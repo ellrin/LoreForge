@@ -4,6 +4,7 @@
 //! `sections/`. Section files hold one sentence per line and a blank line
 //! between paragraphs, so Git diffs land on single sentences.
 
+use crate::meta::{tex_text, OutlineSection};
 use crate::text::sentences;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -282,6 +283,11 @@ const BLANK_SECTIONS: &[(&str, &str)] = &[
 /// Create `papers/<name>/` with a plain article main.tex, empty sections and
 /// an empty refs.bib. Refuses to touch an existing folder.
 pub fn create_paper(papers: &Path, name: &str) -> Result<PathBuf, String> {
+    create_paper_with(papers, name, None)
+}
+
+/// A blank paper; with an outline, its sections instead of the default ones.
+pub fn create_paper_with(papers: &Path, name: &str, outline: Option<&[OutlineSection]>) -> Result<PathBuf, String> {
     let name = name.trim();
     if !safe_name(name) {
         return Err("名稱只能用文字、數字、空格、- _ .".into());
@@ -292,14 +298,21 @@ pub fn create_paper(papers: &Path, name: &str) -> Result<PathBuf, String> {
     }
     let io = |e: std::io::Error| e.to_string();
     std::fs::create_dir_all(dir.join("sections")).map_err(io)?;
-    let inputs: String = BLANK_SECTIONS.iter().map(|(f, _)| format!("\\input{{sections/{f}}}\n")).collect();
+    let sections: Vec<Section> = match outline.filter(|o| !o.is_empty()) {
+        Some(o) => o
+            .iter()
+            .enumerate()
+            .map(|(i, s)| Section { file: format!("{:02}-{}.tex", i + 1, slug(&s.title)), title: tex_text(&s.title), paragraphs: s.paragraphs(), tail: String::new() })
+            .collect(),
+        None => BLANK_SECTIONS.iter().map(|(f, t)| Section { file: format!("{f}.tex"), title: (*t).into(), paragraphs: vec![], tail: String::new() }).collect(),
+    };
+    let inputs: String = sections.iter().map(|s| format!("\\input{{sections/{}}}\n", s.file.trim_end_matches(".tex"))).collect();
     let main = format!(
         "\\documentclass{{article}}\n\\usepackage{{amsmath,amssymb}}\n\n\\title{{{name}}}\n\\author{{}}\n\n\\begin{{document}}\n\\maketitle\n\n\\begin{{abstract}}\n\\end{{abstract}}\n\n{inputs}\n\\bibliographystyle{{plain}}\n\\bibliography{{refs}}\n\\end{{document}}\n"
     );
     write_atomic(&dir.join("main.tex"), &main).map_err(io)?;
-    for (f, title) in BLANK_SECTIONS {
-        let s = Section { file: format!("{f}.tex"), title: (*title).into(), paragraphs: vec![], tail: String::new() };
-        write_atomic(&dir.join("sections").join(&s.file), &render_section(&s)).map_err(io)?;
+    for s in &sections {
+        write_atomic(&dir.join("sections").join(&s.file), &render_section(s)).map_err(io)?;
     }
     write_atomic(&dir.join("refs.bib"), "").map_err(io)?;
     Ok(dir)
@@ -342,6 +355,12 @@ const TEMPLATE_SKIP: &[&str] = &["sample.tex", "template.toml", "README", "READM
 /// and the class, style and support files are copied alongside so the paper
 /// compiles on its own.
 pub fn create_paper_from_template(papers: &Path, name: &str, template: &Path) -> Result<PathBuf, String> {
+    create_paper_from_template_with(papers, name, template, None)
+}
+
+/// From a template; with an outline, its sections replace the sample's
+/// (the sample's front and back matter stay).
+pub fn create_paper_from_template_with(papers: &Path, name: &str, template: &Path, outline: Option<&[OutlineSection]>) -> Result<PathBuf, String> {
     let name = name.trim();
     if !safe_name(name) {
         return Err("名稱只能用文字、數字、空格、- _ .".into());
@@ -349,7 +368,10 @@ pub fn create_paper_from_template(papers: &Path, name: &str, template: &Path) ->
     let bytes = std::fs::read(template.join("sample.tex")).map_err(|_| "模板裡沒有 sample.tex".to_string())?;
     // Some publishers still ship Latin-1 samples; read those byte for byte.
     let sample = String::from_utf8(bytes).unwrap_or_else(|e| e.into_bytes().iter().map(|&b| b as char).collect());
-    let split = split_sample(&sample, false).ok_or("sample.tex 裡找不到 \\begin{document}")?;
+    let mut split = split_sample(&sample, false).ok_or("sample.tex 裡找不到 \\begin{document}")?;
+    if let Some(o) = outline.filter(|o| !o.is_empty()) {
+        replace_sections(&mut split, o);
+    }
     let dir = papers.join(name);
     if dir.exists() {
         return Err(format!("已經有一篇叫 {name} 的論文"));
@@ -595,8 +617,12 @@ fn split_sample(src: &str, keep_comments: bool) -> Option<Sample> {
             }
         } else if back_marks.iter().any(|m| code.starts_with(m)) {
             in_bib = code.starts_with("\\begin{thebibliography}");
-            if matches!(pieces.last(), Some(Piece::Section { .. })) {
-                pieces.push(Piece::Text(String::new()));
+            if let Some(Piece::Section { body, .. }) = pieces.last_mut() {
+                // A group opened at the end of the section for the back
+                // matter (CVPR's `{\small \bibliography...}`) belongs to it.
+                let carry = open_tail(body);
+                let moved = body.split_off(carry);
+                pieces.push(Piece::Text(moved));
             }
         }
         match pieces.last_mut() {
@@ -616,6 +642,60 @@ fn split_sample(src: &str, keep_comments: bool) -> Option<Sample> {
         }
     }
     Some(Sample { preamble, pieces })
+}
+
+/// Where the trailing lines of `body` that leave a `{` group open begin:
+/// the end of the last line at which every group was closed.
+fn open_tail(body: &str) -> usize {
+    let mut depth = 0i32;
+    let mut cut = 0;
+    let mut pos = 0;
+    for line in body.split_inclusive('\n') {
+        let b = strip_comment(line).as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            match b[i] {
+                b'\\' => i += 1,
+                b'{' => depth += 1,
+                b'}' => depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        pos += line.len();
+        if depth <= 0 {
+            depth = 0;
+            cut = pos;
+        }
+    }
+    cut
+}
+
+/// Put the outline's sections where the sample's body sections were; the
+/// sample's later sections (appendices) go too, its back matter stays.
+fn replace_sections(split: &mut Sample, outline: &[OutlineSection]) {
+    let ours = outline.iter().map(|s| Piece::Section { title: tex_text(&s.title), tail: String::new(), body: s.paragraphs().join("\n\n") + "\n" });
+    let pieces = std::mem::take(&mut split.pieces);
+    let Some(first) = pieces.iter().position(|p| matches!(p, Piece::Section { .. })) else {
+        split.pieces = pieces;
+        split.pieces.extend(ours);
+        return;
+    };
+    let mut end = first;
+    while end < pieces.len()
+        && match &pieces[end] {
+            Piece::Section { .. } => true,
+            Piece::Text(t) => t.trim().is_empty(),
+        }
+    {
+        end += 1;
+    }
+    let mut out = Vec::new();
+    let mut rest = pieces.into_iter();
+    out.extend(rest.by_ref().take(first));
+    out.extend(ours);
+    out.extend(rest.skip(end - first).filter(|p| matches!(p, Piece::Text(_))));
+    split.pieces = out;
 }
 
 fn slug(title: &str) -> String {
@@ -813,5 +893,38 @@ mod tests {
         assert!(!safe_name("../secrets"));
         assert!(!safe_name("a/b.tex"));
         assert!(!safe_name(".git"));
+    }
+
+    const SAMPLE: &str = "\\documentclass{article}\n\\begin{document}\n\\title{T}\n\\maketitle\n\\section{Intro}\nSample intro.\n\\section{Equations}\nSample math.\n{\n  \\small\n  \\bibliographystyle{plain}\n  \\bibliography{refs}\n}\n\\appendix\n\\section{Proofs}\nSample proof.\n\\end{document}\n";
+
+    #[test]
+    fn a_group_opened_for_the_bibliography_stays_with_it() {
+        let s = split_sample(SAMPLE, false).unwrap();
+        let bodies: Vec<&str> = s.pieces.iter().filter_map(|p| match p { Piece::Section { body, .. } => Some(body.as_str()), _ => None }).collect();
+        assert_eq!(bodies[1], "Sample math.\n");
+        let texts: String = s.pieces.iter().filter_map(|p| match p { Piece::Text(t) => Some(t.as_str()), _ => None }).collect();
+        assert!(texts.contains("{\n  \\small\n  \\bibliographystyle{plain}"), "{texts}");
+    }
+
+    #[test]
+    fn an_outline_replaces_the_sample_sections() {
+        let root = std::env::temp_dir().join(format!("pc-outline-{}", std::process::id()));
+        let tpl = root.join("tpl");
+        std::fs::create_dir_all(&tpl).unwrap();
+        std::fs::write(tpl.join("sample.tex"), SAMPLE).unwrap();
+        let outline = vec![
+            OutlineSection { title: "Introduction".into(), intent: "Why it matters.".into(), subsections: vec![] },
+            OutlineSection { title: "Methods & data".into(), intent: "How.".into(), subsections: vec![crate::meta::OutlineSub { title: "Cohort".into(), intent: "Who.".into() }] },
+        ];
+        let dir = create_paper_from_template_with(&root.join("papers"), "P", &tpl, Some(&outline)).unwrap();
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        assert!(main.contains("\\maketitle\n\\input{sections/01-introduction}\n\\input{sections/02-methods-data}\n{\n  \\small"), "{main}");
+        assert!(main.contains("\\appendix") && !main.contains("Proofs") && !main.contains("Sample"));
+        let s = load_paper(&dir);
+        assert_eq!(s.iter().map(|x| x.title.as_str()).collect::<Vec<_>>(), ["Introduction", "Methods \\& data"]);
+        assert_eq!(s[1].paragraphs, ["How.", "\\subsection{Cohort}", "Who."]);
+        let blank = create_paper_with(&root.join("papers"), "B", Some(&outline)).unwrap();
+        assert_eq!(load_paper(&blank).len(), 2);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

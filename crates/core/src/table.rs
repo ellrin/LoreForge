@@ -15,6 +15,8 @@ pub const TABLES: &[(&str, &[&str])] = &[
     ("rules.csv", &["id", "type", "scope", "check", "threshold", "severity", "message"]),
     ("exemplars.csv", &["id", "section", "function", "text", "source"]),
     ("equations.csv", &["id", "name", "latex", "tags"]),
+    ("authors.csv", &["id", "given", "family", "email", "orcid", "affiliations", "role", "note"]),
+    ("affiliations.csv", &["id", "department", "organization", "city", "country"]),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

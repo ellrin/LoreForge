@@ -178,7 +178,8 @@ const PCWrite = (() => {
     [
       ["tableStyle", "表格", (b) => PCTable.insertNew(b)],
       ["image", "圖", () => { const t = "\\begin{figure}[t]\n  \\centering\n  \\includegraphics[width=\\linewidth]{}\n  \\caption{}\n  \\label{fig:}\n\\end{figure}"; block(t, t.indexOf("]{}") + 2); }],
-      ["list", "清單", () => { const t = "\\begin{itemize}\n  \\item \n\\end{itemize}"; block(t, t.indexOf("\\item ") + 6); }],
+      ["list", "項目清單", () => { const t = "\\begin{itemize}\n  \\item \n\\end{itemize}"; block(t, t.indexOf("\\item ") + 6); }],
+      ["listOrdered", "編號清單（例如列出 contributions）", () => { const t = "\\begin{enumerate}\n  \\item \n  \\item \n\\end{enumerate}"; block(t, t.indexOf("\\item ") + 6); }],
     ],
     [
       ["quote", "引用", (b) => PCRefs.picker(b), "wbCite"],

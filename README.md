@@ -41,7 +41,7 @@ cargo run -p pc-server
 your-private-repo/
   profile/      句型、用詞、規則、範例段落、公式片段
   publishers/   各出版社的 .cls、範例 .tex 與模板設定
-  papers/       每篇論文一個資料夾
+  papers/       每篇論文一個資料夾（main.tex、sections/，以及 paper.toml：Key value 與作者）
   prompts/      自訂提示詞（可選）
 ```
 
@@ -77,6 +77,20 @@ your-private-repo/
 - **commit 前檢查金鑰**：新增的內容看起來像 API key 或 token 時，拒絕 commit。
 
 使用系統安裝的 `git`，登入交給你電腦上的 Git 憑證管理（Windows 為 Git Credential Manager），App 不保存 Git 密碼。作者名稱沿用你的 `git config user.name` 與 `user.email`。
+
+## 新論文
+
+論文選單的「新論文」開啟三個步驟的視窗：
+
+1. **名稱與版型**：選期刊或研討會的模板，或空白 article。
+2. **作者**：從作者資料庫勾選、排順序，標記通訊作者與同等貢獻。資料庫在 `profile/authors.csv`（姓名、email、ORCID、所屬機構、角色）與 `profile/affiliations.csv`（系所、機構、城市、國家），姓與機構必填，其他可空著；在這裡新增的人會存進資料庫，下一篇直接選，也可以在「資料庫」視窗的「作者」「機構」分頁編輯。作者區塊依版型的寫法產生，不經過模型：Springer Nature（`\author[1]{\fnm{}\sur{}}`、`\affil`）、Elsevier（`elsarticle` 的 `\corref`；`cas-dc` 的 `\cormark` 與 `[orcid=]`）、IEEE 期刊（`\thanks{… is with …}`）、IEEE 會議（`\IEEEauthorblockN/A`）、LNCS（`\inst`、`\orcidID`、`\institute`），其他 class 用通用的 `\author{Name\\ 機構 \and …}`。範例裡的作者整段換掉，其餘不動。
+3. **Key value 與大綱**：
+   - **Key value 必填**：這篇論文通篇要強調的一件事，可以是願景（例如「提升 XX 效能」）。中文最多 50 字、英文最多 30 個單字，存在 `paper.toml`；論文上方會一直顯示，點一下可修改。匯入現有論文時也要填。
+   - **大綱（選填，需要 Claude）**：條列章節與要說的事，Claude 依 Key value 給 3 個標題建議，並排出 section／subsection，每段最多兩句話說明這裡要寫什麼（寫在內文，之後自己改）。有期刊模板時依期刊的章節順序；勾選套用就取代模板的範例章節，前後的標題區與參考文獻區保留。
+
+**Key value 是生成與檢查的約束**：生成段落時放進規則；檢查加了一條軟規則 R106（`supports_key_value`），判斷段落、圖表、摘要、contribution、討論是否離題。它是黃燈：延伸討論不一定完全對齊主題，不必每段都綠燈。
+
+**清單**：寫作工具列有「項目清單」（`itemize`）和「編號清單」（`enumerate`，例如 *Our contributions are as follows:* 後面列點）。
 
 ## 公式
 
@@ -142,6 +156,7 @@ tlmgr search --global --file /xxx.sty
 - **匯入 PDF 或 DOI**：文獻頁會列出 PDF 資料夾裡還沒匯入的檔案。匯入時從 PDF 前兩頁讀出 DOI（跨行斷開的也會接回），書目向 Crossref（doi.org）取得，摘要依序向 OpenAlex、Semantic Scholar、PDF 本身的 Abstract 段落取得；**書目不經過模型**。模型只負責寫中文簡介、一句話，並從你的標籤清單挑標籤；頂會、頂刊依 `profile/venues.csv`（`pattern,tag`，沒有時用內建清單）判斷。抓到的標題若和 PDF 內容對不上（例如 DOI 被截斷而對到整本論文集），會標示並請你更正 DOI。每一篇都要你確認後才加入。
 - **插入引用**：上方「插入 → 引用…」，搜尋或用標籤篩選、可多選，插在游標處（沒有在編輯時插在段落句尾），可順便記下用途。
 - **用 Claude 找新文獻**（插入引用視窗的放大鏡；沒連 Claude 時是灰的）：預設請求是「幫我找關於『段落開頭』的文獻」，可再選標籤引導（回顧→只找 review；新算法→近 3 年；經典算法→依引用數排序；頂會／頂刊→依期刊清單篩選）。Claude 把請求轉成搜尋關鍵字，**文獻一律來自 OpenAlex**（都有 DOI、排除只有預印本的），Claude 再從候選中排序並寫一句為什麼適合；它不能新增或改寫候選。點標題開啟 DOI 頁面，有開放取用版本可直接開 PDF；「加入」會向 Crossref 取得書目、寫好簡介與標籤後放進文獻庫，並勾選待插入。
+- **貼上想引用的文章**（文獻頁的清單圖示；需要 Claude）：一次貼很多篇，參考文獻清單、標題、DOI 都可以。Claude 只負責拆成一篇一篇並抄下文字裡寫的標題、作者、年份、DOI，不從記憶補資料；**是否真的存在由 Crossref 判斷**：有 DOI 的要對得上標題，沒有的用標題、作者、年份搜尋比對。結果分成找到、需要確認（列出相近的候選讓你選）、查不到、已在文獻庫。勾選後按「建檔並存入」，每篇照「匯入 DOI」的流程向 Crossref 取書目、寫簡介、挑標籤後存進文獻庫。
 - **引用一定送得到 BibTeX，作者的 `.bib` 一律不改寫**：`\bibliography{…}` 列出的每個檔案都會讀取；文獻庫裡有、論文的 `.bib` 沒有的引用，寫到 App 管理的 `pc-refs.bib` 並自動加進 `\bibliography{…}`。論文沒有自己的 `.bib` 時，產生一個只含這篇引用的檔案。
 
 ## 匯入現有的論文
@@ -226,14 +241,21 @@ scripts/            Git hooks
 | GET | `/api/phrases?section=&function=&position=&text=&limit=` | 依欄位篩選並排序句型 |
 | POST | `/api/check` `{ text, section }` | 逐段檢查 |
 | GET | `/api/engine` | 模型連線狀態 |
-| POST | `/api/compose` `{ points, section, function, min_words, max_words, language, before, after }` | 一次性段落生成 |
-| GET | `/api/papers/{name}` | 論文各章節與段落 |
+| POST | `/api/compose` `{ points, section, function, min_words, max_words, language, before, after, key_value? }` | 一次性段落生成 |
+| POST | `/api/check/soft` `{ text, section, before, after, engine, key_value? }` | 軟規則檢查（有 Key value 時才問 R106） |
+| POST | `/api/papers` `{ name, template?, key_value, title?, authors?, outline? }` | 建立論文（Key value 必填） |
+| GET | `/api/papers/{name}` | 論文各章節與段落、`meta`（Key value 與作者） |
+| PUT | `/api/papers/{name}/meta` `{ key_value }` | 修改 Key value |
+| GET / POST | `/api/people` | 作者與機構清單；新增一位作者（可同時新增機構） |
+| POST | `/api/wizard/outline` `{ template?, outline, key_value, engine }` | 大綱 → 標題建議與章節架構（Claude） |
+| POST | `/api/refs/extract` `{ text, engine }` | 把貼上的文字拆成一篇一篇（Claude） |
+| POST | `/api/refs/verify` `{ title, authors, year, doi }` | 向 Crossref 查證一篇是否存在 |
 | PUT | `/api/papers/{name}/sections/{file}` `{ title, paragraphs }` | 儲存章節（一句一行） |
-| GET / PUT | `/api/tables/{file}` | 讀寫資料庫 CSV（句型、片語、用詞、規則、範例、公式） |
+| GET / PUT | `/api/tables/{file}` | 讀寫資料庫 CSV（句型、片語、用詞、規則、範例、公式、作者、機構） |
 | POST | `/api/papers/{name}/export` `{ kind: "pdf" \| "docx" \| "latex" }` | 匯出：頁數、錯誤（含位置）、找不到的引用與標籤 |
 | POST | `/api/papers/{name}/export/open` `{ kind, reveal }` | 開啟匯出的檔案，或在資料夾中顯示 |
-| POST | `/api/papers/import?name=` （本文為 .zip／.tar.gz／.tex） | 匯入現有的 LaTeX 專案 |
-| POST | `/api/papers/import-arxiv` `{ id, name? }` | 從 arXiv 匯入原始檔 |
+| POST | `/api/papers/import?name=&key_value=` （本文為 .zip／.tar.gz／.tex） | 匯入現有的 LaTeX 專案 |
+| POST | `/api/papers/import-arxiv` `{ id, name?, key_value }` | 從 arXiv 匯入原始檔 |
 | PUT | `/api/papers/{name}/front` `{ field, index, value }` | 修改標題區的欄位（title、author、affil、abstract、keywords） |
 | GET | `/api/papers/{name}/figure?path=` | 圖片預覽（PDF／EPS 轉 PNG） |
 | POST | `/api/decompose` `{ text, section }` | 把句子或段落拆成句型與片語建議 |

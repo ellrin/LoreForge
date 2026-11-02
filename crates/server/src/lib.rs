@@ -11,6 +11,7 @@
 //! The config file lives in the OS config folder, never inside a repository,
 //! so a personal profile path is never committed by accident.
 
+pub mod citecheck;
 pub mod claude;
 pub mod claude_code;
 pub mod convert;
@@ -23,6 +24,7 @@ pub mod git;
 pub mod models;
 pub mod refimport;
 pub mod texmeasure;
+pub mod wizard;
 
 use axum::{
     extract::{Path as AxPath, Query as AxQuery, State},
@@ -34,6 +36,8 @@ use axum::{
 use claude::Claude;
 use engine::{Engine, EngineConfig, EngineStatus};
 use pc_core::compose::{self, ComposeRequest, Draft, DraftCheck, Prompt};
+use pc_core::authors::{self, Affiliation, Author, PaperAuthor, Person};
+use pc_core::meta::{self, OutlineSection, PaperMeta};
 use pc_core::paper::{self, Section};
 use pc_core::table::{self, Table};
 use pc_core::bib;
@@ -332,6 +336,9 @@ struct SoftCheckBody {
     after: Option<String>,
     #[serde(default)]
     engine: Option<EngineChoice>,
+    /// The paper's key value, for the rule that checks the paragraph stays on topic.
+    #[serde(default)]
+    key_value: Option<String>,
 }
 
 /// Judge one paragraph against the soft rules in rules.csv with a model.
@@ -339,8 +346,12 @@ async fn soft_check(State(s): State<Shared>, Json(b): Json<SoftCheckBody>) -> im
     let (prompt, rules) = {
         let l = s.loaded.read().await;
         let Some(p) = &l.profile else { return bad("profile not loaded") };
-        let rules = softcheck::soft_rules(p, b.section.as_deref());
-        let prompt = softcheck::build_prompt(&rules, &b.text, b.section.as_deref(), b.before.as_deref(), b.after.as_deref());
+        let kv = b.key_value.as_deref().map(str::trim).filter(|k| !k.is_empty());
+        let mut rules = softcheck::soft_rules(p, b.section.as_deref());
+        if kv.is_none() {
+            rules.retain(|r| r.check != softcheck::KEY_VALUE_CHECK);
+        }
+        let prompt = softcheck::build_prompt(&rules, &b.text, b.section.as_deref(), b.before.as_deref(), b.after.as_deref(), kv);
         (prompt, rules.into_iter().cloned().collect::<Vec<_>>())
     };
     if rules.is_empty() || b.text.trim().is_empty() {
@@ -695,31 +706,233 @@ struct NewPaper {
     /// A folder under publishers/; none = blank article.
     #[serde(default)]
     template: Option<String>,
+    /// Required: the one thing the whole paper argues.
+    #[serde(default)]
+    key_value: String,
+    #[serde(default)]
+    title: Option<String>,
+    /// From the profile's authors.csv, in order.
+    #[serde(default)]
+    authors: Vec<PaperAuthor>,
+    /// Section skeleton from the wizard; empty = the template's sections.
+    #[serde(default)]
+    outline: Vec<OutlineSection>,
+}
+
+/// The authors picked for a paper, resolved against the profile.
+async fn resolve_people(s: &Shared, chosen: &[PaperAuthor]) -> Result<Option<(Vec<Person>, Vec<Affiliation>)>, String> {
+    if chosen.is_empty() {
+        return Ok(None);
+    }
+    let l = s.loaded.read().await;
+    let p = l.profile.as_ref().ok_or("profile not loaded")?;
+    authors::resolve(chosen, &p.authors, &p.affiliations).map(Some)
+}
+
+/// paper.toml, the title and the author block of a paper just made.
+fn finish_paper(dir: &Path, key_value: &str, title: Option<&str>, chosen: &[PaperAuthor], people: Option<(Vec<Person>, Vec<Affiliation>)>) -> Result<(), String> {
+    meta::write_meta(dir, &PaperMeta { key_value: key_value.to_string(), authors: chosen.to_vec() })?;
+    let path = dir.join("main.tex");
+    let mut main = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    if let Some(t) = title.map(str::trim).filter(|t| !t.is_empty()) {
+        main = pc_core::front::set_field(&main, "title", 0, &meta::tex_text(t))?;
+    }
+    if let Some((p, a)) = people {
+        main = authors::apply(&main, &p, &a);
+    }
+    paper::write_atomic(&path, &main).map_err(|e| e.to_string())
 }
 
 async fn create_paper(State(s): State<Shared>, Json(b): Json<NewPaper>) -> impl IntoResponse {
     let Some(ws) = s.loaded.read().await.workspace.clone() else {
         return bad("no workspace");
     };
+    let key_value = match meta::check_key_value(&b.key_value) { Ok(k) => k, Err(e) => return bad(&e) };
+    let people = match resolve_people(&s, &b.authors).await { Ok(p) => p, Err(e) => return bad(&e) };
+    let outline = (!b.outline.is_empty()).then_some(b.outline.as_slice());
     let made = match b.template.as_deref().filter(|t| !t.is_empty()) {
         Some(t) if !paper::safe_name(t) => return bad("invalid template"),
-        Some(t) => paper::create_paper_from_template(&ws.join("papers"), &b.name, &ws.join("publishers").join(t)),
-        None => paper::create_paper(&ws.join("papers"), &b.name),
+        Some(t) => paper::create_paper_from_template_with(&ws.join("papers"), &b.name, &ws.join("publishers").join(t), outline),
+        None => paper::create_paper_with(&ws.join("papers"), &b.name, outline),
     };
-    match made {
-        Ok(_) => Json(serde_json::json!({ "name": b.name.trim() })).into_response(),
-        Err(e) => bad(&e),
+    let dir = match made { Ok(d) => d, Err(e) => return bad(&e) };
+    if let Err(e) = finish_paper(&dir, &key_value, b.title.as_deref(), &b.authors, people) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return bad(&e);
     }
+    Json(serde_json::json!({ "name": b.name.trim() })).into_response()
+}
+
+#[derive(Deserialize)]
+struct MetaEdit {
+    key_value: String,
+}
+
+/// Change a paper's key value.
+async fn put_meta(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<MetaEdit>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let key_value = match meta::check_key_value(&b.key_value) { Ok(k) => k, Err(e) => return bad(&e) };
+    let mut m = meta::read_meta(&dir);
+    m.key_value = key_value;
+    match meta::write_meta(&dir, &m) {
+        Ok(()) => Json(m).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+/// The people and institutions in the profile, for picking authors.
+async fn people(State(s): State<Shared>) -> impl IntoResponse {
+    let l = s.loaded.read().await;
+    let (a, f) = l.profile.as_ref().map(|p| (p.authors.clone(), p.affiliations.clone())).unwrap_or_default();
+    Json(serde_json::json!({ "authors": a, "affiliations": f }))
+}
+
+#[derive(Deserialize)]
+struct NewPerson {
+    author: Author,
+    /// A new institution for this person, added to affiliations.csv first.
+    #[serde(default)]
+    affiliation: Option<Affiliation>,
+}
+
+/// Next free id with a prefix in a table's `id` column: A001, F012, ...
+fn next_id(t: &Table, prefix: &str) -> String {
+    let col = t.headers.iter().position(|h| h == "id").unwrap_or(0);
+    let max = t.rows.iter().filter_map(|r| r.get(col)?.strip_prefix(prefix)?.parse::<u32>().ok()).max().unwrap_or(0);
+    format!("{prefix}{:03}", max + 1)
+}
+
+fn put_row(t: &mut Table, values: &[(&str, String)]) {
+    let row = t.headers.iter().map(|h| values.iter().find(|(k, _)| k == h).map(|(_, v)| v.clone()).unwrap_or_default()).collect();
+    t.rows.push(row);
+}
+
+/// Add a person (and optionally a new institution) to the profile.
+async fn add_person(State(s): State<Shared>, Json(b): Json<NewPerson>) -> impl IntoResponse {
+    let dir = s.loaded.read().await.path.clone();
+    let mut a = b.author;
+    if a.family.trim().is_empty() {
+        return bad("請填姓（family name）");
+    }
+    let mut new_affil = None;
+    if let Some(f) = b.affiliation {
+        if f.organization.trim().is_empty() {
+            return bad("請填機構名稱");
+        }
+        let mut t = match table::read_table(&dir, "affiliations.csv") { Ok(t) => t, Err(e) => return bad(&e) };
+        let id = next_id(&t, "F");
+        put_row(&mut t, &[("id", id.clone()), ("department", f.department), ("organization", f.organization), ("city", f.city), ("country", f.country)]);
+        if let Err(e) = table::write_table(&dir, "affiliations.csv", &t) { return bad(&e) }
+        a.affiliations.push(id.clone());
+        new_affil = Some(id);
+    }
+    if a.affiliations.is_empty() {
+        return bad("請選擇或新增一個機構");
+    }
+    let mut t = match table::read_table(&dir, "authors.csv") { Ok(t) => t, Err(e) => return bad(&e) };
+    let id = next_id(&t, "A");
+    put_row(&mut t, &[("id", id.clone()), ("given", a.given), ("family", a.family), ("email", a.email), ("orcid", a.orcid), ("affiliations", a.affiliations.join(";")), ("role", a.role), ("note", a.note)]);
+    if let Err(e) = table::write_table(&dir, "authors.csv", &t) { return bad(&e) }
+    *s.loaded.write().await = load(&s.paths);
+    Json(serde_json::json!({ "id": id, "affiliation": new_affil })).into_response()
+}
+
+#[derive(Deserialize)]
+struct OutlineBody {
+    #[serde(default)]
+    template: Option<String>,
+    outline: String,
+    key_value: String,
+    engine: EngineChoice,
+}
+
+/// Wizard: titles and a section skeleton from the outline (Claude only).
+async fn wizard_outline(State(s): State<Shared>, Json(b): Json<OutlineBody>) -> impl IntoResponse {
+    if b.engine == EngineChoice::Local || !engine_ready(&s, b.engine).await {
+        return bad("大綱生成需要連接 Claude");
+    }
+    let key_value = match meta::check_key_value(&b.key_value) { Ok(k) => k, Err(e) => return bad(&e) };
+    if b.outline.trim().is_empty() {
+        return bad("請輸入大綱");
+    }
+    let (ws, language) = {
+        let l = s.loaded.read().await;
+        (l.workspace.clone(), l.profile.as_ref().map(|p| p.manifest.language.clone()).unwrap_or_else(|| "en".into()))
+    };
+    let sections = match (ws, b.template.as_deref().filter(|t| paper::safe_name(t))) {
+        (Some(ws), Some(t)) => std::fs::read_to_string(ws.join("publishers").join(t).join("sample.tex")).map(|x| wizard::sample_sections(&x)).unwrap_or_default(),
+        _ => vec![],
+    };
+    let prompt = wizard::outline_prompt(&b.outline, &key_value, &sections, &language);
+    let mut extra = None;
+    let mut last = String::new();
+    for _ in 0..2 {
+        match writing_complete(&s, Some(b.engine), &prompt, extra).await {
+            Ok(reply) => match wizard::parse_plan(&reply) {
+                Ok(plan) => return Json(plan).into_response(),
+                Err(e) => {
+                    last = e;
+                    extra = Some("Reply with the JSON object only, in the shape given.");
+                }
+            },
+            Err(e) => return bad(&e),
+        }
+    }
+    bad(&last)
+}
+
+#[derive(Deserialize)]
+struct ExtractBody {
+    text: String,
+    engine: EngineChoice,
+}
+
+/// Split pasted text into the papers it lists (Claude only).
+async fn extract_refs(State(s): State<Shared>, Json(b): Json<ExtractBody>) -> impl IntoResponse {
+    if b.engine == EngineChoice::Local || !engine_ready(&s, b.engine).await {
+        return bad("這個功能需要連接 Claude");
+    }
+    if b.text.trim().is_empty() {
+        return bad("請貼上想引用的文章");
+    }
+    let prompt = citecheck::extract_prompt(&b.text);
+    let mut extra = None;
+    let mut last = String::new();
+    for _ in 0..2 {
+        match writing_complete(&s, Some(b.engine), &prompt, extra).await {
+            Ok(reply) => match citecheck::parse_extract(&reply) {
+                Ok(papers) => return Json(serde_json::json!({ "papers": papers })).into_response(),
+                Err(e) => {
+                    last = e;
+                    extra = Some("Reply with the JSON object only, in the shape given.");
+                }
+            },
+            Err(e) => return bad(&e),
+        }
+    }
+    bad(&last)
+}
+
+/// Is this paper real? Crossref decides; a paper already in the library says so.
+async fn verify_ref(State(s): State<Shared>, Json(g): Json<citecheck::Guess>) -> impl IntoResponse {
+    let ws = match refs_root(&s).await { Ok(w) => w, Err(r) => return r };
+    let g = citecheck::Guess { doi: citecheck::clean_doi(&g.doi), ..g };
+    let v = match citecheck::verify(&g).await { Ok(v) => v, Err(e) => return bad(&e) };
+    let (entries, _) = load_library(&ws);
+    let exists = v.work.as_ref().and_then(|w| entries.iter().find(|e| e.get("doi").is_some_and(|d| d.eq_ignore_ascii_case(&w.doi)))).map(|e| e.key.clone());
+    Json(serde_json::json!({ "verdict": v, "exists": exists })).into_response()
 }
 
 #[derive(Deserialize)]
 struct ImportQuery {
     name: String,
+    #[serde(default)]
+    key_value: String,
 }
 
 /// Import an uploaded LaTeX project (.zip, .tar.gz or .tex as the raw body).
 async fn import_upload(State(s): State<Shared>, AxQuery(q): AxQuery<ImportQuery>, body: axum::body::Bytes) -> impl IntoResponse {
-    import_bytes(&s, &q.name, &body).await
+    import_bytes(&s, &q.name, &q.key_value, &body).await
 }
 
 #[derive(Deserialize)]
@@ -727,17 +940,23 @@ struct ArxivImport {
     id: String,
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    key_value: String,
 }
 
 /// Import a paper's LaTeX source from arXiv by id or URL.
 async fn import_arxiv(State(s): State<Shared>, Json(b): Json<ArxivImport>) -> impl IntoResponse {
+    if let Err(e) = meta::check_key_value(&b.key_value) {
+        return bad(&e);
+    }
     let Some(id) = import::arxiv_id(&b.id) else { return bad("看不懂這個 arXiv 編號") };
     let bytes = match import::fetch_arxiv(&id).await { Ok(b) => b, Err(e) => return bad(&e) };
     let name = b.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("arXiv {}", id.replace('/', "-")));
-    import_bytes(&s, &name, &bytes).await
+    import_bytes(&s, &name, &b.key_value, &bytes).await
 }
 
-async fn import_bytes(s: &Shared, name: &str, bytes: &[u8]) -> axum::response::Response {
+async fn import_bytes(s: &Shared, name: &str, key_value: &str, bytes: &[u8]) -> axum::response::Response {
+    let key_value = match meta::check_key_value(key_value) { Ok(k) => k, Err(e) => return bad(&e) };
     let Some(ws) = s.loaded.read().await.workspace.clone() else { return bad("no workspace") };
     let tmp = std::env::temp_dir().join(format!("papercomposer-import-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
     let res = std::fs::create_dir_all(&tmp)
@@ -745,7 +964,7 @@ async fn import_bytes(s: &Shared, name: &str, bytes: &[u8]) -> axum::response::R
         .and_then(|_| import::unpack(bytes, &tmp))
         .and_then(|_| paper::import_paper(&ws.join("papers"), name, &tmp));
     let _ = std::fs::remove_dir_all(&tmp);
-    match res {
+    match res.and_then(|dir| meta::write_meta(&dir, &PaperMeta { key_value, authors: vec![] }).map(|_| dir)) {
         Ok(_) => Json(serde_json::json!({ "name": name.trim() })).into_response(),
         Err(e) => bad(&e),
     }
@@ -1373,6 +1592,7 @@ async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> imp
             "back": back,
             "fields": pc_core::front::fields(&main),
             "bibliography": preview::bibliography(&dir, &export::cache_dir(&name)),
+            "meta": meta::read_meta(&dir),
         }))
         .into_response()
         }
@@ -2166,6 +2386,11 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/papers/{name}/export", post(export_paper))
         .route("/api/papers/{name}/figure", get(paper_figure))
         .route("/api/papers/{name}/front", put(put_front))
+        .route("/api/papers/{name}/meta", put(put_meta))
+        .route("/api/people", get(people).post(add_person))
+        .route("/api/wizard/outline", post(wizard_outline))
+        .route("/api/refs/extract", post(extract_refs))
+        .route("/api/refs/verify", post(verify_ref))
         .route("/api/templates", get(list_templates).post(create_template))
         .route("/api/convert", post(convert_create))
         .route("/api/convert/{id}", get(convert_get))

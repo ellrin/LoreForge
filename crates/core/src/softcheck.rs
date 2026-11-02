@@ -21,6 +21,10 @@ pub struct SoftResult {
     pub reason: String,
 }
 
+/// The check that compares a paragraph with the paper's key value; it is
+/// only asked when the paper has one.
+pub const KEY_VALUE_CHECK: &str = "supports_key_value";
+
 /// Soft rules that apply to a paragraph in `section`.
 pub fn soft_rules<'a>(profile: &'a Profile, section: Option<&str>) -> Vec<&'a Rule> {
     profile
@@ -30,7 +34,9 @@ pub fn soft_rules<'a>(profile: &'a Profile, section: Option<&str>) -> Vec<&'a Ru
         .collect()
 }
 
-pub fn build_prompt(rules: &[&Rule], paragraph: &str, section: Option<&str>, before: Option<&str>, after: Option<&str>) -> Prompt {
+/// `key_value` is what the whole paper argues; with it, a rule can judge
+/// whether the paragraph stays on that topic.
+pub fn build_prompt(rules: &[&Rule], paragraph: &str, section: Option<&str>, before: Option<&str>, after: Option<&str>, key_value: Option<&str>) -> Prompt {
     let system = "You check one paragraph of an academic paper against the author's own writing rules. \
 Judge each listed rule strictly as written. Do not rewrite the paragraph, do not suggest new text, do not add rules. \
 Reply with JSON only, in this shape: \
@@ -42,6 +48,9 @@ Give one result per listed rule. `sentence` is the number of the sentence the pr
     let mut user = String::new();
     if let Some(s) = section {
         user += &format!("Section: {s}\n");
+    }
+    if let Some(k) = key_value.filter(|k| !k.trim().is_empty()) {
+        user += &format!("Key value of the whole paper (what it argues): {}\n", k.trim());
     }
     user += "\nRules:\n";
     for r in rules {
@@ -121,11 +130,15 @@ mod tests {
     #[test]
     fn prompt_numbers_sentences_and_lists_rules() {
         let a = rule("R101", "has_topic_sentence", "paragraph");
-        let p = build_prompt(&[&a], "First idea. Second idea.", Some("Result"), Some("Before."), None);
+        let p = build_prompt(&[&a], "First idea. Second idea.", Some("Result"), Some("Before."), None, None);
         assert!(p.user.contains("- R101 (has_topic_sentence): has_topic_sentence message"));
         assert!(p.user.contains("1. First idea.\n2. Second idea.\n"), "{}", p.user);
         assert!(p.user.contains("Previous paragraph"));
         assert!(!p.user.contains("Next paragraph"));
+        assert!(!p.user.contains("Key value"));
+        let k = rule("R106", KEY_VALUE_CHECK, "paragraph");
+        let p = build_prompt(&[&k], "One.", None, None, None, Some(" 提升效能 "));
+        assert!(p.user.starts_with("Key value of the whole paper (what it argues): 提升效能\n"), "{}", p.user);
     }
 
     #[test]

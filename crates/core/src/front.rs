@@ -16,7 +16,7 @@ pub struct Field {
 }
 
 /// main.tex with comments blanked out (same byte offsets), so searches skip them.
-fn masked(src: &str) -> String {
+pub(crate) fn masked(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     for line in src.split_inclusive('\n') {
         let b = line.as_bytes();
@@ -34,7 +34,7 @@ fn masked(src: &str) -> String {
 }
 
 /// End (exclusive) of the `{...}` group opening at `open`.
-fn group_end(s: &str, open: usize) -> Option<usize> {
+pub(crate) fn group_end(s: &str, open: usize) -> Option<usize> {
     let b = s.as_bytes();
     let mut depth = 0;
     let mut i = open;

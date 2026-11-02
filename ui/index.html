@@ -38,6 +38,7 @@
 
   <main class="page-area" id="pageArea">
     <div class="writebar" id="writebar" role="toolbar" aria-label="寫作工具"></div>
+    <div class="keyvalue" id="keyValue" hidden></div>
     <article class="paper" id="paper"></article>
     <div class="statusbar" id="statusbar"></div>
   </main>
@@ -122,6 +123,22 @@
         <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
       </div>
       <div class="tpl-body" id="publishers"></div>
+    </div>
+  </dialog>
+
+  <dialog class="dialog" id="dlgNew" aria-label="新論文">
+    <div class="dlg">
+      <div class="dlg-head">
+        <h2>新論文</h2>
+        <div class="tabs" id="npTabs" role="tablist">
+          <button data-step="0"><span class="c">01</span>名稱與版型</button>
+          <button data-step="1"><span class="c">02</span>作者</button>
+          <button data-step="2"><span class="c">03</span>Key value 與大綱</button>
+        </div>
+        <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
+      </div>
+      <div class="np-body" id="npBody"></div>
+      <div class="np-foot" id="npFoot"></div>
     </div>
   </dialog>
 
@@ -275,6 +292,7 @@
 <script src="export.js"></script>
 <script src="write.js"></script>
 <script src="zoom.js"></script>
+<script src="newpaper.js"></script>
 <script src="templates.js"></script>
 <script src="convert.js"></script>
 <script src="app.js"></script>

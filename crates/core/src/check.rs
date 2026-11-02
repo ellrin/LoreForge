@@ -174,6 +174,8 @@ mod tests {
         };
         Profile {
             root: Default::default(),
+            authors: vec![],
+            affiliations: vec![],
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },
             phrases: vec![],
             expressions: vec![],

@@ -27,6 +27,9 @@ pub struct ComposeRequest {
     pub before: Option<String>,
     #[serde(default)]
     pub after: Option<String>,
+    /// What the whole paper argues; every paragraph must serve it.
+    #[serde(default)]
+    pub key_value: Option<String>,
 }
 
 fn default_min() -> usize {
@@ -119,6 +122,11 @@ Use \"phrase_id\": null for a sentence that uses no pattern.",
             profile.vocabulary.iter().map(|v| format!("\"{}\"", v.avoid)).collect::<Vec<_>>().join(", ")
         },
     );
+
+    let mut system = system;
+    if let Some(k) = req.key_value.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
+        system += &format!("\n7. The whole paper argues one key value: \"{k}\". Every sentence must serve it; do not drift to other topics.");
+    }
 
     let mut user = format!("Section: {}\n", req.section);
     if let Some(f) = req.function.as_deref().filter(|f| !f.is_empty()) {
@@ -247,6 +255,8 @@ mod tests {
         };
         Profile {
             root: Default::default(),
+            authors: vec![],
+            affiliations: vec![],
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },
             phrases: vec![
                 ph("P1", "Result", "finding", "Compared with {baseline}, {method} improves {metric} by {value}."),
@@ -269,7 +279,18 @@ mod tests {
             language: "en".into(),
             before: None,
             after: None,
+            key_value: None,
         }
+    }
+
+    #[test]
+    fn key_value_becomes_a_rule() {
+        let pr = profile();
+        let mut r = req();
+        let pts = parse_points(&r.points);
+        assert!(!build_prompt(&pr, &r, &pts, &[]).system.contains("key value"));
+        r.key_value = Some("提升骨折判讀的可解釋性".into());
+        assert!(build_prompt(&pr, &r, &pts, &[]).system.contains("7. The whole paper argues one key value: \"提升骨折判讀的可解釋性\""));
     }
 
     #[test]

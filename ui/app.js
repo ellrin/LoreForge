@@ -14,6 +14,8 @@ const TABLES = [
   ["rules.csv", "規則"],
   ["exemplars.csv", "範例"],
   ["equations.csv", "公式"],
+  ["authors.csv", "作者"],
+  ["affiliations.csv", "機構"],
 ];
 
 const $ = (s) => document.querySelector(s);
@@ -73,7 +75,7 @@ const rank = (s) => ({ info: 1, warning: 2, error: 3 }[s] ?? 0);
 async function openPaper(name) {
   try {
     const res = await api(`/api/papers/${encodeURIComponent(name)}`);
-    state.paper = { name, sections: res.sections, front: res.front ?? "", back: res.back ?? "", fields: res.fields ?? [], bibliography: res.bibliography ?? [] };
+    state.paper = { name, sections: res.sections, front: res.front ?? "", back: res.back ?? "", fields: res.fields ?? [], bibliography: res.bibliography ?? [], meta: res.meta ?? { key_value: "", authors: [] } };
     PCTex.setMacros(res.macros ?? {});
     PCTex.setNumbers(res.numbers);
     PCTex.setFigureBase(`/api/papers/${encodeURIComponent(name)}/figure`);
@@ -109,7 +111,43 @@ async function saveSection(i) {
 
 function render() {
   PCTex.number(sections(), state.paper?.front ?? "");
-  renderNav(); renderPaper(); renderSide(); renderStatus();
+  renderNav(); renderKeyValue(); renderPaper(); renderSide(); renderStatus();
+}
+
+// The paper's key value over the page: what every paragraph should serve.
+// Click to change it.
+function renderKeyValue() {
+  const bar = $("#keyValue");
+  bar.innerHTML = "";
+  bar.hidden = !state.paper;
+  if (!state.paper) return;
+  const kv = state.paper.meta?.key_value ?? "";
+  bar.append(el("span", "k", "KEY VALUE"));
+  const v = el("button", kv ? "v" : "v empty", kv || "尚未設定：點這裡填寫這篇論文通篇要強調的一件事");
+  v.title = "點擊修改。生成段落與 R106 離題檢查都以它為準。";
+  v.onclick = () => {
+    const input = el("input", "kv-edit");
+    input.value = kv;
+    const count = el("span", "np-count");
+    const recount = () => { const [n, max, unit] = PCNew.kvLength(input.value); count.textContent = `${n} / ${max} ${unit}`; count.classList.toggle("bad", n > max); };
+    const save = async () => {
+      if (input.value.trim() === kv) { renderKeyValue(); return; }
+      try {
+        state.paper.meta = await api(`/api/papers/${encodeURIComponent(state.paper.name)}/meta`, { key_value: input.value }, "PUT");
+        state.soft = {};
+        flash("已更新 Key value");
+        refreshGit();
+      } catch (e) { flash(e.message, 6000); }
+      renderKeyValue();
+    };
+    input.oninput = recount;
+    input.onkeydown = (e) => { if (e.key === "Enter") save(); if (e.key === "Escape") renderKeyValue(); };
+    input.onblur = save;
+    v.replaceWith(input, count);
+    recount();
+    input.focus();
+  };
+  bar.append(v);
 }
 
 function renderNav() {
@@ -400,6 +438,7 @@ async function softCheck(again) {
       text: list[p], section: roleOf(sec.title),
       before: list[p - 1] ?? null, after: list[p + 1] ?? null,
       engine: chosenEngine(),
+      key_value: state.paper?.meta?.key_value || null,
     });
   } catch (e) { res = { error: e.message }; }
   state.soft[key] = res.error ? { error: res.error } : { results: res.results };
@@ -543,6 +582,7 @@ async function compose() {
     // Neighbours, so the paragraph links into its place in the text.
     before: list[state.cur.p] ?? null,
     after: list[state.cur.p + 1] ?? null,
+    key_value: state.paper?.meta?.key_value || null,
   };
   const btn = $("#generate");
   btn.disabled = true;
@@ -832,7 +872,7 @@ function fileMenuList() {
   m.append(el("div", "sep"));
   const add = el("button", "", "新論文");
   add.prepend(icon("plus"));
-  add.onclick = newPaperForm;
+  add.onclick = () => PCNew.open();
   const imp = el("button", "", "匯入");
   imp.prepend(icon("upload"));
   imp.onclick = importForm;
@@ -851,66 +891,16 @@ function menuForm(title, tip) {
   return m;
 }
 
-async function newPaperForm() {
-  const m = menuForm("新論文");
-  const input = el("input", "field");
-  input.placeholder = "論文名稱";
-  let tpls = [];
-  try { tpls = await api("/api/templates"); } catch {}
-  let chosen = store.get("pc.newTemplate", "");
-  if (chosen && !tpls.some((t) => t.id === chosen)) chosen = "";
-  const list = el("div", "tpl-list");
-  const label = el("div", "form-label");
-  label.append(el("span", "", "模板"));
-  if (!tpls.length) {
-    const h = el("button", "help", "?");
-    h.dataset.tip = "期刊與研討會的模板在「模板」視窗管理，存在工作區的 publishers/。";
-    label.append(h);
-  }
-  const option = (value, name, sub) => {
-    const b = el("button", "tpl");
-    b.append(el("span", "name", name));
-    if (sub) b.append(el("span", "sub", sub));
-    b.setAttribute("aria-pressed", String(value === chosen));
-    b.onclick = () => {
-      chosen = value;
-      list.querySelectorAll(".tpl").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-      input.focus();
-    };
-    list.append(b);
-  };
-  // journals, then conferences; the search runs over both
-  const fill = (q = "") => {
-    list.innerHTML = "";
-    if (!q) option("", "空白");
-    const hit = (t) => !q || `${t.name} ${t.short ?? ""} ${t.publisher ?? ""} ${t.id}`.toLowerCase().includes(q.toLowerCase());
-    [["journal", "期刊"], ["conference", "研討會"]].forEach(([k, title]) => {
-      const group = tpls.filter((t) => (t.kind === "conference" ? "conference" : "journal") === k && hit(t)).sort((a, b) => a.name.localeCompare(b.name));
-      if (!group.length) return;
-      list.append(el("div", "tpl-group", title));
-      group.forEach((t) => option(t.id, t.name, [t.short, t.publisher].filter(Boolean).join(" · ")));
-    });
-  };
-  fill();
-  const tq = tpls.length > 4 ? el("input", "field") : null;
-  if (tq) { tq.type = "search"; tq.placeholder = "搜尋期刊或研討會"; tq.oninput = () => fill(tq.value); }
-  const go = el("button", "primary small", "建立");
-  const create = () => { store.set("pc.newTemplate", chosen); createPaper(input, chosen); };
-  go.onclick = create;
-  input.onkeydown = (e) => { if (e.key === "Enter") create(); if (e.key === "Escape") m.hidden = true; };
-  const foot = el("div", "form-foot");
-  foot.append(go);
-  m.append(...[input, label, tq, list, foot].filter(Boolean));
-  input.focus();
-}
-
 function importForm() {
   const m = menuForm("匯入", "現有的 LaTeX 論文：.zip、.tar.gz 或 .tex，或 arXiv 上的論文（下載作者上傳的原始檔）。每個 \\section 會成為一個可編輯的章節。");
   const name = el("input", "field");
   name.placeholder = "論文名稱（可留空）";
+  const kv = el("input", "field");
+  kv.placeholder = "Key value（必填）：通篇要強調的一件事";
+  name.kv = kv;
   const file = el("button", "ghost wide", "選擇檔案…");
   file.prepend(icon("upload"));
-  file.onclick = () => pickProject(name);
+  file.onclick = () => { if (!kv.value.trim()) { flash("Key value 必填"); kv.focus(); return; } pickProject(name); };
   const or = el("div", "form-label", "或");
   const arxiv = el("input", "field");
   arxiv.placeholder = "arXiv 編號或網址";
@@ -920,17 +910,18 @@ function importForm() {
   arxiv.onkeydown = (e) => { if (e.key === "Enter") run(); if (e.key === "Escape") m.hidden = true; };
   const foot = el("div", "form-foot");
   foot.append(go);
-  m.append(name, file, or, arxiv, foot);
+  m.append(name, kv, file, or, arxiv, foot);
   name.focus();
 }
 
 async function importArxiv(input, nameInput) {
   const id = input.value.trim();
   if (!id) { input.focus(); return; }
+  if (!nameInput.kv.value.trim()) { flash("Key value 必填"); nameInput.kv.focus(); return; }
   input.disabled = true;
   flash("從 arXiv 下載中…", 60000);
   try {
-    const r = await api("/api/papers/import-arxiv", { id, name: nameInput.value.trim() || null });
+    const r = await api("/api/papers/import-arxiv", { id, name: nameInput.value.trim() || null, key_value: nameInput.kv.value });
     await opened(r.name);
   } catch (e) {
     flash(e.message, 6000);
@@ -952,7 +943,7 @@ function pickProject(input) {
     input.disabled = true;
     flash("匯入中…", 60000);
     try {
-      const r = await fetch(`/api/papers/import?name=${encodeURIComponent(name)}`, { method: "POST", body: file });
+      const r = await fetch(`/api/papers/import?name=${encodeURIComponent(name)}&key_value=${encodeURIComponent(input.kv.value)}`, { method: "POST", body: file });
       if (!r.ok) throw new Error(await r.text());
       await opened(name);
     } catch (e) {
@@ -970,20 +961,6 @@ async function opened(name) {
   await openPaper(name);
   refreshGit();
   flash(`已建立 ${name}`);
-}
-
-async function createPaper(input, template) {
-  const name = input.value.trim();
-  if (!name) { input.focus(); return; }
-  input.disabled = true;
-  try {
-    await api("/api/papers", { name, template: template || null });
-    await opened(name);
-  } catch (e) {
-    flash(e.message, 6000);
-    input.disabled = false;
-    input.focus();
-  }
 }
 
 // templates
@@ -1100,7 +1077,7 @@ function nextId(t, prefix) {
   const max = Math.max(0, ...t.rows.map((r) => parseInt(String(r[ii] ?? "").replace(prefix, ""), 10)).filter((n) => !isNaN(n)));
   return `${prefix}${String(max + 1).padStart(3, "0")}`;
 }
-const PREFIX = { "phrases.csv": "P", "expressions.csv": "X", "rules.csv": "R", "exemplars.csv": "E", "equations.csv": "Q" };
+const PREFIX = { "phrases.csv": "P", "expressions.csv": "X", "rules.csv": "R", "exemplars.csv": "E", "equations.csv": "Q", "authors.csv": "A", "affiliations.csv": "F" };
 
 function addRow(name, values = {}) {
   const t = state.db.tables[name];
@@ -1235,6 +1212,7 @@ function wire() {
   });
 
   PCZoom.init();
+  PCNew.wire();
   wireHoverMenus();
   wireWindows();
   $("#actFile").onclick = toggleFileMenu;

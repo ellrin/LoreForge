@@ -7,3 +7,4 @@ R102,soft,paragraph,claim_has_evidence,,error,Claim lacks evidence or citation
 R103,soft,paragraph,links_to_neighbours,,warning,Weak link to the previous or next paragraph
 R104,soft,paragraph,one_complete_idea,,warning,Paragraph does not finish one idea
 R105,soft,section:Result,first_sentence_states_finding,,warning,First sentence should state the finding
+R106,soft,paragraph,supports_key_value,,warning,"Off topic: the paragraph (or figure, table, abstract, contribution, discussion) does not support the paper's key value"

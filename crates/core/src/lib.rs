@@ -5,12 +5,14 @@
 //! A profile is a folder of plain files that lives in the user's own private
 //! repository. Nothing in this crate writes to it except through explicit calls.
 
+pub mod authors;
 pub mod bib;
 pub mod check;
 pub mod compose;
 pub mod decompose;
 pub mod front;
 pub mod journal;
+pub mod meta;
 pub mod paper;
 pub mod table;
 pub mod vcs;

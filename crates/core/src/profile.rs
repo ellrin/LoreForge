@@ -1,3 +1,4 @@
+use crate::authors::{Affiliation, Author};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -49,7 +50,7 @@ fn default_priority() -> u8 {
     3
 }
 
-fn split_tags<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+pub(crate) fn split_tags<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     let s = String::deserialize(d)?;
     Ok(s.split(';')
         .map(|t| t.trim().to_string())
@@ -137,6 +138,11 @@ pub struct Profile {
     pub expressions: Vec<Expression>,
     pub vocabulary: Vec<VocabEntry>,
     pub rules: Vec<Rule>,
+    /// People the user writes with, and their institutions (optional files).
+    #[serde(default)]
+    pub authors: Vec<Author>,
+    #[serde(default)]
+    pub affiliations: Vec<Affiliation>,
 }
 
 impl Profile {
@@ -199,8 +205,49 @@ impl Profile {
             Vec::new()
         };
 
+        // Optional too. An organization, a family name and an affiliation are
+        // required: they are what every journal asks for.
+        let affiliations: Vec<Affiliation> = if root.join("affiliations.csv").exists() {
+            read_csv::<Affiliation>(root, "affiliations.csv", &mut issues)
+                .into_iter()
+                .filter(|(line, a)| {
+                    let ok = !a.id.trim().is_empty() && !a.organization.trim().is_empty();
+                    if !ok {
+                        issues.push(issue("affiliations.csv", *line, None, "id 與 organization（機構）必填", true));
+                    }
+                    ok
+                })
+                .map(|(_, a)| a)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let authors = if root.join("authors.csv").exists() {
+            read_csv::<Author>(root, "authors.csv", &mut issues)
+                .into_iter()
+                .filter(|(line, a)| {
+                    if a.id.trim().is_empty() || a.family.trim().is_empty() {
+                        issues.push(issue("authors.csv", *line, None, "id 與 family（姓）必填", true));
+                        return false;
+                    }
+                    if a.affiliations.is_empty() {
+                        issues.push(issue("authors.csv", *line, Some("affiliations"), "至少要有一個機構", true));
+                        return false;
+                    }
+                    if let Some(bad) = a.affiliations.iter().find(|f| !affiliations.iter().any(|x| &x.id == *f)) {
+                        issues.push(issue("authors.csv", *line, Some("affiliations"), &format!("機構 {bad} 不在 affiliations.csv"), true));
+                        return false;
+                    }
+                    true
+                })
+                .map(|(_, a)| a)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         Ok((
-            Profile { root: root.to_path_buf(), manifest, phrases, expressions, vocabulary, rules },
+            Profile { root: root.to_path_buf(), manifest, phrases, expressions, vocabulary, rules, authors, affiliations },
             issues,
         ))
     }

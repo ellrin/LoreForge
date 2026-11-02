@@ -28,6 +28,8 @@ The config file is outside every repository, so your path is never committed.
 | `rules.csv` | Paragraph checks |
 | `exemplars.csv` | Whole paragraphs that show your voice |
 | `equations.csv` | Formulas you insert often |
+| `authors.csv` | People you write with, picked when you create a paper |
+| `affiliations.csv` | Their institutions |
 
 Edit them in any spreadsheet app; save as UTF-8 CSV.
 
@@ -56,6 +58,22 @@ Edit them in any spreadsheet app; save as UTF-8 CSV.
 
 The database editor's decompose tool fills this file and phrases.csv from a
 sentence or paragraph you paste in.
+
+### authors.csv and affiliations.csv
+
+| Column | Required | Meaning |
+| --- | --- | --- |
+| `id` | yes | `A001` (authors), `F001` (affiliations) |
+| `family` | yes | Family name |
+| `given` | no | Given name |
+| `email`, `orcid` | no | Printed where the journal's class has a place for them |
+| `affiliations` | yes | Affiliation ids in print order, separated by `;` |
+| `role`, `note` | no | Free text: me, advisor, clinician, ... |
+| `organization` | yes | (affiliations.csv) The institution |
+| `department`, `city`, `country` | no | (affiliations.csv) |
+
+Each paper keeps its key value and the authors picked for it in
+`papers/<paper>/paper.toml`.
 
 ### vocabulary.csv
 

@@ -110,6 +110,8 @@ mod tests {
     fn profile() -> Profile {
         Profile {
             root: Default::default(),
+            authors: vec![],
+            affiliations: vec![],
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },
             phrases: vec![Phrase {
                 id: "P017".into(),
