@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="apps/desktop/icons/logo.png" alt="PaperComposer logo" width="160">
+</p>
+
 # PaperComposer
 
 本機運作的論文寫作編輯器：在排版好的畫面上直接編輯，用你自己的句型資料庫輔助寫作與檢查段落，輸出期刊要求的 LaTeX 或 Word。
@@ -17,6 +21,7 @@ cargo run -p papercomposer
 - Windows：需要 Visual Studio Build Tools（C++）與 WebView2（Windows 10/11 已內建）。
 - macOS：需要 Xcode Command Line Tools。
 - 打包安裝檔：`cargo install tauri-cli --version "^2"`，再於 `apps/desktop/` 執行 `cargo tauri build`。Windows 產生 `.msi` / `.exe`，macOS 產生 `.app` / `.dmg`。
+- 圖示：原始檔為 `apps/desktop/icons/logo.svg`，對應的 1024px 圖為 `logo.png`。換圖後於 `apps/desktop/` 執行 `cargo tauri icon icons/logo.png` 重新產生各尺寸。
 
 **瀏覽器開發模式**（改介面時最快）
 

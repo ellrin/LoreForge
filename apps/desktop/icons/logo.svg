@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A0B33"/>
+      <stop offset="0.6" stop-color="#0C0619"/>
+      <stop offset="1" stop-color="#05030C"/>
+    </linearGradient>
+    <radialGradient id="haze" cx="0.5" cy="0.92" r="0.6">
+      <stop offset="0" stop-color="#FF2BD6" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FF2BD6" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="tile">
+      <rect x="32" y="32" width="960" height="960" rx="216"/>
+    </clipPath>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="14" result="b1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="34" result="b2"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <path id="page" d="M 300 196 H 620 L 748 324 V 800 Q 748 828 720 828 H 300 Q 272 828 272 800 V 224 Q 272 196 300 196 Z M 620 196 V 296 Q 620 324 648 324 H 748"/>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#haze)"/>
+
+    <!-- perspective grid floor -->
+    <g stroke="#FF2BD6" stroke-opacity="0.35" stroke-width="4" fill="none">
+      <line x1="0" y1="760" x2="1024" y2="760"/>
+      <line x1="0" y1="812" x2="1024" y2="812"/>
+      <line x1="0" y1="876" x2="1024" y2="876"/>
+      <line x1="0" y1="956" x2="1024" y2="956"/>
+      <line x1="512" y1="700" x2="512" y2="1024"/>
+      <line x1="512" y1="700" x2="292" y2="1024"/>
+      <line x1="512" y1="700" x2="732" y2="1024"/>
+      <line x1="512" y1="700" x2="72" y2="1024"/>
+      <line x1="512" y1="700" x2="952" y2="1024"/>
+      <line x1="512" y1="700" x2="-148" y2="1024"/>
+      <line x1="512" y1="700" x2="1172" y2="1024"/>
+    </g>
+
+    <!-- scanlines -->
+    <g fill="#FFFFFF" fill-opacity="0.035">
+      <rect x="0" y="120" width="1024" height="6"/>
+      <rect x="0" y="240" width="1024" height="6"/>
+      <rect x="0" y="360" width="1024" height="6"/>
+      <rect x="0" y="480" width="1024" height="6"/>
+      <rect x="0" y="600" width="1024" height="6"/>
+    </g>
+  </g>
+
+  <!-- dark page body so the neon reads on top of the grid -->
+  <path d="M 300 196 H 620 L 748 324 V 800 Q 748 828 720 828 H 300 Q 272 828 272 800 V 224 Q 272 196 300 196 Z" fill="#0A0616" fill-opacity="0.92"/>
+
+  <!-- chromatic-aberration ghosts -->
+  <use href="#page" transform="translate(-12 0)" fill="none" stroke="#FF2BD6" stroke-width="30" stroke-linejoin="round" opacity="0.85"/>
+  <use href="#page" transform="translate(12 0)" fill="none" stroke="#00F0FF" stroke-width="30" stroke-linejoin="round" opacity="0.85"/>
+
+  <!-- main neon outline -->
+  <use href="#page" fill="none" stroke="#B8FBFF" stroke-width="26" stroke-linejoin="round" filter="url(#glow)"/>
+
+  <!-- text lines -->
+  <g stroke-linecap="round" stroke-width="40" fill="none" filter="url(#glow)">
+    <line x1="352" y1="430" x2="668" y2="430" stroke="#00F0FF"/>
+    <line x1="352" y1="526" x2="668" y2="526" stroke="#00F0FF" stroke-opacity="0.85"/>
+    <line x1="352" y1="622" x2="580" y2="622" stroke="#00F0FF" stroke-opacity="0.7"/>
+    <line x1="352" y1="718" x2="476" y2="718" stroke="#FF2BD6"/>
+  </g>
+
+  <!-- glitch slice -->
+  <rect x="560" y="606" width="128" height="14" fill="#FF2BD6" opacity="0.9"/>
+  <rect x="620" y="636" width="70" height="8" fill="#00F0FF" opacity="0.9"/>
+
+  <!-- caret -->
+  <rect x="520" y="668" width="30" height="100" rx="6" fill="#FCEE0A" filter="url(#glow)"/>
+</svg>
