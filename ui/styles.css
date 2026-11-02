@@ -724,6 +724,13 @@ table.plan .src { color: var(--faint); font-size: 11px; }
 .paper .para ul, .paper .para ol { margin: 6px 0; padding-left: 1.6em; text-align: left; }
 .paper .para li.labelled { list-style: none; margin-left: -1.2em; }
 .paper .tex-env.center { text-align: center; }
+.paper .tex-code { margin: 10px 0; padding: 8px 10px; max-width: 100%; overflow-x: auto; background: #00000008; border: 1px solid #0000001a; border-radius: 4px; text-align: left; }
+.paper .tex-code code { font: 12.5px/1.5 var(--mono); white-space: pre; }
+.paper .tex-verb { font: .86em var(--mono); background: #0000000a; border-radius: 3px; padding: 0 3px; white-space: pre-wrap; }
+.zoom { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.zoom button { background: none; border: 1px solid transparent; border-radius: var(--r); color: var(--faint); font: 500 11px var(--mono); height: 22px; min-width: 22px; padding: 0 4px; }
+.zoom button:hover { color: var(--text); background: var(--surface); }
+.zoom .pct { min-width: 44px; }
 .paper .tex-abstract { font-size: .92em; }
 .paper .link { color: #2f5d9e; }
 .paper .tex-notes .img.missing { display: inline-grid; }

@@ -640,7 +640,7 @@ function renderStatus() {
   eng.append(dot, name);
   eng.title = "寫作引擎（右側可切換）";
   eng.onclick = () => Setup.open(pick && pick !== "local" ? "claude" : "model");
-  bar.append(eng);
+  bar.append(eng, PCZoom.control());
   paintSync();
 }
 
@@ -1234,6 +1234,7 @@ function wire() {
     closeTip(); $("#fileMenu").hidden = true; $("#modelMenu").hidden = true; closeHoverMenu(true); PCExport.close();
   });
 
+  PCZoom.init();
   wireHoverMenus();
   wireWindows();
   $("#actFile").onclick = toggleFileMenu;

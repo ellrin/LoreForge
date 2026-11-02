@@ -110,9 +110,34 @@ window.PCTex = (() => {
   }
 
   // ── Source helpers ──────────────────────────────────
+  // Code shown as typed: \verb|…| and verbatim-like environments. A % inside
+  // is code, not a comment.
+  const CODE_ENVS = "verbatim\\*?|Verbatim|BVerbatim|lstlisting|minted|alltt";
+  const VERBATIM_RE = new RegExp(`\\\\begin\\{(${CODE_ENVS})\\}[\\s\\S]*?\\\\end\\{\\1\\}|\\\\verb\\*?([^a-zA-Z\\s*])[^\\n]*?\\2`, "g");
   /** Drop % comments (and the line break they swallow), keep \%. */
   function stripComments(t) {
-    return t.replace(/(?<!\\)%[^\n]*(\n[ \t]*)?/g, "");
+    const strip = (s) => s.replace(/(?<!\\)%[^\n]*(\n[ \t]*)?/g, "");
+    let out = "", last = 0;
+    for (const m of t.matchAll(VERBATIM_RE)) {
+      out += strip(t.slice(last, m.index)) + m[0];
+      last = m.index + m[0].length;
+    }
+    return out + strip(t.slice(last));
+  }
+  /** \begin{lstlisting}…: a <pre> of the code as typed. */
+  function codeNode(env, body) {
+    let b = body;
+    if (env !== "verbatim" && env !== "verbatim*" && env !== "alltt") { const o = optional(b, 0); if (o) b = b.slice(o[1]); }
+    if (env === "minted") { const g = required(b, 0); if (g) b = b.slice(g[1]); }
+    b = b.replace(/^[ \t]*\n/, "").replace(/\n[ \t]*$/, "");
+    const pre = el("pre", "tex-code");
+    const code = el("code");
+    if (env === "lstlisting") {
+      // escapeinside (*…*) holds LaTeX, usually comments
+      b.split(/\(\*([\s\S]*?)\*\)/).forEach((part, x) => code.append(x % 2 ? render(part) : document.createTextNode(part)));
+    } else code.textContent = b;
+    pre.append(code);
+    return pre;
   }
 
   // Read a balanced {group} starting at s[i] === "{". Returns [content, nextIndex].
@@ -452,7 +477,8 @@ window.PCTex = (() => {
     tiny: 0, scriptsize: 0, footnotesize: 0, small: 0, normalsize: 0, large: 0, Large: 0, LARGE: 0, huge: 0, Huge: 0, selectfont: 0, bfseries: 0, itshape: 0, rmfamily: 0, sffamily: 0, ttfamily: 0, normalfont: 0,
     markboth: 2, markright: 1, IEEEpubid: 1, IEEEoverridecommandlockouts: 0, IEEEpubidadjcol: 0, IEEEdisplaynontitleabstractindextext: 0, IEEEaftertitletext: 1,
     titlerunning: 1, authorrunning: 1, date: 1, newblock: 0, BibitemOpen: 0, BibitemShut: 1, urlstyle: 1, appendices: 0, backmatter: 0, bibliography: 1, printbibliography: 0,
-    maketitle: 0, appendix: 0, frenchspacing: 0, sloppy: 0, balance: 0, IEEEPARstart: 0, hline: 0, toprule: 0, midrule: 0, bottomrule: 0 };
+    maketitle: 0, appendix: 0, frenchspacing: 0, sloppy: 0, balance: 0, IEEEPARstart: 0, hline: 0, toprule: 0, midrule: 0, bottomrule: 0,
+    lstset: 1, lstdefinestyle: 2, lstloadlanguages: 1, definecolor: 3, hypersetup: 1, sisetup: 1, graphicspath: 1, usetikzlibrary: 1, theoremstyle: 1 };
   // Commands whose last argument is shown as text.
   const PASS = { textrm: 1, textsf: 1, textnormal: 1, textup: 1, textmd: 1, text: 1, mbox: 1, hbox: 1, fbox: 1, centerline: 1, makebox: 1, framebox: 1, parbox: 2, resizebox: 3, scalebox: 2, rotatebox: 2, raisebox: 2,
     adjustbox: 2, NoHyper: 1, fnm: 1, sur: 1, spfx: 1, orgdiv: 1, orgname: 1, orgaddress: 1, street: 1, city: 1, postcode: 1, state: 1, country: 1, bibinfo: 2, bibfield: 2, natexlab: 1, textsuperscript: 1, IEEEauthorrefmark: 1, acrshort: 1, acrlong: 1, acrfull: 1, gls: 1, ac: 1, acp: 1, acs: 1, acl: 1, acf: 1, sethlcolor: 1 };
@@ -498,6 +524,18 @@ window.PCTex = (() => {
       }
       if (c === "{" || c === "}") { i++; continue; }
       if (c === "\\") {
+        // inline code: \verb+…+, \lstinline[opt]{…} or \lstinline|…|
+        const vm = text.slice(i, i + 12).match(/^\\(verb|lstinline)(?![a-zA-Z])\*?/);
+        if (vm) {
+          let k = i + vm[0].length, code = null;
+          if (vm[1] === "lstinline") { const o = optional(text, k); if (o) k = o[1]; }
+          if (vm[1] === "lstinline" && text[k] === "{") { const g = group(text, k); code = g[0]; k = g[1]; }
+          else if (text[k] && !/[\sa-zA-Z]/.test(text[k])) {
+            const end = text.indexOf(text[k], k + 1);
+            if (end > 0) { code = text.slice(k + 1, end); k = end + 1; }
+          }
+          if (code != null) { add(el("code", "tex-verb", code)); i = k; continue; }
+        }
         // accents: \'e \"{o} \c{c}
         const acc = text[i + 1];
         if (ACCENTS[acc] && (/[^a-zA-Z]/.test(acc) ? true : !/[a-zA-Z]/.test(text[i + 2] ?? "") || text[i + 2] === "{")) {
@@ -635,6 +673,7 @@ window.PCTex = (() => {
   function block(env, body) {
     const base = env.replace("*", "");
     if (MATH_ENVS.includes(base)) return envNode(env, body);
+    if (new RegExp(`^(${CODE_ENVS})$`).test(env)) return codeNode(env, body);
     if (FLOAT_KIND[env] === "fig" || base === "subfigure") {
       // a figure holding only a table is a table
       if (/\\begin\{tabular/.test(body) && !/\\includegraphics/.test(body)) return tableNode(env, body);

@@ -11,7 +11,6 @@ use pc_core::vcs::{commit_message, secret_like};
 use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
-use tokio::process::Command;
 
 #[derive(Debug, Serialize, Default)]
 pub struct GitStatus {
@@ -36,7 +35,7 @@ pub struct SyncResult {
 }
 
 async fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let run = Command::new("git")
+    let run = crate::proc::cmd("git")
         .args(args)
         .current_dir(dir)
         .env("GIT_TERMINAL_PROMPT", "0") // never hang waiting for a password

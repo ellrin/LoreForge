@@ -6,7 +6,6 @@
 use pc_core::textable::{self, Measured, TexTable};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::process::Command;
 
 pub fn pdflatex() -> Option<PathBuf> {
     tool("pdflatex")
@@ -91,7 +90,7 @@ pub async fn measure(paper: &Path, t: &TexTable) -> Result<Measured, String> {
     let sep = if cfg!(windows) { ";" } else { ":" };
     let out = tokio::time::timeout(
         Duration::from_secs(40),
-        Command::new(&tex)
+        crate::proc::cmd(&tex)
             .current_dir(&dir)
             // the paper folder first, then the usual search path (trailing separator)
             .env("TEXINPUTS", format!("{}{sep}", paper.display()))

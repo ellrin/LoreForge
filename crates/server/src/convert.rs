@@ -184,7 +184,7 @@ fn walk(d: &Path, base: &Path, out: &mut Vec<String>) {
 
 fn kpsewhich(name: &str) -> bool {
     crate::texmeasure::tool("kpsewhich")
-        .and_then(|k| std::process::Command::new(k).arg(name).output().ok())
+        .and_then(|k| crate::proc::std_cmd(k).arg(name).output().ok())
         .is_some_and(|o| o.status.success() && !o.stdout.is_empty())
 }
 
@@ -286,7 +286,7 @@ async fn prepare(id: &str) -> Result<(), String> {
     if let Some(docx) = files.iter().find(|f| f.to_lowercase().ends_with(".docx")) {
         let path = src.join(docx);
         if let Some(pandoc) = crate::texmeasure::tool("pandoc") {
-            let o = tokio::process::Command::new(pandoc).arg(&path).args(["-t", "markdown", "--wrap=none"]).output().await.map_err(|e| e.to_string())?;
+            let o = crate::proc::cmd(pandoc).arg(&path).args(["-t", "markdown", "--wrap=none"]).output().await.map_err(|e| e.to_string())?;
             std::fs::write(prep.join("word.md"), &o.stdout).map_err(|e| e.to_string())?;
         }
         std::fs::write(prep.join("word-format.txt"), docx_format(&path)).map_err(|e| e.to_string())?;
@@ -295,7 +295,7 @@ async fn prepare(id: &str) -> Result<(), String> {
     if reference.is_file() {
         render_pages(&reference, &prep, "reference", 3).await;
         if let Some(gs) = crate::texmeasure::tool("gs") {
-            let o = tokio::process::Command::new(gs)
+            let o = crate::proc::cmd(gs)
                 .args(["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=txtwrite", "-dFirstPage=1", "-dLastPage=3", "-sOutputFile=-"])
                 .arg(&reference)
                 .output()
@@ -310,7 +310,7 @@ async fn prepare(id: &str) -> Result<(), String> {
 /// Pages 1..n of a PDF as `<stem>-<page>.png`.
 pub async fn render_pages(pdf: &Path, out: &Path, stem: &str, n: u32) {
     if let Some(gs) = crate::texmeasure::tool("gs") {
-        let _ = tokio::process::Command::new(gs)
+        let _ = crate::proc::cmd(gs)
             .args(["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=png16m", "-r60", "-dFirstPage=1"])
             .arg(format!("-dLastPage={n}"))
             .arg(format!("-sOutputFile={}", out.join(format!("{stem}-%d.png")).display()))
@@ -431,7 +431,7 @@ pub async fn run(job: &mut Job, auth: Auth, model: &str, system: &str, instructi
     let tex_path = crate::texmeasure::tool("pdflatex").and_then(|p| p.parent().map(Path::to_path_buf));
     let gs_path = crate::texmeasure::tool("gs").and_then(|p| p.parent().map(Path::to_path_buf));
     let path = [tex_path, gs_path].into_iter().flatten().map(|p| p.display().to_string()).chain(std::env::var("PATH").ok()).collect::<Vec<_>>().join(":");
-    let mut c = tokio::process::Command::new(bin);
+    let mut c = crate::proc::cmd(bin);
     for v in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"] {
         c.env_remove(v);
     }
@@ -505,7 +505,7 @@ const ALLOWED: &[&str] = &[
 pub fn stop(id: &str) {
     let pid = RUNNING.lock().unwrap().as_mut().and_then(|m| m.remove(id));
     if let Some(pid) = pid.filter(|p| *p > 0) {
-        let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+        let _ = crate::proc::std_cmd("kill").arg(pid.to_string()).status();
     }
     if let Some(mut j) = load(id) {
         j.status = "idle".into();

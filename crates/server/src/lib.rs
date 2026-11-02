@@ -18,6 +18,7 @@ pub mod engine;
 pub mod export;
 pub mod import;
 pub mod preview;
+pub mod proc;
 pub mod git;
 pub mod models;
 pub mod refimport;
@@ -1829,7 +1830,7 @@ struct GitTool {
 }
 
 async fn cmd_out(args: &[&str]) -> Option<String> {
-    let out = tokio::process::Command::new(args[0]).args(&args[1..]).env("GIT_TERMINAL_PROMPT", "0").output().await.ok()?;
+    let out = crate::proc::cmd(args[0]).args(&args[1..]).env("GIT_TERMINAL_PROMPT", "0").output().await.ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
 }
 
@@ -1938,7 +1939,7 @@ async fn setup_clone(State(s): State<Shared>, Json(b): Json<CloneBody>) -> impl 
     if target.exists() {
         return bad(&format!("{} 已經存在；若已 clone 過，請改用「開啟資料夾」", target.display()));
     }
-    let out = tokio::process::Command::new("git")
+    let out = crate::proc::cmd("git")
         .args(["clone", "--quiet", url])
         .arg(&target)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -1973,7 +1974,7 @@ async fn setup_new(State(s): State<Shared>, Json(b): Json<NewBody>) -> impl Into
     let run = |args: Vec<String>| {
         let p = path.clone();
         async move {
-            let o = tokio::process::Command::new("git").args(&args).current_dir(&p).env("GIT_TERMINAL_PROMPT", "0").output().await;
+            let o = crate::proc::cmd("git").args(&args).current_dir(&p).env("GIT_TERMINAL_PROMPT", "0").output().await;
             match o {
                 Ok(o) if o.status.success() => Ok(()),
                 Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),

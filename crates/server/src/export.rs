@@ -244,7 +244,7 @@ pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<R
         std::fs::copy(paper.join("main.bbl"), out.join("main.bbl")).map_err(|e| e.to_string())?;
     }
     let latex = |out: &Path| {
-        let mut c = Command::new(&tex);
+        let mut c = crate::proc::cmd(&tex);
         c.current_dir(paper)
             .env("max_print_line", "100000")
             .env("error_line", "254")
@@ -297,7 +297,7 @@ pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<R
 /// Run BibTeX or Biber in the build folder; returns its warnings.
 async fn run_bib(prog: &str, paper: &Path, out: &Path) -> Result<Vec<String>, String> {
     let exe = tool(prog).ok_or_else(|| format!("找不到 {prog}：sudo tlmgr install {prog}"))?;
-    let mut c = Command::new(exe);
+    let mut c = crate::proc::cmd(exe);
     c.current_dir(out).env("BIBINPUTS", search_path(paper)).env("BSTINPUTS", search_path(paper));
     if prog == "biber" {
         c.arg(format!("--input-directory={}", paper.display()));
@@ -382,7 +382,7 @@ pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Rep
     std::fs::write(&filter, figure_filter(paper).await).map_err(|e| e.to_string())?;
     let bibs: Vec<PathBuf> = bibs.iter().map(|b| paper.join(b)).filter(|b| b.is_file()).collect();
     let pandoc_run = |bibs: &[PathBuf]| {
-        let mut c = Command::new(&pandoc);
+        let mut c = crate::proc::cmd(&pandoc);
         c.current_dir(paper).arg(&compat_file).args(["main.tex", "--from=latex", "--to=docx", "--resource-path=."]).arg("-o").arg(&dest);
         c.arg(format!("--lua-filter={}", filter.display()));
         if !bibs.is_empty() {
@@ -650,7 +650,7 @@ fn first_with_ext(dir: &Path, ext: &str) -> Option<String> {
 pub fn open(path: &Path, reveal: bool) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut cmd = {
-        let mut c = std::process::Command::new("open");
+        let mut c = crate::proc::std_cmd("open");
         if reveal {
             c.arg("-R");
         }
@@ -659,13 +659,13 @@ pub fn open(path: &Path, reveal: bool) -> Result<(), String> {
     };
     #[cfg(target_os = "windows")]
     let mut cmd = {
-        let mut c = std::process::Command::new("explorer");
+        let mut c = crate::proc::std_cmd("explorer");
         if reveal { c.arg(format!("/select,{}", path.display())); } else { c.arg(path); }
         c
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut cmd = {
-        let mut c = std::process::Command::new("xdg-open");
+        let mut c = crate::proc::std_cmd("xdg-open");
         c.arg(if reveal { path.parent().unwrap_or(path) } else { path });
         c
     };

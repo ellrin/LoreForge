@@ -381,7 +381,7 @@ pub async fn figure_image(file: &Path, cache: &Path) -> Option<(PathBuf, &'stati
     std::fs::create_dir_all(cache).ok()?;
     let mut ok = false;
     if let Some(gs) = tool("gs") {
-        let mut c = tokio::process::Command::new(gs);
+        let mut c = crate::proc::cmd(gs);
         c.args(["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=png16m", "-r144", "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4", "-dFirstPage=1", "-dLastPage=1"]);
         if ext != "pdf" {
             c.arg("-dEPSCrop");
@@ -390,7 +390,7 @@ pub async fn figure_image(file: &Path, cache: &Path) -> Option<(PathBuf, &'stati
         ok = c.kill_on_drop(true).output().await.is_ok_and(|o| o.status.success());
     }
     if !ok && cfg!(target_os = "macos") && ext == "pdf" {
-        ok = tokio::process::Command::new("sips")
+        ok = crate::proc::cmd("sips")
             .args(["-s", "format", "png"])
             .arg(file)
             .arg("--out")

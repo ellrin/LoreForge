@@ -3,7 +3,8 @@
 //! counts against the subscription instead of API billing.
 //!
 //! Each call runs in an empty temporary folder with every tool turned off and
-//! all customisations skipped (`--safe-mode`), so it only answers the prompt
+//! all customisations skipped (`--safe-mode`, or its equivalent on older
+//! CLIs; see `isolation_flags`), so it only answers the prompt
 //! and never reads or writes the user's files. ANTHROPIC_API_KEY is removed
 //! from the child's environment: with it set, Claude Code would bill the API.
 //! `--bare` is not used because bare mode ignores the subscription login.
@@ -34,7 +35,7 @@ pub fn binary() -> Option<PathBuf> {
 }
 
 fn command(bin: &PathBuf) -> Command {
-    let mut c = Command::new(bin);
+    let mut c = crate::proc::cmd(bin);
     for v in STRIP_ENV {
         c.env_remove(v);
     }
@@ -122,9 +123,11 @@ pub async fn complete(prompt: &Prompt, model: &str, extra: Option<&str>) -> Resu
         user += "\n";
         user += e;
     }
+    let isolation = isolation_flags(&bin).await;
     let mut c = command(&bin);
     c.current_dir(&dir)
-        .args(["-p", "--output-format", "json", "--safe-mode", "--no-session-persistence", "--tools", ""])
+        .args(["-p", "--output-format", "json", "--no-session-persistence", "--tools", ""])
+        .args(isolation)
         .args(["--model", model, "--system-prompt", &prompt.system])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -138,6 +141,30 @@ pub async fn complete(prompt: &Prompt, model: &str, extra: Option<&str>) -> Resu
         .map_err(|_| "Claude Code 超過 5 分鐘沒有回應".to_string())?
         .map_err(|e| e.to_string())?;
     parse_output(&out.stdout, &out.stderr)
+}
+
+/// Flags that skip the user's customisations. `--safe-mode` does it in one
+/// flag but only newer CLIs have it; older ones get the same effect from no
+/// setting sources (so no hooks or settings), no MCP servers and no slash
+/// commands. Read once from `claude --help`.
+async fn isolation_flags(bin: &PathBuf) -> &'static [&'static str] {
+    static FLAGS: tokio::sync::OnceCell<&'static [&'static str]> = tokio::sync::OnceCell::const_new();
+    *FLAGS
+        .get_or_init(|| async {
+            let help = command(bin).arg("--help").output().await.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+            pick_isolation(&help)
+        })
+        .await
+}
+
+fn pick_isolation(help: &str) -> &'static [&'static str] {
+    if help.contains("--safe-mode") {
+        &["--safe-mode"]
+    } else if help.contains("--disable-slash-commands") {
+        &["--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands"]
+    } else {
+        &["--strict-mcp-config", "--setting-sources", ""]
+    }
 }
 
 /// The `--output-format json` result: text in `result`, failures flagged by
@@ -157,7 +184,14 @@ fn parse_output(stdout: &[u8], stderr: &[u8]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_output;
+    use super::{parse_output, pick_isolation};
+
+    #[test]
+    fn isolation_follows_the_cli_version() {
+        assert_eq!(pick_isolation("  --safe-mode   Skip customisations\n  --disable-slash-commands"), &["--safe-mode"]);
+        assert_eq!(pick_isolation("  --disable-slash-commands\n  --strict-mcp-config"), &["--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands"]);
+        assert!(!pick_isolation("").contains(&"--safe-mode"));
+    }
 
     #[test]
     fn reads_result_and_errors() {

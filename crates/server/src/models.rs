@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::Mutex;
 
 const CATALOG: &str = include_str!("../../../models/catalog.json");
@@ -92,7 +92,7 @@ pub async fn system_info() -> SystemInfo {
     let (mut gpu, mut gpu_memory_gb) = (None, None);
     if let Ok(Ok(out)) = tokio::time::timeout(
         Duration::from_secs(5),
-        Command::new("nvidia-smi").args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]).output(),
+        crate::proc::cmd("nvidia-smi").args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]).output(),
     )
     .await
     {
@@ -431,7 +431,7 @@ pub async fn start(mgr: &Manager, id: &str) -> Result<String, String> {
     stop(mgr).await;
     *mgr.phase.lock().await = "starting".into();
     let port = free_port();
-    let mut cmd = Command::new(&bin);
+    let mut cmd = crate::proc::cmd(&bin);
     cmd.arg("-m")
         .arg(models_dir().join(&m.model_file))
         .args(["--host", "127.0.0.1", "--port", &port.to_string(), "-c", &m.context.to_string(), "-ngl", "999", "--jinja"])
@@ -445,11 +445,6 @@ pub async fn start(mgr: &Manager, id: &str) -> Result<String, String> {
     }
     if let Some(dir) = bin.parent() {
         cmd.current_dir(dir); // shared libraries ship next to the binary
-    }
-    #[cfg(windows)]
-    {
-        // No console window for the background server.
-        cmd.creation_flags(0x0800_0000);
     }
     let mut child = cmd.spawn().map_err(|e| format!("無法啟動 llama.cpp：{e}"))?;
     let url = format!("http://127.0.0.1:{port}/v1");

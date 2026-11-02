@@ -108,15 +108,15 @@ pub const KEYS_PAGE: &str = "https://console.anthropic.com/settings/keys";
 /// `PAGES` in lib.rs): the local API must not open arbitrary links.
 pub fn open_in_browser(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    let mut cmd = std::process::Command::new("open");
+    let mut cmd = crate::proc::std_cmd("open");
     #[cfg(target_os = "windows")]
     let mut cmd = {
-        let mut c = std::process::Command::new("rundll32");
+        let mut c = crate::proc::std_cmd("rundll32");
         c.arg("url.dll,FileProtocolHandler");
         c
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let mut cmd = std::process::Command::new("xdg-open");
+    let mut cmd = crate::proc::std_cmd("xdg-open");
     cmd.arg(url).spawn().map(|_| ()).map_err(|e| format!("無法開啟瀏覽器：{e}"))
 }
 

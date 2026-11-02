@@ -323,6 +323,7 @@ const PCRefs = (() => {
     await load();
     const f = { q: "", tags: new Set() };
     const chosen = new Set();
+    let lastReq = null; // the Claude request as the user last edited it
     pop(anchor, (p) => {
       p.classList.add("cite-pop");
       const search = el("input", "search");
@@ -392,12 +393,19 @@ const PCRefs = (() => {
         listMode.hidden = true;
         searchBox.hidden = false;
         searchBox.innerHTML = "";
-        const sec = sections()[at.si];
-        const para = sec?.paragraphs[at.pi] ?? "";
-        const lead = para.replace(/\\[a-zA-Z]+\*?(\[[^\]]*\])?(\{[^}]*\})?/g, " ").replace(/[{}$~%]/g, " ").split(/(?<=[.!?。])\s+/).slice(0, 2).join(" ").replace(/\s+/g, " ").trim();
         const req = el("textarea", "request");
         req.rows = 3;
-        req.value = lead ? `幫我找關於「${lead}」的文獻` : "";
+        // What the user typed wins; then the request they last wrote here;
+        // only then a suggestion from the paragraph.
+        const typed = search.value.trim();
+        if (typed) req.value = typed;
+        else if (lastReq != null) req.value = lastReq;
+        else {
+          const para = sections()[at.si]?.paragraphs[at.pi] ?? "";
+          const lead = para.replace(/\\[a-zA-Z]+\*?(\[[^\]]*\])?(\{[^}]*\})?/g, " ").replace(/[{}$~%]/g, " ").split(/(?<=[.!?。])\s+/).slice(0, 2).join(" ").replace(/\s+/g, " ").trim();
+          req.value = lead ? `幫我找關於「${lead}」的文獻` : "";
+        }
+        req.oninput = () => { lastReq = req.value; };
         req.placeholder = "幫我找…";
         const want = { q: "", tags: new Set() };
         const back = iconButton("back", "回到文獻庫", () => { searchBox.hidden = true; listMode.hidden = false; draw(); });
@@ -407,7 +415,7 @@ const PCRefs = (() => {
         head.append(back, req, send);
         const results = el("div", "cite-list");
         searchBox.append(head, tagChips(want, () => {}), results);
-        setTimeout(() => req.focus());
+        setTimeout(() => { req.focus(); req.setSelectionRange(req.value.length, req.value.length); });
 
         async function run() {
           if (!req.value.trim()) return req.focus();
