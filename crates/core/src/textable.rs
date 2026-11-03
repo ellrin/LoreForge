@@ -884,6 +884,80 @@ pub fn new_table(s: &Style) -> Result<TexTable, String> {
     Ok(t)
 }
 
+// ── tables from pasted data ────────────────────────────
+
+/// Rows of cells from pasted data: a spreadsheet copy (tab-separated), a
+/// Markdown table, or CSV. Blank lines and Markdown separator rows are dropped;
+/// cells are trimmed.
+pub fn parse_grid(text: &str) -> Vec<Vec<String>> {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return vec![];
+    }
+    let trim = |v: Vec<String>| -> Vec<String> { v.into_iter().map(|c| c.trim().to_string()).collect() };
+    if lines.iter().all(|l| l.trim_start().starts_with('|')) {
+        return lines
+            .iter()
+            .filter(|l| !l.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '+')))
+            .map(|l| {
+                let t = l.trim();
+                let t = t.strip_prefix('|').unwrap_or(t);
+                let t = t.strip_suffix('|').unwrap_or(t);
+                trim(t.split('|').map(String::from).collect())
+            })
+            .collect();
+    }
+    if lines.iter().any(|l| l.contains('\t')) {
+        return lines.iter().map(|l| trim(l.split('\t').map(String::from).collect())).collect();
+    }
+    let mut r = csv::ReaderBuilder::new().has_headers(false).flexible(true).from_reader(text.as_bytes());
+    r.records().flatten().map(|rec| trim(rec.iter().map(String::from).collect())).filter(|row: &Vec<String>| row.iter().any(|c| !c.is_empty())).collect()
+}
+
+/// Escape what breaks LaTeX in a pasted cell; text already escaped, and
+/// math in `$...$`, is left alone.
+fn tex_cell(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut math = false;
+    let mut prev = ' ';
+    for c in s.chars() {
+        if c == '$' && prev != '\\' {
+            math = !math;
+        }
+        if !math && matches!(c, '&' | '%' | '#' | '_') && prev != '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+        prev = c;
+    }
+    out
+}
+
+/// A table in a style from a grid of plain text; the first row is the header.
+pub fn from_grid(grid: &[Vec<String>], caption: &str, label: &str, style: &Style) -> TexTable {
+    let ncols = grid.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
+    let rows: Vec<Vec<Cell>> = grid
+        .iter()
+        .map(|r| (0..ncols).map(|i| Cell { text: tex_cell(r.get(i).map(String::as_str).unwrap_or("")), colspan: 1, rowspan: 1, covered: false, align: None }).collect())
+        .collect();
+    let n = rows.len();
+    let mut cols = vec!["c".to_string(); ncols];
+    cols[0] = "l".into();
+    let mut t = TexTable {
+        env: "table".into(),
+        caption: Some(caption.trim().to_string()),
+        label: Some(label.to_string()),
+        cols,
+        vlines: vec![false; ncols + 1],
+        rows,
+        rules: vec![vec![]; n + 1],
+        gaps: vec![None; n],
+        ..Default::default()
+    };
+    apply_style(&mut t, style);
+    t
+}
+
 // ── layout: fit the table to the journal's page ────────
 
 pub const FONT_STEPS: &[&str] = &["normalsize", "small", "footnotesize", "scriptsize"];
@@ -1010,6 +1084,38 @@ pub fn advise(t: &TexTable, limits: &Limits, base_env: &str, m: &Measured) -> Ad
         "無法量測".into()
     };
     Advice { ok: false, current, suggest, reason }
+}
+
+#[cfg(test)]
+mod grid_tests {
+    use super::*;
+
+    #[test]
+    fn reads_spreadsheet_markdown_and_csv() {
+        let tsv = "Model\tAUC\tF1\nResNet50\t0.91\t0.85\n\nViT\t0.93\t0.88\n";
+        assert_eq!(parse_grid(tsv), vec![vec!["Model", "AUC", "F1"], vec!["ResNet50", "0.91", "0.85"], vec!["ViT", "0.93", "0.88"]]);
+        let md = "| Model | AUC |\n|---|:---:|\n| A | 0.9 |\n";
+        assert_eq!(parse_grid(md), vec![vec!["Model", "AUC"], vec!["A", "0.9"]]);
+        let csv = "Model,\"AUC, 95% CI\"\nA,\"0.91 (0.88-0.93)\"\n";
+        assert_eq!(parse_grid(csv), vec![vec!["Model", "AUC, 95% CI"], vec!["A", "0.91 (0.88-0.93)"]]);
+        assert!(parse_grid(" \n").is_empty());
+    }
+
+    #[test]
+    fn builds_a_styled_table() {
+        let style = builtin_styles().into_iter().find(|s| s.id == "booktabs").unwrap();
+        let grid = parse_grid("Model\tAUC (95% CI)\tn_test\nA & B\t$0.91$\t120\nC\t0.8");
+        let t = from_grid(&grid, "Results on the test set", "tab:results", &style);
+        assert_eq!(t.cols, ["l", "c", "c"]);
+        let tex = render(&t);
+        assert!(tex.contains("\\caption{Results on the test set}"), "{tex}");
+        assert!(tex.contains("\\label{tab:results}"));
+        assert!(tex.contains("AUC (95\\% CI)") && tex.contains("n\\_test") && tex.contains("A \\& B") && tex.contains("$0.91$"));
+        assert!(tex.contains("\\toprule") && tex.contains("\\midrule") && tex.contains("\\bottomrule"));
+        // the short last row is padded
+        assert_eq!(t.rows[2].len(), 3);
+        assert!(parse(&tex).is_ok(), "the editor can read it back");
+    }
 }
 
 #[cfg(test)]

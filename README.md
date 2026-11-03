@@ -80,13 +80,16 @@ your-private-repo/
 
 ## 新論文
 
-論文選單的「新論文」開啟三個步驟的視窗：
+論文選單的「新論文」開啟五個步驟的視窗（後兩步選填；第 3 步起就能按「建立論文」）：
 
 1. **名稱與版型**：選期刊或研討會的模板，或空白 article。
 2. **作者**：從作者資料庫勾選、排順序，標記通訊作者與同等貢獻。資料庫在 `profile/authors.csv`（姓名、email、ORCID、所屬機構、角色）與 `profile/affiliations.csv`（系所、機構、城市、國家），姓與機構必填，其他可空著；在這裡新增的人會存進資料庫，下一篇直接選，也可以在「資料庫」視窗的「作者」「機構」分頁編輯。作者區塊依版型的寫法產生，不經過模型：Springer Nature（`\author[1]{\fnm{}\sur{}}`、`\affil`）、Elsevier（`elsarticle` 的 `\corref`；`cas-dc` 的 `\cormark` 與 `[orcid=]`）、IEEE 期刊（`\thanks{… is with …}`）、IEEE 會議（`\IEEEauthorblockN/A`）、LNCS（`\inst`、`\orcidID`、`\institute`），其他 class 用通用的 `\author{Name\\ 機構 \and …}`。範例裡的作者整段換掉，其餘不動。
 3. **Key value 與大綱**：
    - **Key value 必填**：這篇論文通篇要強調的一件事，可以是願景（例如「提升 XX 效能」）。中文最多 50 字、英文最多 30 個單字，存在 `paper.toml`；論文上方會一直顯示，點一下可修改。匯入現有論文時也要填。
    - **大綱（選填，需要 Claude）**：條列章節與要說的事，Claude 依 Key value 給 3 個標題建議，並排出 section／subsection，每段最多兩句話說明這裡要寫什麼（寫在內文，之後自己改）。有期刊模板時依期刊的章節順序；勾選套用就取代模板的範例章節，前後的標題區與參考文獻區保留。
+
+4. **表格（選填）**：已經有的結果先放進來。從 Excel 或 Google 試算表選取儲存格直接貼上（也可以貼 CSV 或 Markdown 表格），第一列是表頭，下方即時預覽列數與欄數。每個表格填標題、選要放的章節（大綱架構的章節、模板的章節或空白論文的章節）和樣式（預設用這個期刊的：Springer Nature、Elsevier、IEEE、LNCS、CVPR，其他用 booktabs），可調整順序。建立時依序放在各章節的最後，產生 `\caption`、`\label{tab:…}`，需要的套件自動加進 `main.tex`；之後在頁面上照常編輯。
+5. **文獻（選填，需要 Claude）**：把想引用的文章一次貼上，可以夾雜備註（見下方「文獻」的「貼上想引用的文章」）。Claude 先算出有幾篇，再三篇一組查證、建檔、加標籤存進文獻庫，顯示進度條；可以邊匯入邊回到其他步驟。你對每篇的備註（例如「需注意 · Methods · 只支撐…」）會記成這篇論文的引用用途（`citations.csv`）。
 
 **Key value 是生成與檢查的約束**：生成段落時放進規則；檢查加了一條軟規則 R106（`supports_key_value`），判斷段落、圖表、摘要、contribution、討論是否離題。它是黃燈：延伸討論不一定完全對齊主題，不必每段都綠燈。
 
@@ -156,7 +159,13 @@ tlmgr search --global --file /xxx.sty
 - **匯入 PDF 或 DOI**：文獻頁會列出 PDF 資料夾裡還沒匯入的檔案。匯入時從 PDF 前兩頁讀出 DOI（跨行斷開的也會接回），書目向 Crossref（doi.org）取得，摘要依序向 OpenAlex、Semantic Scholar、PDF 本身的 Abstract 段落取得；**書目不經過模型**。模型只負責寫中文簡介、一句話，並從你的標籤清單挑標籤；頂會、頂刊依 `profile/venues.csv`（`pattern,tag`，沒有時用內建清單）判斷。抓到的標題若和 PDF 內容對不上（例如 DOI 被截斷而對到整本論文集），會標示並請你更正 DOI。每一篇都要你確認後才加入。
 - **插入引用**：上方「插入 → 引用…」，搜尋或用標籤篩選、可多選，插在游標處（沒有在編輯時插在段落句尾），可順便記下用途。
 - **用 Claude 找新文獻**（插入引用視窗的放大鏡；沒連 Claude 時是灰的）：預設請求是「幫我找關於『段落開頭』的文獻」，可再選標籤引導（回顧→只找 review；新算法→近 3 年；經典算法→依引用數排序；頂會／頂刊→依期刊清單篩選）。Claude 把請求轉成搜尋關鍵字，**文獻一律來自 OpenAlex**（都有 DOI、排除只有預印本的），Claude 再從候選中排序並寫一句為什麼適合；它不能新增或改寫候選。點標題開啟 DOI 頁面，有開放取用版本可直接開 PDF；「加入」會向 Crossref 取得書目、寫好簡介與標籤後放進文獻庫，並勾選待插入。
-- **貼上想引用的文章**（文獻頁的清單圖示；需要 Claude）：一次貼很多篇，參考文獻清單、標題、DOI 都可以。Claude 只負責拆成一篇一篇並抄下文字裡寫的標題、作者、年份、DOI，不從記憶補資料；**是否真的存在由 Crossref 判斷**：有 DOI 的要對得上標題，沒有的用標題、作者、年份搜尋比對。結果分成找到、需要確認（列出相近的候選讓你選）、查不到、已在文獻庫。勾選後按「建檔並存入」，每篇照「匯入 DOI」的流程向 Crossref 取書目、寫簡介、挑標籤後存進文獻庫。
+- **貼上想引用的文章**（文獻頁的清單圖示，或新論文的第 5 步；需要 Claude）：一次貼很多篇，參考文獻清單、標題、DOI、PMID、arXiv 編號都可以，中間夾雜的備註與小標題也沒關係。Claude 只負責拆成一篇一篇，抄下文字裡寫的書目欄位，以及你對每篇的備註（原文照抄），不從記憶補資料。**是否真的存在由資料庫判斷**：
+  - 有 DOI：Crossref 上要對得上標題（你寫的簡短標題、或 Crossref 把副標題分開存的，都算對得上）
+  - arXiv：向 arXiv 查證，書目用 arXiv 的 DOI（`10.48550/arXiv.…`）
+  - PMID：向 PubMed 查證
+  - 都沒有：用標題、作者、年份先搜 Crossref，再搜 PubMed（沒有 DOI 的臨床期刊文章多半在這裡），書目取自 PubMed 的紀錄
+
+  找到的直接建檔（書目來自資料庫，簡介與標籤由模型寫），三篇同時進行並顯示進度。需要確認的列出候選讓你選；資料庫都沒有的（例如 Holm 1979，沒有 DOI 也不在 PubMed）可以按「用我貼的書目建檔」，BibTeX 會註明 *Bibliographic data as entered by the author*。在文獻頁使用時，可勾選把備註記到目前開啟的論文。
 - **引用一定送得到 BibTeX，作者的 `.bib` 一律不改寫**：`\bibliography{…}` 列出的每個檔案都會讀取；文獻庫裡有、論文的 `.bib` 沒有的引用，寫到 App 管理的 `pc-refs.bib` 並自動加進 `\bibliography{…}`。論文沒有自己的 `.bib` 時，產生一個只含這篇引用的檔案。
 
 ## 匯入現有的論文
@@ -243,13 +252,14 @@ scripts/            Git hooks
 | GET | `/api/engine` | 模型連線狀態 |
 | POST | `/api/compose` `{ points, section, function, min_words, max_words, language, before, after, key_value? }` | 一次性段落生成 |
 | POST | `/api/check/soft` `{ text, section, before, after, engine, key_value? }` | 軟規則檢查（有 Key value 時才問 R106） |
-| POST | `/api/papers` `{ name, template?, key_value, title?, authors?, outline? }` | 建立論文（Key value 必填） |
+| POST | `/api/papers` `{ name, template?, key_value, title?, authors?, outline?, tables? }` | 建立論文（Key value 必填；`tables` 為 `{ caption, section, data, style? }`） |
 | GET | `/api/papers/{name}` | 論文各章節與段落、`meta`（Key value 與作者） |
 | PUT | `/api/papers/{name}/meta` `{ key_value }` | 修改 Key value |
 | GET / POST | `/api/people` | 作者與機構清單；新增一位作者（可同時新增機構） |
 | POST | `/api/wizard/outline` `{ template?, outline, key_value, engine }` | 大綱 → 標題建議與章節架構（Claude） |
 | POST | `/api/refs/extract` `{ text, engine }` | 把貼上的文字拆成一篇一篇（Claude） |
-| POST | `/api/refs/verify` `{ title, authors, year, doi }` | 向 Crossref 查證一篇是否存在 |
+| POST | `/api/refs/verify` `{ title, authors, year, doi, pmid, arxiv }` | 向 Crossref／arXiv／PubMed 查證一篇是否存在 |
+| POST | `/api/refs/propose-record` `{ work \| guess, engine }` | 沒有 DOI 紀錄可取時，從 PubMed 紀錄或你貼的書目產生文獻庫條目 |
 | PUT | `/api/papers/{name}/sections/{file}` `{ title, paragraphs }` | 儲存章節（一句一行） |
 | GET / PUT | `/api/tables/{file}` | 讀寫資料庫 CSV（句型、片語、用詞、規則、範例、公式、作者、機構） |
 | POST | `/api/papers/{name}/export` `{ kind: "pdf" \| "docx" \| "latex" }` | 匯出：頁數、錯誤（含位置）、找不到的引用與標籤 |

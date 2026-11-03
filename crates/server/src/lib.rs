@@ -717,6 +717,101 @@ struct NewPaper {
     /// Section skeleton from the wizard; empty = the template's sections.
     #[serde(default)]
     outline: Vec<OutlineSection>,
+    /// Results the user already has, placed in their sections in this order.
+    #[serde(default)]
+    tables: Vec<TableSpec>,
+}
+
+#[derive(Deserialize)]
+struct TableSpec {
+    #[serde(default)]
+    caption: String,
+    /// Section title to put it in.
+    #[serde(default)]
+    section: String,
+    /// Pasted cells: spreadsheet copy, Markdown table or CSV; first row = header.
+    data: String,
+    /// Table style id; empty = the journal's own.
+    #[serde(default)]
+    style: Option<String>,
+}
+
+/// The table style that matches a paper's class.
+fn journal_table_style(main: &str, template: Option<&str>) -> &'static str {
+    use authors::Style as S;
+    match authors::detect(main) {
+        S::Springer => "springer-nature",
+        S::Elsevier | S::Cas => "elsevier",
+        S::IeeeJournal | S::IeeeConference => "ieee",
+        S::Lncs => "lncs",
+        S::Blocks { .. } if template.is_some_and(|t| t.contains("cvpr") || t.contains("iccv")) => "cvpr",
+        S::Blocks { .. } => "booktabs",
+    }
+}
+
+/// `tab:results-test-set` from a caption.
+fn table_label(caption: &str, i: usize, taken: &[String]) -> String {
+    let words: Vec<String> = caption
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() > 2)
+        .take(3)
+        .map(|w| w.to_lowercase())
+        .collect();
+    let base = if words.is_empty() { format!("tab:t{}", i + 1) } else { format!("tab:{}", words.join("-")) };
+    let mut label = base.clone();
+    let mut n = 2;
+    while taken.contains(&label) {
+        label = format!("{base}-{n}");
+        n += 1;
+    }
+    label
+}
+
+/// Put the user's tables at the end of their sections, in order, and load
+/// the packages their style needs.
+fn add_tables(dir: &Path, template: Option<&str>, specs: &[TableSpec]) -> Result<(), String> {
+    if specs.is_empty() {
+        return Ok(());
+    }
+    let main = std::fs::read_to_string(dir.join("main.tex")).map_err(|e| e.to_string())?;
+    let default_style = journal_table_style(&main, template);
+    let mut sections = paper::load_paper(dir);
+    if sections.is_empty() {
+        return Err("這篇論文沒有章節可以放表格".into());
+    }
+    let mut packages: Vec<String> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
+    let mut touched = vec![false; sections.len()];
+    for (i, spec) in specs.iter().enumerate() {
+        let grid = pc_core::textable::parse_grid(&spec.data);
+        if grid.is_empty() {
+            return Err(format!("第 {} 個表格沒有資料", i + 1));
+        }
+        let id = spec.style.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(default_style);
+        let style = find_style(id).or_else(|| find_style("booktabs")).expect("booktabs style");
+        let caption = if spec.caption.trim().is_empty() { format!("Table {}", i + 1) } else { meta::tex_text(&spec.caption) };
+        let label = table_label(&spec.caption, i, &labels);
+        labels.push(label.clone());
+        let table = pc_core::textable::from_grid(&grid, &caption, &label, &style);
+        packages.extend(style.packages.iter().cloned());
+        packages.extend(pc_core::textable::needed_packages(&table));
+        let want = spec.section.trim();
+        let si = sections
+            .iter()
+            .position(|s| s.title.eq_ignore_ascii_case(want) || s.title.eq_ignore_ascii_case(&meta::tex_text(want)))
+            .or_else(|| sections.iter().position(|s| s.title.to_lowercase().contains("result")))
+            .unwrap_or(sections.len() - 1);
+        sections[si].paragraphs.push(pc_core::textable::render(&table).trim_end().to_string());
+        touched[si] = true;
+    }
+    for (s, t) in sections.iter().zip(&touched) {
+        if *t {
+            paper::write_atomic(&dir.join("sections").join(&s.file), &paper::render_section(s)).map_err(|e| e.to_string())?;
+        }
+    }
+    packages.sort();
+    packages.dedup();
+    paper::ensure_packages(dir, &packages).map(|_| ())
 }
 
 /// The authors picked for a paper, resolved against the profile.
@@ -756,7 +851,7 @@ async fn create_paper(State(s): State<Shared>, Json(b): Json<NewPaper>) -> impl 
         None => paper::create_paper_with(&ws.join("papers"), &b.name, outline),
     };
     let dir = match made { Ok(d) => d, Err(e) => return bad(&e) };
-    if let Err(e) = finish_paper(&dir, &key_value, b.title.as_deref(), &b.authors, people) {
+    if let Err(e) = finish_paper(&dir, &key_value, b.title.as_deref(), &b.authors, people).and_then(|_| add_tables(&dir, b.template.as_deref(), &b.tables)) {
         let _ = std::fs::remove_dir_all(&dir);
         return bad(&e);
     }
@@ -916,11 +1011,88 @@ async fn extract_refs(State(s): State<Shared>, Json(b): Json<ExtractBody>) -> im
 /// Is this paper real? Crossref decides; a paper already in the library says so.
 async fn verify_ref(State(s): State<Shared>, Json(g): Json<citecheck::Guess>) -> impl IntoResponse {
     let ws = match refs_root(&s).await { Ok(w) => w, Err(r) => return r };
-    let g = citecheck::Guess { doi: citecheck::clean_doi(&g.doi), ..g };
+    let g = citecheck::clean_guess(g);
     let v = match citecheck::verify(&g).await { Ok(v) => v, Err(e) => return bad(&e) };
     let (entries, _) = load_library(&ws);
-    let exists = v.work.as_ref().and_then(|w| entries.iter().find(|e| e.get("doi").is_some_and(|d| d.eq_ignore_ascii_case(&w.doi)))).map(|e| e.key.clone());
+    let exists = v.work.as_ref().and_then(|w| library_has(&entries, w)).map(|e| e.key.clone());
     Json(serde_json::json!({ "verdict": v, "exists": exists })).into_response()
+}
+
+/// The library entry for a work: same DOI, or same title and year.
+fn library_has<'a>(entries: &'a [bib::Entry], w: &citecheck::Work) -> Option<&'a bib::Entry> {
+    entries.iter().find(|e| {
+        (!w.doi.is_empty() && e.get("doi").is_some_and(|d| d.eq_ignore_ascii_case(&w.doi)))
+            || (citecheck::title_similarity(&e.title(), &w.title) > 0.95 && e.year() == w.year)
+    })
+}
+
+#[derive(Deserialize)]
+struct ProposeRecord {
+    /// A database record (PubMed, arXiv) ...
+    #[serde(default)]
+    work: Option<citecheck::Work>,
+    /// ... or the user's own entry, when no database has the paper.
+    #[serde(default)]
+    guess: Option<citecheck::Guess>,
+    #[serde(default)]
+    engine: Option<EngineChoice>,
+}
+
+/// A library entry for a work with no DOI record to fetch: from PubMed's
+/// record, or from what the user typed (marked so in the entry).
+async fn propose_record(State(s): State<Shared>, Json(b): Json<ProposeRecord>) -> impl IntoResponse {
+    let ws = match refs_root(&s).await { Ok(w) => w, Err(r) => return r };
+    let Some(w) = b.work.or_else(|| b.guess.map(|g| citecheck::from_text(&citecheck::clean_guess(g)))) else {
+        return bad("缺少書目");
+    };
+    if w.title.trim().is_empty() || w.names.is_empty() || w.year.trim().is_empty() {
+        return Json(serde_json::json!({ "error": "書目不完整：至少要有標題、作者與年份" })).into_response();
+    }
+    let (entries, _) = load_library(&ws);
+    if let Some(e) = library_has(&entries, &w) {
+        return Json(serde_json::json!({ "exists": e.key })).into_response();
+    }
+    let mut entry = bib::Entry { kind: "article".into(), key: String::new(), fields: citecheck::entry_fields(&w) };
+    let taken: Vec<String> = entries.iter().map(|e| e.key.clone()).collect();
+    entry.key = refimport::make_key(&entry, &taken);
+    let (summary, one_liner, tags, note_error) = ref_notes(&s, b.engine, &entry, &w.venue, "article", "").await;
+    Json(serde_json::json!({
+        "key": entry.key, "bibtex": bib::write_entry(&entry), "title": entry.title(), "authors": entry.authors_short(),
+        "year": entry.year(), "venue": w.venue, "doi": w.doi, "summary": summary, "one_liner": one_liner,
+        "tags": tags, "note_error": note_error, "source": w.source,
+    }))
+    .into_response()
+}
+
+/// Summary, one-liner and tags for a library entry, from the model (venue
+/// tags from the profile's list), and why the notes are missing if they are.
+async fn ref_notes(s: &Shared, engine: Option<EngineChoice>, entry: &bib::Entry, venue: &str, kind: &str, abstract_text: &str) -> (String, String, Vec<String>, Option<String>) {
+    let profile = s.loaded.read().await.path.clone();
+    let tag_list = bib::read_tags(&profile.join("tags.csv"));
+    let mut tags = refimport::venue_tags(&profile, venue);
+    if kind == "review" && !tags.contains(&"review".to_string()) {
+        tags.push("review".into());
+    }
+    let (mut summary, mut one_liner, mut note_error) = (String::new(), String::new(), None);
+    if has_writing_engine(s, engine).await {
+        let prompt = refimport::notes_prompt(&entry.title(), venue, &entry.year(), kind, abstract_text, &tag_list);
+        match writing_complete(s, engine, &prompt, None).await {
+            Ok(reply) => match refimport::parse_notes(&reply, &tag_list) {
+                Some(n) => {
+                    summary = n.summary;
+                    one_liner = n.one_liner;
+                    for t in n.tags {
+                        if !tags.contains(&t) {
+                            tags.push(t);
+                        }
+                    }
+                }
+                None => note_error = Some("模型的回覆無法讀取".to_string()),
+            },
+            Err(e) => note_error = Some(e),
+        }
+    }
+    (summary, one_liner, tags, note_error)
 }
 
 #[derive(Deserialize)]
@@ -1005,6 +1177,10 @@ fn load_library(ws: &Path) -> (Vec<bib::Entry>, Vec<bib::Note>) {
     (bib::parse(&src).0, bib::read_notes(&ws.join("refs/notes.csv")))
 }
 
+/// Handlers that change the library hold this across their read and write, so
+/// papers filed at the same time do not overwrite each other.
+static LIBRARY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn save_library(ws: &Path, entries: &[bib::Entry], notes: &[bib::Note]) -> Result<(), String> {
     std::fs::create_dir_all(ws.join("refs")).map_err(|e| e.to_string())?;
     paper::write_atomic(&ws.join("refs/library.bib"), &bib::write(entries)).map_err(|e| e.to_string())?;
@@ -1044,6 +1220,7 @@ struct ImportBib {
 /// Add BibTeX entries to the library; existing keys or DOIs are skipped.
 async fn import_refs(State(s): State<Shared>, Json(b): Json<ImportBib>) -> impl IntoResponse {
     let ws = match refs_root(&s).await { Ok(w) => w, Err(r) => return r };
+    let _library = LIBRARY_LOCK.lock().await;
     let (mut entries, mut notes) = load_library(&ws);
     let (new, errors) = bib::parse(&b.bibtex);
     let (mut added, mut skipped) = (Vec::new(), Vec::new());
@@ -1074,6 +1251,7 @@ struct NoteBody {
 
 async fn update_ref(State(s): State<Shared>, AxPath(key): AxPath<String>, Json(b): Json<NoteBody>) -> impl IntoResponse {
     let ws = match refs_root(&s).await { Ok(w) => w, Err(r) => return r };
+    let _library = LIBRARY_LOCK.lock().await;
     let (entries, mut notes) = load_library(&ws);
     let Some(e) = entries.iter().find(|e| e.key == key) else { return (StatusCode::NOT_FOUND, "no such reference").into_response() };
     if !notes.iter().any(|n| n.key == key) {
@@ -1330,11 +1508,17 @@ struct AddRef {
 
 async fn add_ref(State(s): State<Shared>, Json(b): Json<AddRef>) -> impl IntoResponse {
     let ws = match refs_root(&s).await { Ok(w) => w, Err(r) => return r };
-    let Some(e) = bib::parse(&b.bibtex).0.into_iter().next() else { return bad("BibTeX 無法讀取") };
+    let Some(mut e) = bib::parse(&b.bibtex).0.into_iter().next() else { return bad("BibTeX 無法讀取") };
+    let _library = LIBRARY_LOCK.lock().await; // one read-modify-write of the library at a time
     let (mut entries, mut notes) = load_library(&ws);
     let doi = e.get("doi").unwrap_or("").to_string();
-    if entries.iter().any(|x| x.key == e.key || (!doi.is_empty() && x.get("doi").is_some_and(|d| d.eq_ignore_ascii_case(&doi)))) {
+    if !doi.is_empty() && entries.iter().any(|x| x.get("doi").is_some_and(|d| d.eq_ignore_ascii_case(&doi))) {
         return bad("文獻庫已經有這篇");
+    }
+    // Another paper filed meanwhile may have taken the key it was proposed with.
+    if entries.iter().any(|x| x.key == e.key) {
+        let taken: Vec<String> = entries.iter().map(|x| x.key.clone()).collect();
+        e.key = refimport::make_key(&e, &taken);
     }
     notes.push(bib::Note { key: e.key.clone(), summary: b.summary, one_liner: b.one_liner, tags: b.tags, doi, pdf: b.pdf.unwrap_or_default() });
     let key = e.key.clone();
@@ -2391,6 +2575,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/wizard/outline", post(wizard_outline))
         .route("/api/refs/extract", post(extract_refs))
         .route("/api/refs/verify", post(verify_ref))
+        .route("/api/refs/propose-record", post(propose_record))
         .route("/api/templates", get(list_templates).post(create_template))
         .route("/api/convert", post(convert_create))
         .route("/api/convert/{id}", get(convert_get))

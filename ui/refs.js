@@ -63,11 +63,25 @@ const PCRefs = (() => {
     };
     search.oninput = () => { filter.q = search.value; draw(); };
     const bar = el("div", "refs-bar");
-    const pasteBtn = iconButton("list", claudeReady() ? "貼上想引用的文章，逐篇查證後建檔" : "連接 Claude 後可貼上文獻清單逐篇查證", () => { batch.open = !batch.open; drawBatch(); });
+    libImporter ??= { open: false, ui: importer({ paper: () => (libImporter.attach && state.paper ? state.paper.name : null), onDone: () => { refreshGit(); renderPage(); } }), attach: false };
+    const batchBox = el("div", "batch");
+    const drawBatch = () => {
+      batchBox.hidden = !libImporter.open;
+      batchBox.innerHTML = "";
+      if (!libImporter.open) return;
+      if (state.paper) {
+        const l = el("label", "np-check");
+        const cb = el("input"); cb.type = "checkbox"; cb.checked = libImporter.attach;
+        cb.onchange = () => (libImporter.attach = cb.checked);
+        l.append(cb, el("span", "", `把每篇的備註記到「${state.paper.name}」的引用用途`));
+        batchBox.append(l);
+      }
+      batchBox.append(libImporter.ui.el);
+    };
+    const pasteBtn = iconButton("list", claudeReady() ? "貼上想引用的文章，逐篇查證後建檔" : "連接 Claude 後可貼上文獻清單逐篇查證", () => { libImporter.open = !libImporter.open; drawBatch(); });
     pasteBtn.disabled = !claudeReady();
     bar.append(search, pasteBtn, iconButton("upload", "匯入 BibTeX", (e) => importPop(e.currentTarget)), iconButton("folder", "這台電腦的 PDF 資料夾", (e) => pdfPop(e.currentTarget)));
     queueBox ??= el("div", "queue");
-    batchBox ??= el("div", "batch");
     box.append(bar, batchBox, await intake(), queueBox, tagChips(filter, draw), list);
     drawBatch();
     drawQueue();
@@ -75,114 +89,155 @@ const PCRefs = (() => {
   }
 
   // ── a pasted list of papers to cite ──
-  // Claude splits the text into papers; Crossref says whether each exists;
-  // the ones that do are filed like a DOI typed in (BibTeX from Crossref,
-  // notes and tags from the model) and saved.
-  const batch = { open: false, text: "", items: [], running: false };
-  let batchBox = null;
-  const MARK = { found: "✓", ambiguous: "?", missing: "✕", exists: "＝", saved: "✓", checking: "…", error: "!" };
+  // Claude splits the text into papers (and copies the user's remarks on
+  // each); Crossref, arXiv or PubMed say whether each exists; the ones that
+  // do are filed (BibTeX from the database, notes and tags from the model)
+  // and saved, a few at a time, with a progress bar. Papers that need a
+  // decision wait for the user: pick a candidate, or file one no database has
+  // from the user's own entry.
+  const MARK = { queued: "·", checking: "…", filing: "…", saved: "✓", exists: "＝", ambiguous: "?", missing: "✕", error: "!", skipped: "–" };
+  const LABEL = { saved: "已存入", exists: "已在文獻庫", ambiguous: "需要確認", missing: "查不到", error: "失敗", skipped: "略過" };
 
-  function drawBatch() {
-    if (!batchBox) return;
-    batchBox.innerHTML = "";
-    batchBox.hidden = !batch.open;
-    if (!batch.open) return;
-    const ta = el("textarea", "batch-text");
-    ta.rows = 5;
-    ta.placeholder = "貼上想引用的文章，可以很多篇：參考文獻清單、標題、DOI 都可以。\nClaude 只負責拆成一篇一篇；是否真的存在由 Crossref 查證，查不到的不會建檔。";
-    ta.value = batch.text;
-    ta.oninput = () => (batch.text = ta.value);
-    const check = el("button", "primary small", batch.running ? "處理中…" : "逐篇查證");
-    check.disabled = batch.running;
-    check.onclick = runBatch;
-    const head = el("div", "row-end");
-    head.append(check);
-    batchBox.append(ta, head);
-    if (!batch.items.length) return;
-    const ul = el("ul", "batch-list");
-    batch.items.forEach((it) => {
-      const li = el("li", `b-${it.state}`);
-      li.append(el("span", "mark", MARK[it.state] ?? ""));
-      const body = el("div", "b-body");
-      const w = it.work;
-      const t = el("b", "", w?.title || it.guess.title || it.guess.doi);
-      body.append(t, el("span", "meta", w ? [w.authors, w.year, w.venue].filter(Boolean).join(" · ") : [it.guess.authors, it.guess.year].filter(Boolean).join(" · ")));
-      if (it.msg) body.append(el("span", "note", it.msg));
-      if (it.state === "ambiguous" && it.candidates?.length) {
-        const opts = el("div", "b-cands");
-        it.candidates.forEach((c) => {
-          const b = el("button", "ghost", `${c.title}${c.year ? ` (${c.year})` : ""}`);
-          b.onclick = () => { it.work = c; it.state = "found"; it.msg = "已選擇"; it.candidates = []; drawBatch(); };
-          opts.append(b);
-        });
-        body.append(opts);
-      }
-      li.append(body);
-      if (it.state === "found") {
-        const cb = el("input");
-        cb.type = "checkbox";
-        cb.checked = it.pick !== false;
-        cb.onchange = () => (it.pick = cb.checked);
-        li.append(cb);
-      }
-      ul.append(li);
-    });
-    const ready = batch.items.filter((i) => i.state === "found" && i.pick !== false);
-    const save = el("button", "primary small", `建檔並存入 ${ready.length} 篇`);
-    save.disabled = batch.running || !ready.length;
-    save.onclick = saveBatch;
-    const foot = el("div", "row-end");
-    const n = (s) => batch.items.filter((i) => i.state === s).length;
-    foot.append(el("span", "note", `找到 ${n("found") + n("saved")}・需確認 ${n("ambiguous")}・查不到 ${n("missing")}・已在庫 ${n("exists")}`), save);
-    batchBox.append(ul, foot);
-  }
+  /** opts.paper(): the paper whose citation purposes get the user's notes (or null). */
+  function importer(opts = {}) {
+    const st = { text: "", items: [], phase: "idle", error: "" };
+    const box = el("div", "importer");
 
-  async function runBatch() {
-    if (!batch.text.trim()) return;
-    batch.running = true;
-    batch.items = [];
-    drawBatch();
-    try {
-      const r = await api("/api/refs/extract", { text: batch.text, engine: claudeVia() });
-      batch.items = r.papers.map((g) => ({ guess: g, state: "checking" }));
-    } catch (e) { flash(e.message, 6000); batch.running = false; drawBatch(); return; }
-    drawBatch();
-    for (const it of batch.items) {
+    async function file(it, work) {
+      it.state = "filing"; it.msg = "建檔、產生標籤中…"; draw();
       try {
-        const r = await api("/api/refs/verify", it.guess);
-        const v = r.verdict;
-        it.work = v.work; it.candidates = v.candidates; it.msg = v.note;
-        it.state = r.exists ? "exists" : v.status;
-        if (r.exists) it.msg = `已在文獻庫：${r.exists}`;
-      } catch (e) { it.state = "error"; it.msg = e.message; }
-      drawBatch();
-    }
-    batch.running = false;
-    drawBatch();
-  }
-
-  async function saveBatch() {
-    batch.running = true;
-    drawBatch();
-    let saved = 0;
-    for (const it of batch.items.filter((i) => i.state === "found" && i.pick !== false)) {
-      it.state = "checking"; it.msg = "建檔中…"; drawBatch();
-      try {
-        const q = await api("/api/refs/propose", { doi: it.work.doi, engine: chosenEngine() });
-        if (q.exists) { it.state = "exists"; it.msg = `已在文獻庫：${q.exists}`; }
+        let q = work.doi && work.source !== "pubmed" ? await api("/api/refs/propose", { doi: work.doi, engine: chosenEngine() }) : null;
+        // no DOI record to fetch (or doi.org failed): file the database's own record
+        if (!q || (q.error && work.names?.length)) q = await api("/api/refs/propose-record", { work, engine: chosenEngine() });
+        if (q.exists) { it.state = "exists"; it.key = q.exists; it.msg = `已在文獻庫：${q.exists}`; }
         else if (q.error) { it.state = "error"; it.msg = q.error; }
         else {
           const r = await api("/api/refs/add", { bibtex: q.bibtex, summary: q.summary, one_liner: q.one_liner, tags: q.tags ?? [], pdf: null });
-          it.state = "saved"; it.msg = `已存入 ${r.key}${q.note_error ? `（簡介沒有產生：${q.note_error}）` : ""}`;
-          saved++;
+          it.state = "saved"; it.key = r.key; it.tags = q.tags ?? [];
+          it.msg = `${r.key}${q.source === "text" ? "（書目取自你貼的文字）" : ""}${q.note_error ? `；簡介沒有產生：${q.note_error}` : ""}`;
         }
       } catch (e) { it.state = "error"; it.msg = e.message; }
-      drawBatch();
+      await keepNote(it);
+      draw();
     }
-    batch.running = false;
-    if (saved) { flash(`已存入 ${saved} 篇`); refreshGit(); renderPage(); }
-    else drawBatch();
+
+    async function keepNote(it) {
+      const paper = opts.paper?.();
+      if (!paper || !it.key || !it.guess.note || it.noteKept) return;
+      try { await api(`/api/papers/${encodeURIComponent(paper)}/citations`, { key: it.key, purpose: it.guess.note }); it.noteKept = true; } catch {}
+    }
+
+    async function check(it) {
+      it.state = "checking"; it.msg = "查證中…"; draw();
+      try {
+        const r = await api("/api/refs/verify", it.guess);
+        const v = r.verdict;
+        it.candidates = v.candidates ?? [];
+        if (r.exists) { it.state = "exists"; it.key = r.exists; it.work = v.work; it.msg = `已在文獻庫：${r.exists}`; await keepNote(it); }
+        else if (v.status === "found") { it.work = v.work; await file(it, v.work); return; }
+        else { it.state = v.status; it.msg = v.note; }
+      } catch (e) { it.state = "error"; it.msg = e.message; }
+      draw();
+    }
+
+    async function run() {
+      if (!st.text.trim() || st.phase === "running") return;
+      st.phase = "running"; st.error = ""; st.items = []; draw();
+      try {
+        const r = await api("/api/refs/extract", { text: st.text, engine: claudeVia() });
+        st.items = r.papers.map((g) => ({ guess: g, state: "queued", msg: "" }));
+      } catch (e) { st.error = e.message; st.phase = "idle"; draw(); return; }
+      draw();
+      // three at a time: the model's notes are the slow part
+      let next = 0;
+      const worker = async () => { while (next < st.items.length) { const it = st.items[next++]; await check(it); } };
+      await Promise.all([worker(), worker(), worker()]);
+      st.phase = "done";
+      draw();
+      opts.onDone?.(st.items);
+    }
+
+    const finished = (it) => ["saved", "exists", "ambiguous", "missing", "error", "skipped"].includes(it.state);
+
+    function draw() {
+      box.innerHTML = "";
+      const ta = el("textarea", "batch-text");
+      ta.rows = st.items.length ? 3 : 8;
+      ta.placeholder = "貼上想引用的文章，可以很多篇、可以夾雜備註：參考文獻清單、標題、DOI、PMID、arXiv 都可以。\nClaude 會算出有幾篇並抄下你對每篇的備註；是否真的存在由 Crossref／arXiv／PubMed 查證，查不到的不會自動建檔。";
+      ta.value = st.text;
+      ta.disabled = st.phase === "running";
+      ta.oninput = () => (st.text = ta.value);
+      const go = el("button", "primary small", st.phase === "running" ? "處理中…" : st.items.length ? "重新分析" : "分析並匯入");
+      go.disabled = st.phase === "running" || !claudeReady();
+      if (!claudeReady()) go.title = "連接 Claude 後可用";
+      go.onclick = run;
+      const head = el("div", "row-end");
+      if (st.error) head.append(el("span", "note bad", st.error));
+      head.append(go);
+      box.append(ta, head);
+      if (st.phase === "running" && !st.items.length) { box.append(el("p", "note", "Claude 正在找出有幾篇文章…")); return; }
+      if (!st.items.length) return;
+
+      const n = st.items.length, done = st.items.filter(finished).length;
+      const bar = el("div", "progress");
+      const fill = el("i");
+      fill.style.width = `${Math.round((done / n) * 100)}%`;
+      bar.append(fill);
+      const count = (s) => st.items.filter((i) => i.state === s).length;
+      const sum = el("div", "progress-line");
+      sum.append(el("b", "", `${done} / ${n} 篇`), el("span", "", ["saved", "exists", "ambiguous", "missing", "error"].filter((s) => count(s)).map((s) => `${LABEL[s]} ${count(s)}`).join("・")));
+      box.append(bar, sum);
+
+      const ul = el("ul", "batch-list");
+      st.items.forEach((it) => {
+        const li = el("li", `b-${it.state}`);
+        li.append(el("span", "mark", MARK[it.state] ?? ""));
+        const body = el("div", "b-body");
+        const w = it.work;
+        body.append(el("b", "", w?.title || it.guess.title || it.guess.doi || it.guess.arxiv));
+        body.append(el("span", "meta", [w?.authors || it.guess.authors, w?.year || it.guess.year, w?.venue || it.guess.venue].filter(Boolean).join(" · ")));
+        if (it.msg) body.append(el("span", "note", it.msg));
+        if (it.tags?.length) { const t = el("div", "b-tags"); it.tags.forEach((x) => t.append(el("span", "tchip on", tagLabel(x)))); body.append(t); }
+        if (it.guess.note) body.append(el("span", "b-note", it.guess.note));
+        const acts = el("div", "b-cands");
+        if (it.state === "ambiguous") it.candidates.forEach((c) => {
+          const b = el("button", "ghost", `${c.title}${c.year ? `（${c.year}）` : ""}${c.authors ? ` · ${c.authors}` : ""}`);
+          b.onclick = () => { it.work = c; file(it, c); };
+          acts.append(b);
+        });
+        if ((it.state === "missing" || it.state === "ambiguous") && it.guess.title && it.guess.authors && it.guess.year) {
+          const b = el("button", "ghost", "用我貼的書目建檔（資料庫查不到時）");
+          b.onclick = async () => {
+            it.state = "filing"; it.msg = "建檔中…"; draw();
+            try {
+              const q = await api("/api/refs/propose-record", { guess: it.guess, engine: chosenEngine() });
+              if (q.exists) { it.state = "exists"; it.key = q.exists; }
+              else if (q.error) { it.state = "error"; it.msg = q.error; }
+              else { const r = await api("/api/refs/add", { bibtex: q.bibtex, summary: q.summary, one_liner: q.one_liner, tags: q.tags ?? [], pdf: null }); it.state = "saved"; it.key = r.key; it.tags = q.tags ?? []; it.msg = `${r.key}（書目取自你貼的文字）`; }
+            } catch (e) { it.state = "error"; it.msg = e.message; }
+            await keepNote(it); draw();
+          };
+          acts.append(b);
+        }
+        if (it.state === "error") { const b = el("button", "ghost", "重試"); b.onclick = () => (it.work ? file(it, it.work) : check(it)); acts.append(b); }
+        if (["ambiguous", "missing", "error"].includes(it.state)) { const b = el("button", "ghost", "略過"); b.onclick = () => { it.state = "skipped"; it.msg = ""; draw(); }; acts.append(b); }
+        if (acts.children.length) body.append(acts);
+        li.append(body);
+        ul.append(li);
+      });
+      box.append(ul);
+    }
+
+    draw();
+    return {
+      el: box,
+      items: () => st.items,
+      running: () => st.phase === "running" || st.items.some((i) => i.state === "checking" || i.state === "filing"),
+      keepNotes: async () => { for (const it of st.items) await keepNote(it); },
+    };
   }
+
+  let libImporter = null;
 
   // ── bringing papers in: unlinked PDFs, or a DOI ──
   const queue = []; // proposals waiting for the user
@@ -629,5 +684,5 @@ const PCRefs = (() => {
     box.append(list);
   }
 
-  return { renderPage, picker, insertAt, paperPage };
+  return { renderPage, picker, insertAt, paperPage, importer, load };
 })();

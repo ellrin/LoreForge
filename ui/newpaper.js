@@ -1,9 +1,13 @@
-// New paper: a three-step window.
+// New paper: a five-step window.
 //   01 name and template
 //   02 authors, picked from the profile's authors.csv (new people are saved there)
 //   03 key value (required) and, optionally, a bullet outline that Claude
-//      turns into title suggestions and a section skeleton.
-// Only step 03's outline needs Claude; everything else works without it.
+//      turns into title suggestions and a section skeleton
+//   04 tables (optional): results the user already has, pasted from a
+//      spreadsheet, each put in a chosen section in order
+//   05 references (optional): a pasted list of papers to cite, split by
+//      Claude, checked against the databases and filed one by one
+// The outline and the reference list need Claude; everything else works without it.
 const PCNew = (() => {
   let st = null;
 
@@ -18,8 +22,10 @@ const PCNew = (() => {
 
   async function open() {
     $("#fileMenu").hidden = true;
-    st = { step: 0, name: "", template: store.get("pc.newTemplate", ""), tpls: [], people: { authors: [], affiliations: [] }, chosen: [], key: "", outline: "", plan: null, usePlan: true, title: "", busy: false };
+    st = { step: 0, name: "", template: store.get("pc.newTemplate", ""), tpls: [], people: { authors: [], affiliations: [] }, chosen: [], key: "", outline: "", plan: null, usePlan: true, title: "", busy: false, tables: [], styles: [], sampleFor: null, sampleSections: [], refs: null, drawId: 0 };
     try { st.tpls = await api("/api/templates"); } catch {}
+    try { st.styles = await api("/api/textable/styles"); } catch {}
+    await PCRefs.load();
     if (st.template && !st.tpls.some((t) => t.id === st.template)) st.template = "";
     await loadPeople();
     const d = $("#dlgNew");
@@ -39,13 +45,14 @@ const PCNew = (() => {
     document.querySelectorAll("#npTabs button").forEach((b) => b.setAttribute("aria-selected", String(+b.dataset.step === st.step)));
     const body = $("#npBody");
     body.innerHTML = "";
-    [stepTemplate, stepAuthors, stepKey][st.step](body);
+    st.drawId++;
+    [stepTemplate, stepAuthors, stepKey, stepTables, stepRefs][st.step](body);
     const foot = $("#npFoot");
     foot.innerHTML = "";
     if (st.step > 0) { const b = el("button", "ghost", "上一步"); b.onclick = () => go(st.step - 1); foot.append(b); }
     foot.append(el("span", "grow"));
-    if (st.step < 2) { const b = el("button", "primary small", "下一步"); b.onclick = () => go(st.step + 1); foot.append(b); }
-    else { const b = el("button", "primary small", st.busy ? "建立中…" : "建立論文"); b.disabled = st.busy; b.onclick = create; foot.append(b); }
+    if (st.step < 4) { const b = el("button", st.step < 2 ? "primary small" : "ghost", st.step < 2 ? "下一步" : "下一步（選填）"); b.onclick = () => go(st.step + 1); foot.append(b); }
+    if (st.step >= 2) { const b = el("button", "primary small", st.busy ? "建立中…" : "建立論文"); b.disabled = st.busy; b.onclick = create; foot.append(b); }
   }
 
   function go(step) {
@@ -263,8 +270,113 @@ const PCNew = (() => {
     st.busy = false; draw();
   }
 
+  // ── 04 tables ──
+  const BLANK_SECTIONS = ["Introduction", "Related work", "Method", "Result", "Discussion", "Conclusion"];
+
+  /** Sections the paper will have: the skeleton, else the template's sample, else the blank ones. */
+  async function paperSections() {
+    if (st.plan && st.usePlan) return st.plan.sections.map((s) => s.title);
+    if (!st.template) return BLANK_SECTIONS;
+    if (st.sampleFor !== st.template) {
+      try {
+        const r = await fetch(`/api/templates/${encodeURIComponent(st.template)}/sample`);
+        const t = r.ok ? await r.text() : "";
+        st.sampleSections = [...t.matchAll(/^[ \t]*\\section\{([^}]*)\}/gm)].map((m) => m[1].trim());
+      } catch { st.sampleSections = []; }
+      st.sampleFor = st.template;
+    }
+    return st.sampleSections.length ? st.sampleSections : BLANK_SECTIONS;
+  }
+
+  /** Rows of cells, the same way the server reads them: tabs, a Markdown table, or CSV. */
+  function grid(text) {
+    const lines = text.split(/\r?\n/).filter((l) => l.trim());
+    if (!lines.length) return [];
+    if (lines.every((l) => l.trim().startsWith("|"))) return lines.filter((l) => !/^[\s|:+-]+$/.test(l)).map((l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()));
+    if (lines.some((l) => l.includes("\t"))) return lines.map((l) => l.split("\t").map((c) => c.trim()));
+    return lines.map((l) => {
+      const out = []; let cur = "", q = false;
+      for (let i = 0; i < l.length; i++) {
+        const c = l[i];
+        if (c === '"') { if (q && l[i + 1] === '"') { cur += '"'; i++; } else q = !q; }
+        else if (c === "," && !q) { out.push(cur.trim()); cur = ""; }
+        else cur += c;
+      }
+      out.push(cur.trim());
+      return out;
+    });
+  }
+
+  async function stepTables(body) {
+    const id = st.drawId;
+    const sections = await paperSections();
+    if (id !== st.drawId) return;
+    body.append(el("p", "np-note", "已經有的結果先放進來：從 Excel 或 Google 試算表選取儲存格後直接貼上（也可以貼 CSV 或 Markdown 表格），第一列是表頭。表格依序放在指定章節的最後，樣式預設用這個期刊的。"));
+    const def = sections.find((s) => /result/i.test(s)) ?? sections[sections.length - 1];
+    st.tables.forEach((t, i) => body.append(tableCard(t, i, sections)));
+    const add = el("button", "ghost wide np-add", "新增表格");
+    add.prepend(icon("plus"));
+    add.onclick = () => { st.tables.push({ caption: "", section: def, data: "", style: "" }); draw(); setTimeout(() => body.querySelectorAll(".np-table textarea")[st.tables.length - 1]?.focus()); };
+    body.append(add);
+  }
+
+  function tableCard(t, i, sections) {
+    const c = el("div", "np-table");
+    const head = el("div", "np-row start");
+    head.append(el("b", "np-tn", `表 ${i + 1}`));
+    const cap = el("input", "np-input");
+    cap.placeholder = "標題（caption），例如 Performance on the external test set";
+    cap.value = t.caption;
+    cap.oninput = () => (t.caption = cap.value);
+    const sec = el("select", "np-input");
+    if (!sections.includes(t.section)) t.section = sections.find((s) => /result/i.test(s)) ?? sections[sections.length - 1];
+    sections.forEach((s) => sec.append(new Option(s, s)));
+    sec.value = t.section;
+    sec.onchange = () => (t.section = sec.value);
+    const sty = el("select", "np-input");
+    sty.append(new Option("期刊預設樣式", ""));
+    st.styles.forEach((s) => sty.append(new Option(s.name, s.id)));
+    sty.value = t.style;
+    sty.onchange = () => (t.style = sty.value);
+    const move = (d, ic, tip) => iconButton(ic, tip, () => { const j = i + d; if (j < 0 || j >= st.tables.length) return; [st.tables[i], st.tables[j]] = [st.tables[j], st.tables[i]]; draw(); });
+    head.append(cap, move(-1, "up", "上移"), move(1, "chevron", "下移"), iconButton("x", "移除", () => { st.tables.splice(i, 1); draw(); }));
+    const where = el("div", "np-grid");
+    where.append(sec, sty);
+    const data = el("textarea", "np-input data");
+    data.rows = 5;
+    data.placeholder = "Model\tAUC\tSensitivity\nResNet50\t0.91\t0.85\n…（從試算表複製貼上）";
+    data.value = t.data;
+    const prev = el("div", "np-preview");
+    const show = () => {
+      prev.innerHTML = "";
+      const g = grid(data.value);
+      if (!g.length) return;
+      const cols = Math.max(...g.map((r) => r.length));
+      prev.append(el("span", "np-note", `${g.length - 1} 列資料 × ${cols} 欄（第一列為表頭）`));
+      const tb = el("table");
+      g.slice(0, 5).forEach((r, ri) => { const tr = el("tr"); for (let k = 0; k < cols; k++) tr.append(el(ri ? "td" : "th", "", r[k] ?? "")); tb.append(tr); });
+      prev.append(tb);
+      if (g.length > 5) prev.append(el("span", "np-note", `…還有 ${g.length - 5} 列`));
+    };
+    data.oninput = () => { t.data = data.value; show(); };
+    show();
+    c.append(head, where, data, prev);
+    return c;
+  }
+
+  // ── 05 references ──
+  function stepRefs(body) {
+    body.append(el("p", "np-note", "把想引用的文章一次貼上（可以夾雜備註）。Claude 先算出有幾篇，再一篇一篇查證、建檔、加標籤，存進文獻庫；你對每篇的備註會記成這篇論文的「引用用途」。可以邊匯入邊繼續其他步驟。"));
+    if (!claudeReady()) body.append(el("p", "np-note bad", "連接 Claude 後可用。"));
+    st.refs ??= PCRefs.importer();
+    body.append(st.refs.el);
+  }
+
   async function create() {
     if (!st.name.trim()) { go(0); return; }
+    if (st.refs?.running()) { flash("文獻還在匯入中，請稍候"); return; }
+    const tables = st.tables.filter((t) => t.data.trim());
+    if (tables.some((t) => grid(t.data).length < 2)) { flash("表格至少要有表頭和一列資料"); return; }
     const [n, max, unit] = kvLength(st.key);
     if (!st.key.trim()) { flash("Key value 必填：這篇論文通篇要強調的一件事"); return; }
     if (n > max) { flash(`Key value 最多 ${max} ${unit}`); return; }
@@ -273,7 +385,12 @@ const PCNew = (() => {
       const r = await api("/api/papers", {
         name: st.name.trim(), template: st.template || null, key_value: st.key, title: st.title.trim() || null,
         authors: st.chosen, outline: st.plan && st.usePlan ? st.plan.sections : [],
+        tables: tables.map((t) => ({ caption: t.caption, section: t.section, data: t.data, style: t.style || null })),
       });
+      // the user's note on each filed paper becomes its purpose in this paper
+      for (const it of st.refs?.items() ?? []) {
+        if (it.key && it.guess.note) await api(`/api/papers/${encodeURIComponent(r.name)}/citations`, { key: it.key, purpose: it.guess.note }).catch(() => {});
+      }
       $("#dlgNew").close();
       await opened(r.name);
     } catch (e) { flash(e.message, 6000); st.busy = false; draw(); }
@@ -291,7 +408,7 @@ const PCNew = (() => {
   }
 
   /** Has the user filled anything in that closing would lose? */
-  const dirty = () => !!st && !st.busy && !!(st.name.trim() || st.key.trim() || st.outline.trim() || st.title.trim() || st.chosen.length || st.plan);
+  const dirty = () => !!st && !st.busy && !!(st.name.trim() || st.key.trim() || st.outline.trim() || st.title.trim() || st.chosen.length || st.plan || st.tables.length);
 
   return { open, wire, kvLength, dirty };
 })();
