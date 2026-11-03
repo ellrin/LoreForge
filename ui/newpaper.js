@@ -290,5 +290,8 @@ const PCNew = (() => {
     document.querySelectorAll("#npTabs button").forEach((b) => (b.onclick = () => go(+b.dataset.step)));
   }
 
-  return { open, wire, kvLength };
+  /** Has the user filled anything in that closing would lose? */
+  const dirty = () => !!st && !st.busy && !!(st.name.trim() || st.key.trim() || st.outline.trim() || st.title.trim() || st.chosen.length || st.plan);
+
+  return { open, wire, kvLength, dirty };
 })();

@@ -773,6 +773,7 @@ function openDbTab(name) {
 // Closing with unsaved database edits asks first.
 function closeWindow(d) {
   if (d.id === "dlgDb" && state.db.dirty.size && !confirm("資料庫有未儲存的修改，仍要關閉？")) return;
+  if (d.id === "dlgNew" && PCNew.dirty() && !confirm("新論文還沒建立，填的內容會不見，仍要關閉？")) return;
   d.close();
 }
 
@@ -780,7 +781,8 @@ function wireWindows() {
   document.querySelectorAll("dialog.dialog:not(#dlgSetup)").forEach((d) => {
     d.querySelector(".close")?.addEventListener("click", () => closeWindow(d));
     // A click on the backdrop lands on the <dialog> itself, not its content.
-    d.addEventListener("click", (e) => { if (e.target === d) closeWindow(d); });
+    // Windows you fill in (new paper) stay open on a stray click outside.
+    if (d.id !== "dlgNew") d.addEventListener("click", (e) => { if (e.target === d) closeWindow(d); });
     d.addEventListener("cancel", (e) => { e.preventDefault(); closeWindow(d); });
   });
 }
