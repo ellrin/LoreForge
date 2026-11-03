@@ -1,0 +1,9 @@
+name = "Journal of Example Imaging"
+short = "JEI"
+publisher = "Example Press"
+kind = "journal"
+url = "https://example.org/jei/author-guidelines"
+notes = """Fictional journal for the example.
+- Abstract up to 250 words; 3 to 6 keywords.
+- Numbered references in order of first citation (unsrt).
+- Figures as PDF or PNG at 300 dpi or more."""

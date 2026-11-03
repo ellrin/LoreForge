@@ -29,6 +29,64 @@ skip sample sections that only demonstrate formatting (equations, tables, figure
     Prompt { system, user }
 }
 
+/// A caption for a table (from its cells) or a figure (from its file name),
+/// for the section it goes in.
+#[allow(clippy::too_many_arguments)]
+pub fn caption_prompt(kind: &str, grid: &[Vec<String>], file: &str, section: &str, key_value: &str, title: &str, language: &str) -> Prompt {
+    let lang = if language.starts_with("zh") { "Traditional Chinese" } else { "English" };
+    let what = if kind == "figure" { "figure" } else { "table" };
+    let system = format!(
+        "You write the caption of a {what} in an academic paper.\n\
+Rules:\n\
+1. One caption: a short title-like phrase, optionally followed by one sentence on what is compared or shown.\n\
+2. Use only the information given (headers, row names, file name, section). Do not state results, rankings or numbers.\n\
+3. Name metrics, methods and datasets exactly as given; expand nothing you are unsure of.\n\
+4. Do not mention the section, the paper or its title; the section is context only.\n\
+5. A figure is known only by its file name. If the name does not say what the figure shows, reply NONE.\n\
+6. No \"Table 1:\" or \"Figure 1:\" prefix, no quotes, no LaTeX.\n\
+7. Write in {lang}. Reply with the caption only."
+    );
+    let mut user = String::new();
+    if !title.trim().is_empty() {
+        user += &format!("Paper title: {}\n", title.trim());
+    }
+    if !key_value.trim().is_empty() {
+        user += &format!("Paper key value: {}\n", key_value.trim());
+    }
+    if !section.trim().is_empty() {
+        user += &format!("Section: {}\n", section.trim());
+    }
+    if kind == "figure" {
+        user += &format!("Figure file name: {}\n", file.trim());
+    } else {
+        user += "Table (first row is the header; at most 12 rows shown):\n";
+        for row in grid.iter().take(12) {
+            user += &row.join(" | ");
+            user += "\n";
+        }
+    }
+    Prompt { system, user }
+}
+
+/// The caption out of a reply: first non-empty line, without a label or quotes.
+pub fn clean_caption(reply: &str) -> Option<String> {
+    let line = reply.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let mut c = line.trim_matches(|ch: char| matches!(ch, '"' | '\'' | '“' | '”' | '*' | '`')).trim();
+    for p in ["Caption:", "caption:", "Table:", "Figure:"] {
+        c = c.strip_prefix(p).unwrap_or(c).trim();
+    }
+    // "Table 2." / "Figure 1:" left at the front
+    for w in ["Table ", "Figure ", "Fig. "] {
+        if let Some(rest) = c.strip_prefix(w) {
+            let rest = rest.trim_start_matches(|ch: char| ch.is_ascii_digit());
+            if let Some(r) = rest.strip_prefix(['.', ':']) {
+                c = r.trim();
+            }
+        }
+    }
+    (!c.is_empty() && !c.eq_ignore_ascii_case("none")).then(|| c.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Plan {
     pub titles: Vec<String>,
@@ -116,6 +174,19 @@ mod tests {
         assert_eq!(p.sections[0].intent, "One. Two.");
         assert_eq!(p.sections[0].subsections.len(), 1);
         assert!(parse_plan("{\"titles\":[],\"sections\":[]}").is_err());
+    }
+
+    #[test]
+    fn caption_prompt_and_cleanup() {
+        let g = vec![vec!["Model".to_string(), "AUC".into()], vec!["ResNet50".into(), "0.91".into()]];
+        let p = caption_prompt("table", &g, "", "Results", "提升可解釋性", "", "en");
+        assert!(p.user.contains("Model | AUC\nResNet50 | 0.91"));
+        assert!(p.system.contains("caption of a table"));
+        assert!(caption_prompt("figure", &[], "fig1-roc.png", "", "", "", "en").user.contains("fig1-roc.png"));
+        assert_eq!(clean_caption("\n\"Table 2: AUC of each model.\"\nmore").as_deref(), Some("AUC of each model."));
+        assert_eq!(clean_caption("Caption: ROC curves").as_deref(), Some("ROC curves"));
+        assert_eq!(clean_caption("  \n "), None);
+        assert_eq!(clean_caption("NONE"), None);
     }
 
     #[test]

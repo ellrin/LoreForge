@@ -21,9 +21,29 @@ const TABLES = [
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const pad = (n) => String(n).padStart(2, "0");
+// Choices worth keeping across devices also go to the workspace's
+// config.toml (through /api/settings), which syncs with the rest of it.
+const SYNCED = ["theme", "mode", "dim", "zoom", "engine", "claudeVia", "navOpen", "paper", "tableStyle", "tplKind", "template", "newTemplate"];
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  set(k, v) {
+    try { localStorage.setItem(k, JSON.stringify(v)); } catch {}
+    if (SYNCED.includes(k.replace(/^pc\./, ""))) store.saveSoon();
+  },
+  saveSoon() {
+    clearTimeout(store.t);
+    store.t = setTimeout(() => {
+      const ui = {};
+      SYNCED.forEach((k) => { const v = store.get(`pc.${k}`, null); if (v !== null) ui[k] = v; });
+      api("/api/settings", ui, "PUT").catch(() => {});
+    }, 800);
+  },
+  /** Bring in config.toml; it wins over what this browser remembers. */
+  async load() {
+    let ui = {};
+    try { ui = await api("/api/settings"); } catch { return; }
+    Object.entries(ui).forEach(([k, v]) => { if (SYNCED.includes(k)) try { localStorage.setItem(`pc.${k}`, JSON.stringify(v)); } catch {} });
+  },
 };
 
 const state = {
@@ -1261,6 +1281,9 @@ async function boot() {
     const r = await api("/api/git/pull", {});
     if (r?.pulled) flash("已從遠端更新");
   } catch (e) { flash(e.message, 8000); }
+  await store.load();
+  applyTheme();
+  PCZoom.restore();
   await refreshGit();
   try {
     state.profile = await api("/api/profile");

@@ -1,0 +1,13 @@
+\section{Introduction}
+
+Diabetic retinopathy is a leading cause of preventable blindness among working-age adults \citep{morgan2021burden}.
+Referral grading is commonly performed by trained human graders, which is time-consuming and subject to inter-observer variability.
+Automated screening has therefore attracted increasing attention, especially where specialist graders are scarce.
+
+Previous studies have applied convolutional networks to referral grading and reported sensitivities above 90\% \citep{example2022deep}.
+Rivera et al. improved lesion detection by adding a multi-scale attention module \citep{rivera2023attention}.
+Despite these advances, explaining the reason for referral remains an open problem.
+Most of these models are trained only with image-level labels, so they may rely on camera artefacts rather than the lesions themselves \citep{sample2024shortcut}.
+
+In this study, we aim to make referral decisions traceable to the lesions that justify them.
+To this end, we designed a two-stage network that grades referral urgency only from the lesions it detects.

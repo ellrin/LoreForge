@@ -1,0 +1,4 @@
+id,given,family,email,orcid,affiliations,role,note
+A001,Jordan,Lee,jordan.lee@example.edu,0000-0000-0000-0001,F001,me,Fictional example person
+A002,Sam,Rivera,sam.rivera@example.edu,,F001,advisor,
+A003,Taylor,Morgan,t.morgan@example.org,,F002,合作醫師,Clinical collaborator

@@ -4,7 +4,8 @@
 const PCZoom = (() => {
   const MIN = 0.5, MAX = 2.5, KEY = "pc.zoom";
   let z = 1;
-  try { z = clamp(+JSON.parse(localStorage.getItem(KEY)) || 1); } catch {}
+  const saved = () => { try { return clamp(+JSON.parse(localStorage.getItem(KEY)) || 1); } catch { return 1; } };
+  z = saved();
 
   function clamp(v) { return Math.min(MAX, Math.max(MIN, v)); }
   const paper = () => document.getElementById("paper");
@@ -23,7 +24,7 @@ const PCZoom = (() => {
     const r1 = p.getBoundingClientRect();
     a.scrollLeft += r1.left + lx * z - cx;
     a.scrollTop += r1.top + ly * z - cy;
-    try { localStorage.setItem(KEY, JSON.stringify(z)); } catch {}
+    store.set(KEY, z);
     const pct = document.querySelector(".zoom .pct");
     if (pct) pct.textContent = `${Math.round(z * 100)}%`;
   }
@@ -52,6 +53,15 @@ const PCZoom = (() => {
     });
   }
 
+  /** Take the zoom from storage again (after config.toml is read). */
+  function restore() {
+    z = saved();
+    const p = paper();
+    if (p) p.style.zoom = z === 1 ? "" : String(z);
+    const pct = document.querySelector(".zoom .pct");
+    if (pct) pct.textContent = `${Math.round(z * 100)}%`;
+  }
+
   /** The −/%/+ control for the status bar. */
   function control() {
     const box = document.createElement("span");
@@ -68,5 +78,5 @@ const PCZoom = (() => {
     return box;
   }
 
-  return { init, control, set, get: () => z };
+  return { init, control, set, restore, get: () => z };
 })();

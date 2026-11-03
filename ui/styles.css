@@ -983,6 +983,9 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .np-preview th { color: var(--muted); font-weight: 600; border-bottom-color: var(--line-strong); }
 .np-add { display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px dashed var(--line-strong); padding: 8px; }
 .np-add svg.i { width: 15px; height: 15px; }
+.np-row .np-add { flex: 1; }
+.np-fig { max-width: 100%; max-height: 180px; object-fit: contain; align-self: flex-start; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.np-foot .np-name { width: 260px; }
 .np-note.bad { color: var(--err); }
 .importer { display: flex; flex-direction: column; gap: 8px; }
 .importer .row-end { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }

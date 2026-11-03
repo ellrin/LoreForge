@@ -1,0 +1,20 @@
+\section{Results}
+
+LesionTriage outperformed all baselines on the external test set (Table~\ref{tab:main}).
+Compared with the image-level classifier, LesionTriage improved sensitivity from 0.86 to 0.92 while keeping specificity above 0.90.
+Removing the lesion branch reduced AUC by 0.03, indicating that lesion evidence contributes to the referral decision.
+
+\begin{table}[t]
+\centering
+\caption{Referral performance on the external test set (95\% CI).}
+\label{tab:main}
+\begin{tabular}{lccc}
+\toprule
+Model & AUC & Sensitivity & Specificity \\
+\midrule
+Image-level classifier & 0.89 & 0.86 & 0.91 \\
+LesionTriage w/o lesion branch & 0.91 & 0.88 & 0.90 \\
+LesionTriage & \textbf{0.94} & \textbf{0.92} & 0.91 \\
+\bottomrule
+\end{tabular}
+\end{table}

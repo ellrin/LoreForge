@@ -1,12 +1,14 @@
 // New paper: a five-step window.
-//   01 name and template
+//   01 template
 //   02 authors, picked from the profile's authors.csv (new people are saved there)
 //   03 key value (required) and, optionally, a bullet outline that Claude
 //      turns into title suggestions and a section skeleton
-//   04 tables (optional): results the user already has, pasted from a
-//      spreadsheet, each put in a chosen section in order
+//   04 tables and figures (optional): results the user already has, pasted
+//      from a spreadsheet or picked as image files, each put in a chosen
+//      section in order; captions are written by the engine when left empty
 //   05 references (optional): a pasted list of papers to cite, split by
 //      Claude, checked against the databases and filed one by one
+// The folder name is asked last, suggested from the title or key value.
 // The outline and the reference list need Claude; everything else works without it.
 const PCNew = (() => {
   let st = null;
@@ -22,7 +24,7 @@ const PCNew = (() => {
 
   async function open() {
     $("#fileMenu").hidden = true;
-    st = { step: 0, name: "", template: store.get("pc.newTemplate", ""), tpls: [], people: { authors: [], affiliations: [] }, chosen: [], key: "", outline: "", plan: null, usePlan: true, title: "", busy: false, tables: [], styles: [], sampleFor: null, sampleSections: [], refs: null, drawId: 0 };
+    st = { step: 0, name: "", nameEdited: false, template: store.get("pc.newTemplate", ""), tpls: [], people: { authors: [], affiliations: [] }, chosen: [], key: "", outline: "", plan: null, usePlan: true, title: "", busy: false, tables: [], styles: [], sampleFor: null, sampleSections: [], refs: null, drawId: 0 };
     try { st.tpls = await api("/api/templates"); } catch {}
     try { st.styles = await api("/api/textable/styles"); } catch {}
     await PCRefs.load();
@@ -51,24 +53,45 @@ const PCNew = (() => {
     foot.innerHTML = "";
     if (st.step > 0) { const b = el("button", "ghost", "上一步"); b.onclick = () => go(st.step - 1); foot.append(b); }
     foot.append(el("span", "grow"));
-    if (st.step < 4) { const b = el("button", st.step < 2 ? "primary small" : "ghost", st.step < 2 ? "下一步" : "下一步（選填）"); b.onclick = () => go(st.step + 1); foot.append(b); }
-    if (st.step >= 2) { const b = el("button", "primary small", st.busy ? "建立中…" : "建立論文"); b.disabled = st.busy; b.onclick = create; foot.append(b); }
+    if (st.step < 4) { const b = el("button", "primary small", "下一步"); b.onclick = () => go(st.step + 1); foot.append(b); return; }
+    // last step: the folder name, then create
+    if (!st.nameEdited) st.name = autoName();
+    const name = el("input", "np-input np-name");
+    name.id = "npName";
+    name.value = st.name;
+    name.placeholder = "資料夾名稱";
+    name.oninput = () => { st.name = name.value; st.nameEdited = true; };
+    name.onkeydown = (e) => { if (e.key === "Enter") create(); };
+    const tip = el("button", "help", "?");
+    tip.dataset.tip = "論文存在 papers/ 底下的資料夾名稱，依標題或 Key value 自動產生，可以改。";
+    const b = el("button", "primary small", st.busy ? "建立中…" : "建立論文");
+    b.disabled = st.busy;
+    b.onclick = create;
+    foot.append(name, tip, b);
   }
 
   function go(step) {
-    if (step > 0 && !st.name.trim()) { st.step = 0; draw(); flash("請先填論文名稱"); $("#npName")?.focus(); return; }
+    if (step > 2 && st.step <= 2 && !st.key.trim()) { st.step = 2; draw(); flash("Key value 必填：這篇論文通篇要強調的一件事"); return; }
     st.step = step;
     draw();
   }
 
-  // ── 01 name and template ──
+  // Folder name from the title (else the key value): its main English words,
+  // or the first characters of a Chinese key value; never one that exists.
+  const STOP = new Set("a an the of for and or in on with to via by from using based towards toward into at its is are as".split(" "));
+  function autoName() {
+    const src = st.title.trim() || st.key.trim();
+    let base = (src.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => !STOP.has(w)).slice(0, 5).join("-");
+    if (!base) base = (src.match(/[\p{L}\p{N}]+/gu) ?? []).join("").slice(0, 16);
+    if (!base) base = "paper";
+    const taken = new Set(state.workspace?.papers ?? []);
+    let name = base, n = 2;
+    while (taken.has(name)) name = `${base}-${n++}`;
+    return name;
+  }
+
+  // ── 01 template ──
   function stepTemplate(body) {
-    const name = el("input", "np-input");
-    name.id = "npName";
-    name.placeholder = "論文名稱（資料夾名稱，例如 hip-fracture-2027）";
-    name.value = st.name;
-    name.oninput = () => (st.name = name.value);
-    name.onkeydown = (e) => { if (e.key === "Enter") go(1); };
     const q = el("input", "np-input");
     q.type = "search";
     q.placeholder = "搜尋期刊或研討會";
@@ -95,8 +118,8 @@ const PCNew = (() => {
     };
     q.oninput = fill;
     fill();
-    body.append(label("名稱"), name, label("版型"), q, list);
-    setTimeout(() => name.focus());
+    body.append(label("版型"), q, list);
+    setTimeout(() => q.focus());
   }
 
   // ── 02 authors ──
@@ -311,35 +334,115 @@ const PCNew = (() => {
     const id = st.drawId;
     const sections = await paperSections();
     if (id !== st.drawId) return;
-    body.append(el("p", "np-note", "已經有的結果先放進來：從 Excel 或 Google 試算表選取儲存格後直接貼上（也可以貼 CSV 或 Markdown 表格），第一列是表頭。表格依序放在指定章節的最後，樣式預設用這個期刊的。"));
+    const note = label("已有的結果", "表格：從 Excel 或 Google 試算表選取儲存格直接貼上（也可以貼 CSV 或 Markdown 表格），第一列是表頭，樣式預設用這個期刊的。圖片：PNG、JPG、PDF 或 EPS。依序放在指定章節的最後；標題留白會自動產生。");
+    body.append(note);
     const def = sections.find((s) => /result/i.test(s)) ?? sections[sections.length - 1];
-    st.tables.forEach((t, i) => body.append(tableCard(t, i, sections)));
-    const add = el("button", "ghost wide np-add", "新增表格");
-    add.prepend(icon("plus"));
-    add.onclick = () => { st.tables.push({ caption: "", section: def, data: "", style: "" }); draw(); setTimeout(() => body.querySelectorAll(".np-table textarea")[st.tables.length - 1]?.focus()); };
-    body.append(add);
+    st.tables.forEach((t, i) => body.append(t.kind === "figure" ? figureCard(t, i, sections) : tableCard(t, i, sections)));
+    const addT = el("button", "ghost np-add", "新增表格");
+    addT.prepend(icon("plus"));
+    addT.onclick = () => { st.tables.push({ kind: "table", caption: "", section: def, data: "", style: "" }); draw(); setTimeout(() => [...body.querySelectorAll(".np-table textarea")].pop()?.focus()); };
+    const addF = el("button", "ghost np-add", "新增圖片");
+    addF.prepend(icon("image"));
+    addF.onclick = () => pickImage((f) => { st.tables.push({ kind: "figure", caption: "", section: def, file: f }); draw(); autoCaption(st.tables[st.tables.length - 1]); });
+    const row = el("div", "np-row start");
+    row.append(addT, addF);
+    body.append(row);
   }
 
-  function tableCard(t, i, sections) {
-    const c = el("div", "np-table");
-    const head = el("div", "np-row start");
-    head.append(el("b", "np-tn", `表 ${i + 1}`));
-    const cap = el("input", "np-input");
-    cap.placeholder = "標題（caption），例如 Performance on the external test set";
+  function pickImage(done) {
+    const i = el("input");
+    i.type = "file";
+    i.accept = ".png,.jpg,.jpeg,.pdf,.eps";
+    i.onchange = () => i.files[0] && done(i.files[0]);
+    i.click();
+  }
+
+  /** figures/ name: fig2-roc-curves.png, plain characters only. */
+  function figureFile(t) {
+    const n = st.tables.filter((x) => x.kind === "figure").indexOf(t) + 1;
+    const m = t.file.name.match(/^(.*?)(?:\.([^.]+))?$/);
+    const stem = (m[1] ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+    return `fig${n}${stem ? `-${stem}` : ""}.${(m[2] ?? "png").toLowerCase()}`;
+  }
+
+  /** Ask the writing engine for a caption when the user left it empty. */
+  function autoCaption(t, force) {
+    if (t.capJob) return t.capJob;
+    if ((t.caption.trim() && !force) || !chosenEngine()) return;
+    if (t.kind !== "figure" && grid(t.data).length < 2) return;
+    t.capBusy = true; repaintCaption(t);
+    t.capJob = api("/api/wizard/caption", { kind: t.kind, data: t.data ?? "", file: t.kind === "figure" ? t.file.name : "", section: t.section, key_value: st.key, title: st.title, engine: chosenEngine() })
+      .then((r) => { if (r.caption && (!t.caption.trim() || force)) t.caption = r.caption; else if (force && !r.caption) flash("從檔名看不出這張圖的內容，請自己填標題"); })
+      .catch((e) => flash(e.message, 5000))
+      .finally(() => { t.capBusy = false; t.capJob = null; repaintCaption(t); });
+    return t.capJob;
+  }
+  const repaintCaption = (t) => {
+    const cap = t.capEl;
+    if (!cap?.isConnected) return;
     cap.value = t.caption;
+    cap.disabled = !!t.capBusy;
+    cap.placeholder = t.capBusy ? "產生標題中…" : cap.dataset.ph;
+  };
+
+  /** Caption input with a button that writes one. */
+  function captionInput(t, ph) {
+    const cap = el("input", "np-input");
+    cap.dataset.ph = ph;
     cap.oninput = () => (t.caption = cap.value);
+    t.capEl = cap;
+    repaintCaption(t);
+    const gen = iconButton("ai", chosenEngine() ? "自動產生標題" : "連接寫作引擎後可自動產生", () => autoCaption(t, true));
+    gen.disabled = !chosenEngine();
+    return [cap, gen];
+  }
+
+  function sectionSelect(t, sections) {
     const sec = el("select", "np-input");
     if (!sections.includes(t.section)) t.section = sections.find((s) => /result/i.test(s)) ?? sections[sections.length - 1];
     sections.forEach((s) => sec.append(new Option(s, s)));
     sec.value = t.section;
     sec.onchange = () => (t.section = sec.value);
+    return sec;
+  }
+
+  const moveButtons = (i) => {
+    const move = (d, ic, tip) => iconButton(ic, tip, () => { const j = i + d; if (j < 0 || j >= st.tables.length) return; [st.tables[i], st.tables[j]] = [st.tables[j], st.tables[i]]; draw(); });
+    return [move(-1, "up", "上移"), move(1, "chevron", "下移"), iconButton("x", "移除", () => { st.tables.splice(i, 1); draw(); })];
+  };
+
+  function figureCard(t, i, sections) {
+    const c = el("div", "np-table");
+    const head = el("div", "np-row start");
+    head.append(el("b", "np-tn", `圖 ${st.tables.slice(0, i + 1).filter((x) => x.kind === "figure").length}`));
+    head.append(...captionInput(t, "標題（caption），留白會自動產生"), ...moveButtons(i));
+    const where = el("div", "np-grid");
+    const change = el("button", "ghost", t.file.name);
+    change.title = "換一張";
+    change.onclick = () => pickImage((f) => { t.file = f; draw(); });
+    where.append(sectionSelect(t, sections), change);
+    const prev = el("div", "np-preview");
+    if (/\.(png|jpe?g)$/i.test(t.file.name)) {
+      const img = el("img", "np-fig");
+      img.src = URL.createObjectURL(t.file);
+      prev.append(img);
+    }
+    c.append(head, where, prev);
+    return c;
+  }
+
+  function tableCard(t, i, sections) {
+    const c = el("div", "np-table");
+    const head = el("div", "np-row start");
+    head.append(el("b", "np-tn", `表 ${st.tables.slice(0, i + 1).filter((x) => x.kind !== "figure").length}`));
+    const [cap, gen] = captionInput(t, "標題（caption），留白會自動產生");
+    const sec = sectionSelect(t, sections);
     const sty = el("select", "np-input");
     sty.append(new Option("期刊預設樣式", ""));
     st.styles.forEach((s) => sty.append(new Option(s.name, s.id)));
     sty.value = t.style;
     sty.onchange = () => (t.style = sty.value);
-    const move = (d, ic, tip) => iconButton(ic, tip, () => { const j = i + d; if (j < 0 || j >= st.tables.length) return; [st.tables[i], st.tables[j]] = [st.tables[j], st.tables[i]]; draw(); });
-    head.append(cap, move(-1, "up", "上移"), move(1, "chevron", "下移"), iconButton("x", "移除", () => { st.tables.splice(i, 1); draw(); }));
+    head.append(cap, gen, ...moveButtons(i));
     const where = el("div", "np-grid");
     where.append(sec, sty);
     const data = el("textarea", "np-input data");
@@ -359,6 +462,7 @@ const PCNew = (() => {
       if (g.length > 5) prev.append(el("span", "np-note", `…還有 ${g.length - 5} 列`));
     };
     data.oninput = () => { t.data = data.value; show(); };
+    data.onblur = () => autoCaption(t);
     show();
     c.append(head, where, data, prev);
     return c;
@@ -373,20 +477,27 @@ const PCNew = (() => {
   }
 
   async function create() {
-    if (!st.name.trim()) { go(0); return; }
+    if (!st.name.trim()) { $("#npName")?.focus(); flash("請填資料夾名稱"); return; }
     if (st.refs?.running()) { flash("文獻還在匯入中，請稍候"); return; }
-    const tables = st.tables.filter((t) => t.data.trim());
-    if (tables.some((t) => grid(t.data).length < 2)) { flash("表格至少要有表頭和一列資料"); return; }
+    const tables = st.tables.filter((t) => t.kind === "figure" || t.data.trim());
+    if (tables.some((t) => t.kind !== "figure" && grid(t.data).length < 2)) { flash("表格至少要有表頭和一列資料"); return; }
     const [n, max, unit] = kvLength(st.key);
-    if (!st.key.trim()) { flash("Key value 必填：這篇論文通篇要強調的一件事"); return; }
-    if (n > max) { flash(`Key value 最多 ${max} ${unit}`); return; }
+    if (!st.key.trim()) { go(2); flash("Key value 必填：這篇論文通篇要強調的一件事"); return; }
+    if (n > max) { go(2); flash(`Key value 最多 ${max} ${unit}`); return; }
     st.busy = true; draw();
     try {
+      await Promise.all(tables.map((t) => autoCaption(t)));
       const r = await api("/api/papers", {
         name: st.name.trim(), template: st.template || null, key_value: st.key, title: st.title.trim() || null,
         authors: st.chosen, outline: st.plan && st.usePlan ? st.plan.sections : [],
-        tables: tables.map((t) => ({ caption: t.caption, section: t.section, data: t.data, style: t.style || null })),
+        tables: tables.map((t) => (t.kind === "figure"
+          ? { kind: "figure", caption: t.caption, section: t.section, file: figureFile(t) }
+          : { caption: t.caption, section: t.section, data: t.data, style: t.style || null })),
       });
+      for (const t of tables.filter((x) => x.kind === "figure")) {
+        const up = await fetch(`/api/papers/${encodeURIComponent(r.name)}/figures?file=${encodeURIComponent(figureFile(t))}`, { method: "POST", body: t.file });
+        if (!up.ok) flash(`${t.file.name}：${await up.text()}`, 6000);
+      }
       // the user's note on each filed paper becomes its purpose in this paper
       for (const it of st.refs?.items() ?? []) {
         if (it.key && it.guess.note) await api(`/api/papers/${encodeURIComponent(r.name)}/citations`, { key: it.key, purpose: it.guess.note }).catch(() => {});

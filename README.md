@@ -35,7 +35,7 @@ cargo run -p pc-server
 
 ## 你的私人工作區
 
-句型、模板、論文都是個人資料，**放在你自己的私有 repository**，不要放進這個 repo。結構如下（範本見 [`workspace-template/`](workspace-template/)）：
+句型、模板、論文都是個人資料，**放在你自己的私有 repository**，不要放進這個 repo。結構如下（空白範本見 [`workspace-template/`](workspace-template/)；填好虛構內容的完整範例見 [`private-example/`](private-example/README.md)）：
 
 ```
 your-private-repo/
@@ -43,7 +43,10 @@ your-private-repo/
   publishers/   各出版社的 .cls、範例 .tex 與模板設定
   papers/       每篇論文一個資料夾（main.tex、sections/，以及 paper.toml：Key value 與作者）
   prompts/      自訂提示詞（可選）
+  config.toml   App 記住的介面設定：淺色／深色、配色、紙張、縮放、引擎、上次開的論文
 ```
+
+介面設定存在工作區的 `config.toml`（`[ui]`），跟著工作區一起同步，換一台電腦打開也是同樣的樣子；每次開啟時以它為準。
 
 第一次開啟 App 會彈出 **AI 與同步** 視窗（之後點右上角的「AI」開啟），三個步驟都可略過：
 
@@ -80,15 +83,19 @@ your-private-repo/
 
 ## 新論文
 
-論文選單的「新論文」開啟五個步驟的視窗（後兩步選填；第 3 步起就能按「建立論文」）：
+論文選單的「新論文」開啟五個步驟的視窗。第 3 步的 Key value 填好才能往下；第 4、5 步可以留白，直接按「下一步」。「建立論文」只在最後一步出現，旁邊是資料夾名稱：依標題（沒有標題時用 Key value）自動產生，例如 `explainable-hip-fracture-detection-attention`，可以改，不會和現有的論文重名。
 
-1. **名稱與版型**：選期刊或研討會的模板，或空白 article。
+1. **版型**：選期刊或研討會的模板，或空白 article。
 2. **作者**：從作者資料庫勾選、排順序，標記通訊作者與同等貢獻。資料庫在 `profile/authors.csv`（姓名、email、ORCID、所屬機構、角色）與 `profile/affiliations.csv`（系所、機構、城市、國家），姓與機構必填，其他可空著；在這裡新增的人會存進資料庫，下一篇直接選，也可以在「資料庫」視窗的「作者」「機構」分頁編輯。作者區塊依版型的寫法產生，不經過模型：Springer Nature（`\author[1]{\fnm{}\sur{}}`、`\affil`）、Elsevier（`elsarticle` 的 `\corref`；`cas-dc` 的 `\cormark` 與 `[orcid=]`）、IEEE 期刊（`\thanks{… is with …}`）、IEEE 會議（`\IEEEauthorblockN/A`）、LNCS（`\inst`、`\orcidID`、`\institute`），其他 class 用通用的 `\author{Name\\ 機構 \and …}`。範例裡的作者整段換掉，其餘不動。
 3. **Key value 與大綱**：
    - **Key value 必填**：這篇論文通篇要強調的一件事，可以是願景（例如「提升 XX 效能」）。中文最多 50 字、英文最多 30 個單字，存在 `paper.toml`；論文上方會一直顯示，點一下可修改。匯入現有論文時也要填。
    - **大綱（選填，需要 Claude）**：條列章節與要說的事，Claude 依 Key value 給 3 個標題建議，並排出 section／subsection，每段最多兩句話說明這裡要寫什麼（寫在內文，之後自己改）。有期刊模板時依期刊的章節順序；勾選套用就取代模板的範例章節，前後的標題區與參考文獻區保留。
 
-4. **表格（選填）**：已經有的結果先放進來。從 Excel 或 Google 試算表選取儲存格直接貼上（也可以貼 CSV 或 Markdown 表格），第一列是表頭，下方即時預覽列數與欄數。每個表格填標題、選要放的章節（大綱架構的章節、模板的章節或空白論文的章節）和樣式（預設用這個期刊的：Springer Nature、Elsevier、IEEE、LNCS、CVPR，其他用 booktabs），可調整順序。建立時依序放在各章節的最後，產生 `\caption`、`\label{tab:…}`，需要的套件自動加進 `main.tex`；之後在頁面上照常編輯。
+4. **圖表（選填）**：已經有的結果先放進來。
+   - **表格**：從 Excel 或 Google 試算表選取儲存格直接貼上（也可以貼 CSV 或 Markdown 表格），第一列是表頭，下方即時預覽列數與欄數。選要放的章節（大綱架構的章節、模板的章節或空白論文的章節）和樣式（預設用這個期刊的：Springer Nature、Elsevier、IEEE、LNCS、CVPR，其他用 booktabs）。
+   - **圖片**：PNG、JPG、PDF 或 EPS，存進論文的 `figures/`（檔名整理成 `fig1-原檔名.png`），以 `\includegraphics[width=\linewidth]` 放進 `figure` 環境。
+   - **標題（caption）自動產生**：留白時，貼完表格或選好圖片後由右側選的寫作引擎（本機模型或 Claude）依表頭、列名寫一句標題，不寫結果與數字；也可以按標題旁的 AI 重寫。圖片只看得到檔名，檔名看不出內容時不會亂編，請自己填。建立時還空著的會先補上。
+   - 可調整順序；建立時依序放在各章節的最後，產生 `\caption`、`\label{tab:…}`／`\label{fig:…}`，需要的套件自動加進 `main.tex`；之後在頁面上照常編輯。
 5. **文獻（選填，需要 Claude）**：把想引用的文章一次貼上，可以夾雜備註（見下方「文獻」的「貼上想引用的文章」）。Claude 先算出有幾篇，再三篇一組查證、建檔、加標籤存進文獻庫，顯示進度條；可以邊匯入邊回到其他步驟。你對每篇的備註（例如「需注意 · Methods · 只支撐…」）會記成這篇論文的引用用途（`citations.csv`）。
 
 **Key value 是生成與檢查的約束**：生成段落時放進規則；檢查加了一條軟規則 R106（`supports_key_value`），判斷段落、圖表、摘要、contribution、討論是否離題。它是黃燈：延伸討論不一定完全對齊主題，不必每段都綠燈。
@@ -236,7 +243,8 @@ crates/core         資料庫讀取與驗證、句型檢索、段落檢查、生
 crates/server       本機伺服器（只監聽 127.0.0.1），桌面版與瀏覽器模式共用
 apps/desktop        Tauri 桌面殼：啟動伺服器並開啟視窗
 ui/                 介面（HTML / CSS / JS）
-workspace-template/ 私人工作區範本與示範資料
+workspace-template/ 私人工作區範本與示範資料（沒有指定工作區時使用）
+private-example/    完整的私人工作區範例（虛構的作者、文獻、期刊與論文）
 scripts/            Git hooks
 ```
 
@@ -252,7 +260,10 @@ scripts/            Git hooks
 | GET | `/api/engine` | 模型連線狀態 |
 | POST | `/api/compose` `{ points, section, function, min_words, max_words, language, before, after, key_value? }` | 一次性段落生成 |
 | POST | `/api/check/soft` `{ text, section, before, after, engine, key_value? }` | 軟規則檢查（有 Key value 時才問 R106） |
-| POST | `/api/papers` `{ name, template?, key_value, title?, authors?, outline?, tables? }` | 建立論文（Key value 必填；`tables` 為 `{ caption, section, data, style? }`） |
+| POST | `/api/papers` `{ name, template?, key_value, title?, authors?, outline?, tables? }` | 建立論文（Key value 必填；`tables` 為 `{ caption, section, data, style? }`，圖片為 `{ kind: "figure", caption, section, file }`） |
+| POST | `/api/papers/{name}/figures?file=` | 上傳圖片到論文的 `figures/`（body 為檔案內容） |
+| POST | `/api/wizard/caption` `{ kind, data?, file?, section?, key_value?, title?, engine? }` | 表格或圖片的標題建議（寫作引擎） |
+| GET／PUT | `/api/settings` | 工作區 `config.toml` 的 `[ui]` 介面設定 |
 | GET | `/api/papers/{name}` | 論文各章節與段落、`meta`（Key value 與作者） |
 | PUT | `/api/papers/{name}/meta` `{ key_value }` | 修改 Key value |
 | GET / POST | `/api/people` | 作者與機構清單；新增一位作者（可同時新增機構） |

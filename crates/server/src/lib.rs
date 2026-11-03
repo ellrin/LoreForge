@@ -23,6 +23,7 @@ pub mod proc;
 pub mod git;
 pub mod models;
 pub mod refimport;
+pub mod settings;
 pub mod texmeasure;
 pub mod wizard;
 
@@ -724,13 +725,20 @@ struct NewPaper {
 
 #[derive(Deserialize)]
 struct TableSpec {
+    /// "table" (the default) or "figure".
+    #[serde(default)]
+    kind: String,
     #[serde(default)]
     caption: String,
     /// Section title to put it in.
     #[serde(default)]
     section: String,
     /// Pasted cells: spreadsheet copy, Markdown table or CSV; first row = header.
+    #[serde(default)]
     data: String,
+    /// Figure: its file name under figures/, uploaded once the paper exists.
+    #[serde(default)]
+    file: String,
     /// Table style id; empty = the journal's own.
     #[serde(default)]
     style: Option<String>,
@@ -749,15 +757,15 @@ fn journal_table_style(main: &str, template: Option<&str>) -> &'static str {
     }
 }
 
-/// `tab:results-test-set` from a caption.
-fn table_label(caption: &str, i: usize, taken: &[String]) -> String {
+/// `tab:results-test-set` (or `fig:...`) from a caption.
+fn float_label(prefix: &str, caption: &str, i: usize, taken: &[String]) -> String {
     let words: Vec<String> = caption
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| w.len() > 2)
         .take(3)
         .map(|w| w.to_lowercase())
         .collect();
-    let base = if words.is_empty() { format!("tab:t{}", i + 1) } else { format!("tab:{}", words.join("-")) };
+    let base = if words.is_empty() { format!("{prefix}:{}{}", &prefix[..1], i + 1) } else { format!("{prefix}:{}", words.join("-")) };
     let mut label = base.clone();
     let mut n = 2;
     while taken.contains(&label) {
@@ -782,26 +790,41 @@ fn add_tables(dir: &Path, template: Option<&str>, specs: &[TableSpec]) -> Result
     let mut packages: Vec<String> = Vec::new();
     let mut labels: Vec<String> = Vec::new();
     let mut touched = vec![false; sections.len()];
-    for (i, spec) in specs.iter().enumerate() {
-        let grid = pc_core::textable::parse_grid(&spec.data);
-        if grid.is_empty() {
-            return Err(format!("第 {} 個表格沒有資料", i + 1));
-        }
-        let id = spec.style.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(default_style);
-        let style = find_style(id).or_else(|| find_style("booktabs")).expect("booktabs style");
-        let caption = if spec.caption.trim().is_empty() { format!("Table {}", i + 1) } else { meta::tex_text(&spec.caption) };
-        let label = table_label(&spec.caption, i, &labels);
-        labels.push(label.clone());
-        let table = pc_core::textable::from_grid(&grid, &caption, &label, &style);
-        packages.extend(style.packages.iter().cloned());
-        packages.extend(pc_core::textable::needed_packages(&table));
+    let (mut nt, mut nf) = (0, 0);
+    for spec in specs {
+        let block = if spec.kind == "figure" {
+            if !figure_name_ok(&spec.file) {
+                return Err(format!("圖檔名稱不合法：{}", spec.file));
+            }
+            let caption = if spec.caption.trim().is_empty() { format!("Figure {}", nf + 1) } else { meta::tex_text(&spec.caption) };
+            let label = float_label("fig", &spec.caption, nf, &labels);
+            labels.push(label.clone());
+            nf += 1;
+            packages.push("graphicx".into());
+            format!("\\begin{{figure}}[t]\n\\centering\n\\includegraphics[width=\\linewidth]{{figures/{}}}\n\\caption{{{caption}}}\n\\label{{{label}}}\n\\end{{figure}}", spec.file)
+        } else {
+            let grid = pc_core::textable::parse_grid(&spec.data);
+            if grid.is_empty() {
+                return Err(format!("第 {} 個表格沒有資料", nt + 1));
+            }
+            let id = spec.style.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(default_style);
+            let style = find_style(id).or_else(|| find_style("booktabs")).expect("booktabs style");
+            let caption = if spec.caption.trim().is_empty() { format!("Table {}", nt + 1) } else { meta::tex_text(&spec.caption) };
+            let label = float_label("tab", &spec.caption, nt, &labels);
+            labels.push(label.clone());
+            nt += 1;
+            let table = pc_core::textable::from_grid(&grid, &caption, &label, &style);
+            packages.extend(style.packages.iter().cloned());
+            packages.extend(pc_core::textable::needed_packages(&table));
+            pc_core::textable::render(&table).trim_end().to_string()
+        };
         let want = spec.section.trim();
         let si = sections
             .iter()
             .position(|s| s.title.eq_ignore_ascii_case(want) || s.title.eq_ignore_ascii_case(&meta::tex_text(want)))
             .or_else(|| sections.iter().position(|s| s.title.to_lowercase().contains("result")))
             .unwrap_or(sections.len() - 1);
-        sections[si].paragraphs.push(pc_core::textable::render(&table).trim_end().to_string());
+        sections[si].paragraphs.push(block);
         touched[si] = true;
     }
     for (s, t) in sections.iter().zip(&touched) {
@@ -812,6 +835,32 @@ fn add_tables(dir: &Path, template: Option<&str>, specs: &[TableSpec]) -> Result
     packages.sort();
     packages.dedup();
     paper::ensure_packages(dir, &packages).map(|_| ())
+}
+
+/// A figure file name the wizard may write: plain characters and an image type.
+fn figure_name_ok(name: &str) -> bool {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    !name.starts_with('.')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "pdf" | "eps")
+}
+
+#[derive(Deserialize)]
+struct FigureUpload {
+    file: String,
+}
+
+/// Save an image into a paper's figures/ folder.
+async fn put_figure(State(s): State<Shared>, AxPath(name): AxPath<String>, AxQuery(q): AxQuery<FigureUpload>, body: axum::body::Bytes) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    if !figure_name_ok(&q.file) {
+        return bad("圖檔要是 PNG、JPG、PDF 或 EPS，名稱只用英數字與 - _ .");
+    }
+    let figs = dir.join("figures");
+    match std::fs::create_dir_all(&figs).and_then(|_| std::fs::write(figs.join(&q.file), &body)) {
+        Ok(()) => Json(serde_json::json!({ "path": format!("figures/{}", q.file) })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 /// The authors picked for a paper, resolved against the profile.
@@ -974,6 +1023,56 @@ async fn wizard_outline(State(s): State<Shared>, Json(b): Json<OutlineBody>) -> 
         }
     }
     bad(&last)
+}
+
+#[derive(Deserialize)]
+struct CaptionBody {
+    /// "table" or "figure".
+    kind: String,
+    /// Table cells as pasted.
+    #[serde(default)]
+    data: String,
+    /// Figure file name.
+    #[serde(default)]
+    file: String,
+    #[serde(default)]
+    section: String,
+    #[serde(default)]
+    key_value: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    engine: Option<EngineChoice>,
+}
+
+/// A caption for a table or figure the wizard is about to place.
+async fn wizard_caption(State(s): State<Shared>, Json(b): Json<CaptionBody>) -> impl IntoResponse {
+    if !has_writing_engine(&s, b.engine).await {
+        return bad("自動產生標題需要寫作引擎");
+    }
+    let language = s.loaded.read().await.profile.as_ref().map(|p| p.manifest.language.clone()).unwrap_or_else(|| "en".into());
+    let grid = pc_core::textable::parse_grid(&b.data);
+    let prompt = wizard::caption_prompt(&b.kind, &grid, &b.file, &b.section, &b.key_value, &b.title, &language);
+    match writing_complete(&s, b.engine, &prompt, None).await {
+        // empty: nothing to say from what was given (a figure named img1.png)
+        Ok(reply) => Json(serde_json::json!({ "caption": wizard::clean_caption(&reply).unwrap_or_default() })).into_response(),
+        Err(e) => bad(&e),
+    }
+}
+
+/// The workspace's own settings (config.toml): look and choices the UI
+/// remembers, kept with the user's data so every device opens the same way.
+async fn get_settings(State(s): State<Shared>) -> impl IntoResponse {
+    let Some(ws) = s.loaded.read().await.workspace.clone() else { return Json(serde_json::json!({})).into_response() };
+    Json(settings::read(&ws)).into_response()
+}
+
+async fn put_settings(State(s): State<Shared>, Json(b): Json<serde_json::Map<String, serde_json::Value>>) -> impl IntoResponse {
+    let Some(ws) = s.loaded.read().await.workspace.clone() else { return bad("no workspace") };
+    match settings::write(&ws, &b) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -2569,10 +2668,13 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/papers/{name}/bib", post(paper_bib))
         .route("/api/papers/{name}/export", post(export_paper))
         .route("/api/papers/{name}/figure", get(paper_figure))
+        .route("/api/papers/{name}/figures", post(put_figure).layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)))
         .route("/api/papers/{name}/front", put(put_front))
         .route("/api/papers/{name}/meta", put(put_meta))
         .route("/api/people", get(people).post(add_person))
         .route("/api/wizard/outline", post(wizard_outline))
+        .route("/api/wizard/caption", post(wizard_caption))
+        .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/refs/extract", post(extract_refs))
         .route("/api/refs/verify", post(verify_ref))
         .route("/api/refs/propose-record", post(propose_record))

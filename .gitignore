@@ -13,6 +13,7 @@
 *.local.toml
 /config.toml
 !workspace-template/**
+!private-example/**
 
 # Secrets
 .env
