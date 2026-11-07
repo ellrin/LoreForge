@@ -514,8 +514,17 @@ async fn engines_status(State(s): State<Shared>, AxQuery(f): AxQuery<Fresh>) -> 
     let local = s.engine.read().await;
     let c = s.claude.read().await.status();
     let cc = s.cc.get(f.fresh.is_some()).await;
+    // Downloaded models, in catalog order, for the local engine's menu.
+    let have: Vec<String> = models::installed().into_iter().map(|m| m.id).collect();
+    let local_models: Vec<serde_json::Value> = models::catalog()
+        .models
+        .into_iter()
+        .filter(|m| have.contains(&m.id))
+        .map(|m| serde_json::json!({ "id": m.id, "name": m.name, "variant": m.variant, "summary": m.summary, "uncensored": m.uncensored }))
+        .collect();
+    let running = s.models.runtime.lock().await.as_ref().map(|r| r.model_id.clone());
     Json(serde_json::json!({
-        "local": { "configured": local.configured(), "status": local.status().await },
+        "local": { "configured": local.configured(), "status": local.status().await, "models": local_models, "running": running },
         "subscription": { "configured": cc.ready, "status": cc },
         "api": { "configured": c.configured, "masked": c.masked, "source": c.source },
         "model": c.model,

@@ -516,10 +516,52 @@ const modelName = (id) => {
   return `${family[0].toUpperCase()}${family.slice(1)} ${ver.join(".")}`.trim();
 };
 
+/** Place the shared engine menu under its button. */
+function showEngineMenu(m, btn) {
+  m.hidden = false;
+  const r = btn.getBoundingClientRect();
+  m.style.top = `${r.bottom + 4}px`;
+  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+}
+
+/** Local menu: the downloaded models; picking one starts it in place of the running one. */
+function toggleLocalMenu(btn) {
+  const m = $("#modelMenu");
+  if (!m.hidden && m.dataset.for === "local") { m.hidden = true; return; }
+  m.dataset.for = "local";
+  const loc = state.engines.local;
+  m.innerHTML = "";
+  m.append(el("div", "hm-title", "本機模型"));
+  loc.models.forEach((x) => {
+    const b = el("button", "", x.name);
+    if (x.uncensored) b.append(el("span", "tag warn", "Uncensored"));
+    b.append(el("span", "v", x.variant.replace(/^abliterated /, "")));
+    b.setAttribute("aria-current", String(x.id === loc.running));
+    b.title = x.summary;
+    b.onclick = async () => {
+      m.hidden = true;
+      store.set("pc.engine", "local");
+      if (x.id !== loc.running) {
+        flash(`啟動 ${x.name}…`, 120000);
+        try { await api("/api/models/start", { id: x.id }); flash(`已改用 ${x.name} ${x.variant}`); }
+        catch (err) { flash(err.message, 8000); }
+      }
+      loadEngines();
+    };
+    m.append(b);
+  });
+  m.append(el("div", "sep"));
+  const more = el("button", "", "下載或管理模型…");
+  more.onclick = () => { m.hidden = true; Setup.open("model"); };
+  m.append(more);
+  showEngineMenu(m, btn);
+}
+
 /** Claude menu: the model, and how Claude connects. */
 function toggleModelMenu(btn) {
   const m = $("#modelMenu");
-  if (!m.hidden) { m.hidden = true; return; }
+  if (!m.hidden && m.dataset.for === "claude") { m.hidden = true; return; }
+  m.dataset.for = "claude";
   const e = state.engines;
   m.innerHTML = "";
   m.append(el("div", "hm-title", "模型"));
@@ -550,19 +592,19 @@ function toggleModelMenu(btn) {
     };
     m.append(b);
   });
-  m.hidden = false;
-  const r = btn.getBoundingClientRect();
-  m.style.top = `${r.bottom + 4}px`;
-  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+  showEngineMenu(m, btn);
 }
 
 function renderEngineSwitch() {
   const pick = chosenEngine();
   const e = state.engines;
   $('#cEngine [data-v="claude"] .lbl').textContent = claudeReady() ? `Claude ${modelName(e.model)}` : "Claude";
+  const run = e?.local.models?.find((x) => x.id === e.local.running);
+  $('#cEngine [data-v="local"] .lbl').textContent = run ? run.name : "本機";
   document.querySelectorAll("#cEngine button").forEach((b) => {
     const v = b.dataset.v;
-    const ready = v === "local" ? !!e?.local.configured : claudeReady();
+    // Local counts as available once a model is downloaded: the menu starts it.
+    const ready = v === "local" ? !!e?.local.configured || !!e?.local.models?.length : claudeReady();
     b.classList.toggle("off", !ready);
     b.setAttribute("aria-pressed", String(v === "local" ? pick === "local" : pick != null && pick !== "local"));
     b.title = ready ? "" : v === "local" ? "尚未部署本機模型，點此設定" : "尚未連接 Claude，點此設定";
@@ -572,8 +614,8 @@ function renderEngineSwitch() {
       store.set("pc.engine", v);
       renderEngineSwitch();
       renderStatus();
-      // Claude: also offer its models and connection.
-      if (v === "claude") toggleModelMenu(b); else $("#modelMenu").hidden = true;
+      // Both offer their models; Claude also its connection.
+      if (v === "claude") toggleModelMenu(b); else toggleLocalMenu(b);
     };
   });
 }

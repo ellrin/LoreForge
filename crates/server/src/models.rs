@@ -46,6 +46,9 @@ pub struct ModelEntry {
     pub license: String,
     #[serde(default)]
     pub vision: bool,
+    /// Refusal removed (abliterated). Shown with a tag, never recommended.
+    #[serde(default)]
+    pub uncensored: bool,
 }
 
 fn default_ctx() -> u32 {
@@ -125,14 +128,17 @@ pub async fn system_info() -> SystemInfo {
     SystemInfo { os: std::env::consts::OS, arch: std::env::consts::ARCH, memory_gb, gpu, gpu_memory_gb, unified_memory }
 }
 
-/// The largest catalog model this machine can hold, preferring the default.
+/// The default when this machine can hold it, else the most demanding model
+/// that fits: `min_memory_gb` tracks the model's tier better than file size
+/// (a 4B at Q8 is a bigger file than a 12B at Q4). Uncensored models are
+/// never recommended.
 pub fn recommend(cat: &Catalog, sys: &SystemInfo) -> Option<String> {
     // Unified memory and discrete GPUs both count; take the larger pool.
     let pool = sys.memory_gb.max(sys.gpu_memory_gb.unwrap_or(0.0));
-    let fits: Vec<&ModelEntry> = cat.models.iter().filter(|m| pool + 0.5 >= m.min_memory_gb as f32).collect();
+    let fits: Vec<&ModelEntry> = cat.models.iter().filter(|m| !m.uncensored && pool + 0.5 >= m.min_memory_gb as f32).collect();
     fits.iter()
         .find(|m| m.id == cat.default)
-        .or_else(|| fits.iter().max_by(|a, b| a.approx_gb.total_cmp(&b.approx_gb)))
+        .or_else(|| fits.iter().max_by(|a, b| a.min_memory_gb.cmp(&b.min_memory_gb).then(a.approx_gb.total_cmp(&b.approx_gb))))
         .map(|m| m.id.clone())
 }
 
@@ -328,6 +334,10 @@ pub struct Manager {
     pub runtime: Mutex<Option<Running>>,
     /// "idle" | "downloading" | "starting" | "ready" | "error: …"
     pub phase: Mutex<String>,
+    /// One start at a time: the app restores the last model at launch, and a
+    /// pick from the menu meanwhile would load two large models at once,
+    /// overflow GPU memory, and time out.
+    pub starting: Mutex<()>,
 }
 
 pub struct Running {
@@ -492,13 +502,17 @@ fn free_port() -> u16 {
 pub async fn start(mgr: &Manager, id: &str) -> Result<String, String> {
     let m = installed().into_iter().find(|m| m.id == id).ok_or("這個模型尚未下載")?;
     let bin = runtime_binary().ok_or("尚未安裝 llama.cpp")?;
+    let _one_at_a_time = mgr.starting.lock().await;
     stop(mgr).await;
     *mgr.phase.lock().await = "starting".into();
     let port = free_port();
     let mut cmd = crate::proc::cmd(&bin);
     cmd.arg("-m")
         .arg(models_dir().join(&m.model_file))
-        .args(["--host", "127.0.0.1", "--port", &port.to_string(), "-c", &m.context.to_string(), "-ngl", "999", "--jinja"])
+        // No thinking: Gemma 4 and Qwen reason for a thousand tokens or more
+        // before answering, which at ~10 tokens/s on a laptop turns a
+        // paragraph into minutes. Every task here asks for a fixed JSON shape.
+        .args(["--host", "127.0.0.1", "--port", &port.to_string(), "-c", &m.context.to_string(), "-ngl", "999", "--jinja", "--reasoning-budget", "0"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
@@ -576,7 +590,17 @@ mod tests {
         let sys = |mem: f32| SystemInfo { os: "windows", arch: "x86_64", memory_gb: mem, gpu: None, gpu_memory_gb: None, unified_memory: false };
         assert_eq!(recommend(&c, &sys(32.0)).as_deref(), Some("gemma-4-12b-q8"));
         assert_eq!(recommend(&c, &sys(16.0)).as_deref(), Some("gemma-4-12b-q4"));
+        assert_eq!(recommend(&c, &sys(12.0)).as_deref(), Some("qwen3.5-4b-q8"));
         assert_eq!(recommend(&c, &sys(8.0)), None);
+    }
+
+    #[test]
+    fn uncensored_models_are_never_recommended() {
+        let c: Catalog = serde_json::from_str(CATALOG).unwrap();
+        assert!(c.models.iter().any(|m| m.uncensored));
+        let only = Catalog { version: 1, default: String::new(), models: c.models.into_iter().filter(|m| m.uncensored).collect() };
+        let sys = SystemInfo { os: "macos", arch: "aarch64", memory_gb: 128.0, gpu: None, gpu_memory_gb: None, unified_memory: true };
+        assert_eq!(recommend(&only, &sys), None);
     }
 
     #[test]

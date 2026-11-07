@@ -160,6 +160,7 @@ const Setup = (() => {
       head.append(el("b", "", `${m.name} ${m.variant}`), el("span", "sum", m.summary));
       const tags = el("div", "tags");
       if (m.id === st.recommended) tags.append(el("span", "tag acc", "推薦"));
+      if (m.uncensored) tags.append(el("span", "tag warn", "Uncensored"));
       if (st.running === m.id) tags.append(el("span", "tag ok", "使用中"));
       else if (installed) tags.append(el("span", "tag", "已下載"));
       if (!fits) tags.append(el("span", "tag bad", `需 ${m.min_memory_gb} GB`));

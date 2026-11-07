@@ -39,6 +39,8 @@ struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<Msg<'a>>,
     temperature: f32,
+    /// A ceiling, so a model that loops cannot run for minutes.
+    max_tokens: u32,
     response_format: serde_json::Value,
 }
 
@@ -104,6 +106,7 @@ impl Engine {
                 Msg { role: "user", content: &user },
             ],
             temperature: 0.2,
+            max_tokens: 4096,
             response_format: serde_json::json!({ "type": "json_object" }),
         };
         let resp = self

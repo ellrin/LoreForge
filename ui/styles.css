@@ -488,6 +488,7 @@ select, input[type="search"] {
 .tag.acc { color: var(--accent); border-color: var(--accent); }
 .tag.ok { color: var(--ok); border-color: var(--ok); }
 .tag.bad { color: var(--err); border-color: var(--err); }
+.tag.warn { color: var(--warn); border-color: var(--warn); }
 .actions-row { display: flex; gap: 8px; margin-top: 4px; }
 table.plan { border-collapse: collapse; width: 100%; font-size: 12px; }
 table.plan td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
@@ -522,6 +523,8 @@ table.plan .src { color: var(--faint); font-size: 11px; }
 #cEngine button[data-v="local"] { flex: 0 0 34%; }
 #cEngine svg.i { width: 13px; height: 13px; opacity: .6; }
 #modelMenu { min-width: 180px; }
+#modelMenu button { display: flex; align-items: center; gap: 8px; }
+#modelMenu .v { margin-left: auto; font: 10.5px var(--mono); color: var(--faint); }
 /* check panel */
 .chk-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; font: 500 11px var(--mono); color: var(--faint); }
 .chk-head .acc { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

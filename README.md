@@ -20,7 +20,7 @@ cargo run -p papercomposer
 
 - Windows：需要 Visual Studio Build Tools（C++）與 WebView2（Windows 10/11 已內建）。
 - macOS：需要 Xcode Command Line Tools。
-- 打包安裝檔：`cargo install tauri-cli --version "^2"`，再於 `apps/desktop/` 執行 `cargo tauri build`。Windows 產生 `.msi` / `.exe`，macOS 產生 `.app` / `.dmg`。
+- 打包安裝檔：見下方「自己打包成 App」。
 - 圖示：原始檔為 `apps/desktop/icons/logo.svg`，對應的 1024px 圖為 `logo.png`。換圖後於 `apps/desktop/` 執行 `cargo tauri icon icons/logo.png` 重新產生各尺寸。
 
 **瀏覽器開發模式**（改介面時最快）
@@ -32,6 +32,49 @@ cargo run -p pc-server
 開啟 <http://127.0.0.1:7878>。
 
 沒有指定工作區時，兩種模式都使用內建示範資料（`workspace-template/`），右上角顯示「連接工作區」。
+
+## 自己打包成 App
+
+這個 repo 只提供原始碼，要不要包成 App、包成哪一種由你決定。先安裝打包工具（一次即可）：
+
+```sh
+cargo install tauri-cli --version "^2" --locked
+```
+
+**macOS（`.app`）**
+
+```sh
+cd apps/desktop
+APPLE_SIGNING_IDENTITY="你的簽章名稱" cargo tauri build --bundles app
+cp -R ../../target/release/bundle/macos/PaperComposer.app /Applications/
+```
+
+Claude 的 API key 存在鑰匙圈。macOS 依程式的簽章決定誰能讀它：**沒有簽章**的 App 每次重新打包都被當成另一個程式，開啟時會一直要求輸入登入密碼。給 App 一個固定的簽章就只會問一次（按「永遠允許」），之後更新也不再問：
+
+- 自己用：建立免費的自簽憑證即可。
+
+  ```sh
+  openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes \
+    -subj "/CN=My Local Code Signing" -addext "keyUsage=critical,digitalSignature" \
+    -addext "extendedKeyUsage=critical,codeSigning" -addext "basicConstraints=critical,CA:false"
+  openssl pkcs12 -export -legacy -out id.p12 -inkey key.pem -in cert.pem -passout pass:tmp
+  security import id.p12 -k ~/Library/Keychains/login.keychain-db -P tmp -T /usr/bin/codesign
+  rm key.pem id.p12
+  ```
+
+  之後以 `APPLE_SIGNING_IDENTITY="My Local Code Signing"` 打包。系統不信任自簽憑證沒關係，`codesign` 照樣能簽。
+- 給別人下載：需要 Apple Developer 帳號的 Developer ID 憑證並經過公證（notarize），別人的 Mac 才能直接開啟；設定方式見 [Tauri 的 macOS 簽章說明](https://v2.tauri.app/distribute/sign/macos/)。
+
+**Windows（`.msi` / `.exe`）**
+
+在 Windows 上（需 Visual Studio Build Tools 的 C++ 與 WebView2）：
+
+```powershell
+cd apps\desktop
+cargo tauri build
+```
+
+安裝檔在 `target\release\bundle\msi\` 與 `target\release\bundle\nsis\`。Windows 的 API key 存在「認證管理員」，不受簽章影響；沒有簽章時 SmartScreen 第一次會警告，按「其他資訊 → 仍要執行」。
 
 ## 你的私人工作區
 
@@ -204,7 +247,9 @@ tlmgr search --global --file /xxx.sty
 
 **台灣用語**：本機模型寫繁體中文時字形正確，但常用大陸詞（數據、網絡、視頻、信息、代碼）。本機模型的回覆會經過 OpenCC `s2twp` 校正成台灣用語（資料、網路、影片、資訊、程式碼），英文、LaTeX 與 JSON 不受影響；「文件」這類台灣也通用的詞保留原樣。Claude 的回覆不轉換。
 
-可選的模型列在 [`models/catalog.json`](models/catalog.json)，目前預設 Gemma 4 12B（Q8_0；記憶體較少時用 Q4_K_XL）。之後有新模型（例如 Gemma 5），在清單加一筆即可出現在精靈中：
+可選的模型列在 [`models/catalog.json`](models/catalog.json)：Gemma 4（E4B、12B、31B）與 Qwen（3.5 4B、3.5 9B、3.8 27B），以及兩者的 abliterated 版本（移除拒答，標示 **Uncensored**，不會被推薦）。目前預設 Gemma 4 12B（Q8_0；記憶體較少時用 Q4_K_XL）。寫作區的「本機」按鈕會列出已下載的模型，點一下就切換。模型以不思考模式執行（`--reasoning-budget 0`）：每個任務都要求固定的 JSON 格式，思考只會讓一段文字多等好幾分鐘。
+
+M6 32 GB 實測的生成速度（token/秒）：Qwen3.5 4B 30.8、Gemma 4 E4B 27.6、Qwen3.5 9B 16.8、Gemma 4 12B Q8 11.5、Qwen3.8 27B 8.2、Gemma 4 31B 8.0。寫英文段落時，Gemma 容易把句型庫例句的內容帶進來，Qwen3.8 27B 較忠於你給的重點。之後有新模型（例如 Gemma 5），在清單加一筆即可出現在精靈中：
 
 ```json
 {
