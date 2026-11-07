@@ -26,6 +26,7 @@ pub mod refimport;
 pub mod settings;
 pub mod texmeasure;
 pub mod wizard;
+pub mod zhtw;
 
 use axum::{
     extract::{Path as AxPath, Query as AxQuery, State},
@@ -589,7 +590,8 @@ async fn resolve_engine(s: &Shared, choice: Option<EngineChoice>) -> Option<Engi
 
 async fn writing_complete(s: &Shared, choice: Option<EngineChoice>, prompt: &Prompt, extra: Option<&str>) -> Result<String, String> {
     match resolve_engine(s, choice).await.ok_or("no engine")? {
-        EngineChoice::Local => s.engine.read().await.complete(prompt, extra).await,
+        // Local models write mainland vocabulary even when asked for Traditional Chinese.
+        EngineChoice::Local => s.engine.read().await.complete(prompt, extra).await.map(|t| zhtw::to_taiwan(&t)),
         EngineChoice::Subscription => {
             let model = s.claude.read().await.model.clone();
             claude_code::complete(prompt, &model, extra).await
