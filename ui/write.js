@@ -167,6 +167,87 @@ const PCWrite = (() => {
     });
   }
 
+  // ── collect a sentence into the phrase bank ──
+  /** The selection: inside the paragraph being edited, else on the page. */
+  function selectedText() {
+    const ta = active();
+    if (ta && ta.selectionEnd > ta.selectionStart) return ta.value.slice(ta.selectionStart, ta.selectionEnd);
+    return String(document.getSelection() ?? "");
+  }
+
+  /** Select a sentence, click: the engine splits it into a pattern and
+   *  phrases, the user ticks what to keep, and it is saved in one step. */
+  async function collect(anchor) {
+    const text = selectedText().trim();
+    if (!text) return flash("先選取想收藏的句子");
+    const section = roleOf(curSection()?.title ?? "Any");
+    const p = popover(anchor, (p) => {
+      p.classList.add("collect-pop");
+      p.append(el("p", "note", "拆解中…"));
+    });
+    let props;
+    try {
+      props = await api("/api/decompose", { text, section, engine: chosenEngine() });
+    } catch (e) {
+      p.innerHTML = "";
+      p.append(el("p", "note bad", e.message));
+      return;
+    }
+    p.innerHTML = "";
+    const picks = [];
+    const group = (label, items, show, kind) => {
+      if (!items.length) return;
+      const head = el("div", "prop-head");
+      head.append(label, el("span", "c", String(items.length)));
+      const ul = el("ul", "prop");
+      items.forEach((x) => {
+        const li = el("li");
+        const cb = el("input"); cb.type = "checkbox"; cb.checked = true;
+        const [meta, main, sub] = show(x);
+        const body = el("div");
+        const t = el("div", "t");
+        t.append(kind === "phrases" ? slotted(main) : main);
+        body.append(el("div", "meta", meta), t);
+        if (sub) body.append(el("div", "u", sub));
+        li.append(cb, body);
+        ul.append(li);
+        picks.push([cb, kind, x]);
+      });
+      p.append(head, ul);
+    };
+    group("句型", props.phrases, (x) => [`${x.section} · ${x.function} · ${x.position}`, x.template, x.example], "phrases");
+    group("片語", props.expressions, (x) => [`${x.kind}${x.section ? " · " + x.section : ""}`, x.text, x.usage], "expressions");
+    if (!picks.length) { p.append(el("p", "note", "這句沒有可收藏的句型")); return; }
+    const save = el("button", "primary small", "加入句型庫");
+    save.onclick = async () => {
+      const chosen = { phrases: [], expressions: [] };
+      picks.filter(([cb]) => cb.checked).forEach(([, kind, x]) => chosen[kind].push(x));
+      if (!chosen.phrases.length && !chosen.expressions.length) { p.remove(); return; }
+      // The database editor holds unsaved edits: add there, so its save does not drop these.
+      const open = state.db?.dirty;
+      if (open?.has("phrases.csv") || open?.has("expressions.csv")) {
+        chosen.phrases.forEach((x) => addRow("phrases.csv", { section: x.section, function: x.function, position: x.position, template: x.template, example: x.example, tags: (x.tags ?? []).join(";") }));
+        chosen.expressions.forEach((x) => addRow("expressions.csv", { kind: x.kind, text: x.text, usage: x.usage, section: x.section, example: x.example }));
+        p.remove();
+        return flash("資料庫有未儲存的修改：已加進編輯中的表格，記得儲存", 6000);
+      }
+      save.disabled = true; save.textContent = "儲存中…";
+      try {
+        const r = await api("/api/phrases/add", chosen);
+        const n = r.phrases.length + r.expressions.length;
+        const skipped = chosen.phrases.length + chosen.expressions.length - n;
+        flash(n ? `已加入 ${n} 筆${skipped ? `（${skipped} 筆已經有了）` : ""}` : "都已經在句型庫裡了");
+        try { state.profile = await api("/api/profile"); } catch {}
+        if (typeof refreshGit === "function") refreshGit();
+        p.remove();
+      } catch (e) {
+        save.disabled = false; save.textContent = "加入句型庫";
+        flash(e.message, 6000);
+      }
+    };
+    p.append(save);
+  }
+
   // ── the bar ──
   const TOOLS = [
     [["bold", "粗體　Ctrl+B", () => wrap("\\textbf{", "}")], ["italic", "斜體　Ctrl+I", () => wrap("\\emph{", "}")]],
@@ -186,6 +267,7 @@ const PCWrite = (() => {
       ["ref", "參照", (b) => references(b)],
       ["footnote", "註腳", () => wrap("\\footnote{", "}")],
     ],
+    [["star", "收藏句型：選取喜歡的句子，拆解後加入句型庫", (b) => collect(b)]],
   ];
 
   function build() {

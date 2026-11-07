@@ -77,9 +77,61 @@ pub fn next_id<'a>(existing: impl IntoIterator<Item = &'a str>, prefix: &str) ->
     format!("{prefix}{:03}", max + 1)
 }
 
+/// Append rows given as `column → value`, each with the next free id for
+/// `prefix`; `default` fills columns a row leaves empty. A row whose `key`
+/// column equals an existing row's (trimmed) is skipped, so saving the same
+/// sentence twice adds it once. Returns the ids of the rows added.
+pub fn append_rows(dir: &Path, name: &str, prefix: &str, key: &str, default: &[(&str, &str)], rows: &[Vec<(&str, String)>]) -> Result<Vec<String>, String> {
+    let mut t = read_table(dir, name)?;
+    let col = |c: &str| t.headers.iter().position(|h| h == c);
+    let (id_col, key_col) = (col("id"), col(key));
+    let mut added = Vec::new();
+    for values in rows {
+        let key_val = values.iter().find(|(c, _)| *c == key).map(|(_, v)| v.trim()).unwrap_or("");
+        if let Some(k) = key_col {
+            if !key_val.is_empty() && t.rows.iter().any(|r| r.get(k).is_some_and(|v| v.trim() == key_val)) {
+                continue;
+            }
+        }
+        let mut row = vec![String::new(); t.headers.len()];
+        for (c, v) in default.iter().map(|(c, v)| (*c, v.to_string())).chain(values.iter().cloned()) {
+            if let Some(i) = col(c) {
+                if !v.is_empty() {
+                    row[i] = v;
+                }
+            }
+        }
+        if let Some(i) = id_col {
+            let id = next_id(t.rows.iter().filter_map(|r| r.get(i).map(String::as_str)), prefix);
+            row[i] = id.clone();
+            added.push(id);
+        }
+        t.rows.push(row);
+    }
+    if !added.is_empty() {
+        write_table(dir, name, &t)?;
+    }
+    Ok(added)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn append_numbers_rows_fills_defaults_and_skips_duplicates() {
+        let dir = std::env::temp_dir().join(format!("pc-append-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("phrases.csv"), "id,section,function,position,template,example,tags,priority\nP007,Results,finding,body,We found {x}.,,,5\n").unwrap();
+        let row = |tpl: &str| vec![("section", "Introduction".to_string()), ("template", tpl.to_string()), ("tags", "novelty;first".to_string())];
+        let ids = append_rows(&dir, "phrases.csv", "P", "template", &[("priority", "3")], &[row("To our knowledge, {claim}."), row("We found {x}."), row("To our knowledge, {claim}.")]).unwrap();
+        assert_eq!(ids, vec!["P008"]);
+        let t = read_table(&dir, "phrases.csv").unwrap();
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!(t.rows[1], vec!["P008", "Introduction", "", "", "To our knowledge, {claim}.", "", "novelty;first", "3"]);
+        assert!(append_rows(&dir, "phrases.csv", "P", "template", &[], &[row("We found {x}.")]).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn round_trip_keeps_unknown_columns_and_drops_blank_rows() {

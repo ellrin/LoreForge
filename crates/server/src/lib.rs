@@ -2290,6 +2290,41 @@ async fn decompose_text(State(s): State<Shared>, Json(b): Json<DecomposeBody>) -
     }
 }
 
+/// Save picked proposals straight into the phrase bank: one step from a
+/// sentence on the page, no trip through the database editor.
+async fn add_proposals(State(s): State<Shared>, Json(p): Json<decompose::Proposals>) -> impl IntoResponse {
+    let dir = s.loaded.read().await.path.clone();
+    let phrases: Vec<Vec<(&str, String)>> = p
+        .phrases
+        .iter()
+        .map(|x| {
+            vec![
+                ("section", x.section.clone()),
+                ("function", x.function.clone()),
+                ("position", x.position.clone()),
+                ("template", x.template.clone()),
+                ("example", x.example.clone()),
+                ("tags", x.tags.join(";")),
+            ]
+        })
+        .collect();
+    let exprs: Vec<Vec<(&str, String)>> = p
+        .expressions
+        .iter()
+        .map(|x| vec![("kind", x.kind.clone()), ("text", x.text.clone()), ("usage", x.usage.clone()), ("section", x.section.clone()), ("example", x.example.clone())])
+        .collect();
+    let added = table::append_rows(&dir, "phrases.csv", "P", "template", &[("priority", "3")], &phrases)
+        .and_then(|a| Ok((a, table::append_rows(&dir, "expressions.csv", "X", "text", &[], &exprs)?)));
+    let (ph, ex) = match added {
+        Ok(x) => x,
+        Err(e) => return bad(&e),
+    };
+    let fresh = load(&s.paths);
+    let issues: Vec<Issue> = fresh.issues.iter().filter(|i| i.file == "phrases.csv" || i.file == "expressions.csv").cloned().collect();
+    *s.loaded.write().await = fresh;
+    Json(serde_json::json!({ "phrases": ph, "expressions": ex, "issues": issues })).into_response()
+}
+
 // ── Git ────────────────────────────────────────────────
 
 async fn workspace_root(s: &Shared) -> Option<PathBuf> {
@@ -2723,6 +2758,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/open/{page}", post(open_page))
         .route("/api/settings/claude", post(claude_settings))
         .route("/api/decompose", post(decompose_text))
+        .route("/api/phrases/add", post(add_proposals))
         .route("/api/workspace", get(workspace_info))
         .route("/api/profile", get(profile_info))
         .route("/api/profile/rules", get(rule_messages))

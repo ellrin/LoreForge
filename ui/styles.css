@@ -794,6 +794,8 @@ table.plan .src { color: var(--faint); font-size: 11px; }
 .writebar .grp:last-child { border-right: 0; }
 .writebar .ico { width: 30px; height: 30px; }
 .wb-pop { width: 300px; display: flex; flex-direction: column; gap: 8px; }
+.wb-pop.collect-pop { width: min(440px, calc(100vw - 16px)); max-height: 70vh; overflow: auto; gap: 4px; }
+.collect-pop > .primary { align-self: flex-end; margin-top: 6px; }
 .wb-pop .search { width: 100%; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r); color: var(--text); padding: 6px 8px; font: 12.5px var(--sans); outline: none; }
 .sym-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; max-height: 260px; overflow: auto; }
 .sym-grid .sym { height: 30px; background: none; border: 1px solid transparent; border-radius: 4px; color: var(--text); font: 16px "Source Serif 4", Georgia, serif; }

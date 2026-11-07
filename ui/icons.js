@@ -64,6 +64,7 @@ const ICONS = {
   footnote: '<path d="M4 18h10M4 13h16M4 8h16"/><text x="19" y="8" text-anchor="middle" font-size="8" fill="currentColor" stroke="none">1</text>',
   list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1" fill="currentColor"/><circle cx="4.5" cy="12" r="1" fill="currentColor"/><circle cx="4.5" cy="18" r="1" fill="currentColor"/>',
   textSize: '<path d="M4 7V5h10v2M9 5v14M7 19h4M14 13v-1h7v1M17.5 12v7M16 19h3"/>',
+  star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9Z"/>',
 };
 
 function icon(name) {

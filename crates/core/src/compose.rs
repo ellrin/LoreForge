@@ -107,12 +107,17 @@ pub fn build_prompt(profile: &Profile, req: &ComposeRequest, points: &[Point], r
     let system = format!(
         "You write one paragraph of an academic paper in the author's own voice.\n\
 Rules:\n\
-1. Build sentences from the author's patterns below. Fill the {{slots}}; keep the pattern wording.\n\
-2. Do not polish, embellish, or add rhetoric. Do not add claims, numbers or citations that are not in the points.\n\
-3. Cover every point. Points marked EMPHASIS must appear in the first or the last sentence.\n\
-4. Length: {min} to {max} words. Language: {lang}.\n\
-5. Avoid these words: {avoid}.\n\
-6. Reply with JSON only: {{\"sentences\":[{{\"text\":\"...\",\"phrase_id\":\"P001\"}}]}}. \
+1. The points are the only source of content: every claim, number and finding comes from them.\n\
+2. Write in the author's voice: phrase as many points as you can with the author's patterns below, filling the {{slots}} from the point and keeping the pattern wording. \
+You may join related points in one sentence and add the transitions the patterns use. \
+A pattern is a sentence frame, never a source of content: its example shows the wording only, \
+and the example's subject, methods, numbers and findings belong to another paper and must never appear. \
+A pattern that fits no point is not used.\n\
+3. Do not polish, embellish, or add rhetoric. Do not add claims, numbers, methods, experiments or citations that are not in the points.\n\
+4. Cover every point. Points marked EMPHASIS must appear in the first or the last sentence.\n\
+5. Length: aim for {min} to {max} words, but never pad: a shorter paragraph is right when the points are few. Language: {lang}.\n\
+6. Avoid these words: {avoid}.\n\
+7. Reply with JSON only: {{\"sentences\":[{{\"text\":\"...\",\"phrase_id\":\"P001\"}}]}}. \
 Use \"phrase_id\": null for a sentence that uses no pattern.",
         min = req.min_words,
         max = req.max_words,
@@ -125,7 +130,7 @@ Use \"phrase_id\": null for a sentence that uses no pattern.",
 
     let mut system = system;
     if let Some(k) = req.key_value.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
-        system += &format!("\n7. The whole paper argues one key value: \"{k}\". Every sentence must serve it; do not drift to other topics.");
+        system += &format!("\n8. The whole paper argues one key value: \"{k}\". Every sentence must serve it; do not drift to other topics.");
     }
 
     let mut user = format!("Section: {}\n", req.section);
@@ -137,7 +142,7 @@ Use \"phrase_id\": null for a sentence that uses no pattern.",
         let p = &h.phrase;
         user += &format!("- {} [{} / {}] {}", p.id, p.function, p.position, p.template);
         if !p.example.is_empty() {
-            user += &format!("  (e.g. {})", p.example);
+            user += &format!("  (wording example from another paper: {})", p.example);
         }
         user += "\n";
     }
@@ -290,7 +295,21 @@ mod tests {
         let pts = parse_points(&r.points);
         assert!(!build_prompt(&pr, &r, &pts, &[]).system.contains("key value"));
         r.key_value = Some("提升骨折判讀的可解釋性".into());
-        assert!(build_prompt(&pr, &r, &pts, &[]).system.contains("7. The whole paper argues one key value: \"提升骨折判讀的可解釋性\""));
+        assert!(build_prompt(&pr, &r, &pts, &[]).system.contains("8. The whole paper argues one key value: \"提升骨折判讀的可解釋性\""));
+    }
+
+    #[test]
+    fn examples_are_marked_as_wording_only() {
+        // Gemma copied example content (other experiments, other numbers)
+        // into drafts while padding to length; the prompt must say not to.
+        let pr = profile();
+        let r = req();
+        let pts = parse_points(&r.points);
+        let s = build_prompt(&pr, &r, &pts, &[]).system;
+        assert!(s.contains("A pattern that fits no point is not used"));
+        assert!(s.contains("phrase as many points as you can with the author's patterns"));
+        assert!(s.contains("must never appear"));
+        assert!(s.contains("never pad"));
     }
 
     #[test]
