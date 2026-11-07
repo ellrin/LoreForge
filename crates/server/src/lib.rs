@@ -105,6 +105,9 @@ struct Config {
     model: Option<ModelConfig>,
     /// This machine's folder of reference PDFs (never synced).
     pdf_dir: Option<PathBuf>,
+    /// Shared local-model store used by every project on this machine
+    /// (fallback for the LOCAL_LLM_HOME environment variable).
+    local_llm_home: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Default)]

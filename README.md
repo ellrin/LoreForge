@@ -200,6 +200,8 @@ tlmgr search --global --file /xxx.sty
 
 「AI 與同步」第 3 步會從 Hugging Face 下載 GGUF 模型、從 GitHub 下載對應平台的 [llama.cpp](https://github.com/ggml-org/llama.cpp)（Windows 用 Vulkan 版，支援 NVIDIA／AMD／Intel 顯示卡；Mac 用 Metal 版），存在本機資料夾（Windows：`%APPDATA%\PaperComposer`；macOS：`~/Library/Application Support/PaperComposer`；Linux：`~/.local/share/PaperComposer`）。App 啟動時自動開啟上次使用的模型，關閉時一併結束。
 
+**和其他專案共用模型**：設定環境變數 `LOCAL_LLM_HOME`（或在 App 設定檔 `config.toml` 寫 `local_llm_home = "/path"`，從 Finder／開始選單開啟時讀不到 shell 變數），模型改存在 `<LOCAL_LLM_HOME>/gguf/<owner>/<repo>/<檔名>`、llama.cpp 存在 `<LOCAL_LLM_HOME>/runtimes/llama.cpp`。這和 `hf download <repo> --local-dir "$LOCAL_LLM_HOME/gguf/<repo>"` 的結構相同，用其他方式下載、而且在清單裡的模型會直接當成已安裝。
+
 可選的模型列在 [`models/catalog.json`](models/catalog.json)，目前預設 Gemma 4 12B（Q8_0；記憶體較少時用 Q4_K_XL）。之後有新模型（例如 Gemma 5），在清單加一筆即可出現在精靈中：
 
 ```json

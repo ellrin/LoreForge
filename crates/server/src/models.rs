@@ -64,11 +64,28 @@ pub fn catalog() -> Catalog {
 pub fn data_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("PaperComposer")
 }
+
+/// Shared store for model weights and the llama.cpp runtime, so every project
+/// on this machine uses one copy: `LOCAL_LLM_HOME`, then `local_llm_home` in
+/// config.toml (apps opened from Finder do not see shell variables).
+pub fn llm_home() -> Option<PathBuf> {
+    std::env::var_os("LOCAL_LLM_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::read_config().local_llm_home)
+}
+
+/// Model files, laid out as `<owner>/<repo>/<file>` like `hf download --local-dir`,
+/// so models fetched outside the app are found too.
 fn models_dir() -> PathBuf {
-    data_dir().join("models")
+    llm_home().map(|h| h.join("gguf")).unwrap_or_else(|| data_dir().join("models"))
 }
 fn runtime_dir() -> PathBuf {
-    data_dir().join("llama.cpp")
+    llm_home().map(|h| h.join("runtimes/llama.cpp")).unwrap_or_else(|| data_dir().join("llama.cpp"))
+}
+/// The app's own records (installed manifests, catalog override) stay private to the app.
+fn manifests_dir() -> PathBuf {
+    data_dir().join("models")
 }
 
 // ── System check ────────────────────────────────────────
@@ -184,7 +201,8 @@ async fn hf_find(repo: &str, suffix: &str) -> Result<PlannedFile, String> {
     let mut hits: Vec<&HfEntry> = list.iter().filter(|e| e.kind == "file" && e.path.to_lowercase().ends_with(&want)).collect();
     hits.sort_by_key(|e| e.path.len()); // shortest = the plain variant, not a split part
     let e = hits.first().ok_or_else(|| format!("{repo} 裡沒有以 {suffix} 結尾的檔案"))?;
-    let name = e.path.rsplit('/').next().unwrap_or(&e.path).to_string();
+    // Per-repo folders: different repos ship files with the same name (mmproj-BF16.gguf).
+    let name = format!("{repo}/{}", e.path);
     Ok(PlannedFile {
         kind: String::new(),
         installed: models_dir().join(&name).exists(),
@@ -241,8 +259,11 @@ fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
 }
 
 async fn runtime_asset(sys: &SystemInfo) -> Result<PlannedFile, String> {
-    let rel: Release = http()
-        .get(format!("{}/repos/ggml-org/llama.cpp/releases/latest", gh_api()))
+    // Binaries ship with the per-build releases (b12345, marked prerelease);
+    // the versioned "latest" release (v0.9.0) carries none, so take the
+    // newest release that has a build for this platform.
+    let releases: Vec<Release> = http()
+        .get(format!("{}/repos/ggml-org/llama.cpp/releases?per_page=20", gh_api()))
         .send()
         .await
         .map_err(|e| format!("無法連線到 GitHub：{e}"))?
@@ -251,19 +272,24 @@ async fn runtime_asset(sys: &SystemInfo) -> Result<PlannedFile, String> {
         .json()
         .await
         .map_err(|e| e.to_string())?;
-    for pat in runtime_patterns(sys) {
-        if let Some(a) = rel.assets.iter().find(|a| a.name.contains(pat) && (a.name.ends_with(".zip") || a.name.ends_with(".tar.gz"))) {
-            return Ok(PlannedFile {
+    pick_runtime(&releases, sys).ok_or_else(|| format!("llama.cpp 最近的版本都沒有適合 {}/{} 的執行檔", sys.os, sys.arch))
+}
+
+fn pick_runtime(releases: &[Release], sys: &SystemInfo) -> Option<PlannedFile> {
+    let pats = runtime_patterns(sys);
+    releases.iter().find_map(|rel| {
+        pats.iter().find_map(|pat| {
+            let a = rel.assets.iter().find(|a| a.name.contains(pat) && (a.name.ends_with(".zip") || a.name.ends_with(".tar.gz")))?;
+            Some(PlannedFile {
                 kind: "runtime".into(),
                 name: a.name.clone(),
                 url: a.browser_download_url.clone(),
                 size: a.size,
                 source: format!("github.com/ggml-org/llama.cpp（{}）", rel.tag_name),
                 installed: false,
-            });
-        }
-    }
-    Err(format!("llama.cpp {} 沒有適合 {}/{} 的版本", rel.tag_name, sys.os, sys.arch))
+            })
+        })
+    })
 }
 
 pub async fn plan(id: &str) -> Result<Plan, String> {
@@ -320,6 +346,9 @@ async fn download(mgr: &Manager, f: &PlannedFile, dest: &Path) -> Result<(), Str
         }
     };
     set("downloading", 0, None).await;
+    if let Some(dir) = dest.parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+    }
     let part = dest.with_extension("part");
     let resp = http().get(&f.url).send().await.and_then(|r| r.error_for_status()).map_err(|e| e.to_string())?;
     let mut out = tokio::fs::File::create(&part).await.map_err(|e| e.to_string())?;
@@ -393,7 +422,8 @@ pub async fn install(mgr: Arc<Manager>, plan: Plan) -> Result<(), String> {
         mmproj_file: plan.files.iter().find(|f| f.kind == "mmproj").map(|f| f.name.clone()),
         context: plan.model.context,
     };
-    let path = models_dir().join(format!("{}.json", plan.model.id));
+    std::fs::create_dir_all(manifests_dir()).map_err(|e| e.to_string())?;
+    let path = manifests_dir().join(format!("{}.json", plan.model.id));
     std::fs::write(path, serde_json::to_string_pretty(&manifest).unwrap()).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -408,7 +438,7 @@ pub struct InstalledModel {
 
 pub fn installed() -> Vec<InstalledModel> {
     let mut out = Vec::new();
-    for e in std::fs::read_dir(models_dir()).into_iter().flatten().flatten() {
+    for e in std::fs::read_dir(manifests_dir()).into_iter().flatten().flatten() {
         if e.path().extension().is_some_and(|x| x == "json") && e.file_name() != "catalog.json" {
             if let Some(m) = std::fs::read_to_string(e.path()).ok().and_then(|s| serde_json::from_str::<InstalledModel>(&s).ok()) {
                 if models_dir().join(&m.model_file).exists() {
@@ -417,7 +447,41 @@ pub fn installed() -> Vec<InstalledModel> {
             }
         }
     }
+    // Catalog models already in the shared store (downloaded by another
+    // project or by `hf download`) count as installed without a manifest.
+    for m in catalog().models {
+        if out.iter().any(|o| o.id == m.id) {
+            continue;
+        }
+        if let Some(model_file) = find_local(&m.repo, &m.file_suffix) {
+            let mmproj_file = m.mmproj_suffix.as_deref().and_then(|s| find_local(&m.repo, s));
+            out.push(InstalledModel { id: m.id, model_file, mmproj_file, context: m.context });
+        }
+    }
     out
+}
+
+/// `<repo>/<path>` of a complete local file in the repo folder ending with `suffix`.
+fn find_local(repo: &str, suffix: &str) -> Option<String> {
+    let want = suffix.to_lowercase();
+    let root = models_dir().join(repo);
+    let mut hits = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if e.file_name() != ".cache" {
+                    stack.push(p);
+                }
+            } else if p.to_string_lossy().to_lowercase().ends_with(&want) {
+                hits.push(p);
+            }
+        }
+    }
+    hits.sort_by_key(|p| p.as_os_str().len()); // same rule as hf_find
+    let rel = hits.first()?.strip_prefix(&root).ok()?.to_string_lossy().replace('\\', "/");
+    Some(format!("{repo}/{rel}"))
 }
 
 fn free_port() -> u16 {
@@ -513,5 +577,20 @@ mod tests {
         assert_eq!(recommend(&c, &sys(32.0)).as_deref(), Some("gemma-4-12b-q8"));
         assert_eq!(recommend(&c, &sys(16.0)).as_deref(), Some("gemma-4-12b-q4"));
         assert_eq!(recommend(&c, &sys(8.0)), None);
+    }
+
+    #[test]
+    fn runtime_skips_releases_without_binaries() {
+        let asset = |n: &str| Asset { name: n.into(), size: 1, browser_download_url: format!("https://x/{n}") };
+        let releases = vec![
+            Release { tag_name: "v0.9.0".into(), assets: vec![asset("nightly-tag.txt")] },
+            Release { tag_name: "b12182".into(), assets: vec![asset("llama-b12182-bin-macos-x64.tar.gz"), asset("llama-b12182-bin-macos-arm64.tar.gz")] },
+        ];
+        let mac = SystemInfo { os: "macos", arch: "aarch64", memory_gb: 32.0, gpu: None, gpu_memory_gb: None, unified_memory: true };
+        let f = pick_runtime(&releases, &mac).unwrap();
+        assert_eq!(f.name, "llama-b12182-bin-macos-arm64.tar.gz");
+        assert!(f.source.contains("b12182"));
+        let other = SystemInfo { os: "plan9", ..mac };
+        assert!(pick_runtime(&releases, &other).is_none());
     }
 }
