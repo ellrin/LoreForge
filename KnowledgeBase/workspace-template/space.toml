@@ -1,0 +1,10 @@
+# 個人 space（只有你自己）。家庭共用 space 放在 JELearner 共用 repo 的 knowledge/（kind = "household"，圖片走 git）。
+id = "personal"
+name = "我的知識庫"
+kind = "personal"
+members = ["ellrin"]          # 換成你的使用者 id（小寫英數、- 或 _）
+
+[assets]
+backend = "icloud"
+# 圖片存在 iCloud Drive（內容定址：ab/abcd….png）。不寫 root 時用預設：
+# root = "~/Library/Mobile Documents/com~apple~CloudDocs/KnowledgeBase/assets"

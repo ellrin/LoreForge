@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "domains": {
+    "medical-image-analysis": { "label": "醫學影像分析" },
+    "deep-learning": { "label": "深度學習" },
+    "computer-vision": { "label": "電腦視覺" }
+  },
+  "tags": {}
+}

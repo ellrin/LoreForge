@@ -1,0 +1,28 @@
+[package]
+name = "kb-server"
+version.workspace = true
+edition.workspace = true
+
+# Local server on 127.0.0.1:7700: the only writer of the knowledge base. Serves web/
+# and the JSON API (design §4.7). Handlers are plain fns over `Shared` so they can
+# become Tauri commands later.
+
+[dependencies]
+kb-core.workspace = true
+ym-store.workspace = true
+ym-secrets.workspace = true
+lettre.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+dirs = "6"
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+base64 = "0.22"
