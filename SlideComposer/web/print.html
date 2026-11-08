@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>SlideComposer print</title>
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    html, body { overflow: hidden; background: #fff; height: auto; width: var(--w); }
+    .page { width: var(--w); height: var(--h); overflow: hidden; contain: strict; position: relative; page-break-after: always; break-after: page; }
+    .page:last-child { page-break-after: auto; break-after: auto; }
+  </style>
+  <style id="pageSize"></style>
+</head>
+<body>
+<div id="pages"></div>
+<script src="vendor/katex/katex.min.js"></script>
+<script src="render.js"></script>
+<script>
+// Print route for PDF export: every visible slide on its own page, at the
+// deck's size. Waits for images and equations (OMML → LaTeX via the server).
+(async () => {
+  const q = new URL(location.href).searchParams;
+  const name = q.get("deck");
+  const all = q.get("hidden") === "1";
+  const r = await (await fetch(`/api/decks/${encodeURIComponent(name)}`)).json();
+  const W = SC.px(r.deck.size.w), H = SC.px(r.deck.size.h);
+  document.documentElement.style.setProperty("--w", `${W}px`);
+  document.documentElement.style.setProperty("--h", `${H}px`);
+  document.getElementById("pageSize").textContent = `@page { size: ${W / 96}in ${H / 96}in; margin: 0; }`;
+  const omml = [];
+  const walk = (objs) => objs.forEach((o) => { if (o.type === "group") walk(o.children); for (const tb of [o.text, ...(o.rows ?? []).flatMap((rw) => rw.cells.map((c) => c.text))]) tb?.paras.forEach((p) => p.runs.forEach((x) => { if (x.kind === "math" && x.omml && !x.latex) omml.push(x.omml); })); });
+  r.deck.slides.forEach((s) => walk(s.objects));
+  const latex = new Map();
+  if (omml.length) {
+    try {
+      const res = await (await fetch(`/api/decks/${encodeURIComponent(name)}/latex`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ omml }) })).json();
+      res.results.forEach((x, i) => latex.set(omml[i], x.latex));
+    } catch {}
+  }
+  const pages = document.getElementById("pages");
+  r.deck.slides.forEach((s, i) => {
+    if (s.hidden && !all) return;
+    const ctx = { size: r.deck.size, backdrops: r.backdrops, slideNo: i + 1, assetUrl: (a) => `/api/decks/${encodeURIComponent(name)}/asset?id=${encodeURIComponent(a)}`, latex: (m) => latex.get(m) };
+    const pg = document.createElement("div");
+    pg.className = "page";
+    pg.append(SC.renderSlide(s, ctx));
+    pages.append(pg);
+  });
+  await Promise.all([...document.images].map((im) => im.decode().catch(() => {})));
+  await document.fonts.ready;
+  document.body.dataset.ready = "1";
+})();
+</script>
+</body>
+</html>

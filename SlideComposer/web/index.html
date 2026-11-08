@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-Hant" data-mode="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SlideComposer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='2' y='5' width='20' height='14' rx='2' fill='%23ff6b35'/%3E%3Crect x='5' y='8' width='8' height='2' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="styles.css">
+  <script>try { const m = localStorage.getItem("sc.mode"); if (m === "light" || m === "dark") document.documentElement.dataset.mode = m; } catch {}</script>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <button class="ico" id="actHome" data-icon="folder" aria-label="簡報清單"></button>
+    <button class="ico ed-only narrow-only" id="toggleSorter" data-icon="cards" aria-label="投影片清單" aria-pressed="false"></button>
+    <div class="brand">SLIDE<b>/</b>COMPOSER</div>
+    <span class="deckname" id="deckName"></span>
+    <span class="chip" id="saveChip" hidden>已儲存</span>
+    <div class="top-right">
+      <span class="ed-only top-group">
+      <button class="ico" id="actUndo" data-icon="undo" aria-label="復原 (⌘Z)" disabled></button>
+      <button class="ico" id="actRedo" data-icon="redo" aria-label="重做 (⇧⌘Z)" disabled></button>
+      <span class="sep"></span>
+      <button class="ico" id="actZoomOut" data-icon="zoomOut" aria-label="縮小"></button>
+      <span class="chip" id="zoomChip">100%</span>
+      <button class="ico" id="actZoomIn" data-icon="zoomIn" aria-label="放大"></button>
+      <button class="ico" id="actFit" data-icon="fit" aria-label="符合視窗"></button>
+      <span class="sep"></span>
+      <button class="btn small" id="actPptx"><span data-icon="download"></span>匯出 PPTX</button>
+      <button class="btn small" id="actPdf"><span data-icon="pdf"></span>PDF</button>
+      <button class="ico narrow-only" id="toggleSide" data-icon="panel" aria-label="格式面板" aria-pressed="false"></button>
+      </span>
+      <button class="ico" id="actMode" data-icon="sun" aria-label="切換深色／淺色"></button>
+    </div>
+  </header>
+
+  <nav class="tools" id="tools" aria-label="工具">
+    <button class="ico" data-tool="select" data-icon="cursor" aria-label="選取 (V)" aria-pressed="true"></button>
+    <button class="ico" data-tool="text" data-icon="text" aria-label="文字方塊 (T)"></button>
+    <span class="sep"></span>
+    <span class="lbl">圖形</span>
+    <button class="ico" data-tool="rect" data-icon="square" aria-label="矩形"></button>
+    <button class="ico" data-tool="roundRect" data-icon="rounded" aria-label="圓角矩形"></button>
+    <button class="ico" data-tool="ellipse" data-icon="circle" aria-label="橢圓"></button>
+    <button class="ico" data-tool="triangle" data-icon="triangle" aria-label="三角形"></button>
+    <button class="ico" data-tool="trapezoid" data-icon="trapezoid" aria-label="梯形"></button>
+    <button class="ico" data-tool="polygon" data-icon="polygon" aria-label="多邊形（點擊加點，雙擊結束）"></button>
+    <span class="sep"></span>
+    <span class="lbl">線</span>
+    <button class="ico" data-tool="line" data-icon="line" aria-label="直線"></button>
+    <button class="ico" data-tool="arrow" data-icon="arrow" aria-label="箭頭"></button>
+    <button class="ico" data-tool="conn-straight" data-icon="conn" aria-label="連接線（直線，可黏在圖形上）"></button>
+    <button class="ico" data-tool="conn-elbow" data-icon="elbow" aria-label="連接線（肘形）"></button>
+    <button class="ico" data-tool="conn-curved" data-icon="curve" aria-label="連接線（曲線）"></button>
+    <span class="sep"></span>
+    <span class="lbl">插入</span>
+    <button class="ico" id="insImage" data-icon="image" aria-label="圖片"></button>
+    <button class="ico" id="insTable" data-icon="table" aria-label="表格"></button>
+    <button class="ico" id="insEq" data-icon="sigma" aria-label="方程式（LaTeX）"></button>
+    <button class="ico" id="insComp" data-icon="puzzle" aria-label="風格元件"></button>
+    <span class="sep"></span>
+    <button class="ico" id="actGrid" data-icon="grid" aria-label="格線"></button>
+    <button class="ico" id="actSnap" data-icon="magnet" aria-label="吸附（按住 Alt 暫停）" aria-pressed="true"></button>
+    <span class="sep"></span>
+    <button class="ico" id="actReveal" data-icon="steps" aria-label="漸進揭露…"></button>
+    <input type="file" id="imgFile" accept="image/*" hidden>
+  </nav>
+
+  <aside class="sorter" id="sorter" aria-label="投影片">
+    <div class="sorter-head">
+      <span id="slideCount"></span>
+      <button class="ico" id="slideAdd" data-icon="plus" aria-label="新增投影片"></button>
+      <button class="ico" id="slideDup" data-icon="dup" aria-label="複製投影片"></button>
+      <button class="ico" id="slideHide" data-icon="eyeOff" aria-label="隱藏／顯示（備用頁）"></button>
+      <button class="ico" id="slideDel" data-icon="trash" aria-label="刪除投影片"></button>
+    </div>
+    <div id="thumbs"></div>
+  </aside>
+
+  <main class="stage">
+    <div class="viewport" id="viewport">
+      <div class="paper-wrap" id="paperWrap">
+        <div class="paper editor-canvas" id="paper"></div>
+        <div class="overlay" id="overlay"></div>
+      </div>
+    </div>
+    <div class="notes"><label for="notes">講者備註</label><textarea id="notes" placeholder="這一頁要說的話…"></textarea></div>
+  </main>
+
+  <aside class="side" id="side">
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="obj" aria-selected="true">格式</button>
+      <button role="tab" data-tab="anim">動畫</button>
+      <button role="tab" data-tab="slide">投影片</button>
+    </div>
+    <div class="pane" id="pane"></div>
+  </aside>
+</div>
+
+<section class="home" id="home" hidden>
+  <h2>簡報</h2>
+  <div class="cards" id="deckList"></div>
+  <h2>新增</h2>
+  <form id="newForm"><input id="newName" placeholder="名稱（資料夾名）" required> <select id="newStyle"></select> <button class="btn primary">從風格包建立空白簡報</button></form>
+  <form id="importForm"><input id="impPath" placeholder="本機 .pptx 路徑" style="flex:1;min-width:260px"> <input id="impName" placeholder="名稱（可省略）"> <button class="btn">匯入路徑</button> <label class="btn"><span data-icon="upload"></span>上傳 .pptx<input type="file" id="impFile" accept=".pptx" hidden></label></form>
+  <p class="muted mono" id="wsInfo"></p>
+</section>
+
+<dialog id="dlg"></dialog>
+
+<script src="vendor/katex/katex.min.js"></script>
+<script src="icons.js"></script>
+<script src="render.js"></script>
+<script src="panels.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
