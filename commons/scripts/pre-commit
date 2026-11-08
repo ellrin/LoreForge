@@ -1,0 +1,9 @@
+#!/bin/sh
+# Blocks commits that contain anything that looks like a secret.
+# Install: sh scripts/install-hooks.sh   (needs gitleaks: https://github.com/gitleaks/gitleaks)
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks not installed; secret scan skipped." >&2
+  echo "            install it (e.g. brew install gitleaks) to enable the check." >&2
+  exit 0
+fi
+exec gitleaks git --staged --redact --no-banner

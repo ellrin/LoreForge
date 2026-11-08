@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+csv = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+async-trait = "0.1"
+futures-util = "0.3"
+base64 = "0.22"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+ferrous-opencc = "0.4"
+axum = "0.8"
+tempfile = "3"
+# ym-ooxml / ym-math (A4)
+quick-xml = "0.42"
+zip = { version = "2.6", default-features = false, features = ["deflate"] }
