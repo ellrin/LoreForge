@@ -12,21 +12,17 @@
 //! so a personal profile path is never committed by accident.
 
 pub mod citecheck;
-pub mod claude;
-pub mod claude_code;
 pub mod convert;
-pub mod engine;
 pub mod export;
 pub mod import;
+pub mod llm;
 pub mod preview;
 pub mod proc;
-pub mod git;
 pub mod models;
 pub mod refimport;
 pub mod settings;
 pub mod texmeasure;
 pub mod wizard;
-pub mod zhtw;
 
 use axum::{
     extract::{Path as AxPath, Query as AxQuery, State},
@@ -35,8 +31,7 @@ use axum::{
     routing::{get, post, put},
     Router,
 };
-use claude::Claude;
-use engine::{Engine, EngineConfig, EngineStatus};
+use llm::{EngineChoice, EngineConfig, EngineStatus, Llm};
 use pc_core::compose::{self, ComposeRequest, Draft, DraftCheck, Prompt};
 use pc_core::authors::{self, Affiliation, Author, PaperAuthor, Person};
 use pc_core::meta::{self, OutlineSection, PaperMeta};
@@ -83,14 +78,12 @@ struct Loaded {
 
 struct AppState {
     loaded: RwLock<Loaded>,
-    engine: RwLock<Engine>,
+    /// Engines and task routing (ym-llm).
+    llm: Arc<Llm>,
     models: Arc<models::Manager>,
-    claude: RwLock<Claude>,
     paths: Paths,
     /// Soft-check results by prompt hash: an unchanged paragraph is not re-sent.
     soft_cache: tokio::sync::Mutex<std::collections::HashMap<u64, Vec<SoftResult>>>,
-    /// Claude Code CLI status (installed / logged in), refreshed at most once a minute.
-    cc: claude_code::Cache,
 }
 
 type Shared = Arc<AppState>;
@@ -379,7 +372,7 @@ async fn soft_check(State(s): State<Shared>, Json(b): Json<SoftCheckBody>) -> im
     let mut extra = None;
     let mut last = String::new();
     for _ in 0..2 {
-        match writing_complete(&s, b.engine, &prompt, extra).await {
+        match writing_complete(&s, "pc-soft-check", b.engine, &prompt, extra, Some(softcheck::reply_schema())).await {
             Ok(reply) => match softcheck::parse_reply(&reply, &refs, &b.text) {
                 Ok(results) => {
                     s.soft_cache.lock().await.insert(key, results.clone());
@@ -492,13 +485,13 @@ async fn check(State(s): State<Shared>, Json(b): Json<CheckBody>) -> impl IntoRe
 }
 
 async fn engine_status(State(s): State<Shared>) -> impl IntoResponse {
-    if !s.engine.read().await.configured() {
-        let c = s.claude.read().await;
-        if c.status().configured {
+    if !s.llm.local_configured().await {
+        let c = s.llm.claude_status();
+        if c.configured {
             return Json(EngineStatus { connected: true, name: format!("Claude · {}", c.model) });
         }
     }
-    Json(s.engine.read().await.status().await)
+    Json(s.llm.local_status().await)
 }
 
 /// Both writing engines, for the engine switch in the compose panel.
@@ -511,20 +504,20 @@ struct Fresh {
 /// The three writing engines, for the engine switch and the setup dialog.
 /// `?fresh=1` re-reads the Claude Code login instead of the cached answer.
 async fn engines_status(State(s): State<Shared>, AxQuery(f): AxQuery<Fresh>) -> impl IntoResponse {
-    let local = s.engine.read().await;
-    let c = s.claude.read().await.status();
-    let cc = s.cc.get(f.fresh.is_some()).await;
+    let c = s.llm.claude_status();
+    let cc = s.llm.cc.get(&s.llm.cli, f.fresh.is_some()).await;
     // Downloaded models, in catalog order, for the local engine's menu.
-    let have: Vec<String> = models::installed().into_iter().map(|m| m.id).collect();
-    let local_models: Vec<serde_json::Value> = models::catalog()
-        .models
-        .into_iter()
+    let have = models::installed(&s.llm.catalog);
+    let local_models: Vec<serde_json::Value> = s
+        .llm
+        .catalog
+        .brains(true)
         .filter(|m| have.contains(&m.id))
         .map(|m| serde_json::json!({ "id": m.id, "name": m.name, "variant": m.variant, "summary": m.summary, "uncensored": m.uncensored }))
         .collect();
-    let running = s.models.runtime.lock().await.as_ref().map(|r| r.model_id.clone());
+    let running = s.models.runtime.current().await.map(|r| r.0);
     Json(serde_json::json!({
-        "local": { "configured": local.configured(), "status": local.status().await, "models": local_models, "running": running },
+        "local": { "configured": s.llm.local_configured().await, "status": s.llm.local_status().await, "models": local_models, "running": running },
         "subscription": { "configured": cc.ready, "status": cc },
         "api": { "configured": c.configured, "masked": c.masked, "source": c.source },
         "model": c.model,
@@ -533,9 +526,9 @@ async fn engines_status(State(s): State<Shared>, AxQuery(f): AxQuery<Fresh>) -> 
 }
 
 async fn claude_code_login(State(s): State<Shared>) -> impl IntoResponse {
-    match claude_code::start_login() {
+    match ym_llm::claude_code::start_login(&s.llm.cli) {
         Ok(()) => {
-            s.cc.get(true).await;
+            s.llm.cc.get(&s.llm.cli, true).await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => bad(&e),
@@ -551,7 +544,7 @@ struct TestBody {
 async fn test_engine(State(s): State<Shared>, Json(b): Json<TestBody>) -> impl IntoResponse {
     let prompt = Prompt { system: "Reply with exactly: OK".into(), user: "ping".into() };
     let t = std::time::Instant::now();
-    let r = writing_complete(&s, Some(b.engine), &prompt, None).await;
+    let r = writing_complete(&s, "pc-engine-test", Some(b.engine), &prompt, None, None).await;
     let ms = t.elapsed().as_millis() as u64;
     match r {
         Ok(reply) => Json(serde_json::json!({ "ok": true, "ms": ms, "reply": reply.trim() })),
@@ -559,26 +552,8 @@ async fn test_engine(State(s): State<Shared>, Json(b): Json<TestBody>) -> impl I
     }
 }
 
-/// Which engine writes. None = automatic: the local model when configured,
-/// otherwise Claude. Both get the same retrieved patterns and prompt, so the
-/// voice rules hold whichever runs.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-enum EngineChoice {
-    Local,
-    /// Claude Code CLI on the claude.ai subscription.
-    Subscription,
-    /// Anthropic API with a key (billed per use).
-    #[serde(alias = "claude")]
-    Api,
-}
-
 async fn engine_ready(s: &Shared, e: EngineChoice) -> bool {
-    match e {
-        EngineChoice::Local => s.engine.read().await.configured(),
-        EngineChoice::Subscription => s.cc.get(false).await.ready,
-        EngineChoice::Api => s.claude.read().await.status().configured,
-    }
+    s.llm.ready(e).await
 }
 
 /// The engine that runs: the chosen one, or the first ready of local,
@@ -597,22 +572,12 @@ async fn resolve_engine(s: &Shared, choice: Option<EngineChoice>) -> Option<Engi
     }
 }
 
-async fn writing_complete(s: &Shared, choice: Option<EngineChoice>, prompt: &Prompt, extra: Option<&str>) -> Result<String, String> {
-    match resolve_engine(s, choice).await.ok_or("no engine")? {
-        // Local models write mainland vocabulary even when asked for Traditional Chinese.
-        EngineChoice::Local => s.engine.read().await.complete(prompt, extra).await.map(|t| zhtw::to_taiwan(&t)),
-        EngineChoice::Subscription => {
-            let model = s.claude.read().await.model.clone();
-            claude_code::complete(prompt, &model, extra).await
-        }
-        EngineChoice::Api => {
-            let c = s.claude.read().await;
-            match extra {
-                Some(e) => c.complete(&Prompt { system: prompt.system.clone(), user: format!("{}\n{e}", prompt.user) }).await,
-                None => c.complete(prompt).await,
-            }
-        }
-    }
+/// Run `task` through the router: the engine switch's choice is an override
+/// for this call; without one the task's order (local, then Claude) applies.
+/// "no engine" when nothing is set up.
+async fn writing_complete(s: &Shared, task: &str, choice: Option<EngineChoice>, prompt: &Prompt, extra: Option<&str>, schema: Option<serde_json::Value>) -> Result<String, String> {
+    resolve_engine(s, choice).await.ok_or("no engine")?;
+    s.llm.complete(task, choice, prompt, extra, schema).await
 }
 
 async fn has_writing_engine(s: &Shared, choice: Option<EngineChoice>) -> bool {
@@ -669,7 +634,7 @@ async fn compose_paragraph(State(s): State<Shared>, Json(body): Json<ComposeBody
     let mut feedback: Option<String> = None;
     let mut last_err = None;
     for _ in 0..2 {
-        let reply = match writing_complete(&s, choice, &prompt, feedback.as_deref()).await {
+        let reply = match writing_complete(&s, "pc-compose-paragraph", choice, &prompt, feedback.as_deref(), Some(compose::reply_schema())).await {
             Ok(r) => r,
             Err(e) => {
                 last_err = Some(e);
@@ -889,7 +854,7 @@ async fn resolve_people(s: &Shared, chosen: &[PaperAuthor]) -> Result<Option<(Ve
 
 /// paper.toml, the title and the author block of a paper just made.
 fn finish_paper(dir: &Path, key_value: &str, title: Option<&str>, chosen: &[PaperAuthor], people: Option<(Vec<Person>, Vec<Affiliation>)>) -> Result<(), String> {
-    meta::write_meta(dir, &PaperMeta { key_value: key_value.to_string(), authors: chosen.to_vec() })?;
+    meta::write_meta(dir, &PaperMeta { key_value: key_value.to_string(), authors: chosen.to_vec(), ..Default::default() })?;
     let path = dir.join("main.tex");
     let mut main = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     if let Some(t) = title.map(str::trim).filter(|t| !t.is_empty()) {
@@ -1025,7 +990,7 @@ async fn wizard_outline(State(s): State<Shared>, Json(b): Json<OutlineBody>) -> 
     let mut extra = None;
     let mut last = String::new();
     for _ in 0..2 {
-        match writing_complete(&s, Some(b.engine), &prompt, extra).await {
+        match writing_complete(&s, "pc-outline", Some(b.engine), &prompt, extra, Some(wizard::plan_schema())).await {
             Ok(reply) => match wizard::parse_plan(&reply) {
                 Ok(plan) => return Json(plan).into_response(),
                 Err(e) => {
@@ -1067,7 +1032,7 @@ async fn wizard_caption(State(s): State<Shared>, Json(b): Json<CaptionBody>) -> 
     let language = s.loaded.read().await.profile.as_ref().map(|p| p.manifest.language.clone()).unwrap_or_else(|| "en".into());
     let grid = pc_core::textable::parse_grid(&b.data);
     let prompt = wizard::caption_prompt(&b.kind, &grid, &b.file, &b.section, &b.key_value, &b.title, &language);
-    match writing_complete(&s, b.engine, &prompt, None).await {
+    match writing_complete(&s, "pc-caption", b.engine, &prompt, None, None).await {
         // empty: nothing to say from what was given (a figure named img1.png)
         Ok(reply) => Json(serde_json::json!({ "caption": wizard::clean_caption(&reply).unwrap_or_default() })).into_response(),
         Err(e) => bad(&e),
@@ -1107,7 +1072,7 @@ async fn extract_refs(State(s): State<Shared>, Json(b): Json<ExtractBody>) -> im
     let mut extra = None;
     let mut last = String::new();
     for _ in 0..2 {
-        match writing_complete(&s, Some(b.engine), &prompt, extra).await {
+        match writing_complete(&s, "pc-cite-extract", Some(b.engine), &prompt, extra, Some(citecheck::extract_schema())).await {
             Ok(reply) => match citecheck::parse_extract(&reply) {
                 Ok(papers) => return Json(serde_json::json!({ "papers": papers })).into_response(),
                 Err(e) => {
@@ -1189,7 +1154,7 @@ async fn ref_notes(s: &Shared, engine: Option<EngineChoice>, entry: &bib::Entry,
     let (mut summary, mut one_liner, mut note_error) = (String::new(), String::new(), None);
     if has_writing_engine(s, engine).await {
         let prompt = refimport::notes_prompt(&entry.title(), venue, &entry.year(), kind, abstract_text, &tag_list);
-        match writing_complete(s, engine, &prompt, None).await {
+        match writing_complete(s, "pc-ref-notes", engine, &prompt, None, Some(refimport::notes_schema())).await {
             Ok(reply) => match refimport::parse_notes(&reply, &tag_list) {
                 Some(n) => {
                     summary = n.summary;
@@ -1213,11 +1178,14 @@ struct ImportQuery {
     name: String,
     #[serde(default)]
     key_value: String,
+    /// Also tidy the import (see `paper::tidy_plan`); otherwise it is only offered.
+    #[serde(default)]
+    tidy: Option<u8>,
 }
 
 /// Import an uploaded LaTeX project (.zip, .tar.gz or .tex as the raw body).
 async fn import_upload(State(s): State<Shared>, AxQuery(q): AxQuery<ImportQuery>, body: axum::body::Bytes) -> impl IntoResponse {
-    import_bytes(&s, &q.name, &q.key_value, &body).await
+    import_bytes(&s, &q.name, &q.key_value, &body, q.tidy.is_some_and(|t| t != 0)).await
 }
 
 #[derive(Deserialize)]
@@ -1227,6 +1195,8 @@ struct ArxivImport {
     name: Option<String>,
     #[serde(default)]
     key_value: String,
+    #[serde(default)]
+    tidy: bool,
 }
 
 /// Import a paper's LaTeX source from arXiv by id or URL.
@@ -1237,22 +1207,159 @@ async fn import_arxiv(State(s): State<Shared>, Json(b): Json<ArxivImport>) -> im
     let Some(id) = import::arxiv_id(&b.id) else { return bad("看不懂這個 arXiv 編號") };
     let bytes = match import::fetch_arxiv(&id).await { Ok(b) => b, Err(e) => return bad(&e) };
     let name = b.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("arXiv {}", id.replace('/', "-")));
-    import_bytes(&s, &name, &b.key_value, &bytes).await
+    import_bytes(&s, &name, &b.key_value, &bytes, b.tidy).await
 }
 
-async fn import_bytes(s: &Shared, name: &str, key_value: &str, bytes: &[u8]) -> axum::response::Response {
+/// Import, recognise the journal template, and either tidy the paper or say
+/// what tidying and merging its .bib into the library would do.
+async fn import_bytes(s: &Shared, name: &str, key_value: &str, bytes: &[u8], tidy: bool) -> axum::response::Response {
     let key_value = match meta::check_key_value(key_value) { Ok(k) => k, Err(e) => return bad(&e) };
     let Some(ws) = s.loaded.read().await.workspace.clone() else { return bad("no workspace") };
+    let profile_authors = s.loaded.read().await.profile.as_ref().map(|p| p.authors.clone()).unwrap_or_default();
     let tmp = std::env::temp_dir().join(format!("papercomposer-import-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
     let res = std::fs::create_dir_all(&tmp)
         .map_err(|e| e.to_string())
         .and_then(|_| import::unpack(bytes, &tmp))
         .and_then(|_| paper::import_paper(&ws.join("papers"), name, &tmp));
     let _ = std::fs::remove_dir_all(&tmp);
-    match res.and_then(|dir| meta::write_meta(&dir, &PaperMeta { key_value, authors: vec![] }).map(|_| dir)) {
-        Ok(_) => Json(serde_json::json!({ "name": name.trim() })).into_response(),
-        Err(e) => bad(&e),
+    let res = res.and_then(|dir| {
+        let journal = pc_core::journal::detect(&ws.join("publishers"), &dir);
+        // authors named in the paper's own \author block who are in the profile (none guessed)
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
+        let authors = pc_core::authors::match_block(&main, &profile_authors);
+        meta::write_meta(&dir, &PaperMeta { key_value, journal: journal.clone(), authors: authors.clone() }).map(|_| (dir, journal, authors))
+    });
+    let (dir, journal, authors) = match res {
+        Ok(x) => x,
+        Err(e) => return bad(&e),
+    };
+    let journal_name = journal.as_deref().and_then(|j| pc_core::journal::load(&ws.join("publishers"), j)).map(|j| j.meta.name).filter(|n| !n.is_empty());
+    let author_names: Vec<String> = authors.iter().filter_map(|a| profile_authors.iter().find(|p| p.id == a.id)).map(|p| p.name()).collect();
+    let plan = paper::tidy_plan(&dir);
+    // Tidying is offered (`tidy`) unless it was asked for (`tidied`).
+    let tidied = tidy.then(|| paper::apply_tidy(&dir, &plan));
+    let bib = merge_paper_bib(&ws, &dir, true).await.ok();
+    Json(serde_json::json!({
+        "name": name.trim(),
+        "journal": journal,
+        "journal_name": journal_name,
+        "authors": author_names,
+        "tidied": tidied.as_ref().and_then(|r| r.as_ref().ok()),
+        "tidy_error": tidied.as_ref().and_then(|r| r.as_ref().err()),
+        "tidy": (!tidy && !plan.is_empty()).then_some(&plan),
+        "bib": bib,
+    }))
+    .into_response()
+}
+
+/// What the import card shows for a paper already in the workspace: the
+/// recognised journal, the tidy plan, and a dry run of merging its .bib.
+async fn import_summary(State(s): State<Shared>, AxPath(name): AxPath<String>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let Some(ws) = s.loaded.read().await.workspace.clone() else { return bad("no workspace") };
+    let m = meta::read_meta(&dir);
+    let journal_name = m.journal.as_deref().and_then(|j| pc_core::journal::load(&ws.join("publishers"), j)).map(|j| j.meta.name).filter(|n| !n.is_empty());
+    let plan = paper::tidy_plan(&dir);
+    let bib = merge_paper_bib(&ws, &dir, true).await.ok();
+    Json(serde_json::json!({
+        "name": name,
+        "journal": m.journal,
+        "journal_name": journal_name,
+        "tidy": (!plan.is_empty()).then_some(&plan),
+        "bib": bib,
+    }))
+    .into_response()
+}
+
+/// GET: what tidying the paper would do. POST: do it.
+async fn get_tidy(State(s): State<Shared>, AxPath(name): AxPath<String>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    Json(paper::tidy_plan(&dir)).into_response()
+}
+
+async fn post_tidy(State(s): State<Shared>, AxPath(name): AxPath<String>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    match paper::apply_tidy(&dir, &paper::tidy_plan(&dir)) {
+        Ok(done) => Json(done).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
+}
+
+#[derive(Deserialize, Default)]
+struct MergeBody {
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// Copy the entries of the paper's own .bib files into refs/library.bib;
+/// an entry whose key or DOI the library already has is skipped.
+async fn merge_bib(State(s): State<Shared>, AxPath(name): AxPath<String>, body: Option<Json<MergeBody>>) -> impl IntoResponse {
+    let ws = match refs_root(&s).await { Ok(w) => w, Err(r) => return r };
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let dry_run = body.is_some_and(|Json(b)| b.dry_run);
+    match merge_paper_bib(&ws, &dir, dry_run).await {
+        Ok(r) => Json(r).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+#[derive(Serialize)]
+struct MergeReport {
+    /// The paper's own .bib files that were read.
+    files: Vec<String>,
+    added: Vec<String>,
+    /// Already in the library (same key or same DOI).
+    skipped: Vec<String>,
+    errors: Vec<String>,
+    dry_run: bool,
+}
+
+async fn merge_paper_bib(ws: &Path, dir: &Path, dry_run: bool) -> Result<MergeReport, String> {
+    let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
+    let mut files: Vec<String> = bib_files(&main).into_iter().filter(|f| f != PC_BIB).collect();
+    if files.is_empty() {
+        files = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.ends_with(".bib")).collect();
+        files.sort();
+    }
+    let mut new = Vec::new();
+    let mut errors = Vec::new();
+    let mut read = Vec::new();
+    for f in files {
+        let Ok(bytes) = std::fs::read(dir.join(&f)) else { continue };
+        let text = String::from_utf8_lossy(&bytes);
+        if text.starts_with(BIB_MARK) {
+            continue; // written by the app from the library
+        }
+        let (entries, errs) = bib::parse(&text);
+        new.extend(entries);
+        errors.extend(errs);
+        read.push(f);
+    }
+    let _library = LIBRARY_LOCK.lock().await;
+    let (mut entries, mut notes) = load_library(ws);
+    let (added, skipped) = add_to_library(&mut entries, &mut notes, new);
+    if !dry_run && !added.is_empty() {
+        save_library(ws, &entries, &notes)?;
+    }
+    Ok(MergeReport { files: read, added, skipped, errors, dry_run })
+}
+
+/// Append entries the library does not have (by key or DOI); returns the
+/// keys added and the keys skipped.
+fn add_to_library(entries: &mut Vec<bib::Entry>, notes: &mut Vec<bib::Note>, new: Vec<bib::Entry>) -> (Vec<String>, Vec<String>) {
+    let (mut added, mut skipped) = (Vec::new(), Vec::new());
+    for e in new {
+        let doi = e.get("doi").unwrap_or("").trim().to_lowercase();
+        let dup = entries.iter().any(|x| x.key == e.key || (!doi.is_empty() && x.get("doi").is_some_and(|d| d.trim().to_lowercase() == doi)));
+        if dup {
+            skipped.push(e.key.clone());
+            continue;
+        }
+        notes.push(bib::Note { key: e.key.clone(), doi: e.get("doi").unwrap_or("").into(), ..Default::default() });
+        added.push(e.key.clone());
+        entries.push(e);
+    }
+    (added, skipped)
 }
 
 #[derive(Deserialize)]
@@ -1336,18 +1443,7 @@ async fn import_refs(State(s): State<Shared>, Json(b): Json<ImportBib>) -> impl 
     let _library = LIBRARY_LOCK.lock().await;
     let (mut entries, mut notes) = load_library(&ws);
     let (new, errors) = bib::parse(&b.bibtex);
-    let (mut added, mut skipped) = (Vec::new(), Vec::new());
-    for e in new {
-        let doi = e.get("doi").unwrap_or("").to_lowercase();
-        let dup = entries.iter().any(|x| x.key == e.key || (!doi.is_empty() && x.get("doi").is_some_and(|d| d.to_lowercase() == doi)));
-        if dup {
-            skipped.push(e.key.clone());
-            continue;
-        }
-        notes.push(bib::Note { key: e.key.clone(), doi: e.get("doi").unwrap_or("").into(), ..Default::default() });
-        added.push(e.key.clone());
-        entries.push(e);
-    }
+    let (added, skipped) = add_to_library(&mut entries, &mut notes, new);
     if let Err(e) = save_library(&ws, &entries, &notes) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
     }
@@ -1388,7 +1484,7 @@ async fn open_ref_pdf(State(s): State<Shared>, AxPath(key): AxPath<String>) -> i
     let Some(dir) = pdf_dir() else { return bad("還沒設定 PDF 資料夾") };
     let note = notes.into_iter().find(|n| n.key == key).unwrap_or(bib::Note { key: key.clone(), ..Default::default() });
     match bib::find_pdf(&dir, &note) {
-        Some(p) => match claude::open_in_browser(&p.to_string_lossy()) {
+        Some(p) => match proc::open_in_browser(&p.to_string_lossy()) {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
         },
@@ -1482,7 +1578,7 @@ async fn propose_ref(State(s): State<Shared>, Json(b): Json<Propose>) -> impl In
     let (mut summary, mut one_liner, mut note_error) = (String::new(), String::new(), None);
     if has_writing_engine(&s, b.engine).await {
         let prompt = refimport::notes_prompt(&entry.title(), &venue, &entry.year(), &work.kind, &work.abstract_text, &tag_list);
-        match writing_complete(&s, b.engine, &prompt, None).await {
+        match writing_complete(&s, "pc-ref-notes", b.engine, &prompt, None, Some(refimport::notes_schema())).await {
             Ok(reply) => match refimport::parse_notes(&reply, &tag_list) {
                 Some(n) => {
                     summary = n.summary;
@@ -1530,7 +1626,7 @@ async fn search_refs(State(s): State<Shared>, Json(b): Json<SearchBody>) -> impl
     let labels: Vec<String> = b.tags.iter().map(|t| tag_list.iter().find(|x| &x.id == t).map(|x| format!("{} ({})", x.label, x.id)).unwrap_or(t.clone())).collect();
     let steer = refimport::Steer::from_tags(&b.tags);
 
-    let queries = match writing_complete(&s, Some(b.engine), &refimport::queries_prompt(&b.request, &labels), None).await {
+    let queries = match writing_complete(&s, "pc-ref-queries", Some(b.engine), &refimport::queries_prompt(&b.request, &labels), None, Some(refimport::queries_schema())).await {
         Ok(r) => refimport::parse_queries(&r),
         Err(e) => return Json(serde_json::json!({ "error": e })).into_response(),
     };
@@ -1567,7 +1663,7 @@ async fn search_refs(State(s): State<Shared>, Json(b): Json<SearchBody>) -> impl
         }
     }
     cands.truncate(30);
-    let ranked = match writing_complete(&s, Some(b.engine), &refimport::rank_prompt(&b.request, &cands), None).await {
+    let ranked = match writing_complete(&s, "pc-ref-rank", Some(b.engine), &refimport::rank_prompt(&b.request, &cands), None, Some(refimport::rank_schema())).await {
         Ok(r) => refimport::apply_ranking(&r, &cands).unwrap_or_else(|| cands.iter().take(8).cloned().collect()),
         Err(_) => cands.iter().take(8).cloned().collect(),
     };
@@ -1600,7 +1696,7 @@ async fn open_doi(Json(b): Json<OpenDoi>) -> impl IntoResponse {
         (_, Some(u)) if u.starts_with("https://") && !u.contains(char::is_whitespace) => u,
         _ => return bad("invalid link"),
     };
-    match claude::open_in_browser(&url) {
+    match proc::open_in_browser(&url) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
@@ -2032,12 +2128,12 @@ async fn convert_run(State(s): State<Shared>, AxPath(id): AxPath<String>, Json(b
     let ws = match refs_root(&s).await { Ok(w) => w, Err(r) => return r };
     let auth = if engine_ready(&s, EngineChoice::Subscription).await {
         convert::Auth::Subscription
-    } else if let Some((k, _)) = claude::key() {
+    } else if let Some((k, _)) = s.llm.key() {
         convert::Auth::ApiKey(k)
     } else {
         return bad("模板轉換需要 Claude：在「設定 → Claude」登入帳號或設定 API key");
     };
-    let model = b.model.filter(|m| m.starts_with("claude-")).unwrap_or_else(|| "claude-sonnet-5-5".into());
+    let model = b.model.filter(|m| m.starts_with("claude-")).unwrap_or_else(|| s.llm.catalog.cloud.default.clone());
     let system = convert::prompt(&ws);
     let instruction = b.instruction.map(|i| i.trim().to_string()).filter(|i| !i.is_empty());
     match convert::run(&mut job, auth, &model, &system, instruction).await {
@@ -2217,13 +2313,13 @@ async fn put_table(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(t
 // ── Claude ─────────────────────────────────────────────
 
 async fn claude_status(State(s): State<Shared>) -> impl IntoResponse {
-    Json(s.claude.read().await.status())
+    Json(s.llm.claude_status())
 }
 
 /// Pages the UI may open in the system browser. Fixed URLs only, so the
 /// local API cannot be used to open arbitrary links.
 const PAGES: &[(&str, &str)] = &[
-    ("anthropic-keys", claude::KEYS_PAGE),
+    ("anthropic-keys", ym_llm::secrets::KEYS_PAGE),
     // GitHub pre-fills the form; the user still confirms on the page.
     ("github-new-repo", "https://github.com/new?name=my-paper-workspace&visibility=private"),
 ];
@@ -2232,7 +2328,7 @@ async fn open_page(AxPath(name): AxPath<String>) -> impl IntoResponse {
     let Some((_, url)) = PAGES.iter().find(|(n, _)| *n == name) else {
         return (StatusCode::NOT_FOUND, "unknown page").into_response();
     };
-    match claude::open_in_browser(url) {
+    match proc::open_in_browser(url) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
@@ -2247,17 +2343,17 @@ struct ClaudeSettings {
 
 async fn claude_settings(State(s): State<Shared>, Json(b): Json<ClaudeSettings>) -> impl IntoResponse {
     if let Some(k) = &b.key {
-        if let Err(e) = claude::save_key(k) {
+        if let Err(e) = s.llm.save_key(k) {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("無法存入系統金鑰圈：{e}")).into_response();
         }
     }
-    if let Some(m) = b.model.filter(|m| claude::MODELS.contains(&m.as_str())) {
+    if let Some(m) = b.model.filter(|m| s.llm.cloud_models().contains(m)) {
         if let Err(e) = write_config_value("claude", "model", &m) {
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
-        s.claude.write().await.model = m;
+        s.llm.set_model(m);
     }
-    Json(s.claude.read().await.status()).into_response()
+    Json(s.llm.claude_status()).into_response()
 }
 
 #[derive(Deserialize)]
@@ -2277,7 +2373,7 @@ async fn decompose_text(State(s): State<Shared>, Json(b): Json<DecomposeBody>) -
         let Some(p) = &l.profile else { return bad("profile not loaded") };
         decompose::build_prompt(p, &b.text, b.section.as_deref())
     };
-    let reply = match writing_complete(&s, b.engine, &prompt, None).await {
+    let reply = match writing_complete(&s, "pc-decompose", b.engine, &prompt, None, Some(decompose::reply_schema())).await {
         Ok(r) => r,
         Err(e) if e == "no engine" => return (StatusCode::BAD_GATEWAY, "需要先在「AI 與同步」連接一個引擎".to_string()).into_response(),
         Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
@@ -2334,21 +2430,21 @@ async fn workspace_root(s: &Shared) -> Option<PathBuf> {
 
 async fn git_status(State(s): State<Shared>) -> impl IntoResponse {
     match workspace_root(&s).await {
-        Some(ws) => Json(git::status(&ws).await).into_response(),
-        None => Json(git::GitStatus::default()).into_response(),
+        Some(ws) => Json(ym_gitsync::Repo::new(ws).status().await).into_response(),
+        None => Json(ym_gitsync::GitStatus::default()).into_response(),
     }
 }
 
 async fn git_pull(State(s): State<Shared>) -> impl IntoResponse {
     let Some(ws) = workspace_root(&s).await else { return Json(serde_json::json!({ "pulled": false })).into_response() };
-    match git::pull(&ws).await {
+    match ym_gitsync::Repo::new(ws).pull().await {
         Ok(pulled) => {
             if pulled {
                 *s.loaded.write().await = load(&s.paths);
             }
             Json(serde_json::json!({ "pulled": pulled })).into_response()
         }
-        Err(e) => (StatusCode::CONFLICT, e).into_response(),
+        Err(e) => (StatusCode::CONFLICT, e.to_string()).into_response(),
     }
 }
 
@@ -2360,14 +2456,15 @@ struct SyncBody {
 async fn git_sync(State(s): State<Shared>, body: Option<Json<SyncBody>>) -> impl IntoResponse {
     let Some(ws) = workspace_root(&s).await else { return bad("示範工作區不做同步") };
     let msg = body.and_then(|Json(b)| b.message);
-    match git::sync(&ws, msg).await {
+    let opts = ym_gitsync::SyncOptions { message: msg, group_roots: vec!["papers".into()], ..Default::default() };
+    match ym_gitsync::Repo::new(ws).sync(&opts).await {
         Ok(r) => {
             if r.pulled {
                 *s.loaded.write().await = load(&s.paths);
             }
             Json(r).into_response()
         }
-        Err(e) => (StatusCode::CONFLICT, e).into_response(),
+        Err(e) => (StatusCode::CONFLICT, e.to_string()).into_response(),
     }
 }
 
@@ -2404,15 +2501,15 @@ async fn setup_status(State(s): State<Shared>) -> impl IntoResponse {
         (l.workspace.clone(), l.demo)
     };
     let ws_git = match (&root, demo) {
-        (Some(r), false) => Some(git::status(r).await),
+        (Some(r), false) => Some(ym_gitsync::Repo::new(r).status().await),
         _ => None,
     };
     let sys = models::system_info().await;
-    let cat = models::catalog();
-    let recommended = models::recommend(&cat, &sys);
-    let pool = sys.memory_gb.max(sys.gpu_memory_gb.unwrap_or(0.0));
-    let installed: Vec<String> = models::installed().into_iter().map(|m| m.id).collect();
-    let running = s.models.runtime.lock().await.as_ref().map(|r| r.model_id.clone());
+    let cat = &s.llm.catalog;
+    let recommended = models::recommend(cat, &sys);
+    let pool = sys.memory_gb.max(sys.gpu_memory_gb.unwrap_or(0.0)) as f64;
+    let installed = models::installed(cat);
+    let running = s.models.runtime.current().await.map(|r| r.0);
     Json(serde_json::json!({
         "first_run": !env_ws && cfg.workspace_path.is_none() && cfg.profile_path.is_none(),
         "config_path": config_path().map(|p| p.display().to_string()),
@@ -2425,17 +2522,17 @@ async fn setup_status(State(s): State<Shared>) -> impl IntoResponse {
         },
         "git_tool": git_tool().await,
         "system": sys,
-        "models": cat.models.iter().map(|m| serde_json::json!({
+        "models": cat.brains(true).map(|m| serde_json::json!({
             "entry": m,
-            "fits": pool + 0.5 >= m.min_memory_gb as f32,
+            "fits": pool + 0.5 >= m.min_memory_gb,
             "installed": installed.contains(&m.id),
         })).collect::<Vec<_>>(),
         "recommended": recommended,
         "runtime_installed": models::runtime_binary().is_some(),
         "running": running,
-        "phase": s.models.phase.lock().await.clone(),
-        "engine": s.engine.read().await.status().await,
-        "claude": s.claude.read().await.status(),
+        "phase": s.models.phase().await,
+        "engine": s.llm.local_status().await,
+        "claude": s.llm.claude_status(),
     }))
 }
 
@@ -2609,26 +2706,27 @@ struct ModelBody {
     id: String,
 }
 
-async fn model_plan(Json(b): Json<ModelBody>) -> impl IntoResponse {
-    match models::plan(&b.id).await {
+async fn model_plan(State(s): State<Shared>, Json(b): Json<ModelBody>) -> impl IntoResponse {
+    match models::plan(&s.llm.catalog, &b.id).await {
         Ok(p) => Json(p).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
     }
 }
 
+/// Start a downloaded model; it becomes the local engine in place of any
+/// external server until it is stopped.
 async fn activate(s: &Shared, id: &str) -> Result<(), String> {
-    let url = models::start(&s.models, id).await?;
-    let name = models::catalog().models.into_iter().find(|m| m.id == id).map(|m| format!("{} {}", m.name, m.variant)).unwrap_or(id.into());
-    *s.engine.write().await = Engine::new(EngineConfig { url: Some(url), model: Some(name) });
+    models::start(&s.models, &s.llm.catalog, id).await?;
+    s.llm.set_external(EngineConfig::default());
     write_config_value("model", "active", id)
 }
 
 /// Re-plans on the server (the client never supplies URLs), downloads, then starts.
 async fn model_install(State(s): State<Shared>, Json(b): Json<ModelBody>) -> impl IntoResponse {
-    if s.models.phase.lock().await.as_str() == "downloading" {
+    if s.models.phase().await == "downloading" {
         return (StatusCode::CONFLICT, "已有下載進行中").into_response();
     }
-    let plan = match models::plan(&b.id).await {
+    let plan = match models::plan(&s.llm.catalog, &b.id).await {
         Ok(p) => p,
         Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
     };
@@ -2637,7 +2735,7 @@ async fn model_install(State(s): State<Shared>, Json(b): Json<ModelBody>) -> imp
     tokio::spawn(async move {
         if models::install(s2.models.clone(), plan).await.is_ok() {
             if let Err(e) = activate(&s2, &b.id).await {
-                *s2.models.phase.lock().await = format!("error: {e}");
+                s2.models.note(Some(format!("error: {e}"))).await;
             }
         }
     });
@@ -2646,8 +2744,8 @@ async fn model_install(State(s): State<Shared>, Json(b): Json<ModelBody>) -> imp
 
 async fn model_progress(State(s): State<Shared>) -> impl IntoResponse {
     let files: Vec<models::Progress> = s.models.progress.lock().await.values().cloned().collect();
-    let running = s.models.runtime.lock().await.as_ref().map(|r| (r.model_id.clone(), r.url.clone()));
-    Json(serde_json::json!({ "phase": s.models.phase.lock().await.clone(), "files": files, "running": running }))
+    let running = s.models.runtime.current().await.map(|r| (r.0, r.1));
+    Json(serde_json::json!({ "phase": s.models.phase().await, "files": files, "running": running }))
 }
 
 async fn model_start(State(s): State<Shared>, Json(b): Json<ModelBody>) -> impl IntoResponse {
@@ -2659,8 +2757,7 @@ async fn model_start(State(s): State<Shared>, Json(b): Json<ModelBody>) -> impl 
 
 async fn model_stop(State(s): State<Shared>) -> impl IntoResponse {
     models::stop(&s.models).await;
-    *s.models.phase.lock().await = "idle".into();
-    *s.engine.write().await = Engine::new(EngineConfig::resolve(read_config().engine));
+    s.llm.set_external(EngineConfig::resolve(read_config().engine));
     StatusCode::NO_CONTENT
 }
 
@@ -2668,21 +2765,26 @@ pub fn router(paths: Paths) -> Router {
     let cfg = read_config();
     let engine_cfg = EngineConfig::resolve(cfg.engine);
     let external = engine_cfg.url.is_some();
-    let engine = Engine::new(engine_cfg);
-    let claude = Claude::new(cfg.claude.and_then(|c| c.model));
+    let manager = Arc::new(models::Manager::default());
+    let catalog = models::catalog();
+    // The app's tasks, and the user's overrides when their file is readable.
+    let user_tasks = config_path().map(|p| p.with_file_name("tasks.toml"));
+    let tasks = Llm::task_table(user_tasks.as_deref()).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        Llm::task_table(None).expect("bundled tasks.toml is valid")
+    });
+    let llm = Llm::new(catalog, tasks, manager.runtime.clone(), models::layout(), engine_cfg, cfg.claude.and_then(|c| c.model));
     let state: Shared = Arc::new(AppState {
         loaded: RwLock::new(load(&paths)),
-        engine: RwLock::new(engine),
-        models: Arc::new(models::Manager::default()),
-        claude: RwLock::new(claude),
+        llm: Arc::new(llm),
+        models: manager,
         paths: paths.clone(),
         soft_cache: Default::default(),
-        cc: Default::default(),
     });
     models::register(state.models.clone());
     // Start the chosen local model with the app, unless an external engine is set.
     if let (false, Some(id)) = (external, cfg.model.and_then(|m| m.active)) {
-        if models::installed().iter().any(|m| m.id == id) {
+        if models::installed(&state.llm.catalog).contains(&id) {
             let s = state.clone();
             tokio::spawn(async move {
                 if let Err(e) = activate(&s, &id).await {
@@ -2703,7 +2805,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/models/progress", get(model_progress))
         .route("/api/models/start", post(model_start))
         .route("/api/models/stop", post(model_stop))
-        .route("/api/models/catalog", get(|| async { Json(models::catalog()) }))
+        .route("/api/models/catalog", get(|State(s): State<Shared>| async move { Json(s.llm.catalog.clone()) }))
         .route("/api/git/status", get(git_status))
         .route("/api/git/pull", post(git_pull))
         .route("/api/git/sync", post(git_sync))
@@ -2715,6 +2817,9 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/papers/{name}/table-fit", post(table_fit))
         .route("/api/papers/{name}/citations", get(paper_citations).post(set_purpose))
         .route("/api/papers/{name}/bib", post(paper_bib))
+        .route("/api/papers/{name}/bib/merge", post(merge_bib))
+        .route("/api/papers/{name}/tidy", get(get_tidy).post(post_tidy))
+        .route("/api/papers/{name}/import-summary", get(import_summary))
         .route("/api/papers/{name}/export", post(export_paper))
         .route("/api/papers/{name}/figure", get(paper_figure))
         .route("/api/papers/{name}/figures", post(put_figure).layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)))
@@ -2790,4 +2895,37 @@ pub async fn bind(
     let addr = listener.local_addr()?;
     let app = router(paths);
     Ok((addr, async move { axum::serve(listener, app).await }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn merges_a_paper_bib_into_the_library_without_duplicates() {
+        let root = std::env::temp_dir().join(format!("pc-merge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (ws, dir) = (root.join("ws"), root.join("ws/papers/P"));
+        std::fs::create_dir_all(ws.join("refs")).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(ws.join("refs/library.bib"), "@article{kept2020,\n  title = {Kept},\n  doi = {10.1000/Kept},\n  year = {2020}\n}\n").unwrap();
+        std::fs::write(dir.join("main.tex"), "\\documentclass{article}\n\\begin{document}\n\\bibliography{references}\n\\end{document}\n").unwrap();
+        std::fs::write(
+            dir.join("references.bib"),
+            "@article{kept2020,\n  title = {Same key},\n  year = {2020}\n}\n@article{other2021,\n  title = {Same DOI},\n  doi = {10.1000/kept},\n  year = {2021}\n}\n@inproceedings{new2022,\n  title = {New},\n  year = {2022}\n}\n",
+        )
+        .unwrap();
+        let preview = merge_paper_bib(&ws, &dir, true).await.unwrap();
+        assert_eq!((preview.added.as_slice(), preview.skipped.len()), (&["new2022".to_string()][..], 2));
+        assert!(!std::fs::read_to_string(ws.join("refs/library.bib")).unwrap().contains("new2022"), "a dry run writes nothing");
+        let r = merge_paper_bib(&ws, &dir, false).await.unwrap();
+        assert_eq!(r.files, ["references.bib"]);
+        assert_eq!(r.added, ["new2022"]);
+        assert_eq!(r.skipped, ["kept2020", "other2021"]);
+        let (entries, notes) = load_library(&ws);
+        assert_eq!(entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["kept2020", "new2022"]);
+        assert!(notes.iter().any(|n| n.key == "new2022"));
+        assert!(merge_paper_bib(&ws, &dir, false).await.unwrap().added.is_empty(), "merging twice adds nothing");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

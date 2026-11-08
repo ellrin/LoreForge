@@ -105,8 +105,10 @@ fn braced(s: &str) -> Option<(&str, &str)> {
     None
 }
 
-/// Write back: one sentence per line for prose; blocks with environments or
-/// comments are kept exactly as typed.
+/// Write back: one sentence per line for prose. Environments and display
+/// math stay exactly as typed on their own lines, and so do lines with a `%`
+/// comment; the prose around them is split into sentences. Only line breaks
+/// between words change, so the compiled document is the same.
 pub fn render_section(s: &Section) -> String {
     let mut out = format!("\\section{{{}}}{}\n", s.title, s.tail);
     for p in &s.paragraphs {
@@ -115,22 +117,188 @@ pub fn render_section(s: &Section) -> String {
             continue;
         }
         out.push('\n');
-        // A real comment is an unescaped %; "12.4\%" is ordinary prose.
-        let has_comment = p.lines().any(|l| strip_comment(l).len() != l.len());
-        let keep = p.contains("\\begin") || has_comment || p.starts_with('\\');
-        if keep {
-            out.push_str(p);
-        } else {
-            out.push_str(&sentences(p).join("\n"));
-        }
+        out.push_str(&render_paragraph(p));
         out.push('\n');
     }
     out
 }
 
+/// Commands that start running text rather than a block: drop caps,
+/// run-in heads, emphasis, a citation or reference opening a sentence.
+const PROSE_COMMANDS: &[&str] = &[
+    "IEEEPARstart", "PARstart", "noindent", "indent", "textit", "emph", "textbf", "textsc", "textsl", "textsf", "textrm", "texttt", "underline",
+    "paragraph", "cite", "citet", "citep", "Citet", "Citep", "citeauthor", "Citeauthor", "ref", "eqref", "cref", "Cref", "autoref", "url", "href", "mbox",
+];
+
+/// Running text: it starts with a word, or with one of `PROSE_COMMANDS`.
+fn is_prose(text: &str) -> bool {
+    let Some(rest) = text.trim_start().strip_prefix('\\') else { return true };
+    let name: String = rest.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    PROSE_COMMANDS.contains(&name.as_str())
+}
+
+/// A line holding only commands that are not prose and their arguments,
+/// such as `\\enlargethispage{-\\baselineskip}` or `\\vspace{2mm}\\noindent`.
+fn command_only(t: &str) -> bool {
+    let mut rest = t.trim();
+    if rest.is_empty() || is_prose(rest) {
+        return false;
+    }
+    while let Some(r) = rest.strip_prefix('\\') {
+        let name_len = r.chars().take_while(|c| c.is_ascii_alphabetic()).count();
+        if name_len == 0 {
+            return false;
+        }
+        rest = r[name_len..].trim_start_matches('*').trim_start();
+        loop {
+            if rest.starts_with('{') {
+                match braced(rest) {
+                    Some((_, after)) => rest = after.trim_start(),
+                    None => return false,
+                }
+            } else if rest.starts_with('[') {
+                match rest.find(']') {
+                    Some(e) => rest = rest[e + 1..].trim_start(),
+                    None => return false,
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    rest.is_empty()
+}
+
+/// One paragraph in file form: prose one sentence per line; environments,
+/// display math, comment lines and lines of layout commands verbatim on
+/// their own lines.
+fn render_paragraph(p: &str) -> String {
+    // \verb keeps its spaces: leave such a paragraph alone.
+    if p.contains("\\verb") {
+        return p.to_string();
+    }
+    let lines: Vec<&str> = p.lines().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut prose: Vec<&str> = Vec::new();
+    let flush = |prose: &mut Vec<&str>, out: &mut Vec<String>| {
+        if prose.is_empty() {
+            return;
+        }
+        let text = prose.join("\n");
+        if is_prose(&text) {
+            out.extend(sentences(&text));
+        } else {
+            out.push(text);
+        }
+        prose.clear();
+    };
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let code = strip_comment(line);
+        let t = code.trim_start();
+        let end = if code.contains("\\begin{") {
+            // to the line that closes every environment opened here
+            let mut depth = 0i32;
+            let mut j = i;
+            loop {
+                let c = strip_comment(lines[j]);
+                depth += c.matches("\\begin{").count() as i32 - c.matches("\\end{").count() as i32;
+                j += 1;
+                if depth <= 0 || j == lines.len() {
+                    break j;
+                }
+            }
+        } else if t.starts_with("\\[") {
+            let close = |c: &str| c.contains("\\]");
+            (i..lines.len()).find(|&j| close(if j == i { &t[2..] } else { strip_comment(lines[j]) })).map_or(lines.len(), |j| j + 1)
+        } else if t.starts_with("$$") {
+            let close = |c: &str| c.contains("$$");
+            (i..lines.len()).find(|&j| close(if j == i { &t[2..] } else { strip_comment(lines[j]) })).map_or(lines.len(), |j| j + 1)
+        } else if code.len() != line.len() {
+            i + 1 // a line with a comment: the comment also swallows the line break
+        } else if command_only(code) {
+            i + 1
+        } else {
+            prose.push(line);
+            i += 1;
+            continue;
+        };
+        flush(&mut prose, &mut out);
+        out.push(split_items(&lines[i..end]).unwrap_or_else(|| lines[i..end].join("\n")));
+        i = end;
+    }
+    flush(&mut prose, &mut out);
+    out.join("\n")
+}
+
+/// A simple list (`itemize` / `enumerate` / `description` with no nested
+/// environment and no comment) with each `\item` one sentence per line, like
+/// prose; `None` leaves the block as typed. Only line breaks between words
+/// change. Captions and other environments are never split.
+fn split_items(block: &[&str]) -> Option<String> {
+    let (first, last) = (block.first()?.trim(), block.last()?.trim());
+    let env = ["itemize", "enumerate", "description"].into_iter().find(|e| first.starts_with(&format!("\\begin{{{e}}}")))?;
+    let head_rest = first[format!("\\begin{{{env}}}").len()..].trim();
+    if block.len() < 3 || last != format!("\\end{{{env}}}") || !(head_rest.is_empty() || head_rest.starts_with('[') && head_rest.ends_with(']')) {
+        return None;
+    }
+    let inner = &block[1..block.len() - 1];
+    if inner.iter().any(|l| l.contains('%') || l.contains("\\begin{") || l.contains("\\end{") || l.trim().is_empty() || l.contains("\\verb")) {
+        return None;
+    }
+    let mut items: Vec<(String, Vec<&str>)> = Vec::new();
+    for l in inner {
+        let t = l.trim();
+        if let Some(rest) = t.strip_prefix("\\item").filter(|r| !r.starts_with(|c: char| c.is_ascii_alphabetic())) {
+            // \item[label] keeps its label with the first sentence
+            let (label, body) = if rest.trim_start().starts_with('[') {
+                let r = rest.trim_start();
+                let e = r.find(']')?;
+                (r[..=e].to_string(), &r[e + 1..])
+            } else {
+                (String::new(), rest)
+            };
+            items.push((format!("\\item{label}"), vec![body.trim()]));
+        } else {
+            items.last_mut()?.1.push(t);
+        }
+    }
+    let mut out = vec![block[0].trim_end().to_string()];
+    for (head, body) in items {
+        let text = body.join("\n");
+        let sents = if text.trim().is_empty() { vec![] } else { crate::text::sentences(&text) };
+        match sents.split_first() {
+            Some((one, rest)) => {
+                out.push(format!("{head} {one}"));
+                out.extend(rest.iter().cloned());
+            }
+            None => out.push(head),
+        }
+    }
+    out.push(block[block.len() - 1].trim_end().to_string());
+    Some(out.join("\n"))
+}
+
+/// Layout parameters and document parts a preamble redefines; none of them
+/// is math, and KaTeX would only choke on them.
+const LAYOUT_MACROS: &[&str] = &[
+    "\\topfraction", "\\bottomfraction", "\\textfraction", "\\floatpagefraction", "\\dbltopfraction", "\\dblfloatpagefraction",
+    "\\baselinestretch", "\\arraystretch", "\\thebibliography", "\\bibsection", "\\bibfont", "\\maketitle", "\\section", "\\subsection",
+    "\\subsubsection", "\\paragraph", "\\thesection", "\\thesubsection", "\\thefigure", "\\thetable", "\\footnoterule", "\\headrule",
+];
+
+/// A macro the math previewer cannot use: a layout setting, or an
+/// internal one (`@` in its name or body only works between \makeatletter
+/// and \makeatother).
+fn layout_macro(name: &str, body: &str) -> bool {
+    LAYOUT_MACROS.contains(&name) || name.contains('@') || body.contains('@')
+}
+
 /// `\newcommand`, `\renewcommand`, `\DeclareMathOperator` and simple `\def`
 /// from LaTeX source, as name -> body, for the math previewer. Argument
-/// counts are dropped: `#1` in the body works the same way in KaTeX.
+/// counts are dropped: `#1` in the body works the same way in KaTeX. Layout
+/// macros (`\topfraction`, `\thebibliography`, anything with `@`) are left out.
 pub fn extract_macros(src: &str) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
     let src: String = src.lines().map(|l| strip_comment(l)).collect::<Vec<_>>().join("\n");
@@ -194,6 +362,10 @@ pub fn extract_macros(src: &str) -> std::collections::BTreeMap<String, String> {
         }
         if bytes.get(j) == Some(&'{') && name.starts_with('\\') {
             let (body, k) = group(&bytes, j);
+            if layout_macro(&name, &body) {
+                i = k;
+                continue;
+            }
             // The starred form puts limits under the operator in display math.
             let body = match (kind, starred) {
                 ("\\DeclareMathOperator", true) => format!("\\operatorname*{{{body}}}"),
@@ -558,6 +730,239 @@ pub fn import_paper(papers: &Path, name: &str, src: &Path) -> Result<PathBuf, St
     Ok(dir)
 }
 
+/// Optional clean-up after an import, offered to the user, never automatic.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Tidy {
+    /// Figures whose file names have spaces → `figures/figN.ext` (N = the
+    /// figure's place in the document), paths relative to the paper.
+    pub renames: Vec<(String, String)>,
+    /// Class files the paper does not load.
+    pub remove: Vec<String>,
+    /// Lines to add to the paper's `.gitignore`: `*-eps-converted-to.pdf`
+    /// when the paper has .eps figures. Those PDFs are build output that
+    /// epstopdf writes next to the .eps on every compile, so they are kept
+    /// (deleting them only makes the next export write them again) but
+    /// not committed.
+    #[serde(default)]
+    pub gitignore: Vec<String>,
+}
+
+/// Build output that LaTeX (epstopdf) writes into the paper folder itself.
+pub const CONVERTED_PATTERN: &str = "*-eps-converted-to.pdf";
+
+impl Tidy {
+    pub fn is_empty(&self) -> bool {
+        self.renames.is_empty() && self.remove.is_empty() && self.gitignore.is_empty()
+    }
+}
+
+/// `.gitignore` lines of a folder (trimmed).
+fn gitignore_lines(dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join(".gitignore")).unwrap_or_default().lines().map(|l| l.trim().to_string()).collect()
+}
+
+/// The paper's own .tex files: main.tex and its sections.
+fn paper_tex_files(paper: &Path) -> Vec<PathBuf> {
+    let mut v = vec![paper.join("main.tex")];
+    v.extend(section_files(paper).into_iter().map(|f| paper.join("sections").join(f)));
+    v
+}
+
+/// `\includegraphics[..]{arg}` arguments in reading order, with the byte
+/// range of each `{arg}` (comments skipped).
+fn graphics_args(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        let code = strip_comment(line);
+        let mut from = 0;
+        while let Some(i) = code[from..].find("\\includegraphics") {
+            let mut j = from + i + "\\includegraphics".len();
+            let rest = &code[j..];
+            let r = rest.trim_start_matches('*').trim_start();
+            j += rest.len() - r.len();
+            let r = if r.starts_with('[') {
+                match r.find(']') {
+                    Some(e) => {
+                        j += e + 1;
+                        &r[e + 1..]
+                    }
+                    None => break,
+                }
+            } else {
+                r
+            };
+            let lead = r.len() - r.trim_start().len();
+            j += lead;
+            match braced(&code[j..]) {
+                Some((arg, _)) => {
+                    out.push((at + j..at + j + arg.len() + 2, arg.to_string()));
+                    from = j + arg.len() + 2;
+                }
+                None => break,
+            }
+        }
+        at += line.len();
+    }
+    out
+}
+
+const FIGURE_EXT: &[&str] = &["pdf", "png", "jpg", "jpeg", "eps"];
+
+/// The figure file an `\includegraphics` argument names (graphicx tries the
+/// usual extensions when there is none).
+fn figure_file(paper: &Path, arg: &str) -> Option<PathBuf> {
+    if arg.contains("..") || arg.starts_with('/') {
+        return None;
+    }
+    let p = paper.join(arg);
+    if p.is_file() {
+        return Some(p);
+    }
+    FIGURE_EXT.iter().map(|x| paper.join(format!("{arg}.{x}"))).find(|p| p.is_file())
+}
+
+/// What `apply_tidy` would do to this paper.
+pub fn tidy_plan(paper: &Path) -> Tidy {
+    let mut plan = Tidy::default();
+    // figures, numbered by their first \includegraphics
+    let mut seen: Vec<String> = Vec::new();
+    let mut taken: Vec<String> = Vec::new();
+    for f in paper_tex_files(paper) {
+        let Some(text) = read_tex(&f) else { continue };
+        for (_, arg) in graphics_args(&text) {
+            if seen.contains(&arg) {
+                continue;
+            }
+            seen.push(arg.clone());
+            let Some(file) = figure_file(paper, &arg) else { continue };
+            let Ok(rel) = file.strip_prefix(paper) else { continue };
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            if !rel.contains(' ') || plan.renames.iter().any(|(from, _)| *from == rel) {
+                continue;
+            }
+            let ext = file.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let n = seen.len();
+            let to = (1..)
+                .map(|k| if k == 1 { format!("figures/fig{n}.{ext}") } else { format!("figures/fig{n}-{k}.{ext}") })
+                .find(|t| !paper.join(t).exists() && !taken.contains(t))
+                .expect("a free name");
+            taken.push(to.clone());
+            plan.renames.push((rel, to));
+        }
+    }
+    // class files nobody loads
+    let used: Vec<PathBuf> = crate::journal::used_style_files(paper);
+    let mut classes: Vec<String> = used.iter().filter(|p| p.extension().is_some_and(|x| x == "cls")).filter_map(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).collect();
+    // a class may load another (\LoadClass)
+    let mut i = 0;
+    while i < classes.len() {
+        if let Some(src) = read_tex(&paper.join(format!("{}.cls", classes[i]))) {
+            for line in src.lines() {
+                let code = strip_comment(line);
+                for cmd in ["\\LoadClassWithOptions", "\\LoadClass"] {
+                    if let Some(r) = code.find(cmd).map(|k| &code[k + cmd.len()..]) {
+                        let r = r.trim_start();
+                        let r = if r.starts_with('[') { r.find(']').map_or("", |e| &r[e + 1..]) } else { r };
+                        if let Some((c, _)) = braced(r.trim_start()) {
+                            if !classes.iter().any(|x| x == c.trim()) {
+                                classes.push(c.trim().to_string());
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    let names: Vec<String> = std::fs::read_dir(paper).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+    let mut remove: Vec<String> = Vec::new();
+    for n in &names {
+        if let Some(stem) = n.strip_suffix(".cls") {
+            // Only when the main class is found here: otherwise nothing is known to be unused.
+            if !classes.is_empty() && !classes.iter().any(|c| c == stem) {
+                remove.push(n.clone());
+            }
+        }
+    }
+    remove.sort();
+    plan.remove = remove;
+    // .eps figures: epstopdf writes x-eps-converted-to.pdf beside them on each compile
+    let has_eps = names.iter().any(|n| n.to_lowercase().ends_with(".eps") || n.ends_with("-eps-converted-to.pdf"))
+        || paper.join("figures").read_dir().into_iter().flatten().flatten().any(|e| e.file_name().to_string_lossy().to_lowercase().ends_with(".eps"));
+    if has_eps && !gitignore_lines(paper).iter().any(|l| l == CONVERTED_PATTERN) {
+        plan.gitignore.push(CONVERTED_PATTERN.to_string());
+    }
+    plan
+}
+
+/// Rename figures (and rewrite their `\includegraphics`) and remove the
+/// files in `plan`. Never overwrites a file; returns what was done.
+pub fn apply_tidy(paper: &Path, plan: &Tidy) -> Result<Tidy, String> {
+    let io = |e: std::io::Error| e.to_string();
+    let mut done = Tidy::default();
+    let mut moved: Vec<(String, String)> = Vec::new();
+    for (from, to) in &plan.renames {
+        let (src, dst) = (paper.join(from), paper.join(to));
+        if !safe_rel(from) || !safe_rel(to) || !src.is_file() || dst.exists() {
+            continue;
+        }
+        if let Some(d) = dst.parent() {
+            std::fs::create_dir_all(d).map_err(io)?;
+        }
+        std::fs::rename(&src, &dst).map_err(io)?;
+        moved.push((from.clone(), to.clone()));
+        done.renames.push((from.clone(), to.clone()));
+    }
+    if !moved.is_empty() {
+        for f in paper_tex_files(paper) {
+            let Some(text) = read_tex(&f) else { continue };
+            let mut out = String::new();
+            let mut last = 0;
+            for (range, arg) in graphics_args(&text) {
+                let Some((_, to)) = moved.iter().find(|(from, _)| *from == arg || from.rsplit_once('.').is_some_and(|(stem, _)| stem == arg)) else { continue };
+                // keep the argument's form: with an extension only if it had one
+                let new = if moved.iter().any(|(from, _)| *from == arg) { to.clone() } else { to.rsplit_once('.').map_or(to.clone(), |(stem, _)| stem.to_string()) };
+                out += &text[last..range.start];
+                out += &format!("{{{new}}}");
+                last = range.end;
+            }
+            if last > 0 {
+                out += &text[last..];
+                write_atomic(&f, &out).map_err(io)?;
+            }
+        }
+    }
+    for n in &plan.remove {
+        let p = paper.join(n);
+        if safe_name(n) && p.is_file() && n.ends_with(".cls") {
+            std::fs::remove_file(&p).map_err(io)?;
+            done.remove.push(n.clone());
+        }
+    }
+    let have = gitignore_lines(paper);
+    let add: Vec<&String> = plan.gitignore.iter().filter(|l| !l.trim().is_empty() && !l.contains('\n') && !have.contains(l)).collect();
+    if !add.is_empty() {
+        let mut text = std::fs::read_to_string(paper.join(".gitignore")).unwrap_or_default();
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        for l in add {
+            text.push_str(l);
+            text.push('\n');
+            done.gitignore.push(l.clone());
+        }
+        write_atomic(&paper.join(".gitignore"), &text).map_err(io)?;
+    }
+    Ok(done)
+}
+
+/// A relative path inside the paper: plain names joined by `/`.
+fn safe_rel(p: &str) -> bool {
+    !p.is_empty() && p.split('/').all(safe_name)
+}
+
 /// Copy a project's files except the .tex files merged into main.tex, build
 /// output, and any .tex under sections/ (that folder belongs to the app).
 fn copy_project(from: &Path, to: &Path, used: &[PathBuf], in_sections: bool) -> std::io::Result<()> {
@@ -751,6 +1156,45 @@ mod tests {
     }
 
     #[test]
+    fn run_in_heads_and_text_around_environments_are_split() {
+        let text = "\\section{Method}\n\n\\IEEEPARstart{W}{e} study a toy problem. It has two\nparts.\n\n\
+\\textit{Data.} We use 120 synthetic images. Each one is $64\\times64$.\n\n\
+\\noindent Only the first part is new. The rest follows [1].\n\n\
+The loss is\n\\begin{equation}\nL = a. b = c.\n\\end{equation}\nwhere $a$ is small. It works\nwell. %keep this note\nThen we stop. Done.\n\n\
+\\vspace{2mm} Kept as typed. Really.\n";
+        let s = parse_section("method.tex", text);
+        let out = render_section(&s);
+        let want = "\\section{Method}\n\n\\IEEEPARstart{W}{e} study a toy problem.\nIt has two parts.\n\n\
+\\textit{Data.} We use 120 synthetic images.\nEach one is $64\\times64$.\n\n\
+\\noindent Only the first part is new.\nThe rest follows [1].\n\n\
+The loss is\n\\begin{equation}\nL = a. b = c.\n\\end{equation}\nwhere $a$ is small.\nwell. %keep this note\nThen we stop.\nDone.\n\n\
+\\vspace{2mm} Kept as typed. Really.\n";
+        // The line with a comment stays whole, so the sentence before it
+        // ends at that line's start.
+        let want = want.replace("where $a$ is small.\nwell.", "where $a$ is small.\nIt works\nwell.");
+        assert_eq!(out, want);
+        // Saving again changes nothing, and only line breaks between words changed.
+        assert_eq!(render_section(&parse_section("method.tex", &out)), out);
+        let words = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(words(&out), words(text));
+        assert_eq!(render_paragraph("a  \\verb|x  y|. B."), "a  \\verb|x  y|. B.", "\\verb keeps its spaces");
+        // simple lists: each \item one sentence per line too; anything unusual stays as typed
+        let list = "We list:\n\\begin{itemize}\n  \\item First point. It has two\n  parts.\n  \\item[(b)] Second one.\n\\end{itemize}";
+        let got = render_paragraph(list);
+        assert_eq!(got, "We list:\n\\begin{itemize}\n\\item First point.\nIt has two parts.\n\\item[(b)] Second one.\n\\end{itemize}");
+        assert_eq!(render_paragraph(&got), got, "stable");
+        assert_eq!(words(&got), words(list));
+        let nested = "\\begin{itemize}\n\\item A. B.\n\\begin{enumerate}\n\\item C.\n\\end{enumerate}\n\\end{itemize}";
+        assert_eq!(render_paragraph(nested), nested, "nested lists are left alone");
+        let fig = "\\begin{figure}\n\\caption{One. Two.}\n\\end{figure}";
+        assert_eq!(render_paragraph(fig), fig, "captions are not split");
+        assert_eq!(render_paragraph("\\[ x. y \\]\nThen. Now."), "\\[ x. y \\]\nThen.\nNow.");
+        assert_eq!(render_paragraph("\\enlargethispage{-\\baselineskip}\nOne. Two."), "\\enlargethispage{-\\baselineskip}\nOne.\nTwo.");
+        assert_eq!(render_paragraph("\\vspace{2mm}\\noindent\nOne. Two."), "\\vspace{2mm}\\noindent\nOne.\nTwo.");
+        assert_eq!(render_paragraph("\\label{x} One. Two."), "\\label{x} One. Two.", "a command followed by text on its line stays as typed");
+    }
+
+    #[test]
     fn creates_a_blank_paper_that_loads() {
         let tmp = std::env::temp_dir().join(format!("pc-blank-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
@@ -826,6 +1270,42 @@ mod tests {
     }
 
     #[test]
+    fn tidy_renames_spaced_figures_and_drops_unused_classes() {
+        let root = std::env::temp_dir().join(format!("pc-tidy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("main.tex"), "\\documentclass{wrapper}\n\\begin{document}\n\\section{Intro}\nSee the plot.\n\\begin{figure}\n\\includegraphics[width=\\linewidth]{Plot A}\n\\end{figure}\n\\begin{figure}\n\\includegraphics{logo}\\includegraphics*{Scan B.png}\n% \\includegraphics{Old C}\n\\end{figure}\n\\end{document}\n").unwrap();
+        std::fs::write(src.join("wrapper.cls"), "\\LoadClass[journal]{base}\n").unwrap();
+        std::fs::write(src.join("base.cls"), "% base").unwrap();
+        std::fs::write(src.join("spare.cls"), "% spare").unwrap();
+        std::fs::write(src.join("Plot A.pdf"), "pdf").unwrap();
+        std::fs::write(src.join("Scan B.png"), "png").unwrap();
+        std::fs::write(src.join("Old C.png"), "png").unwrap();
+        std::fs::write(src.join("logo.eps"), "eps").unwrap();
+        std::fs::write(src.join("logo-eps-converted-to.pdf"), "pdf").unwrap();
+        std::fs::write(src.join("chart-eps-converted-to.pdf"), "no source: keep").unwrap();
+        let dir = import_paper(&root.join("papers"), "P", &src).unwrap();
+        let plan = tidy_plan(&dir);
+        assert_eq!(plan.renames, [("Plot A.pdf".to_string(), "figures/fig1.pdf".to_string()), ("Scan B.png".into(), "figures/fig3.png".into())]);
+        // the converted PDF is build output: kept, and ignored by git instead
+        assert_eq!(plan.remove, ["spare.cls"]);
+        assert_eq!(plan.gitignore, [CONVERTED_PATTERN]);
+        let done = apply_tidy(&dir, &plan).unwrap();
+        assert_eq!(done, plan);
+        let sec = std::fs::read_to_string(dir.join("sections/01-intro.tex")).unwrap();
+        assert!(sec.contains("\\includegraphics[width=\\linewidth]{figures/fig1}\n"), "{sec}");
+        assert!(sec.contains("\\includegraphics{logo}\\includegraphics*{figures/fig3.png}"), "{sec}");
+        assert!(sec.contains("% \\includegraphics{Old C}"), "comments untouched");
+        assert!(dir.join("figures/fig1.pdf").is_file() && !dir.join("Plot A.pdf").exists());
+        assert!(dir.join("base.cls").is_file() && dir.join("wrapper.cls").is_file() && !dir.join("spare.cls").exists());
+        assert!(dir.join("chart-eps-converted-to.pdf").is_file() && dir.join("logo-eps-converted-to.pdf").is_file());
+        assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), format!("{CONVERTED_PATTERN}\n"));
+        assert!(tidy_plan(&dir).is_empty(), "nothing left to do");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn creates_a_paper_from_a_single_file_template() {
         let root = std::env::temp_dir().join(format!("pc-tpl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -885,6 +1365,22 @@ mod tests {
         assert_eq!(m["\\argmax"], "\\operatorname*{arg\\,max}");
         assert_eq!(m["\\eps"], "\\varepsilon");
         assert!(!m.contains_key("\\hidden"));
+    }
+
+    #[test]
+    fn leaves_layout_macros_out() {
+        let src = r"\makeatletter
+\renewcommand{\thebibliography}[1]{%
+  \section*{References}%
+  \def\bibitem{\@mybibitem}%
+  \list{\@biblabel{\@arabic\c@enumiv}}{}}
+\makeatother
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\floatpagefraction}{0.85}
+\def\journalname{Journal of Examples}
+\newcommand{\R}{\mathbb{R}}";
+        let m = extract_macros(src);
+        assert_eq!(m.keys().collect::<Vec<_>>(), ["\\R", "\\journalname"]);
     }
 
     #[test]

@@ -171,6 +171,33 @@ pub struct Draft {
     pub sentences: Vec<Sentence>,
 }
 
+/// A JSON Schema object with these fields, all required and nothing else:
+/// the shape every engine's structured output accepts (Claude, Claude Code,
+/// llama-server `json_schema`).
+pub fn json_object(fields: &[(&str, serde_json::Value)]) -> serde_json::Value {
+    let props: serde_json::Map<String, serde_json::Value> = fields.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+    let required: Vec<&str> = fields.iter().map(|(k, _)| *k).collect();
+    serde_json::json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
+}
+
+pub fn json_array(items: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "type": "array", "items": items })
+}
+
+pub fn json_string() -> serde_json::Value {
+    serde_json::json!({ "type": "string" })
+}
+
+/// A string, or null when there is none.
+pub fn json_string_or_null() -> serde_json::Value {
+    serde_json::json!({ "anyOf": [{ "type": "string" }, { "type": "null" }] })
+}
+
+/// The reply `build_prompt` asks for.
+pub fn reply_schema() -> serde_json::Value {
+    json_object(&[("sentences", json_array(json_object(&[("text", json_string()), ("phrase_id", json_string_or_null())])))])
+}
+
 /// Parse the engine's reply. Tolerates code fences and text around the JSON.
 pub fn parse_draft(reply: &str) -> Result<Draft, String> {
     let start = reply.find('{').ok_or("no JSON object in reply")?;

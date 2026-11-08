@@ -70,6 +70,18 @@ Give one result per listed rule. `sentence` is the number of the sentence the pr
     Prompt { system, user }
 }
 
+/// The reply `build_prompt` asks for.
+pub fn reply_schema() -> serde_json::Value {
+    use crate::compose::{json_array, json_object, json_string};
+    let result = json_object(&[
+        ("rule", json_string()),
+        ("pass", serde_json::json!({ "type": "boolean" })),
+        ("sentence", serde_json::json!({ "anyOf": [{ "type": "integer" }, { "type": "null" }] })),
+        ("reason", json_string()),
+    ]);
+    json_object(&[("results", json_array(result))])
+}
+
 #[derive(Deserialize)]
 struct Reply {
     results: Vec<Raw>,

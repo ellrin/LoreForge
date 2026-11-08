@@ -43,6 +43,15 @@ pub struct Proposals {
     pub expressions: Vec<ProposedExpression>,
 }
 
+/// The reply `build_prompt` asks for.
+pub fn reply_schema() -> serde_json::Value {
+    use crate::compose::{json_array, json_object, json_string};
+    let s = json_string;
+    let phrase = json_object(&[("section", s()), ("function", s()), ("position", s()), ("template", s()), ("example", s()), ("tags", json_array(s()))]);
+    let expression = json_object(&[("kind", s()), ("text", s()), ("usage", s()), ("section", s()), ("example", s())]);
+    json_object(&[("phrases", json_array(phrase)), ("expressions", json_array(expression))])
+}
+
 pub fn build_prompt(profile: &Profile, text: &str, section: Option<&str>) -> Prompt {
     let mut functions: Vec<&str> = profile.phrases.iter().map(|p| p.function.as_str()).collect();
     functions.sort();

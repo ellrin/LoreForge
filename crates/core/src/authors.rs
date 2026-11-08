@@ -97,6 +97,107 @@ pub struct PaperAuthor {
     pub equal: bool,
 }
 
+/// Drop `\cmd{…}` (with its braced argument) for each of `cmds`.
+fn drop_commands(s: &str, cmds: &[&str]) -> String {
+    let mut out = s.to_string();
+    for c in cmds {
+        while let Some(i) = out.find(c) {
+            let after = &out[i + c.len()..];
+            // only whole command names
+            if after.starts_with(|ch: char| ch.is_ascii_alphabetic()) {
+                break;
+            }
+            let opt = after.trim_start_matches('*');
+            let skip = after.len() - opt.len();
+            let opt_len = if opt.starts_with('[') { opt.find(']').map_or(0, |e| e + 1) } else { 0 };
+            let rest = &opt[opt_len..];
+            let end = if rest.starts_with('{') {
+                let mut depth = 0;
+                let mut k = 0;
+                for (j, ch) in rest.char_indices() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                k = j + 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if k == 0 { rest.len() } else { k }
+            } else {
+                0
+            };
+            out.replace_range(i..i + c.len() + skip + opt_len + end, " ");
+        }
+    }
+    out
+}
+
+/// The people named in a paper's title block, in order: `\author{A~One,
+/// B~Two, and C~Three\thanks{…}}`, IEEE `\IEEEauthorblockN{…}`, Springer
+/// `\author{\fnm{A} \sur{One}}`. Footnotes, memberships and marks are dropped.
+pub fn names_in_block(main: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in crate::front::fields(main).into_iter().filter(|f| f.field == "author") {
+        // comments out first (the block often ends a line with %)
+        let v: String = f.value.lines().map(|l| match l.find('%').filter(|&i| i == 0 || !l[..i].ends_with('\\')) { Some(i) => &l[..i], None => l }).collect::<Vec<_>>().join(" ");
+        let v = drop_commands(&v, &["\\thanks", "\\IEEEmembership", "\\inst", "\\textsuperscript", "\\footnote", "\\email", "\\orcidlink", "\\orcid", "\\affil", "\\affiliation"]);
+        let v = v.replace("\\fnm", " ").replace("\\sur", " ");
+        for part in v.split("\\and").flat_map(|p| p.split("\\\\")).flat_map(|p| p.split(',')).flat_map(|p| p.split(" and ")) {
+            let mut name = String::new();
+            let mut chars = part.chars().peekable();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => {
+                        // a command: drop its name
+                        while chars.peek().is_some_and(|c| c.is_ascii_alphabetic()) {
+                            chars.next();
+                        }
+                        name.push(' ');
+                    }
+                    '~' => name.push(' '),
+                    '$' | '{' | '}' | '*' | '^' | '_' => name.push(' '),
+                    c if c.is_ascii_digit() => name.push(' '),
+                    c => name.push(c),
+                }
+            }
+            let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+            let name = name.trim_start_matches("and ").trim();
+            if name.split_whitespace().count() >= 2 && name.chars().count() <= 60 && name.chars().any(|c| c.is_alphabetic()) && !out.iter().any(|x| x == name) {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn name_key(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).collect::<String>().to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Profile authors whose names appear in the paper's author block, in the
+/// block's order (given + family, or family + given). Nobody is guessed:
+/// a name that matches no one is left out.
+pub fn match_block(main: &str, authors: &[Author]) -> Vec<PaperAuthor> {
+    let mut out: Vec<PaperAuthor> = Vec::new();
+    for n in names_in_block(main) {
+        let k = name_key(&n.replace('-', ""));
+        let hit = authors.iter().find(|a| {
+            let g = a.given.replace('-', "");
+            let f = a.family.replace('-', "");
+            name_key(&format!("{g} {f}")) == k || name_key(&format!("{f} {g}")) == k
+        });
+        if let Some(a) = hit.filter(|a| !out.iter().any(|x| x.id == a.id)) {
+            out.push(PaperAuthor { id: a.id.clone(), corresponding: false, equal: false });
+        }
+    }
+    out
+}
+
 /// An author resolved for printing: affiliations as 1-based numbers into
 /// the paper's own affiliation list.
 #[derive(Debug, Clone, PartialEq)]
@@ -681,5 +782,23 @@ mod tests {
         let (p, a) = people();
         let out = apply(main, &p, &a);
         assert!(out.starts_with("\\documentclass{article}\n\\title{T}\n\\author{Shang-Lin Chung"), "{out}");
+    }
+
+    #[test]
+    fn reads_names_from_an_imported_author_block() {
+        let ieee = "\\documentclass{ieeecolor}\n\\author{Ellrin~Lan, Kiro~Tamsin, and Daidai~Wu%\n\\thanks{Supported by a grant.}\n\\thanks{Ellrin~Lan is with the Lab.}}\n\\begin{document}\n\\maketitle\n\\end{document}\n";
+        assert_eq!(names_in_block(ieee), ["Ellrin Lan", "Kiro Tamsin", "Daidai Wu"]);
+        let sn = "\\documentclass{sn-jnl}\n\\begin{document}\n\\author*[1]{\\fnm{Daidai} \\sur{Wu}}\\email{d@x}\n\\author[2]{\\fnm{Ellrin} \\sur{Lan}}\n\\maketitle\n\\end{document}\n";
+        assert_eq!(names_in_block(sn), ["Daidai Wu", "Ellrin Lan"]);
+        let ieee_conf = "\\documentclass{IEEEtran}\n\\begin{document}\n\\author{\\IEEEauthorblockN{Ellrin Lan\\IEEEauthorrefmark{1}}\n\\IEEEauthorblockA{Lab}}\n\\maketitle\n\\end{document}\n";
+        assert!(names_in_block(ieee_conf).contains(&"Ellrin Lan".to_string()), "{:?}", names_in_block(ieee_conf));
+        let profile = vec![
+            Author { id: "A001".into(), given: "Ellrin".into(), family: "Lan".into(), ..Default::default() },
+            Author { id: "A002".into(), given: "Dai-dai".into(), family: "Wu".into(), ..Default::default() },
+        ];
+        // block order; a hyphen in the given name does not matter; unknown people are left out
+        let got: Vec<String> = match_block(ieee, &profile).into_iter().map(|a| a.id).collect();
+        assert_eq!(got, ["A001", "A002"]);
+        assert!(match_block("\\documentclass{article}\n\\begin{document}\n\\end{document}\n", &profile).is_empty());
     }
 }

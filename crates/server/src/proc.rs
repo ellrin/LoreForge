@@ -29,3 +29,19 @@ pub fn std_cmd(program: impl AsRef<OsStr>) -> std::process::Command {
     }
     c
 }
+
+/// Open a URL (or a file) with the system's default program. Callers pass
+/// fixed URLs or checked paths only: the local API must not open arbitrary links.
+pub fn open_in_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut cmd = std_cmd("open");
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std_cmd("rundll32");
+        c.arg("url.dll,FileProtocolHandler");
+        c
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut cmd = std_cmd("xdg-open");
+    cmd.arg(url).spawn().map(|_| ()).map_err(|e| format!("無法開啟瀏覽器：{e}"))
+}

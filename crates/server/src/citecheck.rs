@@ -39,6 +39,14 @@ pub struct Guess {
     pub note: String,
 }
 
+/// The reply `extract_prompt` asks for.
+pub fn extract_schema() -> serde_json::Value {
+    use pc_core::compose::{json_array, json_object, json_string};
+    let fields = ["title", "authors", "year", "venue", "volume", "issue", "pages", "doi", "pmid", "arxiv", "note"];
+    let paper = json_object(&fields.iter().map(|f| (*f, json_string())).collect::<Vec<_>>());
+    json_object(&[("papers", json_array(paper))])
+}
+
 pub fn extract_prompt(text: &str) -> Prompt {
     let system = "You split text that lists academic papers into one entry per paper. \
 The text may be a numbered reference list, citations in any style, titles, DOIs, PMIDs, arXiv ids or notes, in any language. \

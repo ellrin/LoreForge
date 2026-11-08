@@ -351,7 +351,9 @@ function edit(p, si, pi) {
   p.replaceChildren(ta);
   p.ondblclick = null;
   fit();
-  ta.focus();
+  // the writing toolbar is sticky: keep the editor's top below it (.page-area scroll-padding in styles.css)
+  ta.focus({ preventScroll: true });
+  ta.scrollIntoView({ block: "nearest" });
 }
 
 // Edit one field of the title block in place: its LaTeX, saved into main.tex.
@@ -918,6 +920,7 @@ function toggleFileMenu() {
   m.style.top = `${r.bottom + 4}px`;
   m.style.left = `${r.left}px`;
   m.hidden = false;
+  keepOnScreen(m);
 }
 
 function fileMenuList() {
@@ -941,6 +944,13 @@ function fileMenuList() {
   imp.prepend(icon("upload"));
   imp.onclick = importForm;
   m.append(add, imp);
+  if (state.paper?.name) {
+    const next = el("button", "", "整理與文獻…");
+    next.prepend(icon("library"));
+    next.title = "這篇論文的期刊模板、檔案整理與 .bib 加入文獻庫";
+    next.onclick = () => importCard(state.paper.name);
+    m.append(next);
+  }
 }
 
 // Form header inside the menu: back to the list, a title, an optional "?".
@@ -956,37 +966,46 @@ function menuForm(title, tip) {
 }
 
 function importForm() {
-  const m = menuForm("匯入", "現有的 LaTeX 論文：.zip、.tar.gz 或 .tex，或 arXiv 上的論文（下載作者上傳的原始檔）。每個 \\section 會成為一個可編輯的章節。");
+  const m = menuForm("匯入論文", "現有的 LaTeX 論文：壓縮檔（.zip、.tar.gz）、單一 .tex、整個資料夾，或 arXiv 上的論文（下載作者上傳的原始檔）。每個 \\section 會成為一個可編輯的章節。匯入後會列出可以整理的檔案與可加入文獻庫的參考文獻，由你決定要不要做。");
   const name = el("input", "field");
   name.placeholder = "論文名稱（可留空）";
   const kv = el("input", "field");
   kv.placeholder = "Key value（必填）：通篇要強調的一件事";
   name.kv = kv;
-  const file = el("button", "ghost wide", "選擇檔案…");
+  const need = () => { if (kv.value.trim()) return true; flash("Key value 必填"); kv.focus(); return false; };
+  const fromPc = el("div", "form-label", "從這台電腦");
+  const row = el("div", "form-row");
+  const file = el("button", "ghost wide", "壓縮檔或 .tex…");
   file.prepend(icon("upload"));
-  file.onclick = () => { if (!kv.value.trim()) { flash("Key value 必填"); kv.focus(); return; } pickProject(name); };
-  const or = el("div", "form-label", "或");
+  file.title = ".zip、.tar.gz 或單一 .tex";
+  file.onclick = () => { if (need()) pickProject(name); };
+  const folder = el("button", "ghost wide", "資料夾…");
+  folder.prepend(icon("folder"));
+  folder.title = "含 main.tex 的論文資料夾（.git 等隱藏檔不會帶入）";
+  folder.onclick = () => { if (need()) pickFolder(name); };
+  row.append(file, folder);
+  const fromArxiv = el("div", "form-label", "從 arXiv");
+  const arow = el("div", "form-row");
   const arxiv = el("input", "field");
-  arxiv.placeholder = "arXiv 編號或網址";
-  const go = el("button", "primary small", "匯入");
-  const run = () => importArxiv(arxiv, name);
+  arxiv.placeholder = "編號或網址，例如 2401.01234";
+  const go = el("button", "primary small", "下載並匯入");
+  const run = () => { if (need()) importArxiv(arxiv, name); };
   go.onclick = run;
   arxiv.onkeydown = (e) => { if (e.key === "Enter") run(); if (e.key === "Escape") m.hidden = true; };
-  const foot = el("div", "form-foot");
-  foot.append(go);
-  m.append(name, kv, file, or, arxiv, foot);
+  arow.append(arxiv, go);
+  m.append(name, kv, fromPc, row, fromArxiv, arow);
+  keepOnScreen(m);
   name.focus();
 }
 
 async function importArxiv(input, nameInput) {
   const id = input.value.trim();
   if (!id) { input.focus(); return; }
-  if (!nameInput.kv.value.trim()) { flash("Key value 必填"); nameInput.kv.focus(); return; }
   input.disabled = true;
   flash("從 arXiv 下載中…", 60000);
   try {
     const r = await api("/api/papers/import-arxiv", { id, name: nameInput.value.trim() || null, key_value: nameInput.kv.value });
-    await opened(r.name);
+    await opened(r.name, r);
   } catch (e) {
     flash(e.message, 6000);
     input.disabled = false;
@@ -994,37 +1013,185 @@ async function importArxiv(input, nameInput) {
   }
 }
 
+const importName = (raw) => raw.replace(/\.(tar\.gz|tgz|zip|gz|tex)$/i, "").replace(/[^\p{L}\p{N} ._-]+/gu, "-").replace(/^[.-]+/, "") || "imported";
+
 // Import a LaTeX project from a file: .zip, .tar.gz or .tex. The name box
 // names it; empty takes the file's name.
 function pickProject(input) {
   const f = el("input");
   f.type = "file";
   f.accept = ".zip,.tar.gz,.tgz,.gz,.tex";
-  f.onchange = async () => {
+  f.onchange = () => {
     const file = f.files[0];
-    if (!file) return;
-    const name = input.value.trim() || file.name.replace(/\.(tar\.gz|tgz|zip|gz|tex)$/i, "").replace(/[^\p{L}\p{N} ._-]+/gu, "-").replace(/^[.-]+/, "") || "imported";
-    input.disabled = true;
-    flash("匯入中…", 60000);
-    try {
-      const r = await fetch(`/api/papers/import?name=${encodeURIComponent(name)}&key_value=${encodeURIComponent(input.kv.value)}`, { method: "POST", body: file });
-      if (!r.ok) throw new Error(await r.text());
-      await opened(name);
-    } catch (e) {
-      flash(e.message, 6000);
-    } finally {
-      input.disabled = false;
-    }
+    if (file) uploadProject(input, input.value.trim() || importName(file.name), file);
   };
   f.click();
 }
 
-async function opened(name) {
+// A whole folder: packed into a tar here (the server unpacks .tar like .tar.gz).
+function pickFolder(input) {
+  const f = el("input");
+  f.type = "file";
+  f.webkitdirectory = true;
+  f.multiple = true;
+  f.onchange = async () => {
+    const files = [...f.files].filter((x) => !(x.webkitRelativePath || x.name).split("/").some((seg) => seg.startsWith(".")));
+    if (!files.length) return;
+    if (!files.some((x) => /\.tex$/i.test(x.name))) { flash("這個資料夾裡沒有 .tex 檔", 5000); return; }
+    const top = (files[0].webkitRelativePath || "").split("/")[0];
+    try {
+      const tar = await packTar(files);
+      uploadProject(input, input.value.trim() || importName(top), tar);
+    } catch (e) { flash(e.message, 6000); }
+  };
+  f.click();
+}
+
+/** A ustar archive of `files` (paths from webkitRelativePath). */
+async function packTar(files) {
+  const enc = new TextEncoder();
+  const parts = [];
+  const field = (h, off, len, str) => { const b = enc.encode(str); if (b.length > len) throw new Error(`路徑太長：${str}`); h.set(b, off); };
+  const octal = (n, len) => n.toString(8).padStart(len - 1, "0") + "\0";
+  for (const f of files) {
+    const path = f.webkitRelativePath || f.name;
+    const bytes = enc.encode(path);
+    let name = path, prefix = "";
+    if (bytes.length > 100) {
+      // split at a "/" so that the name part fits in 100 bytes
+      const cut = [...path].map((c, i) => (c === "/" ? i : -1)).filter((i) => i > 0 && enc.encode(path.slice(i + 1)).length <= 100 && enc.encode(path.slice(0, i)).length <= 155)[0];
+      if (cut == null) throw new Error(`路徑太長：${path}`);
+      prefix = path.slice(0, cut); name = path.slice(cut + 1);
+    }
+    const data = new Uint8Array(await f.arrayBuffer());
+    const h = new Uint8Array(512);
+    field(h, 0, 100, name);
+    field(h, 100, 8, "0000644\0");
+    field(h, 108, 8, "0000000\0");
+    field(h, 116, 8, "0000000\0");
+    field(h, 124, 12, octal(data.length, 12));
+    field(h, 136, 12, octal(Math.floor((f.lastModified || Date.now()) / 1000), 12));
+    h.fill(32, 148, 156); // checksum counted as spaces
+    h[156] = 48; // "0": regular file
+    field(h, 257, 6, "ustar\0");
+    field(h, 263, 2, "00");
+    field(h, 345, 155, prefix);
+    const sum = h.reduce((a, b) => a + b, 0);
+    field(h, 148, 8, octal(sum, 7) + " ");
+    parts.push(h, data, new Uint8Array((512 - (data.length % 512)) % 512));
+  }
+  parts.push(new Uint8Array(1024));
+  return new Blob(parts, { type: "application/x-tar" });
+}
+
+async function uploadProject(input, name, body) {
+  input.disabled = true;
+  flash("匯入中…", 60000);
+  try {
+    const r = await fetch(`/api/papers/import?name=${encodeURIComponent(name)}&key_value=${encodeURIComponent(input.kv.value)}`, { method: "POST", body });
+    if (!r.ok) throw new Error(await r.text());
+    await opened(name, await r.json().catch(() => null));
+  } catch (e) {
+    flash(e.message, 6000);
+  } finally {
+    input.disabled = false;
+  }
+}
+
+async function opened(name, result) {
   state.workspace = await api("/api/workspace");
   $("#fileMenu").hidden = true;
-  await openPaper(name);
+  await openPaper(result?.name || name);
   refreshGit();
-  flash(`已建立 ${name}`);
+  flash(`已匯入 ${result?.name || name}`);
+  if (result) importCard(result.name || name, result, true);
+}
+
+// After an import (or from the paper menu): which journal template the paper
+// matched, what tidying would change, and how many references could go into
+// the library. Nothing happens until a button says so.
+async function importCard(name, info, fresh = false) {
+  if (!info) {
+    try { info = await api(`/api/papers/${encodeURIComponent(name)}/import-summary`); }
+    catch (e) { flash(e.message, 6000); return; }
+  }
+  const m = menuForm(fresh ? "匯入完成：下一步" : "整理與文獻", "整理只動這篇論文的資料夾：圖檔改成沒有空格的名字（\\includegraphics 跟著改）、移除沒載入的 .cls，並讓 Git 略過編譯產生的 *-eps-converted-to.pdf。加入文獻庫會把論文自己的 .bib 條目複製到 refs/library.bib，已有的（同 key 或同 DOI）會略過。");
+  const r = $("#actFile").getBoundingClientRect();
+  m.style.top = `${r.bottom + 4}px`;
+  m.style.left = `${r.left}px`;
+  m.classList.add("next-card");
+  const line = (label, ...content) => {
+    const d = el("div", "nc-row");
+    d.append(el("span", "nc-label", label), ...content);
+    m.append(d);
+    return d;
+  };
+  // journal
+  if (info.journal) line("期刊", el("span", "", info.journal_name || info.journal), el("span", "nc-sub", "由 .cls 比對出的模板"));
+  else line("期刊", el("span", "nc-sub", "沒有對到 publishers/ 裡的模板；論文自帶的 class 照常使用"));
+  if (fresh && info.authors) line("作者", info.authors.length ? el("span", "", info.authors.join("、")) : el("span", "nc-sub", "\\author 裡沒有作者資料庫的人"));
+  // tidy
+  const plan = info.tidy;
+  const tidyBox = line("整理");
+  if (info.tidied) tidyBox.append(el("span", "nc-ok", "已整理"));
+  else if (!plan || (!plan.renames?.length && !plan.remove?.length && !plan.gitignore?.length)) tidyBox.append(el("span", "nc-sub", "不需要整理"));
+  else {
+    const ul = el("ul", "nc-list");
+    for (const [from, to] of plan.renames ?? []) { const li = el("li"); li.append(el("code", "", from), " → ", el("code", "", to)); ul.append(li); }
+    for (const f of plan.remove ?? []) { const li = el("li"); li.append("刪除沒用到的 ", el("code", "", f)); ul.append(li); }
+    for (const g of plan.gitignore ?? []) { const li = el("li"); li.append(".gitignore 加入 ", el("code", "", g), "（編譯時產生的檔案，保留但不同步）"); ul.append(li); }
+    const go = el("button", "primary small", "整理");
+    go.onclick = async () => {
+      go.disabled = true;
+      try {
+        const done = await api(`/api/papers/${encodeURIComponent(name)}/tidy`, {});
+        const n = (done.renames?.length ?? 0) + (done.remove?.length ?? 0) + (done.gitignore?.length ?? 0);
+        ul.replaceWith(el("span", "nc-ok", `已整理 ${n} 項`));
+        go.remove();
+        if (done.renames?.length) await openPaper(name);
+        refreshGit();
+      } catch (e) { flash(e.message, 6000); go.disabled = false; }
+    };
+    tidyBox.append(ul, go);
+  }
+  // bibliography
+  const bib = info.bib;
+  const bibBox = line("文獻");
+  if (!bib || !bib.files?.length) bibBox.append(el("span", "nc-sub", "論文沒有自己的 .bib"));
+  else {
+    const n = bib.added?.length ?? 0, k = bib.skipped?.length ?? 0;
+    const txt = el("span", "", n ? `${bib.files.join("、")}：${n} 筆可加入文獻庫` : `${bib.files.join("、")} 的條目都已在文獻庫`);
+    bibBox.append(txt);
+    if (k) bibBox.append(el("span", "nc-sub", `${k} 筆已在庫中，會略過`));
+    if (bib.errors?.length) bibBox.append(el("span", "nc-sub", `${bib.errors.length} 筆讀不懂：${bib.errors.slice(0, 2).join("；")}`));
+    if (n) {
+      const go = el("button", "primary small", "加入文獻庫");
+      go.onclick = async () => {
+        go.disabled = true;
+        try {
+          const done = await api(`/api/papers/${encodeURIComponent(name)}/bib/merge`, {});
+          txt.replaceWith(el("span", "nc-ok", `已加入 ${done.added?.length ?? 0} 筆`));
+          go.remove();
+          refreshGit();
+        } catch (e) { flash(e.message, 6000); go.disabled = false; }
+      };
+      bibBox.append(go);
+    }
+  }
+  const foot = el("div", "form-foot");
+  const ok = el("button", "ghost small", "完成");
+  ok.onclick = () => { m.hidden = true; };
+  foot.append(ok);
+  m.append(foot);
+  m.hidden = false;
+  keepOnScreen(m);
+}
+
+/** A popup menu moved left as far as needed to stay inside a narrow window. */
+function keepOnScreen(m) {
+  const w = m.offsetWidth;
+  const left = parseFloat(m.style.left) || 0;
+  if (left + w > innerWidth - 8) m.style.left = `${Math.max(8, innerWidth - w - 8)}px`;
 }
 
 // templates

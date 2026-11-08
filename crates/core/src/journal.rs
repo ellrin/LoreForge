@@ -289,6 +289,81 @@ pub fn write_sample(publishers: &Path, id: &str, text: &str) -> Result<(), Strin
     crate::paper::write_atomic(&dir.join("sample.tex"), text).map_err(|e| e.to_string())
 }
 
+/// FNV-1a: enough to tell files apart (length is compared too).
+fn fingerprint(bytes: &[u8]) -> (usize, u64) {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    (bytes.len(), h)
+}
+
+/// The `.cls` / `.sty` files beside a paper's main.tex that it loads: its
+/// `\documentclass` and every `\usepackage` / `\RequirePackage`, with the
+/// class first. Files that only sit in the folder do not count.
+pub fn used_style_files(paper: &Path) -> Vec<PathBuf> {
+    let main = std::fs::read(paper.join("main.tex")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let mut names: Vec<String> = document_class(&main).map(|(_, _, c)| vec![format!("{c}.cls")]).unwrap_or_default();
+    let begin = main.find("\\begin{document}").unwrap_or(main.len());
+    for (_, code) in code_lines(&main[..begin]) {
+        for cmd in ["\\usepackage", "\\RequirePackage"] {
+            let mut rest = code;
+            while let Some(i) = rest.find(cmd) {
+                rest = &rest[i + cmd.len()..];
+                let r = rest.trim_start();
+                let r = if r.starts_with('[') { r.find(']').map_or("", |e| &r[e + 1..]) } else { r };
+                if let Some(arg) = r.trim_start().strip_prefix('{').and_then(|a| a.split('}').next()) {
+                    names.extend(arg.split(',').map(|n| format!("{}.sty", n.trim())).filter(|n| n.len() > 4));
+                }
+            }
+        }
+    }
+    names.into_iter().map(|n| paper.join(n)).filter(|p| p.is_file()).collect()
+}
+
+/// The template a paper was written with: the publisher folder holding
+/// byte-identical copies of the class and style files the paper loads (the
+/// class must be among them). `None` when nothing matches or two templates
+/// match equally well (IEEEtran.cls alone fits every IEEE template).
+pub fn detect(publishers: &Path, paper: &Path) -> Option<String> {
+    let used = used_style_files(paper);
+    let class_local = used.first().is_some_and(|p| p.extension().is_some_and(|x| x == "cls"));
+    let ours: Vec<(usize, u64)> = used.iter().filter_map(|p| std::fs::read(p).ok()).map(|b| fingerprint(&b)).collect();
+    if ours.is_empty() {
+        return None;
+    }
+    let mut best: Vec<(usize, String)> = Vec::new();
+    for e in std::fs::read_dir(publishers).ok()?.flatten() {
+        let id = e.file_name().to_string_lossy().to_string();
+        if !e.path().is_dir() || !crate::paper::safe_name(&id) {
+            continue;
+        }
+        let theirs: Vec<(usize, u64)> = std::fs::read_dir(e.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|f| f.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "cls" || x == "sty"))
+            .filter_map(|p| std::fs::read(p).ok())
+            .map(|b| fingerprint(&b))
+            .collect();
+        if class_local && !theirs.contains(&ours[0]) {
+            continue;
+        }
+        let n = ours.iter().filter(|f| theirs.contains(f)).count();
+        if n > 0 {
+            best.push((n, id));
+        }
+    }
+    best.sort();
+    match best.as_slice() {
+        [.., (a, _), (b, _)] if a == b => None,
+        [.., (_, id)] => Some(id.clone()),
+        [] => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,6 +420,34 @@ mod tests {
         let j = update(&root, &t, Update { meta: Meta { name: "IEEE Transactions on Medical Imaging".into(), ..Default::default() }, class_options: Some("journal".into()), bib_style: Some("IEEEtranN".into()) }).unwrap();
         assert_eq!((j.class_options.as_str(), j.bib_style.as_str()), ("journal", "IEEEtranN"));
         assert!(create(&root, Meta { name: "IEEE Transactions on Medical Imaging".into(), short: "TMI".into(), ..Default::default() }, "ieee-journal").unwrap() == "tmi-2");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detects_the_template_by_its_files() {
+        let root = setup("detect");
+        let pubs = root.join("publishers");
+        for (id, files) in [("demo-a", vec![("demo.cls", "class v2"), ("demo-logo.sty", "logo")]), ("demo-b", vec![("demo.cls", "class v1")]), ("plain-1", vec![("common.cls", "c")]), ("plain-2", vec![("common.cls", "c")])] {
+            std::fs::create_dir_all(pubs.join(id)).unwrap();
+            for (f, body) in files {
+                std::fs::write(pubs.join(id).join(f), body).unwrap();
+            }
+        }
+        let paper = root.join("paper");
+        std::fs::create_dir_all(&paper).unwrap();
+        std::fs::write(paper.join("main.tex"), "\\documentclass[journal]{demo}\n\\usepackage{demo-logo,amsmath}\n% \\usepackage{old}\n\\begin{document}\nx\n\\end{document}\n").unwrap();
+        std::fs::write(paper.join("demo.cls"), "class v2").unwrap();
+        std::fs::write(paper.join("demo-logo.sty"), "logo").unwrap();
+        std::fs::write(paper.join("old.sty"), "unused").unwrap();
+        std::fs::write(paper.join("common.cls"), "c").unwrap(); // in the folder, not loaded
+        assert_eq!(used_style_files(&paper).len(), 2);
+        assert_eq!(detect(&pubs, &paper).as_deref(), Some("demo-a"));
+        // An edited class matches nothing.
+        std::fs::write(paper.join("demo.cls"), "class v3").unwrap();
+        assert_eq!(detect(&pubs, &paper), None);
+        // Two templates with the same class: ambiguous.
+        std::fs::write(paper.join("main.tex"), "\\documentclass{common}\n\\begin{document}\n\\end{document}\n").unwrap();
+        assert_eq!(detect(&pubs, &paper), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

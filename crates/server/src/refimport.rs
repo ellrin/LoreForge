@@ -338,6 +338,24 @@ pub async fn openalex_search(query: &str, steer: &Steer, this_year: u32) -> Resu
         .collect())
 }
 
+/// The reply `queries_prompt` asks for.
+pub fn queries_schema() -> serde_json::Value {
+    use pc_core::compose::{json_array, json_object, json_string};
+    json_object(&[("queries", json_array(json_string()))])
+}
+
+/// The reply `rank_prompt` asks for.
+pub fn rank_schema() -> serde_json::Value {
+    use pc_core::compose::{json_array, json_object, json_string};
+    json_object(&[("picks", json_array(json_object(&[("id", serde_json::json!({ "type": "integer" })), ("reason", json_string())])))])
+}
+
+/// The reply `notes_prompt` asks for.
+pub fn notes_schema() -> serde_json::Value {
+    use pc_core::compose::{json_array, json_object, json_string};
+    json_object(&[("summary", json_string()), ("one_liner", json_string()), ("tags", json_array(json_string()))])
+}
+
 pub fn queries_prompt(request: &str, steer_labels: &[String]) -> Prompt {
     Prompt {
         system: "You turn a researcher's request into searches for a scholarly database (OpenAlex full-text search). \

@@ -90,6 +90,20 @@ fn hint_for(msg: &str) -> Option<String> {
         let pkg = f.trim_end_matches(".sty").trim_end_matches(".cls");
         return Some(format!("缺少 {f}：sudo tlmgr install {pkg}"));
     }
+    // "Font OT1/phv/m/n/24=phvr7t at 24.0pt not loadable: Metric (TFM) file not found."
+    if msg.contains("not loadable") && msg.contains("TFM") {
+        let tfm = msg.split_once('=').map(|(_, r)| r.split_whitespace().next().unwrap_or("")).unwrap_or("").to_string();
+        let search = format!("tlmgr search --global --file /{tfm}.tfm");
+        return Some(match font_package(&tfm) {
+            Some(pkg) => format!("缺少字型 {tfm}：sudo tlmgr install {pkg}（不確定時用 {search} 找出套件）"),
+            None if !tfm.is_empty() => format!("缺少字型 {tfm}：用 {search} 找出它屬於哪個套件，再 sudo tlmgr install 該套件"),
+            None => "缺少字型：用 tlmgr search --global --file 找出它屬於哪個套件再安裝".into(),
+        });
+    }
+    // fontspec (XeLaTeX / LuaLaTeX): a system font the computer does not have
+    if let Some(f) = between(msg, "The font \"", '"') {
+        return Some(format!("這台電腦沒有安裝字型「{f}」：安裝它，或在 main.tex 換成已安裝的字型"));
+    }
     if msg.contains("Undefined control sequence") {
         return Some("指令拼錯，或少載入它的套件".into());
     }
@@ -100,6 +114,27 @@ fn hint_for(msg: &str) -> Option<String> {
         return Some("表格外的 & 要寫成 \\&".into());
     }
     None
+}
+
+/// The TeX Live package of a PostScript font by its Karl Berry name prefix
+/// (`phvr7t` → helvetic); BasicTeX leaves most of them out.
+fn font_package(tfm: &str) -> Option<&'static str> {
+    const FONTS: &[(&str, &str)] = &[
+        ("phv", "helvetic"),
+        ("ptm", "times"),
+        ("pcr", "courier"),
+        ("ppl", "palatino"),
+        ("pbk", "bookman"),
+        ("pag", "avantgar"),
+        ("pnc", "ncntrsbk"),
+        ("pzc", "zapfchan"),
+        ("psy", "symbol"),
+        ("pzd", "zapfding"),
+        ("ec", "ec"),
+        ("tc", "ec"),
+        ("sf", "cm-super"),
+    ];
+    FONTS.iter().find(|(p, _)| tfm.starts_with(p)).map(|(_, k)| *k)
 }
 
 /// Read a log written with -file-line-error and max_print_line large enough
@@ -714,6 +749,9 @@ Output written on /tmp/b/main.pdf (5 pages, 12345 bytes).
         assert_eq!((i.overfull, i.pages, i.rerun), (2, Some(5), true));
         assert_eq!(i.undefined_cites, ["smith2020"]);
         assert_eq!(i.undefined_refs, ["fig:x"]);
+        let font = parse_log("! Font OT1/phv/m/n/24=phvr7t at 24.0pt not loadable: Metric (TFM) file not found.\n<to be read again>\nl.74 \\maketitle\n");
+        let h = font.errors[0].hint.as_deref().unwrap();
+        assert!(h.contains("sudo tlmgr install helvetic") && h.contains("tlmgr search --global --file /phvr7t.tfm"), "{h}");
         let bare = parse_log("! Emergency stop.\n<*> main.tex\n");
         assert_eq!(bare.errors[0].message, "Emergency stop.");
         assert_eq!(bare.errors[0].file, None);

@@ -6,6 +6,14 @@ use pc_core::compose::Prompt;
 use pc_core::meta::{OutlineSection, OutlineSub};
 use serde::{Deserialize, Serialize};
 
+/// The reply `outline_prompt` asks for.
+pub fn plan_schema() -> serde_json::Value {
+    use pc_core::compose::{json_array, json_object, json_string};
+    let sub = json_object(&[("title", json_string()), ("intent", json_string())]);
+    let section = json_object(&[("title", json_string()), ("intent", json_string()), ("subsections", json_array(sub))]);
+    json_object(&[("titles", json_array(json_string())), ("sections", json_array(section))])
+}
+
 pub fn outline_prompt(outline: &str, key_value: &str, template_sections: &[String], language: &str) -> Prompt {
     let lang = if language.starts_with("zh") { "Traditional Chinese" } else { "English" };
     let system = format!(

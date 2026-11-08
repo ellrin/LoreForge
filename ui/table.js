@@ -16,6 +16,7 @@ const PCTable = (() => {
   const fits = new Map(); // table JSON → measurement result
 
   const isTable = (text) => TABLE_RE.test(text);
+  const RESIZED_RE = /\\resizebox\*?\s*\{\s*\\(textwidth|linewidth|columnwidth|hsize)|\\begin\{adjustbox\}\s*\{[^}]*\bwidth\s*=/;
 
   async function parsed(text) {
     if (!cache.has(text)) {
@@ -200,7 +201,15 @@ const PCTable = (() => {
       });
       table.append(tr);
     });
-    fig.append(table);
+    // \resizebox{\textwidth}{!}{…} / adjustbox width=…: LaTeX scales the table
+    // to the text width, so the preview does too instead of running off the page.
+    if (t.before.some((l) => RESIZED_RE.test(PCTex.stripComments(l)))) {
+      const wrap = el("div", "tbl-scale");
+      wrap.title = "LaTeX 會把這個表格縮放到版面寬度（\\resizebox）";
+      wrap.append(table);
+      fig.append(wrap);
+      fitWidth(wrap, table);
+    } else fig.append(table);
     if (t.caption_below) { const c = cap(); if (c) fig.append(c); }
     // Lines around the tabular: layout commands vanish, notes are shown.
     const notes = [...t.before, ...t.after].map((l) => PCTex.stripComments(l).trim())
@@ -213,6 +222,29 @@ const PCTable = (() => {
     }
     p.append(fig);
     if (active === box) p.append(toolbar(box));
+  }
+
+  /** Scale `table` down to the width of `wrap` (kept in step when the page is resized or zoomed). */
+  function fitWidth(wrap, table) {
+    let lastW = -1;
+    const apply = () => {
+      const avail = wrap.clientWidth;
+      if (!avail || avail === lastW && table.dataset.scaled) return;
+      lastW = avail;
+      table.style.transform = "";
+      wrap.style.height = "";
+      const w = table.offsetWidth;
+      if (!w) return;
+      const k = Math.min(1, avail / w);
+      table.dataset.scaled = String(k);
+      table.style.margin = k < 1 ? "0" : "0 auto";
+      if (k < 1) {
+        table.style.transform = `scale(${k})`;
+        wrap.style.height = `${Math.ceil(table.offsetHeight * k)}px`;
+      }
+    };
+    requestAnimationFrame(apply);
+    if (window.ResizeObserver) new ResizeObserver(apply).observe(wrap);
   }
 
   // Selection and toolbar change without rebuilding the table, so a second

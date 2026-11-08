@@ -1,9 +1,11 @@
-//! Local models: catalog, system check, downloads, and the llama.cpp runtime.
+//! Local models: system check, downloads, and the llama.cpp runtime.
 //!
-//! The catalog is data (models/catalog.json): a new model is a new entry.
-//! Files are resolved at download time through the Hugging Face API by
-//! suffix, and llama.cpp comes from its latest GitHub release, so neither
-//! exact build names nor download links are hard-coded.
+//! The catalog is ym-llm's shared `catalog.json` (a new model is a new
+//! entry); a user may replace it with `models/catalog.json` in the app data
+//! folder, in the same shape. Files are resolved at download time through the
+//! Hugging Face API by suffix, and llama.cpp comes from its latest GitHub
+//! release, so neither exact build names nor download links are hard-coded.
+//! Starting and stopping llama-server is ym-llm's `LocalRuntime`.
 //!
 //! Nothing downloads without the user first seeing the plan (file names,
 //! sizes, sources) and confirming it.
@@ -15,53 +17,34 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use tokio::process::Child;
 use tokio::sync::Mutex;
+use ym_llm::catalog::{Catalog, Machine, Model};
+use ym_llm::local::{self, Layout, LocalRuntime, Phase};
 
-const CATALOG: &str = include_str!("../../../models/catalog.json");
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Catalog {
-    pub version: u32,
-    pub default: String,
-    pub models: Vec<ModelEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelEntry {
-    pub id: String,
-    pub name: String,
-    pub variant: String,
-    #[serde(default)]
-    pub summary: String,
-    pub repo: String,
-    pub file_suffix: String,
-    #[serde(default)]
-    pub mmproj_suffix: Option<String>,
-    pub approx_gb: f32,
-    pub min_memory_gb: u32,
-    #[serde(default = "default_ctx")]
-    pub context: u32,
-    #[serde(default)]
-    pub license: String,
-    #[serde(default)]
-    pub vision: bool,
-    /// Refusal removed (abliterated). Shown with a tag, never recommended.
-    #[serde(default)]
-    pub uncensored: bool,
-}
-
-fn default_ctx() -> u32 {
-    32768
-}
-
-/// Bundled catalog, or a user override in the app data folder.
+/// The shared catalog, or a user override in the app data folder. Without
+/// an override, the descriptions are PaperComposer's own
+/// (`model_summaries.json`): the shared ones are worded for every app.
 pub fn catalog() -> Catalog {
     let user = data_dir().join("models/catalog.json");
-    std::fs::read_to_string(user)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::from_str(CATALOG).expect("bundled catalog is valid"))
+    let mut c = Catalog::load(Some(&user));
+    if !user.is_file() {
+        apply_summaries(&mut c);
+    }
+    c
+}
+
+/// Replace the descriptions of the models `model_summaries.json` names.
+pub fn apply_summaries(c: &mut Catalog) {
+    #[derive(Deserialize)]
+    struct Summaries {
+        summaries: HashMap<String, String>,
+    }
+    let Ok(s) = serde_json::from_str::<Summaries>(include_str!("model_summaries.json")) else { return };
+    for m in &mut c.models {
+        if let Some(t) = s.summaries.get(&m.id) {
+            m.summary = t.clone();
+        }
+    }
 }
 
 pub fn data_dir() -> PathBuf {
@@ -72,23 +55,31 @@ pub fn data_dir() -> PathBuf {
 /// on this machine uses one copy: `LOCAL_LLM_HOME`, then `local_llm_home` in
 /// config.toml (apps opened from Finder do not see shell variables).
 pub fn llm_home() -> Option<PathBuf> {
-    std::env::var_os("LOCAL_LLM_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| crate::read_config().local_llm_home)
+    local::home(crate::read_config().local_llm_home.as_deref())
 }
 
-/// Model files, laid out as `<owner>/<repo>/<file>` like `hf download --local-dir`,
-/// so models fetched outside the app are found too.
+/// Where models and llama.cpp live: the shared folder (`gguf/`,
+/// `runtimes/llama.cpp/`), else the app's data folder as the first versions
+/// laid it out (`models/`, `llama.cpp/`). Weights are always
+/// `<owner>/<repo>/<file>` like `hf download --local-dir`.
+pub fn layout() -> Layout {
+    match llm_home() {
+        Some(h) => Layout::shared(&h),
+        None => Layout::new(data_dir().join("models"), data_dir().join("llama.cpp")),
+    }
+}
+
 fn models_dir() -> PathBuf {
-    llm_home().map(|h| h.join("gguf")).unwrap_or_else(|| data_dir().join("models"))
+    layout().gguf
 }
 fn runtime_dir() -> PathBuf {
-    llm_home().map(|h| h.join("runtimes/llama.cpp")).unwrap_or_else(|| data_dir().join("llama.cpp"))
+    layout().runtime
 }
-/// The app's own records (installed manifests, catalog override) stay private to the app.
-fn manifests_dir() -> PathBuf {
-    data_dir().join("models")
+
+/// Catalog brains already in the model folder (downloaded here, by another
+/// project, or with `hf download`).
+pub fn installed(cat: &Catalog) -> Vec<String> {
+    layout().installed(cat, true).into_iter().map(|m| m.id.clone()).collect()
 }
 
 // ── System check ────────────────────────────────────────
@@ -133,13 +124,8 @@ pub async fn system_info() -> SystemInfo {
 /// (a 4B at Q8 is a bigger file than a 12B at Q4). Uncensored models are
 /// never recommended.
 pub fn recommend(cat: &Catalog, sys: &SystemInfo) -> Option<String> {
-    // Unified memory and discrete GPUs both count; take the larger pool.
-    let pool = sys.memory_gb.max(sys.gpu_memory_gb.unwrap_or(0.0));
-    let fits: Vec<&ModelEntry> = cat.models.iter().filter(|m| !m.uncensored && pool + 0.5 >= m.min_memory_gb as f32).collect();
-    fits.iter()
-        .find(|m| m.id == cat.default)
-        .or_else(|| fits.iter().max_by(|a, b| a.min_memory_gb.cmp(&b.min_memory_gb).then(a.approx_gb.total_cmp(&b.approx_gb))))
-        .map(|m| m.id.clone())
+    // Unified memory and discrete GPUs both count; ym-llm takes the larger pool.
+    ym_llm::catalog::recommend(cat, &Machine { memory_gb: sys.memory_gb as f64, gpu_memory_gb: sys.gpu_memory_gb.map(f64::from) })
 }
 
 // ── Download plan ───────────────────────────────────────
@@ -156,7 +142,7 @@ pub struct PlannedFile {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Plan {
-    pub model: ModelEntry,
+    pub model: Model,
     pub files: Vec<PlannedFile>,
     pub total_to_download: u64,
 }
@@ -246,22 +232,7 @@ fn runtime_patterns(sys: &SystemInfo) -> Vec<&'static str> {
 }
 
 pub fn runtime_binary() -> Option<PathBuf> {
-    let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
-    find_file(&runtime_dir(), exe)
-}
-
-fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
-    for e in std::fs::read_dir(dir).ok()?.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            if let Some(f) = find_file(&p, name) {
-                return Some(f);
-            }
-        } else if e.file_name() == name {
-            return Some(p);
-        }
-    }
-    None
+    layout().find_runtime()
 }
 
 async fn runtime_asset(sys: &SystemInfo) -> Result<PlannedFile, String> {
@@ -298,9 +269,8 @@ fn pick_runtime(releases: &[Release], sys: &SystemInfo) -> Option<PlannedFile> {
     })
 }
 
-pub async fn plan(id: &str) -> Result<Plan, String> {
-    let cat = catalog();
-    let model = cat.models.iter().find(|m| m.id == id).cloned().ok_or("目錄裡沒有這個模型")?;
+pub async fn plan(cat: &Catalog, id: &str) -> Result<Plan, String> {
+    let model = cat.brains(true).find(|m| m.id == id).cloned().ok_or("目錄裡沒有這個模型")?;
     let mut files = Vec::new();
     let mut f = hf_find(&model.repo, &model.file_suffix).await?;
     f.kind = "model".into();
@@ -331,19 +301,32 @@ pub struct Progress {
 #[derive(Default)]
 pub struct Manager {
     pub progress: Mutex<HashMap<String, Progress>>,
-    pub runtime: Mutex<Option<Running>>,
-    /// "idle" | "downloading" | "starting" | "ready" | "error: …"
-    pub phase: Mutex<String>,
-    /// One start at a time: the app restores the last model at launch, and a
-    /// pick from the menu meanwhile would load two large models at once,
-    /// overflow GPU memory, and time out.
-    pub starting: Mutex<()>,
+    /// The llama-server, one at a time: the app restores the last model at
+    /// launch, and a pick from the menu meanwhile would otherwise load two
+    /// large models at once and overflow GPU memory.
+    pub runtime: Arc<LocalRuntime>,
+    /// Downloading, or why a download or start failed; `None` = the
+    /// runtime's own state.
+    note: Mutex<Option<String>>,
 }
 
-pub struct Running {
-    pub child: Child,
-    pub model_id: String,
-    pub url: String,
+impl Manager {
+    /// "idle" | "downloading" | "starting" | "ready" | "error: …"
+    pub async fn phase(&self) -> String {
+        if let Some(n) = self.note.lock().await.clone() {
+            return n;
+        }
+        match self.runtime.phase() {
+            Phase::Idle => "idle".into(),
+            Phase::Starting { .. } => "starting".into(),
+            Phase::Ready { .. } => "ready".into(),
+            Phase::Error { message } => format!("error: {message}"),
+        }
+    }
+
+    pub async fn note(&self, n: Option<String>) {
+        *self.note.lock().await = n;
+    }
 }
 
 async fn download(mgr: &Manager, f: &PlannedFile, dest: &Path) -> Result<(), String> {
@@ -401,7 +384,7 @@ fn extract(archive: &Path, into: &Path) -> Result<(), String> {
 
 /// Download everything in the plan, then start the model. Runs in the background.
 pub async fn install(mgr: Arc<Manager>, plan: Plan) -> Result<(), String> {
-    *mgr.phase.lock().await = "downloading".into();
+    mgr.note(Some("downloading".into())).await;
     std::fs::create_dir_all(models_dir()).map_err(|e| e.to_string())?;
     for f in &plan.files {
         mgr.progress.lock().await.insert(
@@ -417,137 +400,26 @@ pub async fn install(mgr: Arc<Manager>, plan: Plan) -> Result<(), String> {
                 x.state = "error".into();
                 x.error = Some(e.clone());
             }
-            *mgr.phase.lock().await = format!("error: {e}");
+            mgr.note(Some(format!("error: {e}"))).await;
             return Err(e);
         }
         if f.kind == "runtime" {
-            extract(&dest, &runtime_dir())?;
+            if let Err(e) = extract(&dest, &runtime_dir()) {
+                mgr.note(Some(format!("error: {e}"))).await;
+                return Err(e);
+            }
             let _ = std::fs::remove_file(&dest);
         }
     }
-    // Remember which files belong to this model.
-    let manifest = InstalledModel {
-        id: plan.model.id.clone(),
-        model_file: plan.files.iter().find(|f| f.kind == "model").map(|f| f.name.clone()).unwrap_or_default(),
-        mmproj_file: plan.files.iter().find(|f| f.kind == "mmproj").map(|f| f.name.clone()),
-        context: plan.model.context,
-    };
-    std::fs::create_dir_all(manifests_dir()).map_err(|e| e.to_string())?;
-    let path = manifests_dir().join(format!("{}.json", plan.model.id));
-    std::fs::write(path, serde_json::to_string_pretty(&manifest).unwrap()).map_err(|e| e.to_string())?;
+    mgr.note(None).await;
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InstalledModel {
-    pub id: String,
-    pub model_file: String,
-    pub mmproj_file: Option<String>,
-    pub context: u32,
-}
-
-pub fn installed() -> Vec<InstalledModel> {
-    let mut out = Vec::new();
-    for e in std::fs::read_dir(manifests_dir()).into_iter().flatten().flatten() {
-        if e.path().extension().is_some_and(|x| x == "json") && e.file_name() != "catalog.json" {
-            if let Some(m) = std::fs::read_to_string(e.path()).ok().and_then(|s| serde_json::from_str::<InstalledModel>(&s).ok()) {
-                if models_dir().join(&m.model_file).exists() {
-                    out.push(m);
-                }
-            }
-        }
-    }
-    // Catalog models already in the shared store (downloaded by another
-    // project or by `hf download`) count as installed without a manifest.
-    for m in catalog().models {
-        if out.iter().any(|o| o.id == m.id) {
-            continue;
-        }
-        if let Some(model_file) = find_local(&m.repo, &m.file_suffix) {
-            let mmproj_file = m.mmproj_suffix.as_deref().and_then(|s| find_local(&m.repo, s));
-            out.push(InstalledModel { id: m.id, model_file, mmproj_file, context: m.context });
-        }
-    }
-    out
-}
-
-/// `<repo>/<path>` of a complete local file in the repo folder ending with `suffix`.
-fn find_local(repo: &str, suffix: &str) -> Option<String> {
-    let want = suffix.to_lowercase();
-    let root = models_dir().join(repo);
-    let mut hits = Vec::new();
-    let mut stack = vec![root.clone()];
-    while let Some(dir) = stack.pop() {
-        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                if e.file_name() != ".cache" {
-                    stack.push(p);
-                }
-            } else if p.to_string_lossy().to_lowercase().ends_with(&want) {
-                hits.push(p);
-            }
-        }
-    }
-    hits.sort_by_key(|p| p.as_os_str().len()); // same rule as hf_find
-    let rel = hits.first()?.strip_prefix(&root).ok()?.to_string_lossy().replace('\\', "/");
-    Some(format!("{repo}/{rel}"))
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).unwrap_or(8089)
-}
-
-/// Start llama-server for an installed model; returns its /v1 base URL once it answers.
-pub async fn start(mgr: &Manager, id: &str) -> Result<String, String> {
-    let m = installed().into_iter().find(|m| m.id == id).ok_or("這個模型尚未下載")?;
-    let bin = runtime_binary().ok_or("尚未安裝 llama.cpp")?;
-    let _one_at_a_time = mgr.starting.lock().await;
-    stop(mgr).await;
-    *mgr.phase.lock().await = "starting".into();
-    let port = free_port();
-    let mut cmd = crate::proc::cmd(&bin);
-    cmd.arg("-m")
-        .arg(models_dir().join(&m.model_file))
-        // No thinking: Gemma 4 and Qwen reason for a thousand tokens or more
-        // before answering, which at ~10 tokens/s on a laptop turns a
-        // paragraph into minutes. Every task here asks for a fixed JSON shape.
-        .args(["--host", "127.0.0.1", "--port", &port.to_string(), "-c", &m.context.to_string(), "-ngl", "999", "--jinja", "--reasoning-budget", "0"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    if let Some(mm) = &m.mmproj_file {
-        if models_dir().join(mm).exists() {
-            cmd.arg("--mmproj").arg(models_dir().join(mm));
-        }
-    }
-    if let Some(dir) = bin.parent() {
-        cmd.current_dir(dir); // shared libraries ship next to the binary
-    }
-    let mut child = cmd.spawn().map_err(|e| format!("無法啟動 llama.cpp：{e}"))?;
-    let url = format!("http://127.0.0.1:{port}/v1");
-    // Loading a 12B model can take a while on first start.
-    let client = http();
-    for _ in 0..240 {
-        if let Ok(Some(status)) = child.try_wait() {
-            let mut err = String::new();
-            if let Some(mut e) = child.stderr.take() {
-                use tokio::io::AsyncReadExt;
-                let _ = e.read_to_string(&mut err).await;
-            }
-            let tail: String = err.lines().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" ");
-            *mgr.phase.lock().await = format!("error: llama.cpp 結束（{status}）{tail}");
-            return Err(format!("llama.cpp 啟動失敗：{tail}"));
-        }
-        if client.get(format!("{url}/models")).timeout(Duration::from_secs(2)).send().await.is_ok_and(|r| r.status().is_success()) {
-            *mgr.runtime.lock().await = Some(Running { child, model_id: m.id.clone(), url: url.clone() });
-            *mgr.phase.lock().await = "ready".into();
-            return Ok(url);
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-    *mgr.phase.lock().await = "error: 模型啟動逾時".into();
-    Err("模型啟動逾時".into())
+/// Start llama-server for a downloaded model; returns its /v1 base URL once it answers.
+pub async fn start(mgr: &Manager, cat: &Catalog, id: &str) -> Result<String, String> {
+    let m = cat.brains(true).find(|m| m.id == id).ok_or("目錄裡沒有這個模型")?;
+    mgr.note(None).await;
+    mgr.runtime.ensure_in(&layout(), m).await.map(|r| r.url)
 }
 
 static MANAGER: std::sync::OnceLock<Arc<Manager>> = std::sync::OnceLock::new();
@@ -560,18 +432,13 @@ pub fn register(mgr: Arc<Manager>) {
 /// server never outlives the window.
 pub fn kill_runtime() {
     if let Some(mgr) = MANAGER.get() {
-        if let Ok(mut r) = mgr.runtime.try_lock() {
-            if let Some(run) = r.as_mut() {
-                let _ = run.child.start_kill();
-            }
-        }
+        mgr.runtime.kill_now();
     }
 }
 
 pub async fn stop(mgr: &Manager) {
-    if let Some(mut r) = mgr.runtime.lock().await.take() {
-        let _ = r.child.kill().await;
-    }
+    mgr.runtime.stop().await;
+    mgr.note(None).await;
 }
 
 #[cfg(test)]
@@ -579,28 +446,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundled_catalog_parses_and_default_exists() {
-        let c: Catalog = serde_json::from_str(CATALOG).unwrap();
-        assert!(c.models.iter().any(|m| m.id == c.default));
+    fn paper_composer_describes_models_in_its_own_words() {
+        let mut c = Catalog::bundled();
+        apply_summaries(&mut c);
+        for m in c.brains(true) {
+            assert!(!m.summary.contains("字詞") && !m.summary.contains("對話"), "{}: {}", m.id, m.summary);
+        }
+        // every id in the map is still in the shared catalog
+        let s: serde_json::Value = serde_json::from_str(include_str!("model_summaries.json")).unwrap();
+        for id in s["summaries"].as_object().unwrap().keys() {
+            assert!(c.get(id).is_some(), "{id} is not in the shared catalog");
+        }
+    }
+
+    #[test]
+    fn shared_catalog_has_the_default_brain() {
+        let c = Catalog::bundled();
+        assert!(c.brains(true).any(|m| m.id == c.defaults.brain));
+        assert!(c.brains(true).any(|m| m.uncensored), "PaperComposer lists abliterated models too");
     }
 
     #[test]
     fn recommends_by_memory() {
-        let c: Catalog = serde_json::from_str(CATALOG).unwrap();
+        let c = Catalog::bundled();
         let sys = |mem: f32| SystemInfo { os: "windows", arch: "x86_64", memory_gb: mem, gpu: None, gpu_memory_gb: None, unified_memory: false };
         assert_eq!(recommend(&c, &sys(32.0)).as_deref(), Some("gemma-4-12b-q8"));
         assert_eq!(recommend(&c, &sys(16.0)).as_deref(), Some("gemma-4-12b-q4"));
         assert_eq!(recommend(&c, &sys(12.0)).as_deref(), Some("qwen3.5-4b-q8"));
         assert_eq!(recommend(&c, &sys(8.0)), None);
+        // A discrete GPU counts too.
+        let gpu = SystemInfo { gpu_memory_gb: Some(24.0), ..sys(8.0) };
+        assert_eq!(recommend(&c, &gpu).as_deref(), Some("gemma-4-12b-q8"));
     }
 
     #[test]
     fn uncensored_models_are_never_recommended() {
-        let c: Catalog = serde_json::from_str(CATALOG).unwrap();
-        assert!(c.models.iter().any(|m| m.uncensored));
-        let only = Catalog { version: 1, default: String::new(), models: c.models.into_iter().filter(|m| m.uncensored).collect() };
+        let mut only = Catalog::bundled();
+        only.models.retain(|m| m.uncensored);
         let sys = SystemInfo { os: "macos", arch: "aarch64", memory_gb: 128.0, gpu: None, gpu_memory_gb: None, unified_memory: true };
         assert_eq!(recommend(&only, &sys), None);
+    }
+
+    #[tokio::test]
+    async fn phase_reads_downloads_then_the_runtime() {
+        let m = Manager::default();
+        assert_eq!(m.phase().await, "idle");
+        m.note(Some("downloading".into())).await;
+        assert_eq!(m.phase().await, "downloading");
+        stop(&m).await;
+        assert_eq!(m.phase().await, "idle");
     }
 
     #[test]

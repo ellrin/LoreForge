@@ -16,8 +16,13 @@ pub const KEY_VALUE_MAX_WORDS: usize = 30;
 pub struct PaperMeta {
     #[serde(default)]
     pub key_value: String,
-    #[serde(default)]
+    /// Profile authors (ids into authors.csv). Left out of paper.toml when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authors: Vec<PaperAuthor>,
+    /// The template under `publishers/` the paper was written with, when an
+    /// import recognised it (its class and style files match byte for byte).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal: Option<String>,
 }
 
 fn is_cjk(c: char) -> bool {
@@ -131,7 +136,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pc-meta-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(read_meta(&dir), PaperMeta::default());
-        let m = PaperMeta { key_value: "提升效能".into(), authors: vec![PaperAuthor { id: "A001".into(), corresponding: true, equal: false }] };
+        let m = PaperMeta { key_value: "提升效能".into(), authors: vec![PaperAuthor { id: "A001".into(), corresponding: true, equal: false }], ..Default::default() };
         write_meta(&dir, &m).unwrap();
         assert_eq!(read_meta(&dir), m);
         std::fs::remove_dir_all(&dir).unwrap();

@@ -15,7 +15,6 @@ pub mod journal;
 pub mod meta;
 pub mod paper;
 pub mod table;
-pub mod vcs;
 pub mod profile;
 pub mod retrieve;
 pub mod softcheck;

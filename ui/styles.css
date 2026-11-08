@@ -1007,3 +1007,29 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .b-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .b-note { font-size: 11.5px; color: var(--faint); border-left: 2px solid var(--line-strong); padding-left: 6px; margin-top: 2px; white-space: pre-wrap; }
 .batch .np-check { margin-bottom: 4px; }
+/* \resizebox{\textwidth}{!}{…} tables: scaled to the page width like LaTeX does (table.js fitWidth) */
+.tbl-scale { width: 100%; overflow: hidden; }
+.tbl-scale > table { width: max-content; min-width: 0; margin: 0; transform-origin: 0 0; }
+/* paper menu forms: header buttons keep their size so the title never wraps */
+.menu .form-head > button { width: auto; flex: none; }
+.menu .form-head b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu .form-row { display: flex; gap: 6px; align-items: center; }
+.menu .form-row > * { flex: 1; min-width: 0; }
+.menu .form-row > .primary.small { flex: none; white-space: nowrap; padding: 7px 10px; }
+.menu .form-foot button { width: auto; }
+/* import: next-step card */
+.menu.form.next-card { width: min(420px, calc(100vw - 16px)); max-height: calc(100vh - 80px); overflow-y: auto; }
+.next-card .nc-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12.5px; padding: 6px 0; border-top: 1px solid var(--line); }
+.next-card .nc-label { flex: 0 0 3em; color: var(--faint); font-size: 11.5px; }
+.next-card .nc-row > span:not(.nc-label) { flex: 1 1 calc(100% - 4em); min-width: 0; overflow-wrap: anywhere; }
+.next-card .nc-row > .nc-sub { color: var(--faint); font-size: 11.5px; margin-left: calc(3em + 8px); }
+.next-card .nc-row > .nc-label + .nc-sub { margin-left: 0; }
+.next-card .nc-ok { color: var(--ok); }
+.next-card .nc-list { flex: 1 1 calc(100% - 4em); margin: 0; padding-left: 16px; font-size: 12px; overflow-wrap: anywhere; }
+.next-card .nc-list code { font: 11.5px var(--mono); }
+.next-card .nc-row > .primary.small { margin-left: calc(3em + 8px); }
+/* the writing toolbar is sticky over the page: editors and jumps stop below it */
+.page-area { scroll-padding-top: 52px; scroll-padding-bottom: 56px; }
+.menu button.primary { width: auto; background: var(--accent); color: var(--accent-ink); justify-content: center; padding: 6px 12px; font-weight: 700; }
+.menu button.primary:hover { background: var(--accent); filter: brightness(1.06); }
+.menu .form-foot button.ghost { border: 1px solid var(--line-strong); padding: 5px 14px; }

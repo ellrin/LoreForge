@@ -78,6 +78,14 @@ pub struct TexTable {
     /// `\setlength{\tabcolsep}{x}` inside the environment.
     #[serde(default)]
     pub colsep: Option<String>,
+    /// The spacing commands (`stretch`, `colsep`) came after the `before`
+    /// lines, e.g. inside `\resizebox{\textwidth}{!}{%`, and stay there.
+    #[serde(default)]
+    pub spacing_late: bool,
+    /// `\end{tabular}%`: the lines inside a box end with `%`, so the box
+    /// gets no stray spaces (and keeps its width).
+    #[serde(default)]
+    pub tight: bool,
     /// `@{}` at the left / right edge.
     #[serde(default)]
     pub trim_left: bool,
@@ -240,6 +248,7 @@ pub fn parse(src: &str) -> Result<TexTable, String> {
     parse_spec(spec, &mut t)?;
 
     read_extras(pre, &mut t, false);
+    t.tight = post.starts_with('%');
     read_extras(post, &mut t, true);
     parse_body(body, &mut t)?;
     Ok(t)
@@ -312,12 +321,29 @@ fn parse_spec(spec: &str, t: &mut TexTable) -> Result<(), String> {
     Ok(())
 }
 
+/// Comments dropped, but a bare `%` ending a line is kept: in
+/// `\resizebox{..}{!}{%` it stops the line break from becoming a space.
+fn strip_comments_keep_eol(s: &str) -> String {
+    s.lines()
+        .map(|l| {
+            let b = l.as_bytes();
+            match (0..b.len()).find(|&i| b[i] == b'%' && (i == 0 || b[i - 1] != b'\\')) {
+                Some(cut) if l[cut + 1..].trim().is_empty() => &l[..=cut],
+                Some(cut) => &l[..cut],
+                None => l,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Caption, label, centering and font size around the tabular; anything else
 /// is kept verbatim in `before` / `after`.
 fn read_extras(s: &str, t: &mut TexTable, after: bool) {
-    let mut rest = strip_comments(s);
+    let mut rest = strip_comments_keep_eol(s);
     loop {
-        let r = rest.trim_start();
+        // a `%` left after a command read below belongs to that command
+        let r = rest.trim_start_matches(|c: char| c.is_whitespace() || c == '%');
         if r.is_empty() {
             break;
         }
@@ -344,6 +370,9 @@ fn read_extras(s: &str, t: &mut TexTable, after: bool) {
                 if let Some(x) = r.strip_prefix(cmd) {
                     if let Some((v, rr)) = group(x) {
                         let v = Some(v.trim().to_string());
+                        if !after && !t.before.is_empty() {
+                            t.spacing_late = true;
+                        }
                         if slot == 0 { t.stretch = v } else { t.colsep = v }
                         next = Some(rr.to_string());
                         break;
@@ -589,11 +618,8 @@ pub fn render(t: &TexTable) -> String {
         if let Some(f) = &t.font {
             out += &format!("\\{f}\n");
         }
-        if let Some(x) = &t.stretch {
-            out += &format!("\\renewcommand{{\\arraystretch}}{{{x}}}\n");
-        }
-        if let Some(x) = &t.colsep {
-            out += &format!("\\setlength{{\\tabcolsep}}{{{x}}}\n");
+        if !t.spacing_late {
+            spacing(t, &mut out);
         }
         if !t.caption_below {
             caption_label(t, &mut out);
@@ -601,6 +627,9 @@ pub fn render(t: &TexTable) -> String {
         for l in &t.before {
             out += l;
             out.push('\n');
+        }
+        if t.spacing_late {
+            spacing(t, &mut out);
         }
     }
     match &t.width {
@@ -647,7 +676,8 @@ pub fn render(t: &TexTable) -> String {
         out.push('\n');
         line(t.rules.get(r + 1), &mut out);
     }
-    out += if t.width.is_some() { "\\end{tabular*}\n" } else { "\\end{tabular}\n" };
+    out += if t.width.is_some() { "\\end{tabular*}" } else { "\\end{tabular}" };
+    out += if t.tight { "%\n" } else { "\n" };
     if wrapped {
         if t.caption_below {
             caption_label(t, &mut out);
@@ -661,6 +691,18 @@ pub fn render(t: &TexTable) -> String {
         out.truncate(out.trim_end().len());
     }
     out
+}
+
+/// `\renewcommand{\arraystretch}` and `\setlength{\tabcolsep}`; inside a
+/// tight box each line ends with `%`.
+fn spacing(t: &TexTable, out: &mut String) {
+    let eol = if t.tight && t.spacing_late { "%\n" } else { "\n" };
+    if let Some(x) = &t.stretch {
+        *out += &format!("\\renewcommand{{\\arraystretch}}{{{x}}}{eol}");
+    }
+    if let Some(x) = &t.colsep {
+        *out += &format!("\\setlength{{\\tabcolsep}}{{{x}}}{eol}");
+    }
 }
 
 fn caption_label(t: &TexTable, out: &mut String) {
@@ -1181,6 +1223,45 @@ A & 70.1 & 89.2 & 1.2 \\
         let again = parse(&render(&t)).unwrap();
         assert_eq!(again, t);
         assert!(render(&t).contains("\\multirow{2}{*}{Method} & \\multicolumn{2}{c|}{Accuracy} & Time \\\\"));
+    }
+
+    #[test]
+    fn a_resized_table_keeps_its_percent_signs_and_spacing() {
+        let src = r"\begin{table*}[!t]
+\centering
+\caption{Scores of the methods, with
+95\% intervals.}
+\label{tab:scores}
+\resizebox{\textwidth}{!}{%
+\setlength{\tabcolsep}{4pt}%
+\begin{tabular}{lcc}
+\toprule
+Method & AUC & SEN \\
+\midrule
+A & 0.91 & 0.80 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}";
+        let t = parse(src).unwrap();
+        assert_eq!(t.colsep.as_deref(), Some("4pt"));
+        assert!(t.spacing_late && t.tight);
+        assert_eq!(t.before, ["\\resizebox{\\textwidth}{!}{%"]);
+        assert_eq!(t.after, ["}"]);
+        let out = render(&t);
+        assert!(out.contains("\\label{tab:scores}\n\\resizebox{\\textwidth}{!}{%\n\\setlength{\\tabcolsep}{4pt}%\n\\begin{tabular}{lcc}\n"), "{out}");
+        assert!(out.contains("\\end{tabular}%\n}\n\\end{table*}"), "{out}");
+        assert_eq!(parse(&out).unwrap(), t, "round trip");
+        // Same tokens as the source: only line breaks between words may differ.
+        let tokens = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>().join(" ");
+        assert_eq!(tokens(&out.replace("}\\label", "}\n\\label")), tokens(src));
+
+        // A plain table keeps its spacing at the top, without `%`.
+        let plain = parse("\\begin{table}\n\\setlength{\\tabcolsep}{3pt}\n\\begin{tabular}{l}\nx \\\\\n\\end{tabular}\n\\end{table}").unwrap();
+        assert!(!plain.spacing_late && !plain.tight);
+        assert!(render(&plain).starts_with("\\begin{table}\n\\setlength{\\tabcolsep}{3pt}\n\\begin{tabular}{l}"));
+        let scaled = parse("\\begin{table}\n\\scalebox{0.8}{%\n\\begin{tabular}{l}\nx \\\\\n\\end{tabular}%\n}\n\\end{table}").unwrap();
+        assert!(render(&scaled).contains("\\scalebox{0.8}{%\n\\begin{tabular}{l}") && render(&scaled).contains("\\end{tabular}%\n}"));
     }
 
     #[test]

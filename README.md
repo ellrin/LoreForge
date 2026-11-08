@@ -10,7 +10,7 @@
 
 ## 執行
 
-需要 [Rust](https://rustup.rs)（1.85 以上）。
+需要 [Rust](https://rustup.rs)（1.88 以上）。共用模組 `commons`（`ym-llm`：模型與任務路由；`ym-gitsync`：Git 同步）以相對路徑引用，要放在這個 App 資料夾旁邊：`<上層>/commons` 與 `<上層>/PaperComposer/public`。
 
 **桌面版**
 
@@ -119,10 +119,10 @@ your-private-repo/
 
 - **開啟 App**：自動 pull。只做 fast-forward；兩邊都有新 commit 時會提示你按同步。
 - **Ctrl+S**（或點狀態列的同步狀態）：commit 所有修改並 push。commit 訊息依修改的檔案自動產生，例如 `Update my-paper (method, result); profile (phrases)`。
-- **另一台裝置先推了**：自動把你的修改接在遠端之後再 push；若兩邊改到同一句，**中止並還原**，你的修改仍保留在本機，不會自動合併。
+- **另一台裝置先推了**：先抓遠端、把你的 commit 接在遠端之後再 push（不會先推一次失敗）；若兩邊改到同一句，**中止並還原**，你的修改仍保留在本機，不會自動合併。永遠不會 force-push。
 - **commit 前檢查金鑰**：新增的內容看起來像 API key 或 token 時，拒絕 commit。
 
-使用系統安裝的 `git`，登入交給你電腦上的 Git 憑證管理（Windows 為 Git Credential Manager），App 不保存 Git 密碼。作者名稱沿用你的 `git config user.name` 與 `user.email`。
+同步由共用模組 `ym-gitsync` 處理，使用系統安裝的 `git`，登入交給你電腦上的 Git 憑證管理（Windows 為 Git Credential Manager），App 不保存 Git 密碼。作者名稱沿用你的 `git config user.name` 與 `user.email`。
 
 ## 新論文
 
@@ -151,7 +151,7 @@ your-private-repo/
 
 ## 公式
 
-紙張上的數學式用內建的 KaTeX 顯示（離線可用），支援 `$…$`、`\[…\]`、`equation`／`align` 等環境、自動編號與 `\eqref`，並會讀取論文 `main.tex` 與 `macros*.tex` 裡的 `\newcommand`、`\DeclareMathOperator`。這是編輯時的預覽，投稿用的 PDF 仍由 LaTeX 搭配期刊 cls 產生。
+紙張上的數學式用內建的 KaTeX 顯示（離線可用），支援 `$…$`、`\[…\]`、`equation`／`align` 等環境、自動編號與 `\eqref`，並會讀取論文 `main.tex` 與 `macros*.tex` 裡的 `\newcommand`、`\DeclareMathOperator`。版面設定（`\topfraction`、`\floatpagefraction`、重新定義的 `\thebibliography`、名稱或內容含 `@` 的內部巨集）不是數學，會略過。這是編輯時的預覽，投稿用的 PDF 仍由 LaTeX 搭配期刊 cls 產生。
 
 ## LaTeX 與期刊模板
 
@@ -224,13 +224,21 @@ tlmgr search --global --file /xxx.sty
 
 ## 匯入現有的論文
 
-論文選單的模板欄選「匯入檔案…」或「arXiv…」：可匯入 `.zip`、`.tar.gz`、單一 `.tex`，或直接輸入 arXiv 編號／網址（下載作者上傳的 LaTeX 原始檔）。App 找出主檔（arXiv 依 `00README.json` 指定的檔案），展開 `\input`／`\include`／`\subfile`，每個 `\section`（含附錄）成為一個可編輯的章節檔；標題、摘要、參考文獻等章節之間的內容依原順序留在 `main.tex`。`%` 註解原樣保留，圖片、樣式檔、`.bib` 一起帶過來；只附 `.bbl` 的論文直接使用它。
+論文選單的「匯入」：「從這台電腦」選壓縮檔（`.zip`、`.tar.gz`）或單一 `.tex`，或選整個資料夾（隱藏檔如 `.git` 不帶入）；「從 arXiv」輸入編號／網址（下載作者上傳的 LaTeX 原始檔）。App 找出主檔（arXiv 依 `00README.json` 指定的檔案），展開 `\input`／`\include`／`\subfile`，每個 `\section`（含附錄）成為一個可編輯的章節檔；標題、摘要、參考文獻等章節之間的內容依原順序留在 `main.tex`。`%` 註解原樣保留，圖片、樣式檔、`.bib` 一起帶過來；只附 `.bbl` 的論文直接使用它。
 
 以 4 篇 arXiv 論文實測（NeurIPS〈Attention Is All You Need〉、IEEE TMI、IEEE TSP、Springer BIT），匯出的 PDF 頁數與 arXiv 版完全相同，逐頁比對只有字型版本造成的細微差異。
 
+- **匯入後的下一步**：匯入完成會在論文選單位置顯示一張小卡：對應到的期刊模板、從 `\author` 對到作者資料庫的作者（對不到的人不會猜；都對不到時 `paper.toml` 不寫 `authors`）、整理會改哪些檔案（先列出，按「整理」才做）、論文的 `.bib` 有幾筆可加入文獻庫（按「加入文獻庫」才寫入）。之後從論文選單的「整理與文獻…」也能再打開。
+- **一句一行**：章節檔的內文一句一行，Git 的差異就落在單一句子上。以 `\IEEEPARstart`、`\textit{…}`／`\emph{…}`／`\textbf{…}` 小標、`\noindent` 開頭的段落也算內文；段落中間的環境（方程式、表格、圖）、`\[…\]`、有 `%` 註解的行、只有版面指令的行（例如 `\enlargethispage{…}`）原樣各自成行，前後的文字照樣拆句。簡單的條列（`itemize`／`enumerate`／`description`，沒有巢狀環境或註解）每個 `\item` 也一句一行；圖表說明（caption）與其他環境不拆。只改變字與字之間的換行，編譯結果不變。
+- **自動對應期刊模板**：論文用到的 cls／sty（`\documentclass` 與 `\usepackage` 載入、而且就在論文資料夾裡的）和 `publishers/` 某個模板的檔案逐位元相同時，`paper.toml` 會記下 `journal = "<模板>"`。只有 `IEEEtran.cls` 這種多個模板共用的檔案時無法判斷，就不記。
+- **整理（選用，不會自動做）**：匯入後會列出可以整理的地方——檔名有空白的圖（`Fig 1.png`）改名為 `figures/fig1.png`（編號依 `\includegraphics` 出現的順序）並改寫 `\includegraphics`；刪除沒有被載入的 `.cls`；有 `.eps` 圖時在論文的 `.gitignore` 加入 `*-eps-converted-to.pdf`。這些 PDF 是 epstopdf 每次編譯都會在論文資料夾裡重新寫出的檔案，刪掉下次匯出又會出現，所以保留、只是不同步。匯入時加上 `tidy=1` 或之後呼叫 `POST /api/papers/<論文>/tidy` 才會執行，不會覆蓋已有的檔案。
+- **把論文的 `.bib` 併入文獻庫**：匯入時會先試算（不寫入）論文自己的 `.bib` 有幾筆是文獻庫沒有的；呼叫 `POST /api/papers/<論文>/bib/merge` 才加入 `refs/library.bib`。key 或 DOI 已經在文獻庫裡的會略過，論文的 `.bib` 本身不改。
+
+以一篇 IEEE JBHI 格式的論文實測（6 個章節、5 個表格、4 張圖）：重新組合後的 TeX token 與原檔相同，pdflatex＋BibTeX 編譯出的 10 頁 PDF 文字與逐頁影像都和原檔一致（整理後也一致）；44 個內文段落都一句一行（以前有 14 個整段留在一行）；5 個 `\resizebox{…}{!}{%` 表格經表格編輯器讀進再寫回，token 不變；KaTeX 巨集表從 6 個（5 個版面巨集）減為 1 個；自動對應到 `ieee-jbhi`。
+
 **標題、作者、單位、摘要、關鍵字**也在頁面上雙擊編輯（左側導覽最上方的「標題與摘要」可跳到這裡）。編輯框裡是該欄位的 LaTeX 原文，存檔時只替換那一段，`main.tex` 其他內容一字不動；IEEE（`abstract`、`IEEEkeywords` 環境）與 Springer Nature（`\abstract{…}`、`\keywords{…}`、每人一個 `\author*[1]{…}`）的寫法都支援，註解掉的不算。還沒有摘要的論文會顯示「雙擊新增摘要」，寫入 `\maketitle` 之後。
 
-**編輯畫面是預覽，PDF 才是成品**：編輯畫面用 KaTeX 與 App 自己的轉換呈現論文（方程式、圖片、表格、清單、定理、演算法、標題摘要、參考文獻），以便直接在頁面上修改，外觀接近但不保證與 PDF 完全相同。匯出 PDF 一律用期刊的 class 與真正的 LaTeX 編譯。編譯過一次後，畫面上的方程式、圖表、章節與引用編號會改用 LaTeX 算出的實際編號（讀取 `.aux`）。PDF 與 EPS 圖片用 Ghostscript（macOS 沒有時用內建的 `sips`）轉成預覽圖。
+**編輯畫面是預覽，PDF 才是成品**：編輯畫面用 KaTeX 與 App 自己的轉換呈現論文（方程式、圖片、表格、清單、定理、演算法、標題摘要、參考文獻），以便直接在頁面上修改，外觀接近但不保證與 PDF 完全相同。匯出 PDF 一律用期刊的 class 與真正的 LaTeX 編譯。用 `\resizebox{\textwidth}{!}{…}`（或 `adjustbox` 的 `width=`）縮放的表格，預覽時也縮到版面寬度。缺字型（`Font … not loadable: Metric (TFM) file not found`）時，錯誤訊息會附上 `tlmgr install` 的套件或 `tlmgr search` 指令。編譯過一次後，畫面上的方程式、圖表、章節與引用編號會改用 LaTeX 算出的實際編號（讀取 `.aux`）。PDF 與 EPS 圖片用 Ghostscript（macOS 沒有時用內建的 `sips`）轉成預覽圖。
 
 ## 匯出
 
@@ -251,7 +259,7 @@ tlmgr search --global --file /xxx.sty
 
 **台灣用語**：本機模型寫繁體中文時字形正確，但常用大陸詞（數據、網絡、視頻、信息、代碼）。本機模型的回覆會經過 OpenCC `s2twp` 校正成台灣用語（資料、網路、影片、資訊、程式碼），英文、LaTeX 與 JSON 不受影響；「文件」這類台灣也通用的詞保留原樣。Claude 的回覆不轉換。
 
-可選的模型列在 [`models/catalog.json`](models/catalog.json)：Gemma 4（E4B、12B、31B）與 Qwen（3.5 4B、3.5 9B、3.8 27B），以及兩者的 abliterated 版本（移除拒答，標示 **Uncensored**，不會被推薦）。目前預設 Gemma 4 12B（Q8_0；記憶體較少時用 Q4_K_XL）。寫作區的「本機」按鈕會列出已下載的模型，點一下就切換。模型以不思考模式執行（`--reasoning-budget 0`）：每個任務都要求固定的 JSON 格式，思考只會讓一段文字多等好幾分鐘。
+可選的模型列在共用模組的 `commons/crates/ym-llm/catalog.json`（所有 App 共用一份）：Gemma 4（E4B、12B、31B）與 Qwen（3.5 4B、3.5 9B、3.8 27B），以及兩者的 abliterated 版本（移除拒答，標示 **Uncensored**，不會被推薦）。目前預設 Gemma 4 12B（Q8_0；記憶體較少時用 Q4_K_XL）。寫作區的「本機」按鈕會列出已下載的模型，點一下就切換。各模型的一行說明是 PaperComposer 自己的（`crates/server/src/model_summaries.json`，速度以 tokens/秒標示）；共用 catalog 的說明是為所有 App 寫的。模型以不思考模式執行（`--reasoning-budget 0`）：每個任務都要求固定的 JSON 格式，思考只會讓一段文字多等好幾分鐘。
 
 M6 32 GB 實測的生成速度（token/秒）：Qwen3.5 4B 30.8、Gemma 4 E4B 27.6、Qwen3.5 9B 16.8、Gemma 4 12B Q8 11.5、Qwen3.8 27B 8.2、Gemma 4 31B 8.0。寫英文段落時，Gemma 容易把句型庫例句的內容帶進來，Qwen3.8 27B 較忠於你給的重點。之後有新模型（例如 Gemma 5），在清單加一筆即可出現在精靈中：
 
@@ -272,7 +280,9 @@ M6 32 GB 實測的生成速度（token/秒）：Qwen3.5 4B 30.8、Gemma 4 E4B 27
 }
 ```
 
-檔名由 Hugging Face 的檔案清單比對 `file_suffix` 找出，不需要寫完整網址。不想改 repo 時，可把自己的 `catalog.json` 放在上述本機資料夾的 `models/` 底下，會取代內建清單。
+檔名由 Hugging Face 的檔案清單比對 `file_suffix` 找出，不需要寫完整網址。不想改 repo 時，可把自己的 `catalog.json`（與共用清單同樣的格式）放在上述本機資料夾的 `models/` 底下，會取代內建清單。
+
+沒有設定 `LOCAL_LLM_HOME` 時，模型與 llama.cpp 放在上述本機資料夾，沿用最早版本的結構：模型在 `models/<owner>/<repo>/`、llama.cpp 在 `llama.cpp/`（之前下載的模型不用重新下載）。
 
 ### 自己架設的模型
 
@@ -287,13 +297,38 @@ model = "gemma-4-12b"
 
 或用環境變數 `PAPERCOMPOSER_LLM_URL`、`PAPERCOMPOSER_LLM_MODEL`。未連接時，問答框仍會列出參考句型，並可複製完整提示詞到其他模型使用。
 
-**Claude**：在「設定」貼上 API key，key 只存在系統金鑰圈（Windows 認證管理員、macOS 鑰匙圈），不寫入任何檔案；也可以用環境變數 `ANTHROPIC_API_KEY`。資料庫的「拆解」功能優先使用 Claude，未設定時改用本機模型。
+**Claude**：在「設定」貼上 API key，key 只存在系統金鑰圈（Windows 認證管理員、macOS 鑰匙圈，項目名稱 `PaperComposer`），不寫入任何檔案；也可以用環境變數 `ANTHROPIC_API_KEY`。API 使用 `anthropic-version: 2026-10-21`，不送 `temperature`，要求固定格式的任務改用 JSON schema（結構化輸出）。
+
+### 任務與引擎
+
+所有模型呼叫都經過共用模組 `ym-llm`，每個用途是一個「任務」，定義在 [`crates/server/tasks.toml`](crates/server/tasks.toml)：
+
+| 任務 | 用途 | 預設順序 |
+|---|---|---|
+| `pc-compose-paragraph` | 撰寫段落 | 本機 → Claude |
+| `pc-soft-check` | 軟規則檢查 | 本機 → Claude |
+| `pc-decompose` | 拆解句型 | 本機 → Claude |
+| `pc-caption` | 圖表標題 | 本機 → Claude |
+| `pc-ref-notes` | 文獻簡介與標籤 | 本機 → Claude |
+| `pc-outline` | 大綱與標題 | 只用 Claude |
+| `pc-ref-queries`、`pc-ref-rank` | 找文獻的關鍵字與排序 | 只用 Claude |
+| `pc-cite-extract` | 把貼上的文字拆成一篇一篇 | 只用 Claude |
+
+「本機」是目前連接的本機引擎（自己架設的端點，或「AI 與同步」啟動的模型；`tasks.toml` 寫作 `local:current`），以 `temperature` 0.2 寫作；「Claude」先用訂閱（Claude Code），沒有時用 API key，模型是設定裡選的那個（`claude:selected`）。寫作區的引擎切換（本機／訂閱／API）只用你選的那一個，不會悄悄改用別的；自動時照上表的順序。要個別指定某個任務的模型，在 App 設定檔旁邊放 `tasks.toml`（`PaperComposer/tasks.toml`）：
+
+```toml
+[override]
+pc-ref-notes = "claude:haiku"       # 或 local:qwen3.5-9b-q8、claude-api:sonnet、claude-code:opus
+```
+
+要求固定格式的任務一律附 JSON schema：本機用 llama-server 的 `response_format: json_schema`，Claude Code 用 `--json-schema`，API 用結構化輸出。模板轉換仍直接執行 Claude Code 代理，不經過任務路由。
 
 ## 專案結構
 
 ```
 crates/core         資料庫讀取與驗證、句型檢索、段落檢查、生成提示詞與輸出驗證（不需模型）
-crates/server       本機伺服器（只監聽 127.0.0.1），桌面版與瀏覽器模式共用
+crates/server       本機伺服器（只監聽 127.0.0.1），桌面版與瀏覽器模式共用；tasks.toml 為模型任務
+../../commons       共用模組（ym-llm、ym-gitsync），以相對路徑引用
 apps/desktop        Tauri 桌面殼：啟動伺服器並開啟視窗
 ui/                 介面（HTML / CSS / JS）
 workspace-template/ 私人工作區範本與示範資料（沒有指定工作區時使用）
@@ -328,8 +363,11 @@ scripts/            Git hooks
 | GET / PUT | `/api/tables/{file}` | 讀寫資料庫 CSV（句型、片語、用詞、規則、範例、公式、作者、機構） |
 | POST | `/api/papers/{name}/export` `{ kind: "pdf" \| "docx" \| "latex" }` | 匯出：頁數、錯誤（含位置）、找不到的引用與標籤 |
 | POST | `/api/papers/{name}/export/open` `{ kind, reveal }` | 開啟匯出的檔案，或在資料夾中顯示 |
-| POST | `/api/papers/import?name=&key_value=` （本文為 .zip／.tar.gz／.tex） | 匯入現有的 LaTeX 專案 |
-| POST | `/api/papers/import-arxiv` `{ id, name?, key_value }` | 從 arXiv 匯入原始檔 |
+| POST | `/api/papers/import?name=&key_value=&tidy=` （本文為 .zip／.tar.gz／.tex） | 匯入現有的 LaTeX 專案；回覆含對應到的模板 `journal`（名稱 `journal_name`）、對到的作者 `authors`、可做的整理 `tidy`（`tidy=1` 時直接整理，結果在 `tidied`）與 `.bib` 併入文獻庫的試算 `bib` |
+| POST | `/api/papers/import-arxiv` `{ id, name?, key_value, tidy? }` | 從 arXiv 匯入原始檔 |
+| GET／POST | `/api/papers/{name}/tidy` | 列出／執行整理：有空白的圖檔改名為 `figures/figN.ext`、刪除沒用到的 `.cls`、`.gitignore` 加入 `*-eps-converted-to.pdf`（`renames`、`remove`、`gitignore`） |
+| GET | `/api/papers/{name}/import-summary` | 匯入小卡的內容：`journal`／`journal_name`、整理計畫 `tidy`、`.bib` 試算 `bib` |
+| POST | `/api/papers/{name}/bib/merge` `{ dry_run? }` | 把論文自己的 `.bib` 併入 `refs/library.bib`（key 或 DOI 重複的略過） |
 | PUT | `/api/papers/{name}/front` `{ field, index, value }` | 修改標題區的欄位（title、author、affil、abstract、keywords） |
 | GET | `/api/papers/{name}/figure?path=` | 圖片預覽（PDF／EPS 轉 PNG） |
 | POST | `/api/decompose` `{ text, section }` | 把句子或段落拆成句型與片語建議 |

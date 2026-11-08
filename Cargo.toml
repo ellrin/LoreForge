@@ -15,3 +15,6 @@ serde_json = "1"
 toml = "0.8"
 csv = "1"
 thiserror = "2"
+# Shared crates (commons/, next to this app's folder).
+ym-llm = { path = "../../commons/crates/ym-llm" }
+ym-gitsync = { path = "../../commons/crates/ym-gitsync" }
