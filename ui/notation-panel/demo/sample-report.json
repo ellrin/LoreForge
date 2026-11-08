@@ -1,0 +1,1305 @@
+{
+  "version": 1,
+  "files": [
+    "main.tex",
+    "sections/introduction.tex",
+    "sections/method.tex",
+    "sections/results.tex"
+  ],
+  "issues": [
+    {
+      "code": "ref_undefined",
+      "category": "ref",
+      "severity": "error",
+      "message": "引用了不存在的標籤 fig:missing",
+      "subject": "fig:missing",
+      "locations": [
+        {
+          "file": "sections/results.tex",
+          "line": 4,
+          "col": 36,
+          "para": 0,
+          "sentence": 3,
+          "para_sentence": 2,
+          "context": "body",
+          "ord": 1781,
+          "snippet": "The scorer also fails on Fig.~\\ref{fig:missing}."
+        }
+      ]
+    },
+    {
+      "code": "label_duplicate",
+      "category": "ref",
+      "severity": "error",
+      "message": "標籤 tab:main 重複定義",
+      "subject": "tab:main",
+      "locations": [
+        {
+          "file": "sections/results.tex",
+          "line": 8,
+          "col": 8,
+          "para": 1,
+          "sentence": 4,
+          "para_sentence": 1,
+          "context": "body",
+          "ord": 1844,
+          "snippet": "\\label{tab:main}"
+        },
+        {
+          "file": "sections/results.tex",
+          "line": 27,
+          "col": 8,
+          "para": 3,
+          "sentence": 9,
+          "para_sentence": 2,
+          "context": "body",
+          "ord": 2161,
+          "snippet": "\\label{tab:main}"
+        }
+      ]
+    },
+    {
+      "code": "registry_invalid",
+      "category": "registry",
+      "severity": "error",
+      "message": "對照表「bad-macro」的 macro：\\alpha 是 LaTeX 既有指令，不能覆蓋",
+      "entry": "bad-macro",
+      "locations": []
+    },
+    {
+      "code": "spelling_variants",
+      "category": "style",
+      "severity": "warning",
+      "message": "同一個詞有不同寫法：nonlinear / non-linear",
+      "subject": "nonlinear / non-linear",
+      "locations": [
+        {
+          "file": "sections/introduction.tex",
+          "line": 3,
+          "col": 35,
+          "para": 0,
+          "sentence": 2,
+          "para_sentence": 1,
+          "context": "body",
+          "ord": 415,
+          "snippet": "Gear widgets are small parts with nonlinear behaviour."
+        },
+        {
+          "file": "sections/results.tex",
+          "line": 3,
+          "col": 46,
+          "para": 0,
+          "sentence": 2,
+          "para_sentence": 1,
+          "context": "body",
+          "ord": 1694,
+          "snippet": "Table~\\ref{tab:main} and Table 2 compare the non-linear scorer with GearNet-S and GearNet-Small."
+        }
+      ]
+    },
+    {
+      "code": "abbrev_used_before_expansion",
+      "category": "abbrev",
+      "severity": "warning",
+      "message": "縮寫 WSN 在展開（sections/introduction.tex:5「widget scoring network」）之前就用了 1 次",
+      "subject": "WSN",
+      "entry": "wsn",
+      "locations": [
+        {
+          "file": "sections/introduction.tex",
+          "line": 4,
+          "col": 3,
+          "para": 0,
+          "sentence": 3,
+          "para_sentence": 2,
+          "context": "body",
+          "ord": 438,
+          "snippet": "A WSN can rank them quickly."
+        }
+      ],
+      "related": [
+        {
+          "file": "sections/introduction.tex",
+          "line": 5,
+          "col": 36,
+          "para": 0,
+          "sentence": 4,
+          "para_sentence": 3,
+          "context": "body",
+          "ord": 500,
+          "snippet": "We build a widget scoring network (WSN) on top of an MLP."
+        }
+      ]
+    },
+    {
+      "code": "abbrev_never_expanded",
+      "category": "abbrev",
+      "severity": "warning",
+      "message": "縮寫 MLP 在正文用了 1 次，但從未展開（對照表：multilayer perceptron）",
+      "subject": "MLP",
+      "entry": "mlp",
+      "locations": [
+        {
+          "file": "sections/introduction.tex",
+          "line": 5,
+          "col": 54,
+          "para": 0,
+          "sentence": 4,
+          "para_sentence": 3,
+          "context": "body",
+          "ord": 518,
+          "snippet": "…build a widget scoring network (WSN) on top of an MLP."
+        }
+      ]
+    },
+    {
+      "code": "hardcoded_reference",
+      "category": "ref",
+      "severity": "warning",
+      "message": "「Section II-B」是寫死的編號，請改用 \\ref / \\eqref",
+      "subject": "Section~II-B",
+      "locations": [
+        {
+          "file": "sections/introduction.tex",
+          "line": 6,
+          "col": 34,
+          "para": 0,
+          "sentence": 5,
+          "para_sentence": 4,
+          "context": "body",
+          "ord": 556,
+          "snippet": "The gear ratio (GR) matters, and Section~II-B returns to the gear ratio (GR) later."
+        }
+      ]
+    },
+    {
+      "code": "used_before_definition",
+      "category": "symbol",
+      "severity": "warning",
+      "message": "符號 $\\boldsymbol{w}$ 先出現在圖表說明（sections/method.tex:6），正文到 sections/method.tex:10 才定義",
+      "subject": "\\boldsymbol{w}",
+      "entry": "w",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 6,
+          "col": 39,
+          "para": 0,
+          "sentence": 3,
+          "para_sentence": 2,
+          "context": "caption",
+          "ord": 779,
+          "snippet": "\\caption{Overview. The weight vector $\\vw$ scores each widget}"
+        }
+      ],
+      "related": [
+        {
+          "file": "sections/method.tex",
+          "line": 10,
+          "col": 6,
+          "para": 1,
+          "sentence": 4,
+          "para_sentence": 1,
+          "context": "definition",
+          "ord": 844,
+          "snippet": "Let $\\vw\\in\\mathbb{R}^{d}$ denote the weight vector of the scorer."
+        }
+      ]
+    },
+    {
+      "code": "symbol_multiple_meanings",
+      "category": "symbol",
+      "severity": "warning",
+      "message": "符號 $n$ 被定義了 2 次，內容不同",
+      "subject": "n",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 11,
+          "col": 85,
+          "para": 1,
+          "sentence": 5,
+          "para_sentence": 2,
+          "context": "definition",
+          "ord": 990,
+          "snippet": "…mbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A}|$."
+        },
+        {
+          "file": "sections/method.tex",
+          "line": 26,
+          "col": 40,
+          "para": 1,
+          "sentence": 12,
+          "para_sentence": 9,
+          "context": "definition",
+          "ord": 1424,
+          "snippet": "For a group $\\mathcal{B}$ of widgets, $n=|\\mathcal{B}|$ counts its members."
+        }
+      ],
+      "details": [
+        "sections/method.tex:11  $n$ = |\\mathcal{A}|",
+        "sections/method.tex:26  $n$ = |\\mathcal{B}|"
+      ]
+    },
+    {
+      "code": "meaning_multiple_symbols",
+      "category": "symbol",
+      "severity": "warning",
+      "message": "「widget speed」用了 2 個不同符號：$u$、$v$",
+      "subject": "widget speed",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 12,
+          "col": 8,
+          "para": 1,
+          "sentence": 6,
+          "para_sentence": 3,
+          "context": "definition",
+          "ord": 1015,
+          "snippet": "Here, $\\speed$ denotes the widget speed and $v$ denotes the widget speed."
+        },
+        {
+          "file": "sections/method.tex",
+          "line": 12,
+          "col": 46,
+          "para": 1,
+          "sentence": 6,
+          "para_sentence": 3,
+          "context": "definition",
+          "ord": 1053,
+          "snippet": "Here, $\\speed$ denotes the widget speed and $v$ denotes the widget speed."
+        }
+      ]
+    },
+    {
+      "code": "equation_undefined_variables",
+      "category": "equation",
+      "severity": "warning",
+      "message": "方程式 eq:score 的變數未定義：$\\beta$",
+      "subject": "eq:score",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 15,
+          "col": 1,
+          "para": 1,
+          "sentence": 9,
+          "para_sentence": 6,
+          "context": "equation",
+          "ord": 1128,
+          "snippet": "\\begin{equation}"
+        }
+      ],
+      "details": [
+        "$\\beta$"
+      ]
+    },
+    {
+      "code": "undefined_symbol",
+      "category": "symbol",
+      "severity": "warning",
+      "message": "符號 $\\beta$ 用了 1 次，但正文沒有定義",
+      "subject": "\\beta",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 17,
+          "col": 32,
+          "para": 1,
+          "sentence": 9,
+          "para_sentence": 6,
+          "context": "equation",
+          "ord": 1193,
+          "snippet": "s = \\vw^{\\top}\\boldsymbol{a} + \\beta\\,\\speed,"
+        }
+      ]
+    },
+    {
+      "code": "equation_undefined_variables",
+      "category": "equation",
+      "severity": "warning",
+      "message": "方程式 eq:loss 的變數未定義：$\\eta$",
+      "subject": "eq:loss",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 21,
+          "col": 1,
+          "para": 1,
+          "sentence": 11,
+          "para_sentence": 8,
+          "context": "equation",
+          "ord": 1266,
+          "snippet": "\\begin{equation}"
+        }
+      ],
+      "details": [
+        "$\\eta$"
+      ]
+    },
+    {
+      "code": "label_unreferenced",
+      "category": "ref",
+      "severity": "warning",
+      "message": "方程式標籤 eq:loss 從未被引用",
+      "subject": "eq:loss",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 22,
+          "col": 8,
+          "para": 1,
+          "sentence": 11,
+          "para_sentence": 8,
+          "context": "equation",
+          "ord": 1290,
+          "snippet": "\\label{eq:loss}"
+        }
+      ]
+    },
+    {
+      "code": "undefined_symbol",
+      "category": "symbol",
+      "severity": "warning",
+      "message": "符號 $\\eta$ 用了 1 次，但正文沒有定義",
+      "subject": "\\eta",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 23,
+          "col": 10,
+          "para": 1,
+          "sentence": 11,
+          "para_sentence": 8,
+          "context": "equation",
+          "ord": 1308,
+          "snippet": "L = (s - \\eta)^2 + \\gamma ."
+        }
+      ]
+    },
+    {
+      "code": "symbol_multiple_meanings",
+      "category": "symbol",
+      "severity": "warning",
+      "message": "字母 a 有多種意思：$a$、$\\boldsymbol{a}$",
+      "subject": "a",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 25,
+          "col": 19,
+          "para": 1,
+          "sentence": 11,
+          "para_sentence": 8,
+          "context": "definition",
+          "ord": 1360,
+          "snippet": "We set the decay $a=0.9$ and $\\gamma=0.1$."
+        },
+        {
+          "file": "sections/method.tex",
+          "line": 11,
+          "col": 28,
+          "para": 1,
+          "sentence": 5,
+          "para_sentence": 2,
+          "context": "definition",
+          "ord": 933,
+          "snippet": "Each widget has an anchor $\\boldsymbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A…"
+        }
+      ],
+      "details": [
+        "$a$（斜體）：decay — sections/method.tex:25",
+        "$\\boldsymbol{a}$（粗體）：anchor — sections/method.tex:11"
+      ]
+    },
+    {
+      "code": "hardcoded_reference",
+      "category": "ref",
+      "severity": "warning",
+      "message": "「Table 2」是寫死的編號，請改用 \\ref / \\eqref",
+      "subject": "Table 2",
+      "locations": [
+        {
+          "file": "sections/results.tex",
+          "line": 3,
+          "col": 26,
+          "para": 0,
+          "sentence": 2,
+          "para_sentence": 1,
+          "context": "body",
+          "ord": 1674,
+          "snippet": "Table~\\ref{tab:main} and Table 2 compare the non-linear scorer with GearNet-S and GearNet-Small…"
+        }
+      ]
+    },
+    {
+      "code": "spelling_variants",
+      "category": "style",
+      "severity": "warning",
+      "message": "同一個詞有不同寫法：GearNet-S / GearNet-Small",
+      "subject": "GearNet-S / GearNet-Small",
+      "locations": [
+        {
+          "file": "sections/results.tex",
+          "line": 3,
+          "col": 69,
+          "para": 0,
+          "sentence": 2,
+          "para_sentence": 1,
+          "context": "body",
+          "ord": 1717,
+          "snippet": "…n} and Table 2 compare the non-linear scorer with GearNet-S and GearNet-Small."
+        },
+        {
+          "file": "sections/results.tex",
+          "line": 3,
+          "col": 83,
+          "para": 0,
+          "sentence": 2,
+          "para_sentence": 1,
+          "context": "body",
+          "ord": 1731,
+          "snippet": "…compare the non-linear scorer with GearNet-S and GearNet-Small."
+        }
+      ]
+    },
+    {
+      "code": "label_unreferenced",
+      "category": "ref",
+      "severity": "warning",
+      "message": "圖標籤 fig:spare 從未被引用",
+      "subject": "fig:spare",
+      "locations": [
+        {
+          "file": "sections/results.tex",
+          "line": 19,
+          "col": 8,
+          "para": 2,
+          "sentence": 7,
+          "para_sentence": 1,
+          "context": "body",
+          "ord": 2033,
+          "snippet": "\\label{fig:spare}"
+        }
+      ]
+    },
+    {
+      "code": "symbol_multiple_meanings",
+      "category": "registry",
+      "severity": "warning",
+      "message": "對照表中 $\\gamma$ 有 2 個意思（gamma-bias、gamma-rate）",
+      "subject": "\\gamma",
+      "entry": "gamma-bias",
+      "locations": [],
+      "details": [
+        "gamma-bias：偏差",
+        "gamma-rate：學習率"
+      ]
+    },
+    {
+      "code": "abbrev_abstract",
+      "category": "abbrev",
+      "severity": "info",
+      "message": "摘要用了縮寫 WSN 但沒有在摘要內展開",
+      "subject": "WSN",
+      "entry": "wsn",
+      "locations": [
+        {
+          "file": "main.tex",
+          "line": 11,
+          "col": 14,
+          "para": 1,
+          "sentence": 1,
+          "para_sentence": 1,
+          "context": "abstract",
+          "ord": 230,
+          "snippet": "We propose a WSN that ranks gear widgets."
+        }
+      ]
+    },
+    {
+      "code": "abbrev_expanded_twice",
+      "category": "abbrev",
+      "severity": "info",
+      "message": "縮寫 GR 在正文展開了 2 次",
+      "subject": "GR",
+      "locations": [
+        {
+          "file": "sections/introduction.tex",
+          "line": 6,
+          "col": 17,
+          "para": 0,
+          "sentence": 5,
+          "para_sentence": 4,
+          "context": "body",
+          "ord": 539,
+          "snippet": "The gear ratio (GR) matters, and Section~II-B returns to the gear ratio (GR) later."
+        },
+        {
+          "file": "sections/introduction.tex",
+          "line": 6,
+          "col": 74,
+          "para": 0,
+          "sentence": 5,
+          "para_sentence": 4,
+          "context": "body",
+          "ord": 596,
+          "snippet": "…ters, and Section~II-B returns to the gear ratio (GR) later."
+        }
+      ]
+    },
+    {
+      "code": "caption_style",
+      "category": "style",
+      "severity": "info",
+      "message": "圖說明結尾句點不一致：1 個有句點、1 個沒有",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 6,
+          "col": 10,
+          "para": 0,
+          "sentence": 2,
+          "para_sentence": 1,
+          "context": "caption",
+          "ord": 750,
+          "snippet": "\\caption{Overview. The weight vector $\\vw$ scores each widget}"
+        }
+      ]
+    },
+    {
+      "code": "unregistered_symbol",
+      "category": "registry",
+      "severity": "info",
+      "message": "符號 $\\mathcal{A}$ 尚未登記在對照表",
+      "subject": "\\mathcal{A}",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 11,
+          "col": 55,
+          "para": 1,
+          "sentence": 5,
+          "para_sentence": 2,
+          "context": "body",
+          "ord": 960,
+          "snippet": "…widget has an anchor $\\boldsymbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A}|$."
+        }
+      ]
+    },
+    {
+      "code": "unused_definition",
+      "category": "symbol",
+      "severity": "info",
+      "message": "符號 $n$ 定義了但後文沒有再用到",
+      "subject": "n",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 11,
+          "col": 85,
+          "para": 1,
+          "sentence": 5,
+          "para_sentence": 2,
+          "context": "definition",
+          "ord": 990,
+          "snippet": "…mbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A}|$."
+        }
+      ]
+    },
+    {
+      "code": "unregistered_symbol",
+      "category": "registry",
+      "severity": "info",
+      "message": "符號 $n$ 尚未登記在對照表",
+      "subject": "n",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 11,
+          "col": 85,
+          "para": 1,
+          "sentence": 5,
+          "para_sentence": 2,
+          "context": "body",
+          "ord": 990,
+          "snippet": "…mbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A}|$."
+        }
+      ]
+    },
+    {
+      "code": "unused_definition",
+      "category": "symbol",
+      "severity": "info",
+      "message": "符號 $v$ 定義了但後文沒有再用到",
+      "subject": "v",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 12,
+          "col": 46,
+          "para": 1,
+          "sentence": 6,
+          "para_sentence": 3,
+          "context": "definition",
+          "ord": 1053,
+          "snippet": "Here, $\\speed$ denotes the widget speed and $v$ denotes the widget speed."
+        }
+      ]
+    },
+    {
+      "code": "unregistered_symbol",
+      "category": "registry",
+      "severity": "info",
+      "message": "符號 $v$ 尚未登記在對照表",
+      "subject": "v",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 12,
+          "col": 46,
+          "para": 1,
+          "sentence": 6,
+          "para_sentence": 3,
+          "context": "body",
+          "ord": 1053,
+          "snippet": "Here, $\\speed$ denotes the widget speed and $v$ denotes the widget speed."
+        }
+      ]
+    },
+    {
+      "code": "unused_definition",
+      "category": "symbol",
+      "severity": "info",
+      "message": "符號 $z$ 定義了但後文沒有再用到",
+      "subject": "z",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 13,
+          "col": 6,
+          "para": 1,
+          "sentence": 7,
+          "para_sentence": 4,
+          "context": "definition",
+          "ord": 1087,
+          "snippet": "Let $z$ denote an unused offset."
+        }
+      ]
+    },
+    {
+      "code": "unregistered_symbol",
+      "category": "registry",
+      "severity": "info",
+      "message": "符號 $z$ 尚未登記在對照表",
+      "subject": "z",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 13,
+          "col": 6,
+          "para": 1,
+          "sentence": 7,
+          "para_sentence": 4,
+          "context": "body",
+          "ord": 1087,
+          "snippet": "Let $z$ denote an unused offset."
+        }
+      ]
+    },
+    {
+      "code": "unregistered_symbol",
+      "category": "registry",
+      "severity": "info",
+      "message": "符號 $\\beta$ 尚未登記在對照表",
+      "subject": "\\beta",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 17,
+          "col": 32,
+          "para": 1,
+          "sentence": 9,
+          "para_sentence": 6,
+          "context": "equation",
+          "ord": 1193,
+          "snippet": "s = \\vw^{\\top}\\boldsymbol{a} + \\beta\\,\\speed,"
+        }
+      ]
+    },
+    {
+      "code": "unused_definition",
+      "category": "symbol",
+      "severity": "info",
+      "message": "符號 $L$ 定義了但後文沒有再用到",
+      "subject": "L",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 23,
+          "col": 1,
+          "para": 1,
+          "sentence": 11,
+          "para_sentence": 8,
+          "context": "definition",
+          "ord": 1299,
+          "snippet": "L = (s - \\eta)^2 + \\gamma ."
+        }
+      ]
+    },
+    {
+      "code": "unregistered_symbol",
+      "category": "registry",
+      "severity": "info",
+      "message": "符號 $L$ 尚未登記在對照表",
+      "subject": "L",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 23,
+          "col": 1,
+          "para": 1,
+          "sentence": 11,
+          "para_sentence": 8,
+          "context": "equation",
+          "ord": 1299,
+          "snippet": "L = (s - \\eta)^2 + \\gamma ."
+        }
+      ]
+    },
+    {
+      "code": "unregistered_symbol",
+      "category": "registry",
+      "severity": "info",
+      "message": "符號 $\\eta$ 尚未登記在對照表",
+      "subject": "\\eta",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 23,
+          "col": 10,
+          "para": 1,
+          "sentence": 11,
+          "para_sentence": 8,
+          "context": "equation",
+          "ord": 1308,
+          "snippet": "L = (s - \\eta)^2 + \\gamma ."
+        }
+      ]
+    },
+    {
+      "code": "unregistered_symbol",
+      "category": "registry",
+      "severity": "info",
+      "message": "符號 $a$ 尚未登記在對照表",
+      "subject": "a",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 25,
+          "col": 19,
+          "para": 1,
+          "sentence": 11,
+          "para_sentence": 8,
+          "context": "body",
+          "ord": 1360,
+          "snippet": "We set the decay $a=0.9$ and $\\gamma=0.1$."
+        }
+      ]
+    },
+    {
+      "code": "unregistered_symbol",
+      "category": "registry",
+      "severity": "info",
+      "message": "符號 $\\mathcal{B}$ 尚未登記在對照表",
+      "subject": "\\mathcal{B}",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 26,
+          "col": 14,
+          "para": 1,
+          "sentence": 12,
+          "para_sentence": 9,
+          "context": "body",
+          "ord": 1398,
+          "snippet": "For a group $\\mathcal{B}$ of widgets, $n=|\\mathcal{B}|$ counts its members."
+        }
+      ]
+    },
+    {
+      "code": "ref_prefix_style",
+      "category": "style",
+      "severity": "info",
+      "message": "引用前綴不一致：Fig.~\\ref（1 次）、Figure~\\ref（1 次）",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 27,
+          "col": 66,
+          "para": 1,
+          "sentence": 13,
+          "para_sentence": 10,
+          "context": "body",
+          "ord": 1526,
+          "snippet": "…pears in Fig.~\\ref{fig:overview}, and Figure~\\ref{fig:overview} repeats it; \\eqref{eq:score} gives the score."
+        }
+      ]
+    },
+    {
+      "code": "caption_style",
+      "category": "style",
+      "severity": "info",
+      "message": "表說明位置不一致：1 個在表格上方、1 個在下方",
+      "locations": [
+        {
+          "file": "sections/results.tex",
+          "line": 26,
+          "col": 10,
+          "para": 3,
+          "sentence": 9,
+          "para_sentence": 2,
+          "context": "caption",
+          "ord": 2135,
+          "snippet": "\\caption{Ablation results.}"
+        }
+      ]
+    },
+    {
+      "code": "unused_entry",
+      "category": "registry",
+      "severity": "info",
+      "message": "對照表的「omega」（\\Omega）在文件中沒有用到",
+      "entry": "omega",
+      "locations": []
+    },
+    {
+      "code": "unused_entry",
+      "category": "registry",
+      "severity": "info",
+      "message": "對照表的「bad-macro」（\\boldsymbol{q}）在文件中沒有用到",
+      "entry": "bad-macro",
+      "locations": []
+    },
+    {
+      "code": "unused_entry",
+      "category": "registry",
+      "severity": "info",
+      "message": "對照表的「mean」（\\operatorname{mean}）在文件中沒有用到",
+      "entry": "mean",
+      "locations": []
+    }
+  ],
+  "summary": {
+    "abbrev_abstract": 1,
+    "abbrev_expanded_twice": 1,
+    "abbrev_never_expanded": 1,
+    "abbrev_used_before_expansion": 1,
+    "caption_style": 2,
+    "equation_undefined_variables": 2,
+    "hardcoded_reference": 2,
+    "label_duplicate": 1,
+    "label_unreferenced": 2,
+    "meaning_multiple_symbols": 1,
+    "ref_prefix_style": 1,
+    "ref_undefined": 1,
+    "registry_invalid": 1,
+    "spelling_variants": 2,
+    "symbol_multiple_meanings": 3,
+    "undefined_symbol": 2,
+    "unregistered_symbol": 9,
+    "unused_definition": 4,
+    "unused_entry": 3,
+    "used_before_definition": 1
+  },
+  "symbols": [
+    {
+      "key": "L",
+      "uses": 1,
+      "defined": true,
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 23,
+        "col": 1,
+        "para": 1,
+        "sentence": 11,
+        "para_sentence": 8,
+        "context": "equation",
+        "ord": 1299,
+        "snippet": "L = (s - \\eta)^2 + \\gamma ."
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 23,
+        "col": 1,
+        "para": 1,
+        "sentence": 11,
+        "para_sentence": 8,
+        "context": "definition",
+        "ord": 1299,
+        "snippet": "L = (s - \\eta)^2 + \\gamma ."
+      }
+    },
+    {
+      "key": "\\beta",
+      "uses": 1,
+      "defined": false,
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 17,
+        "col": 32,
+        "para": 1,
+        "sentence": 9,
+        "para_sentence": 6,
+        "context": "equation",
+        "ord": 1193,
+        "snippet": "s = \\vw^{\\top}\\boldsymbol{a} + \\beta\\,\\speed,"
+      }
+    },
+    {
+      "key": "\\boldsymbol{a}",
+      "uses": 2,
+      "defined": true,
+      "meaning": "anchor",
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 11,
+        "col": 28,
+        "para": 1,
+        "sentence": 5,
+        "para_sentence": 2,
+        "context": "body",
+        "ord": 933,
+        "snippet": "Each widget has an anchor $\\boldsymbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A…"
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 11,
+        "col": 28,
+        "para": 1,
+        "sentence": 5,
+        "para_sentence": 2,
+        "context": "definition",
+        "ord": 933,
+        "snippet": "Each widget has an anchor $\\boldsymbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A…"
+      },
+      "entry": "anchor"
+    },
+    {
+      "key": "\\boldsymbol{w}",
+      "uses": 3,
+      "defined": true,
+      "meaning": "weight vector of the scorer",
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 6,
+        "col": 39,
+        "para": 0,
+        "sentence": 3,
+        "para_sentence": 2,
+        "context": "caption",
+        "ord": 779,
+        "snippet": "\\caption{Overview. The weight vector $\\vw$ scores each widget}"
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 10,
+        "col": 6,
+        "para": 1,
+        "sentence": 4,
+        "para_sentence": 1,
+        "context": "definition",
+        "ord": 844,
+        "snippet": "Let $\\vw\\in\\mathbb{R}^{d}$ denote the weight vector of the scorer."
+      },
+      "entry": "w"
+    },
+    {
+      "key": "\\eta",
+      "uses": 1,
+      "defined": false,
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 23,
+        "col": 10,
+        "para": 1,
+        "sentence": 11,
+        "para_sentence": 8,
+        "context": "equation",
+        "ord": 1308,
+        "snippet": "L = (s - \\eta)^2 + \\gamma ."
+      }
+    },
+    {
+      "key": "\\gamma",
+      "uses": 2,
+      "defined": true,
+      "meaning": "decay",
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 23,
+        "col": 20,
+        "para": 1,
+        "sentence": 11,
+        "para_sentence": 8,
+        "context": "equation",
+        "ord": 1318,
+        "snippet": "L = (s - \\eta)^2 + \\gamma ."
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 25,
+        "col": 31,
+        "para": 1,
+        "sentence": 11,
+        "para_sentence": 8,
+        "context": "definition",
+        "ord": 1372,
+        "snippet": "We set the decay $a=0.9$ and $\\gamma=0.1$."
+      },
+      "entry": "gamma-bias"
+    },
+    {
+      "key": "\\mathcal{A}",
+      "uses": 2,
+      "defined": true,
+      "meaning": "set",
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 11,
+        "col": 55,
+        "para": 1,
+        "sentence": 5,
+        "para_sentence": 2,
+        "context": "body",
+        "ord": 960,
+        "snippet": "…widget has an anchor $\\boldsymbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A}|$."
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 11,
+        "col": 55,
+        "para": 1,
+        "sentence": 5,
+        "para_sentence": 2,
+        "context": "definition",
+        "ord": 960,
+        "snippet": "…widget has an anchor $\\boldsymbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A}|$."
+      }
+    },
+    {
+      "key": "\\mathcal{B}",
+      "uses": 2,
+      "defined": true,
+      "meaning": "group",
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 26,
+        "col": 14,
+        "para": 1,
+        "sentence": 12,
+        "para_sentence": 9,
+        "context": "body",
+        "ord": 1398,
+        "snippet": "For a group $\\mathcal{B}$ of widgets, $n=|\\mathcal{B}|$ counts its members."
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 26,
+        "col": 14,
+        "para": 1,
+        "sentence": 12,
+        "para_sentence": 9,
+        "context": "definition",
+        "ord": 1398,
+        "snippet": "For a group $\\mathcal{B}$ of widgets, $n=|\\mathcal{B}|$ counts its members."
+      }
+    },
+    {
+      "key": "a",
+      "uses": 1,
+      "defined": true,
+      "meaning": "decay",
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 25,
+        "col": 19,
+        "para": 1,
+        "sentence": 11,
+        "para_sentence": 8,
+        "context": "body",
+        "ord": 1360,
+        "snippet": "We set the decay $a=0.9$ and $\\gamma=0.1$."
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 25,
+        "col": 19,
+        "para": 1,
+        "sentence": 11,
+        "para_sentence": 8,
+        "context": "definition",
+        "ord": 1360,
+        "snippet": "We set the decay $a=0.9$ and $\\gamma=0.1$."
+      }
+    },
+    {
+      "key": "n",
+      "uses": 2,
+      "defined": true,
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 11,
+        "col": 85,
+        "para": 1,
+        "sentence": 5,
+        "para_sentence": 2,
+        "context": "body",
+        "ord": 990,
+        "snippet": "…mbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A}|$."
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 11,
+        "col": 85,
+        "para": 1,
+        "sentence": 5,
+        "para_sentence": 2,
+        "context": "definition",
+        "ord": 990,
+        "snippet": "…mbol{a}$ and a set $\\mathcal{A}$ of teeth, where $n=|\\mathcal{A}|$."
+      }
+    },
+    {
+      "key": "s",
+      "uses": 3,
+      "defined": true,
+      "meaning": "widget score",
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 17,
+        "col": 1,
+        "para": 1,
+        "sentence": 9,
+        "para_sentence": 6,
+        "context": "equation",
+        "ord": 1162,
+        "snippet": "s = \\vw^{\\top}\\boldsymbol{a} + \\beta\\,\\speed,"
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 17,
+        "col": 1,
+        "para": 1,
+        "sentence": 9,
+        "para_sentence": 6,
+        "context": "definition",
+        "ord": 1162,
+        "snippet": "s = \\vw^{\\top}\\boldsymbol{a} + \\beta\\,\\speed,"
+      },
+      "entry": "score"
+    },
+    {
+      "key": "u",
+      "uses": 2,
+      "defined": true,
+      "meaning": "widget speed",
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 12,
+        "col": 8,
+        "para": 1,
+        "sentence": 6,
+        "para_sentence": 3,
+        "context": "body",
+        "ord": 1015,
+        "snippet": "Here, $\\speed$ denotes the widget speed and $v$ denotes the widget speed."
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 12,
+        "col": 8,
+        "para": 1,
+        "sentence": 6,
+        "para_sentence": 3,
+        "context": "definition",
+        "ord": 1015,
+        "snippet": "Here, $\\speed$ denotes the widget speed and $v$ denotes the widget speed."
+      },
+      "entry": "speed"
+    },
+    {
+      "key": "v",
+      "uses": 1,
+      "defined": true,
+      "meaning": "widget speed",
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 12,
+        "col": 46,
+        "para": 1,
+        "sentence": 6,
+        "para_sentence": 3,
+        "context": "body",
+        "ord": 1053,
+        "snippet": "Here, $\\speed$ denotes the widget speed and $v$ denotes the widget speed."
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 12,
+        "col": 46,
+        "para": 1,
+        "sentence": 6,
+        "para_sentence": 3,
+        "context": "definition",
+        "ord": 1053,
+        "snippet": "Here, $\\speed$ denotes the widget speed and $v$ denotes the widget speed."
+      }
+    },
+    {
+      "key": "z",
+      "uses": 1,
+      "defined": true,
+      "meaning": "unused offset",
+      "first_use": {
+        "file": "sections/method.tex",
+        "line": 13,
+        "col": 6,
+        "para": 1,
+        "sentence": 7,
+        "para_sentence": 4,
+        "context": "body",
+        "ord": 1087,
+        "snippet": "Let $z$ denote an unused offset."
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 13,
+        "col": 6,
+        "para": 1,
+        "sentence": 7,
+        "para_sentence": 4,
+        "context": "definition",
+        "ord": 1087,
+        "snippet": "Let $z$ denote an unused offset."
+      }
+    }
+  ],
+  "abbreviations": [
+    {
+      "short": "GR",
+      "uses": 2,
+      "long": "gear ratio"
+    },
+    {
+      "short": "MLP",
+      "uses": 1
+    },
+    {
+      "short": "WSN",
+      "uses": 4,
+      "long": "widget scoring network"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+[package]
+name = "ym-gitsync"
+version.workspace = true
+edition.workspace = true
+description = "Git sync for app workspaces through the system git: fast-forward pulls, never force-push, secret scan before commit, commit only chosen path prefixes (family mode), offline/auth/conflict error kinds."
+
+[dependencies]
+serde.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

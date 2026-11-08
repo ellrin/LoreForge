@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "entries": [
+    { "id": "w", "kind": "symbol", "latex": "\\boldsymbol{w}", "meaning": "權重向量", "meaning_en": "weight vector", "shape": "d", "domain": "\\mathbb{R}^{d}", "gloss": "每個特徵的重要性", "tags": [] },
+    { "id": "speed", "kind": "symbol", "latex": "u", "macro": "speed", "meaning": "零件速度", "meaning_en": "widget speed", "unit": "rpm", "gloss": "轉得多快" },
+    { "id": "anchor", "kind": "symbol", "latex": "\\boldsymbol{a}", "meaning": "錨點", "meaning_en": "anchor" },
+    { "id": "score", "kind": "symbol", "latex": "s", "meaning": "零件分數", "meaning_en": "widget score", "kb": "kb-widget-score" },
+    { "id": "gamma-bias", "kind": "symbol", "latex": "\\gamma", "meaning": "偏差", "meaning_en": "bias" },
+    { "id": "gamma-rate", "kind": "symbol", "latex": "\\gamma", "meaning": "學習率", "meaning_en": "learning rate" },
+    { "id": "omega", "kind": "symbol", "latex": "\\Omega", "meaning": "沒用到的符號" },
+    { "id": "bad-macro", "kind": "symbol", "latex": "\\boldsymbol{q}", "macro": "alpha", "meaning": "示範：巨集名稱衝突" },
+    { "id": "mean", "kind": "operator", "latex": "\\operatorname{mean}", "macro": "avg", "meaning": "平均" },
+    { "id": "eq-score", "kind": "equation", "latex": "s = \\boldsymbol{w}^{\\top}\\boldsymbol{a} + \\beta u", "label": "eq:score", "meaning": "分數公式", "gloss": "(score)", "uses": ["w", "anchor", "speed"] },
+    { "id": "fig-overview", "kind": "figure", "label": "fig:overview", "file": "overview", "caption": "Overview." },
+    { "id": "wsn", "kind": "abbrev", "short": "WSN", "long": "widget scoring network", "macro": "wsn" },
+    { "id": "mlp", "kind": "abbrev", "short": "MLP", "long": "multilayer perceptron" },
+    { "id": "gear-ratio", "kind": "term", "meaning": "齒輪比", "meaning_en": "gear ratio", "kb": "kb-gear-ratio" }
+  ]
+}

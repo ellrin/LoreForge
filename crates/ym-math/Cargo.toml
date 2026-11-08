@@ -1,0 +1,13 @@
+[package]
+name = "ym-math"
+description = "LaTeX <-> OMML via an offline pandoc sidecar, plus PowerPoint equation objects"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+ym-ooxml = { path = "../ym-ooxml" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

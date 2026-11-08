@@ -1,0 +1,27 @@
+\section{Method}\label{sec:method}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{overview}
+\caption{Overview. The weight vector $\vw$ scores each widget}
+\label{fig:overview}
+\end{figure}
+
+Let $\vw\in\mathbb{R}^{d}$ denote the weight vector of the scorer.
+Each widget has an anchor $\boldsymbol{a}$ and a set $\mathcal{A}$ of teeth, where $n=|\mathcal{A}|$.
+Here, $\speed$ denotes the widget speed and $v$ denotes the widget speed.
+Let $z$ denote an unused offset.
+The score is
+\begin{equation}
+\label{eq:score}
+s = \vw^{\top}\boldsymbol{a} + \beta\,\speed,
+\end{equation}
+where $s$ is the widget score.
+The loss is
+\begin{equation}
+\label{eq:loss}
+L = (s - \eta)^2 + \gamma .
+\end{equation}
+We set the decay $a=0.9$ and $\gamma=0.1$.
+For a group $\mathcal{B}$ of widgets, $n=|\mathcal{B}|$ counts its members.
+The pipeline appears in Fig.~\ref{fig:overview}, and Figure~\ref{fig:overview} repeats it; \eqref{eq:score} gives the score.

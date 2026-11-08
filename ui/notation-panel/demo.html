@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>notation-panel 示範</title>
+<!-- KaTeX copied from PaperComposer/public/ui/vendor/katex (0.16.47) -->
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<script src="vendor/katex/katex.min.js"></script>
+<script src="notation-panel.js"></script>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --fg:#1d2228; --card:#fff; --line:#e3e6ea; --mute:#6b7280; --hi:#fff3bf; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1114; --fg:#e6e8eb; --card:#16191d; --line:#2b3036; --mute:#9aa3ad; --hi:#4a3f12; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 "Noto Sans TC", system-ui, sans-serif; }
+  header { padding:12px 16px; border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:16px; }
+  header p { margin:4px 0 0; color:var(--mute); font-size:13px; }
+  main { display:grid; grid-template-columns:minmax(0,3fr) minmax(0,2fr); gap:16px; padding:16px; height:calc(100vh - 90px); box-sizing:border-box; }
+  @media (max-width: 900px) { main { grid-template-columns:1fr; height:auto; } notation-panel { height:70vh; } }
+  .side { display:flex; flex-direction:column; gap:12px; min-height:0; overflow:auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .card h2 { margin:0 0 6px; font-size:13px; color:var(--mute); font-weight:600; }
+  textarea { width:100%; box-sizing:border-box; min-height:90px; font:13px "JetBrains Mono", ui-monospace, monospace; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px; }
+  #log { font:12px "JetBrains Mono", ui-monospace, monospace; max-height:180px; overflow:auto; white-space:pre-wrap; margin:0; }
+  #jump { font-size:13px; }
+  #jump code { background:var(--hi); padding:1px 4px; border-radius:4px; }
+  #preview [data-notation] { border-bottom:1px dotted currentColor; cursor:help; }
+  label { font-size:12px; color:var(--mute); }
+</style>
+</head>
+<body>
+<header>
+  <h1>notation-panel — 對照表元件示範</h1>
+  <p>資料：<code>demo/sample-notation.json</code>（合成範例的對照表）與 <code>demo/sample-report.json</code>（<code>cargo run -p ym-notation --example check</code> 的校對結果）。</p>
+</header>
+<main>
+  <notation-panel id="panel" src="demo/sample-notation.json" report-src="demo/sample-report.json" mode="macro"></notation-panel>
+  <div class="side">
+    <div class="card">
+      <h2>編輯器（「插入」會放到游標處）</h2>
+      <textarea id="editor">Let $\speed$ denote the widget speed. </textarea>
+      <label><input type="checkbox" id="inmath"> 游標在數學模式內</label>
+    </div>
+    <div class="card">
+      <h2>跳到位置（notation-jump）</h2>
+      <div id="jump">在「校對」分頁點一個位置。</div>
+    </div>
+    <div class="card">
+      <h2>預覽（滑過有底線的符號看說明）</h2>
+      <div id="preview"></div>
+    </div>
+    <div class="card">
+      <h2>事件紀錄</h2>
+      <pre id="log"></pre>
+    </div>
+  </div>
+</main>
+<script>
+  const panel = document.getElementById("panel");
+  const editor = document.getElementById("editor");
+  const inmath = document.getElementById("inmath");
+  const log = (type, d) => {
+    const pre = document.getElementById("log");
+    const brief = { ...d };
+    delete brief.notation; delete brief.entry; delete brief.issue;
+    pre.textContent = `${type} ${JSON.stringify(brief)}\n` + pre.textContent;
+  };
+  panel.inMath = () => inmath.checked;
+  panel.addEventListener("notation-insert", (ev) => {
+    const text = inmath.checked ? ev.detail.math : ev.detail.text;
+    const s = editor.selectionStart, e = editor.selectionEnd;
+    editor.setRangeText(text, s, e, "end");
+    editor.focus();
+    log("notation-insert", ev.detail);
+  });
+  for (const t of ["notation-change", "notation-add", "notation-delete", "notation-select"]) {
+    panel.addEventListener(t, (ev) => { log(t, ev.detail); if (t !== "notation-select") preview(); });
+  }
+  panel.addEventListener("notation-jump", (ev) => {
+    const d = ev.detail;
+    const box = document.getElementById("jump");
+    box.textContent = "";
+    const head = document.createElement("div");
+    head.textContent = `${d.file} 第 ${d.line} 行第 ${d.col} 欄 · 第 ${d.para + 1} 段第 ${d.para_sentence} 句（全檔第 ${d.sentence} 句） · ${d.context}`;
+    const code = document.createElement("code");
+    code.textContent = d.snippet;
+    box.append(head, code);
+    log("notation-jump", d);
+  });
+  const tip = new NotationTooltip(panel);
+  tip.attach(document.getElementById("preview"));
+  function preview() {
+    tip.renderText(document.getElementById("preview"),
+      "The score is $s$, computed from the weight vector $\\boldsymbol{w}$, the anchor $\\boldsymbol{a}$ and the speed $\\speed$; the bias $\\gamma$ appears twice in the table.");
+  }
+  panel.addEventListener("notation-loaded", (ev) => { if (ev.detail.what === "notation") preview(); });
+</script>
+</body>
+</html>
