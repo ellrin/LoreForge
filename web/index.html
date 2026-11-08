@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="orange" data-mode="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KnowledgeBase</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='6' cy='6' r='3' fill='%23ff6b35'/%3E%3Ccircle cx='18' cy='8' r='3' fill='%23ff6b35'/%3E%3Ccircle cx='10' cy='18' r='3' fill='%23ff6b35'/%3E%3Cpath d='M6 6 18 8 10 18Z' fill='none' stroke='%23ff6b35' stroke-width='1.5'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="styles.css">
+  <script>try { const m = localStorage.getItem("kb.mode"); if (m === "light" || m === "dark") document.documentElement.dataset.mode = m; } catch {}</script>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <button class="ico only-narrow" id="actNav" data-icon="menu" aria-label="選單"></button>
+    <div class="brand">KNOWLEDGE<b>/</b>BASE</div>
+    <label class="search"><span data-icon="search"></span><input id="q" type="search" placeholder="搜尋標題、別名、摘要、內文…" autocomplete="off"></label>
+    <div class="top-right">
+      <span class="chip" id="memberChip" title="目前使用者"></span>
+      <button class="ico" id="actNew" data-icon="plus" aria-label="新增知識卡"></button>
+      <button class="ico" id="actReindex" data-icon="refresh" aria-label="從檔案重建索引"></button>
+      <button class="ico" id="actMode" data-icon="sun" aria-label="切換深色／淺色"></button>
+    </div>
+  </header>
+
+  <aside class="left" id="left" aria-label="導覽">
+    <ol class="views" id="views">
+      <li><button data-view="cards"><span data-icon="cards"></span><span class="t">知識卡</span><span class="count" id="cCards"></span></button></li>
+      <li><button data-view="review"><span data-icon="target"></span><span class="t">複習</span><span class="count hot" id="cDue"></span></button></li>
+      <li><button data-view="timeline"><span data-icon="calendar"></span><span class="t">時間軸</span></button></li>
+      <li><button data-view="graph"><span data-icon="graph"></span><span class="t">圖譜</span></button></li>
+    </ol>
+
+    <section class="filters" id="filters">
+      <h4>篩選</h4>
+      <label>時間
+        <select id="fTime">
+          <option value="">全部</option>
+          <option value="1">今天</option>
+          <option value="7">最近 7 天</option>
+          <option value="30">最近 30 天</option>
+          <option value="365">最近一年</option>
+        </select>
+      </label>
+      <div class="seg" id="fDateField" role="group" aria-label="時間依據">
+        <button data-v="created" aria-pressed="true">建立</button>
+        <button data-v="updated">修改</button>
+      </div>
+      <label>熟悉度
+        <select id="fState">
+          <option value="">全部</option>
+          <option value="due">到期待複習</option>
+          <option value="learning">學習中</option>
+          <option value="known">記得</option>
+          <option value="stale">久未複習</option>
+          <option value="none">尚無紀錄</option>
+        </select>
+      </label>
+      <label>種類 <select id="fKind"><option value="">全部</option></select></label>
+      <label>標籤 <select id="fTag"><option value="">全部</option></select></label>
+      <label>空間 <select id="fSpace"><option value="">全部</option></select></label>
+      <label>排序
+        <select id="fSort">
+          <option value="updated">最近修改</option>
+          <option value="created">最近建立</option>
+          <option value="title">標題</option>
+          <option value="score">最不熟的先</option>
+        </select>
+      </label>
+    </section>
+    <div class="left-foot" id="spacesFoot"></div>
+  </aside>
+
+  <main class="page" id="page">
+    <section class="view" data-view="cards">
+      <div class="view-head"><h2>知識卡</h2><span class="muted" id="cardsInfo"></span></div>
+      <div class="cards" id="cardList"></div>
+    </section>
+
+    <section class="view" data-view="editor" hidden>
+      <div class="view-head">
+        <button class="ico" id="edBack" data-icon="back" aria-label="回到清單"></button>
+        <h2 id="edHeading">新增知識卡</h2>
+        <span class="muted mono" id="edMeta"></span>
+        <div class="head-actions">
+          <select id="edShareTo" hidden aria-label="分享到"></select>
+          <button class="btn" id="edShare" hidden><span data-icon="share"></span>分享到…</button>
+          <button class="ico" id="edDelete" data-icon="trash" aria-label="移到垃圾桶" hidden></button>
+          <button class="btn primary" id="edSave"><span data-icon="check"></span>儲存</button>
+        </div>
+      </div>
+      <div class="editor">
+        <form class="ed-form" id="edForm" autocomplete="off">
+          <div class="row2">
+            <label>標題 <input id="edTitle" required placeholder="例：Dice coefficient"></label>
+            <label>種類 <select id="edKind"></select></label>
+          </div>
+          <div class="row2">
+            <label>別名（逗號分隔）<input id="edAliases" placeholder="DSC, Dice score"></label>
+            <label>空間 <select id="edSpace"></select></label>
+          </div>
+          <div class="row2">
+            <label>標籤（逗號分隔，可用 / 分層）<input id="edTags" placeholder="metric, deep-learning/cnn"></label>
+            <label>領域 <input id="edDomains" placeholder="medical-image-analysis"></label>
+          </div>
+          <label>摘要 <textarea id="edSummary" rows="2" placeholder="一兩句話說明"></textarea></label>
+          <label class="grow">內文（Markdown + LaTeX，<code>[[標題]]</code> 連到其他卡片；可貼上或拖曳圖片）
+            <textarea id="edBody" rows="12" spellcheck="false"></textarea>
+          </label>
+          <div class="ed-tools">
+            <button type="button" class="btn" id="edInsertLink"><span data-icon="link"></span>插入 [[連結]]</button>
+            <button type="button" class="btn" id="edAddImage"><span data-icon="image"></span>加入圖片</button>
+            <input type="file" id="edImageFile" accept="image/*,.pdf" hidden multiple>
+            <button type="button" class="btn" id="edDraft"><span data-icon="spark"></span>從上下文起草</button>
+          </div>
+          <div class="ed-images" id="edImages"></div>
+          <div class="ed-links">
+            <div class="sub-head"><h4>明確連結</h4><button type="button" class="btn small" id="edAddLink"><span data-icon="plus"></span>新增連結</button></div>
+            <ul id="edLinks"></ul>
+          </div>
+        </form>
+        <div class="ed-preview">
+          <div class="paper" id="edPreview"></div>
+          <div class="side-block" id="edBacklinks"></div>
+          <div class="side-block" id="edProgress"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" data-view="review" hidden>
+      <div class="view-head"><h2>複習</h2><span class="muted" id="reviewInfo"></span></div>
+      <div class="review" id="review"></div>
+    </section>
+
+    <section class="view" data-view="timeline" hidden>
+      <div class="view-head"><h2>時間軸</h2>
+        <select id="tlDays" aria-label="範圍"><option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近一年</option></select>
+      </div>
+      <div class="timeline" id="timeline"></div>
+    </section>
+
+    <section class="view" data-view="graph" hidden>
+      <div class="view-head"><h2>圖譜</h2>
+        <span class="muted" id="graphInfo"></span>
+        <div class="head-actions">
+          <label class="check"><input type="checkbox" id="gTags"> 顯示標籤</label>
+          <select id="gDepth" aria-label="深度"><option value="1">1 層</option><option value="2" selected>2 層</option><option value="3">3 層</option></select>
+          <button class="btn" id="gAll"><span data-icon="graph"></span>全部</button>
+        </div>
+      </div>
+      <div class="graph-wrap"><canvas id="graph"></canvas>
+        <div class="legend"><span><i class="st-learning"></i>學習中</span><span><i class="st-known"></i>記得</span><span><i class="st-stale"></i>久未複習</span><span><i class="st-none"></i>尚無紀錄</span></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="picker" class="dlg">
+  <form method="dialog" class="dlg-body">
+    <h3 id="pickerTitle">選擇知識卡</h3>
+    <div class="row2">
+      <input id="pickerQ" type="search" placeholder="搜尋卡片…" autocomplete="off">
+      <select id="pickerRel" aria-label="連結類型"></select>
+    </div>
+    <ul class="pick-list" id="pickerList"></ul>
+    <div class="dlg-actions"><button class="btn" value="cancel">取消</button></div>
+  </form>
+</dialog>
+
+<dialog id="draftDlg" class="dlg">
+  <form method="dialog" class="dlg-body">
+    <h3>從上下文起草</h3>
+    <p class="muted">貼上論文段落或投影片文字，產生卡片草稿（目前為離線 mock，之後接 ym-llm）。</p>
+    <label>術語 <input id="draftTerm"></label>
+    <label>上下文 <textarea id="draftCtx" rows="6"></textarea></label>
+    <div class="dlg-actions"><button class="btn" value="cancel">取消</button><button class="btn primary" id="draftGo" value="ok">起草</button></div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="vendor/katex/katex.min.js"></script>
+<script src="icons.js"></script>
+<script src="md.js"></script>
+<script src="graph.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

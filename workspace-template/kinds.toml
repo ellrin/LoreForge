@@ -1,0 +1,27 @@
+# 知識卡種類。內建：concept term method equation anatomy dataset metric paper person vocab。
+# 這裡可以替內建種類加欄位，或新增種類（欄位存在卡片 JSON 的最上層）。
+# type：text | markdown | latex | number | list | url
+
+[kinds.equation]
+fields = [{ name = "latex", label = "LaTeX", type = "latex" }]
+layout = "equation"
+
+[kinds.metric]
+fields = [{ name = "formula", label = "公式", type = "latex" }, { name = "range", label = "範圍", type = "text" }]
+
+[kinds.paper]
+fields = [
+  { name = "doi", label = "DOI", type = "text" },
+  { name = "year", label = "年份", type = "number" },
+  { name = "venue", label = "期刊／會議", type = "text" },
+]
+
+[kinds.dataset]
+fields = [{ name = "url", label = "網址", type = "url" }, { name = "modality", label = "影像種類", type = "text" }]
+
+[kinds.anatomy]
+layout = "image-first"
+
+# 例：新增種類
+# [kinds.theorem]
+# label = "定理"

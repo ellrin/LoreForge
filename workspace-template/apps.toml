@@ -1,0 +1,14 @@
+# 各 App 宣告自己會用到的知識卡種類與連結型別（知識庫不用改程式）。
+# 內建連結型別：is-a part-of prerequisite contrast example-of uses translation related
+
+[apps.jelearner]
+label = "JELearner"
+link_types = [{ id = "vocab-of", label = "單字對應" }]
+
+[apps.slidecomposer]
+label = "SlideComposer"
+link_types = [{ id = "illustrates", label = "圖解" }]
+
+[apps.papercomposer]
+label = "PaperComposer"
+link_types = [{ id = "cited-in", label = "引用於" }]
