@@ -1,7 +1,8 @@
 //! Claude through the Anthropic Messages API (API key).
 //!
 //! Current API conventions (JELearner decisions §3, design §9):
-//! - `anthropic-version: 2026-10-21`; no `temperature` / `top_p` (rejected).
+//! - `anthropic-version: 2026-10-21`; no `temperature` / `top_p` (rejected by
+//!   the current API): `LlmRequest.temperature` / `top_p` are left out here.
 //! - Structured output via `output_config.format` (JSON Schema), effort via
 //!   `output_config.effort`.
 //! - `fallbacks: "default"` with beta `server-side-fallback-2026-07-01`, except
@@ -393,11 +394,11 @@ mod tests {
     #[test]
     fn body_follows_current_api() {
         let p = claude("http://x".into(), "claude-sonnet-5-5");
-        let b = p.body(&req());
+        let b = p.body(&req().temperature(0.2).top_p(0.9));
         assert_eq!(b["output_config"]["format"]["type"], "json_schema");
         assert_eq!(b["output_config"]["effort"], "medium");
         assert_eq!(b["fallbacks"], "default");
-        assert!(b.get("temperature").is_none() && b.get("top_p").is_none(), "sampling params are rejected");
+        assert!(b.get("temperature").is_none() && b.get("top_p").is_none(), "sampling params are never sent, even when the request sets them");
         assert!(b.get("tools").is_none());
         assert_eq!(b["messages"][0]["content"][0]["type"], "text");
 

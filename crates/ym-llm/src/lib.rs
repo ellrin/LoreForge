@@ -11,7 +11,7 @@
 //! - [`router`]: task routing from `tasks.toml` (needs → model, fallback,
 //!   offline), with per-task user overrides.
 //! - [`json`]: extract / validate / retry structured replies.
-//! - [`secrets`]: API keys in the OS keychain.
+//! - [`secrets`]: API keys in the OS keychain (the `ym-secrets` crate, re-exported).
 //! - [`zhtw`] (feature `zhtw`): Taiwan usage for local-model replies.
 //!
 //! Upper layers never name an engine or a model: they ask the router for a
@@ -42,5 +42,5 @@ pub use json::{complete_as, complete_json};
 pub use mock::MockProvider;
 pub use openai::{LlamaServer, LlamaServerConfig, OpenAiCompat, OpenAiCompatConfig};
 pub use provider::{LlmProvider, OnEvent};
-pub use router::{ModelRef, ProviderFactory, Route, RouteError, Router, StandardFactory, TaskSpec, TaskTable};
+pub use router::{ModelRef, ProviderFactory, Route, RouteError, RouteOptions, Router, StandardFactory, TaskSpec, TaskTable};
 pub use types::{Capabilities, Image, LlmRequest, LlmResponse, Message, Needs, Part, Role, StreamEvent, Usage, WebSource};

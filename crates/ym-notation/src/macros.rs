@@ -203,7 +203,9 @@ pub enum InsertMode {
 /// inside math. Macro mode falls back to literal when the entry has no macro.
 pub fn insert_text(e: &Entry, mode: InsertMode, in_math: bool) -> String {
     let mac = e.macro_name().filter(|_| mode == InsertMode::Macro);
-    let wrap = |s: String| if in_math { s } else { format!("${s}$") };
+    // in math a trailing control word (`\speed`, `\alpha`) gets a space so a
+    // letter typed next does not merge into it (`\speedx`)
+    let wrap = |s: String| if in_math { if ends_with_control_word(&s) { s + " " } else { s } } else { format!("${s}$") };
     match e.kind() {
         Kind::Symbol | Kind::Operator => match mac {
             Some(m) => wrap(format!("\\{m}")),
@@ -230,6 +232,12 @@ pub fn insert_text(e: &Entry, mode: InsertMode, in_math: bool) -> String {
             None => e.meaning_en.clone().or(e.meaning.clone()).unwrap_or_default(),
         },
     }
+}
+
+/// `\name` at the very end (a letter typed after it would join the name).
+pub fn ends_with_control_word(s: &str) -> bool {
+    let letters = s.chars().rev().take_while(|c| c.is_ascii_alphabetic()).count();
+    letters > 0 && s[..s.len() - letters].ends_with('\\') && !s[..s.len() - letters - 1].ends_with('\\')
 }
 
 /// A Nomenclature table (symbols and operators, then abbreviations).
@@ -384,6 +392,8 @@ mod tests {
         assert_eq!(k["\\wn"], "\\text{WN}");
         assert_eq!(insert_text(&n.entries[0], InsertMode::Macro, false), "$\\wmask$");
         assert_eq!(insert_text(&n.entries[0], InsertMode::Literal, true), "\\boldsymbol{m}");
+        assert_eq!(insert_text(&n.entries[0], InsertMode::Macro, true), "\\wmask ", "a following letter must not join the macro name");
+        assert!(ends_with_control_word("a+\\alpha") && !ends_with_control_word("x\\\\y") && !ends_with_control_word("\\bm{m}"));
         assert_eq!(insert_text(&n.entries[3], InsertMode::Literal, false), "WN");
         let mut f = Entry::new("f1", Kind::Figure);
         f.label = Some("fig:a".into());

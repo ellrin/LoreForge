@@ -19,7 +19,7 @@ tokio.workspace = true
 reqwest.workspace = true
 futures-util.workspace = true
 base64.workspace = true
-keyring.workspace = true
+ym-secrets = { path = "../ym-secrets" }
 ferrous-opencc = { workspace = true, optional = true }
 
 [dev-dependencies]

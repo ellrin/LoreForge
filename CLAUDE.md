@@ -6,7 +6,7 @@ design is in `../docs/ecosystem-design.md` — read the section for the crate yo
 
 ## Layout
 
-- `crates/<name>/` — one crate per module (`ym-llm`, `ym-gitsync`, `ym-store`, `kb-core`,
+- `crates/<name>/` — one crate per module (`ym-llm`, `ym-secrets`, `ym-gitsync`, `ym-store`, `kb-core`,
   `ym-notation`, `ym-voice`, `ym-docsrc`, `ym-canvas`, `ym-ooxml`, `ym-math`).
   Each crate knows nothing about any app. Apps depend on them by path
   (`../../commons/crates/<name>` from an app's `public/` workspace).

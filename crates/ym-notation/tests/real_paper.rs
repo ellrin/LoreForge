@@ -9,8 +9,8 @@
 //! `NOTATION_EXPECT` (optional) is a JSON list of findings a human review
 //! made: `[{"name": "...", "code": "used_before_definition", "subject": "G",
 //! "contains": ["圖表說明"]}]`. A finding is found when an issue has that
-//! code, that exact subject (if given) and every `contains` string in its
-//! subject, message or details. The test prints the recall table and fails
+//! code, that exact subject (if given; a grouped issue counts for each of its
+//! `subjects`) and every `contains` string in its subject, message or details. The test prints the recall table and fails
 //! below `NOTATION_MIN_RECALL` (default 0.8). Both files stay outside the repo.
 
 use serde::Deserialize;
@@ -50,7 +50,9 @@ fn real_paper_recall() {
     for e in &expect {
         let hit = report.issues.iter().position(|i| {
             let hay = format!("{} {} {}", i.subject.clone().unwrap_or_default(), i.message, i.details.join(" "));
-            i.code == e.code && e.subject.as_ref().is_none_or(|s| i.subject.as_deref() == Some(s.as_str())) && e.contains.iter().all(|c| hay.contains(c.as_str()))
+            // a grouped issue (one caption, several symbols) covers each of its `subjects`
+            let subject_ok = e.subject.as_ref().is_none_or(|s| i.subject.as_deref() == Some(s.as_str()) || i.subjects.contains(s));
+            i.code == e.code && subject_ok && e.contains.iter().all(|c| hay.contains(c.as_str()))
         });
         if let Some(k) = hit {
             used[k] = true;
@@ -60,6 +62,8 @@ fn real_paper_recall() {
     }
     let recall = found as f64 / expect.len().max(1) as f64;
     eprintln!("\nrecall {found}/{} = {recall:.2}", expect.len());
+    let warn = report.issues.iter().filter(|i| i.severity != Severity::Info).count();
+    eprintln!("{} issues: {warn} warnings/errors, {} info", report.issues.len(), report.issues.len() - warn);
     eprintln!("\nnot in the review list (warnings and errors):");
     for (k, i) in report.issues.iter().enumerate() {
         if !used[k] && i.severity != Severity::Info {

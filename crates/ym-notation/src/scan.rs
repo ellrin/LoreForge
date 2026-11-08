@@ -428,6 +428,20 @@ impl Scan {
         out.trim().to_string()
     }
 
+    /// Area of the text at `off` (the item that covers it; body otherwise).
+    pub fn area_at(&self, off: usize) -> Area {
+        let k = self.items.partition_point(|it| it.start <= off);
+        match k.checked_sub(1).map(|k| &self.items[k]) {
+            Some(it) if off < it.end.max(it.start + 1) => it.ctx.area,
+            _ => Area::Body,
+        }
+    }
+
+    /// Caption (index into `captions`) that contains `off`.
+    pub fn caption_at(&self, off: usize) -> Option<usize> {
+        self.captions.iter().position(|c| c.start <= off && off < c.end)
+    }
+
     pub fn context_of(&self, ctx: Ctx, display: bool) -> &'static str {
         if display && matches!(ctx.area, Area::Body | Area::Abstract) { "equation" } else { ctx.area.as_str() }
     }

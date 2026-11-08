@@ -31,6 +31,10 @@ pub struct Issue {
     /// Symbol key, abbreviation, label or word the issue is about.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// Every subject a grouped issue covers (several symbols one caption
+    /// uses before the text defines them); empty for single-subject issues.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subjects: Vec<String>,
     /// Registry entry id, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
@@ -107,7 +111,7 @@ impl Default for CheckOptions {
         CheckOptions {
             caption_defines: false,
             grace_sentences: 3,
-            allow_abbrevs: ["IEEE", "ID", "PDF", "URL", "USA", "UK", "HTML", "GPU", "CPU", "RGB", "DOI", "ISBN"].iter().map(|s| s.to_string()).collect(),
+            allow_abbrevs: ["AI", "IEEE", "ID", "PDF", "URL", "USA", "UK", "HTML", "GPU", "CPU", "RGB", "DOI", "ISBN"].iter().map(|s| s.to_string()).collect(),
             section_labels: false,
             abstract_abbrevs: true,
             index_letters: math::DEFAULT_INDEX.iter().map(|s| s.to_string()).collect(),
@@ -145,7 +149,7 @@ impl<'a> Ctx<'a> {
         let mut locations = locations;
         locations.truncate(self.opt.max_locations);
         let entry = subject.as_ref().and_then(|s| self.reg_keys.get(s).cloned());
-        self.issues.push(Issue { code: code.into(), category: category.into(), severity, message, subject, entry, locations, related: vec![], details: vec![] });
+        self.issues.push(Issue { code: code.into(), category: category.into(), severity, message, subject, subjects: vec![], entry, locations, related: vec![], details: vec![] });
         self.issues.last_mut().unwrap()
     }
 
@@ -165,6 +169,8 @@ impl<'a> Ctx<'a> {
     fn symbols(&mut self) {
         let grace = self.opt.grace_sentences;
         let syms = self.syms;
+        // caption → symbols it uses before the text defines them: (key, early uses, definition)
+        let mut by_caption: BTreeMap<usize, Vec<(String, Vec<Loc>, Loc)>> = BTreeMap::new();
         for info in syms.table.values() {
             if self.conventional.contains(&info.key) {
                 continue;
@@ -172,11 +178,16 @@ impl<'a> Ctx<'a> {
             let key = info.key.clone();
             if info.defs.is_empty() {
                 let locs: Vec<Loc> = info.occs.iter().map(|o| self.occ_loc(o.off, o.area, o.display)).collect();
-                let mut msg = format!("符號 ${key}$ 用了 {} 次，但正文沒有定義", info.occs.len());
-                if let Some(m) = self.reg_meaning(&key) {
-                    msg.push_str(&format!("（對照表：{m}）"));
-                }
-                self.push("undefined_symbol", "symbol", Severity::Warning, msg, Some(key.clone()), locs);
+                let n = info.occs.len();
+                // only in tables (usually a column header such as $\Delta$AUC): a hint, not a warning
+                let only_table = info.occs.iter().all(|o| o.area == Area::Table);
+                let reg = self.reg_meaning(&key).map(|m| format!("（對照表：{m}）")).unwrap_or_default();
+                let (sev, msg) = if only_table {
+                    (Severity::Info, format!("符號 ${key}$ 只出現在表格裡（{n} 次），正文沒有說明{reg} — 若是表頭的慣用寫法可標為慣用，否則在表說明補一句"))
+                } else {
+                    (Severity::Warning, format!("符號 ${key}$ 用了 {n} 次，但正文沒有定義{reg} — 第一次用到時補一句說明（「${key}$ denotes …」）"))
+                };
+                self.push("undefined_symbol", "symbol", sev, msg, Some(key.clone()), locs);
                 continue;
             }
             let d = info.first_def().unwrap().clone();
@@ -187,17 +198,21 @@ impl<'a> Ctx<'a> {
                 .filter(|o| !(o.display && d.sentence >= o.sentence && d.sentence - o.sentence <= grace && o.area != Area::Caption))
                 .collect();
             if !early.is_empty() {
-                let in_caption = early.iter().any(|o| o.area == Area::Caption);
                 let dl = self.def_loc(&d);
-                let first = self.occ_loc(early[0].off, early[0].area, early[0].display);
-                let msg = if in_caption {
-                    format!("符號 ${key}$ 先出現在圖表說明（{}:{}），正文到 {}:{} 才定義", first.file, first.line, dl.file, dl.line)
+                let locs: Vec<Loc> = early.iter().map(|o| self.occ_loc(o.off, o.area, o.display)).collect();
+                // floats come early: everything one caption uses too soon is one issue
+                let caption = Some(early[0]).filter(|o| o.area == Area::Caption).and_then(|o| self.scan.caption_at(o.off));
+                if let Some(ci) = caption {
+                    by_caption.entry(ci).or_default().push((key.clone(), locs, dl));
                 } else {
-                    format!("符號 ${key}$ 先用後定義：第一次用在 {}:{}，到 {}:{} 才定義", first.file, first.line, dl.file, dl.line)
-                };
-                let locs = early.iter().map(|o| self.occ_loc(o.off, o.area, o.display)).collect();
-                let iss = self.push("used_before_definition", "symbol", Severity::Warning, msg, Some(key.clone()), locs);
-                iss.related.push(dl);
+                    let first = &locs[0];
+                    let msg = format!(
+                        "符號 ${key}$ 先用後定義：第一次用在 {}:{}，到 {}:{} 才定義 — 把定義移到第一次使用的地方",
+                        first.file, first.line, dl.file, dl.line
+                    );
+                    let iss = self.push("used_before_definition", "symbol", Severity::Warning, msg, Some(key.clone()), locs);
+                    iss.related.push(dl);
+                }
             }
             // defined twice with different content
             let mut contents: Vec<(String, &symbols::Def)> = Vec::new();
@@ -216,7 +231,11 @@ impl<'a> Ctx<'a> {
             let dens = contents.len() - eqs;
             if eqs >= 2 || dens >= 2 {
                 let locs: Vec<Loc> = contents.iter().map(|(_, d)| self.def_loc(d)).collect();
-                let details: Vec<String> = contents.iter().zip(&locs).map(|((c, _), l)| format!("{}:{}  ${key}$ {c}", l.file, l.line)).collect();
+                let details: Vec<String> = contents
+                    .iter()
+                    .zip(&locs)
+                    .map(|((c, _), l)| if c.starts_with('=') { format!("{}:{}  ${key} {c}$", l.file, l.line) } else { format!("{}:{}  ${key}$ {c}", l.file, l.line) })
+                    .collect();
                 let msg = format!("符號 ${key}$ 被定義了 {} 次，內容不同", contents.len());
                 let iss = self.push("symbol_multiple_meanings", "symbol", Severity::Warning, msg, Some(key.clone()), locs);
                 iss.details = details;
@@ -231,8 +250,34 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
+        self.caption_groups(by_caption);
         self.letter_overloading();
         self.same_meaning();
+    }
+
+    /// One issue per caption that uses symbols before the text defines them.
+    fn caption_groups(&mut self, by_caption: BTreeMap<usize, Vec<(String, Vec<Loc>, Loc)>>) {
+        for (ci, mut g) in by_caption {
+            g.sort_by_key(|(_, l, _)| l.first().map(|x| x.ord).unwrap_or(usize::MAX));
+            let cap = self.scan.loc(self.scan.captions[ci].start, "caption");
+            let at = format!("{}:{}", cap.file, cap.line);
+            let msg = if let [(key, _, dl)] = g.as_slice() {
+                format!("符號 ${key}$ 先出現在圖表說明（{at}），正文到 {}:{} 才定義 — 在圖說裡簡短說明它，或把定義移到圖之前", dl.file, dl.line)
+            } else {
+                let keys: Vec<String> = g.iter().map(|(k, _, _)| format!("${k}$")).collect();
+                format!("圖表說明（{at}）用了 {} 個正文後面才定義的符號：{} — 在圖說裡簡短說明，或把定義移到圖之前", g.len(), keys.join("、"))
+            };
+            let mut locs: Vec<Loc> = g.iter().flat_map(|(_, l, _)| l.iter().cloned()).collect();
+            locs.sort_by_key(|l| l.ord);
+            locs.dedup_by_key(|l| l.ord);
+            let details: Vec<String> = g.iter().map(|(k, l, dl)| format!("${k}$：先用在 {}:{}，{}:{} 才定義", l[0].file, l[0].line, dl.file, dl.line)).collect();
+            let related: Vec<Loc> = g.iter().map(|(_, _, dl)| dl.clone()).collect();
+            let subjects: Vec<String> = if g.len() > 1 { g.iter().map(|(k, _, _)| k.clone()).collect() } else { vec![] };
+            let iss = self.push("used_before_definition", "symbol", Severity::Warning, msg, Some(g[0].0.clone()), locs);
+            iss.related = related;
+            iss.details = if subjects.is_empty() { vec![] } else { details };
+            iss.subjects = subjects;
+        }
     }
 
     /// One letter in several fonts with different meanings (bold m vs m),
@@ -329,6 +374,8 @@ impl<'a> Ctx<'a> {
                 continue;
             }
             let mut bad: Vec<String> = Vec::new();
+            let l = self.scan.loc(seg.start, "equation");
+            let name = seg.labels.first().map(|x| format!("方程式 {x}")).unwrap_or_else(|| format!("方程式（{}:{}）", l.file, l.line));
             for info in self.syms.table.values() {
                 if self.conventional.contains(&info.key) || !info.occs.iter().any(|o| o.seg == si) {
                     continue;
@@ -337,6 +384,16 @@ impl<'a> Ctx<'a> {
                     None => false,
                     Some(d) => d.off <= seg.end || d.seg == si || (d.sentence >= seg.sentence && d.sentence - seg.sentence <= grace),
                 };
+                if !ok && info.defs.is_empty() {
+                    // never defined: already an undefined_symbol issue; note the equation there
+                    if let Some(iss) = self.issues.iter_mut().find(|i| i.code == "undefined_symbol" && i.subject.as_deref() == Some(info.key.as_str())) {
+                        if !iss.related.iter().any(|r| r.ord == l.ord) {
+                            iss.related.push(l.clone());
+                            iss.details.push(format!("也出現在{name}"));
+                        }
+                    }
+                    continue;
+                }
                 if !ok {
                     let later = info.first_def().map(|d| {
                         let l = self.def_loc(d);
@@ -348,9 +405,7 @@ impl<'a> Ctx<'a> {
             if bad.is_empty() {
                 continue;
             }
-            let l = self.scan.loc(seg.start, "equation");
-            let name = seg.labels.first().map(|x| format!("方程式 {x}")).unwrap_or_else(|| format!("方程式（{}:{}）", l.file, l.line));
-            let msg = format!("{name} 的變數未定義：{}", bad.join("、"));
+            let msg = format!("{name} 的變數到後面才定義：{} — 在方程式後面用「where …」說明，或把定義移到前面", bad.join("、"));
             let subj = seg.labels.first().cloned();
             let iss = self.push("equation_undefined_variables", "equation", Severity::Warning, msg, subj, vec![l]);
             iss.details = bad;
@@ -363,7 +418,7 @@ impl<'a> Ctx<'a> {
             self.reg.entries.iter().filter(|e| e.kind() == Kind::Abbrev).filter_map(|e| e.short.clone().map(|s| (s, e))).collect();
         let has_abstract = self.scan.items.iter().any(|i| i.ctx.area == Area::Abstract);
         for (short, a) in &abbr {
-            if self.opt.allow_abbrevs.iter().any(|x| x == short) || reg_abbr.get(short).is_some_and(|e| e.is_conventional()) {
+            if self.opt.allow_abbrevs.iter().any(|x| x == short) || reg_abbr.get(short).is_some_and(|e| e.is_conventional()) || self.reg.is_conventional(short) {
                 continue;
             }
             let entry = reg_abbr.get(short).map(|e| e.id.clone());
@@ -371,16 +426,31 @@ impl<'a> Ctx<'a> {
             let body_exp: Vec<&abbrev::Expansion> = a.expansions.iter().filter(|e| e.area != Area::Abstract).collect();
             let loc_u = |s: &Self, u: &abbrev::Use| s.scan.loc(u.off, u.area.as_str());
             if !body_uses.is_empty() && body_exp.is_empty() {
-                let hint = reg_abbr.get(short).and_then(|e| e.long.clone()).map(|l| format!("（對照表：{l}）")).unwrap_or_default();
-                let msg = format!("縮寫 {short} 在正文用了 {} 次，但從未展開{hint}", body_uses.len());
+                let long = reg_abbr.get(short).and_then(|e| e.long.clone());
+                let full = long.clone().unwrap_or_else(|| "全名".into());
+                let n = body_uses.len();
+                // model / method names (Grad-CAM, ConvNeXt, ECGAN): usually cited, not spelled out
+                let (sev, msg) = if long.is_none() && looks_like_name(short, &abbr) {
+                    (Severity::Info, format!("{short} 看起來是模型或方法名稱（正文用了 {n} 次，沒有全名） — 讀者不一定認識的話，第一次出現時寫成「全名 ({short})」或附上引用；是慣用名稱就標為慣用"))
+                } else {
+                    let hint = long.map(|l| format!("（對照表：{l}）")).unwrap_or_default();
+                    (Severity::Warning, format!("縮寫 {short} 在正文用了 {n} 次，但從未展開{hint} — 第一次出現時寫成「{full} ({short})」"))
+                };
                 let locs = body_uses.iter().map(|u| loc_u(self, u)).collect();
-                let iss = self.push("abbrev_never_expanded", "abbrev", Severity::Warning, msg, Some(short.clone()), locs);
+                let iss = self.push("abbrev_never_expanded", "abbrev", sev, msg, Some(short.clone()), locs);
                 iss.entry = entry.clone();
             } else if let Some(first_exp) = body_exp.first() {
                 let early: Vec<&&abbrev::Use> = body_uses.iter().filter(|u| u.off < first_exp.off).collect();
                 if !early.is_empty() {
                     let el = self.scan.loc(first_exp.off, first_exp.area.as_str());
-                    let msg = format!("縮寫 {short} 在展開（{}:{}「{}」）之前就用了 {} 次", el.file, el.line, first_exp.long, early.len());
+                    let msg = format!(
+                        "縮寫 {short} 在展開（{}:{}「{}」）之前就用了 {} 次 — 把「{} ({short})」移到第一次出現的地方",
+                        el.file,
+                        el.line,
+                        first_exp.long,
+                        early.len(),
+                        first_exp.long
+                    );
                     let locs = early.iter().map(|u| loc_u(self, u)).collect();
                     let iss = self.push("abbrev_used_before_expansion", "abbrev", Severity::Warning, msg, Some(short.clone()), locs);
                     iss.related.push(el);
@@ -388,7 +458,7 @@ impl<'a> Ctx<'a> {
                 }
                 if body_exp.len() >= 2 {
                     let locs: Vec<Loc> = body_exp.iter().map(|e| self.scan.loc(e.off, e.area.as_str())).collect();
-                    let msg = format!("縮寫 {short} 在正文展開了 {} 次", body_exp.len());
+                    let msg = format!("縮寫 {short} 在正文展開了 {} 次 — 只在第一次出現時展開，之後直接用 {short}", body_exp.len());
                     let iss = self.push("abbrev_expanded_twice", "abbrev", Severity::Info, msg, Some(short.clone()), locs);
                     iss.entry = entry.clone();
                 }
@@ -397,7 +467,7 @@ impl<'a> Ctx<'a> {
                 let abs_uses: Vec<&abbrev::Use> = a.uses.iter().filter(|u| u.area == Area::Abstract).collect();
                 let abs_exp = a.expansions.iter().any(|e| e.area == Area::Abstract);
                 if !abs_uses.is_empty() && !abs_exp {
-                    let msg = format!("摘要用了縮寫 {short} 但沒有在摘要內展開");
+                    let msg = format!("摘要用了縮寫 {short} 但沒有在摘要內展開 — 摘要要能單獨閱讀，第一次出現時寫成「全名 ({short})」");
                     let locs = abs_uses.iter().map(|u| loc_u(self, u)).collect();
                     let iss = self.push("abbrev_abstract", "abbrev", Severity::Info, msg, Some(short.clone()), locs);
                     iss.entry = entry.clone();
@@ -408,10 +478,25 @@ impl<'a> Ctx<'a> {
     }
 
     fn variants(&mut self) {
-        for g in abbrev::spelling_variants(self.scan) {
+        let scan = self.scan;
+        for g in abbrev::spelling_variants(scan) {
             let words: Vec<String> = g.iter().map(|(w, _)| w.clone()).collect();
-            let locs = g.iter().map(|(_, off)| self.scan.loc(*off, "body")).collect();
-            let msg = format!("同一個詞有不同寫法：{}", words.join(" / "));
+            // every use of each spelling (case-insensitive: "Non-fracture" at a sentence start is the same spelling)
+            let mut per: Vec<(String, Vec<usize>)> = words.iter().map(|w| (w.clone(), Vec::new())).collect();
+            for it in &scan.items {
+                if let ItemKind::Word(x) = &it.kind
+                    && let Some(p) = per.iter_mut().find(|p| p.0.eq_ignore_ascii_case(x)) {
+                        p.1.push(it.start);
+                    }
+            }
+            per.sort_by_key(|p| std::cmp::Reverse(p.1.len()));
+            let counts: Vec<String> = per.iter().map(|(w, o)| format!("{w} {} 次", o.len().max(1))).collect();
+            let fix = if per.len() >= 2 && per[0].1.len() > per[1].1.len() { format!("統一寫成「{}」", per[0].0) } else { "統一成一種寫法".into() };
+            let msg = format!("同一個詞有不同寫法：{} — {fix}", counts.join("、"));
+            // the less used spellings first: those are the ones to change
+            let mut offs: Vec<usize> = per.iter().skip(1).flat_map(|p| p.1.iter().copied()).collect();
+            offs.extend(per[0].1.first().copied().or(g.first().map(|x| x.1)));
+            let locs = offs.into_iter().map(|off| scan.loc(off, scan.area_at(off).as_str())).collect();
             self.push("spelling_variants", "style", Severity::Warning, msg, Some(words.join(" / ")), locs);
         }
     }
@@ -437,9 +522,16 @@ impl<'a> Ctx<'a> {
                     "eq" => "方程式",
                     _ => "章節",
                 };
-                let msg = format!("{what}標籤 {} 從未被引用", l.key);
+                // an equation label nobody cites is harmless (numbering only): a hint
+                let (sev, fix) = match l.kind.as_str() {
+                    "eq" => (Severity::Info, "不需要引用的話可以拿掉 \\label".to_string()),
+                    "fig" => (Severity::Warning, format!("在正文用 Fig.~\\ref{{{}}} 提到它", l.key)),
+                    "tab" => (Severity::Warning, format!("在正文用 Table~\\ref{{{}}} 提到它", l.key)),
+                    _ => (Severity::Warning, format!("用 \\ref{{{}}} 提到它，或拿掉標籤", l.key)),
+                };
+                let msg = format!("{what}標籤 {} 從未被引用 — {fix}", l.key);
                 let loc = scan.loc(l.off, if l.kind == "eq" { "equation" } else { l.ctx.area.as_str() });
-                self.push("label_unreferenced", "ref", Severity::Warning, msg, Some(l.key.clone()), vec![loc]);
+                self.push("label_unreferenced", "ref", sev, msg, Some(l.key.clone()), vec![loc]);
             }
         }
         let labels: BTreeSet<&str> = scan.labels.iter().map(|l| l.key.as_str()).collect();
@@ -521,8 +613,9 @@ impl<'a> Ctx<'a> {
             }
             v.sort_by_key(|x| std::cmp::Reverse(x.1.len()));
             let names: Vec<String> = v.iter().map(|(f, o)| format!("{f}~\\ref（{} 次）", o.len())).collect();
-            let locs = v[1..].iter().flat_map(|(_, o)| o.iter().map(|x| scan.loc(*x, "body"))).collect();
-            self.push("ref_prefix_style", "style", Severity::Info, format!("引用前綴不一致：{}", names.join("、")), None, locs);
+            let locs = v[1..].iter().flat_map(|(_, o)| o.iter().map(|x| scan.loc(*x, scan.area_at(*x).as_str()))).collect();
+            let msg = format!("引用前綴不一致：{} — 統一寫成「{}」", names.join("、"), v[0].0);
+            self.push("ref_prefix_style", "style", Severity::Info, msg, None, locs);
         }
     }
 
@@ -651,6 +744,16 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// A model or method name rather than a plain abbreviation: mixed case
+/// (`Grad-CAM`), digits, a hyphen, or another acronym of the text plus a
+/// prefix or suffix (`ECGAN` next to `GAN`).
+pub fn looks_like_name(short: &str, all: &BTreeMap<String, abbrev::AbbrevInfo>) -> bool {
+    if short.chars().any(|c| c.is_lowercase() || c.is_ascii_digit()) || short.contains('-') {
+        return true;
+    }
+    all.keys().any(|o| o != short && o.len() >= 3 && short.len() > o.len() && (short.ends_with(o.as_str()) || short.starts_with(o.as_str())))
+}
+
 /// Run every check. `notation` is the effective registry (document + global,
 /// see [`Notation::effective`]); pass an empty one for text-only checks.
 pub fn check(scan: &Scan, notation: &Notation, opt: &CheckOptions) -> Report {
@@ -661,6 +764,9 @@ pub fn check(scan: &Scan, notation: &Notation, opt: &CheckOptions) -> Report {
 pub fn check_with(scan: &Scan, syms: &Symbols, notation: &Notation, opt: &CheckOptions) -> Report {
     let mut reg_keys = BTreeMap::new();
     let mut conventional = BTreeSet::new();
+    for c in &notation.conventional {
+        conventional.insert(math::canonical(c));
+    }
     for e in &notation.entries {
         if let (Some(l), true) = (&e.latex, matches!(e.kind(), Kind::Symbol | Kind::Operator)) {
             let k = math::canonical(l);
@@ -679,6 +785,11 @@ pub fn check_with(scan: &Scan, syms: &Symbols, notation: &Notation, opt: &CheckO
     c.captions();
     c.registry(&abbr);
     let mut issues = c.issues;
+    // dismissed by the author ("忽略"): a grouped issue goes when all its subjects are dismissed
+    issues.retain(|i| {
+        let all: Vec<Option<&str>> = if i.subjects.is_empty() { vec![i.subject.as_deref()] } else { i.subjects.iter().map(|s| Some(s.as_str())).collect() };
+        !all.iter().all(|s| notation.is_ignored(&i.code, *s))
+    });
     issues.sort_by_key(|i| (i.severity, i.locations.first().map(|l| l.ord).unwrap_or(usize::MAX)));
     let mut summary = BTreeMap::new();
     for i in &issues {

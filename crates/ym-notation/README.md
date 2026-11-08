@@ -49,6 +49,20 @@ the combined view for checks and the panel (`origin: "global"|"document"`).
 | `abbrev` | `short`, `long`, `macro` |
 | `term` | `meaning`, `meaning_en`, `kb` |
 
+Two optional top-level lists (left out of the file when empty), read by the checker:
+
+```json
+{ "version": 1, "entries": [ … ],
+  "conventional": ["AI", "ECGAN", "\\Delta"],
+  "ignored": [ { "code": "label_unreferenced", "subject": "eq:loss" }, { "code": "caption_style" } ] }
+```
+
+- `conventional` — abbreviations, model names and symbol LaTeX that need no definition or
+  expansion; usually in the global profile file (`profile/notation.json`). The panel's
+  "標為慣用（不再提醒）" adds to the document file. `Notation::effective` combines both files' lists.
+- `ignored` — findings the author dismissed ("忽略"): `code` + `subject` (no subject = every
+  finding of that code). A grouped issue disappears when all its `subjects` are ignored.
+
 `macro` is stored without the backslash (a leading `\` is accepted on load).
 Tags: `conventional` / `well-known` (never needs a definition or expansion —
 put `p` for p-values, `\mathbb{E}`, `AI` … in the global file), `auto`
@@ -64,6 +78,7 @@ Notation::import(&mut doc, &global, Option<&[&str]>, Conflict) -> ImportReport
 Notation::merged(&global, &doc) -> Vec<MergedEntry>      // + origin
 Notation::effective(&global, &doc) -> Notation
 Notation::validate(&existing_macros) -> Vec<Problem>
+Notation::is_conventional(name) / is_ignored(code, subject)
 Notation::find_latex(latex) / get / get_mut / upsert / remove / free_id
 
 // macro mode
@@ -71,7 +86,7 @@ macros::check_macro_name(name, &existing) -> Result<(), String>
 notation_tex(&n, &existing) -> String                       // \newcommand / \DeclareMathOperator, \ensuremath where right
 write_notation_tex(dir, &n, &existing) -> io::Result<PathBuf>
 katex_macros(&n) -> BTreeMap<"\\name", body>               // for previews (PCTex.setMacros)
-insert_text(&entry, InsertMode::{Macro,Literal}, in_math) -> String
+insert_text(&entry, InsertMode::{Macro,Literal}, in_math) -> String  // in math a trailing \name gets a space (`\speed ` + x ≠ `\speedx`)
 macros::nomenclature_tex(&n, "zh"|"en") -> String
 macros::rename_macro(text, old, new) -> (String, n)          // rewrite uses when a macro is renamed
 macros::replace_symbol(text, old_latex, new_latex) -> (String, replaced, skipped)  // literal mode
@@ -96,7 +111,9 @@ is reported), `grace_sentences` (3 — "…equation… where $x$ is …"),
 ### Report
 
 `Report { version, files, issues, summary: {code: n}, symbols: [...], abbreviations: [...] }`;
-each `Issue { code, category, severity, message (繁中), subject, entry, locations, related, details }`;
+each `Issue { code, category, severity, message (繁中), subject, subjects, entry, locations, related, details }`;
+`message` is "problem — how to fix it" (the panel shows the part after ` — ` as 建議);
+`subjects` lists every subject of a grouped issue (one caption using several symbols too early);
 each location `Loc { file, line, col, para, sentence, para_sentence, context, ord, snippet }`
 (`para` counts blank-line paragraphs like pc-core, without the file's leading
 `\section` line; `sentence` is the 1-based sentence in the file; `para_sentence`
@@ -105,18 +122,18 @@ the sentence in the paragraph, headings excluded; `context` is
 
 | code | category | severity | what |
 |---|---|---|---|
-| `undefined_symbol` | symbol | warning | used, never defined in the text |
-| `used_before_definition` | symbol | warning | first use (captions included — floats come early) before the definition; display equations may be explained within `grace_sentences` |
+| `undefined_symbol` | symbol | warning (info when it only appears in tables, e.g. a `$\Delta$AUC` header) | used, never defined in the text; display equations that use it are listed in `related` / `details` (no second `equation_undefined_variables` issue) |
+| `used_before_definition` | symbol | warning | first use before the definition; display equations may be explained within `grace_sentences`. Everything one caption uses too early is **one** issue (`subjects`) |
 | `symbol_multiple_meanings` | symbol / registry | warning | defined twice with different content (`n=|A|`, `n=|B|`); one letter in several fonts with meanings (`\boldsymbol{m}` vs `m`); a name subscript that is also a variable (`\lambda_m` vs `m`); registry: same LaTeX, different meanings |
 | `meaning_multiple_symbols` | symbol / registry | warning | same description for different symbols |
 | `unused_definition` | symbol | info | defined, never used again |
-| `equation_undefined_variables` | equation | warning | display equation variables undefined (or defined too late) |
-| `abbrev_never_expanded` | abbrev | warning | used in the body, never "long form (ABC)" |
+| `equation_undefined_variables` | equation | warning | display equation variables defined too late (never-defined ones are `undefined_symbol`) |
+| `abbrev_never_expanded` | abbrev | warning (info for model / method names: mixed case `Grad-CAM`, digits, hyphen, or another acronym plus a prefix/suffix `ECGAN`) | used in the body, never "long form (ABC)"; well-known ones (`AI`, `allow_abbrevs`, `conventional`) are skipped |
 | `abbrev_used_before_expansion` | abbrev | warning | body use before the expansion |
 | `abbrev_expanded_twice` | abbrev | info | expanded more than once in the body |
 | `abbrev_abstract` | abbrev | info | abstract uses it without expanding |
-| `spelling_variants` | style | warning | `nonlinear` / `non-linear`, `Net-T` / `Net-Tiny` |
-| `label_unreferenced` | ref | warning | figure/table/equation label never `\ref`'d |
+| `spelling_variants` | style | warning | `nonlinear` / `non-linear`, `Net-T` / `Net-Tiny`, with counts ("non-linear 11 次、nonlinear 1 次") and the less used spelling's places first |
+| `label_unreferenced` | ref | warning (info for equations) | figure/table/equation label never `\ref`'d |
 | `ref_undefined` / `label_duplicate` | ref | error | |
 | `hardcoded_reference` | ref | warning | "Section III-C", "Fig. 2", "Table 1", "Eq. (3)" typed instead of `\ref` |
 | `caption_style` | style | info | caption period / initial capital / Title Case / table caption above-below inconsistent |
@@ -167,6 +184,9 @@ UI (`ui/write.js`, `ui/tex.js`):
 - toolbar "對照表" opens `<notation-panel>`; `notation-insert` → `put(inMath(ta) ? d.math : d.text)`
   (the existing `put`/`inMath` helpers of the symbol palette); set `panel.inMath = () => inMath(active())`.
 - `notation-change` / `notation-add` / `notation-delete` → `PUT …/notation` (debounced); the server regenerates `notation.tex`.
+- The panel validates macro names live with the rules of `check_macro_name` (set `panel.docMacros` to
+  the document's own commands); "忽略" / "標為慣用" emit `notation-change` with `id: null` and
+  `field: "ignored" | "conventional"` — save the document file as for any other change.
 - `PCTex.setMacros({...paper_macros, ...NotationPanel.katexMacros(notation)})` so `\vw` previews.
 - `notation-jump {file, line, para, para_sentence}` → open `sections/<file>`, paragraph `para`
   (same counting as `paper::parse_section`), sentence `para_sentence` (= line within the paragraph).

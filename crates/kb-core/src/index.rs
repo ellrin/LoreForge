@@ -33,7 +33,7 @@ CREATE TABLE names(id TEXT NOT NULL, space TEXT NOT NULL, name TEXT NOT NULL, ke
 CREATE INDEX names_key ON names(key, space);
 CREATE TABLE links(src TEXT NOT NULL, dst TEXT NOT NULL, rel TEXT NOT NULL);
 CREATE INDEX links_dst ON links(dst);
-CREATE TABLE wikilinks(src TEXT NOT NULL, space TEXT NOT NULL, key TEXT NOT NULL);
+CREATE TABLE wikilinks(src TEXT NOT NULL, space TEXT NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL);
 CREATE TABLE progress(member TEXT NOT NULL, id TEXT NOT NULL, state TEXT NOT NULL, streak INTEGER NOT NULL,
   next_at TEXT, next_utc TEXT, last_seen_utc TEXT, encounters INTEGER NOT NULL, score INTEGER NOT NULL,
   PRIMARY KEY(member, id));
@@ -91,21 +91,67 @@ pub struct Filter {
     pub offset: Option<u32>,
 }
 
+/// A graph node: a card, a `tag:<name>` node (`kind = "tag"`) or, with
+/// [`GraphQuery::missing`], a placeholder for an unresolved `[[link]]`
+/// (`id = "missing:<space>:<key>"`, `kind = "missing"`).
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphNode {
     pub id: String,
     pub title: String,
     pub kind: String,
     pub space: String,
+    /// This member's state (learning | known | stale); `None` = no learning state.
     pub state: Option<String>,
     pub score: u32,
+    pub streak: u32,
     pub tags: Vec<String>,
+    pub aliases: Vec<String>,
+    pub domains: Vec<String>,
+    pub summary: String,
+    /// RFC 3339 with the card's own offset; empty for tag and placeholder nodes.
+    pub created_at: String,
+    pub updated_at: String,
+    /// Edges (links and mentions, not tag edges) touching this node in the returned view.
+    pub degree: u32,
+    /// Steps from the center in a local graph; absent in a global graph.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hop: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct GraphView {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<Edge>,
+    /// Cards that matched (space filter, reachable from the center) before `limit`.
+    pub total: usize,
+    /// `limit` dropped cards.
+    pub truncated: bool,
+    /// The center actually used (absent when none was given or it is unknown).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub center: Option<String>,
+}
+
+/// What [`Index::graph_with`] returns.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct GraphQuery {
+    /// Local graph around this card; `None` = global graph.
+    pub center: Option<String>,
+    /// Steps from the center (both directions).
+    pub depth: u32,
+    /// Add `tag:<name>` nodes joined to their cards.
+    pub with_tags: bool,
+    pub space: Option<String>,
+    /// Most cards returned (newest first in a global graph, nearest first in a local one).
+    pub limit: usize,
+    /// Add a placeholder node for every unresolved `[[link]]` (Obsidian's "not created yet").
+    pub missing: bool,
+}
+
+impl Default for GraphQuery {
+    fn default() -> GraphQuery {
+        GraphQuery { center: None, depth: 2, with_tags: false, space: None, limit: 400, missing: false }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -231,7 +277,7 @@ impl Index {
             c.execute("INSERT INTO links VALUES (?1, ?2, ?3)", params![n.id, l.to, l.rel])?;
         }
         for w in wikilinks(&n.body) {
-            c.execute("INSERT INTO wikilinks VALUES (?1, ?2, ?3)", params![n.id, space, name_key(&w)])?;
+            c.execute("INSERT INTO wikilinks VALUES (?1, ?2, ?3, ?4)", params![n.id, space, name_key(&w), w])?;
         }
         c.execute("INSERT INTO fts(id, title, aliases, summary, body) VALUES (?1, ?2, ?3, ?4, ?5)", params![n.id, n.title, n.aliases.join(" ; "), n.summary, n.body])?;
         Ok(())
@@ -405,37 +451,86 @@ impl Index {
     /// Graph around `center` (`depth` steps, both directions) or the whole graph.
     /// `with_tags` adds `tag:<name>` nodes joined to their cards.
     pub fn graph(&self, member: &str, center: Option<&str>, depth: u32, with_tags: bool, space: Option<&str>, limit: usize) -> Result<GraphView> {
-        let mut st = self.conn.prepare("SELECT n.id, n.title, n.kind, n.space, n.tags, p.state, p.score FROM nodes n LEFT JOIN progress p ON p.id = n.id AND p.member = ?1")?;
-        let all: HashMap<String, GraphNode> = st
+        self.graph_with(member, &GraphQuery { center: center.map(str::to_string), depth, with_tags, space: space.map(str::to_string), limit, missing: false })
+    }
+
+    /// Unresolved `[[…]]` mentions as `(src, placeholder id, shown name, space)`.
+    fn missing_mentions(&self) -> Result<Vec<(String, String, String, String)>> {
+        let mut st = self.conn.prepare("SELECT w.src, w.space, w.key, w.name FROM wikilinks w WHERE NOT EXISTS (SELECT 1 FROM names n WHERE n.key = w.key AND n.space = w.space) ORDER BY w.rowid")?;
+        let rows = st
+            .query_map([], |r| {
+                let (src, space, key, name): (String, String, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+                Ok((src, format!("missing:{space}:{key}"), name, space))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Global or local graph (see [`GraphQuery`]).
+    pub fn graph_with(&self, member: &str, q: &GraphQuery) -> Result<GraphView> {
+        let space = q.space.as_deref().filter(|s| !s.is_empty());
+        let mut st = self.conn.prepare("SELECT n.id, n.title, n.kind, n.space, n.tags, p.state, p.score, p.streak, n.aliases, n.domains, n.summary, n.created_at, n.updated_at FROM nodes n LEFT JOIN progress p ON p.id = n.id AND p.member = ?1")?;
+        let list = |s: String| -> Vec<String> { serde_json::from_str(&s).unwrap_or_default() };
+        let mut all: HashMap<String, GraphNode> = st
             .query_map([member], |r| {
                 Ok(GraphNode {
                     id: r.get(0)?,
                     title: r.get(1)?,
                     kind: r.get(2)?,
                     space: r.get(3)?,
-                    tags: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or_default(),
+                    tags: list(r.get(4)?),
                     state: r.get(5)?,
                     score: r.get::<_, Option<i64>>(6)?.unwrap_or(0) as u32,
+                    streak: r.get::<_, Option<i64>>(7)?.unwrap_or(0) as u32,
+                    aliases: list(r.get(8)?),
+                    domains: list(r.get(9)?),
+                    summary: r.get(10)?,
+                    created_at: r.get(11)?,
+                    updated_at: r.get(12)?,
+                    degree: 0,
+                    hop: None,
                 })
             })?
             .filter_map(|r| r.ok())
             .filter(|n| space.is_none_or(|s| n.space == s))
             .map(|n| (n.id.clone(), n))
             .collect();
-        let edges: Vec<Edge> = self.edges()?.into_iter().filter(|e| all.contains_key(&e.from) && all.contains_key(&e.to)).collect();
-        let mut keep: Vec<String> = Vec::new();
-        match center.filter(|c| all.contains_key(*c)) {
+        let mut edges: Vec<Edge> = self.edges()?.into_iter().filter(|e| all.contains_key(&e.from) && all.contains_key(&e.to)).collect();
+        // Placeholders: not cards, so they never count against `limit` or `total`.
+        let mut placeholders: HashSet<String> = HashSet::new();
+        if q.missing {
+            let mut seen_edges: HashSet<(String, String)> = HashSet::new();
+            for (src, pid, name, sp) in self.missing_mentions()? {
+                if !all.contains_key(&src) || !seen_edges.insert((src.clone(), pid.clone())) {
+                    continue;
+                }
+                if placeholders.insert(pid.clone()) {
+                    let blank = GraphNode { id: pid.clone(), title: name, kind: "missing".into(), space: sp, state: None, score: 0, streak: 0, tags: vec![], aliases: vec![], domains: vec![], summary: String::new(), created_at: String::new(), updated_at: String::new(), degree: 0, hop: None };
+                    all.insert(pid.clone(), blank);
+                }
+                edges.push(Edge { from: src, to: pid, rel: "mentions".into(), origin: "mention".into() });
+            }
+        }
+        let cards = all.len() - placeholders.len();
+        let limit = q.limit.max(1);
+        let mut keep: Vec<String>;
+        let mut hops: HashMap<String, u32> = HashMap::new();
+        let total;
+        let center = q.center.as_deref().filter(|c| all.contains_key(*c) && !placeholders.contains(*c)).map(str::to_string);
+        match &center {
             Some(c) => {
                 let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
                 for e in &edges {
                     adj.entry(&e.from).or_default().push(&e.to);
                     adj.entry(&e.to).or_default().push(&e.from);
                 }
-                let mut seen: HashSet<String> = HashSet::from([c.to_string()]);
-                let mut queue = VecDeque::from([(c.to_string(), 0u32)]);
+                let mut seen: HashSet<String> = HashSet::from([c.clone()]);
+                let mut queue = VecDeque::from([(c.clone(), 0u32)]);
+                let mut order: Vec<String> = Vec::new();
                 while let Some((id, d)) = queue.pop_front() {
-                    keep.push(id.clone());
-                    if keep.len() >= limit || d >= depth {
+                    hops.insert(id.clone(), d);
+                    order.push(id.clone());
+                    if d >= q.depth || placeholders.contains(&id) {
                         continue;
                     }
                     for nb in adj.get(id.as_str()).into_iter().flatten() {
@@ -444,16 +539,43 @@ impl Index {
                         }
                     }
                 }
+                total = order.iter().filter(|id| !placeholders.contains(*id)).count();
+                keep = order.iter().filter(|id| !placeholders.contains(*id)).take(limit).cloned().collect();
+                let kept: HashSet<&String> = keep.iter().collect();
+                let extra: Vec<String> = order.iter().filter(|id| placeholders.contains(*id) && edges.iter().any(|e| &e.to == *id && kept.contains(&e.from))).cloned().collect();
+                keep.extend(extra);
             }
             None => {
-                let mut ids: Vec<&String> = all.keys().collect();
+                total = cards;
+                let mut ids: Vec<&String> = all.keys().filter(|k| !placeholders.contains(*k)).collect();
                 ids.sort();
                 keep = ids.into_iter().rev().take(limit).cloned().collect();
+                let kept: HashSet<&String> = keep.iter().collect();
+                let mut extra: Vec<String> = edges.iter().filter(|e| placeholders.contains(&e.to) && kept.contains(&e.from)).map(|e| e.to.clone()).collect();
+                extra.sort();
+                extra.dedup();
+                keep.extend(extra);
             }
         }
         let set: HashSet<&String> = keep.iter().collect();
-        let mut view = GraphView { nodes: keep.iter().filter_map(|id| all.get(id).cloned()).collect(), edges: edges.iter().filter(|e| set.contains(&e.from) && set.contains(&e.to)).cloned().collect() };
-        if with_tags {
+        let kept_cards = keep.iter().filter(|k| !placeholders.contains(*k)).count();
+        let view_edges: Vec<Edge> = edges.iter().filter(|e| set.contains(&e.from) && set.contains(&e.to)).cloned().collect();
+        let mut degree: HashMap<&str, u32> = HashMap::new();
+        for e in &view_edges {
+            *degree.entry(e.from.as_str()).or_default() += 1;
+            *degree.entry(e.to.as_str()).or_default() += 1;
+        }
+        let nodes: Vec<GraphNode> = keep
+            .iter()
+            .filter_map(|id| all.get(id).cloned())
+            .map(|mut n| {
+                n.degree = degree.get(n.id.as_str()).copied().unwrap_or(0);
+                n.hop = hops.get(&n.id).copied();
+                n
+            })
+            .collect();
+        let mut view = GraphView { nodes, edges: view_edges, total, truncated: kept_cards < total, center };
+        if q.with_tags {
             let mut tags: BTreeMap<String, ()> = BTreeMap::new();
             let mut tag_edges = Vec::new();
             for n in &view.nodes {
@@ -463,7 +585,7 @@ impl Index {
                 }
             }
             for t in tags.into_keys() {
-                view.nodes.push(GraphNode { id: format!("tag:{t}"), title: format!("#{t}"), kind: "tag".into(), space: String::new(), state: None, score: 0, tags: vec![] });
+                view.nodes.push(GraphNode { id: format!("tag:{t}"), title: format!("#{t}"), kind: "tag".into(), space: String::new(), state: None, score: 0, streak: 0, tags: vec![], aliases: vec![], domains: vec![], summary: String::new(), created_at: String::new(), updated_at: String::new(), degree: 0, hop: None });
             }
             view.edges.extend(tag_edges);
         }

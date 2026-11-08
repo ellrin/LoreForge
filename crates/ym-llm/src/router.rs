@@ -7,11 +7,18 @@
 //! The router does not know how to build engines: a [`ProviderFactory`] does.
 //! [`StandardFactory`] covers Claude (API key / subscription) and local
 //! llama-server; tests use [`MockFactory`].
+//!
+//! Two refs mean "what the user set up in the app" rather than a catalog
+//! entry: `local:current` ([`LOCAL_CURRENT`]: the external server, or the
+//! model [`LocalRuntime`] is running) and `claude:selected`
+//! ([`CLAUDE_SELECTED`]: [`StandardFactory::selected_claude`]). A per-call
+//! engine choice goes through [`Router::provider_for_with`] and
+//! [`RouteOptions`] (`strict`: that engine or an error, never a fallback).
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CloudModel};
 use crate::claude_api::{ClaudeApi, ClaudeApiConfig};
 use crate::claude_code::{Cache, ClaudeCode, Cli};
-use crate::local::{self, LocalRuntime};
+use crate::local::{self, Layout, LocalRuntime};
 use crate::openai::{OpenAiCompat, OpenAiCompatConfig};
 use crate::provider::LlmProvider;
 use crate::types::{LlmRequest, Needs};
@@ -24,6 +31,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 const BUNDLED: &str = include_str!("../tasks.toml");
+
+/// `local:current`: the local engine that is connected now (the external
+/// server, else whatever [`LocalRuntime`] is running), whatever its model.
+pub const LOCAL_CURRENT: &str = "current";
+/// `claude:selected` (also `claude-api:selected`, `claude-code:selected`):
+/// the Claude model the app's settings picked ([`StandardFactory::selected_claude`]).
+pub const CLAUDE_SELECTED: &str = "selected";
+/// Context assumed for a selected Claude model that is not in the catalog.
+const UNKNOWN_CLOUD_CONTEXT: u32 = 200_000;
 
 // ── model refs ──────────────────────────────────────────
 
@@ -180,6 +196,20 @@ impl MockFactory {
 }
 
 #[async_trait]
+impl<F: ProviderFactory + ?Sized> ProviderFactory for Arc<F> {
+    async fn make(&self, model: &ModelRef, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
+        (**self).make(model, task).await
+    }
+}
+
+#[async_trait]
+impl<F: ProviderFactory + ?Sized> ProviderFactory for &F {
+    async fn make(&self, model: &ModelRef, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
+        (**self).make(model, task).await
+    }
+}
+
+#[async_trait]
 impl ProviderFactory for MockFactory {
     async fn make(&self, model: &ModelRef, _task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
         self.0.get(&model.to_string()).cloned().ok_or_else(|| "沒有設定".to_string())
@@ -236,6 +266,29 @@ impl Route {
     }
 }
 
+/// Per-call routing choices (nothing shared is changed).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RouteOptions {
+    /// A model ref for this call only (an engine switch in the UI), tried
+    /// before the user's saved override and the task's own order.
+    pub override_ref: Option<String>,
+    /// Only `override_ref` is tried: an explicit engine choice fails with
+    /// the reason instead of silently falling back. Without `override_ref`
+    /// it has no effect.
+    pub strict: bool,
+}
+
+impl RouteOptions {
+    /// This engine for this call, or an error (no fallback).
+    pub fn only(model_ref: impl Into<String>) -> RouteOptions {
+        RouteOptions { override_ref: Some(model_ref.into()), strict: true }
+    }
+    /// This engine first, then the task's usual candidates.
+    pub fn prefer(model_ref: impl Into<String>) -> RouteOptions {
+        RouteOptions { override_ref: Some(model_ref.into()), strict: false }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RouteError {
     #[error("沒有這個 LLM 任務：{0}")]
@@ -248,6 +301,17 @@ pub enum RouteError {
 
 fn list(s: &[Skip]) -> String {
     s.iter().map(|k| format!("{}（{}）", k.model, k.reason)).collect::<Vec<_>>().join("；")
+}
+
+impl RouteError {
+    /// The first reason a candidate was passed over (for a strict choice:
+    /// why that engine cannot run), else the whole message.
+    pub fn reason(&self) -> String {
+        match self {
+            RouteError::Unavailable { skipped, .. } if !skipped.is_empty() => skipped[0].reason.clone(),
+            other => other.to_string(),
+        }
+    }
 }
 
 pub struct Router<F: ProviderFactory> {
@@ -304,9 +368,20 @@ impl<F: ProviderFactory> Router<F> {
 
     /// Candidates in order: override, default, fallback (no repeats).
     pub fn candidates(&self, task: &str) -> Vec<String> {
+        self.candidates_with(task, &RouteOptions::default())
+    }
+
+    /// Candidates for one call: the call's ref, then (unless strict) the
+    /// saved override, default, fallback (no repeats).
+    pub fn candidates_with(&self, task: &str, opts: &RouteOptions) -> Vec<String> {
         let Some(t) = self.tasks.get(task) else { return vec![] };
+        if opts.strict
+            && let Some(r) = &opts.override_ref
+        {
+            return vec![r.clone()];
+        }
         let mut out: Vec<String> = Vec::new();
-        for r in [self.override_for(task), Some(t.default.clone()), t.fallback.clone()].into_iter().flatten() {
+        for r in [opts.override_ref.clone(), self.override_for(task), Some(t.default.clone()), t.fallback.clone()].into_iter().flatten() {
             if !out.contains(&r) {
                 out.push(r);
             }
@@ -316,10 +391,19 @@ impl<F: ProviderFactory> Router<F> {
 
     /// The engine for a task, or a clear reason why there is none.
     pub async fn provider_for(&self, task: &str) -> Result<Route, RouteError> {
+        self.provider_for_with(task, &RouteOptions::default()).await
+    }
+
+    /// [`Router::provider_for`] with per-call choices: an engine picked for
+    /// this call (`override_ref`) and whether it may fall back (`strict`).
+    /// With `strict`, a failure is `RouteError::Unavailable` with one skip
+    /// ([`RouteError::reason`] says why) or `NeedsNetwork` for a cloud
+    /// choice while offline.
+    pub async fn provider_for_with(&self, task: &str, opts: &RouteOptions) -> Result<Route, RouteError> {
         let spec = self.tasks.get(task).ok_or_else(|| RouteError::UnknownTask(task.into()))?;
         let label = spec.label.clone().unwrap_or_else(|| task.to_string());
         let online = self.is_online();
-        let cands = self.candidates(task);
+        let cands = self.candidates_with(task, opts);
         let refs: Vec<(String, Result<ModelRef, String>)> = cands.iter().map(|c| (c.clone(), ModelRef::parse(c))).collect();
         let any_local = refs.iter().any(|(_, r)| r.as_ref().is_ok_and(|r| !r.needs_network()));
         if !online && (spec.offline == Some(false) || !any_local) {
@@ -401,16 +485,49 @@ pub struct ExternalServer {
 }
 
 /// Local models: an external server, or llama-server started on demand.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct LocalAccess {
     /// Shared folder; `None` = `LOCAL_LLM_HOME`.
     pub home: Option<PathBuf>,
+    /// The app's own folders instead of the shared layout of `home`
+    /// (wins over `home` when set).
+    pub layout: Option<Layout>,
     pub external: Option<ExternalServer>,
     pub runtime: Option<Arc<LocalRuntime>>,
     /// Rewrite Chinese replies in Taiwan usage.
     pub zh_tw: bool,
     /// Allow abliterated models (PaperComposer yes, household apps no).
     pub include_uncensored: bool,
+}
+
+impl LocalAccess {
+    /// `local:current`: the external server (any model name; the catalog
+    /// supplies vision/context when it knows the name, `local` when there is
+    /// no name), else the model the runtime is running. `Err` when no local
+    /// engine is connected.
+    pub async fn current(&self, catalog: &Catalog) -> Result<OpenAiCompat, String> {
+        let mut cfg = if let Some(ext) = &self.external {
+            let m = ext.model.clone().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| "local".into());
+            let mut c = OpenAiCompatConfig::llama_server(ext.url.clone(), m.clone());
+            if let Some(entry) = catalog.get(&m) {
+                c.vision = entry.vision;
+                c.context = entry.context_or_default();
+            }
+            c
+        } else if let Some(info) = match &self.runtime {
+            Some(rt) => rt.current_info().await,
+            None => None,
+        } {
+            let mut c = OpenAiCompatConfig::llama_server(info.url, info.model_id);
+            c.vision = info.vision;
+            c.context = info.context;
+            c
+        } else {
+            return Err("沒有連接本機模型".into());
+        };
+        cfg.zh_tw = self.zh_tw;
+        Ok(OpenAiCompat::new(cfg))
+    }
 }
 
 /// Builds Claude and local engines from the app's settings and the catalog.
@@ -422,15 +539,46 @@ pub struct StandardFactory {
     pub api: Option<ApiAccess>,
     pub subscription: Option<SubscriptionAccess>,
     pub local: Option<LocalAccess>,
+    /// The Claude model picked in the app's settings, for `claude:selected`
+    /// (an alias or id; `None` = the catalog's `cloud.default`). An id that
+    /// is not in the catalog is used as is, with a 200k context.
+    pub selected_claude: Option<String>,
 }
 
 impl StandardFactory {
     pub fn new(catalog: Catalog) -> StandardFactory {
-        StandardFactory { catalog, prefer_subscription: true, api: None, subscription: None, local: None }
+        StandardFactory { catalog, prefer_subscription: true, api: None, subscription: None, local: None, selected_claude: None }
+    }
+
+    /// The Claude model `claude:<model>` means: `selected` → the settings'
+    /// pick, otherwise a catalog alias or id.
+    pub fn claude_model(&self, model: &str) -> Result<CloudModel, String> {
+        if model == CLAUDE_SELECTED {
+            let pick = self.selected_claude.as_deref().map(str::trim).filter(|m| !m.is_empty()).unwrap_or(&self.catalog.cloud.default);
+            return Ok(self.catalog.cloud_model(pick).cloned().unwrap_or_else(|| CloudModel {
+                id: pick.to_string(),
+                summary: String::new(),
+                context: UNKNOWN_CLOUD_CONTEXT,
+            }));
+        }
+        self.catalog.cloud_model(model).cloned().ok_or_else(|| format!("模型目錄裡沒有 Claude 模型「{model}」"))
+    }
+
+    /// Where local models live: `LocalAccess.layout`, else the shared layout
+    /// of its `home` (or `LOCAL_LLM_HOME`).
+    pub fn local_layout(&self) -> Option<Layout> {
+        let la = self.local.as_ref()?;
+        la.layout.clone().or_else(|| local::home(la.home.as_deref()).map(|h| Layout::shared(&h)))
+    }
+
+    /// `local:current` ([`LocalAccess::current`]). `Err` when no local
+    /// engine is set up or connected.
+    pub async fn current_local(&self) -> Result<OpenAiCompat, String> {
+        self.local.as_ref().ok_or("沒有設定本機模型")?.current(&self.catalog).await
     }
 
     async fn claude(&self, model: &str, via: ClaudeVia, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
-        let cm = self.catalog.cloud_model(model).ok_or_else(|| format!("模型目錄裡沒有 Claude 模型「{model}」"))?;
+        let cm = self.claude_model(model)?;
         let effort = task.effort.clone().or_else(|| self.catalog.cloud.effort.clone());
         let order: &[ClaudeVia] = match via {
             ClaudeVia::Api => &[ClaudeVia::Api],
@@ -483,8 +631,11 @@ impl StandardFactory {
 
     async fn local(&self, r: &str, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
         let la = self.local.as_ref().ok_or("沒有設定本機模型")?;
-        let home = local::home(la.home.as_deref());
-        let on_disk = |m: &crate::catalog::Model| home.as_deref().is_some_and(|h| local::find_model(h, m).is_some());
+        if r == LOCAL_CURRENT {
+            return Ok(Arc::new(self.current_local().await?));
+        }
+        let layout = self.local_layout();
+        let on_disk = |m: &crate::catalog::Model| layout.as_ref().is_some_and(|l| l.find_model(m).is_some());
         let m = self.catalog.resolve_local(r, on_disk).ok_or_else(|| format!("模型目錄裡沒有本機模型「{r}」"))?;
         if m.uncensored && !la.include_uncensored {
             return Err("這個 App 不使用移除拒答的模型".into());
@@ -509,11 +660,11 @@ impl StandardFactory {
             c
         } else {
             let rt = la.runtime.as_ref().ok_or("沒有設定本機 llama-server")?;
-            let home = home.as_deref().ok_or("沒有設定共用模型資料夾（LOCAL_LLM_HOME）")?;
-            if let Some(why) = local::missing(home, m) {
+            let layout = layout.as_ref().ok_or("沒有設定共用模型資料夾（LOCAL_LLM_HOME）")?;
+            if let Some(why) = layout.missing(m) {
                 return Err(why);
             }
-            let info = rt.ensure(home, m).await?;
+            let info = rt.ensure_in(layout, m).await?;
             let mut c = OpenAiCompatConfig::llama_server(info.url, m.id.clone());
             c.vision = info.vision;
             c.context = info.context;
@@ -752,6 +903,7 @@ max_tokens = 9000
             runtime: Some(Arc::new(LocalRuntime::new())),
             zh_tw: true,
             include_uncensored: false,
+            ..Default::default()
         });
         let e = f.make(&q, &spec(Needs::default())).await.err().unwrap();
         assert!(e.contains("llama.cpp"), "nothing downloaded: {e}");
@@ -780,6 +932,7 @@ max_tokens = 9000
             runtime: None,
             zh_tw: false,
             include_uncensored: false,
+            ..Default::default()
         });
         let r = Router::new(TaskTable::bundled(), f);
         assert_eq!(r.provider_for("sc-crop-modules").await.unwrap().provider.id(), "claude:claude-sonnet-5-5");
@@ -791,5 +944,126 @@ max_tokens = 9000
         assert!(matches!(r.provider_for("research-web").await, Err(RouteError::NeedsNetwork { .. })));
         let jl = r.provider_for("jl-realtime").await.unwrap();
         assert_eq!(jl.effort.as_deref(), Some("low"));
+    }
+
+    // ── per-call choices, app-level refs ──
+
+    #[tokio::test]
+    async fn per_call_choices_are_strict_or_preferred_without_touching_overrides() {
+        let f = MockFactory::default()
+            .with("claude:sonnet", mock("claude", caps(true, true, true, 1_000_000)))
+            .with("claude:haiku", mock("haiku", caps(true, true, true, 1_000_000)))
+            .with("local:qwen", mock("qwen", caps(false, false, false, 32768)));
+        let r = router(f);
+        r.set_override("card", Some("claude:haiku")).unwrap();
+
+        // Strict: that engine, or why not — never the task's own order.
+        let route = r.provider_for_with("card", &RouteOptions::only("local:qwen")).await.unwrap();
+        assert_eq!((route.provider.id().as_str(), route.fallback_used), ("qwen", false));
+        let e = r.provider_for_with("card", &RouteOptions::only("local:gemma")).await.unwrap_err();
+        assert!(matches!(&e, RouteError::Unavailable { skipped, .. } if skipped.len() == 1), "{e:?}");
+        assert_eq!(e.reason(), "沒有設定");
+        let e = r.provider_for_with("crop", &RouteOptions::only("local:qwen")).await.unwrap_err();
+        assert!(e.reason().contains("看圖"), "{e}");
+        assert_eq!(r.candidates_with("card", &RouteOptions::only("local:qwen")), vec!["local:qwen"]);
+
+        // Preferred: the call's pick first, then override, default, fallback.
+        let opts = RouteOptions::prefer("local:gemma");
+        assert_eq!(r.candidates_with("card", &opts), vec!["local:gemma", "claude:haiku", "claude:sonnet", "local:qwen"]);
+        let route = r.provider_for_with("card", &opts).await.unwrap();
+        assert_eq!(route.provider.id(), "haiku");
+        assert!(route.fallback_used);
+
+        // The saved override is untouched; strict cloud choices offline say so.
+        assert_eq!(r.override_for("card").as_deref(), Some("claude:haiku"));
+        r.set_online(false);
+        assert!(matches!(r.provider_for_with("card", &RouteOptions::only("claude:sonnet")).await, Err(RouteError::NeedsNetwork { .. })));
+        assert_eq!(r.provider_for_with("card", &RouteOptions::default()).await.unwrap().provider.id(), "qwen");
+    }
+
+    #[tokio::test]
+    async fn shared_factories_work_through_arc_and_references() {
+        let f = Arc::new(MockFactory::default().with("claude:sonnet", mock("claude", caps(true, true, true, 1_000_000))));
+        let r = Router::new(TaskTable::parse(TASKS).unwrap(), f.clone());
+        assert_eq!(r.provider_for("web").await.unwrap().provider.id(), "claude");
+        let by_ref = Router::new(TaskTable::parse(TASKS).unwrap(), &*f);
+        assert_eq!(by_ref.provider_for("web").await.unwrap().provider.id(), "claude");
+        let dynamic: Arc<dyn ProviderFactory> = f;
+        assert!(Router::new(TaskTable::parse(TASKS).unwrap(), dynamic).provider_for("web").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn claude_selected_follows_the_settings_pick() {
+        let mut f = StandardFactory::new(Catalog::bundled());
+        f.prefer_subscription = false;
+        f.api = Some(ApiAccess { base_url: "http://127.0.0.1:9".into(), api_key: "test-key".into(), fallbacks: true });
+        let sel = ModelRef::parse("claude-api:selected").unwrap();
+        let p = f.make(&sel, &spec(Needs::default())).await.unwrap();
+        assert_eq!(p.id(), format!("claude:{}", Catalog::bundled().cloud.default), "unset: the catalog default");
+        f.selected_claude = Some("haiku".into());
+        assert_eq!(f.make(&sel, &spec(Needs::default())).await.unwrap().id(), "claude:claude-haiku-5-5", "aliases resolve");
+        // A model the catalog does not list yet (picked in settings) is used as is.
+        f.selected_claude = Some("claude-next-test".into());
+        let p = f.make(&sel, &spec(Needs::default())).await.unwrap();
+        assert_eq!(p.id(), "claude:claude-next-test");
+        assert_eq!(p.capabilities().context, 200_000);
+        // Other names still have to be in the catalog.
+        assert!(f.make(&ModelRef::parse("claude:claude-next-test").unwrap(), &spec(Needs::default())).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn local_current_is_the_external_server_or_the_running_model() {
+        let mut f = StandardFactory::new(Catalog::bundled());
+        let cur = ModelRef::parse("local:current").unwrap();
+        f.local = Some(LocalAccess { runtime: Some(Arc::new(LocalRuntime::new())), zh_tw: true, ..Default::default() });
+        assert!(f.make(&cur, &spec(Needs::default())).await.err().unwrap().contains("沒有連接本機模型"));
+
+        // An external server with a name the catalog does not know (Ollama, LM Studio).
+        f.local.as_mut().unwrap().external = Some(ExternalServer { url: "http://127.0.0.1:9/v1".into(), model: Some("my-model:7b".into()) });
+        let p = f.make(&cur, &spec(Needs::default())).await.unwrap();
+        assert_eq!(p.id(), "llama-server:my-model:7b");
+        assert!(!p.capabilities().vision);
+        // No name: "local". A catalog name: the catalog's capabilities.
+        f.local.as_mut().unwrap().external = Some(ExternalServer { url: "http://127.0.0.1:9/v1".into(), model: None });
+        assert_eq!(f.current_local().await.unwrap().id(), "llama-server:local");
+        f.local.as_mut().unwrap().external = Some(ExternalServer { url: "http://127.0.0.1:9/v1".into(), model: Some("qwen3.5-9b-q8".into()) });
+        assert!(f.current_local().await.unwrap().capabilities().vision);
+        assert!(f.current_local().await.unwrap().config().zh_tw);
+
+        // No external server: whatever the runtime is running.
+        #[cfg(unix)]
+        {
+            f.local.as_mut().unwrap().external = None;
+            let rt = f.local.as_ref().unwrap().runtime.clone().unwrap();
+            let child = tokio::process::Command::new("sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+            rt.adopt(crate::local::Running { child, model_id: "gemma-4-12b-q8".into(), url: "http://127.0.0.1:9/v1".into(), vision: true, context: 32768 }).await;
+            let p = f.make(&cur, &spec(Needs { vision: true, ..Default::default() })).await.unwrap();
+            assert_eq!(p.id(), "llama-server:gemma-4-12b-q8");
+            assert_eq!(p.capabilities().context, 32768);
+            rt.stop().await;
+            assert!(f.current_local().await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_app_layout_replaces_the_shared_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path();
+        let cat = Catalog::bundled();
+        let m = cat.get("qwen3.5-9b-q8").unwrap().clone();
+        let mut f = StandardFactory::new(cat);
+        f.local = Some(LocalAccess {
+            home: Some(data.join("unused")),
+            layout: Some(Layout::new(data.join("models"), data.join("llama.cpp"))),
+            runtime: Some(Arc::new(LocalRuntime::new())),
+            ..Default::default()
+        });
+        assert_eq!(f.local_layout().unwrap().gguf, data.join("models"));
+        let e = f.make(&ModelRef::parse("local:qwen3.5-9b-q8").unwrap(), &spec(Needs::default())).await.err().unwrap();
+        assert!(e.contains(&data.join("llama.cpp").display().to_string()), "{e}");
+        std::fs::create_dir_all(data.join("llama.cpp")).unwrap();
+        std::fs::write(data.join("llama.cpp/llama-server"), "").unwrap();
+        let e = f.make(&ModelRef::parse("local:qwen3.5-9b-q8").unwrap(), &spec(Needs::default())).await.err().unwrap();
+        assert!(e.contains("hf download") && e.contains(&data.join("models").join(&m.repo).display().to_string()), "{e}");
     }
 }

@@ -28,7 +28,7 @@ pub mod scan;
 pub mod tags;
 
 pub use clock::{Clock, FixedClock, SystemClock};
-pub use index::{Filter, GraphView, NodeSummary, TimelineDay};
+pub use index::{Filter, GraphQuery, GraphView, NodeSummary, TimelineDay};
 pub use kb::{KbOptions, KnowledgeBase, SpaceInfo};
 pub use llm::{CardAssistant, DraftRequest, MockAssistant};
 pub use node::{Node, NodeFields};

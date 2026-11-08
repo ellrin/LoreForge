@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use kb_core::index::Filter;
 use kb_core::node::{Image, Link};
-use kb_core::{FixedClock, KbError, KbOptions, KnowledgeBase, NodeFields, Outcome, ScanOptions};
+use kb_core::{FixedClock, GraphQuery, KbError, KbOptions, KnowledgeBase, NodeFields, Outcome, ScanOptions};
 use ym_store::{AssetsConfig, Space, SpaceConfig, SpaceKind, Spaces};
 
 struct Env {
@@ -101,6 +101,22 @@ fn create_edit_trash_and_files_are_truth() {
     assert!(e.root.join("personal/trash/progress/ellrin").join(format!("{}.json", n.id)).is_file());
     assert!(e.kb.list(&Filter::default()).unwrap().is_empty());
     assert!(matches!(e.kb.node(&n.id), Err(KbError::NotFound(_))));
+
+    // Undo: the card and its learning state come back; a second restore finds nothing.
+    let (sid, back) = e.kb.restore(&n.id).unwrap();
+    assert_eq!((sid.as_str(), back.revision), ("me", 2));
+    assert!(file.is_file());
+    assert!(e.root.join("personal/progress/ellrin").join(format!("{}.json", n.id)).is_file());
+    assert_eq!(e.kb.list(&Filter::default()).unwrap().len(), 1);
+    assert!(e.kb.progress(&n.id).unwrap().is_some());
+    assert!(matches!(e.kb.restore(&n.id), Err(KbError::Invalid(_))));
+    // Trashed twice: the latest copy is restored.
+    e.kb.trash(&n.id).unwrap();
+    e.kb.restore(&n.id).unwrap();
+    e.kb.update(&n.id, NodeFields { summary: Some("第三版".into()), ..Default::default() }, None).unwrap();
+    e.kb.trash(&n.id).unwrap();
+    assert_eq!(e.kb.restore(&n.id).unwrap().1.summary, "第三版");
+    assert!(matches!(e.kb.restore("n01K7QHM527JNK6KJFYY0WPJ28S"), Err(KbError::NotFound(_))));
 }
 
 #[test]
@@ -182,6 +198,58 @@ fn links_mentions_backlinks_graph_timeline() {
     // Dice was edited on the 8th too; IoU created then.
     assert_eq!(t[1].created.len(), 3);
     assert_eq!(e.kb.recent(1, 10).unwrap().len(), 1);
+}
+
+#[test]
+fn graph_fields_placeholders_and_local_depth() {
+    let mut e = env_as("ellrin");
+    let link = |to: &str, rel: &str| Link { to: to.into(), rel: rel.into(), extra: Default::default() };
+    let a = e.kb.create("me", NodeFields { summary: Some("卷積".into()), tags: Some(vec!["deep-learning/cnn".into()]), domains: Some(vec!["deep-learning".into()]), ..fields("Convolution", &["conv"]) }, None).unwrap();
+    e.clock.advance_days(1);
+    let b = e.kb.create("me", NodeFields { links: Some(vec![link(&a.id, "prerequisite")]), body: Some("見 [[Pooling]] 與 [[pooling]]、[[Stride]]".into()), ..fields("CNN", &[]) }, None).unwrap();
+    e.clock.advance_days(1);
+    let c = e.kb.create("me", NodeFields { links: Some(vec![link(&b.id, "example-of")]), ..fields("U-Net", &[]) }, None).unwrap();
+    let lone = e.kb.create("me", fields("Orphan", &[]), None).unwrap();
+    e.kb.create("home", fields("家用卡", &[]), None).unwrap();
+
+    // Global, every field; placeholders only on request, one per unresolved name (case-folded).
+    let g = e.kb.graph_with(&GraphQuery { missing: true, limit: 10_000, ..Default::default() }).unwrap();
+    assert_eq!((g.total, g.truncated, g.center.as_deref()), (5, false, None));
+    let n = |id: &str| g.nodes.iter().find(|n| n.id == id).unwrap().clone();
+    let conv = n(&a.id);
+    assert_eq!((conv.summary.as_str(), conv.aliases.clone(), conv.domains.clone(), conv.degree), ("卷積", vec!["conv".to_string()], vec!["deep-learning".to_string()], 1));
+    assert_eq!(conv.state.as_deref(), Some("learning"));
+    assert!(conv.created_at.starts_with("2026-11-08T21:10:00"));
+    assert!(n(&c.id).created_at.starts_with("2026-11-10"));
+    assert_eq!(n(&b.id).degree, 4, "prerequisite + example-of + two placeholders");
+    assert_eq!((n(&lone.id).degree, n(&lone.id).hop), (0, None));
+    let missing: Vec<&str> = g.nodes.iter().filter(|n| n.kind == "missing").map(|n| n.title.as_str()).collect();
+    assert_eq!(missing, vec!["Pooling", "Stride"]);
+    assert!(g.nodes.iter().any(|n| n.id == "missing:me:pooling" && n.space == "me" && n.degree == 1));
+    assert!(g.edges.iter().any(|x| x.from == b.id && x.to == "missing:me:stride" && x.rel == "mentions"));
+    assert_eq!(e.kb.graph_with(&GraphQuery { limit: 10_000, ..Default::default() }).unwrap().nodes.iter().filter(|n| n.kind == "missing").count(), 0);
+
+    // Global limit keeps the newest cards and reports truncation.
+    let g = e.kb.graph_with(&GraphQuery { limit: 2, space: Some("me".into()), ..Default::default() }).unwrap();
+    assert_eq!((g.total, g.truncated, g.nodes.len()), (4, true, 2));
+
+    // Local: hop distances, depth, placeholders hang off kept cards only.
+    let g = e.kb.graph_with(&GraphQuery { center: Some(c.id.clone()), depth: 1, missing: true, limit: 100, ..Default::default() }).unwrap();
+    let hops: Vec<(String, Option<u32>)> = g.nodes.iter().map(|n| (n.title.clone(), n.hop)).collect();
+    assert_eq!(hops, vec![("U-Net".to_string(), Some(0)), ("CNN".to_string(), Some(1))]);
+    assert_eq!(g.center.as_deref(), Some(c.id.as_str()));
+    let g = e.kb.graph_with(&GraphQuery { center: Some(c.id.clone()), depth: 2, missing: true, limit: 100, ..Default::default() }).unwrap();
+    assert_eq!(g.nodes.iter().filter(|n| n.hop == Some(2)).count(), 3, "Convolution + two placeholders");
+    assert_eq!(g.total, 3);
+    let g = e.kb.graph_with(&GraphQuery { center: Some(c.id.clone()), depth: 3, missing: true, limit: 2, ..Default::default() }).unwrap();
+    assert_eq!((g.total, g.truncated), (3, true));
+    assert!(g.nodes.iter().all(|n| n.kind != "missing" || g.edges.iter().any(|x| x.to == n.id)));
+    // Unknown center → global graph.
+    assert!(e.kb.graph_with(&GraphQuery { center: Some("nope".into()), ..Default::default() }).unwrap().center.is_none());
+    // Placeholders disappear once the card exists.
+    e.kb.create("me", fields("Stride", &[]), None).unwrap();
+    let g = e.kb.graph_with(&GraphQuery { missing: true, limit: 100, ..Default::default() }).unwrap();
+    assert_eq!(g.nodes.iter().filter(|n| n.kind == "missing").count(), 1);
 }
 
 #[test]

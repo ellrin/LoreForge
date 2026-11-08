@@ -6,6 +6,8 @@
 //! - Images go in as `image_url` data URLs (needs a model started with its
 //!   `--mmproj`; the catalog says which have one).
 //! - Streaming reads `data:` lines until `[DONE]`.
+//! - `temperature` / `top_p` from the request are sent when set (Claude
+//!   engines leave them out).
 //! - `zh_tw`: Chinese replies are rewritten in Taiwan usage (local models
 //!   write mainland vocabulary; PaperComposer `zhtw.rs`).
 //!
@@ -99,6 +101,12 @@ impl OpenAiCompat {
         let mut body = json!({ "model": self.cfg.model, "max_tokens": req.max_tokens, "messages": messages });
         if let Some(schema) = &req.json_schema {
             body["response_format"] = json!({ "type": "json_schema", "json_schema": { "name": "reply", "schema": schema } });
+        }
+        if let Some(t) = req.temperature {
+            body["temperature"] = json!(t);
+        }
+        if let Some(p) = req.top_p {
+            body["top_p"] = json!(p);
         }
         body
     }
@@ -265,6 +273,10 @@ mod tests {
         assert_eq!(b["messages"][1]["content"][1]["text"], "what?");
         // Text-only turns stay plain strings (widest server support).
         assert_eq!(OpenAiCompat::new(cfg.clone()).body(&LlmRequest::prompt("s", "u"))["messages"][1]["content"], "u");
+        // Sampling params go to local engines when the request sets them.
+        let b = OpenAiCompat::new(cfg.clone()).body(&LlmRequest::prompt("s", "u").temperature(0.2).top_p(0.9));
+        assert!((b["temperature"].as_f64().unwrap() - 0.2).abs() < 1e-6);
+        assert!((b["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         assert!(matches!(rt.block_on(OpenAiCompat::new(cfg.clone()).send(&req)), Err(LlmError::Unsupported(..))));
         cfg.vision = true;

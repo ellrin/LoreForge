@@ -10,6 +10,9 @@
 //! <home>/runtimes/llama.cpp/…/llama-server
 //! ```
 //!
+//! An app may keep its own folders instead ([`Layout::new`]; PaperComposer
+//! without `LOCAL_LLM_HOME` uses `<data>/models` and `<data>/llama.cpp`).
+//!
 //! Nothing here downloads (PaperComposer's setup or `hf download` fill the
 //! folder). [`LocalRuntime`] starts one llama-server at a time for one
 //! catalog model and stops it on request or drop. No thinking
@@ -63,60 +66,110 @@ fn find_under(dir: &Path, suffix: &str) -> Option<PathBuf> {
     hits.into_iter().next()
 }
 
+/// Where model weights and llama.cpp live. The shared layout is
+/// [`Layout::shared`]; an app with its own folder from before
+/// `LOCAL_LLM_HOME` (PaperComposer: `<data>/models`, `<data>/llama.cpp`)
+/// passes its folders with [`Layout::new`]. Weights are always laid out as
+/// `<gguf>/<owner>/<repo>/<file>` (what `hf download --local-dir` writes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Layout {
+    /// Model weights: `<gguf>/<owner>/<repo>/<file>`.
+    pub gguf: PathBuf,
+    /// llama.cpp: `llama-server` anywhere below this folder.
+    pub runtime: PathBuf,
+}
+
+impl Layout {
+    /// The shared folder: `<home>/gguf`, `<home>/runtimes/llama.cpp`.
+    pub fn shared(home: &Path) -> Layout {
+        Layout { gguf: gguf_dir(home), runtime: runtime_dir(home) }
+    }
+
+    /// Any two folders (an app's own layout).
+    pub fn new(gguf: impl Into<PathBuf>, runtime: impl Into<PathBuf>) -> Layout {
+        Layout { gguf: gguf.into(), runtime: runtime.into() }
+    }
+
+    /// The model's weights, when downloaded.
+    pub fn find_model(&self, m: &Model) -> Option<PathBuf> {
+        if m.repo.is_empty() || m.file_suffix.is_empty() {
+            return None;
+        }
+        find_under(&self.gguf.join(&m.repo), &m.file_suffix)
+    }
+
+    /// The vision projector next to the weights, when the catalog names one.
+    pub fn find_mmproj(&self, m: &Model) -> Option<PathBuf> {
+        find_under(&self.gguf.join(&m.repo), m.mmproj_suffix.as_deref()?)
+    }
+
+    /// `llama-server` below the runtime folder.
+    pub fn find_runtime(&self) -> Option<PathBuf> {
+        let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+        let mut stack = vec![self.runtime.clone()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if e.file_name() == exe {
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+
+    /// Brains of the catalog that are on disk.
+    pub fn installed<'a>(&self, cat: &'a Catalog, include_uncensored: bool) -> Vec<&'a Model> {
+        cat.brains(include_uncensored).filter(|m| self.find_model(m).is_some()).collect()
+    }
+
+    /// Why a model cannot start, in the user's words.
+    pub fn missing(&self, m: &Model) -> Option<String> {
+        if self.find_runtime().is_none() {
+            return Some(format!(
+                "還沒有 llama.cpp：{} 裡找不到 llama-server。請用 PaperComposer 的「AI 與同步」安裝一次，或把 llama.cpp 解壓到這個資料夾",
+                self.runtime.display()
+            ));
+        }
+        if self.find_model(m).is_none() {
+            return Some(format!(
+                "還沒下載 {} {}：hf download {} --include \"*{}\" --local-dir \"{}\"",
+                m.name,
+                m.variant,
+                m.repo,
+                m.file_suffix,
+                self.gguf.join(&m.repo).display()
+            ));
+        }
+        None
+    }
+}
+
 /// The model's weights in the shared folder, when downloaded.
 pub fn find_model(home: &Path, m: &Model) -> Option<PathBuf> {
-    if m.repo.is_empty() || m.file_suffix.is_empty() {
-        return None;
-    }
-    find_under(&gguf_dir(home).join(&m.repo), &m.file_suffix)
+    Layout::shared(home).find_model(m)
 }
 
 /// The vision projector next to the weights, when the catalog names one.
 pub fn find_mmproj(home: &Path, m: &Model) -> Option<PathBuf> {
-    find_under(&gguf_dir(home).join(&m.repo), m.mmproj_suffix.as_deref()?)
+    Layout::shared(home).find_mmproj(m)
 }
 
 /// `llama-server` in the shared runtimes folder.
 pub fn find_runtime(home: &Path) -> Option<PathBuf> {
-    let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
-    let mut stack = vec![runtime_dir(home)];
-    while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if e.file_name() == exe {
-                return Some(p);
-            }
-        }
-    }
-    None
+    Layout::shared(home).find_runtime()
 }
 
 /// Brains of the catalog that are on disk.
 pub fn installed<'a>(home: &Path, cat: &'a Catalog, include_uncensored: bool) -> Vec<&'a Model> {
-    cat.brains(include_uncensored).filter(|m| find_model(home, m).is_some()).collect()
+    Layout::shared(home).installed(cat, include_uncensored)
 }
 
 /// Why a model cannot start, in the user's words.
 pub fn missing(home: &Path, m: &Model) -> Option<String> {
-    if find_runtime(home).is_none() {
-        return Some(format!(
-            "共用資料夾 {} 裡沒有 llama.cpp：請用 PaperComposer 的「AI 與同步」安裝一次，或把 llama-server 放在 runtimes/llama.cpp",
-            home.display()
-        ));
-    }
-    if find_model(home, m).is_none() {
-        return Some(format!(
-            "還沒下載 {} {}：hf download {} --include \"*{}\" --local-dir \"{}\"",
-            m.name,
-            m.variant,
-            m.repo,
-            m.file_suffix,
-            gguf_dir(home).join(&m.repo).display()
-        ));
-    }
-    None
+    Layout::shared(home).missing(m)
 }
 
 /// llama-server arguments for one model (no thinking, all layers on the GPU,
@@ -161,12 +214,17 @@ fn free_port() -> u16 {
 /// Start llama-server for `m` and wait until `/v1/models` answers (a large
 /// model takes a while to load the first time).
 pub async fn start(home: &Path, m: &Model, wait: Duration) -> Result<Running, String> {
-    if let Some(why) = missing(home, m) {
+    start_in(&Layout::shared(home), m, wait).await
+}
+
+/// [`start`] with any [`Layout`].
+pub async fn start_in(layout: &Layout, m: &Model, wait: Duration) -> Result<Running, String> {
+    if let Some(why) = layout.missing(m) {
         return Err(why);
     }
-    let bin = find_runtime(home).expect("checked");
-    let weights = find_model(home, m).expect("checked");
-    let mmproj = find_mmproj(home, m);
+    let bin = layout.find_runtime().expect("checked");
+    let weights = layout.find_model(m).expect("checked");
+    let mmproj = layout.find_mmproj(m);
     let port = free_port();
     let context = m.context_or_default();
     let mut cmd = tokio::process::Command::new(&bin);
@@ -248,6 +306,12 @@ impl LocalRuntime {
         *self.phase.lock().unwrap_or_else(|e| e.into_inner()) = p;
     }
 
+    /// The running server, if alive (for `local:current`).
+    pub async fn current_info(&self) -> Option<ServerInfo> {
+        let (model_id, url, vision, context) = self.current().await?;
+        Some(ServerInfo { model_id, url, vision, context })
+    }
+
     /// `(model id, url, vision, context)` of the running server, if alive.
     pub async fn current(&self) -> Option<(String, String, bool, u32)> {
         let mut r = self.running.lock().await;
@@ -262,6 +326,11 @@ impl LocalRuntime {
 
     /// The `/v1` URL of a server running `m`, starting it if needed.
     pub async fn ensure(&self, home: &Path, m: &Model) -> Result<ServerInfo, String> {
+        self.ensure_in(&Layout::shared(home), m).await
+    }
+
+    /// [`LocalRuntime::ensure`] with any [`Layout`].
+    pub async fn ensure_in(&self, layout: &Layout, m: &Model) -> Result<ServerInfo, String> {
         let _one = self.starting.lock().await;
         if let Some((id, url, vision, context)) = self.current().await
             && id == m.id
@@ -270,7 +339,7 @@ impl LocalRuntime {
         }
         self.stop().await;
         self.set(Phase::Starting { model: m.id.clone() });
-        match start(home, m, self.wait).await {
+        match start_in(layout, m, self.wait).await {
             Ok(run) => {
                 let out = ServerInfo { model_id: run.model_id.clone(), url: run.url.clone(), vision: run.vision, context: run.context };
                 self.set(Phase::Ready { model: run.model_id.clone(), url: run.url.clone() });
@@ -282,6 +351,13 @@ impl LocalRuntime {
                 Err(e)
             }
         }
+    }
+
+    /// Tests: treat an already running process as the server for `model_id`.
+    #[cfg(test)]
+    pub(crate) async fn adopt(&self, run: Running) {
+        self.set(Phase::Ready { model: run.model_id.clone(), url: run.url.clone() });
+        *self.running.lock().await = Some(run);
     }
 
     pub async fn stop(&self) {
@@ -341,6 +417,26 @@ mod tests {
         assert_eq!(find_runtime(home).unwrap(), home.join("runtimes/llama.cpp/llama-b1/llama-server"));
         assert!(missing(home, m).is_none());
         assert_eq!(installed(home, &cat, false).iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["qwen3.5-4b-q8"]);
+    }
+
+    #[test]
+    fn an_app_layout_finds_files_in_its_own_folders() {
+        // PaperComposer before LOCAL_LLM_HOME: <data>/models/<owner>/<repo>, <data>/llama.cpp.
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path();
+        let l = Layout::new(data.join("models"), data.join("llama.cpp"));
+        let cat = Catalog::bundled();
+        let m = cat.get("qwen3.5-4b-q8").unwrap();
+        let e = l.missing(m).unwrap();
+        assert!(e.contains("llama.cpp"), "{e}");
+        touch(&data.join("llama.cpp/build/bin/llama-server"));
+        touch(&data.join("models").join(&m.repo).join("Qwen3.5-4B-Q8_0.gguf"));
+        assert!(l.missing(m).is_none());
+        assert_eq!(l.find_runtime().unwrap(), data.join("llama.cpp/build/bin/llama-server"));
+        assert_eq!(l.installed(&cat, true).len(), 1);
+        // The shared layout over the same folder sees none of it.
+        assert!(find_model(data, m).is_none() && find_runtime(data).is_none());
+        assert_eq!(Layout::shared(data), Layout::new(data.join("gguf"), data.join("runtimes/llama.cpp")));
     }
 
     #[test]

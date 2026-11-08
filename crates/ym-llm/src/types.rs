@@ -101,6 +101,14 @@ pub struct LlmRequest {
     pub web_search: bool,
     /// `low` | `medium` | `high` | `xhigh` | `max`; overrides the provider's default.
     pub effort: Option<String>,
+    /// Sampling temperature for engines that take one (OpenAI-compatible /
+    /// llama-server). **Not sent to Claude**: the current Claude API rejects
+    /// sampling parameters, and the Claude Code CLI has no flag for them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    /// Nucleus sampling, same rule as `temperature` (local engines only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
 }
 
 impl LlmRequest {
@@ -120,6 +128,8 @@ impl LlmRequest {
             json_schema: None,
             web_search: false,
             effort: None,
+            temperature: None,
+            top_p: None,
         }
     }
 
@@ -137,6 +147,16 @@ impl LlmRequest {
     }
     pub fn effort(mut self, e: impl Into<String>) -> Self {
         self.effort = Some(e.into());
+        self
+    }
+    /// Sampling temperature for local / OpenAI-compatible engines (ignored by Claude).
+    pub fn temperature(mut self, t: f32) -> Self {
+        self.temperature = Some(t);
+        self
+    }
+    /// Nucleus sampling for local / OpenAI-compatible engines (ignored by Claude).
+    pub fn top_p(mut self, p: f32) -> Self {
+        self.top_p = Some(p);
         self
     }
     /// Attach an image to the last user turn (before its text).

@@ -121,6 +121,23 @@ pub struct Notation {
     pub version: u32,
     #[serde(default)]
     pub entries: Vec<Entry>,
+    /// Abbreviations, names and symbol LaTeX that need no definition or
+    /// expansion (`AI`, `ECGAN`, `\Delta`): the checker stays quiet about them.
+    /// Usually in the global profile file; "標為慣用" in the panel adds here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conventional: Vec<String>,
+    /// Check findings the author dismissed ("忽略"): never reported again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored: Vec<Ignored>,
+}
+
+/// One dismissed finding: a check code and the subject it was about
+/// (symbol key, abbreviation, label, word list). No subject = every finding of that code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ignored {
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
 
 fn version() -> u32 {
@@ -129,7 +146,7 @@ fn version() -> u32 {
 
 impl Default for Notation {
     fn default() -> Self {
-        Notation { version: FORMAT_VERSION, entries: Vec::new() }
+        Notation { version: FORMAT_VERSION, entries: Vec::new(), conventional: Vec::new(), ignored: Vec::new() }
     }
 }
 
@@ -269,8 +286,33 @@ impl Notation {
     }
 
     /// The merged view as a plain registry (for checks).
+    /// `conventional` and `ignored` lists of both files are combined.
     pub fn effective(global: &Notation, doc: &Notation) -> Notation {
-        Notation { version: FORMAT_VERSION, entries: Self::merged(global, doc).into_iter().map(|m| m.entry).collect() }
+        let mut conventional = doc.conventional.clone();
+        for c in &global.conventional {
+            if !conventional.contains(c) {
+                conventional.push(c.clone());
+            }
+        }
+        let mut ignored = doc.ignored.clone();
+        for i in &global.ignored {
+            if !ignored.contains(i) {
+                ignored.push(i.clone());
+            }
+        }
+        Notation { version: FORMAT_VERSION, entries: Self::merged(global, doc).into_iter().map(|m| m.entry).collect(), conventional, ignored }
+    }
+
+    /// `name` (abbreviation, word or symbol LaTeX) is listed as conventional,
+    /// either in `conventional` or as an entry tagged `conventional`.
+    pub fn is_conventional(&self, name: &str) -> bool {
+        let key = crate::math::canonical(name);
+        self.conventional.iter().any(|c| c == name || crate::math::canonical(c) == key)
+    }
+
+    /// The finding `code` about `subject` was dismissed.
+    pub fn is_ignored(&self, code: &str, subject: Option<&str>) -> bool {
+        self.ignored.iter().any(|i| i.code == code && (i.subject.is_none() || i.subject.as_deref() == subject))
     }
 
     /// Structural problems: ids, macro names, kind-specific fields.

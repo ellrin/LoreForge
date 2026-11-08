@@ -112,3 +112,81 @@ fn draft_from_the_sample() {
     assert!(n.entries.iter().any(|e| e.kind() == Kind::Table && e.label.as_deref() == Some("tab:main")));
     assert!(n.entries.iter().any(|e| e.short.as_deref() == Some("GR") && e.long.as_deref() == Some("gear ratio")));
 }
+
+fn check_text(text: &str, reg: &Notation) -> Report {
+    check_document(Document::from_str("main.tex", text), reg, &CheckOptions::default())
+}
+
+const GROUPED: &str = r#"\begin{document}
+\section{Intro}
+We use a widget scoring network (WSN). Artificial widgets are often studied with AI.
+The DCWSN variant and the Spin-NET tool help. A non-widget sample is rare.
+\begin{figure}
+\caption{The scorer $q$ reads $\boldsymbol{k}$ and a nonwidget sample.}
+\label{fig:a}
+\end{figure}
+Fig.~\ref{fig:a} shows the setup. A non-widget case is common. Another non-widget case follows.
+Then more words follow here. And still more words come next. The setup has many parts.
+Let $q$ denote the scorer and $\boldsymbol{k}$ denote the key vector.
+\begin{equation}
+\label{eq:z}
+y = q + \beta \boldsymbol{k}
+\end{equation}
+where $y$ is the output.
+\begin{table}
+\caption{Results.}
+\begin{tabular}{cc}
+Method & $\Delta$WSN \\
+\end{tabular}
+\end{table}
+\end{document}
+"#;
+
+#[test]
+fn findings_are_grouped_and_deduplicated() {
+    let r = check_text(GROUPED, &Notation::default());
+    // one caption, two symbols used before the text defines them → one issue
+    let early = r.by_code("used_before_definition");
+    assert_eq!(early.len(), 1, "{early:#?}");
+    assert_eq!(early[0].subjects, vec!["q".to_string(), "\\boldsymbol{k}".to_string()]);
+    assert!(early[0].message.contains("圖表說明") && early[0].locations.iter().all(|l| l.context == "caption"));
+    // beta: one undefined_symbol issue that mentions the equation, no second equation issue
+    assert!(r.by_code("equation_undefined_variables").is_empty(), "{:#?}", r.by_code("equation_undefined_variables"));
+    let beta = r.by_code("undefined_symbol").into_iter().find(|i| i.subject.as_deref() == Some("\\beta")).unwrap();
+    assert!(beta.details.iter().any(|d| d.contains("eq:z")) && beta.message.contains("denotes"));
+    // a symbol only in a table header is a hint, not a warning
+    let delta = r.by_code("undefined_symbol").into_iter().find(|i| i.subject.as_deref() == Some("\\Delta")).unwrap();
+    assert_eq!(delta.severity, Severity::Info);
+    // AI is well known; DCWSN (WSN + prefix) and Spin-NET look like names → hints
+    let never = r.by_code("abbrev_never_expanded");
+    assert!(!never.iter().any(|i| i.subject.as_deref() == Some("AI")));
+    for name in ["DCWSN", "Spin-NET"] {
+        let i = never.iter().find(|i| i.subject.as_deref() == Some(name)).unwrap_or_else(|| panic!("{name}: {never:#?}"));
+        assert_eq!(i.severity, Severity::Info, "{name}");
+    }
+    // spelling variants: counts, the fix, and the caption use tagged as caption
+    let v = &r.by_code("spelling_variants")[0];
+    assert!(v.message.contains("non-widget 3 次、nonwidget 1 次") && v.message.contains("統一寫成「non-widget」"), "{}", v.message);
+    assert_eq!(v.locations[0].context, "caption");
+    // an unreferenced equation label is only a hint
+    let eq = r.by_code("label_unreferenced");
+    assert!(eq.iter().all(|i| i.severity == Severity::Info) && !eq.is_empty());
+}
+
+#[test]
+fn conventional_and_ignored_lists_silence_findings() {
+    let mut reg = Notation::from_json(r#"{"version":1,"entries":[],"conventional":["DCWSN","\\Delta"],"ignored":[{"code":"undefined_symbol","subject":"\\beta"},{"code":"label_unreferenced"}]}"#).unwrap();
+    let r = check_text(GROUPED, &reg);
+    assert!(!r.by_code("abbrev_never_expanded").iter().any(|i| i.subject.as_deref() == Some("DCWSN")));
+    assert!(!r.by_code("undefined_symbol").iter().any(|i| matches!(i.subject.as_deref(), Some("\\Delta" | "\\beta"))));
+    assert!(r.by_code("label_unreferenced").is_empty());
+    // the lists survive a round trip and merge with the global file
+    let global = Notation::from_json(r#"{"version":1,"conventional":["Spin-NET"]}"#).unwrap();
+    reg = Notation::from_json(&reg.to_json()).unwrap();
+    let eff = Notation::effective(&global, &reg);
+    assert!(eff.is_conventional("Spin-NET") && eff.is_conventional("DCWSN") && eff.is_ignored("label_unreferenced", Some("eq:z")));
+    let r = check_text(GROUPED, &eff);
+    assert!(!r.by_code("abbrev_never_expanded").iter().any(|i| i.subject.as_deref() == Some("Spin-NET")));
+    // a registry without the lists writes none
+    assert!(!Notation::default().to_json().contains("ignored"));
+}

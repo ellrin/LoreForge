@@ -12,7 +12,7 @@ use ym_store::{AssetRef, CommandRunner, Space, SpaceKind, Spaces, SystemRunner, 
 use crate::clock::{Clock, SystemClock, Time};
 use crate::edges::Edge;
 use crate::id::{node_id, valid_node_id};
-use crate::index::{Filter, GraphView, Index, NodeSummary, TimelineDay};
+use crate::index::{Filter, GraphQuery, GraphView, Index, NodeSummary, TimelineDay};
 use crate::llm::{CardAssistant, DraftRequest, MockAssistant};
 use crate::node::{CopyRef, Image, Link, Node, NodeFields};
 use crate::progress::{Intervals, Outcome, Progress, Step};
@@ -398,6 +398,64 @@ impl KnowledgeBase {
         Ok(to)
     }
 
+    /// Undo [`trash`](Self::trash): move the most recently trashed copy of a card (and this
+    /// member's learning state, when it was trashed with it) back to `nodes/`. Refuses when
+    /// a card with that id exists again. Returns the space and the card.
+    pub fn restore(&mut self, id: &str) -> Result<(String, Node)> {
+        if !valid_node_id(id) {
+            return Err(KbError::NotFound(format!("card `{id}`")));
+        }
+        if self.index.space_of(id)?.is_some() {
+            return Err(KbError::Invalid(format!("card `{id}` is not in the trash")));
+        }
+        // `free_path` names repeated trashings `<id>-2.json`, `<id>-3.json`…: take the last.
+        let latest = |dir: &Path| -> Option<PathBuf> {
+            let mut best: Option<(usize, PathBuf)> = None;
+            for e in std::fs::read_dir(dir).ok()?.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                let Some(stem) = name.strip_suffix(".json") else { continue };
+                let n = if stem == id {
+                    1
+                } else if let Some(k) = stem.strip_prefix(id).and_then(|r| r.strip_prefix('-')).and_then(|k| k.parse::<usize>().ok()) {
+                    k
+                } else {
+                    continue;
+                };
+                if best.as_ref().is_none_or(|(b, _)| n > *b) {
+                    best = Some((n, e.path()));
+                }
+            }
+            best.map(|(_, p)| p)
+        };
+        let spaces: Vec<Space> = self.spaces.iter().cloned().collect();
+        for space in &spaces {
+            let Some(from) = latest(&space.trash_dir().join("nodes")) else { continue };
+            let node: Node = serde_json::from_str(&std::fs::read_to_string(&from)?)?;
+            let to = Self::node_path(space, id);
+            if to.exists() {
+                return Err(KbError::Invalid(format!("{} already exists", to.display())));
+            }
+            std::fs::create_dir_all(space.nodes_dir())?;
+            std::fs::rename(&from, &to)?;
+            self.index.upsert_node(space.id(), &node)?;
+            self.scanner = None;
+            if let Ok(p) = self.progress_path(space, id)
+                && !p.exists()
+                && let Some(pf) = latest(&space.trash_dir().join("progress").join(&self.member))
+            {
+                if let Some(parent) = p.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::rename(&pf, &p)?;
+                let mut pr: Progress = serde_json::from_str(&std::fs::read_to_string(&p)?)?;
+                pr.refresh(self.now(), &self.opts.intervals);
+                self.index.upsert_progress(&self.member, id, &pr)?;
+            }
+            return Ok((space.id().to_string(), node));
+        }
+        Err(KbError::NotFound(format!("card `{id}` in the trash")))
+    }
+
     /// Answer a check (記得 / 忘了 / 不熟). A card without learning state for this member
     /// (e.g. made by another household member) starts one first.
     pub fn recall(&mut self, id: &str, outcome: Outcome, via: Option<&str>) -> Result<RecallResult> {
@@ -434,6 +492,11 @@ impl KnowledgeBase {
 
     pub fn graph(&self, center: Option<&str>, depth: u32, with_tags: bool, space: Option<&str>, limit: usize) -> Result<GraphView> {
         self.index.graph(&self.member, center, depth, with_tags, space, limit)
+    }
+
+    /// Global or local graph with every option (placeholders for unresolved `[[links]]`, …).
+    pub fn graph_with(&self, q: &GraphQuery) -> Result<GraphView> {
+        self.index.graph_with(&self.member, q)
     }
 
     pub fn timeline(&self, days: i64, space: Option<&str>) -> Result<Vec<TimelineDay>> {

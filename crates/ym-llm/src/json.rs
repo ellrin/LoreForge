@@ -40,8 +40,9 @@ pub fn extract_json(text: &str) -> Option<Value> {
 }
 
 /// A small JSON Schema check: `type`, `properties`, `required`, `items`,
-/// `enum`, `additionalProperties: false`. Enough for the schemas the apps
-/// write; anything else in the schema is accepted as is.
+/// `enum`, `const`, `anyOf`, `oneOf` (exactly one branch), `allOf`,
+/// `additionalProperties: false`. Enough for the schemas the apps write;
+/// anything else in the schema (`$ref`, formats, lengths…) is accepted as is.
 pub fn validate(v: &Value, schema: &Value) -> Result<(), String> {
     validate_at(v, schema, "$")
 }
@@ -71,6 +72,35 @@ fn validate_at(v: &Value, schema: &Value, at: &str) -> Result<(), String> {
         && !choices.contains(v)
     {
         return Err(format!("{at} 不在允許的值裡"));
+    }
+    if let Some(c) = schema.get("const")
+        && c != v
+    {
+        return Err(format!("{at} 應該是 {c}"));
+    }
+    if let Some(all) = schema["allOf"].as_array() {
+        for s in all {
+            validate_at(v, s, at)?;
+        }
+    }
+    if let Some(any) = schema["anyOf"].as_array() {
+        let mut first_err = None;
+        if !any.iter().any(|s| match validate_at(v, s, at) {
+            Ok(()) => true,
+            Err(e) => {
+                first_err.get_or_insert(e);
+                false
+            }
+        }) {
+            return Err(format!("{at} 不符合任何一種允許的格式（{}）", first_err.unwrap_or_default()));
+        }
+    }
+    if let Some(one) = schema["oneOf"].as_array() {
+        match one.iter().filter(|s| validate_at(v, s, at).is_ok()).count() {
+            1 => {}
+            0 => return Err(format!("{at} 不符合任何一種允許的格式")),
+            n => return Err(format!("{at} 同時符合 {n} 種格式（oneOf 只能符合一種）")),
+        }
     }
     if let Some(obj) = v.as_object() {
         for k in schema["required"].as_array().into_iter().flatten().filter_map(Value::as_str) {
@@ -150,6 +180,34 @@ mod tests {
         let arr = json!({"type":"array","items":{"type":"string","enum":["a","b"]}});
         assert!(validate(&json!(["a","b"]), &arr).is_ok());
         assert!(validate(&json!(["c"]), &arr).is_err());
+    }
+
+    #[test]
+    fn validates_any_of_one_of_all_of_and_const() {
+        // A reply that is either a list of edits or a refusal note.
+        let s = json!({"anyOf": [
+            {"type":"object","properties":{"edits":{"type":"array","items":{"type":"string"}}},"required":["edits"]},
+            {"type":"object","properties":{"kind":{"const":"none"},"why":{"type":"string"}},"required":["kind"]}
+        ]});
+        assert!(validate(&json!({"edits":["a"]}), &s).is_ok());
+        assert!(validate(&json!({"kind":"none","why":"x"}), &s).is_ok());
+        assert!(validate(&json!({"kind":"other"}), &s).unwrap_err().contains("不符合"));
+        assert!(validate(&json!({"edits":[1]}), &s).is_err());
+        // Nested inside properties too.
+        let nested = json!({"type":"object","properties":{"v":{"anyOf":[{"type":"string"},{"type":"null"}]}}});
+        assert!(validate(&json!({"v":null}), &nested).is_ok() && validate(&json!({"v":"x"}), &nested).is_ok());
+        assert!(validate(&json!({"v":1}), &nested).unwrap_err().contains("$.v"));
+
+        let one = json!({"oneOf": [{"type":"integer"}, {"type":"number"}]});
+        assert!(validate(&json!(1.5), &one).is_ok());
+        assert!(validate(&json!(2), &one).unwrap_err().contains("oneOf"), "an integer is also a number");
+        assert!(validate(&json!("x"), &one).is_err());
+
+        let all = json!({"allOf": [{"type":"object","required":["a"]}, {"required":["b"]}]});
+        assert!(validate(&json!({"a":1,"b":2}), &all).is_ok());
+        assert!(validate(&json!({"a":1}), &all).unwrap_err().contains("b"));
+        assert!(validate(&json!("x"), &json!({"const":"x"})).is_ok());
+        assert!(validate(&json!("y"), &json!({"const":"x"})).is_err());
     }
 
     #[tokio::test]

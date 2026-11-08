@@ -22,7 +22,7 @@
           "sentence": 3,
           "para_sentence": 2,
           "context": "body",
-          "ord": 1781,
+          "ord": 1878,
           "snippet": "The scorer also fails on Fig.~\\ref{fig:missing}."
         }
       ]
@@ -42,7 +42,7 @@
           "sentence": 4,
           "para_sentence": 1,
           "context": "body",
-          "ord": 1844,
+          "ord": 1941,
           "snippet": "\\label{tab:main}"
         },
         {
@@ -53,7 +53,7 @@
           "sentence": 9,
           "para_sentence": 2,
           "context": "body",
-          "ord": 2161,
+          "ord": 2258,
           "snippet": "\\label{tab:main}"
         }
       ]
@@ -67,41 +67,10 @@
       "locations": []
     },
     {
-      "code": "spelling_variants",
-      "category": "style",
-      "severity": "warning",
-      "message": "同一個詞有不同寫法：nonlinear / non-linear",
-      "subject": "nonlinear / non-linear",
-      "locations": [
-        {
-          "file": "sections/introduction.tex",
-          "line": 3,
-          "col": 35,
-          "para": 0,
-          "sentence": 2,
-          "para_sentence": 1,
-          "context": "body",
-          "ord": 415,
-          "snippet": "Gear widgets are small parts with nonlinear behaviour."
-        },
-        {
-          "file": "sections/results.tex",
-          "line": 3,
-          "col": 46,
-          "para": 0,
-          "sentence": 2,
-          "para_sentence": 1,
-          "context": "body",
-          "ord": 1694,
-          "snippet": "Table~\\ref{tab:main} and Table 2 compare the non-linear scorer with GearNet-S and GearNet-Small."
-        }
-      ]
-    },
-    {
       "code": "abbrev_used_before_expansion",
       "category": "abbrev",
       "severity": "warning",
-      "message": "縮寫 WSN 在展開（sections/introduction.tex:5「widget scoring network」）之前就用了 1 次",
+      "message": "縮寫 WSN 在展開（sections/introduction.tex:5「widget scoring network」）之前就用了 1 次 — 把「widget scoring network (WSN)」移到第一次出現的地方",
       "subject": "WSN",
       "entry": "wsn",
       "locations": [
@@ -135,7 +104,7 @@
       "code": "abbrev_never_expanded",
       "category": "abbrev",
       "severity": "warning",
-      "message": "縮寫 MLP 在正文用了 1 次，但從未展開（對照表：multilayer perceptron）",
+      "message": "縮寫 MLP 在正文用了 1 次，但從未展開（對照表：multilayer perceptron） — 第一次出現時寫成「multilayer perceptron (MLP)」",
       "subject": "MLP",
       "entry": "mlp",
       "locations": [
@@ -176,7 +145,7 @@
       "code": "used_before_definition",
       "category": "symbol",
       "severity": "warning",
-      "message": "符號 $\\boldsymbol{w}$ 先出現在圖表說明（sections/method.tex:6），正文到 sections/method.tex:10 才定義",
+      "message": "符號 $\\boldsymbol{w}$ 先出現在圖表說明（sections/method.tex:6），正文到 sections/method.tex:10 才定義 — 在圖說裡簡短說明它，或把定義移到圖之前",
       "subject": "\\boldsymbol{w}",
       "entry": "w",
       "locations": [
@@ -237,8 +206,8 @@
         }
       ],
       "details": [
-        "sections/method.tex:11  $n$ = |\\mathcal{A}|",
-        "sections/method.tex:26  $n$ = |\\mathcal{B}|"
+        "sections/method.tex:11  $n = |\\mathcal{A}|$",
+        "sections/method.tex:26  $n = |\\mathcal{B}|$"
       ]
     },
     {
@@ -273,33 +242,10 @@
       ]
     },
     {
-      "code": "equation_undefined_variables",
-      "category": "equation",
-      "severity": "warning",
-      "message": "方程式 eq:score 的變數未定義：$\\beta$",
-      "subject": "eq:score",
-      "locations": [
-        {
-          "file": "sections/method.tex",
-          "line": 15,
-          "col": 1,
-          "para": 1,
-          "sentence": 9,
-          "para_sentence": 6,
-          "context": "equation",
-          "ord": 1128,
-          "snippet": "\\begin{equation}"
-        }
-      ],
-      "details": [
-        "$\\beta$"
-      ]
-    },
-    {
       "code": "undefined_symbol",
       "category": "symbol",
       "severity": "warning",
-      "message": "符號 $\\beta$ 用了 1 次，但正文沒有定義",
+      "message": "符號 $\\beta$ 用了 1 次，但正文沒有定義 — 第一次用到時補一句說明（「$\\beta$ denotes …」）",
       "subject": "\\beta",
       "locations": [
         {
@@ -313,13 +259,29 @@
           "ord": 1193,
           "snippet": "s = \\vw^{\\top}\\boldsymbol{a} + \\beta\\,\\speed,"
         }
+      ],
+      "related": [
+        {
+          "file": "sections/method.tex",
+          "line": 15,
+          "col": 1,
+          "para": 1,
+          "sentence": 9,
+          "para_sentence": 6,
+          "context": "equation",
+          "ord": 1128,
+          "snippet": "\\begin{equation}"
+        }
+      ],
+      "details": [
+        "也出現在方程式 eq:score"
       ]
     },
     {
       "code": "equation_undefined_variables",
       "category": "equation",
       "severity": "warning",
-      "message": "方程式 eq:loss 的變數未定義：$\\eta$",
+      "message": "方程式 eq:loss 的變數到後面才定義：$\\eta$（sections/method.tex:29 才定義） — 在方程式後面用「where …」說明，或把定義移到前面",
       "subject": "eq:loss",
       "locations": [
         {
@@ -335,34 +297,14 @@
         }
       ],
       "details": [
-        "$\\eta$"
+        "$\\eta$（sections/method.tex:29 才定義）"
       ]
     },
     {
-      "code": "label_unreferenced",
-      "category": "ref",
-      "severity": "warning",
-      "message": "方程式標籤 eq:loss 從未被引用",
-      "subject": "eq:loss",
-      "locations": [
-        {
-          "file": "sections/method.tex",
-          "line": 22,
-          "col": 8,
-          "para": 1,
-          "sentence": 11,
-          "para_sentence": 8,
-          "context": "equation",
-          "ord": 1290,
-          "snippet": "\\label{eq:loss}"
-        }
-      ]
-    },
-    {
-      "code": "undefined_symbol",
+      "code": "used_before_definition",
       "category": "symbol",
       "severity": "warning",
-      "message": "符號 $\\eta$ 用了 1 次，但正文沒有定義",
+      "message": "符號 $\\eta$ 先用後定義：第一次用在 sections/method.tex:23，到 sections/method.tex:29 才定義 — 把定義移到第一次使用的地方",
       "subject": "\\eta",
       "locations": [
         {
@@ -375,6 +317,19 @@
           "context": "equation",
           "ord": 1308,
           "snippet": "L = (s - \\eta)^2 + \\gamma ."
+        }
+      ],
+      "related": [
+        {
+          "file": "sections/method.tex",
+          "line": 29,
+          "col": 13,
+          "para": 1,
+          "sentence": 15,
+          "para_sentence": 12,
+          "context": "definition",
+          "ord": 1643,
+          "snippet": "The target $\\eta$ is the score of a perfect widget."
         }
       ]
     },
@@ -428,7 +383,7 @@
           "sentence": 2,
           "para_sentence": 1,
           "context": "body",
-          "ord": 1674,
+          "ord": 1771,
           "snippet": "Table~\\ref{tab:main} and Table 2 compare the non-linear scorer with GearNet-S and GearNet-Small…"
         }
       ]
@@ -437,20 +392,40 @@
       "code": "spelling_variants",
       "category": "style",
       "severity": "warning",
-      "message": "同一個詞有不同寫法：GearNet-S / GearNet-Small",
-      "subject": "GearNet-S / GearNet-Small",
+      "message": "同一個詞有不同寫法：nonlinear 1 次、non-linear 1 次 — 統一成一種寫法",
+      "subject": "nonlinear / non-linear",
       "locations": [
         {
           "file": "sections/results.tex",
           "line": 3,
-          "col": 69,
+          "col": 46,
           "para": 0,
           "sentence": 2,
           "para_sentence": 1,
           "context": "body",
-          "ord": 1717,
-          "snippet": "…n} and Table 2 compare the non-linear scorer with GearNet-S and GearNet-Small."
+          "ord": 1791,
+          "snippet": "Table~\\ref{tab:main} and Table 2 compare the non-linear scorer with GearNet-S and GearNet-Small."
         },
+        {
+          "file": "sections/introduction.tex",
+          "line": 3,
+          "col": 35,
+          "para": 0,
+          "sentence": 2,
+          "para_sentence": 1,
+          "context": "body",
+          "ord": 415,
+          "snippet": "Gear widgets are small parts with nonlinear behaviour."
+        }
+      ]
+    },
+    {
+      "code": "spelling_variants",
+      "category": "style",
+      "severity": "warning",
+      "message": "同一個詞有不同寫法：GearNet-S 1 次、GearNet-Small 1 次 — 統一成一種寫法",
+      "subject": "GearNet-S / GearNet-Small",
+      "locations": [
         {
           "file": "sections/results.tex",
           "line": 3,
@@ -459,8 +434,19 @@
           "sentence": 2,
           "para_sentence": 1,
           "context": "body",
-          "ord": 1731,
+          "ord": 1828,
           "snippet": "…compare the non-linear scorer with GearNet-S and GearNet-Small."
+        },
+        {
+          "file": "sections/results.tex",
+          "line": 3,
+          "col": 69,
+          "para": 0,
+          "sentence": 2,
+          "para_sentence": 1,
+          "context": "body",
+          "ord": 1814,
+          "snippet": "…n} and Table 2 compare the non-linear scorer with GearNet-S and GearNet-Small."
         }
       ]
     },
@@ -468,7 +454,7 @@
       "code": "label_unreferenced",
       "category": "ref",
       "severity": "warning",
-      "message": "圖標籤 fig:spare 從未被引用",
+      "message": "圖標籤 fig:spare 從未被引用 — 在正文用 Fig.~\\ref{fig:spare} 提到它",
       "subject": "fig:spare",
       "locations": [
         {
@@ -479,7 +465,7 @@
           "sentence": 7,
           "para_sentence": 1,
           "context": "body",
-          "ord": 2033,
+          "ord": 2130,
           "snippet": "\\label{fig:spare}"
         }
       ]
@@ -501,7 +487,7 @@
       "code": "abbrev_abstract",
       "category": "abbrev",
       "severity": "info",
-      "message": "摘要用了縮寫 WSN 但沒有在摘要內展開",
+      "message": "摘要用了縮寫 WSN 但沒有在摘要內展開 — 摘要要能單獨閱讀，第一次出現時寫成「全名 (WSN)」",
       "subject": "WSN",
       "entry": "wsn",
       "locations": [
@@ -522,7 +508,7 @@
       "code": "abbrev_expanded_twice",
       "category": "abbrev",
       "severity": "info",
-      "message": "縮寫 GR 在正文展開了 2 次",
+      "message": "縮寫 GR 在正文展開了 2 次 — 只在第一次出現時展開，之後直接用 GR",
       "subject": "GR",
       "locations": [
         {
@@ -729,6 +715,26 @@
       ]
     },
     {
+      "code": "label_unreferenced",
+      "category": "ref",
+      "severity": "info",
+      "message": "方程式標籤 eq:loss 從未被引用 — 不需要引用的話可以拿掉 \\label",
+      "subject": "eq:loss",
+      "locations": [
+        {
+          "file": "sections/method.tex",
+          "line": 22,
+          "col": 8,
+          "para": 1,
+          "sentence": 11,
+          "para_sentence": 8,
+          "context": "equation",
+          "ord": 1290,
+          "snippet": "\\label{eq:loss}"
+        }
+      ]
+    },
+    {
       "code": "unused_definition",
       "category": "symbol",
       "severity": "info",
@@ -832,7 +838,7 @@
       "code": "ref_prefix_style",
       "category": "style",
       "severity": "info",
-      "message": "引用前綴不一致：Fig.~\\ref（1 次）、Figure~\\ref（1 次）",
+      "message": "引用前綴不一致：Fig.~\\ref（1 次）、Figure~\\ref（1 次） — 統一寫成「Fig.」",
       "locations": [
         {
           "file": "sections/method.tex",
@@ -861,7 +867,7 @@
           "sentence": 9,
           "para_sentence": 2,
           "context": "caption",
-          "ord": 2135,
+          "ord": 2232,
           "snippet": "\\caption{Ablation results.}"
         }
       ]
@@ -897,7 +903,7 @@
     "abbrev_never_expanded": 1,
     "abbrev_used_before_expansion": 1,
     "caption_style": 2,
-    "equation_undefined_variables": 2,
+    "equation_undefined_variables": 1,
     "hardcoded_reference": 2,
     "label_duplicate": 1,
     "label_unreferenced": 2,
@@ -907,11 +913,11 @@
     "registry_invalid": 1,
     "spelling_variants": 2,
     "symbol_multiple_meanings": 3,
-    "undefined_symbol": 2,
+    "undefined_symbol": 1,
     "unregistered_symbol": 9,
     "unused_definition": 4,
     "unused_entry": 3,
-    "used_before_definition": 1
+    "used_before_definition": 2
   },
   "symbols": [
     {
@@ -1017,8 +1023,9 @@
     },
     {
       "key": "\\eta",
-      "uses": 1,
-      "defined": false,
+      "uses": 2,
+      "defined": true,
+      "meaning": "score of a perfect widget",
       "first_use": {
         "file": "sections/method.tex",
         "line": 23,
@@ -1029,6 +1036,17 @@
         "context": "equation",
         "ord": 1308,
         "snippet": "L = (s - \\eta)^2 + \\gamma ."
+      },
+      "defined_at": {
+        "file": "sections/method.tex",
+        "line": 29,
+        "col": 13,
+        "para": 1,
+        "sentence": 15,
+        "para_sentence": 12,
+        "context": "definition",
+        "ord": 1643,
+        "snippet": "The target $\\eta$ is the score of a perfect widget."
       }
     },
     {
