@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/server", "apps/desktop"]
+# `cargo build` / `cargo test` skip the desktop app so they need no WebView
+# libraries; build it with `cargo run -p papercomposer` or `cargo tauri build`.
+default-members = ["crates/core", "crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+csv = "1"
+thiserror = "2"
+# Shared crates (commons/, next to this app's folder).
+ym-llm = { path = "../../commons/crates/ym-llm" }
+ym-gitsync = { path = "../../commons/crates/ym-gitsync" }

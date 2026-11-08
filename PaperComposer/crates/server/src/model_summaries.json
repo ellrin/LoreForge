@@ -1,0 +1,12 @@
+{
+  "note": "PaperComposer's own one-line descriptions of the shared catalog's local models (ym-llm catalog.json is written for every app). Applied by models::catalog() unless the user keeps a models/catalog.json override. Speeds are generation tokens per second on the catalog's reference Mac.",
+  "summaries": {
+    "qwen3.5-4b-q8": "最快（約 31 tokens/秒）；適合改寫單句、快速檢查，長段落品質較弱",
+    "gemma-4-e4b-q8": "很快（約 28 tokens/秒）；適合改寫與檢查",
+    "gemma-4-12b-q4": "省記憶體版（約 18 tokens/秒），16 GB 的電腦用這個",
+    "qwen3.5-9b-q8": "中等速度（約 17 tokens/秒）",
+    "gemma-4-12b-q8": "預設：接近原版品質（約 12 tokens/秒），生成段落夠用",
+    "gemma-4-31b-q4": "大：段落品質較好，但記憶體會滿",
+    "qwen3.8-27b-q4": "最聰明但慢（約 8 tokens/秒），記憶體會滿"
+  }
+}

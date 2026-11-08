@@ -1,0 +1,15 @@
+id,kind,text,usage,section,example,tags
+X001,connective,"However,",Turns from prior work to its limitation.,Introduction,"However, these models do not show which lesions drive the decision.",contrast
+X002,connective,"In contrast,",Sets our result against a baseline.,Result,"In contrast, the image-level classifier missed small haemorrhages.",contrast
+X003,connective,"Moreover,","Adds a second, stronger point.",Discussion,"Moreover, the maps were rated as clinically plausible by both graders.",addition
+X004,connective,"Consequently,",States what follows from a problem.,Introduction,"Consequently, many referrals cannot be audited.",cause
+X005,connective,"To this end,",Introduces the method after the aim.,Introduction,"To this end, we designed a two-stage network.",aim
+X006,connective,"Taken together,",Summarises several results.,Discussion,"Taken together, these results support lesion-level supervision.",summary
+X007,collocation,play a crucial role in,Importance of an exam or factor.,Introduction,Fundus photographs play a crucial role in diabetic eye screening.,importance
+X008,collocation,remain an open problem,States an unsolved gap.,Introduction,Explaining referral decisions remains an open problem.,gap
+X009,collocation,was approved by,Ethics statement.,Method,The study was approved by the institutional review board.,ethics
+X010,collocation,resolved by consensus,Annotation disagreement.,Method,Disagreements were resolved by consensus.,annotation
+X011,collocation,outperformed all baselines,Main comparison result.,Result,Our model outperformed all baselines on both test sets.,result
+X012,phrase,with 95% confidence intervals,Reporting uncertainty.,Method,AUC is reported with 95% confidence intervals.,statistics
+X013,phrase,to the best of our knowledge,"Claiming first work, used sparingly.",Introduction,"To the best of our knowledge, this is the first study to grade referral from lesions alone.",novelty
+X014,phrase,in a real-world setting,Clinical deployment context.,Discussion,The system has not yet been tested in a real-world setting.,clinical

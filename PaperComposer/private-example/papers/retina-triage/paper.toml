@@ -1,0 +1,16 @@
+key_value = "Make each referral decision traceable to the lesions that justify it"
+
+[[authors]]
+id = "A001"
+corresponding = false
+equal = false
+
+[[authors]]
+id = "A003"
+corresponding = false
+equal = false
+
+[[authors]]
+id = "A002"
+corresponding = true
+equal = false

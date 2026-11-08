@@ -1,0 +1,12 @@
+\section{Method}
+
+Let $x_t \in \R^d$ denote the query embedding at step $t$, where $t \le T$.
+For each candidate $c$, the first stage scores $s(c) = \langle x_t, e_c \rangle / \norm{e_c}$.
+
+\begin{equation}
+\hat{c} = \argmax_{c \in \mathcal{C}} \; \alpha \, s(c) + (1 - \alpha) \, r(c)
+\label{eq:score}
+\end{equation}
+
+The weight $\alpha \in [0, 1]$ balances recall against precision, as shown in Eq.~\eqref{eq:score}.
+We set $\alpha = 0.7$ following \cite{smith2024}.

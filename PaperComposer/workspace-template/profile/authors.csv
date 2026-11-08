@@ -1,0 +1,3 @@
+id,given,family,email,orcid,affiliations,role,note
+A001,Your,Name,you@example.edu,,F001,me,Replace with your own details
+A002,Advisor,Example,advisor@example.edu,,F001;F002,advisor,

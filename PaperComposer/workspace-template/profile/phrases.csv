@@ -1,0 +1,18 @@
+id,section,function,position,template,example,tags,priority
+P001,Introduction,background,opening,"{Field} has become central to {application} over the past decade.","Retrieval-augmented generation has become central to question answering over the past decade.",context,3
+P002,Introduction,research_gap,opening,"Despite recent advances in {field}, {problem} remains largely unexplored.","Despite recent advances in retrieval, long-context grounding remains largely unexplored.",gap;contrast,5
+P003,Introduction,research_gap,body,"Existing approaches either {limitation_a} or {limitation_b}, which limits {consequence}.",,gap;limitation,4
+P004,Introduction,contribution,opening,"In this paper, we propose {method}, which {key_idea}.","In this paper, we propose a two-stage retriever, which separates recall from precision.",contribution,5
+P005,Introduction,contribution,body,"Our contributions are threefold: {c1}, {c2}, and {c3}.",,contribution;list,3
+P006,Related work,comparison,opening,"Prior work on {topic} falls into {n} broad categories.",,survey;structure,3
+P007,Method,overview,opening,"Figure~\ref{{fig}} illustrates the overall pipeline of {method}.",,figure;overview,4
+P008,Method,definition,body,"Let {symbol} denote {quantity}, where {condition}.","Let $x_t$ denote the input at step $t$, where $t \le T$.",notation;math,5
+P009,Method,justification,body,"We adopt {choice} because {reason}.",,design;reason,3
+P010,Result,finding,opening,"Compared with {baseline}, {method} improves {metric} by {value}.","Compared with BM25, our retriever improves recall@10 by 12.4\%.",result;quantitative,5
+P011,Result,finding,body,"This gain is most pronounced on {subset}, where {observation}.",,result;analysis,4
+P012,Result,evidence,closing,"These results indicate that {claim}.",,result;interpretation,4
+P013,Discussion,limitation,opening,"A limitation of this study is that {limitation}.",,limitation,4
+P014,Discussion,future_work,closing,"Future work could {direction} to {goal}.",,future,3
+P015,Conclusion,summary,opening,"We presented {method}, which {main_result}.",,summary,4
+P016,Any,transition,transition,"In contrast, {contrast}.",,contrast,3
+P017,Any,transition,transition,"Building on this observation, {next_step}.",,flow,3

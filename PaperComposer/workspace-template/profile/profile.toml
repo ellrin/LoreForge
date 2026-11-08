@@ -1,0 +1,5 @@
+# PaperComposer writing profile manifest.
+# Copy this whole folder into your own PRIVATE repository, then point the app at it.
+name = "Demo profile"
+schema_version = 1
+language = "en"

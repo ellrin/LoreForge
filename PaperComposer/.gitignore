@@ -1,0 +1,35 @@
+# Build output
+/target
+/dist
+
+# Personal data never belongs in this public repository.
+# Your writing profile lives in its own private repository; the app finds it
+# through an environment variable or the OS config folder.
+/user_data/
+/profile/
+/workspace/
+/my-profile/
+/papers/
+*.local.toml
+/config.toml
+!workspace-template/**
+!private-example/**
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Local model files and indexes
+*.gguf
+*.safetensors
+/.index/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Tauri generated files
+/apps/desktop/gen/

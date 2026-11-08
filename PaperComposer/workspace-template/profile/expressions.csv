@@ -1,0 +1,6 @@
+id,kind,text,usage,section,example,tags
+X001,connective,"In contrast,",Opens a sentence that sets up an opposing case,Any,"In contrast, the dense retriever keeps the full context.",contrast
+X002,connective,"Building on this observation,",Moves from a finding to the next step,Any,,flow
+X003,collocation,is most pronounced on,Says where an effect is strongest,Result,"The gain is most pronounced on long inputs.",result
+X004,phrase,in line with,Agreement with prior work or expectation,Discussion,"This is in line with earlier reports.",agreement
+X005,collocation,remains largely unexplored,Marks a research gap,Introduction,,gap

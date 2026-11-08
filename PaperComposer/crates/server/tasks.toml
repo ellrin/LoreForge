@@ -1,0 +1,81 @@
+# PaperComposer's LLM tasks (design §9), layered over ym-llm's shared
+# tasks.toml. A user file `<config folder>/PaperComposer/tasks.toml` in the
+# same format can add an `[override]` per task.
+#
+# Two ym-llm model refs here mean "what the user set up in the app":
+#   local:current     the local engine that is connected (an external
+#                     llama-server from [engine] url, or the model started in
+#                     「AI 與同步」)
+#   claude:selected   the Claude model picked in settings; subscription first,
+#                     then the API key
+#
+# The engine switch in the UI (本機 / 訂閱 / API) becomes a strict override for
+# the call (that engine or an error, no fallback): local:current,
+# claude-code:selected or claude-api:selected. With no choice ("auto") the
+# order below applies: local first, then Claude.
+#
+# Template conversion is not a task here: it runs the Claude Code agent itself.
+
+[task.pc-compose-paragraph]
+label = "撰寫段落"
+needs = { json = true }
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+
+[task.pc-soft-check]
+label = "軟規則檢查"
+needs = { json = true }
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+
+[task.pc-decompose]
+label = "拆解句型"
+needs = { json = true }
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+
+[task.pc-outline]
+label = "大綱與標題"
+needs = { json = true }
+default = "claude:selected"
+offline = false
+
+[task.pc-caption]
+label = "圖表標題"
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+
+[task.pc-ref-queries]
+label = "文獻搜尋關鍵字"
+needs = { json = true }
+default = "claude:selected"
+offline = false
+
+[task.pc-ref-rank]
+label = "文獻排序"
+needs = { json = true }
+default = "claude:selected"
+offline = false
+
+[task.pc-ref-notes]
+label = "文獻摘要與標籤"
+needs = { json = true }
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+
+[task.pc-cite-extract]
+label = "從貼上文字找出文獻"
+needs = { json = true }
+default = "claude:selected"
+offline = false
+
+[task.pc-engine-test]
+label = "測試引擎"
+default = "local:current"
+fallback = "claude:selected"
+offline = true

@@ -1,0 +1,57 @@
+\documentclass[10pt,twocolumn]{article}
+\usepackage[a4paper,margin=18mm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[numbers,sort&compress]{natbib}
+
+\title{Title of the paper}
+\author{First Author\textsuperscript{1} \and Second Author\textsuperscript{2}\\
+\small\textsuperscript{1}Department, Institution, City, Country\\
+\small\textsuperscript{2}Department, Institution, City, Country}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+One paragraph of up to 250 words.
+\end{abstract}
+
+\noindent\textbf{Keywords:} keyword one; keyword two; keyword three
+
+\section{Introduction}
+Introduction text with a citation \citep{example2024}.
+
+\section{Methods}
+Methods text. An equation:
+\begin{equation}
+\mathcal{L} = -\sum_{i=1}^{N} y_i \log \hat{y}_i
+\label{eq:loss}
+\end{equation}
+
+\section{Results}
+Results text (Table~\ref{tab:example}).
+\begin{table}[t]
+\centering
+\caption{Example table.}
+\label{tab:example}
+\begin{tabular}{lcc}
+\toprule
+Model & AUC & Sensitivity \\
+\midrule
+Baseline & 0.89 & 0.86 \\
+Proposed & 0.94 & 0.92 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+Discussion text.
+
+\section{Conclusion}
+Conclusion text.
+
+\bibliographystyle{unsrtnat}
+\bibliography{refs}
+\end{document}

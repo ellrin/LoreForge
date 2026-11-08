@@ -1,0 +1,682 @@
+[
+ {
+  "id": "ieee",
+  "name": "IEEE 官方格線",
+  "group": "期刊",
+  "from": "IEEEtran 範例（期刊、會議相同）：格線、[!t]、arraystretch 1.3、標題在上；字體由 IEEEtran 自動設為 footnotesize",
+  "look": {
+   "rules": "grid",
+   "placement": "!t",
+   "stretch": "1.3"
+  },
+  "packages": [],
+  "limits": {
+   "max_cols": {
+    "normalsize": 5,
+    "small": 7,
+    "footnotesize": 9
+   },
+   "overflow": [
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "!t",
+    "t",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "ieee-lines",
+  "name": "IEEE 簡潔橫線",
+  "group": "期刊",
+  "from": "IEEEtran：[!t]、arraystretch 1.3、標題在上，只用橫線",
+  "look": {
+   "rules": "hline",
+   "placement": "!t",
+   "stretch": "1.3"
+  },
+  "packages": [],
+  "limits": {
+   "max_cols": {
+    "normalsize": 5,
+    "small": 7,
+    "footnotesize": 9
+   },
+   "overflow": [
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "!t",
+    "t",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "springer-nature",
+  "name": "Springer Nature",
+  "group": "期刊",
+  "from": "sn-jnl 範例：\\toprule／\\midrule／\\botrule、@{}、標題在上",
+  "look": {
+   "rules": "booktabs",
+   "bottom": "botrule",
+   "trim": true,
+   "placement": "h"
+  },
+  "packages": [],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "lncs",
+  "name": "MICCAI／LNCS",
+  "group": "期刊",
+  "from": "Springer LNCS（MICCAI 使用）：標題在上、橫線",
+  "look": {
+   "rules": "hline"
+  },
+  "packages": [],
+  "limits": {
+   "max_cols": {
+    "normalsize": 5,
+    "small": 7,
+    "footnotesize": 9
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "cvpr",
+  "name": "CVPR",
+  "group": "期刊",
+  "from": "CVPR author kit 範例：booktabs、@{}、標題在上",
+  "look": {
+   "rules": "booktabs",
+   "trim": true
+  },
+  "packages": [
+   "booktabs"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "acm",
+  "name": "ACM",
+  "group": "期刊",
+  "from": "acmart 範例：booktabs、標題在上",
+  "look": {
+   "rules": "booktabs"
+  },
+  "packages": [
+   "booktabs"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "elsevier",
+  "name": "Elsevier",
+  "group": "期刊",
+  "from": "elsarticle 範例：無線、標題在下、[t]",
+  "look": {
+   "rules": "none",
+   "caption_below": true,
+   "placement": "t"
+  },
+  "packages": [],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "aps",
+  "name": "APS／REVTeX",
+  "group": "期刊",
+  "from": "REVTeX 範例：ruledtabular（上下雙線）、\\colrule、標題在上",
+  "look": {
+   "rules": "ruled",
+   "placement": "b"
+  },
+  "packages": [],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "apa",
+  "name": "APA 7",
+  "group": "期刊",
+  "from": "APA 第 7 版慣例：標題在上、三條橫線、註解在表下",
+  "look": {
+   "rules": "booktabs",
+   "notes": "threeparttable"
+  },
+  "packages": [
+   "booktabs",
+   "threeparttable"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "booktabs",
+  "name": "三線表",
+  "group": "通用",
+  "from": "booktabs：上、表頭下、下三條線",
+  "look": {
+   "rules": "booktabs"
+  },
+  "packages": [
+   "booktabs"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "multiheader",
+  "name": "多層表頭",
+  "group": "通用",
+  "from": "合併的表頭加部分底線（\\cmidrule）",
+  "look": {
+   "rules": "booktabs"
+  },
+  "packages": [
+   "booktabs",
+   "multirow"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcccc}\n\\multirow{2}{*}{Method} & \\multicolumn{2}{c}{Dataset A} & \\multicolumn{2}{c}{Dataset B} \\\\\n\\cmidrule{2-3}\\cmidrule{4-5}\n & Dice & HD95 & Dice & HD95 \\\\\nBaseline & 0.81 & 5.2 & 0.77 & 6.1 \\\\\nOurs & 0.85 & 4.1 & 0.80 & 5.4 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "groups",
+  "name": "分組列",
+  "group": "通用",
+  "from": "以整列小標分組",
+  "look": {
+   "rules": "booktabs"
+  },
+  "packages": [
+   "booktabs"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\n\\multicolumn{3}{l}{\\textit{Classical}} \\\\\nMethod 1 & 0.62 & 0.58 \\\\\nMethod 2 & 0.66 & 0.61 \\\\\n\\multicolumn{3}{l}{\\textit{Learning-based}} \\\\\nMethod 3 & 0.74 & 0.69 \\\\\nOurs & 0.78 & 0.72 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "notes",
+  "name": "附註表",
+  "group": "通用",
+  "from": "threeparttable：表下附註",
+  "look": {
+   "rules": "booktabs",
+   "notes": "threeparttable"
+  },
+  "packages": [
+   "booktabs",
+   "threeparttable"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "minimal",
+  "name": "極簡",
+  "group": "通用",
+  "from": "只有上下兩條線",
+  "look": {
+   "rules": "minimal"
+  },
+  "packages": [
+   "booktabs"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "results",
+  "name": "結果比較",
+  "group": "數據",
+  "from": "最佳值粗體、次佳底線",
+  "look": {
+   "rules": "booktabs"
+  },
+  "packages": [
+   "booktabs"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lccc}\nMethod & Acc. & F1 & AUC \\\\\nBaseline A & 0.81 & 0.77 & \\underline{0.88} \\\\\nBaseline B & \\underline{0.83} & \\underline{0.79} & 0.86 \\\\\nOurs & \\textbf{0.86} & \\textbf{0.82} & \\textbf{0.91} \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "decimal",
+  "name": "小數點對齊",
+  "group": "數據",
+  "from": "siunitx 的 S 欄：數字依小數點對齊",
+  "look": {
+   "rules": "booktabs",
+   "numeric_s": true
+  },
+  "packages": [
+   "booktabs",
+   "siunitx"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lccc}\nSample & Value 1 & Value 2 & Value 3 \\\\\nA & 1.25 & 12.5 & 125.0 \\\\\nB & 10.5 & 3.14 & 0.618 \\\\\nC & 100.25 & 0.5 & 42.0 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "meanstd",
+  "name": "平均 ± 標準差",
+  "group": "數據",
+  "from": "數值寫成 $平均 \\pm 標準差$",
+  "look": {
+   "rules": "booktabs"
+  },
+  "packages": [
+   "booktabs"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Dice (\\%) & HD95 (mm) \\\\\nBaseline & $81.2 \\pm 3.4$ & $5.2 \\pm 1.1$ \\\\\nOurs & $\\mathbf{85.1 \\pm 2.7}$ & $\\mathbf{4.1 \\pm 0.9}$ \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "ablation",
+  "name": "消融實驗",
+  "group": "數據",
+  "from": "模組開關用 ✓ / ×",
+  "look": {
+   "rules": "booktabs"
+  },
+  "packages": [
+   "booktabs",
+   "amssymb"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{cccc}\nModule A & Module B & Module C & Score \\\\\n$\\times$ & $\\times$ & $\\times$ & 0.70 \\\\\n\\checkmark & $\\times$ & $\\times$ & 0.74 \\\\\n\\checkmark & \\checkmark & $\\times$ & 0.77 \\\\\n\\checkmark & \\checkmark & \\checkmark & \\textbf{0.80} \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "wide",
+  "name": "跨雙欄",
+  "group": "版面",
+  "from": "table*：雙欄排版時橫跨兩欄",
+  "look": {
+   "rules": "booktabs",
+   "env": "table*",
+   "placement": "t",
+   "font": "small"
+  },
+  "packages": [
+   "booktabs"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 10,
+    "small": 12,
+    "footnotesize": 14
+   },
+   "overflow": [
+    "footnotesize",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "p"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcccccccc}\nMethod & C1 & C2 & C3 & C4 & C5 & C6 & C7 & Mean \\\\\nBaseline & 0.71 & 0.65 & 0.70 & 0.68 & 0.72 & 0.66 & 0.69 & 0.69 \\\\\nOurs & 0.78 & 0.70 & 0.75 & 0.74 & 0.77 & 0.71 & 0.74 & 0.74 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "fullwidth",
+  "name": "撐滿全寬",
+  "group": "版面",
+  "from": "tabular* 加 \\extracolsep\\fill：欄距平均撐滿頁寬",
+  "look": {
+   "rules": "booktabs",
+   "env": "table*",
+   "placement": "t",
+   "width": "\\textwidth"
+  },
+  "packages": [
+   "booktabs"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 10,
+    "small": 12,
+    "footnotesize": 14
+   },
+   "overflow": [
+    "footnotesize",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "p"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcccccccc}\nMethod & C1 & C2 & C3 & C4 & C5 & C6 & C7 & Mean \\\\\nBaseline & 0.71 & 0.65 & 0.70 & 0.68 & 0.72 & 0.66 & 0.69 & 0.69 \\\\\nOurs & 0.78 & 0.70 & 0.75 & 0.74 & 0.77 & 0.71 & 0.74 & 0.74 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "landscape",
+  "name": "橫式長表",
+  "group": "版面",
+  "from": "sidewaystable：整頁橫放",
+  "look": {
+   "rules": "booktabs",
+   "env": "sidewaystable",
+   "font": "small"
+  },
+  "packages": [
+   "booktabs",
+   "rotating"
+  ],
+  "limits": {
+   "max_cols": {
+    "normalsize": 14,
+    "small": 16,
+    "footnotesize": 18
+   },
+   "overflow": [
+    "footnotesize"
+   ],
+   "placement": [
+    "p"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcccccccc}\nMethod & C1 & C2 & C3 & C4 & C5 & C6 & C7 & Mean \\\\\nBaseline & 0.71 & 0.65 & 0.70 & 0.68 & 0.72 & 0.66 & 0.69 & 0.69 \\\\\nOurs & 0.78 & 0.70 & 0.75 & 0.74 & 0.77 & 0.71 & 0.74 & 0.74 \\\\\n\\end{tabular}"
+ },
+ {
+  "id": "grid",
+  "name": "全格線",
+  "group": "版面",
+  "from": "所有格線（附錄或少數期刊）",
+  "look": {
+   "rules": "grid"
+  },
+  "packages": [],
+  "limits": {
+   "max_cols": {
+    "normalsize": 6,
+    "small": 8,
+    "footnotesize": 10
+   },
+   "overflow": [
+    "small",
+    "footnotesize",
+    "table*",
+    "sidewaystable"
+   ],
+   "placement": [
+    "t",
+    "h",
+    "b"
+   ]
+  },
+  "starter": "\\begin{tabular}{lcc}\nMethod & Metric A & Metric B \\\\\nBaseline & 0.71 & 0.65 \\\\\nOurs & 0.78 & 0.70 \\\\\n\\end{tabular}"
+ }
+]

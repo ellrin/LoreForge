@@ -1,0 +1,17 @@
+[package]
+name = "papercomposer"
+version.workspace = true
+edition.workspace = true
+description = "PaperComposer desktop app"
+
+# Desktop shell: starts the local server in-process on a free 127.0.0.1 port and
+# opens a native window on it. Windows uses WebView2, macOS uses WKWebView.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+pc-server = { path = "../../crates/server" }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+url = "2"

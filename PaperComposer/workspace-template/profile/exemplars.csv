@@ -1,0 +1,2 @@
+id,section,function,text,source
+E001,Result,finding,"Compared with the strongest baseline, our method reduces error by 18% on the held-out set. The gain comes almost entirely from long inputs, where the baseline truncates context. On short inputs the two methods perform within one standard deviation. These results indicate that the improvement stems from context handling rather than model capacity.",demo
