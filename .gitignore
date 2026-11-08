@@ -1,0 +1,4 @@
+# Personal and household data: each folder under private/ is its own git repo.
+/private/
+target/
+.DS_Store
