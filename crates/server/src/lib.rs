@@ -1,10 +1,13 @@
 //! kb-server: axum on 127.0.0.1:7700, the only writer of the knowledge base.
 //! Serves `web/` and the JSON API (design §4.7). Other local apps (PaperComposer,
 //! SlideComposer, JELearner, NeonDeck's WKWebView with a `file://` / `null` origin)
-//! call it over CORS.
+//! call it over CORS. NeonDeck serves its desktop from a `deck://` scheme, so that origin is
+//! allowed too. `reminders` + `digest`: recall notifications and the daily e-mail (§4.5).
 
 pub mod api;
 pub mod config;
+pub mod digest;
+pub mod reminders;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -21,6 +24,13 @@ pub use config::Config;
 pub struct AppState {
     pub kb: Mutex<KnowledgeBase>,
     pub web: PathBuf,
+    pub rem: reminders::Reminders,
+}
+
+impl AppState {
+    pub fn new(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders) -> Shared {
+        Arc::new(AppState { kb: Mutex::new(kb), web, rem })
+    }
 }
 
 pub type Shared = Arc<AppState>;
@@ -40,7 +50,7 @@ pub fn open(config: &Config, opts: KbOptions) -> Result<KnowledgeBase, String> {
 /// Origins allowed to call the API: this machine's apps only.
 pub fn allowed_origin(origin: &HeaderValue) -> bool {
     let Ok(o) = origin.to_str() else { return false };
-    if o == "null" || o.starts_with("file://") || o == "tauri://localhost" {
+    if o == "null" || o.starts_with("file://") || o == "tauri://localhost" || o.starts_with("deck://") {
         return true;
     }
     let local_host = |rest: &str| {
@@ -59,11 +69,14 @@ pub fn router(shared: Shared) -> Router {
     api::routes().with_state(shared).fallback_service(web).layer(cors)
 }
 
-/// Bind 127.0.0.1:`port` (0 = any free port) and return the server future.
+/// Bind 127.0.0.1:`port` (0 = any free port), start the reminder scheduler and return the
+/// server future.
 pub async fn bind(config: Config, kb: KnowledgeBase) -> std::io::Result<(SocketAddr, impl std::future::Future<Output = std::io::Result<()>>)> {
-    let shared = Arc::new(AppState { kb: Mutex::new(kb), web: config.web.clone() });
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", config.port)).await?;
     let addr = listener.local_addr()?;
+    let rem = reminders::Reminders::system(config.app_dir.clone(), format!("http://127.0.0.1:{}", addr.port()));
+    let shared = AppState::new(kb, config.web.clone(), rem);
+    reminders::spawn_scheduler(shared.clone());
     let app = router(shared);
     Ok((addr, async move { axum::serve(listener, app).await }))
 }
@@ -74,7 +87,7 @@ mod tests {
 
     #[test]
     fn origins() {
-        for ok in ["null", "file://", "http://127.0.0.1:7878", "http://localhost:7979", "tauri://localhost", "https://tauri.localhost"] {
+        for ok in ["null", "file://", "deck://desktop", "http://127.0.0.1:7878", "http://localhost:7979", "tauri://localhost", "https://tauri.localhost"] {
             assert!(allowed_origin(&HeaderValue::from_static(ok)), "{ok}");
         }
         for bad in ["https://example.com", "http://127.0.0.1.evil.com", "http://localhost.evil.com:80"] {

@@ -9,12 +9,13 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
   <link rel="stylesheet" href="vendor/katex/katex.min.css">
   <link rel="stylesheet" href="styles.css">
-  <script>try { const m = localStorage.getItem("kb.mode"); if (m === "light" || m === "dark") document.documentElement.dataset.mode = m; } catch {}</script>
+  <!-- Mode: the author's choice (kb.mode) or, until they pick one, the system's. -->
+  <script>(() => { let m = null; try { m = localStorage.getItem("kb.mode"); } catch {} if (m !== "light" && m !== "dark") m = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"; document.documentElement.dataset.mode = m; })();</script>
 </head>
 <body>
 <div class="app">
   <header class="top">
-    <button class="ico only-narrow" id="actNav" data-icon="menu" aria-label="選單"></button>
+    <button class="ico only-narrow" id="actNav" data-icon="menu" aria-label="選單" aria-controls="left" aria-expanded="false"></button>
     <div class="brand">KNOWLEDGE<b>/</b>BASE</div>
     <label class="search"><span data-icon="search"></span><input id="q" type="search" placeholder="搜尋標題、別名、摘要、內文…" autocomplete="off"></label>
     <div class="top-right">
@@ -31,6 +32,7 @@
       <li><button data-view="review"><span data-icon="target"></span><span class="t">複習</span><span class="count hot" id="cDue"></span></button></li>
       <li><button data-view="timeline"><span data-icon="calendar"></span><span class="t">時間軸</span></button></li>
       <li><button data-view="graph"><span data-icon="graph"></span><span class="t">圖譜</span></button></li>
+      <li><button data-view="settings"><span data-icon="gear"></span><span class="t">設定</span></button></li>
     </ol>
 
     <section class="filters" id="filters">
@@ -72,6 +74,7 @@
     </section>
     <div class="left-foot" id="spacesFoot"></div>
   </aside>
+  <div class="nav-backdrop" id="navBackdrop" hidden></div>
 
   <main class="page" id="page">
     <section class="view" data-view="cards">
@@ -83,14 +86,19 @@
       <div class="view-head">
         <button class="ico" id="edBack" data-icon="back" aria-label="回到清單"></button>
         <h2 id="edHeading">新增知識卡</h2>
+        <span class="dirty" id="edDirty" hidden>未儲存</span>
         <span class="muted mono" id="edMeta"></span>
         <div class="head-actions">
-          <select id="edShareTo" hidden aria-label="分享到"></select>
-          <button class="btn" id="edShare" hidden><span data-icon="share"></span>分享到…</button>
+          <button class="btn" id="edGraph" hidden><span data-icon="graph"></span>在圖譜中查看</button>
+          <span class="share" id="edShareWrap" hidden>
+            <label class="share-to">分享到 <select id="edShareTo"></select></label>
+            <button class="btn" id="edShare"><span data-icon="share"></span>分享</button>
+          </span>
           <button class="ico" id="edDelete" data-icon="trash" aria-label="移到垃圾桶" hidden></button>
           <button class="btn primary" id="edSave"><span data-icon="check"></span>儲存</button>
         </div>
       </div>
+      <div class="draft-bar" id="edDraftBar" role="status" hidden></div>
       <div class="editor">
         <form class="ed-form" id="edForm" autocomplete="off">
           <div class="row2">
@@ -106,7 +114,7 @@
             <label>領域 <input id="edDomains" placeholder="medical-image-analysis"></label>
           </div>
           <label>摘要 <textarea id="edSummary" rows="2" placeholder="一兩句話說明"></textarea></label>
-          <label class="grow">內文（Markdown + LaTeX，<code>[[標題]]</code> 連到其他卡片；可貼上或拖曳圖片）
+          <label class="grow"><span class="lab-row">內文 <span class="lab-hint">Markdown＋LaTeX · <code>[[標題]]</code> 連到其他卡片 · 可貼上或拖曳圖片</span></span>
             <textarea id="edBody" rows="12" spellcheck="false"></textarea>
           </label>
           <div class="ed-tools">
@@ -145,13 +153,80 @@
       <div class="view-head"><h2>圖譜</h2>
         <span class="muted" id="graphInfo"></span>
         <div class="head-actions">
-          <label class="check"><input type="checkbox" id="gTags"> 顯示標籤</label>
-          <select id="gDepth" aria-label="深度"><option value="1">1 層</option><option value="2" selected>2 層</option><option value="3">3 層</option></select>
-          <button class="btn" id="gAll"><span data-icon="graph"></span>全部</button>
+          <div class="seg" id="gMode" role="group" aria-label="圖譜範圍">
+            <button data-v="global" aria-pressed="true">全部</button>
+            <button data-v="local" aria-pressed="false">局部</button>
+          </div>
+          <label class="g-depth" id="gDepthWrap" hidden>深度 <input type="range" id="gDepth" min="1" max="3" step="1" value="2"> <output id="gDepthOut">2</output> 層</label>
         </div>
       </div>
-      <div class="graph-wrap"><canvas id="graph"></canvas>
-        <div class="legend"><span><i class="st-learning"></i>學習中</span><span><i class="st-known"></i>記得</span><span><i class="st-stale"></i>久未複習</span><span><i class="st-none"></i>尚無紀錄</span></div>
+      <div class="graph-wrap" id="graphWrap"><canvas id="graph"></canvas></div>
+    </section>
+
+    <section class="view" data-view="settings" hidden>
+      <div class="view-head"><h2>設定</h2><span class="muted">提醒：通知與每日 e-mail 摘要</span></div>
+      <div class="settings">
+        <div class="stat-strip" id="stStats" aria-label="今日數字"></div>
+
+        <form class="set-panel" id="setNotify" autocomplete="off" novalidate>
+          <div class="set-head"><span data-icon="clock"></span><h3>到期通知</h3>
+            <details class="help"><summary aria-label="到期通知的說明" title="說明">?</summary>
+              <p>NeonDeck 的「知識」小工具會在這些時間檢查到期卡片並跳通知；NeonDeck 沒開時，由知識庫伺服器用 macOS 通知代替。同一個時段只會通知一次。</p></details></div>
+          <label>通知時間（逗號分隔，24 小時制）<input id="nTimes" placeholder="09:00, 21:00"></label>
+          <p class="warn-text small" id="nTimesWarn" hidden>沒有通知時間：不會跳任何到期通知。</p>
+          <label class="check"><input type="checkbox" id="nEnabled"> NeonDeck 沒開時，由知識庫顯示 macOS 通知</label>
+          <div class="set-actions">
+            <button type="button" class="btn" id="nTest"><span data-icon="alert"></span>測試通知</button>
+            <span class="muted small" id="nState"></span>
+          </div>
+        </form>
+
+        <form class="set-panel" id="setEmail" autocomplete="off" novalidate>
+          <div class="set-head"><span data-icon="mail"></span><h3>每日 e-mail 摘要</h3>
+            <details class="help"><summary aria-label="e-mail 摘要的說明" title="說明">?</summary>
+              <p>每天寄一封：到期的問題（答案在信末）、最近學到的卡片、今日數字。手機連不回這台 Mac，所以信只是提醒，作答請回到 Mac。</p></details>
+            <label class="check head-toggle"><input type="checkbox" id="eEnabled"> 啟用</label></div>
+          <div class="e-fields" id="eFields">
+          <div class="row3">
+            <label>SMTP 主機 <input id="eHost" placeholder="smtp.gmail.com"></label>
+            <label>連接埠 <input id="ePort" type="number" min="1" max="65535" placeholder="587"></label>
+            <label>加密
+              <select id="eSecurity">
+                <option value="starttls">STARTTLS（587）</option>
+                <option value="tls">TLS（465）</option>
+                <option value="none">不加密（僅本機轉送）</option>
+              </select>
+            </label>
+          </div>
+          <div class="row2">
+            <label>帳號（Gmail 填完整地址）<input id="eUser" type="email" placeholder="you@gmail.com"></label>
+            <label>寄件人（空白 = 帳號）<input id="eFrom" type="email"></label>
+          </div>
+          <label>收件人（逗號分隔）<input id="eTo" placeholder="you@gmail.com"></label>
+          <div class="row3">
+            <label>寄送時間 <input id="eAt" type="time"></label>
+            <label>「最近學到」天數 <input id="eDays" type="number" min="1" max="60"></label>
+            <label>最多幾題 <input id="eMax" type="number" min="1" max="200"></label>
+          </div>
+          <label class="check"><input type="checkbox" id="eSkip"> 沒有到期、也沒有新卡片的日子不寄</label>
+
+          <div class="pw-row">
+            <label>密碼（Gmail 請用「應用程式密碼」）<input id="ePw" type="password" autocomplete="new-password" placeholder="16 個字元，空格可留著"></label>
+            <button type="button" class="btn" id="ePwSave"><span data-icon="lock"></span>儲存密碼</button>
+          </div>
+          <div class="pw-state"><p class="muted small" id="ePwState"></p>
+            <details class="help"><summary aria-label="密碼存在哪裡" title="說明">?</summary>
+              <p>Gmail：先開啟兩步驟驗證，再到 Google 帳戶 ▸ 安全性 ▸ 應用程式密碼 產生一組。密碼存在這台 Mac 的鑰匙圈（服務名稱 KnowledgeBase）；鑰匙圈無法使用時，改存在設定資料夾的 credentials.toml（只有你的帳號能讀）。不會寫進任何 repo。</p></details></div>
+          </div>
+
+          <div class="set-actions">
+            <button type="submit" class="btn primary" id="setSave"><span data-icon="check"></span>儲存設定</button>
+            <a class="btn" id="ePreview" href="/api/reminders/preview" target="_blank" rel="noopener"><span data-icon="eye"></span>預覽今天的摘要</a>
+            <button type="button" class="btn" id="eTest"><span data-icon="send"></span>寄測試信</button>
+          </div>
+          <p class="muted small" id="eState"></p>
+        </form>
+        <p class="muted small" id="setFile"></p>
       </div>
     </section>
   </main>
@@ -161,7 +236,7 @@
   <form method="dialog" class="dlg-body">
     <h3 id="pickerTitle">選擇知識卡</h3>
     <div class="row2">
-      <input id="pickerQ" type="search" placeholder="搜尋卡片…" autocomplete="off">
+      <input id="pickerQ" type="search" placeholder="搜尋卡片…" autocomplete="off" aria-label="搜尋卡片">
       <select id="pickerRel" aria-label="連結類型"></select>
     </div>
     <ul class="pick-list" id="pickerList"></ul>

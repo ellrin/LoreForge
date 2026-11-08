@@ -1,7 +1,7 @@
 // Small Markdown + LaTeX renderer for card bodies (no build step, no network).
 // Supports headings, paragraphs, lists, block quotes, fenced code, **bold**,
 // *italic*, `code`, [links](url), ![images](url), $inline$ / $$display$$ math
-// (KaTeX) and [[wikilinks]] (rendered as .wikilink spans; `resolve(name)` says
+// (KaTeX) and [[wikilinks]] (rendered as a.wikilink, the app sets the href; `resolve(name)` says
 // whether a card exists). Everything else is escaped.
 
 const MD = (() => {
@@ -23,13 +23,15 @@ const MD = (() => {
     let s = text
       .replace(/`([^`]+)`/g, (_, c) => keep(`<code>${esc(c)}</code>`))
       .replace(/\$\$([^$]+)\$\$/g, (_, m) => keep(tex(m, true)))
-      .replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_, pre, m) => pre + keep(tex(m, false)));
+      // $…$ needs a non-space right inside both dollars and no digit right after the closing
+      // one, so prices like "$5 and $10" stay text.
+      .replace(/(^|[^\\$])\$(?=\S)([^$\n]*?\S)\$(?!\d)/g, (_, pre, m) => pre + keep(tex(m, false)));
     s = esc(s);
     s = s
       .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, shown) => {
         const t = target.trim();
         const ok = opts.resolve ? opts.resolve(t) : true;
-        return `<span class="wikilink${ok ? "" : " missing"}" data-target="${t}">${(shown ?? target).trim()}</span>`;
+        return `<a class="wikilink${ok ? "" : " missing"}" href="#" data-target="${t}">${(shown ?? target).trim()}</a>`;
       })
       .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, url) => `<img alt="${alt}" src="${safeUrl(url.replace(/&amp;/g, "&"))}">`)
       .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, t, url) => `<a href="${safeUrl(url.replace(/&amp;/g, "&"))}" target="_blank" rel="noopener">${t}</a>`)

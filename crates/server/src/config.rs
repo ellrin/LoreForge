@@ -2,7 +2,8 @@
 //!
 //! Priority: command line (`--space <dir>` repeatable, `--member`, `--port`) > env
 //! (`KB_SPACES` = dirs separated by `:`, `KB_MEMBER`, `PORT`) > `config.toml` in
-//! `<config dir>/KnowledgeBase/` > the sibling `../private` of this repo.
+//! `<app dir>` > the sibling `../private` of this repo. `<app dir>` is `$KB_HOME` or
+//! `<OS config dir>/KnowledgeBase/` (also holds `reminders.toml`, see `reminders.rs`).
 //!
 //! ```toml
 //! member = "ellrin"
@@ -24,6 +25,8 @@ pub struct Config {
     pub port: u16,
     pub web: PathBuf,
     pub intervals: Intervals,
+    /// App settings folder (reminders, state); `None` = nothing persists.
+    pub app_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -41,7 +44,7 @@ pub fn repo_dir() -> PathBuf {
 }
 
 pub fn config_file() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("KnowledgeBase").join("config.toml"))
+    crate::reminders::app_dir().map(|d| d.join("config.toml"))
 }
 
 impl Config {
@@ -79,6 +82,6 @@ impl Config {
         }
         let member = member.or_else(|| std::env::var("KB_MEMBER").ok()).or(file.member).unwrap_or_else(|| "ellrin".into());
         let port = port.or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok())).or(file.port).unwrap_or(7700);
-        Ok(Config { spaces, member, port, web: repo_dir().join("web"), intervals: file.intervals.unwrap_or_default() })
+        Ok(Config { spaces, member, port, web: repo_dir().join("web"), intervals: file.intervals.unwrap_or_default(), app_dir: crate::reminders::app_dir() })
     }
 }
