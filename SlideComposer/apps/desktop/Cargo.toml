@@ -1,0 +1,17 @@
+[package]
+name = "slidecomposer"
+version.workspace = true
+edition.workspace = true
+description = "SlideComposer desktop app"
+
+# Desktop shell: starts the local server in-process on a free 127.0.0.1 port and
+# opens a native window on it (WKWebView on macOS), like PaperComposer.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+sc-server = { path = "../../crates/server" }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+url = "2"

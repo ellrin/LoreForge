@@ -123,6 +123,23 @@ pub fn repo_dir() -> PathBuf {
     p.canonicalize().unwrap_or(p)
 }
 
+/// The workspace both the browser mode and the desktop app use:
+/// `SLIDECOMPOSER_WORKSPACE`, else LoreForge `private/SlideComposer`
+/// (created from `private-example/SlideComposer` the first time).
+pub fn default_workspace() -> Workspace {
+    let repo = repo_dir();
+    let home = lore_home::Home::discover(&repo);
+    let default = match home.seed_app("SlideComposer") {
+        Ok(Some(d)) => d,
+        Ok(None) => repo.join("../private/SlideComposer"),
+        Err(e) => {
+            eprintln!("sc-server: private/SlideComposer: {e}");
+            repo.join("../private/SlideComposer")
+        }
+    };
+    Workspace::from_env(&default)
+}
+
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/prefs.css", get(prefs_css))

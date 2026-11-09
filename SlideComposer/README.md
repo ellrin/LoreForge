@@ -13,6 +13,8 @@ SLIDECOMPOSER_DECKS=/tmp/decks cargo run --release -p sc-server -- --port 7880
 cargo test                        # 全部離線（合成測資）
 ```
 
+Mac App：在 LoreForge 根目錄執行 `scripts/install-apps.sh SlideComposer`（`apps/desktop` 的 Tauri 殼，伺服器在 App 裡以任意可用的埠啟動）。圖示原始檔為 `apps/desktop/icons/logo.svg`，換圖後轉成 1024px 的 `logo.png`，再於 `apps/desktop/` 執行 `cargo tauri icon icons/logo.png -o icons` 重新產生各尺寸（只保留 `tauri.conf.json` 列出的檔案）。
+
 - `SLIDECOMPOSER_WORKSPACE`：風格包與簡報所在的私人 repo（`styles/`、`decks/`）。
 - `SLIDECOMPOSER_DECKS`：另指簡報資料夾（例如把真實簡報放在暫存區，不進任何 repo）。
 - `SLIDECOMPOSER_CHROME`：PDF 與公式備用圖片用的 Chrome/Chromium 路徑（預設找 `/Applications/Google Chrome.app`）。
@@ -26,6 +28,7 @@ cargo test                        # 全部離線（合成測資）
 | `../commons/crates/lore-canvas` | 場景模型（投影片／物件／文字段落與 run＝標籤＋強調）、風格規則、可復原的操作、幾何（連接點、黏著、對齊）、漸進揭露產生器、元件、PPTX ↔ 畫布轉換（未改動的物件保留原 XML，未改動的投影片逐位元組相同） |
 | `crates/core`（`sc-core`） | workspace、簡報資料夾（`deck.json`＋`source.pptx`＋`assets/`）、匯入、存檔、匯出 PPTX、Chrome 列印 PDF、OMML↔LaTeX 快取 |
 | `crates/server`（`sc-server`） | axum，127.0.0.1:7880，JSON API（見 `crates/server/src/lib.rs` 開頭的表） |
+| `apps/desktop` | Tauri 桌面殼：在 App 裡啟動伺服器並開啟視窗 |
 | `web/` | 編輯器（無建置步驟）：`render.js` 投影片 → DOM/SVG（編輯畫面、縮圖、列印共用）、`app.js` 互動、`panels.js` 側欄與對話框、`print.html` PDF 路由 |
 
 只掛載目前這一頁；縮圖依投影片物件快取。所有編輯都送到伺服器變成一筆交易（驗證標籤與色票規則 → 套用 → 自動存 `deck.json`），復原／重做在 Rust 端。

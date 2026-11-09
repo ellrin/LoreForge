@@ -7,6 +7,8 @@ habits as PaperComposer / JELearner / KnowledgeBase. Design: `../private/shared/
 
 ```sh
 cargo test                                         # sc-core + sc-server, offline (synthetic decks)
+cargo run -p slidecomposer                         # desktop window (Tauri), free port; not in default-members
+../scripts/install-apps.sh SlideComposer           # build the .app, install to /Applications, Dock
 cargo run -p sc-server                             # http://127.0.0.1:7880, workspace ../private/SlideComposer
 SLIDECOMPOSER_DECKS=/tmp/decks cargo run --release -p sc-server
 cd ../commons && cargo test -p lore-canvas        # the canvas core
@@ -27,6 +29,9 @@ when working on lore-canvas in parallel with other agents.
   source package, layout backdrops, LaTeX cache), export PPTX/PDF, `layout_titles`.
 - `crates/server` (`sc-server`): axum on 127.0.0.1:7880; handlers are plain async fns over
   `Shared` so they can become Tauri commands later. Static files are served `no-cache`.
+- `apps/desktop` (`slidecomposer`): Tauri shell; starts sc-server in-process on a free port,
+  `web/` bundled as a resource, workspace from `sc_server::default_workspace()`. Icon source
+  `icons/logo.svg` (PaperComposer's neon style).
 - `web/`: static HTML/CSS/JS, no build step. `render.js` is the only renderer (editor canvas,
   thumbnails, `print.html` for PDF). UI text in Traditional Chinese; tokens/icons from
   KnowledgeBase/PaperComposer. KaTeX vendored in `web/vendor/katex`.

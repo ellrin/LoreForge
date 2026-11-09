@@ -5,3 +5,5 @@
 /decks/
 *.pptx
 !crates/**/tests/fixtures/*.pptx
+# Tauri generated files
+/apps/desktop/gen/
