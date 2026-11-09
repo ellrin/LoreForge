@@ -52,7 +52,7 @@ const PCExport = (() => {
         close();
         const pi = e.para ?? 0;
         select(si, pi);
-        (paraEl(si, pi) ?? document.getElementById(`sec-${si}`))?.scrollIntoView({ block: "center", behavior: "smooth" });
+        PCLazy.jump(paraEl(si, pi) ?? document.getElementById(`sec-${si}`));
       };
     } else b.disabled = true;
     return b;

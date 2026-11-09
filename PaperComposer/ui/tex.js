@@ -22,7 +22,20 @@ window.PCTex = (() => {
     "\\textsc": "\\text", "\\up": "\\text", "\\degree": "^\\circ", "\\ensuremath": "",
   };
 
-  function setMacros(m) { macros = { ...BUILTIN, ...m }; }
+  // KaTeX output by (display mode, source), valid for one macro table: a
+  // paper repeats the same symbols hundreds of times, and re-rendering a
+  // paragraph reuses what is already drawn. Cleared when the macros change.
+  const kcache = new Map();  // key -> rendered template (insertion order = least recently used first)
+  const ksize = new Map();   // key -> [width, height] in px as last drawn, to reserve space
+  const KCACHE_MAX = 6000;
+  let macroKey = "";
+  let figSizes = {};         // \includegraphics path -> [w, h] (any unit; the ratio is used)
+
+  function setMacros(m) {
+    macros = { ...BUILTIN, ...m };
+    const key = JSON.stringify(macros);
+    if (key !== macroKey) { kcache.clear(); ksize.clear(); macroKey = key; }
+  }
 
   /** Numbers from the server: { labels, cites, compiled }. */
   function setNumbers(n) {
@@ -30,11 +43,27 @@ window.PCTex = (() => {
     cites = n?.cites ?? {};
   }
   function setFigureBase(url) { figureBase = url; }
+  function setFigureSizes(s) { figSizes = { ...figSizes, ...(s ?? {}) }; }
 
   // ── Numbering ───────────────────────────────────────
   const FLOAT_KIND = { figure: "fig", "figure*": "fig", wrapfigure: "fig", table: "tab", "table*": "tab", sidewaystable: "tab", algorithm: "alg", "algorithm*": "alg" };
   const THEOREMS = ["theorem", "lemma", "proposition", "corollary", "definition", "remark", "assumption", "example", "conjecture", "claim", "problem"];
   const THM_NAME = { theorem: "Theorem", lemma: "Lemma", proposition: "Proposition", corollary: "Corollary", definition: "Definition", remark: "Remark", assumption: "Assumption", example: "Example", conjecture: "Conjecture", claim: "Claim", problem: "Problem", proof: "Proof" };
+
+  // What numbering looks at in a paragraph (headings, environments, labels,
+  // row breaks, \nonumber), in order. Kept per paragraph text, so after an
+  // edit only the changed paragraphs are scanned again.
+  const NUMBER_RE = /\\(subsubsection|subsection)\*?\{|\\begin\{([a-zA-Z*]+)\}|\\label\{([^}]*)\}|\\\\|\\(nonumber|notag)\b|\\end\{([a-zA-Z*]+)\}/g;
+  const tokenCache = new Map();
+  function numberTokens(raw) {
+    let t = tokenCache.get(raw);
+    if (!t) {
+      t = [...stripComments(raw).matchAll(NUMBER_RE)].map((m) => [...m]);
+      if (tokenCache.size > 20000) tokenCache.clear();
+      tokenCache.set(raw, t);
+    }
+    return t;
+  }
 
   /** Count labels in reading order; a compile's numbers win where known.
    *  `sections` is [{ title, paragraphs }]. */
@@ -50,12 +79,10 @@ window.PCTex = (() => {
       if (!s.front) { sec++; sub = 0; subsub = 0; }
       (s.tail?.match(/\\label\{([^}]*)\}/g) ?? []).forEach((l) => put(l.slice(7, -1), sec, "sec"));
       s.paragraphs.forEach((raw) => {
-        const p = stripComments(raw);
         // walk environments and headings in order
-        const re = /\\(subsubsection|subsection)\*?\{|\\begin\{([a-zA-Z*]+)\}|\\label\{([^}]*)\}|\\\\|\\(nonumber|notag)\b|\\end\{([a-zA-Z*]+)\}/g;
         const stack = [];
         let pending = null;
-        for (const m of p.matchAll(re)) {
+        for (const m of numberTokens(raw)) {
           if (m[1] === "subsection") { sub++; subsub = 0; pending = { kind: "sec", n: `${sec}.${sub}` }; }
           else if (m[1] === "subsubsection") { subsub++; pending = { kind: "sec", n: `${sec}.${sub}.${subsub}` }; }
           else if (m[2]) {
@@ -92,7 +119,11 @@ window.PCTex = (() => {
   // Running counters while the page renders in reading order: a labelled
   // item takes its known number (and moves the counter there), others count on.
   const ctr = { eq: 0, fig: 0, tab: 0, alg: 0, thm: 0 };
-  function resetCounters() { Object.keys(ctr).forEach((k) => (ctr[k] = 0)); }
+  let romanKinds = new Set(); // kinds the class numbers in Roman (IEEE tables)
+  function resetCounters() {
+    Object.keys(ctr).forEach((k) => (ctr[k] = 0));
+    romanKinds = new Set(Object.entries(compiled).filter(([k, v]) => kinds[k] && /^[IVXL]+$/.test(v)).map(([k]) => kinds[k]));
+  }
   const ROMAN = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
   const toRoman = (n) => ROMAN.reduce((s, [v, r]) => { while (n >= v) { s += r; n -= v; } return s; }, "");
   const fromRoman = (r) => { let n = 0, i = 0; for (const [v, sym] of ROMAN) while (r.startsWith(sym, i)) { n += v; i += sym.length; } return i === r.length ? n : NaN; };
@@ -105,8 +136,35 @@ window.PCTex = (() => {
     }
     ctr[kind]++;
     // the class numbers this kind in Roman (IEEE tables): follow it
-    const roman = Object.entries(compiled).some(([k, v]) => kinds[k] === kind && /^[IVXL]+$/.test(v));
-    return roman ? toRoman(ctr[kind]) : String(ctr[kind]);
+    return romanKinds.has(kind) ? toRoman(ctr[kind]) : String(ctr[kind]);
+  }
+
+  // Numbers on the page sit in their own nodes (.pc-num: equation tags,
+  // "Fig. 3", "Theorem 2"), so after an edit they are rewritten in reading
+  // order without drawing any formula again. The same running counter as a
+  // full render, so both give the same numbers.
+  const numNode = (kind, key, n) => { const s = el("span", "pc-num", n); s.dataset.kind = kind; if (key) s.dataset.key = key; return s; };
+  /** Renumber every .pc-num under root in document order, then the references. */
+  function renumber(root) {
+    resetCounters();
+    for (const n of root.getElementsByClassName("pc-num")) {
+      const v = next(n.dataset.kind, n.dataset.key || null);
+      if (n.textContent !== v) n.textContent = v;
+    }
+    updateRefs(root);
+  }
+  /** Rewrite \ref texts (and table captions' numbers) under root from the labels. */
+  function updateRefs(root) {
+    for (const n of root.getElementsByClassName("ref")) {
+      if (!n.dataset.cmd) continue;
+      const [t, missing] = refText(n.dataset.cmd, n.title);
+      if (n.textContent !== t) n.textContent = t;
+      n.classList.toggle("missing", missing);
+    }
+    for (const n of root.getElementsByClassName("pc-lab")) {
+      const v = labels[n.dataset.key] ?? compiled[n.dataset.key] ?? "";
+      if (n.textContent !== v) n.textContent = v;
+    }
   }
 
   // ── Source helpers ──────────────────────────────────
@@ -185,24 +243,125 @@ window.PCTex = (() => {
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 
   // ── Math ────────────────────────────────────────────
-  function katexNode(src, display) {
+  // While `lazy` is on (the page and the navigator), a formula becomes a
+  // placeholder of the size it will take; hydrate() draws it when it comes
+  // near the view (lazy.js). Elsewhere formulas are drawn at once.
+  let lazy = false;
+  /** Run fn with formulas left as placeholders. */
+  function lazily(fn) { const was = lazy; lazy = true; try { return fn(); } finally { lazy = was; } }
+
+  /** `tags`: for a display equation, its numbered rows [{ key, n }] in order. */
+  function katexNode(src, display, tags = []) {
     const span = document.createElement(display ? "div" : "span");
     span.className = display ? "math display" : "math";
     src = stripComments(src);
     if (!window.katex) { span.textContent = src; return span; }
-    try {
-      katex.render(src, span, { displayMode: display, throwOnError: false, macros: { ...macros }, strict: "ignore", trust: false });
-    } catch {
-      span.textContent = src;
-    }
+    span._tex = { src, display, tags };
+    if (lazy) placeholder(span); else fill(span);
     return span;
   }
+
+  const cacheKey = (t) => `${t.display ? "D" : "I"}${t.src}`;
+
+  // Visible width of inline math in em, roughly: commands that only style or
+  // place count nothing, other commands one glyph, sub/superscripts less.
+  const QUIET = /\\(left|right|big|Big|bigg|Bigg|mathrm|mathbf|mathit|mathsf|mathtt|mathcal|mathbb|mathfrak|boldsymbol|bm|tilde|widetilde|hat|widehat|bar|overline|vec|dot|ddot|text|textrm|operatorname|mathop|frac|dfrac|tfrac|sqrt|limits|displaystyle|,|;|!|:)(?![a-zA-Z])/g;
+  function estimateEm(src) {
+    const s = src.replace(QUIET, "").replace(/\\[a-zA-Z]+/g, "x").replace(/\\./g, "x");
+    let w = 0, small = 0;
+    for (const c of s) {
+      if (c === "_" || c === "^") { small = 1; continue; }
+      if (c === "{" ) { if (small) small = 2; continue; }
+      if (c === "}") { small = 0; continue; }
+      if (/\s/.test(c)) continue;
+      w += small ? 0.4 : /[=+<>-]/.test(c) ? 0.9 : 0.55;
+      if (small === 1) small = 0;
+    }
+    return Math.max(0.6, w);
+  }
+  function estimateDisplayEm(src) {
+    const rows = (src.match(/\\\\/g)?.length ?? 0) + 1;
+    const tall = /\\(frac|dfrac|sum|prod|int|oint|begin\{(cases|pmatrix|bmatrix|matrix|array))/.test(src) ? 1.2 : 0;
+    return 2.2 + (rows - 1) * 1.7 + tall * (rows > 1 ? 0.5 : 1);
+  }
+
+  /** An empty box holding the formula's place (and its numbers, so renumbering sees them). */
+  function placeholder(span) {
+    const t = span._tex;
+    span.classList.add("pending");
+    const size = ksize.get(cacheKey(t));
+    if (t.display) {
+      span.style.height = size ? `${size[1]}px` : `${estimateDisplayEm(t.src)}em`;
+      if (t.tags.length) {
+        const tags = el("span", "pc-tags");
+        t.tags.forEach((g) => { const r = el("span", "pc-tag"); r.append("(", numNode("eq", g.key, g.n), ")"); tags.append(r); });
+        span.append(tags);
+      }
+    } else span.style.width = size ? `${size[0]}px` : `${estimateEm(t.src)}em`;
+  }
+
+  /** Draw a formula (from the cache when the same source was drawn before). */
+  function fill(span) {
+    const t = span._tex;
+    if (!t) return;
+    // current numbers: the placeholder's (renumbered since), else those given
+    const nums = span.classList.contains("pending") ? [...span.getElementsByClassName("pc-num")].map((n) => n.textContent) : t.tags.map((g) => g.n);
+    const key = cacheKey(t);
+    let tpl = kcache.get(key);
+    if (tpl) { kcache.delete(key); kcache.set(key, tpl); }
+    else {
+      tpl = document.createElement("span");
+      try {
+        // KaTeX writes \gdef into the macro table it is given: hand it a copy
+        katex.render(t.src, tpl, { displayMode: t.display, throwOnError: false, macros: { ...macros }, strict: "ignore", trust: false });
+      } catch { tpl.textContent = t.src; }
+      kcache.set(key, tpl);
+      if (kcache.size > KCACHE_MAX) kcache.delete(kcache.keys().next().value);
+    }
+    const parts = [];
+    for (const c of tpl.childNodes) parts.push(c.cloneNode(true));
+    span.replaceChildren(...parts);
+    span.classList.remove("pending");
+    span.style.height = span.style.width = "";
+    delete span._tex;
+    // KaTeX drew each number as \tag{0}: that 0 becomes the number's own node
+    if (t.tags.length) {
+      span.querySelectorAll(".tag .mord.text").forEach((mt, i) => {
+        const g = t.tags[i];
+        const zero = g && [...mt.querySelectorAll("span")].find((s) => !s.firstElementChild && s.textContent === "0");
+        if (!zero) return;
+        zero.classList.add("pc-num");
+        zero.dataset.kind = "eq";
+        if (g.key) zero.dataset.key = g.key;
+        zero.textContent = nums[i] ?? g.n;
+      });
+    }
+    return key;
+  }
+
+  /** Draw the formulas and images left as placeholders under root. */
+  function hydrate(root) {
+    const spans = [...root.querySelectorAll(".math.pending")];
+    const drawn = spans.map((s) => [s, fill(s)]);
+    // remember the drawn size, so the next placeholder for it is exact
+    for (const [s, key] of drawn) {
+      if (!key || !s.isConnected) continue;
+      const w = s.offsetWidth, h = s.offsetHeight;
+      if (w || h) ksize.set(key, [w, h]);
+    }
+    if (ksize.size > KCACHE_MAX * 2) ksize.clear();
+    root.querySelectorAll("img.pending").forEach(loadImage);
+  }
+  const hasPending = (root) => !!root.querySelector?.(".math.pending, img.pending");
 
   function envNode(env, body) {
     const base = env.replace("*", "");
     const star = env.endsWith("*");
     const src = stripComments(body);
     const rows = src.split(/\\\\(?:\[[^\]]*\])?/);
+    // Numbers are drawn as \tag{0} and filled in afterwards (fill), so the
+    // cached drawing does not depend on them.
+    const tags = [];
     if (["align", "eqnarray", "flalign", "alignat", "gather"].includes(base)) {
       // KaTeX tags rows of align/gather; every row gets its number or \notag
       // (an untagged row would be numbered by KaTeX's own counter).
@@ -212,17 +371,18 @@ window.PCTex = (() => {
         let clean = r.replace(/\\label\{[^}]*\}/g, "").replace(/\\nonumber|\\notag/g, "");
         if (base === "eqnarray") clean = clean.replace(/&\s*([=<>]|\\[a-zA-Z]+)\s*&/, "&$1 ");
         if (base === "alignat") clean = clean.replace(/^\s*\{\d+\}/, "");
-        const num = !star && !/\\nonumber|\\notag/.test(r) ? next("eq", lab?.[1]) : null;
-        return `${clean}${num ? `\\tag{${num}}` : "\\notag"}`;
+        const n = !star && !/\\nonumber|\\notag/.test(r) ? next("eq", lab?.[1]) : null;
+        if (n) tags.push({ key: lab?.[1] ?? null, n });
+        return `${clean}${n ? "\\tag{0}" : "\\notag"}`;
       });
-      return katexNode(`\\begin{${out}}${tagged.join("\\\\\n")}\n\\end{${out}}`, true);
+      return katexNode(`\\begin{${out}}${tagged.join("\\\\\n")}\n\\end{${out}}`, true, tags);
     }
     const lab = src.match(/\\label\{([^}]*)\}/);
     let inner = src.replace(/\\label\{[^}]*\}/g, "");
-    const num = !star && base !== "math" && base !== "displaymath" && !/\\nonumber|\\notag/.test(inner) ? next("eq", lab?.[1]) : null;
+    const n = !star && base !== "math" && base !== "displaymath" && !/\\nonumber|\\notag/.test(inner) ? next("eq", lab?.[1]) : null;
     if (base === "multline") inner = `\\begin{gathered}${inner}\n\\end{gathered}`;
-    const tagged = num ? `${inner}\n\\tag{${num}}` : inner;
-    return katexNode(tagged, true);
+    if (n) tags.push({ key: lab?.[1] ?? null, n });
+    return katexNode(n ? `${inner}\n\\tag{0}` : inner, true, tags);
   }
 
   // ── Citations and references ────────────────────────
@@ -259,19 +419,43 @@ window.PCTex = (() => {
   }
 
   const REF_PREFIX = { fig: "Fig.", tab: "Table", eq: "Eq.", sec: "Section", alg: "Algorithm", thm: "Theorem" };
+  /** What \cmd{key} prints: [text, missing]. */
+  function refText(cmd, key) {
+    const num = labels[key] ?? compiled[key];
+    if (!num) return [`[${key}]`, true];
+    const kind = kinds[key] ?? (key.match(/^(fig|tab|eq|sec|alg|thm)/)?.[1]);
+    if (cmd === "eqref") return [`(${num})`, false];
+    if (/^(autoref|cref|Cref)$/.test(cmd)) return [`${REF_PREFIX[kind] ?? ""} ${kind === "eq" ? `(${num})` : num}`.trim(), false];
+    return [num, false];
+  }
   function refNode(cmd, key) {
     const n = el("span", "ref");
-    const num = labels[key] ?? compiled[key];
     n.title = key;
-    if (!num) { n.classList.add("missing"); n.textContent = `[${key}]`; return n; }
-    const kind = kinds[key] ?? (key.match(/^(fig|tab|eq|sec|alg|thm)/)?.[1]);
-    if (cmd === "eqref") n.textContent = `(${num})`;
-    else if (/^(autoref|cref|Cref)$/.test(cmd)) n.textContent = `${REF_PREFIX[kind] ?? ""} ${kind === "eq" ? `(${num})` : num}`.trim();
-    else n.textContent = num;
+    n.dataset.cmd = cmd; // updateRefs rewrites it when numbers move
+    const [t, missing] = refText(cmd, key);
+    n.textContent = t;
+    if (missing) n.classList.add("missing");
     return n;
   }
 
   // ── Blocks ──────────────────────────────────────────
+  /** The figure as the browser can show it; `w` asks the server for a copy that wide. */
+  const figureUrl = (path, w) => `${figureBase}?path=${encodeURIComponent(path)}${w ? `&w=${w}` : ""}`;
+  /** Load a figure at about twice its display width (sharp on Retina), in
+   *  256-px steps; `blind` (not on the page yet): a width that suits most. */
+  function loadImage(img, blind) {
+    img.classList.remove("pending");
+    if (!img._path) return;
+    const shown = blind ? 0 : img.getBoundingClientRect().width;
+    const want = shown ? Math.ceil((shown * Math.max(2, window.devicePixelRatio || 1)) / 256) * 256 : 1536;
+    img.decoding = "async";
+    img.src = figureUrl(img._path, Math.min(4096, want));
+  }
+  /** Printing: every figure from its original file. */
+  function fullImages(root) {
+    root.querySelectorAll("img").forEach((img) => { if (img._path) { img.classList.remove("pending"); img.src = figureUrl(img._path); } });
+  }
+
   function figureNode(env, body) {
     const fig = el("figure", "tex-figure" + (env.endsWith("*") ? " wide" : ""));
     const imgs = el("div", "imgs");
@@ -279,10 +463,19 @@ window.PCTex = (() => {
       const w = m[1]?.match(/width\s*=\s*([\d.]*)\s*\\(textwidth|columnwidth|linewidth)/);
       const box = el("div", "img");
       const img = el("img");
+      const path = m[2].trim();
       img.alt = m[2];
-      img.loading = "lazy";
-      img.src = `${figureBase}?path=${encodeURIComponent(m[2].trim())}`;
+      img._path = path;
+      // keep the figure's shape before the image arrives: its size from the
+      // server, else 3:2 until it loads
+      const size = figSizes[path];
+      if (size) { img.width = Math.max(1, Math.round(size[0])); img.height = Math.max(1, Math.round(size[1])); }
+      else img.style.aspectRatio = "3 / 2";
+      img.onload = () => { img.style.aspectRatio = ""; if (!figSizes[path]) figSizes[path] = [img.naturalWidth, img.naturalHeight]; };
       img.onerror = () => { box.classList.add("missing"); box.textContent = m[2]; };
+      img.classList.add("pending");
+      // drawn at once: sized once it is on the page (a microtask later)
+      if (!lazy) queueMicrotask(() => loadImage(img, !img.isConnected));
       if (w) box.style.width = `${Math.min(100, Math.round(parseFloat(w[1] || "1") * (w[2] === "textwidth" && !env.endsWith("*") ? 100 : 100)))}%`;
       box.append(img);
       imgs.append(box);
@@ -313,9 +506,11 @@ window.PCTex = (() => {
   function captionNode(env, cap, body) {
     const kind = FLOAT_KIND[env] ?? "fig";
     const lab = body.match(/\\label\{([^}]*)\}/g)?.pop()?.slice(7, -1);
-    const num = next(kind === "fig" ? "fig" : kind, lab);
+    const k = kind === "fig" ? "fig" : kind;
     const c = el(kind === "tab" ? "div" : "figcaption", "caption");
-    c.append(el("b", "", `${kind === "tab" ? "Table" : kind === "alg" ? "Algorithm" : "Fig."}${num ? ` ${num}` : ""}`), ". ");
+    const b = el("b", "", `${kind === "tab" ? "Table" : kind === "alg" ? "Algorithm" : "Fig."} `);
+    b.append(numNode(k, lab, next(k, lab)));
+    c.append(b, ". ");
     c.append(render(cap));
     return c;
   }
@@ -409,8 +604,8 @@ window.PCTex = (() => {
     const base = env.replace("*", "");
     const box = el("div", `tex-thm ${base}`);
     const lab = body.match(/\\label\{([^}]*)\}/)?.[1];
-    const num = base !== "proof" ? next("thm", lab) : null;
-    const head = el("b", "", `${THM_NAME[base] ?? base}${num ? ` ${num}` : ""}`);
+    const head = el("b", "", THM_NAME[base] ?? base);
+    if (base !== "proof") head.append(" ", numNode("thm", lab, next("thm", lab)));
     if (opt) { head.append(" ("); head.append(render(opt)); head.append(")"); }
     head.append(". ");
     if (base === "proof") head.className = "proof-head";
@@ -810,7 +1005,7 @@ window.PCTex = (() => {
   function headingNumber(p) { const l = p.match(/\\label\{([^}]*)\}/); return l ? labels[l[1]] : null; }
 
   return {
-    setMacros, setNumbers, setFigureBase, number, resetCounters, frontNode, bibliographyNode, render, isDisplay, heading, headingNumber, needsWhole, stripComments, tabularNode,
+    setMacros, setNumbers, setFigureBase, setFigureSizes, number, resetCounters, renumber, updateRefs, lazily, hydrate, hasPending, fullImages, frontNode, bibliographyNode, render, isDisplay, heading, headingNumber, needsWhole, stripComments, tabularNode,
     numberEquations: (paragraphs) => number([{ paragraphs }]),
     citeNumber: (key) => cites[key]?.n ?? null,
     get labels() { return labels; },

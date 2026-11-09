@@ -25,6 +25,7 @@ pub mod refimport;
 pub mod settings;
 pub mod texfonts;
 pub mod texmeasure;
+pub mod thumb;
 pub mod wizard;
 
 use axum::{
@@ -2260,20 +2261,53 @@ async fn put_front(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b
 #[derive(Deserialize)]
 struct FigureQuery {
     path: String,
+    /// Pixels wide the editor wants (about twice its display width); the
+    /// original when absent, as for export and print.
+    w: Option<u32>,
 }
 
-/// A figure as an image the editor can show (PDF and EPS figures converted).
+/// A figure as an image the editor can show (PDF and EPS figures converted),
+/// shrunk to `w` pixels wide when asked (copies cached by file, mtime and width).
 async fn paper_figure(State(s): State<Shared>, AxPath(name): AxPath<String>, AxQuery(q): AxQuery<FigureQuery>) -> impl IntoResponse {
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
     let Some(file) = preview::resolve_figure(&dir, &q.path) else { return (StatusCode::NOT_FOUND, "no such figure").into_response() };
     let cache = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("PaperComposer/figures");
-    match preview::figure_image(&file, &cache).await {
+    let shown = match preview::figure_image(&file, &cache).await {
+        // widths come in steps of 128 px, so a few cached copies serve every window size
+        Some((img, mime)) => match q.w {
+            Some(w) => Some(thumb::thumbnail(&img, mime, &cache.join("thumbs"), w.clamp(64, 8192).div_ceil(128) * 128).await),
+            None => Some((img, mime)),
+        },
+        None => None,
+    };
+    match shown {
         Some((img, mime)) => match std::fs::read(img) {
             Ok(bytes) => ([(axum::http::header::CONTENT_TYPE, mime), (axum::http::header::CACHE_CONTROL, "no-cache")], bytes).into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         },
         None => (StatusCode::UNSUPPORTED_MEDIA_TYPE, "cannot show this figure").into_response(),
     }
+}
+
+#[derive(Deserialize)]
+struct FigureSizesBody {
+    paths: Vec<String>,
+}
+
+/// Width and height of each figure (from file headers; PDF/EPS in points),
+/// so the page can reserve a figure's shape before its image arrives.
+async fn paper_figure_sizes(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<FigureSizesBody>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let sizes: serde_json::Map<String, serde_json::Value> = b
+        .paths
+        .iter()
+        .take(2000)
+        .filter_map(|p| {
+            let (w, h) = thumb::image_size(&preview::resolve_figure(&dir, p)?)?;
+            Some((p.clone(), serde_json::json!([w, h])))
+        })
+        .collect();
+    Json(serde_json::Value::Object(sizes)).into_response()
 }
 
 #[derive(Deserialize)]
@@ -2840,6 +2874,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/papers/{name}/import-summary", get(import_summary))
         .route("/api/papers/{name}/export", post(export_paper))
         .route("/api/papers/{name}/figure", get(paper_figure))
+        .route("/api/papers/{name}/figure-sizes", post(paper_figure_sizes))
         .route("/api/papers/{name}/figures", post(put_figure).layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)))
         .route("/api/papers/{name}/front", put(put_front))
         .route("/api/papers/{name}/meta", put(put_meta))

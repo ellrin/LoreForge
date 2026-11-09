@@ -81,8 +81,8 @@ const PCWrite = (() => {
     const si = state.cur.s, pi = sections()[si].paragraphs.length ? state.cur.p + 1 : 0;
     sections()[si].paragraphs.splice(pi, 0, text);
     try { await saveSection(si); } catch (e) { flash(`儲存失敗：${e.message}`); }
-    render();
     state.cur = { s: si, p: pi };
+    refreshSection(si);
     const p = paraEl(si, pi);
     if (!p) return;
     edit(p, si, pi);

@@ -539,7 +539,7 @@ const PCRefs = (() => {
           const r = await api(`/api/papers/${name}/bib`, {});
           if (r.missing.length) flash(`文獻庫裡沒有：${r.missing.join(", ")}`, 6000);
         } catch (e) { flash(e.message, 6000); }
-        render();
+        refreshSection(at.si);
         refreshGit();
       };
       const foot = el("div", "row-end");

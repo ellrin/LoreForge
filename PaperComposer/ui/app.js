@@ -93,6 +93,7 @@ const roleOf = (title) => ROLES.find((r) => r.toLowerCase() === title.toLowerCas
 const rank = (s) => ({ info: 1, warning: 2, error: 3 }[s] ?? 0);
 
 async function openPaper(name) {
+  const same = state.paper?.name === name; // reopened (after a pull): keep the place
   try {
     const res = await api(`/api/papers/${encodeURIComponent(name)}`);
     state.paper = { name, sections: res.sections, front: res.front ?? "", back: res.back ?? "", fields: res.fields ?? [], bibliography: res.bibliography ?? [], meta: res.meta ?? { key_value: "", authors: [] } };
@@ -105,8 +106,19 @@ async function openPaper(name) {
     state.paper = null;
   }
   $("#paperName").textContent = state.paper?.name ?? "—";
-  await checkAll();
-  render();
+  // the checks, and every figure's size (so its place is kept before it loads)
+  await Promise.all([checkAll(), loadFigureSizes()]);
+  if (!same) $("#pageArea").scrollTop = 0;
+  render(!same);
+}
+
+/** Width and height of the paper's figures, read from their files by the server. */
+async function loadFigureSizes() {
+  if (!state.paper) return;
+  const all = [state.paper.front, ...sections().flatMap((s) => s.paragraphs)].join("\n");
+  const paths = [...new Set([...all.matchAll(/\\includegraphics\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}/g)].map((m) => m[1].trim()))];
+  if (!paths.length) return;
+  try { PCTex.setFigureSizes(await api(`/api/papers/${encodeURIComponent(state.paper.name)}/figure-sizes`, { paths })); } catch {}
 }
 
 async function checkSection(i) {
@@ -129,9 +141,61 @@ async function saveSection(i) {
   await checkSection(i);
 }
 
-function render() {
-  PCTex.number(sections(), state.paper?.front ?? "");
-  renderNav(); renderKeyValue(); renderPaper(); renderSide(); renderStatus();
+// Drawing the paper. render() rebuilds everything: opening a paper, and
+// changes that reach past one section file (title block, numbers from a
+// compile, sync). An edit inside one section goes through refreshSection(),
+// which redraws only the paragraphs whose text changed and then renumbers
+// (equations, figures, tables, theorems, \ref texts) without drawing any
+// formula again. Formulas and figures are drawn near the view only (lazy.js).
+function render(fresh) {
+  const all = () => {
+    PCTex.number(sections(), state.paper?.front ?? "");
+    renderNav(); renderKeyValue(); renderPaper(); renderSide(); renderStatus();
+  };
+  if (fresh) all(); else keepPlace(all);
+  PCLazy.revealView($("#paper")); // what is shown is drawn before the first paint
+}
+
+/** Rebuild the page without moving the paragraph at the top of the view. */
+function keepPlace(fn) {
+  const area = $("#pageArea"), top = area.getBoundingClientRect().top;
+  const at = [...document.querySelectorAll("#paper > .para")].find((p) => p.getBoundingClientRect().bottom > top);
+  const place = at && { s: at.dataset.s, p: at.dataset.p, y: at.getBoundingClientRect().top - top };
+  fn();
+  const now = place && paraEl(place.s, place.p);
+  if (!now) return;
+  PCLazy.reveal(now);
+  area.scrollTop += now.getBoundingClientRect().top - top - place.y;
+}
+
+/** After the paragraphs of section si changed (state already holds them). */
+function refreshSection(si) {
+  const paper = $("#paper");
+  const sec = sections()[si];
+  const head = document.getElementById(`sec-${si}`);
+  if (!state.paper || !sec || !head) { render(); return; }
+  PCTex.number(sections(), state.paper.front);
+  const old = [...paper.querySelectorAll(`:scope > [data-s="${si}"]`)];
+  const pool = new Map();
+  old.forEach((e) => { if (!pool.has(e._sig)) pool.set(e._sig, []); pool.get(e._sig).push(e); });
+  // keep every paragraph whose text (and check marks) did not change
+  const nodes = sec.paragraphs.map((text, pi) => {
+    const kept = pool.get(paraSig(si, pi, text))?.shift();
+    if (kept) { kept.dataset.p = pi; return kept; }
+    return paraNode(si, pi, text); // drawn at once: this is where the user is
+  });
+  if (!sec.paragraphs.length) nodes.push(addParaNode(si));
+  const keep = new Set(nodes);
+  old.forEach((e) => { if (!keep.has(e)) e.remove(); });
+  let at = head;
+  nodes.forEach((n) => { if (at.nextSibling !== n) at.after(n); at = n; });
+  PCTex.renumber(paper);
+  PCLazy.watch(paper, nodes);
+  renderNavSection(si);
+  updateNavNumbers();
+  markCurrent();
+  renderSide();
+  renderStatus();
 }
 
 // The paper's key value over the page: what every paragraph should serve.
@@ -170,53 +234,220 @@ function renderKeyValue() {
   bar.append(v);
 }
 
+// ── Navigator ──────────────────────────────────────────
+// Each section file, and inside it a tree of its heading paragraphs
+// (\section, \subsection, \subsubsection) with their paragraphs. Files and
+// headings fold; a folded node's items are only created when it is opened,
+// so a book's navigator holds what is shown, not two thousand labels.
+// Open/closed is kept in pc.navOpen: files by file name (open unless closed),
+// headings by "file#label" or "file#level:title#n" (closed unless opened).
+const NAV_LEVEL = { section: 0, subsection: 1, subsubsection: 2 };
+const navOpen = () => store.get("pc.navOpen", {});
+function setNavOpen(changes) {
+  const open = navOpen();
+  Object.entries(changes).forEach(([k, v]) => { open[k] = v; });
+  store.set("pc.navOpen", open);
+}
+
+/** One file's paragraphs as a tree: { children: [{ pi } | { pi, head, key, children, n }] }. */
+function navTree(sec) {
+  const root = { children: [], n: { para: 0, eq: 0, fig: 0, tab: 0 } };
+  const stack = [{ level: -1, node: root }];
+  const seen = {};
+  sec.paragraphs.forEach((text, pi) => {
+    const t = PCTex.stripComments(text).trim();
+    if (!t) return; // commented-out paragraphs stay on the page (faint %), not in the outline
+    const head = PCTex.heading(text);
+    if (head) {
+      const level = NAV_LEVEL[head[0]] ?? 1;
+      while (stack[stack.length - 1].level >= level) stack.pop();
+      const lab = t.match(/\\label\{([^}]*)\}/)?.[1];
+      const id = lab ? lab : `${head[0]}:${head[1]}`;
+      seen[id] = (seen[id] ?? 0) + 1;
+      const node = { pi, head, key: `${sec.file}#${id}${lab ? "" : `#${seen[id]}`}`, children: [], n: { para: 0, eq: 0, fig: 0, tab: 0 } };
+      stack[stack.length - 1].node.children.push(node);
+      stack.push({ level, node });
+      return;
+    }
+    stack[stack.length - 1].node.children.push({ pi });
+    const kind = navKind(text)?.[0];
+    stack.forEach(({ node }) => {
+      node.n.para++;
+      if (kind === "式") node.n.eq++;
+      else if (kind === "圖") node.n.fig++;
+      else if (kind === "表") node.n.tab++;
+    });
+  });
+  return root;
+}
+
+const navCountTitle = (n) => [`${n.para} 段`, n.eq && `${n.eq} 式`, n.fig && `${n.fig} 圖`, n.tab && `${n.tab} 表`].filter(Boolean).join(" · ");
+
 function renderNav() {
   $("#navTitle").textContent = state.paper?.name ?? "";
   const nav = $("#nav");
   nav.innerHTML = "";
   if (!state.paper) { nav.append(el("li", "empty", "從「檔案」開啟論文")); return; }
-  const open = store.get("pc.navOpen", {});
   if (state.paper.front?.trim()) {
     const li = el("li", "sec front");
     const head = el("button");
     head.append(el("span", "caret", ""), el("span", "", "標題與摘要"));
-    head.onclick = () => document.getElementById("front")?.scrollIntoView({ block: "start", behavior: "smooth" });
+    head.onclick = () => PCLazy.jump(document.getElementById("front"), { block: "start", behavior: "smooth" });
     li.append(head);
     nav.append(li);
   }
-  sections().forEach((sec, si) => {
-    const li = el("li", "sec");
-    li.dataset.open = String(open[sec.file] !== false);
-    const head = el("button");
-    head.append(el("span", "caret", "▾"), el("span", "", sec.title), el("span", "count", String(sec.paragraphs.filter((t) => PCTex.stripComments(t).trim()).length)));
-    head.onclick = () => {
-      const now = li.dataset.open !== "true";
-      li.dataset.open = String(now);
-      open[sec.file] = now;
-      store.set("pc.navOpen", open);
-      document.getElementById(`sec-${si}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
-    };
-    const ol = el("ol", "outline");
-    sec.paragraphs.forEach((text, pi) => {
-      // commented-out paragraphs stay on the page (faint %), not in the outline
-      if (!PCTex.stripComments(text).trim()) return;
-      const b = el("button");
-      b.setAttribute("aria-current", String(si === state.cur.s && pi === state.cur.p));
-      const rep = state.reports[si]?.[pi];
-      // Label: rendered first line; display equations show their number.
-      const t = el("span", "t");
-      const kind = navKind(text);
-      if (kind) t.textContent = kind;
-      else t.append(PCTex.render(PCTex.stripComments(text).trim().split("\n")[0]));
-      b.append(el("span", `status ${rep ? rep.status ?? "" : ""}`), el("span", "i", pad(pi + 1)), t);
-      b.onclick = () => { select(si, pi); paraEl(si, pi)?.scrollIntoView({ block: "center", behavior: "smooth" }); };
-      const item = el("li");
-      item.append(b);
-      ol.append(item);
-    });
-    li.append(head, ol);
-    nav.append(li);
+  sections().forEach((sec, si) => nav.append(navSection(si)));
+  PCLazy.watch(nav);
+}
+
+/** Redraw one file's part of the navigator (after its paragraphs changed). */
+function renderNavSection(si) {
+  const old = $(`#nav .sec[data-s="${si}"]`);
+  if (!old) { renderNav(); return; }
+  const li = navSection(si);
+  old.replaceWith(li);
+  PCLazy.watch($("#nav"), li.querySelectorAll("button"));
+}
+
+function navSection(si) {
+  const sec = sections()[si];
+  const tree = navTree(sec);
+  const li = el("li", "sec");
+  li.dataset.s = si;
+  li.dataset.open = String(navOpen()[sec.file] !== false);
+  const head = el("button", "sec-head");
+  const title = el("span", "t");
+  title.append(PCTex.render(sec.title));
+  head.append(el("span", "caret", "▾"), title, el("span", "count", String(tree.n.para)));
+  head.title = navCountTitle(tree.n);
+  const ol = el("ol", "outline");
+  const fill = () => { if (ol._filled) return; ol._filled = true; PCTex.lazily(() => navItems(ol, si, tree.children)); };
+  if (li.dataset.open === "true") fill();
+  li._tree = tree;
+  li._fill = fill;
+  head.onclick = (e) => {
+    const now = li.dataset.open !== "true";
+    if (e.altKey) setSubtree(li, tree, sec.file, now);
+    li.dataset.open = String(now);
+    setNavOpen({ [sec.file]: now });
+    if (now) { fill(); PCLazy.watch($("#nav"), ol.querySelectorAll("button")); }
+    PCLazy.jump(document.getElementById(`sec-${si}`), { block: "start", behavior: "smooth" });
+  };
+  li.append(head, ol);
+  return li;
+}
+
+function navItems(ol, si, children) {
+  children.forEach((c) => ol.append(c.head ? navHeading(si, c) : navLeaf(si, c.pi)));
+}
+
+function navLeaf(si, pi) {
+  const text = sections()[si].paragraphs[pi];
+  const b = el("button");
+  b.dataset.s = si;
+  b.dataset.p = pi;
+  b.setAttribute("aria-current", String(si === state.cur.s && pi === state.cur.p));
+  const rep = state.reports[si]?.[pi];
+  // Label: rendered first line; blocks show their kind and number.
+  const t = el("span", "t");
+  const kind = navKind(text);
+  if (kind) { t.textContent = kind; b.dataset.kind = "1"; } // updateNavNumbers rewrites it
+  else t.append(PCTex.render(PCTex.stripComments(text).trim().split("\n")[0]));
+  b.append(el("span", `status ${rep ? rep.status ?? "" : ""}`), el("span", "i", pad(pi + 1)), t);
+  b.onclick = () => { const s = +b.dataset.s, p = +b.dataset.p; select(s, p); PCLazy.jump(paraEl(s, p)); };
+  const item = el("li");
+  item.append(b);
+  return item;
+}
+
+function navHeading(si, node) {
+  const file = sections()[si].file;
+  const li = el("li", `sub lv${NAV_LEVEL[node.head[0]] ?? 1}`);
+  li.dataset.open = String(navOpen()[node.key] === true);
+  li.dataset.key = node.key;
+  const b = el("button", "sub-head");
+  b.dataset.s = si;
+  b.dataset.p = node.pi;
+  b.setAttribute("aria-current", String(si === state.cur.s && node.pi === state.cur.p));
+  const t = el("span", "t");
+  t.append(PCTex.render(node.head[1]));
+  b.append(el("span", "caret", "▾"), t, el("span", "count", String(node.n.para)));
+  b.title = navCountTitle(node.n);
+  const ol = el("ol", "outline");
+  const fill = () => { if (ol._filled) return; ol._filled = true; PCTex.lazily(() => navItems(ol, si, node.children)); };
+  if (li.dataset.open === "true") fill();
+  li._fill = fill;
+  li._node = node;
+  // like a file: a click folds or opens it and goes to the heading; Alt+click does the whole subtree
+  b.onclick = (e) => {
+    const now = li.dataset.open !== "true";
+    if (e.altKey) setSubtree(li, node, file, now);
+    li.dataset.open = String(now);
+    setNavOpen({ [node.key]: now });
+    if (now) { fill(); PCLazy.watch($("#nav"), ol.querySelectorAll("button")); }
+    const s = +b.dataset.s, p = +b.dataset.p;
+    select(s, p);
+    PCLazy.jump(paraEl(s, p), { block: "start", behavior: "smooth" });
+  };
+  li.append(b, ol);
+  return li;
+}
+
+/** Open or close every heading under a node (Alt+click), then redraw it. */
+function setSubtree(li, node, file, open) {
+  const changes = {};
+  const walk = (n) => n.children.forEach((c) => { if (c.head) { changes[c.key] = open; walk(c); } });
+  walk(node);
+  setNavOpen(changes);
+  const ol = li.querySelector(":scope > ol");
+  ol.innerHTML = "";
+  ol._filled = false;
+  if (open || li.dataset.open === "true") { li._fill(); PCLazy.watch($("#nav"), ol.querySelectorAll("button")); }
+}
+
+/** Open or close every file and heading of the paper. */
+function setAllNav(open) {
+  const changes = {};
+  sections().forEach((sec) => {
+    changes[sec.file] = open;
+    const walk = (n) => n.children.forEach((c) => { if (c.head) { changes[c.key] = open; walk(c); } });
+    walk(navTree(sec));
   });
+  setNavOpen(changes);
+  renderNav();
+  markCurrent();
+}
+
+/** Open the files and headings above paragraph (si, pi) so its item exists. */
+function openNavPath(si, pi) {
+  const li = $(`#nav .sec[data-s="${si}"]`);
+  if (!li || !PCTex.stripComments(sections()[si]?.paragraphs[pi] ?? "").trim()) return null; // comments are not listed
+  const opened = {};
+  if (li.dataset.open !== "true") { li.dataset.open = "true"; opened[sections()[si].file] = true; }
+  li._fill();
+  let ol = li.querySelector(":scope > ol");
+  for (;;) {
+    const hit = ol.querySelector(`:scope > li > button[data-s="${si}"][data-p="${pi}"]`);
+    if (hit) { if (Object.keys(opened).length) setNavOpen(opened); return hit; }
+    // the heading whose span holds pi: the last one at this level starting at or before it
+    const subs = [...ol.querySelectorAll(":scope > li.sub")].filter((s) => s._node.pi <= pi);
+    const sub = subs[subs.length - 1];
+    if (!sub) return null;
+    if (sub.dataset.open !== "true") { sub.dataset.open = "true"; opened[sub.dataset.key] = true; }
+    sub._fill();
+    ol = sub.querySelector(":scope > ol");
+  }
+}
+
+/** Equation, figure and table numbers in the navigator's labels, after renumbering. */
+function updateNavNumbers() {
+  const nav = $("#nav");
+  nav.querySelectorAll('button[data-kind="1"]').forEach((b) => {
+    const t = navKind(sections()[+b.dataset.s]?.paragraphs[+b.dataset.p] ?? "");
+    const label = b.querySelector(".t");
+    if (t && label.textContent !== t) label.textContent = t;
+  });
+  PCTex.updateRefs(nav);
 }
 
 // Navigator label for a block paragraph: its kind, number and title.
@@ -239,97 +470,124 @@ function navKind(text) {
   return null;
 }
 
-const paraEl = (si, pi) => document.querySelector(`.para[data-s="${si}"][data-p="${pi}"]`);
+const paraEl = (si, pi) => document.querySelector(`#paper > .para[data-s="${si}"][data-p="${pi}"]`);
 
 function renderPaper() {
   const paper = $("#paper");
-  paper.innerHTML = "";
-  if (!state.paper) return;
+  if (!state.paper) { paper.innerHTML = ""; return; }
   PCTex.resetCounters();
-  // main.tex around the sections: title block first, back matter and references last
-  if (state.paper.front.trim()) {
-    const front = PCTex.frontNode(state.paper.front);
-    front.id = "front";
-    front.querySelectorAll("[data-field]").forEach((n) => (n.ondblclick = (e) => { e.stopPropagation(); editField(n); }));
-    paper.append(front);
-  }
-  sections().forEach((sec, si) => {
-    const h = el("h2");
-    h.append(PCTex.render(sec.title));
-    h.id = `sec-${si}`;
-    paper.append(h);
-    sec.paragraphs.forEach((text, pi) => {
-      if (PCTable.isTable(text)) {
-        const p = el("div", "para");
-        p.dataset.s = si;
-        p.dataset.p = pi;
-        paper.append(p);
-        PCTable.mount(p, si, pi, text);
-        return;
-      }
-      if (!PCTex.stripComments(text).trim()) {
-        // only comments: keep a handle to edit it, nothing to read
-        const p = el("div", "para comment-only", "%");
-        p.title = "註解";
-        p.dataset.s = si;
-        p.dataset.p = pi;
-        p.onclick = () => select(si, pi);
-        p.ondblclick = () => edit(p, si, pi);
-        paper.append(p);
-        return;
-      }
-      const head = PCTex.heading(text);
-      const block = PCTex.isDisplay(text);
-      const whole = block || PCTex.needsWhole(text);
-      const p = el(head ? "div" : block ? "div" : "p", head ? `para head ${head[0]}` : block ? "para display" : "para");
-      p.dataset.s = si;
-      p.dataset.p = pi;
-      if (head) {
-        p.append(PCTex.render(head[1]));
-      } else if (whole) {
-        // Blocks, and prose with comments or line breaks: render as a whole, without sentence marks.
-        p.append(PCTex.render(text));
-      } else {
-        const rep = state.reports[si]?.[pi];
-        const flagged = new Map();
-        rep?.findings.forEach((f) => {
-          if (f.sentence == null) return;
-          if (rank(f.severity) > rank(flagged.get(f.sentence))) flagged.set(f.sentence, f.severity);
-        });
-        (rep?.sentence_text ?? [text.replace(/\s+/g, " ")]).forEach((s, i) => {
-          const span = el("span", "s" + (flagged.has(i) ? ` flag ${flagged.get(i)}` : ""));
-          span.append(PCTex.render(s), " ");
-          p.append(span);
-        });
-      }
-      p.onclick = () => select(si, pi);
-      p.ondblclick = () => edit(p, si, pi);
-      paper.append(p);
-    });
-    if (!sec.paragraphs.length) {
-      const p = el("p", "para add-para", "雙擊新增段落");
-      p.ondblclick = () => { sec.paragraphs.push(""); render(); edit(paraEl(si, 0), si, 0); };
-      paper.append(p);
+  const page = document.createDocumentFragment();
+  PCTex.lazily(() => {
+    // main.tex around the sections: title block first, back matter and references last
+    if (state.paper.front.trim()) {
+      const front = PCTex.frontNode(state.paper.front);
+      front.id = "front";
+      front.querySelectorAll("[data-field]").forEach((n) => (n.ondblclick = (e) => { e.stopPropagation(); editField(n); }));
+      page.append(front);
     }
+    sections().forEach((sec, si) => {
+      const h = el("h2");
+      h.append(PCTex.render(sec.title));
+      h.id = `sec-${si}`;
+      page.append(h);
+      sec.paragraphs.forEach((text, pi) => page.append(paraNode(si, pi, text)));
+      if (!sec.paragraphs.length) page.append(addParaNode(si));
+    });
+    const back = state.paper.back.trim();
+    if (back) { const d = el("div", "tex-back"); d.append(PCTex.render(back)); if (d.textContent.trim()) page.append(d); }
+    if (state.paper.bibliography.length) page.append(PCTex.bibliographyNode(state.paper.bibliography));
   });
-  const back = state.paper.back.trim();
-  if (back) { const d = el("div", "tex-back"); d.append(PCTex.render(back)); if (d.textContent.trim()) paper.append(d); }
-  if (state.paper.bibliography.length) paper.append(PCTex.bibliographyNode(state.paper.bibliography));
+  paper.replaceChildren(page);
+  PCLazy.watch(paper);
   markCurrent();
 }
 
+/** What a paragraph's drawing depends on: its text and, for prose, its check marks. */
+function paraSig(si, pi, text) {
+  if (PCTable.isTable(text)) return `T${pi}\u0001${text}`; // the table editor holds its place
+  const rep = state.reports[si]?.[pi];
+  return rep ? `${text}\u0001${JSON.stringify([rep.sentence_text, rep.findings.map((f) => [f.sentence, f.severity])])}` : text;
+}
+
+/** One paragraph of the page. Handlers read data-s/data-p, so a kept paragraph can move. */
+function paraNode(si, pi, text) {
+  const at = (p) => [+p.dataset.s, +p.dataset.p];
+  let p;
+  if (PCTable.isTable(text)) {
+    p = el("div", "para");
+    p.dataset.s = si;
+    p.dataset.p = pi;
+    PCTable.mount(p, si, pi, text);
+  } else if (!PCTex.stripComments(text).trim()) {
+    // only comments: keep a handle to edit it, nothing to read
+    p = el("div", "para comment-only", "%");
+    p.title = "註解";
+  } else {
+    const head = PCTex.heading(text);
+    const block = PCTex.isDisplay(text);
+    const whole = block || PCTex.needsWhole(text);
+    p = el(head ? "div" : block ? "div" : "p", head ? `para head ${head[0]}` : block ? "para display" : "para");
+    if (head) {
+      p.append(PCTex.render(head[1]));
+    } else if (whole) {
+      // Blocks, and prose with comments or line breaks: render as a whole, without sentence marks.
+      p.append(PCTex.render(text));
+    } else {
+      const rep = state.reports[si]?.[pi];
+      const flagged = new Map();
+      rep?.findings.forEach((f) => {
+        if (f.sentence == null) return;
+        if (rank(f.severity) > rank(flagged.get(f.sentence))) flagged.set(f.sentence, f.severity);
+      });
+      (rep?.sentence_text ?? [text.replace(/\s+/g, " ")]).forEach((s, i) => {
+        const span = el("span", "s" + (flagged.has(i) ? ` flag ${flagged.get(i)}` : ""));
+        span.append(PCTex.render(s), " ");
+        p.append(span);
+      });
+    }
+  }
+  p.dataset.s = si;
+  p.dataset.p = pi;
+  p._sig = paraSig(si, pi, text);
+  if (!p.classList.contains("tbl")) {
+    p.onclick = () => select(...at(p));
+    p.ondblclick = () => edit(p, ...at(p));
+  }
+  return p;
+}
+
+function addParaNode(si) {
+  const p = el("p", "para add-para", "雙擊新增段落");
+  p.dataset.s = si;
+  p._sig = "\u0002add";
+  p.ondblclick = () => {
+    const s = +p.dataset.s;
+    sections()[s].paragraphs.push("");
+    refreshSection(s);
+    edit(paraEl(s, 0), s, 0);
+  };
+  return p;
+}
+
+/** Make (si, pi) the current paragraph; its item in the navigator is opened and shown. */
 function select(si, pi) {
   state.cur = { s: si, p: pi };
+  const b = openNavPath(si, pi);
   markCurrent();
+  if (b) {
+    PCLazy.watch($("#nav"), $(`#nav .sec[data-s="${si}"]`)?.querySelectorAll("button") ?? []);
+    // keep it in sight in the navigator's own scroll
+    const pane = $("aside.left"), r = b.getBoundingClientRect(), pr = pane.getBoundingClientRect();
+    if (r.top < pr.top || r.bottom > pr.bottom) pane.scrollTop += r.top - pr.top - pr.height / 2;
+  }
   renderSide();
 }
 
 function markCurrent() {
-  document.querySelectorAll(".para").forEach((p) =>
-    p.classList.toggle("current", +p.dataset.s === state.cur.s && +p.dataset.p === state.cur.p));
-  document.querySelectorAll(".nav .outline button").forEach((b) => b.setAttribute("aria-current", "false"));
-  const navSec = document.querySelectorAll(".nav .sec")[state.cur.s];
-  navSec?.querySelectorAll(".outline button")[state.cur.p]?.setAttribute("aria-current", "true");
+  document.querySelectorAll("#paper > .para.current").forEach((p) => p.classList.remove("current"));
+  paraEl(state.cur.s, state.cur.p)?.classList.add("current");
+  document.querySelectorAll('#nav button[aria-current="true"]').forEach((b) => b.setAttribute("aria-current", "false"));
+  $(`#nav button[data-s="${state.cur.s}"][data-p="${state.cur.p}"]`)?.setAttribute("aria-current", "true");
 }
 
 function edit(p, si, pi) {
@@ -345,9 +603,10 @@ function edit(p, si, pi) {
     const list = sections()[si].paragraphs;
     if (v) list[pi] = v; else list.splice(pi, 1);
     try { await saveSection(si); } catch (e) { flash(`儲存失敗：${e.message}`); }
-    render();
+    refreshSection(si);
     refreshGit();
   };
+  p._sig = null; // holds the editor now: never kept as it is
   p.replaceChildren(ta);
   p.ondblclick = null;
   fit();
@@ -442,7 +701,7 @@ function findingItem(status, message, reason, rule, sentence, pending) {
 function pointAt(si, pi, i) {
   const s = paraEl(si, pi)?.querySelectorAll(".s")[i];
   if (!s) return;
-  s.scrollIntoView({ block: "center", behavior: "smooth" });
+  PCLazy.jump(s);
   s.classList.remove("blink"); void s.offsetWidth; s.classList.add("blink");
 }
 
@@ -725,7 +984,7 @@ async function placeDraft(text, how) {
     state.cur.p = at;
   }
   try { await saveSection(state.cur.s); } catch (e) { flash(`儲存失敗：${e.message}`); }
-  render();
+  refreshSection(state.cur.s);
   refreshGit();
 }
 
@@ -1486,6 +1745,12 @@ function wire() {
 }
 
 async function boot() {
+  // formulas and figures are drawn near the view: the page (held in place
+  // while they are drawn above it) and the navigator's open items
+  PCLazy.attach($("#paper"), $("#pageArea"), (c) => c.children, true);
+  PCLazy.attach($("#nav"), $("aside.left"), (c) => c.querySelectorAll("button"), false);
+  $("#navOpenAll").onclick = () => setAllNav(true);
+  $("#navCloseAll").onclick = () => setAllNav(false);
   PCWrite.build();
   paintIcons();
   applyTheme();

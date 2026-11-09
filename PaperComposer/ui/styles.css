@@ -1130,3 +1130,40 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-old { margin: 4px 0 0; font: 13px/1.6 var(--serif); color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--err) 50%, transparent); }
 .df-refpick { display: flex; flex-direction: column; gap: 6px; }
 .df-main > textarea.np-input { flex: none; min-height: 4.6em; }
+
+/* ── Drawing near the view (lazy.js) ─────────────── */
+/* lazy.js holds the view while formulas above it are drawn */
+.page-area { overflow-anchor: none; }
+/* a block drawn once may be skipped by layout while far away, at the size it last had
+   (tables keep their toolbar, which reaches outside the block) */
+#paper > .seen:not(.tbl) { content-visibility: auto; contain-intrinsic-block-size: auto 120px; overflow-clip-margin: 16px; }
+/* a formula not drawn yet: an empty box of the size it will take */
+.math.pending { display: inline-block; height: 1em; vertical-align: -0.2em; border-radius: 2px; background: color-mix(in srgb, var(--faint) 10%, transparent); }
+.paper .math.display.pending { display: block; position: relative; overflow: hidden; }
+.math.pending .pc-tags { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; align-items: flex-end; font: 1.1em var(--serif); }
+.nav .math.pending { height: .9em; vertical-align: -0.1em; }
+/* a figure keeps its shape (width/height from the server) before the image arrives */
+.paper .tex-figure img.pending, .paper .tex-figure img:not([src]) { background: color-mix(in srgb, var(--faint) 8%, transparent); }
+.pc-lab:not(:empty)::before { content: " "; }
+/* equation numbers are KaTeX's .tag: not the UI's .tag chip */
+.katex .tag { font: inherit; padding: 0; border: 0; border-radius: 0; color: inherit; }
+/* an equation and its number side by side, never on top of each other: when
+   the page is too narrow for both, the equation scrolls (.math.display) */
+.paper .katex-display > .katex > .katex-html:has(> .tag) { display: flex; align-items: baseline; }
+.paper .katex-display > .katex > .katex-html:has(> .tag) > .base { flex: none; }
+.paper .katex-display > .katex > .katex-html:has(> .tag) > .base:first-child { margin-left: auto; }
+.paper .katex-display > .katex > .katex-html:has(> .tag) > .tag { position: static; flex: none; margin-left: auto; padding-left: 1em; }
+
+/* ── Navigator tree: files and headings fold ─────── */
+.nav-head { display: flex; align-items: center; gap: 2px; margin: 0 0 12px; min-width: 0; }
+.nav-head .panel-title { margin: 0; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: block; }
+.nav-head .ico { width: 26px; height: 26px; }
+.nav-head .ico svg.i { width: 15px; height: 15px; }
+.nav .sec > button .t, .nav .sub-head .t { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.nav .sec[data-open="false"] .caret { transform: none; }
+.nav .sec[data-open="false"] > button .caret, .nav .sub[data-open="false"] > button .caret { transform: rotate(-90deg); }
+.nav .sub[data-open="false"] > .outline { display: none; }
+.outline .sub-head { grid-template-columns: 10px minmax(0, 1fr) auto; color: var(--text); font-weight: 500; }
+.outline .sub.lv2 > .sub-head { font-weight: 400; font-style: italic; }
+.outline .sub-head[aria-current="true"] { box-shadow: inset 2px 0 0 var(--accent-text, var(--accent)); }
+.nav .sub > .outline { margin-left: 10px; padding-left: 6px; border-left: 1px solid var(--line); }

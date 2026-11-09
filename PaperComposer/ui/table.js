@@ -147,7 +147,7 @@ const PCTable = (() => {
       await needPackages(r.packages);
       focusNext = { si, pi: at };
       state.cur = { s: si, p: at };
-      render();
+      refreshSection(si);
       refreshGit();
     });
   }
@@ -162,7 +162,11 @@ const PCTable = (() => {
       if (!t.caption && !t.label) return null;
       const c = el("figcaption");
       const n = t.label ? PCTex.labels[t.label] : null;
-      c.append(el("b", "", n ? `Table ${n}. ` : "Table. "), PCTex.render(t.caption ?? ""));
+      // the number in its own node: PCTex.updateRefs rewrites it when tables move
+      const b = el("b", "", "Table");
+      if (t.label) { const lab = el("span", "pc-lab", n ?? ""); lab.dataset.key = t.label; b.append(lab); }
+      b.append(". ");
+      c.append(b, PCTex.render(t.caption ?? ""));
       return c;
     };
     if (!t.caption_below) { const c = cap(); if (c) fig.append(c); }

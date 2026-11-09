@@ -34,7 +34,11 @@
   </header>
 
   <aside class="left" aria-label="導覽">
-    <h2 class="panel-title" id="navTitle"></h2>
+    <div class="nav-head">
+      <h2 class="panel-title" id="navTitle"></h2>
+      <button class="ico small" id="navOpenAll" data-icon="chevron" aria-label="全部展開（Alt+點標題：展開或收合整個分支）"></button>
+      <button class="ico small" id="navCloseAll" data-icon="up" aria-label="全部收合"></button>
+    </div>
     <ol class="nav" id="nav"></ol>
   </aside>
 
@@ -316,6 +320,7 @@
 <script src="vendor/katex/katex.min.js"></script>
 <script src="icons.js"></script>
 <script src="tex.js"></script>
+<script src="lazy.js"></script>
 <script src="table.js"></script>
 <script src="refs.js"></script>
 <script src="export.js"></script>
