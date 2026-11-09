@@ -196,7 +196,7 @@ impl<'a> Builder<'a> {
                 && depth < 8 {
                     // a generated notation.tex is not part of the text: its
                     // macros come from the registry itself
-                    if let Some((rel, body)) = resolve(&arg).filter(|(_, b)| !b.starts_with(crate::macros::GENERATED_HEADER)) {
+                    if let Some((rel, body)) = resolve(&arg).filter(|(_, b)| !crate::macros::is_generated(b)) {
                         let key = self.root.map(|r| r.join(&rel)).unwrap_or_else(|| PathBuf::from(&rel));
                         if !self.seen.contains(&key) {
                             self.seen.push(key);

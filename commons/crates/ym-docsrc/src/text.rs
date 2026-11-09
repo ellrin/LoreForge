@@ -1,4 +1,4 @@
-//! Plain text per section, for kb-core's term scanner and ym-notation's
+//! Plain text per section, for kb-core's term scanner and lore-notation's
 //! extractor (design §6 learning flow, §7.5). No dependency on either: they
 //! take strings.
 
@@ -21,7 +21,7 @@ pub struct SectionText {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextOptions {
     /// Append the captions of figures/tables that sit in the section
-    /// (`Fig. 1. …` lines). ym-notation does not treat captions as definitions.
+    /// (`Fig. 1. …` lines). lore-notation does not treat captions as definitions.
     pub captions: bool,
     /// Keep `$…$` / `$$…$$` math; when false math is removed.
     pub math: bool,

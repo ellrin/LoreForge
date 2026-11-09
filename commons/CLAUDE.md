@@ -7,7 +7,7 @@ design is in `../private/shared/docs/ecosystem-design.md` (author's private note
 ## Layout
 
 - `crates/<name>/` — one crate per module (`ym-llm`, `ym-secrets`, `ym-gitsync`, `ym-store`, `kb-core`,
-  `ym-notation`, `ym-voice`, `ym-docsrc`, `ym-canvas`, `ym-ooxml`, `ym-math`).
+  `lore-notation`, `ym-voice`, `ym-docsrc`, `ym-canvas`, `ym-ooxml`, `ym-math`).
   Each crate knows nothing about any app. Apps depend on them by path
   (`../commons/crates/<name>` from an app folder).
 - `ui/` — framework-free Web Components (no build step), one folder per component,

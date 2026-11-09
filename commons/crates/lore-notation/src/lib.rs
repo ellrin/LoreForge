@@ -1,9 +1,9 @@
-//! ym-notation — the notation registry (對照表) shared by PaperComposer and
+//! lore-notation — the notation registry (對照表) shared by PaperComposer and
 //! SlideComposer: `notation.json`, macro generation (`notation.tex`), LaTeX
 //! scanning, consistency checks and auto-extract. Pure Rust, no network.
 //!
 //! ```no_run
-//! use ym_notation::*;
+//! use lore_notation::*;
 //! let doc = Document::load(std::path::Path::new("papers/demo")).unwrap();
 //! let reg = Notation::load(std::path::Path::new("papers/demo/notation.json")).unwrap();
 //! let report = check_document(doc, &reg, &CheckOptions::default());

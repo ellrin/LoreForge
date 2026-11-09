@@ -1,4 +1,4 @@
-# ym-notation — 對照表（notation registry）
+# lore-notation — 對照表（notation registry）
 
 Pure Rust, no network, no app knowledge. Shared by PaperComposer (PC) and
 SlideComposer (SC); design: `../../../private/shared/docs/ecosystem-design.md` §5.
@@ -11,9 +11,9 @@ SlideComposer (SC); design: `../../../private/shared/docs/ecosystem-design.md` �
 - UI: `commons/ui/notation-panel/` (`<notation-panel>` Web Component, demo)
 
 ```sh
-cargo test -p ym-notation
-cargo run -p ym-notation --example check -- crates/ym-notation/examples/sample \
-    --notation crates/ym-notation/examples/sample/notation.json --out /tmp/report.json
+cargo test -p lore-notation
+cargo run -p lore-notation --example check -- crates/lore-notation/examples/sample \
+    --notation crates/lore-notation/examples/sample/notation.json --out /tmp/report.json
 ```
 
 ## Files
@@ -168,7 +168,7 @@ fills empty fields and tags them `suggested`. This crate never calls a model.
 
 ### PaperComposer (wave 2, B1)
 
-Server (`pc-core` / `pc-server`), by path dependency `../commons/crates/ym-notation`:
+Server (`pc-core` / `pc-server`), by path dependency `../commons/crates/lore-notation`:
 
 | route | does |
 |---|---|

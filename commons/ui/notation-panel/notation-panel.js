@@ -4,7 +4,7 @@
 // otherwise LaTeX is shown as code.
 //
 // Data in:   panel.notation = {version, entries:[…], conventional:[…], ignored:[…]}   (notation.json)
-//            panel.report   = {issues:[…], …}          (ym-notation check report)
+//            panel.report   = {issues:[…], …}          (lore-notation check report)
 //            panel.mode     = "macro" | "literal"       (插入 mode: 用巨集 / 符號直接寫)
 //            panel.docMacros = ["foo", …]               commands the document already defines (macro check)
 //            attributes src="notation.json" report-src="report.json" mode="macro"
@@ -126,7 +126,7 @@ notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
     return n;
   };
 
-  /** Rough canonical form of a symbol's LaTeX (mirrors ym_notation::math::canonical for common cases). */
+  /** Rough canonical form of a symbol's LaTeX (mirrors lore_notation::math::canonical for common cases). */
   function canon(latex) {
     if (!latex) return "";
     let s = String(latex).replace(/\s+/g, "");
@@ -137,7 +137,7 @@ notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
     return s;
   }
 
-  // ── macro names: the same rules as ym_notation::macros::check_macro_name ──
+  // ── macro names: the same rules as lore_notation::macros::check_macro_name ──
   const RESERVED = new Set(`begin end documentclass usepackage input include newcommand renewcommand providecommand def let edef
     gdef relax par item label ref pageref cite caption section subsection subsubsection paragraph
     subparagraph chapter part title author date maketitle thanks footnote emph textbf textit texttt
@@ -178,7 +178,7 @@ notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
     return null;
   }
 
-  /** Macro map for KaTeX: {"\\speed": "u"} (same rules as ym_notation::katex_macros). */
+  /** Macro map for KaTeX: {"\\speed": "u"} (same rules as lore_notation::katex_macros). */
   function katexMacros(notation) {
     const out = {};
     for (const e of notation?.entries ?? []) {
@@ -206,7 +206,7 @@ notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
   /** `\name` at the very end: a letter typed next would join the command name. */
   const endsWithControlWord = (s) => /(^|[^\\])(\\\\)*\\[A-Za-z]+$/.test(s);
 
-  /** What 插入 puts at the caret (same rules as ym_notation::insert_text). */
+  /** What 插入 puts at the caret (same rules as lore_notation::insert_text). */
   function insertText(e, mode, inMath) {
     const mac = mode === "macro" ? macroName(e) : null;
     // in math, `\speed` + a following letter would read as `\speedx`: end with a space

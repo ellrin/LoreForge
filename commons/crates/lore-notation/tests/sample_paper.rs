@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use ym_notation::*;
+use lore_notation::*;
 
 fn sample() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/sample")

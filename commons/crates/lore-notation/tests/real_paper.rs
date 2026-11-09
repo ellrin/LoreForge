@@ -3,7 +3,7 @@
 //! ```sh
 //! NOTATION_SAMPLE=/path/to/main.tex \
 //! NOTATION_EXPECT=/path/to/expect.json \
-//! cargo test -p ym-notation --test real_paper -- --ignored --nocapture
+//! cargo test -p lore-notation --test real_paper -- --ignored --nocapture
 //! ```
 //!
 //! `NOTATION_EXPECT` (optional) is a JSON list of findings a human review
@@ -15,7 +15,7 @@
 
 use serde::Deserialize;
 use std::path::PathBuf;
-use ym_notation::*;
+use lore_notation::*;
 
 #[derive(Deserialize)]
 struct Expect {

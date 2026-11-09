@@ -1,7 +1,7 @@
 //! Check a paper and write the report (and optionally a draft registry).
 //!
 //! ```sh
-//! cargo run -p ym-notation --example check -- <paper folder or .tex> \
+//! cargo run -p lore-notation --example check -- <paper folder or .tex> \
 //!     [--notation notation.json] [--global profile/notation.json] \
 //!     [--out report.json] [--extract draft.json] [--tex out-dir]
 //! ```
@@ -9,7 +9,7 @@
 //! `--notation examples/sample/notation.json` on `examples/sample`.
 
 use std::path::PathBuf;
-use ym_notation::*;
+use lore_notation::*;
 
 fn main() {
     let mut args = std::env::args().skip(1);
