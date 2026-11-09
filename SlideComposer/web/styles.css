@@ -110,7 +110,7 @@ select { height: 30px; }
 .tx .p { margin: 0; min-height: 1em; }
 .tx .bu { padding-right: .3em; }
 .tx .math { display: inline-block; text-indent: 0; }
-.tx .math .katex { font-size: 1.15em; }
+.tx .math .katex { font-size: 1em; }
 .tx .math.pending { color: #888; font-style: italic; }
 .tx.cell-tx { position: static; height: 100%; }
 .pic { position: absolute; inset: 0; overflow: hidden; }
