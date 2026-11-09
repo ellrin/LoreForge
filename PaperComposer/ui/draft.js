@@ -515,7 +515,7 @@ const PCDraft = (() => {
   // ── 7 草稿 ───────────────────────────────────────────
   function drafting(main) {
     main.append(h("草稿"));
-    main.append(note("逐章生成，每段用你的句型庫寫，並照大綱的組成與你的風格筆記。建議最後才生成 Introduction 與 Conclusion。引擎用右側「寫作」選的那個。"));
+    main.append(note("逐章生成，每段用你的句型庫寫，並照大綱的組成、你的風格筆記與對照表（登記的巨集、\\ref 標籤、縮寫）。每段寫完會跑一次對照表檢查：手打的「Table 1」或不存在的標籤會自動重寫一次，其他問題列在段落下方。建議最後才生成 Introduction 與 Conclusion。引擎用右側「寫作」選的那個。"));
     if (!sess().outline.length) { main.append(note("先完成大綱。")); return; }
     const order = ["Methods", "Results", "Discussion", "Introduction", "Conclusion"];
     order.forEach((sec) => {
@@ -525,6 +525,7 @@ const PCDraft = (() => {
       const r = row(el("h4", "", `${sec}　${SEC_ZH[sec]}`), btn(d ? "重新生成" : "生成", () => run(`生成 ${sec}`, () => call("/compose", { section: sec, engine: chosenEngine() })), "ghost"));
       if (d) r.append(btn("複製", () => { navigator.clipboard.writeText(d.paras.map((p) => p.text).join("\n\n")); flash("已複製"); }, "ghost"));
       box.append(r);
+      if (d?.new_symbols?.length) box.append(newSymbols(d.new_symbols));
       d?.paras.forEach((p) => {
         const card = el("div", "df-card");
         card.append(el("span", "df-gid", p.para), el("p", "df-draft", p.text));
@@ -553,6 +554,14 @@ const PCDraft = (() => {
       card.append(r);
       main.append(card);
     });
+  }
+
+  /** Symbols the generated text uses that the notation registry lacks. */
+  function newSymbols(list) {
+    const box = el("div", "df-card");
+    box.append(note(`對照表裡沒有這些符號：${list.join("、")}。登記後到對照表補上意思（標為「待確認」）。`, "warn"));
+    box.append(row(btn("登記到對照表", () => run("登記符號", () => call("/notation/register", { symbols: list })), "ghost")));
+    return box;
   }
 
   // ── 9 修訂 ───────────────────────────────────────────
@@ -621,6 +630,7 @@ const PCDraft = (() => {
       card.append(acts);
       if (r.plan) {
         card.append(el("p", "df-text", r.plan.summary));
+        if (r.plan.new_symbols?.length) card.append(newSymbols(r.plan.new_symbols));
         if (r.plan.effects.length) {
           const ul = el("ul", "df-list warn");
           r.plan.effects.forEach((e) => ul.append(el("li", "", `還要注意：${e}`)));

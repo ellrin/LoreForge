@@ -14,6 +14,7 @@
 pub mod citecheck;
 pub mod convert;
 mod draft;
+mod notation;
 pub mod export;
 pub mod import;
 pub mod llm;

@@ -167,6 +167,8 @@ your-private-repo/
 
 | 9 修訂 | 論文寫好之後要補東西（一審要求外部驗證、老師要多一張圖、多引兩篇）：寫下要補什麼，可附新圖檔、從文獻庫選要加的文獻（會記進本篇引用）。先開一組對話，討論它要支撐什麼、放在哪一段（選項直接用段落編號）、會影響哪些地方、圖的 caption；再由 Opus 產生具體修改（插在某段之前／之後、取代某段、加在章節最後），每一項附原段落與理由，逐項「套用」或「不採用」。套用前會確認那一段還是原來的文字，改過就不寫；對不上的修改與需要你處理的連帶影響列在「還要注意」 |
 
+**對照表（`lore-notation`）**：討論草稿與修訂的每一步都會帶上你的對照表（`profile/notation.json` 加上論文的 `notation.json`）：符號用登記的巨集、圖表公式一律 `\ref{…}`、縮寫第一次出現要展開、數學一律在 `$…$` 裡。每段草稿與每項修訂寫完都跑一次對照表檢查：手打的「Table 1」或不存在的標籤會自動重寫一次，其他問題（縮寫沒展開、符號未定義等）列在段落下方或「還要注意」；對照表裡沒有的新符號可以一鍵登記（標為「待確認」，到對照表補上意思）。
+
 **文獻用途會在對話裡長出來**：審稿說某篇的引用超出你寫的用途時，你在對話裡說明那篇其實還能支撐什麼（例如作者設計方法時觀察到的某個事實），這句會加進那篇在 `citations.csv` 的用途，之後的大綱與審稿就照新的用途判斷。
 
 **什麼重要由你決定**：程式本身是中性的，要追問什麼、回答怎麼判讀、什麼時候算問夠，寫在工作區的 `lens/`；你的寫作風格（段落類型、比例、要避免的習慣、範例段落）寫在 `style/`。兩者都是你私人 repo 的檔案，格式見 [`lens/README.md`](../private-example/PaperComposer/lens/README.md) 與 [`style/README.md`](../private-example/PaperComposer/style/README.md)。沒有 `lens/` 時用內建的中性視角（只分「有沒有理由」）。
@@ -406,6 +408,7 @@ scripts/            Git hooks
 | POST | `/api/papers/{name}/draft/revisions/{id}/plan` | 產生修改方案（Opus） |
 | POST | `/api/papers/{name}/draft/revisions/{id}/changes/{cid}` `{ apply }` | 套用或不採用一項修改（原段落已改過時拒絕） |
 | POST | `/api/papers/{name}/draft/revisions/{id}/status` `{ status }` | open／dropped 等 |
+| POST | `/api/papers/{name}/draft/notation/register` `{ symbols }` | 把草稿或修訂用到的新符號登記進論文的 `notation.json`（標為待確認） |
 | POST／PUT | `/api/papers/{name}/draft/plan` | 規劃題組（Sonnet）／修改題組 `{ groups, items }` |
 | POST | `/api/papers/{name}/draft/turn` `{ group, answer?, model? }` | 一回合問答；沒有 `answer` 時開場；`model` = haiku／sonnet／opus／local |
 | POST | `/api/papers/{name}/draft/group/{id}` `{ action }` | start／close／skip／reopen |

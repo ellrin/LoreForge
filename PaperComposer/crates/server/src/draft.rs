@@ -39,6 +39,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/phase", put(put_phase))
         .route("/api/papers/{name}/draft/tables/{id}/insert", post(insert_table))
         .route("/api/papers/{name}/draft/revisions", post(new_revision))
+        .route("/api/papers/{name}/draft/notation/register", post(register_symbols))
         .route("/api/papers/{name}/draft/revisions/{id}/plan", post(plan_revision))
         .route("/api/papers/{name}/draft/revisions/{id}/changes/{cid}", post(decide_change))
         .route("/api/papers/{name}/draft/revisions/{id}/status", post(revision_status))
@@ -60,9 +61,11 @@ async fn ctx(s: &Shared, name: &str) -> Result<Ctx, Resp> {
 }
 
 /// The paper's tables, figures and references, and the same as prompt text.
+/// …plus the author's notation registry and its rules, so every step writes
+/// with the registered macros and labels.
 fn material_of(c: &Ctx) -> (Material, String) {
     let m = material::load(&c.ws, &c.dir);
-    let text = material::describe(&m);
+    let text = material::describe(&m) + &crate::notation::describe(&crate::notation::load(&c.ws, &c.dir));
     (m, text)
 }
 
@@ -673,8 +676,12 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
     if !has_writing_engine(&s, b.engine).await {
         return bad("沒有可用的寫作引擎");
     }
-    let style = style_text(&c.ws);
+    let notation = crate::notation::load(&c.ws, &c.dir);
+    let style = style_text(&c.ws) + &crate::notation::describe(&notation);
     let (mat, _) = material_of(&c);
+    // Other sections already drafted count as context for the notation checks.
+    let other_drafts: Vec<String> = sess.drafts.iter().filter(|d| d.section != b.section).map(|d| d.paras.iter().map(|p| p.text.clone()).collect::<Vec<_>>().join("\n\n")).collect();
+    let mut new_symbols: Vec<String> = vec![];
     let mut out: Vec<ds::DraftPara> = vec![];
     for p in &paras {
         let points = if p.en.is_empty() { p.zh.clone() } else { p.en.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
@@ -712,13 +719,24 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
                     let l = s.loaded.read().await;
                     let Some(prof) = &l.profile else { break };
                     let check = compose::check_draft(prof, &req, &pts, &refs, &mut d);
+                    drop(l);
                     let text = d.sentences.iter().map(|x| x.text.trim()).collect::<Vec<_>>().join(" ");
-                    if check.ok() || done.is_some() {
-                        done = Some(ds::DraftPara { para: p.id.clone(), text, problems: check.problems });
+                    // The registry's checks, in the context of the paper and the drafts so far.
+                    let mut ctx_texts = other_drafts.clone();
+                    ctx_texts.push(out.iter().map(|x| x.text.clone()).collect::<Vec<_>>().join("\n\n"));
+                    let nc = crate::notation::check(&c.dir, &notation, &ctx_texts, &text);
+                    let mut problems = check.problems.clone();
+                    problems.extend(nc.shown.iter().map(|m| format!("對照表：{m}")));
+                    if (check.ok() && nc.blocking.is_empty()) || done.is_some() {
+                        new_symbols.extend(nc.new_symbols.clone());
+                        done = Some(ds::DraftPara { para: p.id.clone(), text, problems });
                         break;
                     }
-                    feedback = format!("{extra}\nYour previous answer had problems: {}. Fix them.", check.problems.join("; "));
-                    done = Some(ds::DraftPara { para: p.id.clone(), text, problems: check.problems });
+                    let mut why: Vec<String> = check.problems.clone();
+                    why.extend(nc.blocking.iter().cloned());
+                    feedback = format!("{extra}\nYour previous answer had problems: {}. Fix them.", why.join("; "));
+                    new_symbols.extend(nc.new_symbols.clone());
+                    done = Some(ds::DraftPara { para: p.id.clone(), text, problems });
                 }
                 Err(e) => {
                     err = e;
@@ -734,7 +752,9 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     sess.drafts.retain(|d| d.section != b.section);
-    sess.drafts.push(ds::DraftSection { section: b.section.clone(), paras: out });
+    new_symbols.sort();
+    new_symbols.dedup();
+    sess.drafts.push(ds::DraftSection { section: b.section.clone(), paras: out, new_symbols });
     sess.drafts.sort_by_key(|d| ds::SECTIONS.iter().position(|x| *x == d.section));
     if sess.phase < Phase::Draft {
         sess.phase = Phase::Draft;
@@ -813,6 +833,32 @@ async fn audit_ask(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, 
     }
     sess.start_group(&gid);
     sess.phase = Phase::Interview;
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+#[derive(Deserialize)]
+struct RegisterBody {
+    symbols: Vec<String>,
+}
+
+/// Put symbols a draft or a revision introduced into the paper's registry
+/// (tagged `suggested`; the author fills in the meaning in the notation panel).
+async fn register_symbols(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RegisterBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    if let Err(e) = crate::notation::register(&c.dir, &b.symbols) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+    }
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    for d in &mut sess.drafts {
+        d.new_symbols.retain(|x| !b.symbols.contains(x));
+    }
+    for r in &mut sess.revisions {
+        if let Some(p) = &mut r.plan {
+            p.new_symbols.retain(|x| !b.symbols.contains(x));
+        }
+    }
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
 }
@@ -896,7 +942,16 @@ async fn plan_revision(State(s): State<Shared>, AxPath((name, id)): AxPath<(Stri
     let (_, mtext) = material_of(&c);
     let prompt = rv::plan_prompt(&c.key_value, &sess, &r, &c.dir, &mtext, &style_text(&c.ws), &(conversation + &summary));
     let dir = c.dir.clone();
-    let plan = tri!(ask_model(&s, "pc-draft-revise", None, &prompt, rv::plan_schema(), |x| rv::parse_plan(x, &dir)).await);
+    let mut plan = tri!(ask_model(&s, "pc-draft-revise", None, &prompt, rv::plan_schema(), |x| rv::parse_plan(x, &dir)).await);
+    // The registry's checks on every change; findings join the effects.
+    let notation = crate::notation::load(&c.ws, &c.dir);
+    for ch in &plan.changes {
+        let nc = crate::notation::check(&c.dir, &notation, &[], &ch.text);
+        plan.effects.extend(nc.shown.iter().map(|m| format!("{}：對照表：{m}", ch.id)));
+        plan.new_symbols.extend(nc.new_symbols);
+    }
+    plan.new_symbols.sort();
+    plan.new_symbols.dedup();
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     if let Some(x) = sess.revisions.iter_mut().find(|x| x.id == id) {

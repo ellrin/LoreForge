@@ -56,6 +56,9 @@ pub struct RevisionPlan {
     /// Knock-on effects elsewhere that the plan does not change itself.
     #[serde(default)]
     pub effects: Vec<String>,
+    /// Symbols the changes use that the notation registry does not have.
+    #[serde(default)]
+    pub new_symbols: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -230,7 +233,7 @@ pub fn parse_plan(reply: &str, paper_dir: &Path) -> Result<RevisionPlan, String>
     if changes.is_empty() {
         return Err("修改方案裡沒有可以套用的修改".into());
     }
-    Ok(RevisionPlan { summary: r.summary, changes, effects })
+    Ok(RevisionPlan { summary: r.summary, changes, effects, new_symbols: vec![] })
 }
 
 /// Apply one change to its section file. The target paragraph is found by

@@ -27,5 +27,10 @@ Monorepo of the author's local-first apps. Each top-level folder is its own Carg
 - Commits: ellrin is the only author; no `Co-Authored-By` or AI attribution trailers.
   Claude is mentioned only in README "開發說明" sections.
 - `cargo test` in every workspace you touched must pass before a commit.
+- Anything in PaperComposer or SlideComposer that writes LaTeX (drafting, revisions, imports,
+  exports, diffs) must stay compatible with `commons/crates/lore-notation` (the author's
+  registry of symbols, equations, abbreviations and labels): use the registered macros,
+  refer with `\ref{…}` (never a typed "Table 1"), keep `notation.tex` intact, run its
+  checks on the generated text, and say in the hand-off how the change was checked.
 - Example/test users: `ellrin`, then `daidai`.
 - Replies to the author in Traditional Chinese (繁體中文).

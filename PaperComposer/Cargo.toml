@@ -19,3 +19,4 @@ thiserror = "2"
 ym-llm = { path = "../commons/crates/ym-llm" }
 ym-gitsync = { path = "../commons/crates/ym-gitsync" }
 ym-home = { path = "../commons/crates/ym-home" }
+lore-notation = { path = "../commons/crates/lore-notation" }

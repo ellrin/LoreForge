@@ -333,6 +333,9 @@ pub struct DraftPara {
 pub struct DraftSection {
     pub section: String,
     pub paras: Vec<DraftPara>,
+    /// Symbols the drafts use that the notation registry does not have.
+    #[serde(default)]
+    pub new_symbols: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
