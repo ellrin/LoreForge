@@ -447,7 +447,14 @@ fn new_objects_components_tables_equations_export() {
         "insert",
     )
     .unwrap();
-    let assets = |p: &str| (p == "assets/a.png").then(|| b"\x89PNG-new".to_vec());
+    let need = pptx_out::equations_needing_fallback(&ed.deck);
+    assert_eq!(need.iter().map(|(sl, id, _)| (sl.as_str(), *id)).collect::<Vec<_>>(), [(s.as_str(), 31)], "only the new equation");
+    let fb_key = pptx_out::equation_fallback_key(&s, 31);
+    let assets = |p: &str| match p {
+        "assets/a.png" => Some(b"\x89PNG-new".to_vec()),
+        k if k == fb_key => Some(b"\x89PNG-equation".to_vec()),
+        _ => None,
+    };
     let bytes = pptx_out::export_bytes(&ed.deck, &od, Some(&st), &assets).unwrap();
     let back = ODeck::from_bytes(&bytes).unwrap();
     let cd2 = pptx_in::import(&back, Some(&st), None);
@@ -464,6 +471,12 @@ fn new_objects_components_tables_equations_export() {
     let Kind::Picture(p) = &s2.find(32).unwrap().kind else { panic!() };
     assert!((p.alpha - 0.5).abs() < 1e-6 && (p.crop.b - 0.2).abs() < 1e-6);
     assert!(back.pkg.parts.iter().any(|x| x.name.starts_with("ppt/media/") && x.data == b"\x89PNG-new"));
+    // the new equation carries the offered picture for viewers without Office Math
+    let media = back.pkg.parts.iter().find(|x| x.data == b"\x89PNG-equation").expect("fallback picture in the package").name.clone();
+    let slide_xml = String::from_utf8(back.pkg.parts.iter().find(|x| x.name == back.slides[0].part).unwrap().data.clone()).unwrap();
+    let fb = slide_xml.split("<mc:Fallback").nth(1).expect("an mc:Fallback branch");
+    assert!(fb.split("</mc:Fallback>").next().unwrap().contains("<p:pic"), "the fallback is a picture");
+    assert!(media.starts_with("ppt/media/") && media.ends_with(".png"));
     // mask exported as a white rectangle after the picture
     assert!(s2.objects.iter().any(|o| o.name.starts_with("SC-mask:32")));
 }

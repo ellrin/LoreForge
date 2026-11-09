@@ -15,7 +15,8 @@ cargo test                        # 全部離線（合成測資）
 
 - `SLIDECOMPOSER_WORKSPACE`：風格包與簡報所在的私人 repo（`styles/`、`decks/`）。
 - `SLIDECOMPOSER_DECKS`：另指簡報資料夾（例如把真實簡報放在暫存區，不進任何 repo）。
-- `SLIDECOMPOSER_CHROME`：PDF 用的 Chrome/Chromium 路徑（預設找 `/Applications/Google Chrome.app`）。
+- `SLIDECOMPOSER_CHROME`：PDF 與公式備用圖片用的 Chrome/Chromium 路徑（預設找 `/Applications/Google Chrome.app`）。
+- `SLIDECOMPOSER_CHROME_ARGS`：額外給 Chrome 的參數（空白分隔），例如以 root 執行的容器裡要 `--no-sandbox`；預設不加，沙箱保持開啟。
 - 方程式需要 pandoc（`lore-math` 旁掛；`LORE_PANDOC` 可指定路徑）。
 
 ## 架構
@@ -37,7 +38,8 @@ cargo test                        # 全部離線（合成測資）
 - 插入：矩形、圓角矩形、橢圓、三角形、梯形、多邊形、直線、箭頭、連接線（直線／肘形／曲線，可黏在圖形連接點上，圖形移動時自動跟著走）、風格元件（編號圓圈、模型梯形、標籤卡、重點框、語意遮罩、各種箭頭樣式）、圖片（裁切把手、透明度、外框、白色遮罩）、表格（編輯儲存格、插入／刪除列欄、底色）、方程式（LaTeX → KaTeX 預覽 → pandoc 轉原生 OMML）。
 - 漸進揭露：選步驟（每步一組物件）→ 產生 N 頁，其他步驟依風格包變淡（圖片透明、文字灰、線條淡、方程式灰）；或議程模式（每個第一層項目一頁、當前項目加粗）；設定面板停靠在側欄，設定時仍可點選投影片上的物件。
 - 動畫：5 種進場（出現、淡入、飛入、擦去、縮放），順序、觸發、時間。
-- 匯出：PPTX（`exports/`，不覆蓋）、PDF（headless Chrome 列印 `print.html`）。
+- 匯出：PPTX（`exports/`，不覆蓋）、PDF（headless Chrome 列印 `print.html`）。Chrome 每次最多等 30 秒（截圖）／3 分鐘（PDF），卡住就整組程序結束並回報，不會讓匯出一直等。
+- 公式備用圖片：新增或改過文字的方程式框，匯出 PPTX 時用 headless Chrome 把該框單獨畫成 PNG（`object.html`，透明背景、兩倍解析度），寫成 `mc:Fallback` 的圖片，Keynote、Google 簡報、LibreOffice 這些不認得 Office Math 的軟體就看得到。沒改過的 PowerPoint 公式保留原本的備用內容（逐位元組不變）。找不到 Chrome 或截圖失敗時照樣匯出，並在提示裡說明哪些公式沒有備用圖片。
 - 字型代替（`lore-fonts`）：簡報用到、這台電腦沒有的字型，畫面與 PDF 依序改用作者規則（`private/shared/fonts.toml` 的 `[fallback]`）、字寬相同的開源字（Calibri → Carlito）、同類字型（不認得的無襯線字先試較窄的 Carlito、PT Sans）。上方列出現「字型代替 N」時，點開看每個字型變成什麼；紅色表示這台電腦連代替字都沒有。字型檔放在 `private/shared/fonts/` 就能直接用，不必安裝；公司字型或授權字型的名稱只寫在 private。
 - 方程式與文字同樣大小（PowerPoint 的原生公式不放大），避免一行混著文字與公式時溢出換行。
 

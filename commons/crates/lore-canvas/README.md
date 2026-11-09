@@ -12,7 +12,7 @@
 | `reveal` | `RevealSpec::Ghost { steps, future }`（每步一頁，其他步驟依變淡規則：圖片 alpha、文字灰、線條／填色 alpha、方程式灰）、`Agenda { obj, paras, em }`（每個第一層、有內容的段落一頁，略過空白行與第二層項目；`agenda_items` 列出這些段落；當前項加粗） |
 | `components` | 風格包元件 → 物件：編號圓圈（色序）、模型梯形、標籤卡（群組）、重點框、語意遮罩；`arrow(style)` |
 | `pptx_in` | `import(deck, style, id)`：每個物件保留原 XML＋逐欄位指紋；placeholder 位置與文字樣式依版面配置／母片繼承解析；`backdrops`（版面配置＋母片的非 placeholder 圖形，顯示用）；`cust_path`（custGeom → SVG） |
-| `pptx_out` | `export` / `export_parts` / `export_bytes`：未改動的投影片保留原 part 位元組；改動的投影片逐物件重建（未改動物件＝原 XML，改動物件＝原 XML 上逐欄位修補，新物件從頭建）；新增／複製／刪除／重新排序投影片、備註頁建立、圖片關聯（同內容共用）、清掉沒人用的媒體 |
+| `pptx_out` | `export` / `export_parts` / `export_bytes`：未改動的投影片保留原 part 位元組；改動的投影片逐物件重建（未改動物件＝原 XML，改動物件＝原 XML 上逐欄位修補，新物件從頭建）；新增／複製／刪除／重新排序投影片、備註頁建立、圖片關聯（同內容共用）、清掉沒人用的媒體；`equations_needing_fallback(deck)` 列出要備用圖片的方程式框（新增或文字改過），app 以 `equation_fallback_key(slide_uid, id)`（`fallback:<uid>:<id>`）作資產路徑提供 PNG，匯出寫成 `mc:Fallback` 的 `<p:pic>`；沒提供就不寫 |
 
 ## 無損原則
 
@@ -30,5 +30,5 @@ LORE_DECKS="a.pptx:b.pptx" LORE_STYLE_DIR=styles/x cargo run --release -p lore-c
 
 - 群組內的子物件只能改內容（文字），不能單獨移動。
 - 連接點用矩形 4 點／橢圓 8 點近似（其他 preset 的實際連接點未逐一實作）；匯入的連接線只在它黏著的物件移動時才重排。
-- 方程式改動後，`mc:AlternateContent` 的 Fallback 圖片不更新。
+- 方程式備用圖片要由 app 提供（lore-canvas 不會畫圖）；沒提供時新增／改過的方程式沒有 Fallback。
 - 表格儲存格框線只在新儲存格寫入；既有儲存格只修補底色。

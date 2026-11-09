@@ -1519,7 +1519,7 @@ function wire() {
   };
   document.addEventListener("click", (e) => { if (!e.target.closest("#fontPop")) { $("#fontPop").hidden = true; $("#fontChip").setAttribute("aria-expanded", "false"); } });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#fontPop").hidden) { $("#fontPop").hidden = true; $("#fontChip").setAttribute("aria-expanded", "false"); } });
-  $("#actPptx").onclick = async () => { try { const r = await api(deckApi("/export"), { body: {} }); toast(`已匯出：${r.path}`); } catch (e) { toast(e.message, true); } };
+  $("#actPptx").onclick = async () => { toast("正在匯出 PPTX…"); try { const r = await api(deckApi("/export"), { body: {} }); toast(r.warning ? `已匯出：${r.path}。注意：${r.warning}` : `已匯出：${r.path}`, !!r.warning); } catch (e) { toast(e.message, true); } };
   $("#actPdf").onclick = async () => { toast("正在用 Chrome 產生 PDF…"); try { const r = await api(deckApi("/pdf"), { body: {} }); toast(`已輸出 PDF：${r.path}`); } catch (e) { toast(e.message, true); } };
   $("#slideAdd").onclick = addSlide;
   $("#slideDup").onclick = dupSlide;

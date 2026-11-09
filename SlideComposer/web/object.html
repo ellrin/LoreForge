@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>SlideComposer object</title>
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="prefs.css">
+  <style>
+    html, body { margin: 0; padding: 0; background: transparent !important; overflow: hidden; }
+    #one { position: relative; }
+  </style>
+</head>
+<body>
+<div id="one"></div>
+<script src="vendor/katex/katex.min.js"></script>
+<script src="prefs.js"></script>
+<script src="render.js"></script>
+<script>
+// One object of a deck, alone, at its own size: headless Chrome screenshots it
+// as the fallback picture of an equation box (viewers without Office Math).
+(async () => {
+  const q = new URL(location.href).searchParams;
+  const name = q.get("deck"), uid = q.get("slide"), id = Number(q.get("obj"));
+  const r = await (await fetch(`/api/decks/${encodeURIComponent(name)}`)).json();
+  SC.addFontStacks(r.font_stacks);
+  const slide = r.deck.slides.find((s) => s.uid === uid);
+  const find = (objs) => { for (const o of objs ?? []) { if (o.id === id) return o; const c = o.type === "group" ? find(o.children) : null; if (c) return c; } return null; };
+  const obj = slide && find(slide.objects);
+  if (!obj) return;
+  const one = JSON.parse(JSON.stringify(obj));
+  one.frame = { ...one.frame, x: 0, y: 0, rot: 0 };
+  const omml = [];
+  const tb = one.text;
+  tb?.paras.forEach((p) => p.runs.forEach((x) => { if (x.kind === "math" && x.omml && !x.latex) omml.push(x.omml); }));
+  const latex = new Map();
+  if (omml.length) {
+    try {
+      const res = await (await fetch(`/api/decks/${encodeURIComponent(name)}/latex`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ omml }) })).json();
+      res.results.forEach((x, i) => latex.set(omml[i], x.latex));
+    } catch {}
+  }
+  const size = { w: obj.frame.w, h: obj.frame.h };
+  const ctx = { size, backdrops: null, slideNo: 0, assetUrl: (a) => `/api/decks/${encodeURIComponent(name)}/asset?id=${encodeURIComponent(a)}`, latex: (m) => latex.get(m), transparent: true };
+  const el = SC.renderSlide({ ...slide, objects: [one], bg: null }, ctx);
+  el.style.background = "transparent";
+  document.getElementById("one").append(el);
+  await document.fonts.ready;
+  document.body.dataset.ready = "1";
+})();
+</script>
+</body>
+</html>

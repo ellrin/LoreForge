@@ -531,6 +531,40 @@ pub(crate) struct Out<'a> {
     pub style: Option<&'a StyleSystem>,
     pub assets: &'a dyn Assets,
     pub next_id: u32,
+    /// Uid of the slide being written (names equation fallback pictures).
+    pub slide: String,
+}
+
+/// The asset path under which an app offers the fallback picture of an
+/// equation box: a PNG of how the box looks, for viewers without Office Math
+/// (Keynote, Google Slides, LibreOffice). Asked only for new or edited boxes;
+/// PowerPoint's own fallback of an untouched box is kept.
+pub fn equation_fallback_key(slide_uid: &str, object_id: u32) -> String {
+    format!("fallback:{slide_uid}:{object_id}")
+}
+
+/// Equation boxes that export will ask a fallback picture for (new, or text
+/// changed), with their slide uid: render these before exporting.
+pub fn equations_needing_fallback(deck: &Deck) -> Vec<(String, u32, Frame)> {
+    fn walk(slide: &str, objs: &[Object], out: &mut Vec<(String, u32, Frame)>) {
+        for o in objs {
+            match &o.kind {
+                Kind::Text(sp) | Kind::Shape(sp) if sp.equation => {
+                    let changed = crate::model::changed_fields(o);
+                    if o.src.is_none() || changed.iter().any(|c| c == "text") {
+                        out.push((slide.to_string(), o.id, o.frame.clone()));
+                    }
+                }
+                Kind::Group(g) => walk(slide, &g.children, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = vec![];
+    for s in &deck.slides {
+        walk(&s.uid, &s.objects, &mut out);
+    }
+    out
 }
 
 fn mime(ext: &str) -> &'static str {
@@ -555,9 +589,11 @@ impl Out<'_> {
                 return None;
             }
             p.to_string()
-        } else if let Some(f) = asset.strip_prefix("file:") {
-            let bytes = self.assets.get(f)?;
-            let ext = f.rsplit('.').next().unwrap_or("png").to_lowercase();
+        } else if asset.starts_with("file:") || asset.starts_with("fallback:") {
+            let (bytes, ext) = match asset.strip_prefix("file:") {
+                Some(f) => (self.assets.get(f)?, f.rsplit('.').next().unwrap_or("png").to_lowercase()),
+                None => (self.assets.get(asset)?, "png".to_string()),
+            };
             // identical media already in the package → share it
             if let Some(p) = self
                 .pkg
@@ -676,9 +712,24 @@ pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
                     .as_ref()
                     .map(|t| text_out(t, s.text.as_ref(), out.style, "p:txBody"));
             }
+            // A picture of the box for viewers without Office Math, when the
+            // equation is new or its text changed and the app offers one.
+            let wants_fallback = sp.equation && (o.src.is_none() || has(&changed, "text"));
+            let fallback = if wants_fallback {
+                out.image_rel(&equation_fallback_key(&out.slide, o.id)).map(|rid| {
+                    let f = &o.frame;
+                    let pic = lore_ooxml::shapes::picture(o.id, &o.name, &rid, lore_ooxml::shapes::Rect { x: f.x, y: f.y, cx: f.w, cy: f.h }, None, None);
+                    om::AltBranch { attrs: Attrs(vec![]), shapes: vec![pic] }
+                })
+            } else {
+                None
+            };
             match alt {
                 Some(mut a) => {
                     a.choices[0].shapes[0] = Shape::Sp(s);
+                    if fallback.is_some() {
+                        a.fallback = fallback;
+                    }
                     Shape::Alt(a)
                 }
                 None if sp.equation && o.src.is_none() => Shape::Alt(om::AltContent {
@@ -690,7 +741,7 @@ pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
                         attrs: Attrs(vec![("Requires".into(), "a14".into())]),
                         shapes: vec![Shape::Sp(s)],
                     }],
-                    fallback: None,
+                    fallback,
                 }),
                 None => Shape::Sp(s),
             }
@@ -1157,6 +1208,7 @@ pub fn export_parts(cd: &Deck, src: &ODeck, style: Option<&StyleSystem>, assets:
                 style,
                 assets,
                 next_id: cs.max_id() + 1000,
+                slide: cs.uid.clone(),
             };
             let shapes: Vec<Shape> = cs.objects.iter().flat_map(|x| object_out(&mut o, x)).collect();
             entry.rels = o.rels;

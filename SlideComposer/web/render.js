@@ -204,6 +204,11 @@ function renderRuns(p, para, pi, ctx, scale, editable) {
       span = el("span", "math");
       span.contentEditable = "false";
       runStyle(span, r.look, scale);
+      // Spaces PowerPoint keeps inside the equation (" A ") are lost in LaTeX
+      // math; keep them as margins so "where A is" does not read "whereAis".
+      const t = r.text ?? "";
+      if (/^[\s\u00a0]/.test(t)) span.style.marginLeft = "0.25em";
+      if (/[\s\u00a0]$/.test(t)) span.style.marginRight = "0.25em";
       // pandoc sometimes leaves a dangling "\" at the end
       const tex = (r.latex ?? ctx.latex?.(r.omml))?.replace(/\\\s*$/, "");
       if (tex && window.katex) {

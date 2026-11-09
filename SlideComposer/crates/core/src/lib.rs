@@ -11,6 +11,7 @@
 //!     └── cache/latex.json        OMML → LaTeX conversions
 //! ```
 
+use std::collections::HashMap;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -308,8 +309,18 @@ impl Session {
     }
 
     pub fn export_bytes(&self) -> Result<Vec<u8>> {
+        self.export_bytes_with(&HashMap::new())
+    }
+
+    /// Export with fallback pictures for equation boxes (key:
+    /// `pptx_out::equation_fallback_key`, value: PNG bytes), rendered by the
+    /// caller before taking the session lock.
+    pub fn export_bytes_with(&self, fallbacks: &HashMap<String, Vec<u8>>) -> Result<Vec<u8>> {
         let dir = self.dir.clone();
         let assets = move |p: &str| -> Option<Vec<u8>> {
+            if p.starts_with("fallback:") {
+                return fallbacks.get(p).cloned();
+            }
             if p.contains("..") {
                 return None;
             }
@@ -325,7 +336,11 @@ impl Session {
 
     /// Export to `exports/<name>.pptx` (free name). Returns the path.
     pub fn export_pptx(&self) -> Result<PathBuf> {
-        let bytes = self.export_bytes()?;
+        self.export_pptx_with(&HashMap::new())
+    }
+
+    pub fn export_pptx_with(&self, fallbacks: &HashMap<String, Vec<u8>>) -> Result<PathBuf> {
+        let bytes = self.export_bytes_with(fallbacks)?;
         let dir = self.dir.join("exports");
         std::fs::create_dir_all(&dir)?;
         let p = free_path(&dir, &self.name, "pptx");
@@ -411,28 +426,118 @@ pub fn find_chrome() -> Option<PathBuf> {
     .find(|p| p.exists())
 }
 
-/// Print `url` (the app's print route) to `out` with headless Chrome.
-/// **Not part of the offline tests** (needs a browser).
-pub fn print_pdf(chrome: &Path, url: &str, out: &Path) -> Result<()> {
-    let profile = std::env::temp_dir().join(format!("sc-chrome-{}", std::process::id()));
-    let st = Command::new(chrome)
-        .arg("--headless=new")
+/// Extra Chrome arguments from `SLIDECOMPOSER_CHROME_ARGS` (space-separated),
+/// e.g. `--no-sandbox` in a container that runs as root. Empty by default:
+/// the sandbox stays on.
+fn chrome_extra_args() -> Vec<String> {
+    std::env::var("SLIDECOMPOSER_CHROME_ARGS").map(|v| v.split_whitespace().map(str::to_string).collect()).unwrap_or_default()
+}
+
+/// Run headless Chrome once with `args` and wait at most `limit`.
+///
+/// - No `--user-data-dir`: headless Chrome then makes and removes its own
+///   temporary profile. With an explicit profile folder Chrome 153 opens a
+///   normal (invisible) browser window and never runs `--screenshot` /
+///   `--print-to-pdf`, so the call hung forever.
+/// - stdin/stdout closed, stderr to a file (no pipe a helper process could
+///   keep open); its own process group, so on timeout (and afterwards) the
+///   whole tree — renderers, GPU process, crash handler — is killed.
+///
+/// Returns the last line Chrome wrote to stderr (for error messages).
+fn run_chrome(chrome: &Path, args: &[String], limit: std::time::Duration) -> Result<String> {
+    use std::process::Stdio;
+    let log = std::env::temp_dir().join(format!(
+        "sc-chrome-{}-{}.log",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+    ));
+    let mut cmd = Command::new(chrome);
+    cmd.arg("--headless=new")
         .arg("--disable-gpu")
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
-        .arg(format!("--user-data-dir={}", profile.display()))
-        .arg("--no-pdf-header-footer")
-        .arg("--virtual-time-budget=20000")
-        .arg("--run-all-compositor-stages-before-draw")
-        .arg(format!("--print-to-pdf={}", out.display()))
-        .arg(url)
-        .output()?;
-    let _ = std::fs::remove_dir_all(&profile);
+        .arg("--disable-background-networking")
+        .arg("--disable-component-update")
+        .arg("--disable-sync")
+        .args(chrome_extra_args())
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(std::fs::File::create(&log).map(Stdio::from).unwrap_or_else(|_| Stdio::null()));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn()?;
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(st) = child.try_wait()? {
+            break Some(st);
+        }
+        if start.elapsed() >= limit {
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    kill_tree(&mut child);
+    let last = std::fs::read_to_string(&log)
+        .ok()
+        .and_then(|t| t.lines().filter(|l| !l.contains("dbus")).last().map(str::to_string))
+        .unwrap_or_default();
+    let _ = std::fs::remove_file(&log);
+    if status.is_none() {
+        return Err(Error::Invalid(format!("Chrome 超過 {} 秒沒有完成，已停止", limit.as_secs())));
+    }
+    Ok(last)
+}
+
+/// Kill Chrome and everything it started (its process group on Unix).
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // SAFETY: plain kill(2) on the process group created for this child.
+        unsafe {
+            libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Screenshot `url` (the app's single-object route) at `w`×`h` CSS pixels,
+/// twice the resolution, transparent background, into `out`; at most 30 s.
+/// **Not part of the offline tests** (needs a browser).
+pub fn screenshot_png(chrome: &Path, url: &str, w: u32, h: u32, out: &Path) -> Result<()> {
+    let args = [
+        "--hide-scrollbars".to_string(),
+        "--force-device-scale-factor=2".into(),
+        "--default-background-color=00000000".into(),
+        "--virtual-time-budget=10000".into(),
+        format!("--window-size={w},{h}"),
+        format!("--screenshot={}", out.display()),
+        url.into(),
+    ];
+    let last = run_chrome(chrome, &args, std::time::Duration::from_secs(30))?;
     if !out.is_file() {
-        return Err(Error::Invalid(format!(
-            "Chrome 沒有產生 PDF：{}",
-            String::from_utf8_lossy(&st.stderr).lines().last().unwrap_or("")
-        )));
+        return Err(Error::Invalid(format!("Chrome 沒有產生圖片：{last}")));
+    }
+    Ok(())
+}
+
+/// Print `url` (the app's print route) to `out` with headless Chrome; at most
+/// 3 minutes. **Not part of the offline tests** (needs a browser).
+pub fn print_pdf(chrome: &Path, url: &str, out: &Path) -> Result<()> {
+    let args = [
+        "--no-pdf-header-footer".to_string(),
+        "--virtual-time-budget=20000".into(),
+        "--run-all-compositor-stages-before-draw".into(),
+        format!("--print-to-pdf={}", out.display()),
+        url.into(),
+    ];
+    let last = run_chrome(chrome, &args, std::time::Duration::from_secs(180))?;
+    if !out.is_file() {
+        return Err(Error::Invalid(format!("Chrome 沒有產生 PDF：{last}")));
     }
     Ok(())
 }

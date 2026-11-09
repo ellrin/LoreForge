@@ -447,17 +447,78 @@ async fn save(State(s): State<Shared>, Path(name): Path<String>) -> R {
     Ok(Json(json!({ "saved": true })))
 }
 
+/// Fallback pictures for the equation boxes export will write (new or
+/// edited): each box is rendered by headless Chrome from `object.html`.
+/// Runs without holding the session lock (the page reads the deck).
+/// Returns the pictures and, when some could not be made, why.
+async fn equation_fallbacks(s: &Shared, name: &str) -> (HashMap<String, Vec<u8>>, Option<String>) {
+    let Ok(sess) = session(s, name) else { return (HashMap::new(), None) };
+    let need = lore_canvas::pptx_out::equations_needing_fallback(&sess.lock().unwrap().editor.deck);
+    if need.is_empty() {
+        return (HashMap::new(), None);
+    }
+    let Some(chrome) = sc_core::find_chrome() else {
+        return (HashMap::new(), Some(format!("沒有找到 Chrome：{} 個新公式沒有備用圖片（Keynote、Google 簡報會看不到）", need.len())));
+    };
+    let port = *s.port.lock().unwrap();
+    let name = name.to_string();
+    tokio::task::spawn_blocking(move || {
+        let mut out = HashMap::new();
+        let mut failed = 0;
+        let mut why: Option<String> = None;
+        let dir = std::env::temp_dir().join(format!("sc-fallback-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        for (slide, id, f) in need {
+            // After a timeout Chrome is likely to hang again: skip the rest
+            // instead of waiting 30 s per box.
+            if why.as_deref().is_some_and(|w| w.contains("超過")) {
+                failed += 1;
+                continue;
+            }
+            let w = ((f.w as f64) / 9525.0).ceil().max(1.0) as u32;
+            let h = ((f.h as f64) / 9525.0).ceil().max(1.0) as u32;
+            let url = format!("http://127.0.0.1:{port}/object.html?deck={}&slide={}&obj={id}", urlenc(&name), urlenc(&slide));
+            let png = dir.join(format!("{slide}-{id}.png"));
+            let _ = std::fs::remove_file(&png);
+            match sc_core::screenshot_png(&chrome, &url, w, h, &png).and_then(|_| Ok(std::fs::read(&png)?)) {
+                Ok(b) => {
+                    out.insert(lore_canvas::pptx_out::equation_fallback_key(&slide, id), b);
+                }
+                Err(e) => {
+                    failed += 1;
+                    why.get_or_insert(e.to_string());
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let warn = (failed > 0).then(|| {
+            format!("{failed} 個公式的備用圖片沒有產生成功（{}）；這些公式在 Keynote、Google 簡報會看不到", why.unwrap_or_default())
+        });
+        (out, warn)
+    })
+    .await
+    .unwrap_or_else(|_| (HashMap::new(), Some("備用圖片產生失敗".into())))
+}
+
+fn urlenc(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
 async fn export(State(s): State<Shared>, Path(name): Path<String>) -> R {
+    let (fallbacks, warning) = equation_fallbacks(&s, &name).await;
     let sess = session(&s, &name)?;
     let sess = sess.lock().unwrap();
-    let p = sess.export_pptx()?;
-    Ok(Json(json!({ "path": p })))
+    let p = sess.export_pptx_with(&fallbacks)?;
+    Ok(Json(json!({ "path": p, "fallbacks": fallbacks.len(), "warning": warning })))
 }
 
 async fn pptx(State(s): State<Shared>, Path(name): Path<String>) -> Result<Response, ApiError> {
+    let (fallbacks, _) = equation_fallbacks(&s, &name).await;
     let sess = session(&s, &name)?;
     let sess = sess.lock().unwrap();
-    let bytes = sess.export_bytes()?;
+    let bytes = sess.export_bytes_with(&fallbacks)?;
     Ok((
         [
             (header::CONTENT_TYPE, "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string()),

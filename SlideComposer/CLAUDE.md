@@ -63,8 +63,11 @@ when working on lore-canvas in parallel with other agents.
    connector text labels; custom geometry point editing; merged-cell editing UI; per-cell
    borders UI; picture mask rectangles are edited numerically (no handles).
 4. Locked objects (charts/SmartArt/OLE) are kept but cannot be moved (none in the 4 decks).
-5. Equation edit replaces the first math run of a box; fallback picture of an edited
-   `mc:AlternateContent` is left stale (PowerPoint uses the a14 choice).
+5. Equation edit replaces the first math run of a box. New/edited equation boxes get an
+   `mc:Fallback` picture rendered by headless Chrome (`object.html`, KaTeX — looks close to,
+   not identical with, PowerPoint's own rendering); without Chrome they export with no
+   fallback (export warns). Chrome is run without `--user-data-dir` (Chrome 153 headless never
+   finishes `--screenshot`/`--print-to-pdf` with one) and with a timeout that kills its process group.
 6. Animations: preset ids follow lore-ooxml (Wipe/Zoom subtypes **not verified on PowerPoint**).
 
 ## Rules
