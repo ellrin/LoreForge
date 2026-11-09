@@ -12,6 +12,7 @@ use pc_core::draft::prompts as dp;
 use pc_core::draft::revise::{self as rv, Revision, RevisionStatus};
 use pc_core::draft::session::{self as ds, Phase, Session, Who};
 use pc_core::draft::style_text;
+use pc_core::draft::venue;
 
 /// Serialises read-modify-write of draft sessions.
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -37,6 +38,11 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/audit", post(run_audit).put(put_audit))
         .route("/api/papers/{name}/draft/audit/{id}/ask", post(audit_ask))
         .route("/api/papers/{name}/draft/phase", put(put_phase))
+        .route("/api/papers/{name}/draft/restart", post(restart))
+        .route("/api/papers/{name}/draft/rewind", post(rewind))
+        .route("/api/papers/{name}/draft/templates", get(template_choices))
+        .route("/api/papers/{name}/draft/template", put(put_template))
+        .route("/api/papers/{name}/draft/floats", post(add_floats))
         .route("/api/papers/{name}/draft/tables/{id}/insert", post(insert_table))
         .route("/api/papers/{name}/draft/revisions", post(new_revision))
         .route("/api/papers/{name}/draft/notation/register", post(register_symbols))
@@ -160,6 +166,9 @@ async fn ask_model<T>(s: &Shared, task: &str, model_ref: Option<&str>, prompt: &
 
 #[derive(Deserialize)]
 struct TopicBody {
+    /// The paper's key value: asked here, kept in paper.toml.
+    #[serde(default)]
+    key_value: Option<String>,
     #[serde(default)]
     reader_accepts: String,
     #[serde(default)]
@@ -169,7 +178,24 @@ struct TopicBody {
 }
 
 async fn put_topic(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<TopicBody>) -> Resp {
-    let c = tri!(ctx(&s, &name).await);
+    let mut c = tri!(ctx(&s, &name).await);
+    if let Some(kv) = &b.key_value {
+        let kv = match meta::check_key_value(kv) {
+            Ok(k) => k,
+            Err(e) => return bad(&e),
+        };
+        let mut m = meta::read_meta(&c.dir);
+        if m.key_value != kv {
+            m.key_value = kv.clone();
+            if let Err(e) = meta::write_meta(&c.dir, &m) {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+            }
+        }
+        c.key_value = kv;
+    }
+    if c.key_value.trim().is_empty() {
+        return bad("請填寫 Key value：這篇論文通篇要強調的一件事");
+    }
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     sess.hook = ds::Hook { reader_accepts: b.reader_accepts.trim().into(), twist: b.twist.trim().into() };
@@ -195,6 +221,30 @@ async fn put_phase(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b
     sess.phase = b.phase;
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
+}
+
+// ── 重來 ────────────────────────────────────────────────
+
+/// 重新開始: the whole draft/ folder goes to draft/archive/<time>/.
+async fn restart(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    if let Err(e) = ds::restart(&c.dir) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+    }
+    let sess = tri!(load(&c.dir));
+    tri!(view(&c, &sess))
+}
+
+/// 從這步重來: back to a step; later steps' results are cleared (a copy
+/// of the session goes to draft/archive/ first).
+async fn rewind(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<PhaseBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    match ds::rewind(&c.dir, b.phase) {
+        Ok(sess) => tri!(view(&c, &sess)),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
 }
 
 // ── Step 2 ──────────────────────────────────────────────
@@ -554,6 +604,9 @@ async fn run_review(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     sess.review = Some(review);
+    if sess.phase < Phase::Template {
+        sess.phase = Phase::Template;
+    }
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
 }
@@ -574,6 +627,95 @@ async fn put_review(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(
                 x.accepted = *d;
             }
         }
+    }
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+// ── ★ 版型 ──────────────────────────────────────────────
+
+/// Every template in the workspace, as the suggester sees it; `except` is
+/// the paper itself (its own template is not a habit).
+fn candidates(ws: &Path, except: &Path) -> Vec<venue::Candidate> {
+    let mut uses: std::collections::HashMap<String, usize> = Default::default();
+    for e in std::fs::read_dir(ws.join("papers")).into_iter().flatten().flatten() {
+        if e.path() != except {
+            if let Some(j) = meta::read_meta(&e.path()).journal {
+                *uses.entry(j).or_default() += 1;
+            }
+        }
+    }
+    let publishers = ws.join("publishers");
+    pc_core::journal::list(&publishers)
+        .into_iter()
+        .map(|j| venue::Candidate {
+            sections: pc_core::journal::read_sample(&publishers.join(&j.id)).map(|x| crate::wizard::sample_sections(&x)).unwrap_or_default(),
+            uses: uses.get(&j.id).copied().unwrap_or(0),
+            kind: j.meta.kind,
+            id: j.id,
+        })
+        .collect()
+}
+
+async fn template_choices(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let sess = tri!(load(&c.dir));
+    let suggested = venue::suggest(&sess, &candidates(&c.ws, &c.dir), 3);
+    Json(serde_json::json!({ "current": meta::read_meta(&c.dir).journal, "suggested": suggested })).into_response()
+}
+
+/// Put the paper on `template` (None = the plain article), with its
+/// authors written again from the profile in the new class's style.
+pub(crate) async fn set_paper_template(s: &Shared, ws: &Path, dir: &Path, template: Option<&str>) -> Result<(), Resp> {
+    let people = resolve_people(s, &meta::read_meta(dir).authors).await.map_err(|e| bad(&e))?;
+    retemplate(ws, dir, template, people).map_err(|e| bad(&e)).map(|_| ())
+}
+
+/// The section files keep every word; the old main.tex is kept in
+/// draft/archive/. False when the paper is on that template already.
+fn retemplate(ws: &Path, dir: &Path, template: Option<&str>, people: Option<(Vec<Person>, Vec<Affiliation>)>) -> Result<bool, String> {
+    if let Some(t) = template {
+        if !paper::safe_name(t) || !ws.join("publishers").join(t).join("sample.tex").is_file() {
+            return Err("找不到這個版型".into());
+        }
+    }
+    let mut m = meta::read_meta(dir);
+    if m.journal.as_deref() == template {
+        return Ok(false);
+    }
+    let old = paper::apply_template(dir, template.map(|t| ws.join("publishers").join(t)).as_deref())?;
+    let keep = ds::new_archive(dir)?;
+    std::fs::write(keep.join("main.tex"), old).map_err(|e| e.to_string())?;
+    if let Some((p, a)) = people {
+        let path = dir.join("main.tex");
+        let main = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        paper::write_atomic(&path, &authors::apply(&main, &p, &a)).map_err(|e| e.to_string())?;
+    }
+    m.journal = template.map(String::from);
+    meta::write_meta(dir, &m)?;
+    Ok(true)
+}
+
+#[derive(Deserialize)]
+struct TemplateBody {
+    /// A folder under publishers/; none = the plain article.
+    #[serde(default)]
+    template: Option<String>,
+    /// 稍後: keep the paper's template and go on.
+    #[serde(default)]
+    later: bool,
+}
+
+async fn put_template(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<TemplateBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    if !b.later {
+        let t = b.template.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        tri!(set_paper_template(&s, &c.ws, &c.dir, t).await);
+    }
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    if sess.phase < Phase::Outline {
+        sess.phase = Phase::Outline;
     }
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
@@ -1005,6 +1147,27 @@ async fn revision_status(State(s): State<Shared>, AxPath((name, id)): AxPath<(St
     tri!(view(&c, &sess))
 }
 
+#[derive(Deserialize)]
+struct FloatsBody {
+    /// Tables pasted from a spreadsheet and figures already uploaded to
+    /// figures/, each put at the end of its section in this order.
+    tables: Vec<TableSpec>,
+}
+
+/// Results the author already has, straight into the paper (the new-paper
+/// wizard's 圖表 step, on an existing paper).
+async fn add_floats(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<FloatsBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    if b.tables.is_empty() {
+        return bad("沒有圖表");
+    }
+    if let Err(e) = add_tables(&c.dir, meta::read_meta(&c.dir).journal.as_deref(), &b.tables) {
+        return bad(&e);
+    }
+    let sess = tri!(load(&c.dir));
+    tri!(view(&c, &sess))
+}
+
 #[derive(Deserialize, Default)]
 struct InsertBody {
     /// Section title to put it in; default: the Results section.
@@ -1041,6 +1204,63 @@ async fn insert_table(State(s): State<Shared>, AxPath((name, id)): AxPath<(Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_template_keeps_the_text_and_the_notation_checks() {
+        use lore_notation::{check_document, CheckOptions, Document};
+        let ws = std::env::temp_dir().join(format!("pc-draft-tpl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ws);
+        let tpl = ws.join("publishers/demo-conf");
+        std::fs::create_dir_all(&tpl).unwrap();
+        std::fs::write(tpl.join("template.toml"), "name = \"Demo Conference\"\nkind = \"conference\"\n").unwrap();
+        std::fs::write(tpl.join("sample.tex"), "\\documentclass{article}\n\\usepackage{cite}\n\\begin{document}\n\\title{T}\\maketitle\n\\section{Introduction}\nSample.\n\\section{Method}\nSample.\n\\section{Results}\nSample.\n\\bibliography{refs}\n\\end{document}\n").unwrap();
+        let dir = paper::create_paper(&ws.join("papers"), "P").unwrap();
+        // another paper on the same template: the author's habit
+        let other = paper::create_paper(&ws.join("papers"), "Q").unwrap();
+        meta::write_meta(&other, &meta::PaperMeta { journal: Some("demo-conf".into()), ..Default::default() }).unwrap();
+        std::fs::write(dir.join("notation.json"), r#"{"version":1,"entries":[{"id":"w","kind":"symbol","latex":"\\boldsymbol{w}","macro":"vw","meaning_en":"frame weight"},{"id":"t1","kind":"table","label":"tab:main","caption":"Main comparison"}]}"#).unwrap();
+        std::fs::write(dir.join("notation.tex"), "\\newcommand{\\vw}{\\boldsymbol{w}}\n").unwrap();
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap().replace("\\usepackage{amsmath,amssymb}\n", "\\usepackage{amsmath,amssymb}\n\\input{notation}\n");
+        std::fs::write(dir.join("main.tex"), main).unwrap();
+        std::fs::write(dir.join("sections/result.tex"), "\\section{Result}\n\nTable~\\ref{tab:main} shows that $\\vw$ matters.\n\n\\begin{table}\n\\caption{Main comparison.}\n\\label{tab:main}\n\\begin{tabular}{l}\nx\n\\end{tabular}\n\\end{table}\n").unwrap();
+        let checks = |d: &Path| {
+            let mut files = vec![("main.tex".to_string(), std::fs::read_to_string(d.join("main.tex")).unwrap())];
+            for f in paper::section_files(d) {
+                files.push((format!("sections/{f}"), std::fs::read_to_string(d.join("sections").join(&f)).unwrap()));
+            }
+            let n = crate::notation::load(&ws, d);
+            let mut codes: Vec<String> = check_document(Document::from_files(&files), &n, &CheckOptions::default()).issues.iter().map(|i| format!("{} {}", i.code, i.message)).collect();
+            codes.sort();
+            codes
+        };
+        let before = checks(&dir);
+        assert!(!before.iter().any(|c| c.starts_with("ref_undefined") || c.starts_with("hardcoded_reference")), "{before:?}");
+        let text = std::fs::read_to_string(dir.join("sections/result.tex")).unwrap();
+
+        assert!(retemplate(&ws, &dir, Some("demo-conf"), None).unwrap());
+        assert_eq!(meta::read_meta(&dir).journal.as_deref(), Some("demo-conf"));
+        assert_eq!(std::fs::read_to_string(dir.join("sections/result.tex")).unwrap(), text);
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        assert!(main.contains("\\usepackage{cite}") && main.contains("\\input{notation}") && main.contains("\\input{sections/result}"), "{main}");
+        assert_eq!(checks(&dir), before, "the registry's checks say the same after the change");
+        let archived: Vec<_> = std::fs::read_dir(ds::draft_dir(&dir).join(ds::ARCHIVE_DIR)).unwrap().flatten().collect();
+        assert!(archived[0].path().join("main.tex").is_file(), "the old main.tex is kept");
+        assert!(!retemplate(&ws, &dir, Some("demo-conf"), None).unwrap(), "same template: nothing to do");
+        assert!(retemplate(&ws, &dir, Some("../x"), None).is_err() && retemplate(&ws, &dir, Some("nope"), None).is_err());
+
+        // the suggester sees the template, its sections and the other paper's habit
+        let c = candidates(&ws, &dir);
+        assert_eq!(c.len(), 1);
+        assert_eq!((c[0].kind.as_str(), c[0].uses), ("conference", 1));
+        assert_eq!(c[0].sections, ["Introduction", "Method", "Results"]);
+        assert_eq!(venue::suggest(&Session::default(), &c, 3), ["demo-conf"]);
+
+        // back to the plain article
+        assert!(retemplate(&ws, &dir, None, None).unwrap());
+        assert_eq!(meta::read_meta(&dir).journal, None);
+        assert_eq!(checks(&dir), before);
+        let _ = std::fs::remove_dir_all(&ws);
+    }
 
     #[test]
     fn model_picker_maps_to_refs() {

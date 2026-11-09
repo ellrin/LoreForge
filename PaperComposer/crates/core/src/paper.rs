@@ -479,15 +479,19 @@ pub fn create_paper_with(papers: &Path, name: &str, outline: Option<&[OutlineSec
         None => BLANK_SECTIONS.iter().map(|(f, t)| Section { file: format!("{f}.tex"), title: (*t).into(), paragraphs: vec![], tail: String::new() }).collect(),
     };
     let inputs: String = sections.iter().map(|s| format!("\\input{{sections/{}}}\n", s.file.trim_end_matches(".tex"))).collect();
-    let main = format!(
-        "\\documentclass{{article}}\n\\usepackage{{amsmath,amssymb}}\n\n\\title{{{name}}}\n\\author{{}}\n\n\\begin{{document}}\n\\maketitle\n\n\\begin{{abstract}}\n\\end{{abstract}}\n\n{inputs}\n\\bibliographystyle{{plain}}\n\\bibliography{{refs}}\n\\end{{document}}\n"
-    );
-    write_atomic(&dir.join("main.tex"), &main).map_err(io)?;
+    write_atomic(&dir.join("main.tex"), &blank_main(name, &inputs)).map_err(io)?;
     for s in &sections {
         write_atomic(&dir.join("sections").join(&s.file), &render_section(s)).map_err(io)?;
     }
     write_atomic(&dir.join("refs.bib"), "").map_err(io)?;
     Ok(dir)
+}
+
+/// The plain article: the neutral template a paper has until one is chosen.
+fn blank_main(title: &str, inputs: &str) -> String {
+    format!(
+        "\\documentclass{{article}}\n\\usepackage{{amsmath,amssymb}}\n\n\\title{{{title}}}\n\\author{{}}\n\n\\begin{{document}}\n\\maketitle\n\n\\begin{{abstract}}\n\\end{{abstract}}\n\n{inputs}\n\\bibliographystyle{{plain}}\n\\bibliography{{refs}}\n\\end{{document}}\n"
+    )
 }
 
 /// Add `\usepackage{x}` for each package main.tex does not load yet, right
@@ -562,6 +566,184 @@ pub fn create_paper_from_template_with(papers: &Path, name: &str, template: &Pat
 
     write_split(&dir, &split)?;
     Ok(dir)
+}
+
+/// Packages a paper's content may need, carried over when the template
+/// changes. Class-specific packages are left behind on purpose.
+const CONTENT_PACKAGES: &[&str] = &[
+    "amsmath", "amssymb", "amsthm", "mathtools", "bm", "graphicx", "booktabs", "multirow", "makecell", "array", "tabularx",
+    "threeparttable", "siunitx", "xcolor", "subcaption", "algorithm", "algorithmic", "algpseudocode", "url",
+];
+
+/// Put an existing paper on another template (`None` = the plain article).
+/// main.tex is rebuilt around the paper's own section files, which are not
+/// touched; the title, abstract and keywords move over, and so do the
+/// preamble's `\input` of files in the paper (notation.tex, macros), its
+/// one-line macro definitions, its content packages and its own .bib files.
+/// The template's support files are copied without overwriting anything.
+/// Authors are left to the caller (they come from the profile). Returns the
+/// old main.tex.
+pub fn apply_template(paper: &Path, template: Option<&Path>) -> Result<String, String> {
+    let io = |e: std::io::Error| e.to_string();
+    let old = read_tex(&paper.join("main.tex")).ok_or("這篇論文沒有 main.tex")?;
+    let inputs: String = section_files(paper).iter().map(|f| format!("\\input{{sections/{}}}\n", f.trim_end_matches(".tex"))).collect();
+    let mut main = match template {
+        None => blank_main("", &inputs),
+        Some(t) => {
+            let sample = read_tex(&t.join("sample.tex")).ok_or("模板裡沒有 sample.tex")?;
+            let mut split = split_sample(&sample, false).ok_or("sample.tex 裡找不到 \\begin{document}")?;
+            replace_section_pieces(&mut split, vec![Piece::Text(inputs)]);
+            let doc: String = split.pieces.iter().map(|p| if let Piece::Text(t) = p { t.as_str() } else { "" }).collect();
+            copy_new(t, paper).map_err(io)?;
+            if let Ok(rd) = std::fs::read_dir(t.join("bst")) {
+                for e in rd.flatten() {
+                    if e.path().extension().is_some_and(|x| x == "bst") && !paper.join(e.file_name()).exists() {
+                        std::fs::copy(e.path(), paper.join(e.file_name())).map_err(io)?;
+                    }
+                }
+            }
+            format!("{}\\begin{{document}}{}\\end{{document}}\n", split.preamble, doc.trim_end().to_string() + "\n")
+        }
+    };
+    // the title block
+    let had = crate::front::fields(&old);
+    for f in ["title", "abstract", "keywords"] {
+        if let Some(v) = had.iter().find(|x| x.field == f && x.index == 0).filter(|x| !x.value.trim().is_empty()) {
+            if let Ok(m) = crate::front::set_field(&main, f, 0, &v.value) {
+                main = m;
+            }
+        }
+    }
+    // the preamble's own lines
+    let old_pre = &old[..old.find("\\begin{document}").unwrap_or(old.len())];
+    let at = main.find("\\begin{document}").ok_or("新的 main.tex 沒有 \\begin{document}")?;
+    let new_macros = extract_macros(&main[..at]);
+    let mut carried = String::new();
+    let mut packages: Vec<String> = Vec::new();
+    for line in old_pre.lines() {
+        let code = strip_comment(line).trim();
+        if let Some(arg) = ["\\input{", "\\include{"].iter().find_map(|c| code.strip_prefix(c)).and_then(|r| r.split('}').next()) {
+            let file = if arg.ends_with(".tex") { arg.to_string() } else { format!("{arg}.tex") };
+            if safe_rel(&file) && paper.join(&file).is_file() && !main[..at].contains(code) {
+                carried += code;
+                carried.push('\n');
+            }
+        } else if let Some(rest) = code.strip_prefix("\\usepackage") {
+            let rest = rest.trim_start();
+            let rest = if rest.starts_with('[') { rest.find(']').map_or("", |e| &rest[e + 1..]) } else { rest };
+            if let Some((names, _)) = braced(rest.trim_start()) {
+                packages.extend(names.split(',').map(str::trim).filter(|n| CONTENT_PACKAGES.contains(n)).map(String::from));
+            }
+        } else if ["\\newcommand", "\\renewcommand", "\\providecommand", "\\DeclareMathOperator"].iter().any(|c| code.starts_with(c)) && balanced_line(code) {
+            let defs = extract_macros(code);
+            if !defs.is_empty() && defs.keys().all(|k| !new_macros.contains_key(k)) {
+                carried += code;
+                carried.push('\n');
+            }
+        }
+    }
+    let mut pre = main[..at].to_string();
+    packages.dedup();
+    let loaded = loaded_packages(&pre);
+    for p in packages.iter().filter(|p| !loaded.contains(p)) {
+        pre += &format!("\\usepackage{{{p}}}\n");
+    }
+    pre += &carried;
+    main = pre + &main[at..];
+    // the paper's own .bib files (an empty one is a placeholder)
+    let own: Vec<String> = bibliography_names(&old).into_iter().filter(|b| std::fs::metadata(paper.join(format!("{b}.bib"))).is_ok_and(|m| m.len() > 0)).collect();
+    main = add_bibliographies(&main, &own);
+    write_atomic(&paper.join("main.tex"), &main).map_err(io)?;
+    Ok(old)
+}
+
+fn balanced_line(s: &str) -> bool {
+    let mut depth = 0i32;
+    let mut esc = false;
+    for c in s.chars() {
+        match c {
+            _ if esc => esc = false,
+            '\\' => esc = true,
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ => {}
+        }
+        if depth < 0 {
+            return false;
+        }
+    }
+    depth == 0
+}
+
+/// Package names a preamble loads.
+fn loaded_packages(pre: &str) -> Vec<String> {
+    pre.lines()
+        .map(strip_comment)
+        .filter_map(|l| {
+            let i = l.find("\\usepackage")?;
+            let rest = l[i + "\\usepackage".len()..].trim_start();
+            let rest = if rest.starts_with('[') { &rest[rest.find(']')? + 1..] } else { rest };
+            braced(rest.trim_start()).map(|(names, _)| names.to_string())
+        })
+        .flat_map(|names| names.split(',').map(|n| n.trim().to_string()).collect::<Vec<_>>())
+        .collect()
+}
+
+/// The names in `\bibliography{a,b}`.
+fn bibliography_names(main: &str) -> Vec<String> {
+    main.lines()
+        .map(strip_comment)
+        .filter_map(|l| braced(&l[l.find("\\bibliography{")? + "\\bibliography".len()..]).map(|(n, _)| n.to_string()))
+        .flat_map(|n| n.split(',').map(|x| x.trim().trim_end_matches(".bib").to_string()).collect::<Vec<_>>())
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+/// Add names to main.tex's `\bibliography{…}` (nothing when it has none).
+fn add_bibliographies(main: &str, names: &[String]) -> String {
+    let have = bibliography_names(main);
+    let missing: Vec<&String> = names.iter().filter(|n| !have.contains(n)).collect();
+    if missing.is_empty() {
+        return main.to_string();
+    }
+    let mut done = false;
+    let lines: Vec<String> = main
+        .lines()
+        .map(|l| {
+            let code = strip_comment(l);
+            if let (false, Some(i)) = (done, code.find("\\bibliography{")) {
+                if let Some(j) = code[i..].find('}') {
+                    done = true;
+                    let add: String = missing.iter().map(|n| format!(",{n}")).collect();
+                    let head = &l[..i + j];
+                    let head = if head.ends_with('{') { format!("{head}{}", &add[1..]) } else { format!("{head}{add}") };
+                    return format!("{head}{}", &l[i + j..]);
+                }
+            }
+            l.to_string()
+        })
+        .collect();
+    lines.join("\n") + if main.ends_with('\n') { "\n" } else { "" }
+}
+
+/// Like `copy_support`, but never over a file that is already there.
+fn copy_new(from: &Path, to: &Path) -> std::io::Result<()> {
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let name = e.file_name();
+        let n = name.to_string_lossy();
+        if n.starts_with('.') || TEMPLATE_SKIP.contains(&n.as_ref()) {
+            continue;
+        }
+        let dst = to.join(&name);
+        if e.file_type()?.is_dir() {
+            std::fs::create_dir_all(&dst)?;
+            copy_new(&e.path(), &dst)?;
+        } else if !dst.exists() {
+            std::fs::copy(e.path(), dst)?;
+        }
+    }
+    Ok(())
 }
 
 /// One file per section under `sections/`, and main.tex around them.
@@ -1079,7 +1261,12 @@ fn open_tail(body: &str) -> usize {
 /// Put the outline's sections where the sample's body sections were; the
 /// sample's later sections (appendices) go too, its back matter stays.
 fn replace_sections(split: &mut Sample, outline: &[OutlineSection]) {
-    let ours = outline.iter().map(|s| Piece::Section { title: tex_text(&s.title), tail: String::new(), body: s.paragraphs().join("\n\n") + "\n" });
+    let ours = outline.iter().map(|s| Piece::Section { title: tex_text(&s.title), tail: String::new(), body: s.paragraphs().join("\n\n") + "\n" }).collect();
+    replace_section_pieces(split, ours);
+}
+
+/// `ours` where the sample's body sections were; its later sections go too.
+fn replace_section_pieces(split: &mut Sample, ours: Vec<Piece>) {
     let pieces = std::mem::take(&mut split.pieces);
     let Some(first) = pieces.iter().position(|p| matches!(p, Piece::Section { .. })) else {
         split.pieces = pieces;
@@ -1421,6 +1608,64 @@ The loss is\n\\begin{equation}\nL = a. b = c.\n\\end{equation}\nwhere $a$ is sma
         assert_eq!(s[1].paragraphs, ["How.", "\\subsection{Cohort}", "Who."]);
         let blank = create_paper_with(&root.join("papers"), "B", Some(&outline)).unwrap();
         assert_eq!(load_paper(&blank).len(), 2);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn changing_the_template_keeps_every_written_word() {
+        let root = std::env::temp_dir().join(format!("pc-retpl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // a paper started on the plain article, written in, with the
+        // author's notation and a table that needs booktabs
+        let dir = create_paper(&root.join("papers"), "P").unwrap();
+        std::fs::write(dir.join("notation.tex"), "% generated by lore-notation\n\\newcommand{\\vw}{\\mathbf{w}}\n").unwrap();
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        let main = main.replace("\\usepackage{amsmath,amssymb}\n", "\\usepackage{amsmath,amssymb}\n\\usepackage{booktabs}\n\\usepackage{fancyhdr}\n\\input{notation}\n\\newcommand{\\R}{\\mathbb{R}}\n");
+        let main = crate::front::set_field(&main, "title", 0, "Weighted masks for uncertain labels").unwrap();
+        let main = crate::front::set_field(&main, "abstract", 0, "We weight, not drop.").unwrap();
+        std::fs::write(dir.join("main.tex"), main).unwrap();
+        std::fs::write(dir.join("sections/method.tex"), "\\section{Method}\n\nThe weight $\\vw \\in \\R$ follows Eq.~\\eqref{eq:w}.\n\n\\begin{table}[t]\n\\centering\n\\begin{tabular}{ll}\\toprule\na & b\\\\\\bottomrule\n\\end{tabular}\n\\caption{Results.}\\label{tab:res}\n\\end{table}\n").unwrap();
+        std::fs::write(dir.join("refs.bib"), "@article{kim2019,\n  title = {T},\n  year = {2019}\n}\n").unwrap();
+        let read_secs = |d: &Path| section_files(d).iter().map(|f| (f.clone(), std::fs::read_to_string(d.join("sections").join(f)).unwrap())).collect::<Vec<_>>();
+        let before = read_secs(&dir);
+        assert_eq!(before.len(), 6);
+
+        let tpl = root.join("publishers/demo");
+        std::fs::create_dir_all(&tpl).unwrap();
+        std::fs::write(tpl.join("demo.cls"), "% class").unwrap();
+        std::fs::write(tpl.join("refs.bib"), "@article{sample1, title={Sample}}\n").unwrap();
+        std::fs::write(tpl.join("sample-refs.bib"), "@article{sample2, title={Sample}}\n").unwrap();
+        std::fs::write(
+            tpl.join("sample.tex"),
+            "\\documentclass{demo}\n\\usepackage{cite}\n\\begin{document}\n\\title{Sample title}\\maketitle\n\\begin{abstract}Sample abstract.\\end{abstract}\n\\begin{keywords}k\\end{keywords}\n\
+\\section{Introduction}\nSample intro.\n\n\\section{Methods}\nSample methods.\n\n\\bibliographystyle{demo}\n\\bibliography{sample-refs}\n\\appendix\n\\section{Extra}\nSample appendix.\n\\end{document}\n",
+        )
+        .unwrap();
+        let old = apply_template(&dir, Some(&tpl)).unwrap();
+        assert!(old.starts_with("\\documentclass{article}"));
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        assert!(main.starts_with("\\documentclass{demo}\n\\usepackage{cite}\n"), "{main}");
+        assert!(!main.contains("Sample"), "the sample's text is gone: {main}");
+        assert!(main.contains("\\title{Weighted masks for uncertain labels}") && main.contains("We weight, not drop."), "{main}");
+        let inputs: String = before.iter().map(|(f, _)| format!("\\input{{sections/{}}}\n", f.trim_end_matches(".tex"))).collect();
+        assert!(main.contains(&inputs), "the paper's sections, in order: {main}");
+        assert!(main.contains("\\usepackage{amsmath}\n\\usepackage{amssymb}\n\\usepackage{booktabs}\n\\input{notation}\n\\newcommand{\\R}{\\mathbb{R}}\n\\begin{document}"), "{main}");
+        assert!(!main.contains("fancyhdr"), "layout packages stay with the old template");
+        assert!(main.contains("\\bibliography{sample-refs,refs}"), "{main}");
+        assert!(main.find("\\bibliography").unwrap() < main.find("\\appendix").unwrap());
+        assert_eq!(read_secs(&dir), before, "section files are not touched");
+        assert!(std::fs::read_to_string(dir.join("notation.tex")).unwrap().starts_with("% generated by lore-notation"));
+        assert!(std::fs::read_to_string(dir.join("refs.bib")).unwrap().contains("kim2019"), "the paper's .bib is never overwritten");
+        assert!(dir.join("demo.cls").exists() && dir.join("sample-refs.bib").exists());
+        assert_eq!(paper_macros(&dir).get("\\R").map(String::as_str), Some("\\mathbb{R}"));
+
+        // and back to the plain article
+        apply_template(&dir, None).unwrap();
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        assert!(main.starts_with("\\documentclass{article}") && main.contains(&inputs) && main.contains("\\input{notation}"), "{main}");
+        assert!(main.contains("\\title{Weighted masks for uncertain labels}") && main.contains("We weight, not drop."));
+        assert!(main.contains("\\bibliography{refs,") && !main.contains("\\usepackage{cite}"), "{main}");
+        assert_eq!(read_secs(&dir), before);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

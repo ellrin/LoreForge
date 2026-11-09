@@ -1,7 +1,7 @@
 //! What a paper is about, beside its LaTeX: `paper.toml` in the paper folder
 //! holds the key value (the one thing the whole paper argues) and the
-//! authors picked from the profile. Every paper has a key value; a paper
-//! cannot be created without one.
+//! authors picked from the profile. Every paper needs a key value; a new
+//! paper gets it in 討論草稿 step 1 (or the editor's key value bar).
 
 use crate::authors::PaperAuthor;
 use serde::{Deserialize, Serialize};
@@ -19,8 +19,9 @@ pub struct PaperMeta {
     /// Profile authors (ids into authors.csv). Left out of paper.toml when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authors: Vec<PaperAuthor>,
-    /// The template under `publishers/` the paper was written with, when an
-    /// import recognised it (its class and style files match byte for byte).
+    /// The template under `publishers/` the paper is on: chosen when it was
+    /// made or in 討論草稿's 版型 step, or recognised by an import (its class
+    /// and style files match byte for byte). None = the plain article.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub journal: Option<String>,
 }

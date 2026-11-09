@@ -19,6 +19,9 @@ pub const DRAFT_DIR: &str = "draft";
 const SESSION_FILE: &str = "session.json";
 const TRANSCRIPT_FILE: &str = "transcript.jsonl";
 pub const RECORDS_DIR: &str = "records";
+/// Earlier sessions (重新開始) and snapshots taken before a rewind or a
+/// template change, one folder per time stamp.
+pub const ARCHIVE_DIR: &str = "archive";
 pub const SECTIONS: [&str; 5] = ["Introduction", "Methods", "Results", "Discussion", "Conclusion"];
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -37,6 +40,8 @@ pub enum Phase {
     Claims,
     /// 5 order and narrative check
     Review,
+    /// ★ the journal template (the paper starts on the plain article)
+    Template,
     /// 6 paragraph-level outline
     Outline,
     /// 7 drafting
@@ -468,7 +473,12 @@ pub fn draft_dir(paper: &Path) -> PathBuf {
 
 impl Session {
     pub fn load(paper: &Path) -> Result<Session, String> {
-        match std::fs::read_to_string(draft_dir(paper).join(SESSION_FILE)) {
+        Session::load_file(&draft_dir(paper).join(SESSION_FILE))
+    }
+
+    /// A session file anywhere (an archived one); missing = a new session.
+    pub fn load_file(path: &Path) -> Result<Session, String> {
+        match std::fs::read_to_string(path) {
             Ok(s) => serde_json::from_str(&s).map_err(|e| format!("draft/session.json: {e}")),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Session::default()),
             Err(e) => Err(e.to_string()),
@@ -628,13 +638,156 @@ impl Session {
     pub fn interview_finished(&self) -> bool {
         !self.groups.is_empty() && self.groups.iter().all(|g| matches!(g.status, GroupStatus::Done | GroupStatus::Skipped))
     }
+
+    /// 從這步重來: back to `to`, clearing what every later step produced.
+    /// `to`'s own results stay (its inputs too: the uploaded records, the
+    /// hook, the lens). Groups opened by the reviewer pass (`a…`) and by
+    /// 修訂 (`v…`) belong to those steps and go with them. Returns the groups
+    /// whose conversation is gone (their turns are dropped from the transcript).
+    pub fn rewind(&mut self, to: Phase) -> RewindGone {
+        let before: Vec<String> = self.groups.iter().map(|g| g.id.clone()).collect();
+        if to < Phase::Record {
+            self.record_summary.clear();
+            self.experiments.clear();
+            self.timeline.clear();
+            self.thoughts.clear();
+            self.tables.clear();
+            self.conflicts.clear();
+        }
+        if to < Phase::Plan {
+            self.groups.clear();
+            self.items.clear();
+        }
+        // Later steps' own groups.
+        self.revisions.clear();
+        let audit_too = to < Phase::Audit;
+        self.groups.retain(|g| !(g.id.starts_with('v') || audit_too && g.id.starts_with('a')));
+        let keep: Vec<String> = self.groups.iter().map(|g| g.id.clone()).collect();
+        self.items.retain(|i| keep.contains(&i.group));
+        let all_turns = to < Phase::Interview;
+        if all_turns {
+            for g in &mut self.groups {
+                g.status = GroupStatus::Pending;
+                g.turns = 0;
+                g.summary = GroupSummary::default();
+            }
+            for i in &mut self.items {
+                *i = Item { id: i.id.clone(), group: i.group.clone(), label: i.label.clone(), role: i.role.clone(), ..Default::default() };
+            }
+        }
+        if all_turns || self.active.as_ref().is_some_and(|a| !keep.contains(a)) {
+            self.active = None;
+        }
+        if to < Phase::Claims {
+            self.claims.clear();
+        }
+        if to < Phase::Review {
+            self.review = None;
+        }
+        if to < Phase::Outline {
+            self.outline.clear();
+        }
+        if to < Phase::Draft {
+            self.drafts.clear();
+        }
+        if to < Phase::Audit {
+            self.audit.clear();
+        }
+        self.phase = to;
+        let groups = before.into_iter().filter(|g| all_turns || !keep.contains(g)).collect();
+        RewindGone { all_turns, groups }
+    }
+}
+
+/// What a rewind removed from the conversation.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RewindGone {
+    /// Every turn (back before the interview).
+    pub all_turns: bool,
+    /// Groups whose turns go.
+    pub groups: Vec<String>,
+}
+
+/// A new, empty `draft/archive/<UTC time stamp>/` folder.
+pub fn new_archive(paper: &Path) -> Result<PathBuf, String> {
+    let base = draft_dir(paper).join(ARCHIVE_DIR);
+    let stamp = stamp(std::time::SystemTime::now());
+    let mut dir = base.join(&stamp);
+    let mut k = 2;
+    while dir.exists() {
+        dir = base.join(format!("{stamp}-{k}"));
+        k += 1;
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// `20261109-153012` (UTC) for a moment.
+pub fn stamp(t: std::time::SystemTime) -> String {
+    let secs = t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // civil date from days since 1970-01-01 (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+/// 重新開始: move everything in `draft/` (session, transcript, records)
+/// into a new archive folder; the next load starts a fresh session.
+pub fn restart(paper: &Path) -> Result<PathBuf, String> {
+    let dir = draft_dir(paper);
+    let to = new_archive(paper)?;
+    for e in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        if e.file_name() == ARCHIVE_DIR {
+            continue;
+        }
+        std::fs::rename(e.path(), to.join(e.file_name())).map_err(|e| e.to_string())?;
+    }
+    Ok(to)
+}
+
+/// 從這步重來 on disk: a copy of the session and transcript goes to a new
+/// archive folder first, then the session is rewound and the transcript
+/// keeps only the conversation that is still there.
+pub fn rewind(paper: &Path, to: Phase) -> Result<Session, String> {
+    let mut sess = Session::load(paper)?;
+    let snap = new_archive(paper)?;
+    for f in [SESSION_FILE, TRANSCRIPT_FILE] {
+        let from = draft_dir(paper).join(f);
+        if from.is_file() {
+            std::fs::copy(&from, snap.join(f)).map_err(|e| e.to_string())?;
+        }
+    }
+    let gone = sess.rewind(to);
+    if gone.all_turns || !gone.groups.is_empty() {
+        let kept: Vec<Turn> = if gone.all_turns { vec![] } else { read_turns(paper).into_iter().filter(|t| !gone.groups.contains(&t.group)).collect() };
+        let mut text = String::new();
+        for t in &kept {
+            text += &serde_json::to_string(t).map_err(|e| e.to_string())?;
+            text.push('\n');
+        }
+        let path = draft_dir(paper).join(TRANSCRIPT_FILE);
+        if path.exists() {
+            std::fs::write(&path, text).map_err(|e| e.to_string())?;
+        }
+    }
+    sess.save(paper)?;
+    Ok(sess)
 }
 
 /// Append one turn to the transcript; its number is the line count + 1.
 pub fn append_turn(paper: &Path, group: &str, who: Who, text: &str, options: Vec<String>) -> Result<Turn, String> {
     let dir = draft_dir(paper);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let n = read_turns(paper).len() + 1;
+    // after the max, not the count: a rewind may have dropped turns in between
+    let n = read_turns(paper).iter().map(|t| t.n).max().unwrap_or(0) + 1;
     let t = Turn { n, group: group.into(), who, text: text.into(), options };
     let mut line = serde_json::to_string(&t).map_err(|e| e.to_string())?;
     line.push('\n');
@@ -828,6 +981,123 @@ max_turns_per_group = 2
         assert_eq!(t.n, 2);
         assert_eq!(read_turns(&p).len(), 2);
         let _ = std::fs::remove_dir_all(&p);
+    }
+
+    #[test]
+    fn an_old_session_file_still_loads() {
+        // written before the template step existed: no "template" phase, and
+        // fields added since then are missing
+        let p = tmp("old");
+        std::fs::create_dir_all(p.join(DRAFT_DIR)).unwrap();
+        let old = r#"{"lens":"default","phase":"outline","hook":{"reader_accepts":"a","twist":"b"},"records":[],"experiments":[],"timeline":[],
+"groups":[{"id":"g1","section":"Methods","title":"Loss","status":"done","turns":2}],"items":[],"claims":[{"id":"c1","zh":"主張"}],
+"outline":[{"section":"Methods","paras":[{"id":"p1","zh":"段落"}]}],"drafts":[],"audit":[]}"#;
+        std::fs::write(p.join(DRAFT_DIR).join(SESSION_FILE), old).unwrap();
+        let s = Session::load(&p).unwrap();
+        assert_eq!(s.phase, Phase::Outline);
+        assert!(s.phase > Phase::Template && Phase::Template > Phase::Review);
+        assert_eq!(s.groups[0].status, GroupStatus::Done);
+        assert_eq!(s.outline[0].paras[0].id, "p1");
+        assert!(s.revisions.is_empty() && s.tables.is_empty());
+        assert_eq!(serde_json::to_string(&Phase::Template).unwrap(), "\"template\"");
+        let _ = std::fs::remove_dir_all(&p);
+    }
+
+    /// A session that went all the way to the reviewer pass, with a
+    /// reviewer group and a revision group.
+    fn finished(p: &Path) -> Session {
+        let l = lens();
+        let mut s = planned();
+        s.hook.twist = "twist".into();
+        s.records.push(RecordFile { file: "log.md".into(), bytes: 3 });
+        s.experiments.push(Experiment { id: "E1".into(), title: "run".into(), ..Default::default() });
+        s.apply(&l, "g1", &[], vec![ItemUpdate { id: Some("i1".into()), mode: Some("comply".into()), stance: Some("常規".into()), ..Default::default() }]);
+        s.start_group("g1");
+        s.groups[0].turns = 1;
+        s.groups[0].summary.explain = "e".into();
+        s.close_group("g1", false);
+        append_turn(p, "g1", Who::Ai, "為什麼？", vec![]).unwrap();
+        append_turn(p, "g1", Who::Me, "因為", vec![]).unwrap();
+        s.claims.push(Claim { id: "c1".into(), zh: "主張".into(), ..Default::default() });
+        s.review = Some(Review::default());
+        s.outline.push(OutlineSection { section: "Methods".into(), paras: vec![OutlinePara { id: "p1".into(), zh: "x".into(), ..Default::default() }], ..Default::default() });
+        s.drafts.push(DraftSection { section: "Methods".into(), paras: vec![], new_symbols: vec![] });
+        s.audit.push(Finding { id: "f1".into(), kind: "generic".into(), why: "w".into(), ..Default::default() });
+        for gid in ["af1", "v1"] {
+            s.groups.push(Group { id: gid.into(), section: "Results".into(), title: gid.into(), ..Default::default() });
+            s.items.push(Item { id: s.new_item_id(), group: gid.into(), label: gid.into(), ..Default::default() });
+            append_turn(p, gid, Who::Ai, "追問", vec![]).unwrap();
+        }
+        s.revisions.push(super::super::revise::Revision { id: "v1".into(), request: "r".into(), group: "v1".into(), ..Default::default() });
+        s.phase = Phase::Audit;
+        s.save(p).unwrap();
+        s
+    }
+
+    #[test]
+    fn rewinding_clears_only_later_steps() {
+        let p = tmp("rw");
+        let s = finished(&p);
+        // back to 6 大綱: the outline stays, drafts, the reviewer pass and 修訂 go
+        let r = rewind(&p, Phase::Outline).unwrap();
+        assert_eq!(r.phase, Phase::Outline);
+        assert_eq!(r.outline, s.outline);
+        assert!(r.drafts.is_empty() && r.audit.is_empty() && r.revisions.is_empty());
+        assert_eq!(r.claims, s.claims);
+        assert_eq!(r.groups.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(), ["g1"]);
+        assert!(r.items.iter().all(|i| i.group == "g1"));
+        assert_eq!(read_turns(&p).iter().map(|t| t.group.as_str()).collect::<Vec<_>>(), ["g1", "g1"]);
+        assert_eq!(Session::load(&p).unwrap(), r);
+        // a snapshot of what was there before
+        let snaps: Vec<_> = std::fs::read_dir(p.join(DRAFT_DIR).join(ARCHIVE_DIR)).unwrap().flatten().collect();
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(Session::load_file(&snaps[0].path().join(SESSION_FILE)).unwrap(), s);
+        // the next turn is numbered after the ones kept (never a number still in use)
+        assert_eq!(append_turn(&p, "g1", Who::Ai, "再問", vec![]).unwrap().n, 3);
+
+        // back to 3 題組: the plan stays, the conversation goes
+        let r = rewind(&p, Phase::Plan).unwrap();
+        assert_eq!(r.groups.len(), 1);
+        assert_eq!(r.groups[0].status, GroupStatus::Pending);
+        assert_eq!((r.groups[0].turns, r.groups[0].summary.clone()), (0, GroupSummary::default()));
+        assert_eq!(r.items.iter().map(|i| (i.label.as_str(), i.mode.is_none(), i.stance.is_empty())).collect::<Vec<_>>(), [("BCE", true, true), ("fuzzy weight", true, true)]);
+        assert!(r.claims.is_empty() && r.review.is_none() && r.outline.is_empty());
+        assert!(read_turns(&p).is_empty());
+        assert_eq!(r.experiments, s.experiments, "step 2 is before the target");
+
+        // back to 1 主題: the hook and the uploaded records stay, the rest goes
+        let r = rewind(&p, Phase::Topic).unwrap();
+        assert_eq!(r.hook, s.hook);
+        assert_eq!(r.records, s.records);
+        assert!(r.experiments.is_empty() && r.groups.is_empty() && r.items.is_empty());
+        let _ = std::fs::remove_dir_all(&p);
+    }
+
+    #[test]
+    fn restarting_archives_the_whole_session() {
+        let p = tmp("rs");
+        let s = finished(&p);
+        save_record(&p, "log.md", b"run 1").unwrap();
+        let to = restart(&p).unwrap();
+        assert!(to.starts_with(p.join(DRAFT_DIR).join(ARCHIVE_DIR)));
+        assert_eq!(Session::load(&p).unwrap(), Session::default());
+        assert!(read_turns(&p).is_empty());
+        assert_eq!(Session::load_file(&to.join(SESSION_FILE)).unwrap(), s);
+        assert!(to.join(TRANSCRIPT_FILE).is_file() && to.join(RECORDS_DIR).join("log.md").is_file());
+        // a second restart keeps the first archive
+        Session::default().save(&p).unwrap();
+        let again = restart(&p).unwrap();
+        assert_ne!(again, to);
+        assert!(to.join(SESSION_FILE).is_file());
+        let _ = std::fs::remove_dir_all(&p);
+    }
+
+    #[test]
+    fn time_stamps_are_utc_dates() {
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_794_227_012);
+        assert_eq!(stamp(t), "20261109-122332");
+        assert_eq!(stamp(std::time::UNIX_EPOCH + std::time::Duration::from_secs(951_868_799)), "20000229-235959");
+        assert_eq!(stamp(std::time::UNIX_EPOCH), "19700101-000000");
     }
 
     #[test]

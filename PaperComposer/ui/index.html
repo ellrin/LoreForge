@@ -17,7 +17,7 @@
     <div class="brand">PAPER<b>/</b>COMPOSER</div>
     <!-- this paper: switch, its references, export -->
     <div class="paper-bar">
-      <button class="picker" id="actFile" aria-haspopup="true" aria-label="切換或新增論文"><span data-icon="file"></span><span id="paperName">—</span><span data-icon="chevron"></span></button>
+      <button class="picker" id="actFile" aria-label="封面"><span data-icon="file"></span><span id="paperName">—</span><span data-icon="chevron"></span></button>
       <button class="ico" id="actRefs" data-icon="quote" aria-label="本篇文獻"></button>
       <button class="ico" id="actDraft" data-icon="ai" aria-label="討論草稿"></button>
       <button class="ico" id="actExport" data-icon="export" data-menu="export" aria-label="匯出"></button>
@@ -48,6 +48,9 @@
     <article class="paper" id="paper"></article>
     <div class="statusbar" id="statusbar"></div>
   </main>
+
+  <!-- start screen (home.js): over the page and side panels, under the top bar -->
+  <section class="home" id="home" aria-label="封面" hidden></section>
 
   <aside class="right" aria-label="寫作助手">
     <section class="block" data-open="true">
@@ -136,13 +139,6 @@
     <div class="dlg">
       <div class="dlg-head">
         <h2>新論文</h2>
-        <div class="tabs" id="npTabs" role="tablist">
-          <button data-step="0"><span class="c">01</span>版型</button>
-          <button data-step="1"><span class="c">02</span>作者</button>
-          <button data-step="2"><span class="c">03</span>Key value 與大綱</button>
-          <button data-step="3"><span class="c">04</span>圖表<span class="opt">選填</span></button>
-          <button data-step="4"><span class="c">05</span>文獻<span class="opt">選填</span></button>
-        </div>
         <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
       </div>
       <div class="np-body" id="npBody"></div>
@@ -156,6 +152,7 @@
       <div class="dlg-head">
         <h2>討論草稿</h2>
         <span class="count" id="dfLens"></span>
+        <button class="ghost small" id="dfRestart">重新開始</button>
         <label class="df-model" data-tip="對話問答用的模型；整理用 Sonnet，審稿固定用 Opus">問答模型
           <select id="dfModel">
             <option value="auto">自動（Haiku）</option>
@@ -330,6 +327,7 @@
 <script src="draft.js"></script>
 <script src="templates.js"></script>
 <script src="convert.js"></script>
+<script src="home.js"></script>
 <script src="app.js"></script>
 <script src="setup.js"></script>
 </body>

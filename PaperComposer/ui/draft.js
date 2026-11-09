@@ -6,10 +6,14 @@
 //               each item still lacks (decided by the server from the lens)
 //   4.5 主張    claim register: every claim once, with its home section
 //   5 校正      narrative chain and suggestions (accept / reject)
+//   ★ 版型      the journal template, up to 3 suggested; 稍後 keeps the plain
+//               article. Changing it re-lays main.tex; the sections keep every word
 //   6 大綱      paragraph-level outline, revised section by section
 //   7 草稿      drafted through the phrase bank, section by section
 //   8 審稿      reviewer pass (Opus); questions go back to the conversation
 // Everything is saved in the paper folder (draft/), so it can be resumed.
+// 重新開始 moves draft/ to draft/archive/<time>/; 從這步重來 (on a finished
+// step) clears what the later steps produced, after a copy in the archive.
 const PCDraft = (() => {
   const STEPS = [
     ["topic", "1", "主題"],
@@ -18,6 +22,7 @@ const PCDraft = (() => {
     ["interview", "4", "對話"],
     ["claims", "4.5", "主張"],
     ["review", "5", "校正"],
+    ["template", "★", "版型"],
     ["outline", "6", "大綱"],
     ["draft", "7", "草稿"],
     ["audit", "8", "審稿"],
@@ -39,8 +44,13 @@ const PCDraft = (() => {
     const d = $("#dlgDraft");
     if (!d.open) d.showModal();
     if (!D || D.name !== state.paper.name) D = { name: state.paper.name, data: null, step: null, group: null, busy: null, err: null };
+    if (!D.tableStyles) { try { D.tableStyles = await api("/api/textable/styles"); } catch { D.tableStyles = []; } }
     $("#dfModel").value = store.get("pc.draftModel", "auto");
     $("#dfModel").onchange = (e) => store.set("pc.draftModel", e.target.value);
+    $("#dfRestart").onclick = () => {
+      if (!D?.data || D.busy || !confirm("重新開始？目前的討論會移到 draft/archive/。")) return;
+      run("重新開始", async () => { const v = await call("/restart"); D.step = 0; D.group = null; D.comments = null; D.draftAnswer = null; return v; });
+    };
     await reload();
   }
 
@@ -91,9 +101,14 @@ const PCDraft = (() => {
   function refsPanel(main) {
     const refs = D.data.material?.refs ?? [];
     main.append(h(`本篇文獻（${refs.length}）`));
-    main.append(note("對話時會依標籤與你寫的用途，幫每個動機配對文獻。要加文獻請在文獻視窗貼上（一篇一篇查證、找 DOI）。"));
-    const r = row(btn("本篇文獻", () => openWindow("dlgPaperRefs"), "ghost"), btn("貼上要引用的文章…", () => openDbTab("@refs"), "ghost"), btn("重新讀取", () => reload(), "ghost"));
+    const r = row(btn("本篇文獻", () => openWindow("dlgPaperRefs"), "ghost"), btn(D.refsOpen ? "收起貼上" : "貼上要引用的文章", () => { D.refsOpen = !D.refsOpen; draw(); }, "ghost"), btn("重新讀取", () => reload(), "ghost"));
     main.append(r);
+    if (D.refsOpen) {
+      // the old new-paper wizard's 文獻 step: each paper checked and filed,
+      // the note on it kept as its purpose in this paper
+      D.refImporter ??= PCRefs.importer({ paper: () => D?.name ?? null, onDone: () => reload() });
+      main.append(D.refImporter.el);
+    }
     if (!refs.length) return;
     const ul = el("ul", "df-reflist");
     refs.forEach((x) => {
@@ -122,12 +137,21 @@ const PCDraft = (() => {
       if (i < phaseAt) b.classList.add("done");
       b.onclick = () => go(i);
       li.append(b);
+      if (i < phaseAt) {
+        const r = el("button", "df-rewind", "從這步重來");
+        r.disabled = !!D.busy;
+        r.onclick = () => {
+          if (!confirm(`回到「${label}」？之後步驟的結果會清掉（先存一份在 draft/archive/）。`)) return;
+          run("重來", async () => { const v = await call("/rewind", { phase: k }); D.step = i; return v; });
+        };
+        li.append(r);
+      }
       steps.append(li);
     });
     if (D.busy) main.append(el("div", "df-busy", `${D.busy}…（模型思考中，可以先看其他步驟）`));
     if (D.err) main.append(el("div", "df-note bad", D.err));
     const key = STEPS[D.step][0];
-    ({ topic, record, plan, interview, claims, review, outline, draft: drafting, audit, revise })[key](main, side);
+    ({ topic, record, plan, interview, claims, review, template, outline, draft: drafting, audit, revise })[key](main, side);
     $("#dlgDraft").classList.toggle("with-side", side.childElementCount > 0);
   }
 
@@ -151,9 +175,16 @@ const PCDraft = (() => {
 
   // ── 1 主題 ───────────────────────────────────────────
   function topic(main) {
-    main.append(h("Key value"));
-    const kv = D.data.key_value?.trim();
-    main.append(kv ? el("p", "df-kv", kv) : note("這篇論文還沒有 Key value：先在論文上方填好，草稿的每一步都會用到它。", "bad"));
+    const kvHead = el("div", "np-label");
+    kvHead.append(el("span", "", "Key value"));
+    const count = el("span", "np-count");
+    kvHead.append(count);
+    const kv = input(D.data.key_value, "這篇論文通篇要強調的一件事，例如：提升髖部骨折判讀的可解釋性");
+    kv.classList.add("kv");
+    const recount = () => { const [n, max, unit] = PCNew.kvLength(kv.value); count.textContent = `${n} / ${max} ${unit}`; count.classList.toggle("bad", n > max); };
+    kv.oninput = recount;
+    recount();
+    main.append(kvHead, kv);
     main.append(h("有意思的地方（假說，之後對話會再確認）"));
     const acc = input(sess().hook.reader_accepts, "同行已經承認的事實是什麼？例如：標註不確定的影像通常直接排除", "textarea");
     const tw = input(sess().hook.twist, "你加了什麼讓人意外的東西？例如：不排除，而是依品質與面積降權", "textarea");
@@ -167,7 +198,13 @@ const PCDraft = (() => {
     const levels = el("ul", "df-levels");
     lens().scale.levels.forEach((l) => levels.append(el("li", "", `${l.id} ${l.label}${l.means ? `：${l.means}` : ""}`)));
     main.append(levels);
-    main.append(row(btn("儲存，下一步", () => run("儲存", async () => { const v = await call("/topic", { reader_accepts: acc.value, twist: tw.value, lens: sel.value }, "PUT"); D.step = 1; return v; }))));
+    main.append(row(btn("儲存，下一步", () => run("儲存", async () => {
+      const v = await call("/topic", { key_value: kv.value, reader_accepts: acc.value, twist: tw.value, lens: sel.value }, "PUT");
+      if (state.paper?.name === D.name && state.paper.meta) { state.paper.meta.key_value = v.key_value; renderKeyValue(); }
+      D.step = 1;
+      return v;
+    }))));
+    setTimeout(() => { if (!kv.value) kv.focus(); });
     refsPanel(main);
   }
 
@@ -227,6 +264,17 @@ const PCDraft = (() => {
       sess().thoughts.forEach((t) => { const li = el("li"); li.append(el("span", "df-gid", t.id), document.createTextNode(` ${t.text}`)); if (t.about.length) li.append(el("span", "df-role", t.about.join(" "))); ul.append(li); });
       main.append(ul);
     }
+    main.append(h("加入圖表"));
+    D.floats ??= PCNew.floats({
+      paper: D.name,
+      sections: (state.paper?.sections ?? []).map((x) => x.title),
+      styles: D.tableStyles ?? [],
+      keyValue: D.data.key_value,
+      title: "",
+      figuresBefore: (D.data.material?.floats ?? []).filter((f) => f.kind !== "table").length,
+      onSaved: (v) => { D.data = v; D.floats = null; if (state.paper?.name) openPaper(state.paper.name); draw(); },
+    });
+    main.append(D.floats.el);
     if (sess().tables.length) {
       main.append(h("從記錄整理出的表格"));
       const secs = (state.paper?.sections ?? []).map((x) => x.title);
@@ -469,6 +517,28 @@ const PCDraft = (() => {
       card.append(row(btn("採用", () => decide(true), x.accepted === true ? "primary small" : "ghost"), btn("不採用", () => decide(false), x.accepted === false ? "primary small" : "ghost")));
       main.append(card);
     });
+  }
+
+  // ── ★ 版型 ───────────────────────────────────────────
+  async function template(main) {
+    const id = (D.drawId = (D.drawId ?? 0) + 1);
+    if (!D.tpls) {
+      try { D.tpls = await api("/api/templates"); } catch { D.tpls = []; }
+    }
+    let choice = null;
+    try { choice = await api(base() + "/templates"); } catch { choice = { current: null, suggested: [] }; }
+    if (id !== D.drawId || STEPS[D.step][0] !== "template") return;
+    const current = choice.current ?? "";
+    let picked = current;
+    const apply = btn("套用", () => run("套用版型", async () => {
+      const v = await call("/template", { template: picked || null }, "PUT");
+      if (state.paper?.name === D.name) openPaper(D.name);
+      D.step = STEPS.findIndex(([k]) => k === "outline");
+      return v;
+    }));
+    apply.disabled = !!D.busy || picked === current;
+    const later = btn("稍後", () => run("儲存", async () => { const v = await call("/template", { later: true }, "PUT"); D.step = STEPS.findIndex(([k]) => k === "outline"); return v; }), "ghost");
+    main.append(h("版型"), PCNew.templateList({ tpls: D.tpls, selected: current, suggested: choice.suggested, onPick: (v) => { picked = v; apply.disabled = !!D.busy || picked === current; } }), row(later, apply));
   }
 
   // ── 6 大綱 ───────────────────────────────────────────

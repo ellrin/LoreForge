@@ -92,8 +92,9 @@ const roleOf = (title) => ROLES.find((r) => r.toLowerCase() === title.toLowerCas
   ?? ROLES.find((r) => title.toLowerCase().startsWith(r.toLowerCase().slice(0, 5))) ?? "Any";
 const rank = (s) => ({ info: 1, warning: 2, error: 3 }[s] ?? 0);
 
-async function openPaper(name) {
+async function openPaper(name, { keepHome = false } = {}) {
   const same = state.paper?.name === name; // reopened (after a pull): keep the place
+  if (!keepHome) PCHome.close();
   try {
     const res = await api(`/api/papers/${encodeURIComponent(name)}`);
     state.paper = { name, sections: res.sections, front: res.front ?? "", back: res.back ?? "", fields: res.fields ?? [], bibliography: res.bibliography ?? [], meta: res.meta ?? { key_value: "", authors: [] } };
@@ -1051,7 +1052,8 @@ async function syncNow() {
     const r = await api("/api/git/sync", {});
     state.git = r.status;
     state.lastSync = new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false });
-    if (r.pulled && state.paper) await openPaper(state.paper.name);
+    if (r.pulled && state.paper) await openPaper(state.paper.name, { keepHome: true });
+    if (r.pulled) PCHome.refresh();
     flash(r.committed ? `已同步：${r.committed}` : "沒有新的修改");
   } catch (e) {
     flash(e.message, 8000);
@@ -1170,67 +1172,25 @@ function wireHoverMenus() {
   m.addEventListener("mouseleave", () => closeHoverMenu());
 }
 
-// Paper menu: the papers to switch to; "新論文" and "匯入" turn the menu
-// into a small form in place.
-function toggleFileMenu() {
-  const m = $("#fileMenu");
-  if (!m.hidden) { m.hidden = true; return; }
-  fileMenuList();
-  const r = $("#actFile").getBoundingClientRect();
-  m.style.top = `${r.bottom + 4}px`;
-  m.style.left = `${r.left}px`;
-  m.hidden = false;
-  keepOnScreen(m);
-}
-
-function fileMenuList() {
-  const m = $("#fileMenu");
-  m.className = "menu";
-  m.innerHTML = "";
-  const papers = state.workspace?.papers ?? [];
-  if (!papers.length) m.append(el("div", "empty", "還沒有論文"));
-  papers.forEach((name) => {
-    const b = el("button", "", name);
-    b.prepend(icon("file"));
-    b.setAttribute("aria-current", String(name === state.paper?.name));
-    b.onclick = () => { m.hidden = true; openPaper(name); };
-    m.append(b);
-  });
-  m.append(el("div", "sep"));
-  const add = el("button", "", "新論文");
-  add.prepend(icon("plus"));
-  add.onclick = () => PCNew.open();
-  const imp = el("button", "", "匯入");
-  imp.prepend(icon("upload"));
-  imp.onclick = importForm;
-  m.append(add, imp);
-  if (state.paper?.name) {
-    const next = el("button", "", "整理與文獻…");
-    next.prepend(icon("library"));
-    next.title = "這篇論文的期刊模板、檔案整理與 .bib 加入文獻庫";
-    next.onclick = () => importCard(state.paper.name);
-    const draft = el("button", "", "討論草稿…");
-    draft.prepend(icon("ai"));
-    draft.title = "用對話整理實驗與想法，產生大綱與草稿";
-    draft.onclick = () => { m.hidden = true; PCDraft.open(); };
-    m.append(next, draft);
-  }
-}
-
-// Form header inside the menu: back to the list, a title, an optional "?".
-function menuForm(title, tip) {
+// A small form in the paper menu, under `anchor` (the paper button by
+// default): back closes it, a title, an optional "?".
+function menuForm(title, tip, anchor = $("#actFile")) {
   const m = $("#fileMenu");
   m.className = "menu form";
   m.innerHTML = "";
+  const r = anchor.getBoundingClientRect();
+  m.style.top = `${r.bottom + 4}px`;
+  m.style.left = `${r.left}px`;
+  m.hidden = false;
   const head = el("div", "form-head");
-  head.append(iconButton("back", "返回", fileMenuList), el("b", "", title));
+  head.append(iconButton("back", "返回", () => { m.hidden = true; }), el("b", "", title));
   if (tip) { const h = el("button", "help", "?"); h.dataset.tip = tip; head.append(h); }
   m.append(head);
   return m;
 }
 
-function importForm() {
-  const m = menuForm("匯入論文", "現有的 LaTeX 論文：壓縮檔（.zip、.tar.gz）、單一 .tex、整個資料夾，或 arXiv 上的論文（下載作者上傳的原始檔）。每個 \\section 會成為一個可編輯的章節。匯入後會列出可以整理的檔案與可加入文獻庫的參考文獻，由你決定要不要做。");
+function importForm(anchor) {
+  const m = menuForm("匯入論文", "現有的 LaTeX 論文：壓縮檔（.zip、.tar.gz）、單一 .tex、整個資料夾，或 arXiv 上的論文（下載作者上傳的原始檔）。每個 \\section 會成為一個可編輯的章節。匯入後會列出可以整理的檔案與可加入文獻庫的參考文獻，由你決定要不要做。", anchor);
   const name = el("input", "field");
   name.placeholder = "論文名稱（可留空）";
   const kv = el("input", "field");
@@ -1260,6 +1220,27 @@ function importForm() {
   m.append(name, kv, fromPc, row, fromArxiv, arow);
   keepOnScreen(m);
   name.focus();
+}
+
+// A file already picked (start screen, 打開檔案): name and Key value, then import.
+function importFileForm(file, anchor) {
+  const m = menuForm("匯入論文", null, anchor);
+  const name = el("input", "field");
+  name.value = importName(file.name);
+  name.placeholder = "論文名稱";
+  const kv = el("input", "field");
+  kv.placeholder = "Key value（必填）：通篇要強調的一件事";
+  name.kv = kv;
+  const go = el("button", "primary small", "匯入");
+  const run = () => {
+    if (!kv.value.trim()) { flash("Key value 必填"); kv.focus(); return; }
+    uploadProject(name, name.value.trim() || importName(file.name), file);
+  };
+  go.onclick = run;
+  kv.onkeydown = (e) => { if (e.key === "Enter") run(); };
+  m.append(el("div", "form-label", file.name), name, kv, go);
+  keepOnScreen(m);
+  kv.focus();
 }
 
 async function importArxiv(input, nameInput) {
@@ -1380,9 +1361,6 @@ async function importCard(name, info, fresh = false) {
     catch (e) { flash(e.message, 6000); return; }
   }
   const m = menuForm(fresh ? "匯入完成：下一步" : "整理與文獻", "整理只動這篇論文的資料夾：圖檔改成沒有空格的名字（\\includegraphics 跟著改）、移除沒載入的 .cls，並讓 Git 略過編譯產生的 *-eps-converted-to.pdf。加入文獻庫會把論文自己的 .bib 條目複製到 refs/library.bib，已有的（同 key 或同 DOI）會略過。");
-  const r = $("#actFile").getBoundingClientRect();
-  m.style.top = `${r.bottom + 4}px`;
-  m.style.left = `${r.left}px`;
   m.classList.add("next-card");
   const line = (label, ...content) => {
     const d = el("div", "nc-row");
@@ -1692,7 +1670,7 @@ function wire() {
     closeTip();
     // a control that replaced itself (a menu turning into a form) is not "outside"
     if (!e.target.isConnected) return;
-    if (!e.target.closest("#fileMenu, #actFile")) $("#fileMenu").hidden = true;
+    if (!e.target.closest("#fileMenu, #actFile, [data-opens-menu]")) $("#fileMenu").hidden = true;
     if (!e.target.closest("#modelMenu, #cEngine")) $("#modelMenu").hidden = true;
     if (!e.target.closest("#exportPop, #actExport, #hoverMenu") && !PCExport.busy) PCExport.close();
   });
@@ -1710,7 +1688,7 @@ function wire() {
   PCNew.wire();
   wireHoverMenus();
   wireWindows();
-  $("#actFile").onclick = toggleFileMenu;
+  $("#actFile").onclick = () => PCHome.toggle();
   $("#actRefs").onclick = () => openWindow("dlgPaperRefs");
   $("#actDraft").onclick = () => PCDraft.open();
   $("#actExport").onclick = () => PCExport.run("pdf");
@@ -1754,6 +1732,7 @@ async function boot() {
   PCWrite.build();
   paintIcons();
   applyTheme();
+  PCHome.wire(); // before wire(): Esc on the start screen sees the menu still open
   wire();
   try { state.workspace = await api("/api/workspace"); } catch {}
   // Bring in work from other devices before showing anything.
@@ -1780,10 +1759,9 @@ async function boot() {
   } catch {
     flash("伺服器未啟動", 8000);
   }
-  const papers = state.workspace?.papers ?? [];
-  const last = store.get("pc.paper", null);
-  if (papers.length) await openPaper(papers.includes(last) ? last : papers[0]);
-  else render();
+  // the app opens on the start screen; a paper opens from there
+  render();
+  PCHome.show(1);
   await loadEngines();
   // setup.js loads after this file; by now it is defined.
   Setup.wire();

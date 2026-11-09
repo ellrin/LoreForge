@@ -14,6 +14,7 @@
 pub mod citecheck;
 pub mod convert;
 mod draft;
+mod home;
 mod notation;
 pub mod export;
 pub mod import;
@@ -704,7 +705,7 @@ struct NewPaper {
     /// A folder under publishers/; none = blank article.
     #[serde(default)]
     template: Option<String>,
-    /// Required: the one thing the whole paper argues.
+    /// The one thing the whole paper argues; empty = asked later.
     #[serde(default)]
     key_value: String,
     #[serde(default)]
@@ -888,7 +889,8 @@ async fn create_paper(State(s): State<Shared>, Json(b): Json<NewPaper>) -> impl 
     let Some(ws) = s.loaded.read().await.workspace.clone() else {
         return bad("no workspace");
     };
-    let key_value = match meta::check_key_value(&b.key_value) { Ok(k) => k, Err(e) => return bad(&e) };
+    // asked in 討論草稿 step 1 (or in the editor's key value bar) when left empty here
+    let key_value = if b.key_value.trim().is_empty() { String::new() } else { match meta::check_key_value(&b.key_value) { Ok(k) => k, Err(e) => return bad(&e) } };
     let people = match resolve_people(&s, &b.authors).await { Ok(p) => p, Err(e) => return bad(&e) };
     let outline = (!b.outline.is_empty()).then_some(b.outline.as_slice());
     let made = match b.template.as_deref().filter(|t| !t.is_empty()) {
@@ -900,6 +902,11 @@ async fn create_paper(State(s): State<Shared>, Json(b): Json<NewPaper>) -> impl 
     if let Err(e) = finish_paper(&dir, &key_value, b.title.as_deref(), &b.authors, people).and_then(|_| add_tables(&dir, b.template.as_deref(), &b.tables)) {
         let _ = std::fs::remove_dir_all(&dir);
         return bad(&e);
+    }
+    if let Some(t) = b.template.as_deref().filter(|t| !t.is_empty()) {
+        let mut m = meta::read_meta(&dir);
+        m.journal = Some(t.to_string());
+        let _ = meta::write_meta(&dir, &m);
     }
     Json(serde_json::json!({ "name": b.name.trim() })).into_response()
 }
@@ -2935,6 +2942,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/claude-code/login", post(claude_code_login))
         .route("/api/compose", post(compose_paragraph))
         .merge(draft::routes())
+        .merge(home::routes())
         .fallback_service(ServeDir::new(paths.ui))
         .with_state(state)
 }
