@@ -6,7 +6,10 @@ import { h, injectCSS } from '../core/util.js';
 
 injectCSS('news', `
 :where(.nw) { height: 100%; display: flex; flex-direction: column; gap: 8px; }
-:where(.nw-tabs) { display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; overflow: hidden; }
+:where(.nw-tabs) { display: flex; gap: 6px; align-items: center; }
+:where(.nw-tabs-scroll) { flex: 1; min-width: 0; display: flex; gap: 6px; align-items: center; overflow-x: auto; scrollbar-width: none; padding: 2px 4px; }
+:where(.nw-tabs-scroll)::-webkit-scrollbar { display: none; }
+:where(.nw-tabs) > *, :where(.nw-tabs-scroll) > * { flex-shrink: 0; white-space: nowrap; }
 :where(.nw-list) { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 :where(.nw-item) { cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 :where(.nw-title) { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; }
@@ -42,6 +45,10 @@ export default {
     const memBusy = () => mem && (mem.pressure >= 2 || mem.use > (cfg.maxMemUse ?? 0.85));
 
     const tabs = h('div.nw-tabs');
+    const tabScroll = h('div.nw-tabs-scroll', {
+      // 滑鼠滾輪直向捲動 → 標籤列橫向捲動
+      onwheel: e => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { tabScroll.scrollLeft += e.deltaY; e.preventDefault(); } },
+    });
     const summary = h('div.nw-summary.well.s');
     const list = h('div.nw-list');
     body.append(h('div.nw', {}, tabs, summary, list));
@@ -63,11 +70,12 @@ export default {
     }
 
     function render() {
-      tabs.replaceChildren(
+      tabScroll.replaceChildren(
         ...['*', ...cfg.keywords].map(k => h(`button.chip.mini.edit-live${tab === k ? '.on' : ''}`, {
           onclick: () => { tab = k; render(); },
-        }, h('span', {}, k === '*' ? '全部' : k))),
-        h('span', { style: { flex: 1 } }),
+        }, h('span', {}, k === '*' ? '全部' : k))));
+      tabs.replaceChildren(
+        tabScroll,
         h('button.chip.mini.edit-live', { title: '編輯關鍵字', onclick: () => { editing = !editing; render(); } }, h('span', {}, editing ? '完成' : '⚙')),
       );
 
