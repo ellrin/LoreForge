@@ -32,5 +32,9 @@ Monorepo of the author's local-first apps. Each top-level folder is its own Carg
   registry of symbols, equations, abbreviations and labels): use the registered macros,
   refer with `\ref{…}` (never a typed "Table 1"), keep `notation.tex` intact, run its
   checks on the generated text, and say in the hand-off how the change was checked.
+- Long-running work (large test runs, real-file comparisons, several build/test rounds) goes to a
+  background subagent on the same model, so the main conversation stays free for discussion; the
+  subagent gets a complete brief, never edits files the main thread is editing, and anything that
+  needs the author's decision comes back to the author instead of being decided by the subagent.
 - Example/test users: `ellrin`, then `daidai`.
 - Replies to the author in Traditional Chinese (繁體中文).
