@@ -1,0 +1,109 @@
+{
+  "widgets": {
+    "net": {
+      "type": "net",
+      "config": {}
+    },
+    "gauges": {
+      "type": "gauges",
+      "config": {}
+    },
+    "news": {
+      "type": "news",
+      "config": {}
+    },
+    "procs-mem": {
+      "type": "procs",
+      "config": {
+        "mode": "mem",
+        "rows": 5,
+        "title": "記憶體大戶",
+        "tag": "MEM"
+      }
+    },
+    "calendar": {
+      "type": "calendar",
+      "config": {
+        "title": "CALENDAR",
+        "tag": "CAL"
+      }
+    },
+    "reminders": {
+      "type": "reminders",
+      "config": {
+        "title": "TODO",
+        "tag": "TODO"
+      }
+    },
+    "launcher": {
+      "type": "launcher",
+      "config": {
+        "hideHeader": true
+      }
+    },
+    "clock": {
+      "type": "clock",
+      "config": {}
+    },
+    "alarm": {
+      "type": "alarm",
+      "config": {}
+    }
+  },
+  "positions": {
+    "net": {
+      "x": 150,
+      "y": 64,
+      "w": 420,
+      "h": 150
+    },
+    "gauges": {
+      "x": 112,
+      "y": 230,
+      "w": 420,
+      "h": 80
+    },
+    "news": {
+      "x": 84,
+      "y": 326,
+      "w": 450,
+      "h": 254
+    },
+    "procs-mem": {
+      "x": 40,
+      "y": 598,
+      "w": 450,
+      "h": 226
+    },
+    "calendar": {
+      "x": 1046,
+      "y": 64,
+      "w": 426,
+      "h": 330
+    },
+    "reminders": {
+      "x": 984,
+      "y": 410,
+      "w": 426,
+      "h": 190
+    },
+    "launcher": {
+      "x": 600,
+      "y": 250,
+      "w": 360,
+      "h": 180
+    },
+    "clock": {
+      "x": 560,
+      "y": 572,
+      "w": 820,
+      "h": 290
+    },
+    "alarm": {
+      "x": 600,
+      "y": 870,
+      "w": 520,
+      "h": 44
+    }
+  }
+}

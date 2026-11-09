@@ -2,14 +2,14 @@
 
 Shared Rust crates and web components used by the author's apps (PaperComposer,
 JELearner, KnowledgeBase, SlideComposer, NeonDeck widgets, future apps). The overall
-design is in `../docs/ecosystem-design.md` — read the section for the crate you touch.
+design is in `../private/docs/ecosystem-design.md` (author's private notes) — read the section for the crate you touch.
 
 ## Layout
 
 - `crates/<name>/` — one crate per module (`ym-llm`, `ym-secrets`, `ym-gitsync`, `ym-store`, `kb-core`,
   `ym-notation`, `ym-voice`, `ym-docsrc`, `ym-canvas`, `ym-ooxml`, `ym-math`).
   Each crate knows nothing about any app. Apps depend on them by path
-  (`../../commons/crates/<name>` from an app's `public/` workspace).
+  (`../commons/crates/<name>` from an app folder).
 - `ui/` — framework-free Web Components (no build step), one folder per component,
   each with a `demo.html` that works from `python3 -m http.server`.
 - `docs/` — per-crate design notes and data formats when they go beyond the main design doc.

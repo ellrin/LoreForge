@@ -1,9 +1,9 @@
 # KnowledgeBase
 
-本機運作的個人知識庫：一張知識卡一個 JSON 檔，記錄「我記不記得」，讓其他 App（PaperComposer、SlideComposer、JELearner、NeonDeck 小工具）查詢術語、提醒複習。設計見 `../../docs/ecosystem-design.md` §4。
+本機運作的個人知識庫：一張知識卡一個 JSON 檔，記錄「我記不記得」，讓其他 App（PaperComposer、SlideComposer、JELearner、NeonDeck 小工具）查詢術語、提醒複習。設計見 `../private/docs/ecosystem-design.md`（作者的私人筆記） §4。
 
 > 開發中（第 1 波 A1：知識庫核心）。已完成：`ym-store`（space、iCloud／git 圖片）、`kb-core`（知識卡、連結、標籤、學習狀態機、SQLite/FTS5 索引、術語掃描）、kb-server API、最小網頁介面（清單、編輯器、複習、時間軸、圖譜）。
-> 第 2 波 B2：NeonDeck 小工具（`desktoptool/desktop/widgets/knowledge.js`）、到期通知、每日 e-mail 摘要、登入自動啟動腳本。
+> 第 2 波 B2：NeonDeck 小工具（`NeonDeck/desktop/widgets/knowledge.js`）、到期通知、每日 e-mail 摘要、登入自動啟動腳本。
 > 尚未完成：Tauri 桌面 App、接上 `ym-llm`（目前起草卡片與候選術語用離線 mock）、家庭 space 的實際掛載。
 
 ## 執行
@@ -14,7 +14,7 @@
 cargo run -p kb-server
 ```
 
-開啟 <http://127.0.0.1:7700>（只監聽本機）。預設掛載旁邊的 `../private`（你的個人 space）。
+開啟 <http://127.0.0.1:7700>（只監聽本機）。預設掛載`../private/KnowledgeBase`（你的個人 space）。
 
 其他 space 或使用者：
 
@@ -91,7 +91,7 @@ CORS 只允許本機（`127.0.0.1`、`localhost`、`tauri://`、`file://`／`nul
 
 ```sh
 cargo test                       # 伺服器 API 測試（離線；SMTP 用測試內的假伺服器，不碰鑰匙圈、不跳通知）
-cd ../../commons && cargo test -p kb-core -p ym-store
+cd ../commons && cargo test -p kb-core -p ym-store
 ```
 
 開發說明：程式碼由作者與 Claude Code 一起撰寫。

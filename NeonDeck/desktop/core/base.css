@@ -1,0 +1,88 @@
+/*
+ * 結構用的基礎樣式 —— 只管「怎麼擺」，不管「長怎樣」。
+ * 美術風格全部寫在 themes/*.css，可以覆蓋這裡任何東西。
+ */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--desk-bg, transparent);   /* 預設透明：透出系統桌布與桌面圖示 */
+  color: var(--fg, #ddd);
+  font-family: var(--font, -apple-system, "PingFang TC", sans-serif);
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+input, textarea { -webkit-user-select: text; user-select: text; font: inherit; }
+button { font: inherit; cursor: pointer; }
+
+#desktop { position: fixed; inset: 0; }
+
+/* ---------- 小工具外框 ----------
+ * section.widget            定位、陰影 / 光暈（主題用 filter: drop-shadow）
+ *   .w-frame                邊框層（主題用 clip-path 切角 + 漸層背景當邊框）
+ *     .w-panel              面板本體
+ *       header.w-head       .w-tag + .w-title
+ *       .w-body             小工具內容
+ *   .w-del / .w-resize      編輯模式控制項
+ */
+.widget { position: absolute; }
+.w-frame, .w-panel { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.w-panel { flex: 1; }
+.widget.no-head .w-head { display: none; }
+.w-head { flex: none; display: flex; align-items: center; gap: 8px; }
+.w-tag:empty { display: none; }
+.w-title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.w-title:empty { display: none; }
+.w-body { flex: 1; min-height: 0; position: relative; }
+.w-error { padding: 10px; color: #ff5470; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+
+/* 編輯控制項：平常隱藏 */
+.w-del, .w-resize { display: none; }
+
+/* ---------- 編輯模式 ---------- */
+body.editing #desktop {
+  background-image:
+    linear-gradient(var(--grid-line, rgba(255,255,255,.05)) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line, rgba(255,255,255,.05)) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+body.editing .widget { cursor: move; outline: 1px dashed var(--edit-outline, rgba(0,240,255,.6)); outline-offset: 3px; }
+body.editing .widget.dragging { opacity: .85; z-index: 9999; }
+body.editing .widget .w-body { pointer-events: none; }
+body.editing .widget .w-body .edit-live { pointer-events: auto; }   /* 小工具裡標了 edit-live 的元素在編輯模式仍可點 */
+
+body.editing .w-del {
+  display: grid; place-items: center;
+  position: absolute; top: -10px; right: -10px; z-index: 10;
+  width: 22px; height: 22px; padding: 0;
+  border-radius: 50%; border: none;
+  background: #ff2a6d; color: #000; font-size: 12px; font-weight: 700;
+}
+body.editing .w-resize {
+  display: block;
+  position: absolute; right: -4px; bottom: -4px; z-index: 10;
+  width: 16px; height: 16px; cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--edit-outline, #00f0ff) 50%);
+}
+
+#edit-bar {
+  position: fixed; z-index: 10000;
+  top: 44px; left: 50%; transform: translateX(-50%);
+  display: none; align-items: center; gap: 12px;
+  padding: 8px 14px;
+  background: rgba(10, 10, 16, .92);
+  border: 1px solid var(--edit-outline, #00f0ff);
+  color: #eee; font: 12px ui-monospace, Menlo, monospace;
+}
+body.editing #edit-bar { display: flex; }
+#edit-bar .eb-title { color: var(--edit-outline, #00f0ff); font-weight: 700; letter-spacing: .1em; }
+#edit-bar .eb-hint { opacity: .6; }
+#edit-bar select, #edit-bar button {
+  background: #111; color: #eee; border: 1px solid #444; padding: 3px 8px; font: inherit;
+}
+#edit-bar button { background: var(--edit-outline, #00f0ff); color: #000; border: none; font-weight: 700; }

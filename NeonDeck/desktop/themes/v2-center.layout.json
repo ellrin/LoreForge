@@ -1,0 +1,159 @@
+{
+  "widgets": {
+    "lbl-sys": {
+      "type": "label",
+      "config": {
+        "tag": "SYS",
+        "text": "系統",
+        "hue": "#3DA5FF"
+      }
+    },
+    "gauges": {
+      "type": "gauges",
+      "config": {}
+    },
+    "net": {
+      "type": "net",
+      "config": {}
+    },
+    "procs": {
+      "type": "procs",
+      "config": {
+        "mode": "tabs",
+        "rows": 4
+      }
+    },
+    "sysinfo": {
+      "type": "sysinfo",
+      "config": {}
+    },
+    "clock": {
+      "type": "clock",
+      "config": {}
+    },
+    "alarm": {
+      "type": "alarm",
+      "config": {}
+    },
+    "lbl-cal": {
+      "type": "label",
+      "config": {
+        "tag": "CAL",
+        "text": "行程",
+        "hue": "#C04BFF"
+      }
+    },
+    "calendar": {
+      "type": "calendar",
+      "config": {
+        "title": "CALENDAR",
+        "tag": "CAL"
+      }
+    },
+    "reminders": {
+      "type": "reminders",
+      "config": {
+        "title": "TODO",
+        "tag": "TODO"
+      }
+    },
+    "lbl-news": {
+      "type": "label",
+      "config": {
+        "tag": "NEWS",
+        "text": "新聞",
+        "hue": "#FF4FD8"
+      }
+    },
+    "news": {
+      "type": "news",
+      "config": {}
+    },
+    "launcher": {
+      "type": "launcher",
+      "config": {
+        "hideHeader": true
+      }
+    }
+  },
+  "positions": {
+    "lbl-sys": {
+      "x": 40,
+      "y": 56,
+      "w": 400,
+      "h": 28
+    },
+    "gauges": {
+      "x": 40,
+      "y": 94,
+      "w": 400,
+      "h": 200
+    },
+    "net": {
+      "x": 40,
+      "y": 312,
+      "w": 400,
+      "h": 190
+    },
+    "procs": {
+      "x": 40,
+      "y": 520,
+      "w": 400,
+      "h": 300
+    },
+    "sysinfo": {
+      "x": 48,
+      "y": 832,
+      "w": 392,
+      "h": 28
+    },
+    "clock": {
+      "x": 446,
+      "y": 150,
+      "w": 620,
+      "h": 620
+    },
+    "alarm": {
+      "x": 556,
+      "y": 604,
+      "w": 400,
+      "h": 44
+    },
+    "lbl-cal": {
+      "x": 1072,
+      "y": 56,
+      "w": 400,
+      "h": 28
+    },
+    "calendar": {
+      "x": 1072,
+      "y": 94,
+      "w": 400,
+      "h": 330
+    },
+    "reminders": {
+      "x": 1072,
+      "y": 440,
+      "w": 400,
+      "h": 180
+    },
+    "lbl-news": {
+      "x": 1072,
+      "y": 636,
+      "w": 400,
+      "h": 28
+    },
+    "news": {
+      "x": 1072,
+      "y": 672,
+      "w": 400,
+      "h": 236
+    },
+    "launcher": {
+      "x": 436,
+      "y": 812,
+      "w": 640,
+      "h": 56
+    }
+  }
+}

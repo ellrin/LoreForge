@@ -2,7 +2,7 @@
 //!
 //! Priority: command line (`--space <dir>` repeatable, `--member`, `--port`) > env
 //! (`KB_SPACES` = dirs separated by `:`, `KB_MEMBER`, `PORT`) > `config.toml` in
-//! `<app dir>` > the sibling `../private` of this repo. `<app dir>` is `$KB_HOME` or
+//! `<app dir>` > `../private/KnowledgeBase` next to this app. `<app dir>` is `$KB_HOME` or
 //! `<OS config dir>/KnowledgeBase/` (also holds `reminders.toml`, see `reminders.rs`).
 //!
 //! ```toml
@@ -74,7 +74,7 @@ impl Config {
             spaces = file.spaces.iter().map(|s| ym_store::expand_home(s)).collect();
         }
         if spaces.is_empty() {
-            let private = repo_dir().join("../private");
+            let private = repo_dir().join("../private/KnowledgeBase");
             let private = private.canonicalize().unwrap_or(private);
             if private.join("space.toml").is_file() {
                 spaces.push(private);

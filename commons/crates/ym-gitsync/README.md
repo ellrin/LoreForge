@@ -5,7 +5,7 @@ library — no axum; apps add their own routes. Merged from PaperComposer and JE
 (`core/src/vcs.rs`, `server/src/git.rs`, JL `family.rs` sync).
 
 ```toml
-ym-gitsync = { path = "../../commons/crates/ym-gitsync" }
+ym-gitsync = { path = "../commons/crates/ym-gitsync" }
 ```
 
 ## Rules

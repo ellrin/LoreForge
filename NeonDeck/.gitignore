@@ -1,0 +1,4 @@
+build/
+.DS_Store
+# Personal layout (positions, launcher apps); first run uses themes/<name>.layout.json
+desktop/layout.json

@@ -1,7 +1,7 @@
 # ym-notation — 對照表（notation registry）
 
 Pure Rust, no network, no app knowledge. Shared by PaperComposer (PC) and
-SlideComposer (SC); design: `../../../docs/ecosystem-design.md` §5.
+SlideComposer (SC); design: `../../../private/docs/ecosystem-design.md` §5.
 
 - `notation.json` data model, global profile file + per-document file, import/merge
 - macro mode: `notation.tex` (`\newcommand` per entry), KaTeX macro map, insert text, Nomenclature
@@ -168,7 +168,7 @@ fills empty fields and tags them `suggested`. This crate never calls a model.
 
 ### PaperComposer (wave 2, B1)
 
-Server (`pc-core` / `pc-server`), by path dependency `../../commons/crates/ym-notation`:
+Server (`pc-core` / `pc-server`), by path dependency `../commons/crates/ym-notation`:
 
 | route | does |
 |---|---|

@@ -328,7 +328,7 @@ pc-ref-notes = "claude:haiku"       # 或 local:qwen3.5-9b-q8、claude-api:sonne
 ```
 crates/core         資料庫讀取與驗證、句型檢索、段落檢查、生成提示詞與輸出驗證（不需模型）
 crates/server       本機伺服器（只監聽 127.0.0.1），桌面版與瀏覽器模式共用；tasks.toml 為模型任務
-../../commons       共用模組（ym-llm、ym-gitsync），以相對路徑引用
+../commons       共用模組（ym-llm、ym-gitsync），以相對路徑引用
 apps/desktop        Tauri 桌面殼：啟動伺服器並開啟視窗
 ui/                 介面（HTML / CSS / JS）
 workspace-template/ 私人工作區範本與示範資料（沒有指定工作區時使用）
@@ -391,10 +391,10 @@ scripts/            Git hooks
 ## 防止洩漏個人資料
 
 ```sh
-sh scripts/install-hooks.sh
+sh ../scripts/install-hooks.sh
 ```
 
-安裝 commit 前的金鑰掃描（需要 [gitleaks](https://github.com/gitleaks/gitleaks)）。
+安裝 LoreForge 的 commit 前檢查：擋下 `private/` 底下的檔案、私人字詞、過大的檔案，並在有安裝 [gitleaks](https://github.com/gitleaks/gitleaks) 時掃描金鑰。
 
 ## 開發說明
 

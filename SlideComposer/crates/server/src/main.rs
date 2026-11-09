@@ -18,7 +18,7 @@ async fn main() {
         }
     }
     let repo = sc_server::repo_dir();
-    let ws = sc_core::Workspace::from_env(&repo.join("../private"));
+    let ws = sc_core::Workspace::from_env(&repo.join("../private/SlideComposer"));
     let web = repo.join("web");
     eprintln!("SlideComposer workspace: {} · decks: {}", ws.root.display(), ws.decks.display());
     let shared = sc_server::state(ws, web);

@@ -1,6 +1,6 @@
 //! API tests on a synthetic deck (ym-ooxml's test fixture), offline.
 
-#[path = "../../../../../commons/crates/ym-ooxml/tests/common/mod.rs"]
+#[path = "../../../../commons/crates/ym-ooxml/tests/common/mod.rs"]
 mod common;
 
 use axum::body::Body;

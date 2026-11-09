@@ -1,8 +1,8 @@
 # commons
 
-各個 App（PaperComposer、JELearner、KnowledgeBase、SlideComposer、NeonDeck 小工具，以及之後的新 App）共用的 Rust 模組與網頁元件。每個模組都不知道任何 App 的存在，App 以路徑依賴引用（從 App 的 `public/` 工作區：`../../commons/crates/<name>`）。
+各個 App（PaperComposer、JELearner、KnowledgeBase、SlideComposer、NeonDeck 小工具，以及之後的新 App）共用的 Rust 模組與網頁元件。每個模組都不知道任何 App 的存在，App 以路徑依賴引用（從 App 的 `public/` 工作區：`../commons/crates/<name>`）。
 
-整體設計見 `../docs/ecosystem-design.md`。
+整體設計見 `../private/docs/ecosystem-design.md`（作者的私人筆記）。
 
 ## 模組
 
@@ -25,7 +25,7 @@
 ```sh
 cargo test                 # 全部，離線
 cargo test -p <crate>      # 單一模組
-sh scripts/install-hooks.sh   # 安裝 commit 前的金鑰掃描（需要 gitleaks）
+sh ../scripts/install-hooks.sh   # 安裝 LoreForge 的 commit 前檢查（見根目錄 README）
 ```
 
 ## 開發說明

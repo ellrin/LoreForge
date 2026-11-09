@@ -1,0 +1,7 @@
+#!/bin/sh
+# Runs the user's global commit-msg hook too (core.hooksPath points here for this repo).
+g=$(git config --global core.hooksPath 2>/dev/null)
+g=${g:-}
+case "$g" in "~/"*) g="$HOME/${g#\~/}";; esac
+if [ -n "$g" ] && [ -x "$g/commit-msg" ]; then exec "$g/commit-msg" "$@"; fi
+exit 0

@@ -1,29 +1,29 @@
 # KnowledgeBase — notes for Claude Code
 
 Personal knowledge base, Rust, local-first, later a Mac app (Tauri). Same structure and
-habits as PaperComposer / JELearner. Design: `../../docs/ecosystem-design.md` §3 and §4.
+habits as PaperComposer / JELearner. Design: `../private/docs/ecosystem-design.md` (author's private notes) §3 and §4.
 
 ## Commands
 
 ```sh
 cargo test                              # kb-server API tests, offline
-cargo run -p kb-server                  # http://127.0.0.1:7700, mounts ../private
+cargo run -p kb-server                  # http://127.0.0.1:7700, mounts ../private/KnowledgeBase
 cargo run -p kb-server -- --space <dir> --member ellrin --port 7700
-cd ../../commons && cargo test -p kb-core -p ym-store
+cd ../commons && cargo test -p kb-core -p ym-store
 ```
 
 `cargo test` (here and for the two commons crates) must pass before every commit.
 
 ## Layout
 
-- `../../commons/crates/ym-store`: spaces (`space.toml`, personal / household, members),
+- `../commons/crates/ym-store`: spaces (`space.toml`, personal / household, members),
   `progress/<member>/`, content-addressed assets (iCloud Drive folder or git folder),
   `free_path` / `copy_missing` / `write_atomic`.
-- `../../commons/crates/kb-core`: nodes, kinds/apps registry, tags, learning state machine,
+- `../commons/crates/kb-core`: nodes, kinds/apps registry, tags, learning state machine,
   SQLite + FTS5 index (rusqlite 0.32, bundled — it shares libsqlite3-sys 0.30 with sqlx 0.8),
   term scanner, `CardAssistant` (LLM trait, mock), `KnowledgeBase` façade.
 - `crates/server` (`kb-server`): axum on 127.0.0.1:7700; `api.rs` handlers (plain fns over
-  `Shared`, can become Tauri commands), `config.rs` (args > env > config.toml > `../private`),
+  `Shared`, can become Tauri commands), `config.rs` (args > env > config.toml > `../private/KnowledgeBase`),
   `reminders.rs` (settings/state in `<app dir>` = `$KB_HOME` or `<config dir>/KnowledgeBase`,
   stats, notification slots + osascript fallback via an injected `CommandRunner`, the minute
   scheduler), `digest.rs` (daily e-mail, lettre + rustls). SMTP password: keychain through
@@ -34,7 +34,7 @@ cd ../../commons && cargo test -p kb-core -p ym-store
   (copied from PaperComposer). Graph (`graph.js`): Obsidian-style canvas view, Barnes–Hut force
   layout, global / local (`#/graph/<id>`), filters, playback; data from `/api/graph?full=true&missing=true`.
 - `workspace-template/`: starting layout of a personal space.
-- NeonDeck widget: `../../desktoptool/desktop/widgets/knowledge.js` (not in this repo).
+- NeonDeck widget: `../NeonDeck/desktop/widgets/knowledge.js`.
 - Next: `apps/desktop` (Tauri shell).
 
 ## Decisions
@@ -65,7 +65,7 @@ cd ../../commons && cargo test -p kb-core -p ym-store
 ## Rules
 
 - Never commit keys, tokens, personal data, real user paths or the user's e-mail. Nothing
-  personal goes into this repo; personal cards live in `../private`.
+  personal goes into this repo; personal cards live in `../private/KnowledgeBase`.
 - Example and test users: `ellrin`, then `daidai`. Never invent names that look like real people.
 - Household spaces are only ever created in temp dirs by tests; the real one will live in the
   JELearner shared repo (`knowledge/`).

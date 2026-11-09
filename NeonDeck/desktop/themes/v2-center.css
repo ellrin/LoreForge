@@ -1,0 +1,241 @@
+@import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700;800&family=Orbitron:wght@500;700;800;900&display=swap');
+/* ==========================================================================
+ * V2 · 時間置中
+ * 黃 = 時間 / 快速啟動，紫 = 行程 / 新聞，藍 = 系統。
+ * 層次：背景（透明 + 光暈 + 透視地板）→ 浮起的切角面板 → 凹下的控制項 → 亮起的開啟狀態
+ * 只用靜態效果；唯一的動畫是鬧鐘響鈴。
+ * ========================================================================== */
+:root {
+  --y: #FFE600; --y2: #FFC300;
+  --p: #C04BFF; --p2: #9D3BFF; --pk: #FF4FD8;
+  --b: #3D8BFF; --c: #2DE2FF; --i: #5B6CFF; --i2: #4A62E0;
+  --fg: #f3eeff;
+  --dim-fg: rgba(228, 218, 255, .68);
+  --ink: #07040e;
+  --desk-bg: transparent;
+  --edit-outline: var(--y);
+  --grid-line: rgba(255, 230, 0, .07);
+  --font: 'Exo 2', 'PingFang TC', sans-serif;
+  --mono: Orbitron, 'Exo 2', 'PingFang TC', sans-serif;
+  --net-chart: bars;
+  --cut: 18px;
+}
+
+body {
+  font-size: 13px;
+  background:
+    radial-gradient(circle 520px at 50% 47%, rgba(255, 214, 10, .08), transparent 70%),
+    radial-gradient(ellipse 1100px 500px at 50% 112%, rgba(192, 75, 255, .40), transparent 70%),
+    radial-gradient(ellipse 600px 400px at 0% 0%, rgba(45, 140, 255, .14), transparent 70%),
+    transparent;
+}
+/* 透視網格地板 */
+#desktop::before {
+  content: ""; position: absolute; z-index: -1; pointer-events: none;
+  left: -300px; right: -300px; bottom: -120px; height: 420px;
+  transform: perspective(380px) rotateX(62deg); transform-origin: 50% 100%;
+  background:
+    linear-gradient(rgba(214, 92, 255, .5) 1px, transparent 1px) 0 0 / 100% 40px,
+    linear-gradient(90deg, rgba(214, 92, 255, .5) 1px, transparent 1px) 0 0 / 60px 100%;
+  -webkit-mask-image: linear-gradient(transparent, #000 70%);
+}
+/* 全畫面掃描線 */
+#desktop::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, .02) 0 1px, transparent 1px 3px);
+}
+
+/* ---------- 色調分組 ---------- */
+.widget { --h: var(--b); color: var(--fg); }
+.w-net { --h: var(--c); }
+.w-gauges { --h: var(--b); }
+.w-procs, .w-sysinfo { --h: var(--i2); }
+.w-calendar { --h: var(--p); }
+.w-reminders { --h: var(--p2); }
+.w-news { --h: var(--pk); }
+.w-clock, .w-alarm, .w-launcher { --h: var(--y); }
+
+/* ---------- 浮起的切角面板 ---------- */
+.widget {
+  filter: drop-shadow(0 22px 24px rgba(0, 0, 0, .85)) drop-shadow(0 0 14px color-mix(in srgb, var(--h) 50%, transparent));
+}
+.w-frame {
+  padding: 1.5px;
+  background: linear-gradient(150deg, var(--h), color-mix(in srgb, var(--h) 35%, #000) 60%, var(--h));
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+}
+.w-panel {
+  position: relative;
+  padding: 14px 18px;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 3px),
+    linear-gradient(165deg, color-mix(in srgb, var(--h) 26%, #150a2c) 0%, #0b0617 55%, #06030c 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18);
+  clip-path: polygon(calc(var(--cut) - 1px) 0, 100% 0, 100% calc(100% - var(--cut) + 1px), calc(100% - var(--cut) + 1px) 100%, 0 100%, 0 calc(var(--cut) - 1px));
+}
+/* 右上角警示斜紋 */
+.w-panel::before {
+  content: ""; position: absolute; right: 14px; top: 10px; width: 46px; height: 8px;
+  background: repeating-linear-gradient(-45deg, var(--h) 0 4px, transparent 4px 8px); opacity: .85;
+}
+.w-head { margin-bottom: 10px; padding-right: 56px; }
+.w-title { font-family: var(--mono); font-weight: 700; font-size: 12.5px; letter-spacing: .12em; }
+.w-tag { display: none; }
+
+/* 不浮起、直接放在背景上的：時鐘、鬧鐘、快速啟動、分組標題、系統資訊 */
+.w-clock, .w-alarm, .w-launcher, .w-label, .w-sysinfo { filter: none; }
+:is(.w-clock, .w-alarm, .w-launcher, .w-label, .w-sysinfo) :is(.w-frame, .w-panel) {
+  padding: 0; background: none; clip-path: none; box-shadow: none;
+}
+:is(.w-clock, .w-alarm, .w-launcher, .w-label, .w-sysinfo) .w-panel::before { display: none; }
+body.editing .widget { outline-offset: 2px; }
+
+/* ---------- 通用元件 ---------- */
+.num { font-family: var(--mono); font-weight: 700; color: var(--h); text-shadow: 0 0 14px color-mix(in srgb, var(--h) 60%, transparent); }
+.unit, .s { font-size: 11px; color: var(--dim-fg); }
+.hl { color: var(--y); }
+.danger { color: #FF6BD6; }
+[data-level=warn] .num, .num[data-level=warn] { color: var(--y2); }
+[data-level=danger] .num, .num[data-level=danger] { color: #FF4F7A; }
+
+.well {
+  background: rgba(0, 0, 0, .5); border-radius: 4px;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, .85), inset 0 0 0 1px color-mix(in srgb, var(--h) 25%, transparent);
+}
+.chip, .btn {
+  border: none; cursor: pointer; font-family: var(--font); font-weight: 700; letter-spacing: .04em;
+  padding: 6px 16px; color: var(--h);
+  clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+  background: rgba(0, 0, 0, .5);
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, .85), inset 0 0 0 1px color-mix(in srgb, var(--h) 30%, transparent);
+}
+.chip.mini { padding: 2px 12px; font-size: 11px; }
+.chip.on, .btn.primary, .chip:hover, .btn:hover {
+  background: var(--h); color: var(--ink);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--h) 70%, transparent), inset 0 1px 0 rgba(255, 255, 255, .5);
+}
+.chip.off { opacity: .55; }
+.btn.ghost { background: none; box-shadow: none; color: var(--dim-fg); }
+input[type=text], input[type=time] {
+  font: inherit; font-size: 12px; color: var(--fg); padding: 6px 10px; outline: none; border: none; color-scheme: dark;
+  background: rgba(0, 0, 0, .5); border-radius: 4px;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, .85), inset 0 0 0 1px color-mix(in srgb, var(--h) 30%, transparent);
+}
+input:focus { box-shadow: inset 0 2px 8px rgba(0, 0, 0, .85), inset 0 0 0 1px var(--h), 0 0 10px color-mix(in srgb, var(--h) 50%, transparent); }
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--h) 50%, transparent); }
+
+/* 浮層（新增鬧鐘、響鈴） */
+.panel-pop {
+  --h: var(--y);
+  color: var(--fg);
+  background: linear-gradient(165deg, #2a2108, #0b0617 60%);
+  border: 1.5px solid var(--y);
+  box-shadow: 0 24px 40px rgba(0, 0, 0, .8), 0 0 24px rgba(255, 230, 0, .4);
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+}
+.al-ring-time { font-family: var(--mono); font-weight: 900; font-size: 64px; color: var(--y); text-shadow: 0 0 24px rgba(255, 230, 0, .7); }
+.alerting { animation: v2-alert .5s steps(2) infinite; }
+@keyframes v2-alert { 50% { border-color: var(--pk); box-shadow: 0 0 50px var(--pk); } }
+
+/* ---------- 分組標題 ---------- */
+.lb { font-family: var(--mono); color: var(--h); }
+.lb-tag { padding: 1px 6px; background: var(--h); color: var(--ink); font-size: 10px; }
+.lb-text { font-weight: 700; font-size: 13px; letter-spacing: .2em; text-shadow: 0 0 12px color-mix(in srgb, var(--h) 70%, transparent); }
+.lb::after { content: ""; flex: 1; height: 2px; background: linear-gradient(90deg, var(--h), transparent); }
+
+/* ---------- 時鐘：刻度環 + 故障字 ---------- */
+.w-clock .ck-rings { display: block; }
+.r-outer { stroke: rgba(192, 75, 255, .35); stroke-width: 1; stroke-dasharray: 2 8; }
+.r-ticks { stroke: rgba(61, 165, 255, .55); stroke-width: 10; }
+.r-hours { stroke: #3DA5FF; stroke-width: 18; }
+.r-track { stroke: rgba(255, 230, 0, .14); stroke-width: 5; }
+.r-sec { stroke: var(--y); stroke-width: 5; filter: drop-shadow(0 0 8px var(--y)); }
+.r-inner { stroke: rgba(192, 75, 255, .6); stroke-width: 1.5; }
+.r-cross { stroke: var(--p); stroke-width: 2; }
+.ck-stack { align-items: center; gap: 12px; }
+.ck-zone { order: 1; font-family: var(--mono); font-size: 11px; letter-spacing: .5em; color: var(--p); }
+.ck-zone-b, .ck-bottom { display: none; }
+.ck-time { order: 2; }
+.ck-dates { order: 3; }
+.ck-hm {
+  font-family: var(--mono); font-weight: 900; font-size: 24cqw; letter-spacing: -.02em; color: var(--y);
+  text-shadow: -4px 0 0 #2DA8FF, 4px 0 0 var(--p), 0 0 40px rgba(255, 230, 0, .55);
+}
+.ck-hm::before, .ck-hm::after { content: attr(data-text); position: absolute; top: 0; text-shadow: none; pointer-events: none; }
+.ck-hm::before { left: 8px; color: #2DE2FF; clip-path: inset(50% 0 44% 0); opacity: .6; }
+.ck-hm::after { left: -6px; color: #D35CFF; clip-path: inset(77% 0 18% 0); opacity: .55; }
+.ck-chip {
+  font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: .12em; color: var(--ink); padding: 5px 20px;
+  clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+}
+.ck-day { order: 1; background: var(--y); }
+.ck-wd { order: 2; background: var(--p); padding: 5px 16px; }
+.ck-sec-a { order: 3; font-family: var(--mono); font-weight: 700; font-size: 26px; color: var(--y); text-shadow: 0 0 14px rgba(255, 230, 0, .6); }
+
+/* ---------- 鬧鐘膠囊（置中在時鐘下方） ---------- */
+.w-alarm .al { justify-content: center; }
+.al-chip { font-size: 12px; }
+
+/* ---------- 儀表：環形 ---------- */
+.gg-key { display: none; }
+.gg-track { stroke: color-mix(in srgb, var(--h) 18%, transparent); stroke-width: 8; }
+.gg-arc { stroke-width: 8; }
+.gg-dots { stroke: color-mix(in srgb, var(--h) 50%, transparent); stroke-width: 1; }
+.gg-cpu { --g: var(--i); } .gg-mem { --g: var(--b); } .gg-ssd { --g: var(--c); }
+.gg-arc { stroke: var(--g); filter: drop-shadow(0 0 6px var(--g)); }
+.gg-val { font-size: 17px; color: color-mix(in srgb, var(--g) 50%, #fff); text-shadow: 0 0 10px var(--g); }
+.gg-sub { font-size: 10px; color: var(--dim-fg); }
+.gg-lbl { font-weight: 700; font-size: 12px; }
+
+/* ---------- 網速 ---------- */
+.nt-down { font-size: 32px; }
+.nt-up { font-size: 19px; color: #9DF0FF; }
+.nt-chart { padding: 6px; }
+.arrow { font-size: 10px; color: var(--dim-fg); }
+
+/* ---------- 程序排行 ---------- */
+.pr-rank { font-size: 10.5px; color: color-mix(in srgb, var(--h) 40%, #fff); }
+.pr-bar i { background: color-mix(in srgb, var(--h) 60%, #fff); }
+.pr-row { font-size: 12px; border-radius: 4px; }
+.pr-row:hover { background: color-mix(in srgb, var(--h) 18%, transparent); }
+.pr-row.sel {
+  background: color-mix(in srgb, var(--h) 45%, #0b0617);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, .6), 0 0 0 1px color-mix(in srgb, var(--h) 60%, #fff), 0 0 16px color-mix(in srgb, var(--h) 60%, transparent);
+}
+.pr-row.sel .pr-rank, .pr-row.sel .pr-val { color: var(--y); }
+.pr-detail { color: rgba(235, 230, 255, .85); }
+.pr-acts .chip { --h: var(--y); }
+
+/* ---------- 行事曆 ---------- */
+.cal-nav .mid { font-family: var(--mono); font-weight: 700; font-size: 15px; color: var(--h); }
+.cal-grid { font-size: 12px; }
+.cal-grid .day.weekend { color: #E3A6FF; }
+.cal-grid .day:hover { background: color-mix(in srgb, var(--h) 18%, transparent); }
+.cal-grid .day.today { background: var(--h); color: var(--ink); font-weight: 800; box-shadow: 0 0 14px var(--h); }
+.cal-grid .day.selected:not(.today) { outline: 1px solid var(--h); outline-offset: -1px; }
+.cal-list { padding: 8px 10px; background: rgba(0, 0, 0, .45); border-radius: 4px; box-shadow: inset 0 2px 8px rgba(0, 0, 0, .85); }
+
+/* ---------- 待辦 ---------- */
+.check { border: 1.5px solid var(--list-color, var(--h)); background: transparent; border-radius: 2px; }
+.check:hover { background: color-mix(in srgb, var(--h) 40%, transparent); }
+
+/* ---------- 新聞 ---------- */
+.nw-kw { font-family: var(--mono); font-size: 10px; color: var(--h); }
+.nw-title { font-size: 12.5px; }
+.nw-item { padding: 4px 6px; border-radius: 4px; }
+.nw-item:hover { background: color-mix(in srgb, var(--h) 16%, transparent); }
+.nw-summary { padding: 4px 8px; }
+
+/* ---------- 快速啟動：斜切文字按鈕 ---------- */
+.w-launcher .ln { display: flex; justify-content: center; gap: 10px; overflow: visible; }
+.ln-item {
+  flex-direction: row; padding: 11px 18px; color: var(--y);
+  background: rgba(0, 0, 0, .55);
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, .85), inset 0 0 0 1px rgba(255, 230, 0, .3);
+  clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+}
+.ln-item img, .ln-item .ph { display: none; }
+.ln-item .n { font-family: var(--font); font-weight: 800; font-size: 12.5px; letter-spacing: .08em; text-transform: uppercase; }
+.ln-item:hover, .ln-item:first-child { background: var(--y); color: var(--ink); box-shadow: 0 0 18px rgba(255, 230, 0, .7); }
+.ln-add .n::before { content: "＋ "; }

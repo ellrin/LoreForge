@@ -1,0 +1,46 @@
+#!/bin/sh
+# LoreForge pre-commit guard. Enable: sh scripts/install-hooks.sh
+#  1. Nothing under private/ may be committed (personal and household data live in their own repos).
+#  2. Added lines must not contain words from private/deny-words.txt (one regex per line,
+#     case-insensitive, whole words). The list itself stays private.
+#  3. No file over 5 MB.
+#  4. Secret scan with gitleaks when it is installed.
+fail=0
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+bad=$(git diff --cached --name-only | grep -E '^private/' || true)
+if [ -n "$bad" ]; then
+  echo "pre-commit: files under private/ must never be committed here:" >&2
+  echo "$bad" | sed 's/^/  /' >&2
+  fail=1
+fi
+
+deny="$(git rev-parse --show-toplevel)/private/deny-words.txt"
+if [ -f "$deny" ]; then
+  pat=$(grep -vE '^\s*(#|$)' "$deny" | paste -sd'|' -)
+  if [ -n "$pat" ]; then
+    hits=$(git diff --cached -U0 --no-color | grep -E '^\+[^+]' | grep -inwE "$pat" || true)
+    if [ -n "$hits" ]; then
+      echo "pre-commit: staged lines contain private words (private/deny-words.txt):" >&2
+      echo "$hits" | cut -c1-160 | sed 's/^/  /' >&2
+      fail=1
+    fi
+  fi
+fi
+
+for f in $staged; do
+  [ -f "$f" ] || continue
+  size=$(wc -c < "$f")
+  if [ "$size" -gt 5242880 ]; then
+    echo "pre-commit: $f is larger than 5 MB" >&2
+    fail=1
+  fi
+done
+
+[ $fail -eq 0 ] || exit 1
+
+if command -v gitleaks >/dev/null 2>&1; then
+  exec gitleaks git --staged --redact --no-banner
+fi
+echo "pre-commit: gitleaks not installed; secret scan skipped (brew install gitleaks)." >&2
+exit 0

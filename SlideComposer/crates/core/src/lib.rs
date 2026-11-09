@@ -1,7 +1,7 @@
 //! sc-core: SlideComposer's workspace and deck folders.
 //!
 //! ```text
-//! <workspace>/                    SLIDECOMPOSER_WORKSPACE (default ../private)
+//! <workspace>/                    SLIDECOMPOSER_WORKSPACE (default ../private/SlideComposer)
 //! ├── styles/<id>/style.toml      style packs (+ template.pptx)
 //! └── decks/<name>/               SLIDECOMPOSER_DECKS overrides this folder
 //!     ├── deck.json               the canvas model (source of truth)
@@ -55,7 +55,7 @@ impl Workspace {
         Workspace { root, decks }
     }
 
-    /// `SLIDECOMPOSER_WORKSPACE` (default `<repo>/../private`), `SLIDECOMPOSER_DECKS`.
+    /// `SLIDECOMPOSER_WORKSPACE` (default `<repo>/../private/SlideComposer`), `SLIDECOMPOSER_DECKS`.
     pub fn from_env(default_root: &Path) -> Self {
         let root = std::env::var("SLIDECOMPOSER_WORKSPACE")
             .map(PathBuf::from)

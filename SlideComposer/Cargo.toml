@@ -8,9 +8,9 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-ym-canvas = { path = "../../commons/crates/ym-canvas" }
-ym-ooxml = { path = "../../commons/crates/ym-ooxml" }
-ym-math = { path = "../../commons/crates/ym-math" }
+ym-canvas = { path = "../commons/crates/ym-canvas" }
+ym-ooxml = { path = "../commons/crates/ym-ooxml" }
+ym-math = { path = "../commons/crates/ym-math" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

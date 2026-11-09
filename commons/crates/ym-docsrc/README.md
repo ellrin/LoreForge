@@ -6,7 +6,7 @@ equations, captions, references and metadata. SlideComposer uses the page region
 crops; PaperComposer's book/learning pipeline and the term/notation scanners use the text.
 
 ```toml
-ym-docsrc = { path = "../../commons/crates/ym-docsrc" }
+ym-docsrc = { path = "../commons/crates/ym-docsrc" }
 ```
 
 ## API

@@ -7,7 +7,7 @@
 #
 # 額外參數會原樣傳給 kb-server，例如：
 #   scripts/install-launchd.sh -- --space ~/Documents/KnowledgeBase/private --member ellrin
-# 沒給參數時，kb-server 照平常的順序找 space（config.toml > 旁邊的 ../private）。
+# 沒給參數時，kb-server 照平常的順序找 space（config.toml > ../private/KnowledgeBase）。
 #
 # 執行檔複製到 ~/Library/Application Support/KnowledgeBase/bin/kb-server，
 # 之後重新編譯不會換掉它（鑰匙圈的存取權限綁在執行檔上），要更新就再跑一次這個腳本。

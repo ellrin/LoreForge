@@ -5,7 +5,7 @@ or a model: they ask the router for a **task**'s provider, and the provider answ
 `LlmRequest`.
 
 ```toml
-ym-llm = { path = "../../commons/crates/ym-llm" }   # default feature: zhtw (OpenCC)
+ym-llm = { path = "../commons/crates/ym-llm" }   # default feature: zhtw (OpenCC)
 ```
 
 ## API overview

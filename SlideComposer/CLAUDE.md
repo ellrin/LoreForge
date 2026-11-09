@@ -1,16 +1,16 @@
 # SlideComposer — notes for Claude Code
 
 Task-driven slide editor, Rust, local-first, later a Mac app (Tauri). Same structure and
-habits as PaperComposer / JELearner / KnowledgeBase. Design: `../../docs/ecosystem-design.md` §7.
+habits as PaperComposer / JELearner / KnowledgeBase. Design: `../private/docs/ecosystem-design.md` (author's private notes) §7.
 
 ## Commands
 
 ```sh
 cargo test                                         # sc-core + sc-server, offline (synthetic decks)
-cargo run -p sc-server                             # http://127.0.0.1:7880, workspace ../private
+cargo run -p sc-server                             # http://127.0.0.1:7880, workspace ../private/SlideComposer
 SLIDECOMPOSER_DECKS=/tmp/decks cargo run --release -p sc-server
-cd ../../commons && cargo test -p ym-canvas        # the canvas core
-YM_DECKS="a.pptx:b.pptx" YM_STYLE_DIR=../SlideComposer/private/styles/my-style \
+cd ../commons && cargo test -p ym-canvas        # the canvas core
+YM_DECKS="a.pptx:b.pptx" YM_STYLE_DIR=../private/SlideComposer/styles/my-style \
   cargo run --release -p ym-canvas --example deck_roundtrip   # real decks: unedited export identical?
 ```
 
@@ -21,7 +21,7 @@ when working on ym-canvas in parallel with other agents.
 
 ## Layout
 
-- `../../commons/crates/ym-canvas`: app-agnostic scene model, style rules, ops/undo,
+- `../commons/crates/ym-canvas`: app-agnostic scene model, style rules, ops/undo,
   geometry, reveal generator, components, PPTX ↔ canvas (`pptx_in`, `pptx_out`).
 - `crates/core` (`sc-core`): `Workspace` (styles/, decks/), `Session` (open deck: editor,
   source package, layout backdrops, LaTeX cache), export PPTX/PDF, `layout_titles`.

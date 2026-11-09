@@ -6,7 +6,7 @@ so an app that just stores a secret (KnowledgeBase's SMTP password) stays light.
 `ym_llm::secrets` re-exports this crate unchanged.
 
 ```toml
-ym-secrets = { path = "../../commons/crates/ym-secrets" }
+ym-secrets = { path = "../commons/crates/ym-secrets" }
 ```
 
 | Item | What |

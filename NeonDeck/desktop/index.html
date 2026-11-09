@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>NeonDeck</title>
+  <link rel="stylesheet" href="core/base.css">
+  <link rel="stylesheet" id="theme-css" href="">
+</head>
+<body>
+  <div id="desktop"></div>
+
+  <!-- 編輯模式工具列 -->
+  <div id="edit-bar">
+    <span class="eb-title">EDIT MODE</span>
+    <span class="eb-hint">拖曳移動 · 右下角縮放 · ✕ 移除 · Esc 結束</span>
+    <select id="eb-add"><option value="">＋ 新增小工具</option></select>
+    <select id="eb-theme"></select>
+    <button id="eb-done">完成</button>
+  </div>
+
+  <script type="module" src="core/deck.js"></script>
+</body>
+</html>
