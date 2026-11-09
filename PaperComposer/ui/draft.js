@@ -73,6 +73,36 @@ const PCDraft = (() => {
     return m.kind;
   }
 
+  // ── references ───────────────────────────────────────
+  const refOf = (key) => D.data.material?.refs.find((r) => r.key === key);
+  function openDoi(doi) { api("/api/open-link", { doi }).catch((e) => flash(e.message)); }
+  /** A reference as a chip: key, short title, DOI link when there is one. */
+  function refChip(key) {
+    const r = refOf(key);
+    const c = el("span", "df-ref");
+    c.append(el("b", "", key));
+    if (r?.title) c.append(el("span", "", ` ${r.title.length > 60 ? r.title.slice(0, 58) + "…" : r.title}${r.year ? ` (${r.year})` : ""}`));
+    if (r?.doi) { const a = el("button", "df-doi", "DOI"); a.title = `https://doi.org/${r.doi}`; a.onclick = () => openDoi(r.doi); c.append(a); }
+    return c;
+  }
+  function refsPanel(main) {
+    const refs = D.data.material?.refs ?? [];
+    main.append(h(`本篇文獻（${refs.length}）`));
+    main.append(note("對話時會依標籤與你寫的用途，幫每個動機配對文獻。要加文獻請在文獻視窗貼上（一篇一篇查證、找 DOI）。"));
+    const r = row(btn("本篇文獻", () => openWindow("dlgPaperRefs"), "ghost"), btn("貼上要引用的文章…", () => openDbTab("@refs"), "ghost"), btn("重新讀取", () => reload(), "ghost"));
+    main.append(r);
+    if (!refs.length) return;
+    const ul = el("ul", "df-reflist");
+    refs.forEach((x) => {
+      const li = el("li");
+      li.append(refChip(x.key));
+      const meta = [x.tags.join("、"), x.purpose].filter(Boolean).join("　");
+      if (meta) li.append(el("div", "df-note", meta));
+      ul.append(li);
+    });
+    main.append(ul);
+  }
+
   // ── frame ────────────────────────────────────────────
   function draw() {
     if (!D) return;
@@ -135,12 +165,13 @@ const PCDraft = (() => {
     lens().scale.levels.forEach((l) => levels.append(el("li", "", `${l.id} ${l.label}${l.means ? `：${l.means}` : ""}`)));
     main.append(levels);
     main.append(row(btn("儲存，下一步", () => run("儲存", async () => { const v = await call("/topic", { reader_accepts: acc.value, twist: tw.value, lens: sel.value }, "PUT"); D.step = 1; return v; }))));
+    refsPanel(main);
   }
 
   // ── 2 實驗記錄 ───────────────────────────────────────
   function record(main) {
     main.append(h("上傳實驗記錄"));
-    main.append(note("接受 .md .txt .csv .tsv .json .log 與 PDF；Excel、Word 請另存成 CSV 或純文字。記錄裡的順序（日期、版本、run 編號）越完整，越能問出你當時的想法。"));
+    main.append(note("接受 .md .txt .csv .tsv .json .log 與 PDF；Excel、Word 請另存成 CSV 或純文字。記錄裡的順序（日期、版本、run 編號）越完整，越能問出你當時的想法；你在記錄裡寫下的想法，會在問答時當作選項給你。論文裡已有的表格、圖與文獻會自動帶入，不用重貼。整理由 Opus 負責。"));
     const file = el("input");
     file.type = "file"; file.multiple = true;
     file.onchange = () => run("上傳", async () => {
@@ -180,6 +211,45 @@ const PCDraft = (() => {
         t.append(tr);
       });
       main.append(t);
+    }
+    if (sess().conflicts.length) {
+      main.append(h("記錄與論文對不上的數字"));
+      const ul = el("ul", "df-list warn");
+      sess().conflicts.forEach((c) => ul.append(el("li", "", c)));
+      main.append(ul);
+    }
+    if (sess().thoughts.length) {
+      main.append(h("記錄裡你的想法"));
+      const ul = el("ul", "df-thoughts");
+      sess().thoughts.forEach((t) => { const li = el("li"); li.append(el("span", "df-gid", t.id), document.createTextNode(` ${t.text}`)); if (t.about.length) li.append(el("span", "df-role", t.about.join(" "))); ul.append(li); });
+      main.append(ul);
+    }
+    if (sess().tables.length) {
+      main.append(h("從記錄整理出的表格"));
+      const secs = (state.paper?.sections ?? []).map((x) => x.title);
+      sess().tables.forEach((t) => {
+        const card = el("div", "df-card");
+        card.append(row(el("span", "df-gid", t.id), el("b", "", t.caption), t.inserted ? el("span", "df-badge flag", "已放進論文") : el("span")));
+        if (t.note) card.append(note(t.note));
+        const tb = el("table", "df-table");
+        const hr = el("tr"); t.columns.forEach((c) => hr.append(el("th", "", c))); tb.append(hr);
+        t.rows.forEach((r) => { const tr = el("tr"); r.forEach((c) => tr.append(el("td", "", c))); tb.append(tr); });
+        card.append(tb);
+        if (!t.inserted) {
+          const pick = el("select", "np-input df-home");
+          (secs.length ? secs : ["Results"]).forEach((x) => { const o = el("option", "", `放進 ${x}`); o.value = x; pick.append(o); });
+          const res = secs.find((x) => /result/i.test(x)); if (res) pick.value = res;
+          card.append(row(pick, btn("插入論文", () => run("插入表格", async () => { const v = await call(`/tables/${t.id}/insert`, { section: pick.value }); if (state.paper?.name) openPaper(state.paper.name); return v; }), "ghost")));
+        }
+        main.append(card);
+      });
+    }
+    const floats = D.data.material?.floats ?? [];
+    if (floats.length) {
+      main.append(h("論文裡已有的圖表"));
+      const ul = el("ul", "df-list");
+      floats.forEach((f) => ul.append(el("li", "", `${f.kind === "table" ? "表" : "圖"} ${f.id}（${f.section}）：${f.caption || "（沒有標題）"}`)));
+      main.append(ul);
     }
     if (sess().timeline.length) {
       main.append(h("時間線"));
@@ -334,6 +404,7 @@ const PCDraft = (() => {
       if (s?.preferred != null) tags.append(el("span", "df-badge soft", `可再到 ${levelName(s.preferred)}`));
       li.append(tags);
       if (it.stance) li.append(el("div", "df-stance", it.stance));
+      if (it.refs?.length) { const rr = el("div", "df-refs"); it.refs.forEach((k) => rr.append(refChip(k))); li.append(rr); }
       ul.append(li);
     });
     side.append(ul);
@@ -362,6 +433,7 @@ const PCDraft = (() => {
       card.append(head, zh, en);
       const meta = [c.evidence && `證據：${c.evidence}`, c.reader_accepts && `讀者承認：${c.reader_accepts}`, c.twist && `轉折：${c.twist}`].filter(Boolean).join("　");
       if (meta) card.append(note(meta));
+      if (c.refs?.length) { const rr = el("div", "df-refs"); c.refs.forEach((k) => rr.append(refChip(k))); card.append(rr); }
       main.append(card);
     });
     function save() { run("儲存主張", () => call("/claims", { claims: edit }, "PUT")); }
@@ -424,6 +496,7 @@ const PCDraft = (() => {
           en.oninput = () => (p.en = en.value.split("\n").map((x) => x.trim()).filter(Boolean));
           card.append(zh, en);
           if (p.sources.length) card.append(note(`來源：${p.sources.join("、")}`));
+          if (p.cites?.length) { const rr = el("div", "df-refs"); p.cites.forEach((k) => rr.append(refChip(k))); card.append(rr); }
           box.append(card);
         });
       });
@@ -461,7 +534,7 @@ const PCDraft = (() => {
   }
 
   // ── 8 審稿 ───────────────────────────────────────────
-  const KIND_ZH = { contradiction: "矛盾", overclaim: "宣稱過度", "missing-number": "缺數字", impossible: "數字不可能", generic: "空泛", repeat: "重複", "buried-origin": "發想埋太晚", "missing-why": "缺理由" };
+  const KIND_ZH = { citation: "引用", contradiction: "矛盾", overclaim: "宣稱過度", "missing-number": "缺數字", impossible: "數字不可能", generic: "空泛", repeat: "重複", "buried-origin": "發想埋太晚", "missing-why": "缺理由" };
   function audit(main) {
     main.append(h("審稿檢查（Opus）"));
     main.append(note("檢查矛盾、宣稱強度、缺數字、空泛句、重複與埋掉的發想。需要你補充的，可以回到對話追問。"));

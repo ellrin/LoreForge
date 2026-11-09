@@ -13,6 +13,7 @@
 //! the paper folder ([`session`]); prompts are in [`prompts`].
 
 pub mod lens;
+pub mod material;
 pub mod prompts;
 pub mod session;
 

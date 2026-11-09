@@ -155,19 +155,19 @@ your-private-repo/
 
 | 步驟 | 內容 |
 |---|---|
-| 1 主題 | Key value，加上「有意思的地方」的假說：讀者已經承認什麼、你的轉折是什麼 |
-| 2 實驗記錄 | 上傳 `.md .txt .csv .tsv .json .log` 或 PDF（Excel、Word 請另存 CSV／純文字）；整理成實驗清單與**時間線**（先試了什麼、看到什麼、改了什麼），目的不確定的標「待確認」 |
-| 3 題組 | 依 Introduction、Methods、Results、Discussion、Conclusion 規劃題組，每組要整理出說明、動機、結論；可以直接修改、增刪 |
-| 4 對話 | 一次一題；回答「不確定」時給 2–4 個選項。右側狀態表顯示每一項還缺什麼，一組問夠了就提示可以結束（由程式依視角判斷，不是模型感覺）；超過題數上限會提示略過 |
+| 1 主題 | Key value，加上「有意思的地方」的假說：讀者已經承認什麼、你的轉折是什麼；列出本篇文獻（標籤、你寫的用途、DOI 連結），要加文獻在文獻視窗貼上，照常一篇一篇查證 |
+| 2 實驗記錄 | 上傳 `.md .txt .csv .tsv .json .log` 或 PDF（Excel、Word 請另存 CSV／純文字）。Opus 整理成實驗清單、**時間線**（先試了什麼、看到什麼、改了什麼）、**你在記錄裡寫下的想法**（問答時當作選項）、**結果表格**（數字照抄，缺的標「—」，可一鍵插入論文，用期刊的表格樣式），並列出記錄與論文既有表格對不上的數字。論文裡已有的表格、圖、文獻自動帶入，不用重貼 |
+| 3 題組 | 依 Introduction、Methods、Results、Discussion、Conclusion 規劃題組，每組要整理出說明、動機、結論；Results 一張圖表一組；可以直接修改、增刪 |
+| 4 對話 | 一次一題；回答「不確定」時給 2–4 個選項（先用你記錄裡的想法）。動機牽涉前人研究或公認做法時，順便問要對應哪幾篇文獻（依標籤與用途配對）；Results 先問「表 X 是主表嗎、想比較什麼、強調什麼」。右側狀態表顯示每一項還缺什麼，一組問夠了就提示可以結束（由程式依視角判斷，不是模型感覺）；超過題數上限會提示略過 |
 | 4.5 主張 | 主張登記：每個主張只在一個章節完整說一次，其他地方只回扣 |
 | 5 校正 | 檢查題組順序是否形成線性敘事，提出移動、拆分、合併、合成一張表的建議，逐條採用或不採用 |
-| 6 大綱 | 逐段大綱：段落類型、組成（事實 → 理由層級 → 結論）、中文說明與英文重點；逐章寫意見修改 |
-| 7 草稿 | 逐章用句型庫生成（與「寫作」相同的語氣鎖定），加上大綱的組成與你的風格筆記 |
-| 8 審稿 | 找矛盾、宣稱過度、缺數字、不可能的數字、空泛句、重複、埋掉的發想、缺理由的設計；需要你補充的可以「回到對話追問」 |
+| 6 大綱 | 逐段大綱：段落類型、組成（事實 → 理由層級 → 結論）、中文說明與英文重點、要引用的文獻（遵守你寫的用途，例如「只用在 Methods」）；逐章寫意見修改 |
+| 7 草稿 | 逐章用句型庫生成（與「寫作」相同的語氣鎖定），加上大綱的組成、你的風格筆記與 `\cite{}`；會參考同章已寫的段落與校正時採用的建議，避免重述 |
+| 8 審稿 | 找矛盾、宣稱過度、缺數字、不可能的數字、空泛句、重複、埋掉的發想、缺理由的設計、引用超出用途或該引未引；需要你補充的可以「回到對話追問」 |
 
 **什麼重要由你決定**：程式本身是中性的，要追問什麼、回答怎麼判讀、什麼時候算問夠，寫在工作區的 `lens/`；你的寫作風格（段落類型、比例、要避免的習慣、範例段落）寫在 `style/`。兩者都是你私人 repo 的檔案，格式見 [`lens/README.md`](../private-example/PaperComposer/lens/README.md) 與 [`style/README.md`](../private-example/PaperComposer/style/README.md)。沒有 `lens/` 時用內建的中性視角（只分「有沒有理由」）。
 
-**模型**：問答用小模型就夠（預設 Haiku，視窗右上可以改 Sonnet、Opus 或本機模型比較）；整理實驗記錄、題組、主張、校正、大綱用 Sonnet；審稿固定用 Opus、不退回其他模型；草稿走「寫作」選的引擎。
+**模型**：問答用小模型就夠（預設 Haiku，視窗右上可以改 Sonnet、Opus 或本機模型比較）；整理實驗記錄與審稿用 Opus；題組、主張、校正、大綱用 Sonnet；草稿走「寫作」選的引擎。
 
 ## 公式
 
@@ -334,8 +334,8 @@ model = "gemma-4-12b"
 | `pc-ref-queries`、`pc-ref-rank` | 找文獻的關鍵字與排序 | 只用 Claude |
 | `pc-cite-extract` | 把貼上的文字拆成一篇一篇 | 只用 Claude |
 | `pc-draft-turn` | 討論草稿的問答 | Haiku → 本機（視窗可指定 Haiku／Sonnet／Opus／本機） |
-| `pc-draft-record`、`pc-draft-plan`、`pc-draft-claims`、`pc-draft-review`、`pc-draft-outline` | 整理實驗記錄、題組、主張、校正、大綱 | 只用 Sonnet |
-| `pc-draft-audit` | 討論草稿的審稿 | 只用 Opus |
+| `pc-draft-plan`、`pc-draft-claims`、`pc-draft-review`、`pc-draft-outline` | 題組、主張、校正、大綱 | 只用 Sonnet |
+| `pc-draft-record`、`pc-draft-audit` | 整理實驗記錄（表格、想法、衝突）、審稿 | 只用 Opus |
 
 「本機」是目前連接的本機引擎（自己架設的端點，或「AI 與同步」啟動的模型；`tasks.toml` 寫作 `local:current`），以 `temperature` 0.2 寫作；「Claude」先用訂閱（Claude Code），沒有時用 API key，模型是設定裡選的那個（`claude:selected`）。寫作區的引擎切換（本機／訂閱／API）只用你選的那一個，不會悄悄改用別的；自動時照上表的順序。要個別指定某個任務的模型，在 App 設定檔旁邊放 `tasks.toml`（`PaperComposer/tasks.toml`）：
 
@@ -396,7 +396,8 @@ scripts/            Git hooks
 | GET | `/api/papers/{name}/draft` | 討論草稿：session、對話紀錄、視角、各題組狀態 |
 | PUT | `/api/papers/{name}/draft/topic` `{ reader_accepts, twist, lens? }` | 步驟 1 |
 | POST／DELETE | `/api/papers/{name}/draft/records?file=`、`/draft/records/{file}` | 上傳（本文為檔案）／移除實驗記錄 |
-| POST | `/api/papers/{name}/draft/record` | 整理成實驗清單與時間線（Sonnet）；PUT `/draft/experiments` 手動修改 |
+| POST | `/api/papers/{name}/draft/record` | 整理成實驗清單、時間線、想法、結果表格與衝突（Opus）；PUT `/draft/experiments` 手動修改 |
+| POST | `/api/papers/{name}/draft/tables/{id}/insert` `{ section? }` | 把記錄整理出的表格插到章節最後（期刊表格樣式） |
 | POST／PUT | `/api/papers/{name}/draft/plan` | 規劃題組（Sonnet）／修改題組 `{ groups, items }` |
 | POST | `/api/papers/{name}/draft/turn` `{ group, answer?, model? }` | 一回合問答；沒有 `answer` 時開場；`model` = haiku／sonnet／opus／local |
 | POST | `/api/papers/{name}/draft/group/{id}` `{ action }` | start／close／skip／reopen |

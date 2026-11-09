@@ -83,15 +83,15 @@ offline = true
 # ── 討論草稿 ───────────────────────────────────────────────
 # The interview turns are short structured gradings under a detailed lens:
 # a small model is enough (Haiku by default; Sonnet or a local model can be
-# picked in the draft window). Organising steps use Sonnet; the reviewer
-# pass, which must catch overclaims and contradictions, always uses Opus.
+# picked in the draft window). Organising steps use Sonnet; reading the
+# experiment record into tables and the reviewer pass use Opus.
 
 [task.pc-draft-record]
 label = "整理實驗記錄"
 needs = { json = true }
-default = "claude:sonnet"
+default = "claude:opus"
 offline = false
-max_tokens = 8000
+max_tokens = 16000
 
 [task.pc-draft-plan]
 label = "規劃題組"

@@ -92,6 +92,47 @@ pub struct TimelineStep {
     pub changed: String,
 }
 
+/// What the author wrote down about their own thinking in the record
+/// ("tried X because…", "suspect Y") — evidence for their stance and a
+/// source of options when the interview asks why.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Thought {
+    #[serde(default)]
+    pub id: String,
+    /// Close to the author's own words.
+    pub text: String,
+    /// Experiment ids (E2) or timeline steps (T3) it is about.
+    #[serde(default)]
+    pub about: Vec<String>,
+}
+
+/// A results table built from the experiment record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ResultTable {
+    #[serde(default)]
+    pub id: String,
+    pub caption: String,
+    /// Header row, then data rows; numbers copied from the record.
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    /// What the table is meant to show (for the author).
+    #[serde(default)]
+    pub note: String,
+    /// Experiment ids it draws on.
+    #[serde(default)]
+    pub from: Vec<String>,
+    /// Put into the paper already.
+    #[serde(default)]
+    pub inserted: bool,
+}
+
+impl ResultTable {
+    /// Tab-separated cells, the format the table importer reads.
+    pub fn tsv(&self) -> String {
+        std::iter::once(&self.columns).chain(self.rows.iter()).map(|r| r.join("\t")).collect::<Vec<_>>().join("\n")
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum GroupStatus {
@@ -166,6 +207,9 @@ pub struct Item {
     /// Where it comes from: turn numbers, experiment ids, timeline steps.
     #[serde(default)]
     pub evidence: Vec<String>,
+    /// Reference keys its motive rests on.
+    #[serde(default)]
+    pub refs: Vec<String>,
 }
 
 impl Graded for Item {
@@ -208,6 +252,9 @@ pub struct Claim {
     pub home: String,
     #[serde(default)]
     pub items: Vec<String>,
+    /// Reference keys that back it or that it builds on.
+    #[serde(default)]
+    pub refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -258,6 +305,9 @@ pub struct OutlinePara {
     pub en: Vec<String>,
     #[serde(default)]
     pub sources: Vec<String>,
+    /// Reference keys to cite in this paragraph.
+    #[serde(default)]
+    pub cites: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -319,6 +369,14 @@ pub struct Session {
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]
+    pub thoughts: Vec<Thought>,
+    /// Results tables built from the record.
+    #[serde(default)]
+    pub tables: Vec<ResultTable>,
+    /// Where the record and the paper's own tables disagree.
+    #[serde(default)]
+    pub conflicts: Vec<String>,
+    #[serde(default)]
     pub groups: Vec<Group>,
     #[serde(default)]
     pub items: Vec<Item>,
@@ -374,6 +432,8 @@ pub struct ItemUpdate {
     pub stance: Option<String>,
     #[serde(default)]
     pub evidence: Vec<String>,
+    #[serde(default)]
+    pub refs: Vec<String>,
 }
 
 /// One item's standing in a group, for the UI and the next prompt.
@@ -461,7 +521,8 @@ impl Session {
     /// Apply the model's grading of the latest answer to a group's items.
     /// Unknown modes are dropped (the lens decides what modes exist), depths
     /// are clamped to the scale, flags must be the lens's own.
-    pub fn apply(&mut self, lens: &Lens, group: &str, updates: Vec<ItemUpdate>) {
+    /// `known_refs` are the paper's reference keys; others are dropped.
+    pub fn apply(&mut self, lens: &Lens, group: &str, known_refs: &[String], updates: Vec<ItemUpdate>) {
         let max_depth = lens.scale.levels.len() - 1;
         for u in updates {
             let pos = u.id.as_deref().and_then(|id| self.items.iter().position(|i| i.id == id && i.group == group));
@@ -501,6 +562,11 @@ impl Session {
             for e in u.evidence {
                 if !it.evidence.contains(&e) {
                     it.evidence.push(e);
+                }
+            }
+            for r in u.refs {
+                if known_refs.contains(&r) && !it.refs.contains(&r) {
+                    it.refs.push(r);
                 }
             }
         }
@@ -690,7 +756,7 @@ max_turns_per_group = 2
         // "BCE for two classes, no plan to try others" → routine, done.
         // The core contribution gets a reason but not yet its origin; an
         // unknown mode and flag are ignored, depth is clamped.
-        s.apply(&l, "g1", vec![
+        s.apply(&l, "g1", &[], vec![
             ItemUpdate { id: Some("i1".into()), mode: Some("comply".into()), ..Default::default() },
             ItemUpdate { id: Some("i2".into()), mode: Some("custom".into()), depth: Some(9), flags: vec!["fame".into()], ..Default::default() },
             ItemUpdate { id: Some("i2".into()), mode: Some("vibes".into()), ..Default::default() },
@@ -702,20 +768,31 @@ max_turns_per_group = 2
         assert!(st.items[0].missing.is_empty());
         assert_eq!(st.items[1].missing, vec![Missing::Flag("origin".into())]);
 
-        s.apply(&l, "g1", vec![ItemUpdate { id: Some("i2".into()), flags: vec!["origin".into()], stance: Some("看到醫師的分級方式才想到".into()), ..Default::default() }]);
+        s.apply(&l, "g1", &[], vec![ItemUpdate { id: Some("i2".into()), flags: vec!["origin".into()], stance: Some("看到醫師的分級方式才想到".into()), ..Default::default() }]);
         assert!(!s.group_state(&l, "g1").ready, "items done but no summary yet");
         s.groups[0].summary = GroupSummary { explain: "a".into(), motive: "b".into(), conclusion: "c".into(), ..Default::default() };
         assert!(s.group_state(&l, "g1").ready);
     }
 
     #[test]
+    fn only_the_papers_references_are_kept() {
+        let l = lens();
+        let mut s = planned();
+        let known = vec!["kim2019".to_string()];
+        s.apply(&l, "g1", &known, vec![ItemUpdate { id: Some("i2".into()), refs: vec!["kim2019".into(), "invented2024".into()], ..Default::default() }]);
+        assert_eq!(s.items[1].refs, ["kim2019"]);
+        let t = ResultTable { columns: vec!["Method".into(), "Dice".into()], rows: vec![vec!["Fuzzy".into(), "0.720".into()]], ..Default::default() };
+        assert_eq!(t.tsv(), "Method\tDice\nFuzzy\t0.720");
+    }
+
+    #[test]
     fn new_items_come_from_answers() {
         let l = lens();
         let mut s = planned();
-        s.apply(&l, "g1", vec![ItemUpdate { label: Some("pretrained weights".into()), mode: Some("comply".into()), ..Default::default() }]);
+        s.apply(&l, "g1", &[], vec![ItemUpdate { label: Some("pretrained weights".into()), mode: Some("comply".into()), ..Default::default() }]);
         assert_eq!(s.items.last().unwrap().id, "i3");
         assert_eq!(s.items.last().unwrap().group, "g1");
-        s.apply(&l, "g1", vec![ItemUpdate { id: Some("nope".into()), ..Default::default() }]);
+        s.apply(&l, "g1", &[], vec![ItemUpdate { id: Some("nope".into()), ..Default::default() }]);
         assert_eq!(s.items.len(), 3, "an update with an unknown id and no label is dropped");
     }
 

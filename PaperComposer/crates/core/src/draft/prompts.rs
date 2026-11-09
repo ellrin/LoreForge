@@ -36,8 +36,10 @@ pub fn json_in<T: for<'de> Deserialize<'de>>(reply: &str) -> Result<T, String> {
 const TW: &str = "Write every text meant for the author in Traditional Chinese as used in Taiwan (繁體中文, never simplified), \
 with full-width Chinese punctuation (，。：；？！「」（）), never ASCII commas or colons inside Chinese text.";
 
-/// Shared context: key value, hook, experiments and timeline, compact.
-pub fn context(key_value: &str, s: &Session) -> String {
+/// Shared context: key value, hook, experiments, timeline, the author's
+/// recorded thoughts, tables built from the record, and what the paper
+/// already holds (`material`, see [`super::material::describe`]).
+pub fn context(key_value: &str, s: &Session, material: &str) -> String {
     let mut c = format!("Key value (the one thing the paper argues): {}\n", key_value.trim());
     if !s.hook.reader_accepts.trim().is_empty() || !s.hook.twist.trim().is_empty() {
         c += &format!("Interesting hypothesis — readers already accept: {} / the twist: {}\n", s.hook.reader_accepts.trim(), s.hook.twist.trim());
@@ -67,6 +69,28 @@ pub fn context(key_value: &str, s: &Session) -> String {
             c += &format!("- T{} {} → observed: {} → changed: {}\n", t.step, t.what, t.observed, t.changed);
         }
     }
+    if !s.thoughts.is_empty() {
+        c += "\nThe author's own thoughts written in the record (their words at the time):\n";
+        for h in &s.thoughts {
+            c += &format!("- {} [{}] {}\n", h.id, h.about.join(","), h.text);
+        }
+    }
+    let pending: Vec<&ResultTable> = s.tables.iter().filter(|t| !t.inserted).collect();
+    if !pending.is_empty() {
+        c += "\nResults tables built from the record (not yet in the paper):\n";
+        for t in pending {
+            c += &format!("- {} \"{}\": {} | {}\n", t.id, t.caption, t.columns.join(" | "), t.note);
+            for r in t.rows.iter().take(10) {
+                c += &format!("    | {} |\n", r.join(" | "));
+            }
+        }
+    }
+    if !s.conflicts.is_empty() {
+        c += "\nRecord vs paper disagreements to settle: ";
+        c += &s.conflicts.join("; ");
+        c += "\n";
+    }
+    c += material;
     c
 }
 
@@ -84,10 +108,19 @@ pub fn record_schema() -> Value {
         ("mode", json_string_or_null()),
     ]);
     let step = json_object(&[("step", json_int()), ("what", json_string()), ("observed", json_string()), ("changed", json_string())]);
-    json_object(&[("summary", json_string()), ("experiments", json_array(exp)), ("timeline", json_array(step))])
+    let thought = json_object(&[("text", json_string()), ("about", strings())]);
+    let table = json_object(&[("caption", json_string()), ("columns", strings()), ("rows", json_array(strings())), ("note", json_string()), ("from", strings())]);
+    json_object(&[
+        ("summary", json_string()),
+        ("experiments", json_array(exp)),
+        ("timeline", json_array(step)),
+        ("thoughts", json_array(thought)),
+        ("tables", json_array(table)),
+        ("conflicts", strings()),
+    ])
 }
 
-pub fn record_prompt(key_value: &str, lens: &Lens, records: &str) -> Prompt {
+pub fn record_prompt(key_value: &str, lens: &Lens, records: &str, material: &str) -> Prompt {
     let modes: Vec<String> = lens.modes.iter().map(|m| format!("{} ({})", m.id, m.means)).collect();
     let system = format!(
         "You read a researcher's raw experiment record and organise it for a paper.\n\
@@ -101,10 +134,20 @@ author will be asked. `mode` = your guess among these modes: {}; null if you can
 For each step: what was tried, what was observed, what was changed next. This is where the author's thinking \
 shows (a parameter that did not fit, a baseline that failed); keep those details, they matter more than tidy \
 summaries. Empty if the record shows no order.\n\
+4. `thoughts`: every place where the author wrote down their own thinking — why they tried something, what they \
+suspected, what surprised them, what they planned next. Keep it close to their words (translate to Traditional \
+Chinese if needed); `about` = experiment ids or T-steps. These are evidence of the author's stance and will be \
+offered back to them as options; never invent a thought the record does not contain.\n\
+5. `tables`: the results tables a paper would need, built from the record: usually one main comparison and one per \
+ablation. `columns` = header, `rows` = data rows with numbers copied exactly (keep ± spreads and p-values), \
+`caption` in English, `note` (Traditional Chinese) = what the table is meant to show, `from` = experiment ids. Do \
+not propose a table the paper already has (listed below), unless the record adds rows to it — then say so in `note`.\n\
+6. `conflicts`: every number that differs between the record and the paper's existing tables (Traditional Chinese, \
+one item per conflict, naming both values). Empty when none.\n\
 Do not invent experiments, numbers or reasons. {TW} Reply with JSON only.",
         modes.join("; ")
     );
-    let user = format!("Key value: {}\n\nExperiment record:\n{}", key_value.trim(), records);
+    let user = format!("Key value: {}\n\nExperiment record:\n{}\n{}", key_value.trim(), records, material);
     Prompt { system, user }
 }
 
@@ -113,6 +156,9 @@ pub struct RecordReply {
     pub summary: String,
     pub experiments: Vec<Experiment>,
     pub timeline: Vec<TimelineStep>,
+    pub thoughts: Vec<Thought>,
+    pub tables: Vec<ResultTable>,
+    pub conflicts: Vec<String>,
 }
 
 pub fn parse_record(reply: &str, lens: &Lens) -> Result<RecordReply, String> {
@@ -123,6 +169,17 @@ pub fn parse_record(reply: &str, lens: &Lens) -> Result<RecordReply, String> {
         }
     }
     r.experiments.retain(|e| !e.title.trim().is_empty());
+    r.thoughts.retain(|h| !h.text.trim().is_empty());
+    for (i, h) in r.thoughts.iter_mut().enumerate() {
+        h.id = format!("H{}", i + 1);
+    }
+    let width = |t: &ResultTable| t.columns.len();
+    r.tables.retain(|t| !t.columns.is_empty() && !t.rows.is_empty() && t.rows.iter().all(|row| row.len() == width(t)));
+    for (i, t) in r.tables.iter_mut().enumerate() {
+        t.id = format!("R{}", i + 1);
+        t.inserted = false;
+    }
+    r.conflicts.retain(|c| !c.trim().is_empty());
     Ok(r)
 }
 
@@ -134,7 +191,7 @@ pub fn plan_schema() -> Value {
     json_object(&[("groups", json_array(group))])
 }
 
-pub fn plan_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str) -> Prompt {
+pub fn plan_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str, material: &str) -> Prompt {
     let roles = lens.targets.iter().map(|t| t.role.as_str()).collect::<Vec<_>>().join(", ");
     let system = format!(
         "You plan the question groups for an interview that will turn a study into a paper draft.\n\
@@ -145,8 +202,11 @@ Rules:\n\
 what readers already accept, the twist), then the gap and the contribution.\n\
 2. Methods: one group per key step of the pipeline as the record shows it; the number of groups is your estimate \
 of the subsections, not final.\n\
-3. Results: one group per message the results must carry (what the main table shows, which comparison matters), \
-built from the experiments.\n\
+3. Results: one group per table or figure the paper will show — those already in the paper and those built from \
+the record. Its purpose asks what the table is for: is it the main table, which comparison matters, what the author \
+wants to stress and why. Results the record has but no table shows can get a group too.\n\
+   Introduction (and Related work, if the author's papers have one): when the paper's references are listed, plan \
+the groups so that each motive can be tied to the references that support it.\n\
 4. Discussion and Conclusion: one or two groups each.\n\
 5. `items` = what must be clarified in the group: decisions, experiments, findings. Give each a `role` (use these \
 when they fit: {roles}; otherwise design, experiment, result, background) and a `mode` guess from the lens or null. \
@@ -156,7 +216,7 @@ usual), however important other items are — every core item will be asked down
 {TW} Titles and purposes are for the author. Reply with JSON only.",
         SECTIONS.join(", ")
     );
-    let mut user = context(key_value, s);
+    let mut user = context(key_value, s, material);
     user += "\n";
     user += &lens.describe();
     if !style.trim().is_empty() {
@@ -221,6 +281,7 @@ pub fn turn_schema() -> Value {
         ("number", json_string_or_null()),
         ("stance", json_string_or_null()),
         ("evidence", strings()),
+        ("refs", strings()),
     ]);
     let summary = json_object(&[
         ("explain", json_string()),
@@ -253,7 +314,9 @@ Each turn:
    - `flags`: lens flags the answer earns (e.g. how the idea came about).
    - `number`: the number that backs a result, from the answer or the record.
    - `stance`: the author's own view on the item, condensed, in their terms (Traditional Chinese).
-   - `evidence`: \"turn N\", experiment ids (E2) or timeline steps (T3) it rests on.
+   - `evidence`: \"turn N\", experiment ids (E2), timeline steps (T3) or recorded thoughts (H1) it rests on.
+   - `refs`: keys of the paper's references this item's motive rests on (what readers already accept, prior
+     methods it differs from), only keys from the list given. Match by the reference's tags and the author's note.
    Leave out items the answer did not touch.
 2. Rewrite `summary` for the group (explanation, motive, conclusion; what readers accept and the twist) from
    everything said so far. Leave a field empty rather than guess.
@@ -264,19 +327,27 @@ Each turn:
    that is never asked; for routine items only confirm. If nothing is open, ask whether anything is missing or
    wrap up, and leave `question` empty when the group is clearly complete.
 5. `options`: when the author said they are unsure, or the question invites a choice, 2–4 short candidate answers
-   (Traditional Chinese) built from the record; otherwise empty.
+   (Traditional Chinese) built from the record — the author's recorded thoughts (H…) first, in their own words;
+   otherwise empty.
+6. References: when a motive rests on prior work or on something readers accept, ask (in the same question, briefly)
+   which of the paper's references supports it, offering the matching ones as options written \"key — short title\".
+   If none of them fits, say that this motive still needs a reference; the author adds references in the reference
+   window, not here.
+7. Results groups: open with the group's table or figure itself — \"Is Table X the main table? Which comparison
+   in it matters, what do you want to stress, and why?\" — using its actual numbers; ask about the story behind a
+   result only after that, and only what other groups have not covered.
 Never invent facts about the study. Ask one thing at a time.";
 
-pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns: &[Turn], answer: Option<&str>) -> Prompt {
+pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns: &[Turn], answer: Option<&str>, material: &str) -> Prompt {
     let system = format!("{TURN_SYSTEM}\n{TW} Reply with JSON only.");
-    let mut user = context(key_value, s);
+    let mut user = context(key_value, s, material);
     user += "\n";
     user += &lens.describe();
-    let done: Vec<&Group> = s.groups.iter().filter(|g| g.status == GroupStatus::Done && g.id != group).collect();
-    if !done.is_empty() {
-        user += "\n## Groups already settled\n";
-        for g in done {
-            user += &format!("- {} [{}] {}: {} / {}\n", g.id, g.section, g.title, g.summary.motive, g.summary.conclusion);
+    let talked: Vec<&Group> = s.groups.iter().filter(|g| g.id != group && (g.status == GroupStatus::Done || g.turns > 0)).collect();
+    if !talked.is_empty() {
+        user += "\n## Already discussed in other groups (do NOT ask about these again; build on them)\n";
+        for g in talked {
+            user += &format!("- {} [{}] {}: {} / {} / {}\n", g.id, g.section, g.title, g.summary.explain, g.summary.motive, g.summary.conclusion);
         }
     }
     if let Some(g) = s.group(group) {
@@ -301,13 +372,14 @@ pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns
                     .join("; ")
             };
             user += &format!(
-                "- {} \"{}\" role={} mode={} depth={} flags=[{}] stance=\"{}\" → {need}",
+                "- {} \"{}\" role={} mode={} depth={} flags=[{}] refs=[{}] stance=\"{}\" → {need}",
                 it.id,
                 it.label,
                 it.role,
                 it.mode.as_deref().unwrap_or("?"),
                 it.depth.map(|d| lens.level_name(d)).unwrap_or_else(|| "?".into()),
                 it.flags.join(","),
+                it.refs.join(","),
                 it.stance
             );
             if let Some(p) = st.and_then(|x| x.preferred) {
@@ -368,6 +440,7 @@ pub fn claims_schema() -> Value {
         ("twist", json_string()),
         ("home", json_string()),
         ("items", strings()),
+        ("refs", strings()),
     ]);
     json_object(&[("claims", json_array(c))])
 }
@@ -382,7 +455,7 @@ pub fn ledger_text(s: &Session, lens: &Lens) -> String {
         );
         for it in s.items_of(&g.id) {
             t += &format!(
-                "- {} {} (role {}, mode {}, depth {}, flags [{}]{}) stance: {}\n",
+                "- {} {} (role {}, mode {}, depth {}, flags [{}]{}{}) stance: {}\n",
                 it.id,
                 it.label,
                 it.role,
@@ -390,6 +463,7 @@ pub fn ledger_text(s: &Session, lens: &Lens) -> String {
                 it.depth.map(|d| lens.level_name(d)).unwrap_or_else(|| "?".into()),
                 it.flags.join(","),
                 it.number.as_deref().map(|n| format!(", number {n}")).unwrap_or_default(),
+                if it.refs.is_empty() { String::new() } else { format!(", refs {}", it.refs.join(" ")) },
                 it.stance
             );
         }
@@ -397,7 +471,7 @@ pub fn ledger_text(s: &Session, lens: &Lens) -> String {
     t
 }
 
-pub fn claims_prompt(key_value: &str, s: &Session, lens: &Lens) -> Prompt {
+pub fn claims_prompt(key_value: &str, s: &Session, lens: &Lens, material: &str) -> Prompt {
     let system = format!(
         "You build the claim register of a paper from an interview's ledger. A claim is something the paper asserts \
 and must earn. Each claim appears once: `home` is the section where it is said in full (Introduction, Methods, \
@@ -405,10 +479,10 @@ Results, Discussion or Conclusion); everywhere else the draft will only call it 
 that make the same claim — repeating the main line in many places is a known weakness of this author.\n\
 `zh` for the author, `en` one crisp English sentence for the paper, `depth` = lens scale index of the reasoning \
 behind it, `evidence` = what backs it (table, number, experiment id), `reader_accepts` / `twist` = what makes it \
-interesting (empty when it is a plain fact), `items` = ledger ids. Order claims from the strongest down. Only \
+interesting (empty when it is a plain fact), `items` = ledger ids, `refs` = reference keys from the items. Order claims from the strongest down. Only \
 claims the ledger supports. {TW} Reply with JSON only."
     );
-    let mut user = context(key_value, s);
+    let mut user = context(key_value, s, material);
     user += "\n";
     user += &lens.describe();
     user += "\n## Ledger\n";
@@ -485,7 +559,7 @@ pub fn parse_review(reply: &str) -> Result<Review, String> {
 // ── Step 6: paragraph-level outline ──────────────────────
 
 pub fn outline_schema() -> Value {
-    let para = json_object(&[("kind", json_string()), ("plan", json_string()), ("zh", json_string()), ("en", strings()), ("sources", strings())]);
+    let para = json_object(&[("kind", json_string()), ("plan", json_string()), ("zh", json_string()), ("en", strings()), ("sources", strings()), ("cites", strings())]);
     let sec = json_object(&[("section", json_string()), ("subsection", json_string_or_null()), ("paras", json_array(para))]);
     json_object(&[("sections", json_array(sec))])
 }
@@ -504,11 +578,15 @@ did not fit and was changed) in the Methods paragraph where they happened.\n\
 5. Results: every judgement comes with its number; the key results get an explanation, not only higher/lower.\n\
 6. Conclusion: carry the strongest claims with the main numbers and one honest limitation of the method itself.\n\
 7. Follow the author's style notes below (paragraph types, proportions, habits to keep and habits to fix).\n\
-8. Do not invent results, numbers or citations.";
+8. `cites`: reference keys to cite in the paragraph — from the items and claims it uses, within what the author's \
+note on each reference allows (a note like \"Methods only\" or \"only supports X\" is binding). Never a key that is \
+not in the paper's reference list.\n\
+9. Results: one paragraph group per table or figure, pointing to it and reading its numbers.\n\
+10. Do not invent results, numbers or citations.";
 
-pub fn outline_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str, only: Option<(&str, &str)>) -> Prompt {
+pub fn outline_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str, only: Option<(&str, &str)>, material: &str) -> Prompt {
     let system = format!("You outline a paper from its interview ledger, claim register and review.\n{OUTLINE_RULES}\n{TW} Reply with JSON only.");
-    let mut user = context(key_value, s);
+    let mut user = context(key_value, s, material);
     user += "\n";
     user += &lens.describe();
     user += "\n## Ledger\n";
@@ -561,6 +639,7 @@ struct RawPara {
     zh: String,
     en: Vec<String>,
     sources: Vec<String>,
+    cites: Vec<String>,
 }
 
 /// Sections in paper order, paragraph ids p1, p2, … across the outline.
@@ -575,7 +654,7 @@ pub fn parse_outline(reply: &str) -> Result<Vec<OutlineSection>, String> {
                 .paras
                 .into_iter()
                 .filter(|p| !p.zh.trim().is_empty())
-                .map(|p| OutlinePara { id: String::new(), kind: p.kind, plan: p.plan, zh: p.zh, en: p.en.into_iter().filter(|e| !e.trim().is_empty()).collect(), sources: p.sources })
+                .map(|p| OutlinePara { id: String::new(), kind: p.kind, plan: p.plan, zh: p.zh, en: p.en.into_iter().filter(|e| !e.trim().is_empty()).collect(), sources: p.sources, cites: p.cites })
                 .collect();
             Some((i, OutlineSection { section: SECTIONS[i].into(), subsection: x.subsection.filter(|s| !s.trim().is_empty()), paras, confirmed: false }))
         })
@@ -611,7 +690,7 @@ pub fn replace_section(outline: &mut Vec<OutlineSection>, section: &str, new: Ve
 /// Extra instructions appended to the phrase-bank compose prompt for one
 /// outline paragraph: its unit plan, the claims it may state in full, and the
 /// author's style notes.
-pub fn compose_extra(para: &OutlinePara, s: &Session, section: &str, style: &str, earlier: &[String]) -> String {
+pub fn compose_extra(para: &OutlinePara, s: &Session, section: &str, style: &str, earlier: &[String], refs: &[super::material::RefInfo]) -> String {
     let mut x = format!(
         "\nThis paragraph is part of a draft built from an interview with the author.\nParagraph type: {}\nUnit plan, in order: {}\nWhat it must say (author's words): {}\n\
 Never mention a figure, table or equation the points do not mention. Use a transition pattern (\"In contrast\", \
@@ -634,6 +713,13 @@ state it (or its wording) only where the points themselves state it.\n",
         x += "Only call these back in a few words (they are stated in full elsewhere):\n";
         for c in back {
             x += &format!("- {}\n", c.en);
+        }
+    }
+    let cites: Vec<&super::material::RefInfo> = para.cites.iter().filter_map(|k| refs.iter().find(|r| &r.key == k)).collect();
+    if !cites.is_empty() {
+        x += "Cite these references with \\cite{key} right after the statement each supports (and nowhere else):\n";
+        for r in cites {
+            x += &format!("- {} — {} ({}){}\n", r.key, r.title, r.year, if r.purpose.is_empty() { String::new() } else { format!("; the author's note: {}", r.purpose) });
         }
     }
     let accepted: Vec<&Suggestion> = s.review.iter().flat_map(|r| &r.suggestions).filter(|x| x.accepted == Some(true)).collect();
@@ -665,7 +751,7 @@ pub fn audit_schema() -> Value {
     json_object(&[("findings", json_array(f))])
 }
 
-pub fn audit_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str) -> Prompt {
+pub fn audit_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str, material: &str) -> Prompt {
     let system = format!(
         "You are a demanding but fair reviewer reading a paper draft against the study's own record. Find:\n\
 - contradiction: two places that cannot both be true (including Introduction stance vs Discussion), or text vs record;\n\
@@ -676,12 +762,14 @@ improvement\" on a gap inside one standard deviation is an overclaim);\n\
 - generic: a sentence, often a closing, that would stay true if moved into another paper;\n\
 - repeat: a claim stated in full in more than one place;\n\
 - buried-origin: how the idea came about is told late or as after-the-fact support;\n\
-- missing-why: an own design decision written as procedure with no reason.\n\
+- missing-why: an own design decision written as procedure with no reason;\n\
+- citation: a reference cited for something its note does not support, or a statement about prior work or accepted \
+practice with no citation.\n\
 Exposition paragraphs need no motive — do not flag them for lacking one. For each finding give `para` (paragraph \
 id), `quote` (the exact words), `why`, and `ask`: a question for the author when the fix needs their knowledge, \
 else empty. Report only real problems, most serious first. {TW} Reply with JSON only."
     );
-    let mut user = context(key_value, s);
+    let mut user = context(key_value, s, material);
     user += "\n";
     user += &lens.describe();
     if !s.claims.is_empty() {
@@ -765,7 +853,7 @@ mod tests {
             Group { section: "Methods".into(), title: "Loss".into(), ..Default::default() },
             vec![Item { label: "BCE".into(), role: "design".into(), ..Default::default() }],
         )]);
-        let p = turn_prompt("Make uncertain frames count", &s, &l, "g1", &[], Some("用 BCE"));
+        let p = turn_prompt("Make uncertain frames count", &s, &l, "g1", &[], Some("用 BCE"), "");
         assert!(p.user.contains("mode not yet known"));
         assert!(p.user.contains("這是領域常規做法"), "the lens's probe is offered");
         assert!(p.user.contains("用 BCE"));
@@ -773,22 +861,22 @@ mod tests {
           "summary":{"explain":"","motive":"","conclusion":"","reader_accepts":"","twist":""},"reply":"了解","question":"","options":["a","b","c","d","e"]}"#)
             .unwrap();
         assert_eq!(r.options.len(), 4);
-        s.apply(&l, "g1", r.updates);
+        s.apply(&l, "g1", &[], r.updates);
         assert!(s.group_state(&l, "g1").items[0].missing.is_empty());
     }
 
     #[test]
     fn outline_numbers_paragraphs_and_revises_one_section() {
         let reply = r#"{"sections":[
- {"section":"Methods","subsection":"Loss","paras":[{"kind":"exposition","plan":"fact","zh":"定義","en":["define the loss"],"sources":[]}]},
- {"section":"Introduction","subsection":null,"paras":[{"kind":"Intro turn","plan":"fact → L4","zh":"轉折","en":["a","",""],"sources":["c1"]}]}
+ {"section":"Methods","subsection":"Loss","paras":[{"kind":"exposition","plan":"fact","zh":"定義","en":["define the loss"],"sources":[],"cites":[]}]},
+ {"section":"Introduction","subsection":null,"paras":[{"kind":"Intro turn","plan":"fact → L4","zh":"轉折","en":["a","",""],"sources":["c1"],"cites":["kim2019"]}]}
 ]}"#;
         let mut o = parse_outline(reply).unwrap();
         number_paras(&mut o);
         assert_eq!(o[0].section, "Introduction");
         assert_eq!(o[0].paras[0].en, ["a"]);
         assert_eq!((o[0].paras[0].id.as_str(), o[1].paras[0].id.as_str()), ("p1", "p2"));
-        let rev = parse_outline(r#"{"sections":[{"section":"Methods","subsection":"Loss","paras":[{"kind":"Methods custom decision","plan":"fact → L2","zh":"為什麼用加權","en":["why weighting"],"sources":[]},{"kind":"exposition","plan":"fact","zh":"變數","en":["variables"],"sources":[]}]}]}"#).unwrap();
+        let rev = parse_outline(r#"{"sections":[{"section":"Methods","subsection":"Loss","paras":[{"kind":"Methods custom decision","plan":"fact → L2","zh":"為什麼用加權","en":["why weighting"],"sources":[],"cites":[]},{"kind":"exposition","plan":"fact","zh":"變數","en":["variables"],"sources":[],"cites":[]}]}]}"#).unwrap();
         replace_section(&mut o, "Methods", rev);
         assert_eq!(o.len(), 2);
         assert_eq!(o[1].paras.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["p2", "p3"]);
@@ -801,10 +889,12 @@ mod tests {
             Claim { id: "c1".into(), zh: "z".into(), en: "Reliability is a joint condition.".into(), home: "Results".into(), ..Default::default() },
             Claim { id: "c2".into(), zh: "z".into(), en: "Excluding hard frames is damaging.".into(), home: "Introduction".into(), ..Default::default() },
         ];
-        let p = OutlinePara { id: "p9".into(), kind: "Results key result".into(), plan: "table → numbers → L2".into(), zh: "主表".into(), en: vec![], sources: vec!["c1".into(), "c2".into()] };
+        let p = OutlinePara { id: "p9".into(), kind: "Results key result".into(), plan: "table → numbers → L2".into(), zh: "主表".into(), en: vec![], sources: vec!["c1".into(), "c2".into()], cites: vec!["kim2019".into()] };
         let mut s = s;
         s.review = Some(Review { chain: vec![], suggestions: vec![Suggestion { id: "s1".into(), kind: "other".into(), detail: "No final scores in Methods.".into(), accepted: Some(true), ..Default::default() }] });
-        let x = compose_extra(&p, &s, "Results", "Paragraphs 80–150 words.", &["We first discarded frames.".into()]);
+        let refs = vec![super::super::material::RefInfo { key: "kim2019".into(), title: "Excluding hard frames".into(), purpose: "Intro only".into(), ..Default::default() }];
+        let x = compose_extra(&p, &s, "Results", "Paragraphs 80–150 words.", &["We first discarded frames.".into()], &refs);
+        assert!(x.contains("kim2019 — Excluding hard frames") && x.contains("Intro only"));
         assert!(x.contains("No final scores in Methods.") && x.contains("We first discarded frames."));
         let (full, back) = x.split_once("Only call these back").unwrap();
         assert!(full.contains("joint condition") && back.contains("damaging"));

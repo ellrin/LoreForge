@@ -7,6 +7,7 @@
 
 use super::*;
 use pc_core::draft::lens::Lens;
+use pc_core::draft::material::{self, Material};
 use pc_core::draft::prompts as dp;
 use pc_core::draft::session::{self as ds, Phase, Session, Who};
 use pc_core::draft::style_text;
@@ -35,6 +36,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/audit", post(run_audit).put(put_audit))
         .route("/api/papers/{name}/draft/audit/{id}/ask", post(audit_ask))
         .route("/api/papers/{name}/draft/phase", put(put_phase))
+        .route("/api/papers/{name}/draft/tables/{id}/insert", post(insert_table))
 }
 
 type Resp = axum::response::Response;
@@ -50,6 +52,17 @@ async fn ctx(s: &Shared, name: &str) -> Result<Ctx, Resp> {
     let ws = s.loaded.read().await.workspace.clone().ok_or_else(|| bad("no workspace"))?;
     let key_value = meta::read_meta(&dir).key_value;
     Ok(Ctx { dir, ws, key_value })
+}
+
+/// The paper's tables, figures and references, and the same as prompt text.
+fn material_of(c: &Ctx) -> (Material, String) {
+    let m = material::load(&c.ws, &c.dir);
+    let text = material::describe(&m);
+    (m, text)
+}
+
+fn ref_keys(m: &Material) -> Vec<String> {
+    m.refs.iter().map(|r| r.key.clone()).collect()
 }
 
 fn load(dir: &Path) -> Result<Session, Resp> {
@@ -92,6 +105,7 @@ fn view(c: &Ctx, sess: &Session) -> Result<Resp, Resp> {
         },
         "states": states,
         "has_style": !style_text(&c.ws).trim().is_empty(),
+        "material": material::load(&c.ws, &c.dir),
     }))
     .into_response())
 }
@@ -236,13 +250,27 @@ async fn run_record(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
     }
     let lens = tri!(lens_for(&c.ws, &sess));
     let text = ds::records_text(&c.dir, &sess.records, RECORD_MAX_CHARS);
-    let prompt = dp::record_prompt(&c.key_value, &lens, &text);
+    let (_, mtext) = material_of(&c);
+    let prompt = dp::record_prompt(&c.key_value, &lens, &text, &mtext);
     let r = tri!(ask_model(&s, "pc-draft-record", None, &prompt, dp::record_schema(), |x| dp::parse_record(x, &lens)).await);
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     sess.record_summary = r.summary;
     sess.experiments = r.experiments;
     sess.timeline = r.timeline;
+    sess.thoughts = r.thoughts;
+    // Tables already put into the paper stay marked; new ones replace the rest.
+    let kept: Vec<ds::ResultTable> = sess.tables.iter().filter(|t| t.inserted).cloned().collect();
+    let mut tables = kept;
+    for mut t in r.tables {
+        if tables.iter().any(|k| k.caption == t.caption) {
+            continue;
+        }
+        t.id = format!("R{}", tables.len() + 1);
+        tables.push(t);
+    }
+    sess.tables = tables;
+    sess.conflicts = r.conflicts;
     if sess.phase < Phase::Plan {
         sess.phase = Phase::Plan;
     }
@@ -277,7 +305,8 @@ async fn run_plan(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp
     let c = tri!(ctx(&s, &name).await);
     let sess = tri!(load(&c.dir));
     let lens = tri!(lens_for(&c.ws, &sess));
-    let prompt = dp::plan_prompt(&c.key_value, &sess, &lens, &style_text(&c.ws));
+    let (_, mtext) = material_of(&c);
+    let prompt = dp::plan_prompt(&c.key_value, &sess, &lens, &style_text(&c.ws), &mtext);
     let groups = tri!(ask_model(&s, "pc-draft-plan", None, &prompt, dp::plan_schema(), |x| dp::parse_plan(x, &lens)).await);
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
@@ -375,6 +404,7 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
     let c = tri!(ctx(&s, &name).await);
     let mref = tri!(model_ref(b.model.as_deref()));
     let answer = b.answer.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+    let (mat, mtext) = material_of(&c);
     let (prompt, lens) = {
         let _g = LOCK.lock().await;
         let mut sess = tri!(load(&c.dir));
@@ -383,7 +413,7 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
             return bad("沒有這個題組");
         }
         let turns = ds::read_turns(&c.dir);
-        let prompt = dp::turn_prompt(&c.key_value, &sess, &lens, &b.group, &turns, answer.as_deref());
+        let prompt = dp::turn_prompt(&c.key_value, &sess, &lens, &b.group, &turns, answer.as_deref(), &mtext);
         // The answer is kept even if the model call fails; sending it again
         // after a failure does not record it twice.
         let resent = answer.as_ref().is_some_and(|a| turns.iter().rev().find(|t| t.group == b.group).is_some_and(|t| t.who == Who::Me && &t.text == a));
@@ -405,7 +435,7 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
     let r = tri!(ask_model(&s, "pc-draft-turn", mref.as_deref(), &prompt, dp::turn_schema(), dp::parse_turn).await);
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
-    sess.apply(&lens, &b.group, r.updates);
+    sess.apply(&lens, &b.group, &ref_keys(&mat), r.updates);
     if let Some(g) = sess.group_mut(&b.group) {
         let keep = |new: String, old: &str| if new.trim().is_empty() { old.to_string() } else { new };
         let old = g.summary.clone();
@@ -461,8 +491,13 @@ async fn run_claims(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
     let c = tri!(ctx(&s, &name).await);
     let sess = tri!(load(&c.dir));
     let lens = tri!(lens_for(&c.ws, &sess));
-    let prompt = dp::claims_prompt(&c.key_value, &sess, &lens);
-    let claims = tri!(ask_model(&s, "pc-draft-claims", None, &prompt, dp::claims_schema(), dp::parse_claims).await);
+    let (mat, mtext) = material_of(&c);
+    let prompt = dp::claims_prompt(&c.key_value, &sess, &lens, &mtext);
+    let mut claims = tri!(ask_model(&s, "pc-draft-claims", None, &prompt, dp::claims_schema(), dp::parse_claims).await);
+    let known = ref_keys(&mat);
+    for c in &mut claims {
+        c.refs.retain(|k| known.contains(k));
+    }
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     sess.claims = claims;
@@ -554,8 +589,13 @@ async fn run_outline(State(s): State<Shared>, AxPath(name): AxPath<String>, body
         }
         _ => None,
     };
-    let prompt = dp::outline_prompt(&c.key_value, &sess, &lens, &style_text(&c.ws), only);
-    let new = tri!(ask_model(&s, "pc-draft-outline", None, &prompt, dp::outline_schema(), dp::parse_outline).await);
+    let (mat, mtext) = material_of(&c);
+    let prompt = dp::outline_prompt(&c.key_value, &sess, &lens, &style_text(&c.ws), only, &mtext);
+    let mut new = tri!(ask_model(&s, "pc-draft-outline", None, &prompt, dp::outline_schema(), dp::parse_outline).await);
+    let known = ref_keys(&mat);
+    for p in new.iter_mut().flat_map(|o| o.paras.iter_mut()) {
+        p.cites.retain(|k| known.contains(k));
+    }
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     match only {
@@ -622,6 +662,7 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
         return bad("沒有可用的寫作引擎");
     }
     let style = style_text(&c.ws);
+    let (mat, _) = material_of(&c);
     let mut out: Vec<ds::DraftPara> = vec![];
     for p in &paras {
         let points = if p.en.is_empty() { p.zh.clone() } else { p.en.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
@@ -645,7 +686,7 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
             (pts, refs, prompt)
         };
         let earlier: Vec<String> = out.iter().map(|d| d.text.clone()).collect();
-        let extra = dp::compose_extra(p, &sess, &b.section, &style, &earlier);
+        let extra = dp::compose_extra(p, &sess, &b.section, &style, &earlier, &mat.refs);
         let mut feedback = extra.clone();
         let mut done = None;
         let mut err = String::new();
@@ -699,7 +740,8 @@ async fn run_audit(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
         return bad("還沒有草稿");
     }
     let lens = tri!(lens_for(&c.ws, &sess));
-    let prompt = dp::audit_prompt(&c.key_value, &sess, &lens, &style_text(&c.ws));
+    let (_, mtext) = material_of(&c);
+    let prompt = dp::audit_prompt(&c.key_value, &sess, &lens, &style_text(&c.ws), &mtext);
     let findings = tri!(ask_model(&s, "pc-draft-audit", None, &prompt, dp::audit_schema(), dp::parse_audit).await);
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
@@ -763,6 +805,39 @@ async fn audit_ask(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, 
     tri!(view(&c, &sess))
 }
 
+#[derive(Deserialize, Default)]
+struct InsertBody {
+    /// Section title to put it in; default: the Results section.
+    #[serde(default)]
+    section: Option<String>,
+}
+
+/// Put a table built from the record at the end of a section, in the
+/// journal's table style (the same path as the new-paper wizard's tables).
+async fn insert_table(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, String)>, body: Option<Json<InsertBody>>) -> Resp {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    let Some(t) = sess.tables.iter().find(|t| t.id == id).cloned() else { return bad("沒有這個表格") };
+    let spec = TableSpec {
+        kind: "table".into(),
+        caption: t.caption.clone(),
+        section: b.section.unwrap_or_else(|| "Results".into()),
+        data: t.tsv(),
+        file: String::new(),
+        style: None,
+    };
+    if let Err(e) = add_tables(&c.dir, meta::read_meta(&c.dir).journal.as_deref(), &[spec]) {
+        return bad(&e);
+    }
+    if let Some(x) = sess.tables.iter_mut().find(|x| x.id == id) {
+        x.inserted = true;
+    }
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -783,8 +858,9 @@ mod tests {
         assert_eq!(t.task["pc-draft-turn"].default, "claude:haiku");
         assert_eq!(t.task["pc-draft-turn"].fallback.as_deref(), Some("local:current"));
         assert_eq!(t.task["pc-draft-audit"].default, "claude:opus");
+        assert_eq!(t.task["pc-draft-record"].default, "claude:opus", "reading tables out of a record is Opus work");
         assert!(t.task["pc-draft-audit"].fallback.is_none(), "the reviewer pass never falls back");
-        for id in ["pc-draft-record", "pc-draft-plan", "pc-draft-claims", "pc-draft-review", "pc-draft-outline"] {
+        for id in ["pc-draft-plan", "pc-draft-claims", "pc-draft-review", "pc-draft-outline"] {
             assert_eq!(t.task[id].default, "claude:sonnet", "{id}");
         }
     }
