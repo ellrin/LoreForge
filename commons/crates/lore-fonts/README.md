@@ -13,6 +13,7 @@
 | `Table::defaults()`、`Table::with_user(&fallback)` | 規則表（內建／加上作者的規則） |
 | `Table::chain(name)`、`Table::stacks()` | 一個字型的完整代替順序／所有規則（給網頁組 CSS font stack） |
 | `Installed::scan(private_dir)`、`Installed::from_names(..)` | 這台電腦有的字型（系統＋私人資料夾）／測試用 |
+| `Installed::add_system_dir(dir)` | 再加一個資料夾（含子資料夾）裡的字型，算「已安裝」：例如 TeX 發行版的 `fonts/opentype`，XeTeX 認得但系統字型清單不一定有 |
 | `resolve(&table, &installed, name)` → `Resolution { used, how, chain, category, user_rule }` | `how`：`installed`、`private`、`substitute`、`missing` |
 | `report(&table, &installed, names)` | 多個名稱一次算（略過主題代號 `+mj-lt` 與 CSS 關鍵字） |
 | `font_faces_css(&installed, "/fonts/")`、`safe_font_file(name)` | 私人字型檔的 `@font-face`／可以提供的檔名 |

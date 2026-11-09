@@ -198,6 +198,19 @@ impl Installed {
         Installed { families: names.into_iter().map(|n| (n.as_ref().to_lowercase(), n.as_ref().to_string())).collect(), private: vec![] }
     }
 
+    /// Fonts under `dir` and its sub-folders counted as installed (not
+    /// private), e.g. a TeX distribution's `fonts/opentype` tree, which
+    /// XeTeX and LuaTeX find by name but the system font list may not show.
+    pub fn add_system_dir(&mut self, dir: &Path) {
+        let mut db = fontdb::Database::new();
+        db.load_fonts_dir(dir);
+        for f in db.faces() {
+            for (name, _) in &f.families {
+                self.families.entry(name.to_lowercase()).or_insert_with(|| name.clone());
+            }
+        }
+    }
+
     /// Font files directly in `dir` (not sub-folders).
     pub fn add_private(&mut self, dir: &Path) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
@@ -435,6 +448,24 @@ mod tests {
         i.add_private(&dir);
         assert_eq!(i.private.len(), 1);
         assert!(i.has(&i.private[0].families[0].clone()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn system_dirs_are_read_with_sub_folders_and_count_as_installed() {
+        let candidates = ["/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial Unicode.ttf"];
+        let Some(src) = candidates.iter().map(Path::new).find(|p| p.exists()) else { return };
+        let dir = std::env::temp_dir().join(format!("lore-fonts-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("opentype/public/x")).unwrap();
+        std::fs::copy(src, dir.join("opentype/public/x/face.ttf")).unwrap();
+        let mut probe = Installed::default();
+        probe.add_private(&dir.join("opentype/public/x"));
+        let family = probe.private[0].families[0].clone();
+        let mut i = Installed::default();
+        i.add_system_dir(&dir);
+        assert!(i.has(&family) && i.private.is_empty());
+        assert_eq!(resolve(&Table::defaults(), &i, &family).how, How::Installed);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

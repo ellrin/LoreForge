@@ -278,8 +278,42 @@ pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<R
     if prebuilt_bbl {
         std::fs::copy(paper.join("main.bbl"), out.join("main.bbl")).map_err(|e| e.to_string())?;
     }
+    let mut report = Report::default();
+    // fontspec fonts (XeLaTeX / LuaLaTeX): substitutes in copies, or stop here
+    let fonts = if engine == "pdflatex" { None } else { Some(check_fonts(paper, &out).await?) };
+    if let Some(f) = &fonts {
+        report.warnings.extend(f.prep.notes.iter().cloned());
+        if !f.prep.missing.is_empty() {
+            report.errors = f
+                .prep
+                .missing
+                .iter()
+                .map(|(file, line, msg)| Problem {
+                    file: Some(file.clone()),
+                    line: Some(*line),
+                    message: msg.clone(),
+                    hint: Some("安裝其中一個字型、把字型檔放進 private/shared/fonts/，或在 private/shared/fonts.toml 的 [fallback] 為它加一條規則".into()),
+                    ..Default::default()
+                })
+                .collect();
+            report.seconds = (start.elapsed().as_secs_f64() * 10.0).round() / 10.0;
+            return Ok(report);
+        }
+    }
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let main_arg = fonts.as_ref().and_then(|f| f.prep.main.clone()).unwrap_or_else(|| PathBuf::from("main.tex"));
     let latex = |out: &Path| {
         let mut c = crate::proc::cmd(&tex);
+        if let Some(f) = &fonts {
+            if let Some(dir) = &f.private_dir {
+                // trailing separator: then the usual font path
+                c.env("OSFONTDIR", format!("{}{sep}", dir.display()));
+            }
+            if let Some(copies) = &f.prep.copies {
+                // the rewritten copies first, then the paper folder and TeX's own path
+                c.env("TEXINPUTS", format!("{}{sep}", copies.display()));
+            }
+        }
         c.current_dir(paper)
             .env("max_print_line", "100000")
             .env("error_line", "254")
@@ -288,10 +322,9 @@ pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<R
             // .eps figures, nothing else
             .args(["-interaction=nonstopmode", "-halt-on-error", "-file-line-error"])
             .arg(format!("-output-directory={}", out.display()))
-            .arg("main.tex");
+            .arg(&main_arg);
         c
     };
-    let mut report = Report::default();
     let mut info = LogInfo::default();
     for pass in 0..4 {
         let o = run(&mut latex(&out), 120).await?;
@@ -319,6 +352,15 @@ pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<R
     report.undefined_cites = info.undefined_cites;
     report.undefined_refs = info.undefined_refs;
     report.errors = info.errors;
+    // errors in a rewritten copy point at the author's file (same lines)
+    if let Some(copies) = fonts.as_ref().and_then(|f| f.prep.copies.as_ref()) {
+        let prefix = format!("{}/", copies.display());
+        for e in &mut report.errors {
+            if let Some(rel) = e.file.as_deref().and_then(|f| f.strip_prefix(&prefix)) {
+                e.file = Some(rel.to_string());
+            }
+        }
+    }
     locate(paper, &mut report.errors);
     if report.errors.is_empty() {
         let dest = export_dir(paper).map_err(|e| e.to_string())?.join(format!("{name}.pdf"));
@@ -327,6 +369,27 @@ pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<R
         report.file = Some(format!("export/{name}.pdf"));
     }
     Ok(report)
+}
+
+struct FontCheck {
+    prep: crate::texfonts::Prepared,
+    private_dir: Option<PathBuf>,
+}
+
+/// Resolve the fonts the paper names (`lore-fonts`, the author's rules in
+/// private/shared/fonts.toml) and write copies with substitutes when needed.
+async fn check_fonts(paper: &Path, out: &Path) -> Result<FontCheck, String> {
+    let (paper, out) = (paper.to_path_buf(), out.to_path_buf());
+    tokio::task::spawn_blocking(move || {
+        let home = crate::loreforge_home();
+        let private_dir = home.shared_file("fonts").filter(|p| p.is_dir());
+        let table = lore_fonts::Table::with_user(&home.prefs().fonts.fallback);
+        let installed = crate::texfonts::installed(private_dir.as_deref());
+        let prep = crate::texfonts::prepare(&paper, &out, &table, installed, private_dir.as_deref()).map_err(|e| e.to_string())?;
+        Ok(FontCheck { prep, private_dir })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Run BibTeX or Biber in the build folder; returns its warnings.

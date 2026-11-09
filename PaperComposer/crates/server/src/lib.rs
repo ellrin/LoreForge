@@ -23,6 +23,7 @@ pub mod proc;
 pub mod models;
 pub mod refimport;
 pub mod settings;
+pub mod texfonts;
 pub mod texmeasure;
 pub mod wizard;
 
@@ -201,7 +202,7 @@ fn demo_workspace(paths: &Paths) -> PathBuf {
     target
 }
 
-fn loreforge_home() -> lore_home::Home {
+pub(crate) fn loreforge_home() -> lore_home::Home {
     lore_home::Home::discover(Path::new(env!("CARGO_MANIFEST_DIR")))
 }
 
