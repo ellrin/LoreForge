@@ -4,7 +4,7 @@
 
 > 開發中（第 1 波 A1：知識庫核心）。已完成：`lore-store`（space、iCloud／git 圖片）、`kb-core`（知識卡、連結、標籤、學習狀態機、SQLite/FTS5 索引、術語掃描）、kb-server API、最小網頁介面（清單、編輯器、複習、時間軸、圖譜）。
 > 第 2 波 B2：NeonDeck 小工具（`NeonDeck/desktop/widgets/knowledge.js`）、到期通知、每日 e-mail 摘要、登入自動啟動腳本。
-> 尚未完成：Tauri 桌面 App、接上 `lore-llm`（目前起草卡片與候選術語用離線 mock）、家庭 space 的實際掛載。
+> 尚未完成：接上 `lore-llm`（目前起草卡片與候選術語用離線 mock）、家庭 space 的實際掛載。
 
 ## 執行
 
@@ -15,6 +15,8 @@ cargo run -p kb-server
 ```
 
 開啟 <http://127.0.0.1:7700>（只監聽本機）。預設掛載`../private/KnowledgeBase`（你的個人 space）。
+
+Mac App：在 LoreForge 根目錄執行 `scripts/install-apps.sh KnowledgeBase`（`apps/desktop` 的 Tauri 殼）。App 用 7700 埠（NeonDeck 小工具讀這個埠）；如果 7700 已經有 kb-server 在跑（例如用下方的 launchd 腳本開機啟動），視窗就直接開那一個，不另外啟動。App 自己啟動伺服器時，提醒排程只在 App 開著時運作。圖示原始檔為 `apps/desktop/icons/logo.svg`（換圖方式同 SlideComposer）。
 
 其他 space 或使用者：
 

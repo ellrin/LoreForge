@@ -1,7 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/server"]
-# Next: apps/desktop (Tauri shell), like PaperComposer / JELearner.
+members = ["crates/server", "apps/desktop"]
+# `cargo build` / `cargo test` skip the desktop app so they need no WebView
+# libraries; build it with `cargo run -p knowledgebase` or `cargo tauri build`.
+default-members = ["crates/server"]
 
 [workspace.package]
 version = "0.1.0"

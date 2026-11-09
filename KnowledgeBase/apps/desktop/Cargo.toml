@@ -1,0 +1,20 @@
+[package]
+name = "knowledgebase"
+version.workspace = true
+edition.workspace = true
+description = "KnowledgeBase desktop app"
+
+# Desktop shell: starts the local server in-process on 127.0.0.1:7700 (the port
+# the NeonDeck widget reads) and opens a native window on it (WKWebView on
+# macOS), like PaperComposer. When a kb-server already answers there (launchd),
+# the window opens on that one instead.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+kb-server = { path = "../../crates/server" }
+kb-core.workspace = true
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+url = "2"

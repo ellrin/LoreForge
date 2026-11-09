@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A0B33"/>
+      <stop offset="0.6" stop-color="#0C0619"/>
+      <stop offset="1" stop-color="#05030C"/>
+    </linearGradient>
+    <radialGradient id="haze" cx="0.5" cy="0.92" r="0.6">
+      <stop offset="0" stop-color="#FF2BD6" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FF2BD6" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="tile">
+      <rect x="32" y="32" width="960" height="960" rx="216"/>
+    </clipPath>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="14" result="b1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="34" result="b2"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#haze)"/>
+
+    <!-- perspective grid floor -->
+    <g stroke="#FF2BD6" stroke-opacity="0.35" stroke-width="4" fill="none">
+      <line x1="0" y1="760" x2="1024" y2="760"/>
+      <line x1="0" y1="812" x2="1024" y2="812"/>
+      <line x1="0" y1="876" x2="1024" y2="876"/>
+      <line x1="0" y1="956" x2="1024" y2="956"/>
+      <line x1="512" y1="700" x2="512" y2="1024"/>
+      <line x1="512" y1="700" x2="292" y2="1024"/>
+      <line x1="512" y1="700" x2="732" y2="1024"/>
+      <line x1="512" y1="700" x2="72" y2="1024"/>
+      <line x1="512" y1="700" x2="952" y2="1024"/>
+      <line x1="512" y1="700" x2="-148" y2="1024"/>
+      <line x1="512" y1="700" x2="1172" y2="1024"/>
+    </g>
+
+    <!-- scanlines -->
+    <g fill="#FFFFFF" fill-opacity="0.035">
+      <rect x="0" y="120" width="1024" height="6"/>
+      <rect x="0" y="240" width="1024" height="6"/>
+      <rect x="0" y="360" width="1024" height="6"/>
+      <rect x="0" y="480" width="1024" height="6"/>
+      <rect x="0" y="600" width="1024" height="6"/>
+    </g>
+  </g>
+
+  <!-- chromatic-aberration ghosts of the links -->
+  <g stroke-width="22" stroke-linecap="round" opacity="0.7">
+    <g stroke="#FF2BD6"><line x1="502" y1="456" x2="290" y2="300"/><line x1="502" y1="456" x2="718" y2="284"/><line x1="502" y1="456" x2="266" y2="604"/><line x1="502" y1="456" x2="750" y2="610"/><line x1="502" y1="456" x2="510" y2="742"/><line x1="290" y1="300" x2="410" y2="228"/><line x1="290" y1="300" x2="266" y2="604"/><line x1="718" y1="284" x2="750" y2="610"/><line x1="750" y1="610" x2="510" y2="742"/><line x1="266" y1="604" x2="510" y2="742"/><line x1="410" y1="228" x2="718" y2="284"/></g>
+    <g stroke="#00F0FF"><line x1="522" y1="456" x2="310" y2="300"/><line x1="522" y1="456" x2="738" y2="284"/><line x1="522" y1="456" x2="286" y2="604"/><line x1="522" y1="456" x2="770" y2="610"/><line x1="522" y1="456" x2="530" y2="742"/><line x1="310" y1="300" x2="430" y2="228"/><line x1="310" y1="300" x2="286" y2="604"/><line x1="738" y1="284" x2="770" y2="610"/><line x1="770" y1="610" x2="530" y2="742"/><line x1="286" y1="604" x2="530" y2="742"/><line x1="430" y1="228" x2="738" y2="284"/></g>
+  </g>
+
+  <!-- links -->
+  <g stroke="#B8FBFF" stroke-width="18" stroke-linecap="round" filter="url(#glow)"><line x1="512" y1="456" x2="300" y2="300"/><line x1="512" y1="456" x2="728" y2="284"/><line x1="512" y1="456" x2="276" y2="604"/><line x1="512" y1="456" x2="760" y2="610"/><line x1="512" y1="456" x2="520" y2="742"/><line x1="300" y1="300" x2="420" y2="228"/><line x1="300" y1="300" x2="276" y2="604"/><line x1="728" y1="284" x2="760" y2="610"/><line x1="760" y1="610" x2="520" y2="742"/><line x1="276" y1="604" x2="520" y2="742"/><line x1="420" y1="228" x2="728" y2="284"/></g>
+
+  <!-- nodes: dark core, neon ring -->
+  <g filter="url(#glow)"><circle cx="512" cy="456" r="58" fill="#0A0616" stroke="#FCEE0A" stroke-width="22"/><circle cx="300" cy="300" r="40" fill="#0A0616" stroke="#00F0FF" stroke-width="22"/><circle cx="728" cy="284" r="44" fill="#0A0616" stroke="#00F0FF" stroke-width="22"/><circle cx="276" cy="604" r="40" fill="#0A0616" stroke="#FF2BD6" stroke-width="22"/><circle cx="760" cy="610" r="48" fill="#0A0616" stroke="#00F0FF" stroke-width="22"/><circle cx="520" cy="742" r="36" fill="#0A0616" stroke="#00F0FF" stroke-width="22"/><circle cx="420" cy="228" r="24" fill="#0A0616" stroke="#FF2BD6" stroke-width="22"/></g>
+  <circle cx="512" cy="456" r="22" fill="#FCEE0A" filter="url(#glow)"/>
+
+  <!-- glitch slice -->
+  <rect x="640" y="590" width="128" height="14" fill="#FF2BD6" opacity="0.9"/>
+  <rect x="700" y="620" width="70" height="8" fill="#00F0FF" opacity="0.9"/>
+</svg>

@@ -8,6 +8,8 @@ habits as PaperComposer / JELearner. Design: `../private/shared/docs/ecosystem-d
 ```sh
 cargo test                              # kb-server API tests, offline
 cargo run -p kb-server                  # http://127.0.0.1:7700, mounts ../private/KnowledgeBase
+cargo run -p knowledgebase              # desktop window (Tauri); not in default-members
+../scripts/install-apps.sh KnowledgeBase   # build the .app, install to /Applications, Dock
 cargo run -p kb-server -- --space <dir> --member ellrin --port 7700
 cd ../commons && cargo test -p kb-core -p lore-store
 ```
@@ -35,7 +37,9 @@ cd ../commons && cargo test -p kb-core -p lore-store
   layout, global / local (`#/graph/<id>`), filters, playback; data from `/api/graph?full=true&missing=true`.
 - `../private-example/KnowledgeBase/`: starting layout of a personal space (copied to `../private/KnowledgeBase` on first run).
 - NeonDeck widget: `../NeonDeck/desktop/widgets/knowledge.js`.
-- Next: `apps/desktop` (Tauri shell).
+- `apps/desktop` (`knowledgebase`): Tauri shell on the configured port (7700, what the NeonDeck
+  widget reads); if a kb-server already answers `/api/health` there (launchd), it opens that one.
+  Icon source `icons/logo.svg` (PaperComposer's neon style).
 
 ## Decisions
 
