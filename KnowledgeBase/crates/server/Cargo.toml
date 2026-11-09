@@ -11,6 +11,7 @@ edition.workspace = true
 kb-core.workspace = true
 ym-store.workspace = true
 ym-secrets.workspace = true
+ym-home.workspace = true
 lettre.workspace = true
 serde.workspace = true
 serde_json.workspace = true

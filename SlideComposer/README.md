@@ -1,6 +1,6 @@
 # SlideComposer
 
-任務式簡報編輯器：選「任務版型」（例如論文報告）＋「風格版型」（從 PPTX 收集的母片、標籤字型、色票、元件），放入論文等素材，快速產生初稿，再在畫布上細修，輸出 PPTX／PDF。與個人知識庫、對照表串聯。設計見 `../private/docs/ecosystem-design.md`（作者的私人筆記） §7。
+任務式簡報編輯器：選「任務版型」（例如論文報告）＋「風格版型」（從 PPTX 收集的母片、標籤字型、色票、元件），放入論文等素材，快速產生初稿，再在畫布上細修，輸出 PPTX／PDF。與個人知識庫、對照表串聯。設計見 `../private/shared/docs/ecosystem-design.md`（作者的私人筆記） §7。
 
 目前完成 **B3：畫布編輯器 v1**（Rust 核心 `commons/crates/ym-canvas` ＋ axum 伺服器 ＋ 純 JS DOM/SVG 編輯器）。生成流程（C3）尚未開始。
 

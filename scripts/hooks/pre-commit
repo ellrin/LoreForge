@@ -1,7 +1,7 @@
 #!/bin/sh
 # LoreForge pre-commit guard. Enable: sh scripts/install-hooks.sh
 #  1. Nothing under private/ may be committed (personal and household data live in their own repos).
-#  2. Added lines must not contain words from private/deny-words.txt (one regex per line,
+#  2. Added lines must not contain words from private/shared/deny-words.txt (one regex per line,
 #     case-insensitive, whole words). The list itself stays private.
 #  3. No file over 5 MB.
 #  4. Secret scan with gitleaks when it is installed.
@@ -15,13 +15,15 @@ if [ -n "$bad" ]; then
   fail=1
 fi
 
-deny="$(git rev-parse --show-toplevel)/private/deny-words.txt"
+top=$(git rev-parse --show-toplevel)
+deny="$top/private/shared/deny-words.txt"
+[ -f "$deny" ] || deny="$top/private/deny-words.txt"
 if [ -f "$deny" ]; then
   pat=$(grep -vE '^\s*(#|$)' "$deny" | paste -sd'|' -)
   if [ -n "$pat" ]; then
     hits=$(git diff --cached -U0 --no-color | grep -E '^\+[^+]' | grep -inwE "$pat" || true)
     if [ -n "$hits" ]; then
-      echo "pre-commit: staged lines contain private words (private/deny-words.txt):" >&2
+      echo "pre-commit: staged lines contain private words (private/shared/deny-words.txt):" >&2
       echo "$hits" | cut -c1-160 | sed 's/^/  /' >&2
       fail=1
     fi

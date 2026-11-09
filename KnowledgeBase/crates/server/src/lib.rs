@@ -25,11 +25,14 @@ pub struct AppState {
     pub kb: Mutex<KnowledgeBase>,
     pub web: PathBuf,
     pub rem: reminders::Reminders,
+    /// LoreForge private folders (read-only here: `/prefs.css` from private/shared/fonts.toml).
+    pub home: ym_home::Home,
 }
 
 impl AppState {
     pub fn new(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders) -> Shared {
-        Arc::new(AppState { kb: Mutex::new(kb), web, rem })
+        let home = ym_home::Home::discover(&config::repo_dir());
+        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home })
     }
 }
 

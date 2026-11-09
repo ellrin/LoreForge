@@ -1,7 +1,7 @@
 # SlideComposer — notes for Claude Code
 
 Task-driven slide editor, Rust, local-first, later a Mac app (Tauri). Same structure and
-habits as PaperComposer / JELearner / KnowledgeBase. Design: `../private/docs/ecosystem-design.md` (author's private notes) §7.
+habits as PaperComposer / JELearner / KnowledgeBase. Design: `../private/shared/docs/ecosystem-design.md` (author's private notes) §7.
 
 ## Commands
 
@@ -30,7 +30,7 @@ when working on ym-canvas in parallel with other agents.
 - `web/`: static HTML/CSS/JS, no build step. `render.js` is the only renderer (editor canvas,
   thumbnails, `print.html` for PDF). UI text in Traditional Chinese; tokens/icons from
   KnowledgeBase/PaperComposer. KaTeX vendored in `web/vendor/katex`.
-- `workspace-template/`: starting layout of the private workspace.
+- `../private-example/SlideComposer/`: starting layout of the private workspace (copied to `../private/SlideComposer` on first run).
 
 ## Decisions
 

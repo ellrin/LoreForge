@@ -45,6 +45,8 @@ pub struct AppState {
     pub port: Mutex<u16>,
     pub sessions: Mutex<HashMap<String, Arc<Mutex<Session>>>>,
     pub pandoc: ym_math::Pandoc,
+    /// LoreForge private folders (read-only here: font preferences from private/shared/fonts.toml).
+    pub home: ym_home::Home,
 }
 
 pub type Shared = Arc<AppState>;
@@ -84,6 +86,8 @@ pub fn repo_dir() -> PathBuf {
 
 pub fn routes() -> Router<Shared> {
     Router::new()
+        .route("/prefs.css", get(prefs_css))
+        .route("/prefs.js", get(prefs_js))
         .route("/api/info", get(info))
         .route("/api/styles/{id}", get(style))
         .route("/api/decks", post(new_deck))
@@ -105,6 +109,20 @@ pub fn routes() -> Router<Shared> {
         .route("/api/math", post(math))
 }
 
+/// Interface fonts from `private/shared/fonts.toml` (CSS variables; linked after styles.css).
+async fn prefs_css(State(s): State<Shared>) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], s.home.prefs().fonts.css())
+}
+
+/// `window.SC_PREFS`: font fallbacks for fonts named in decks (`[fallback]` in
+/// private/shared/fonts.toml), loaded before render.js. Licensed or company fonts
+/// are named only there, never in this repository.
+async fn prefs_js(State(s): State<Shared>) -> impl IntoResponse {
+    let fonts = s.home.prefs().fonts;
+    let body = format!("window.SC_PREFS = {};\n", json!({ "fonts": { "fallback": fonts.fallback } }));
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], body)
+}
+
 pub fn router(shared: Shared) -> Router {
     // static files: always revalidate (no build step, edits show up on reload)
     let web = tower::ServiceBuilder::new()
@@ -123,6 +141,7 @@ pub fn state(ws: Workspace, web: PathBuf) -> Shared {
         port: Mutex::new(0),
         sessions: Mutex::new(HashMap::new()),
         pandoc: ym_math::Pandoc::default(),
+        home: ym_home::Home::discover(&repo_dir()),
     })
 }
 

@@ -19,7 +19,7 @@
 - 匯入時每個物件記下原 XML 與每個欄位（frame、name、fill、line、text、crop…）的指紋；
   段落與 run 記下來源索引與格式指紋。匯出時只修補改過的欄位，其他屬性與未知子元素原封保留。
 - 投影片內容指紋沒變 → 該投影片 part 與備註 part 原位元組輸出。
-- 實測（4 份 seminar，`examples/deck_roundtrip.rs`）：86 頁、匯入→ JSON → 匯出，**所有 part 逐位元組相同**（558/558）。
+- 實測（4 份真實簡報，`examples/deck_roundtrip.rs`）：匯入→ JSON → 匯出，**所有 part 逐位元組相同**。
 
 ```sh
 cargo test -p ym-canvas

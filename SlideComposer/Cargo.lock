@@ -478,6 +478,7 @@ dependencies = [
  "tower",
  "tower-http",
  "ym-canvas",
+ "ym-home",
  "ym-math",
  "ym-ooxml",
 ]
@@ -849,6 +850,14 @@ dependencies = [
  "serde_json",
  "thiserror",
  "ym-ooxml",
+]
+
+[[package]]
+name = "ym-home"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
 ]
 
 [[package]]

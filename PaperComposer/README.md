@@ -31,7 +31,7 @@ cargo run -p pc-server
 
 開啟 <http://127.0.0.1:7878>。
 
-沒有指定工作區時，兩種模式都使用內建示範資料（`workspace-template/`），右上角顯示「連接工作區」。
+沒有指定工作區時，兩種模式都使用內建示範資料（`../private-example/PaperComposer/`），右上角顯示「連接工作區」。
 
 ## 自己打包成 App
 
@@ -78,7 +78,7 @@ cargo tauri build
 
 ## 你的私人工作區
 
-句型、模板、論文都是個人資料，**放在你自己的私有 repository**，不要放進這個 repo。結構如下（空白範本見 [`workspace-template/`](workspace-template/)；填好虛構內容的完整範例見 [`private-example/`](private-example/README.md)）：
+句型、模板、論文都是個人資料，**放在你自己的私有 repository**，不要放進這個 repo。結構如下（空白範本見 [`../private-example/PaperComposer/`](../private-example/PaperComposer/)；填好虛構內容的完整範例見 [`example-workspace/`](example-workspace/README.md)）：
 
 ```
 your-private-repo/
@@ -111,7 +111,7 @@ your-private-repo/
 - 設定檔 `PaperComposer/config.toml` 寫入 `workspace_path = "/path/to/your-private-repo"`
   （Windows：`%APPDATA%`；macOS：`~/Library/Application Support/`；Linux：`~/.config/`）
 
-設定檔在所有 repo 之外，路徑不會被 commit。欄位說明見 [`workspace-template/profile/README.md`](workspace-template/profile/README.md)。
+設定檔在所有 repo 之外，路徑不會被 commit。欄位說明見 [`../private-example/PaperComposer/profile/README.md`](../private-example/PaperComposer/profile/README.md)。
 
 ## Git 同步
 
@@ -182,7 +182,7 @@ sudo tlmgr install silence enumitem cleveref currfile helvetic times courier mwe
 tlmgr search --global --file /xxx.sty
 ```
 
-**期刊模板**放在工作區的 `publishers/<名稱>/`，主要範例命名為 `sample.tex`（見 [`workspace-template/publishers/`](workspace-template/publishers/README.md)）。常用的官方來源：
+**期刊模板**放在工作區的 `publishers/<名稱>/`，主要範例命名為 `sample.tex`（見 [`../private-example/PaperComposer/publishers/`](../private-example/PaperComposer/publishers/README.md)）。常用的官方來源：
 
 | 期刊 | 來源 | 放法 |
 |---|---|---|
@@ -331,8 +331,8 @@ crates/server       本機伺服器（只監聽 127.0.0.1），桌面版與瀏�
 ../commons       共用模組（ym-llm、ym-gitsync），以相對路徑引用
 apps/desktop        Tauri 桌面殼：啟動伺服器並開啟視窗
 ui/                 介面（HTML / CSS / JS）
-workspace-template/ 私人工作區範本與示範資料（沒有指定工作區時使用）
-private-example/    完整的私人工作區範例（虛構的作者、文獻、期刊與論文）
+../private-example/PaperComposer/  私人工作區的最小範本與示範資料（沒有指定工作區時使用）
+example-workspace/  完整的私人工作區範例（虛構的作者、文獻、期刊與論文）
 scripts/            Git hooks
 ```
 

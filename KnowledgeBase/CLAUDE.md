@@ -1,7 +1,7 @@
 # KnowledgeBase — notes for Claude Code
 
 Personal knowledge base, Rust, local-first, later a Mac app (Tauri). Same structure and
-habits as PaperComposer / JELearner. Design: `../private/docs/ecosystem-design.md` (author's private notes) §3 and §4.
+habits as PaperComposer / JELearner. Design: `../private/shared/docs/ecosystem-design.md` (author's private notes) §3 and §4.
 
 ## Commands
 
@@ -33,7 +33,7 @@ cd ../commons && cargo test -p kb-core -p ym-store
   (tokens, icons, panels). UI text in Traditional Chinese. KaTeX vendored in `web/vendor/katex`
   (copied from PaperComposer). Graph (`graph.js`): Obsidian-style canvas view, Barnes–Hut force
   layout, global / local (`#/graph/<id>`), filters, playback; data from `/api/graph?full=true&missing=true`.
-- `workspace-template/`: starting layout of a personal space.
+- `../private-example/KnowledgeBase/`: starting layout of a personal space (copied to `../private/KnowledgeBase` on first run).
 - NeonDeck widget: `../NeonDeck/desktop/widgets/knowledge.js`.
 - Next: `apps/desktop` (Tauri shell).
 

@@ -23,7 +23,7 @@
     ],
     "resources": {
       "../../ui": "ui",
-      "../../workspace-template": "workspace-template"
+      "../../../private-example/PaperComposer": "workspace-template"
     }
   }
 }

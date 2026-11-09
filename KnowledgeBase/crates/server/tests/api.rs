@@ -153,7 +153,7 @@ async fn assets_roundtrip_and_cors() {
 #[test]
 fn workspace_template_opens() {
     let dir = tempfile::tempdir().unwrap();
-    let tpl = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../workspace-template");
+    let tpl = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../private-example/KnowledgeBase");
     ym_store::copy_missing(&tpl, &dir.path().join("kb")).unwrap();
     let config = Config { spaces: vec![dir.path().join("kb")], member: "ellrin".into(), port: 0, web: dir.path().into(), intervals: Default::default(), app_dir: None };
     let kb = kb_server::open(&config, KbOptions::default()).unwrap();

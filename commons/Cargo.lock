@@ -2549,6 +2549,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ym-home"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "ym-llm"
 version = "0.1.0"
 dependencies = [

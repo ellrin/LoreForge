@@ -1,0 +1,4 @@
+# LoreForge commit 前檢查：新增的行若含有這些字（不分大小寫、整個字）就擋下。
+# 一行一個正規表示式。真正的清單放在 private/shared/deny-words.txt，不會公開。
+# example-company
+# my-student-id

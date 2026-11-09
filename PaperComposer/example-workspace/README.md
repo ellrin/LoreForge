@@ -3,7 +3,7 @@
 這個資料夾示範**你自己的私有 repo** 長什麼樣子：每個檔案都是真的會用到的格式、填了內容，但人名、機構、期刊、文獻全部是虛構的（DOI 用 `10.5555` 測試前綴）。照著它建立自己的私有 repo，再把內容換成自己的。
 
 ```
-private-example/
+example-workspace/
   config.toml                 App 記住的介面設定（淺色／深色、配色、縮放、上次開的論文…）
   profile/                    寫作資料庫
     profile.toml              資料庫名稱、語言
@@ -36,7 +36,7 @@ private-example/
 2. 複製這個資料夾並推上去：
 
    ```sh
-   cp -R private-example ~/PaperComposer-private
+   cp -R example-workspace ~/PaperComposer-private
    cd ~/PaperComposer-private
    git init && git add -A && git commit -m "Start my workspace"
    git remote add origin https://github.com/you/PaperComposer-private.git

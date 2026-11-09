@@ -441,7 +441,8 @@ pub fn make_key(e: &Entry, taken: &[String]) -> String {
 }
 
 /// Venue patterns that earn the top-venue tags, from profile/venues.csv
-/// (`pattern,tag`), or a small default list. Matching is case-insensitive
+/// (`pattern,tag`; the author's field lives there, in the private workspace),
+/// or a small field-neutral default list. Matching is case-insensitive
 /// on the venue name.
 pub fn venue_tags(profile: &Path, venue: &str) -> Vec<String> {
     let rows: Vec<(String, String)> = std::fs::read_to_string(profile.join("venues.csv"))
@@ -475,20 +476,14 @@ pub const DEFAULT_VENUES: &[(&str, &str)] = &[
     ("neural information processing systems", "top_conference"),
     ("international conference on machine learning", "top_conference"),
     ("international conference on learning representations", "top_conference"),
-    ("medical image computing and computer-assisted intervention", "top_conference"),
-    ("miccai", "top_conference"),
     ("aaai conference", "top_conference"),
     ("cvpr", "top_conference"),
     ("iccv", "top_conference"),
     ("eccv", "top_conference"),
     ("neurips", "top_conference"),
-    ("ieee transactions on medical imaging", "top_journal"),
-    ("medical image analysis", "top_journal"),
     ("ieee transactions on pattern analysis and machine intelligence", "top_journal"),
     ("nature", "top_journal"),
     ("science", "top_journal"),
-    ("radiology", "top_journal"),
-    ("the lancet", "top_journal"),
 ];
 
 /// Prompt for the summary, one-liner and tags. Facts come only from the
@@ -579,12 +574,19 @@ mod tests {
     #[test]
     fn tags_from_venues_and_model() {
         let dir = std::env::temp_dir();
-        assert_eq!(venue_tags(&dir.join("nope"), "IEEE Transactions on Medical Imaging"), vec!["top_journal"]);
+        // a field's venues come from the workspace's profile/venues.csv
+        let profile = dir.join(format!("pc-venues-{}", std::process::id()));
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join("venues.csv"), "pattern,tag\nieee transactions on medical imaging,top_journal\nmedical image computing and computer-assisted intervention,top_conference\n").unwrap();
+        assert_eq!(venue_tags(&profile, "IEEE Transactions on Medical Imaging"), vec!["top_journal"]);
+        assert_eq!(venue_tags(&profile, "Medical Image Computing and Computer-Assisted Intervention – MICCAI 2015"), vec!["top_conference"]);
+        assert!(venue_tags(&profile, "Nature").is_empty(), "the file replaces the defaults");
+        let _ = std::fs::remove_dir_all(&profile);
+        assert!(venue_tags(&dir.join("nope"), "IEEE Transactions on Medical Imaging").is_empty(), "not in the neutral defaults");
         assert!(venue_tags(&dir.join("nope"), "Some Workshop").is_empty());
         assert!(venue_tags(&dir.join("nope"), "Lecture Notes in Computer Science").is_empty(), "contains 'science' but is not Science");
         assert_eq!(venue_tags(&dir.join("nope"), "Nature Medicine"), vec!["top_journal"]);
         assert_eq!(venue_tags(&dir.join("nope"), "2016 IEEE Conference on Computer Vision and Pattern Recognition (CVPR)"), vec!["top_conference"]);
-        assert_eq!(venue_tags(&dir.join("nope"), "Medical Image Computing and Computer-Assisted Intervention – MICCAI 2015"), vec!["top_conference"]);
         let tags = vec![Tag { id: "medical".into(), label: "醫學".into() }];
         let n = parse_notes("```json\n{\"summary\":\"s\",\"one_liner\":\"這篇…\",\"tags\":[\"medical\",\"invented\"]}\n```", &tags).unwrap();
         assert_eq!(n.tags, vec!["medical"], "only tags from the list");

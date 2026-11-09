@@ -10,6 +10,7 @@ edition.workspace = true
 pc-core = { path = "../core" }
 ym-llm.workspace = true
 ym-gitsync.workspace = true
+ym-home.workspace = true
 async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true

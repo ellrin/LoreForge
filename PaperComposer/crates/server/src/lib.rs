@@ -6,7 +6,7 @@
 //! 1. `PAPERCOMPOSER_WORKSPACE` (private repo root; profile in `profile/`)
 //! 2. `PAPERCOMPOSER_PROFILE` (a profile folder on its own)
 //! 3. `workspace_path` or `profile_path` in `<config dir>/PaperComposer/config.toml`
-//! 4. the bundled `workspace-template/` (demo mode)
+//! 4. the bundled demo workspace (`../private-example/PaperComposer`; `workspace-template/` inside the app bundle)
 //!
 //! The config file lives in the OS config folder, never inside a repository,
 //! so a personal profile path is never committed by accident.
@@ -26,7 +26,7 @@ pub mod wizard;
 
 use axum::{
     extract::{Path as AxPath, Query as AxQuery, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post, put},
     Router,
@@ -61,7 +61,7 @@ impl Paths {
     pub fn from_repo() -> Paths {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let root = root.canonicalize().unwrap_or(root);
-        Paths { ui: root.join("ui"), demo_workspace: root.join("workspace-template") }
+        Paths { ui: root.join("ui"), demo_workspace: root.join("../private-example/PaperComposer") }
     }
 }
 
@@ -199,8 +199,18 @@ fn demo_workspace(paths: &Paths) -> PathBuf {
     target
 }
 
+fn loreforge_home() -> ym_home::Home {
+    ym_home::Home::discover(Path::new(env!("CARGO_MANIFEST_DIR")))
+}
+
+/// Interface fonts from LoreForge `private/shared/fonts.toml` (CSS variables; linked after styles.css).
+async fn prefs_css() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], loreforge_home().prefs().fonts.css())
+}
+
 /// Resolution order: PAPERCOMPOSER_WORKSPACE, PAPERCOMPOSER_PROFILE,
-/// config workspace_path, config profile_path, bundled demo workspace.
+/// config workspace_path, config profile_path, LoreForge private/PaperComposer,
+/// bundled demo workspace.
 fn locate(paths: &Paths) -> (PathBuf, Option<PathBuf>, bool) {
     let env = |k| std::env::var(k).ok().map(PathBuf::from);
     if let Some(ws) = env("PAPERCOMPOSER_WORKSPACE") {
@@ -215,6 +225,10 @@ fn locate(paths: &Paths) -> (PathBuf, Option<PathBuf>, bool) {
     }
     if let Some(p) = cfg.profile_path {
         return (p, None, false);
+    }
+    // LoreForge: private/PaperComposer when it exists (the setup page creates it otherwise).
+    if let Some(ws) = loreforge_home().app_dir("PaperComposer").filter(|d| d.join("profile").is_dir()) {
+        return (ws.join("profile"), Some(ws), false);
     }
     let ws = demo_workspace(paths);
     (ws.join("profile"), Some(ws), true)
@@ -2794,6 +2808,7 @@ pub fn router(paths: Paths) -> Router {
         }
     }
     Router::new()
+        .route("/prefs.css", get(prefs_css))
         .route("/api/setup/status", get(setup_status))
         .route("/api/setup/workspace", post(setup_workspace))
         .route("/api/setup/clone", post(setup_clone))

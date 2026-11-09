@@ -1,0 +1,12 @@
+# 字型偏好：所有 App 共用。複製到 private/shared/fonts.toml 再改。
+# 需要授權的字型（公司字型、買來的字型）只寫在 private 裡；字型檔本身裝在系統（~/Library/Fonts），不放進任何 repo。
+
+# 介面字型（每個 App 網頁的 --sans / --serif / --mono）。留空 = 用 App 預設。
+[ui]
+# sans = ["Noto Sans TC", "PingFang TC", "sans-serif"]
+# serif = ["Source Serif 4", "Noto Serif TC", "serif"]
+# mono = ["JetBrains Mono", "ui-monospace"]
+
+# 簡報編輯器：簡報裡用到、這台電腦沒有的字型，要用什麼代替（依序嘗試）。
+[fallback]
+# "Brand Sans" = ["Brand Sans", "Calibri", "Carlito", "Arial"]

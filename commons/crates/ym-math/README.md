@@ -14,7 +14,7 @@
 | `slide_equations(doc)` | 取出一頁所有 `a14:m` |
 | `MathRenderer` / `NoRenderer` | Fallback 圖片（PNG/SVG）渲染掛勾；目前是 stub（TODO：KaTeX/MathJax 旁掛或 Typst） |
 
-實測（4 份 seminar，`examples/deck_equations.rs`）：93 個原生方程式 OMML→LaTeX 93/93 成功，再轉回 OMML 90/93。
+實測（4 份真實簡報，`examples/deck_equations.rs`）：93 個原生方程式 OMML→LaTeX 全部成功，再轉回 OMML 90/93。
 
 測試不需要 pandoc 也會通過：需要 pandoc 的測試在找不到時直接略過。
 

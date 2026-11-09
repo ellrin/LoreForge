@@ -18,7 +18,17 @@ async fn main() {
         }
     }
     let repo = sc_server::repo_dir();
-    let ws = sc_core::Workspace::from_env(&repo.join("../private/SlideComposer"));
+    // LoreForge private/SlideComposer, created from private-example/SlideComposer the first time.
+    let home = ym_home::Home::discover(&repo);
+    let default = match home.seed_app("SlideComposer") {
+        Ok(Some(d)) => d,
+        Ok(None) => repo.join("../private/SlideComposer"),
+        Err(e) => {
+            eprintln!("sc-server: private/SlideComposer: {e}");
+            repo.join("../private/SlideComposer")
+        }
+    };
+    let ws = sc_core::Workspace::from_env(&default);
     let web = repo.join("web");
     eprintln!("SlideComposer workspace: {} · decks: {}", ws.root.display(), ws.decks.display());
     let shared = sc_server::state(ws, web);

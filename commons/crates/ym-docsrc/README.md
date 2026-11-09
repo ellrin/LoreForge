@@ -67,23 +67,14 @@ LaTeX `text` (LaTeX mode) is there for ym-math → OMML when a slide wants nativ
 `YM_DOCSRC_DEBUG=1` prints the equation slots and bands; `examples/debug_lines.rs` prints line
 roles, headings and reading order.
 
-## Evaluation (2026-11-09, real papers, read-only; nothing from them is in the repo)
+## Evaluation (2026-11-09)
 
-True counts read from the PDFs (captions and equation tags); "found" = placed with a region.
-
-| Paper | Figures | Tables | Equations | Sections | References |
-|---|---|---|---|---|---|
-| MIA 2023, report generation (Elsevier 2-col) | 4/4 | 5/5 | 17/17 | 19 (all) | 42 (one year each) |
-| MIA 2023, nodule synthesis | 8/8 | 4/4 | 9/9 | 22 | 63 |
-| IEEE journal, knee cartilage (IEEE 2-col, small caps) | 5/5 | 8/8 | 12/12 | 17 (all I–V, A–E) | 66 = [66] |
-| MIA 2022, rib suppression | 9/9 | 7/7 | 16/16 | 25 | 44 |
-| Author's JBHI (IEEEtran) | 4/4 | 5/5 | 10/10 | 21 = LaTeX | 37 = .bbl |
-
-LaTeX mode on the JBHI source: 4 figures, 5 tables, 10 numbered equations, 21 sections,
-37 references; `attach_pdf` placed 19/19 numbered assets; captions LaTeX vs PDF token Jaccard
-0.92–1.00 (figures), 0.75–0.93 (tables: small caps/emphasis). Crops checked by eye: figures and
-tables (incl. MIA Fig. 1/2 and Tables 1–4 used in the seminar decks) match the paper; equation
-crops are complete incl. multi-line ones. ~5 s per 10-page paper (release).
+Run on five real two-column papers (IEEE and Elsevier styles, one with its LaTeX source);
+the papers are not in the repository and the per-paper notes are kept privately.
+Every numbered figure, table and equation was found and cropped (30/30 figures,
+29/29 tables, 64/64 equations); sections and references matched the true counts; in LaTeX
+mode `attach_pdf` placed every numbered asset, captions LaTeX vs PDF token Jaccard
+0.92–1.00 (figures) and 0.75–0.93 (tables: small caps/emphasis). ~5 s per 10-page paper (release).
 
 ```sh
 cargo run -p ym-docsrc --example docsrc -- pdf paper.pdf out/            # summary + crops

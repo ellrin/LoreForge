@@ -2,7 +2,7 @@
 
 Shared Rust crates and web components used by the author's apps (PaperComposer,
 JELearner, KnowledgeBase, SlideComposer, NeonDeck widgets, future apps). The overall
-design is in `../private/docs/ecosystem-design.md` (author's private notes) — read the section for the crate you touch.
+design is in `../private/shared/docs/ecosystem-design.md` (author's private notes) — read the section for the crate you touch.
 
 ## Layout
 

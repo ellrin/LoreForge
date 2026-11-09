@@ -2698,6 +2698,7 @@ dependencies = [
  "toml 0.8.23",
  "tower-http",
  "ym-gitsync",
+ "ym-home",
  "ym-llm",
  "zip",
 ]
@@ -5587,6 +5588,14 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "ym-home"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml 0.8.23",
 ]
 
 [[package]]

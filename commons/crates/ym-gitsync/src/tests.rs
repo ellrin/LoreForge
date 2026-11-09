@@ -194,3 +194,13 @@ async fn deploy_key_is_made_once() {
     assert!(first.starts_with("ssh-ed25519 ") && first.ends_with("ym-gitsync test"));
     assert_eq!(ensure_deploy_key(&key, "other").await.unwrap(), first);
 }
+
+#[tokio::test]
+async fn deploy_keys_are_never_made_inside_a_git_repo() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir(t.path().join(".git")).unwrap();
+    let key = vcs::deploy_key_path(&t.path().join("app"), "ellrin", "ws");
+    let err = crate::ensure_deploy_key(&key, "test").await.unwrap_err();
+    assert!(err.contains("git repository"), "{err}");
+    assert!(!key.exists());
+}

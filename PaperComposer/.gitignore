@@ -12,8 +12,7 @@
 /papers/
 *.local.toml
 /config.toml
-!workspace-template/**
-!private-example/**
+!example-workspace/**
 
 # Secrets
 .env

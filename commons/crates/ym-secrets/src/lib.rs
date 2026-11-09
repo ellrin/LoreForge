@@ -13,6 +13,7 @@
 //!    key per app) or `anthropic-api-key:<workspace>:<user>` (per user);
 //! 4. a file with owner-only permissions when the keychain is unavailable:
 //!    `<app dir>/credentials.toml` or `<app dir>/credentials/<workspace>/<user>.toml`;
+//!    never inside a git work tree (saving there is refused);
 //! 5. per user, for the workspace owner only: the app's single key (legacy).
 //!
 //! A user never falls back to another user's key. Keychain reads can prompt
@@ -187,6 +188,12 @@ impl KeyStore {
             let _ = std::fs::remove_file(&path);
             return Ok(KeySource::File);
         }
+        if let Some(repo) = git_work_tree(&path) {
+            return Err(format!(
+                "金鑰檔不能放在 git repository 裡（{}）。請改用鑰匙圈，或把設定資料夾移到 repository 外面。",
+                repo.display()
+            ));
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -200,6 +207,13 @@ impl KeyStore {
         }
         Ok(KeySource::File)
     }
+}
+
+/// The git work tree that contains `path` (an ancestor with a `.git`), if any.
+/// Key files are never written inside one, so a key cannot be committed by accident.
+pub fn git_work_tree(path: &Path) -> Option<PathBuf> {
+    let abs = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().ok()?.join(path) };
+    abs.ancestors().skip(1).find(|a| a.join(".git").exists()).map(Path::to_path_buf)
 }
 
 /// Write (or with an empty key, delete) a keychain item. macOS ties an item
@@ -286,6 +300,17 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn key_files_are_never_written_inside_a_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let inside = dir.path().join("private").join("app");
+        let err = store(&inside).save("sk-ant-x-0000000000", &Account::Single).unwrap_err();
+        assert!(err.contains("git repository"), "{err}");
+        assert!(!inside.join("credentials.toml").exists());
+        assert_eq!(git_work_tree(&inside.join("credentials.toml")), Some(dir.path().to_path_buf()));
+    }
+
     #[test]
     fn credential_files_are_owner_only() {
         use std::os::unix::fs::PermissionsExt;

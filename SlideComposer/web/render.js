@@ -17,7 +17,10 @@ const FONT_MAP = {
   "Cambria Math": ["Cambria Math", "STIX Two Math", "Latin Modern Math", "Times New Roman", "serif"],
   "Times New Roman": ["Times New Roman", "Times", "serif"],
 };
-// Fonts this table does not know (e.g. a template's brand font) fall back like Calibri.
+// The user's own fallbacks (private/shared/fonts.toml → /prefs.js) win: company or
+// licensed fonts are named there, never here.
+Object.assign(FONT_MAP, window.SC_PREFS?.fonts?.fallback ?? {});
+// Fonts neither table knows (e.g. a template's brand font) fall back like Calibri.
 const LATIN_FALLBACK = ["Calibri", "Carlito", "PT Sans", "Helvetica Neue", "Arial"];
 function fontStack(look) {
   const out = [];

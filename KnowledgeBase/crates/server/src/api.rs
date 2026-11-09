@@ -86,6 +86,7 @@ fn ok(v: impl serde::Serialize) -> R {
 
 pub fn routes() -> Router<Shared> {
     Router::new()
+        .route("/prefs.css", get(prefs_css))
         .route("/api/health", get(health))
         .route("/api/spaces", get(spaces))
         .route("/api/registry", get(registry))
@@ -441,4 +442,9 @@ async fn reminders_claim(State(s): State<Shared>, body: Bytes) -> R {
     let _busy = s.rem.busy.lock().await;
     let kb = kb!(s);
     ok(reminders::claim(&s.rem, &kb, &by)?)
+}
+
+/// The user's interface fonts (`private/shared/fonts.toml`) as CSS variables; linked after styles.css.
+async fn prefs_css(State(s): State<Shared>) -> impl axum::response::IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8"), (axum::http::header::CACHE_CONTROL, "no-cache")], s.home.prefs().fonts.css())
 }

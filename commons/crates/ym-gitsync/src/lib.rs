@@ -425,6 +425,11 @@ pub async fn clone(url: &str, target: &Path, ssh_command: Option<&str>) -> Resul
 pub async fn ensure_deploy_key(path: &Path, comment: &str) -> Result<String, String> {
     let public = path.with_extension("pub");
     if !path.exists() {
+        // A private key must never be able to end up in a commit.
+        let abs = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().map_err(|e| e.to_string())?.join(path) };
+        if let Some(repo) = abs.ancestors().skip(1).find(|a| a.join(".git").exists()) {
+            return Err(format!("部署金鑰不能放在 git repository 裡（{}）；請把 App 的設定資料夾放在 repository 外面。", repo.display()));
+        }
         std::fs::create_dir_all(path.parent().ok_or("位置無效")?).map_err(|e| e.to_string())?;
         let out = Command::new("ssh-keygen")
             .args(["-t", "ed25519", "-N", "", "-q", "-C", comment, "-f"])
