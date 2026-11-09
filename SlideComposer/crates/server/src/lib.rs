@@ -47,6 +47,45 @@ pub struct AppState {
     pub pandoc: lore_math::Pandoc,
     /// LoreForge private folders (read-only here: font preferences from private/shared/fonts.toml).
     pub home: lore_home::Home,
+    /// Fonts this machine has (system + private/shared/fonts/), scanned once.
+    pub fonts: std::sync::OnceLock<lore_fonts::Installed>,
+}
+
+/// The author's private font folder (`private/shared/fonts/`), when there is one.
+fn fonts_dir(home: &lore_home::Home) -> Option<PathBuf> {
+    home.shared_file("fonts").filter(|p| p.is_dir())
+}
+
+fn installed_fonts(s: &AppState) -> &lore_fonts::Installed {
+    s.fonts.get_or_init(|| lore_fonts::Installed::scan(fonts_dir(&s.home).as_deref()))
+}
+
+fn font_table(s: &AppState) -> lore_fonts::Table {
+    lore_fonts::Table::with_user(&s.home.prefs().fonts.fallback)
+}
+
+/// Every font name a deck uses (run looks, paragraph ends, table cells…).
+fn deck_font_names(deck: &serde_json::Value) -> Vec<String> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                for (k, x) in m {
+                    if matches!(k.as_str(), "font" | "ea_font" | "cs_font") {
+                        if let Some(f) = x.as_str() {
+                            out.push(f.to_string());
+                        }
+                    } else {
+                        walk(x, out);
+                    }
+                }
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    walk(deck, &mut out);
+    out
 }
 
 pub type Shared = Arc<AppState>;
@@ -88,6 +127,7 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/prefs.css", get(prefs_css))
         .route("/prefs.js", get(prefs_js))
+        .route("/fonts/{file}", get(font_file))
         .route("/api/info", get(info))
         .route("/api/styles/{id}", get(style))
         .route("/api/decks", post(new_deck))
@@ -110,8 +150,29 @@ pub fn routes() -> Router<Shared> {
 }
 
 /// Interface fonts from `private/shared/fonts.toml` (CSS variables; linked after styles.css).
+/// …plus `@font-face` rules for the font files in private/shared/fonts/.
 async fn prefs_css(State(s): State<Shared>) -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], s.home.prefs().fonts.css())
+    let css = s.home.prefs().fonts.css() + &lore_fonts::font_faces_css(installed_fonts(&s), "/fonts/");
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], css)
+}
+
+/// A font file from the author's private font folder (never anything else).
+async fn font_file(State(s): State<Shared>, Path(file): Path<String>) -> Response {
+    let Some(dir) = fonts_dir(&s.home).filter(|_| lore_fonts::safe_font_file(&file)) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match std::fs::read(dir.join(&file)) {
+        Ok(bytes) => {
+            let ct = match file.rsplit('.').next().map(|e| e.to_ascii_lowercase()).as_deref() {
+                Some("woff2") => "font/woff2",
+                Some("woff") => "font/woff",
+                Some("otf") | Some("otc") => "font/otf",
+                _ => "font/ttf",
+            };
+            ([(header::CONTENT_TYPE, ct)], bytes).into_response()
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// `window.SC_PREFS`: font fallbacks for fonts named in decks (`[fallback]` in
@@ -119,7 +180,7 @@ async fn prefs_css(State(s): State<Shared>) -> impl IntoResponse {
 /// are named only there, never in this repository.
 async fn prefs_js(State(s): State<Shared>) -> impl IntoResponse {
     let fonts = s.home.prefs().fonts;
-    let body = format!("window.SC_PREFS = {};\n", json!({ "fonts": { "fallback": fonts.fallback } }));
+    let body = format!("window.SC_PREFS = {};\n", json!({ "fonts": { "fallback": fonts.fallback, "stacks": font_table(&s).stacks() } }));
     ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], body)
 }
 
@@ -142,6 +203,7 @@ pub fn state(ws: Workspace, web: PathBuf) -> Shared {
         sessions: Mutex::new(HashMap::new()),
         pandoc: lore_math::Pandoc::default(),
         home: lore_home::Home::discover(&repo_dir()),
+        fonts: std::sync::OnceLock::new(),
     })
 }
 
@@ -232,12 +294,23 @@ async fn open(State(s): State<Shared>, Path(name): Path<String>) -> R {
     let sess = session(&s, &name)?;
     let sess = sess.lock().unwrap();
     let style = sess.editor.style.as_ref().map(|st| serde_json::to_value(&st.pack).unwrap());
+    // What each font the deck names becomes on this machine.
+    let deck = serde_json::to_value(&sess.editor.deck).unwrap_or_default();
+    let mut names = deck_font_names(&deck);
+    if let Some(st) = &style {
+        names.extend(deck_font_names(st));
+    }
+    let table = font_table(&s);
+    let fonts = lore_fonts::report(&table, installed_fonts(&s), names);
+    let stacks: serde_json::Map<String, serde_json::Value> = fonts.iter().map(|r| (r.name.clone(), json!(r.chain))).collect();
     Ok(Json(json!({
         "name": sess.name,
-        "deck": sess.editor.deck,
+        "deck": deck,
         "backdrops": sess.backdrops,
         "style": style,
         "status": status(&sess),
+        "fonts": fonts,
+        "font_stacks": stacks,
     })))
 }
 

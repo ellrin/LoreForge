@@ -1415,8 +1415,40 @@ function togglePanel(which, force) {
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────
+// Fonts the deck names that this machine lacks: a chip in the top bar, a list
+// on click (what each one becomes), closed by Esc or a click elsewhere.
+function showFonts(list) {
+  const chip = $("#fontChip"), pop = $("#fontPop");
+  const off = (list ?? []).filter((f) => f.how === "substitute" || f.how === "missing");
+  pop.hidden = true;
+  chip.setAttribute("aria-expanded", "false");
+  chip.hidden = !off.length;
+  if (!off.length) return;
+  const missing = off.filter((f) => f.how === "missing").length;
+  chip.textContent = `字型代替 ${off.length}`;
+  chip.title = "這份簡報用到的字型，這台電腦有些沒有；點開看用什麼代替";
+  chip.classList.toggle("err", missing > 0);
+  pop.textContent = "";
+  const head = document.createElement("p");
+  head.className = "muted";
+  head.textContent = "這台電腦沒有下列字型，畫面與 PDF 用右邊的字代替；字寬不同時換行可能和 PowerPoint 不一樣。規則可以寫在 private/shared/fonts.toml 的 [fallback]，字型檔可以放在 private/shared/fonts/。";
+  pop.append(head);
+  const ul = document.createElement("ul");
+  for (const f of off) {
+    const li = document.createElement("li");
+    const a = document.createElement("span"); a.className = "fname"; a.textContent = f.name; a.title = f.name;
+    const arrow = document.createElement("span"); arrow.className = "muted"; arrow.textContent = "→";
+    const b = document.createElement("span"); b.className = "fname" + (f.used ? "" : " err"); b.textContent = f.used ?? "找不到，用系統預設字"; b.title = (f.chain ?? []).join("、");
+    li.append(a, arrow, b);
+    ul.append(li);
+  }
+  pop.append(ul);
+}
+
 async function openDeck(name) {
   const r = await api(`/api/decks/${encodeURIComponent(name)}`);
+  SC.addFontStacks(r.font_stacks);
+  showFonts(r.fonts);
   S.name = r.name;
   S.deck = r.deck;
   S.style = r.style;
@@ -1478,6 +1510,15 @@ function wire() {
   $("#actSnap").onclick = (e) => { S.snap = !S.snap; e.currentTarget.setAttribute("aria-pressed", S.snap); };
   $("#actMode").onclick = () => { const m = document.documentElement.dataset.mode === "dark" ? "light" : "dark"; document.documentElement.dataset.mode = m; try { localStorage.setItem("sc.mode", m); } catch {} };
   $("#actHome").onclick = () => { const u = new URL(location.href); u.search = ""; history.pushState(null, "", u); showHome(); };
+  $("#fontChip").onclick = (e) => {
+    e.stopPropagation();
+    const pop = $("#fontPop"), open = pop.hidden;
+    pop.hidden = !open;
+    $("#fontChip").setAttribute("aria-expanded", String(open));
+    if (open) { const r = $("#fontChip").getBoundingClientRect(); pop.style.top = `${r.bottom + 6}px`; pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`; }
+  };
+  document.addEventListener("click", (e) => { if (!e.target.closest("#fontPop")) { $("#fontPop").hidden = true; $("#fontChip").setAttribute("aria-expanded", "false"); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#fontPop").hidden) { $("#fontPop").hidden = true; $("#fontChip").setAttribute("aria-expanded", "false"); } });
   $("#actPptx").onclick = async () => { try { const r = await api(deckApi("/export"), { body: {} }); toast(`已匯出：${r.path}`); } catch (e) { toast(e.message, true); } };
   $("#actPdf").onclick = async () => { toast("正在用 Chrome 產生 PDF…"); try { const r = await api(deckApi("/pdf"), { body: {} }); toast(`已輸出 PDF：${r.path}`); } catch (e) { toast(e.message, true); } };
   $("#slideAdd").onclick = addSlide;

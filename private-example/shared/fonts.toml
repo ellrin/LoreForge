@@ -7,6 +7,7 @@
 # serif = ["Source Serif 4", "Noto Serif TC", "serif"]
 # mono = ["JetBrains Mono", "ui-monospace"]
 
-# 簡報編輯器：簡報裡用到、這台電腦沒有的字型，要用什麼代替（依序嘗試）。
+# 文件裡用到、這台電腦沒有的字型，要用什麼代替（依序嘗試；比內建規則優先，見 commons/crates/lore-fonts）。
+# 字型檔也可以直接放在 private/shared/fonts/（.ttf .otf .ttc .woff2），App 會讓畫面讀得到，不必安裝。
 [fallback]
 # "Brand Sans" = ["Brand Sans", "Calibri", "Carlito", "Arial"]

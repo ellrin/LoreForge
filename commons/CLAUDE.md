@@ -7,7 +7,7 @@ design is in `../private/shared/docs/ecosystem-design.md` (author's private note
 ## Layout
 
 - `crates/<name>/` — one crate per module (`lore-llm`, `lore-secrets`, `lore-gitsync`, `lore-store`, `kb-core`,
-  `lore-notation`, `lore-voice`, `lore-docsrc`, `lore-canvas`, `lore-ooxml`, `lore-math`).
+  `lore-notation`, `lore-voice`, `lore-docsrc`, `lore-canvas`, `lore-ooxml`, `lore-math`, `lore-fonts`).
   Each crate knows nothing about any app. Apps depend on them by path
   (`../commons/crates/<name>` from an app folder).
 - `ui/` — framework-free Web Components (no build step), one folder per component,

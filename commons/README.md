@@ -17,6 +17,7 @@
 | `lore-notation` | 對照表：符號／方程式／圖／表／縮寫的登記、巨集、插入與校對 |
 | `lore-ooxml` | PPTX 無損讀寫、風格範本、進場動畫、風格包 |
 | `lore-math` | LaTeX ↔ OMML（以 pandoc 為旁掛程式） |
+| `lore-fonts` | 字型代替：文件指定的字型在這台電腦變成什麼（作者規則 → 字寬相同的開源字 → 分類預設），掃描系統與 `private/shared/fonts/` 的字型，產生私人字型的 `@font-face` |
 | `lore-canvas` | 簡報畫布：場景模型、標籤字型規則、可復原操作、漸進揭露、PPTX ↔ 畫布 |
 | `lore-docsrc` | 論文素材擷取：從 arXiv LaTeX 或 PDF 找出圖、表、方程式並裁切 |
 

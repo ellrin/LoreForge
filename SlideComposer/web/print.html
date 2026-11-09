@@ -26,6 +26,7 @@
   const name = q.get("deck");
   const all = q.get("hidden") === "1";
   const r = await (await fetch(`/api/decks/${encodeURIComponent(name)}`)).json();
+  SC.addFontStacks(r.font_stacks);
   const W = SC.px(r.deck.size.w), H = SC.px(r.deck.size.h);
   document.documentElement.style.setProperty("--w", `${W}px`);
   document.documentElement.style.setProperty("--h", `${H}px`);

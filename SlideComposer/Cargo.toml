@@ -12,6 +12,7 @@ lore-canvas = { path = "../commons/crates/lore-canvas" }
 lore-ooxml = { path = "../commons/crates/lore-ooxml" }
 lore-math = { path = "../commons/crates/lore-math" }
 lore-home = { path = "../commons/crates/lore-home" }
+lore-fonts = { path = "../commons/crates/lore-fonts" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

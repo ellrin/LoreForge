@@ -1,0 +1,90 @@
+# Default font substitutions (public, neutral). A document names a font; the
+# first name in its chain that this machine has is used. The author's own
+# rules (private/shared/fonts.toml [fallback]) are tried first, and company or
+# licensed fonts are named only there.
+#
+# category: sans | serif | mono | math | cjk-sans | cjk-serif | cjk-kai
+# A font this table does not know is guessed into a category and gets that
+# category's chain.
+
+[category]
+# Unknown sans fonts in Office documents were mostly laid out for Calibri-like
+# widths: narrow humanist faces first (PT Sans ships with macOS), Arial-wide last.
+sans = ["Calibri", "Carlito", "PT Sans", "Helvetica Neue", "Helvetica", "Arial", "Liberation Sans", "Arimo", "Noto Sans", "DejaVu Sans"]
+serif = ["Times New Roman", "Times", "Liberation Serif", "Tinos", "Noto Serif", "DejaVu Serif"]
+mono = ["Menlo", "Courier New", "Liberation Mono", "Cousine", "DejaVu Sans Mono"]
+math = ["STIX Two Math", "Latin Modern Math", "Cambria Math", "STIXGeneral"]
+cjk-sans = ["PingFang TC", "Noto Sans TC", "Noto Sans CJK TC", "Heiti TC", "Microsoft JhengHei"]
+cjk-serif = ["Songti TC", "LiSong Pro", "Noto Serif TC", "Noto Serif CJK TC", "PMingLiU"]
+cjk-kai = ["BiauKai", "Kaiti TC", "TW-Kai", "AR PL UKai TW", "DFKai-SB"]
+
+# Metric-compatible substitutes first (same widths, so lines break the same way).
+[font."Calibri"]
+category = "sans"
+chain = ["Calibri", "Carlito"]
+[font."Calibri Light"]
+category = "sans"
+chain = ["Calibri Light", "Calibri", "Carlito"]
+[font."Cambria"]
+category = "serif"
+chain = ["Cambria", "Caladea"]
+[font."Cambria Math"]
+category = "math"
+chain = ["Cambria Math", "STIX Two Math", "Latin Modern Math"]
+[font."Arial"]
+category = "sans"
+chain = ["Arial", "Liberation Sans", "Arimo", "Helvetica"]
+[font."Helvetica"]
+category = "sans"
+chain = ["Helvetica", "Helvetica Neue", "Arial", "Liberation Sans"]
+[font."Times New Roman"]
+category = "serif"
+chain = ["Times New Roman", "Times", "Liberation Serif", "Tinos"]
+[font."Courier New"]
+category = "mono"
+chain = ["Courier New", "Liberation Mono", "Cousine", "Courier"]
+[font."Consolas"]
+category = "mono"
+chain = ["Consolas", "Menlo", "Inconsolata"]
+[font."Segoe UI"]
+category = "sans"
+chain = ["Segoe UI", "Helvetica Neue", "Noto Sans"]
+[font."Georgia"]
+category = "serif"
+chain = ["Georgia", "Gelasio"]
+[font."微軟正黑體"]
+category = "cjk-sans"
+chain = ["Microsoft JhengHei", "微軟正黑體", "PingFang TC", "Noto Sans TC", "Noto Sans CJK TC"]
+[font."Microsoft JhengHei"]
+category = "cjk-sans"
+chain = ["Microsoft JhengHei", "微軟正黑體", "PingFang TC", "Noto Sans TC", "Noto Sans CJK TC"]
+[font."Microsoft JhengHei UI"]
+category = "cjk-sans"
+chain = ["Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC"]
+[font."新細明體"]
+category = "cjk-serif"
+chain = ["PMingLiU", "新細明體", "LiSong Pro", "Apple LiSung", "Noto Serif TC", "Noto Serif CJK TC"]
+[font."PMingLiU"]
+category = "cjk-serif"
+chain = ["PMingLiU", "新細明體", "LiSong Pro", "Noto Serif TC", "Noto Serif CJK TC"]
+[font."細明體"]
+category = "cjk-serif"
+chain = ["MingLiU", "細明體", "LiSong Pro", "Noto Serif TC", "Noto Serif CJK TC"]
+[font."標楷體"]
+category = "cjk-kai"
+chain = ["DFKai-SB", "標楷體", "BiauKai", "Kaiti TC", "TW-Kai", "AR PL UKai TW"]
+[font."DFKai-SB"]
+category = "cjk-kai"
+chain = ["DFKai-SB", "標楷體", "BiauKai", "Kaiti TC", "TW-Kai", "AR PL UKai TW"]
+[font."芫荽"]
+category = "cjk-sans"
+chain = ["Iansui", "芫荽", "Klee One", "PingFang TC", "Noto Sans TC"]
+[font."Iansui"]
+category = "cjk-sans"
+chain = ["Iansui", "芫荽", "Klee One", "PingFang TC", "Noto Sans TC"]
+[font."微軟雅黑"]
+category = "cjk-sans"
+chain = ["Microsoft YaHei", "微軟雅黑", "PingFang SC", "Noto Sans SC", "Noto Sans CJK SC"]
+[font."Microsoft YaHei"]
+category = "cjk-sans"
+chain = ["Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Sans CJK SC"]

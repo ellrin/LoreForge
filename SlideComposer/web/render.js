@@ -7,8 +7,14 @@ const px = (e) => e / EMU_PX;
 const ptpx = (pt) => (pt * 96) / 72;
 const SVGNS = "http://www.w3.org/2000/svg";
 
-// Font stacks: fonts named in the decks → what this machine has.
-const FONT_MAP = {
+// Font stacks: fonts named in the decks → what this machine has. The server
+// (lore-fonts) sends the rules: the author's own (private/shared/fonts.toml;
+// company or licensed fonts are named only there), then the defaults with
+// metric-compatible substitutes first (Calibri → Carlito), then a chain for the
+// font's category. This table is only used when the server sent nothing.
+const FONT_MAP = new Map();
+const addStacks = (m) => Object.entries(m ?? {}).forEach(([k, v]) => FONT_MAP.set(k.toLowerCase(), v));
+addStacks({
   "微軟正黑體": ["Microsoft JhengHei", "微軟正黑體", "PingFang TC", "Noto Sans TC"],
   "Microsoft JhengHei": ["Microsoft JhengHei", "PingFang TC", "Noto Sans TC"],
   "新細明體": ["PMingLiU", "新細明體", "LiSong Pro", "PingFang TC"],
@@ -16,17 +22,16 @@ const FONT_MAP = {
   "Calibri Light": ["Calibri Light", "Calibri", "Carlito", "PT Sans", "Helvetica Neue", "Arial"],
   "Cambria Math": ["Cambria Math", "STIX Two Math", "Latin Modern Math", "Times New Roman", "serif"],
   "Times New Roman": ["Times New Roman", "Times", "serif"],
-};
-// The user's own fallbacks (private/shared/fonts.toml → /prefs.js) win: company or
-// licensed fonts are named there, never here.
-Object.assign(FONT_MAP, window.SC_PREFS?.fonts?.fallback ?? {});
+});
+addStacks(window.SC_PREFS?.fonts?.stacks);
+addStacks(window.SC_PREFS?.fonts?.fallback);
 // Fonts neither table knows (e.g. a template's brand font) fall back like Calibri.
 const LATIN_FALLBACK = ["Calibri", "Carlito", "PT Sans", "Helvetica Neue", "Arial"];
 function fontStack(look) {
   const out = [];
   for (const f of [look.font, look.ea_font]) {
     if (!f) continue;
-    for (const x of FONT_MAP[f] ?? [f, ...LATIN_FALLBACK]) if (!out.includes(x)) out.push(x);
+    for (const x of FONT_MAP.get(f.toLowerCase()) ?? [f, ...LATIN_FALLBACK]) if (!out.includes(x)) out.push(x);
   }
   out.push("PingFang TC", "Noto Sans TC", "sans-serif");
   return out.map((f) => (/^[a-z-]+$/i.test(f) && !f.includes(" ") ? f : `"${f}"`)).join(", ");
@@ -479,4 +484,4 @@ function renderWarnings(slide) {
   return w;
 }
 
-window.SC = { EMU_PX, px, ptpx, rgba, fontStack, renderSlide, renderObject, renderText, renderWarnings, geomPath, KNOWN_GEOMS };
+window.SC = { EMU_PX, px, ptpx, rgba, fontStack, addFontStacks: addStacks, renderSlide, renderObject, renderText, renderWarnings, geomPath, KNOWN_GEOMS };
