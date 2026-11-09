@@ -1,0 +1,15 @@
+[package]
+name = "lore-canvas"
+description = "App-agnostic slide scene model: objects, style-pack rules, undoable ops, progressive reveal, lossless PPTX conversion"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+lore-ooxml = { path = "../lore-ooxml" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,8 +1,8 @@
-# PaperComposer's LLM tasks (design §9), layered over ym-llm's shared
+# PaperComposer's LLM tasks (design §9), layered over lore-llm's shared
 # tasks.toml. A user file `<config folder>/PaperComposer/tasks.toml` in the
 # same format can add an `[override]` per task.
 #
-# Two ym-llm model refs here mean "what the user set up in the app":
+# Two lore-llm model refs here mean "what the user set up in the app":
 #   local:current     the local engine that is connected (an external
 #                     llama-server from [engine] url, or the model started in
 #                     「AI 與同步」)

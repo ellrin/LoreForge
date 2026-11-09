@@ -19,7 +19,7 @@ async fn main() {
     }
     let repo = sc_server::repo_dir();
     // LoreForge private/SlideComposer, created from private-example/SlideComposer the first time.
-    let home = ym_home::Home::discover(&repo);
+    let home = lore_home::Home::discover(&repo);
     let default = match home.seed_app("SlideComposer") {
         Ok(Some(d)) => d,
         Ok(None) => repo.join("../private/SlideComposer"),

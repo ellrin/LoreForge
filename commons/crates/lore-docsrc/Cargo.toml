@@ -1,0 +1,22 @@
+[package]
+name = "lore-docsrc"
+description = "Paper material extraction (design §7.4): sections, figures, tables, equations, captions, references and metadata from arXiv LaTeX sources or PDFs, as a reusable asset catalog with page crops."
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+regex = "1"
+flate2 = "1"
+tar = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+lore-llm = { path = "../lore-llm", default-features = false }
+
+[dev-dependencies]
+tempfile.workspace = true

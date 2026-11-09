@@ -10,7 +10,7 @@
 //! - [`progress`]: per-member learning state and the familiarity state machine (§4.2, §4.4).
 //! - [`edges`]: `[[wikilink]]` mentions; explicit links live in the node.
 //! - [`scan`]: term scanner (Aho-Corasick over titles + aliases).
-//! - [`llm`]: card drafting / term extraction trait with a mock — the ym-llm
+//! - [`llm`]: card drafting / term extraction trait with a mock — the lore-llm
 //!   integration point.
 //! - [`kb`]: [`KnowledgeBase`], the façade apps use (create / edit / trash / recall /
 //!   share / queries).
@@ -35,12 +35,12 @@ pub use node::{Node, NodeFields};
 pub use progress::{Intervals, Outcome, Progress, State};
 pub use registry::Registry;
 pub use scan::{ScanOptions, ScanSpan};
-pub use ym_store;
+pub use lore_store;
 
 #[derive(Debug, thiserror::Error)]
 pub enum KbError {
     #[error(transparent)]
-    Store(#[from] ym_store::StoreError),
+    Store(#[from] lore_store::StoreError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
@@ -59,7 +59,7 @@ pub enum KbError {
     /// The card changed since the caller read it.
     #[error("revision conflict: expected {expected}, file has {actual}")]
     Conflict { expected: u64, actual: u64 },
-    /// The LLM assistant failed (ym-llm integration point).
+    /// The LLM assistant failed (lore-llm integration point).
     #[error("assistant: {0}")]
     Assistant(String),
 }
@@ -67,7 +67,7 @@ pub enum KbError {
 impl KbError {
     /// Store errors keep their own category (not found / forbidden / invalid).
     pub fn category(&self) -> &'static str {
-        use ym_store::StoreError as S;
+        use lore_store::StoreError as S;
         match self {
             KbError::NotFound(_) | KbError::Store(S::NotFound(_)) => "not_found",
             KbError::Forbidden(_) | KbError::Store(S::Forbidden(_)) => "forbidden",

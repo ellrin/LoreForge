@@ -1,4 +1,4 @@
-// Slide renderer: canvas model (ym-canvas JSON) → DOM/SVG. Used by the editor
+// Slide renderer: canvas model (lore-canvas JSON) → DOM/SVG. Used by the editor
 // canvas, the slide sorter thumbnails and the print route (PDF).
 // Units: 1 px = 9525 EMU (96 dpi); font sizes in pt.
 

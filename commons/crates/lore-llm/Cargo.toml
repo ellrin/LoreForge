@@ -1,0 +1,27 @@
+[package]
+name = "lore-llm"
+version.workspace = true
+edition.workspace = true
+description = "The single LLM layer for every app: providers (Claude API, Claude subscription via Claude Code, llama-server / OpenAI-compatible, mock), the shared model catalog, local llama-server lifecycle, task routing (tasks.toml) and API-key secrets."
+
+[features]
+default = ["zhtw"]
+# Taiwan-usage post-processing for local-model replies (OpenCC s2twp).
+zhtw = ["dep:ferrous-opencc"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+base64.workspace = true
+lore-secrets = { path = "../lore-secrets" }
+ferrous-opencc = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+axum.workspace = true

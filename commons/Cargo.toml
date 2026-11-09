@@ -22,6 +22,6 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "linux-
 ferrous-opencc = "0.4"
 axum = "0.8"
 tempfile = "3"
-# ym-ooxml / ym-math (A4)
+# lore-ooxml / lore-math (A4)
 quick-xml = "0.42"
 zip = { version = "2.6", default-features = false, features = ["deflate"] }

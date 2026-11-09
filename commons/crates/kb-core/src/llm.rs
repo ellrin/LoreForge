@@ -1,7 +1,7 @@
 //! LLM-dependent features behind a small trait.
 //!
 //! ┌─────────────────────────────────────────────────────────────────────────────┐
-//! │ INTEGRATION POINT (ym-llm): `ym-llm` is being built in parallel. When it    │
+//! │ INTEGRATION POINT (lore-llm): `lore-llm` is being built in parallel. When it    │
 //! │ lands, add an implementation of [`CardAssistant`] that runs the tasks       │
 //! │ `kb-summarize-card` (draft) and `kb-extract-terms` (candidates) through its  │
 //! │ task router with a JSON schema, validates the result and retries once       │
@@ -30,7 +30,7 @@ pub trait CardAssistant: Send + Sync {
     fn draft_card(&self, req: &DraftRequest) -> Result<NodeFields>;
     /// Candidate terms in `text` that are not in `known` (lowercased names).
     fn extract_terms(&self, text: &str, known: &[String]) -> Result<Vec<String>>;
-    /// Shown in the UI ("mock", later the model id from ym-llm).
+    /// Shown in the UI ("mock", later the model id from lore-llm).
     fn name(&self) -> String;
 }
 

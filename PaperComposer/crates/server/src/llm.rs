@@ -1,4 +1,4 @@
-//! Writing engines, through ym-llm.
+//! Writing engines, through lore-llm.
 //!
 //! Every model call is a task from `tasks.toml` (compose, soft check,
 //! decompose, outline, caption, reference search and notes, citation
@@ -13,7 +13,7 @@
 //!
 //! With no choice the task's own order applies (local first, then Claude);
 //! a choice is that engine or an error, never a silent fallback.
-//! `local:current` and `claude:selected` in tasks.toml are ym-llm's refs for
+//! `local:current` and `claude:selected` in tasks.toml are lore-llm's refs for
 //! "the local engine that is connected" and "the Claude model picked in
 //! settings". Local engines write at temperature 0.2 (Claude takes no
 //! sampling parameters). The API key never touches a file: it comes from ANTHROPIC_API_KEY or the
@@ -22,18 +22,18 @@
 use pc_core::compose::Prompt;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
-use ym_llm::catalog::Catalog;
-use ym_llm::claude_code::{Cache, Cli};
-use ym_llm::local::{Layout, LocalRuntime};
-use ym_llm::router::{ApiAccess, CLAUDE_SELECTED, ExternalServer, LOCAL_CURRENT, LocalAccess, StandardFactory, SubscriptionAccess};
-use ym_llm::secrets::{Account, KeySource, KeyStore};
-use ym_llm::{LlmRequest, Route, RouteOptions, Router, TaskTable};
+use lore_llm::catalog::Catalog;
+use lore_llm::claude_code::{Cache, Cli};
+use lore_llm::local::{Layout, LocalRuntime};
+use lore_llm::router::{ApiAccess, CLAUDE_SELECTED, ExternalServer, LOCAL_CURRENT, LocalAccess, StandardFactory, SubscriptionAccess};
+use lore_llm::secrets::{Account, KeySource, KeyStore};
+use lore_llm::{LlmRequest, Route, RouteOptions, Router, TaskTable};
 
 const TASKS: &str = include_str!("../tasks.toml");
 /// Keychain service: the name the first versions stored the key under.
 pub const SERVICE: &str = "PaperComposer";
 /// Sampling temperature for local engines (what PaperComposer always used;
-/// ym-llm leaves it out for Claude, whose API rejects it).
+/// lore-llm leaves it out for Claude, whose API rejects it).
 pub const LOCAL_TEMPERATURE: f32 = 0.2;
 
 /// Which engine writes. None = automatic: the task's order (local first).
@@ -127,11 +127,11 @@ impl Llm {
             layout,
             external: RwLock::new(external),
             model: RwLock::new(model),
-            base_url: std::env::var("PAPERCOMPOSER_CLAUDE_BASE_URL").unwrap_or_else(|_| ym_llm::claude_api::DEFAULT_BASE_URL.into()),
+            base_url: std::env::var("PAPERCOMPOSER_CLAUDE_BASE_URL").unwrap_or_else(|_| lore_llm::claude_api::DEFAULT_BASE_URL.into()),
         }
     }
 
-    /// The app's tasks over ym-llm's shared ones, then the user's file.
+    /// The app's tasks over lore-llm's shared ones, then the user's file.
     pub fn task_table(user_file: Option<&std::path::Path>) -> Result<TaskTable, String> {
         let base = TaskTable::bundled().merge(TaskTable::parse(TASKS)?);
         TaskTable::load(base, user_file)
@@ -171,7 +171,7 @@ impl Llm {
         let k = self.key();
         ClaudeStatus {
             configured: k.is_some(),
-            masked: k.as_ref().map(|(k, _)| ym_llm::secrets::mask(k)),
+            masked: k.as_ref().map(|(k, _)| lore_llm::secrets::mask(k)),
             source: k.map(|(_, s)| s),
             model: self.model(),
             models: self.cloud_models(),
@@ -273,7 +273,7 @@ pub fn request(route: &Route, prompt: &Prompt, extra: Option<&str>, schema: Opti
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use ym_llm::{OpenAiCompat, OpenAiCompatConfig};
+    use lore_llm::{OpenAiCompat, OpenAiCompatConfig};
 
     fn llm(external: Option<String>) -> Arc<Llm> {
         let tasks = Llm::task_table(None).unwrap();
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(body["response_format"]["json_schema"]["schema"], schema);
         assert!((body["temperature"].as_f64().unwrap() - 0.2).abs() < 1e-6, "local engines write at 0.2");
         // Claude gets the same request without sampling parameters.
-        let claude = ym_llm::ClaudeApi::new(ym_llm::ClaudeApiConfig::new("claude-haiku-5-5"), "test-key").body(&req);
+        let claude = lore_llm::ClaudeApi::new(lore_llm::ClaudeApiConfig::new("claude-haiku-5-5"), "test-key").body(&req);
         assert!(claude.get("temperature").is_none());
     }
 

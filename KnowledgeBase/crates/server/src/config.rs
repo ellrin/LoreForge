@@ -3,7 +3,7 @@
 //! Priority: command line (`--space <dir>` repeatable, `--member`, `--port`) > env
 //! (`KB_SPACES` = dirs separated by `:`, `KB_MEMBER`, `PORT`) > `config.toml` in
 //! `<app dir>` > LoreForge `private/KnowledgeBase` (seeded from `private-example/KnowledgeBase`,
-//! see `ym-home`). The member defaults to `id` in `private/shared/profile.toml`. `<app dir>` is `$KB_HOME` or
+//! see `lore-home`). The member defaults to `id` in `private/shared/profile.toml`. `<app dir>` is `$KB_HOME` or
 //! `<OS config dir>/KnowledgeBase/` (also holds `reminders.toml`, see `reminders.rs`).
 //!
 //! ```toml
@@ -72,9 +72,9 @@ impl Config {
             spaces = v.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
         }
         if spaces.is_empty() {
-            spaces = file.spaces.iter().map(|s| ym_store::expand_home(s)).collect();
+            spaces = file.spaces.iter().map(|s| lore_store::expand_home(s)).collect();
         }
-        let home = ym_home::Home::discover(&repo_dir());
+        let home = lore_home::Home::discover(&repo_dir());
         if spaces.is_empty() {
             // LoreForge: private/KnowledgeBase, created from private-example/KnowledgeBase the first time.
             match home.seed_app("KnowledgeBase") {

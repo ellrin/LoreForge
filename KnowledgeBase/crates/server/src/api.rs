@@ -22,7 +22,7 @@
 //! | GET | /api/timeline?days=&space= | per day created / edited |
 //! | POST | /api/assets?space=&ext= | raw bytes → `{asset, ext, url}` |
 //! | GET | /api/assets/{space}/{hex.ext} | the file |
-//! | POST | /api/draft | `{term, context, kind?, lang?}` → card draft (mock until ym-llm) |
+//! | POST | /api/draft | `{term, context, kind?, lang?}` → card draft (mock until lore-llm) |
 //! | POST | /api/reindex | rebuild the index from the files |
 //! | GET | /api/stats | today's numbers (+ notification times for NeonDeck) |
 //! | GET/PUT | /api/reminders | e-mail / notification settings, state, password status |
@@ -62,8 +62,8 @@ impl From<KbError> for ApiError {
     }
 }
 
-impl From<ym_store::StoreError> for ApiError {
-    fn from(e: ym_store::StoreError) -> ApiError {
+impl From<lore_store::StoreError> for ApiError {
+    fn from(e: lore_store::StoreError) -> ApiError {
         KbError::from(e).into()
     }
 }
@@ -318,7 +318,7 @@ async fn put_asset(State(s): State<Shared>, Query(q): Query<AssetQ>, body: Bytes
 
 async fn get_asset(State(s): State<Shared>, Path((space, file)): Path<(String, String)>) -> Result<Response, ApiError> {
     let (hex, ext) = file.rsplit_once('.').ok_or_else(|| bad("asset file name"))?;
-    let r = ym_store::AssetRef::parse(hex, ext)?;
+    let r = lore_store::AssetRef::parse(hex, ext)?;
     let bytes = {
         let kb = kb!(s);
         kb.get_asset(&space, &r)?

@@ -21,7 +21,7 @@ use crate::Result;
 pub struct ScanOptions {
     /// Only cards in these spaces (empty = all mounted spaces).
     pub spaces: Vec<String>,
-    /// Ask the assistant for candidate terms that have no card yet (ym-llm later).
+    /// Ask the assistant for candidate terms that have no card yet (lore-llm later).
     pub candidates: bool,
     /// Record an `encountered` event for every matched card (first occurrence).
     pub record: bool,

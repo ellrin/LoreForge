@@ -1,11 +1,11 @@
 //! Local models: system check, downloads, and the llama.cpp runtime.
 //!
-//! The catalog is ym-llm's shared `catalog.json` (a new model is a new
+//! The catalog is lore-llm's shared `catalog.json` (a new model is a new
 //! entry); a user may replace it with `models/catalog.json` in the app data
 //! folder, in the same shape. Files are resolved at download time through the
 //! Hugging Face API by suffix, and llama.cpp comes from its latest GitHub
 //! release, so neither exact build names nor download links are hard-coded.
-//! Starting and stopping llama-server is ym-llm's `LocalRuntime`.
+//! Starting and stopping llama-server is lore-llm's `LocalRuntime`.
 //!
 //! Nothing downloads without the user first seeing the plan (file names,
 //! sizes, sources) and confirming it.
@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
-use ym_llm::catalog::{Catalog, Machine, Model};
-use ym_llm::local::{self, Layout, LocalRuntime, Phase};
+use lore_llm::catalog::{Catalog, Machine, Model};
+use lore_llm::local::{self, Layout, LocalRuntime, Phase};
 
 /// The shared catalog, or a user override in the app data folder. Without
 /// an override, the descriptions are PaperComposer's own
@@ -124,8 +124,8 @@ pub async fn system_info() -> SystemInfo {
 /// (a 4B at Q8 is a bigger file than a 12B at Q4). Uncensored models are
 /// never recommended.
 pub fn recommend(cat: &Catalog, sys: &SystemInfo) -> Option<String> {
-    // Unified memory and discrete GPUs both count; ym-llm takes the larger pool.
-    ym_llm::catalog::recommend(cat, &Machine { memory_gb: sys.memory_gb as f64, gpu_memory_gb: sys.gpu_memory_gb.map(f64::from) })
+    // Unified memory and discrete GPUs both count; lore-llm takes the larger pool.
+    lore_llm::catalog::recommend(cat, &Machine { memory_gb: sys.memory_gb as f64, gpu_memory_gb: sys.gpu_memory_gb.map(f64::from) })
 }
 
 // ── Download plan ───────────────────────────────────────

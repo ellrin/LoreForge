@@ -10,7 +10,7 @@
 
 ## 執行
 
-需要 [Rust](https://rustup.rs)（1.88 以上）。共用模組 `commons`（`ym-llm`：模型與任務路由；`ym-gitsync`：Git 同步）以相對路徑引用，要放在這個 App 資料夾旁邊：`<上層>/commons` 與 `<上層>/PaperComposer/public`。
+需要 [Rust](https://rustup.rs)（1.88 以上）。共用模組 `commons`（`lore-llm`：模型與任務路由；`lore-gitsync`：Git 同步）以相對路徑引用，要放在這個 App 資料夾旁邊：`<上層>/commons` 與 `<上層>/PaperComposer/public`。
 
 **桌面版**
 
@@ -122,7 +122,7 @@ your-private-repo/
 - **另一台裝置先推了**：先抓遠端、把你的 commit 接在遠端之後再 push（不會先推一次失敗）；若兩邊改到同一句，**中止並還原**，你的修改仍保留在本機，不會自動合併。永遠不會 force-push。
 - **commit 前檢查金鑰**：新增的內容看起來像 API key 或 token 時，拒絕 commit。
 
-同步由共用模組 `ym-gitsync` 處理，使用系統安裝的 `git`，登入交給你電腦上的 Git 憑證管理（Windows 為 Git Credential Manager），App 不保存 Git 密碼。作者名稱沿用你的 `git config user.name` 與 `user.email`。
+同步由共用模組 `lore-gitsync` 處理，使用系統安裝的 `git`，登入交給你電腦上的 Git 憑證管理（Windows 為 Git Credential Manager），App 不保存 Git 密碼。作者名稱沿用你的 `git config user.name` 與 `user.email`。
 
 ## 新論文
 
@@ -285,7 +285,7 @@ tlmgr search --global --file /xxx.sty
 
 **台灣用語**：本機模型寫繁體中文時字形正確，但常用大陸詞（數據、網絡、視頻、信息、代碼）。本機模型的回覆會經過 OpenCC `s2twp` 校正成台灣用語（資料、網路、影片、資訊、程式碼），英文、LaTeX 與 JSON 不受影響；「文件」這類台灣也通用的詞保留原樣。Claude 的回覆不轉換。
 
-可選的模型列在共用模組的 `commons/crates/ym-llm/catalog.json`（所有 App 共用一份）：Gemma 4（E4B、12B、31B）與 Qwen（3.5 4B、3.5 9B、3.8 27B），以及兩者的 abliterated 版本（移除拒答，標示 **Uncensored**，不會被推薦）。目前預設 Gemma 4 12B（Q8_0；記憶體較少時用 Q4_K_XL）。寫作區的「本機」按鈕會列出已下載的模型，點一下就切換。各模型的一行說明是 PaperComposer 自己的（`crates/server/src/model_summaries.json`，速度以 tokens/秒標示）；共用 catalog 的說明是為所有 App 寫的。模型以不思考模式執行（`--reasoning-budget 0`）：每個任務都要求固定的 JSON 格式，思考只會讓一段文字多等好幾分鐘。
+可選的模型列在共用模組的 `commons/crates/lore-llm/catalog.json`（所有 App 共用一份）：Gemma 4（E4B、12B、31B）與 Qwen（3.5 4B、3.5 9B、3.8 27B），以及兩者的 abliterated 版本（移除拒答，標示 **Uncensored**，不會被推薦）。目前預設 Gemma 4 12B（Q8_0；記憶體較少時用 Q4_K_XL）。寫作區的「本機」按鈕會列出已下載的模型，點一下就切換。各模型的一行說明是 PaperComposer 自己的（`crates/server/src/model_summaries.json`，速度以 tokens/秒標示）；共用 catalog 的說明是為所有 App 寫的。模型以不思考模式執行（`--reasoning-budget 0`）：每個任務都要求固定的 JSON 格式，思考只會讓一段文字多等好幾分鐘。
 
 M6 32 GB 實測的生成速度（token/秒）：Qwen3.5 4B 30.8、Gemma 4 E4B 27.6、Qwen3.5 9B 16.8、Gemma 4 12B Q8 11.5、Qwen3.8 27B 8.2、Gemma 4 31B 8.0。寫英文段落時，Gemma 容易把句型庫例句的內容帶進來，Qwen3.8 27B 較忠於你給的重點。之後有新模型（例如 Gemma 5），在清單加一筆即可出現在精靈中：
 
@@ -327,7 +327,7 @@ model = "gemma-4-12b"
 
 ### 任務與引擎
 
-所有模型呼叫都經過共用模組 `ym-llm`，每個用途是一個「任務」，定義在 [`crates/server/tasks.toml`](crates/server/tasks.toml)：
+所有模型呼叫都經過共用模組 `lore-llm`，每個用途是一個「任務」，定義在 [`crates/server/tasks.toml`](crates/server/tasks.toml)：
 
 | 任務 | 用途 | 預設順序 |
 |---|---|---|
@@ -357,7 +357,7 @@ pc-ref-notes = "claude:haiku"       # 或 local:qwen3.5-9b-q8、claude-api:sonne
 ```
 crates/core         資料庫讀取與驗證、句型檢索、段落檢查、生成提示詞與輸出驗證（不需模型）
 crates/server       本機伺服器（只監聽 127.0.0.1），桌面版與瀏覽器模式共用；tasks.toml 為模型任務
-../commons       共用模組（ym-llm、ym-gitsync），以相對路徑引用
+../commons       共用模組（lore-llm、lore-gitsync），以相對路徑引用
 apps/desktop        Tauri 桌面殼：啟動伺服器並開啟視窗
 ui/                 介面（HTML / CSS / JS）
 ../private-example/PaperComposer/  私人工作區的最小範本與示範資料（沒有指定工作區時使用）

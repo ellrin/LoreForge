@@ -29,10 +29,10 @@ private-example/              （公開，在 LoreForge repo 裡）
 
 ## 新的 App 怎麼用私人資料
 
-用 `commons/crates/ym-home`：
+用 `commons/crates/lore-home`：
 
 ```rust
-let home = ym_home::Home::discover(Path::new(env!("CARGO_MANIFEST_DIR")));
+let home = lore_home::Home::discover(Path::new(env!("CARGO_MANIFEST_DIR")));
 let data = home.seed_app("MyApp")?;          // private/MyApp（第一次從 private-example/MyApp 建立）
 let prefs = home.prefs();                    // private/shared 的 profile、fonts
 let notes = home.shared_file("my-app.toml"); // 任何共用設定檔：private 優先，否則用範本

@@ -2,7 +2,7 @@
 
 任務式簡報編輯器：選「任務版型」（例如論文報告）＋「風格版型」（從 PPTX 收集的母片、標籤字型、色票、元件），放入論文等素材，快速產生初稿，再在畫布上細修，輸出 PPTX／PDF。與個人知識庫、對照表串聯。設計見 `../private/shared/docs/ecosystem-design.md`（作者的私人筆記） §7。
 
-目前完成 **B3：畫布編輯器 v1**（Rust 核心 `commons/crates/ym-canvas` ＋ axum 伺服器 ＋ 純 JS DOM/SVG 編輯器）。生成流程（C3）尚未開始。
+目前完成 **B3：畫布編輯器 v1**（Rust 核心 `commons/crates/lore-canvas` ＋ axum 伺服器 ＋ 純 JS DOM/SVG 編輯器）。生成流程（C3）尚未開始。
 
 ## 執行
 
@@ -16,13 +16,13 @@ cargo test                        # 全部離線（合成測資）
 - `SLIDECOMPOSER_WORKSPACE`：風格包與簡報所在的私人 repo（`styles/`、`decks/`）。
 - `SLIDECOMPOSER_DECKS`：另指簡報資料夾（例如把真實簡報放在暫存區，不進任何 repo）。
 - `SLIDECOMPOSER_CHROME`：PDF 用的 Chrome/Chromium 路徑（預設找 `/Applications/Google Chrome.app`）。
-- 方程式需要 pandoc（`ym-math` 旁掛；`YM_PANDOC` 可指定路徑）。
+- 方程式需要 pandoc（`lore-math` 旁掛；`LORE_PANDOC` 可指定路徑）。
 
 ## 架構
 
 | 位置 | 內容 |
 |---|---|
-| `../commons/crates/ym-canvas` | 場景模型（投影片／物件／文字段落與 run＝標籤＋強調）、風格規則、可復原的操作、幾何（連接點、黏著、對齊）、漸進揭露產生器、元件、PPTX ↔ 畫布轉換（未改動的物件保留原 XML，未改動的投影片逐位元組相同） |
+| `../commons/crates/lore-canvas` | 場景模型（投影片／物件／文字段落與 run＝標籤＋強調）、風格規則、可復原的操作、幾何（連接點、黏著、對齊）、漸進揭露產生器、元件、PPTX ↔ 畫布轉換（未改動的物件保留原 XML，未改動的投影片逐位元組相同） |
 | `crates/core`（`sc-core`） | workspace、簡報資料夾（`deck.json`＋`source.pptx`＋`assets/`）、匯入、存檔、匯出 PPTX、Chrome 列印 PDF、OMML↔LaTeX 快取 |
 | `crates/server`（`sc-server`） | axum，127.0.0.1:7880，JSON API（見 `crates/server/src/lib.rs` 開頭的表） |
 | `web/` | 編輯器（無建置步驟）：`render.js` 投影片 → DOM/SVG（編輯畫面、縮圖、列印共用）、`app.js` 互動、`panels.js` 側欄與對話框、`print.html` PDF 路由 |

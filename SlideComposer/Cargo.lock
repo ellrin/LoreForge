@@ -333,6 +333,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
+name = "lore-canvas"
+version = "0.1.0"
+dependencies = [
+ "lore-ooxml",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "lore-home"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "lore-math"
+version = "0.1.0"
+dependencies = [
+ "lore-ooxml",
+ "thiserror",
+]
+
+[[package]]
+name = "lore-ooxml"
+version = "0.1.0"
+dependencies = [
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+ "zip",
+]
+
+[[package]]
 name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -455,13 +493,13 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 name = "sc-core"
 version = "0.1.0"
 dependencies = [
+ "lore-canvas",
+ "lore-math",
+ "lore-ooxml",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
- "ym-canvas",
- "ym-math",
- "ym-ooxml",
 ]
 
 [[package]]
@@ -470,6 +508,10 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "http-body-util",
+ "lore-canvas",
+ "lore-home",
+ "lore-math",
+ "lore-ooxml",
  "sc-core",
  "serde",
  "serde_json",
@@ -477,10 +519,6 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
- "ym-canvas",
- "ym-home",
- "ym-math",
- "ym-ooxml",
 ]
 
 [[package]]
@@ -840,44 +878,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "ym-canvas"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror",
- "ym-ooxml",
-]
-
-[[package]]
-name = "ym-home"
-version = "0.1.0"
-dependencies = [
- "serde",
- "toml",
-]
-
-[[package]]
-name = "ym-math"
-version = "0.1.0"
-dependencies = [
- "thiserror",
- "ym-ooxml",
-]
-
-[[package]]
-name = "ym-ooxml"
-version = "0.1.0"
-dependencies = [
- "quick-xml",
- "serde",
- "serde_json",
- "thiserror",
- "toml",
- "zip",
 ]
 
 [[package]]

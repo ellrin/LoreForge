@@ -1,5 +1,5 @@
 {
-  "note": "PaperComposer's own one-line descriptions of the shared catalog's local models (ym-llm catalog.json is written for every app). Applied by models::catalog() unless the user keeps a models/catalog.json override. Speeds are generation tokens per second on the catalog's reference Mac.",
+  "note": "PaperComposer's own one-line descriptions of the shared catalog's local models (lore-llm catalog.json is written for every app). Applied by models::catalog() unless the user keeps a models/catalog.json override. Speeds are generation tokens per second on the catalog's reference Mac.",
   "summaries": {
     "qwen3.5-4b-q8": "最快（約 31 tokens/秒）；適合改寫單句、快速檢查，長段落品質較弱",
     "gemma-4-e4b-q8": "很快（約 28 tokens/秒）；適合改寫與檢查",

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
-use ym_store::{AssetRef, CommandRunner, Space, SpaceKind, Spaces, SystemRunner, free_path, valid_member, write_atomic};
+use lore_store::{AssetRef, CommandRunner, Space, SpaceKind, Spaces, SystemRunner, free_path, valid_member, write_atomic};
 
 use crate::clock::{Clock, SystemClock, Time};
 use crate::edges::Edge;
@@ -26,7 +26,7 @@ pub struct KbOptions {
     pub intervals: Intervals,
     /// Runs `brctl` for iCloud placeholders.
     pub runner: Arc<dyn CommandRunner>,
-    /// Card drafting / term extraction (ym-llm integration point; mock for now).
+    /// Card drafting / term extraction (lore-llm integration point; mock for now).
     pub assistant: Arc<dyn CardAssistant>,
     /// Keep the index in a file instead of memory (it is rebuilt at open either way).
     pub index_path: Option<PathBuf>,
@@ -530,7 +530,7 @@ impl KnowledgeBase {
         Ok(ScanResult { spans, candidates, assistant })
     }
 
-    /// A card draft from context (not saved). ym-llm integration point.
+    /// A card draft from context (not saved). lore-llm integration point.
     pub fn draft(&self, req: &DraftRequest) -> Result<NodeFields> {
         self.opts.assistant.draft_card(req)
     }
@@ -571,7 +571,7 @@ impl KnowledgeBase {
         if from.id() == to.id() {
             return Err(KbError::Invalid("the card is already in that space".into()));
         }
-        ym_store::check_flow(&from, &to, true)?;
+        lore_store::check_flow(&from, &to, true)?;
         if !self.registry(to.id())?.has_kind(&src.kind) {
             return Err(KbError::Invalid(format!("space `{}` has no kind `{}`", to.id(), src.kind)));
         }

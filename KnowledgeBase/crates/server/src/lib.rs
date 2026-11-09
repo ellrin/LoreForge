@@ -26,12 +26,12 @@ pub struct AppState {
     pub web: PathBuf,
     pub rem: reminders::Reminders,
     /// LoreForge private folders (read-only here: `/prefs.css` from private/shared/fonts.toml).
-    pub home: ym_home::Home,
+    pub home: lore_home::Home,
 }
 
 impl AppState {
     pub fn new(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders) -> Shared {
-        let home = ym_home::Home::discover(&config::repo_dir());
+        let home = lore_home::Home::discover(&config::repo_dir());
         Arc::new(AppState { kb: Mutex::new(kb), web, rem, home })
     }
 }
@@ -40,7 +40,7 @@ pub type Shared = Arc<AppState>;
 
 /// Open the knowledge base described by `config`.
 pub fn open(config: &Config, opts: KbOptions) -> Result<KnowledgeBase, String> {
-    let mut spaces = ym_store::Spaces::new();
+    let mut spaces = lore_store::Spaces::new();
     for root in &config.spaces {
         spaces.mount(root).map_err(|e| format!("{}: {e}", root.display()))?;
     }

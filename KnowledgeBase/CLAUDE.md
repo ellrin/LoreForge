@@ -9,14 +9,14 @@ habits as PaperComposer / JELearner. Design: `../private/shared/docs/ecosystem-d
 cargo test                              # kb-server API tests, offline
 cargo run -p kb-server                  # http://127.0.0.1:7700, mounts ../private/KnowledgeBase
 cargo run -p kb-server -- --space <dir> --member ellrin --port 7700
-cd ../commons && cargo test -p kb-core -p ym-store
+cd ../commons && cargo test -p kb-core -p lore-store
 ```
 
 `cargo test` (here and for the two commons crates) must pass before every commit.
 
 ## Layout
 
-- `../commons/crates/ym-store`: spaces (`space.toml`, personal / household, members),
+- `../commons/crates/lore-store`: spaces (`space.toml`, personal / household, members),
   `progress/<member>/`, content-addressed assets (iCloud Drive folder or git folder),
   `free_path` / `copy_missing` / `write_atomic`.
 - `../commons/crates/kb-core`: nodes, kinds/apps registry, tags, learning state machine,
@@ -27,7 +27,7 @@ cd ../commons && cargo test -p kb-core -p ym-store
   `reminders.rs` (settings/state in `<app dir>` = `$KB_HOME` or `<config dir>/KnowledgeBase`,
   stats, notification slots + osascript fallback via an injected `CommandRunner`, the minute
   scheduler), `digest.rs` (daily e-mail, lettre + rustls). SMTP password: keychain through
-  `ym_secrets::KeyStore` (service `KnowledgeBase`, account `smtp-password`).
+  `lore_secrets::KeyStore` (service `KnowledgeBase`, account `smtp-password`).
 - `scripts/install-launchd.sh` + `scripts/launchd/kb-server.plist.template`: start at login.
 - `web/`: static HTML/CSS/JS, no build step; visual language from PaperComposer / JELearner
   (tokens, icons, panels). UI text in Traditional Chinese. KaTeX vendored in `web/vendor/katex`
@@ -53,7 +53,7 @@ cd ../commons && cargo test -p kb-core -p ym-store
 - Scanner: Aho-Corasick over titles + aliases, Unicode case-folding, English plural forms,
   word boundaries only for Latin names; spans in UTF-16 offsets for JavaScript.
 - LLM features (draft card, candidate terms) go through `kb_core::CardAssistant`;
-  `MockAssistant` until `ym-llm` exists (integration point marked in `kb-core/src/llm.rs`).
+  `MockAssistant` until `lore-llm` exists (integration point marked in `kb-core/src/llm.rs`).
 - iCloud placeholders (`.<name>.icloud`) are fetched with `brctl download` through an injected
   runner: **not tested on real hardware**. Tests never touch the real iCloud folder.
 - Reminders: a notification slot is handled once (NeonDeck claims it; kb-server shows it with

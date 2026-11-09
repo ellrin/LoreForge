@@ -1,0 +1,13 @@
+[package]
+name = "lore-secrets"
+version.workspace = true
+edition.workspace = true
+description = "API keys in the OS keychain (file fallback with owner-only permissions). Keyring only: no HTTP client, so apps that only store keys stay light. Re-exported as lore_llm::secrets."
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
+keyring.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -9,4 +9,4 @@ decks/<name>/exports/      匯出的 .pptx / .pdf（永不覆蓋）
 decks/<name>/cache/        OMML→LaTeX 快取（可刪）
 ```
 
-風格包格式見 `commons/crates/ym-ooxml/src/style.rs`（`StylePack`）。
+風格包格式見 `commons/crates/lore-ooxml/src/style.rs`（`StylePack`）。

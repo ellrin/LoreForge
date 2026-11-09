@@ -363,7 +363,7 @@ function connPoints(f) {
 function connFrame(a, b) {
   return { x: Math.round(Math.min(a[0], b[0])), y: Math.round(Math.min(a[1], b[1])), w: Math.round(Math.abs(b[0] - a[0])), h: Math.round(Math.abs(b[1] - a[1])), flip_h: b[0] < a[0], flip_v: b[1] < a[1] };
 }
-/** Connection sites (same order as ym-canvas geom::sites). */
+/** Connection sites (same order as lore-canvas geom::sites). */
 function sites(o) {
   const f = o.frame;
   let pts;

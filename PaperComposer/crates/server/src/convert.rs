@@ -412,7 +412,7 @@ pub async fn run(job: &mut Job, auth: Auth, model: &str, system: &str, instructi
     if running(&job.id) {
         return Err("正在轉換中".into());
     }
-    let bin = ym_llm::claude_code::binary(None).ok_or("找不到 Claude Code：模板轉換需要先安裝並登入 Claude Code（設定 → Claude）")?;
+    let bin = lore_llm::claude_code::binary(None).ok_or("找不到 Claude Code：模板轉換需要先安裝並登入 Claude Code（設定 → Claude）")?;
     let d = dir(&job.id).ok_or("bad job")?;
     let wd = d.join("work");
     let a = analyze(&job.id).ok_or("bad job")?;

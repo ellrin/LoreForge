@@ -6,8 +6,8 @@ design is in `../private/shared/docs/ecosystem-design.md` (author's private note
 
 ## Layout
 
-- `crates/<name>/` — one crate per module (`ym-llm`, `ym-secrets`, `ym-gitsync`, `ym-store`, `kb-core`,
-  `lore-notation`, `ym-voice`, `ym-docsrc`, `ym-canvas`, `ym-ooxml`, `ym-math`).
+- `crates/<name>/` — one crate per module (`lore-llm`, `lore-secrets`, `lore-gitsync`, `lore-store`, `kb-core`,
+  `lore-notation`, `lore-voice`, `lore-docsrc`, `lore-canvas`, `lore-ooxml`, `lore-math`).
   Each crate knows nothing about any app. Apps depend on them by path
   (`../commons/crates/<name>` from an app folder).
 - `ui/` — framework-free Web Components (no build step), one folder per component,
@@ -27,7 +27,7 @@ cargo test -p <crate>          # one crate
 
 - Files are the source of truth; SQLite indexes can always be rebuilt from them.
   Never overwrite a user's file: new files get a free name, template copies never overwrite.
-- All LLM calls go through `ym-llm`. Model names live in catalog/config, never in code
+- All LLM calls go through `lore-llm`. Model names live in catalog/config, never in code
   (tests excepted). Tests never call real Claude, the real `claude` CLI, a real
   llama-server, the network or Apple-only engines: use mocks/fakes. Things that cannot be
   tested here are marked **not tested on real hardware**.

@@ -2158,11 +2158,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-gitsync"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "lore-home"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "lore-llm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "ferrous-opencc",
+ "futures-util",
+ "lore-secrets",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "lore-notation"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lore-secrets"
+version = "0.1.0"
+dependencies = [
+ "keyring",
+ "serde",
+ "toml 0.8.23",
 ]
 
 [[package]]
@@ -2695,6 +2738,9 @@ dependencies = [
  "dirs 6.0.0",
  "flate2",
  "futures-util",
+ "lore-gitsync",
+ "lore-home",
+ "lore-llm",
  "lore-notation",
  "pc-core",
  "pdf-extract",
@@ -2706,9 +2752,6 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "tower-http",
- "ym-gitsync",
- "ym-home",
- "ym-llm",
  "zip",
 ]
 
@@ -5588,49 +5631,6 @@ checksum = "963d6fab92d5504b971dc8bd90ca743c2575e590bc8071ea5bc571598667ae08"
 dependencies = [
  "libc",
  "rustix",
-]
-
-[[package]]
-name = "ym-gitsync"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "ym-home"
-version = "0.1.0"
-dependencies = [
- "serde",
- "toml 0.8.23",
-]
-
-[[package]]
-name = "ym-llm"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "ferrous-opencc",
- "futures-util",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "toml 0.8.23",
- "ym-secrets",
-]
-
-[[package]]
-name = "ym-secrets"
-version = "0.1.0"
-dependencies = [
- "keyring",
- "serde",
- "toml 0.8.23",
 ]
 
 [[package]]

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use kb_core::index::Filter;
 use kb_core::node::{Image, Link};
 use kb_core::{FixedClock, GraphQuery, KbError, KbOptions, KnowledgeBase, NodeFields, Outcome, ScanOptions};
-use ym_store::{AssetsConfig, Space, SpaceConfig, SpaceKind, Spaces};
+use lore_store::{AssetsConfig, Space, SpaceConfig, SpaceKind, Spaces};
 
 struct Env {
     _dir: tempfile::TempDir,
@@ -22,7 +22,7 @@ fn personal(root: &Path) -> SpaceConfig {
         name: "我的知識庫".into(),
         kind: SpaceKind::Personal,
         members: vec!["ellrin".into()],
-        assets: AssetsConfig { backend: Some(ym_store::space::BackendKind::Icloud), root: Some(root.join("icloud").display().to_string()), ..Default::default() },
+        assets: AssetsConfig { backend: Some(lore_store::space::BackendKind::Icloud), root: Some(root.join("icloud").display().to_string()), ..Default::default() },
     }
 }
 
@@ -285,7 +285,7 @@ fn household_isolation_and_explicit_share() {
     assert_eq!(copy.images[0].ext, "webp");
     let hfile = std::fs::read_to_string(e.root.join("household/nodes").join(format!("{}.json", copy.id))).unwrap();
     assert!(!hfile.contains(&dice.id) && !hfile.contains(&iou.id));
-    assert!(e.root.join("household/assets").join(ym_store::AssetRef::parse(&copy.images[0].asset, "webp").unwrap().rel_path()).is_file());
+    assert!(e.root.join("household/assets").join(lore_store::AssetRef::parse(&copy.images[0].asset, "webp").unwrap().rel_path()).is_file());
     // The personal side remembers the copy.
     let (_, src) = e.kb.node(&dice.id).unwrap();
     assert_eq!(src.copies[0].id, copy.id);

@@ -7,9 +7,9 @@ edition.workspace = true
 # open .pptx, save, export .pptx / .pdf, equation helpers.
 
 [dependencies]
-ym-canvas.workspace = true
-ym-ooxml.workspace = true
-ym-math.workspace = true
+lore-canvas.workspace = true
+lore-ooxml.workspace = true
+lore-math.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

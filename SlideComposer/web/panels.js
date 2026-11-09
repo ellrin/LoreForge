@@ -461,7 +461,7 @@ function openEquation(o) {
   dialog((box, close) => {
     const ta = h("textarea", { placeholder: "例如 \\mathcal{L} = \\lambda_1 L_{adv} + \\lambda_2 L_{rec}" }, cur);
     const pv = h("div", { class: "preview" });
-    const msg = h("div", { class: "info" }, "存檔時經 pandoc（ym-math）轉成原生 OMML，PowerPoint 可直接編輯。");
+    const msg = h("div", { class: "info" }, "存檔時經 pandoc（lore-math）轉成原生 OMML，PowerPoint 可直接編輯。");
     let ok = false;
     const go = h("button", { class: "btn primary", onclick: async () => {
         const latex = ta.value.trim();
@@ -497,7 +497,7 @@ function openEquation(o) {
       ok = !!v && !err;
       go.disabled = !ok;
       msg.style.color = err ? "var(--err)" : "";
-      msg.textContent = err ? `LaTeX 有錯誤，修正後才能${o ? "更新" : "插入"}：${katexZh(err.message)}` : v ? "存檔時經 pandoc（ym-math）轉成原生 OMML，PowerPoint 可直接編輯。" : "輸入 LaTeX，下方即時預覽。";
+      msg.textContent = err ? `LaTeX 有錯誤，修正後才能${o ? "更新" : "插入"}：${katexZh(err.message)}` : v ? "存檔時經 pandoc（lore-math）轉成原生 OMML，PowerPoint 可直接編輯。" : "輸入 LaTeX，下方即時預覽。";
     };
     ta.oninput = upd;
     upd();

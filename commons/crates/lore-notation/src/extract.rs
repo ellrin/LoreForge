@@ -3,7 +3,7 @@
 //! Heuristics only (definitions found by [`crate::symbols`], labelled
 //! equations, floats, abbreviations). Meanings the text does not give can be
 //! filled by an assistant ([`NotationAssistant`]); the real one lives in the
-//! app and calls `ym-llm`, tests use [`MockAssistant`]. This crate never
+//! app and calls `lore-llm`, tests use [`MockAssistant`]. This crate never
 //! talks to a model itself.
 
 use crate::abbrev;
@@ -233,7 +233,7 @@ pub struct Suggestion {
 }
 
 /// Fills meanings the heuristics could not find. Implemented by apps on top
-/// of `ym-llm` (one structured-output task); synchronous so this crate stays
+/// of `lore-llm` (one structured-output task); synchronous so this crate stays
 /// runtime-free — an async app wraps its call in `block_on` or runs it on a
 /// worker thread.
 pub trait NotationAssistant {

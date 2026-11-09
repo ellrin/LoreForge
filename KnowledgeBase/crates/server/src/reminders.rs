@@ -5,7 +5,7 @@
 //! - settings: `<app dir>/reminders.toml` (written by the web UI's settings page);
 //! - state: `<app dir>/reminders-state.json` (last e-mail day, last notification slot);
 //! - SMTP password: the OS keychain, service `KnowledgeBase`, account `smtp-password`
-//!   (`ym_secrets::KeyStore`; `KB_SMTP_PASSWORD` overrides it for this process,
+//!   (`lore_secrets::KeyStore`; `KB_SMTP_PASSWORD` overrides it for this process,
 //!   `<app dir>/credentials.toml` is the fallback when no keychain is usable).
 //!
 //! `<app dir>` is `$KB_HOME` or `<OS config dir>/KnowledgeBase`.
@@ -23,8 +23,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDateTime, NaiveTime};
 use kb_core::{Filter, KbError, KnowledgeBase};
 use serde::{Deserialize, Serialize};
-use ym_secrets::{Account, KeySource, KeyStore};
-use ym_store::{CommandRunner, SystemRunner, write_atomic};
+use lore_secrets::{Account, KeySource, KeyStore};
+use lore_store::{CommandRunner, SystemRunner, write_atomic};
 
 use crate::Shared;
 use crate::digest;

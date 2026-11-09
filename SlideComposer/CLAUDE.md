@@ -9,19 +9,19 @@ habits as PaperComposer / JELearner / KnowledgeBase. Design: `../private/shared/
 cargo test                                         # sc-core + sc-server, offline (synthetic decks)
 cargo run -p sc-server                             # http://127.0.0.1:7880, workspace ../private/SlideComposer
 SLIDECOMPOSER_DECKS=/tmp/decks cargo run --release -p sc-server
-cd ../commons && cargo test -p ym-canvas        # the canvas core
-YM_DECKS="a.pptx:b.pptx" YM_STYLE_DIR=../private/SlideComposer/styles/my-style \
-  cargo run --release -p ym-canvas --example deck_roundtrip   # real decks: unedited export identical?
+cd ../commons && cargo test -p lore-canvas        # the canvas core
+LORE_DECKS="a.pptx:b.pptx" LORE_STYLE_DIR=../private/SlideComposer/styles/my-style \
+  cargo run --release -p lore-canvas --example deck_roundtrip   # real decks: unedited export identical?
 ```
 
 `CARGO_TARGET_DIR`: this workspace builds into `target/`; commons into `commons/target/canvas`
-when working on ym-canvas in parallel with other agents.
+when working on lore-canvas in parallel with other agents.
 
-`cargo test` (here and `-p ym-canvas` in commons) must pass before every commit.
+`cargo test` (here and `-p lore-canvas` in commons) must pass before every commit.
 
 ## Layout
 
-- `../commons/crates/ym-canvas`: app-agnostic scene model, style rules, ops/undo,
+- `../commons/crates/lore-canvas`: app-agnostic scene model, style rules, ops/undo,
   geometry, reveal generator, components, PPTX ↔ canvas (`pptx_in`, `pptx_out`).
 - `crates/core` (`sc-core`): `Workspace` (styles/, decks/), `Session` (open deck: editor,
   source package, layout backdrops, LaTeX cache), export PPTX/PDF, `layout_titles`.
@@ -41,14 +41,14 @@ when working on ym-canvas in parallel with other agents.
   export verbatim; edited ones are patched field by field on their original XML; slides whose
   fingerprint is unchanged keep their original part bytes. Duplicated slides (reveal) reuse
   the source slide's relationships.
-- Rules (enforced in `ym-canvas::style`): text runs carry a style-pack tag + optional emphasis
+- Rules (enforced in `lore-canvas::style`): text runs carry a style-pack tag + optional emphasis
   tag; new colours must be palette colours. Imported runs that match no tag stay untagged
   (their formatting is kept) until a tag is applied.
-- Undo/redo lives in Rust (`ym_canvas::Editor`); the UI sends op batches and re-renders the
+- Undo/redo lives in Rust (`lore_canvas::Editor`); the UI sends op batches and re-renders the
   slides the server returns. Attached connectors are re-routed in the same transaction.
 - Progressive reveal = duplicate slides + ghost (default, design §13-4); animations optional.
 - Equations: imported OMML kept raw; display via pandoc OMML→LaTeX (cached per deck) + KaTeX;
-  new equations LaTeX → OMML via `ym-math` (pandoc). PDF: headless Chrome prints `print.html`
+  new equations LaTeX → OMML via `lore-math` (pandoc). PDF: headless Chrome prints `print.html`
   (**v2: Typst**). Fonts not installed here (a template's brand font, Calibri, 微軟正黑體) fall back to
   PT Sans / PingFang TC — widths differ slightly.
 
@@ -65,7 +65,7 @@ when working on ym-canvas in parallel with other agents.
 4. Locked objects (charts/SmartArt/OLE) are kept but cannot be moved (none in the 4 decks).
 5. Equation edit replaces the first math run of a box; fallback picture of an edited
    `mc:AlternateContent` is left stale (PowerPoint uses the a14 choice).
-6. Animations: preset ids follow ym-ooxml (Wipe/Zoom subtypes **not verified on PowerPoint**).
+6. Animations: preset ids follow lore-ooxml (Wipe/Zoom subtypes **not verified on PowerPoint**).
 
 ## Rules
 

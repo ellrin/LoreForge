@@ -1,0 +1,12 @@
+[package]
+name = "lore-home"
+version.workspace = true
+edition.workspace = true
+description = "Where a LoreForge app finds its private data: private/<App>, the shared personal folder private/shared (profile, fonts, …), and the public private-example/ it is seeded from."
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

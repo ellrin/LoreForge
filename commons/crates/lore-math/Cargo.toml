@@ -1,0 +1,13 @@
+[package]
+name = "lore-math"
+description = "LaTeX <-> OMML via an offline pandoc sidecar, plus PowerPoint equation objects"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+lore-ooxml = { path = "../lore-ooxml" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

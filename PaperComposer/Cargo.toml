@@ -16,7 +16,7 @@ toml = "0.8"
 csv = "1"
 thiserror = "2"
 # Shared crates (commons/, next to this app's folder).
-ym-llm = { path = "../commons/crates/ym-llm" }
-ym-gitsync = { path = "../commons/crates/ym-gitsync" }
-ym-home = { path = "../commons/crates/ym-home" }
+lore-llm = { path = "../commons/crates/lore-llm" }
+lore-gitsync = { path = "../commons/crates/lore-gitsync" }
+lore-home = { path = "../commons/crates/lore-home" }
 lore-notation = { path = "../commons/crates/lore-notation" }

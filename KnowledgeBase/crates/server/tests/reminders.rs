@@ -13,7 +13,7 @@ use kb_server::{AppState, Config, Shared};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tower::ServiceExt;
-use ym_store::{CommandOutput, CommandRunner};
+use lore_store::{CommandOutput, CommandRunner};
 
 #[derive(Default)]
 struct FakeRunner {

@@ -16,23 +16,23 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
-use ym_canvas::pptx_in::{self, Backdrop};
-use ym_canvas::{Deck, Editor, StyleSystem, pptx_out};
-use ym_ooxml::Deck as ODeck;
-use ym_ooxml::style::StylePack;
+use lore_canvas::pptx_in::{self, Backdrop};
+use lore_canvas::{Deck, Editor, StyleSystem, pptx_out};
+use lore_ooxml::Deck as ODeck;
+use lore_ooxml::style::StylePack;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("檔案讀寫失敗：{0}")]
     Io(#[from] std::io::Error),
     #[error("無法讀取 PPTX：{0}")]
-    Ooxml(#[from] ym_ooxml::Error),
+    Ooxml(#[from] lore_ooxml::Error),
     #[error("匯出失敗：{0}")]
     Export(#[from] pptx_out::ExportError),
     #[error("資料格式錯誤：{0}")]
     Json(#[from] serde_json::Error),
     #[error("方程式：{0}")]
-    Math(#[from] ym_math::Error),
+    Math(#[from] lore_math::Error),
     #[error("{0}")]
     NotFound(String),
     #[error("{0}")]
@@ -159,7 +159,7 @@ impl Workspace {
         for sem in ["cover", "content"] {
             let layout = st.pack.layouts.get(sem).cloned();
             let uid = deck.new_uid();
-            let mut s = ym_canvas::Slide::new(uid, layout.clone());
+            let mut s = lore_canvas::Slide::new(uid, layout.clone());
             if let Some(l) = &layout {
                 s.objects = layout_titles(&od, Some(&st), l);
             }
@@ -297,7 +297,7 @@ impl Session {
         if ext.is_empty() {
             return Err(Error::Invalid("缺少副檔名".into()));
         }
-        let h = ym_canvas::fnv(bytes);
+        let h = lore_canvas::fnv(bytes);
         let rel = format!("assets/{h:016x}.{ext}");
         let p = self.dir.join(&rel);
         std::fs::create_dir_all(self.dir.join("assets"))?;
@@ -334,12 +334,12 @@ impl Session {
     }
 
     /// Cached LaTeX for an OMML string.
-    pub fn latex_for(&mut self, omml: &str, pandoc: &ym_math::Pandoc) -> Result<String> {
-        let key = format!("{:016x}", ym_canvas::fnv(omml.as_bytes()));
+    pub fn latex_for(&mut self, omml: &str, pandoc: &lore_math::Pandoc) -> Result<String> {
+        let key = format!("{:016x}", lore_canvas::fnv(omml.as_bytes()));
         if let Some(l) = self.latex.get(&key) {
             return Ok(l.clone());
         }
-        let el = ym_ooxml::xml::parse_element(omml.as_bytes())?;
+        let el = lore_ooxml::xml::parse_element(omml.as_bytes())?;
         let l = pandoc.omml_to_latex(&el)?;
         self.latex.insert(key, l.clone());
         std::fs::create_dir_all(self.dir.join("cache"))?;
@@ -349,14 +349,14 @@ impl Session {
 }
 
 /// LaTeX → PowerPoint OMML (`a14:m`) as an XML string.
-pub fn latex_to_omml(pandoc: &ym_math::Pandoc, latex: &str, display: bool, size_pt: f64) -> Result<String> {
+pub fn latex_to_omml(pandoc: &lore_math::Pandoc, latex: &str, display: bool, size_pt: f64) -> Result<String> {
     let el = pandoc.latex_to_pptx_math(latex, display, size_pt)?;
     Ok(el.to_xml_string())
 }
 
 /// Placeholder objects (titles) of a layout, empty, tagged from the style pack.
-pub fn layout_titles(source: &ODeck, st: Option<&StyleSystem>, layout: &str) -> Vec<ym_canvas::Object> {
-    use ym_canvas::{Kind, Object};
+pub fn layout_titles(source: &ODeck, st: Option<&StyleSystem>, layout: &str) -> Vec<lore_canvas::Object> {
+    use lore_canvas::{Kind, Object};
     let Some(l) = source.layout_by_name(layout) else { return vec![] };
     let mut out = Vec::new();
     for (ph, sh) in l.doc.placeholders() {
@@ -367,11 +367,11 @@ pub fn layout_titles(source: &ODeck, st: Option<&StyleSystem>, layout: &str) -> 
             _ => continue,
         };
         let Some(x) = sh.xfrm() else { continue };
-        let frame = ym_canvas::Frame::new(x.off.unwrap_or((0, 0)).0, x.off.unwrap_or((0, 0)).1, x.ext.unwrap_or((0, 0)).0, x.ext.unwrap_or((0, 0)).1);
+        let frame = lore_canvas::Frame::new(x.off.unwrap_or((0, 0)).0, x.off.unwrap_or((0, 0)).1, x.ext.unwrap_or((0, 0)).0, x.ext.unwrap_or((0, 0)).1);
         let look = st.and_then(|st| st.look(tag, None)).unwrap_or_default();
-        let mut p = ym_canvas::Para::new(vec![]);
+        let mut p = lore_canvas::Para::new(vec![]);
         p.end = Some(look);
-        let tb = ym_canvas::TextBody {
+        let tb = lore_canvas::TextBody {
             anchor: if kind == "title" { "ctr".into() } else { "t".into() },
             autofit: "norm".into(),
             paras: vec![p],
@@ -383,9 +383,9 @@ pub fn layout_titles(source: &ODeck, st: Option<&StyleSystem>, layout: &str) -> 
             frame,
             hidden: false,
             ph: Some(kind.into()),
-            kind: Kind::Text(ym_canvas::SpObj {
-                geom: ym_canvas::Geom::preset("rect"),
-                fill: ym_canvas::Paint::None,
+            kind: Kind::Text(lore_canvas::SpObj {
+                geom: lore_canvas::Geom::preset("rect"),
+                fill: lore_canvas::Paint::None,
                 line: None,
                 text: Some(tb),
                 equation: false,

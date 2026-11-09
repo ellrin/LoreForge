@@ -36,17 +36,17 @@ use sc_core::{Session, Workspace};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tower_http::services::ServeDir;
-use ym_canvas::reveal::{RevealSpec, reveal};
-use ym_canvas::{Applied, Op, Slide};
+use lore_canvas::reveal::{RevealSpec, reveal};
+use lore_canvas::{Applied, Op, Slide};
 
 pub struct AppState {
     pub ws: Workspace,
     pub web: PathBuf,
     pub port: Mutex<u16>,
     pub sessions: Mutex<HashMap<String, Arc<Mutex<Session>>>>,
-    pub pandoc: ym_math::Pandoc,
+    pub pandoc: lore_math::Pandoc,
     /// LoreForge private folders (read-only here: font preferences from private/shared/fonts.toml).
-    pub home: ym_home::Home,
+    pub home: lore_home::Home,
 }
 
 pub type Shared = Arc<AppState>;
@@ -68,8 +68,8 @@ impl From<sc_core::Error> for ApiError {
         ApiError(code, e.to_string())
     }
 }
-impl From<ym_canvas::OpError> for ApiError {
-    fn from(e: ym_canvas::OpError) -> Self {
+impl From<lore_canvas::OpError> for ApiError {
+    fn from(e: lore_canvas::OpError) -> Self {
         ApiError(StatusCode::UNPROCESSABLE_ENTITY, e.to_string())
     }
 }
@@ -140,8 +140,8 @@ pub fn state(ws: Workspace, web: PathBuf) -> Shared {
         web,
         port: Mutex::new(0),
         sessions: Mutex::new(HashMap::new()),
-        pandoc: ym_math::Pandoc::default(),
-        home: ym_home::Home::discover(&repo_dir()),
+        pandoc: lore_math::Pandoc::default(),
+        home: lore_home::Home::discover(&repo_dir()),
     })
 }
 
@@ -296,7 +296,7 @@ async fn do_reveal(State(s): State<Shared>, Path(name): Path<String>, Json(b): J
     let mut sess = sess.lock().unwrap();
     let idx = sess.editor.deck.slide_index(&b.slide).ok_or_else(|| bad("找不到投影片"))?;
     let slide = sess.editor.deck.slides[idx].clone();
-    let rules = sess.editor.style.as_ref().map(|st| st.pack.ghost.clone()).unwrap_or(ym_ooxml::style::GhostRules {
+    let rules = sess.editor.style.as_ref().map(|st| st.pack.ghost.clone()).unwrap_or(lore_ooxml::style::GhostRules {
         picture_alpha: 0.2,
         line_alpha: 0.2,
         fill_alpha: 0.3,
@@ -304,7 +304,7 @@ async fn do_reveal(State(s): State<Shared>, Path(name): Path<String>, Json(b): J
         agenda_bold_current: true,
     });
     let grey = rules.text_color.clone();
-    let ghost = move |l: &ym_canvas::Look| ym_canvas::Look { color: grey.clone(), ..l.clone() };
+    let ghost = move |l: &lore_canvas::Look| lore_canvas::Look { color: grey.clone(), ..l.clone() };
     let mut deck = sess.editor.deck.clone();
     let out = reveal(&slide, &b.spec, &rules, &ghost, &mut || deck.new_uid());
     if out.len() < 2 {
@@ -363,7 +363,7 @@ async fn component(State(s): State<Shared>, Path(name): Path<String>, Json(b): J
     let sess = sess.lock().unwrap();
     let st = sess.editor.style.as_ref().ok_or_else(|| bad("這份簡報沒有風格包"))?;
     let id = sess.editor.deck.slide(&b.slide).map(|s| s.max_id() + 1).unwrap_or(2);
-    let o = ym_canvas::components::instantiate(st, &b.name, b.x, b.y, b.n, id).ok_or_else(|| bad(format!("風格包沒有元件 {}", b.name)))?;
+    let o = lore_canvas::components::instantiate(st, &b.name, b.x, b.y, b.n, id).ok_or_else(|| bad(format!("風格包沒有元件 {}", b.name)))?;
     Ok(Json(serde_json::to_value(o).unwrap()))
 }
 

@@ -783,12 +783,12 @@ dependencies = [
  "aho-corasick",
  "chrono",
  "getrandom 0.2.17",
+ "lore-store",
  "rusqlite",
  "serde",
  "serde_json",
  "thiserror",
  "toml",
- "ym-store",
 ]
 
 [[package]]
@@ -802,6 +802,9 @@ dependencies = [
  "http-body-util",
  "kb-core",
  "lettre",
+ "lore-home",
+ "lore-secrets",
+ "lore-store",
  "serde",
  "serde_json",
  "tempfile",
@@ -809,9 +812,6 @@ dependencies = [
  "toml",
  "tower",
  "tower-http",
- "ym-home",
- "ym-secrets",
- "ym-store",
 ]
 
 [[package]]
@@ -910,6 +910,36 @@ name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+
+[[package]]
+name = "lore-home"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "lore-secrets"
+version = "0.1.0"
+dependencies = [
+ "keyring",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "lore-store"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "hex",
+ "image",
+ "serde",
+ "sha2",
+ "thiserror",
+ "toml",
+]
 
 [[package]]
 name = "matchit"
@@ -1971,36 +2001,6 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
-
-[[package]]
-name = "ym-home"
-version = "0.1.0"
-dependencies = [
- "serde",
- "toml",
-]
-
-[[package]]
-name = "ym-secrets"
-version = "0.1.0"
-dependencies = [
- "keyring",
- "serde",
- "toml",
-]
-
-[[package]]
-name = "ym-store"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "hex",
- "image",
- "serde",
- "sha2",
- "thiserror",
- "toml",
-]
 
 [[package]]
 name = "yoke"

@@ -4,7 +4,7 @@
 
 | 資料夾 | 用途 |
 |---|---|
-| [`commons/`](commons/) | 共用模組：LLM（Claude API、Claude Code 訂閱、地端模型）、git 同步、私人資料位置（`ym-home`）、知識庫核心、對照表、PPTX 讀寫、畫布、論文素材擷取 |
+| [`commons/`](commons/) | 共用模組：LLM（Claude API、Claude Code 訂閱、地端模型）、git 同步、私人資料位置（`lore-home`）、知識庫核心、對照表、PPTX 讀寫、畫布、論文素材擷取 |
 | [`PaperComposer/`](PaperComposer/) | 論文寫作：句型庫、期刊範本、LaTeX 匯入匯出、對照表校對 |
 | [`KnowledgeBase/`](KnowledgeBase/) | 個人知識庫：一張卡一個 JSON 檔、連結與網路圖、熟悉度與複習提醒 |
 | [`SlideComposer/`](SlideComposer/) | 任務式簡報編輯器：標籤字型、漸進揭露、無損 PPTX、輸出 PPTX／PDF |
@@ -44,10 +44,10 @@ LoreForge/
 
 讀取順序：`private/shared/<檔案>` → 沒有才用 `private-example/shared/<檔案>`。要個人化就把範本複製到 `private/shared/` 再改，公開的程式碼和範本都不用動。例如公司或買來的字型：字型檔裝在系統裡，名稱與代替規則寫在 `private/shared/fonts.toml`，App 執行時才讀進頁面，公開 repo 裡不會出現。
 
-**新的 App** 用 `commons/crates/ym-home` 取得這些位置：
+**新的 App** 用 `commons/crates/lore-home` 取得這些位置：
 
 ```rust
-let home = ym_home::Home::discover(Path::new(env!("CARGO_MANIFEST_DIR")));
+let home = lore_home::Home::discover(Path::new(env!("CARGO_MANIFEST_DIR")));
 let data = home.seed_app("MyApp")?;           // private/MyApp（第一次從 private-example/MyApp 建立）
 let prefs = home.prefs();                     // private/shared 的 profile、fonts
 let extra = home.shared_file("my-app.toml");  // 任何新的共用設定檔

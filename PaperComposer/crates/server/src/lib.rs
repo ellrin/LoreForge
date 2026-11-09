@@ -80,7 +80,7 @@ struct Loaded {
 
 struct AppState {
     loaded: RwLock<Loaded>,
-    /// Engines and task routing (ym-llm).
+    /// Engines and task routing (lore-llm).
     llm: Arc<Llm>,
     models: Arc<models::Manager>,
     paths: Paths,
@@ -201,8 +201,8 @@ fn demo_workspace(paths: &Paths) -> PathBuf {
     target
 }
 
-fn loreforge_home() -> ym_home::Home {
-    ym_home::Home::discover(Path::new(env!("CARGO_MANIFEST_DIR")))
+fn loreforge_home() -> lore_home::Home {
+    lore_home::Home::discover(Path::new(env!("CARGO_MANIFEST_DIR")))
 }
 
 /// Interface fonts from LoreForge `private/shared/fonts.toml` (CSS variables; linked after styles.css).
@@ -542,7 +542,7 @@ async fn engines_status(State(s): State<Shared>, AxQuery(f): AxQuery<Fresh>) -> 
 }
 
 async fn claude_code_login(State(s): State<Shared>) -> impl IntoResponse {
-    match ym_llm::claude_code::start_login(&s.llm.cli) {
+    match lore_llm::claude_code::start_login(&s.llm.cli) {
         Ok(()) => {
             s.llm.cc.get(&s.llm.cli, true).await;
             StatusCode::NO_CONTENT.into_response()
@@ -2335,7 +2335,7 @@ async fn claude_status(State(s): State<Shared>) -> impl IntoResponse {
 /// Pages the UI may open in the system browser. Fixed URLs only, so the
 /// local API cannot be used to open arbitrary links.
 const PAGES: &[(&str, &str)] = &[
-    ("anthropic-keys", ym_llm::secrets::KEYS_PAGE),
+    ("anthropic-keys", lore_llm::secrets::KEYS_PAGE),
     // GitHub pre-fills the form; the user still confirms on the page.
     ("github-new-repo", "https://github.com/new?name=my-paper-workspace&visibility=private"),
 ];
@@ -2446,14 +2446,14 @@ async fn workspace_root(s: &Shared) -> Option<PathBuf> {
 
 async fn git_status(State(s): State<Shared>) -> impl IntoResponse {
     match workspace_root(&s).await {
-        Some(ws) => Json(ym_gitsync::Repo::new(ws).status().await).into_response(),
-        None => Json(ym_gitsync::GitStatus::default()).into_response(),
+        Some(ws) => Json(lore_gitsync::Repo::new(ws).status().await).into_response(),
+        None => Json(lore_gitsync::GitStatus::default()).into_response(),
     }
 }
 
 async fn git_pull(State(s): State<Shared>) -> impl IntoResponse {
     let Some(ws) = workspace_root(&s).await else { return Json(serde_json::json!({ "pulled": false })).into_response() };
-    match ym_gitsync::Repo::new(ws).pull().await {
+    match lore_gitsync::Repo::new(ws).pull().await {
         Ok(pulled) => {
             if pulled {
                 *s.loaded.write().await = load(&s.paths);
@@ -2472,8 +2472,8 @@ struct SyncBody {
 async fn git_sync(State(s): State<Shared>, body: Option<Json<SyncBody>>) -> impl IntoResponse {
     let Some(ws) = workspace_root(&s).await else { return bad("示範工作區不做同步") };
     let msg = body.and_then(|Json(b)| b.message);
-    let opts = ym_gitsync::SyncOptions { message: msg, group_roots: vec!["papers".into()], ..Default::default() };
-    match ym_gitsync::Repo::new(ws).sync(&opts).await {
+    let opts = lore_gitsync::SyncOptions { message: msg, group_roots: vec!["papers".into()], ..Default::default() };
+    match lore_gitsync::Repo::new(ws).sync(&opts).await {
         Ok(r) => {
             if r.pulled {
                 *s.loaded.write().await = load(&s.paths);
@@ -2517,7 +2517,7 @@ async fn setup_status(State(s): State<Shared>) -> impl IntoResponse {
         (l.workspace.clone(), l.demo)
     };
     let ws_git = match (&root, demo) {
-        (Some(r), false) => Some(ym_gitsync::Repo::new(r).status().await),
+        (Some(r), false) => Some(lore_gitsync::Repo::new(r).status().await),
         _ => None,
     };
     let sys = models::system_info().await;

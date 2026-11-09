@@ -1,6 +1,6 @@
-//! API tests on a synthetic deck (ym-ooxml's test fixture), offline.
+//! API tests on a synthetic deck (lore-ooxml's test fixture), offline.
 
-#[path = "../../../../commons/crates/ym-ooxml/tests/common/mod.rs"]
+#[path = "../../../../commons/crates/lore-ooxml/tests/common/mod.rs"]
 mod common;
 
 use axum::body::Body;
@@ -73,8 +73,8 @@ async fn import_edit_undo_reveal_export() {
 
     // unedited export keeps every part
     let (_, _, bytes) = call(&app, "GET", "/api/decks/demo/pptx", None, None).await;
-    let back = ym_ooxml::Deck::from_bytes(&bytes).unwrap();
-    let orig = ym_ooxml::Deck::from_bytes(&common::synthetic_deck()).unwrap();
+    let back = lore_ooxml::Deck::from_bytes(&bytes).unwrap();
+    let orig = lore_ooxml::Deck::from_bytes(&common::synthetic_deck()).unwrap();
     for p in &orig.pkg.parts {
         assert!(back.pkg.get(&p.name) == Some(p.data.as_slice()), "{}", p.name);
     }
@@ -110,7 +110,7 @@ async fn import_edit_undo_reveal_export() {
     let (_, a, _) = call(&app, "POST", "/api/decks/demo/export", Some(json!({})), None).await;
     let (_, b2, _) = call(&app, "POST", "/api/decks/demo/export", Some(json!({})), None).await;
     assert_ne!(a["path"], b2["path"]);
-    let out = ym_ooxml::Deck::open(a["path"].as_str().unwrap()).unwrap();
+    let out = lore_ooxml::Deck::open(a["path"].as_str().unwrap()).unwrap();
     assert_eq!(out.slides.len(), 3);
 
     // deck.json on disk is the source of truth: a fresh server sees the edits

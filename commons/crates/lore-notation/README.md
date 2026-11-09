@@ -160,7 +160,7 @@ filled), figures and tables (label, file, caption), abbreviations (long form or
 `needs-expansion`). `Draft.contexts[id]` holds up to three sentences per entry.
 
 `NotationAssistant` is a synchronous trait (`suggest(&AssistRequest) ->
-Vec<Suggestion>`); the app implements it on top of `ym-llm` (one structured
+Vec<Suggestion>`); the app implements it on top of `lore-llm` (one structured
 task, model from the catalog), `MockAssistant` is for tests. `refine` only
 fills empty fields and tags them `suggested`. This crate never calls a model.
 
@@ -176,7 +176,7 @@ Server (`pc-core` / `pc-server`), by path dependency `../commons/crates/lore-not
 | `PUT /api/papers/:p/notation` | save the document file; then `write_notation_tex(paper, …, doc_macros)` and `ensure_input("notation")` in `main.tex` preamble (only once, after `amsmath`) |
 | `POST /api/papers/:p/notation/import` | `import(global, ids, conflict)` |
 | `GET /api/papers/:p/notation/check` | `check_document(Document::load(paper), &effective, &opts)` → `Report` |
-| `POST /api/papers/:p/notation/extract` | `extract_document` (+ `refine` with the ym-llm assistant when asked) → draft for review, never saved automatically |
+| `POST /api/papers/:p/notation/extract` | `extract_document` (+ `refine` with the lore-llm assistant when asked) → draft for review, never saved automatically |
 | `POST /api/papers/:p/notation/rename-macro` | `rename_macro` over `sections/*.tex` (one sentence per line kept) |
 
 UI (`ui/write.js`, `ui/tex.js`):
@@ -197,7 +197,7 @@ UI (`ui/write.js`, `ui/tex.js`):
 
 - Each deck has its own `notation.json`, usually imported from the paper's (`import`) plus the global file.
 - Equation boxes insert `latex` and optionally `gloss` as the bracket note (design §5 v0.2);
-  native OMML via `ym-math` from the same LaTeX (macros expanded with `katex_macros`).
+  native OMML via `lore-math` from the same LaTeX (macros expanded with `katex_macros`).
 - `check_document` is for LaTeX sources; for slides the app runs `symbols::analyze` on a
   `Document::from_files` built from slide text boxes (one pseudo-file per slide, `file = "slide-07"`),
   so `notation-jump` names the slide.

@@ -10,7 +10,7 @@ Monorepo of the author's local-first apps. Each top-level folder is its own Carg
 - `private/` is **ignored**: each subfolder is a separate private git repo —
   `private/shared/` (profile, fonts, deny words, `docs/ecosystem-design.md` = the overall
   design; may be missing on other machines) and `private/<App>/` (one app's data).
-- Find these with `ym-home` (`Home::discover`, `seed_app`, `shared_file`, `prefs`); never
+- Find these with `lore-home` (`Home::discover`, `seed_app`, `shared_file`, `prefs`); never
   hard-code `../private`. Personal choices (fonts, field-specific lists, who the user is)
   go in `private/shared` or the app's private folder, with a neutral default in public.
 

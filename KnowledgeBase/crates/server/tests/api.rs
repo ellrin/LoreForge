@@ -26,7 +26,7 @@ fn setup() -> (tempfile::TempDir, axum::Router, Arc<FixedClock>) {
     let config = Config { spaces: vec![p, h], member: "ellrin".into(), port: 0, web: dir.path().join("web"), intervals: Default::default(), app_dir: None };
     let clock = Arc::new(FixedClock::at("2026-11-08T21:10:00+08:00"));
     let kb = kb_server::open(&config, KbOptions { clock: clock.clone(), ..Default::default() }).unwrap();
-    let rem = Reminders::isolated(&dir.path().join("app"), Arc::new(ym_store::SystemRunner), "http://127.0.0.1:7700");
+    let rem = Reminders::isolated(&dir.path().join("app"), Arc::new(lore_store::SystemRunner), "http://127.0.0.1:7700");
     let app = kb_server::router(AppState::new(kb, config.web.clone(), rem));
     (dir, app, clock)
 }
@@ -154,7 +154,7 @@ async fn assets_roundtrip_and_cors() {
 fn workspace_template_opens() {
     let dir = tempfile::tempdir().unwrap();
     let tpl = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../private-example/KnowledgeBase");
-    ym_store::copy_missing(&tpl, &dir.path().join("kb")).unwrap();
+    lore_store::copy_missing(&tpl, &dir.path().join("kb")).unwrap();
     let config = Config { spaces: vec![dir.path().join("kb")], member: "ellrin".into(), port: 0, web: dir.path().into(), intervals: Default::default(), app_dir: None };
     let kb = kb_server::open(&config, KbOptions::default()).unwrap();
     let reg = kb.registry("personal").unwrap();
