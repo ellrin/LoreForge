@@ -238,6 +238,14 @@ impl Llm {
         router.provider_for_with(task, &opts).await.map_err(|e| if choice.is_some() { e.reason() } else { e.to_string() })
     }
 
+    /// Run `task` on one exact model ref ("claude:haiku", "local:current"),
+    /// no fallback: the draft window's model picker.
+    pub async fn complete_on(&self, task: &str, model_ref: &str, prompt: &Prompt, extra: Option<&str>, schema: Option<serde_json::Value>) -> Result<String, String> {
+        let router = Router::new(self.tasks.clone(), self.factory());
+        let route = router.provider_for_with(task, &RouteOptions::only(model_ref)).await.map_err(|e| e.reason())?;
+        route.provider.complete(&request(&route, prompt, extra, schema)).await.map_err(|e| e.to_string())
+    }
+
     /// Run one prompt as `task`. `extra` is appended to the user prompt (the
     /// retry feedback); `schema` asks for JSON of that shape.
     pub async fn complete(&self, task: &str, choice: Option<EngineChoice>, prompt: &Prompt, extra: Option<&str>, schema: Option<serde_json::Value>) -> Result<String, String> {

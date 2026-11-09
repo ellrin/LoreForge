@@ -19,6 +19,7 @@
     <div class="paper-bar">
       <button class="picker" id="actFile" aria-haspopup="true" aria-label="切換或新增論文"><span data-icon="file"></span><span id="paperName">—</span><span data-icon="chevron"></span></button>
       <button class="ico" id="actRefs" data-icon="quote" aria-label="本篇文獻"></button>
+      <button class="ico" id="actDraft" data-icon="ai" aria-label="討論草稿"></button>
       <button class="ico" id="actExport" data-icon="export" data-menu="export" aria-label="匯出"></button>
     </div>
     <div class="top-right">
@@ -142,6 +143,31 @@
       </div>
       <div class="np-body" id="npBody"></div>
       <div class="np-foot" id="npFoot"></div>
+    </div>
+  </dialog>
+
+  <!-- 討論草稿: the draft interview for the open paper -->
+  <dialog class="dialog big" id="dlgDraft" aria-label="討論草稿">
+    <div class="dlg">
+      <div class="dlg-head">
+        <h2>討論草稿</h2>
+        <span class="count" id="dfLens"></span>
+        <label class="df-model" data-tip="對話問答用的模型；整理用 Sonnet，審稿固定用 Opus">問答模型
+          <select id="dfModel">
+            <option value="auto">自動（Haiku）</option>
+            <option value="haiku">Haiku</option>
+            <option value="sonnet">Sonnet</option>
+            <option value="opus">Opus</option>
+            <option value="local">本機模型</option>
+          </select>
+        </label>
+        <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
+      </div>
+      <div class="df-body">
+        <ol class="df-steps" id="dfSteps"></ol>
+        <section class="df-main" id="dfMain"></section>
+        <aside class="df-side" id="dfSide"></aside>
+      </div>
     </div>
   </dialog>
 
@@ -296,6 +322,7 @@
 <script src="write.js"></script>
 <script src="zoom.js"></script>
 <script src="newpaper.js"></script>
+<script src="draft.js"></script>
 <script src="templates.js"></script>
 <script src="convert.js"></script>
 <script src="app.js"></script>

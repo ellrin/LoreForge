@@ -79,3 +79,57 @@ label = "測試引擎"
 default = "local:current"
 fallback = "claude:selected"
 offline = true
+
+# ── 討論草稿 ───────────────────────────────────────────────
+# The interview turns are short structured gradings under a detailed lens:
+# a small model is enough (Haiku by default; Sonnet or a local model can be
+# picked in the draft window). Organising steps use Sonnet; the reviewer
+# pass, which must catch overclaims and contradictions, always uses Opus.
+
+[task.pc-draft-record]
+label = "整理實驗記錄"
+needs = { json = true }
+default = "claude:sonnet"
+offline = false
+max_tokens = 8000
+
+[task.pc-draft-plan]
+label = "規劃題組"
+needs = { json = true }
+default = "claude:sonnet"
+offline = false
+max_tokens = 8000
+
+[task.pc-draft-turn]
+label = "草稿問答"
+needs = { json = true }
+default = "claude:haiku"
+fallback = "local:current"
+
+[task.pc-draft-claims]
+label = "主張登記"
+needs = { json = true }
+default = "claude:sonnet"
+offline = false
+max_tokens = 8000
+
+[task.pc-draft-review]
+label = "章節校正"
+needs = { json = true }
+default = "claude:sonnet"
+offline = false
+max_tokens = 8000
+
+[task.pc-draft-outline]
+label = "段落大綱"
+needs = { json = true }
+default = "claude:sonnet"
+offline = false
+max_tokens = 16000
+
+[task.pc-draft-audit]
+label = "審稿檢查"
+needs = { json = true }
+default = "claude:opus"
+offline = false
+max_tokens = 16000

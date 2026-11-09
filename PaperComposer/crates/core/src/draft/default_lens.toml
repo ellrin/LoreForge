@@ -1,0 +1,46 @@
+# The built-in lens, used when the workspace has no lens/<name>.toml.
+# Deliberately neutral: an item either has a reason or it does not.
+# Copy private-example/PaperComposer/lens/default.toml into your own
+# workspace and change it to say what YOU care about.
+
+name = "default"
+
+[scale]
+label = "理由"
+levels = [
+  { id = "R0", label = "沒有理由", means = "Only what was done is stated." },
+  { id = "R1", label = "有理由", means = "Why it was done is stated." },
+]
+
+[[mode]]
+id = "routine"
+label = "常規"
+means = "Standard practice in the field; stated, not argued."
+examples = ["data split", "evaluation metrics", "cross-validation", "hyperparameters"]
+ask = "confirm"
+
+[[mode]]
+id = "exposition"
+label = "鋪陳"
+means = "Background, definitions, variables of an equation, procedure steps."
+ask = "never"
+
+[[mode]]
+id = "own"
+label = "自己的決定"
+means = "A choice the authors made for this study."
+min_depth = 1
+
+[[probe]]
+id = "mode"
+when_missing = "mode"
+ask = "這是領域常規做法，還是這篇研究自己的決定？"
+
+[[probe]]
+id = "why"
+when_missing = "depth"
+ask = "為什麼這樣做？"
+
+[stop]
+max_turns_per_group = 8
+options_when_unsure = true

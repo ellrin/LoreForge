@@ -825,6 +825,7 @@ function openWindow(id) {
   if (!d.open) d.showModal();
   if (id === "dlgTpl") PCTemplates.open();
   if (id === "dlgPaperRefs") PCRefs.paperPage();
+  if (id === "dlgDraft") PCDraft.open();
 }
 
 // The database window: one tab per table, and the reference library.
@@ -846,7 +847,7 @@ function wireWindows() {
     d.querySelector(".close")?.addEventListener("click", () => closeWindow(d));
     // A click on the backdrop lands on the <dialog> itself, not its content.
     // Windows you fill in (new paper) stay open on a stray click outside.
-    if (d.id !== "dlgNew") d.addEventListener("click", (e) => { if (e.target === d) closeWindow(d); });
+    if (d.id !== "dlgNew" && d.id !== "dlgDraft") d.addEventListener("click", (e) => { if (e.target === d) closeWindow(d); });
     d.addEventListener("cancel", (e) => { e.preventDefault(); closeWindow(d); });
   });
 }
@@ -949,7 +950,11 @@ function fileMenuList() {
     next.prepend(icon("library"));
     next.title = "這篇論文的期刊模板、檔案整理與 .bib 加入文獻庫";
     next.onclick = () => importCard(state.paper.name);
-    m.append(next);
+    const draft = el("button", "", "討論草稿…");
+    draft.prepend(icon("ai"));
+    draft.title = "用對話整理實驗與想法，產生大綱與草稿";
+    draft.onclick = () => { m.hidden = true; PCDraft.open(); };
+    m.append(next, draft);
   }
 }
 
@@ -1448,6 +1453,7 @@ function wire() {
   wireWindows();
   $("#actFile").onclick = toggleFileMenu;
   $("#actRefs").onclick = () => openWindow("dlgPaperRefs");
+  $("#actDraft").onclick = () => PCDraft.open();
   $("#actExport").onclick = () => PCExport.run("pdf");
   $("#actDb").onclick = () => openDbTab(state.db.name);
   $("#actTpl").onclick = () => openWindow("dlgTpl");

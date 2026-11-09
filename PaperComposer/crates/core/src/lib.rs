@@ -10,6 +10,7 @@ pub mod bib;
 pub mod check;
 pub mod compose;
 pub mod decompose;
+pub mod draft;
 pub mod front;
 pub mod journal;
 pub mod meta;

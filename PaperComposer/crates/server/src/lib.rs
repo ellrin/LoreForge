@@ -13,6 +13,7 @@
 
 pub mod citecheck;
 pub mod convert;
+mod draft;
 pub mod export;
 pub mod import;
 pub mod llm;
@@ -2896,6 +2897,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/engines/test", post(test_engine))
         .route("/api/claude-code/login", post(claude_code_login))
         .route("/api/compose", post(compose_paragraph))
+        .merge(draft::routes())
         .fallback_service(ServeDir::new(paths.ui))
         .with_state(state)
 }
