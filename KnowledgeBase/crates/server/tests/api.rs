@@ -162,3 +162,14 @@ fn workspace_template_opens() {
     assert!(reg.kinds.iter().find(|k| k.id == "paper").unwrap().fields.iter().any(|f| f.name == "doi"));
     assert_eq!(kb.tags("personal").unwrap().domains.len(), 3);
 }
+
+#[tokio::test]
+async fn web_files_are_revalidated() {
+    // The desktop WebView must not keep showing an old app.js / styles.css after an update.
+    let (dir, app, _) = setup();
+    std::fs::create_dir_all(dir.path().join("web")).unwrap();
+    std::fs::write(dir.path().join("web/app.js"), "// app").unwrap();
+    let res = app.clone().oneshot(Request::builder().uri("/app.js").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers().get("cache-control").unwrap(), "no-cache");
+}

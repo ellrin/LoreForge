@@ -22,7 +22,7 @@ thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time", "io-util"] }
 axum = "0.8"
-tower-http = { version = "0.6", features = ["fs", "cors"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "set-header"] }
 tempfile = "3"
 # Daily e-mail digest (Gmail SMTP with an app password); rustls, no OpenSSL.
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }

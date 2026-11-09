@@ -18,6 +18,7 @@ use axum::http::{HeaderValue, Method, header};
 use kb_core::{KbOptions, KnowledgeBase};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 pub use config::Config;
 
@@ -68,7 +69,11 @@ pub fn router(shared: Shared) -> Router {
         .allow_origin(AllowOrigin::predicate(|o, _| allowed_origin(o)))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
         .allow_headers([header::CONTENT_TYPE]);
-    let web = ServeDir::new(&shared.web).append_index_html_on_directories(true);
+    // `no-cache` = revalidate every time (a 304 when unchanged), so the desktop WebView picks
+    // up new web/ files after an update instead of showing its cached copy.
+    let web = Router::new()
+        .fallback_service(ServeDir::new(&shared.web).append_index_html_on_directories(true))
+        .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, header::HeaderValue::from_static("no-cache")));
     api::routes().with_state(shared).fallback_service(web).layer(cors)
 }
 

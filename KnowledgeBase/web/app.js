@@ -100,6 +100,10 @@ const S = {
 };
 
 const kindLabel = (id) => S.reg.kinds.find((k) => k.id === id)?.label ?? id;
+// Domains carry the colour (--g1…--g12) everywhere: card list and graph. The slot is the
+// domain's place in the registry (alphabetical), so a colour never moves when cards change.
+const domainLabel = (id) => S.reg?.domains?.[id]?.label ?? id;
+const domainSlot = (id) => { const i = Object.keys(S.reg?.domains ?? {}).indexOf(id); return i < 0 ? null : i % 12; };
 const relLabel = (id) => S.reg.link_types.find((k) => k.id === id)?.label ?? id;
 const spaceName = (id) => S.spaces.find((s) => s.id === id)?.name ?? id;
 
@@ -250,7 +254,7 @@ function wire() {
     newCard: () => openEditor(null),
     onCenter: (id) => { S.graphCenter = id; setHash(id ? `#/graph/${id}` : "#/graph"); },
     info: (t) => ($("graphInfo").textContent = t),
-    kindLabel, relLabel, spaceName, fail, toast,
+    kindLabel, relLabel, spaceName, domainLabel, domainSlot, fail, toast,
   });
   wireSettings();
   document.addEventListener("keydown", reviewKeys);
@@ -309,21 +313,59 @@ async function loadCards() {
             h("button", { class: "btn", type: "button", onclick: clearFilters }, "清除篩選")));
       return;
     }
-    list.replaceChildren(...nodes.map(cardEl));
+    list.replaceChildren(...cardIndex(nodes));
   } catch (e) { fail(e); }
 }
 
-function cardEl(n) {
-  return h("button", { class: "card", onclick: () => openEditor(n.id) },
-    n.image ? h("img", { class: "thumb", alt: "", loading: "lazy", src: assetUrl(n.space, n.image) }) : null,
-    h("div", { class: "t" }, n.title, stateChip(n.state)),
-    n.aliases.length ? h("div", { class: "al" }, n.aliases.join(" · ")) : null,
-    n.summary ? h("div", { class: "s" }, n.summary) : null,
-    h("div", { class: "meta" },
-      h("span", { class: "tag kind" }, kindLabel(n.kind)),
-      S.spaces.length > 1 ? h("span", { class: "tag space" }, spaceName(n.space)) : null,
-      ...n.tags.map((t) => h("span", { class: "tag" }, `#${t}`))));
+// The card list is an index: what I know, grouped by domain, one line per card. Cards that
+// need attention (learning, stale, never reviewed) come first; the summary shows on hover.
+const domainOf = (n) => n.domains?.[0] ?? null;
+const dcStyle = (d) => { const i = d == null ? null : domainSlot(d); return i == null ? null : `--dc: var(--g${i + 1})`; };
+function cardIndex(nodes) {
+  const out = [];
+  const due = nodes.filter((n) => (n.state ?? "none") !== "known");
+  if (due.length && due.length < nodes.length) out.push(idxSection("待複習", null, due, true));
+  const groups = new Map();
+  for (const n of nodes) { const d = domainOf(n); (groups.get(d) ?? groups.set(d, []).get(d)).push(n); }
+  const order = [...groups.entries()].sort((a, b) => (a[0] == null) - (b[0] == null) || b[1].length - a[1].length);
+  for (const [d, list] of order) out.push(idxSection(d == null ? "未分類" : domainLabel(d), d, list, false));
+  return out;
 }
+function idxSection(label, d, list, attention) {
+  return h("section", { class: `idx${attention ? " due" : ""}`, style: dcStyle(d) },
+    h("h3", {}, h("i", {}), label, h("span", {}, list.length)),
+    h("ul", {}, list.map((n) => h("li", {}, idxRow(n, attention)))));
+}
+function idxRow(n, attention) {
+  const st = n.state ?? "none";
+  const b = h("button", { type: "button", onclick: () => { unpeek(); openEditor(n.id); } },
+    attention ? h("i", { class: `st-${st}` }) : null,
+    h("span", { class: "t" }, n.title),
+    h("span", { class: "k" }, kindLabel(n.kind)));
+  b.addEventListener("pointerenter", (e) => e.pointerType === "mouse" && peek(n, b));
+  b.addEventListener("pointerleave", unpeek);
+  b.addEventListener("focus", () => peek(n, b));
+  b.addEventListener("blur", unpeek);
+  return b;
+}
+let peekEl = null;
+function peek(n, anchor) {
+  if (!peekEl) { peekEl = h("div", { class: "peek", role: "tooltip" }); document.body.append(peekEl); }
+  const d = domainOf(n), st = n.state ?? "none";
+  peekEl.setAttribute("style", dcStyle(d) ?? "");
+  peekEl.replaceChildren(
+    h("b", {}, n.title),
+    n.aliases.length ? h("div", { class: "al" }, n.aliases.join(" · ")) : null,
+    n.summary ? h("p", {}, n.summary) : null,
+    h("div", { class: "m" }, d ? h("span", { class: "dm" }, domainLabel(d)) : null, h("span", {}, kindLabel(n.kind)), h("span", {}, STATE_LABEL[st]),
+      S.spaces.length > 1 ? h("span", {}, spaceName(n.space)) : null));
+  peekEl.hidden = false;
+  const r = anchor.getBoundingClientRect(), w = peekEl.offsetWidth, ph = peekEl.offsetHeight;
+  const x = r.right + 12 + w < innerWidth ? r.right + 12 : Math.max(8, r.left - 12 - w);
+  peekEl.style.left = `${x}px`;
+  peekEl.style.top = `${Math.max(8, Math.min(r.top - 6, innerHeight - ph - 8))}px`;
+}
+function unpeek() { if (peekEl) peekEl.hidden = true; }
 
 // ── Editor ─────────────────────────────────────────────
 // Unsaved changes: the form is compared with a snapshot taken when the card was opened or

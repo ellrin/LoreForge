@@ -24,23 +24,26 @@ const Graph = (() => {
   ];
   const STATE_LABEL = Object.fromEntries(STATES.map(([k, l]) => [k, l]));
   const SHAPE = { concept: "circle", term: "circle", vocab: "circle", method: "square", equation: "diamond", metric: "diamond", dataset: "triangle", anatomy: "hexagon", paper: "pentagon", person: "hexagon", tag: "ring", missing: "ring" };
-  const shapeOf = (kind) => SHAPE[kind] ?? "circle";
+  // Cards are all circles (colour and size carry the meaning); SHAPE stays for the kind chips.
+  const shapeOf = (kind) => (kind === "tag" || kind === "missing" ? "ring" : "circle");
+  const kindShape = (kind) => SHAPE[kind] ?? "circle";
   // Edge styles: colour token, width (screen px), dash (screen px), opacity, arrowhead.
   const REL = {
     prerequisite: { c: "accentText", w: 1.5, dash: null, a: 0.75, arrow: true },
     contrast: { c: "muted", w: 1.3, dash: [6, 4], a: 0.85, arrow: false },
-    related: { c: "edge", w: 1.1, dash: null, a: 0.8, arrow: false },
+    related: { c: "edge", w: 1, dash: null, a: 0.42, arrow: false },
     translation: { c: "muted", w: 1.1, dash: [1.5, 3], a: 0.85, arrow: false },
-    mentions: { c: "edge", w: 0.7, dash: null, a: 0.6, arrow: false, softArrow: true },
+    mentions: { c: "edge", w: 0.7, dash: null, a: 0.35, arrow: false, softArrow: true },
     tag: { c: "faint", w: 0.7, dash: [2, 3], a: 0.55, arrow: false },
-    _directed: { c: "muted", w: 1.2, dash: null, a: 0.75, arrow: true },
+    _directed: { c: "edge", w: 1.1, dash: null, a: 0.5, arrow: true },
   };
   const relStyle = (rel) => REL[rel] ?? REL._directed;
   const REL_ORDER = ["tag", "mentions", "related", "translation", "contrast", "_directed", "prerequisite"];
-  const GROUP_N = 8; // categorical slots (--g1…--g8); the rest fold into 其他
+  const GROUP_N = 12; // categorical slots (--g1…--g12); the rest fold into 其他
   const LS_KEY = "kb.graph";
   const PHYS = { center: 0.05, repel: 140, linkDist: 55, linkForce: 1 };
-  const DEFAULTS = { ...PHYS, colorBy: "state", showTags: false, showMissing: true, orphans: true, arrows: true, labelAt: 1, nodeSize: 1, rels: { tag: false }, depth: 2, panel: false };
+  const SETTINGS_V = 2; // v2: colour by domain
+  const DEFAULTS = { v: SETTINGS_V, ...PHYS, colorBy: "domain", showTags: false, showMissing: true, orphans: true, arrows: true, labelAt: 1, nodeSize: 1, rels: { tag: false }, depth: 2, panel: false };
   const ALPHA_MIN = 0.001, ALPHA_DECAY = 1 - Math.pow(ALPHA_MIN, 1 / 300), VELOCITY_KEEP = 0.6, THETA2 = 0.81;
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -62,7 +65,11 @@ const Graph = (() => {
   const stats = { nodes: 0, edges: 0, loadAt: 0, settleMs: null, ticks: 0, frames: 0, fps: 0, tickMs: 0, drawMs: 0, _fpsT: 0, _fpsF: 0 };
 
   function loadSettings() {
-    try { const v = JSON.parse(localStorage.getItem(LS_KEY) ?? "{}"); return { ...DEFAULTS, ...v, rels: { ...DEFAULTS.rels, ...(v.rels ?? {}) } }; }
+    try {
+      const v = JSON.parse(localStorage.getItem(LS_KEY) ?? "{}");
+      if (v.v !== SETTINGS_V) { delete v.colorBy; delete v.labelAt; v.v = SETTINGS_V; }
+      return { ...DEFAULTS, ...v, rels: { ...DEFAULTS.rels, ...(v.rels ?? {}) } };
+    }
     catch { return { ...DEFAULTS, rels: { ...DEFAULTS.rels } }; }
   }
   function saveSettings() { try { localStorage.setItem(LS_KEY, JSON.stringify(S)); } catch {} }
@@ -339,6 +346,8 @@ const Graph = (() => {
     const count = new Map();
     for (const n of nodes) if (n.isCard) { const k = groupKey(n); if (k != null) count.set(k, (count.get(k) ?? 0) + 1); }
     groupOrder = [...count.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
+    // Domains use the app's fixed slots, so a domain has the same colour here and in the card list.
+    if (S.colorBy === "domain" && opts.domainSlot) { for (const [k] of groupOrder) { const i = opts.domainSlot(k); if (i != null) groupColour.set(k, i); } return; }
     groupOrder.slice(0, GROUP_N).forEach(([k], i) => groupColour.set(k, i));
   }
   function colourOf(n) {
@@ -653,7 +662,7 @@ const Graph = (() => {
 
   // ── Drawing ────────────────────────────────────────────
   // World radius by degree; never smaller than ~2.4 screen px so zoomed-out nodes stay visible.
-  const radius = (n) => Math.max(2.4 / view.k, n.kind === "tag" ? 3.2 : n.kind === "missing" ? 3.4 : (3.4 + Math.sqrt(n.deg) * 2.6) * S.nodeSize);
+  const radius = (n) => Math.max(2.4 / view.k, n.kind === "tag" ? 3.2 : n.kind === "missing" ? 3.4 : (3 + Math.sqrt(n.deg) * 1.9) * S.nodeSize);
   function polygon(shape, x, y, r) {
     const sides = { square: 4, diamond: 4, triangle: 3, hexagon: 6, pentagon: 5 }[shape] ?? 4;
     const rot = { square: Math.PI / 4, diamond: 0, triangle: -Math.PI / 2, hexagon: 0, pentagon: -Math.PI / 2 }[shape] ?? 0;
@@ -788,10 +797,10 @@ const Graph = (() => {
   function drawLabels(lit, inView) {
     const k = view.k;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.font = `500 12px ${P.sans}`;
+    ctx.font = `500 11.5px ${P.sans}`;
     ctx.textAlign = "center"; ctx.textBaseline = "top";
     ctx.lineJoin = "round";
-    const th = 5.5 * S.labelAt; // screen radius at which a label appears
+    const th = 8 * S.labelAt; // screen radius at which a label appears
     const cand = [];
     for (const n of active) {
       if (!inView(n)) continue;
@@ -800,7 +809,8 @@ const Graph = (() => {
       if (n === hover || n === selected) a = 1;
       else if (lit) a = lit.has(n) ? 1 : 0;
       else a = Math.max(n.hub && k > 0.2 ? 0.85 : 0, Math.min(1, (rs - th) / (th * 0.25)));
-      if (a > 0.02) cand.push([n, a, rs]);
+      // Half-faded labels over edges read as noise: a label is either shown or not.
+      if (a >= 0.5) cand.push([n, 1, rs]);
     }
     const pri = (x) => (x[0] === hover || x[0] === selected ? 1e9 : 0) + x[2];
     cand.sort((p, q) => pri(q) - pri(p));
@@ -818,7 +828,7 @@ const Graph = (() => {
     let count = 0;
     for (const [n, a, rs] of cand) {
       if (count > 320) break;
-      const text = n.title.length > 40 ? n.title.slice(0, 38) + "…" : n.title;
+      const text = n.title.length > 28 ? n.title.slice(0, 26).trimEnd() + "…" : n.title;
       if (n._tw == null || n._tt !== text) { n._tw = ctx.measureText(text).width; n._tt = text; }
       const sx = n.x * k + view.x, sy = n.y * k + view.y + rs + 3;
       const r = { x0: sx - n._tw / 2 - 2, x1: sx + n._tw / 2 + 2, y0: sy, y1: sy + 15 };
@@ -829,7 +839,8 @@ const Graph = (() => {
     for (const [n, a, sx, sy, text] of placed) {
       ctx.globalAlpha = a;
       ctx.lineWidth = 3.5; ctx.strokeStyle = P.panel; ctx.strokeText(text, sx, sy);
-      ctx.fillStyle = n.kind === "missing" || n.kind === "tag" ? P.muted : P.text;
+      // Hubs and the focused neighbourhood in full ink, the rest a step quieter.
+      ctx.fillStyle = n.kind === "missing" || n.kind === "tag" ? P.faint : n.hub || n === hover || n === selected || lit ? P.text : P.muted;
       ctx.fillText(text, sx, sy);
     }
     ctx.globalAlpha = 1;
@@ -1073,8 +1084,8 @@ const Graph = (() => {
     } else {
       const cnt = new Map();
       for (const n of active) if (n.isCard) { const k = groupKey(n); const key = groupColour.has(k) ? k : "__other"; cnt.set(key, (cnt.get(key) ?? 0) + 1); }
-      for (const [k] of groupOrder.slice(0, GROUP_N)) items.push(el("span", {}, el("i", { style: `background:var(--g${groupColour.get(k) + 1})` }), groupLabel(k), el("em", {}, cnt.get(k) ?? 0)));
-      if (groupOrder.length > GROUP_N || cnt.get("__other")) items.push(el("span", {}, el("i", { style: "background:var(--faint)" }), "其他", el("em", {}, cnt.get("__other") ?? 0)));
+      for (const [k] of groupOrder) if (groupColour.has(k)) items.push(el("span", {}, el("i", { style: `background:var(--g${groupColour.get(k) + 1})` }), groupLabel(k), el("em", {}, cnt.get(k) ?? 0)));
+      if (cnt.get("__other")) items.push(el("span", {}, el("i", { style: "background:var(--faint)" }), "其他", el("em", {}, cnt.get("__other") ?? 0)));
     }
     if (S.showMissing && active.some((n) => n.kind === "missing")) items.push(el("span", {}, el("i", { class: "hollow dashed" }), "尚未建立"));
     if (S.showTags && active.some((n) => n.kind === "tag")) items.push(el("span", {}, el("i", { class: "hollow" }), "標籤"));
@@ -1110,7 +1121,7 @@ const Graph = (() => {
     const toggle = (set, k) => () => { set.has(k) ? set.delete(k) : set.add(k); refilter(); };
     // Filters
     const kinds = count((n) => n.kind), states = count((n) => n.state ?? "none"), spaces = count((n) => n.space);
-    const kindChips = [...kinds.entries()].sort((a, b) => b[1] - a[1]).map(([k, c]) => chip(`${opts.kindLabel?.(k) ?? k} ${c}`, F.kinds.has(k), toggle(F.kinds, k), shapeSwatch(shapeOf(k), "currentColor")));
+    const kindChips = [...kinds.entries()].sort((a, b) => b[1] - a[1]).map(([k, c]) => chip(`${opts.kindLabel?.(k) ?? k} ${c}`, F.kinds.has(k), toggle(F.kinds, k), shapeSwatch(kindShape(k), "currentColor")));
     const stateChips = STATES.filter(([k]) => states.has(k)).map(([k, l, tok]) => chip(`${l} ${states.get(k)}`, F.states.has(k), toggle(F.states, k), el("i", { class: "g-dot", style: `background:var(${tok})` })));
     const spaceChips = spaces.size > 1 ? [...spaces.entries()].map(([k, c]) => chip(`${opts.spaceName?.(k) ?? k} ${c}`, F.spaces.has(k), toggle(F.spaces, k))) : [];
     const days = cards.map((n) => n.day).filter(Boolean).sort();
@@ -1139,7 +1150,7 @@ const Graph = (() => {
       check("有方向的連結畫箭頭", S.arrows, (v) => { S.arrows = v; }, false),
       el("p", { class: "muted small" }, "箭頭方向 = 連結方向：A →先備知識→ B 表示 A 需要先懂 B。"));
     // Appearance
-    const colourSel = el("select", { "aria-label": "著色依據" }, [["state", "熟悉度"], ["domain", "領域"], ["tag", "標籤群組"], ["kind", "種類"], ["space", "空間"]].map(([v, l]) => el("option", { value: v, selected: S.colorBy === v }, l)));
+    const colourSel = el("select", { "aria-label": "著色依據" }, [["domain", "領域"], ["state", "熟悉度"], ["tag", "標籤群組"], ["kind", "種類"], ["space", "空間"]].map(([v, l]) => el("option", { value: v, selected: S.colorBy === v }, l)));
     colourSel.addEventListener("change", () => { S.colorBy = colourSel.value; saveSettings(); assignGroups(); for (const n of nodes) n.col = colourOf(n); renderLegend(); renderPanel(); kick(); });
     const look = section("外觀", false,
       el("label", { class: "g-field" }, "著色依據", colourSel),

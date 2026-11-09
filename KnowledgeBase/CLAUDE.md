@@ -35,6 +35,10 @@ cd ../commons && cargo test -p kb-core -p lore-store
   (tokens, icons, panels). UI text in Traditional Chinese. KaTeX vendored in `web/vendor/katex`
   (copied from PaperComposer). Graph (`graph.js`): Obsidian-style canvas view, Barnes–Hut force
   layout, global / local (`#/graph/<id>`), filters, playback; data from `/api/graph?full=true&missing=true`.
+  Colour = a card's first domain (`--g1…--g12`, slot = the domain's place in `tags.json`), the
+  same in the graph and the card list. The card list is an index: grouped by domain, one line per
+  card, summary in a hover preview. The server sends web/ with `Cache-Control: no-cache` (the
+  desktop WebView kept old files otherwise).
 - `../private-example/KnowledgeBase/`: starting layout of a personal space (copied to `../private/KnowledgeBase` on first run).
 - NeonDeck widget: `../NeonDeck/desktop/widgets/knowledge.js`.
 - `apps/desktop` (`knowledgebase`): Tauri shell on the configured port (7700, what the NeonDeck
