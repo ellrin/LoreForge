@@ -9,12 +9,14 @@
 //!   planning, outline, drafting and review prompts ([`style_text`]).
 //!
 //! The steps: topic → experiment record → question groups → interview →
-//! claim register → review → outline → draft → reviewer pass. State lives in
+//! claim register → review → outline → draft → reviewer pass; then 修訂
+//! ([`revise`]) for what has to be added to an existing paper. State lives in
 //! the paper folder ([`session`]); prompts are in [`prompts`].
 
 pub mod lens;
 pub mod material;
 pub mod prompts;
+pub mod revise;
 pub mod session;
 
 use std::path::Path;

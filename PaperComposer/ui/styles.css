@@ -1124,3 +1124,9 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-reflist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .df-thoughts { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
 .df-list.warn li { border-color: var(--warn); color: var(--warn); font-family: var(--sans); }
+.df-change { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--bg); border-radius: var(--r); }
+.df-change.yes { border-left-color: var(--ok); }
+.df-change.no { opacity: .5; }
+.df-old { margin: 4px 0 0; font: 13px/1.6 var(--serif); color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--err) 50%, transparent); }
+.df-refpick { display: flex; flex-direction: column; gap: 6px; }
+.df-main > textarea.np-input { flex: none; min-height: 4.6em; }

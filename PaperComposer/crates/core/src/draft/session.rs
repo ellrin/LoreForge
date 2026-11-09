@@ -392,6 +392,9 @@ pub struct Session {
     pub drafts: Vec<DraftSection>,
     #[serde(default)]
     pub audit: Vec<Finding>,
+    /// 修訂 requests on the existing paper.
+    #[serde(default)]
+    pub revisions: Vec<super::revise::Revision>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

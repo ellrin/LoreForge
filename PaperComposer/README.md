@@ -165,6 +165,10 @@ your-private-repo/
 | 7 草稿 | 逐章用句型庫生成（與「寫作」相同的語氣鎖定），加上大綱的組成、你的風格筆記與 `\cite{}`；會參考同章已寫的段落與校正時採用的建議，避免重述 |
 | 8 審稿 | 找矛盾、宣稱過度、缺數字、不可能的數字、空泛句、重複、埋掉的發想、缺理由的設計、引用超出用途或該引未引；需要你補充的可以「回到對話追問」 |
 
+| 9 修訂 | 論文寫好之後要補東西（一審要求外部驗證、老師要多一張圖、多引兩篇）：寫下要補什麼，可附新圖檔、從文獻庫選要加的文獻（會記進本篇引用）。先開一組對話，討論它要支撐什麼、放在哪一段（選項直接用段落編號）、會影響哪些地方、圖的 caption；再由 Opus 產生具體修改（插在某段之前／之後、取代某段、加在章節最後），每一項附原段落與理由，逐項「套用」或「不採用」。套用前會確認那一段還是原來的文字，改過就不寫；對不上的修改與需要你處理的連帶影響列在「還要注意」 |
+
+**文獻用途會在對話裡長出來**：審稿說某篇的引用超出你寫的用途時，你在對話裡說明那篇其實還能支撐什麼（例如作者設計方法時觀察到的某個事實），這句會加進那篇在 `citations.csv` 的用途，之後的大綱與審稿就照新的用途判斷。
+
 **什麼重要由你決定**：程式本身是中性的，要追問什麼、回答怎麼判讀、什麼時候算問夠，寫在工作區的 `lens/`；你的寫作風格（段落類型、比例、要避免的習慣、範例段落）寫在 `style/`。兩者都是你私人 repo 的檔案，格式見 [`lens/README.md`](../private-example/PaperComposer/lens/README.md) 與 [`style/README.md`](../private-example/PaperComposer/style/README.md)。沒有 `lens/` 時用內建的中性視角（只分「有沒有理由」）。
 
 **模型**：問答用小模型就夠（預設 Haiku，視窗右上可以改 Sonnet、Opus 或本機模型比較）；整理實驗記錄與審稿用 Opus；題組、主張、校正、大綱用 Sonnet；草稿走「寫作」選的引擎。
@@ -335,7 +339,7 @@ model = "gemma-4-12b"
 | `pc-cite-extract` | 把貼上的文字拆成一篇一篇 | 只用 Claude |
 | `pc-draft-turn` | 討論草稿的問答 | Haiku → 本機（視窗可指定 Haiku／Sonnet／Opus／本機） |
 | `pc-draft-plan`、`pc-draft-claims`、`pc-draft-review`、`pc-draft-outline` | 題組、主張、校正、大綱 | 只用 Sonnet |
-| `pc-draft-record`、`pc-draft-audit` | 整理實驗記錄（表格、想法、衝突）、審稿 | 只用 Opus |
+| `pc-draft-record`、`pc-draft-audit`、`pc-draft-revise` | 整理實驗記錄（表格、想法、衝突）、審稿、修訂方案 | 只用 Opus |
 
 「本機」是目前連接的本機引擎（自己架設的端點，或「AI 與同步」啟動的模型；`tasks.toml` 寫作 `local:current`），以 `temperature` 0.2 寫作；「Claude」先用訂閱（Claude Code），沒有時用 API key，模型是設定裡選的那個（`claude:selected`）。寫作區的引擎切換（本機／訂閱／API）只用你選的那一個，不會悄悄改用別的；自動時照上表的順序。要個別指定某個任務的模型，在 App 設定檔旁邊放 `tasks.toml`（`PaperComposer/tasks.toml`）：
 
@@ -398,6 +402,10 @@ scripts/            Git hooks
 | POST／DELETE | `/api/papers/{name}/draft/records?file=`、`/draft/records/{file}` | 上傳（本文為檔案）／移除實驗記錄 |
 | POST | `/api/papers/{name}/draft/record` | 整理成實驗清單、時間線、想法、結果表格與衝突（Opus）；PUT `/draft/experiments` 手動修改 |
 | POST | `/api/papers/{name}/draft/tables/{id}/insert` `{ section? }` | 把記錄整理出的表格插到章節最後（期刊表格樣式） |
+| POST | `/api/papers/{name}/draft/revisions` `{ request, section?, refs?, figure? }` | 新增修訂（建立對話題組；`refs` 加進本篇引用，`figure` 為已上傳的圖檔） |
+| POST | `/api/papers/{name}/draft/revisions/{id}/plan` | 產生修改方案（Opus） |
+| POST | `/api/papers/{name}/draft/revisions/{id}/changes/{cid}` `{ apply }` | 套用或不採用一項修改（原段落已改過時拒絕） |
+| POST | `/api/papers/{name}/draft/revisions/{id}/status` `{ status }` | open／dropped 等 |
 | POST／PUT | `/api/papers/{name}/draft/plan` | 規劃題組（Sonnet）／修改題組 `{ groups, items }` |
 | POST | `/api/papers/{name}/draft/turn` `{ group, answer?, model? }` | 一回合問答；沒有 `answer` 時開場；`model` = haiku／sonnet／opus／local |
 | POST | `/api/papers/{name}/draft/group/{id}` `{ action }` | start／close／skip／reopen |

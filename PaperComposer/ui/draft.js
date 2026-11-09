@@ -21,9 +21,12 @@ const PCDraft = (() => {
     ["outline", "6", "大綱"],
     ["draft", "7", "草稿"],
     ["audit", "8", "審稿"],
+    ["revise", "9", "修訂"],
   ];
   const SECTIONS = ["Introduction", "Methods", "Results", "Discussion", "Conclusion"];
   const SEC_ZH = { Introduction: "前言", Methods: "方法", Results: "結果", Discussion: "討論", Conclusion: "結論" };
+  const REV_ZH = { open: "討論中", planned: "有修改方案", done: "完成", dropped: "放棄" };
+  const ACT_ZH = { "insert-after": "插在這段之後", "insert-before": "插在這段之前", replace: "取代這段", append: "加在章節最後" };
   const STATUS_ZH = { pending: "未開始", active: "進行中", done: "完成", skipped: "略過" };
   let D = null;
 
@@ -124,7 +127,7 @@ const PCDraft = (() => {
     if (D.busy) main.append(el("div", "df-busy", `${D.busy}…（模型思考中，可以先看其他步驟）`));
     if (D.err) main.append(el("div", "df-note bad", D.err));
     const key = STEPS[D.step][0];
-    ({ topic, record, plan, interview, claims, review, outline, draft: drafting, audit })[key](main, side);
+    ({ topic, record, plan, interview, claims, review, outline, draft: drafting, audit, revise })[key](main, side);
     $("#dlgDraft").classList.toggle("with-side", side.childElementCount > 0);
   }
 
@@ -321,7 +324,7 @@ const PCDraft = (() => {
     const chips = el("div", "df-chips");
     groups.forEach((g) => {
       const c = el("button", `df-chip s-${g.status}`, g.title);
-      c.prepend(el("span", "c", SEC_ZH[g.section] ?? g.section));
+      c.prepend(el("span", "c", g.id.startsWith("v") ? "修訂" : (SEC_ZH[g.section] ?? g.section)));
       c.setAttribute("aria-pressed", String(g.id === D.group));
       if (stateOf(g.id)?.ready && g.status !== "done") c.classList.add("ready");
       c.onclick = () => { D.group = g.id; draw(); };
@@ -548,6 +551,94 @@ const PCDraft = (() => {
       const r = row(btn(f.resolved ? "標為未處理" : "已處理", () => run("儲存", () => call("/audit", { resolved: { [f.id]: !f.resolved } }, "PUT")), "ghost"));
       if (!f.resolved) r.append(btn("回到對話追問", () => run("建立追問", async () => { const v = await call(`/audit/${f.id}/ask`); D.group = `a${f.id}`; D.step = 3; return v; }), "ghost"));
       card.append(r);
+      main.append(card);
+    });
+  }
+
+  // ── 9 修訂 ───────────────────────────────────────────
+  // Something has to go into the finished paper: new data after a review, a
+  // figure, more citations. Each request is discussed in its own group, then
+  // Opus proposes paragraph-level changes the author applies one by one.
+  async function libraryKeys() {
+    if (D.library) return D.library;
+    try { D.library = (await api("/api/refs"))?.refs ?? []; } catch { D.library = []; }
+    return D.library;
+  }
+
+  function revise(main) {
+    main.append(h("新增修訂"));
+    main.append(note("老師或審稿人要你補什麼？補了什麼實驗、數據、圖、文獻？寫下來，先討論放在哪裡、會影響哪些地方，再產生具體修改。新的實驗記錄請在第 2 步上傳並重新整理；新文獻先在文獻視窗加入文獻庫。"));
+    const req = input(D.revDraft ?? "", "例：審稿人要求外部驗證。我補了另一家醫院 120 張影格，Dice 0.71；想放在 Results 主表之後，並在 Discussion 提一句。", "textarea");
+    req.rows = 4;
+    req.oninput = () => (D.revDraft = req.value);
+    const sec = el("select", "np-input df-home");
+    SECTIONS.forEach((x) => { const o = el("option", "", `大概在 ${x}`); o.value = x; sec.append(o); });
+    sec.value = "Results";
+    const fig = el("input"); fig.type = "file"; fig.accept = ".png,.jpg,.jpeg,.pdf,.eps";
+    const refBox = el("div", "df-refpick");
+    const chosen = new Set();
+    libraryKeys().then((lib) => {
+      const inPaper = new Set((D.data.material?.refs ?? []).map((r) => r.key));
+      const sel = el("select", "np-input");
+      sel.append(el("option", "", "＋ 從文獻庫加入要引用的文獻…"));
+      lib.filter((r) => !inPaper.has(r.key)).forEach((r) => { const o = el("option", "", `${r.key} — ${r.title}`); o.value = r.key; sel.append(o); });
+      const tags = el("div", "df-refs");
+      sel.onchange = () => { if (sel.value && sel.selectedIndex > 0) { chosen.add(sel.value); const c = el("span", "df-ref"); c.append(el("b", "", sel.value)); tags.append(c); } sel.selectedIndex = 0; };
+      refBox.append(sel, tags);
+    });
+    main.append(req, row(sec, el("span", "df-note", "新圖檔："), fig), refBox);
+    main.append(row(btn("開始討論", () => run("建立修訂", async () => {
+      let figure = null;
+      const f = fig.files?.[0];
+      if (f) {
+        const name = f.name.replace(/[^A-Za-z0-9._-]/g, "-");
+        const r = await fetch(`/api/papers/${encodeURIComponent(D.name)}/figures?file=${encodeURIComponent(name)}`, { method: "POST", body: f });
+        if (!r.ok) throw new Error(await r.text());
+        figure = name;
+      }
+      const v = await call("/revisions", { request: req.value, section: sec.value, refs: [...chosen], figure });
+      D.revDraft = "";
+      const r = v.session.revisions[v.session.revisions.length - 1];
+      D.group = r.group; D.step = STEPS.findIndex(([k]) => k === "interview");
+      return v;
+    }))));
+
+    const revs = sess().revisions ?? [];
+    if (!revs.length) return;
+    main.append(h("修訂清單"));
+    revs.slice().reverse().forEach((r) => {
+      const card = el("div", `df-card ${r.status === "dropped" ? "no" : ""}`);
+      card.append(row(el("span", "df-gid", r.id), el("span", "df-badge", REV_ZH[r.status] ?? r.status), el("b", "", r.request.length > 80 ? r.request.slice(0, 78) + "…" : r.request)));
+      const meta = row();
+      if (r.figure) meta.append(el("span", "df-badge", `圖：${r.figure}`));
+      r.refs.forEach((k) => meta.append(refChip(k)));
+      if (meta.childElementCount) card.append(meta);
+      const g = sess().groups.find((x) => x.id === r.group);
+      if (g?.summary.conclusion) card.append(note(`討論結論：${g.summary.conclusion}`));
+      const acts = row(btn("到對話討論", () => { D.group = r.group; go(STEPS.findIndex(([k]) => k === "interview")); }, "ghost"));
+      if (r.status !== "dropped") acts.append(btn(r.plan ? "重新產生修改方案" : "產生修改方案（Opus）", () => run("產生修改方案", () => call(`/revisions/${r.id}/plan`)), r.plan ? "ghost" : "primary small"));
+      acts.append(btn(r.status === "dropped" ? "恢復" : "放棄", () => run("更新", () => call(`/revisions/${r.id}/status`, { status: r.status === "dropped" ? "open" : "dropped" })), "ghost"));
+      card.append(acts);
+      if (r.plan) {
+        card.append(el("p", "df-text", r.plan.summary));
+        if (r.plan.effects.length) {
+          const ul = el("ul", "df-list warn");
+          r.plan.effects.forEach((e) => ul.append(el("li", "", `還要注意：${e}`)));
+          card.append(ul);
+        }
+        r.plan.changes.forEach((c) => {
+          const cc = el("div", `df-change ${c.applied === true ? "yes" : c.applied === false ? "no" : ""}`);
+          cc.append(row(el("span", "df-gid", c.id), el("span", "df-badge", ACT_ZH[c.action] ?? c.action), el("span", "df-plan", `${c.file}${c.index != null ? ` ¶${c.index}` : ""}`)));
+          if (c.before) { const d = el("details"); d.append(el("summary", "", "原段落"), el("p", "df-old", c.before)); cc.append(d); }
+          cc.append(el("p", "df-draft", c.text));
+          if (c.reason) cc.append(note(c.reason));
+          if (c.applied == null) cc.append(row(
+            btn("套用", () => run("套用修改", async () => { const v = await call(`/revisions/${r.id}/changes/${c.id}`, { apply: true }); if (state.paper?.name) openPaper(state.paper.name); return v; })),
+            btn("不採用", () => run("更新", () => call(`/revisions/${r.id}/changes/${c.id}`, { apply: false })), "ghost")));
+          else cc.append(el("span", "df-note", c.applied ? "已套用到論文" : "不採用"));
+          card.append(cc);
+        });
+      }
       main.append(card);
     });
   }

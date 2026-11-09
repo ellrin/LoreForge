@@ -9,6 +9,7 @@ use super::*;
 use pc_core::draft::lens::Lens;
 use pc_core::draft::material::{self, Material};
 use pc_core::draft::prompts as dp;
+use pc_core::draft::revise::{self as rv, Revision, RevisionStatus};
 use pc_core::draft::session::{self as ds, Phase, Session, Who};
 use pc_core::draft::style_text;
 
@@ -37,6 +38,10 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/audit/{id}/ask", post(audit_ask))
         .route("/api/papers/{name}/draft/phase", put(put_phase))
         .route("/api/papers/{name}/draft/tables/{id}/insert", post(insert_table))
+        .route("/api/papers/{name}/draft/revisions", post(new_revision))
+        .route("/api/papers/{name}/draft/revisions/{id}/plan", post(plan_revision))
+        .route("/api/papers/{name}/draft/revisions/{id}/changes/{cid}", post(decide_change))
+        .route("/api/papers/{name}/draft/revisions/{id}/status", post(revision_status))
 }
 
 type Resp = axum::response::Response;
@@ -404,10 +409,13 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
     let c = tri!(ctx(&s, &name).await);
     let mref = tri!(model_ref(b.model.as_deref()));
     let answer = b.answer.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
-    let (mat, mtext) = material_of(&c);
+    let (mat, mut mtext) = material_of(&c);
     let (prompt, lens) = {
         let _g = LOCK.lock().await;
         let mut sess = tri!(load(&c.dir));
+        if let Some(r) = sess.revisions.iter().find(|r| r.group == b.group) {
+            mtext += &rv::turn_context(r, &c.dir);
+        }
         let lens = tri!(lens_for(&c.ws, &sess));
         if sess.group(&b.group).is_none() {
             return bad("沒有這個題組");
@@ -435,7 +443,11 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
     let r = tri!(ask_model(&s, "pc-draft-turn", mref.as_deref(), &prompt, dp::turn_schema(), dp::parse_turn).await);
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
-    sess.apply(&lens, &b.group, &ref_keys(&mat), r.updates);
+    let known = ref_keys(&mat);
+    sess.apply(&lens, &b.group, &known, r.updates);
+    if let Err(e) = dp::add_ref_notes(&c.dir, &r.ref_notes, &known) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
     if let Some(g) = sess.group_mut(&b.group) {
         let keep = |new: String, old: &str| if new.trim().is_empty() { old.to_string() } else { new };
         let old = g.summary.clone();
@@ -805,6 +817,139 @@ async fn audit_ask(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, 
     tri!(view(&c, &sess))
 }
 
+// ── 修訂 ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct NewRevision {
+    /// What has to be added, in the author's (or the reviewer's) words.
+    request: String,
+    /// Section where it probably belongs (for the conversation's grouping).
+    #[serde(default)]
+    section: Option<String>,
+    /// Library keys to add to this paper's references.
+    #[serde(default)]
+    refs: Vec<String>,
+    /// A figure already uploaded to figures/.
+    #[serde(default)]
+    figure: Option<String>,
+}
+
+fn short(s: &str, n: usize) -> String {
+    let t: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if t.chars().count() > n { t.chars().take(n).collect::<String>() + "…" } else { t }
+}
+
+/// A revision request becomes a conversation group (`v1`, `v2`, …); its new
+/// references are added to the paper's citations.csv so every step knows them.
+async fn new_revision(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<NewRevision>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let request = b.request.trim().to_string();
+    if request.is_empty() {
+        return bad("請寫下要補什麼");
+    }
+    if let Some(f) = &b.figure {
+        if !paper::safe_name(f) || !c.dir.join("figures").join(f).is_file() {
+            return bad("找不到這個圖檔，請先上傳");
+        }
+    }
+    let section = b.section.filter(|x| ds::SECTIONS.contains(&x.as_str())).unwrap_or_else(|| "Results".into());
+    let lib: Vec<String> = bib::parse(&std::fs::read_to_string(c.ws.join("refs/library.bib")).unwrap_or_default()).0.into_iter().map(|e| e.key).collect();
+    let refs: Vec<String> = b.refs.into_iter().filter(|k| lib.contains(k)).collect();
+    if !refs.is_empty() {
+        let path = c.dir.join("citations.csv");
+        let mut cit = bib::read_citations(&path);
+        for k in &refs {
+            cit.entry(k.clone()).or_insert_with(|| format!("修訂：{}", short(&request, 40)));
+        }
+        if let Err(e) = bib::write_citations(&path, &cit) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    let n = sess.revisions.len() + 1;
+    let (id, mut gid) = (format!("v{n}"), format!("v{n}"));
+    while sess.group(&gid).is_some() {
+        gid.push('x');
+    }
+    sess.groups.push(ds::Group { id: gid.clone(), section, title: format!("修訂：{}", short(&request, 24)), purpose: request.clone(), ..Default::default() });
+    let iid = sess.new_item_id();
+    sess.items.push(ds::Item { id: iid, group: gid.clone(), label: short(&request, 60), role: "revision".into(), refs: refs.clone(), ..Default::default() });
+    sess.revisions.push(Revision { id, request, group: gid.clone(), refs, figure: b.figure, status: RevisionStatus::Open, plan: None });
+    sess.start_group(&gid);
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+/// The concrete changes for a revision (Opus), from its conversation.
+async fn plan_revision(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, String)>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let sess = tri!(load(&c.dir));
+    let Some(r) = sess.revisions.iter().find(|r| r.id == id).cloned() else { return bad("沒有這個修訂") };
+    let conversation = ds::read_turns(&c.dir)
+        .iter()
+        .filter(|t| t.group == r.group)
+        .map(|t| format!("{}: {}", if t.who == Who::Ai { "Q" } else { "A" }, t.text))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let summary = sess.group(&r.group).map(|g| format!("\nSummary: {} / {} / {}", g.summary.explain, g.summary.motive, g.summary.conclusion)).unwrap_or_default();
+    let (_, mtext) = material_of(&c);
+    let prompt = rv::plan_prompt(&c.key_value, &sess, &r, &c.dir, &mtext, &style_text(&c.ws), &(conversation + &summary));
+    let dir = c.dir.clone();
+    let plan = tri!(ask_model(&s, "pc-draft-revise", None, &prompt, rv::plan_schema(), |x| rv::parse_plan(x, &dir)).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    if let Some(x) = sess.revisions.iter_mut().find(|x| x.id == id) {
+        x.plan = Some(plan);
+        x.status = RevisionStatus::Planned;
+    }
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+#[derive(Deserialize)]
+struct Decide {
+    apply: bool,
+}
+
+async fn decide_change(State(s): State<Shared>, AxPath((name, id, cid)): AxPath<(String, String, String)>, Json(b): Json<Decide>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    let Some(r) = sess.revisions.iter_mut().find(|x| x.id == id) else { return bad("沒有這個修訂") };
+    let Some(plan) = r.plan.as_mut() else { return bad("還沒有修改方案") };
+    let Some(ch) = plan.changes.iter_mut().find(|x| x.id == cid) else { return bad("沒有這項修改") };
+    if ch.applied == Some(true) {
+        return bad("已經套用過了");
+    }
+    if b.apply {
+        if let Err(e) = rv::apply(&c.dir, ch) {
+            return bad(&e);
+        }
+    }
+    ch.applied = Some(b.apply);
+    if plan.changes.iter().all(|x| x.applied.is_some()) {
+        r.status = RevisionStatus::Done;
+    }
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+#[derive(Deserialize)]
+struct RevStatus {
+    status: RevisionStatus,
+}
+
+async fn revision_status(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, String)>, Json(b): Json<RevStatus>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    let Some(r) = sess.revisions.iter_mut().find(|x| x.id == id) else { return bad("沒有這個修訂") };
+    r.status = b.status;
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
 #[derive(Deserialize, Default)]
 struct InsertBody {
     /// Section title to put it in; default: the Results section.
@@ -859,6 +1004,7 @@ mod tests {
         assert_eq!(t.task["pc-draft-turn"].fallback.as_deref(), Some("local:current"));
         assert_eq!(t.task["pc-draft-audit"].default, "claude:opus");
         assert_eq!(t.task["pc-draft-record"].default, "claude:opus", "reading tables out of a record is Opus work");
+        assert_eq!(t.task["pc-draft-revise"].default, "claude:opus", "editing an existing paper is Opus work");
         assert!(t.task["pc-draft-audit"].fallback.is_none(), "the reviewer pass never falls back");
         for id in ["pc-draft-plan", "pc-draft-claims", "pc-draft-review", "pc-draft-outline"] {
             assert_eq!(t.task[id].default, "claude:sonnet", "{id}");

@@ -133,3 +133,10 @@ needs = { json = true }
 default = "claude:opus"
 offline = false
 max_tokens = 16000
+
+[task.pc-draft-revise]
+label = "修訂方案"
+needs = { json = true }
+default = "claude:opus"
+offline = false
+max_tokens = 16000

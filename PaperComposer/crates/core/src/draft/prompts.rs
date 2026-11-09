@@ -296,6 +296,7 @@ pub fn turn_schema() -> Value {
         ("reply", json_string()),
         ("question", json_string()),
         ("options", strings()),
+        ("ref_notes", json_array(json_object(&[("key", json_string()), ("note", json_string())]))),
     ])
 }
 
@@ -332,7 +333,9 @@ Each turn:
 6. References: when a motive rests on prior work or on something readers accept, ask (in the same question, briefly)
    which of the paper's references supports it, offering the matching ones as options written \"key — short title\".
    If none of them fits, say that this motive still needs a reference; the author adds references in the reference
-   window, not here.
+   window, not here. When the author says what a reference can support beyond its note (e.g. a fact the authors of
+   that paper observed while designing their method, not the method it is known for), record it in `ref_notes`
+   as {key, note}: one short line in the author's terms. It is added to that reference's purpose for this paper.
 7. Results groups: open with the group's table or figure itself — \"Is Table X the main table? Which comparison
    in it matters, what do you want to stress, and why?\" — using its actual numbers; ask about the story behind a
    result only after that, and only what other groups have not covered.
@@ -419,6 +422,39 @@ pub struct TurnReply {
     pub reply: String,
     pub question: String,
     pub options: Vec<String>,
+    #[serde(default)]
+    pub ref_notes: Vec<RefNote>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RefNote {
+    pub key: String,
+    pub note: String,
+}
+
+/// Add what the author said a reference can support to its purpose in
+/// `citations.csv` (only the paper's own keys; a note already there is not
+/// repeated). Returns the keys that changed.
+pub fn add_ref_notes(paper: &std::path::Path, notes: &[RefNote], known: &[String]) -> std::io::Result<Vec<String>> {
+    let path = paper.join("citations.csv");
+    let mut c = crate::bib::read_citations(&path);
+    let mut changed = vec![];
+    for n in notes {
+        let note = n.note.trim();
+        if note.is_empty() || !known.contains(&n.key) {
+            continue;
+        }
+        let cur = c.entry(n.key.clone()).or_default();
+        if cur.contains(note) {
+            continue;
+        }
+        *cur = if cur.trim().is_empty() { note.to_string() } else { format!("{}；{note}", cur.trim()) };
+        changed.push(n.key.clone());
+    }
+    if !changed.is_empty() {
+        crate::bib::write_citations(&path, &c)?;
+    }
+    Ok(changed)
 }
 
 pub fn parse_turn(reply: &str) -> Result<TurnReply, String> {
@@ -899,6 +935,22 @@ mod tests {
         let (full, back) = x.split_once("Only call these back").unwrap();
         assert!(full.contains("joint condition") && back.contains("damaging"));
         assert!(x.contains("80–150"));
+    }
+
+    #[test]
+    fn reference_notes_extend_the_purpose() {
+        let p = std::env::temp_dir().join(format!("pc-refnotes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(p.join("citations.csv"), "key,purpose\nlin2017focal,Results · 只用來比較困難樣本加權\n").unwrap();
+        let known = vec!["lin2017focal".to_string()];
+        let n = |k: &str, t: &str| RefNote { key: k.into(), note: t.into() };
+        let ch = add_ref_notes(&p, &[n("lin2017focal", "也可支撐：困難樣本多半落在邊界"), n("ghost2020", "x")], &known).unwrap();
+        assert_eq!(ch, ["lin2017focal"]);
+        let c = crate::bib::read_citations(&p.join("citations.csv"));
+        assert_eq!(c["lin2017focal"], "Results · 只用來比較困難樣本加權；也可支撐：困難樣本多半落在邊界");
+        assert!(add_ref_notes(&p, &[n("lin2017focal", "也可支撐：困難樣本多半落在邊界")], &known).unwrap().is_empty(), "not added twice");
+        let _ = std::fs::remove_dir_all(&p);
     }
 
     #[test]
