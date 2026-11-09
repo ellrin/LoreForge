@@ -33,7 +33,8 @@ pub fn json_in<T: for<'de> Deserialize<'de>>(reply: &str) -> Result<T, String> {
     serde_json::from_str(&reply[start..=end]).map_err(|e| format!("看不懂回覆：{e}"))
 }
 
-const TW: &str = "Write every text meant for the author in Traditional Chinese as used in Taiwan (繁體中文, never simplified).";
+const TW: &str = "Write every text meant for the author in Traditional Chinese as used in Taiwan (繁體中文, never simplified), \
+with full-width Chinese punctuation (，。：；？！「」（）), never ASCII commas or colons inside Chinese text.";
 
 /// Shared context: key value, hook, experiments and timeline, compact.
 pub fn context(key_value: &str, s: &Session) -> String {
@@ -148,7 +149,9 @@ of the subsections, not final.\n\
 built from the experiments.\n\
 4. Discussion and Conclusion: one or two groups each.\n\
 5. `items` = what must be clarified in the group: decisions, experiments, findings. Give each a `role` (use these \
-when they fit: {roles}; otherwise design, experiment, result, background) and a `mode` guess from the lens or null.\n\
+when they fit: {roles}; otherwise design, experiment, result, background) and a `mode` guess from the lens or null. \
+`core-contribution` is the paper's central idea: give that role to at most two items in the whole plan (one is \
+usual), however important other items are — every core item will be asked down to its origin.\n\
 6. Follow the author's structure habits below when given. Do not invent results.\n\
 {TW} Titles and purposes are for the author. Reply with JSON only.",
         SECTIONS.join(", ")
@@ -608,9 +611,15 @@ pub fn replace_section(outline: &mut Vec<OutlineSection>, section: &str, new: Ve
 /// Extra instructions appended to the phrase-bank compose prompt for one
 /// outline paragraph: its unit plan, the claims it may state in full, and the
 /// author's style notes.
-pub fn compose_extra(para: &OutlinePara, s: &Session, section: &str, style: &str) -> String {
+pub fn compose_extra(para: &OutlinePara, s: &Session, section: &str, style: &str, earlier: &[String]) -> String {
     let mut x = format!(
-        "\nThis paragraph is part of a draft built from an interview with the author.\nParagraph type: {}\nUnit plan, in order: {}\nWhat it must say (author's words): {}\n",
+        "\nThis paragraph is part of a draft built from an interview with the author.\nParagraph type: {}\nUnit plan, in order: {}\nWhat it must say (author's words): {}\n\
+Never mention a figure, table or equation the points do not mention. Use a transition pattern (\"In contrast\", \
+\"Building on this observation\", \"However\") only when the sentence really contrasts with or builds on the one before; \
+otherwise write the sentence without a pattern. A bracketed note for the author (e.g. [Author to confirm: …]) is \
+fine where the points say something is unknown.\n\
+The key value is the paper's direction, not a phrase to repeat: serve it through the content of the points, and \
+state it (or its wording) only where the points themselves state it.\n",
         para.kind, para.plan, para.zh
     );
     let full: Vec<&Claim> = s.claims.iter().filter(|c| c.home == section && para.sources.iter().any(|src| src == &c.id)).collect();
@@ -625,6 +634,20 @@ pub fn compose_extra(para: &OutlinePara, s: &Session, section: &str, style: &str
         x += "Only call these back in a few words (they are stated in full elsewhere):\n";
         for c in back {
             x += &format!("- {}\n", c.en);
+        }
+    }
+    let accepted: Vec<&Suggestion> = s.review.iter().flat_map(|r| &r.suggestions).filter(|x| x.accepted == Some(true)).collect();
+    if !accepted.is_empty() {
+        x += "Decisions the author accepted for the whole paper (respect them):\n";
+        for a in accepted {
+            x += &format!("- {}\n", a.detail);
+        }
+    }
+    if !earlier.is_empty() {
+        x += "Earlier paragraphs of this section, already written (do not restate what they say; do not open with \
+the transition they used; do not reuse the same pattern in consecutive paragraphs):\n";
+        for e in earlier {
+            x += &format!("- {}\n", e);
         }
     }
     if !style.trim().is_empty() {
@@ -779,7 +802,10 @@ mod tests {
             Claim { id: "c2".into(), zh: "z".into(), en: "Excluding hard frames is damaging.".into(), home: "Introduction".into(), ..Default::default() },
         ];
         let p = OutlinePara { id: "p9".into(), kind: "Results key result".into(), plan: "table → numbers → L2".into(), zh: "主表".into(), en: vec![], sources: vec!["c1".into(), "c2".into()] };
-        let x = compose_extra(&p, &s, "Results", "Paragraphs 80–150 words.");
+        let mut s = s;
+        s.review = Some(Review { chain: vec![], suggestions: vec![Suggestion { id: "s1".into(), kind: "other".into(), detail: "No final scores in Methods.".into(), accepted: Some(true), ..Default::default() }] });
+        let x = compose_extra(&p, &s, "Results", "Paragraphs 80–150 words.", &["We first discarded frames.".into()]);
+        assert!(x.contains("No final scores in Methods.") && x.contains("We first discarded frames."));
         let (full, back) = x.split_once("Only call these back").unwrap();
         assert!(full.contains("joint condition") && back.contains("damaging"));
         assert!(x.contains("80–150"));

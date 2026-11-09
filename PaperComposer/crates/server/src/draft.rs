@@ -644,7 +644,8 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
             let prompt = compose::build_prompt(prof, &req, &pts, &refs);
             (pts, refs, prompt)
         };
-        let extra = dp::compose_extra(p, &sess, &b.section, &style);
+        let earlier: Vec<String> = out.iter().map(|d| d.text.clone()).collect();
+        let extra = dp::compose_extra(p, &sess, &b.section, &style, &earlier);
         let mut feedback = extra.clone();
         let mut done = None;
         let mut err = String::new();
