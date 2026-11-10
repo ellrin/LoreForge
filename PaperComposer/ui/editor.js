@@ -241,7 +241,7 @@ const PCSections = (() => {
         closeMenu();
         await reload(r.stamp, r.after);
         undoToast(`已刪除「${PCTex.stripComments(sec.title)}」`, async () => {
-          const back = await api(`${base()}/section-ops/restore`, { parked: r.parked, file: r.file, after: r.after });
+          const back = await api(`${base()}/section-ops/restore`, r); // what the delete said, as it is
           await reload(back.stamp, back.file);
         });
       } catch (e) { closeMenu(); flash(`刪除失敗：${e.message}`, 6000); }
@@ -364,7 +364,7 @@ const PCSections = (() => {
   /** After a save: a `\section{…}` typed in section `si` becomes a section of its own. */
   async function splitTyped(si) {
     const sec = sections()[si];
-    if (!sec?.paragraphs.some((p) => /^\s*\\section\{.*\}\s*(\\label\{[^}]*\}\s*)?$/.test(p) && !p.trim().includes("\n"))) return false;
+    if (!sec) return false;
     try {
       const r = await api(`${base()}/section-ops/split`, { file: sec.file });
       if (!r.files?.length) return false;

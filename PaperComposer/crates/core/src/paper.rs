@@ -129,30 +129,114 @@ pub fn render_section(s: &Section) -> String {
 }
 
 // ── Section files: add, delete, restore, reorder, split ──
-// main.tex reads the sections with `\input{sections/…}` (or `\include`).
-// Every operation edits those commands where they are: a new one goes on
-// its own line after its neighbour's, a removed one takes its line with it
-// when nothing else is on it, and a new order is written into the existing
-// commands in turn, so whatever sits between them (`\appendix`, a
+// The main file reads the sections with `\input{…}` (or `\include`):
+// `sections/x` in a paper made here, the project's own paths in a paper
+// opened as it is (open.rs; there a `\section{Title}` typed in the main file
+// right before an `\input` is that file's title, and moves with it). Every
+// operation edits those commands where they are: a new one goes on its own
+// line after its neighbour's, a removed one takes its line with it when
+// nothing else is on it, and a new order is written into the existing
+// places in turn, so whatever sits between them (`\appendix`, a
 // `\clearpage`) keeps its place. File names are never changed: review.json,
 // the navigator and co-authors know a section by its file.
 
-/// One `\input{sections/x}` / `\include{sections/x}` in main.tex, outside comments.
+/// Where a section is read from, in each layout. Section ids are file names
+/// under sections/ (standard), or paths relative to the paper folder (a
+/// paper opened as it is).
+struct Layout<'a> {
+    paper: &'a Path,
+    custom: bool,
+    ids: Vec<String>,
+}
+
+impl<'a> Layout<'a> {
+    fn of(paper: &'a Path) -> Self {
+        let custom = crate::open::is_custom(paper);
+        let ids = if custom { crate::open::sections(paper).into_iter().map(|s| s.file).collect() } else { section_files(paper) };
+        Layout { paper, custom, ids }
+    }
+    fn path(&self, id: &str) -> PathBuf {
+        if self.custom { self.paper.join(id) } else { self.paper.join("sections").join(id) }
+    }
+    /// The section an `\input` argument reads, if it is one.
+    fn id_of(&self, arg: &str) -> Option<String> {
+        let arg = arg.trim().trim_start_matches("./");
+        if self.custom {
+            let id = if arg.ends_with(".tex") { arg.to_string() } else { format!("{arg}.tex") };
+            return self.ids.contains(&id).then_some(id);
+        }
+        let name = arg.strip_prefix("sections/")?;
+        Some(if name.ends_with(".tex") { name.to_string() } else { format!("{name}.tex") })
+    }
+    fn arg(&self, id: &str, ext: bool) -> String {
+        let stem = id.strip_suffix(".tex").unwrap_or(id);
+        let stem = if ext { format!("{stem}.tex") } else { stem.to_string() };
+        if self.custom { stem } else { format!("sections/{stem}") }
+    }
+    /// The file itself holds its `\section` (else its title is in the main file).
+    fn titled(&self, id: &str) -> bool {
+        std::fs::read_to_string(self.path(id)).is_ok_and(|t| t.lines().any(|l| l.trim_start().starts_with("\\section")))
+    }
+    fn main_path(&self) -> PathBuf {
+        crate::open::main_file(self.paper)
+    }
+    fn read_main(&self) -> Result<String, String> {
+        let p = self.main_path();
+        std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()))
+    }
+    fn write_main(&self, main: &str) -> Result<(), String> {
+        write_atomic(&self.main_path(), main).map_err(|e| e.to_string())
+    }
+    /// Deleted sections wait here: sections/unused/, or the app's own folder
+    /// in a project opened as it is (its folders stay the author's).
+    fn unused(&self) -> PathBuf {
+        if self.custom { self.paper.join(APP_DIR).join(crate::open::UNUSED_DIR) } else { self.paper.join("sections").join(crate::open::UNUSED_DIR) }
+    }
+    /// A section id this paper may have: a plain name (standard), or a
+    /// relative .tex path inside the paper (opened as it is).
+    fn valid_id(&self, id: &str) -> bool {
+        if !id.ends_with(".tex") {
+            return false;
+        }
+        if self.custom {
+            !id.is_empty() && !id.starts_with('/') && !id.contains('\\') && id.split('/').all(|p| safe_name(p))
+        } else {
+            safe_name(id)
+        }
+    }
+    /// A free id for a new section titled `title`, next to `near` (its folder).
+    fn free_id(&self, title: &str, near: Option<&str>) -> String {
+        let base = slug(&crate::text::strip_latex(title));
+        let dir = if self.custom { near.and_then(|n| n.rsplit_once('/')).map(|(d, _)| format!("{d}/")).unwrap_or_default() } else { String::new() };
+        let taken = |f: &str| self.path(f).exists() || self.unused().join(f.replace('/', "-")).exists();
+        (1..).map(|n| if n == 1 { format!("{dir}{base}.tex") } else { format!("{dir}{base}-{n}.tex") }).find(|f| !taken(f)).unwrap()
+    }
+}
+
+/// One `\input` / `\include` of a section in the main file, outside comments.
 #[derive(Debug, Clone)]
 struct SectionInput {
-    /// Byte range of the whole command.
+    /// The command.
     range: std::ops::Range<usize>,
+    /// What belongs to the section here: the command, and before it a
+    /// `\section{…}` typed in the main file when the file has none.
+    slot: std::ops::Range<usize>,
     cmd: &'static str,
-    /// File name under sections/, with `.tex`.
-    file: String,
-    /// Written with `.tex` in main.tex.
+    id: String,
+    /// Written with `.tex`.
     ext: bool,
 }
 
-fn section_inputs(main: &str) -> Vec<SectionInput> {
-    let mut out = Vec::new();
+fn section_inputs(main: &str, lay: &Layout) -> Vec<SectionInput> {
+    let body = main.find("\\begin{document}").unwrap_or(0);
+    let mut out: Vec<SectionInput> = Vec::new();
     let mut start = 0;
     for line in main.split_inclusive('\n') {
+        let at = start;
+        start += line.len();
+        if at + line.len() <= body {
+            continue;
+        }
         let code = strip_comment(line);
         for cmd in ["\\input", "\\include"] {
             for (i, _) in code.match_indices(cmd) {
@@ -161,88 +245,104 @@ fn section_inputs(main: &str) -> Vec<SectionInput> {
                     continue; // \includegraphics, \inputencoding
                 }
                 let Some(arg) = after.strip_prefix('{').and_then(|a| a.split_once('}')).map(|(a, _)| a) else { continue };
-                let Some(name) = arg.trim().strip_prefix("sections/") else { continue };
-                let ext = name.ends_with(".tex");
-                let file = if ext { name.to_string() } else { format!("{name}.tex") };
-                let end = i + cmd.len() + arg.len() + 2;
-                out.push(SectionInput { range: start + i..start + end, cmd: if cmd == "\\input" { "\\input" } else { "\\include" }, file, ext });
+                let Some(id) = lay.id_of(arg) else { continue };
+                let range = at + i..at + i + cmd.len() + arg.len() + 2;
+                out.push(SectionInput { slot: range.clone(), range, cmd: if cmd == "\\input" { "\\input" } else { "\\include" }, ext: arg.trim().ends_with(".tex"), id });
             }
         }
-        start += line.len();
     }
     out.sort_by_key(|x| x.range.start);
+    if lay.custom {
+        // a title typed in the main file goes with the file after it
+        let mut prev = body;
+        for x in out.iter_mut() {
+            if !lay.titled(&x.id) {
+                if let Some(s) = main[prev..x.range.start].rfind("\\section").map(|i| prev + i) {
+                    let ls = main[..s].rfind('\n').map_or(0, |i| i + 1);
+                    x.slot.start = if main[ls..s].trim().is_empty() { ls } else { s };
+                }
+            }
+            prev = x.range.end;
+        }
+    }
     out
 }
 
-fn input_cmd(cmd: &str, file: &str, ext: bool) -> String {
-    let stem = file.trim_end_matches(".tex");
-    format!("{cmd}{{sections/{stem}{}}}", if ext { ".tex" } else { "" })
+fn line_start(s: &str, at: usize) -> usize {
+    s[..at].rfind('\n').map_or(0, |i| i + 1)
+}
+fn line_end(s: &str, at: usize) -> usize {
+    s[at..].find('\n').map_or(s.len(), |i| at + i + 1)
 }
 
-/// main.tex with a command reading `file` on a line of its own: after the
-/// one reading `after`, else before the first section, else before the
-/// bibliography / `\end{document}`.
-fn insert_input(main: &str, file: &str, after: Option<&str>) -> String {
-    let inputs = section_inputs(main);
-    let like = inputs.first();
-    let (cmd, ext) = like.map(|x| (x.cmd, x.ext)).unwrap_or(("\\input", false));
-    let line_start = |at: usize| main[..at].rfind('\n').map_or(0, |i| i + 1);
-    let line_end = |at: usize| main[at..].find('\n').map_or(main.len(), |i| at + i + 1);
-    let indent = |at: usize| main[line_start(at)..].chars().take_while(|c| *c == ' ' || *c == '\t').collect::<String>();
-    let anchor = after.and_then(|a| inputs.iter().filter(|x| x.file == a).next_back()).or(if after.is_some() { inputs.last() } else { None });
+/// The main file with `text` on lines of its own: after the section `after`
+/// reads, else before the first section, else before the bibliography /
+/// `\end{document}`. Its lines take the indent of their neighbour.
+fn insert_block(main: &str, lay: &Layout, text: &str, after: Option<&str>) -> String {
+    let inputs = section_inputs(main, lay);
+    let indent = |at: usize| main[line_start(main, at)..].chars().take_while(|c| *c == ' ' || *c == '\t').collect::<String>();
+    let anchor = after.and_then(|a| inputs.iter().filter(|x| x.id == a).next_back()).or(if after.is_some() { inputs.last() } else { None });
     let (at, ind) = match (anchor, inputs.first()) {
-        (Some(a), _) => (line_end(a.range.end), indent(a.range.start)),
-        (None, Some(first)) => (line_start(first.range.start), indent(first.range.start)),
+        (Some(a), _) => (line_end(main, a.slot.end), indent(a.range.start)),
+        (None, Some(first)) => (line_start(main, first.slot.start), indent(first.range.start)),
         (None, None) => {
             let body = main.find("\\begin{document}").unwrap_or(0);
-            let end = ["\\bibliography{", "\\printbibliography", "\\end{document}"]
+            let end = ["\\bibliography{", "\\printbibliography", "\\appendix", "\\end{document}"]
                 .iter()
                 .filter_map(|m| main[body..].find(m).map(|i| body + i))
                 .min()
                 .unwrap_or(main.len());
-            (line_start(end), String::new())
+            (line_start(main, end), String::new())
         }
     };
-    let mut line = format!("{ind}{}\n", input_cmd(cmd, file, ext));
+    let mut block: String = text.trim_matches('\n').lines().map(|l| format!("{ind}{}\n", l.trim_start())).collect();
     if at > 0 && !main[..at].ends_with('\n') {
-        line.insert(0, '\n');
+        block.insert(0, '\n');
     }
-    format!("{}{}{}", &main[..at], line, &main[at..])
+    format!("{}{}{}", &main[..at], block, &main[at..])
 }
 
-/// main.tex without the commands reading `file` (and their lines, when
-/// nothing else is on them).
-fn remove_input(main: &str, file: &str) -> String {
+/// A command reading section `id`, in the style of its neighbour `near`
+/// (else of the main file's first).
+fn input_line(main: &str, lay: &Layout, id: &str, near: Option<&str>) -> String {
+    let inputs = section_inputs(main, lay);
+    let like = near.and_then(|n| inputs.iter().find(|x| x.id == n)).or(inputs.first());
+    let (cmd, ext) = like.map(|x| (x.cmd, x.ext)).unwrap_or(("\\input", false));
+    format!("{cmd}{{{}}}", lay.arg(id, ext))
+}
+
+/// The main file without the places reading `id` (and their lines, when
+/// nothing else is on them), the text taken out (for a restore), and, when
+/// it was one place, where and exactly what was cut.
+fn remove_input(main: &str, lay: &Layout, id: &str) -> (String, String, Option<(usize, String)>) {
     let mut out = main.to_string();
-    for x in section_inputs(main).into_iter().rev().filter(|x| x.file == file) {
-        let ls = out[..x.range.start].rfind('\n').map_or(0, |i| i + 1);
-        let le = out[x.range.end..].find('\n').map_or(out.len(), |i| x.range.end + i + 1);
-        let rest = format!("{}{}", &out[ls..x.range.start], &out[x.range.end..le]);
-        if rest.trim().is_empty() {
-            out.replace_range(ls..le, "");
-        } else {
-            out.replace_range(x.range.clone(), "");
-        }
+    let mut taken = Vec::new();
+    let mut cut = Vec::new();
+    for x in section_inputs(main, lay).into_iter().rev().filter(|x| x.id == id) {
+        let ls = line_start(&out, x.slot.start);
+        let le = line_end(&out, x.slot.end);
+        taken.push(out[x.slot.clone()].to_string());
+        let range = if out[ls..x.slot.start].trim().is_empty() && out[x.slot.end..le].trim().is_empty() { ls..le } else { x.slot.clone() };
+        cut.push((range.start, out[range.clone()].to_string()));
+        out.replace_range(range, "");
     }
-    out
+    taken.reverse();
+    let exact = if cut.len() == 1 { cut.pop() } else { None };
+    (out, taken.join("\n"), exact)
 }
 
-/// A free file name under sections/ for a title: its slug, then -2, -3…
-/// (a name taken in sections/ or sections/unused/ is not reused).
-fn free_section_file(paper: &Path, title: &str) -> String {
-    let base = slug(&crate::text::strip_latex(title));
-    let taken = |f: &str| paper.join("sections").join(f).exists() || paper.join("sections").join(crate::open::UNUSED_DIR).join(f).exists();
-    (1..).map(|n| if n == 1 { format!("{base}.tex") } else { format!("{base}-{n}.tex") }).find(|f| !taken(f)).unwrap()
+fn text_hash(t: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    t.hash(&mut h);
+    format!("{:016x}", h.finish())
 }
 
-/// Every `\label{…}` in main.tex and the section files.
+/// Every `\label{…}` in the main file and the section files.
 fn paper_labels(paper: &Path) -> Vec<String> {
-    let mut texts = vec![std::fs::read_to_string(paper.join("main.tex")).unwrap_or_default()];
-    for f in section_files(paper) {
-        texts.push(std::fs::read_to_string(paper.join("sections").join(f)).unwrap_or_default());
-    }
     let mut out = Vec::new();
-    for t in texts {
+    for f in crate::open::source_files(paper) {
+        let t = std::fs::read_to_string(f).unwrap_or_default();
         for l in t.lines().map(strip_comment) {
             for (i, _) in l.match_indices("\\label{") {
                 if let Some((arg, _)) = braced(&l[i + "\\label".len()..]) {
@@ -274,93 +374,129 @@ pub fn valid_title(title: &str) -> Result<&str, String> {
     Ok(t)
 }
 
-fn write_main(paper: &Path, main: &str) -> Result<(), String> {
-    write_atomic(&paper.join("main.tex"), main).map_err(|e| e.to_string())
+fn write_new(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    write_atomic(path, text).map_err(|e| e.to_string())
 }
 
-fn read_main(paper: &Path) -> Result<String, String> {
-    std::fs::read_to_string(paper.join("main.tex")).map_err(|e| format!("main.tex: {e}"))
-}
-
-/// A new, empty section after `after` (None: first), with a `\label{sec:…}`.
-/// Returns its file name.
+/// A new, empty section after `after` (None: first), with a `\label{sec:…}`,
+/// in a file of its own (in a project opened as it is: next to the section
+/// it follows). Returns its id.
 pub fn add_section(paper: &Path, title: &str, after: Option<&str>) -> Result<String, String> {
     let title = valid_title(title)?;
-    let main = read_main(paper)?;
-    let file = free_section_file(paper, title);
+    let lay = Layout::of(paper);
+    let main = lay.read_main()?;
+    let id = lay.free_id(title, after.or(lay.ids.first().map(String::as_str)));
     let tail = free_section_label(paper, title);
-    let s = Section { file: file.clone(), title: title.to_string(), paragraphs: vec![], tail };
-    std::fs::create_dir_all(paper.join("sections")).map_err(|e| e.to_string())?;
-    write_atomic(&paper.join("sections").join(&file), &render_section(&s)).map_err(|e| e.to_string())?;
-    write_main(paper, &insert_input(&main, &file, after))?;
-    Ok(file)
+    let s = Section { file: id.clone(), title: title.to_string(), paragraphs: vec![], tail };
+    write_new(&lay.path(&id), &render_section(&s))?;
+    let line = input_line(&main, &lay, &id, after);
+    let lay = Layout { ids: [lay.ids.clone(), vec![id.clone()]].concat(), ..lay };
+    lay.write_main(&insert_block(&main, &lay, &line, after))?;
+    Ok(id)
 }
 
-/// Take a section out of the paper: its file goes to sections/unused/ (so it
-/// can come back) and main.tex no longer reads it. Returns the name it has
-/// there and the section it followed (for `restore_section`).
-pub fn delete_section(paper: &Path, file: &str) -> Result<(String, Option<String>), String> {
-    if !safe_name(file) || !file.ends_with(".tex") {
-        return Err("invalid section file".into());
-    }
-    let order = section_files(paper);
-    let at = order.iter().position(|f| f == file).ok_or("找不到這個章節")?;
-    let main = read_main(paper)?;
-    let unused = paper.join("sections").join(crate::open::UNUSED_DIR);
+/// A deleted section: where its file waits, and what to put back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Parked {
+    /// File name in the unused folder.
+    pub parked: String,
+    /// Its id before.
+    pub file: String,
+    /// The section it followed.
+    pub after: Option<String>,
+    /// The main file's text that read it (with a `\section` typed there).
+    pub slot: String,
+    /// Where the main file was cut and what came out, valid while the main
+    /// file is still as the delete left it (`main`): an undo puts it back
+    /// exactly (after an `\appendix`, say).
+    #[serde(default)]
+    pub at: Option<usize>,
+    #[serde(default)]
+    pub cut: String,
+    #[serde(default)]
+    pub main: String,
+}
+
+/// Take a section out of the paper: its file goes to the unused folder (so
+/// it can come back) and the main file no longer reads it.
+pub fn delete_section(paper: &Path, file: &str) -> Result<Parked, String> {
+    let lay = Layout::of(paper);
+    let at = lay.ids.iter().position(|f| f == file).ok_or("找不到這個章節")?;
+    let main = lay.read_main()?;
+    let unused = lay.unused();
     std::fs::create_dir_all(&unused).map_err(|e| e.to_string())?;
-    let stem = file.trim_end_matches(".tex");
-    let parked = (1..).map(|n| if n == 1 { file.to_string() } else { format!("{stem}-{n}.tex") }).find(|f| !unused.join(f).exists()).unwrap();
-    std::fs::rename(paper.join("sections").join(file), unused.join(&parked)).map_err(|e| e.to_string())?;
-    write_main(paper, &remove_input(&main, file))?;
-    Ok((parked, at.checked_sub(1).map(|i| order[i].clone())))
+    let flat = file.replace('/', "-");
+    let stem = flat.trim_end_matches(".tex");
+    let parked = (1..).map(|n| if n == 1 { flat.clone() } else { format!("{stem}-{n}.tex") }).find(|f| !unused.join(f).exists()).unwrap();
+    let (rest, slot, exact) = remove_input(&main, &lay, file);
+    std::fs::rename(lay.path(file), unused.join(&parked)).map_err(|e| e.to_string())?;
+    lay.write_main(&rest)?;
+    let (cut_at, cut) = exact.map(|(a, c)| (Some(a), c)).unwrap_or((None, String::new()));
+    Ok(Parked { parked, file: file.to_string(), after: at.checked_sub(1).map(|i| lay.ids[i].clone()), slot, at: cut_at, cut, main: text_hash(&rest) })
 }
 
-/// Bring a deleted section back from sections/unused/`parked` as `file`
-/// (its old name; a free one if that was taken since), after `after`.
-/// Returns its file name.
-pub fn restore_section(paper: &Path, parked: &str, file: &str, after: Option<&str>) -> Result<String, String> {
-    if ![parked, file].iter().all(|f| safe_name(f) && f.ends_with(".tex")) {
+/// Bring a deleted section back as it was, after `p.after` (or first). Its
+/// old id unless that was taken since. Returns its id.
+pub fn restore_section(paper: &Path, p: &Parked) -> Result<String, String> {
+    let lay = Layout::of(paper);
+    if !safe_name(&p.parked) || !lay.valid_id(&p.file) {
         return Err("invalid section file".into());
     }
-    let from = paper.join("sections").join(crate::open::UNUSED_DIR).join(parked);
+    let from = lay.unused().join(&p.parked);
     if !from.is_file() {
         return Err("找不到刪除的章節".into());
     }
-    let main = read_main(paper)?;
-    let file = if paper.join("sections").join(file).exists() { free_section_file(paper, file.trim_end_matches(".tex")) } else { file.to_string() };
-    std::fs::rename(&from, paper.join("sections").join(&file)).map_err(|e| e.to_string())?;
-    let after = after.filter(|a| section_files(paper).iter().any(|f| f == a));
-    write_main(paper, &insert_input(&main, &file, after))?;
-    Ok(file)
+    let main = lay.read_main()?;
+    let id = if lay.path(&p.file).exists() { lay.free_id(p.file.trim_end_matches(".tex").rsplit('/').next().unwrap_or("section"), Some(&p.file)) } else { p.file.clone() };
+    let to = lay.path(&id);
+    if let Some(d) = to.parent() {
+        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&from, &to).map_err(|e| e.to_string())?;
+    // the text that read it, when it still reads this file; else a plain \input
+    let lay = Layout { ids: [lay.ids.clone(), vec![id.clone()]].concat(), ..lay };
+    let block = if id == p.file && section_inputs(&format!("\\begin{{document}}\n{}\n", p.slot), &lay).iter().any(|x| x.id == id) { p.slot.clone() } else { input_line(&main, &lay, &id, p.after.as_deref()) };
+    let after = p.after.as_deref().filter(|a| lay.ids.iter().any(|f| f == a));
+    let exact = p.at.filter(|&a| id == p.file && !p.cut.is_empty() && text_hash(&main) == p.main && main.is_char_boundary(a) && a <= main.len());
+    let out = match exact {
+        Some(a) => format!("{}{}{}", &main[..a], p.cut, &main[a..]),
+        None => insert_block(&main, &lay, &block, after),
+    };
+    lay.write_main(&out)?;
+    Ok(id)
 }
 
-/// Put the sections in `order` (every section file once). main.tex's own
-/// commands take the new order in turn; files it did not read yet are added
-/// after the last one.
+/// Put the sections in `order` (every section once). The main file's own
+/// places take the new order in turn; sections it did not read yet are
+/// added after the last one.
 pub fn reorder_sections(paper: &Path, order: &[String]) -> Result<(), String> {
-    let now = section_files(paper);
-    let mut a = now.clone();
+    let lay = Layout::of(paper);
+    let mut a = lay.ids.clone();
     let mut b = order.to_vec();
     a.sort();
     b.sort();
     if a != b {
         return Err("章節清單和磁碟上的不同，請重新載入".into());
     }
-    let main = read_main(paper)?;
-    // the first command reading each file is its slot
+    let main = lay.read_main()?;
+    // the first place reading each section is its slot
     let mut seen = Vec::new();
-    let slots: Vec<SectionInput> = section_inputs(&main).into_iter().filter(|x| now.contains(&x.file) && !seen.contains(&x.file) && { seen.push(x.file.clone()); true }).collect();
+    let slots: Vec<SectionInput> = section_inputs(&main, &lay).into_iter().filter(|x| !seen.contains(&x.id) && { seen.push(x.id.clone()); true }).collect();
+    let text_of = |id: &str| slots.iter().find(|x| x.id == id).map(|x| main[x.slot.clone()].to_string()).unwrap_or_else(|| input_line(&main, &lay, id, None));
     let mut out = main.clone();
-    for (x, file) in slots.iter().zip(order).rev() {
-        out.replace_range(x.range.clone(), &input_cmd(x.cmd, file, x.ext));
+    for (x, id) in slots.iter().zip(order).rev() {
+        out.replace_range(x.slot.clone(), &text_of(id));
     }
     let mut last = slots.len().checked_sub(1).map(|i| order[i].clone());
-    for file in order.iter().skip(slots.len()) {
-        out = insert_input(&out, file, last.as_deref());
-        last = Some(file.clone());
+    for id in order.iter().skip(slots.len()) {
+        out = insert_block(&out, &lay, &input_line(&main, &lay, id, last.as_deref()), last.as_deref());
+        last = Some(id.clone());
     }
     if out != main {
-        write_main(paper, &out)?;
+        lay.write_main(&out)?;
     }
     Ok(())
 }
@@ -378,18 +514,42 @@ pub fn section_heading(p: &str) -> Option<(String, String)> {
     label_only.then(|| (title.trim().to_string(), tail.to_string()))
 }
 
+/// The section file as a split reads it: (path, holds only the body, section).
+/// A file whose title is typed in the main file holds only the body: there
+/// every `\section` in it is a new one (read as a section, the file would
+/// take the first for its own title).
+fn split_source(lay: &Layout, file: &str) -> Result<(PathBuf, bool, Section), String> {
+    if !lay.ids.iter().any(|f| f == file) {
+        return Err("找不到這個章節".into());
+    }
+    let path = lay.path(file);
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let body_only = lay.custom && !text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with('%')).is_some_and(|l| l.starts_with("\\section"));
+    let sec = if body_only {
+        Section { file: file.to_string(), title: String::new(), paragraphs: crate::text::paragraphs(&text), tail: String::new() }
+    } else {
+        parse_section(file, &text)
+    };
+    Ok((path, body_only, sec))
+}
+
+fn heading_cuts(sec: &Section) -> Vec<usize> {
+    sec.paragraphs.iter().enumerate().filter(|(_, p)| section_heading(p).is_some()).map(|(i, _)| i).collect()
+}
+
+/// Where `split_section` would cut: the heading paragraphs' places.
+pub fn split_cuts(paper: &Path, file: &str) -> Vec<usize> {
+    split_source(&Layout::of(paper), file).map(|(_, _, s)| heading_cuts(&s)).unwrap_or_default()
+}
+
 /// A `\section{…}` typed inside a section becomes a section file of its own:
 /// it and what follows it move to a new file read right after this one
 /// (with a `\label{sec:…}` when it had none). Every such heading in the
-/// file is split off. Returns the new files in order.
+/// section is split off. Returns the new ids in order.
 pub fn split_section(paper: &Path, file: &str) -> Result<Vec<String>, String> {
-    if !safe_name(file) || !file.ends_with(".tex") {
-        return Err("invalid section file".into());
-    }
-    let path = paper.join("sections").join(file);
-    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut sec = parse_section(file, &text);
-    let mut cuts: Vec<usize> = sec.paragraphs.iter().enumerate().filter(|(_, p)| section_heading(p).is_some()).map(|(i, _)| i).collect();
+    let lay = Layout::of(paper);
+    let (path, body_only, mut sec) = split_source(&lay, file)?;
+    let mut cuts = heading_cuts(&sec);
     if cuts.is_empty() {
         return Ok(vec![]);
     }
@@ -400,21 +560,26 @@ pub fn split_section(paper: &Path, file: &str) -> Result<Vec<String>, String> {
         parts.push(Section { file: String::new(), title, paragraphs: sec.paragraphs[w[0] + 1..w[1]].to_vec(), tail });
     }
     sec.paragraphs.truncate(cuts[0]);
-    let mut main = read_main(paper)?;
+    let mut main = lay.read_main()?;
+    let mut lay = lay;
     let mut after = file.to_string();
     let mut made = Vec::new();
     for mut part in parts {
-        part.file = free_section_file(paper, &part.title);
+        part.file = lay.free_id(&part.title, Some(file));
         if part.tail.is_empty() {
             part.tail = free_section_label(paper, &part.title);
         }
-        write_atomic(&paper.join("sections").join(&part.file), &render_section(&part)).map_err(|e| e.to_string())?;
-        main = insert_input(&main, &part.file, Some(&after));
+        write_new(&lay.path(&part.file), &render_section(&part))?;
+        let line = input_line(&main, &lay, &part.file, Some(file));
+        lay.ids.push(part.file.clone());
+        main = insert_block(&main, &lay, &line, Some(&after));
         after = part.file.clone();
         made.push(part.file);
     }
-    write_atomic(&path, &render_section(&sec)).map_err(|e| e.to_string())?;
-    write_main(paper, &main)?;
+    let rendered = render_section(&sec);
+    let own = if body_only { rendered.split_once('\n').map(|x| x.1).unwrap_or("").trim_start_matches('\n').to_string() } else { rendered };
+    write_atomic(&path, &own).map_err(|e| e.to_string())?;
+    lay.write_main(&main)?;
     Ok(made)
 }
 
@@ -710,7 +875,8 @@ fn group(chars: &[char], open: usize) -> (String, usize) {
 /// Macros for a paper: main.tex preamble plus any macros*.tex beside it.
 pub fn paper_macros(paper: &Path) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
-    let mut files = vec![paper.join("main.tex")];
+    let main_path = crate::open::main_file(paper);
+    let mut files = vec![main_path.clone()];
     if let Ok(dir) = std::fs::read_dir(paper) {
         for e in dir.flatten() {
             let n = e.file_name().to_string_lossy().to_string();
@@ -720,7 +886,7 @@ pub fn paper_macros(paper: &Path) -> std::collections::BTreeMap<String, String> 
         }
     }
     // files the preamble \inputs (notation.tex, a co-author's defs.tex)
-    let main = std::fs::read_to_string(paper.join("main.tex")).unwrap_or_default();
+    let main = std::fs::read_to_string(&main_path).unwrap_or_default();
     let preamble = &main[..main.find("\\begin{document}").unwrap_or(main.len())];
     for line in preamble.lines().map(strip_comment) {
         for (i, _) in line.match_indices("\\input{") {
@@ -739,7 +905,12 @@ pub fn paper_macros(paper: &Path) -> std::collections::BTreeMap<String, String> 
     out
 }
 
+/// The paper's sections; a paper opened as it is reads them from its own
+/// main file's structure (`open::sections`).
 pub fn load_paper(paper: &Path) -> Vec<Section> {
+    if crate::open::is_custom(paper) {
+        return crate::open::sections(paper);
+    }
     section_files(paper)
         .into_iter()
         .filter_map(|f| {
@@ -892,8 +1063,22 @@ const CONTENT_PACKAGES: &[&str] = &[
 /// old main.tex.
 pub fn apply_template(paper: &Path, template: Option<&Path>) -> Result<String, String> {
     let io = |e: std::io::Error| e.to_string();
-    let old = read_tex(&paper.join("main.tex")).ok_or("這篇論文沒有 main.tex")?;
-    let inputs: String = section_files(paper).iter().map(|f| format!("\\input{{sections/{}}}\n", f.trim_end_matches(".tex"))).collect();
+    let main_path = crate::open::main_file(paper);
+    let old = read_tex(&main_path).ok_or("這篇論文沒有主檔")?;
+    // the body's sections as the paper reads them: its own file names, and a
+    // title typed in the main file stays in front of its file
+    let inputs: String = if crate::open::is_custom(paper) {
+        crate::open::sections(paper)
+            .iter()
+            .map(|s| {
+                let own = std::fs::read_to_string(paper.join(&s.file)).is_ok_and(|t| t.lines().any(|l| l.trim_start().starts_with("\\section")));
+                let cmd = format!("\\input{{{}}}\n", s.file.trim_end_matches(".tex"));
+                if own { cmd } else { format!("\\section{{{}}}\n{cmd}", s.title) }
+            })
+            .collect()
+    } else {
+        section_files(paper).iter().map(|f| format!("\\input{{sections/{}}}\n", f.trim_end_matches(".tex"))).collect()
+    };
     let mut main = match template {
         None => blank_main("", &inputs),
         Some(t) => {
@@ -960,7 +1145,7 @@ pub fn apply_template(paper: &Path, template: Option<&Path>) -> Result<String, S
     // the paper's own .bib files (an empty one is a placeholder)
     let own: Vec<String> = bibliography_names(&old).into_iter().filter(|b| std::fs::metadata(paper.join(format!("{b}.bib"))).is_ok_and(|m| m.len() > 0)).collect();
     main = add_bibliographies(&main, &own);
-    write_atomic(&paper.join("main.tex"), &main).map_err(io)?;
+    write_atomic(&main_path, &main).map_err(io)?;
     Ok(old)
 }
 
@@ -1710,6 +1895,9 @@ pub fn citations_file(paper: &Path) -> PathBuf {
 /// The paper's sources as they are on disk now (main.tex and the section
 /// files), by content: another editor or a `git pull` changes it.
 pub fn stamp(paper: &Path) -> String {
+    if crate::open::is_custom(paper) {
+        return crate::open::stamp(paper);
+    }
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     std::fs::read(paper.join("main.tex")).unwrap_or_default().hash(&mut h);
@@ -2130,18 +2318,24 @@ The loss is\n\\begin{equation}\nL = a. b = c.\n\\end{equation}\nwhere $a$ is sma
         assert!(add_section(&dir, "Bad {title", None).is_err() && add_section(&dir, "  ", None).is_err());
 
         // delete: parked in sections/unused/, its line gone
-        let (parked, after) = delete_section(&dir, "related-work-2.tex").unwrap();
-        assert_eq!((parked.as_str(), after.as_deref()), ("related-work-2.tex", None));
+        let parked = delete_section(&dir, "related-work-2.tex").unwrap();
+        assert_eq!((parked.parked.as_str(), parked.after.as_deref()), ("related-work-2.tex", None));
         assert!(dir.join("sections/unused/related-work-2.tex").is_file() && !main_of(&dir).contains("related-work-2"));
         assert_eq!(section_files(&dir), ["intro.tex", "related-work.tex", "method.tex", "extra.tex"]);
         // and back where it was
-        assert_eq!(restore_section(&dir, &parked, "related-work-2.tex", after.as_deref()).unwrap(), "related-work-2.tex");
+        assert_eq!(restore_section(&dir, &parked).unwrap(), "related-work-2.tex");
         assert_eq!(section_files(&dir)[0], "related-work-2.tex");
         delete_section(&dir, "related-work-2.tex").unwrap();
         // a section after the appendix keeps its indent and place
-        let (p2, after2) = delete_section(&dir, "extra.tex").unwrap();
+        let before = main_of(&dir);
+        let p2 = delete_section(&dir, "extra.tex").unwrap();
         assert!(main_of(&dir).contains("\\appendix\n\\bibliography"), "{}", main_of(&dir));
-        restore_section(&dir, &p2, "extra.tex", after2.as_deref()).unwrap();
+        restore_section(&dir, &p2).unwrap();
+        assert_eq!(main_of(&dir), before, "an undo puts it back exactly, after the appendix");
+        // the main file changed since: back after the section it followed
+        let p3 = delete_section(&dir, "extra.tex").unwrap();
+        std::fs::write(dir.join("main.tex"), main_of(&dir).replace("\\appendix\n", "\\appendix\n\\clearpage\n")).unwrap();
+        restore_section(&dir, &p3).unwrap();
         assert!(main_of(&dir).contains("\\input{sections/method}\n\\input{sections/extra}\n\\appendix\n"), "restored after method: {}", main_of(&dir));
 
         // reorder: commands take the new order in turn, \appendix stays between slots
@@ -2151,7 +2345,7 @@ The loss is\n\\begin{equation}\nL = a. b = c.\n\\end{equation}\nwhere $a$ is sma
         );
         let order: Vec<String> = ["method.tex", "intro.tex", "zzz.tex", "extra.tex"].map(String::from).to_vec();
         reorder_sections(&dir, &order).unwrap();
-        assert!(main_of(&dir).contains("\\input{sections/method}\n\\input{sections/intro}\n\\appendix\n  \\input{sections/zzz.tex}\n  \\input{sections/extra}\n"), "{}", main_of(&dir));
+        assert!(main_of(&dir).contains("\\input{sections/method}\n\\input{sections/intro}\n\\appendix\n  \\input{sections/zzz}\n  \\input{sections/extra}\n"), "{}", main_of(&dir));
         assert_eq!(section_files(&dir), order);
         assert!(reorder_sections(&dir, &order[..2]).is_err(), "every section once");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -2193,6 +2387,55 @@ The loss is\n\\begin{equation}\nL = a. b = c.\n\\end{equation}\nwhere $a$ is sma
         let caught = check_document(Document::from_files(&wrong), &Notation::default(), &CheckOptions::default()).issues;
         assert!(caught.iter().any(|i| i.code.starts_with("ref_undefined")), "the check does look at section labels");
         assert!(!issues.iter().any(|i| i.code.starts_with("ref_undefined") || i.code.starts_with("label_")), "{:?}", issues.iter().map(|i| &i.code).collect::<Vec<_>>());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn section_operations_keep_an_opened_projects_own_files() {
+        let dir = std::env::temp_dir().join(format!("pc-secops-custom-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("chapters")).unwrap();
+        std::fs::create_dir_all(dir.join(APP_DIR)).unwrap();
+        std::fs::write(dir.join(APP_DIR).join(crate::open::LAYOUT_FILE), "main = \"ms.tex\"\n").unwrap();
+        let ms = "\\documentclass{article}\n\\begin{document}\n\\input{abstract}\n\\section{Intro}\\label{sec:intro}\n\\input{intro}\n\\input{chapters/results.tex}\n\\appendix\n\\input{chapters/extra}\n\\end{document}\n";
+        std::fs::write(dir.join("ms.tex"), ms).unwrap();
+        std::fs::write(dir.join("abstract.tex"), "An abstract.\n").unwrap();
+        std::fs::write(dir.join("intro.tex"), "Intro text.\n").unwrap();
+        std::fs::write(dir.join("chapters/results.tex"), "\\section{Results}\\label{sec:r}\n\nWe found it.\n").unwrap();
+        std::fs::write(dir.join("chapters/extra.tex"), "\\section{Extra}\n\nMore.\n").unwrap();
+        let ms_of = || std::fs::read_to_string(dir.join("ms.tex")).unwrap();
+        let ids = || load_paper(&dir).into_iter().map(|s| s.file).collect::<Vec<_>>();
+        assert_eq!(ids(), ["intro.tex", "chapters/results.tex", "chapters/extra.tex"]);
+
+        // add: next to the section it follows, in ms.tex's own \input style
+        let id = add_section(&dir, "Method", Some("chapters/results.tex")).unwrap();
+        assert_eq!(id, "chapters/method.tex");
+        assert!(ms_of().contains("\\input{chapters/results.tex}\n\\input{chapters/method.tex}\n\\appendix"), "{}", ms_of());
+        assert!(!dir.join("main.tex").exists() && !dir.join("sections").exists(), "no main.tex, no sections/ in the author's project");
+
+        // reorder: the title typed in ms.tex moves with its file
+        reorder_sections(&dir, &["chapters/results.tex", "intro.tex", "chapters/method.tex", "chapters/extra.tex"].map(String::from)).unwrap();
+        assert!(ms_of().contains("\\input{abstract}\n\\input{chapters/results.tex}\n\\section{Intro}\\label{sec:intro}\n\\input{intro}\n\\input{chapters/method.tex}\n\\appendix\n\\input{chapters/extra}\n"), "{}", ms_of());
+        assert_eq!(load_paper(&dir)[1].title, "Intro");
+
+        // delete waits in .papercomposer/unused/, and an undo puts back the title line too
+        let before = ms_of();
+        let p = delete_section(&dir, "intro.tex").unwrap();
+        assert!(!ms_of().contains("Intro") && dir.join(APP_DIR).join("unused/intro.tex").is_file() && !dir.join("intro.tex").exists());
+        assert!(p.slot.starts_with("\\section{Intro}"), "{}", p.slot);
+        restore_section(&dir, &p).unwrap();
+        assert_eq!(ms_of(), before);
+        assert_eq!(load_paper(&dir)[1].title, "Intro");
+
+        // a typed \section in a file whose title is in ms.tex: the body file stays body-only
+        let mut s = load_paper(&dir).remove(1);
+        s.paragraphs.push("\\section{Scope}".into());
+        s.paragraphs.push("Scope text.".into());
+        crate::open::write_section(&dir, &s).unwrap();
+        assert_eq!(split_section(&dir, "intro.tex").unwrap(), ["scope.tex"]);
+        assert_eq!(std::fs::read_to_string(dir.join("intro.tex")).unwrap().trim(), "Intro text.");
+        assert!(ms_of().contains("\\input{intro}\n\\input{scope}\n"), "{}", ms_of());
+        assert_eq!(load_paper(&dir).iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Results", "Intro", "Scope", "Method", "Extra"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

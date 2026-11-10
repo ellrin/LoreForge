@@ -24,7 +24,7 @@ pub(crate) fn routes() -> Router<Shared> {
 }
 
 fn done(dir: &Path, mut v: serde_json::Value) -> axum::response::Response {
-    v["stamp"] = serde_json::Value::String(paper::stamp(dir));
+    v["stamp"] = serde_json::Value::String(pc_core::open::stamp(dir));
     Json(v).into_response()
 }
 
@@ -64,9 +64,10 @@ struct Delete {
 async fn delete(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<Delete>) -> impl IntoResponse {
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
     let _lock = REVIEW_LOCK.lock().await;
-    let (parked, after) = match paper::delete_section(&dir, &b.file) { Ok(x) => x, Err(e) => return bad(&e) };
-    edit_review(&dir, |r| park(r, &b.file, &parked));
-    done(&dir, serde_json::json!({ "parked": parked, "file": b.file, "after": after }))
+    let p = match paper::delete_section(&dir, &b.file) { Ok(x) => x, Err(e) => return bad(&e) };
+    edit_review(&dir, |r| park(r, &b.file, &p.parked));
+    // the page keeps it for 復原 and sends it back as it is
+    done(&dir, serde_json::to_value(&p).unwrap_or_default())
 }
 
 /// Move the changes and comments of `file` aside, under the parked name.
@@ -98,18 +99,10 @@ fn unpark(r: &mut Review, parked: &str, file: &str) {
     r.comments.extend(comments.into_iter().map(|mut c| { c.file = file.to_string(); c }));
 }
 
-#[derive(Deserialize)]
-struct Restore {
-    parked: String,
-    file: String,
-    #[serde(default)]
-    after: Option<String>,
-}
-
-async fn restore(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<Restore>) -> impl IntoResponse {
+async fn restore(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<paper::Parked>) -> impl IntoResponse {
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
     let _lock = REVIEW_LOCK.lock().await;
-    let file = match paper::restore_section(&dir, &b.parked, &b.file, b.after.as_deref()) { Ok(f) => f, Err(e) => return bad(&e) };
+    let file = match paper::restore_section(&dir, &b) { Ok(f) => f, Err(e) => return bad(&e) };
     edit_review(&dir, |r| unpark(r, &b.parked, &file));
     done(&dir, serde_json::json!({ "file": file }))
 }
@@ -135,12 +128,11 @@ struct Split {
 
 async fn split(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<Split>) -> impl IntoResponse {
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
-    if !paper::safe_name(&b.file) || !b.file.ends_with(".tex") {
+    if !pc_core::open::is_section_file(&dir, &b.file) {
         return bad("invalid section file");
     }
     let _lock = REVIEW_LOCK.lock().await;
-    let Ok(text) = std::fs::read_to_string(dir.join("sections").join(&b.file)) else { return bad("找不到這個章節") };
-    let cuts: Vec<usize> = paper::parse_section(&b.file, &text).paragraphs.iter().enumerate().filter(|(_, p)| paper::section_heading(p).is_some()).map(|(i, _)| i).collect();
+    let cuts = paper::split_cuts(&dir, &b.file);
     let made = match paper::split_section(&dir, &b.file) { Ok(m) => m, Err(e) => return bad(&e) };
     if !made.is_empty() {
         edit_review(&dir, |r| moved(r, &dir, &b.file, &cuts, &made));
@@ -166,8 +158,8 @@ fn moved(r: &mut Review, dir: &Path, file: &str, cuts: &[usize], made: &[String]
         }
     }
     for f in std::iter::once(file.to_string()).chain(made.iter().cloned()) {
-        if let Ok(t) = std::fs::read_to_string(dir.join("sections").join(&f)) {
-            review::reanchor(r, &f, &paper::parse_section(&f, &t).paragraphs);
+        if let Some(s) = pc_core::open::read_section(dir, &f) {
+            review::reanchor(r, &f, &s.paragraphs);
         }
     }
 }
