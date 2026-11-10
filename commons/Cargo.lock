@@ -1074,6 +1074,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-engines"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "lore-home",
+ "lore-llm",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "lore-flow"
 version = "0.1.0"
 dependencies = [

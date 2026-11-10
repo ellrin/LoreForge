@@ -1,0 +1,17 @@
+[package]
+name = "lore-engines"
+version.workspace = true
+edition.workspace = true
+description = "The shared engine settings backend every LoreForge server mounts: GET/PUT /api/engines (local model, Claude connection, routes per task class, per-task overrides in private/shared/engine.toml) and POST /api/links/open (lore-<app>:// and local http links, handed to the OS)."
+
+[dependencies]
+lore-home = { path = "../lore-home" }
+lore-llm = { path = "../lore-llm" }
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
