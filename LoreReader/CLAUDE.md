@@ -13,6 +13,7 @@ cargo run -p lr-server                             # http://127.0.0.1:7890, work
 cargo run -p lorereader                            # desktop window (Tauri); not in default-members
 ../scripts/install-apps.sh LoreReader              # build the .app, install to /Applications, Dock
 cargo run -p lr-core --example synth_pdf -- demo out.pdf   # the synthetic demo paper
+cargo run -p lr-server --example isolated_server -- <empty folder> [port] [kb url]   # UI without model, keychain or claude CLI
 LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tmp/ws cargo run -p lr-server
 ```
 
@@ -38,7 +39,7 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   `paragraphs` (track B: split with sections / indents / gaps, display equations kept inside
   as ［式 (n)］, chips = red terms + symbols + equations, run order methods/results first,
   `lr-paragraph` prompt + schema; no paragraph summary or translation),
-  `synth` (synthetic PDFs, incl. the ≈8,000-word `long_paper`, `paper_text` = what the page
+  `myvocab` (cross-app my-vocab, see Decisions), `synth` (synthetic PDFs, incl. the ≈8,000-word `long_paper`, `paper_text` = what the page
   would post for a synthetic PDF — never a real paper).
   `tests/math/`: synthetic LaTeX papers + their pdf.js items (`dump-items.js`); the PDFs are
   not kept. `examples/symbols_json.rs --tex` = precision / recall against a LaTeX source.
@@ -102,6 +103,10 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   (`text::title_from_first_page`); a placeholder `/Title` counts as `file`. The author's edit wins.
 - Track B never writes a Chinese summary or translation of a paragraph. Claude's answers
   reach the symbol table only through 存進符號表… (`resolved_by: claude`, evidence kept).
+- Readers elsewhere: PaperComposer (`crates/server/src/reader.rs`, the 讀過的 tab and panel) and
+  SlideComposer (`crates/server/src/reader.rs`, the 論文 panel) read the library's `papers/<sha256>/*.json`
+  and PDFs straight from disk, read-only; they do not call `/api/quotes`. Changing these files' schema
+  means changing both readers too.
 - Theme: the one all LoreForge apps share. `/theme.css` and `/theme.js` are `commons/ui/theme.{css,js}`
   (compiled in through `lore_home::theme`; the script carries the shared choice from
   `private/shared/ui.toml`), `GET`/`PUT /api/theme` read and set it; the sun button opens the

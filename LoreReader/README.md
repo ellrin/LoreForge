@@ -14,6 +14,7 @@
 cargo run -p lr-server            # http://127.0.0.1:7890
 cargo test                        # 全部離線（合成 PDF、假的 KnowledgeBase 與本機模型）
 cargo run -p lr-core --example synth_pdf -- demo /tmp/demo.pdf   # 示範用的合成論文（3 頁）
+cargo run -p lr-server --example isolated_server -- <空資料夾> [埠] [KB 位址]   # 不需要模型、鑰匙圈或 claude CLI，只用來試介面
 ```
 
 Mac App：在 LoreForge 根目錄執行 `scripts/install-apps.sh LoreReader`（`apps/desktop` 的 Tauri 殼）。App 用 7890 埠（知識庫卡片的連結指向這裡）；7890 已經有 lr-server 在跑時直接開那一個，被別的程式佔用時改用任意空埠（這時知識庫的連結到不了這個視窗）。App 登記為 PDF 檢視器：在 Finder 開啟的 PDF（雙擊、「打開檔案的應用程式」）會加入書庫並直接打開；要讓它成為預設的 PDF App，在任一 PDF 的「取得資訊 → 打開檔案的應用程式」選 LoreReader 再按「全部更改…」。圖示原始檔為 `apps/desktop/icons/logo.svg`（PaperComposer 的霓虹風格；換圖方式同 SlideComposer）。
@@ -58,13 +59,13 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 工作區根目錄另有 `ignore-words.txt`（忽略清單，一行一個字或詞組，`#` 之後是註解）與 `models.json`（`{schema: "lorereader.models/1", choices: {<任務>: auto\|local\|haiku\|sonnet\|opus}}`）。
 
-`GET /api/quotes` 回傳所有論文的引用句（每筆加上 `sha256`、`paper_title`、`doi`），給 PaperComposer 之後讀取；PaperComposer 那邊尚未實作。
+`GET /api/quotes` 回傳所有論文的引用句（每筆加上 `sha256`、`paper_title`、`doi`）。PaperComposer 的「讀過的」與 SlideComposer 的「論文」面板不經過這個 API，它們直接唯讀讀取書庫與論文資料夾（兩邊的 `crates/server/src/reader.rs`）。
 
 之後的「論文符號／方程式表」也會放在 `papers/<sha256>/`（與 lore-notation 的登錄欄位相同，加上論文範圍、等級與誰確認的），目前的檔名不會和它衝突。
 
 ## 閱讀
 
-- 左邊縮圖、中間頁面、右邊面板（名詞／符號／段落／註記／引用句／對話）；窄螢幕時縮圖與面板變成抽屜。配色與其他 App 共用（右上角的外觀）。
+- 左邊縮圖、中間頁面、右邊面板（名詞／符號／段落／註記／引用句／對話）；窄螢幕時縮圖與面板變成抽屜。配色與其他 App 共用（工具列右上角的太陽按鈕開啟「外觀」）。
 - pdf.js 文字層可以選取文字；縮放、符合寬度、頁碼跳頁、全文搜尋（⌘/Ctrl＋F，Enter 下一個）。只繪製視窗附近的頁面，縮圖捲到才畫。
 
 ## 頁面操作（不破壞原檔）
@@ -103,7 +104,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 - **翻譯**：lore-llm 任務 `lr-translate`，先用本機模型（`local:current`），連不上才用 Claude（`claude:selected`），與 PaperComposer 的順序相同。結果在小視窗顯示，可以「加入知識庫」。
 - **問 Claude**：把選取的文字、頁碼和所在段落附到右邊的對話（任務 `lr-chat` → `claude:selected`；模型選單可以改）。對話存在這篇論文的 `chat.json`。
 - **存成引用句…**：句子（可修剪）＋一行備註，存在 `quotes.json`；右邊「引用句」分頁列出。
-- **加入知識庫…**：呼叫 KnowledgeBase 的 `POST /api/nodes`。標題預填選取的文字，摘要自己寫（可按「用模型起草摘要」呼叫 KnowledgeBase 的 `/api/draft`）。**初始狀態**可選「學習中」（預設：明天問、3 天後再問）或「已掌握」（已經熟的詞，直接記為「記得」，30 天後再確認）。來源記為 `{type: "pdf", ref: <sha256>, where: "p.<頁>", title: <論文標題>}`，內文附上所在的句子。
+- **加入知識庫…**：呼叫 KnowledgeBase 的 `POST /api/nodes`。標題預填選取的文字，摘要自己寫（可按「用模型起草摘要」呼叫 KnowledgeBase 的 `/api/draft`，論文標題與頁碼一併送出）。**初始狀態**可選「學習中」（預設：明天問、3 天後再問）或「已掌握」（已經熟的詞，直接記為「記得」，30 天後再確認）。來源記為 `{type: "pdf", ref: <sha256>, where: "p.<頁>", title: <論文標題>}`，內文附上所在的句子。
 
 ## 名詞整理與知識標示（A 線：要學的名詞）
 
@@ -173,7 +174,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 ### 模型選單
 
-工具列的 ✦ 按鈕：名詞分類、段落分析、問 Claude、翻譯，各自選「自動」（照 `tasks.toml` 的預設順序）、地端、Haiku、Sonnet 或 Opus，做法同 PaperComposer 的模型選單（`complete_on`）。選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。選擇存在 `private/LoreReader/models.json`。
+工具列的「模型」按鈕：名詞分類、段落分析、問 Claude、翻譯，各自選「自動」（照 `tasks.toml` 的預設順序）、地端、Haiku、Sonnet 或 Opus，做法同 PaperComposer 的模型選單（`complete_on`）。選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。選擇存在 `private/LoreReader/models.json`。
 
 ## 從知識庫開啟 PDF
 
@@ -198,6 +199,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `GET/PUT /api/glyphs` | 自己的字形 → LaTeX 對照（`private/LoreReader/glyphs.toml`） |
 | `POST/DELETE /api/ignore` | `{term}` → 加進／移出忽略清單 |
 | `GET/PUT /api/models` | 模型選單：`{task, model}` |
+| `GET/PUT /api/theme` | 共用配色（外觀） |
 | `GET/PUT /api/reader` | 讀者的領域與程度 `{field}`（名詞分類用；存在 `private/shared/profile.toml`） |
 | `POST /api/papers/{sha}/mine` | `{on, pages?}`：「我的論文」標記與重建 my-vocab |
 | `GET /api/kb/status`、`POST /api/kb/cards`、`POST /api/kb/draft`、`GET /api/kb/nodes/{id}` | KnowledgeBase（建立卡片只在明確操作時） |
