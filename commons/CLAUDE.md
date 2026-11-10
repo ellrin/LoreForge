@@ -11,7 +11,9 @@ design is in `../private/shared/docs/ecosystem-design.md` (author's private note
   Each crate knows nothing about any app. Apps depend on them by path
   (`../commons/crates/<name>` from an app folder).
 - `ui/` — framework-free Web Components (no build step), one folder per component,
-  each with a `demo.html` that works from `python3 -m http.server`.
+  each with a `demo.html` that works from `python3 -m http.server`. `ui/theme.css` + `ui/theme.js`
+  are the colour themes of every app (20 palettes, the 外觀 picker, one shared choice kept by
+  `lore-home`); `cargo test -p lore-home` checks the ids and the contrast rules after any change.
 - `docs/` — per-crate design notes and data formats when they go beyond the main design doc.
 
 ## Commands

@@ -313,6 +313,7 @@ async fn a_pptx_opened_where_it_lives_saves_back_into_it() {
     assert!(to.is_file());
     let (code, _, _) = call(&app, "POST", &format!("/api/decks/{name}/file/save-as"), Some(json!({ "path": docs.join("x.txt") })), None).await;
     assert_eq!(code, StatusCode::BAD_REQUEST);
+}
 
 /// One theme for every LoreForge app: the page gets it before first paint
 /// (`/theme.js`), `/api/theme` reads and sets the shared choice.

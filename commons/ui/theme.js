@@ -156,6 +156,7 @@
           b.type = "button";
           b.dataset.theme = t.id;
           b.setAttribute("aria-label", t.name);
+          b.setAttribute("aria-pressed", String(t.id === current()));   // the host may not be in the document yet
           const sw = el("span", "theme-sw");
           for (const c of t.sw) { const i = el("i"); i.style.background = c; sw.append(i); }
           b.append(sw, el("span", "theme-nm", t.name));

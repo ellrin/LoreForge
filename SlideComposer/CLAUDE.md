@@ -59,8 +59,11 @@ when working on lore-canvas in parallel with other agents.
   `web/` bundled as a resource, workspace from `sc_server::default_workspace()`. Icon source
   `icons/logo.svg` (PaperComposer's neon style).
 - `web/`: static HTML/CSS/JS, no build step. `render.js` is the only renderer (editor canvas,
-  thumbnails, `print.html` for PDF). UI text in Traditional Chinese; tokens/icons from
-  KnowledgeBase/PaperComposer. KaTeX vendored in `web/vendor/katex`.
+  thumbnails, `print.html` for PDF). UI text in Traditional Chinese; icons from
+  KnowledgeBase/PaperComposer. Colours: the theme all LoreForge apps share — `/theme.css` and
+  `/theme.js` are `commons/ui/theme.{css,js}` (through `lore_home::theme`), `/api/theme` reads and
+  sets the shared choice, 設定 has the 外觀 picker (`LoreTheme.picker`). Slides, thumbnails, the
+  show, `object.html` and `print.html` never use theme tokens. KaTeX vendored in `web/vendor/katex`.
 - `../private-example/SlideComposer/`: starting layout of the private workspace (copied to `../private/SlideComposer` on first run).
 
 ## Decisions
