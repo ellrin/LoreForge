@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A0B33"/>
+      <stop offset="0.6" stop-color="#0C0619"/>
+      <stop offset="1" stop-color="#05030C"/>
+    </linearGradient>
+    <radialGradient id="haze" cx="0.5" cy="0.92" r="0.6">
+      <stop offset="0" stop-color="#FF2BD6" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FF2BD6" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="tile">
+      <rect x="32" y="32" width="960" height="960" rx="216"/>
+    </clipPath>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="14" result="b1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="34" result="b2"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#haze)"/>
+
+    <!-- perspective grid floor -->
+    <g stroke="#FF2BD6" stroke-opacity="0.35" stroke-width="4" fill="none">
+      <line x1="0" y1="760" x2="1024" y2="760"/>
+      <line x1="0" y1="812" x2="1024" y2="812"/>
+      <line x1="0" y1="876" x2="1024" y2="876"/>
+      <line x1="0" y1="956" x2="1024" y2="956"/>
+      <line x1="512" y1="700" x2="512" y2="1024"/>
+      <line x1="512" y1="700" x2="292" y2="1024"/>
+      <line x1="512" y1="700" x2="732" y2="1024"/>
+      <line x1="512" y1="700" x2="72" y2="1024"/>
+      <line x1="512" y1="700" x2="952" y2="1024"/>
+      <line x1="512" y1="700" x2="-148" y2="1024"/>
+      <line x1="512" y1="700" x2="1172" y2="1024"/>
+    </g>
+
+    <!-- scanlines -->
+    <g fill="#FFFFFF" fill-opacity="0.035">
+      <rect x="0" y="120" width="1024" height="6"/>
+      <rect x="0" y="240" width="1024" height="6"/>
+      <rect x="0" y="360" width="1024" height="6"/>
+      <rect x="0" y="480" width="1024" height="6"/>
+      <rect x="0" y="600" width="1024" height="6"/>
+    </g>
+  </g>
+
+  <defs>
+    <g id="tiles">
+      <rect x="216" y="232" width="276" height="276" rx="34"/>
+      <rect x="532" y="232" width="276" height="276" rx="34"/>
+      <rect x="216" y="548" width="276" height="236" rx="34"/>
+      <rect x="532" y="548" width="276" height="236" rx="34"/>
+    </g>
+  </defs>
+
+  <!-- dark tile bodies so the neon reads on top of the grid -->
+  <use href="#tiles" fill="#0A0616" fill-opacity="0.92"/>
+
+  <!-- chromatic-aberration ghosts -->
+  <g fill="none" stroke-width="16" opacity="0.7">
+    <use href="#tiles" transform="translate(-10 0)" stroke="#FF2BD6"/>
+    <use href="#tiles" transform="translate(10 0)" stroke="#00F0FF"/>
+  </g>
+
+  <!-- main neon outline -->
+  <use href="#tiles" fill="none" stroke="#B8FBFF" stroke-width="14" filter="url(#glow)"/>
+
+  <!-- clock -->
+  <g fill="none" stroke-linecap="round" filter="url(#glow)">
+    <circle cx="354" cy="370" r="84" stroke="#00F0FF" stroke-width="20"/>
+    <line x1="354" y1="370" x2="354" y2="316" stroke="#B8FBFF" stroke-width="18"/>
+    <line x1="354" y1="370" x2="396" y2="394" stroke="#FF2BD6" stroke-width="18"/>
+  </g>
+  <circle cx="354" cy="370" r="14" fill="#FCEE0A" filter="url(#glow)"/>
+
+  <!-- gauge -->
+  <g fill="none" stroke-linecap="round" stroke-width="24" filter="url(#glow)">
+    <path d="M 586 430 A 84 84 0 0 1 754 430" stroke="#00F0FF" stroke-opacity="0.35"/>
+    <path d="M 586 430 A 84 84 0 0 1 708 355" stroke="#FF2BD6"/>
+  </g>
+
+  <!-- bars -->
+  <g filter="url(#glow)">
+    <rect x="262" y="660" width="48" height="76" rx="8" fill="#00F0FF" fill-opacity="0.8"/>
+    <rect x="330" y="616" width="48" height="120" rx="8" fill="#FF2BD6"/>
+    <rect x="398" y="640" width="48" height="96" rx="8" fill="#00F0FF" fill-opacity="0.9"/>
+  </g>
+
+  <!-- news lines -->
+  <g stroke-linecap="round" stroke-width="26" filter="url(#glow)">
+    <line x1="584" y1="612" x2="756" y2="612" stroke="#00F0FF"/>
+    <line x1="584" y1="666" x2="720" y2="666" stroke="#00F0FF" stroke-opacity="0.75"/>
+    <line x1="584" y1="720" x2="680" y2="720" stroke="#FF2BD6"/>
+  </g>
+
+  <!-- glitch slice -->
+  <rect x="690" y="700" width="140" height="14" fill="#FF2BD6" opacity="0.9"/>
+  <rect x="750" y="730" width="72" height="8" fill="#00F0FF" opacity="0.9"/>
+
+  <!-- gauge tip -->
+  <circle cx="708" cy="355" r="22" fill="#FCEE0A" filter="url(#glow)"/>
+</svg>

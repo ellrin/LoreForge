@@ -28,11 +28,11 @@
         "tag": "CAL"
       }
     },
-    "reminders": {
-      "type": "reminders",
+    "cards": {
+      "type": "cards",
       "config": {
-        "title": "TODO",
-        "tag": "TODO"
+        "title": "KB.CARDS",
+        "tag": "KB"
       }
     },
     "launcher": {
@@ -81,7 +81,7 @@
       "w": 426,
       "h": 330
     },
-    "reminders": {
+    "cards": {
       "x": 984,
       "y": 410,
       "w": 426,

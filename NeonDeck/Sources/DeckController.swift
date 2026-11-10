@@ -415,6 +415,18 @@ final class DeckController: NSObject, WKScriptMessageHandlerWithReply, WKNavigat
                 replyHandler(out, nil)
             }
 
+        case "kbCards":
+            // since = 小工具手上的版本；沒變就不重傳整包
+            let deckRoot = root
+            let since = ps["since"] as? Int ?? -1
+            Task.detached {
+                let (version, cards) = KnowledgeCards.load(deckRoot: deckRoot)
+                let reply: [String: Any] = cards == nil ? ["missing": true]
+                    : version == since ? ["version": version, "unchanged": true]
+                    : ["version": version, "cards": cards!]
+                await MainActor.run { replyHandler(reply, nil) }
+            }
+
         case "log":
             DeckLog.write(String(describing: p ?? ""))
             replyHandler(true, nil)

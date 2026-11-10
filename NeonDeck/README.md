@@ -9,7 +9,7 @@ desktop/
   layout.json     版面（哪些小工具、位置、大小、各自設定、目前主題）；個人設定，不進 git
   core/           deck.js 版面引擎 · util.js 共用函式 · base.css 結構 · mock.js 預覽用假資料
   themes/         ★ 美術風格：cyberpunk.css、mono.css …
-  widgets/        ★ 小工具：sysmon / clock / alarm / calendar / reminders / launcher；_template.js 是範本
+  widgets/        ★ 小工具：sysmon / clock / alarm / calendar（含提醒事項待辦）/ cards（知識卡輪播）/ news / launcher …；_template.js 是範本
 ```
 
 ## 安裝 / 更新

@@ -1,78 +1,47 @@
-// 產生 App 圖示：Resources/AppIcon.icns
-// 用法：swift scripts/make-icon.swift （build.sh 會在圖示不存在時自動執行）
+// 產生 App 圖示：Resources/logo.svg → Resources/AppIcon.icns（風格同 PaperComposer / SlideComposer / KnowledgeBase）
+// 用法：swift scripts/make-icon.swift [輸出.icns]（build.sh 會在圖示不存在時自動執行）
+// SVG 用 Quick Look（qlmanage）轉成 1024px，四角依圖示外形裁成透明，再用 iconutil 打包。
 import AppKit
 
 let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Resources/AppIcon.icns")
-let iconset = FileManager.default.temporaryDirectory.appendingPathComponent("NeonDeck.iconset")
-try? FileManager.default.removeItem(at: iconset)
-try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
+let svg = URL(fileURLWithPath: "Resources/logo.svg")
+let fm = FileManager.default
+let tmp = fm.temporaryDirectory.appendingPathComponent("neondeck-icon-\(getpid())")
+try? fm.removeItem(at: tmp)
+try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+defer { try? fm.removeItem(at: tmp) }
 
-func color(_ hex: UInt32, _ a: CGFloat = 1) -> NSColor {
-    NSColor(srgbRed: CGFloat(hex >> 16 & 255) / 255, green: CGFloat(hex >> 8 & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: a)
+func run(_ cmd: String, _ args: [String]) throws {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: cmd)
+    p.arguments = args
+    p.standardOutput = FileHandle.nullDevice
+    try p.run(); p.waitUntilExit()
+    guard p.terminationStatus == 0 else { throw NSError(domain: cmd, code: Int(p.terminationStatus)) }
 }
 
-/// 在 1024 座標系畫圖，再縮放到指定像素
+try run("/usr/bin/qlmanage", ["-t", "-s", "1024", "-o", tmp.path, svg.path])
+guard let src = NSImage(contentsOf: tmp.appendingPathComponent("logo.svg.png")) else { fatalError("qlmanage 沒有產生 PNG") }
+
+/// 依 logo.svg 的圓角方塊（x/y 32、寬高 960、圓角 216，1024 座標系）裁切，縮放到 px
 func render(_ px: Int) -> Data {
-    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8,
-                               samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-                               bytesPerRow: 0, bitsPerPixel: 0)!
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8, samplesPerPixel: 4,
+                               hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    let k = CGFloat(px) / 1024
     NSGraphicsContext.saveGraphicsState()
-    let ctx = NSGraphicsContext(bitmapImageRep: rep)!
-    NSGraphicsContext.current = ctx
-    let g = ctx.cgContext
-    g.scaleBy(x: CGFloat(px) / 1024, y: CGFloat(px) / 1024)
-
-    // 圓角方塊底（macOS 圖示格線：824 見方、留 100 邊）
-    let body = NSBezierPath(roundedRect: NSRect(x: 100, y: 100, width: 824, height: 824), xRadius: 185, yRadius: 185)
-    NSGraphicsContext.saveGraphicsState()
-    let shadow = NSShadow()
-    shadow.shadowColor = NSColor.black.withAlphaComponent(0.5)
-    shadow.shadowBlurRadius = 24
-    shadow.shadowOffset = NSSize(width: 0, height: -12)
-    shadow.set()
-    NSGradient(colors: [color(0x1A0D33), color(0x05030B)])!.draw(in: body, angle: -90)
-    NSGraphicsContext.restoreGraphicsState()
-    body.addClip()
-
-    // 背景紫色光暈
-    NSGradient(colors: [color(0xC04BFF, 0.45), color(0xC04BFF, 0)])!
-        .draw(fromCenter: NSPoint(x: 512, y: 180), radius: 0, toCenter: NSPoint(x: 512, y: 180), radius: 620, options: [])
-
-    // 斜帶：14° 平行四邊形
-    let k = tan(14 * CGFloat.pi / 180)
-    func band(_ x: CGFloat, _ w: CGFloat, _ c: NSColor) {
-        let p = NSBezierPath()
-        let lo: CGFloat = 60, hi: CGFloat = 964
-        p.move(to: NSPoint(x: x + k * (lo - 512), y: lo))
-        p.line(to: NSPoint(x: x + w + k * (lo - 512), y: lo))
-        p.line(to: NSPoint(x: x + w + k * (hi - 512), y: hi))
-        p.line(to: NSPoint(x: x + k * (hi - 512), y: hi))
-        p.close()
-        c.setFill(); p.fill()
-    }
-    // 紫色擠出陰影 → 黃色主帶 → 紫窄帶 → 藍細線
-    for i in stride(from: 6, through: 1, by: -1) {
-        band(300 + CGFloat(i) * 9, 230, color(0x6E20B8).blended(withFraction: CGFloat(6 - i) / 8, of: color(0xD35CFF))!)
-    }
-    band(300, 230, color(0xFFE600))
-    band(590, 70, color(0xC04BFF))
-    band(700, 16, color(0x2DE2FF))
-
-    // 霓虹描邊
-    color(0xFFE600, 0.5).setStroke()
-    body.lineWidth = 10
-    body.stroke()
-
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    NSGraphicsContext.current?.imageInterpolation = .high
+    NSBezierPath(roundedRect: NSRect(x: 32 * k, y: 32 * k, width: 960 * k, height: 960 * k), xRadius: 216 * k, yRadius: 216 * k).addClip()
+    src.draw(in: NSRect(x: 0, y: 0, width: CGFloat(px), height: CGFloat(px)))
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!
 }
 
-for (name, px) in [("16x16", 16), ("16x16@2x", 32), ("32x32", 32), ("32x32@2x", 64), ("128x128", 128),
-                   ("128x128@2x", 256), ("256x256", 256), ("256x256@2x", 512), ("512x512", 512), ("512x512@2x", 1024)] {
-    try render(px).write(to: iconset.appendingPathComponent("icon_\(name).png"))
+let iconset = tmp.appendingPathComponent("NeonDeck.iconset")
+try fm.createDirectory(at: iconset, withIntermediateDirectories: true)
+for s in [16, 32, 128, 256, 512] {
+    try render(s).write(to: iconset.appendingPathComponent("icon_\(s)x\(s).png"))
+    try render(s * 2).write(to: iconset.appendingPathComponent("icon_\(s)x\(s)@2x.png"))
 }
-let p = Process()
-p.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
-p.arguments = ["-c", "icns", iconset.path, "-o", out.path]
-try p.run(); p.waitUntilExit()
-print(p.terminationStatus == 0 ? "✔ \(out.path)" : "iconutil failed")
+try run("/usr/bin/iconutil", ["-c", "icns", iconset.path, "-o", out.path])
+print("✔ \(out.path)")

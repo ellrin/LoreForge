@@ -79,6 +79,11 @@ export function createMock(emit) {
         { id: 'b', title: '繳電話費', due: at(2, 0), list: '個人', color: '#FCEE0A' },
         { id: 'c', title: '買咖啡豆', list: '個人', color: '#FCEE0A' },
       ];
+      case 'kbCards': return { version: 1, cards: [
+        { id: 'n1', title: 'Dice coefficient', aliases: ['DSC'], summary: '衡量兩個集合重疊程度的指標，2|A∩B| / (|A|+|B|)。', body: '', created: Date.now() - 86400e3, state: 'learning', streak: 0 },
+        { id: 'n2', title: 'Hausdorff distance', aliases: ['HD95'], summary: '兩個點集之間「最遠的最近距離」，對邊界誤差很敏感。', body: '', created: Date.now() - 9 * 86400e3, state: 'learning', streak: 1 },
+        { id: 'n3', title: 'Focal loss', aliases: [], summary: '', body: '降低容易樣本的權重，讓訓練專注在難分類的樣本。', created: Date.now() - 2 * 3600e3, state: '', streak: 0 },
+      ] };
       case 'appIcon': return null;
       case 'pickApps': return [];
       case 'refreshDisk': return { free: 824e9, total: 995e9, at: Date.now() };

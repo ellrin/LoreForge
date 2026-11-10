@@ -50,11 +50,11 @@
         "tag": "CAL"
       }
     },
-    "reminders": {
-      "type": "reminders",
+    "cards": {
+      "type": "cards",
       "config": {
-        "title": "TODO",
-        "tag": "TODO"
+        "title": "KB.CARDS",
+        "tag": "KB"
       }
     },
     "lbl-news": {
@@ -131,7 +131,7 @@
       "w": 400,
       "h": 330
     },
-    "reminders": {
+    "cards": {
       "x": 1072,
       "y": 440,
       "w": 400,

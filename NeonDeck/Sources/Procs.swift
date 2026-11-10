@@ -143,3 +143,111 @@ enum NewsFetcher {
         }
     }
 }
+
+// MARK: - 知識卡：直接讀 KnowledgeBase 的檔案（不需要 kb-server）
+// 資料夾：$LOREFORGE_PRIVATE/KnowledgeBase，否則 $LOREFORGE_HOME 或桌面資料夾往上找到的 LoreForge 資料夾的 private/KnowledgeBase。
+// 卡片在 nodes/<id>.json，學習狀態在 progress/<member>/<id>.json（member = space.toml 的第一位成員）。
+
+enum KnowledgeCards {
+    static func loreForgeRoot(from start: URL) -> URL? {
+        let fm = FileManager.default
+        if let h = ProcessInfo.processInfo.environment["LOREFORGE_HOME"], !h.isEmpty { return URL(fileURLWithPath: h) }
+        var d = start.standardizedFileURL
+        while d.path != "/" {
+            if fm.fileExists(atPath: d.appendingPathComponent("private-example").path),
+               fm.fileExists(atPath: d.appendingPathComponent("commons").path) { return d }
+            d = d.deletingLastPathComponent()
+        }
+        return nil
+    }
+
+    static func kbDir(deckRoot: URL) -> URL? {
+        if let p = ProcessInfo.processInfo.environment["LOREFORGE_PRIVATE"], !p.isEmpty {
+            return URL(fileURLWithPath: p).appendingPathComponent("KnowledgeBase")
+        }
+        return loreForgeRoot(from: deckRoot)?.appendingPathComponent("private/KnowledgeBase")
+    }
+
+    static func member(in dir: URL) -> String? {
+        if let toml = try? String(contentsOf: dir.appendingPathComponent("space.toml"), encoding: .utf8),
+           let r = toml.range(of: #"members\s*=\s*\[\s*"([^"]+)""#, options: .regularExpression) {
+            let m = toml[r]
+            if let q1 = m.lastIndex(of: "\"") , let q0 = m[..<q1].lastIndex(of: "\"") { return String(m[m.index(after: q0)..<q1]) }
+        }
+        let subs = (try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("progress").path))?.filter { !$0.hasPrefix(".") } ?? []
+        return subs.count == 1 ? subs[0] : nil
+    }
+
+    private static func readJSON(_ url: URL) -> [String: Any]? {
+        guard let d = try? Data(contentsOf: url) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+    }
+
+    private static func mtime(_ url: URL) -> Date? {
+        try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+    }
+
+    // 快取：KnowledgeBase 寫檔是「寫暫存檔再改名」，每次寫入都會改到資料夾的修改時間。
+    //   兩個資料夾（nodes/、progress/<member>/）都沒變 → 直接用上次的結果，一個檔案都不讀；
+    //   有變 → 只看每個檔案的修改時間，只重新解析變了的。
+    private struct Entry { var nodeTime: Date; var progTime: Date?; var card: [String: Any] }
+    private static let lock = NSLock()
+    private static var cacheDir: URL?
+    private static var dirTimes: [Date?] = []
+    private static var entries: [String: Entry] = [:]
+    private static var cards: [[String: Any]] = []
+    private static var version = 0
+
+    /// 全部的卡（含學習狀態），挑哪些由小工具決定。
+    /// 回傳 (版本, 卡片)；卡片 nil = 找不到知識庫資料夾。版本只在內容有變時 +1。
+    static func load(deckRoot: URL) -> (Int, [[String: Any]]?) {
+        lock.lock(); defer { lock.unlock() }
+        guard let dir = kbDir(deckRoot: deckRoot) else { return (version, nil) }
+        let nodes = dir.appendingPathComponent("nodes")
+        let prog = member(in: dir).map { dir.appendingPathComponent("progress").appendingPathComponent($0) }
+        let times = [mtime(nodes), prog.flatMap(mtime)]
+        guard times[0] != nil else { return (version, nil) }
+        if dir == cacheDir, times == dirTimes { return (version, cards) }
+
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: nodes, includingPropertiesForKeys: [.contentModificationDateKey]) else { return (version, nil) }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoPlain = ISO8601DateFormatter()
+        if dir != cacheDir { entries = [:] }
+        var next: [String: Entry] = [:]
+        var changed = dir != cacheDir
+        for f in files where f.pathExtension == "json" {
+            let id = f.deletingPathExtension().lastPathComponent
+            guard let nt = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else { continue }
+            let pf = prog?.appendingPathComponent("\(id).json")
+            let pt = pf.flatMap(mtime)
+            if let e = entries[id], e.nodeTime == nt, e.progTime == pt { next[id] = e; continue }
+            changed = true
+            guard let n = readJSON(f), let title = n["title"] as? String else { continue }
+            let p = pf.flatMap(readJSON)
+            let createdStr = n["created_at"] as? String ?? ""
+            let created = iso.date(from: createdStr) ?? isoPlain.date(from: createdStr) ?? .distantPast
+            let summary = n["summary"] as? String ?? ""
+            var body = ""
+            if summary.isEmpty {   // 沒有摘要才帶一段內文，平常不傳
+                body = (n["body"] as? String ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+                if body.count > 240 { body = String(body.prefix(240)) + "…" }
+            }
+            next[id] = Entry(nodeTime: nt, progTime: pt, card: [
+                "id": n["id"] as? String ?? id, "title": title,
+                "aliases": n["aliases"] as? [String] ?? [],
+                "summary": summary, "body": body,
+                "created": created.timeIntervalSince1970 * 1000,
+                "state": p?["state"] as? String ?? "",
+                "streak": p?["streak"] as? Int ?? 0,
+            ])
+        }
+        if next.count != entries.count { changed = true }
+        entries = next
+        cacheDir = dir
+        dirTimes = times
+        if changed { cards = next.values.map(\.card); version += 1 }
+        return (version, cards)
+    }
+}
