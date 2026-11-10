@@ -105,13 +105,17 @@ pub struct Noun {
     /// (never red or amber); a KB card's own state always wins.
     #[serde(default)]
     pub used: bool,
+    /// Not red yet: a single word while the reader's field is not set (see
+    /// [`Inventory::quiet_single_words`]). Never stored; set when the list is built.
+    #[serde(default)]
+    pub quiet: bool,
 }
 
 impl Noun {
     /// Red on the page: no card, not used in the author's own papers, and classified
     /// as a specialist term (never 基礎科學詞, 一般學術詞, 人名 or unclassified).
     pub fn red(&self) -> bool {
-        self.state == "new" && !self.used && is_specialist(self.category.as_deref())
+        self.state == "new" && !self.used && !self.quiet && is_specialist(self.category.as_deref())
     }
 }
 
@@ -557,6 +561,7 @@ fn add(acc: &mut BTreeMap<String, Acc>, id: String, key: &str, surface: &str, so
             first_page: occ[0],
             occ: vec![],
             used: false,
+            quiet: false,
         },
         forms: BTreeMap::new(),
     });
@@ -806,6 +811,15 @@ impl Inventory {
     /// words the author used in their own papers are not asked about.
     pub fn unclassified(&self) -> Vec<&Noun> {
         self.entries.iter().filter(|e| e.state == "new" && !e.used && e.category.is_none()).collect()
+    }
+
+    /// Before the reader's field is set the model cannot tell what is basic for them, so
+    /// single words (diabetic, sensitivity ...) would be red by the dozen: only phrases,
+    /// hyphenated terms and acronyms stay red until the field is known.
+    pub fn quiet_single_words(&mut self) {
+        for e in self.entries.iter_mut().filter(|e| e.state == "new" && e.source == "word") {
+            e.quiet = true;
+        }
     }
 
     /// Mark the no-card units found in the author's own papers (`my` = my-vocab keys).

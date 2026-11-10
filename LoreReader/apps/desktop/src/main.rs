@@ -60,7 +60,8 @@ impl lr_server::Saver for NativeSaver {
     }
 }
 
-/// Close / quit with notes that are not saved in a PDF yet: one prompt per such paper,
+/// Close / quit with notes that are not saved in a PDF yet: one prompt, for the paper that is
+/// open in the window (the page asks the same when the author leaves a paper), with
 /// 「儲存…」(the save panel; straight to the last export when there is one) / 「不儲存」 / 「取消」.
 #[derive(Default)]
 struct CloseGuard {
@@ -70,55 +71,63 @@ struct CloseGuard {
     asking: AtomicBool,
 }
 
+/// The paper open in the main window: `paper=<sha256>` of its URL (the page keeps it there).
+fn open_paper(app: &AppHandle) -> Option<String> {
+    let url = app.get_webview_window("main")?.url().ok()?;
+    url.query_pairs().find(|(k, _)| k == "paper").map(|(_, v)| v.to_string()).filter(|v| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 /// Runs off the main thread (blocking dialogs). `true` = go ahead and close.
 fn confirm_close(app: &AppHandle) -> bool {
     let Some(addr) = *app.state::<Opener>().addr.lock().unwrap() else { return true };
-    let dirty = match http_json(addr, "GET", "/api/dirty", None) {
-        Ok(v) => v["papers"].as_array().cloned().unwrap_or_default(),
+    let Some(sha) = open_paper(app) else { return true };
+    let st = match http_json(addr, "GET", &format!("/api/papers/{sha}/export"), None) {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("dirty check: {e}");
             return true;
         }
     };
-    let parent = app.get_webview_window("main");
-    for p in dirty {
-        let sha = p["sha256"].as_str().unwrap_or_default();
-        let title = p["title"].as_str().unwrap_or_default();
-        let last = p["last_path"].as_str().map(PathBuf::from);
-        let (msg, yes) = match &last {
-            Some(l) => (format!("《{title}》\n→ {}", l.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()), "儲存"),
-            None => (format!("《{title}》"), "儲存…"),
-        };
-        let mut d = app.dialog().message(msg).title("儲存筆記到新的 PDF？").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::YesNoCancelCustom(yes.into(), "不儲存".into(), "取消".into()));
-        if let Some(w) = &parent {
-            d = d.parent(w);
-        }
-        match d.blocking_show_with_result() {
-            MessageDialogResult::Custom(b) if b == yes => {
-                let target = match last {
-                    Some(l) => l,
-                    None => {
-                        let dir = PathBuf::from(p["default_dir"].as_str().unwrap_or_default());
-                        match save_panel(app, &dir, p["default_name"].as_str().unwrap_or("notes.pdf")) {
-                            Some(t) => t,
-                            None => return false,
-                        }
-                    }
-                };
-                if let Err(e) = http_json(addr, "POST", &format!("/api/papers/{sha}/export"), Some(&serde_json::json!({ "path": target }))) {
-                    app.dialog().message(e).title("沒有存成").kind(MessageDialogKind::Error).blocking_show();
-                    return false;
-                }
-            }
-            MessageDialogResult::Custom(b) if b == "不儲存" => {
-                if let Err(e) = http_json(addr, "POST", &format!("/api/papers/{sha}/export/decline"), Some(&serde_json::json!({}))) {
-                    eprintln!("decline: {e}");
-                }
-            }
-            _ => return false,
-        }
+    if st["dirty"] != true {
+        return true;
     }
-    true
+    let title = http_json(addr, "GET", &format!("/api/papers/{sha}"), None).ok().and_then(|v| v["paper"]["title"].as_str().map(str::to_string)).unwrap_or_default();
+    let parent = app.get_webview_window("main");
+    let last = st["last"]["path"].as_str().filter(|_| st["last"]["exists"] == true).map(PathBuf::from);
+    let (msg, yes) = match &last {
+        Some(l) => (format!("《{title}》\n→ {}", l.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()), "儲存"),
+        None => (format!("《{title}》"), "儲存…"),
+    };
+    let mut d = app.dialog().message(msg).title("儲存筆記到新的 PDF？").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::YesNoCancelCustom(yes.into(), "不儲存".into(), "取消".into()));
+    if let Some(w) = &parent {
+        d = d.parent(w);
+    }
+    match d.blocking_show_with_result() {
+        MessageDialogResult::Custom(b) if b == yes => {
+            let target = match last {
+                Some(l) => l,
+                None => {
+                    let dir = PathBuf::from(st["default_dir"].as_str().unwrap_or_default());
+                    match save_panel(app, &dir, st["default_name"].as_str().unwrap_or("notes.pdf")) {
+                        Some(t) => t,
+                        None => return false,
+                    }
+                }
+            };
+            if let Err(e) = http_json(addr, "POST", &format!("/api/papers/{sha}/export"), Some(&serde_json::json!({ "path": target }))) {
+                app.dialog().message(e).title("沒有存成").kind(MessageDialogKind::Error).blocking_show();
+                return false;
+            }
+            true
+        }
+        MessageDialogResult::Custom(b) if b == "不儲存" => {
+            if let Err(e) = http_json(addr, "POST", &format!("/api/papers/{sha}/export/decline"), Some(&serde_json::json!({}))) {
+                eprintln!("decline: {e}");
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Ask (on a worker thread), then `then` on the main thread when the author lets it close.

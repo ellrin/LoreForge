@@ -154,15 +154,20 @@ fn field_of(path: &FsPath) -> Option<String> {
 /// `private/shared/profile.toml`, else a neutral default. An older
 /// `private/LoreReader/reading.toml` field is moved there once.
 pub fn reader_field(s: &crate::AppState) -> String {
+    reader_field_set(s).unwrap_or_else(|| nouns::DEFAULT_FIELD.to_string())
+}
+
+/// The field the author wrote down, `None` while it is still the neutral default.
+pub fn reader_field_set(s: &crate::AppState) -> Option<String> {
     let profile = s.shared.join("profile.toml");
     let old = s.workspace.join(OLD_READER_FILE);
     if let Some(f) = field_of(&old) {
         if field_of(&profile).is_none() && set_profile_field(&profile, &f).is_err() {
-            return f;
+            return Some(f);
         }
         let _ = std::fs::remove_file(&old);
     }
-    field_of(&profile).unwrap_or_else(|| nouns::DEFAULT_FIELD.to_string())
+    field_of(&profile)
 }
 
 /// Set (or remove, when empty) `field = "…"` in profile.toml, keeping its other lines
@@ -204,7 +209,7 @@ fn load_cache(s: &crate::AppState, sha: &str) -> Result<NounsCache, ApiError> {
 }
 
 pub async fn reader_get(State(s): State<Shared>) -> R {
-    Ok(Json(json!({ "field": reader_field(&s), "default": nouns::DEFAULT_FIELD })))
+    Ok(Json(json!({ "field": reader_field(&s), "default": nouns::DEFAULT_FIELD, "set": reader_field_set(&s).is_some() })))
 }
 
 #[derive(Deserialize)]
@@ -258,6 +263,9 @@ async fn inventory_of(s: &crate::AppState, sha: &str) -> Result<(nouns::Inventor
     let syms: SymbolFile = s.papers.load(sha, "symbols.json")?.unwrap_or_default();
     let mut inv = nouns::inventory_masked(&text, &kb, &Filters::with_file(&ignore_file(&s.workspace)), &cats, &math_mask(&syms));
     inv.mark_used(&load_vocab(s).keys());
+    if reader_field_set(s).is_none() {
+        inv.quiet_single_words();
+    }
     Ok((inv, kb_status, cache))
 }
 
@@ -288,6 +296,7 @@ pub async fn nouns_view(s: &crate::AppState, sha: &str) -> Result<Value, ApiErro
         "stats": inv.stats,
         "used": inv.entries.iter().filter(|n| n.used).count(),
         "kb": kb_status,
+        "field_set": reader_field_set(s).is_some(),
         "categories": nouns::CATEGORIES,
         "classification": { "engine": cache.engine, "at": cache.classified_at, "unclassified": inv.unclassified().len(), "pending": pending },
     }))

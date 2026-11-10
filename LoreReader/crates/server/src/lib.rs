@@ -39,7 +39,7 @@
 //! | POST | /api/papers/{sha}/export | `{path}` / `{last: true}` (overwrite the last export) / `{choose: true}` (desktop save panel) → PDF with the notes written to that file |
 //! | POST | /api/papers/{sha}/export.pdf | the PDF with the notes as a download (browser) |
 //! | POST | /api/papers/{sha}/export/decline | "不儲存" on close: not dirty until the notes change |
-//! | GET | /api/dirty | papers whose notes changed since their last export (the close prompt) |
+//! | GET | /api/dirty | every paper whose notes changed since their last export (not the close path: the shell and the page ask about the open paper only, via `…/export`) |
 //! | POST | /api/print | `{sha}` → `{native}`: the desktop app opens its print dialog |
 //! | POST | /api/print/ready?id= | print.html is rendered (desktop: show the dialog) |
 
