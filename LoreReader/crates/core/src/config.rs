@@ -12,6 +12,9 @@
 //! model = "qwen3.5-9b-q8"
 //! ```
 //!
+//! Without `[engine]` the server uses the engine all LoreForge apps share,
+//! `private/shared/engine.toml` (`lore_home::engine`).
+//!
 //! Env: `LOREREADER_LIBRARY`, `LOREREADER_EXPORTS`, `LOREREADER_KB_URL`,
 //! `LOREREADER_LLM_URL`, `LOREREADER_LLM_MODEL`.
 

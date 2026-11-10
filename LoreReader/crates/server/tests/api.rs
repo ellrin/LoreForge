@@ -341,6 +341,9 @@ async fn knowledge_base_terms_and_cards() {
     let (_, v, _) = call(&e.app, "GET", "/api/kb/status", None, None).await;
     assert_eq!(v["ok"], false);
     assert!(v["error"].as_str().unwrap().contains("KnowledgeBase"));
+    // 開啟 KnowledgeBase never starts an app from a test
+    let (s, v, _) = call(&e.app, "POST", "/api/kb/open", None, None).await;
+    assert_eq!((s, v["opened"].as_bool()), (StatusCode::OK, Some(false)));
     let (s, v, _) = call(&e.app, "POST", "/api/kb/cards", Some(json!({ "sha": sha, "page": 1, "title": "SBL" })), None).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(v["kb_down"], true);
@@ -864,4 +867,33 @@ async fn a_file_named_paper_gets_the_headline_of_page_one_and_the_author_can_ren
     call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(page), None).await;
     let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}"), None, None).await;
     assert_eq!((v["paper"]["title"].as_str(), v["paper"]["title_source"].as_str()), (Some("My title"), Some("author")));
+}
+
+#[tokio::test]
+async fn margin_line_numbers_leave_the_text_and_the_noun_list() {
+    let e = setup(&dead_url(), None);
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    // a line-numbered manuscript page: each line's number follows its last word
+    let lines = ["We train the segmentation model with a similar", "loss and transpose the anisotropic kernel", "before the tortuosity estimate of the", "vessel skeleton on every synthetic", "image of the dataset in this study"];
+    let (mut text, mut items) = (String::new(), vec![]);
+    for (k, l) in lines.iter().enumerate() {
+        let y = 740.0 - 17.0 * k as f64;
+        let n = (275 + k).to_string();
+        for (s, x, w, eol) in [(l.to_string(), 77.0, 400.0, false), (n, 41.0, 18.0, true)] {
+            let a = text.encode_utf16().count();
+            text += &s;
+            items.push(json!({ "s": a, "e": text.encode_utf16().count(), "str": s, "x": x, "y": y, "w": w, "h": 10.0, "size": 10.0, "eol": eol }));
+            if eol {
+                text.push('\n');
+            }
+        }
+    }
+    let body = json!({ "pages": [{ "page": 1, "text": text, "items": items, "width": 612.0, "height": 792.0 }] });
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(body), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["line_numbers"].as_array().unwrap().len(), 5);
+    assert_eq!(v["line_numbers"][0], json!([1, 46, 49]));
+    let terms: Vec<&str> = v["nouns"]["entries"].as_array().unwrap().iter().map(|n| n["text"].as_str().unwrap()).collect();
+    assert!(terms.iter().all(|t| !t.chars().any(|c| c.is_ascii_digit())), "{terms:?}");
+    assert!(terms.contains(&"anisotropic") && terms.contains(&"tortuosity"), "{terms:?}");
 }

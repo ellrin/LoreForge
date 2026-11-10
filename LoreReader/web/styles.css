@@ -475,3 +475,14 @@ button.chip.warn { cursor: pointer; }
 .nn-tools select, .nn-tools input { font-size: 13px; }
 .item .meta { font-size: 12px; }
 html { overflow: hidden; height: 100%; }
+
+/* ── quiet notes, scrolling, line numbers ────────────────────────── */
+/* KB not running / no model: one muted line, not a box */
+.kb-note, .note-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); min-height: 26px; overflow-wrap: anywhere; }
+.kb-note .btn { margin-left: auto; flex: none; }
+/* nothing around the scroll areas may scroll (WebKit scrolls clipped boxes for scrollIntoView / selection) */
+html, body, .app { overflow: clip; }
+/* the sticky "N 頁" header never covers the current thumbnail's frame */
+.sorter { scroll-padding-top: 48px; }
+/* margin line numbers of a manuscript: not selectable, never in a quote */
+.textLayer .lnum { -webkit-user-select: none; user-select: none; }

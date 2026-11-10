@@ -830,6 +830,10 @@ pub fn inventory_masked(paper: &PaperText, kb: &[KbName], filters: &Filters, cat
         if !acr && (filters.is_function(&w.text) || filters.is_general(&w.text)) {
             continue;
         }
+        // a common word in capitals ("EXAMPLE LAKE" in an address) is not an acronym
+        if acr && w.text.chars().count() >= 4 && (filters.is_general(&w.text) || filters.is_familiar(&w.text)) {
+            continue;
+        }
         add(&mut acc, format!("w:{}", w.key), &w.key, &w.text, if acr { "acronym" } else { "word" }, None, None, occ_of(w, w));
     }
 
@@ -919,14 +923,20 @@ impl FrontMatter {
     fn is_name<'a>(&self, n: &Noun, forms: impl Iterator<Item = &'a String>) -> bool {
         let forms: Vec<&String> = forms.collect();
         // an affiliation mark may be glued on ("Liao2")
+        // "Yang", "I-Fang", "Liao2" (an affiliation mark glued on); the same word in
+        // capitals ("TAIWAN" in an address) counts when it is also written "Taiwan"
+        let strip = |f: &str| f.trim_end_matches(|c: char| c.is_ascii_digit()).to_string();
         let capital = |f: &str| {
-            let f = f.trim_end_matches(|c: char| c.is_ascii_digit());
-            f.split(|c: char| is_hyphen(c)).all(|p| {
-                let mut cs = p.chars();
-                cs.next().is_some_and(char::is_uppercase) && cs.clone().count() >= 1 && cs.all(char::is_lowercase)
-            })
+            let f = strip(f);
+            let parts: Vec<&str> = f.split(|c: char| is_hyphen(c)).collect();
+            parts.iter().any(|p| p.chars().count() >= 2)
+                && parts.iter().all(|p| {
+                    let mut cs = p.chars();
+                    cs.next().is_some_and(char::is_uppercase) && cs.all(char::is_lowercase)
+                })
         };
-        if forms.is_empty() || !forms.iter().all(|f| capital(f)) {
+        let shouted = |f: &str| f.chars().count() >= 3 && f.chars().all(|c| c.is_uppercase() || is_hyphen(c)) && forms.iter().any(|g| capital(g) && strip(g).to_uppercase() == strip(f));
+        if forms.is_empty() || !forms.iter().all(|f| capital(f) || shouted(f)) {
             return false;
         }
         if forms.iter().any(|f| f.trim_end_matches(|c: char| c.is_ascii_digit()).split(|c: char| is_hyphen(c)).any(|p| self.lower.contains(&p.to_lowercase()) && n.source == "word")) {
@@ -946,13 +956,14 @@ impl FrontMatter {
     }
 }
 
-/// A line in title case: at least two words of three or more letters, three quarters of
-/// them capitalised (small connectors aside) — names, affiliations, a journal's name,
+/// A line in title case: words of three or more letters (one alone on its line, or two
+/// and more), three quarters of them capitalised (small connectors aside) — names, affiliations, a journal's name,
 /// headings. A sentence is not.
 fn title_case(line: &str) -> bool {
     const SMALL: &[&str] = &["of", "and", "the", "in", "for", "on", "at", "de", "van", "von", "der", "du", "la", "di", "da", "to", "with"];
     let words: Vec<&str> = line.split(|c: char| !(c.is_alphabetic() || is_hyphen(c))).filter(|w| w.chars().filter(|c| c.is_alphabetic()).count() >= 3 && !SMALL.contains(&w.to_lowercase().as_str())).collect();
-    if words.len() < 2 {
+    // one capitalised word alone on its line ("TAIWAN", a table cell) counts too
+    if words.is_empty() || words.len() == 1 && line.split_whitespace().count() > 2 {
         return false;
     }
     let caps = words.iter().filter(|w| w.chars().next().is_some_and(char::is_uppercase)).count();
@@ -1174,7 +1185,7 @@ mod tests {
         // a synthetic submission PDF: the journal's name, a metadata table with text cells
         // (manuscript number, authors, affiliation), then the abstract
         let p = PaperText::from_strings(&[
-            "Journal of Synthetic Imaging\nManuscript Number:\nSYNJ-D-24-01234R2\nCorresponding Author:\nEllrin Daidai\nExample Lake University Institute of Synthetic Informatics\nOrder of Authors:\nEllrin Daidai\nEll-Rin Daidai\nAbstract:\n\
+            "Journal of Synthetic Imaging\nManuscript Number:\nSYNJ-D-24-01234R2\nCorresponding Author:\nEllrin Daidai\nExample Lake University Institute of Synthetic Informatics\nOrder of Authors:\nEllrin Daidai\nEll-Rin Daidai\nI-Rin Daidai\nEXAMPLE LAKE\nAbstract:\n\
              Background: Hip fractures are common in the elderly and hard to see on pelvic radiographs. We propose a patch auxiliary \
              generative adversarial network (PAGAN) with GradCAM heatmaps for weakly supervised fracture detection. Code: \
              https://example.org/synthlab and contact ellrin@example.edu. Daidai et al. used a similar275 transposed277 layer \
@@ -1182,7 +1193,7 @@ mod tests {
         ]);
         let inv = inventory(&p, &[], &Filters::default(), &HashMap::new());
         let listed: Vec<&str> = inv.listed().map(|e| e.text.as_str()).collect();
-        for gone in ["Hip", "hip", "elderly", "Biology", "Institute", "Ellrin", "Daidai", "Ell-Rin", "Lake", "SYNJ-D-24-01234R2", "similar275", "the275", "transposed277", "example", "synthlab", "edu", "24GB", "43rd", "Imaging"] {
+        for gone in ["Hip", "hip", "elderly", "Biology", "Institute", "Ellrin", "Daidai", "Ell-Rin", "I-Rin", "Lake", "SYNJ-D-24-01234R2", "similar275", "the275", "transposed277", "example", "synthlab", "edu", "24GB", "43rd", "Imaging"] {
             assert!(!listed.iter().any(|x| x.eq_ignore_ascii_case(gone)), "{gone} in {listed:?}");
         }
         for kept in ["GradCAM", "ResNet50", "heatmaps", "radiographs"] {

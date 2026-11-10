@@ -69,6 +69,7 @@ const S = {
   sha: null, paper: null,
   docs: new Map(),          // sha → Promise<PDFDocumentProxy>
   texts: new Map(),         // "sha:page" → Promise<{text, items:[{start,end}]}>
+  lineNums: new Map(),      // "sha:page" → [[start, end]]: margin line numbers (blanked in the text)
   nouns: null,              // the noun list of the open paper (GET …/nouns)
   nounMarks: new Map(),     // page → [{s, e, cls, i}] from the noun list
   focusNoun: null,          // {i, k}: the noun whose occurrences are lit, and the current one
@@ -116,9 +117,35 @@ function pageText(sha, page) {
       items.push({ start, end: text.length, raw: it });
       if (it.hasEOL) text += "\n";
     }
-    return { text, items };
+    return blankLineNums({ text, items }, S.lineNums.get(k));
   })());
   return S.texts.get(k);
+}
+
+/** Margin line numbers ("the" + "275") as spaces, so search, quotes and offsets never
+ *  see them (same length: every offset stays valid). */
+function blankLineNums(t, ranges) {
+  if (!ranges?.length) return t;
+  let text = t.text;
+  for (const [s, e] of ranges) text = text.slice(0, s) + " ".repeat(e - s) + text.slice(e);
+  t.text = text;
+  return t;
+}
+
+/** The line numbers the server found (`[page, start, end]`): kept per page, blanked in
+ *  the page texts already read. */
+async function setLineNums(sha, list) {
+  const per = new Map();
+  for (const [page, s, e] of list ?? []) {
+    const k = key(sha, page);
+    if (!per.has(k)) per.set(k, []);
+    per.get(k).push([s, e]);
+  }
+  for (const [k, ranges] of per) {
+    if (S.lineNums.has(k)) continue;
+    S.lineNums.set(k, ranges);
+    if (S.texts.has(k)) blankLineNums(await S.texts.get(k), ranges);
+  }
 }
 
 /** One page for the reading aids: the page text plus every item's PDF font name,
@@ -281,6 +308,28 @@ async function refreshKb() {
   updateLegend();
 }
 
+/** KnowledgeBase is not running: a one-line note with 開啟 KnowledgeBase; the page checks
+ *  again every few seconds and refreshes the noun list once it answers. */
+function kbNote() {
+  const btn = h("button", { type: "button", class: "btn ghost small", onclick: async () => {
+    btn.disabled = true;
+    try { await api("/api/kb/open", { method: "POST" }); } catch (e) { fail(e); }
+    watchKb(true);
+  } }, "開啟 KnowledgeBase");
+  return h("div", { class: "kb-note" }, h("span", {}, "KnowledgeBase 未開啟"), btn);
+}
+let kbTimer = 0;
+function watchKb(soon = false) {
+  if (kbTimer) { if (!soon) return; clearTimeout(kbTimer); }
+  const tick = async () => {
+    kbTimer = 0;
+    await refreshKb();
+    if (S.kb?.ok) { refreshNouns(); return; }
+    kbTimer = setTimeout(tick, document.hidden ? 15000 : 4000);
+  };
+  kbTimer = setTimeout(tick, soon ? 1500 : 4000);
+}
+
 // ── the page list ─────────────────────────────────────────────────────────
 const list = () => S.arr ?? S.orig;
 let pageObserver, thumbObserver;
@@ -366,11 +415,49 @@ async function renderPage(p) {
     p.divs = layer.textDivs;
     p.strs = layer.textContentItemsStr;
     p.divIndex = new Map(p.divs.map((d, i) => [d, i]));
+    await refitText(p);
+    if (token !== p.token) return;
     drawHighlights(p);
     decorate(p);
   } catch (e) {
     if (token === p.token) { p.rendered = false; console.error(e); }
   }
+}
+
+/** pdf.js sizes every text-layer span from a canvas measurement of a fallback font, but
+ *  WebKit (the desktop app) lays the same text out several per cent wider, so a mark in
+ *  the middle of a long line (a table cell, an abstract) drifts off its glyphs. Measure
+ *  the spans as laid out and stretch each one to its PDF width: one read pass, one write
+ *  pass. Rotated text keeps pdf.js's own fit. */
+async function refitText(p) {
+  const { items } = await pageText(p.sha, p.page);
+  const fix = [];
+  p.divs.forEach((div, i) => {
+    const t = items[i]?.raw?.transform;
+    if (!t || t[1] !== 0 || t[2] !== 0 || !p.strs[i]?.trim()) return;
+    const want = items[i].raw.width * S.zoom;
+    const have = div.getBoundingClientRect().width;
+    if (want > 0 && have > 0) fix.push([div, want / have]);
+  });
+  for (const [div, f] of fix) {
+    if (Math.abs(f - 1) < 0.002) continue;
+    const sx = parseFloat(div.style.getPropertyValue("--scale-x")) || 1;
+    div.style.setProperty("--scale-x", sx * f);
+  }
+}
+
+/** Scroll `box` (and nothing around it: WebKit's scrollIntoView also scrolls the page's
+ *  clipped ancestors, which shifts the whole window) so `el` is in view. `top` = space
+ *  kept free at the top (a sticky header). */
+function scrollWithin(box, el, block = "center", top = 0) {
+  if (!box || !el) return;
+  const b = box.getBoundingClientRect(), r = el.getBoundingClientRect();
+  let y = box.scrollTop, x = box.scrollLeft;
+  if (block === "center") y += r.top - b.top - (box.clientHeight - r.height) / 2;
+  else if (r.top < b.top + top) y += r.top - b.top - top - 4;
+  else if (r.bottom > b.top + box.clientHeight) y += r.bottom - b.top - box.clientHeight + 4;
+  if (r.left < b.left || r.right > b.left + box.clientWidth) x += r.left - b.left - (box.clientWidth - r.width) / 2;
+  box.scrollTo({ top: Math.max(0, y), left: Math.max(0, x) });
 }
 
 function setZoom(z, fit = false) {
@@ -396,7 +483,7 @@ function setCur(i) {
   $("#pageInput").value = i + 1;
   $$(".thumb").forEach((t) => t.setAttribute("aria-current", +t.dataset.i === i ? "true" : "false"));
   const t = $(`.thumb[data-i="${i}"]`);
-  if (t && !$("#sorter").matches(":hover")) t.scrollIntoView({ block: "nearest" });
+  if (t && !$("#sorter").matches(":hover")) scrollWithin($("#sorter"), t, "nearest", $(".sorter-head")?.offsetHeight ?? 0);
   if (S.sha && !S.arr) {
     const u = new URL(location.href);
     u.searchParams.set("page", S.pages[i].page);
@@ -674,13 +761,14 @@ async function selectionInfo() {
   const b = pageEl.contains(range.endContainer) ? domOffset(p, range.endContainer, range.endOffset) : null;
   if (a && items[a.i]) start = items[a.i].start + a.off;
   if (b && items[b.i]) end = items[b.i].start + b.off;
-  if (start == null || end == null || end <= start) {
+  const fromDom = !(start == null || end == null || end <= start);
+  if (!fromDom) {
     const at = ptext.replace(/\s+/g, " ").indexOf(text);
     start = at >= 0 ? at : 0; end = start + text.length;
   }
   const exact = ptext.slice(start, end);
   return {
-    p, text, rects, start, end, pageText: ptext,
+    p, text: (fromDom && norm(exact)) || text, rects, start, end, pageText: ptext,
     quote: { exact: norm(exact) || text, prefix: norm(ptext.slice(Math.max(0, start - 40), start)), suffix: norm(ptext.slice(end, end + 40)) },
     context: surrounding(ptext, start, end),
     box: range.getBoundingClientRect(),
@@ -901,7 +989,7 @@ async function addCardDialog({ title, sha, page, context, hint, summary }) {
     segHint.textContent = "";
   };
   paintSeg();
-  const status = kb?.ok ? null : h("div", { class: "err-box" }, "KnowledgeBase 沒有回應。");
+  const status = kb?.ok ? null : kbNote();
   const draftBtn = h("button", { type: "button", class: "btn", disabled: !kb?.ok, onclick: async () => {
     draftBtn.disabled = true; draftBtn.textContent = "起草中…";
     try { const r = await api("/api/kb/draft", { body: { term: t.value, context, sha, page } }); if (r.draft?.summary) sum.value = r.draft.summary; toast(`草稿：${r.assistant ?? ""}`); }
@@ -950,9 +1038,11 @@ async function decorate(p) {
   if (p.sha === S.sha) for (const m of S.symMarks.get(p.page) ?? []) marks.push({ s: m.s, e: m.e, cls: "sy", t: `y${m.k}` });
   const pi = S.pages.indexOf(p);
   S.search.hits.forEach((x, n) => { if (x.i === pi) marks.push({ s: x.start, e: x.end, cls: n === S.search.i ? "sr sr-cur" : "sr" }); });
+  const lnums = S.lineNums.get(key(p.sha, p.page)) ?? [];
   p.divs.forEach((div, i) => {
     const it = items[i], str = p.strs[i];
     if (!it) return;
+    if (lnums.length) div.classList.toggle("lnum", lnums.some(([s, e]) => s <= it.start && it.end <= e && it.end > it.start));
     const mine = marks.filter((m) => m.s < it.end && m.e > it.start);
     if (!mine.length) { if (div.dataset.marked) { div.textContent = str; delete div.dataset.marked; } return; }
     // classes per character; later marks win
@@ -1061,7 +1151,7 @@ function symPopover(sp, anchor, sticky) {
       ev?.quote ? h("div", { class: "sym-quote" }, mixed(ev.quote), h("span", { class: "src" }, ` p.${ev.page || "?"}${byLabel(ev.by)}`)) : null));
   }
   if (none.length) kids.push(h("div", { class: "sym-none" }, gradeChip("unresolved"), ...none.map((e) => tex(e.latex ?? e.id))));
-  if (sticky) kids.push(h("div", { class: "actions" }, h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); setTab("symbols"); setTimeout(() => $(`.sym-item[data-i="${sp.ents[0]}"]`)?.scrollIntoView({ block: "center" }), 60); } }, h("span", { "data-icon": "sigma" }), "符號表")));
+  if (sticky) kids.push(h("div", { class: "actions" }, h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); setTab("symbols"); setTimeout(() => scrollWithin($("#pane"), $(`.sym-item[data-i="${sp.ents[0]}"]`)), 60); } }, h("span", { "data-icon": "sigma" }), "符號表")));
   showPop(anchor, ...kids);
   $("#pop").classList.toggle("hover-pop", !sticky);
 }
@@ -1245,6 +1335,7 @@ async function readPaper(sha) {
       }
     }).catch(() => {});
     S.words = r.words;
+    await setLineNums(sha, r.line_numbers);
     setSymbols(r.symbols);
     setNouns(r.nouns);
     loadParagraphs(sha);
@@ -1284,6 +1375,7 @@ function setNouns(n) {
     S.focusNoun = i >= 0 ? { ...S.focusNoun, i } : null;
   }
   if (n.kb && !n.kb.ok && S.kb?.ok !== false) { S.kb = { ok: false, error: n.kb.error }; updateLegend(); }
+  if (n.kb && !n.kb.ok) watchKb();
   S.pages.filter((p) => p.rendered).forEach(decorate);
   if (S.tab === "nouns") renderSide();
   renderTabCounts();
@@ -1317,7 +1409,7 @@ function focusNoun(i, k = 0) {
   const pi = S.pages.findIndex((p) => p.sha === S.sha && p.page === page);
   if (pi < 0) { toast("這一頁不在目前的頁面清單裡", true); return; }
   scrollToPage(pi, false);
-  setTimeout(() => $(".nf-cur")?.scrollIntoView({ block: "center" }), 250);
+  setTimeout(() => scrollWithin($("#viewport"), $(".nf-cur")), 250);
 }
 function clearNounFocus() {
   S.focusNoun = null;
@@ -1408,8 +1500,8 @@ function nounsPane() {
     stat("learning", "學習中", "kt-learn", count((e) => ["learning", "stale", "none"].includes(e.state))),
     stat("known", "記得", "kt-known", count(isKnown)),
     S.classifying ? h("span", { class: "muted" }, "分類中…") : cls.unclassified ? h("button", { type: "button", class: "btn ghost small", title: "整篇送一次模型", onclick: () => classifyNouns(true) }, `分類（${cls.unclassified}）`) : null));
-  if (S.classifyError) out.push(h("div", { class: "warn-box" }, S.classifyError));
-  if (n.kb && !n.kb.ok) out.push(h("div", { class: "warn-box" }, "KnowledgeBase 沒有回應。"));
+  if (S.classifyError) out.push(h("div", { class: "note-line" }, S.classifyError));
+  if (n.kb && !n.kb.ok) out.push(kbNote());
   const catSel = h("select", { "aria-label": "分類", onchange: (e) => { v.cat = e.target.value; renderSide(); } },
     h("option", { value: "" }, "全部分類"), ...n.categories.map((c) => h("option", { value: c }, c)), h("option", { value: "-" }, "未分類"));
   catSel.value = v.cat;
@@ -1499,7 +1591,7 @@ function nextNotUnderstood() {
   S.curPara = n.id;
   renderSide();
   jumpPara(n.id);
-  setTimeout(() => $(`.para[data-id="${n.id}"]`)?.scrollIntoView({ block: "nearest" }), 60);
+  setTimeout(() => scrollWithin($("#pane"), $(`.para[data-id="${n.id}"]`), "nearest"), 60);
   void vpEl;
 }
 
@@ -1712,7 +1804,7 @@ function stepSearch(d) {
   $("#searchCount").textContent = `${S.search.i + 1}/${n}`;
   S.pages.filter((p) => p.rendered).forEach(decorate);
   scrollToPage(hit.i, false);
-  setTimeout(() => $(".sr-cur")?.scrollIntoView({ block: "center" }), 300);
+  setTimeout(() => scrollWithin($("#viewport"), $(".sr-cur")), 300);
 }
 
 // ── chat ──────────────────────────────────────────────────────────────────

@@ -38,6 +38,8 @@ url = "http://127.0.0.1:8080/v1"             # LOREREADER_LLM_URL
 model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 ```
 
+沒寫 `[engine]` 時，本機模型用所有 LoreForge App 共用的 `private/shared/engine.toml`（`[engine] url`、`model`，`lore_home::engine`；每次呼叫重讀，伺服器換埠也跟得上），同一個本機模型不必在每個 App 各設一次。
+
 私人工作區的位置可用 `LOREREADER_WORKSPACE` 改到別處（測試、示範用）。
 
 ## 資料格式
@@ -110,10 +112,10 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 打開論文後，頁面把**全文**（pdf.js 的文字、字型、位置）送給伺服器一次（`POST /api/papers/{sha}/read`，只放在記憶體，不寫進工作區），伺服器照作者的做法整理出整篇的名詞清單（`lr-core` 的 `nouns`）：
 
-1. **詞表**：References／Bibliography 之後不算，取出每個詞與每次出現的位置（頁碼＋在該頁文字裡的位置）。
+1. **詞表**：References／Bibliography 之後不算，取出每個詞與每次出現的位置（頁碼＋在該頁文字裡的位置）。投稿稿件左邊的**行號**（固定 x 的一欄、往下遞增的整數）先換成空白（位置不變），所以不會黏成 `the275`，搜尋、引用句、段落分析也看不到；投稿系統的字樣（`Click here to view linked References`、`--Manuscript Draft--`、`Editorial Manager`…）與每頁重複的頁首頁尾不算詞。
 2. **先比對多字詞**：文中連續 2–4 個字的詞組拿去對 KnowledgeBase 卡片的標題與別名（`GET /api/nodes`，只讀），所以 `cross entropy`、`Dice coefficient`、`U-Net` 會整組對到；跨行的詞組也算。括號裡的縮寫和前面拼得出它的全名（`Spectral Boundary Loss (SBL)`）也算一組，之後的 `SBL` 算在同一組。剩下的拆成單字；有連字號的複合詞（`label-smoothing`）保持一組，除非每一段都是一般字。
 3. **詞形還原**：大小寫、複數（含 `matrices`、`analyses` 這類不規則的）、連字號與空格、英式／美式拼法（`normalisation`、`colour`、`tumour`、`centre`、`labelled`、`haem-`、`oedema`…）、連字（ﬁ）、彎引號、**行尾斷字**（`segmen-` 換行 `tation`：全文別處出現過 `segmentation`，或下一段是小寫而且全文沒有 `segmen-tation` 這種寫法，就接回去）。
-4. **扣掉**：功能詞（`function_words.txt`）、學術通用詞（`academic_words.txt`：method、propose、significant…）、日常英文（`common_words.txt`，約 2,600 字；但 `TERMLIKE` 裡在論文中是術語的字不扣，例如 regression、variance、attention、loss、boundary）、以及**忽略清單**。縮寫（兩個以上大寫字母）不扣。
+4. **扣掉**：功能詞（`function_words.txt`）、學術通用詞（`academic_words.txt`：method、propose、significant…）、日常英文（`common_words.txt`，約 2,600 字；但 `TERMLIKE` 裡在論文中是術語的字不扣，例如 regression、variance、attention、loss、boundary）、最常見的英文字（`english_common.txt`，SCOWL 20 級以內，約 11,000 個字形：hip、biology、institute…）、以及**忽略清單**。縮寫（兩個以上大寫字母）不扣；全大寫的一般字（`TAIWAN`、`LAKE`）不算縮寫。次常見的字（`english_familiar.txt`，SCOWL 35 級：fracture、pelvic、auxiliary…）照樣送去分類，但**分類之前不列出**。也不列：人名、單位與標題頁的字（大寫開頭、全文沒有小寫寫法、多半出現在每個字都大寫的行或 `et al.` 前面：作者、`I-Fang`、`Liao2`、學校與期刊名）、編號（`ABCD-D-24-01234R4`）、網址／e-mail／檔名裡的字、序數與容量（`43rd`、`24GB`）、黏著數字的一般字。字表來自 SCOWL（http://wordlist.aspell.net/ ，授權在 `english_words.LICENSE`，可自由使用與散布，須保留版權聲明）。
 5. **對知識庫**：記得、學習中／久未複習、沒有卡片。
 6. **沒有卡片的詞整批交給模型分類，一篇只呼叫一次**（任務 `lr-classify-terms`：先地端模型、沒有時用 Haiku；JSON schema）：方法、指標、資料集、統計、臨床／解剖、其他術語、**基礎科學詞**（這個領域的專家早就會的科學、數學、工程詞，例如 pixel、vector、variance）、一般學術詞、人名。提示裡附上**讀者的領域與程度**（模型選單的「你的領域」，存在共用的 `private/shared/profile.toml` 的 `field`，其他 App 也看得到；不寫就用預設 "researcher in medical image analysis and deep learning"；舊的 `private/LoreReader/reading.toml` 會自動搬過去），以及讀者已經記得的術語（知識庫「記得」的卡片標題、「我的論文」裡的術語）當程度參考。結果存在 `papers/<sha256>/nouns.json`；分類或提示的版本、或領域改了，快取就作廢重來。**還沒分類的詞不標色**，清單上顯示「未分類」。
 7. 右鍵（或清單裡的眼睛按鈕）「**忽略**」寫進 `private/LoreReader/ignore-words.txt`，清單與內文立刻重畫。舊的 `known-words.txt` 第一次啟動時會自動搬進 `ignore-words.txt`（兩個都有時接在後面），之後只讀新檔名。懂的專有名詞不要放忽略清單：加入知識庫並選「記得」。
@@ -132,7 +134,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 點有顏色的詞：分類、次數、第一次出現的頁碼；可以看所有出現位置、翻譯、「忽略」、加入知識庫；有卡片的顯示卡片摘要，可在 KnowledgeBase 開啟。參考文獻不會自動加入知識庫；「遇到」也不會記錄（只讀卡片清單，不呼叫 `/api/scan`）。
 
-**已知限制**：人名、地名要靠模型分類才不會標紅；日常英文字表裡、又不在 `TERMLIKE` 的字（例如 network、image、model）不會列出，若某個領域需要，請告訴 Claude 加進 `TERMLIKE`；希臘字母與單一字母是變數，屬於「符號」，不在名詞清單；數字加單位不處理。
+**已知限制**：標題頁與作者行以外的人名、地名（內文、參考文獻前的致謝）要靠模型分類才不會標紅；日常英文字表裡、又不在 `TERMLIKE` 的字（例如 network、image、model）不會列出，若某個領域需要，請告訴 Claude 加進 `TERMLIKE`；希臘字母與單一字母是變數，屬於「符號」，不在名詞清單；數字加單位不處理。
 
 ## 符號與方程式（第一步：不靠模型）
 
@@ -184,6 +186,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 | | |
 |---|---|
+| `POST /api/kb/open` | KnowledgeBase 沒開時打開它（macOS `open -a KnowledgeBase`，只限本機的 KB；測試與 isolated 不會開）；頁面之後每幾秒檢查一次，連上就重畫名詞清單 |
 | `GET /api/info` | 書庫、匯出、工作區位置與錯誤、KnowledgeBase 位址、是否有本機模型、是否是 Mac App |
 | `GET /api/papers`、`POST /api/papers/import?name=` | 論文清單；匯入（內容是 PDF，或 JSON `{path}`） |
 | `GET/PUT /api/papers/{sha}`、`GET /api/papers/{sha}/pdf` | 論文資料／改標題；PDF 本身 |
@@ -192,7 +195,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `GET/POST/DELETE /api/papers/{sha}/chat` | 對話（送出 `{text, attachments, paragraph?, chip?: {kind, id}}` 會回覆並存檔；有 `paragraph` 時伺服器附上段落脈絡） |
 | `POST /api/compose` | `{pages: [{sha, page}], title?, op?}` → 新 PDF（書庫＋匯出） |
 | `POST /api/translate` | `{text, context?}` |
-| `POST /api/papers/{sha}/read` | 頁面送來的全文（每頁的文字與 pdf.js 項目：字型名稱、字級、位置）→ 名詞清單 |
+| `POST /api/papers/{sha}/read` | 頁面送來的全文（每頁的文字與 pdf.js 項目：字型名稱、字級、位置）→ 名詞清單、符號，以及找到的行號 `line_numbers: [[頁, 起, 迄]]`（頁面拿來排除在搜尋與選取之外） |
 | `GET /api/papers/{sha}/nouns`、`POST …/nouns/classify` | 名詞清單（每個詞的 key、寫法、來源、知識庫狀態、分類、次數、出現位置 `[頁, 起, 迄]`）；`{again?}` → 一次 `lr-classify-terms` |
 | `GET/POST /api/papers/{sha}/symbols`、`PUT …/symbols/{id}`、`POST …/symbols/rebuild` | 符號表；新增；修改 `{latex?, meaning?, meaning_en?, grade?, note?, by?, evidence?, page?}`（作者的修改優先）；重新偵測 |
 | `GET /api/papers/{sha}/paragraphs`、`POST …/paragraphs/run`、`POST …/paragraphs/{id}/understood` | 段落（標籤、分析、懂了）與背景分析的進度；重跑 `{again?}`；`{on}` |

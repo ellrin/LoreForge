@@ -32,6 +32,7 @@
 //! | GET/PUT | /api/reader | `{field}`: the reader's field and level for term classification (`reading.toml`) |
 //! | GET/PUT | /api/models | the model menu: `{task, model: auto\|local\|haiku\|sonnet\|opus}` |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
+//! | POST | /api/kb/open | start the KnowledgeBase app (macOS, local KB only; never when isolated) |
 //! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?}` → KB `POST /api/nodes` |
 //! | POST | /api/kb/draft | `{term, context, sha?, page?}` → KB `POST /api/draft` (with `page` and the paper's title as `source`) |
 //! | GET | /api/kb/nodes/{id} | a card (summary for the term popover) |
@@ -108,6 +109,8 @@ pub struct AppState {
     pub runs: Mutex<HashMap<String, reading::RunStatus>>,
     pub printer: Mutex<Option<Arc<dyn Printer>>>,
     pub saver: Mutex<Option<Arc<dyn Saver>>>,
+    /// Tests and the isolated example: never start other apps.
+    pub isolated: bool,
 }
 
 pub type Shared = Arc<AppState>;
@@ -198,6 +201,7 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
         runs: Mutex::new(HashMap::new()),
         printer: Mutex::new(None),
         saver: Mutex::new(None),
+        isolated,
     })
 }
 
@@ -237,6 +241,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/reader", get(reading::reader_get).put(reading::reader_put))
         .route("/api/papers/{sha}/mine", post(reading::mine).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
         .route("/api/kb/status", get(kb_status))
+        .route("/api/kb/open", post(kb_open))
         .route("/api/kb/cards", post(kb_card))
         .route("/api/kb/draft", post(kb_draft))
         .route("/api/kb/nodes/{id}", get(kb_node))
@@ -884,6 +889,20 @@ async fn kb_status(State(s): State<Shared>) -> Json<Value> {
         Ok(v) => Json(json!({ "ok": true, "url": s.kb.base, "member": v["member"], "spaces": v["spaces"] })),
         Err(e) => Json(json!({ "ok": false, "url": s.kb.base, "down": e.down, "error": e.message })),
     }
+}
+
+/// `POST /api/kb/open`: start the KnowledgeBase app (macOS `open -a KnowledgeBase`) when
+/// its server is this machine's and not up. The page then waits for `/api/kb/status`.
+async fn kb_open(State(s): State<Shared>) -> R {
+    let local = ["http://127.0.0.1", "http://localhost"].iter().any(|p| s.kb.base.starts_with(p));
+    if s.isolated || !local || !cfg!(target_os = "macos") {
+        return Ok(Json(json!({ "opened": false })));
+    }
+    let ok = std::process::Command::new("open").args(["-g", "-a", "KnowledgeBase"]).status().map(|st| st.success()).unwrap_or(false);
+    if !ok {
+        return Err(ApiError(StatusCode::NOT_FOUND, json!({ "error": "找不到 KnowledgeBase App" })));
+    }
+    Ok(Json(json!({ "opened": true })))
 }
 
 #[derive(Deserialize)]

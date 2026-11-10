@@ -29,9 +29,14 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   annotations: `/Highlight` + `/AP`, sticky `/Text` for notes, `/NM (lr:<id>)`, Info
   `/LoreReaderSource`; display fractions ⇄ user space via CropBox + `/Rotate`), `pdfops` (lopdf `compose(sources, picks)` = every page operation;
   title, DOI), `text` (the page's pdf.js text: items with font name, size, position; UTF-16
-  offsets shared with the page), `nouns` (track A noun list: inventory, KB n-grams 2–4 over
+  offsets shared with the page; `blank_line_numbers` = a manuscript's margin line numbers
+  as spaces before any analysis, ranges sent back to the page; `boilerplate_lines` =
+  submission-system lines and running heads, masked out of the noun list), `nouns` (track A noun list: inventory, KB n-grams 2–4 over
   titles + aliases, normalisation, `function_words.txt` / `academic_words.txt` /
-  `common_words.txt` minus `TERMLIKE`, ignore list, batched classification prompt + schema),
+  `common_words.txt` + SCOWL ≤20 `english_common.txt` minus `TERMLIKE`, ignore list; SCOWL 35
+  `english_familiar.txt` = listed only once classified (`Noun::familiar`, `Inventory::listed`);
+  names / affiliations / title-case front matter, identifiers, addresses dropped (`FrontMatter`);
+  batched classification prompt + schema),
   `symbols` (step 1 of variables/equations, no model: math runs from item fonts / sizes /
   baselines / accent positions, `glyphs.toml` + overrides + TeX font-encoding tables (OML /
   OMS / OT1 / CMEX), display equations, regex definition finder, `SymbolFile` with
@@ -48,7 +53,9 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   the author's action, `initial_state` learning|known; `lexicon()` = `GET /api/nodes` titles +
   aliases), `llm.rs` = lore-llm wired like PaperComposer (`tasks.toml`: `lr-translate`
   local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` and `lr-paragraph`
-  local:current → claude:haiku; `complete_on` = the model menu's choice, strict),
+  local:current → claude:haiku; `complete_on` = the model menu's choice, strict; the local
+  engine is config `[engine]`, else the shared `private/shared/engine.toml` via
+  `lore_home::engine`, re-read per call),
   `reading.rs` = the reading aids over the text the page posts once per open (memory only):
   nouns, symbols, paragraphs (background run per paper, newest run wins, cached per
   paragraph id), 懂了 (`reading.json`), and `chat_context` (title, section, paragraph, chip
