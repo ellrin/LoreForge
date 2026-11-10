@@ -194,6 +194,35 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+// ── theme: the one every LoreForge app shows (commons/ui, lore-home) ──────
+async fn theme_css() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], lore_home::theme::CSS)
+}
+
+/// theme.js with the shared choice in front, so the first paint has the theme.
+async fn theme_js() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], lore_home::theme::script(&loreforge_home()))
+}
+
+fn theme_value(home: &lore_home::Home) -> serde_json::Value {
+    serde_json::json!({ "theme": home.theme() })
+}
+
+fn theme_set(home: &lore_home::Home, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    home.set_theme(body["theme"].as_str().unwrap_or_default()).map(|t| serde_json::json!({ "theme": t })).map_err(|e| e.to_string())
+}
+
+async fn theme_get() -> Json<serde_json::Value> {
+    Json(theme_value(&loreforge_home()))
+}
+
+async fn theme_put(Json(b): Json<serde_json::Value>) -> axum::response::Response {
+    match theme_set(&loreforge_home(), &b) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
+    }
+}
+
 /// The demo workspace is copied into the app's data folder on first use, so
 /// trying the app never edits the bundled (or repository) copy.
 fn demo_workspace(paths: &Paths) -> PathBuf {
@@ -3201,6 +3230,9 @@ pub fn router(paths: Paths) -> Router {
     }
     Router::new()
         .route("/prefs.css", get(prefs_css))
+        .route("/theme.css", get(theme_css))
+        .route("/theme.js", get(theme_js))
+        .route("/api/theme", get(theme_get).put(theme_put))
         .route("/api/setup/status", get(setup_status))
         .route("/api/setup/workspace", post(setup_workspace))
         .route("/api/setup/clone", post(setup_clone))
@@ -3403,5 +3435,34 @@ mod tests {
         let cv = replace_check(&ws, &dir, &[], &[], "cross-validation");
         assert_eq!(cv["entries"], serde_json::json!(["CV — cross-validation"]));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The theme is the one all LoreForge apps share: read and set through
+    /// lore-home, and the page takes its palettes from commons/ui only.
+    #[test]
+    fn theme_is_the_shared_choice_and_the_page_has_no_palette_of_its_own() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("pc-theme-{}-{nanos}", std::process::id()));
+        let home = lore_home::Home::at(&root);
+        assert_eq!(theme_value(&home), serde_json::json!({ "theme": null }));
+        assert!(theme_set(&home, &serde_json::json!({ "theme": "night" })).is_err(), "old ids are not stored");
+        assert_eq!(theme_set(&home, &serde_json::json!({ "theme": "aurora" })).unwrap(), serde_json::json!({ "theme": "aurora" }));
+        assert_eq!(theme_value(&home), serde_json::json!({ "theme": "aurora" }));
+        assert!(lore_home::theme::script(&home).starts_with("window.LORE_THEME = \"aurora\";"));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let ui = Paths::from_repo().ui;
+        let index = std::fs::read_to_string(ui.join("index.html")).unwrap();
+        let (theme, styles) = (index.find("href=\"theme.css\"").unwrap(), index.find("href=\"styles.css\"").unwrap());
+        assert!(theme < styles, "theme.css loads before styles.css (the page's white sheet overrides --paper)");
+        assert!(index.contains("<script src=\"theme.js\"></script>"));
+        let css = std::fs::read_to_string(ui.join("styles.css")).unwrap();
+        assert!(!css.contains("[data-theme=\""), "palettes live in commons/ui/theme.css only");
+        // accent as text or a thin line is --accent-text; --accent is a fill
+        for bad in [" color: var(--accent)", "border-color: var(--accent)", "solid var(--accent);  ", "{ color: var(--accent)"] {
+            assert!(!css.contains(bad), "{bad}");
+        }
+        let app = std::fs::read_to_string(ui.join("app.js")).unwrap();
+        assert!(!app.contains("pc.theme") && !app.contains("pc.mode"));
     }
 }

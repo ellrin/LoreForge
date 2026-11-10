@@ -23,7 +23,7 @@ const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls)
 const pad = (n) => String(n).padStart(2, "0");
 // Choices worth keeping across devices also go to the workspace's
 // config.toml (through /api/settings), which syncs with the rest of it.
-const SYNCED = ["theme", "mode", "dim", "zoom", "engine", "claudeVia", "navOpen", "paper", "tableStyle", "tplKind", "template", "newTemplate"];
+const SYNCED = ["dim", "zoom", "engine", "claudeVia", "navOpen", "paper", "tableStyle", "tplKind", "template", "newTemplate"];
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set(k, v) {
@@ -43,6 +43,8 @@ const store = {
     let ui = {};
     try { ui = await api("/api/settings"); } catch { return; }
     Object.entries(ui).forEach(([k, v]) => { if (SYNCED.includes(k)) try { localStorage.setItem(`pc.${k}`, JSON.stringify(v)); } catch {} });
+    // the theme an earlier version kept in config.toml becomes the shared choice, once
+    if (!LoreTheme.chosen() && typeof ui.theme === "string") LoreTheme.choose(LoreTheme.nearest(ui.theme, ui.mode));
   },
 };
 
@@ -74,19 +76,13 @@ async function api(path, body, method) {
   return text ? JSON.parse(text) : null;
 }
 
-// ── Theme ──────────────────────────────────────────────
+// ── Look ───────────────────────────────────────────────
+// The colour theme is the one all LoreForge apps share (theme.js, LoreTheme);
+// only the dimmed page is this app's own choice.
 function applyTheme() {
-  const t = store.get("pc.theme", "orange");
-  const sys = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  const m = store.get("pc.mode", sys);
-  const root = document.documentElement;
-  root.dataset.theme = t;
-  root.dataset.mode = m;
-  root.classList.toggle("dim-paper", store.get("pc.dim", false));
-  document.querySelectorAll(".theme[data-theme]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.theme === t)));
-  document.querySelectorAll("#lookMode button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === m)));
-  const dim = store.get("pc.dim", false) ? "dim" : "white";
-  document.querySelectorAll("#lookPaper button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === dim)));
+  const dim = store.get("pc.dim", false);
+  document.documentElement.classList.toggle("dim-paper", dim);
+  document.querySelectorAll("#lookPaper button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === (dim ? "dim" : "white"))));
 }
 
 // ── Paper ──────────────────────────────────────────────
@@ -1713,14 +1709,13 @@ function wire() {
   $("#actSync").onclick = () => (state.git?.repo ? syncNow() : Setup.open("workspace"));
   $("#actSettings").onclick = () => Setup.open();
 
-  document.querySelectorAll(".theme[data-theme]").forEach((b) => { b.onclick = () => { store.set("pc.theme", b.dataset.theme); applyTheme(); }; });
+  LoreTheme.picker($("#themePick"));
 
   document.querySelectorAll(".seg").forEach((s) => {
     s.querySelectorAll("button").forEach((b) => {
       b.onclick = () => s.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     });
   });
-  document.querySelectorAll("#lookMode button").forEach((b) => b.addEventListener("click", () => { store.set("pc.mode", b.dataset.v); applyTheme(); }));
   document.querySelectorAll("#lookPaper button").forEach((b) => b.addEventListener("click", () => { store.set("pc.dim", b.dataset.v === "dim"); applyTheme(); }));
   $("#generate").onclick = compose;
   $("#points").onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) compose(); };

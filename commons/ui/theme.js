@@ -6,7 +6,8 @@
 //
 //   LoreTheme.picker(el)   fills el with the 外觀 picker (light first, then dark;
 //                          單色 / 搭配色; hover or focus previews, click applies)
-//   LoreTheme.current()    the chosen id
+//   LoreTheme.current()    the id in use (the default until one was chosen)
+//   LoreTheme.chosen()     the shared choice, null when none was made yet
 //   LoreTheme.choose(id)   apply + save (PUT /api/theme), other apps follow
 //   LoreTheme.refresh()    read the shared choice again (also done on focus)
 //   "lore-theme" event on document whenever the shown theme changes.
@@ -169,5 +170,5 @@
     mark();
   }
 
-  window.LoreTheme = { THEMES, DEFAULT, themeOf, nearest, current, show, choose, refresh, picker };
+  window.LoreTheme = { THEMES, DEFAULT, themeOf, nearest, current, chosen: () => chosen, show, choose, refresh, picker };
 })();

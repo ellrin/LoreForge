@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant" data-theme="orange" data-mode="dark">
+<html lang="zh-Hant" data-theme="giftbox" data-mode="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,8 +8,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
   <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="prefs.css">
+  <script src="theme.js"></script>
 </head>
 <body>
 <div class="app at-home">
@@ -288,16 +290,7 @@
 
         <!-- appearance -->
         <section class="step" data-step="3" hidden>
-          <div class="look-row"><span class="lbl">主題</span>
-            <div class="themes">
-              <button class="theme" data-theme="orange" aria-label="深灰橘"><span class="swatch"><i style="background:#27272a"></i><i style="background:#ff6b35"></i><i style="background:#f0f0f1"></i></span></button>
-              <button class="theme" data-theme="night" aria-label="藍紫黃"><span class="swatch"><i style="background:#0c0b24"></i><i style="background:#5b3df5"></i><i style="background:#f3e600"></i></span></button>
-              <button class="theme" data-theme="terminal" aria-label="綠黑"><span class="swatch"><i style="background:#080d0a"></i><i style="background:#11965a"></i><i style="background:#2ef08a"></i></span></button>
-            </div>
-          </div>
-          <div class="look-row"><span class="lbl">模式</span>
-            <div class="seg" id="lookMode"><button data-v="light">淺色</button><button data-v="dark">深色</button></div>
-          </div>
+          <div id="themePick"></div>
           <div class="look-row"><span class="lbl">紙張</span>
             <div class="seg" id="lookPaper"><button data-v="white">白</button><button data-v="dim">調暗</button></div>
           </div>
