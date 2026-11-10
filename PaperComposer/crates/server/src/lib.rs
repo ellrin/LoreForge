@@ -16,6 +16,7 @@ pub mod convert;
 mod draft;
 mod home;
 mod notation;
+mod sections;
 pub mod export;
 pub mod import;
 pub mod opened;
@@ -3349,6 +3350,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/compose", post(compose_paragraph))
         .merge(draft::routes())
         .merge(home::routes())
+        .merge(sections::routes())
         .merge(opened::routes())
         .merge(notation::routes())
         // the UI is read fresh each time: a new server must not meet an old script
