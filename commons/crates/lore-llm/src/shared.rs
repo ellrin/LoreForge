@@ -216,6 +216,10 @@ pub fn installed() -> Option<EngineSettings> {
     s.map(|f| f())
 }
 
+/// Tests that install settings, or route classed tasks without fixed settings, take this.
+#[cfg(test)]
+pub(crate) static TEST_GLOBAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 static LAST: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 
 /// `llama-server:qwen…` → `local:qwen…`, `claude-subscription:claude-…` → `claude:claude-…`.
@@ -352,6 +356,7 @@ class = "create"
 
     #[tokio::test]
     async fn without_settings_the_task_order_is_kept() {
+        let _g = TEST_GLOBAL.lock().await;
         let r = Router::new(TaskTable::parse(TASKS).unwrap(), factory(true, true));
         assert_eq!(r.candidates("c"), vec!["local:qwen", "claude:sonnet"], "class ignored, nothing filled");
         assert_eq!(r.candidates("a"), vec!["claude:sonnet"]);
@@ -427,6 +432,7 @@ class = "create"
 
     #[tokio::test]
     async fn installed_settings_reach_routers_and_tables() {
+        let _g = TEST_GLOBAL.lock().await;
         let t = TaskTable::parse("[task.only-in-this-test]\ndefault = \"claude:sonnet\"\nfallback = \"local:qwen\"\nclass = \"create\"\n").unwrap();
         install(Arc::new(|| EngineSettings { overrides: [("only-in-this-test".to_string(), RouteMode::Local)].into(), ..Default::default() }));
         assert_eq!(t.candidates_for("only-in-this-test", &RouteOptions::default()), vec!["local:qwen"]);

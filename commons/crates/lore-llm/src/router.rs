@@ -1138,6 +1138,7 @@ max_tokens = 9000
 
     #[tokio::test]
     async fn bundled_tasks_route_with_a_standard_factory() {
+        let _g = crate::shared::TEST_GLOBAL.lock().await;
         let mut f = StandardFactory::new(Catalog::bundled());
         f.prefer_subscription = false;
         f.api = Some(ApiAccess { base_url: "http://127.0.0.1:9".into(), api_key: "k".into(), fallbacks: true });
