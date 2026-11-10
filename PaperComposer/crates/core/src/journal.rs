@@ -26,6 +26,27 @@ pub struct Meta {
     /// Submission rules worth remembering (word limits, figure formats, ...).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub notes: String,
+    /// Word limits the journal sets, for the word count in the status bar.
+    #[serde(default, skip_serializing_if = "WordLimits::is_empty")]
+    pub word_limits: WordLimits,
+}
+
+/// `[word_limits]` in template.toml: `abstract`, `total` (the body), and
+/// `[word_limits.sections]` by section title. All optional.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
+pub struct WordLimits {
+    #[serde(default, rename = "abstract", skip_serializing_if = "Option::is_none")]
+    pub abstract_: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sections: std::collections::BTreeMap<String, usize>,
+}
+
+impl WordLimits {
+    pub fn is_empty(&self) -> bool {
+        self.abstract_.is_none() && self.total.is_none() && self.sections.is_empty()
+    }
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -241,6 +262,10 @@ pub fn update(publishers: &Path, id: &str, u: Update) -> Result<Journal, String>
     let cur = load(publishers, id).ok_or("找不到模板")?;
     let mut meta = u.meta;
     meta.based_on = cur.meta.based_on.clone();
+    if meta.word_limits.is_empty() {
+        // the template editor does not send them: keep what template.toml has
+        meta.word_limits = cur.meta.word_limits.clone();
+    }
     if meta.name.trim().is_empty() {
         return Err("請輸入期刊名稱".into());
     }
@@ -383,6 +408,27 @@ mod tests {
         std::fs::write(ieee.join("sample.tex"), "\\documentclass{IEEEtran}\n\\begin{document}\n\\bibliographystyle{IEEEtran}\n\\end{document}\n").unwrap();
         std::fs::write(ieee.join("IEEEtran.bst"), "").unwrap();
         root
+    }
+
+    #[test]
+    fn word_limits_are_optional_and_kept() {
+        let root = setup("limits");
+        let sn = root.join("springer-nature");
+        std::fs::write(sn.join("template.toml"), "name = \"Example Journal\"\n\n[word_limits]\nabstract = 250\ntotal = 6000\n\n[word_limits.sections]\nIntroduction = 1000\n").unwrap();
+        let j = load(&root, "springer-nature").unwrap();
+        assert_eq!(j.meta.word_limits.abstract_, Some(250));
+        assert_eq!(j.meta.word_limits.total, Some(6000));
+        assert_eq!(j.meta.word_limits.sections.get("Introduction"), Some(&1000));
+        let json = serde_json::to_value(&j).unwrap();
+        assert_eq!(json["word_limits"]["abstract"], 250);
+        // the template editor sends no limits: they stay
+        update(&root, "springer-nature", Update { meta: Meta { name: "Example Journal".into(), ..Default::default() }, ..Default::default() }).unwrap();
+        assert_eq!(load(&root, "springer-nature").unwrap().meta.word_limits.total, Some(6000));
+        // a template without limits writes none
+        let ieee = load(&root, "ieee-journal").unwrap();
+        assert!(ieee.meta.word_limits.is_empty());
+        assert!(!toml::to_string(&ieee.meta).unwrap().contains("word_limits"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -97,7 +97,7 @@ async function openPaper(name, { keepHome = false } = {}) {
   if (!keepHome) PCHome.close();
   try {
     const res = await api(`/api/papers/${encodeURIComponent(name)}`);
-    state.paper = { name, sections: res.sections, front: res.front ?? "", back: res.back ?? "", fields: res.fields ?? [], bibliography: res.bibliography ?? [], meta: res.meta ?? { key_value: "", authors: [] } };
+    state.paper = { name, sections: res.sections, front: res.front ?? "", back: res.back ?? "", fields: res.fields ?? [], bibliography: res.bibliography ?? [], meta: res.meta ?? { key_value: "", authors: [] }, word_limits: res.word_limits ?? {} };
     PCTex.setMacros(res.macros ?? {});
     PCTex.setNumbers(res.numbers);
     PCTex.setFigureBase(`/api/papers/${encodeURIComponent(name)}/figure`);
@@ -990,12 +990,12 @@ async function placeDraft(text, how) {
 }
 
 function renderStatus() {
-  const words = state.reports.flat().reduce((n, r) => n + (r?.words ?? 0), 0);
   const paras = sections().reduce((n, s) => n + s.paragraphs.length, 0);
   const sec = curSection();
   const bar = $("#statusbar");
   bar.innerHTML = "";
-  bar.append(el("span", "accent", sec ? `${pad(state.cur.s + 1)} / ${sec.title}` : "—"), el("span", "", `${paras} 段 · ${words} 字`));
+  bar.append(el("span", "accent", sec ? `${pad(state.cur.s + 1)} / ${sec.title}` : "—"), el("span", "", `${paras} 段`));
+  if (state.paper) bar.lastChild.append(" · ", PCWords.button()); else PCWords.close();
   const e = state.engines, pick = chosenEngine();
   const eng = el("button", "sync"); const dot = el("span", "dot");
   const [ok, name] = pick === "local" ? [e.local.status.connected, e.local.status.name]

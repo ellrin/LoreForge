@@ -2002,6 +2002,10 @@ async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> imp
         Ok(dir) => {
             let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
             let (front, back) = preview::front_back(&main);
+            let m = meta::read_meta(&dir);
+            // the journal's word limits, for the word count
+            let ws = s.loaded.read().await.workspace.clone();
+            let word_limits = m.journal.as_deref().zip(ws).and_then(|(j, ws)| pc_core::journal::load(&ws.join("publishers"), j)).map(|j| j.meta.word_limits).unwrap_or_default();
             Json(serde_json::json!({
             "sections": paper::load_paper(&dir),
             "macros": paper::paper_macros(&dir),
@@ -2010,7 +2014,8 @@ async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> imp
             "back": back,
             "fields": pc_core::front::fields(&main),
             "bibliography": preview::bibliography(&dir, &export::cache_dir(&name)),
-            "meta": meta::read_meta(&dir),
+            "meta": m,
+            "word_limits": word_limits,
         }))
         .into_response()
         }

@@ -20,3 +20,15 @@ In the app, Templates lists every journal (searchable). "New journal" copies
 an existing template under a new name; then tune its class options,
 bibliography style, notes and sample.tex there. `template.toml` is written
 by the app; a folder without one shows its README heading or folder name.
+
+Word limits, if the journal sets them, go in `template.toml` by hand; the
+status bar's word count shows them beside the numbers:
+
+```toml
+[word_limits]
+abstract = 250
+total = 6000          # the parts ticked in the word count
+
+[word_limits.sections]
+Introduction = 1000   # by section title
+```
