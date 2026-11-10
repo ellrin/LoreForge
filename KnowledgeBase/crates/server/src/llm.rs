@@ -9,7 +9,7 @@ use lore_llm::catalog::Catalog;
 use lore_llm::claude_code::{Cache, Cli};
 use lore_llm::local::LocalRuntime;
 use lore_llm::router::{ApiAccess, ExternalServer, LocalAccess, ProviderFactory, RouteError, RouteOptions, StandardFactory, SubscriptionAccess};
-use lore_llm::secrets::{Account, KeyStore};
+use lore_llm::secrets::{Account, SharedKeys};
 use lore_llm::{LlmRequest, Router, TaskTable};
 use serde::Deserialize;
 
@@ -42,7 +42,7 @@ pub struct Answer {
 pub struct Llm {
     catalog: Catalog,
     tasks: TaskTable,
-    keys: KeyStore,
+    keys: SharedKeys,
     cli: Cli,
     cc: Arc<Cache>,
     runtime: Arc<LocalRuntime>,
@@ -75,7 +75,7 @@ impl Llm {
         Llm {
             catalog,
             tasks,
-            keys: KeyStore::anthropic(SERVICE, None),
+            keys: SharedKeys::for_app(SERVICE, None),
             cli: Cli::default(),
             cc: Arc::new(Cache::default()),
             runtime: Arc::new(LocalRuntime::new()),
@@ -89,8 +89,7 @@ impl Llm {
     pub fn none() -> Llm {
         let mut l = Llm::new(None);
         l.external = None;
-        l.keys.use_keychain = false;
-        l.keys.env_var = None;
+        l.keys.isolate();
         l.cli = Cli { bin: Some(std::env::temp_dir().join("kb-no-such-claude")), config_dir: None };
         l
     }
@@ -119,8 +118,9 @@ impl Llm {
     }
 
     /// Run a JSON request as `task`. `engine`: `"local"` / `"claude"` pins that engine
-    /// (no fallback); anything else = the task's order. Errors are one line for the UI.
-    pub async fn complete_json(&self, task: &str, req: LlmRequest, engine: Option<&str>) -> Result<Answer, String> {
+    /// (no fallback); anything else = the task's order. Errors are one line for the UI;
+    /// the second part is the JSON body (with the one-click `alternative` when there is one).
+    pub async fn complete_json(&self, task: &str, req: LlmRequest, engine: Option<&str>) -> Result<Answer, (String, serde_json::Value)> {
         let opts = match engine {
             Some("local") => RouteOptions::only("local:current"),
             Some("claude") => RouteOptions::only("claude:selected"),
@@ -130,9 +130,12 @@ impl Llm {
             Some(f) => Router::new(self.tasks.clone(), f.clone()).provider_for_with(task, &opts).await,
             None => Router::new(self.tasks.clone(), self.factory()).provider_for_with(task, &opts).await,
         }
-        .map_err(unavailable)?;
+        .map_err(|e| (unavailable(&e), alt_payload(&e)))?;
         let req = route.apply(req.temperature(LOCAL_TEMPERATURE));
-        let value = lore_llm::complete_json(route.provider.as_ref(), &req).await.map_err(|e| first_line(&format!("模型沒有回答：{e}")))?;
+        let value = lore_llm::complete_json(route.provider.as_ref(), &req).await.map_err(|e| {
+            let m = first_line(&format!("模型沒有回答：{e}"));
+            (m.clone(), serde_json::json!({ "error": m }))
+        })?;
         Ok(Answer { value, engine: route.provider.id().to_string() })
     }
 }
@@ -141,8 +144,15 @@ fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or("").trim().to_string()
 }
 
+/// The body for the page: `{ error, alternative? }` (the kit toast shows 「改用本機／改用 Claude」).
+fn alt_payload(e: &RouteError) -> serde_json::Value {
+    let mut v = e.payload(true);
+    v["error"] = unavailable(e).into();
+    v
+}
+
 /// "沒有可用的模型，無法起草：local:current（沒有連接本機模型）；…" as one line.
-fn unavailable(e: RouteError) -> String {
+fn unavailable(e: &RouteError) -> String {
     match e {
         RouteError::Unavailable { skipped, .. } if !skipped.is_empty() => {
             let why: Vec<String> = skipped.iter().map(|k| format!("{}（{}）", k.model, k.reason)).collect();
@@ -176,7 +186,7 @@ mod tests {
 
     #[tokio::test]
     async fn nothing_configured_is_one_line() {
-        let e = Llm::none().complete_json(TASK_DRAFT, LlmRequest::prompt("s", "u"), None).await.err().unwrap();
+        let e = Llm::none().complete_json(TASK_DRAFT, LlmRequest::prompt("s", "u"), None).await.err().unwrap().0;
         assert!(!e.is_empty() && !e.contains('\n'), "{e}");
     }
 

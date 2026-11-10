@@ -57,7 +57,7 @@ fn open(root: &Path, clock: Arc<FixedClock>, runner: Arc<FakeRunner>) -> (Shared
     let kb = kb_server::open(&config, KbOptions { clock, ..Default::default() }).unwrap();
     let rem = Reminders::isolated(&root.join("app"), runner, "http://127.0.0.1:7700");
     let shared = AppState::new(kb, config.web.clone(), rem);
-    (shared.clone(), kb_server::router(shared))
+    (shared.clone(), kb_server::router_isolated(shared))
 }
 
 fn setup(at: &str) -> Env {

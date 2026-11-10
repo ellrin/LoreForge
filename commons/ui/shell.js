@@ -9,7 +9,7 @@
 //     picker: { icon: "cards", name: "", recent: async () => [{ label, current, run }],
 //               actions: [{ icon: "folder", label: "開啟…", run }, …] },
 //     status: { onClick: (state) => … },          // the chip's action (LR: 另存新檔)
-//     primary: [{ id, icon, label: "放映", run | menu: [items] | () => items }],   // 2–4
+//     primary: [{ id, icon, label: "放映", run | menu: [items] | () => items }],   // 1–4
 //     ai: { icon: "spark", label: "AI", run | menu },          // last of the primary group
 //     notation: () => openNotation(),             // 對照表
 //     export: [{ icon: "download", label: "PPTX", run }, …, { icon: "printer", label: "列印", run }],
@@ -237,10 +237,11 @@
       add(g, p.label, p.keys);
     }
     for (const k of S.opts?.keys ?? []) add(k.group ?? "其他", k.label, k.keys);
-    if (S.opts?.save) add("其他", "儲存", "⌘S");
-    if (S.opts?.search) add("其他", "搜尋", "⌘F");
-    add("其他", "設定", "⌘,");
-    const order = ["上方列", "工具", "左側", "右側", "狀態列", "其他"];
+    if (S.opts?.save) add("一般", "儲存", "⌘S");
+    if (S.opts?.search) add("一般", "搜尋", "⌘F");
+    add("一般", "設定", "⌘,");
+    add("一般", "關閉", "Esc");
+    const order = ["一般", "上方列", "工具", "左側", "右側", "狀態列", "其他"];
     return out.sort((a, b) => (order.indexOf(a.group) + 99) % 99 - (order.indexOf(b.group) + 99) % 99);
   }
 
@@ -372,6 +373,29 @@
     return dlg;
   }
 
+  // ── form: a small dialog the app fills (title, fields, actions) ─────
+  // build(body, dlg) puts the fields in; actions: [{ label, icon, primary, danger, run(dlg, body) }]
+  // (run returns false to keep the dialog open); resolves with the clicked action's id/label, null on close.
+  function form({ title, build, actions }) {
+    return new Promise((resolve) => {
+      const dlg = h("dialog", { class: "dialog small lore-form", "aria-label": title });
+      const body = h("div", { class: "dlg-body" });
+      const foot = h("div", { class: "dlg-foot" }, h("span", { class: "grow" }));
+      let result = null;
+      const finish = (v) => { result = v; dlg.close(); };
+      for (const a of actions ?? [{ label: "確定", primary: true }]) {
+        const b = h("button", { type: "button", class: "btn" + (a.primary ? " primary" : "") + (a.danger ? " danger" : "") }, a.icon ? icon(a.icon) : null, a.label);
+        b.onclick = async () => { if ((await a.run?.(dlg, body)) !== false) finish(a.id ?? a.label); };
+        foot.append(b);
+      }
+      dlg.append(h("div", { class: "dlg" }, h("div", { class: "dlg-head" }, h("h2", {}, title), ico("x", "關閉 Esc", () => dlg.close(), { class: "ico close" })), body, foot));
+      dlg.addEventListener("close", () => { dlg.remove(); resolve(result); });
+      document.body.append(dlg);
+      Promise.resolve(build?.(body, dlg)).then(() => { paintIcons(dlg); body.querySelector("input, textarea, select")?.focus(); });
+      dlg.showModal();
+    });
+  }
+
   // ── the top bar ────────────────────────────────────────────────────
   const S = { opts: null };
   const STATUS = { saved: "已儲存", saving: "儲存中", dirty: "未儲存", syncing: "同步中", unsynced: "未同步", error: "未能儲存" };
@@ -439,7 +463,7 @@
     chip.onclick = () => { if (chipAction) chipAction(chip.dataset.state); };
     top.append(chip, lead);
 
-    // primary 2–4, AI last
+    // primary 1–4, AI last
     for (const p of opts.primary ?? []) primary.append(ico(p.icon, p.label, runOrMenu(p), { id: p.id, "aria-haspopup": p.menu ? "menu" : null, "aria-pressed": p.pressed == null ? null : String(p.pressed) }));
     if (opts.ai) primary.append(ico(opts.ai.icon ?? "spark", opts.ai.label ?? "AI", runOrMenu(opts.ai), { id: opts.ai.id ?? "actAI", "aria-haspopup": opts.ai.menu ? "menu" : null }));
     if (toggles.right) primary.append(toggles.right);
@@ -504,7 +528,7 @@
     return shell;
   }
 
-  window.LoreShell = { mount, toast, ask, menu, closeMenu, settings, engineChip, engines, block, shortcuts, parseKeys };
+  window.LoreShell = { mount, toast, ask, form, menu, closeMenu, settings, engineChip, engines, block, shortcuts, parseKeys };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wireTips); else wireTips();
 })();
 

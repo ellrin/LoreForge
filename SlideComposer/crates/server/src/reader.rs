@@ -667,7 +667,7 @@ mod tests {
             std::fs::copy(f.path(), ws_dir.join("styles/blank").join(f.file_name())).unwrap();
         }
         let ws = sc_core::Workspace::new(&ws_dir, None);
-        let app = crate::router(crate::state_at(ws, crate::repo_dir().join("web"), lore_home::Home::at(&root)));
+        let app = crate::router_isolated(crate::state_at(ws, crate::repo_dir().join("web"), lore_home::Home::at(&root)));
 
         let (st, v, _) = call(&app, "GET", "/api/reader/papers", None).await;
         assert_eq!(st, StatusCode::OK, "{v}");

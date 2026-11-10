@@ -40,7 +40,7 @@ fn setup() -> (tempfile::TempDir, axum::Router) {
     std::fs::write(dir.path().join("styles/test/style.toml"), STYLE).unwrap();
     let ws = sc_core::Workspace::new(dir.path(), None);
     let web = sc_server::repo_dir().join("web");
-    let app = sc_server::router(sc_server::state(ws, web));
+    let app = sc_server::router_isolated(sc_server::state(ws, web));
     (dir, app)
 }
 
@@ -322,7 +322,7 @@ async fn theme_is_the_shared_choice() {
     let dir = tempfile::tempdir().unwrap();
     let ws = sc_core::Workspace::new(dir.path().join("ws"), None);
     let home = lore_home::Home::at(dir.path().join("lore"));
-    let app = sc_server::router(sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone()));
+    let app = sc_server::router_isolated(sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone()));
 
     let (st, v, _) = call(&app, "GET", "/api/theme", None, None).await;
     assert_eq!((st, &v["theme"]), (StatusCode::OK, &Value::Null));

@@ -344,14 +344,17 @@ async fn get_asset(State(s): State<Shared>, Path((space, file)): Path<(String, S
 /// A card draft from a quoted source through the `kb-summarize-card` task. Nothing is saved.
 /// Body: `{term, context, kind?, lang?, page?, source?, engine?: "local"|"claude"}`.
 /// Engine trouble is a 503 with a one-line `error`; the caller keeps the source text.
-async fn draft(State(s): State<Shared>, Json(body): Json<serde_json::Map<String, Value>>) -> R {
+async fn draft(State(s): State<Shared>, Json(body): Json<serde_json::Map<String, Value>>) -> Result<Json<Value>, Response> {
     let engine = body.get("engine").and_then(Value::as_str).map(str::to_string);
-    let req: DraftRequest = serde_json::from_value(Value::Object(body)).map_err(|e| bad(e.to_string()))?;
-    let p = kb_core::draft_prompt(&req)?;
+    let req: DraftRequest = serde_json::from_value(Value::Object(body)).map_err(|e| bad(e.to_string()).into_response())?;
+    let p = kb_core::draft_prompt(&req).map_err(|e| ApiError::from(e).into_response())?;
     let llm_req = lore_llm::LlmRequest::prompt(p.system.clone(), p.user.clone()).max_tokens(1024).json(p.schema.clone());
-    let a = s.llm.complete_json(crate::llm::TASK_DRAFT, llm_req, engine.as_deref()).await.map_err(|e| ApiError(StatusCode::SERVICE_UNAVAILABLE, e, "assistant"))?;
-    let draft = kb_core::parse_draft(&req, &p.quote, &a.value).map_err(|e| ApiError(StatusCode::UNPROCESSABLE_ENTITY, e.to_string(), "assistant"))?;
-    ok(json!({ "draft": draft, "assistant": crate::llm::engine_label(&a.engine), "engine": a.engine }))
+    let a = s.llm.complete_json(crate::llm::TASK_DRAFT, llm_req, engine.as_deref()).await.map_err(|(_, mut body)| {
+        body["category"] = "assistant".into();
+        (StatusCode::SERVICE_UNAVAILABLE, Json(body)).into_response()
+    })?;
+    let draft = kb_core::parse_draft(&req, &p.quote, &a.value).map_err(|e| ApiError(StatusCode::UNPROCESSABLE_ENTITY, e.to_string(), "assistant").into_response())?;
+    Ok(Json(json!({ "draft": draft, "assistant": crate::llm::engine_label(&a.engine), "engine": a.engine })))
 }
 
 async fn reindex(State(s): State<Shared>) -> R {

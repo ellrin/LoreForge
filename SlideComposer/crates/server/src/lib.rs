@@ -335,7 +335,24 @@ async fn prefs_js(State(s): State<Shared>) -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], body)
 }
 
+/// The settings behind the 模型 tab: the shared engine file, with this app's tasks (lore-flow's).
+fn engines(shared: &Shared) -> lore_engines::Engines {
+    lore_engines::Engines::new(shared.home.clone(), "SlideComposer", include_str!("../../../../commons/crates/lore-flow/tasks.toml"))
+}
+
 pub fn router(shared: Shared) -> Router {
+    let e = engines(&shared);
+    router_with(shared, e)
+}
+
+/// Tests: never the keychain, the `claude` CLI, the network, the OS opener or the process routing.
+pub fn router_isolated(shared: Shared) -> Router {
+    let mut e = engines(&shared).isolated();
+    e.install_routing = false;
+    router_with(shared, e)
+}
+
+fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
     // static files: always revalidate (no build step, edits show up on reload)
     let web = tower::ServiceBuilder::new()
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
@@ -343,7 +360,7 @@ pub fn router(shared: Shared) -> Router {
             axum::http::HeaderValue::from_static("no-cache"),
         ))
         .service(ServeDir::new(&shared.web).append_index_html_on_directories(true));
-    routes().with_state(shared).fallback_service(web)
+    routes().with_state(shared).merge(lore_engines::router(engines)).fallback_service(web)
 }
 
 pub fn state(ws: Workspace, web: PathBuf) -> Shared {

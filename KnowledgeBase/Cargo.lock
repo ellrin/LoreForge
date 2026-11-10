@@ -1971,6 +1971,7 @@ dependencies = [
  "http-body-util",
  "kb-core",
  "lettre",
+ "lore-engines",
  "lore-home",
  "lore-llm",
  "lore-notation",
@@ -2156,6 +2157,18 @@ name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+
+[[package]]
+name = "lore-engines"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "lore-home",
+ "lore-llm",
+ "serde",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "lore-home"

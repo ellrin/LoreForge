@@ -49,7 +49,7 @@ cd ../commons && cargo test -p kb-core -p lore-store
   (numbers, 重建索引), 外觀, 模型, 快捷鍵, 提醒 (到期通知), 郵件 (digest; forms are `<template>`s in index.html).
   Status chip only while a card is open. `confirm()` → `LoreShell.ask`, toasts → `LoreShell.toast`.
   對照表 = `<notation-panel>` (`/notation-panel.js`, `notation.rs`) over the global registry
-  `private/shared/notation.json` (`GET/PUT /api/notation`). `/api/engines` is not mounted yet (模型 tab shows 「—」).
+  `private/shared/notation.json` (`GET/PUT /api/notation`). `/api/engines` is `lore-engines` (mounted in `router`; `router_isolated` + `examples/isolated_server` for tests and screenshots).
 - `../private-example/KnowledgeBase/`: starting layout of a personal space (copied to `../private/KnowledgeBase` on first run).
 - NeonDeck widget: `../NeonDeck/desktop/widgets/knowledge.js`.
 - `apps/desktop` (`knowledgebase`): Tauri shell on the configured port (7700, what the NeonDeck

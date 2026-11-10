@@ -32,6 +32,7 @@ async function api(method, path, body, raw) {
     // axum answers a body it cannot read (wrong type, number out of range) with 400/422 plain text.
     const e = new Error(data?.error ?? (text || res.statusText));
     e.status = res.status;
+    e.alternative = data?.alternative ?? null;
     e.category = data?.category ?? (res.status === 422 || (res.status === 400 && !data) ? "format" : res.status === 404 ? "not_found" : res.status >= 500 ? "internal" : "invalid");
     throw e;
   }
@@ -442,19 +443,25 @@ function wireEditor() {
   $("edAddLink").onclick = () => pick("link");
   $("draftGo").onclick = async (e) => {
     e.preventDefault();
+    runDraft();
+  };
+  async function runDraft(engine) {
     const go = $("draftGo"), err = $("draftErr");
     err.hidden = true; go.disabled = true; go.textContent = "起草中…";
     try {
-      const { draft, assistant } = await api("POST", "/api/draft", { term: $("draftTerm").value, context: $("draftCtx").value, kind: $("edKind").value });
+      const { draft, assistant } = await api("POST", "/api/draft", { term: $("draftTerm").value, context: $("draftCtx").value, kind: $("edKind").value, engine });
       if (!$("edTitle").value.trim()) $("edTitle").value = draft.title ?? "";
       if (!$("edSummary").value.trim()) $("edSummary").value = draft.summary ?? "";
       if (!$("edBody").value.trim()) $("edBody").value = draft.body ?? "";
       $("draftDlg").close();
       renderPreview(); updateDirty();
       toast(`草稿已填入（${assistant}）`);
-    } catch (er) { err.textContent = errorText(er); err.hidden = false; } // the dialog stays open with the source text
+    } catch (er) { // the dialog stays open with the source text
+      err.textContent = errorText(er); err.hidden = false;
+      if (er.alternative) toast(errorText(er), true, { label: er.alternative.label, run: () => runDraft(er.alternative.engine) });
+    }
     go.disabled = false; go.replaceChildren(icon("spark"), "起草");
-  };
+  }
   let pq;
   $("pickerQ").addEventListener("input", () => { clearTimeout(pq); pq = setTimeout(searchPicker, 150); });
 }

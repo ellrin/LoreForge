@@ -95,7 +95,7 @@ const shell = LoreShell.mount({
   app, brand: "SLIDE/COMPOSER", home,                       // 品牌（按了回首頁）
   picker: { icon, name, recent: async () => [...], actions: [...] },   // 文件選單；最後自動加「首頁」
   status: { onClick(state) },                               // 狀態標籤可點時做什麼（LR：另存新檔）
-  primary: [{ id, icon, label, run | menu }],               // 2–4 個；ai 固定在最後一格
+  primary: [{ id, icon, label, run | menu }],               // 1–4 個；ai 固定在最後一格
   ai: { icon: "spark", label, run | menu },
   notation, export: [...含列印],                            // 右側：對照表 · 匯出▾ · 齒輪（固定，不收別的）
   undo: { undo, redo },                                     // 只在 shell.editing(true) 時出現
@@ -110,6 +110,7 @@ shell.slots.lead / primary / right   // 給本工具的小東西（SC 字型標�
 shell.setName(n) · shell.setStatus(state, { label, title, action }) · shell.editing(on) · shell.setUndo({ undo, redo }) · shell.drawer(w, on) · shell.home(on)（首頁：只留品牌、抽屜鈕、齒輪）
 LoreShell.toast(msg, { err, action: { label, run }, ms })
 LoreShell.ask(anchor, lines, buttons) → Promise（值或 null；Esc、點外面＝null）
+LoreShell.form({ title, build(body, dlg), actions: [{ label, primary, run }] }) → Promise（小表單對話框）
 LoreShell.menu(anchor, items) · LoreShell.settings(tab) · LoreShell.block({ n, title, count, help, open, key })
 LoreShell.engineChip({ task, value, used, onChange }) · LoreShell.shortcuts()
 LoreLinks.open(app, params) · LoreLinks.url(app, params) · LoreLinks.ports

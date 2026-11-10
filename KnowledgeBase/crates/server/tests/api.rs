@@ -31,7 +31,7 @@ fn setup_with(llm: kb_server::llm::Llm) -> (tempfile::TempDir, axum::Router, Arc
     let clock = Arc::new(FixedClock::at("2026-11-08T21:10:00+08:00"));
     let kb = kb_server::open(&config, KbOptions { clock: clock.clone(), ..Default::default() }).unwrap();
     let rem = Reminders::isolated(&dir.path().join("app"), Arc::new(lore_store::SystemRunner), "http://127.0.0.1:7700");
-    let app = kb_server::router(AppState::with_llm(kb, config.web.clone(), rem, llm));
+    let app = kb_server::router_isolated(AppState::with_llm(kb, config.web.clone(), rem, llm));
     (dir, app, clock)
 }
 
@@ -213,7 +213,7 @@ async fn theme_is_the_shared_choice() {
     let kb = kb_server::open(&config, KbOptions::default()).unwrap();
     let rem = Reminders::isolated(&dir.path().join("app"), Arc::new(lore_store::SystemRunner), "http://127.0.0.1:7700");
     let home = lore_home::Home::at(dir.path().join("lore"));
-    let app = kb_server::router(AppState::with_home(kb, config.web.clone(), rem, home.clone()));
+    let app = kb_server::router_isolated(AppState::with_home(kb, config.web.clone(), rem, home.clone()));
 
     let get = |uri: &'static str| {
         let app = app.clone();
@@ -305,7 +305,7 @@ async fn notation_is_the_global_registry() {
     let kb = kb_server::open(&config, KbOptions::default()).unwrap();
     let rem = Reminders::isolated(&dir.path().join("app"), Arc::new(lore_store::SystemRunner), "http://127.0.0.1:7700");
     let home = lore_home::Home::at(dir.path().join("lore"));
-    let app = kb_server::router(AppState::with_home(kb, config.web.clone(), rem, home.clone()));
+    let app = kb_server::router_isolated(AppState::with_home(kb, config.web.clone(), rem, home.clone()));
 
     let (s, v) = call(&app, "GET", "/api/notation", None).await;
     assert_eq!(s, StatusCode::OK);

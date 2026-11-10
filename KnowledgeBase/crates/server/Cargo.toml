@@ -13,6 +13,7 @@ lore-store.workspace = true
 lore-secrets.workspace = true
 lore-home.workspace = true
 lore-llm.workspace = true
+lore-engines.workspace = true
 lore-shell.workspace = true
 lore-notation.workspace = true
 lettre.workspace = true

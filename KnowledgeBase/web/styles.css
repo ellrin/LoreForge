@@ -37,9 +37,6 @@ code { font: 13px var(--mono); }
 .ico.busy svg, .btn.busy svg { animation: spin 1s linear infinite; }
 .btn:disabled.busy { cursor: progress; }
 @keyframes spin { to { transform: rotate(360deg); } }
-/* base.css's bare .primary is full width (PC 生成); in KB it is the 儲存 / 起草 button */
-.btn [data-icon], .ghost [data-icon] { display: inline-flex; }
-.btn.primary { width: auto; display: inline-flex; padding: 0 12px; }
 
 /* ── Left panel ──────────────────────── */
 .left { grid-area: left; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }

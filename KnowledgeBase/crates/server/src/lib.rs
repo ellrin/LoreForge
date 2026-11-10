@@ -79,7 +79,24 @@ pub fn allowed_origin(origin: &HeaderValue) -> bool {
     o.strip_prefix("http://").is_some_and(local_host) || o.strip_prefix("https://").is_some_and(local_host)
 }
 
+/// The settings behind the 模型 tab: the shared engine file, with this app's tasks.
+fn engines(shared: &Shared) -> lore_engines::Engines {
+    lore_engines::Engines::new(shared.home.clone(), "KnowledgeBase", include_str!("../tasks.toml"))
+}
+
 pub fn router(shared: Shared) -> Router {
+    let e = engines(&shared);
+    router_with(shared, e)
+}
+
+/// Tests: never the keychain, the `claude` CLI, the network, the OS opener or the process routing.
+pub fn router_isolated(shared: Shared) -> Router {
+    let mut e = engines(&shared).isolated();
+    e.install_routing = false;
+    router_with(shared, e)
+}
+
+fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|o, _| allowed_origin(o)))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
@@ -94,7 +111,7 @@ pub fn router(shared: Shared) -> Router {
     for (path, mime, body) in lore_shell::FILES {
         kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
     }
-    api::routes().merge(notation::routes()).with_state(shared).merge(kit).fallback_service(web).layer(cors)
+    api::routes().merge(notation::routes()).with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`port` (0 = any free port), start the reminder scheduler and return the
