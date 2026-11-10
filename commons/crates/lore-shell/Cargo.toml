@@ -1,0 +1,7 @@
+[package]
+name = "lore-shell"
+version.workspace = true
+edition.workspace = true
+description = "The shared LoreForge app shell (commons/ui icons.js, base.css, shell.js) compiled in, so every app server serves the same files."
+
+[dependencies]
