@@ -1,0 +1,15 @@
+{
+  "kind": "encoder",
+  "description": "an encoder drawn as a block that narrows to the right, label inside",
+  "w": 64,
+  "h": 44,
+  "objects": [
+    { "id": 0, "name": "body", "type": "shape",
+      "frame": { "x": 0, "y": 0, "w": 812800, "h": 558800 },
+      "geom": { "prst": "custom", "path": "M0 0 L1 0.25 L1 0.75 L0 1 Z" },
+      "fill": { "kind": "solid", "color": "role:fill" },
+      "line": { "color": "role:line", "width_pt": 1.0 },
+      "text": { "insets": [0, 0, 0, 0], "anchor": "ctr", "wrap": false,
+        "paras": [ { "align": "ctr", "runs": [ { "kind": "text", "text": "{{label}}", "look": { "font": "Calibri", "size": 11.0, "color": "role:text" } } ] } ] } }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "kind": "document",
+  "description": "a text document (report, caption) drawn as a page with lines, label below",
+  "w": 36,
+  "h": 46,
+  "objects": [
+    { "id": 0, "name": "page", "type": "shape",
+      "frame": { "x": 0, "y": 0, "w": 457200, "h": 584200 },
+      "geom": { "prst": "custom", "path": "M0 0 L0.7 0 L1 0.24 L1 1 L0 1 Z" },
+      "fill": { "kind": "solid", "color": "theme:paper" },
+      "line": { "color": "role:line", "width_pt": 1.0 } },
+    { "id": 0, "name": "line1", "type": "shape",
+      "frame": { "x": 76200, "y": 203200, "w": 304800, "h": 12700 },
+      "geom": { "prst": "rect" }, "fill": { "kind": "solid", "color": "theme:muted" } },
+    { "id": 0, "name": "line2", "type": "shape",
+      "frame": { "x": 76200, "y": 304800, "w": 304800, "h": 12700 },
+      "geom": { "prst": "rect" }, "fill": { "kind": "solid", "color": "theme:muted" } },
+    { "id": 0, "name": "line3", "type": "shape",
+      "frame": { "x": 76200, "y": 406400, "w": 203200, "h": 12700 },
+      "geom": { "prst": "rect" }, "fill": { "kind": "solid", "color": "theme:muted" } }
+  ]
+}

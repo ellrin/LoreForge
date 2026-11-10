@@ -1074,6 +1074,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-flow"
+version = "0.1.0"
+dependencies = [
+ "lore-canvas",
+ "lore-llm",
+ "lore-math",
+ "lore-notation",
+ "lore-ooxml",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "lore-fonts"
 version = "0.1.0"
 dependencies = [

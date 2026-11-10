@@ -1,0 +1,159 @@
+# classic-bw — the neutral theme: white paper, black lines, grey fills.
+# A theme file only needs the keys it changes; everything else comes from here.
+# Colours are 6-digit RGB hex, "none" = no fill / no line. Sizes are in pt.
+
+id = "classic-bw"
+name = "Classic black & white"
+
+[font]
+family = "Calibri"
+math = "Cambria Math"
+size = 11.0          # module names and variables
+title_scale = 1.2    # panel titles (bold)
+small_scale = 0.82   # sizes, captions, legend
+
+[colors]
+ink = "000000"
+paper = "FFFFFF"
+muted = "595959"
+image = "D9D9D9"     # picture placeholders
+tensor = "BFBFBF"    # feature maps, cells, 3-D blocks
+# outline colours of layer bars, one per kind of layer (first word of its name)
+cycle = ["000000"]
+
+[panel]
+fill = "none"
+line = "000000"
+line_w = 1.5
+dash = "solid"
+radius = 0.0
+# inside-top-left | inside-top-center | outside-top-left | outside-top-center
+title = "inside-top-left"
+
+[node]
+line_w = 1.0
+radius = 0.0         # corner radius of boxes, as a fraction of the short side (0 = square)
+loss = "plain"       # plain (just the math) | pill | box
+
+[roles.default]
+fill = "FFFFFF"
+line = "000000"
+text = "000000"
+
+[roles.model]
+fill = "F2F2F2"
+line = "000000"
+text = "000000"
+
+[roles.loss]
+fill = "FFFFFF"
+line = "000000"
+text = "000000"
+
+[roles.gt]
+fill = "FFFFFF"
+line = "000000"
+text = "000000"
+
+[edges.data]
+color = "000000"
+width = 1.0
+dash = "solid"
+head = "none"
+tail = "triangle"
+
+[edges.supervision]
+color = "404040"
+width = 0.75
+dash = "dash"
+tail = "triangle"
+
+[edges.feedback]
+color = "000000"
+width = 1.75
+dash = "dash"
+tail = "triangle"
+
+[edges.loss-out]
+color = "000000"
+width = 0.75
+dash = "solid"
+tail = "triangle"
+
+[edges.compare]
+color = "000000"
+width = 1.5
+dash = "solid"
+head = "triangle"
+tail = "triangle"
+
+[edges.optional]
+color = "000000"
+width = 0.75
+dash = "sysDash"
+tail = "triangle"
+
+[edges.shared]
+color = "595959"
+width = 1.0
+dash = "dash"
+tail = "none"
+
+[edges.skip]
+color = "000000"
+width = 0.75
+dash = "solid"
+tail = "triangle"
+
+[edges.concat]
+color = "000000"
+width = 1.0
+dash = "solid"
+tail = "triangle"
+
+[edges.down]
+color = "000000"
+width = 1.0
+dash = "lgDash"
+tail = "triangle"
+
+[edges.up]
+color = "000000"
+width = 1.0
+dash = "dashDot"
+tail = "triangle"
+
+[edges.cross]
+color = "000000"
+width = 2.0
+dash = "dash"
+tail = "triangle"
+
+[edges.stage]
+color = "000000"
+width = 3.0
+dash = "solid"
+tail = "triangle"
+
+[edges.repeat]
+color = "000000"
+width = 1.0
+dash = "sysDot"
+tail = "none"
+
+[edges.zoom]
+color = "7F7F7F"
+width = 0.5
+dash = "solid"
+tail = "none"
+
+# 3-D blocks: top and side faces are the front colour made lighter (> 0) or darker (< 0).
+[shade]
+top = 0.45
+side = -0.2
+
+[space]
+gap_x = 26.0         # between columns of a row
+gap_y = 16.0         # between rows
+pad = 12.0           # inside a panel
+panel_gap = 14.0     # between panels

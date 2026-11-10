@@ -1,0 +1,13 @@
+{
+  "kind": "store",
+  "description": "a data store / memory bank drawn as a cylinder, label below",
+  "w": 40,
+  "h": 46,
+  "objects": [
+    { "id": 0, "name": "body", "type": "shape",
+      "frame": { "x": 0, "y": 0, "w": 508000, "h": 584200 },
+      "geom": { "prst": "can" },
+      "fill": { "kind": "solid", "color": "role:fill" },
+      "line": { "color": "role:line", "width_pt": 1.0 } }
+  ]
+}

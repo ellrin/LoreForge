@@ -1,0 +1,10 @@
+# LLM tasks of lore-flow, in lore-llm's tasks.toml format. An app merges this
+# table into its own (TaskTable::merge) so the router knows the task.
+
+[task.sc-flow-graph]
+label = "分析流程圖資料流"
+needs = { json = true, vision = true, context = 32000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 8000
