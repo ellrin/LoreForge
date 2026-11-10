@@ -280,7 +280,12 @@ pub struct LocalRuntime {
     phase: std::sync::Mutex<Phase>,
     starting: Mutex<()>,
     pub wait: Duration,
+    /// Told about every phase change (an app publishes the running server for the others).
+    hook: std::sync::Mutex<Option<PhaseHook>>,
 }
+
+/// See [`LocalRuntime::on_phase`].
+pub type PhaseHook = std::sync::Arc<dyn Fn(&Phase) + Send + Sync>;
 
 impl Default for LocalRuntime {
     fn default() -> Self {
@@ -289,6 +294,7 @@ impl Default for LocalRuntime {
             phase: std::sync::Mutex::new(Phase::Idle),
             starting: Mutex::new(()),
             wait: Duration::from_secs(180),
+            hook: std::sync::Mutex::new(None),
         }
     }
 }
@@ -303,7 +309,16 @@ impl LocalRuntime {
     }
 
     fn set(&self, p: Phase) {
+        let hook = self.hook.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(h) = hook {
+            h(&p);
+        }
         *self.phase.lock().unwrap_or_else(|e| e.into_inner()) = p;
+    }
+
+    /// Call `f` on every phase change (Ready / Idle / Error …).
+    pub fn on_phase(&self, f: PhaseHook) {
+        *self.hook.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
     }
 
     /// The running server, if alive (for `local:current`).

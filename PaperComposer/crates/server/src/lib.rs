@@ -3189,6 +3189,15 @@ pub fn router(paths: Paths) -> Router {
     let engine_cfg = EngineConfig::resolve(cfg.engine);
     let external = engine_cfg.url.is_some();
     let manager = Arc::new(models::Manager::default());
+    // the other Lore apps use the model PaperComposer runs (private/shared/engine.toml, lore-home)
+    manager.runtime.on_phase(Arc::new(|p: &lore_llm::local::Phase| {
+        let shared = loreforge_home();
+        let _ = match p {
+            lore_llm::local::Phase::Ready { model, url } => shared.set_engine(Some(url), Some(model)),
+            lore_llm::local::Phase::Idle | lore_llm::local::Phase::Error { .. } => shared.set_engine(None, None),
+            lore_llm::local::Phase::Starting { .. } => Ok(()),
+        };
+    }));
     let catalog = models::catalog();
     // The app's tasks, and the user's overrides when their file is readable.
     let user_tasks = config_path().map(|p| p.with_file_name("tasks.toml"));
