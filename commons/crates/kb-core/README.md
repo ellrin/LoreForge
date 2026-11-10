@@ -13,7 +13,7 @@
 | `index` | rusqlite（bundled，FTS5 `trigram` → 中日文可搜）：清單篩選、到期、最近、圖譜、時間軸 |
 | `scan` | 術語掃描：Aho-Corasick（標題＋別名，不分大小寫、英文複數、CJK 不需字界），回傳 UTF-16 位置、狀態、是否第一次出現 |
 | `llm` | `CardAssistant`（起草卡片、抽候選術語）＋ `MockAssistant` — **lore-llm 整合點** |
-| `kb` | `KnowledgeBase`：create / update（revision+1、updated_at）/ trash / restore（從 `trash/` 復原最近一份）/ recall / encounter / share / scan / 查詢 / 資產 |
+| `kb` | `KnowledgeBase`：create / `create_as(space, fields, via, State::Known)`（新卡直接「記得」：`Progress::new_known`）/ update（revision+1、updated_at）/ trash / restore（從 `trash/` 復原最近一份）/ recall / encounter / share / scan / 查詢 / 資產 |
 
 ## 規則
 

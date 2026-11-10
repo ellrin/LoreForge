@@ -40,6 +40,27 @@ async fn call(app: &axum::Router, method: &str, uri: &str, body: Option<Value>) 
 }
 
 #[tokio::test]
+async fn create_with_initial_state_and_a_pdf_source() {
+    let (_d, app, _clock) = setup();
+    let src = json!([{ "type": "pdf", "ref": "ab".repeat(32), "where": "p.3", "title": "A synthetic paper" }]);
+    let (s, v) = call(&app, "POST", "/api/nodes", Some(json!({ "space": "me", "title": "Softmax", "initial_state": "known", "via": "reader", "sources": src }))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["summary"]["state"], "known");
+    let id = v["node"]["id"].as_str().unwrap().to_string();
+    let (_, v) = call(&app, "GET", &format!("/api/nodes/{id}"), None).await;
+    assert_eq!(v["progress"]["state"], "known");
+    assert_eq!(v["node"]["sources"], src);
+    assert!(v["node"].get("initial_state").is_none(), "not stored on the card");
+    // Default stays learning; a new card cannot start stale.
+    let (_, v) = call(&app, "POST", "/api/nodes", Some(json!({ "space": "me", "title": "Sigmoid" }))).await;
+    assert_eq!(v["summary"]["state"], "learning");
+    let (s, _) = call(&app, "POST", "/api/nodes", Some(json!({ "space": "me", "title": "Tanh", "initial_state": "stale" }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (_, v) = call(&app, "GET", "/api/health", None).await;
+    assert!(v["reader_url"].as_str().unwrap().starts_with("http"));
+}
+
+#[tokio::test]
 async fn card_lifecycle_scan_recall() {
     let (_d, app, clock) = setup();
     let (s, v) = call(&app, "GET", "/api/spaces", None).await;

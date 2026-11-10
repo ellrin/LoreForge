@@ -143,6 +143,24 @@ fn two_remembered_make_known_via_due_queue() {
 }
 
 #[test]
+fn create_as_known_skips_the_learning_checks() {
+    let mut e = env_as("ellrin");
+    let n = e.kb.create_as("me", fields("Softmax", &[]), Some("reader"), kb_core::State::Known).unwrap();
+    assert_eq!(e.kb.summary(&n.id).unwrap().unwrap().state.as_deref(), Some("known"));
+    let p = e.kb.progress(&n.id).unwrap().unwrap();
+    assert_eq!((p.streak, p.maintenance_step), (0, 0));
+    assert_eq!(p.log.iter().map(|l| l.event.as_str()).collect::<Vec<_>>(), ["created", "known"]);
+    e.clock.advance_days(1);
+    assert!(e.kb.due(10).unwrap().is_empty(), "no first check for a known card");
+    e.clock.advance_days(29);
+    assert_eq!(e.kb.due(10).unwrap()[0].id, n.id, "first maintenance check at +30 d");
+    // The default is unchanged, and a new card cannot start stale.
+    let l = e.kb.create("me", fields("Sigmoid", &[]), None).unwrap();
+    assert_eq!(e.kb.summary(&l.id).unwrap().unwrap().state.as_deref(), Some("learning"));
+    assert!(e.kb.create_as("me", fields("Tanh", &[]), None, kb_core::State::Stale).is_err());
+}
+
+#[test]
 fn scan_finds_aliases_with_state_and_records_encounters() {
     let mut e = env_as("ellrin");
     let dice = e.kb.create("me", fields("Dice coefficient", &["DSC", "Dice score"]), None).unwrap();

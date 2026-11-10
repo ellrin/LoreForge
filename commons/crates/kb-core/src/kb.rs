@@ -15,7 +15,7 @@ use crate::id::{node_id, valid_node_id};
 use crate::index::{Filter, GraphQuery, GraphView, Index, NodeSummary, TimelineDay};
 use crate::llm::{CardAssistant, DraftRequest, MockAssistant};
 use crate::node::{CopyRef, Image, Link, Node, NodeFields};
-use crate::progress::{Intervals, Outcome, Progress, Step};
+use crate::progress::{Intervals, Outcome, Progress, State, Step};
 use crate::registry::Registry;
 use crate::scan::{ScanOptions, ScanSpan, Scanner};
 use crate::tags::TagsFile;
@@ -326,6 +326,16 @@ impl KnowledgeBase {
     /// Create a card in `space` (always named: writes never guess a space). The
     /// current member's learning state starts as `learning`.
     pub fn create(&mut self, space_id: &str, fields: NodeFields, via: Option<&str>) -> Result<Node> {
+        self.create_as(space_id, fields, via, State::Learning)
+    }
+
+    /// [`create`](Self::create) with the member's initial state: `Learning` (the default)
+    /// or `Known` (a term the member already masters; see [`Progress::new_known`]).
+    /// `Stale` is refused.
+    pub fn create_as(&mut self, space_id: &str, fields: NodeFields, via: Option<&str>, initial: State) -> Result<Node> {
+        if initial == State::Stale {
+            return Err(KbError::Invalid("a new card starts as learning or known".into()));
+        }
         let space = self.space(space_id)?.clone();
         let now = self.now();
         let mut node = Node {
@@ -356,7 +366,11 @@ impl KnowledgeBase {
         }
         self.write_node(&space, &node)?;
         if space.is_member(&self.member) {
-            self.save_progress(&space, &node.id, &Progress::new(now, via, &self.opts.intervals))?;
+            let p = match initial {
+                State::Known => Progress::new_known(now, via, &self.opts.intervals),
+                _ => Progress::new(now, via, &self.opts.intervals),
+            };
+            self.save_progress(&space, &node.id, &p)?;
         }
         Ok(node)
     }

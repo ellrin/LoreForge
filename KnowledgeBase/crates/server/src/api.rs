@@ -3,11 +3,11 @@
 //!
 //! | Method | Path | |
 //! |---|---|---|
-//! | GET | /api/health | status, member, assistant |
+//! | GET | /api/health | status, member, assistant, `reader_url` (LoreReader, for `pdf` sources) |
 //! | GET | /api/spaces | mounted spaces |
 //! | GET | /api/registry?space= | kinds, link types, tags |
 //! | GET | /api/nodes?q=&kind=&tag=&domain=&state=&space=&since=&until=&date_field=&sort=&limit=&offset= | card list |
-//! | POST | /api/nodes | create `{space, via?, …fields}` |
+//! | POST | /api/nodes | create `{space, via?, initial_state?: learning\|known, …fields}` |
 //! | GET | /api/nodes/{id} | card + learning state + backlinks |
 //! | PUT | /api/nodes/{id} | edit `{revision?, …fields}` (409 on stale revision) |
 //! | DELETE | /api/nodes/{id} | move to the space's trash |
@@ -122,7 +122,7 @@ macro_rules! kb {
 
 async fn health(State(s): State<Shared>) -> R {
     let kb = kb!(s);
-    ok(json!({ "ok": true, "member": kb.member(), "now": kb.now().to_rfc3339(), "assistant": kb.assistant_name(), "intervals": kb.intervals() }))
+    ok(json!({ "ok": true, "member": kb.member(), "now": kb.now().to_rfc3339(), "assistant": kb.assistant_name(), "intervals": kb.intervals(), "reader_url": crate::config::reader_url() }))
 }
 
 async fn spaces(State(s): State<Shared>) -> R {
@@ -156,6 +156,9 @@ async fn list(State(s): State<Shared>, Query(f): Query<Filter>) -> R {
 struct CreateBody {
     space: Option<String>,
     via: Option<String>,
+    /// The member's state for the new card: `learning` (default) or `known`
+    /// (a term already mastered, e.g. added from LoreReader).
+    initial_state: Option<kb_core::State>,
     #[serde(flatten)]
     fields: NodeFields,
 }
@@ -163,7 +166,7 @@ struct CreateBody {
 async fn create(State(s): State<Shared>, Json(b): Json<CreateBody>) -> Result<(StatusCode, Json<Value>), ApiError> {
     let space = b.space.filter(|s| !s.is_empty()).ok_or_else(|| bad("`space` is required: every write names its space"))?;
     let mut kb = kb!(s);
-    let node = kb.create(&space, b.fields, b.via.as_deref().or(Some("kb")))?;
+    let node = kb.create_as(&space, b.fields, b.via.as_deref().or(Some("kb")), b.initial_state.unwrap_or(kb_core::State::Learning))?;
     let summary = kb.summary(&node.id)?;
     Ok((StatusCode::CREATED, Json(json!({ "space": space, "node": node, "summary": summary }))))
 }

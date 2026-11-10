@@ -116,6 +116,7 @@ async function boot() {
     $("memberChip").textContent = S.member;
     S.reg = await api("GET", "/api/registry");
   } catch (e) { fail(e); return; }
+  api("GET", "/api/health").then((hl) => { S.readerUrl = hl.reader_url; }).catch(() => {});
   fillSelect($("fKind"), [["", "全部"], ...S.reg.kinds.map((k) => [k.id, k.label])]);
   fillSelect($("edKind"), S.reg.kinds.map((k) => [k.id, k.label]));
   fillSelect($("fSpace"), [["", "全部"], ...S.spaces.map((s) => [s.id, s.name])]);
@@ -519,7 +520,8 @@ function renderSide(v) {
     if (!rels.includes(r)) rels.push(r);
   }
   const back = [...by].map(([id, rels]) => h("li", {}, h("a", { href: `#/node/${id}` }, S.titles.get(id) ?? id), ...rels.map((r) => h("span", { class: "rel-chip" }, r))));
-  $("edBacklinks").replaceChildren(...(back.length || v.unresolved.length ? [
+  const srcs = (v.node.sources ?? []).map(sourceItem);
+  $("edBacklinks").replaceChildren(...(srcs.length ? [h("h4", {}, "來源"), h("ul", {}, srcs)] : []), ...(back.length || v.unresolved.length ? [
     back.length ? h("h4", {}, `反向連結（${back.length}）`) : null,
     back.length ? h("ul", {}, back) : null,
     v.unresolved.length ? h("h4", {}, "尚未建立的 [[連結]]") : null,
@@ -533,6 +535,18 @@ function renderSide(v) {
     h("div", {}, stateChip(p.state), ` · 連續記得 ${p.streak} 次 · 遇到 ${p.encounters} 次`),
     h("div", { class: "muted" }, p.next_check_at ? `下次確認：${p.next_check_at.slice(0, 10)}` : "不需再確認"),
     h("ul", {}, p.log.slice(-5).reverse().map((l) => h("li", { class: "muted" }, `${l.at.slice(0, 10)} ${ev[l.event] ?? l.event}${l.early ? "（未到期，不計）" : ""}${l.via ? ` · ${l.via}` : ""}`))));
+}
+
+/** A card source. `pdf` sources (LoreReader: ref = the PDF's sha256, where = "p.<n>")
+ *  link to LoreReader's /open, at `reader_url` from /api/health. */
+function sourceItem(src) {
+  const label = [src.title || src.ref, src.where].filter(Boolean).join(" · ");
+  if (src.type === "pdf" && /^[0-9a-f]{64}$/.test(src.ref ?? "")) {
+    const page = /(\d+)/.exec(src.where ?? "")?.[1] ?? "1";
+    const base = S.readerUrl ?? "http://127.0.0.1:7890";
+    return h("li", {}, h("a", { href: `${base}/open?sha=${src.ref}&page=${page}`, target: "_blank", rel: "noopener", title: "在 LoreReader 開啟" }, label), h("span", { class: "rel-chip" }, "PDF"));
+  }
+  return h("li", { class: "muted" }, src.type ? `${src.type}：${label}` : label);
 }
 
 function newFromTitle(t) {

@@ -150,6 +150,16 @@ impl Progress {
         }
     }
 
+    /// A card created as already mastered (the author knew the term before adding it):
+    /// `created`, then straight to known, as [`Progress::recall`] would after the last
+    /// remembered check: maintenance step 0, first maintenance check (none when
+    /// maintenance is off), log entry `known`.
+    pub fn new_known(now: Time, via: Option<&str>, iv: &Intervals) -> Progress {
+        let mut p = Progress::new(now, via, iv);
+        p.become_known(now, iv);
+        p
+    }
+
     pub fn is_due(&self, now: Time) -> bool {
         self.next_check_at.is_some_and(|t| t <= now)
     }
@@ -272,6 +282,17 @@ mod tests {
     }
     fn d(n: i64) -> Time {
         t0() + Duration::days(n)
+    }
+
+    #[test]
+    fn created_as_known() {
+        let iv = Intervals::default();
+        let p = Progress::new_known(t0(), Some("reader"), &iv);
+        assert_eq!((p.state, p.streak, p.maintenance_step), (State::Known, 0, 0));
+        assert_eq!(p.next_check_at, Some(d(30)));
+        assert_eq!(p.log.iter().map(|e| e.event.as_str()).collect::<Vec<_>>(), ["created", "known"]);
+        let off = Intervals { maintenance: false, ..Intervals::default() };
+        assert_eq!(Progress::new_known(t0(), None, &off).next_check_at, None);
     }
 
     #[test]

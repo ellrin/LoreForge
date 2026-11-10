@@ -37,6 +37,17 @@ struct File {
     spaces: Vec<String>,
     port: Option<u16>,
     intervals: Option<Intervals>,
+    reader_url: Option<String>,
+}
+
+/// LoreReader's address, for links from `pdf` card sources (`<url>/open?sha=…&page=…`):
+/// `KB_READER_URL` > `reader_url` in config.toml > `http://127.0.0.1:7890`.
+pub fn reader_url() -> String {
+    let file = || -> Option<String> {
+        let p = config_file().filter(|p| p.is_file())?;
+        toml::from_str::<File>(&std::fs::read_to_string(p).ok()?).ok()?.reader_url
+    };
+    std::env::var("KB_READER_URL").ok().filter(|v| !v.trim().is_empty()).or_else(file).unwrap_or_else(|| "http://127.0.0.1:7890".into()).trim_end_matches('/').to_string()
 }
 
 /// This app's folder (`LoreForge/KnowledgeBase`).

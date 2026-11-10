@@ -30,6 +30,7 @@ KB_SPACES=/a:/b KB_MEMBER=ellrin PORT=7700 cargo run -p kb-server
 ```toml
 member = "ellrin"
 spaces = ["~/Documents/KnowledgeBase/private"]
+reader_url = "http://127.0.0.1:7890"   # LoreReader：卡片來源是 PDF 時連到這裡（也可用 KB_READER_URL）
 [intervals]          # 複習間隔（天），都可省略
 first_check_days = 1
 second_check_days = 3
@@ -74,13 +75,14 @@ stale_after_days = 180
 
 | | |
 |---|---|
-| `GET/POST /api/nodes`、`GET/PUT/DELETE /api/nodes/{id}` | 清單（`q`、`kind`、`tag`、`domain`、`state`、`space`、`since`/`until`、`sort`）、新增（必須指定 `space`）、編輯（`revision` 衝突回 409）、移到垃圾桶 |
+| `GET/POST /api/nodes`、`GET/PUT/DELETE /api/nodes/{id}` | 清單（`q`、`kind`、`tag`、`domain`、`state`、`space`、`since`/`until`、`sort`）、新增（必須指定 `space`；可選 `initial_state`：`learning`（預設）或 `known` ＝已經熟的詞，直接成為「記得」，第一次確認在 30 天後，關掉維持確認時不排）、編輯（`revision` 衝突回 409）、移到垃圾桶 |
 | `POST /api/nodes/{id}/restore` | 從垃圾桶復原（最近一次刪除的那份，連同學習狀態）；網頁刪除後的「復原」 |
 | `POST /api/scan` | 術語掃描：`{text, candidates?, record?}` → 位置（UTF-16）、卡片、狀態、是否第一次出現 |
 | `GET /api/recall/due`、`POST /api/recall/{id}` | 到期卡片；作答 `remembered` / `forgot` / `unfamiliar` |
 | `GET /api/recent`、`/api/timeline` | 最近、每天新增修改 |
 | `GET /api/graph` | 圖譜：`center`＋`depth`（局部，預設 2，最多 6）、`space`、`limit`（預設 400 張最新的卡）、`full=true`（全部，上限 20,000）、`missing=true`（未建立的 `[[連結]]` 佔位節點，`kind = "missing"`）、`tags=true`（標籤節點）。節點含 `kind`、`state`、`score`、`streak`、`tags`、`aliases`、`domains`、`summary`、`created_at`、`updated_at`、`degree`、`hop`（局部圖譜的距離）；另回傳 `total`、`truncated`、`center` |
 | `POST /api/assets?space=&ext=`、`GET /api/assets/{space}/{hash.ext}` | 圖片 |
+| `GET /api/health` | 狀態、成員、`reader_url`（LoreReader 的位址，卡片來源 `type = "pdf"` 連到 `<reader_url>/open?sha=…&page=…`；`KB_READER_URL` 或 config.toml 的 `reader_url`，預設 `http://127.0.0.1:7890`） |
 | `GET /api/spaces`、`/api/registry`、`POST /api/nodes/{id}/share`、`POST /api/draft`、`POST /api/reindex` | |
 | `GET /api/stats` | 今日數字（今天新增、待複習、7 天內記住、各狀態張數）＋通知時間 |
 | `GET/PUT /api/reminders`、`PUT /api/reminders/password` | 提醒設定、狀態、密碼是否已設定（密碼不會回傳） |
