@@ -26,6 +26,7 @@
 //   shell.slots.lead / .primary / .right           elements for app extras (font chip, member chip)
 //   shell.setName(name) · shell.setStatus(state, { label, title, action }) · shell.editing(on)
 //   shell.setUndo({ undo: "移動" | null, redo: null }) · shell.drawer("left" | "right", on?)
+//   shell.home(on)   the home screen: brand and gear only
 //
 //   LoreShell.toast(msg, { err, action: { label, run }, ms })
 //   LoreShell.ask(anchor, lines, buttons) → Promise<value | null>     (never a native confirm)
@@ -489,6 +490,8 @@
         chip.classList.toggle("can-act", !!chipAction);
       },
       editing(on) { top.classList.toggle("editing", !!on); },
+      /** On the home screen: only brand, drawer toggles and the gear (no document, no status, no tools). */
+      home(on) { top.classList.toggle("at-home", !!on); if (on) top.classList.remove("editing"); },
       setUndo({ undo, redo } = {}) {
         if (!undoB) return;
         undoB.disabled = !undo; redoB.disabled = !redo;
