@@ -21,7 +21,11 @@ const Setup = (() => {
 
   const gb = (bytes) => `${(bytes / 1024 ** 3).toFixed(bytes > 1024 ** 3 * 10 ? 0 : 1)} GB`;
   const mb = (bytes) => bytes < 1024 ** 3 ? `${Math.round(bytes / 1024 ** 2)} MB` : gb(bytes);
-  const part = (id) => document.getElementById(id);
+  // the parts, kept once: a tab switch empties the shell's body, and a part out of the page
+  // goes back into #setupParts (park) so its $("#wz…") lookups keep working
+  const PARTS = {};
+  const part = (id) => (PARTS[id] ??= document.getElementById(id));
+  const park = () => { const home = document.getElementById("setupParts"); for (const n of Object.values(PARTS)) if (!n.isConnected) home.append(n); };
   const row = (k, ...v) => { const r = el("div", "set-row"); r.append(el("span", "k", k), ...v); return r; };
   const btn = (label, onclick) => { const b = el("button", "btn small", label); b.type = "button"; b.onclick = onclick; return b; };
 
@@ -99,6 +103,7 @@ const Setup = (() => {
     shown = kind;
     $("#dlgModelTitle").textContent = kind === "local" ? "本機模型" : "Claude";
     $("#dlgModelBody").replaceChildren(part(kind === "local" ? "partLocal" : "partClaude"));
+    park();
     if (showVia) via = showVia;
     if (!dlg.open) dlg.showModal();
     paintIcons(dlg);
@@ -155,7 +160,7 @@ const Setup = (() => {
     const hook = (dlg) => {
       if (dlg._pc) return;
       dlg._pc = true;
-      new MutationObserver(() => { markTabs(); modelFallback(dlg); localPick(dlg); }).observe(dlg, { childList: true, subtree: true });
+      new MutationObserver(() => { park(); markTabs(); modelFallback(dlg); localPick(dlg); }).observe(dlg, { childList: true, subtree: true });
       dlg.addEventListener("close", onClosed);
       markTabs();
       modelFallback(dlg);
@@ -485,6 +490,7 @@ const Setup = (() => {
   }
 
   function wire() {
+    ["partWorkspace", "partGit", "partLocal", "partClaude", "partPaper"].forEach(part);
     watchSettings();
     const md = $("#dlgModel");
     md.addEventListener("close", () => { shown = null; onClosed(); });

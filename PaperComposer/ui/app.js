@@ -686,9 +686,9 @@ function edit(p, si, pi) {
     if (ta.dataset.discard) return; // Esc, or 重新載入 chose the other version (open.js)
     const v = ta.value.trim();
     const list = sections()[si].paragraphs;
-    if (v === was.trim() && v) { refreshSection(si); return; } // unchanged: nothing to write
+    if (v === was.trim() && v) { refreshSection(si); PCFrame.status(); return; } // unchanged: nothing to write
     if (v) list[pi] = v; else list.splice(pi, 1);
-    if (!v && !was.trim()) { refreshSection(si); return; } // a new paragraph left empty
+    if (!v && !was.trim()) { refreshSection(si); PCFrame.status(); return; } // a new paragraph left empty
     try { await saveSection(si); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true }); }
     refreshSection(si);
     refreshGit();
@@ -711,6 +711,7 @@ function cancelEdit(ta, si, pi, was) {
   if (list && !was.trim() && list[pi] === was) list.splice(pi, 1); // opened for a new paragraph
   ta.blur();
   refreshSection(si);
+  PCFrame.status();
 }
 
 // Edit one field of the title block in place: its LaTeX, saved into main.tex.
@@ -1182,7 +1183,9 @@ function menuForm(title, tip, anchor = $("#actFile")) {
   const m = $("#fileMenu");
   m.className = "menu form";
   m.innerHTML = "";
-  const r = anchor.getBoundingClientRect();
+  // a hidden anchor (the picker on the home screen): under the brand instead
+  let r = anchor.getBoundingClientRect();
+  if (!r.width && !r.height) r = document.querySelector(".top .brand")?.getBoundingClientRect() ?? r;
   m.style.top = `${r.bottom + 4}px`;
   m.style.left = `${r.left}px`;
   m.hidden = false;
