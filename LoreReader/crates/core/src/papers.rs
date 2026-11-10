@@ -276,15 +276,22 @@ impl Papers {
     }
 
     /// Rename a paper (the only edit to paper.json from the UI).
-    pub fn set_title(&self, sha: &str, title: &str) -> Result<PaperMeta> {
+    /// `source`: where the title came from (`author`, `page`, `pdf`, `file`), kept in
+    /// `paper.json` as `title_source`; only `file` titles are replaced automatically.
+    pub fn set_title_from(&self, sha: &str, title: &str, source: &str) -> Result<PaperMeta> {
         let mut m = self.meta(sha)?.ok_or_else(|| Error::NotFound(sha.into()))?;
         let t = title.trim();
         if t.is_empty() {
             return Err(Error::Invalid("標題不能是空的".into()));
         }
         m.title = t.to_string();
+        m.extra.insert("title_source".into(), source.into());
         write_json(&self.folder(sha)?.join("paper.json"), &m)?;
         Ok(m)
+    }
+
+    pub fn set_title(&self, sha: &str, title: &str) -> Result<PaperMeta> {
+        self.set_title_from(sha, title, "author")
     }
 
     /// Change `paper.json` (it must exist).

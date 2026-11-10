@@ -146,6 +146,59 @@ pub fn body_end(paper: &PaperText) -> Option<(usize, usize)> {
     None
 }
 
+/// The paper's title from its first page: the block of lines in the largest type of the
+/// upper part of the page (what a reader sees as the headline). `None` when the page has
+/// no clearly larger type, or the block does not look like a title.
+pub fn title_from_first_page(p: &PageText) -> Option<String> {
+    let top = if p.height > 0.0 { p.height * 0.3 } else { f32::MIN };
+    let words: Vec<&Item> = p.items.iter().filter(|i| !i.str.trim().is_empty() && i.size > 0.0 && i.y >= top).collect();
+    if words.len() < 2 {
+        return None;
+    }
+    let mut sizes: Vec<f32> = p.items.iter().filter(|i| !i.str.trim().is_empty() && i.size > 0.0).map(|i| i.size).collect();
+    sizes.sort_by(|a, b| a.total_cmp(b));
+    let body = sizes[sizes.len() / 2];
+    let big = words.iter().map(|i| i.size).fold(0.0f32, f32::max);
+    if big < body * 1.2 || big < 11.0 {
+        return None;
+    }
+    // items in that type, top line first
+    let mut hit: Vec<&Item> = words.into_iter().filter(|i| i.size >= big - 0.8).collect();
+    hit.sort_by(|a, b| b.y.total_cmp(&a.y).then(a.x.total_cmp(&b.x)));
+    // lines: items whose baselines are within half a line of each other
+    let mut lines: Vec<(f32, Vec<&Item>)> = vec![];
+    for it in hit {
+        match lines.last_mut() {
+            Some((y, l)) if (*y - it.y).abs() < big * 0.5 => l.push(it),
+            _ => lines.push((it.y, vec![it])),
+        }
+    }
+    // the first block: lines about one line-height apart
+    let mut out: Vec<String> = vec![];
+    let mut prev: Option<f32> = None;
+    for (y, mut l) in lines {
+        if prev.is_some_and(|p| p - y > big * 2.2) {
+            break;
+        }
+        l.sort_by(|a, b| a.x.total_cmp(&b.x));
+        out.push(l.iter().map(|i| i.str.as_str()).collect::<Vec<_>>().join(" "));
+        prev = Some(y);
+    }
+    let mut t = String::new();
+    for line in out {
+        let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if t.ends_with('-') && line.chars().next().is_some_and(|c| c.is_lowercase()) {
+            t.pop();
+        } else if !t.is_empty() {
+            t.push(' ');
+        }
+        t += &line;
+    }
+    let t = t.trim().to_string();
+    let n = t.chars().count();
+    ((6..=250).contains(&n) && t.split_whitespace().count() >= 2).then_some(t)
+}
+
 /// Strip a subset tag: `ABCDEF+CMMI10` → `CMMI10`.
 pub fn base_font(name: &str) -> &str {
     match name.split_once('+') {
@@ -157,6 +210,26 @@ pub fn base_font(name: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn it(str: &str, x: f32, y: f32, size: f32) -> Item {
+        Item { str: str.into(), x, y, size, ..Default::default() }
+    }
+
+    #[test]
+    fn title_is_the_largest_block_on_the_first_page() {
+        let mut items = vec![it("Deep Learning for Retinal", 72.0, 720.0, 20.0), it("Image Triage", 72.0, 695.0, 20.0), it("A. Author, B. Author", 72.0, 660.0, 11.0), it("Abstract", 72.0, 620.0, 12.0)];
+        for k in 0..30 {
+            items.push(it("body text of the paper goes here", 72.0, 580.0 - k as f32 * 12.0, 10.0));
+        }
+        let p = PageText { page: 1, text: String::new(), items, width: 612.0, height: 792.0 };
+        assert_eq!(title_from_first_page(&p).as_deref(), Some("Deep Learning for Retinal Image Triage"));
+        // no larger type at all: no guess
+        let flat = PageText { items: (0..20).map(|k| it("same size text here", 72.0, 700.0 - k as f32 * 12.0, 10.0)).collect(), ..p.clone() };
+        assert_eq!(title_from_first_page(&flat), None);
+        // a hyphenated line break is joined
+        let hy = PageText { items: [vec![it("Segmen-", 72.0, 720.0, 20.0), it("tation of Vessels", 72.0, 695.0, 20.0)], p.items[2..].to_vec()].concat(), ..p };
+        assert_eq!(title_from_first_page(&hy).as_deref(), Some("Segmentation of Vessels"));
+    }
 
     #[test]
     fn offsets_and_references() {

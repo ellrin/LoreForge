@@ -374,10 +374,17 @@ fn add_paper(s: &AppState, bytes: &[u8], original_name: &str, derived: Option<De
     let pages = pdfops::page_count(bytes).map_err(|e| bad(format!("讀不了這份 PDF：{e}")))?;
     let (sha, new) = l.add(bytes)?;
     let stem = original_name.trim_end_matches(".pdf").trim_end_matches(".PDF");
+    // Title: given (a composed PDF), the PDF's own /Title unless it is a placeholder, else the
+    // file name until the page sends its text and the headline of page 1 is used.
+    let (title, title_source) = match (title, pdfops::info_title(bytes).filter(|t| !pdfops::is_junk_title(t, stem))) {
+        (Some(t), _) => (t, "author"),
+        (None, Some(t)) => (t, "pdf"),
+        (None, None) => (if stem.is_empty() { "未命名".into() } else { stem.to_string() }, "file"),
+    };
     let meta = PaperMeta {
         schema: lr_core::papers::PAPER_SCHEMA.into(),
         sha256: sha,
-        title: title.or_else(|| pdfops::info_title(bytes)).unwrap_or_else(|| if stem.is_empty() { "未命名".into() } else { stem.to_string() }),
+        title,
         original_name: original_name.to_string(),
         doi: pdfops::doi_of(bytes),
         pages,
@@ -385,7 +392,7 @@ fn add_paper(s: &AppState, bytes: &[u8], original_name: &str, derived: Option<De
         derived_from: derived,
         original_path: None,
         source_sha: None,
-        extra: Default::default(),
+        extra: [("title_source".to_string(), Value::from(title_source))].into_iter().collect(),
     };
     let _g = s.write.lock().unwrap();
     Ok((s.papers.register(meta)?, new))
@@ -797,6 +804,10 @@ struct ChatBody {
     /// File the exchange under this paragraph and send its context.
     #[serde(default)]
     paragraph: Option<String>,
+    /// Run this question on this engine once (`local`, `haiku` ...) instead of the model
+    /// menu's choice: 「改用地端」 after Claude was not available.
+    #[serde(default)]
+    model: Option<String>,
     /// The stuck point: `{kind: term|symbol|equation, id}`.
     #[serde(default)]
     chip: Option<reading::ChipRef>,
@@ -844,7 +855,11 @@ async fn send_chat(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Js
     msgs.push(Message::user(compose(&b.text, &b.attachments, context.as_deref())));
     let text = if b.text.trim().is_empty() && b.paragraph.is_some() { reading::DEFAULT_QUESTION.to_string() } else { b.text.clone() };
     let user = ChatMessage { role: "user".into(), text, attachments: b.attachments.clone(), at: lr_core::now(), engine: None, paragraph: b.paragraph.clone(), chip: chip.clone(), context };
-    let choice = reading::model_choice(&s.workspace, "lr-chat");
+    let choice = match b.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) if llm::CHOICES.contains(&m) => Some(m.to_string()),
+        Some(_) => return Err(bad("模型只能是 auto、local、haiku、sonnet 或 opus")),
+        None => reading::model_choice(&s.workspace, "lr-chat"),
+    };
     let a = s.llm.complete_on("lr-chat", choice.as_deref(), LlmRequest::chat(llm::chat_system(&title), msgs).max_tokens(2000)).await.map_err(llm_error)?;
     let reply = ChatMessage { role: "assistant".into(), text: a.text, attachments: vec![], at: lr_core::now(), engine: Some(a.engine), paragraph: b.paragraph.clone(), chip, context: None };
     {

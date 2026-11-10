@@ -435,6 +435,7 @@ async fn classification_is_one_cached_call_and_the_model_menu_picks_the_engine()
     let reply = r#"{"方法": ["anisotropic", "diffusion", "Spectral Boundary Loss"], "指標": [], "資料集": [], "統計": [], "臨床／解剖": [], "一般學術詞": ["codebook"], "人名": ["Hausdorff", "Sobel"], "其他術語": []}"#;
     let (url, hits) = counting_engine(reply).await;
     let e = setup(&dead_url(), Some(url));
+    call(&e.app, "PUT", "/api/reader", Some(json!({ "field": "retinal imaging researcher" })), None).await;
     let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
     call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
     let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), None, None).await;
@@ -690,6 +691,7 @@ fn lines_text(pages: &[&[&str]]) -> Value {
 async fn my_papers_vocabulary_is_never_red_and_kb_wins() {
     let (kb, _) = fake_kb().await;
     let e = setup(&kb, Some(all_method_engine().await));
+    call(&e.app, "PUT", "/api/reader", Some(json!({ "field": "retinal imaging researcher" })), None).await;
     // two synthetic "own" papers and a third one to read
     let own1 = lines_text(&[&["# 1. Method", "We measure vessel tortuosity after skeletonization of the mask.", "The Dice coefficient is learning material here.", "# References", "[1] Quaternion Wavelets."]]);
     let own2 = lines_text(&[&["# 2. Results", "Vessel tortuosity and centerline extraction work.", "Centerline extraction again with skeletonization."]]);
@@ -819,4 +821,47 @@ async fn theme_is_the_shared_choice() {
     // printed pages take no theme
     let print = std::fs::read_to_string(web.join("print.html")).unwrap();
     assert!(!print.contains("theme.css") && !print.contains("theme.js"));
+}
+
+#[tokio::test]
+async fn single_words_stay_quiet_until_the_field_is_set() {
+    let reply = r#"{"方法": ["anisotropic", "diffusion", "Spectral Boundary Loss"], "指標": [], "資料集": [], "統計": [], "臨床／解剖": [], "一般學術詞": ["codebook"], "人名": ["Hausdorff", "Sobel"], "其他術語": []}"#;
+    let (url, _) = counting_engine(reply).await;
+    let e = setup(&dead_url(), Some(url));
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
+    let (_, v, _) = call(&e.app, "GET", "/api/reader", None, None).await;
+    assert_eq!(v["set"], false);
+    let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), None, None).await;
+    assert_eq!(v["nouns"]["field_set"], false);
+    let red: Vec<String> = v["nouns"]["entries"].as_array().unwrap().iter().filter(|n| n["red"] == true).map(|n| n["key"].as_str().unwrap().to_string()).collect();
+    assert!(!red.contains(&"anisotropic".to_string()), "a single word is not red yet: {red:?}");
+    // the field set once: the same classification (asked again for the new field) turns them red
+    call(&e.app, "PUT", "/api/reader", Some(json!({ "field": "retinal imaging researcher" })), None).await;
+    let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), None, None).await;
+    assert_eq!(v["nouns"]["field_set"], true);
+    let n = v["nouns"]["entries"].as_array().unwrap().iter().find(|n| n["key"] == "anisotropic").cloned().unwrap();
+    assert_eq!(n["red"], true);
+}
+
+#[tokio::test]
+async fn a_file_named_paper_gets_the_headline_of_page_one_and_the_author_can_rename() {
+    let e = setup(&dead_url(), None);
+    let sha = import(&e.app, lr_core::synth::text_pdf(&[vec!["body".to_string()]]), "triage.pdf").await;
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}"), None, None).await;
+    assert_eq!((v["paper"]["title"].as_str(), v["paper"]["title_source"].as_str()), (Some("triage"), Some("file")));
+    let mut items = vec![json!({ "s": 0, "e": 27, "str": "Triage of Retinal Fundus Images", "size": 20.0, "x": 72.0, "y": 720.0 })];
+    for k in 0..30 {
+        items.push(json!({ "s": 28 + k, "e": 29 + k, "str": "body text of the paper goes here", "size": 10.0, "x": 72.0, "y": 600.0 - k as f64 * 12.0 }));
+    }
+    let page = json!({ "pages": [{ "page": 1, "text": "x".repeat(400), "items": items, "width": 612.0, "height": 792.0 }] });
+    let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(page.clone()), None).await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}"), None, None).await;
+    assert_eq!((v["paper"]["title"].as_str(), v["paper"]["title_source"].as_str()), (Some("Triage of Retinal Fundus Images"), Some("page")));
+    // the author's title is never replaced
+    call(&e.app, "PUT", &format!("/api/papers/{sha}"), Some(json!({ "title": "My title" })), None).await;
+    call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(page), None).await;
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}"), None, None).await;
+    assert_eq!((v["paper"]["title"].as_str(), v["paper"]["title_source"].as_str()), (Some("My title"), Some("author")));
 }

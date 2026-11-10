@@ -58,6 +58,20 @@ pub fn info_title(bytes: &[u8]) -> Option<String> {
     (!t.is_empty()).then(|| t.to_string())
 }
 
+/// A `/Title` that says nothing about the paper: empty, the file name again, a word
+/// processor's placeholder ("Microsoft Word - x.docx", "Untitled") or a file name.
+pub fn is_junk_title(title: &str, stem: &str) -> bool {
+    let t = title.trim();
+    let l = t.to_lowercase();
+    let ls = stem.trim().to_lowercase();
+    t.chars().count() < 4
+        || (!ls.is_empty() && l == ls)
+        || l.starts_with("microsoft word")
+        || l.starts_with("untitled")
+        || (l.starts_with("document") && l.len() < 14)
+        || [".pdf", ".doc", ".docx", ".tex", ".dvi", ".indd", ".qxd", ".ps"].iter().any(|e| l.ends_with(e))
+}
+
 /// PDF text string: UTF-16BE with BOM, else PDFDocEncoding (≈ Latin-1).
 pub(crate) fn decode_text_string(raw: &[u8]) -> String {
     if raw.starts_with(&[0xFE, 0xFF]) {
@@ -247,6 +261,15 @@ mod tests {
         assert!(compose(&[&a], &[Pick { src: 0, page: 3 }]).unwrap_err().to_string().contains("第 3 頁"));
         assert!(compose(&[&a], &[Pick { src: 1, page: 1 }]).is_err());
         assert!(compose(&[b"not a pdf"], &[Pick { src: 0, page: 1 }]).is_err());
+    }
+
+    #[test]
+    fn placeholder_titles_are_junk() {
+        assert!(is_junk_title("Microsoft Word - triage.docx", "x"));
+        assert!(is_junk_title("triage", "Triage"));
+        assert!(is_junk_title("paper_final.dvi", ""));
+        assert!(is_junk_title("Untitled", ""));
+        assert!(!is_junk_title("A Synthetic Study of Overlap Metrics", "triage"));
     }
 
     #[test]

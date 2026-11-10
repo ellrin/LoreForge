@@ -235,6 +235,25 @@ pub fn text_of(s: &crate::AppState, sha: &str) -> Result<Arc<PaperText>, ApiErro
     s.texts.lock().unwrap().get(sha).cloned().ok_or_else(|| ApiError(StatusCode::CONFLICT, json!({ "error": "這篇論文的文字還沒讀進來（重新開啟論文）", "no_text": true })))
 }
 
+/// A paper whose title is still its file name gets the headline of its first page
+/// (`title_source` = `page`). Titles from the PDF or the author are never replaced; a
+/// paper from before `title_source` existed counts as file-named when its title is the
+/// file name.
+fn auto_title(s: &crate::AppState, sha: &str, t: &PaperText) {
+    let Ok(Some(m)) = s.papers.meta(sha) else { return };
+    let stem = m.original_name.trim().trim_end_matches(".pdf").trim_end_matches(".PDF");
+    let from_file = match m.extra.get("title_source").and_then(|v| v.as_str()) {
+        Some(src) => src == "file",
+        None => m.derived_from.is_none() && (m.title == stem || m.title == "未命名"),
+    };
+    if !from_file {
+        return;
+    }
+    let Some(title) = t.pages.first().and_then(lr_core::text::title_from_first_page) else { return };
+    let _g = s.write.lock().unwrap();
+    let _ = s.papers.set_title_from(sha, &title, "page");
+}
+
 /// `POST /api/papers/{sha}/read`: the page's pdf.js text (all pages of the paper's own
 /// PDF). Returns the noun list.
 pub async fn read_paper(State(s): State<Shared>, Path(sha): Path<String>, Json(t): Json<PaperText>) -> R {
@@ -244,6 +263,7 @@ pub async fn read_paper(State(s): State<Shared>, Path(sha): Path<String>, Json(t
     }
     let t = Arc::new(t.normalise());
     s.texts.lock().unwrap().insert(sha.clone(), t.clone());
+    auto_title(&s, &sha, &t);
     let symbols = rebuild_symbols(&s, &sha, &t)?;
     let nouns = nouns_view(&s, &sha).await?;
     build_paragraphs(&s, &sha).await?;
