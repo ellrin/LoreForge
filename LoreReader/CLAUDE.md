@@ -33,7 +33,11 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   baselines / accent positions, `glyphs.toml` + overrides + TeX font-encoding tables (OML /
   OMS / OT1 / CMEX), display equations, regex definition finder, `SymbolFile` with
   lore-notation `Entry` + scope / grade / resolved_by, `merge` keeps author / Claude edits),
-  `synth` (synthetic PDFs, incl. the ≈8,000-word `long_paper` — never a real paper).
+  `paragraphs` (track B: split with sections / indents / gaps, display equations kept inside
+  as ［式 (n)］, chips = red terms + symbols + equations, run order methods/results first,
+  `lr-paragraph` prompt + schema; no paragraph summary or translation),
+  `synth` (synthetic PDFs, incl. the ≈8,000-word `long_paper`, `paper_text` = what the page
+  would post for a synthetic PDF — never a real paper).
   `tests/math/`: synthetic LaTeX papers + their pdf.js items (`dump-items.js`); the PDFs are
   not kept. `examples/symbols_json.rs --tex` = precision / recall against a LaTeX source.
 - `crates/server` (`lr-server`): axum on 127.0.0.1:7890; handlers are plain async fns over
@@ -42,7 +46,10 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   aliases), `llm.rs` = lore-llm wired like PaperComposer (`tasks.toml`: `lr-translate`
   local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` and
   `lr-paragraph` local:current, no fallback; `complete_on` = the model menu's choice, strict),
-  `reading.rs` = the reading aids over the text the page posts once per open (memory only).
+  `reading.rs` = the reading aids over the text the page posts once per open (memory only):
+  nouns, symbols, paragraphs (background run per paper, newest run wins, cached per
+  paragraph id), 懂了 (`reading.json`), and `chat_context` (title, section, paragraph, chip
+  + its definition here, the author's KB states) for Ask Claude.
   `Printer` trait = the desktop print bridge.
 - `apps/desktop` (`lorereader`): Tauri shell on 7890 (KB links point there); reuses an
   lr-server already on 7890, else binds it (free port if taken). Registers `NativePrinter`:
@@ -67,7 +74,10 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   come from `GET /api/nodes` (read only; no `/api/scan`, no encounters).
   `ignore-words.txt` replaced `known-words.txt` (migrated once by `reading::ignore_file`).
 - Classification: one `lr-classify-terms` call per paper, cached in `nouns.json` (`asked`
-  keys are never re-sent automatically).
+  keys are never re-sent automatically). Math runs and display equations are masked out of
+  the noun list.
+- Track B never writes a Chinese summary or translation of a paragraph. Claude's answers
+  reach the symbol table only through 寫回符號表 (`resolved_by: claude`, evidence kept).
 - Theme: `web/theme.js` = `data-mode` on `<html>`, `lr.mode` in localStorage, then
   `window.LORE_PREFS.theme` from `/prefs.js` (always `null` today). **Later**: a shared, synced
   theme in lore-home prefs fills `theme` server-side in `prefs_js`; pages need no change.

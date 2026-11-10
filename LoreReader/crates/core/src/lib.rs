@@ -17,11 +17,14 @@
 //! - [`symbols`]: variables and equations, step 1 (no model): math runs from pdf.js
 //!   items (fonts, sizes, baselines, accents), glyph → LaTeX, display equations, the
 //!   regex definition finder and the per-paper symbol table (lore-notation fields).
+//! - [`paragraphs`]: track B — paragraphs with sections, their chips (terms, symbols,
+//!   equations), the `lr-paragraph` prompt, schema and run order.
 //! - [`synth`]: synthetic text PDFs for tests and demos (never a real paper).
 
 pub mod config;
 pub mod library;
 pub mod papers;
+pub mod paragraphs;
 pub mod pdfops;
 pub mod symbols;
 pub mod synth;

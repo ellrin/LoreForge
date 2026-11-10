@@ -102,3 +102,23 @@ fn definitions_quote_their_sentence_and_conflicts_are_found() {
     assert_eq!(m.grade, "conflict", "{:?}", m.evidence);
     assert_eq!(m.evidence.len(), 2);
 }
+
+/// Display equations stay inside their paragraph ("… is (1) where w_i is …"), and the
+/// words of math runs are not nouns.
+#[test]
+fn paragraphs_keep_display_equations_and_math_is_not_a_noun() {
+    let (_, det, paper) = score("paper1");
+    let t = symbols::build(&paper, &det, "test");
+    let eqs: Vec<(u32, usize, usize, String)> = t.equations.iter().map(|q| (q.page, q.s, q.e, q.entry.label.clone().unwrap_or_default())).collect();
+    let paras = lr_core::paragraphs::split_with(&paper, &eqs);
+    let with_eq = paras.iter().find(|p| p.text.contains("［式 (1)］")).unwrap_or_else(|| panic!("{:#?}", paras.iter().map(|p| &p.text).collect::<Vec<_>>()));
+    assert!(with_eq.text.contains("The weighted loss is") && with_eq.text.contains("where"), "{}", with_eq.text);
+    assert_eq!(with_eq.section, "1 Method");
+    assert!(paras.iter().any(|p| p.section_kind == "result"));
+    let mask: Vec<(u32, usize, usize)> = t.entries.iter().flat_map(|e| e.occurrences.iter().map(|o| (o.page, o.s, o.e))).chain(t.equations.iter().map(|q| (q.page, q.s, q.e))).collect();
+    let inv = lr_core::nouns::inventory_masked(&paper, &[], &Default::default(), &Default::default(), &mask);
+    for junk in ["lce", "nx", "rh"] {
+        assert!(!inv.entries.iter().any(|e| e.key == junk), "{junk} is math, not a noun");
+    }
+    assert!(inv.entries.iter().any(|e| e.key == "curvature"));
+}

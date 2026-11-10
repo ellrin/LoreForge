@@ -3,7 +3,7 @@
 本機運作的 PDF 論文閱讀器。目標是用最短時間弄清楚一篇論文裡自己需要掌握什麼：沒學過的術語標成紅色、已在知識庫的術語顯示熟悉度；讀的時候存「引用句」（之後在 PaperComposer 引用）、加註記、翻譯、問 Claude。知識庫只放真正消化過的東西，所以**只有按「加入知識庫」才會建立卡片**，不會自動寫入。
 
 > 原型 v0。已完成：書庫（repo 外、sha256 命名）、pdf.js 閱讀（文字層、縮放、搜尋、延遲繪製、縮圖）、不破壞原檔的頁面操作（刪除、複製、拖曳排序、從其他 PDF 插入、合併）、列印、螢光標記與註記、選取文字右鍵選單（複製、翻譯、問 Claude、存成引用句、加入知識庫）、知識標示（紅色＝沒有卡片）、從知識庫卡片連回 PDF 那一頁。
-> 閱讀輔助（第二階段）：名詞整理（整篇詞表對知識庫、模型一次分類、忽略清單）、符號與方程式表（不靠模型）、每個工作可選模型。
+> 閱讀輔助（第二階段）：名詞整理（整篇詞表對知識庫、模型一次分類、忽略清單）、符號與方程式表（不靠模型）、讀懂段落（背景分析、卡住的標籤、懂了的進度）與問 Claude 的段落脈絡、每個工作可選模型。
 > 不在範圍：編輯 PDF 內容、投影片精靈（之後在 SlideComposer）、把註記寫進 PDF 檔（之後可做）。
 
 ## 執行
@@ -48,8 +48,10 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `paper.json` | `schema: "lorereader.paper/1"`、`sha256`、`title`（PDF 的 Title，沒有就用檔名）、`original_name`、`doi`（前兩頁找到的第一個 DOI，沒有為 `null`）、`pages`、`added_at`、`derived_from`（頁面操作產生的新 PDF：`{op, from: [sha256…]}`） |
 | `annotations.json` | `schema: "lorereader.annotations/1"`，`annotations: [{id, page, kind: "highlight" \| "note", color: yellow\|green\|blue\|pink, quote: {exact, prefix, suffix}, rects: [[x0,y0,x1,y1]…], note, created_at, updated_at}]`。`rects` 是相對於頁面的比例（左上為原點），所以任何縮放都對得上；`quote` 是原文與前後文，之後換渲染方式也能重新定位 |
 | `quotes.json` | 引用句。`schema: "lorereader.quotes/1"`，`quotes: [{id, text, page, note, created_at}]`。`note` 是一行備註（可空白） |
-| `chat.json` | 問 Claude 的對話。`schema: "lorereader.chat/1"`，`messages: [{role: user\|assistant, text, attachments: [{text, page, context}], at, engine}]` |
+| `chat.json` | 問 Claude 的對話。`schema: "lorereader.chat/1"`，`messages: [{role: user\|assistant, text, attachments: [{text, page, context}], at, engine, paragraph?, chip?: {kind: term\|symbol\|equation, id, label}, context?}]`（`context` 是附給模型的段落脈絡，重播歷史時用） |
 | `symbols.json` | 符號表。`schema: "lorereader.symbols/1"`，`sha256`，`generated_at`，`entries`：lore-notation 登錄的欄位（`id`、`kind: "symbol"`、`latex`、`meaning`、`meaning_en`、`defined_at`、`tags`…）加上 `scope`（論文 sha256）、`grade`（`certain` ✅／`defined` 🟢／`inferred` 🟡／`conflict` 🔴／`unresolved` ⚪）、`resolved_by`（`program`／`local`／`claude`／`author`）、`evidence: [{quote, page, by, at?, meaning?}]`、`occurrences: [{page, s, e, bbox, latex, eq?}]`、`first: {page, sentence}`、`equations: [id]`、`note`；`equations`：lore-notation 的 `equation` 條目（`id`、`label: "(3)"`、`latex`、`uses`）加上 `page`、`number`、`bbox`、`s`、`e`。`bbox` 是頁面比例、左上為原點 |
+| `paragraphs.json` | 段落分析的快取。`schema: "lorereader.paragraphs/1"`，`analyses: {<段落 id>: {role, equations: [{ref, inputs, outputs, target, effect}], motive, results: [{metric, comparison, values, difference, test, significance}], engine, at}}`。段落 id 是段落文字的雜湊，重新開檔不變；段落文字本身不存 |
+| `reading.json` | 「懂了」。`schema: "lorereader.reading/1"`，`understood: [段落 id]` |
 | `nouns.json` | 名詞分類的快取。`schema: "lorereader.nouns/1"`，`categories: {<詞的正規化 key>: 分類}`，`asked: [已經送給模型的 key]`，`engine`，`classified_at`。名詞清單本身每次開檔重算（全文不寫進工作區） |
 
 工作區根目錄另有 `ignore-words.txt`（忽略清單，一行一個字或詞組，`#` 之後是註解）與 `models.json`（`{schema: "lorereader.models/1", choices: {<任務>: auto\|local\|haiku\|sonnet\|opus}}`）。
@@ -60,7 +62,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 ## 閱讀
 
-- 左邊縮圖、中間頁面、右邊面板（名詞／符號／註記／引用句／對話）；窄螢幕時縮圖與面板變成抽屜。深色／淺色與其他 App 相同（右上角切換）。
+- 左邊縮圖、中間頁面、右邊面板（名詞／符號／段落／註記／引用句／對話）；窄螢幕時縮圖與面板變成抽屜。深色／淺色與其他 App 相同（右上角切換）。
 - pdf.js 文字層可以選取文字；縮放、符合寬度、頁碼跳頁、全文搜尋（⌘/Ctrl＋F，Enter 下一個）。只繪製視窗附近的頁面，縮圖捲到才畫。
 
 ## 頁面操作（不破壞原檔）
@@ -83,7 +85,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 - **複製**。
 - **螢光標記**（黃、綠、藍、粉紅）與**加註記…**：存在 `annotations.json`，右邊「註記」分頁列出，點一下跳到那裡。
 - **翻譯**：lore-llm 任務 `lr-translate`，先用本機模型（`local:current`），連不上才用 Claude（`claude:selected`），與 PaperComposer 的順序相同。結果在小視窗顯示，可以「加入知識庫」。
-- **問 Claude**：把選取的文字、頁碼和所在段落附到右邊的對話（任務 `lr-chat` → `claude:selected`，只用 Claude）。對話存在這篇論文的 `chat.json`。
+- **問 Claude**：把選取的文字、頁碼和所在段落附到右邊的對話（任務 `lr-chat` → `claude:selected`；模型選單可以改）。對話存在這篇論文的 `chat.json`。
 - **存成引用句…**：句子（可修剪）＋一行備註，存在 `quotes.json`；右邊「引用句」分頁列出。
 - **加入知識庫…**：呼叫 KnowledgeBase 的 `POST /api/nodes`。標題預填選取的文字，摘要自己寫（可按「用模型起草摘要」呼叫 KnowledgeBase 的 `/api/draft`）。**初始狀態**可選「學習中」（預設：明天問、3 天後再問）或「已掌握」（已經熟的詞，直接記為「記得」，30 天後再確認）。來源記為 `{type: "pdf", ref: <sha256>, where: "p.<頁>", title: <論文標題>}`，內文附上所在的句子。
 
@@ -129,6 +131,28 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 **已知限制**：分數 `\frac{a}{b}` 在行內常被讀成上下標；大型運算子上下的極限（`\sum_{i=1}^{N}`）方向可能顛倒；括號後面的下標（`(\ldots)_{t}`）接不上；寬的 `\bar`、`\widehat` 若是畫線而不是字形就抓不到；同一個字母在 CM 字型裡 `\phi` 與 `\varphi` 分不出來（都當 `\phi`）；圖說等小字級裡的上下標偶爾漏掉；無編號的獨立方程式會偵測得比實際多。
 
+## 讀懂段落（B 線）與「問 Claude」的分工
+
+開檔後把全文切成**段落**（pdf.js 的行：粗體或較大、較短、常有編號的行是章節標題；行距變大、首行縮排、句子結束的短行開始新段；獨立方程式留在所屬的段落裡、讀成［式 (n)］，方程式後面的「where …」接在同一段；沒結束的段落接到下一頁），然後在背景依序跑 `lr-paragraph`：**方法段與結果段先跑**，跑完一段就顯示一段，結果存在 `papers/<sha256>/paragraphs.json`，下次開檔不再跑。**不提供整段的中文摘要或翻譯**，只標出卡住的地方。
+
+「段落」分頁，每一段：
+
+- **角色**：背景、缺口、方法步驟、結果、討論、其他。
+- **卡住的地方（標籤）**：這段裡 A 線的紅字（沒有卡片的術語）、符號表裡的符號（附等級）與獨立方程式。每個標籤有三個動作：**看定義**（知識庫卡片或符號表）、**問 Claude**、**加入知識庫**。
+- **方法段**：每條方程式的「翻譯」（輸入、輸出、作用目標、作用結果）與這一步的動機（原文有寫才有）。
+- **結果段**：指標、比較對象、數值、差距、檢定、顯著性，原文沒有的格子留空。
+- **「這段我卡住了」**（整段和所有標籤一起問）與 **「懂了」**：懂了存在 `papers/<sha256>/reading.json`，上方顯示進度（例如 20/32），「下一段還沒懂的」跳到下一段；這和知識庫的「記得」無關。
+
+**問 Claude 自動附上**：論文標題、章節、段落原文（含頁碼）、卡住的項目和它在本篇的已知定義（符號的意思、等級與原文定義句；術語的分類與知識庫狀態），以及**作者在這段裡的知識庫狀態**（已掌握、學習中、沒有卡片），讓 Claude 用作者懂的詞解釋不懂的。預設問法「只解釋我卡住的點，不要翻譯整段」，可以改寫。
+
+**回答下方**：
+
+- **寫回符號表**：選這段的一個符號，填意思與等級（Claude 的回答當依據；有引用原文定義句才選 🟢），記為 `resolved_by: claude`，回答存成 `evidence`；之後重新偵測不會蓋掉。
+- **存成這段的註記**：存進 `annotations.json`（`paragraph` 欄位記段落 id），在「註記」分頁看得到。
+- **加入知識庫**：可選學習中或已掌握（同右鍵選單的「加入知識庫」）。
+
+對話依段落歸檔（`chat.json` 的 `paragraph`、`chip`、`context`），「對話」分頁可以切換「全部」或「這段」，重讀時看得到當時卡在哪、怎麼解開。沒有模型時段落與標籤照樣列出，上方說明原因。
+
 ### 模型選單
 
 工具列的 ✦ 按鈕：名詞分類、段落分析、問 Claude、翻譯，各自選「自動」（照 `tasks.toml` 的預設順序）、地端、Haiku、Sonnet 或 Opus，做法同 PaperComposer 的模型選單（`complete_on`）。選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。選擇存在 `private/LoreReader/models.json`。
@@ -146,12 +170,13 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `GET/PUT /api/papers/{sha}`、`GET /api/papers/{sha}/pdf` | 論文資料／改標題；PDF 本身 |
 | `GET/POST /api/papers/{sha}/annotations`、`PUT/DELETE …/annotations/{id}` | 註記 |
 | `GET/POST /api/papers/{sha}/quotes`、`DELETE …/quotes/{id}`、`GET /api/quotes` | 引用句（單篇／全部） |
-| `GET/POST/DELETE /api/papers/{sha}/chat` | 對話（送出 `{text, attachments}` 會回覆並存檔） |
+| `GET/POST/DELETE /api/papers/{sha}/chat` | 對話（送出 `{text, attachments, paragraph?, chip?: {kind, id}}` 會回覆並存檔；有 `paragraph` 時伺服器附上段落脈絡） |
 | `POST /api/compose` | `{pages: [{sha, page}], title?, op?}` → 新 PDF（書庫＋匯出） |
 | `POST /api/translate` | `{text, context?}` |
 | `POST /api/papers/{sha}/read` | 頁面送來的全文（每頁的文字與 pdf.js 項目：字型名稱、字級、位置）→ 名詞清單 |
 | `GET /api/papers/{sha}/nouns`、`POST …/nouns/classify` | 名詞清單（每個詞的 key、寫法、來源、知識庫狀態、分類、次數、出現位置 `[頁, 起, 迄]`）；`{again?}` → 一次 `lr-classify-terms` |
 | `GET/POST /api/papers/{sha}/symbols`、`PUT …/symbols/{id}`、`POST …/symbols/rebuild` | 符號表；新增；修改 `{latex?, meaning?, meaning_en?, grade?, note?, by?, evidence?, page?}`（作者的修改優先）；重新偵測 |
+| `GET /api/papers/{sha}/paragraphs`、`POST …/paragraphs/run`、`POST …/paragraphs/{id}/understood` | 段落（標籤、分析、懂了）與背景分析的進度；重跑 `{again?}`；`{on}` |
 | `GET/PUT /api/glyphs` | 自己的字形 → LaTeX 對照（`private/LoreReader/glyphs.toml`） |
 | `POST/DELETE /api/ignore` | `{term}` → 加進／移出忽略清單 |
 | `GET/PUT /api/models` | 模型選單：`{task, model}` |

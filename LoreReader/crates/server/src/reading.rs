@@ -8,6 +8,9 @@
 //!   `GET …/symbols`, `PUT …/symbols/{id}` (author edits win), `POST …/symbols` (add),
 //!   `POST …/symbols/rebuild`, kept in `papers/<sha>/symbols.json`; the glyph → LaTeX
 //!   override `GET/PUT /api/glyphs` (`private/LoreReader/glyphs.toml`);
+//! - paragraphs (track B): `GET …/paragraphs`, the background `lr-paragraph` run
+//!   (methods and results first, cached per paragraph in `papers/<sha>/paragraphs.json`),
+//!   懂了 in `papers/<sha>/reading.json`, and the context Ask Claude gets for a paragraph;
 //! - the model menu: `GET/PUT /api/models` (`private/LoreReader/models.json`).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +22,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use lore_llm::LlmRequest;
 use lr_core::nouns::{self, Filters};
+use lr_core::paragraphs::{self, Analysis, Paragraph};
 use lr_core::symbols::{self, Evidence, Glyphs, SymbolEntry, SymbolFile};
 use lr_core::text::PaperText;
 use serde::{Deserialize, Serialize};
@@ -95,11 +99,13 @@ pub async fn read_paper(State(s): State<Shared>, Path(sha): Path<String>, Json(t
     s.texts.lock().unwrap().insert(sha.clone(), t.clone());
     let symbols = rebuild_symbols(&s, &sha, &t)?;
     let nouns = nouns_view(&s, &sha).await?;
+    build_paragraphs(&s, &sha).await?;
+    spawn_run(s.clone(), sha.clone(), false);
     Ok(Json(json!({ "words": t.words(), "pages": t.pages.len(), "nouns": nouns, "symbols": symbols })))
 }
 
-/// The noun list now: inventory × KB × ignore list × cached categories.
-pub async fn nouns_view(s: &crate::AppState, sha: &str) -> Result<Value, ApiError> {
+/// Inventory × KB × ignore list × cached categories, and the KB's status.
+async fn inventory_of(s: &crate::AppState, sha: &str) -> Result<(nouns::Inventory, Value, NounsCache), ApiError> {
     let text = text_of(s, sha)?;
     let (kb, kb_status) = match s.kb.lexicon().await {
         Ok(l) => (l, json!({ "ok": true })),
@@ -107,7 +113,23 @@ pub async fn nouns_view(s: &crate::AppState, sha: &str) -> Result<Value, ApiErro
     };
     let cache: NounsCache = s.papers.load(sha, "nouns.json")?.unwrap_or_default();
     let cats = cache.categories.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let inv = nouns::inventory(&text, &kb, &Filters::with_file(&ignore_file(&s.workspace)), &cats);
+    let syms: SymbolFile = s.papers.load(sha, "symbols.json")?.unwrap_or_default();
+    let inv = nouns::inventory_masked(&text, &kb, &Filters::with_file(&ignore_file(&s.workspace)), &cats, &math_mask(&syms));
+    Ok((inv, kb_status, cache))
+}
+
+/// The page ranges of every math run and display equation (not words).
+pub fn math_mask(syms: &SymbolFile) -> Vec<(u32, usize, usize)> {
+    let mut m: Vec<(u32, usize, usize)> = syms.entries.iter().flat_map(|e| e.occurrences.iter().map(|o| (o.page, o.s, o.e))).collect();
+    m.extend(syms.equations.iter().map(|q| (q.page, q.s, q.e)));
+    m.sort();
+    m.dedup();
+    m
+}
+
+/// The noun list now: inventory × KB × ignore list × cached categories.
+pub async fn nouns_view(s: &crate::AppState, sha: &str) -> Result<Value, ApiError> {
+    let (inv, kb_status, cache) = inventory_of(s, sha).await?;
     let pending = inv.unclassified().iter().filter(|n| !cache.asked.contains(&n.key)).count();
     let entries: Vec<Value> = inv
         .entries
@@ -144,10 +166,8 @@ pub async fn classify(State(s): State<Shared>, Path(sha): Path<String>, body: Op
     sha_ok(&sha)?;
     let again = body.map(|b| b.again).unwrap_or(false);
     let text = text_of(&s, &sha)?;
-    let kb = s.kb.lexicon().await.unwrap_or_default();
-    let mut cache: NounsCache = s.papers.load(&sha, "nouns.json")?.unwrap_or_default();
-    let cats = cache.categories.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let inv = nouns::inventory(&text, &kb, &Filters::with_file(&ignore_file(&s.workspace)), &cats);
+    let _ = &text;
+    let (inv, _, mut cache) = inventory_of(&s, &sha).await?;
     let todo: Vec<&nouns::Noun> = inv.unclassified().into_iter().filter(|n| again || !cache.asked.contains(&n.key)).collect();
     if todo.is_empty() {
         return Ok(Json(json!({ "asked": 0, "nouns": nouns_view(&s, &sha).await? })));
@@ -361,6 +381,301 @@ pub async fn glyphs_put(State(s): State<Shared>, Json(b): Json<GlyphsBody>) -> R
     let _g = s.write.lock().unwrap();
     lr_core::write_atomic(&s.workspace.join(GLYPHS_FILE), b.text.as_bytes()).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?;
     Ok(Json(json!({ "entries": n })))
+}
+
+// ── paragraphs (track B) ─────────────────────────────────────────────────
+
+pub const PARAGRAPHS_FILE: &str = "paragraphs.json";
+pub const READING_FILE: &str = "reading.json";
+/// The question Ask Claude sends for a paragraph unless the author writes another.
+pub const DEFAULT_QUESTION: &str = "只解釋我卡住的點，不要翻譯整段";
+
+/// The background run of one paper.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RunStatus {
+    pub id: u64,
+    pub running: bool,
+    pub done: usize,
+    pub total: usize,
+    pub error: Option<String>,
+    pub engine: Option<String>,
+}
+
+/// paragraphs.json: the model's analysis per paragraph id.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ParagraphsFile {
+    #[serde(default)]
+    pub schema: String,
+    #[serde(default)]
+    pub analyses: BTreeMap<String, Analysis>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// reading.json: what the author marked 懂了 (separate from KB states).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReadingFile {
+    #[serde(default)]
+    pub schema: String,
+    #[serde(default)]
+    pub understood: BTreeSet<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// Split the paper and attach chips; kept in memory.
+async fn build_paragraphs(s: &crate::AppState, sha: &str) -> Result<Arc<Vec<Paragraph>>, ApiError> {
+    let text = text_of(s, sha)?;
+    let (inv, _, _) = inventory_of(s, sha).await?;
+    let syms: SymbolFile = s.papers.load(sha, "symbols.json")?.unwrap_or_default();
+    let eqs: Vec<(u32, usize, usize, String)> = syms.equations.iter().map(|q| (q.page, q.s, q.e, q.entry.label.clone().unwrap_or_default())).collect();
+    let mut ps = paragraphs::split_with(&text, &eqs);
+    paragraphs::attach_chips(&mut ps, &inv, &syms);
+    let ps = Arc::new(ps);
+    s.paras.lock().unwrap().insert(sha.to_string(), ps.clone());
+    Ok(ps)
+}
+
+fn paras_of(s: &crate::AppState, sha: &str) -> Option<Arc<Vec<Paragraph>>> {
+    s.paras.lock().unwrap().get(sha).cloned()
+}
+
+/// Analyse every paragraph without a cached analysis, methods and results first, one at
+/// a time; results are saved as they come. A newer run for the same paper stops this one.
+pub fn spawn_run(s: Shared, sha: String, again: bool) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let Some(ps) = paras_of(&s, &sha) else { return };
+    let order = paragraphs::run_order(&ps);
+    s.runs.lock().unwrap().insert(sha.clone(), RunStatus { id, running: true, done: 0, total: order.len(), error: None, engine: None });
+    tokio::spawn(async move {
+        let title = s.papers.meta(&sha).ok().flatten().map(|m| m.title).unwrap_or_default();
+        let syms: SymbolFile = s.papers.load(&sha, "symbols.json").ok().flatten().unwrap_or_default();
+        let mine = |s: &crate::AppState| s.runs.lock().unwrap().get(&sha).is_some_and(|r| r.id == id);
+        let mut done = 0;
+        for i in order {
+            if !mine(&s) {
+                return;
+            }
+            let p = &ps[i];
+            let cached = s.papers.load::<ParagraphsFile>(&sha, PARAGRAPHS_FILE).ok().flatten().is_some_and(|f| f.analyses.contains_key(&p.id));
+            if cached && !again {
+                done += 1;
+                if let Some(r) = s.runs.lock().unwrap().get_mut(&sha).filter(|r| r.id == id) {
+                    r.done = done;
+                }
+                continue;
+            }
+            let choice = model_choice(&s.workspace, "lr-paragraph");
+            let req = LlmRequest::prompt(paragraphs::PARAGRAPH_SYSTEM, paragraphs::paragraph_prompt(&title, p, &syms)).json(paragraphs::paragraph_schema()).max_tokens(1500);
+            let res = s.llm.complete_on("lr-paragraph", choice.as_deref(), req).await;
+            let a = match res {
+                Ok(a) => a,
+                Err(e) => {
+                    if let Some(r) = s.runs.lock().unwrap().get_mut(&sha).filter(|r| r.id == id) {
+                        r.running = false;
+                        r.error = Some(format!("沒有可用的模型：{e}"));
+                    }
+                    return;
+                }
+            };
+            let Some(v) = lore_llm::json::extract_json(&a.text) else {
+                done += 1;
+                continue;
+            };
+            let mut an = paragraphs::parse_analysis(&v);
+            an.engine = a.engine.clone();
+            an.at = lr_core::now();
+            {
+                let _g = s.write.lock().unwrap();
+                let mut f: ParagraphsFile = s.papers.load(&sha, PARAGRAPHS_FILE).ok().flatten().unwrap_or_default();
+                f.schema = paragraphs::PARAGRAPHS_SCHEMA.into();
+                f.analyses.insert(p.id.clone(), an);
+                let _ = s.papers.save(&sha, PARAGRAPHS_FILE, &f);
+            }
+            done += 1;
+            if let Some(r) = s.runs.lock().unwrap().get_mut(&sha).filter(|r| r.id == id) {
+                r.done = done;
+                r.engine = Some(a.engine.clone());
+            }
+        }
+        if let Some(r) = s.runs.lock().unwrap().get_mut(&sha).filter(|r| r.id == id) {
+            r.running = false;
+        }
+    });
+}
+
+pub async fn paragraphs_get(State(s): State<Shared>, Path(sha): Path<String>) -> R {
+    sha_ok(&sha)?;
+    let ps = match paras_of(&s, &sha) {
+        Some(p) => p,
+        None => build_paragraphs(&s, &sha).await?,
+    };
+    let f: ParagraphsFile = s.papers.load(&sha, PARAGRAPHS_FILE)?.unwrap_or_default();
+    let r: ReadingFile = s.papers.load(&sha, READING_FILE)?.unwrap_or_default();
+    let list: Vec<Value> = ps
+        .iter()
+        .map(|p| {
+            let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
+            v["analysis"] = f.analyses.get(&p.id).map(|a| serde_json::to_value(a).unwrap_or(Value::Null)).unwrap_or(Value::Null);
+            v["understood"] = r.understood.contains(&p.id).into();
+            v["page"] = p.page().into();
+            v
+        })
+        .collect();
+    let readable = ps.iter().filter(|p| p.section_kind != "front").count();
+    let understood = ps.iter().filter(|p| p.section_kind != "front" && r.understood.contains(&p.id)).count();
+    let status = s.runs.lock().unwrap().get(&sha).cloned().unwrap_or_default();
+    Ok(Json(json!({ "paragraphs": list, "status": status, "progress": { "understood": understood, "total": readable }, "default_question": DEFAULT_QUESTION })))
+}
+
+#[derive(Deserialize, Default)]
+pub struct RunBody {
+    #[serde(default)]
+    pub again: bool,
+}
+
+pub async fn paragraphs_run(State(s): State<Shared>, Path(sha): Path<String>, body: Option<Json<RunBody>>) -> R {
+    sha_ok(&sha)?;
+    if paras_of(&s, &sha).is_none() {
+        build_paragraphs(&s, &sha).await?;
+    }
+    spawn_run(s.clone(), sha.clone(), body.map(|b| b.again).unwrap_or(false));
+    paragraphs_get(State(s), Path(sha)).await
+}
+
+#[derive(Deserialize)]
+pub struct UnderstoodBody {
+    pub on: bool,
+}
+
+pub async fn understood(State(s): State<Shared>, Path((sha, pid)): Path<(String, String)>, Json(b): Json<UnderstoodBody>) -> R {
+    sha_ok(&sha)?;
+    if !pid.starts_with('p') || pid.len() > 40 || !pid[1..].chars().all(|c| c.is_ascii_hexdigit() || c == '-' || c.is_ascii_digit()) {
+        return Err(bad("段落 id"));
+    }
+    let _g = s.write.lock().unwrap();
+    let mut r: ReadingFile = s.papers.load(&sha, READING_FILE)?.unwrap_or_default();
+    r.schema = "lorereader.reading/1".into();
+    if b.on {
+        r.understood.insert(pid.clone());
+    } else {
+        r.understood.remove(&pid);
+    }
+    s.papers.save(&sha, READING_FILE, &r)?;
+    Ok(Json(json!({ "paragraph": pid, "understood": b.on, "count": r.understood.len() })))
+}
+
+/// The stuck point a question is about.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChipRef {
+    /// term | symbol | equation
+    pub kind: String,
+    pub id: String,
+}
+
+/// What Ask Claude gets for a paragraph: title, section, the paragraph (with its page),
+/// the chip and its known definition in this paper, and the author's KB states for the
+/// terms in the paragraph (known vs not), so the answer uses words the author knows.
+pub async fn chat_context(s: &crate::AppState, sha: &str, title: &str, pid: &str, chip: Option<&ChipRef>) -> Result<(String, Option<Value>), ApiError> {
+    let ps = match paras_of(s, sha) {
+        Some(p) => p,
+        None => build_paragraphs(s, sha).await?,
+    };
+    let p = ps.iter().find(|p| p.id == pid).ok_or_else(|| bad("沒有這個段落（重新開啟論文）"))?;
+    let (inv, kb_status, _) = inventory_of(s, sha).await?;
+    let syms: SymbolFile = s.papers.load(sha, "symbols.json")?.unwrap_or_default();
+    let mut out = format!("〔論文〕{title}\n〔章節〕{}\n〔段落，p.{}〕{}\n", if p.section.is_empty() { "（未知）" } else { &p.section }, p.page(), p.text);
+    let mut chip_json = None;
+    if let Some(c) = chip {
+        let (label, known) = match c.kind.as_str() {
+            "symbol" => match syms.entries.iter().find(|e| e.entry.id == c.id) {
+                Some(e) => {
+                    let latex = e.entry.latex.clone().unwrap_or_default();
+                    let def = match (e.entry.meaning.as_deref().or(e.entry.meaning_en.as_deref()), e.evidence.first()) {
+                        (Some(m), Some(ev)) => format!("{m}（{}；原文 p.{}：「{}」）", grade_label(&e.grade), ev.page, ev.quote),
+                        (Some(m), None) => format!("{m}（{}）", grade_label(&e.grade)),
+                        (None, _) => format!("本篇沒找到定義（{}）", grade_label(&e.grade)),
+                    };
+                    (format!("${latex}$"), def)
+                }
+                None => (c.id.clone(), "（符號表裡沒有）".into()),
+            },
+            "equation" => match syms.equations.iter().find(|q| q.entry.id == c.id) {
+                Some(q) => (format!("式 {}", q.entry.label.clone().unwrap_or_default()), format!("PDF 讀出的 LaTeX（可能不完整）：{}", q.entry.latex.clone().unwrap_or_default())),
+                None => (c.id.clone(), String::new()),
+            },
+            _ => match inv.entries.iter().find(|n| n.key == c.id) {
+                Some(n) => (n.text.clone(), format!("知識庫：{}；分類：{}", state_label(&n.state), n.category.as_deref().unwrap_or("未分類"))),
+                None => (c.id.clone(), String::new()),
+            },
+        };
+        out += &format!("〔卡住的地方〕{label}\n〔在本篇的已知定義〕{}\n", if known.is_empty() { "（無）" } else { &known });
+        chip_json = Some(json!({ "kind": c.kind, "id": c.id, "label": label }));
+    } else {
+        // 「這段我卡住了」: every stuck point of the paragraph with what is known here
+        let mut lines = vec![];
+        for k in &p.chips.terms {
+            if let Some(n) = inv.entries.iter().find(|n| &n.key == k) {
+                lines.push(format!("- {}（{}；{}）", n.text, state_label(&n.state), n.category.as_deref().unwrap_or("未分類")));
+            }
+        }
+        for id in &p.chips.symbols {
+            if let Some(e) = syms.entries.iter().find(|e| &e.entry.id == id) {
+                let m = e.entry.meaning.as_deref().or(e.entry.meaning_en.as_deref()).unwrap_or("本篇沒找到定義");
+                lines.push(format!("- ${}$：{m}（{}）", e.entry.latex.clone().unwrap_or_default(), grade_label(&e.grade)));
+            }
+        }
+        for id in &p.chips.equations {
+            if let Some(q) = syms.equations.iter().find(|q| &q.entry.id == id) {
+                lines.push(format!("- 式 {}：{}", q.entry.label.clone().unwrap_or_else(|| "（無編號）".into()), q.entry.latex.clone().unwrap_or_default()));
+            }
+        }
+        if !lines.is_empty() {
+            out += &format!("〔這段卡住的地方〕\n{}\n", lines.join("\n"));
+        }
+    }
+    // the author's KB states for the terms in this paragraph
+    let inside = |page: u32, st: u32, en: u32| p.ranges.iter().any(|r| r.page == page && st as usize >= r.s && en as usize <= r.e);
+    let (mut known, mut learning, mut none) = (vec![], vec![], vec![]);
+    for n in inv.entries.iter().filter(|n| n.occ.iter().any(|o| inside(o[0], o[1], o[2]))) {
+        match n.state.as_str() {
+            "known" => known.push(n.text.clone()),
+            "learning" | "stale" | "none" => learning.push(n.text.clone()),
+            _ if n.red() => none.push(n.text.clone()),
+            _ => {}
+        }
+    }
+    if kb_status["ok"] == true {
+        out += &format!(
+            "〔作者的知識庫〕已掌握：{}；學習中：{}；沒有卡片（作者不熟）：{}\n",
+            if known.is_empty() { "（無）".into() } else { known.join("、") },
+            if learning.is_empty() { "（無）".into() } else { learning.join("、") },
+            if none.is_empty() { "（無）".into() } else { none.join("、") }
+        );
+    } else {
+        out += &format!("〔作者的知識庫〕KnowledgeBase 沒有回應；這段沒有卡片的術語：{}\n", if none.is_empty() { "（無）".into() } else { none.join("、") });
+    }
+    Ok((out, chip_json))
+}
+
+fn grade_label(g: &str) -> &'static str {
+    match g {
+        "certain" => "✅ 確定",
+        "defined" => "🟢 有定義",
+        "inferred" => "🟡 推測",
+        "conflict" => "🔴 本篇有兩種定義",
+        _ => "⚪ 查不到",
+    }
+}
+
+fn state_label(s: &str) -> &'static str {
+    match s {
+        "known" => "已掌握",
+        "learning" | "none" => "學習中",
+        "stale" => "久未複習",
+        _ => "沒有卡片",
+    }
 }
 
 // ── model menu ───────────────────────────────────────────────────────────

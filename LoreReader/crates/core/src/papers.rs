@@ -25,7 +25,9 @@
 //! ```json
 //! { "schema": "lorereader.chat/1", "messages": [
 //!   { "role": "user" | "assistant", "text": "…", "at": "…", "engine": "…"?,
-//!     "attachments": [ { "text": "…", "page": 3, "context": "…" } ] } ] }
+//!     "attachments": [ { "text": "…", "page": 3, "context": "…" } ],
+//!     "paragraph": "p…"?, "chip": { "kind": "symbol", "id": "w", "label": "w_i" }?,
+//!     "context": "…"? } ] }
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -144,6 +146,16 @@ pub struct ChatMessage {
     pub at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
+    /// The paragraph this exchange is filed under (track B).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paragraph: Option<String>,
+    /// The stuck point it was about: `{kind: term|symbol|equation, id, label}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chip: Option<Value>,
+    /// What was sent to the model before the question (paper, section, paragraph,
+    /// definitions, the author's KB states), so the history replays exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -451,7 +463,7 @@ mod tests {
         ps.delete_quote(&sha, &q.id).unwrap();
         assert!(ps.quotes(&sha).unwrap().is_empty());
 
-        ps.push_chat(&sha, &[ChatMessage { role: "user".into(), text: "?".into(), attachments: vec![Attachment { text: "x".into(), page: 1, context: "y".into() }], at: crate::now(), engine: None }]).unwrap();
+        ps.push_chat(&sha, &[ChatMessage { role: "user".into(), text: "?".into(), attachments: vec![Attachment { text: "x".into(), page: 1, context: "y".into() }], at: crate::now(), engine: None, paragraph: None, chip: None, context: None }]).unwrap();
         assert_eq!(ps.chat(&sha).unwrap().len(), 1);
         ps.clear_chat(&sha).unwrap();
         assert!(ps.chat(&sha).unwrap().is_empty());

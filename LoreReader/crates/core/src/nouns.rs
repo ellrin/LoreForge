@@ -555,7 +555,21 @@ fn add(acc: &mut BTreeMap<String, Acc>, id: String, key: &str, surface: &str, so
 /// Build the inventory. `kb` = every card title and alias (empty when the KB is
 /// down); `cats` = the cached classification (key → category).
 pub fn inventory(paper: &PaperText, kb: &[KbName], filters: &Filters, cats: &HashMap<String, String>) -> Inventory {
-    let ws = words(paper);
+    inventory_masked(paper, kb, filters, cats, &[])
+}
+
+/// [`inventory`] without the words inside `mask` (`(page, start, end)`, UTF-16): the math
+/// runs and display equations of the symbol table, whose letters are not words.
+pub fn inventory_masked(paper: &PaperText, kb: &[KbName], filters: &Filters, cats: &HashMap<String, String>, mask: &[(u32, usize, usize)]) -> Inventory {
+    let mut ws = words(paper);
+    if !mask.is_empty() {
+        let u16s: Vec<U16Map> = paper.pages.iter().map(|p| U16Map::new(&p.text)).collect();
+        ws.retain(|w| {
+            let page = paper.pages[w.page].page.max(1);
+            let (a, b) = (u16s[w.page].u16(w.b0), u16s[w.page].u16(w.b1));
+            !mask.iter().any(|&(pg, s, e)| pg == page && a < e && s < b)
+        });
+    }
     let u16s: Vec<U16Map> = paper.pages.iter().map(|p| U16Map::new(&p.text)).collect();
     let page_no = |pi: usize| paper.pages[pi].page.max(1);
     let occ_of = |a: &Word, b: &Word| -> [u32; 3] { [page_no(a.page), u16s[a.page].u16(a.b0) as u32, u16s[b.page].u16(b.b1) as u32] };
@@ -662,6 +676,32 @@ pub fn inventory(paper: &PaperText, kb: &[KbName], filters: &Filters, cats: &Has
         };
         if let Some(id) = id {
             acronym_of.entry(w.key.clone()).or_insert(id);
+        }
+    }
+    // Later uses of an expansion's long form ("the Spectral Boundary Loss weights …").
+    let longs: HashMap<String, String> = acc.iter().filter(|(id, _)| id.starts_with("x:")).map(|(id, a)| (a.noun.key.clone(), id.clone())).collect();
+    if !longs.is_empty() {
+        let max = longs.keys().map(|k| k.split(' ').count()).max().unwrap_or(0);
+        let mut i = 0;
+        while i < ws.len() {
+            let mut hit = None;
+            for n in (2..=max.min(8)).rev() {
+                if !contiguous(i, n) || taken[i..i + n].iter().any(|t| *t) {
+                    continue;
+                }
+                let key = ws[i..i + n].iter().map(|w| w.key.as_str()).collect::<Vec<_>>().join(" ");
+                if let Some(id) = longs.get(&key) {
+                    hit = Some((n, id.clone(), key));
+                    break;
+                }
+            }
+            if let Some((n, id, key)) = hit {
+                add(&mut acc, id, &key, &surface(i, i + n), "expansion", None, None, occ_of(&ws[i], &ws[i + n - 1]));
+                taken[i..i + n].iter_mut().for_each(|x| *x = true);
+                i += n;
+            } else {
+                i += 1;
+            }
         }
     }
     // 3. Compounds and single words.

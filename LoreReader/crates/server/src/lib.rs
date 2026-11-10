@@ -14,7 +14,7 @@
 //! | GET/POST | /api/papers/{sha}/quotes | citable sentences / add `{text, page, note?}` |
 //! | DELETE | /api/papers/{sha}/quotes/{id} | |
 //! | GET | /api/quotes | citable sentences of every paper (`sha256`, `paper_title`, `doi`) |
-//! | GET/POST/DELETE | /api/papers/{sha}/chat | conversation / `{text, attachments}` → reply (task `lr-chat`) / clear |
+//! | GET/POST/DELETE | /api/papers/{sha}/chat | conversation / `{text, attachments, paragraph?, chip?}` → reply (task `lr-chat`; a paragraph brings its context) / clear |
 //! | POST | /api/compose | `{pages: [{sha, page}], title?}` → new PDF in the library + exports |
 //! | POST | /api/translate | `{text, context?}` (task `lr-translate`) |
 //! | POST | /api/papers/{sha}/read | the page's pdf.js text (all pages, items with fonts and positions) → noun list |
@@ -23,6 +23,9 @@
 //! | GET/POST | /api/papers/{sha}/symbols | the symbol table / the author adds `{latex, meaning?…}` |
 //! | PUT | /api/papers/{sha}/symbols/{id} | `{latex?, meaning?, meaning_en?, grade?, note?, by?, evidence?, page?}` (author edits win) |
 //! | POST | /api/papers/{sha}/symbols/rebuild | detect again (after a glyph-table change) |
+//! | GET | /api/papers/{sha}/paragraphs | paragraphs with chips, cached analyses, 懂了 flags, run status |
+//! | POST | /api/papers/{sha}/paragraphs/run | `{again?}` → restart the background `lr-paragraph` run |
+//! | POST | /api/papers/{sha}/paragraphs/{pid}/understood | `{on}` → 懂了 (reading.json; separate from KB state) |
 //! | GET/PUT | /api/glyphs | the author's glyph → LaTeX override (`glyphs.toml`) |
 //! | POST/DELETE | /api/ignore | `{term}` → add to / remove from `ignore-words.txt` (「這不是術語」) |
 //! | GET/PUT | /api/models | the model menu: `{task, model: auto\|local\|haiku\|sonnet\|opus}` |
@@ -81,6 +84,10 @@ pub struct AppState {
     pub(crate) write: Mutex<()>,
     /// The text of each opened paper as the page sent it (memory only).
     pub texts: Mutex<HashMap<String, Arc<lr_core::text::PaperText>>>,
+    /// Its paragraphs with chips (memory only; analyses are in paragraphs.json).
+    pub paras: Mutex<HashMap<String, Arc<Vec<lr_core::paragraphs::Paragraph>>>>,
+    /// The background paragraph analysis of each paper.
+    pub runs: Mutex<HashMap<String, reading::RunStatus>>,
     pub printer: Mutex<Option<Arc<dyn Printer>>>,
 }
 
@@ -160,6 +167,8 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
         port: Mutex::new(0),
         write: Mutex::new(()),
         texts: Mutex::new(HashMap::new()),
+        paras: Mutex::new(HashMap::new()),
+        runs: Mutex::new(HashMap::new()),
         printer: Mutex::new(None),
     })
 }
@@ -190,6 +199,9 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{sha}/symbols/rebuild", post(reading::symbols_rebuild))
         .route("/api/papers/{sha}/symbols/{id}", put(reading::symbol_put))
         .route("/api/glyphs", get(reading::glyphs_get).put(reading::glyphs_put))
+        .route("/api/papers/{sha}/paragraphs", get(reading::paragraphs_get))
+        .route("/api/papers/{sha}/paragraphs/run", post(reading::paragraphs_run))
+        .route("/api/papers/{sha}/paragraphs/{pid}/understood", post(reading::understood))
         .route("/api/models", get(reading::models_get).put(reading::models_put))
         .route("/api/kb/status", get(kb_status))
         .route("/api/kb/cards", post(kb_card))
@@ -475,7 +487,8 @@ async fn translate(State(s): State<Shared>, Json(b): Json<TranslateBody>) -> R {
     if !b.context.trim().is_empty() && b.context.trim() != text {
         user += &format!("\n\n上下文：{}", b.context.trim());
     }
-    let a = s.llm.complete("lr-translate", LlmRequest::prompt(llm::TRANSLATE_SYSTEM, user).max_tokens(800)).await.map_err(llm_error)?;
+    let choice = reading::model_choice(&s.workspace, "lr-translate");
+    let a = s.llm.complete_on("lr-translate", choice.as_deref(), LlmRequest::prompt(llm::TRANSLATE_SYSTEM, user).max_tokens(800)).await.map_err(llm_error)?;
     Ok(Json(json!({ "translation": a.text, "engine": a.engine, "fallback_used": a.fallback_used })))
 }
 
@@ -490,6 +503,12 @@ struct ChatBody {
     text: String,
     #[serde(default)]
     attachments: Vec<Attachment>,
+    /// File the exchange under this paragraph and send its context.
+    #[serde(default)]
+    paragraph: Option<String>,
+    /// The stuck point: `{kind: term|symbol|equation, id}`.
+    #[serde(default)]
+    chip: Option<reading::ChipRef>,
 }
 
 fn with_attachments(text: &str, att: &[Attachment]) -> String {
@@ -506,22 +525,37 @@ fn with_attachments(text: &str, att: &[Attachment]) -> String {
 
 async fn send_chat(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Json<ChatBody>) -> R {
     sha_ok(&sha)?;
-    if b.text.trim().is_empty() && b.attachments.is_empty() {
+    if b.text.trim().is_empty() && b.attachments.is_empty() && b.paragraph.is_none() {
         return Err(bad("沒有內容"));
     }
     let title = s.papers.meta(&sha)?.map(|m| m.title).unwrap_or_default();
+    let (context, chip) = match &b.paragraph {
+        Some(pid) => {
+            let (c, chip) = reading::chat_context(&s, &sha, &title, pid, b.chip.as_ref()).await?;
+            (Some(c), chip)
+        }
+        None => (None, None),
+    };
     let history = s.papers.chat(&sha)?;
+    let compose = |text: &str, att: &[Attachment], ctx: Option<&str>| -> String {
+        match ctx {
+            Some(c) => format!("{c}\n〔問題〕{}", if text.trim().is_empty() { reading::DEFAULT_QUESTION } else { text }),
+            None => with_attachments(text, att),
+        }
+    };
     let mut msgs: Vec<Message> = history
         .iter()
         .rev()
         .take(20)
         .rev()
-        .map(|m| if m.role == "assistant" { Message::assistant(m.text.clone()) } else { Message::user(with_attachments(&m.text, &m.attachments)) })
+        .map(|m| if m.role == "assistant" { Message::assistant(m.text.clone()) } else { Message::user(compose(&m.text, &m.attachments, m.context.as_deref())) })
         .collect();
-    msgs.push(Message::user(with_attachments(&b.text, &b.attachments)));
-    let user = ChatMessage { role: "user".into(), text: b.text.clone(), attachments: b.attachments.clone(), at: lr_core::now(), engine: None };
-    let a = s.llm.complete("lr-chat", LlmRequest::chat(llm::chat_system(&title), msgs).max_tokens(2000)).await.map_err(llm_error)?;
-    let reply = ChatMessage { role: "assistant".into(), text: a.text, attachments: vec![], at: lr_core::now(), engine: Some(a.engine) };
+    msgs.push(Message::user(compose(&b.text, &b.attachments, context.as_deref())));
+    let text = if b.text.trim().is_empty() && b.paragraph.is_some() { reading::DEFAULT_QUESTION.to_string() } else { b.text.clone() };
+    let user = ChatMessage { role: "user".into(), text, attachments: b.attachments.clone(), at: lr_core::now(), engine: None, paragraph: b.paragraph.clone(), chip: chip.clone(), context };
+    let choice = reading::model_choice(&s.workspace, "lr-chat");
+    let a = s.llm.complete_on("lr-chat", choice.as_deref(), LlmRequest::chat(llm::chat_system(&title), msgs).max_tokens(2000)).await.map_err(llm_error)?;
+    let reply = ChatMessage { role: "assistant".into(), text: a.text, attachments: vec![], at: lr_core::now(), engine: Some(a.engine), paragraph: b.paragraph.clone(), chip, context: None };
     {
         let _g = s.write.lock().unwrap();
         s.papers.push_chat(&sha, &[user, reply.clone()])?;

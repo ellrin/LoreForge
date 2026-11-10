@@ -53,6 +53,8 @@ const SOURCE_LABEL = { kb: "知識庫的詞", expansion: "縮寫全名", compoun
 const NOUN_STATE = { known: "記得", learning: "學習中", stale: "久未複習", none: "學習中（尚無紀錄）", new: "沒有卡片" };
 const GRADE = { certain: ["✅", "確定"], defined: ["🟢", "有定義"], inferred: ["🟡", "推測"], conflict: ["🔴", "衝突"], unresolved: ["⚪", "查不到"] };
 const RESOLVER = { program: "程式", local: "地端模型", claude: "Claude", author: "作者" };
+const ROLE = { background: "背景", gap: "缺口", method: "方法步驟", result: "結果", discussion: "討論", other: "其他" };
+const SECTION_KIND = { front: "標題與作者", abstract: "摘要", intro: "引言／相關研究", method: "方法", result: "結果", discussion: "討論", other: "其他" };
 const MODEL_LABEL = { auto: "自動", local: "地端", haiku: "Haiku", sonnet: "Sonnet", opus: "Opus" };
 const COLOR_LABEL = { yellow: "黃", green: "綠", blue: "藍", pink: "粉紅" };
 
@@ -71,6 +73,10 @@ const S = {
   symSpans: [],             // unique math runs: {page, s, e, bbox, latex, ents: [entry index]}
   symMarks: new Map(),      // page → [{s, e, k}] (k = index into symSpans)
   symView: { grade: "" },
+  paras: null,              // GET …/paragraphs: {paragraphs, status, progress, default_question}
+  curPara: null,            // the paragraph the chat is about (id)
+  chatCtx: null,            // {paragraph, chip: {kind, id, label}|null} for the next question
+  chatScope: "all",         // all | para
   orig: [],                 // [{sha, page}] of the open paper
   arr: null,                // pending edited list, or null
   pages: [],                // view items: {sha, page, w, h, el, token, rendered, divs, strs}
@@ -190,6 +196,7 @@ async function openPaper(sha, page) {
     S.att = []; S.chatDraft = "";
     S.nouns = null; S.nounMarks = new Map(); S.focusNoun = null;
     S.symbols = null; S.symSpans = []; S.symMarks = new Map();
+    S.paras = null; S.curPara = null; S.chatCtx = null; S.chatScope = "all";
     await Promise.all([loadAnnotations(), loadQuotes(), loadChat()]);
     await buildView();
     refreshKb();
@@ -751,13 +758,13 @@ async function translate(text, context, box, info) {
 }
 
 // ── knowledge base ────────────────────────────────────────────────────────
-async function addCardDialog({ title, sha, page, context, hint }) {
+async function addCardDialog({ title, sha, page, context, hint, summary }) {
   hidePop();
   let kb = S.kb;
   try { kb = S.kb = await api("/api/kb/status"); } catch {}
   updateLegend();
   const t = h("input", { value: title.length > 120 ? title.slice(0, 120) : title });
-  const sum = h("textarea", { placeholder: "用自己的話寫一兩句：這是什麼、在這篇論文裡做什麼" });
+  const sum = h("textarea", { placeholder: "用自己的話寫一兩句：這是什麼、在這篇論文裡做什麼" }, summary ?? "");
   let state = "learning";
   const seg = h("div", { class: "seg", role: "group", "aria-label": "初始狀態" });
   const segHint = h("span", { class: "seg-hint" });
@@ -785,7 +792,7 @@ async function addCardDialog({ title, sha, page, context, hint }) {
       kb?.ok ? draftBtn : h("button", { type: "button", class: "btn", onclick: () => close("retry") }, "重新檢查"),
       h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"),
       h("button", { class: "btn primary", disabled: !kb?.ok }, "加入知識庫"))));
-  if (r === "retry") return addCardDialog({ title: t.value, sha, page, context, hint });
+  if (r === "retry") return addCardDialog({ title: t.value, sha, page, context, hint, summary: sum.value });
   if (r !== true) return;
   try {
     const out = await api("/api/kb/cards", { body: { sha, page, title: t.value, summary: sum.value, initial_state: state, context } });
@@ -1077,6 +1084,7 @@ async function readPaper(sha) {
     S.words = r.words;
     setSymbols(r.symbols);
     setNouns(r.nouns);
+    loadParagraphs(sha);
     if (r.nouns.classification.pending > 0) classifyNouns(false);
   } catch (e) {
     if (S.sha !== sha) return;
@@ -1279,6 +1287,138 @@ function nounsPane() {
   return out;
 }
 
+// ── paragraphs (track B) ──────────────────────────────────────────────────
+async function loadParagraphs(sha) {
+  clearTimeout(S.paraTimer);
+  try {
+    const r = await api(`/api/papers/${sha}/paragraphs`);
+    if (S.sha !== sha) return;
+    S.paras = r;
+    if (S.tab === "paras") renderSide(); else renderTabCounts();
+    if (r.status?.running) S.paraTimer = setTimeout(() => loadParagraphs(sha), 2000);
+  } catch (e) { if (S.sha === sha) console.error(e); }
+}
+
+async function setUnderstood(p, on) {
+  try {
+    await api(`/api/papers/${S.sha}/paragraphs/${p.id}/understood`, { body: { on } });
+    p.understood = on;
+    S.paras.progress.understood += on ? 1 : -1;
+    renderSide();
+  } catch (e) { fail(e); }
+}
+
+function jumpPara(pid) {
+  const p = paraOf(pid);
+  if (!p) return;
+  const r = p.ranges[0];
+  if (r.bbox[3] > 0) flashBox(r.page, r.bbox);
+  else jumpTo(r.page);
+}
+
+/** The next paragraph not marked 懂了 after the one in view (wraps). */
+function nextNotUnderstood() {
+  const ps = S.paras?.paragraphs.filter((p) => p.section_kind !== "front") ?? [];
+  if (!ps.length) return;
+  const vpEl = $("#viewport");
+  const curPage = S.pages[S.cur]?.page ?? 1;
+  const start = Math.max(0, ps.findIndex((p) => p.page >= curPage && p.id !== S.curPara));
+  const order = [...ps.slice(start), ...ps.slice(0, start)];
+  const n = order.find((p) => !p.understood && p.id !== S.curPara) ?? order.find((p) => !p.understood);
+  if (!n) { toast("每一段都標了「懂了」"); return; }
+  S.curPara = n.id;
+  renderSide();
+  jumpPara(n.id);
+  setTimeout(() => $(`.para[data-id="${n.id}"]`)?.scrollIntoView({ block: "nearest" }), 60);
+  void vpEl;
+}
+
+function chipLabel(kind, id) {
+  if (kind === "term") return S.nouns?.entries.find((e) => e.key === id)?.text ?? id;
+  if (kind === "symbol") return S.symbols?.entries.find((e) => e.id === id)?.latex ?? id;
+  return q_label(id);
+}
+
+function chipMenu(p, kind, id, ev) {
+  const m = $("#ctxMenu");
+  const label = chipLabel(kind, id);
+  const item = (icon, text, fn) => h("button", { type: "button", role: "menuitem", onclick: () => { closeMenus(); fn(); } }, h("span", { "data-icon": icon }), text);
+  const box = ev.currentTarget.getBoundingClientRect();
+  const anchor = { left: box.left, top: box.top, bottom: box.bottom };
+  m.replaceChildren(
+    h("div", { class: "menu-title" }, kind === "symbol" ? tex(label) : label),
+    item("eye", "看定義", () => showChipDef(kind, id, anchor)),
+    item("chat", "問 Claude", () => askClaude(p.id, { kind, id, label: kind === "symbol" ? label : label })),
+    kind === "equation" ? null : item("book", "加入知識庫…", () => addCardDialog({ title: kind === "symbol" ? "" : label, sha: S.sha, page: p.page, context: p.text.slice(0, 600) })));
+  paintIcons(m);
+  placeAt(m, box.left, box.bottom + 4);
+}
+
+function showChipDef(kind, id, anchor) {
+  if (kind === "term") {
+    const n = S.nouns?.entries.find((e) => e.key === id);
+    if (n) nounPopover(n, anchor);
+  } else if (kind === "symbol") {
+    const i = S.symbols?.entries.findIndex((e) => e.id === id);
+    const e = S.symbols?.entries[i];
+    if (e) symPopover({ page: e.occurrences?.[0]?.page ?? 1, latex: e.latex, ents: [i] }, anchor, true);
+  } else {
+    const q = S.symbols?.equations.find((x) => x.id === id);
+    if (q) flashBox(q.page, q.bbox);
+  }
+}
+
+function analysisBlock(a) {
+  if (!a) return null;
+  const out = h("div", { class: "para-an" });
+  if (a.equations?.length) out.append(...a.equations.map((q) => h("dl", { class: "eqnote" },
+    h("dt", { class: "eqref" }, q.ref ? mixed(q.ref) : "式"),
+    h("dd", {}, h("span", { class: "k" }, "輸入"), mixed(q.inputs || "—")),
+    h("dd", {}, h("span", { class: "k" }, "輸出"), mixed(q.outputs || "—")),
+    h("dd", {}, h("span", { class: "k" }, "作用目標"), mixed(q.target || "—")),
+    h("dd", {}, h("span", { class: "k" }, "作用結果"), mixed(q.effect || "—")))));
+  if (a.motive) out.append(h("div", { class: "motive" }, h("span", { class: "k" }, "動機"), mixed(a.motive)));
+  if (a.results?.length) out.append(...a.results.map((r) => h("dl", { class: "resrow" },
+    ...[["指標", r.metric], ["比較對象", r.comparison], ["數值", r.values], ["差距", r.difference], ["檢定", r.test], ["顯著性", r.significance]].map(([k, v]) => h("dd", {}, h("span", { class: "k" }, k), mixed(v || "—"))))));
+  return out.childElementCount ? out : null;
+}
+
+function parasPane() {
+  const d = S.paras;
+  if (!d) return [h("p", { class: "empty" }, S.readStatus || "整理段落…")];
+  const st = d.status ?? {};
+  const pr = d.progress;
+  const out = [];
+  out.push(h("div", { class: "para-top" },
+    h("div", { class: "progress", role: "progressbar", "aria-valuenow": pr.understood, "aria-valuemax": pr.total, "aria-label": "懂了的段落" }, h("i", { style: `width:${pr.total ? (pr.understood / pr.total) * 100 : 0}%` })),
+    h("span", { class: "para-count" }, `懂了 ${pr.understood}/${pr.total}`),
+    h("button", { type: "button", class: "btn small", onclick: nextNotUnderstood }, h("span", { "data-icon": "next" }), "下一段還沒懂的")));
+  const runLine = st.running ? `分析中 ${st.done}/${st.total}${st.engine ? `（${st.engine}）` : ""}：方法與結果段先跑` : st.error ? null : st.total ? `分析完成 ${st.done}/${st.total}${st.engine ? `（${st.engine}）` : ""}` : "";
+  out.push(h("div", { class: "muted para-status" }, runLine, " 不提供整段的中文摘要或翻譯，只標出卡住的地方。"));
+  if (st.error) out.push(h("div", { class: "warn-box" }, st.error, " 標籤（生詞、符號、方程式）照樣列出。", h("button", { type: "button", class: "btn ghost small", onclick: async () => { try { S.paras = await api(`/api/papers/${S.sha}/paragraphs/run`, { body: {} }); renderSide(); loadParagraphs(S.sha); } catch (e) { fail(e); } } }, "再試一次")));
+  let section = null;
+  for (const p of d.paragraphs) {
+    if (p.section_kind === "front") continue;
+    if (p.section !== section) { section = p.section; out.push(h("h4", { class: "para-sec" }, section || SECTION_KIND[p.section_kind] || "（未命名）")); }
+    const a = p.analysis;
+    const role = a ? ROLE[a.role] ?? a.role : st.running ? "分析中…" : "—";
+    const chips = [
+      ...p.chips.terms.map((id) => h("button", { type: "button", class: "chip-b term", onclick: (ev) => chipMenu(p, "term", id, ev) }, chipLabel("term", id))),
+      ...p.chips.symbols.map((id) => { const e = S.symbols?.entries.find((x) => x.id === id); return h("button", { type: "button", class: `chip-b sym g-${e?.grade ?? "unresolved"}`, title: e ? GRADE[e.grade]?.[1] : "", onclick: (ev) => chipMenu(p, "symbol", id, ev) }, tex(e?.latex ?? id), h("span", { class: "gi" }, GRADE[e?.grade]?.[0] ?? "")); }),
+      ...p.chips.equations.map((id) => h("button", { type: "button", class: "chip-b eq", onclick: (ev) => chipMenu(p, "equation", id, ev) }, q_label(id))),
+    ];
+    out.push(h("div", { class: `para${p.understood ? " done" : ""}${S.curPara === p.id ? " cur" : ""}`, dataset: { id: p.id } },
+      h("div", { class: "para-head" }, h("span", { class: `role r-${a?.role ?? "none"}` }, role), h("span", { class: "src" }, `p.${p.page} · ${p.words} 字`), p.understood ? h("span", { class: "ok-mark" }, "✓ 懂了") : null),
+      h("button", { type: "button", class: "para-text", title: "跳到這段", onclick: () => { S.curPara = p.id; renderSide(); jumpPara(p.id); } }, p.text),
+      chips.length ? h("div", { class: "para-chips" }, ...chips) : h("div", { class: "muted", style: "font-size:11.5px" }, "沒有生詞或符號。"),
+      analysisBlock(a),
+      h("div", { class: "para-acts" },
+        h("button", { type: "button", class: "btn small", onclick: () => askClaude(p.id, null) }, h("span", { "data-icon": "alert" }), "這段我卡住了"),
+        h("button", { type: "button", class: `btn small${p.understood ? " primary" : ""}`, "aria-pressed": p.understood ? "true" : "false", onclick: () => setUnderstood(p, !p.understood) }, h("span", { "data-icon": "check" }), "懂了"))));
+  }
+  return out;
+}
+
 // ── model menu ────────────────────────────────────────────────────────────
 async function modelDialog() {
   let m;
@@ -1340,23 +1480,38 @@ function attach(info) {
 async function sendChat() {
   const ta = $("#chatInput");
   const text = ta.value.trim();
-  if (S.sending || (!text && !S.att.length)) return;
+  const ctx = S.chatCtx;
+  if (S.sending || (!text && !S.att.length && !ctx)) return;
   S.sending = true;
   const att = S.att; S.att = [];
-  const pending = { role: "user", text, attachments: att, at: new Date().toISOString(), pending: true };
+  const pending = { role: "user", text, attachments: att, at: new Date().toISOString(), pending: true, paragraph: ctx?.paragraph, chip: ctx?.chip };
   S.chat.push(pending);
-  S.chatDraft = "";
+  S.chatDraft = ""; S.chatCtx = null;
   renderSide();
   try {
-    const r = await api(`/api/papers/${S.sha}/chat`, { body: { text, attachments: att } });
-    delete pending.pending;
-    S.chat.push(r.reply);
+    const body = { text, attachments: att };
+    if (ctx) { body.paragraph = ctx.paragraph; if (ctx.chip) body.chip = { kind: ctx.chip.kind, id: ctx.chip.id }; }
+    const r = await api(`/api/papers/${S.sha}/chat`, { body });
+    S.chat.pop();
+    await loadChat();
   } catch (e) {
-    S.chat.pop(); S.att = att; S.chatDraft = text;
+    S.chat.pop(); S.att = att; S.chatDraft = text; S.chatCtx = ctx;
     S.chatError = e.message;
   }
   S.sending = false;
   renderSide();
+}
+
+/** Ask Claude about a paragraph (and one stuck point in it): the server attaches title,
+ *  section, the paragraph, the point's known definition and the author's KB states. */
+function askClaude(pid, chip) {
+  S.curPara = pid;
+  S.chatCtx = { paragraph: pid, chip: chip ?? null };
+  S.chatDraft = S.paras?.default_question ?? "只解釋我卡住的點，不要翻譯整段";
+  S.chatScope = "para";
+  setTab("chat");
+  if (innerWidth <= 1100) togglePanel("side", true);
+  setTimeout(() => { const t = $("#chatInput"); t?.focus(); t?.select(); }, 60);
 }
 
 // ── side panel ────────────────────────────────────────────────────────────
@@ -1370,7 +1525,7 @@ function renderTabCounts() {
   $$(".tabs [data-tab]").forEach((b) => {
     b.setAttribute("aria-selected", b.dataset.tab === S.tab ? "true" : "false");
     const t = b.dataset.tab;
-    const n = t === "notes" ? S.annotations.length : t === "quotes" ? S.quotes.length : t === "nouns" ? (S.nouns?.entries.filter((e) => e.red).length ?? 0) : t === "symbols" ? (S.symbols?.entries?.length ?? 0) : 0;
+    const n = t === "notes" ? S.annotations.length : t === "quotes" ? S.quotes.length : t === "nouns" ? (S.nouns?.entries.filter((e) => e.red).length ?? 0) : t === "symbols" ? (S.symbols?.entries?.length ?? 0) : t === "paras" && S.paras ? `${S.paras.progress.understood}/${S.paras.progress.total}` : 0;
     b.querySelector(".n")?.remove();
     if (n) b.append(h("span", { class: "n" }, n));
   });
@@ -1383,7 +1538,8 @@ function renderSide() {
   $(".composer")?.remove();
   pane.classList.toggle("chat-pane", S.tab === "chat");
   pane.classList.toggle("nouns-pane", S.tab === "nouns");
-  if (S.tab === "symbols") pane.replaceChildren(...symbolsPane());
+  if (S.tab === "paras") { const keep2 = pane.scrollTop; pane.replaceChildren(...parasPane()); pane.scrollTop = keep2; }
+  else if (S.tab === "symbols") pane.replaceChildren(...symbolsPane());
   else if (S.tab === "nouns") { pane.replaceChildren(...nounsPane()); if (keep != null && $(".nn-table", pane)) $(".nn-table", pane).scrollTop = keep; }
   else if (S.tab === "notes") pane.replaceChildren(...notesPane());
   else if (S.tab === "quotes") pane.replaceChildren(...quotesPane());
@@ -1435,23 +1591,92 @@ function quotesPane() {
       h("button", { class: "ico small", "aria-label": "刪除", "data-icon": "trash", onclick: async () => { try { await api(`/api/papers/${S.sha}/quotes/${q.id}`, { method: "DELETE" }); await loadQuotes(); renderSide(); } catch (e) { fail(e); } } })))))];
 }
 
+/** A chip's label: symbols as KaTeX (stored as `$…$` or bare LaTeX), the rest as text. */
+function chipText(c) {
+  const l = c.label ?? c.id;
+  if (c.kind !== "symbol") return mixed(l);
+  return l.startsWith("$") ? mixed(l) : tex(l);
+}
+
+function paraOf(pid) {
+  return S.paras?.paragraphs.find((p) => p.id === pid);
+}
+
 function chatPane() {
   const head = h("div", { class: "pane-head" }, h("h4", {}, "問 Claude · 對話存在這篇論文的私人資料夾"),
     S.chat.length ? h("button", { class: "ico small", "aria-label": "清除對話", "data-icon": "trash", onclick: async () => { try { await api(`/api/papers/${S.sha}/chat`, { method: "DELETE" }); S.chat = []; renderSide(); } catch (e) { fail(e); } } }) : null);
-  const msgs = S.chat.map((m) => h("div", { class: `msg ${m.role}` },
+  const cur = paraOf(S.curPara);
+  const scope = h("div", { class: "seg chat-scope", role: "group", "aria-label": "顯示哪些對話" },
+    h("button", { type: "button", "aria-pressed": S.chatScope !== "para" ? "true" : "false", onclick: () => { S.chatScope = "all"; renderSide(); } }, "全部"),
+    h("button", { type: "button", "aria-pressed": S.chatScope === "para" ? "true" : "false", disabled: !cur, title: cur ? `p.${cur.page} ${cur.text.slice(0, 40)}…` : "先在「段落」選一段", onclick: () => { S.chatScope = "para"; renderSide(); } }, cur ? `這段（p.${cur.page}）` : "這段"));
+  const shown = S.chatScope === "para" && cur ? S.chat.filter((m) => m.paragraph === cur.id) : S.chat;
+  const msgs = shown.map((m) => h("div", { class: `msg ${m.role}` },
+    m.role === "user" && m.paragraph ? h("button", { type: "button", class: "para-badge", onclick: () => { S.curPara = m.paragraph; jumpPara(m.paragraph); } }, `段落 p.${paraOf(m.paragraph)?.page ?? "?"}`, m.chip ? [" · 卡住：", chipText(m.chip)] : " · 整段") : null,
     ...(m.attachments ?? []).map((a) => h("span", { class: "att", title: a.context }, `p.${a.page}「${a.text}」`)),
-    m.text,
+    m.role === "assistant" ? mixed(m.text) : m.text,
     m.role === "assistant" && m.engine ? h("span", { class: "eng" }, m.engine) : null,
+    m.role === "assistant" && m.paragraph ? answerActions(m) : null,
     m.pending ? h("span", { class: "eng" }, "Claude 思考中…") : null));
   const err = S.chatError ? h("div", { class: "err-box" }, S.chatError) : null;
   S.chatError = null;
-  return [head, h("div", { class: "msgs" }, msgs.length ? msgs : [h("p", { class: "empty" }, "選取文字後按右鍵 →「問 Claude」，會附上這段話、頁碼和所在段落。")]), err].filter(Boolean);
+  return [head, scope, h("div", { class: "msgs" }, msgs.length ? msgs : [h("p", { class: "empty" }, S.chatScope === "para" ? "這段還沒有對話。在「段落」按「這段我卡住了」或某個標籤的「問 Claude」。" : "選取文字後按右鍵 →「問 Claude」，會附上這段話、頁碼和所在段落；或在「段落」分頁按「這段我卡住了」。")]), err].filter(Boolean);
+}
+
+/** Under an answer about a paragraph: write it back to the symbol table, keep it as
+ *  this paragraph's note, or add the term to the KB. */
+function answerActions(m) {
+  const p = paraOf(m.paragraph);
+  const syms = p?.chips?.symbols ?? [];
+  return h("div", { class: "ans-acts" },
+    syms.length ? h("button", { type: "button", class: "btn small", onclick: () => writeBackDialog(m, p) }, h("span", { "data-icon": "sigma" }), "寫回符號表") : null,
+    h("button", { type: "button", class: "btn small", onclick: () => saveParaNote(m, p) }, h("span", { "data-icon": "pen" }), "存成這段的註記"),
+    h("button", { type: "button", class: "btn small", onclick: () => addCardDialog({ title: m.chip?.kind === "term" ? (m.chip.label ?? m.chip.id) : "", sha: S.sha, page: p?.page ?? 1, context: p?.text?.slice(0, 600), summary: m.text.slice(0, 300) }) }, h("span", { "data-icon": "book" }), "加入知識庫"));
+}
+
+async function writeBackDialog(m, p) {
+  const ents = (p.chips.symbols ?? []).map((id) => S.symbols?.entries.find((e) => e.id === id)).filter(Boolean);
+  if (!ents.length) return;
+  let pick = ents.find((e) => m.chip?.kind === "symbol" && e.id === m.chip.id) ?? ents[0];
+  const sel = h("select", { onchange: (ev) => { pick = ents[+ev.target.value]; zh.value = pick.meaning ?? ""; } }, ents.map((e, i) => h("option", { value: i, selected: e === pick }, `${e.latex}（${GRADE[e.grade]?.[0] ?? ""}）`)));
+  const firstLine = m.text.split(/\n|。/)[0].slice(0, 120);
+  const zh = h("textarea", {}, pick.meaning || firstLine);
+  let grade = pick.grade === "defined" || pick.grade === "certain" ? pick.grade : "inferred";
+  const seg = h("div", { class: "seg", role: "group", "aria-label": "等級" });
+  const paintSeg = () => seg.replaceChildren(...["certain", "defined", "inferred"].map((g) => h("button", { type: "button", "aria-pressed": g === grade ? "true" : "false", onclick: () => { grade = g; paintSeg(); } }, `${GRADE[g][0]} ${GRADE[g][1]}`)));
+  paintSeg();
+  const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (ev) => { ev.preventDefault(); close(true); } },
+    h("h3", {}, "寫回符號表"),
+    h("label", {}, "符號", sel),
+    h("label", {}, "意思", zh),
+    h("div", { style: "display:flex;flex-direction:column;gap:4px" }, h("span", { style: "font-size:12.5px;color:var(--muted)" }, "等級（依據是 Claude 的回答；有引用原文定義句才選 🟢）"), seg),
+    h("div", { class: "quote-box" }, h("span", { class: "muted" }, "依據："), m.text.slice(0, 400), m.text.length > 400 ? "…" : ""),
+    h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"), h("button", { class: "btn primary" }, "寫回"))));
+  if (r !== true) return;
+  try {
+    await api(`/api/papers/${S.sha}/symbols/${encodeURIComponent(pick.id)}`, { method: "PUT", body: { meaning: zh.value, grade, by: "claude", evidence: m.text, page: p.page } });
+    setSymbols(await api(`/api/papers/${S.sha}/symbols`));
+    toast(`已寫回 ${pick.latex}（由 Claude 解）`);
+  } catch (e) { fail(e); }
+}
+
+async function saveParaNote(m, p) {
+  try {
+    const r = await api(`/api/papers/${S.sha}/annotations`, { body: { page: p.page, kind: "note", color: "blue", note: m.text, quote: { exact: p.text.slice(0, 160), prefix: "", suffix: "" }, rects: [], paragraph: p.id, chip: m.chip ?? null } });
+    S.annotations.push(r.annotation);
+    toast("已存成這段的註記（「註記」分頁）");
+  } catch (e) { fail(e); }
 }
 
 function composer() {
-  const chips = h("div", { class: "chips" }, S.att.map((a, i) => h("span", { class: "attchip", title: a.context }, h("span", {}, `p.${a.page}「${a.text}」`),
+  const ctxChip = S.chatCtx ? (() => {
+    const p = paraOf(S.chatCtx.paragraph);
+    return h("span", { class: "attchip ctx", title: "會一起送出：論文標題、章節、這段原文、卡住的點在本篇的定義、你的知識庫狀態" },
+      h("span", {}, `段落 p.${p?.page ?? "?"}`, S.chatCtx.chip ? [" · 卡住：", chipText(S.chatCtx.chip)] : " · 整段所有標籤"),
+      h("button", { class: "ico small", "aria-label": "不附段落", "data-icon": "x", onclick: () => { S.chatCtx = null; renderSide(); } }));
+  })() : null;
+  const chips = h("div", { class: "chips" }, ctxChip, S.att.map((a, i) => h("span", { class: "attchip", title: a.context }, h("span", {}, `p.${a.page}「${a.text}」`),
     h("button", { class: "ico small", "aria-label": "移除引文", "data-icon": "x", onclick: () => { S.att.splice(i, 1); renderSide(); } }))));
-  const ta = h("textarea", { id: "chatInput", placeholder: S.att.length ? "想問這段什麼？" : "問這篇論文的問題（⌘/Ctrl＋Enter 送出）" });
+  const ta = h("textarea", { id: "chatInput", placeholder: S.att.length || S.chatCtx ? "想問這段什麼？" : "問這篇論文的問題（⌘/Ctrl＋Enter 送出）" });
   ta.value = S.chatDraft ?? "";
   ta.addEventListener("input", () => { S.chatDraft = ta.value; });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); } });

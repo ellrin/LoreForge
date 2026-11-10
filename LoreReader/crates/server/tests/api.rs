@@ -121,12 +121,9 @@ fn dead_url() -> String {
     format!("http://{a}")
 }
 
-/// The demo paper's text as the page would send it (one string per page; lopdf's
-/// text extraction stands in for pdf.js here).
+/// The demo paper's text as the page would send it (one pdf.js item per line).
 fn demo_text() -> Value {
-    let pdf = lr_core::synth::demo_paper();
-    let pages: Vec<Value> = (1..=3).map(|p| json!({ "page": p, "text": lr_core::pdfops::page_text(&pdf, p).unwrap() })).collect();
-    json!({ "pages": pages })
+    serde_json::to_value(lr_core::synth::paper_text(&lr_core::synth::demo_lines())).unwrap()
 }
 
 fn text_of_page(t: &Value, page: usize) -> String {
@@ -364,16 +361,19 @@ async fn classification_is_one_cached_call_and_the_model_menu_picks_the_engine()
     assert_eq!((s, v["llm_unavailable"].as_bool()), (StatusCode::SERVICE_UNAVAILABLE, Some(true)));
 }
 
-/// A fake OpenAI-compatible engine that counts its requests.
+/// A fake OpenAI-compatible engine that counts the classification requests.
 async fn counting_engine(reply: &'static str) -> (String, Arc<Mutex<usize>>) {
     let hits: Arc<Mutex<usize>> = Arc::default();
     let h2 = hits.clone();
     let app = axum::Router::new().route(
         "/v1/chat/completions",
-        post(move || {
+        post(move |axum::Json(b): axum::Json<Value>| {
             let h = h2.clone();
             async move {
-                *h.lock().unwrap() += 1;
+                // count the classification calls only (the paragraph run also asks)
+                if b["messages"][0]["content"].as_str().unwrap_or("").contains("術語分類器") {
+                    *h.lock().unwrap() += 1;
+                }
                 axum::Json(json!({ "choices": [{ "index": 0, "message": { "role": "assistant", "content": reply }, "finish_reason": "stop" }], "usage": { "prompt_tokens": 1, "completion_tokens": 1 } }))
             }
         }),
@@ -433,4 +433,113 @@ async fn symbol_table_detected_edited_and_kept() {
     assert!(e.root.join("ws/glyphs.toml").is_file());
     let (_, v, _) = call(&e.app, "GET", "/api/glyphs", None, None).await;
     assert!(v["text"].as_str().unwrap().contains("kappa"));
+}
+
+/// A fake local engine that answers by task (classification, paragraph analysis, chat)
+/// and keeps every request it got.
+async fn task_engine() -> (String, Arc<Mutex<Vec<Value>>>) {
+    let got: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let g2 = got.clone();
+    let app = axum::Router::new().route(
+        "/v1/chat/completions",
+        post(move |axum::Json(b): axum::Json<Value>| {
+            let g = g2.clone();
+            async move {
+                g.lock().unwrap().push(b.clone());
+                let system = b["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                let reply = if system.contains("術語分類器") {
+                    json!({ "方法": ["anisotropic"], "人名": ["Hausdorff"] }).to_string()
+                } else if system.contains("段落") && system.contains("role") {
+                    json!({ "role": "method", "equations": [{ "ref": "SBL", "inputs": "像素與邊緣距離", "outputs": "權重", "target": "邊界上的點", "effect": "邊界錯誤罰得更重" }], "motive": "細結構容易被忽略", "results": [] }).to_string()
+                } else {
+                    "Spectral Boundary Loss 依曲率加權邊界像素（測試回覆）".to_string()
+                };
+                axum::Json(json!({ "choices": [{ "index": 0, "message": { "role": "assistant", "content": reply }, "finish_reason": "stop" }], "usage": { "prompt_tokens": 1, "completion_tokens": 1 } }))
+            }
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    (format!("http://{addr}/v1"), got)
+}
+
+#[tokio::test]
+async fn paragraphs_run_in_the_background_and_ask_claude_gets_the_context() {
+    let (kb, _) = fake_kb().await;
+    let (engine, got) = task_engine().await;
+    let e = setup(&kb, Some(engine));
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
+    assert_eq!(s, StatusCode::OK);
+    // the run streams in; wait until it is done
+    let mut v = Value::Null;
+    for _ in 0..100 {
+        v = call(&e.app, "GET", &format!("/api/papers/{sha}/paragraphs"), None, None).await.1;
+        if v["status"]["running"] == false {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(v["status"]["running"], false, "{}", v["status"]);
+    assert!(v["status"]["error"].is_null(), "{}", v["status"]);
+    let paras = v["paragraphs"].as_array().unwrap().clone();
+    assert!(paras.len() >= 4, "{v}");
+    let method = paras.iter().find(|p| p["section_kind"] == "method").unwrap_or_else(|| panic!("{v}"));
+    assert_eq!(method["analysis"]["role"], "method");
+    assert_eq!(method["analysis"]["equations"][0]["target"], "邊界上的點");
+    assert!(method["chips"]["terms"].as_array().unwrap().iter().any(|t| t == "spectral boundary loss"), "{}", method["chips"]);
+    // methods and results first; no Chinese summary asked for
+    let reqs = got.lock().unwrap().clone();
+    let para_reqs: Vec<&Value> = reqs.iter().filter(|r| r["messages"][0]["content"].as_str().unwrap().contains("role")).collect();
+    assert!(para_reqs[0]["messages"][1]["content"].as_str().unwrap().contains("章節：2. Method"), "{}", para_reqs[0]["messages"][1]);
+    assert!(para_reqs[0]["messages"][0]["content"].as_str().unwrap().contains("不要翻譯"));
+    // cached: a new run asks nothing more
+    let before = got.lock().unwrap().len();
+    call(&e.app, "POST", &format!("/api/papers/{sha}/paragraphs/run"), None, None).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(got.lock().unwrap().iter().skip(before).filter(|r| r["messages"][0]["content"].as_str().unwrap().contains("role")).count(), 0);
+    assert!(e.root.join("ws/papers").join(&sha).join("paragraphs.json").is_file());
+
+    // 懂了: per paper, shown as progress, separate from KB state
+    let pid = method["id"].as_str().unwrap();
+    let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/paragraphs/{pid}/understood"), Some(json!({ "on": true })), None).await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}/paragraphs"), None, None).await;
+    assert_eq!(v["progress"]["understood"], 1);
+    assert!(v["progress"]["total"].as_u64().unwrap() >= 4);
+    let reading: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/papers").join(&sha).join("reading.json")).unwrap()).unwrap();
+    assert_eq!(reading["understood"][0], pid);
+
+    // Ask Claude about a chip (here routed to the local engine with the model menu):
+    // title, section, paragraph, the chip and its definition, the author's KB states.
+    call(&e.app, "PUT", "/api/models", Some(json!({ "task": "lr-chat", "model": "local" })), None).await;
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/chat"), Some(json!({ "text": "", "paragraph": pid, "chip": { "kind": "term", "id": "spectral boundary loss" } })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["reply"]["paragraph"], pid);
+    let sent = got.lock().unwrap().last().unwrap().clone();
+    let user = sent["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().to_string();
+    for part in ["〔論文〕A Synthetic Study of Overlap Metrics", "〔章節〕2. Method", "〔段落，p.2〕", "〔卡住的地方〕Spectral Boundary Loss", "〔作者的知識庫〕", "U-Net", "〔問題〕只解釋我卡住的點，不要翻譯整段"] {
+        assert!(user.contains(part), "{part} not in {user}");
+    }
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}/chat"), None, None).await;
+    let m = &v["messages"][0];
+    assert_eq!((m["paragraph"].as_str(), m["chip"]["kind"].as_str(), m["text"].as_str()), (Some(pid), Some("term"), Some("只解釋我卡住的點，不要翻譯整段")));
+    let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/chat"), Some(json!({ "text": "?", "paragraph": "pdeadbeef" })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // No model at all: the run stops with the reason, the paragraphs are still listed.
+    let e = setup(&dead_url(), None);
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
+    let mut v = Value::Null;
+    for _ in 0..100 {
+        v = call(&e.app, "GET", &format!("/api/papers/{sha}/paragraphs"), None, None).await.1;
+        if v["status"]["running"] == false {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(v["status"]["error"].as_str().unwrap().contains("沒有可用的模型"), "{}", v["status"]);
+    assert!(!v["paragraphs"].as_array().unwrap().is_empty());
 }

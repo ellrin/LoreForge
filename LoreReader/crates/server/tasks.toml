@@ -19,8 +19,10 @@ fallback = "claude:selected"
 offline = true
 
 [task.lr-chat]
-label = "問 Claude（附上引文）"
-needs = { context = 32000 }
+label = "問 Claude（附上引文或段落）"
+# 16k is enough for a paragraph, its definitions and 20 turns; also lets the model menu
+# pick a local engine for the chat.
+needs = { context = 16000 }
 default = "claude:selected"
 offline = false
 

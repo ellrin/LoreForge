@@ -78,10 +78,13 @@ pub fn numbered_pdf(n: usize, tag: &str) -> Vec<u8> {
 /// The demo paper used by the UI checks: known and unknown terms, an acronym with its
 /// expansion, hyphenated terms, a DOI and a references list. Invented content.
 pub fn demo_paper() -> Vec<u8> {
+    titled_pdf(Some("A Synthetic Study of Overlap Metrics"), &demo_lines())
+}
+
+/// The demo paper's lines (see [`demo_paper`]).
+pub fn demo_lines() -> Vec<Vec<String>> {
     let p = |lines: &[&str]| lines.iter().map(|s| s.to_string()).collect::<Vec<String>>();
-    titled_pdf(
-        Some("A Synthetic Study of Overlap Metrics"),
-        &[
+    vec![
             p(&[
                 "# A Synthetic Study of Overlap Metrics",
                 "ellrin and daidai",
@@ -122,8 +125,37 @@ pub fn demo_paper() -> Vec<u8> {
                 "[1] A. Author. Overlap Metrics Revisited. Journal of Examples, 2020.",
                 "[2] B. Writer. Boundary Losses for Thin Structures. Proc. Synthetic Conf., 2021.",
             ]),
-        ],
-    )
+        ]
+}
+
+/// What the reader page sends for a synthetic PDF made by [`titled_pdf`]: one pdf.js item
+/// per line with the same fonts, sizes and positions (tests of the reading aids).
+pub fn paper_text(pages: &[Vec<String>]) -> crate::text::PaperText {
+    let mut out = crate::text::PaperText::default();
+    for (pi, lines) in pages.iter().enumerate() {
+        let mut text = String::new();
+        let mut items = vec![];
+        let mut y = 740.0;
+        for (i, line) in lines.iter().enumerate() {
+            let (size, bold, t) = match line.strip_prefix("# ") {
+                Some(h) => (15.0, true, h),
+                None => (11.0, false, line.as_str()),
+            };
+            if i > 0 {
+                y -= if size > 11.0 { 24.0 } else { 15.5 };
+            }
+            let s = text.encode_utf16().count();
+            text += t;
+            let e = text.encode_utf16().count();
+            items.push(crate::text::Item { s, e, str: t.into(), font: if bold { "Helvetica-Bold".into() } else { "Helvetica".into() }, size, x: 72.0, y, w: t.len() as f32 * 5.5, h: size, eol: true, italic: false, bold });
+            text.push('\n');
+            if line.is_empty() {
+                y += 5.0;
+            }
+        }
+        out.pages.push(crate::text::PageText { page: pi as u32 + 1, text, items, width: 612.0, height: 792.0 });
+    }
+    out
 }
 
 /// A long synthetic paper (≈8,000 words, invented content) as page lines: the

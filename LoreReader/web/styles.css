@@ -351,3 +351,38 @@ dialog .quote-box { font-size: 13px; background: var(--surface); border-left: 3p
 .sym-def { display: flex; flex-direction: column; gap: 4px; }
 .pop .sym-quote { -webkit-line-clamp: 4; }
 .tex-preview { min-height: 34px; padding: 4px 8px; background: var(--surface); border-radius: var(--r); overflow-x: auto; }
+
+/* ── Paragraphs (track B) ────────────────────────────────────────── */
+.para-top { display: flex; gap: 8px; align-items: center; }
+.progress { flex: 1; height: 6px; background: var(--surface); border-radius: 3px; overflow: hidden; min-width: 40px; }
+.progress i { display: block; height: 100%; background: var(--ok); }
+.para-count { font: 600 12px var(--mono); white-space: nowrap; }
+.para-status { font-size: 11.5px; line-height: 1.5; }
+.para-sec { margin: 8px 0 0; font: 600 12px var(--mono); color: var(--muted); }
+.para { background: var(--surface); border: 1px solid transparent; border-radius: var(--r); padding: 7px 8px; display: flex; flex-direction: column; gap: 6px; }
+.para.cur { border-color: var(--accent-text); }
+.para.done { opacity: .78; }
+.para-head { display: flex; gap: 6px; align-items: center; }
+.role { font: 600 11px var(--sans); color: var(--accent-text); border: 1px solid var(--accent-text); border-radius: 10px; padding: 0 7px; white-space: nowrap; }
+.role.r-none { color: var(--muted); border-color: var(--line-strong); }
+.ok-mark { margin-left: auto; font-size: 11.5px; color: var(--ok); }
+.para-text { text-align: left; background: none; border: 0; padding: 0; color: var(--text); font-size: 12.5px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.para-text:hover { color: var(--accent-text); }
+.para-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip-b { display: inline-flex; gap: 3px; align-items: center; font-size: 12px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; padding: 1px 8px; color: var(--text); max-width: 100%; overflow: hidden; }
+.chip-b.term { border-color: var(--kt-new); }
+.chip-b.eq { color: var(--accent-text); border-color: var(--accent-text); }
+.chip-b .gi { font-size: 10px; }
+.chip-b:hover { background: var(--surface-hover); }
+.para-an { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
+.para-an dl { margin: 0; display: grid; grid-template-columns: 1fr; gap: 2px; font-size: 12px; }
+.para-an dt { font-weight: 600; }
+.para-an dd { margin: 0; display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 6px; overflow-wrap: anywhere; }
+.para-an .k { color: var(--muted); font-size: 11.5px; }
+.para-an .motive { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 6px; font-size: 12px; }
+.para-an .resrow { border-left: 2px solid var(--accent-text); padding-left: 6px; }
+.para-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.chat-scope { align-self: flex-start; }
+.para-badge { display: block; background: none; border: 0; padding: 0 0 4px; font: 500 11px var(--sans); color: var(--accent-text); text-align: left; }
+.ans-acts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; white-space: normal; }
+.attchip.ctx { border-style: dashed; }
