@@ -70,12 +70,37 @@ async function api(path, body, method, extra = {}) {
   if (extra.signal) opts.signal = extra.signal;
   const r = await fetch(path, opts);
   if (!r.ok) {
-    const err = new Error((await r.text()) || `${r.status}`);
+    const raw = await r.text();
+    const fail = routeFail(raw);
+    const err = new Error(fail?.error ?? (raw || `${r.status}`));
     err.status = r.status;
+    if (fail?.alternative) offerEngine(fail);
     throw err;
   }
   const text = await r.text();
-  return text ? JSON.parse(text) : null;
+  const out = text ? JSON.parse(text) : null;
+  // a routing failure inside a result ({ error: "<RouteError payload>" }): its message, and the offer
+  if (typeof out?.error === "string") {
+    const fail = routeFail(out.error);
+    if (fail) { out.error = fail.error; if (fail.alternative) offerEngine(fail); }
+  }
+  return out;
+}
+
+/** A lore-llm RouteError payload `{ error, alternative? }` sent as the error text (llm.rs route_error). */
+function routeFail(s) {
+  if (typeof s !== "string" || !s.startsWith('{"error"')) return null;
+  try { const v = JSON.parse(s); return typeof v.error === "string" ? v : null; } catch { return null; }
+}
+
+/** 「改用本機」／「改用 Claude」: once, after the caller's own message (it replaces it). */
+function offerEngine({ error, alternative: alt }) {
+  setTimeout(() => LoreShell.toast(error, { err: true, action: { label: alt.label, run: () => {
+    store.set("pc.engine", alt.engine === "local" ? "local" : "claude");
+    renderEngineSwitch();
+    renderStatus();
+    LoreShell.toast(`已${alt.label}，再試一次`);
+  } } }), 0);
 }
 
 // ── Look ───────────────────────────────────────────────
@@ -846,7 +871,7 @@ function chosenEngine() {
 }
 
 async function loadEngines(fresh = false) {
-  try { state.engines = await api(`/api/pc/engines${fresh ? "?fresh=1" : ""}`); } catch { state.engines = null; }
+  try { state.engines = await api(`/api/engines/status${fresh ? "?fresh=1" : ""}`); } catch { state.engines = null; }
   renderEngineSwitch();
   renderStatus();
   markSettings();
@@ -1076,7 +1101,8 @@ function markSettings() {
   const gear = $("#actSettings");
   if (!gear) return;
   gear.classList.toggle("attn", !!need);
-  gear.setAttribute("aria-label", state.profile?.demo ? "設定（還沒連接你的工作區） ⌘," : need ? "設定（還沒連接模型） ⌘," : "設定 ⌘,");
+  gear.setAttribute("aria-label", "設定 ⌘,");
+  gear.title = state.profile?.demo ? "還沒連接你的工作區" : need ? "還沒連接模型" : "";
 }
 
 // ── Git sync ───────────────────────────────────────────

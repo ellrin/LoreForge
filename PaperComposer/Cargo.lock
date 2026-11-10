@@ -2180,6 +2180,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-engines"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "lore-home",
+ "lore-llm",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "lore-fonts"
 version = "0.1.0"
 dependencies = [
@@ -2786,6 +2798,7 @@ dependencies = [
  "dirs 6.0.0",
  "flate2",
  "futures-util",
+ "lore-engines",
  "lore-fonts",
  "lore-gitsync",
  "lore-home",

@@ -3335,7 +3335,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/textable/new", post(table_new))
         .route("/api/check/soft", post(soft_check))
         .route("/api/engine", get(engine_status))
-        .route("/api/pc/engines", get(engines_status)) // setup.js, the 寫作 engine switch; /api/engines is the shared contract (docs/shell.md)
+        .route("/api/engines/status", get(engines_status)) // setup.js, the 寫作 engine switch; /api/engines is lore-engines (the gear's 模型)
         .route("/api/engines/test", post(test_engine))
         .route("/api/claude-code/login", post(claude_code_login))
         .route("/api/compose", post(compose_paragraph))
@@ -3345,9 +3345,26 @@ pub fn router(paths: Paths) -> Router {
         .merge(opened::routes())
         .merge(notation::routes())
         .merge(shell::routes())
+        // GET/PUT /api/engines (the gear's 模型) and POST /api/links/open, shared by every app
+        .merge(lore_engines::router(engines_settings(&state)))
         // the UI is read fresh each time: a new server must not meet an old script
         .fallback_service(Router::new().fallback_service(ServeDir::new(paths.ui)).layer(axum::middleware::map_response(no_cache)))
         .with_state(state)
+}
+
+/// The shared 模型 settings (lore-engines) over this app's llama-server, Claude Code and tasks.
+/// `PAPERCOMPOSER_ENGINES_ISOLATED` (tests, the isolated example) keeps them off the
+/// real engine.toml routing.
+fn engines_settings(state: &Shared) -> lore_engines::Engines {
+    let mut e = lore_engines::Engines::new(loreforge_home(), "PaperComposer", include_str!("../tasks.toml"))
+        .runtime(state.llm.runtime.clone(), state.llm.layout.clone())
+        .cli(state.llm.cli.clone(), state.llm.cc.clone())
+        .claude_model(Some(state.llm.model()));
+    e.include_uncensored = true;
+    if cfg!(test) || std::env::var_os("PAPERCOMPOSER_ENGINES_ISOLATED").is_some() {
+        e.install_routing = false;
+    }
+    e
 }
 
 /// Bind on 127.0.0.1 (port 0 = any free port) and return the bound address

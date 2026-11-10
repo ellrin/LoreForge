@@ -21,4 +21,5 @@ lore-gitsync = { path = "../commons/crates/lore-gitsync" }
 lore-home = { path = "../commons/crates/lore-home" }
 lore-notation = { path = "../commons/crates/lore-notation" }
 lore-shell = { path = "../commons/crates/lore-shell" }
+lore-engines = { path = "../commons/crates/lore-engines" }
 lore-fonts = { path = "../commons/crates/lore-fonts" }

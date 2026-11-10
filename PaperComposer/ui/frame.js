@@ -52,7 +52,8 @@ const PCFrame = (() => {
   async function settle() {
     const ta = document.querySelector("#paper .para > textarea, #paper .field-edit");
     if (!ta) return;
-    ta.blur();
+    // its onblur saves; a window without focus fires no blur, so run it directly
+    if (document.activeElement === ta && document.hasFocus()) ta.blur(); else ta.onblur?.();
     for (let t = 0; t < 80 && document.querySelector("#paper .para > textarea, #paper .field-edit"); t++) await new Promise((ok) => setTimeout(ok, 50));
     while (state.saving) await new Promise((ok) => setTimeout(ok, 50));
   }

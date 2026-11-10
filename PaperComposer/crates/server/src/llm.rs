@@ -26,7 +26,7 @@ use lore_llm::catalog::Catalog;
 use lore_llm::claude_code::{Cache, Cli};
 use lore_llm::local::{Layout, LocalRuntime};
 use lore_llm::router::{ApiAccess, CLAUDE_SELECTED, ExternalServer, LOCAL_CURRENT, LocalAccess, StandardFactory, SubscriptionAccess};
-use lore_llm::secrets::{Account, KeySource, KeyStore};
+use lore_llm::secrets::{Account, KeySource, SharedKeys};
 use lore_llm::{LlmRequest, Route, RouteOptions, Router, TaskTable};
 
 const TASKS: &str = include_str!("../tasks.toml");
@@ -98,7 +98,7 @@ pub struct ClaudeStatus {
 pub struct Llm {
     pub catalog: Catalog,
     tasks: TaskTable,
-    pub keys: KeyStore,
+    pub keys: SharedKeys,
     pub cli: Cli,
     /// Claude Code login status, refreshed at most once a minute.
     pub cc: Arc<Cache>,
@@ -120,7 +120,7 @@ impl Llm {
         Llm {
             catalog,
             tasks,
-            keys: KeyStore::anthropic(SERVICE, None),
+            keys: SharedKeys::for_app(SERVICE, None),
             cli: Cli::default(),
             cc: Arc::new(Cache::default()),
             runtime,
@@ -235,14 +235,14 @@ impl Llm {
     pub async fn route(&self, task: &str, choice: Option<EngineChoice>) -> Result<Route, String> {
         let opts = choice.map(|c| RouteOptions::only(c.model_ref())).unwrap_or_default();
         let router = Router::new(self.tasks.clone(), self.factory());
-        router.provider_for_with(task, &opts).await.map_err(|e| if choice.is_some() { e.reason() } else { e.to_string() })
+        router.provider_for_with(task, &opts).await.map_err(|e| route_error(&e, choice.is_some()))
     }
 
     /// Run `task` on one exact model ref ("claude:haiku", "local:current"),
     /// no fallback: the draft window's model picker.
     pub async fn complete_on(&self, task: &str, model_ref: &str, prompt: &Prompt, extra: Option<&str>, schema: Option<serde_json::Value>) -> Result<String, String> {
         let router = Router::new(self.tasks.clone(), self.factory());
-        let route = router.provider_for_with(task, &RouteOptions::only(model_ref)).await.map_err(|e| e.reason())?;
+        let route = router.provider_for_with(task, &RouteOptions::only(model_ref)).await.map_err(|e| route_error(&e, true))?;
         route.provider.complete(&request(&route, prompt, extra, schema)).await.map_err(|e| e.to_string())
     }
 
@@ -252,6 +252,13 @@ impl Llm {
         let route = self.route(task, choice).await?;
         route.provider.complete(&request(&route, prompt, extra, schema)).await.map_err(|e| e.to_string())
     }
+}
+
+/// A routing failure as the error text the UI gets: the message, or — when the other
+/// engine could run (「改用本機」／「改用 Claude」) — `RouteError::payload` as JSON, which
+/// the page's api() reads back into the message and that one-click choice.
+pub fn route_error(e: &lore_llm::RouteError, reason: bool) -> String {
+    if e.alternative().is_some() { e.payload(reason).to_string() } else if reason { e.reason() } else { e.to_string() }
 }
 
 /// The request for a prompt: max 4096 tokens unless the task says otherwise,
@@ -274,13 +281,13 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use lore_llm::{OpenAiCompat, OpenAiCompatConfig};
+    use lore_llm::secrets::KeyStore;
 
     fn llm(external: Option<String>) -> Arc<Llm> {
         let tasks = Llm::task_table(None).unwrap();
         let home = std::env::temp_dir().join(format!("pc-llm-{}", std::process::id()));
         let mut l = Llm::new(Catalog::bundled(), tasks, Arc::new(LocalRuntime::new()), Layout::shared(&home), EngineConfig { url: external, model: None }, Some("claude-haiku-5-5".into()));
-        l.keys.use_keychain = false; // never the real keychain in tests
-        l.keys.env_var = None;
+        l.keys.isolate(); // never the real keychain in tests
         l.cli = Cli { bin: Some(std::env::temp_dir().join("pc-no-such-claude")), config_dir: None };
         Arc::new(l)
     }
@@ -330,7 +337,7 @@ mod tests {
         ks.env_var = None;
         ks.save("test-key", &Account::Single).unwrap();
         let mut inner = Arc::try_unwrap(l).ok().unwrap();
-        inner.keys = ks;
+        inner.keys = SharedKeys { main: ks, old: vec![] };
         let l = Arc::new(inner);
         let r = l.route("pc-outline", Some(EngineChoice::Api)).await.unwrap();
         assert_eq!(r.provider.id(), "claude:claude-haiku-5-5");

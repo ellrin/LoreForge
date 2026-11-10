@@ -133,12 +133,29 @@ const Setup = (() => {
     body.replaceChildren(sec);
   }
 
+  // 模型 → 本機 model picker: through this app's own start (it also keeps config.toml
+  // [model] active, which PUT /api/engines does not), then the tab reads /api/engines again.
+  function localPick(dlg) {
+    const sel = dlg.querySelector('.dlg-body[data-tab="model"] select[aria-label="本機模型"]');
+    if (!sel || sel._pc) return;
+    sel._pc = true;
+    sel.onchange = async () => {
+      sel.disabled = true;
+      LoreShell.toast("啟動中…", { ms: 120000 });
+      try { await api("/api/models/start", { id: sel.value }); LoreShell.toast("模型已啟用"); }
+      catch (e) { LoreShell.toast(e.message, { err: true, ms: 8000 }); }
+      await loadEngines(true);
+      await LoreShell.engines.get(true);
+      LoreShell.settings("model");
+    };
+  }
+
   /** Watch the shell's settings dialog: tab dots, the 模型 fallback, closing. */
   function watchSettings() {
     const hook = (dlg) => {
       if (dlg._pc) return;
       dlg._pc = true;
-      new MutationObserver(() => { markTabs(); modelFallback(dlg); }).observe(dlg, { childList: true, subtree: true });
+      new MutationObserver(() => { markTabs(); modelFallback(dlg); localPick(dlg); }).observe(dlg, { childList: true, subtree: true });
       dlg.addEventListener("close", onClosed);
       markTabs();
       modelFallback(dlg);

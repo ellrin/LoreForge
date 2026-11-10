@@ -46,17 +46,8 @@ pub struct Live<'a> {
 #[async_trait]
 impl Engines for Live<'_> {
     fn candidates(&self, task: &str, picked: Option<&str>) -> Vec<String> {
-        if let Some(p) = picked {
-            return vec![p.to_string()];
-        }
-        let Some(t) = self.table.task.get(task) else { return vec![] };
-        let mut out: Vec<String> = vec![];
-        for r in [self.table.overrides.get(task).cloned(), Some(t.default.clone()), t.fallback.clone()].into_iter().flatten() {
-            if !out.contains(&r) {
-                out.push(r);
-            }
-        }
-        out
+        // the shared routing (engine.toml: class routes, overrides); a pick is the only one
+        self.table.candidates_for(task, &picked.map(lore_llm::RouteOptions::only).unwrap_or_default())
     }
     async fn complete(&self, task: &str, model_ref: &str, prompt: &Prompt, extra: Option<&str>, schema: Value) -> Result<String, String> {
         self.llm.complete_on(task, model_ref, prompt, extra, Some(schema)).await

@@ -121,6 +121,7 @@ select, input[type="search"] {
 
 .findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .findings li { display: grid; grid-template-columns: 10px 1fr; gap: 8px; align-items: baseline; }
+.findings li.empty { display: block; }
 .findings .rid { font: 500 10.5px var(--mono); color: var(--faint); margin-left: 6px; }
 .findings .pending { color: var(--faint); }
 .empty { color: var(--faint); font-size: 12px; }
@@ -144,6 +145,7 @@ select, input[type="search"] {
 /* PaperComposer's segs fill their row (base.css: .seg) */
 .right .seg, #setupParts .seg, .pc-part .seg, #partPaper .seg { display: flex; }
 .right .seg button { flex: 1; padding: 5px 0; font-size: 12px; }
+.pc-part .seg button, #partPaper .seg button { flex: 1; padding: 6px 14px; white-space: nowrap; }
 
 #points {
   width: 100%; resize: vertical; min-height: 96px; background: var(--surface);

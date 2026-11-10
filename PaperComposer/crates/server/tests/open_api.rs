@@ -52,6 +52,7 @@ async fn opens_latex_and_word_where_they_are() {
         std::env::set_var("PAPERCOMPOSER_WORKSPACE", root.join("ws"));
         std::env::set_var("PAPERCOMPOSER_OPENED", root.join("home/opened.toml"));
         std::env::set_var("LOREFORGE_PRIVATE", root.join("private"));
+        std::env::set_var("PAPERCOMPOSER_ENGINES_ISOLATED", "1");
         std::env::set_var("HOME", root.join("home"));
     }
     let (addr, serve) = pc_server::bind(pc_server::Paths::from_repo(), 0).await.unwrap();
