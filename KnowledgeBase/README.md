@@ -4,7 +4,7 @@
 
 > 開發中（第 1 波 A1：知識庫核心）。已完成：`lore-store`（space、iCloud／git 圖片）、`kb-core`（知識卡、連結、標籤、學習狀態機、SQLite/FTS5 索引、術語掃描）、kb-server API、最小網頁介面（清單、編輯器、複習、時間軸、圖譜）。
 > 第 2 波 B2：NeonDeck 小工具（`NeonDeck/desktop/widgets/knowledge.js`）、到期通知、每日 e-mail 摘要、登入自動啟動腳本。
-> 尚未完成：接上 `lore-llm`（目前起草卡片與候選術語用離線 mock）、家庭 space 的實際掛載。
+> 尚未完成：候選術語仍用離線 mock（起草卡片已接上 `lore-llm`）、家庭 space 的實際掛載。
 
 ## 執行
 
@@ -55,6 +55,14 @@ stale_after_days = 180
 - 個人卡片**不會自動**進入家庭 space；在卡片上按「分享到…」才會複製一份（新 id，指向個人卡片的連結不帶過去）。
 - SQLite 索引在記憶體中，每次啟動從檔案重建；工具列的「重建索引」可在手動改檔後重讀。
 
+## 外觀
+
+設定頁的「外觀」選配色，所有 App 共用（存在 `private/shared/ui.toml`）。卡片的閱讀頁用主題的紙面色。
+
+## 起草摘要
+
+卡片編輯器的「用模型起草摘要」（`POST /api/draft`）經過 `lore-llm`，任務 `kb-summarize-card`：先用本機模型（`config.toml` 的 `[engine]` 或 `KB_LLM_URL`），沒有時用 Claude。引用的 PDF 頁碼與論文標題一併放進提示，行尾斷開的連字號會接回去。草稿只回傳給編輯器，**不會自動儲存**，改過再存。回覆標明實際用的引擎；沒有任何引擎時回 503 並說明原因。
+
 ## 圖譜
 
 類似 Obsidian 的知識網路圖（`web/graph.js`，純 canvas，沒有外部套件）。
@@ -83,7 +91,10 @@ stale_after_days = 180
 | `GET /api/graph` | 圖譜：`center`＋`depth`（局部，預設 2，最多 6）、`space`、`limit`（預設 400 張最新的卡）、`full=true`（全部，上限 20,000）、`missing=true`（未建立的 `[[連結]]` 佔位節點，`kind = "missing"`）、`tags=true`（標籤節點）。節點含 `kind`、`state`、`score`、`streak`、`tags`、`aliases`、`domains`、`summary`、`created_at`、`updated_at`、`degree`、`hop`（局部圖譜的距離）；另回傳 `total`、`truncated`、`center` |
 | `POST /api/assets?space=&ext=`、`GET /api/assets/{space}/{hash.ext}` | 圖片 |
 | `GET /api/health` | 狀態、成員、`reader_url`（LoreReader 的位址，卡片來源 `type = "pdf"` 連到 `<reader_url>/open?sha=…&page=…`；`KB_READER_URL` 或 config.toml 的 `reader_url`，預設 `http://127.0.0.1:7890`） |
-| `GET /api/spaces`、`/api/registry`、`POST /api/nodes/{id}/share`、`POST /api/draft`、`POST /api/reindex` | |
+| `GET /api/spaces`、`/api/registry`、`POST /api/nodes/{id}/share`、`POST /api/reindex` | 空間、各 App 的登錄；複製到家庭 space（新 id）；重建索引 |
+| `POST /api/draft` | 起草摘要（見上）：`{term, context, kind?, lang?, page?, source?, engine?}` → `{draft, engine, assistant}` |
+| `POST /api/nodes/{id}/encounter` | 「遇到」：記一次出現，可附來源 `{via}` → `{progress}` |
+| `GET/PUT /api/theme` | 共用配色（外觀） |
 | `GET /api/stats` | 今日數字（今天新增、待複習、7 天內記住、各狀態張數）＋通知時間 |
 | `GET/PUT /api/reminders`、`PUT /api/reminders/password` | 提醒設定、狀態、密碼是否已設定（密碼不會回傳） |
 | `GET /api/reminders/preview?format=html\|text\|json`、`POST /api/reminders/test-email`、`POST /api/reminders/test-notify` | 預覽／測試 |

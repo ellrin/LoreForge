@@ -25,7 +25,7 @@ cd ../commons && cargo test -p kb-core -p lore-store
   SQLite + FTS5 index (rusqlite 0.32, bundled — it shares libsqlite3-sys 0.30 with sqlx 0.8),
   term scanner, `CardAssistant` (LLM trait, mock), `KnowledgeBase` façade.
 - `crates/server` (`kb-server`): axum on 127.0.0.1:7700; `api.rs` handlers (plain fns over
-  `Shared`, can become Tauri commands), `config.rs` (args > env > config.toml > `../private/KnowledgeBase`),
+  `Shared`, can become Tauri commands), `llm.rs` (lore-llm wiring for the card draft, `tasks.toml`), `config.rs` (args > env > config.toml > `../private/KnowledgeBase`),
   `reminders.rs` (settings/state in `<app dir>` = `$KB_HOME` or `<config dir>/KnowledgeBase`,
   stats, notification slots + osascript fallback via an injected `CommandRunner`, the minute
   scheduler), `digest.rs` (daily e-mail, lettre + rustls). SMTP password: keychain through
