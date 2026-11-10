@@ -35,6 +35,8 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
 - `apps/desktop` (`lorereader`): Tauri shell on 7890 (KB links point there); reuses an
   lr-server already on 7890, else binds it (free port if taken). Registers `NativePrinter`:
   print.html in a window, `WebviewWindow::print()` when `/api/print/ready` arrives.
+  Registered as a PDF viewer (`fileAssociations`): `RunEvent::Opened` files go through
+  `POST /api/papers/import {path}` on whichever server it uses, then `/?paper=<sha>`.
 - `web/`: static HTML/CSS/JS, no build step; `app.js` is an ES module over pdf.js
   (`web/vendor/pdfjs`, 5.7.284, Apache-2.0; keep LICENSE + VERSION). `print.html` renders pages
   at ~216 dpi. Tokens/icons from SlideComposer (icons.js copied, extra icons at the end).

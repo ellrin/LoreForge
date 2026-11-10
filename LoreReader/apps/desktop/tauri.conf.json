@@ -23,6 +23,16 @@
     ],
     "resources": {
       "../../web": "web"
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "pdf"
+        ],
+        "name": "PDF 文件",
+        "role": "Viewer",
+        "mimeType": "application/pdf"
+      }
+    ]
   }
 }

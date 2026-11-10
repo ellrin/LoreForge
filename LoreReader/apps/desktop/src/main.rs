@@ -3,10 +3,64 @@
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+
+/// PDFs opened from Finder (double-click, "Open With", LoreReader as the default PDF app):
+/// queued until the server answers, then added to the library through `/api/papers/import`
+/// (the same call whether this app runs the server or reuses one on 7890) and shown.
+#[derive(Default)]
+struct Opener {
+    addr: Mutex<Option<SocketAddr>>,
+    pending: Mutex<Vec<PathBuf>>,
+}
+
+/// POST `{"path": …}` to the import endpoint; the paper's sha256.
+fn import_pdf(addr: SocketAddr, path: &Path) -> Result<String, String> {
+    let body = serde_json::json!({ "path": path.to_string_lossy() }).to_string();
+    let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|e| e.to_string())?;
+    let _ = s.set_read_timeout(Some(Duration::from_secs(120)));
+    let req = format!(
+        "POST /api/papers/import HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    s.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    let mut resp = String::new();
+    s.read_to_string(&mut resp).map_err(|e| e.to_string())?;
+    let (head, json) = resp.split_once("\r\n\r\n").ok_or("empty response")?;
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("{e}: {json}"))?;
+    if !head.starts_with("HTTP/1.1 200") {
+        return Err(v["error"].as_str().unwrap_or(head).to_string());
+    }
+    v["paper"]["sha256"].as_str().map(str::to_string).ok_or_else(|| "no sha256 in reply".into())
+}
+
+fn open_file(app: &AppHandle, path: PathBuf) {
+    let st = app.state::<Opener>();
+    let Some(addr) = *st.addr.lock().unwrap() else {
+        st.pending.lock().unwrap().push(path);
+        return;
+    };
+    let app = app.clone();
+    // off the main thread: a large PDF takes a moment to hash and copy
+    std::thread::spawn(move || match import_pdf(addr, &path) {
+        Ok(sha) => {
+            let url = url::Url::parse(&format!("http://{addr}/?paper={sha}&page=1")).expect("url");
+            let a = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(w) = a.get_webview_window("main") {
+                    let _ = w.navigate(url);
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            });
+        }
+        Err(e) => eprintln!("open {}: {e}", path.display()),
+    });
+}
 
 /// An lr-server already answers on `addr` (e.g. `cargo run -p lr-server`).
 fn lr_server_at(addr: SocketAddr) -> bool {
@@ -111,8 +165,27 @@ fn main() {
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(900.0, 600.0)
                 .build()?;
+            // files Finder handed over while starting up
+            *app.state::<Opener>().addr.lock().unwrap() = Some(addr);
+            let pending: Vec<PathBuf> = std::mem::take(&mut *app.state::<Opener>().pending.lock().unwrap());
+            for p in pending {
+                open_file(app.handle(), p);
+            }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running LoreReader");
+        .manage(Opener::default())
+        .build(tauri::generate_context!())
+        .expect("error while building LoreReader")
+        .run(|app, event| {
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            if let RunEvent::Opened { urls } = event {
+                for u in urls {
+                    if let Ok(p) = u.to_file_path() {
+                        open_file(app, p);
+                    }
+                }
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+            let _ = (app, event);
+        });
 }
