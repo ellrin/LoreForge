@@ -178,7 +178,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 ### 引擎標籤
 
-名詞分類（01 名詞）、段落分析（04 段落）、問這篇（送出旁）、翻譯（譯文下方）各有共用外殼的引擎標籤：「自動」（照 `tasks.toml` 的預設順序）、雲（`claude:selected`）、地（本機模型），做法同 PaperComposer 的模型選單（`complete_on`）；舊的 Haiku／Sonnet／Opus 選擇照用，標籤顯示「雲 · 名稱」。選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。選擇存在 `private/LoreReader/models.json`。
+名詞分類（01 名詞）、段落分析（04 段落）、問這篇（送出旁）、翻譯（譯文下方）各有共用外殼的引擎標籤：「自動」（跟齒輪 → 模型的類別走向）、雲、地；存成共用 `private/shared/engine.toml` 的 `[overrides]`（`PUT /api/engines`，lore-engines）。舊的 `private/LoreReader/models.json`（以前的模型選單：地端、Haiku、Sonnet、Opus，嚴格、不換）照讀，標籤顯示「雲 · 名稱」或「地」，改一次標籤就清掉。用不了時錯誤附上 lore-llm 的「改用本機／改用 Claude」，問這篇的錯誤框有這顆按鈕。選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。選擇存在 `private/LoreReader/models.json`。
 
 ## 從知識庫開啟 PDF
 
@@ -203,7 +203,8 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `GET /api/papers/{sha}/paragraphs`、`POST …/paragraphs/run`、`POST …/paragraphs/{id}/understood` | 段落（標籤、分析、懂了）與背景分析的進度；重跑 `{again?}`；`{on}` |
 | `GET/PUT /api/glyphs` | 自己的字形 → LaTeX 對照（`private/LoreReader/glyphs.toml`） |
 | `POST/DELETE /api/ignore` | `{term}` → 加進／移出忽略清單 |
-| `GET/PUT /api/models` | 引擎標籤：`{task, model: auto\|local\|cloud\|haiku\|sonnet\|opus}` |
+| `GET/PUT /api/engines`、`POST /api/links/open` | 齒輪的模型頁與引擎標籤、開其他 Lore App（lore-engines，所有 App 共用） |
+| `GET/PUT /api/models` | 舊的模型選單（引擎標籤改一次就清掉）：`{task, model: auto\|local\|cloud\|haiku\|sonnet\|opus}` |
 | `POST /api/papers/{sha}/symbols/{id}/global` | 對照表的「加入全域」：這一列寫進共用的 `private/shared/notation.json`（全域已有同一個符號 → 409） |
 | `GET /api/notation/global` | 全域對照表 |
 | `GET/PUT /api/theme` | 共用配色（外觀） |

@@ -2050,6 +2050,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-engines"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "lore-home",
+ "lore-llm",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "lore-home"
 version = "0.1.0"
 dependencies = [
@@ -2134,6 +2146,7 @@ dependencies = [
  "axum",
  "dirs 6.0.0",
  "http-body-util",
+ "lore-engines",
  "lore-home",
  "lore-llm",
  "lore-notation",

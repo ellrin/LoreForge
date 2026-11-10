@@ -938,6 +938,16 @@ async fn the_shared_shell_is_served_and_loaded_in_order() {
     assert!(at("src=\"theme.js\"") < at("src=\"icons.js\"") && at("src=\"icons.js\"") < at("src=\"shell.js\"") && at("src=\"shell.js\"") < at("src=\"app.js\""));
     let app = std::fs::read_to_string(web.join("app.js")).unwrap();
     assert!(!app.contains("confirm("), "questions go through LoreShell.ask");
+    // the 模型 tab and the engine chips: lore-engines over the shared engine.toml
+    let (s, v, _) = call(&e.app, "GET", "/api/engines", None, None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let tasks: Vec<&str> = v["tasks"].as_array().unwrap().iter().filter_map(|t| t["id"].as_str()).collect();
+    for t in ["lr-chat", "lr-translate", "lr-classify-terms", "lr-paragraph"] {
+        assert!(tasks.contains(&t), "{t} in {tasks:?}");
+    }
+    let (s, v, _) = call(&e.app, "PUT", "/api/engines", Some(json!({ "overrides": { "lr-chat": "local" } })), None).await;
+    assert_eq!((s, v["overrides"]["lr-chat"].as_str()), (StatusCode::OK, Some("local")), "{v}");
+    assert!(std::fs::read_to_string(e.root.join("ws/shared/engine.toml")).unwrap().contains("lr-chat"));
 }
 
 /// 加入全域: a row of the paper's symbol table goes into the global 對照表 once

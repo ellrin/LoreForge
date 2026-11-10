@@ -53,7 +53,7 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   the author's action, `initial_state` learning|known; `lexicon()` = `GET /api/nodes` titles +
   aliases), `llm.rs` = lore-llm wired like PaperComposer (`tasks.toml`: `lr-translate`
   local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` and `lr-paragraph`
-  local:current → claude:haiku; `complete_on` = the engine chip's choice (`auto | local | cloud`, old `haiku | sonnet | opus` still read), strict; the local
+  local:current → claude:haiku; `complete_on` = a per-call choice or the old models.json one (`auto | local | cloud | haiku | sonnet | opus`), strict, else the shared routes / overrides; errors are `LlmFail` = lore-llm's `payload` (with `alternative`); keys `SharedKeys::for_app("LoreReader")`; the local
   engine is config `[engine]`, else the shared `private/shared/engine.toml` via
   `lore_home::engine`, re-read per call),
   `reading.rs` = the reading aids over the text the page posts once per open (memory only):
@@ -75,8 +75,10 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   at ~216 dpi. The shared shell (`docs/shell.md`): `/icons.js`, `/base.css`, `/shell.js` are
   `lore_shell::FILES` (no icons.js in web/), `/notation-panel.js` the shared 對照表 component;
   `LoreShell.mount` builds the top bar, gear (一般 · 外觀 · 模型 · 快捷鍵), drawers, ⌘F / ⌘S;
-  the right panel is `LoreShell.block`s (01 名詞 … 06 問這篇). `/api/engines` (the 模型 tab) is
-  not mounted yet (group EN). styles.css keeps only what base.css does not own.
+  the right panel is `LoreShell.block`s (01 名詞 … 06 問這篇). `/api/engines` (the 模型 tab, the
+  engine chips' `overrides`) and `/api/links/open` are `lore_engines::router` (isolated: no
+  keychain / CLI / opener, process routing not installed). styles.css keeps only what base.css
+  does not own.
 - `../private-example/LoreReader/`: seed of the private workspace (README, `ignore-words.txt`, `papers/`).
 
 ## Decisions

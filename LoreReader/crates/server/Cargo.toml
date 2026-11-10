@@ -12,6 +12,7 @@ lore-home.workspace = true
 lore-llm.workspace = true
 lore-notation.workspace = true
 lore-shell.workspace = true
+lore-engines.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

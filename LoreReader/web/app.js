@@ -1443,7 +1443,7 @@ async function nounPopover(n, anchor, p) {
     showPop(anchor, head, meta, acts);
     return;
   }
-  acts.append(h("a", { class: "btn small", href: `${S.info?.kb_url ?? "http://127.0.0.1:7700"}/#/node/${n.kb.node_id}`, target: "_blank", rel: "noopener" }, h("span", { "data-icon": "external" }), "開啟卡片"));
+  acts.append(h("button", { type: "button", class: "btn small", onclick: () => openKbCard(n.kb.node_id) }, h("span", { "data-icon": "external" }), "開啟卡片"));
   showPop(anchor, head, meta, h("div", { class: "muted" }, "…"));
   let summary = "";
   try { const v = await api(`/api/kb/nodes/${n.kb.node_id}`); summary = v.node?.summary ?? ""; } catch (err) { summary = err.message; }
@@ -1734,15 +1734,20 @@ function fieldAsk() {
     h("button", { type: "button", class: "btn small ghost", onclick: () => { try { localStorage.setItem("lr.fieldSkipped", "1"); } catch {} S.fieldSkipped = true; renderSide(); } }, "略過"));
 }
 
-/** A feature's own engine (the kit's engine chip): 自動 · 雲 · 地, stored per task in
- *  models.json (`/api/models`). An old haiku / sonnet / opus choice shows as 雲 with its name. */
+/** A feature's own engine (the kit's engine chip): 自動 · 雲 · 地, kept as the task's
+ *  override in the shared engine settings (`PUT /api/engines` overrides). An older
+ *  models.json choice (the former 模型 dialog) still wins until the chip is changed; it
+ *  shows as 地 or 雲 (with the Claude model's name), and changing the chip clears it. */
 function engineChip(task) {
-  const t = S.models?.tasks.find((x) => x.id === task);
-  const c = t?.choice ?? "auto";
-  const value = c === "auto" || c === "local" ? c : "cloud";
-  const used = ["haiku", "sonnet", "opus"].includes(c) ? MODEL_LABEL[c] : engineName(S.used[task]);
+  const legacy = S.models?.tasks.find((x) => x.id === task)?.choice ?? "auto";
+  const d = S.engines;
+  const t = d?.tasks?.find((x) => x.id === task) ?? S.models?.tasks.find((x) => x.id === task);
+  const value = legacy !== "auto" ? (legacy === "local" ? "local" : "cloud") : d?.overrides?.[task] ?? "auto";
+  const used = ["haiku", "sonnet", "opus"].includes(legacy) ? MODEL_LABEL[legacy] : engineName(S.used[task] ?? d?.tasks?.find((x) => x.id === task)?.last);
   return LoreShell.engineChip({ task, value, used, label: `${t?.label ?? "模型"}：模型`, onChange: async (v) => {
-    S.models = await api("/api/models", { method: "PUT", body: { task, model: v } });
+    if (!d) { S.models = await api("/api/models", { method: "PUT", body: { task, model: v } }); return; }
+    await LoreShell.engines.put({ overrides: { [task]: v } });
+    if (legacy !== "auto") S.models = await api("/api/models", { method: "PUT", body: { task, model: "auto" } });
   } });
 }
 /** "claude:sonnet" → "sonnet", "local:qwen3.5-9b" → "qwen3.5-9b". */
@@ -1817,8 +1822,10 @@ async function sendChat(model) {
   } catch (e) {
     S.chat.pop(); S.att = att; S.chatDraft = text; S.chatCtx = ctx;
     S.chatError = e.message;
+    // lore-llm's one-click alternative (「改用本機」／「改用 Claude」) when the other engine could answer
+    S.chatAlt = e.data?.alternative ?? null;
     S.chatLocal = false;
-    if (e.data?.llm_unavailable && !model) { try { S.chatLocal = !!(await api("/api/models")).local_engine; } catch {} }
+    if (!S.chatAlt && e.data?.llm_unavailable && !model) { try { S.chatLocal = !!(await api("/api/models")).local_engine; } catch {} }
   }
   S.sending = false;
   renderSide();
@@ -1978,7 +1985,9 @@ function chatPane() {
     m.role === "assistant" ? mixed(m.text) : m.text,
     m.role === "assistant" && (m.engine || m.paragraph) ? h("div", { class: "eng-row" }, h("span", { class: "eng" }, m.engine ?? ""), m.paragraph ? answerActions(m) : null) : null,
     m.pending ? h("span", { class: "eng" }, "思考中…") : null));
-  const err = S.chatError ? h("div", { class: "err-box" }, S.chatError, S.chatLocal ? h("button", { type: "button", class: "btn small", onclick: () => sendChat("local") }, "改用地端") : null) : null;
+  const alt = S.chatAlt ? h("button", { type: "button", class: "btn small", onclick: () => sendChat(S.chatAlt.engine === "local" ? "local" : "cloud") }, S.chatAlt.label)
+    : S.chatLocal ? h("button", { type: "button", class: "btn small", onclick: () => sendChat("local") }, "改用本機") : null;
+  const err = S.chatError ? h("div", { class: "err-box" }, S.chatError, alt) : null;
   S.chatError = null;
   return [head, h("div", { class: "msgs" }, msgs.length ? msgs : [h("p", { class: "empty" }, S.chatScope === "para" ? "這段還沒有對話" : "選取文字後按 A")]), err].filter(Boolean);
 }
@@ -2234,6 +2243,13 @@ async function generalTab(el) {
     h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "KnowledgeBase"), setRow("網址", path(S.info.kb_url))));
 }
 
+/** A KnowledgeBase card: `lore-kb://node/<id>` (the app), else the KB's http address. */
+function openKbCard(id) {
+  const port = +new URL(S.info?.kb_url ?? "http://127.0.0.1:7700").port;
+  if (port) LoreLinks.ports.kb = port;
+  LoreLinks.open("kb", { node: id });
+}
+
 // ── 最近的論文 (the document menu) ─────────────────────────────────────────
 function remember(sha) {
   try {
@@ -2305,6 +2321,8 @@ function wire() {
   buildBlocks();
   paintIcons();
   api("/api/models").then((m) => { S.models = m; renderSide(); }).catch(() => {});
+  LoreShell.engines.get().then((d) => { S.engines = d; renderSide(); });
+  document.addEventListener("lore-engines", (e) => { S.engines = e.detail; renderSide(); });
   $("#openFile").onchange = async (e) => { const p = await importFiles([...e.target.files]); e.target.value = ""; if (p) go(p.sha256, 1); else if (!S.sha) showHome(); };
   $("#pathForm").onsubmit = async (e) => { e.preventDefault(); try { const r = await api("/api/papers/import", { body: { path: $("#pathInput").value.trim() } }); $("#pathInput").value = ""; go(r.paper.sha256, 1); } catch (x) { fail(x); } };
   $("#actMerge").onclick = () => mergeDialog().catch(fail);

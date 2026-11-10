@@ -1,7 +1,9 @@
 //! Model calls through lore-llm, wired like PaperComposer's: every call is a task from
 //! `tasks.toml` (`lr-translate` → `local:current` then `claude:selected`; `lr-chat` →
 //! `claude:selected`). Local engines get temperature 0.2 and Taiwan usage; the API key
-//! comes from the OS keychain (service `LoreReader`) or ANTHROPIC_API_KEY, never a file.
+//! comes from the shared LoreForge keychain item (the old `LoreReader` one still read) or
+//! ANTHROPIC_API_KEY, never a file. A route that cannot run comes back as
+//! [`LlmFail`]: lore-llm's JSON payload with the one-click alternative (「改用本機」…).
 //!
 //! The local engine (`local:current`): config.toml `[engine]` / `LOREREADER_LLM_URL`, else
 //! the engine all LoreForge apps share, `private/shared/engine.toml` `[engine] url / model`
@@ -13,18 +15,18 @@ use lore_llm::catalog::Catalog;
 use lore_llm::claude_code::{Cache, Cli};
 use lore_llm::local::LocalRuntime;
 use lore_llm::router::{ApiAccess, ExternalServer, LocalAccess, StandardFactory, SubscriptionAccess};
-use lore_llm::secrets::{Account, KeyStore};
+use lore_llm::secrets::{Account, SharedKeys};
 use lore_llm::{LlmRequest, RouteOptions, Router, TaskTable};
 use lr_core::config::EngineConfig;
 
-const TASKS: &str = include_str!("../tasks.toml");
+pub const TASKS: &str = include_str!("../tasks.toml");
 pub const SERVICE: &str = "LoreReader";
 pub const LOCAL_TEMPERATURE: f32 = 0.2;
 
 pub struct Llm {
     pub catalog: Catalog,
     tasks: TaskTable,
-    pub keys: KeyStore,
+    pub keys: SharedKeys,
     pub cli: Cli,
     pub cc: Arc<Cache>,
     runtime: Arc<LocalRuntime>,
@@ -34,6 +36,23 @@ pub struct Llm {
     shared: Option<lore_home::Home>,
     model: String,
     base_url: String,
+}
+
+/// Why a model call did not run: lore-llm's payload (`{ error, alternative? }`), so the
+/// page can offer 「改用本機」／「改用 Claude」.
+#[derive(Debug, Clone)]
+pub struct LlmFail(pub serde_json::Value);
+
+impl LlmFail {
+    pub fn message(m: impl Into<String>) -> LlmFail {
+        LlmFail(serde_json::json!({ "error": m.into() }))
+    }
+}
+
+impl std::fmt::Display for LlmFail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0["error"].as_str().unwrap_or("模型呼叫失敗"))
+    }
 }
 
 /// What a model answered, and with which engine.
@@ -54,7 +73,7 @@ impl Llm {
         Llm {
             catalog,
             tasks,
-            keys: KeyStore::anthropic(SERVICE, None),
+            keys: SharedKeys::for_app(SERVICE, None),
             cli: Cli::default(),
             cc: Arc::new(Cache::default()),
             runtime: Arc::new(LocalRuntime::new()),
@@ -67,8 +86,7 @@ impl Llm {
 
     /// Never the real keychain, environment key or `claude` CLI (tests).
     pub fn isolate(&mut self) {
-        self.keys.use_keychain = false;
-        self.keys.env_var = None;
+        self.keys.isolate();
         self.cli = Cli { bin: Some(std::env::temp_dir().join("lr-no-such-claude")), config_dir: None };
     }
 
@@ -111,21 +129,24 @@ impl Llm {
     }
 
     /// Run `req` as `task` in the task's order (local first for translation).
-    pub async fn complete(&self, task: &str, req: LlmRequest) -> Result<Answer, String> {
+    pub async fn complete(&self, task: &str, req: LlmRequest) -> Result<Answer, LlmFail> {
         self.complete_on(task, None, req).await
     }
 
     /// Run `req` as `task` on the engine picked in the model menu (`local`, `haiku`,
     /// `sonnet`, `opus`): that engine or the reason it cannot run, no fallback.
     /// `None` / `auto`: the task's own order from tasks.toml.
-    pub async fn complete_on(&self, task: &str, choice: Option<&str>, req: LlmRequest) -> Result<Answer, String> {
+    pub async fn complete_on(&self, task: &str, choice: Option<&str>, req: LlmRequest) -> Result<Answer, LlmFail> {
         let router = Router::new(self.tasks.clone(), self.factory());
-        let route = match model_ref(choice)? {
-            Some(r) => router.provider_for_with(task, &RouteOptions::only(r)).await.map_err(|e| e.reason())?,
-            None => router.provider_for(task).await.map_err(|e| e.to_string())?,
-        };
+        let pick = model_ref(choice).map_err(LlmFail::message)?;
+        let strict = pick.is_some();
+        let route = match pick {
+            Some(r) => router.provider_for_with(task, &RouteOptions::only(r)).await,
+            None => router.provider_for(task).await,
+        }
+        .map_err(|e| LlmFail(e.payload(strict)))?;
         let req = route.apply(req.temperature(LOCAL_TEMPERATURE));
-        let text = route.provider.complete(&req).await.map_err(|e| e.to_string())?;
+        let text = route.provider.complete(&req).await.map_err(|e| LlmFail::message(e.to_string()))?;
         Ok(Answer { text: text.trim().to_string(), engine: route.provider.id().to_string(), fallback_used: route.fallback_used })
     }
 }
@@ -197,7 +218,7 @@ mod tests {
         let mut l = Llm::new(&EngineConfig::default(), None, None);
         l.isolate();
         let e = l.complete("lr-translate", LlmRequest::prompt("s", "u")).await.err().unwrap();
-        assert!(!e.is_empty());
+        assert!(!e.to_string().is_empty() && e.0["error"].is_string());
         assert!(l.complete("lr-chat", LlmRequest::prompt("s", "u")).await.is_err());
     }
 

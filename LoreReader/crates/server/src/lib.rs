@@ -277,7 +277,23 @@ pub fn router(shared: Shared) -> Router {
     let web = tower::ServiceBuilder::new()
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-cache")))
         .service(ServeDir::new(&shared.web).append_index_html_on_directories(true));
-    routes().with_state(shared).fallback_service(web)
+    routes().merge(lore_engines::router(engines(&shared))).with_state(shared).fallback_service(web)
+}
+
+/// The shell's 模型 tab (`GET/PUT /api/engines`) and `POST /api/links/open`, shared by every
+/// app (lore-engines). Isolated: no keychain, CLI or opener, and the process routing stays
+/// the tasks' own order.
+fn engines(s: &AppState) -> lore_engines::Engines {
+    let e = lore_engines::Engines::new(s.home.clone(), "LoreReader", llm::TASKS)
+        .external(s.config.engine.url.clone(), s.config.engine.model.clone())
+        .claude_model(s.config.claude_model.clone())
+        .cli(s.llm.cli.clone(), s.llm.cc.clone());
+    if !s.isolated {
+        return e;
+    }
+    let mut e = e.isolated();
+    e.install_routing = false;
+    e
 }
 
 pub async fn bind(shared: Shared, port: u16) -> std::io::Result<(SocketAddr, impl std::future::Future<Output = std::io::Result<()>>)> {
@@ -797,8 +813,13 @@ struct TranslateBody {
     context: String,
 }
 
-pub(crate) fn llm_error(e: String) -> ApiError {
-    ApiError(StatusCode::SERVICE_UNAVAILABLE, json!({ "error": format!("沒有可用的模型：{e}"), "llm_unavailable": true }))
+/// A model call that did not run: lore-llm's payload (with `alternative` when the other
+/// engine could answer) plus `llm_unavailable`.
+pub(crate) fn llm_error(e: llm::LlmFail) -> ApiError {
+    let mut v = e.0.clone();
+    v["error"] = json!(format!("沒有可用的模型：{e}"));
+    v["llm_unavailable"] = json!(true);
+    ApiError(StatusCode::SERVICE_UNAVAILABLE, v)
 }
 
 async fn translate(State(s): State<Shared>, Json(b): Json<TranslateBody>) -> R {
@@ -882,7 +903,7 @@ async fn send_chat(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Js
     let user = ChatMessage { role: "user".into(), text, attachments: b.attachments.clone(), at: lr_core::now(), engine: None, paragraph: b.paragraph.clone(), chip: chip.clone(), context };
     let choice = match b.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
         Some(m) if llm::CHOICES.contains(&m) => Some(m.to_string()),
-        Some(_) => return Err(bad("模型只能是 auto、local、haiku、sonnet 或 opus")),
+        Some(_) => return Err(bad("模型只能是 auto、local、cloud、haiku、sonnet 或 opus")),
         None => reading::model_choice(&s.workspace, "lr-chat"),
     };
     let a = s.llm.complete_on("lr-chat", choice.as_deref(), LlmRequest::chat(llm::chat_system(&title), msgs).max_tokens(2000)).await.map_err(llm_error)?;
