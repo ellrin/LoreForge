@@ -38,8 +38,19 @@ when working on lore-canvas in parallel with other agents.
   private workspace (same block format, `class: "academic"`). Objects keep their block as `slot`; empty slots are
   dashed in the editor and left out of shows, PDFs and PPTX (`Object::is_empty_slot`). `deck.defaults` = recipe
   per page kind for new slides (Enter / ＋); `slide.arrangement` = the recipe a slide was laid out with.
-- Desktop: .pptx files opened from Finder are imported (or the deck already made from the same bytes is opened),
-  on the style whose layouts the file shares most (`Workspace::open_pptx_file`).
+- Files where they live (`crates/core/src/file.rs`): a .pptx opened from Finder / 開啟… (native dialog
+  through the shell: `/api/shell/dialog` calls a hook the desktop app installs — the page has no Tauri IPC)
+  is bound to its deck (`decks/<name>/file.json`: path, size/mtime/hash last read or written, deck id).
+  Lookup (`Workspace::open_path`): bound path → deck id in the file (moved file) → unbound deck from the
+  same bytes → new import on the style whose layouts the file shares most. The page writes the file back
+  ~0.9 s after the last edit (`/file/write`); the desktop app flushes pending decks on quit.
+  A file changed on disk (hash differs from the last read/write) or gone is never written silently: the
+  page asks 重新載入 / 保留我的版本，覆蓋 / 另存新檔…. Before the first overwrite the original is copied
+  once to `.<stem>.original.pptx` next to it (never deleted). Writes: `.<file>.sc-tmp` + rename.
+  Editor-only state (style, deck defaults, slide arrangement, object slots, empty slots) rides in the
+  file as an Office custom XML part (`customXml/itemN.xml`, root `sc:state` in `urn:loreforge:slidecomposer:state`),
+  so a wiped deck folder is rebuilt from the file (`EditorState`). Equation fallbacks for autosaves are
+  cached per object content (`AppState::fallback_cache`).
 - `crates/core` (`sc-core`): `Workspace` (styles/, decks/), `Session` (open deck: editor,
   source package, layout backdrops, LaTeX cache), export PPTX/PDF, `layout_titles`.
 - `crates/server` (`sc-server`): axum on 127.0.0.1:7880; handlers are plain async fns over
@@ -54,9 +65,12 @@ when working on lore-canvas in parallel with other agents.
 
 ## Decisions
 
-- Files are the source of truth: `decks/<name>/deck.json` (written after every transaction),
-  `source.pptx` (the imported file or the style template, never modified), `assets/`
-  (content-addressed images), `exports/` (never overwritten, `free_path`).
+- Three tiers: documents (the bound .pptx, where the author keeps it) are the source of truth for
+  bound decks; tool data (styles, arrangements) stays in `private/`; the deck folder is a regenerable
+  cache for a bound deck. `decks/<name>/deck.json` (written after every transaction), `source.pptx`
+  (the bytes the deck was imported from, never modified; exports diff against it), `assets/`
+  (content-addressed images), `exports/` (never overwritten, `free_path`). Unbound decks
+  (新簡報, browser import) live only in their folder until 另存新檔….
 - Lossless: every imported object keeps its XML + per-field fingerprints. Untouched objects
   export verbatim; edited ones are patched field by field on their original XML; slides whose
   fingerprint is unchanged keep their original part bytes. Duplicated slides (reveal) reuse
@@ -95,7 +109,9 @@ when working on lore-canvas in parallel with other agents.
 - Never commit keys, tokens, personal data, real user paths, real decks or the user's e-mail.
   Real decks live only in the private workspace or a scratch folder; tests use synthetic decks.
 - Example and test users: `ellrin`, then `daidai`. Never invent names that look like real people.
-- Never overwrite a user's file; deck.json writes are atomic.
+- Never overwrite a user's file, except the .pptx a deck is bound to (opened there or chosen in
+  另存新檔): one-time backup first, atomic write, never over a version changed elsewhere. Exports never
+  overwrite; deck.json writes are atomic; no code deletes backups or caches automatically.
 - Every frontend change (web/) is reviewed afterwards (screenshots in light/dark and narrow
   widths); new CSS uses `--accent-text` for accent text, line icons and thin borders.
 - Commits: ellrin is the only author; no `Co-Authored-By` or AI attribution trailers.

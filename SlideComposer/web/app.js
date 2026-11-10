@@ -100,6 +100,7 @@ function absorb(r, { edited = true } = {}) {
   rebindDrag();
   if (edited) savedChip();
   else undoButtons();
+  if ("file" in r) setFile(r.file);
   renderAll();
 }
 
@@ -116,6 +117,106 @@ function undoButtons() {
 
 async function undo() { await exitEdit(); flushNudge(); return serial(async () => { try { absorb(await api(deckApi("/undo"), { body: {} })); } catch (e) { toast(e.message, true); } }); }
 async function redo() { await exitEdit(); flushNudge(); return serial(async () => { try { absorb(await api(deckApi("/redo"), { body: {} })); } catch (e) { toast(e.message, true); } }); }
+
+// ── The .pptx the deck is bound to: autosave back into it ─────────────────
+// The server writes deck.json on every edit; the file itself is written
+// after a short pause (debounce), never over a file changed elsewhere.
+const FILE = { timer: 0, busy: null, asked: false };
+const FILE_LABEL = { saved: "已儲存", pending: "儲存中", saving: "儲存中", changed: "檔案已變更", missing: "找不到檔案", error: "未能儲存" };
+function setFile(f) {
+  S.file = f ?? null;
+  const b = $("#fileState");
+  b.hidden = !S.file;
+  $("#saveChip").hidden = !!S.file; // the file state next to the name says it all
+  if (!S.file) return;
+  const st = S.file.state;
+  b.className = `fstate ed-only ${st}`;
+  b.textContent = "";
+  const dot = document.createElement("i");
+  b.append(dot, FILE_LABEL[st] ?? "");
+  b.title = S.file.path;
+  b.setAttribute("aria-label", `${S.file.file}：${FILE_LABEL[st] ?? ""}`);
+  if (st === "pending") scheduleWrite();
+  if ((st === "changed" || st === "missing") && !FILE.asked) askConflict();
+}
+function scheduleWrite(ms = 900) {
+  clearTimeout(FILE.timer);
+  FILE.timer = setTimeout(writeFile, ms);
+}
+async function writeFile(force = false) {
+  clearTimeout(FILE.timer);
+  if (!S.file || !S.name) return;
+  if (FILE.busy) { await FILE.busy; if (!force && S.file?.state !== "pending") return; }
+  const name = S.name;
+  setFile({ ...S.file, state: "saving" });
+  FILE.busy = api(`/api/decks/${encodeURIComponent(name)}/file/write`, { body: { force } })
+    .then((r) => { if (S.name === name) { setFile(r.file); if (r.warning) toast(r.warning, true); } })
+    .catch((e) => { if (S.name === name) { setFile({ ...S.file, state: "error" }); toast(e.message, true); } })
+    .finally(() => { FILE.busy = null; });
+  return FILE.busy;
+}
+/** Leaving the page inside the debounce: hand the write to the server anyway. */
+function flushFileOnLeave() {
+  if (!S.file || !S.name || !["pending", "saving"].includes(S.file.state)) return;
+  navigator.sendBeacon?.(deckApi("/file/write"), new Blob(["{}"], { type: "application/json" }));
+}
+/** The file changed elsewhere (or vanished): the author decides. */
+function askConflict() {
+  FILE.asked = true;
+  const missing = S.file.state === "missing";
+  dialog((box, close) => {
+    const done = (fn) => async () => { close(); FILE.asked = false; await fn(); };
+    const btns = [];
+    if (!missing) btns.push(h("button", { class: "btn", onclick: done(reloadFile) }, h("span", { "data-icon": "refresh" }), "重新載入"));
+    btns.push(h("button", { class: "btn", onclick: done(() => writeFile(true)) }, h("span", { "data-icon": "save" }), missing ? "寫回原位置" : "保留我的版本，覆蓋"));
+    btns.push(h("button", { class: "btn primary", onclick: done(saveAs) }, h("span", { "data-icon": "download" }), "另存新檔…"));
+    box.append(h("h3", {}, missing ? `找不到 ${S.file.file}` : `${S.file.file} 已在別處修改`), h("div", { class: "info mono" }, S.file.path), h("div", { class: "actions" }, ...btns));
+  });
+  // Esc / closing keeps everything as is (nothing is written); ask again on the next save
+  $("#dlg").addEventListener("close", () => { FILE.asked = false; }, { once: true });
+}
+async function reloadFile() {
+  try {
+    await api(deckApi("/file/reload"), { body: {} });
+    await openDeck(S.name);
+  } catch (e) { toast(e.message, true); }
+}
+async function shellDialog(kind, name) {
+  if (S.info?.shell !== "desktop") return undefined;
+  const r = await api("/api/shell/dialog", { body: { kind, name } });
+  return r.path ?? null;
+}
+/** 開啟…: a .pptx where it lives (native dialog), bound to its deck. Browser: import a copy. */
+async function openFile() {
+  S.info ??= await api("/api/info");
+  if (S.info.shell !== "desktop") { $("#impFile").click(); return; }
+  try {
+    const path = await shellDialog("open");
+    if (!path) return;
+    const r = await api("/api/files/open", { body: { path } });
+    openByName(r.name);
+  } catch (e) { toast(e.message, true); }
+}
+/** 另存新檔…: bind the deck to a chosen .pptx and write it there. Browser: download. */
+async function saveAs() {
+  S.info ??= await api("/api/info");
+  const base = S.file?.file?.replace(/\.pptx$/i, "") ?? S.name;
+  if (S.info.shell !== "desktop") {
+    const a = document.createElement("a");
+    a.href = deckApi("/pptx");
+    a.download = `${base}.pptx`;
+    a.click();
+    return;
+  }
+  try {
+    const path = await shellDialog("save", `${base}.pptx`);
+    if (!path) return;
+    setFile({ ...(S.file ?? { path, file: path.split("/").pop() }), state: "saving" });
+    const r = await api(deckApi("/file/save-as"), { body: { path } });
+    setFile(r.file);
+    if (r.warning) toast(r.warning, true);
+  } catch (e) { toast(e.message, true); if (S.file?.state === "saving") setFile({ ...S.file, state: "error" }); }
+}
 
 // ── Model helpers ─────────────────────────────────────────────────────────
 const slide = () => S.deck?.slides.find((s) => s.uid === S.cur);
@@ -1378,7 +1479,8 @@ function onKey(ev) {
   if (mod && k.toLowerCase() === "g") { ev.preventDefault(); ev.shiftKey ? ungroup() : group(); return; }
   if (mod && (k === "]" || k === "}")) { ev.preventDefault(); zorder(ev.shiftKey ? "front" : "forward"); return; }
   if (mod && (k === "[" || k === "{")) { ev.preventDefault(); zorder(ev.shiftKey ? "back" : "backward"); return; }
-  if (mod && k === "s") { ev.preventDefault(); api(deckApi("/save"), { body: {} }).then(() => toast("已儲存")); return; }
+  if (mod && k.toLowerCase() === "s") { ev.preventDefault(); if (ev.shiftKey) { saveAs(); return; } if (S.file) { writeFile(); return; } api(deckApi("/save"), { body: {} }).then(() => toast("已儲存")); return; }
+  if (mod && k.toLowerCase() === "o") { ev.preventDefault(); openFile(); return; }
   if (k === "Delete" || k === "Backspace") { if (S.sel.length) { ev.preventDefault(); deleteSel(); } return; }
   if (k === "Escape") { if (poly) { poly = null; setTool("select"); renderOverlay(); return; } S.crop = null; S.sel = []; setTool("select"); renderOverlay(); renderSide(); return; }
   if (k === "Enter" && S.crop) { S.crop = null; renderOverlay(); return; }
@@ -1575,6 +1677,8 @@ async function openDeck(name) {
   document.body.classList.remove("at-home");
   $("#saveChip").className = "saved";
   undoButtons();
+  FILE.asked = false;
+  setFile(r.file);
   renderAll();
 }
 
@@ -1588,6 +1692,9 @@ function statusLine() {
 
 // ── Home: 01 開始 (tiles) and 02 最近 (first-slide thumbnails) ─────────────
 function goHome() {
+  // an edit still inside the autosave delay goes to the file now
+  clearTimeout(FILE.timer);
+  flushFileOnLeave();
   const u = new URL(location.href);
   u.search = "";
   history.pushState(null, "", u);
@@ -1601,6 +1708,7 @@ async function showHome() {
   $("#home").hidden = false;
   document.body.classList.add("at-home");
   $("#deckName").textContent = "";
+  setFile(null);
   document.title = "SlideComposer";
   S.reveal = null;
   S.deck = null;
@@ -1658,6 +1766,8 @@ async function drawCover(frame) {
 function wireHome() {
   $("#tileNew").onclick = openNewDeck;
   const tile = $("#tileImport");
+  // desktop: the native dialog gives the real path, so the file is edited where it lives
+  tile.addEventListener("click", (e) => { if (S.info?.shell === "desktop" && e.target !== $("#impFile")) { e.preventDefault(); openFile(); } });
   $("#impFile").onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) importPptx(f); };
   let depth = 0;
   tile.addEventListener("dragenter", (e) => { e.preventDefault(); depth++; tile.classList.add("over"); });
@@ -1751,8 +1861,11 @@ async function deckMenu(anchor) {
   popMenu(anchor, [
     ...decks.map((d) => ({ label: d.name, current: d.name === S.name, run: () => { if (d.name !== S.name) openByName(d.name); } })),
     "-",
+    { icon: "folder", label: "開啟…", run: openFile },
+    { icon: "download", label: "另存新檔…", run: saveAs },
+    "-",
     { icon: "plus", label: "新簡報", run: openNewDeck },
-    { icon: "folder", label: "首頁", run: goHome },
+    { icon: "back", label: "首頁", run: goHome },
   ]);
 }
 function exportMenu(anchor) {
@@ -1861,6 +1974,8 @@ function wire() {
   $("#zoomChip").onclick = () => { S.fit = true; renderCanvas(); };
   $("#actSettings").onclick = openSettings;
   $("#deckPicker").onclick = (e) => deckMenu(e.currentTarget);
+  $("#fileState").onclick = () => { if (S.file?.state === "changed" || S.file?.state === "missing") askConflict(); else if (S.file?.state === "error" || S.file?.state === "pending") writeFile(); };
+  addEventListener("pagehide", flushFileOnLeave);
   $("#actExport").onclick = (e) => exportMenu(e.currentTarget);
   $("#actShow").onclick = (e) => popMenu(e.currentTarget, [
     { icon: "play", label: "從這頁放映", run: () => startShow(true) },

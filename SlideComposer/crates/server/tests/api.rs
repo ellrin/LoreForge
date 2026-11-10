@@ -260,3 +260,57 @@ async fn arranged_slides_keep_empty_slots_out_of_exports() {
     let (code, _, _) = call(&app, "POST", "/api/arrangements", Some(json!({ "id": "../x", "name": "bad" })), None).await;
     assert!(code.is_client_error());
 }
+
+#[tokio::test]
+async fn a_pptx_opened_where_it_lives_saves_back_into_it() {
+    let (dir, app) = setup();
+    let docs = dir.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    let file = docs.join("daidai.pptx");
+    std::fs::write(&file, common::synthetic_deck()).unwrap();
+    // browser mode: no native dialog
+    let (_, info, _) = call(&app, "GET", "/api/info", None, None).await;
+    assert_eq!(info["shell"], "browser");
+    let (code, _, _) = call(&app, "POST", "/api/shell/dialog", Some(json!({ "kind": "open" })), None).await;
+    assert_eq!(code, StatusCode::NOT_IMPLEMENTED);
+
+    let (code, v, _) = call(&app, "POST", "/api/files/open", Some(json!({ "path": file })), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    let name = v["name"].as_str().unwrap().to_string();
+    let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
+    assert_eq!(d["file"]["state"], "saved");
+    assert_eq!(d["file"]["file"], "daidai.pptx");
+    let s2 = d["deck"]["slides"][1]["uid"].as_str().unwrap().to_string();
+    let mut f = d["deck"]["slides"][1]["objects"].as_array().unwrap().iter().find(|o| o["id"] == 5).unwrap()["frame"].clone();
+    f["x"] = json!(f["x"].as_i64().unwrap() + 100000);
+    let (_, v, _) = call(&app, "POST", &format!("/api/decks/{name}/ops"), Some(json!({"ops": [{"op": "set_obj", "slide": s2, "id": 5, "path": "/frame", "value": f}], "label": "移動"})), None).await;
+    assert_eq!(v["file"]["state"], "pending");
+    let (code, v, _) = call(&app, "POST", &format!("/api/decks/{name}/file/write"), Some(json!({})), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!((v["written"].as_bool(), v["file"]["state"].as_str()), (Some(true), Some("saved")));
+    assert_ne!(std::fs::read(&file).unwrap(), common::synthetic_deck());
+    assert!(docs.join(".daidai.original.pptx").is_file());
+
+    // changed elsewhere: the write is refused until the author chooses
+    std::fs::write(&file, common::synthetic_deck()).unwrap();
+    let (_, v, _) = call(&app, "POST", &format!("/api/decks/{name}/ops"), Some(json!({"ops": [{"op": "set_obj", "slide": s2, "id": 5, "path": "/frame/y", "value": 0}], "label": "移動"})), None).await;
+    assert_eq!(v["file"]["state"], "changed");
+    let (_, v, _) = call(&app, "POST", &format!("/api/decks/{name}/file/write"), Some(json!({})), None).await;
+    assert_eq!((v["written"].as_bool(), v["file"]["state"].as_str()), (Some(false), Some("changed")));
+    assert_eq!(std::fs::read(&file).unwrap(), common::synthetic_deck());
+    // 重新載入
+    let (code, _, _) = call(&app, "POST", &format!("/api/decks/{name}/file/reload"), Some(json!({})), None).await;
+    assert_eq!(code, StatusCode::OK);
+    let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
+    assert_eq!(d["file"]["state"], "saved");
+    assert_ne!(d["deck"]["slides"][1]["objects"].as_array().unwrap().iter().find(|o| o["id"] == 5).unwrap()["frame"]["y"], 0);
+
+    // 另存新檔 binds to the new file
+    let to = docs.join("copy.pptx");
+    let (code, v, _) = call(&app, "POST", &format!("/api/decks/{name}/file/save-as"), Some(json!({ "path": to })), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["file"]["file"], "copy.pptx");
+    assert!(to.is_file());
+    let (code, _, _) = call(&app, "POST", &format!("/api/decks/{name}/file/save-as"), Some(json!({ "path": docs.join("x.txt") })), None).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+}

@@ -20,6 +20,12 @@
 //! | POST | /api/decks/{name}/assets?ext= | body = image bytes → `{asset}` |
 //! | POST | /api/decks/{name}/latex | `{omml}` → `{latex}` (cached in the deck folder) |
 //! | POST | /api/math | `{latex, display?, size?}` → `{omml}` (pandoc) |
+//! | POST | /api/files/open | `{path}` → `{name}`: open a .pptx where it lives, bound to it |
+//! | GET | /api/decks/{name}/file | the bound file's save state |
+//! | POST | /api/decks/{name}/file/write | `{force?}` write the deck back to its file (autosave) |
+//! | POST | /api/decks/{name}/file/reload | replace the deck with the file as it is on disk |
+//! | POST | /api/decks/{name}/file/save-as | `{path}` bind to a new file and write it |
+//! | POST | /api/shell/dialog | `{kind: open\|save, name?}` → `{path}` native dialog (desktop app only, else 501) |
 
 mod notation;
 
@@ -51,7 +57,25 @@ pub struct AppState {
     pub home: lore_home::Home,
     /// Fonts this machine has (system + private/shared/fonts/), scanned once.
     pub fonts: std::sync::OnceLock<lore_fonts::Installed>,
+    /// Native open/save dialogs, installed by the desktop shell (none in browser mode).
+    pub dialog: std::sync::OnceLock<DialogHook>,
+    /// Equation fallback pictures already rendered: `<deck>/<key>/<object hash>` → PNG,
+    /// so autosaves do not run Chrome again for unchanged equations.
+    pub fallback_cache: Mutex<HashMap<String, Vec<u8>>>,
 }
+
+/// A native file dialog request from the page (`/api/shell/dialog`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DialogReq {
+    /// `open` (pick a .pptx) or `save` (choose where a .pptx goes).
+    pub kind: String,
+    /// Suggested file name for `save`.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Shows the dialog and returns the chosen path (blocking; runs off the async runtime).
+pub type DialogHook = Arc<dyn Fn(DialogReq) -> Option<PathBuf> + Send + Sync>;
 
 /// The author's private font folder (`private/shared/fonts/`), when there is one.
 fn fonts_dir(home: &lore_home::Home) -> Option<PathBuf> {
@@ -175,6 +199,12 @@ pub fn routes() -> Router<Shared> {
         .route("/api/decks/{name}/assets", post(add_asset).layer(DefaultBodyLimit::max(60 * 1024 * 1024)))
         .route("/api/decks/{name}/latex", post(latex))
         .route("/api/math", post(math))
+        .route("/api/files/open", post(open_file))
+        .route("/api/decks/{name}/file", get(file_get))
+        .route("/api/decks/{name}/file/write", post(file_write))
+        .route("/api/decks/{name}/file/reload", post(file_reload))
+        .route("/api/decks/{name}/file/save-as", post(file_save_as))
+        .route("/api/shell/dialog", post(shell_dialog))
 }
 
 /// The LoreForge app themes (shared with PaperComposer), compiled in so the
@@ -295,6 +325,8 @@ pub fn state(ws: Workspace, web: PathBuf) -> Shared {
         pandoc: lore_math::Pandoc::default(),
         home: lore_home::Home::discover(&repo_dir()),
         fonts: std::sync::OnceLock::new(),
+        dialog: std::sync::OnceLock::new(),
+        fallback_cache: Mutex::new(HashMap::new()),
     })
 }
 
@@ -327,6 +359,7 @@ async fn info(State(s): State<Shared>) -> R {
         "decks": s.ws.deck_names(),
         "pandoc": s.pandoc.available(),
         "chrome": sc_core::find_chrome().is_some(),
+        "shell": if s.dialog.get().is_some() { "desktop" } else { "browser" },
     })))
 }
 
@@ -436,6 +469,7 @@ async fn open(State(s): State<Shared>, Path(name): Path<String>) -> R {
         "backdrops": sess.backdrops,
         "style": style,
         "status": status(&sess),
+        "file": sess.file_status(),
         "fonts": fonts,
         "font_stacks": stacks,
     })))
@@ -451,6 +485,7 @@ fn changed(sess: &mut Session, a: Applied) -> R {
         "order": order,
         "defaults": sess.editor.deck.defaults,
         "status": status(sess),
+        "file": sess.file_status(),
     })))
 }
 
@@ -607,17 +642,18 @@ async fn save(State(s): State<Shared>, Path(name): Path<String>) -> R {
 /// Runs without holding the session lock (the page reads the deck).
 /// Returns the pictures and, when some could not be made, why.
 async fn equation_fallbacks(s: &Shared, name: &str) -> (HashMap<String, Vec<u8>>, Option<String>) {
-    let Ok(sess) = session(s, name) else { return (HashMap::new(), None) };
-    let need = lore_canvas::pptx_out::equations_needing_fallback(&sess.lock().unwrap().editor.deck);
+    let (mut cached, need) = cached_fallbacks(s, name);
     if need.is_empty() {
-        return (HashMap::new(), None);
+        return (cached, None);
     }
     let Some(chrome) = sc_core::find_chrome() else {
         return (HashMap::new(), Some(format!("沒有找到 Chrome：{} 個新公式沒有備用圖片（Keynote、Google 簡報會看不到）", need.len())));
     };
     let port = *s.port.lock().unwrap();
     let name = name.to_string();
-    tokio::task::spawn_blocking(move || {
+    let need_keys: Vec<(String, String)> = need.iter().map(|(_, _, _, c)| c.clone()).collect();
+    let need: Vec<(String, u32, lore_canvas::Frame)> = need.into_iter().map(|(sl, id, f, _)| (sl, id, f)).collect();
+    let (fresh, warn) = tokio::task::spawn_blocking(move || {
         let mut out = HashMap::new();
         let mut failed = 0;
         let mut why: Option<String> = None;
@@ -652,7 +688,55 @@ async fn equation_fallbacks(s: &Shared, name: &str) -> (HashMap<String, Vec<u8>>
         (out, warn)
     })
     .await
-    .unwrap_or_else(|_| (HashMap::new(), Some("備用圖片產生失敗".into())))
+    .unwrap_or_else(|_| (HashMap::new(), Some("備用圖片產生失敗".into())));
+    let mut cache = s.fallback_cache.lock().unwrap();
+    for (key, ck) in need_keys {
+        if let Some(b) = fresh.get(&key) {
+            cache.insert(ck, b.clone());
+            cached.insert(key, b.clone());
+        }
+    }
+    (cached, warn)
+}
+
+/// Fallback pictures already rendered for this deck's equation boxes (by
+/// content), and the boxes still needing one: (slide, id, frame, (key, cache key)).
+#[allow(clippy::type_complexity)]
+fn cached_fallbacks(s: &Shared, name: &str) -> (HashMap<String, Vec<u8>>, Vec<(String, u32, lore_canvas::Frame, (String, String))>) {
+    let Ok(sess) = session(s, name) else { return (HashMap::new(), vec![]) };
+    let sess = sess.lock().unwrap();
+    let deck = &sess.editor.deck;
+    let cache = s.fallback_cache.lock().unwrap();
+    let mut have = HashMap::new();
+    let mut need = vec![];
+    for (slide, id, f) in lore_canvas::pptx_out::equations_needing_fallback(deck) {
+        let key = lore_canvas::pptx_out::equation_fallback_key(&slide, id);
+        let obj = deck.slide(&slide).and_then(|sl| sl.find(id)).and_then(|o| serde_json::to_vec(o).ok()).unwrap_or_default();
+        let ck = format!("{name}/{key}/{:016x}", lore_canvas::fnv(&obj));
+        match cache.get(&ck) {
+            Some(b) => {
+                have.insert(key, b.clone());
+            }
+            None => need.push((slide, id, f, (key, ck))),
+        }
+    }
+    (have, need)
+}
+
+/// Write every open deck with unsaved changes back to its file (the desktop
+/// app calls this when it quits, so the autosave delay never loses edits).
+/// Only already-rendered equation fallbacks are used; files changed elsewhere are left alone.
+pub fn flush_files(s: &Shared) {
+    let sessions: Vec<(String, Arc<Mutex<Session>>)> = s.sessions.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    for (name, sess) in sessions {
+        if !sess.lock().unwrap().pending() {
+            continue;
+        }
+        let (fallbacks, _) = cached_fallbacks(s, &name);
+        if let Err(e) = sess.lock().unwrap().write_back(&fallbacks, false) {
+            eprintln!("save {name}: {e}");
+        }
+    }
 }
 
 fn urlenc(s: &str) -> String {
@@ -768,4 +852,89 @@ async fn math(State(s): State<Shared>, Json(b): Json<MathBody>) -> R {
         .await
         .map_err(|e| bad(e.to_string()))??;
     Ok(Json(json!({ "omml": omml })))
+}
+
+// ── Decks bound to a .pptx where it lives ────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PathBody {
+    path: String,
+}
+
+/// 開啟… / Finder: open a .pptx where it lives; the deck is bound to it.
+async fn open_file(State(s): State<Shared>, Json(b): Json<PathBody>) -> R {
+    let ws = s.ws.clone();
+    let name = tokio::task::spawn_blocking(move || ws.open_path(std::path::Path::new(&b.path)))
+        .await
+        .map_err(|e| bad(e.to_string()))??;
+    Ok(Json(json!({ "name": name })))
+}
+
+async fn file_get(State(s): State<Shared>, Path(name): Path<String>) -> R {
+    let sess = session(&s, &name)?;
+    let sess = sess.lock().unwrap();
+    Ok(Json(json!({ "file": sess.file_status() })))
+}
+
+#[derive(Deserialize, Default)]
+struct WriteBody {
+    #[serde(default)]
+    force: bool,
+}
+
+/// Autosave: write the deck back to its file (after the page's debounce).
+/// A file changed on disk is not written (`file.state` = `changed` / `missing`)
+/// unless `force` (保留我的版本，覆蓋).
+async fn file_write(State(s): State<Shared>, Path(name): Path<String>, body: Option<Json<WriteBody>>) -> R {
+    let force = body.map(|b| b.force).unwrap_or(false);
+    let (fallbacks, warning) = equation_fallbacks(&s, &name).await;
+    let sess = session(&s, &name)?;
+    let res = tokio::task::spawn_blocking(move || {
+        let mut sess = sess.lock().unwrap();
+        let w = sess.write_back(&fallbacks, force)?;
+        Ok::<_, sc_core::Error>((w, sess.file_status()))
+    })
+    .await
+    .map_err(|e| bad(e.to_string()))??;
+    Ok(Json(json!({ "written": res.0 == sc_core::Wrote::Written, "file": res.1, "warning": warning })))
+}
+
+/// 重新載入: the deck becomes the file as it is on disk (editor state from the file).
+async fn file_reload(State(s): State<Shared>, Path(name): Path<String>) -> R {
+    // hold the session while the folder is rewritten, then drop it: the next request reopens it
+    let sess = session(&s, &name)?;
+    {
+        let _guard = sess.lock().unwrap();
+        s.ws.reload_file(&name)?;
+    }
+    s.sessions.lock().unwrap().remove(&name);
+    Ok(Json(json!({ "name": name })))
+}
+
+/// 另存新檔: bind the deck to `path` (from the native save dialog) and write it there.
+async fn file_save_as(State(s): State<Shared>, Path(name): Path<String>, Json(b): Json<PathBody>) -> R {
+    let path = PathBuf::from(&b.path);
+    if path.extension().is_none_or(|e| !e.eq_ignore_ascii_case("pptx")) {
+        return Err(bad("檔名要以 .pptx 結尾"));
+    }
+    let (fallbacks, warning) = equation_fallbacks(&s, &name).await;
+    let sess = session(&s, &name)?;
+    let file = tokio::task::spawn_blocking(move || {
+        let mut sess = sess.lock().unwrap();
+        sess.save_as(&path, &fallbacks)?;
+        Ok::<_, sc_core::Error>(sess.file_status())
+    })
+    .await
+    .map_err(|e| bad(e.to_string()))??;
+    Ok(Json(json!({ "file": file, "warning": warning })))
+}
+
+/// Native open/save dialog through the desktop shell; 501 in browser mode
+/// (the page then uses a file input / a download instead).
+async fn shell_dialog(State(s): State<Shared>, Json(b): Json<DialogReq>) -> R {
+    let Some(hook) = s.dialog.get().cloned() else {
+        return Err(ApiError(StatusCode::NOT_IMPLEMENTED, "瀏覽器模式沒有檔案對話框".into()));
+    };
+    let path = tokio::task::spawn_blocking(move || hook(b)).await.map_err(|e| bad(e.to_string()))?;
+    Ok(Json(json!({ "path": path })))
 }

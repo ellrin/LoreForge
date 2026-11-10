@@ -10,7 +10,8 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wry};
 
 /// .pptx files opened from Finder (double-click, "Open With"): queued until the
-/// local server runs, then imported (or the deck already made from them) and shown.
+/// local server runs, then opened where they live (the deck is bound to the file
+/// and saves back into it) and shown.
 #[derive(Default)]
 struct Opener {
     ready: Mutex<Option<(sc_server::Shared, std::net::SocketAddr)>>,
@@ -23,7 +24,7 @@ fn open_file(app: &AppHandle, path: PathBuf) {
         st.pending.lock().unwrap().push(path);
         return;
     };
-    match shared.ws.open_pptx_file(&path) {
+    match shared.ws.open_path(&path) {
         Ok(name) => {
             let mut url = url::Url::parse(&format!("http://{addr}/")).expect("url");
             url.query_pairs_mut().append_pair("deck", &name);
@@ -85,6 +86,22 @@ fn main() {
                 .filter(|w| w.join("index.html").exists())
                 .unwrap_or_else(|| sc_server::repo_dir().join("web"));
             let shared = sc_server::state(sc_server::default_workspace(), web);
+            // native open/save dialogs for 開啟… / 另存新檔… (the page has no Tauri IPC:
+            // it asks the local server, which calls this)
+            let dlg_app = app.handle().clone();
+            let _ = shared.dialog.set(std::sync::Arc::new(move |req: sc_server::DialogReq| {
+                use tauri_plugin_dialog::DialogExt;
+                let d = dlg_app.dialog().file().add_filter("PowerPoint", &["pptx"]);
+                let picked = match req.kind.as_str() {
+                    "save" => {
+                        let name = req.name.unwrap_or_else(|| "簡報".into());
+                        let name = if name.to_lowercase().ends_with(".pptx") { name } else { format!("{name}.pptx") };
+                        d.set_file_name(name).blocking_save_file()
+                    }
+                    _ => d.blocking_pick_file(),
+                };
+                picked.and_then(|p| p.into_path().ok())
+            }));
             let for_opener = shared.clone();
 
             // The server runs on its own runtime thread for the life of the app.
@@ -124,10 +141,18 @@ fn main() {
             }
             Ok(())
         })
+        .plugin(tauri_plugin_dialog::init())
         .manage(Opener::default())
         .build(tauri::generate_context!())
         .expect("error while building SlideComposer")
         .run(|app, event| {
+            // quitting inside the autosave delay: write pending decks to their files
+            if let RunEvent::Exit = event {
+                if let Some((shared, _)) = app.state::<Opener>().ready.lock().unwrap().clone() {
+                    sc_server::flush_files(&shared);
+                }
+                return;
+            }
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             if let RunEvent::Opened { urls } = event {
                 for u in urls {

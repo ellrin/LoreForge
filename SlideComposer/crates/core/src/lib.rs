@@ -7,9 +7,17 @@
 //!     ├── deck.json               the canvas model (source of truth)
 //!     ├── source.pptx             the imported .pptx or the style template (never modified)
 //!     ├── assets/                 inserted images (content-addressed)
+//!     ├── file.json               the .pptx this deck is bound to (see `file`)
 //!     ├── exports/                exported .pptx / .pdf (never overwritten)
 //!     └── cache/latex.json        OMML → LaTeX conversions
 //! ```
+//!
+//! A deck opened from a .pptx is bound to it: every save writes the file back
+//! (lossless export + editor-state part, one-time backup, atomic, never over a
+//! file changed elsewhere). The deck folder is then a regenerable cache.
+
+pub mod file;
+pub use file::{Bound, Disk, EditorState, FileStatus, Wrote};
 
 use std::collections::HashMap;
 use std::collections::BTreeMap;
@@ -324,34 +332,9 @@ impl Workspace {
         Ok(name)
     }
 
-    /// Open a .pptx from disk (Finder double-click): the deck already imported from
-    /// the same bytes, else a new import named after the file, on the style whose
-    /// layouts this file shares most (none when no style matches).
+    /// Open a .pptx from disk (Finder, 開啟…) and bind the deck to it (`Workspace::open_path`).
     pub fn open_pptx_file(&self, path: &Path) -> Result<String> {
-        let bytes = std::fs::read(path)?;
-        let h = lore_canvas::fnv(&bytes);
-        for d in self.deck_names() {
-            let src = self.decks.join(&d.name).join("source.pptx");
-            if std::fs::metadata(&src).map(|m| m.len() == bytes.len() as u64).unwrap_or(false)
-                && std::fs::read(&src).map(|b| lore_canvas::fnv(&b) == h).unwrap_or(false)
-            {
-                return Ok(d.name);
-            }
-        }
-        let od = ODeck::from_bytes(&bytes)?;
-        let names: std::collections::BTreeSet<&str> = od.layouts.iter().map(|l| l.name()).collect();
-        let style = self
-            .style_ids()
-            .into_iter()
-            .filter_map(|id| {
-                let tpl = ODeck::from_bytes(&self.template_bytes(&id).ok()?).ok()?;
-                let shared = tpl.layouts.iter().filter(|l| names.contains(l.name())).count();
-                (shared > 0).then_some((shared, id))
-            })
-            .max()
-            .map(|(_, id)| id);
-        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "imported".into());
-        self.import_pptx(&stem, &bytes, style.as_deref())
+        self.open_path(path)
     }
 
     /// New deck from a style pack's template: one cover slide and one content slide.
@@ -396,12 +379,13 @@ impl Workspace {
             .unwrap_or_default();
         Ok(Session {
             name: name.into(),
-            dir,
+            dir: dir.clone(),
             editor: Editor::new(deck, style),
             source,
             backdrops,
             latex,
             saved_rev: 0,
+            file: Bound::load(&dir),
         })
     }
 }
@@ -456,6 +440,8 @@ pub struct Session {
     /// OMML fingerprint → LaTeX.
     pub latex: BTreeMap<String, String>,
     pub saved_rev: u64,
+    /// The .pptx this deck is bound to (written back on save).
+    pub file: Option<Bound>,
 }
 
 pub fn mime_of(path: &str) -> &'static str {

@@ -54,6 +54,14 @@ select { height: 30px; }
 .picker #deckName { font: 500 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .picker svg.i { width: 16px; height: 16px; color: var(--muted); }
 .picker > span:last-child svg.i { width: 14px; height: 14px; color: var(--faint); }
+/* the bound .pptx: saved / saving / changed elsewhere */
+.fstate { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; margin-left: -4px; border: 1px solid transparent; border-radius: 999px; background: none; color: var(--faint); font: 500 11px var(--mono); white-space: nowrap; cursor: default; }
+.fstate i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+.fstate.pending i, .fstate.saving i { background: var(--accent-text); animation: fstate-pulse 1s ease-in-out infinite alternate; }
+.fstate.changed, .fstate.missing, .fstate.error { color: var(--warn); border-color: currentColor; cursor: pointer; }
+.fstate.changed i, .fstate.missing i, .fstate.error i { background: var(--warn); }
+@keyframes fstate-pulse { to { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .fstate i { animation: none !important; } }
 .top-right { margin-left: auto; display: flex; gap: 4px; align-items: center; }
 .top-group { display: contents; }
 .at-home .ed-only { display: none !important; }
@@ -299,6 +307,7 @@ dialog textarea { min-height: 80px; font: 13px var(--mono); }
   .app.show-sorter .sorter { display: flex; }
   .app.show-side .side { display: block; }
   .picker { max-width: 30vw; }
+  .fstate.saved { font-size: 0; gap: 0; padding: 0 4px; }
 }
 @media (max-width: 760px) {
   .top { gap: 8px; padding: 0 8px; }
@@ -436,3 +445,6 @@ dialog textarea { min-height: 80px; font: 13px var(--mono); }
 .guide-layer .g-anchor { fill: #8b5cf6; stroke: none; }
 .slide .thumb-guides { position: absolute; left: 0; top: 0; opacity: .85; }
 .slide .thumb-guides * { stroke-width: 3; }
+.info.mono { word-break: break-all; }
+dialog .actions .btn.primary { width: auto; margin: 0; padding: 0 12px; }
+dialog .actions { flex-wrap: wrap; }
