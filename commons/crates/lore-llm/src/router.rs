@@ -21,6 +21,7 @@ use crate::claude_code::{Cache, ClaudeCode, Cli};
 use crate::local::{self, Layout, LocalRuntime};
 use crate::openai::{OpenAiCompat, OpenAiCompatConfig};
 use crate::provider::LlmProvider;
+use crate::shared::{self, Alternative, EngineKind, EngineSettings, RouteMode, TaskClass};
 use crate::types::{LlmRequest, Needs};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -115,6 +116,10 @@ pub struct TaskSpec {
     pub effort: Option<String>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// `create` | `tidy` | `ask`: which engine `auto` tries first once shared settings
+    /// are installed ([`crate::shared`]). Unset = the task's own order.
+    #[serde(default)]
+    pub class: Option<TaskClass>,
 }
 
 /// A tasks.toml file: task definitions and user overrides.
@@ -161,6 +166,13 @@ impl TaskTable {
         self
     }
 
+    /// [`plan`]'s candidates from this table, with the installed shared settings (what a
+    /// [`Router`] over this table would try; for callers that walk candidates themselves).
+    pub fn candidates_for(&self, task: &str, opts: &RouteOptions) -> Vec<String> {
+        let Some(t) = self.task.get(task) else { return vec![] };
+        plan(task, t, self.overrides.get(task).cloned(), opts, shared::installed().as_ref()).candidates
+    }
+
     /// `base` plus the user's file when it exists and parses (a broken user
     /// file is reported, not silently ignored).
     pub fn load(base: TaskTable, user_file: Option<&Path>) -> Result<TaskTable, String> {
@@ -182,6 +194,12 @@ impl TaskTable {
 #[async_trait]
 pub trait ProviderFactory: Send + Sync {
     async fn make(&self, model: &ModelRef, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String>;
+
+    /// Could `model` run `task` now, without starting anything? Decides whether a
+    /// one-click [`Alternative`] is offered. Default: yes.
+    async fn check(&self, _model: &ModelRef, _task: &TaskSpec) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Fixed providers by ref string (`"mock:a"`, `"claude:sonnet"`…), for tests.
@@ -200,6 +218,9 @@ impl<F: ProviderFactory + ?Sized> ProviderFactory for Arc<F> {
     async fn make(&self, model: &ModelRef, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
         (**self).make(model, task).await
     }
+    async fn check(&self, model: &ModelRef, task: &TaskSpec) -> Result<(), String> {
+        (**self).check(model, task).await
+    }
 }
 
 #[async_trait]
@@ -207,12 +228,18 @@ impl<F: ProviderFactory + ?Sized> ProviderFactory for &F {
     async fn make(&self, model: &ModelRef, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
         (**self).make(model, task).await
     }
+    async fn check(&self, model: &ModelRef, task: &TaskSpec) -> Result<(), String> {
+        (**self).check(model, task).await
+    }
 }
 
 #[async_trait]
 impl ProviderFactory for MockFactory {
     async fn make(&self, model: &ModelRef, _task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
         self.0.get(&model.to_string()).cloned().ok_or_else(|| "沒有設定".to_string())
+    }
+    async fn check(&self, model: &ModelRef, _task: &TaskSpec) -> Result<(), String> {
+        self.0.get(&model.to_string()).map(|_| ()).ok_or_else(|| "沒有設定".to_string())
     }
 }
 
@@ -237,6 +264,9 @@ pub struct Route {
     pub skipped: Vec<Skip>,
     pub effort: Option<String>,
     pub max_tokens: Option<u32>,
+    /// After a `cloud` / `local` route or a strict choice: the other engine, for a call
+    /// that fails once it runs (not checked; [`RouteError`]'s alternative is).
+    pub alternative: Option<Alternative>,
 }
 
 impl fmt::Debug for Route {
@@ -296,7 +326,14 @@ pub enum RouteError {
     #[error("「{label}」需要網路，現在離線，暫時無法使用")]
     NeedsNetwork { task: String, label: String },
     #[error("「{label}」目前沒有可用的模型：{}", list(.skipped))]
-    Unavailable { task: String, label: String, skipped: Vec<Skip> },
+    Unavailable {
+        task: String,
+        label: String,
+        skipped: Vec<Skip>,
+        /// The other engine, when only one kind was allowed (a `cloud` / `local` route
+        /// or a strict per-call choice) and the other one could run.
+        alternative: Option<Box<Alternative>>,
+    },
 }
 
 fn list(s: &[Skip]) -> String {
@@ -312,18 +349,158 @@ impl RouteError {
             other => other.to_string(),
         }
     }
+
+    /// The one-click alternative (「改用本機」／「改用 Claude」), when there is one.
+    pub fn alternative(&self) -> Option<&Alternative> {
+        match self {
+            RouteError::Unavailable { alternative, .. } => alternative.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The JSON body for the UI: `{ "error": "…", "alternative": { engine, label, model_ref } }`
+    /// (`alternative` only when there is one). `reason` = [`RouteError::reason`] instead of
+    /// the whole message (an explicit choice).
+    pub fn payload(&self, reason: bool) -> serde_json::Value {
+        let mut v = serde_json::json!({ "error": if reason { self.reason() } else { self.to_string() } });
+        if let Some(a) = self.alternative() {
+            v["alternative"] = serde_json::to_value(a).unwrap_or_default();
+        }
+        v
+    }
+}
+
+/// The candidates of one call, and what restricts them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Plan {
+    pub candidates: Vec<String>,
+    /// Only this kind may run: a `cloud` / `local` route, or a strict per-call choice.
+    pub only: Option<EngineKind>,
+    /// The restriction comes from a route (not from a per-call choice).
+    pub by_route: bool,
+    /// Refs of the other kind, best first (for the alternative).
+    pub others: Vec<String>,
+    pub mode: RouteMode,
+}
+
+/// `claude:selected` → the shared Claude model, `claude:` → the shared way in (not for
+/// tasks that need images: the subscription cannot read them, the API key may).
+fn rewrite(r: &str, s: &EngineSettings, spec: &TaskSpec) -> String {
+    match ModelRef::parse(r) {
+        Ok(ModelRef::Claude { model, via }) => {
+            let model = match &s.claude_model {
+                Some(m) if model == CLAUDE_SELECTED => m.clone(),
+                _ => model,
+            };
+            let via = match s.claude_via {
+                Some(v) if via == ClaudeVia::Auto && !spec.needs.vision => v,
+                _ => via,
+            };
+            ModelRef::Claude { model, via }.to_string()
+        }
+        _ => r.to_string(),
+    }
+}
+
+fn push(out: &mut Vec<String>, r: String) {
+    if !out.contains(&r) {
+        out.push(r);
+    }
+}
+
+/// Which refs to try for `task`, in order.
+///
+/// - A strict per-call choice: that ref only.
+/// - No shared settings installed: per-call ref, saved override, default, fallback.
+/// - Shared settings: the mode is the task's override, else its class route, else `auto`.
+///   The per-call ref and the saved override come first, then default and fallback; a
+///   task with a class (or a `cloud` / `local` mode) gets `claude:selected` /
+///   `local:current` when it names no model of that kind. `auto` orders them by the
+///   class ([`TaskClass::auto_order`]); `cloud` / `local` keep only that kind.
+pub fn plan(task: &str, spec: &TaskSpec, saved: Option<String>, opts: &RouteOptions, settings: Option<&EngineSettings>) -> Plan {
+    let rw = |r: &str| settings.map_or_else(|| r.to_string(), |s| rewrite(r, s, spec));
+    // every ref the task could use, for the alternative
+    let mut pool: Vec<String> = Vec::new();
+    for r in [saved.clone(), Some(spec.default.clone()), spec.fallback.clone(), Some(format!("claude:{CLAUDE_SELECTED}")), Some(format!("local:{LOCAL_CURRENT}"))]
+        .into_iter()
+        .flatten()
+    {
+        push(&mut pool, rw(&r));
+    }
+    let of_kind = |v: &[String], k: EngineKind| v.iter().filter(|r| EngineKind::of(r) == k).cloned().collect::<Vec<_>>();
+    if opts.strict
+        && let Some(r) = &opts.override_ref
+    {
+        let r = rw(r);
+        let k = EngineKind::of(&r);
+        return Plan { candidates: vec![r], only: Some(k), by_route: false, others: of_kind(&pool, k.other()), mode: RouteMode::Auto };
+    }
+    let mut head = Vec::new();
+    for r in [opts.override_ref.clone(), saved].into_iter().flatten() {
+        push(&mut head, rw(&r));
+    }
+    let mut rest = Vec::new();
+    for r in [Some(spec.default.clone()), spec.fallback.clone()].into_iter().flatten() {
+        let r = rw(&r);
+        if !head.contains(&r) {
+            push(&mut rest, r);
+        }
+    }
+    let Some(s) = settings else {
+        head.extend(rest);
+        return Plan { candidates: head, ..Default::default() };
+    };
+    let mode = s.mode_for(task, spec.class);
+    if spec.class.is_some() || mode != RouteMode::Auto {
+        for (k, fill) in [(EngineKind::Claude, format!("claude:{CLAUDE_SELECTED}")), (EngineKind::Local, format!("local:{LOCAL_CURRENT}"))] {
+            if !head.iter().chain(&rest).any(|r| EngineKind::of(r) == k) {
+                let r = rw(&fill);
+                if !head.contains(&r) {
+                    push(&mut rest, r);
+                }
+            }
+        }
+    }
+    if let (Some(c), RouteMode::Auto) = (spec.class, mode) {
+        let order = c.auto_order();
+        rest.sort_by_key(|r| order.iter().position(|k| *k == EngineKind::of(r)));
+    }
+    head.extend(rest);
+    match mode.only() {
+        None => Plan { candidates: head, mode, ..Default::default() },
+        Some(k) => Plan { candidates: of_kind(&head, k), only: Some(k), by_route: true, others: of_kind(&head, k.other()), mode },
+    }
 }
 
 pub struct Router<F: ProviderFactory> {
     tasks: BTreeMap<String, TaskSpec>,
     overrides: RwLock<BTreeMap<String, String>>,
     online: AtomicBool,
+    /// Fixed shared settings; `None` = whatever [`shared::install`] provides, read per route.
+    settings: Option<EngineSettings>,
     pub factory: F,
 }
 
 impl<F: ProviderFactory> Router<F> {
     pub fn new(table: TaskTable, factory: F) -> Router<F> {
-        Router { tasks: table.task, overrides: RwLock::new(table.overrides), online: AtomicBool::new(true), factory }
+        Router { tasks: table.task, overrides: RwLock::new(table.overrides), online: AtomicBool::new(true), settings: None, factory }
+    }
+
+    /// Route with these shared settings instead of the installed ones (tests, previews).
+    pub fn with_settings(mut self, s: EngineSettings) -> Self {
+        self.settings = Some(s);
+        self
+    }
+
+    /// The shared settings this router follows now (`None` = the tasks' own order).
+    pub fn settings(&self) -> Option<EngineSettings> {
+        self.settings.clone().or_else(shared::installed)
+    }
+
+    /// [`plan`] for one call of `task` (`None` for an unknown task).
+    pub fn plan(&self, task: &str, opts: &RouteOptions) -> Option<Plan> {
+        let t = self.tasks.get(task)?;
+        Some(plan(task, t, self.override_for(task), opts, self.settings().as_ref()))
     }
 
     pub fn task(&self, id: &str) -> Option<&TaskSpec> {
@@ -373,20 +550,24 @@ impl<F: ProviderFactory> Router<F> {
 
     /// Candidates for one call: the call's ref, then (unless strict) the
     /// saved override, default, fallback (no repeats).
+    /// With shared settings installed, the class route and task overrides apply ([`plan`]).
     pub fn candidates_with(&self, task: &str, opts: &RouteOptions) -> Vec<String> {
-        let Some(t) = self.tasks.get(task) else { return vec![] };
-        if opts.strict
-            && let Some(r) = &opts.override_ref
-        {
-            return vec![r.clone()];
-        }
-        let mut out: Vec<String> = Vec::new();
-        for r in [opts.override_ref.clone(), self.override_for(task), Some(t.default.clone()), t.fallback.clone()].into_iter().flatten() {
-            if !out.contains(&r) {
-                out.push(r);
+        self.plan(task, opts).map(|p| p.candidates).unwrap_or_default()
+    }
+
+    /// The other engine of a restricted plan, when it could run now.
+    async fn alternative(&self, plan: &Plan, spec: &TaskSpec, online: bool) -> Option<Alternative> {
+        plan.only?;
+        for raw in &plan.others {
+            let Ok(r) = ModelRef::parse(raw) else { continue };
+            if !online && r.needs_network() {
+                continue;
+            }
+            if self.factory.check(&r, spec).await.is_ok() {
+                return Some(Alternative::new(EngineKind::of(raw), raw.clone()));
             }
         }
-        out
+        None
     }
 
     /// The engine for a task, or a clear reason why there is none.
@@ -403,10 +584,16 @@ impl<F: ProviderFactory> Router<F> {
         let spec = self.tasks.get(task).ok_or_else(|| RouteError::UnknownTask(task.into()))?;
         let label = spec.label.clone().unwrap_or_else(|| task.to_string());
         let online = self.is_online();
-        let cands = self.candidates_with(task, opts);
-        let refs: Vec<(String, Result<ModelRef, String>)> = cands.iter().map(|c| (c.clone(), ModelRef::parse(c))).collect();
+        let plan = plan(task, spec, self.override_for(task), opts, self.settings().as_ref());
+        let refs: Vec<(String, Result<ModelRef, String>)> = plan.candidates.iter().map(|c| (c.clone(), ModelRef::parse(c))).collect();
         let any_local = refs.iter().any(|(_, r)| r.as_ref().is_ok_and(|r| !r.needs_network()));
         if !online && (spec.offline == Some(false) || !any_local) {
+            // `cloud` while offline: say so, with the local model one click away.
+            if plan.by_route && spec.offline != Some(false) {
+                let skipped = plan.candidates.iter().map(|c| Skip { model: c.clone(), reason: "離線".into() }).collect();
+                let alternative = self.alternative(&plan, spec, online).await;
+                return Err(RouteError::Unavailable { task: task.into(), label, skipped, alternative: alternative.map(Box::new) });
+            }
             return Err(RouteError::NeedsNetwork { task: task.into(), label });
         }
         let mut skipped = Vec::new();
@@ -439,6 +626,8 @@ impl<F: ProviderFactory> Router<F> {
                 skipped.push(skip("離線".into()));
                 continue;
             }
+            shared::record_used(task, &p.id());
+            let alternative = plan.only.and_then(|_| plan.others.first()).map(|o| Alternative::new(EngineKind::of(o), o.clone()));
             return Ok(Route {
                 task: task.into(),
                 model: r,
@@ -447,9 +636,11 @@ impl<F: ProviderFactory> Router<F> {
                 skipped,
                 effort: spec.effort.clone(),
                 max_tokens: spec.max_tokens,
+                alternative,
             });
         }
-        Err(RouteError::Unavailable { task: task.into(), label, skipped })
+        let alternative = self.alternative(&plan, spec, online).await;
+        Err(RouteError::Unavailable { task: task.into(), label, skipped, alternative: alternative.map(Box::new) })
     }
 }
 
@@ -684,6 +875,30 @@ impl ProviderFactory for StandardFactory {
             ModelRef::Mock(_) => Err("mock 只在測試裡使用".into()),
         }
     }
+
+    /// Claude: the same checks as [`make`](ProviderFactory::make) (nothing is started).
+    /// Local: `local:current` is connected, or the model is served / on disk; nothing is started.
+    async fn check(&self, model: &ModelRef, task: &TaskSpec) -> Result<(), String> {
+        match model {
+            ModelRef::Claude { model, via } => self.claude(model, *via, task).await.map(|_| ()),
+            ModelRef::Local(r) if r == LOCAL_CURRENT => self.current_local().await.map(|_| ()),
+            ModelRef::Local(r) => {
+                let la = self.local.as_ref().ok_or("沒有設定本機模型")?;
+                let layout = self.local_layout();
+                let on_disk = |m: &crate::catalog::Model| layout.as_ref().is_some_and(|l| l.find_model(m).is_some());
+                let m = self.catalog.resolve_local(r, on_disk).ok_or_else(|| format!("模型目錄裡沒有本機模型「{r}」"))?;
+                match (&la.external, &layout) {
+                    (Some(ext), _) => match &ext.model {
+                        Some(serving) if serving != &m.id => Err(format!("外部 llama-server 跑的是 {serving}，不是 {}", m.id)),
+                        _ => Ok(()),
+                    },
+                    (None, Some(l)) if la.runtime.is_some() => l.missing(m).map_or(Ok(()), Err),
+                    _ => Err("沒有設定本機 llama-server".into()),
+                }
+            }
+            ModelRef::Mock(_) => Err("mock 只在測試裡使用".into()),
+        }
+    }
 }
 
 /// A quick connectivity probe for [`Router::set_online`]: can a TCP
@@ -854,7 +1069,7 @@ max_tokens = 9000
     // ── StandardFactory (no network: fake CLI, mock HTTP, temp folders) ──
 
     fn spec(needs: Needs) -> TaskSpec {
-        TaskSpec { label: None, needs, default: "claude:sonnet".into(), fallback: None, offline: None, effort: None, max_tokens: None }
+        TaskSpec { label: None, needs, default: "claude:sonnet".into(), fallback: None, offline: None, effort: None, max_tokens: None, class: None }
     }
 
     #[cfg(unix)]

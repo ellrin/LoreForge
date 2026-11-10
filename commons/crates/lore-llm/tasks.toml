@@ -11,6 +11,13 @@
 #                                     # unset = true when any candidate is local
 #   effort   = "medium"               # Claude effort for this task (optional)
 #   max_tokens = 8000                 # optional
+#   class    = "create"               # create (創作與審稿) | tidy (整理與格式) | ask (問答):
+#                                     # with the shared routes (private/shared/engine.toml
+#                                     # [route] / [overrides], lore_llm::shared) `auto` tries
+#                                     # Claude first for create, the local model first for
+#                                     # tidy and ask; `cloud` / `local` = that engine only.
+#                                     # A missing kind is filled with claude:selected /
+#                                     # local:current. Unset = the order above.
 #
 # Model refs:
 #   claude:<alias|id>       Claude, subscription or API key (app setting decides; aliases in catalog.json)
@@ -29,6 +36,7 @@
 
 [task.kb-summarize-card]
 label = "整理成知識卡"
+class = "tidy"
 needs = { json = true }
 default = "local:qwen3.5-9b-q8"
 fallback = "claude:haiku"
@@ -36,6 +44,7 @@ offline = true
 
 [task.kb-extract-terms]
 label = "術語抽取"
+class = "tidy"
 needs = { json = true }
 default = "local:qwen3.5-9b-q8"
 fallback = "claude:haiku"
@@ -45,6 +54,7 @@ offline = true
 
 [task.sc-slide-content]
 label = "逐頁生成投影片內容"
+class = "create"
 needs = { json = true, context = 32000 }
 default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
@@ -52,6 +62,7 @@ offline = true
 
 [task.sc-crop-modules]
 label = "從架構圖標出子模組框"
+class = "tidy"
 needs = { vision = true, json = true }
 default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
@@ -60,6 +71,7 @@ fallback = "local:gemma-4-12b-q8"
 
 [task.research-web]
 label = "搜尋與下載文獻"
+class = "create"
 needs = { web = true }
 default = "claude:sonnet"
 offline = false
@@ -68,6 +80,7 @@ offline = false
 
 [task.pc-compose-paragraph]
 label = "撰寫段落"
+class = "create"
 needs = { json = true, context = 32000 }
 default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
@@ -77,6 +90,7 @@ offline = true
 
 [task.reader-chat]
 label = "閱讀時提問"
+class = "ask"
 needs = { streaming = true, context = 32000 }
 default = "claude-api:sonnet"
 fallback = "local:qwen3.5-9b-q8"
@@ -87,6 +101,7 @@ offline = true
 
 [task.jl-generate]
 label = "產生課程"
+class = "create"
 needs = { json = true }
 default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
@@ -94,6 +109,7 @@ offline = true
 
 [task.jl-realtime]
 label = "對話即時回覆"
+class = "ask"
 needs = { json = true }
 default = "claude:haiku"
 fallback = "local:gemma-4-12b-q8"

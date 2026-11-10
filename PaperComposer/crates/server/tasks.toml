@@ -18,6 +18,7 @@
 
 [task.pc-compose-paragraph]
 label = "撰寫段落"
+class = "create"
 needs = { json = true }
 default = "local:current"
 fallback = "claude:selected"
@@ -25,6 +26,7 @@ offline = true
 
 [task.pc-soft-check]
 label = "軟規則檢查"
+class = "create"
 needs = { json = true }
 default = "local:current"
 fallback = "claude:selected"
@@ -32,6 +34,7 @@ offline = true
 
 [task.pc-decompose]
 label = "拆解句型"
+class = "tidy"
 needs = { json = true }
 default = "local:current"
 fallback = "claude:selected"
@@ -39,6 +42,7 @@ offline = true
 
 [task.pc-outline]
 label = "大綱與標題"
+class = "create"
 needs = { json = true }
 default = "claude:selected"
 fallback = "local:current"
@@ -46,12 +50,14 @@ offline = false
 
 [task.pc-caption]
 label = "圖表標題"
+class = "create"
 default = "local:current"
 fallback = "claude:selected"
 offline = true
 
 [task.pc-ref-queries]
 label = "文獻搜尋關鍵字"
+class = "tidy"
 needs = { json = true }
 default = "claude:selected"
 fallback = "local:current"
@@ -59,6 +65,7 @@ offline = false
 
 [task.pc-ref-rank]
 label = "文獻排序"
+class = "tidy"
 needs = { json = true }
 default = "claude:selected"
 fallback = "local:current"
@@ -66,6 +73,7 @@ offline = false
 
 [task.pc-ref-notes]
 label = "文獻摘要與標籤"
+class = "tidy"
 needs = { json = true }
 default = "local:current"
 fallback = "claude:selected"
@@ -73,6 +81,7 @@ offline = true
 
 [task.pc-cite-extract]
 label = "從貼上文字找出文獻"
+class = "tidy"
 needs = { json = true }
 default = "claude:selected"
 fallback = "local:current"
@@ -94,6 +103,7 @@ offline = true
 
 [task.pc-draft-record]
 label = "整理實驗記錄"
+class = "create"
 needs = { json = true }
 default = "claude:opus"
 fallback = "local:current"
@@ -101,6 +111,7 @@ max_tokens = 16000
 
 [task.pc-draft-plan]
 label = "規劃題組"
+class = "create"
 needs = { json = true }
 default = "claude:sonnet"
 fallback = "local:current"
@@ -108,12 +119,14 @@ max_tokens = 8000
 
 [task.pc-draft-turn]
 label = "草稿問答"
+class = "ask"
 needs = { json = true }
 default = "claude:haiku"
 fallback = "local:current"
 
 [task.pc-draft-claims]
 label = "主張登記"
+class = "create"
 needs = { json = true }
 default = "claude:sonnet"
 fallback = "local:current"
@@ -121,6 +134,7 @@ max_tokens = 8000
 
 [task.pc-draft-review]
 label = "章節校正"
+class = "create"
 needs = { json = true }
 default = "claude:sonnet"
 fallback = "local:current"
@@ -128,6 +142,7 @@ max_tokens = 8000
 
 [task.pc-draft-outline]
 label = "段落大綱"
+class = "create"
 needs = { json = true }
 default = "claude:sonnet"
 fallback = "local:current"
@@ -135,6 +150,7 @@ max_tokens = 16000
 
 [task.pc-draft-audit]
 label = "審稿檢查"
+class = "create"
 needs = { json = true }
 default = "claude:opus"
 fallback = "local:current"
@@ -142,6 +158,7 @@ max_tokens = 16000
 
 [task.pc-draft-revise]
 label = "修訂方案"
+class = "create"
 needs = { json = true }
 default = "claude:opus"
 fallback = "local:current"
@@ -149,6 +166,7 @@ max_tokens = 16000
 
 [task.pc-template-rules]
 label = "讀取投稿規則"
+class = "tidy"
 needs = { json = true }
 default = "claude:selected"
 fallback = "local:current"

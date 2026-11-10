@@ -91,7 +91,30 @@ let route = router.provider_for_with("jl-generate", &RouteOptions::only("claude-
 - An app's own model folders: `LocalAccess { layout: Some(Layout::new(gguf, runtime)), .. }`
   (wins over `home`).
 
-Candidate order is (call's ref →) override → default → fallback. For each: offline + cloud → skipped;
+### Task classes and shared routes (`shared`)
+
+Every task has `class = "create" | "tidy" | "ask"`. Once the app mounts `lore-engines`
+(which calls `shared::install` with `private/shared/engine.toml`), every `Router` of the
+process reads the shared settings on each route; before that, nothing changes.
+
+- Mode = per-task override (`[overrides]`) → class route (`[route]`) → `auto`.
+- `auto`: create = Claude → local, tidy / ask = local → Claude. The call's ref and the
+  saved `[override]` model still come first. A classed task that names no model of a kind
+  gets `claude:selected` / `local:current`.
+- `cloud` / `local`: that kind only. When it cannot run, `RouteError::Unavailable` carries
+  `alternative` (`{ engine, label: 「改用本機」|「改用 Claude」, model_ref }`, only when the
+  other engine passes `ProviderFactory::check`, which starts nothing); the UI runs that one
+  call with `RouteOptions::only(model_ref)`. `e.payload(reason)` is the JSON body.
+  Offline with `cloud` is `Unavailable` (skip 「離線」) with the local alternative.
+- A strict per-call choice ignores routes; its failure offers the other engine too.
+- `[claude] model` replaces `selected` in `claude:selected`; `[claude] via` turns `claude:`
+  into `claude-code:` / `claude-api:` (not for tasks that need images).
+- `TaskTable::candidates_for(task, opts)` = the same list for code that walks candidates
+  itself; `shared::last_used(task)` = what the task last ran on.
+- Keys: `secrets::SharedKeys::for_app(app, dir)` reads the `LoreForge` keychain service,
+  then the app's old one (and the other apps'); saves only under `LoreForge`.
+
+Candidate order without shared settings is (call's ref →) override → default → fallback. For each: offline + cloud → skipped;
 the factory builds it (or says why not: "Claude 訂閱尚未登入", "還沒下載 …", "不能看圖");
 its capabilities must cover `needs`. `Route.fallback_used` and `Route.skipped` let the UI
 say "改用本機模型（Claude：離線）". `claude:` tries the subscription first when

@@ -11,6 +11,7 @@
 
 [task.kb-summarize-card]
 label = "起草知識卡摘要"
+class = "tidy"
 needs = { json = true }
 default = "local:current"
 fallback = "claude:selected"

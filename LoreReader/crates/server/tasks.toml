@@ -15,20 +15,25 @@
 
 [task.lr-translate]
 label = "翻譯"
+class = "tidy"
 default = "local:current"
 fallback = "claude:selected"
 offline = true
 
 [task.lr-chat]
 label = "問 Claude"
+class = "ask"
 # 16k is enough for a paragraph, its definitions and 20 turns; also lets the model menu
 # pick a local engine for the chat.
 needs = { context = 16000 }
 default = "claude:selected"
-offline = false
+# 問答 (class ask): with the shared routes installed the local model comes first and
+# answers offline; without them the chat is Claude only, as before.
+offline = true
 
 [task.lr-classify-terms]
 label = "名詞分類"
+class = "tidy"
 needs = { context = 16000 }
 default = "local:current"
 fallback = "claude:haiku"
@@ -36,6 +41,7 @@ max_tokens = 8000
 
 [task.lr-paragraph]
 label = "段落分析"
+class = "tidy"
 needs = { context = 8000 }
 default = "local:current"
 fallback = "claude:haiku"

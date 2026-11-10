@@ -4,6 +4,7 @@
 
 [task.sc-flow-graph]
 label = "分析流程圖資料流"
+class = "create"
 needs = { json = true, context = 32000 }
 default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
@@ -12,6 +13,7 @@ max_tokens = 8000
 
 [task.sc-flow-graph-vision]
 label = "分析流程圖資料流（含圖片）"
+class = "create"
 needs = { json = true, vision = true, context = 32000 }
 default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"

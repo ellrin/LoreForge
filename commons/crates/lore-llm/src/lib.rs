@@ -8,6 +8,8 @@
 //!   OpenAI-compatible servers), [`MockProvider`].
 //! - [`catalog`]: the shared model catalog; [`local`]: the shared
 //!   `LOCAL_LLM_HOME` folder and the llama-server lifecycle.
+//! - [`shared`]: the engine choices all apps share (task classes, routes, the Claude
+//!   connection) and the one-click alternative after a fixed route fails.
 //! - [`router`]: task routing from `tasks.toml` (needs → model, fallback,
 //!   offline), with per-task user overrides.
 //! - [`json`]: extract / validate / retry structured replies.
@@ -29,6 +31,7 @@ pub mod openai;
 pub mod provider;
 pub mod router;
 pub mod secrets;
+pub mod shared;
 pub mod sse;
 pub mod types;
 #[cfg(feature = "zhtw")]
@@ -42,5 +45,6 @@ pub use json::{complete_as, complete_json};
 pub use mock::MockProvider;
 pub use openai::{LlamaServer, LlamaServerConfig, OpenAiCompat, OpenAiCompatConfig};
 pub use provider::{LlmProvider, OnEvent};
-pub use router::{ModelRef, ProviderFactory, Route, RouteError, RouteOptions, Router, StandardFactory, TaskSpec, TaskTable};
+pub use router::{ModelRef, Plan, ProviderFactory, Route, RouteError, RouteOptions, Router, StandardFactory, TaskSpec, TaskTable};
+pub use shared::{Alternative, EngineKind, EngineSettings, RouteMode, TaskClass};
 pub use types::{Capabilities, Image, LlmRequest, LlmResponse, Message, Needs, Part, Role, StreamEvent, Usage, WebSource};
