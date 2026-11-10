@@ -237,9 +237,10 @@ pub fn find_key(p: &ReaderPaper, doi: &str, entries: &[bib::Entry]) -> Option<St
     (t.len() >= 12).then(|| entries.iter().find(|e| norm_title(&e.title()) == t).map(|e| e.key.clone())).flatten()
 }
 
-/// Entries of the paper's own .bib files (not the one PaperComposer generates).
+/// Entries of the paper's own .bib files (not the one PaperComposer generates), found
+/// from its main file the way `write_paper_bib` finds them (papers opened in place keep theirs).
 fn paper_entries(dir: &Path) -> Vec<bib::Entry> {
-    let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
+    let main = std::fs::read_to_string(pc_core::open::main_file(dir)).unwrap_or_default();
     bib_files(&main)
         .iter()
         .filter_map(|f| std::fs::read_to_string(dir.join(f)).ok())
