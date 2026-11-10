@@ -583,6 +583,7 @@ function select(si, pi) {
     if (r.top < pr.top || r.bottom > pr.bottom) pane.scrollTop += r.top - pr.top - pr.height / 2;
   }
   renderSide();
+  renderStatus(); // the section name and its word count follow the selection
 }
 
 function markCurrent() {

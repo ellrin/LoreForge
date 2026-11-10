@@ -5,3 +5,5 @@ target/
 
 # Editor settings
 .vscode/
+# Claude Code agent worktrees
+/.claude/worktrees/

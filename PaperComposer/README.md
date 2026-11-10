@@ -175,6 +175,14 @@ your-private-repo/
 
 **模型**：問答用小模型就夠（預設 Haiku，視窗右上可以改 Sonnet、Opus 或本機模型比較）；整理實驗記錄與審稿用 Opus；題組、主張、校正、大綱用 Sonnet；草稿走「寫作」選的引擎。
 
+## 尋找、取代與字數
+
+- **尋找**：Ctrl+F（macOS ⌘F）。取代：Windows／Linux 按 Ctrl+H，macOS 按 ⌘⌥F，或點搜尋列左邊的箭頭。Enter／Shift+Enter 跳下一個／上一個，Aa 區分大小寫，ab 整個字，⋯ 裡可以改範圍（全文／本節）或連公式與指令一起搜。
+- 只比對看得到的文字：`\cite{}`、`\ref{}`、`\label{}` 這類指令的內容和數學式不會被搜到或改到（除非打開「搜尋公式與指令」）。範圍包含標題區的標題、摘要、關鍵字。
+- **全部取代**前會跑對照表檢查：會改到登記過的符號、縮寫、標籤，或產生新問題（例如把 `\ref{…}` 換成手打的編號）時先提醒，建議改對照表。取代後可以按「復原」或 Ctrl+Z 一次還原。
+- **字數**在下方狀態列（本節／全文）。點開可以逐章勾選要不要算、是否包含圖表標題、表格內容、註腳；公式和引用指令不算。英文算單字、中文算字，合計以「字」表示。勾選結果每篇論文各自記住。
+- 期刊的字數上限寫在出版社範本的 `template.toml`（`[word_limits]`，格式見 [`publishers/README.md`](../private-example/PaperComposer/publishers/README.md)），超過時數字變紅。
+
 ## 公式
 
 紙張上的數學式用內建的 KaTeX 顯示（離線可用），支援 `$…$`、`\[…\]`、`equation`／`align` 等環境、自動編號與 `\eqref`，並會讀取論文 `main.tex` 與 `macros*.tex` 裡的 `\newcommand`、`\DeclareMathOperator`。版面設定（`\topfraction`、`\floatpagefraction`、重新定義的 `\thebibliography`、名稱或內容含 `@` 的內部巨集）不是數學，會略過。這是編輯時的預覽，投稿用的 PDF 仍由 LaTeX 搭配期刊 cls 產生。
@@ -390,6 +398,7 @@ scripts/            Git hooks
 | POST | `/api/refs/verify` `{ title, authors, year, doi, pmid, arxiv }` | 向 Crossref／arXiv／PubMed 查證一篇是否存在 |
 | POST | `/api/refs/propose-record` `{ work \| guess, engine }` | 沒有 DOI 紀錄可取時，從 PubMed 紀錄或你貼的書目產生文獻庫條目 |
 | PUT | `/api/papers/{name}/sections/{file}` `{ title, paragraphs }` | 儲存章節（一句一行） |
+| POST | `/api/papers/{name}/notation/check` `{ before, texts, find }` | 取代前的對照表檢查：只回報改後才多出的問題，以及搜尋字串碰到的登記項目 |
 | GET / PUT | `/api/tables/{file}` | 讀寫資料庫 CSV（句型、片語、用詞、規則、範例、公式、作者、機構） |
 | POST | `/api/papers/{name}/export` `{ kind: "pdf" \| "docx" \| "latex" }` | 匯出：頁數、錯誤（含位置）、找不到的引用與標籤 |
 | POST | `/api/papers/{name}/export/open` `{ kind, reveal }` | 開啟匯出的檔案，或在資料夾中顯示 |

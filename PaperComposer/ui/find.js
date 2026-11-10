@@ -16,7 +16,9 @@
 
 const PCFind = (() => {
   const opt = { case: false, word: false, all: false, scope: "all" };
-  let bar, dock, q, r, count, repRow, note, menu, moreBtn;
+  let bar, dock, q, r, count, repRow, note, menu, moreBtn, scopeTag;
+  const MAC = /Mac/.test(navigator.platform);
+  const REPLACE_KEY = MAC ? "⌘⌥F" : "Ctrl+H";
   let asking = null;  // the 仍要取代/取消 question waiting for an answer
   let hits = [];      // { s, p, a, b }: s = -1 for a title-block field, p its place in frontList()
   let cur = -1;
@@ -245,7 +247,7 @@ const PCFind = (() => {
     });
     marked.forEach((b) => { if (!now.has(b) && b.isConnected) unmark(b); });
     marked = now;
-    count.textContent = q.value ? `${hits.length ? cur + 1 : 0}/${hits.length}` : "";
+    count.textContent = !q.value ? "" : hits.length ? `${cur + 1}/${hits.length}` : "0";
     bar.classList.toggle("none", !!q.value && !hits.length);
     badges();
   }
@@ -481,18 +483,19 @@ const PCFind = (() => {
     bar = el("div", "find-bar");
     bar.setAttribute("role", "search");
     const row = el("div", "find-row");
-    const toggle = button("chevron", "取代 Ctrl+H", () => showReplace(repRow.hidden), "find-toggle");
+    const toggle = button("chevron", `取代 ${REPLACE_KEY}`, () => showReplace(repRow.hidden), "find-toggle");
     q = el("input", "find-q");
     q.type = "text";
-    q.placeholder = "搜尋";
-    q.setAttribute("aria-label", "搜尋");
+    q.placeholder = "尋找";
+    q.setAttribute("aria-label", "尋找");
     q.spellcheck = false;
     count = el("span", "find-count");
+    scopeTag = el("span", "find-scope", "本節");
+    scopeTag.hidden = true;
     const caseB = textButton("Aa", "大小寫相符", () => flip("case", caseB));
     const wordB = textButton("ab", "全字相符", () => flip("word", wordB));
-    wordB.classList.add("word");
     const more = moreBtn = button("more", "更多選項", () => toggleMenu(more));
-    row.append(toggle, q, count,
+    row.append(toggle, q, scopeTag, count,
       button("up", "上一個 Shift+Enter", () => go(cur - 1)),
       button("chevron", "下一個 Enter", () => go(cur + 1)),
       caseB, wordB, more,
@@ -514,7 +517,7 @@ const PCFind = (() => {
     menu.setAttribute("role", "menu");
     bar.append(row, repRow, note, menu);
     dock.append(bar);
-    $("#writebar").after(dock);
+    $("#keyValue").after(dock);
 
     q.addEventListener("input", () => { hits = compute(); go(fromHere()); });
     q.addEventListener("keydown", (e) => {
@@ -555,6 +558,11 @@ const PCFind = (() => {
     if (hits.length) go(cur);
   }
 
+  /** Options hidden in ⋯ that are not the default show on the bar. */
+  function markOptions() {
+    scopeTag.hidden = opt.scope !== "section";
+    moreBtn.classList.toggle("set", opt.scope === "section" || !!opt.all);
+  }
   function hideMenu() { menu.hidden = true; moreBtn.setAttribute("aria-expanded", "false"); }
   function toggleMenu(btn) {
     if (!menu.hidden) { hideMenu(); return; }
@@ -566,10 +574,10 @@ const PCFind = (() => {
       menu.append(b);
     };
     menu.append(el("div", "hm-title", "範圍"));
-    item("全文", opt.scope === "all", () => { opt.scope = "all"; refresh(); });
-    item("本節", opt.scope === "section", () => { opt.scope = "section"; refresh(); });
+    item("全文", opt.scope === "all", () => { opt.scope = "all"; markOptions(); refresh(); });
+    item("本節", opt.scope === "section", () => { opt.scope = "section"; markOptions(); refresh(); });
     menu.append(el("div", "sep"));
-    item("搜尋公式與指令", opt.all, () => { opt.all = !opt.all; refresh(); });
+    item("搜尋公式與指令", opt.all, () => { opt.all = !opt.all; markOptions(); refresh(); });
     menu.hidden = false;
     btn.setAttribute("aria-expanded", "true");
   }
@@ -614,7 +622,8 @@ const PCFind = (() => {
     const mod = e.ctrlKey || e.metaKey;
     const k = e.code.startsWith("Key") ? e.code.slice(3).toLowerCase() : e.key.toLowerCase(); // Alt changes e.key on macOS
     if (mod && !e.shiftKey && k === "f") { e.preventDefault(); open(e.altKey); return; }
-    if (e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && k === "h") { e.preventDefault(); open(true); return; }
+    // Ctrl+H = replace, except on macOS where Ctrl+H deletes backward in text fields (there: ⌘⌥F)
+    if (!MAC && e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && k === "h") { e.preventDefault(); open(true); return; }
     if (!isOpen()) return;
     const inBar = bar.contains(e.target);
     // the event's target: an editor's own Esc blurs it before this listener runs

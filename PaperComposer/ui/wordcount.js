@@ -155,16 +155,14 @@ const PCWords = (() => {
     const ps = parts().map((p) => ({ ...p, on: on(p, pr), n: tally(p.texts, pr) }));
     const all = ps.reduce((a, p) => add(a, p.n), zero());
     const total = ps.filter((p) => p.on).reduce((a, p) => add(a, p.n), zero());
-    return { pr, ps, all, total, cjk: all.c > all.w };
+    return { pr, ps, all, total };
   }
 
   const num = (x) => x.toLocaleString("en-US");
-  /** "1,234" or, with both kinds, "1,200 · 34 字". */
-  function fmt(x, unit) {
-    if (x.w && x.c) return `${num(x.w)} words · ${num(x.c)} 字`;
-    return unit ? `${num(n(x))} ${unit}` : num(n(x));
-  }
-  const unitOf = (s) => (s.cjk ? "字" : "words");
+  /** One number in 字 (English words + CJK characters, as the app counts elsewhere). */
+  const fmt = (x) => num(n(x));
+  /** Mixed text: the two kinds, for a tooltip. */
+  const kinds = (x) => (x.w && x.c ? `英文 ${num(x.w)} 字 · 中文 ${num(x.c)} 字` : "");
 
   // ── status bar button and popover ──
   let btn = null, pop = null;
@@ -174,10 +172,11 @@ const PCWords = (() => {
     b.innerHTML = "";
     const over = limits().total != null && n(s.total) > limits().total;
     b.append(
-      cur ? `本節 ${fmt(cur.n)} · ` : "",
-      el("span", over ? "wc-over" : "", `全文 ${fmt(s.total, unitOf(s))}`),
+      cur ? `本節 ${fmt(cur.n)} 字 · ` : "",
+      el("span", over ? "wc-over" : "", `全文 ${fmt(s.total)} 字`),
       el("span", "wc-caret", " ▴"),
     );
+    b.title = kinds(s.total);
   }
 
   /** The words part of the status bar: a button opening the popover. */
@@ -233,7 +232,8 @@ const PCWords = (() => {
   function limitText(x, max) {
     const span = el("span", "wc-n");
     span.append(el("span", n(x) > max ? "wc-over" : "", fmt(x)));
-    if (max != null) span.append(el("span", "wc-lim", ` / ${num(max)} 上限`));
+    if (max != null) span.append(el("span", "wc-lim", ` / ${num(max)}`));
+    span.title = kinds(x);
     return span;
   }
 
@@ -242,17 +242,14 @@ const PCWords = (() => {
     const scroll = pop.querySelector(".wc-list")?.scrollTop ?? 0;
     pop.innerHTML = "";
     const head = el("div", "wc-head");
-    const preset = el("select", "wc-preset");
-    preset.setAttribute("aria-label", "範圍");
-    const isDefault = s.ps.every((p) => p.on === !p.away), isAll = s.ps.every((p) => p.on);
-    [["default", "全文"], ["all", "全部"], ["custom", "自訂"]].forEach(([v, t]) => {
-      const o = el("option", "", t); o.value = v;
-      if (v === "custom") o.disabled = true;
-      preset.append(o);
-    });
-    preset.value = isDefault ? "default" : isAll ? "all" : "custom";
-    preset.onchange = () => change((pr) => { pr.parts = {}; if (preset.value === "all") s.ps.forEach((p) => { pr.parts[p.id] = true; }); });
-    head.append(el("b", "", "字數"), preset);
+    head.append(el("b", "", "字數"));
+    // back to the default selection, offered only when it differs
+    const isDefault = s.ps.every((p) => p.on === !p.away) && !s.pr.cap && !s.pr.tab && !s.pr.fn;
+    if (!isDefault) {
+      const reset = el("button", "link wc-reset", "還原預設");
+      reset.onclick = () => change((pr) => { pr.parts = {}; pr.cap = pr.tab = pr.fn = false; });
+      head.append(reset);
+    }
     pop.append(head);
 
     const list = el("div", "wc-list");
@@ -272,8 +269,9 @@ const PCWords = (() => {
 
     const foot = el("div", "wc-foot");
     const max = limits().total;
-    foot.append("計入：", el("span", max != null && n(s.total) > max ? "wc-over" : "", fmt(s.total, unitOf(s))));
+    foot.append(el("span", max != null && n(s.total) > max ? "wc-over" : "", `合計 ${fmt(s.total)} 字`));
     if (max != null) foot.append(el("span", "wc-lim", ` / ${num(max)} 上限`));
+    foot.title = kinds(s.total);
     pop.append(foot);
     pop.querySelector(".wc-list").scrollTop = scroll;
     place();
