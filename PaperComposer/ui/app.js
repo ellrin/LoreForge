@@ -356,6 +356,7 @@ function navLeaf(si, pi) {
   else t.append(PCTex.render(PCTex.stripComments(text).trim().split("\n")[0]));
   b.append(el("span", `status ${rep ? rep.status ?? "" : ""}`), el("span", "i", pad(pi + 1)), t);
   b.onclick = () => { const s = +b.dataset.s, p = +b.dataset.p; select(s, p); PCLazy.jump(paraEl(s, p)); };
+  window.PCFind?.badge(b); // find.js: count of matches
   const item = el("li");
   item.append(b);
   return item;

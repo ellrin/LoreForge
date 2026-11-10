@@ -1265,3 +1265,54 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .wc-foot { padding-top: 6px; font: 500 12px var(--mono); color: var(--muted); }
 .wc-foot > span:first-child { color: var(--text); }
 .wc-foot > span.wc-over:first-child { color: var(--err); }
+
+/* ── Find & Replace (find.js) ── */
+/* a zero-height strip under the writing toolbar: the bar floats at its right */
+.find-dock { position: sticky; top: 46px; z-index: 6; height: 0; width: 100%; }
+.find-bar {
+  position: absolute; top: 0; right: 0; width: min(440px, 100%);
+  display: flex; flex-direction: column; gap: 4px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r);
+  box-shadow: 0 10px 28px #0005;
+}
+.find-row { display: flex; align-items: center; gap: 1px; }
+.find-bar .ico { width: 26px; height: 26px; }
+.find-bar .ico svg.i { width: 15px; height: 15px; }
+.find-bar .find-toggle svg.i { transform: rotate(-90deg); transition: transform .12s; }
+.find-bar .find-toggle[aria-expanded="true"] svg.i { transform: none; }
+.find-pad { width: 26px; flex: none; }
+.find-q {
+  flex: 1; min-width: 80px; margin: 0 4px 0 2px; padding: 4px 7px;
+  background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px;
+  color: var(--text); font: 12.5px var(--sans); outline: none;
+}
+.find-q:focus { border-color: var(--accent); }
+.find-bar.none .find-row:first-child .find-q { border-color: var(--err); }
+.find-count { min-width: 44px; text-align: right; margin-right: 4px; font: 500 11px var(--mono); color: var(--faint); white-space: nowrap; }
+.find-opt { font: 600 11.5px var(--mono); }
+.find-opt.word { text-decoration: underline; text-underline-offset: 3px; }
+.find-row .ghost { padding: 4px 9px; margin-left: 4px; }
+.find-note { display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 4px; border-top: 1px solid var(--line); font-size: 12px; }
+.find-note.warn .find-msg { color: var(--warn); }
+.find-msg div { overflow-wrap: anywhere; }
+.find-sub { color: var(--faint); font-size: 11.5px; margin-right: auto; }
+.find-acts { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.find-acts .ghost { padding: 4px 10px; }
+.find-menu { position: absolute; top: 34px; right: 30px; min-width: 168px; }
+.find-menu button { font-size: 12.5px; }
+/* on the page (always light paper): every match, the current one solid */
+.paper mark.find-hit { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; border-radius: 2px; }
+.paper mark.find-hit.cur { background: var(--accent); color: var(--accent-ink); }
+.paper .find-para { outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+.paper .find-cur { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* navigator: matches per paragraph */
+.find-badge {
+  justify-self: end; margin-left: auto; padding: 0 5px; border-radius: 8px; line-height: 16px;
+  background: var(--accent-soft); color: var(--accent); font: 600 10px var(--mono);
+}
+.outline button:has(> .find-badge) { grid-template-columns: 10px 22px 1fr auto; }
+@media print {
+  .find-dock { display: none; }
+  .paper mark.find-hit, .paper mark.find-hit.cur { background: none; color: inherit; }
+  .paper .find-para, .paper .find-cur { outline: 0; }
+}

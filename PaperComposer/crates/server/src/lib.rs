@@ -2352,6 +2352,73 @@ async fn put_section(
     Json(paper::parse_section(&file, &text)).into_response()
 }
 
+// ── Find & Replace: notation check (find.js) ───────────
+// Before a replacement is saved, the registry's checks run on the changed
+// paragraphs: what the new text adds over the old, and which registered
+// entries (abbreviation, macro, label, symbol) the searched text touches.
+
+#[derive(Deserialize)]
+struct ReplaceCheckBody {
+    /// The changed paragraphs as they are now, and as they would be.
+    #[serde(default)]
+    before: Vec<String>,
+    #[serde(default)]
+    texts: Vec<String>,
+    #[serde(default)]
+    find: String,
+}
+
+async fn notation_check(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<ReplaceCheckBody>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let Some(ws) = s.loaded.read().await.workspace.clone() else { return bad("no workspace") };
+    Json(replace_check(&ws, &dir, &b.before, &b.texts, &b.find)).into_response()
+}
+
+/// Findings in `after` that `before` does not have (messages compared without
+/// their numbers, which hold line positions), plus the entries `find` touches.
+fn replace_check(ws: &Path, dir: &Path, before: &[String], after: &[String], find: &str) -> serde_json::Value {
+    let n = crate::notation::load(ws, dir);
+    let run = |texts: &[String]| crate::notation::check(dir, &n, &[], &texts.join("\n\n"));
+    let (old, new) = (run(before), run(after));
+    let key = |m: &String| m.chars().filter(|c| !c.is_ascii_digit()).collect::<String>();
+    let added = |was: &[String], now: &[String]| -> Vec<String> {
+        let mut left: Vec<String> = was.iter().map(key).collect();
+        now.iter()
+            .filter(|m| match left.iter().position(|k| *k == key(m)) {
+                Some(i) => { left.swap_remove(i); false }
+                None => true,
+            })
+            .cloned()
+            .collect()
+    };
+    let blocking = added(&old.blocking, &new.blocking);
+    let shown: Vec<String> = added(&old.shown, &new.shown).into_iter().filter(|m| !blocking.contains(m)).collect();
+    let new_symbols: Vec<&String> = new.new_symbols.iter().filter(|x| !old.new_symbols.contains(x)).collect();
+    let f = find.trim();
+    let lf = f.to_lowercase();
+    let mut entries = vec![];
+    if f.chars().count() >= 2 {
+        for e in &n.entries {
+            let macro_name = e.macro_name().map(|m| format!("\\{m}"));
+            // words compare without case; LaTeX, macros and labels exactly
+            let words = [e.short.as_deref(), e.long.as_deref()].into_iter().flatten().any(|w| {
+                let w = w.to_lowercase();
+                w.len() >= 2 && (lf.contains(&w) || w.contains(&lf))
+            });
+            let exact = [macro_name.as_deref(), e.label.as_deref(), e.latex.as_deref()].into_iter().flatten().any(|w| w.len() >= 2 && (f.contains(w) || w.contains(f)));
+            if words || exact {
+                let what = match (e.short.as_deref(), e.long.as_deref()) {
+                    (Some(sh), Some(l)) => format!("{sh} — {l}"),
+                    _ => macro_name.or_else(|| e.label.clone()).or_else(|| e.latex.clone()).or_else(|| e.short.clone()).unwrap_or_else(|| e.id.clone()),
+                };
+                entries.push(what);
+            }
+        }
+    }
+    serde_json::json!({ "blocking": blocking, "shown": shown, "new_symbols": new_symbols, "entries": entries })
+}
+// ── end Find & Replace ─────────────────────────────────
+
 // ── Database tables ────────────────────────────────────
 
 async fn get_table(State(s): State<Shared>, AxPath(name): AxPath<String>) -> impl IntoResponse {
@@ -2923,6 +2990,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/refs/{key}/open", post(open_ref_pdf))
         .route("/api/settings/pdf-dir", post(set_pdf_dir))
         .route("/api/papers/{name}/sections/{file}", put(put_section))
+        .route("/api/papers/{name}/notation/check", post(notation_check)) // find.js
         .route("/api/tables/{name}", get(get_table).put(put_table))
         .route("/api/claude", get(claude_status))
         .route("/api/open/{page}", post(open_page))
@@ -2993,6 +3061,37 @@ mod tests {
         assert_eq!(entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["kept2020", "new2022"]);
         assert!(notes.iter().any(|n| n.key == "new2022"));
         assert!(merge_paper_bib(&ws, &dir, false).await.unwrap().added.is_empty(), "merging twice adds nothing");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Find & Replace (find.js): the registry's checks on a replacement.
+    #[test]
+    fn replace_check_reports_what_a_replacement_adds_and_the_entries_it_touches() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("pc-replace-{}-{nanos}", std::process::id()));
+        let (ws, dir) = (root.join("ws"), root.join("ws/papers/P"));
+        std::fs::create_dir_all(dir.join("sections")).unwrap();
+        std::fs::write(dir.join("main.tex"), "\\documentclass{article}\n\\begin{document}\n\\input{sections/results}\n\\end{document}\n").unwrap();
+        let para = "Table~\\ref{tab:main} compares the runs.".to_string();
+        std::fs::write(
+            dir.join("sections/results.tex"),
+            format!("\\section{{Results}}\n{para}\n\n\\begin{{table}}\n\\caption{{Main comparison.}}\n\\label{{tab:main}}\n\\begin{{tabular}}{{l}}\nx\n\\end{{tabular}}\n\\end{{table}}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("notation.json"),
+            r#"{"version":1,"entries":[{"id":"t1","kind":"table","label":"tab:main","caption":"Main comparison"},{"id":"cv","kind":"abbrev","short":"CV","long":"cross-validation"}]}"#,
+        )
+        .unwrap();
+        let typed = "Table 1 compares the runs.".to_string();
+        let r = replace_check(&ws, &dir, std::slice::from_ref(&para), std::slice::from_ref(&typed), "Table~\\ref{tab:main}");
+        assert!(!r["blocking"].as_array().unwrap().is_empty(), "a typed 'Table 1' is new: {r}");
+        assert_eq!(r["entries"], serde_json::json!(["tab:main"]));
+        let same = replace_check(&ws, &dir, std::slice::from_ref(&typed), std::slice::from_ref(&typed), "runs");
+        assert!(same["blocking"].as_array().unwrap().is_empty() && same["shown"].as_array().unwrap().is_empty(), "nothing new: {same}");
+        assert!(same["entries"].as_array().unwrap().is_empty());
+        let cv = replace_check(&ws, &dir, &[], &[], "cross-validation");
+        assert_eq!(cv["entries"], serde_json::json!(["CV — cross-validation"]));
         let _ = std::fs::remove_dir_all(&root);
     }
 }
