@@ -106,7 +106,7 @@ export default {
           h('span.s.kc-meta', {}, h('b.kc-kw', {}, n.state === 'known' ? '已會' : isNew ? '新' : n.streak ? `記得 ${n.streak} 次` : '不熟'),
             ...(n.aliases?.length ? [` · ${n.aliases.join(' · ')}`] : [])),
           h('span.kc-t', {}, n.title),
-          text ? h('span.s.kc-sum', {}, text) : null);
+          text ? h('span.kc-sum', {}, text) : null);
       }));
       // auto：放不下的卡從後面拿掉，排回佇列前面，下一輪先出現
       if (cfg.count !== 1 && cfg.count !== 2) {
