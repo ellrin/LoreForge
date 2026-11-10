@@ -245,14 +245,21 @@ const PCContext = (() => {
     return t;
   }
 
-  /** The notation registry's checks on what changes; true when it may go ahead. */
   /** A question beside the paragraph, in the app's own look: true = 仍要插入. Esc / outside = 取消. */
-  function ask(at, lines) {
+  function ask(at, lines, linkLine, target) {
     return new Promise((resolve) => {
       const box = el("div", "menu ctx-ask");
       box.setAttribute("role", "alertdialog");
       const msg = el("div", "ctx-ask-msg");
-      lines.slice(0, 6).forEach((l) => msg.append(el("div", "", l)));
+      lines.slice(0, 6).forEach((l) => {
+        const d = el("div", "", l);
+        if (l === linkLine && typeof PCNotation !== "undefined") {
+          d.className = "ctx-link";
+          d.title = "開啟對照表";
+          d.onclick = () => { done(false); PCNotation.open(target); };
+        }
+        msg.append(d);
+      });
       const acts = el("div", "ctx-ask-acts");
       const no = el("button", "ghost", "取消"), yes = el("button", "primary small", "仍要插入");
       acts.append(no, yes);
@@ -277,13 +284,27 @@ const PCContext = (() => {
     });
   }
 
+  /** The notation registry's checks on what changes; true when it may go ahead
+   *  (also reader.js's insertions from the toolbar and the side panel). */
   async function vet(before, after, at) {
     let r;
     try { r = await api(`${base()}/notation/check`, { before, texts: after, find: "" }); }
     catch (e) { return ask(at, [`對照表檢查失敗：${e.message}`]); }
-    const lines = [...(r.blocking ?? []), ...(r.shown ?? []), ...(r.new_symbols?.length ? [`對照表沒有的符號：${r.new_symbols.join("、")}`] : [])];
-    if (r.blocking?.length) return ask(at, lines);
-    if (lines.length) flash(lines.slice(0, 3).join("　"), 6000);
+    const fresh = r.new_symbols ?? [];
+    const symLine = fresh.length ? `對照表沒有的符號：${fresh.join("、")}` : null;
+    // that line opens the 對照表 (notation.js), at the symbol when there is one
+    const target = fresh.length === 1 ? fresh[0] : "";
+    const lines = [...(r.blocking ?? []), ...(r.shown ?? []), ...(symLine ? [symLine] : [])];
+    if (r.blocking?.length) return ask(at, lines, symLine, target);
+    if (lines.length) {
+      flash(lines.slice(0, 3).join("　"), 6000);
+      const t = document.querySelector("#flash");
+      if (t && symLine && typeof PCNotation !== "undefined") {
+        t.classList.add("ctx-link");
+        t.title = "開啟對照表";
+        t.onclick = () => { t.remove(); PCNotation.open(target); };
+      }
+    }
     return true;
   }
 
@@ -653,6 +674,6 @@ const PCContext = (() => {
     show(e.clientX, e.clientY, d, at);
   });
 
-  return { atoms, locate, isOpen: () => !!menu };
+  return { atoms, locate, vet, isOpen: () => !!menu };
 })();
 window.PCContext = PCContext;
