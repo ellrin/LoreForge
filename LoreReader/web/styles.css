@@ -160,6 +160,7 @@ select { height: 30px; }
 #dlg label > input, #dlg label > textarea, #dlg label > select { color: var(--text); font-size: 13.5px; }
 #dlg textarea { min-height: 70px; resize: vertical; }
 #dlg .actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+#dlg .btn.primary { width: auto; padding: 0 10px; border: 1px solid var(--accent); display: inline-flex; }
 #dlg .quote-box { font-size: 13px; background: var(--surface); border-left: 3px solid var(--accent-text); padding: 6px 10px; border-radius: 4px; max-height: 120px; overflow: auto; overflow-wrap: anywhere; }
 #dlg .seg { align-self: flex-start; flex-wrap: wrap; }
 .seg-hint { font-size: 12px; color: var(--muted); }

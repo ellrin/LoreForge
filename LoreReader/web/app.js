@@ -2296,7 +2296,7 @@ function mountShell() {
     ],
     drawers: { left: "#sorter", leftLabel: "頁面縮圖", leftIcon: "cards", right: "#side", rightLabel: "面板" },
     search: openFind,
-    save: () => saveNotes(statusAnchor()),
+    save: () => { if (S.sha && !S.arr && S.exp?.last?.exists) saveNotesLast(); else saveNotes(statusAnchor()); },
     general: generalTab,
     keys: [
       { group: "選取文字", label: "螢光（黃 · 綠 · 藍 · 粉紅）", keys: "1–4" },
@@ -2364,7 +2364,7 @@ function wire() {
     if (!e.target.closest("#pop") && !e.target.closest(".mk[data-t]") && !e.target.closest("dialog")) hidePop();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closeMenus(); hidePop(); hideSelBar(); }
+    if (e.key === "Escape") { closeMenus(); hidePop(); hideSelBar(); if (!$("#find").hidden && !document.querySelector("dialog[open]")) closeFind(); }
     onSelKey(e);
   });
   let rt;
