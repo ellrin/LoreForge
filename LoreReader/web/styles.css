@@ -262,7 +262,7 @@ dialog .quote-box { font-size: 13px; background: var(--surface); border-left: 3p
   .app.show-side .side { display: flex; }
 }
 @media (max-width: 640px) {
-  .brand { display: none; }
+  .app:not(.at-home) .brand { display: none; }
   .hide-sm { display: none !important; }
   .top { padding: 0 6px; gap: 4px; }
   .searchbox input { width: 110px; }

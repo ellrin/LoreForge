@@ -2087,6 +2087,7 @@ dependencies = [
 name = "lorereader"
 version = "0.1.0"
 dependencies = [
+ "lr-core",
  "lr-server",
  "tauri",
  "tauri-build",

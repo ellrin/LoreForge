@@ -183,16 +183,34 @@ impl Detector {
         }
         u16_at[body.len()] = u;
 
-        let mut taken = vec![false; toks.len()];
+        // A line break after a short line (a heading, an author line) ends a sentence.
+        let line_len_before = |pos: usize| -> usize {
+            let ls = body[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            body[ls..pos].trim().chars().count()
+        };
+        let hard_break = |k: usize| -> bool {
+            let between = &body[toks[k - 1].e..toks[k].s];
+            between.contains('\n') && line_len_before(toks[k - 1].e) < 40
+        };
+        // Tokens inside a URL, DOI or e-mail address are never terms.
+        let mut taken: Vec<bool> = toks
+            .iter()
+            .map(|t| {
+                let cs = body[..t.s].rfind(char::is_whitespace).map(|p| p + 1).unwrap_or(0);
+                let ce = body[t.e..].find(char::is_whitespace).map(|p| t.e + p).unwrap_or(body.len());
+                let chunk = &body[cs..ce];
+                chunk.contains('/') || chunk.contains('@') || chunk.to_lowercase().starts_with("doi:") || chunk.starts_with("www.")
+            })
+            .collect();
         let mut found: Vec<(usize, usize, &'static str)> = Vec::new(); // token ranges [a, b)
         let sentence_start = |i: usize| -> bool {
             if i == 0 {
                 return true;
             }
             let between = &body[toks[i - 1].e..toks[i].s];
-            between.contains(['.', '!', '?', ':']) || between.contains("\n\n")
+            between.contains(['.', '!', '?', ':']) || between.contains("\n\n") || hard_break(i)
         };
-        let same_sentence = |a: usize, b: usize| -> bool { (a + 1..=b).all(|k| !body[toks[k - 1].e..toks[k].s].contains(['.', '!', '?', ';', ':', '(', ')'])) };
+        let same_sentence = |a: usize, b: usize| -> bool { (a + 1..=b).all(|k| !body[toks[k - 1].e..toks[k].s].contains(['.', '!', '?', ';', ':', '(', ')']) && !hard_break(k)) };
 
         // 1. "(ACR)" and its expansion.
         let mut acronyms: HashSet<String> = HashSet::new();
@@ -360,6 +378,10 @@ mod tests {
         assert_eq!(texts(&c, "phrase"), ["Hidden Markov Model"]);
         let r = c.iter().find(|x| x.kind == "rare").unwrap();
         assert_eq!((r.start, r.end), (34, 49));
+        // Headings and author lines end a sentence; URLs and DOIs are skipped.
+        let c = d.detect("Abstract\nWe study Quaternion Wavelets here and there.\nsee doi:10.1/zyxwvut and https://example.org/qwertyuiop");
+        assert_eq!(texts(&c, "phrase"), ["Quaternion Wavelets"], "{c:?}");
+        assert!(!c.iter().any(|x| x.text.contains("zyxw") || x.text.contains("qwerty")), "{c:?}");
         let d = Detector::new(&["heteroscedastic # mine".into()]);
         assert!(d.detect("heteroscedastic noise").is_empty());
     }

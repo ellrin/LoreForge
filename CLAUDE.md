@@ -4,7 +4,7 @@ Monorepo of the author's local-first apps. Each top-level folder is its own Carg
 (or Swift app for NeonDeck) with its own `CLAUDE.md`; read that before working in it.
 
 - `commons/` shared crates and web components; apps depend on `../commons/crates/<name>`.
-- `PaperComposer/`, `KnowledgeBase/`, `SlideComposer/`, `NeonDeck/` apps.
+- `PaperComposer/`, `KnowledgeBase/`, `SlideComposer/`, `LoreReader/`, `NeonDeck/` apps.
 - `private-example/` (public): the minimal content each app needs to open, same layout as
   `private/`. Apps seed `private/<App>` from it on first run and never write into it.
 - `private/` is **ignored**: each subfolder is a separate private git repo —

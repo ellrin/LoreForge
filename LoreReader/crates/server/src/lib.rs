@@ -239,7 +239,7 @@ async fn open(State(s): State<Shared>, Query(q): Query<OpenQ>) -> Response {
     let what = known.map(|m| format!("《{}》", html_escape(&m.title))).unwrap_or_else(|| "這份 PDF".into());
     let body = format!(
         "<!doctype html><html lang=\"zh-Hant\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>LoreReader</title>\
-<link rel=\"stylesheet\" href=\"/styles.css\"><body class=\"notice-page\"><main class=\"notice\"><h1>不在這台電腦的書庫裡</h1>\
+<link rel=\"stylesheet\" href=\"/styles.css\"><script src=\"/prefs.js\"></script><script src=\"/theme.js\"></script><body class=\"notice-page\"><main class=\"notice\"><h1>不在這台電腦的書庫裡</h1>\
 <p>{what}（sha256 <code>{}</code>，第 {page} 頁）不在這台電腦的 LoreReader 書庫中。</p>\
 <p>在這台電腦用 LoreReader 開啟同一個 PDF 檔，它就會加入書庫，這個連結之後就能直接開到那一頁。</p>\
 <p><a class=\"btn\" href=\"/\">回到書庫</a></p></main></body></html>",
@@ -550,7 +550,9 @@ fn occurrences(text: &str, needle: &str) -> Vec<(usize, usize)> {
 
 /// Known terms (KB scan) and candidates for red terms in one page's text.
 async fn terms(State(s): State<Shared>, Json(b): Json<TermsBody>) -> R {
-    let scan = s.kb.scan(&b.text).await;
+    // Line breaks become spaces (same length, so offsets hold): a term wrapped across
+    // two lines ("Hausdorff\ndistance") still matches its card.
+    let scan = s.kb.scan(&b.text.replace('\n', " ")).await;
     let (spans, kb_status, kb_candidates) = match &scan {
         Ok(v) => {
             // Use the KB's own candidates only when a real assistant made them.

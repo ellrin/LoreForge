@@ -1,11 +1,11 @@
 #!/bin/zsh
 # 編譯 LoreForge 的 Mac App、安裝並放進 Dock。
 #
-#   scripts/install-apps.sh                     全部：PaperComposer SlideComposer KnowledgeBase NeonDeck
+#   scripts/install-apps.sh                     全部：PaperComposer SlideComposer KnowledgeBase LoreReader NeonDeck
 #   scripts/install-apps.sh SlideComposer ...   只做指定的 App
 #   scripts/install-apps.sh --no-dock ...       不動 Dock
 #
-# Tauri App（PaperComposer、SlideComposer、KnowledgeBase）裝到 /Applications，
+# Tauri App（PaperComposer、SlideComposer、KnowledgeBase、LoreReader）裝到 /Applications，
 # NeonDeck 用它自己的 build.sh 裝到 ~/Applications。安裝前會先結束正在執行的舊版。
 # Dock：每個 App 一個項目；名稱相同但指向別的位置（例如舊的編譯資料夾）的項目會被換掉，
 # 其他項目不動。簽章是 ad-hoc（沒有 Developer ID），所以換版後第一次讀鑰匙圈時系統會再問一次。
@@ -18,11 +18,11 @@ for a in "$@"; do
   case $a in
     --no-dock) dock=0 ;;
     -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
-    PaperComposer|SlideComposer|KnowledgeBase|NeonDeck) apps+=$a ;;
+    PaperComposer|SlideComposer|KnowledgeBase|LoreReader|NeonDeck) apps+=$a ;;
     *) echo "不認得的 App：$a" >&2; exit 2 ;;
   esac
 done
-(( ${#apps} )) || apps=(PaperComposer SlideComposer KnowledgeBase NeonDeck)
+(( ${#apps} )) || apps=(PaperComposer SlideComposer KnowledgeBase LoreReader NeonDeck)
 
 quit() { osascript -e "tell application id \"$1\" to quit" >/dev/null 2>&1 || true; }
 

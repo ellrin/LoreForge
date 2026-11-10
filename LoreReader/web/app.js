@@ -974,7 +974,7 @@ function chatPane() {
     m.pending ? h("span", { class: "eng" }, "Claude 思考中…") : null));
   const err = S.chatError ? h("div", { class: "err-box" }, S.chatError) : null;
   S.chatError = null;
-  return [head, h("div", { class: "msgs" }, msgs.length ? msgs : [h("p", { class: "empty" }, "選取文字後按右鍵 →「問 Claude」，會附上這段話、頁碼和所在段落。")]), err];
+  return [head, h("div", { class: "msgs" }, msgs.length ? msgs : [h("p", { class: "empty" }, "選取文字後按右鍵 →「問 Claude」，會附上這段話、頁碼和所在段落。")]), err].filter(Boolean);
 }
 
 function composer() {
