@@ -1,55 +1,339 @@
-/* LoreForge app themes, shared by PaperComposer and SlideComposer.
-   Palettes: orange / night / terminal, each with a dark and a light mode.
-   data-theme picks the palette, data-mode picks light/dark (both on <html>).
-   --accent-text is the accent for text, line icons and thin borders; --paper is
-   the document surface, which stays the document's own colour in every theme. */
+/* LoreForge colour themes, shared by every app (PaperComposer, SlideComposer,
+   LoreReader, KnowledgeBase). Each server sends this file as /theme.css and
+   theme.js as /theme.js; the choice itself is one shared setting
+   (lore-home: private/shared/ui.toml), so every app shows the same theme.
+   The palettes are JELearner's (its web/themes.css).
 
-:root,
-:root[data-theme="orange"][data-mode="dark"] {
-  --bg: #1d1d20; --panel: #27272a; --surface: #313135; --surface-hover: #3b3b40;
-  --line: #3a3a3f; --line-strong: #505056;
-  --text: #f0f0f1; --muted: #a6a6ad; --faint: #74747b;
-  --accent: #ff6b35; --accent-ink: #0a0706; --accent-text: #ff8a5c; --accent-soft: #ff6b3526;
-  --dot: #ffffff0f; --paper: #ffffff; --paper-ink: #1b1b1f; --paper-dim: 1;
-}
-:root[data-theme="orange"][data-mode="light"] {
-  --bg: #f6f5f3; --panel: #ffffff; --surface: #efeeeb; --surface-hover: #e6e4e0;
-  --line: #e2e0dc; --line-strong: #c9c6c0;
-  --text: #1d1d20; --muted: #5d5d64; --faint: #8d8d94;
-  --accent: #d9541f; --accent-ink: #ffffff; --accent-text: #b8441a; --accent-soft: #d9541f1f;
-  --dot: #0000000d; --paper: #ffffff; --paper-ink: #1b1b1f;
-}
-:root[data-theme="night"][data-mode="dark"] {
-  --bg: #06061a; --panel: #0c0b24; --surface: #151336; --surface-hover: #1d1a45;
-  --line: #221f4a; --line-strong: #353163;
-  --text: #eeecff; --muted: #a7a3d6; --faint: #6f6ba3;
-  --accent: #f3e600; --accent-ink: #0c0b24; --accent-text: #f3e600; --accent-soft: #f3e60024;
-  --dot: #ffffff10; --paper: #ffffff; --paper-ink: #14122e;
-}
-:root[data-theme="night"][data-mode="light"] {
-  --bg: #f5f4fb; --panel: #ffffff; --surface: #ecebf7; --surface-hover: #e2e0f2;
-  --line: #e0def0; --line-strong: #c6c2e3;
-  --text: #0c0b24; --muted: #57538a; --faint: #8b88b3;
-  --accent: #5b3df5; --accent-ink: #ffffff; --accent-text: #4a2fe0; --accent-soft: #5b3df51f;
-  --dot: #0c0b240f; --paper: #ffffff; --paper-ink: #14122e;
-}
-:root[data-theme="terminal"][data-mode="dark"] {
-  --bg: #040705; --panel: #080d0a; --surface: #0f1812; --surface-hover: #15221a;
-  --line: #17271d; --line-strong: #24402f;
-  --text: #e6f5ec; --muted: #94b8a2; --faint: #5d7f69;
-  --accent: #2ef08a; --accent-ink: #04140a; --accent-text: #2ef08a; --accent-soft: #2ef08a22;
-  --dot: #ffffff0d; --paper: #ffffff; --paper-ink: #0c1a11;
-}
-:root[data-theme="terminal"][data-mode="light"] {
-  --bg: #f2f7f4; --panel: #ffffff; --surface: #e8f1ec; --surface-hover: #dceae2;
-  --line: #d9e7df; --line-strong: #b7d0c1;
-  --text: #08130c; --muted: #45634f; --faint: #7d9886;
-  --accent: #11965a; --accent-ink: #ffffff; --accent-text: #0b7a48; --accent-soft: #11965a1f;
-  --dot: #08130c0d; --paper: #ffffff; --paper-ink: #0c1a11;
-}
+   Twenty themes: ten dark, ten light; in each, five single-hue and five
+   combinations of three accents. Every theme is dark or light by itself
+   (there is no separate light/dark mode); theme.js also sets data-mode to
+   "dark" or "light" for rules that only care about that.
 
-:root {
-  --ok: #3fb97a; --warn: #e6a700; --err: #e5484d;
+   Tokens: --bg --panel --surface --surface-hover --line --line-strong
+   --text --muted --faint --dot --ok --warn --err, and three accents. Each
+   accent comes as a fill and a text colour:
+     --accent, --accent-2, --accent-3        fills: bars, rings, dots, button
+                                             and chip backgrounds; may be bright
+     --accent-*-ink                          text on that fill
+     --accent-*-soft                         translucent tint of the fill
+     --accent-text, --accent-2-text, ...     the same hue as text, line icons,
+                                             thin borders and focus rings
+   --accent stays the primary action colour; -2 and -3 colour secondary
+   marks. In single-hue themes they are shades of the same hue.
+   --paper / --paper-ink (+ the derived --paper-* below) are the app's own
+   reading or writing sheet. Rendered documents (slides, PDF pages, exports,
+   thumbnails) never use theme tokens.
+
+   Rules: no background, panel, surface or paper is pure black or white;
+   text on bg and panel ≥ 7:1; muted ≥ 4.5:1 on panel; faint ≥ 3:1; every
+   -text ≥ 4.5:1 on bg and panel (and surface); every -ink on its fill
+   ≥ 4.5:1; paper-ink on paper ≥ 7:1. Fills have no contrast rule of their
+   own, so a lemon can stay lemon.
+   The ids are also listed in commons/crates/lore-home (theme::THEMES) and
+   theme.js (THEMES); lore-home's tests check that the three match and that
+   the rules hold. With no or an unknown data-theme the default (giftbox)
+   applies. */
+
+/* ── 深色 · 單色 (dark mono) ────────────────────────────── */
+/* 駭客終端：磷光綠字在近黑的綠灰底上，像 Matrix 終端 */
+:root[data-theme="hacker"] {
   color-scheme: dark;
+  --bg: #121712; --panel: #161d17; --surface: #1e2720; --surface-hover: #263229;
+  --line: #243026; --line-strong: #38493b;
+  --text: #b4ffc4; --muted: #72d68a; --faint: #4b9a5e;
+  --accent: #39ff6a; --accent-ink: #031a08; --accent-soft: #39ff6a2e;
+  --accent-2: #16c94d; --accent-2-ink: #021306; --accent-2-soft: #16c94d2e;
+  --accent-3: #a8ffbc; --accent-3-ink: #062010; --accent-3-soft: #a8ffbc2e;
+  --accent-text: #39ff6a; --accent-2-text: #16c94d; --accent-3-text: #a8ffbc;
+  --dot: #39ff6a12; --paper: #151c16; --paper-ink: #b8f7c4;
+  --ok: #8cff6a; --warn: #e3f55a; --err: #ff6a5f;
 }
-:root[data-mode="light"] { color-scheme: light; }
+/* 琥珀終端：琥珀色字的老式終端，炭灰底 */
+:root[data-theme="amber"] {
+  color-scheme: dark;
+  --bg: #1c1a16; --panel: #24221c; --surface: #2e2b23; --surface-hover: #38342b;
+  --line: #37332b; --line-strong: #4f493d;
+  --text: #ffdfae; --muted: #ccab7c; --faint: #937b58;
+  --accent: #ffb000; --accent-ink: #1f1400; --accent-soft: #ffb0002e;
+  --accent-2: #ff8a1f; --accent-2-ink: #200c00; --accent-2-soft: #ff8a1f2e;
+  --accent-3: #ffd98a; --accent-3-ink: #241800; --accent-3-soft: #ffd98a2e;
+  --accent-text: #ffb000; --accent-2-text: #ff8a1f; --accent-3-text: #ffd98a;
+  --dot: #ffb00010; --paper: #25221b; --paper-ink: #ffe4b8;
+  --ok: #9be564; --warn: #ffcf4a; --err: #ff6a55;
+}
+/* 冰晶藍：石板灰藍底上的冰青色 */
+:root[data-theme="ice"] {
+  color-scheme: dark;
+  --bg: #172028; --panel: #1e2832; --surface: #27333e; --surface-hover: #303e4b;
+  --line: #2f3c48; --line-strong: #475a6b;
+  --text: #e8f7fb; --muted: #a9c5cf; --faint: #738f9b;
+  --accent: #5ce1ff; --accent-ink: #03161d; --accent-soft: #5ce1ff2e;
+  --accent-2: #2fb2e6; --accent-2-ink: #02121a; --accent-2-soft: #2fb2e62e;
+  --accent-3: #b8f2ff; --accent-3-ink: #062028; --accent-3-soft: #b8f2ff2e;
+  --accent-text: #5ce1ff; --accent-2-text: #2fb2e6; --accent-3-text: #b8f2ff;
+  --dot: #5ce1ff12; --paper: #edf5f7; --paper-ink: #142028;
+  --ok: #4ade80; --warn: #fcd34d; --err: #fb7185;
+}
+/* 紫外線：紫黑底、紫光，深色紙 */
+:root[data-theme="ultraviolet"] {
+  color-scheme: dark;
+  --bg: #1b1530; --panel: #231b40; --surface: #2d2352; --surface-hover: #382c64;
+  --line: #352b5d; --line-strong: #504289;
+  --text: #f3eeff; --muted: #c3b6ef; --faint: #8d80c3;
+  --accent: #ae7aff; --accent-ink: #12062a; --accent-soft: #ae7aff2e;
+  --accent-2: #8c5cff; --accent-2-ink: #0c0322; --accent-2-soft: #8c5cff2e;
+  --accent-3: #dcc8ff; --accent-3-ink: #1a0d33; --accent-3-soft: #dcc8ff2e;
+  --accent-text: #ae7aff; --accent-2-text: #a27bff; --accent-3-text: #dcc8ff;
+  --dot: #ae7aff12; --paper: #231c3e; --paper-ink: #ece6ff;
+  --ok: #5ee6a8; --warn: #ffcf5c; --err: #ff6b9a;
+}
+/* 紅色警戒：暗紅灰底上的警示紅 */
+:root[data-theme="redalert"] {
+  color-scheme: dark;
+  --bg: #1d1517; --panel: #271b1e; --surface: #322327; --surface-hover: #3d2b30;
+  --line: #3b2a2e; --line-strong: #583d43;
+  --text: #fdeeee; --muted: #d8b3b7; --faint: #a07e82;
+  --accent: #ff4752; --accent-ink: #1a0204; --accent-soft: #ff47522e;
+  --accent-2: #e8323f; --accent-2-ink: #160103; --accent-2-soft: #e8323f2e;
+  --accent-3: #ffa3a8; --accent-3-ink: #2a0a0d; --accent-3-soft: #ffa3a82e;
+  --accent-text: #ff4a54; --accent-2-text: #ed5e68; --accent-3-text: #ffa3a8;
+  --dot: #ff475212; --paper: #f7eded; --paper-ink: #2a1518;
+  --ok: #3ddc84; --warn: #ffc233; --err: #ff8f7a;
+}
+
+/* ── 深色 · 搭配色 (dark multi) ────────────────────────────── */
+/* 霓虹夜市：夜市招牌：洋紅、青色、燈泡黃，靛藍夜空 */
+:root[data-theme="neon"] {
+  color-scheme: dark;
+  --bg: #161731; --panel: #1e1f40; --surface: #282a52; --surface-hover: #323563;
+  --line: #33365e; --line-strong: #4b4f86;
+  --text: #f1efff; --muted: #b9b5e4; --faint: #8580b8;
+  --accent: #ff3fb4; --accent-ink: #1a0716; --accent-soft: #ff3fb42e;
+  --accent-2: #2de2e6; --accent-2-ink: #03191a; --accent-2-soft: #2de2e62e;
+  --accent-3: #ffd23f; --accent-3-ink: #1f1700; --accent-3-soft: #ffd23f2e;
+  --accent-text: #ff4cb9; --accent-2-text: #2de2e6; --accent-3-text: #ffd23f;
+  --dot: #2de2e61a; --paper: #f3f0fa; --paper-ink: #1d1838;
+  --ok: #3ee8b5; --warn: #ff9f43; --err: #ff6b86;
+}
+/* 澀谷雨夜：下雨的十字路口：濕亮的粉紅、青藍、紫色倒影，灰藍雨夜 */
+:root[data-theme="shibuya"] {
+  color-scheme: dark;
+  --bg: #151c26; --panel: #1b2431; --surface: #232e3e; --surface-hover: #2c394c;
+  --line: #2b3748; --line-strong: #425369;
+  --text: #eaf0f8; --muted: #aebdd0; --faint: #7787a0;
+  --accent: #ff5fa2; --accent-ink: #24030f; --accent-soft: #ff5fa22e;
+  --accent-2: #4fd8ff; --accent-2-ink: #021820; --accent-2-soft: #4fd8ff2e;
+  --accent-3: #a98cff; --accent-3-ink: #140a2e; --accent-3-soft: #a98cff2e;
+  --accent-text: #ff5fa2; --accent-2-text: #4fd8ff; --accent-3-text: #a98cff;
+  --dot: #4fd8ff12; --paper: #eef1f6; --paper-ink: #161d2a;
+  --ok: #4fe3a0; --warn: #ffcf5a; --err: #ff7b7b;
+}
+/* 香港霓虹：老街招牌：朱紅、翡翠綠、金色，墨綠夜色，泛黃紙 */
+:root[data-theme="hongkong"] {
+  color-scheme: dark;
+  --bg: #122220; --panel: #172b28; --surface: #1f3733; --surface-hover: #28433e;
+  --line: #26403b; --line-strong: #3a5c55;
+  --text: #f4efe4; --muted: #bfc9b8; --faint: #869a8c;
+  --accent: #ff5147; --accent-ink: #1e0302; --accent-soft: #ff51472e;
+  --accent-2: #2ee6a6; --accent-2-ink: #03190f; --accent-2-soft: #2ee6a62e;
+  --accent-3: #ffc845; --accent-3-ink: #1f1500; --accent-3-soft: #ffc8452e;
+  --accent-text: #ff6961; --accent-2-text: #2ee6a6; --accent-3-text: #ffc845;
+  --dot: #ffc84512; --paper: #f6efe2; --paper-ink: #22201a;
+  --ok: #8be78b; --warn: #ffa94d; --err: #ff8fa3;
+}
+/* 落日合成：八〇年代合成器海報：夕陽橘、粉紅、電紫，深紫天空，奶油紙 */
+:root[data-theme="synthwave"] {
+  color-scheme: dark;
+  --bg: #1e1329; --panel: #28193a; --surface: #33204a; --surface-hover: #3e275a;
+  --line: #3c2953; --line-strong: #593d79;
+  --text: #fff0f5; --muted: #d6b8da; --faint: #a083ab;
+  --accent: #ff8a3d; --accent-ink: #220c02; --accent-soft: #ff8a3d2e;
+  --accent-2: #ff4fa0; --accent-2-ink: #24020f; --accent-2-soft: #ff4fa02e;
+  --accent-3: #b691ff; --accent-3-ink: #150833; --accent-3-soft: #b691ff2e;
+  --accent-text: #ff8a3d; --accent-2-text: #ff4fa0; --accent-3-text: #b691ff;
+  --dot: #ff4fa016; --paper: #fff1e4; --paper-ink: #2a1530;
+  --ok: #4be0b0; --warn: #ffd166; --err: #ff6b6b;
+}
+/* 極光：北國夜空：極光綠、冰藍、紫粉的光帶，深海軍藍 */
+:root[data-theme="aurora"] {
+  color-scheme: dark;
+  --bg: #121b2a; --panel: #172336; --surface: #1f2e45; --surface-hover: #283a55;
+  --line: #273750; --line-strong: #3b5274;
+  --text: #eaf4f6; --muted: #a9c2cc; --faint: #7590a3;
+  --accent: #4cf5a8; --accent-ink: #03190e; --accent-soft: #4cf5a82e;
+  --accent-2: #46c8ff; --accent-2-ink: #02141e; --accent-2-soft: #46c8ff2e;
+  --accent-3: #d58cff; --accent-3-ink: #1e0730; --accent-3-soft: #d58cff2e;
+  --accent-text: #4cf5a8; --accent-2-text: #46c8ff; --accent-3-text: #d58cff;
+  --dot: #4cf5a810; --paper: #eef4f3; --paper-ink: #142026;
+  --ok: #8ff07a; --warn: #ffd36b; --err: #ff7a90;
+}
+
+/* ── 淺色 · 單色 (light mono) ────────────────────────────── */
+/* 薰衣草：淡紫底、藍紫色 */
+:root[data-theme="lavender"] {
+  color-scheme: light;
+  --bg: #ebe7f6; --panel: #f3f0fa; --surface: #e2dcf2; --surface-hover: #d7cfed;
+  --line: #d8d1eb; --line-strong: #b7abdb;
+  --text: #2a2145; --muted: #574a82; --faint: #786c9f;
+  --accent: #6f4fd0; --accent-ink: #faf8ff; --accent-soft: #6f4fd024;
+  --accent-2: #5232ad; --accent-2-ink: #f6f2ff; --accent-2-soft: #5232ad24;
+  --accent-3: #8d6edb; --accent-3-ink: #1a0f3a; --accent-3-soft: #8d6edb24;
+  --accent-text: #5536b0; --accent-2-text: #5232ad; --accent-3-text: #6e47d1;
+  --dot: #6f4fd014; --paper: #f6f3f9; --paper-ink: #231c3a;
+  --ok: #2a7655; --warn: #835c00; --err: #b8344f;
+}
+/* 檸檬塔：淡黃底、焦金色 */
+:root[data-theme="lemon"] {
+  color-scheme: light;
+  --bg: #faf2d2; --panel: #fcf6e0; --surface: #f4e9bd; --surface-hover: #ede0a8;
+  --line: #eadeab; --line-strong: #d3c27a;
+  --text: #33290a; --muted: #665619; --faint: #847640;
+  --accent: #f5c518; --accent-ink: #3a2a00; --accent-soft: #f5c51833;
+  --accent-2: #e9a200; --accent-2-ink: #2e1d00; --accent-2-soft: #e9a20033;
+  --accent-3: #ffdf5e; --accent-3-ink: #3a2c00; --accent-3-soft: #ffdf5e33;
+  --accent-text: #806606; --accent-2-text: #8b6000; --accent-3-text: #7f6600;
+  --dot: #d9b30018; --paper: #fdf7e6; --paper-ink: #2a220a;
+  --ok: #2e7340; --warn: #9a4f00; --err: #b3332b;
+}
+/* 薄荷：淡薄荷底、墨綠 */
+:root[data-theme="mint"] {
+  color-scheme: light;
+  --bg: #e2f3eb; --panel: #edf7f2; --surface: #d5ede1; --surface-hover: #c5e5d5;
+  --line: #c7e3d5; --line-strong: #9eccb5;
+  --text: #12352a; --muted: #3a6253; --faint: #5b8272;
+  --accent: #0b7a5d; --accent-ink: #effbf6; --accent-soft: #0b7a5d24;
+  --accent-2: #08604a; --accent-2-ink: #ecfaf4; --accent-2-soft: #08604a24;
+  --accent-3: #1f9474; --accent-3-ink: #03140e; --accent-3-soft: #1f947424;
+  --accent-text: #0b7559; --accent-2-text: #08604a; --accent-3-text: #18745b;
+  --dot: #0b7a5d14; --paper: #f2f8f2; --paper-ink: #14291f;
+  --ok: #2a7336; --warn: #865f00; --err: #b83a44;
+}
+/* 藍莓：淡藍底、靛藍 */
+:root[data-theme="blueberry"] {
+  color-scheme: light;
+  --bg: #e3e8f6; --panel: #edf0f9; --surface: #d8dff2; --surface-hover: #cad3ed;
+  --line: #ccd4eb; --line-strong: #a6b3db;
+  --text: #1b2348; --muted: #444f7c; --faint: #64709a;
+  --accent: #3a4bb0; --accent-ink: #f2f4fd; --accent-soft: #3a4bb024;
+  --accent-2: #2a3888; --accent-2-ink: #eef1ff; --accent-2-soft: #2a388824;
+  --accent-3: #4f63c4; --accent-3-ink: #f4f6ff; --accent-3-soft: #4f63c424;
+  --accent-text: #3a4bb0; --accent-2-text: #2a3888; --accent-3-text: #4459c0;
+  --dot: #3a4bb014; --paper: #f4f5fa; --paper-ink: #1a2040;
+  --ok: #287447; --warn: #835c00; --err: #b83246;
+}
+/* 草莓：粉紅底、莓紅 */
+:root[data-theme="strawberry"] {
+  color-scheme: light;
+  --bg: #f9e4ea; --panel: #fbeef2; --surface: #f5d9e1; --surface-hover: #efcad5;
+  --line: #ebcad4; --line-strong: #d9a2b4;
+  --text: #3a1622; --muted: #763c50; --faint: #96616f;
+  --accent: #c8254f; --accent-ink: #fff3f6; --accent-soft: #c8254f24;
+  --accent-2: #9c1a3c; --accent-2-ink: #fff0f4; --accent-2-soft: #9c1a3c24;
+  --accent-3: #d9547a; --accent-3-ink: #2a0612; --accent-3-soft: #d9547a24;
+  --accent-text: #bd234b; --accent-2-text: #9c1a3c; --accent-3-text: #ba2953;
+  --dot: #c8254f14; --paper: #fdf2ed; --paper-ink: #2b1219;
+  --ok: #23784a; --warn: #8f5a00; --err: #b8261f;
+}
+
+/* ── 淺色 · 搭配色 (light multi) ────────────────────────────── */
+/* 甜點禮盒：一盒法式小圓餅：覆盆子粉、薄荷綠、檸檬黃，奶油色盒底 */
+:root,
+:root[data-theme="giftbox"] {
+  color-scheme: light;
+  --bg: #f8efe4; --panel: #fbf4ec; --surface: #f2e6d8; --surface-hover: #ebdccb;
+  --line: #eadccb; --line-strong: #d6c1a8;
+  --text: #3a2a24; --muted: #6c5248; --faint: #8f766b;
+  --accent: #e0457b; --accent-ink: #2a0614; --accent-soft: #e0457b33;
+  --accent-2: #3ec7a0; --accent-2-ink: #032019; --accent-2-soft: #3ec7a033;
+  --accent-3: #f5c518; --accent-3-ink: #3a2a00; --accent-3-soft: #f5c51833;
+  --accent-text: #c4215a; --accent-2-text: #22755e; --accent-3-text: #7e6405;
+  --dot: #0f7d6214; --paper: #fdf5ec; --paper-ink: #2e211c;
+  --ok: #287a46; --warn: #8a5a00; --err: #b8302c;
+}
+/* 蜜桃薰衣草：夏日傍晚：蜜桃橘配薰衣草紫，玫瑰點綴 */
+:root[data-theme="peachlavender"] {
+  color-scheme: light;
+  --bg: #fae7da; --panel: #fcf0e7; --surface: #f6dccb; --surface-hover: #f0cfb9;
+  --line: #eed0bd; --line-strong: #ddac90;
+  --text: #3b2015; --muted: #744532; --faint: #946854;
+  --accent: #ff8a5c; --accent-ink: #2a0c02; --accent-soft: #ff8a5c33;
+  --accent-2: #9b7fe6; --accent-2-ink: #160a33; --accent-2-soft: #9b7fe633;
+  --accent-3: #e86a9e; --accent-3-ink: #2a0616; --accent-3-soft: #e86a9e33;
+  --accent-text: #b83400; --accent-2-text: #6e45db; --accent-3-text: #bd1d5f;
+  --dot: #7556c914; --paper: #fdf3eb; --paper-ink: #2e1a12;
+  --ok: #287446; --warn: #8a5800; --err: #b8352a;
+}
+/* 櫻花抹茶：和菓子：櫻花粉、抹茶綠、紅豆褐 */
+:root[data-theme="sakuramatcha"] {
+  color-scheme: light;
+  --bg: #f5eaee; --panel: #f9f2f4; --surface: #eedfe5; --surface-hover: #e6d1d9;
+  --line: #e5d3da; --line-strong: #cdb0bb;
+  --text: #3d2a30; --muted: #6a545b; --faint: #87727a;
+  --accent: #f08cae; --accent-ink: #2a0712; --accent-soft: #f08cae33;
+  --accent-2: #8dba4a; --accent-2-ink: #132005; --accent-2-soft: #8dba4a33;
+  --accent-3: #8c4f42; --accent-3-ink: #fff4f0; --accent-3-soft: #8c4f4233;
+  --accent-text: #c41a54; --accent-2-text: #526d29; --accent-3-text: #8c4f42;
+  --dot: #7fa65a1a; --paper: #fbf4f2; --paper-ink: #2f2025;
+  --ok: #2f7340; --warn: #8a5a00; --err: #b3303a;
+}
+/* 藍莓檸檬：早午餐鬆餅：藍莓藍、檸檬黃、莓果紫，淡藍桌布 */
+:root[data-theme="blueberrylemon"] {
+  color-scheme: light;
+  --bg: #e6ebf7; --panel: #eff2fa; --surface: #dbe2f3; --surface-hover: #ced6ee;
+  --line: #cfd7ec; --line-strong: #aab6dc;
+  --text: #1b2348; --muted: #444f7c; --faint: #64709a;
+  --accent: #4a5fd0; --accent-ink: #f4f6ff; --accent-soft: #4a5fd033;
+  --accent-2: #f5c518; --accent-2-ink: #3a2a00; --accent-2-soft: #f5c51833;
+  --accent-3: #a462d4; --accent-3-ink: #1c0830; --accent-3-soft: #a462d433;
+  --accent-text: #4258ce; --accent-2-text: #7b6205; --accent-3-text: #8d3ac9;
+  --dot: #e0b40026; --paper: #f6f6f8; --paper-ink: #1a2040;
+  --ok: #287447; --warn: #9a5200; --err: #b83246;
+}
+/* 焦糖開心果：咖啡館冰淇淋：焦糖棕、開心果綠、可可玫瑰 */
+:root[data-theme="caramelpistachio"] {
+  color-scheme: light;
+  --bg: #f2e7d6; --panel: #f7eee2; --surface: #eadcc6; --surface-hover: #e1cfb4;
+  --line: #e1d1ba; --line-strong: #c7ab89;
+  --text: #3a2614; --muted: #6a4c31; --faint: #876b50;
+  --accent: #d68b3a; --accent-ink: #2a1505; --accent-soft: #d68b3a33;
+  --accent-2: #93c572; --accent-2-ink: #142608; --accent-2-soft: #93c57233;
+  --accent-3: #cf6f84; --accent-3-ink: #2a0a10; --accent-3-soft: #cf6f8433;
+  --accent-text: #8b561d; --accent-2-text: #466c2d; --accent-3-text: #aa3951;
+  --dot: #4c7a1a14; --paper: #f9f1e3; --paper-ink: #2e1e10;
+  --ok: #2f6f3e; --warn: #8a5400; --err: #b0352a;
+}
+
+/* ── Paper: derived from --paper / --paper-ink so every theme's sheet
+   (light or dark) keeps its own tint. Colours only. */
+:root {
+  --paper-ink2: color-mix(in srgb, var(--paper-ink) 84%, var(--paper));
+  --paper-muted: color-mix(in srgb, var(--paper-ink) 70%, var(--paper));
+  --paper-faint: color-mix(in srgb, var(--paper-ink) 64%, var(--paper));
+  --paper-line: color-mix(in srgb, var(--paper-ink) 13%, var(--paper));
+  --paper-line-strong: color-mix(in srgb, var(--paper-ink) 22%, var(--paper));
+  --paper-soft: color-mix(in srgb, var(--paper-ink) 4%, var(--paper));
+  --paper-soft2: color-mix(in srgb, var(--paper-ink) 7%, var(--paper));
+  --paper-link: color-mix(in srgb, var(--accent) 40%, var(--paper-ink));
+  /* accents readable as text on the paper */
+  --paper-accent-2: color-mix(in srgb, var(--accent-2) 40%, var(--paper-ink));
+  --paper-accent-3: color-mix(in srgb, var(--accent-3) 40%, var(--paper-ink));
+}
+:root.dim-paper[data-theme] { --paper: color-mix(in srgb, var(--paper) 88%, var(--paper-ink)); }
+
+/* ── Theme picker (settings → 外觀) ─────────────────── */
+.theme-pick h4 { margin: 0 0 10px; font: 600 13px var(--mono, ui-monospace, monospace); color: var(--muted); letter-spacing: .04em; }
+.theme-pick h5 { margin: 12px 0 6px; font: 500 13px var(--sans, sans-serif); color: var(--muted); }
+.theme-pick h4 + h5 { margin-top: 0; }
+.theme-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.theme-pick .theme-grid + h4 { margin-top: 22px; }
+.theme-card {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 5px; min-width: 0; text-align: left; cursor: pointer; font: inherit;
+  border: 1px solid var(--line); border-radius: var(--r, 4px); background: var(--panel); color: var(--muted);
+}
+.theme-card:hover { border-color: var(--line-strong); color: var(--text); }
+.theme-card[aria-pressed="true"] { border-color: var(--accent-text); box-shadow: 0 0 0 1px var(--accent-text); color: var(--text); font-weight: 600; }
+.theme-card .sw { display: flex; height: 26px; border-radius: 3px; overflow: hidden; box-shadow: inset 0 0 0 1px #8882; }
+.theme-card .sw i { flex: 1; }
+.theme-card .sw i:first-child { flex: 1.4; }
+.theme-card .nm { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) { .theme-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

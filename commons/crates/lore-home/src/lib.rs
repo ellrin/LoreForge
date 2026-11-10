@@ -22,8 +22,13 @@
 //!   Fonts may name licensed fonts installed on this machine; they stay in the
 //!   private repo and only reach the apps' pages at run time.
 //!
+//! * [`theme`] is the colour theme all apps share (`private/shared/ui.toml`),
+//!   with the stylesheet and script every server sends.
+//!
 //! Keys and passwords never live here: they are in the OS keychain (see
 //! `lore-secrets`), and local models in `LOCAL_LLM_HOME` (see `lore-llm`).
+
+pub mod theme;
 
 use serde::Deserialize;
 use std::collections::BTreeMap;

@@ -1,0 +1,2 @@
+# 介面選擇：所有 App 共用。App 的「設定 → 外觀」會寫進 private/shared/ui.toml，不必手動改。
+# theme = "giftbox"   # 配色 id，見 commons/ui/theme.css
