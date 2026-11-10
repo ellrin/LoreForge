@@ -1,0 +1,74 @@
+/* editor.js: the ＋ line between paragraphs, the section menu and rename,
+   waiting rows. Theme tokens only. */
+
+/* ＋ between paragraphs: a thin line with a round ＋ at the left margin */
+.pc-gap {
+  position: fixed; z-index: 6; height: 14px; margin-top: -7px; padding: 0;
+  background: none; border: 0; cursor: pointer;
+}
+.pc-gap::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 6.5px; height: 1px;
+  background: var(--accent); opacity: .55;
+}
+.pc-gap::after {
+  content: "+"; position: absolute; left: -22px; top: -1px; width: 16px; height: 16px;
+  display: grid; place-items: center; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink); font: 600 13px/1 var(--sans);
+}
+.pc-gap:hover::before { opacity: 1; }
+.pc-gap[hidden] { display: none; }
+
+/* navigator: ⋯ per section, drag targets, 新增章節 */
+.nav .sec { position: relative; }
+.nav .sec > .sx-more {
+  position: absolute; right: 2px; top: 3px; z-index: 1; width: 22px; height: 22px; padding: 0;
+  display: none; place-items: center; border: 0; border-radius: var(--r);
+  background: var(--surface); color: var(--muted); font-size: 14px; line-height: 1;
+}
+.nav .sec:hover > .sx-more, .nav .sec > .sx-more:focus-visible { display: grid; }
+.nav .sec > .sx-more:hover { color: var(--text); background: var(--surface-hover); }
+.nav .sec:hover > .sec-head .count { visibility: hidden; }
+.nav .sec.sx-dragging { opacity: .45; }
+.nav .sec.sx-drop-before > .sec-head { box-shadow: inset 0 2px 0 var(--accent); }
+.nav .sec.sx-drop-after > .sec-head { box-shadow: inset 0 -2px 0 var(--accent); }
+.nav .sx-add > button {
+  width: 100%; text-align: left; background: none; border: 0; padding: 6px 6px 6px 24px;
+  border-radius: var(--r); color: var(--faint); font-size: 12px;
+}
+.nav .sx-add > button:hover { color: var(--accent-text); background: var(--surface); }
+
+/* section menu, title box, delete question */
+.menu.sx-menu { position: fixed; z-index: 30; min-width: 150px; }
+.menu.sx-menu button:disabled { color: var(--faint); cursor: default; background: none; }
+.menu.sx-menu.form { width: 260px; }
+.sx-row { display: flex; gap: 6px; align-items: center; }
+.sx-row > input.field { flex: 1; min-width: 0; }
+.sx-err { color: var(--err); font-size: 11.5px; min-height: 0; }
+.sx-err:empty { display: none; }
+.menu.sx-ask { width: 260px; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.sx-msg { font-size: 13px; color: var(--text); display: flex; flex-direction: column; gap: 3px; }
+.sx-sub { font-size: 11.5px; color: var(--muted); }
+.sx-sub.bad { color: var(--warn); }
+.sx-acts { display: flex; justify-content: flex-end; gap: 6px; }
+.menu.sx-ask .sx-acts button { width: auto; }
+.primary.danger { background: var(--err); border-color: var(--err); color: var(--bg); }
+
+/* rename on the page */
+.paper h2 > input.sx-title {
+  width: 100%; font: inherit; color: inherit; background: var(--paper); padding: 0 4px; margin: 0 -5px;
+  border: 1px solid var(--paper-line-strong); border-radius: 3px; outline: none;
+}
+.paper h2 > input.sx-title:focus { border-color: var(--paper-link); }
+
+/* 已刪除 … 復原 */
+.tip.sx-toast { bottom: 24px; left: 50%; transform: translateX(-50%); max-width: 520px; display: flex; align-items: center; gap: 12px; }
+
+/* waiting: label, seconds, 停止 */
+.wait-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+.wait-row .wait-t { font-variant-numeric: tabular-nums; }
+.wait-row .wait-t::before {
+  content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; vertical-align: 1px;
+  border-radius: 50%; background: var(--accent); animation: pc-wait 1.2s ease-in-out infinite;
+}
+@keyframes pc-wait { 50% { opacity: .25; } }
+button.waiting { font-variant-numeric: tabular-nums; }

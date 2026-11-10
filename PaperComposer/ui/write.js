@@ -262,18 +262,23 @@ const PCWrite = (() => {
     const text = (picked ?? selectedText()).trim();
     if (!text) return flash("先選取想收藏的句子");
     const section = roleOf(curSection()?.title ?? "Any");
+    const { row, wait } = PCWait.row("拆解中");
     const p = popover(anchor, (p) => {
       p.classList.add("collect-pop");
-      p.append(el("p", "note", "拆解中…"));
+      p.append(row);
     });
+    // closing the popover stops the request too
+    const gone = new MutationObserver(() => { if (!p.isConnected) { wait.stop(); gone.disconnect(); } });
+    gone.observe(document.body, { childList: true });
     let props;
     try {
-      props = await api("/api/decompose", { text, section, engine: chosenEngine() });
+      props = await api("/api/decompose", { text, section, engine: chosenEngine() }, "POST", { signal: wait.signal });
     } catch (e) {
       p.innerHTML = "";
+      if (PCWait.aborted(e)) { p.remove(); return; }
       p.append(el("p", "note bad", e.message));
       return;
-    }
+    } finally { wait.end(); gone.disconnect(); }
     p.innerHTML = "";
     const picks = [];
     const group = (label, items, show, kind) => {

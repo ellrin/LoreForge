@@ -62,10 +62,12 @@ const state = {
   db: { name: "phrases.csv", tables: {}, dirty: new Set(), issues: {} },
 };
 
-async function api(path, body, method) {
+/** `extra.signal`: an AbortSignal (PCWait, editor.js) that stops the request. */
+async function api(path, body, method, extra = {}) {
   const opts = body !== undefined
     ? { method: method ?? "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-    : undefined;
+    : {};
+  if (extra.signal) opts.signal = extra.signal;
   const r = await fetch(path, opts);
   if (!r.ok) {
     const err = new Error((await r.text()) || `${r.status}`);
@@ -324,6 +326,7 @@ function renderNav() {
     nav.append(li);
   }
   sections().forEach((sec, si) => nav.append(navSection(si)));
+  nav.append(PCSections.addRow());
   PCLazy.watch(nav);
 }
 
@@ -361,6 +364,7 @@ function navSection(si) {
     PCLazy.jump(document.getElementById(`sec-${si}`), { block: "start", behavior: "smooth" });
   };
   li.append(head, ol);
+  PCSections.decorate(li, si); // ⋯ menu, drag to reorder (editor.js)
   return li;
 }
 
@@ -518,6 +522,8 @@ function renderPaper() {
       const h = el("h2");
       h.append(PCTex.render(sec.title));
       h.id = `sec-${si}`;
+      h.title = "雙擊改名";
+      h.ondblclick = () => PCSections.rename(+h.id.slice(4));
       page.append(h);
       sec.paragraphs.forEach((text, pi) => page.append(paraNode(si, pi, text)));
       if (!sec.paragraphs.length) page.append(addParaNode(si));
@@ -585,6 +591,16 @@ function paraNode(si, pi, text) {
   return p;
 }
 
+/** A new, empty paragraph at (si, pi), open for typing; left empty, it goes away. */
+function insertParagraph(si, pi) {
+  const list = sections()[si]?.paragraphs;
+  if (!list) return;
+  pi = Math.max(0, Math.min(pi, list.length));
+  list.splice(pi, 0, "");
+  refreshSection(si);
+  edit(paraEl(si, pi), si, pi);
+}
+
 function addParaNode(si) {
   const p = el("p", "para add-para", "雙擊新增段落");
   p.dataset.s = si;
@@ -624,18 +640,29 @@ function edit(p, si, pi) {
   if (!p) return;
   select(si, pi);
   const ta = document.createElement("textarea");
-  ta.value = sections()[si].paragraphs[pi] ?? "";
+  const was = sections()[si].paragraphs[pi] ?? "";
+  ta.value = was;
   const fit = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
   ta.oninput = fit;
-  ta.onkeydown = (e) => { if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) ta.blur(); };
+  // Esc: put the text back as it was, nothing saved (a new paragraph goes away).
+  // ⌘↵ / Ctrl+↵ or a click elsewhere saves. A blank line starts a new paragraph.
+  ta.onkeydown = (e) => {
+    if (e.isComposing) return;
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelEdit(ta, si, pi, was); }
+    else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ta.blur(); }
+  };
   ta.onblur = async () => {
-    if (ta.dataset.discard) return; // 重新載入 chose the other version (open.js)
+    if (ta.dataset.discard) return; // Esc, or 重新載入 chose the other version (open.js)
     const v = ta.value.trim();
     const list = sections()[si].paragraphs;
+    if (v === was.trim() && v) { refreshSection(si); return; } // unchanged: nothing to write
     if (v) list[pi] = v; else list.splice(pi, 1);
+    if (!v && !was.trim()) { refreshSection(si); return; } // a new paragraph left empty
     try { await saveSection(si); } catch (e) { flash(`儲存失敗：${e.message}`); }
     refreshSection(si);
     refreshGit();
+    // a \section{…} typed here becomes a section of its own (editor.js)
+    if (/(^|\n)\s*\\section\{/.test(v) && !/(^|\n)\s*\\section\{/.test(was)) await PCSections.splitTyped(si);
   };
   p._sig = null; // holds the editor now: never kept as it is
   p.replaceChildren(ta);
@@ -644,6 +671,15 @@ function edit(p, si, pi) {
   // the writing toolbar is sticky: keep the editor's top below it (.page-area scroll-padding in styles.css)
   ta.focus({ preventScroll: true });
   ta.scrollIntoView({ block: "nearest" });
+}
+
+/** Leave a paragraph editor without saving: the paragraph as it was. */
+function cancelEdit(ta, si, pi, was) {
+  ta.dataset.discard = "1";
+  const list = sections()[si]?.paragraphs;
+  if (list && !was.trim() && list[pi] === was) list.splice(pi, 1); // opened for a new paragraph
+  ta.blur();
+  refreshSection(si);
 }
 
 // Edit one field of the title block in place: its LaTeX, saved into main.tex.
@@ -655,9 +691,14 @@ function editField(n) {
   ta.value = cur;
   const fit = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
   ta.oninput = fit;
-  ta.onkeydown = (e) => { if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) ta.blur(); };
+  // Esc: back as it was, nothing saved; ⌘↵ / Ctrl+↵ or a click elsewhere saves.
+  ta.onkeydown = (e) => {
+    if (e.isComposing) return;
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); ta.dataset.discard = "1"; ta.blur(); }
+    else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ta.blur(); }
+  };
   ta.onblur = async () => {
-    const v = ta.value.trim();
+    const v = ta.dataset.discard ? cur.trim() : ta.value.trim();
     if (v !== cur.trim()) {
       try {
         const r = await api(`/api/papers/${encodeURIComponent(state.paper.name)}/front`, { field, index, value: v }, "PUT");
@@ -709,9 +750,9 @@ function renderFindings() {
     r.pending.forEach((id) => list.append(findingItem("info", state.ruleText[id] ?? id, null, id, null, true)));
   }
   const bar = el("div", "soft-bar");
-  const go = el("button", "primary small", done?.busy ? "檢查中…" : done?.results ? "重新檢查" : `檢查 ${r.pending.length} 條規則`);
-  go.disabled = !!done?.busy;
-  go.onclick = () => softCheck(done?.results ? true : false);
+  const go = el("button", done?.busy ? "ghost small waiting" : "primary small", done?.busy ? `停止 · ${done.busy.secs()} 秒` : done?.results ? "重新檢查" : `檢查 ${r.pending.length} 條規則`);
+  go.onclick = () => (done?.busy ? done.busy.stop() : softCheck(done?.results ? true : false));
+  if (done?.busy) done.busy.button = go; // its seconds tick here
   bar.append(el("span", done?.error ? "note bad" : "note", done?.error ? (done.error === "no engine" ? "先連接引擎" : `失敗：${done.error}`) : "軟規則"), go);
   box.append(bar, list);
 }
@@ -742,7 +783,8 @@ async function softCheck(again) {
   if (!key || !sec) return;
   const list = sec.paragraphs;
   const p = state.cur.p;
-  state.soft[key] = { busy: true };
+  const wait = PCWait.start((n) => { const b = state.soft[key]?.busy?.button; if (b?.isConnected) b.textContent = `停止 · ${n} 秒`; });
+  state.soft[key] = { busy: wait };
   renderFindings();
   let res;
   try {
@@ -751,9 +793,11 @@ async function softCheck(again) {
       before: list[p - 1] ?? null, after: list[p + 1] ?? null,
       engine: chosenEngine(),
       key_value: state.paper?.meta?.key_value || null,
-    });
-  } catch (e) { res = { error: e.message }; }
-  state.soft[key] = res.error ? { error: res.error } : { results: res.results };
+    }, "POST", { signal: wait.signal });
+  } catch (e) { res = PCWait.aborted(e) ? { stopped: true } : { error: e.message }; }
+  finally { wait.end(); }
+  state.soft[key] = res.stopped ? undefined : res.error ? { error: res.error } : { results: res.results };
+  if (res.stopped) delete state.soft[key];
   if (!again && res.cached) flash("沿用上次的檢查結果");
   // Only redraw if the user is still on this paragraph.
   if (softKey() === key) renderFindings();
@@ -922,6 +966,7 @@ function slotted(template) {
 }
 
 async function compose() {
+  if (state.composing) { state.composing.stop(); return; } // the button is 停止 while it runs
   const points = $("#points").value.trim();
   if (!points) { $("#points").focus(); return; }
   const list = curSection()?.paragraphs ?? [];
@@ -939,11 +984,11 @@ async function compose() {
     key_value: state.paper?.meta?.key_value || null,
   };
   const btn = $("#generate");
-  btn.disabled = true;
-  btn.firstElementChild.textContent = "生成中";
-  try { state.composed = await api("/api/compose", body); }
-  catch (e) { state.composed = { error: e.message, references: [] }; }
-  finally { btn.disabled = false; btn.firstElementChild.textContent = "生成"; }
+  btn.classList.add("waiting");
+  const wait = (state.composing = PCWait.start((n) => { btn.firstElementChild.textContent = `停止 · ${n} 秒`; }));
+  try { state.composed = await api("/api/compose", body, "POST", { signal: wait.signal }); }
+  catch (e) { state.composed = PCWait.aborted(e) ? null : { error: e.message, references: [] }; if (!state.composed) flash("已停止生成"); }
+  finally { wait.end(); state.composing = null; btn.classList.remove("waiting"); btn.firstElementChild.textContent = "生成"; }
   renderResult();
 }
 
@@ -1653,6 +1698,7 @@ function renderProposals(p) {
 
 // ── Wiring ─────────────────────────────────────────────
 function wire() {
+  PCGap.wire(); // ＋ between paragraphs (editor.js)
   document.querySelectorAll(".block .toggle").forEach((t) => {
     t.onclick = () => {
       const b = t.closest(".block");
