@@ -70,7 +70,8 @@ function errorText(e) {
     case "notify": return "無法顯示 macOS 通知。";
   }
   if (hasCJK(msg)) return msg;
-  if (/title is empty/.test(msg)) return "請輸入標題。";
+  if (/title is empty|term is empty/.test(msg)) return "請輸入標題。";
+  if (/context is empty/.test(msg)) return "請貼上原文。";
   if (/unknown kind/.test(msg)) return "不認得這個種類，請到 kinds.toml 新增。";
   if (/unknown link type/.test(msg)) return "不認得這個連結類型。";
   if (/link target/.test(msg)) return "連結的目標不對（不能連到自己）。";
@@ -446,6 +447,8 @@ function wireEditor() {
   $("edDraft").onclick = () => { $("draftTerm").value = $("edTitle").value; $("draftDlg").showModal(); };
   $("draftGo").onclick = async (e) => {
     e.preventDefault();
+    const go = $("draftGo"), err = $("draftErr");
+    err.hidden = true; go.disabled = true; go.textContent = "起草中…";
     try {
       const { draft, assistant } = await api("POST", "/api/draft", { term: $("draftTerm").value, context: $("draftCtx").value, kind: $("edKind").value });
       if (!$("edTitle").value.trim()) $("edTitle").value = draft.title ?? "";
@@ -454,7 +457,8 @@ function wireEditor() {
       $("draftDlg").close();
       renderPreview(); updateDirty();
       toast(`草稿已填入（${assistant}）`);
-    } catch (er) { fail(er); }
+    } catch (er) { err.textContent = errorText(er); err.hidden = false; } // the dialog stays open with the source text
+    go.disabled = false; go.textContent = "起草";
   };
   let pq;
   $("pickerQ").addEventListener("input", () => { clearTimeout(pq); pq = setTimeout(searchPicker, 150); });

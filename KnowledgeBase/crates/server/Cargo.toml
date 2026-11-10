@@ -12,6 +12,7 @@ kb-core.workspace = true
 lore-store.workspace = true
 lore-secrets.workspace = true
 lore-home.workspace = true
+lore-llm.workspace = true
 lettre.workspace = true
 serde.workspace = true
 serde_json.workspace = true

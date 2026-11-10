@@ -1,0 +1,17 @@
+# KnowledgeBase's LLM tasks, layered over lore-llm's shared tasks.toml. A user file
+# `<settings folder>/KnowledgeBase/tasks.toml` in the same format can add an `[override]`.
+#
+#   local:current     the local engine that is connected: the OpenAI-compatible server
+#                     in config.toml `[engine] url` (or KB_LLM_URL)
+#   claude:selected   the Claude model from config.toml `claude_model` (else the catalog
+#                     default); the subscription (Claude Code) first, then the API key
+#
+# Same order as LoreReader's translation: local first, Claude when the local model is not
+# connected. The card draft stays a draft: the author edits it before saving.
+
+[task.kb-summarize-card]
+label = "起草知識卡摘要"
+needs = { json = true }
+default = "local:current"
+fallback = "claude:selected"
+offline = true

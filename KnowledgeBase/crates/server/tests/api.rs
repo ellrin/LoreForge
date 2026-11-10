@@ -12,6 +12,10 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 fn setup() -> (tempfile::TempDir, axum::Router, Arc<FixedClock>) {
+    setup_with(kb_server::llm::Llm::none())
+}
+
+fn setup_with(llm: kb_server::llm::Llm) -> (tempfile::TempDir, axum::Router, Arc<FixedClock>) {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("personal");
     std::fs::create_dir_all(p.join("nodes")).unwrap();
@@ -27,7 +31,7 @@ fn setup() -> (tempfile::TempDir, axum::Router, Arc<FixedClock>) {
     let clock = Arc::new(FixedClock::at("2026-11-08T21:10:00+08:00"));
     let kb = kb_server::open(&config, KbOptions { clock: clock.clone(), ..Default::default() }).unwrap();
     let rem = Reminders::isolated(&dir.path().join("app"), Arc::new(lore_store::SystemRunner), "http://127.0.0.1:7700");
-    let app = kb_server::router(AppState::new(kb, config.web.clone(), rem));
+    let app = kb_server::router(AppState::with_llm(kb, config.web.clone(), rem, llm));
     (dir, app, clock)
 }
 
@@ -123,8 +127,10 @@ async fn card_lifecycle_scan_recall() {
     assert_eq!((v["nodes"].as_array().unwrap().len(), v["truncated"].as_bool()), (1, Some(true)));
     let (_, v) = call(&app, "GET", "/api/registry?space=me", None).await;
     assert!(v["kinds"].as_array().unwrap().iter().any(|k| k["id"] == "concept"));
-    let (_, v) = call(&app, "POST", "/api/draft", Some(json!({ "term": "IoU", "context": "IoU is intersection over union." }))).await;
-    assert_eq!(v["draft"]["title"], "IoU");
+    // No engine connected: one-line message, nothing invented.
+    let (s, v) = call(&app, "POST", "/api/draft", Some(json!({ "term": "IoU", "context": "IoU is intersection over union." }))).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!v["error"].as_str().unwrap().contains('\n'));
 
     // Share into the household, then trash the personal card.
     let (s, v) = call(&app, "POST", &format!("/api/nodes/{id}/share"), Some(json!({ "to_space": "home" }))).await;
@@ -235,4 +241,36 @@ async fn theme_is_the_shared_choice() {
     assert!(index.contains("href=\"theme.css\"") && index.contains("<script src=\"theme.js\"></script>"));
     let styles = get("/styles.css").await;
     assert!(!styles.contains("--bg: #"), "palettes live in commons/ui/theme.css only");
+}
+
+#[tokio::test]
+async fn draft_goes_through_the_engine_with_cleaned_source() {
+    use lore_llm::mock::MockProvider;
+    use lore_llm::router::MockFactory;
+    let mock = Arc::new(MockProvider::new(vec![json!({ "summary": "  延後給標籤。 ", "supported": true }).to_string()]));
+    let f = MockFactory::default().with("local:current", mock.clone());
+    let (_d, app, _c) = setup_with(kb_server::llm::Llm::with_factory(f));
+    let body = json!({ "term": "deferral", "context": "The model de- fers the label.", "page": 7, "source": "A synthetic paper" });
+    let (s, v) = call(&app, "POST", "/api/draft", Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["draft"]["summary"], "延後給標籤。");
+    assert_eq!(v["draft"]["body"], "> The model defers the label.\n\n（A synthetic paper，p.7）");
+    assert_eq!(v["assistant"], "mock");
+    let seen = mock.seen.lock().unwrap();
+    assert!(seen[0].flatten().contains("defers") && !seen[0].flatten().contains("de- fers"));
+    drop(seen);
+    // Nothing was saved.
+    let (_, v) = call(&app, "GET", "/api/nodes", None).await;
+    assert!(v.to_string().find("deferral").is_none());
+}
+
+#[tokio::test]
+async fn draft_refuses_when_the_source_does_not_say() {
+    use lore_llm::mock::MockProvider;
+    use lore_llm::router::MockFactory;
+    let mock = Arc::new(MockProvider::new(vec![json!({ "summary": "", "supported": false }).to_string()]));
+    let (_d, app, _c) = setup_with(kb_server::llm::Llm::with_factory(MockFactory::default().with("local:current", mock)));
+    let (s, v) = call(&app, "POST", "/api/draft", Some(json!({ "term": "X", "context": "Unrelated sentence." }))).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(v["error"].as_str().unwrap().contains("沒有起草"));
 }

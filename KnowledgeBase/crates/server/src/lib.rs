@@ -7,6 +7,7 @@
 pub mod api;
 pub mod config;
 pub mod digest;
+pub mod llm;
 pub mod reminders;
 
 use std::net::SocketAddr;
@@ -29,6 +30,8 @@ pub struct AppState {
     /// LoreForge private folders: `/prefs.css` from private/shared/fonts.toml, and the
     /// theme all apps share (private/shared/ui.toml, the only thing written there).
     pub home: lore_home::Home,
+    /// Model calls (card drafts).
+    pub llm: llm::Llm,
 }
 
 impl AppState {
@@ -38,7 +41,13 @@ impl AppState {
 
     /// With the LoreForge folder named (tests use a temporary one).
     pub fn with_home(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders, home: lore_home::Home) -> Shared {
-        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home })
+        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home, llm: llm::Llm::new(reminders::app_dir().as_deref()) })
+    }
+
+    /// Like [`AppState::new`] with the given model access (tests use mock engines).
+    pub fn with_llm(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders, llm: llm::Llm) -> Shared {
+        let home = lore_home::Home::discover(&config::repo_dir());
+        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home, llm })
     }
 }
 

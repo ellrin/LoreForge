@@ -30,7 +30,7 @@ pub mod tags;
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use index::{Filter, GraphQuery, GraphView, NodeSummary, TimelineDay};
 pub use kb::{KbOptions, KnowledgeBase, SpaceInfo};
-pub use llm::{CardAssistant, DraftRequest, MockAssistant};
+pub use llm::{CardAssistant, DraftPrompt, DraftRequest, MockAssistant, clean_source, draft_prompt, parse_draft};
 pub use node::{Node, NodeFields};
 pub use progress::{Intervals, Outcome, Progress, State};
 pub use registry::Registry;

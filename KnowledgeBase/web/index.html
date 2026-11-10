@@ -252,9 +252,9 @@
 <dialog id="draftDlg" class="dlg">
   <form method="dialog" class="dlg-body">
     <h3>從上下文起草</h3>
-    <p class="muted">貼上論文段落或投影片文字，產生卡片草稿（目前為離線 mock，之後接 lore-llm）。</p>
     <label>術語 <input id="draftTerm"></label>
     <label>上下文 <textarea id="draftCtx" rows="6"></textarea></label>
+    <div class="err-text" id="draftErr" role="alert" hidden></div>
     <div class="dlg-actions"><button class="btn" value="cancel">取消</button><button class="btn primary" id="draftGo" value="ok">起草</button></div>
   </form>
 </dialog>

@@ -64,8 +64,11 @@ cd ../commons && cargo test -p kb-core -p lore-store
   `remembered` is logged but does not advance (`count_early`). Intervals in config.
 - Scanner: Aho-Corasick over titles + aliases, Unicode case-folding, English plural forms,
   word boundaries only for Latin names; spans in UTF-16 offsets for JavaScript.
-- LLM features (draft card, candidate terms) go through `kb_core::CardAssistant`;
-  `MockAssistant` until `lore-llm` exists (integration point marked in `kb-core/src/llm.rs`).
+- Card draft (`POST /api/draft`): `kb_core::{draft_prompt, parse_draft, clean_source}` build/check the
+  request, `crates/server/src/llm.rs` runs it through lore-llm as task `kb-summarize-card`
+  (`crates/server/tasks.toml`: `local:current` then `claude:selected`; engine URL in config.toml
+  `[engine]` or `KB_LLM_URL`; optional body `engine: "local"|"claude"`). Never saved; no engine = 503 with
+  one line. Candidate terms still use `CardAssistant`/`MockAssistant` (tests and offline only).
 - iCloud placeholders (`.<name>.icloud`) are fetched with `brctl download` through an injected
   runner: **not tested on real hardware**. Tests never touch the real iCloud folder.
 - Reminders: a notification slot is handled once (NeonDeck claims it; kb-server shows it with
