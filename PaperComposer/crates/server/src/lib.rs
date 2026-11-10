@@ -3331,6 +3331,7 @@ pub fn router(paths: Paths) -> Router {
         .merge(draft::routes())
         .merge(home::routes())
         .merge(opened::routes())
+        .merge(notation::routes())
         .fallback_service(ServeDir::new(paths.ui))
         .with_state(state)
 }

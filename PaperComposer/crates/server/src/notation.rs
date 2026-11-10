@@ -2,11 +2,25 @@
 //! the drafting and revision prompts are told (macros, labels,
 //! abbreviations), and the registry's checks run on what they write.
 //!
-//! The registry is `profile/notation.json` (the author's habits) merged with
-//! `papers/<p>/notation.json` (this paper); the paper file wins.
+//! The registry is the author's one global file (`private/shared/notation.json`,
+//! shared with the other apps; `profile/notation.json` only when LoreForge has
+//! no private folder) merged with `papers/<p>/notation.json` (this paper); the
+//! paper file wins. An older `profile/notation.json` is merged into the global
+//! file once (never deleted; clashes are reported, the global row is kept).
 
-use lore_notation::{check_document, CheckOptions, Document, Entry, Issue, Kind, Notation, RefWords};
-use std::path::Path;
+use axum::{
+    extract::{Path as UrlPath, State},
+    http::header,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
+use lore_notation::{check_document, CheckOptions, Document, Entry, Ignored, Issue, Kind, Notation, Origin, RefWords};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+
+use crate::Shared;
 
 /// Findings in generated text that must be fixed before it is kept.
 const BLOCKING: &[&str] = &["hardcoded_reference", "ref_undefined"];
@@ -22,8 +36,139 @@ const SHOWN: &[&str] = &[
     "symbol_multiple_meanings",
 ];
 
+/// The global registry file: `shared/notation.json` through lore-home; the
+/// workspace's `profile/notation.json` when there is no shared folder.
+pub fn global_path(workspace: &Path) -> PathBuf {
+    shared_path().unwrap_or_else(|| old_path(workspace))
+}
+
+fn shared_path() -> Option<PathBuf> {
+    crate::loreforge_home().shared_dir().map(|d| d.join("notation.json"))
+}
+
+fn old_path(workspace: &Path) -> PathBuf {
+    workspace.join("profile/notation.json")
+}
+
+fn marker_path(workspace: &Path) -> PathBuf {
+    workspace.join("profile/notation.migrated.json")
+}
+
+/// A row of the old profile file that differs from the global row it matches.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Clash {
+    pub id: String,
+    /// What stays (the global row).
+    pub kept: Entry,
+    /// What the old file had.
+    pub old: Entry,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct Migration {
+    pub added: Vec<String>,
+    pub same: Vec<String>,
+    pub clashes: Vec<Clash>,
+    /// The author has seen the clashes.
+    #[serde(default)]
+    pub seen: bool,
+}
+
+fn same_but_id(a: &Entry, b: &Entry) -> bool {
+    let strip = |e: &Entry| {
+        let mut v = serde_json::to_value(e).unwrap_or_default();
+        if let Some(o) = v.as_object_mut() {
+            o.remove("id");
+        }
+        v
+    };
+    strip(a) == strip(b)
+}
+
+/// The global row that means the same thing as `e` (same id, same symbol LaTeX, same abbreviation).
+fn counterpart<'a>(glob: &'a Notation, e: &Entry) -> Option<&'a Entry> {
+    if let Some(g) = glob.get(&e.id) {
+        return Some(g);
+    }
+    match e.kind() {
+        Kind::Symbol | Kind::Operator => e.latex.as_deref().and_then(|l| glob.find_latex(l)).filter(|g| g.kind() == e.kind()),
+        Kind::Abbrev => glob.entries.iter().find(|g| g.kind() == Kind::Abbrev && e.short.is_some() && g.short == e.short),
+        _ => None,
+    }
+}
+
+/// Merge `old` into `glob` (rows only the old file has are added; a global row always wins).
+pub fn merge_old(glob: &mut Notation, old: &Notation) -> Migration {
+    let mut m = Migration::default();
+    for e in &old.entries {
+        match counterpart(glob, e).cloned() {
+            None => {
+                m.added.push(e.id.clone());
+                glob.entries.push(e.clone());
+            }
+            Some(g) if same_but_id(&g, e) => m.same.push(g.id.clone()),
+            Some(g) => m.clashes.push(Clash { id: g.id.clone(), kept: g, old: e.clone() }),
+        }
+    }
+    for c in &old.conventional {
+        if !glob.conventional.contains(c) {
+            glob.conventional.push(c.clone());
+        }
+    }
+    for i in &old.ignored {
+        if !glob.ignored.contains(i) {
+            glob.ignored.push(i.clone());
+        }
+    }
+    m
+}
+
+/// Is there an old `profile/notation.json` not yet merged into the global file?
+fn pending(workspace: &Path) -> bool {
+    shared_path().is_some() && old_path(workspace).is_file() && !marker_path(workspace).exists()
+}
+
+/// Once per workspace: merge the old profile file into the global one and
+/// leave a marker (with the report) in `profile/`. Returns the report when it ran.
+pub fn migrate(workspace: &Path) -> Result<Option<Migration>, String> {
+    let Some(shared) = shared_path() else { return Ok(None) };
+    migrate_files(&old_path(workspace), &shared, &marker_path(workspace))
+}
+
+pub fn migrate_files(old: &Path, shared: &Path, marker: &Path) -> Result<Option<Migration>, String> {
+    if !old.is_file() || marker.exists() {
+        return Ok(None);
+    }
+    let old_n = Notation::load(old)?;
+    let mut glob = Notation::load(shared)?;
+    let before = glob.to_json();
+    let m = merge_old(&mut glob, &old_n);
+    if glob.to_json() != before {
+        glob.save(shared)?;
+    }
+    let text = serde_json::to_string_pretty(&m).map_err(|e| e.to_string())? + "\n";
+    lore_notation::write_atomic(marker, &text).map_err(|e| format!("{}: {e}", marker.display()))?;
+    Ok(Some(m))
+}
+
+fn migration_report(workspace: &Path) -> Option<Migration> {
+    std::fs::read_to_string(marker_path(workspace)).ok().and_then(|t| serde_json::from_str(&t).ok())
+}
+
+/// The global registry as the apps see it. Before the migration has run it
+/// already includes the old profile file (read only).
+pub fn load_global(workspace: &Path) -> Notation {
+    let mut g = Notation::load(&global_path(workspace)).unwrap_or_default();
+    if pending(workspace) {
+        if let Ok(old) = Notation::load(&old_path(workspace)) {
+            merge_old(&mut g, &old);
+        }
+    }
+    g
+}
+
 pub fn load(workspace: &Path, paper: &Path) -> Notation {
-    let global = Notation::load(&workspace.join("profile/notation.json")).unwrap_or_default();
+    let global = load_global(workspace);
     let doc = Notation::load(&pc_core::paper::app_dir(paper).join("notation.json")).unwrap_or_default();
     Notation::effective(&global, &doc)
 }
@@ -193,6 +338,132 @@ pub fn register(paper: &Path, latex: &[String]) -> Result<usize, String> {
     Ok(added)
 }
 
+// ── 對照表 screen: the shared <notation-panel> over the global + paper registries ──
+
+pub fn routes() -> Router<Shared> {
+    Router::new()
+        .route("/notation-panel.js", get(panel_js))
+        .route("/api/papers/{name}/notation", get(notation_get).put(notation_put))
+        .route("/api/papers/{name}/notation/seen", post(notation_seen))
+}
+
+/// The shared notation-panel Web Component (commons/ui), compiled in.
+async fn panel_js() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../../../../commons/ui/notation-panel/notation-panel.js"))
+}
+
+fn glob_and_doc(workspace: &Path, paper: &Path) -> (Notation, Notation) {
+    (load_global(workspace), Notation::load(&pc_core::paper::app_dir(paper).join("notation.json")).unwrap_or_default())
+}
+
+/// What the panel shows: merged rows (each with `origin`), the check report on
+/// the whole paper, the commands the paper defines, and the migration note.
+pub fn view(workspace: &Path, paper: &Path, glob: &Notation, doc: &Notation) -> Value {
+    let eff = Notation::effective(glob, doc);
+    let mut n = serde_json::to_value(&eff).unwrap_or(json!({}));
+    n["entries"] = Value::Array(
+        Notation::merged(glob, doc)
+            .into_iter()
+            .map(|m| {
+                let mut e = serde_json::to_value(&m.entry).unwrap_or(json!({}));
+                e["origin"] = json!(if m.origin == Origin::Global { "global" } else { "document" });
+                e
+            })
+            .collect(),
+    );
+    let (report, macros) = match Document::load(paper) {
+        Ok(d) => {
+            let macros: Vec<String> = lore_notation::scan::document_macros(&d.text).keys().cloned().collect();
+            (serde_json::to_value(check_document(d, &eff, &options(workspace, paper))).unwrap_or(Value::Null), macros)
+        }
+        Err(_) => (Value::Null, vec![]),
+    };
+    let migration = migration_report(workspace).filter(|m| !m.clashes.is_empty() && !m.seen);
+    json!({ "notation": n, "report": report, "macros": macros, "migration": migration })
+}
+
+fn keep_in<T: PartialEq + Clone>(old: &[T], still: &[T]) -> Vec<T> {
+    old.iter().filter(|x| still.contains(x)).cloned().collect()
+}
+
+/// Split what the panel sends back into the global file and the paper file.
+/// Rows tagged `global` go to the global file (a global row hidden behind a
+/// paper row of the same thing is left alone); everything else is the paper's.
+pub fn split(panel: &Value, glob_old: &Notation, doc_old: &Notation) -> Result<(Notation, Notation), String> {
+    let mut from_glob: Vec<Entry> = vec![];
+    let mut from_doc: Vec<Entry> = vec![];
+    for mut e in panel.get("entries").and_then(Value::as_array).cloned().unwrap_or_default() {
+        let global = e.get("origin").and_then(Value::as_str) == Some("global");
+        if let Some(o) = e.as_object_mut() {
+            o.remove("origin");
+        }
+        let entry: Entry = serde_json::from_value(e).map_err(|e| e.to_string())?;
+        if global { from_glob.push(entry) } else { from_doc.push(entry) }
+    }
+    let shown: Vec<String> = Notation::merged(glob_old, doc_old).into_iter().filter(|m| m.origin == Origin::Global).map(|m| m.entry.id).collect();
+    let mut glob = glob_old.clone();
+    glob.entries = glob_old
+        .entries
+        .iter()
+        .filter_map(|g| if shown.contains(&g.id) { from_glob.iter().find(|e| e.id == g.id).cloned() } else { Some(g.clone()) })
+        .collect();
+    for e in from_glob {
+        if glob_old.get(&e.id).is_none() {
+            glob.entries.push(e);
+        }
+    }
+    let mut doc = doc_old.clone();
+    doc.entries = from_doc;
+    let conv: Vec<String> = panel.get("conventional").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    glob.conventional = keep_in(&glob_old.conventional, &conv);
+    doc.conventional = conv.into_iter().filter(|c| !glob_old.conventional.contains(c)).collect();
+    let ign: Vec<Ignored> = panel.get("ignored").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    glob.ignored = keep_in(&glob_old.ignored, &ign);
+    doc.ignored = ign.into_iter().filter(|i| !glob_old.ignored.contains(i)).collect();
+    Ok((glob, doc))
+}
+
+type Resp = axum::response::Response;
+
+async fn context(s: &Shared, name: &str) -> Result<(PathBuf, PathBuf), Resp> {
+    let dir = crate::paper_dir(s, name).await?;
+    let ws = s.loaded.read().await.workspace.clone().ok_or_else(|| crate::bad("no workspace"))?;
+    Ok((ws, dir))
+}
+
+async fn notation_get(State(s): State<Shared>, UrlPath(name): UrlPath<String>) -> Result<Json<Value>, Resp> {
+    let (ws, dir) = context(&s, &name).await?;
+    migrate(&ws).map_err(|e| crate::bad(&e))?;
+    let (g, d) = glob_and_doc(&ws, &dir);
+    Ok(Json(view(&ws, &dir, &g, &d)))
+}
+
+async fn notation_put(State(s): State<Shared>, UrlPath(name): UrlPath<String>, Json(b): Json<Value>) -> Result<Json<Value>, Resp> {
+    let (ws, dir) = context(&s, &name).await?;
+    migrate(&ws).map_err(|e| crate::bad(&e))?;
+    let (g0, d0) = glob_and_doc(&ws, &dir);
+    let (g1, d1) = split(&b, &g0, &d0).map_err(|e| crate::bad(&e))?;
+    if g1.to_json() != g0.to_json() {
+        g1.save(&global_path(&ws)).map_err(|e| crate::bad(&e))?;
+    }
+    if d1.to_json() != d0.to_json() {
+        d1.save(&pc_core::paper::app_dir(&dir).join("notation.json")).map_err(|e| crate::bad(&e))?;
+    }
+    let (g, d) = glob_and_doc(&ws, &dir);
+    Ok(Json(view(&ws, &dir, &g, &d)))
+}
+
+/// The author has seen the migration clashes.
+async fn notation_seen(State(s): State<Shared>, UrlPath(name): UrlPath<String>) -> Result<Json<Value>, Resp> {
+    let (ws, _) = context(&s, &name).await?;
+    if let Some(mut m) = migration_report(&ws) {
+        m.seen = true;
+        let text = serde_json::to_string_pretty(&m).map_err(|e| crate::bad(&e.to_string()))? + "\n";
+        lore_notation::write_atomic(&marker_path(&ws), &text).map_err(|e| crate::bad(&e.to_string()))?;
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,6 +521,78 @@ mod tests {
             assert!(reg.find_latex(s).is_some_and(|e| e.has_tag("suggested")));
         }
         assert_eq!(register(&p, &bad.new_symbols).unwrap(), 0, "registered once");
+        let _ = std::fs::remove_dir_all(&p);
+    }
+
+    fn n(s: &str) -> Notation {
+        Notation::from_json(s).unwrap()
+    }
+
+    #[test]
+    fn migration_merges_once_keeps_the_old_file_and_reports_clashes() {
+        let d = std::env::temp_dir().join(format!("pc-notation-mig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profile")).unwrap();
+        let (old, shared, marker) = (d.join("profile/notation.json"), d.join("shared/notation.json"), d.join("profile/notation.migrated.json"));
+        let old_text = r#"{"version":1,"entries":[
+            {"id":"w","kind":"symbol","latex":"\\boldsymbol{w}","macro":"vw","meaning_en":"weight"},
+            {"id":"x","kind":"symbol","latex":"x","meaning_en":"input"},
+            {"id":"cv","kind":"abbrev","short":"CV","long":"cross-validation"}],"conventional":["AI"]}"#;
+        std::fs::write(&old, old_text).unwrap();
+        std::fs::create_dir_all(d.join("shared")).unwrap();
+        std::fs::write(&shared, r#"{"version":1,"entries":[{"id":"w","kind":"symbol","latex":"\\boldsymbol{w}","macro":"vw","meaning_en":"frame weight"},{"id":"x","kind":"symbol","latex":"x","meaning_en":"input"}]}"#).unwrap();
+        let m = migrate_files(&old, &shared, &marker).unwrap().unwrap();
+        assert_eq!(m.added, ["cv"]);
+        assert_eq!(m.same, ["x"]);
+        assert_eq!(m.clashes.len(), 1);
+        assert_eq!(m.clashes[0].kept.meaning_en.as_deref(), Some("frame weight"), "the global row is kept");
+        let g = Notation::load(&shared).unwrap();
+        assert_eq!(g.entries.len(), 3);
+        assert_eq!(g.get("w").unwrap().meaning_en.as_deref(), Some("frame weight"));
+        assert_eq!(g.conventional, ["AI"]);
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), old_text, "the old file is never touched");
+        // once: a row deleted from the global file does not come back
+        let mut g2 = g.clone();
+        g2.remove("cv");
+        g2.save(&shared).unwrap();
+        assert!(migrate_files(&old, &shared, &marker).unwrap().is_none());
+        assert!(Notation::load(&shared).unwrap().get("cv").is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn saving_splits_rows_between_the_global_and_the_paper_file() {
+        let glob = n(r#"{"entries":[{"id":"g1","kind":"symbol","latex":"a","meaning_en":"A"},{"id":"g2","kind":"symbol","latex":"b","meaning_en":"B"},{"id":"g3","kind":"symbol","latex":"c","meaning_en":"C"}],"conventional":["AI"]}"#);
+        // the paper overrides g3, so the panel does not show the global g3
+        let doc = n(r#"{"entries":[{"id":"d3","kind":"symbol","latex":"c","meaning_en":"mine"}]}"#);
+        let panel = json!({"entries":[
+            {"id":"g1","kind":"symbol","latex":"a","meaning_en":"A edited","origin":"global"},
+            {"id":"d3","kind":"symbol","latex":"c","meaning_en":"mine","origin":"document"},
+            {"id":"new","kind":"symbol","latex":"q","origin":"document"},
+            {"id":"ng","kind":"symbol","latex":"r","origin":"global"}],
+            "conventional":["AI","BERT"]});
+        let (g, d) = split(&panel, &glob, &doc).unwrap();
+        let ids = |x: &Notation| x.entries.iter().map(|e| e.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&g), ["g1", "g3", "ng"], "g2 was deleted, g3 (hidden) is untouched");
+        assert_eq!(g.get("g1").unwrap().meaning_en.as_deref(), Some("A edited"));
+        assert_eq!(ids(&d), ["d3", "new"]);
+        assert_eq!(g.conventional, ["AI"]);
+        assert_eq!(d.conventional, ["BERT"]);
+        assert!(d.entries.iter().all(|e| e.kind.is_some()));
+    }
+
+    #[test]
+    fn the_paper_file_keeps_its_bytes_when_nothing_in_it_changed() {
+        let p = paper();
+        let before = std::fs::read_to_string(p.join("notation.json")).unwrap();
+        let g = Notation::default();
+        let d = Notation::load(&p.join("notation.json")).unwrap();
+        let view = view(&p, &p, &g, &d);
+        let (g1, d1) = split(&view["notation"], &g, &d).unwrap();
+        assert_eq!(d1.to_json(), d.to_json());
+        assert!(g1.entries.is_empty());
+        assert_eq!(std::fs::read_to_string(p.join("notation.json")).unwrap(), before);
+        assert!(view["report"].is_object(), "the paper is checked as a whole");
         let _ = std::fs::remove_dir_all(&p);
     }
 }

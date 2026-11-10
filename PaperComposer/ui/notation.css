@@ -1,0 +1,16 @@
+/* 對照表 window: the shared notation-panel in the app's tokens. */
+#dlgNotation .dlg-head .chip { margin-left: auto; }
+#dlgNotation .dlg-head .close { margin-left: 0; }
+#dlgNotation notation-panel {
+  flex: 1; min-height: 0; border: 0; border-radius: 0;
+  --np-bg: var(--bg); --np-fg: var(--text); --np-mute: var(--muted); --np-line: var(--line); --np-soft: var(--panel);
+  --np-accent: var(--accent-text, var(--accent)); --np-hi: var(--accent-soft);
+  --np-err: var(--err); --np-warn: var(--warn); --np-info: var(--muted);
+}
+.pcn-scope { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--r); overflow: hidden; }
+#dlgNotation .dlg-head .chip[hidden] + .pcn-scope { margin-left: auto; }
+.pcn-scope button { background: var(--surface); color: var(--muted); padding: 5px 10px; font-size: 12px; white-space: nowrap; }
+.pcn-scope button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.pcn-note { display: flex; align-items: center; gap: 12px; padding: 8px 20px; font-size: 12px; color: var(--warn); border-bottom: 1px solid var(--line); background: var(--panel); }
+.pcn-note[hidden] { display: none; }
+.pcn-note .ghost { margin-left: auto; }
