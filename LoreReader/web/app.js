@@ -565,6 +565,18 @@ async function mergeDialog() {
   } catch (e) { fail(e); }
 }
 
+// ── 外觀: the theme all LoreForge apps share (theme.js) ───────────────────
+function lookDialog() {
+  return dialog((d, close) => {
+    const pick = h("div", {});
+    LoreTheme.picker(pick);
+    return h("div", { class: "dlg look" },
+      h("h3", {}, "外觀"),
+      pick,
+      h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(true) }, "關閉")));
+  });
+}
+
 // ── generic dialog ────────────────────────────────────────────────────────
 /** `build(dialog, close)` returns the content; resolves with what `close(v)` gets. */
 function dialog(build) {
@@ -1855,7 +1867,7 @@ function togglePanel(which, force) {
 function wire() {
   paintIcons();
   $("#actHome").onclick = () => go(null);
-  $("#actMode").onclick = () => window.loreTheme.toggle();
+  $("#actLook").onclick = () => lookDialog();
   $("#openFile").onchange = async (e) => { const p = await importFiles([...e.target.files]); e.target.value = ""; if (p) go(p.sha256, 1); else showHome(); };
   $("#pathForm").onsubmit = async (e) => { e.preventDefault(); try { const r = await api("/api/papers/import", { body: { path: $("#pathInput").value.trim() } }); $("#pathInput").value = ""; go(r.paper.sha256, 1); } catch (x) { fail(x); } };
   $("#actMerge").onclick = () => mergeDialog().catch(fail);

@@ -96,9 +96,11 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   the noun list.
 - Track B never writes a Chinese summary or translation of a paragraph. Claude's answers
   reach the symbol table only through 存進符號表… (`resolved_by: claude`, evidence kept).
-- Theme: `web/theme.js` = `data-mode` on `<html>`, `lr.mode` in localStorage, then
-  `window.LORE_PREFS.theme` from `/prefs.js` (always `null` today). **Later**: a shared, synced
-  theme in lore-home prefs fills `theme` server-side in `prefs_js`; pages need no change.
+- Theme: the one all LoreForge apps share. `/theme.css` and `/theme.js` are `commons/ui/theme.{css,js}`
+  (compiled in through `lore_home::theme`; the script carries the shared choice from
+  `private/shared/ui.toml`), `GET`/`PUT /api/theme` read and set it; the sun button opens the
+  外觀 picker (`LoreTheme.picker`). `data-mode` (dark / light) follows the theme. PDF pages,
+  thumbnails and `print.html` never use theme tokens.
 - Symbol table: `papers/<sha256>/symbols.json` (lore-notation fields + scope, grade,
   resolved_by). Grades are evidence-based: the program gives 🟢 only with the quoted sentence,
   🔴 only for two definitions in the same paper (never vs the author's notation). Keys are

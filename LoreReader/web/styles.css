@@ -1,30 +1,21 @@
-/* LoreReader. Tokens, icons and panels follow SlideComposer / KnowledgeBase /
-   PaperComposer (orange palette, dark and light mode). Accent text, line icons and
-   thin borders use --accent-text. */
+/* LoreReader. Colours come from theme.css (commons/ui: the themes every
+   LoreForge app shares, picked by theme.js). Icons and panels follow
+   SlideComposer / KnowledgeBase / PaperComposer. Accent text, line icons and
+   thin borders use --accent-text; --accent is a fill.
+   PDF pages, thumbnails and print.html never use theme tokens: a page is
+   white paper, and the marks on it (highlights, knowledge colouring, search
+   hits) keep fixed colours that read on white. */
 
-:root,
-:root[data-mode="dark"] {
-  --bg: #1d1d20; --panel: #27272a; --surface: #313135; --surface-hover: #3b3b40;
-  --line: #3a3a3f; --line-strong: #505056;
-  --text: #f0f0f1; --muted: #a6a6ad; --faint: #74747b;
-  --accent: #ff6b35; --accent-ink: #0a0706; --accent-soft: #ff6b3526; --accent-text: #ff8a5c;
-  --stage: #151517;
-  --ok: #3fb97a; --warn: #e6a700; --err: #e5484d;
+:root {
+  --stage: color-mix(in srgb, var(--bg) 82%, #000);
   --sel: #3b82f6;
   /* knowledge colouring on the page (the page itself is always white paper) */
   --kt-new: #e5484d; --kt-new-bg: #e5484d33; --kt-learn-bg: #f5a62340; --kt-known: #3fb97a99;
-  color-scheme: dark;
 }
 :root[data-mode="light"] {
-  --bg: #f6f5f3; --panel: #fdfdfc; --surface: #efeeeb; --surface-hover: #e6e4e0;
-  --line: #e2e0dc; --line-strong: #c9c6c0;
-  --text: #1d1d20; --muted: #5d5d64; --faint: #8d8d94;
-  --accent: #d9541f; --accent-ink: #ffffff; --accent-soft: #d9541f1f; --accent-text: #b8441a;
-  --stage: #e4e2de;
-  --ok: #23905a; --warn: #a87900; --err: #c9353a;
+  --stage: color-mix(in srgb, var(--bg) 92%, #000);
   --sel: #2563eb;
   --kt-new: #d92d33; --kt-new-bg: #e5484d2e; --kt-learn-bg: #f5a62338; --kt-known: #23905a88;
-  color-scheme: light;
 }
 :root {
   --sans: "Noto Sans TC", -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
@@ -228,7 +219,7 @@ dialog .quote-box { font-size: 13px; background: var(--surface); border-left: 3p
 .pick-list button[aria-pressed="true"] { border-color: var(--accent-text); background: var(--accent-soft); }
 .pick-list .ord { font: 600 11px var(--mono); color: var(--accent-text); }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 90; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: var(--r); font-size: 13.5px; max-width: calc(100vw - 32px); overflow-wrap: anywhere; }
-.toast.err { background: var(--err); color: #fff; }
+.toast.err { background: var(--err); color: var(--bg); }
 
 /* ── Home (library) ──────────────────── */
 .home { position: fixed; inset: 48px 0 0 0; background: var(--bg); overflow: auto; padding: 20px 24px 32px; z-index: 30; }

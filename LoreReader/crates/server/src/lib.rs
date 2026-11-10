@@ -174,7 +174,12 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
     if isolated {
         llm.isolate();
     }
-    let shared = if isolated { workspace.join("shared") } else { lore_home::Home::discover(&repo_dir()).shared_dir().unwrap_or_else(|| workspace.join("../shared")) };
+    // isolated: the shared folder (and so the shared theme) lives inside the test's workspace
+    let mut home = lore_home::Home::discover(&repo_dir());
+    if isolated {
+        home.private = Some(workspace.clone());
+    }
+    let shared = home.shared_dir().unwrap_or_else(|| workspace.join("../shared"));
     Arc::new(AppState {
         kb: kb::Kb::new(&config.kb_url),
         llm,
@@ -184,7 +189,7 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
         workspace,
         web,
         shared,
-        home: lore_home::Home::discover(&repo_dir()),
+        home,
         port: Mutex::new(0),
         write: Mutex::new(()),
         texts: Mutex::new(HashMap::new()),
@@ -199,6 +204,9 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/prefs.css", get(prefs_css))
         .route("/prefs.js", get(prefs_js))
+        .route("/theme.css", get(theme_css))
+        .route("/theme.js", get(theme_js))
+        .route("/api/theme", get(theme_get).put(theme_put))
         .route("/open", get(open))
         .route("/api/info", get(info))
         .route("/api/papers", get(list_papers))
@@ -270,11 +278,30 @@ async fn prefs_css(State(s): State<Shared>) -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], s.home.prefs().fonts.css())
 }
 
-/// `window.LORE_PREFS`. `theme` is null until the shared, synced theme preference
-/// exists in lore-home; the page then prefers it over its own localStorage value.
-async fn prefs_js() -> impl IntoResponse {
-    let body = format!("window.LORE_PREFS = {};\n", json!({ "theme": null }));
+/// `window.LORE_PREFS`: the shared theme id (null = none chosen yet).
+async fn prefs_js(State(s): State<Shared>) -> impl IntoResponse {
+    let body = format!("window.LORE_PREFS = {};\n", json!({ "theme": s.home.theme() }));
     ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], body)
+}
+
+/// The LoreForge themes (commons/ui/theme.css, the same file in every app), compiled in.
+async fn theme_css() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], lore_home::theme::CSS)
+}
+
+/// commons/ui/theme.js with the shared choice in front (first paint has the theme).
+async fn theme_js(State(s): State<Shared>) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], lore_home::theme::script(&s.home))
+}
+
+/// The theme every LoreForge app shows (`private/shared/ui.toml`).
+async fn theme_get(State(s): State<Shared>) -> Json<Value> {
+    Json(json!({ "theme": s.home.theme() }))
+}
+
+async fn theme_put(State(s): State<Shared>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+    let t = s.home.set_theme(b["theme"].as_str().unwrap_or_default()).map_err(|e| bad(e.to_string()))?;
+    Ok(Json(json!({ "theme": t })))
 }
 
 // ── open from KnowledgeBase ──────────────────────────────────────────────
@@ -301,7 +328,7 @@ async fn open(State(s): State<Shared>, Query(q): Query<OpenQ>) -> Response {
     let what = known.map(|m| format!("《{}》", html_escape(&m.title))).unwrap_or_else(|| "這份 PDF".into());
     let body = format!(
         "<!doctype html><html lang=\"zh-Hant\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>LoreReader</title>\
-<link rel=\"stylesheet\" href=\"/styles.css\"><script src=\"/prefs.js\"></script><script src=\"/theme.js\"></script><body class=\"notice-page\"><main class=\"notice\"><h1>不在這台電腦的書庫裡</h1>\
+<link rel=\"stylesheet\" href=\"/theme.css\"><link rel=\"stylesheet\" href=\"/styles.css\"><script src=\"/theme.js\"></script><body class=\"notice-page\"><main class=\"notice\"><h1>不在這台電腦的書庫裡</h1>\
 <p>{what}（sha256 <code>{}</code>，第 {page} 頁）不在這台電腦的 LoreReader 書庫中。</p>\
 <p>在這台電腦用 LoreReader 開啟同一個 PDF 檔，它就會加入書庫，這個連結之後就能直接開到那一頁。</p>\
 <p><a class=\"btn\" href=\"/\">回到書庫</a></p></main></body></html>",

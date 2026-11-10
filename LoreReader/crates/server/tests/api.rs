@@ -792,3 +792,31 @@ async fn my_vocab_is_shared_keeps_imports_and_migrates_old_files() {
     let srcs: Vec<&str> = vocab["sources"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
     assert_eq!(srcs, [old_sha.as_str(), "import:thesis"]);
 }
+
+/// One theme for every LoreForge app: `/theme.js` carries the shared choice,
+/// `/api/theme` reads and sets it (inside the test's own folder here).
+#[tokio::test]
+async fn theme_is_the_shared_choice() {
+    let e = setup("http://127.0.0.1:9", None);
+    let (st, v, _) = call(&e.app, "GET", "/api/theme", None, None).await;
+    assert_eq!((st, &v["theme"]), (StatusCode::OK, &Value::Null));
+    let (st, _, _) = call(&e.app, "PUT", "/api/theme", Some(json!({ "theme": "dark" })), None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    let (st, v, _) = call(&e.app, "PUT", "/api/theme", Some(json!({ "theme": "hongkong" })), None).await;
+    assert_eq!((st, v["theme"].as_str()), (StatusCode::OK, Some("hongkong")));
+    assert!(std::fs::read_to_string(e.root.join("ws/shared/ui.toml")).unwrap().contains("hongkong"));
+    let (_, _, js) = call(&e.app, "GET", "/theme.js", None, None).await;
+    assert!(String::from_utf8(js).unwrap().starts_with("window.LORE_THEME = \"hongkong\";"));
+    let (_, _, css) = call(&e.app, "GET", "/theme.css", None, None).await;
+    assert!(String::from_utf8(css).unwrap().contains(":root[data-theme=\"hongkong\"]"));
+
+    let web = lr_server::repo_dir().join("web");
+    let index = std::fs::read_to_string(web.join("index.html")).unwrap();
+    assert!(index.contains("href=\"theme.css\"") && index.contains("<script src=\"theme.js\"></script>"));
+    assert!(!web.join("theme.js").exists(), "theme.js comes from commons/ui through the server");
+    let styles = std::fs::read_to_string(web.join("styles.css")).unwrap();
+    assert!(!styles.contains("--bg: #"), "palettes live in commons/ui/theme.css only");
+    // printed pages take no theme
+    let print = std::fs::read_to_string(web.join("print.html")).unwrap();
+    assert!(!print.contains("theme.css") && !print.contains("theme.js"));
+}
