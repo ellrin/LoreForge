@@ -181,6 +181,32 @@ enum Shell {
         return url
     }
 
+    /// 打開「行事曆」；有日期時用 AppleScript 切到那天（`view` = "day view" / "month view"）。
+    /// 第一次會問自動化權限；被拒絕或腳本失敗時只打開 App。
+    static func showCalendar(at: Date?, view: String) {
+        let app = URL(fileURLWithPath: "/System/Applications/Calendar.app")
+        guard let at else { NSWorkspace.shared.open(app); return }
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: at)
+        let src = """
+        set d to current date
+        set day of d to 1
+        set year of d to \(c.year!)
+        set month of d to \(c.month!)
+        set day of d to \(c.day!)
+        tell application "Calendar"
+          activate
+          switch view to \(view)
+          view calendar at d
+        end tell
+        """
+        var err: NSDictionary?
+        NSAppleScript(source: src)?.executeAndReturnError(&err)
+        if let err {
+            DeckLog.write("showCalendar: \(err)")
+            NSWorkspace.shared.open(app)
+        }
+    }
+
     private static var notifAsked = false
 
     static func notify(title: String, body: String, sound: String?) {

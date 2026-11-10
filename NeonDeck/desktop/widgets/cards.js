@@ -3,13 +3,13 @@
 // Swift 端有快取（看資料夾修改時間），沒變時不讀檔也不重傳，所以每 5 分鐘問一次很便宜。
 // 越新、連續記得次數越少的卡越常出現；一輪全部輪完才重新洗牌，不會一直出現同一張。
 // 一次顯示幾張：config.count = 'auto'（依小工具高度 1 或 2 張）或 1 / 2。
-// 點卡片 → 用瀏覽器開知識庫網頁（#/node/<id>，要 KnowledgeBase 開著）。
+// 點卡片 → 開 KnowledgeBase App 並進到那張卡（lore-kb://node/<id>；App 沒開會自動啟動）。
 import { h, injectCSS } from '../core/util.js';
 
 injectCSS('cards', `
-:where(.kc) { height: 100%; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-:where(.kc-card) { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
-  cursor: pointer; text-align: left; border: 0; color: inherit; font: inherit; overflow: hidden; }
+:where(.kc) { height: 100%; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+:where(.kc-card) { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 0;
+  cursor: pointer; text-align: left; border: 0; background: none; color: inherit; font: inherit; overflow: hidden; }
 :where(.kc-card:focus-visible) { outline: 1px solid currentColor; outline-offset: 2px; }
 :where(.kc-head) { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 :where(.kc-t) { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -26,11 +26,10 @@ export default {
   tag: 'KB',
   defaultSize: { w: 400, h: 190 },
   minSize: { w: 220, h: 110 },
-  defaultConfig: { server: 'http://127.0.0.1:7700', count: 'auto', rotateSec: 60, newDays: 14 },
+  defaultConfig: { count: 'auto', rotateSec: 60, newDays: 14 },
 
   mount(body, ctx) {
     const cfg = ctx.config;
-    const base = () => String(cfg.server || 'http://127.0.0.1:7700').replace(/\/+$/, '');
     let online = null;          // false = 找不到知識庫資料夾
     let pool = [], queue = [], shown = [];
     let fallback = false;
@@ -104,7 +103,7 @@ export default {
       main.replaceChildren(...shown.map(n => {
         const isNew = Date.now() - n.created < 7 * DAY;
         const text = n.summary || n.body || '';
-        return h('button.kc-card.well.edit-live', { type: 'button', title: '在知識庫開啟', onclick: () => ctx.call('open', `${base()}/#/node/${n.id}`).catch(() => {}) },
+        return h('button.kc-card.edit-live', { type: 'button', title: '在知識庫開啟', onclick: () => ctx.call('open', `lore-kb://node/${encodeURIComponent(n.id)}`).catch(() => {}) },
           h('div.kc-head', {},
             h('b.kc-t.hl', {}, n.title),
             h('span.s.kc-badge', {}, n.state === 'known' ? '' : isNew ? '新' : n.streak ? `記得 ${n.streak} 次` : '不熟')),

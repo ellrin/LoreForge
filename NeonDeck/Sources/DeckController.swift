@@ -395,6 +395,17 @@ final class DeckController: NSObject, WKScriptMessageHandlerWithReply, WKNavigat
         case "activateApp":
             replyHandler(ProcSampler.activate(appPath: ps["appPath"] as? String, pid: ps["pid"] as? Int), nil)
 
+        case "showCalendar":
+            // 打開「行事曆」並跳到那天（日 / 月檢視）；不能控制行事曆時（沒給自動化權限）只打開它
+            let at = (ps["at"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
+            let mode = (ps["view"] as? String) == "month" ? "month view" : "day view"
+            Task.detached { Shell.showCalendar(at: at, view: mode) }
+            replyHandler(true, nil)
+
+        case "showReminders":
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Reminders.app"))
+            replyHandler(true, nil)
+
         case "activityMonitor":
             NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
             replyHandler(true, nil)

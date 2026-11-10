@@ -17,5 +17,6 @@
   <key>NSCalendarsUsageDescription</key>            <string>在桌面顯示你的行事曆行程。</string>
   <key>NSRemindersFullAccessUsageDescription</key>  <string>在桌面顯示並勾選你的提醒事項。</string>
   <key>NSRemindersUsageDescription</key>            <string>在桌面顯示並勾選你的提醒事項。</string>
+  <key>NSAppleEventsUsageDescription</key>          <string>點桌面上的月曆或行程時，讓「行事曆」直接跳到那一天。</string>
 </dict>
 </plist>

@@ -2,6 +2,7 @@
 // 待辦（macOS / iPhone「提醒事項」）也併在列表裡：選今天時顯示過期、N 天內到期和沒有日期的，
 //   選其他天只顯示那天到期的；打勾 = 完成（同步回提醒事項）。config.todos = false 關掉，
 //   config.todoLists = ['清單名稱'] 只顯示這些清單。
+// 點月份標題 → 「行事曆」月檢視；雙擊日期或點行程 → 那天的日檢視；點待辦文字 → 「提醒事項」。
 import { h, pad2, injectCSS } from '../core/util.js';
 
 injectCSS('calendar', `
@@ -18,6 +19,7 @@ injectCSS('calendar', `
 :where(.cal-ev .rm-check) { width: 14px; height: 14px; padding: 0; }
 :where(.cal-ev.done .t) { text-decoration: line-through; opacity: .4; }
 :where(.cal-ev .t) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:where(.cal-open) { cursor: pointer; }
 `);
 
 const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
@@ -39,7 +41,8 @@ export default {
     let todos = [];
     let todoAccess = 'unknown';
 
-    const title = h('span.mid');
+    const showCal = (at, v) => ctx.call('showCalendar', { at: +at, view: v }).catch(() => {});
+    const title = h('span.mid.cal-open.edit-live', { title: '在行事曆開啟', onclick: () => showCal(view, 'month') });
     const grid = h('div.cal-grid');
     const listTitle = h('div.small.dim');
     const list = h('div.cal-list');
@@ -93,7 +96,7 @@ export default {
         const evs = [...(byDay.get(dayKey(d)) || []), ...(todoDay.get(dayKey(d)) || [])];
         const cls = ['day', d.getMonth() !== view.getMonth() && 'other', sameDay(d, today) && 'today',
           sameDay(d, selected) && 'selected', (d.getDay() === 0 || d.getDay() === 6) && 'weekend'].filter(Boolean).join('.');
-        cells.push(h('div.' + cls + '.edit-live', { onclick: () => { selected = d; render(); } },
+        cells.push(h('div.' + cls + '.edit-live', { onclick: () => { selected = d; render(); }, ondblclick: () => showCal(d, 'day') },
           String(d.getDate()),
           h('span.dots', {}, evs.slice(0, 3).map(e => h('i', { style: { background: e.color || 'currentColor' } })))));
       }
@@ -131,7 +134,7 @@ export default {
         const s = new Date(e.start);
         const when = e.allDay ? '全天' : `${pad2(s.getHours())}:${pad2(s.getMinutes())}`;
         const prefix = isToday && !sameDay(s, today) ? `${s.getMonth() + 1}/${s.getDate()} ` : '';
-        return h('div.cal-ev.small', { title: [e.title, e.location, e.calendar].filter(Boolean).join('\n') },
+        return h('div.cal-ev.small.cal-open.edit-live', { title: [e.title, e.location, e.calendar].filter(Boolean).join('\n'), onclick: () => showCal(s, 'day') },
           h('span.bar', { style: { background: e.color || 'currentColor' } }),
           h('span.dim', {}, prefix + when),
           h('span.t', {}, e.title));
@@ -156,7 +159,8 @@ export default {
           setTimeout(() => { todos = todos.filter(x => x.id !== r.id); render(); }, 800);
         },
       });
-      row.append(check, h(r.due && r.due < Date.now() ? 'span.danger' : 'span.dim', {}, when), h('span.t', {}, r.title));
+      row.append(check, h(r.due && r.due < Date.now() ? 'span.danger' : 'span.dim', {}, when),
+        h('span.t.cal-open.edit-live', { onclick: () => ctx.call('showReminders').catch(() => {}) }, r.title));
       return row;
     }
 

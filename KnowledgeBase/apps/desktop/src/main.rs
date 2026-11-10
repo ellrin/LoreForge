@@ -3,9 +3,44 @@
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+
+/// `lore-kb://node/<id>` links (NeonDeck's card widget, other apps): queued until the
+/// window exists, then the window goes to that card. macOS starts the app for them.
+#[derive(Default)]
+struct Links {
+    addr: Mutex<Option<SocketAddr>>,
+    pending: Mutex<Vec<url::Url>>,
+}
+
+/// The page hash a `lore-kb://` link stands for: `node/<id>` → `#/node/<id>`.
+fn link_hash(u: &url::Url) -> Option<String> {
+    let id = u.path().trim_matches('/');
+    let ok = u.host_str() == Some("node") && !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    ok.then(|| format!("#/node/{id}"))
+}
+
+fn open_link(app: &AppHandle, u: url::Url) {
+    let st = app.state::<Links>();
+    let Some(addr) = *st.addr.lock().unwrap() else {
+        st.pending.lock().unwrap().push(u);
+        return;
+    };
+    let Some(hash) = link_hash(&u) else {
+        eprintln!("not a card link: {u}");
+        return;
+    };
+    let Ok(target) = url::Url::parse(&format!("http://{addr}/{hash}")) else { return };
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.navigate(target);
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
 
 /// A kb-server already answers on `addr` (e.g. started at login by launchd).
 fn kb_server_at(addr: SocketAddr) -> bool {
@@ -61,8 +96,25 @@ fn main() {
                 .inner_size(1360.0, 880.0)
                 .min_inner_size(900.0, 600.0)
                 .build()?;
+            // links macOS handed over while starting up
+            *app.state::<Links>().addr.lock().unwrap() = Some(addr);
+            let pending: Vec<url::Url> = std::mem::take(&mut *app.state::<Links>().pending.lock().unwrap());
+            for u in pending {
+                open_link(app.handle(), u);
+            }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running KnowledgeBase");
+        .manage(Links::default())
+        .build(tauri::generate_context!())
+        .expect("error while building KnowledgeBase")
+        .run(|app, event| {
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            if let RunEvent::Opened { urls } = event {
+                for u in urls.into_iter().filter(|u| u.scheme() == "lore-kb") {
+                    open_link(app, u);
+                }
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+            let _ = (app, event);
+        });
 }

@@ -43,7 +43,8 @@ cd ../commons && cargo test -p kb-core -p lore-store
 - NeonDeck widget: `../NeonDeck/desktop/widgets/knowledge.js`.
 - `apps/desktop` (`knowledgebase`): Tauri shell on the configured port (7700, what the NeonDeck
   widget reads); if a kb-server already answers `/api/health` there (launchd), it opens that one.
-  Icon source `icons/logo.svg` (PaperComposer's neon style).
+  `lore-kb://node/<id>` (URL scheme in `apps/desktop/Info.plist`, merged by tauri build) opens the
+  app on that card — NeonDeck's card widget uses it. Icon source `icons/logo.svg` (PaperComposer's neon style).
 
 ## Decisions
 
