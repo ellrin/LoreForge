@@ -382,6 +382,7 @@ fn new_objects_components_tables_equations_export() {
         frame: Frame::new(500_000, 3_000_000, 3_000_000, 600_000),
         hidden: false,
         ph: None,
+        slot: None,
         kind: Kind::Table(TableObj {
             cols: vec![1_500_000, 1_500_000],
             rows: vec![Row { h: 300_000, cells: vec![cell("Epochs"), cell("200")], src: None }],
@@ -398,6 +399,7 @@ fn new_objects_components_tables_equations_export() {
         frame: Frame::new(500_000, 4_000_000, 1_000_000, 300_000),
         hidden: false,
         ph: None,
+        slot: None,
         kind: Kind::Text(SpObj {
             geom: Geom::preset("rect"),
             fill: Paint::None,
@@ -427,6 +429,7 @@ fn new_objects_components_tables_equations_export() {
         frame: Frame::new(5_000_000, 3_000_000, 1_000_000, 1_000_000),
         hidden: false,
         ph: None,
+        slot: None,
         kind: Kind::Picture(PicObj {
             asset: "file:assets/a.png".into(),
             crop: Crop { l: 0.1, t: 0.0, r: 0.0, b: 0.2 },

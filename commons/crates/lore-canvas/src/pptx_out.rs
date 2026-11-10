@@ -75,11 +75,31 @@ fn color_el(hex: &str, alpha: f64) -> om::Color {
     c
 }
 
+/// `a:gradFill` from stops (pos 0..1), a linear angle in degrees, or a path (radial) gradient.
+pub(crate) fn grad_fill(stops: &[Stop], angle: f64, path: bool) -> Element {
+    let mut gs = Element::new("a:gsLst");
+    for st in stops {
+        let mut g = Element::new("a:gs").with_attr("pos", ((st.pos.clamp(0.0, 1.0) * 100_000.0).round() as i64).to_string());
+        g.push(color_el(&st.color, st.alpha).to_element());
+        gs.push(g);
+    }
+    let mut e = Element::new("a:gradFill").with_attr("rotWithShape", "1");
+    e.push(gs);
+    if path {
+        let mut p = Element::new("a:path").with_attr("path", "circle");
+        p.push(Element::new("a:fillToRect").with_attr("l", "50000").with_attr("t", "50000").with_attr("r", "50000").with_attr("b", "50000"));
+        e.push(p);
+    } else {
+        e.push(Element::new("a:lin").with_attr("ang", ((angle * 60_000.0).round() as i64).to_string()).with_attr("scaled", "0"));
+    }
+    e
+}
+
 fn fill_of(p: &Paint, orig: Option<&om::Fill>) -> Option<om::Fill> {
     match p {
         Paint::None => Some(om::Fill::NoFill),
         Paint::Solid { color, alpha } => Some(om::Fill::Solid(Some(color_el(color, *alpha)))),
-        Paint::Gradient { stops, .. } => match orig {
+        Paint::Gradient { stops, angle, path } => match orig {
             // alpha edits on a kept gradient: patch stop colours' alpha
             Some(om::Fill::Gradient(e)) => {
                 let mut e = e.clone();
@@ -94,7 +114,8 @@ fn fill_of(p: &Paint, orig: Option<&om::Fill>) -> Option<om::Fill> {
                 }
                 Some(om::Fill::Gradient(e))
             }
-            _ => None,
+            // a new gradient (a base's band, a takeaway bar): built from the stops
+            _ => Some(om::Fill::Gradient(grad_fill(stops, *angle, *path))),
         },
         Paint::Other { .. } => orig.cloned(),
     }
@@ -216,10 +237,21 @@ pub fn cust_geom(path: &str) -> Element {
         }
         p.push(e);
     }
-    let mut g = Element::new("a:custGeom");
-    for n in ["a:avLst", "a:gdLst", "a:ahLst", "a:cxnLst"] {
-        g.push(Element::new(n));
+    // one connection site per vertex (same order as geom::sites), positions as guides of w / h
+    let mut gd = Element::new("a:gdLst");
+    let mut cxn = Element::new("a:cxnLst");
+    for (k, (x, y)) in crate::geom::path_vertices(path).into_iter().enumerate() {
+        gd.push(Element::new("a:gd").with_attr("name", format!("cx{k}")).with_attr("fmla", format!("*/ w {} 100000", (x * S).round() as i64)));
+        gd.push(Element::new("a:gd").with_attr("name", format!("cy{k}")).with_attr("fmla", format!("*/ h {} 100000", (y * S).round() as i64)));
+        let mut c = Element::new("a:cxn").with_attr("ang", "0");
+        c.push(Element::new("a:pos").with_attr("x", format!("cx{k}")).with_attr("y", format!("cy{k}")));
+        cxn.push(c);
     }
+    let mut g = Element::new("a:custGeom");
+    g.push(Element::new("a:avLst"));
+    g.push(gd);
+    g.push(Element::new("a:ahLst"));
+    g.push(cxn);
     g.push(
         Element::new("a:rect")
             .with_attr("l", "0")
@@ -1210,7 +1242,7 @@ pub fn export_parts(cd: &Deck, src: &ODeck, style: Option<&StyleSystem>, assets:
                 next_id: cs.max_id() + 1000,
                 slide: cs.uid.clone(),
             };
-            let shapes: Vec<Shape> = cs.objects.iter().flat_map(|x| object_out(&mut o, x)).collect();
+            let shapes: Vec<Shape> = cs.objects.iter().filter(|x| !x.is_empty_slot()).flat_map(|x| object_out(&mut o, x)).collect();
             entry.rels = o.rels;
             entry.doc.tree.children = shapes;
             entry.doc.set_hidden(cs.hidden);

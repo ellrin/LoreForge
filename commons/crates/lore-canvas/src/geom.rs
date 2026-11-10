@@ -63,7 +63,14 @@ pub fn sites(o: &Object) -> Vec<(f64, f64)> {
     let f = &o.frame;
     let (x, y, w, h) = (f.x as f64, f.y as f64, f.w as f64, f.h as f64);
     let prst = o.kind.sp().map(|s| s.geom.prst.as_str()).unwrap_or("rect");
-    let local: Vec<(f64, f64)> = if prst == "ellipse" {
+    let custom = o.kind.sp().filter(|s| s.geom.prst == "custom").and_then(|s| s.geom.path.as_deref()).map(path_vertices).unwrap_or_default();
+    let local: Vec<(f64, f64)> = if !custom.is_empty() {
+        // custom shapes (polygons): one site per vertex, in path order
+        custom
+            .iter()
+            .map(|&(u, v)| (x + if f.flip_h { 1.0 - u } else { u } * w, y + if f.flip_v { 1.0 - v } else { v } * h))
+            .collect()
+    } else if prst == "ellipse" {
         let (cx, cy, rx, ry) = (x + w / 2.0, y + h / 2.0, w / 2.0, h / 2.0);
         (0..8)
             .map(|i| {
@@ -232,6 +239,70 @@ pub fn distribute(frames: &[Frame], axis: &str) -> Vec<Frame> {
         } else {
             out[i].y = pos.round() as i64;
             pos += frames[i].h as f64 + gap;
+        }
+    }
+    out
+}
+
+/// Vertices of a custom path (0..1 box, `M`/`L`/`C`/`Q`/`Z`): the end point of
+/// every segment, without the repeated start of a closed path. These are a
+/// custom shape's connection sites (`a:cxnLst` on export, in the same order).
+pub fn path_vertices(path: &str) -> Vec<(f64, f64)> {
+    let mut toks: Vec<String> = Vec::new();
+    for t in path.replace(',', " ").split_whitespace() {
+        let mut cur = String::new();
+        for ch in t.chars() {
+            if ch.is_ascii_alphabetic() {
+                if !cur.is_empty() {
+                    toks.push(std::mem::take(&mut cur));
+                }
+                toks.push(ch.to_string());
+            } else {
+                cur.push(ch);
+            }
+        }
+        if !cur.is_empty() {
+            toks.push(cur);
+        }
+    }
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    let mut i = 0;
+    let mut start: Option<(f64, f64)> = None;
+    while i < toks.len() {
+        let pairs = match toks[i].as_str() {
+            "M" | "L" => 1,
+            "Q" => 2,
+            "C" => 3,
+            "Z" | "z" => {
+                if let (Some(s), Some(l)) = (start, out.last())
+                    && (s.0 - l.0).abs() < 1e-9
+                    && (s.1 - l.1).abs() < 1e-9
+                    && out.len() > 1
+                {
+                    out.pop();
+                }
+                i += 1;
+                continue;
+            }
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let is_move = toks[i] == "M";
+        i += 1;
+        let mut last = (0.0, 0.0);
+        for _ in 0..pairs {
+            let x = toks.get(i).and_then(|t| t.parse().ok()).unwrap_or(0.0);
+            let y = toks.get(i + 1).and_then(|t| t.parse().ok()).unwrap_or(0.0);
+            i += 2;
+            last = (x, y);
+        }
+        if is_move {
+            start = Some(last);
+        }
+        if out.last() != Some(&last) {
+            out.push(last);
         }
     }
     out

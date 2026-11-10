@@ -1,0 +1,55 @@
+/* LoreForge app themes, shared by PaperComposer and SlideComposer.
+   Palettes: orange / night / terminal, each with a dark and a light mode.
+   data-theme picks the palette, data-mode picks light/dark (both on <html>).
+   --accent-text is the accent for text, line icons and thin borders; --paper is
+   the document surface, which stays the document's own colour in every theme. */
+
+:root,
+:root[data-theme="orange"][data-mode="dark"] {
+  --bg: #1d1d20; --panel: #27272a; --surface: #313135; --surface-hover: #3b3b40;
+  --line: #3a3a3f; --line-strong: #505056;
+  --text: #f0f0f1; --muted: #a6a6ad; --faint: #74747b;
+  --accent: #ff6b35; --accent-ink: #0a0706; --accent-text: #ff8a5c; --accent-soft: #ff6b3526;
+  --dot: #ffffff0f; --paper: #ffffff; --paper-ink: #1b1b1f; --paper-dim: 1;
+}
+:root[data-theme="orange"][data-mode="light"] {
+  --bg: #f6f5f3; --panel: #ffffff; --surface: #efeeeb; --surface-hover: #e6e4e0;
+  --line: #e2e0dc; --line-strong: #c9c6c0;
+  --text: #1d1d20; --muted: #5d5d64; --faint: #8d8d94;
+  --accent: #d9541f; --accent-ink: #ffffff; --accent-text: #b8441a; --accent-soft: #d9541f1f;
+  --dot: #0000000d; --paper: #ffffff; --paper-ink: #1b1b1f;
+}
+:root[data-theme="night"][data-mode="dark"] {
+  --bg: #06061a; --panel: #0c0b24; --surface: #151336; --surface-hover: #1d1a45;
+  --line: #221f4a; --line-strong: #353163;
+  --text: #eeecff; --muted: #a7a3d6; --faint: #6f6ba3;
+  --accent: #f3e600; --accent-ink: #0c0b24; --accent-text: #f3e600; --accent-soft: #f3e60024;
+  --dot: #ffffff10; --paper: #ffffff; --paper-ink: #14122e;
+}
+:root[data-theme="night"][data-mode="light"] {
+  --bg: #f5f4fb; --panel: #ffffff; --surface: #ecebf7; --surface-hover: #e2e0f2;
+  --line: #e0def0; --line-strong: #c6c2e3;
+  --text: #0c0b24; --muted: #57538a; --faint: #8b88b3;
+  --accent: #5b3df5; --accent-ink: #ffffff; --accent-text: #4a2fe0; --accent-soft: #5b3df51f;
+  --dot: #0c0b240f; --paper: #ffffff; --paper-ink: #14122e;
+}
+:root[data-theme="terminal"][data-mode="dark"] {
+  --bg: #040705; --panel: #080d0a; --surface: #0f1812; --surface-hover: #15221a;
+  --line: #17271d; --line-strong: #24402f;
+  --text: #e6f5ec; --muted: #94b8a2; --faint: #5d7f69;
+  --accent: #2ef08a; --accent-ink: #04140a; --accent-text: #2ef08a; --accent-soft: #2ef08a22;
+  --dot: #ffffff0d; --paper: #ffffff; --paper-ink: #0c1a11;
+}
+:root[data-theme="terminal"][data-mode="light"] {
+  --bg: #f2f7f4; --panel: #ffffff; --surface: #e8f1ec; --surface-hover: #dceae2;
+  --line: #d9e7df; --line-strong: #b7d0c1;
+  --text: #08130c; --muted: #45634f; --faint: #7d9886;
+  --accent: #11965a; --accent-ink: #ffffff; --accent-text: #0b7a48; --accent-soft: #11965a1f;
+  --dot: #08130c0d; --paper: #ffffff; --paper-ink: #0c1a11;
+}
+
+:root {
+  --ok: #3fb97a; --warn: #e6a700; --err: #e5484d;
+  color-scheme: dark;
+}
+:root[data-mode="light"] { color-scheme: light; }

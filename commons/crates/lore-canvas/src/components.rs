@@ -67,6 +67,7 @@ pub fn instantiate(
         frame,
         hidden: false,
         ph: None,
+        slot: None,
         kind,
         src: None,
     };
@@ -164,6 +165,7 @@ pub fn instantiate(
                 frame: Frame::new(x, y + lh / 2, w, h),
                 hidden: false,
                 ph: None,
+                slot: None,
                 kind: Kind::Shape(SpObj {
                     geom: Geom {
                         prst: s("frame_geometry").unwrap_or_else(|| "roundRect".into()),
@@ -184,6 +186,7 @@ pub fn instantiate(
                 frame: Frame::new(x + inch(0.1), y, inch(1.2), lh),
                 hidden: false,
                 ph: None,
+                slot: None,
                 kind: Kind::Shape(SpObj {
                     geom: Geom {
                         prst: s("label_geometry").unwrap_or_else(|| "roundRect".into()),
@@ -204,6 +207,7 @@ pub fn instantiate(
                 frame: fr.clone(),
                 hidden: false,
                 ph: None,
+                slot: None,
                 kind: Kind::Group(GroupObj {
                     ch: fr,
                     children: vec![card, label],
@@ -229,6 +233,7 @@ pub fn arrow(st: &StyleSystem, style: &str, a: (f64, f64), b: (f64, f64), id: u3
         frame: crate::geom::connector_frame(a, b),
         hidden: false,
         ph: None,
+        slot: None,
         kind: Kind::Connector(ConnObj {
             geom: s.connector.clone(),
             adj: BTreeMap::new(),

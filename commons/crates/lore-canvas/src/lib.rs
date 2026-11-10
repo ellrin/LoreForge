@@ -11,6 +11,7 @@
 //! * [`pptx_in`] / [`pptx_out`]: lore-ooxml ↔ canvas (untouched objects keep
 //!   their original XML; unedited slides stay byte-identical).
 
+pub mod base;
 pub mod components;
 pub mod geom;
 pub mod model;

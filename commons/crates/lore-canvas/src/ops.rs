@@ -39,6 +39,8 @@ pub enum Op {
         value: Value,
     },
     InsertSlide { index: usize, slide: Slide },
+    /// Replace a deck field (`/defaults`).
+    SetDeck { path: String, value: Value },
     DeleteSlide { slide: String },
     MoveSlide { slide: String, index: usize },
     /// Macro: group these top-level objects into a new group with id `id`.
@@ -182,6 +184,7 @@ impl Editor {
                     frame: b.clone(),
                     hidden: false,
                     ph: None,
+                    slot: None,
                     kind: Kind::Group(GroupObj { ch: b, children }),
                     src: None,
                 };
@@ -337,6 +340,17 @@ impl Editor {
                     path: path.clone(),
                     value: old,
                 })
+            }
+            Op::SetDeck { path, value } => {
+                if !path.starts_with("/defaults") {
+                    return Err(OpError::BadPath(path.clone()));
+                }
+                let mut v = serde_json::to_value(&self.deck.defaults).map_err(|e| OpError::Bad(e.to_string()))?;
+                let mut root = serde_json::json!({ "defaults": v.take() });
+                let old = set_ptr(&mut root, path, value.clone())?;
+                self.deck.defaults = serde_json::from_value(root["defaults"].take()).map_err(|e| OpError::Bad(e.to_string()))?;
+                a.structure = true;
+                Ok(Op::SetDeck { path: path.clone(), value: old })
             }
             Op::InsertSlide { index, slide } => {
                 if self.deck.slide(&slide.uid).is_some() {

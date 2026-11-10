@@ -635,6 +635,7 @@ fn sp_obj(ctx: &Ctx, sp: &om::Sp, equation: bool, frame: Frame) -> Object {
         frame,
         hidden: sp.nv.hidden(),
         ph: sp.nv.ph.as_ref().map(|p| p.kind().to_string()),
+        slot: None,
         kind: if is_text { Kind::Text(spo) } else { Kind::Shape(spo) },
         src: None,
     }
@@ -672,6 +673,7 @@ pub(crate) fn object_of(ctx: &Ctx, s: &Shape) -> Object {
                 frame,
                 hidden: p.nv.hidden(),
                 ph: p.nv.ph.as_ref().map(|x| x.kind().to_string()),
+                slot: None,
                 kind: Kind::Picture(PicObj {
                     asset: blip
                         .embed()
@@ -702,6 +704,7 @@ pub(crate) fn object_of(ctx: &Ctx, s: &Shape) -> Object {
                 frame,
                 hidden: c.nv.hidden(),
                 ph: None,
+                slot: None,
                 kind: Kind::Connector(ConnObj {
                     geom: g.prst,
                     adj: g.adj,
@@ -735,6 +738,7 @@ pub(crate) fn object_of(ctx: &Ctx, s: &Shape) -> Object {
                 frame,
                 hidden: g.nv.hidden(),
                 ph: None,
+                slot: None,
                 kind: Kind::Group(GroupObj {
                     ch,
                     children: g.children.iter().map(|c| object_of(&inner, c)).collect(),
@@ -749,6 +753,7 @@ pub(crate) fn object_of(ctx: &Ctx, s: &Shape) -> Object {
                 frame,
                 hidden: f.nv.hidden(),
                 ph: None,
+                slot: None,
                 kind: Kind::Table(table_of(ctx, t)),
                 src: None,
             },
@@ -758,6 +763,7 @@ pub(crate) fn object_of(ctx: &Ctx, s: &Shape) -> Object {
                 frame,
                 hidden: f.nv.hidden(),
                 ph: None,
+                slot: None,
                 kind: Kind::Locked(LockedObj {
                     kind: format!(
                         "graphicFrame:{}",
@@ -782,6 +788,7 @@ pub(crate) fn object_of(ctx: &Ctx, s: &Shape) -> Object {
                     frame,
                     hidden: false,
                     ph: None,
+                    slot: None,
                     kind: Kind::Locked(LockedObj {
                         kind: "mc:AlternateContent".into(),
                     }),
@@ -804,6 +811,7 @@ pub(crate) fn object_of(ctx: &Ctx, s: &Shape) -> Object {
                 frame: frame_of(x.as_ref()),
                 hidden: false,
                 ph: None,
+                slot: None,
                 kind: Kind::Locked(LockedObj { kind: l.kind.clone() }),
                 src: None,
             }
@@ -951,6 +959,7 @@ pub fn import(od: &ODeck, style: Option<&StyleSystem>, style_id: Option<String>)
             layout: od.slide_layout(i).map(|l| l.name().to_string()),
             hidden: e.doc.hidden(),
             notes: e.notes.as_ref().map(|n| notes_text(&n.doc)).unwrap_or_default(),
+            arrangement: None,
             objects,
             anims,
             src: None,

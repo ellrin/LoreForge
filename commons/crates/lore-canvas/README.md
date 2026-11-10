@@ -12,7 +12,8 @@
 | `reveal` | `RevealSpec::Ghost { steps, future }`（每步一頁，其他步驟依變淡規則：圖片 alpha、文字灰、線條／填色 alpha、方程式灰）、`Agenda { obj, paras, em }`（每個第一層、有內容的段落一頁，略過空白行與第二層項目；`agenda_items` 列出這些段落；當前項加粗） |
 | `components` | 風格包元件 → 物件：編號圓圈（色序）、模型梯形、標籤卡（群組）、重點框、語意遮罩；`arrow(style)` |
 | `pptx_in` | `import(deck, style, id)`：每個物件保留原 XML＋逐欄位指紋；placeholder 位置與文字樣式依版面配置／母片繼承解析；`backdrops`（版面配置＋母片的非 placeholder 圖形，顯示用）；`cust_path`（custGeom → SVG） |
-| `pptx_out` | `export` / `export_parts` / `export_bytes`：未改動的投影片保留原 part 位元組；改動的投影片逐物件重建（未改動物件＝原 XML，改動物件＝原 XML 上逐欄位修補，新物件從頭建）；新增／複製／刪除／重新排序投影片、備註頁建立、圖片關聯（同內容共用）、清掉沒人用的媒體；`equations_needing_fallback(deck)` 列出要備用圖片的方程式框（新增或文字改過），app 以 `equation_fallback_key(slide_uid, id)`（`fallback:<uid>:<id>`）作資產路徑提供 PNG，匯出寫成 `mc:Fallback` 的 `<p:pic>`；沒提供就不寫 |
+| `base` | 畫布型底版（設計 §7.2 v2）：`Base`（`pages`：`cover`／`section`／`content`／`end` → `BasePage`：`layout` 名稱、`bg`、`fixed`（寫進版面配置）、`starter`（新投影片的起始物件，可編輯）、`title`／`subtitle`／`kicker`／`content`／`takeaway` 區域）；`Base::from_json(text, colors)` 把 `"@角色"` 顏色換成配色的值（沒有的角色是錯誤）；`compile(base, colors, assets)` → `template.pptx`（一個母片、每個頁類一個 slideLayout、0 張投影片，佈景主題顏色取自配色角色） |
+| `pptx_out` | `export` / `export_parts` / `export_bytes`：未改動的投影片保留原 part 位元組；改動的投影片逐物件重建（未改動物件＝原 XML，改動物件＝原 XML 上逐欄位修補，新物件從頭建）；新物件的漸層（`Paint::Gradient`）寫成 `a:gradFill`；新增／複製／刪除／重新排序投影片、備註頁建立、圖片關聯（同內容共用）、清掉沒人用的媒體；`equations_needing_fallback(deck)` 列出要備用圖片的方程式框（新增或文字改過），app 以 `equation_fallback_key(slide_uid, id)`（`fallback:<uid>:<id>`）作資產路徑提供 PNG，匯出寫成 `mc:Fallback` 的 `<p:pic>`；沒提供就不寫 |
 
 ## 無損原則
 

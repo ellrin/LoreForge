@@ -86,6 +86,9 @@ pub struct Deck {
     /// Counter for new slide uids.
     #[serde(default)]
     pub next_uid: u64,
+    /// Default arrangement (版型) per page kind (`cover`, `content`, `end`) for new slides.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub defaults: BTreeMap<String, String>,
 }
 
 impl Deck {
@@ -96,6 +99,7 @@ impl Deck {
             style,
             slides: vec![],
             next_uid: 1,
+            defaults: BTreeMap::new(),
         }
     }
     pub fn new_uid(&mut self) -> String {
@@ -126,6 +130,9 @@ pub struct Slide {
     /// Speaker notes, plain text (one paragraph per line).
     #[serde(default)]
     pub notes: String,
+    /// Arrangement (版型) the slide was laid out with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrangement: Option<String>,
     pub objects: Vec<Object>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub anims: Vec<Anim>,
@@ -148,6 +155,26 @@ pub struct SlideSrc {
     pub anims_k: u64,
 }
 
+impl Object {
+    /// An arrangement slot nobody filled yet: an image slot that is still a
+    /// shape, or a slot whose text has nothing but whitespace. Left out of
+    /// exports and shows.
+    pub fn is_empty_slot(&self) -> bool {
+        // colour panels of a recipe (`deco-…`) are part of the design, never empty
+        match self.slot.as_deref() {
+            None => return false,
+            Some(s) if s.starts_with("deco") => return false,
+            _ => {}
+        }
+        let blank = |t: &TextBody| t.paras.iter().all(|p| p.runs.iter().all(|r| r.kind != "math" && r.text.trim().is_empty()));
+        match &self.kind {
+            Kind::Text(sp) | Kind::Shape(sp) => sp.text.as_ref().is_none_or(blank),
+            Kind::Table(t) => t.rows.iter().all(|r| r.cells.iter().all(|c| blank(&c.text))),
+            _ => false,
+        }
+    }
+}
+
 impl Slide {
     pub fn new(uid: String, layout: Option<String>) -> Self {
         Slide {
@@ -155,6 +182,7 @@ impl Slide {
             layout,
             hidden: false,
             notes: String::new(),
+            arrangement: None,
             objects: vec![],
             anims: vec![],
             src: None,
@@ -304,6 +332,10 @@ pub struct Object {
     /// Placeholder type when the object is a layout placeholder (`title`, `ctrTitle`, `sldNum` …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ph: Option<String>,
+    /// Arrangement slot (`photo`, `cards[1]` …) this object fills. An empty slot
+    /// is drawn dashed in the editor and left out of shows and exports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
     #[serde(flatten)]
     pub kind: Kind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -612,7 +644,8 @@ fn is_one_u(v: &u32) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextBody {
-    /// Insets left, top, right, bottom.
+    /// Insets left, top, right, bottom (PowerPoint's default when omitted).
+    #[serde(default = "default_insets")]
     pub insets: [Emu; 4],
     /// t | ctr | b
     #[serde(default = "top")]
@@ -640,10 +673,14 @@ fn yes() -> bool {
     true
 }
 
+fn default_insets() -> [Emu; 4] {
+    [91_440, 45_720, 91_440, 45_720]
+}
+
 impl Default for TextBody {
     fn default() -> Self {
         TextBody {
-            insets: [91_440, 45_720, 91_440, 45_720],
+            insets: default_insets(),
             anchor: top(),
             wrap: true,
             autofit: none_str(),
