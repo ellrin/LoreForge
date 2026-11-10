@@ -30,7 +30,10 @@
 //! | POST/DELETE | /api/ignore | `{term}` → add to / remove from `ignore-words.txt` (「這不是術語」) |
 //! | POST | /api/papers/{sha}/mine | `{on, pages?}` → 「我的論文」 flag (paper.json) and the rebuilt my-vocab.json |
 //! | GET/PUT | /api/reader | `{field}`: the reader's field and level for term classification (`reading.toml`) |
-//! | GET/PUT | /api/models | the model menu: `{task, model: auto\|local\|haiku\|sonnet\|opus}` |
+//! | GET/PUT | /api/models | per-feature engine (the engine chips): `{task, model: auto\|local\|cloud\|haiku\|sonnet\|opus}` |
+//! | POST | /api/papers/{sha}/symbols/{id}/global | 加入全域: the row into the global 對照表 (`shared/notation.json`) |
+//! | GET | /api/notation/global | the global 對照表 (`shared/notation.json`; empty when missing) |
+//! | GET | /icons.js, /base.css, /shell.js | the shared shell (`lore_shell::FILES`); /notation-panel.js the shared 對照表 component |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
 //! | POST | /api/kb/open | start the KnowledgeBase app (macOS, local KB only; never when isolated) |
 //! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?}` → KB `POST /api/nodes` |
@@ -206,11 +209,12 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
 }
 
 pub fn routes() -> Router<Shared> {
-    Router::new()
+    shell_files(Router::new())
         .route("/prefs.css", get(prefs_css))
         .route("/prefs.js", get(prefs_js))
         .route("/theme.css", get(theme_css))
         .route("/theme.js", get(theme_js))
+        .route("/notation-panel.js", get(notation_panel_js))
         .route("/api/theme", get(theme_get).put(theme_put))
         .route("/open", get(open))
         .route("/api/info", get(info))
@@ -233,6 +237,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{sha}/symbols", get(reading::symbols_get).post(reading::symbol_add))
         .route("/api/papers/{sha}/symbols/rebuild", post(reading::symbols_rebuild))
         .route("/api/papers/{sha}/symbols/{id}", put(reading::symbol_put))
+        .route("/api/papers/{sha}/symbols/{id}/global", post(reading::symbol_to_global))
+        .route("/api/notation/global", get(reading::global_notation_get))
         .route("/api/glyphs", get(reading::glyphs_get).put(reading::glyphs_put))
         .route("/api/papers/{sha}/paragraphs", get(reading::paragraphs_get))
         .route("/api/papers/{sha}/paragraphs/run", post(reading::paragraphs_run))
@@ -251,6 +257,19 @@ pub fn routes() -> Router<Shared> {
         .route("/api/dirty", get(dirty))
         .route("/api/print", post(print))
         .route("/api/print/ready", post(print_ready))
+}
+
+/// The shared shell (commons/ui icons.js, base.css, shell.js) through lore-shell.
+fn shell_files(mut r: Router<Shared>) -> Router<Shared> {
+    for (path, mime, body) in lore_shell::FILES {
+        r = r.route(path, get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
+    }
+    r
+}
+
+/// The shared notation-panel Web Component (commons/ui), compiled in (the 對照表).
+async fn notation_panel_js() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../../../../commons/ui/notation-panel/notation-panel.js"))
 }
 
 pub fn router(shared: Shared) -> Router {
@@ -334,7 +353,7 @@ async fn open(State(s): State<Shared>, Query(q): Query<OpenQ>) -> Response {
     let what = known.map(|m| format!("《{}》", html_escape(&m.title))).unwrap_or_else(|| "這份 PDF".into());
     let body = format!(
         "<!doctype html><html lang=\"zh-Hant\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>LoreReader</title>\
-<link rel=\"stylesheet\" href=\"/theme.css\"><link rel=\"stylesheet\" href=\"/styles.css\"><script src=\"/theme.js\"></script><body class=\"notice-page\"><main class=\"notice\"><h1>不在這台電腦的書庫裡</h1>\
+<link rel=\"stylesheet\" href=\"/theme.css\"><link rel=\"stylesheet\" href=\"/base.css\"><link rel=\"stylesheet\" href=\"/styles.css\"><script src=\"/theme.js\"></script><body class=\"notice-page\"><main class=\"notice\"><h1>不在這台電腦的書庫裡</h1>\
 <p>{what}（sha256 <code>{}</code>，第 {page} 頁）不在這台電腦的 LoreReader 書庫中。</p>\
 <p>在這台電腦用 LoreReader 開啟同一個 PDF 檔，它就會加入書庫，這個連結之後就能直接開到那一頁。</p>\
 <p><a class=\"btn\" href=\"/\">回到書庫</a></p></main></body></html>",

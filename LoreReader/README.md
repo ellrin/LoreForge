@@ -67,23 +67,25 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 ## 閱讀
 
-- 左邊縮圖、中間頁面、右邊面板（名詞／符號／段落／註記／引用句／對話）；窄螢幕時縮圖與面板變成抽屜。配色與其他 App 共用（工具列右上角的太陽按鈕開啟「外觀」）。
-- pdf.js 文字層可以選取文字；縮放、符合寬度、頁碼跳頁、全文搜尋（⌘/Ctrl＋F，Enter 下一個）。只繪製視窗附近的頁面，縮圖捲到才畫。
+- 外框是所有 LoreForge App 共用的外殼（`commons/ui` 的 icons.js、base.css、shell.js，`docs/shell.md`）：上方列＝品牌（回首頁）· 文件選單（最近的論文、加入 PDF…、合併 PDF…、改標題…、另存新檔（含筆記）…、首頁）· 狀態標籤 · 標示名詞 · 搜尋 · 問這篇（AI）… 右邊 對照表 · 匯出▾（另存新檔（含筆記）、列印）· 齒輪。
+- 左邊縮圖、中間頁面、右邊編號區塊（01 名詞、02 註記 預設展開；03 符號、04 段落、05 引用句、06 問這篇 預設收起，上方列的「問這篇」打開 06）；≤1100px 縮圖與面板變成抽屜。
+- 齒輪：一般（你的領域、書庫與匯出資料夾、KnowledgeBase 網址）、外觀（配色，與其他 App 共用）、模型（共用的連線與走向，`/api/engines`）、快捷鍵。
+- pdf.js 文字層可以選取文字；下方狀態列：頁碼跳頁、縮小／實際大小／放大、符合寬度。⌘F 在頁面上方開搜尋列（Enter 下一個、⇧Enter 上一個、Esc 關閉）。只繪製視窗附近的頁面，縮圖捲到才畫。
 
 ## 頁面操作（不破壞原檔）
 
-左邊縮圖欄上方的三顆按鈕：複製這一頁、刪除這一頁、從其他 PDF 插入頁面（選一份 PDF → 點選要的頁，依點選順序 → 指定插在第幾頁之後）；左邊縮圖可以拖曳排序。變更先暫存（標題旁顯示「頁面未儲存」，點它打開縮圖欄），按縮圖欄的「另存…」才用 Rust（`lopdf`）產生**新的 PDF**：存進書庫，同時複製一份到匯出資料夾（同名就加 `-2`、`-3`，不覆蓋）。原本的 PDF 永遠不動。書庫頁的「合併 PDF…」依點選順序把幾份 PDF 接成一份新的。
+左邊縮圖欄上方的三顆按鈕：複製這一頁、刪除這一頁、從其他 PDF 插入頁面（選一份 PDF → 點選要的頁，依點選順序 → 指定插在第幾頁之後）；左邊縮圖可以拖曳排序。變更先暫存（狀態標籤顯示「頁面未儲存」，點它＝另存…），按縮圖欄的「另存…」才用 Rust（`lopdf`）產生**新的 PDF**：存進書庫，同時複製一份到匯出資料夾（同名就加 `-2`、`-3`，不覆蓋）。原本的 PDF 永遠不動。書庫頁的「合併 PDF…」依點選順序把幾份 PDF 接成一份新的。
 
 新 PDF 不保留原檔的書籤（outline）、表單與具名目的地；頁面上的連結註解保留。
 
 ## 另存新檔（含筆記）
 
-`private/` 可能被清掉，所以註記可以寫進一份**新的 PDF**（原檔永遠不動）。上方工具列的存檔按鈕：
+`private/` 可能被清掉，所以註記可以寫進一份**新的 PDF**（原檔永遠不動）：這就是 LoreReader 的「儲存」。從文件選單或匯出▾ 的「另存新檔（含筆記）…」、⌘S，或點狀態標籤：
 
-- 註記改過、還沒存進 PDF 時，按鈕上有一個橘點。
+- 註記改過、還沒存進 PDF 時，狀態標籤顯示「未儲存」；存過之後「已儲存」。
 - 第一次：Mac App 開系統的存檔對話框，預設在原檔旁邊（不知道原檔在哪就是「文件」），檔名 `<原檔名> (筆記).pdf`；瀏覽器直接下載。
 - 之後：選單「儲存」（覆寫上一次存的那份，先寫暫存檔再改名）或「另存新檔…」。只會覆寫 LoreReader 自己存出的檔案，不會覆寫原檔、書庫或 git repo 裡的檔。
-- 「頁面未儲存」（頁面操作）時要先在縮圖欄「另存…」頁面；筆記未儲存只看存檔按鈕上的橘點。
+- 「頁面未儲存」（頁面操作）時要先在縮圖欄「另存…」頁面；筆記未儲存看狀態標籤。
 - **關閉視窗或 ⌘Q**（Mac App）：有沒存進 PDF 的註記時，每篇問一次「儲存筆記到新的 PDF？」：儲存…／不儲存／取消。存過的直接覆寫那份；「不儲存」之後同一版註記不再問；「取消」不關。
 
 寫法（任何 PDF 閱讀器都看得到）：每個螢光是 `/Highlight` 註解（`/QuadPoints`、顏色、外觀串流 `/AP`，Preview 才畫得出來）；「註記」另外在旁邊加一個便利貼（`/Text`，內容是註記文字）。每個註解有 `/NM (lr:<id>)` 和整筆註記的 JSON，再存一次會先移除 `lr:` 開頭的註解（別的工具加的不動）。文件資訊裡的 `/LoreReaderSource` 是原本那篇的 sha256。位置換算用 CropBox（沒有就 MediaBox）與 `/Rotate`。
@@ -92,7 +94,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 ## 列印
 
-工具列的印表機按鈕：
+匯出▾ 的「列印」：
 
 - **Mac App**：開一個列印視窗（`print.html`，每頁以約 216 dpi 繪製，紙張大小用 PDF 第一頁的尺寸），繪製完成後顯示 macOS 的系統列印對話框（WKWebView 的原生列印），可以選任何已安裝的印表機或存成 PDF。
 - **瀏覽器**：開新分頁 `print.html?sha=…&auto=1`，繪製完成後呼叫 `window.print()`。
@@ -104,7 +106,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 - **複製**。
 - **螢光標記**（黃、綠、藍、粉紅）與**加註記…**：存在 `annotations.json`，右邊「註記」分頁列出，點一下跳到那裡。
 - **翻譯**：lore-llm 任務 `lr-translate`，先用本機模型（`local:current`），連不上才用 Claude（`claude:selected`），與 PaperComposer 的順序相同。結果在小視窗顯示，可以「加入知識庫」。
-- **問 Claude**：把選取的文字、頁碼和所在段落附到右邊的對話（任務 `lr-chat` → `claude:selected`；模型選單可以改）。對話存在這篇論文的 `chat.json`。
+- **問 Claude**：把選取的文字、頁碼和所在段落附到右邊的對話（任務 `lr-chat` → `claude:selected`；送出旁的引擎標籤可以改）。對話存在這篇論文的 `chat.json`。
 - **存成引用句…**：句子（可修剪）＋一行備註，存在 `quotes.json`；右邊「引用句」分頁列出。
 - **加入知識庫…**：呼叫 KnowledgeBase 的 `POST /api/nodes`。標題預填選取的文字，摘要自己寫（可按「用模型起草摘要」呼叫 KnowledgeBase 的 `/api/draft`，論文標題與頁碼一併送出）。**初始狀態**可選「學習中」（預設：明天問、3 天後再問）或「已掌握」（已經熟的詞，直接記為「記得」，30 天後再確認）。來源記為 `{type: "pdf", ref: <sha256>, where: "p.<頁>", title: <論文標題>}`，內文附上所在的句子。
 
@@ -117,14 +119,14 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 3. **詞形還原**：大小寫、複數（含 `matrices`、`analyses` 這類不規則的）、連字號與空格、英式／美式拼法（`normalisation`、`colour`、`tumour`、`centre`、`labelled`、`haem-`、`oedema`…）、連字（ﬁ）、彎引號、**行尾斷字**（`segmen-` 換行 `tation`：全文別處出現過 `segmentation`，或下一段是小寫而且全文沒有 `segmen-tation` 這種寫法，就接回去）。
 4. **扣掉**：功能詞（`function_words.txt`）、學術通用詞（`academic_words.txt`：method、propose、significant…）、日常英文（`common_words.txt`，約 2,600 字；但 `TERMLIKE` 裡在論文中是術語的字不扣，例如 regression、variance、attention、loss、boundary）、最常見的英文字（`english_common.txt`，SCOWL 20 級以內，約 11,000 個字形：hip、biology、institute…）、以及**忽略清單**。縮寫（兩個以上大寫字母）不扣；全大寫的一般字（`TAIWAN`、`LAKE`）不算縮寫。次常見的字（`english_familiar.txt`，SCOWL 35 級：fracture、pelvic、auxiliary…）照樣送去分類，但**分類之前不列出**。也不列：人名、單位與標題頁的字（大寫開頭、全文沒有小寫寫法、多半出現在每個字都大寫的行或 `et al.` 前面：作者、`I-Fang`、`Liao2`、學校與期刊名）、編號（`ABCD-D-24-01234R4`）、網址／e-mail／檔名裡的字、序數與容量（`43rd`、`24GB`）、黏著數字的一般字。字表來自 SCOWL（http://wordlist.aspell.net/ ，授權在 `english_words.LICENSE`，可自由使用與散布，須保留版權聲明）。
 5. **對知識庫**：記得、學習中／久未複習、沒有卡片。
-6. **沒有卡片的詞整批交給模型分類，一篇只呼叫一次**（任務 `lr-classify-terms`：先地端模型、沒有時用 Haiku；JSON schema）：方法、指標、資料集、統計、臨床／解剖、其他術語、**基礎科學詞**（這個領域的專家早就會的科學、數學、工程詞，例如 pixel、vector、variance）、一般學術詞、人名。提示裡附上**讀者的領域與程度**（模型選單的「你的領域」，存在共用的 `private/shared/profile.toml` 的 `field`，其他 App 也看得到；不寫就用預設 "researcher in medical image analysis and deep learning"；舊的 `private/LoreReader/reading.toml` 會自動搬過去），以及讀者已經記得的術語（知識庫「記得」的卡片標題、「我的論文」裡的術語）當程度參考。結果存在 `papers/<sha256>/nouns.json`；分類或提示的版本、或領域改了，快取就作廢重來。**還沒分類的詞不標色**，清單上顯示「未分類」。
+6. **沒有卡片的詞整批交給模型分類，一篇只呼叫一次**（任務 `lr-classify-terms`：先地端模型、沒有時用 Haiku；JSON schema）：方法、指標、資料集、統計、臨床／解剖、其他術語、**基礎科學詞**（這個領域的專家早就會的科學、數學、工程詞，例如 pixel、vector、variance）、一般學術詞、人名。提示裡附上**讀者的領域與程度**（齒輪 → 一般的「你的領域」，存在共用的 `private/shared/profile.toml` 的 `field`，其他 App 也看得到；不寫就用預設 "researcher in medical image analysis and deep learning"；舊的 `private/LoreReader/reading.toml` 會自動搬過去），以及讀者已經記得的術語（知識庫「記得」的卡片標題、「我的論文」裡的術語）當程度參考。結果存在 `papers/<sha256>/nouns.json`；分類或提示的版本、或領域改了，快取就作廢重來。**還沒分類的詞不標色**，清單上顯示「未分類」。
 7. 右鍵（或清單裡的眼睛按鈕）「**忽略**」寫進 `private/LoreReader/ignore-words.txt`，清單與內文立刻重畫。舊的 `known-words.txt` 第一次啟動時會自動搬進 `ignore-words.txt`（兩個都有時接在後面），之後只讀新檔名。懂的專有名詞不要放忽略清單：加入知識庫並選「記得」。
 
 一篇約 8,000 字的合成論文會整理成約 270 個詞（測試 `long_paper_reduces_to_a_few_hundred_units`）。
 
 **右邊「名詞」分頁**：欄位是詞、分類、知識庫狀態、次數、第一次出現的頁碼；可以依每一欄排序，依分類、狀態篩選，也可以打字篩選。點一個詞：文中**所有出現的位置**都會亮起來並跳到第一個，再點一下（或 ↓）跳到下一個。每一列可以「加入知識庫…」（狀態「學習中／記得」）或「忽略」。上方「● 要學 · ● 學習中 · ● 記得」可以點來篩選；「要學」＝專業術語而且沒有卡片（分頁上的數字也是它）。
 
-**內文顏色**（工具列的標靶按鈕「標示名詞」打開／關閉）也來自這份清單：
+**內文顏色**（上方列的標靶按鈕「標示名詞」打開／關閉）也來自這份清單：
 
 - **紅色（要學）**：模型判為方法／指標／資料集／統計／臨床解剖／其他術語、而且沒有卡片、也不在「我的論文」裡的詞。基礎科學詞、一般學術詞、人名與還沒分類的詞都不標紅；名詞清單把基礎科學詞收成最後一組。
 - **淡琥珀色（學習中）**：有卡片，學習中、久未複習或還沒有學習紀錄。
@@ -174,9 +176,9 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 對話依段落歸檔（`chat.json` 的 `paragraph`、`chip`、`context`），「對話」分頁可以切換「全部」或「這段」，重讀時看得到當時卡在哪、怎麼解開。沒有模型時段落與標籤照樣列出，上方說明原因。
 
-### 模型選單
+### 引擎標籤
 
-工具列的「模型」按鈕：名詞分類、段落分析、問 Claude、翻譯，各自選「自動」（照 `tasks.toml` 的預設順序）、地端、Haiku、Sonnet 或 Opus，做法同 PaperComposer 的模型選單（`complete_on`）。選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。選擇存在 `private/LoreReader/models.json`。
+名詞分類（01 名詞）、段落分析（04 段落）、問這篇（送出旁）、翻譯（譯文下方）各有共用外殼的引擎標籤：「自動」（照 `tasks.toml` 的預設順序）、雲（`claude:selected`）、地（本機模型），做法同 PaperComposer 的模型選單（`complete_on`）；舊的 Haiku／Sonnet／Opus 選擇照用，標籤顯示「雲 · 名稱」。選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。選擇存在 `private/LoreReader/models.json`。
 
 ## 從知識庫開啟 PDF
 
@@ -201,7 +203,9 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `GET /api/papers/{sha}/paragraphs`、`POST …/paragraphs/run`、`POST …/paragraphs/{id}/understood` | 段落（標籤、分析、懂了）與背景分析的進度；重跑 `{again?}`；`{on}` |
 | `GET/PUT /api/glyphs` | 自己的字形 → LaTeX 對照（`private/LoreReader/glyphs.toml`） |
 | `POST/DELETE /api/ignore` | `{term}` → 加進／移出忽略清單 |
-| `GET/PUT /api/models` | 模型選單：`{task, model}` |
+| `GET/PUT /api/models` | 引擎標籤：`{task, model: auto\|local\|cloud\|haiku\|sonnet\|opus}` |
+| `POST /api/papers/{sha}/symbols/{id}/global` | 對照表的「加入全域」：這一列寫進共用的 `private/shared/notation.json`（全域已有同一個符號 → 409） |
+| `GET /api/notation/global` | 全域對照表 |
 | `GET/PUT /api/theme` | 共用配色（外觀） |
 | `GET/PUT /api/reader` | 讀者的領域與程度 `{field}`（名詞分類用；存在 `private/shared/profile.toml`） |
 | `POST /api/papers/{sha}/mine` | `{on, pages?}`：「我的論文」標記與重建 my-vocab |

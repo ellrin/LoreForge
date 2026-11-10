@@ -13,6 +13,7 @@ edition = "2024"
 lore-home = { path = "../commons/crates/lore-home" }
 lore-llm = { path = "../commons/crates/lore-llm" }
 lore-notation = { path = "../commons/crates/lore-notation" }
+lore-shell = { path = "../commons/crates/lore-shell" }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

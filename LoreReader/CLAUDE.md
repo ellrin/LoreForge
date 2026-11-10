@@ -53,7 +53,7 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   the author's action, `initial_state` learning|known; `lexicon()` = `GET /api/nodes` titles +
   aliases), `llm.rs` = lore-llm wired like PaperComposer (`tasks.toml`: `lr-translate`
   local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` and `lr-paragraph`
-  local:current → claude:haiku; `complete_on` = the model menu's choice, strict; the local
+  local:current → claude:haiku; `complete_on` = the engine chip's choice (`auto | local | cloud`, old `haiku | sonnet | opus` still read), strict; the local
   engine is config `[engine]`, else the shared `private/shared/engine.toml` via
   `lore_home::engine`, re-read per call),
   `reading.rs` = the reading aids over the text the page posts once per open (memory only):
@@ -72,7 +72,11 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   Tauri event can stop — Dock Quit / logout still bypass the prompt).
 - `web/`: static HTML/CSS/JS, no build step; `app.js` is an ES module over pdf.js
   (`web/vendor/pdfjs`, 5.7.284, Apache-2.0; keep LICENSE + VERSION). `print.html` renders pages
-  at ~216 dpi. Tokens/icons from SlideComposer (icons.js copied, extra icons at the end).
+  at ~216 dpi. The shared shell (`docs/shell.md`): `/icons.js`, `/base.css`, `/shell.js` are
+  `lore_shell::FILES` (no icons.js in web/), `/notation-panel.js` the shared 對照表 component;
+  `LoreShell.mount` builds the top bar, gear (一般 · 外觀 · 模型 · 快捷鍵), drawers, ⌘F / ⌘S;
+  the right panel is `LoreShell.block`s (01 名詞 … 06 問這篇). `/api/engines` (the 模型 tab) is
+  not mounted yet (group EN). styles.css keeps only what base.css does not own.
 - `../private-example/LoreReader/`: seed of the private workspace (README, `ignore-words.txt`, `papers/`).
 
 ## Decisions
@@ -116,14 +120,16 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   means changing both readers too.
 - Theme: the one all LoreForge apps share. `/theme.css` and `/theme.js` are `commons/ui/theme.{css,js}`
   (compiled in through `lore_home::theme`; the script carries the shared choice from
-  `private/shared/ui.toml`), `GET`/`PUT /api/theme` read and set it; the sun button opens the
-  外觀 picker (`LoreTheme.picker`). `data-mode` (dark / light) follows the theme. PDF pages,
+  `private/shared/ui.toml`), `GET`/`PUT /api/theme` read and set it; the gear's 外觀 tab is the
+  picker (`LoreTheme.picker`). `data-mode` (dark / light) follows the theme. PDF pages,
   thumbnails and `print.html` never use theme tokens.
 - Symbol table: `papers/<sha256>/symbols.json` (lore-notation fields + scope, grade,
   resolved_by). Grades are evidence-based: the program gives 🟢 only with the quoted sentence,
   🔴 only for two definitions in the same paper (never vs the author's notation). Keys are
   lore-notation canonical keys; ground truth in tests = lore-notation's scan of the source.
-  Glyph table: default in lr-core, overrides `private/shared/glyphs.toml` then
+  對照表 (top bar, 03 符號): `symbols.json` in `<notation-panel>` as document scope; 加入全域 copies
+  the selected row into `private/shared/notation.json` (lore-notation `Notation`, free id, paper-only
+  fields dropped; an existing symbol is refused). Glyph table: default in lr-core, overrides `private/shared/glyphs.toml` then
   `private/LoreReader/glyphs.toml`. KaTeX in `web/vendor/katex` (MIT, same as PaperComposer).
 
 ## Not tested on real hardware

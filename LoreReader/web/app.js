@@ -37,14 +37,8 @@ async function api(path, { method, body, raw } = {}) {
   if (!r.ok) { const e = new Error(v.error ?? `${r.status}`); e.data = v; e.status = r.status; throw e; }
   return v;
 }
-let toastTimer;
-function toast(msg, err = false) {
-  $(".toast")?.remove();
-  const t = h("div", { class: `toast${err ? " err" : ""}`, role: "status" }, msg);
-  document.body.append(t);
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.remove(), err ? 6000 : 3000);
-}
+/** The shell's toast (commons/ui/shell.js). */
+const toast = (msg, err = false) => LoreShell.toast(msg, { err });
 const fail = (e) => toast(e.message ?? String(e), true);
 const norm = (s) => (s ?? "").replace(/\s+/g, " ").trim();
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -89,12 +83,16 @@ const S = {
   pages: [],                // view items: {sha, page, w, h, el, token, rendered, divs, strs}
   zoom: 1, fit: true, cur: 0,
   annotations: [], quotes: [], chat: [], att: [],
-  tab: "notes", termsOn: false,
+  termsOn: false,
+  models: null,             // GET /api/models: each feature's engine choice (the engine chips)
   search: { q: "", hits: [], i: -1 },
   sending: false,
+  used: {},                 // task → the engine that answered last (engine chip label)
 };
 try { S.fieldSkipped = localStorage.getItem("lr.fieldSkipped") === "1"; } catch {}
-try { S.termsOn = localStorage.getItem("lr.terms") !== "0"; S.tab = localStorage.getItem("lr.tab") || "nouns"; } catch {}
+try { S.termsOn = localStorage.getItem("lr.terms") !== "0"; } catch {}
+/** The shell (top bar, gear, drawers), mounted in wire(). */
+let shell = null;
 
 const key = (sha, page) => `${sha}:${page}`;
 const getDoc = (sha) => {
@@ -176,23 +174,25 @@ async function pageRich(sha, page) {
 
 // ── library (home) ────────────────────────────────────────────────────────
 async function showHome() {
-  S.sha = null; S.paper = null; S.exp = null;
+  S.sha = null; S.paper = null; S.exp = null; S.arr = null;
   $("#app").classList.add("at-home");
   $("#home").hidden = false;
-  $("#paperName").textContent = "";
+  shell.home(true);
+  shell.setName("");
+  updateStatus();
+  closeFind();
   document.title = "LoreReader";
   const [info, list] = await Promise.all([api("/api/info"), api("/api/papers")]);
   S.info = info;
   $("#libError").hidden = !info.library_error;
   $("#libError").textContent = info.library_error ?? "";
-  $("#actHome").title = `書庫：${info.library}\n匯出：${info.exports}`;
   const cards = list.papers.map((p) => h("div", { class: "cardwrap" }, h("button", { class: `card${p.present ? "" : " missing"}`, onclick: () => p.present ? go(p.sha256, 1) : toast("這份 PDF 不在這台電腦的書庫裡", true) },
     h("b", { title: p.title }, p.title),
     h("span", { class: "meta", title: p.original_name }, `${p.pages} 頁 · ${p.added_at.slice(0, 10)}${p.original_name.replace(/\.pdf$/i, "") === p.title ? "" : ` · ${p.original_name}`}`),
     p.doi ? h("span", { class: "meta" }, `doi:${p.doi}`) : null,
     p.derived_from ? h("span", { class: "tag" }, "編輯版") : null,
     p.present ? null : h("span", { class: "tag" }, "不在這台電腦")),
-    p.present ? h("button", { class: "ico small rename", "aria-label": "改標題", title: "改標題", "data-icon": "pen", onclick: () => renameDialog(p) }) : null,
+    p.present ? h("button", { class: "ico small rename", "aria-label": "改標題", "data-icon": "pen", onclick: () => renameDialog(p) }) : null,
     p.present ? h("button", { class: "ico small mine", "aria-label": "我的論文", "aria-pressed": p.mine ? "true" : "false", "data-icon": "star", onclick: (ev) => toggleMine(p, ev.currentTarget) }) : null));
   $("#paperList").replaceChildren(...(cards.length ? cards : [h("p", { class: "empty" }, "書庫是空的")]));
   paintIcons($("#paperList"));
@@ -209,7 +209,7 @@ async function renameDialog(paper) {
   try {
     const out = await api(`/api/papers/${paper.sha256}`, { method: "PUT", body: { title: r } });
     paper.title = out.paper.title;
-    if (S.sha === paper.sha256) { S.paper = out.paper; $("#paperName").textContent = out.paper.title; $("#paperName").title = out.paper.title; document.title = `${out.paper.title} · LoreReader`; }
+    if (S.sha === paper.sha256) { S.paper = out.paper; shell.setName(out.paper.title); document.title = `${out.paper.title} · LoreReader`; }
     if (!S.sha) showHome();
   } catch (e) { fail(e); }
 }
@@ -239,13 +239,8 @@ async function confirmLeave() {
   await refreshExport();
   if (!S.exp?.dirty) return true;
   const last = S.exp.last?.exists ? S.exp.last : null;
-  const r = await dialog((d, close) => h("div", { class: "dlg" },
-    h("h3", {}, "儲存筆記到新的 PDF？"),
-    h("div", { class: "quote-box" }, `《${S.paper.title}》`, last ? ` → ${last.name}` : ""),
-    h("div", { class: "actions" },
-      h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"),
-      h("button", { type: "button", class: "btn", onclick: () => close("skip") }, "不儲存"),
-      h("button", { type: "button", class: "btn primary", onclick: () => close("save") }, last ? "儲存" : "儲存…"))));
+  const r = await LoreShell.ask(statusAnchor(), ["儲存筆記到新的 PDF？", `《${S.paper.title}》${last ? ` → ${last.name}` : ""}`],
+    [{ label: "取消", value: null }, { label: "不儲存", value: "skip" }, { label: last ? "儲存" : "儲存…", value: "save", primary: true }]);
   if (r === "skip") {
     try { await api(`/api/papers/${S.sha}/export/decline`, { body: {} }); } catch (e) { fail(e); }
     return true;
@@ -278,15 +273,16 @@ async function importFiles(files) {
 async function openPaper(sha, page) {
   $("#home").hidden = true;
   $("#app").classList.remove("at-home");
+  shell.home(false);
   if (S.sha !== sha) {
     const r = await api(`/api/papers/${sha}`);
     S.sha = sha; S.paper = r.paper; S.arr = null;
-    $("#paperName").textContent = r.paper.title;
-    $("#paperName").title = r.paper.title;
+    shell.setName(r.paper.title);
     document.title = `${r.paper.title} · LoreReader`;
+    remember(sha);
     const doc = await getDoc(sha);
     S.orig = Array.from({ length: doc.numPages }, (_, i) => ({ sha, page: i + 1 }));
-    S.search = { q: "", hits: [], i: -1 }; $("#searchInput").value = ""; $("#searchCount").textContent = "";
+    S.search = { q: "", hits: [], i: -1 }; $("#searchInput").value = ""; $("#searchCount").textContent = ""; closeFind();
     S.att = []; S.chatDraft = "";
     S.nouns = null; S.nounMarks = new Map(); S.focusNoun = null;
     S.symbols = null; S.symSpans = []; S.symMarks = new Map();
@@ -343,9 +339,8 @@ async function buildView() {
     items.push({ sha: r.sha, page: r.page, w: vp.width, h: vp.height, token: 0 });
   }
   S.pages = items;
-  const edited = !!S.arr;
-  $("#editChip").hidden = !edited;
-  $("#editActions").hidden = !edited;
+  $("#editActions").hidden = !S.arr;
+  updateStatus();
   $("#pageTotal").textContent = `/ ${items.length}`;
   if (S.fit) S.zoom = fitZoom();
   layoutPages();
@@ -377,6 +372,7 @@ function layoutPages() {
   });
   $("#pages").replaceChildren(...els);
   $("#zoomChip").textContent = `${Math.round(S.zoom * 100)}%`;
+  $("#actFit").setAttribute("aria-pressed", S.fit ? "true" : "false");
 }
 
 function sizePage(p) {
@@ -516,7 +512,7 @@ function buildThumbs() {
     if (!own(p)) frame.append(h("span", { class: "from" }, `插入 · 原第 ${p.page} 頁`));
     const t = h("div", { class: "thumb", draggable: "true", dataset: { i }, "aria-current": i === S.cur ? "true" : "false", title: own(p) ? `第 ${p.page} 頁` : null },
       h("span", { class: "no" }, i + 1), frame);
-    t.addEventListener("click", () => { scrollToPage(i); if (innerWidth <= 1100) togglePanel("sorter", false); });
+    t.addEventListener("click", () => { scrollToPage(i); if (innerWidth <= 1100) shell.drawer("left", false); });
     thumbObserver.observe(t);
     return t;
   });
@@ -692,18 +688,6 @@ async function mergeDialog() {
   } catch (e) { fail(e); }
 }
 
-// ── 外觀: the theme all LoreForge apps share (theme.js) ───────────────────
-function lookDialog() {
-  return dialog((d, close) => {
-    const pick = h("div", {});
-    LoreTheme.picker(pick);
-    return h("div", { class: "dlg look" },
-      h("h3", {}, "外觀"),
-      pick,
-      h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(true) }, "關閉")));
-  });
-}
-
 // ── generic dialog ────────────────────────────────────────────────────────
 /** `build(dialog, close)` returns the content; resolves with what `close(v)` gets. */
 function dialog(build) {
@@ -800,8 +784,8 @@ function selActions(info) {
     { key: "c", icon: "copy", label: "複製", hint: "C", run: () => navigator.clipboard.writeText(info.text).then(() => toast("已複製"), () => document.execCommand("copy")) },
     { key: "t", icon: "languages", label: "翻譯", hint: "T", run: () => translate(info.text, info.context, info.box, info) },
     { key: "a", icon: "chat", label: "問這篇", hint: "A", run: () => attach(info) },
-    { key: "q", icon: "quote", label: "存成引用句…", hint: "Q", run: () => quoteDialog(info) },
-    { key: "k", icon: "book", label: "加入知識庫…", hint: "K", run: () => addCardDialog({ title: info.text, sha: info.p.sha, page: info.p.page, context: info.context }) },
+    { key: "q", icon: "excerpt", label: "存成引用句…", hint: "Q", run: () => quoteDialog(info) },
+    { key: "k", icon: "cards", label: "加入知識庫…", hint: "K", run: () => addCardDialog({ title: info.text, sha: info.p.sha, page: info.p.page, context: info.context }) },
   ].map((x) => ({ hint: x.key === "n" ? "N" : undefined, ...x }));
 }
 
@@ -881,7 +865,7 @@ async function addAnnotation(info, { kind, color, note = "" }) {
   try {
     const r = await api(`/api/papers/${info.p.sha}/annotations`, { body: { page: info.p.page, kind, color, note, quote: info.quote, rects: info.rects } });
     getSelection().removeAllRanges();
-    if (info.p.sha === S.sha) { S.annotations.push(r.annotation); if (S.tab === "notes") renderSide(); }
+    if (info.p.sha === S.sha) { S.annotations.push(r.annotation); renderSide("notes"); }
     S.pages.filter((p) => p.sha === info.p.sha && p.page === info.p.page && p.rendered).forEach(drawHighlights);
     toast(kind === "note" ? "已加註記" : "已螢光");
     refreshExport();
@@ -923,7 +907,7 @@ function jumpTo(page, id) {
   vpEl.scrollTo({ top: y, behavior: "smooth" });
   setCur(i);
   if (id) setTimeout(() => $$(`.hl[data-id="${id}"]`).forEach((x) => { x.classList.remove("flash"); void x.offsetWidth; x.classList.add("flash"); }), 450);
-  if (innerWidth <= 1100) togglePanel("side", false);
+  if (innerWidth <= 1100) shell.drawer("right", false);
 }
 
 // ── citable sentences ─────────────────────────────────────────────────────
@@ -963,10 +947,11 @@ async function translate(text, context, box, info) {
   showPop(anchor, head, h("div", { class: "muted" }, "翻譯中…"));
   try {
     const r = await api("/api/translate", { body: { text, context } });
-    const kids = [head, h("div", { class: "out" }, r.translation), h("div", { class: "src" }, `${r.engine}${r.fallback_used ? " · 改用 Claude" : ""}`)];
+    S.used["lr-translate"] = r.engine;
+    const kids = [head, h("div", { class: "out" }, r.translation), h("div", { class: "src eng-line" }, engineChip("lr-translate"), r.fallback_used ? " 改用 Claude" : "")];
     const acts = h("div", { class: "actions" },
       h("button", { type: "button", class: "btn small", onclick: () => navigator.clipboard.writeText(r.translation).then(() => toast("已複製")) }, h("span", { "data-icon": "copy" }), "複製"));
-    if (info) acts.append(h("button", { type: "button", class: "btn small primary", onclick: () => { hidePop(); addCardDialog({ title: text, sha: info.p.sha, page: info.p.page, context: info.context, hint: r.translation }); } }, h("span", { "data-icon": "book" }), "加入知識庫…"));
+    if (info) acts.append(h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); addCardDialog({ title: text, sha: info.p.sha, page: info.p.page, context: info.context, hint: r.translation }); } }, h("span", { "data-icon": "cards" }), "加入知識庫…"));
     showPop(anchor, ...kids, acts);
   } catch (e) {
     showPop(anchor, head, h("div", { class: "err-box" }, e.message));
@@ -1019,7 +1004,7 @@ async function addCardDialog({ title, sha, page, context, hint, summary }) {
 }
 
 function updateLegend() {
-  $("#actTerms").setAttribute("aria-pressed", S.termsOn ? "true" : "false");
+  $("#actTerms")?.setAttribute("aria-pressed", S.termsOn ? "true" : "false");
 }
 
 /** Re-mark one page's text layer: knowledge colouring, then search hits on top. */
@@ -1128,8 +1113,8 @@ function setSymbols(f) {
     S.symMarks.get(sp.page).push({ s: sp.s, e: sp.e, k });
   });
   S.pages.filter((p) => p.rendered).forEach(decorate);
-  if (S.tab === "symbols") renderSide();
-  renderTabCounts();
+  renderSide("symbols");
+  if (ntDlg?.open) ntPanel.notation = notationView();
 }
 
 function symMeaning(e) {
@@ -1151,7 +1136,7 @@ function symPopover(sp, anchor, sticky) {
       ev?.quote ? h("div", { class: "sym-quote" }, mixed(ev.quote), h("span", { class: "src" }, ` p.${ev.page || "?"}${byLabel(ev.by)}`)) : null));
   }
   if (none.length) kids.push(h("div", { class: "sym-none" }, gradeChip("unresolved"), ...none.map((e) => tex(e.latex ?? e.id))));
-  if (sticky) kids.push(h("div", { class: "actions" }, h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); setTab("symbols"); setTimeout(() => scrollWithin($("#pane"), $(`.sym-item[data-i="${sp.ents[0]}"]`)), 60); } }, h("span", { "data-icon": "sigma" }), "符號表")));
+  if (sticky) kids.push(h("div", { class: "actions" }, h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); setTab("symbols"); setTimeout(() => scrollWithin($("#side"), $(`.sym-item[data-i="${sp.ents[0]}"]`)), 60); } }, h("span", { "data-icon": "sigma" }), "符號表")));
   showPop(anchor, ...kids);
   $("#pop").classList.toggle("hover-pop", !sticky);
 }
@@ -1187,7 +1172,7 @@ function flashBox(page, bbox) {
   Object.assign(d.style, { left: `${(bbox[0] - pad) * 100}%`, top: `${(bbox[1] - pad) * 100}%`, width: `${(bbox[2] - bbox[0] + 2 * pad) * 100}%`, height: `${(bbox[3] - bbox[1] + 2 * pad) * 100}%` });
   p.el.append(d);
   setTimeout(() => d.remove(), 2600);
-  if (innerWidth <= 1100) togglePanel("side", false);
+  if (innerWidth <= 1100) shell.drawer("right", false);
 }
 
 function symbolsPane() {
@@ -1201,6 +1186,7 @@ function symbolsPane() {
     h("span", { class: "sym-total" }, `${ents.length} 符號 · ${f.equations?.length ?? 0} 式`),
     ...["conflict", "inferred", "defined", "certain", "unresolved"].map(gsel),
     h("span", { style: "flex:1" }),
+    h("button", { type: "button", class: "ico small", "aria-label": "對照表", "data-icon": "book", onclick: () => openNotation() }),
     h("button", { type: "button", class: "ico small", "aria-label": "新增符號…", "data-icon": "plus", onclick: () => symbolDialog(null) }),
     h("button", { type: "button", class: "ico small", "aria-label": "重新偵測", "data-icon": "refresh", onclick: rebuildSymbols }),
     h("button", { type: "button", class: "ico small", "aria-label": "字形對照表…", "data-icon": "gear", onclick: glyphDialog })));
@@ -1320,7 +1306,7 @@ function toggleTerms() {
  *  the noun list (and later the symbol table and paragraphs) are built from it. */
 async function readPaper(sha) {
   S.readStatus = "讀取全文…";
-  if (S.tab === "nouns") renderSide();
+  renderSide("nouns");
   try {
     const doc = await getDoc(sha);
     const pages = [];
@@ -1331,7 +1317,7 @@ async function readPaper(sha) {
     S.readStatus = "";
     api(`/api/papers/${sha}`).then(({ paper }) => {
       if (S.sha === sha && paper.title !== S.paper.title) {
-        S.paper = paper; $("#paperName").textContent = paper.title; $("#paperName").title = paper.title; document.title = `${paper.title} · LoreReader`;
+        S.paper = paper; shell.setName(paper.title); document.title = `${paper.title} · LoreReader`;
       }
     }).catch(() => {});
     S.words = r.words;
@@ -1343,7 +1329,7 @@ async function readPaper(sha) {
   } catch (e) {
     if (S.sha !== sha) return;
     S.readStatus = `讀不到全文：${e.message}`;
-    if (S.tab === "nouns") renderSide();
+    renderSide("nouns");
   }
 }
 
@@ -1377,15 +1363,14 @@ function setNouns(n) {
   if (n.kb && !n.kb.ok && S.kb?.ok !== false) { S.kb = { ok: false, error: n.kb.error }; updateLegend(); }
   if (n.kb && !n.kb.ok) watchKb();
   S.pages.filter((p) => p.rendered).forEach(decorate);
-  if (S.tab === "nouns") renderSide();
-  renderTabCounts();
+  renderSide("nouns");
 }
 
 async function classifyNouns(again) {
   if (!S.sha || S.classifying) return;
   const sha = S.sha;
   S.classifying = true; S.classifyError = null;
-  if (S.tab === "nouns") renderSide();
+  renderSide("nouns");
   try {
     const r = await api(`/api/papers/${sha}/nouns/classify`, { body: { again } });
     if (S.sha === sha) { setNouns(r.nouns); loadParagraphs(sha); }
@@ -1393,7 +1378,7 @@ async function classifyNouns(again) {
     S.classifyError = e.data?.llm_unavailable ? "沒有可用的模型，名詞未分類。" : e.message;
   }
   S.classifying = false;
-  if (S.tab === "nouns" && S.sha === sha) renderSide();
+  if (S.sha === sha) renderSide("nouns");
 }
 
 /** Light every occurrence of noun `i` and go to occurrence `k` (wraps). */
@@ -1405,7 +1390,7 @@ function focusNoun(i, k = 0) {
   const [page, s] = n.occ[kk];
   S.focusNoun = { i, k: kk, cur: [page, s] };
   S.pages.filter((p) => p.rendered).forEach(decorate);
-  if (S.tab === "nouns") renderSide();
+  renderSide("nouns");
   const pi = S.pages.findIndex((p) => p.sha === S.sha && p.page === page);
   if (pi < 0) { toast("這一頁不在目前的頁面清單裡", true); return; }
   scrollToPage(pi, false);
@@ -1414,7 +1399,7 @@ function focusNoun(i, k = 0) {
 function clearNounFocus() {
   S.focusNoun = null;
   S.pages.filter((p) => p.rendered).forEach(decorate);
-  if (S.tab === "nouns") renderSide();
+  renderSide("nouns");
 }
 
 /** The sentence around a noun's first occurrence (for KB cards and translation). */
@@ -1454,7 +1439,7 @@ async function nounPopover(n, anchor, p) {
   acts.append(h("button", { type: "button", class: "btn small", onclick: () => translate(n.text, ctx.context, null, { p: { sha: S.sha, page: ctx.page }, context: ctx.context }) }, h("span", { "data-icon": "languages" }), "翻譯"));
   if (!n.kb) {
     acts.append(h("button", { type: "button", class: "btn small", onclick: () => ignoreNoun(n) }, h("span", { "data-icon": "eyeOff" }), "忽略"));
-    acts.append(h("button", { type: "button", class: "btn small primary", onclick: () => nounCard(n) }, h("span", { "data-icon": "book" }), "加入知識庫…"));
+    acts.append(h("button", { type: "button", class: "btn small", onclick: () => nounCard(n) }, h("span", { "data-icon": "cards" }), "加入知識庫…"));
     showPop(anchor, head, meta, acts);
     return;
   }
@@ -1467,17 +1452,17 @@ async function nounPopover(n, anchor, p) {
 
 /** Right-click on a coloured term (no selection): the term's own menu. */
 function nounMenu(n, x, y) {
-  const m = $("#ctxMenu");
   const i = S.nouns.entries.indexOf(n);
-  const item = (icon, label, fn) => h("button", { type: "button", role: "menuitem", onclick: () => { closeMenus(); fn(); } }, h("span", { "data-icon": icon }), label);
-  m.replaceChildren(
-    h("div", { class: "menu-title" }, n.text),
-    item("search", `${n.count} 處`, () => { setTab("nouns"); focusNoun(i, 0); }),
-    n.kb ? null : item("eyeOff", "忽略", () => ignoreNoun(n)),
-    n.kb ? null : item("book", "加入知識庫…", () => nounCard(n)),
-  );
-  paintIcons(m);
-  placeAt(m, x, y);
+  LoreShell.menu(pointAnchor(x, y), [
+    { head: n.text },
+    { icon: "search", label: `${n.count} 處`, run: () => { setTab("nouns"); focusNoun(i, 0); } },
+    ...(n.kb ? [] : [{ icon: "eyeOff", label: "忽略", run: () => ignoreNoun(n) }, { icon: "cards", label: "加入知識庫…", run: () => nounCard(n) }]),
+  ]);
+}
+
+/** A menu at a point (right-click): the shell's menu wants an anchor element. */
+function pointAnchor(x, y) {
+  return { getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y, width: 0, height: 0 }), contains: () => false, setAttribute() {}, focus() {} };
 }
 
 const NOUN_COLS = [["text", "詞"], ["category", "分類"], ["count", "次數"], ["page", "頁"]];
@@ -1499,7 +1484,8 @@ function nounsPane() {
     stat("red", "要學", "kt-new", count((e) => e.red)),
     stat("learning", "學習中", "kt-learn", count((e) => ["learning", "stale", "none"].includes(e.state))),
     stat("known", "記得", "kt-known", count(isKnown)),
-    S.classifying ? h("span", { class: "muted" }, "分類中…") : cls.unclassified ? h("button", { type: "button", class: "btn ghost small", title: "整篇送一次模型", onclick: () => classifyNouns(true) }, `分類（${cls.unclassified}）`) : null));
+    S.classifying ? h("span", { class: "muted" }, "分類中…") : cls.unclassified ? h("button", { type: "button", class: "btn ghost small", title: "整篇送一次模型", onclick: () => classifyNouns(true) }, `分類（${cls.unclassified}）`) : null,
+    engineChip("lr-classify-terms")));
   if (S.classifyError) out.push(h("div", { class: "note-line" }, S.classifyError));
   if (n.kb && !n.kb.ok) out.push(kbNote());
   const catSel = h("select", { "aria-label": "分類", onchange: (e) => { v.cat = e.target.value; renderSide(); } },
@@ -1536,7 +1522,7 @@ function nounsPane() {
         on ? h("button", { class: "ico small", "aria-label": "上一個出現位置", "data-icon": "up", onclick: () => focusNoun(i, S.focusNoun.k - 1) }) : null,
         on ? h("button", { class: "ico small", "aria-label": "下一個出現位置", "data-icon": "chevron", onclick: () => focusNoun(i, S.focusNoun.k + 1) }) : null,
         !on && !e.kb ? h("button", { class: "ico small", "aria-label": "忽略", "data-icon": "eyeOff", onclick: () => ignoreNoun(e) }) : null,
-        !on && !e.kb ? h("button", { class: "ico small", "aria-label": "加入知識庫…", "data-icon": "book", onclick: () => nounCard(e) }) : null,
+        !on && !e.kb ? h("button", { class: "ico small", "aria-label": "加入知識庫…", "data-icon": "cards", onclick: () => nounCard(e) }) : null,
         on ? h("button", { class: "ico small", "aria-label": "取消標示", "data-icon": "x", onclick: clearNounFocus }) : null));
     return row;
   };
@@ -1556,7 +1542,7 @@ async function loadParagraphs(sha) {
     const r = await api(`/api/papers/${sha}/paragraphs`);
     if (S.sha !== sha) return;
     S.paras = r;
-    if (S.tab === "paras") renderSide(); else renderTabCounts();
+    renderSide("paras");
     if (r.status?.running) S.paraTimer = setTimeout(() => loadParagraphs(sha), 2000);
   } catch (e) { if (S.sha === sha) console.error(e); }
 }
@@ -1589,9 +1575,9 @@ function nextNotUnderstood() {
   const n = order.find((p) => !p.understood && p.id !== S.curPara) ?? order.find((p) => !p.understood);
   if (!n) { toast("每一段都標了「懂了」"); return; }
   S.curPara = n.id;
-  renderSide();
+  renderSide("paras");
   jumpPara(n.id);
-  setTimeout(() => scrollWithin($("#pane"), $(`.para[data-id="${n.id}"]`), "nearest"), 60);
+  setTimeout(() => scrollWithin($("#side"), $(`.para[data-id="${n.id}"]`), "nearest"), 60);
   void vpEl;
 }
 
@@ -1602,18 +1588,16 @@ function chipLabel(kind, id) {
 }
 
 function chipMenu(p, kind, id, ev) {
-  const m = $("#ctxMenu");
   const label = chipLabel(kind, id);
-  const item = (icon, text, fn) => h("button", { type: "button", role: "menuitem", onclick: () => { closeMenus(); fn(); } }, h("span", { "data-icon": icon }), text);
-  const box = ev.currentTarget.getBoundingClientRect();
+  const btn = ev.currentTarget;
+  const box = btn.getBoundingClientRect();
   const anchor = { left: box.left, top: box.top, bottom: box.bottom };
-  m.replaceChildren(
-    h("div", { class: "menu-title" }, kind === "symbol" ? tex(label) : label),
-    item("eye", "看定義", () => showChipDef(kind, id, anchor)),
-    item("chat", "問這篇", () => askClaude(p.id, { kind, id, label: kind === "symbol" ? label : label })),
-    kind === "equation" ? null : item("book", "加入知識庫…", () => addCardDialog({ title: kind === "symbol" ? "" : label, sha: S.sha, page: p.page, context: p.text.slice(0, 600) })));
-  paintIcons(m);
-  placeAt(m, box.left, box.bottom + 4);
+  LoreShell.menu(btn, [
+    { head: kind === "symbol" ? tex(label) : label },
+    { icon: "eye", label: "看定義", run: () => showChipDef(kind, id, anchor) },
+    { icon: "chat", label: "問這篇", run: () => askClaude(p.id, { kind, id, label }) },
+    ...(kind === "equation" ? [] : [{ icon: "cards", label: "加入知識庫…", run: () => addCardDialog({ title: kind === "symbol" ? "" : label, sha: S.sha, page: p.page, context: p.text.slice(0, 600) }) }]),
+  ]);
 }
 
 function showChipDef(kind, id, anchor) {
@@ -1655,7 +1639,8 @@ function parasPane() {
   const out = [];
   out.push(h("div", { class: "para-top" },
     h("div", { class: "progress", role: "progressbar", "aria-valuenow": pr.understood, "aria-valuemax": pr.total, title: `懂了 ${pr.understood}/${pr.total}` }, h("i", { style: `width:${pr.total ? (pr.understood / pr.total) * 100 : 0}%` })),
-    h("button", { type: "button", class: "btn small", onclick: nextNotUnderstood }, h("span", { "data-icon": "next" }), "下一段未懂")));
+    h("button", { type: "button", class: "btn small", onclick: nextNotUnderstood }, h("span", { "data-icon": "next" }), "下一段未懂"),
+    engineChip("lr-paragraph")));
   if (st.running) out.push(h("div", { class: "muted para-status" }, `分析中 ${st.done}/${st.total}`));
   if (st.error) out.push(h("div", { class: "warn-box" }, st.error, " ", h("button", { type: "button", class: "btn ghost small", onclick: async () => { try { S.paras = await api(`/api/papers/${S.sha}/paragraphs/run`, { body: {} }); renderSide(); loadParagraphs(S.sha); } catch (e) { fail(e); } } }, "重試")));
   // only what can block understanding: terms to learn, symbols not settled, equations
@@ -1693,7 +1678,7 @@ function parasPane() {
         h("button", { type: "button", class: "btn small", onclick: () => askClaude(p.id, null) }, h("span", { "data-icon": "chat" }), "這段我卡住了"),
         p.understood
           ? h("button", { type: "button", class: "btn small ghost-muted", onclick: () => setUnderstood(p, false) }, "取消懂了")
-          : h("button", { type: "button", class: "btn small primary", onclick: () => setUnderstood(p, true) }, h("span", { "data-icon": "check" }), "懂了"))));
+          : h("button", { type: "button", class: "btn small", onclick: () => setUnderstood(p, true) }, h("span", { "data-icon": "check" }), "懂了"))));
   }
   requestAnimationFrame(foldChips);
   return out;
@@ -1745,40 +1730,36 @@ function fieldAsk() {
   };
   return h("form", { class: "nn-field", onsubmit: (e) => { e.preventDefault(); save(); } },
     h("label", {}, "你的領域", inp),
-    h("button", { class: "btn small primary" }, "確定"),
+    h("button", { class: "btn small" }, "確定"),
     h("button", { type: "button", class: "btn small ghost", onclick: () => { try { localStorage.setItem("lr.fieldSkipped", "1"); } catch {} S.fieldSkipped = true; renderSide(); } }, "略過"));
 }
 
-async function modelDialog() {
-  let m, rd;
-  try { [m, rd] = await Promise.all([api("/api/models"), api("/api/reader")]); } catch (e) { fail(e); return; }
-  const fieldIn = h("input", { value: rd.field === rd.default ? "" : rd.field, placeholder: rd.default });
-  fieldIn.addEventListener("change", async () => {
-    try {
-      await api("/api/reader", { method: "PUT", body: { field: fieldIn.value } });
-      toast("已儲存");
-      await refreshNouns();
-      if (S.nouns?.classification.pending > 0) classifyNouns(false);
-    } catch (e) { fail(e); }
-  });
-  const field = h("label", { title: "名詞分類用它判斷哪些詞對你是基礎" }, "你的領域", fieldIn);
-  const rows = h("div", { class: "model-rows" });
-  const paint = () => rows.replaceChildren(...m.tasks.map((t) => h("div", { class: "model-row" },
-    h("b", {}, t.label),
-    h("div", { class: "seg", role: "group", "aria-label": t.label }, m.choices.map((c) => h("button", { type: "button", "aria-pressed": t.choice === c ? "true" : "false", title: c === "auto" ? `預設：${defaultLabel(t.default)}` : null, onclick: async () => {
-      try { m = await api("/api/models", { method: "PUT", body: { task: t.id, model: c } }); paint(); } catch (e) { fail(e); }
-    } }, MODEL_LABEL[c] ?? c))))));
-  paint();
-  await dialog((d, close) => h("div", { class: "dlg" },
-    h("h3", {}, "模型"),
-    field,
-    m.local_engine ? null : h("div", { class: "warn-box" }, "沒有設定地端模型"),
-    rows,
-    h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(true) }, "關閉"))));
+/** A feature's own engine (the kit's engine chip): 自動 · 雲 · 地, stored per task in
+ *  models.json (`/api/models`). An old haiku / sonnet / opus choice shows as 雲 with its name. */
+function engineChip(task) {
+  const t = S.models?.tasks.find((x) => x.id === task);
+  const c = t?.choice ?? "auto";
+  const value = c === "auto" || c === "local" ? c : "cloud";
+  const used = ["haiku", "sonnet", "opus"].includes(c) ? MODEL_LABEL[c] : engineName(S.used[task]);
+  return LoreShell.engineChip({ task, value, used, label: `${t?.label ?? "模型"}：模型`, onChange: async (v) => {
+    S.models = await api("/api/models", { method: "PUT", body: { task, model: v } });
+  } });
 }
+/** "claude:sonnet" → "sonnet", "local:qwen3.5-9b" → "qwen3.5-9b". */
+const engineName = (id) => (id ? String(id).replace(/^(claude|local)[:/-]/, "") : "");
 
-// ── search ────────────────────────────────────────────────────────────────
+// ── search: the ⌘F bar over the pages ─────────────────────────────────────
 let searchTimer;
+function openFind() {
+  if (!S.sha) return;
+  $("#find").hidden = false;
+  $("#searchInput").focus();
+  $("#searchInput").select();
+}
+function closeFind() {
+  $("#find").hidden = true;
+  if (S.search.q) { S.search = { q: "", hits: [], i: -1 }; $("#searchInput").value = ""; $("#searchCount").textContent = ""; S.pages.filter((p) => p.rendered).forEach(decorate); }
+}
 async function runSearch(q) {
   S.search = { q, hits: [], i: -1 };
   const needle = q.trim().toLowerCase();
@@ -1812,7 +1793,6 @@ function attach(info) {
   S.att.push({ text: info.text, page: info.p.page, context: info.context });
   getSelection().removeAllRanges();
   setTab("chat");
-  if (innerWidth <= 1100) togglePanel("side", true);
   setTimeout(() => $("#chatInput")?.focus(), 50);
 }
 
@@ -1852,41 +1832,77 @@ function askClaude(pid, chip) {
   S.chatDraft = S.paras?.default_question ?? "只解釋我卡住的點，不要翻譯整段";
   S.chatScope = "para";
   setTab("chat");
-  if (innerWidth <= 1100) togglePanel("side", true);
   setTimeout(() => { const t = $("#chatInput"); t?.focus(); t?.select(); }, 60);
 }
 
-// ── side panel ────────────────────────────────────────────────────────────
+// ── side panel: the kit's numbered blocks ────────────────────────────────
+// 01 名詞 and 02 註記 open by default; 符號, 段落, 引用句 and 問這篇 start folded (the
+// AI button opens 問這篇). A block's body is built only while it is open.
+const BLOCKS = [
+  ["nouns", "名詞", true, "紅：要學 · 黃：學習中 · 綠：記得"],
+  ["notes", "註記", true],
+  ["symbols", "符號", false],
+  ["paras", "段落", false],
+  ["quotes", "引用句", false],
+  ["chat", "問這篇", false],
+];
+const blocks = {};
+function buildBlocks() {
+  BLOCKS.forEach(([id, title, open, help], i) => {
+    const b = LoreShell.block({ n: String(i + 1).padStart(2, "0"), title, open, help, key: `lr.${id}` });
+    b.dataset.block = id;
+    const set = b.setOpen;
+    b.setOpen = (on) => { set(on); if (on) { renderSide(id); paintIcons(b); } };
+    blocks[id] = b;
+  });
+  $("#side").replaceChildren(...Object.values(blocks));
+}
+const isOpen = (id) => blocks[id]?.dataset.open === "true";
+
+/** Open a block (and the right drawer on narrow windows) and bring it into view. */
 function setTab(t) {
-  S.tab = t;
-  try { localStorage.setItem("lr.tab", t); } catch {}
-  renderSide();
+  const b = blocks[t];
+  if (!b) return;
+  if (!isOpen(t)) b.setOpen(true);
+  if (innerWidth <= 1100) { shell.drawer("right", true); requestAnimationFrame(foldChips); }
+  const side = $("#side");
+  requestAnimationFrame(() => side.scrollTo({ top: Math.max(0, b.offsetTop - 8), behavior: "smooth" }));
 }
 
 function renderTabCounts() {
-  $$(".tabs [data-tab]").forEach((b) => {
-    b.setAttribute("aria-selected", b.dataset.tab === S.tab ? "true" : "false");
-    const t = b.dataset.tab;
-    const n = t === "notes" ? S.annotations.length : t === "quotes" ? S.quotes.length : t === "nouns" ? (S.nouns?.entries.filter((e) => e.red).length ?? 0) : t === "symbols" ? (S.symbols?.entries?.length ?? 0) : t === "paras" && S.paras ? `${S.paras.progress.understood}/${S.paras.progress.total}` : 0;
-    b.querySelector(".n")?.remove();
-    if (n) b.append(h("span", { class: "n" }, n));
-  });
+  const c = {
+    nouns: S.nouns?.entries.filter((e) => e.red).length || "",
+    notes: S.annotations.length || "",
+    symbols: S.symbols?.entries?.length || "",
+    paras: S.paras ? `${S.paras.progress.understood}/${S.paras.progress.total}` : "",
+    quotes: S.quotes.length || "",
+    chat: S.chat.length || "",
+  };
+  for (const [id, b] of Object.entries(blocks)) b.setCount(c[id]);
 }
 
-function renderSide() {
+/** Build the open blocks' bodies (`which` = one block only). */
+function renderSide(which) {
   renderTabCounts();
-  const pane = $("#pane");
-  const keep = S.tab === "nouns" ? $(".nn-table", pane)?.scrollTop : null;
-  $(".composer")?.remove();
-  pane.classList.toggle("chat-pane", S.tab === "chat");
-  pane.classList.toggle("nouns-pane", S.tab === "nouns");
-  if (S.tab === "paras") { const keep2 = pane.scrollTop; pane.replaceChildren(...parasPane()); pane.scrollTop = keep2; }
-  else if (S.tab === "symbols") pane.replaceChildren(...symbolsPane());
-  else if (S.tab === "nouns") { pane.replaceChildren(...nounsPane()); if (keep != null && $(".nn-table", pane)) $(".nn-table", pane).scrollTop = keep; }
-  else if (S.tab === "notes") pane.replaceChildren(...notesPane());
-  else if (S.tab === "quotes") pane.replaceChildren(...quotesPane());
-  else { pane.replaceChildren(...chatPane()); $("#side").append(composer()); pane.scrollTop = pane.scrollHeight; }
-  paintIcons($("#side"));
+  for (const id of which ? [which] : Object.keys(blocks)) {
+    if (!isOpen(id)) continue;
+    const body = blocks[id].body;
+    if (id === "nouns") {
+      const keep = $(".nn-table", body)?.scrollTop;
+      body.replaceChildren(...nounsPane());
+      if (keep != null && $(".nn-table", body)) $(".nn-table", body).scrollTop = keep;
+    } else if (id === "paras") body.replaceChildren(...parasPane());
+    else if (id === "symbols") body.replaceChildren(...symbolsPane());
+    else if (id === "notes") body.replaceChildren(...notesPane());
+    else if (id === "quotes") body.replaceChildren(...quotesPane());
+    else {
+      body.replaceChildren(...chatPane(), composer());
+      const m = $(".msgs", body);
+      if (m) m.scrollTop = m.scrollHeight;
+    }
+    body.classList.add(`b-${id}`);
+    paintIcons(body);
+  }
 }
 
 function notesPane() {
@@ -1932,7 +1948,7 @@ function quotesPane() {
     h("span", { class: "body" }, h("span", { class: "txt" }, `“${q.text}”`), q.note ? h("span", { class: "note" }, q.note) : null, h("span", { class: "meta" }, `p.${q.page} · ${q.created_at.slice(5, 10)}`)),
     h("span", { class: "acts" },
       h("button", { class: "ico small", "aria-label": "複製", "data-icon": "copy", onclick: () => navigator.clipboard.writeText(`“${q.text}” (p. ${q.page})`).then(() => toast("已複製")) }),
-      h("button", { class: "ico small", "aria-label": "刪除", "data-icon": "trash", onclick: async () => { try { await api(`/api/papers/${S.sha}/quotes/${q.id}`, { method: "DELETE" }); await loadQuotes(); renderSide(); } catch (e) { fail(e); } } })))))];
+      h("button", { class: "ico small", "aria-label": "刪除", "data-icon": "trash", onclick: async () => { try { await api(`/api/papers/${S.sha}/quotes/${q.id}`, { method: "DELETE" }); await loadQuotes(); renderSide("quotes"); } catch (e) { fail(e); } } })))))];
 }
 
 /** A chip's label: symbols as KaTeX (stored as `$…$` or bare LaTeX), the rest as text. */
@@ -1954,6 +1970,8 @@ function chatPane() {
   const head = h("div", { class: "pane-head" }, scope, h("span", { style: "flex:1" }),
     S.chat.length ? h("button", { class: "ico small", "aria-label": "清除全部對話", "data-icon": "trash", onclick: async () => { try { await api(`/api/papers/${S.sha}/chat`, { method: "DELETE" }); S.chat = []; renderSide(); } catch (e) { fail(e); } } }) : null);
   const shown = S.chatScope === "para" && cur ? S.chat.filter((m) => m.paragraph === cur.id) : S.chat;
+  const lastEngine = [...S.chat].reverse().find((m) => m.role === "assistant" && m.engine)?.engine;
+  if (lastEngine) S.used["lr-chat"] = lastEngine;
   const msgs = shown.map((m) => h("div", { class: `msg ${m.role}` },
     m.role === "user" && m.paragraph ? h("button", { type: "button", class: "para-badge", onclick: () => { S.curPara = m.paragraph; jumpPara(m.paragraph); } }, `p.${paraOf(m.paragraph)?.page ?? "?"}`, m.chip ? [" · ", chipText(m.chip)] : " · 整段") : null,
     ...(m.attachments ?? []).map((a) => h("span", { class: "att", title: a.context }, `p.${a.page}「${a.text}」`)),
@@ -1973,7 +1991,7 @@ function answerActions(m) {
   return h("span", { class: "ans-acts" },
     syms.length ? h("button", { type: "button", class: "ico small", "aria-label": "存進符號表…", "data-icon": "sigma", onclick: () => writeBackDialog(m, p) }) : null,
     h("button", { type: "button", class: "ico small", "aria-label": "存成註記", "data-icon": "pen", onclick: () => saveParaNote(m, p) }),
-    h("button", { type: "button", class: "ico small", "aria-label": "加入知識庫…", "data-icon": "book", onclick: () => addCardDialog({ title: m.chip?.kind === "term" ? (m.chip.label ?? m.chip.id) : "", sha: S.sha, page: p?.page ?? 1, context: p?.text?.slice(0, 600), summary: m.text.slice(0, 300) }) }));
+    h("button", { type: "button", class: "ico small", "aria-label": "加入知識庫…", "data-icon": "cards", onclick: () => addCardDialog({ title: m.chip?.kind === "term" ? (m.chip.label ?? m.chip.id) : "", sha: S.sha, page: p?.page ?? 1, context: p?.text?.slice(0, 600), summary: m.text.slice(0, 300) }) }));
 }
 
 async function writeBackDialog(m, p) {
@@ -2023,7 +2041,7 @@ function composer() {
   ta.value = S.chatDraft ?? "";
   ta.addEventListener("input", () => { S.chatDraft = ta.value; });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); } });
-  return h("div", { class: "composer" }, chips, ta, h("div", { class: "row" }, h("button", { class: "btn small primary", disabled: S.sending, title: "⌘/Ctrl＋Enter", onclick: sendChat }, h("span", { "data-icon": "send" }), S.sending ? "等待回覆…" : "送出")));
+  return h("div", { class: "composer" }, chips, ta, h("div", { class: "row" }, engineChip("lr-chat"), h("span", { class: "grow" }), h("button", { class: "btn small", disabled: S.sending, title: "⌘↵", onclick: sendChat }, h("span", { "data-icon": "send" }), S.sending ? "等待回覆…" : "送出")));
 }
 
 // ── save with notes ───────────────────────────────────────────────────────
@@ -2032,12 +2050,27 @@ function composer() {
 async function refreshExport() {
   if (!S.sha) return;
   try { S.exp = await api(`/api/papers/${S.sha}/export`); } catch { S.exp = null; }
-  const b = $("#actSaveNotes");
-  b.classList.toggle("dirty", !!S.exp?.dirty);
-  b.setAttribute("aria-label", S.exp?.dirty ? "另存新檔（含筆記）· 筆記未儲存" : "另存新檔（含筆記）");
+  updateStatus();
+}
+
+/** The shell's status chip: 頁面未儲存 (pending page operations: click = 另存…),
+ *  未儲存 (notes not in a PDF yet: click = 另存新檔（含筆記）), 已儲存 after a save. */
+function updateStatus() {
+  if (!shell) return;
+  if (!S.sha) { shell.setStatus(null); return; }
+  if (S.arr) shell.setStatus("dirty", { label: "頁面未儲存", title: "另存…", action: () => saveArrangement() });
+  else if (S.exp?.dirty) shell.setStatus("dirty", { title: "另存新檔（含筆記）" });
+  else if (S.exp?.last?.exists || S.savedHere === S.sha) shell.setStatus("saved", { title: S.exp?.last?.name ?? "" });
+  else shell.setStatus(null);
+}
+/** Where a question about saving appears: the status chip, else the document menu. */
+function statusAnchor() {
+  const chip = shell?.el.querySelector(".fstate");
+  return chip && !chip.hidden ? chip : shell?.el.querySelector(".picker");
 }
 
 function exported(r) {
+  S.savedHere = S.sha;
   if (r.export) S.exp = r.export;
   toast(`已存：${r.name}`);
   refreshExport();
@@ -2055,6 +2088,7 @@ async function saveNotesAs() {
     const url = URL.createObjectURL(await res.blob());
     h("a", { href: url, download: S.exp?.default_name ?? "notes.pdf" }).click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
+    S.savedHere = S.sha;
     refreshExport();
     return true;
   } catch (e) { fail(e); return false; }
@@ -2064,17 +2098,17 @@ async function saveNotesLast() {
   try { exported(await api(`/api/papers/${S.sha}/export`, { body: { last: true } })); return true; } catch (e) { fail(e); return false; }
 }
 
-function saveNotes(e) {
-  if (S.arr) { toast("頁面未儲存：先在縮圖欄另存", true); if (innerWidth <= 1100) togglePanel("sorter", true); return; }
+/** 另存新檔（含筆記）: LoreReader's save (private/ is scratch). With an earlier copy, a
+ *  menu at `anchor`: 儲存 (overwrite that copy) · 另存新檔…. */
+function saveNotes(anchor, { ask = true } = {}) {
+  if (!S.sha) return;
+  if (S.arr) { toast("頁面未儲存：先在縮圖欄另存", true); if (innerWidth <= 1100) shell.drawer("left", true); return; }
   const last = S.exp?.last;
-  if (!last?.exists) { saveNotesAs(); return; }
-  const m = $("#ctxMenu");
-  m.replaceChildren(
-    h("button", { type: "button", role: "menuitem", onclick: () => { closeMenus(); saveNotesLast(); } }, h("span", { "data-icon": "save" }), "儲存", h("span", { class: "muted menu-sub" }, last.name)),
-    h("button", { type: "button", role: "menuitem", onclick: () => { closeMenus(); saveNotesAs(); } }, h("span", { "data-icon": "copy" }), "另存新檔…"));
-  paintIcons(m);
-  const r = e.currentTarget.getBoundingClientRect();
-  placeAt(m, r.right - 220, r.bottom + 4);
+  if (!last?.exists || !ask) { saveNotesAs(); return; }
+  LoreShell.menu(anchor ?? statusAnchor(), [
+    { icon: "save", label: "儲存", kbd: last.name, run: saveNotesLast },
+    { icon: "copy", label: "另存新檔…", run: saveNotesAs },
+  ]);
 }
 
 // ── print ─────────────────────────────────────────────────────────────────
@@ -2088,25 +2122,190 @@ async function print() {
   if (!w) location.href = `print.html?sha=${S.sha}&auto=1`;
 }
 
-// ── narrow widths: drawers ────────────────────────────────────────────────
-function togglePanel(which, force) {
-  const app = $("#app");
-  const cls = which === "sorter" ? "show-sorter" : "show-side";
-  const on = force ?? !app.classList.contains(cls);
-  app.classList.toggle(cls, on);
-  if (on) app.classList.remove(which === "sorter" ? "show-side" : "show-sorter");
-  $("#toggleThumbs").setAttribute("aria-pressed", app.classList.contains("show-sorter"));
-  if (on && which === "side") requestAnimationFrame(foldChips);
-  $("#toggleSide").setAttribute("aria-pressed", app.classList.contains("show-side"));
+// ── 對照表: this paper's symbols.json in the shared <notation-panel> ──────────
+// Document scope: the rows are this paper's symbols and equations. A row the global
+// 對照表 (shared/notation.json) already has shows 全域; 加入全域 copies the selected row
+// there. Edits of LaTeX / 意思 / 原文定義 / 備註 go to the paper's symbol table;
+// 插入 copies the LaTeX; 新增 opens 新增符號; rows are not deleted here.
+let ntDlg = null, ntPanel = null, ntSel = null, ntGlobal = new Set();
+const NT_FIELDS = { latex: "latex", meaning: "meaning", meaning_en: "meaning_en", note: "note" };
+const texKey = (t) => String(t ?? "").replace(/\s+/g, "");
+
+function notationAssets() {
+  if (customElements.get("notation-panel")) return Promise.resolve();
+  return new Promise((ok, no) => {
+    const sc = h("script", { src: "/notation-panel.js" });
+    sc.onload = ok;
+    sc.onerror = () => no(new Error("對照表元件載入失敗"));
+    document.head.append(sc);
+  });
+}
+
+function notationView() {
+  const f = S.symbols ?? {};
+  const origin = (e) => (e.latex && ntGlobal.has(texKey(e.latex)) ? "global" : "document");
+  const sym = (f.entries ?? []).map((e) => ({ ...e, kind: e.kind ?? "symbol", origin: origin(e) }));
+  const eqs = (f.equations ?? []).map((e) => ({ ...e, kind: "equation", origin: origin(e) }));
+  return { version: 1, entries: [...sym, ...eqs] };
+}
+
+function paintNtGlobal() {
+  const b = $("#ntGlobal");
+  if (!b) return;
+  const e = S.symbols?.entries.find((x) => x.id === ntSel);
+  const has = e?.latex && ntGlobal.has(texKey(e.latex));
+  b.disabled = !e || !e.latex || has;
+  b.title = e ? `${e.latex ?? e.id}${has ? "（全域已有）" : ""}` : "";
+}
+
+function buildNotation() {
+  ntPanel = document.createElement("notation-panel");
+  ntPanel.setAttribute("mode", "literal");
+  const add = h("button", { type: "button", class: "btn small", id: "ntGlobal", disabled: true, onclick: addToGlobal }, h("span", { "data-icon": "upload" }), "加入全域");
+  const close = h("button", { type: "button", class: "ico close", "data-icon": "x", "aria-label": "關閉 Esc" });
+  ntDlg = h("dialog", { class: "dialog lr-notation", "aria-label": "對照表" },
+    h("div", { class: "dlg" }, h("div", { class: "dlg-head" }, h("h2", {}, "對照表"), h("span", { class: "grow" }), add, close), ntPanel));
+  document.body.append(ntDlg);
+  paintIcons(ntDlg);
+  close.onclick = () => ntDlg.close();
+  ntPanel.addEventListener("notation-select", (e) => { ntSel = e.detail.id; paintNtGlobal(); });
+  ntPanel.addEventListener("notation-insert", (e) => {
+    const t = e.detail.entry?.latex ?? e.detail.text ?? "";
+    navigator.clipboard.writeText(t).then(() => toast(`已複製 ${t}`), () => toast("無法複製", true));
+  });
+  ntPanel.addEventListener("notation-change", async (e) => {
+    const { id, field, value } = e.detail;
+    if (!id) return;
+    const sym = S.symbols?.entries.find((x) => x.id === id);
+    if (!sym || !NT_FIELDS[field]) { toast(sym ? "這一欄在 LoreReader 不能改" : "式不能在這裡改", true); ntPanel.notation = notationView(); return; }
+    try {
+      await api(`/api/papers/${S.sha}/symbols/${encodeURIComponent(id)}`, { method: "PUT", body: { [NT_FIELDS[field]]: value ?? "" } });
+      setSymbols(await api(`/api/papers/${S.sha}/symbols`));
+    } catch (x) { fail(x); ntPanel.notation = notationView(); }
+  });
+  ntPanel.addEventListener("notation-add", () => { ntPanel.notation = notationView(); symbolDialog(null); });
+  ntPanel.addEventListener("notation-delete", () => { ntPanel.notation = notationView(); toast("符號表的列不能刪除", true); });
+}
+
+async function openNotation() {
+  if (!S.sha) return;
+  try { await notationAssets(); } catch (e) { fail(e); return; }
+  if (!ntDlg) buildNotation();
+  try { ntGlobal = new Set(((await api("/api/notation/global")).entries ?? []).map((e) => texKey(e.latex)).filter(Boolean)); } catch { ntGlobal = new Set(); }
+  ntPanel.setAttribute("theme", document.documentElement.dataset.mode === "dark" ? "dark" : "light");
+  ntPanel.notation = notationView();
+  ntSel = null;
+  paintNtGlobal();
+  if (!ntDlg.open) ntDlg.showModal();
+}
+
+async function addToGlobal() {
+  const e = S.symbols?.entries.find((x) => x.id === ntSel);
+  if (!e) return;
+  try {
+    await api(`/api/papers/${S.sha}/symbols/${encodeURIComponent(e.id)}/global`, { body: {} });
+    ntGlobal.add(texKey(e.latex));
+    ntPanel.notation = notationView();
+    paintNtGlobal();
+    toast(`已加入全域：${e.latex}`);
+  } catch (x) { fail(x); }
+}
+
+// ── the gear: 一般 (你的領域, folders, KnowledgeBase) ──────────────────────
+function setRow(k, ...v) {
+  return h("div", { class: "set-row" }, h("span", { class: "k" }, k), ...v);
+}
+async function generalTab(el) {
+  let rd = null;
+  try { [rd, S.info] = await Promise.all([api("/api/reader"), api("/api/info")]); } catch (e) { el.append(h("div", { class: "set-empty" }, e.message)); return; }
+  const field = h("input", { class: "set-input", value: rd.set ? rd.field : "", placeholder: rd.default, "aria-label": "你的領域", maxlength: 200, style: "flex:1" });
+  field.addEventListener("change", async () => {
+    try {
+      await api("/api/reader", { method: "PUT", body: { field: field.value } });
+      toast("已儲存");
+      await refreshNouns();
+      if (S.nouns?.classification.pending > 0) classifyNouns(false);
+    } catch (e) { fail(e); }
+  });
+  const path = (p) => h("span", { class: "v mono", title: p ?? "" }, p ?? "—");
+  el.append(
+    h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "名詞"), setRow("你的領域", field)),
+    h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "資料夾"), setRow("書庫", path(S.info.library)), setRow("匯出", path(S.info.exports))),
+    h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "KnowledgeBase"), setRow("網址", path(S.info.kb_url))));
+}
+
+// ── 最近的論文 (the document menu) ─────────────────────────────────────────
+function remember(sha) {
+  try {
+    const r = JSON.parse(localStorage.getItem("lr.recent") || "[]").filter((x) => x !== sha);
+    localStorage.setItem("lr.recent", JSON.stringify([sha, ...r].slice(0, 12)));
+  } catch {}
+}
+async function recentPapers() {
+  let order = [];
+  try { order = JSON.parse(localStorage.getItem("lr.recent") || "[]"); } catch {}
+  let list = [];
+  try { list = (await api("/api/papers")).papers.filter((p) => p.present); } catch (e) { fail(e); }
+  const rank = (p) => { const i = order.indexOf(p.sha256); return i < 0 ? 1e9 : i; };
+  list.sort((a, b) => rank(a) - rank(b) || String(b.added_at).localeCompare(String(a.added_at)));
+  return list.slice(0, 8).map((p) => ({ icon: "pdf", label: p.title, title: p.original_name, current: p.sha256 === S.sha, run: () => { if (p.sha256 !== S.sha) go(p.sha256, 1); } }));
 }
 
 // ── wiring ────────────────────────────────────────────────────────────────
+function mountShell() {
+  shell = LoreShell.mount({
+    app: "lr",
+    host: "header.top",
+    brand: "LORE/READER",
+    home: () => go(null),
+    picker: {
+      icon: "pdf",
+      recent: recentPapers,
+      actions: [
+        { icon: "upload", label: "加入 PDF…", run: () => $("#openFile").click() },
+        { icon: "layers", label: "合併 PDF…", run: () => mergeDialog().catch(fail) },
+        { icon: "pen", label: "改標題…", run: () => { if (S.paper) renameDialog(S.paper); } },
+        "-",
+        { icon: "save", label: "另存新檔（含筆記）…", run: () => saveNotes(null, { ask: false }) },
+      ],
+    },
+    status: { onClick: () => saveNotes(statusAnchor()) },
+    primary: [{ id: "actFind", icon: "search", label: "搜尋 ⌘F", run: openFind }],
+    ai: { id: "actAsk", icon: "spark", label: "問這篇", run: () => { setTab("chat"); setTimeout(() => $("#chatInput")?.focus(), 80); } },
+    notation: () => openNotation(),
+    export: [
+      { icon: "save", label: "另存新檔（含筆記）…", run: () => saveNotes(null, { ask: false }) },
+      "-",
+      { icon: "printer", label: "列印", run: print },
+    ],
+    drawers: { left: "#sorter", leftLabel: "頁面縮圖", leftIcon: "cards", right: "#side", rightLabel: "面板" },
+    search: openFind,
+    save: () => saveNotes(statusAnchor()),
+    general: generalTab,
+    keys: [
+      { group: "選取文字", label: "螢光（黃 · 綠 · 藍 · 粉紅）", keys: "1–4" },
+      { group: "選取文字", label: "加註記", keys: "N" },
+      { group: "選取文字", label: "複製", keys: "C" },
+      { group: "選取文字", label: "翻譯", keys: "T" },
+      { group: "選取文字", label: "問這篇", keys: "A" },
+      { group: "選取文字", label: "存成引用句", keys: "Q" },
+      { group: "選取文字", label: "加入知識庫", keys: "K" },
+      { group: "問這篇", label: "送出", keys: "⌘↵" },
+    ],
+  });
+  const terms = h("button", { type: "button", class: "ico", id: "actTerms", "data-icon": "target", "aria-label": "標示名詞", title: "紅：要學 · 黃：學習中 · 綠：記得", "aria-pressed": "false", onclick: toggleTerms });
+  shell.slots.lead.append(terms);
+  paintIcons(shell.el);
+  // the drawer toggles: 段落 chips are measured once the right panel is visible
+  shell.el.querySelector(".slot-primary .narrow-only")?.addEventListener("click", () => requestAnimationFrame(foldChips));
+}
+
 function wire() {
+  mountShell();
+  buildBlocks();
   paintIcons();
-  $("#actHome").onclick = () => go(null);
-  $("#paperName").onclick = () => { if (S.paper) renameDialog(S.paper); };
-  $("#actLook").onclick = () => lookDialog();
-  $("#openFile").onchange = async (e) => { const p = await importFiles([...e.target.files]); e.target.value = ""; if (p) go(p.sha256, 1); else showHome(); };
+  api("/api/models").then((m) => { S.models = m; renderSide(); }).catch(() => {});
+  $("#openFile").onchange = async (e) => { const p = await importFiles([...e.target.files]); e.target.value = ""; if (p) go(p.sha256, 1); else if (!S.sha) showHome(); };
   $("#pathForm").onsubmit = async (e) => { e.preventDefault(); try { const r = await api("/api/papers/import", { body: { path: $("#pathInput").value.trim() } }); $("#pathInput").value = ""; go(r.paper.sha256, 1); } catch (x) { fail(x); } };
   $("#actMerge").onclick = () => mergeDialog().catch(fail);
   $("#actPrev").onclick = () => scrollToPage(Math.max(0, S.cur - 1));
@@ -2114,24 +2313,21 @@ function wire() {
   $("#pageInput").addEventListener("change", (e) => scrollToPage(clamp((+e.target.value || 1) - 1, 0, S.pages.length - 1)));
   $("#actZoomIn").onclick = () => setZoom(S.zoom * 1.2);
   $("#actZoomOut").onclick = () => setZoom(S.zoom / 1.2);
+  $("#zoomChip").onclick = () => setZoom(1);
   $("#actFit").onclick = () => setZoom(fitZoom(), true);
-  $("#actPrint").onclick = print;
-  $("#actSaveNotes").onclick = saveNotes;
-  $("#actTerms").onclick = toggleTerms;
-  $("#actModels").onclick = () => modelDialog();
   $("#pgDup").onclick = dupPage;
   $("#pgDel").onclick = delPage;
   $("#pgInsert").onclick = () => insertDialog().catch(fail);
   $("#editSave").onclick = saveArrangement;
-  $("#editChip").onclick = () => togglePanel("sorter", true);
   $("#editDiscard").onclick = () => setArrangement(S.orig.map((r) => ({ ...r })), 0);
-  $("#toggleThumbs").onclick = () => togglePanel("sorter");
-  $("#toggleSide").onclick = () => togglePanel("side");
-  $$(".tabs [data-tab]").forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
   $("#searchInput").addEventListener("input", (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(e.target.value), 250); });
-  $("#searchInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); stepSearch(e.shiftKey ? -1 : 1); } });
+  $("#searchInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); stepSearch(e.shiftKey ? -1 : 1); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); }
+  });
   $("#searchNext").onclick = () => stepSearch(1);
   $("#searchPrev").onclick = () => stepSearch(-1);
+  $("#searchClose").onclick = closeFind;
   $("#viewport").addEventListener("scroll", onScroll, { passive: true });
   $("#pages").addEventListener("contextmenu", onContextMenu);
   $("#pages").addEventListener("mouseup", () => setTimeout(showSelBar, 10));
@@ -2152,10 +2348,9 @@ function wire() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { closeMenus(); hidePop(); hideSelBar(); }
     onSelKey(e);
-    if ((e.metaKey || e.ctrlKey) && e.key === "f" && S.sha) { e.preventDefault(); $("#searchInput").focus(); $("#searchInput").select(); }
   });
   let rt;
-  addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { if (S.sha && S.fit) setZoom(fitZoom(), true); if (S.tab === "paras") foldChips(); }, 150); });
+  addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { if (S.sha && S.fit) setZoom(fitZoom(), true); if (isOpen("paras")) foldChips(); }, 150); });
   addEventListener("popstate", async () => {
     const to = new URL(location.href).searchParams.get("paper");
     if (S.sha && to !== S.sha && !(await confirmLeave())) { history.pushState(null, "", `?paper=${S.sha}&page=${S.pages[S.cur]?.page ?? 1}`); return; }

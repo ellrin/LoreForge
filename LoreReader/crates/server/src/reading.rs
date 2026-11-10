@@ -557,6 +557,52 @@ pub async fn symbol_add(State(s): State<Shared>, Path(sha): Path<String>, Json(p
     Ok((StatusCode::CREATED, Json(json!({ "entry": e }))))
 }
 
+// ── 加入全域: a symbol of this paper into the global 對照表 ─────────────────────
+
+/// The global 對照表 every app shares (`private/shared/notation.json`).
+fn global_file(s: &crate::AppState) -> PathBuf {
+    s.shared.join("notation.json")
+}
+
+/// The global registry (empty when the file is missing).
+pub async fn global_notation_get(State(s): State<Shared>) -> R {
+    let n = lore_notation::Notation::load(&global_file(&s)).map_err(bad)?;
+    Ok(Json(serde_json::to_value(&n).unwrap_or(Value::Null)))
+}
+
+/// The registry fields of a paper's row that mean the same in every document: the
+/// paper-only fields (where it is defined, the equations that use it, the label) stay
+/// in the paper. `auto` (made by detection) is not a tag the global file keeps.
+pub fn global_entry(e: &lore_notation::Entry, id: &str) -> lore_notation::Entry {
+    let mut g = e.clone();
+    g.id = id.to_string();
+    g.defined_at = None;
+    g.uses.clear();
+    g.label = None;
+    g.tags.retain(|t| t != "auto");
+    g
+}
+
+/// 加入全域: the row goes into the global file under a free id; a row the global file
+/// already has (same canonical LaTeX) is refused, so nothing there is overwritten.
+pub async fn symbol_to_global(State(s): State<Shared>, Path((sha, id)): Path<(String, String)>) -> R {
+    sha_ok(&sha)?;
+    let _g = s.write.lock().unwrap();
+    let f: SymbolFile = s.papers.load(&sha, "symbols.json")?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, json!({ "error": "這篇論文還沒有符號表" })))?;
+    let e = f.entries.iter().find(|e| e.entry.id == id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, json!({ "error": format!("沒有符號 {id}") })))?;
+    let latex = e.entry.latex.clone().filter(|l| !l.trim().is_empty()).ok_or_else(|| bad("這一列沒有 LaTeX"))?;
+    let path = global_file(&s);
+    let mut glob = lore_notation::Notation::load(&path).map_err(bad)?;
+    if let Some(have) = glob.find_latex(&latex) {
+        return Err(ApiError(StatusCode::CONFLICT, json!({ "error": format!("全域對照表已經有 {latex}"), "id": have.id })));
+    }
+    let gid = glob.free_id(&e.entry.id);
+    let row = global_entry(&e.entry, &gid);
+    glob.entries.push(row.clone());
+    glob.save(&path).map_err(|x| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": x })))?;
+    Ok(Json(json!({ "entry": row })))
+}
+
 const GLYPHS_TEMPLATE: &str = "# 只寫要覆蓋的條目。例：\n# [glyphs]\n# \"ε\" = \"\\\\epsilon\"\n# [fonts]\n# math = [\"MyMathFont\"]\n";
 
 pub async fn glyphs_get(State(s): State<Shared>) -> R {
@@ -911,7 +957,7 @@ pub async fn models_put(State(s): State<Shared>, Json(b): Json<ModelBody>) -> R 
         return Err(bad("沒有這個任務"));
     }
     if !llm::CHOICES.contains(&b.model.as_str()) {
-        return Err(bad("模型只能是 auto、local、haiku、sonnet 或 opus"));
+        return Err(bad("模型只能是 auto、local、cloud、haiku、sonnet 或 opus"));
     }
     let _g = s.write.lock().unwrap();
     let mut m = load_models(&s.workspace);

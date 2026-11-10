@@ -918,3 +918,51 @@ async fn the_shared_local_engine_classifies_when_the_config_names_none() {
     assert_eq!(*hits.lock().unwrap(), 1);
     assert_eq!(v["engine"], "llama-server:local");
 }
+
+/// The shared shell: icons.js / base.css / shell.js and the 對照表 component come from
+/// commons through the server; the page loads them in the spec's order, and has no
+/// icons.js of its own.
+#[tokio::test]
+async fn the_shared_shell_is_served_and_loaded_in_order() {
+    let e = setup(&dead_url(), None);
+    for (path, needle) in [("/shell.js", "window.LoreShell"), ("/base.css", ".fstate"), ("/icons.js", "const ICONS"), ("/notation-panel.js", "notation-panel")] {
+        let (s, _, b) = call(&e.app, "GET", path, None, None).await;
+        assert_eq!(s, StatusCode::OK, "{path}");
+        assert!(String::from_utf8(b).unwrap().contains(needle), "{path}");
+    }
+    let web = lr_server::repo_dir().join("web");
+    assert!(!web.join("icons.js").exists(), "icons.js comes from commons/ui through lore-shell");
+    let index = std::fs::read_to_string(web.join("index.html")).unwrap();
+    let at = |s: &str| index.find(s).unwrap_or_else(|| panic!("{s} not in index.html"));
+    assert!(at("href=\"theme.css\"") < at("href=\"base.css\"") && at("href=\"base.css\"") < at("href=\"styles.css\""));
+    assert!(at("src=\"theme.js\"") < at("src=\"icons.js\"") && at("src=\"icons.js\"") < at("src=\"shell.js\"") && at("src=\"shell.js\"") < at("src=\"app.js\""));
+    let app = std::fs::read_to_string(web.join("app.js")).unwrap();
+    assert!(!app.contains("confirm("), "questions go through LoreShell.ask");
+}
+
+/// 加入全域: a row of the paper's symbol table goes into the global 對照表 once
+/// (lore-notation's file in the shared folder); the same symbol again is refused.
+#[tokio::test]
+async fn a_symbol_goes_into_the_global_notation_once() {
+    let e = setup(&dead_url(), None);
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/symbols"), Some(json!({ "latex": "\\hat{y}", "meaning": "預測值", "meaning_en": "the prediction" })), None).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let id = v["entry"]["id"].as_str().unwrap().to_string();
+    let (_, v, _) = call(&e.app, "GET", "/api/notation/global", None, None).await;
+    assert_eq!(v["entries"].as_array().map(Vec::len), Some(0));
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/symbols/{id}/global"), None, None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let g = lore_notation::Notation::load(&e.root.join("ws/shared/notation.json")).unwrap();
+    let row = g.find_latex("\\hat{y}").expect("in the global file");
+    assert_eq!((row.meaning.as_deref(), row.meaning_en.as_deref()), (Some("預測值"), Some("the prediction")));
+    assert!(row.defined_at.is_none() && row.uses.is_empty());
+    let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/symbols/{id}/global"), None, None).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let (_, v, _) = call(&e.app, "GET", "/api/notation/global", None, None).await;
+    assert_eq!(v["entries"].as_array().map(Vec::len), Some(1));
+    // the engine chip's 雲 is a model choice of its own
+    let (s, v, _) = call(&e.app, "PUT", "/api/models", Some(json!({ "task": "lr-chat", "model": "cloud" })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["tasks"].as_array().unwrap().iter().any(|t| t["id"] == "lr-chat" && t["choice"] == "cloud"));
+}

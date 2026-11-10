@@ -132,14 +132,17 @@ impl Llm {
 
 /// The tasks the model menu offers, in menu order.
 pub const MENU_TASKS: [&str; 4] = ["lr-classify-terms", "lr-paragraph", "lr-chat", "lr-translate"];
-/// The engines of the model menu (`auto` = the task's order from tasks.toml).
-pub const CHOICES: [&str; 5] = ["auto", "local", "haiku", "sonnet", "opus"];
+/// The engines of a feature's engine chip (`auto` = the task's order from tasks.toml,
+/// `cloud` = the selected Claude model, `local` = the local engine). haiku / sonnet / opus
+/// are the old model menu's choices: still accepted, so an older models.json keeps working.
+pub const CHOICES: [&str; 6] = ["auto", "local", "cloud", "haiku", "sonnet", "opus"];
 
 /// A menu choice as a lore-llm model ref (`None` = the task's own order).
 pub fn model_ref(choice: Option<&str>) -> Result<Option<String>, String> {
     match choice.map(str::trim).filter(|m| !m.is_empty() && *m != "auto") {
         None => Ok(None),
         Some("local") => Ok(Some("local:current".into())),
+        Some("cloud") => Ok(Some("claude:selected".into())),
         Some(a @ ("haiku" | "sonnet" | "opus")) => Ok(Some(format!("claude:{a}"))),
         Some(other) => Err(format!("不認得的模型選擇「{other}」")),
     }
@@ -185,6 +188,7 @@ mod tests {
         assert_eq!(t.task["lr-paragraph"].fallback.as_deref(), Some("claude:haiku"));
         assert_eq!(model_ref(Some("haiku")).unwrap().as_deref(), Some("claude:haiku"));
         assert_eq!(model_ref(Some("auto")).unwrap(), None);
+        assert_eq!(model_ref(Some("cloud")).unwrap().as_deref(), Some("claude:selected"));
         assert!(model_ref(Some("gpt")).is_err());
     }
 
