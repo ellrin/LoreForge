@@ -18,6 +18,7 @@ pub mod paper;
 pub mod table;
 pub mod profile;
 pub mod retrieve;
+pub mod review;
 pub mod softcheck;
 pub mod text;
 pub mod textable;

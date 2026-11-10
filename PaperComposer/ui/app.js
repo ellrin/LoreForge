@@ -111,6 +111,7 @@ async function openPaper(name, { keepHome = false } = {}) {
   await Promise.all([checkAll(), loadFigureSizes()]);
   if (!same) $("#pageArea").scrollTop = 0;
   render(!same);
+  window.PCReview?.load(); // review.js: tracked changes and comments
 }
 
 /** Width and height of the paper's figures, read from their files by the server. */
@@ -139,6 +140,7 @@ async function saveSection(i) {
   const saved = await api(`/api/papers/${encodeURIComponent(state.paper.name)}/sections/${encodeURIComponent(s.file)}`,
     { title: s.title, paragraphs: s.paragraphs }, "PUT");
   sections()[i] = saved;
+  window.PCReview?.refresh(); // the server may have recorded this save (review.js)
   await checkSection(i);
 }
 
@@ -357,6 +359,7 @@ function navLeaf(si, pi) {
   b.append(el("span", `status ${rep ? rep.status ?? "" : ""}`), el("span", "i", pad(pi + 1)), t);
   b.onclick = () => { const s = +b.dataset.s, p = +b.dataset.p; select(s, p); PCLazy.jump(paraEl(s, p)); };
   window.PCFind?.badge(b); // find.js: count of matches
+  window.PCReview?.badge(b); // review.js: open review items
   const item = el("li");
   item.append(b);
   return item;
@@ -998,6 +1001,7 @@ function renderStatus() {
   bar.innerHTML = "";
   bar.append(el("span", "accent", sec ? `${pad(state.cur.s + 1)} / ${sec.title}` : "—"), el("span", "", `${paras} 段`));
   if (state.paper) bar.lastChild.append(" · ", PCWords.button()); else PCWords.close();
+  window.PCReview?.status(bar); // 「審閱 N」 in writing mode
   const e = state.engines, pick = chosenEngine();
   const eng = el("button", "sync"); const dot = el("span", "dot");
   const [ok, name] = pick === "local" ? [e.local.status.connected, e.local.status.name]

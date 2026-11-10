@@ -190,6 +190,17 @@ your-private-repo/
 - **字數**在下方狀態列（本節／全文）。點開可以逐章勾選要不要算、是否包含圖表標題、表格內容、註腳；公式和引用指令不算。英文算單字、中文算字，合計以「字」表示。勾選結果每篇論文各自記住。
 - 期刊的字數上限寫在出版社範本的 `template.toml`（`[word_limits]`，格式見 [`publishers/README.md`](../private-example/PaperComposer/publishers/README.md)），在「模板」的「投稿規則」裡也能改，超過時數字變紅。
 
+## 審閱模式
+
+上方中間的「寫作｜審閱」切換；審閱旁的數字是還沒處理的修改＋註解，追蹤修訂開著時有一個小點。寫作模式和平常一樣，只在有未解決註解的段落左側留一個小點，狀態列出現「審閱 N」可以直接切過去。每台電腦各自記住上次的模式。
+
+- **追蹤修訂**（審閱工具列第一個，預設關閉，存在這篇論文）：開著時，**兩個模式**下的每一種修改都會記下來：直接編輯段落、尋找與取代、右鍵插入、生成段落、討論草稿的修改方案、表格編輯。記錄以段落為單位（新增、刪除、修改），同一個人再改同一段只更新同一筆，保留最早的原文。
+- **審閱模式**：頁面上插入是綠色底線、刪除是紅色刪除線、註解範圍是黃底，右側邊界標上編號；右側換成審閱清單（全部／修改／註解），每個人一個顏色；左側導覽標出每段的項目數。仍可雙擊段落編輯。
+- **‹ ›** 逐項移動，**✓ 接受**（保留現在的文字、刪除紀錄）、**✕ 拒絕**（放回原文；之後又改過的段落不能拒絕）。拒絕後放回的文字會跑對照表檢查，有問題時提示，不會擋。**全部 ⌄**：接受全部／拒絕全部／解決全部註解。
+- **顯示**：標記（預設）／只看結果／原稿。
+- **註解**：選取文字後按「＋ 註解」或右鍵「新增註解」（沒有選取時註解整段）。可以回覆、標為已解決（已解決的不算在數字裡，清單下方可顯示）。文字改過後依原文重新定位；原文不見時保留在清單，標「原文已更動」。
+- 資料存在論文資料夾的 `review.json`，**不寫進 .tex**：PDF、LaTeX、Word 匯出都不帶標記，LaTeX 原始碼包也不含它。作者名稱取自 `shared/profile.toml` 的 `name`。
+
 ## 公式
 
 紙張上的數學式用內建的 KaTeX 顯示（離線可用），支援 `$…$`、`\[…\]`、`equation`／`align` 等環境、自動編號與 `\eqref`，並會讀取論文 `main.tex` 與 `macros*.tex` 裡的 `\newcommand`、`\DeclareMathOperator`。版面設定（`\topfraction`、`\floatpagefraction`、重新定義的 `\thebibliography`、名稱或內容含 `@` 的內部巨集）不是數學，會略過。這是編輯時的預覽，投稿用的 PDF 仍由 LaTeX 搭配期刊 cls 產生。
@@ -408,6 +419,12 @@ scripts/            Git hooks
 | POST | `/api/refs/propose-record` `{ work \| guess, engine }` | 沒有 DOI 紀錄可取時，從 PubMed 紀錄或你貼的書目產生文獻庫條目 |
 | PUT | `/api/papers/{name}/sections/{file}` `{ title, paragraphs }` | 儲存章節（一句一行） |
 | POST | `/api/papers/{name}/notation/check` `{ before, texts, find }` | 取代前的對照表檢查：只回報改後才多出的問題，以及搜尋字串碰到的登記項目 |
+| GET | `/api/papers/{name}/review` | 審閱資料（`review.json`）：追蹤修訂開關、修改與註解，以及每項修改目前的位置 |
+| PUT | `/api/papers/{name}/review/tracking` `{ on }` | 追蹤修訂開／關 |
+| POST | `/api/papers/{name}/review/changes/{id}` `{ action: "accept" \| "reject" }` | 接受或拒絕一項修改；拒絕時寫回原文並回傳該章節與對照表檢查結果 |
+| POST | `/api/papers/{name}/review/all` `{ action: "accept" \| "reject" \| "resolve" }` | 全部接受／全部拒絕（之後又改過的略過）／解決全部註解 |
+| POST | `/api/papers/{name}/review/comments` `{ file, index, exact, prefix, suffix, text }` | 新增註解（`exact` 空白＝整段） |
+| PUT | `/api/papers/{name}/review/comments/{id}` `{ reply?, resolved? }` | 回覆或標為已解決 |
 | GET / PUT | `/api/tables/{file}` | 讀寫資料庫 CSV（句型、片語、用詞、規則、範例、公式、作者、機構） |
 | POST | `/api/papers/{name}/export` `{ kind: "pdf" \| "docx" \| "latex" }` | 匯出：頁數、錯誤（含位置）、找不到的引用與標籤 |
 | POST | `/api/papers/{name}/export/open` `{ kind, reveal }` | 開啟匯出的檔案，或在資料夾中顯示 |

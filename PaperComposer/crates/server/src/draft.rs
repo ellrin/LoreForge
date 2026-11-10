@@ -1122,9 +1122,14 @@ async fn decide_change(State(s): State<Shared>, AxPath((name, id, cid)): AxPath<
         return bad("已經套用過了");
     }
     if b.apply {
+        // the review sees this save too (tracked changes, comment anchors)
+        let _review = crate::REVIEW_LOCK.lock().await;
+        let paras = |d: &std::path::Path| std::fs::read_to_string(d.join("sections").join(&ch.file)).map(|t| paper::parse_section(&ch.file, &t).paragraphs).unwrap_or_default();
+        let old = paras(&c.dir);
         if let Err(e) = rv::apply(&c.dir, ch) {
             return bad(&e);
         }
+        crate::review_saved(&c.dir, &ch.file, &old, &paras(&c.dir));
     }
     ch.applied = Some(b.apply);
     if plan.changes.iter().all(|x| x.applied.is_some()) {

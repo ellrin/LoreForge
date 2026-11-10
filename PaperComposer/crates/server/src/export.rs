@@ -523,7 +523,7 @@ pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Rep
 }
 
 /// Files of the paper folder that are the app's, not the paper's.
-const APP_FILES: &[&str] = &["citations.csv", "main.bbl", "main.tex", "00README.json"];
+const APP_FILES: &[&str] = &["citations.csv", "main.bbl", "main.tex", "00README.json", "review.json"];
 
 /// `export/<name>-latex.zip`: a source package that compiles on its own,
 /// as journals and arXiv want it: main.tex with the sections merged back

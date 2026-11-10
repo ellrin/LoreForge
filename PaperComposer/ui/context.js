@@ -576,6 +576,7 @@ const PCContext = (() => {
     if (d.text.trim()) {
       sep();
       add("star", "收藏句型", () => { PCWrite.collect(marker, d.text); keepMarker(); });
+      add("comment", "新增註解", () => { window.PCReview?.comment({ si: at.si, pi: at.pi, ta: d.ta, a: d.a, b: d.b, text: d.text, range: d.ta ? null : getSelection()?.rangeCount ? getSelection().getRangeAt(0).cloneRange() : null }); return false; });
       sep();
       const row = el("div", "ctx-clip");
       menu.append(row);

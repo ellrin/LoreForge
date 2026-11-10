@@ -2347,15 +2347,20 @@ async fn put_section(
         Err(r) => return r,
     };
     let path = dir.join("sections").join(&file);
+    // the review (review.json) sees every save: tracked changes, comment anchors
+    let _review = REVIEW_LOCK.lock().await;
     // Keep what follows \section{} (e.g. \label) from the file on disk.
-    let tail = std::fs::read_to_string(&path).map(|t| paper::parse_section(&file, &t).tail).unwrap_or_default();
+    let was = std::fs::read_to_string(&path).map(|t| paper::parse_section(&file, &t)).ok();
+    let tail = was.as_ref().map(|s| s.tail.clone()).unwrap_or_default();
     let section = Section { file: file.clone(), title: b.title, paragraphs: b.paragraphs, tail };
     if let Err(e) = std::fs::create_dir_all(dir.join("sections")).and_then(|_| paper::write_atomic(&path, &paper::render_section(&section))) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
     // Return what is now on disk, re-read, so the UI shows the saved form.
     let text = std::fs::read_to_string(&path).unwrap_or_default();
-    Json(paper::parse_section(&file, &text)).into_response()
+    let saved = paper::parse_section(&file, &text);
+    review_saved(&dir, &file, &was.map(|s| s.paragraphs).unwrap_or_default(), &saved.paragraphs);
+    Json(saved).into_response()
 }
 
 // ── Find & Replace: notation check (find.js) ───────────
@@ -2425,6 +2430,222 @@ fn replace_check(ws: &Path, dir: &Path, before: &[String], after: &[String], fin
     serde_json::json!({ "blocking": blocking, "shown": shown, "new_symbols": new_symbols, "entries": entries })
 }
 // ── end Find & Replace ─────────────────────────────────
+
+// ── Review: tracked changes and comments (review.js) ───
+// review.json beside the paper, never in the .tex. Every section save goes
+// through review_saved(), tracked or not, so changes and comments keep
+// their places; while 追蹤修訂 is on it also records what changed. The
+// author is the LoreForge profile's name (private/shared/profile.toml).
+
+/// One review.json read-modify-write at a time, together with its section file.
+pub(crate) static REVIEW_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Who is reviewing: the profile's display name, else its id, else 「我」.
+pub(crate) fn review_author() -> String {
+    let p = loreforge_home().prefs().profile;
+    [p.name, p.id].into_iter().flatten().map(|s| s.trim().to_string()).find(|s| !s.is_empty()).unwrap_or_else(|| "我".into())
+}
+
+/// A section file went from `old` to `new` paragraphs (hold REVIEW_LOCK).
+pub(crate) fn review_saved(dir: &Path, file: &str, old: &[String], new: &[String]) {
+    let mut r = pc_core::review::load(dir);
+    if !r.tracking && !r.changes.iter().any(|c| c.file == file) && !r.comments.iter().any(|c| c.file == file) {
+        return;
+    }
+    let before = r.clone();
+    pc_core::review::record(&mut r, file, old, new, &review_author(), &pc_core::review::now());
+    if r != before {
+        if let Err(e) = pc_core::review::save(dir, &r) {
+            eprintln!("review.json: {e}");
+        }
+    }
+}
+
+fn section_of(dir: &Path, file: &str) -> Option<Section> {
+    if !paper::safe_name(file) {
+        return None;
+    }
+    std::fs::read_to_string(dir.join("sections").join(file)).ok().map(|t| paper::parse_section(file, &t))
+}
+
+/// The review with each change's place in its section now, and who I am.
+fn review_view(dir: &Path, r: &pc_core::review::Review) -> serde_json::Value {
+    let mut cache: std::collections::HashMap<String, Vec<String>> = Default::default();
+    let mut v = serde_json::to_value(r).unwrap_or_default();
+    if let Some(list) = v["changes"].as_array_mut() {
+        for (x, c) in list.iter_mut().zip(&r.changes) {
+            let paras = cache.entry(c.file.clone()).or_insert_with(|| section_of(dir, &c.file).map(|s| s.paragraphs).unwrap_or_default());
+            x["place"] = serde_json::to_value(pc_core::review::locate(paras, &r.changes, c)).unwrap_or_default();
+        }
+    }
+    v["me"] = serde_json::Value::String(review_author());
+    v
+}
+
+async fn get_review(State(s): State<Shared>, AxPath(name): AxPath<String>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let _g = REVIEW_LOCK.lock().await;
+    Json(review_view(&dir, &pc_core::review::load(&dir))).into_response()
+}
+
+#[derive(Deserialize)]
+struct TrackingBody {
+    on: bool,
+}
+
+async fn put_tracking(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<TrackingBody>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let _g = REVIEW_LOCK.lock().await;
+    let mut r = pc_core::review::load(&dir);
+    r.tracking = b.on;
+    if let Err(e) = pc_core::review::save(&dir, &r) { return bad(&e) }
+    Json(review_view(&dir, &r)).into_response()
+}
+
+#[derive(Deserialize)]
+struct DecideBody {
+    /// "accept" | "reject" (one change); for all: also "resolve" (comments)
+    action: String,
+}
+
+/// Reject change `id`: write the section with `before` back. Returns the
+/// section and the notation findings the restored text adds.
+fn reject_one(ws: Option<&Path>, dir: &Path, r: &mut pc_core::review::Review, id: &str) -> Result<(Section, Vec<String>), String> {
+    let c = r.changes.iter().find(|c| c.id == id).cloned().ok_or("沒有這項修改")?;
+    let mut sec = section_of(dir, &c.file).ok_or("找不到這個章節檔")?;
+    let paras = pc_core::review::reject(r, id, &sec.paragraphs)?;
+    sec.paragraphs = paras;
+    let path = dir.join("sections").join(&c.file);
+    paper::write_atomic(&path, &paper::render_section(&sec)).map_err(|e| e.to_string())?;
+    let saved = section_of(dir, &c.file).ok_or("找不到這個章節檔")?;
+    // the registry's checks on what came back (shown, not blocking)
+    let issues = match (ws, &c.before) {
+        (Some(ws), Some(before)) => {
+            let was: Vec<String> = c.after.iter().cloned().collect();
+            let res = replace_check(ws, dir, &was, std::slice::from_ref(before), "");
+            let mut out: Vec<String> = ["blocking", "shown"]
+                .iter()
+                .flat_map(|k| res[*k].as_array().cloned().unwrap_or_default())
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
+            let syms: Vec<&str> = res["new_symbols"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
+            if !syms.is_empty() {
+                out.push(format!("對照表沒有的符號：{}", syms.join("、")));
+            }
+            out
+        }
+        _ => vec![],
+    };
+    Ok((saved, issues))
+}
+
+async fn decide_review_change(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, String)>, Json(b): Json<DecideBody>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let ws = s.loaded.read().await.workspace.clone();
+    let _g = REVIEW_LOCK.lock().await;
+    let mut r = pc_core::review::load(&dir);
+    let (sections, issues) = match b.action.as_str() {
+        "accept" => match pc_core::review::accept(&mut r, &id) { Ok(_) => (vec![], vec![]), Err(e) => return bad(&e) },
+        "reject" => match reject_one(ws.as_deref(), &dir, &mut r, &id) { Ok((sec, issues)) => (vec![sec], issues), Err(e) => return bad(&e) },
+        _ => return bad("unknown action"),
+    };
+    if let Err(e) = pc_core::review::save(&dir, &r) { return bad(&e) }
+    Json(serde_json::json!({ "review": review_view(&dir, &r), "sections": sections, "issues": issues })).into_response()
+}
+
+async fn decide_review_all(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<DecideBody>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let ws = s.loaded.read().await.workspace.clone();
+    let _g = REVIEW_LOCK.lock().await;
+    let mut r = pc_core::review::load(&dir);
+    let (mut sections, mut issues, mut skipped): (Vec<Section>, Vec<String>, usize) = (vec![], vec![], 0);
+    match b.action.as_str() {
+        "accept" => r.changes.clear(),
+        "reject" => {
+            let ids: Vec<String> = r.changes.iter().map(|c| c.id.clone()).collect();
+            for id in ids {
+                match reject_one(ws.as_deref(), &dir, &mut r, &id) {
+                    Ok((sec, found)) => {
+                        sections.retain(|x: &Section| x.file != sec.file);
+                        sections.push(sec);
+                        issues.extend(found);
+                    }
+                    Err(_) => skipped += 1,
+                }
+            }
+        }
+        "resolve" => r.comments.iter_mut().for_each(|c| c.resolved = true),
+        _ => return bad("unknown action"),
+    }
+    if let Err(e) = pc_core::review::save(&dir, &r) { return bad(&e) }
+    issues.dedup();
+    Json(serde_json::json!({ "review": review_view(&dir, &r), "sections": sections, "issues": issues, "skipped": skipped })).into_response()
+}
+
+#[derive(Deserialize)]
+struct NewComment {
+    file: String,
+    #[serde(default)]
+    index: usize,
+    #[serde(default)]
+    exact: String,
+    #[serde(default)]
+    prefix: String,
+    #[serde(default)]
+    suffix: String,
+    text: String,
+}
+
+async fn add_review_comment(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<NewComment>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    if b.text.trim().is_empty() { return bad("註解是空的") }
+    let Some(sec) = section_of(&dir, &b.file) else { return bad("找不到這個章節檔") };
+    let _g = REVIEW_LOCK.lock().await;
+    let mut r = pc_core::review::load(&dir);
+    r.comments.push(pc_core::review::Comment {
+        id: pc_core::review::new_id("m"),
+        author: review_author(),
+        at: pc_core::review::now(),
+        file: b.file.clone(),
+        index: b.index,
+        exact: b.exact,
+        prefix: b.prefix,
+        suffix: b.suffix,
+        text: b.text.trim().to_string(),
+        replies: vec![],
+        resolved: false,
+        orphan: false,
+        source: None,
+        extra: Default::default(),
+    });
+    pc_core::review::reanchor(&mut r, &b.file, &sec.paragraphs);
+    if let Err(e) = pc_core::review::save(&dir, &r) { return bad(&e) }
+    Json(review_view(&dir, &r)).into_response()
+}
+
+#[derive(Deserialize)]
+struct CommentEdit {
+    #[serde(default)]
+    reply: Option<String>,
+    #[serde(default)]
+    resolved: Option<bool>,
+}
+
+async fn edit_review_comment(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, String)>, Json(b): Json<CommentEdit>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let _g = REVIEW_LOCK.lock().await;
+    let mut r = pc_core::review::load(&dir);
+    let Some(c) = r.comments.iter_mut().find(|c| c.id == id) else { return bad("沒有這則註解") };
+    if let Some(text) = b.reply.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        c.replies.push(pc_core::review::Reply { id: pc_core::review::new_id("r"), author: review_author(), at: pc_core::review::now(), text: text.into(), extra: Default::default() });
+    }
+    if let Some(v) = b.resolved {
+        c.resolved = v;
+    }
+    if let Err(e) = pc_core::review::save(&dir, &r) { return bad(&e) }
+    Json(review_view(&dir, &r)).into_response()
+}
+// ── end Review ─────────────────────────────────────────
 
 // ── Database tables ────────────────────────────────────
 
@@ -2998,6 +3219,12 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/settings/pdf-dir", post(set_pdf_dir))
         .route("/api/papers/{name}/sections/{file}", put(put_section))
         .route("/api/papers/{name}/notation/check", post(notation_check)) // find.js
+        .route("/api/papers/{name}/review", get(get_review)) // review.js
+        .route("/api/papers/{name}/review/tracking", put(put_tracking))
+        .route("/api/papers/{name}/review/all", post(decide_review_all))
+        .route("/api/papers/{name}/review/changes/{id}", post(decide_review_change))
+        .route("/api/papers/{name}/review/comments", post(add_review_comment))
+        .route("/api/papers/{name}/review/comments/{id}", put(edit_review_comment))
         .route("/api/tables/{name}", get(get_table).put(put_table))
         .route("/api/claude", get(claude_status))
         .route("/api/open/{page}", post(open_page))
@@ -3042,6 +3269,33 @@ pub async fn bind(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejecting_writes_the_old_paragraph_back_and_checks_it() {
+        let root = std::env::temp_dir().join(format!("pc-review-reject-{}-{}", std::process::id(), pc_core::review::new_id("")));
+        let (ws, dir) = (root.join("ws"), root.join("ws/papers/P"));
+        std::fs::create_dir_all(dir.join("sections")).unwrap();
+        std::fs::write(dir.join("main.tex"), "\\documentclass{article}\n\\begin{document}\n\\input{sections/res}\n\\end{document}\n").unwrap();
+        std::fs::write(dir.join("notation.json"), r#"{"version":1,"entries":[{"id":"t1","kind":"table","label":"tab:main","caption":"Main"}]}"#).unwrap();
+        // the old text typed a table number; the tracked edit fixed it with \ref
+        let old = vec!["Table 1 shows the gain.".to_string(), "Second.".to_string()];
+        let new = vec!["Table~\\ref{tab:main} shows the gain.".to_string(), "Second.".to_string()];
+        let sec = |p: &[String]| Section { file: "res.tex".into(), title: "Results".into(), paragraphs: p.to_vec(), tail: String::new() };
+        std::fs::write(dir.join("sections/res.tex"), paper::render_section(&sec(&new))).unwrap();
+        let mut r = pc_core::review::Review { tracking: true, ..Default::default() };
+        pc_core::review::record(&mut r, "res.tex", &old, &new, "ellrin", "t1");
+        let id = r.changes[0].id.clone();
+        let (saved, issues) = reject_one(Some(&ws), &dir, &mut r, &id).unwrap();
+        assert_eq!(saved.paragraphs, old);
+        assert!(r.changes.is_empty());
+        let on_disk = std::fs::read_to_string(dir.join("sections/res.tex")).unwrap();
+        assert!(on_disk.contains("Table 1 shows the gain."));
+        // the restored text is checked against the registry; shown, not blocking
+        assert!(!issues.is_empty(), "a typed table number comes back and is reported");
+        // tracked changes never reach the .tex
+        assert!(!on_disk.contains("ellrin"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[tokio::test]
     async fn merges_a_paper_bib_into_the_library_without_duplicates() {
