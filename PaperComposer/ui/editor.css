@@ -61,7 +61,7 @@
 .paper h2 > input.sx-title:focus { border-color: var(--paper-link); }
 
 /* 已刪除 … 復原 */
-.tip.sx-toast { bottom: 24px; left: 50%; transform: translateX(-50%); max-width: 520px; display: flex; align-items: center; gap: 12px; }
+.tip.sx-toast { bottom: 48px; left: 50%; transform: translateX(-50%); max-width: 520px; display: flex; align-items: center; gap: 12px; }
 
 /* waiting: label, seconds, 停止 */
 .wait-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }

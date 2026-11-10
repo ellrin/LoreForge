@@ -161,6 +161,8 @@ const PCSections = (() => {
   /** ⋯ / right-click on a section in the navigator. */
   function openMenu(si, anchor) {
     const n = sections().length;
+    // what follows opens under the section's line (the ⋯ is gone once the pointer leaves)
+    const head = () => document.querySelector(`#nav .sec[data-s="${si}"] > .sec-head`) ?? anchor;
     const { box, place } = popup(anchor);
     const item = (label, fn, off) => {
       const b = el("button", off ? "off" : "", label);
@@ -169,14 +171,13 @@ const PCSections = (() => {
       box.append(b);
     };
     item("改名", () => rename(si));
-    item("在後面新增章節", () => askTitle(si, anchor));
+    item("在後面新增章節", () => askTitle(si, head()));
     box.append(el("div", "sep"));
     item("上移", () => move(si, si - 1), si === 0);
     item("下移", () => move(si, si + 1), si === n - 1);
     box.append(el("div", "sep"));
-    item("刪除章節…", () => askDelete(si, anchor));
+    item("刪除章節…", () => askDelete(si, head()));
     place();
-    box.querySelector("button")?.focus();
   }
 
   /** The title of a new section, after section `si` (-1: first). */
@@ -245,7 +246,6 @@ const PCSections = (() => {
         });
       } catch (e) { closeMenu(); flash(`刪除失敗：${e.message}`, 6000); }
     };
-    no.focus();
   }
 
   /** A note with 復原, gone after a while. */
