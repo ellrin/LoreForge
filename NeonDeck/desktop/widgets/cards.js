@@ -2,19 +2,17 @@
 // 資料由 Swift 端直接讀 private/KnowledgeBase 的 JSON（ctx.call('kbCards')），不需要 kb-server；
 // Swift 端有快取（看資料夾修改時間），沒變時不讀檔也不重傳，所以每 5 分鐘問一次很便宜。
 // 越新、連續記得次數越少的卡越常出現；一輪全部輪完才重新洗牌，不會一直出現同一張。
-// 一次顯示幾張：config.count = 'auto'（依小工具高度 1 或 2 張）或 1 / 2。
+// 一次顯示幾張：config.count = 'auto'（放得下幾張就幾張，最多 3）或 1 / 2。
 // 點卡片 → 開 KnowledgeBase App 並進到那張卡（lore-kb://node/<id>；App 沒開會自動啟動）。
 import { h, injectCSS } from '../core/util.js';
 
 injectCSS('cards', `
-:where(.kc) { height: 100%; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
-:where(.kc-card) { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 0;
+:where(.kc) { height: 100%; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: hidden; }
+:where(.kc-card) { flex: none; display: flex; flex-direction: column; gap: 2px;
   cursor: pointer; text-align: left; border: 0; background: none; color: inherit; font: inherit; overflow: hidden; }
 :where(.kc-card:focus-visible) { outline: 1px solid currentColor; outline-offset: 2px; }
-:where(.kc-head) { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-:where(.kc-t) { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-:where(.kc-badge) { flex: none; }
-:where(.kc-al) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:where(.kc-meta) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:where(.kc-t) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4; }
 :where(.kc-sum) { line-height: 1.45; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--kc-lines, 4); }
 :where(.kc-off) { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 `);
@@ -73,7 +71,7 @@ export default {
 
     const count = () => {
       if (cfg.count === 1 || cfg.count === 2) return cfg.count;
-      return (ctx.el?.offsetHeight || body.clientHeight + 70) >= 300 ? 2 : 1;
+      return 3;   // auto：先排三張，render() 把放不下的退回佇列
     };
 
     function next() {
@@ -104,12 +102,20 @@ export default {
         const isNew = Date.now() - n.created < 7 * DAY;
         const text = n.summary || n.body || '';
         return h('button.kc-card.edit-live', { type: 'button', title: '在知識庫開啟', onclick: () => ctx.call('open', `lore-kb://node/${encodeURIComponent(n.id)}`).catch(() => {}) },
-          h('div.kc-head', {},
-            h('b.kc-t.hl', {}, n.title),
-            h('span.s.kc-badge', {}, n.state === 'known' ? '' : isNew ? '新' : n.streak ? `記得 ${n.streak} 次` : '不熟')),
-          n.aliases?.length ? h('span.s.kc-al', {}, n.aliases.join(' · ')) : null,
+          // 同 NEWS 的條目：一行小字（狀態 · 別名）、標題、摘要
+          h('span.s.kc-meta', {}, h('b.kc-kw', {}, n.state === 'known' ? '已會' : isNew ? '新' : n.streak ? `記得 ${n.streak} 次` : '不熟'),
+            ...(n.aliases?.length ? [` · ${n.aliases.join(' · ')}`] : [])),
+          h('span.kc-t', {}, n.title),
           text ? h('span.s.kc-sum', {}, text) : null);
       }));
+      // auto：放不下的卡從後面拿掉，排回佇列前面，下一輪先出現
+      if (cfg.count !== 1 && cfg.count !== 2) {
+        while (shown.length > 1 && main.scrollHeight > main.clientHeight + 1) {
+          main.lastChild.remove();
+          queue.unshift(shown.pop());
+        }
+        main.style.setProperty('--kc-lines', shown.length > 1 ? 2 : 4);
+      }
     }
 
     const rot = setInterval(() => { if (!document.hidden && online) next(); }, Math.max(10, cfg.rotateSec || 60) * 1000);
