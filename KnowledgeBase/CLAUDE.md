@@ -32,7 +32,10 @@ cd ../commons && cargo test -p kb-core -p lore-store
   `lore_secrets::KeyStore` (service `KnowledgeBase`, account `smtp-password`).
 - `scripts/install-launchd.sh` + `scripts/launchd/kb-server.plist.template`: start at login.
 - `web/`: static HTML/CSS/JS, no build step; visual language from PaperComposer / JELearner
-  (tokens, icons, panels). UI text in Traditional Chinese. KaTeX vendored in `web/vendor/katex`
+  (icons, panels). Colours: the theme all LoreForge apps share — `/theme.css` and `/theme.js` are
+  `commons/ui/theme.{css,js}` (through `lore_home::theme`), `/api/theme` reads and sets the shared
+  choice (`private/shared/ui.toml`), 設定 has the 外觀 picker. The card's reading sheet is the
+  theme's `--paper`; domain colours `--g1…--g12` only differ between dark and light themes. UI text in Traditional Chinese. KaTeX vendored in `web/vendor/katex`
   (copied from PaperComposer). Graph (`graph.js`): Obsidian-style canvas view, Barnes–Hut force
   layout, global / local (`#/graph/<id>`), filters, playback; data from `/api/graph?full=true&missing=true`.
   Colour = a card's first domain (`--g1…--g12`, slot = the domain's place in `tags.json`), the

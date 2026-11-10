@@ -87,6 +87,9 @@ fn ok(v: impl serde::Serialize) -> R {
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/prefs.css", get(prefs_css))
+        .route("/theme.css", get(theme_css))
+        .route("/theme.js", get(theme_js))
+        .route("/api/theme", get(theme_get).put(theme_put))
         .route("/api/health", get(health))
         .route("/api/spaces", get(spaces))
         .route("/api/registry", get(registry))
@@ -450,4 +453,27 @@ async fn reminders_claim(State(s): State<Shared>, body: Bytes) -> R {
 /// The user's interface fonts (`private/shared/fonts.toml`) as CSS variables; linked after styles.css.
 async fn prefs_css(State(s): State<Shared>) -> impl axum::response::IntoResponse {
     ([(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8"), (axum::http::header::CACHE_CONTROL, "no-cache")], s.home.prefs().fonts.css())
+}
+
+/// The LoreForge themes (commons/ui/theme.css, the same file in every app), compiled in.
+async fn theme_css() -> impl axum::response::IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8"), (axum::http::header::CACHE_CONTROL, "no-cache")], lore_home::theme::CSS)
+}
+
+/// commons/ui/theme.js with the shared choice in front (first paint has the theme).
+async fn theme_js(State(s): State<Shared>) -> impl axum::response::IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (axum::http::header::CACHE_CONTROL, "no-cache")], lore_home::theme::script(&s.home))
+}
+
+/// The theme every LoreForge app shows (`private/shared/ui.toml`); null = none chosen yet.
+async fn theme_get(State(s): State<Shared>) -> Json<Value> {
+    Json(json!({ "theme": s.home.theme() }))
+}
+
+async fn theme_put(State(s): State<Shared>, Json(b): Json<Value>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match s.home.set_theme(b["theme"].as_str().unwrap_or_default()) {
+        Ok(t) => Json(json!({ "theme": t })).into_response(),
+        Err(e) => (axum::http::StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
 }

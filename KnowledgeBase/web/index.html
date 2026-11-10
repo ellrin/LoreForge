@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant" data-theme="orange" data-mode="dark">
+<html lang="zh-Hant" data-theme="giftbox" data-mode="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,10 +8,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
   <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="prefs.css">
-  <!-- Mode: the author's choice (kb.mode) or, until they pick one, the system's. -->
-  <script>(() => { let m = null; try { m = localStorage.getItem("kb.mode"); } catch {} if (m !== "light" && m !== "dark") m = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"; document.documentElement.dataset.mode = m; })();</script>
+  <script src="theme.js"></script>
 </head>
 <body>
 <div class="app">
@@ -23,7 +23,6 @@
       <span class="chip" id="memberChip" title="目前使用者"></span>
       <button class="ico" id="actNew" data-icon="plus" aria-label="新增知識卡"></button>
       <button class="ico" id="actReindex" data-icon="refresh" aria-label="從檔案重建索引"></button>
-      <button class="ico" id="actMode" data-icon="sun" aria-label="切換深色／淺色"></button>
     </div>
   </header>
 
@@ -168,6 +167,11 @@
       <div class="view-head"><h2>設定</h2><span class="muted">提醒：通知與每日 e-mail 摘要</span></div>
       <div class="settings">
         <div class="stat-strip" id="stStats" aria-label="今日數字"></div>
+
+        <section class="set-panel">
+          <div class="set-head"><span data-icon="sun"></span><h3>外觀</h3></div>
+          <div id="themePick"></div>
+        </section>
 
         <form class="set-panel" id="setNotify" autocomplete="off" novalidate>
           <div class="set-head"><span data-icon="clock"></span><h3>到期通知</h3>

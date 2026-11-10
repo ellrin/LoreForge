@@ -231,17 +231,9 @@ function wire() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && $("left").classList.contains("open")) { setNav(false); $("actNav").focus(); }
   });
-  matchMedia("(prefers-color-scheme: light)").addEventListener?.("change", (e) => {
-    let chosen = null;
-    try { chosen = localStorage.getItem("kb.mode"); } catch {}
-    if (chosen !== "light" && chosen !== "dark") { document.documentElement.dataset.mode = e.matches ? "light" : "dark"; if (S.view === "graph") Graph.draw(); }
-  });
-  $("actMode").onclick = () => {
-    const m = document.documentElement.dataset.mode === "dark" ? "light" : "dark";
-    document.documentElement.dataset.mode = m;
-    try { localStorage.setItem("kb.mode", m); } catch {}
-    if (S.view === "graph") Graph.draw();
-  };
+  // 外觀: the theme all LoreForge apps share (theme.js)
+  LoreTheme.picker($("themePick"));
+  document.addEventListener("lore-theme", () => { if (S.view === "graph") Graph.draw(); });
   $("actReindex").onclick = async (e) => {
     const b = e.currentTarget; b.classList.add("busy");
     try { const r = await api("POST", "/api/reindex"); toast(`已重建索引：${r.nodes} 張卡片${r.errors.length ? `，${r.errors.length} 個檔案無法讀取` : ""}`); await refreshMeta(); setView(S.view); }

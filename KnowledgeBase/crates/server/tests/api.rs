@@ -194,3 +194,45 @@ async fn web_files_are_revalidated() {
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(res.headers().get("cache-control").unwrap(), "no-cache");
 }
+
+/// One theme for every LoreForge app: `/theme.js` carries the shared choice,
+/// `/api/theme` reads and sets it; the page has no palette of its own.
+#[tokio::test]
+async fn theme_is_the_shared_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("personal");
+    std::fs::create_dir_all(p.join("nodes")).unwrap();
+    std::fs::write(p.join("space.toml"), "id = \"me\"\nname = \"我的\"\nkind = \"personal\"\nmembers = [\"ellrin\"]\n").unwrap();
+    let config = Config { spaces: vec![p], member: "ellrin".into(), port: 0, web: kb_server::config::repo_dir().join("web"), intervals: Default::default(), app_dir: None };
+    let kb = kb_server::open(&config, KbOptions::default()).unwrap();
+    let rem = Reminders::isolated(&dir.path().join("app"), Arc::new(lore_store::SystemRunner), "http://127.0.0.1:7700");
+    let home = lore_home::Home::at(dir.path().join("lore"));
+    let app = kb_server::router(AppState::with_home(kb, config.web.clone(), rem, home.clone()));
+
+    let get = |uri: &'static str| {
+        let app = app.clone();
+        async move {
+            let res = app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap()).await.unwrap();
+            String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
+        }
+    };
+    let put = |id: &'static str| {
+        let app = app.clone();
+        async move {
+            let req = Request::builder().method("PUT").uri("/api/theme").header("content-type", "application/json").body(Body::from(json!({ "theme": id }).to_string())).unwrap();
+            app.oneshot(req).await.unwrap().status()
+        }
+    };
+    assert_eq!(serde_json::from_str::<Value>(&get("/api/theme").await).unwrap()["theme"], Value::Null);
+    assert!(get("/theme.js").await.starts_with("window.LORE_THEME = null;"));
+    assert_eq!(put("orange").await, StatusCode::BAD_REQUEST);
+    assert_eq!(put("mint").await, StatusCode::OK);
+    assert_eq!(home.theme(), Some("mint"));
+    assert!(get("/theme.js").await.starts_with("window.LORE_THEME = \"mint\";"));
+    assert!(get("/theme.css").await.contains(":root[data-theme=\"mint\"]"));
+
+    let index = get("/").await;
+    assert!(index.contains("href=\"theme.css\"") && index.contains("<script src=\"theme.js\"></script>"));
+    let styles = get("/styles.css").await;
+    assert!(!styles.contains("--bg: #"), "palettes live in commons/ui/theme.css only");
+}

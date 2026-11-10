@@ -26,13 +26,18 @@ pub struct AppState {
     pub kb: Mutex<KnowledgeBase>,
     pub web: PathBuf,
     pub rem: reminders::Reminders,
-    /// LoreForge private folders (read-only here: `/prefs.css` from private/shared/fonts.toml).
+    /// LoreForge private folders: `/prefs.css` from private/shared/fonts.toml, and the
+    /// theme all apps share (private/shared/ui.toml, the only thing written there).
     pub home: lore_home::Home,
 }
 
 impl AppState {
     pub fn new(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders) -> Shared {
-        let home = lore_home::Home::discover(&config::repo_dir());
+        Self::with_home(kb, web, rem, lore_home::Home::discover(&config::repo_dir()))
+    }
+
+    /// With the LoreForge folder named (tests use a temporary one).
+    pub fn with_home(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders, home: lore_home::Home) -> Shared {
         Arc::new(AppState { kb: Mutex::new(kb), web, rem, home })
     }
 }
