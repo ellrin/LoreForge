@@ -28,6 +28,7 @@
 //! Keys and passwords never live here: they are in the OS keychain (see
 //! `lore-secrets`), and local models in `LOCAL_LLM_HOME` (see `lore-llm`).
 
+pub mod engine;
 pub mod theme;
 
 use serde::Deserialize;

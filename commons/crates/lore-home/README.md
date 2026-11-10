@@ -32,4 +32,19 @@ LoreForge/
 頁面：`<link rel="stylesheet" href="theme.css">`、`<script src="theme.js"></script>` 放在 `<head>`，設定裡用 `LoreTheme.picker(元素)`。
 測試檢查三處的 id 一致，以及 `theme.css` 開頭寫的對比規則。
 
+## 本機模型（`lore_home::engine`）
+
+所有 App 共用的本機模型伺服器存在 `private/shared/engine.toml`：
+
+```toml
+[engine]
+url = "http://127.0.0.1:8080/v1"   # OpenAI 相容伺服器（llama-server、Ollama、LM Studio）
+model = "qwen3.5-9b-q8"            # 可省略
+```
+
+| API | 用途 |
+|---|---|
+| `home.engine()` | 有設定（`url` 不是空的）才是 `Some`；App 自己的 `[engine]` 優先，沒有才用這個。每次用都重讀（伺服器可能換埠） |
+| `home.set_engine(url, model)` | 管理本機模型的 App（PaperComposer）在作者選定／啟動模型時寫入；`url = None` 清掉。檔案裡其他表格保留 |
+
 不會寫進 `private-example/`。金鑰不在這裡（見 `lore-secrets`）。
