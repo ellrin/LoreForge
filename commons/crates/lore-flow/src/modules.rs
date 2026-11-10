@@ -1023,7 +1023,7 @@ fn gen_layer_bars(n: &Node, cx: &Ctx) -> Core {
         // past the end of the cycle the colours come round lighter, so no two kinds share one
         let len = cx.theme.colors.cycle.len().max(1);
         let named = cls.chars().any(char::is_alphanumeric);
-        let colour = if !named { cx.theme.colors.muted.clone() } else if ci < len { cx.theme.cycle(ci).to_string() } else { shade(cx.theme.cycle(ci), 0.45 * (ci / len) as f64) };
+        let colour = if !named { cx.theme.colors.muted.clone() } else if ci < len || len == 1 { cx.theme.cycle(ci).to_string() } else { shade(cx.theme.cycle(ci), 0.45 * (ci / len) as f64) };
         if typed && named && !legend.iter().any(|s: &crate::art::Swatch| s.key == format!("bars:{cls}")) {
             legend.push(crate::art::Swatch { key: format!("bars:{cls}"), label: cls.clone(), color: colour.clone() });
         }
@@ -1369,6 +1369,24 @@ pub fn scale_obj(o: &mut Object, k: f64) {
 
 fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx) -> Core {
     let st = style(n, cx);
+    // the layer types a saved drawing names go into the colour legend, as when it was drawn
+    fn layer_keys(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::String(s) => {
+                if let Some(k) = s.strip_prefix("layer:")
+                    && !out.iter().any(|x| x == k)
+                {
+                    out.push(k.to_string());
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|x| layer_keys(x, out)),
+            Value::Object(m) => m.values().for_each(|x| layer_keys(x, out)),
+            _ => {}
+        }
+    }
+    let mut keys = Vec::new();
+    layer_keys(&t.objects, &mut keys);
+    let legend: Vec<crate::art::Swatch> = keys.iter().map(|k| crate::art::Swatch { key: k.clone(), label: cx.theme.layer_label(k), color: cx.theme.layer(k).to_string() }).collect();
     let mut v = t.objects.clone();
     substitute(&mut v, &st, cx.theme);
     let mut objs: Vec<Object> = serde_json::from_value(v).unwrap_or_default();
@@ -1409,7 +1427,7 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx) -> Core {
         scale_obj(o, cx.k);
         fill_label(o, &label, cx, &mut drawn);
     }
-    Core { w: cx.s(t.w), h: cx.s(t.h), objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below }, ..Default::default() }
+    Core { w: cx.s(t.w), h: cx.s(t.h), objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below }, legend, ..Default::default() }
 }
 
 /// Draw a node at scale `cx.k`.

@@ -1003,11 +1003,13 @@ fn a_selection_becomes_a_module_file() {
     let f3 = draw(&g3, &Drawing { theme: t, library: lib2, ..Default::default() }).unwrap();
     let mut blue = 0;
     walk(f3.objects(), &mut |o| {
-        if o.kind.sp().is_some_and(|s| s.fill == lore_canvas::Paint::solid("4472C4")) {
+        if o.name.starts_with("flow:v/e/") && o.kind.sp().is_some_and(|s| s.fill == lore_canvas::Paint::solid("4472C4")) {
             blue += 1;
         }
     });
     assert_eq!(blue, 10, "the ten conv layers");
+    let keys: Vec<&str> = f3.layout.swatches.iter().map(|s| s.swatch.key.as_str()).collect();
+    assert_eq!(keys, ["conv", "pool"], "a saved drawing keeps its colour legend");
 }
 
 #[test]

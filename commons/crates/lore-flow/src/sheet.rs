@@ -132,6 +132,8 @@ pub fn builtin_templates(theme: &Theme) -> Vec<ModuleTemplate> {
             let (o, _) = modules::place(body, "m", 0.0, 0.0, 2);
             // layer colours become placeholders before the role colours are picked
             let mut text = serde_json::to_string(&o).unwrap_or_default();
+            // paper stays paper (the most used fill is the one that follows the role)
+            text = text.replace(&format!("\"color\":\"{}\"", theme.colors.paper.to_uppercase()), "\"color\":\"theme:paper\"");
             for sw in &legend {
                 text = text.replace(&format!("\"color\":\"{}\"", sw.color.to_uppercase()), &format!("\"color\":\"layer:{}\"", sw.key));
             }
