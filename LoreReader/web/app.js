@@ -149,7 +149,7 @@ async function openPaper(sha, page) {
     const doc = await getDoc(sha);
     S.orig = Array.from({ length: doc.numPages }, (_, i) => ({ sha, page: i + 1 }));
     S.search = { q: "", hits: [], i: -1 }; $("#searchInput").value = ""; $("#searchCount").textContent = "";
-    S.att = [];
+    S.att = []; S.chatDraft = "";
     await Promise.all([loadAnnotations(), loadQuotes(), loadChat()]);
     await buildView();
     refreshKb();
@@ -883,14 +883,14 @@ async function sendChat() {
   const att = S.att; S.att = [];
   const pending = { role: "user", text, attachments: att, at: new Date().toISOString(), pending: true };
   S.chat.push(pending);
-  ta.value = "";
+  S.chatDraft = "";
   renderSide();
   try {
     const r = await api(`/api/papers/${S.sha}/chat`, { body: { text, attachments: att } });
     delete pending.pending;
     S.chat.push(r.reply);
   } catch (e) {
-    S.chat.pop(); S.att = att; ta.value = text;
+    S.chat.pop(); S.att = att; S.chatDraft = text;
     S.chatError = e.message;
   }
   S.sending = false;
@@ -981,6 +981,8 @@ function composer() {
   const chips = h("div", { class: "chips" }, S.att.map((a, i) => h("span", { class: "attchip", title: a.context }, h("span", {}, `p.${a.page}「${a.text}」`),
     h("button", { class: "ico small", "aria-label": "移除引文", "data-icon": "x", onclick: () => { S.att.splice(i, 1); renderSide(); } }))));
   const ta = h("textarea", { id: "chatInput", placeholder: S.att.length ? "想問這段什麼？" : "問這篇論文的問題（⌘/Ctrl＋Enter 送出）" });
+  ta.value = S.chatDraft ?? "";
+  ta.addEventListener("input", () => { S.chatDraft = ta.value; });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); } });
   return h("div", { class: "composer" }, chips, ta, h("div", { class: "row" }, h("button", { class: "btn small primary", disabled: S.sending, onclick: sendChat }, h("span", { "data-icon": "send" }), S.sending ? "等待回覆…" : "送出")));
 }
