@@ -23,6 +23,7 @@ use axum::http::StatusCode;
 use lore_llm::LlmRequest;
 use lr_core::nouns::{self, Filters};
 use lr_core::paragraphs::{self, Analysis, Paragraph};
+use lr_core::myvocab::{self, MyVocab};
 use lr_core::symbols::{self, Evidence, Glyphs, SymbolEntry, SymbolFile};
 use lr_core::text::PaperText;
 use serde::{Deserialize, Serialize};
@@ -87,56 +88,29 @@ fn nouns_schema() -> String {
     NOUNS_SCHEMA.into()
 }
 
-pub const READER_FILE: &str = "reading.toml";
-pub const VOCAB_FILE: &str = "my-vocab.json";
+/// The old per-app files, migrated once into `private/shared/`.
+pub const OLD_READER_FILE: &str = "reading.toml";
 
-/// One word or term of the author's own papers.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct VocabEntry {
-    pub key: String,
-    pub text: String,
-    /// The papers (sha256) it comes from: the vocabulary is rebuilt from these.
-    pub sources: BTreeSet<String>,
-}
-
-/// `private/LoreReader/my-vocab.json`: the vocabulary of the papers marked 「我的論文」.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MyVocab {
-    #[serde(default)]
-    pub schema: String,
-    #[serde(default)]
-    pub built_at: String,
-    #[serde(default)]
-    pub papers: BTreeSet<String>,
-    #[serde(default)]
-    pub entries: Vec<VocabEntry>,
-}
-
-pub fn load_vocab(ws: &FsPath) -> MyVocab {
-    std::fs::read(ws.join(VOCAB_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-}
-
-/// Rebuild with `sha`'s words replaced by `words` (`None` = the paper is no longer mine).
-pub fn rebuild_vocab(ws: &FsPath, sha: &str, words: Option<BTreeMap<String, String>>) -> std::io::Result<MyVocab> {
-    let mut v = load_vocab(ws);
-    let mut map: BTreeMap<String, VocabEntry> = v.entries.drain(..).map(|e| (e.key.clone(), e)).collect();
-    for e in map.values_mut() {
-        e.sources.remove(sha);
-    }
-    v.papers.remove(sha);
-    if let Some(w) = words {
-        v.papers.insert(sha.to_string());
-        for (k, t) in w {
-            map.entry(k.clone()).or_insert_with(|| VocabEntry { key: k, text: t, sources: BTreeSet::new() }).sources.insert(sha.to_string());
+/// `private/shared/my-vocab.json` (cross-app personal data). The first time, an older
+/// `private/LoreReader/my-vocab.json` is merged in and removed.
+pub fn vocab_path(s: &crate::AppState) -> std::path::PathBuf {
+    let shared = s.shared.join(myvocab::FILE);
+    let old = s.workspace.join(myvocab::FILE);
+    if old.is_file() {
+        let mut v = MyVocab::load(&shared);
+        v.merge(&MyVocab::load(&old));
+        match v.save(&shared) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&old);
+            }
+            Err(e) => eprintln!("lr-server: my-vocab.json → shared: {e}"),
         }
     }
-    v.entries = map.into_values().filter(|e| !e.sources.is_empty()).collect();
-    v.schema = "lorereader.my-vocab/1".into();
-    v.built_at = lr_core::now();
-    let mut b = serde_json::to_vec_pretty(&v).unwrap_or_default();
-    b.push(b'\n');
-    lr_core::write_atomic(&ws.join(VOCAB_FILE), &b)?;
-    Ok(v)
+    shared
+}
+
+pub fn load_vocab(s: &crate::AppState) -> MyVocab {
+    MyVocab::load(&vocab_path(s))
 }
 
 #[derive(Deserialize)]
@@ -147,7 +121,8 @@ pub struct MineBody {
     pub pages: Option<Vec<lr_core::text::PageText>>,
 }
 
-/// 「我的論文」 on / off: the flag in paper.json and the rebuilt my-vocab.
+/// 「我的論文」 on / off: the flag in paper.json, and this paper's source in the shared
+/// my-vocab replaced (other sources, e.g. `import:…`, are kept).
 pub async fn mine(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Json<MineBody>) -> R {
     sha_ok(&sha)?;
     let words = if b.on {
@@ -162,20 +137,59 @@ pub async fn mine(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Jso
     };
     let _g = s.write.lock().unwrap();
     let m = s.papers.set_mine(&sha, b.on)?;
-    let v = rebuild_vocab(&s.workspace, &sha, words).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?;
-    Ok(Json(json!({ "paper": m, "mine": b.on, "vocab": { "papers": v.papers.len(), "entries": v.entries.len() } })))
+    let p = vocab_path(&s);
+    let mut v = MyVocab::load(&p);
+    v.set_source(&sha, words);
+    v.save(&p).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?;
+    Ok(Json(json!({ "paper": m, "mine": b.on, "vocab": { "sources": v.sources.len(), "entries": v.entries.len() } })))
 }
 
-/// The reader's field and level for the classification prompt: `field` in
-/// `private/LoreReader/reading.toml`, else `field` in `private/shared/profile.toml`,
-/// else a neutral default.
+fn field_of(path: &FsPath) -> Option<String> {
+    let t = std::fs::read_to_string(path).ok()?;
+    let v: toml::Value = toml::from_str(&t).ok()?;
+    v.get("field")?.as_str().map(|x| x.trim().to_string()).filter(|x| !x.is_empty())
+}
+
+/// The reader's field and level for the classification prompt: `field` in the shared
+/// `private/shared/profile.toml`, else a neutral default. An older
+/// `private/LoreReader/reading.toml` field is moved there once.
 pub fn reader_field(s: &crate::AppState) -> String {
-    let from = |p: Option<std::path::PathBuf>| -> Option<String> {
-        let t = std::fs::read_to_string(p?).ok()?;
-        let v: toml::Value = toml::from_str(&t).ok()?;
-        v.get("field")?.as_str().map(|x| x.trim().to_string()).filter(|x| !x.is_empty())
-    };
-    from(Some(s.workspace.join(READER_FILE))).or_else(|| from(s.home.shared_file("profile.toml"))).unwrap_or_else(|| nouns::DEFAULT_FIELD.to_string())
+    let profile = s.shared.join("profile.toml");
+    let old = s.workspace.join(OLD_READER_FILE);
+    if let Some(f) = field_of(&old) {
+        if field_of(&profile).is_none() && set_profile_field(&profile, &f).is_err() {
+            return f;
+        }
+        let _ = std::fs::remove_file(&old);
+    }
+    field_of(&profile).unwrap_or_else(|| nouns::DEFAULT_FIELD.to_string())
+}
+
+/// Set (or remove, when empty) `field = "…"` in profile.toml, keeping its other lines
+/// and comments.
+fn set_profile_field(path: &FsPath, field: &str) -> std::io::Result<()> {
+    let cur = std::fs::read_to_string(path).unwrap_or_default();
+    let line = if field.is_empty() { None } else { Some(format!("field = {}", toml::Value::String(field.to_string()))) };
+    let mut out: Vec<String> = vec![];
+    let mut done = false;
+    for l in cur.lines() {
+        let t = l.trim_start();
+        let is_field = t.starts_with("field") && t["field".len()..].trim_start().starts_with('=');
+        if is_field {
+            if let (false, Some(nl)) = (done, &line) {
+                out.push(nl.clone());
+            }
+            done = true;
+        } else {
+            out.push(l.to_string());
+        }
+    }
+    if let (false, Some(nl)) = (done, &line) {
+        // before the first table, so it stays a top-level key
+        let at = out.iter().position(|l| l.trim_start().starts_with('[')).unwrap_or(out.len());
+        out.insert(at, nl.clone());
+    }
+    lr_core::write_atomic(path, (out.join("\n") + "\n").as_bytes())
 }
 
 /// What the cached categories must have been made for.
@@ -198,22 +212,15 @@ pub struct FieldBody {
     pub field: String,
 }
 
-/// The reader's field (the 模型 dialog). Empty = back to the default.
+/// The reader's field (the 模型 dialog), saved in the shared profile.toml. Empty = the
+/// default.
 pub async fn reader_put(State(s): State<Shared>, Json(b): Json<FieldBody>) -> R {
     let f = b.field.split_whitespace().collect::<Vec<_>>().join(" ");
     if f.chars().count() > 200 {
         return Err(bad("太長了"));
     }
     let _g = s.write.lock().unwrap();
-    let p = s.workspace.join(READER_FILE);
-    let mut v: toml::Table = std::fs::read_to_string(&p).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default();
-    if f.is_empty() {
-        v.remove("field");
-    } else {
-        v.insert("field".into(), toml::Value::String(f));
-    }
-    let text = format!("# 讀論文的設定。field = 你的領域與程度（名詞分類用來判斷什麼是「基礎」）。\n{}", toml::to_string(&v).unwrap_or_default());
-    lr_core::write_atomic(&p, text.as_bytes()).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?;
+    set_profile_field(&s.shared.join("profile.toml"), &f).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?;
     drop(_g);
     reader_get(State(s)).await
 }
@@ -250,7 +257,7 @@ async fn inventory_of(s: &crate::AppState, sha: &str) -> Result<(nouns::Inventor
     let cats = cache.categories.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let syms: SymbolFile = s.papers.load(sha, "symbols.json")?.unwrap_or_default();
     let mut inv = nouns::inventory_masked(&text, &kb, &Filters::with_file(&ignore_file(&s.workspace)), &cats, &math_mask(&syms));
-    inv.mark_used(&load_vocab(&s.workspace).entries.iter().map(|e| e.key.clone()).collect());
+    inv.mark_used(&load_vocab(s).keys());
     Ok((inv, kb_status, cache))
 }
 
@@ -318,7 +325,7 @@ pub async fn classify(State(s): State<Shared>, Path(sha): Path<String>, body: Op
     known.dedup();
     known.truncate(40);
     // and terms from the author's own papers
-    let vocab: BTreeMap<String, String> = load_vocab(&s.workspace).entries.into_iter().map(|e| (e.key, e.text)).collect();
+    let vocab: BTreeMap<String, String> = load_vocab(&s).texts();
     for t in nouns::vocab_anchors(&vocab, &Filters::default(), 30) {
         if !known.contains(&t) {
             known.push(t);

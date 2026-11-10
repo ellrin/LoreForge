@@ -599,8 +599,9 @@ async fn my_papers_vocabulary_is_never_red_and_kb_wins() {
     call(&e.app, "POST", &format!("/api/papers/{b}/mine"), Some(json!({ "on": true, "pages": own2["pages"] })), None).await;
     let meta: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/papers").join(&a).join("paper.json")).unwrap()).unwrap();
     assert_eq!(meta["mine"], true);
-    let vocab: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/my-vocab.json")).unwrap()).unwrap();
-    assert_eq!(vocab["papers"].as_array().unwrap().len(), 2);
+    let vocab: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/shared/my-vocab.json")).unwrap()).unwrap();
+    assert_eq!(vocab["sources"].as_array().unwrap().len(), 2);
+    assert_eq!(vocab["schema"], "lore.my-vocab/1");
     let entry = |k: &str| vocab["entries"].as_array().unwrap().iter().find(|x| x["key"] == k).cloned();
     assert_eq!(entry("tortuosity").unwrap()["sources"].as_array().unwrap().len(), 2, "both papers are its sources");
     assert!(entry("centerline extraction").is_some(), "a recurring 2-gram");
@@ -623,8 +624,8 @@ async fn my_papers_vocabulary_is_never_red_and_kb_wins() {
 
     // unflag one: rebuilt from the other; unflag both: empty
     call(&e.app, "POST", &format!("/api/papers/{a}/mine"), Some(json!({ "on": false })), None).await;
-    let vocab: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/my-vocab.json")).unwrap()).unwrap();
-    assert_eq!(vocab["papers"], json!([b]));
+    let vocab: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/shared/my-vocab.json")).unwrap()).unwrap();
+    assert_eq!(vocab["sources"], json!([b]));
     assert!(vocab["entries"].as_array().unwrap().iter().all(|x| x["sources"] == json!([b])));
     assert!(!vocab["entries"].as_array().unwrap().iter().any(|x| x["key"] == "mask"), "only in the unflagged paper");
     call(&e.app, "POST", &format!("/api/papers/{b}/mine"), Some(json!({ "on": false })), None).await;
@@ -637,11 +638,44 @@ async fn my_papers_vocabulary_is_never_red_and_kb_wins() {
     // the classification prompt carries the reader's field and level anchors
     let (_, v, _) = call(&e.app, "PUT", "/api/reader", Some(json!({ "field": "radiologist, deep learning for CT" })), None).await;
     assert_eq!(v["field"], "radiologist, deep learning for CT");
-    assert!(std::fs::read_to_string(e.root.join("ws/reading.toml")).unwrap().contains("radiologist"));
+    assert!(std::fs::read_to_string(e.root.join("ws/shared/profile.toml")).unwrap().contains("field = \"radiologist, deep learning for CT\""));
     // categories made for another field (or prompt version) are not used
     let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{c}/nouns"), None, None).await;
     assert!(v["entries"].as_array().unwrap().iter().all(|n| n["category"].is_null()), "the cache was made for the old field");
     assert!(red_of(&v).is_empty());
     let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{c}/nouns/classify"), None, None).await;
     assert_eq!(red_of(&v["nouns"]).len(), before.len());
+}
+
+#[tokio::test]
+async fn my_vocab_is_shared_keeps_imports_and_migrates_old_files() {
+    let e = setup(&dead_url(), None);
+    let ws = e.root.join("ws");
+    std::fs::create_dir_all(ws.join("shared")).unwrap();
+    // an imported list in the shared file, an older per-app file, an older field
+    std::fs::write(ws.join("shared/my-vocab.json"), json!({ "schema": "lore.my-vocab/1", "sources": ["import:thesis"], "entries": [{ "key": "tortuosity", "text": "tortuosity", "sources": ["import:thesis"] }] }).to_string()).unwrap();
+    let old_sha = "ab".repeat(32);
+    std::fs::write(ws.join("my-vocab.json"), json!({ "schema": "lorereader.my-vocab/1", "papers": [old_sha], "entries": [{ "key": "centerline", "text": "centerline", "sources": [old_sha] }] }).to_string()).unwrap();
+    std::fs::write(ws.join("reading.toml"), "field = \"ophthalmology and deep learning\"\n").unwrap();
+    std::fs::write(ws.join("shared/profile.toml"), "# who\nid = \"ellrin\"\n").unwrap();
+
+    let (_, v, _) = call(&e.app, "GET", "/api/reader", None, None).await;
+    assert_eq!(v["field"], "ophthalmology and deep learning", "moved from reading.toml");
+    let profile = std::fs::read_to_string(ws.join("shared/profile.toml")).unwrap();
+    assert!(profile.contains("# who") && profile.contains("id = \"ellrin\"") && profile.contains("field = \"ophthalmology and deep learning\""), "{profile}");
+    assert!(!ws.join("reading.toml").exists());
+
+    let sha = import(&e.app, lr_core::synth::numbered_pdf(1, "Own"), "own.pdf").await;
+    let pages = lines_text(&[&["# 1. Method", "Skeletonization of vessels and skeletonization again."]]);
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/mine"), Some(json!({ "on": true, "pages": pages["pages"] })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let vocab: Value = serde_json::from_slice(&std::fs::read(ws.join("shared/my-vocab.json")).unwrap()).unwrap();
+    let keys: Vec<&str> = vocab["entries"].as_array().unwrap().iter().map(|x| x["key"].as_str().unwrap()).collect();
+    assert!(keys.contains(&"tortuosity") && keys.contains(&"centerline") && keys.contains(&"skeletonization"), "{keys:?}");
+    assert!(!ws.join("my-vocab.json").exists(), "the old per-app file was merged once");
+    // unflagging replaces only this paper's source
+    call(&e.app, "POST", &format!("/api/papers/{sha}/mine"), Some(json!({ "on": false })), None).await;
+    let vocab: Value = serde_json::from_slice(&std::fs::read(ws.join("shared/my-vocab.json")).unwrap()).unwrap();
+    let srcs: Vec<&str> = vocab["sources"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+    assert_eq!(srcs, [old_sha.as_str(), "import:thesis"]);
 }

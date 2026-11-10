@@ -44,8 +44,8 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   `Shared`. `kb.rs` = KnowledgeBase client (read only except `POST /api/nodes`, only from
   the author's action, `initial_state` learning|known; `lexicon()` = `GET /api/nodes` titles +
   aliases), `llm.rs` = lore-llm wired like PaperComposer (`tasks.toml`: `lr-translate`
-  local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` local:current →
-  claude:haiku, `lr-paragraph` claude:haiku → local:current; `complete_on` = the model menu's choice, strict),
+  local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` and `lr-paragraph`
+  local:current → claude:haiku; `complete_on` = the model menu's choice, strict),
   `reading.rs` = the reading aids over the text the page posts once per open (memory only):
   nouns, symbols, paragraphs (background run per paper, newest run wins, cached per
   paragraph id), 懂了 (`reading.json`), and `chat_context` (title, section, paragraph, chip
@@ -68,7 +68,7 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   name the page's own PDF and its page number there.
 - Annotations anchor by page + rects (page fractions) + text quote (exact/prefix/suffix).
   Writing them into the PDF is a later option.
-- Knowledge colouring = the noun list (`nouns.rs`): red = no card and not 一般學術詞 / 人名;
+- Knowledge colouring = the noun list (`nouns.rs`): red = a term to learn (see Classification);
   amber = learning / stale / no state; green = known. The page sends all pages' pdf.js text
   once (`POST /api/papers/{sha}/read`); the server never stores the paper's text. KB names
   come from `GET /api/nodes` (read only; no `/api/scan`, no encounters).
@@ -76,13 +76,18 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
 - Classification: one `lr-classify-terms` call per paper (local first, then Haiku), cached in
   `nouns.json` under `key = v<CLASSIFY_VERSION>|<field>`; `asked` keys are never re-sent
   automatically. Red = SPECIALIST categories only (not 基礎科學詞 / 一般學術詞 / 人名 /
-  unclassified), no card, not in my-vocab. The reader's field: `reading.toml` `field`, else
-  `private/shared/profile.toml` `field`, else `nouns::DEFAULT_FIELD`.
-- 我的論文: `paper.json` `mine`; `my-vocab.json` (per-source entries, rebuilt on flag change)
+  unclassified), no card, not in my-vocab. The reader's field: `private/shared/profile.toml`
+  `field` (an old `private/LoreReader/reading.toml` field is moved there once), else
+  `nouns::DEFAULT_FIELD`.
+- 我的論文: `paper.json` `mine`; `private/shared/my-vocab.json` (lr-core `myvocab`, cross-app,
+  `lore.my-vocab/1`; per-source entries — a paper sha or `import:<name>`; a flag change
+  replaces only that sha's source; `AppState.shared` = lore-home shared dir, a temp folder
+  in isolated tests; the old per-app file is merged once; `examples/my_vocab_import.rs`
+  builds import sources from paragraph text)
   marks no-card units `used` = 記得 (a KB card's own state wins). Not the ignore list. Math runs and display equations are masked out of
   the noun list.
 - Track B never writes a Chinese summary or translation of a paragraph. Claude's answers
-  reach the symbol table only through 寫回符號表 (`resolved_by: claude`, evidence kept).
+  reach the symbol table only through 存進符號表… (`resolved_by: claude`, evidence kept).
 - Theme: `web/theme.js` = `data-mode` on `<html>`, `lr.mode` in localStorage, then
   `window.LORE_PREFS.theme` from `/prefs.js` (always `null` today). **Later**: a shared, synced
   theme in lore-home prefs fills `theme` server-side in `prefs_js`; pages need no change.

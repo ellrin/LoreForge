@@ -17,6 +17,8 @@
 //! - [`symbols`]: variables and equations, step 1 (no model): math runs from pdf.js
 //!   items (fonts, sizes, baselines, accents), glyph → LaTeX, display equations, the
 //!   regex definition finder and the per-paper symbol table (lore-notation fields).
+//! - [`myvocab`]: "my vocabulary" (`private/shared/my-vocab.json`): words and terms of
+//!   the author's own papers, per source, rebuilt per source.
 //! - [`paragraphs`]: track B — paragraphs with sections, their chips (terms, symbols,
 //!   equations), the `lr-paragraph` prompt, schema and run order.
 //! - [`synth`]: synthetic text PDFs for tests and demos (never a real paper).
@@ -28,6 +30,7 @@ pub mod paragraphs;
 pub mod pdfops;
 pub mod symbols;
 pub mod synth;
+pub mod myvocab;
 pub mod nouns;
 pub mod text;
 

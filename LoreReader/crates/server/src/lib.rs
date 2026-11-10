@@ -79,6 +79,9 @@ pub struct AppState {
     pub workspace: PathBuf,
     pub web: PathBuf,
     pub home: lore_home::Home,
+    /// `private/shared` (cross-app personal data: profile.toml, my-vocab.json); a folder
+    /// inside the workspace in isolated tests.
+    pub shared: PathBuf,
     pub kb: kb::Kb,
     pub llm: llm::Llm,
     pub port: Mutex<u16>,
@@ -157,6 +160,7 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
     if isolated {
         llm.isolate();
     }
+    let shared = if isolated { workspace.join("shared") } else { lore_home::Home::discover(&repo_dir()).shared_dir().unwrap_or_else(|| workspace.join("../shared")) };
     Arc::new(AppState {
         kb: kb::Kb::new(&config.kb_url),
         llm,
@@ -165,6 +169,7 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
         papers: Papers::new(workspace.join("papers")),
         workspace,
         web,
+        shared,
         home: lore_home::Home::discover(&repo_dir()),
         port: Mutex::new(0),
         write: Mutex::new(()),

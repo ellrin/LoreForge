@@ -823,7 +823,8 @@ impl Inventory {
 /// The words and terms of one paper for the author's own vocabulary (my-vocab), with no
 /// model: every listable word of the body (references cut off) by its normalised key,
 /// hyphenated compounds, 2–4-word runs that occur at least twice (no function word at
-/// either end) and runs that are KB titles or aliases. key → spelling.
+/// either end, not only general words) and runs that are KB titles or aliases.
+/// key → spelling.
 pub fn vocabulary(paper: &PaperText, kb: &[KbName], filters: &Filters) -> BTreeMap<String, String> {
     let ws = words(paper);
     let mut out: BTreeMap<String, String> = BTreeMap::new();
@@ -841,6 +842,10 @@ pub fn vocabulary(paper: &PaperText, kb: &[KbName], filters: &Filters) -> BTreeM
             }
             let run = &ws[i..i + n];
             if filters.is_function(&run[0].text) || filters.is_function(&run[n - 1].text) || run.iter().any(|w| !w.text.chars().any(char::is_alphabetic)) {
+                continue;
+            }
+            // "accurately capture": only general words is not a term
+            if run.iter().all(|w| filters.is_general(&w.text) || filters.is_function(&w.text)) {
                 continue;
             }
             let key = run.iter().map(|w| w.key.as_str()).collect::<Vec<_>>().join(" ");

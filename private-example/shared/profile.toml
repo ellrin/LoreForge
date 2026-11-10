@@ -1,3 +1,5 @@
 # 你是誰：所有 App 共用。複製到 private/shared/profile.toml 再改。
 id = "ellrin"        # 使用者 id：知識庫的 progress/<id>/ 等（小寫英數、- 或 _）
 name = "Ellrin"      # 顯示名稱
+# 你的領域與程度：LoreReader 的名詞分類用它判斷哪些詞對你是「基礎」、不必標紅（不寫就用下面的預設）。
+# field = "researcher in medical image analysis and deep learning"
