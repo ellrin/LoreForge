@@ -22,6 +22,7 @@ pub mod opened;
 pub mod llm;
 pub mod preview;
 pub mod proc;
+mod reader;
 pub mod models;
 pub mod refimport;
 pub mod settings;
@@ -3307,6 +3308,11 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/open-link", post(open_doi))
         .route("/api/refs/{key}", put(update_ref))
         .route("/api/refs/{key}/open", post(open_ref_pdf))
+        .route("/api/reader/papers", get(reader::papers)) // reader.rs: LoreReader's library, read-only
+        .route("/api/reader/papers/{sha}", get(reader::paper))
+        .route("/api/reader/papers/{sha}/cite", post(reader::cite))
+        .route("/api/reader/open", post(reader::open))
+        .route("/api/reader/paraphrase", post(reader::paraphrase))
         .route("/api/settings/pdf-dir", post(set_pdf_dir))
         .route("/api/papers/{name}/sections/{file}", put(put_section))
         .route("/api/papers/{name}/notation/check", post(notation_check)) // find.js
