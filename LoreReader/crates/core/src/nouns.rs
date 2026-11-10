@@ -14,7 +14,13 @@
 //!    the second part is lowercase and the hyphenated form never appears).
 //! 4. Function words, general academic words (`academic_words.txt`), everyday English
 //!    (`common_words.txt`, except [`TERMLIKE`] words that are terms in research
-//!    papers) and the author's ignore list are dropped. Acronyms are kept.
+//!    papers), the most common English words (`english_common.txt`, SCOWL ≤ 20) and the
+//!    author's ignore list are dropped. Acronyms are kept. Fairly common words
+//!    (`english_familiar.txt`, SCOWL 35) are listed only once a model classified them
+//!    ([`Noun::familiar`]). Never listed: people's names, affiliations and title-case
+//!    front matter (capitalised words that are never written lowercase and stand on
+//!    title-case lines or before "et al."), identifiers ("ABCD-D-24-01234R4") and a
+//!    general word glued to a number ("the275", a margin line number).
 //! 5. Each unit is compared with the KB: known, learning / stale, or no card.
 //! 6. The no-card units are classified by a model in one batched call per paper
 //!    ([`classify_prompt`], [`classify_schema`], cached by the server); without a
@@ -32,6 +38,8 @@ use crate::text::{PaperText, U16Map, body_end};
 const COMMON: &str = include_str!("common_words.txt");
 const ACADEMIC: &str = include_str!("academic_words.txt");
 const FUNCTION: &str = include_str!("function_words.txt");
+const ENGLISH_COMMON: &str = include_str!("english_common.txt");
+const ENGLISH_FAMILIAR: &str = include_str!("english_familiar.txt");
 
 /// Everyday words that are specialist terms in research papers: never dropped as
 /// "general" (they still go to the model, which can call them 一般學術詞).
@@ -109,6 +117,10 @@ pub struct Noun {
     /// [`Inventory::quiet_single_words`]). Never stored; set when the list is built.
     #[serde(default)]
     pub quiet: bool,
+    /// A fairly common English word (`english_familiar.txt`): not listed while no model
+    /// has classified it. Never stored; set when the list is built.
+    #[serde(default)]
+    pub familiar: bool,
 }
 
 impl Noun {
@@ -159,6 +171,7 @@ pub struct Filters {
     termlike: HashSet<String>,
     /// Keys from the ignore list (single words and phrases).
     ignore: HashSet<String>,
+    familiar: HashSet<String>,
 }
 
 impl Default for Filters {
@@ -173,6 +186,7 @@ impl Filters {
     pub fn new(ignore: &[String]) -> Filters {
         let mut general = list(COMMON);
         general.extend(list(ACADEMIC));
+        general.extend(list(ENGLISH_COMMON));
         let termlike: HashSet<String> = TERMLIKE.iter().map(|s| s.to_string()).collect();
         let mut ig = HashSet::new();
         for line in ignore {
@@ -185,7 +199,7 @@ impl Filters {
                 ig.insert(word_key(w));
             }
         }
-        Filters { function: list(FUNCTION), general, termlike, ignore: ig }
+        Filters { function: list(FUNCTION), general, termlike, ignore: ig, familiar: list(ENGLISH_FAMILIAR) }
     }
 
     /// The lines of an ignore file.
@@ -206,6 +220,12 @@ impl Filters {
             return false;
         }
         forms.iter().any(|f| self.general.contains(f) || self.function.contains(f))
+    }
+
+    /// A fairly common English word (allowing for inflections), never a [`TERMLIKE`] one.
+    pub fn is_familiar(&self, w: &str) -> bool {
+        let forms = variants(w);
+        !forms.iter().any(|f| self.termlike.contains(f)) && forms.iter().any(|f| self.familiar.contains(f))
     }
 
     pub fn is_ignored(&self, key: &str) -> bool {
@@ -538,6 +558,40 @@ fn listable(w: &str) -> bool {
     !w.chars().all(|c| matches!(c as u32, 0x0370..=0x03FF))
 }
 
+/// A manuscript or record number, not a term: four or more digits with two or more
+/// hyphens, or more digits than letters ("ABCD-D-24-01234R4", "2024-0312").
+fn is_identifier(w: &str) -> bool {
+    let digits = w.chars().filter(char::is_ascii_digit).count();
+    let letters = w.chars().filter(|c| c.is_alphabetic()).count();
+    let hyphens = w.chars().filter(|c| is_hyphen(*c)).count();
+    digits >= 4 && (hyphens >= 2 || digits > letters)
+}
+
+/// Inside an address, not prose: a URL, an e-mail address or a file name
+/// ("https://github.com/…", "name@uni.edu", "statement.docx").
+fn in_address(text: &str, b0: usize, b1: usize) -> bool {
+    let start = text[..b0].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+    let end = text[b1..].find(char::is_whitespace).map(|i| b1 + i).unwrap_or(text.len());
+    let tok = text[start..end].trim_end_matches(['.', ',', ';', ')']).to_lowercase();
+    const EXT: &[&str] = &[".com", ".org", ".edu", ".net", ".gov", ".io", ".docx", ".doc", ".pdf", ".xlsx", ".zip", ".tw", ".cn", ".uk"];
+    tok.contains('@') || tok.contains("://") || tok.starts_with("www.") || tok.contains(".edu.") || tok.contains(".com/") || EXT.iter().any(|e| tok.ends_with(e) || tok.contains(&format!("{e}/")))
+}
+
+/// An ordinal or a size, not a term ("43rd", "24GB").
+fn is_ordinal(w: &str) -> bool {
+    let core = w.trim_start_matches(|c: char| c.is_ascii_digit());
+    core.len() < w.len() && matches!(core.to_lowercase().as_str(), "st" | "nd" | "rd" | "th" | "gb" | "mb" | "kb" | "tb" | "k" | "m" | "px" | "mm" | "cm" | "ms")
+}
+
+/// A general word glued to a number ("the275", "similar276", "12method"): what a margin
+/// line number does to the last word of a line. Model names ("ResNet50") are not general.
+fn glued_number(w: &str, filters: &Filters) -> bool {
+    let core = w.trim_end_matches(|c: char| c.is_ascii_digit());
+    let core = if core.len() == w.len() { w.trim_start_matches(|c: char| c.is_ascii_digit()) } else { core };
+    let run = w.len() - core.len();
+    (1..=5).contains(&run) && core.chars().all(char::is_alphabetic) && !core.is_empty() && (filters.is_function(core) || filters.is_general(core) || filters.is_familiar(core))
+}
+
 struct Acc {
     noun: Noun,
     forms: BTreeMap<String, usize>,
@@ -562,6 +616,7 @@ fn add(acc: &mut BTreeMap<String, Acc>, id: String, key: &str, surface: &str, so
             occ: vec![],
             used: false,
             quiet: false,
+            familiar: false,
         },
         forms: BTreeMap::new(),
     });
@@ -745,7 +800,7 @@ pub fn inventory_masked(paper: &PaperText, kb: &[KbName], filters: &Filters, cat
             if let Some(&k) = kb_single.get(&key.replace(' ', "")) {
                 let n_ = &kb[k];
                 add(&mut acc, format!("kb:{}", n_.node_id), &key, &surface(i, j + 1), "kb", Some(n_), None, occ_of(&ws[i], &ws[j]));
-            } else if !all_general && !filters.is_ignored(&key) && parts.iter().any(|w| w.text.chars().any(char::is_alphabetic)) {
+            } else if !all_general && !filters.is_ignored(&key) && parts.iter().any(|w| w.text.chars().any(char::is_alphabetic)) && !is_identifier(&surface(i, j + 1)) {
                 add(&mut acc, format!("c:{key}"), &key, &surface(i, j + 1), "compound", None, None, occ_of(&ws[i], &ws[j]));
             }
             i = j + 1;
@@ -768,7 +823,7 @@ pub fn inventory_masked(paper: &PaperText, kb: &[KbName], filters: &Filters, cat
             }
             continue;
         }
-        if !listable(&w.text) || filters.is_ignored(&w.key) {
+        if !listable(&w.text) || filters.is_ignored(&w.key) || is_identifier(&w.text) || is_ordinal(&w.text) || glued_number(&w.text, filters) || in_address(&paper.pages[w.page].text, w.b0, w.b1) {
             continue;
         }
         let acr = is_acronym(&w.text);
@@ -779,9 +834,11 @@ pub fn inventory_masked(paper: &PaperText, kb: &[KbName], filters: &Filters, cat
     }
 
     let unique: HashSet<&str> = ws.iter().map(|w| w.key.as_str()).collect();
+    let front = FrontMatter::new(paper, &ws);
     let mut entries: Vec<Noun> = acc
         .into_values()
         .filter(|a| !filters.is_ignored(&a.noun.key) || a.noun.kb.is_some())
+        .filter(|a| a.noun.kb.is_some() || !matches!(a.noun.source.as_str(), "word" | "compound") || !front.is_name(&a.noun, a.forms.keys()))
         .map(|mut a| {
             // display: the most frequent spelling (ties: the first in sort order, which
             // puts capitalised forms first — "Dice" over "dice")
@@ -790,6 +847,7 @@ pub fn inventory_masked(paper: &PaperText, kb: &[KbName], filters: &Filters, cat
             if a.noun.kb.is_none() {
                 a.noun.category = cats.get(&a.noun.key).cloned();
             }
+            a.noun.familiar = a.noun.source == "word" && filters.is_familiar(&a.noun.text);
             a.noun
         })
         .collect();
@@ -806,7 +864,108 @@ pub fn inventory_masked(paper: &PaperText, kb: &[KbName], filters: &Filters, cat
     Inventory { entries, stats }
 }
 
+/// Where capitalised words stand: people's names, affiliations and title-case front
+/// matter ("Computers in Biology and Medicine", "National … University Institute of …").
+struct FrontMatter {
+    /// Lowercase words written with a lowercase first letter somewhere in the paper.
+    lower: HashSet<String>,
+    /// Per page: UTF-16 ranges of title-case lines.
+    title_lines: Vec<Vec<(usize, usize)>>,
+    /// Per page: UTF-16 starts of words right before "et al".
+    et_al: Vec<HashSet<usize>>,
+}
+
+impl FrontMatter {
+    fn new(paper: &PaperText, ws: &[Word]) -> FrontMatter {
+        let mut lower = HashSet::new();
+        for p in &paper.pages {
+            for (s, e) in runs(&p.text) {
+                let w = &p.text[s..e];
+                if w.chars().next().is_some_and(char::is_lowercase) && !in_address(&p.text, s, e) {
+                    lower.insert(w.to_lowercase());
+                }
+            }
+        }
+        let title_lines = paper
+            .pages
+            .iter()
+            .map(|p| {
+                let mut out = vec![];
+                let mut u = 0;
+                for line in p.text.split('\n') {
+                    let len = line.encode_utf16().count();
+                    if title_case(line) {
+                        out.push((u, u + len));
+                    }
+                    u += len + 1;
+                }
+                out
+            })
+            .collect();
+        let mut et_al: Vec<HashSet<usize>> = vec![HashSet::new(); paper.pages.len()];
+        let u16s: Vec<U16Map> = paper.pages.iter().map(|p| U16Map::new(&p.text)).collect();
+        for w in ws {
+            let rest = paper.pages[w.page].text[w.b1..].trim_start_matches([',', ' ']);
+            if rest.starts_with("et al") || rest.starts_with("and colleagues") {
+                et_al[w.page].insert(u16s[w.page].u16(w.b0));
+            }
+        }
+        FrontMatter { lower, title_lines, et_al }
+    }
+
+    /// A word or hyphenated compound in capitals ("Yang", "I-Fang") that is never written
+    /// lowercase and stands mostly (two thirds of its uses) on title-case lines or before
+    /// "et al.". CamelCase ("GradCAM") and acronyms are technical and stay.
+    fn is_name<'a>(&self, n: &Noun, forms: impl Iterator<Item = &'a String>) -> bool {
+        let forms: Vec<&String> = forms.collect();
+        // an affiliation mark may be glued on ("Liao2")
+        let capital = |f: &str| {
+            let f = f.trim_end_matches(|c: char| c.is_ascii_digit());
+            f.split(|c: char| is_hyphen(c)).all(|p| {
+                let mut cs = p.chars();
+                cs.next().is_some_and(char::is_uppercase) && cs.clone().count() >= 1 && cs.all(char::is_lowercase)
+            })
+        };
+        if forms.is_empty() || !forms.iter().all(|f| capital(f)) {
+            return false;
+        }
+        if forms.iter().any(|f| f.trim_end_matches(|c: char| c.is_ascii_digit()).split(|c: char| is_hyphen(c)).any(|p| self.lower.contains(&p.to_lowercase()) && n.source == "word")) {
+            return false;
+        }
+        let page_ix = |pg: u32| (pg as usize).saturating_sub(1).min(self.title_lines.len().saturating_sub(1));
+        let in_front = n
+            .occ
+            .iter()
+            .filter(|o| {
+                let k = page_ix(o[0]);
+                let (s, e) = (o[1] as usize, o[2] as usize);
+                self.title_lines.get(k).is_some_and(|ls| ls.iter().any(|&(a, b)| a <= s && e <= b)) || self.et_al.get(k).is_some_and(|x| x.contains(&s))
+            })
+            .count();
+        in_front * 3 >= n.occ.len() * 2
+    }
+}
+
+/// A line in title case: at least two words of three or more letters, three quarters of
+/// them capitalised (small connectors aside) — names, affiliations, a journal's name,
+/// headings. A sentence is not.
+fn title_case(line: &str) -> bool {
+    const SMALL: &[&str] = &["of", "and", "the", "in", "for", "on", "at", "de", "van", "von", "der", "du", "la", "di", "da", "to", "with"];
+    let words: Vec<&str> = line.split(|c: char| !(c.is_alphabetic() || is_hyphen(c))).filter(|w| w.chars().filter(|c| c.is_alphabetic()).count() >= 3 && !SMALL.contains(&w.to_lowercase().as_str())).collect();
+    if words.len() < 2 {
+        return false;
+    }
+    let caps = words.iter().filter(|w| w.chars().next().is_some_and(char::is_uppercase)).count();
+    caps * 4 >= words.len() * 3
+}
+
 impl Inventory {
+    /// The units shown in the list: everything except fairly common English words that
+    /// no model has classified (they stay in [`Inventory::unclassified`] for the model).
+    pub fn listed(&self) -> impl Iterator<Item = &Noun> {
+        self.entries.iter().filter(|e| !(e.familiar && e.category.is_none() && e.kb.is_none()))
+    }
+
     /// The no-card units that still need a category (display texts, for the model);
     /// words the author used in their own papers are not asked about.
     pub fn unclassified(&self) -> Vec<&Noun> {
@@ -1008,6 +1167,36 @@ mod tests {
         assert_eq!(String::from_utf16(&u[o[1] as usize..o[2] as usize]).unwrap(), "Dice coefficients");
         let o = get(&inv, "hausdorff distance").occ[0];
         assert_eq!(String::from_utf16(&u[o[1] as usize..o[2] as usize]).unwrap(), "Hausdorff\ndistance");
+    }
+
+    #[test]
+    fn a_submission_front_page_gives_terms_not_names_or_common_words() {
+        // a synthetic submission PDF: the journal's name, a metadata table with text cells
+        // (manuscript number, authors, affiliation), then the abstract
+        let p = PaperText::from_strings(&[
+            "Journal of Synthetic Imaging\nManuscript Number:\nSYNJ-D-24-01234R2\nCorresponding Author:\nEllrin Daidai\nExample Lake University Institute of Synthetic Informatics\nOrder of Authors:\nEllrin Daidai\nEll-Rin Daidai\nAbstract:\n\
+             Background: Hip fractures are common in the elderly and hard to see on pelvic radiographs. We propose a patch auxiliary \
+             generative adversarial network (PAGAN) with GradCAM heatmaps for weakly supervised fracture detection. Code: \
+             https://example.org/synthlab and contact ellrin@example.edu. Daidai et al. used a similar275 transposed277 layer \
+             before; the275 baseline ResNet50 runs on 24GB cards in the 43rd trial.",
+        ]);
+        let inv = inventory(&p, &[], &Filters::default(), &HashMap::new());
+        let listed: Vec<&str> = inv.listed().map(|e| e.text.as_str()).collect();
+        for gone in ["Hip", "hip", "elderly", "Biology", "Institute", "Ellrin", "Daidai", "Ell-Rin", "Lake", "SYNJ-D-24-01234R2", "similar275", "the275", "transposed277", "example", "synthlab", "edu", "24GB", "43rd", "Imaging"] {
+            assert!(!listed.iter().any(|x| x.eq_ignore_ascii_case(gone)), "{gone} in {listed:?}");
+        }
+        for kept in ["GradCAM", "ResNet50", "heatmaps", "radiographs"] {
+            assert!(listed.iter().any(|x| x.eq_ignore_ascii_case(kept)), "{kept} not in {listed:?}");
+        }
+        assert!(inv.entries.iter().any(|e| e.source == "expansion" && e.short.as_deref() == Some("PAGAN")), "the phrase and its acronym stay");
+        // fairly common words wait for a model: not listed, but still asked about
+        let fracture = inv.entries.iter().find(|e| e.key == "fracture").expect("in the inventory");
+        assert!(fracture.familiar && !listed.contains(&"fracture"));
+        assert!(inv.unclassified().iter().any(|e| e.key == "fracture"));
+        let mut cats = HashMap::new();
+        cats.insert("fracture".to_string(), "臨床／解剖".to_string());
+        let classified = inventory(&p, &[], &Filters::default(), &cats);
+        assert!(classified.listed().any(|e| e.key == "fracture"), "listed once classified");
     }
 
     #[test]

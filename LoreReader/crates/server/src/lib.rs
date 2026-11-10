@@ -180,6 +180,7 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
         home.private = Some(workspace.clone());
     }
     let shared = home.shared_dir().unwrap_or_else(|| workspace.join("../shared"));
+    llm.share_engine(home.clone());
     Arc::new(AppState {
         kb: kb::Kb::new(&config.kb_url),
         llm,

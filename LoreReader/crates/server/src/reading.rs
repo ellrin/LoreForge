@@ -261,14 +261,18 @@ pub async fn read_paper(State(s): State<Shared>, Path(sha): Path<String>, Json(t
     if t.pages.is_empty() {
         return Err(bad("沒有頁面文字"));
     }
-    let t = Arc::new(t.normalise());
+    // margin line numbers ("the" + "275") are blanked before any analysis; the page gets
+    // their ranges to leave them out of search and quotes
+    let mut t = t.normalise();
+    let line_numbers: Vec<[usize; 3]> = lr_core::text::blank_line_numbers(&mut t).into_iter().map(|(p, a, b)| [p as usize, a, b]).collect();
+    let t = Arc::new(t);
     s.texts.lock().unwrap().insert(sha.clone(), t.clone());
     auto_title(&s, &sha, &t);
     let symbols = rebuild_symbols(&s, &sha, &t)?;
     let nouns = nouns_view(&s, &sha).await?;
     build_paragraphs(&s, &sha).await?;
     spawn_run(s.clone(), sha.clone(), false);
-    Ok(Json(json!({ "words": t.words(), "pages": t.pages.len(), "nouns": nouns, "symbols": symbols })))
+    Ok(Json(json!({ "words": t.words(), "pages": t.pages.len(), "nouns": nouns, "symbols": symbols, "line_numbers": line_numbers })))
 }
 
 /// Inventory × KB × ignore list × cached categories, and the KB's status.
@@ -281,7 +285,10 @@ async fn inventory_of(s: &crate::AppState, sha: &str) -> Result<(nouns::Inventor
     let cache = load_cache(s, sha)?;
     let cats = cache.categories.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let syms: SymbolFile = s.papers.load(sha, "symbols.json")?.unwrap_or_default();
-    let mut inv = nouns::inventory_masked(&text, &kb, &Filters::with_file(&ignore_file(&s.workspace)), &cats, &math_mask(&syms));
+    // math is not words; submission boilerplate and running heads are not the paper
+    let mut mask = math_mask(&syms);
+    mask.extend(lr_core::text::boilerplate_lines(&text));
+    let mut inv = nouns::inventory_masked(&text, &kb, &Filters::with_file(&ignore_file(&s.workspace)), &cats, &mask);
     inv.mark_used(&load_vocab(s).keys());
     if reader_field_set(s).is_none() {
         inv.quiet_single_words();
@@ -303,8 +310,7 @@ pub async fn nouns_view(s: &crate::AppState, sha: &str) -> Result<Value, ApiErro
     let (inv, kb_status, cache) = inventory_of(s, sha).await?;
     let pending = inv.unclassified().iter().filter(|n| !cache.asked.contains(&n.key)).count();
     let entries: Vec<Value> = inv
-        .entries
-        .iter()
+        .listed()
         .map(|n| {
             let mut v = serde_json::to_value(n).unwrap_or(Value::Null);
             v["red"] = n.red().into();
@@ -314,7 +320,7 @@ pub async fn nouns_view(s: &crate::AppState, sha: &str) -> Result<Value, ApiErro
     Ok(json!({
         "entries": entries,
         "stats": inv.stats,
-        "used": inv.entries.iter().filter(|n| n.used).count(),
+        "used": inv.listed().filter(|n| n.used).count(),
         "kb": kb_status,
         "field_set": reader_field_set(s).is_some(),
         "categories": nouns::CATEGORIES,

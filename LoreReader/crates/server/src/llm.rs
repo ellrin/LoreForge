@@ -2,6 +2,10 @@
 //! `tasks.toml` (`lr-translate` → `local:current` then `claude:selected`; `lr-chat` →
 //! `claude:selected`). Local engines get temperature 0.2 and Taiwan usage; the API key
 //! comes from the OS keychain (service `LoreReader`) or ANTHROPIC_API_KEY, never a file.
+//!
+//! The local engine (`local:current`): config.toml `[engine]` / `LOREREADER_LLM_URL`, else
+//! the engine all LoreForge apps share, `private/shared/engine.toml` `[engine] url / model`
+//! (`lore_home::engine`, re-read on every call: the server may change port).
 
 use std::sync::Arc;
 
@@ -25,6 +29,9 @@ pub struct Llm {
     pub cc: Arc<Cache>,
     runtime: Arc<LocalRuntime>,
     external: Option<ExternalServer>,
+    /// Where the shared engine is kept (`private/shared/engine.toml`), used when the
+    /// app's own config names none.
+    shared: Option<lore_home::Home>,
     model: String,
     base_url: String,
 }
@@ -52,6 +59,7 @@ impl Llm {
             cc: Arc::new(Cache::default()),
             runtime: Arc::new(LocalRuntime::new()),
             external: engine.url.clone().map(|url| ExternalServer { url, model: engine.model.clone() }),
+            shared: None,
             model,
             base_url: std::env::var("LOREREADER_CLAUDE_BASE_URL").unwrap_or_else(|_| lore_llm::claude_api::DEFAULT_BASE_URL.into()),
         }
@@ -70,8 +78,21 @@ impl Llm {
         TaskTable::load(base, user_file.filter(|p| p.is_file()))
     }
 
+    /// Use the shared engine of `home` when the app's own config names none.
+    pub fn share_engine(&mut self, home: lore_home::Home) {
+        self.shared = Some(home);
+    }
+
+    /// The local server: the app's own `[engine]`, else the shared one.
+    pub fn external(&self) -> Option<ExternalServer> {
+        self.external.clone().or_else(|| {
+            let e = self.shared.as_ref()?.engine()?;
+            Some(ExternalServer { url: e.url?, model: e.model })
+        })
+    }
+
     pub fn has_local(&self) -> bool {
-        self.external.is_some()
+        self.external().is_some()
     }
 
     fn factory(&self) -> StandardFactory {
@@ -81,7 +102,7 @@ impl Llm {
         f.api = self.keys.get(None, &Account::Single).map(|(k, _)| ApiAccess { base_url: self.base_url.clone(), api_key: k, fallbacks: true });
         f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: false, temp_prefix: "lorereader-claude".into() });
         f.local = Some(LocalAccess {
-            external: self.external.clone(),
+            external: self.external(),
             runtime: Some(self.runtime.clone()),
             zh_tw: true,
             ..Default::default()
@@ -174,5 +195,23 @@ mod tests {
         let e = l.complete("lr-translate", LlmRequest::prompt("s", "u")).await.err().unwrap();
         assert!(!e.is_empty());
         assert!(l.complete("lr-chat", LlmRequest::prompt("s", "u")).await.is_err());
+    }
+
+    #[test]
+    fn the_shared_engine_is_the_default_and_the_own_config_wins() {
+        let d = tempfile::tempdir().unwrap();
+        let home = lore_home::Home::at(d.path());
+        let mut l = Llm::new(&EngineConfig::default(), None, None);
+        l.share_engine(home.clone());
+        assert!(!l.has_local());
+        home.set_engine(Some("http://127.0.0.1:8123/v1"), Some("qwen3.5-4b-q8")).unwrap();
+        let e = l.external().unwrap();
+        assert_eq!((e.url.as_str(), e.model.as_deref()), ("http://127.0.0.1:8123/v1", Some("qwen3.5-4b-q8")));
+        // a new port is picked up without a restart
+        home.set_engine(Some("http://127.0.0.1:8124/v1"), None).unwrap();
+        assert_eq!(l.external().unwrap().url, "http://127.0.0.1:8124/v1");
+        let mut own = Llm::new(&EngineConfig { url: Some("http://127.0.0.1:7000/v1".into()), model: None }, None, None);
+        own.share_engine(home);
+        assert_eq!(own.external().unwrap().url, "http://127.0.0.1:7000/v1");
     }
 }
