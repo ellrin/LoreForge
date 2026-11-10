@@ -206,6 +206,119 @@ async fn page_operations_make_new_pdfs() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
 
+fn app_at(root: &std::path::Path, lib: &str, ws: &str) -> axum::Router {
+    let mut c = config(root, &dead_url(), None);
+    c.library = root.join(lib);
+    lr_server::router(lr_server::state(c, root.join(ws), lr_server::repo_dir().join("web"), true))
+}
+
+async fn annotations_of(app: &axum::Router, sha: &str) -> Value {
+    call(app, "GET", &format!("/api/papers/{sha}/annotations"), None, None).await.1["annotations"].clone()
+}
+
+#[tokio::test]
+async fn save_with_notes_dirty_and_round_trip() {
+    let e = setup(&dead_url(), None);
+    let out = e.root.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    // Opened from a path: the save panel defaults next to it, "<name> (筆記).pdf".
+    let orig = out.join("demo.pdf");
+    std::fs::write(&orig, lr_core::synth::demo_paper()).unwrap();
+    let (_, v, _) = call(&e.app, "POST", "/api/papers/import", Some(json!({ "path": orig })), None).await;
+    let sha = v["paper"]["sha256"].as_str().unwrap().to_string();
+    let (_, st, _) = call(&e.app, "GET", &format!("/api/papers/{sha}/export"), None, None).await;
+    assert_eq!((st["dirty"].as_bool(), st["default_name"].as_str()), (Some(false), Some("demo (筆記).pdf")));
+    assert_eq!(std::path::PathBuf::from(st["default_dir"].as_str().unwrap()).canonicalize().unwrap(), out.canonicalize().unwrap());
+
+    for (kind, note) in [("highlight", ""), ("note", "要再查")] {
+        let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/annotations"), Some(json!({ "page": 1, "kind": kind, "color": "green", "quote": { "exact": "Dice" }, "rects": [[0.1, 0.2, 0.4, 0.22]], "note": note })), None).await;
+        assert_eq!(s, StatusCode::CREATED);
+    }
+    let (_, st, _) = call(&e.app, "GET", &format!("/api/papers/{sha}/export"), None, None).await;
+    assert_eq!(st["dirty"], true);
+    let (_, d, _) = call(&e.app, "GET", "/api/dirty", None, None).await;
+    assert_eq!(d["papers"][0]["sha256"], sha);
+    // No desktop save panel here: the page falls back to a download.
+    let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/export"), Some(json!({ "choose": true })), None).await;
+    assert_eq!(v["native"], false);
+
+    // Refused: the original, the library, an existing file LoreReader did not write.
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/export"), Some(json!({ "path": orig })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/export"), Some(json!({ "path": e.root.join("library/x.pdf") })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    std::fs::write(out.join("other.pdf"), lr_core::synth::numbered_pdf(1, "X")).unwrap();
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/export"), Some(json!({ "path": out.join("other.pdf") })), None).await;
+    assert!(s == StatusCode::BAD_REQUEST && v["error"].as_str().unwrap().contains("不會覆寫"), "{v}");
+    assert_eq!(std::fs::read(&orig).unwrap(), lr_core::synth::demo_paper());
+
+    // Save as → clean; the file carries the notes and the source sha.
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/export"), Some(json!({ "path": out.join("demo (筆記)") })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["name"], "demo (筆記).pdf");
+    let saved = out.join("demo (筆記).pdf").canonicalize().unwrap();
+    let emb = lr_core::annotate::read(&std::fs::read(&saved).unwrap()).unwrap();
+    assert_eq!((emb.source.as_deref(), emb.annotations.len()), (Some(sha.as_str()), 2));
+    assert_eq!((v["export"]["dirty"].as_bool(), v["export"]["last"]["exists"].as_bool()), (Some(false), Some(true)));
+    let (_, d, _) = call(&e.app, "GET", "/api/dirty", None, None).await;
+    assert!(d["papers"].as_array().unwrap().is_empty());
+
+    // A change → dirty; "儲存" overwrites that export in place, still two notes (no duplicates).
+    let id = annotations_of(&e.app, &sha).await[0]["id"].as_str().unwrap().to_string();
+    call(&e.app, "PUT", &format!("/api/papers/{sha}/annotations/{id}"), Some(json!({ "note": "改了" })), None).await;
+    let (_, d, _) = call(&e.app, "GET", "/api/dirty", None, None).await;
+    assert_eq!(d["papers"][0]["last_path"].as_str().map(std::path::PathBuf::from), Some(saved.clone()));
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/export"), Some(json!({ "last": true })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let emb = lr_core::annotate::read(&std::fs::read(&saved).unwrap()).unwrap();
+    assert_eq!((emb.annotations.len(), emb.annotations[0].note.as_str()), (2, "改了"));
+    let left: Vec<_> = std::fs::read_dir(&out).unwrap().flatten().filter(|f| f.file_name().to_string_lossy().ends_with(".tmp")).collect();
+    assert!(left.is_empty());
+
+    // "不儲存" quiets the close prompt until the next change; a download also counts as saved.
+    call(&e.app, "PUT", &format!("/api/papers/{sha}/annotations/{id}"), Some(json!({ "color": "pink" })), None).await;
+    call(&e.app, "POST", &format!("/api/papers/{sha}/export/decline"), Some(json!({})), None).await;
+    let (_, d, _) = call(&e.app, "GET", "/api/dirty", None, None).await;
+    assert!(d["papers"].as_array().unwrap().is_empty());
+    call(&e.app, "PUT", &format!("/api/papers/{sha}/annotations/{id}"), Some(json!({ "color": "blue" })), None).await;
+    let (s, _, bytes) = call(&e.app, "POST", &format!("/api/papers/{sha}/export.pdf"), Some(json!({})), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(lr_core::annotate::read(&bytes).unwrap().annotations[0].color, "blue");
+    let (_, st, _) = call(&e.app, "GET", &format!("/api/papers/{sha}/export"), None, None).await;
+    assert_eq!(st["dirty"], false);
+    let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/export"), Some(json!({ "path": saved })), None).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // private/ wiped, library kept: opening the export brings the paper (same sha) and its notes back.
+    let fresh = app_at(&e.root, "library", "ws2");
+    let (s, v, _) = call(&fresh, "POST", "/api/papers/import", Some(json!({ "path": saved })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["paper"]["sha256"].as_str(), v["restored"].as_u64()), (Some(sha.as_str()), Some(2)));
+    assert_eq!(annotations_of(&fresh, &sha).await, annotations_of(&e.app, &sha).await);
+    let (_, st, _) = call(&fresh, "GET", &format!("/api/papers/{sha}/export"), None, None).await;
+    assert_eq!((st["dirty"].as_bool(), st["last"]["exists"].as_bool()), (Some(false), Some(true)));
+    let (_, v, _) = call(&fresh, "POST", "/api/papers/import", Some(json!({ "path": saved })), None).await;
+    assert_eq!(v["restored"], 0, "opening it again does not duplicate");
+
+    // Library and private/ both gone: the export becomes its own paper (LoreReader's annotations
+    // taken out of the stored copy), source_sha points at the original, KB links follow it.
+    let bare = app_at(&e.root, "library3", "ws3");
+    let (_, v, _) = call(&bare, "POST", "/api/papers/import", Some(json!({ "path": saved })), None).await;
+    let new_sha = v["paper"]["sha256"].as_str().unwrap().to_string();
+    assert_ne!(new_sha, sha);
+    assert_eq!((v["paper"]["source_sha"].as_str(), v["paper"]["original_name"].as_str()), (Some(sha.as_str()), Some("demo.pdf")));
+    let (_, _, pdf) = call(&bare, "GET", &format!("/api/papers/{new_sha}/pdf"), None, None).await;
+    assert!(lr_core::annotate::read(&pdf).unwrap().annotations.is_empty());
+    assert_eq!(annotations_of(&bare, &new_sha).await.as_array().unwrap().len(), 2);
+    let (_, v, _) = call(&bare, "GET", &format!("/open?sha={sha}&page=2"), None, None).await;
+    assert_eq!(v["location"], format!("/?paper={new_sha}&page=2"));
+    // Saving from there keeps the original sha as the marker.
+    let again = out.join("again.pdf");
+    let (s, _, _) = call(&bare, "POST", &format!("/api/papers/{new_sha}/export"), Some(json!({ "path": again })), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(lr_core::annotate::read(&std::fs::read(&again).unwrap()).unwrap().source.as_deref(), Some(sha.as_str()));
+}
+
 #[tokio::test]
 async fn library_inside_git_is_refused() {
     let dir = tempfile::tempdir().unwrap();

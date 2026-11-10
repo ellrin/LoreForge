@@ -10,6 +10,8 @@
 //!   `quotes.json` (citable sentences), `chat.json`. Writes are atomic.
 //! - [`pdfops`]: non-destructive page operations (delete, duplicate, reorder, insert
 //!   from another PDF, merge) — all one [`pdfops::compose`] call that builds a new PDF.
+//! - [`annotate`]: the annotations written into a copy of a PDF (Highlight / Text with
+//!   appearance streams, `/NM (lr:<id>)`, `/LoreReaderSource`) and read back from it.
 //! - [`text`]: the paper's text as pdf.js gives it (items with fonts and positions;
 //!   UTF-16 offsets shared with the page).
 //! - [`nouns`]: the noun list (track A): word inventory, KB n-gram matching,
@@ -23,6 +25,7 @@
 //!   equations), the `lr-paragraph` prompt, schema and run order.
 //! - [`synth`]: synthetic text PDFs for tests and demos (never a real paper).
 
+pub mod annotate;
 pub mod config;
 pub mod library;
 pub mod papers;

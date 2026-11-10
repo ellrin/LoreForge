@@ -84,6 +84,7 @@ const S = {
   chatScope: "all",         // all | para
   orig: [],                 // [{sha, page}] of the open paper
   arr: null,                // pending edited list, or null
+  exp: null,                // GET /api/papers/{sha}/export: dirty, last export, defaults
   pages: [],                // view items: {sha, page, w, h, el, token, rendered, divs, strs}
   zoom: 1, fit: true, cur: 0,
   annotations: [], quotes: [], chat: [], att: [],
@@ -147,7 +148,7 @@ async function pageRich(sha, page) {
 
 // ── library (home) ────────────────────────────────────────────────────────
 async function showHome() {
-  S.sha = null; S.paper = null;
+  S.sha = null; S.paper = null; S.exp = null;
   $("#app").classList.add("at-home");
   $("#home").hidden = false;
   $("#paperName").textContent = "";
@@ -200,7 +201,7 @@ async function importFiles(files) {
     try {
       const r = await api(`/api/papers/import?name=${encodeURIComponent(f.name)}`, { body: await f.arrayBuffer(), raw: true });
       last = r.paper;
-      toast(r.new ? `已加入書庫：${r.paper.title}` : `書庫裡已經有：${r.paper.title}`);
+      toast(r.restored ? `已還原 ${r.restored} 則註記：${r.paper.title}` : r.new ? `已加入書庫：${r.paper.title}` : `書庫裡已經有：${r.paper.title}`);
     } catch (e) { fail(e); }
   }
   return last;
@@ -223,7 +224,7 @@ async function openPaper(sha, page) {
     S.nouns = null; S.nounMarks = new Map(); S.focusNoun = null;
     S.symbols = null; S.symSpans = []; S.symMarks = new Map();
     S.paras = null; S.curPara = null; S.chatCtx = null; S.chatScope = "all";
-    await Promise.all([loadAnnotations(), loadQuotes(), loadChat()]);
+    await Promise.all([loadAnnotations(), loadQuotes(), loadChat(), refreshExport()]);
     await buildView();
     refreshKb();
     readPaper(sha);
@@ -694,6 +695,7 @@ async function addAnnotation(info, { kind, color, note = "" }) {
     if (info.p.sha === S.sha) { S.annotations.push(r.annotation); if (S.tab === "notes") renderSide(); }
     S.pages.filter((p) => p.sha === info.p.sha && p.page === info.p.page && p.rendered).forEach(drawHighlights);
     toast(kind === "note" ? "已加註記" : "已螢光");
+    refreshExport();
   } catch (e) { fail(e); }
 }
 
@@ -1660,6 +1662,7 @@ async function editNote(a) {
     const out = await api(`/api/papers/${S.sha}/annotations/${a.id}`, { method: "PUT", body: { note: r } });
     Object.assign(a, out.annotation);
     renderSide();
+    refreshExport();
     S.pages.filter((p) => p.rendered && p.page === a.page).forEach(drawHighlights);
   } catch (e) { fail(e); }
 }
@@ -1669,6 +1672,7 @@ async function delAnnotation(a) {
     await api(`/api/papers/${S.sha}/annotations/${a.id}`, { method: "DELETE" });
     S.annotations = S.annotations.filter((x) => x.id !== a.id);
     renderSide();
+    refreshExport();
     S.pages.filter((p) => p.rendered && p.page === a.page).forEach(drawHighlights);
   } catch (e) { fail(e); }
 }
@@ -1774,6 +1778,56 @@ function composer() {
   return h("div", { class: "composer" }, chips, ta, h("div", { class: "row" }, h("button", { class: "btn small primary", disabled: S.sending, title: "⌘/Ctrl＋Enter", onclick: sendChat }, h("span", { "data-icon": "send" }), S.sending ? "等待回覆…" : "送出")));
 }
 
+// ── save with notes ───────────────────────────────────────────────────────
+// A copy of the paper's PDF with the notes written in (the original never changes).
+// Desktop: the native save panel; browser: a download. "儲存" overwrites the last copy.
+async function refreshExport() {
+  if (!S.sha) return;
+  try { S.exp = await api(`/api/papers/${S.sha}/export`); } catch { S.exp = null; }
+  const b = $("#actSaveNotes");
+  b.classList.toggle("dirty", !!S.exp?.dirty);
+  b.setAttribute("aria-label", S.exp?.dirty ? "另存新檔（含筆記）· 筆記未儲存" : "另存新檔（含筆記）");
+}
+
+function exported(r) {
+  if (r.export) S.exp = r.export;
+  toast(`已存：${r.name}`);
+  refreshExport();
+}
+
+async function saveNotesAs() {
+  try {
+    if (S.exp?.save_dialog !== false) {
+      const r = await api(`/api/papers/${S.sha}/export`, { body: { choose: true } });
+      if (r.cancelled) return;
+      if (r.native !== false) return exported(r);
+    }
+    const res = await fetch(`/api/papers/${S.sha}/export.pdf`, { method: "POST" });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `${res.status}`);
+    const url = URL.createObjectURL(await res.blob());
+    h("a", { href: url, download: S.exp?.default_name ?? "notes.pdf" }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    refreshExport();
+  } catch (e) { fail(e); }
+}
+
+async function saveNotesLast() {
+  try { exported(await api(`/api/papers/${S.sha}/export`, { body: { last: true } })); } catch (e) { fail(e); }
+}
+
+function saveNotes(e) {
+  if (S.arr) { toast("頁面未儲存：先在縮圖欄另存", true); if (innerWidth <= 1100) togglePanel("sorter", true); return; }
+  const last = S.exp?.last;
+  if (!last?.exists) { saveNotesAs(); return; }
+  const m = $("#ctxMenu");
+  m.replaceChildren(
+    h("button", { type: "button", role: "menuitem", onclick: () => { closeMenus(); saveNotesLast(); } }, h("span", { "data-icon": "save" }), "儲存", h("span", { class: "muted menu-sub" }, last.name)),
+    h("button", { type: "button", role: "menuitem", onclick: () => { closeMenus(); saveNotesAs(); } }, h("span", { "data-icon": "copy" }), "另存新檔…"));
+  paintIcons(m);
+  const r = e.currentTarget.getBoundingClientRect();
+  placeAt(m, r.right - 220, r.bottom + 4);
+}
+
 // ── print ─────────────────────────────────────────────────────────────────
 async function print() {
   if (S.arr) { toast("先另存再列印", true); return; }
@@ -1812,6 +1866,7 @@ function wire() {
   $("#actZoomOut").onclick = () => setZoom(S.zoom / 1.2);
   $("#actFit").onclick = () => setZoom(fitZoom(), true);
   $("#actPrint").onclick = print;
+  $("#actSaveNotes").onclick = saveNotes;
   $("#actTerms").onclick = toggleTerms;
   $("#actModels").onclick = () => modelDialog();
   $("#pgDup").onclick = dupPage;

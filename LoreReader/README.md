@@ -45,9 +45,10 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 | 檔案 | 內容 |
 |---|---|
-| `paper.json` | `schema: "lorereader.paper/1"`、`sha256`、`title`（PDF 的 Title，沒有就用檔名）、`original_name`、`doi`（前兩頁找到的第一個 DOI，沒有為 `null`）、`pages`、`added_at`、`derived_from`（頁面操作產生的新 PDF：`{op, from: [sha256…]}`） |
+| `paper.json` | `schema: "lorereader.paper/1"`、`sha256`、`title`（PDF 的 Title，沒有就用檔名）、`original_name`、`doi`（前兩頁找到的第一個 DOI，沒有為 `null`）、`pages`、`added_at`、`derived_from`（頁面操作產生的新 PDF：`{op, from: [sha256…]}`）、`original_path`（從 Finder 或路徑開啟時原檔的位置，存檔對話框預設在它旁邊）、`source_sha`（這份 PDF 是 LoreReader 存出的「含筆記」檔，對應原本那篇的 sha256） |
 | `annotations.json` | `schema: "lorereader.annotations/1"`，`annotations: [{id, page, kind: "highlight" \| "note", color: yellow\|green\|blue\|pink, quote: {exact, prefix, suffix}, rects: [[x0,y0,x1,y1]…], note, created_at, updated_at}]`。`rects` 是相對於頁面的比例（左上為原點），所以任何縮放都對得上；`quote` 是原文與前後文，之後換渲染方式也能重新定位 |
 | `quotes.json` | 引用句。`schema: "lorereader.quotes/1"`，`quotes: [{id, text, page, note, created_at}]`。`note` 是一行備註（可空白） |
+| `export.json` | 上一次「另存新檔（含筆記）」：`schema: "lorereader.export/1"`、`hash`（當時註記的 sha256）、`path`（存到哪裡；瀏覽器下載為 `null`）、`at`、`declined`（關閉時按「不儲存」的那一版註記） |
 | `chat.json` | 問 Claude 的對話。`schema: "lorereader.chat/1"`，`messages: [{role: user\|assistant, text, attachments: [{text, page, context}], at, engine, paragraph?, chip?: {kind: term\|symbol\|equation, id, label}, context?}]`（`context` 是附給模型的段落脈絡，重播歷史時用） |
 | `symbols.json` | 符號表。`schema: "lorereader.symbols/1"`，`sha256`，`generated_at`，`entries`：lore-notation 登錄的欄位（`id`、`kind: "symbol"`、`latex`、`meaning`、`meaning_en`、`defined_at`、`tags`…）加上 `scope`（論文 sha256）、`grade`（`certain` ✅／`defined` 🟢／`inferred` 🟡／`conflict` 🔴／`unresolved` ⚪）、`resolved_by`（`program`／`local`／`claude`／`author`）、`evidence: [{quote, page, by, at?, meaning?}]`、`occurrences: [{page, s, e, bbox, latex, eq?}]`、`first: {page, sentence}`、`equations: [id]`、`note`；`equations`：lore-notation 的 `equation` 條目（`id`、`label: "(3)"`、`latex`、`uses`）加上 `page`、`number`、`bbox`、`s`、`e`。`bbox` 是頁面比例、左上為原點 |
 | `private/shared/my-vocab.json` | 我的詞彙（各 App 共用）。`schema: "lore.my-vocab/1"`，`sources: [sha256 或 "import:<名稱>"]`，`entries: [{key, text, sources}]` |
@@ -68,9 +69,23 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 ## 頁面操作（不破壞原檔）
 
-左邊縮圖欄上方的三顆按鈕：複製這一頁、刪除這一頁、從其他 PDF 插入頁面（選一份 PDF → 點選要的頁，依點選順序 → 指定插在第幾頁之後）；左邊縮圖可以拖曳排序。變更先暫存（標題旁顯示「未儲存」，點它打開縮圖欄），按縮圖欄的「另存…」才用 Rust（`lopdf`）產生**新的 PDF**：存進書庫，同時複製一份到匯出資料夾（同名就加 `-2`、`-3`，不覆蓋）。原本的 PDF 永遠不動。書庫頁的「合併 PDF…」依點選順序把幾份 PDF 接成一份新的。
+左邊縮圖欄上方的三顆按鈕：複製這一頁、刪除這一頁、從其他 PDF 插入頁面（選一份 PDF → 點選要的頁，依點選順序 → 指定插在第幾頁之後）；左邊縮圖可以拖曳排序。變更先暫存（標題旁顯示「頁面未儲存」，點它打開縮圖欄），按縮圖欄的「另存…」才用 Rust（`lopdf`）產生**新的 PDF**：存進書庫，同時複製一份到匯出資料夾（同名就加 `-2`、`-3`，不覆蓋）。原本的 PDF 永遠不動。書庫頁的「合併 PDF…」依點選順序把幾份 PDF 接成一份新的。
 
 新 PDF 不保留原檔的書籤（outline）、表單與具名目的地；頁面上的連結註解保留。
+
+## 另存新檔（含筆記）
+
+`private/` 可能被清掉，所以註記可以寫進一份**新的 PDF**（原檔永遠不動）。上方工具列的存檔按鈕：
+
+- 註記改過、還沒存進 PDF 時，按鈕上有一個橘點。
+- 第一次：Mac App 開系統的存檔對話框，預設在原檔旁邊（不知道原檔在哪就是「文件」），檔名 `<原檔名> (筆記).pdf`；瀏覽器直接下載。
+- 之後：選單「儲存」（覆寫上一次存的那份，先寫暫存檔再改名）或「另存新檔…」。只會覆寫 LoreReader 自己存出的檔案，不會覆寫原檔、書庫或 git repo 裡的檔。
+- 「頁面未儲存」（頁面操作）時要先在縮圖欄「另存…」頁面；筆記未儲存只看存檔按鈕上的橘點。
+- **關閉視窗或 ⌘Q**（Mac App）：有沒存進 PDF 的註記時，每篇問一次「儲存筆記到新的 PDF？」：儲存…／不儲存／取消。存過的直接覆寫那份；「不儲存」之後同一版註記不再問；「取消」不關。
+
+寫法（任何 PDF 閱讀器都看得到）：每個螢光是 `/Highlight` 註解（`/QuadPoints`、顏色、外觀串流 `/AP`，Preview 才畫得出來）；「註記」另外在旁邊加一個便利貼（`/Text`，內容是註記文字）。每個註解有 `/NM (lr:<id>)` 和整筆註記的 JSON，再存一次會先移除 `lr:` 開頭的註解（別的工具加的不動）。文件資訊裡的 `/LoreReaderSource` 是原本那篇的 sha256。位置換算用 CropBox（沒有就 MediaBox）與 `/Rotate`。
+
+**再開啟這份檔案**（例如 `private/` 被清掉之後，從 Finder 打開）：註記依 id 合併回來（不重複），這份檔案記為「上一次存的」。原本那篇還在書庫 → 就是那篇（同一個 sha256，知識庫連結與引用句不變）；不在 → 去掉 LoreReader 註解後的 PDF 成為一篇新的論文，`source_sha` 指向原本那篇，`/open?sha=<原本的>` 也會開到它。在別的閱讀器改過的註記文字以 PDF 上看得到的為準。
 
 ## 列印
 
@@ -186,6 +201,8 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `GET/PUT /api/reader` | 讀者的領域與程度 `{field}`（名詞分類用；存在 `private/shared/profile.toml`） |
 | `POST /api/papers/{sha}/mine` | `{on, pages?}`：「我的論文」標記與重建 my-vocab |
 | `GET /api/kb/status`、`POST /api/kb/cards`、`POST /api/kb/draft`、`GET /api/kb/nodes/{id}` | KnowledgeBase（建立卡片只在明確操作時） |
+| `GET/POST /api/papers/{sha}/export` | 含筆記的 PDF：狀態（`dirty`、上一次存的檔）／存檔 `{path}`、`{last: true}`（覆寫上一次）、`{choose: true}`（Mac App 的存檔對話框） |
+| `POST /api/papers/{sha}/export.pdf`、`POST …/export/decline`、`GET /api/dirty` | 下載（瀏覽器）／關閉時「不儲存」／還沒存進 PDF 的論文 |
 | `POST /api/print`、`POST /api/print/ready?id=` | Mac App 的原生列印 |
 | `GET /open?sha=&page=` | 從其他 App 開到某一頁 |
 
@@ -193,11 +210,13 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 - [KaTeX](https://katex.org)（MIT）0.16.47，放在 `web/vendor/katex/`（與 PaperComposer 相同；`LICENSE` 隨附）：符號與方程式的顯示。
 - [pdf.js](https://github.com/mozilla/pdf.js)（Mozilla，Apache-2.0）5.7.284，放在 `web/vendor/pdfjs/`（`LICENSE` 隨附）。標準字型：Foxit（BSD 風格授權，`standard_fonts/LICENSE_FOXIT`）與 Liberation（SIL OFL 1.1，`standard_fonts/LICENSE_LIBERATION`）。文字層的 CSS 取自 pdf.js 的 `pdf_viewer.css`。
-- [lopdf](https://github.com/J-F-Liu/lopdf)（MIT）：頁面操作。
+- [lopdf](https://github.com/J-F-Liu/lopdf)（MIT）：頁面操作、把註記寫進 PDF。
+- [tauri-plugin-dialog](https://github.com/tauri-apps/plugins-workspace)（MIT／Apache-2.0）：Mac App 的存檔與確認對話框。
 
 ## 沒有在真的硬體上測過
 
 - Mac App（Tauri）：這台 Linux 機器沒有 WebKitGTK，`apps/desktop` 無法編譯；原生列印對話框、實體印表機、7890 埠的處理都沒測。
+- 存檔對話框、關閉視窗／⌘Q 時的「儲存筆記到新的 PDF？」都只編譯過，沒有點過。Dock 的「結束」、登出不會問（走 `terminate:`）。在 Preview 改過、再存的含筆記 PDF 能不能讀回來也沒測（要看 Preview 是否保留 `/NM` 和 `/LoreReaderSource`）。
 - 真的本機模型與 Claude（測試用假的 OpenAI 相容伺服器；問 Claude 只測了「沒有可用模型」的錯誤）。
 - 真實論文（只用合成 PDF）。
 

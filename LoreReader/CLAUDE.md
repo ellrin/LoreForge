@@ -23,8 +23,10 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
 - `crates/core` (`lr-core`): `config` (env > `<app dir>/config.toml` > defaults; app dir =
   `$LOREREADER_HOME` or `<OS config dir>/LoreReader`), `library` (PDFs outside git, sha256
   addressed, never modified; refuses a git work tree; exports with free names), `papers`
-  (`private/LoreReader/papers/<sha256>/{paper,annotations,quotes,chat}.json`, atomic writes,
-  unknown fields kept), `pdfops` (lopdf `compose(sources, picks)` = every page operation;
+  (`private/LoreReader/papers/<sha256>/{paper,annotations,quotes,chat,export}.json`, atomic writes,
+  unknown fields kept; dirty = annotations hash ≠ last export), `annotate` (notes ⇄ PDF
+  annotations: `/Highlight` + `/AP`, sticky `/Text` for notes, `/NM (lr:<id>)`, Info
+  `/LoreReaderSource`; display fractions ⇄ user space via CropBox + `/Rotate`), `pdfops` (lopdf `compose(sources, picks)` = every page operation;
   title, DOI), `text` (the page's pdf.js text: items with font name, size, position; UTF-16
   offsets shared with the page), `nouns` (track A noun list: inventory, KB n-grams 2–4 over
   titles + aliases, normalisation, `function_words.txt` / `academic_words.txt` /
@@ -50,12 +52,15 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   nouns, symbols, paragraphs (background run per paper, newest run wins, cached per
   paragraph id), 懂了 (`reading.json`), and `chat_context` (title, section, paragraph, chip
   + its definition here, the author's KB states) for Ask Claude.
-  `Printer` trait = the desktop print bridge.
+  `Printer` / `Saver` traits = the desktop print / save-panel bridges.
 - `apps/desktop` (`lorereader`): Tauri shell on 7890 (KB links point there); reuses an
   lr-server already on 7890, else binds it (free port if taken). Registers `NativePrinter`:
   print.html in a window, `WebviewWindow::print()` when `/api/print/ready` arrives.
   Registered as a PDF viewer (`fileAssociations`): `RunEvent::Opened` files go through
   `POST /api/papers/import {path}` on whichever server it uses, then `/?paper=<sha>`.
+  `NativeSaver` (tauri-plugin-dialog). Close / ⌘Q: `GET /api/dirty`, one prompt per dirty
+  paper; the menu's Quit is our own item (the predefined one calls `terminate:`, which no
+  Tauri event can stop — Dock Quit / logout still bypass the prompt).
 - `web/`: static HTML/CSS/JS, no build step; `app.js` is an ES module over pdf.js
   (`web/vendor/pdfjs`, 5.7.284, Apache-2.0; keep LICENSE + VERSION). `print.html` renders pages
   at ~216 dpi. Tokens/icons from SlideComposer (icons.js copied, extra icons at the end).
@@ -67,7 +72,10 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   "另存新檔" composes a new PDF (library + exports). Annotations, quotes and KB sources always
   name the page's own PDF and its page number there.
 - Annotations anchor by page + rects (page fractions) + text quote (exact/prefix/suffix).
-  Writing them into the PDF is a later option.
+  "另存新檔（含筆記）" writes them into a new PDF (never the original; overwrites only files
+  LoreReader saved). Pending page operations must be saved first. Importing such a PDF maps
+  it to the paper in `/LoreReaderSource` when that PDF is in the library, else stores it
+  without `lr:` annotations as a new paper with `source_sha`; notes merge by id.
 - Knowledge colouring = the noun list (`nouns.rs`): red = a term to learn (see Classification);
   amber = learning / stale / no state; green = known. The page sends all pages' pdf.js text
   once (`POST /api/papers/{sha}/read`); the server never stores the paper's text. KB names

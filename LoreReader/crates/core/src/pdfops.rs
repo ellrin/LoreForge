@@ -26,7 +26,7 @@ pub struct Pick {
     pub page: u32,
 }
 
-fn load(bytes: &[u8]) -> Result<Document> {
+pub(crate) fn load(bytes: &[u8]) -> Result<Document> {
     let doc = Document::load_mem(bytes)?;
     if doc.is_encrypted() {
         return Err(Error::Pdf("這份 PDF 有加密，不能做頁面操作".into()));
@@ -59,7 +59,7 @@ pub fn info_title(bytes: &[u8]) -> Option<String> {
 }
 
 /// PDF text string: UTF-16BE with BOM, else PDFDocEncoding (≈ Latin-1).
-fn decode_text_string(raw: &[u8]) -> String {
+pub(crate) fn decode_text_string(raw: &[u8]) -> String {
     if raw.starts_with(&[0xFE, 0xFF]) {
         let u: Vec<u16> = raw[2..].chunks(2).filter(|c| c.len() == 2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
         String::from_utf16_lossy(&u)
@@ -116,7 +116,7 @@ pub fn doi_of(bytes: &[u8]) -> Option<String> {
 const INHERITED: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
 
 /// The page dictionary with inherited attributes copied in from its ancestors.
-fn flattened_page(doc: &Document, id: ObjectId) -> Result<Dictionary> {
+pub(crate) fn flattened_page(doc: &Document, id: ObjectId) -> Result<Dictionary> {
     let mut page = doc.get_dictionary(id)?.clone();
     let mut parent = page.get(b"Parent").ok().and_then(|p| p.as_reference().ok());
     let mut guard = 0;

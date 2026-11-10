@@ -4,10 +4,13 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::menu::{Menu, MenuItem};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
 /// PDFs opened from Finder (double-click, "Open With", LoreReader as the default PDF app):
 /// queued until the server answers, then added to the library through `/api/papers/import`
@@ -18,13 +21,13 @@ struct Opener {
     pending: Mutex<Vec<PathBuf>>,
 }
 
-/// POST `{"path": …}` to the import endpoint; the paper's sha256.
-fn import_pdf(addr: SocketAddr, path: &Path) -> Result<String, String> {
-    let body = serde_json::json!({ "path": path.to_string_lossy() }).to_string();
+/// A JSON request to the server at `addr` (in-process or reused); the JSON reply.
+fn http_json(addr: SocketAddr, method: &str, path: &str, body: Option<&serde_json::Value>) -> Result<serde_json::Value, String> {
+    let body = body.map(|b| b.to_string()).unwrap_or_default();
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|e| e.to_string())?;
     let _ = s.set_read_timeout(Some(Duration::from_secs(120)));
     let req = format!(
-        "POST /api/papers/import HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     s.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
@@ -35,7 +38,123 @@ fn import_pdf(addr: SocketAddr, path: &Path) -> Result<String, String> {
     if !head.starts_with("HTTP/1.1 200") {
         return Err(v["error"].as_str().unwrap_or(head).to_string());
     }
+    Ok(v)
+}
+
+/// POST `{"path": …}` to the import endpoint; the paper's sha256.
+fn import_pdf(addr: SocketAddr, path: &Path) -> Result<String, String> {
+    let v = http_json(addr, "POST", "/api/papers/import", Some(&serde_json::json!({ "path": path.to_string_lossy() })))?;
     v["paper"]["sha256"].as_str().map(str::to_string).ok_or_else(|| "no sha256 in reply".into())
+}
+
+/// The native save panel (also behind the page's "另存新檔（含筆記）" via `lr_server::Saver`).
+fn save_panel(app: &AppHandle, dir: &Path, name: &str) -> Option<PathBuf> {
+    app.dialog().file().set_title("另存新檔（含筆記）").set_directory(dir).set_file_name(name).add_filter("PDF", &["pdf"]).blocking_save_file().and_then(|p| p.into_path().ok())
+}
+
+struct NativeSaver(AppHandle);
+
+impl lr_server::Saver for NativeSaver {
+    fn choose(&self, dir: &Path, name: &str) -> Result<Option<PathBuf>, String> {
+        Ok(save_panel(&self.0, dir, name))
+    }
+}
+
+/// Close / quit with notes that are not saved in a PDF yet: one prompt per such paper,
+/// 「儲存…」(the save panel; straight to the last export when there is one) / 「不儲存」 / 「取消」.
+#[derive(Default)]
+struct CloseGuard {
+    /// The author already decided: let the close / exit through.
+    decided: AtomicBool,
+    /// A prompt is showing (a second Cmd+Q does not open another).
+    asking: AtomicBool,
+}
+
+/// Runs off the main thread (blocking dialogs). `true` = go ahead and close.
+fn confirm_close(app: &AppHandle) -> bool {
+    let Some(addr) = *app.state::<Opener>().addr.lock().unwrap() else { return true };
+    let dirty = match http_json(addr, "GET", "/api/dirty", None) {
+        Ok(v) => v["papers"].as_array().cloned().unwrap_or_default(),
+        Err(e) => {
+            eprintln!("dirty check: {e}");
+            return true;
+        }
+    };
+    let parent = app.get_webview_window("main");
+    for p in dirty {
+        let sha = p["sha256"].as_str().unwrap_or_default();
+        let title = p["title"].as_str().unwrap_or_default();
+        let last = p["last_path"].as_str().map(PathBuf::from);
+        let (msg, yes) = match &last {
+            Some(l) => (format!("《{title}》\n→ {}", l.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()), "儲存"),
+            None => (format!("《{title}》"), "儲存…"),
+        };
+        let mut d = app.dialog().message(msg).title("儲存筆記到新的 PDF？").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::YesNoCancelCustom(yes.into(), "不儲存".into(), "取消".into()));
+        if let Some(w) = &parent {
+            d = d.parent(w);
+        }
+        match d.blocking_show_with_result() {
+            MessageDialogResult::Custom(b) if b == yes => {
+                let target = match last {
+                    Some(l) => l,
+                    None => {
+                        let dir = PathBuf::from(p["default_dir"].as_str().unwrap_or_default());
+                        match save_panel(app, &dir, p["default_name"].as_str().unwrap_or("notes.pdf")) {
+                            Some(t) => t,
+                            None => return false,
+                        }
+                    }
+                };
+                if let Err(e) = http_json(addr, "POST", &format!("/api/papers/{sha}/export"), Some(&serde_json::json!({ "path": target }))) {
+                    app.dialog().message(e).title("沒有存成").kind(MessageDialogKind::Error).blocking_show();
+                    return false;
+                }
+            }
+            MessageDialogResult::Custom(b) if b == "不儲存" => {
+                if let Err(e) = http_json(addr, "POST", &format!("/api/papers/{sha}/export/decline"), Some(&serde_json::json!({}))) {
+                    eprintln!("decline: {e}");
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Ask (on a worker thread), then `then` on the main thread when the author lets it close.
+fn guarded(app: &AppHandle, then: impl FnOnce(&AppHandle) + Send + 'static) {
+    let g = app.state::<CloseGuard>();
+    if g.asking.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let go = confirm_close(&app);
+        let g = app.state::<CloseGuard>();
+        g.asking.store(false, Ordering::SeqCst);
+        if go {
+            g.decided.store(true, Ordering::SeqCst);
+            let a = app.clone();
+            let _ = app.run_on_main_thread(move || then(&a));
+        }
+    });
+}
+
+/// The default menu with its Quit item replaced by ours: the predefined one calls
+/// `terminate:` directly, which no Tauri event can stop.
+fn app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let menu = Menu::default(app)?;
+    #[cfg(target_os = "macos")]
+    if let Some(first) = menu.items()?.into_iter().next()
+        && let Some(sub) = first.as_submenu()
+    {
+        let n = sub.items()?.len();
+        if n > 0 {
+            sub.remove_at(n - 1)?;
+        }
+        sub.append(&MenuItem::with_id(app, "lr-quit", "Quit LoreReader", true, Some("CmdOrCtrl+Q"))?)?;
+    }
+    Ok(menu)
 }
 
 fn open_file(app: &AppHandle, path: PathBuf) {
@@ -130,6 +249,7 @@ fn main() {
             } else {
                 let shared = lr_server::state(config, lr_server::default_workspace(), web, false);
                 *shared.printer.lock().unwrap() = Some(Arc::new(NativePrinter(app.handle().clone())));
+                *shared.saver.lock().unwrap() = Some(Arc::new(NativeSaver(app.handle().clone())));
                 // The server runs on its own runtime thread for the life of the app.
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
@@ -174,6 +294,28 @@ fn main() {
             Ok(())
         })
         .manage(Opener::default())
+        .manage(CloseGuard::default())
+        .plugin(tauri_plugin_dialog::init())
+        .menu(app_menu)
+        .on_menu_event(|app, e| {
+            if e.id() == "lr-quit" {
+                guarded(app, |a| a.exit(0));
+            }
+        })
+        .on_window_event(|w, e| {
+            if w.label() == "main"
+                && let WindowEvent::CloseRequested { api, .. } = e
+                && !w.app_handle().state::<CloseGuard>().decided.load(Ordering::SeqCst)
+            {
+                api.prevent_close();
+                let label = w.label().to_string();
+                guarded(w.app_handle(), move |a| {
+                    if let Some(w) = a.get_webview_window(&label) {
+                        let _ = w.destroy();
+                    }
+                });
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building LoreReader")
         .run(|app, event| {

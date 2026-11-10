@@ -449,3 +449,9 @@ button.chip.warn { cursor: pointer; }
 .home .cardwrap .mine { position: absolute; top: 8px; right: 8px; }
 .home .cardwrap .mine[aria-pressed="true"] svg.i { fill: currentColor; }
 .nn-src { flex: none; font: 500 10.5px var(--sans); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 8px; padding: 0 5px; }
+
+/* save with notes: a dot on the save icon while notes are not in a PDF yet */
+.ico.save-notes { position: relative; }
+.ico.save-notes.dirty { color: var(--accent-text); }
+.ico.save-notes.dirty::after { content: ""; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--panel); }
+.menu .menu-sub { margin-left: auto; padding-left: 14px; font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }

@@ -6,7 +6,14 @@
 //! ```json
 //! { "schema": "lorereader.paper/1", "sha256": "…", "title": "…", "original_name": "x.pdf",
 //!   "doi": "10.…" | null, "pages": 12, "added_at": "2026-11-10T09:00:00+08:00",
-//!   "derived_from": { "op": "compose", "from": ["<sha256>", …] } | null }
+//!   "derived_from": { "op": "compose", "from": ["<sha256>", …] } | null,
+//!   "original_path": "/…/x.pdf"?,   // where the file was opened from (Finder / path), if known
+//!   "source_sha": "<sha256>"? }     // set when this PDF is a LoreReader export of that paper
+//! ```
+//! `export.json` (the last "另存新檔（含筆記）"; dirty = the annotations changed since)
+//! ```json
+//! { "schema": "lorereader.export/1", "hash": "<sha256 of the annotations>", "path": "/…/x (筆記).pdf" | null,
+//!   "at": "…", "declined": "<hash the author chose not to save>" | null }
 //! ```
 //! `annotations.json`
 //! ```json
@@ -43,6 +50,7 @@ pub const PAPER_SCHEMA: &str = "lorereader.paper/1";
 pub const ANNOTATIONS_SCHEMA: &str = "lorereader.annotations/1";
 pub const QUOTES_SCHEMA: &str = "lorereader.quotes/1";
 pub const CHAT_SCHEMA: &str = "lorereader.chat/1";
+pub const EXPORT_SCHEMA: &str = "lorereader.export/1";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Derived {
@@ -65,6 +73,32 @@ pub struct PaperMeta {
     pub added_at: String,
     #[serde(default)]
     pub derived_from: Option<Derived>,
+    /// The file it was opened from (Finder / a typed path), for the save dialog's folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_path: Option<String>,
+    /// This PDF is a LoreReader export (notes written in) of the paper with this sha256.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_sha: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// The last export with notes (`export.json`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExportState {
+    #[serde(default)]
+    pub schema: String,
+    /// [`Papers::annotations_hash`] when it was written.
+    #[serde(default)]
+    pub hash: String,
+    /// Where it was written; `None` = handed to the browser as a download.
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub at: String,
+    /// The annotations hash the author chose not to save when closing ("不儲存").
+    #[serde(default)]
+    pub declined: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -253,6 +287,14 @@ impl Papers {
         Ok(m)
     }
 
+    /// Change `paper.json` (it must exist).
+    pub fn update_meta(&self, sha: &str, f: impl FnOnce(&mut PaperMeta)) -> Result<PaperMeta> {
+        let mut m = self.meta(sha)?.ok_or_else(|| Error::NotFound(sha.into()))?;
+        f(&mut m);
+        write_json(&self.folder(sha)?.join("paper.json"), &m)?;
+        Ok(m)
+    }
+
     /// 「我的論文」: the author's own (published or co-authored) paper.
     pub fn set_mine(&self, sha: &str, on: bool) -> Result<PaperMeta> {
         let mut m = self.meta(sha)?.ok_or_else(|| Error::NotFound(sha.into()))?;
@@ -338,6 +380,89 @@ impl Papers {
             return Err(Error::NotFound(id.into()));
         }
         self.save_annotations(sha, list)
+    }
+
+    /// Add annotations read from an exported PDF: new ids are appended, an id already here
+    /// is replaced only when the incoming one is newer (`updated_at`). Returns how many changed.
+    pub fn merge_annotations(&self, sha: &str, incoming: Vec<Annotation>) -> Result<usize> {
+        let mut list = self.annotations(sha)?;
+        let mut n = 0;
+        for mut a in incoming {
+            if a.page == 0 {
+                continue;
+            }
+            if !COLORS.contains(&a.color.as_str()) {
+                a.color = "yellow".into();
+            }
+            if !matches!(a.kind.as_str(), "highlight" | "note") {
+                a.kind = "highlight".into();
+            }
+            if a.id.is_empty() {
+                a.id = crate::new_id("a");
+            }
+            match list.iter_mut().find(|x| x.id == a.id) {
+                Some(x) if a.updated_at > x.updated_at && *x != a => {
+                    *x = a;
+                    n += 1;
+                }
+                Some(_) => {}
+                None => {
+                    list.push(a);
+                    n += 1;
+                }
+            }
+        }
+        if n > 0 {
+            self.save_annotations(sha, list)?;
+        }
+        Ok(n)
+    }
+
+    // ── export with notes ──
+
+    /// sha256 of the annotations as stored (what an export captured).
+    pub fn annotations_hash(&self, sha: &str) -> Result<String> {
+        Ok(hash_annotations(&self.annotations(sha)?))
+    }
+
+    pub fn export_state(&self, sha: &str) -> Result<Option<ExportState>> {
+        read_json(&self.folder(sha)?.join("export.json"))
+    }
+
+    fn save_export_state(&self, sha: &str, f: impl FnOnce(&mut ExportState)) -> Result<ExportState> {
+        let mut st = self.export_state(sha)?.unwrap_or_default();
+        st.schema = EXPORT_SCHEMA.into();
+        f(&mut st);
+        write_json(&self.folder(sha)?.join("export.json"), &st)?;
+        Ok(st)
+    }
+
+    /// Record an export of the annotations with `hash` (to `path`, or downloaded).
+    pub fn set_exported(&self, sha: &str, hash: &str, path: Option<&str>) -> Result<ExportState> {
+        self.save_export_state(sha, |st| {
+            st.hash = hash.into();
+            st.path = path.map(str::to_string);
+            st.at = crate::now();
+            st.declined = None;
+        })
+    }
+
+    /// "不儲存" on close: do not ask again until the annotations change.
+    pub fn set_declined(&self, sha: &str) -> Result<ExportState> {
+        let h = self.annotations_hash(sha)?;
+        self.save_export_state(sha, |st| st.declined = Some(h))
+    }
+
+    /// The annotations changed since the last export (or were never exported), and the
+    /// author has not declined saving this state. No annotations, never exported = clean.
+    pub fn is_dirty(&self, sha: &str) -> Result<bool> {
+        let list = self.annotations(sha)?;
+        let st = self.export_state(sha)?;
+        if list.is_empty() && st.as_ref().is_none_or(|s| s.hash.is_empty()) {
+            return Ok(false);
+        }
+        let h = hash_annotations(&list);
+        Ok(st.is_none_or(|s| s.hash != h && s.declined.as_deref() != Some(h.as_str())))
     }
 
     // ── citable sentences ──
@@ -428,12 +553,17 @@ impl Papers {
     }
 }
 
+/// sha256 of a list of annotations (their JSON as stored).
+pub fn hash_annotations(list: &[Annotation]) -> String {
+    crate::library::sha256(&serde_json::to_vec(list).unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn meta(sha: &str) -> PaperMeta {
-        PaperMeta { schema: PAPER_SCHEMA.into(), sha256: sha.into(), title: "T".into(), original_name: "t.pdf".into(), doi: None, pages: 2, added_at: crate::now(), derived_from: None, extra: Map::new() }
+        PaperMeta { schema: PAPER_SCHEMA.into(), sha256: sha.into(), title: "T".into(), original_name: "t.pdf".into(), doi: None, pages: 2, added_at: crate::now(), derived_from: None, original_path: None, source_sha: None, extra: Map::new() }
     }
 
     #[test]
@@ -479,6 +609,42 @@ mod tests {
         assert_eq!(ps.chat(&sha).unwrap().len(), 1);
         ps.clear_chat(&sha).unwrap();
         assert!(ps.chat(&sha).unwrap().is_empty());
+        // Dirty tracking: never exported + no notes = clean; a note makes it dirty; an export
+        // cleans it; a change dirties it again; "不儲存" quiets it until the next change.
+        let other = "cd".repeat(32);
+        ps.register(meta(&other)).unwrap();
+        assert!(!ps.is_dirty(&other).unwrap());
+        let mk = |note: &str| Annotation { id: String::new(), page: 1, kind: "note".into(), color: "blue".into(), quote: TextQuote { exact: "x".into(), ..Default::default() }, rects: vec![[0.1, 0.1, 0.2, 0.12]], note: note.into(), created_at: String::new(), updated_at: String::new(), extra: Map::new() };
+        let n1 = ps.add_annotation(&other, mk("one")).unwrap();
+        assert!(ps.is_dirty(&other).unwrap());
+        ps.set_exported(&other, &ps.annotations_hash(&other).unwrap(), Some("/x/y (筆記).pdf")).unwrap();
+        assert!(!ps.is_dirty(&other).unwrap());
+        assert_eq!(ps.export_state(&other).unwrap().unwrap().path.as_deref(), Some("/x/y (筆記).pdf"));
+        ps.update_annotation(&other, &n1.id, AnnotationPatch { note: Some("two".into()), color: None }).unwrap();
+        assert!(ps.is_dirty(&other).unwrap());
+        ps.set_declined(&other).unwrap();
+        assert!(!ps.is_dirty(&other).unwrap());
+        ps.delete_annotation(&other, &n1.id).unwrap();
+        assert!(ps.is_dirty(&other).unwrap(), "exported notes were deleted");
+
+        // Merge by id: new ones added, older copies ignored, newer ones replace.
+        let mut a = mk("from pdf");
+        a.id = "a1".into();
+        a.updated_at = "2026-01-01T00:00:00+08:00".into();
+        assert_eq!(ps.merge_annotations(&other, vec![a.clone(), a.clone()]).unwrap(), 1);
+        let mut older = a.clone();
+        older.updated_at = "2025-01-01T00:00:00+08:00".into();
+        older.note = "old".into();
+        assert_eq!(ps.merge_annotations(&other, vec![older]).unwrap(), 0);
+        let mut newer = a.clone();
+        newer.updated_at = "2026-02-01T00:00:00+08:00".into();
+        newer.color = "purple".into();
+        assert_eq!(ps.merge_annotations(&other, vec![newer]).unwrap(), 1);
+        let l = ps.annotations(&other).unwrap();
+        assert_eq!((l.len(), l[0].color.as_str()), (1, "yellow"));
+        let m = ps.update_meta(&other, |m| m.source_sha = Some(sha.clone())).unwrap();
+        assert_eq!(ps.meta(&other).unwrap().unwrap().source_sha, m.source_sha);
+
         // No temp files left behind.
         let left: Vec<_> = std::fs::read_dir(d.path().join(&sha)).unwrap().flatten().map(|e| e.file_name()).filter(|n| n.to_string_lossy().ends_with(".tmp")).collect();
         assert!(left.is_empty());

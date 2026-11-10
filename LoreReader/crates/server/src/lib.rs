@@ -35,6 +35,11 @@
 //! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?}` → KB `POST /api/nodes` |
 //! | POST | /api/kb/draft | `{term, context}` → KB `POST /api/draft` |
 //! | GET | /api/kb/nodes/{id} | a card (summary for the term popover) |
+//! | GET | /api/papers/{sha}/export | notes export state: `dirty`, `last` {path, name, at, exists}, default folder/name |
+//! | POST | /api/papers/{sha}/export | `{path}` / `{last: true}` (overwrite the last export) / `{choose: true}` (desktop save panel) → PDF with the notes written to that file |
+//! | POST | /api/papers/{sha}/export.pdf | the PDF with the notes as a download (browser) |
+//! | POST | /api/papers/{sha}/export/decline | "不儲存" on close: not dirty until the notes change |
+//! | GET | /api/dirty | papers whose notes changed since their last export (the close prompt) |
 //! | POST | /api/print | `{sha}` → `{native}`: the desktop app opens its print dialog |
 //! | POST | /api/print/ready?id= | print.html is rendered (desktop: show the dialog) |
 
@@ -56,7 +61,9 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use lore_llm::{LlmRequest, Message};
 use lr_core::library::valid_sha;
-use lr_core::papers::{Annotation, AnnotationPatch, Attachment, ChatMessage, Derived, PaperMeta};
+use lr_core::annotate;
+use lr_core::library::git_work_tree;
+use lr_core::papers::{Annotation, AnnotationPatch, Attachment, ChatMessage, Derived, PaperMeta, hash_annotations};
 use lr_core::pdfops::{self, Pick};
 use lr_core::{Config, Library, Papers};
 use serde::Deserialize;
@@ -68,6 +75,12 @@ use tower_http::services::ServeDir;
 pub trait Printer: Send + Sync {
     fn open(&self, url: &str, id: &str) -> Result<(), String>;
     fn ready(&self, id: &str) -> Result<(), String>;
+}
+
+/// The desktop app's save panel: the path the author chose, `None` when cancelled.
+/// Called from a blocking thread.
+pub trait Saver: Send + Sync {
+    fn choose(&self, dir: &std::path::Path, name: &str) -> Result<Option<PathBuf>, String>;
 }
 
 pub struct AppState {
@@ -94,6 +107,7 @@ pub struct AppState {
     /// The background paragraph analysis of each paper.
     pub runs: Mutex<HashMap<String, reading::RunStatus>>,
     pub printer: Mutex<Option<Arc<dyn Printer>>>,
+    pub saver: Mutex<Option<Arc<dyn Saver>>>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -177,6 +191,7 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
         paras: Mutex::new(HashMap::new()),
         runs: Mutex::new(HashMap::new()),
         printer: Mutex::new(None),
+        saver: Mutex::new(None),
     })
 }
 
@@ -216,6 +231,10 @@ pub fn routes() -> Router<Shared> {
         .route("/api/kb/cards", post(kb_card))
         .route("/api/kb/draft", post(kb_draft))
         .route("/api/kb/nodes/{id}", get(kb_node))
+        .route("/api/papers/{sha}/export", get(export_state).post(export))
+        .route("/api/papers/{sha}/export.pdf", post(export_download))
+        .route("/api/papers/{sha}/export/decline", post(export_decline))
+        .route("/api/dirty", get(dirty))
         .route("/api/print", post(print))
         .route("/api/print/ready", post(print_ready))
 }
@@ -272,6 +291,12 @@ async fn open(State(s): State<Shared>, Query(q): Query<OpenQ>) -> Response {
     if s.library.as_ref().is_ok_and(|l| l.has(&sha)) {
         return Redirect::to(&format!("/?paper={sha}&page={page}")).into_response();
     }
+    // The original is gone but a LoreReader export of it (same pages) was opened since.
+    if valid_sha(&sha)
+        && let Some(m) = s.papers.list().unwrap_or_default().into_iter().find(|m| m.source_sha.as_deref() == Some(sha.as_str()) && s.library.as_ref().is_ok_and(|l| l.has(&m.sha256)))
+    {
+        return Redirect::to(&format!("/?paper={}&page={page}", m.sha256)).into_response();
+    }
     let known = valid_sha(&sha).then(|| s.papers.meta(&sha).ok().flatten()).flatten();
     let what = known.map(|m| format!("《{}》", html_escape(&m.title))).unwrap_or_else(|| "這份 PDF".into());
     let body = format!(
@@ -300,6 +325,7 @@ async fn info(State(s): State<Shared>) -> R {
         "kb_url": s.kb.base,
         "local_engine": s.llm.has_local(),
         "desktop": s.printer.lock().unwrap().is_some(),
+        "save_dialog": s.saver.lock().unwrap().is_some(),
         "colors": lr_core::papers::COLORS,
     })))
 }
@@ -330,6 +356,8 @@ fn add_paper(s: &AppState, bytes: &[u8], original_name: &str, derived: Option<De
         pages,
         added_at: lr_core::now(),
         derived_from: derived,
+        original_path: None,
+        source_sha: None,
         extra: Default::default(),
     };
     let _g = s.write.lock().unwrap();
@@ -343,17 +371,71 @@ struct ImportQ {
 
 async fn import(State(s): State<Shared>, Query(q): Query<ImportQ>, headers: HeaderMap, body: Bytes) -> R {
     let is_json = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("application/json"));
-    let (bytes, name) = if is_json {
+    let (bytes, name, from) = if is_json {
         let v: Value = serde_json::from_slice(&body).map_err(|e| bad(e.to_string()))?;
         let path = PathBuf::from(v["path"].as_str().ok_or_else(|| bad("需要 path"))?.trim());
         let bytes = std::fs::read(&path).map_err(|e| bad(format!("{}：{e}", path.display())))?;
-        (bytes, path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        (bytes, name, Some(path).filter(|p| p.is_absolute()))
     } else {
-        (body.to_vec(), q.name.unwrap_or_default())
+        (body.to_vec(), q.name.unwrap_or_default(), None)
     };
     let name = std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "paper.pdf".into());
-    let (meta, new) = add_paper(&s, &bytes, &name, None, None)?;
+    // A PDF that LoreReader saved with notes: back to its paper, notes restored.
+    let emb = annotate::read(&bytes).unwrap_or_default();
+    if !emb.is_empty() {
+        return import_export(&s, &bytes, &name, from.as_deref(), emb);
+    }
+    let (mut meta, new) = add_paper(&s, &bytes, &name, None, None)?;
+    if let Some(p) = from {
+        let _g = s.write.lock().unwrap();
+        meta = s.papers.update_meta(&meta.sha256, |m| m.original_path = Some(p.to_string_lossy().to_string()))?;
+    }
     Ok(Json(json!({ "paper": paper_view(&s, &meta), "new": new })))
+}
+
+/// Import a PDF that carries LoreReader's notes (`/LoreReaderSource` and/or `lr:` annotations).
+///
+/// Identity: the paper it was exported from when that PDF is in the library (KB links and
+/// quotes keep their sha); else a paper already recorded with the same `source_sha`; else
+/// the file **without** LoreReader's annotations (they are drawn from annotations.json, not
+/// twice) becomes a new paper with `source_sha` = the marker. The notes are merged by id
+/// and the file is remembered as that paper's last export (so "儲存" overwrites it).
+fn import_export(s: &AppState, bytes: &[u8], name: &str, from: Option<&std::path::Path>, emb: annotate::Embedded) -> R {
+    let l = lib(s)?;
+    let own = lr_core::library::sha256(bytes);
+    let src = emb.source.clone().filter(|x| *x != own);
+    let found = src.as_ref().and_then(|src| {
+        if l.has(src) {
+            return Some(src.clone());
+        }
+        s.papers.list().ok()?.into_iter().find(|m| m.source_sha.as_deref() == Some(src.as_str()) && l.has(&m.sha256)).map(|m| m.sha256)
+    });
+    let plain_name = name.replace(" (筆記)", "").replace("（筆記）", "");
+    let (meta, new) = match found {
+        Some(sha) => match s.papers.meta(&sha)? {
+            Some(m) => (m, false),
+            None => add_paper(s, &l.read(&sha)?, &plain_name, None, None)?,
+        },
+        None => {
+            let stripped = annotate::strip(bytes)?;
+            let (m, new) = add_paper(s, &stripped, &plain_name, None, None)?;
+            let _g = s.write.lock().unwrap();
+            let m = s.papers.update_meta(&m.sha256, |x| {
+                if x.source_sha.is_none() {
+                    x.source_sha = src.clone();
+                }
+            })?;
+            (m, new)
+        }
+    };
+    let _g = s.write.lock().unwrap();
+    let restored = s.papers.merge_annotations(&meta.sha256, emb.annotations.clone())?;
+    let path = from.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string());
+    if path.is_some() || s.papers.export_state(&meta.sha256)?.is_none() {
+        s.papers.set_exported(&meta.sha256, &hash_annotations(&emb.annotations), path.as_deref())?;
+    }
+    Ok(Json(json!({ "paper": paper_view(s, &meta), "new": new, "restored": restored, "from_export": true })))
 }
 
 async fn paper(State(s): State<Shared>, Path(sha): Path<String>) -> R {
@@ -472,6 +554,179 @@ async fn compose(State(s): State<Shared>, Json(b): Json<ComposeBody>) -> R {
     let derived = Derived { op: b.op.unwrap_or_else(|| "compose".into()), from: shas };
     let (meta, _) = add_paper(&s, &bytes, &name, Some(derived), Some(title))?;
     Ok(Json(json!({ "paper": paper_view(&s, &meta), "export": path })))
+}
+
+// ── save with notes ──────────────────────────────────────────────────────
+
+/// Folder and file name the save panel starts with: next to the file it was opened from
+/// (if known and still there), else ~/Documents; `<original name> (筆記).pdf`.
+fn default_target(m: Option<&PaperMeta>) -> (PathBuf, String) {
+    let dir = m
+        .and_then(|m| m.original_path.as_deref())
+        .and_then(|p| std::path::Path::new(p).parent().map(std::path::Path::to_path_buf))
+        .filter(|d| d.is_dir())
+        .or_else(dirs::document_dir)
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(std::env::temp_dir);
+    let stem = m
+        .map(|m| {
+            let n = m.original_name.trim();
+            let n = n.strip_suffix(".pdf").or_else(|| n.strip_suffix(".PDF")).unwrap_or(n);
+            if n.is_empty() || m.derived_from.is_some() { m.title.clone() } else { n.to_string() }
+        })
+        .unwrap_or_default();
+    let stem = stem.replace(" (筆記)", "");
+    (dir, format!("{} (筆記).pdf", lr_core::safe_stem(&stem)))
+}
+
+fn export_view(s: &AppState, sha: &str) -> Result<Value, ApiError> {
+    let m = s.papers.meta(sha)?;
+    let st = s.papers.export_state(sha)?;
+    let (dir, name) = default_target(m.as_ref());
+    let last = st.as_ref().and_then(|st| st.path.as_ref().map(|p| (p, st))).map(|(p, st)| {
+        let pb = std::path::Path::new(p);
+        json!({ "path": p, "name": pb.file_name().map(|n| n.to_string_lossy().to_string()), "at": st.at, "exists": pb.is_file() })
+    });
+    Ok(json!({
+        "dirty": s.papers.is_dirty(sha)?,
+        "count": s.papers.annotations(sha)?.len(),
+        "last": last,
+        "default_dir": dir,
+        "default_name": name,
+        "save_dialog": s.saver.lock().unwrap().is_some(),
+    }))
+}
+
+async fn export_state(State(s): State<Shared>, Path(sha): Path<String>) -> R {
+    sha_ok(&sha)?;
+    Ok(Json(export_view(&s, &sha)?))
+}
+
+/// The paper's PDF with its notes written in, and the annotations hash it captured.
+fn build_export(s: &AppState, sha: &str) -> Result<(Vec<u8>, String, PaperMeta), ApiError> {
+    let l = lib(s)?;
+    let meta = s.papers.meta(sha)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, json!({ "error": "沒有這份論文的資料" })))?;
+    let src = l.read(sha)?;
+    let (list, hash) = {
+        let _g = s.write.lock().unwrap();
+        let list = s.papers.annotations(sha)?;
+        let h = hash_annotations(&list);
+        (list, h)
+    };
+    let root = meta.source_sha.clone().unwrap_or_else(|| sha.to_string());
+    Ok((annotate::write(&src, &list, &root)?, hash, meta))
+}
+
+/// Write the export to `path` (atomically). Refused: inside the library or a git work
+/// tree, the file the paper was opened from, or an existing file LoreReader did not save.
+fn write_export(s: &AppState, sha: &str, path: PathBuf) -> Result<PathBuf, ApiError> {
+    let l = lib(s)?;
+    if !path.is_absolute() {
+        return Err(bad("需要完整路徑"));
+    }
+    let path = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) { path } else { PathBuf::from(format!("{}.pdf", path.display())) };
+    let file = path.file_name().ok_or_else(|| bad("需要檔名"))?.to_owned();
+    let parent = path.parent().filter(|p| p.is_dir()).ok_or_else(|| bad(format!("資料夾不存在：{}", path.display())))?;
+    let target = parent.canonicalize().map_err(|e| bad(e.to_string()))?.join(file);
+    let real = target.canonicalize().unwrap_or_else(|_| target.clone());
+    let lib_root = l.root.canonicalize().unwrap_or_else(|_| l.root.clone());
+    if real.starts_with(&lib_root) {
+        return Err(bad("不能存進書庫資料夾"));
+    }
+    if let Some(repo) = git_work_tree(&target) {
+        return Err(bad(format!("{} 在 git 工作目錄 {} 裡；PDF 不能放進 repo", target.display(), repo.display())));
+    }
+    let meta = s.papers.meta(sha)?;
+    let original = meta.as_ref().and_then(|m| m.original_path.as_deref()).map(|p| std::path::Path::new(p).canonicalize().unwrap_or_else(|_| PathBuf::from(p)));
+    if original.as_ref() == Some(&real) {
+        return Err(bad("不會覆寫原本的 PDF，請換一個檔名"));
+    }
+    if real.exists() {
+        let ours = std::fs::read(&real).ok().and_then(|b| annotate::read(&b).ok()).is_some_and(|e| e.source.is_some());
+        if !ours {
+            return Err(bad("這個檔案不是 LoreReader 存的，不會覆寫；請換一個檔名"));
+        }
+    }
+    let (bytes, hash, _) = build_export(s, sha)?;
+    lr_core::write_atomic(&real, &bytes).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": format!("{}：{e}", real.display()) })))?;
+    let _g = s.write.lock().unwrap();
+    s.papers.set_exported(sha, &hash, Some(&real.to_string_lossy()))?;
+    Ok(real)
+}
+
+#[derive(Deserialize, Default)]
+struct ExportBody {
+    path: Option<String>,
+    #[serde(default)]
+    last: bool,
+    #[serde(default)]
+    choose: bool,
+}
+
+async fn export(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Json<ExportBody>) -> R {
+    sha_ok(&sha)?;
+    lib(&s)?;
+    let target = if b.last {
+        let st = s.papers.export_state(&sha)?;
+        PathBuf::from(st.and_then(|st| st.path).ok_or_else(|| bad("還沒有存過含筆記的 PDF"))?)
+    } else if let Some(p) = b.path.filter(|p| !p.trim().is_empty()) {
+        PathBuf::from(p.trim())
+    } else if b.choose {
+        let saver = s.saver.lock().unwrap().clone();
+        let Some(sv) = saver else { return Ok(Json(json!({ "native": false }))) };
+        let (dir, name) = default_target(s.papers.meta(&sha)?.as_ref());
+        let picked = tokio::task::spawn_blocking(move || sv.choose(&dir, &name))
+            .await
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e })))?;
+        match picked {
+            Some(p) => p,
+            None => return Ok(Json(json!({ "cancelled": true }))),
+        }
+    } else {
+        return Err(bad("需要 path"));
+    };
+    let out = write_export(&s, &sha, target)?;
+    let name = out.file_name().map(|n| n.to_string_lossy().to_string());
+    Ok(Json(json!({ "path": out, "name": name, "export": export_view(&s, &sha)? })))
+}
+
+fn pct(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// Browser fallback: the PDF with notes as a download (recorded as exported, no path).
+async fn export_download(State(s): State<Shared>, Path(sha): Path<String>) -> Result<Response, ApiError> {
+    sha_ok(&sha)?;
+    let (bytes, hash, meta) = build_export(&s, &sha)?;
+    let (_, name) = default_target(Some(&meta));
+    {
+        let _g = s.write.lock().unwrap();
+        s.papers.set_exported(&sha, &hash, None)?;
+    }
+    let disp = format!("attachment; filename=\"notes.pdf\"; filename*=UTF-8''{}", pct(&name));
+    Ok(([(header::CONTENT_TYPE, "application/pdf".to_string()), (header::CONTENT_DISPOSITION, disp)], bytes).into_response())
+}
+
+async fn export_decline(State(s): State<Shared>, Path(sha): Path<String>) -> R {
+    sha_ok(&sha)?;
+    let _g = s.write.lock().unwrap();
+    s.papers.set_declined(&sha)?;
+    Ok(Json(json!({ "declined": true })))
+}
+
+/// Papers in this library whose notes changed since they were last saved into a PDF.
+async fn dirty(State(s): State<Shared>) -> R {
+    let l = lib(&s)?;
+    let mut out = vec![];
+    for m in s.papers.list()? {
+        if l.has(&m.sha256) && s.papers.is_dirty(&m.sha256)? {
+            let (dir, name) = default_target(Some(&m));
+            let last = s.papers.export_state(&m.sha256)?.and_then(|st| st.path).filter(|p| std::path::Path::new(p).is_file());
+            out.push(json!({ "sha256": m.sha256, "title": m.title, "last_path": last, "default_dir": dir, "default_name": name }));
+        }
+    }
+    Ok(Json(json!({ "papers": out })))
 }
 
 // ── models ───────────────────────────────────────────────────────────────
