@@ -492,8 +492,10 @@ pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Rep
                 c.arg(format!("--csl={csl}"));
             }
         }
-        if paper.join("reference.docx").is_file() {
-            c.arg("--reference-doc=reference.docx");
+        // a paper opened from Word keeps its original here
+        let reference = paper::app_dir(paper).join("reference.docx");
+        if reference.is_file() {
+            c.arg(format!("--reference-doc={}", reference.display()));
         }
         c
     };
@@ -523,7 +525,7 @@ pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Rep
 }
 
 /// Files of the paper folder that are the app's, not the paper's.
-const APP_FILES: &[&str] = &["citations.csv", "main.bbl", "main.tex", "00README.json", "review.json"];
+const APP_FILES: &[&str] = &["citations.csv", "main.bbl", "main.tex", "00README.json", "review.json", "paper.toml", "notation.json", "draft", "reference.docx"];
 
 /// `export/<name>-latex.zip`: a source package that compiles on its own,
 /// as journals and arXiv want it: main.tex with the sections merged back

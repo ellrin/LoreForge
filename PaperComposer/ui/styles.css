@@ -1237,7 +1237,51 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .home-item:hover .home-more, .home-more:focus-visible { opacity: 1; }
 .home-more:hover { background: var(--surface); }
 
+/* a paper opened where it is (open.js): a folder mark on its card */
+.home-where {
+  position: absolute; bottom: 6px; right: 6px; display: grid; place-items: center;
+  width: 22px; height: 22px; border-radius: 6px; background: var(--panel); color: var(--muted); border: 1px solid var(--line);
+}
+.home-where svg.i { width: 13px; height: 13px; opacity: 1; stroke-width: 1.8; }
+
+/* 最近開啟 under the start screen's cards */
+.open-recent { max-width: 1180px; width: 100%; margin: 8px auto 0; }
+.open-recent .home-sub { margin: 0 0 6px; }
+.open-recent ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; max-width: 640px; }
+.open-recent li { display: flex; align-items: center; gap: 4px; }
+.open-item {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+  background: none; border: 0; border-radius: 6px; color: var(--text); text-align: left; font: 13px var(--sans);
+}
+.open-item:hover:not(:disabled), .open-item:focus-visible { background: var(--surface); }
+.open-item:disabled { opacity: .4; cursor: default; }
+.open-item svg.i { width: 18px; height: 18px; flex: none; color: var(--muted); }
+.open-name { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.open-where { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font: 11.5px var(--mono); color: var(--faint); }
+
+/* the cards of 開啟: preview, where to unpack / convert */
+.open-card .open-path { display: block; font: 11.5px var(--mono); color: var(--faint); overflow-wrap: anywhere; }
+.open-card > .open-path { padding: 0 0 6px; }
+.open-card .nc-row > .ghost.small { flex: none; margin-left: auto; }
+.open-card .form-foot { gap: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+
+/* 這篇在別處改過: 重新載入 / 保留我的版本 */
+.open-conflict {
+  position: fixed; top: 58px; left: 50%; transform: translateX(-50%); z-index: 60;
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; max-width: calc(100vw - 16px);
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; box-shadow: 0 8px 28px #0006;
+  font: 600 13px var(--sans); color: var(--text);
+}
+.open-conflict > span { flex: 1; min-width: 0; }
+.open-conflict button { white-space: nowrap; }
+
 @media (max-width: 1100px) { .home { padding: 24px 20px 48px; } }
+@media (max-width: 640px) {
+  .home-grid.modes { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .home-head { flex-wrap: wrap; }
+  .open-conflict { flex-wrap: wrap; top: 52px; }
+  .open-name { max-width: 60%; }
+}
 @media (prefers-reduced-motion: no-preference) {
   .home-card, .home-more { transition: background .12s, border-color .12s, opacity .12s; }
 }

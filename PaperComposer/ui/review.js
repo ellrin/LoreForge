@@ -417,11 +417,13 @@ const PCReview = (() => {
 
   async function applied(res) {
     data = res.review;
+    if (res.stamp && state.paper) state.paper.stamp = res.stamp;
     paper = state.paper.name;
     for (const sec of res.sections ?? []) {
       const si = secIndex(sec.file);
       if (si < 0) continue;
       sections()[si] = sec;
+      setBase(sec);
       await checkSection(si);
       refreshSection(si);
     }

@@ -1045,7 +1045,7 @@ async fn new_revision(State(s): State<Shared>, AxPath(name): AxPath<String>, Jso
     let lib: Vec<String> = bib::parse(&std::fs::read_to_string(c.ws.join("refs/library.bib")).unwrap_or_default()).0.into_iter().map(|e| e.key).collect();
     let refs: Vec<String> = b.refs.into_iter().filter(|k| lib.contains(k)).collect();
     if !refs.is_empty() {
-        let path = c.dir.join("citations.csv");
+        let path = pc_core::paper::citations_file(&c.dir);
         let mut cit = bib::read_citations(&path);
         for k in &refs {
             cit.entry(k.clone()).or_insert_with(|| format!("修訂：{}", short(&request, 40)));

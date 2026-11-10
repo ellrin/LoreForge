@@ -18,6 +18,7 @@ mod home;
 mod notation;
 pub mod export;
 pub mod import;
+pub mod opened;
 pub mod llm;
 pub mod preview;
 pub mod proc;
@@ -28,6 +29,7 @@ pub mod texfonts;
 pub mod texmeasure;
 pub mod thumb;
 pub mod wizard;
+pub mod word;
 
 use axum::{
     extract::{Path as AxPath, Query as AxQuery, State},
@@ -255,6 +257,8 @@ struct WorkspaceInfo {
     publishers: Vec<String>,
     /// Journal name from each template's README heading, when it has one.
     publisher_titles: std::collections::BTreeMap<String, String>,
+    /// "desktop" when native file dialogs are there (opened.rs), else "browser".
+    shell: &'static str,
 }
 
 fn subdirs(dir: &Path) -> Vec<String> {
@@ -277,11 +281,13 @@ async fn workspace_info(State(s): State<Shared>) -> Json<WorkspaceInfo> {
     Json(WorkspaceInfo {
         root: ws.map(|w| w.display().to_string()),
         demo: l.demo,
-        papers: ws.map(|w| subdirs(&w.join("papers"))).unwrap_or_default(),
+        // names a new paper cannot take: the workspace's and those of papers opened elsewhere
+        papers: ws.map(|w| subdirs(&w.join("papers"))).unwrap_or_default().into_iter().chain(opened::registry().papers.into_iter().map(|e| e.id)).collect(),
         publisher_titles: ws
             .map(|w| pc_core::journal::list(&w.join("publishers")).into_iter().map(|j| (j.id, j.meta.name)).collect())
             .unwrap_or_default(),
         publishers,
+        shell: if opened::DIALOG.get().is_some() { "desktop" } else { "browser" },
     })
 }
 
@@ -690,13 +696,21 @@ async fn paper_dir(s: &Shared, name: &str) -> Result<PathBuf, axum::response::Re
     if !paper::safe_name(name) {
         return Err(bad("invalid paper name"));
     }
-    let l = s.loaded.read().await;
-    let ws = l.workspace.clone().ok_or_else(|| bad("no workspace"))?;
-    let dir = ws.join("papers").join(name);
-    if !dir.is_dir() {
-        return Err((StatusCode::NOT_FOUND, "paper not found").into_response());
+    // the workspace's papers/<name>/, else a folder opened where it is (opened.rs)
+    let ws = s.loaded.read().await.workspace.clone();
+    if let Some(dir) = ws.map(|w| w.join("papers").join(name)).filter(|d| d.is_dir()) {
+        return Ok(dir);
     }
-    Ok(dir)
+    match opened::external_dir(name) {
+        Some(dir) if dir.is_dir() => Ok(dir),
+        Some(dir) => Err((StatusCode::NOT_FOUND, format!("找不到 {}", dir.display())).into_response()),
+        None => Err((StatusCode::NOT_FOUND, "paper not found").into_response()),
+    }
+}
+
+/// A new workspace paper may not take the id of a paper opened elsewhere.
+fn name_taken_outside(name: &str) -> Option<axum::response::Response> {
+    opened::registry().get(name.trim()).map(|_| bad(&format!("已經有一篇叫 {} 的論文", name.trim())))
 }
 
 #[derive(Deserialize)]
@@ -893,6 +907,9 @@ async fn create_paper(State(s): State<Shared>, Json(b): Json<NewPaper>) -> impl 
     let key_value = if b.key_value.trim().is_empty() { String::new() } else { match meta::check_key_value(&b.key_value) { Ok(k) => k, Err(e) => return bad(&e) } };
     let people = match resolve_people(&s, &b.authors).await { Ok(p) => p, Err(e) => return bad(&e) };
     let outline = (!b.outline.is_empty()).then_some(b.outline.as_slice());
+    if let Some(r) = name_taken_outside(&b.name) {
+        return r;
+    }
     let made = match b.template.as_deref().filter(|t| !t.is_empty()) {
         Some(t) if !paper::safe_name(t) => return bad("invalid template"),
         Some(t) => paper::create_paper_from_template_with(&ws.join("papers"), &b.name, &ws.join("publishers").join(t), outline),
@@ -1240,6 +1257,9 @@ async fn import_arxiv(State(s): State<Shared>, Json(b): Json<ArxivImport>) -> im
 async fn import_bytes(s: &Shared, name: &str, key_value: &str, bytes: &[u8], tidy: bool) -> axum::response::Response {
     let key_value = match meta::check_key_value(key_value) { Ok(k) => k, Err(e) => return bad(&e) };
     let Some(ws) = s.loaded.read().await.workspace.clone() else { return bad("no workspace") };
+    if let Some(r) = name_taken_outside(name) {
+        return r;
+    }
     let profile_authors = s.loaded.read().await.profile.as_ref().map(|p| p.authors.clone()).unwrap_or_default();
     let tmp = std::env::temp_dir().join(format!("papercomposer-import-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
     let res = std::fs::create_dir_all(&tmp)
@@ -1799,7 +1819,7 @@ async fn paper_citations(State(s): State<Shared>, AxPath(name): AxPath<String>) 
             serde_json::json!({ "key": e.key, "title": g("title"), "authors": g("author"), "year": g("year"), "venue": venue })
         })
         .collect();
-    Json(serde_json::json!({ "cited": bib::cited_keys(&tex), "purposes": bib::read_citations(&dir.join("citations.csv")), "local": local })).into_response()
+    Json(serde_json::json!({ "cited": bib::cited_keys(&tex), "purposes": bib::read_citations(&paper::citations_file(&dir)), "local": local })).into_response()
 }
 
 #[derive(Deserialize)]
@@ -1810,7 +1830,7 @@ struct Purpose {
 
 async fn set_purpose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<Purpose>) -> impl IntoResponse {
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
-    let path = dir.join("citations.csv");
+    let path = paper::citations_file(&dir);
     let mut c = bib::read_citations(&path);
     if b.purpose.trim().is_empty() { c.remove(&b.key); } else { c.insert(b.key, b.purpose.trim().to_string()); }
     match bib::write_citations(&path, &c) {
@@ -2022,6 +2042,9 @@ async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> imp
             "ref_words": ref_words,
             "captions": captions,
             "limits": limits,
+            // what is on disk now (edits made elsewhere change it), and where
+            "stamp": paper::stamp(&dir),
+            "path": opened::external_dir(&name).filter(|d| *d == dir),
         }))
         .into_response()
         }
@@ -2332,6 +2355,17 @@ async fn paper_figure_sizes(State(s): State<Shared>, AxPath(name): AxPath<String
 struct SectionBody {
     title: String,
     paragraphs: Vec<String>,
+    /// The section as the page last had it from the server: when the file
+    /// no longer reads so (edited elsewhere), the save is refused (409).
+    /// None = write anyway (保留我的版本).
+    #[serde(default)]
+    base: Option<SectionBase>,
+}
+
+#[derive(Deserialize)]
+struct SectionBase {
+    title: String,
+    paragraphs: Vec<String>,
 }
 
 async fn put_section(
@@ -2351,6 +2385,12 @@ async fn put_section(
     let _review = REVIEW_LOCK.lock().await;
     // Keep what follows \section{} (e.g. \label) from the file on disk.
     let was = std::fs::read_to_string(&path).map(|t| paper::parse_section(&file, &t)).ok();
+    if let (Some(base), Some(now)) = (&b.base, &was) {
+        let norm = |p: &[String]| p.iter().map(|x| pc_core::review::norm(x)).collect::<Vec<_>>();
+        if base.title.trim() != now.title.trim() || norm(&base.paragraphs) != norm(&now.paragraphs) {
+            return (StatusCode::CONFLICT, Json(serde_json::json!({ "conflict": true, "section": now }))).into_response();
+        }
+    }
     let tail = was.as_ref().map(|s| s.tail.clone()).unwrap_or_default();
     let section = Section { file: file.clone(), title: b.title, paragraphs: b.paragraphs, tail };
     if let Err(e) = std::fs::create_dir_all(dir.join("sections")).and_then(|_| paper::write_atomic(&path, &paper::render_section(&section))) {
@@ -2360,7 +2400,9 @@ async fn put_section(
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let saved = paper::parse_section(&file, &text);
     review_saved(&dir, &file, &was.map(|s| s.paragraphs).unwrap_or_default(), &saved.paragraphs);
-    Json(saved).into_response()
+    let mut v = serde_json::to_value(&saved).unwrap_or_default();
+    v["stamp"] = serde_json::Value::String(paper::stamp(&dir));
+    Json(v).into_response()
 }
 
 // ── Find & Replace: notation check (find.js) ───────────
@@ -2550,7 +2592,7 @@ async fn decide_review_change(State(s): State<Shared>, AxPath((name, id)): AxPat
         _ => return bad("unknown action"),
     };
     if let Err(e) = pc_core::review::save(&dir, &r) { return bad(&e) }
-    Json(serde_json::json!({ "review": review_view(&dir, &r), "sections": sections, "issues": issues })).into_response()
+    Json(serde_json::json!({ "review": review_view(&dir, &r), "stamp": paper::stamp(&dir), "sections": sections, "issues": issues })).into_response()
 }
 
 async fn decide_review_all(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<DecideBody>) -> impl IntoResponse {
@@ -2585,7 +2627,7 @@ async fn decide_review_all(State(s): State<Shared>, AxPath(name): AxPath<String>
     }
     if let Err(e) = pc_core::review::save(&dir, &r) { return bad(&e) }
     issues.dedup();
-    Json(serde_json::json!({ "review": review_view(&dir, &r), "sections": sections, "issues": issues, "skipped": skipped })).into_response()
+    Json(serde_json::json!({ "review": review_view(&dir, &r), "stamp": paper::stamp(&dir), "sections": sections, "issues": issues, "skipped": skipped })).into_response()
 }
 
 #[derive(Deserialize)]
@@ -3256,6 +3298,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/compose", post(compose_paragraph))
         .merge(draft::routes())
         .merge(home::routes())
+        .merge(opened::routes())
         .fallback_service(ServeDir::new(paths.ui))
         .with_state(state)
 }

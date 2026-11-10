@@ -60,12 +60,12 @@ pub fn check_key_value(s: &str) -> Result<String, String> {
 }
 
 pub fn read_meta(paper: &Path) -> PaperMeta {
-    std::fs::read_to_string(paper.join(META_FILE)).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default()
+    std::fs::read_to_string(crate::paper::app_dir(paper).join(META_FILE)).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default()
 }
 
 pub fn write_meta(paper: &Path, meta: &PaperMeta) -> Result<(), String> {
     let text = toml::to_string(meta).map_err(|e| e.to_string())?;
-    crate::paper::write_atomic(&paper.join(META_FILE), &text).map_err(|e| e.to_string())
+    crate::paper::write_atomic(&crate::paper::app_dir(paper).join(META_FILE), &text).map_err(|e| e.to_string())
 }
 
 /// A section planned before writing: its heading, one or two sentences on

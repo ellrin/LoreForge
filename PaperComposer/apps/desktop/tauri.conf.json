@@ -24,6 +24,22 @@
     "resources": {
       "../../ui": "ui",
       "../../../private-example/PaperComposer": "workspace-template"
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["docx"],
+        "name": "Word 文件",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      },
+      {
+        "ext": ["tex"],
+        "name": "LaTeX 原始檔",
+        "role": "Editor",
+        "rank": "Alternate",
+        "mimeType": "application/x-tex"
+      }
+    ]
   }
 }

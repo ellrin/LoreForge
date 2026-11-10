@@ -14,6 +14,7 @@ pub mod draft;
 pub mod front;
 pub mod journal;
 pub mod meta;
+pub mod open;
 pub mod paper;
 pub mod table;
 pub mod profile;

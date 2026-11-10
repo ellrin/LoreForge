@@ -276,9 +276,21 @@ tlmgr search --global --file /xxx.sty
   找到的直接建檔（書目來自資料庫，簡介與標籤由模型寫），三篇同時進行並顯示進度。需要確認的列出候選讓你選；資料庫都沒有的（例如 Holm 1979，沒有 DOI 也不在 PubMed）可以按「用我貼的書目建檔」，BibTeX 會註明 *Bibliographic data as entered by the author*。在文獻頁使用時，可勾選把備註記到目前開啟的論文。
 - **引用一定送得到 BibTeX，作者的 `.bib` 一律不改寫**：`\bibliography{…}` 列出的每個檔案都會讀取；文獻庫裡有、論文的 `.bib` 沒有的引用，寫到 App 管理的 `pc-refs.bib` 並自動加進 `\bibliography{…}`。論文沒有自己的 `.bib` 時，產生一個只含這篇引用的檔案。
 
+## 開啟 LaTeX… 與開啟 Word…
+
+封面與「寫論文」都有這兩個入口；桌面版用系統的開檔對話框，論文**留在原來的地方**直接編輯、自動存檔（暫存檔＋改名，保留檔案權限）。
+
+- **開啟 LaTeX…**：選專案裡的任一個 `.tex`（開啟它所在的資料夾；`sections/` 裡的檔案開啟上一層），或 `.zip`／`.tar.gz`／`.tgz`（先問解壓縮到哪裡，預設是壓縮檔旁、同名的資料夾）。第一次開啟時列出會改動的每個檔案：新增的章節檔、主檔改名為 `main.tex`、被併入的 `\input` 檔（併入後移除）、主檔沒讀到的 `sections/*.tex`（移到 `unused/`），按「確定」才寫入；預覽之後資料夾有變動就不做，請再開一次。前言裡的 `\input`（例如 `notation.tex`）保持原檔不併入。`.git`、隱藏檔與編譯中間檔不動。已經是 PaperComposer 格式的資料夾直接開啟。
+- **開啟 Word…**：`.docx` **不會被改寫**。轉成一個新的 LaTeX 資料夾（預設是 `.docx` 旁的 `<檔名> (LaTeX)`），原檔存成 `.papercomposer/reference.docx`，之後匯出 Word 沿用它的版面；匯出 Word 一律寫成新檔。需要 [Pandoc](https://pandoc.org/installing.html)（macOS：`brew install pandoc`），沒有時會提示。轉換做的事：Word 不認得的標題樣式（`Heading1`）當標題、手打的章節編號變成 `\label{sec:N}`、兩欄表格裡的公式＋手打 `(N)` 變成 `equation`＋`\label{eq:N}`、圖與表的說明拿掉手打的「Figure N.」並加上 `\label{fig:N}`／`\label{tab:N}`、表格寫成 `table`＋`tabular`（booktabs）、手打的 `[1]`、`[2, 3]`、`[4–6]` 變成 `\cite{ref1}`…、手打的「Fig. 1」「Table 1」「Eq. (1)」「Section 2」在有對應標籤時變成 `\ref`／`\eqref`（沒有對應的留著，對照表檢查會標出來）、參考文獻清單變成 `refs.bib`（每筆先以原文存為 `note`）、作者對到作者資料庫的寫進 `paper.toml`。**追蹤修訂與註解**不會遺失：論文內容是「全部接受」後的版本，每處修訂（含 Word 的作者與時間）與每則註解放進審閱模式（`review.json`，標示「Word 匯入」），在 PaperComposer 裡逐一接受或拒絕。轉換後會用對照表（lore-notation）檢查手打編號與找不到標籤的 `\ref`。
+- **最近開啟**：封面下方列出開過的資料夾，找不到的變灰，可從清單移除（資料夾本身不動）。清單存在設定資料夾的 `opened.toml`（與 `config.toml` 同一處，只屬於這台電腦；清除快取不影響）。
+- **PaperComposer 自己的檔案**：在原地開啟的論文，`paper.toml`、`review.json`、`citations.csv`、`notation.json`、討論草稿都放在論文資料夾裡的隱藏資料夾 `.papercomposer/`，論文資料夾最上層只有 LaTeX；`notation.tex` 照常在最上層、可直接編譯。工作區 `papers/` 裡原有的論文維持原樣（這些檔案在論文資料夾最上層）。匯出的檔案一樣放在論文資料夾的 `export/`（附 `.gitignore`）。
+- **在別處改過**：用其他編輯器改了 `.tex` 或 `git pull` 之後，回到 App（或每幾秒）會發現：沒有正在編輯的段落就直接重新載入；正在編輯時問「重新載入／保留我的版本」。存檔時若檔案已被別處改過，同樣會問，不會默默蓋掉。
+- **Finder**：桌面版登記為 `.docx` 與 `.tex` 的「打開方式」之一（不是預設 App）；從 Finder 用 PaperComposer 打開 `.docx` 走開啟 Word，`.tex` 開啟它的資料夾。
+- **瀏覽器開發模式**沒有檔案路徑：開啟 LaTeX 改用下方的匯入（複製進工作區），開啟 Word 上傳 `.docx` 轉成工作區裡的論文。
+
 ## 匯入現有的論文
 
-論文選單的「匯入」：「從這台電腦」選壓縮檔（`.zip`、`.tar.gz`）或單一 `.tex`，或選整個資料夾（隱藏檔如 `.git` 不帶入）；「從 arXiv」輸入編號／網址（下載作者上傳的 LaTeX 原始檔）。App 找出主檔（arXiv 依 `00README.json` 指定的檔案），展開 `\input`／`\include`／`\subfile`，每個 `\section`（含附錄）成為一個可編輯的章節檔；標題、摘要、參考文獻等章節之間的內容依原順序留在 `main.tex`。`%` 註解原樣保留，圖片、樣式檔、`.bib` 一起帶過來；只附 `.bbl` 的論文直接使用它。
+論文選單的「匯入」（桌面版只剩「從 arXiv」，其他改用開啟 LaTeX…）：「從這台電腦」選壓縮檔（`.zip`、`.tar.gz`）或單一 `.tex`，或選整個資料夾（隱藏檔如 `.git` 不帶入）；「從 arXiv」輸入編號／網址（下載作者上傳的 LaTeX 原始檔）。App 找出主檔（arXiv 依 `00README.json` 指定的檔案），展開 `\input`／`\include`／`\subfile`，每個 `\section`（含附錄）成為一個可編輯的章節檔；標題、摘要、參考文獻等章節之間的內容依原順序留在 `main.tex`。`%` 註解原樣保留，圖片、樣式檔、`.bib` 一起帶過來；只附 `.bbl` 的論文直接使用它。
 
 以 4 篇 arXiv 論文實測（NeurIPS〈Attention Is All You Need〉、IEEE TMI、IEEE TSP、Springer BIT），匯出的 PDF 頁數與 arXiv 版完全相同，逐頁比對只有字型版本造成的細微差異。
 
@@ -430,6 +442,14 @@ scripts/            Git hooks
 | POST | `/api/papers/{name}/export/open` `{ kind, reveal }` | 開啟匯出的檔案，或在資料夾中顯示 |
 | POST | `/api/papers/import?name=&key_value=&tidy=` （本文為 .zip／.tar.gz／.tex） | 匯入現有的 LaTeX 專案；回覆含對應到的模板 `journal`（名稱 `journal_name`）、對到的作者 `authors`、可做的整理 `tidy`（`tidy=1` 時直接整理，結果在 `tidied`）與 `.bib` 併入文獻庫的試算 `bib` |
 | POST | `/api/papers/import-arxiv` `{ id, name?, key_value, tidy? }` | 從 arXiv 匯入原始檔 |
+| POST | `/api/shell/dialog` `{ kind: "latex" \| "word" \| "folder", start? }` | 桌面版的系統開檔對話框，回覆 `{ path }`；瀏覽器模式 501 |
+| POST | `/api/open/inspect` `{ path }` | 看路徑是什麼：已可開啟的論文 `{kind:"paper", id}`、要先整理的 LaTeX 資料夾 `{kind:"latex", plan}`（不寫入任何檔案）、壓縮檔 `{kind:"archive", dest}`、Word `{kind:"word", dest, pandoc}` |
+| POST | `/api/open/latex` `{ path, stamp }` | 照預覽（`plan.stamp`）原地整理並開啟；預覽後資料夾有變動則拒絕 |
+| POST | `/api/open/extract` `{ path, dest }` | 解壓縮到 `dest`（不存在或空的資料夾），再當成 LaTeX 資料夾看 |
+| POST | `/api/open/word` `{ path, dest }` | `.docx` 轉成 `dest` 的 LaTeX 資料夾並開啟；回覆 `converted`（章節、圖、公式、文獻、修訂、註解數與對照表檢查） |
+| POST | `/api/open/word-upload?name=` （本文為 .docx） | 瀏覽器模式：轉成工作區裡的論文 |
+| GET | `/api/open/recent` ／ POST `/api/open/forget` `{ id }` | 最近開啟（`exists` 為 false 表示找不到）／從清單移除 |
+| GET | `/api/papers/{name}/stamp` | 論文來源檔目前的指紋，用來發現別處的修改；`PUT …/sections/{file}` 帶 `base`（上次讀到的章節）時，檔案已被別處改過會回 409 |
 | GET／POST | `/api/papers/{name}/tidy` | 列出／執行整理：有空白的圖檔改名為 `figures/figN.ext`、刪除沒用到的 `.cls`、`.gitignore` 加入 `*-eps-converted-to.pdf`（`renames`、`remove`、`gitignore`） |
 | GET | `/api/papers/{name}/import-summary` | 匯入小卡的內容：`journal`／`journal_name`、整理計畫 `tidy`、`.bib` 試算 `bib` |
 | POST | `/api/papers/{name}/bib/merge` `{ dry_run? }` | 把論文自己的 `.bib` 併入 `refs/library.bib`（key 或 DOI 重複的略過） |

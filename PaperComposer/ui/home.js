@@ -10,7 +10,8 @@ const PCHome = (() => {
   const MODES = [
     { id: "paper", icon: "modePaper", label: "寫論文", enabled: true, onOpen: () => show(2) },
     { id: "book", icon: "modeBook", label: "寫書", enabled: false },
-    { id: "open", icon: "modeOpen", label: "打開檔案", enabled: true, onOpen: (card) => pickFile(card) },
+    { id: "latex", icon: "openLatex", label: "開啟 LaTeX", enabled: true, onOpen: (card) => PCOpen.latex(card) },
+    { id: "word", icon: "openWord", label: "開啟 Word", enabled: true, onOpen: (card) => PCOpen.word(card) },
   ];
 
   let level = 1;
@@ -72,6 +73,9 @@ const PCHome = (() => {
       head.append(el("h2", "", "我要做什麼"));
       box.append(head, grid);
       if (focus) grid.querySelector(".home-card:not(:disabled)")?.focus();
+      // 最近開啟: folders opened where they are (open.js)
+      const recent = await PCOpen.recentList();
+      if (grid.isConnected && level === 1) box.append(recent);
       return;
     }
 
@@ -79,11 +83,16 @@ const PCHome = (() => {
     const back = iconButton("back", "返回", () => show(1));
     const add = el("button", "primary small", "＋ 新論文");
     add.onclick = () => PCNew.open();
-    const imp = el("button", "ghost", "匯入");
-    imp.prepend(icon("upload"));
-    imp.dataset.opensMenu = "";
-    imp.onclick = () => importForm(imp);
-    head.append(back, el("h2", "", "寫論文"), el("span", "grow"), add, imp);
+    const opener = (label, ic, fn) => {
+      const b = el("button", "ghost", label);
+      b.prepend(icon(ic));
+      b.dataset.opensMenu = "";
+      b.onclick = () => fn(b);
+      return b;
+    };
+    head.append(back, el("h2", "", "寫論文"), el("span", "grow"), add, opener("LaTeX…", "openLatex", PCOpen.latex), opener("Word…", "openWord", PCOpen.word));
+    // the desktop app opens files where they are; arXiv still downloads into the workspace
+    if (PCOpen.desktop()) head.append(opener("arXiv", "upload", importForm));
     const sub = el("div", "home-sub", "繼續");
     const grid = el("div", "home-grid papers");
     box.append(head, sub, grid);
@@ -113,6 +122,13 @@ const PCHome = (() => {
     } else art.append(fauxPage(p));
     const c = card(art, p.name, () => openPaper(p.name));
     c.dataset.paper = p.name;
+    // opened where it is: a folder mark, the place on hover
+    if (p.path) {
+      c.title = p.path;
+      const f = el("span", "home-where");
+      f.append(icon("folder"));
+      art.append(f);
+    }
     c.setAttribute("aria-current", String(p.name === state.paper?.name));
     if (p.phase) {
       const b = el("span", "home-badge", PHASES[p.phase] ?? p.phase);
@@ -133,20 +149,6 @@ const PCHome = (() => {
     f.append(el("div", "t", p.title || p.name));
     for (let i = 0; i < 9; i++) f.append(el("i"));
     return f;
-  }
-
-  // 打開檔案: LaTeX goes through the import; PDF and Word are not read yet.
-  function pickFile(anchor) {
-    const f = el("input");
-    f.type = "file";
-    f.accept = ".tex,.zip,.tar.gz,.tgz,.gz,.pdf,.docx";
-    f.onchange = () => {
-      const file = f.files[0];
-      if (!file) return;
-      if (/\.(pdf|docx?)$/i.test(file.name)) { flash("PDF、Word 尚未支援", 4000); return; }
-      importFileForm(file, anchor);
-    };
-    f.click();
   }
 
   // arrows move between cards; Esc goes back a level (or to the open paper)

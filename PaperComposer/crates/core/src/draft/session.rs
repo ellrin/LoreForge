@@ -468,7 +468,7 @@ pub struct GroupState {
 }
 
 pub fn draft_dir(paper: &Path) -> PathBuf {
-    paper.join(DRAFT_DIR)
+    crate::paper::app_dir(paper).join(DRAFT_DIR)
 }
 
 impl Session {

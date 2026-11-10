@@ -134,7 +134,7 @@ pub fn floats(paper: &Path) -> Vec<Float> {
 /// The paper's references: every key in `citations.csv` or cited in the
 /// LaTeX, with the library's title, year, DOI, one-liner and tag labels.
 pub fn refs(workspace: &Path, paper: &Path) -> Vec<RefInfo> {
-    let purposes = bib::read_citations(&paper.join("citations.csv"));
+    let purposes = bib::read_citations(&crate::paper::citations_file(paper));
     let tex: String = crate::paper::section_files(paper)
         .iter()
         .filter_map(|f| std::fs::read_to_string(paper.join("sections").join(f)).ok())

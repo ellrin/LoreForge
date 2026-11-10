@@ -65,7 +65,11 @@ async function api(path, body, method) {
     ? { method: method ?? "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
     : undefined;
   const r = await fetch(path, opts);
-  if (!r.ok) throw new Error((await r.text()) || `${r.status}`);
+  if (!r.ok) {
+    const err = new Error((await r.text()) || `${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
   const text = await r.text();
   return text ? JSON.parse(text) : null;
 }
@@ -97,7 +101,8 @@ async function openPaper(name, { keepHome = false } = {}) {
   if (!keepHome) PCHome.close();
   try {
     const res = await api(`/api/papers/${encodeURIComponent(name)}`);
-    state.paper = { name, sections: res.sections, front: res.front ?? "", back: res.back ?? "", fields: res.fields ?? [], bibliography: res.bibliography ?? [], meta: res.meta ?? { key_value: "", authors: [] }, word_limits: res.word_limits ?? {}, ref_words: res.ref_words ?? {}, captions: res.captions ?? {}, limits: res.limits ?? {} };
+    state.paper = { name, sections: res.sections, front: res.front ?? "", back: res.back ?? "", fields: res.fields ?? [], bibliography: res.bibliography ?? [], meta: res.meta ?? { key_value: "", authors: [] }, word_limits: res.word_limits ?? {}, ref_words: res.ref_words ?? {}, captions: res.captions ?? {}, limits: res.limits ?? {}, stamp: res.stamp, path: res.path ?? null, base: {} };
+    res.sections.forEach(setBase);
     PCTex.setMacros(res.macros ?? {});
     PCTex.setNumbers(res.numbers);
     PCTex.setFigureBase(`/api/papers/${encodeURIComponent(name)}/figure`);
@@ -107,6 +112,7 @@ async function openPaper(name, { keepHome = false } = {}) {
     state.paper = null;
   }
   $("#paperName").textContent = state.paper?.name ?? "—";
+  $("#paperName").title = state.paper?.path ?? "";
   // the checks, and every figure's size (so its place is kept before it loads)
   await Promise.all([checkAll(), loadFigureSizes()]);
   if (!same) $("#pageArea").scrollTop = 0;
@@ -135,10 +141,32 @@ async function checkAll() {
   await Promise.all(sections().map((_, i) => checkSection(i)));
 }
 
-async function saveSection(i) {
+/** A section as the server last gave it: a save says what it replaces. */
+function setBase(sec) {
+  if (state.paper && sec?.file) state.paper.base[sec.file] = { title: sec.title, paragraphs: [...sec.paragraphs] };
+}
+
+async function saveSection(i, force = false) {
   const s = sections()[i];
-  const saved = await api(`/api/papers/${encodeURIComponent(state.paper.name)}/sections/${encodeURIComponent(s.file)}`,
-    { title: s.title, paragraphs: s.paragraphs }, "PUT");
+  const paper = state.paper;
+  // the file changed elsewhere since it was read: ask before writing over it (open.js)
+  const base = force || paper.force ? undefined : paper.base?.[s.file];
+  let saved;
+  try {
+    saved = await api(`/api/papers/${encodeURIComponent(paper.name)}/sections/${encodeURIComponent(s.file)}`,
+      { title: s.title, paragraphs: s.paragraphs, base }, "PUT");
+  } catch (e) {
+    if (e.status !== 409) throw e;
+    if (await PCOpen.conflict() === "mine") return saveSection(i, true);
+    await openPaper(paper.name, { keepHome: true });
+    return;
+  }
+  const reread = paper.force;
+  paper.force = false;
+  if (saved.stamp) paper.stamp = saved.stamp;
+  setBase(saved);
+  // 保留我的版本: mine is written, the other sections are read again
+  if (reread && state.paper === paper) { await openPaper(paper.name, { keepHome: true }); return; }
   sections()[i] = saved;
   window.PCReview?.refresh(); // the server may have recorded this save (review.js)
   await checkSection(i);
@@ -605,6 +633,7 @@ function edit(p, si, pi) {
   ta.oninput = fit;
   ta.onkeydown = (e) => { if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) ta.blur(); };
   ta.onblur = async () => {
+    if (ta.dataset.discard) return; // 重新載入 chose the other version (open.js)
     const v = ta.value.trim();
     const list = sections()[si].paragraphs;
     if (v) list[pi] = v; else list.splice(pi, 1);
@@ -1214,6 +1243,8 @@ function importForm(anchor) {
   folder.title = "含 main.tex 的論文資料夾（.git 等隱藏檔不會帶入）";
   folder.onclick = () => { if (need()) pickFolder(name); };
   row.append(file, folder);
+  // the desktop app opens files where they are (開啟 LaTeX…): here only arXiv
+  if (PCOpen.desktop()) { m.querySelector(".form-head b").textContent = "從 arXiv 匯入"; fromPc.hidden = row.hidden = true; }
   const fromArxiv = el("div", "form-label", "從 arXiv");
   const arow = el("div", "form-row");
   const arxiv = el("input", "field");
@@ -1226,27 +1257,6 @@ function importForm(anchor) {
   m.append(name, kv, fromPc, row, fromArxiv, arow);
   keepOnScreen(m);
   name.focus();
-}
-
-// A file already picked (start screen, 打開檔案): name and Key value, then import.
-function importFileForm(file, anchor) {
-  const m = menuForm("匯入論文", null, anchor);
-  const name = el("input", "field");
-  name.value = importName(file.name);
-  name.placeholder = "論文名稱";
-  const kv = el("input", "field");
-  kv.placeholder = "Key value（必填）：通篇要強調的一件事";
-  name.kv = kv;
-  const go = el("button", "primary small", "匯入");
-  const run = () => {
-    if (!kv.value.trim()) { flash("Key value 必填"); kv.focus(); return; }
-    uploadProject(name, name.value.trim() || importName(file.name), file);
-  };
-  go.onclick = run;
-  kv.onkeydown = (e) => { if (e.key === "Enter") run(); };
-  m.append(el("div", "form-label", file.name), name, kv, go);
-  keepOnScreen(m);
-  kv.focus();
 }
 
 async function importArxiv(input, nameInput) {
@@ -1772,6 +1782,13 @@ async function boot() {
   // setup.js loads after this file; by now it is defined.
   Setup.wire();
   await Setup.maybeOpen();
+  // a file Finder handed to the desktop app (Open With): ?open=<path>
+  const opening = new URLSearchParams(location.search).get("open");
+  if (opening) {
+    history.replaceState(null, "", location.pathname);
+    await PCOpen.path(opening);
+  }
+  PCOpen.watch();
   // A local model may still be starting in the background.
   setTimeout(loadEngines, 15000);
 }

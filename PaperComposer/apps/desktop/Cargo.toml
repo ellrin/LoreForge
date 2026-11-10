@@ -6,6 +6,7 @@ description = "PaperComposer desktop app"
 
 # Desktop shell: starts the local server in-process on a free 127.0.0.1 port and
 # opens a native window on it. Windows uses WebView2, macOS uses WKWebView.
+# Native open dialogs (開啟 LaTeX… / 開啟 Word…) come from tauri-plugin-dialog.
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -13,5 +14,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 pc-server = { path = "../../crates/server" }
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 url = "2"

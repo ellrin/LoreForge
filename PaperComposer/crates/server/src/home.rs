@@ -21,23 +21,38 @@ pub struct Card {
     pub phase: Option<String>,
     /// A compiled PDF exists, so `/thumb` can draw the first page.
     pub thumb: bool,
+    /// Where it is, for a paper opened outside the workspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+fn card(dir: &Path, name: String) -> Card {
+    Card {
+        modified: newest(dir, 3),
+        title: std::fs::read_to_string(dir.join("main.tex")).ok().and_then(|t| title(&t)),
+        phase: phase(dir),
+        thumb: compiled_pdf(dir, &name).is_some(),
+        name,
+        path: None,
+    }
 }
 
 /// Every paper in `papers/`, newest first.
+#[cfg(test)]
 pub fn cards(papers: &Path) -> Vec<Card> {
-    let mut out: Vec<Card> = subdirs(papers)
-        .into_iter()
-        .map(|name| {
-            let dir = papers.join(&name);
-            Card {
-                modified: newest(&dir, 3),
-                title: std::fs::read_to_string(dir.join("main.tex")).ok().and_then(|t| title(&t)),
-                phase: phase(&dir),
-                thumb: compiled_pdf(&dir, &name).is_some(),
-                name,
-            }
-        })
-        .collect();
+    cards_with(papers, &[])
+}
+
+/// The workspace's papers and the folders opened elsewhere that are still
+/// there, newest first.
+pub fn cards_with(papers: &Path, opened: &[(String, PathBuf)]) -> Vec<Card> {
+    let names = if papers.as_os_str().is_empty() { vec![] } else { subdirs(papers) };
+    let mut out: Vec<Card> = names.iter().map(|name| card(&papers.join(name), name.clone())).collect();
+    for (id, dir) in opened {
+        if dir.join("main.tex").is_file() && !names.contains(id) {
+            out.push(Card { path: Some(dir.display().to_string()), ..card(dir, id.clone()) });
+        }
+    }
     out.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.name.cmp(&b.name)));
     out
 }
@@ -132,7 +147,9 @@ fn compiled_pdf(dir: &Path, name: &str) -> Option<PathBuf> {
 
 async fn list(State(s): State<Shared>) -> impl IntoResponse {
     let ws = s.loaded.read().await.workspace.clone();
-    Json(ws.map(|w| cards(&w.join("papers"))).unwrap_or_default())
+    let opened: Vec<(String, PathBuf)> = super::opened::registry().papers.into_iter().map(|e| (e.id, e.path)).collect();
+    let papers = ws.map(|w| w.join("papers")).unwrap_or_default();
+    Json(cards_with(&papers, &opened))
 }
 
 /// The first page of the paper's newest compiled PDF, about 384 px wide.
@@ -211,6 +228,20 @@ mod tests {
         // an edit moves a paper to the front
         set(&papers.join("ellrin-notes/sections/intro.tex"), 3_000_000);
         assert_eq!(cards(&papers)[0].name, "ellrin-notes");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lists_papers_opened_elsewhere_with_their_place() {
+        let root = std::env::temp_dir().join(format!("pc-home-ext-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ext = root.join("Projects/daidai draft");
+        std::fs::create_dir_all(&ext).unwrap();
+        std::fs::write(ext.join("main.tex"), "\\title{Outside}\n").unwrap();
+        let gone = root.join("Projects/moved away");
+        let c = cards_with(&root.join("ws/papers"), &[("daidai draft".into(), ext.clone()), ("moved away".into(), gone)]);
+        assert_eq!(c.len(), 1, "a folder that is gone is not a card");
+        assert_eq!((c[0].name.as_str(), c[0].title.as_deref(), c[0].path.as_deref()), ("daidai draft", Some("Outside"), Some(ext.to_str().unwrap())));
         let _ = std::fs::remove_dir_all(&root);
     }
 

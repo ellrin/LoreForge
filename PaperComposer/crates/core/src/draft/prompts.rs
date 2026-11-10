@@ -436,7 +436,7 @@ pub struct RefNote {
 /// `citations.csv` (only the paper's own keys; a note already there is not
 /// repeated). Returns the keys that changed.
 pub fn add_ref_notes(paper: &std::path::Path, notes: &[RefNote], known: &[String]) -> std::io::Result<Vec<String>> {
-    let path = paper.join("citations.csv");
+    let path = crate::paper::citations_file(paper);
     let mut c = crate::bib::read_citations(&path);
     let mut changed = vec![];
     for n in notes {

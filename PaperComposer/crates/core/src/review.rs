@@ -121,13 +121,13 @@ pub struct Reply {
 
 /// `review.json` of a paper (an empty review when missing or unreadable).
 pub fn load(paper_dir: &Path) -> Review {
-    std::fs::read_to_string(paper_dir.join(FILE)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    std::fs::read_to_string(paper::app_dir(paper_dir).join(FILE)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
 /// Write `review.json` atomically. An empty review with tracking off and no
 /// file yet writes nothing, so papers that never use review stay as they are.
 pub fn save(paper_dir: &Path, r: &Review) -> Result<(), String> {
-    let path = paper_dir.join(FILE);
+    let path = paper::app_dir(paper_dir).join(FILE);
     if !path.exists() && !r.tracking && r.changes.is_empty() && r.comments.is_empty() && r.extra.is_empty() {
         return Ok(());
     }

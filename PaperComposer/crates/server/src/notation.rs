@@ -24,7 +24,7 @@ const SHOWN: &[&str] = &[
 
 pub fn load(workspace: &Path, paper: &Path) -> Notation {
     let global = Notation::load(&workspace.join("profile/notation.json")).unwrap_or_default();
-    let doc = Notation::load(&paper.join("notation.json")).unwrap_or_default();
+    let doc = Notation::load(&pc_core::paper::app_dir(paper).join("notation.json")).unwrap_or_default();
     Notation::effective(&global, &doc)
 }
 
@@ -174,7 +174,7 @@ pub fn check(paper: &Path, n: &Notation, opt: &CheckOptions, others: &[String], 
 /// Add symbols to the paper's own registry, tagged `suggested` for review.
 /// Returns how many were new.
 pub fn register(paper: &Path, latex: &[String]) -> Result<usize, String> {
-    let path = paper.join("notation.json");
+    let path = pc_core::paper::app_dir(paper).join("notation.json");
     let mut n = Notation::load(&path)?;
     let mut added = 0;
     for l in latex.iter().map(|l| l.trim()).filter(|l| !l.is_empty()) {

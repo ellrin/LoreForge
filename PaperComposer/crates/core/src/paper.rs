@@ -424,6 +424,18 @@ pub fn paper_macros(paper: &Path) -> std::collections::BTreeMap<String, String> 
             }
         }
     }
+    // files the preamble \inputs (notation.tex, a co-author's defs.tex)
+    let main = std::fs::read_to_string(paper.join("main.tex")).unwrap_or_default();
+    let preamble = &main[..main.find("\\begin{document}").unwrap_or(main.len())];
+    for line in preamble.lines().map(strip_comment) {
+        for (i, _) in line.match_indices("\\input{") {
+            if let Some((arg, _)) = braced(&line[i + "\\input".len()..]) {
+                if let Some(f) = resolve_tex(paper, paper, arg.trim()).filter(|f| !files.contains(f)) {
+                    files.push(f);
+                }
+            }
+        }
+    }
     for f in files {
         if let Ok(src) = std::fs::read_to_string(f) {
             out.extend(extract_macros(&src));
@@ -892,24 +904,71 @@ pub fn import_paper(papers: &Path, name: &str, src: &Path) -> Result<PathBuf, St
     if !safe_name(name) {
         return Err("名稱只能用文字、數字、空格、- _ .".into());
     }
-    let main_path = find_main_tex(src).ok_or("找不到主檔（有 \\documentclass 與 \\begin{document} 的 .tex）")?;
-    let base = main_path.parent().unwrap_or(src).to_path_buf();
-    let mut used = vec![main_path.clone()];
-    let text = flatten(&base, &base, &read_tex(&main_path).unwrap_or_default(), &mut used, 0);
-    let split = split_sample(&text, true).ok_or("主檔裡找不到 \\begin{document}")?;
     let dir = papers.join(name);
     if dir.exists() {
         return Err(format!("已經有一篇叫 {name} 的論文"));
     }
+    import_into(&dir, src)?;
+    Ok(dir)
+}
+
+/// The project in `src` as it would be imported: its main file, the folder
+/// it sits in (the paper folder), the .tex files merged into it, and the
+/// document split into sections.
+pub struct Flattened {
+    pub main: PathBuf,
+    pub base: PathBuf,
+    /// The main file and every file its body takes in.
+    pub used: Vec<PathBuf>,
+    split: Sample,
+}
+
+/// Read and flatten a project. Only the document body's `\input`s are
+/// merged: the preamble's (notation.tex, macros) stay files of their own.
+pub fn flatten_project(src: &Path) -> Result<Flattened, String> {
+    let main = find_main_tex(src).ok_or("找不到主檔（有 \\documentclass 與 \\begin{document} 的 .tex）")?;
+    let base = main.parent().unwrap_or(src).to_path_buf();
+    let mut used = vec![main.clone()];
+    let raw = read_tex(&main).unwrap_or_default();
+    let at = raw.find("\\begin{document}").ok_or("主檔裡找不到 \\begin{document}")?;
+    let text = format!("{}{}", &raw[..at], flatten(&base, &base, &raw[at..], &mut used, 0));
+    let split = split_sample(&text, true).ok_or("主檔裡找不到 \\begin{document}")?;
+    Ok(Flattened { main, base, used, split })
+}
+
+/// Import the project in `src` into the folder `dir` (created when missing;
+/// it must not hold a main.tex yet): main.tex plus one file per section,
+/// every other file copied.
+pub fn import_into(dir: &Path, src: &Path) -> Result<(), String> {
+    let f = flatten_project(src)?;
+    if dir.join("main.tex").exists() {
+        return Err(format!("{} 已經有 main.tex", dir.display()));
+    }
     let io = |e: std::io::Error| e.to_string();
-    std::fs::create_dir_all(&dir).map_err(io)?;
-    copy_project(&base, &dir, &used, false).map_err(io)?;
-    let bbl = main_path.with_extension("bbl");
+    std::fs::create_dir_all(dir).map_err(io)?;
+    copy_project(&f.base, dir, &f.used, false).map_err(io)?;
+    let bbl = f.main.with_extension("bbl");
     if bbl.is_file() {
         std::fs::copy(&bbl, dir.join("main.bbl")).map_err(io)?;
     }
-    write_split(&dir, &split)?;
-    Ok(dir)
+    write_split(dir, &f.split)
+}
+
+/// A LaTeX document (one file, \input already merged) split the way an
+/// import splits it: (section file name, section) in order. Used to compare
+/// two versions of the same document.
+pub fn split_sections(text: &str) -> Vec<Section> {
+    let Some(split) = split_sample(text, true) else { return vec![] };
+    let mut out = Vec::new();
+    for piece in &split.pieces {
+        if let Piece::Section { title, tail, body } = piece {
+            let file = format!("{:02}-{}.tex", out.len() + 1, slug(title));
+            let mut s = parse_section(&file, &format!("\\section{{{title}}}{tail}\n{body}"));
+            s.file = file;
+            out.push(s);
+        }
+    }
+    out
 }
 
 /// Optional clean-up after an import, offered to the user, never automatic.
@@ -1319,10 +1378,59 @@ fn copy_support(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 /// Atomic write (temp file + rename) so a crash never leaves half a file.
+/// A file that exists keeps its permissions.
 pub fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
-    let tmp: PathBuf = path.with_extension("tmp~");
+    write_atomic_bytes(path, content.as_bytes())
+}
+
+pub fn write_atomic_bytes(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp: PathBuf = path.with_file_name(format!(".{name}.tmp~"));
     std::fs::write(&tmp, content)?;
-    std::fs::rename(&tmp, path)
+    if let Ok(m) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp, m.permissions());
+    }
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// PaperComposer's own files of a paper (paper.toml, review.json,
+/// citations.csv, notation.json, draft/, reference.docx) live in this
+/// hidden folder when the paper has one. A paper opened where it is (a
+/// co-author's project) gets it, so the project's top level shows only
+/// LaTeX; papers made in the workspace keep these files at their top level.
+pub const APP_DIR: &str = ".papercomposer";
+
+pub fn app_dir(paper: &Path) -> PathBuf {
+    let d = paper.join(APP_DIR);
+    if d.is_dir() { d } else { paper.to_path_buf() }
+}
+
+/// What each reference is used for in this paper.
+pub fn citations_file(paper: &Path) -> PathBuf {
+    app_dir(paper).join("citations.csv")
+}
+
+/// The paper's sources as they are on disk now (main.tex and the section
+/// files), by content: another editor or a `git pull` changes it.
+pub fn stamp(paper: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::fs::read(paper.join("main.tex")).unwrap_or_default().hash(&mut h);
+    let mut files: Vec<String> = std::fs::read_dir(paper.join("sections"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.ends_with(".tex"))
+        .collect();
+    files.sort();
+    for f in files {
+        f.hash(&mut h);
+        std::fs::read(paper.join("sections").join(&f)).unwrap_or_default().hash(&mut h);
+    }
+    format!("{:016x}", h.finish())
 }
 
 #[cfg(test)]
