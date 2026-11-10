@@ -434,3 +434,7 @@ button.chip.warn { cursor: pointer; }
 .nn-row.on .nn-num { visibility: hidden; }
 .nn-row.on .nn-acts { background: var(--panel); }
 .para-chips .chip-b[hidden] { display: none !important; }
+/* ≤640px: the unsaved-pages badge becomes a dot (tooltip and click stay) */
+@media (max-width: 640px) {
+  #editChip { font-size: 0; width: 12px; height: 12px; padding: 0; border-radius: 50%; background: var(--warn); flex: none; }
+}
