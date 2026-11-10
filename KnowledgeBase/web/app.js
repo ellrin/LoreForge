@@ -1,8 +1,8 @@
 // KnowledgeBase web UI: card list with filters, card editor (Markdown + KaTeX
 // preview, image paste/drop, link picker), review, timeline, graph, settings
-// (reminders). Talks only to kb-server's JSON API (same origin).
+// (對照表, reminders in the gear). Talks only to kb-server's JSON API (same origin).
 // Routes (other apps link here, e.g. NeonDeck and the e-mail digest):
-//   #/node/<id>  #/new  #/review  #/timeline  #/graph  #/graph/<id> (local graph)  #/settings  #/cards
+//   #/node/<id>  #/new  #/review  #/timeline  #/graph  #/graph/<id> (local graph)  #/settings (opens the gear)  #/cards
 
 const $ = (id) => document.getElementById(id);
 
@@ -38,15 +38,8 @@ async function api(method, path, body, raw) {
   return data ?? {};
 }
 
-let toastTimer;
-/** Short message at the bottom. `action`: { label, run } adds a button (e.g. 復原). */
-function toast(msg, err = false, action = null) {
-  const t = $("toast");
-  t.replaceChildren(...[h("span", {}, msg), action && h("button", { type: "button", class: "toast-act", onclick: () => { t.hidden = true; action.run(); } }, action.label)].filter(Boolean));
-  t.className = err ? "toast err" : "toast"; t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), action ? 8000 : err ? 5000 : 2600);
-}
+/** Short message at the bottom (the shell's). `action`: { label, run } adds a button (e.g. 復原). */
+const toast = (msg, err = false, action = null) => LoreShell.toast(msg, { err, action });
 const fail = (e) => toast(errorText(e), true);
 const hasCJK = (s) => /[\u3400-\u9fff]/.test(s ?? "");
 /** Drop a trailing raw (English) detail the server keeps for troubleshooting: 「…（Connection refused）」. */
@@ -110,6 +103,7 @@ const spaceName = (id) => S.spaces.find((s) => s.id === id)?.name ?? id;
 
 // ── Boot ───────────────────────────────────────────────
 async function boot() {
+  mountShell();
   paintIcons();
   try {
     const sp = await api("GET", "/api/spaces");
@@ -134,14 +128,21 @@ async function boot() {
 }
 
 // ── Routes ─────────────────────────────────────────────
-const VIEWS = ["cards", "review", "timeline", "graph", "settings"];
+const VIEWS = ["cards", "review", "timeline", "graph"];
 /** Show what the URL hash names; false when it names nothing. */
 function route() {
   const m = location.hash.match(/^#\/(\w+)(?:\/([\w-]+))?/);
   if (!m) return false;
   // Leaving the editor with unsaved changes: ask first; on "no" put the address back.
   const target = m[1] === "node" ? `#/node/${m[2]}` : m[1] === "new" ? "#/new" : null;
-  if (S.view === "editor" && edHash() !== location.hash && !leaveEditorOk()) { history.replaceState(null, "", edHash()); return true; }
+  if (S.view === "editor" && edHash() !== location.hash && isDirty()) {
+    // Unsaved changes: put the address back, ask, and go on to where it was headed.
+    const wanted = location.hash;
+    history.replaceState(null, "", edHash());
+    askLeave().then((ok) => { if (ok) location.hash = wanted; });
+    return true;
+  }
+  if (m[1] === "settings") { LoreShell.settings(); setHash(S.view === "editor" ? edHash() : `#/${S.view}`); return true; }
   if (m[1] === "node" && m[2]) { if (target !== edHash() || S.view !== "editor") openEditor(m[2]); return true; }
   if (m[1] === "new") { if (S.view !== "editor" || S.ed?.id) openEditor(null); return true; }
   if (m[1] === "graph") { S.graphCenter = m[2] ?? null; setView("graph"); return true; }
@@ -186,29 +187,28 @@ async function refreshMeta() {
 
 // ── Views ──────────────────────────────────────────────
 function setView(v) {
-  if (S.view === "editor" && v !== "editor" && !leaveEditorOk()) { setHash(edHash()); return false; }
+  if (S.view === "editor" && v !== "editor" && isDirty()) {
+    setHash(edHash());
+    askLeave().then((ok) => { if (ok) showView(v); });
+    return false;
+  }
+  return showView(v);
+}
+function showView(v) {
   S.view = v;
   document.querySelectorAll(".view").forEach((s) => (s.hidden = s.dataset.view !== v));
   document.querySelectorAll("#views button").forEach((b) => b.toggleAttribute("aria-current", b.dataset.view === v || (v === "editor" && b.dataset.view === "cards")));
   document.querySelectorAll("#views button[aria-current]").forEach((b) => b.setAttribute("aria-current", "page"));
   $("filters").hidden = !(v === "cards");
-  setNav(false);
+  shell.drawer("left", false);
+  paintStatus();
   if (v !== "graph") Graph.hide();
   if (v === "cards") loadCards();
   if (v === "review") loadReview();
   if (v === "timeline") loadTimeline();
   if (v === "graph") loadGraph();
-  if (v === "settings") loadSettings();
   if (VIEWS.includes(v)) setHash(v === "graph" && S.graphCenter ? `#/graph/${S.graphCenter}` : `#/${v}`);
   return true;
-}
-
-/** Narrow screens: the side panel slides over the page with a backdrop; Esc or a tap outside closes it. */
-function setNav(open) {
-  $("left").classList.toggle("open", open);
-  $("navBackdrop").hidden = !open;
-  $("actNav").setAttribute("aria-expanded", String(open));
-  if (open) $("left").querySelector("button[aria-current], button")?.focus();
 }
 
 function wire() {
@@ -226,20 +226,8 @@ function wire() {
   });
   let qt;
   $("q").addEventListener("input", () => { clearTimeout(qt); qt = setTimeout(() => { if (S.view !== "cards") setView("cards"); else loadCards(); }, 200); });
-  $("actNew").onclick = () => openEditor(null);
-  $("actNav").onclick = () => setNav(!$("left").classList.contains("open"));
-  $("navBackdrop").onclick = () => setNav(false);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && $("left").classList.contains("open")) { setNav(false); $("actNav").focus(); }
-  });
-  // 外觀: the theme all LoreForge apps share (theme.js)
-  LoreTheme.picker($("themePick"));
+  // 外觀 is the shell's (the theme all LoreForge apps share)
   document.addEventListener("lore-theme", () => { if (S.view === "graph") Graph.draw(); });
-  $("actReindex").onclick = async (e) => {
-    const b = e.currentTarget; b.classList.add("busy");
-    try { const r = await api("POST", "/api/reindex"); toast(`已重建索引：${r.nodes} 張卡片${r.errors.length ? `，${r.errors.length} 個檔案無法讀取` : ""}`); await refreshMeta(); setView(S.view); }
-    catch (er) { fail(er); } finally { b.classList.remove("busy"); }
-  };
   wireEditor();
   $("tlDays").onchange = loadTimeline;
   Graph.init($("graphWrap"), {
@@ -250,7 +238,7 @@ function wire() {
     info: (t) => ($("graphInfo").textContent = t),
     kindLabel, relLabel, spaceName, domainLabel, domainSlot, fail, toast,
   });
-  wireSettings();
+  wireNotation();
   document.addEventListener("keydown", reviewKeys);
 }
 
@@ -377,15 +365,26 @@ function markClean() {
 }
 function updateDirty() {
   const d = isDirty();
-  $("edDirty").hidden = !d;
+  paintStatus();
   if (d) try { localStorage.setItem(draftKey(S.ed.id), JSON.stringify({ at: new Date().toISOString(), revision: S.ed.revision, state: edState() })); } catch {}
 }
-/** True when it is fine to leave the editor (nothing unsaved, or the author agreed). */
-function leaveEditorOk() {
-  if (!isDirty()) return true;
-  if (!confirm("這張卡有未儲存的修改，確定要離開嗎？\n（修改已暫存成草稿，下次打開這張卡可以還原）")) return false;
-  S.ed.leaving = true;
+/** Ask before leaving unsaved changes (next to the status chip); yes = leave, the draft stays in localStorage. */
+async function askLeave() {
+  const ok = await LoreShell.ask(document.querySelector(".fstate:not([hidden])") ?? $("edBack"),
+    ["這張卡有未儲存的修改，確定要離開嗎？", "修改已暫存成草稿，下次打開這張卡可以還原"],
+    [{ label: "留下", value: false }, { label: "離開", value: true, primary: true }]);
+  if (ok !== true) return false;
+  if (S.ed) S.ed.leaving = true;
   return true;
+}
+/** The one status chip, only while a card is open: 未儲存 / 儲存中 / 已儲存. */
+function paintStatus() {
+  if (!shell) return;
+  if (S.view !== "editor" || !S.ed) shell.setStatus(null);
+  else if (S.ed.saving) shell.setStatus("saving");
+  else if (isDirty()) shell.setStatus("dirty");
+  else if (S.ed.id) shell.setStatus("saved");
+  else shell.setStatus(null);
 }
 window.addEventListener("beforeunload", (e) => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
 
@@ -416,12 +415,9 @@ function wireEditor() {
   $("edForm").addEventListener("submit", (e) => { e.preventDefault(); saveCard(); });
   let pt;
   $("edForm").addEventListener("input", () => { clearTimeout(pt); pt = setTimeout(() => { renderPreview(); updateDirty(); }, 120); });
-  // Enter in the title saves (not while an IME is composing); ⌘S / Ctrl+S saves anywhere in the editor.
+  // Enter in the title saves (not while an IME is composing); ⌘S is the shell's.
   $("edTitle").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); saveCard(); }
-  });
-  document.addEventListener("keydown", (e) => {
-    if (S.view === "editor" && (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "s") { e.preventDefault(); if (!e.repeat) saveCard(); }
   });
   $("edSpace").onchange = renderPreview;
   $("edDelete").onclick = deleteCard;
@@ -444,7 +440,6 @@ function wireEditor() {
   $("edImageFile").onchange = (e) => { [...e.target.files].forEach((f) => uploadImage(f)); e.target.value = ""; };
   $("edInsertLink").onclick = () => pick("wiki");
   $("edAddLink").onclick = () => pick("link");
-  $("edDraft").onclick = () => { $("draftTerm").value = $("edTitle").value; $("draftDlg").showModal(); };
   $("draftGo").onclick = async (e) => {
     e.preventDefault();
     const go = $("draftGo"), err = $("draftErr");
@@ -458,19 +453,19 @@ function wireEditor() {
       renderPreview(); updateDirty();
       toast(`草稿已填入（${assistant}）`);
     } catch (er) { err.textContent = errorText(er); err.hidden = false; } // the dialog stays open with the source text
-    go.disabled = false; go.textContent = "起草";
+    go.disabled = false; go.replaceChildren(icon("spark"), "起草");
   };
   let pq;
   $("pickerQ").addEventListener("input", () => { clearTimeout(pq); pq = setTimeout(searchPicker, 150); });
 }
 
 async function openEditor(id) {
-  if (S.view === "editor" && (S.ed?.id ?? null) !== (id ?? null) && !leaveEditorOk()) { setHash(edHash()); return; }
+  if (S.view === "editor" && (S.ed?.id ?? null) !== (id ?? null) && isDirty() && !(await askLeave())) { setHash(edHash()); return; }
   if (S.view === "editor" && S.ed) S.ed.leaving = true;
   setView("editor");
   setHash(id ? `#/node/${id}` : "#/new");
   const isNew = !id;
-  $("edDraftBar").hidden = true; $("edDirty").hidden = true;
+  $("edDraftBar").hidden = true;
   $("edDelete").hidden = isNew; $("edGraph").hidden = isNew; $("edShareWrap").hidden = true;
   $("edSpace").disabled = !isNew;
   $("edHeading").textContent = isNew ? "新增知識卡" : "編輯知識卡";
@@ -483,7 +478,7 @@ async function openEditor(id) {
     $("edSpace").value = def?.id ?? "";
     $("edMeta").textContent = "";
     renderEdLists(); renderPreview();
-    S.ed.snap = edState(); offerDraft();
+    S.ed.snap = edState(); offerDraft(); paintStatus();
     $("edTitle").focus();
     return;
   }
@@ -503,7 +498,7 @@ async function openEditor(id) {
     }
     renderEdLists(); renderPreview();
     renderSide(v);
-    S.ed.snap = edState(); offerDraft();
+    S.ed.snap = edState(); offerDraft(); paintStatus();
   } catch (e) { fail(e); S.ed = null; setView("cards"); }
 }
 
@@ -622,7 +617,7 @@ function fieldsFromForm() {
 async function saveCard() {
   if (!S.ed || S.ed.saving) return;
   if (!$("edTitle").value.trim()) { toast("請輸入標題", true); $("edTitle").focus(); return; }
-  S.ed.saving = true; $("edSave").disabled = true;
+  S.ed.saving = true; $("edSave").disabled = true; paintStatus();
   try {
     let id;
     const wasNew = !S.ed.id;
@@ -640,7 +635,7 @@ async function saveCard() {
     S.ed.leaving = true;
     await openEditor(id);
   } catch (e) { fail(e); }
-  finally { S.ed && (S.ed.saving = false); $("edSave").disabled = false; }
+  finally { S.ed && (S.ed.saving = false); $("edSave").disabled = false; paintStatus(); }
 }
 
 /** Delete = move to the trash; the toast offers 復原 (no confirm dialog). */
@@ -668,8 +663,9 @@ async function restoreCard(id, title) {
 async function shareCard() {
   const to = $("edShareTo").value;
   const target = S.spaces.find((s) => s.id === to);
-  const note = target?.kind === "household" ? "\n\n會複製一份到家庭空間（新的 id，圖片轉成 webp 存進共用 repo）；指向個人卡片的連結不會帶過去。" : "";
-  if (!confirm(`把「${$("edTitle").value}」分享（複製）到「${target?.name ?? to}」？${note}`)) return;
+  const lines = [`把「${$("edTitle").value}」分享（複製）到「${target?.name ?? to}」？`];
+  if (target?.kind === "household") lines.push("會複製一份到家庭空間（新的 id，圖片轉成 webp 存進共用 repo）；指向個人卡片的連結不會帶過去。");
+  if (!(await LoreShell.ask($("edShare"), lines, [{ label: "取消", value: null }, { label: "分享", value: true, primary: true }]))) return;
   try { const r = await api("POST", `/api/nodes/${S.ed.id}/share`, { to_space: to }); toast(`已分享到 ${target?.name ?? to}`); await refreshMeta(); S.ed.leaving = true; openEditor(r.node.id); }
   catch (e) { fail(e); }
 }
@@ -831,34 +827,147 @@ function loadGraph() {
   Graph.show(S.graphCenter);
 }
 
-// ── Settings: reminders ────────────────────────────────
+// ── The shell: top bar, gear, 對照表, 匯出 ─────────────
+let shell = null;
+function mountShell() {
+  const inEditor = () => S.view === "editor" && !!S.ed;
+  shell = LoreShell.mount({
+    app: "kb", brand: "KNOWLEDGE/BASE", host: "header.top",
+    home: () => setView("cards"),
+    status: { onClick: () => saveCard() },
+    primary: [{ id: "actNew", icon: "plus", label: "新增知識卡", run: () => openEditor(null) }],
+    ai: { id: "actDraft", icon: "spark", label: "起草摘要", run: openDraft },
+    notation: openNotation,
+    export: [
+      { icon: "download", label: "匯出 Markdown", run: exportMarkdown, get disabled() { return !inEditor(); } },
+      { icon: "printer", label: "列印", run: () => window.print(), get disabled() { return !inEditor(); } },
+    ],
+    drawers: { left: "#left", leftLabel: "導覽", leftIcon: "panelLeft" },
+    search: () => { $("q").focus(); $("q").select(); },
+    save: () => { if (inEditor()) saveCard(); },
+    general: buildGeneral,
+    settingsTabs: [{ id: "notify", label: "提醒", build: buildNotify }, { id: "email", label: "郵件", build: buildEmail }],
+    keys: [{ label: "複習：記得", keys: "1", group: "其他" }, { label: "複習：忘了", keys: "2", group: "其他" }, { label: "複習：看答案", keys: "Space", group: "其他" }],
+  });
+  // 搜尋 and the current user sit in the lead slot
+  shell.slots.lead.append(
+    h("label", { class: "search" }, h("span", { "data-icon": "search" }), h("input", { id: "q", type: "search", placeholder: "搜尋標題、別名、摘要、內文…", autocomplete: "off", "aria-label": "搜尋" })),
+    h("span", { class: "chip", id: "memberChip", title: "目前使用者" }));
+  paintIcons(shell.slots.lead);
+}
+
+/** 起草摘要: the draft dialog for the card being edited (opens a new card first when none is). */
+async function openDraft() {
+  if (!(S.view === "editor" && S.ed)) { await openEditor(null); if (S.view !== "editor") return; }
+  $("draftTerm").value = $("edTitle").value;
+  $("draftDlg").showModal();
+}
+
+// 匯出: the card in the editor as Markdown; 列印 prints its sheet (print rules in styles.css).
+function cardMarkdown() {
+  const f = fieldsFromForm();
+  const out = [`# ${f.title.trim() || "未命名"}`];
+  if (f.aliases.length) out.push("", `別名：${f.aliases.join("、")}`);
+  if (f.summary.trim()) out.push("", ...f.summary.trim().split("\n").map((l) => `> ${l}`));
+  if (f.body.trim()) out.push("", f.body.trim());
+  return `${out.join("\n")}\n`;
+}
+function exportMarkdown() {
+  if (!S.ed) return;
+  const name = ($("edTitle").value.trim() || "未命名").replace(/[\\/:*?"<>|]+/g, "-");
+  const url = URL.createObjectURL(new Blob([cardMarkdown()], { type: "text/markdown;charset=utf-8" }));
+  const a = h("a", { href: url, download: `${name}.md` });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// ── 對照表: the global registry (private/shared/notation.json) in the shared <notation-panel> ──
+const NT = { timer: 0 };
+async function openNotation() {
+  try { $("ntPanel").notation = await api("GET", "/api/notation"); } catch (e) { fail(e); return; }
+  $("ntState").hidden = true;
+  $("dlgNotation").showModal();
+}
+function wireNotation() {
+  const p = $("ntPanel"), st = $("ntState");
+  const save = () => {
+    clearTimeout(NT.timer);
+    st.hidden = false; st.textContent = "未儲存";
+    NT.timer = setTimeout(async () => {
+      try { await api("PUT", "/api/notation", p.notation); st.textContent = "已儲存"; }
+      catch (e) { fail(e); }
+    }, 500);
+  };
+  for (const ev of ["notation-change", "notation-add", "notation-delete"]) p.addEventListener(ev, save);
+  $("dlgNotation").querySelector(".close").onclick = () => $("dlgNotation").close();
+}
+
+// ── Gear: 一般 (today's numbers, 重建索引), 提醒, 郵件 ─────
 const SEC_PORT = { starttls: 587, tls: 465 };
 const NUM_RANGE = { ePort: [1, 65535], eDays: [1, 60], eMax: [1, 200] };
 const EMAIL_RE = /^[^\s@<>()",;]+@[^\s@<>()",;]+\.[^\s@<>()",;]+$/;
 const PW_SOURCE = { keychain: "存在鑰匙圈", env: "來自環境變數 KB_SMTP_PASSWORD", file: "存在設定資料夾的 credentials.toml（鑰匙圈無法使用時的備用，只有你的帳號能讀）" };
 
-function wireSettings() {
-  $("setEmail").addEventListener("submit", (e) => { e.preventDefault(); saveSettings(); });
+async function buildGeneral(el) {
+  const strip = h("div", { class: "stat-strip", "aria-label": "今日數字" });
+  const file = h("p", { class: "muted small" });
+  const btn = h("button", { type: "button", class: "btn", id: "actReindex", onclick: reindex }, icon("refresh"), "重建索引");
+  el.append(strip, h("div", { class: "set-actions" }, btn), file);
+  try {
+    const [r, st] = await Promise.all([api("GET", "/api/reminders"), api("GET", "/api/stats")]);
+    S.reminders = r;
+    const n = st.stats;
+    strip.replaceChildren(...[["今天新增", n.new_today], ["待複習", n.due], ["7 天內記住", n.known_week], ["全部卡片", n.total]]
+      .map(([k, v]) => h("div", {}, h("b", {}, v), h("span", {}, k))));
+    file.textContent = r.settings_file ? `設定檔：${r.settings_file}（不在任何 repo 內）` : "";
+  } catch (e) { fail(e); }
+}
+
+async function reindex(e) {
+  const b = e.currentTarget; b.classList.add("busy"); b.disabled = true;
+  try { const r = await api("POST", "/api/reindex"); toast(`已重建索引：${r.nodes} 張卡片${r.errors.length ? `，${r.errors.length} 個檔案無法讀取` : ""}`); await refreshMeta(); }
+  catch (er) { fail(er); } finally { b.classList.remove("busy"); b.disabled = false; }
+}
+
+async function loadReminders() {
+  S.reminders = await api("GET", "/api/reminders");
+}
+
+async function buildNotify(el) {
+  el.append($("tplNotify").content.cloneNode(true));
+  paintIcons(el);
   $("setNotify").addEventListener("submit", (e) => { e.preventDefault(); saveSettings(); });
+  for (const f of el.querySelectorAll("input")) f.addEventListener("input", () => fieldError(f, null));
+  $("nTimes").addEventListener("input", () => warnTimes());
+  $("nTimes").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); saveSettings(); } });
+  $("nTest").onclick = async () => {
+    try { const r = await api("POST", "/api/reminders/test-notify"); toast(`已送出通知：${r.title}`); }
+    catch (e) { fail(e); }
+  };
+  try { await loadReminders(); renderNotify(); } catch (e) { fail(e); }
+}
+
+async function buildEmail(el) {
+  el.append($("tplEmail").content.cloneNode(true));
+  paintIcons(el);
+  $("setEmail").addEventListener("submit", (e) => { e.preventDefault(); saveSettings(); });
   $("eSecurity").onchange = () => {
     const p = SEC_PORT[$("eSecurity").value], cur = +$("ePort").value;
     if (p && (!cur || cur === 465 || cur === 587)) $("ePort").value = p;
   };
   $("eEnabled").addEventListener("change", syncEmailFields);
   // Typing clears that field's error; leaving a number field pulls it into range.
-  for (const f of document.querySelectorAll("#setNotify input, #setEmail input")) f.addEventListener("input", () => fieldError(f, null));
+  for (const f of el.querySelectorAll("input")) f.addEventListener("input", () => fieldError(f, null));
   for (const id of ["eDays", "eMax"]) $(id).addEventListener("change", () => clampField($(id)));
-  $("nTimes").addEventListener("input", () => warnTimes());
-  $("nTimes").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); saveSettings(); } });
   $("ePwSave").onclick = async () => {
     const pw = $("ePw").value;
-    if (!pw && !confirm("密碼欄是空的：要刪除已存的 SMTP 密碼嗎？")) return;
+    if (!pw && !(await LoreShell.ask($("ePwSave"), ["密碼欄是空的：要刪除已存的 SMTP 密碼嗎？"], [{ label: "取消", value: null }, { label: "刪除", value: true, primary: true, danger: true }]))) return;
     try {
       const r = await api("PUT", "/api/reminders/password", { password: pw });
       $("ePw").value = "";
       const where = r.password?.source ?? r.saved;
       toast(!pw ? "已刪除密碼" : where === "keychain" ? "密碼已存到鑰匙圈" : "鑰匙圈無法使用，密碼改存在設定資料夾的 credentials.toml（只有你的帳號能讀）");
-      loadSettings();
+      await loadReminders(); renderEmail();
     } catch (e) { fail(e); }
   };
   $("eTest").onclick = async (ev) => {
@@ -869,16 +978,13 @@ function wireSettings() {
       if (!(await saveSettings(true))) return;
       const r = await api("POST", "/api/reminders/test-email");
       toast(`已寄出測試信到 ${r.to.join("、")}`);
-    } catch (e) { fail(e); loadSettings(); } finally { b.disabled = false; b.classList.remove("busy"); }
+    } catch (e) { fail(e); try { await loadReminders(); renderEmail(); } catch {} } finally { b.disabled = false; b.classList.remove("busy"); }
   };
-  $("nTest").onclick = async () => {
-    try { const r = await api("POST", "/api/reminders/test-notify"); toast(`已送出通知：${r.title}`); }
-    catch (e) { fail(e); }
-  };
+  try { await loadReminders(); renderEmail(); } catch (e) { fail(e); }
 }
 
 /** E-mail fields only matter when the digest is on (the toggle stays visible). */
-function syncEmailFields() { $("eFields").hidden = !$("eEnabled").checked; }
+function syncEmailFields() { if ($("eFields")) $("eFields").hidden = !$("eEnabled").checked; }
 
 function clampField(el) {
   const [lo, hi] = NUM_RANGE[el.id];
@@ -910,6 +1016,7 @@ function parseTimes(raw) {
   return [[...new Set(out)].sort(), null];
 }
 function warnTimes() {
+  if (!$("nTimes")) return;
   const empty = !splitList($("nTimes").value).length;
   $("nTimesWarn").hidden = !empty;
 }
@@ -917,10 +1024,25 @@ function warnTimes() {
 /** Client-side checks, Chinese messages next to the field; focuses the first problem. */
 function validateSettings(forTest = false) {
   document.querySelectorAll("#setNotify [aria-invalid], #setEmail [aria-invalid]").forEach((el) => fieldError(el, null));
-  for (const id of ["eDays", "eMax"]) clampField($(id));
+  for (const id of ["eDays", "eMax"]) if ($(id)) clampField($(id));
   const errs = [];
-  const [, badTime] = parseTimes($("nTimes").value);
-  if (badTime) errs.push([$("nTimes"), `「${badTime}」看不懂，請寫成 09:00 這樣，用逗號分隔`]);
+  if ($("nTimes")) {
+    const [, badTime] = parseTimes($("nTimes").value);
+    if (badTime) errs.push([$("nTimes"), `「${badTime}」看不懂，請寫成 09:00 這樣，用逗號分隔`]);
+  }
+  if ($("eHost")) validateEmail(errs, forTest);
+  for (const [el, m] of errs) fieldError(el, m);
+  if (errs.length) {
+    const el = errs[0][0];
+    if (el.closest("#eFields")?.hidden) $("eFields").hidden = false;   // show, without turning the digest on
+    el.focus();
+    toast(errs.length > 1 ? `有 ${errs.length} 個欄位要修正` : errs[0][1], true);
+    return false;
+  }
+  return true;
+}
+
+function validateEmail(errs, forTest) {
   const enabled = $("eEnabled").checked || forTest;
   const port = $("ePort").value;
   if (port !== "" && !(+port >= 1 && +port <= 65535 && Number.isInteger(+port))) errs.push([$("ePort"), "連接埠要是 1–65535 的數字（Gmail 用 587）"]);
@@ -934,26 +1056,18 @@ function validateSettings(forTest = false) {
   if (badTo) errs.push([$("eTo"), `「${badTo}」不是有效的 e-mail 地址`]);
   else if (enabled && !to.length) errs.push([$("eTo"), "請填收件人"]);
   if (enabled && !$("eAt").value) errs.push([$("eAt"), "請選寄送時間"]);
-  for (const [el, m] of errs) fieldError(el, m);
-  if (errs.length) {
-    const el = errs[0][0];
-    if (el.closest("#eFields")?.hidden) $("eFields").hidden = false;   // show, without turning the digest on
-    el.focus();
-    toast(errs.length > 1 ? `有 ${errs.length} 個欄位要修正` : errs[0][1], true);
-    return false;
-  }
-  return true;
 }
 
 function settingsFromForm() {
   const n = (id, d) => { const v = Math.round(+$(id).value); return $(id).value !== "" && Number.isFinite(v) ? v : d; };
+  const cur = S.reminders.settings;
   return {
-    notify: {
+    notify: !$("nTimes") ? cur.notify : {
       enabled: $("nEnabled").checked,
       times: parseTimes($("nTimes").value)[0] ?? splitList($("nTimes").value),
-      grace_minutes: S.reminders?.settings.notify.grace_minutes ?? 2,
+      grace_minutes: cur.notify.grace_minutes ?? 2,
     },
-    email: {
+    email: !$("eHost") ? cur.email : {
       enabled: $("eEnabled").checked,
       smtp_host: $("eHost").value.trim(), smtp_port: n("ePort", 587), security: $("eSecurity").value,
       user: $("eUser").value.trim(), from: $("eFrom").value.trim(), to: splitList($("eTo").value),
@@ -967,7 +1081,7 @@ async function saveSettings(forTest = false) {
   if (!validateSettings(forTest)) return false;
   try {
     S.reminders = await api("PUT", "/api/reminders", settingsFromForm());
-    renderSettings();
+    renderNotify(); renderEmail();
     if (!forTest) toast(S.reminders.settings.notify.times.length ? "設定已儲存" : "設定已儲存（沒有通知時間，不會跳到期通知）");
     return true;
   } catch (e) {
@@ -976,31 +1090,27 @@ async function saveSettings(forTest = false) {
   }
 }
 
-async function loadSettings() {
-  try {
-    const [r, st] = await Promise.all([api("GET", "/api/reminders"), api("GET", "/api/stats")]);
-    S.reminders = r;
-    const n = st.stats;
-    $("stStats").replaceChildren(...[["今天新增", n.new_today], ["待複習", n.due], ["7 天內記住", n.known_week], ["全部卡片", n.total]]
-      .map(([k, v]) => h("div", {}, h("b", {}, v), h("span", {}, k))));
-    renderSettings();
-  } catch (e) { fail(e); }
-}
-
 function fmtWhen(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   return isNaN(d) ? iso : `${d.getMonth() + 1}/${d.getDate()} ${fmtTime(iso)}`;
 }
 
-function renderSettings() {
-  const { settings: s, state: st, password: pw, settings_file: file } = S.reminders;
-  document.querySelectorAll("#setNotify [aria-invalid], #setEmail [aria-invalid]").forEach((el) => fieldError(el, null));
+function renderNotify() {
+  if (!$("nTimes") || !S.reminders) return;
+  const { settings: s, state: st } = S.reminders;
+  document.querySelectorAll("#setNotify [aria-invalid]").forEach((el) => fieldError(el, null));
   $("nEnabled").checked = s.notify.enabled;
   $("nTimes").value = s.notify.times.join(", ");
   warnTimes();
   const by = { neondeck: "NeonDeck", "kb-server": "知識庫" }[st.notify_last_by] ?? st.notify_last_by;
   $("nState").textContent = st.notify_last_slot ? `上次通知時段：${st.notify_last_slot.replace("T", " ")}（${by}）${st.notify_last_error ? " · 上次通知沒有成功" : ""}` : "";
+}
+
+function renderEmail() {
+  if (!$("eHost") || !S.reminders) return;
+  const { settings: s, state: st, password: pw } = S.reminders;
+  document.querySelectorAll("#setEmail [aria-invalid]").forEach((el) => fieldError(el, null));
   const e = s.email;
   $("eEnabled").checked = e.enabled;
   syncEmailFields();
@@ -1014,7 +1124,6 @@ function renderSettings() {
   if (st.email_last_error) parts.push(h("span", { class: "err-text", title: st.email_last_error }, `上次失敗（${fmtWhen(st.email_last_attempt)}）：${hasCJK(st.email_last_error) ? plainZh(st.email_last_error) : "寄信失敗，請檢查 SMTP 設定"}`));
   if (e.enabled) parts.push(`每天 ${e.send_at} 寄出；Mac 睡著錯過時，醒來後補寄一次。`);
   $("eState").replaceChildren(...parts.flatMap((p, i) => (i ? [" · ", p] : [p])));
-  $("setFile").textContent = file ? `設定檔：${file}（不在任何 repo 內）` : "";
 }
 
 boot();

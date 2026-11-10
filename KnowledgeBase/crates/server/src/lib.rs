@@ -8,6 +8,7 @@ pub mod api;
 pub mod config;
 pub mod digest;
 pub mod llm;
+pub mod notation;
 pub mod reminders;
 
 use std::net::SocketAddr;
@@ -88,7 +89,12 @@ pub fn router(shared: Shared) -> Router {
     let web = Router::new()
         .fallback_service(ServeDir::new(&shared.web).append_index_html_on_directories(true))
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, header::HeaderValue::from_static("no-cache")));
-    api::routes().with_state(shared).fallback_service(web).layer(cors)
+    // The shared kit (icons.js, base.css, shell.js): compiled in from commons/ui.
+    let mut kit = Router::new();
+    for (path, mime, body) in lore_shell::FILES {
+        kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
+    }
+    api::routes().merge(notation::routes()).with_state(shared).merge(kit).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`port` (0 = any free port), start the reminder scheduler and return the

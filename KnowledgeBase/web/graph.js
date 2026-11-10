@@ -184,7 +184,7 @@ const Graph = (() => {
     ui.tools = el("div", { class: "g-tools" },
       icoBtn("zoomIn", "放大", () => zoomBy(1.4), { class: "ico g-zoom" }),
       icoBtn("zoomOut", "縮小", () => zoomBy(1 / 1.4), { class: "ico g-zoom" }),
-      icoBtn("fit", "全部置中（F）", () => fit(true)),
+      icoBtn("fit", "全部置中 F", () => fit(true)),
       ui.playBtn, ui.panelBtn);
     ui.tip = el("div", { class: "g-tip", hidden: true, role: "tooltip" });
     ui.card = el("aside", { class: "g-card", hidden: true, "aria-label": "節點資訊" });

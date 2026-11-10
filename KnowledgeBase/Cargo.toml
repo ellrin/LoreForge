@@ -17,6 +17,9 @@ lore-secrets = { path = "../commons/crates/lore-secrets" }
 lore-home = { path = "../commons/crates/lore-home" }
 # Model calls (card drafts): local model first, Claude when chosen/available.
 lore-llm = { path = "../commons/crates/lore-llm" }
+# The shared UI kit (icons.js, base.css, shell.js) and the global notation registry (對照表).
+lore-shell = { path = "../commons/crates/lore-shell" }
+lore-notation = { path = "../commons/crates/lore-notation" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

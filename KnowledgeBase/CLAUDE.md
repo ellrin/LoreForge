@@ -34,7 +34,7 @@ cd ../commons && cargo test -p kb-core -p lore-store
 - `web/`: static HTML/CSS/JS, no build step; visual language from PaperComposer / JELearner
   (icons, panels). Colours: the theme all LoreForge apps share — `/theme.css` and `/theme.js` are
   `commons/ui/theme.{css,js}` (through `lore_home::theme`), `/api/theme` reads and sets the shared
-  choice (`private/shared/ui.toml`), 設定 has the 外觀 picker. The card's reading sheet is the
+  choice (`private/shared/ui.toml`); the gear (設定) has the 外觀 picker. The card's reading sheet is the
   theme's `--paper`; domain colours `--g1…--g12` only differ between dark and light themes. UI text in Traditional Chinese. KaTeX vendored in `web/vendor/katex`
   (copied from PaperComposer). Graph (`graph.js`): Obsidian-style canvas view, Barnes–Hut force
   layout, global / local (`#/graph/<id>`), filters, playback; data from `/api/graph?full=true&missing=true`.
@@ -42,6 +42,14 @@ cd ../commons && cargo test -p kb-core -p lore-store
   same in the graph and the card list. The card list is an index: grouped by domain, one line per
   card, summary in a hover preview. The server sends web/ with `Cache-Control: no-cache` (the
   desktop WebView kept old files otherwise).
+- Shared shell (`../commons/ui`, `docs/shell.md` §F): `icons.js`, `base.css`, `shell.js` are served by
+  `lore_shell::FILES` (no own icons.js); load order `theme.css → base.css → styles.css`, `theme.js → icons.js →
+  shell.js → app.js`. `mountShell()` in `app.js` builds the top bar: lead = `#q` + member chip, primary =
+  新增知識卡, AI = 起草摘要, right = 對照表 · 匯出▾ (Markdown, 列印 of the open card) · gear. Gear tabs 一般
+  (numbers, 重建索引), 外觀, 模型, 快捷鍵, 提醒 (到期通知), 郵件 (digest; forms are `<template>`s in index.html).
+  Status chip only while a card is open. `confirm()` → `LoreShell.ask`, toasts → `LoreShell.toast`.
+  對照表 = `<notation-panel>` (`/notation-panel.js`, `notation.rs`) over the global registry
+  `private/shared/notation.json` (`GET/PUT /api/notation`). `/api/engines` is not mounted yet (模型 tab shows 「—」).
 - `../private-example/KnowledgeBase/`: starting layout of a personal space (copied to `../private/KnowledgeBase` on first run).
 - NeonDeck widget: `../NeonDeck/desktop/widgets/knowledge.js`.
 - `apps/desktop` (`knowledgebase`): Tauri shell on the configured port (7700, what the NeonDeck

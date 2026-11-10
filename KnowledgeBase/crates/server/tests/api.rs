@@ -274,3 +274,52 @@ async fn draft_refuses_when_the_source_does_not_say() {
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(v["error"].as_str().unwrap().contains("沒有起草"));
 }
+
+/// The shared kit is served from the binary (the page has no icons.js of its own) and the page
+/// loads it in the documented order.
+#[tokio::test]
+async fn shared_shell_files_are_served() {
+    let (_d, app, _c) = setup();
+    for (path, needle) in [("/icons.js", "const ICONS"), ("/base.css", "--top-h"), ("/shell.js", "LoreShell"), ("/notation-panel.js", "notation-panel")] {
+        let res = app.clone().oneshot(Request::builder().uri(path).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        let text = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        assert!(text.contains(needle), "{path}");
+    }
+    let web = kb_server::config::repo_dir().join("web");
+    assert!(!web.join("icons.js").exists(), "the kit's icons.js replaces the app's own");
+    let index = std::fs::read_to_string(web.join("index.html")).unwrap();
+    let at = |s: &str| index.find(s).unwrap_or_else(|| panic!("{s}"));
+    assert!(at("theme.css") < at("base.css") && at("base.css") < at("styles.css"));
+    assert!(at("theme.js") < at("icons.js") && at("icons.js") < at("shell.js") && at("shell.js") < at("app.js"));
+}
+
+/// 對照表 is the global registry in `private/shared/notation.json`: read, edit, saved there.
+#[tokio::test]
+async fn notation_is_the_global_registry() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("personal");
+    std::fs::create_dir_all(p.join("nodes")).unwrap();
+    std::fs::write(p.join("space.toml"), "id = \"me\"\nname = \"我的\"\nkind = \"personal\"\nmembers = [\"ellrin\"]\n").unwrap();
+    let config = Config { spaces: vec![p], member: "ellrin".into(), port: 0, web: dir.path().join("web"), intervals: Default::default(), app_dir: None };
+    let kb = kb_server::open(&config, KbOptions::default()).unwrap();
+    let rem = Reminders::isolated(&dir.path().join("app"), Arc::new(lore_store::SystemRunner), "http://127.0.0.1:7700");
+    let home = lore_home::Home::at(dir.path().join("lore"));
+    let app = kb_server::router(AppState::with_home(kb, config.web.clone(), rem, home.clone()));
+
+    let (s, v) = call(&app, "GET", "/api/notation", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["entries"], json!([]));
+    let body = json!({ "version": 1, "entries": [{ "id": "speed", "kind": "symbol", "latex": "v", "name": "widget speed", "origin": "global" }] });
+    let (s, v) = call(&app, "PUT", "/api/notation", Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["entries"][0]["id"], "speed");
+    let file = home.shared_dir().unwrap().join("notation.json");
+    let saved = lore_notation::Notation::load(&file).unwrap();
+    assert_eq!(saved.entries.len(), 1);
+    assert!(!std::fs::read_to_string(&file).unwrap().contains("origin"), "display-only fields stay out of the file");
+    let (_, v) = call(&app, "GET", "/api/notation", None).await;
+    assert_eq!(v["entries"][0]["latex"], "v");
+    let (s, v) = call(&app, "PUT", "/api/notation", Some(json!({ "entries": "nope" }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+}

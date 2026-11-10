@@ -1973,7 +1973,9 @@ dependencies = [
  "lettre",
  "lore-home",
  "lore-llm",
+ "lore-notation",
  "lore-secrets",
+ "lore-shell",
  "lore-store",
  "serde",
  "serde_json",
@@ -2181,6 +2183,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-notation"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lore-secrets"
 version = "0.1.0"
 dependencies = [
@@ -2188,6 +2198,10 @@ dependencies = [
  "serde",
  "toml 0.8.23",
 ]
+
+[[package]]
+name = "lore-shell"
+version = "0.1.0"
 
 [[package]]
 name = "lore-store"
