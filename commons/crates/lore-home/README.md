@@ -46,5 +46,23 @@ model = "qwen3.5-9b-q8"            # 可省略
 |---|---|
 | `home.engine()` | 有設定（`url` 不是空的）才是 `Some`；App 自己的 `[engine]` 優先，沒有才用這個。每次用都重讀（伺服器可能換埠） |
 | `home.set_engine(url, model)` | 管理本機模型的 App（PaperComposer）在作者選定／啟動模型時寫入；`url = None` 清掉。檔案裡其他表格保留 |
+| `home.engine_settings()` | 整個檔：`[engine]`、`[claude] via／model`、`[route]`（類別 → 走向）、`[overrides]`（任務 → 走向）；不認得的值略過（＝自動） |
+| `home.set_claude(via, model)`、`set_route(class, route)`、`set_override(task, route)` | 改一項、其他保留；`via` ∈ `VIAS`、類別 ∈ `CLASSES`、走向 ∈ `ROUTES`；覆寫設成 `auto`／`None` 就刪掉那行 |
+
+同一個檔還有 Claude 連線與走向（由 `lore-engines` 的 `/api/engines` 讀寫，lore-llm 依它排先後）：
+
+```toml
+[claude]
+via = "subscription"   # subscription | api（金鑰不在這裡）
+model = "sonnet"       # catalog 別名或 id
+
+[route]                # create 創作與審稿 · tidy 整理與格式 · ask 問答
+create = "auto"        # auto | cloud | local
+tidy = "auto"
+ask = "auto"
+
+[overrides]            # 個別任務，優先於類別
+pc-draft-turn = "local"
+```
 
 不會寫進 `private-example/`。金鑰不在這裡（見 `lore-secrets`）。
