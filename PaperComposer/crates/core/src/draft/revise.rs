@@ -7,7 +7,7 @@
 
 use super::session::Session;
 use crate::compose::{json_array, json_object, json_string, json_string_or_null, Prompt};
-use crate::paper::{self, Section};
+use crate::paper::Section;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -88,7 +88,7 @@ pub struct Revision {
 /// conversation). Cut at `max_chars`.
 pub fn paper_map(paper_dir: &Path, full: bool, max_chars: usize) -> String {
     let mut out = String::new();
-    for s in paper::load_paper(paper_dir) {
+    for s in crate::open::sections(paper_dir) {
         out += &format!("\n### {} — {}\n", s.file, s.title);
         for (i, p) in s.paragraphs.iter().enumerate() {
             let p = p.trim();
@@ -227,7 +227,7 @@ struct RawChange {
 /// changes to files or paragraphs that do not exist are dropped.
 pub fn parse_plan(reply: &str, paper_dir: &Path) -> Result<RevisionPlan, String> {
     let r: RawPlan = super::prompts::json_in(reply)?;
-    let sections = paper::load_paper(paper_dir);
+    let sections = crate::open::sections(paper_dir);
     let stem = |f: &str| f.trim().trim_end_matches(".tex").trim_end_matches('s').to_lowercase();
     let mut changes = vec![];
     let mut effects: Vec<String> = r.effects.into_iter().filter(|e| !e.trim().is_empty()).collect();
@@ -273,12 +273,10 @@ pub fn parse_plan(reply: &str, paper_dir: &Path) -> Result<RevisionPlan, String>
 /// its text (it may have moved if earlier changes inserted paragraphs); if it
 /// no longer exists, nothing is written.
 pub fn apply(paper_dir: &Path, c: &Change) -> Result<(), String> {
-    if !paper::safe_name(&c.file) {
+    if !crate::open::is_section_file(paper_dir, &c.file) {
         return Err("invalid file".into());
     }
-    let path = paper_dir.join("sections").join(&c.file);
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", c.file))?;
-    let mut sec: Section = paper::parse_section(&c.file, &text);
+    let mut sec: Section = crate::open::read_section(paper_dir, &c.file).ok_or_else(|| format!("{}：讀不到這個章節", c.file))?;
     let new = c.text.trim().to_string();
     if c.action == "append" {
         sec.paragraphs.push(new);
@@ -298,7 +296,7 @@ pub fn apply(paper_dir: &Path, c: &Change) -> Result<(), String> {
             _ => return Err("unknown action".into()),
         }
     }
-    paper::write_atomic(&path, &paper::render_section(&sec)).map_err(|e| e.to_string())
+    crate::open::write_section(paper_dir, &sec)
 }
 
 #[cfg(test)]
@@ -354,7 +352,7 @@ mod tests {
         // Apply the replace first: the insert still finds its paragraph by text.
         apply(&p, &plan.changes[1]).unwrap();
         apply(&p, &plan.changes[0]).unwrap();
-        let s = paper::load_paper(&p).remove(0);
+        let s = crate::paper::load_paper(&p).remove(0);
         assert_eq!(s.paragraphs, ["First paragraph, revised.", "Second paragraph about Table 1.", "External validation on 120 frames gave Dice 0.71."]);
         // Applying the replace again fails: its paragraph is gone.
         assert!(apply(&p, &plan.changes[1]).is_err());
@@ -381,5 +379,25 @@ mod tests {
         assert_eq!(plan.changes.iter().map(|c| (c.id.as_str(), c.action.as_str())).collect::<Vec<_>>(), [("x1", "append")]);
         assert!(plan.effects[0].contains("results.tex ¶0") && plan.effects[0].contains("Short."));
         let _ = std::fs::remove_dir_all(&p);
+    }
+
+    #[test]
+    fn revisions_work_on_a_paper_opened_in_place() {
+        let d = std::env::temp_dir().join(format!("pc-revise-inplace-{}-{}", std::process::id(), rand_tag()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("chapters")).unwrap();
+        std::fs::create_dir_all(d.join(crate::paper::APP_DIR)).unwrap();
+        std::fs::write(d.join(crate::paper::APP_DIR).join(crate::open::LAYOUT_FILE), "main = \"ms.tex\"\n").unwrap();
+        std::fs::write(d.join("ms.tex"), "\\documentclass{article}\n\\begin{document}\n\\input{chapters/res}\n\\end{document}\n").unwrap();
+        std::fs::write(d.join("chapters/res.tex"), "\\section{Results}\nOld paragraph.\n").unwrap();
+        assert!(crate::open::is_custom(&d));
+        let map = paper_map(&d, true, 10_000);
+        assert!(map.contains("chapters/res.tex") && map.contains("[0] Old paragraph."), "{map}");
+        let plan = parse_plan(r#"{"summary":"s","changes":[{"file":"chapters/res.tex","action":"insert-after","index":0,"text":"New paragraph.","reason":""}],"effects":[],"caption":null}"#, &d).unwrap();
+        apply(&d, &plan.changes[0]).unwrap();
+        let t = std::fs::read_to_string(d.join("chapters/res.tex")).unwrap();
+        assert!(t.contains("Old paragraph.") && t.contains("New paragraph."), "{t}");
+        assert!(!d.join("sections").exists() && !d.join("main.tex").exists(), "the project keeps its own files");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

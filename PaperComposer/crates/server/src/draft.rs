@@ -672,6 +672,10 @@ fn retemplate(ws: &Path, dir: &Path, template: Option<&str>, people: Option<(Vec
     if m.journal.as_deref() == template {
         return Ok(false);
     }
+    // A LaTeX project opened as it is keeps its own main file and structure.
+    if pc_core::open::is_custom(dir) {
+        return Err("這篇是原地開啟的 LaTeX 專案，版型請在它自己的主檔裡改；按「稍後」繼續".into());
+    }
     let old = paper::apply_template(dir, template.map(|t| ws.join("publishers").join(t)).as_deref())?;
     let keep = ds::new_archive(dir)?;
     std::fs::write(keep.join("main.tex"), old).map_err(|e| e.to_string())?;
@@ -1117,7 +1121,7 @@ async fn decide_change(State(s): State<Shared>, AxPath((name, id, cid)): AxPath<
     if b.apply {
         // the review sees this save too (tracked changes, comment anchors)
         let _review = crate::REVIEW_LOCK.lock().await;
-        let paras = |d: &std::path::Path| std::fs::read_to_string(d.join("sections").join(&ch.file)).map(|t| paper::parse_section(&ch.file, &t).paragraphs).unwrap_or_default();
+        let paras = |d: &std::path::Path| pc_core::open::read_section(d, &ch.file).map(|s| s.paragraphs).unwrap_or_default();
         let old = paras(&c.dir);
         if let Err(e) = rv::apply(&c.dir, ch) {
             return bad(&e);

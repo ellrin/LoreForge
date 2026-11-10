@@ -94,7 +94,7 @@ fn arg_after(s: &str, cmd: &str) -> Option<String> {
 pub fn floats(paper: &Path) -> Vec<Float> {
     let mut out = vec![];
     let (mut nt, mut nf) = (0, 0);
-    for sec in crate::paper::load_paper(paper) {
+    for sec in crate::open::sections(paper) {
         let title = plain(&sec.title);
         let text = sec.paragraphs.join("\n\n");
         let mut rest = text.as_str();
@@ -135,10 +135,9 @@ pub fn floats(paper: &Path) -> Vec<Float> {
 /// LaTeX, with the library's title, year, DOI, one-liner and tag labels.
 pub fn refs(workspace: &Path, paper: &Path) -> Vec<RefInfo> {
     let purposes = bib::read_citations(&crate::paper::citations_file(paper));
-    let tex: String = crate::paper::section_files(paper)
+    let tex: String = crate::open::source_files(paper)
         .iter()
-        .filter_map(|f| std::fs::read_to_string(paper.join("sections").join(f)).ok())
-        .chain(std::fs::read_to_string(paper.join("main.tex")).ok())
+        .filter_map(|f| std::fs::read_to_string(f).ok())
         .collect::<Vec<_>>()
         .join("\n");
     let cited = bib::cited_keys(&tex);
