@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
+use lore_canvas::base::Base;
 use lore_canvas::pptx_in::{self, Backdrop};
 use lore_canvas::{Deck, Editor, StyleSystem, pptx_out};
 use lore_ooxml::Deck as ODeck;
@@ -92,6 +93,179 @@ impl Workspace {
         Ok(self.styles_dir().join(id).join(&st.pack.pack.template))
     }
 
+    /// The canvas base (`styles/<id>/base.json`, design §7.2 v2) when the style has
+    /// one; colour roles resolve against the style's palette colours.
+    pub fn base(&self, id: &str) -> Result<Option<Base>> {
+        let st = self.style(id)?;
+        let path = self.styles_dir().join(id).join("base.json");
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let text = std::fs::read_to_string(&path)?;
+        Base::from_json(&text, &st.pack.palette.colors).map(Some).map_err(Error::Invalid)
+    }
+
+    /// Template bytes: compiled from base.json when present (nothing is written
+    /// into the style folder), else the style's template.pptx.
+    pub fn template_bytes(&self, id: &str) -> Result<Vec<u8>> {
+        match self.base(id)? {
+            Some(b) => {
+                let st = self.style(id)?;
+                let dir = self.styles_dir().join(id);
+                let assets = move |a: &str| style_asset(&dir, a);
+                Ok(lore_canvas::base::compile(&b, &st.pack.palette.colors, &assets).map_err(|e| Error::Invalid(e.to_string()))?)
+            }
+            None => Ok(std::fs::read(self.template(id)?)?),
+        }
+    }
+
+    /// What a style looks like (for previews): its cover and content page as a
+    /// small deck (layout backdrops, title placeholders, starter objects).
+    /// Pictures keep `pkg:` (inside the template) or `style:` (style folder) ids.
+    pub fn style_sample(&self, id: &str) -> Result<StyleSample> {
+        let st = self.style(id)?;
+        let tpl = self.template_bytes(id)?;
+        let od = ODeck::from_bytes(&tpl)?;
+        let base = self.base(id)?;
+        let mut slides = Vec::new();
+        for sem in ["cover", "content"] {
+            let Some(layout) = st.pack.layouts.get(sem) else { continue };
+            let mut objs = layout_titles(&od, Some(&st), layout);
+            if let Some(page) = base.as_ref().and_then(|b| b.pages.values().find(|p| &p.layout == layout)) {
+                let mut starter = page.starter.clone();
+                starter.extend(objs);
+                objs = starter;
+            }
+            let mut s = lore_canvas::Slide::new(format!("s-{sem}"), Some(layout.clone()));
+            s.objects = objs;
+            slides.push(s);
+        }
+        Ok(StyleSample { size: lore_canvas::Size { w: od.slide_size.0, h: od.slide_size.1 }, backdrops: pptx_in::backdrops(&od), slides })
+    }
+
+    /// A picture a style preview refers to: `pkg:<part>` inside the template, `style:<file>` in the style folder.
+    pub fn style_asset(&self, id: &str, asset: &str) -> Option<Vec<u8>> {
+        if let Some(f) = asset.strip_prefix("style:") {
+            return style_asset(&self.styles_dir().join(id), &format!("file:{f}"));
+        }
+        let part = asset.strip_prefix("pkg:")?;
+        let tpl = self.template_bytes(id).ok()?;
+        lore_ooxml::package::Package::from_bytes(&tpl).ok()?.get(part).map(<[u8]>::to_vec)
+    }
+
+    /// Named arrangements (版型) the author saved: `arrangements/*.json` in the
+    /// workspace (private), in file-name order. Each is free JSON the editor
+    /// interprets (`split`, `regions`, …); unreadable files are skipped.
+    pub fn arrangements(&self) -> Vec<serde_json::Value> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(self.root.join("arrangements"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .collect();
+        files.sort();
+        files
+            .iter()
+            .filter_map(|p| {
+                let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(p).ok()?).ok()?;
+                if v.get("id").is_none() {
+                    v["id"] = serde_json::json!(p.file_stem()?.to_string_lossy());
+                }
+                Some(v)
+            })
+            .collect()
+    }
+
+    /// Save a named arrangement as `arrangements/<id>.json` (atomic; an
+    /// existing file of the same id is replaced — it is the same arrangement).
+    pub fn save_arrangement(&self, v: &serde_json::Value) -> Result<String> {
+        let id = v.get("id").and_then(|x| x.as_str()).ok_or_else(|| Error::Invalid("版型缺少 id".into()))?.to_string();
+        check_name(&id)?;
+        let dir = self.root.join("arrangements");
+        std::fs::create_dir_all(&dir)?;
+        write_atomic(&dir.join(format!("{id}.json")), &serde_json::to_vec_pretty(v)?)?;
+        Ok(id)
+    }
+
+    /// Where arrangements go on each page kind: title, kicker, content and
+    /// takeaway areas (EMU). From the canvas base when the style has one,
+    /// otherwise from the layout's title placeholder with plain margins.
+    pub fn page_areas(&self, style: Option<&StyleSystem>, source: &ODeck) -> Vec<serde_json::Value> {
+        let (w, h) = source.slide_size;
+        let base = style.and_then(|st| self.base(&st.pack.pack.id).ok().flatten());
+        let mut out = Vec::new();
+        let kinds: Vec<(String, String)> = match style {
+            Some(st) => st.pack.layouts.iter().map(|(k, l)| (k.clone(), l.clone())).collect(),
+            None => source.layouts.iter().take(1).map(|l| ("content".to_string(), l.name().to_string())).collect(),
+        };
+        for (kind, layout) in kinds {
+            if let Some(p) = base.as_ref().and_then(|b| b.pages.get(&kind)) {
+                out.push(serde_json::json!({ "kind": kind, "layout": layout, "title": p.title, "kicker": p.kicker, "content": p.content, "takeaway": p.takeaway }));
+                continue;
+            }
+            let titles = layout_titles(source, style, &layout);
+            let title = titles.iter().find(|o| o.ph.as_deref() == Some("title") || o.ph.as_deref() == Some("ctrTitle")).map(|o| o.frame.clone());
+            let mx = w / 20;
+            let top = title.as_ref().map(|t| t.y + t.h + h / 30).unwrap_or(h / 6);
+            let content = lore_canvas::Frame::new(mx, top, w - 2 * mx, (h * 9 / 10 - top).max(h / 4));
+            out.push(serde_json::json!({ "kind": kind, "layout": layout, "title": title, "kicker": null, "content": content, "takeaway": null }));
+        }
+        out
+    }
+
+    /// Objects a new slide on `layout` starts with: the layout's title
+    /// placeholders, then the base's starter objects for that page kind (style
+    /// pictures are copied into the deck's assets).
+    pub fn new_slide_objects(&self, style: Option<&StyleSystem>, source: &ODeck, layout: &str, deck_dir: &Path) -> Result<Vec<lore_canvas::Object>> {
+        let mut objs = layout_titles(source, style, layout);
+        let Some(st) = style else { return Ok(objs) };
+        let id = st.pack.pack.id.clone();
+        let Some(base) = self.base(&id)? else { return Ok(objs) };
+        let Some(page) = base.pages.values().find(|p| p.layout == layout) else { return Ok(objs) };
+        // an imported deck keeps its own layouts: without a title placeholder there,
+        // the base's title area becomes a plain title box
+        if objs.is_empty() && let Some(f) = &page.title {
+            let tag = if page.layout == st.pack.layouts.get("content").cloned().unwrap_or_default() { "title" } else { "cover-title" };
+            let look = st.look(tag, None).or_else(|| st.look("title", None)).unwrap_or_default();
+            let mut p = lore_canvas::Para::new(vec![]);
+            p.end = Some(look);
+            objs.push(lore_canvas::Object {
+                id: 2,
+                name: "Title".into(),
+                frame: f.clone(),
+                hidden: false,
+                ph: None,
+                slot: Some("title".into()),
+                kind: lore_canvas::Kind::Text(lore_canvas::SpObj {
+                    geom: lore_canvas::Geom::preset("rect"),
+                    fill: lore_canvas::Paint::None,
+                    line: None,
+                    text: Some(lore_canvas::TextBody { insets: [0, 0, 0, 0], anchor: "ctr".into(), paras: vec![p], ..Default::default() }),
+                    equation: false,
+                }),
+                src: None,
+            });
+        }
+        let mut next = objs.iter().map(|o| o.id).max().unwrap_or(1) + 1;
+        let mut starter = page.starter.clone();
+        // starters go under the title placeholders
+        for o in &mut starter {
+            o.id = next;
+            next += 1;
+            if let lore_canvas::Kind::Picture(pic) = &mut o.kind
+                && let Some(f) = pic.asset.strip_prefix("style:")
+            {
+                let bytes = style_asset(&self.styles_dir().join(&id), &format!("file:{f}")).ok_or_else(|| Error::NotFound(format!("底版圖片 {f}")))?;
+                let ext = f.rsplit('.').next().unwrap_or("png");
+                pic.asset = store_asset(deck_dir, &bytes, ext)?;
+            }
+        }
+        starter.extend(objs);
+        objs = starter;
+        Ok(objs)
+    }
+
     pub fn deck_dir(&self, name: &str) -> Result<PathBuf> {
         check_name(name)?;
         Ok(self.decks.join(name))
@@ -150,25 +324,55 @@ impl Workspace {
         Ok(name)
     }
 
+    /// Open a .pptx from disk (Finder double-click): the deck already imported from
+    /// the same bytes, else a new import named after the file, on the style whose
+    /// layouts this file shares most (none when no style matches).
+    pub fn open_pptx_file(&self, path: &Path) -> Result<String> {
+        let bytes = std::fs::read(path)?;
+        let h = lore_canvas::fnv(&bytes);
+        for d in self.deck_names() {
+            let src = self.decks.join(&d.name).join("source.pptx");
+            if std::fs::metadata(&src).map(|m| m.len() == bytes.len() as u64).unwrap_or(false)
+                && std::fs::read(&src).map(|b| lore_canvas::fnv(&b) == h).unwrap_or(false)
+            {
+                return Ok(d.name);
+            }
+        }
+        let od = ODeck::from_bytes(&bytes)?;
+        let names: std::collections::BTreeSet<&str> = od.layouts.iter().map(|l| l.name()).collect();
+        let style = self
+            .style_ids()
+            .into_iter()
+            .filter_map(|id| {
+                let tpl = ODeck::from_bytes(&self.template_bytes(&id).ok()?).ok()?;
+                let shared = tpl.layouts.iter().filter(|l| names.contains(l.name())).count();
+                (shared > 0).then_some((shared, id))
+            })
+            .max()
+            .map(|(_, id)| id);
+        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "imported".into());
+        self.import_pptx(&stem, &bytes, style.as_deref())
+    }
+
     /// New deck from a style pack's template: one cover slide and one content slide.
     pub fn new_deck(&self, name: &str, style: &str) -> Result<String> {
         check_name(name)?;
         let st = self.style(style)?;
-        let tpl = std::fs::read(self.template(style)?)?;
+        let tpl = self.template_bytes(style)?;
         let od = ODeck::from_bytes(&tpl)?;
         let mut deck = Deck::new(od.slide_size.0, od.slide_size.1, Some(style.into()));
+        let name = self.free_deck_name(name)?;
+        let dir = self.decks.join(&name);
+        std::fs::create_dir_all(dir.join("assets"))?;
         for sem in ["cover", "content"] {
             let layout = st.pack.layouts.get(sem).cloned();
             let uid = deck.new_uid();
             let mut s = lore_canvas::Slide::new(uid, layout.clone());
             if let Some(l) = &layout {
-                s.objects = layout_titles(&od, Some(&st), l);
+                s.objects = self.new_slide_objects(Some(&st), &od, l, &dir)?;
             }
             deck.slides.push(s);
         }
-        let name = self.free_deck_name(name)?;
-        let dir = self.decks.join(&name);
-        std::fs::create_dir_all(dir.join("assets"))?;
         std::fs::write(dir.join("source.pptx"), &tpl)?;
         write_atomic(&dir.join("deck.json"), &serde_json::to_vec(&deck)?)?;
         Ok(name)
@@ -200,6 +404,13 @@ impl Workspace {
             saved_rev: 0,
         })
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StyleSample {
+    pub size: lore_canvas::Size,
+    pub backdrops: Vec<Backdrop>,
+    pub slides: Vec<lore_canvas::Slide>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -398,6 +609,7 @@ pub fn layout_titles(source: &ODeck, st: Option<&StyleSystem>, layout: &str) -> 
             frame,
             hidden: false,
             ph: Some(kind.into()),
+            slot: None,
             kind: Kind::Text(lore_canvas::SpObj {
                 geom: lore_canvas::Geom::preset("rect"),
                 fill: lore_canvas::Paint::None,
@@ -540,4 +752,29 @@ pub fn print_pdf(chrome: &Path, url: &str, out: &Path) -> Result<()> {
         return Err(Error::Invalid(format!("Chrome 沒有產生 PDF：{last}")));
     }
     Ok(())
+}
+
+/// A file inside a style folder named by an asset id (`file:<relative path>`).
+fn style_asset(dir: &Path, asset: &str) -> Option<Vec<u8>> {
+    let f = asset.strip_prefix("file:")?;
+    if f.contains("..") || f.starts_with('/') {
+        return None;
+    }
+    std::fs::read(dir.join(f)).ok()
+}
+
+/// Store bytes in a deck's `assets/` (content-addressed, same names as
+/// `Session::add_asset`). Returns `file:assets/<hash>.<ext>`.
+pub fn store_asset(deck_dir: &Path, bytes: &[u8], ext: &str) -> Result<String> {
+    let ext: String = ext.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+    if ext.is_empty() {
+        return Err(Error::Invalid("缺少副檔名".into()));
+    }
+    let rel = format!("assets/{:016x}.{ext}", lore_canvas::fnv(bytes));
+    let path = deck_dir.join(&rel);
+    if !path.exists() {
+        std::fs::create_dir_all(deck_dir.join("assets"))?;
+        write_atomic(&path, bytes)?;
+    }
+    Ok(format!("file:{rel}"))
 }

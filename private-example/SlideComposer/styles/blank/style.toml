@@ -1,0 +1,156 @@
+# 空白底版：白底、左上標題、頁碼。配色與字型是中性的預設，可以複製這個資料夾再改。
+# 版面由 base.json 描述（畫布型底版，App 會編譯成範本）；顏色在 base.json 裡寫成角色（"@ink"），
+# 角色的實際顏色在下面的 [palette.colors]。
+
+[pack]
+id = "blank"
+name = "空白"
+version = 1
+slide_cx = 12192000   # 13.333 in
+slide_cy = 6858000    # 7.5 in (16:9)
+
+[layouts]
+cover = "封面"
+content = "內頁"
+end = "結尾"
+
+# ---------------------------------------------------------------------------
+# 文字標籤
+# ---------------------------------------------------------------------------
+
+[tags.cover-title]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 40.0
+size_range = [32.0, 44.0]
+bold = true
+color = "1D1D20"
+
+[tags.subtitle]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 20.0
+color = "5D5D64"
+
+[tags.kicker]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 13.0
+bold = true
+color = "2F5D9E"
+
+[tags.title]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 32.0
+size_range = [24.0, 32.0]
+bold = true
+color = "1D1D20"
+
+[tags.body]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 18.0
+size_range = [14.0, 20.0]
+color = "1D1D20"
+
+[tags.body-dense]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 14.0
+color = "1D1D20"
+
+[tags.label]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 16.0
+bold = true
+color = "2F5D9E"
+
+[tags.caption]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 12.0
+color = "5D5D64"
+
+[tags.table]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 12.0
+color = "1D1D20"
+
+[tags.takeaway]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 18.0
+bold = true
+color = "FFFFFF"
+
+[tags.source]
+font = "Arial"
+ea_font = "Noto Sans TC"
+size = 9.0
+color = "5D5D64"
+
+[tags.equation]
+font = "Cambria Math"
+size = 18.0
+color = "1D1D20"
+
+# ---------------------------------------------------------------------------
+# 色票：角色 → 顏色（base.json 的 "@角色" 在這裡查）
+# ---------------------------------------------------------------------------
+
+[palette.colors]
+slide-bg = "FFFFFF"
+surface = "F3F4F6"
+line = "D9DCE1"
+ink = "1D1D20"
+muted = "5D5D64"
+inverse = "1D1D20"
+on-inverse = "FFFFFF"
+accent-1 = "D9541F"
+on-accent = "FFFFFF"
+label = "2F5D9E"
+emphasis = "E5484D"
+annotate = "7030A0"
+
+[palette.tints.neutral]
+hex = "F3F4F6"
+meaning = "卡片、表格斑馬紋"
+
+[palette.tints.highlight]
+hex = "FFF2CC"
+meaning = "重點列"
+
+[palette.tints.info]
+hex = "DAE3F3"
+meaning = "說明、補充"
+
+[emphasis.key]
+color = "E5484D"
+bold = true
+meaning = "關鍵結果"
+
+[emphasis.note]
+color = "7030A0"
+meaning = "符號註記"
+
+[emphasis.strong]
+bold = true
+meaning = "粗體"
+
+[arrows.default]
+color = "1D1D20"
+width_pt = 1.5
+connector = "straightConnector1"
+dash = "solid"
+head = "none"
+tail = "triangle"
+
+[ghost]
+picture_alpha = 0.25
+line_alpha = 0.25
+fill_alpha = 0.30
+text_color = "A6A6A6"
+agenda_bold_current = true

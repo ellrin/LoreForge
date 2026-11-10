@@ -1,0 +1,38 @@
+{
+  "id": "03-image-text",
+  "name": "左圖右文",
+  "class": "academic",
+  "composition": "bisect",
+  "blocks": [
+    {
+      "name": "標題",
+      "role": "title",
+      "rect": [
+        0.04,
+        0.092,
+        0.92,
+        0.078
+      ]
+    },
+    {
+      "name": "圖片",
+      "role": "image",
+      "rect": [
+        0.04,
+        0.211,
+        0.448,
+        0.69
+      ]
+    },
+    {
+      "name": "文字",
+      "role": "text",
+      "rect": [
+        0.512,
+        0.211,
+        0.448,
+        0.69
+      ]
+    }
+  ]
+}

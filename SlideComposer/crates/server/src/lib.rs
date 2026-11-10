@@ -21,6 +21,8 @@
 //! | POST | /api/decks/{name}/latex | `{omml}` → `{latex}` (cached in the deck folder) |
 //! | POST | /api/math | `{latex, display?, size?}` → `{omml}` (pandoc) |
 
+mod notation;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -37,7 +39,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tower_http::services::ServeDir;
 use lore_canvas::reveal::{RevealSpec, reveal};
-use lore_canvas::{Applied, Op, Slide};
+use lore_canvas::{Applied, Object, Op, Slide};
 
 pub struct AppState {
     pub ws: Workspace,
@@ -142,11 +144,20 @@ pub fn default_workspace() -> Workspace {
 
 pub fn routes() -> Router<Shared> {
     Router::new()
+        .route("/theme.css", get(theme_css))
+        .route("/notation-panel.js", get(notation_panel_js))
+        .route("/api/decks/{name}/notation", get(notation_get).put(notation_put))
+        .route("/api/decks/{name}/arrangements", get(arrangements_get))
+        .route("/api/arrangements", post(arrangement_save))
+        .route("/api/decks/{name}/notation/extract", post(notation_extract))
         .route("/prefs.css", get(prefs_css))
         .route("/prefs.js", get(prefs_js))
         .route("/fonts/{file}", get(font_file))
         .route("/api/info", get(info))
         .route("/api/styles/{id}", get(style))
+        .route("/api/styles/{id}/preview/{n}", get(style_preview))
+        .route("/api/styles/{id}/sample", get(style_sample))
+        .route("/api/styles/{id}/asset", get(style_asset))
         .route("/api/decks", post(new_deck))
         .route("/api/decks/import", post(import).layer(DefaultBodyLimit::max(300 * 1024 * 1024)))
         .route("/api/decks/{name}", get(open))
@@ -164,6 +175,69 @@ pub fn routes() -> Router<Shared> {
         .route("/api/decks/{name}/assets", post(add_asset).layer(DefaultBodyLimit::max(60 * 1024 * 1024)))
         .route("/api/decks/{name}/latex", post(latex))
         .route("/api/math", post(math))
+}
+
+/// The LoreForge app themes (shared with PaperComposer), compiled in so the
+/// bundled app serves the same file.
+async fn theme_css() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../../../../commons/ui/theme.css"))
+}
+
+/// 版型: the author's named arrangements and this deck's page areas per kind.
+async fn arrangements_get(State(s): State<Shared>, Path(name): Path<String>) -> R {
+    let sess = session(&s, &name)?;
+    let sess = sess.lock().unwrap();
+    Ok(Json(json!({
+        "presets": s.ws.arrangements(),
+        "pages": s.ws.page_areas(sess.editor.style.as_ref(), &sess.source),
+        "defaults": sess.editor.deck.defaults,
+    })))
+}
+
+async fn arrangement_save(State(s): State<Shared>, Json(v): Json<Value>) -> R {
+    let id = s.ws.save_arrangement(&v)?;
+    Ok(Json(json!({ "id": id })))
+}
+
+/// The shared notation-panel Web Component (commons/ui), compiled in.
+async fn notation_panel_js() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../../../../commons/ui/notation-panel/notation-panel.js"))
+}
+
+fn global_notation(s: &Shared) -> Option<std::path::PathBuf> {
+    s.home.shared_dir().map(|d| d.join("notation.json")).filter(|p| p.is_file())
+}
+
+/// 對照表: merged registry, check report on the slides, line map for jumps.
+async fn notation_get(State(s): State<Shared>, Path(name): Path<String>) -> R {
+    let sess = session(&s, &name)?;
+    let sess = sess.lock().unwrap();
+    let (glob, doc) = notation::load(&sess.dir, global_notation(&s).as_deref());
+    Ok(Json(notation::view(&sess.editor.deck, &sess.latex, &glob, &doc)))
+}
+
+/// Save the document file (from the panel), then the fresh view.
+async fn notation_put(State(s): State<Shared>, Path(name): Path<String>, Json(b): Json<Value>) -> R {
+    let sess = session(&s, &name)?;
+    let sess = sess.lock().unwrap();
+    let doc = notation::from_panel(&b).map_err(bad)?;
+    doc.save(&sess.dir.join("notation.json")).map_err(bad)?;
+    let (glob, doc) = notation::load(&sess.dir, global_notation(&s).as_deref());
+    Ok(Json(notation::view(&sess.editor.deck, &sess.latex, &glob, &doc)))
+}
+
+/// Auto-extract symbols / equations / abbreviations from the slides into the document file.
+async fn notation_extract(State(s): State<Shared>, Path(name): Path<String>) -> R {
+    let sess = session(&s, &name)?;
+    let sess = sess.lock().unwrap();
+    let (glob, mut doc) = notation::load(&sess.dir, global_notation(&s).as_deref());
+    let added = notation::extract_into(&sess.editor.deck, &sess.latex, &mut doc);
+    if added > 0 {
+        doc.save(&sess.dir.join("notation.json")).map_err(bad)?;
+    }
+    let mut v = notation::view(&sess.editor.deck, &sess.latex, &glob, &doc);
+    v["added"] = json!(added);
+    Ok(Json(v))
 }
 
 /// Interface fonts from `private/shared/fonts.toml` (CSS variables; linked after styles.css).
@@ -249,10 +323,46 @@ async fn info(State(s): State<Shared>) -> R {
         "workspace": s.ws.root,
         "decks_dir": s.ws.decks,
         "styles": s.ws.style_ids(),
+        "style_list": style_list(&s.ws),
         "decks": s.ws.deck_names(),
         "pandoc": s.pandoc.available(),
         "chrome": sc_core::find_chrome().is_some(),
     })))
+}
+
+/// The styles for the start page: id, display name and how many preview pictures
+/// (`styles/<id>/preview/slide-<n>.png`, from the style_preview example) it has.
+fn style_list(ws: &Workspace) -> Vec<Value> {
+    ws.style_ids()
+        .into_iter()
+        .map(|id| {
+            let name = ws.style(&id).map(|st| st.pack.pack.name.clone()).unwrap_or_default();
+            let dir = ws.styles_dir().join(&id).join("preview");
+            let previews = (1..).take_while(|n| dir.join(format!("slide-{n}.png")).is_file()).count();
+            json!({ "id": id, "name": if name.is_empty() { id.clone() } else { name }, "previews": previews })
+        })
+        .collect()
+}
+
+/// One preview picture of a style (`slide-<n>.png` only).
+async fn style_preview(State(s): State<Shared>, Path((id, n)): Path<(String, u32)>) -> Result<Response, ApiError> {
+    s.ws.style(&id)?;
+    let f = s.ws.styles_dir().join(&id).join("preview").join(format!("slide-{n}.png"));
+    let bytes = std::fs::read(&f).map_err(|_| ApiError(StatusCode::NOT_FOUND, "no preview".into()))?;
+    Ok(([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "no-cache")], bytes).into_response())
+}
+
+/// A style's cover and content page as a small deck, rendered by the client as a preview.
+async fn style_sample(State(s): State<Shared>, Path(id): Path<String>) -> R {
+    Ok(Json(serde_json::to_value(s.ws.style_sample(&id)?).unwrap()))
+}
+
+async fn style_asset(State(s): State<Shared>, Path(id): Path<String>, Query(q): Query<AssetQ>) -> Result<Response, ApiError> {
+    s.ws.style(&id)?;
+    let bytes = s.ws.style_asset(&id, &q.id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no asset".into()))?;
+    let ext = q.id.rsplit('.').next().unwrap_or("").to_lowercase();
+    let mime = match ext.as_str() { "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "gif" => "image/gif", "svg" => "image/svg+xml", "emf" => "image/x-emf", _ => "application/octet-stream" };
+    Ok(([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "max-age=600")], bytes).into_response())
 }
 
 async fn style(State(s): State<Shared>, Path(id): Path<String>) -> R {
@@ -339,6 +449,7 @@ fn changed(sess: &mut Session, a: Applied) -> R {
         "label": a.label,
         "slides": slides,
         "order": order,
+        "defaults": sess.editor.deck.defaults,
         "status": status(sess),
     })))
 }
@@ -412,19 +523,46 @@ async fn do_reveal(State(s): State<Shared>, Path(name): Path<String>, Json(b): J
 struct NewSlideBody {
     after: Option<String>,
     layout: Option<String>,
+    /// Page kind (`cover`, `content`, `end`): its layout from the style.
+    #[serde(default)]
+    kind: Option<String>,
+    /// Arrangement the slide is laid out with, and the objects the editor placed for it.
+    #[serde(default)]
+    arrangement: Option<String>,
+    #[serde(default)]
+    objects: Vec<Object>,
 }
 
 async fn new_slide(State(s): State<Shared>, Path(name): Path<String>, Json(b): Json<NewSlideBody>) -> R {
     let sess = session(&s, &name)?;
     let mut sess = sess.lock().unwrap();
+    let kind = b.kind.clone().unwrap_or_else(|| "content".into());
     let layout = b.layout.clone().or_else(|| {
-        sess.editor.style.as_ref().and_then(|st| st.pack.layouts.get("content").cloned())
+        sess.editor.style.as_ref().and_then(|st| st.pack.layouts.get(&kind).cloned())
     }).or_else(|| sess.source.layouts.first().map(|l| l.name().to_string()));
+    // the deck's own file lacks that layout (an imported deck): the page after which it goes decides
+    let after_layout = b.after.as_deref().and_then(|u| sess.editor.deck.slide(u)).and_then(|s| s.layout.clone());
+    let slide_layout = match &layout {
+        Some(l) if sess.source.layout_by_name(l).is_none() => after_layout.or(layout.clone()),
+        _ => layout.clone(),
+    };
     let uid = sess.editor.deck.new_uid();
-    let mut slide = Slide::new(uid, layout.clone());
+    let mut slide = Slide::new(uid, slide_layout.clone());
     if let Some(l) = &layout {
-        slide.objects = sc_core::layout_titles(&sess.source, sess.editor.style.as_ref(), l);
+        slide.objects = s.ws.new_slide_objects(sess.editor.style.as_ref(), &sess.source, l, &sess.dir)?;
     }
+    // a recipe brings its own title: drop the stand-in title box (decks without a title placeholder)
+    if b.objects.iter().any(|o| o.slot.as_deref().is_some_and(|s| s.starts_with("title"))) {
+        slide.objects.retain(|o| o.slot.as_deref() != Some("title"));
+    }
+    // the arrangement's slots, after the title and starters, with fresh ids
+    let mut next = slide.objects.iter().map(|o| o.id).max().unwrap_or(1) + 1;
+    for mut o in b.objects {
+        o.id = next;
+        next += 1;
+        slide.objects.push(o);
+    }
+    slide.arrangement = b.arrangement.clone();
     let index = b
         .after
         .as_deref()

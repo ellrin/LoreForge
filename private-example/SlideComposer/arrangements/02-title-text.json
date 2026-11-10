@@ -1,0 +1,28 @@
+{
+  "id": "02-title-text",
+  "name": "標題＋文字",
+  "class": "academic",
+  "composition": "rule-of-thirds",
+  "blocks": [
+    {
+      "name": "標題",
+      "role": "title",
+      "rect": [
+        0.04,
+        0.092,
+        0.92,
+        0.078
+      ]
+    },
+    {
+      "name": "內文",
+      "role": "text",
+      "rect": [
+        0.04,
+        0.211,
+        0.92,
+        0.69
+      ]
+    }
+  ]
+}

@@ -1,0 +1,119 @@
+{
+  "format": 1,
+  "id": "blank",
+  "name": "空白",
+  "size": {
+    "w": 12192000,
+    "h": 6858000
+  },
+  "fonts": {
+    "major": "Arial",
+    "minor": "Arial",
+    "major_ea": "Noto Sans TC",
+    "minor_ea": "Noto Sans TC"
+  },
+  "pages": {
+    "cover": {
+      "layout": "封面",
+      "bg": {
+        "kind": "solid",
+        "color": "@slide-bg"
+      },
+      "title": {
+        "x": 731520,
+        "y": 2286000,
+        "w": 10728960,
+        "h": 1097280
+      },
+      "subtitle": {
+        "x": 731520,
+        "y": 3474720,
+        "w": 10728960,
+        "h": 640080
+      }
+    },
+    "content": {
+      "layout": "內頁",
+      "bg": {
+        "kind": "solid",
+        "color": "@slide-bg"
+      },
+      "kicker": {
+        "x": 487680,
+        "y": 363474,
+        "w": 5486400,
+        "h": 205740
+      },
+      "title": {
+        "x": 487680,
+        "y": 630936,
+        "w": 11216640,
+        "h": 534924
+      },
+      "content": {
+        "x": 487680,
+        "y": 1447038,
+        "w": 11216640,
+        "h": 4773168
+      },
+      "fixed": [
+        {
+          "id": 2,
+          "name": "page-number",
+          "frame": {
+            "x": 10997184,
+            "y": 6487668,
+            "w": 707136,
+            "h": 192024
+          },
+          "type": "text",
+          "geom": {
+            "prst": "rect"
+          },
+          "fill": {
+            "kind": "none"
+          },
+          "text": {
+            "insets": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "anchor": "b",
+            "paras": [
+              {
+                "align": "r",
+                "runs": [
+                  {
+                    "kind": "field",
+                    "field": "slidenum",
+                    "text": "‹#›",
+                    "look": {
+                      "font": "Arial",
+                      "size": 10.0,
+                      "color": "@muted"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "end": {
+      "layout": "結尾",
+      "bg": {
+        "kind": "solid",
+        "color": "@slide-bg"
+      },
+      "title": {
+        "x": 731520,
+        "y": 2743200,
+        "w": 10728960,
+        "h": 1097280
+      }
+    }
+  }
+}

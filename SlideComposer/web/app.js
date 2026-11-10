@@ -13,7 +13,7 @@ const S = {
   info: null, name: null, deck: null, style: null, backdrops: [], status: {},
   cur: null, sel: [], zoom: 1, fit: true, snap: true, grid: false, tool: "select",
   editing: null, editingCell: null, crop: null, latex: new Map(), latexWant: new Set(),
-  thumbs: new WeakMap(), clip: null, composing: false, tab: "obj", textSel: null,
+  thumbs: new WeakMap(), clip: null, composing: false, textSel: null,
 };
 
 // ── Server ────────────────────────────────────────────────────────────────
@@ -91,6 +91,7 @@ function absorb(r, { edited = true } = {}) {
   const byUid = new Map(S.deck.slides.map((s) => [s.uid, s]));
   for (const s of r.slides) byUid.set(s.uid, s);
   S.deck.slides = r.order.map((u) => byUid.get(u)).filter(Boolean);
+  if (r.defaults) S.deck.defaults = r.defaults;
   S.status = r.status;
   for (const [id, f] of pending) { const o = f && findObj(id, S.deck.slides.find((x) => x.uid === nudgeBuf.uid)?.objects ?? []); if (o) o.frame = f; }
   if (!S.deck.slides.some((s) => s.uid === S.cur)) S.cur = S.deck.slides[0]?.uid ?? null;
@@ -103,10 +104,7 @@ function absorb(r, { edited = true } = {}) {
 }
 
 function savedChip() {
-  const c = $("#saveChip");
-  c.hidden = false;
-  c.textContent = "已自動儲存";
-  c.className = "chip ok";
+  $("#saveChip").className = "saved";
   undoButtons();
 }
 function undoButtons() {
@@ -180,10 +178,21 @@ function paletteHex() {
   if (!out.length) ["000000", "FFFFFF", "FF0000", "A6A6A6"].forEach((h) => add(h, h));
   return out;
 }
+/** New shapes use palette colours only: a light tint to fill, the line/ink role to outline. */
 function defaultFill() {
-  const t = S.style?.palette?.tints;
-  const h = t?.neutral?.hex ?? Object.values(t ?? {})[0]?.hex ?? "FFFFFF";
+  const p = S.style?.palette ?? {};
+  const t = p.tints ?? {};
+  const h = t.neutral?.hex ?? t.card?.hex ?? Object.values(t)[0]?.hex ?? p.colors?.surface ?? paletteHex().at(-1)?.hex ?? "FFFFFF";
   return { kind: "solid", color: h.toUpperCase() };
+}
+function luminance(hex) {
+  const n = parseInt(hex, 16);
+  return 0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255);
+}
+function inkColor() {
+  const c = S.style?.palette?.colors ?? {};
+  const h = c.ink ?? c.line ?? [...paletteHex()].sort((a, b) => luminance(a.hex) - luminance(b.hex))[0]?.hex ?? "000000";
+  return h.toUpperCase();
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────
@@ -221,12 +230,13 @@ function renderAll() {
   const n = $("#notes");
   if (sl && document.activeElement !== n) n.value = sl.notes ?? "";
   $("#slideCount").textContent = `${S.deck.slides.length} 頁`;
+  statusLine();
 }
 
 function renderThumbs(force = false) {
   const box = $("#thumbs");
   const W = SC.px(S.deck.size.w);
-  const scale = 148 / W;
+  const scale = 180 / W;
   const keep = new Map($$(".thumb", box).map((t) => [t.dataset.uid, t]));
   box.textContent = "";
   S.deck.slides.forEach((sl, i) => {
@@ -273,8 +283,10 @@ function renderCanvas() {
   paper.append(node);
   if (S.grid) paper.append(Object.assign(document.createElement("div"), { className: "gridlines", style: `background-size:${SC.px(IN / 4)}px ${SC.px(IN / 4)}px` }));
   $("#zoomChip").textContent = `${Math.round(S.zoom * 100)}%`;
+  statusLine();
   if (S.editing) mountEditor();
   if (S.editingCell) mountCellEditor();
+  renderGuides();
   renderOverlay();
 }
 
@@ -302,6 +314,13 @@ function renderOverlay(guides = []) {
           h.dataset.end = i;
           h.style.cursor = "crosshair";
         });
+        // elbow / curved connectors: the middle segment moves (adj1, like PowerPoint's yellow handle)
+        if (/^(bent|curved)Connector3$/.test(o.geom)) {
+          const [mx, my] = connMid(o);
+          const h = handle(ov, "adj", sx(mx), sx(my));
+          h.dataset.adj = "adj1";
+          h.style.cursor = Math.abs(f.rot % 180) === 90 ? "ns-resize" : "ew-resize";
+        }
       } else if (S.crop === o.id) {
         for (const [k, x, y] of cropHandles(o)) { const h = handle(ov, "crop", x, y); h.dataset.crop = k; }
       } else {
@@ -360,14 +379,52 @@ function connPoints(f) {
   const y0 = f.flip_v ? f.y + f.h : f.y, y1 = f.flip_v ? f.y : f.y + f.h;
   return [rotPt(f, x0, y0), rotPt(f, x1, y1)];
 }
+/** A point in the frame's own (unrotated, unflipped) 0..1 space → slide space, and back. */
+function framePt(f, u, v) {
+  const x = f.x + (f.flip_h ? 1 - u : u) * f.w, y = f.y + (f.flip_v ? 1 - v : v) * f.h;
+  return rotPt(f, x, y);
+}
+function frameUV(f, p) {
+  const c = [f.x + f.w / 2, f.y + f.h / 2], t = (-(f.rot ?? 0) * Math.PI) / 180;
+  const dx = p[0] - c[0], dy = p[1] - c[1];
+  const x = c[0] + dx * Math.cos(t) - dy * Math.sin(t), y = c[1] + dx * Math.sin(t) + dy * Math.cos(t);
+  let u = f.w ? (x - f.x) / f.w : 0.5, v = f.h ? (y - f.y) / f.h : 0.5;
+  if (f.flip_h) u = 1 - u;
+  if (f.flip_v) v = 1 - v;
+  return [u, v];
+}
+function connMid(o) {
+  return framePt(o.frame, (o.adj?.adj1 ?? 50000) / 100000, 0.5);
+}
 function connFrame(a, b) {
   return { x: Math.round(Math.min(a[0], b[0])), y: Math.round(Math.min(a[1], b[1])), w: Math.round(Math.abs(b[0] - a[0])), h: Math.round(Math.abs(b[1] - a[1])), flip_h: b[0] < a[0], flip_v: b[1] < a[1] };
 }
 /** Connection sites (same order as lore-canvas geom::sites). */
+/** Vertices of a custom path (0..1 box): one connection site each, same order as lore-canvas geom::path_vertices. */
+function pathVertices(path) {
+  const toks = path.replace(/,/g, " ").match(/[A-Za-z]|-?[\d.]+(?:e-?\d+)?/g) ?? [];
+  const out = [];
+  let i = 0, start = null;
+  const same = (a, b) => a && b && Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9;
+  while (i < toks.length) {
+    const c = toks[i++];
+    const pairs = { M: 1, L: 1, Q: 2, C: 3 }[c];
+    if (c === "Z" || c === "z") { if (out.length > 1 && same(start, out.at(-1))) out.pop(); continue; }
+    if (!pairs) continue;
+    let last = [0, 0];
+    for (let k = 0; k < pairs; k++) { last = [+toks[i] || 0, +toks[i + 1] || 0]; i += 2; }
+    if (c === "M") start = last;
+    if (!same(out.at(-1), last)) out.push(last);
+  }
+  return out;
+}
 function sites(o) {
   const f = o.frame;
   let pts;
-  if (o.type !== "connector" && o.geom?.prst === "ellipse") {
+  const verts = o.type !== "connector" && o.geom?.prst === "custom" && o.geom.path ? pathVertices(o.geom.path) : [];
+  if (verts.length) {
+    pts = verts.map(([u, v]) => [f.x + (f.flip_h ? 1 - u : u) * f.w, f.y + (f.flip_v ? 1 - v : v) * f.h]);
+  } else if (o.type !== "connector" && o.geom?.prst === "ellipse") {
     pts = [...Array(8)].map((_, i) => { const a = ((-90 - 45 * i) * Math.PI) / 180; return [f.x + f.w / 2 + (f.w / 2) * Math.cos(a), f.y + f.h / 2 + (f.h / 2) * Math.sin(a)]; });
   } else {
     pts = [[f.x + f.w / 2, f.y], [f.x, f.y + f.h / 2], [f.x + f.w / 2, f.y + f.h], [f.x + f.w, f.y + f.h / 2]];
@@ -474,6 +531,7 @@ function onPointerDown(ev) {
     if (h.dataset.resize) drag = { kind: "resize", k: h.dataset.resize, o, f0: { ...o.frame }, p0: p };
     else if (h.dataset.rotate) drag = { kind: "rotate", o, f0: { ...o.frame } };
     else if (h.dataset.end) drag = { kind: "end", end: +h.dataset.end, o, f0: { ...o.frame }, pts: connPoints(o.frame) };
+    else if (h.dataset.adj) drag = { kind: "adj", key: h.dataset.adj, o, a0: { ...(o.adj ?? {}) } };
     else if (h.dataset.crop) drag = { kind: "crop", k: h.dataset.crop, o, f0: { ...o.frame }, c0: { ...o.crop }, p0: p };
     capture(ev);
     return;
@@ -608,6 +666,10 @@ function onPointerMove(ev) {
     drag.o.frame = { ...f, rot: a % 360 };
     liveFrame(drag.o);
     liveConnectors(drag);
+  } else if (drag.kind === "adj") {
+    const [u] = frameUV(drag.o.frame, p);
+    drag.o.adj = { ...drag.a0, [drag.key]: Math.round(u * 100000) };
+    liveFrame(drag.o, true);
   } else if (drag.kind === "end") {
     const hot = nearestSite(p, drag.o.id);
     showSites(hot, drag.o.id);
@@ -724,6 +786,8 @@ async function onPointerUp(ev) {
   } else if (d.kind === "end") {
     const key = d.end === 0 ? "start" : "end";
     await commit([setObj(d.o.id, "/frame", d.o.frame), setObj(d.o.id, `/${key}`, d.hot ? { id: d.hot.id, site: d.hot.site } : null)], "調整連接線");
+  } else if (d.kind === "adj") {
+    await commit([setObj(d.o.id, "/adj", d.o.adj)], "調整連接線中段");
   } else if (d.kind === "crop") {
     await commit([setObj(d.o.id, "/frame", d.o.frame), setObj(d.o.id, "/crop", d.o.crop)], "裁切");
   } else if (d.kind === "marquee") {
@@ -741,7 +805,7 @@ async function onPointerUp(ev) {
 function baseObj(type, frame, name) {
   return { id: maxId() + 1, name, frame: { ...frame, rot: 0 }, type };
 }
-function defaultLine() { return { color: "000000", width_pt: 1, dash: "solid", head: "none", tail: "none" }; }
+function defaultLine() { return { color: inkColor(), width_pt: 1, dash: "solid", head: "none", tail: "none" }; }
 
 async function insertObj(o, label) {
   await commit([{ op: "insert_obj", slide: S.cur, parent: null, index: 9999, obj: o }], label);
@@ -758,7 +822,7 @@ async function finishDraw(d) {
   if (/^(line|arrow|conn-)/.test(tool)) {
     if (tiny) { renderOverlay(); return; }
     const arrow = S.style?.arrows?.default;
-    const line = { color: (arrow?.color ?? "000000").toUpperCase(), width_pt: arrow?.width_pt ?? 1.5, dash: "solid", head: "none", tail: tool === "line" ? "none" : arrow?.tail ?? "triangle" };
+    const line = { color: (arrow?.color ?? inkColor()).toUpperCase(), width_pt: arrow?.width_pt ?? 1.5, dash: "solid", head: "none", tail: tool === "line" ? "none" : arrow?.tail ?? "triangle" };
     const geom = { "conn-elbow": "bentConnector3", "conn-curved": "curvedConnector3" }[tool] ?? "straightConnector1";
     const o = { ...baseObj("connector", connFrame(d.p0, d.p), tool === "line" ? "直線" : "箭頭"), geom, line, start: d.start ? { id: d.start.id, site: d.start.site } : null, end: d.end ? { id: d.end.id, site: d.end.site } : null };
     if (!o.start) delete o.start;
@@ -1166,6 +1230,15 @@ function onDblClick(ev) {
   // pointer capture retargets the event to the viewport: hit-test again
   const target = document.elementFromPoint(ev.clientX, ev.clientY) ?? ev.target;
   if (S.editing || S.editingCell || !$("#paperWrap").contains(target)) return;
+  // an empty image slot: pick a picture for it
+  const slotEl = topObjEl(target);
+  if (slotEl?.classList.contains("slot-empty") && slotEl.dataset.slot === "image") {
+    const o = findObj(+slotEl.dataset.id);
+    const pick = $("#imgFile");
+    pick.dataset.slot = o.id;
+    pick.click();
+    return;
+  }
   const td = target.closest(".obj.t-table td");
   if (td && !S.editing) {
     const id = +td.closest(".obj.t-table").dataset.id;
@@ -1292,6 +1365,8 @@ function onKey(ev) {
   if (t.closest?.("input, textarea, select, [contenteditable='true'], dialog")) return;
   const mod = ev.metaKey || ev.ctrlKey;
   const k = ev.key;
+  if (mod && k === "Enter") { ev.preventDefault(); startShow(!ev.shiftKey); return; }
+  if (S.focus === "slides" && slideKey(ev, mod, k)) return;
   if (mod && k.toLowerCase() === "z") { ev.preventDefault(); ev.shiftKey ? redo() : undo(); return; }
   if (mod && k.toLowerCase() === "y") { ev.preventDefault(); redo(); return; }
   if (mod && k === "c") { ev.preventDefault(); copySel(); return; }
@@ -1323,6 +1398,40 @@ function onKey(ev) {
 }
 
 // ── Slides ────────────────────────────────────────────────────────────────
+/** Keys go to the slide list after a click there, to objects after a click on the canvas. */
+function setFocus(where) {
+  S.focus = where;
+  $("#thumbs").classList.toggle("focus", where === "slides");
+}
+/** Slide-list keys: copy / cut / paste / duplicate / delete slides, Enter = new slide. */
+function slideKey(ev, mod, k) {
+  const key = k.toLowerCase();
+  if (mod && key === "c") { ev.preventDefault(); copySlide(); return true; }
+  if (mod && key === "x") { ev.preventDefault(); copySlide(); delSlide(); return true; }
+  if (mod && key === "v" && S.clip?.slides) { ev.preventDefault(); pasteSlides(); return true; }
+  if (mod && key === "d") { ev.preventDefault(); dupSlide(); return true; }
+  if (!mod && k === "Enter") { ev.preventDefault(); addSlide(); return true; }
+  if (!mod && (k === "Delete" || k === "Backspace")) { ev.preventDefault(); delSlide(); return true; }
+  if (!mod && (k === "ArrowDown" || k === "ArrowUp" || k === "PageDown" || k === "PageUp")) {
+    const i = S.deck.slides.findIndex((x) => x.uid === S.cur) + (k === "ArrowDown" || k === "PageDown" ? 1 : -1);
+    if (S.deck.slides[i]) gotoSlide(S.deck.slides[i].uid);
+    ev.preventDefault();
+    return true;
+  }
+  return false;
+}
+function copySlide() {
+  const sl = slide();
+  if (!sl) return;
+  S.clip = { slides: [clone(sl)] };
+  toast("已複製投影片");
+}
+async function pasteSlides() {
+  const i = S.deck.slides.findIndex((x) => x.uid === S.cur);
+  const copies = S.clip.slides.map((sl) => ({ ...clone(sl), uid: nextUid() }));
+  await commit(copies.map((c, n) => ({ op: "insert_slide", index: i + 1 + n, slide: c })), "貼上投影片");
+  gotoSlide(copies.at(-1).uid);
+}
 function gotoSlide(uid) {
   if (document.activeElement === $("#notes")) $("#notes").blur(); // commits the notes of the slide they belong to
   flushNudge();
@@ -1337,7 +1446,8 @@ function gotoSlide(uid) {
   $(`.thumb[data-uid="${uid}"]`)?.scrollIntoView({ block: "nearest" });
 }
 async function addSlide() {
-  try { absorb(await api(deckApi("/new-slide"), { body: { after: S.cur } })); const i = S.deck.slides.findIndex((s) => s.uid === S.cur); gotoSlide(S.deck.slides[i + 1]?.uid ?? S.cur); } catch (e) { toast(e.message, true); }
+  // the deck's default arrangement for content pages, laid out right away (00 版型)
+  await addArrangedSlide("content");
 }
 function nextUid() {
   let n = S.deck.next_uid ?? 1;
@@ -1367,7 +1477,7 @@ async function hideSlide() {
 
 function wireSorter() {
   const box = $("#thumbs");
-  box.addEventListener("click", (e) => { const t = e.target.closest(".thumb"); if (t) gotoSlide(t.dataset.uid); });
+  box.addEventListener("click", (e) => { const t = e.target.closest(".thumb"); setFocus("slides"); if (t) gotoSlide(t.dataset.uid); });
   let dragUid = null;
   box.addEventListener("dragstart", (e) => { dragUid = e.target.closest(".thumb")?.dataset.uid; e.dataTransfer.effectAllowed = "move"; });
   box.addEventListener("dragover", (e) => {
@@ -1456,43 +1566,282 @@ async function openDeck(name) {
   S.status = r.status;
   const want = new URL(location.href).searchParams.get("s");
   S.cur = S.deck.slides.some((s) => s.uid === want) ? want : S.deck.slides[0]?.uid;
+  S.arr = null;
+  loadArrangements().then(() => { renderSide(); renderGuides(); }).catch(() => {});
   S.sel = [];
   $("#deckName").textContent = name;
   document.title = `${name} · SlideComposer`;
   $("#home").hidden = true;
   document.body.classList.remove("at-home");
-  $("#saveChip").hidden = true;
+  $("#saveChip").className = "saved";
   undoButtons();
   renderAll();
+}
+
+/** Status bar: position, layout, save state (zoom is set by renderCanvas). */
+function statusLine() {
+  const sl = slide();
+  if (!sl) return;
+  $("#stPos").textContent = `${String(slideNo(sl.uid)).padStart(2, "0")} / ${String(S.deck.slides.length).padStart(2, "0")}`;
+  $("#stLayout").textContent = sl.layout ?? "";
+}
+
+// ── Home: 01 開始 (tiles) and 02 最近 (first-slide thumbnails) ─────────────
+function goHome() {
+  const u = new URL(location.href);
+  u.search = "";
+  history.pushState(null, "", u);
+  showHome();
+}
+function openByName(name) {
+  location.search = `?deck=${encodeURIComponent(name)}`;
 }
 
 async function showHome() {
   $("#home").hidden = false;
   document.body.classList.add("at-home");
   $("#deckName").textContent = "";
-  $("#saveChip").hidden = true;
+  document.title = "SlideComposer";
   S.reveal = null;
+  S.deck = null;
+  renderSide();
   const info = await api("/api/info");
   S.info = info;
   const list = $("#deckList");
   list.textContent = "";
-  for (const d of info.decks) {
-    const b = document.createElement("button");
-    b.className = "card";
-    b.innerHTML = `<b></b><span class="muted mono"></span>`;
-    b.querySelector("b").textContent = d.name;
-    b.querySelector("span").textContent = new Date(d.modified * 1000).toLocaleString("zh-TW");
-    b.onclick = () => { const u = new URL(location.href); u.search = `?deck=${encodeURIComponent(d.name)}`; history.pushState(null, "", u); openDeck(d.name).catch((e) => toast(e.message, true)); };
-    list.append(b);
+  $("#recentBlock").hidden = !info.decks.length;
+  const recent = [...info.decks].sort((a, b) => b.modified - a.modified).slice(0, 8);
+  for (const d of recent) {
+    const card = document.createElement("button");
+    card.className = "deck-card";
+    card.innerHTML = `<div class="frame"></div><span class="name"></span><span class="when"></span>`;
+    card.querySelector(".name").textContent = d.name;
+    card.title = d.name;
+    card.querySelector(".when").textContent = shortDate(d.modified);
+    card.onclick = () => openByName(d.name);
+    list.append(card);
+    coverWhenVisible(card.querySelector(".frame"), d.name);
   }
-  if (!info.decks.length) list.innerHTML = `<p class="muted">還沒有簡報。從風格包建立，或匯入 .pptx。</p>`;
-  $("#newStyle").innerHTML = info.styles.map((s) => `<option>${s}</option>`).join("");
-  $("#wsInfo").textContent = `workspace：${info.workspace} · decks：${info.decks_dir} · pandoc ${info.pandoc ? "✓" : "✗"} · Chrome ${info.chrome ? "✓" : "✗"}`;
+  $("#envInfo").textContent = "";
+  for (const [k, v, ok] of [["資料夾", info.workspace, true], ["簡報", info.decks_dir, true], ["pandoc", info.pandoc ? "✓" : "✗  brew install pandoc", info.pandoc], ["Chrome", info.chrome ? "✓" : "✗  Google Chrome", info.chrome]]) {
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v; if (!ok) dd.className = "bad";
+    $("#envInfo").append(dt, dd);
+  }
+}
+function shortDate(sec) {
+  const d = new Date(sec * 1000), now = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return d.toDateString() === now.toDateString() ? `${p(d.getHours())}:${p(d.getMinutes())}` : `${d.getFullYear() === now.getFullYear() ? "" : d.getFullYear() + "/"}${p(d.getMonth() + 1)}/${p(d.getDate())}`;
+}
+
+/** Render a deck's first slide into `frame` once it scrolls into view. */
+const coverSeen = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { coverSeen.unobserve(e.target); drawCover(e.target).catch(() => {}); } }));
+function coverWhenVisible(frame, name) { frame.dataset.deck = name; coverSeen.observe(frame); }
+async function drawCover(frame) {
+  const name = frame.dataset.deck;
+  const r = await api(`/api/decks/${encodeURIComponent(name)}`);
+  SC.addFontStacks(r.font_stacks);
+  const sl = r.deck.slides.find((s) => !s.hidden) ?? r.deck.slides[0];
+  if (!sl) return;
+  const latex = new Map();
+  const node = SC.renderSlide(sl, {
+    size: r.deck.size, backdrops: r.backdrops, slideNo: 1,
+    assetUrl: (a) => `/api/decks/${encodeURIComponent(name)}/asset?id=${encodeURIComponent(a)}`,
+    latex: (omml) => latex.get(omml), needLatex: () => {},
+  });
+  const W = SC.px(r.deck.size.w);
+  node.style.transform = `scale(${frame.clientWidth / W})`;
+  frame.append(node);
+}
+
+function wireHome() {
+  $("#tileNew").onclick = openNewDeck;
+  const tile = $("#tileImport");
+  $("#impFile").onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) importPptx(f); };
+  let depth = 0;
+  tile.addEventListener("dragenter", (e) => { e.preventDefault(); depth++; tile.classList.add("over"); });
+  tile.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; tile.classList.remove("over"); } });
+  tile.addEventListener("dragover", (e) => e.preventDefault());
+  tile.addEventListener("drop", (e) => { e.preventDefault(); depth = 0; tile.classList.remove("over"); const f = e.dataTransfer.files[0]; if (f) importPptx(f); });
+  $("#newForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const style = $("#baseList input:checked")?.value;
+    if (!style) return;
+    const name = $("#newName").value.trim() || `簡報 ${shortDate(Date.now() / 1000).replace(":", "")}`;
+    try { const r = await api("/api/decks", { body: { name, style } }); openByName(r.name); } catch (x) { toast(x.message, true); }
+  };
+  $$("dialog .close").forEach((b) => (b.onclick = () => b.closest("dialog").close()));
+}
+async function importPptx(f) {
+  if (!/\.pptx$/i.test(f.name)) { toast("只能匯入 .pptx", true); return; }
+  toast(`匯入 ${f.name}…`);
+  try {
+    const r = await api(`/api/decks/import?name=${encodeURIComponent(f.name.replace(/\.pptx$/i, ""))}`, { body: await f.arrayBuffer(), raw: true });
+    openByName(r.name);
+  } catch (x) { toast(x.message, true); }
+}
+
+/** 新簡報: pick a base (底版) by its preview, name optional. */
+function openNewDeck() {
+  const box = $("#baseList");
+  box.textContent = "";
+  const styles = S.info?.style_list ?? (S.info?.styles ?? []).map((id) => ({ id, name: id, previews: 0 }));
+  styles.forEach((st, i) => {
+    const l = document.createElement("label");
+    l.className = "base-opt";
+    l.title = st.name;
+    l.innerHTML = `<input type="radio" name="base"><div class="thumb16"></div><span></span>`;
+    const r = l.querySelector("input");
+    r.value = st.id;
+    r.checked = i === 0;
+    l.querySelector("span").textContent = st.name;
+    box.append(l);
+    drawStyleCover(l.querySelector(".thumb16"), st.id).catch(() => l.querySelector(".thumb16").classList.add("blank"));
+  });
+  $("#newBtn").disabled = !styles.length;
+  $("#newName").value = "";
+  $("#dlgNew").showModal();
+  $("#newName").focus();
+}
+
+/** A style's cover page, rendered like a slide (layout background, starter objects). */
+async function drawStyleCover(frame, id) {
+  const r = await api(`/api/styles/${encodeURIComponent(id)}/sample`);
+  const sl = r.slides[0];
+  if (!sl) return;
+  const node = SC.renderSlide(sl, {
+    size: r.size, backdrops: r.backdrops, slideNo: 1,
+    assetUrl: (a) => `/api/styles/${encodeURIComponent(id)}/asset?id=${encodeURIComponent(a)}`,
+    latex: () => undefined, needLatex: () => {},
+  });
+  node.style.transform = `scale(${frame.clientWidth / SC.px(r.size.w)})`;
+  frame.textContent = "";
+  frame.append(node);
+}
+
+/** Top-bar menus: the deck picker (recent decks + 新簡報) and export. */
+function popMenu(anchor, items) {
+  $(".menu")?.remove();
+  const m = document.createElement("div");
+  m.className = "menu";
+  m.setAttribute("role", "menu");
+  for (const it of items) {
+    if (it === "-") { const hr = document.createElement("div"); hr.className = "menu-sep"; m.append(hr); continue; }
+    const b = document.createElement("button");
+    b.setAttribute("role", "menuitem");
+    if (it.icon) { const i = document.createElement("span"); i.dataset.icon = it.icon; b.append(i); }
+    b.append(it.label);
+    if (it.current) b.setAttribute("aria-current", "true");
+    b.onclick = () => { m.remove(); anchor.setAttribute("aria-expanded", "false"); it.run(); };
+    m.append(b);
+  }
+  document.body.append(m);
+  paintIcons(m);
+  const r = anchor.getBoundingClientRect();
+  m.style.top = `${r.bottom + 4}px`;
+  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+  anchor.setAttribute("aria-expanded", "true");
+  setTimeout(() => document.addEventListener("pointerdown", (e) => { if (!m.contains(e.target)) { m.remove(); anchor.setAttribute("aria-expanded", "false"); } }, { once: true }), 0);
+}
+async function deckMenu(anchor) {
+  const info = await api("/api/info");
+  S.info = info;
+  const decks = [...info.decks].sort((a, b) => b.modified - a.modified).slice(0, 10);
+  popMenu(anchor, [
+    ...decks.map((d) => ({ label: d.name, current: d.name === S.name, run: () => { if (d.name !== S.name) openByName(d.name); } })),
+    "-",
+    { icon: "plus", label: "新簡報", run: openNewDeck },
+    { icon: "folder", label: "首頁", run: goHome },
+  ]);
+}
+function exportMenu(anchor) {
+  popMenu(anchor, [
+    { icon: "download", label: "PPTX", run: async () => { toast("匯出 PPTX…"); try { const r = await api(deckApi("/export"), { body: {} }); toast(r.warning ? `${r.path}　⚠ ${r.warning}` : r.path, !!r.warning); } catch (e) { toast(e.message, true); } } },
+    { icon: "pdf", label: "PDF", run: async () => { toast("產生 PDF…"); try { const r = await api(deckApi("/pdf"), { body: {} }); toast(r.path); } catch (e) { toast(e.message, true); } } },
+  ]);
+}
+
+// ── 方程式與變數: the deck's notation registry (shared <notation-panel>) ──────
+const NT = { lines: {}, timer: 0 };
+async function openNotation() {
+  const r = await api(deckApi("/notation"));
+  showNotation(r);
+  $("#dlgNotation").showModal();
+}
+function showNotation(r) {
+  const p = $("#ntPanel");
+  NT.lines = r.lines ?? {};
+  p.notation = r.notation;
+  p.report = r.report;
+}
+function wireNotation() {
+  const p = $("#ntPanel");
+  const save = () => {
+    clearTimeout(NT.timer);
+    $("#ntState").hidden = false;
+    $("#ntState").textContent = "未儲存";
+    NT.timer = setTimeout(async () => {
+      try {
+        const r = await api(deckApi("/notation"), { method: "PUT", body: p.notation });
+        NT.lines = r.lines ?? {};
+        p.report = r.report;
+        $("#ntState").textContent = "已儲存";
+      } catch (e) { toast(e.message, true); }
+    }, 500);
+  };
+  // an edited global row becomes the deck's own (the global file is never written here)
+  p.addEventListener("notation-change", (e) => { if (e.detail.entry?.origin === "global") e.detail.entry.origin = "document"; });
+  for (const ev of ["notation-change", "notation-add", "notation-delete"]) p.addEventListener(ev, save);
+  p.addEventListener("notation-jump", (e) => {
+    const at = NT.lines[e.detail.file]?.[(e.detail.line ?? 1) - 1];
+    if (!at) return;
+    $("#dlgNotation").close();
+    gotoSlide(at[0]);
+    S.sel = [at[1]];
+    renderOverlay();
+    renderSide();
+  });
+  $("#ntExtract").onclick = async () => {
+    try {
+      const r = await api(deckApi("/notation/extract"), { body: {} });
+      showNotation(r);
+      toast(r.added ? `新增 ${r.added} 筆` : "沒有新的");
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+// ── Settings: 外觀 (theme × mode, same as PaperComposer) and folders ─────────
+function applyTheme() {
+  const root = document.documentElement;
+  let t = "orange", m = "dark";
+  try { t = localStorage.getItem("sc.theme") || t; m = localStorage.getItem("sc.mode") || m; } catch {}
+  root.dataset.theme = t;
+  root.dataset.mode = m;
+  $$(".theme[data-theme]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.theme === t)));
+  $$("#lookMode button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === m)));
+}
+function wireSettings() {
+  $$(".theme[data-theme]").forEach((b) => (b.onclick = () => { try { localStorage.setItem("sc.theme", b.dataset.theme); } catch {} applyTheme(); }));
+  $$("#lookMode button").forEach((b) => (b.onclick = () => { try { localStorage.setItem("sc.mode", b.dataset.v); } catch {} applyTheme(); }));
+  applyTheme();
+}
+async function openSettings() {
+  if (!S.info) { try { S.info = await api("/api/info"); } catch {} }
+  if (S.info && !$("#envInfo").childElementCount) {
+    for (const [k, v] of [["資料夾", S.info.workspace], ["簡報", S.info.decks_dir]]) {
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v;
+      $("#envInfo").append(dt, dd);
+    }
+  }
+  $("#dlgSet").showModal();
 }
 
 function wire() {
   paintIcons();
   const vp = $("#viewport");
+  vp.addEventListener("pointerdown", () => setFocus("canvas"), true);
   vp.addEventListener("pointerdown", onPointerDown);
   vp.addEventListener("pointermove", onPointerMove);
   vp.addEventListener("pointerup", onPointerUp);
@@ -1508,8 +1857,20 @@ function wire() {
   $("#actFit").onclick = () => { S.fit = true; renderCanvas(); };
   $("#actGrid").onclick = (e) => { S.grid = !S.grid; e.currentTarget.setAttribute("aria-pressed", S.grid); renderCanvas(); };
   $("#actSnap").onclick = (e) => { S.snap = !S.snap; e.currentTarget.setAttribute("aria-pressed", S.snap); };
-  $("#actMode").onclick = () => { const m = document.documentElement.dataset.mode === "dark" ? "light" : "dark"; document.documentElement.dataset.mode = m; try { localStorage.setItem("sc.mode", m); } catch {} };
-  $("#actHome").onclick = () => { const u = new URL(location.href); u.search = ""; history.pushState(null, "", u); showHome(); };
+  $("#actHome").onclick = goHome;
+  $("#zoomChip").onclick = () => { S.fit = true; renderCanvas(); };
+  $("#actSettings").onclick = openSettings;
+  $("#deckPicker").onclick = (e) => deckMenu(e.currentTarget);
+  $("#actExport").onclick = (e) => exportMenu(e.currentTarget);
+  $("#actShow").onclick = (e) => popMenu(e.currentTarget, [
+    { icon: "play", label: "從這頁放映", run: () => startShow(true) },
+    { icon: "refresh", label: "從頭放映", run: () => startShow(false) },
+    { icon: "panel", label: "簡報者檢視（延伸螢幕）", run: () => startShow(true, "presenter") },
+  ]);
+  $("#actNotation").onclick = openNotation;
+  wireNotation();
+  wireHome();
+  wireSettings();
   $("#fontChip").onclick = (e) => {
     e.stopPropagation();
     const pop = $("#fontPop"), open = pop.hidden;
@@ -1519,14 +1880,20 @@ function wire() {
   };
   document.addEventListener("click", (e) => { if (!e.target.closest("#fontPop")) { $("#fontPop").hidden = true; $("#fontChip").setAttribute("aria-expanded", "false"); } });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#fontPop").hidden) { $("#fontPop").hidden = true; $("#fontChip").setAttribute("aria-expanded", "false"); } });
-  $("#actPptx").onclick = async () => { toast("正在匯出 PPTX…"); try { const r = await api(deckApi("/export"), { body: {} }); toast(r.warning ? `已匯出：${r.path}。注意：${r.warning}` : `已匯出：${r.path}`, !!r.warning); } catch (e) { toast(e.message, true); } };
-  $("#actPdf").onclick = async () => { toast("正在用 Chrome 產生 PDF…"); try { const r = await api(deckApi("/pdf"), { body: {} }); toast(`已輸出 PDF：${r.path}`); } catch (e) { toast(e.message, true); } };
   $("#slideAdd").onclick = addSlide;
   $("#slideDup").onclick = dupSlide;
   $("#slideDel").onclick = delSlide;
   $("#slideHide").onclick = hideSlide;
   $("#insImage").onclick = () => $("#imgFile").click();
-  $("#imgFile").onchange = (e) => { const f = e.target.files[0]; if (f) insertImageFile(f); e.target.value = ""; };
+  $("#imgFile").onchange = (e) => {
+    const f = e.target.files[0], into = e.target.dataset.slot;
+    e.target.value = "";
+    delete e.target.dataset.slot;
+    if (!f) return;
+    const o = into ? findObj(+into) : null;
+    if (o) fillImageSlot(o, f); else insertImageFile(f);
+  };
+  $("#insImage").addEventListener("click", () => delete $("#imgFile").dataset.slot, true);
   $("#insTable").onclick = () => openTableDialog();
   $("#insEq").onclick = () => openEquation(null);
   $("#insComp").onclick = (e) => openComponentMenu(e.currentTarget);
@@ -1542,22 +1909,27 @@ function wire() {
   $("#notes").addEventListener("blur", () => setTimeout(() => (notesUid = null), 0));
   $("#toggleSorter").onclick = () => togglePanel("sorter");
   $("#toggleSide").onclick = () => togglePanel("side");
-  $$(".tabs [data-tab]").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; S.reveal = null; $$(".tabs [data-tab]").forEach((x) => x.setAttribute("aria-selected", x === b)); renderSide(); }));
   wireSorter();
-  $("#newForm").onsubmit = async (e) => { e.preventDefault(); try { const r = await api("/api/decks", { body: { name: $("#newName").value.trim(), style: $("#newStyle").value } }); location.search = `?deck=${encodeURIComponent(r.name)}`; } catch (x) { toast(x.message, true); } };
-  $("#importForm").onsubmit = async (e) => { e.preventDefault(); try { const r = await api("/api/decks/import", { body: { path: $("#impPath").value.trim(), name: $("#impName").value.trim() || undefined } }); location.search = `?deck=${encodeURIComponent(r.name)}`; } catch (x) { toast(x.message, true); } };
-  $("#impFile").onchange = async (e) => { const f = e.target.files[0]; if (!f) return; try { const r = await api(`/api/decks/import?name=${encodeURIComponent(f.name.replace(/\.pptx$/i, ""))}`, { body: await f.arrayBuffer(), raw: true }); location.search = `?deck=${encodeURIComponent(r.name)}`; } catch (x) { toast(x.message, true); } };
   addEventListener("popstate", boot);
   const pane = $("#viewport");
   pane.addEventListener("dragover", (e) => e.preventDefault());
-  pane.addEventListener("drop", (e) => { e.preventDefault(); const f = [...e.dataTransfer.files].find((x) => x.type.startsWith("image/")); if (f && S.deck) insertImageFile(f); });
+  pane.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const f = [...e.dataTransfer.files].find((x) => x.type.startsWith("image/"));
+    if (!f || !S.deck) return;
+    // dropped on an empty image slot: it fills that slot
+    const at = topObjEl(document.elementFromPoint(e.clientX, e.clientY));
+    const o = at?.classList.contains("slot-empty") && at.dataset.slot === "image" ? findObj(+at.dataset.id) : null;
+    if (o) fillImageSlot(o, f); else insertImageFile(f);
+  });
 }
 
 async function boot() {
   const name = new URL(location.href).searchParams.get("deck");
   try {
-    if (name) await openDeck(name);
-    else await showHome();
+    if (!name) { await showHome(); return; }
+    await openDeck(name);
+    if (new URL(location.href).searchParams.get("audience")) startAudience();
   } catch (e) { toast(e.message, true); await showHome(); }
 }
 

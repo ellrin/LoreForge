@@ -15,7 +15,7 @@ const h = (tag, attrs = {}, ...kids) => {
   for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k));
   return e;
 };
-const sec = (title, ...kids) => h("div", { class: "sec" }, h("h4", {}, title), ...kids);
+const sec = (title, ...kids) => h("div", { class: "sec" }, title ? h("h4", {}, title) : null, ...kids);
 const row = (...kids) => h("div", { class: "row" }, ...kids);
 const ib = (icon, label, onclick, pressed) => { const b = iconButton(icon, label, onclick); if (pressed !== undefined) b.setAttribute("aria-pressed", pressed ? "true" : "false"); return b; };
 
@@ -236,7 +236,7 @@ function strokeControls(o, line, path) {
 }
 
 function connectorSection(o) {
-  const line = o.line ?? { color: "000000", width_pt: 1.5, dash: "solid", head: "none", tail: "triangle" };
+  const line = o.line ?? { color: inkColor(), width_pt: 1.5, dash: "solid", head: "none", tail: "triangle" };
   const ends = [["none", "無"], ["triangle", "三角"], ["stealth", "尖箭"], ["arrow", "開放"], ["oval", "圓"], ["diamond", "菱形"]];
   const set = (patch, label) => commit([setObj(o.id, "/line", { ...line, ...patch })], label);
   const presets = Object.entries(S.style?.arrows ?? {});
@@ -247,7 +247,7 @@ function connectorSection(o) {
       h("label", {}, "終點", h("select", { onchange: (e) => set({ tail: e.target.value }, "箭頭") }, ends.map(([v, l]) => h("option", { value: v, selected: v === line.tail }, l))))),
     swatches(line.color, (hex) => hex && set({ color: hex }, "線條顏色"), { none: false }),
     strokeControls(o, line, "/line"),
-    o.start || o.end ? row(h("span", { class: "info" }, `黏著：${o.start ? `起點→#${o.start.id}` : ""} ${o.end ? `終點→#${o.end.id}` : ""}`), h("button", { class: "btn small", onclick: () => commit([setObj(o.id, "/start", null), setObj(o.id, "/end", null)], "解除黏著") }, "解除")) : h("div", { class: "info" }, "拖曳端點到圖形的連接點即可黏著。"));
+    o.start || o.end ? row(h("span", { class: "info" }, `黏著：${o.start ? `起點→#${o.start.id}` : ""} ${o.end ? `終點→#${o.end.id}` : ""}`), h("button", { class: "btn small", onclick: () => commit([setObj(o.id, "/start", null), setObj(o.id, "/end", null)], "解除黏著") }, "解除")) : null);
 }
 
 function pictureSection(o) {
@@ -275,7 +275,7 @@ function tableSection(o) {
       h("button", { class: "btn small", onclick: () => { if (t.rows.length > 1) { t.rows.splice(r, 1); save("刪除列"); } } }, "刪除列")),
     row(h("button", { class: "btn small", onclick: () => { t.cols.splice(c + 1, 0, t.cols[c]); t.rows.forEach((row) => row.cells.splice(c + 1, 0, emptyCell(row.cells[c]?.src))); save("插入欄"); } }, "右方插入欄"),
       h("button", { class: "btn small", onclick: () => { if (t.cols.length > 1) { t.cols.splice(c, 1); t.rows.forEach((row) => row.cells.splice(c, 1)); save("刪除欄"); } } }, "刪除欄")),
-    h("div", { class: "info" }, ec ? `儲存格 (${r + 1}, ${c + 1}) 底色` : "雙擊儲存格編輯文字；Tab 移到下一格"),
+    h("div", { class: "info" }, ec ? `儲存格 (${r + 1}, ${c + 1})` : ""),
     ec ? swatches(o.rows[r].cells[c].fill ?? null, (hex) => commit([setObj(o.id, `/rows/${r}/cells/${c}/fill`, hex)], "儲存格底色")) : null);
 }
 
@@ -288,13 +288,11 @@ function slidePane() {
   const visit = (o) => { const tbs = []; if (o.text) tbs.push(o.text); if (o.type === "table") o.rows.forEach((r) => r.cells.forEach((c) => tbs.push(c.text))); if (o.type === "group") o.children.forEach(visit); tbs.forEach((tb) => tb.paras.forEach((p) => p.runs.forEach((r) => { if (r.kind === "text" && r.text.trim()) { runs++; if (!r.tag) untagged++; } }))); };
   sl.objects.forEach(visit);
   return [
-    sec(`投影片 ${slideNo(sl.uid)}`,
+    sec("",
       row(h("label", {}, "版面配置", h("select", { onchange: (e) => commit([{ op: "set_slide", slide: sl.uid, path: "/layout", value: e.target.value }], "版面配置") }, layouts.map((l) => h("option", { selected: l === sl.layout }, l))))),
       row(h("label", { class: "row" }, h("input", { type: "checkbox", checked: !!sl.hidden, onchange: hideSlide }), "隱藏（備用頁）")),
-      h("div", { class: "info" }, `${sl.objects.length} 個物件 · 文字 ${runs} 段，未標籤 ${untagged}`),
-      sl.src ? h("div", { class: "info" }, `來源：${sl.src.part}`) : null),
-    sec("漸進揭露", h("div", { class: "info" }, "複製這一頁成數頁，每頁強調一組物件，其餘依風格包變淡（圖片透明、文字灰、箭頭淡）。"), row(h("button", { class: "btn small primary", onclick: () => openReveal() }, "設定步驟…"))),
-    warn.length ? sec("畫面上無法完整呈現（匯出時原樣保留）", h("ul", { class: "warn-box" }, warn.map((w) => h("li", {}, warningText(w))))) : null,
+      h("div", { class: "info mono" }, `${sl.objects.length} 物件 · ${runs} 段文字 · 未標籤 ${untagged}`)),
+    warn.length ? sec("無法完整顯示（匯出原樣保留）", h("ul", { class: "warn-box" }, warn.map((w) => h("li", {}, warningText(w))))) : null,
   ];
 }
 
@@ -337,19 +335,139 @@ function animPane() {
         ib("chevron", "上移", () => { if (!i) return; const l = clone(anims); [l[i - 1], l[i]] = [l[i], l[i - 1]]; save(l, "動畫順序"); }),
         ib("x", "移除", () => { const l = clone(anims); l.splice(i, 1); save(l, "移除動畫"); })));
   }));
-  return [sec("進場動畫（5 種）",
-    h("div", { class: "info" }, "你的習慣是「複製頁＋變淡」；動畫只當選配。"),
+  return [sec("",
     one ? row(h("select", { onchange: (e) => (eff = e.target.value) }, Object.entries(names).map(([k, v]) => h("option", { value: k, selected: k === "fade" }, v))),
-      h("button", { class: "btn small primary", onclick: () => save([...anims, ...S.sel.map((id) => ({ obj: id, effect: eff, trigger: "click", duration_ms: 500, delay_ms: 0 }))], "加入動畫") }, "加到選取物件")) : h("div", { class: "info" }, "先選取物件。"),
-    anims.length ? list : h("div", { class: "info" }, "這一頁沒有動畫。"))];
+      h("button", { class: "btn small primary", onclick: () => save([...anims, ...S.sel.map((id) => ({ obj: id, effect: eff, trigger: "click", duration_ms: 500, delay_ms: 0 }))], "加入動畫") }, h("span", { "data-icon": "plus" }), "加入")) : null,
+    anims.length ? list : null)];
 }
 
+// ── 00 版型: 輔助線, defaults (封面 / 內頁 / 封底), the recipe gallery ──────────
+const KIND_NAMES = { cover: "封面", content: "內頁", end: "封底" };
+const FILTERS = { academic: "學術", design: "設計", all: "全部" };
+
+/** A recipe thumbnail (lazy: drawn when it scrolls into view). */
+const THUMBS = new Map(); // `${deck}|${recipe}|${layout}` → rendered slide node
+const thumbSeen = new IntersectionObserver((es) => es.forEach((e) => {
+  if (!e.isIntersecting) return;
+  thumbSeen.unobserve(e.target);
+  const r = recipeById(e.target.dataset.recipe);
+  if (!r || e.target.firstChild) return;
+  const key = `${S.name}|${r.id}|${e.target.dataset.layout}|${GUIDES.on}`;
+  let node = THUMBS.get(key);
+  if (!node) { node = recipeThumb(r, e.target.dataset.layout); THUMBS.set(key, node); }
+  else if (node.isConnected) node = node.cloneNode(true);
+  node.style.transform = `scale(${e.target.clientWidth / SC.px(S.deck.size.w)})`;
+  e.target.append(node);
+}));
+function thumbFrame(r, layout) {
+  const f = h("div", { class: "rthumb", "data-recipe": r.id, "data-layout": layout ?? "" });
+  let cached = THUMBS.get(`${S.name}|${r.id}|${layout ?? ""}|${GUIDES.on}`);
+  if (cached?.isConnected) cached = cached.cloneNode(true);
+  if (cached) { f.append(cached); requestAnimationFrame(() => (cached.style.transform = `scale(${f.clientWidth / SC.px(S.deck.size.w)})`)); }
+  else thumbSeen.observe(f);
+  return f;
+}
+
+function arrangePane() {
+  const sl = slide();
+  if (!sl) return [];
+  if (!S.arr) { loadArrangements().then(() => { renderSide(); renderGuides(); }).catch(() => {}); return [h("div", { class: "empty" }, "…")]; }
+
+  const guides = h("label", { class: "row check" }, h("input", { type: "checkbox", checked: GUIDES.on, onchange: (e) => toggleGuides(e.target.checked) }), "輔助線");
+
+  const chips = h("div", { class: "seg filters" }, Object.entries(FILTERS).map(([k, v]) =>
+    h("button", { "aria-pressed": String(ARR.filter === k), onclick: () => { ARR.filter = k; renderSide(); } }, v)));
+
+  const list = S.arr.recipes.filter((r) => ARR.filter === "all" || (ARR.filter === "academic") === isAcademic(r));
+  const current = sl.arrangement;
+  const gallery = h("div", { class: "recipes" }, list.map((r) =>
+    h("button", { class: "recipe", "aria-pressed": String(current === r.id), title: r.description || r.name,
+      onclick: () => applyArrangement(r.id) },
+      thumbFrame(r, sl.layout),
+      h("span", {}, r.name.replace(/^[^｜]*｜/, "")))));
+
+  return [guides, chips, gallery];
+}
+
+// ── Side panel: numbered blocks (PaperComposer); explanations only behind "?" ──
+const BLOCKS = [
+  { id: "reveal", title: "漸進揭露", when: () => !!S.reveal, kids: () => revealPane(),
+    help: "這一頁複製成數頁，每頁強調一組物件，其餘依底版的規則變淡（圖片透明、文字灰、線條淡）。在投影片上選物件（Shift 多選）後加入步驟，至少兩步。議程加粗：清單的每個第一層項目產生一頁，當前項目加粗。" },
+  { id: "arr", n: "00", title: "版型", kids: () => arrangePane(),
+    key: () => [S.cur, slide()?.arrangement, slide()?.layout, ARR.filter, !!S.arr, GUIDES.on].join("|"),
+    help: "點縮圖就套用到這一頁；按 Enter 或＋新增的頁沿用目前這頁的版型。輔助線是這個版型的構圖線，只在編輯時顯示。圖片位置點兩下或把圖拖進去就能放圖；沒填的位置放映與匯出時不會出現。" },
+  { id: "fmt", n: "01", title: "格式", kids: () => formatKids(),
+    help: "文字只能套用標籤，顏色只從色票挑；字級只能在標籤允許的範圍內調整。連接線：把端點拖到圖形的連接點就會黏著；肘形線中間的黃點可以調整中段位置。" },
+  { id: "page", n: "02", title: "頁面", kids: () => slidePane(),
+    help: "版面配置來自底版。隱藏的頁是備用頁，匯出時保留、放映時略過。" },
+  { id: "anim", n: "03", title: "動畫", kids: () => animPane(),
+    help: "選物件後加入進場動畫，依清單順序播放。通常用漸進揭露代替動畫。" },
+];
+const blockOpen = (() => { try { return JSON.parse(localStorage.getItem("sc.blocks") ?? "{}"); } catch { return {}; } })();
+function isOpen(b) { return b.id === "reveal" || (blockOpen[b.id] ?? b.id !== "anim"); }
+
 function renderSide() {
-  const pane = $("#pane");
-  if (!S.deck) { pane.textContent = ""; return; }
+  const box = $("#blocks");
+  if (!S.deck) { box.textContent = ""; box.dataset.ids = ""; return; }
   if (S.reveal && S.reveal.uid !== S.cur) S.reveal = null;
-  const kids = sideKids();
-  const key = [S.tab, S.cur, S.sel.join(","), S.editing, S.crop, S.reveal ? "r" : ""].join("|");
+  const want = BLOCKS.filter((b) => !b.when || b.when());
+  const ids = want.map((b) => b.id).join(",");
+  if (box.dataset.ids !== ids) {
+    box.dataset.ids = ids;
+    box.textContent = "";
+    for (const b of want) box.append(blockShell(b));
+    paintIcons(box);
+  }
+  for (const b of want) {
+    const el = box.querySelector(`.block[data-id="${b.id}"]`);
+    el.dataset.open = isOpen(b) ? "true" : "false";
+    if (!isOpen(b)) continue;
+    const pane = el.querySelector(".pane");
+    // a block with its own key (00 版型) is left alone while that key holds
+    if (b.key) { const k = b.key(); if (pane.dataset.key === k) continue; fillPane(pane, b.kids(), k); continue; }
+    fillPane(pane, b.kids(), [b.id, S.cur, S.sel.join(","), S.editing, S.crop, S.reveal ? "r" : ""].join("|"));
+  }
+}
+function blockShell(b) {
+  const head = h("div", { class: "block-head" }, b.n ? h("span", { class: "n" }, b.n) : null, h("h3", {}, b.title), helpButton(b.help));
+  if (b.id === "reveal") {
+    const close = ib("x", "關閉", () => { S.reveal = null; renderSide(); });
+    close.classList.add("small");
+    close.style.marginLeft = "auto";
+    head.append(close);
+  } else {
+    const toggle = h("button", { class: "toggle", "aria-label": "收合" }, isOpen(b) ? "−" : "+");
+    toggle.onclick = () => {
+      blockOpen[b.id] = !isOpen(b);
+      try { localStorage.setItem("sc.blocks", JSON.stringify(blockOpen)); } catch {}
+      toggle.textContent = blockOpen[b.id] ? "−" : "+";
+      renderSide();
+    };
+    head.append(toggle);
+  }
+  return h("section", { class: "block", "data-id": b.id }, head, h("div", { class: "block-body" }, h("div", { class: "pane" })));
+}
+/** The "?" next to a block title: the only place with explanatory text. */
+function helpButton(text) {
+  if (!text) return null;
+  const b = h("button", { class: "help", "aria-label": "說明", "aria-expanded": "false" }, "?");
+  b.onclick = (e) => {
+    e.stopPropagation();
+    const was = $(".tip");
+    was?.remove();
+    $$(".help[aria-expanded=true]").forEach((x) => x.setAttribute("aria-expanded", "false"));
+    if (was?.dataset.for === text) return;
+    const t = h("div", { class: "tip", "data-for": text }, text);
+    document.body.append(t);
+    const r = b.getBoundingClientRect();
+    t.style.top = `${r.bottom + 6}px`;
+    t.style.left = `${Math.max(8, Math.min(r.left - 8, innerWidth - t.offsetWidth - 8))}px`;
+    b.setAttribute("aria-expanded", "true");
+    setTimeout(() => document.addEventListener("pointerdown", () => { t.remove(); b.setAttribute("aria-expanded", "false"); }, { once: true }), 0);
+  };
+  return b;
+}
+function fillPane(pane, kids, key) {
   const ae = document.activeElement;
   // a focused number field (X/Y/W/H…) is kept: refresh values in place instead of rebuilding under it
   if (pane.dataset.key === key && ae?.dataset?.k && pane.contains(ae)) {
@@ -363,31 +481,24 @@ function renderSide() {
   pane.dataset.key = key;
   pane.textContent = "";
   for (const k of kids.flat()) if (k) pane.append(k);
+  if (!pane.childElementCount) pane.append(h("div", { class: "empty" }, "—"));
   paintIcons(pane);
 }
-function sideKids() {
-  let kids = [];
-  if (S.reveal) kids = revealPane();
-  else if (S.tab === "anim") kids = animPane();
-  else if (S.tab === "slide") kids = slidePane();
-  else {
-    const objs = selObjs();
-    if (!objs.length && !S.editing) kids = slidePane();
-    else {
-      const one = objs.length === 1 ? objs[0] : null;
-      const editingObj = S.editing ? findObj(S.editing) : null;
-      if (editingObj || textTargets().length) kids.push(textSection());
-      if (one) {
-        if (one.type === "shape" || one.type === "text") kids.push(fillLineSection(one));
-        if (one.type === "connector") kids.push(connectorSection(one));
-        if (one.type === "picture") kids.push(pictureSection(one));
-        if (one.type === "table") kids.push(tableSection(one));
-        if (one.type === "locked") kids.push(sec("鎖定物件", h("div", { class: "info" }, `${one.kind}：原封保留、可移動，不能編輯內容。`)));
-        if (one.equation) kids.push(sec("方程式", row(h("button", { class: "btn small", onclick: () => openEquation(one) }, "編輯 LaTeX…"))));
-      }
-      if (objs.length) kids.push(arrangeSection(objs));
-    }
+function formatKids() {
+  const kids = [];
+  const objs = selObjs();
+  const one = objs.length === 1 ? objs[0] : null;
+  const editingObj = S.editing ? findObj(S.editing) : null;
+  if (editingObj || textTargets().length) kids.push(textSection());
+  if (one) {
+    if (one.type === "shape" || one.type === "text") kids.push(fillLineSection(one));
+    if (one.type === "connector") kids.push(connectorSection(one));
+    if (one.type === "picture") kids.push(pictureSection(one));
+    if (one.type === "table") kids.push(tableSection(one));
+    if (one.type === "locked") kids.push(sec("鎖定物件", h("div", { class: "info" }, one.kind)));
+    if (one.equation) kids.push(sec("方程式", row(h("button", { class: "btn small", onclick: () => openEquation(one) }, h("span", { "data-icon": "sigma" }), "LaTeX"))));
   }
+  if (objs.length) kids.push(arrangeSection(objs));
   return kids;
 }
 
@@ -470,7 +581,7 @@ function openEquation(o) {
         let omml;
         try { omml = (await api("/api/math", { body: { latex, size } })).omml; } catch (e) { toast(e.message, true); return; }
         S.latex.set(omml, latex);
-        const look = tagLook("equation") ?? { font: "Cambria Math", size, color: "000000" };
+        const look = tagLook("equation") ?? { font: "Cambria Math", size, color: inkColor() };
         const mrun = { kind: "math", text: latex, tag: S.style?.tags?.equation ? "equation" : null, look, omml, latex };
         close();
         if (o) {
@@ -555,16 +666,14 @@ function revealPane() {
   const close = () => { S.reveal = null; renderSide(); };
   const list = h("ol", { class: "steps" });
   R.steps.forEach((st, i) => list.append(h("li", {}, h("b", {}, `步驟 ${i + 1}`), h("span", { class: "ids" }, st.map((id) => findObj(id)?.name ?? `#${id}`).join("、")), ib("x", "移除這個步驟", () => { R.steps.splice(i, 1); renderSide(); }))));
-  if (!R.steps.length) list.append(h("li", {}, h("span", { class: "ids empty" }, "在投影片上選物件（Shift 多選），再按「加入選取物件」。")));
   const lists = sl.objects.filter((o) => o.text && agendaCount(o) > 1);
   if (R.agenda == null || !lists.some((o) => o.id === R.agenda)) R.agenda = lists.find((o) => S.sel.includes(o.id))?.id ?? lists[0]?.id ?? null;
   const ghostBox = h("div", { class: "sec" },
-    row(h("button", { class: "btn small primary", disabled: !S.sel.length, onclick: () => { R.steps.push([...S.sel]); S.sel = []; renderOverlay(); renderSide(); } }, S.sel.length ? `加入選取物件（${S.sel.length}）為步驟 ${R.steps.length + 1}` : "先在投影片上選物件")),
+    row(h("button", { class: "btn small primary", disabled: !S.sel.length, onclick: () => { R.steps.push([...S.sel]); S.sel = []; renderOverlay(); renderSide(); } }, h("span", { "data-icon": "plus" }), `步驟 ${R.steps.length + 1}${S.sel.length ? `（${S.sel.length}）` : ""}`)),
     list,
-    row(h("label", {}, "後面步驟的物件", h("select", { onchange: (e) => (R.future = e.target.value) }, h("option", { value: "ghost", selected: R.future === "ghost" }, "變淡"), h("option", { value: "hide", selected: R.future === "hide" }, "先隱藏")))));
+    row(h("label", {}, "之後的物件", h("select", { onchange: (e) => (R.future = e.target.value) }, h("option", { value: "ghost", selected: R.future === "ghost" }, "變淡"), h("option", { value: "hide", selected: R.future === "hide" }, "先隱藏")))));
   const agendaBox = h("div", { class: "sec" },
-    lists.length ? row(h("label", {}, "議程清單", h("select", { onchange: (e) => (R.agenda = +e.target.value) }, lists.map((o) => h("option", { value: o.id, selected: o.id === R.agenda }, `${o.name} · ${agendaCount(o)} 項`))))) : h("div", { class: "info" }, "這一頁沒有兩項以上的清單。"),
-    h("div", { class: "info" }, "每個第一層項目產生一頁，當前項目加粗；空白行與第二層項目略過。"));
+    lists.length ? row(h("label", {}, "清單", h("select", { onchange: (e) => (R.agenda = +e.target.value) }, lists.map((o) => h("option", { value: o.id, selected: o.id === R.agenda }, `${o.name} · ${agendaCount(o)} 項`))))) : h("div", { class: "empty" }, "—"));
   const pick = (m) => { R.mode = m; renderSide(); };
   const seg = h("div", { class: "seg" },
     h("button", { "aria-pressed": R.mode === "ghost" ? "true" : "false", onclick: () => pick("ghost") }, "複製頁＋變淡"),
@@ -572,10 +681,9 @@ function revealPane() {
   const g = S.style?.ghost;
   const ready = R.mode === "ghost" ? R.steps.length >= 2 : R.agenda != null;
   return [h("div", { class: "pane-inner sec" },
-    h("div", { class: "reveal-head" }, h("h4", {}, `漸進揭露 · 投影片 ${slideNo(sl.uid)}`), ib("x", "關閉", close)),
     seg,
     R.mode === "ghost" ? ghostBox : agendaBox,
-    R.mode === "ghost" && g ? h("div", { class: "info" }, `變淡規則：圖片 ${Math.round(g.picture_alpha * 100)}%、線條 ${Math.round(g.line_alpha * 100)}%、填色 ${Math.round((g.fill_alpha || g.line_alpha) * 100)}%、文字 #${g.text_color}`) : null,
+    R.mode === "ghost" && g ? h("div", { class: "info mono" }, `變淡：圖片 ${Math.round(g.picture_alpha * 100)}%、線條 ${Math.round(g.line_alpha * 100)}%、填色 ${Math.round((g.fill_alpha || g.line_alpha) * 100)}%、文字 #${g.text_color}`) : null,
     h("div", { class: "actions row" }, h("button", { class: "btn small", onclick: close }, "取消"), h("button", { class: "btn small primary", disabled: !ready, title: ready ? "" : "至少兩個步驟", onclick: async () => {
       const spec = R.mode === "ghost" ? { mode: "ghost", steps: R.steps, future: R.future } : { mode: "agenda", obj: R.agenda, em: "strong" };
       await serial(async () => {

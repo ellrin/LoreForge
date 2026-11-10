@@ -349,6 +349,13 @@ function renderObject(o, ctx) {
   else e.dataset.id = o.id;
   frameStyle(e, f);
   if (o.hidden) e.classList.add("is-hidden");
+  if (o.slot) {
+    // arrangement slot: empty ones are dashed in the editor, gone in shows and prints
+    e.dataset.slot = o.slot.replace(/-\d+$/, "");
+    const blank = (t) => !t || t.paras.every((p) => p.runs.every((r) => r.kind !== "math" && !(r.text ?? "").trim()));
+    const empty = o.type === "table" ? o.rows.every((r) => r.cells.every((c) => blank(c.text))) : (o.type === "text" || o.type === "shape") && blank(o.text);
+    if (empty) e.classList.add("slot-empty");
+  }
   if (o.ph) {
     e.dataset.ph = o.ph;
     const empty = !o.text || o.text.paras.every((p) => !p.runs.some((r) => (r.text ?? "").length || r.kind === "math"));

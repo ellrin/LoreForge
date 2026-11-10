@@ -25,6 +25,21 @@ when working on lore-canvas in parallel with other agents.
 
 - `../commons/crates/lore-canvas`: app-agnostic scene model, style rules, ops/undo,
   geometry, reveal generator, components, PPTX ↔ canvas (`pptx_in`, `pptx_out`).
+- Bases (底版, design §7.2 v2): a style folder with `base.json` is a canvas base — `Workspace::template_bytes`
+  compiles it in memory (`lore_canvas::base::compile`; nothing written into the style folder), new slides get
+  the page kind's `starter` objects (`Workspace::new_slide_objects`; `style:` pictures copied into the deck's
+  assets). Without base.json the style's template.pptx is used (imported masters, e.g. a company template).
+  `/api/styles/{id}/sample` gives the cover and content page for client-rendered previews.
+- 版型 (recipes, `web/arrange.js`, right panel block 00): blocks on the slide (fractions) with roles —
+  title, text, image, caption, card, table, takeaway, colour panels (`deco`) — plus the composition's guide
+  lines and anchors (輔助線, drawn over everything, never exported). Sources: `web/recipes.json`, built from
+  GraphicDesigner (MIT, the author's) by `node --import ./scripts/gd-register.mjs scripts/import-gd-recipes.mjs <GraphicDesigner>`
+  (its own resolver and generators, 16:9 + any-canvas recipes), and the author's `arrangements/*.json` in the
+  private workspace (same block format, `class: "academic"`). Objects keep their block as `slot`; empty slots are
+  dashed in the editor and left out of shows, PDFs and PPTX (`Object::is_empty_slot`). `deck.defaults` = recipe
+  per page kind for new slides (Enter / ＋); `slide.arrangement` = the recipe a slide was laid out with.
+- Desktop: .pptx files opened from Finder are imported (or the deck already made from the same bytes is opened),
+  on the style whose layouts the file shares most (`Workspace::open_pptx_file`).
 - `crates/core` (`sc-core`): `Workspace` (styles/, decks/), `Session` (open deck: editor,
   source package, layout backdrops, LaTeX cache), export PPTX/PDF, `layout_titles`.
 - `crates/server` (`sc-server`): axum on 127.0.0.1:7880; handlers are plain async fns over

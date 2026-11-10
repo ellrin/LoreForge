@@ -1846,6 +1846,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-notation"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lore-ooxml"
 version = "0.1.0"
 dependencies = [
@@ -2706,6 +2714,7 @@ dependencies = [
  "lore-fonts",
  "lore-home",
  "lore-math",
+ "lore-notation",
  "lore-ooxml",
  "sc-core",
  "serde",

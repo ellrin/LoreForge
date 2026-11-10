@@ -13,6 +13,7 @@ lore-ooxml.workspace = true
 lore-math.workspace = true
 lore-home.workspace = true
 lore-fonts.workspace = true
+lore-notation.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

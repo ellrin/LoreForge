@@ -23,6 +23,16 @@
     ],
     "resources": {
       "../../web": "web"
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "pptx"
+        ],
+        "name": "PowerPoint 簡報",
+        "role": "Editor",
+        "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+      }
+    ]
   }
 }
