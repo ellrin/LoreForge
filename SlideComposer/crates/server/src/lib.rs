@@ -29,6 +29,7 @@
 
 mod export_open;
 mod notation;
+mod reader;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -209,6 +210,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/decks/{name}/file/save-as", post(file_save_as))
         .route("/api/shell/dialog", post(shell_dialog))
         .route("/api/export/open", post(export_open::export_open))
+        .merge(reader::routes())
 }
 
 /// The LoreForge themes (commons/ui/theme.css, the same file in every app),
