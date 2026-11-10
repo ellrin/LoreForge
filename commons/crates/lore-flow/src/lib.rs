@@ -75,7 +75,8 @@ fn with_layer_classes(g: &Graph) -> Graph {
     for n in g.nodes.iter().filter(|n| n.module == "layer-bars") {
         for l in n.list("layers") {
             let c = modules::layer_class(&l);
-            if !classes.contains(&c) {
+            // an ellipsis (…) stands for layers left out, not a kind of layer
+            if c.chars().any(char::is_alphanumeric) && !classes.contains(&c) {
                 classes.push(c);
             }
         }

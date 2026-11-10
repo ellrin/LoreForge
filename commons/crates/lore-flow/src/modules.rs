@@ -1020,8 +1020,11 @@ fn gen_layer_bars(n: &Node, cx: &Ctx) -> Core {
             classes.push(cls.clone());
             classes.len() - 1
         });
-        let colour = cx.theme.cycle(ci).to_string();
-        if typed && !legend.iter().any(|s: &crate::art::Swatch| s.key == format!("bars:{cls}")) {
+        // past the end of the cycle the colours come round lighter, so no two kinds share one
+        let len = cx.theme.colors.cycle.len().max(1);
+        let named = cls.chars().any(char::is_alphanumeric);
+        let colour = if !named { cx.theme.colors.muted.clone() } else if ci < len { cx.theme.cycle(ci).to_string() } else { shade(cx.theme.cycle(ci), 0.45 * (ci / len) as f64) };
+        if typed && named && !legend.iter().any(|s: &crate::art::Swatch| s.key == format!("bars:{cls}")) {
             legend.push(crate::art::Swatch { key: format!("bars:{cls}"), label: cls.clone(), color: colour.clone() });
         }
         // tapering keeps room for the name
@@ -1073,9 +1076,14 @@ fn gen_cuboid_seq(n: &Node, cx: &Ctx) -> Core {
     // classes=[conv,pool,…]: each block takes its layer type's colour and name from the theme
     let classes = n.list("classes");
     let mut legend: Vec<crate::art::Swatch> = Vec::new();
-    let line = hex_param(n, "line").unwrap_or_else(|| cx.theme.colors.ink.clone());
-    let alpha = n.num("alpha").unwrap_or(1.0);
-    let lw = 0.5 * cx.k;
+    // painted by the finish: outline = white blocks, translucent, gradient …
+    let mut f = crate::finish::Finish::of(n, cx.theme);
+    f.fill = fill.clone();
+    f.line = hex_param(n, "line").unwrap_or_else(|| cx.theme.colors.ink.clone());
+    f.lw = n.num("line_w").unwrap_or(0.5) / 0.6;
+    if let Some(a) = n.num("alpha") {
+        f.alpha = a;
+    }
     let gap = cx.s(n.num("gap").unwrap_or(7.0));
     let labels = n.list("labels");
     let small = cx.ty(cx.theme.font.small_scale * 0.9, false, &cx.theme.colors.ink);
@@ -1098,9 +1106,12 @@ fn gen_cuboid_seq(n: &Node, cx: &Ctx) -> Core {
                 legend.push(crate::art::Swatch { key: key.clone(), label: cx.theme.layer_label(key), color: c.clone() });
             }
         }
-        objs.push(poly(&format!("b{i}-top"), &[(x, y), (x + dx, y - dy), (x + t + dx, y - dy), (x + t, y)], true, paint(&shade(&c, cx.theme.shade.top), alpha), stroke(&line, lw)));
-        objs.push(poly(&format!("b{i}-side"), &[(x + t, y), (x + t + dx, y - dy), (x + t + dx, y + h - dy), (x + t, y + h)], true, paint(&shade(&c, cx.theme.shade.side), alpha), stroke(&line, lw)));
-        objs.push(shape(&format!("b{i}-front"), "rect", x, y, t, h, paint(&c, alpha), stroke(&line, lw)));
+        let (p, s) = f.face(&c, cx.theme.shade.top, cx.k);
+        objs.push(poly(&format!("b{i}-top"), &[(x, y), (x + dx, y - dy), (x + t + dx, y - dy), (x + t, y)], true, p, s));
+        let (p, s) = f.face(&c, cx.theme.shade.side, cx.k);
+        objs.push(poly(&format!("b{i}-side"), &[(x + t, y), (x + t + dx, y - dy), (x + t + dx, y + h - dy), (x + t, y + h)], true, p, s));
+        let (p, s) = f.face(&c, 0.0, cx.k);
+        objs.push(shape(&format!("b{i}-front"), "rect", x, y, t, h, p, s));
         if let Some(l) = labels.get(i).filter(|l| !l.is_empty()) {
             let (o, _, th) = cx.text(&format!("b{i}-dim"), l, &small, x + t / 2.0, mid + cx.s(max_h) / 2.0 + cx.s(2.0));
             bottom = bottom.max(mid + cx.s(max_h) / 2.0 + cx.s(2.0) + th);

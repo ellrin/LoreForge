@@ -984,7 +984,8 @@ pub(crate) fn pair(n: &Node, cx: &Ctx) -> Core {
     half.label = String::new();
     half.style = which.clone();
     half.params.insert("_pair".into(), true.into());
-    let role_coloured = matches!(which.as_str(), "trapezoid" | "bars" | "planes" | "lenet" | "fc" | "graph" | "vae" | "transformer");
+    // one model drawn as a pair (names=off) keeps one colour
+    let role_coloured = n.str("names") != Some("off") && matches!(which.as_str(), "trapezoid" | "bars" | "planes" | "lenet" | "fc" | "graph" | "vae" | "transformer");
     let mut e = half.clone();
     let mut d = half.clone();
     if role_coloured {
@@ -1146,11 +1147,14 @@ pub(crate) fn pair(n: &Node, cx: &Ctx) -> Core {
     let ty = p.ty_small();
     let base = h + 3.0;
     let base = p.objs.iter().map(|o| (o.frame.y + o.frame.h) as f64 / (crate::modules::EMU_PT * k)).fold(base, f64::max) + 2.0;
-    p.text("enc-name", &cx.theme.layer_label("enc"), ew / 2.0, base, &ty);
-    if let Some((a, b)) = latent_span {
-        p.text("latent-name", &cx.theme.layer_label("latent"), (a + b) / 2.0, base, &ty);
+    // names=off: the pair is one model (its label says what it is)
+    if n.str("names") != Some("off") {
+        p.text("enc-name", &cx.theme.layer_label("enc"), ew / 2.0, base, &ty);
+        if let Some((a, b)) = latent_span {
+            p.text("latent-name", &cx.theme.layer_label("latent"), (a + b) / 2.0, base, &ty);
+        }
+        p.text("dec-name", &cx.theme.layer_label("dec"), dx + dw / 2.0, base, &ty);
     }
-    p.text("dec-name", &cx.theme.layer_label("dec"), dx + dw / 2.0, base, &ty);
     let (w, hh) = normalise(&mut p);
     p.core(w, hh, LabelPos::Above)
 }
