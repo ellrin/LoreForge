@@ -2562,15 +2562,21 @@ async fn decide_review_all(State(s): State<Shared>, AxPath(name): AxPath<String>
     match b.action.as_str() {
         "accept" => r.changes.clear(),
         "reject" => {
-            let ids: Vec<String> = r.changes.iter().map(|c| c.id.clone()).collect();
-            for id in ids {
-                match reject_one(ws.as_deref(), &dir, &mut r, &id) {
-                    Ok((sec, found)) => {
+            // passes until nothing more goes: a change under another one can go once the upper one has
+            loop {
+                let ids: Vec<String> = r.changes.iter().map(|c| c.id.clone()).collect();
+                let mut done = false;
+                for id in &ids {
+                    if let Ok((sec, found)) = reject_one(ws.as_deref(), &dir, &mut r, id) {
                         sections.retain(|x: &Section| x.file != sec.file);
                         sections.push(sec);
                         issues.extend(found);
+                        done = true;
                     }
-                    Err(_) => skipped += 1,
+                }
+                if !done {
+                    skipped = r.changes.len();
+                    break;
                 }
             }
         }
