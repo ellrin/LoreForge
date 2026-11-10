@@ -91,7 +91,7 @@ your-private-repo/
 
 介面設定存在工作區的 `config.toml`（`[ui]`），跟著工作區一起同步，換一台電腦打開也是同樣的樣子；每次開啟時以它為準。
 
-第一次開啟 App 會彈出 **AI 與同步** 視窗（之後點右上角的「AI」開啟），三個步驟都可略過：
+第一次開啟 App 會彈出 **設定** 視窗（之後點右上角的齒輪開啟），前三個步驟都可略過：
 
 1. **工作區與同步**：三選一，每位使用者都指向**自己的**私有 repo，App 不綁定任何特定帳號
    - 建立新的：先在 GitHub 建立一個空白的 **private** repo（旁邊的外連圖示會開啟建立頁面），貼上網址並選擇存放位置；從範本建立資料夾、`git init` 並 push。網址留空則只存在這台電腦
@@ -104,6 +104,8 @@ your-private-repo/
    - **API key**：按外連圖示開啟 Anthropic Console 建立 key，貼回來儲存（只存在系統金鑰圈），按用量計費
 
    兩種方式都有「測試連線」，會標明走的是訂閱還是 API。寫作、拆解、段落檢查都使用右側選的引擎，檢索、提示詞與驗證都相同
+
+第四步 **外觀** 選配色與明暗。配色是所有 App 共用的，存在 LoreForge 的 `private/shared/ui.toml`，在任一 App 改了，其他 App 回到前景時跟著換；頁面本身（紙張）在每種配色下都是白底。
 
 也可以手動指定位置（擇一）：
 
@@ -132,14 +134,14 @@ your-private-repo/
 2. **作者**：從作者資料庫勾選、排順序，標記通訊作者與同等貢獻。資料庫在 `profile/authors.csv`（姓名、email、ORCID、所屬機構、角色）與 `profile/affiliations.csv`（系所、機構、城市、國家），姓與機構必填，其他可空著；在這裡新增的人會存進資料庫，下一篇直接選，也可以在「資料庫」視窗的「作者」「機構」分頁編輯。作者區塊依版型的寫法產生，不經過模型：Springer Nature（`\author[1]{\fnm{}\sur{}}`、`\affil`）、Elsevier（`elsarticle` 的 `\corref`；`cas-dc` 的 `\cormark` 與 `[orcid=]`）、IEEE 期刊（`\thanks{… is with …}`）、IEEE 會議（`\IEEEauthorblockN/A`）、LNCS（`\inst`、`\orcidID`、`\institute`），其他 class 用通用的 `\author{Name\\ 機構 \and …}`。範例裡的作者整段換掉，其餘不動。
 3. **Key value 與大綱**：
    - **Key value 必填**：這篇論文通篇要強調的一件事，可以是願景（例如「提升 XX 效能」）。中文最多 50 字、英文最多 30 個單字，存在 `paper.toml`；論文上方會一直顯示，點一下可修改。匯入現有論文時也要填。
-   - **大綱（選填，需要 Claude）**：條列章節與要說的事，Claude 依 Key value 給 3 個標題建議，並排出 section／subsection，每段最多兩句話說明這裡要寫什麼（寫在內文，之後自己改）。有期刊模板時依期刊的章節順序；勾選套用就取代模板的範例章節，前後的標題區與參考文獻區保留。
+   - **大綱（選填，需要 Claude 或本機模型）**：條列章節與要說的事，Claude（沒有時用本機模型）依 Key value 給 3 個標題建議，並排出 section／subsection，每段最多兩句話說明這裡要寫什麼（寫在內文，之後自己改）。有期刊模板時依期刊的章節順序；勾選套用就取代模板的範例章節，前後的標題區與參考文獻區保留。
 
 4. **圖表（選填）**：已經有的結果先放進來。
    - **表格**：從 Excel 或 Google 試算表選取儲存格直接貼上（也可以貼 CSV 或 Markdown 表格），第一列是表頭，下方即時預覽列數與欄數。選要放的章節（大綱架構的章節、模板的章節或空白論文的章節）和樣式（預設用這個期刊的：Springer Nature、Elsevier、IEEE、LNCS、CVPR，其他用 booktabs）。
    - **圖片**：PNG、JPG、PDF 或 EPS，存進論文的 `figures/`（檔名整理成 `fig1-原檔名.png`），以 `\includegraphics[width=\linewidth]` 放進 `figure` 環境。
    - **標題（caption）自動產生**：留白時，貼完表格或選好圖片後由右側選的寫作引擎（本機模型或 Claude）依表頭、列名寫一句標題，不寫結果與數字；也可以按標題旁的 AI 重寫。圖片只看得到檔名，檔名看不出內容時不會亂編，請自己填。建立時還空著的會先補上。
    - 可調整順序；建立時依序放在各章節的最後，產生 `\caption`、`\label{tab:…}`／`\label{fig:…}`，需要的套件自動加進 `main.tex`；之後在頁面上照常編輯。
-5. **文獻（選填，需要 Claude）**：把想引用的文章一次貼上，可以夾雜備註（見下方「文獻」的「貼上想引用的文章」）。Claude 先算出有幾篇，再三篇一組查證、建檔、加標籤存進文獻庫，顯示進度條；可以邊匯入邊回到其他步驟。你對每篇的備註（例如「需注意 · Methods · 只支撐…」）會記成這篇論文的引用用途（`citations.csv`）。
+5. **文獻（選填，需要 Claude 或本機模型）**：把想引用的文章一次貼上，可以夾雜備註（見下方「文獻」的「貼上想引用的文章」）。模型先算出有幾篇，再三篇一組查證、建檔、加標籤存進文獻庫，顯示進度條；可以邊匯入邊回到其他步驟。你對每篇的備註（例如「需注意 · Methods · 只支撐…」）會記成這篇論文的引用用途（`citations.csv`）。
 
 **Key value 是生成與檢查的約束**：生成段落時放進規則；檢查加了一條軟規則 R106（`supports_key_value`），判斷段落、圖表、摘要、contribution、討論是否離題。它是黃燈：延伸討論不一定完全對齊主題，不必每段都綠燈。
 
@@ -151,7 +153,7 @@ your-private-repo/
 
 ## 討論草稿
 
-已經做完實驗、有實驗記錄時，用對話把它變成論文草稿。開啟論文後按上方的 AI 圖示（或檔案選單的「討論草稿…」）。所有內容存在論文資料夾的 `draft/`（`session.json`、`transcript.jsonl`、`records/`），隨工作區同步，可以隨時接著做。
+已經做完實驗、有實驗記錄時，用對話把它變成論文草稿。開啟論文後按上方的 AI 圖示（或檔案選單的「討論草稿…」）。所有內容存在論文資料夾的 `draft/`（`session.json`、`transcript.jsonl`、`records/`；原地開啟的論文在 `.papercomposer/draft/`），隨工作區同步，可以隨時接著做。
 
 | 步驟 | 內容 |
 |---|---|
@@ -167,7 +169,7 @@ your-private-repo/
 
 | 9 修訂 | 論文寫好之後要補東西（一審要求外部驗證、老師要多一張圖、多引兩篇）：寫下要補什麼，可附新圖檔、從文獻庫選要加的文獻（會記進本篇引用）。先開一組對話，討論它要支撐什麼、放在哪一段（選項直接用段落編號）、會影響哪些地方、圖的 caption；再由 Opus 產生具體修改（插在某段之前／之後、取代某段、加在章節最後），每一項附原段落與理由，逐項「套用」或「不採用」。套用前會確認那一段還是原來的文字，改過就不寫；對不上的修改與需要你處理的連帶影響列在「還要注意」 |
 
-**對照表（`lore-notation`）**：討論草稿與修訂的每一步都會帶上你的對照表（`profile/notation.json` 加上論文的 `notation.json`）：符號用登記的巨集、圖表公式一律 `\ref{…}`、縮寫第一次出現要展開、數學一律在 `$…$` 裡。每段草稿與每項修訂寫完都跑一次對照表檢查：手打的「Table 1」或不存在的標籤會自動重寫一次，其他問題（縮寫沒展開、符號未定義等）列在段落下方或「還要注意」；對照表裡沒有的新符號可以一鍵登記（標為「待確認」，到對照表補上意思）。
+**對照表（`lore-notation`）**：討論草稿與修訂的每一步都會帶上你的對照表（全域的 `shared/notation.json`，即 LoreForge 的 `private/shared/`，所有 App 共用；沒有私人資料夾時用工作區的 `profile/notation.json`；再加上論文的 `notation.json`）：符號用登記的巨集、圖表公式一律 `\ref{…}`、縮寫第一次出現要展開、數學一律在 `$…$` 裡。每段草稿與每項修訂寫完都跑一次對照表檢查：手打的「Table 1」或不存在的標籤會自動重寫一次，其他問題（縮寫沒展開、符號未定義等）列在段落下方或「還要注意」；對照表裡沒有的新符號可以一鍵登記（標為「待確認」，到對照表補上意思）。
 
 **文獻用途會在對話裡長出來**：審稿說某篇的引用超出你寫的用途時，你在對話裡說明那篇其實還能支撐什麼（例如作者設計方法時觀察到的某個事實），這句會加進那篇在 `citations.csv` 的用途，之後的大綱與審稿就照新的用途判斷。
 
@@ -199,7 +201,7 @@ your-private-repo/
 - **‹ ›** 逐項移動，**✓ 接受**（保留現在的文字、刪除紀錄）、**✕ 拒絕**（放回原文；之後又改過的段落不能拒絕）。拒絕後放回的文字會跑對照表檢查，有問題時提示，不會擋。**全部 ⌄**：接受全部／拒絕全部／解決全部註解。
 - **顯示**：標記（預設）／只看結果／原稿。
 - **註解**：選取文字後按「＋ 註解」或右鍵「新增註解」（沒有選取時註解整段）。可以回覆、標為已解決（已解決的不算在數字裡，清單下方可顯示）。文字改過後依原文重新定位；原文不見時保留在清單，標「原文已更動」。
-- 資料存在論文資料夾的 `review.json`，**不寫進 .tex**：PDF、LaTeX、Word 匯出都不帶標記，LaTeX 原始碼包也不含它。作者名稱取自 `shared/profile.toml` 的 `name`。
+- 資料存在論文資料夾的 `review.json`，**不寫進 .tex**：PDF 與 LaTeX 匯出都不帶標記，LaTeX 原始碼包也不含它；Word 匯出則把未處理的修改與註解寫成 Word 的追蹤修訂與批註（見「匯出」）。作者名稱取自 `shared/profile.toml` 的 `name`。
 
 ## 公式
 
@@ -264,16 +266,17 @@ tlmgr search --global --file /xxx.sty
 
 - **文獻頁**（上方書架圖示）：搜尋、依標籤篩選、匯入 `.bib`、直接編輯一句話、簡介和標籤；有 PDF 的可一鍵開啟。
 - **PDF 不上 git**：每台電腦在文獻頁設定自己的 PDF 資料夾（存在 App 設定檔，不在任何 repo）。App 依檔名、`<key>.pdf` 或檔名中的 DOI 找到對應的 PDF，找不到就顯示本機沒有。
-- **匯入 PDF 或 DOI**：文獻頁會列出 PDF 資料夾裡還沒匯入的檔案。匯入時從 PDF 前兩頁讀出 DOI（跨行斷開的也會接回），書目向 Crossref（doi.org）取得，摘要依序向 OpenAlex、Semantic Scholar、PDF 本身的 Abstract 段落取得；**書目不經過模型**。模型只負責寫中文簡介、一句話，並從你的標籤清單挑標籤；頂會、頂刊依 `profile/venues.csv`（`pattern,tag`，沒有時用內建清單）判斷。抓到的標題若和 PDF 內容對不上（例如 DOI 被截斷而對到整本論文集），會標示並請你更正 DOI。每一篇都要你確認後才加入。
+- **匯入 PDF 或 DOI**：文獻頁會列出 PDF 資料夾裡還沒匯入的檔案。匯入時從 PDF 前兩頁讀出 DOI（跨行斷開的也會接回），書目向 Crossref（doi.org）取得，摘要依序向 OpenAlex、Semantic Scholar、PDF 本身的 Abstract 段落取得；**書目不經過模型**。模型只負責寫中文簡介、一句話，並從你的標籤清單挑標籤；頂會、頂刊依 `profile/venues.csv`（`pattern,tag`，沒有時用內建清單）判斷。抓到的標題若和 PDF 內容對不上（例如 DOI 被截斷而對到整本論文集），會標示並請你更正 DOI。每一篇都要你確認後才加入。查詢中可按「停止」。
 - **插入引用**：上方「插入 → 引用…」，搜尋或用標籤篩選、可多選，插在游標處（沒有在編輯時插在段落句尾），可順便記下用途。
-- **用 Claude 找新文獻**（插入引用視窗的放大鏡；沒連 Claude 時是灰的）：預設請求是「幫我找關於『段落開頭』的文獻」，可再選標籤引導（回顧→只找 review；新算法→近 3 年；經典算法→依引用數排序；頂會／頂刊→依期刊清單篩選）。Claude 把請求轉成搜尋關鍵字，**文獻一律來自 OpenAlex**（都有 DOI、排除只有預印本的），Claude 再從候選中排序並寫一句為什麼適合；它不能新增或改寫候選。點標題開啟 DOI 頁面，有開放取用版本可直接開 PDF；「加入」會向 Crossref 取得書目、寫好簡介與標籤後放進文獻庫，並勾選待插入。
-- **貼上想引用的文章**（文獻頁的清單圖示，或新論文的第 5 步；需要 Claude）：一次貼很多篇，參考文獻清單、標題、DOI、PMID、arXiv 編號都可以，中間夾雜的備註與小標題也沒關係。Claude 只負責拆成一篇一篇，抄下文字裡寫的書目欄位，以及你對每篇的備註（原文照抄），不從記憶補資料。**是否真的存在由資料庫判斷**：
+- **找新文獻**（插入引用視窗的放大鏡；沒有 Claude 也沒有本機模型時是灰的）：預設請求是「幫我找關於『段落開頭』的文獻」，可再選標籤引導（回顧→只找 review；新算法→近 3 年；經典算法→依引用數排序；頂會／頂刊→依期刊清單篩選）。Claude 把請求轉成搜尋關鍵字，**文獻一律來自 OpenAlex**（都有 DOI、排除只有預印本的），Claude 再從候選中排序並寫一句為什麼適合；它不能新增或改寫候選。點標題開啟 DOI 頁面，有開放取用版本可直接開 PDF；「加入」會向 Crossref 取得書目、寫好簡介與標籤後放進文獻庫，並勾選待插入。
+- **貼上想引用的文章**（文獻頁的清單圖示，或新論文的第 5 步；需要 Claude 或本機模型）：一次貼很多篇，參考文獻清單、標題、DOI、PMID、arXiv 編號都可以，中間夾雜的備註與小標題也沒關係。模型只負責拆成一篇一篇，抄下文字裡寫的書目欄位，以及你對每篇的備註（原文照抄），不從記憶補資料。**是否真的存在由資料庫判斷**：
   - 有 DOI：Crossref 上要對得上標題（你寫的簡短標題、或 Crossref 把副標題分開存的，都算對得上）
   - arXiv：向 arXiv 查證，書目用 arXiv 的 DOI（`10.48550/arXiv.…`）
   - PMID：向 PubMed 查證
   - 都沒有：用標題、作者、年份先搜 Crossref，再搜 PubMed（沒有 DOI 的臨床期刊文章多半在這裡），書目取自 PubMed 的紀錄
 
   找到的直接建檔（書目來自資料庫，簡介與標籤由模型寫），三篇同時進行並顯示進度。需要確認的列出候選讓你選；資料庫都沒有的（例如 Holm 1979，沒有 DOI 也不在 PubMed）可以按「用我貼的書目建檔」，BibTeX 會註明 *Bibliographic data as entered by the author*。在文獻頁使用時，可勾選把備註記到目前開啟的論文。
+- **讀過的論文**（LoreReader）：引用視窗的「讀過的」分頁列出 LoreReader 裡讀過的論文，可以引用、引用原句（附頁碼），或寫成改寫草稿。段落引用了讀過的論文時，右側面板的「讀過的」列出那篇的摘錄與筆記（唯讀），頁碼可以在 LoreReader 開啟。LoreReader 的資料夾只讀取、不寫入（`reader.rs`）。
 - **引用一定送得到 BibTeX，作者的 `.bib` 一律不改寫**：`\bibliography{…}` 列出的每個檔案都會讀取；文獻庫裡有、論文的 `.bib` 沒有的引用，寫到 App 管理的 `pc-refs.bib` 並自動加進 `\bibliography{…}`。論文沒有自己的 `.bib` 時，產生一個只含這篇引用的檔案。
 
 ## 開啟 LaTeX… 與開啟 Word…
@@ -282,6 +285,7 @@ tlmgr search --global --file /xxx.sty
 
 - **開啟 LaTeX…**：選專案裡的任一個 `.tex`（開啟它所在的資料夾），或 `.zip`／`.tar.gz`／`.tgz`（先問解壓縮到哪裡，預設是壓縮檔旁、同名的資料夾）。**預設保持原樣**：主檔不改名、`\input`／`\include` 的檔案不併入、不移動，作者的檔案一個字都不動，App 只在資料夾裡加 `.papercomposer/`（`layout.toml` 記主檔名）。章節取自主檔本文的 `\input`／`\include`：檔案裡有 `\section` 的，標題讀自該檔；緊跟在主檔 `\section{…}` 之後的檔案是那一章的內文（改標題時只替換主檔那一行）；其他 `\input`（摘要、表格）不當章節、不會被寫入。直接寫在主檔裡的章節保持原樣、不列為章節。預覽卡列出主檔、章節與設定；要用 App 的章節檔結構時，按「整理成章節檔…」：列出新增、改寫、併入、移動的每個檔案，並且**先把每個會被改動的原檔複製到 `.papercomposer/original/`**（已存在時用 `original-2`…）才寫入。主檔沒有分檔章節時只提供整理這一種。預覽之後資料夾有變動就不做，請再開一次。`.git`、隱藏檔與編譯中間檔不動。已經是 PaperComposer 格式的資料夾直接開啟。目前僅編輯、儲存、審閱、引用清單與封面讀取「保持原樣」的結構；匯出、預覽編譯、討論草稿、對照表檢查仍假設 `main.tex` 與 `sections/`（待 `pc_core::open::main_file`／`sources` 接入）。
 - **開啟 Word…**：`.docx` **不會被改寫**。轉成一個新的 LaTeX 資料夾（預設是 `.docx` 旁的 `<檔名> (LaTeX)`），原檔存成 `.papercomposer/reference.docx`，之後匯出 Word 沿用它的版面；匯出 Word 一律寫成新檔。需要 [Pandoc](https://pandoc.org/installing.html)（macOS：`brew install pandoc`），沒有時會提示。轉換做的事：Word 不認得的標題樣式（`Heading1`）當標題、手打的章節編號變成 `\label{sec:N}`、兩欄表格裡的公式＋手打 `(N)` 變成 `equation`＋`\label{eq:N}`、圖與表的說明拿掉手打的「Figure N.」並加上 `\label{fig:N}`／`\label{tab:N}`、表格寫成 `table`＋`tabular`（booktabs）、手打的 `[1]`、`[2, 3]`、`[4–6]` 變成 `\cite{ref1}`…、手打的「Fig. 1」「Table 1」「Eq. (1)」「Section 2」在有對應標籤時變成 `\ref`／`\eqref`（沒有對應的留著，對照表檢查會標出來）、參考文獻清單變成 `refs.bib`（每筆先以原文存為 `note`）、作者對到作者資料庫的寫進 `paper.toml`。**追蹤修訂與註解**不會遺失：論文內容是「全部接受」後的版本，每處修訂（含 Word 的作者與時間）與每則註解放進審閱模式（`review.json`，標示「Word 匯入」），在 PaperComposer 裡逐一接受或拒絕。轉換後會用對照表（lore-notation）檢查手打編號與找不到標籤的 `\ref`。
+- **章節**：導覽可以新增、改名、刪除（檔案留在 `sections/unused/`，可以還原）、拖曳排序，也能在一個章節裡打的 `\section` 處拆成兩章。原地開啟的論文照樣可用，主檔與 `\input` 路徑一起更新；復原一次還原整個動作。
 - **最近**：封面的「最近」是唯一的清單，工作區的論文與在原地開啟的資料夾合在一起（名稱與上層資料夾名），重新開啟 App 時直接回到上次的論文。在原地開啟的清單存在設定資料夾的 `opened.toml`（與 `config.toml` 同一處，只屬於這台電腦；清除快取不影響）。
 - **PaperComposer 自己的檔案**：在原地開啟的論文，`paper.toml`、`review.json`、`citations.csv`、`notation.json`、討論草稿都放在論文資料夾裡的隱藏資料夾 `.papercomposer/`，論文資料夾最上層只有 LaTeX；`notation.tex` 照常在最上層、可直接編譯。工作區 `papers/` 裡原有的論文維持原樣（這些檔案在論文資料夾最上層）。匯出的檔案一樣放在論文資料夾的 `export/`（附 `.gitignore`）。
 - **在別處改過**：用其他編輯器改了 `.tex` 或 `git pull` 之後，回到 App（或每幾秒）會發現：沒有正在編輯的段落就直接重新載入；正在編輯時問「重新載入／保留我的版本」。存檔時若檔案已被別處改過，同樣會問，不會默默蓋掉。
@@ -312,7 +316,7 @@ tlmgr search --global --file /xxx.sty
 
 - **PDF**：用期刊自己的 class 編譯（pdflatex；`main.tex` 用了 `fontspec`、`xeCJK` 或寫了 `% !TEX program = xelatex` 時改用 XeLaTeX），自動跑 BibTeX／Biber 並重編到交互參照穩定。編譯前會重新產生這篇論文的 `.bib`。成功時顯示頁數；失敗時列出錯誤、出錯的原文、建議做法，點位置直接跳到那一段。找不到的引用、標籤和超出版面的行數也會列出。
 - **字型（XeLaTeX／LuaLaTeX）**：編譯前找出 `main.tex` 與它前言載入的檔案（`\input`、本機 `.sty`）用 `\setmainfont`、`\setsansfont`、`\setmonofont`、`\setCJKmainfont`／`sansfont`／`monofont`、`\newfontfamily`、`\newCJKfontfamily`、`\setmathfont` 指定的字型，交給 `lore-fonts` 判斷這台電腦有沒有（系統字型、TeX 自己的字型資料夾、`private/shared/fonts/`）。沒有時依作者規則（`private/shared/fonts.toml` 的 `[fallback]`）、字寬相同的開源字（Calibri → Carlito）、同類字型找代替字，**在編譯用的副本裡換掉**（原本的 `main.tex`、前言、`notation.tex` 都不動），匯出結果會列出「字型代替：A → B」。私人字型資料夾裡的字型在副本裡改用檔名與 `Path=`，不必安裝進系統；`OSFONTDIR` 也指向那個資料夾。代替順序裡一個都沒有時，不編譯，直接指出是哪個檔案哪一行、要怎麼補。LaTeX 壓縮檔仍是原本的字型名稱（投稿系統用它們自己的字型）。**在真正的 TeX 上尚未實測**（開發環境沒有 TeX；指令解析與改寫有單元測試）。
-- **Word**：需要 [Pandoc](https://pandoc.org/installing.html)（macOS：`brew install pandoc`）。引用依論文資料夾裡的 `.csl` 排版（從模板建立的論文會一起帶過來：IEEE、CVPR 用 `ieee.csl`，Springer Nature 用 `springer-basic-brackets.csl`，LNCS 用 `springer-lecture-notes-in-computer-science.csl`，取自 [CSL styles](https://github.com/citation-style-language/styles)）；有 `reference.docx` 時套用其中的字型與標題樣式。投稿請以 PDF 為準，Word 適合給共同作者修改。
+- **Word**：需要 [Pandoc](https://pandoc.org/installing.html)（macOS：`brew install pandoc`）。引用依論文資料夾裡的 `.csl` 排版（從模板建立的論文會一起帶過來：IEEE、CVPR 用 `ieee.csl`，Springer Nature 用 `springer-basic-brackets.csl`，LNCS 用 `springer-lecture-notes-in-computer-science.csl`，取自 [CSL styles](https://github.com/citation-style-language/styles)）；有 `reference.docx` 時套用其中的字型與標題樣式。未處理的審閱修改寫成 Word 的追蹤修訂（作者與時間保留，段落標記也記），註解（含回覆與已解決狀態）寫成批註；圖表與公式編號、`[n]` 引用照常。投稿請以 PDF 為準，Word 適合給共同作者修改。
   轉換前會處理 Pandoc 的常見困難：PDF／EPS 圖與省略副檔名的圖轉成 PNG；`subfigure`、`subfig`、`bbm`、`dsfont`、`mathabx` 等套件的指令給相容定義（論文自己定義的優先）；`.bib` 有語法錯誤時改用 App 解析出的乾淨副本（原檔不動）。以 4 篇 arXiv 論文實測，方程式轉成 Word 原生公式、表格、圖片、引用都在；少數寫法不標準的數學式（例如 `\underset{…}\mathop{…}` 第二個參數沒加大括號）會保留 LaTeX 原文並列在警告裡。
 - **LaTeX**：產生 `export/<論文>-latex.zip`，可直接上傳投稿系統、arXiv 或 Overleaf：章節併回單一 `main.tex`，附上編譯產生的 `.bbl`、class／樣式檔、`.bib` 與圖片，不含 App 自己的檔案。所有檔案都放在最上層、沒有子資料夾（Editorial Manager 等投稿系統的要求），`\includegraphics{figures/x}` 等路徑自動改寫，同名的不同檔案會加上原資料夾名稱。會先完整編譯一次，確定能編譯才打包。實測 8 篇（4 篇 arXiv 論文與 4 個期刊範本）解壓到空資料夾單獨編譯，頁數與 App 輸出的 PDF 相同。
 
@@ -320,7 +324,7 @@ tlmgr search --global --file /xxx.sty
 
 ### 一鍵安裝的本機模型
 
-「AI 與同步」第 3 步會從 Hugging Face 下載 GGUF 模型、從 GitHub 下載對應平台的 [llama.cpp](https://github.com/ggml-org/llama.cpp)（Windows 用 Vulkan 版，支援 NVIDIA／AMD／Intel 顯示卡；Mac 用 Metal 版），存在本機資料夾（Windows：`%APPDATA%\PaperComposer`；macOS：`~/Library/Application Support/PaperComposer`；Linux：`~/.local/share/PaperComposer`）。App 啟動時自動開啟上次使用的模型，關閉時一併結束。
+「設定」的「本機模型」步會從 Hugging Face 下載 GGUF 模型、從 GitHub 下載對應平台的 [llama.cpp](https://github.com/ggml-org/llama.cpp)（Windows 用 Vulkan 版，支援 NVIDIA／AMD／Intel 顯示卡；Mac 用 Metal 版），存在本機資料夾（Windows：`%APPDATA%\PaperComposer`；macOS：`~/Library/Application Support/PaperComposer`；Linux：`~/.local/share/PaperComposer`）。App 啟動時自動開啟上次使用的模型，關閉時一併結束。
 
 **和其他專案共用模型**：設定環境變數 `LOCAL_LLM_HOME`（或在 App 設定檔 `config.toml` 寫 `local_llm_home = "/path"`，從 Finder／開始選單開啟時讀不到 shell 變數），模型改存在 `<LOCAL_LLM_HOME>/gguf/<owner>/<repo>/<檔名>`、llama.cpp 存在 `<LOCAL_LLM_HOME>/runtimes/llama.cpp`。這和 `hf download <repo> --local-dir "$LOCAL_LLM_HOME/gguf/<repo>"` 的結構相同，用其他方式下載、而且在清單裡的模型會直接當成已安裝。
 
@@ -377,14 +381,14 @@ model = "gemma-4-12b"
 | `pc-decompose` | 拆解句型 | 本機 → Claude |
 | `pc-caption` | 圖表標題 | 本機 → Claude |
 | `pc-ref-notes` | 文獻簡介與標籤 | 本機 → Claude |
-| `pc-outline` | 大綱與標題 | 只用 Claude |
-| `pc-ref-queries`、`pc-ref-rank` | 找文獻的關鍵字與排序 | 只用 Claude |
-| `pc-cite-extract` | 把貼上的文字拆成一篇一篇 | 只用 Claude |
+| `pc-outline` | 大綱與標題 | Claude → 本機 |
+| `pc-ref-queries`、`pc-ref-rank` | 找文獻的關鍵字與排序 | Claude → 本機 |
+| `pc-cite-extract` | 把貼上的文字拆成一篇一篇 | Claude → 本機 |
 | `pc-draft-turn` | 討論草稿的問答 | Haiku → 本機（視窗可指定 Haiku／Sonnet／Opus／本機） |
-| `pc-draft-plan`、`pc-draft-claims`、`pc-draft-review`、`pc-draft-outline` | 題組、主張、校正、大綱 | 只用 Sonnet |
-| `pc-draft-record`、`pc-draft-audit`、`pc-draft-revise` | 整理實驗記錄（表格、想法、衝突）、審稿、修訂方案 | 只用 Opus |
+| `pc-draft-plan`、`pc-draft-claims`、`pc-draft-review`、`pc-draft-outline` | 題組、主張、校正、大綱 | Sonnet → 本機 |
+| `pc-draft-record`、`pc-draft-audit`、`pc-draft-revise` | 整理實驗記錄（表格、想法、衝突）、審稿、修訂方案 | Opus → 本機 |
 
-「本機」是目前連接的本機引擎（自己架設的端點，或「AI 與同步」啟動的模型；`tasks.toml` 寫作 `local:current`），以 `temperature` 0.2 寫作；「Claude」先用訂閱（Claude Code），沒有時用 API key，模型是設定裡選的那個（`claude:selected`）。寫作區的引擎切換（本機／訂閱／API）只用你選的那一個，不會悄悄改用別的；自動時照上表的順序。要個別指定某個任務的模型，在 App 設定檔旁邊放 `tasks.toml`（`PaperComposer/tasks.toml`）：
+「本機」是目前連接的本機引擎（自己架設的端點，或「設定」的本機模型步啟動的模型；`tasks.toml` 寫作 `local:current`），以 `temperature` 0.2 寫作；「Claude」先用訂閱（Claude Code），沒有時用 API key，模型是設定裡選的那個（`claude:selected`）。寫作區的引擎切換（本機／訂閱／API）只用你選的那一個，不會悄悄改用別的；自動時照上表的順序。要個別指定某個任務的模型，在 App 設定檔旁邊放 `tasks.toml`（`PaperComposer/tasks.toml`）：
 
 ```toml
 [override]
@@ -478,7 +482,7 @@ scripts/            Git hooks
 | GET | `/api/git/status` | 分支、遠端、未同步的檔案、領先或落後的 commit 數 |
 | POST | `/api/git/pull` | 從遠端更新（只做 fast-forward） |
 | POST | `/api/git/sync` `{ message? }` | commit 並 push |
-| GET | `/api/setup/status` | AI 與同步：工作區、Git、記憶體、模型、Claude 狀態 |
+| GET | `/api/setup/status` | 設定：工作區、Git、記憶體、模型、Claude 狀態 |
 | POST | `/api/setup/workspace` `{ path, init }` | 使用既有資料夾（可補上範本） |
 | POST | `/api/setup/clone` `{ url, parent }` | clone 自己的私有 repo |
 | POST | `/api/setup/new` `{ path, remote? }` | 從範本建立新工作區 |
@@ -488,6 +492,21 @@ scripts/            Git hooks
 | POST | `/api/models/install` `{ id }` | 下載並啟用模型 |
 | GET | `/api/models/progress` | 下載進度 |
 | POST | `/api/models/start` / `/api/models/stop` | 啟動或停止本機模型 |
+| GET | `/api/engines` ／ POST `/api/engines/test` | 三個引擎（本機、訂閱、API）的狀態；測試連線 |
+| POST | `/api/claude-code/login` | 用 Claude Code 登入訂閱帳號 |
+| GET／PUT | `/api/theme` ／ POST `/api/settings/pdf-dir` | 共用配色（外觀）；這台電腦的 PDF 資料夾 |
+| GET／POST | `/api/refs`、POST `/api/refs/search`、`/api/refs/add`、`/api/refs/propose`、`/api/refs/import`、`/api/open-link` | 文獻庫：列表、搜尋、加入、提出候選、匯入 BibTeX、開 DOI |
+| GET | `/api/refs/pdfs` | 這台電腦 PDF 資料夾裡還沒匯入文獻庫的檔案 |
+| GET／POST | `/api/papers/{name}/citations` | 每篇文獻在這篇論文裡的用途 |
+| POST | `/api/papers/{name}/table-fit` | 版型檢查：表格在期刊版面的寬度 |
+| POST | `/api/phrases/add` | 收藏句型：加進句型庫（`phrases.csv`／`expressions.csv`） |
+| POST | `/api/papers/{name}/section-ops/{add,delete,restore,order,split}` | 章節新增、刪除、復原、排序、拆分 |
+| GET／PUT | `/api/papers/{name}/notation` | 對照表（全域＋這篇論文） |
+| GET／POST | `/api/papers/{name}/word-refs`、POST `/word-refs/confirm` | 從 Word 讀進的文獻清單；查證 Crossref／PubMed |
+| GET | `/api/reader/papers`（`?paper=`）、`/api/reader/papers/{sha}` | LoreReader 讀過的論文與其摘錄、筆記（唯讀） |
+| POST | `/api/reader/papers/{sha}/cite`、`/api/reader/open`、`/api/reader/paraphrase` | 引用讀過的論文、在 LoreReader 開啟某一頁、改寫草稿 |
+| GET／POST | `/api/templates`、`/api/convert…` | 期刊模板列表與建立；上傳模板讓 Claude 轉換 |
+| `/api/textable/*` | 論文裡表格的編輯器：解析、畫出、套用樣式、新增 |
 
 ## 防止洩漏個人資料
 
