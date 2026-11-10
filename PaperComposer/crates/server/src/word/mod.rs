@@ -154,6 +154,10 @@ async fn convert_in(docx: &Path, dest: &Path, people: &[Author], work: &Path) ->
     // sections as written, markers taken out; the rejected version beside them
     let mut review = Review::default();
     let mut comments = 0;
+    // Word's threads (commentsExtended.xml): replies and done comments
+    let threads = out::comment_threads(&std::fs::read(docx).unwrap_or_default());
+    let mut by_word_id: HashMap<String, usize> = HashMap::new();
+    let mut replies: Vec<(String, review::Reply)> = Vec::new();
     let before = paper::split_sections(&rejected);
     let files = paper::section_files(dest);
     for (i, file) in files.iter().enumerate() {
@@ -165,6 +169,12 @@ async fn convert_in(docx: &Path, dest: &Path, people: &[Author], work: &Path) ->
         let sec = paper::parse_section(file, &std::fs::read_to_string(&path).map_err(io)?);
         for c in found_comments {
             let Some(info) = marks.comments.get(&c.id) else { continue };
+            let (parent, done) = threads.get(&c.id).cloned().unwrap_or((None, false));
+            if let Some(p) = parent {
+                replies.push((p, review::Reply { id: review::new_id("r"), author: info.author.clone(), at: info.date.clone(), text: info.text.clone(), extra: Default::default() }));
+                continue;
+            }
+            by_word_id.insert(c.id.clone(), review.comments.len());
             review.comments.push(Comment {
                 id: review::new_id("m"),
                 author: info.author.clone(),
@@ -176,7 +186,7 @@ async fn convert_in(docx: &Path, dest: &Path, people: &[Author], work: &Path) ->
                 suffix: c.suffix,
                 text: info.text.clone(),
                 replies: vec![],
-                resolved: false,
+                resolved: done,
                 orphan: false,
                 source: Some("word".into()),
                 extra: Default::default(),
@@ -202,6 +212,15 @@ async fn convert_in(docx: &Path, dest: &Path, people: &[Author], work: &Path) ->
             }
             c.source = Some("word".into());
         }
+    }
+    for (parent, reply) in replies {
+        match by_word_id.get(&parent) {
+            Some(&k) => review.comments[k].replies.push(reply),
+            None => {}
+        }
+    }
+    for c in &mut review.comments {
+        c.replies.sort_by(|a, b| a.at.cmp(&b.at));
     }
     review::save(dest, &review)?;
 

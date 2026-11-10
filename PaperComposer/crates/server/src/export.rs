@@ -462,7 +462,11 @@ const PANDOC_COMPAT: &[(&str, &str)] = &[
     ("\\subfloat", "[2][]{#2}"),
 ];
 
+/// Two passes: LaTeX to pandoc's tree, where review.json's open changes and
+/// comments and the figure / table / equation numbers go in (`word::out`),
+/// then the tree to Word.
 pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Report, String> {
+    use crate::word::out;
     let start = Instant::now();
     let pandoc = tool("pandoc").ok_or("pandoc-missing")?;
     let dest = export_dir(paper).map_err(|e| e.to_string())?.join(format!("{name}.docx"));
@@ -478,18 +482,58 @@ pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Rep
     std::fs::write(&compat_file, compat).map_err(|e| e.to_string())?;
     let filter = work.join("figures.lua");
     std::fs::write(&filter, figure_filter(paper).await).map_err(|e| e.to_string())?;
+    let io = |e: std::io::Error| e.to_string();
+    let main = std::fs::read_to_string(paper.join("main.tex")).unwrap_or_default();
+
+    // The review: open changes and comments as markers in copies of the sections.
+    let (marked, marks) = out::mark(paper, &pc_core::review::load(paper));
+    let input = if marked.is_empty() {
+        paper.join("main.tex")
+    } else {
+        let f = work.join("review-main.tex");
+        std::fs::write(&f, out::main_with(&main, &marked)).map_err(io)?;
+        f
+    };
+    // 1. LaTeX → pandoc's tree (\input resolves from the paper folder)
+    let mut read = crate::proc::cmd(&pandoc);
+    read.current_dir(paper).arg(&compat_file).arg(&input).args(["--from=latex", "--to=json", "--resource-path=."]).arg(format!("--lua-filter={}", filter.display()));
+    let o = run(&mut read, 120).await?;
+    let mut stderr = String::from_utf8_lossy(&o.stderr).to_string();
+    let mut report = Report::default();
+    if !o.status.success() {
+        report.warnings = pandoc_warnings(&stderr, &mut report.undefined_cites);
+        report.errors.push(Problem { message: report.warnings.first().cloned().unwrap_or_else(|| "pandoc 失敗".into()), ..Default::default() });
+        return Ok(report);
+    }
+    let mut doc: serde_json::Value = serde_json::from_slice(&o.stdout).map_err(|e| e.to_string())?;
+    // markers → Word's tracked changes and comments; captions, equations and \refs get numbers
+    out::spans(&mut doc, &marks);
+    out::numbers(&mut doc);
+    let tree = work.join("paper.json");
+    std::fs::write(&tree, serde_json::to_vec(&doc).map_err(|e| e.to_string())?).map_err(io)?;
+
+    // 2. the tree → Word, citations in the paper's style: its own .csl, else
+    // numbers ([1]) for a numeric bibliography style or a paper from Word
+    let csl = match first_with_ext(paper, "csl") {
+        Some(c) => Some(paper.join(c)),
+        None if out::numeric_citations(&main) || paper::app_dir(paper).join("reference.docx").is_file() => {
+            let f = work.join("numeric.csl");
+            std::fs::write(&f, out::NUMERIC_CSL).map_err(io)?;
+            Some(f)
+        }
+        None => None,
+    };
     let bibs: Vec<PathBuf> = bibs.iter().map(|b| paper.join(b)).filter(|b| b.is_file()).collect();
     let pandoc_run = |bibs: &[PathBuf]| {
         let mut c = crate::proc::cmd(&pandoc);
-        c.current_dir(paper).arg(&compat_file).args(["main.tex", "--from=latex", "--to=docx", "--resource-path=."]).arg("-o").arg(&dest);
-        c.arg(format!("--lua-filter={}", filter.display()));
+        c.current_dir(paper).arg(&tree).args(["--from=json", "--to=docx", "--number-sections", "--resource-path=."]).arg("-o").arg(&dest);
         if !bibs.is_empty() {
-            c.arg("--citeproc");
+            c.arg("--citeproc").args(["-M", "reference-section-title=References"]);
             for b in bibs {
                 c.arg(format!("--bibliography={}", b.display()));
             }
-            if let Some(csl) = first_with_ext(paper, "csl") {
-                c.arg(format!("--csl={csl}"));
+            if let Some(csl) = &csl {
+                c.arg(format!("--csl={}", csl.display()));
             }
         }
         // a paper opened from Word keeps its original here
@@ -512,10 +556,17 @@ pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Rep
         }
         o = run(&mut pandoc_run(&clean), 120).await?;
     }
-    let stderr = String::from_utf8_lossy(&o.stderr);
-    let mut report = Report { seconds: (start.elapsed().as_secs_f64() * 10.0).round() / 10.0, ..Default::default() };
+    stderr += &String::from_utf8_lossy(&o.stderr);
+    report.seconds = (start.elapsed().as_secs_f64() * 10.0).round() / 10.0;
     report.warnings = pandoc_warnings(&stderr, &mut report.undefined_cites);
     if o.status.success() {
+        // what pandoc does not write: paragraph marks, unique ids, comment threads
+        if !marks.is_empty() {
+            out::finish(&dest, &marks)?;
+        }
+        if marks.unmarked > 0 {
+            report.warnings.push(format!("{} 處修改在圖、表、方程式或標題裡，Word 檔裡是改後的樣子，沒有標成修訂", marks.unmarked));
+        }
         report.ok = true;
         report.file = Some(format!("export/{name}.docx"));
     } else {
