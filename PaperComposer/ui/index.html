@@ -17,6 +17,8 @@
 <body>
 <div class="app at-home">
   <header class="top">
+    <!-- narrow windows: the navigator and the right panel open as drawers (layout.js) -->
+    <button class="ico narrow-only" id="toggleLeft" aria-label="導覽" aria-pressed="false"></button>
     <div class="brand">PAPER<b>/</b>COMPOSER</div>
     <!-- this paper: switch, its references, export -->
     <div class="paper-bar">
@@ -31,6 +33,7 @@
       <!-- the workspace: shared by every paper -->
       <button class="ico" id="actDb" data-icon="database" data-menu="db" aria-label="資料庫"></button>
       <button class="ico" id="actTpl" data-icon="layout" aria-label="模板"></button>
+      <button class="ico narrow-only" id="toggleRight" aria-label="面板" aria-pressed="false"></button>
       <span class="vsep"></span>
       <!-- the app -->
       <button class="ico" id="actSync" data-icon="cloud" aria-label="同步"></button>
@@ -59,11 +62,12 @@
   <section class="home" id="home" aria-label="封面"></section>
 
   <aside class="right" aria-label="寫作助手">
-    <section class="block" data-open="true">
+    <!-- 寫作 starts folded: its head is the one button that opens it -->
+    <section class="block compose" data-open="false">
       <div class="block-head">
         <span class="n">01</span><h3>寫作</h3>
         <button class="help" data-tip="條列重點，一行一點；以 ! 開頭表示強調。模型只能用你句型庫裡的寫法組成段落。模型會參考目前段落與下一段，寫出能接在兩段之間的段落。">?</button>
-        <button class="toggle" aria-label="展開或收合">−</button>
+        <button class="toggle" aria-label="展開或收合">+</button>
       </div>
       <div class="block-body">
         <div class="cond">
@@ -332,6 +336,7 @@
 <script src="home.js"></script>
 <script src="app.js"></script>
 <script src="review.js"></script>
+<script src="layout.js"></script>
 <script src="setup.js"></script>
 </body>
 </html>

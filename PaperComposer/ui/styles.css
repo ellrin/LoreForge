@@ -39,7 +39,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 
 .top {
-  grid-area: top; display: flex; align-items: center; gap: 24px;
+  grid-area: top; display: flex; align-items: center; gap: 16px; min-width: 0;
   padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line);
 }
 .brand { font: 700 14px/1 var(--sans); letter-spacing: .06em; white-space: nowrap; }
@@ -258,9 +258,25 @@ select, input[type="search"] {
 .refs i { font-style: normal; color: var(--accent-text); }
 .note { font-size: 12px; color: var(--faint); }
 
+/* ≤1100px: the page takes the whole width; navigator and right panel are
+   drawers over it, opened from the two panel buttons (SlideComposer's way) */
+.narrow-only { display: none; }
 @media (max-width: 1100px) {
   .app { grid-template: "top" 48px "page" 1fr / 1fr; }
-  .left, .right { display: none; }
+  .narrow-only { display: inline-grid; }
+  .app.at-home .narrow-only { display: none; }
+  .left, .right { position: fixed; top: 48px; bottom: 0; z-index: 18; display: none; box-shadow: 0 0 18px #0006; }
+  .left { left: 0; width: 248px; }
+  .right { right: 0; width: min(300px, 90vw); }
+  .app.show-left .left, .app.show-right .right { display: flex; }
+  .app.at-home .left, .app.at-home .right { display: none; }
+  .top { gap: 10px; padding: 0 12px; }
+  .picker { max-width: 26vw; }
+  .paper-bar { min-width: 0; }
+}
+@media (max-width: 760px) {
+  .brand { display: none; }
+  .top-right .vsep { display: none; }
 }
 @media (prefers-reduced-motion: no-preference) {
   .block-head .toggle, .hit, .outline button { transition: background .12s, border-color .12s; }
@@ -737,15 +753,17 @@ table.plan .src { color: var(--faint); font-size: 11px; }
 #actSync[data-state="busy"] { color: var(--accent-text); }
 #actSync[data-state="off"] { color: var(--faint); }
 
-/* ── Writing toolbar: stays over the page while it scrolls ── */
+/* ── Writing toolbar: a rounded capsule floating over the page while it
+   scrolls (SlideComposer's tool bar); the review toolbar takes the same spot ── */
 .writebar {
-  position: sticky; top: 0; z-index: 5; display: flex; justify-content: center; gap: 2px;
-  width: min(680px, 100%); margin: 0 auto 18px; padding: 8px 0 6px;
-  background: linear-gradient(var(--bg) 70%, transparent);
+  position: sticky; top: 10px; z-index: 5; display: flex; align-items: center; gap: 2px;
+  width: max-content; max-width: 100%; margin: 10px auto 14px; padding: 4px 6px;
+  overflow-x: auto; scrollbar-width: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 20px #0003;
 }
-.writebar .grp { display: flex; gap: 1px; padding: 0 6px; border-right: 1px solid var(--line); }
-.writebar .grp:last-child { border-right: 0; }
-.writebar .ico { width: 30px; height: 30px; }
+.writebar .grp { display: flex; align-items: center; gap: 2px; padding: 0 4px; flex: none; }
+.writebar .grp + .grp { border-left: 1px solid var(--line); }
+.writebar .ico { width: 32px; height: 32px; }
 .wb-pop { width: 300px; display: flex; flex-direction: column; gap: 8px; }
 .wb-pop.collect-pop { width: min(440px, calc(100vw - 16px)); max-height: 70vh; overflow: auto; gap: 4px; }
 .collect-pop > .primary { align-self: flex-end; margin-top: 6px; }
@@ -981,7 +999,7 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .next-card .nc-list code { font: 11.5px var(--mono); }
 .next-card .nc-row > .primary.small { margin-left: calc(3em + 8px); }
 /* the writing toolbar is sticky over the page: editors and jumps stop below it */
-.page-area { scroll-padding-top: 52px; scroll-padding-bottom: 56px; }
+.page-area { scroll-padding-top: 64px; scroll-padding-bottom: 56px; }
 .menu button.primary { width: auto; background: var(--accent); color: var(--accent-ink); justify-content: center; padding: 6px 12px; font-weight: 700; }
 .menu button.primary:hover { background: var(--accent); filter: brightness(1.06); }
 .menu .form-foot button.ghost { border: 1px solid var(--line-strong); padding: 5px 14px; }
@@ -1288,7 +1306,7 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 /* ── Find & Replace (find.js) ── */
 /* a zero-height strip under the writing toolbar: the bar floats at its right */
 /* placed after the KEY VALUE line: at the top of the page it sits below it, scrolled it sticks under the toolbar */
-.find-dock { position: sticky; top: 46px; z-index: 6; height: 0; width: 100%; }
+.find-dock { position: sticky; top: 58px; z-index: 6; height: 0; width: 100%; }
 .find-bar {
   position: absolute; top: 0; right: 0; width: min(440px, 100%);
   display: flex; flex-direction: column; gap: 4px; padding: 4px;
@@ -1518,4 +1536,62 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .menu.rv-ask .rv-ask-acts button { width: auto; flex: none; }
 @media print {
   .rv-mks, .para.rv-has-cm::before { display: none; }
+}
+
+/* ── Frame toward SlideComposer: emphasis, folded blocks, soft rules ── */
+/* The page is the focus. --accent is kept for the one primary action (生成,
+   the current mark); secondary marks take --accent-2-text / --accent-3-text
+   (JELearner's rule; in single-hue themes they are shades of the same hue);
+   red (--err, --paper-err) only for real errors. */
+.brand b { color: var(--accent-2-text); }
+.block + .block .block-head .n, .block + .block[data-open="true"] .block-head h3 { color: var(--accent-2-text); }
+.chk-head .acc { color: var(--accent-2-text); }
+.findings .where { color: var(--accent-3-text); }
+.keyvalue { border-left-color: var(--accent-2); }
+.keyvalue .k { color: var(--accent-2-text); }
+/* a citation or reference the page cannot resolve yet: marked, not alarmed */
+.paper .ref.missing, .paper .cite.missing {
+  color: inherit !important; text-decoration: underline dashed var(--paper-warn); text-decoration-thickness: 1px; text-underline-offset: 3px;
+}
+.ref.missing { color: var(--warn) !important; }
+
+/* a folded block is one button: its whole head opens it (layout.js) */
+.block[data-open="false"] > .block-head {
+  cursor: pointer; margin: 0 -8px; padding: 6px 8px; border-radius: var(--r);
+  border: 1px solid var(--line); background: var(--surface);
+}
+.block[data-open="false"] > .block-head:hover { border-color: var(--line-strong); background: var(--surface-hover); }
+.block[data-open="false"] > .block-head .toggle { background: none; }
+.block.compose[data-open="false"] { padding-bottom: 14px; }
+.block.compose + .block { padding-top: 14px; }
+
+/* 檢查: soft rules stay out of sight until checked; the check button is a
+   plain control (生成 keeps the accent); each result says 通過 / 要改 */
+.findings.soft li.pending { display: none; }
+.soft-bar .primary.small {
+  background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); font-weight: 600;
+}
+.soft-bar .primary.small:hover:not(:disabled) { border-color: var(--accent-text); }
+.findings.soft .status.error { background: var(--warn); }
+.findings.soft li:not(.pending) .m::before {
+  content: "通過"; display: inline-block; white-space: nowrap; margin-right: 6px; padding: 0 5px; border-radius: 4px; vertical-align: 1px;
+  font: 600 10.5px/16px var(--sans); color: var(--ok); border: 1px solid currentColor;
+}
+.findings.soft li:not(.pending):has(> .status:is(.error, .warning)) .m::before { content: "要改"; color: var(--warn); }
+.findings.soft li:not(.pending):has(> .status:is(.error, .warning)) .m { color: var(--text); font-weight: 600; }
+.findings.soft li:not(.pending):not(:has(> .status:is(.error, .warning))) .m { color: var(--muted); }
+
+/* SlideComposer's measures: panel heads, body text, status bar */
+.left { padding-top: 0; }
+.nav-head { position: sticky; top: 0; z-index: 3; background: var(--panel); padding: 14px 0 8px; margin-bottom: 4px; }
+.nav-head .panel-title { font: 700 15px var(--sans); }
+.right { padding: 14px 16px 40px; }
+.primary { padding: 9px; }
+
+/* narrow: 寫作｜審閱 joins the row instead of floating over the paper's buttons */
+@media (max-width: 1100px) {
+  .seg.modes { position: static; transform: none; margin: 0 auto; flex: none; }
+  .seg.modes button { padding: 5px 10px; }
+  .seg.modes:not([hidden]) ~ .top-right { margin-left: 0; }
+  .page-area { padding: 0 16px; }
 }
