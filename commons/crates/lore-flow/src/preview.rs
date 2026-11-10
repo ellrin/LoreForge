@@ -1,9 +1,11 @@
 //! A plain SVG drawing of canvas objects, to look at a figure without the
 //! app or PowerPoint. It draws from the same objects that are exported
-//! (preset and custom shapes, text runs, connectors with their flips,
-//! rotation and adjust values, groups), so a wrong connector shows here too.
-//! Math is drawn with the Unicode approximation of [`crate::text`].
+//! (preset and custom shapes, gradients, text runs, pictures, connectors with
+//! their flips, rotation and adjust values, groups), so a wrong connector
+//! shows here too. Math is drawn with the Unicode approximation of
+//! [`crate::text`].
 
+use base64::Engine;
 use lore_canvas::{Frame, Kind, Object, Paint, SpObj, Stroke, TextBody};
 
 use crate::build::connector_path;
@@ -19,11 +21,27 @@ fn n(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-fn fill_attr(p: &Paint) -> String {
+struct State<'a> {
+    defs: String,
+    count: usize,
+    pictures: &'a dyn Fn(&str) -> Option<Vec<u8>>,
+}
+
+fn fill_attr(p: &Paint, st: &mut State) -> String {
     match p {
         Paint::Solid { color, alpha } if *alpha < 0.999 => format!("fill=\"#{color}\" fill-opacity=\"{}\"", n(*alpha)),
         Paint::Solid { color, .. } => format!("fill=\"#{color}\""),
-        Paint::Gradient { stops, .. } => format!("fill=\"#{}\"", stops.first().map(|s| s.color.as_str()).unwrap_or("CCCCCC")),
+        Paint::Gradient { stops, angle, .. } => {
+            st.count += 1;
+            let id = format!("g{}", st.count);
+            let (s, c) = angle.to_radians().sin_cos();
+            st.defs.push_str(&format!("<linearGradient id=\"{id}\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\">", n(0.5 - c / 2.0), n(0.5 - s / 2.0), n(0.5 + c / 2.0), n(0.5 + s / 2.0)));
+            for g in stops {
+                st.defs.push_str(&format!("<stop offset=\"{}\" stop-color=\"#{}\" stop-opacity=\"{}\"/>", n(g.pos), g.color, n(g.alpha)));
+            }
+            st.defs.push_str("</linearGradient>");
+            format!("fill=\"url(#{id})\"")
+        }
         _ => "fill=\"none\"".into(),
     }
 }
@@ -104,6 +122,8 @@ fn polyline(out: &mut String, pts: &[(f64, f64)], s: &Stroke) {
     if s.head != "none" && s.head != "arrow" {
         p[0] = shorten(p[0], p[1]);
     }
+    // dashes are counted from the arrow end, so the last stretch is always drawn
+    p.reverse();
     out.push_str(&format!("<polyline points=\"{}\" fill=\"none\" {} stroke-linejoin=\"round\"/>", p.iter().map(|q| format!("{},{}", n(q.0), n(q.1))).collect::<Vec<_>>().join(" "), stroke_attr(&Some(s.clone()))));
     arrow(out, pts[last], pts[last - 1], &s.tail, s);
     arrow(out, pts[0], pts[1], &s.head, s);
@@ -163,12 +183,13 @@ fn text_svg(out: &mut String, tb: &TextBody, x: f64, y: f64, w: f64, h: f64, sca
                     out.push_str(&format!("<tspan dy=\"{}\" font-size=\"0.1\">\u{200B}</tspan>", n(-fs * shift)));
                 }
             };
-            let sans = format!("{}, Carlito, 'Helvetica Neue', Arial, 'PingFang TC', sans-serif", r.look.font);
+            let ea = if r.look.ea_font.is_empty() { String::new() } else { format!("'{}', ", r.look.ea_font) };
+            let sans = format!("'{}', {ea}Carlito, 'Helvetica Neue', Arial, 'PingFang TC', sans-serif", r.look.font);
             match r.kind.as_str() {
                 "math" => {
-                    let math = "'Cambria Math', 'STIX Two Math', 'STIX Two Text', 'Times New Roman', serif";
+                    let math = format!("'{}', 'STIX Two Math', 'STIX Two Text', 'Times New Roman', serif", r.look.font);
                     for pc in latex_pieces(r.latex.as_deref().unwrap_or(&r.text)) {
-                        span(&pc.text, pc.italic, pc.bold || r.look.bold, pc.script, math);
+                        span(&pc.text, pc.italic, pc.bold || r.look.bold, pc.script, &math);
                     }
                 }
                 "br" => {}
@@ -189,29 +210,45 @@ fn text_svg(out: &mut String, tb: &TextBody, x: f64, y: f64, w: f64, h: f64, sca
     }
 }
 
-fn preset_path(prst: &str, sp: &SpObj, x: f64, y: f64, w: f64, h: f64) -> String {
+/// Path of a preset shape in its frame; `open` = stroke only.
+fn preset_path(prst: &str, sp: &SpObj, x: f64, y: f64, w: f64, h: f64) -> (String, bool) {
     let adj = |k: &str, d: f64| sp.geom.adj.get(k).copied().unwrap_or(d) / 100_000.0;
     let pts = |v: &[(f64, f64)]| format!("M{} Z", v.iter().map(|p| format!("{} {}", n(x + p.0 * w), n(y + p.1 * h))).collect::<Vec<_>>().join(" L"));
+    let p = |u: f64, v: f64| format!("{} {}", n(x + u), n(y + v));
     match prst {
         "trapezoid" => {
             let a = adj("adj", 25_000.0) * w.min(h) / w;
-            pts(&[(a, 0.0), (1.0 - a, 0.0), (1.0, 1.0), (0.0, 1.0)])
+            (pts(&[(a, 0.0), (1.0 - a, 0.0), (1.0, 1.0), (0.0, 1.0)]), false)
         }
         "parallelogram" => {
             let a = adj("adj", 25_000.0) * w.min(h) / w;
-            pts(&[(a, 0.0), (1.0, 0.0), (1.0 - a, 1.0), (0.0, 1.0)])
+            (pts(&[(a, 0.0), (1.0, 0.0), (1.0 - a, 1.0), (0.0, 1.0)]), false)
         }
-        "diamond" => pts(&[(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)]),
+        "diamond" => (pts(&[(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)]), false),
         "hexagon" => {
             let a = adj("adj", 25_000.0) * w.min(h) / w;
-            pts(&[(a, 0.0), (1.0 - a, 0.0), (1.0, 0.5), (1.0 - a, 1.0), (a, 1.0), (0.0, 0.5)])
+            (pts(&[(a, 0.0), (1.0 - a, 0.0), (1.0, 0.5), (1.0 - a, 1.0), (a, 1.0), (0.0, 0.5)]), false)
         }
-        "triangle" => pts(&[(0.5, 0.0), (1.0, 1.0), (0.0, 1.0)]),
-        _ => pts(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]),
+        "triangle" => (pts(&[(0.5, 0.0), (1.0, 1.0), (0.0, 1.0)]), false),
+        "can" => {
+            let ry = w.min(h) * adj("adj", 25_000.0) / 2.0;
+            (format!("M{} A{} {} 0 0 1 {} V{} A{} {} 0 0 1 {} Z M{} A{} {} 0 0 0 {}", p(0.0, ry), n(w / 2.0), n(ry), p(w, ry), n(y + h - ry), n(w / 2.0), n(ry), p(0.0, h - ry), p(0.0, ry), n(w / 2.0), n(ry), p(w, ry)), false)
+        }
+        "rightBrace" => (format!("M{} Q{} {} V{} Q{} {} Q{} {} V{} Q{} {}", p(0.0, 0.0), p(w / 2.0, 0.0), p(w / 2.0, h / 4.0), n(y + h / 2.0 - w / 2.0), p(w / 2.0, h / 2.0), p(w, h / 2.0), p(w / 2.0, h / 2.0), p(w / 2.0, h / 2.0 + w / 2.0), n(y + 3.0 * h / 4.0), p(w / 2.0, h), p(0.0, h)), true),
+        "leftBrace" => (format!("M{} Q{} {} V{} Q{} {} Q{} {} V{} Q{} {}", p(w, 0.0), p(w / 2.0, 0.0), p(w / 2.0, h / 4.0), n(y + h / 2.0 - w / 2.0), p(w / 2.0, h / 2.0), p(0.0, h / 2.0), p(w / 2.0, h / 2.0), p(w / 2.0, h / 2.0 + w / 2.0), n(y + 3.0 * h / 4.0), p(w / 2.0, h), p(w, h)), true),
+        "leftBracket" => {
+            let r = w.min(h / 2.0);
+            (format!("M{} Q{} {} V{} Q{} {}", p(w, 0.0), p(0.0, 0.0), p(0.0, r), n(y + h - r), p(0.0, h), p(w, h)), true)
+        }
+        "rightBracket" => {
+            let r = w.min(h / 2.0);
+            (format!("M{} Q{} {} V{} Q{} {}", p(0.0, 0.0), p(w, 0.0), p(w, r), n(y + h - r), p(w, h), p(0.0, h)), true)
+        }
+        _ => (pts(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]), false),
     }
 }
 
-fn draw(out: &mut String, o: &Object, xf: &Xf) {
+fn draw(out: &mut String, o: &Object, xf: &Xf, st: &mut State) {
     if o.hidden {
         return;
     }
@@ -224,8 +261,8 @@ fn draw(out: &mut String, o: &Object, xf: &Xf) {
     match &o.kind {
         Kind::Text(sp) | Kind::Shape(sp) => {
             out.push_str(&format!("<g{tf}>"));
-            let paint = format!("{} {}", fill_attr(&sp.fill), stroke_attr(&sp.line));
             if !(sp.fill.is_none() && sp.line.is_none()) {
+                let paint = format!("{} {}", fill_attr(&sp.fill, st), stroke_attr(&sp.line));
                 match sp.geom.prst.as_str() {
                     "custom" => {
                         let path = sp.geom.path.clone().unwrap_or_default();
@@ -244,7 +281,11 @@ fn draw(out: &mut String, o: &Object, xf: &Xf) {
                         let r = sp.geom.adj.get("adj").copied().unwrap_or(16_667.0) / 100_000.0 * w.min(h);
                         out.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{}\" {paint}/>", n(x), n(y), n(w), n(h), n(r)));
                     }
-                    other => out.push_str(&format!("<path d=\"{}\" {paint} stroke-linejoin=\"round\"/>", preset_path(other, sp, x, y, w, h))),
+                    other => {
+                        let (d, open) = preset_path(other, sp, x, y, w, h);
+                        let paint = if open { format!("fill=\"none\" {}", stroke_attr(&sp.line)) } else { paint };
+                        out.push_str(&format!("<path d=\"{d}\" {paint} stroke-linejoin=\"round\"/>"));
+                    }
                 }
             }
             if let Some(tb) = &sp.text {
@@ -264,28 +305,66 @@ fn draw(out: &mut String, o: &Object, xf: &Xf) {
             let inner = Xf { sx: xf.sx * sx, sy: xf.sy * sy, ox: x - g.ch.x as f64 / EMU_PT * xf.sx * sx, oy: y - g.ch.y as f64 / EMU_PT * xf.sy * sy };
             out.push_str(&format!("<g{tf}>"));
             for ch in &g.children {
-                draw(out, ch, &inner);
+                draw(out, ch, &inner, st);
             }
             out.push_str("</g>");
         }
-        Kind::Picture(_) => out.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#DDDDDD\" stroke=\"#999999\"/>", n(x), n(y), n(w), n(h))),
+        Kind::Picture(p) => {
+            let bytes = p.asset.strip_prefix("file:").and_then(|f| (st.pictures)(f).map(|b| (f.to_string(), b)));
+            match bytes {
+                Some((name, b)) => {
+                    let mime = match name.rsplit('.').next().unwrap_or("").to_lowercase().as_str() {
+                        "jpg" | "jpeg" => "image/jpeg",
+                        "gif" => "image/gif",
+                        "svg" => "image/svg+xml",
+                        _ => "image/png",
+                    };
+                    // the crop: the visible part of the picture fills the frame
+                    let (vw, vh) = ((1.0 - p.crop.l - p.crop.r).max(0.01), (1.0 - p.crop.t - p.crop.b).max(0.01));
+                    out.push_str(&format!(
+                        "<svg x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" viewBox=\"{} {} {} {}\" preserveAspectRatio=\"none\"{}><image width=\"1\" height=\"1\" preserveAspectRatio=\"none\" href=\"data:{mime};base64,{}\"/></svg>",
+                        n(x),
+                        n(y),
+                        n(w),
+                        n(h),
+                        p.crop.l,
+                        p.crop.t,
+                        vw,
+                        vh,
+                        if p.alpha < 0.999 { format!(" opacity=\"{}\"", n(p.alpha)) } else { String::new() },
+                        base64::engine::general_purpose::STANDARD.encode(b)
+                    ));
+                    if p.line.is_some() {
+                        out.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" {}/>", n(x), n(y), n(w), n(h), stroke_attr(&p.line)));
+                    }
+                }
+                None => out.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#DDDDDD\" stroke=\"#999999\"/>", n(x), n(y), n(w), n(h))),
+            }
+        }
         _ => {}
     }
 }
 
 /// Draw objects on a page of `w` × `h` pt (white paper). `zoom` = CSS px per pt.
 pub fn svg(objects: &[Object], w: f64, h: f64, zoom: f64) -> String {
-    let mut out = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\"><rect width=\"100%\" height=\"100%\" fill=\"#FFFFFF\"/>",
+    svg_with(objects, w, h, zoom, &|_: &str| None)
+}
+
+/// As [`svg`], with the bytes of the picture files the objects name.
+pub fn svg_with(objects: &[Object], w: f64, h: f64, zoom: f64, pictures: &dyn Fn(&str) -> Option<Vec<u8>>) -> String {
+    let mut st = State { defs: String::new(), count: 0, pictures };
+    let mut body = String::new();
+    let xf = Xf { sx: 1.0, sy: 1.0, ox: 0.0, oy: 0.0 };
+    for o in objects {
+        draw(&mut body, o, &xf, &mut st);
+    }
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\"><defs>{}</defs><rect width=\"100%\" height=\"100%\" fill=\"#FFFFFF\"/>{}</svg>\n",
         n(w),
         n(h),
         n(w * zoom),
-        n(h * zoom)
-    );
-    let xf = Xf { sx: 1.0, sy: 1.0, ox: 0.0, oy: 0.0 };
-    for o in objects {
-        draw(&mut out, o, &xf);
-    }
-    out.push_str("</svg>\n");
-    out
+        n(h * zoom),
+        st.defs,
+        body
+    )
 }

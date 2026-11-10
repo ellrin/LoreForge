@@ -58,8 +58,9 @@ pub enum FlowError {
 /// Module kinds on offer: the built-in ones and the library's templates.
 pub fn module_list(lib: &Library) -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = MODULES.iter().map(|(k, d)| (k.to_string(), d.to_string())).collect();
-    for t in lib.templates.values() {
-        v.push((t.kind.clone(), if t.description.is_empty() { "a saved drawing".to_string() } else { t.description.clone() }));
+    for kind in lib.kinds() {
+        let d = lib.description(&kind);
+        v.push((kind, if d.is_empty() { "a saved drawing".to_string() } else { d }));
     }
     v
 }

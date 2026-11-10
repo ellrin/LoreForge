@@ -31,13 +31,14 @@ pub mod notation;
 pub mod pptx;
 pub mod preview;
 pub mod route;
+pub mod sheet;
 pub mod spec;
 pub mod text;
 pub mod theme;
 
 pub use build::{Built, insert_ops, retarget_for_pptx};
 pub use layout::{Layout, LayoutOptions, PanelTemplate, Rect};
-pub use modules::{Library, ModuleTemplate};
+pub use modules::{Library, ModuleTemplate, SaveOptions, template_from_objects};
 pub use route::Route;
 pub use spec::{Edge, EdgeKind, Graph, Node, Panel, SpecError, VarNew};
 pub use text::{MathSource, NoMath, PandocMath, Vars};
@@ -54,11 +55,14 @@ pub struct Drawing<'a> {
     pub options: LayoutOptions,
     /// Id of the first new object (the slide's largest id + 1).
     pub first_id: u32,
+    /// Bytes of the picture files image nodes name (`src=`), so pictures keep
+    /// their proportions. `None` = unknown (boxes are drawn as asked).
+    pub pictures: Option<&'a dyn Fn(&str) -> Option<Vec<u8>>>,
 }
 
 impl Default for Drawing<'_> {
     fn default() -> Self {
-        Drawing { theme: Theme::classic_bw(), library: Library::default(), notation: None, math: &NoMath, options: LayoutOptions::default(), first_id: 2 }
+        Drawing { theme: Theme::classic_bw(), library: Library::default(), notation: None, math: &NoMath, options: LayoutOptions::default(), first_id: 2, pictures: None }
     }
 }
 
@@ -81,8 +85,9 @@ pub fn draw(g: &Graph, d: &Drawing) -> Result<Figure, SpecError> {
     g.validate(&d.library.kinds())?;
     let mut vars = d.notation.map(Vars::from_notation).unwrap_or_default();
     vars.add_new(&g.vars_new);
-    let layout = layout::layout(g, &d.theme, &vars, &d.library, &d.options);
+    let size = |src: &str| d.pictures.and_then(|f| f(src)).and_then(|b| pptx::image_size(&b));
+    let layout = layout::layout_with(g, &d.theme, &vars, &d.library, &d.options, &size);
     let routes = route::route(g, &layout);
-    let built = build::build(g, &d.theme, &vars, &d.library, d.math, &layout, &routes, d.first_id);
+    let built = build::build_with(g, &d.theme, &vars, &d.library, d.math, &layout, &routes, d.first_id, &size);
     Ok(Figure { layout, routes, built })
 }

@@ -20,17 +20,54 @@ pub struct Theme {
     pub node: NodeStyle,
     pub roles: BTreeMap<String, RoleStyle>,
     pub edges: BTreeMap<String, EdgeStyle>,
+    /// Per module kind (`[modules.unet]`): colours and art style, over the role's.
+    #[serde(default)]
+    pub modules: BTreeMap<String, ModuleStyle>,
     pub shade: Shade,
     pub space: Space,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Font {
+    /// Module names and labels.
     pub family: String,
+    /// Variables and equations (Office Math).
     pub math: String,
+    /// East Asian text; empty = the deck's own.
+    #[serde(default)]
+    pub ea: String,
+    /// Panel titles; empty = `family`.
+    #[serde(default)]
+    pub title: String,
+    /// Captions, sizes, line labels, legend; empty = `family`.
+    #[serde(default)]
+    pub caption: String,
     pub size: f64,
     pub title_scale: f64,
     pub small_scale: f64,
+    /// Sizes in pt that override the scales when > 0.
+    #[serde(default)]
+    pub title_size: f64,
+    #[serde(default)]
+    pub small_size: f64,
+    #[serde(default = "yes")]
+    pub title_bold: bool,
+}
+fn yes() -> bool {
+    true
+}
+
+/// Colours and style of one kind of module.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ModuleStyle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -163,6 +200,11 @@ impl Theme {
         for e in self.edges.values() {
             cols.push(("edges.*.color", &e.color));
         }
+        for m in self.modules.values() {
+            for c in [&m.fill, &m.line, &m.text].into_iter().flatten() {
+                cols.push(("modules.*", c));
+            }
+        }
         if let Some((k, v)) = cols.into_iter().find(|(_, v)| !hex_ok(v)) {
             return Err(format!("theme: {k} = {v:?} is not a 6-digit hex colour"));
         }
@@ -182,10 +224,10 @@ impl Theme {
         self.edges.get(kind.as_str()).or_else(|| self.edges.get("data")).expect("checked")
     }
     pub fn title_size(&self) -> f64 {
-        self.font.size * self.font.title_scale
+        if self.font.title_size > 0.0 { self.font.title_size } else { self.font.size * self.font.title_scale }
     }
     pub fn small_size(&self) -> f64 {
-        self.font.size * self.font.small_scale
+        if self.font.small_size > 0.0 { self.font.small_size } else { self.font.size * self.font.small_scale }
     }
     pub fn panel_fill(&self, i: usize) -> &str {
         if self.panel.fills.is_empty() { &self.panel.fill } else { &self.panel.fills[i % self.panel.fills.len()] }

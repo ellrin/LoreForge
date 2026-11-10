@@ -7,7 +7,14 @@
 //! lore-flow graph desc.md [-o fig.flow] [--image ref.png] [--engine claude:sonnet]
 //!                 [--modules DIR] [--notation notation.json] [--examples DIR]
 //! lore-flow check fig.flow [--notation notation.json]
+//! lore-flow sheet [-o sheet.pptx] [--png sheet.png] [--modules DIR] [--theme theme.toml]
+//! lore-flow export-modules DIR [--theme theme.toml]
 //! ```
+//!
+//! `sheet` draws every module kind in every art style (built-in and from the
+//! library folder); `export-modules` writes the built-in styles of encoder,
+//! decoder, nn and brace as `DIR/<kind>/<style>.json` (never overwriting).
+//! Picture files named by image nodes (`src=`) are read relative to the input file.
 //!
 //! Input is the text form (`.flow`) or L1 JSON (`.json`). `graph` asks an LLM
 //! through lore-llm (the Claude subscription or a local model; nothing is
@@ -115,10 +122,7 @@ fn cmd_draw(a: &Args) -> Result<(), String> {
     let input = PathBuf::from(a.pos.get(1).ok_or("draw needs an input file")?);
     let library = load_library(a)?;
     let g = read_graph(&input, &library)?;
-    let theme = match a.opt("--theme") {
-        Some(p) => Theme::from_toml(&std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?)?,
-        None => Theme::classic_bw(),
-    };
+    let theme = load_theme(a)?;
     let (w, h) = match a.opt("--size") {
         Some(s) => {
             let (w, h) = s.split_once('x').ok_or("--size is WxH in pt, e.g. 720x405")?;
@@ -137,7 +141,14 @@ fn cmd_draw(a: &Args) -> Result<(), String> {
     if !a.flag("--no-math") && !pandoc.available() {
         eprintln!("pandoc not found: math is written as plain text runs");
     }
-    let fig = draw(&g, &Drawing { theme, library, notation: notation.as_ref(), math, options, first_id: 2 }).map_err(|e| e.to_string())?;
+    let dir = input.parent().map(Path::to_path_buf).unwrap_or_default();
+    let pictures = move |src: &str| std::fs::read(dir.join(src)).ok();
+    let fig = draw(&g, &Drawing { theme, library, notation: notation.as_ref(), math, options, first_id: 2, pictures: Some(&pictures) }).map_err(|e| e.to_string())?;
+    for pic in &fig.built.pictures {
+        if pictures(pic).is_none() {
+            eprintln!("warning: picture {pic} not found");
+        }
+    }
     for wng in &fig.built.warnings {
         eprintln!("warning: {wng}");
     }
@@ -153,7 +164,7 @@ fn cmd_draw(a: &Args) -> Result<(), String> {
         fig.layout.scale
     );
     let out = a.opt("-o").map(PathBuf::from).unwrap_or_else(|| input.with_extension("pptx"));
-    std::fs::write(&out, pptx::single_slide(fig.objects(), w, h)?).map_err(|e| format!("{}: {e}", out.display()))?;
+    std::fs::write(&out, pptx::single_slide_with(fig.objects(), w, h, &pictures)?).map_err(|e| format!("{}: {e}", out.display()))?;
     eprintln!("wrote {}", out.display());
     if let Some(p) = a.opt("--json") {
         std::fs::write(p, g.to_json()).map_err(|e| format!("{p}: {e}"))?;
@@ -162,7 +173,7 @@ fn cmd_draw(a: &Args) -> Result<(), String> {
     let svg_path = a.opt("--svg").map(PathBuf::from).or_else(|| png.as_ref().map(|p| p.with_extension("svg")));
     if let Some(sp) = &svg_path {
         let zoom = 2.0;
-        std::fs::write(sp, preview::svg(fig.objects(), w, h, zoom)).map_err(|e| format!("{}: {e}", sp.display()))?;
+        std::fs::write(sp, preview::svg_with(fig.objects(), w, h, zoom, &pictures)).map_err(|e| format!("{}: {e}", sp.display()))?;
         eprintln!("wrote {}", sp.display());
         if let Some(pp) = &png {
             svg_to_png(sp, pp, (w * zoom) as u32, (h * zoom) as u32)?;
@@ -170,6 +181,53 @@ fn cmd_draw(a: &Args) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn load_theme(a: &Args) -> Result<Theme, String> {
+    match a.opt("--theme") {
+        Some(p) => Theme::from_toml(&std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?),
+        None => Ok(Theme::classic_bw()),
+    }
+}
+
+fn cmd_sheet(a: &Args) -> Result<(), String> {
+    let library = load_library(a)?;
+    let theme = load_theme(a)?;
+    let pandoc = PandocMath::new(lore_math::Pandoc::new("pandoc"));
+    let math: &dyn MathSource = if a.flag("--no-math") || !pandoc.available() { &NoMath } else { &pandoc };
+    let (objects, w, h) = sheet::contact_sheet(&theme, &library, math);
+    let out = PathBuf::from(a.opt("-o").unwrap_or("modules.pptx"));
+    std::fs::write(&out, pptx::single_slide(&objects, w, h)?).map_err(|e| format!("{}: {e}", out.display()))?;
+    let cat = sheet::catalogue(&library);
+    eprintln!("wrote {} ({} kinds, {} drawings)", out.display(), cat.len(), cat.iter().map(|c| c.1.len()).sum::<usize>());
+    let png = a.opt("--png").map(PathBuf::from);
+    if let Some(sp) = a.opt("--svg").map(PathBuf::from).or_else(|| png.as_ref().map(|p| p.with_extension("svg"))) {
+        std::fs::write(&sp, preview::svg(&objects, w, h, 2.0)).map_err(|e| format!("{}: {e}", sp.display()))?;
+        eprintln!("wrote {}", sp.display());
+        if let Some(pp) = &png {
+            svg_to_png(&sp, pp, (w * 2.0) as u32, (h * 2.0) as u32)?;
+            eprintln!("wrote {}", pp.display());
+        }
+    }
+    Ok(())
+}
+
+fn cmd_export(a: &Args) -> Result<(), String> {
+    let dir = PathBuf::from(a.pos.get(1).ok_or("export-modules needs a folder")?);
+    if lore_secrets_guard(&dir) {
+        return Err(format!("{} is inside the public example folder; choose your own library folder", dir.display()));
+    }
+    let theme = load_theme(a)?;
+    for t in sheet::builtin_templates(&theme) {
+        let p = Library::save(&dir, &t)?;
+        eprintln!("wrote {}", p.display());
+    }
+    Ok(())
+}
+
+/// The public example is never written by tools.
+fn lore_secrets_guard(dir: &Path) -> bool {
+    dir.components().any(|c| c.as_os_str() == "private-example")
 }
 
 fn cmd_check(a: &Args) -> Result<(), String> {
@@ -230,7 +288,9 @@ async fn cmd_graph(a: &Args) -> Result<(), String> {
 
 const USAGE: &str = "lore-flow draw  FILE [-o out.pptx] [--svg out.svg] [--png out.png] [--json out.json] [--theme t.toml] [--modules DIR] [--template t.json] [--notation n.json] [--size WxH] [--no-math]
 lore-flow graph DESC.md [-o out.flow] [--image ref.png] [--engine REF] [--modules DIR] [--notation n.json] [--examples DIR]
-lore-flow check FILE [--notation n.json]";
+lore-flow check FILE [--notation n.json]
+lore-flow sheet [-o sheet.pptx] [--png sheet.png] [--modules DIR] [--theme t.toml]
+lore-flow export-modules DIR [--theme t.toml]";
 
 fn main() -> ExitCode {
     let a = Args::parse(std::env::args().skip(1).collect());
@@ -241,6 +301,8 @@ fn main() -> ExitCode {
         }
         Some("draw") => cmd_draw(&a),
         Some("check") => cmd_check(&a),
+        Some("sheet") => cmd_sheet(&a),
+        Some("export-modules") => cmd_export(&a),
         Some("graph") => match tokio::runtime::Runtime::new() {
             Ok(rt) => rt.block_on(cmd_graph(&a)),
             Err(e) => Err(e.to_string()),

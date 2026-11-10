@@ -476,12 +476,17 @@ fn arrangement_size(rows: &[Vec<usize>], needs: &[PanelNeed], gap: f64) -> (f64,
 
 /// Lay a graph out. The graph must be valid ([`Graph::validate`]).
 pub fn layout(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &LayoutOptions) -> Layout {
+    layout_with(g, theme, vars, lib, opt, &modules::no_images)
+}
+
+/// As [`layout`], knowing the pixel sizes of the picture files the graph names.
+pub fn layout_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &LayoutOptions, image_size: &dyn Fn(&str) -> Option<(u32, u32)>) -> Layout {
     let down_panels: BTreeSet<&str> = g.panels.iter().filter(|p| p.dir == "down").map(|p| p.id.as_str()).collect();
     let sizes: Vec<Size> = g
         .nodes
         .iter()
         .map(|n| {
-            let cx = Ctx { theme, vars, math: &NoMath, lib, k: 1.0, symmetric: !down_panels.contains(n.panel.as_str()) };
+            let cx = Ctx { theme, vars, math: &NoMath, lib, k: 1.0, symmetric: !down_panels.contains(n.panel.as_str()), image_size };
             let b = modules::make(n, &cx);
             Size { w: b.w, h: b.h, reserve_w: b.reserve_w, cy: b.cy, single: b.single, ellipse: b.ellipse }
         })

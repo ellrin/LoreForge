@@ -614,6 +614,8 @@ impl MathSource for PandocMath {
 #[derive(Debug, Clone)]
 pub struct Type {
     pub font: String,
+    /// East Asian font (empty = the deck's own).
+    pub ea_font: String,
     pub math_font: String,
     pub size: f64,
     pub bold: bool,
@@ -623,7 +625,7 @@ pub struct Type {
 
 impl Type {
     pub fn look(&self) -> Look {
-        Look { font: self.font.clone(), size: self.size, bold: self.bold, italic: self.italic, color: self.color.clone(), ..Look::default() }
+        Look { font: self.font.clone(), ea_font: self.ea_font.clone(), size: self.size, bold: self.bold, italic: self.italic, color: self.color.clone(), ..Look::default() }
     }
 }
 

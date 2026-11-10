@@ -1077,6 +1077,7 @@ dependencies = [
 name = "lore-flow"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "lore-canvas",
  "lore-llm",
  "lore-math",

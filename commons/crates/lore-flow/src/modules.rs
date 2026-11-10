@@ -35,59 +35,320 @@ pub fn frame(x: f64, y: f64, w: f64, h: f64) -> Frame {
     Frame::new(emu(x), emu(y), emu(w).max(0), emu(h).max(0))
 }
 
-/// A saved drawing used as a module kind.
+/// Where lines attach on a saved drawing: a rect in the drawing's own
+/// coordinates (EMU). Parts outside it (a shadow, a side note) do not move
+/// the connection sites.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PortRect {
+    pub x: Emu,
+    pub y: Emu,
+    pub w: Emu,
+    pub h: Emu,
+}
+
+/// A saved drawing: one art style of a module kind
+/// (`modules/<kind>/<style>.json`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModuleTemplate {
     pub kind: String,
+    /// Style name; a file `modules/<kind>/<style>.json` is named after it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub style: String,
     /// One line for the LLM's module list.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    /// Natural size in pt.
+    /// Natural size in pt (of the port rect when there is one).
     pub w: f64,
     pub h: f64,
-    /// Canvas objects, frames in EMU relative to the module's top-left corner.
+    /// The rect lines attach to; the whole drawing when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<PortRect>,
+    /// Canvas objects, frames in EMU relative to the drawing's top-left corner.
     /// Colours may be `role:fill`, `role:line`, `role:text`, `theme:ink`,
     /// `theme:muted`, `theme:paper`, `theme:image`, `theme:tensor`; a run whose
     /// text is `{{label}}` receives the node's label.
     pub objects: Value,
 }
 
-/// Module templates by kind.
+/// The module library: kind → style → drawing.
 #[derive(Debug, Clone, Default)]
 pub struct Library {
-    pub templates: BTreeMap<String, ModuleTemplate>,
+    pub templates: BTreeMap<String, BTreeMap<String, ModuleTemplate>>,
 }
 
+pub const DEFAULT_STYLE: &str = "default";
+
 impl Library {
-    pub fn add_json(&mut self, text: &str) -> Result<(), String> {
-        let t: ModuleTemplate = serde_json::from_str(text).map_err(|e| format!("module: {e}"))?;
+    pub fn add(&mut self, mut t: ModuleTemplate) -> Result<(), String> {
         if !crate::spec::valid_id(&t.kind) {
             return Err(format!("module: bad kind {:?}", t.kind));
         }
-        if crate::spec::MODULES.iter().any(|(m, _)| *m == t.kind) {
-            return Err(format!("module: {:?} is a built-in kind", t.kind));
+        if t.style.is_empty() {
+            t.style = DEFAULT_STYLE.into();
+        }
+        if !crate::spec::valid_id(&t.style) {
+            return Err(format!("module {}: bad style name {:?}", t.kind, t.style));
+        }
+        if let Some(p) = &t.port {
+            t.w = p.w as f64 / EMU_PT;
+            t.h = p.h as f64 / EMU_PT;
         }
         if t.w <= 0.0 || t.h <= 0.0 {
-            return Err(format!("module {}: w and h must be positive", t.kind));
+            return Err(format!("module {}/{}: w and h must be positive", t.kind, t.style));
         }
-        self.templates.insert(t.kind.clone(), t);
+        if serde_json::from_value::<Vec<Object>>(placeholder_colours(&t.objects)).is_err() {
+            return Err(format!("module {}/{}: objects are not canvas objects", t.kind, t.style));
+        }
+        self.templates.entry(t.kind.clone()).or_default().insert(t.style.clone(), t);
         Ok(())
     }
-    /// Load every `*.json` of a folder (missing folder = empty library).
+    pub fn add_json(&mut self, text: &str) -> Result<(), String> {
+        self.add(serde_json::from_str(text).map_err(|e| format!("module: {e}"))?)
+    }
+    /// Load a library folder: `<kind>/<style>.json` (the style defaults to the
+    /// file name) and, directly in the folder, `<kind>.json` (style `default`).
+    /// A missing folder is an empty library.
     pub fn load_dir(dir: &std::path::Path) -> Result<Library, String> {
         let mut lib = Library::default();
         let Ok(rd) = std::fs::read_dir(dir) else { return Ok(lib) };
-        let mut files: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
-        files.sort();
-        for f in files {
-            let text = std::fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?;
-            lib.add_json(&text).map_err(|e| format!("{}: {e}", f.display()))?;
+        let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        entries.sort();
+        let load = |f: &std::path::Path, kind: Option<&str>, lib: &mut Library| -> Result<(), String> {
+            let text = std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
+            let mut t: ModuleTemplate = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", f.display()))?;
+            if let Some(k) = kind {
+                if t.kind != k {
+                    return Err(format!("{}: kind {:?} does not match its folder {k:?}", f.display(), t.kind));
+                }
+                if t.style.is_empty() {
+                    t.style = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                }
+            }
+            lib.add(t).map_err(|e| format!("{}: {e}", f.display()))
+        };
+        for e in entries {
+            if e.is_dir() {
+                let kind = e.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                let mut files: Vec<_> = std::fs::read_dir(&e).map_err(|x| format!("{}: {x}", e.display()))?.filter_map(|x| x.ok()).map(|x| x.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+                files.sort();
+                for f in files {
+                    load(&f, Some(&kind), &mut lib)?;
+                }
+            } else if e.extension().is_some_and(|x| x == "json") {
+                load(&e, None, &mut lib)?;
+            }
         }
         Ok(lib)
     }
-    pub fn kinds(&self) -> Vec<String> {
-        self.templates.keys().cloned().collect()
+    /// Write a drawing to `<dir>/<kind>/<style>.json`. An existing file is
+    /// never overwritten: the style gets a free name (`flat-2`), which is returned.
+    pub fn save(dir: &std::path::Path, t: &ModuleTemplate) -> Result<std::path::PathBuf, String> {
+        let mut t = t.clone();
+        if t.style.is_empty() {
+            t.style = DEFAULT_STYLE.into();
+        }
+        let folder = dir.join(&t.kind);
+        std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        let base = t.style.clone();
+        let mut n = 1;
+        let path = loop {
+            let p = folder.join(format!("{}.json", t.style));
+            if !p.exists() {
+                break p;
+            }
+            n += 1;
+            t.style = format!("{base}-{n}");
+        };
+        let text = serde_json::to_string_pretty(&t).map_err(|e| e.to_string())? + "\n";
+        lore_notation::write_atomic(&path, &text).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(path)
     }
+    /// Kinds the library adds to the built-in ones.
+    pub fn kinds(&self) -> Vec<String> {
+        self.templates.keys().filter(|k| !crate::spec::MODULES.iter().any(|(m, _)| m == k)).cloned().collect()
+    }
+    /// Saved styles of a kind.
+    pub fn styles(&self, kind: &str) -> Vec<String> {
+        self.templates.get(kind).map(|m| m.keys().cloned().collect()).unwrap_or_default()
+    }
+    /// The drawing of `kind` in `style`; with no style, `default` or the first one.
+    pub fn get(&self, kind: &str, style: &str) -> Option<&ModuleTemplate> {
+        let m = self.templates.get(kind)?;
+        if style.is_empty() { m.get(DEFAULT_STYLE).or_else(|| m.values().next()) } else { m.get(style) }
+    }
+    pub fn description(&self, kind: &str) -> String {
+        self.templates.get(kind).and_then(|m| m.values().find(|t| !t.description.is_empty())).map(|t| t.description.clone()).unwrap_or_default()
+    }
+}
+
+/// `role:*` / `theme:*` replaced by a real colour so the objects parse.
+fn placeholder_colours(v: &Value) -> Value {
+    match v {
+        Value::String(s) if s.starts_with("role:") || s.starts_with("theme:") => Value::String("000000".into()),
+        Value::Array(a) => Value::Array(a.iter().map(placeholder_colours).collect()),
+        Value::Object(m) => Value::Object(m.iter().map(|(k, x)| (k.clone(), placeholder_colours(x))).collect()),
+        other => other.clone(),
+    }
+}
+
+/// How a selection becomes a module file.
+#[derive(Debug, Clone, Default)]
+pub struct SaveOptions {
+    pub kind: String,
+    pub style: String,
+    pub description: String,
+    /// Text on the drawing that stands for the node's label (becomes `{{label}}`).
+    pub label: Option<String>,
+    /// Replace the most used fill, outline and text colour by the role's
+    /// colours, so the drawing follows the theme.
+    pub role_colours: bool,
+}
+
+/// Selected canvas objects → a module drawing ("存成模組"): coordinates
+/// relative to the selection's corner, ids and source XML dropped, attachments
+/// to objects outside the selection released.
+pub fn template_from_objects(objects: &[Object], opt: &SaveOptions) -> Result<ModuleTemplate, String> {
+    if objects.is_empty() {
+        return Err("nothing is selected".into());
+    }
+    let b = lore_canvas::geom::bounds(objects.iter().map(|o| &o.frame));
+    if b.w <= 0 || b.h <= 0 {
+        return Err("the selection has no size".into());
+    }
+    fn clean(o: &mut Object) {
+        o.id = 0;
+        o.src = None;
+        o.slot = None;
+        o.ph = None;
+        o.name = o.name.rsplit('/').next().unwrap_or("").to_string();
+        match &mut o.kind {
+            Kind::Connector(c) => {
+                // ids are given anew every time the module is placed
+                c.start = None;
+                c.end = None;
+            }
+            Kind::Group(g) => g.children.iter_mut().for_each(clean),
+            Kind::Text(sp) | Kind::Shape(sp) => {
+                if let Some(tb) = &mut sp.text {
+                    for r in tb.paras.iter_mut().flat_map(|p| p.runs.iter_mut()) {
+                        r.src = None;
+                        r.k = 0;
+                    }
+                    for p in &mut tb.paras {
+                        p.src = None;
+                        p.k = 0;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut objs: Vec<Object> = objects.to_vec();
+    // a selection that is one module group is saved as its parts
+    if objs.len() == 1
+        && let Kind::Group(g) = &objs[0].kind
+        && g.ch.w == objs[0].frame.w
+        && g.ch.h == objs[0].frame.h
+    {
+        let (gx, gy) = (objs[0].frame.x - g.ch.x, objs[0].frame.y - g.ch.y);
+        let mut kids = g.children.clone();
+        for k in &mut kids {
+            k.frame.x += gx;
+            k.frame.y += gy;
+        }
+        kids.retain(|k| !k.name.ends_with("/port") && k.name != "port");
+        if !kids.is_empty() {
+            objs = kids;
+        }
+    }
+    let b = if objs.len() == objects.len() { b } else { lore_canvas::geom::bounds(objs.iter().map(|o| &o.frame)) };
+    for o in &mut objs {
+        clean(o);
+        o.frame.x -= b.x;
+        o.frame.y -= b.y;
+    }
+    let mut v = serde_json::to_value(&objs).map_err(|e| e.to_string())?;
+    if let Some(label) = opt.label.as_deref().filter(|l| !l.trim().is_empty()) {
+        fn mark(v: &mut Value, label: &str) {
+            match v {
+                Value::Object(m) => {
+                    if m.contains_key("look") && m.get("text").and_then(|t| t.as_str()).map(str::trim) == Some(label.trim()) {
+                        m.insert("text".into(), Value::String("{{label}}".into()));
+                        m.insert("kind".into(), Value::String("text".into()));
+                        m.remove("omml");
+                        m.remove("latex");
+                    }
+                    m.values_mut().for_each(|x| mark(x, label));
+                }
+                Value::Array(a) => a.iter_mut().for_each(|x| mark(x, label)),
+                _ => {}
+            }
+        }
+        mark(&mut v, label);
+    }
+    if opt.role_colours {
+        // count colours by where they are used
+        fn count(v: &Value, key: Option<&str>, in_look: bool, out: &mut [BTreeMap<String, usize>; 3]) {
+            match v {
+                Value::Object(m) => {
+                    if let Some(Value::String(c)) = m.get("color") {
+                        let slot = if in_look {
+                            Some(2)
+                        } else if key == Some("fill") {
+                            Some(0)
+                        } else if key == Some("line") {
+                            Some(1)
+                        } else {
+                            None
+                        };
+                        if let Some(i) = slot {
+                            *out[i].entry(c.clone()).or_default() += 1;
+                        }
+                    }
+                    for (k, x) in m {
+                        count(x, Some(k), k == "look" || (in_look && k != "runs"), out);
+                    }
+                }
+                Value::Array(a) => a.iter().for_each(|x| count(x, key, in_look, out)),
+                _ => {}
+            }
+        }
+        let mut tallies: [BTreeMap<String, usize>; 3] = Default::default();
+        count(&v, None, false, &mut tallies);
+        let top = |m: &BTreeMap<String, usize>| m.iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0))).map(|(c, _)| c.clone());
+        let picks = [top(&tallies[0]), top(&tallies[1]), top(&tallies[2])];
+        fn swap(v: &mut Value, key: Option<&str>, in_look: bool, picks: &[Option<String>; 3]) {
+            match v {
+                Value::Object(m) => {
+                    let slot = if in_look {
+                        Some((2, "role:text"))
+                    } else if key == Some("fill") {
+                        Some((0, "role:fill"))
+                    } else if key == Some("line") {
+                        Some((1, "role:line"))
+                    } else {
+                        None
+                    };
+                    if let (Some((i, role)), Some(Value::String(c))) = (slot, m.get("color"))
+                        && picks[i].as_deref() == Some(c.as_str())
+                    {
+                        m.insert("color".into(), Value::String(role.into()));
+                    }
+                    for (k, x) in m.iter_mut() {
+                        let look = k == "look" || (in_look && k != "runs");
+                        swap(x, Some(k.as_str()), look, picks);
+                    }
+                }
+                Value::Array(a) => a.iter_mut().for_each(|x| swap(x, key, in_look, picks)),
+                _ => {}
+            }
+        }
+        swap(&mut v, None, false, &picks);
+    }
+    let t = ModuleTemplate { kind: opt.kind.clone(), style: opt.style.clone(), description: opt.description.clone(), w: b.w as f64 / EMU_PT, h: b.h as f64 / EMU_PT, port: None, objects: v };
+    // must load back
+    Library::default().add(t.clone())?;
+    Ok(t)
 }
 
 pub struct Ctx<'a> {
@@ -102,6 +363,13 @@ pub struct Ctx<'a> {
     /// side sites sit on the body's centre line. Otherwise (top-down flow)
     /// the frame is tight and the top and bottom sites touch the content.
     pub symmetric: bool,
+    /// Pixel size of a picture file (`src=` of image nodes), when known.
+    pub image_size: &'a dyn Fn(&str) -> Option<(u32, u32)>,
+}
+
+/// No picture files are known.
+pub fn no_images(_: &str) -> Option<(u32, u32)> {
+    None
 }
 
 /// A drawn module, origin at its frame's top-left corner.
@@ -188,7 +456,18 @@ impl Ctx<'_> {
         v * self.k
     }
     pub(crate) fn ty(&self, scale: f64, bold: bool, color: &str) -> Type {
-        Type { font: self.theme.font.family.clone(), math_font: self.theme.font.math.clone(), size: self.theme.font.size * scale * self.k, bold, italic: false, color: color.to_uppercase() }
+        let f = &self.theme.font;
+        Type { font: f.family.clone(), ea_font: f.ea.clone(), math_font: f.math.clone(), size: f.size * scale * self.k, bold, italic: false, color: color.to_uppercase() }
+    }
+    /// Captions, sizes, line labels, legend.
+    pub(crate) fn small(&self, color: &str) -> Type {
+        let f = &self.theme.font;
+        Type { font: if f.caption.is_empty() { f.family.clone() } else { f.caption.clone() }, size: self.theme.small_size() * self.k, ..self.ty(1.0, false, color) }
+    }
+    /// Panel titles.
+    pub(crate) fn title(&self) -> Type {
+        let f = &self.theme.font;
+        Type { font: if f.title.is_empty() { f.family.clone() } else { f.title.clone() }, size: self.theme.title_size() * self.k, bold: f.title_bold, ..self.ty(1.0, false, &self.theme.colors.ink) }
     }
     /// A text box of one or more centred lines; (object, width, height).
     pub(crate) fn text(&self, name: &str, s: &str, ty: &Type, cx: f64, y: f64) -> (Object, f64, f64) {
@@ -227,12 +506,29 @@ struct Style {
 
 fn style(n: &Node, cx: &Ctx) -> Style {
     let r = cx.theme.role(n.role_or_default());
+    // a node's own colour, then the theme's colour for this kind of module, then the role's
+    let m = cx.theme.modules.get(&n.module);
+    let pick = |param: &str, kind: Option<&String>, role: &String| hex_param(n, param).or_else(|| kind.cloned()).unwrap_or_else(|| role.clone());
     Style {
-        fill: hex_param(n, "fill").unwrap_or_else(|| r.fill.clone()),
-        line: hex_param(n, "line").unwrap_or_else(|| r.line.clone()),
-        text: r.text.clone(),
+        fill: pick("fill", m.and_then(|m| m.fill.as_ref()), &r.fill),
+        line: pick("line", m.and_then(|m| m.line.as_ref()), &r.line),
+        text: m.and_then(|m| m.text.clone()).unwrap_or_else(|| r.text.clone()),
         lw: n.num("line_w").unwrap_or(cx.theme.node.line_w) * cx.k,
     }
+}
+
+/// The art style of a node: its own `style`, else the theme's for its kind.
+pub fn style_name(n: &Node, theme: &Theme) -> String {
+    if !n.style.is_empty() {
+        return n.style.clone();
+    }
+    theme.modules.get(&n.module).and_then(|m| m.style.clone()).unwrap_or_default()
+}
+
+/// A fill for parts that must show on paper: the role's fill unless it is
+/// none or the paper colour, then the tensor colour.
+fn solid_fill(st: &Style, cx: &Ctx) -> String {
+    if st.fill == "none" || st.fill.eq_ignore_ascii_case(&cx.theme.colors.paper) { cx.theme.colors.tensor.clone() } else { st.fill.clone() }
 }
 
 fn op_symbol(label: &str) -> String {
@@ -266,7 +562,8 @@ fn gen_box(n: &Node, cx: &Ctx) -> Core {
     if let Some(v) = n.num("h") {
         h = cx.s(v);
     }
-    let kind = n.str("shape").unwrap_or(if cx.theme.node.radius > 0.0 { "round" } else { "rect" });
+    let named = style_name(n, cx.theme);
+    let kind = n.str("shape").unwrap_or(if !named.is_empty() { named.as_str() } else if cx.theme.node.radius > 0.0 { "round" } else { "rect" });
     let prst = match kind {
         "round" => "roundRect",
         "rect" => "rect",
@@ -306,7 +603,8 @@ fn gen_loss(n: &Node, cx: &Ctx) -> Core {
     let ty = cx.ty(1.0, false, &st.text);
     let label = cx.vars.resolve(&n.label);
     let (tw, lines) = text::block(&label, ty.size);
-    let look = n.str("look").unwrap_or(&cx.theme.node.loss).to_string();
+    let named = style_name(n, cx.theme);
+    let look = n.str("look").map(str::to_string).unwrap_or(if named.is_empty() { cx.theme.node.loss.clone() } else { named });
     let pad = if look == "plain" { cx.s(6.0) } else { cx.s(16.0) };
     let (w, h) = (tw + pad, lines as f64 * ty.size * 1.25 + if look == "plain" { cx.s(4.0) } else { cx.s(10.0) });
     let mut o = match look.as_str() {
@@ -389,17 +687,64 @@ fn pic_size(n: &Node, cx: &Ctx, default: f64) -> (f64, f64) {
     (cx.s(n.num("w").unwrap_or(s)), cx.s(n.num("h").unwrap_or(s)))
 }
 
+/// A picture file on the slide. With a known pixel size the picture keeps its
+/// proportions: it is cropped to fill a box whose width and height are both
+/// given, else the box follows the picture.
+fn photo(name: &str, src: &str, x: f64, y: f64, w: f64, h: f64, outline: &str, lw: f64, cx: &Ctx) -> Object {
+    let mut crop = lore_canvas::Crop::default();
+    if let Some((pw, ph)) = (cx.image_size)(src).filter(|d| d.0 > 0 && d.1 > 0) {
+        let (pic, boxr) = (pw as f64 / ph as f64, w / h);
+        if pic > boxr * 1.001 {
+            let cut = (1.0 - boxr / pic) / 2.0;
+            crop.l = cut;
+            crop.r = cut;
+        } else if pic < boxr / 1.001 {
+            let cut = (1.0 - pic / boxr) / 2.0;
+            crop.t = cut;
+            crop.b = cut;
+        }
+    }
+    obj(name, frame(x, y, w, h), Kind::Picture(lore_canvas::PicObj { asset: format!("file:{src}"), crop, alpha: 1.0, line: stroke(outline, lw), clip: "rect".into(), masks: vec![], effects: vec![] }))
+}
+
+/// Box of a picture node: `w`/`h` (cropping), or `size` as the longer side of
+/// the picture's own proportions.
+fn photo_size(n: &Node, cx: &Ctx, src: &str, default: f64) -> (f64, f64) {
+    let s = n.num("size").unwrap_or(default);
+    match ((cx.image_size)(src), n.num("w"), n.num("h")) {
+        (Some((pw, ph)), None, None) if pw > 0 && ph > 0 => {
+            let r = (pw as f64 / ph as f64).clamp(0.4, 2.5);
+            if r >= 1.0 { (cx.s(s), cx.s(s / r)) } else { (cx.s(s * r), cx.s(s)) }
+        }
+        _ => pic_size(n, cx, default),
+    }
+}
+
 fn gen_image(n: &Node, cx: &Ctx) -> Core {
-    let (w, h) = pic_size(n, cx, 44.0);
     let outline = hex_param(n, "line").unwrap_or_else(|| cx.theme.colors.ink.clone());
     let lw = n.num("line_w").unwrap_or(0.75) * cx.k;
+    if let Some(src) = n.str("src").filter(|s| !s.is_empty()) {
+        let (w, h) = photo_size(n, cx, src, 44.0);
+        return Core { w, h, objs: vec![photo("picture", src, 0.0, 0.0, w, h, &outline, lw, cx)], single: false, ellipse: false, label: LabelPos::Below };
+    }
+    let (w, h) = pic_size(n, cx, 44.0);
     let objs = picture("", n.str("look").unwrap_or("photo"), 0.0, 0.0, w, h, &outline, lw, cx, true);
     Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Below }
 }
 
 fn gen_image_stack(n: &Node, cx: &Ctx) -> Core {
-    let (w, h) = pic_size(n, cx, 40.0);
-    let count = n.num("n").unwrap_or(3.0).clamp(2.0, 8.0) as usize;
+    // real pictures: `srcs=[a.png,b.png]` back to front, or one `src` repeated
+    let mut srcs = n.list("srcs");
+    if srcs.is_empty()
+        && let Some(s) = n.str("src").filter(|s| !s.is_empty())
+    {
+        srcs = vec![s.to_string(); n.num("n").unwrap_or(3.0).clamp(2.0, 8.0) as usize];
+    }
+    let count = if srcs.is_empty() { n.num("n").unwrap_or(3.0).clamp(2.0, 8.0) as usize } else { srcs.len().clamp(1, 8) };
+    let (w, h) = match srcs.last() {
+        Some(front) => photo_size(n, cx, front, 40.0),
+        None => pic_size(n, cx, 40.0),
+    };
     let off = cx.s(n.num("offset").unwrap_or(5.0));
     let outline = hex_param(n, "line").unwrap_or_else(|| cx.theme.colors.ink.clone());
     let lw = n.num("line_w").unwrap_or(0.75) * cx.k;
@@ -409,7 +754,10 @@ fn gen_image_stack(n: &Node, cx: &Ctx) -> Core {
     // back to front: the front picture is bottom-left
     for i in 0..count {
         let back = (count - 1 - i) as f64;
-        objs.extend(picture(&format!("p{i}"), look, back * off, total - back * off, w, h, &outline, lw, cx, i == count - 1));
+        match srcs.get(i) {
+            Some(src) => objs.push(photo(&format!("p{i}"), src, back * off, total - back * off, w, h, &outline, lw, cx)),
+            None => objs.extend(picture(&format!("p{i}"), look, back * off, total - back * off, w, h, &outline, lw, cx, i == count - 1)),
+        }
     }
     Core { w: w + total, h: h + total, objs, single: false, ellipse: false, label: LabelPos::Below }
 }
@@ -424,7 +772,7 @@ fn gen_feature_stack(n: &Node, cx: &Ctx) -> Core {
     let alpha = n.num("alpha").unwrap_or(0.85);
     let total = off * (count - 1) as f64;
     let mut objs = Vec::new();
-    if n.str("look") == Some("3d") {
+    if n.str("look") == Some("3d") || style_name(n, cx.theme) == "3d" {
         // upright sheets seen from the side: parallelograms
         let (sw, skew) = (size * 0.45, size * 0.28);
         for i in 0..count {
@@ -493,7 +841,7 @@ fn gen_layer_bars(n: &Node, cx: &Ctx) -> Core {
         layers = vec!["Conv".into(), "Conv".into(), "Conv".into()];
     }
     let st = style(n, cx);
-    let ty = cx.ty(cx.theme.font.small_scale, false, &st.text);
+    let ty = cx.small(&st.text);
     let bw = n.num("bar_w").map(|v| cx.s(v)).unwrap_or(ty.size * 1.25 + cx.s(5.0));
     let gap = cx.s(n.num("gap").unwrap_or(4.0));
     let longest = layers.iter().map(|l| text::width(&cx.vars.resolve(l), ty.size)).fold(0.0, f64::max);
@@ -598,7 +946,7 @@ fn gen_cuboid_seq(n: &Node, cx: &Ctx) -> Core {
 fn gen_unet(n: &Node, cx: &Ctx) -> Core {
     let depth = n.num("depth").unwrap_or(3.0).clamp(1.0, 6.0) as usize;
     let st = style(n, cx);
-    let fill = if st.fill == "none" || st.fill.eq_ignore_ascii_case(&cx.theme.colors.paper) { cx.theme.colors.tensor.clone() } else { st.fill.clone() };
+    let fill = solid_fill(&st, cx);
     let (bw, gap, h0, step) = (cx.s(8.0), cx.s(8.0), cx.s(42.0), cx.s(11.0));
     let hl = |l: usize| h0 * 0.68f64.powi(l as i32);
     let count = 2 * depth + 1;
@@ -622,6 +970,200 @@ fn gen_unet(n: &Node, cx: &Ctx) -> Core {
         objs.push(shape(&format!("bar{i}"), "rect", x, l as f64 * step, bw, hl(l), paint(&fill, 1.0), stroke(&st.line, st.lw)));
     }
     Core { w: count as f64 * (bw + gap) - gap, h: total_h, objs, single: false, ellipse: false, label: LabelPos::Above }
+}
+
+/// Built-in art styles of the generator kinds (the first is the default).
+pub fn generator_styles(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "encoder" | "decoder" => &["trapezoid", "outline", "rounded", "gradient", "bars", "3d", "stacked"],
+        "nn" => &["circles", "filled", "dots", "pills", "squares"],
+        "brace" => &["curly", "square", "line", "arrow", "angle"],
+        "feature-stack" => &["flat", "3d"],
+        "loss" => &["plain", "pill", "box"],
+        "box" => &["rect", "round", "pill"],
+        _ => &[],
+    }
+}
+
+/// encoder / decoder: a block that narrows (encoder) or widens (decoder) along the flow.
+fn gen_coder(n: &Node, cx: &Ctx, decoder: bool) -> Core {
+    let st = style(n, cx);
+    let which = style_name(n, cx.theme);
+    let (w, h) = (cx.s(n.num("w").unwrap_or(58.0)), cx.s(n.num("h").unwrap_or(46.0)));
+    let ty = cx.ty(1.0, false, &st.text);
+    // heights at the wide and the narrow end
+    let narrow = 0.5;
+    let frac = |t: f64| if decoder { narrow + (1.0 - narrow) * t } else { 1.0 - (1.0 - narrow) * t };
+    let outline = |fill: Paint, lw: f64| {
+        let (a, b) = (frac(0.0), frac(1.0));
+        let pts = [(0.0, h * (1.0 - a) / 2.0), (w, h * (1.0 - b) / 2.0), (w, h * (1.0 + b) / 2.0), (0.0, h * (1.0 + a) / 2.0)];
+        poly("", &pts, true, fill, stroke(&st.line, lw))
+    };
+    let steps = n.num("n").unwrap_or(4.0).clamp(2.0, 8.0) as usize;
+    match which.as_str() {
+        "rounded" => {
+            let mut o = shape("", "roundRect", 0.0, 0.0, w, h * 0.8, paint(&st.fill, 1.0), stroke(&st.line, st.lw));
+            round_adj(&mut o, 0.28);
+            cx.put_text(&mut o, &n.label, &ty, false);
+            Core { w, h: h * 0.8, objs: vec![o], single: true, ellipse: false, label: LabelPos::Drawn }
+        }
+        "outline" => {
+            let mut o = outline(Paint::None, st.lw * 1.5);
+            cx.put_text(&mut o, &n.label, &ty, false);
+            Core { w, h, objs: vec![o], single: false, ellipse: false, label: LabelPos::Drawn }
+        }
+        "gradient" => {
+            let base = solid_fill(&st, cx);
+            let (from, to) = if decoder { (shade(&base, 0.75), base.clone()) } else { (base.clone(), shade(&base, 0.75)) };
+            let stops = vec![lore_canvas::Stop { pos: 0.0, color: from, alpha: 1.0 }, lore_canvas::Stop { pos: 1.0, color: to, alpha: 1.0 }];
+            let mut o = outline(Paint::Gradient { stops, angle: 0.0, path: false }, st.lw);
+            cx.put_text(&mut o, &n.label, &ty, false);
+            Core { w, h, objs: vec![o], single: false, ellipse: false, label: LabelPos::Drawn }
+        }
+        "bars" => {
+            let fill = solid_fill(&st, cx);
+            let (bw, gap) = (cx.s(9.0), cx.s(5.0));
+            let mut objs = Vec::new();
+            for i in 0..steps {
+                let bh = h * frac(i as f64 / (steps - 1) as f64);
+                let mut o = shape(&format!("bar{i}"), "roundRect", i as f64 * (bw + gap), (h - bh) / 2.0, bw, bh, paint(&fill, 1.0), stroke(&st.line, st.lw));
+                round_adj(&mut o, 0.3);
+                objs.push(o);
+            }
+            Core { w: steps as f64 * (bw + gap) - gap, h, objs, single: false, ellipse: false, label: LabelPos::Above }
+        }
+        "3d" => {
+            let mut m = n.clone();
+            let dims: Vec<Value> = (0..steps)
+                .map(|i| {
+                    let f = frac(i as f64 / (steps - 1) as f64);
+                    serde_json::json!([5.0 + 8.0 * (1.0 - f) / (1.0 - narrow), 46.0 * f, 14.0 * f])
+                })
+                .collect();
+            m.params.insert("dims".into(), Value::Array(dims));
+            if hex_param(n, "fill").is_none() {
+                m.params.insert("fill".into(), Value::String(solid_fill(&st, cx)));
+            }
+            gen_cuboid_seq(&m, cx)
+        }
+        "stacked" => {
+            // translucent sheets one behind the other
+            let fill = solid_fill(&st, cx);
+            let (sw, off, skew) = (cx.s(16.0), cx.s(9.0), cx.s(7.0));
+            let mut objs = Vec::new();
+            for i in 0..steps {
+                let sh = (h - skew) * frac(i as f64 / (steps - 1) as f64);
+                let x = i as f64 * off;
+                let y0 = (h - skew - sh) / 2.0;
+                let pts = [(x, y0 + skew), (x + sw, y0), (x + sw, y0 + sh), (x, y0 + sh + skew)];
+                objs.push(poly(&format!("sheet{i}"), &pts, true, paint(&fill, 0.55), stroke(&st.line, 0.75 * cx.k)));
+            }
+            Core { w: (steps - 1) as f64 * off + sw, h, objs, single: false, ellipse: false, label: LabelPos::Above }
+        }
+        _ => {
+            let mut o = outline(paint(&st.fill, 1.0), st.lw);
+            cx.put_text(&mut o, &n.label, &ty, false);
+            Core { w, h, objs: vec![o], single: false, ellipse: false, label: LabelPos::Drawn }
+        }
+    }
+}
+
+/// nn: a small fully connected network, neurons and the lines between layers.
+fn gen_nn(n: &Node, cx: &Ctx) -> Core {
+    let st = style(n, cx);
+    let which = style_name(n, cx.theme);
+    let mut layers: Vec<usize> = n.list("layers").iter().filter_map(|l| l.trim().parse::<f64>().ok()).map(|v| v.clamp(1.0, 8.0) as usize).collect();
+    if layers.is_empty() {
+        layers = vec![3, 4, 2];
+    }
+    let (d, vgap, lgap) = match which.as_str() {
+        "dots" => (cx.s(5.0), cx.s(6.0), cx.s(22.0)),
+        "pills" => (cx.s(8.0), cx.s(3.0), cx.s(26.0)),
+        _ => (cx.s(9.0), cx.s(5.0), cx.s(24.0)),
+    };
+    let pad = if which == "pills" { cx.s(3.0) } else { 0.0 };
+    let tallest = *layers.iter().max().unwrap() as f64;
+    let h = tallest * d + (tallest - 1.0) * vgap + 2.0 * pad;
+    let centre = |li: usize, ni: usize| {
+        let count = layers[li] as f64;
+        let col_h = count * d + (count - 1.0) * vgap;
+        (pad + li as f64 * (d + lgap + 2.0 * pad) + d / 2.0, (h - col_h) / 2.0 + ni as f64 * (d + vgap) + d / 2.0)
+    };
+    let mut objs = Vec::new();
+    let wire = Stroke::new(if which == "dots" { &cx.theme.colors.muted } else { &st.line }, (if which == "dots" { 0.35 } else { 0.5 }) * cx.k);
+    for li in 0..layers.len().saturating_sub(1) {
+        for a in 0..layers[li] {
+            for b in 0..layers[li + 1] {
+                let (p, q) = (centre(li, a), centre(li + 1, b));
+                // from edge to edge of the neurons, so outlined neurons stay clean
+                objs.push(seg(&format!("w{li}-{a}-{b}"), (p.0 + d / 2.0 + pad, p.1), (q.0 - d / 2.0 - pad, q.1), wire.clone()));
+            }
+        }
+    }
+    for (li, count) in layers.iter().enumerate() {
+        if which == "pills" {
+            let (x, _) = centre(li, 0);
+            let col_h = *count as f64 * d + (*count as f64 - 1.0) * vgap + 2.0 * pad;
+            let mut o = shape(&format!("layer{li}"), "roundRect", x - d / 2.0 - pad, (h - col_h) / 2.0, d + 2.0 * pad, col_h, paint(&cx.theme.colors.paper, 1.0), stroke(&st.line, st.lw));
+            round_adj(&mut o, 0.5);
+            objs.push(o);
+        }
+        for ni in 0..*count {
+            let (x, y) = centre(li, ni);
+            let (prst, fill, line) = match which.as_str() {
+                "filled" | "pills" => ("ellipse", paint(&solid_fill(&st, cx), 1.0), stroke(&st.line, 0.5 * cx.k)),
+                "dots" => ("ellipse", paint(&st.line, 1.0), None),
+                "squares" => ("rect", paint(&cx.theme.colors.paper, 1.0), stroke(&st.line, st.lw)),
+                _ => ("ellipse", paint(&cx.theme.colors.paper, 1.0), stroke(&st.line, st.lw)),
+            };
+            objs.push(shape(&format!("n{li}-{ni}"), prst, x - d / 2.0, y - d / 2.0, d, d, fill, line));
+        }
+    }
+    let w = layers.len() as f64 * (d + 2.0 * pad) + (layers.len() - 1) as f64 * lgap;
+    Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Above }
+}
+
+/// brace: gathers what is on its open side (`dir` = the side it points to).
+fn gen_brace(n: &Node, cx: &Ctx) -> Core {
+    let st = style(n, cx);
+    let which = style_name(n, cx.theme);
+    let len = cx.s(n.num("size").unwrap_or(56.0));
+    let thick = cx.s(n.num("thick").unwrap_or(if which == "line" || which == "arrow" { 8.0 } else { 10.0 }));
+    let dir = n.str("dir").unwrap_or("right").to_string();
+    let vertical = dir == "left" || dir == "right";
+    let line = Stroke::new(&st.line, st.lw);
+    // drawn pointing right in a (thick × len) box, then turned
+    let (w, h) = if vertical { (thick, len) } else { (len, thick) };
+    let turn = |p: (f64, f64)| -> (f64, f64) {
+        match dir.as_str() {
+            "left" => (thick - p.0, p.1),
+            "down" => (p.1, p.0),
+            "up" => (p.1, thick - p.0),
+            _ => p,
+        }
+    };
+    let path = |pts: &[(f64, f64)], name: &str, st: Stroke| poly(name, &pts.iter().map(|p| turn(*p)).collect::<Vec<_>>(), false, Paint::None, Some(st));
+    let objs = match which.as_str() {
+        "square" => vec![path(&[(0.0, 0.0), (thick, 0.0), (thick, len), (0.0, len)], "", line)],
+        "angle" => vec![path(&[(0.0, 0.0), (thick, len / 2.0), (0.0, len)], "", line)],
+        "line" => vec![path(&[(0.0, 0.0), (thick, 0.0)], "tick0", line.clone()), path(&[(thick / 2.0, 0.0), (thick / 2.0, len)], "bar", line.clone()), path(&[(0.0, len), (thick, len)], "tick1", line)],
+        "arrow" => {
+            let mut both = line.clone();
+            both.head = "triangle".into();
+            both.tail = "triangle".into();
+            vec![path(&[(0.0, 0.0), (thick, 0.0)], "tick0", line.clone()), path(&[(thick / 2.0, 0.0), (thick / 2.0, len)], "bar", both), path(&[(0.0, len), (thick, len)], "tick1", line)]
+        }
+        _ => {
+            // PowerPoint's own brace, turned for the up/down directions
+            let prst = if dir == "left" || dir == "up" { "leftBrace" } else { "rightBrace" };
+            let mut o = shape("", prst, (w - thick) / 2.0, (h - len) / 2.0, thick, len, Paint::None, Some(line));
+            if !vertical {
+                o.frame.rot = 90.0;
+            }
+            vec![o]
+        }
+    };
+    Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Below }
 }
 
 fn resolve_colour(s: &str, st: &Style, t: &Theme) -> Option<String> {
@@ -723,7 +1265,7 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx) -> Core {
                     for p in &mut tb.paras {
                         if let Some(i) = p.runs.iter().position(|r| r.text.trim() == "{{label}}") {
                             let l = &p.runs[i].look;
-                            let ty = Type { font: l.font.clone(), math_font: cx.theme.font.math.clone(), size: l.size, bold: l.bold, italic: l.italic, color: l.color.clone() };
+                            let ty = Type { font: l.font.clone(), ea_font: l.ea_font.clone(), math_font: cx.theme.font.math.clone(), size: l.size, bold: l.bold, italic: l.italic, color: l.color.clone() };
                             let (rs, m) = text::runs(label, &ty, cx.vars, cx.math);
                             math |= m;
                             p.runs.splice(i..=i, rs);
@@ -743,6 +1285,10 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx) -> Core {
         if o.name.is_empty() {
             o.name = format!("part{i}");
         }
+        if let Some(p) = &t.port {
+            o.frame.x -= p.x;
+            o.frame.y -= p.y;
+        }
         scale_obj(o, cx.k);
         fill_label(o, &label, cx, &mut drawn);
     }
@@ -757,20 +1303,33 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         n.label = format!("@{}", std::mem::take(&mut n.var));
     }
     let n = &n;
-    let core = match n.module.as_str() {
-        "box" => gen_box(n, cx),
-        "op" => gen_op(n, cx),
-        "loss" => gen_loss(n, cx),
-        "label" => gen_label(n, cx),
-        "image" => gen_image(n, cx),
-        "image-stack" => gen_image_stack(n, cx),
-        "feature-stack" => gen_feature_stack(n, cx),
-        "vector-bar" => gen_vector_bar(n, cx),
-        "matrix" => gen_matrix(n, cx),
-        "layer-bars" => gen_layer_bars(n, cx),
-        "cuboid-seq" => gen_cuboid_seq(n, cx),
-        "unet" => gen_unet(n, cx),
-        other => match cx.lib.templates.get(other) {
+    // a saved drawing of this kind and style wins over the built-in drawing
+    let which = style_name(n, cx.theme);
+    let saved = match cx.lib.templates.get(&n.module) {
+        Some(styles) if !which.is_empty() => styles.get(&which),
+        Some(_) if !crate::spec::MODULES.iter().any(|(m, _)| *m == n.module) => cx.lib.get(&n.module, ""),
+        _ => None,
+    };
+    let core = match (saved, n.module.as_str()) {
+        (Some(t), _) => gen_template(n, t, cx),
+        (None, "box") => gen_box(n, cx),
+        (None, "op") => gen_op(n, cx),
+        (None, "loss") => gen_loss(n, cx),
+        (None, "label") => gen_label(n, cx),
+        (None, "image") => gen_image(n, cx),
+        (None, "image-stack") => gen_image_stack(n, cx),
+        (None, "feature-stack") => gen_feature_stack(n, cx),
+        (None, "vector-bar") => gen_vector_bar(n, cx),
+        (None, "matrix") => gen_matrix(n, cx),
+        (None, "layer-bars") => gen_layer_bars(n, cx),
+        (None, "cuboid-seq") => gen_cuboid_seq(n, cx),
+        (None, "unet") => gen_unet(n, cx),
+        (None, "encoder") => gen_coder(n, cx, false),
+        (None, "decoder") => gen_coder(n, cx, true),
+        (None, "nn") => gen_nn(n, cx),
+        (None, "brace") => gen_brace(n, cx),
+        // a library kind whose named style is missing falls back to its default drawing
+        (None, other) => match cx.lib.get(other, "") {
             Some(t) => gen_template(n, t, cx),
             None => gen_box(n, cx),
         },
@@ -778,7 +1337,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     // text around the body: the label (above or below) and, below, the variable and caption
     let ink = cx.theme.colors.ink.clone();
     let ty = cx.ty(1.0, false, &ink);
-    let small = cx.ty(cx.theme.font.small_scale, false, &cx.theme.colors.muted);
+    let small = cx.small(&cx.theme.colors.muted);
     let mut above: Vec<(String, &'static str, Type)> = Vec::new();
     let mut below: Vec<(String, &'static str, Type)> = Vec::new();
     match core.label {

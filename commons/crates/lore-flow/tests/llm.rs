@@ -55,7 +55,7 @@ fn the_task_is_defined_for_the_router() {
 fn the_request_offers_closed_lists_and_the_notation_table() {
     let reg = registry();
     let mut lib = Library::default();
-    lib.add_json(r#"{ "kind": "encoder", "description": "a block that narrows", "w": 60, "h": 40, "objects": [] }"#).unwrap();
+    lib.add_json(r#"{ "kind": "gadget", "description": "a block that narrows", "w": 60, "h": 40, "objects": [] }"#).unwrap();
     let example = (String::from("An image goes through a model."), dsl::parse("fig e\nx: image \"$x$\"\nf: box \"Model\"\nx -> f\n").unwrap());
     let img = Image::from_bytes("image/png", &[1, 2, 3]);
     let p = FlowPrompt { description: "x goes into a U-Net.", image: Some(img), notation: Some(&reg), library: &lib, examples: std::slice::from_ref(&example) };
@@ -64,7 +64,7 @@ fn the_request_offers_closed_lists_and_the_notation_table() {
     let schema = req.json_schema.clone().unwrap();
     let modules = schema["properties"]["nodes"]["items"]["properties"]["module"]["enum"].as_array().unwrap();
     assert_eq!(modules.len(), lore_flow::spec::MODULES.len() + 1);
-    assert!(modules.contains(&json!("encoder")) && modules.contains(&json!("unet")));
+    assert!(modules.contains(&json!("gadget")) && modules.contains(&json!("unet")));
     let kinds = schema["properties"]["edges"]["items"]["properties"]["kind"]["enum"].as_array().unwrap();
     assert_eq!(kinds.len(), EdgeKind::ALL.len());
     // nothing about positions or colours can come back
@@ -72,7 +72,7 @@ fn the_request_offers_closed_lists_and_the_notation_table() {
     assert!(!node_props.keys().any(|k| ["x", "y", "color", "fill", "frame"].contains(&k.as_str())));
     assert_eq!(schema["properties"]["nodes"]["items"]["additionalProperties"], json!(false));
     assert!(req.system.contains("img — $\\boldsymbol{x}$ — input image"));
-    assert!(req.system.contains("encoder: a block that narrows"));
+    assert!(req.system.contains("gadget: a block that narrows"));
     assert!(req.system.contains("Example 1") && req.system.contains("An image goes through a model."));
     // the canned good reply satisfies the schema we send
     lore_llm::json::validate(&good(), &schema).unwrap();

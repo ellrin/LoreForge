@@ -9,7 +9,7 @@ use serde_json::Value;
 
 /// Module kinds the program can draw (the closed list an LLM picks from).
 /// Module templates loaded from a library extend it at run time.
-pub const MODULES: [(&str, &str); 12] = [
+pub const MODULES: [(&str, &str); 16] = [
     ("box", "a named step or model: rectangle with the label inside (params: shape=rect|round|trapezoid, vertical=true for an upright bar)"),
     ("op", "operator circle; label is one of + x . C (add, multiply, element-wise, concatenate) or a short word such as Or"),
     ("loss", "a loss or metric; label is its math, e.g. $\\mathcal L_{seg}$"),
@@ -22,6 +22,10 @@ pub const MODULES: [(&str, &str); 12] = [
     ("layer-bars", "a network drawn as a row of upright layer bars (params: layers=[names], taper=true)"),
     ("cuboid-seq", "a network drawn as 3-D blocks (params: shape=down|up|hourglass|flat, n, or dims=[[w,h,d],..])"),
     ("unet", "a flat U-shaped encoder-decoder with skip lines (params: depth)"),
+    ("encoder", "an encoder as one block that narrows along the flow"),
+    ("decoder", "a decoder as one block that widens along the flow"),
+    ("nn", "a small fully connected network: neurons and the lines between layers (params: layers=[3,4,2])"),
+    ("brace", "a brace or dimension mark that gathers several things (params: dir=right|left|up|down)"),
 ];
 
 /// What a node is in the story (decides its colour through the theme).
@@ -194,6 +198,10 @@ pub struct Node {
     pub caption: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub panel: String,
+    /// Art style of the module (a built-in style or a saved drawing of the
+    /// library); empty = the theme's choice for this kind.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub style: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, Value>,
 }
@@ -230,6 +238,7 @@ impl Node {
         }
         match self.module.as_str() {
             "op" => "op",
+            "brace" => "note",
             "loss" => "loss",
             "label" => "note",
             "image" | "image-stack" | "feature-stack" | "vector-bar" | "matrix" => "data",

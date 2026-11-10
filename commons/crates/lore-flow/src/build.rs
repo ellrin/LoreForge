@@ -25,6 +25,9 @@ pub struct Built {
     pub node_ids: BTreeMap<String, u32>,
     /// Next free object id.
     pub next_id: u32,
+    /// Picture files the objects refer to (`file:<path>` assets, as written in
+    /// the graph): the app copies them into the deck before inserting.
+    pub pictures: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -178,8 +181,14 @@ fn top_level(name: &str, fr: Frame, kind: Kind, id: u32) -> Object {
 /// Turn a laid-out, routed graph into canvas objects with ids from `first_id`.
 #[allow(clippy::too_many_arguments)]
 pub fn build(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &dyn MathSource, lay: &Layout, routes: &[Route], first_id: u32) -> Built {
+    build_with(g, theme, vars, lib, math, lay, routes, first_id, &modules::no_images)
+}
+
+/// As [`build`], knowing the pixel sizes of the picture files the graph names.
+#[allow(clippy::too_many_arguments)]
+pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &dyn MathSource, lay: &Layout, routes: &[Route], first_id: u32, image_size: &dyn Fn(&str) -> Option<(u32, u32)>) -> Built {
     let k = lay.scale;
-    let cx = Ctx { theme, vars, math, lib, k, symmetric: true };
+    let cx = Ctx { theme, vars, math, lib, k, symmetric: true, image_size };
     let mut id = first_id.max(2);
     let mut objects = Vec::new();
     let mut warnings = Vec::new();
@@ -214,7 +223,7 @@ pub fn build(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &dyn Ma
         id += 1;
         objects.push(o);
         if let Some(t) = &p.title_rect {
-            let ty = cx.ty(theme.font.title_scale, true, &theme.colors.ink);
+            let ty = cx.title();
             let (mut o, _, _) = cx.text("", &p.title, &ty, t.cx(), t.y);
             if !theme.panel.title.ends_with("center") {
                 // left-aligned from the title's corner, however wide the font turns out
@@ -233,7 +242,7 @@ pub fn build(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &dyn Ma
     // modules
     let mut node_ids = BTreeMap::new();
     for (n, pl) in g.nodes.iter().zip(&lay.nodes) {
-        let body = modules::make(n, &Ctx { theme, vars, math, lib, k, symmetric: !lay.panels[pl.panel].down });
+        let body = modules::make(n, &Ctx { theme, vars, math, lib, k, symmetric: !lay.panels[pl.panel].down, image_size });
         let (o, next) = modules::place(body, &node_name(fig, &n.id), pl.rect.x, pl.rect.y, id);
         node_ids.insert(n.id.clone(), o.id);
         id = next;
@@ -241,7 +250,7 @@ pub fn build(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &dyn Ma
     }
 
     // lines
-    let small = cx.ty(theme.font.small_scale, false, &theme.colors.ink);
+    let small = cx.small(&theme.colors.ink);
     let mut labels = Vec::new();
     let mut label_rects: Vec<Rect> = Vec::new();
     for r in routes {
@@ -318,7 +327,7 @@ pub fn build(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &dyn Ma
         line.name = format!("flow:{fig}/legend:{}", l.kind.as_str());
         id += 1;
         objects.push(line);
-        let ty = cx.ty(theme.font.small_scale, false, &theme.colors.ink);
+        let ty = cx.small(&theme.colors.ink);
         let (mut o, w, h) = cx.text("", l.kind.label(), &ty, 0.0, 0.0);
         o.frame.x = emu(l.text.x);
         o.frame.y = emu(l.text.cy() - h / 2.0);
@@ -362,7 +371,22 @@ pub fn build(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &dyn Ma
         }
     }
     objects.iter_mut().for_each(tidy);
-    Built { objects, node_ids, next_id: id, warnings }
+    let mut pictures: Vec<String> = Vec::new();
+    fn collect(o: &Object, out: &mut Vec<String>) {
+        match &o.kind {
+            Kind::Picture(p) => {
+                if let Some(f) = p.asset.strip_prefix("file:")
+                    && !out.iter().any(|x| x == f)
+                {
+                    out.push(f.to_string());
+                }
+            }
+            Kind::Group(g) => g.children.iter().for_each(|c| collect(c, out)),
+            _ => {}
+        }
+    }
+    objects.iter().for_each(|o| collect(o, &mut pictures));
+    Built { objects, node_ids, next_id: id, pictures, warnings }
 }
 
 /// The batch that puts a figure on a slide: one `InsertObj` per object, on top

@@ -17,7 +17,7 @@
 //! ```
 //!
 //! One statement per line; `#` starts a comment. Node keys `role`, `var`,
-//! `caption` are fields, every other `key=value` is a module parameter.
+//! `caption`, `style` are fields, every other `key=value` is a module parameter.
 
 use serde_json::Value;
 
@@ -217,6 +217,7 @@ pub fn parse_with(text: &str, extra_modules: &[String]) -> Result<Graph, DslErro
                         Some((k, v)) if !k.is_empty() => match k {
                             "role" => n.role = v.trim_start_matches('"').to_string(),
                             "var" => n.var = v.trim_start_matches('"').to_string(),
+                            "style" => n.style = v.trim_start_matches('"').to_string(),
                             "caption" => n.caption = v.trim_start_matches('"').to_string(),
                             "label" => n.label = v.trim_start_matches('"').to_string(),
                             _ => {
@@ -338,6 +339,9 @@ fn node_line(n: &Node, indent: &str) -> String {
     }
     if !n.var.is_empty() {
         s.push_str(&format!(" var={}", n.var));
+    }
+    if !n.style.is_empty() {
+        s.push_str(&format!(" style={}", n.style));
     }
     if !n.caption.is_empty() {
         s.push_str(&format!(" caption={}", quote(&n.caption)));

@@ -122,9 +122,9 @@ fn validation_names_what_is_wrong() {
     g.nodes[1].role = "villain".into();
     assert!(matches!(g.validate(&[]), Err(SpecError::UnknownRole { .. })));
     let mut g = chain(3);
-    g.nodes[1].module = "encoder".into();
+    g.nodes[1].module = "widget".into();
     assert!(matches!(g.validate(&[]), Err(SpecError::UnknownModule { .. })));
-    assert!(g.validate(&["encoder".to_string()]).is_ok());
+    assert!(g.validate(&["widget".to_string()]).is_ok());
     let mut g = chain(2);
     g.nodes[0].panel = "p".into();
     assert!(matches!(g.validate(&[]), Err(SpecError::UnknownPanel { .. })));
@@ -707,38 +707,304 @@ fn a_theme_file_only_lists_what_it_changes() {
     assert_eq!(Theme::from_toml(&example).unwrap(), base);
 }
 
+fn example_dir() -> std::path::PathBuf {
+    std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../private-example/SlideComposer/flow")).to_path_buf()
+}
+
+fn find(f: &Figure, name: &str) -> Object {
+    let mut hit = None;
+    walk(f.objects(), &mut |o| {
+        if o.name == name {
+            hit = Some(o.clone());
+        }
+    });
+    hit.unwrap_or_else(|| panic!("{name} missing"))
+}
+
 #[test]
-fn saved_drawings_are_module_kinds() {
-    let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../private-example/SlideComposer/flow"));
+fn saved_drawings_are_module_kinds_and_styles() {
+    let dir = example_dir();
+    // modules/<kind>/<style>.json: the style is the file name
     let lib = Library::load_dir(&dir.join("modules")).unwrap();
-    assert_eq!(lib.kinds(), ["decoder", "document", "encoder", "store"]);
-    let g = dsl::parse_with("fig t\ne: encoder \"$E_\\phi$\"\ns: store \"Memory\"\nd: decoder \"Dec\" role=output fill=FFE5E5\ndoc: document \"Report\"\ne -> s -> d -> doc\n", &lib.kinds()).unwrap();
+    assert_eq!(lib.kinds(), ["document", "store"], "kinds the library adds to the built-in ones");
+    assert_eq!(lib.styles("encoder"), ["plain"]);
+    assert_eq!(lib.styles("store"), ["can"]);
+    let g = dsl::parse_with(
+        "fig t\ne: encoder \"$E_\\phi$\" style=plain\ns: store \"Memory\"\nd: decoder \"Dec\" style=plain role=output fill=FFE5E5\ndoc: document \"Report\"\ne2: encoder \"Enc\"\ne -> s -> d -> doc -> e2\n",
+        &lib.kinds(),
+    )
+    .unwrap();
+    assert_eq!(g.node("e").unwrap().style, "plain");
+    assert_eq!(dsl::parse_with(&dsl::to_dsl(&g), &lib.kinds()).unwrap(), g);
     let f = draw(&g, &Drawing { library: lib, ..Default::default() }).unwrap();
-    let find = |name: &str| {
-        let mut hit = None;
-        walk(f.objects(), &mut |o| {
-            if o.name == name {
-                hit = Some(o.clone());
-            }
-        });
-        hit.unwrap_or_else(|| panic!("{name} missing"))
-    };
     // role colours and the label are filled in
-    let body = find("flow:t/e/body");
+    let body = find(&f, "flow:t/e/body");
     let sp = body.kind.sp().unwrap();
     assert_eq!(sp.fill, lore_canvas::Paint::solid(&Theme::classic_bw().role("model").fill));
     assert_eq!(sp.text.as_ref().unwrap().plain_text(), "Eϕ");
-    assert_eq!(find("flow:t/d/body").kind.sp().unwrap().fill, lore_canvas::Paint::solid("FFE5E5"));
+    assert_eq!(find(&f, "flow:t/d/body").kind.sp().unwrap().fill, lore_canvas::Paint::solid("FFE5E5"));
     // a drawing without a label run gets its label underneath
-    assert_eq!(find("flow:t/s/label").kind.sp().unwrap().text.as_ref().unwrap().plain_text(), "Memory");
-    assert_eq!(find("flow:t/s/port").frame.w, find("flow:t/s").frame.w);
+    assert_eq!(find(&f, "flow:t/s/label").kind.sp().unwrap().text.as_ref().unwrap().plain_text(), "Memory");
+    assert_eq!(find(&f, "flow:t/s/port").frame.w, find(&f, "flow:t/s").frame.w);
+    // without a style a built-in kind keeps its built-in drawing
+    assert!(matches!(find(&f, "flow:t/e2").kind, Kind::Group(_)));
+    assert!(f.objects().iter().all(|o| o.name != "flow:t/e2/body") || find(&f, "flow:t/e2/body").kind.sp().unwrap().geom.prst == "custom");
     assert!(f.routes.iter().all(|r| r.bends() == 0 && !r.forced));
     // the example panel template parses
     let t = PanelTemplate::from_json(&std::fs::read_to_string(dir.join("templates/one-over-two.json")).unwrap()).unwrap();
     assert_eq!(t.panels.len(), 3);
-    // built-in names cannot be shadowed
-    let mut lib = Library::default();
-    assert!(lib.add_json(r#"{ "kind": "box", "w": 10, "h": 10, "objects": [] }"#).is_err());
+    // a file in the wrong folder is refused
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("decoder")).unwrap();
+    std::fs::copy(dir.join("modules/encoder/plain.json"), tmp.path().join("decoder/plain.json")).unwrap();
+    assert!(Library::load_dir(tmp.path()).unwrap_err().contains("does not match its folder"));
+    assert!(Library::load_dir(&tmp.path().join("nothing-here")).unwrap().templates.is_empty());
+}
+
+#[test]
+fn every_built_in_style_draws_and_differs() {
+    use lore_flow::modules::generator_styles;
+    for kind in ["encoder", "decoder", "nn", "brace"] {
+        let styles = generator_styles(kind);
+        assert!(styles.len() >= 5, "{kind} has {} styles", styles.len());
+        let mut seen = BTreeSet::new();
+        for style in styles {
+            let g = dsl::parse(&format!("fig k\na: box \"A\"\nm: {kind} \"M\" style={style}\nb: box \"B\"\na -> m -> b\n")).unwrap();
+            let f = fig(&g);
+            assert!(f.routes.iter().all(|r| r.bends() == 0 && !r.forced), "{kind}/{style}");
+            let o = f.objects().iter().find(|o| o.name == "flow:k/m").unwrap();
+            let mut o2 = o.clone();
+            o2.frame = Default::default();
+            assert!(seen.insert(serde_json::to_string(&o2).unwrap()), "{kind}/{style} looks like another style");
+            // connection sites are where the lines end
+            let sites = lore_canvas::geom::sites(o);
+            let end = f.routes[0].points[1];
+            assert!((sites[1].0 / 12_700.0 - end.0).abs() < 0.01 && (sites[1].1 / 12_700.0 - end.1).abs() < 0.01, "{kind}/{style}");
+        }
+    }
+    // the theme can choose the style and the colours of a kind
+    let t = Theme::from_toml("[modules.encoder]\nstyle = \"bars\"\nfill = \"C8C1FF\"\nline = \"1D3B63\"\n[modules.unet]\nfill = \"C8C1FF\"\n").unwrap();
+    let g = dsl::parse("fig k\ne: encoder \"E\"\nu: unet \"U\"\no: encoder \"O\" style=outline\ne -> u -> o\n").unwrap();
+    let f = draw(&g, &Drawing { theme: t, ..Default::default() }).unwrap();
+    assert_eq!(find(&f, "flow:k/e/bar0").kind.sp().unwrap().fill, lore_canvas::Paint::solid("C8C1FF"));
+    assert_eq!(find(&f, "flow:k/e/bar0").kind.sp().unwrap().line.as_ref().unwrap().color, "1D3B63");
+    assert_eq!(find(&f, "flow:k/u/bar0").kind.sp().unwrap().fill, lore_canvas::Paint::solid("C8C1FF"));
+    assert!(find(&f, "flow:k/o/body").kind.sp().unwrap().fill.is_none(), "a node's own style wins over the theme's");
+}
+
+#[test]
+fn a_selection_becomes_a_module_file() {
+    // draw something, "select" it, save it as a module, use it
+    let g = dsl::parse("fig s\nn: nn \"Net\" style=filled layers=[2,3,1] fill=C8C1FF\n").unwrap();
+    let f = fig(&g);
+    let group = f.objects().iter().find(|o| o.name == "flow:s/n").unwrap();
+    let Kind::Group(gr) = &group.kind else { panic!() };
+    // as the editor hands them over: top-level objects somewhere on the slide
+    let mut selection: Vec<Object> = gr.children.iter().filter(|c| !c.name.ends_with("/port")).cloned().collect();
+    for o in &mut selection {
+        o.frame.x += group.frame.x;
+        o.frame.y += group.frame.y;
+    }
+    let opt = SaveOptions { kind: "my-net".into(), style: "lavender".into(), description: "a small network".into(), label: Some("Net".into()), role_colours: true };
+    let t = template_from_objects(&selection, &opt).unwrap();
+    let text = serde_json::to_string(&t).unwrap();
+    assert!(text.contains("role:fill") && text.contains("role:line") && text.contains("{{label}}"), "{text}");
+    assert!(!text.contains("C8C1FF") && !text.contains("\"src\""));
+    let objs: Vec<Object> = serde_json::from_value(serde_json::json!(t.objects.to_string().replace("role:fill", "000000").replace("role:line", "000000").replace("role:text", "000000"))).ok().and_then(|v: String| serde_json::from_str(&v).ok()).unwrap();
+    assert!(objs.iter().all(|o| o.id == 0 && o.frame.x >= 0 && o.frame.y >= 0));
+    assert!(objs.iter().any(|o| o.frame.x == 0) && objs.iter().any(|o| o.frame.y == 0), "coordinates are relative to the selection");
+    // one file per style, never overwritten
+    let tmp = tempfile::tempdir().unwrap();
+    let p1 = Library::save(tmp.path(), &t).unwrap();
+    assert!(p1.ends_with("my-net/lavender.json"));
+    let p2 = Library::save(tmp.path(), &t).unwrap();
+    assert!(p2.ends_with("my-net/lavender-2.json"));
+    let lib = Library::load_dir(tmp.path()).unwrap();
+    assert_eq!(lib.styles("my-net"), ["lavender", "lavender-2"]);
+    // used like any module, in another theme's colours
+    let g2 = dsl::parse_with("fig u\na: box \"A\"\nm: my-net \"Classifier\" style=lavender role=output fill=FFE5E5\na -> m\n", &lib.kinds()).unwrap();
+    let f2 = draw(&g2, &Drawing { library: lib, ..Default::default() }).unwrap();
+    let Kind::Group(m) = &f2.objects().iter().find(|o| o.name == "flow:u/m").unwrap().kind else { panic!() };
+    assert_eq!(m.children.len(), selection.len() + 1, "every part plus the port frame");
+    let neuron = m.children.iter().find(|c| c.name.ends_with("/n0-0")).unwrap();
+    assert_eq!(neuron.kind.sp().unwrap().fill, lore_canvas::Paint::solid("FFE5E5"));
+    assert!(m.children.iter().any(|c| c.kind.sp().and_then(|s| s.text.as_ref()).is_some_and(|t| t.plain_text() == "Classifier")));
+    assert_eq!(f2.routes[0].bends(), 0);
+    // a whole module group can be saved as it is
+    let whole = template_from_objects(std::slice::from_ref(group), &SaveOptions { kind: "k".into(), ..Default::default() }).unwrap();
+    assert_eq!(whole.objects.as_array().unwrap().len(), selection.len());
+    assert!(template_from_objects(&[], &opt).is_err());
+    // the built-in styles can be written out as files for a library
+    let all = lore_flow::sheet::builtin_templates(&Theme::classic_bw());
+    assert!(all.len() >= 7 + 7 + 5 + 5);
+    let mut lib2 = Library::default();
+    for t in all {
+        lib2.add(t).unwrap();
+    }
+    assert!(lib2.styles("encoder").contains(&"gradient".to_string()));
+}
+
+#[test]
+fn the_contact_sheet_shows_every_kind_and_style() {
+    let lib = Library::load_dir(&example_dir().join("modules")).unwrap();
+    let cat = lore_flow::sheet::catalogue(&lib);
+    assert_eq!(cat.len(), lore_flow::spec::MODULES.len() + 2);
+    let enc = cat.iter().find(|c| c.0 == "encoder").unwrap();
+    assert!(enc.1.contains(&"3d".to_string()) && enc.1.contains(&"plain".to_string()));
+    let (objs, w, h) = lore_flow::sheet::contact_sheet(&Theme::classic_bw(), &lib, &NoMath);
+    for (kind, styles) in &cat {
+        for s in styles {
+            assert!(objs.iter().any(|o| o.name == format!("sheet:{kind}/{s}")), "{kind}/{s}");
+        }
+    }
+    let mut ids = BTreeSet::new();
+    walk(&objs, &mut |o| {
+        assert!(ids.insert(o.id));
+        let f = &o.frame;
+        assert!(f.x as f64 / 12_700.0 <= w && f.y as f64 / 12_700.0 <= h);
+    });
+    assert!(pptx::single_slide(&objs, w, h).is_ok());
+    assert!(preview::svg(&objs, w, h, 1.0).contains("linearGradient"));
+}
+
+#[test]
+fn fonts_come_from_the_theme() {
+    let t = Theme::from_toml("[font]\nfamily = \"Flow Sans\"\ntitle = \"Flow Display\"\ncaption = \"Flow Mono\"\nmath = \"Flow Math\"\nea = \"Flow CJK\"\nsize = 14.0\ntitle_size = 20.0\nsmall_size = 9.0\ntitle_bold = false\n").unwrap();
+    let g = dsl::parse("fig f\npanel p \"Stage\"\n a: box \"Model\"\n b: image \"$x$\" caption=\"512\"\nend\na -> b \"feeds\"\n").unwrap();
+    let f = draw(&g, &Drawing { theme: t, math: &FakeMath, options: LayoutOptions { max_scale: 1.0, frame: Rect::new(0.0, 0.0, 2000.0, 2000.0), ..Default::default() }, ..Default::default() }).unwrap();
+    assert!((f.layout.scale - 1.0).abs() < 1e-9);
+    let look = |name: &str| find(&f, name).kind.sp().unwrap().text.as_ref().unwrap().paras[0].runs[0].look.clone();
+    let l = look("flow:f/a");
+    assert_eq!((l.font.as_str(), l.ea_font.as_str(), l.size), ("Flow Sans", "Flow CJK", 14.0));
+    let l = look("flow:f/panel:p/title");
+    assert_eq!((l.font.as_str(), l.size, l.bold), ("Flow Display", 20.0, false));
+    let l = look("flow:f/b/caption");
+    assert_eq!((l.font.as_str(), l.size), ("Flow Mono", 9.0));
+    assert_eq!(look("flow:f/edge:a-b/label").font, "Flow Mono");
+    // variables are Office Math in the theme's math font
+    let l = look("flow:f/b/label");
+    assert_eq!(l.font, "Flow Math");
+    assert_eq!(find(&f, "flow:f/b/label").kind.sp().unwrap().text.as_ref().unwrap().paras[0].runs[0].kind, "math");
+}
+
+/// A 2 × 1 pixel PNG header (enough for its size; the bytes are only carried along).
+fn tiny_png(w: u32, h: u32) -> Vec<u8> {
+    let mut b = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+    b.extend(w.to_be_bytes());
+    b.extend(h.to_be_bytes());
+    b.extend([8, 2, 0, 0, 0, 0, 0, 0, 0]);
+    b
+}
+
+#[test]
+fn image_nodes_take_real_pictures() {
+    let files = |src: &str| match src {
+        "wide.png" => Some(tiny_png(400, 200)),
+        "tall.png" => Some(tiny_png(100, 300)),
+        _ => None,
+    };
+    assert_eq!(pptx::image_size(&tiny_png(400, 200)), Some((400, 200)));
+    let g = dsl::parse("fig i\na: image \"$x$\" src=wide.png size=60\nb: image \"crop\" src=wide.png w=40 h=40\nc: image-stack \"frames\" srcs=[tall.png,wide.png,tall.png]\nd: image-stack \"same\" src=wide.png n=2\ne: image \"lost\" src=missing.png\na -> b -> c -> d -> e\n").unwrap();
+    let f = draw(&g, &Drawing { pictures: Some(&files), options: LayoutOptions { max_scale: 1.0, frame: Rect::new(0.0, 0.0, 2000.0, 2000.0), ..Default::default() }, ..Default::default() }).unwrap();
+    assert_eq!(f.built.pictures, ["wide.png", "tall.png", "missing.png"]);
+    // the picture's own proportions when only a size is given
+    let a = find(&f, "flow:i/a/picture");
+    let Kind::Picture(pa) = &a.kind else { panic!("a real picture is a picture object") };
+    assert_eq!(pa.asset, "file:wide.png");
+    assert_eq!((a.frame.w, a.frame.h), (60 * 12_700, 30 * 12_700));
+    assert_eq!(pa.crop, lore_canvas::Crop::default());
+    // cropped to fill a box whose both sides are given
+    let b = find(&f, "flow:i/b/picture");
+    let Kind::Picture(pb) = &b.kind else { panic!() };
+    assert_eq!((b.frame.w, b.frame.h), (40 * 12_700, 40 * 12_700));
+    assert!((pb.crop.l - 0.25).abs() < 1e-9 && (pb.crop.r - 0.25).abs() < 1e-9 && pb.crop.t == 0.0);
+    // stacks: one picture object per file, front last
+    let Kind::Group(c) = &f.objects().iter().find(|o| o.name == "flow:i/c").unwrap().kind else { panic!() };
+    let pics: Vec<&str> = c.children.iter().filter_map(|x| if let Kind::Picture(p) = &x.kind { Some(p.asset.as_str()) } else { None }).collect();
+    assert_eq!(pics, ["file:tall.png", "file:wide.png", "file:tall.png"]);
+    let Kind::Group(d) = &f.objects().iter().find(|o| o.name == "flow:i/d").unwrap().kind else { panic!() };
+    assert_eq!(d.children.iter().filter(|x| matches!(x.kind, Kind::Picture(_))).count(), 2);
+    assert!(f.routes.iter().all(|r| r.bends() == 0));
+    // the pictures travel into the file as media, the rest stays shapes
+    let bytes = pptx::single_slide_with(f.objects(), 2000.0, 2000.0, &files).unwrap();
+    let od = lore_ooxml::Deck::from_bytes(&bytes).unwrap();
+    assert_eq!(od.pkg.parts.iter().filter(|p| p.name.starts_with("ppt/media/")).count(), 2);
+    let back = pptx::read(&bytes).unwrap();
+    let mut n = 0;
+    walk(&back.slides[0].objects, &mut |o| {
+        if matches!(o.kind, Kind::Picture(_)) {
+            n += 1;
+        }
+    });
+    assert_eq!(n, 7);
+    let svg = preview::svg_with(f.objects(), 400.0, 200.0, 1.0, &files);
+    assert!(svg.contains("data:image/png;base64,"));
+}
+
+// ── editable after export ──────────────────────────────────────────────
+
+#[test]
+fn everything_stays_an_editable_native_object() {
+    let g = dsl::parse(
+        "fig e\npanel p \"Stage\"\n x: image \"$x$\"\n enc: encoder \"Enc\" style=3d\n net: nn \"Net\" style=pills\n u: unet \"$\\theta$\"\n br: brace dir=right\n l: loss \"$\\mathcal L$\" style=pill\n y: image-stack \"$y$\" role=gt look=mask\nend\nx -> enc -> net -> u -> br -> l\ny -> l : supervision\nl -> u : feedback \"update\"\nl -> enc : feedback\n",
+    )
+    .unwrap();
+    let f = draw(&g, &Drawing { math: &FakeMath, ..Default::default() }).unwrap();
+    let bytes = pptx::single_slide(f.objects(), 720.0, 405.0).unwrap();
+    // 1. in the file: only shapes, text boxes, connectors and groups of them
+    let od = lore_ooxml::Deck::from_bytes(&bytes).unwrap();
+    let xml = String::from_utf8_lossy(od.pkg.get(&od.slides[0].part).unwrap()).to_string();
+    assert!(!xml.contains("<p:pic>") && !xml.contains("<p:graphicFrame>") && !xml.contains("blip"), "nothing is rasterised");
+    assert!(od.pkg.parts.iter().all(|p| !p.name.starts_with("ppt/media/")));
+    assert!(xml.contains("<p:cxnSp>") && xml.contains("<p:grpSp>") && xml.contains("a14:m"));
+    // 2. read back through lore-canvas: same kinds, same texts, lines still attached
+    let deck = pptx::read(&bytes).unwrap();
+    let slide = &deck.slides[0];
+    let mut kinds = BTreeSet::new();
+    walk(&slide.objects, &mut |o| {
+        kinds.insert(o.kind.name());
+    });
+    assert_eq!(kinds.into_iter().collect::<Vec<_>>(), ["connector", "group", "shape", "text"]);
+    let text_of = |objs: &[Object]| {
+        let mut v = Vec::new();
+        walk(objs, &mut |o| {
+            if let Some(t) = o.kind.sp().and_then(|s| s.text.as_ref()) {
+                v.push((o.name.clone(), t.paras.iter().flat_map(|p| p.runs.iter().map(|r| (r.kind.clone(), r.text.clone()))).collect::<Vec<_>>().len()));
+            }
+        });
+        v
+    };
+    assert_eq!(text_of(&slide.objects), text_of(f.objects()), "every text is still text, run for run");
+    let mut math_runs = 0;
+    walk(&slide.objects, &mut |o| {
+        if let Some(t) = o.kind.sp().and_then(|s| s.text.as_ref()) {
+            math_runs += t.paras.iter().flat_map(|p| &p.runs).filter(|r| r.kind == "math" && r.omml.is_some()).count();
+        }
+    });
+    assert!(math_runs >= 4, "variables are equation runs, not pictures of equations");
+    // 3. edits go through the usual editor: retype a label, recolour a part, ungroup a module, undo
+    let src = lore_ooxml::Deck::from_bytes(&bytes).unwrap();
+    let uid = slide.uid.clone();
+    let mut ed = Editor::new(deck.clone(), None);
+    let enc = slide.objects.iter().find(|o| o.name == "flow:e/enc").unwrap();
+    let Kind::Group(grp) = &enc.kind else { panic!("a module is a group") };
+    let n_children = grp.children.len();
+    let front = grp.children.iter().find(|c| c.name.ends_with("b0-front")).unwrap().id;
+    ed.apply(vec![lore_canvas::Op::SetObj { slide: uid.clone(), id: front, path: "/fill".into(), value: serde_json::json!({ "kind": "solid", "color": "FFC000" }) }], "recolour").unwrap();
+    let before = ed.deck.slide(&uid).unwrap().objects.len();
+    ed.apply(vec![lore_canvas::Op::Ungroup { slide: uid.clone(), id: enc.id }], "ungroup").unwrap();
+    let after = ed.deck.slide(&uid).unwrap();
+    assert_eq!(after.objects.len(), before - 1 + n_children, "the parts are now ordinary objects on the slide");
+    assert_eq!(after.find(front).unwrap().kind.sp().unwrap().fill, lore_canvas::Paint::solid("FFC000"));
+    assert!(after.locate(front).unwrap().0.is_none());
+    // the edited deck exports again, and the untouched modules are unchanged in it
+    let again = lore_canvas::pptx_out::export_bytes(&ed.deck, &src, None, &|_: &str| None).unwrap();
+    let re = pptx::read(&again).unwrap();
+    let net = |d: &lore_canvas::Deck| serde_json::to_string(&d.slides[0].objects.iter().find(|o| o.name == "flow:e/net").map(|o| (&o.frame, o.kind.name()))).unwrap();
+    assert_eq!(net(&re), net(&deck));
+    ed.undo().unwrap();
+    ed.undo().unwrap();
+    assert_eq!(ed.deck.slide(&uid).unwrap().objects.len(), before);
 }
 
 #[test]
