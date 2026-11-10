@@ -1,0 +1,47 @@
+/* 新增期刊 from a template file (newtemplate.js) and the extra rule fields in
+   the template editor's 投稿規則 (templates.js). Theme tokens only. */
+
+.tpl-head .nt-switch { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; }
+.tpl-head .nt-switch svg.i { width: 14px; height: 14px; }
+
+.nt-drop {
+  display: flex; align-items: center; gap: 14px; padding: 18px 20px; cursor: pointer;
+  border: 1.5px dashed var(--line-strong); border-radius: var(--r); background: var(--panel);
+  transition: border-color .12s, background .12s;
+}
+.nt-drop:hover, .nt-drop:focus-visible { border-color: var(--accent-text); outline: none; }
+.nt-drop.over { border-color: var(--accent-text); background: var(--accent-soft); }
+.nt-drop.has { border-style: solid; padding: 12px 16px; }
+.nt-drop-icon { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-text); }
+.nt-drop-icon svg.i { width: 20px; height: 20px; }
+.nt-drop.has .nt-drop-icon { width: 30px; height: 30px; }
+.nt-drop.has .nt-drop-icon svg.i { width: 16px; height: 16px; }
+.nt-drop-text { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.nt-drop-text b { font: 600 13.5px var(--sans); color: var(--text); }
+.nt-pick { display: flex; gap: 6px; flex-wrap: wrap; }
+.nt-found { display: flex; flex-direction: column; gap: 4px; margin-top: -6px; }
+.nt-found:empty { display: none; }
+.nt-found .cv-state { font-family: var(--mono); overflow-wrap: anywhere; }
+
+.nt-url { display: flex; gap: 6px; align-items: stretch; }
+.nt-url input { flex: 1; min-width: 0; }
+.nt-read-btn { flex: none; display: inline-flex; align-items: center; white-space: nowrap; }
+.nt-readstate { font: 12px var(--mono); color: var(--muted); margin-top: -6px; overflow-wrap: anywhere; }
+.nt-readstate:empty { display: none; }
+.nt-readstate.ok { color: var(--ok); } .nt-readstate.bad { color: var(--err); }
+.nt-paste { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.nt-paste[hidden] { display: none; }
+.nt-paste textarea { width: 100%; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r); color: var(--text); padding: 7px 9px; font: 12.5px/1.5 var(--sans); resize: vertical; }
+.nt-paste textarea:focus { outline: none; border-color: var(--accent-text); }
+
+/* 投稿規則: counts, keyword range, where each value came from */
+.tr-counts { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 10px; align-items: end; }
+.tr-counts .tf:last-child { grid-column: span 2; }
+.tr-range { display: flex; align-items: center; gap: 6px; color: var(--faint); }
+.tr-range input { width: 100%; min-width: 0; }
+.tr-quotes { display: flex; flex-direction: column; gap: 4px; }
+.tr-quotes:empty { display: none; }
+.tr-quote { display: flex; flex-direction: column; gap: 1px; font-size: 11.5px; line-height: 1.45; color: var(--muted); border-left: 2px solid var(--accent-text); padding: 1px 0 1px 7px; }
+.tr-quote.cls { border-left-color: var(--line-strong); color: var(--faint); }
+.tr-from { flex: none; font: 600 9.5px var(--mono); letter-spacing: .04em; color: var(--accent-text); }
+.tr-quote.cls .tr-from { color: var(--faint); }

@@ -22,16 +22,57 @@ const PCTemplates = (() => {
   // ── House rules: [ref_words], [captions], [limits], [word_limits] ──
   const REF_KINDS = [["fig", "圖"], ["tab", "表"], ["eq", "式"], ["sec", "節"]];
   const REF_DEFAULT = { fig: "Fig.", tab: "Table", eq: "", sec: "Section" };
+  const RULE_NAMES = {
+    "captions.table": "表", "captions.figure": "圖", "word_limits.abstract": "摘要", "word_limits.total": "全文",
+    "limits.pages": "頁數", "limits.figures": "圖", "limits.tables": "表", "limits.references": "參考文獻",
+    "limits.keywords": "關鍵字上限", "limits.keywords_min": "關鍵字下限", "limits.anonymous": "雙盲",
+    "requires.highlights": "Highlights", "requires.graphical_abstract": "Graphical abstract", "reference_style": "文獻格式",
+  };
   const num = (v, ph = "") => { const i = el("input"); i.type = "number"; i.min = "0"; i.inputMode = "numeric"; i.value = v ?? ""; i.placeholder = ph; return i; };
   const intOf = (i) => { const n = parseInt(i.value, 10); return Number.isFinite(n) && n > 0 ? n : undefined; };
   const block = (title, ...kids) => { const b = el("div", "tr-block"); b.append(el("div", "tr-h", title), ...kids); return b; };
   const tick = (label, on) => { const l = el("label", "tr-tick"); const c = el("input"); c.type = "checkbox"; c.checked = !!on; l.append(c, el("span", "", label)); return [l, c]; };
 
-  /** The rules section of a journal: { node, value() } — value() is what PUT sends. */
-  function rulesSection(j) {
+  /** The rules section of a journal: { node, value() } — value() is what PUT sends.
+   *  `src` (key → { quote, from }) shows where each value came from: a line of
+   *  the author guidelines, the template's own text, or the class's house style.
+   *  A value changed here loses its source. */
+  function rulesSection(j, src = null) {
     const rw = j.ref_words ?? {};
     const cleverDetected = !!j.cleveref && !Object.keys(rw).length;
     let mode = /^\s*cleveref\s*$/i.test(rw.mode ?? "") || cleverDetected ? "cleveref" : "words";
+    // saved sources are text: a class's house style reads "<publisher> 慣例（<class>）"
+    const sources = src ?? Object.fromEntries(Object.entries(j.sources ?? {}).map(([k, q]) => [k, { quote: q, from: /慣例（[^）]+）$/.test(q) ? "class" : undefined }]));
+    const FROM = { page: "作者須知", template: "範本", class: "class" };
+    const watched = []; // [key, () => current value as text, value at start]
+    const watch = (key, read) => watched.push([key, read, read()]);
+    const KIND_NAME = Object.fromEntries(REF_KINDS);
+    const what = (k) => {
+      const m = k.match(/^ref_words\.(?:(sentence_start)\.)?(\w+)$/);
+      if (m) return `${KIND_NAME[m[2]] ?? m[2]}·${m[1] ? "句首" : "句中"}`;
+      if (k.startsWith("word_limits.sections.")) return k.slice("word_limits.sections.".length);
+      return RULE_NAMES[k] ?? k;
+    };
+    // one line per sentence, naming the values it gave
+    const quote = (...keys) => {
+      const box = el("div", "tr-quotes");
+      const lines = new Map();
+      for (const k of keys) {
+        const s = sources[k];
+        if (!s?.quote) continue;
+        const id = `${s.from ?? ""}\u0000${s.quote}`;
+        if (!lines.has(id)) lines.set(id, { s, keys: [] });
+        lines.get(id).keys.push(k);
+      }
+      for (const { s, keys: ks } of lines.values()) {
+        const q = el("div", `tr-quote${s.from === "class" ? " cls" : ""}`);
+        q.dataset.keys = ks.join(" ");
+        const head = el("span", "tr-from", [s.from ? FROM[s.from] ?? s.from : "", ks.map(what).join("、")].filter(Boolean).join(" · "));
+        q.append(head, el("span", "", s.from === "class" ? s.quote : `「${s.quote}」`));
+        box.append(q);
+      }
+      return box;
+    };
 
     // references: mode, then a word per kind (mid-sentence / sentence start)
     const modeSeg = el("div", "seg tr-mode");
@@ -45,6 +86,8 @@ const PCTemplates = (() => {
       mid.setAttribute("aria-label", `${label} 句中`);
       start.setAttribute("aria-label", `${label} 句首`);
       inputs[k] = [mid, start];
+      watch(`ref_words.${k}`, () => mid.value.trim());
+      watch(`ref_words.sentence_start.${k}`, () => start.value.trim());
       grid.append(el("span", "tr-kind", label), mid, start);
     }
     const sample = el("code", "tr-sample");
@@ -72,6 +115,7 @@ const PCTemplates = (() => {
     const refHead = el("div", "tr-row");
     refHead.append(modeSeg);
     if (cleverDetected) refHead.append(el("span", "tr-note", "範本載入 cleveref"));
+    const refKeys = REF_KINDS.flatMap(([k]) => [`ref_words.${k}`, `ref_words.sentence_start.${k}`]);
 
     // captions
     const capSel = (v) => {
@@ -82,21 +126,51 @@ const PCTemplates = (() => {
     };
     const capTab = capSel(j.captions?.table);
     const capFig = capSel(j.captions?.figure);
+    watch("captions.table", () => capTab.value);
+    watch("captions.figure", () => capFig.value);
     const caps = el("div", "tr-pairs");
     caps.append(field("表說明", capTab), field("圖說明", capFig));
 
-    // pages
-    const pages = num(j.limits?.pages, "—");
-    const [exLabel, exRefs] = tick("不含參考文獻", j.limits?.pages_exclude_refs);
-    const [anLabel, anon] = tick("雙盲匿名", j.limits?.anonymous);
-    const pageRow = el("div", "tr-pairs");
-    pageRow.append(field("頁數上限", pages), el("div", "tr-ticks"));
-    pageRow.lastChild.append(exLabel, anLabel);
+    // counts: pages, figures, tables, references, keywords
+    const lim = j.limits ?? {};
+    const counted = (key, label, v) => { const i = num(v, "—"); watch(key, () => i.value.trim()); return [field(label, i), i]; };
+    const [pagesF, pages] = counted("limits.pages", "頁數", lim.pages);
+    const [figsF, figs] = counted("limits.figures", "圖", lim.figures);
+    const [tabsF, tabs] = counted("limits.tables", "表", lim.tables);
+    const [refsF, refs] = counted("limits.references", "參考文獻", lim.references);
+    const kwMin = num(lim.keywords_min, "最少");
+    const kwMax = num(lim.keywords, "最多");
+    kwMin.setAttribute("aria-label", "關鍵字 最少");
+    kwMax.setAttribute("aria-label", "關鍵字 最多");
+    watch("limits.keywords_min", () => kwMin.value.trim());
+    watch("limits.keywords", () => kwMax.value.trim());
+    const kwBox = el("div", "tr-range");
+    kwBox.append(kwMin, el("span", "", "–"), kwMax);
+    const [exLabel, exRefs] = tick("頁數不含參考文獻", lim.pages_exclude_refs);
+    const [anLabel, anon] = tick("雙盲匿名", lim.anonymous);
+    watch("limits.anonymous", () => String(anon.checked));
+    const countGrid = el("div", "tr-counts");
+    countGrid.append(pagesF, figsF, tabsF, refsF, field("關鍵字", kwBox));
+    const countTicks = el("div", "tr-ticks");
+    countTicks.append(exLabel, anLabel);
+
+    // what the submission must include besides the paper
+    const req = j.requires ?? {};
+    const [hlLabel, hl] = tick("Highlights", req.highlights);
+    const [gaLabel, ga] = tick("Graphical abstract", req.graphical_abstract);
+    watch("requires.highlights", () => String(hl.checked));
+    watch("requires.graphical_abstract", () => String(ga.checked));
+    const refStyle = input(j.reference_style ?? "", "Vancouver、APA…");
+    watch("reference_style", () => refStyle.value.trim());
+    const reqTicks = el("div", "tr-ticks");
+    reqTicks.append(hlLabel, gaLabel);
 
     // word limits
     const wl = j.word_limits ?? {};
     const abs = num(wl.abstract, "—");
     const total = num(wl.total, "—");
+    watch("word_limits.abstract", () => abs.value.trim());
+    watch("word_limits.total", () => total.value.trim());
     const wordRow = el("div", "tr-pairs");
     wordRow.append(field("摘要", abs), field("全文", total));
     const secs = el("div", "tr-secs");
@@ -104,6 +178,7 @@ const PCTemplates = (() => {
       const row = el("div", "tr-sec");
       const t = input(title, "章節標題");
       const c = num(n, "字數");
+      row.dataset.start = `${title}=${n}`;
       row.append(t, c, iconButton("x", "移除", () => row.remove()));
       secs.append(row);
       return t;
@@ -113,6 +188,7 @@ const PCTemplates = (() => {
     more.type = "button";
     more.prepend(icon("plus"));
     more.onclick = () => addSec().focus();
+    const secKeys = Object.keys(wl.sections ?? {}).map((t) => `word_limits.sections.${t}`);
 
     const node = el("section", "tpl-rules");
     node.append(
@@ -120,10 +196,11 @@ const PCTemplates = (() => {
       el("div", "tr-grid"),
     );
     node.lastChild.append(
-      block("引用", refHead, grid, sample),
-      block("圖表說明", caps),
-      // 篇幅 ([limits]) stays out of sight until something uses it; its values still round-trip
-      block("字數上限", wordRow, secs, more),
+      block("引用", refHead, grid, sample, quote(...refKeys)),
+      block("圖表說明", caps, quote("captions.table", "captions.figure")),
+      block("字數上限", wordRow, secs, more, quote("word_limits.abstract", "word_limits.total", ...secKeys)),
+      block("篇幅與數量", countGrid, countTicks, quote("limits.pages", "limits.figures", "limits.tables", "limits.references", "limits.keywords_min", "limits.keywords", "limits.anonymous")),
+      block("投稿附件", reqTicks, field("文獻格式要求", refStyle), quote("requires.highlights", "requires.graphical_abstract", "reference_style")),
     );
     paint();
 
@@ -143,19 +220,34 @@ const PCTemplates = (() => {
       if (capTab.value) captions.table = capTab.value;
       if (capFig.value) captions.figure = capFig.value;
       const limits = {};
-      if (intOf(pages)) limits.pages = intOf(pages);
+      for (const [k, i] of [["pages", pages], ["figures", figs], ["tables", tabs], ["references", refs], ["keywords", kwMax], ["keywords_min", kwMin]]) if (intOf(i)) limits[k] = intOf(i);
       if (exRefs.checked) limits.pages_exclude_refs = true;
       if (anon.checked) limits.anonymous = true;
+      const requires = {};
+      if (hl.checked) requires.highlights = true;
+      if (ga.checked) requires.graphical_abstract = true;
       const word_limits = {};
       if (intOf(abs)) word_limits.abstract = intOf(abs);
       if (intOf(total)) word_limits.total = intOf(total);
       const sections = {};
+      const keepSec = new Set();
       secs.querySelectorAll(".tr-sec").forEach((r) => {
         const [t, c] = r.querySelectorAll("input");
-        if (t.value.trim() && intOf(c)) sections[t.value.trim()] = intOf(c);
+        if (t.value.trim() && intOf(c)) {
+          sections[t.value.trim()] = intOf(c);
+          if (r.dataset.start === `${t.value.trim()}=${intOf(c)}`) keepSec.add(`word_limits.sections.${t.value.trim()}`);
+        }
       });
       if (Object.keys(sections).length) word_limits.sections = sections;
-      return { ref_words: words, captions, limits, word_limits };
+      // a source stays only while its value is as it was read
+      const changed = new Set(watched.filter(([, read, was]) => read() !== was).map(([k]) => k));
+      const kept = {};
+      for (const [k, s] of Object.entries(sources)) {
+        if (!s?.quote || changed.has(k)) continue;
+        if (k.startsWith("word_limits.sections.") && !keepSec.has(k)) continue;
+        kept[k] = s.quote;
+      }
+      return { ref_words: words, captions, limits, requires, word_limits, reference_style: refStyle.value.trim(), sources: kept };
     }
     return { node, value };
   }
@@ -192,7 +284,7 @@ const PCTemplates = (() => {
     const ul = el("div", "tpl-items");
     const add = el("button", "ghost wide", kind === "conference" ? "新增研討會" : "新增期刊");
     add.prepend(icon("plus"));
-    add.onclick = () => { current = null; newForm(); paintList(); };
+    add.onclick = () => { current = null; newFlow(); paintList(); };
     const paintList = () => {
       ul.innerHTML = "";
       const q = query.trim().toLowerCase();
@@ -219,8 +311,8 @@ const PCTemplates = (() => {
     box.append(side, main);
     paintList();
     if (current && kindOf(list.find((j) => j.id === current) ?? {}) !== kind) current = list.find((j) => kindOf(j) === kind)?.id ?? null;
-    if (current) detail(); else if (!list.length) main.append(el("p", "empty", "把期刊的模板資料夾放進工作區的 publishers/，或從現有模板新增。"));
-    else newForm();
+    if (current) detail();
+    else newFlow();
   }
 
   function detail() {
@@ -306,10 +398,32 @@ const PCTemplates = (() => {
     main.append(head, sub, grid, rules.node, acts);
   }
 
+  /** 新增期刊 from a template file and the author guidelines (newtemplate.js). */
+  function newFlow() {
+    PCNewTemplate.open($("#tplMain"), {
+      kind,
+      rulesSection,
+      fromExisting: list.length ? newForm : null,
+      done: async (id) => {
+        current = id;
+        store.set("pc.template", id);
+        await refreshWorkspace();
+        await open(id);
+        refreshGit();
+      },
+    });
+  }
+
   function newForm() {
     const main = $("#tplMain");
     main.innerHTML = "";
-    main.append(el("h3", "", kind === "conference" ? "新增研討會" : "新增期刊"));
+    const head = el("div", "tpl-head");
+    head.append(el("h3", "", kind === "conference" ? "新增研討會" : "新增期刊"));
+    const back = el("button", "ghost small nt-switch", "從模板檔");
+    back.prepend(icon("upload"));
+    back.onclick = newFlow;
+    head.append(back);
+    main.append(head);
     const name = input("", "IEEE Transactions on Medical Imaging");
     const short = input("", "TMI");
     const from = el("select");

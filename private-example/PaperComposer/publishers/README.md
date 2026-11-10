@@ -51,7 +51,33 @@ figure = "below"
 pages = 8
 pages_exclude_refs = true
 anonymous = true       # double-blind
+figures = 8
+tables = 5
+references = 50
+keywords = 6           # at most
+keywords_min = 3
+
+[requires]
+highlights = true
+graphical_abstract = true
+
+[sources]              # where a value came from, by its key
+"word_limits.abstract" = "The abstract should not exceed 250 words."
+"captions.table" = "Elsevier 慣例（elsarticle）"
 ```
+
+`reference_style = "numbered, Vancouver"` (a top-level key, before the
+tables) records the journal's reference style in its own words.
+
+"New journal" also builds a template from the journal's own files: drop a
+LaTeX template (.zip or folder; its main file becomes `sample.tex`, and only
+the .tex / .pdf files the sample uses are kept) or a Word template (.docx,
+converted by the Word importer, kept as `reference.docx`), and give the
+author guidelines URL. The class's house style (caption places; Fig./Figure
+for IEEE, REVTeX, MDPI) is filled in; the guidelines page, and the sample's
+own text, are read by the configured engine, and every value is shown with
+the sentence it came from. A value whose sentence is not on the page is left
+out. Nothing is written until 建立; `[sources]` keeps the sentences.
 
 - `[ref_words]`: references inserted in the editor are written this way, the
   preview prints these words for `\cref` / `\autoref`, drafting and revising

@@ -16,6 +16,7 @@ pub mod convert;
 mod draft;
 mod home;
 mod notation;
+mod newtemplate; // templates.js: 新增期刊 from a LaTeX kit or a Word sample, rules from the guidelines
 mod sections;
 pub mod export;
 pub mod import;
@@ -3260,6 +3261,11 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/refs/verify", post(verify_ref))
         .route("/api/refs/propose-record", post(propose_record))
         .route("/api/templates", get(list_templates).post(create_template))
+        .route("/api/newtemplate", post(newtemplate::start))
+        .route("/api/newtemplate/{id}", get(newtemplate::get))
+        .route("/api/newtemplate/{id}/files", post(newtemplate::upload).layer(axum::extract::DefaultBodyLimit::max(200 * 1024 * 1024)))
+        .route("/api/newtemplate/{id}/rules", post(newtemplate::rules))
+        .route("/api/newtemplate/{id}/create", post(newtemplate::create))
         .route("/api/convert", post(convert_create))
         .route("/api/convert/{id}", get(convert_get))
         .route("/api/convert/{id}/upload", post(convert_upload).layer(axum::extract::DefaultBodyLimit::max(200 * 1024 * 1024)))
