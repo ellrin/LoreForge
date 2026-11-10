@@ -352,7 +352,7 @@ const PCFind = (() => {
       const no = el("button", "ghost", "取消"); no.onclick = () => done(false);
       const row = el("div", "find-acts"); row.append(go, no);
       // the registry this warns about, one click away (notation.js)
-      if (window.PCNotation && ((res.entries ?? []).length || res.new_symbols?.length)) {
+      if (typeof PCNotation !== "undefined" && ((res.entries ?? []).length || res.new_symbols?.length)) {
         const reg = el("button", "ghost", "對照表");
         reg.onclick = () => { done(false); PCNotation.open(res.new_symbols?.length === 1 ? res.new_symbols[0] : ""); };
         row.prepend(reg);

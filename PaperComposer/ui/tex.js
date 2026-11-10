@@ -400,6 +400,7 @@ window.PCTex = (() => {
 
   function citeNode(cmd, keys, note) {
     const n = el("span", "cite");
+    if (note) note = note.replace(/~/g, "\u00a0"); // p.~4 → p. 4, as LaTeX prints it
     const found = keys.map((k) => cites[k]);
     n.title = keys.join(", ");
     if (found.some((c) => !c)) n.classList.add("missing");
