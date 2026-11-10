@@ -27,6 +27,7 @@
 //! | POST | /api/decks/{name}/file/save-as | `{path}` bind to a new file and write it |
 //! | POST | /api/shell/dialog | `{kind: open\|save, name?}` → `{path}` native dialog (desktop app only, else 501) |
 
+mod export_open;
 mod notation;
 
 use std::collections::HashMap;
@@ -207,6 +208,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/decks/{name}/file/reload", post(file_reload))
         .route("/api/decks/{name}/file/save-as", post(file_save_as))
         .route("/api/shell/dialog", post(shell_dialog))
+        .route("/api/export/open", post(export_open::export_open))
 }
 
 /// The LoreForge themes (commons/ui/theme.css, the same file in every app),

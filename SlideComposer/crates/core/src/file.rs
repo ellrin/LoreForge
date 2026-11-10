@@ -75,6 +75,8 @@ pub struct FileStatus {
     pub file: String,
     /// `saved` | `pending` | `changed` | `missing`
     pub state: &'static str,
+    /// Edits not yet written to the file (also when the file changed on disk meanwhile).
+    pub dirty: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup: Option<PathBuf>,
 }
@@ -240,6 +242,7 @@ pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<()> {
         drop(f);
         if let Ok(m) = std::fs::metadata(path) {
             std::fs::set_permissions(&tmp, m.permissions())?;
+            copy_xattrs(path, &tmp);
         }
         std::fs::rename(&tmp, path)?;
         Ok(())
@@ -249,6 +252,57 @@ pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     res
 }
+
+/// Copy extended attributes (Finder tags, colour labels, comments, quarantine) from `from` to `to`.
+/// Best effort: a volume without xattrs, or one attribute refused, never blocks the save.
+#[cfg(unix)]
+fn copy_xattrs(from: &Path, to: &Path) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let (Ok(src), Ok(dst)) = (CString::new(from.as_os_str().as_bytes()), CString::new(to.as_os_str().as_bytes())) else { return };
+    // SAFETY: plain libc calls on NUL-terminated paths with buffers of the sizes passed.
+    unsafe {
+        #[cfg(target_os = "macos")]
+        let n = libc::listxattr(src.as_ptr(), std::ptr::null_mut(), 0, 0);
+        #[cfg(not(target_os = "macos"))]
+        let n = libc::listxattr(src.as_ptr(), std::ptr::null_mut(), 0);
+        if n <= 0 {
+            return;
+        }
+        let mut names = vec![0u8; n as usize];
+        #[cfg(target_os = "macos")]
+        let n = libc::listxattr(src.as_ptr(), names.as_mut_ptr() as *mut libc::c_char, names.len(), 0);
+        #[cfg(not(target_os = "macos"))]
+        let n = libc::listxattr(src.as_ptr(), names.as_mut_ptr() as *mut libc::c_char, names.len());
+        if n <= 0 {
+            return;
+        }
+        for name in names[..n as usize].split(|b| *b == 0).filter(|n| !n.is_empty()) {
+            let Ok(name) = CString::new(name) else { continue };
+            #[cfg(target_os = "macos")]
+            let len = libc::getxattr(src.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0, 0, 0);
+            #[cfg(not(target_os = "macos"))]
+            let len = libc::getxattr(src.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0);
+            if len < 0 {
+                continue;
+            }
+            let mut val = vec![0u8; len as usize];
+            #[cfg(target_os = "macos")]
+            let got = libc::getxattr(src.as_ptr(), name.as_ptr(), val.as_mut_ptr() as *mut libc::c_void, val.len(), 0, 0);
+            #[cfg(not(target_os = "macos"))]
+            let got = libc::getxattr(src.as_ptr(), name.as_ptr(), val.as_mut_ptr() as *mut libc::c_void, val.len());
+            if got < 0 {
+                continue;
+            }
+            #[cfg(target_os = "macos")]
+            libc::setxattr(dst.as_ptr(), name.as_ptr(), val.as_ptr() as *const libc::c_void, got as usize, 0, 0);
+            #[cfg(not(target_os = "macos"))]
+            libc::setxattr(dst.as_ptr(), name.as_ptr(), val.as_ptr() as *const libc::c_void, got as usize, 0);
+        }
+    }
+}
+#[cfg(not(unix))]
+fn copy_xattrs(_: &Path, _: &Path) {}
 
 fn mtime_ns(m: &std::fs::Metadata) -> u64 {
     m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos() as u64).unwrap_or(0)
@@ -444,6 +498,7 @@ impl Session {
             path: b.path.clone(),
             file: b.path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
             state,
+            dirty: self.pending(),
             backup: b.backup.clone(),
         })
     }

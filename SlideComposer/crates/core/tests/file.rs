@@ -317,3 +317,24 @@ fn save_as_binds_an_unbound_deck_and_a_moved_file_finds_its_deck() {
     s2.save_as(&target, &none()).unwrap();
     assert_eq!(std::fs::read(fx.docs.join(".talk.original.pptx")).unwrap(), before);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn replace_file_keeps_xattrs_and_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("a.pptx");
+    std::fs::write(&f, b"old").unwrap();
+    std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let tag = std::ffi::CString::new("com.apple.metadata:_kMDItemUserTags").unwrap();
+    let path = std::ffi::CString::new(f.to_str().unwrap()).unwrap();
+    let val = b"bplist-red";
+    let rc = unsafe { libc::setxattr(path.as_ptr(), tag.as_ptr(), val.as_ptr() as *const _, val.len(), 0, 0) };
+    assert_eq!(rc, 0);
+    sc_core::file::replace_file(&f, b"new").unwrap();
+    assert_eq!(std::fs::read(&f).unwrap(), b"new");
+    assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o640);
+    let mut buf = [0u8; 64];
+    let n = unsafe { libc::getxattr(path.as_ptr(), tag.as_ptr(), buf.as_mut_ptr() as *mut _, buf.len(), 0, 0) };
+    assert_eq!(&buf[..n as usize], val);
+}
