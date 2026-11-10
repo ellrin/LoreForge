@@ -13,13 +13,13 @@
 # stored in private/LoreReader/models.json and is that engine or an error, never a fallback.
 
 [task.lr-translate]
-label = "翻譯選取文字"
+label = "翻譯"
 default = "local:current"
 fallback = "claude:selected"
 offline = true
 
 [task.lr-chat]
-label = "問 Claude（附上引文或段落）"
+label = "問 Claude"
 # 16k is enough for a paragraph, its definitions and 20 turns; also lets the model menu
 # pick a local engine for the chat.
 needs = { context = 16000 }
@@ -27,14 +27,14 @@ default = "claude:selected"
 offline = false
 
 [task.lr-classify-terms]
-label = "名詞分類（整篇一次）"
+label = "名詞分類"
 needs = { context = 16000 }
 default = "local:current"
 offline = true
 max_tokens = 8000
 
 [task.lr-paragraph]
-label = "段落分析（卡住的地方）"
+label = "段落分析"
 needs = { context = 8000 }
 default = "local:current"
 offline = true

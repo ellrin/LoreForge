@@ -28,7 +28,7 @@ impl Kb {
     }
 
     fn down(&self) -> KbError {
-        KbError { down: true, message: format!("KnowledgeBase 伺服器沒有回應（{}）。請先開啟 KnowledgeBase App 或執行 kb-server。", self.base) }
+        KbError { down: true, message: "KnowledgeBase 沒有回應：請先開啟 KnowledgeBase。".into() }
     }
 
     async fn send(&self, req: reqwest::RequestBuilder, timeout: Duration) -> Result<Value, KbError> {

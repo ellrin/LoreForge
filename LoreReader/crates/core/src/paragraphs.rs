@@ -251,7 +251,8 @@ pub fn split_with(paper: &PaperText, equations: &[(u32, usize, usize, String)]) 
             text += t;
         }
         let words = text.split_whitespace().count();
-        if words == 0 {
+        // page numbers, running heads and stray symbols are not paragraphs
+        if words == 0 || (words < 3 && text.chars().filter(|c| c.is_alphabetic()).count() < 12) {
             cur.clear();
             return;
         }

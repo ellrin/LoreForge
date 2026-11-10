@@ -48,12 +48,15 @@ function toast(msg, err = false) {
 const fail = (e) => toast(e.message ?? String(e), true);
 const norm = (s) => (s ?? "").replace(/\s+/g, " ").trim();
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
-const STATE_LABEL = { learning: "學習中", known: "記得", stale: "久未複習", none: "學習中（尚無紀錄）", new: "沒有卡片" };
-const SOURCE_LABEL = { kb: "知識庫的詞", expansion: "縮寫全名", compound: "連字號複合詞", acronym: "縮寫", word: "單字" };
-const NOUN_STATE = { known: "記得", learning: "學習中", stale: "久未複習", none: "學習中（尚無紀錄）", new: "沒有卡片" };
+const STATE_LABEL = { learning: "學習中", known: "記得", stale: "學習中", none: "學習中", new: "沒卡" };
+const NOUN_STATE = { known: "記得", learning: "學習中", stale: "學習中", none: "學習中", new: "沒卡" };
+/** 要學 = a term without a card (red); 沒卡 = no card but a general word or a name. */
+const nounState = (n) => (n.state === "new" ? (n.red ? "要學" : "沒卡") : NOUN_STATE[n.state] ?? n.state);
+const STATE_TIP = { learning: "學習中", stale: "學習中（久未複習）", none: "學習中（還沒有紀錄）", known: "記得" };
 const GRADE = { certain: ["✅", "確定"], defined: ["🟢", "有定義"], inferred: ["🟡", "推測"], conflict: ["🔴", "衝突"], unresolved: ["⚪", "查不到"] };
-const RESOLVER = { program: "程式", local: "地端模型", claude: "Claude", author: "作者" };
-const ROLE = { background: "背景", gap: "缺口", method: "方法步驟", result: "結果", discussion: "討論", other: "其他" };
+const RESOLVER = { program: "規則", local: "地端", claude: "Claude", author: "作者" };
+const GRADE_ORDER = { conflict: 0, inferred: 1, defined: 2, certain: 3, unresolved: 4 };
+const ROLE = { background: "背景", gap: "缺口", method: "方法", result: "結果", discussion: "討論", other: "其他" };
 const SECTION_KIND = { front: "標題與作者", abstract: "摘要", intro: "引言／相關研究", method: "方法", result: "結果", discussion: "討論", other: "其他" };
 const MODEL_LABEL = { auto: "自動", local: "地端", haiku: "Haiku", sonnet: "Sonnet", opus: "Opus" };
 const COLOR_LABEL = { yellow: "黃", green: "綠", blue: "藍", pink: "粉紅" };
@@ -151,14 +154,14 @@ async function showHome() {
   S.info = info;
   $("#libError").hidden = !info.library_error;
   $("#libError").textContent = info.library_error ?? "";
-  $("#libInfo").textContent = `書庫：${info.library} · 匯出：${info.exports} · 註記資料：${info.workspace}`;
+  $("#actHome").title = `書庫：${info.library}\n匯出：${info.exports}`;
   const cards = list.papers.map((p) => h("button", { class: `card${p.present ? "" : " missing"}`, onclick: () => p.present ? go(p.sha256, 1) : toast("這份 PDF 不在這台電腦的書庫裡", true) },
     h("b", { title: p.title }, p.title),
-    h("span", { class: "meta", title: p.original_name }, `${p.pages} 頁 · ${p.added_at.slice(0, 10)} · ${p.original_name}`),
+    h("span", { class: "meta", title: p.original_name }, `${p.pages} 頁 · ${p.added_at.slice(0, 10)}${p.original_name.replace(/\.pdf$/i, "") === p.title ? "" : ` · ${p.original_name}`}`),
     p.doi ? h("span", { class: "meta" }, `doi:${p.doi}`) : null,
-    p.derived_from ? h("span", { class: "tag" }, "由頁面編輯產生") : null,
-    p.present ? null : h("span", { class: "tag" }, "不在這台電腦的書庫")));
-  $("#paperList").replaceChildren(...(cards.length ? cards : [h("p", { class: "empty" }, "書庫是空的。按「開啟 PDF」加入第一份論文；PDF 會複製進書庫（不在任何 git repo 裡），原檔不動。")]));
+    p.derived_from ? h("span", { class: "tag" }, "編輯版") : null,
+    p.present ? null : h("span", { class: "tag" }, "不在這台電腦")));
+  $("#paperList").replaceChildren(...(cards.length ? cards : [h("p", { class: "empty" }, "書庫是空的")]));
 }
 
 function go(sha, page = 1) {
@@ -360,7 +363,7 @@ function buildThumbs() {
     const frame = h("div", { class: "frame" });
     frame.style.aspectRatio = `${p.w} / ${p.h}`;
     if (!own(p)) frame.append(h("span", { class: "from" }, `插入 · 原第 ${p.page} 頁`));
-    const t = h("div", { class: "thumb", draggable: "true", dataset: { i }, "aria-current": i === S.cur ? "true" : "false", title: own(p) ? `第 ${p.page} 頁` : "從其他 PDF 插入的頁面" },
+    const t = h("div", { class: "thumb", draggable: "true", dataset: { i }, "aria-current": i === S.cur ? "true" : "false", title: own(p) ? `第 ${p.page} 頁` : null },
       h("span", { class: "no" }, i + 1), frame);
     t.addEventListener("click", () => { scrollToPage(i); if (innerWidth <= 1100) togglePanel("sorter", false); });
     thumbObserver.observe(t);
@@ -443,10 +446,9 @@ async function saveArrangement() {
   const r = await dialog((d, done) => {
     const input = h("input", { value: def });
     return h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); done(input.value.trim() || def); } },
-      h("h3", {}, "另存新檔"),
-      h("p", { class: "muted", style: "margin:0;font-size:12.5px" }, `新的 PDF（${S.pages.length} 頁）會存進書庫，也會複製一份到匯出資料夾（不覆蓋舊檔）。原本的 PDF 不會改動。`),
+      h("h3", {}, "另存"),
       h("label", {}, "標題", input),
-      h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => done(null) }, "取消"), h("button", { class: "btn primary" }, "儲存")));
+      h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => done(null) }, "取消"), h("button", { class: "btn primary" }, "另存")));
   });
   if (r == null) return;
   try {
@@ -466,7 +468,7 @@ async function insertDialog() {
     const step1 = () => {
       const file = h("input", { type: "file", accept: "application/pdf,.pdf", hidden: true, onchange: async (e) => { const p = await importFiles([...e.target.files]); if (p) { chosen = p; step2(); } } });
       body.replaceChildren(
-        h("h3", {}, "插入頁面：選一份 PDF"),
+        h("h3", {}, "插入頁面"),
         h("ul", { class: "pick-list" }, lib.map((p) => h("li", {}, h("button", { type: "button", onclick: () => { chosen = p; step2(); } }, h("span", { class: "ellipsis" }, p.title), h("span", { class: "muted mono" }, `${p.pages} 頁`))))),
         h("div", { class: "actions" },
           h("label", { class: "btn", style: "flex-direction:row;color:var(--text);font-size:13px" }, h("span", { "data-icon": "upload" }), "從電腦選 PDF…", file),
@@ -479,11 +481,11 @@ async function insertDialog() {
       const go = h("button", { type: "button", class: "btn primary", disabled: true, onclick: () => close(true) }, "插入");
       body.replaceChildren(
         h("h3", { class: "ellipsis", title: chosen.title }, `插入頁面：${chosen.title}`),
-        h("p", { class: "muted", style: "margin:0;font-size:12.5px" }, "點選要插入的頁面（依點選順序）。"),
+        h("p", { class: "muted", style: "margin:0;font-size:12.5px" }, "依點選順序"),
         grid,
         h("div", { class: "actions", style: "justify-content:space-between;align-items:center" },
-          h("span", { class: "muted", style: "font-size:13px;display:flex;gap:6px;align-items:center" }, "插在第", after, "頁之後（0 = 最前面）"),
-          h("span", { style: "display:flex;gap:8px" }, h("button", { type: "button", class: "btn", onclick: step1 }, "換一份"), go)));
+          h("span", { class: "muted", style: "font-size:13px;display:flex;gap:6px;align-items:center" }, "插在第", after, "頁之後"),
+          h("span", { style: "display:flex;gap:8px" }, h("button", { type: "button", class: "btn", onclick: step1 }, "換一份 PDF"), go)));
       const doc = await getDoc(chosen.sha256);
       for (let n = 1; n <= doc.numPages; n++) {
         const c = h("canvas");
@@ -526,8 +528,8 @@ async function mergeDialog() {
     paint();
     return h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); close(true); } },
       h("h3", {}, "合併 PDF"),
-      h("p", { class: "muted", style: "margin:0;font-size:12.5px" }, "依點選順序接起來，存成書庫裡的一份新 PDF（並複製到匯出資料夾）。原檔不動。"),
-      ul, h("label", {}, "新 PDF 的標題", title),
+      h("p", { class: "muted", style: "margin:0;font-size:12.5px" }, "依點選順序"),
+      ul, h("label", {}, "標題", title),
       h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(false) }, "取消"), go));
   });
   if (!ok) return;
@@ -649,12 +651,11 @@ async function onContextMenu(e) {
   m.replaceChildren(
     item("copy", "複製", () => navigator.clipboard.writeText(info.text).then(() => toast("已複製"), () => document.execCommand("copy"))),
     h("hr"),
-    h("button", { type: "button", role: "menuitem", disabled: true, style: "opacity:1;cursor:default;color:var(--muted)" }, h("span", { "data-icon": "highlighter" }), "螢光標記"),
-    h("div", { class: "swrow" }, (S.info?.colors ?? ["yellow", "green", "blue", "pink"]).map((c) => h("button", { type: "button", class: `sw c-${c}`, "aria-label": `${COLOR_LABEL[c]}色螢光`, title: `${COLOR_LABEL[c]}色`, onclick: () => { closeMenus(); addAnnotation(info, { kind: "highlight", color: c }); } }))),
+    h("div", { class: "swrow" }, h("span", { class: "swicon", "data-icon": "highlighter", title: "螢光" }), (S.info?.colors ?? ["yellow", "green", "blue", "pink"]).map((c) => h("button", { type: "button", class: `sw c-${c}`, "aria-label": `螢光（${COLOR_LABEL[c]}）`, title: `${COLOR_LABEL[c]}色`, onclick: () => { closeMenus(); addAnnotation(info, { kind: "highlight", color: c }); } }))),
     item("pen", "加註記…", () => noteDialog(info)),
     h("hr"),
     item("languages", "翻譯", () => translate(info.text, info.context, info.box, info)),
-    item("chat", "問 Claude（附上這段）", () => attach(info)),
+    item("chat", "問 Claude", () => attach(info)),
     item("quote", "存成引用句…", () => quoteDialog(info)),
     item("book", "加入知識庫…", () => addCardDialog({ title: info.text, sha: info.p.sha, page: info.p.page, context: info.context })),
   );
@@ -669,12 +670,12 @@ async function addAnnotation(info, { kind, color, note = "" }) {
     getSelection().removeAllRanges();
     if (info.p.sha === S.sha) { S.annotations.push(r.annotation); if (S.tab === "notes") renderSide(); }
     S.pages.filter((p) => p.sha === info.p.sha && p.page === info.p.page && p.rendered).forEach(drawHighlights);
-    toast(kind === "note" ? "已加註記" : "已標記");
+    toast(kind === "note" ? "已加註記" : "已螢光");
   } catch (e) { fail(e); }
 }
 
 async function noteDialog(info) {
-  const ta = h("textarea", { placeholder: "寫下想法、疑問或要再查的地方" });
+  const ta = h("textarea");
   let color = "yellow";
   const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); close(ta.value.trim()); } },
     h("h3", {}, `加註記 · 第 ${info.p.page} 頁`),
@@ -713,10 +714,10 @@ function jumpTo(page, id) {
 // ── citable sentences ─────────────────────────────────────────────────────
 async function quoteDialog(info) {
   const ta = h("textarea", {}, info.text);
-  const note = h("input", { placeholder: "一行備註（可省略），例如：用在引言、反例" });
+  const note = h("input", { placeholder: "例：用在引言" });
   const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); close({ text: ta.value, note: note.value }); } },
     h("h3", {}, `存成引用句 · 第 ${info.p.page} 頁`),
-    h("label", {}, "句子（可修剪）", ta),
+    h("label", {}, "句子", ta),
     h("label", {}, "備註", note),
     h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"), h("button", { class: "btn primary" }, "儲存"))));
   if (!r) return;
@@ -744,16 +745,16 @@ const hidePop = () => { $("#pop").hidden = true; };
 async function translate(text, context, box, info) {
   const anchor = box ? { left: box.left, top: box.top, bottom: box.bottom } : null;
   const head = h("h4", {}, h("span", { class: "ellipsis", style: "max-width:100%" }, text.length > 80 ? `${text.slice(0, 80)}…` : text));
-  showPop(anchor, head, h("div", { class: "muted" }, "翻譯中…（本機模型優先）"));
+  showPop(anchor, head, h("div", { class: "muted" }, "翻譯中…"));
   try {
     const r = await api("/api/translate", { body: { text, context } });
-    const kids = [head, h("div", { class: "out" }, r.translation), h("div", { class: "src" }, `${r.engine}${r.fallback_used ? "（本機模型無法使用，改用 Claude）" : ""}`)];
+    const kids = [head, h("div", { class: "out" }, r.translation), h("div", { class: "src" }, `${r.engine}${r.fallback_used ? " · 改用 Claude" : ""}`)];
     const acts = h("div", { class: "actions" },
-      h("button", { type: "button", class: "btn small", onclick: () => navigator.clipboard.writeText(r.translation).then(() => toast("已複製譯文")) }, h("span", { "data-icon": "copy" }), "複製譯文"));
-    if (info) acts.append(h("button", { type: "button", class: "btn small primary", onclick: () => { hidePop(); addCardDialog({ title: text, sha: info.p.sha, page: info.p.page, context: info.context, hint: r.translation }); } }, h("span", { "data-icon": "book" }), "加入知識庫"));
+      h("button", { type: "button", class: "btn small", onclick: () => navigator.clipboard.writeText(r.translation).then(() => toast("已複製")) }, h("span", { "data-icon": "copy" }), "複製"));
+    if (info) acts.append(h("button", { type: "button", class: "btn small primary", onclick: () => { hidePop(); addCardDialog({ title: text, sha: info.p.sha, page: info.p.page, context: info.context, hint: r.translation }); } }, h("span", { "data-icon": "book" }), "加入知識庫…"));
     showPop(anchor, ...kids, acts);
   } catch (e) {
-    showPop(anchor, head, h("div", { class: "err-box" }, e.message), h("div", { class: "muted", style: "font-size:12px" }, "翻譯用本機模型（config.toml 的 [engine] url），連不上時改用 Claude。"));
+    showPop(anchor, head, h("div", { class: "err-box" }, e.message));
   }
 }
 
@@ -764,48 +765,46 @@ async function addCardDialog({ title, sha, page, context, hint, summary }) {
   try { kb = S.kb = await api("/api/kb/status"); } catch {}
   updateLegend();
   const t = h("input", { value: title.length > 120 ? title.slice(0, 120) : title });
-  const sum = h("textarea", { placeholder: "用自己的話寫一兩句：這是什麼、在這篇論文裡做什麼" }, summary ?? "");
+  const sum = h("textarea", { placeholder: "用自己的話寫一兩句" }, summary ?? "");
   let state = "learning";
   const seg = h("div", { class: "seg", role: "group", "aria-label": "初始狀態" });
   const segHint = h("span", { class: "seg-hint" });
   const paintSeg = () => {
-    seg.replaceChildren(...[["learning", "學習中"], ["known", "已掌握"]].map(([v, l]) => h("button", { type: "button", "aria-pressed": v === state ? "true" : "false", onclick: () => { state = v; paintSeg(); } }, l)));
-    segHint.textContent = state === "known" ? "已經熟的詞：直接記為「記得」，不排明天的確認，30 天後再問一次。" : "新學的詞：明天問一次、再過 3 天問一次，都記得才算記得。";
+    seg.replaceChildren(...[["learning", "學習中"], ["known", "記得"]].map(([v, l]) => h("button", { type: "button", "aria-pressed": v === state ? "true" : "false", onclick: () => { state = v; paintSeg(); } }, l)));
+    segHint.textContent = "";
   };
   paintSeg();
-  const status = kb?.ok ? null : h("div", { class: "err-box" }, kb?.error ?? "KnowledgeBase 沒有回應。", " 開啟 KnowledgeBase 後按「重新檢查」。");
+  const status = kb?.ok ? null : h("div", { class: "err-box" }, "KnowledgeBase 沒有回應。");
   const draftBtn = h("button", { type: "button", class: "btn", disabled: !kb?.ok, onclick: async () => {
     draftBtn.disabled = true; draftBtn.textContent = "起草中…";
     try { const r = await api("/api/kb/draft", { body: { term: t.value, context } }); if (r.draft?.summary) sum.value = r.draft.summary; toast(`草稿：${r.assistant ?? ""}`); }
     catch (e) { fail(e); }
-    draftBtn.disabled = false; draftBtn.replaceChildren(h("span", { "data-icon": "spark" }), "用模型起草摘要"); paintIcons(draftBtn);
-  } }, h("span", { "data-icon": "spark" }), "用模型起草摘要");
+    draftBtn.disabled = false; draftBtn.replaceChildren(h("span", { "data-icon": "spark" }), "起草摘要"); paintIcons(draftBtn);
+  } }, h("span", { "data-icon": "spark" }), "起草摘要");
   const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); close(true); } },
     h("h3", {}, "加入知識庫"),
     status,
     h("label", {}, "標題", t),
-    hint ? h("div", { class: "quote-box" }, h("span", { class: "muted" }, "譯文參考："), hint) : null,
+    hint ? h("div", { class: "quote-box" }, h("span", { class: "muted" }, "譯文："), hint) : null,
     h("label", {}, "摘要", sum),
-    h("div", { style: "display:flex;flex-direction:column;gap:4px" }, h("span", { style: "font-size:12.5px;color:var(--muted)" }, "初始狀態"), seg, segHint),
-    h("div", { class: "muted", style: "font-size:12px;overflow-wrap:anywhere" }, `來源：${S.paper?.sha256 === sha ? S.paper.title : "PDF"} · p.${page}（在 KnowledgeBase 可點回這一頁）`),
+    h("div", { style: "display:flex;flex-direction:column;gap:4px" }, h("span", { style: "font-size:12.5px;color:var(--muted)" }, "狀態"), seg),
+    h("div", { class: "muted", style: "font-size:12px;overflow-wrap:anywhere" }, `${S.paper?.sha256 === sha ? S.paper.title : "PDF"} · p.${page}`),
     h("div", { class: "actions" },
       kb?.ok ? draftBtn : h("button", { type: "button", class: "btn", onclick: () => close("retry") }, "重新檢查"),
       h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"),
-      h("button", { class: "btn primary", disabled: !kb?.ok }, "加入知識庫"))));
+      h("button", { class: "btn primary", disabled: !kb?.ok }, "儲存"))));
   if (r === "retry") return addCardDialog({ title: t.value, sha, page, context, hint, summary: sum.value });
   if (r !== true) return;
   try {
     const out = await api("/api/kb/cards", { body: { sha, page, title: t.value, summary: sum.value, initial_state: state, context } });
-    toast(`已加入知識庫：${out.node.title}（${state === "known" ? "已掌握" : "學習中"}）`);
+    toast(`已加入知識庫：${out.node.title}`);
     // The new card changes the noun list and the colouring of every page.
     refreshNouns();
   } catch (e) { fail(e); }
 }
 
 function updateLegend() {
-  $("#legend").hidden = !S.termsOn;
   $("#actTerms").setAttribute("aria-pressed", S.termsOn ? "true" : "false");
-  $("#kbNote").textContent = S.kb && !S.kb.ok ? "· KnowledgeBase 沒有回應：沒有卡片的狀態" : "";
 }
 
 /** Re-mark one page's text layer: knowledge colouring, then search hits on top. */
@@ -903,19 +902,24 @@ function symMeaning(e) {
 function symPopover(sp, anchor, sticky) {
   if (!sp) return;
   const ents = sp.ents.map((i) => S.symbols.entries[i]);
-  const kids = [h("div", { class: "sym-run" }, tex(sp.latex), h("span", { class: "src" }, `p.${sp.page}${sp.eq ? ` · 式 ${sp.eq.replace(/^eq:/, "")}` : ""}`))];
-  for (const e of ents) {
+  const known = ents.filter((e) => e.grade !== "unresolved");
+  const none = ents.filter((e) => e.grade === "unresolved");
+  const kids = [h("div", { class: "sym-run" }, tex(sp.latex), h("span", { class: "src" }, `p.${sp.page}${sp.eq ? ` · ${q_label(sp.eq)}` : ""}`))];
+  for (const e of known) {
     const m = symMeaning(e);
     const ev = e.evidence?.[0];
     kids.push(h("div", { class: "sym-def" },
       h("div", { class: "sym-head" }, tex(e.latex ?? e.id), gradeChip(e.grade)),
-      m ? h("div", { class: "sym-mean" }, mixed(m)) : h("div", { class: "muted" }, "這篇裡沒找到定義句。"),
-      ev?.quote ? h("div", { class: "sym-quote" }, mixed(ev.quote), h("span", { class: "src" }, ` p.${ev.page || "?"} · ${RESOLVER[ev.by] ?? ev.by}`)) : null));
+      m ? h("div", { class: "sym-mean" }, mixed(m)) : null,
+      ev?.quote ? h("div", { class: "sym-quote" }, mixed(ev.quote), h("span", { class: "src" }, ` p.${ev.page || "?"}${byLabel(ev.by)}`)) : null));
   }
-  if (sticky) kids.push(h("div", { class: "actions" }, h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); setTab("symbols"); setTimeout(() => $(`.sym-item[data-i="${sp.ents[0]}"]`)?.scrollIntoView({ block: "center" }), 60); } }, h("span", { "data-icon": "sigma" }), "在符號表中顯示")));
+  if (none.length) kids.push(h("div", { class: "sym-none" }, gradeChip("unresolved"), ...none.map((e) => tex(e.latex ?? e.id))));
+  if (sticky) kids.push(h("div", { class: "actions" }, h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); setTab("symbols"); setTimeout(() => $(`.sym-item[data-i="${sp.ents[0]}"]`)?.scrollIntoView({ block: "center" }), 60); } }, h("span", { "data-icon": "sigma" }), "符號表")));
   showPop(anchor, ...kids);
   $("#pop").classList.toggle("hover-pop", !sticky);
 }
+/** " · 作者" etc.; nothing for the rules (the default). */
+const byLabel = (by) => (by && by !== "program" ? ` · ${RESOLVER[by] ?? by}` : "");
 
 function onPageHover(e) {
   const mk = e.target.closest?.(".mk[data-t^=y]");
@@ -951,78 +955,86 @@ function flashBox(page, bbox) {
 
 function symbolsPane() {
   const f = S.symbols;
-  if (!f) return [h("p", { class: "empty" }, S.readStatus || "讀取全文…")];
+  if (!f) return [h("p", { class: "empty" }, S.readStatus || "…")];
   const ents = f.entries ?? [];
   const count = (g) => ents.filter((e) => e.grade === g).length;
   const out = [];
-  out.push(h("div", { class: "nn-stats" },
-    h("span", {}, `${ents.length} 個符號 · ${f.equations?.length ?? 0} 條獨立方程式`),
-    h("span", { class: "muted" }, Object.keys(GRADE).map((g) => `${GRADE[g][0]} ${count(g)}`).join("　")),
-    h("span", { class: "muted" }, "程式依字型、字級、基線找出數學；定義句用規則找，🟢 一定附原文。不用模型。")));
-  if (f.glyph_errors?.length) out.push(h("div", { class: "warn-box" }, `字形對照表有錯，已略過：${f.glyph_errors.join("；")}`));
-  const sel = h("select", { "aria-label": "等級", onchange: (e) => { S.symView.grade = e.target.value; renderSide(); } },
-    h("option", { value: "" }, "全部等級"), ...Object.entries(GRADE).map(([g, [i, l]]) => h("option", { value: g }, `${i} ${l}`)));
-  sel.value = S.symView.grade;
-  out.push(h("div", { class: "sym-tools" }, sel,
-    h("button", { type: "button", class: "btn small", onclick: () => symbolDialog(null) }, h("span", { "data-icon": "plus" }), "新增"),
-    h("button", { type: "button", class: "ico small", "aria-label": "重新偵測（字形對照表改過之後）", "data-icon": "refresh", onclick: rebuildSymbols }),
+  const gsel = (g) => h("button", { type: "button", class: `nn-stat${S.symView.grade === g ? " on" : ""}`, "aria-pressed": S.symView.grade === g ? "true" : "false", title: GRADE[g][1], onclick: () => { S.symView.grade = S.symView.grade === g ? "" : g; renderSide(); } }, GRADE[g][0], " ", h("b", {}, count(g)));
+  out.push(h("div", { class: "sym-tools" },
+    h("span", { class: "sym-total" }, `${ents.length} 符號 · ${f.equations?.length ?? 0} 式`),
+    ...["conflict", "inferred", "defined", "certain", "unresolved"].map(gsel),
+    h("span", { style: "flex:1" }),
+    h("button", { type: "button", class: "ico small", "aria-label": "新增符號…", "data-icon": "plus", onclick: () => symbolDialog(null) }),
+    h("button", { type: "button", class: "ico small", "aria-label": "重新偵測", "data-icon": "refresh", onclick: rebuildSymbols }),
     h("button", { type: "button", class: "ico small", "aria-label": "字形對照表…", "data-icon": "gear", onclick: glyphDialog })));
+  if (f.glyph_errors?.length) out.push(h("div", { class: "warn-box" }, `字形對照表有錯：${f.glyph_errors.join("；")}`));
   const conv = (e) => (e.tags?.includes("conventional") ? 1 : 0);
-  const shown = ents.map((e, i) => ({ e, i })).filter(({ e }) => !S.symView.grade || e.grade === S.symView.grade).sort((a, b) => conv(a.e) - conv(b.e) || a.i - b.i);
+  const shown = ents.map((e, i) => ({ e, i }))
+    .filter(({ e }) => !S.symView.grade || e.grade === S.symView.grade)
+    .sort((a, b) => conv(a.e) - conv(b.e) || (GRADE_ORDER[a.e.grade] ?? 9) - (GRADE_ORDER[b.e.grade] ?? 9) || a.i - b.i);
+  S.symOpen ??= new Set();
   const list = h("div", { class: "sym-list" }, shown.length ? shown.map(({ e, i }) => {
     const occ = e.occurrences ?? [];
     const pages = [...new Set(occ.map((o) => o.page))];
     const ev = e.evidence?.[0];
+    const by = e.resolved_by && e.resolved_by !== "program" ? h("span", { class: "sym-by" }, RESOLVER[e.resolved_by] ?? e.resolved_by) : null;
+    const edit = h("button", { class: "ico small", "aria-label": "編輯…", "data-icon": "pen", onclick: () => symbolDialog(e) });
+    const latexBtn = h("button", { type: "button", class: "sym-latex", title: e.latex, onclick: () => occ[0] && flashBox(occ[0].page, occ[0].bbox) }, tex(e.latex ?? e.id));
+    const folded = e.grade === "unresolved" && !S.symOpen.has(e.id);
+    if (folded) {
+      return h("div", { class: "sym-item one", dataset: { i } },
+        h("div", { class: "sym-head" }, latexBtn,
+          h("button", { type: "button", class: "sym-more", "aria-label": "展開", onclick: () => { S.symOpen.add(e.id); renderSide(); } }, occ.length ? `${occ.length} 次` : "文中沒偵測到"),
+          e.tags?.includes("conventional") ? h("span", { class: "sym-by" }, "慣用") : null, by, edit));
+    }
+    const pageLinks = pages.slice(0, 6).map((pg) => h("button", { type: "button", class: "pg-link", onclick: () => { const o = occ.find((x) => x.page === pg); flashBox(pg, o.bbox); } }, `p.${pg}`));
     return h("div", { class: "sym-item", dataset: { i } },
-      h("div", { class: "sym-head" },
-        h("button", { type: "button", class: "sym-latex", title: e.latex, onclick: () => occ[0] && flashBox(occ[0].page, occ[0].bbox) }, tex(e.latex ?? e.id)),
-        gradeChip(e.grade),
-        e.tags?.includes("conventional") ? h("span", { class: "sym-by", title: "慣用符號（不需要定義）" }, "慣用") : null,
-        h("span", { class: "sym-by" }, RESOLVER[e.resolved_by] ?? e.resolved_by),
-        h("button", { class: "ico small", "aria-label": "編輯", "data-icon": "pen", onclick: () => symbolDialog(e) })),
+      h("div", { class: "sym-head" }, latexBtn, gradeChip(e.grade),
+        e.tags?.includes("conventional") ? h("span", { class: "sym-by" }, "慣用") : null, by,
+        e.grade === "unresolved" ? h("button", { type: "button", class: "ico small", "aria-label": "收起", "data-icon": "up", onclick: () => { S.symOpen.delete(e.id); renderSide(); } }) : null,
+        edit),
       symMeaning(e) ? h("div", { class: "sym-mean" }, mixed(symMeaning(e)), e.meaning && e.meaning_en ? h("span", { class: "muted" }, " · ", mixed(e.meaning_en)) : null) : null,
       ev?.quote ? h("div", { class: "sym-quote" }, mixed(ev.quote), h("span", { class: "src" }, ` p.${ev.page || "?"}${e.evidence.length > 1 ? ` · 另有 ${e.evidence.length - 1} 句` : ""}`)) : null,
       e.note ? h("div", { class: "sym-note" }, e.note) : null,
       h("div", { class: "sym-meta" },
-        h("span", {}, `${occ.length} 次`),
-        ...pages.slice(0, 8).map((pg) => h("button", { type: "button", class: "pg-chip", onclick: () => { const o = occ.find((x) => x.page === pg); flashBox(pg, o.bbox); } }, `p.${pg}`)),
-        pages.length > 8 ? h("span", {}, "…") : null,
-        ...eqChips(e.equations ?? [], f)),
-      !occ.length && e.first == null ? h("div", { class: "muted", style: "font-size:11.5px" }, "（作者加的；這次沒在文中偵測到）") : null);
-  }) : [h("p", { class: "empty" }, "沒有符合的符號。")]);
+        occ.length ? h("span", {}, `${occ.length} 次`) : h("span", {}, "文中沒偵測到"),
+        ...pageLinks,
+        pages.length > 6 ? h("span", {}, `＋${pages.length - 6}`) : null,
+        ...eqChips(e.equations ?? [], f)));
+  }) : [h("p", { class: "empty" }, "沒有符合的符號")]);
   out.push(list);
   if (f.equations?.length) {
-    out.push(h("h4", { class: "sym-sub" }, "獨立方程式"));
+    out.push(h("h4", { class: "sym-sub" }, "式"));
     out.push(h("div", { class: "sym-list eqs" }, f.equations.map((q) => h("button", { type: "button", class: "eq-item", onclick: () => flashBox(q.page, q.bbox) },
-      h("span", { class: "eq-no" }, q.label ?? "（無編號）"), h("span", { class: "src" }, `p.${q.page}`), q.latex ? h("span", { class: "eq-tex" }, tex(q.latex)) : null))));
+      h("span", { class: "eq-no" }, q.label ?? "無編號"), h("span", { class: "src" }, `p.${q.page}`), q.latex ? h("span", { class: "eq-tex" }, tex(q.latex)) : null))));
   }
   return out;
 }
-/** Numbered equations as chips (at most 6); unnumbered ones as one count. */
+
 function eqChips(ids, f) {
   const jump = (id) => { const q = f.equations.find((x) => x.id === id); if (q) flashBox(q.page, q.bbox); };
   const numbered = ids.filter((id) => !/^eq:p\d+-/.test(id));
   const other = ids.filter((id) => /^eq:p\d+-/.test(id));
-  const out = numbered.slice(0, 6).map((id) => h("button", { type: "button", class: "pg-chip eq", onclick: () => jump(id) }, q_label(id)));
+  const out = numbered.slice(0, 6).map((id) => h("button", { type: "button", class: "pg-link", onclick: () => jump(id) }, q_label(id)));
   if (numbered.length > 6) out.push(h("span", {}, `…另 ${numbered.length - 6} 條`));
-  if (other.length) out.push(h("button", { type: "button", class: "pg-chip eq", title: "無編號的獨立方程式；按一下跳到第一條", onclick: () => jump(other[0]) }, `無編號式 ×${other.length}`));
+  if (other.length) out.push(h("button", { type: "button", class: "pg-link", onclick: () => jump(other[0]) }, `無編號 ×${other.length}`));
   return out;
 }
-const q_label = (id) => (/^eq:p\d+-/.test(id) ? "式（無編號）" : `式 (${id.replace(/^eq:/, "")})`);
+const q_label = (id) => (/^eq:p\d+-/.test(id) ? "無編號" : `式 (${id.replace(/^eq:/, "")})`);
 
 async function rebuildSymbols() {
-  try { setSymbols(await api(`/api/papers/${S.sha}/symbols/rebuild`, { body: {} })); toast("已重新偵測（你改過的條目保留）"); }
+  try { setSymbols(await api(`/api/papers/${S.sha}/symbols/rebuild`, { body: {} })); toast("已重新偵測"); }
   catch (e) { if (e.data?.no_text) readPaper(S.sha); else fail(e); }
 }
 
 async function symbolDialog(e) {
   const latex = h("input", { value: e?.latex ?? "", placeholder: "例：w_i、\\hat{y}、\\mathbf{x}", class: "mono" });
   const preview = h("div", { class: "tex-preview" });
-  const paint = () => preview.replaceChildren(latex.value.trim() ? tex(latex.value, true) : h("span", { class: "muted" }, "（預覽）"));
+  const paint = () => preview.replaceChildren(latex.value.trim() ? tex(latex.value, true) : "");
   latex.addEventListener("input", paint); paint();
-  const zh = h("textarea", { placeholder: "這個符號在這篇論文裡的意思（中文）" }, e?.meaning ?? "");
-  const en = h("input", { value: e?.meaning_en ?? "", placeholder: "原文定義（英文，可用 $…$）" });
-  const note = h("input", { value: e?.note ?? "", placeholder: "備註（可省略）" });
+  const zh = h("textarea", { placeholder: "中文" }, e?.meaning ?? "");
+  const en = h("input", { value: e?.meaning_en ?? "", placeholder: "可用 $…$" });
+  const note = h("input", { value: e?.note ?? "" });
   let grade = e?.grade && e.grade !== "unresolved" ? e.grade : "certain";
   const seg = h("div", { class: "seg", role: "group", "aria-label": "等級" });
   const paintSeg = () => seg.replaceChildren(...Object.entries(GRADE).map(([g, [i, l]]) => h("button", { type: "button", "aria-pressed": g === grade ? "true" : "false", onclick: () => { grade = g; paintSeg(); } }, `${i} ${l}`)));
@@ -1034,7 +1046,6 @@ async function symbolDialog(e) {
     h("label", {}, "意思", zh), h("label", {}, "原文定義", en),
     h("div", { style: "display:flex;flex-direction:column;gap:4px" }, h("span", { style: "font-size:12.5px;color:var(--muted)" }, "等級"), seg),
     h("label", {}, "備註", note),
-    h("p", { class: "muted", style: "margin:0;font-size:12px" }, "你改過的條目記為「作者」，重新偵測不會蓋掉。"),
     h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"), h("button", { class: "btn primary" }, "儲存"))));
   if (r !== true) return;
   const body = { latex: latex.value, meaning: zh.value, meaning_en: en.value, grade, note: note.value };
@@ -1052,7 +1063,7 @@ async function glyphDialog() {
   const ta = h("textarea", { class: "mono", style: "min-height:220px", spellcheck: "false" }, g.text);
   const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (ev) => { ev.preventDefault(); close(true); } },
     h("h3", {}, "字形對照表"),
-    h("p", { class: "muted", style: "margin:0;font-size:12.5px;overflow-wrap:anywhere" }, `PDF 字元 → LaTeX。這裡只寫要蓋過內建表的條目；存在 ${g.path}。共用的放 private/shared/glyphs.toml。存檔後按「重新偵測」。`),
+    h("p", { class: "muted", style: "margin:0;font-size:12.5px" }, "PDF 字元 → LaTeX，只寫要覆蓋的。"),
     g.errors?.length ? h("div", { class: "warn-box" }, g.errors.join("；")) : null,
     ta,
     h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"), h("button", { class: "btn primary" }, "儲存"))));
@@ -1135,7 +1146,7 @@ async function classifyNouns(again) {
     const r = await api(`/api/papers/${sha}/nouns/classify`, { body: { again } });
     if (S.sha === sha) setNouns(r.nouns);
   } catch (e) {
-    S.classifyError = e.data?.llm_unavailable ? "沒有可用的模型：名詞先不分類（右上「模型」可以換）。" : e.message;
+    S.classifyError = e.data?.llm_unavailable ? "沒有可用的模型，名詞未分類。" : e.message;
   }
   S.classifying = false;
   if (S.tab === "nouns" && S.sha === sha) renderSide();
@@ -1175,7 +1186,7 @@ async function ignoreNoun(n) {
     hidePop();
     if (S.focusNoun && S.nouns.entries[S.focusNoun.i]?.key === n.key) S.focusNoun = null;
     await refreshNouns();
-    toast(`「${n.text}」已加入忽略清單（ignore-words.txt）`);
+    toast(`已忽略：${n.text}`);
   } catch (e) { fail(e); }
 }
 
@@ -1184,30 +1195,30 @@ async function nounCard(n) {
   addCardDialog({ title: n.text, sha: S.sha, page, context });
 }
 
-function stateChip(state) {
-  return h("span", { class: "st" }, h("i", { class: `s-${state}` }), NOUN_STATE[state] ?? state);
+function stateChip(n) {
+  return h("span", { class: "st", title: STATE_TIP[n.state] ?? "" }, h("i", { class: `s-${n.state === "new" && !n.red ? "none-card" : n.state}` }), nounState(n));
 }
 
 async function nounPopover(n, anchor, p) {
   if (!n) return;
   const i = S.nouns.entries.indexOf(n);
-  const head = h("h4", {}, n.text, stateChip(n.state));
-  const meta = h("div", { class: "src" }, `${n.category ?? (n.kb ? "知識庫" : "未分類")} · ${SOURCE_LABEL[n.source] ?? n.source}${n.short ? `（${n.short}）` : ""} · ${n.count} 次 · 第一次在 p.${n.first_page}`);
+  const head = h("h4", {}, n.text, stateChip(n));
+  const meta = h("div", { class: "src" }, [n.category, n.short, `${n.count} 次`, `p.${n.first_page}`].filter(Boolean).join(" · "));
   const acts = h("div", { class: "actions" },
-    h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); setTab("nouns"); focusNoun(i, 0); } }, h("span", { "data-icon": "search" }), `所有出現位置（${n.count}）`));
+    h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); setTab("nouns"); focusNoun(i, 0); } }, h("span", { "data-icon": "search" }), `${n.count} 處`));
   const ctx = await nounContext(n);
   acts.append(h("button", { type: "button", class: "btn small", onclick: () => translate(n.text, ctx.context, null, { p: { sha: S.sha, page: ctx.page }, context: ctx.context }) }, h("span", { "data-icon": "languages" }), "翻譯"));
   if (!n.kb) {
-    acts.append(h("button", { type: "button", class: "btn small", onclick: () => ignoreNoun(n) }, h("span", { "data-icon": "eyeOff" }), "這不是術語"));
-    acts.append(h("button", { type: "button", class: "btn small primary", onclick: () => nounCard(n) }, h("span", { "data-icon": "book" }), "加入知識庫"));
+    acts.append(h("button", { type: "button", class: "btn small", onclick: () => ignoreNoun(n) }, h("span", { "data-icon": "eyeOff" }), "忽略"));
+    acts.append(h("button", { type: "button", class: "btn small primary", onclick: () => nounCard(n) }, h("span", { "data-icon": "book" }), "加入知識庫…"));
     showPop(anchor, head, meta, acts);
     return;
   }
-  acts.append(h("a", { class: "btn small", href: `${S.info?.kb_url ?? "http://127.0.0.1:7700"}/#/node/${n.kb.node_id}`, target: "_blank", rel: "noopener" }, h("span", { "data-icon": "external" }), "在 KnowledgeBase 開啟"));
-  showPop(anchor, head, meta, h("div", { class: "muted" }, "讀取卡片…"));
+  acts.append(h("a", { class: "btn small", href: `${S.info?.kb_url ?? "http://127.0.0.1:7700"}/#/node/${n.kb.node_id}`, target: "_blank", rel: "noopener" }, h("span", { "data-icon": "external" }), "開啟卡片"));
+  showPop(anchor, head, meta, h("div", { class: "muted" }, "…"));
   let summary = "";
   try { const v = await api(`/api/kb/nodes/${n.kb.node_id}`); summary = v.node?.summary ?? ""; } catch (err) { summary = err.message; }
-  showPop(anchor, head, meta, h("div", { class: "out" }, summary || "（這張卡還沒有摘要）"), acts);
+  showPop(anchor, head, meta, h("div", { class: "out" }, summary || "（沒有摘要）"), acts);
 }
 
 /** Right-click on a coloured term (no selection): the term's own menu. */
@@ -1217,16 +1228,15 @@ function nounMenu(n, x, y) {
   const item = (icon, label, fn) => h("button", { type: "button", role: "menuitem", onclick: () => { closeMenus(); fn(); } }, h("span", { "data-icon": icon }), label);
   m.replaceChildren(
     h("div", { class: "menu-title" }, n.text),
-    item("search", `所有出現位置（${n.count}）`, () => { setTab("nouns"); focusNoun(i, 0); }),
-    n.kb ? null : item("eyeOff", "這不是術語", () => ignoreNoun(n)),
+    item("search", `${n.count} 處`, () => { setTab("nouns"); focusNoun(i, 0); }),
+    n.kb ? null : item("eyeOff", "忽略", () => ignoreNoun(n)),
     n.kb ? null : item("book", "加入知識庫…", () => nounCard(n)),
   );
   paintIcons(m);
   placeAt(m, x, y);
 }
 
-const NOUN_COLS = [["text", "詞"], ["category", "分類"], ["state", "知識庫"], ["count", "次數"], ["page", "頁"]];
-const STATE_SHORT = { new: "無卡", learning: "學習中", stale: "久未", none: "學習中", known: "記得" };
+const NOUN_COLS = [["text", "詞"], ["category", "分類"], ["count", "次數"], ["page", "頁"]];
 const STATE_ORDER = { new: 0, learning: 1, stale: 1, none: 1, known: 2 };
 
 function nounsPane() {
@@ -1236,22 +1246,22 @@ function nounsPane() {
     out.push(h("p", { class: "empty" }, S.readStatus || "讀取全文…"));
     return out;
   }
-  const st = n.stats;
   const v = S.nounView;
   const cls = n.classification;
-  const engine = S.classifying ? "分類中…（一篇只呼叫一次模型）" : cls.engine ? `分類：${cls.engine}` : "尚未分類";
+  const count = (f) => n.entries.filter(f).length;
+  const stat = (key, label, dot, num) => h("button", { type: "button", class: `nn-stat${v.state === key ? " on" : ""}`, "aria-pressed": v.state === key ? "true" : "false", onclick: () => { v.state = v.state === key ? "" : key; renderSide(); } }, h("i", { class: `nn-dot ${dot}` }), label, " ", h("b", {}, num));
   out.push(h("div", { class: "nn-stats" },
-    h("span", {}, `${st.words.toLocaleString()} 字 → ${st.units} 個詞`),
-    h("span", { class: "muted" }, `沒有卡片 ${st.no_card} · 學習中 ${st.learning} · 記得 ${st.known}`),
-    h("span", { class: "muted nn-engine" }, engine, cls.unclassified && !S.classifying ? ` · 未分類 ${cls.unclassified}` : "",
-      !S.classifying && cls.unclassified ? h("button", { type: "button", class: "btn ghost small", onclick: () => classifyNouns(true) }, "分類") : null)));
+    stat("red", "要學", "kt-new", count((e) => e.red)),
+    stat("learning", "學習中", "kt-learn", count((e) => ["learning", "stale", "none"].includes(e.state))),
+    stat("known", "記得", "kt-known", count((e) => e.state === "known")),
+    S.classifying ? h("span", { class: "muted" }, "分類中…") : cls.unclassified ? h("button", { type: "button", class: "btn ghost small", title: "整篇送一次模型", onclick: () => classifyNouns(true) }, `分類（${cls.unclassified}）`) : null));
   if (S.classifyError) out.push(h("div", { class: "warn-box" }, S.classifyError));
-  if (n.kb && !n.kb.ok) out.push(h("div", { class: "warn-box" }, "KnowledgeBase 沒有回應：全部當作沒有卡片。開啟 KnowledgeBase 後重新開啟論文。"));
+  if (n.kb && !n.kb.ok) out.push(h("div", { class: "warn-box" }, "KnowledgeBase 沒有回應。"));
   const catSel = h("select", { "aria-label": "分類", onchange: (e) => { v.cat = e.target.value; renderSide(); } },
     h("option", { value: "" }, "全部分類"), ...n.categories.map((c) => h("option", { value: c }, c)), h("option", { value: "-" }, "未分類"));
   catSel.value = v.cat;
   const stSel = h("select", { "aria-label": "知識庫狀態", onchange: (e) => { v.state = e.target.value; renderSide(); } },
-    h("option", { value: "" }, "全部狀態"), h("option", { value: "red" }, "紅字（要學）"), h("option", { value: "new" }, "沒有卡片"), h("option", { value: "learning" }, "學習中／久未複習"), h("option", { value: "known" }, "記得"));
+    h("option", { value: "" }, "全部狀態"), h("option", { value: "red" }, "要學"), h("option", { value: "new" }, "沒卡"), h("option", { value: "learning" }, "學習中"), h("option", { value: "known" }, "記得"));
   stSel.value = v.state;
   const q = h("input", { type: "search", placeholder: "篩選", value: v.q, "aria-label": "篩選詞", oninput: (e) => { v.q = e.target.value; clearTimeout(S.nqTimer); S.nqTimer = setTimeout(() => { renderSide(); $(".nn-tools input")?.focus(); }, 200); } });
   out.push(h("div", { class: "nn-tools" }, catSel, stSel, q));
@@ -1269,21 +1279,19 @@ function nounsPane() {
       onclick: (ev) => { if (!ev.target.closest("button")) (on ? focusNoun(i, S.focusNoun.k + 1) : focusNoun(i, 0)); },
       oncontextmenu: (ev) => { ev.preventDefault(); nounMenu(e, ev.clientX, ev.clientY); },
       onkeydown: (ev) => { if (ev.key === "Enter") focusNoun(i, on ? S.focusNoun.k + 1 : 0); } },
-      h("span", { class: "nn-term" }, h("i", { class: `nn-dot ${nounClass(e) || "kt-none"}` }), h("span", { class: "ellipsis" }, e.text)),
-      h("span", { class: "nn-cat ellipsis" }, e.category ?? (e.kb ? "—" : "未分類")),
-      h("span", { class: "nn-st", title: NOUN_STATE[e.state] }, h("i", { class: `s-${e.state}` }), STATE_SHORT[e.state] ?? e.state),
-      h("span", { class: "nn-num" }, on ? `${S.focusNoun.k + 1}/${e.count}` : e.count),
+      h("span", { class: "nn-term", title: nounState(e) }, h("i", { class: `nn-dot ${nounClass(e) || "kt-none"}` }), h("span", { class: "ellipsis" }, e.text)),
+      h("span", { class: "nn-cat ellipsis" }, on ? `${S.focusNoun.k + 1}/${e.count}` : e.category ?? (e.kb ? "—" : "未分類")),
+      h("span", { class: "nn-num" }, e.count),
       h("span", { class: "nn-num" }, e.first_page),
       h("span", { class: "nn-acts" },
         on ? h("button", { class: "ico small", "aria-label": "上一個出現位置", "data-icon": "up", onclick: () => focusNoun(i, S.focusNoun.k - 1) }) : null,
         on ? h("button", { class: "ico small", "aria-label": "下一個出現位置", "data-icon": "chevron", onclick: () => focusNoun(i, S.focusNoun.k + 1) }) : null,
-        !on && !e.kb ? h("button", { class: "ico small", "aria-label": "這不是術語", "data-icon": "eyeOff", onclick: () => ignoreNoun(e) }) : null,
+        !on && !e.kb ? h("button", { class: "ico small", "aria-label": "忽略", "data-icon": "eyeOff", onclick: () => ignoreNoun(e) }) : null,
         !on && !e.kb ? h("button", { class: "ico small", "aria-label": "加入知識庫…", "data-icon": "book", onclick: () => nounCard(e) }) : null,
         on ? h("button", { class: "ico small", "aria-label": "取消標示", "data-icon": "x", onclick: clearNounFocus }) : null));
     return row;
   });
   out.push(h("div", { class: "nn-table", role: "table", "aria-label": "名詞清單" }, head, ...(list.length ? list : [h("p", { class: "empty" }, "沒有符合的詞。")])));
-  out.push(h("p", { class: "muted nn-foot" }, "點一個詞：文中所有出現的位置都會亮起來，再點一下（或 ↓）跳到下一個。右鍵「這不是術語」寫進忽略清單。紅字＝專業術語、沒有卡片；一般學術詞與人名只列出、不標紅。"));
   return out;
 }
 
@@ -1375,8 +1383,8 @@ function analysisBlock(a) {
     h("dt", { class: "eqref" }, q.ref ? mixed(q.ref) : "式"),
     h("dd", {}, h("span", { class: "k" }, "輸入"), mixed(q.inputs || "—")),
     h("dd", {}, h("span", { class: "k" }, "輸出"), mixed(q.outputs || "—")),
-    h("dd", {}, h("span", { class: "k" }, "作用目標"), mixed(q.target || "—")),
-    h("dd", {}, h("span", { class: "k" }, "作用結果"), mixed(q.effect || "—")))));
+    h("dd", {}, h("span", { class: "k" }, "對象"), mixed(q.target || "—")),
+    h("dd", {}, h("span", { class: "k" }, "效果"), mixed(q.effect || "—")))));
   if (a.motive) out.append(h("div", { class: "motive" }, h("span", { class: "k" }, "動機"), mixed(a.motive)));
   if (a.results?.length) out.append(...a.results.map((r) => h("dl", { class: "resrow" },
     ...[["指標", r.metric], ["比較對象", r.comparison], ["數值", r.values], ["差距", r.difference], ["檢定", r.test], ["顯著性", r.significance]].map(([k, v]) => h("dd", {}, h("span", { class: "k" }, k), mixed(v || "—"))))));
@@ -1385,38 +1393,73 @@ function analysisBlock(a) {
 
 function parasPane() {
   const d = S.paras;
-  if (!d) return [h("p", { class: "empty" }, S.readStatus || "整理段落…")];
+  if (!d) return [h("p", { class: "empty" }, S.readStatus || "…")];
   const st = d.status ?? {};
   const pr = d.progress;
+  S.paraOpen ??= new Set();
+  S.chipOpen ??= new Set();
   const out = [];
   out.push(h("div", { class: "para-top" },
-    h("div", { class: "progress", role: "progressbar", "aria-valuenow": pr.understood, "aria-valuemax": pr.total, "aria-label": "懂了的段落" }, h("i", { style: `width:${pr.total ? (pr.understood / pr.total) * 100 : 0}%` })),
-    h("span", { class: "para-count" }, `懂了 ${pr.understood}/${pr.total}`),
-    h("button", { type: "button", class: "btn small", onclick: nextNotUnderstood }, h("span", { "data-icon": "next" }), "下一段還沒懂的")));
-  const runLine = st.running ? `分析中 ${st.done}/${st.total}${st.engine ? `（${st.engine}）` : ""}：方法與結果段先跑` : st.error ? null : st.total ? `分析完成 ${st.done}/${st.total}${st.engine ? `（${st.engine}）` : ""}` : "";
-  out.push(h("div", { class: "muted para-status" }, runLine, " 不提供整段的中文摘要或翻譯，只標出卡住的地方。"));
-  if (st.error) out.push(h("div", { class: "warn-box" }, st.error, " 標籤（生詞、符號、方程式）照樣列出。", h("button", { type: "button", class: "btn ghost small", onclick: async () => { try { S.paras = await api(`/api/papers/${S.sha}/paragraphs/run`, { body: {} }); renderSide(); loadParagraphs(S.sha); } catch (e) { fail(e); } } }, "再試一次")));
+    h("div", { class: "progress", role: "progressbar", "aria-valuenow": pr.understood, "aria-valuemax": pr.total, title: `懂了 ${pr.understood}/${pr.total}` }, h("i", { style: `width:${pr.total ? (pr.understood / pr.total) * 100 : 0}%` })),
+    h("button", { type: "button", class: "btn small", onclick: nextNotUnderstood }, h("span", { "data-icon": "next" }), "下一段未懂")));
+  if (st.running) out.push(h("div", { class: "muted para-status" }, `分析中 ${st.done}/${st.total}`));
+  if (st.error) out.push(h("div", { class: "warn-box" }, st.error, " ", h("button", { type: "button", class: "btn ghost small", onclick: async () => { try { S.paras = await api(`/api/papers/${S.sha}/paragraphs/run`, { body: {} }); renderSide(); loadParagraphs(S.sha); } catch (e) { fail(e); } } }, "重試")));
+  // only what can block understanding: terms to learn, symbols not settled, equations
+  const blocking = (kind, id) => {
+    if (kind === "term") return S.nouns?.entries.find((e) => e.key === id)?.red !== false;
+    if (kind === "symbol") return ["unresolved", "inferred", "conflict"].includes(S.symbols?.entries.find((x) => x.id === id)?.grade ?? "unresolved");
+    return true;
+  };
   let section = null;
   for (const p of d.paragraphs) {
     if (p.section_kind === "front") continue;
-    if (p.section !== section) { section = p.section; out.push(h("h4", { class: "para-sec" }, section || SECTION_KIND[p.section_kind] || "（未命名）")); }
+    if (p.section !== section) { section = p.section; out.push(h("h4", { class: "para-sec" }, section || SECTION_KIND[p.section_kind] || "")); }
     const a = p.analysis;
-    const role = a ? ROLE[a.role] ?? a.role : st.running ? "分析中…" : "—";
+    const role = a ? ROLE[a.role] ?? a.role : st.running ? "…" : "—";
+    if (p.understood && !S.paraOpen.has(p.id)) {
+      out.push(h("button", { type: "button", class: `para one${S.curPara === p.id ? " cur" : ""}`, dataset: { id: p.id }, title: p.text.slice(0, 120), onclick: () => { S.paraOpen.add(p.id); renderSide(); } },
+        h("span", { class: "role" }, role), h("span", { class: "src" }, `p.${p.page}`), h("span", { class: "para-one-text" }, p.text), h("span", { class: "ok-mark" }, "✓")));
+      continue;
+    }
     const chips = [
-      ...p.chips.terms.map((id) => h("button", { type: "button", class: "chip-b term", onclick: (ev) => chipMenu(p, "term", id, ev) }, chipLabel("term", id))),
-      ...p.chips.symbols.map((id) => { const e = S.symbols?.entries.find((x) => x.id === id); return h("button", { type: "button", class: `chip-b sym g-${e?.grade ?? "unresolved"}`, title: e ? GRADE[e.grade]?.[1] : "", onclick: (ev) => chipMenu(p, "symbol", id, ev) }, tex(e?.latex ?? id), h("span", { class: "gi" }, GRADE[e?.grade]?.[0] ?? "")); }),
-      ...p.chips.equations.map((id) => h("button", { type: "button", class: "chip-b eq", onclick: (ev) => chipMenu(p, "equation", id, ev) }, q_label(id))),
+      ...p.chips.terms.filter((id) => blocking("term", id)).map((id) => h("button", { type: "button", class: "chip-b", onclick: (ev) => chipMenu(p, "term", id, ev) }, chipLabel("term", id))),
+      ...p.chips.symbols.filter((id) => blocking("symbol", id)).map((id) => { const e = S.symbols?.entries.find((x) => x.id === id); return h("button", { type: "button", class: "chip-b", title: e ? GRADE[e.grade]?.[1] : "", onclick: (ev) => chipMenu(p, "symbol", id, ev) }, tex(e?.latex ?? id), e?.grade === "conflict" ? h("span", { class: "gi" }, GRADE.conflict[0]) : null); }),
+      ...p.chips.equations.map((id) => h("button", { type: "button", class: "chip-b", onclick: (ev) => chipMenu(p, "equation", id, ev) }, q_label(id))),
     ];
+    const open = S.chipOpen.has(p.id);
+    const chipBox = chips.length ? h("div", { class: `para-chips${open ? "" : " folded"}` }, ...chips) : null;
+    const more = chips.length ? h("button", { type: "button", class: "chip-more", hidden: !open, onclick: () => { open ? S.chipOpen.delete(p.id) : S.chipOpen.add(p.id); renderSide(); } }, open ? "收起" : "") : null;
     out.push(h("div", { class: `para${p.understood ? " done" : ""}${S.curPara === p.id ? " cur" : ""}`, dataset: { id: p.id } },
-      h("div", { class: "para-head" }, h("span", { class: `role r-${a?.role ?? "none"}` }, role), h("span", { class: "src" }, `p.${p.page} · ${p.words} 字`), p.understood ? h("span", { class: "ok-mark" }, "✓ 懂了") : null),
+      h("div", { class: "para-head" }, h("span", { class: "role" }, role), h("span", { class: "src" }, `p.${p.page}`),
+        p.understood ? h("button", { type: "button", class: "ico small ok-btn", "aria-label": "收起", onclick: () => { S.paraOpen.delete(p.id); renderSide(); } }, "✓") : null),
       h("button", { type: "button", class: "para-text", title: "跳到這段", onclick: () => { S.curPara = p.id; renderSide(); jumpPara(p.id); } }, p.text),
-      chips.length ? h("div", { class: "para-chips" }, ...chips) : h("div", { class: "muted", style: "font-size:11.5px" }, "沒有生詞或符號。"),
+      chipBox, more,
       analysisBlock(a),
       h("div", { class: "para-acts" },
-        h("button", { type: "button", class: "btn small", onclick: () => askClaude(p.id, null) }, h("span", { "data-icon": "alert" }), "這段我卡住了"),
-        h("button", { type: "button", class: `btn small${p.understood ? " primary" : ""}`, "aria-pressed": p.understood ? "true" : "false", onclick: () => setUnderstood(p, !p.understood) }, h("span", { "data-icon": "check" }), "懂了"))));
+        h("button", { type: "button", class: "btn small", onclick: () => askClaude(p.id, null) }, h("span", { "data-icon": "chat" }), "這段我卡住了"),
+        p.understood
+          ? h("button", { type: "button", class: "btn small ghost-muted", onclick: () => setUnderstood(p, false) }, "取消懂了")
+          : h("button", { type: "button", class: "btn small primary", onclick: () => setUnderstood(p, true) }, h("span", { "data-icon": "check" }), "懂了"))));
   }
+  requestAnimationFrame(foldChips);
   return out;
+}
+
+/** Chips beyond two lines are folded behind "＋N". */
+function foldChips() {
+  for (const box of $$(".para-chips.folded")) {
+    const more = box.nextElementSibling;
+    if (!more?.classList.contains("chip-more")) continue;
+    const hidden = [...box.children].filter((c) => c.offsetTop >= box.clientHeight + box.offsetTop - 2 || c.offsetTop - box.offsetTop >= box.clientHeight).length;
+    more.hidden = hidden === 0;
+    more.textContent = `＋${hidden}`;
+  }
+}
+
+function defaultLabel(ref) {
+  const [kind, name] = String(ref).split(":");
+  if (kind === "local") return "地端";
+  return MODEL_LABEL[name] ?? "Claude";
 }
 
 // ── model menu ────────────────────────────────────────────────────────────
@@ -1425,17 +1468,16 @@ async function modelDialog() {
   try { m = await api("/api/models"); } catch (e) { fail(e); return; }
   const rows = h("div", { class: "model-rows" });
   const paint = () => rows.replaceChildren(...m.tasks.map((t) => h("div", { class: "model-row" },
-    h("div", {}, h("b", {}, t.label), h("span", { class: "muted mono" }, ` ${t.id} · 預設 ${t.default}`)),
-    h("div", { class: "seg", role: "group", "aria-label": t.label }, m.choices.map((c) => h("button", { type: "button", "aria-pressed": t.choice === c ? "true" : "false", onclick: async () => {
+    h("b", {}, t.label),
+    h("div", { class: "seg", role: "group", "aria-label": t.label }, m.choices.map((c) => h("button", { type: "button", "aria-pressed": t.choice === c ? "true" : "false", title: c === "auto" ? `預設：${defaultLabel(t.default)}` : null, onclick: async () => {
       try { m = await api("/api/models", { method: "PUT", body: { task: t.id, model: c } }); paint(); } catch (e) { fail(e); }
     } }, MODEL_LABEL[c] ?? c))))));
   paint();
   await dialog((d, close) => h("div", { class: "dlg" },
     h("h3", {}, "模型"),
-    h("p", { class: "muted", style: "margin:0;font-size:12.5px" }, "每個工作各自選地端模型或 Claude（Haiku／Sonnet／Opus）。「自動」照 tasks.toml 的預設順序；選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。"),
-    m.local_engine ? null : h("div", { class: "warn-box" }, "沒有設定地端模型（config.toml 的 [engine] url）：選「地端」的工作會失敗。"),
+    m.local_engine ? null : h("div", { class: "warn-box" }, "沒有設定地端模型"),
     rows,
-    h("div", { class: "actions" }, h("button", { type: "button", class: "btn primary", onclick: () => close(true) }, "完成"))));
+    h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(true) }, "關閉"))));
 }
 
 // ── search ────────────────────────────────────────────────────────────────
@@ -1452,7 +1494,7 @@ async function runSearch(q) {
       for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + needle.length)) S.search.hits.push({ i, start: at, end: at + needle.length });
     }
   }
-  $("#searchCount").textContent = needle.length >= 2 ? (S.search.hits.length ? `0/${S.search.hits.length}` : "沒有") : "";
+  $("#searchCount").textContent = needle.length >= 2 ? (S.search.hits.length ? `0/${S.search.hits.length}` : "0") : "";
   S.pages.filter((p) => p.rendered).forEach(decorate);
   if (S.search.hits.length) stepSearch(1);
 }
@@ -1548,11 +1590,11 @@ function renderSide() {
 }
 
 function notesPane() {
-  if (!S.annotations.length) return [h("p", { class: "empty" }, "選取文字後按右鍵：螢光標記（四種顏色）或加註記。註記存在私人資料夾，用頁碼和原文定位，放大縮小都不會跑掉。")];
+  if (!S.annotations.length) return [h("p", { class: "empty" }, "選取文字 → 右鍵")];
   const sorted = [...S.annotations].sort((a, b) => a.page - b.page || (a.rects?.[0]?.[1] ?? 0) - (b.rects?.[0]?.[1] ?? 0));
   return [h("ul", { class: "items" }, sorted.map((a) => h("li", { class: "item", onclick: (e) => { if (!e.target.closest("button")) jumpTo(a.page, a.id); } },
     h("span", { class: `dot c-${a.color}` }),
-    h("span", { class: "body" }, h("span", { class: "txt" }, a.quote?.exact || "（無文字）"), a.note ? h("span", { class: "note" }, a.note) : null, h("span", { class: "meta" }, `p.${a.page} · ${a.kind === "note" ? "註記" : "螢光"} · ${a.created_at.slice(0, 10)}`)),
+    h("span", { class: "body" }, h("span", { class: "txt" }, a.quote?.exact || "（無文字）"), a.note ? h("span", { class: "note" }, a.note) : null, h("span", { class: "meta" }, `p.${a.page} · ${a.created_at.slice(5, 10)}`)),
     h("span", { class: "acts" },
       h("button", { class: "ico small", "aria-label": "編輯註記", "data-icon": "pen", onclick: () => editNote(a) }),
       h("button", { class: "ico small", "aria-label": "刪除", "data-icon": "trash", onclick: () => delAnnotation(a) })))))];
@@ -1582,12 +1624,12 @@ async function delAnnotation(a) {
 }
 
 function quotesPane() {
-  if (!S.quotes.length) return [h("p", { class: "empty" }, "選取一句話後按右鍵 →「存成引用句」。之後在 PaperComposer 可以引用（所有論文的引用句：GET /api/quotes）。")];
+  if (!S.quotes.length) return [h("p", { class: "empty" }, "選取文字 → 右鍵 → 存成引用句…")];
   return [h("ul", { class: "items" }, S.quotes.map((q) => h("li", { class: "item", onclick: (e) => { if (!e.target.closest("button")) jumpTo(q.page); } },
     h("span", { class: "dot q" }),
-    h("span", { class: "body" }, h("span", { class: "txt" }, `“${q.text}”`), q.note ? h("span", { class: "note" }, q.note) : null, h("span", { class: "meta" }, `p.${q.page} · ${q.created_at.slice(0, 10)}`)),
+    h("span", { class: "body" }, h("span", { class: "txt" }, `“${q.text}”`), q.note ? h("span", { class: "note" }, q.note) : null, h("span", { class: "meta" }, `p.${q.page} · ${q.created_at.slice(5, 10)}`)),
     h("span", { class: "acts" },
-      h("button", { class: "ico small", "aria-label": "複製（含頁碼）", "data-icon": "copy", onclick: () => navigator.clipboard.writeText(`“${q.text}” (p. ${q.page})`).then(() => toast("已複製")) }),
+      h("button", { class: "ico small", "aria-label": "複製", "data-icon": "copy", onclick: () => navigator.clipboard.writeText(`“${q.text}” (p. ${q.page})`).then(() => toast("已複製")) }),
       h("button", { class: "ico small", "aria-label": "刪除", "data-icon": "trash", onclick: async () => { try { await api(`/api/papers/${S.sha}/quotes/${q.id}`, { method: "DELETE" }); await loadQuotes(); renderSide(); } catch (e) { fail(e); } } })))))];
 }
 
@@ -1603,23 +1645,22 @@ function paraOf(pid) {
 }
 
 function chatPane() {
-  const head = h("div", { class: "pane-head" }, h("h4", {}, "問 Claude · 對話存在這篇論文的私人資料夾"),
-    S.chat.length ? h("button", { class: "ico small", "aria-label": "清除對話", "data-icon": "trash", onclick: async () => { try { await api(`/api/papers/${S.sha}/chat`, { method: "DELETE" }); S.chat = []; renderSide(); } catch (e) { fail(e); } } }) : null);
   const cur = paraOf(S.curPara);
   const scope = h("div", { class: "seg chat-scope", role: "group", "aria-label": "顯示哪些對話" },
     h("button", { type: "button", "aria-pressed": S.chatScope !== "para" ? "true" : "false", onclick: () => { S.chatScope = "all"; renderSide(); } }, "全部"),
     h("button", { type: "button", "aria-pressed": S.chatScope === "para" ? "true" : "false", disabled: !cur, title: cur ? `p.${cur.page} ${cur.text.slice(0, 40)}…` : "先在「段落」選一段", onclick: () => { S.chatScope = "para"; renderSide(); } }, cur ? `這段（p.${cur.page}）` : "這段"));
+  const head = h("div", { class: "pane-head" }, scope, h("span", { style: "flex:1" }),
+    S.chat.length ? h("button", { class: "ico small", "aria-label": "清除全部對話", "data-icon": "trash", onclick: async () => { try { await api(`/api/papers/${S.sha}/chat`, { method: "DELETE" }); S.chat = []; renderSide(); } catch (e) { fail(e); } } }) : null);
   const shown = S.chatScope === "para" && cur ? S.chat.filter((m) => m.paragraph === cur.id) : S.chat;
   const msgs = shown.map((m) => h("div", { class: `msg ${m.role}` },
-    m.role === "user" && m.paragraph ? h("button", { type: "button", class: "para-badge", onclick: () => { S.curPara = m.paragraph; jumpPara(m.paragraph); } }, `段落 p.${paraOf(m.paragraph)?.page ?? "?"}`, m.chip ? [" · 卡住：", chipText(m.chip)] : " · 整段") : null,
+    m.role === "user" && m.paragraph ? h("button", { type: "button", class: "para-badge", onclick: () => { S.curPara = m.paragraph; jumpPara(m.paragraph); } }, `p.${paraOf(m.paragraph)?.page ?? "?"}`, m.chip ? [" · ", chipText(m.chip)] : " · 整段") : null,
     ...(m.attachments ?? []).map((a) => h("span", { class: "att", title: a.context }, `p.${a.page}「${a.text}」`)),
     m.role === "assistant" ? mixed(m.text) : m.text,
-    m.role === "assistant" && m.engine ? h("span", { class: "eng" }, m.engine) : null,
-    m.role === "assistant" && m.paragraph ? answerActions(m) : null,
-    m.pending ? h("span", { class: "eng" }, "Claude 思考中…") : null));
+    m.role === "assistant" && (m.engine || m.paragraph) ? h("div", { class: "eng-row" }, h("span", { class: "eng" }, m.engine ?? ""), m.paragraph ? answerActions(m) : null) : null,
+    m.pending ? h("span", { class: "eng" }, "思考中…") : null));
   const err = S.chatError ? h("div", { class: "err-box" }, S.chatError) : null;
   S.chatError = null;
-  return [head, scope, h("div", { class: "msgs" }, msgs.length ? msgs : [h("p", { class: "empty" }, S.chatScope === "para" ? "這段還沒有對話。在「段落」按「這段我卡住了」或某個標籤的「問 Claude」。" : "選取文字後按右鍵 →「問 Claude」，會附上這段話、頁碼和所在段落；或在「段落」分頁按「這段我卡住了」。")]), err].filter(Boolean);
+  return [head, h("div", { class: "msgs" }, msgs.length ? msgs : [h("p", { class: "empty" }, S.chatScope === "para" ? "這段還沒有對話" : "選取文字 → 右鍵 → 問 Claude")]), err].filter(Boolean);
 }
 
 /** Under an answer about a paragraph: write it back to the symbol table, keep it as
@@ -1627,10 +1668,10 @@ function chatPane() {
 function answerActions(m) {
   const p = paraOf(m.paragraph);
   const syms = p?.chips?.symbols ?? [];
-  return h("div", { class: "ans-acts" },
-    syms.length ? h("button", { type: "button", class: "btn small", onclick: () => writeBackDialog(m, p) }, h("span", { "data-icon": "sigma" }), "寫回符號表") : null,
-    h("button", { type: "button", class: "btn small", onclick: () => saveParaNote(m, p) }, h("span", { "data-icon": "pen" }), "存成這段的註記"),
-    h("button", { type: "button", class: "btn small", onclick: () => addCardDialog({ title: m.chip?.kind === "term" ? (m.chip.label ?? m.chip.id) : "", sha: S.sha, page: p?.page ?? 1, context: p?.text?.slice(0, 600), summary: m.text.slice(0, 300) }) }, h("span", { "data-icon": "book" }), "加入知識庫"));
+  return h("span", { class: "ans-acts" },
+    syms.length ? h("button", { type: "button", class: "ico small", "aria-label": "存進符號表…", "data-icon": "sigma", onclick: () => writeBackDialog(m, p) }) : null,
+    h("button", { type: "button", class: "ico small", "aria-label": "存成註記", "data-icon": "pen", onclick: () => saveParaNote(m, p) }),
+    h("button", { type: "button", class: "ico small", "aria-label": "加入知識庫…", "data-icon": "book", onclick: () => addCardDialog({ title: m.chip?.kind === "term" ? (m.chip.label ?? m.chip.id) : "", sha: S.sha, page: p?.page ?? 1, context: p?.text?.slice(0, 600), summary: m.text.slice(0, 300) }) }));
 }
 
 async function writeBackDialog(m, p) {
@@ -1645,17 +1686,17 @@ async function writeBackDialog(m, p) {
   const paintSeg = () => seg.replaceChildren(...["certain", "defined", "inferred"].map((g) => h("button", { type: "button", "aria-pressed": g === grade ? "true" : "false", onclick: () => { grade = g; paintSeg(); } }, `${GRADE[g][0]} ${GRADE[g][1]}`)));
   paintSeg();
   const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (ev) => { ev.preventDefault(); close(true); } },
-    h("h3", {}, "寫回符號表"),
+    h("h3", {}, "存進符號表"),
     h("label", {}, "符號", sel),
     h("label", {}, "意思", zh),
-    h("div", { style: "display:flex;flex-direction:column;gap:4px" }, h("span", { style: "font-size:12.5px;color:var(--muted)" }, "等級（依據是 Claude 的回答；有引用原文定義句才選 🟢）"), seg),
+    h("div", { style: "display:flex;flex-direction:column;gap:4px" }, h("span", { style: "font-size:12.5px;color:var(--muted)" }, "等級"), seg),
     h("div", { class: "quote-box" }, h("span", { class: "muted" }, "依據："), m.text.slice(0, 400), m.text.length > 400 ? "…" : ""),
-    h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"), h("button", { class: "btn primary" }, "寫回"))));
+    h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"), h("button", { class: "btn primary" }, "儲存"))));
   if (r !== true) return;
   try {
     await api(`/api/papers/${S.sha}/symbols/${encodeURIComponent(pick.id)}`, { method: "PUT", body: { meaning: zh.value, grade, by: "claude", evidence: m.text, page: p.page } });
     setSymbols(await api(`/api/papers/${S.sha}/symbols`));
-    toast(`已寫回 ${pick.latex}（由 Claude 解）`);
+    toast(`已存進符號表：${pick.latex}`);
   } catch (e) { fail(e); }
 }
 
@@ -1663,29 +1704,29 @@ async function saveParaNote(m, p) {
   try {
     const r = await api(`/api/papers/${S.sha}/annotations`, { body: { page: p.page, kind: "note", color: "blue", note: m.text, quote: { exact: p.text.slice(0, 160), prefix: "", suffix: "" }, rects: [], paragraph: p.id, chip: m.chip ?? null } });
     S.annotations.push(r.annotation);
-    toast("已存成這段的註記（「註記」分頁）");
+    toast("已存成註記");
   } catch (e) { fail(e); }
 }
 
 function composer() {
   const ctxChip = S.chatCtx ? (() => {
     const p = paraOf(S.chatCtx.paragraph);
-    return h("span", { class: "attchip ctx", title: "會一起送出：論文標題、章節、這段原文、卡住的點在本篇的定義、你的知識庫狀態" },
-      h("span", {}, `段落 p.${p?.page ?? "?"}`, S.chatCtx.chip ? [" · 卡住：", chipText(S.chatCtx.chip)] : " · 整段所有標籤"),
+    return h("span", { class: "attchip ctx" },
+      h("span", {}, `p.${p?.page ?? "?"}`, S.chatCtx.chip ? [" · ", chipText(S.chatCtx.chip)] : " · 整段"),
       h("button", { class: "ico small", "aria-label": "不附段落", "data-icon": "x", onclick: () => { S.chatCtx = null; renderSide(); } }));
   })() : null;
   const chips = h("div", { class: "chips" }, ctxChip, S.att.map((a, i) => h("span", { class: "attchip", title: a.context }, h("span", {}, `p.${a.page}「${a.text}」`),
-    h("button", { class: "ico small", "aria-label": "移除引文", "data-icon": "x", onclick: () => { S.att.splice(i, 1); renderSide(); } }))));
-  const ta = h("textarea", { id: "chatInput", placeholder: S.att.length || S.chatCtx ? "想問這段什麼？" : "問這篇論文的問題（⌘/Ctrl＋Enter 送出）" });
+    h("button", { class: "ico small", "aria-label": "移除", "data-icon": "x", onclick: () => { S.att.splice(i, 1); renderSide(); } }))));
+  const ta = h("textarea", { id: "chatInput", placeholder: S.att.length || S.chatCtx ? "想問這段什麼？" : "問這篇論文" });
   ta.value = S.chatDraft ?? "";
   ta.addEventListener("input", () => { S.chatDraft = ta.value; });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); } });
-  return h("div", { class: "composer" }, chips, ta, h("div", { class: "row" }, h("button", { class: "btn small primary", disabled: S.sending, onclick: sendChat }, h("span", { "data-icon": "send" }), S.sending ? "等待回覆…" : "送出")));
+  return h("div", { class: "composer" }, chips, ta, h("div", { class: "row" }, h("button", { class: "btn small primary", disabled: S.sending, title: "⌘/Ctrl＋Enter", onclick: sendChat }, h("span", { "data-icon": "send" }), S.sending ? "等待回覆…" : "送出")));
 }
 
 // ── print ─────────────────────────────────────────────────────────────────
 async function print() {
-  if (S.arr) { toast("頁面有未儲存的變更：先「另存新檔」再列印", true); return; }
+  if (S.arr) { toast("先另存再列印", true); return; }
   try {
     const r = await api("/api/print", { body: { sha: S.sha } });
     if (r.native) { toast("正在準備列印…"); return; }
@@ -1726,6 +1767,7 @@ function wire() {
   $("#pgDel").onclick = delPage;
   $("#pgInsert").onclick = () => insertDialog().catch(fail);
   $("#editSave").onclick = saveArrangement;
+  $("#editChip").onclick = () => togglePanel("sorter", true);
   $("#editDiscard").onclick = () => setArrangement(S.orig.map((r) => ({ ...r })), 0);
   $("#toggleThumbs").onclick = () => togglePanel("sorter");
   $("#toggleSide").onclick = () => togglePanel("side");

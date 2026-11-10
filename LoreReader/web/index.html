@@ -20,7 +20,7 @@
     <button class="ico rd-only narrow-only" id="toggleThumbs" data-icon="cards" aria-label="頁面縮圖" aria-pressed="false"></button>
     <div class="brand">LORE<b>/</b>READER</div>
     <span class="papername" id="paperName"></span>
-    <span class="chip warn rd-only" id="editChip" hidden>頁面已變更（未儲存）</span>
+    <button class="chip warn rd-only" id="editChip" hidden title="頁面有變更：在縮圖欄另存">未儲存</button>
     <div class="top-right">
       <span class="rd-only top-group">
         <button class="ico" id="actPrev" data-icon="back" aria-label="上一頁"></button>
@@ -44,31 +44,27 @@
       <span data-icon="search"></span>
       <input id="searchInput" type="search" placeholder="搜尋全文" aria-label="搜尋全文">
     </span>
-    <button class="ico" id="searchPrev" data-icon="up" aria-label="上一個符合"></button>
-    <button class="ico" id="searchNext" data-icon="chevron" aria-label="下一個符合"></button>
+    <button class="ico" id="searchPrev" data-icon="up" aria-label="上一個"></button>
+    <button class="ico" id="searchNext" data-icon="chevron" aria-label="下一個"></button>
     <span class="count" id="searchCount"></span>
     <span class="sep"></span>
-    <button class="ico" id="actTerms" data-icon="target" aria-label="知識標示：沒有卡片的術語標紅" aria-pressed="false"></button>
-    <span class="legend" id="legend" hidden>
-      <span class="lg"><i class="kt-new"></i>術語、沒有卡片</span>
-      <span class="lg"><i class="kt-learn"></i>學習中／久未複習</span>
-      <span class="lg"><i class="kt-known"></i>記得</span>
-      <span class="lg muted" id="kbNote"></span>
-    </span>
-    <button class="ico" id="actModels" data-icon="spark" aria-label="模型（每個工作選地端或 Claude）"></button>
-    <span class="sep"></span>
-    <span class="lbl">頁面</span>
-    <button class="ico" id="pgDup" data-icon="dup" aria-label="複製這一頁"></button>
-    <button class="ico" id="pgDel" data-icon="trash" aria-label="刪除這一頁"></button>
-    <button class="ico" id="pgInsert" data-icon="insert" aria-label="從其他 PDF 插入頁面…"></button>
-    <span class="edit-actions" id="editActions" hidden>
-      <button class="btn small primary" id="editSave"><span data-icon="save"></span>另存新檔</button>
-      <button class="btn small" id="editDiscard">放棄變更</button>
-    </span>
+    <button class="ico" id="actTerms" data-icon="target" aria-label="標示名詞（紅：要學 · 黃：學習中 · 綠：記得）" aria-pressed="false"></button>
+    <button class="ico" id="actModels" data-icon="spark" aria-label="模型"></button>
   </nav>
 
   <aside class="sorter rd-only" id="sorter" aria-label="頁面縮圖">
-    <div class="sorter-head"><span id="thumbCount"></span><span class="muted hint-drag">拖曳可調整順序</span></div>
+    <div class="sorter-head">
+      <span id="thumbCount"></span>
+      <span class="sorter-acts">
+        <button class="ico small" id="pgDup" data-icon="dup" aria-label="複製這一頁"></button>
+        <button class="ico small" id="pgDel" data-icon="trash" aria-label="刪除這一頁"></button>
+        <button class="ico small" id="pgInsert" data-icon="insert" aria-label="插入頁面…"></button>
+      </span>
+    </div>
+    <div class="edit-actions" id="editActions" hidden>
+      <button class="btn small primary" id="editSave"><span data-icon="save"></span>另存…</button>
+      <button class="btn small" id="editDiscard">放棄變更</button>
+    </div>
     <div id="thumbs"></div>
   </aside>
 
@@ -92,13 +88,12 @@
 <section class="home" id="home">
   <div class="home-head">
     <h2>書庫</h2>
-    <label class="btn primary"><span data-icon="upload"></span>開啟 PDF<input type="file" id="openFile" accept="application/pdf,.pdf" multiple hidden></label>
+    <label class="btn primary"><span data-icon="upload"></span>加入 PDF<input type="file" id="openFile" accept="application/pdf,.pdf" multiple hidden></label>
     <button class="btn" id="actMerge"><span data-icon="layers"></span>合併 PDF…</button>
   </div>
   <div class="warn-box" id="libError" hidden></div>
   <div class="cards" id="paperList"></div>
-  <form id="pathForm" class="pathform"><input id="pathInput" placeholder="或輸入本機 PDF 路徑（會複製進書庫）"> <button class="btn">加入</button></form>
-  <p class="muted mono" id="libInfo"></p>
+  <form id="pathForm" class="pathform"><input id="pathInput" placeholder="或貼上 PDF 路徑"> <button class="btn">加入</button></form>
 </section>
 
 <div class="menu" id="ctxMenu" role="menu" hidden></div>
