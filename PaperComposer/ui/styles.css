@@ -1275,7 +1275,29 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .open-conflict > span { flex: 1; min-width: 0; }
 .open-conflict button { white-space: nowrap; }
 
-@media (max-width: 1100px) { .home { padding: 24px 20px 48px; } }
+/* the start panel: one centred card on the dotted stage, numbered sections (SlideComposer's start screen) */
+.home { display: block; padding: 32px 24px 48px; background-color: var(--bg); background-image: radial-gradient(var(--dot) 1px, transparent 1px); background-size: 16px 16px; }
+.home-inner { max-width: 720px; margin: 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.home-inner.wide { max-width: 1180px; }
+.home-block + .home-block { border-top: 1px solid var(--line); padding-top: 14px; }
+.home-bh { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.home-bh .n { font: 600 11px var(--mono); color: var(--accent-text, var(--accent)); }
+.home-bh h3 { margin: 0; font: 700 13px var(--sans); color: var(--accent-text, var(--accent)); }
+.home-grid.modes { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; }
+.modes .home-card { height: 104px; align-items: center; justify-content: center; gap: 10px; padding: 0 8px; background: var(--surface); border-radius: 8px; }
+.modes .home-card:hover:not(:disabled), .modes .home-card:focus-visible { background: var(--surface-hover, var(--surface)); border-color: var(--line-strong); }
+.modes .home-card:disabled { opacity: .35; }
+.modes .home-art, :root[data-mode="light"] .modes .home-art { aspect-ratio: auto; background: none; border: 0; border-radius: 0; color: var(--muted); overflow: visible; }
+.modes .home-art svg.i { width: 26px; height: 26px; stroke-width: 1.5; opacity: 1; }
+.modes .home-card:hover:not(:disabled) .home-art { color: var(--accent-text, var(--accent)); }
+.modes .home-label { font: 600 13px var(--sans); }
+.home-inner .home-head h2 { font: 700 15px/1.2 var(--sans); }
+.home-inner .open-recent { margin: 0; max-width: none; }
+.home-inner .open-recent ul { max-width: none; }
+.home-inner .home-sub { margin-top: 0; }
+.home-grid.papers:empty { display: none; }
+
+@media (max-width: 1100px) { .home { padding: 16px; } }
 @media (max-width: 640px) {
   .home-grid.modes { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .home-head { flex-wrap: wrap; }

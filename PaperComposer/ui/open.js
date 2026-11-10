@@ -177,7 +177,6 @@ const PCOpen = (() => {
     const items = await recent();
     const box = el("div", "open-recent");
     if (!items.length) return box;
-    box.append(el("div", "home-sub", "最近開啟"));
     const ul = el("ul");
     for (const it of items) {
       const li = el("li");

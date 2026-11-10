@@ -51,6 +51,15 @@ const PCHome = (() => {
     return b;
   }
 
+  /** A numbered section of the start panel (same as SlideComposer's 01 開始 / 02 最近). */
+  function block(n, title, body) {
+    const b = el("section", "home-block");
+    const h = el("div", "home-bh");
+    h.append(el("span", "n", n), el("h3", "", title));
+    b.append(h, body);
+    return b;
+  }
+
   function iconArt(name) {
     const a = el("div", "home-art");
     a.append(icon(name));
@@ -58,10 +67,11 @@ const PCHome = (() => {
   }
 
   async function draw(focus) {
-    const box = root();
+    let box = root();
     box.innerHTML = "";
     box.dataset.level = level;
     if (level === 1) {
+      const inner = el("div", "home-inner");
       const grid = el("div", "home-grid modes");
       MODES.forEach((m) => {
         const c = card(iconArt(m.icon), m.label, m.onOpen, m.enabled);
@@ -69,16 +79,18 @@ const PCHome = (() => {
         c.dataset.opensMenu = ""; // a mode may open a form in the paper menu
         grid.append(c);
       });
-      const head = el("div", "home-head");
-      head.append(el("h2", "", "我要做什麼"));
-      box.append(head, grid);
+      inner.append(block("01", "開始", grid));
+      box.append(inner);
       if (focus) grid.querySelector(".home-card:not(:disabled)")?.focus();
-      // 最近開啟: folders opened where they are (open.js)
+      // 最近: folders opened where they are (open.js)
       const recent = await PCOpen.recentList();
-      if (grid.isConnected && level === 1) box.append(recent);
+      if (grid.isConnected && level === 1 && recent.childElementCount) inner.append(block("02", "最近", recent));
       return;
     }
 
+    const inner = el("div", "home-inner wide");
+    box.append(inner);
+    box = inner;
     const head = el("div", "home-head");
     const back = iconButton("back", "返回", () => show(1));
     const add = el("button", "primary small", "＋ 新論文");
