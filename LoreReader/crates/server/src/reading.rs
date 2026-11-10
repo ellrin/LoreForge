@@ -363,7 +363,7 @@ pub async fn symbol_add(State(s): State<Shared>, Path(sha): Path<String>, Json(p
     Ok((StatusCode::CREATED, Json(json!({ "entry": e }))))
 }
 
-const GLYPHS_TEMPLATE: &str = "# 你自己的字形 → LaTeX 對照（蓋過內建的；格式同 LoreReader/crates/core/src/glyphs.toml）。\n# 例：\n# [glyphs]\n# \"ε\" = \"\\\\epsilon\"\n# [fonts]\n# math = [\"MyMathFont\"]\n";
+const GLYPHS_TEMPLATE: &str = "# 只寫要覆蓋的條目。例：\n# [glyphs]\n# \"ε\" = \"\\\\epsilon\"\n# [fonts]\n# math = [\"MyMathFont\"]\n";
 
 pub async fn glyphs_get(State(s): State<Shared>) -> R {
     let p = s.workspace.join(GLYPHS_FILE);

@@ -338,7 +338,7 @@ dialog .quote-box { font-size: 13px; background: var(--surface); border-left: 3p
 .sym-mean { overflow-wrap: anywhere; line-height: 1.5; }
 .sym-quote { font-size: 12px; color: var(--muted); border-left: 2px solid var(--accent-text); padding-left: 6px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; line-height: 1.5; }
 .sym-note { font-size: 12px; color: var(--accent-text); }
-.sym-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font: 500 11px var(--mono); color: var(--faint); }
+.sym-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font: 500 11.5px var(--mono); color: var(--muted); }
 .pg-chip { font: 500 11px var(--mono); color: var(--accent-text); background: none; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 5px; }
 .pg-chip:hover { border-color: var(--accent-text); }
 .pg-chip.eq { font-family: var(--sans); }
@@ -407,9 +407,9 @@ button.chip.warn { cursor: pointer; }
 .sym-total { font-size: 12.5px; font-weight: 600; margin-right: 4px; }
 .sym-item.one { padding: 3px 8px; }
 .sym-item.one .sym-latex { font-size: 14px; }
-.sym-more { background: none; border: 0; padding: 0 4px; font: 500 11px var(--mono); color: var(--faint); }
+.sym-more { background: none; border: 0; padding: 0 4px; font: 500 11.5px var(--mono); color: var(--muted); }
 .sym-more:hover { color: var(--accent-text); }
-.pg-link { background: none; border: 0; padding: 0 2px; font: 500 11px var(--mono); color: var(--faint); }
+.pg-link { background: none; border: 0; padding: 0 2px; font: 500 11.5px var(--mono); color: var(--muted); }
 .pg-link:hover { color: var(--accent-text); text-decoration: underline; }
 .sym-meta { max-height: 1.6em; overflow: hidden; }
 .sym-none { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; border-top: 1px solid var(--line); padding-top: 6px; }
@@ -422,7 +422,7 @@ button.chip.warn { cursor: pointer; }
 .composer { padding-bottom: 14px; }
 .role { color: var(--muted); border-color: var(--line-strong); font-weight: 500; }
 .chip-b, .chip-b.term, .chip-b.eq { border-color: var(--line-strong); color: var(--text); }
-.para-chips.folded { max-height: 52px; overflow: hidden; }
+
 .chip-more { align-self: flex-start; background: none; border: 0; padding: 0; font: 500 11.5px var(--sans); color: var(--accent-text); }
 .para.one { flex-direction: row; align-items: center; gap: 6px; padding: 4px 8px; text-align: left; color: var(--text); opacity: .75; width: 100%; }
 .para.one:hover { opacity: 1; }
@@ -431,6 +431,6 @@ button.chip.warn { cursor: pointer; }
 .ok-btn { margin-left: auto; color: var(--ok); font-size: 13px; }
 .btn.ghost-muted { background: none; color: var(--muted); }
 .para.done { opacity: 1; }
-.para-chips.folded { max-height: 48px; }
 .nn-row.on .nn-num { visibility: hidden; }
 .nn-row.on .nn-acts { background: var(--panel); }
+.para-chips .chip-b[hidden] { display: none !important; }

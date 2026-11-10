@@ -1063,7 +1063,7 @@ async function glyphDialog() {
   const ta = h("textarea", { class: "mono", style: "min-height:220px", spellcheck: "false" }, g.text);
   const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (ev) => { ev.preventDefault(); close(true); } },
     h("h3", {}, "字形對照表"),
-    h("p", { class: "muted", style: "margin:0;font-size:12.5px" }, "PDF 字元 → LaTeX，只寫要覆蓋的。"),
+    h("p", { class: "muted", style: "margin:0;font-size:12.5px" }, "PDF 字元 → LaTeX"),
     g.errors?.length ? h("div", { class: "warn-box" }, g.errors.join("；")) : null,
     ta,
     h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"), h("button", { class: "btn primary" }, "儲存"))));
@@ -1445,14 +1445,28 @@ function parasPane() {
   return out;
 }
 
-/** Chips beyond two lines are folded behind "＋N". */
+/** Chips beyond two lines are folded behind "＋N": the overflow chips get `hidden`
+ *  (not clipped), rows are measured with getBoundingClientRect relative to the box.
+ *  Runs again when the drawer opens or the window resizes (a hidden panel has no size). */
 function foldChips() {
   for (const box of $$(".para-chips.folded")) {
     const more = box.nextElementSibling;
     if (!more?.classList.contains("chip-more")) continue;
-    const hidden = [...box.children].filter((c) => c.offsetTop >= box.clientHeight + box.offsetTop - 2 || c.offsetTop - box.offsetTop >= box.clientHeight).length;
-    more.hidden = hidden === 0;
-    more.textContent = `＋${hidden}`;
+    const chips = [...box.children];
+    chips.forEach((c) => { c.hidden = false; });
+    if (!box.getBoundingClientRect().width) continue;
+    const top0 = box.getBoundingClientRect().top;
+    const rows = [];
+    for (const c of chips) {
+      const t = Math.round(c.getBoundingClientRect().top - top0);
+      if (!rows.some((r) => Math.abs(r - t) < 4)) rows.push(t);
+    }
+    rows.sort((x, y) => x - y);
+    const limit = rows[2];
+    let n = 0;
+    if (limit != null) for (const c of chips) if (c.getBoundingClientRect().top - top0 >= limit - 3) { c.hidden = true; n++; }
+    more.hidden = n === 0;
+    more.textContent = `＋${n}`;
   }
 }
 
@@ -1743,6 +1757,7 @@ function togglePanel(which, force) {
   app.classList.toggle(cls, on);
   if (on) app.classList.remove(which === "sorter" ? "show-side" : "show-sorter");
   $("#toggleThumbs").setAttribute("aria-pressed", app.classList.contains("show-sorter"));
+  if (on && which === "side") requestAnimationFrame(foldChips);
   $("#toggleSide").setAttribute("aria-pressed", app.classList.contains("show-side"));
 }
 
@@ -1792,7 +1807,7 @@ function wire() {
     if ((e.metaKey || e.ctrlKey) && e.key === "f" && S.sha) { e.preventDefault(); $("#searchInput").focus(); $("#searchInput").select(); }
   });
   let rt;
-  addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { if (S.sha && S.fit) setZoom(fitZoom(), true); }, 150); });
+  addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { if (S.sha && S.fit) setZoom(fitZoom(), true); if (S.tab === "paras") foldChips(); }, 150); });
   addEventListener("popstate", route);
   // Drop PDFs anywhere to add them.
   document.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
