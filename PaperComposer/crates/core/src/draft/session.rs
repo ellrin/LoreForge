@@ -13,6 +13,7 @@
 
 use super::lens::{Graded, Lens, Missing};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const DRAFT_DIR: &str = "draft";
@@ -341,6 +342,9 @@ pub struct DraftSection {
     /// Symbols the drafts use that the notation registry does not have.
     #[serde(default)]
     pub new_symbols: Vec<String>,
+    /// The engine that wrote it (`本機`, `Claude`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub engine: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -403,6 +407,32 @@ pub struct Session {
     /// 修訂 requests on the existing paper.
     #[serde(default)]
     pub revisions: Vec<super::revise::Revision>,
+    /// Which engine produced each step's result (`record`, `plan`, `claims`,
+    /// `review`, `outline`, `audit`), shown next to the step's button.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub engines: BTreeMap<String, EngineUsed>,
+}
+
+/// The engine that ran a step: a short label (`Opus`, `Sonnet`, `本機`) and,
+/// when it was not the first choice, why (for a tooltip).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct EngineUsed {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+/// The phase a step key in [`Session::engines`] belongs to.
+pub fn engine_step_phase(step: &str) -> Phase {
+    match step {
+        "record" => Phase::Record,
+        "plan" => Phase::Plan,
+        "claims" => Phase::Claims,
+        "review" => Phase::Review,
+        "outline" => Phase::Outline,
+        "draft" => Phase::Draft,
+        _ => Phase::Audit,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -420,6 +450,9 @@ pub struct Turn {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+    /// The engine that asked (AI turns), e.g. `Haiku`, `本機`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub engine: String,
 }
 
 /// Changes the model proposes for one item (by id, or a new one by label).
@@ -693,6 +726,7 @@ impl Session {
         if to < Phase::Audit {
             self.audit.clear();
         }
+        self.engines.retain(|k, _| engine_step_phase(k) <= to);
         self.phase = to;
         let groups = before.into_iter().filter(|g| all_turns || !keep.contains(g)).collect();
         RewindGone { all_turns, groups }
@@ -784,11 +818,16 @@ pub fn rewind(paper: &Path, to: Phase) -> Result<Session, String> {
 
 /// Append one turn to the transcript; its number is the line count + 1.
 pub fn append_turn(paper: &Path, group: &str, who: Who, text: &str, options: Vec<String>) -> Result<Turn, String> {
+    append_turn_by(paper, group, who, text, options, "")
+}
+
+/// [`append_turn`] noting the engine that wrote it.
+pub fn append_turn_by(paper: &Path, group: &str, who: Who, text: &str, options: Vec<String>, engine: &str) -> Result<Turn, String> {
     let dir = draft_dir(paper);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // after the max, not the count: a rewind may have dropped turns in between
     let n = read_turns(paper).iter().map(|t| t.n).max().unwrap_or(0) + 1;
-    let t = Turn { n, group: group.into(), who, text: text.into(), options };
+    let t = Turn { n, group: group.into(), who, text: text.into(), options, engine: engine.into() };
     let mut line = serde_json::to_string(&t).map_err(|e| e.to_string())?;
     line.push('\n');
     use std::io::Write;
@@ -1021,7 +1060,7 @@ max_turns_per_group = 2
         s.claims.push(Claim { id: "c1".into(), zh: "主張".into(), ..Default::default() });
         s.review = Some(Review::default());
         s.outline.push(OutlineSection { section: "Methods".into(), paras: vec![OutlinePara { id: "p1".into(), zh: "x".into(), ..Default::default() }], ..Default::default() });
-        s.drafts.push(DraftSection { section: "Methods".into(), paras: vec![], new_symbols: vec![] });
+        s.drafts.push(DraftSection { section: "Methods".into(), paras: vec![], new_symbols: vec![], engine: String::new() });
         s.audit.push(Finding { id: "f1".into(), kind: "generic".into(), why: "w".into(), ..Default::default() });
         for gid in ["af1", "v1"] {
             s.groups.push(Group { id: gid.into(), section: "Results".into(), title: gid.into(), ..Default::default() });
@@ -1111,5 +1150,17 @@ max_turns_per_group = 2
         assert!(text.contains("run 1") && text.contains("=== exp-log-2.md ==="));
         assert!(records_text(&p, &[RecordFile { file: "exp-log.md".into(), bytes: 0 }], 5).contains("truncated"));
         let _ = std::fs::remove_dir_all(&p);
+    }
+
+    #[test]
+    fn rewinding_forgets_the_engines_of_later_steps() {
+        let mut s = Session::default();
+        for k in ["record", "plan", "claims", "outline", "audit"] {
+            s.engines.insert(k.into(), EngineUsed { label: "本機".into(), note: String::new() });
+        }
+        s.rewind(Phase::Plan);
+        assert_eq!(s.engines.keys().map(String::as_str).collect::<Vec<_>>(), ["plan", "record"]);
+        let json = serde_json::to_string(&Session::default()).unwrap();
+        assert!(!json.contains("engines"), "nothing written until a step has run");
     }
 }

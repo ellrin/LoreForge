@@ -4,6 +4,12 @@
 //! Model calls run without holding the lock; the session is re-read after the
 //! call and the result applied to the fresh copy, so a slow model never
 //! blocks the window or loses an edit made meanwhile.
+//!
+//! Each step runs on Claude when it is available and on the local model
+//! otherwise ([`engine`]); the engine that ran is kept in the session and
+//! shown next to the step.
+
+mod engine;
 
 use super::*;
 use pc_core::draft::lens::Lens;
@@ -17,8 +23,6 @@ use pc_core::draft::venue;
 /// Serialises read-modify-write of draft sessions.
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Record text sent to the model is cut here.
-const RECORD_MAX_CHARS: usize = 120_000;
 
 pub fn routes() -> Router<Shared> {
     Router::new()
@@ -139,27 +143,12 @@ async fn get_draft(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
     tri!(view(&c, &sess))
 }
 
-/// Run a model task, retrying once when the reply cannot be parsed.
-async fn ask_model<T>(s: &Shared, task: &str, model_ref: Option<&str>, prompt: &Prompt, schema: serde_json::Value, parse: impl Fn(&str) -> Result<T, String>) -> Result<T, Resp> {
-    let mut extra = None;
-    let mut last = String::new();
-    for _ in 0..2 {
-        let reply = match model_ref {
-            Some(r) => s.llm.complete_on(task, r, prompt, extra, Some(schema.clone())).await,
-            None => s.llm.complete(task, None, prompt, extra, Some(schema.clone())).await,
-        };
-        match reply {
-            Ok(r) => match parse(&r) {
-                Ok(v) => return Ok(v),
-                Err(e) => {
-                    last = e;
-                    extra = Some("Reply with the JSON object only, in the shape given.");
-                }
-            },
-            Err(e) => return Err(bad(&e)),
-        }
-    }
-    Err(bad(&last))
+/// The app's engines for the draft steps, with the task table as it is now
+/// (the user's tasks.toml included).
+fn engines(s: &Shared) -> engine::Live<'_> {
+    let user = config_path().map(|p| p.with_file_name("tasks.toml"));
+    let table = Llm::task_table(user.as_deref()).or_else(|_| Llm::task_table(None)).unwrap_or_default();
+    engine::Live { llm: &s.llm, table }
 }
 
 // ── Step 1 ──────────────────────────────────────────────
@@ -307,12 +296,12 @@ async fn run_record(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
         return bad("先上傳實驗記錄");
     }
     let lens = tri!(lens_for(&c.ws, &sess));
-    let text = ds::records_text(&c.dir, &sess.records, RECORD_MAX_CHARS);
+    let text = ds::records_text(&c.dir, &sess.records, usize::MAX);
     let (_, mtext) = material_of(&c);
-    let prompt = dp::record_prompt(&c.key_value, &lens, &text, &mtext);
-    let r = tri!(ask_model(&s, "pc-draft-record", None, &prompt, dp::record_schema(), |x| dp::parse_record(x, &lens)).await);
+    let (r, used) = tri!(engine::record(&engines(&s), &c.key_value, &lens, &text, &mtext).await.map_err(|e| bad(&e)));
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
+    sess.engines.insert("record".into(), used);
     sess.record_summary = r.summary;
     sess.experiments = r.experiments;
     sess.timeline = r.timeline;
@@ -364,13 +353,13 @@ async fn run_plan(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp
     let sess = tri!(load(&c.dir));
     let lens = tri!(lens_for(&c.ws, &sess));
     let (_, mtext) = material_of(&c);
-    let prompt = dp::plan_prompt(&c.key_value, &sess, &lens, &style_text(&c.ws), &mtext);
-    let groups = tri!(ask_model(&s, "pc-draft-plan", None, &prompt, dp::plan_schema(), |x| dp::parse_plan(x, &lens)).await);
+    let (groups, used) = tri!(engine::plan(&engines(&s), &c.key_value, &sess, &lens, &style_text(&c.ws), &mtext).await.map_err(|e| bad(&e)));
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     if sess.groups.iter().any(|g| g.turns > 0) {
         return bad("已經開始對話了；要重新規劃請先在題組清單裡調整");
     }
+    sess.engines.insert("plan".into(), used);
     sess.set_plan(groups);
     if sess.phase < Phase::Interview {
         sess.phase = Phase::Interview;
@@ -493,7 +482,7 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
         tri!(save(&c.dir, &sess));
         (prompt, lens)
     };
-    let r = tri!(ask_model(&s, "pc-draft-turn", mref.as_deref(), &prompt, dp::turn_schema(), dp::parse_turn).await);
+    let (r, used) = tri!(engine::turn(&engines(&s), mref.as_deref(), &prompt).await.map_err(|e| bad(&e)));
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     let known = ref_keys(&mat);
@@ -514,7 +503,7 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
     }
     let say = [r.reply.trim(), r.question.trim()].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join("\n");
     if !say.is_empty() {
-        if let Err(e) = ds::append_turn(&c.dir, &b.group, Who::Ai, &say, r.options) {
+        if let Err(e) = ds::append_turn_by(&c.dir, &b.group, Who::Ai, &say, r.options, &used.label) {
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
     }
@@ -557,8 +546,7 @@ async fn run_claims(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
     let sess = tri!(load(&c.dir));
     let lens = tri!(lens_for(&c.ws, &sess));
     let (mat, mtext) = material_of(&c);
-    let prompt = dp::claims_prompt(&c.key_value, &sess, &lens, &mtext);
-    let mut claims = tri!(ask_model(&s, "pc-draft-claims", None, &prompt, dp::claims_schema(), dp::parse_claims).await);
+    let (mut claims, used) = tri!(engine::claims(&engines(&s), &c.key_value, &sess, &lens, &mtext).await.map_err(|e| bad(&e)));
     let known = ref_keys(&mat);
     for c in &mut claims {
         c.refs.retain(|k| known.contains(k));
@@ -566,6 +554,7 @@ async fn run_claims(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     sess.claims = claims;
+    sess.engines.insert("claims".into(), used);
     if sess.phase < Phase::Review {
         sess.phase = Phase::Review;
     }
@@ -599,11 +588,11 @@ async fn run_review(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
     let c = tri!(ctx(&s, &name).await);
     let sess = tri!(load(&c.dir));
     let lens = tri!(lens_for(&c.ws, &sess));
-    let prompt = dp::review_prompt(&c.key_value, &sess, &lens);
-    let review = tri!(ask_model(&s, "pc-draft-review", None, &prompt, dp::review_schema(), dp::parse_review).await);
+    let (review, used) = tri!(engine::review(&engines(&s), &c.key_value, &sess, &lens).await.map_err(|e| bad(&e)));
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     sess.review = Some(review);
+    sess.engines.insert("review".into(), used);
     if sess.phase < Phase::Template {
         sess.phase = Phase::Template;
     }
@@ -747,8 +736,7 @@ async fn run_outline(State(s): State<Shared>, AxPath(name): AxPath<String>, body
         _ => None,
     };
     let (mat, mtext) = material_of(&c);
-    let prompt = dp::outline_prompt(&c.key_value, &sess, &lens, &style_text(&c.ws), only, &mtext);
-    let mut new = tri!(ask_model(&s, "pc-draft-outline", None, &prompt, dp::outline_schema(), dp::parse_outline).await);
+    let (mut new, used) = tri!(engine::outline(&engines(&s), &c.key_value, &sess, &lens, &style_text(&c.ws), only, &mtext).await.map_err(|e| bad(&e)));
     let known = ref_keys(&mat);
     for p in new.iter_mut().flat_map(|o| o.paras.iter_mut()) {
         p.cites.retain(|k| known.contains(k));
@@ -762,6 +750,7 @@ async fn run_outline(State(s): State<Shared>, AxPath(name): AxPath<String>, body
             dp::number_paras(&mut sess.outline);
         }
     }
+    sess.engines.insert("outline".into(), used);
     if sess.phase < Phase::Outline {
         sess.phase = Phase::Outline;
     }
@@ -897,7 +886,12 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
     sess.drafts.retain(|d| d.section != b.section);
     new_symbols.sort();
     new_symbols.dedup();
-    sess.drafts.push(ds::DraftSection { section: b.section.clone(), paras: out, new_symbols });
+    let engine = match resolve_engine(&s, b.engine).await {
+        Some(EngineChoice::Local) => "本機".to_string(),
+        Some(_) => pc_core::draft::fallback::engine_label(&format!("claude:{}", s.llm.model())),
+        None => String::new(),
+    };
+    sess.drafts.push(ds::DraftSection { section: b.section.clone(), paras: out, new_symbols, engine });
     sess.drafts.sort_by_key(|d| ds::SECTIONS.iter().position(|x| *x == d.section));
     if sess.phase < Phase::Draft {
         sess.phase = Phase::Draft;
@@ -916,11 +910,11 @@ async fn run_audit(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
     }
     let lens = tri!(lens_for(&c.ws, &sess));
     let (_, mtext) = material_of(&c);
-    let prompt = dp::audit_prompt(&c.key_value, &sess, &lens, &style_text(&c.ws), &mtext);
-    let findings = tri!(ask_model(&s, "pc-draft-audit", None, &prompt, dp::audit_schema(), dp::parse_audit).await);
+    let (findings, used) = tri!(engine::audit(&engines(&s), &c.key_value, &sess, &lens, &style_text(&c.ws), &mtext).await.map_err(|e| bad(&e)));
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     sess.audit = findings;
+    sess.engines.insert("audit".into(), used);
     sess.phase = Phase::Audit;
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
@@ -1083,9 +1077,8 @@ async fn plan_revision(State(s): State<Shared>, AxPath((name, id)): AxPath<(Stri
         .join("\n");
     let summary = sess.group(&r.group).map(|g| format!("\nSummary: {} / {} / {}", g.summary.explain, g.summary.motive, g.summary.conclusion)).unwrap_or_default();
     let (_, mtext) = material_of(&c);
-    let prompt = rv::plan_prompt(&c.key_value, &sess, &r, &c.dir, &mtext, &style_text(&c.ws), &(conversation + &summary));
-    let dir = c.dir.clone();
-    let mut plan = tri!(ask_model(&s, "pc-draft-revise", None, &prompt, rv::plan_schema(), |x| rv::parse_plan(x, &dir)).await);
+    let (mut plan, used) = tri!(engine::revise(&engines(&s), &c.key_value, &sess, &r, &c.dir, &mtext, &style_text(&c.ws), &(conversation + &summary)).await.map_err(|e| bad(&e)));
+    plan.engine = used.label;
     // The registry's checks on every change; findings join the effects.
     let notation = crate::notation::load(&c.ws, &c.dir);
     let check_opt = crate::notation::options(&c.ws, &c.dir);
@@ -1285,9 +1278,9 @@ mod tests {
         assert_eq!(t.task["pc-draft-turn"].default, "claude:haiku");
         assert_eq!(t.task["pc-draft-turn"].fallback.as_deref(), Some("local:current"));
         assert_eq!(t.task["pc-draft-audit"].default, "claude:opus");
+        assert_eq!(t.task["pc-draft-audit"].fallback.as_deref(), Some("local:current"), "without Claude the reviewer pass runs locally");
         assert_eq!(t.task["pc-draft-record"].default, "claude:opus", "reading tables out of a record is Opus work");
         assert_eq!(t.task["pc-draft-revise"].default, "claude:opus", "editing an existing paper is Opus work");
-        assert!(t.task["pc-draft-audit"].fallback.is_none(), "the reviewer pass never falls back");
         for id in ["pc-draft-plan", "pc-draft-claims", "pc-draft-review", "pc-draft-outline"] {
             assert_eq!(t.task[id].default, "claude:sonnet", "{id}");
         }

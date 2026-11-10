@@ -621,6 +621,38 @@ not in the paper's reference list.\n\
 10. Do not invent results, numbers or citations.";
 
 pub fn outline_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str, only: Option<(&str, &str)>, material: &str) -> Prompt {
+    let ask = match only {
+        Some((section, comment)) => {
+            let current = s.outline.iter().filter(|o| o.section == section).map(|o| serde_json::to_string(o).unwrap_or_default()).collect::<Vec<_>>().join("\n");
+            format!(
+                "\n## Revise only the section {section}\nCurrent outline of it:\n{current}\nThe author's comment: {comment}\nReturn only this section (it may hold several subsections)."
+            )
+        }
+        None => format!("\nOutline all sections: {}.", SECTIONS.join(", ")),
+    };
+    outline_prompt_asking(key_value, s, lens, style, material, &ask)
+}
+
+/// One section's outline from scratch (a small model outlines the paper a
+/// section at a time; [`merge_outline_parts`] puts them together).
+pub fn outline_section_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str, section: &str, material: &str) -> Prompt {
+    let ask = format!("\nOutline only the section {section} now (the other sections are outlined separately). Return only this section (it may hold several subsections).");
+    outline_prompt_asking(key_value, s, lens, style, material, &ask)
+}
+
+/// Section-by-section outlines in paper order, each part kept to its own
+/// section, paragraphs numbered.
+pub fn merge_outline_parts(parts: Vec<(&str, Vec<OutlineSection>)>) -> Vec<OutlineSection> {
+    let mut out: Vec<OutlineSection> = vec![];
+    for (section, part) in parts {
+        out.extend(part.into_iter().filter(|o| o.section == section));
+    }
+    out.sort_by_key(|o| SECTIONS.iter().position(|x| *x == o.section));
+    number_paras(&mut out);
+    out
+}
+
+fn outline_prompt_asking(key_value: &str, s: &Session, lens: &Lens, style: &str, material: &str, ask: &str) -> Prompt {
     let system = format!("You outline a paper from its interview ledger, claim register and review.\n{OUTLINE_RULES}\n{TW} Reply with JSON only.");
     let mut user = context(key_value, s, material);
     user += "\n";
@@ -646,15 +678,7 @@ pub fn outline_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str, on
         user += "\n## The author's style\n";
         user += style;
     }
-    match only {
-        Some((section, comment)) => {
-            let current = s.outline.iter().filter(|o| o.section == section).map(|o| serde_json::to_string(o).unwrap_or_default()).collect::<Vec<_>>().join("\n");
-            user += &format!(
-                "\n## Revise only the section {section}\nCurrent outline of it:\n{current}\nThe author's comment: {comment}\nReturn only this section (it may hold several subsections)."
-            );
-        }
-        None => user += &format!("\nOutline all sections: {}.", SECTIONS.join(", ")),
-    }
+    user += ask;
     Prompt { system, user }
 }
 
@@ -680,7 +704,20 @@ struct RawPara {
 
 /// Sections in paper order, paragraph ids p1, p2, … across the outline.
 pub fn parse_outline(reply: &str) -> Result<Vec<OutlineSection>, String> {
-    let r: OutlineReply = json_in(reply)?;
+    parse_outline_in(reply, None)
+}
+
+/// [`parse_outline`] for a reply asked for one section only: every part is
+/// that section, whatever the model called it.
+pub fn parse_outline_section(reply: &str, section: &str) -> Result<Vec<OutlineSection>, String> {
+    parse_outline_in(reply, Some(section))
+}
+
+fn parse_outline_in(reply: &str, only: Option<&str>) -> Result<Vec<OutlineSection>, String> {
+    let mut r: OutlineReply = json_in(reply)?;
+    if let Some(sec) = only {
+        r.sections.iter_mut().for_each(|x| x.section = sec.to_string());
+    }
     let mut secs: Vec<(usize, OutlineSection)> = r
         .sections
         .into_iter()
@@ -788,6 +825,12 @@ pub fn audit_schema() -> Value {
 }
 
 pub fn audit_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str, material: &str) -> Prompt {
+    audit_prompt_for(key_value, s, lens, style, material, None)
+}
+
+/// [`audit_prompt`] on some sections of the draft only (a small model reads
+/// the draft a section at a time); `None` = the whole draft.
+pub fn audit_prompt_for(key_value: &str, s: &Session, lens: &Lens, style: &str, material: &str, sections: Option<&[&str]>) -> Prompt {
     let system = format!(
         "You are a demanding but fair reviewer reading a paper draft against the study's own record. Find:\n\
 - contradiction: two places that cannot both be true (including Introduction stance vs Discussion), or text vs record;\n\
@@ -819,7 +862,10 @@ else empty. Report only real problems, most serious first. {TW} Reply with JSON 
         user += style;
     }
     user += "\n## Draft\n";
-    for d in &s.drafts {
+    if let Some(only) = sections {
+        user += &format!("(Only {} here; the other sections are checked separately. Contradictions with them come from the claims above.)\n", only.join(", "));
+    }
+    for d in s.drafts.iter().filter(|d| sections.is_none_or(|o| o.contains(&d.section.as_str()))) {
         user += &format!("\n### {}\n", d.section);
         for p in &d.paras {
             user += &format!("[{}] {}\n", p.para, p.text);

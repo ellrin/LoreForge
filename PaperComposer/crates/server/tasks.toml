@@ -84,20 +84,22 @@ offline = true
 # The interview turns are short structured gradings under a detailed lens:
 # a small model is enough (Haiku by default; Sonnet or a local model can be
 # picked in the draft window). Organising steps use Sonnet; reading the
-# experiment record into tables and the reviewer pass use Opus.
+# experiment record into tables and the reviewer pass use Opus. Every step
+# falls back to the local model when Claude is not available (src/draft/engine.rs
+# fits prompts to its context, reads long material in pieces, repairs replies).
 
 [task.pc-draft-record]
 label = "整理實驗記錄"
 needs = { json = true }
 default = "claude:opus"
-offline = false
+fallback = "local:current"
 max_tokens = 16000
 
 [task.pc-draft-plan]
 label = "規劃題組"
 needs = { json = true }
 default = "claude:sonnet"
-offline = false
+fallback = "local:current"
 max_tokens = 8000
 
 [task.pc-draft-turn]
@@ -110,33 +112,33 @@ fallback = "local:current"
 label = "主張登記"
 needs = { json = true }
 default = "claude:sonnet"
-offline = false
+fallback = "local:current"
 max_tokens = 8000
 
 [task.pc-draft-review]
 label = "章節校正"
 needs = { json = true }
 default = "claude:sonnet"
-offline = false
+fallback = "local:current"
 max_tokens = 8000
 
 [task.pc-draft-outline]
 label = "段落大綱"
 needs = { json = true }
 default = "claude:sonnet"
-offline = false
+fallback = "local:current"
 max_tokens = 16000
 
 [task.pc-draft-audit]
 label = "審稿檢查"
 needs = { json = true }
 default = "claude:opus"
-offline = false
+fallback = "local:current"
 max_tokens = 16000
 
 [task.pc-draft-revise]
 label = "修訂方案"
 needs = { json = true }
 default = "claude:opus"
-offline = false
+fallback = "local:current"
 max_tokens = 16000

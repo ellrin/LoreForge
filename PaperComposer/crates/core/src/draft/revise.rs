@@ -59,6 +59,9 @@ pub struct RevisionPlan {
     /// Symbols the changes use that the notation registry does not have.
     #[serde(default)]
     pub new_symbols: Vec<String>,
+    /// The engine that made the plan (`Opus`, `本機`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub engine: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -136,6 +139,36 @@ pub fn plan_schema() -> Value {
 }
 
 pub fn plan_prompt(key_value: &str, s: &Session, r: &Revision, paper_dir: &Path, material: &str, style: &str, conversation: &str) -> Prompt {
+    let map = format!("\n## The paper (section file, [paragraph index] full text)\n{}", paper_map(paper_dir, true, 90_000));
+    plan_prompt_on(key_value, s, r, &map, material, style, conversation, "")
+}
+
+/// [`plan_prompt`] for a small model: the paper as first sentences, cut at
+/// `map_chars`, and no paragraph replaced (the model has not seen it whole);
+/// [`drop_replaces`] enforces that on the reply.
+pub fn compact_plan_prompt(key_value: &str, s: &Session, r: &Revision, paper_dir: &Path, material: &str, style: &str, conversation: &str, map_chars: usize) -> Prompt {
+    let map = format!("\n## The paper (section file, [paragraph index] first sentence)\n{}", paper_map(paper_dir, false, map_chars));
+    let rule = "\nYou see only the first sentence of each paragraph: never use `replace`. Insert or append new paragraphs, and \
+list every existing paragraph that must change in `effects` (file, paragraph index, what to change).";
+    plan_prompt_on(key_value, s, r, &map, material, style, conversation, rule)
+}
+
+/// A plan made from first sentences must not replace a paragraph (its other
+/// sentences would be lost): each replace becomes an effect for the author.
+pub fn drop_replaces(plan: &mut RevisionPlan) {
+    let (keep, gone): (Vec<Change>, Vec<Change>) = std::mem::take(&mut plan.changes).into_iter().partition(|c| c.action != "replace");
+    for c in gone {
+        let head: String = c.text.chars().take(80).collect();
+        plan.effects.push(format!("{} ¶{} 需要改寫：{}（建議：「{head}…」）", c.file, c.index.map(|i| i.to_string()).unwrap_or("-".into()), c.reason));
+    }
+    plan.changes = keep;
+    for (i, c) in plan.changes.iter_mut().enumerate() {
+        c.id = format!("x{}", i + 1);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_prompt_on(key_value: &str, s: &Session, r: &Revision, map: &str, material: &str, style: &str, conversation: &str, extra_rule: &str) -> Prompt {
     let system = "You revise an existing paper to take in something new, in the author's own voice. Produce the \
 smallest set of paragraph-level changes that does it well.\n\
 Rules:\n\
@@ -154,6 +187,7 @@ author noted for each.\n\
 6. Keep the author's style (paragraph length, crisp reasons, no generic closing). Write English for the paper; \
 `reason`, `summary` and `effects` in Traditional Chinese with full-width punctuation.\n\
 Reply with JSON only.";
+    let system = format!("{system}{extra_rule}");
     let mut user = super::prompts::context(key_value, s, material);
     user += &format!("\n## Revision request\n{}\n", r.request);
     if !r.refs.is_empty() {
@@ -168,9 +202,8 @@ Reply with JSON only.";
         user += "\n## The author's style\n";
         user += style;
     }
-    user += "\n## The paper (section file, [paragraph index] full text)\n";
-    user += &paper_map(paper_dir, true, 90_000);
-    Prompt { system: system.into(), user }
+    user += map;
+    Prompt { system, user }
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,7 +266,7 @@ pub fn parse_plan(reply: &str, paper_dir: &Path) -> Result<RevisionPlan, String>
     if changes.is_empty() {
         return Err("修改方案裡沒有可以套用的修改".into());
     }
-    Ok(RevisionPlan { summary: r.summary, changes, effects, new_symbols: vec![] })
+    Ok(RevisionPlan { summary: r.summary, changes, effects, new_symbols: vec![], engine: String::new() })
 }
 
 /// Apply one change to its section file. The target paragraph is found by
@@ -325,6 +358,28 @@ mod tests {
         assert_eq!(s.paragraphs, ["First paragraph, revised.", "Second paragraph about Table 1.", "External validation on 120 frames gave Dice 0.71."]);
         // Applying the replace again fails: its paragraph is gone.
         assert!(apply(&p, &plan.changes[1]).is_err());
+        let _ = std::fs::remove_dir_all(&p);
+    }
+
+    #[test]
+    fn a_compact_plan_keeps_every_paragraph_whole() {
+        let p = paper();
+        let s = Session::default();
+        let r = Revision { request: "加外部驗證".into(), ..Default::default() };
+        let full = plan_prompt("kv", &s, &r, &p, "", "", "");
+        let small = compact_plan_prompt("kv", &s, &r, &p, "", "", "", 10_000);
+        assert!(full.user.contains("It has two sentences.") && !small.user.contains("It has two sentences."));
+        assert!(small.system.contains("never use `replace`") && !full.system.contains("never use `replace`"));
+        let mut plan = RevisionPlan {
+            changes: vec![
+                Change { id: "x1".into(), file: "results.tex".into(), action: "replace".into(), index: Some(0), text: "Short.".into(), reason: "更新".into(), ..Default::default() },
+                Change { id: "x2".into(), file: "results.tex".into(), action: "append".into(), text: "New.".into(), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        drop_replaces(&mut plan);
+        assert_eq!(plan.changes.iter().map(|c| (c.id.as_str(), c.action.as_str())).collect::<Vec<_>>(), [("x1", "append")]);
+        assert!(plan.effects[0].contains("results.tex ¶0") && plan.effects[0].contains("Short."));
         let _ = std::fs::remove_dir_all(&p);
     }
 }
