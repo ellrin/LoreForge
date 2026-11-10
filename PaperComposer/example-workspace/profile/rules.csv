@@ -1,10 +1,10 @@
 id,type,scope,check,threshold,severity,message
-R001,hard,paragraph,sentence_count,3-8,warning,Paragraph length
-R002,hard,sentence,max_words,35,warning,Long sentence
+R001,hard,paragraph,sentence_count,3-8,warning,段落長度
+R002,hard,sentence,max_words,35,warning,句子長度
 R003,hard,paragraph,banned_words,,info,
-R101,soft,paragraph,has_topic_sentence,,error,No clear topic sentence
-R102,soft,paragraph,claim_has_evidence,,error,Claim lacks evidence or citation
-R103,soft,paragraph,links_to_neighbours,,warning,Weak link to the previous or next paragraph
-R104,soft,paragraph,one_complete_idea,,warning,Paragraph does not finish one idea
-R105,soft,section:Result,first_sentence_states_finding,,warning,First sentence should state the finding
-R106,soft,paragraph,supports_key_value,,warning,"Off topic: the paragraph (or figure, table, abstract, contribution, discussion) does not support the paper's key value"
+R101,soft,paragraph,has_topic_sentence,,error,主題句
+R102,soft,paragraph,claim_has_evidence,,error,證據與引用
+R103,soft,paragraph,links_to_neighbours,,warning,與前後段的銜接
+R104,soft,paragraph,one_complete_idea,,warning,一段講完一個想法
+R105,soft,section:Result,first_sentence_states_finding,,warning,第一句寫出發現
+R106,soft,paragraph,supports_key_value,,warning,支撐論文的核心價值（段落、圖表、摘要、貢獻、討論）
