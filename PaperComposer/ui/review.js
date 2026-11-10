@@ -32,6 +32,8 @@ const PCReview = (() => {
   let resolvedShown = false;
   let cur = null;             // current item key: "c:<id>" | "m:<id>"
   let bar, panel, observer, queued = false;
+  let wordRefs = [];          // [{ key, title, checked }] from a Word reference list
+  let refsBusy = false;
 
   const base = () => `/api/papers/${encodeURIComponent(state.paper.name)}`;
   const reviewing = () => mode === "review" && !!state.paper;
@@ -44,6 +46,8 @@ const PCReview = (() => {
     const name = state.paper.name;
     try { data = await api(`${base()}/review`); paper = name; }
     catch { data = null; paper = null; }
+    // references read from a Word list: checked on Crossref only when asked
+    try { wordRefs = (await api(`${base()}/word-refs`)).refs ?? []; } catch { wordRefs = []; }
     if (state.paper?.name !== name) return;
     after();
   }
@@ -782,6 +786,9 @@ const PCReview = (() => {
     if (panel.hidden) return;
     const scroll = panel.scrollTop;
     panel.replaceChildren();
+    const head = el("div", "block-head rv-head");
+    head.append(el("span", "n", "01"), el("h3", "", "審閱"));
+    panel.append(head);
     const list = items();
     const nChg = list.filter((x) => x.kind === "change").length;
     const nCm = list.filter((x) => x.kind === "comment" && !x.c.resolved).length;
@@ -809,7 +816,32 @@ const PCReview = (() => {
       t.onclick = () => { resolvedShown = !resolvedShown; after(); };
       panel.append(t);
     }
+    refsRow();
     panel.scrollTop = scroll;
+  }
+
+  /** Word's reference list as read into fields: 「查證」 asks Crossref / PubMed. */
+  function refsRow() {
+    const open = wordRefs.filter((r) => !r.checked).length;
+    if (!open) return;
+    const row = el("div", "rv-refs");
+    row.append(el("span", "", `Word 文獻 ${open}`));
+    const b = el("button", "ghost small", refsBusy ? "查證中…" : "查證");
+    b.disabled = refsBusy;
+    b.onclick = async () => {
+      refsBusy = true; renderPanel();
+      try {
+        const r = await api(`${base()}/word-refs/confirm`, {});
+        wordRefs = r.refs ?? wordRefs;
+        const bits = [`已更新 ${r.updated.length}`];
+        if (r.ambiguous.length) bits.push(`待確認 ${r.ambiguous.join("、")}`);
+        if (r.missing.length) bits.push(`查不到 ${r.missing.join("、")}`);
+        flash(bits.join("；"), 6000);
+      } catch (e) { flash(e.message, 6000); }
+      refsBusy = false; renderPanel();
+    };
+    row.append(b);
+    panel.append(row);
   }
 
   // ── Everything after the data or the mode changed ───

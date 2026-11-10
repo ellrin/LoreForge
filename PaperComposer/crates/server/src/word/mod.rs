@@ -473,6 +473,7 @@ mod tests {
         uniq.dedup();
         assert_eq!(ids.len(), uniq.len(), "change ids are unique");
 
+        // PC_RT_KEEP=<file.docx> keeps the exported Word file for a look outside the test
         if let Ok(k) = std::env::var("PC_RT_KEEP") { std::fs::copy(&exported, k).unwrap(); }
         // …and back
         let second = root.join("second");

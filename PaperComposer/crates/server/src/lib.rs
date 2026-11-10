@@ -3322,6 +3322,8 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/papers/{name}/review/changes/{id}", post(decide_review_change))
         .route("/api/papers/{name}/review/comments", post(add_review_comment))
         .route("/api/papers/{name}/review/comments/{id}", put(edit_review_comment))
+        .route("/api/papers/{name}/word-refs", get(word::api::list)) // review.js
+        .route("/api/papers/{name}/word-refs/confirm", post(word::api::confirm))
         .route("/api/tables/{name}", get(get_table).put(put_table))
         .route("/api/claude", get(claude_status))
         .route("/api/open/{page}", post(open_page))

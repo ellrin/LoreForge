@@ -1,0 +1,9 @@
+/* Review panel: its numbered head and the row for references read from Word (review.js). */
+.rv-panel > .rv-head { padding-bottom: 2px; }
+.rv-panel > .rv-head h3 { color: var(--accent-text); }
+.rv-refs {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 4px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  font-size: 12px;
+}
