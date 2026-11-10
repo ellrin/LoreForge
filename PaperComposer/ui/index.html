@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="prefs.css">
 </head>
 <body>
-<div class="app">
+<div class="app at-home">
   <header class="top">
     <div class="brand">PAPER<b>/</b>COMPOSER</div>
     <!-- this paper: switch, its references, export -->
@@ -50,7 +50,8 @@
   </main>
 
   <!-- start screen (home.js): over the page and side panels, under the top bar -->
-  <section class="home" id="home" aria-label="封面" hidden></section>
+  <!-- shown from the first paint: boot() fills it after loading, so the empty editor never flashes -->
+  <section class="home" id="home" aria-label="封面"></section>
 
   <aside class="right" aria-label="寫作助手">
     <section class="block" data-open="true">
