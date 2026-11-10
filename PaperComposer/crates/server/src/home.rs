@@ -29,7 +29,7 @@ pub struct Card {
 fn card(dir: &Path, name: String) -> Card {
     Card {
         modified: newest(dir, 3),
-        title: std::fs::read_to_string(dir.join("main.tex")).ok().and_then(|t| title(&t)),
+        title: std::fs::read_to_string(pc_core::open::main_file(dir)).ok().and_then(|t| title(&t)),
         phase: phase(dir),
         thumb: compiled_pdf(dir, &name).is_some(),
         name,
@@ -49,7 +49,7 @@ pub fn cards_with(papers: &Path, opened: &[(String, PathBuf)]) -> Vec<Card> {
     let names = if papers.as_os_str().is_empty() { vec![] } else { subdirs(papers) };
     let mut out: Vec<Card> = names.iter().map(|name| card(&papers.join(name), name.clone())).collect();
     for (id, dir) in opened {
-        if dir.join("main.tex").is_file() && !names.contains(id) {
+        if pc_core::open::is_paper(dir) && !names.contains(id) {
             out.push(Card { path: Some(dir.display().to_string()), ..card(dir, id.clone()) });
         }
     }

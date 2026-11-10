@@ -13,7 +13,7 @@
 //! | GET | /api/open/recent | opened folders, newest first, `exists` false when gone |
 //! | POST | /api/open/forget | `{id}`: drop from the list (the folder is not touched) |
 //! | POST | /api/open/inspect | `{path}` → `{kind: paper, id}` / `{kind: latex, plan}` / `{kind: archive, dest}` / `{kind: word, dest, pandoc}` |
-//! | POST | /api/open/latex | `{path, stamp}`: make the previewed change, then open |
+//! | POST | /api/open/latex | `{path, stamp, restructure?}`: open as it is (only `.papercomposer/` is added); `restructure` first copies the originals to `.papercomposer/original/` |
 //! | POST | /api/open/extract | `{path, dest}`: unpack an archive, then inspect the folder |
 //! | POST | /api/open/word | `{path, dest}`: convert into a new folder, then open |
 //! | POST | /api/open/word-upload?name= | browser mode: the .docx as the body becomes a workspace paper |
@@ -201,7 +201,7 @@ async fn recent() -> impl IntoResponse {
         .recent()
         .into_iter()
         .take(8)
-        .map(|e| serde_json::json!({ "id": e.id, "path": e.path, "kind": e.kind, "exists": e.path.join("main.tex").is_file() }))
+        .map(|e| serde_json::json!({ "id": e.id, "path": e.path, "kind": e.kind, "exists": inplace::is_paper(&e.path) }))
         .collect();
     Json(list)
 }
@@ -225,6 +225,9 @@ struct PathBody {
     stamp: String,
     #[serde(default)]
     dest: Option<PathBuf>,
+    /// 開啟 LaTeX…: restructure into main.tex + sections/ (after a backup). Default: open as it is.
+    #[serde(default)]
+    restructure: bool,
 }
 
 fn lower_name(p: &Path) -> String {
@@ -290,7 +293,7 @@ async fn opened(s: &Shared, dir: &Path, kind: &str, source: Option<&Path>) -> Re
             (l.workspace.clone(), l.profile.as_ref().map(|p| p.authors.clone()).unwrap_or_default())
         };
         let journal = ws.as_ref().and_then(|w| pc_core::journal::detect(&w.join("publishers"), dir));
-        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
+        let main = std::fs::read_to_string(inplace::main_file(dir)).unwrap_or_default();
         let authors = if m.authors.is_empty() { pc_core::authors::match_block(&main, &people) } else { m.authors.clone() };
         meta::write_meta(dir, &PaperMeta { journal: m.journal.clone().or(journal), authors, ..m })?;
     }
@@ -304,7 +307,7 @@ async fn inspect_folder(s: &Shared, dir: &Path) -> Result<serde_json::Value, Str
         return Ok(serde_json::json!({ "kind": "paper", "id": name }));
     }
     if let Some(e) = registry().by_path(dir).cloned() {
-        if dir.join("main.tex").is_file() {
+        if inplace::is_paper(dir) {
             return opened(s, &e.path, &e.kind, None).await;
         }
     }
@@ -342,8 +345,8 @@ async fn inspect(State(s): State<Shared>, Json(b): Json<PathBody>) -> impl IntoR
 }
 
 async fn open_latex(State(s): State<Shared>, Json(b): Json<PathBody>) -> impl IntoResponse {
-    let (p, stamp) = (b.path.clone(), b.stamp.clone());
-    let res = match tokio::task::spawn_blocking(move || inplace::apply(&p, &stamp)).await {
+    let (p, stamp, restructure) = (b.path.clone(), b.stamp.clone(), b.restructure);
+    let res = match tokio::task::spawn_blocking(move || inplace::apply(&p, &stamp, restructure)).await {
         Ok(r) => r,
         Err(e) => Err(e.to_string()),
     };
@@ -393,6 +396,10 @@ async fn open_word(State(s): State<Shared>, Json(b): Json<PathBody>) -> impl Int
     if let Some(ws) = s.loaded.read().await.workspace.clone() {
         c.notation = word::reference_findings(&c.dir, &crate::notation::load(&ws, &c.dir));
     }
+    // typed numbers ("Table 1") become review comments on the spot, so they are not lost with a toast
+    if !c.notation.is_empty() {
+        c.comments += typed_number_comments(&c.dir);
+    }
     match opened(&s, &c.dir, "word", Some(&b.path)).await {
         Ok(mut v) => {
             v["converted"] = serde_json::to_value(&c).unwrap_or_default();
@@ -400,6 +407,59 @@ async fn open_word(State(s): State<Shared>, Json(b): Json<PathBody>) -> impl Int
         }
         Err(e) => bad(&e),
     }
+}
+
+/// Every typed "Table 1" / "Figure 2" / "Fig. 3" / "Eq. 4" in the paper's text, as (paragraph, the words).
+pub fn typed_numbers(paras: &[String]) -> Vec<(usize, String)> {
+    const WORDS: [&str; 6] = ["Table", "Figure", "Fig.", "Equation", "Eq.", "Algorithm"];
+    let mut out = Vec::new();
+    for (i, p) in paras.iter().enumerate() {
+        for w in WORDS {
+            let mut from = 0;
+            while let Some(at) = p[from..].find(w).map(|x| x + from) {
+                from = at + w.len();
+                let before_ok = p[..at].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+                let rest = p[from..].trim_start_matches([' ', '\u{a0}']);
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if before_ok && !digits.is_empty() && rest.len() < p[from..].len() {
+                    let end = p.len() - rest.len() + digits.len();
+                    out.push((i, p[at..end].to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Review comments (source "word") for the typed numbers left by a conversion.
+fn typed_number_comments(dir: &Path) -> usize {
+    let mut r = pc_core::review::load(dir);
+    let (mut n, at) = (0, pc_core::review::now());
+    for sec in paper::load_paper(dir) {
+        for (index, exact) in typed_numbers(&sec.paragraphs) {
+            r.comments.push(pc_core::review::Comment {
+                id: pc_core::review::new_id("m"),
+                author: String::new(),
+                at: at.clone(),
+                file: sec.file.clone(),
+                index,
+                exact,
+                prefix: String::new(),
+                suffix: String::new(),
+                text: "手打的編號：改成 \\ref{…}，編號才會跟著走".into(),
+                replies: vec![],
+                resolved: false,
+                orphan: false,
+                source: Some("word".into()),
+                extra: Default::default(),
+            });
+            n += 1;
+        }
+    }
+    if n > 0 && pc_core::review::save(dir, &r).is_err() {
+        return 0;
+    }
+    n
 }
 
 #[derive(Deserialize)]
@@ -431,7 +491,7 @@ async fn word_upload(State(s): State<Shared>, AxQuery(q): AxQuery<UploadQuery>, 
 /// compares it with what it loaded to notice edits made elsewhere.
 async fn stamp(State(s): State<Shared>, AxPath(name): AxPath<String>) -> impl IntoResponse {
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
-    Json(serde_json::json!({ "stamp": paper::stamp(&dir) })).into_response()
+    Json(serde_json::json!({ "stamp": inplace::stamp(&dir) })).into_response()
 }
 
 #[cfg(test)]
@@ -443,6 +503,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn finds_typed_numbers() {
+        let p = vec!["See Table 1 and Figure 2, Fig. 3; not Tables or MyTable 4.".to_string(), "Eq. 12 holds".to_string()];
+        let got: Vec<String> = typed_numbers(&p).into_iter().map(|(i, t)| format!("{i}:{t}")).collect();
+        assert_eq!(got, ["0:Table 1", "0:Figure 2", "0:Fig. 3", "1:Eq. 12"]);
     }
 
     #[test]

@@ -928,6 +928,12 @@ fn finish_paper(dir: &Path, key_value: &str, title: Option<&str>, chosen: &[Pape
     paper::write_atomic(&path, &main).map_err(|e| e.to_string())
 }
 
+/// `Cache-Control: no-cache` on the static UI files (like SlideComposer and KnowledgeBase).
+async fn no_cache(mut res: axum::response::Response) -> axum::response::Response {
+    res.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-cache"));
+    res
+}
+
 async fn create_paper(State(s): State<Shared>, Json(b): Json<NewPaper>) -> impl IntoResponse {
     let Some(ws) = s.loaded.read().await.workspace.clone() else {
         return bad("no workspace");
@@ -935,7 +941,17 @@ async fn create_paper(State(s): State<Shared>, Json(b): Json<NewPaper>) -> impl 
     // asked in 討論草稿 step 1 (or in the editor's key value bar) when left empty here
     let key_value = if b.key_value.trim().is_empty() { String::new() } else { match meta::check_key_value(&b.key_value) { Ok(k) => k, Err(e) => return bad(&e) } };
     let people = match resolve_people(&s, &b.authors).await { Ok(p) => p, Err(e) => return bad(&e) };
-    let outline = (!b.outline.is_empty()).then_some(b.outline.as_slice());
+    // 空白 on a journal template: the template's class and front matter with the usual
+    // empty sections, never the sample's showcase text (same start as the 討論草稿 route)
+    let blank: Vec<OutlineSection>;
+    let outline = if !b.outline.is_empty() {
+        Some(b.outline.as_slice())
+    } else if b.template.as_deref().is_some_and(|t| !t.is_empty()) {
+        blank = ["Introduction", "Related work", "Method", "Result", "Discussion", "Conclusion"].iter().map(|t| OutlineSection { title: (*t).into(), ..Default::default() }).collect();
+        Some(blank.as_slice())
+    } else {
+        None
+    };
     if let Some(r) = name_taken_outside(&b.name) {
         return r;
     }
@@ -1299,7 +1315,7 @@ async fn import_bytes(s: &Shared, name: &str, key_value: &str, bytes: &[u8], tid
     let res = res.and_then(|dir| {
         let journal = pc_core::journal::detect(&ws.join("publishers"), &dir);
         // authors named in the paper's own \author block who are in the profile (none guessed)
-        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
+        let main = std::fs::read_to_string(pc_core::open::main_file(&dir)).unwrap_or_default();
         let authors = pc_core::authors::match_block(&main, &profile_authors);
         meta::write_meta(&dir, &PaperMeta { key_value, journal: journal.clone(), authors: authors.clone() }).map(|_| (dir, journal, authors))
     });
@@ -1389,7 +1405,7 @@ struct MergeReport {
 }
 
 async fn merge_paper_bib(ws: &Path, dir: &Path, dry_run: bool) -> Result<MergeReport, String> {
-    let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
+    let main = std::fs::read_to_string(pc_core::open::main_file(&dir)).unwrap_or_default();
     let mut files: Vec<String> = bib_files(&main).into_iter().filter(|f| f != PC_BIB).collect();
     if files.is_empty() {
         files = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.ends_with(".bib")).collect();
@@ -1831,13 +1847,13 @@ async fn set_pdf_dir(Json(b): Json<PdfDir>) -> impl IntoResponse {
 /// Citations used in one paper, and what each is used for there.
 async fn paper_citations(State(s): State<Shared>, AxPath(name): AxPath<String>) -> impl IntoResponse {
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
-    let tex: String = std::iter::once(dir.join("main.tex"))
-        .chain(paper::section_files(&dir).into_iter().map(|f| dir.join("sections").join(f)))
+    let tex: String = pc_core::open::source_files(&dir)
+        .into_iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
         .collect::<Vec<_>>()
         .join("\n");
     // entries in the paper's own .bib files, for keys the library lacks
-    let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
+    let main = std::fs::read_to_string(pc_core::open::main_file(&dir)).unwrap_or_default();
     let local: Vec<serde_json::Value> = bib_files(&main)
         .iter()
         .filter_map(|f| std::fs::read(dir.join(f)).ok())
@@ -1895,7 +1911,7 @@ struct BibOut {
 const PC_BIB: &str = "pc-refs.bib";
 
 fn write_paper_bib(ws: &Path, dir: &Path) -> Result<BibOut, String> {
-    let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
+    let main = std::fs::read_to_string(pc_core::open::main_file(&dir)).unwrap_or_default();
     let listed = bib_files(&main);
     let own: Vec<String> = listed
         .iter()
@@ -1907,9 +1923,10 @@ fn write_paper_bib(ws: &Path, dir: &Path) -> Result<BibOut, String> {
         .filter_map(|f| std::fs::read(dir.join(f)).ok())
         .flat_map(|b| bib::parse(&String::from_utf8_lossy(&b)).0.into_iter().map(|e| e.key))
         .collect();
-    let tex: String = paper::section_files(dir)
+    let tex: String = pc_core::open::source_files(dir)
         .into_iter()
-        .filter_map(|f| std::fs::read_to_string(dir.join("sections").join(f)).ok())
+        .skip(1)
+        .filter_map(|p| std::fs::read_to_string(p).ok())
         .chain(std::iter::once(main.clone()))
         .collect::<Vec<_>>()
         .join("\n");
@@ -1954,7 +1971,7 @@ fn add_bib_file(dir: &Path, main: &str, file: &str) -> Result<(), String> {
     if !done {
         return Ok(());
     }
-    paper::write_atomic(&dir.join("main.tex"), &(lines.join("\n") + "\n")).map_err(|e| e.to_string())
+    paper::write_atomic(&pc_core::open::main_file(&dir), &(lines.join("\n") + "\n")).map_err(|e| e.to_string())
 }
 
 #[derive(Deserialize)]
@@ -1967,7 +1984,7 @@ struct ExportBody {
 async fn export_paper(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<ExportBody>) -> impl IntoResponse {
     let ws = match refs_root(&s).await { Ok(w) => w, Err(r) => return r };
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
-    let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
+    let main = std::fs::read_to_string(pc_core::open::main_file(&dir)).unwrap_or_default();
     // An imported paper may come with its bibliography already built (arXiv
     // often ships the .bbl, not the .bib): use it as is.
     let prebuilt = dir.join("main.bbl").is_file() && !bib_files(&main).iter().any(|f| dir.join(f).is_file());
@@ -2049,7 +2066,7 @@ fn bib_files(main: &str) -> Vec<String> {
 async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> impl IntoResponse {
     match paper_dir(&s, &name).await {
         Ok(dir) => {
-            let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
+            let main = std::fs::read_to_string(pc_core::open::main_file(&dir)).unwrap_or_default();
             let (front, back) = preview::front_back(&main);
             let m = meta::read_meta(&dir);
             // the journal's house rules: word limits for the word count,
@@ -2059,7 +2076,7 @@ async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> imp
             let ref_words = journal.as_ref().map(|j| j.effective_ref_words()).unwrap_or_default();
             let (word_limits, captions, limits) = journal.map(|j| (j.meta.word_limits, j.meta.captions, j.meta.limits)).unwrap_or_default();
             Json(serde_json::json!({
-            "sections": paper::load_paper(&dir),
+            "sections": pc_core::open::sections(&dir),
             "macros": paper::paper_macros(&dir),
             "numbers": preview::numbers(&dir, &export::cache_dir(&name)),
             "front": front,
@@ -2072,7 +2089,7 @@ async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> imp
             "captions": captions,
             "limits": limits,
             // what is on disk now (edits made elsewhere change it), and where
-            "stamp": paper::stamp(&dir),
+            "stamp": pc_core::open::stamp(&dir),
             "path": opened::external_dir(&name).filter(|d| *d == dir),
         }))
         .into_response()
@@ -2318,7 +2335,7 @@ struct FrontEdit {
 /// Change one field of the title block (title, author, affil, abstract, keywords).
 async fn put_front(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<FrontEdit>) -> impl IntoResponse {
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
-    let path = dir.join("main.tex");
+    let path = pc_core::open::main_file(&dir);
     let main = match std::fs::read_to_string(&path) { Ok(m) => m, Err(e) => return bad(&e.to_string()) };
     let out = match pc_core::front::set_field(&main, &b.field, b.index, &b.value) { Ok(o) => o, Err(e) => return bad(&e) };
     if let Err(e) = paper::write_atomic(&path, &out) {
@@ -2402,18 +2419,17 @@ async fn put_section(
     AxPath((name, file)): AxPath<(String, String)>,
     Json(b): Json<SectionBody>,
 ) -> impl IntoResponse {
-    if !paper::safe_name(&file) || !file.ends_with(".tex") {
-        return bad("invalid section file");
-    }
     let dir = match paper_dir(&s, &name).await {
         Ok(d) => d,
         Err(r) => return r,
     };
-    let path = dir.join("sections").join(&file);
+    if !file.ends_with(".tex") || !pc_core::open::is_section_file(&dir, &file) {
+        return bad("invalid section file");
+    }
     // the review (review.json) sees every save: tracked changes, comment anchors
     let _review = REVIEW_LOCK.lock().await;
     // Keep what follows \section{} (e.g. \label) from the file on disk.
-    let was = std::fs::read_to_string(&path).map(|t| paper::parse_section(&file, &t)).ok();
+    let was = pc_core::open::read_section(&dir, &file);
     if let (Some(base), Some(now)) = (&b.base, &was) {
         let norm = |p: &[String]| p.iter().map(|x| pc_core::review::norm(x)).collect::<Vec<_>>();
         if base.title.trim() != now.title.trim() || norm(&base.paragraphs) != norm(&now.paragraphs) {
@@ -2422,15 +2438,14 @@ async fn put_section(
     }
     let tail = was.as_ref().map(|s| s.tail.clone()).unwrap_or_default();
     let section = Section { file: file.clone(), title: b.title, paragraphs: b.paragraphs, tail };
-    if let Err(e) = std::fs::create_dir_all(dir.join("sections")).and_then(|_| paper::write_atomic(&path, &paper::render_section(&section))) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    if let Err(e) = pc_core::open::write_section(&dir, &section) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
     }
     // Return what is now on disk, re-read, so the UI shows the saved form.
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let saved = paper::parse_section(&file, &text);
+    let saved = pc_core::open::read_section(&dir, &file).unwrap_or_else(|| paper::parse_section(&file, ""));
     review_saved(&dir, &file, &was.map(|s| s.paragraphs).unwrap_or_default(), &saved.paragraphs);
     let mut v = serde_json::to_value(&saved).unwrap_or_default();
-    v["stamp"] = serde_json::Value::String(paper::stamp(&dir));
+    v["stamp"] = serde_json::Value::String(pc_core::open::stamp(&dir));
     Json(v).into_response()
 }
 
@@ -2533,10 +2548,7 @@ pub(crate) fn review_saved(dir: &Path, file: &str, old: &[String], new: &[String
 }
 
 fn section_of(dir: &Path, file: &str) -> Option<Section> {
-    if !paper::safe_name(file) {
-        return None;
-    }
-    std::fs::read_to_string(dir.join("sections").join(file)).ok().map(|t| paper::parse_section(file, &t))
+    pc_core::open::read_section(dir, file)
 }
 
 /// The review with each change's place in its section now, and who I am.
@@ -2586,8 +2598,7 @@ fn reject_one(ws: Option<&Path>, dir: &Path, r: &mut pc_core::review::Review, id
     let mut sec = section_of(dir, &c.file).ok_or("找不到這個章節檔")?;
     let paras = pc_core::review::reject(r, id, &sec.paragraphs)?;
     sec.paragraphs = paras;
-    let path = dir.join("sections").join(&c.file);
-    paper::write_atomic(&path, &paper::render_section(&sec)).map_err(|e| e.to_string())?;
+    pc_core::open::write_section(dir, &sec)?;
     let saved = section_of(dir, &c.file).ok_or("找不到這個章節檔")?;
     // the registry's checks on what came back (shown, not blocking)
     let issues = match (ws, &c.before) {
@@ -2621,7 +2632,7 @@ async fn decide_review_change(State(s): State<Shared>, AxPath((name, id)): AxPat
         _ => return bad("unknown action"),
     };
     if let Err(e) = pc_core::review::save(&dir, &r) { return bad(&e) }
-    Json(serde_json::json!({ "review": review_view(&dir, &r), "stamp": paper::stamp(&dir), "sections": sections, "issues": issues })).into_response()
+    Json(serde_json::json!({ "review": review_view(&dir, &r), "stamp": pc_core::open::stamp(&dir), "sections": sections, "issues": issues })).into_response()
 }
 
 async fn decide_review_all(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<DecideBody>) -> impl IntoResponse {
@@ -2656,7 +2667,7 @@ async fn decide_review_all(State(s): State<Shared>, AxPath(name): AxPath<String>
     }
     if let Err(e) = pc_core::review::save(&dir, &r) { return bad(&e) }
     issues.dedup();
-    Json(serde_json::json!({ "review": review_view(&dir, &r), "stamp": paper::stamp(&dir), "sections": sections, "issues": issues, "skipped": skipped })).into_response()
+    Json(serde_json::json!({ "review": review_view(&dir, &r), "stamp": pc_core::open::stamp(&dir), "sections": sections, "issues": issues, "skipped": skipped })).into_response()
 }
 
 #[derive(Deserialize)]
@@ -3332,7 +3343,8 @@ pub fn router(paths: Paths) -> Router {
         .merge(home::routes())
         .merge(opened::routes())
         .merge(notation::routes())
-        .fallback_service(ServeDir::new(paths.ui))
+        // the UI is read fresh each time: a new server must not meet an old script
+        .fallback_service(Router::new().fallback_service(ServeDir::new(paths.ui)).layer(axum::middleware::map_response(no_cache)))
         .with_state(state)
 }
 

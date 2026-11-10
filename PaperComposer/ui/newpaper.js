@@ -66,11 +66,17 @@ const PCNew = (() => {
     const blank = el("button", "ghost", "空白");
     blank.disabled = st.busy;
     blank.onclick = () => { if (checkName()) { st.step = "template"; draw(); } };
-    const ai = el("button", "primary small", st.busy ? "建立中…" : "跟 AI 討論");
+    // what 討論草稿 needs, said before step 1: Claude, or else the local model
+    const claude = typeof claudeReady === "function" && claudeReady();
+    const local = !!state.engines?.local?.configured;
+    const none = !!state.engines && !claude && !local;
+    const ai = el("button", "primary small", st.busy ? "建立中…" : none ? "連接模型" : "跟 AI 討論");
     ai.prepend(icon("ai"));
     ai.disabled = st.busy;
-    ai.onclick = () => create("ai");
-    name.onkeydown = (e) => { if (e.key === "Enter") create("ai"); };
+    ai.onclick = () => (none ? Setup.open("claude") : create("ai"));
+    name.onkeydown = (e) => { if (e.key === "Enter") ai.click(); };
+    const note = state.engines && !claude ? el("span", "np-engine-note", none ? "沒有 Claude 也沒有本機模型" : "沒有 Claude：改用本機模型，品質較低") : null;
+    if (note) foot.insertBefore(note, name);
     foot.append(blank, ai);
   }
 
@@ -237,7 +243,10 @@ const PCNew = (() => {
       const r = await api("/api/papers", { name: st.name.trim(), template: start === "blank" ? st.template || null : null, key_value: "", authors: st.chosen });
       st = null;
       $("#dlgNew").close();
-      await opened(r.name);
+      // a new paper is not an import: open it without the import message
+      state.workspace = await api("/api/workspace");
+      await openPaper(r.name);
+      refreshGit();
       if (start === "ai") openWindow("dlgDraft");
     } catch (e) { flash(e.message, 6000); if (st) { st.busy = false; draw(); } }
   }

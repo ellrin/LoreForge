@@ -2,7 +2,7 @@
 // Desktop: native dialogs through /api/shell/dialog, then a card for what
 // happens next (the restructuring preview, where to unpack or convert).
 // Browser (501): the old import for LaTeX, an upload for Word.
-// Also: 最近開啟, and noticing edits made elsewhere (another editor, git pull).
+// Also: noticing edits made elsewhere (another editor, git pull). The recent list is the start screen's (home.js).
 
 const PCOpen = (() => {
   const desktop = () => state.workspace?.shell === "desktop";
@@ -73,8 +73,8 @@ const PCOpen = (() => {
       const bits = [`${c.sections} 節`];
       if (c.changes) bits.push(`${c.changes} 處修訂`);
       if (c.comments) bits.push(`${c.comments} 則註解`);
-      if (c.notation?.length) bits.push(`${c.notation.length} 處編號沒對上`);
-      flash(`已轉成 LaTeX：${bits.join("、")}`, 5000);
+      if (c.notation?.length) bits.push(`${c.notation.length} 處編號沒對上，已列在審閱`);
+      flash(`已轉成 LaTeX：${bits.join("、")}`, c.notation?.length ? 12000 : 5000);
       if (c.changes || c.comments) window.PCReview?.setMode("review");
     }
   }
@@ -108,23 +108,63 @@ const PCOpen = (() => {
     return ok;
   }
 
-  /** First open of a LaTeX folder: every file that will change, nothing written yet. */
+  /**
+   * First open of a LaTeX folder. Default: open it as it is (own file names,
+   * own \input structure; only .papercomposer/ is added). 整理成章節檔 is the
+   * other choice: it lists every change and says the originals are kept.
+   */
   function preview(r, anchor) {
     const plan = r.plan;
     const m = menuForm(`開啟 ${baseName(plan.dir)}`, null, anchor);
     m.classList.add("next-card", "open-card");
     m.append(el("div", "open-path", plan.dir));
-    if (plan.main !== "main.tex") row(m, "主檔", code(plan.main), " → ", code("main.tex"));
-    const created = plan.created.filter((f) => !(f === "main.tex" && plan.main !== "main.tex"));
-    if (created.length) row(m, "新增", list(created.map((f) => [code(f)])));
-    if (plan.changed.length) row(m, "改寫", list(plan.changed.map((f) => [code(f)])));
-    if (plan.merged.length) row(m, "併入", list(plan.merged.filter(([f]) => f !== plan.main).map(([f, into]) => [code(f), " → ", code(into)])));
-    if (plan.moved.length) row(m, "移動", list(plan.moved.map(([f, to]) => [code(f), " → ", code(to)])));
+    row(m, "主檔", code(plan.main));
+    const keep = plan.sections.length > 0;
+    if (keep) row(m, "章節", list(plan.sections.map(([f, t]) => [code(f), " ", t])));
+    if (plan.inline_sections) row(m, "主檔內", `${plan.inline_sections} 個章節直接寫在主檔，不列為章節`);
     row(m, "設定", code(".papercomposer/"));
-    foot(m, "確定", async () => {
-      const res = await api("/api/open/latex", { path: r.path, stamp: plan.stamp });
-      await done(res);
-    });
+
+    // the opt-in restructuring: hidden until asked for
+    const re = el("div", "open-restructure");
+    re.hidden = true;
+    if (plan.restructure_error) re.append(el("div", "open-warn", plan.restructure_error));
+    else {
+      const created = plan.created.filter((f) => !(f === "main.tex" && plan.main !== "main.tex"));
+      if (plan.main !== "main.tex") row(re, "主檔", code(plan.main), " → ", code("main.tex"));
+      if (created.length) row(re, "新增", list(created.map((f) => [code(f)])));
+      if (plan.changed.length) row(re, "改寫", list(plan.changed.map((f) => [code(f)])));
+      const merged = plan.merged.filter(([f]) => f !== plan.main);
+      if (merged.length) row(re, "併入", list(merged.map(([f, into]) => [code(f), " → ", code(into)])));
+      if (plan.moved.length) row(re, "移動", list(plan.moved.map(([f, to]) => [code(f), " → ", code(to)])));
+      row(re, "原檔", "先複製到 ", code(".papercomposer/original/"));
+    }
+    m.append(re);
+
+    const f = el("div", "form-foot");
+    const no = el("button", "ghost small", "取消");
+    no.onclick = () => { m.hidden = true; };
+    const alt = el("button", "ghost small", "整理成章節檔…");
+    alt.hidden = !!plan.restructure_error;
+    const ok = el("button", "primary small", keep ? "開啟" : "整理並開啟");
+    let restructure = !keep;
+    if (!keep) re.hidden = false, alt.hidden = true;
+    alt.onclick = () => {
+      restructure = !restructure;
+      re.hidden = !restructure;
+      ok.textContent = restructure ? "整理並開啟" : "開啟";
+      alt.textContent = restructure ? "保持原樣" : "整理成章節檔…";
+      keepOnScreen(m);
+    };
+    ok.disabled = !keep && !!plan.restructure_error;
+    ok.onclick = async () => {
+      ok.disabled = true; no.disabled = true; alt.disabled = true;
+      try { await done(await api("/api/open/latex", { path: r.path, stamp: plan.stamp, restructure })); }
+      catch (e) { flash(e.message, 7000); ok.disabled = false; no.disabled = false; alt.disabled = false; }
+    };
+    f.append(no, alt, ok);
+    m.append(f);
+    keepOnScreen(m);
+    ok.focus();
   }
 
   /** Where an archive unpacks / a .docx converts to: beside it, or a folder picked. */
@@ -165,38 +205,6 @@ const PCOpen = (() => {
   function pandocOr(e, anchor) {
     if (String(e.message).includes("pandoc-missing")) pandocCard(anchor ?? $("#actFile"));
     else flash(e.message, 7000);
-  }
-
-  // ── 最近開啟 ─────────────────────────────────────────
-  async function recent() {
-    try { return await api("/api/open/recent"); } catch { return []; }
-  }
-
-  /** The list under the start screen's cards; empty → nothing drawn. */
-  async function recentList() {
-    const items = await recent();
-    const box = el("div", "open-recent");
-    if (!items.length) return box;
-    const ul = el("ul");
-    for (const it of items) {
-      const li = el("li");
-      const b = el("button", "open-item");
-      b.type = "button";
-      b.disabled = !it.exists;
-      b.title = it.exists ? it.path : `找不到 ${it.path}`;
-      b.append(icon(it.kind === "word" ? "openWord" : "openLatex"), el("span", "open-name", it.id), el("span", "open-where", parentOf(it.path)));
-      b.onclick = () => path(it.path, b);
-      li.append(b);
-      if (!it.exists) {
-        const x = iconButton("x", "從清單移除", async () => {
-          try { await api("/api/open/forget", { id: it.id }); li.remove(); } catch (e) { flash(e.message, 6000); }
-        });
-        li.append(x);
-      }
-      ul.append(li);
-    }
-    box.append(ul);
-    return box;
   }
 
   // ── Edits made elsewhere ──────────────────────────────
@@ -251,5 +259,5 @@ const PCOpen = (() => {
     setInterval(check, 4000);
   }
 
-  return { latex, word, path, recentList, conflict, watch, desktop };
+  return { latex, word, path, conflict, watch, desktop };
 })();

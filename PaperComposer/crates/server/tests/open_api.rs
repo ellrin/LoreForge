@@ -60,6 +60,8 @@ async fn opens_latex_and_word_where_they_are() {
     let (_, ws) = api.get("/api/workspace").await;
     assert_eq!(ws["root"].as_str().map(PathBuf::from), Some(root.join("ws")));
     assert_eq!(ws["shell"], "browser");
+    let ui = api.http.get(format!("{}/app.js", api.base)).send().await.unwrap();
+    assert_eq!(ui.headers().get("cache-control").map(|v| v.to_str().unwrap()), Some("no-cache"), "a new server must not meet an old script");
     assert_eq!(api.post("/api/shell/dialog", json!({"kind": "latex"})).await.0, 501, "no native dialog in browser mode");
 
     // a co-author's project: ms.tex with an \input, notation in the preamble
@@ -73,16 +75,18 @@ async fn opens_latex_and_word_where_they_are() {
     let (code, v) = api.post("/api/open/inspect", json!({"path": proj})).await;
     assert_eq!(code, 200, "{v}");
     assert_eq!(v["kind"], "latex");
-    assert_eq!(v["plan"]["created"], json!(["main.tex", "sections/01-intro.tex"]));
+    assert_eq!(v["plan"]["sections"], json!([["intro.tex", "Intro"]]), "the sections are the ones its main file inputs");
+    assert_eq!(v["plan"]["created"], json!(["main.tex", "sections/01-intro.tex"]), "what 整理成章節檔 would do");
     assert_eq!(files_under(&proj), before, "the preview writes nothing");
-    // 確定
+    // 確定: as it is, only .papercomposer/ is added
     let (code, v) = api.post("/api/open/latex", json!({"path": proj, "stamp": v["plan"]["stamp"]})).await;
     assert_eq!(code, 200, "{v}");
     let id = v["id"].as_str().unwrap().to_string();
     assert_eq!(id, "Joint paper");
-    assert_eq!(files_under(&proj), [".papercomposer", "main.tex", "notation.tex", "sections"]);
+    assert_eq!(files_under(&proj), [".papercomposer", "intro.tex", "ms.tex", "notation.tex"], "no rename, no merge, no move");
+    assert!(std::fs::read_to_string(proj.join("ms.tex")).unwrap().contains("\\input{intro}"));
     // a second open goes straight in
-    let (_, again) = api.post("/api/open/inspect", json!({"path": proj.join("sections/01-intro.tex")})).await;
+    let (_, again) = api.post("/api/open/inspect", json!({"path": proj.join("intro.tex")})).await;
     assert_eq!((again["kind"].as_str(), again["id"].as_str()), (Some("paper"), Some(id.as_str())));
 
     // edit in place
@@ -91,25 +95,25 @@ async fn opens_latex_and_word_where_they_are() {
     assert_eq!(code, 200);
     assert_eq!(paper["path"].as_str().map(PathBuf::from), Some(proj.clone()));
     let sec = paper["sections"][0].clone();
-    assert_eq!(sec["paragraphs"], json!(["One sentence.\nAnother one."]));
+    assert_eq!(sec["paragraphs"], json!(["One sentence. Another one."]));
     let (code, saved) = api
-        .put(&format!("{p}/sections/01-intro.tex"), json!({"title": "Intro", "paragraphs": ["One sentence, edited."], "base": {"title": sec["title"], "paragraphs": sec["paragraphs"]}}))
+        .put(&format!("{p}/sections/intro.tex"), json!({"title": "Intro", "paragraphs": ["One sentence, edited."], "base": {"title": sec["title"], "paragraphs": sec["paragraphs"]}}))
         .await;
     assert_eq!(code, 200, "{saved}");
-    assert!(std::fs::read_to_string(proj.join("sections/01-intro.tex")).unwrap().contains("One sentence, edited."));
+    assert!(std::fs::read_to_string(proj.join("intro.tex")).unwrap().contains("One sentence, edited."));
     let stamp = saved["stamp"].clone();
     assert_eq!(api.get(&format!("{p}/stamp")).await.1["stamp"], stamp);
 
     // edited in another editor: the stamp moves, a save from the old text is refused
-    std::fs::write(proj.join("sections/01-intro.tex"), "\\section{Intro}\n\nChanged elsewhere.\n").unwrap();
+    std::fs::write(proj.join("intro.tex"), "\\section{Intro}\n\nChanged elsewhere.\n").unwrap();
     assert_ne!(api.get(&format!("{p}/stamp")).await.1["stamp"], stamp);
     let (code, v) = api
-        .put(&format!("{p}/sections/01-intro.tex"), json!({"title": "Intro", "paragraphs": ["Mine."], "base": {"title": "Intro", "paragraphs": ["One sentence, edited."]}}))
+        .put(&format!("{p}/sections/intro.tex"), json!({"title": "Intro", "paragraphs": ["Mine."], "base": {"title": "Intro", "paragraphs": ["One sentence, edited."]}}))
         .await;
     assert_eq!(code, 409);
     assert_eq!(v["section"]["paragraphs"], json!(["Changed elsewhere."]));
     // 保留我的版本
-    let (code, _) = api.put(&format!("{p}/sections/01-intro.tex"), json!({"title": "Intro", "paragraphs": ["Mine."]})).await;
+    let (code, _) = api.put(&format!("{p}/sections/intro.tex"), json!({"title": "Intro", "paragraphs": ["Mine."]})).await;
     assert_eq!(code, 200);
 
     // PaperComposer's own files go into .papercomposer/, not the project's top level
@@ -117,7 +121,7 @@ async fn opens_latex_and_word_where_they_are() {
     assert_eq!(api.post(&format!("{p}/citations"), json!({"key": "k1", "purpose": "Intro"})).await.0 / 100, 2);
     let app = files_under(&proj.join(".papercomposer"));
     assert!(app.contains(&"review.json".into()) && app.contains(&"citations.csv".into()) && app.contains(&"paper.toml".into()), "{app:?}");
-    assert_eq!(files_under(&proj), [".papercomposer", "main.tex", "notation.tex", "sections"]);
+    assert_eq!(files_under(&proj), [".papercomposer", "intro.tex", "ms.tex", "notation.tex"]);
 
     // the start screen and the recent list
     let (_, cards) = api.get("/api/home/papers").await;
@@ -141,6 +145,17 @@ async fn opens_latex_and_word_where_they_are() {
     let (code, v) = api.post("/api/open/extract", json!({"path": zip, "dest": v["dest"]})).await;
     assert_eq!((code, v["kind"].as_str()), (200, Some("latex")), "{v}");
     assert!(!root.join("Projects/Shared/sections").exists(), "unpacked, not restructured yet");
+    // no sections in separate files: opening as it is says so; 整理成章節檔 backs up first
+    assert_eq!(v["plan"]["sections"], json!([]));
+    let shared = root.join("Projects/Shared");
+    let (code, _) = api.post("/api/open/latex", json!({"path": v["path"], "stamp": v["plan"]["stamp"]})).await;
+    assert_eq!(code, 400);
+    assert!(!shared.join(".papercomposer").exists());
+    let original = std::fs::read(shared.join("main.tex")).unwrap();
+    let (code, w) = api.post("/api/open/latex", json!({"path": v["path"], "stamp": v["plan"]["stamp"], "restructure": true})).await;
+    assert_eq!(code, 200, "{w}");
+    assert!(shared.join("sections").is_dir());
+    assert_eq!(std::fs::read(shared.join(".papercomposer/original/main.tex")).unwrap(), original, "the original is kept");
 
     // Word: a new LaTeX folder beside the .docx, tracked changes in the review
     let docx = root.join("Projects/Widgets.docx");

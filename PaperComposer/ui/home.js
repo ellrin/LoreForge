@@ -1,5 +1,6 @@
 // Start screen (封面). Level 1: what to do, one large card per mode (MODES:
-// a new mode is one entry). Level 2 (寫論文): new paper, import, and the
+// a new mode is one entry), then 最近 (one list, both kinds of papers). At launch the
+// paper that was open last opens again. Level 2 (寫論文): new paper, import, and the
 // workspace's papers to continue, most recently edited first.
 // The paper button in the top bar comes back here.
 
@@ -26,6 +27,7 @@ const PCHome = (() => {
     $("#actFile").setAttribute("aria-expanded", "true");
     $("#fileMenu").hidden = true;
     draw(true);
+    reopenLast();
   }
 
   function close() {
@@ -82,9 +84,9 @@ const PCHome = (() => {
       inner.append(block("01", "開始", grid));
       box.append(inner);
       if (focus) grid.querySelector(".home-card:not(:disabled)")?.focus();
-      // 最近: folders opened where they are (open.js)
-      const recent = await PCOpen.recentList();
-      if (grid.isConnected && level === 1 && recent.childElementCount) inner.append(block("02", "最近", recent));
+      // 最近: one list, the workspace's papers and the folders opened where they are
+      try { papers = await api("/api/home/papers"); } catch { papers = papers ?? []; }
+      if (grid.isConnected && level === 1 && papers.length) inner.append(block("02", "最近", recentList(papers.slice(0, 6))));
       return;
     }
 
@@ -120,6 +122,41 @@ const PCHome = (() => {
     try { papers = await api("/api/home/papers"); }
     catch (e) { papers = papers ?? []; flash(e.message, 6000); }
     if (grid.isConnected) fill(); // unless the screen was redrawn or left meanwhile
+  }
+
+  const baseName = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
+
+  /** Name, and the folder it sits in (a paper opened where it is). */
+  function recentList(items) {
+    const box = el("div", "open-recent");
+    const ul = el("ul");
+    for (const p of items) {
+      const li = el("li");
+      const b = el("button", "open-item");
+      b.type = "button";
+      b.dataset.paper = p.name;
+      b.title = p.path ?? p.name;
+      const where = p.path ? baseName(p.path.replace(/[\\/][^\\/]*[\\/]?$/, "")) : "";
+      b.append(icon(p.path ? "openLatex" : "modePaper"), el("span", "open-name", p.name), el("span", "open-where", where));
+      b.onclick = () => openPaper(p.name);
+      li.append(b);
+      ul.append(li);
+    }
+    box.append(ul);
+    return box;
+  }
+
+  /** At launch: back to the paper that was open last, if it is still there. */
+  let launched = false;
+  async function reopenLast() {
+    if (launched) return;
+    launched = true;
+    const last = store.get("pc.paper", null);
+    if (!last || state.paper || new URLSearchParams(location.search).has("open")) return;
+    try {
+      papers = await api("/api/home/papers");
+      if (!state.paper && papers.some((p) => p.name === last)) await openPaper(last);
+    } catch {}
   }
 
   function paperCard(p) {
