@@ -92,6 +92,7 @@ const S = {
   search: { q: "", hits: [], i: -1 },
   sending: false,
 };
+try { S.fieldSkipped = localStorage.getItem("lr.fieldSkipped") === "1"; } catch {}
 try { S.termsOn = localStorage.getItem("lr.terms") !== "0"; S.tab = localStorage.getItem("lr.tab") || "nouns"; } catch {}
 
 const key = (sha, page) => `${sha}:${page}`;
@@ -164,12 +165,28 @@ async function showHome() {
     p.doi ? h("span", { class: "meta" }, `doi:${p.doi}`) : null,
     p.derived_from ? h("span", { class: "tag" }, "編輯版") : null,
     p.present ? null : h("span", { class: "tag" }, "不在這台電腦")),
+    p.present ? h("button", { class: "ico small rename", "aria-label": "改標題", title: "改標題", "data-icon": "pen", onclick: () => renameDialog(p) }) : null,
     p.present ? h("button", { class: "ico small mine", "aria-label": "我的論文", "aria-pressed": p.mine ? "true" : "false", "data-icon": "star", onclick: (ev) => toggleMine(p, ev.currentTarget) }) : null));
   $("#paperList").replaceChildren(...(cards.length ? cards : [h("p", { class: "empty" }, "書庫是空的")]));
   paintIcons($("#paperList"));
 }
 
 /** 「我的論文」: its words become the author's own vocabulary (never red). */
+/** Rename a paper (the title the library, the quotes and the KB source show). */
+async function renameDialog(paper) {
+  const inp = h("input", { value: paper.title });
+  const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); close(inp.value.trim()); } },
+    h("h3", {}, "標題"), inp,
+    h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"), h("button", { class: "btn primary" }, "儲存"))));
+  if (!r || r === paper.title) return;
+  try {
+    const out = await api(`/api/papers/${paper.sha256}`, { method: "PUT", body: { title: r } });
+    paper.title = out.paper.title;
+    if (S.sha === paper.sha256) { S.paper = out.paper; $("#paperName").textContent = out.paper.title; $("#paperName").title = out.paper.title; document.title = `${out.paper.title} · LoreReader`; }
+    if (!S.sha) showHome();
+  } catch (e) { fail(e); }
+}
+
 async function toggleMine(p, btn) {
   const on = !p.mine;
   btn.disabled = true;
@@ -188,7 +205,30 @@ async function toggleMine(p, btn) {
   btn.disabled = false;
 }
 
-function go(sha, page = 1) {
+/** Leaving the open paper with notes that are not in a PDF yet: ask once, like the desktop
+ *  shell does on close (儲存 / 不儲存 / 取消). `false` = stay. */
+async function confirmLeave() {
+  if (!S.sha) return true;
+  await refreshExport();
+  if (!S.exp?.dirty) return true;
+  const last = S.exp.last?.exists ? S.exp.last : null;
+  const r = await dialog((d, close) => h("div", { class: "dlg" },
+    h("h3", {}, "儲存筆記到新的 PDF？"),
+    h("div", { class: "quote-box" }, `《${S.paper.title}》`, last ? ` → ${last.name}` : ""),
+    h("div", { class: "actions" },
+      h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"),
+      h("button", { type: "button", class: "btn", onclick: () => close("skip") }, "不儲存"),
+      h("button", { type: "button", class: "btn primary", onclick: () => close("save") }, last ? "儲存" : "儲存…"))));
+  if (r === "skip") {
+    try { await api(`/api/papers/${S.sha}/export/decline`, { body: {} }); } catch (e) { fail(e); }
+    return true;
+  }
+  if (r === "save") return last ? saveNotesLast() : saveNotesAs();
+  return false;
+}
+
+async function go(sha, page = 1) {
+  if (sha !== S.sha && !(await confirmLeave())) return;
   const u = new URL(location.href);
   u.search = sha ? `?paper=${sha}&page=${page}` : "";
   history.pushState(null, "", u);
@@ -662,6 +702,55 @@ function surrounding(text, start, end) {
   return norm(t.slice(s, e));
 }
 
+// ── selection actions: the toolbar, the shortcuts and the context menu ────
+/** What can be done with a selection; `key` is its shortcut (digits = highlight colours). */
+function selActions(info) {
+  const colors = S.info?.colors ?? ["yellow", "green", "blue", "pink"];
+  return [
+    ...colors.map((c, i) => ({ key: String(i + 1), color: c, label: `螢光（${COLOR_LABEL[c]}）`, run: () => addAnnotation(info, { kind: "highlight", color: c }) })),
+    { key: "n", icon: "pen", label: "加註記…", run: () => noteDialog(info) },
+    { key: "c", icon: "copy", label: "複製", hint: "C", run: () => navigator.clipboard.writeText(info.text).then(() => toast("已複製"), () => document.execCommand("copy")) },
+    { key: "t", icon: "languages", label: "翻譯", hint: "T", run: () => translate(info.text, info.context, info.box, info) },
+    { key: "a", icon: "chat", label: "問這篇", hint: "A", run: () => attach(info) },
+    { key: "q", icon: "quote", label: "存成引用句…", hint: "Q", run: () => quoteDialog(info) },
+    { key: "k", icon: "book", label: "加入知識庫…", hint: "K", run: () => addCardDialog({ title: info.text, sha: info.p.sha, page: info.p.page, context: info.context }) },
+  ].map((x) => ({ hint: x.key === "n" ? "N" : undefined, ...x }));
+}
+
+const hideSelBar = () => { $("#selBar").hidden = true; };
+
+/** The small bar above a finished selection. */
+async function showSelBar() {
+  const info = await selectionInfo();
+  if (!info) { hideSelBar(); return; }
+  const bar = $("#selBar");
+  const go = (x) => () => { hideSelBar(); x.run(); };
+  const acts = selActions(info);
+  bar.replaceChildren(
+    ...acts.filter((x) => x.color).map((x) => h("button", { type: "button", class: `sw c-${x.color}`, title: `${x.label} (${x.key})`, "aria-label": x.label, onclick: go(x) })),
+    h("span", { class: "sep" }),
+    ...acts.filter((x) => !x.color).map((x) => h("button", { type: "button", class: "ico small", title: `${x.label} (${x.hint})`, "aria-label": x.label, "data-icon": x.icon, onclick: go(x) })));
+  paintIcons(bar);
+  bar.hidden = false;
+  const b = info.box, w = bar.offsetWidth, hh = bar.offsetHeight;
+  bar.style.left = `${clamp(b.left + b.width / 2 - w / 2, 8, innerWidth - w - 8)}px`;
+  bar.style.top = `${b.top - hh - 8 < 56 ? Math.min(b.bottom + 8, innerHeight - hh - 8) : b.top - hh - 8}px`;
+}
+
+/** Shortcuts while a selection is inside a page: 1–4 highlight, N note, C copy, T translate,
+ *  A ask, Q quote, K knowledge base. */
+function onSelKey(e) {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || e.key.length !== 1) return;
+  if (e.target.closest?.("input, textarea, select, dialog, [contenteditable]")) return;
+  const sel = getSelection();
+  if (!sel || sel.isCollapsed || !sel.anchorNode) return;
+  if (!(sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode).closest?.(".page")) return;
+  const k = e.key.toLowerCase();
+  if (!"1234ncataqk".includes(k)) return;
+  e.preventDefault();
+  selectionInfo().then((info) => { if (!info) return; hideSelBar(); selActions(info).find((x) => x.key === k)?.run(); });
+}
+
 // ── context menu ──────────────────────────────────────────────────────────
 function closeMenus() { $("#ctxMenu").hidden = true; }
 function placeAt(el, x, y) {
@@ -682,18 +771,18 @@ async function onContextMenu(e) {
   const info = await selectionInfo();
   if (!info) return;
   e.preventDefault();
+  $("#selBar").hidden = true;
   const m = $("#ctxMenu");
-  const item = (icon, label, fn, disabled) => h("button", { type: "button", role: "menuitem", disabled, onclick: () => { closeMenus(); fn(); } }, h("span", { "data-icon": icon }), label);
+  const item = (x) => h("button", { type: "button", role: "menuitem", onclick: () => { closeMenus(); x.run(); } }, h("span", { "data-icon": x.icon }), x.label, x.hint ? h("span", { class: "muted menu-sub" }, x.hint) : null);
+  const acts = selActions(info);
+  const pick = (k) => acts.find((x) => x.key === k);
   m.replaceChildren(
-    item("copy", "複製", () => navigator.clipboard.writeText(info.text).then(() => toast("已複製"), () => document.execCommand("copy"))),
+    item(pick("c")),
     h("hr"),
-    h("div", { class: "swrow" }, h("span", { class: "swicon", "data-icon": "highlighter", title: "螢光" }), (S.info?.colors ?? ["yellow", "green", "blue", "pink"]).map((c) => h("button", { type: "button", class: `sw c-${c}`, "aria-label": `螢光（${COLOR_LABEL[c]}）`, title: `${COLOR_LABEL[c]}色`, onclick: () => { closeMenus(); addAnnotation(info, { kind: "highlight", color: c }); } }))),
-    item("pen", "加註記…", () => noteDialog(info)),
+    h("div", { class: "swrow" }, h("span", { class: "swicon", "data-icon": "highlighter", title: "螢光" }), acts.filter((x) => x.color).map((x) => h("button", { type: "button", class: `sw c-${x.color}`, "aria-label": x.label, title: `${COLOR_LABEL[x.color]}色 (${x.key})`, onclick: () => { closeMenus(); x.run(); } }))),
+    item(pick("n")),
     h("hr"),
-    item("languages", "翻譯", () => translate(info.text, info.context, info.box, info)),
-    item("chat", "問 Claude", () => attach(info)),
-    item("quote", "存成引用句…", () => quoteDialog(info)),
-    item("book", "加入知識庫…", () => addCardDialog({ title: info.text, sha: info.p.sha, page: info.p.page, context: info.context })),
+    item(pick("t")), item(pick("a")), item(pick("q")), item(pick("k")),
   );
   paintIcons(m);
   placeAt(m, e.clientX, e.clientY);
@@ -733,6 +822,7 @@ function drawHighlights(p) {
     Object.assign(d.style, { left: `${r[0] * 100}%`, top: `${r[1] * 100}%`, width: `${(r[2] - r[0]) * 100}%`, height: `${(r[3] - r[1]) * 100}%` });
     return d;
   })));
+  markUnderHl(p);
 }
 
 function jumpTo(page, id) {
@@ -879,6 +969,26 @@ async function decorate(p) {
     }
     div.replaceChildren(...out);
     div.dataset.marked = "1";
+  });
+  markUnderHl(p);
+}
+
+/** Knowledge colouring under a highlight would mix the two colours: such terms keep an
+ *  underline only (`.under-hl`). */
+function markUnderHl(p) {
+  if (!p.el) return;
+  const rects = p.sha === S.sha ? S.annotations.filter((a) => a.page === p.page).flatMap((a) => a.rects ?? []) : [];
+  const marks = p.el.querySelectorAll(".mk.kt-new, .mk.kt-learn, .mk.under-hl");
+  if (!marks.length) return;
+  const pr = rects.length ? p.el.getBoundingClientRect() : null;
+  marks.forEach((m) => {
+    let on = false;
+    if (pr) {
+      const r = m.getBoundingClientRect();
+      const cx = (r.left + r.width / 2 - pr.left) / pr.width, cy = (r.top + r.height / 2 - pr.top) / pr.height;
+      on = rects.some((q) => cx >= q[0] && cx <= q[2] && cy >= q[1] && cy <= q[3]);
+    }
+    m.classList.toggle("under-hl", on);
   });
 }
 
@@ -1129,6 +1239,11 @@ async function readPaper(sha) {
     const r = await api(`/api/papers/${sha}/read`, { body: { pages } });
     if (S.sha !== sha) return;
     S.readStatus = "";
+    api(`/api/papers/${sha}`).then(({ paper }) => {
+      if (S.sha === sha && paper.title !== S.paper.title) {
+        S.paper = paper; $("#paperName").textContent = paper.title; $("#paperName").title = paper.title; document.title = `${paper.title} · LoreReader`;
+      }
+    }).catch(() => {});
     S.words = r.words;
     setSymbols(r.symbols);
     setNouns(r.nouns);
@@ -1283,6 +1398,7 @@ function nounsPane() {
     out.push(h("p", { class: "empty" }, S.readStatus || "讀取全文…"));
     return out;
   }
+  if (!n.field_set && !S.fieldSkipped) out.push(fieldAsk());
   const v = S.nounView;
   const cls = n.classification;
   const count = (f) => n.entries.filter(f).length;
@@ -1402,7 +1518,7 @@ function chipMenu(p, kind, id, ev) {
   m.replaceChildren(
     h("div", { class: "menu-title" }, kind === "symbol" ? tex(label) : label),
     item("eye", "看定義", () => showChipDef(kind, id, anchor)),
-    item("chat", "問 Claude", () => askClaude(p.id, { kind, id, label: kind === "symbol" ? label : label })),
+    item("chat", "問這篇", () => askClaude(p.id, { kind, id, label: kind === "symbol" ? label : label })),
     kind === "equation" ? null : item("book", "加入知識庫…", () => addCardDialog({ title: kind === "symbol" ? "" : label, sha: S.sha, page: p.page, context: p.text.slice(0, 600) })));
   paintIcons(m);
   placeAt(m, box.left, box.bottom + 4);
@@ -1523,11 +1639,36 @@ function defaultLabel(ref) {
 }
 
 // ── model menu ────────────────────────────────────────────────────────────
+/** Asked once, where the red terms are: the field decides what counts as basic. */
+function fieldAsk() {
+  const inp = h("input", { placeholder: "例如：視網膜影像分析", "aria-label": "你的領域", maxlength: 200 });
+  const save = async () => {
+    const f = inp.value.trim();
+    if (!f) return;
+    try {
+      await api("/api/reader", { method: "PUT", body: { field: f } });
+      await refreshNouns();
+      if (S.nouns?.classification.pending > 0) classifyNouns(false);
+    } catch (e) { fail(e); }
+  };
+  return h("form", { class: "nn-field", onsubmit: (e) => { e.preventDefault(); save(); } },
+    h("label", {}, "你的領域", inp),
+    h("button", { class: "btn small primary" }, "確定"),
+    h("button", { type: "button", class: "btn small ghost", onclick: () => { try { localStorage.setItem("lr.fieldSkipped", "1"); } catch {} S.fieldSkipped = true; renderSide(); } }, "略過"));
+}
+
 async function modelDialog() {
   let m, rd;
   try { [m, rd] = await Promise.all([api("/api/models"), api("/api/reader")]); } catch (e) { fail(e); return; }
   const fieldIn = h("input", { value: rd.field === rd.default ? "" : rd.field, placeholder: rd.default });
-  fieldIn.addEventListener("change", async () => { try { await api("/api/reader", { method: "PUT", body: { field: fieldIn.value } }); toast("已儲存；重新分類時生效"); } catch (e) { fail(e); } });
+  fieldIn.addEventListener("change", async () => {
+    try {
+      await api("/api/reader", { method: "PUT", body: { field: fieldIn.value } });
+      toast("已儲存");
+      await refreshNouns();
+      if (S.nouns?.classification.pending > 0) classifyNouns(false);
+    } catch (e) { fail(e); }
+  });
   const field = h("label", { title: "名詞分類用它判斷哪些詞對你是基礎" }, "你的領域", fieldIn);
   const rows = h("div", { class: "model-rows" });
   const paint = () => rows.replaceChildren(...m.tasks.map((t) => h("div", { class: "model-row" },
@@ -1538,9 +1679,9 @@ async function modelDialog() {
   paint();
   await dialog((d, close) => h("div", { class: "dlg" },
     h("h3", {}, "模型"),
+    field,
     m.local_engine ? null : h("div", { class: "warn-box" }, "沒有設定地端模型"),
     rows,
-    field,
     h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(true) }, "關閉"))));
 }
 
@@ -1583,7 +1724,7 @@ function attach(info) {
   setTimeout(() => $("#chatInput")?.focus(), 50);
 }
 
-async function sendChat() {
+async function sendChat(model) {
   const ta = $("#chatInput");
   const text = ta.value.trim();
   const ctx = S.chatCtx;
@@ -1596,6 +1737,7 @@ async function sendChat() {
   renderSide();
   try {
     const body = { text, attachments: att };
+    if (typeof model === "string") body.model = model;
     if (ctx) { body.paragraph = ctx.paragraph; if (ctx.chip) body.chip = { kind: ctx.chip.kind, id: ctx.chip.id }; }
     const r = await api(`/api/papers/${S.sha}/chat`, { body });
     S.chat.pop();
@@ -1603,6 +1745,8 @@ async function sendChat() {
   } catch (e) {
     S.chat.pop(); S.att = att; S.chatDraft = text; S.chatCtx = ctx;
     S.chatError = e.message;
+    S.chatLocal = false;
+    if (e.data?.llm_unavailable && !model) { try { S.chatLocal = !!(await api("/api/models")).local_engine; } catch {} }
   }
   S.sending = false;
   renderSide();
@@ -1654,7 +1798,7 @@ function renderSide() {
 }
 
 function notesPane() {
-  if (!S.annotations.length) return [h("p", { class: "empty" }, "選取文字 → 右鍵")];
+  if (!S.annotations.length) return [h("p", { class: "empty" }, "選取文字後按 1–4（螢光）或 N（註記）")];
   const sorted = [...S.annotations].sort((a, b) => a.page - b.page || (a.rects?.[0]?.[1] ?? 0) - (b.rects?.[0]?.[1] ?? 0));
   return [h("ul", { class: "items" }, sorted.map((a) => h("li", { class: "item", onclick: (e) => { if (!e.target.closest("button")) jumpTo(a.page, a.id); } },
     h("span", { class: `dot c-${a.color}` }),
@@ -1690,7 +1834,7 @@ async function delAnnotation(a) {
 }
 
 function quotesPane() {
-  if (!S.quotes.length) return [h("p", { class: "empty" }, "選取文字 → 右鍵 → 存成引用句…")];
+  if (!S.quotes.length) return [h("p", { class: "empty" }, "選取文字後按 Q")];
   return [h("ul", { class: "items" }, S.quotes.map((q) => h("li", { class: "item", onclick: (e) => { if (!e.target.closest("button")) jumpTo(q.page); } },
     h("span", { class: "dot q" }),
     h("span", { class: "body" }, h("span", { class: "txt" }, `“${q.text}”`), q.note ? h("span", { class: "note" }, q.note) : null, h("span", { class: "meta" }, `p.${q.page} · ${q.created_at.slice(5, 10)}`)),
@@ -1724,9 +1868,9 @@ function chatPane() {
     m.role === "assistant" ? mixed(m.text) : m.text,
     m.role === "assistant" && (m.engine || m.paragraph) ? h("div", { class: "eng-row" }, h("span", { class: "eng" }, m.engine ?? ""), m.paragraph ? answerActions(m) : null) : null,
     m.pending ? h("span", { class: "eng" }, "思考中…") : null));
-  const err = S.chatError ? h("div", { class: "err-box" }, S.chatError) : null;
+  const err = S.chatError ? h("div", { class: "err-box" }, S.chatError, S.chatLocal ? h("button", { type: "button", class: "btn small", onclick: () => sendChat("local") }, "改用地端") : null) : null;
   S.chatError = null;
-  return [head, h("div", { class: "msgs" }, msgs.length ? msgs : [h("p", { class: "empty" }, S.chatScope === "para" ? "這段還沒有對話" : "選取文字 → 右鍵 → 問 Claude")]), err].filter(Boolean);
+  return [head, h("div", { class: "msgs" }, msgs.length ? msgs : [h("p", { class: "empty" }, S.chatScope === "para" ? "這段還沒有對話" : "選取文字後按 A")]), err].filter(Boolean);
 }
 
 /** Under an answer about a paragraph: write it back to the symbol table, keep it as
@@ -1811,8 +1955,8 @@ async function saveNotesAs() {
   try {
     if (S.exp?.save_dialog !== false) {
       const r = await api(`/api/papers/${S.sha}/export`, { body: { choose: true } });
-      if (r.cancelled) return;
-      if (r.native !== false) return exported(r);
+      if (r.cancelled) return false;
+      if (r.native !== false) { exported(r); return true; }
     }
     const res = await fetch(`/api/papers/${S.sha}/export.pdf`, { method: "POST" });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `${res.status}`);
@@ -1820,11 +1964,12 @@ async function saveNotesAs() {
     h("a", { href: url, download: S.exp?.default_name ?? "notes.pdf" }).click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     refreshExport();
-  } catch (e) { fail(e); }
+    return true;
+  } catch (e) { fail(e); return false; }
 }
 
 async function saveNotesLast() {
-  try { exported(await api(`/api/papers/${S.sha}/export`, { body: { last: true } })); } catch (e) { fail(e); }
+  try { exported(await api(`/api/papers/${S.sha}/export`, { body: { last: true } })); return true; } catch (e) { fail(e); return false; }
 }
 
 function saveNotes(e) {
@@ -1867,6 +2012,7 @@ function togglePanel(which, force) {
 function wire() {
   paintIcons();
   $("#actHome").onclick = () => go(null);
+  $("#paperName").onclick = () => { if (S.paper) renameDialog(S.paper); };
   $("#actLook").onclick = () => lookDialog();
   $("#openFile").onchange = async (e) => { const p = await importFiles([...e.target.files]); e.target.value = ""; if (p) go(p.sha256, 1); else showHome(); };
   $("#pathForm").onsubmit = async (e) => { e.preventDefault(); try { const r = await api("/api/papers/import", { body: { path: $("#pathInput").value.trim() } }); $("#pathInput").value = ""; go(r.paper.sha256, 1); } catch (x) { fail(x); } };
@@ -1896,6 +2042,11 @@ function wire() {
   $("#searchPrev").onclick = () => stepSearch(-1);
   $("#viewport").addEventListener("scroll", onScroll, { passive: true });
   $("#pages").addEventListener("contextmenu", onContextMenu);
+  $("#pages").addEventListener("mouseup", () => setTimeout(showSelBar, 10));
+  document.addEventListener("keyup", (e) => { if (e.shiftKey && e.key.startsWith("Arrow") && e.target.closest?.(".viewport")) showSelBar(); });
+  document.addEventListener("selectionchange", () => { if (getSelection()?.isCollapsed) hideSelBar(); });
+  $("#selBar").addEventListener("mousedown", (e) => e.preventDefault());
+  $("#viewport").addEventListener("scroll", hideSelBar, { passive: true });
   $("#pages").addEventListener("click", onPageClick);
   $("#pages").addEventListener("mouseover", onPageHover);
   $("#pages").addEventListener("mouseout", onPageHoverOut);
@@ -1903,15 +2054,22 @@ function wire() {
   wireThumbDrag();
   document.addEventListener("mousedown", (e) => {
     if (!e.target.closest("#ctxMenu")) closeMenus();
+    if (!e.target.closest("#selBar")) hideSelBar();
     if (!e.target.closest("#pop") && !e.target.closest(".mk[data-t]") && !e.target.closest("dialog")) hidePop();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closeMenus(); hidePop(); }
+    if (e.key === "Escape") { closeMenus(); hidePop(); hideSelBar(); }
+    onSelKey(e);
     if ((e.metaKey || e.ctrlKey) && e.key === "f" && S.sha) { e.preventDefault(); $("#searchInput").focus(); $("#searchInput").select(); }
   });
   let rt;
   addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { if (S.sha && S.fit) setZoom(fitZoom(), true); if (S.tab === "paras") foldChips(); }, 150); });
-  addEventListener("popstate", route);
+  addEventListener("popstate", async () => {
+    const to = new URL(location.href).searchParams.get("paper");
+    if (S.sha && to !== S.sha && !(await confirmLeave())) { history.pushState(null, "", `?paper=${S.sha}&page=${S.pages[S.cur]?.page ?? 1}`); return; }
+    route();
+  });
+  addEventListener("beforeunload", (e) => { if (S.exp?.dirty) { e.preventDefault(); e.returnValue = ""; } });
   // Drop PDFs anywhere to add them.
   document.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
   document.addEventListener("drop", async (e) => {

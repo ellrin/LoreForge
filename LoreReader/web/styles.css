@@ -446,3 +446,32 @@ button.chip.warn { cursor: pointer; }
 .ico.save-notes.dirty { color: var(--accent-text); }
 .ico.save-notes.dirty::after { content: ""; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--panel); }
 .menu .menu-sub { margin-left: auto; padding-left: 14px; font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Selection bar, leaving a paper, first-use field ─────────────────── */
+.selbar { position: fixed; z-index: 58; display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r); box-shadow: 0 6px 20px #0006; }
+.selbar .sep { height: 18px; margin: 0 2px; }
+.selbar .sw { width: 18px; height: 18px; }
+.selbar .sw:hover { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.menu .menu-sub { margin-left: auto; padding-left: 16px; font: 500 11px var(--mono); }
+.err-box .btn { margin-top: 6px; display: flex; }
+.nn-field { display: flex; align-items: flex-end; gap: 6px; flex: none; }
+.nn-field label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--muted); }
+.nn-field input { height: 28px; font-size: 12.5px; width: 100%; color: var(--text); }
+.papername { cursor: pointer; }
+.home .cardwrap .card { padding-right: 72px; }
+.home .cardwrap .rename { position: absolute; top: 8px; right: 38px; }
+/* a highlight over a coloured term: the term keeps an underline only */
+.textLayer span.kt-new.under-hl, .textLayer span.kt-learn.under-hl { background: none; box-shadow: none; }
+.textLayer span.kt-new.under-hl { border-bottom: .12em solid var(--kt-new); }
+.textLayer span.kt-learn.under-hl { border-bottom: .12em solid var(--warn); }
+/* larger reading type in the side panel */
+.tabs button { font-size: 13.5px; }
+.tabs .n { font-size: 12px; }
+.nn-row { font-size: 13.5px; min-height: 32px; }
+.nn-cat { font-size: 12.5px; }
+.nn-num { font-size: 12px; }
+.nn-head button { font-size: 12px; }
+.nn-stats, .nn-stat { font-size: 13px; }
+.nn-tools select, .nn-tools input { font-size: 13px; }
+.item .meta { font-size: 12px; }
+html { overflow: hidden; height: 100%; }
