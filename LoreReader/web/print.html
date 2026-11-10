@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>列印 · LoreReader</title>
+  <style>
+    html, body { margin: 0; background: #e4e2de; font: 14px -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; }
+    #status { position: sticky; top: 0; padding: 10px 16px; background: #1d1d20; color: #f0f0f1; }
+    #status button { margin-left: 12px; font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid #ff8a5c; background: #ff6b35; color: #0a0706; font-weight: 600; cursor: pointer; }
+    #pages { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
+    .sheet { background: #fff; box-shadow: 0 2px 10px #0004; }
+    .sheet img { display: block; width: 100%; height: 100%; }
+    @media print {
+      html, body { background: #fff; }
+      #status { display: none; }
+      #pages { display: block; padding: 0; }
+      .sheet { box-shadow: none; margin: 0; break-after: page; page-break-after: always; overflow: hidden; }
+      .sheet:last-child { break-after: auto; page-break-after: auto; }
+    }
+  </style>
+  <style id="pageSize"></style>
+</head>
+<body>
+<div id="status">準備列印…</div>
+<div id="pages"></div>
+<script type="module">
+// Print view: every page of a paper rendered by pdf.js at print resolution (about
+// 216 dpi), one sheet per page at the PDF's own page size. In the browser `auto=1`
+// opens the print dialog; in the desktop app `job=<id>` tells the server the view is
+// ready and the app shows the native (macOS) print dialog on this window.
+import * as pdfjsLib from "./vendor/pdfjs/pdf.min.mjs";
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdfjs/pdf.worker.min.mjs", import.meta.url).href;
+const DPI = 216;
+const q = new URL(location.href).searchParams;
+const sha = q.get("sha");
+const status = document.getElementById("status");
+const doc = await pdfjsLib.getDocument({ url: `/api/papers/${sha}/pdf`, standardFontDataUrl: new URL("./vendor/pdfjs/standard_fonts/", import.meta.url).href, isEvalSupported: false }).promise;
+const first = (await doc.getPage(1)).getViewport({ scale: 1 });
+// @page uses the first page's size; pages of another size are scaled to fit it.
+document.getElementById("pageSize").textContent = `@page { size: ${first.width}pt ${first.height}pt; margin: 0; } @media print { .sheet { width: ${first.width}pt; height: ${first.height}pt; } }`;
+const box = document.getElementById("pages");
+for (let n = 1; n <= doc.numPages; n++) {
+  status.textContent = `準備列印… ${n} / ${doc.numPages}`;
+  const pg = await doc.getPage(n);
+  const vp1 = pg.getViewport({ scale: 1 });
+  const vp = pg.getViewport({ scale: DPI / 72 });
+  const c = document.createElement("canvas");
+  c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+  await pg.render({ canvasContext: c.getContext("2d"), viewport: vp, intent: "print" }).promise;
+  const blob = await new Promise((r) => c.toBlob(r, "image/png"));
+  const img = new Image();
+  img.src = URL.createObjectURL(blob);
+  await img.decode();
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  sheet.style.width = `${vp1.width}pt`; sheet.style.height = `${vp1.height}pt`;
+  sheet.append(img);
+  box.append(sheet);
+  c.width = c.height = 0;
+}
+status.textContent = `${doc.numPages} 頁已就緒。`;
+const again = document.createElement("button");
+again.textContent = "列印";
+again.onclick = () => window.print();
+status.append(again);
+document.body.dataset.ready = "1";
+if (q.get("job")) fetch(`/api/print/ready?id=${encodeURIComponent(q.get("job"))}`, { method: "POST" }).catch(() => {});
+else if (q.get("auto") === "1") setTimeout(() => window.print(), 100);
+</script>
+</body>
+</html>

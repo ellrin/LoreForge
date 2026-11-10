@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-Hant" data-mode="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LoreReader</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 5h7a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H3Z' fill='%23ff6b35'/%3E%3Cpath d='M21 5h-7a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h7Z' fill='%23ff8a5c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="prefs.css">
+  <script src="prefs.js"></script>
+  <script src="theme.js"></script>
+</head>
+<body>
+<div class="app at-home" id="app">
+  <header class="top">
+    <button class="ico" id="actHome" data-icon="folder" aria-label="書庫"></button>
+    <button class="ico rd-only narrow-only" id="toggleThumbs" data-icon="cards" aria-label="頁面縮圖" aria-pressed="false"></button>
+    <div class="brand">LORE<b>/</b>READER</div>
+    <span class="papername" id="paperName"></span>
+    <span class="chip warn rd-only" id="editChip" hidden>頁面已變更（未儲存）</span>
+    <div class="top-right">
+      <span class="rd-only top-group">
+        <button class="ico" id="actPrev" data-icon="back" aria-label="上一頁"></button>
+        <span class="pagebox"><input id="pageInput" inputmode="numeric" aria-label="頁碼"><span id="pageTotal">/ 0</span></span>
+        <button class="ico" id="actNext" data-icon="next" aria-label="下一頁"></button>
+        <span class="sep hide-sm"></span>
+        <button class="ico hide-sm" id="actZoomOut" data-icon="zoomOut" aria-label="縮小"></button>
+        <span class="chip hide-sm" id="zoomChip">100%</span>
+        <button class="ico hide-sm" id="actZoomIn" data-icon="zoomIn" aria-label="放大"></button>
+        <button class="ico hide-sm" id="actFit" data-icon="fit" aria-label="符合寬度"></button>
+        <span class="sep"></span>
+        <button class="ico" id="actPrint" data-icon="printer" aria-label="列印"></button>
+        <button class="ico narrow-only" id="toggleSide" data-icon="panel" aria-label="右側面板" aria-pressed="false"></button>
+      </span>
+      <button class="ico" id="actMode" data-icon="sun" aria-label="切換深色／淺色"></button>
+    </div>
+  </header>
+
+  <nav class="tools rd-only" id="tools" aria-label="工具">
+    <span class="searchbox">
+      <span data-icon="search"></span>
+      <input id="searchInput" type="search" placeholder="搜尋全文" aria-label="搜尋全文">
+    </span>
+    <button class="ico" id="searchPrev" data-icon="up" aria-label="上一個符合"></button>
+    <button class="ico" id="searchNext" data-icon="chevron" aria-label="下一個符合"></button>
+    <span class="count" id="searchCount"></span>
+    <span class="sep"></span>
+    <button class="ico" id="actTerms" data-icon="target" aria-label="知識標示：沒學過的術語標紅" aria-pressed="false"></button>
+    <span class="legend" id="legend" hidden>
+      <span class="lg"><i class="kt-new"></i>沒有卡片</span>
+      <span class="lg"><i class="kt-learn"></i>學習中／久未複習</span>
+      <span class="lg"><i class="kt-known"></i>記得</span>
+      <span class="lg muted" id="kbNote"></span>
+    </span>
+    <span class="sep"></span>
+    <span class="lbl">頁面</span>
+    <button class="ico" id="pgDup" data-icon="dup" aria-label="複製這一頁"></button>
+    <button class="ico" id="pgDel" data-icon="trash" aria-label="刪除這一頁"></button>
+    <button class="ico" id="pgInsert" data-icon="insert" aria-label="從其他 PDF 插入頁面…"></button>
+    <span class="edit-actions" id="editActions" hidden>
+      <button class="btn small primary" id="editSave"><span data-icon="save"></span>另存新檔</button>
+      <button class="btn small" id="editDiscard">放棄變更</button>
+    </span>
+  </nav>
+
+  <aside class="sorter rd-only" id="sorter" aria-label="頁面縮圖">
+    <div class="sorter-head"><span id="thumbCount"></span><span class="muted hint-drag">拖曳可調整順序</span></div>
+    <div id="thumbs"></div>
+  </aside>
+
+  <main class="stage rd-only">
+    <div class="viewport" id="viewport"><div class="pages" id="pages"></div></div>
+  </main>
+
+  <aside class="side rd-only" id="side">
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="notes" aria-selected="true">註記</button>
+      <button role="tab" data-tab="quotes">引用句</button>
+      <button role="tab" data-tab="chat">對話</button>
+    </div>
+    <div class="pane" id="pane"></div>
+  </aside>
+</div>
+
+<section class="home" id="home">
+  <div class="home-head">
+    <h2>書庫</h2>
+    <label class="btn primary"><span data-icon="upload"></span>開啟 PDF<input type="file" id="openFile" accept="application/pdf,.pdf" multiple hidden></label>
+    <button class="btn" id="actMerge"><span data-icon="merge"></span>合併 PDF…</button>
+  </div>
+  <div class="warn-box" id="libError" hidden></div>
+  <div class="cards" id="paperList"></div>
+  <form id="pathForm" class="pathform"><input id="pathInput" placeholder="或輸入本機 PDF 路徑（會複製進書庫）"> <button class="btn">加入</button></form>
+  <p class="muted mono" id="libInfo"></p>
+</section>
+
+<div class="menu" id="ctxMenu" role="menu" hidden></div>
+<div class="pop" id="pop" role="dialog" hidden></div>
+<dialog id="dlg"></dialog>
+
+<script src="icons.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
