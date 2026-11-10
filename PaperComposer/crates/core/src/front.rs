@@ -55,9 +55,12 @@ pub(crate) fn group_end(s: &str, open: usize) -> Option<usize> {
     None
 }
 
-/// The part of main.tex that holds the title block: up to the first section.
+/// The part of the main file that holds the title block: up to the first
+/// section (an `\input{sections/…}`, an `\include`, or a `\section` typed in
+/// a paper opened as it is).
 fn front_limit(m: &str) -> usize {
-    m.find("\\input{sections/").unwrap_or(m.len())
+    let body = m.find("\\begin{document}").unwrap_or(0);
+    ["\\input{sections/", "\\include{", "\\section"].iter().filter_map(|k| m[body..].find(k).map(|i| body + i)).min().unwrap_or(m.len())
 }
 
 /// Content ranges of `\cmd*[opt]{content}`.

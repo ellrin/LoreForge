@@ -75,7 +75,7 @@ const PCOpen = (() => {
       if (c.comments) bits.push(`${c.comments} 則註解`);
       if (c.notation?.length) bits.push(`${c.notation.length} 處編號沒對上，已列在審閱`);
       flash(`已轉成 LaTeX：${bits.join("、")}`, c.notation?.length ? 12000 : 5000);
-      if (c.changes || c.comments) window.PCReview?.setMode("review");
+      if (c.changes || c.comments || c.notation?.length) window.PCReview?.setMode("review");
     }
   }
 

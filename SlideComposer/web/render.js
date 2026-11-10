@@ -341,6 +341,15 @@ function flipCss(f) {
 }
 
 /** Render an object (recursively for groups). */
+const phEmpty = (o) => !o.text || o.text.paras.every((p) => !p.runs.some((r) => (r.text ?? "").length || r.kind === "math"));
+
+/** Another object sits over the centre of `o` (the empty-placeholder label would run into it). */
+function coveredByOther(o, ctx) {
+  const f = o.frame, cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+  return (ctx.siblings ?? []).some((x) => x !== o && !x.hidden && !(x.ph && phEmpty(x)) && x.frame
+    && cx >= x.frame.x && cx <= x.frame.x + x.frame.w && cy >= x.frame.y && cy <= x.frame.y + x.frame.h);
+}
+
 function renderObject(o, ctx) {
   const f = o.frame;
   const e = el("div", `obj t-${o.type}`);
@@ -358,8 +367,10 @@ function renderObject(o, ctx) {
   }
   if (o.ph) {
     e.dataset.ph = o.ph;
-    const empty = !o.text || o.text.paras.every((p) => !p.runs.some((r) => (r.text ?? "").length || r.kind === "math"));
-    if (empty) e.classList.add("ph-empty");
+    if (phEmpty(o)) {
+      e.classList.add("ph-empty");
+      if (coveredByOther(o, ctx)) e.classList.add("ph-covered");
+    }
   }
   const w = px(f.w), h = px(f.h);
   switch (o.type) {
@@ -476,7 +487,8 @@ function renderSlide(slide, ctx) {
     root.append(back);
   }
   const layer = el("div", "objects");
-  for (const o of slide.objects) layer.append(renderObject(o, ctx));
+  const sctx = { ...ctx, siblings: slide.objects };
+  for (const o of slide.objects) layer.append(renderObject(o, sctx));
   root.append(layer);
   return root;
 }

@@ -334,7 +334,7 @@ function inkColor() {
 // ── Rendering ─────────────────────────────────────────────────────────────
 function ctxFor(sl, extra = {}) {
   return {
-    size: S.deck.size, backdrops: S.backdrops, slideNo: slideNo(sl.uid),
+    size: S.deck.size, backdrops: S.backdrops, slideNo: slideNo(sl.uid), siblings: sl.objects,
     assetUrl: (a) => `${deckApi("/asset")}?id=${encodeURIComponent(a)}`,
     latex: (omml) => S.latex.get(omml),
     needLatex: (omml) => { if (omml && !S.latex.has(omml)) { S.latexWant.add(omml); queueLatex(); } },

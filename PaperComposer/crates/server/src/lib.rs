@@ -1058,11 +1058,8 @@ struct OutlineBody {
     engine: EngineChoice,
 }
 
-/// Wizard: titles and a section skeleton from the outline (Claude only).
+/// Wizard: titles and a section skeleton from the outline (Claude, then the local model).
 async fn wizard_outline(State(s): State<Shared>, Json(b): Json<OutlineBody>) -> impl IntoResponse {
-    if b.engine == EngineChoice::Local || !engine_ready(&s, b.engine).await {
-        return bad("大綱生成需要連接 Claude");
-    }
     let key_value = match meta::check_key_value(&b.key_value) { Ok(k) => k, Err(e) => return bad(&e) };
     if b.outline.trim().is_empty() {
         return bad("請輸入大綱");
@@ -1076,21 +1073,10 @@ async fn wizard_outline(State(s): State<Shared>, Json(b): Json<OutlineBody>) -> 
         _ => vec![],
     };
     let prompt = wizard::outline_prompt(&b.outline, &key_value, &sections, &language);
-    let mut extra = None;
-    let mut last = String::new();
-    for _ in 0..2 {
-        match writing_complete(&s, "pc-outline", Some(b.engine), &prompt, extra, Some(wizard::plan_schema())).await {
-            Ok(reply) => match wizard::parse_plan(&reply) {
-                Ok(plan) => return Json(plan).into_response(),
-                Err(e) => {
-                    last = e;
-                    extra = Some("Reply with the JSON object only, in the shape given.");
-                }
-            },
-            Err(e) => return bad(&e),
-        }
+    match draft::claude_then_local(&s, "pc-outline", b.engine, &prompt, &wizard::plan_schema(), wizard::parse_plan).await {
+        Ok(plan) => Json(plan).into_response(),
+        Err(e) => bad(&e),
     }
-    bad(&last)
 }
 
 #[derive(Deserialize)]
@@ -1149,30 +1135,16 @@ struct ExtractBody {
     engine: EngineChoice,
 }
 
-/// Split pasted text into the papers it lists (Claude only).
+/// Split pasted text into the papers it lists (Claude, then the local model).
 async fn extract_refs(State(s): State<Shared>, Json(b): Json<ExtractBody>) -> impl IntoResponse {
-    if b.engine == EngineChoice::Local || !engine_ready(&s, b.engine).await {
-        return bad("這個功能需要連接 Claude");
-    }
     if b.text.trim().is_empty() {
         return bad("請貼上想引用的文章");
     }
     let prompt = citecheck::extract_prompt(&b.text);
-    let mut extra = None;
-    let mut last = String::new();
-    for _ in 0..2 {
-        match writing_complete(&s, "pc-cite-extract", Some(b.engine), &prompt, extra, Some(citecheck::extract_schema())).await {
-            Ok(reply) => match citecheck::parse_extract(&reply) {
-                Ok(papers) => return Json(serde_json::json!({ "papers": papers })).into_response(),
-                Err(e) => {
-                    last = e;
-                    extra = Some("Reply with the JSON object only, in the shape given.");
-                }
-            },
-            Err(e) => return bad(&e),
-        }
+    match draft::claude_then_local(&s, "pc-cite-extract", b.engine, &prompt, &citecheck::extract_schema(), citecheck::parse_extract).await {
+        Ok(papers) => Json(serde_json::json!({ "papers": papers })).into_response(),
+        Err(e) => bad(&e),
     }
-    bad(&last)
 }
 
 /// Is this paper real? Crossref decides; a paper already in the library says so.
@@ -1703,12 +1675,9 @@ struct SearchBody {
     engine: EngineChoice,
 }
 
-/// Find papers: Claude writes the queries, OpenAlex returns real works (all
-/// with DOIs, no preprint-only ones), Claude ranks them and says why.
+/// Find papers: Claude (or the local model) writes the queries, OpenAlex
+/// returns real works (all with DOIs, no preprint-only ones), then the model ranks them and says why.
 async fn search_refs(State(s): State<Shared>, Json(b): Json<SearchBody>) -> impl IntoResponse {
-    if b.engine == EngineChoice::Local || !engine_ready(&s, b.engine).await {
-        return bad("搜尋需要連接 Claude");
-    }
     if b.request.trim().is_empty() {
         return bad("寫下要找什麼");
     }
@@ -1718,13 +1687,14 @@ async fn search_refs(State(s): State<Shared>, Json(b): Json<SearchBody>) -> impl
     let labels: Vec<String> = b.tags.iter().map(|t| tag_list.iter().find(|x| &x.id == t).map(|x| format!("{} ({})", x.label, x.id)).unwrap_or(t.clone())).collect();
     let steer = refimport::Steer::from_tags(&b.tags);
 
-    let queries = match writing_complete(&s, "pc-ref-queries", Some(b.engine), &refimport::queries_prompt(&b.request, &labels), None, Some(refimport::queries_schema())).await {
-        Ok(r) => refimport::parse_queries(&r),
+    let queries = match draft::claude_then_local(&s, "pc-ref-queries", b.engine, &refimport::queries_prompt(&b.request, &labels), &refimport::queries_schema(), |r| {
+        Some(refimport::parse_queries(r)).filter(|q| !q.is_empty()).ok_or_else(|| "no queries".to_string())
+    })
+    .await
+    {
+        Ok(q) => q,
         Err(e) => return Json(serde_json::json!({ "error": e })).into_response(),
     };
-    if queries.is_empty() {
-        return Json(serde_json::json!({ "error": "Claude 沒有產生搜尋關鍵字" })).into_response();
-    }
     let this_year: u32 = {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         (1970 + secs / 31_556_952) as u32
@@ -1755,8 +1725,12 @@ async fn search_refs(State(s): State<Shared>, Json(b): Json<SearchBody>) -> impl
         }
     }
     cands.truncate(30);
-    let ranked = match writing_complete(&s, "pc-ref-rank", Some(b.engine), &refimport::rank_prompt(&b.request, &cands), None, Some(refimport::rank_schema())).await {
-        Ok(r) => refimport::apply_ranking(&r, &cands).unwrap_or_else(|| cands.iter().take(8).cloned().collect()),
+    let ranked = match draft::claude_then_local(&s, "pc-ref-rank", b.engine, &refimport::rank_prompt(&b.request, &cands), &refimport::rank_schema(), |r| {
+        refimport::apply_ranking(r, &cands).ok_or_else(|| "no ranking".to_string())
+    })
+    .await
+    {
+        Ok(r) => r,
         Err(_) => cands.iter().take(8).cloned().collect(),
     };
     let (entries, _) = load_library(&ws);
@@ -2069,7 +2043,7 @@ async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> imp
     match paper_dir(&s, &name).await {
         Ok(dir) => {
             let main = std::fs::read_to_string(pc_core::open::main_file(&dir)).unwrap_or_default();
-            let (front, back) = preview::front_back(&main);
+            let (front, back) = preview::front_back_in(&main, pc_core::open::is_custom(&dir));
             let m = meta::read_meta(&dir);
             // the journal's house rules: word limits for the word count,
             // reference words and caption places for inserting, page limits
@@ -2343,7 +2317,7 @@ async fn put_front(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b
     if let Err(e) = paper::write_atomic(&path, &out) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
-    let (front, back) = preview::front_back(&out);
+    let (front, back) = preview::front_back_in(&out, pc_core::open::is_custom(&dir));
     Json(serde_json::json!({ "front": front, "back": back, "fields": pc_core::front::fields(&out) })).into_response()
 }
 

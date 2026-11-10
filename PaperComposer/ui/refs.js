@@ -78,8 +78,8 @@ const PCRefs = (() => {
       }
       batchBox.append(libImporter.ui.el);
     };
-    const pasteBtn = iconButton("list", claudeReady() ? "貼上想引用的文章，逐篇查證後建檔" : "連接 Claude 後可貼上文獻清單逐篇查證", () => { libImporter.open = !libImporter.open; drawBatch(); });
-    pasteBtn.disabled = !claudeReady();
+    const pasteBtn = iconButton("list", textReady() ? "貼上想引用的文章，逐篇查證後建檔" : "連接 Claude 或本機模型後可貼上文獻清單逐篇查證", () => { libImporter.open = !libImporter.open; drawBatch(); });
+    pasteBtn.disabled = !textReady();
     bar.append(search, pasteBtn, iconButton("upload", "匯入 BibTeX", (e) => importPop(e.currentTarget)), iconButton("folder", "這台電腦的 PDF 資料夾", (e) => pdfPop(e.currentTarget)));
     queueBox ??= el("div", "queue");
     box.append(bar, batchBox, await intake(), queueBox, tagChips(filter, draw), list);
@@ -129,14 +129,17 @@ const PCRefs = (() => {
 
     async function check(it) {
       it.state = "checking"; it.msg = "查證中…"; draw();
+      const { row, wait } = waitRow("查詢中");
       try {
-        const r = await api("/api/refs/verify", it.guess);
+        const r = await api("/api/refs/verify", it.guess, "POST", { signal: wait.signal });
         const v = r.verdict;
         it.candidates = v.candidates ?? [];
         if (r.exists) { it.state = "exists"; it.key = r.exists; it.work = v.work; it.msg = `已在文獻庫：${r.exists}`; await keepNote(it); }
         else if (v.status === "found") { it.work = v.work; await file(it, v.work); return; }
         else { it.state = v.status; it.msg = v.note; }
-      } catch (e) { it.state = "error"; it.msg = e.message; }
+      } catch (e) {
+        if (PCWait.aborted(e)) { it.state = "skipped"; it.msg = "已停止"; } else { it.state = "error"; it.msg = e.message; }
+      } finally { endWait(row, wait); }
       draw();
     }
 
@@ -144,7 +147,7 @@ const PCRefs = (() => {
       if (!st.text.trim() || st.phase === "running") return;
       st.phase = "running"; st.error = ""; st.items = []; draw();
       try {
-        const r = await api("/api/refs/extract", { text: st.text, engine: claudeVia() });
+        const r = await api("/api/refs/extract", { text: st.text, engine: textEngine() });
         st.items = r.papers.map((g) => ({ guess: g, state: "queued", msg: "" }));
       } catch (e) { st.error = e.message; st.phase = "idle"; draw(); return; }
       draw();
@@ -163,19 +166,19 @@ const PCRefs = (() => {
       box.innerHTML = "";
       const ta = el("textarea", "batch-text");
       ta.rows = st.items.length ? 3 : 8;
-      ta.placeholder = "貼上想引用的文章，可以很多篇、可以夾雜備註：參考文獻清單、標題、DOI、PMID、arXiv 都可以。\nClaude 會算出有幾篇並抄下你對每篇的備註；是否真的存在由 Crossref／arXiv／PubMed 查證，查不到的不會自動建檔。";
+      ta.placeholder = "貼上想引用的文章，可以很多篇、可以夾雜備註：參考文獻清單、標題、DOI、PMID、arXiv 都可以。\n模型會算出有幾篇並抄下你對每篇的備註；是否真的存在由 Crossref／arXiv／PubMed 查證，查不到的不會自動建檔。";
       ta.value = st.text;
       ta.disabled = st.phase === "running";
       ta.oninput = () => (st.text = ta.value);
       const go = el("button", "primary small", st.phase === "running" ? "處理中…" : st.items.length ? "重新分析" : "分析並匯入");
-      go.disabled = st.phase === "running" || !claudeReady();
-      if (!claudeReady()) go.title = "連接 Claude 後可用";
+      go.disabled = st.phase === "running" || !textReady();
+      if (!textReady()) go.title = "連接 Claude 或本機模型後可用";
       go.onclick = run;
       const head = el("div", "row-end");
       if (st.error) head.append(el("span", "note bad", st.error));
       head.append(go);
       box.append(ta, head);
-      if (st.phase === "running" && !st.items.length) { box.append(el("p", "note", "Claude 正在找出有幾篇文章…")); return; }
+      if (st.phase === "running" && !st.items.length) { box.append(el("p", "note", "正在找出有幾篇文章…")); return; }
       if (!st.items.length) return;
 
       const n = st.items.length, done = st.items.filter(finished).length;
@@ -241,6 +244,18 @@ const PCRefs = (() => {
 
   // ── bringing papers in: unlinked PDFs, or a DOI ──
   const queue = []; // proposals waiting for the user
+  // Steps that run on Claude, else on the local model: the server tries both.
+  const textReady = () => claudeReady() || !!state.engines?.local?.configured;
+  const textEngine = () => (claudeReady() ? claudeVia() : "local");
+  // "查詢中 N 秒 [停止]" rows of lookups under way, shown in the queue
+  const waits = new Set();
+  function waitRow(what) {
+    const r = PCWait.row(what);
+    waits.add(r.row);
+    drawQueue();
+    return r;
+  }
+  function endWait(row, wait) { wait.end(); waits.delete(row); drawQueue(); }
   let queueBox = null; // created on first render: el() comes from app.js, loaded later
   let busy = 0;
 
@@ -266,11 +281,12 @@ const PCRefs = (() => {
 
   async function propose(body) {
     busy++;
-    drawQueue();
+    const { row, wait } = waitRow("查詢中");
     let r;
-    try { r = await api("/api/refs/propose", { ...body, engine: chosenEngine() }); }
-    catch (e) { r = { error: e.message, ...body }; }
-    busy--;
+    try { r = await api("/api/refs/propose", { ...body, engine: chosenEngine() }, "POST", { signal: wait.signal }); }
+    catch (e) { r = PCWait.aborted(e) ? null : { error: e.message, ...body }; }
+    finally { busy--; endWait(row, wait); }
+    if (!r) { flash("已停止"); return; }
     if (r.exists) flash(`已在文獻庫：${r.exists}`);
     else queue.push(r);
     drawQueue();
@@ -279,7 +295,7 @@ const PCRefs = (() => {
   function drawQueue() {
     if (!queueBox) return;
     queueBox.innerHTML = "";
-    if (busy) queueBox.append(el("p", "note", `查詢中 ${busy} 篇…`));
+    waits.forEach((r) => queueBox.append(r));
     queue.forEach((q) => queueBox.append(card(q)));
   }
 
@@ -553,8 +569,8 @@ const PCRefs = (() => {
       const foot = el("div", "row-end");
       foot.append(purpose, go);
       // Search for new papers: a Claude feature, greyed out without Claude.
-      const claudeOn = !!state.engines && (state.engines.subscription.configured || state.engines.api.configured);
-      const find = iconButton("search", claudeOn ? "用 Claude 找新文獻" : "連接 Claude 後可搜尋新文獻", () => searchMode());
+      const claudeOn = textReady();
+      const find = iconButton("search", claudeOn ? "找新文獻" : "連接 Claude 或本機模型後可搜尋新文獻", () => searchMode());
       find.disabled = !claudeOn;
       const top = el("div", "row-end");
       top.append(search, find);
@@ -597,10 +613,10 @@ const PCRefs = (() => {
         async function run() {
           if (!req.value.trim()) return req.focus();
           results.innerHTML = "";
-          results.append(el("p", "note", "Claude 搜尋中…"));
+          results.append(el("p", "note", "搜尋中…"));
           send.disabled = true;
           let r;
-          try { r = await api("/api/refs/search", { request: req.value.trim(), tags: [...want.tags], engine: claudeVia() }); }
+          try { r = await api("/api/refs/search", { request: req.value.trim(), tags: [...want.tags], engine: textEngine() }); }
           catch (e) { r = { error: e.message }; }
           send.disabled = false;
           results.innerHTML = "";

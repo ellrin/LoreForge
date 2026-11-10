@@ -41,6 +41,7 @@ offline = true
 label = "大綱與標題"
 needs = { json = true }
 default = "claude:selected"
+fallback = "local:current"
 offline = false
 
 [task.pc-caption]
@@ -53,12 +54,14 @@ offline = true
 label = "文獻搜尋關鍵字"
 needs = { json = true }
 default = "claude:selected"
+fallback = "local:current"
 offline = false
 
 [task.pc-ref-rank]
 label = "文獻排序"
 needs = { json = true }
 default = "claude:selected"
+fallback = "local:current"
 offline = false
 
 [task.pc-ref-notes]
@@ -72,6 +75,7 @@ offline = true
 label = "從貼上文字找出文獻"
 needs = { json = true }
 default = "claude:selected"
+fallback = "local:current"
 offline = false
 
 [task.pc-engine-test]

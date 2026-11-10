@@ -50,7 +50,7 @@ pub enum EngineChoice {
 
 impl EngineChoice {
     /// The model ref the choice puts in front of a task's candidates.
-    fn model_ref(self) -> String {
+    pub(crate) fn model_ref(self) -> String {
         match self {
             EngineChoice::Local => format!("local:{LOCAL_CURRENT}"),
             EngineChoice::Subscription => format!("claude-code:{CLAUDE_SELECTED}"),
@@ -291,10 +291,10 @@ mod tests {
         for id in ["pc-compose-paragraph", "pc-soft-check", "pc-decompose", "pc-outline", "pc-caption", "pc-ref-queries", "pc-ref-rank", "pc-ref-notes", "pc-cite-extract", "pc-engine-test"] {
             assert!(t.task.contains_key(id), "{id}");
         }
-        // Claude-only tasks have no local candidate.
+        // Claude first, then the local model.
         for id in ["pc-outline", "pc-ref-queries", "pc-ref-rank", "pc-cite-extract"] {
             assert_eq!(t.task[id].default, "claude:selected");
-            assert!(t.task[id].fallback.is_none());
+            assert_eq!(t.task[id].fallback.as_deref(), Some("local:current"));
         }
         assert_eq!(t.task["pc-compose-paragraph"].default, "local:current", "the app's order: local first");
     }
@@ -317,8 +317,8 @@ mod tests {
         // Asking for the API without a key does not fall back to local.
         let e = l.route("pc-compose-paragraph", Some(EngineChoice::Api)).await.unwrap_err();
         assert!(e.contains("API key"), "{e}");
-        // Claude-only tasks never run locally.
-        assert!(l.route("pc-outline", None).await.is_err());
+        // Claude first: with no Claude set up, the task order's local fallback runs.
+        assert_eq!(l.route("pc-outline", None).await.unwrap().provider.id(), "llama-server:local");
     }
 
     #[tokio::test]

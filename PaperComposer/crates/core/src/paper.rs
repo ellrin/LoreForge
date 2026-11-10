@@ -976,7 +976,7 @@ fn blank_main(title: &str, inputs: &str) -> String {
 /// before `\begin{document}`. Returns the packages it added. A package the
 /// class already loads is harmless to load again.
 pub fn ensure_packages(paper: &Path, packages: &[String]) -> Result<Vec<String>, String> {
-    let path = paper.join("main.tex");
+    let path = crate::open::main_file(paper);
     let main = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let loaded: Vec<String> = main
         .lines()
@@ -1484,9 +1484,7 @@ fn gitignore_lines(dir: &Path) -> Vec<String> {
 
 /// The paper's own .tex files: main.tex and its sections.
 fn paper_tex_files(paper: &Path) -> Vec<PathBuf> {
-    let mut v = vec![paper.join("main.tex")];
-    v.extend(section_files(paper).into_iter().map(|f| paper.join("sections").join(f)));
-    v
+    crate::open::source_files(paper)
 }
 
 /// `\includegraphics[..]{arg}` arguments in reading order, with the byte

@@ -212,7 +212,9 @@ pub fn find_fonts(file: &str, tex: &str) -> Vec<FontUse> {
 /// main.tex and the local files its preamble loads (`\input`, `\include`,
 /// `\usepackage` of a .sty in the paper folder), relative paths, no repeats.
 pub fn preamble_files(paper: &Path) -> Vec<String> {
-    let mut files = vec!["main.tex".to_string()];
+    let main = pc_core::open::main_file(paper);
+    let main_rel = main.strip_prefix(paper).unwrap_or(&main).to_string_lossy().replace('\\', "/");
+    let mut files = vec![main_rel];
     let mut k = 0;
     while k < files.len() && files.len() < 40 {
         let Ok(text) = std::fs::read_to_string(paper.join(&files[k])) else {
@@ -353,6 +355,10 @@ pub struct Prepared {
     pub missing: Vec<(String, u32, String)>,
 }
 
+fn is_main_rel(paper: &Path, rel: &str) -> bool {
+    pc_core::open::main_file(paper) == paper.join(rel)
+}
+
 /// Check every font the paper names and write copies with substitutes into
 /// `work/.fonts/` when needed (a dot folder: the build folder mirrors the paper's own folders). The paper's own files are only read.
 pub fn prepare(paper: &Path, work: &Path, table: &Table, installed: &Installed, private_dir: Option<&Path>) -> std::io::Result<Prepared> {
@@ -398,7 +404,7 @@ pub fn prepare(paper: &Path, work: &Path, table: &Table, installed: &Installed, 
         }
         std::fs::write(&out, rewrite(&text, &refs))?;
         p.copies = Some(copies.clone());
-        if rel == "main.tex" {
+        if is_main_rel(paper, &rel) {
             p.main = Some(out);
         }
     }

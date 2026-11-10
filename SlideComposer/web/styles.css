@@ -92,6 +92,7 @@ button.chip { cursor: pointer; }
 .thumb .frame > .slide { transform-origin: 0 0; pointer-events: none; }
 .editor-canvas .obj.ph-empty[data-ph="title"]:not(.editing)::after, .editor-canvas .obj.ph-empty[data-ph="ctrTitle"]:not(.editing)::after { content: "標題"; }
 .editor-canvas .obj.ph-empty[data-ph="subTitle"]:not(.editing)::after { content: "副標"; }
+.editor-canvas .obj.ph-covered::after { content: none !important; }
 .thumb[aria-current="true"] { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent-text); }
 .thumb.hidden-slide .frame { opacity: .45; }
 .thumb.hidden-slide .no::after { content: "隱"; display: block; color: var(--warn); font-size: 10px; }

@@ -278,11 +278,14 @@ pub struct Checked {
 const FRAGMENT: &str = "sections/zz-generated.tex";
 
 pub fn check(paper: &Path, n: &Notation, opt: &CheckOptions, others: &[String], text: &str) -> Checked {
-    let mut main = std::fs::read_to_string(paper.join("main.tex")).unwrap_or_else(|_| "\\documentclass{article}\n\\begin{document}\n\\end{document}\n".into());
+    let rel = |p: &Path| p.strip_prefix(paper).unwrap_or(p).to_string_lossy().replace('\\', "/");
+    let sources = pc_core::open::source_files(paper);
+    let main_name = sources.first().map(|p| rel(p)).unwrap_or_else(|| "main.tex".into());
+    let mut main = std::fs::read_to_string(pc_core::open::main_file(paper)).unwrap_or_else(|_| "\\documentclass{article}\n\\begin{document}\n\\end{document}\n".into());
     let mut files: Vec<(String, String)> = vec![];
-    for f in pc_core::paper::section_files(paper) {
-        if let Ok(t) = std::fs::read_to_string(paper.join("sections").join(&f)) {
-            files.push((format!("sections/{f}"), t));
+    for p in sources.iter().skip(1) {
+        if let Ok(t) = std::fs::read_to_string(p) {
+            files.push((rel(p), t));
         }
     }
     let mut extra = String::new();
@@ -297,7 +300,7 @@ pub fn check(paper: &Path, n: &Notation, opt: &CheckOptions, others: &[String], 
         Some(i) => main.insert_str(i, &extra),
         None => main += &extra,
     }
-    let mut all = vec![("main.tex".to_string(), main)];
+    let mut all = vec![(main_name, main)];
     all.extend(files);
     let report = check_document(Document::from_files(&all), n, opt);
     let here = |i: &&Issue| i.locations.iter().any(|l| l.file == FRAGMENT);

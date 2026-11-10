@@ -9,7 +9,7 @@
 //! otherwise ([`engine`]); the engine that ran is kept in the session and
 //! shown next to the step.
 
-mod engine;
+pub(crate) mod engine;
 
 use super::*;
 use pc_core::draft::lens::Lens;
@@ -145,6 +145,47 @@ async fn get_draft(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
 
 /// The app's engines for the draft steps, with the task table as it is now
 /// (the user's tasks.toml included).
+/// The engines in a fixed order (the wizard's engine choice first, then the
+/// local model): what a step that used to be Claude-only tries.
+struct Ordered<'a> {
+    inner: engine::Live<'a>,
+    order: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl engine::Engines for Ordered<'_> {
+    fn candidates(&self, _task: &str, _picked: Option<&str>) -> Vec<String> {
+        self.order.clone()
+    }
+    async fn complete(&self, task: &str, model_ref: &str, prompt: &Prompt, extra: Option<&str>, schema: serde_json::Value) -> Result<String, String> {
+        self.inner.complete(task, model_ref, prompt, extra, schema).await
+    }
+    async fn local_context(&self, task: &str) -> Option<u32> {
+        self.inner.local_context(task).await
+    }
+}
+
+/// One structured step for the wizard and the reference search: Claude on
+/// the chosen route first (subscription or API), then the local model when
+/// Claude is not available or gives nothing usable. Choosing 本機 asks the
+/// local model only. A small local model gets the prompt fitted to its
+/// context and its reply repaired (see `engine::ask`).
+pub(crate) async fn claude_then_local<T>(s: &Shared, task: &str, choice: EngineChoice, prompt: &Prompt, schema: &serde_json::Value, parse: impl Fn(&str) -> Result<T, String>) -> Result<T, String> {
+    let order = match choice {
+        EngineChoice::Local => vec!["local:current".to_string()],
+        c => vec![c.model_ref(), "local:current".to_string()],
+    };
+    let e = Ordered { inner: engines(s), order };
+    let mut at = engine::Attempts::new(&e, task, None);
+    while let Some(c) = at.next(&e).await {
+        match engine::ask(&e, task, &c, prompt, schema, &parse).await {
+            Ok(v) => return Ok(v),
+            Err(f) => at.failed(&c, f),
+        }
+    }
+    Err(at.error())
+}
+
 fn engines(s: &Shared) -> engine::Live<'_> {
     let user = config_path().map(|p| p.with_file_name("tasks.toml"));
     let table = Llm::task_table(user.as_deref()).or_else(|_| Llm::task_table(None)).unwrap_or_default();

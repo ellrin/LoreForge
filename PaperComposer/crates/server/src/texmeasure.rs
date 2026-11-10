@@ -82,8 +82,8 @@ pub fn parse_log(log: &str) -> Option<Measured> {
 
 pub async fn measure(paper: &Path, t: &TexTable) -> Result<Measured, String> {
     let tex = pdflatex().ok_or("找不到 pdflatex：請先安裝 TeX")?;
-    let main = std::fs::read_to_string(paper.join("main.tex")).map_err(|_| "論文沒有 main.tex".to_string())?;
-    let pre = preamble(&main).ok_or("main.tex 沒有 \\begin{document}")?;
+    let main = std::fs::read_to_string(pc_core::open::main_file(paper)).map_err(|_| "論文沒有主檔".to_string())?;
+    let pre = preamble(&main).ok_or("主檔沒有 \\begin{document}")?;
     let dir = std::env::temp_dir().join(format!("papercomposer-measure-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("probe.tex"), probe(pre, t)).map_err(|e| e.to_string())?;

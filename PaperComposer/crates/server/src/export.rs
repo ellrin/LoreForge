@@ -255,9 +255,11 @@ fn mirror_dirs(src: &Path, dst: &Path) {
 /// Fill in which paragraph each located error points at.
 fn locate(paper: &Path, errors: &mut [Problem]) {
     for e in errors {
-        if let (Some(f), Some(n)) = (e.file.as_ref().filter(|f| f.starts_with("sections/")), e.line) {
-            if let Ok(text) = std::fs::read_to_string(paper.join(f)) {
-                let name = Path::new(f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let custom = pc_core::open::is_custom(paper);
+        let is_section = |f: &&String| if custom { pc_core::open::is_section_file(paper, f.trim_start_matches("./")) } else { f.starts_with("sections/") };
+        if let (Some(f), Some(n)) = (e.file.as_ref().filter(is_section), e.line) {
+            if let Ok(text) = std::fs::read_to_string(paper.join(f.trim_start_matches("./"))) {
+                let name = if custom { f.trim_start_matches("./").to_string() } else { Path::new(f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default() };
                 e.para = para_at(&name, &text, n);
             }
         }
@@ -829,6 +831,52 @@ pub fn open(path: &Path, reveal: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A paper opened as it is (`ms.tex`, `chapters/intro.tex`): preview, notation
+    /// checks and the PDF all follow its own main file and \input paths.
+    #[tokio::test]
+    async fn an_in_place_paper_compiles_previews_and_checks() {
+        let root = std::env::temp_dir().join(format!("pc-inplace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paper = root.join("Joint paper");
+        std::fs::create_dir_all(paper.join("chapters")).unwrap();
+        std::fs::create_dir_all(paper.join(".papercomposer")).unwrap();
+        std::fs::write(paper.join(".papercomposer/layout.toml"), "main = \"ms.tex\"\n").unwrap();
+        std::fs::write(
+            paper.join("ms.tex"),
+            "\\documentclass{article}\n\\title{T}\n\\begin{document}\n\\maketitle\n\\section{Intro}\n\\input{chapters/intro}\n\\begin{thebibliography}{1}\n\\bibitem{a} A.~Author. Title. 2020.\n\\end{thebibliography}\n\\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(paper.join("chapters/intro.tex"), "First sentence.\n\n\\begin{table}\\caption{C.}\\label{tab:in}\\end{table}\nSee Table~\\ref{tab:in} and \\cite{a}.\n").unwrap();
+
+        // what the page reads
+        let (front, back) = crate::preview::front_back_in(&std::fs::read_to_string(pc_core::open::main_file(&paper)).unwrap(), true);
+        assert!(front.contains("\\maketitle") && !front.contains("\\section") && !front.contains("chapters"), "{front}");
+        assert!(back.contains("thebibliography"), "{back}");
+        assert_eq!(pc_core::open::sections(&paper).len(), 1);
+        assert_eq!(pc_core::front::fields(&std::fs::read_to_string(pc_core::open::main_file(&paper)).unwrap()).iter().filter(|f| f.field == "title").count(), 1);
+        assert_eq!(crate::preview::bibliography(&paper, &root.join("none")).len(), 1, "the bibliography in its main file");
+        assert_eq!(crate::texfonts::preamble_files(&paper), ["ms.tex"]);
+        assert_eq!(pc_core::journal::used_style_files(&paper), Vec::<PathBuf>::new());
+
+        // notation checks see its main file and its section files
+        let n = crate::notation::load(&paper, &paper);
+        let opt = lore_notation::CheckOptions::default();
+        let seen = crate::notation::check(&paper, &n, &opt, &[], "Table 1 shows it.\n");
+        assert!(!seen.blocking.is_empty(), "a typed number is still found");
+        let known = crate::notation::check(&paper, &n, &opt, &[], "Table~\\ref{tab:in} shows it.\n");
+        assert!(known.blocking.is_empty(), "a label in chapters/intro.tex is known: {:?}", known.blocking);
+
+        // the PDF keeps the output name; skipped without latexmk-era TeX
+        if tool("pdflatex").is_some() {
+            let name = format!("pc-inplace-test-{}", std::process::id());
+            let r = build_pdf(&paper, &name, false).await.unwrap();
+            assert!(r.ok, "{:?}", r.errors);
+            assert!(cache_dir(&name).join("main.pdf").is_file(), "job name stays main");
+            let _ = std::fs::remove_dir_all(cache_dir(&name));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn picks_the_engine_and_bibliography_program() {

@@ -169,7 +169,7 @@ pub fn numbers(paper: &Path, build: &Path) -> Numbers {
     }
     n.compiled = !n.labels.is_empty() || !n.cites.is_empty();
     if n.cites.is_empty() {
-        for src in [build.join("main.bbl"), paper.join("main.bbl"), paper.join("main.tex")] {
+        for src in own_sources(paper, build) {
             if let Ok(t) = std::fs::read_to_string(src) {
                 parse_bibitems(&t, &mut n);
                 if !n.cites.is_empty() {
@@ -181,10 +181,24 @@ pub fn numbers(paper: &Path, build: &Path) -> Numbers {
     n
 }
 
+/// Where a printed bibliography may be read from: the last compile's .bbl,
+/// the paper's own .bbl, then its main file (which may hold the bibliography).
+fn own_sources(paper: &Path, build: &Path) -> Vec<PathBuf> {
+    let main = pc_core::open::main_file(paper);
+    let bbl = main.with_extension("bbl");
+    vec![build.join("main.bbl"), paper.join("main.bbl"), bbl, main]
+}
+
 /// main.tex around the sections: what comes before the first section
 /// (title, authors, abstract) and what comes after (appendix marks,
 /// acknowledgments, bibliography commands), in order.
 pub fn front_back(main: &str) -> (String, String) {
+    front_back_in(main, false)
+}
+
+/// `front_back` for a paper of either kind. In a paper opened as it is, a
+/// section is a `\section`, `\input` or `\include` line of its main file.
+pub fn front_back_in(main: &str, custom: bool) -> (String, String) {
     let body = match main.find("\\begin{document}") {
         Some(i) => &main[i + "\\begin{document}".len()..],
         None => return (String::new(), String::new()),
@@ -192,7 +206,8 @@ pub fn front_back(main: &str) -> (String, String) {
     let body = &body[..body.rfind("\\end{document}").unwrap_or(body.len())];
     let (mut front, mut back, mut seen) = (String::new(), String::new(), false);
     for line in body.lines() {
-        if line.split('%').next().unwrap_or("").contains("\\input{sections/") {
+        let code = line.split('%').next().unwrap_or("");
+        if code.contains("\\input{sections/") || (custom && ["\\section", "\\input{", "\\include{"].iter().any(|k| code.contains(k))) {
             seen = true;
             continue;
         }
@@ -294,7 +309,7 @@ pub fn bib_entries(src: &str) -> Vec<BibEntry> {
 
 /// The bibliography as printed: the last compile's .bbl, else the paper's own.
 pub fn bibliography(paper: &Path, build: &Path) -> Vec<BibEntry> {
-    for src in [build.join("main.bbl"), paper.join("main.bbl"), paper.join("main.tex")] {
+    for src in own_sources(paper, build) {
         if let Ok(t) = std::fs::read_to_string(src) {
             let v = bib_entries(&t);
             if !v.is_empty() {

@@ -417,7 +417,7 @@ fn fingerprint(bytes: &[u8]) -> (usize, u64) {
 /// `\documentclass` and every `\usepackage` / `\RequirePackage`, with the
 /// class first. Files that only sit in the folder do not count.
 pub fn used_style_files(paper: &Path) -> Vec<PathBuf> {
-    let main = std::fs::read(paper.join("main.tex")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let main = std::fs::read(crate::open::main_file(paper)).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
     let mut names: Vec<String> = document_class(&main).map(|(_, _, c)| vec![format!("{c}.cls")]).unwrap_or_default();
     names.extend(packages(&main).into_iter().map(|n| format!("{n}.sty")));
     names.into_iter().map(|n| paper.join(n)).filter(|p| p.is_file()).collect()
