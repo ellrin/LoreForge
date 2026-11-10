@@ -2403,4 +2403,4 @@ wire();
 updateLegend();
 route();
 // For checks and the console.
-window.LR = { S, pageText, pageRich, decorate, focusNoun };
+window.LR = { S, pageText, pageRich, decorate, focusNoun, setZoom };
