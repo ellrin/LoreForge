@@ -125,6 +125,7 @@ const FILE = { timer: 0, busy: null, asked: false };
 const FILE_LABEL = { saved: "已儲存", pending: "儲存中", saving: "儲存中", changed: "檔案已變更", missing: "找不到檔案", error: "未能儲存" };
 function setFile(f) {
   S.file = f ?? null;
+  if (S.file?.state !== "changed") $(".ext-bar")?.remove();
   const b = $("#fileState");
   b.hidden = !S.file;
   $("#saveChip").hidden = !!S.file; // the file state next to the name says it all
@@ -137,7 +138,38 @@ function setFile(f) {
   b.title = S.file.path;
   b.setAttribute("aria-label", `${S.file.file}：${FILE_LABEL[st] ?? ""}`);
   if (st === "pending") scheduleWrite();
-  if ((st === "changed" || st === "missing") && !FILE.asked) askConflict();
+  if (st === "changed") changedOnDisk();
+  else if (st === "missing" && !FILE.asked) askConflict();
+}
+/** The bound file changed elsewhere: no unsaved edits → reload by itself; else a bar lets the author choose. */
+function changedOnDisk() {
+  if (!S.file.dirty && !FILE.busy && !S.editing && !S.editingCell) { reloadFile(true); return; }
+  if ($(".ext-bar")) return;
+  const done = (fn) => async () => { $(".ext-bar")?.remove(); await fn(); };
+  const bar = h("div", { class: "ext-bar", role: "alert" },
+    h("span", {}, `${S.file.file} 已在別處修改`),
+    h("button", { class: "btn small", onclick: done(() => reloadFile()) }, h("span", { "data-icon": "refresh" }), "重新載入"),
+    h("button", { class: "btn small primary", onclick: done(() => writeFile(true)) }, h("span", { "data-icon": "save" }), "保留我的版本"));
+  $(".top").after(bar);
+  paintIcons(bar);
+}
+let watching = 0;
+/** Look at the bound file every few seconds (and when the window gets focus) for changes made elsewhere. */
+function watchFile() {
+  if (watching) return;
+  const look = async () => {
+    if (document.hidden || !S.file || !S.name || FILE.looking) return;
+    if (!["saved", "changed"].includes(S.file.state)) return;
+    FILE.looking = true;
+    const name = S.name;
+    try {
+      const r = await api(`/api/decks/${encodeURIComponent(name)}/file`);
+      if (S.name === name && r.file && ["saved", "changed", "missing"].includes(S.file?.state) && (r.file.state !== S.file.state || r.file.dirty !== S.file.dirty)) setFile(r.file);
+    } catch {}
+    FILE.looking = false;
+  };
+  watching = setInterval(look, 2500);
+  addEventListener("focus", look);
 }
 function scheduleWrite(ms = 900) {
   clearTimeout(FILE.timer);
@@ -175,11 +207,14 @@ function askConflict() {
   // Esc / closing keeps everything as is (nothing is written); ask again on the next save
   $("#dlg").addEventListener("close", () => { FILE.asked = false; }, { once: true });
 }
-async function reloadFile() {
+async function reloadFile(auto = false) {
+  if (FILE.reloading) return;
+  FILE.reloading = true;
   try {
     await api(deckApi("/file/reload"), { body: {} });
     await openDeck(S.name);
-  } catch (e) { toast(e.message, true); }
+    if (auto) toast("檔案已在別處修改，已重新載入");
+  } catch (e) { toast(e.message, true); } finally { FILE.reloading = false; }
 }
 async function shellDialog(kind, name) {
   if (S.info?.shell !== "desktop") return undefined;
@@ -532,26 +567,52 @@ function sites(o) {
   }
   return pts.map(([x, y]) => rotPt(f, x, y));
 }
-function nearestSite(p, exclude) {
+/** The connection site of `o` closest to `toward`. */
+function closestSite(o, toward) {
+  let best = null;
+  sites(o).forEach((q, i) => {
+    const d = Math.hypot(q[0] - toward[0], q[1] - toward[1]);
+    if (!best || d < best.d) best = { d, id: o.id, site: i, p: q };
+  });
+  return best;
+}
+/** The site a pointer at `p` means: within 12 px of one, else (`loose`) the nearest site of the
+ *  shape the pointer is over, marked `loose` so the other end can re-aim it (centre-facing). */
+function nearestSite(p, exclude, loose = false) {
   const tol = (12 / S.zoom) * EMU;
   let best = null;
-  for (const o of slide().objects) {
-    if (o.id === exclude || o.type === "connector") continue;
+  const cands = slide().objects.filter((o) => o.id !== exclude && o.type !== "connector" && !o.hidden);
+  for (const o of cands) {
     sites(o).forEach((q, i) => {
       const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
       if (d < tol && (!best || d < best.d)) best = { d, id: o.id, site: i, p: q };
     });
   }
-  return best;
+  if (best || !loose) return best;
+  for (const o of [...cands].reverse()) {
+    const [u, v] = frameUV(o.frame, p);
+    if (u >= 0 && u <= 1 && v >= 0 && v <= 1) return { ...closestSite(o, p), loose: true };
+  }
+  return null;
 }
-function showSites(hot, exclude) {
+/** Both ends of a connector being drawn: loose ends face each other. `a0` = where the start is when unglued. */
+function connEnds(start, a0, end, p) {
+  let a = start, b = end;
+  const centre = (h) => { const f = findObj(h.id).frame; return [f.x + f.w / 2, f.y + f.h / 2]; };
+  if (b?.loose) b = closestSite(findObj(b.id), a ? centre(a) : a0);
+  if (a?.loose) a = closestSite(findObj(a.id), b ? b.p : p);
+  return { a, b, p0: a ? a.p : a0, p: b ? b.p : p };
+}
+/** Connection sites of the shape under the pointer (the hot one filled). */
+function showSites(hot, exclude, only = hot?.id) {
   const ov = $("#overlay");
   $$(".site", ov).forEach((s) => s.remove());
+  if (only == null) return;
   for (const o of slide().objects) {
-    if (o.id === exclude || o.type === "connector" || o.type === "group" && false) continue;
+    if (o.id === exclude || o.type === "connector" || o.id !== only) continue;
     sites(o).forEach((q, i) => {
       const d = document.createElement("div");
-      d.className = "site" + (hot && hot.id === o.id && hot.site === i ? " hot" : "");
+      d.className = "site" + (hot && hot.id === o.id && hot.site === i && !hot.loose ? " hot" : "");
       d.style.left = `${sx(q[0])}px`;
       d.style.top = `${sx(q[1])}px`;
       ov.append(d);
@@ -642,8 +703,8 @@ function onPointerDown(ev) {
     ev.preventDefault();
     if (S.tool === "polygon") { polygonClick(p, ev); return; }
     const conn = /^(line|arrow|conn-)/.test(S.tool);
-    const st = conn ? nearestSite(p) : null;
-    drag = { kind: "draw", tool: S.tool, p0: st ? st.p : p, start: st, p };
+    const st = conn && S.tool.startsWith("conn") ? nearestSite(p, null, true) : null;
+    drag = { kind: "draw", tool: S.tool, p0: st ? st.p : p, a0: p, start: st, p };
     capture(ev);
     return;
   }
@@ -718,7 +779,10 @@ function liveConnectors(d) {
 }
 
 function onPointerMove(ev) {
-  if (!drag) return;
+  if (!drag) {
+    if (S.tool.startsWith("conn") && slide() && $("#paperWrap").contains(ev.target)) showSites(nearestSite(toEmu(ev), null, true));
+    return;
+  }
   const p = toEmu(ev);
   const noSnap = ev.altKey || !S.snap;
   const tol = (6 / S.zoom) * EMU;
@@ -772,25 +836,32 @@ function onPointerMove(ev) {
     drag.o.adj = { ...drag.a0, [drag.key]: Math.round(u * 100000) };
     liveFrame(drag.o, true);
   } else if (drag.kind === "end") {
-    const hot = nearestSite(p, drag.o.id);
-    showSites(hot, drag.o.id);
+    let hot = nearestSite(p, drag.o.id, true);
+    if (hot?.loose) hot = closestSite(findObj(hot.id), drag.pts[1 - drag.end]);
     const pts = [...drag.pts];
     pts[drag.end] = hot ? hot.p : p;
     drag.hot = hot;
     drag.o.frame = { ...connFrame(pts[0], pts[1]), rot: 0 };
     liveFrame(drag.o, true);
+    showSites(hot, drag.o.id);
   } else if (drag.kind === "draw") {
     let q = p;
     const conn = /^(line|arrow|conn-)/.test(drag.tool);
+    let hot = null;
     if (conn) {
-      const hot = drag.tool.startsWith("conn") ? nearestSite(p) : null;
-      if (drag.tool.startsWith("conn")) showSites(hot);
-      if (hot) q = hot.p;
-      if (ev.shiftKey) { const dx = q[0] - drag.p0[0], dy = q[1] - drag.p0[1]; if (Math.abs(dx) > Math.abs(dy)) q = [q[0], drag.p0[1]]; else q = [drag.p0[0], q[1]]; }
-      drag.end = hot;
+      if (drag.tool.startsWith("conn")) {
+        hot = nearestSite(p, null, true);
+        const e = connEnds(drag.start, drag.a0, hot, p);
+        drag.p0 = e.p0;
+        q = e.p;
+        drag.end = e.b;
+        drag.startR = e.a;
+      }
+      if (ev.shiftKey && !hot) { const dx = q[0] - drag.p0[0], dy = q[1] - drag.p0[1]; if (Math.abs(dx) > Math.abs(dy)) q = [q[0], drag.p0[1]]; else q = [drag.p0[0], q[1]]; }
     }
     drag.p = q;
     renderOverlay();
+    if (hot) showSites(hot);
     const d = document.createElement("div");
     d.className = "draft";
     const r = rectOf(drag.p0, q);
@@ -925,7 +996,7 @@ async function finishDraw(d) {
     const arrow = S.style?.arrows?.default;
     const line = { color: (arrow?.color ?? inkColor()).toUpperCase(), width_pt: arrow?.width_pt ?? 1.5, dash: "solid", head: "none", tail: tool === "line" ? "none" : arrow?.tail ?? "triangle" };
     const geom = { "conn-elbow": "bentConnector3", "conn-curved": "curvedConnector3" }[tool] ?? "straightConnector1";
-    const o = { ...baseObj("connector", connFrame(d.p0, d.p), tool === "line" ? "直線" : "箭頭"), geom, line, start: d.start ? { id: d.start.id, site: d.start.site } : null, end: d.end ? { id: d.end.id, site: d.end.site } : null };
+    const o = { ...baseObj("connector", connFrame(d.p0, d.p), tool === "line" ? "直線" : "箭頭"), geom, line, start: (d.startR ?? d.start) ? { id: (d.startR ?? d.start).id, site: (d.startR ?? d.start).site } : null, end: d.end ? { id: d.end.id, site: d.end.site } : null };
     if (!o.start) delete o.start;
     if (!o.end) delete o.end;
     await insertObj(o, "插入線條");
@@ -979,6 +1050,7 @@ async function finishPolygon() {
 function setTool(t) {
   S.tool = t;
   if (t !== "polygon") poly = null;
+  $$(".site").forEach((s) => s.remove());
   $$("[data-tool]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.tool === t ? "true" : "false"));
   $("#paperWrap").style.cursor = t === "select" ? "" : "crosshair";
 }
@@ -1611,7 +1683,7 @@ async function insertImageFile(file) {
     let w = img.naturalWidth * EMU, h = img.naturalHeight * EMU;
     const k = Math.min(1, maxW / w, maxH / h);
     w *= k; h *= k;
-    const [x, y] = freeSpot(Math.round((S.deck.size.w - w) / 2), Math.round((S.deck.size.h - h) / 2));
+    const [x, y] = freeSpot(Math.round((S.deck.size.w - w) / 2), Math.round((S.deck.size.h - h) / 2), w, h);
     const f = { x, y, w: Math.round(w), h: Math.round(h) };
     await insertObj({ ...baseObj("picture", f, file.name), asset: r.asset, crop: { l: 0, t: 0, r: 0, b: 0 }, alpha: 1, clip: "rect" }, "插入圖片");
   } catch (e) { toast(e.message, true); }
@@ -1639,6 +1711,7 @@ function showFonts(list) {
   const missing = off.filter((f) => f.how === "missing").length;
   chip.textContent = `字型代替 ${off.length}`;
   chip.title = "這份簡報用到的字型，這台電腦有些沒有；點開看用什麼代替";
+  chip.classList.toggle("warn", missing > 0); // substitutes alone are no warning, only a missing font is
   chip.classList.toggle("err", missing > 0);
   pop.textContent = "";
   const head = document.createElement("p");
@@ -1870,9 +1943,27 @@ async function deckMenu(anchor) {
 }
 function exportMenu(anchor) {
   popMenu(anchor, [
-    { icon: "download", label: "PPTX", run: async () => { toast("匯出 PPTX…"); try { const r = await api(deckApi("/export"), { body: {} }); toast(r.warning ? `${r.path}　⚠ ${r.warning}` : r.path, !!r.warning); } catch (e) { toast(e.message, true); } } },
-    { icon: "pdf", label: "PDF", run: async () => { toast("產生 PDF…"); try { const r = await api(deckApi("/pdf"), { body: {} }); toast(r.path); } catch (e) { toast(e.message, true); } } },
+    { icon: "download", label: "PPTX", run: async () => { toast("匯出 PPTX…"); try { const r = await api(deckApi("/export"), { body: {} }); exportCard(r.path, r.warning); } catch (e) { toast(e.message, true); } } },
+    { icon: "pdf", label: "PDF", run: async () => { toast("產生 PDF…"); try { const r = await api(deckApi("/pdf"), { body: {} }); exportCard(r.path); } catch (e) { toast(e.message, true); } } },
   ]);
+}
+/** After an export: file name, page count, 在 Finder 顯示 and 開啟. */
+function exportCard(path, warning) {
+  $(".toast")?.remove();
+  $(".export-card")?.remove();
+  const name = String(path).split(/[\\/]/).pop();
+  const pages = S.deck?.slides.filter((s) => !s.hidden).length ?? 0;
+  const act = (reveal) => () => api("/api/export/open", { body: { path, reveal } }).catch((e) => toast(e.message, true));
+  const card = h("div", { class: "export-card", role: "status" },
+    h("div", { class: "ec-main" }, h("b", { class: "ec-name", title: path }, name), h("span", { class: "muted" }, `${pages} 頁`)),
+    warning ? h("div", { class: "ec-warn" }, warning) : null,
+    h("div", { class: "ec-actions" },
+      h("button", { class: "btn small", onclick: act(true) }, h("span", { "data-icon": "folder" }), "在 Finder 顯示"),
+      h("button", { class: "btn small primary", onclick: act(false) }, h("span", { "data-icon": "external" }), "開啟"),
+      h("button", { class: "ico small", "data-icon": "x", "aria-label": "關閉", onclick: () => card.remove() })));
+  document.body.append(card);
+  paintIcons(card);
+  setTimeout(() => card.remove(), warning ? 20000 : 12000);
 }
 
 // ── 方程式與變數: the deck's notation registry (shared <notation-panel>) ──────
@@ -1927,6 +2018,11 @@ function wireNotation() {
 // ── Settings: 外觀 (the theme all LoreForge apps share, theme.js) and folders ─────────
 function wireSettings() {
   LoreTheme.picker($("#themePick"));
+  $("#actLook").onclick = () => dialog((box, close) => {
+    const pick = h("div", {});
+    LoreTheme.picker(pick);
+    box.append(h("h3", {}, "外觀"), pick, h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: close }, "關閉")));
+  });
 }
 async function openSettings() {
   if (!S.info) { try { S.info = await api("/api/info"); } catch {} }
@@ -1963,8 +2059,9 @@ function wire() {
   $("#zoomChip").onclick = () => { S.fit = true; renderCanvas(); };
   $("#actSettings").onclick = openSettings;
   $("#deckPicker").onclick = (e) => deckMenu(e.currentTarget);
-  $("#fileState").onclick = () => { if (S.file?.state === "changed" || S.file?.state === "missing") askConflict(); else if (S.file?.state === "error" || S.file?.state === "pending") writeFile(); };
+  $("#fileState").onclick = () => { if (S.file?.state === "changed") { $(".ext-bar")?.remove(); changedOnDisk(); } else if (S.file?.state === "missing") askConflict(); else if (S.file?.state === "error" || S.file?.state === "pending") writeFile(); };
   addEventListener("pagehide", flushFileOnLeave);
+  watchFile();
   $("#actExport").onclick = (e) => exportMenu(e.currentTarget);
   $("#actShow").onclick = (e) => popMenu(e.currentTarget, [
     { icon: "play", label: "從這頁放映", run: () => startShow(true) },

@@ -512,18 +512,35 @@ function katexZh(m) {
   if (/Double (sub|super)script/.test(m)) return "上標或下標重複，請用大括號分組";
   return m;
 }
-/** Where a new object goes: (x, y), or one cascade step further for every
- *  object already sitting there (repeated inserts do not pile up). */
-function freeSpot(x, y) {
-  const d = Math.round(IN / 8);
-  const objs = slide()?.objects ?? [];
-  for (let k = 0; k < 40; k++) {
-    const px = x + k * d, py = y + k * d;
-    if (!objs.some((o) => Math.abs(o.frame.x - px) < d / 2 && Math.abs(o.frame.y - py) < d / 2)) return [px, py];
+/** Where a new object of size w×h goes: the wanted spot (x, y) when free, else the first free place
+ *  in the content area (reading order), else one cascade step per object already there. */
+function freeSpot(x, y, w = 0, h = 0) {
+  const d = Math.round(IN / 8), sz = S.deck.size, m = Math.round(0.4 * IN);
+  const objs = (slide()?.objects ?? []).filter((o) => o.type !== "connector" && !o.hidden && !isEmptySlot(o) && slotKind(o) !== "deco" && o.frame.w * o.frame.h < 0.6 * sz.w * sz.h);
+  const hit = (px, py) => objs.some((o) => px < o.frame.x + o.frame.w - 1 && px + w > o.frame.x + 1 && py < o.frame.y + o.frame.h - 1 && py + h > o.frame.y + 1);
+  if (!hit(x, y)) return [x, y];
+  const step = Math.round(IN / 4);
+  for (let py = m; py + h <= sz.h - m; py += step) {
+    if (!hit(x, py)) return [x, py];
+    for (let px = m; px + w <= sz.w - m; px += step) if (!hit(px, py)) return [px, py];
   }
+  for (let k = 1; k < 40; k++) if (!objs.some((o) => Math.abs(o.frame.x - (x + k * d)) < d / 2 && Math.abs(o.frame.y - (y + k * d)) < d / 2)) return [x + k * d, y + k * d];
   return [x, y];
 }
+/** What a person calls an object: its text, else its kind. */
+function objLabel(o) {
+  const t = (o.text?.paras ?? []).flatMap((p) => p.runs).map((r) => r.text ?? "").join(" ").replace(/\s+/g, " ").trim();
+  if (o.equation) return "方程式";
+  if (t) return t.length > 14 ? `${t.slice(0, 14)}…` : t;
+  return { table: "表格", picture: "圖片", connector: "連接線", group: "群組" }[o.type] ?? o.name ?? `#${o.id}`;
+}
 /** Rendered size (EMU) of a no-wrap text body, as the canvas draws it. */
+async function measureMath(tb) {
+  measureText(tb);                       // makes the browser fetch the KaTeX fonts
+  try { await document.fonts.ready; } catch {}
+  const [w, hh] = measureText(tb);
+  return [w + Math.round(0.08 * IN), hh]; // a little air: superscripts and italics overhang the measured box
+}
 function measureText(tb) {
   const host = h("div", { class: "slide", style: "position:fixed;left:-10000px;top:0;width:4000px;height:2000px;visibility:hidden" });
   const t = SC.renderText(tb, { latex: (m) => S.latex.get(m) });
@@ -551,13 +568,13 @@ function dialog(build) {
 
 function openTableDialog() {
   dialog((box, close) => {
-    const r = h("input", { type: "number", min: 1, max: 30, value: 4 }), c = h("input", { type: "number", min: 1, max: 12, value: 2 });
+    const r = h("input", { type: "number", min: 1, max: 30, value: 4 }), c = h("input", { type: "number", min: 1, max: 12, value: 3 });
     box.append(h("h3", {}, "插入表格"), row(h("label", {}, "列", r), h("label", {}, "欄", c)), h("div", { class: "info" }, "格式：無樣式、表格格線；文字標籤 table。"),
       h("div", { class: "actions" }, h("button", { class: "btn", onclick: close }, "取消"), h("button", { class: "btn primary", onclick: async () => {
         const nr = +r.value, nc = +c.value;
-        const W = Math.min(S.deck.size.w * 0.6, nc * 1.6 * IN), rh = 0.3 * IN;
+        const W = Math.round(S.deck.size.w * 0.84), rh = 0.4 * IN;
         const cell = () => ({ text: { insets: [91440, 45720, 91440, 45720], anchor: "t", wrap: true, autofit: "none", paras: [newPara([], "table")] }, borders: [null, null, null, null] });
-        const [tx, ty] = freeSpot(Math.round((S.deck.size.w - W) / 2), Math.round(S.deck.size.h / 3));
+        const [tx, ty] = freeSpot(Math.round((S.deck.size.w - W) / 2), Math.round(S.deck.size.h / 3), W, Math.round(rh * nr));
         const o = { ...baseObj("table", { x: tx, y: ty, w: Math.round(W), h: Math.round(rh * nr) }, "表格"),
           cols: Array(nc).fill(Math.round(W / nc)), rows: [...Array(nr)].map(() => ({ h: Math.round(rh), cells: [...Array(nc)].map(cell) })), style_id: "{5940675A-B579-460E-94D1-54222C63F5DA}" };
         close();
@@ -591,12 +608,12 @@ function openEquation(o) {
           // only a box that is just the equation follows its size
           const solo = o.text.paras.length === 1 && o.text.paras[0].runs.every((r) => r.kind === "math" || !(r.text ?? "").trim());
           const ops = [setObj(o.id, "/text", t)];
-          if (solo && !o.frame.rot) { const [w, hh] = measureText(t); ops.push(setObj(o.id, "/frame", { ...o.frame, w, h: hh })); }
+          if (solo && !o.frame.rot) { const [w, hh] = await measureMath(t); ops.push(setObj(o.id, "/frame", { ...o.frame, w, h: hh })); }
           await commit(ops, "編輯方程式");
         } else {
           const tb = { insets: [0, 0, 0, 0], anchor: "t", wrap: false, autofit: "shape", paras: [{ ...newPara([mrun], "equation"), end: look }] };
-          const [w, hh] = measureText(tb);
-          const [x, y] = freeSpot(Math.round((S.deck.size.w - w) / 2), Math.round((S.deck.size.h - hh) / 2));
+          const [w, hh] = await measureMath(tb);
+          const [x, y] = freeSpot(Math.round((S.deck.size.w - w) / 2), Math.round((S.deck.size.h - hh) / 2), w, hh);
           await insertObj({ ...baseObj("text", { x, y, w, h: hh }, "方程式"), geom: { prst: "rect" }, fill: { kind: "none" }, text: tb, equation: true }, "插入方程式");
         }
       } }, o ? "更新" : "插入");
@@ -630,7 +647,7 @@ function openComponentMenu(anchor) {
       m.remove();
       try {
         // each new component lands next to the previous one instead of on top of it
-        const [x, y] = freeSpot(Math.round(S.deck.size.w / 2 - IN / 2), Math.round(S.deck.size.h / 2 - IN / 3));
+        const [x, y] = freeSpot(Math.round(S.deck.size.w / 2 - IN / 2), Math.round(S.deck.size.h / 2 - IN / 3), IN, Math.round(0.67 * IN));
         const o = await api(deckApi("/component"), { body: { name: k, slide: S.cur, x, y, n: k === "numbered-circle" ? n : 1 } });
         await insertObj(o, `插入${zh("components", k)}`);
       } catch (e) { toast(e.message, true); }
@@ -640,7 +657,7 @@ function openComponentMenu(anchor) {
     m.append(h("button", { onclick: async () => {
       m.remove();
       const a = S.style.arrows[k];
-      const [x, y] = freeSpot(Math.round(S.deck.size.w / 2 - IN), Math.round(S.deck.size.h / 2));
+      const [x, y] = freeSpot(Math.round(S.deck.size.w / 2 - IN), Math.round(S.deck.size.h / 2), 2 * IN, Math.round(0.2 * IN));
       await insertObj({ ...baseObj("connector", connFrame([x, y], [x + 2 * IN, y]), zh("arrows", k)), geom: a.connector, line: { color: a.color.toUpperCase(), width_pt: a.width_pt, dash: a.dash, head: a.head || "none", tail: a.tail } }, "插入箭頭");
     } }, zh("arrows", k), h("span", { class: "muted mono", style: "margin-left:auto;font-size:11px" }, k)));
   }
@@ -665,7 +682,7 @@ function revealPane() {
   const sl = slide();
   const close = () => { S.reveal = null; renderSide(); };
   const list = h("ol", { class: "steps" });
-  R.steps.forEach((st, i) => list.append(h("li", {}, h("b", {}, `步驟 ${i + 1}`), h("span", { class: "ids" }, st.map((id) => findObj(id)?.name ?? `#${id}`).join("、")), ib("x", "移除這個步驟", () => { R.steps.splice(i, 1); renderSide(); }))));
+  R.steps.forEach((st, i) => list.append(h("li", {}, h("b", {}, `步驟 ${i + 1}`), h("span", { class: "ids" }, st.map((id) => (findObj(id) ? objLabel(findObj(id)) : `#${id}`)).join("、")), ib("x", "移除這個步驟", () => { R.steps.splice(i, 1); renderSide(); }))));
   const lists = sl.objects.filter((o) => o.text && agendaCount(o) > 1);
   if (R.agenda == null || !lists.some((o) => o.id === R.agenda)) R.agenda = lists.find((o) => S.sel.includes(o.id))?.id ?? lists[0]?.id ?? null;
   const ghostBox = h("div", { class: "sec" },
@@ -673,7 +690,7 @@ function revealPane() {
     list,
     row(h("label", {}, "之後的物件", h("select", { onchange: (e) => (R.future = e.target.value) }, h("option", { value: "ghost", selected: R.future === "ghost" }, "變淡"), h("option", { value: "hide", selected: R.future === "hide" }, "先隱藏")))));
   const agendaBox = h("div", { class: "sec" },
-    lists.length ? row(h("label", {}, "清單", h("select", { onchange: (e) => (R.agenda = +e.target.value) }, lists.map((o) => h("option", { value: o.id, selected: o.id === R.agenda }, `${o.name} · ${agendaCount(o)} 項`))))) : h("div", { class: "empty" }, "—"));
+    lists.length ? row(h("label", {}, "清單", h("select", { onchange: (e) => (R.agenda = +e.target.value) }, lists.map((o) => h("option", { value: o.id, selected: o.id === R.agenda }, `${objLabel(o)} · ${agendaCount(o)} 項`))))) : h("div", { class: "empty" }, "—"));
   const pick = (m) => { R.mode = m; renderSide(); };
   const seg = h("div", { class: "seg" },
     h("button", { "aria-pressed": R.mode === "ghost" ? "true" : "false", onclick: () => pick("ghost") }, "複製頁＋變淡"),
@@ -685,7 +702,14 @@ function revealPane() {
     R.mode === "ghost" ? ghostBox : agendaBox,
     R.mode === "ghost" && g ? h("div", { class: "info mono" }, `變淡：圖片 ${Math.round(g.picture_alpha * 100)}%、線條 ${Math.round(g.line_alpha * 100)}%、填色 ${Math.round((g.fill_alpha || g.line_alpha) * 100)}%、文字 #${g.text_color}`) : null,
     h("div", { class: "actions row" }, h("button", { class: "btn small", onclick: close }, "取消"), h("button", { class: "btn small primary", disabled: !ready, title: ready ? "" : "至少兩個步驟", onclick: async () => {
-      const spec = R.mode === "ghost" ? { mode: "ghost", steps: R.steps, future: R.future } : { mode: "agenda", obj: R.agenda, em: "strong" };
+      // a connector appears with the step of the shape it points to (else the one it starts from)
+      const stepOf = (id) => R.steps.findIndex((st) => st.includes(id));
+      const steps = R.steps.map((st) => [...st]);
+      for (const c of sl.objects.filter((o) => o.type === "connector" && stepOf(o.id) < 0)) {
+        const i = [c.end?.id, c.start?.id].map((id) => (id == null ? -1 : stepOf(id))).find((k) => k >= 0);
+        if (i != null && i >= 0) steps[i].push(c.id);
+      }
+      const spec = R.mode === "ghost" ? { mode: "ghost", steps, future: R.future } : { mode: "agenda", obj: R.agenda, em: "strong" };
       await serial(async () => {
         try { absorb(await api(deckApi("/reveal"), { body: { slide: R.uid, spec } })); S.reveal = null; renderSide(); toast("已產生漸進揭露頁"); } catch (e) { toast(e.message, true); }
       });
