@@ -33,7 +33,7 @@
 //! | GET/PUT | /api/models | the model menu: `{task, model: auto\|local\|haiku\|sonnet\|opus}` |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
 //! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?}` → KB `POST /api/nodes` |
-//! | POST | /api/kb/draft | `{term, context}` → KB `POST /api/draft` |
+//! | POST | /api/kb/draft | `{term, context, sha?, page?}` → KB `POST /api/draft` (with `page` and the paper's title as `source`) |
 //! | GET | /api/kb/nodes/{id} | a card (summary for the term popover) |
 //! | GET | /api/papers/{sha}/export | notes export state: `dirty`, `last` {path, name, at, exists}, default folder/name |
 //! | POST | /api/papers/{sha}/export | `{path}` / `{last: true}` (overwrite the last export) / `{choose: true}` (desktop save panel) → PDF with the notes written to that file |
@@ -930,7 +930,9 @@ async fn kb_card(State(s): State<Shared>, Json(b): Json<CardBody>) -> Result<(St
 }
 
 async fn kb_draft(State(s): State<Shared>, Json(b): Json<Value>) -> R {
-    let body = json!({ "term": b["term"], "context": b["context"], "lang": "zh-Hant" });
+    // the paper's title and the page go with the quote, so the draft can say where it is from
+    let source = b["sha"].as_str().and_then(|sha| s.papers.meta(sha).ok().flatten()).map(|m| m.title);
+    let body = json!({ "term": b["term"], "context": b["context"], "lang": "zh-Hant", "page": b["page"], "source": source });
     Ok(Json(s.kb.post("/api/draft", &body, Duration::from_secs(120)).await?))
 }
 

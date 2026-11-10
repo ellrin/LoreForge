@@ -58,8 +58,9 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   print.html in a window, `WebviewWindow::print()` when `/api/print/ready` arrives.
   Registered as a PDF viewer (`fileAssociations`): `RunEvent::Opened` files go through
   `POST /api/papers/import {path}` on whichever server it uses, then `/?paper=<sha>`.
-  `NativeSaver` (tauri-plugin-dialog). Close / ⌘Q: `GET /api/dirty`, one prompt per dirty
-  paper; the menu's Quit is our own item (the predefined one calls `terminate:`, which no
+  `NativeSaver` (tauri-plugin-dialog). Close / ⌘Q: one prompt, for the paper in the window's
+  URL (`paper=<sha>`; `GET …/export` → `dirty`), the same 儲存 / 不儲存 / 取消 the page asks when
+  the author leaves a paper (no list across papers; `/api/dirty` stays for tests); the menu's Quit is our own item (the predefined one calls `terminate:`, which no
   Tauri event can stop — Dock Quit / logout still bypass the prompt).
 - `web/`: static HTML/CSS/JS, no build step; `app.js` is an ES module over pdf.js
   (`web/vendor/pdfjs`, 5.7.284, Apache-2.0; keep LICENSE + VERSION). `print.html` renders pages
@@ -84,7 +85,9 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
 - Classification: one `lr-classify-terms` call per paper (local first, then Haiku), cached in
   `nouns.json` under `key = v<CLASSIFY_VERSION>|<field>`; `asked` keys are never re-sent
   automatically. Red = SPECIALIST categories only (not 基礎科學詞 / 一般學術詞 / 人名 /
-  unclassified), no card, not in my-vocab. The reader's field: `private/shared/profile.toml`
+  unclassified), no card, not in my-vocab; while no field is set single words (`source: word`)
+  stay quiet (`Noun.quiet`), only phrases / acronyms are red, and the nouns pane asks for the
+  field once, inline. The reader's field: `private/shared/profile.toml`
   `field` (an old `private/LoreReader/reading.toml` field is moved there once), else
   `nouns::DEFAULT_FIELD`.
 - 我的論文: `paper.json` `mine`; `private/shared/my-vocab.json` (lr-core `myvocab`, cross-app,
@@ -94,6 +97,9 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   builds import sources from paragraph text)
   marks no-card units `used` = 記得 (a KB card's own state wins). Not the ignore list. Math runs and display equations are masked out of
   the noun list.
+- Titles: `paper.json` `title_source` = author | page | pdf | file. A `file` title (the name of
+  the file) is replaced by the largest-type block of page 1 when the page posts its text
+  (`text::title_from_first_page`); a placeholder `/Title` counts as `file`. The author's edit wins.
 - Track B never writes a Chinese summary or translation of a paragraph. Claude's answers
   reach the symbol table only through 存進符號表… (`resolved_by: claude`, evidence kept).
 - Theme: the one all LoreForge apps share. `/theme.css` and `/theme.js` are `commons/ui/theme.{css,js}`

@@ -904,7 +904,7 @@ async function addCardDialog({ title, sha, page, context, hint, summary }) {
   const status = kb?.ok ? null : h("div", { class: "err-box" }, "KnowledgeBase 沒有回應。");
   const draftBtn = h("button", { type: "button", class: "btn", disabled: !kb?.ok, onclick: async () => {
     draftBtn.disabled = true; draftBtn.textContent = "起草中…";
-    try { const r = await api("/api/kb/draft", { body: { term: t.value, context } }); if (r.draft?.summary) sum.value = r.draft.summary; toast(`草稿：${r.assistant ?? ""}`); }
+    try { const r = await api("/api/kb/draft", { body: { term: t.value, context, sha, page } }); if (r.draft?.summary) sum.value = r.draft.summary; toast(`草稿：${r.assistant ?? ""}`); }
     catch (e) { fail(e); }
     draftBtn.disabled = false; draftBtn.replaceChildren(h("span", { "data-icon": "spark" }), "起草摘要"); paintIcons(draftBtn);
   } }, h("span", { "data-icon": "spark" }), "起草摘要");
