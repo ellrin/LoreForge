@@ -1,0 +1,19 @@
+[package]
+name = "lr-core"
+version.workspace = true
+edition.workspace = true
+description = "LoreReader core: the PDF library (outside git, content-addressed), per-paper metadata (paper.json, annotations, citable sentences, chat), non-destructive page operations (lopdf) and the offline term-candidate detector."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+lopdf.workspace = true
+sha2.workspace = true
+hex.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

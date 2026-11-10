@@ -1,0 +1,22 @@
+# LoreReader's LLM tasks, layered over lore-llm's shared tasks.toml. A user file
+# `<settings folder>/LoreReader/tasks.toml` in the same format can add an `[override]`.
+#
+#   local:current     the local engine that is connected: the OpenAI-compatible server
+#                     in config.toml `[engine] url` (or LOREREADER_LLM_URL)
+#   claude:selected   the Claude model from config.toml `claude_model` (else the catalog
+#                     default); the subscription (Claude Code) first, then the API key
+#
+# Same order as PaperComposer's writing tasks: translation runs locally first and falls
+# back to Claude; the chat panel is Claude only.
+
+[task.lr-translate]
+label = "翻譯選取文字"
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+
+[task.lr-chat]
+label = "問 Claude（附上引文）"
+needs = { context = 32000 }
+default = "claude:selected"
+offline = false
