@@ -17,7 +17,11 @@
 //! | GET/POST/DELETE | /api/papers/{sha}/chat | conversation / `{text, attachments}` → reply (task `lr-chat`) / clear |
 //! | POST | /api/compose | `{pages: [{sha, page}], title?}` → new PDF in the library + exports |
 //! | POST | /api/translate | `{text, context?}` (task `lr-translate`) |
-//! | POST | /api/terms | `{text}` → KB spans + term candidates (UTF-16 offsets) |
+//! | POST | /api/papers/{sha}/read | the page's pdf.js text (all pages, items with fonts and positions) → noun list |
+//! | GET | /api/papers/{sha}/nouns | the noun list (inventory × KB × ignore list × cached categories) |
+//! | POST | /api/papers/{sha}/nouns/classify | `{again?}` → one batched `lr-classify-terms` call |
+//! | POST/DELETE | /api/ignore | `{term}` → add to / remove from `ignore-words.txt` (「這不是術語」) |
+//! | GET/PUT | /api/models | the model menu: `{task, model: auto\|local\|haiku\|sonnet\|opus}` |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
 //! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?}` → KB `POST /api/nodes` |
 //! | POST | /api/kb/draft | `{term, context}` → KB `POST /api/draft` |
@@ -27,8 +31,10 @@
 
 pub mod kb;
 pub mod llm;
+pub mod reading;
 
 use std::net::SocketAddr;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -43,7 +49,6 @@ use lore_llm::{LlmRequest, Message};
 use lr_core::library::valid_sha;
 use lr_core::papers::{Annotation, AnnotationPatch, Attachment, ChatMessage, Derived, PaperMeta};
 use lr_core::pdfops::{self, Pick};
-use lr_core::terms::Detector;
 use lr_core::{Config, Library, Papers};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -69,7 +74,9 @@ pub struct AppState {
     pub llm: llm::Llm,
     pub port: Mutex<u16>,
     /// Serialises metadata writes (read-modify-write of the JSON files).
-    write: Mutex<()>,
+    pub(crate) write: Mutex<()>,
+    /// The text of each opened paper as the page sent it (memory only).
+    pub texts: Mutex<HashMap<String, Arc<lr_core::text::PaperText>>>,
     pub printer: Mutex<Option<Arc<dyn Printer>>>,
 }
 
@@ -148,6 +155,7 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
         home: lore_home::Home::discover(&repo_dir()),
         port: Mutex::new(0),
         write: Mutex::new(()),
+        texts: Mutex::new(HashMap::new()),
         printer: Mutex::new(None),
     })
 }
@@ -170,7 +178,11 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{sha}/chat", get(chat).post(send_chat).delete(clear_chat))
         .route("/api/compose", post(compose))
         .route("/api/translate", post(translate))
-        .route("/api/terms", post(terms))
+        .route("/api/papers/{sha}/read", post(reading::read_paper).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
+        .route("/api/papers/{sha}/nouns", get(reading::nouns_get))
+        .route("/api/papers/{sha}/nouns/classify", post(reading::classify))
+        .route("/api/ignore", post(reading::ignore_add).delete(reading::ignore_remove))
+        .route("/api/models", get(reading::models_get).put(reading::models_put))
         .route("/api/kb/status", get(kb_status))
         .route("/api/kb/cards", post(kb_card))
         .route("/api/kb/draft", post(kb_draft))
@@ -201,10 +213,6 @@ fn lib(s: &AppState) -> Result<&Library, ApiError> {
 
 fn sha_ok(sha: &str) -> Result<(), ApiError> {
     if valid_sha(sha) { Ok(()) } else { Err(bad("不是 sha256")) }
-}
-
-fn detector(s: &AppState) -> Detector {
-    Detector::with_file(&s.workspace.join("known-words.txt"))
 }
 
 // ── theme / fonts ────────────────────────────────────────────────────────
@@ -446,7 +454,7 @@ struct TranslateBody {
     context: String,
 }
 
-fn llm_error(e: String) -> ApiError {
+pub(crate) fn llm_error(e: String) -> ApiError {
     ApiError(StatusCode::SERVICE_UNAVAILABLE, json!({ "error": format!("沒有可用的模型：{e}"), "llm_unavailable": true }))
 }
 
@@ -521,65 +529,6 @@ async fn clear_chat(State(s): State<Shared>, Path(sha): Path<String>) -> R {
 }
 
 // ── KnowledgeBase ────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct TermsBody {
-    text: String,
-}
-
-/// UTF-16 offsets of every whole-word occurrence of `needle` (case-insensitive) in `text`.
-fn occurrences(text: &str, needle: &str) -> Vec<(usize, usize)> {
-    let (lt, ln) = (text.to_lowercase(), needle.to_lowercase());
-    if ln.is_empty() || lt.len() != text.len() {
-        return vec![];
-    }
-    let u16_at = |b: usize| text[..b].encode_utf16().count();
-    let mut out = vec![];
-    let mut i = 0;
-    while let Some(p) = lt[i..].find(&ln) {
-        let (s, e) = (i + p, i + p + ln.len());
-        let before = text[..s].chars().next_back().is_some_and(char::is_alphanumeric);
-        let after = text[e..].chars().next().is_some_and(char::is_alphanumeric);
-        if !before && !after {
-            out.push((u16_at(s), u16_at(e)));
-        }
-        i = e;
-    }
-    out
-}
-
-/// Known terms (KB scan) and candidates for red terms in one page's text.
-async fn terms(State(s): State<Shared>, Json(b): Json<TermsBody>) -> R {
-    // Line breaks become spaces (same length, so offsets hold): a term wrapped across
-    // two lines ("Hausdorff\ndistance") still matches its card.
-    let scan = s.kb.scan(&b.text.replace('\n', " ")).await;
-    let (spans, kb_status, kb_candidates) = match &scan {
-        Ok(v) => {
-            // Use the KB's own candidates only when a real assistant made them.
-            let real = v["assistant"].as_str().is_some_and(|a| a != "mock");
-            let c: Vec<String> = if real { v["candidates"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default() } else { vec![] };
-            (v["spans"].clone(), json!({ "ok": true, "assistant": v["assistant"] }), (real, c))
-        }
-        Err(e) => (json!([]), json!({ "ok": false, "down": e.down, "error": e.message }), (false, vec![])),
-    };
-    let taken: Vec<(usize, usize)> = spans.as_array().map(|a| a.iter().map(|x| (x["start"].as_u64().unwrap_or(0) as usize, x["end"].as_u64().unwrap_or(0) as usize)).collect()).unwrap_or_default();
-    let overlaps = |s0: usize, e0: usize| taken.iter().any(|&(s, e)| s0 < e && s < e0);
-    let (source, candidates): (&str, Vec<Value>) = if kb_candidates.0 {
-        let mut out = vec![];
-        for t in &kb_candidates.1 {
-            for (st, en) in occurrences(&b.text, t) {
-                if !overlaps(st, en) {
-                    out.push(json!({ "text": t, "start": st, "end": en, "kind": "kb" }));
-                }
-            }
-        }
-        ("kb", out)
-    } else {
-        let c = detector(&s).detect(&b.text).into_iter().filter(|c| !overlaps(c.start, c.end)).map(|c| serde_json::to_value(c).unwrap_or(Value::Null)).collect();
-        ("lr-core", c)
-    };
-    Ok(Json(json!({ "spans": spans, "candidates": candidates, "candidate_source": source, "kb": kb_status })))
-}
 
 async fn kb_status(State(s): State<Shared>) -> Json<Value> {
     match s.kb.get("/api/spaces").await {
@@ -683,8 +632,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn occurrences_are_whole_words_in_utf16() {
-        assert_eq!(occurrences("中 SBL and SBLX, sbl.", "SBL"), vec![(2, 5), (16, 19)]);
+    fn attachments_carry_the_page() {
         let a = Attachment { text: "x".into(), page: 2, context: "a x b".into() };
         assert!(with_attachments("why?", &[a]).contains("p. 2"));
     }

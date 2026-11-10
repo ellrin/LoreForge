@@ -3,7 +3,8 @@
 本機運作的 PDF 論文閱讀器。目標是用最短時間弄清楚一篇論文裡自己需要掌握什麼：沒學過的術語標成紅色、已在知識庫的術語顯示熟悉度；讀的時候存「引用句」（之後在 PaperComposer 引用）、加註記、翻譯、問 Claude。知識庫只放真正消化過的東西，所以**只有按「加入知識庫」才會建立卡片**，不會自動寫入。
 
 > 原型 v0。已完成：書庫（repo 外、sha256 命名）、pdf.js 閱讀（文字層、縮放、搜尋、延遲繪製、縮圖）、不破壞原檔的頁面操作（刪除、複製、拖曳排序、從其他 PDF 插入、合併）、列印、螢光標記與註記、選取文字右鍵選單（複製、翻譯、問 Claude、存成引用句、加入知識庫）、知識標示（紅色＝沒有卡片）、從知識庫卡片連回 PDF 那一頁。
-> 不在範圍：編輯 PDF 內容、投影片精靈（之後在 SlideComposer）、變數／方程式擷取、把註記寫進 PDF 檔（之後可做）。
+> 閱讀輔助（第二階段）：名詞整理（整篇詞表對知識庫、模型一次分類、忽略清單）、每個工作可選模型。
+> 不在範圍：編輯 PDF 內容、投影片精靈（之後在 SlideComposer）、把註記寫進 PDF 檔（之後可做）。
 
 ## 執行
 
@@ -48,6 +49,9 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `annotations.json` | `schema: "lorereader.annotations/1"`，`annotations: [{id, page, kind: "highlight" \| "note", color: yellow\|green\|blue\|pink, quote: {exact, prefix, suffix}, rects: [[x0,y0,x1,y1]…], note, created_at, updated_at}]`。`rects` 是相對於頁面的比例（左上為原點），所以任何縮放都對得上；`quote` 是原文與前後文，之後換渲染方式也能重新定位 |
 | `quotes.json` | 引用句。`schema: "lorereader.quotes/1"`，`quotes: [{id, text, page, note, created_at}]`。`note` 是一行備註（可空白） |
 | `chat.json` | 問 Claude 的對話。`schema: "lorereader.chat/1"`，`messages: [{role: user\|assistant, text, attachments: [{text, page, context}], at, engine}]` |
+| `nouns.json` | 名詞分類的快取。`schema: "lorereader.nouns/1"`，`categories: {<詞的正規化 key>: 分類}`，`asked: [已經送給模型的 key]`，`engine`，`classified_at`。名詞清單本身每次開檔重算（全文不寫進工作區） |
+
+工作區根目錄另有 `ignore-words.txt`（忽略清單，一行一個字或詞組，`#` 之後是註解）與 `models.json`（`{schema: "lorereader.models/1", choices: {<任務>: auto\|local\|haiku\|sonnet\|opus}}`）。
 
 `GET /api/quotes` 回傳所有論文的引用句（每筆加上 `sha256`、`paper_title`、`doi`），給 PaperComposer 之後讀取；PaperComposer 那邊尚未實作。
 
@@ -55,7 +59,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 ## 閱讀
 
-- 左邊縮圖、中間頁面、右邊面板（註記／引用句／對話）；窄螢幕時縮圖與面板變成抽屜。深色／淺色與其他 App 相同（右上角切換）。
+- 左邊縮圖、中間頁面、右邊面板（名詞／註記／引用句／對話）；窄螢幕時縮圖與面板變成抽屜。深色／淺色與其他 App 相同（右上角切換）。
 - pdf.js 文字層可以選取文字；縮放、符合寬度、頁碼跳頁、全文搜尋（⌘/Ctrl＋F，Enter 下一個）。只繪製視窗附近的頁面，縮圖捲到才畫。
 
 ## 頁面操作（不破壞原檔）
@@ -82,27 +86,35 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 - **存成引用句…**：句子（可修剪）＋一行備註，存在 `quotes.json`；右邊「引用句」分頁列出。
 - **加入知識庫…**：呼叫 KnowledgeBase 的 `POST /api/nodes`。標題預填選取的文字，摘要自己寫（可按「用模型起草摘要」呼叫 KnowledgeBase 的 `/api/draft`）。**初始狀態**可選「學習中」（預設：明天問、3 天後再問）或「已掌握」（已經熟的詞，直接記為「記得」，30 天後再確認）。來源記為 `{type: "pdf", ref: <sha256>, where: "p.<頁>", title: <論文標題>}`，內文附上所在的句子。
 
-## 知識標示（原型）
+## 名詞整理與知識標示（A 線：要學的名詞）
 
-工具列的標靶按鈕打開／關閉，旁邊有圖例：
+打開論文後，頁面把**全文**（pdf.js 的文字、字型、位置）送給伺服器一次（`POST /api/papers/{sha}/read`，只放在記憶體，不寫進工作區），伺服器照作者的做法整理出整篇的名詞清單（`lr-core` 的 `nouns`）：
 
-- **紅色**：可能是專業術語、但知識庫裡沒有卡片。
-- **淡琥珀色**：有卡片，學習中或久未複習。
+1. **詞表**：References／Bibliography 之後不算，取出每個詞與每次出現的位置（頁碼＋在該頁文字裡的位置）。
+2. **先比對多字詞**：文中連續 2–4 個字的詞組拿去對 KnowledgeBase 卡片的標題與別名（`GET /api/nodes`，只讀），所以 `cross entropy`、`Dice coefficient`、`U-Net` 會整組對到；跨行的詞組也算。括號裡的縮寫和前面拼得出它的全名（`Spectral Boundary Loss (SBL)`）也算一組，之後的 `SBL` 算在同一組。剩下的拆成單字；有連字號的複合詞（`label-smoothing`）保持一組，除非每一段都是一般字。
+3. **詞形還原**：大小寫、複數（含 `matrices`、`analyses` 這類不規則的）、連字號與空格、英式／美式拼法（`normalisation`、`colour`、`tumour`、`centre`、`labelled`、`haem-`、`oedema`…）、連字（ﬁ）、彎引號、**行尾斷字**（`segmen-` 換行 `tation`：全文別處出現過 `segmentation`，或下一段是小寫而且全文沒有 `segmen-tation` 這種寫法，就接回去）。
+4. **扣掉**：功能詞（`function_words.txt`）、學術通用詞（`academic_words.txt`：method、propose、significant…）、日常英文（`common_words.txt`，約 2,600 字；但 `TERMLIKE` 裡在論文中是術語的字不扣，例如 regression、variance、attention、loss、boundary）、以及**忽略清單**。縮寫（兩個以上大寫字母）不扣。
+5. **對知識庫**：記得、學習中／久未複習、沒有卡片。
+6. **沒有卡片的詞整批交給模型分類，一篇只呼叫一次**（任務 `lr-classify-terms`，預設 `local:current`，用 JSON schema）：方法、指標、資料集、統計、臨床／解剖、一般學術詞、人名、其他術語。結果存在 `papers/<sha256>/nouns.json`，問過的詞不會再自動送出（「分類」按鈕可以再送一次還沒有分類的）。沒有模型時清單照樣能用，只是顯示「未分類」。
+7. 右鍵（或清單裡的眼睛按鈕）「**這不是術語**」寫進 `private/LoreReader/ignore-words.txt`，清單與內文立刻重畫。舊的 `known-words.txt` 第一次啟動時會自動搬進 `ignore-words.txt`（兩個都有時接在後面），之後只讀新檔名。懂的專有名詞不要放忽略清單：加入知識庫並選「已掌握」。
+
+一篇約 8,000 字的合成論文會整理成約 270 個詞（測試 `long_paper_reduces_to_a_few_hundred_units`）。
+
+**右邊「名詞」分頁**：欄位是詞、分類、知識庫狀態、次數、第一次出現的頁碼；可以依每一欄排序，依分類、狀態篩選，也可以打字篩選。點一個詞：文中**所有出現的位置**都會亮起來並跳到第一個，再點一下（或 ↓）跳到下一個。每一列可以「加入知識庫」（初始狀態「學習中／已掌握」）或「這不是術語」。
+
+**內文顏色**（工具列的標靶按鈕打開／關閉）也來自這份清單：
+
+- **紅色**：專業術語、沒有卡片。分類是「一般學術詞」或「人名」的只列在清單、不標紅；還沒分類的用紅色虛線。
+- **淡琥珀色**：有卡片，學習中、久未複習或還沒有學習紀錄。
 - **細綠底線**：有卡片，已經記得。
 
-每一頁的文字送到 KnowledgeBase 的 `POST /api/scan`（不記錄「遇到」），找出已有卡片的詞與狀態。紅色候選詞：KnowledgeBase 的候選輸出目前還是離線 mock，所以 LoreReader 用自己的規則（`lr-core` 的 `terms`，不呼叫模型）：
+點有顏色的詞：分類、次數、第一次出現的頁碼；可以看所有出現位置、翻譯、「這不是術語」、加入知識庫；有卡片的顯示卡片摘要，可在 KnowledgeBase 開啟。參考文獻不會自動加入知識庫；「遇到」也不會記錄（只讀卡片清單，不呼叫 `/api/scan`）。
 
-1. 括號裡的縮寫與它前面拼得出縮寫的全名（`Spectral Boundary Loss (SBL)`），之後再出現的縮寫也算；
-2. 兩個以上大寫字母的詞（`BERT`、`ResNet`、`U-Net`）；
-3. 大寫開頭的多字詞組（中間可夾 of、and、for…）；整行都是大寫開頭的標題行不算；
-4. 有連字號、而且其中一段不是常用字（或很長）的詞（`cross-entropy`）；
-5. 5 個字母以上、不在常用英文字表（約 2,600 字，處理複數、-ed、-ing、-ly 等變化）裡的字。
+**已知限制**：人名、地名要靠模型分類才不會標紅；日常英文字表裡、又不在 `TERMLIKE` 的字（例如 network、image、model）不會列出，若某個領域需要，請告訴 Claude 加進 `TERMLIKE`；希臘字母與單一字母是變數，屬於「符號」，不在名詞清單；數字加單位不處理。
 
-References／Bibliography 之後的文字、網址、DOI、e-mail 不標。
+### 模型選單
 
-**已知限制**：沒有詞性和語意，人名、地名（Hausdorff、Sobel、作者名）會被當成少見字；句首的大寫字用小寫判斷；常用字表很短，比較少見但普通的英文字也會標紅；英式／美式拼法不在字表裡的會標；PDF 文字層的連字、斷行連字號會把字拆開；數字加單位、希臘字母不處理。自己已經熟的字寫進 `private/LoreReader/known-words.txt`（一行一個或多個）就不會再標。
-
-點紅色詞：「加入知識庫」或「翻譯」。點有卡片的詞：顯示卡片摘要與熟悉度，可在 KnowledgeBase 開啟。參考文獻不會自動加入知識庫；「遇到」也不會自動記錄（之後可做成選項）。
+工具列的 ✦ 按鈕：名詞分類、段落分析、問 Claude、翻譯，各自選「自動」（照 `tasks.toml` 的預設順序）、地端、Haiku、Sonnet 或 Opus，做法同 PaperComposer 的模型選單（`complete_on`）。選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。選擇存在 `private/LoreReader/models.json`。
 
 ## 從知識庫開啟 PDF
 
@@ -120,7 +132,10 @@ References／Bibliography 之後的文字、網址、DOI、e-mail 不標。
 | `GET/POST/DELETE /api/papers/{sha}/chat` | 對話（送出 `{text, attachments}` 會回覆並存檔） |
 | `POST /api/compose` | `{pages: [{sha, page}], title?, op?}` → 新 PDF（書庫＋匯出） |
 | `POST /api/translate` | `{text, context?}` |
-| `POST /api/terms` | `{text}` → 已有卡片的詞（KnowledgeBase）＋紅色候選詞（UTF-16 位置） |
+| `POST /api/papers/{sha}/read` | 頁面送來的全文（每頁的文字與 pdf.js 項目：字型名稱、字級、位置）→ 名詞清單 |
+| `GET /api/papers/{sha}/nouns`、`POST …/nouns/classify` | 名詞清單（每個詞的 key、寫法、來源、知識庫狀態、分類、次數、出現位置 `[頁, 起, 迄]`）；`{again?}` → 一次 `lr-classify-terms` |
+| `POST/DELETE /api/ignore` | `{term}` → 加進／移出忽略清單 |
+| `GET/PUT /api/models` | 模型選單：`{task, model}` |
 | `GET /api/kb/status`、`POST /api/kb/cards`、`POST /api/kb/draft`、`GET /api/kb/nodes/{id}` | KnowledgeBase（建立卡片只在明確操作時） |
 | `POST /api/print`、`POST /api/print/ready?id=` | Mac App 的原生列印 |
 | `GET /open?sha=&page=` | 從其他 App 開到某一頁 |

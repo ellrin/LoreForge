@@ -49,7 +49,9 @@ const fail = (e) => toast(e.message ?? String(e), true);
 const norm = (s) => (s ?? "").replace(/\s+/g, " ").trim();
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const STATE_LABEL = { learning: "學習中", known: "記得", stale: "久未複習", none: "學習中（尚無紀錄）", new: "沒有卡片" };
-const KIND_LABEL = { acronym: "縮寫", expansion: "縮寫全名", phrase: "專有名詞", hyphenated: "連字號術語", rare: "少見字", kb: "候選術語" };
+const SOURCE_LABEL = { kb: "知識庫的詞", expansion: "縮寫全名", compound: "連字號複合詞", acronym: "縮寫", word: "單字" };
+const NOUN_STATE = { known: "記得", learning: "學習中", stale: "久未複習", none: "學習中（尚無紀錄）", new: "沒有卡片" };
+const MODEL_LABEL = { auto: "自動", local: "地端", haiku: "Haiku", sonnet: "Sonnet", opus: "Opus" };
 const COLOR_LABEL = { yellow: "黃", green: "綠", blue: "藍", pink: "粉紅" };
 
 // ── state ─────────────────────────────────────────────────────────────────
@@ -58,7 +60,11 @@ const S = {
   sha: null, paper: null,
   docs: new Map(),          // sha → Promise<PDFDocumentProxy>
   texts: new Map(),         // "sha:page" → Promise<{text, items:[{start,end}]}>
-  terms: new Map(),         // "sha:page" → Promise<{spans, candidates, kb}>
+  nouns: null,              // the noun list of the open paper (GET …/nouns)
+  nounMarks: new Map(),     // page → [{s, e, cls, i}] from the noun list
+  focusNoun: null,          // {i, k}: the noun whose occurrences are lit, and the current one
+  nounView: { cat: "", state: "", q: "", sort: "page", dir: 1 },
+  readStatus: "",           // what the reading aids are doing ("讀取全文…", errors)
   orig: [],                 // [{sha, page}] of the open paper
   arr: null,                // pending edited list, or null
   pages: [],                // view items: {sha, page, w, h, el, token, rendered, divs, strs}
@@ -68,7 +74,7 @@ const S = {
   search: { q: "", hits: [], i: -1 },
   sending: false,
 };
-try { S.termsOn = localStorage.getItem("lr.terms") === "1"; S.tab = localStorage.getItem("lr.tab") || "notes"; } catch {}
+try { S.termsOn = localStorage.getItem("lr.terms") !== "0"; S.tab = localStorage.getItem("lr.tab") || "nouns"; } catch {}
 
 const key = (sha, page) => `${sha}:${page}`;
 const getDoc = (sha) => {
@@ -88,12 +94,38 @@ function pageText(sha, page) {
       if (it.str === undefined) continue;
       const start = text.length;
       text += it.str;
-      items.push({ start, end: text.length });
+      items.push({ start, end: text.length, raw: it });
       if (it.hasEOL) text += "\n";
     }
     return { text, items };
   })());
   return S.texts.get(k);
+}
+
+/** One page for the reading aids: the page text plus every item's PDF font name,
+ *  size and position (PDF points, y up). Font names come from the font objects pdf.js
+ *  loads for the operator list. */
+async function pageRich(sha, page) {
+  const { text, items } = await pageText(sha, page);
+  const pg = await (await getDoc(sha)).getPage(page);
+  await pg.getOperatorList();
+  const fonts = {};
+  const font = (f) => {
+    if (!(f in fonts)) {
+      let o = null;
+      try { o = pg.commonObjs.has(f) ? pg.commonObjs.get(f) : null; } catch {}
+      fonts[f] = { name: o?.name ?? "", italic: !!o?.italic, bold: !!o?.bold };
+    }
+    return fonts[f];
+  };
+  const vp = pg.getViewport({ scale: 1 });
+  return {
+    page, text, width: vp.width, height: vp.height,
+    items: items.map(({ start, end, raw }) => {
+      const t = raw.transform, f = font(raw.fontName);
+      return { s: start, e: end, str: raw.str, font: f.name, italic: f.italic, bold: f.bold, size: Math.hypot(t[2], t[3]) || Math.abs(t[0]), x: t[4], y: t[5], w: raw.width, h: raw.height, eol: !!raw.hasEOL };
+    }),
+  };
 }
 
 // ── library (home) ────────────────────────────────────────────────────────
@@ -150,9 +182,11 @@ async function openPaper(sha, page) {
     S.orig = Array.from({ length: doc.numPages }, (_, i) => ({ sha, page: i + 1 }));
     S.search = { q: "", hits: [], i: -1 }; $("#searchInput").value = ""; $("#searchCount").textContent = "";
     S.att = []; S.chatDraft = "";
+    S.nouns = null; S.nounMarks = new Map(); S.focusNoun = null;
     await Promise.all([loadAnnotations(), loadQuotes(), loadChat()]);
     await buildView();
     refreshKb();
+    readPaper(sha);
   }
   renderSide();
   scrollToPage(clamp(page - 1, 0, S.pages.length - 1), false);
@@ -253,7 +287,6 @@ async function renderPage(p) {
     p.divIndex = new Map(p.divs.map((d, i) => [d, i]));
     drawHighlights(p);
     decorate(p);
-    if (S.termsOn) ensureTerms(p);
   } catch (e) {
     if (token === p.token) { p.rendered = false; console.error(e); }
   }
@@ -588,6 +621,12 @@ function placeAt(el, x, y) {
 
 async function onContextMenu(e) {
   if (!e.target.closest(".page")) return;
+  const mk = e.target.closest?.(".mk[data-t^=n]");
+  if (mk && getSelection().isCollapsed) {
+    const n = S.nouns?.entries[+mk.dataset.t.slice(1)];
+    if (n) { e.preventDefault(); nounMenu(n, e.clientX, e.clientY); }
+    return;
+  }
   const info = await selectionInfo();
   if (!info) return;
   e.preventDefault();
@@ -744,26 +783,15 @@ async function addCardDialog({ title, sha, page, context, hint }) {
   try {
     const out = await api("/api/kb/cards", { body: { sha, page, title: t.value, summary: sum.value, initial_state: state, context } });
     toast(`已加入知識庫：${out.node.title}（${state === "known" ? "已掌握" : "學習中"}）`);
-    // The new card changes the colouring of every page.
-    S.terms.clear();
-    S.pages.filter((p) => p.rendered).forEach((p) => S.termsOn && ensureTerms(p));
+    // The new card changes the noun list and the colouring of every page.
+    refreshNouns();
   } catch (e) { fail(e); }
 }
 
 function updateLegend() {
   $("#legend").hidden = !S.termsOn;
   $("#actTerms").setAttribute("aria-pressed", S.termsOn ? "true" : "false");
-  $("#kbNote").textContent = S.kb && !S.kb.ok ? "· KnowledgeBase 沒有回應：只標候選術語" : "";
-}
-
-function ensureTerms(p) {
-  const k = key(p.sha, p.page);
-  if (!S.terms.has(k)) S.terms.set(k, pageText(p.sha, p.page).then(({ text }) => api("/api/terms", { body: { text } })));
-  S.terms.get(k).then((r) => {
-    p.termData = r;
-    if (r.kb && !r.kb.ok && S.kb?.ok !== false) { S.kb = { ok: false, error: r.kb.error }; updateLegend(); }
-    decorate(p);
-  }).catch((e) => { S.terms.delete(k); console.error(e); });
+  $("#kbNote").textContent = S.kb && !S.kb.ok ? "· KnowledgeBase 沒有回應：沒有卡片的狀態" : "";
 }
 
 /** Re-mark one page's text layer: knowledge colouring, then search hits on top. */
@@ -771,9 +799,13 @@ async function decorate(p) {
   if (!p.divs) return;
   const { items } = await pageText(p.sha, p.page);
   const marks = [];
-  if (S.termsOn && p.termData) {
-    p.termData.spans?.forEach((s, n) => marks.push({ s: s.start, e: s.end, cls: s.state === "known" ? "kt-known" : "kt-learn", t: `s${n}` }));
-    p.termData.candidates?.forEach((c, n) => marks.push({ s: c.start, e: c.end, cls: "kt-new", t: `c${n}` }));
+  if (p.sha === S.sha) {
+    for (const m of S.nounMarks.get(p.page) ?? []) {
+      const lit = S.focusNoun?.i === m.i;
+      const cur = lit && S.focusNoun.cur?.[0] === p.page && S.focusNoun.cur?.[1] === m.s;
+      const cls = [S.termsOn ? m.cls : "", lit ? "nf" : "", cur ? "nf-cur" : ""].filter(Boolean).join(" ");
+      if (cls) marks.push({ s: m.s, e: m.e, cls, t: `n${m.i}` });
+    }
   }
   const pi = S.pages.indexOf(p);
   S.search.hits.forEach((x, n) => { if (x.i === pi) marks.push({ s: x.start, e: x.end, cls: n === S.search.i ? "sr sr-cur" : "sr" }); });
@@ -803,37 +835,253 @@ async function onPageClick(e) {
   const mk = e.target.closest?.(".mk[data-t]");
   if (!mk || !getSelection().isCollapsed) return;
   const p = S.pages[+mk.closest(".page").dataset.i];
-  const t = mk.dataset.t, n = +t.slice(1);
+  const t = mk.dataset.t;
   const box = mk.getBoundingClientRect();
-  const anchor = { left: box.left, top: box.top, bottom: box.bottom };
-  const { text } = await pageText(p.sha, p.page);
-  if (t[0] === "s") {
-    const s = p.termData.spans[n];
-    const head = h("h4", {}, s.title, h("span", { class: "st" }, h("i", { class: `s-${s.state}` }), STATE_LABEL[s.state] ?? s.state));
-    showPop(anchor, head, h("div", { class: "muted" }, "讀取卡片…"));
-    let summary = "";
-    try { const v = await api(`/api/kb/nodes/${s.node_id}`); summary = v.node?.summary ?? ""; } catch (err) { summary = err.message; }
-    showPop(anchor, head, h("div", { class: "out" }, summary || "（這張卡還沒有摘要）"),
-      h("div", { class: "actions" },
-        h("button", { type: "button", class: "btn small", onclick: () => translate(s.text, surrounding(text, s.start, s.end), box, null) }, h("span", { "data-icon": "languages" }), "翻譯"),
-        h("a", { class: "btn small", href: `${S.info?.kb_url ?? "http://127.0.0.1:7700"}/#/node/${s.node_id}`, target: "_blank", rel: "noopener" }, h("span", { "data-icon": "external" }), "在 KnowledgeBase 開啟")));
-  } else {
-    const c = p.termData.candidates[n];
-    const ctx = surrounding(text, c.start, c.end);
-    showPop(anchor,
-      h("h4", {}, c.text, h("span", { class: "st" }, h("i", { class: "s-new" }), STATE_LABEL.new)),
-      h("div", { class: "src" }, `${KIND_LABEL[c.kind] ?? c.kind} · 由${p.termData.candidate_source === "kb" ? " KnowledgeBase" : "離線規則"}找出`),
-      h("div", { class: "actions" },
-        h("button", { type: "button", class: "btn small", onclick: () => translate(c.text, ctx, box, { p, context: ctx }) }, h("span", { "data-icon": "languages" }), "翻譯"),
-        h("button", { type: "button", class: "btn small primary", onclick: () => addCardDialog({ title: c.text, sha: p.sha, page: p.page, context: ctx }) }, h("span", { "data-icon": "book" }), "加入知識庫")));
-  }
+  if (t[0] === "n") nounPopover(S.nouns?.entries[+t.slice(1)], { left: box.left, top: box.top, bottom: box.bottom }, p);
 }
 
 function toggleTerms() {
   S.termsOn = !S.termsOn;
   try { localStorage.setItem("lr.terms", S.termsOn ? "1" : "0"); } catch {}
   updateLegend();
-  S.pages.filter((p) => p.rendered).forEach((p) => (S.termsOn ? ensureTerms(p) : decorate(p)));
+  S.pages.filter((p) => p.rendered).forEach(decorate);
+}
+
+// ── the noun list (track A) ───────────────────────────────────────────────
+/** Read the whole paper (text, fonts, positions) and send it to the server once;
+ *  the noun list (and later the symbol table and paragraphs) are built from it. */
+async function readPaper(sha) {
+  S.readStatus = "讀取全文…";
+  if (S.tab === "nouns") renderSide();
+  try {
+    const doc = await getDoc(sha);
+    const pages = [];
+    for (let n = 1; n <= doc.numPages; n++) pages.push(await pageRich(sha, n));
+    if (S.sha !== sha) return;
+    const r = await api(`/api/papers/${sha}/read`, { body: { pages } });
+    if (S.sha !== sha) return;
+    S.readStatus = "";
+    S.words = r.words;
+    setNouns(r.nouns);
+    if (r.nouns.classification.pending > 0) classifyNouns(false);
+  } catch (e) {
+    if (S.sha !== sha) return;
+    S.readStatus = `讀不到全文：${e.message}`;
+    if (S.tab === "nouns") renderSide();
+  }
+}
+
+async function refreshNouns() {
+  if (!S.sha || !S.nouns) return;
+  try { setNouns(await api(`/api/papers/${S.sha}/nouns`)); } catch (e) { if (e.data?.no_text) readPaper(S.sha); else fail(e); }
+}
+
+function nounClass(n) {
+  if (n.state === "known") return "kt-known";
+  if (["learning", "stale", "none"].includes(n.state)) return "kt-learn";
+  if (n.red) return n.category ? "kt-new" : "kt-new kt-unc";
+  return "";
+}
+
+function setNouns(n) {
+  const focusKey = S.focusNoun ? S.nouns?.entries[S.focusNoun.i]?.key : null;
+  S.nouns = n;
+  S.nounMarks = new Map();
+  n.entries.forEach((e, i) => {
+    const cls = nounClass(e);
+    for (const [page, s, en] of e.occ) {
+      if (!S.nounMarks.has(page)) S.nounMarks.set(page, []);
+      S.nounMarks.get(page).push({ s, e: en, cls, i });
+    }
+  });
+  if (focusKey) {
+    const i = n.entries.findIndex((e) => e.key === focusKey);
+    S.focusNoun = i >= 0 ? { ...S.focusNoun, i } : null;
+  }
+  if (n.kb && !n.kb.ok && S.kb?.ok !== false) { S.kb = { ok: false, error: n.kb.error }; updateLegend(); }
+  S.pages.filter((p) => p.rendered).forEach(decorate);
+  if (S.tab === "nouns") renderSide();
+  renderTabCounts();
+}
+
+async function classifyNouns(again) {
+  if (!S.sha || S.classifying) return;
+  const sha = S.sha;
+  S.classifying = true; S.classifyError = null;
+  if (S.tab === "nouns") renderSide();
+  try {
+    const r = await api(`/api/papers/${sha}/nouns/classify`, { body: { again } });
+    if (S.sha === sha) setNouns(r.nouns);
+  } catch (e) {
+    S.classifyError = e.data?.llm_unavailable ? "沒有可用的模型：名詞先不分類（右上「模型」可以換）。" : e.message;
+  }
+  S.classifying = false;
+  if (S.tab === "nouns" && S.sha === sha) renderSide();
+}
+
+/** Light every occurrence of noun `i` and go to occurrence `k` (wraps). */
+function focusNoun(i, k = 0) {
+  const n = S.nouns?.entries[i];
+  if (!n) return;
+  const len = n.occ.length;
+  const kk = ((k % len) + len) % len;
+  const [page, s] = n.occ[kk];
+  S.focusNoun = { i, k: kk, cur: [page, s] };
+  S.pages.filter((p) => p.rendered).forEach(decorate);
+  if (S.tab === "nouns") renderSide();
+  const pi = S.pages.findIndex((p) => p.sha === S.sha && p.page === page);
+  if (pi < 0) { toast("這一頁不在目前的頁面清單裡", true); return; }
+  scrollToPage(pi, false);
+  setTimeout(() => $(".nf-cur")?.scrollIntoView({ block: "center" }), 250);
+}
+function clearNounFocus() {
+  S.focusNoun = null;
+  S.pages.filter((p) => p.rendered).forEach(decorate);
+  if (S.tab === "nouns") renderSide();
+}
+
+/** The sentence around a noun's first occurrence (for KB cards and translation). */
+async function nounContext(n, k = 0) {
+  const [page, s, e] = n.occ[k] ?? n.occ[0];
+  const { text } = await pageText(S.sha, page);
+  return { page, context: surrounding(text, s, e) };
+}
+
+async function ignoreNoun(n) {
+  try {
+    await api("/api/ignore", { body: { term: n.text } });
+    hidePop();
+    if (S.focusNoun && S.nouns.entries[S.focusNoun.i]?.key === n.key) S.focusNoun = null;
+    await refreshNouns();
+    toast(`「${n.text}」已加入忽略清單（ignore-words.txt）`);
+  } catch (e) { fail(e); }
+}
+
+async function nounCard(n) {
+  const { page, context } = await nounContext(n, S.focusNoun?.i === S.nouns.entries.indexOf(n) ? S.focusNoun.k : 0);
+  addCardDialog({ title: n.text, sha: S.sha, page, context });
+}
+
+function stateChip(state) {
+  return h("span", { class: "st" }, h("i", { class: `s-${state}` }), NOUN_STATE[state] ?? state);
+}
+
+async function nounPopover(n, anchor, p) {
+  if (!n) return;
+  const i = S.nouns.entries.indexOf(n);
+  const head = h("h4", {}, n.text, stateChip(n.state));
+  const meta = h("div", { class: "src" }, `${n.category ?? (n.kb ? "知識庫" : "未分類")} · ${SOURCE_LABEL[n.source] ?? n.source}${n.short ? `（${n.short}）` : ""} · ${n.count} 次 · 第一次在 p.${n.first_page}`);
+  const acts = h("div", { class: "actions" },
+    h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); setTab("nouns"); focusNoun(i, 0); } }, h("span", { "data-icon": "search" }), `所有出現位置（${n.count}）`));
+  const ctx = await nounContext(n);
+  acts.append(h("button", { type: "button", class: "btn small", onclick: () => translate(n.text, ctx.context, null, { p: { sha: S.sha, page: ctx.page }, context: ctx.context }) }, h("span", { "data-icon": "languages" }), "翻譯"));
+  if (!n.kb) {
+    acts.append(h("button", { type: "button", class: "btn small", onclick: () => ignoreNoun(n) }, h("span", { "data-icon": "eyeOff" }), "這不是術語"));
+    acts.append(h("button", { type: "button", class: "btn small primary", onclick: () => nounCard(n) }, h("span", { "data-icon": "book" }), "加入知識庫"));
+    showPop(anchor, head, meta, acts);
+    return;
+  }
+  acts.append(h("a", { class: "btn small", href: `${S.info?.kb_url ?? "http://127.0.0.1:7700"}/#/node/${n.kb.node_id}`, target: "_blank", rel: "noopener" }, h("span", { "data-icon": "external" }), "在 KnowledgeBase 開啟"));
+  showPop(anchor, head, meta, h("div", { class: "muted" }, "讀取卡片…"));
+  let summary = "";
+  try { const v = await api(`/api/kb/nodes/${n.kb.node_id}`); summary = v.node?.summary ?? ""; } catch (err) { summary = err.message; }
+  showPop(anchor, head, meta, h("div", { class: "out" }, summary || "（這張卡還沒有摘要）"), acts);
+}
+
+/** Right-click on a coloured term (no selection): the term's own menu. */
+function nounMenu(n, x, y) {
+  const m = $("#ctxMenu");
+  const i = S.nouns.entries.indexOf(n);
+  const item = (icon, label, fn) => h("button", { type: "button", role: "menuitem", onclick: () => { closeMenus(); fn(); } }, h("span", { "data-icon": icon }), label);
+  m.replaceChildren(
+    h("div", { class: "menu-title" }, n.text),
+    item("search", `所有出現位置（${n.count}）`, () => { setTab("nouns"); focusNoun(i, 0); }),
+    n.kb ? null : item("eyeOff", "這不是術語", () => ignoreNoun(n)),
+    n.kb ? null : item("book", "加入知識庫…", () => nounCard(n)),
+  );
+  paintIcons(m);
+  placeAt(m, x, y);
+}
+
+const NOUN_COLS = [["text", "詞"], ["category", "分類"], ["state", "知識庫"], ["count", "次數"], ["page", "頁"]];
+const STATE_SHORT = { new: "無卡", learning: "學習中", stale: "久未", none: "學習中", known: "記得" };
+const STATE_ORDER = { new: 0, learning: 1, stale: 1, none: 1, known: 2 };
+
+function nounsPane() {
+  const n = S.nouns;
+  const out = [];
+  if (!n) {
+    out.push(h("p", { class: "empty" }, S.readStatus || "讀取全文…"));
+    return out;
+  }
+  const st = n.stats;
+  const v = S.nounView;
+  const cls = n.classification;
+  const engine = S.classifying ? "分類中…（一篇只呼叫一次模型）" : cls.engine ? `分類：${cls.engine}` : "尚未分類";
+  out.push(h("div", { class: "nn-stats" },
+    h("span", {}, `${st.words.toLocaleString()} 字 → ${st.units} 個詞`),
+    h("span", { class: "muted" }, `沒有卡片 ${st.no_card} · 學習中 ${st.learning} · 記得 ${st.known}`),
+    h("span", { class: "muted nn-engine" }, engine, cls.unclassified && !S.classifying ? ` · 未分類 ${cls.unclassified}` : "",
+      !S.classifying && cls.unclassified ? h("button", { type: "button", class: "btn ghost small", onclick: () => classifyNouns(true) }, "分類") : null)));
+  if (S.classifyError) out.push(h("div", { class: "warn-box" }, S.classifyError));
+  if (n.kb && !n.kb.ok) out.push(h("div", { class: "warn-box" }, "KnowledgeBase 沒有回應：全部當作沒有卡片。開啟 KnowledgeBase 後重新開啟論文。"));
+  const catSel = h("select", { "aria-label": "分類", onchange: (e) => { v.cat = e.target.value; renderSide(); } },
+    h("option", { value: "" }, "全部分類"), ...n.categories.map((c) => h("option", { value: c }, c)), h("option", { value: "-" }, "未分類"));
+  catSel.value = v.cat;
+  const stSel = h("select", { "aria-label": "知識庫狀態", onchange: (e) => { v.state = e.target.value; renderSide(); } },
+    h("option", { value: "" }, "全部狀態"), h("option", { value: "red" }, "紅字（要學）"), h("option", { value: "new" }, "沒有卡片"), h("option", { value: "learning" }, "學習中／久未複習"), h("option", { value: "known" }, "記得"));
+  stSel.value = v.state;
+  const q = h("input", { type: "search", placeholder: "篩選", value: v.q, "aria-label": "篩選詞", oninput: (e) => { v.q = e.target.value; clearTimeout(S.nqTimer); S.nqTimer = setTimeout(() => { renderSide(); $(".nn-tools input")?.focus(); }, 200); } });
+  out.push(h("div", { class: "nn-tools" }, catSel, stSel, q));
+  let rows = n.entries.map((e, i) => ({ e, i }));
+  if (v.cat) rows = rows.filter(({ e }) => (v.cat === "-" ? !e.category && !e.kb : e.category === v.cat));
+  if (v.state) rows = rows.filter(({ e }) => (v.state === "red" ? e.red : v.state === "learning" ? ["learning", "stale", "none"].includes(e.state) : e.state === v.state));
+  if (v.q.trim()) { const qq = v.q.trim().toLowerCase(); rows = rows.filter(({ e }) => e.text.toLowerCase().includes(qq) || e.key.includes(qq)); }
+  const catIdx = (e) => (e.category ? n.categories.indexOf(e.category) : e.kb ? -1 : 99);
+  const key = { text: (e) => e.text.toLowerCase(), category: catIdx, state: (e) => STATE_ORDER[e.state] ?? 0, count: (e) => -e.count, page: (e) => e.first_page * 1e6 + e.occ[0][1] }[v.sort];
+  rows.sort((a, b) => { const x = key(a.e), y = key(b.e); return (x < y ? -1 : x > y ? 1 : 0) * v.dir || a.i - b.i; });
+  const head = h("div", { class: "nn-row nn-head", role: "row" }, NOUN_COLS.map(([k, label]) => h("button", { type: "button", class: v.sort === k ? "on" : "", "aria-sort": v.sort === k ? (v.dir > 0 ? "ascending" : "descending") : "none", onclick: () => { if (v.sort === k) v.dir = -v.dir; else { v.sort = k; v.dir = 1; } renderSide(); } }, label, v.sort === k ? (v.dir > 0 ? " ↑" : " ↓") : "")), h("span"));
+  const list = rows.map(({ e, i }) => {
+    const on = S.focusNoun?.i === i;
+    const row = h("div", { class: `nn-row${on ? " on" : ""}`, role: "row", tabindex: "0", title: `${e.text}${e.short ? `（${e.short}）` : ""}`,
+      onclick: (ev) => { if (!ev.target.closest("button")) (on ? focusNoun(i, S.focusNoun.k + 1) : focusNoun(i, 0)); },
+      oncontextmenu: (ev) => { ev.preventDefault(); nounMenu(e, ev.clientX, ev.clientY); },
+      onkeydown: (ev) => { if (ev.key === "Enter") focusNoun(i, on ? S.focusNoun.k + 1 : 0); } },
+      h("span", { class: "nn-term" }, h("i", { class: `nn-dot ${nounClass(e) || "kt-none"}` }), h("span", { class: "ellipsis" }, e.text)),
+      h("span", { class: "nn-cat ellipsis" }, e.category ?? (e.kb ? "—" : "未分類")),
+      h("span", { class: "nn-st", title: NOUN_STATE[e.state] }, h("i", { class: `s-${e.state}` }), STATE_SHORT[e.state] ?? e.state),
+      h("span", { class: "nn-num" }, on ? `${S.focusNoun.k + 1}/${e.count}` : e.count),
+      h("span", { class: "nn-num" }, e.first_page),
+      h("span", { class: "nn-acts" },
+        on ? h("button", { class: "ico small", "aria-label": "上一個出現位置", "data-icon": "up", onclick: () => focusNoun(i, S.focusNoun.k - 1) }) : null,
+        on ? h("button", { class: "ico small", "aria-label": "下一個出現位置", "data-icon": "chevron", onclick: () => focusNoun(i, S.focusNoun.k + 1) }) : null,
+        !on && !e.kb ? h("button", { class: "ico small", "aria-label": "這不是術語", "data-icon": "eyeOff", onclick: () => ignoreNoun(e) }) : null,
+        !on && !e.kb ? h("button", { class: "ico small", "aria-label": "加入知識庫…", "data-icon": "book", onclick: () => nounCard(e) }) : null,
+        on ? h("button", { class: "ico small", "aria-label": "取消標示", "data-icon": "x", onclick: clearNounFocus }) : null));
+    return row;
+  });
+  out.push(h("div", { class: "nn-table", role: "table", "aria-label": "名詞清單" }, head, ...(list.length ? list : [h("p", { class: "empty" }, "沒有符合的詞。")])));
+  out.push(h("p", { class: "muted nn-foot" }, "點一個詞：文中所有出現的位置都會亮起來，再點一下（或 ↓）跳到下一個。右鍵「這不是術語」寫進忽略清單。紅字＝專業術語、沒有卡片；一般學術詞與人名只列出、不標紅。"));
+  return out;
+}
+
+// ── model menu ────────────────────────────────────────────────────────────
+async function modelDialog() {
+  let m;
+  try { m = await api("/api/models"); } catch (e) { fail(e); return; }
+  const rows = h("div", { class: "model-rows" });
+  const paint = () => rows.replaceChildren(...m.tasks.map((t) => h("div", { class: "model-row" },
+    h("div", {}, h("b", {}, t.label), h("span", { class: "muted mono" }, ` ${t.id} · 預設 ${t.default}`)),
+    h("div", { class: "seg", role: "group", "aria-label": t.label }, m.choices.map((c) => h("button", { type: "button", "aria-pressed": t.choice === c ? "true" : "false", onclick: async () => {
+      try { m = await api("/api/models", { method: "PUT", body: { task: t.id, model: c } }); paint(); } catch (e) { fail(e); }
+    } }, MODEL_LABEL[c] ?? c))))));
+  paint();
+  await dialog((d, close) => h("div", { class: "dlg" },
+    h("h3", {}, "模型"),
+    h("p", { class: "muted", style: "margin:0;font-size:12.5px" }, "每個工作各自選地端模型或 Claude（Haiku／Sonnet／Opus）。「自動」照 tasks.toml 的預設順序；選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。"),
+    m.local_engine ? null : h("div", { class: "warn-box" }, "沒有設定地端模型（config.toml 的 [engine] url）：選「地端」的工作會失敗。"),
+    rows,
+    h("div", { class: "actions" }, h("button", { type: "button", class: "btn primary", onclick: () => close(true) }, "完成"))));
 }
 
 // ── search ────────────────────────────────────────────────────────────────
@@ -904,17 +1152,25 @@ function setTab(t) {
   renderSide();
 }
 
-function renderSide() {
+function renderTabCounts() {
   $$(".tabs [data-tab]").forEach((b) => {
     b.setAttribute("aria-selected", b.dataset.tab === S.tab ? "true" : "false");
-    const n = b.dataset.tab === "notes" ? S.annotations.length : b.dataset.tab === "quotes" ? S.quotes.length : 0;
+    const t = b.dataset.tab;
+    const n = t === "notes" ? S.annotations.length : t === "quotes" ? S.quotes.length : t === "nouns" ? (S.nouns?.entries.filter((e) => e.red).length ?? 0) : 0;
     b.querySelector(".n")?.remove();
     if (n) b.append(h("span", { class: "n" }, n));
   });
+}
+
+function renderSide() {
+  renderTabCounts();
   const pane = $("#pane");
+  const keep = S.tab === "nouns" ? $(".nn-table", pane)?.scrollTop : null;
   $(".composer")?.remove();
   pane.classList.toggle("chat-pane", S.tab === "chat");
-  if (S.tab === "notes") pane.replaceChildren(...notesPane());
+  pane.classList.toggle("nouns-pane", S.tab === "nouns");
+  if (S.tab === "nouns") { pane.replaceChildren(...nounsPane()); if (keep != null && $(".nn-table", pane)) $(".nn-table", pane).scrollTop = keep; }
+  else if (S.tab === "notes") pane.replaceChildren(...notesPane());
   else if (S.tab === "quotes") pane.replaceChildren(...quotesPane());
   else { pane.replaceChildren(...chatPane()); $("#side").append(composer()); pane.scrollTop = pane.scrollHeight; }
   paintIcons($("#side"));
@@ -1025,6 +1281,7 @@ function wire() {
   $("#actFit").onclick = () => setZoom(fitZoom(), true);
   $("#actPrint").onclick = print;
   $("#actTerms").onclick = toggleTerms;
+  $("#actModels").onclick = () => modelDialog();
   $("#pgDup").onclick = dupPage;
   $("#pgDel").onclick = delPage;
   $("#pgInsert").onclick = () => insertDialog().catch(fail);
@@ -1080,4 +1337,4 @@ wire();
 updateLegend();
 route();
 // For checks and the console.
-window.LR = { S, pageText, decorate };
+window.LR = { S, pageText, pageRich, decorate, focusNoun };

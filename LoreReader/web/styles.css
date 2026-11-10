@@ -257,7 +257,7 @@ dialog .quote-box { font-size: 13px; background: var(--surface); border-left: 3p
   .narrow-only { display: inline-grid; }
   .sorter, .side { position: fixed; top: 90px; bottom: 0; z-index: 20; display: none; box-shadow: 0 0 18px #0006; }
   .sorter { left: 0; width: 196px; }
-  .side { right: 0; width: min(340px, 92vw); }
+  .side { right: 0; width: min(380px, 94vw); }
   .app.show-sorter .sorter { display: flex; }
   .app.show-side .side { display: flex; }
 }
@@ -268,3 +268,49 @@ dialog .quote-box { font-size: 13px; background: var(--surface); border-left: 3p
   .searchbox input { width: 110px; }
   .home { padding: 14px; }
 }
+
+/* ── Reading aids: noun list, model menu ─────────────────────────── */
+@media (min-width: 1101px) { .app { grid-template-columns: 196px minmax(0, 1fr) 360px; } }
+.tabs button { font-size: 12.5px; padding: 9px 2px; }
+.menu .menu-title { font: 600 12px var(--sans); color: var(--muted); padding: 4px 10px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* unclassified (no model yet): red with a dotted underline */
+.textLayer span.kt-new.kt-unc { box-shadow: none; border-bottom: .12em dotted var(--kt-new); }
+/* a noun picked in the list: every occurrence lit, the current one stronger */
+.textLayer span.nf { outline: 1.5px solid #ff6b35; outline-offset: 0; border-radius: 2px; }
+.textLayer span.nf-cur { background: #ff6b3566; outline: 2px solid #ff6b35; }
+.pane.nouns-pane { overflow: hidden; gap: 8px; }
+.nn-stats { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.nn-stats > span:first-child { font-weight: 600; }
+.nn-engine { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.nn-tools { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.nn-tools select, .nn-tools input { height: 28px; font-size: 12.5px; width: 100%; }
+.nn-table { flex: 1; min-height: 0; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--r); }
+.nn-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 62px 50px 38px 22px; gap: 4px; align-items: center; padding: 3px 6px; font-size: 12.5px; border-bottom: 1px solid var(--line); cursor: pointer; min-height: 30px; }
+.nn-row:hover { background: var(--surface); }
+.nn-row.on { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent-text); }
+.nn-row:focus-visible { outline-offset: -2px; }
+.nn-head > span:last-child { display: none; }
+.nn-head { position: sticky; top: 0; z-index: 1; background: var(--panel); cursor: default; min-height: 28px; }
+.nn-head:hover { background: var(--panel); }
+.nn-head button { background: none; border: 0; padding: 2px 0; text-align: left; font: 600 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; }
+.nn-head button.on { color: var(--accent-text); }
+.nn-term { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.nn-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; border: 1px solid var(--line-strong); }
+.nn-dot.kt-new { background: var(--kt-new); border-color: var(--kt-new); }
+.nn-dot.kt-new.kt-unc { background: none; border: 1.5px dotted var(--kt-new); }
+.nn-dot.kt-learn { background: var(--warn); border-color: var(--warn); }
+.nn-dot.kt-known { background: var(--ok); border-color: var(--ok); }
+.nn-cat { font-size: 11.5px; color: var(--muted); }
+.nn-st { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.nn-st i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.nn-st i.s-known { background: var(--ok); } .nn-st i.s-learning, .nn-st i.s-stale, .nn-st i.s-none { background: var(--warn); } .nn-st i.s-new { background: var(--err); }
+.nn-num { font: 500 11px var(--mono); color: var(--muted); text-align: right; white-space: nowrap; }
+.nn-acts { display: none; position: absolute; right: 2px; top: 50%; transform: translateY(-50%); gap: 0; background: var(--surface); border-radius: var(--r); box-shadow: -8px 0 8px var(--surface); }
+.nn-row:hover .nn-acts, .nn-row:focus-within .nn-acts { display: flex; }
+.nn-row.on .nn-acts { display: flex; position: static; transform: none; grid-column: 1 / -1; justify-content: flex-end; background: none; box-shadow: none; }
+.nn-acts .ico.small { width: 24px; height: 24px; }
+.nn-foot { font-size: 11.5px; margin: 0; line-height: 1.5; }
+.model-rows { display: flex; flex-direction: column; gap: 12px; }
+.model-row { display: flex; flex-direction: column; gap: 6px; }
+.model-row b { font-size: 13.5px; }
+.model-row .seg { flex-wrap: wrap; }

@@ -47,13 +47,14 @@
     <button class="ico" id="searchNext" data-icon="chevron" aria-label="下一個符合"></button>
     <span class="count" id="searchCount"></span>
     <span class="sep"></span>
-    <button class="ico" id="actTerms" data-icon="target" aria-label="知識標示：沒學過的術語標紅" aria-pressed="false"></button>
+    <button class="ico" id="actTerms" data-icon="target" aria-label="知識標示：沒有卡片的術語標紅" aria-pressed="false"></button>
     <span class="legend" id="legend" hidden>
-      <span class="lg"><i class="kt-new"></i>沒有卡片</span>
+      <span class="lg"><i class="kt-new"></i>術語、沒有卡片</span>
       <span class="lg"><i class="kt-learn"></i>學習中／久未複習</span>
       <span class="lg"><i class="kt-known"></i>記得</span>
       <span class="lg muted" id="kbNote"></span>
     </span>
+    <button class="ico" id="actModels" data-icon="spark" aria-label="模型（每個工作選地端或 Claude）"></button>
     <span class="sep"></span>
     <span class="lbl">頁面</span>
     <button class="ico" id="pgDup" data-icon="dup" aria-label="複製這一頁"></button>
@@ -76,7 +77,8 @@
 
   <aside class="side rd-only" id="side">
     <div class="tabs" role="tablist">
-      <button role="tab" data-tab="notes" aria-selected="true">註記</button>
+      <button role="tab" data-tab="nouns" aria-selected="true">名詞</button>
+      <button role="tab" data-tab="notes">註記</button>
       <button role="tab" data-tab="quotes">引用句</button>
       <button role="tab" data-tab="chat">對話</button>
     </div>

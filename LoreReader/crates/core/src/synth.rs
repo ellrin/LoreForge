@@ -125,3 +125,134 @@ pub fn demo_paper() -> Vec<u8> {
         ],
     )
 }
+
+/// A long synthetic paper (≈8,000 words, invented content) as page lines: the
+/// target scenario of the noun list. Deterministic for a given `seed`.
+pub fn long_paper_lines(seed: u64) -> Vec<Vec<String>> {
+    let mut rng = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let mut pick = |n: usize| -> usize {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((rng >> 33) as usize) % n.max(1)
+    };
+    const METHODS: &[&str] = &["Spectral Boundary Loss", "variational autoencoder", "U-Net", "attention gate", "anisotropic diffusion", "graph convolution", "label smoothing", "test-time augmentation", "deep supervision", "contrastive pretraining", "focal loss", "Monte Carlo dropout", "conditional random field", "residual block", "transformer encoder", "Wasserstein critic", "curriculum schedule", "knowledge distillation", "Gumbel softmax", "stochastic weight averaging"];
+    const METRICS: &[&str] = &["Dice coefficient", "Hausdorff distance", "average surface distance", "intersection over union", "AUROC", "Brier score", "expected calibration error", "volumetric similarity", "mean absolute error", "Cohen kappa"];
+    const DATASETS: &[&str] = &["SynthVessel", "MaskBench", "OrganGrid", "ThinStructures-2K", "the PolypSim archive", "RetinaToy"];
+    const STATS: &[&str] = &["Wilcoxon signed-rank test", "bootstrap confidence interval", "Bonferroni correction", "paired t-test", "mixed-effects model", "Bland-Altman analysis", "intraclass correlation"];
+    const ANATOMY: &[&str] = &["retinal vasculature", "coronary artery", "pulmonary nodule", "hepatic lesion", "optic disc", "left ventricle", "renal cortex", "colonic polyp"];
+    const NAMES: &[&str] = &["Hausdorff", "Sobel", "Kullback", "Gaussian", "Laplacian"];
+    const OPEN: &[&str] = &["In this work", "Following prior studies", "To address this limitation", "As a consequence", "In practice", "For completeness", "In contrast", "Notably", "Overall", "Moreover", "In addition", "Specifically", "Similarly", "Importantly"];
+    const VERBS: &[&str] = &["improves", "stabilises", "regularises", "outperforms", "complements", "constrains", "calibrates", "accelerates", "simplifies", "generalises"];
+    const GENERAL: &[&str] = &[
+        "the proposed approach", "the baseline model", "the training procedure", "our implementation", "the evaluation protocol", "the overall framework",
+        "the main experiment", "the reported results", "the second stage", "the previous method", "a simple variant", "the final configuration",
+    ];
+    const TAILS: &[&str] = &[
+        "on every split of the data", "without additional annotation", "at a modest computational cost", "across all reported settings",
+        "when the images are noisy", "for thin and tortuous structures", "under strong class imbalance", "in the low-data regime",
+        "with a fixed random seed", "after early stopping on the validation set", "compared with the original formulation",
+    ];
+    // Specialist single words: invented clinical words (root × suffix) and a list of
+    // technical words; general vocabulary from the built-in word lists.
+    let roots = ["vascul", "angio", "osteo", "cardio", "neuro", "hepato", "nephro", "pulmo", "dermo", "myo", "arterio", "chondro"];
+    let sufs = ["graphy", "pathy", "genesis", "metry", "plasty", "sclerosis", "lysis", "trophy"];
+    let clinical: Vec<String> = roots.iter().flat_map(|r| sufs.iter().map(move |s| format!("{r}{s}"))).collect();
+    const TECH: &[&str] = &["tortuosity", "skeletonization", "homotopy", "persistence", "eigendecomposition", "isotropy", "heteroscedasticity", "quantile", "hyperparameter", "backpropagation", "logit", "softmax", "sigmoid", "tensor", "manifold", "geodesic", "wavelet", "spectrogram", "voxel", "superpixel", "morphology", "dilation", "erosion", "centerline", "bifurcation", "stenosis", "perfusion", "contrastive", "adversarial", "variational", "bayesian", "posterior", "likelihood", "marginalization", "ensembling", "bagging", "boosting", "kurtosis", "skewness", "autocorrelation", "multicollinearity", "imputation", "stratification", "propensity", "bootstrapping", "permutation", "heatmap", "saliency", "occlusion", "registration", "deformation", "diffeomorphism", "jacobian", "hessian", "laplacian", "curvature", "anisotropy", "denoising", "inpainting", "upsampling", "downsampling", "quantization", "pruning", "distillation", "transformer", "tokenizer", "embedding", "encoder", "decoder", "bottleneck", "skip-connection", "batchnorm", "layernorm", "warmup", "annealing", "overfitting", "underfitting", "calibration", "reliability-diagram", "conformal", "ensemble", "uncertainty", "aleatoric", "epistemic", "entropy", "divergence", "regularizer", "sparsity", "lasso", "ridge", "elastic-net", "kriging", "spline", "isosurface", "mesh", "tetrahedral", "octree", "pointcloud", "graphlet", "hypergraph"];
+    let general: Vec<&str> = include_str!("common_words.txt").lines().chain(include_str!("academic_words.txt").lines()).filter(|l| !l.starts_with('#')).flat_map(str::split_whitespace).filter(|w| w.len() >= 4).collect();
+    let mut sent = |kind: usize| -> String {
+        let cw = clinical[pick(clinical.len())].clone();
+        let tw = TECH[pick(TECH.len())];
+        let tw2 = TECH[pick(TECH.len())];
+        let (g1, g2, g3) = (general[pick(general.len())], general[pick(general.len())], general[pick(general.len())]);
+        let extra = match pick(4) {
+            0 => format!(" The {tw} term relates to {cw} and to the {g1} {g2} of the {g3}."),
+            1 => format!(" We note the {g1}, the {g2} and the {g3} of the {tw}."),
+            2 => format!(" Here {tw2} and {tw} matter for {cw}."),
+            _ => String::new(),
+        };
+        let o = OPEN[pick(OPEN.len())];
+        let g = GENERAL[pick(GENERAL.len())];
+        let t = TAILS[pick(TAILS.len())];
+        let m = METHODS[pick(METHODS.len())];
+        let m2 = METHODS[pick(METHODS.len())];
+        let me = METRICS[pick(METRICS.len())];
+        let d = DATASETS[pick(DATASETS.len())];
+        let s = STATS[pick(STATS.len())];
+        let a = ANATOMY[pick(ANATOMY.len())];
+        let n = NAMES[pick(NAMES.len())];
+        let v = VERBS[pick(VERBS.len())];
+        let x = 60 + pick(35);
+        let y = pick(10);
+        let base = match (kind, pick(6)) {
+            (0, 0) => format!("{o}, segmentation of the {a} remains difficult because boundaries are thin and contrast is low."),
+            (0, 1) => format!("{o}, earlier work relied on the {m} and reported the {me} on {d}."),
+            (0, 2) => format!("{o}, few studies examine how the {m} interacts with the {m2} {t}."),
+            (0, 3) => format!("Researchers such as {n} described related ideas, but the {a} was not considered."),
+            (0, 4) => format!("{o}, clinicians need reliable estimates of the {a} {t}."),
+            (0, _) => format!("{o}, {g} {v} the {m} {t}."),
+            (1, 0) => format!("{o}, the {m} is applied to every feature map before the {m2}."),
+            (1, 1) => format!("The loss combines the {m} with a {n} kernel whose width is chosen on {d}."),
+            (1, 2) => format!("{o}, {g} uses the {m2} so that the {a} keeps its topology."),
+            (1, 3) => format!("Each step of the {m} is motivated by the need to preserve the {a} {t}."),
+            (1, 4) => format!("We optimise the weights with stochastic gradient descent and a cosine learning-rate schedule {t}."),
+            (1, _) => format!("{o}, {g} {v} the {m} {t}."),
+            (2, 0) => format!("On {d}, the {me} improves from 0.{x} to 0.{} for the {a}.", x + 3),
+            (2, 1) => format!("The {s} shows that the difference is significant (p = 0.00{}).", y + 1),
+            (2, 2) => format!("{o}, the {me} of the {m} is within the {s} of the baseline {t}."),
+            (2, 3) => format!("Ablations show that removing the {m} lowers the {me} by {y}.{x} points on {d}."),
+            (2, 4) => format!("We report the {me} and the {me} with a {s} across five folds."),
+            (2, _) => format!("{o}, {g} {v} the {m} {t}."),
+            (_, 0) => format!("{o}, these findings suggest that the {m} is useful for the {a}."),
+            (_, 1) => format!("A limitation is that {d} contains few examples of the {a}."),
+            (_, 2) => format!("Future work will combine the {m} with the {m2} and study the {me} {t}."),
+            _ => format!("{o}, {g} {v} the {m} {t}."),
+        };
+        base + &extra
+    };
+    let sections: &[(&str, usize, usize)] = &[
+        ("Abstract", 0, 10),
+        ("1. Introduction", 0, 62),
+        ("2. Related Work", 0, 55),
+        ("3. Methods", 1, 82),
+        ("4. Results", 2, 70),
+        ("5. Discussion", 3, 44),
+        ("6. Conclusion", 3, 11),
+    ];
+    let mut lines: Vec<String> = vec!["# A Long Synthetic Study of Thin-Structure Segmentation".into(), "ellrin and daidai".into(), String::new()];
+    for (head, kind, n) in sections {
+        lines.push(format!("# {head}"));
+        let mut para = String::new();
+        for k in 0..*n {
+            para += &sent(*kind);
+            para.push(' ');
+            if k % 6 == 5 || k + 1 == *n {
+                // wrap at ~88 characters
+                let mut line = String::new();
+                for w in para.split_whitespace() {
+                    if line.len() + w.len() + 1 > 88 {
+                        lines.push(std::mem::take(&mut line));
+                    }
+                    if !line.is_empty() {
+                        line.push(' ');
+                    }
+                    line += w;
+                }
+                if !line.is_empty() {
+                    lines.push(line);
+                }
+                lines.push(String::new());
+                para.clear();
+            }
+        }
+    }
+    lines.push("# References".into());
+    for i in 1..=12 {
+        lines.push(format!("[{i}] A. Writer. Quaternion Wavelet Methods, Part {i}. Journal of Examples, 20{:02}.", i + 8));
+    }
+    // pages of 44 lines
+    lines.chunks(44).map(|c| c.to_vec()).collect()
+}
+
+/// [`long_paper_lines`] as a PDF.
+pub fn long_paper(seed: u64) -> Vec<u8> {
+    titled_pdf(Some("A Long Synthetic Study of Thin-Structure Segmentation"), &long_paper_lines(seed))
+}

@@ -10,7 +10,7 @@ use lore_llm::claude_code::{Cache, Cli};
 use lore_llm::local::LocalRuntime;
 use lore_llm::router::{ApiAccess, ExternalServer, LocalAccess, StandardFactory, SubscriptionAccess};
 use lore_llm::secrets::{Account, KeyStore};
-use lore_llm::{LlmRequest, Router, TaskTable};
+use lore_llm::{LlmRequest, RouteOptions, Router, TaskTable};
 use lr_core::config::EngineConfig;
 
 const TASKS: &str = include_str!("../tasks.toml");
@@ -91,11 +91,46 @@ impl Llm {
 
     /// Run `req` as `task` in the task's order (local first for translation).
     pub async fn complete(&self, task: &str, req: LlmRequest) -> Result<Answer, String> {
+        self.complete_on(task, None, req).await
+    }
+
+    /// Run `req` as `task` on the engine picked in the model menu (`local`, `haiku`,
+    /// `sonnet`, `opus`): that engine or the reason it cannot run, no fallback.
+    /// `None` / `auto`: the task's own order from tasks.toml.
+    pub async fn complete_on(&self, task: &str, choice: Option<&str>, req: LlmRequest) -> Result<Answer, String> {
         let router = Router::new(self.tasks.clone(), self.factory());
-        let route = router.provider_for(task).await.map_err(|e| e.to_string())?;
+        let route = match model_ref(choice)? {
+            Some(r) => router.provider_for_with(task, &RouteOptions::only(r)).await.map_err(|e| e.reason())?,
+            None => router.provider_for(task).await.map_err(|e| e.to_string())?,
+        };
         let req = route.apply(req.temperature(LOCAL_TEMPERATURE));
         let text = route.provider.complete(&req).await.map_err(|e| e.to_string())?;
         Ok(Answer { text: text.trim().to_string(), engine: route.provider.id().to_string(), fallback_used: route.fallback_used })
+    }
+}
+
+/// The tasks the model menu offers, in menu order.
+pub const MENU_TASKS: [&str; 4] = ["lr-classify-terms", "lr-paragraph", "lr-chat", "lr-translate"];
+/// The engines of the model menu (`auto` = the task's order from tasks.toml).
+pub const CHOICES: [&str; 5] = ["auto", "local", "haiku", "sonnet", "opus"];
+
+/// A menu choice as a lore-llm model ref (`None` = the task's own order).
+pub fn model_ref(choice: Option<&str>) -> Result<Option<String>, String> {
+    match choice.map(str::trim).filter(|m| !m.is_empty() && *m != "auto") {
+        None => Ok(None),
+        Some("local") => Ok(Some("local:current".into())),
+        Some(a @ ("haiku" | "sonnet" | "opus")) => Ok(Some(format!("claude:{a}"))),
+        Some(other) => Err(format!("不認得的模型選擇「{other}」")),
+    }
+}
+
+impl Llm {
+    /// The task's label and default for the model menu.
+    pub fn task_info(&self, task: &str) -> (String, String) {
+        match self.tasks.task.get(task) {
+            Some(t) => (t.label.clone().unwrap_or_else(|| task.into()), t.default.clone()),
+            None => (task.into(), String::new()),
+        }
     }
 }
 
@@ -121,6 +156,13 @@ mod tests {
         assert_eq!(t.task["lr-translate"].fallback.as_deref(), Some("claude:selected"));
         assert_eq!(t.task["lr-chat"].default, "claude:selected");
         assert!(t.task["lr-chat"].fallback.is_none());
+        for id in ["lr-classify-terms", "lr-paragraph"] {
+            assert_eq!(t.task[id].default, "local:current", "{id}");
+            assert!(t.task[id].fallback.is_none(), "{id} never falls back to Claude on its own");
+        }
+        assert_eq!(model_ref(Some("haiku")).unwrap().as_deref(), Some("claude:haiku"));
+        assert_eq!(model_ref(Some("auto")).unwrap(), None);
+        assert!(model_ref(Some("gpt")).is_err());
     }
 
     #[tokio::test]

@@ -7,7 +7,10 @@
 #                     default); the subscription (Claude Code) first, then the API key
 #
 # Same order as PaperComposer's writing tasks: translation runs locally first and falls
-# back to Claude; the chat panel is Claude only.
+# back to Claude; the chat panel is Claude only; the reading aids (term classification,
+# paragraph analysis) run on the local model and never fall back to Claude on their own.
+# The model menu (工具列「模型」) picks local / Haiku / Sonnet / Opus per task; that choice is
+# stored in private/LoreReader/models.json and is that engine or an error, never a fallback.
 
 [task.lr-translate]
 label = "翻譯選取文字"
@@ -20,3 +23,17 @@ label = "問 Claude（附上引文）"
 needs = { context = 32000 }
 default = "claude:selected"
 offline = false
+
+[task.lr-classify-terms]
+label = "名詞分類（整篇一次）"
+needs = { context = 16000 }
+default = "local:current"
+offline = true
+max_tokens = 8000
+
+[task.lr-paragraph]
+label = "段落分析（卡住的地方）"
+needs = { context = 8000 }
+default = "local:current"
+offline = true
+max_tokens = 1500

@@ -366,6 +366,21 @@ impl Papers {
         Ok(out)
     }
 
+    // ── other per-paper files (nouns.json, symbols.json, paragraphs.json, reading.json) ──
+
+    /// Read `papers/<sha>/<file>` (`None` when it does not exist yet).
+    pub fn load<T: DeserializeOwned>(&self, sha: &str, file: &str) -> Result<Option<T>> {
+        read_json(&self.folder(sha)?.join(file))
+    }
+
+    /// Write `papers/<sha>/<file>` atomically.
+    pub fn save<T: Serialize>(&self, sha: &str, file: &str, v: &T) -> Result<()> {
+        if file.contains(['/', '\\']) || !file.ends_with(".json") {
+            return Err(Error::Invalid(format!("檔名：{file}")));
+        }
+        write_json(&self.folder(sha)?.join(file), v)
+    }
+
     // ── chat ──
 
     pub fn chat(&self, sha: &str) -> Result<Vec<ChatMessage>> {

@@ -62,9 +62,22 @@ impl Kb {
         pick.map(str::to_string).ok_or(KbError { down: false, message: "KnowledgeBase 沒有你能寫入的空間".into() })
     }
 
-    /// `POST /api/scan` (never records encounters).
-    pub async fn scan(&self, text: &str) -> Result<Value, KbError> {
-        self.post("/api/scan", &json!({ "text": text, "candidates": true, "record": false }), Duration::from_secs(10)).await
+    /// Every card's title and aliases with this member's state (`GET /api/nodes`,
+    /// read only): the names the noun list matches as units.
+    pub async fn lexicon(&self) -> Result<Vec<lr_core::nouns::KbName>, KbError> {
+        let v = self.get("/api/nodes?limit=5000").await?;
+        let mut out = vec![];
+        for n in v["nodes"].as_array().into_iter().flatten() {
+            let (Some(id), Some(title)) = (n["id"].as_str(), n["title"].as_str()) else { continue };
+            let state = n["state"].as_str().map(str::to_string);
+            let aliases = n["aliases"].as_array().into_iter().flatten().filter_map(|a| a.as_str());
+            for name in std::iter::once(title).chain(aliases) {
+                if !name.trim().is_empty() {
+                    out.push(lr_core::nouns::KbName { name: name.to_string(), node_id: id.to_string(), title: title.to_string(), state: state.clone() });
+                }
+            }
+        }
+        Ok(out)
     }
 }
 

@@ -83,7 +83,11 @@ async fn fake_kb() -> (String, Arc<Mutex<Vec<Value>>>) {
         )
         .route(
             "/api/nodes",
-            post(move |axum::Json(b): axum::Json<Value>| {
+            get(|| async { axum::Json(json!({ "nodes": [
+                { "id": "n1", "title": "Dice coefficient", "aliases": ["Sørensen–Dice index"], "state": "learning" },
+                { "id": "n3", "title": "Hausdorff distance", "aliases": [], "state": "known" },
+                { "id": "n4", "title": "U-Net", "aliases": ["UNet"], "state": null } ] })) })
+            .post(move |axum::Json(b): axum::Json<Value>| {
                 let c = c2.clone();
                 async move {
                     c.lock().unwrap().push(b.clone());
@@ -115,6 +119,18 @@ fn dead_url() -> String {
     let a = l.local_addr().unwrap();
     drop(l);
     format!("http://{a}")
+}
+
+/// The demo paper's text as the page would send it (one string per page; lopdf's
+/// text extraction stands in for pdf.js here).
+fn demo_text() -> Value {
+    let pdf = lr_core::synth::demo_paper();
+    let pages: Vec<Value> = (1..=3).map(|p| json!({ "page": p, "text": lr_core::pdfops::page_text(&pdf, p).unwrap() })).collect();
+    json!({ "pages": pages })
+}
+
+fn text_of_page(t: &Value, page: usize) -> String {
+    t["pages"][page - 1]["text"].as_str().unwrap().to_string()
 }
 
 #[tokio::test]
@@ -218,20 +234,50 @@ async fn knowledge_base_terms_and_cards() {
     let (s, v, _) = call(&e.app, "POST", "/api/kb/cards", Some(json!({ "sha": sha, "page": 1, "title": "SBL" })), None).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(v["kb_down"], true);
-    let (_, v, _) = call(&e.app, "POST", "/api/terms", Some(json!({ "text": "A Spectral Boundary Loss (SBL) and the Dice coefficient." })), None).await;
-    assert_eq!(v["kb"]["ok"], false);
-    assert_eq!(v["candidate_source"], "lr-core");
+    // The noun list still works without the KB: every unit is "no card".
+    let text = demo_text();
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(text.clone()), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["nouns"]["kb"]["ok"], false);
+    assert!(v["nouns"]["entries"].as_array().unwrap().iter().all(|n| n["state"] == "new"));
 
     // KB running: known spans win over candidates; the mock's candidates are not used.
     let (url, created) = fake_kb().await;
     let e = setup(&url, None);
     let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
-    let text = "A Spectral Boundary Loss (SBL) beats the Dice coefficient here.";
-    let (_, v, _) = call(&e.app, "POST", "/api/terms", Some(json!({ "text": text })), None).await;
-    assert_eq!(v["kb"]["ok"], true);
-    assert_eq!(v["spans"][0]["text"], "Dice coefficient");
-    let cands: Vec<&str> = v["candidates"].as_array().unwrap().iter().map(|c| c["text"].as_str().unwrap()).collect();
-    assert_eq!(cands, ["Spectral Boundary Loss", "SBL"], "{v}");
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let nouns = &v["nouns"];
+    assert_eq!(nouns["kb"]["ok"], true);
+    let entry = |key: &str| nouns["entries"].as_array().unwrap().iter().find(|n| n["key"] == key).cloned().unwrap_or_else(|| panic!("no {key}: {nouns}"));
+    let dice = entry("dice coefficient");
+    assert_eq!((dice["state"].as_str(), dice["source"].as_str(), dice["kb"]["node_id"].as_str()), (Some("learning"), Some("kb"), Some("n1")));
+    assert!(dice["count"].as_u64().unwrap() >= 2, "{dice}");
+    assert_eq!(entry("hausdorff distance")["state"], "known");
+    assert_eq!(entry("u net")["state"], "none", "a card without learning state");
+    let sbl = entry("spectral boundary loss");
+    assert_eq!((sbl["state"].as_str(), sbl["short"].as_str(), sbl["red"].as_bool()), (Some("new"), Some("SBL"), Some(true)));
+    assert_eq!(nouns["classification"]["pending"].as_u64(), Some(nouns["stats"]["no_card"].as_u64().unwrap()));
+    // Occurrences are [page, start, end] in UTF-16 of the page text that was sent.
+    let o = &dice["occ"][0];
+    let page_text = text_of_page(&demo_text(), o[0].as_u64().unwrap() as usize);
+    let u: Vec<u16> = page_text.encode_utf16().collect();
+    assert!(String::from_utf16(&u[o[1].as_u64().unwrap() as usize..o[2].as_u64().unwrap() as usize]).unwrap().starts_with("Dice coefficient"));
+
+    // 「這不是術語」 writes to the ignore list and the list changes; undo removes it.
+    assert!(nouns["entries"].as_array().unwrap().iter().any(|n| n["key"] == "anisotropic"));
+    let (s, _, _) = call(&e.app, "POST", "/api/ignore", Some(json!({ "term": "anisotropic" })), None).await;
+    assert_eq!(s, StatusCode::OK);
+    let file = std::fs::read_to_string(e.root.join("ws/ignore-words.txt")).unwrap();
+    assert!(file.lines().any(|l| l == "anisotropic"));
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}/nouns"), None, None).await;
+    assert!(!v["entries"].as_array().unwrap().iter().any(|n| n["key"] == "anisotropic"));
+    call(&e.app, "DELETE", "/api/ignore", Some(json!({ "term": "Anisotropic" })), None).await;
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}/nouns"), None, None).await;
+    assert!(v["entries"].as_array().unwrap().iter().any(|n| n["key"] == "anisotropic"));
+    // No text sent for a paper: a clear 409.
+    let (s, _, _) = call(&e.app, "GET", &format!("/api/papers/{}/nouns", "ab".repeat(32)), None, None).await;
+    assert_eq!(s, StatusCode::CONFLICT);
 
     // Add to KB: explicit, initial state chosen, source points at the PDF page.
     let (s, v, _) = call(&e.app, "POST", "/api/kb/cards", Some(json!({ "sha": sha, "page": 2, "title": "Spectral Boundary Loss", "summary": "依曲率加權邊界像素的損失", "initial_state": "known", "context": "The Spectral Boundary Loss weights pixels near edges." })), None).await;
@@ -270,4 +316,70 @@ async fn translate_and_chat_through_lore_llm() {
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
     let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}/chat"), None, None).await;
     assert_eq!(v["messages"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn classification_is_one_cached_call_and_the_model_menu_picks_the_engine() {
+    // A fake local engine that answers every request with a classification.
+    let reply = r#"{"方法": ["anisotropic", "diffusion", "Spectral Boundary Loss"], "指標": [], "資料集": [], "統計": [], "臨床／解剖": [], "一般學術詞": ["codebook"], "人名": ["Hausdorff", "Sobel"], "其他術語": []}"#;
+    let (url, hits) = counting_engine(reply).await;
+    let e = setup(&dead_url(), Some(url));
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), None, None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(*hits.lock().unwrap(), 1, "one call for the whole paper");
+    let entries = v["nouns"]["entries"].as_array().unwrap();
+    let get = |k: &str| entries.iter().find(|n| n["key"] == k).cloned().unwrap();
+    assert_eq!(get("hausdorff")["category"], "人名");
+    assert_eq!(get("hausdorff")["red"], false, "names are listed, not red");
+    assert_eq!(get("anisotropic")["category"], "方法");
+    assert_eq!(get("anisotropic")["red"], true);
+    assert_eq!(v["nouns"]["classification"]["pending"], 0);
+    // Cached per paper: asking again sends nothing.
+    let cache: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/papers").join(&sha).join("nouns.json")).unwrap()).unwrap();
+    assert_eq!(cache["schema"], "lorereader.nouns/1");
+    assert_eq!(cache["categories"]["hausdorff"], "人名");
+    let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), None, None).await;
+    assert_eq!((v["asked"].as_u64(), *hits.lock().unwrap()), (Some(0), 1));
+
+    // The model menu: Haiku for classification is that engine or an error (no Claude
+    // here, and no fallback to the local engine).
+    let (s, v, _) = call(&e.app, "PUT", "/api/models", Some(json!({ "task": "lr-classify-terms", "model": "haiku" })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["tasks"][0]["choice"], "haiku");
+    assert_eq!(v["tasks"].as_array().unwrap().len(), 4);
+    let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), Some(json!({ "again": true })), None).await;
+    assert!(s == StatusCode::OK || s == StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(*hits.lock().unwrap(), 1, "the local engine was not used");
+    let (s, _, _) = call(&e.app, "PUT", "/api/models", Some(json!({ "task": "lr-classify-terms", "model": "gpt" })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // Without any model the list still works: unclassified.
+    let e = setup(&dead_url(), None);
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
+    assert!(v["nouns"]["entries"].as_array().unwrap().iter().all(|n| n["category"].is_null()));
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), None, None).await;
+    assert_eq!((s, v["llm_unavailable"].as_bool()), (StatusCode::SERVICE_UNAVAILABLE, Some(true)));
+}
+
+/// A fake OpenAI-compatible engine that counts its requests.
+async fn counting_engine(reply: &'static str) -> (String, Arc<Mutex<usize>>) {
+    let hits: Arc<Mutex<usize>> = Arc::default();
+    let h2 = hits.clone();
+    let app = axum::Router::new().route(
+        "/v1/chat/completions",
+        post(move || {
+            let h = h2.clone();
+            async move {
+                *h.lock().unwrap() += 1;
+                axum::Json(json!({ "choices": [{ "index": 0, "message": { "role": "assistant", "content": reply }, "finish_reason": "stop" }], "usage": { "prompt_tokens": 1, "completion_tokens": 1 } }))
+            }
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    (format!("http://{addr}/v1"), hits)
 }

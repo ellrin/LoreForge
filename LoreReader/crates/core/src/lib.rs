@@ -10,8 +10,10 @@
 //!   `quotes.json` (citable sentences), `chat.json`. Writes are atomic.
 //! - [`pdfops`]: non-destructive page operations (delete, duplicate, reorder, insert
 //!   from another PDF, merge) — all one [`pdfops::compose`] call that builds a new PDF.
-//! - [`terms`]: the deterministic, offline detector of specialist-term candidates (the
-//!   red terms) used while KnowledgeBase's own candidate output is a mock.
+//! - [`text`]: the paper's text as pdf.js gives it (items with fonts and positions;
+//!   UTF-16 offsets shared with the page).
+//! - [`nouns`]: the noun list (track A): word inventory, KB n-gram matching,
+//!   normalisation, word filters and the batched classification.
 //! - [`synth`]: synthetic text PDFs for tests and demos (never a real paper).
 
 pub mod config;
@@ -19,7 +21,8 @@ pub mod library;
 pub mod papers;
 pub mod pdfops;
 pub mod synth;
-pub mod terms;
+pub mod nouns;
+pub mod text;
 
 pub use config::Config;
 pub use library::Library;

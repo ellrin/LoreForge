@@ -1,0 +1,22 @@
+# Function words: articles, pronouns, prepositions, conjunctions, auxiliaries,
+# determiners, common adverbs and number words. Never terms. Lowercase, any spacing.
+a an the this that these those such some any each every either neither both all
+no none nor not only own same other another
+i me my mine we us our ours you your yours he him his she her hers it its they them their theirs
+one ones oneself itself themselves ourselves himself herself myself yourself
+who whom whose which what whatever whichever whoever where wherever when whenever why how however
+and or but if then else than so yet because since unless while whereas although though
+whether thus hence therefore moreover furthermore also too very rather quite just even still
+already again ever never always often sometimes usually perhaps maybe almost nearly mostly
+of in on at by for with without within into onto upon from to toward towards about above below
+over under between among amongst across along around through throughout during before after
+until till against beyond behind beside besides despite via per versus vs etc ie eg al
+up down out off away back here there
+be is am are was were been being do does did done doing have has had having
+can could may might must shall should will would ought
+let lets let's it's that's there's don't doesn't didn't can't cannot won't isn't aren't wasn't weren't
+more most less least much many few fewer several enough
+first second third fourth fifth last next former latter
+two three four five six seven eight nine ten hundred thousand million billion
+twenty thirty forty fifty sixty seventy eighty ninety eleven twelve
+yes like unlike whereby wherein therein thereby herein
