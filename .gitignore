@@ -2,3 +2,6 @@
 /private/
 target/
 .DS_Store
+
+# Editor settings
+.vscode/
