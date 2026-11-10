@@ -21,6 +21,8 @@
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
+        <path id="scr" d="M 228 228 H 796 Q 824 228 824 256 V 604 Q 824 632 796 632 H 228 Q 200 632 200 604 V 256 Q 200 228 228 228 Z"/>
+    <path id="stand" d="M 512 632 V 740 M 392 772 H 632"/>
   </defs>
 
   <g clip-path="url(#tile)">
@@ -52,59 +54,23 @@
     </g>
   </g>
 
-  <defs>
-    <g id="tiles">
-      <rect x="216" y="232" width="276" height="276" rx="34"/>
-      <rect x="532" y="232" width="276" height="276" rx="34"/>
-      <rect x="216" y="548" width="276" height="236" rx="34"/>
-      <rect x="532" y="548" width="276" height="236" rx="34"/>
-    </g>
-  </defs>
-
-  <!-- dark tile bodies so the neon reads on top of the grid -->
-  <use href="#tiles" fill="#0A0616" fill-opacity="0.92"/>
-
-  <!-- chromatic-aberration ghosts -->
-  <g fill="none" stroke-width="16" opacity="0.7">
-    <use href="#tiles" transform="translate(-10 0)" stroke="#FF2BD6"/>
-    <use href="#tiles" transform="translate(10 0)" stroke="#00F0FF"/>
+  <use href="#scr" fill="#0A0616" fill-opacity="0.92"/>
+  <g fill="none" stroke-width="30" stroke-linejoin="round" stroke-linecap="round" opacity="0.85">
+    <use href="#scr" transform="translate(-12 0)" stroke="#FF2BD6"/>
+    <use href="#scr" transform="translate(12 0)" stroke="#00F0FF"/>
+    <use href="#stand" transform="translate(-12 0)" stroke="#FF2BD6"/>
+    <use href="#stand" transform="translate(12 0)" stroke="#00F0FF"/>
+  </g>
+  <g fill="none" stroke="#B8FBFF" stroke-width="26" stroke-linejoin="round" stroke-linecap="round" filter="url(#glow)">
+    <use href="#scr"/>
+    <use href="#stand"/>
   </g>
 
-  <!-- main neon outline -->
-  <use href="#tiles" fill="none" stroke="#B8FBFF" stroke-width="14" filter="url(#glow)"/>
-
-  <!-- clock -->
   <g fill="none" stroke-linecap="round" filter="url(#glow)">
-    <circle cx="354" cy="370" r="84" stroke="#00F0FF" stroke-width="20"/>
-    <line x1="354" y1="370" x2="354" y2="316" stroke="#B8FBFF" stroke-width="18"/>
-    <line x1="354" y1="370" x2="396" y2="394" stroke="#FF2BD6" stroke-width="18"/>
+    <circle cx="380" cy="430" r="96" stroke="#00F0FF" stroke-opacity="0.35" stroke-width="30"/>
+    <path d="M 284 430 A 96 96 0 0 1 448 362" stroke="#FF2BD6" stroke-width="30"/>
+    <line x1="548" y1="384" x2="712" y2="384" stroke="#00F0FF" stroke-width="34"/>
+    <line x1="548" y1="476" x2="652" y2="476" stroke="#00F0FF" stroke-opacity="0.6" stroke-width="34"/>
   </g>
-  <circle cx="354" cy="370" r="14" fill="#FCEE0A" filter="url(#glow)"/>
-
-  <!-- gauge -->
-  <g fill="none" stroke-linecap="round" stroke-width="24" filter="url(#glow)">
-    <path d="M 586 430 A 84 84 0 0 1 754 430" stroke="#00F0FF" stroke-opacity="0.35"/>
-    <path d="M 586 430 A 84 84 0 0 1 708 355" stroke="#FF2BD6"/>
-  </g>
-
-  <!-- bars -->
-  <g filter="url(#glow)">
-    <rect x="262" y="660" width="48" height="76" rx="8" fill="#00F0FF" fill-opacity="0.8"/>
-    <rect x="330" y="616" width="48" height="120" rx="8" fill="#FF2BD6"/>
-    <rect x="398" y="640" width="48" height="96" rx="8" fill="#00F0FF" fill-opacity="0.9"/>
-  </g>
-
-  <!-- news lines -->
-  <g stroke-linecap="round" stroke-width="26" filter="url(#glow)">
-    <line x1="584" y1="612" x2="756" y2="612" stroke="#00F0FF"/>
-    <line x1="584" y1="666" x2="720" y2="666" stroke="#00F0FF" stroke-opacity="0.75"/>
-    <line x1="584" y1="720" x2="680" y2="720" stroke="#FF2BD6"/>
-  </g>
-
-  <!-- glitch slice -->
-  <rect x="690" y="700" width="140" height="14" fill="#FF2BD6" opacity="0.9"/>
-  <rect x="750" y="730" width="72" height="8" fill="#00F0FF" opacity="0.9"/>
-
-  <!-- gauge tip -->
-  <circle cx="708" cy="355" r="22" fill="#FCEE0A" filter="url(#glow)"/>
+  <circle cx="448" cy="362" r="22" fill="#FCEE0A" filter="url(#glow)"/>
 </svg>

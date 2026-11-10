@@ -78,4 +78,18 @@
     <line x1="576" y1="452" x2="746" y2="436" stroke="#FFB13B"/>
     <line x1="576" y1="532" x2="700" y2="520" stroke="#00F0FF"/>
   </g>
+
+  <!-- magnifying lens over the right page: the reader looks closer (terms, quotes, chat) -->
+  <defs><clipPath id="inlens"><circle cx="700" cy="590" r="112"/></clipPath></defs>
+  <circle cx="700" cy="590" r="124" fill="#0A0616" fill-opacity="0.96"/>
+  <g clip-path="url(#inlens)" stroke-linecap="round" filter="url(#glow)">
+    <line x1="604" y1="546" x2="800" y2="532" stroke="#FFB13B" stroke-width="40"/>
+    <line x1="604" y1="634" x2="700" y2="626" stroke="#00F0FF" stroke-width="40" stroke-opacity="0.7"/>
+    <line x1="728" y1="624" x2="800" y2="618" stroke="#FF3B5C" stroke-width="40"/>
+  </g>
+  <g fill="none" stroke-width="28" stroke-linecap="round" opacity="0.85">
+    <circle cx="688" cy="590" r="124" stroke="#FF2BD6"/><circle cx="712" cy="590" r="124" stroke="#00F0FF"/>
+  </g>
+  <circle cx="700" cy="590" r="124" fill="none" stroke="#B8FBFF" stroke-width="26" filter="url(#glow)"/>
+  <line x1="790" y1="680" x2="872" y2="762" stroke="#FF2BD6" stroke-width="56" stroke-linecap="round" filter="url(#glow)"/>
 </svg>
