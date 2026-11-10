@@ -50,7 +50,12 @@ when working on lore-canvas in parallel with other agents.
   Editor-only state (style, deck defaults, slide arrangement, object slots, empty slots) rides in the
   file as an Office custom XML part (`customXml/itemN.xml`, root `sc:state` in `urn:loreforge:slidecomposer:state`),
   so a wiped deck folder is rebuilt from the file (`EditorState`). Equation fallbacks for autosaves are
-  cached per object content (`AppState::fallback_cache`).
+  cached per object content (`AppState::fallback_cache`). Writes copy the Finder tags and xattrs over
+  (`copy_xattrs`). A changed file with no unsaved edits reloads by itself (`reloadFile(true)` in `web/app.js`).
+- Paper material (論文 panel, `web/reader.js`): `crates/server/src/reader.rs` reads LoreReader's papers and
+  PDFs read-only (`LOREREADER_WORKSPACE`, else lore-home's `private/LoreReader`; the library from LoreReader's
+  config). Pages are rendered with `pdftoppm` into the workspace's `cache/lorereader/`; a figure is the whole
+  page as one asset, cropped by the picture. Symbols and equations register into the deck's own `notation.json`.
 - `crates/core` (`sc-core`): `Workspace` (styles/, decks/), `Session` (open deck: editor,
   source package, layout backdrops, LaTeX cache), export PPTX/PDF, `layout_titles`.
 - `crates/server` (`sc-server`): axum on 127.0.0.1:7880; handlers are plain async fns over
