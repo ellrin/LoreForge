@@ -146,3 +146,10 @@ needs = { json = true }
 default = "claude:opus"
 fallback = "local:current"
 max_tokens = 16000
+
+[task.pc-template-rules]
+label = "讀取投稿規則"
+needs = { json = true }
+default = "claude:selected"
+fallback = "local:current"
+offline = true
