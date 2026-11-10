@@ -26,6 +26,10 @@ pub struct Meta {
     /// Submission rules worth remembering (word limits, figure formats, ...).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub notes: String,
+    /// How the journal asks references to be listed, in its own words
+    /// ("numbered, Vancouver", "author–year, APA").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reference_style: String,
     /// Word limits the journal sets, for the word count in the status bar.
     #[serde(default, skip_serializing_if = "WordLimits::is_empty")]
     pub word_limits: WordLimits,
@@ -36,9 +40,32 @@ pub struct Meta {
     /// `[captions]`: where table and figure captions go.
     #[serde(default, skip_serializing_if = "Captions::is_empty")]
     pub captions: Captions,
-    /// `[limits]`: page limit, double-blind.
+    /// `[limits]`: page, figure, table, reference and keyword limits, double-blind.
     #[serde(default, skip_serializing_if = "Limits::is_empty")]
     pub limits: Limits,
+    /// `[requires]`: parts the submission must have besides the paper.
+    #[serde(default, skip_serializing_if = "Requires::is_empty")]
+    pub requires: Requires,
+    /// `[sources]`: where a rule came from, by its key (`word_limits.abstract`,
+    /// `ref_words.sentence_start.fig`, …): the sentence of the author
+    /// guidelines it was read from, or the class whose convention it is.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sources: std::collections::BTreeMap<String, String>,
+}
+
+/// `[requires]` in template.toml.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
+pub struct Requires {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub highlights: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub graphical_abstract: bool,
+}
+
+impl Requires {
+    pub fn is_empty(&self) -> bool {
+        *self == Requires::default()
+    }
 }
 
 pub use lore_notation::RefWords;
@@ -70,6 +97,17 @@ pub struct Limits {
     /// Double-blind review: no author names in the submission.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub anonymous: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub figures: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tables: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub references: Option<u32>,
+    /// Keywords: at most `keywords`, at least `keywords_min`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords_min: Option<u32>,
 }
 
 impl Limits {
@@ -269,6 +307,24 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// What every saved template must satisfy: a name, captions above or below.
+fn check_rules(meta: &Meta) -> Result<(), String> {
+    for (what, v) in [("表", &meta.captions.table), ("圖", &meta.captions.figure)] {
+        if v.as_deref().is_some_and(|p| p != "above" && p != "below") {
+            return Err(format!("{what}說明位置只能是 above 或 below"));
+        }
+    }
+    if meta.name.trim().is_empty() {
+        return Err("請輸入期刊名稱".into());
+    }
+    if let (Some(lo), Some(hi)) = (meta.limits.keywords_min, meta.limits.keywords) {
+        if lo > hi {
+            return Err("關鍵字下限大於上限".into());
+        }
+    }
+    Ok(())
+}
+
 fn write_meta(dir: &Path, m: &Meta) -> Result<(), String> {
     let t = toml::to_string_pretty(m).map_err(|e| e.to_string())?;
     crate::paper::write_atomic(&dir.join("template.toml"), &t).map_err(|e| e.to_string())
@@ -284,13 +340,7 @@ pub fn create(publishers: &Path, mut meta: Meta, based_on: &str) -> Result<Strin
     if !crate::paper::safe_name(based_on) || !base.is_dir() {
         return Err("找不到來源模板".into());
     }
-    let stem = slug(&meta);
-    let mut id = stem.clone();
-    let mut n = 2;
-    while publishers.join(&id).exists() {
-        id = format!("{stem}-{n}");
-        n += 1;
-    }
+    let id = free_id(publishers, &meta);
     let dir: PathBuf = publishers.join(&id);
     copy_dir(&base, &dir).map_err(|e| e.to_string())?;
     let base_meta = meta_of(&base, based_on);
@@ -313,9 +363,107 @@ pub fn create(publishers: &Path, mut meta: Meta, based_on: &str) -> Result<Strin
     if meta.limits.is_empty() {
         meta.limits = base_meta.limits;
     }
+    if meta.requires.is_empty() {
+        meta.requires = base_meta.requires;
+    }
+    if meta.reference_style.is_empty() {
+        meta.reference_style = base_meta.reference_style;
+    }
+    if meta.sources.is_empty() {
+        meta.sources = base_meta.sources;
+    }
     meta.based_on = based_on.to_string();
     write_meta(&dir, &meta)?;
     Ok(id)
+}
+
+/// A folder name for `meta` that is not taken yet: its slug, else slug-2, -3, …
+fn free_id(publishers: &Path, meta: &Meta) -> String {
+    let stem = slug(meta);
+    let mut id = stem.clone();
+    let mut n = 2;
+    while publishers.join(&id).exists() {
+        id = format!("{stem}-{n}");
+        n += 1;
+    }
+    id
+}
+
+/// A new template from files the author brought (an unpacked LaTeX kit, or
+/// what a Word sample became): `files` (paths relative to `src`, one of them
+/// `sample.tex`) are copied into a new folder with `meta` as template.toml.
+/// Nothing is left behind when a check or a copy fails.
+pub fn create_from_files(publishers: &Path, mut meta: Meta, src: &Path, files: &[String]) -> Result<String, String> {
+    meta.name = meta.name.trim().to_string();
+    meta.based_on.clear();
+    check_rules(&meta)?;
+    if !files.iter().any(|f| f == "sample.tex") {
+        return Err("模板裡沒有 sample.tex".into());
+    }
+    if !read_sample(src).unwrap_or_default().contains("\\begin{document}") {
+        return Err("範本需要 \\begin{document}".into());
+    }
+    for f in files {
+        let p = Path::new(f);
+        if p.is_absolute() || p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            return Err(format!("檔名不合法：{f}"));
+        }
+    }
+    std::fs::create_dir_all(publishers).map_err(|e| e.to_string())?;
+    let id = free_id(publishers, &meta);
+    let dir = publishers.join(&id);
+    let copy = || -> std::io::Result<()> {
+        for f in files {
+            let to = dir.join(f);
+            if let Some(p) = to.parent() {
+                std::fs::create_dir_all(p)?;
+            }
+            std::fs::copy(src.join(f), to)?;
+        }
+        Ok(())
+    };
+    if let Err(e) = copy().map_err(|e| e.to_string()).and_then(|_| write_meta(&dir, &meta)) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(e);
+    }
+    Ok(id)
+}
+
+/// What a document class fixes for every journal that uses it: where
+/// captions go and, where the publisher's style guide sets it, how figures,
+/// tables, equations and sections are named in the text. Limits are per
+/// journal and never come from here.
+pub struct ClassDefaults {
+    /// Whose class it is, for the source label.
+    pub family: &'static str,
+    pub ref_words: RefWords,
+    pub captions: Captions,
+}
+
+/// `None` for a class with no house style of its own (article, …).
+pub fn class_defaults(class: &str) -> Option<ClassDefaults> {
+    let words = |fig: &str, fig_start: &str, tab: &str, eq: &str, eq_start: &str, sec: &str, sec_start: &str| {
+        let mut r = RefWords { fig: Some(fig.into()), tab: Some(tab.into()), eq: Some(eq.into()), sec: Some(sec.into()), ..Default::default() };
+        for (k, mid, start) in [("fig", fig, fig_start), ("eq", eq, eq_start), ("sec", sec, sec_start)] {
+            if start != mid {
+                r.sentence_start.insert(k.into(), start.into());
+            }
+        }
+        r
+    };
+    let (family, ref_words) = match class.trim().rsplit('/').next().unwrap_or("") {
+        // IEEE Editorial Style: "Fig." even at a sentence start; "(1)", "Equation (1)" first
+        "IEEEtran" | "IEEEtranTCOM" | "IEEEtranTIE" | "ieeecolor" | "ieeeaccess" | "ieeeojies" => ("IEEE", words("Fig.", "Fig.", "Table", "", "Equation", "Section", "Section")),
+        // APS / AIP style
+        "revtex4" | "revtex4-1" | "revtex4-2" => ("REVTeX（APS／AIP）", words("Fig.", "Figure", "Table", "Eq.", "Equation", "Sec.", "Section")),
+        "mdpi" => ("MDPI", words("Figure", "Figure", "Table", "Equation", "Equation", "Section", "Section")),
+        "elsarticle" | "cas-sc" | "cas-dc" => ("Elsevier", RefWords::default()),
+        "sn-jnl" | "svjour3" | "svjour" => ("Springer Nature", RefWords::default()),
+        "llncs" => ("Springer LNCS", RefWords::default()),
+        "acmart" => ("ACM", RefWords::default()),
+        _ => return None,
+    };
+    Some(ClassDefaults { family, ref_words, captions: Captions { table: Some("above".into()), figure: Some("below".into()) } })
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -336,6 +484,12 @@ pub struct Update {
     pub captions: Option<Captions>,
     #[serde(default)]
     pub limits: Option<Limits>,
+    #[serde(default)]
+    pub requires: Option<Requires>,
+    #[serde(default)]
+    pub sources: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    pub reference_style: Option<String>,
 }
 
 /// Save a journal's description, and its class options and bibliography
@@ -350,14 +504,10 @@ pub fn update(publishers: &Path, id: &str, u: Update) -> Result<Journal, String>
     meta.ref_words = u.ref_words.unwrap_or_else(|| if meta.ref_words.is_empty() { cur.meta.ref_words.clone() } else { meta.ref_words });
     meta.captions = u.captions.unwrap_or_else(|| if meta.captions.is_empty() { cur.meta.captions.clone() } else { meta.captions });
     meta.limits = u.limits.unwrap_or_else(|| if meta.limits.is_empty() { cur.meta.limits.clone() } else { meta.limits });
-    for (what, v) in [("表", &meta.captions.table), ("圖", &meta.captions.figure)] {
-        if v.as_deref().is_some_and(|p| p != "above" && p != "below") {
-            return Err(format!("{what}說明位置只能是 above 或 below"));
-        }
-    }
-    if meta.name.trim().is_empty() {
-        return Err("請輸入期刊名稱".into());
-    }
+    meta.requires = u.requires.unwrap_or_else(|| if meta.requires.is_empty() { cur.meta.requires.clone() } else { meta.requires });
+    meta.sources = u.sources.unwrap_or_else(|| if meta.sources.is_empty() { cur.meta.sources.clone() } else { meta.sources });
+    meta.reference_style = u.reference_style.unwrap_or_else(|| if meta.reference_style.is_empty() { cur.meta.reference_style.clone() } else { meta.reference_style });
+    check_rules(&meta)?;
     write_meta(&dir, &meta)?;
     if let Some(mut s) = read_sample(&dir) {
         let before = s.clone();
@@ -539,7 +689,7 @@ mod tests {
         assert_eq!(j.meta.ref_words.eq.as_deref(), Some(""), "an empty word round-trips");
         assert_eq!(j.meta.ref_words.snippet("tab", "tab:a", true), "Table~\\ref{tab:a}");
         assert_eq!(j.meta.captions.table.as_deref(), Some("above"));
-        assert_eq!(j.meta.limits, Limits { pages: Some(8), pages_exclude_refs: true, anonymous: true });
+        assert_eq!(j.meta.limits, Limits { pages: Some(8), pages_exclude_refs: true, anonymous: true, ..Default::default() });
         // written back the same way
         let again: Meta = toml::from_str(&toml::to_string_pretty(&j.meta).unwrap()).unwrap();
         assert_eq!(again, j.meta);
@@ -563,6 +713,74 @@ mod tests {
         assert_eq!((d.meta.word_limits.total, d.meta.captions.table.as_deref()), (Some(5000), Some("above")));
         assert!(d.meta.ref_words.cleveref());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn templates_without_the_new_rules_write_the_same_text() {
+        // template.toml as the app wrote it before [requires], [sources] and the new limits
+        for text in [
+            "name = \"Example Journal\"\nshort = \"EJ\"\npublisher = \"Example Press\"\nkind = \"journal\"\nurl = \"https://example.org/guide\"\nnotes = \"x\"\n\n[word_limits]\nabstract = 200\n\n[word_limits.sections]\nIntroduction = 1000\n\n[ref_words]\nfig = \"Figure\"\neq = \"\"\n\n[ref_words.sentence_start]\ntab = \"Table\"\n\n[captions]\ntable = \"above\"\n\n[limits]\npages = 8\nanonymous = true\n",
+            "name = \"Plain\"\n",
+        ] {
+            let m: Meta = toml::from_str(text).unwrap();
+            assert_eq!(toml::to_string_pretty(&m).unwrap(), text);
+        }
+    }
+
+    #[test]
+    fn new_rules_round_trip_and_survive_the_editor() {
+        let root = setup("newrules");
+        let sn = root.join("springer-nature");
+        let mut m = Meta { name: "Example Journal".into(), reference_style: "numbered, Vancouver".into(), ..Default::default() };
+        m.limits = Limits { figures: Some(8), tables: Some(5), references: Some(50), keywords: Some(6), keywords_min: Some(3), ..Default::default() };
+        m.requires = Requires { highlights: true, graphical_abstract: true };
+        m.sources.insert("limits.figures".into(), "No more than 8 figures.".into());
+        write_meta(&sn, &m).unwrap();
+        assert_eq!(load(&root, "springer-nature").unwrap().meta, m);
+        // the editor's JSON without the new keys keeps them
+        let u: Update = serde_json::from_str(r#"{"name":"Example Journal","notes":"y"}"#).unwrap();
+        let j = update(&root, "springer-nature", u).unwrap();
+        assert_eq!((j.meta.limits.figures, j.meta.requires.highlights, j.meta.reference_style.as_str()), (Some(8), true, "numbered, Vancouver"));
+        assert_eq!(j.meta.sources.len(), 1);
+        let bad: Update = serde_json::from_str(r#"{"name":"Example Journal","limits":{"keywords":2,"keywords_min":4}}"#).unwrap();
+        assert!(update(&root, "springer-nature", bad).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn creates_a_template_from_brought_files() {
+        let root = setup("fromfiles");
+        let src = root.join("staging");
+        std::fs::create_dir_all(src.join("bst")).unwrap();
+        std::fs::write(src.join("sample.tex"), "\\documentclass[review]{elsarticle}\n\\begin{document}\nx\n\\end{document}\n").unwrap();
+        std::fs::write(src.join("elsarticle.cls"), "%cls").unwrap();
+        std::fs::write(src.join("bst/model1-num-names.bst"), "").unwrap();
+        let meta = Meta { name: "Journal of Synthetic Examples".into(), short: "JSE".into(), captions: Captions { table: Some("above".into()), figure: None }, ..Default::default() };
+        let files: Vec<String> = ["sample.tex", "elsarticle.cls", "bst/model1-num-names.bst"].map(String::from).to_vec();
+        let id = create_from_files(&root, meta.clone(), &src, &files).unwrap();
+        assert_eq!(id, "jse");
+        let j = load(&root, "jse").unwrap();
+        assert_eq!((j.class.as_str(), j.class_options.as_str(), j.meta.captions.table.as_deref()), ("elsarticle", "review", Some("above")));
+        assert_eq!(j.bib_styles, ["model1-num-names"]);
+        assert_eq!(create_from_files(&root, meta.clone(), &src, &files).unwrap(), "jse-2");
+        // refused: nothing written
+        let bad = Meta { captions: Captions { table: Some("left".into()), figure: None }, ..meta.clone() };
+        assert!(create_from_files(&root, bad, &src, &files).is_err());
+        assert!(create_from_files(&root, meta.clone(), &src, &["../x".into(), "sample.tex".into()]).is_err());
+        assert!(create_from_files(&root, meta, &src, &["elsarticle.cls".into()]).is_err());
+        assert!(!root.join("jse-3").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn class_defaults_set_only_house_style() {
+        let ieee = class_defaults("IEEEtran").unwrap();
+        assert_eq!(ieee.ref_words.snippet("fig", "fig:a", true), "Fig.~\\ref{fig:a}");
+        assert_eq!(ieee.ref_words.snippet("eq", "eq:a", false), "\\eqref{eq:a}");
+        assert_eq!(ieee.captions.table.as_deref(), Some("above"));
+        assert_eq!(class_defaults("revtex4-2").unwrap().ref_words.snippet("fig", "fig:a", true), "Figure~\\ref{fig:a}");
+        assert!(class_defaults("elsarticle").unwrap().ref_words.is_empty());
+        assert!(class_defaults("article").is_none());
     }
 
     #[test]
