@@ -480,7 +480,33 @@ pub fn layout(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layout
 }
 
 /// As [`layout`], knowing the pixel sizes of the picture files the graph names.
+///
+/// A panel that does not say its direction (and has no pinned node) is tried
+/// left-to-right and top-down; the combination that fits the frame at the
+/// largest scale is kept, left-to-right winning unless top-down is clearly better.
 pub fn layout_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &LayoutOptions, image_size: &dyn Fn(&str) -> Option<(u32, u32)>) -> Layout {
+    let pinned = |p: &Panel| g.nodes.iter().any(|n| n.panel == p.id && (n.params.contains_key("col") || n.params.contains_key("lane")));
+    let auto: Vec<usize> = (0..g.panels.len()).filter(|i| g.panels[*i].dir.is_empty() && !g.panels[*i].bare && !pinned(&g.panels[*i])).collect();
+    if auto.is_empty() || auto.len() > 5 {
+        return layout_fixed(g, theme, vars, lib, opt, image_size);
+    }
+    let mut best: Option<(f64, Layout)> = None;
+    for mask in 0..(1u32 << auto.len()) {
+        let mut h = g.clone();
+        for (bit, pi) in auto.iter().enumerate() {
+            h.panels[*pi].dir = if mask & (1 << bit) != 0 { "down".into() } else { "right".into() };
+        }
+        let lay = layout_fixed(&h, theme, vars, lib, opt, image_size);
+        // each top-down panel must earn its place
+        let score = lay.scale * 0.92f64.powi(mask.count_ones() as i32);
+        if best.as_ref().is_none_or(|b| score > b.0 + 1e-9) {
+            best = Some((score, lay));
+        }
+    }
+    best.expect("at least one combination").1
+}
+
+fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &LayoutOptions, image_size: &dyn Fn(&str) -> Option<(u32, u32)>) -> Layout {
     let down_panels: BTreeSet<&str> = g.panels.iter().filter(|p| p.dir == "down").map(|p| p.id.as_str()).collect();
     let sizes: Vec<Size> = g
         .nodes

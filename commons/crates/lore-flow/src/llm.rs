@@ -14,10 +14,17 @@ use crate::modules::Library;
 use crate::notation::{NotationReport, check_graph};
 use crate::spec::*;
 
-/// Task id in lore-llm's router.
+/// Task id in lore-llm's router (a description alone).
 pub const TASK: &str = "sc-flow-graph";
+/// Task id when a picture is attached (needs an engine that sees images).
+pub const TASK_VISION: &str = "sc-flow-graph-vision";
 
-/// The task definition, to merge into an app's task table.
+/// The task to route: with or without a picture.
+pub fn task_for(has_image: bool) -> &'static str {
+    if has_image { TASK_VISION } else { TASK }
+}
+
+/// The task definitions, to merge into an app's task table.
 pub fn task_table() -> TaskTable {
     TaskTable::parse(include_str!("../tasks.toml")).expect("bundled tasks.toml parses")
 }
@@ -185,11 +192,55 @@ pub fn request(p: &FlowPrompt) -> LlmRequest {
 fn tidy(g: &mut Graph) {
     let fix = |s: &str| -> String {
         let t: String = s.trim().chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
-        if t.is_empty() { "n".into() } else { t }
+        // runs of replaced characters collapse; none left at the ends
+        let mut out = String::new();
+        for c in t.chars() {
+            if c == '_' && out.ends_with('_') {
+                continue;
+            }
+            out.push(c);
+        }
+        let out = out.trim_matches('_').to_string();
+        if out.is_empty() { "n".into() } else { out }
     };
+    // a backslash doubled once too often in the JSON (`\\mathbf`) is a command, not a line break
+    let unescape = |s: &mut String| {
+        let cs: Vec<char> = s.chars().collect();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < cs.len() {
+            if cs[i] == '\\' && cs.get(i + 1) == Some(&'\\') && cs.get(i + 2).is_some_and(|c| c.is_ascii_alphabetic()) {
+                i += 1;
+                continue;
+            }
+            out.push(cs[i]);
+            i += 1;
+        }
+        *s = out;
+    };
+    for n in &mut g.nodes {
+        unescape(&mut n.label);
+        unescape(&mut n.caption);
+    }
+    for v in &mut g.vars_new {
+        unescape(&mut v.latex);
+    }
+    for e in &mut g.edges {
+        unescape(&mut e.label);
+    }
+    for p in &mut g.panels {
+        unescape(&mut p.title);
+    }
     g.fig = fix(&g.fig);
+    if g.fig == "n" {
+        g.fig = "fig".into();
+    }
     for p in &mut g.panels {
         p.id = fix(&p.id);
+        // "right" is only the model's default: the layout may still turn the panel to fit
+        if p.dir == "right" {
+            p.dir.clear();
+        }
     }
     for n in &mut g.nodes {
         n.id = fix(&n.id);

@@ -80,7 +80,7 @@ lore-notation's checks on the figure's text; `notation::register_new` adds the n
 
 ## LLM task
 
-`llm::TASK` = `sc-flow-graph` (`llm::task_table()` to merge into the app's table):
+`llm::task_for(has_image)` = `sc-flow-graph` / `sc-flow-graph-vision` (`llm::task_table()` to merge into the app's table):
 `llm::propose(provider, &FlowPrompt { description, image, notation, library, examples })` →
 `Proposal { graph, dsl, notation, … }`. Closed lists in the JSON schema; a graph that does not
 hold together is sent back once.

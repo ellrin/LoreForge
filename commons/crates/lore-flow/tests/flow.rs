@@ -260,6 +260,31 @@ fn pins_override_the_automatic_position() {
     assert!(n[2].rect.y > n[0].rect.bottom());
 }
 
+#[test]
+fn a_panel_without_a_direction_takes_the_one_that_fits() {
+    // a long chain beside a short panel: laid top-down the figure is far larger
+    let mut src = String::from("fig a\npanel p \"Long\"\n");
+    for i in 0..9 {
+        src.push_str(&format!(" n{i}: box \"Step {i}\"\n"));
+    }
+    src.push_str("panel q \"Short\" dir=right\n a: box \"A\"\n b: box \"B\"\nend\n");
+    src.push_str(&(0..9).map(|i| format!("n{i}")).collect::<Vec<_>>().join(" -> "));
+    src.push_str("\na -> b\nn8 -> a : cross\n");
+    let g = dsl::parse(&src).unwrap();
+    // a tall frame: the nine steps fit much better as a column
+    let d = Drawing { options: LayoutOptions { frame: Rect::new(0.0, 0.0, 300.0, 600.0), ..Default::default() }, ..Default::default() };
+    let f = draw(&g, &d).unwrap();
+    assert!(f.layout.panels[0].down && !f.layout.panels[1].down);
+    no_overlaps(&f);
+    routes_are_clean(&g, &f);
+    // in a wide frame it stays left to right; a pinned panel is never turned
+    let f = fig(&g);
+    assert!(!f.layout.panels[0].down);
+    let mut pinned = g.clone();
+    pinned.nodes[0].params.insert("col".into(), serde_json::json!(0));
+    assert!(!draw(&pinned, &d).unwrap().layout.panels[0].down);
+}
+
 // ── L2: routing ────────────────────────────────────────────────────────
 
 fn routes_are_clean(g: &Graph, f: &Figure) {

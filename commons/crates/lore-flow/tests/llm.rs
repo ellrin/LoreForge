@@ -44,8 +44,10 @@ fn rt() -> tokio::runtime::Runtime {
 fn the_task_is_defined_for_the_router() {
     let t = llm::task_table();
     t.check().unwrap();
-    let spec = &t.task[llm::TASK];
-    assert_eq!(spec.needs, Needs { json: true, vision: true, context: Some(32_000), ..Default::default() });
+    // a description alone runs on engines that cannot see pictures
+    assert_eq!(t.task[llm::TASK].needs, Needs { json: true, context: Some(32_000), ..Default::default() });
+    assert_eq!(t.task[llm::TASK_VISION].needs, Needs { json: true, vision: true, context: Some(32_000), ..Default::default() });
+    assert_eq!((llm::task_for(false), llm::task_for(true)), (llm::TASK, llm::TASK_VISION));
     // merges into the shared table without touching it
     let all = lore_llm::TaskTable::bundled().merge(t);
     assert!(all.task.contains_key(llm::TASK) && all.task.contains_key("sc-slide-content"));
@@ -141,10 +143,14 @@ fn model_ids_are_tidied() {
     v["edges"][4]["from"] = json!("L seg");
     v["arrange"] = json!([["a", "ghost"]]);
     v["nodes"][0]["var"] = json!("@x");
+    v["fig"] = json!("f02 模糊權重分割");
+    v["vars_new"][0]["latex"] = json!("\\\\theta_{seg}");
     let mock = MockProvider::new(vec![v.to_string()]);
     let p = FlowPrompt { description: "…", image: None, notation: None, library: &lib, examples: &[] };
     let prop = rt().block_on(llm::propose(&mock, &p)).unwrap();
     assert!(prop.graph.node("L_seg").is_some());
     assert!(prop.graph.arrange.is_empty());
     assert_eq!(prop.graph.node("x").unwrap().var, "x");
+    assert_eq!(prop.graph.fig, "f02");
+    assert_eq!(prop.graph.vars_new[0].latex, "\\theta_{seg}");
 }
