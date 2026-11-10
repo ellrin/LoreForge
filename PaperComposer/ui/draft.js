@@ -10,7 +10,10 @@
 //               article. Changing it re-lays main.tex; the sections keep every word
 //   6 大綱      paragraph-level outline, revised section by section
 //   7 草稿      drafted through the phrase bank, section by section
-//   8 審稿      reviewer pass (Opus); questions go back to the conversation
+//   8 審稿      reviewer pass; questions go back to the conversation
+// Every step runs on Claude when it is available, else on the local model;
+// the engine that ran shows next to the step's button (engineTag). Each
+// step's explanation sits behind a 「?」 next to its heading (hq).
 // Everything is saved in the paper folder (draft/), so it can be resumed.
 // 重新開始 moves draft/ to draft/archive/<time>/; 從這步重來 (on a finished
 // step) clears what the later steps produced, after a copy in the archive.
@@ -156,6 +159,23 @@ const PCDraft = (() => {
   }
 
   const h = (text) => el("h3", "df-h", text);
+  /** A heading with its explanation behind a 「?」 (the app's help tip). */
+  function hq(text, help) {
+    const t = h(text);
+    const q = el("button", "help", "?");
+    q.dataset.tip = help;
+    q.setAttribute("aria-label", "說明");
+    t.append(q);
+    return t;
+  }
+  /** Which engine produced a result, in a few characters (why, on hover). */
+  function engineTag(label, why) {
+    if (!label) return document.createTextNode("");
+    const t = el("span", `df-engine${label === "本機" ? " local" : ""}`, label);
+    t.title = why ? `改用${label}：${why}` : `由 ${label} 產生`;
+    return t;
+  }
+  const stepTag = (k) => engineTag(sess().engines?.[k]?.label, sess().engines?.[k]?.note);
   const note = (text, cls = "") => el("p", `df-note ${cls}`, text);
   function btn(label, onclick, cls = "primary small") {
     const b = el("button", cls, label);
@@ -171,6 +191,7 @@ const PCDraft = (() => {
     if (tag === "textarea") i.rows = 2;
     return i;
   }
+  const avail0 = () => lens().available.length > 0;
   const nextBtn = (label) => btn(label ?? "下一步", () => go(D.step + 1), "ghost");
 
   // ── 1 主題 ───────────────────────────────────────────
@@ -189,12 +210,12 @@ const PCDraft = (() => {
     const acc = input(sess().hook.reader_accepts, "同行已經承認的事實是什麼？例如：標註不確定的影像通常直接排除", "textarea");
     const tw = input(sess().hook.twist, "你加了什麼讓人意外的東西？例如：不排除，而是依品質與面積降權", "textarea");
     main.append(el("label", "np-label", "讀者已經承認"), acc, el("label", "np-label", "你的轉折"), tw);
-    main.append(h("視角"));
+    main.append(hq("視角", avail0() ? "視角檔在工作區的 lens/ 資料夾：決定要追問什麼、怎麼判讀回答。" : "工作區沒有 lens/ 資料夾，使用內建的中性視角。可以從 private-example 複製 lens/default.toml 改成你自己的。"));
     const avail = lens().available;
     const sel = el("select", "np-input");
     (avail.length ? avail : ["default"]).forEach((n) => { const o = el("option", "", n === "default" && !avail.length ? "default（內建）" : n); o.value = n; sel.append(o); });
     sel.value = sess().lens || lens().name;
-    main.append(sel, note(avail.length ? "視角檔在工作區的 lens/ 資料夾：決定要追問什麼、怎麼判讀回答。" : "工作區沒有 lens/ 資料夾，使用內建的中性視角。可以從 private-example 複製 lens/default.toml 改成你自己的。"));
+    main.append(sel);
     const levels = el("ul", "df-levels");
     lens().scale.levels.forEach((l) => levels.append(el("li", "", `${l.id} ${l.label}${l.means ? `：${l.means}` : ""}`)));
     main.append(levels);
@@ -210,8 +231,7 @@ const PCDraft = (() => {
 
   // ── 2 實驗記錄 ───────────────────────────────────────
   function record(main) {
-    main.append(h("上傳實驗記錄"));
-    main.append(note("接受 .md .txt .csv .tsv .json .log 與 PDF；Excel、Word 請另存成 CSV 或純文字。記錄裡的順序（日期、版本、run 編號）越完整，越能問出你當時的想法；你在記錄裡寫下的想法，會在問答時當作選項給你。論文裡已有的表格、圖與文獻會自動帶入，不用重貼。整理由 Opus 負責。"));
+    main.append(hq("上傳實驗記錄", "接受 .md .txt .csv .tsv .json .log 與 PDF；Excel、Word 請另存成 CSV 或純文字。記錄裡的順序（日期、版本、run 編號）越完整，越能問出你當時的想法；你在記錄裡寫下的想法，會在問答時當作選項給你。論文裡已有的表格、圖與文獻會自動帶入，不用重貼。沒有 Claude 時由本機模型分段整理，表格裡在記錄找不到的數字會標出來。"));
     const file = el("input");
     file.type = "file"; file.multiple = true;
     file.onchange = () => run("上傳", async () => {
@@ -235,7 +255,7 @@ const PCDraft = (() => {
       list.append(li);
     });
     if (sess().records.length) main.append(list);
-    main.append(row(btn(sess().experiments.length ? "重新整理" : "整理實驗記錄", () => run("整理實驗記錄", () => call("/record"))), nextBtn()));
+    main.append(row(btn(sess().experiments.length ? "重新整理" : "整理實驗記錄", () => run("整理實驗記錄", () => call("/record"))), stepTag("record"), nextBtn()));
     if (sess().record_summary) main.append(h("摘要"), el("p", "df-text", sess().record_summary));
     if (sess().experiments.length) {
       main.append(h("實驗"));
@@ -319,11 +339,10 @@ const PCDraft = (() => {
   // ── 3 題組 ───────────────────────────────────────────
   function plan(main) {
     const started = sess().groups.some((g) => g.turns > 0);
-    main.append(h("題組"));
-    main.append(note("每一組最後要整理出：說明、動機、結論。題組數只是估計，對話後還會校正。"));
+    main.append(hq("題組", "每一組最後要整理出：說明、動機、結論。題組數只是估計，對話後還會校正。"));
     const r = row();
-    if (!started) r.append(btn(sess().groups.length ? "重新規劃" : "規劃題組", () => run("規劃題組", () => call("/plan"))));
-    else r.append(note("已經開始對話，只能在下面直接修改。"));
+    if (!started) r.append(btn(sess().groups.length ? "重新規劃" : "規劃題組", () => run("規劃題組", () => call("/plan"))), stepTag("plan"));
+    else r.append(note("已經開始對話，只能在下面直接修改。"), stepTag("plan"));
     main.append(r);
     if (!sess().groups.length) return;
     const edit = { groups: sess().groups.map((g) => ({ ...g })), items: [] };
@@ -387,6 +406,7 @@ const PCDraft = (() => {
     turns.forEach((t, i) => {
       const b = el("div", `df-msg ${t.who}`);
       b.append(el("div", "", t.text));
+      if (t.who === "ai" && t.engine) b.append(engineTag(t.engine));
       if (t.who === "ai" && t.options?.length && i === turns.length - 1) {
         const opts = el("div", "df-opts");
         t.options.forEach((o) => { const ob = el("button", "ghost", o); ob.disabled = !!D.busy; ob.onclick = () => send(o); opts.append(ob); });
@@ -463,9 +483,8 @@ const PCDraft = (() => {
 
   // ── 4.5 主張 ─────────────────────────────────────────
   function claims(main) {
-    main.append(h("主張登記"));
-    main.append(note("每個主張只在一個章節完整說一次，其他地方只簡短回扣；Abstract 與 Conclusion 最後從這裡取最強的主張。"));
-    main.append(row(btn(sess().claims.length ? "重新產生" : "產生主張登記", () => run("整理主張", () => call("/claims"))), nextBtn()));
+    main.append(hq("主張登記", "每個主張只在一個章節完整說一次，其他地方只簡短回扣；Abstract 與 Conclusion 最後從這裡取最強的主張。"));
+    main.append(row(btn(sess().claims.length ? "重新產生" : "產生主張登記", () => run("整理主張", () => call("/claims"))), stepTag("claims"), nextBtn()));
     if (!sess().claims.length) return;
     const edit = sess().claims.map((c) => ({ ...c }));
     edit.forEach((c, i) => {
@@ -494,7 +513,7 @@ const PCDraft = (() => {
   // ── 5 校正 ───────────────────────────────────────────
   function review(main) {
     main.append(h("章節順序與敘事"));
-    main.append(row(btn(sess().review ? "重新校正" : "校正", () => run("校正", () => call("/review"))), nextBtn()));
+    main.append(row(btn(sess().review ? "重新校正" : "校正", () => run("校正", () => call("/review"))), stepTag("review"), nextBtn()));
     const r = sess().review;
     if (!r) return;
     const title = (id) => sess().groups.find((g) => g.id === id)?.title ?? id;
@@ -543,9 +562,8 @@ const PCDraft = (() => {
 
   // ── 6 大綱 ───────────────────────────────────────────
   function outline(main) {
-    main.append(h("段落大綱"));
-    main.append(note("每一段標出類型與組成（事實、理由層級、結論）。逐章看過，有意見寫在章節下方，按「修改這一章」。"));
-    main.append(row(btn(sess().outline.length ? "全部重新產生" : "產生大綱", () => run("產生大綱", () => call("/outline"))), nextBtn()));
+    main.append(hq("段落大綱", "每一段標出類型與組成（事實、理由層級、結論）。逐章看過，有意見寫在章節下方，按「修改這一章」。沒有 Claude 時由本機模型逐章產生。"));
+    main.append(row(btn(sess().outline.length ? "全部重新產生" : "產生大綱", () => run("產生大綱", () => call("/outline"))), stepTag("outline"), nextBtn()));
     if (!sess().outline.length) return;
     const edit = sess().outline.map((o) => ({ ...o, paras: o.paras.map((p) => ({ ...p })) }));
     SECTIONS.forEach((sec) => {
@@ -584,8 +602,7 @@ const PCDraft = (() => {
 
   // ── 7 草稿 ───────────────────────────────────────────
   function drafting(main) {
-    main.append(h("草稿"));
-    main.append(note("逐章生成，每段用你的句型庫寫，並照大綱的組成、你的風格筆記與對照表（登記的巨集、\\ref 標籤、縮寫）。每段寫完會跑一次對照表檢查：手打的「Table 1」或不存在的標籤會自動重寫一次，其他問題列在段落下方。建議最後才生成 Introduction 與 Conclusion。引擎用右側「寫作」選的那個。"));
+    main.append(hq("草稿", "逐章生成，每段用你的句型庫寫，並照大綱的組成、你的風格筆記與對照表（登記的巨集、\\ref 標籤、縮寫）。每段寫完會跑一次對照表檢查：手打的「Table 1」或不存在的標籤會自動重寫一次，其他問題列在段落下方。建議最後才生成 Introduction 與 Conclusion。引擎用右側「寫作」選的那個。"));
     if (!sess().outline.length) { main.append(note("先完成大綱。")); return; }
     const order = ["Methods", "Results", "Discussion", "Introduction", "Conclusion"];
     order.forEach((sec) => {
@@ -593,6 +610,7 @@ const PCDraft = (() => {
       const box = el("div", "df-sec");
       const d = sess().drafts.find((x) => x.section === sec);
       const r = row(el("h4", "", `${sec}　${SEC_ZH[sec]}`), btn(d ? "重新生成" : "生成", () => run(`生成 ${sec}`, () => call("/compose", { section: sec, engine: chosenEngine() })), "ghost"));
+      if (d?.engine) r.append(engineTag(d.engine));
       if (d) r.append(btn("複製", () => { navigator.clipboard.writeText(d.paras.map((p) => p.text).join("\n\n")); flash("已複製"); }, "ghost"));
       box.append(r);
       if (d?.new_symbols?.length) box.append(newSymbols(d.new_symbols));
@@ -610,9 +628,8 @@ const PCDraft = (() => {
   // ── 8 審稿 ───────────────────────────────────────────
   const KIND_ZH = { citation: "引用", contradiction: "矛盾", overclaim: "宣稱過度", "missing-number": "缺數字", impossible: "數字不可能", generic: "空泛", repeat: "重複", "buried-origin": "發想埋太晚", "missing-why": "缺理由" };
   function audit(main) {
-    main.append(h("審稿檢查（Opus）"));
-    main.append(note("檢查矛盾、宣稱強度、缺數字、空泛句、重複與埋掉的發想。需要你補充的，可以回到對話追問。"));
-    main.append(row(btn(sess().audit.length ? "重新審稿" : "審稿", () => run("審稿中", () => call("/audit")))));
+    main.append(hq("審稿檢查", "檢查矛盾、宣稱強度、缺數字、空泛句、重複與埋掉的發想。需要你補充的，可以回到對話追問。沒有 Claude 時由本機模型逐章審。"));
+    main.append(row(btn(sess().audit.length ? "重新審稿" : "審稿", () => run("審稿中", () => call("/audit"))), stepTag("audit")));
     sess().audit.forEach((f) => {
       const card = el("div", `df-card ${f.resolved ? "no" : ""}`);
       card.append(row(el("span", "df-badge warn", KIND_ZH[f.kind] ?? f.kind), el("span", "df-gid", f.para)));
@@ -630,14 +647,18 @@ const PCDraft = (() => {
   function newSymbols(list) {
     const box = el("div", "df-card");
     box.append(note(`對照表裡沒有這些符號：${list.join("、")}。登記後到對照表補上意思（標為「待確認」）。`, "warn"));
-    box.append(row(btn("登記到對照表", () => run("登記符號", () => call("/notation/register", { symbols: list })), "ghost")));
+    box.append(row(btn("登記到對照表", () => run("登記符號", async () => {
+      const v = await call("/notation/register", { symbols: list });
+      if (window.PCNotation) PCNotation.open(list[0] ?? "");
+      return v;
+    }), "ghost")));
     return box;
   }
 
   // ── 9 修訂 ───────────────────────────────────────────
   // Something has to go into the finished paper: new data after a review, a
   // figure, more citations. Each request is discussed in its own group, then
-  // Opus proposes paragraph-level changes the author applies one by one.
+  // the model proposes paragraph-level changes the author applies one by one.
   async function libraryKeys() {
     if (D.library) return D.library;
     try { D.library = (await api("/api/refs"))?.refs ?? []; } catch { D.library = []; }
@@ -645,8 +666,7 @@ const PCDraft = (() => {
   }
 
   function revise(main) {
-    main.append(h("新增修訂"));
-    main.append(note("老師或審稿人要你補什麼？補了什麼實驗、數據、圖、文獻？寫下來，先討論放在哪裡、會影響哪些地方，再產生具體修改。新的實驗記錄請在第 2 步上傳並重新整理；新文獻先在文獻視窗加入文獻庫。"));
+    main.append(hq("新增修訂", "老師或審稿人要你補什麼？補了什麼實驗、數據、圖、文獻？寫下來，先討論放在哪裡、會影響哪些地方，再產生具體修改。新的實驗記錄請在第 2 步上傳並重新整理；新文獻先在文獻視窗加入文獻庫。"));
     const req = input(D.revDraft ?? "", "例：審稿人要求外部驗證。我補了另一家醫院 120 張影格，Dice 0.71；想放在 Results 主表之後，並在 Discussion 提一句。", "textarea");
     req.rows = 4;
     req.oninput = () => (D.revDraft = req.value);
@@ -695,11 +715,11 @@ const PCDraft = (() => {
       const g = sess().groups.find((x) => x.id === r.group);
       if (g?.summary.conclusion) card.append(note(`討論結論：${g.summary.conclusion}`));
       const acts = row(btn("到對話討論", () => { D.group = r.group; go(STEPS.findIndex(([k]) => k === "interview")); }, "ghost"));
-      if (r.status !== "dropped") acts.append(btn(r.plan ? "重新產生修改方案" : "產生修改方案（Opus）", () => run("產生修改方案", () => call(`/revisions/${r.id}/plan`)), r.plan ? "ghost" : "primary small"));
+      if (r.status !== "dropped") acts.append(btn(r.plan ? "重新產生修改方案" : "產生修改方案", () => run("產生修改方案", () => call(`/revisions/${r.id}/plan`)), r.plan ? "ghost" : "primary small"));
       acts.append(btn(r.status === "dropped" ? "恢復" : "放棄", () => run("更新", () => call(`/revisions/${r.id}/status`, { status: r.status === "dropped" ? "open" : "dropped" })), "ghost"));
       card.append(acts);
       if (r.plan) {
-        card.append(el("p", "df-text", r.plan.summary));
+        card.append(row(el("p", "df-text", r.plan.summary), engineTag(r.plan.engine)));
         if (r.plan.new_symbols?.length) card.append(newSymbols(r.plan.new_symbols));
         if (r.plan.effects.length) {
           const ul = el("ul", "df-list warn");

@@ -1,0 +1,10 @@
+/* 討論草稿: the engine that ran a step (a few characters next to its button)
+   and the 「?」 next to a step's heading. Theme tokens only. */
+.df-engine {
+  display: inline-block; align-self: center; padding: 1px 6px;
+  border: 1px solid var(--line-strong); border-radius: 8px;
+  font: 500 11px var(--sans); color: var(--muted); white-space: nowrap; cursor: default;
+}
+.df-engine.local { border-color: var(--accent-text); color: var(--accent-text); }
+.df-msg .df-engine { margin-top: 4px; font-size: 10px; padding: 0 5px; }
+.df-h .help { margin-left: 6px; vertical-align: 1px; }
