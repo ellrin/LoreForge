@@ -86,7 +86,7 @@ your-private-repo/
   publishers/   各出版社的 .cls、範例 .tex 與模板設定
   papers/       每篇論文一個資料夾（main.tex、sections/，以及 paper.toml：Key value 與作者）
   prompts/      自訂提示詞（可選）
-  config.toml   App 記住的介面設定：淺色／深色、配色、紙張、縮放、引擎、上次開的論文
+  config.toml   App 記住的介面設定：紙張、縮放、引擎、上次開的論文（配色是所有 App 共用的，存在 LoreForge 的 private/shared/ui.toml）
 ```
 
 介面設定存在工作區的 `config.toml`（`[ui]`），跟著工作區一起同步，換一台電腦打開也是同樣的樣子；每次開啟時以它為準。

@@ -13,6 +13,9 @@ Monorepo of the author's local-first apps. Each top-level folder is its own Carg
 - Find these with `lore-home` (`Home::discover`, `seed_app`, `shared_file`, `prefs`); never
   hard-code `../private`. Personal choices (fonts, field-specific lists, who the user is)
   go in `private/shared` or the app's private folder, with a neutral default in public.
+- Colours: one theme for every app (`commons/ui/theme.css` + `theme.js`, chosen once, kept in
+  `private/shared/ui.toml` through `lore_home::theme`). An app's stylesheet has no palette of its
+  own; documents (slides, PDF pages, the paper sheet, exports, thumbnails) never take theme colours.
 
 ## Rules
 
