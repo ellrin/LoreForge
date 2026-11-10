@@ -14,12 +14,16 @@
 //!   UTF-16 offsets shared with the page).
 //! - [`nouns`]: the noun list (track A): word inventory, KB n-gram matching,
 //!   normalisation, word filters and the batched classification.
+//! - [`symbols`]: variables and equations, step 1 (no model): math runs from pdf.js
+//!   items (fonts, sizes, baselines, accents), glyph → LaTeX, display equations, the
+//!   regex definition finder and the per-paper symbol table (lore-notation fields).
 //! - [`synth`]: synthetic text PDFs for tests and demos (never a real paper).
 
 pub mod config;
 pub mod library;
 pub mod papers;
 pub mod pdfops;
+pub mod symbols;
 pub mod synth;
 pub mod nouns;
 pub mod text;

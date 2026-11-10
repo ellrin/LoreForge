@@ -51,6 +51,8 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const STATE_LABEL = { learning: "學習中", known: "記得", stale: "久未複習", none: "學習中（尚無紀錄）", new: "沒有卡片" };
 const SOURCE_LABEL = { kb: "知識庫的詞", expansion: "縮寫全名", compound: "連字號複合詞", acronym: "縮寫", word: "單字" };
 const NOUN_STATE = { known: "記得", learning: "學習中", stale: "久未複習", none: "學習中（尚無紀錄）", new: "沒有卡片" };
+const GRADE = { certain: ["✅", "確定"], defined: ["🟢", "有定義"], inferred: ["🟡", "推測"], conflict: ["🔴", "衝突"], unresolved: ["⚪", "查不到"] };
+const RESOLVER = { program: "程式", local: "地端模型", claude: "Claude", author: "作者" };
 const MODEL_LABEL = { auto: "自動", local: "地端", haiku: "Haiku", sonnet: "Sonnet", opus: "Opus" };
 const COLOR_LABEL = { yellow: "黃", green: "綠", blue: "藍", pink: "粉紅" };
 
@@ -65,6 +67,10 @@ const S = {
   focusNoun: null,          // {i, k}: the noun whose occurrences are lit, and the current one
   nounView: { cat: "", state: "", q: "", sort: "page", dir: 1 },
   readStatus: "",           // what the reading aids are doing ("讀取全文…", errors)
+  symbols: null,            // the paper's symbol table (symbols.json)
+  symSpans: [],             // unique math runs: {page, s, e, bbox, latex, ents: [entry index]}
+  symMarks: new Map(),      // page → [{s, e, k}] (k = index into symSpans)
+  symView: { grade: "" },
   orig: [],                 // [{sha, page}] of the open paper
   arr: null,                // pending edited list, or null
   pages: [],                // view items: {sha, page, w, h, el, token, rendered, divs, strs}
@@ -183,6 +189,7 @@ async function openPaper(sha, page) {
     S.search = { q: "", hits: [], i: -1 }; $("#searchInput").value = ""; $("#searchCount").textContent = "";
     S.att = []; S.chatDraft = "";
     S.nouns = null; S.nounMarks = new Map(); S.focusNoun = null;
+    S.symbols = null; S.symSpans = []; S.symMarks = new Map();
     await Promise.all([loadAnnotations(), loadQuotes(), loadChat()]);
     await buildView();
     refreshKb();
@@ -807,6 +814,7 @@ async function decorate(p) {
       if (cls) marks.push({ s: m.s, e: m.e, cls, t: `n${m.i}` });
     }
   }
+  if (p.sha === S.sha) for (const m of S.symMarks.get(p.page) ?? []) marks.push({ s: m.s, e: m.e, cls: "sy", t: `y${m.k}` });
   const pi = S.pages.indexOf(p);
   S.search.hits.forEach((x, n) => { if (x.i === pi) marks.push({ s: x.start, e: x.end, cls: n === S.search.i ? "sr sr-cur" : "sr" }); });
   p.divs.forEach((div, i) => {
@@ -838,6 +846,211 @@ async function onPageClick(e) {
   const t = mk.dataset.t;
   const box = mk.getBoundingClientRect();
   if (t[0] === "n") nounPopover(S.nouns?.entries[+t.slice(1)], { left: box.left, top: box.top, bottom: box.bottom }, p);
+  if (t[0] === "y") { clearTimeout(S.symHover); symPopover(S.symSpans[+t.slice(1)], { left: box.left, top: box.top, bottom: box.bottom }, true); }
+}
+
+// ── symbols (variables and equations, step 1) ─────────────────────────────
+/** KaTeX for one LaTeX string (inline unless `display`); the source as text if KaTeX is missing. */
+function tex(latex, display = false) {
+  const el = h("span", { class: display ? "tex tex-d" : "tex" });
+  try { el.innerHTML = window.katex.renderToString(latex, { throwOnError: false, displayMode: display, errorColor: "currentColor", strict: "ignore" }); }
+  catch { el.textContent = latex; }
+  return el;
+}
+/** Text with `$…$` math rendered. */
+function mixed(text) {
+  const out = h("span", { class: "mixed" });
+  String(text ?? "").split(/(\$[^$]+\$)/).forEach((part) => out.append(part.startsWith("$") && part.endsWith("$") && part.length > 2 ? tex(part.slice(1, -1)) : part));
+  return out;
+}
+function gradeChip(g) {
+  const [icon, label] = GRADE[g] ?? ["⚪", g];
+  return h("span", { class: `grade g-${g}`, title: label }, icon, " ", label);
+}
+
+function setSymbols(f) {
+  S.symbols = f;
+  const spans = new Map();
+  (f?.entries ?? []).forEach((e, i) => {
+    for (const o of e.occurrences ?? []) {
+      const k = `${o.page}:${o.s}:${o.e}`;
+      if (!spans.has(k)) spans.set(k, { page: o.page, s: o.s, e: o.e, bbox: o.bbox, latex: o.latex, eq: o.eq, ents: [] });
+      spans.get(k).ents.push(i);
+    }
+  });
+  S.symSpans = [...spans.values()];
+  S.symMarks = new Map();
+  S.symSpans.forEach((sp, k) => {
+    if (!S.symMarks.has(sp.page)) S.symMarks.set(sp.page, []);
+    S.symMarks.get(sp.page).push({ s: sp.s, e: sp.e, k });
+  });
+  S.pages.filter((p) => p.rendered).forEach(decorate);
+  if (S.tab === "symbols") renderSide();
+  renderTabCounts();
+}
+
+function symMeaning(e) {
+  return e.meaning || e.meaning_en || "";
+}
+
+function symPopover(sp, anchor, sticky) {
+  if (!sp) return;
+  const ents = sp.ents.map((i) => S.symbols.entries[i]);
+  const kids = [h("div", { class: "sym-run" }, tex(sp.latex), h("span", { class: "src" }, `p.${sp.page}${sp.eq ? ` · 式 ${sp.eq.replace(/^eq:/, "")}` : ""}`))];
+  for (const e of ents) {
+    const m = symMeaning(e);
+    const ev = e.evidence?.[0];
+    kids.push(h("div", { class: "sym-def" },
+      h("div", { class: "sym-head" }, tex(e.latex ?? e.id), gradeChip(e.grade)),
+      m ? h("div", { class: "sym-mean" }, mixed(m)) : h("div", { class: "muted" }, "這篇裡沒找到定義句。"),
+      ev?.quote ? h("div", { class: "sym-quote" }, mixed(ev.quote), h("span", { class: "src" }, ` p.${ev.page || "?"} · ${RESOLVER[ev.by] ?? ev.by}`)) : null));
+  }
+  if (sticky) kids.push(h("div", { class: "actions" }, h("button", { type: "button", class: "btn small", onclick: () => { hidePop(); setTab("symbols"); setTimeout(() => $(`.sym-item[data-i="${sp.ents[0]}"]`)?.scrollIntoView({ block: "center" }), 60); } }, h("span", { "data-icon": "sigma" }), "在符號表中顯示")));
+  showPop(anchor, ...kids);
+  $("#pop").classList.toggle("hover-pop", !sticky);
+}
+
+function onPageHover(e) {
+  const mk = e.target.closest?.(".mk[data-t^=y]");
+  clearTimeout(S.symHover);
+  if (!mk) return;
+  S.symHover = setTimeout(() => {
+    if (!$("#pop").hidden && !$("#pop").classList.contains("hover-pop")) return;
+    const b = mk.getBoundingClientRect();
+    symPopover(S.symSpans[+mk.dataset.t.slice(1)], { left: b.left, top: b.top, bottom: b.bottom }, false);
+  }, 220);
+}
+function onPageHoverOut(e) {
+  if (!e.target.closest?.(".mk[data-t^=y]")) return;
+  clearTimeout(S.symHover);
+  if ($("#pop").classList.contains("hover-pop") && !e.relatedTarget?.closest?.("#pop")) S.symHover = setTimeout(() => { if ($("#pop").classList.contains("hover-pop")) hidePop(); }, 250);
+}
+
+/** Scroll to a box on a page (fractions, top-left origin) and flash it. */
+function flashBox(page, bbox) {
+  const i = S.pages.findIndex((p) => p.sha === S.sha && p.page === page);
+  if (i < 0) { toast("這一頁不在目前的頁面清單裡", true); return; }
+  const p = S.pages[i];
+  const vpEl = $("#viewport");
+  vpEl.scrollTo({ top: p.el.offsetTop + bbox[1] * p.el.offsetHeight - vpEl.clientHeight * 0.3, behavior: "smooth" });
+  setCur(i);
+  const pad = 0.004;
+  const d = h("div", { class: "boxflash" });
+  Object.assign(d.style, { left: `${(bbox[0] - pad) * 100}%`, top: `${(bbox[1] - pad) * 100}%`, width: `${(bbox[2] - bbox[0] + 2 * pad) * 100}%`, height: `${(bbox[3] - bbox[1] + 2 * pad) * 100}%` });
+  p.el.append(d);
+  setTimeout(() => d.remove(), 2600);
+  if (innerWidth <= 1100) togglePanel("side", false);
+}
+
+function symbolsPane() {
+  const f = S.symbols;
+  if (!f) return [h("p", { class: "empty" }, S.readStatus || "讀取全文…")];
+  const ents = f.entries ?? [];
+  const count = (g) => ents.filter((e) => e.grade === g).length;
+  const out = [];
+  out.push(h("div", { class: "nn-stats" },
+    h("span", {}, `${ents.length} 個符號 · ${f.equations?.length ?? 0} 條獨立方程式`),
+    h("span", { class: "muted" }, Object.keys(GRADE).map((g) => `${GRADE[g][0]} ${count(g)}`).join("　")),
+    h("span", { class: "muted" }, "程式依字型、字級、基線找出數學；定義句用規則找，🟢 一定附原文。不用模型。")));
+  if (f.glyph_errors?.length) out.push(h("div", { class: "warn-box" }, `字形對照表有錯，已略過：${f.glyph_errors.join("；")}`));
+  const sel = h("select", { "aria-label": "等級", onchange: (e) => { S.symView.grade = e.target.value; renderSide(); } },
+    h("option", { value: "" }, "全部等級"), ...Object.entries(GRADE).map(([g, [i, l]]) => h("option", { value: g }, `${i} ${l}`)));
+  sel.value = S.symView.grade;
+  out.push(h("div", { class: "sym-tools" }, sel,
+    h("button", { type: "button", class: "btn small", onclick: () => symbolDialog(null) }, h("span", { "data-icon": "plus" }), "新增"),
+    h("button", { type: "button", class: "ico small", "aria-label": "重新偵測（字形對照表改過之後）", "data-icon": "refresh", onclick: rebuildSymbols }),
+    h("button", { type: "button", class: "ico small", "aria-label": "字形對照表…", "data-icon": "gear", onclick: glyphDialog })));
+  const conv = (e) => (e.tags?.includes("conventional") ? 1 : 0);
+  const shown = ents.map((e, i) => ({ e, i })).filter(({ e }) => !S.symView.grade || e.grade === S.symView.grade).sort((a, b) => conv(a.e) - conv(b.e) || a.i - b.i);
+  const list = h("div", { class: "sym-list" }, shown.length ? shown.map(({ e, i }) => {
+    const occ = e.occurrences ?? [];
+    const pages = [...new Set(occ.map((o) => o.page))];
+    const ev = e.evidence?.[0];
+    return h("div", { class: "sym-item", dataset: { i } },
+      h("div", { class: "sym-head" },
+        h("button", { type: "button", class: "sym-latex", title: e.latex, onclick: () => occ[0] && flashBox(occ[0].page, occ[0].bbox) }, tex(e.latex ?? e.id)),
+        gradeChip(e.grade),
+        e.tags?.includes("conventional") ? h("span", { class: "sym-by", title: "慣用符號（不需要定義）" }, "慣用") : null,
+        h("span", { class: "sym-by" }, RESOLVER[e.resolved_by] ?? e.resolved_by),
+        h("button", { class: "ico small", "aria-label": "編輯", "data-icon": "pen", onclick: () => symbolDialog(e) })),
+      symMeaning(e) ? h("div", { class: "sym-mean" }, mixed(symMeaning(e)), e.meaning && e.meaning_en ? h("span", { class: "muted" }, " · ", mixed(e.meaning_en)) : null) : null,
+      ev?.quote ? h("div", { class: "sym-quote" }, mixed(ev.quote), h("span", { class: "src" }, ` p.${ev.page || "?"}${e.evidence.length > 1 ? ` · 另有 ${e.evidence.length - 1} 句` : ""}`)) : null,
+      e.note ? h("div", { class: "sym-note" }, e.note) : null,
+      h("div", { class: "sym-meta" },
+        h("span", {}, `${occ.length} 次`),
+        ...pages.slice(0, 8).map((pg) => h("button", { type: "button", class: "pg-chip", onclick: () => { const o = occ.find((x) => x.page === pg); flashBox(pg, o.bbox); } }, `p.${pg}`)),
+        pages.length > 8 ? h("span", {}, "…") : null,
+        ...eqChips(e.equations ?? [], f)),
+      !occ.length && e.first == null ? h("div", { class: "muted", style: "font-size:11.5px" }, "（作者加的；這次沒在文中偵測到）") : null);
+  }) : [h("p", { class: "empty" }, "沒有符合的符號。")]);
+  out.push(list);
+  if (f.equations?.length) {
+    out.push(h("h4", { class: "sym-sub" }, "獨立方程式"));
+    out.push(h("div", { class: "sym-list eqs" }, f.equations.map((q) => h("button", { type: "button", class: "eq-item", onclick: () => flashBox(q.page, q.bbox) },
+      h("span", { class: "eq-no" }, q.label ?? "（無編號）"), h("span", { class: "src" }, `p.${q.page}`), q.latex ? h("span", { class: "eq-tex" }, tex(q.latex)) : null))));
+  }
+  return out;
+}
+/** Numbered equations as chips (at most 6); unnumbered ones as one count. */
+function eqChips(ids, f) {
+  const jump = (id) => { const q = f.equations.find((x) => x.id === id); if (q) flashBox(q.page, q.bbox); };
+  const numbered = ids.filter((id) => !/^eq:p\d+-/.test(id));
+  const other = ids.filter((id) => /^eq:p\d+-/.test(id));
+  const out = numbered.slice(0, 6).map((id) => h("button", { type: "button", class: "pg-chip eq", onclick: () => jump(id) }, q_label(id)));
+  if (numbered.length > 6) out.push(h("span", {}, `…另 ${numbered.length - 6} 條`));
+  if (other.length) out.push(h("button", { type: "button", class: "pg-chip eq", title: "無編號的獨立方程式；按一下跳到第一條", onclick: () => jump(other[0]) }, `無編號式 ×${other.length}`));
+  return out;
+}
+const q_label = (id) => (/^eq:p\d+-/.test(id) ? "式（無編號）" : `式 (${id.replace(/^eq:/, "")})`);
+
+async function rebuildSymbols() {
+  try { setSymbols(await api(`/api/papers/${S.sha}/symbols/rebuild`, { body: {} })); toast("已重新偵測（你改過的條目保留）"); }
+  catch (e) { if (e.data?.no_text) readPaper(S.sha); else fail(e); }
+}
+
+async function symbolDialog(e) {
+  const latex = h("input", { value: e?.latex ?? "", placeholder: "例：w_i、\\hat{y}、\\mathbf{x}", class: "mono" });
+  const preview = h("div", { class: "tex-preview" });
+  const paint = () => preview.replaceChildren(latex.value.trim() ? tex(latex.value, true) : h("span", { class: "muted" }, "（預覽）"));
+  latex.addEventListener("input", paint); paint();
+  const zh = h("textarea", { placeholder: "這個符號在這篇論文裡的意思（中文）" }, e?.meaning ?? "");
+  const en = h("input", { value: e?.meaning_en ?? "", placeholder: "原文定義（英文，可用 $…$）" });
+  const note = h("input", { value: e?.note ?? "", placeholder: "備註（可省略）" });
+  let grade = e?.grade && e.grade !== "unresolved" ? e.grade : "certain";
+  const seg = h("div", { class: "seg", role: "group", "aria-label": "等級" });
+  const paintSeg = () => seg.replaceChildren(...Object.entries(GRADE).map(([g, [i, l]]) => h("button", { type: "button", "aria-pressed": g === grade ? "true" : "false", onclick: () => { grade = g; paintSeg(); } }, `${i} ${l}`)));
+  paintSeg();
+  const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (ev) => { ev.preventDefault(); close(true); } },
+    h("h3", {}, e ? "編輯符號" : "新增符號"),
+    e?.evidence?.length ? h("div", { class: "quote-box" }, mixed(e.evidence[0].quote), h("span", { class: "muted" }, ` p.${e.evidence[0].page}`)) : null,
+    h("label", {}, "LaTeX", latex), preview,
+    h("label", {}, "意思", zh), h("label", {}, "原文定義", en),
+    h("div", { style: "display:flex;flex-direction:column;gap:4px" }, h("span", { style: "font-size:12.5px;color:var(--muted)" }, "等級"), seg),
+    h("label", {}, "備註", note),
+    h("p", { class: "muted", style: "margin:0;font-size:12px" }, "你改過的條目記為「作者」，重新偵測不會蓋掉。"),
+    h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"), h("button", { class: "btn primary" }, "儲存"))));
+  if (r !== true) return;
+  const body = { latex: latex.value, meaning: zh.value, meaning_en: en.value, grade, note: note.value };
+  try {
+    if (e) await api(`/api/papers/${S.sha}/symbols/${encodeURIComponent(e.id)}`, { method: "PUT", body });
+    else await api(`/api/papers/${S.sha}/symbols`, { body });
+    setSymbols(await api(`/api/papers/${S.sha}/symbols`));
+    toast("已儲存");
+  } catch (x) { fail(x); }
+}
+
+async function glyphDialog() {
+  let g;
+  try { g = await api("/api/glyphs"); } catch (e) { fail(e); return; }
+  const ta = h("textarea", { class: "mono", style: "min-height:220px", spellcheck: "false" }, g.text);
+  const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (ev) => { ev.preventDefault(); close(true); } },
+    h("h3", {}, "字形對照表"),
+    h("p", { class: "muted", style: "margin:0;font-size:12.5px;overflow-wrap:anywhere" }, `PDF 字元 → LaTeX。這裡只寫要蓋過內建表的條目；存在 ${g.path}。共用的放 private/shared/glyphs.toml。存檔後按「重新偵測」。`),
+    g.errors?.length ? h("div", { class: "warn-box" }, g.errors.join("；")) : null,
+    ta,
+    h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"), h("button", { class: "btn primary" }, "儲存"))));
+  if (r !== true) return;
+  try { await api("/api/glyphs", { method: "PUT", body: { text: ta.value } }); await rebuildSymbols(); } catch (e) { fail(e); }
 }
 
 function toggleTerms() {
@@ -862,6 +1075,7 @@ async function readPaper(sha) {
     if (S.sha !== sha) return;
     S.readStatus = "";
     S.words = r.words;
+    setSymbols(r.symbols);
     setNouns(r.nouns);
     if (r.nouns.classification.pending > 0) classifyNouns(false);
   } catch (e) {
@@ -1156,7 +1370,7 @@ function renderTabCounts() {
   $$(".tabs [data-tab]").forEach((b) => {
     b.setAttribute("aria-selected", b.dataset.tab === S.tab ? "true" : "false");
     const t = b.dataset.tab;
-    const n = t === "notes" ? S.annotations.length : t === "quotes" ? S.quotes.length : t === "nouns" ? (S.nouns?.entries.filter((e) => e.red).length ?? 0) : 0;
+    const n = t === "notes" ? S.annotations.length : t === "quotes" ? S.quotes.length : t === "nouns" ? (S.nouns?.entries.filter((e) => e.red).length ?? 0) : t === "symbols" ? (S.symbols?.entries?.length ?? 0) : 0;
     b.querySelector(".n")?.remove();
     if (n) b.append(h("span", { class: "n" }, n));
   });
@@ -1169,7 +1383,8 @@ function renderSide() {
   $(".composer")?.remove();
   pane.classList.toggle("chat-pane", S.tab === "chat");
   pane.classList.toggle("nouns-pane", S.tab === "nouns");
-  if (S.tab === "nouns") { pane.replaceChildren(...nounsPane()); if (keep != null && $(".nn-table", pane)) $(".nn-table", pane).scrollTop = keep; }
+  if (S.tab === "symbols") pane.replaceChildren(...symbolsPane());
+  else if (S.tab === "nouns") { pane.replaceChildren(...nounsPane()); if (keep != null && $(".nn-table", pane)) $(".nn-table", pane).scrollTop = keep; }
   else if (S.tab === "notes") pane.replaceChildren(...notesPane());
   else if (S.tab === "quotes") pane.replaceChildren(...quotesPane());
   else { pane.replaceChildren(...chatPane()); $("#side").append(composer()); pane.scrollTop = pane.scrollHeight; }
@@ -1297,10 +1512,13 @@ function wire() {
   $("#viewport").addEventListener("scroll", onScroll, { passive: true });
   $("#pages").addEventListener("contextmenu", onContextMenu);
   $("#pages").addEventListener("click", onPageClick);
+  $("#pages").addEventListener("mouseover", onPageHover);
+  $("#pages").addEventListener("mouseout", onPageHoverOut);
+  $("#pop").addEventListener("mouseleave", () => { if ($("#pop").classList.contains("hover-pop")) hidePop(); });
   wireThumbDrag();
   document.addEventListener("mousedown", (e) => {
     if (!e.target.closest("#ctxMenu")) closeMenus();
-    if (!e.target.closest("#pop") && !e.target.closest(".mk[data-t]")) hidePop();
+    if (!e.target.closest("#pop") && !e.target.closest(".mk[data-t]") && !e.target.closest("dialog")) hidePop();
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { closeMenus(); hidePop(); }

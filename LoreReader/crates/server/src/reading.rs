@@ -4,6 +4,10 @@
 //! - the noun list (track A): `GET …/nouns`, `POST …/nouns/classify` (one batched
 //!   `lr-classify-terms` call, cached in `papers/<sha>/nouns.json`), the ignore list
 //!   (`private/LoreReader/ignore-words.txt`, formerly `known-words.txt`);
+//! - the symbol table (variables and equations, step 1, no model):
+//!   `GET …/symbols`, `PUT …/symbols/{id}` (author edits win), `POST …/symbols` (add),
+//!   `POST …/symbols/rebuild`, kept in `papers/<sha>/symbols.json`; the glyph → LaTeX
+//!   override `GET/PUT /api/glyphs` (`private/LoreReader/glyphs.toml`);
 //! - the model menu: `GET/PUT /api/models` (`private/LoreReader/models.json`).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,6 +19,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use lore_llm::LlmRequest;
 use lr_core::nouns::{self, Filters};
+use lr_core::symbols::{self, Evidence, Glyphs, SymbolEntry, SymbolFile};
 use lr_core::text::PaperText;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -88,8 +93,9 @@ pub async fn read_paper(State(s): State<Shared>, Path(sha): Path<String>, Json(t
     }
     let t = Arc::new(t.normalise());
     s.texts.lock().unwrap().insert(sha.clone(), t.clone());
+    let symbols = rebuild_symbols(&s, &sha, &t)?;
     let nouns = nouns_view(&s, &sha).await?;
-    Ok(Json(json!({ "words": t.words(), "pages": t.pages.len(), "nouns": nouns })))
+    Ok(Json(json!({ "words": t.words(), "pages": t.pages.len(), "nouns": nouns, "symbols": symbols })))
 }
 
 /// The noun list now: inventory × KB × ignore list × cached categories.
@@ -206,6 +212,155 @@ pub async fn ignore_remove(State(s): State<Shared>, Json(b): Json<TermBody>) -> 
         lr_core::write_atomic(&p, (kept.join("\n") + "\n").as_bytes()).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?;
     }
     Ok(Json(json!({ "removed": removed })))
+}
+
+// ── symbols ──────────────────────────────────────────────────────────────
+
+pub const GLYPHS_FILE: &str = "glyphs.toml";
+
+/// The glyph table: default, then `private/shared/glyphs.toml`, then the app's own file.
+pub fn glyphs(s: &crate::AppState) -> (Glyphs, Vec<String>) {
+    let shared = s.home.shared_dir().map(|d| d.join(GLYPHS_FILE));
+    let mine = s.workspace.join(GLYPHS_FILE);
+    let mut files: Vec<&FsPath> = vec![];
+    if let Some(p) = shared.as_deref() {
+        files.push(p);
+    }
+    files.push(&mine);
+    Glyphs::load(&files)
+}
+
+fn symbols_view(f: &SymbolFile, glyph_errors: &[String]) -> Value {
+    let mut v = serde_json::to_value(f).unwrap_or(Value::Null);
+    v["grades"] = json!(symbols::GRADES);
+    v["glyph_errors"] = json!(glyph_errors);
+    v
+}
+
+/// Detect, build and merge with what is stored (author / Claude decisions are kept).
+fn rebuild_symbols(s: &crate::AppState, sha: &str, t: &PaperText) -> Result<Value, ApiError> {
+    let (g, errs) = glyphs(s);
+    let det = symbols::detect(t, &g);
+    let new = symbols::build(t, &det, sha);
+    let _g = s.write.lock().unwrap();
+    let old: Option<SymbolFile> = s.papers.load(sha, "symbols.json")?;
+    let merged = symbols::merge(old, new);
+    s.papers.save(sha, "symbols.json", &merged)?;
+    Ok(symbols_view(&merged, &errs))
+}
+
+pub async fn symbols_get(State(s): State<Shared>, Path(sha): Path<String>) -> R {
+    sha_ok(&sha)?;
+    let f: SymbolFile = s.papers.load(&sha, "symbols.json")?.unwrap_or_default();
+    Ok(Json(symbols_view(&f, &glyphs(&s).1)))
+}
+
+pub async fn symbols_rebuild(State(s): State<Shared>, Path(sha): Path<String>) -> R {
+    sha_ok(&sha)?;
+    let t = text_of(&s, &sha)?;
+    Ok(Json(rebuild_symbols(&s, &sha, &t)?))
+}
+
+/// An author's change to one entry (only the fields that are sent).
+#[derive(Deserialize, Default)]
+pub struct SymbolPatch {
+    pub latex: Option<String>,
+    pub meaning: Option<String>,
+    pub meaning_en: Option<String>,
+    pub grade: Option<String>,
+    pub note: Option<String>,
+    /// author (default) | claude | local — who resolved it
+    pub by: Option<String>,
+    /// The evidence for the change (Claude's answer, a quote) and its page.
+    pub evidence: Option<String>,
+    pub page: Option<u32>,
+}
+
+fn apply_patch(e: &mut SymbolEntry, p: SymbolPatch) -> Result<(), ApiError> {
+    if let Some(g) = &p.grade
+        && !symbols::GRADES.contains(&g.as_str())
+    {
+        return Err(bad("等級只能是 certain、defined、inferred、conflict、unresolved"));
+    }
+    let by = p.by.clone().unwrap_or_else(|| "author".into());
+    if !symbols::RESOLVERS.contains(&by.as_str()) || by == "program" {
+        return Err(bad("by 只能是 author、claude 或 local"));
+    }
+    let clean = |x: String| Some(x.trim().to_string()).filter(|x| !x.is_empty());
+    if let Some(l) = p.latex {
+        e.entry.latex = clean(l).or(e.entry.latex.take());
+    }
+    if let Some(m) = p.meaning {
+        e.entry.meaning = clean(m);
+    }
+    if let Some(m) = p.meaning_en {
+        e.entry.meaning_en = clean(m);
+    }
+    if let Some(n) = p.note {
+        e.note = clean(n);
+    }
+    if let Some(g) = p.grade {
+        e.grade = g;
+    }
+    if let Some(ev) = p.evidence.and_then(clean) {
+        e.evidence.push(Evidence { quote: ev, page: p.page.unwrap_or(0), by: by.clone(), at: Some(lr_core::now()), meaning: e.entry.meaning.clone().or(e.entry.meaning_en.clone()) });
+    }
+    e.resolved_by = by;
+    Ok(())
+}
+
+pub async fn symbol_put(State(s): State<Shared>, Path((sha, id)): Path<(String, String)>, Json(p): Json<SymbolPatch>) -> R {
+    sha_ok(&sha)?;
+    let _g = s.write.lock().unwrap();
+    let mut f: SymbolFile = s.papers.load(&sha, "symbols.json")?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, json!({ "error": "這篇論文還沒有符號表" })))?;
+    let e = f.entries.iter_mut().find(|e| e.entry.id == id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, json!({ "error": format!("沒有符號 {id}") })))?;
+    apply_patch(e, p)?;
+    let out = e.clone();
+    s.papers.save(&sha, "symbols.json", &f)?;
+    Ok(Json(json!({ "entry": out })))
+}
+
+/// The author adds a symbol the detection missed.
+pub async fn symbol_add(State(s): State<Shared>, Path(sha): Path<String>, Json(p): Json<SymbolPatch>) -> Result<(StatusCode, Json<Value>), ApiError> {
+    sha_ok(&sha)?;
+    let latex = p.latex.clone().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).ok_or_else(|| bad("需要 LaTeX"))?;
+    let _g = s.write.lock().unwrap();
+    let mut f: SymbolFile = s.papers.load(&sha, "symbols.json")?.unwrap_or_else(|| SymbolFile { schema: symbols::SYMBOLS_SCHEMA.into(), sha256: sha.clone(), ..Default::default() });
+    let key = lore_notation::math::canonical(&latex);
+    if f.entries.iter().any(|e| e.entry.latex.as_deref() == Some(key.as_str())) {
+        return Err(bad("符號表裡已經有這個符號"));
+    }
+    let mut id = format!("a-{}", key.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>());
+    while f.entries.iter().any(|e| e.entry.id == id) {
+        id.push('x');
+    }
+    let mut entry = lore_notation::Entry::new(&id, lore_notation::Kind::Symbol);
+    entry.latex = Some(key);
+    let mut e = SymbolEntry { entry, scope: sha.clone(), grade: "inferred".into(), resolved_by: "author".into(), evidence: vec![], occurrences: vec![], first: None, equations: vec![], note: None };
+    apply_patch(&mut e, SymbolPatch { latex: None, ..p })?;
+    f.entries.push(e.clone());
+    s.papers.save(&sha, "symbols.json", &f)?;
+    Ok((StatusCode::CREATED, Json(json!({ "entry": e }))))
+}
+
+const GLYPHS_TEMPLATE: &str = "# 你自己的字形 → LaTeX 對照（蓋過內建的；格式同 LoreReader/crates/core/src/glyphs.toml）。\n# 例：\n# [glyphs]\n# \"ε\" = \"\\\\epsilon\"\n# [fonts]\n# math = [\"MyMathFont\"]\n";
+
+pub async fn glyphs_get(State(s): State<Shared>) -> R {
+    let p = s.workspace.join(GLYPHS_FILE);
+    let text = std::fs::read_to_string(&p).unwrap_or_else(|_| GLYPHS_TEMPLATE.into());
+    Ok(Json(json!({ "text": text, "path": p, "errors": glyphs(&s).1 })))
+}
+
+#[derive(Deserialize)]
+pub struct GlyphsBody {
+    pub text: String,
+}
+
+pub async fn glyphs_put(State(s): State<Shared>, Json(b): Json<GlyphsBody>) -> R {
+    let n = Glyphs::validate(&b.text).map_err(|e| bad(format!("字形對照表有錯：{e}")))?;
+    let _g = s.write.lock().unwrap();
+    lr_core::write_atomic(&s.workspace.join(GLYPHS_FILE), b.text.as_bytes()).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?;
+    Ok(Json(json!({ "entries": n })))
 }
 
 // ── model menu ───────────────────────────────────────────────────────────

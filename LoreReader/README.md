@@ -3,7 +3,7 @@
 本機運作的 PDF 論文閱讀器。目標是用最短時間弄清楚一篇論文裡自己需要掌握什麼：沒學過的術語標成紅色、已在知識庫的術語顯示熟悉度；讀的時候存「引用句」（之後在 PaperComposer 引用）、加註記、翻譯、問 Claude。知識庫只放真正消化過的東西，所以**只有按「加入知識庫」才會建立卡片**，不會自動寫入。
 
 > 原型 v0。已完成：書庫（repo 外、sha256 命名）、pdf.js 閱讀（文字層、縮放、搜尋、延遲繪製、縮圖）、不破壞原檔的頁面操作（刪除、複製、拖曳排序、從其他 PDF 插入、合併）、列印、螢光標記與註記、選取文字右鍵選單（複製、翻譯、問 Claude、存成引用句、加入知識庫）、知識標示（紅色＝沒有卡片）、從知識庫卡片連回 PDF 那一頁。
-> 閱讀輔助（第二階段）：名詞整理（整篇詞表對知識庫、模型一次分類、忽略清單）、每個工作可選模型。
+> 閱讀輔助（第二階段）：名詞整理（整篇詞表對知識庫、模型一次分類、忽略清單）、符號與方程式表（不靠模型）、每個工作可選模型。
 > 不在範圍：編輯 PDF 內容、投影片精靈（之後在 SlideComposer）、把註記寫進 PDF 檔（之後可做）。
 
 ## 執行
@@ -49,6 +49,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `annotations.json` | `schema: "lorereader.annotations/1"`，`annotations: [{id, page, kind: "highlight" \| "note", color: yellow\|green\|blue\|pink, quote: {exact, prefix, suffix}, rects: [[x0,y0,x1,y1]…], note, created_at, updated_at}]`。`rects` 是相對於頁面的比例（左上為原點），所以任何縮放都對得上；`quote` 是原文與前後文，之後換渲染方式也能重新定位 |
 | `quotes.json` | 引用句。`schema: "lorereader.quotes/1"`，`quotes: [{id, text, page, note, created_at}]`。`note` 是一行備註（可空白） |
 | `chat.json` | 問 Claude 的對話。`schema: "lorereader.chat/1"`，`messages: [{role: user\|assistant, text, attachments: [{text, page, context}], at, engine}]` |
+| `symbols.json` | 符號表。`schema: "lorereader.symbols/1"`，`sha256`，`generated_at`，`entries`：lore-notation 登錄的欄位（`id`、`kind: "symbol"`、`latex`、`meaning`、`meaning_en`、`defined_at`、`tags`…）加上 `scope`（論文 sha256）、`grade`（`certain` ✅／`defined` 🟢／`inferred` 🟡／`conflict` 🔴／`unresolved` ⚪）、`resolved_by`（`program`／`local`／`claude`／`author`）、`evidence: [{quote, page, by, at?, meaning?}]`、`occurrences: [{page, s, e, bbox, latex, eq?}]`、`first: {page, sentence}`、`equations: [id]`、`note`；`equations`：lore-notation 的 `equation` 條目（`id`、`label: "(3)"`、`latex`、`uses`）加上 `page`、`number`、`bbox`、`s`、`e`。`bbox` 是頁面比例、左上為原點 |
 | `nouns.json` | 名詞分類的快取。`schema: "lorereader.nouns/1"`，`categories: {<詞的正規化 key>: 分類}`，`asked: [已經送給模型的 key]`，`engine`，`classified_at`。名詞清單本身每次開檔重算（全文不寫進工作區） |
 
 工作區根目錄另有 `ignore-words.txt`（忽略清單，一行一個字或詞組，`#` 之後是註解）與 `models.json`（`{schema: "lorereader.models/1", choices: {<任務>: auto\|local\|haiku\|sonnet\|opus}}`）。
@@ -59,7 +60,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 ## 閱讀
 
-- 左邊縮圖、中間頁面、右邊面板（名詞／註記／引用句／對話）；窄螢幕時縮圖與面板變成抽屜。深色／淺色與其他 App 相同（右上角切換）。
+- 左邊縮圖、中間頁面、右邊面板（名詞／符號／註記／引用句／對話）；窄螢幕時縮圖與面板變成抽屜。深色／淺色與其他 App 相同（右上角切換）。
 - pdf.js 文字層可以選取文字；縮放、符合寬度、頁碼跳頁、全文搜尋（⌘/Ctrl＋F，Enter 下一個）。只繪製視窗附近的頁面，縮圖捲到才畫。
 
 ## 頁面操作（不破壞原檔）
@@ -112,6 +113,22 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 **已知限制**：人名、地名要靠模型分類才不會標紅；日常英文字表裡、又不在 `TERMLIKE` 的字（例如 network、image、model）不會列出，若某個領域需要，請告訴 Claude 加進 `TERMLIKE`；希臘字母與單一字母是變數，屬於「符號」，不在名詞清單；數字加單位不處理。
 
+## 符號與方程式（第一步：不靠模型）
+
+開檔時用同一份全文（每個 pdf.js 文字項目的字型名稱、字級、基線位置）找出數學，不呼叫任何模型（`lr-core` 的 `symbols`）：
+
+- **行內數學**：數學字型（Computer／Latin Modern 的 CMMI、CMSY、CMEX、MSBM…、STIX／STIX Two Math、Cambria Math、XITS、TeX Gyre／New CM Math、Euler）、Unicode 數學字母與希臘字母，或正體內文裡單獨一個斜體（粗體）字母，都算數學。比前一個數學字小、而且升高或降低的是上下標，更小的再巢狀（`\mathbb{P}_{\theta_{t}}`、`\mathbb{P}_{\theta^{\prime}}`）；疊在字母上方的 ˆ ˜ ¯ ˙ ¨ 依位置變成 `\hat{}` 等；數學之間的 `= ( ) , |` 與 `log`、`max` 這類字接起來。
+- **字形 → LaTeX**：內建表 `crates/core/src/glyphs.toml`（希臘字母、運算子、關係符號、重音）加上 Unicode 數學字母（𝐱 → `\mathbf{x}`、𝒙 → `\boldsymbol{x}`、𝓛 → `\mathcal{L}`…）；沒有 ToUnicode 的 TeX 字型用字型編碼對照（CMMI 的 OML、CMSY 的 OMS、CMR 的 OT1、CMEX 的大型運算子，例如舊版 pdfTeX 把 `\epsilon` 輸出成字碼 15）。**自己的對照**：`private/shared/glyphs.toml`（各 App 共用）與 `private/LoreReader/glyphs.toml`（「符號」分頁的齒輪按鈕可以直接編輯；存檔後按「重新偵測」），只寫要蓋過的條目。
+- **獨立方程式**：大部分是數學、在欄內大致置中、右邊有 `(n)` 的一行；上下相鄰的置中數學行（分數、多行對齊）併成同一條；編號單獨在兩行中間也認得。記錄頁碼、範圍（bbox）與編號，LaTeX 盡力而為。
+- **符號**：每段數學的 LaTeX 用 lore-notation 自己的解析器讀出符號，所以 key 與 lore-notation 一致（`\bm{x}_i` → `\boldsymbol{x}`，索引字母 i、j、k… 不算）。ℝ、𝔼 這類慣用符號標「慣用」、排在最後。
+- **定義句**：規則比對「where ⟦x⟧ is/denotes/represents …」「⟦x⟧ denotes …」「let ⟦x⟧ be …」「we denote … by ⟦x⟧」（「is/are」後面要接 the/a/an）。**只有附上原文那一句與頁碼時才給 🟢**。同一篇裡同一個符號找到兩種不同的定義是 🔴 衝突（不是和作者自己的 notation 比）。沒找到是 ⚪。程式不給 ✅ 和 🟡（✅ 留給作者或原始檔，🟡 留給之後的模型推測）。
+
+**右邊「符號」分頁**：每個符號用 KaTeX 顯示，附等級、意思、定義原句與頁碼、出現次數與頁碼（點一下跳過去並閃一下位置）、用到它的方程式；可依等級篩選；最後列出獨立方程式。每一筆都能編輯（LaTeX、中文意思、原文定義、等級、備註），作者改過的記為 `resolved_by: author`，重新偵測不會蓋掉；也可以「新增」偵測漏掉的符號。**滑鼠停在內文的變數上**會出現小視窗，顯示這段數學裡每個符號的定義。
+
+**準確度**（`tests/math_ground_truth.rs`）：三篇合成 LaTeX 論文（`crates/core/tests/math/paperN.tex`，pdflatex 編譯，pdf.js 項目存成 JSON；PDF 不留），以 lore-notation 掃描原始檔得到的符號為標準答案：精確率 1.00、召回率 0.98（82／84；漏掉 `\Delta_n` 與 `\mathbf{0}`）；有編號的方程式 7／7。`cargo run -p lr-core --example symbols_json -- 頁面.json --tex 原始檔.tex` 可以拿自己論文的 LaTeX 原始檔算同樣的數字。
+
+**已知限制**：分數 `\frac{a}{b}` 在行內常被讀成上下標；大型運算子上下的極限（`\sum_{i=1}^{N}`）方向可能顛倒；括號後面的下標（`(\ldots)_{t}`）接不上；寬的 `\bar`、`\widehat` 若是畫線而不是字形就抓不到；同一個字母在 CM 字型裡 `\phi` 與 `\varphi` 分不出來（都當 `\phi`）；圖說等小字級裡的上下標偶爾漏掉；無編號的獨立方程式會偵測得比實際多。
+
 ### 模型選單
 
 工具列的 ✦ 按鈕：名詞分類、段落分析、問 Claude、翻譯，各自選「自動」（照 `tasks.toml` 的預設順序）、地端、Haiku、Sonnet 或 Opus，做法同 PaperComposer 的模型選單（`complete_on`）。選了某一個就只用那一個，用不了會直接說原因，不會偷偷改用別的。選擇存在 `private/LoreReader/models.json`。
@@ -134,6 +151,8 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `POST /api/translate` | `{text, context?}` |
 | `POST /api/papers/{sha}/read` | 頁面送來的全文（每頁的文字與 pdf.js 項目：字型名稱、字級、位置）→ 名詞清單 |
 | `GET /api/papers/{sha}/nouns`、`POST …/nouns/classify` | 名詞清單（每個詞的 key、寫法、來源、知識庫狀態、分類、次數、出現位置 `[頁, 起, 迄]`）；`{again?}` → 一次 `lr-classify-terms` |
+| `GET/POST /api/papers/{sha}/symbols`、`PUT …/symbols/{id}`、`POST …/symbols/rebuild` | 符號表；新增；修改 `{latex?, meaning?, meaning_en?, grade?, note?, by?, evidence?, page?}`（作者的修改優先）；重新偵測 |
+| `GET/PUT /api/glyphs` | 自己的字形 → LaTeX 對照（`private/LoreReader/glyphs.toml`） |
 | `POST/DELETE /api/ignore` | `{term}` → 加進／移出忽略清單 |
 | `GET/PUT /api/models` | 模型選單：`{task, model}` |
 | `GET /api/kb/status`、`POST /api/kb/cards`、`POST /api/kb/draft`、`GET /api/kb/nodes/{id}` | KnowledgeBase（建立卡片只在明確操作時） |
@@ -142,6 +161,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 ## 第三方元件
 
+- [KaTeX](https://katex.org)（MIT）0.16.47，放在 `web/vendor/katex/`（與 PaperComposer 相同；`LICENSE` 隨附）：符號與方程式的顯示。
 - [pdf.js](https://github.com/mozilla/pdf.js)（Mozilla，Apache-2.0）5.7.284，放在 `web/vendor/pdfjs/`（`LICENSE` 隨附）。標準字型：Foxit（BSD 風格授權，`standard_fonts/LICENSE_FOXIT`）與 Liberation（SIL OFL 1.1，`standard_fonts/LICENSE_LIBERATION`）。文字層的 CSS 取自 pdf.js 的 `pdf_viewer.css`。
 - [lopdf](https://github.com/J-F-Liu/lopdf)（MIT）：頁面操作。
 

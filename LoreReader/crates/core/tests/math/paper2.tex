@@ -1,0 +1,35 @@
+% Synthetic test paper 2 (invented content): nested scripts, expectations over
+% distributions, norms with subscripts, sup/inf, a parametrised family and a
+% second definition of one symbol (a conflict). Never a real paper.
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb}
+\begin{document}
+\section{Setting}
+Let $\mathbb{P}_r$ be a target distribution over a space $\mathcal{X}$, and let
+$\mathbb{P}_{\theta}$ be a model distribution with parameters $\theta \in \mathbb{R}^{d}$.
+A sequence $(\mathbb{P}_{\theta_t})_{t \in \mathbb{N}}$ is produced by the optimiser.
+The generator $g_{\theta}$ maps a noise vector $z$ to a sample, and the critic $f_w$ has
+weights $w \in \mathcal{W}$. We use the transport distance
+\begin{equation}
+  W(\mathbb{P}_r, \mathbb{P}_{\theta}) = \sup_{\|f\|_L \leq 1} \mathbb{E}_{x \sim \mathbb{P}_r}[f(x)] - \mathbb{E}_{x \sim \mathbb{P}_{\theta}}[f(x)],
+\end{equation}
+where $\|f\|_L$ denotes the Lipschitz constant of $f$. The critic is trained for
+$n_{\mathrm{critic}}$ steps with clipping constant $c$ and step size $\alpha$.
+\begin{equation}
+  \max_{w \in \mathcal{W}} \mathbb{E}_{x \sim \mathbb{P}_r}[f_w(x)] - \mathbb{E}_{z \sim p(z)}[f_w(g_{\theta}(z))].
+\end{equation}
+\section{Analysis}
+Let $\Pi(\mathbb{P}_r, \mathbb{P}_{\theta})$ denote the set of all couplings, and let
+$\gamma$ be a coupling with marginals $\mathbb{P}_r$ and $\mathbb{P}_{\theta}$. Here $m$ is the
+batch size. In the appendix, $m$ denotes the number of critic samples instead, and $K$ is a
+Lipschitz constant. For two parameter values the distance
+$W(\mathbb{P}_{\theta}, \mathbb{P}_{\theta'})$ compares $g_{\theta'}$ with $g_{\theta}$, and
+\begin{equation}
+\begin{split}
+  \| g_{\theta}(z) - g_{\theta'}(z) \| &\leq L(\theta, z) \, \| \theta - \theta' \| \\
+  &\leq C \, \| \theta - \theta' \|.
+\end{split}
+\end{equation}
+The infimum $\inf_{\gamma} \mathbb{E}_{(x, y) \sim \gamma} \|x - y\|$ is
+attained.
+\end{document}

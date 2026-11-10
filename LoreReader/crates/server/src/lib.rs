@@ -20,6 +20,10 @@
 //! | POST | /api/papers/{sha}/read | the page's pdf.js text (all pages, items with fonts and positions) → noun list |
 //! | GET | /api/papers/{sha}/nouns | the noun list (inventory × KB × ignore list × cached categories) |
 //! | POST | /api/papers/{sha}/nouns/classify | `{again?}` → one batched `lr-classify-terms` call |
+//! | GET/POST | /api/papers/{sha}/symbols | the symbol table / the author adds `{latex, meaning?…}` |
+//! | PUT | /api/papers/{sha}/symbols/{id} | `{latex?, meaning?, meaning_en?, grade?, note?, by?, evidence?, page?}` (author edits win) |
+//! | POST | /api/papers/{sha}/symbols/rebuild | detect again (after a glyph-table change) |
+//! | GET/PUT | /api/glyphs | the author's glyph → LaTeX override (`glyphs.toml`) |
 //! | POST/DELETE | /api/ignore | `{term}` → add to / remove from `ignore-words.txt` (「這不是術語」) |
 //! | GET/PUT | /api/models | the model menu: `{task, model: auto\|local\|haiku\|sonnet\|opus}` |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
@@ -182,6 +186,10 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{sha}/nouns", get(reading::nouns_get))
         .route("/api/papers/{sha}/nouns/classify", post(reading::classify))
         .route("/api/ignore", post(reading::ignore_add).delete(reading::ignore_remove))
+        .route("/api/papers/{sha}/symbols", get(reading::symbols_get).post(reading::symbol_add))
+        .route("/api/papers/{sha}/symbols/rebuild", post(reading::symbols_rebuild))
+        .route("/api/papers/{sha}/symbols/{id}", put(reading::symbol_put))
+        .route("/api/glyphs", get(reading::glyphs_get).put(reading::glyphs_put))
         .route("/api/models", get(reading::models_get).put(reading::models_put))
         .route("/api/kb/status", get(kb_status))
         .route("/api/kb/cards", post(kb_card))

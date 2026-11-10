@@ -10,6 +10,7 @@ edition.workspace = true
 lr-core = { path = "../core" }
 lore-home.workspace = true
 lore-llm.workspace = true
+lore-notation.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

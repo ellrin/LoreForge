@@ -383,3 +383,54 @@ async fn counting_engine(reply: &'static str) -> (String, Arc<Mutex<usize>>) {
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     (format!("http://{addr}/v1"), hits)
 }
+
+#[tokio::test]
+async fn symbol_table_detected_edited_and_kept() {
+    let e = setup(&dead_url(), None);
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    // The pdf.js items of a synthetic LaTeX paper (lr-core's test fixture).
+    let items: Value = serde_json::from_slice(&std::fs::read(lr_server::repo_dir().join("crates/core/tests/math/paper1.items.json")).unwrap()).unwrap();
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(items.clone()), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let syms = &v["symbols"];
+    assert_eq!(syms["schema"], "lorereader.symbols/1");
+    let find = |v: &Value, latex: &str| v["entries"].as_array().unwrap().iter().find(|x| x["latex"] == latex).cloned().unwrap_or_else(|| panic!("{latex}"));
+    let w = find(syms, "w");
+    assert_eq!((w["grade"].as_str(), w["resolved_by"].as_str(), w["kind"].as_str()), (Some("defined"), Some("program"), Some("symbol")));
+    assert!(w["evidence"][0]["quote"].as_str().unwrap().contains("weight of pixel"));
+    assert_eq!(w["scope"], sha);
+    assert!(syms["equations"].as_array().unwrap().iter().any(|q| q["label"] == "(1)"));
+    let file = e.root.join("ws/papers").join(&sha).join("symbols.json");
+    assert!(file.is_file());
+
+    // The author edits an entry: it wins over a re-run.
+    let f = find(syms, "\\eta");
+    let id = f["id"].as_str().unwrap();
+    let (s, v, _) = call(&e.app, "PUT", &format!("/api/papers/{sha}/symbols/{id}"), Some(json!({ "meaning": "分割網路", "grade": "certain" })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["entry"]["resolved_by"], "author");
+    let (s, _, _) = call(&e.app, "PUT", &format!("/api/papers/{sha}/symbols/{id}"), Some(json!({ "grade": "great" })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(items), None).await;
+    let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/symbols/rebuild"), None, None).await;
+    let f = find(&v, "\\eta");
+    assert_eq!((f["meaning"].as_str(), f["grade"].as_str(), f["resolved_by"].as_str()), (Some("分割網路"), Some("certain"), Some("author")));
+    assert!(!f["occurrences"].as_array().unwrap().is_empty());
+    // Claude's answer written back: grade up, resolved_by claude, the evidence kept.
+    let k = find(&v, "\\kappa");
+    let (_, v, _) = call(&e.app, "PUT", &format!("/api/papers/{sha}/symbols/{}", k["id"].as_str().unwrap()), Some(json!({ "meaning": "輪廓的曲率", "grade": "inferred", "by": "claude", "evidence": "κ_i 是第 i 個像素所在輪廓的曲率（Claude 的回答）", "page": 1 })), None).await;
+    assert_eq!((v["entry"]["resolved_by"].as_str(), v["entry"]["evidence"][0]["by"].as_str()), (Some("claude"), Some("claude")));
+    // The author adds a symbol.
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/symbols"), Some(json!({ "latex": "\\bm{v}", "meaning": "速度" })), None).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["entry"]["latex"], "\\boldsymbol{v}");
+
+    // The glyph override: invalid text is refused, valid text is saved.
+    let (s, _, _) = call(&e.app, "PUT", "/api/glyphs", Some(json!({ "text": "[glyphs\n" })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _, _) = call(&e.app, "PUT", "/api/glyphs", Some(json!({ "text": "[glyphs]\n\"ϰ\" = \"\\\\kappa\"\n" })), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(e.root.join("ws/glyphs.toml").is_file());
+    let (_, v, _) = call(&e.app, "GET", "/api/glyphs", None, None).await;
+    assert!(v["text"].as_str().unwrap().contains("kappa"));
+}

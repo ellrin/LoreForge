@@ -1,0 +1,32 @@
+% Synthetic test paper 3 (invented content): two columns, numbered display equations,
+% hats, tildes, bars, bold symbols and calligraphic letters. Never a real paper.
+\documentclass[10pt,twocolumn]{article}
+\usepackage{amsmath,amssymb,bm}
+\begin{document}
+\section{Model}
+Each observation $\mathbf{y}_n \in \mathbb{R}^{D}$ is explained by a latent code
+$\mathbf{z}_n$ through a decoder $p_{\phi}(\mathbf{y}_n \mid \mathbf{z}_n)$, where $\phi$
+denotes the decoder weights. The encoder $q_{\psi}$ outputs a mean $\bm{\mu}_n$ and a
+scale $\bm{\sigma}_n$. The evidence lower bound is
+\begin{equation}
+  \mathcal{E}(\phi, \psi) = \sum_{n=1}^{N} \mathbb{E}_{q_{\psi}} [\log p_{\phi}(\mathbf{y}_n \mid \mathbf{z}_n)] - \beta \, \Delta_n,
+\end{equation}
+where $\beta$ is the weight of the regulariser and $\Delta_n$ is the divergence of item $n$.
+Some more words fill this column so that it looks like a paper with several lines of
+running text and the equation sits in the middle of it.
+\begin{equation}
+  \tilde{\mathbf{z}}_n = \bm{\mu}_n + \bm{\sigma}_n \odot \bm{\epsilon}, \quad \bm{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}).
+\end{equation}
+The reconstruction $\hat{\mathbf{y}}_n$ is compared with $\mathbf{y}_n$; the average
+$\bar{r}$ of the residuals $r_n$ is reported. We let $\tau$ be the temperature and $\Gamma$
+the set of admissible schedules.
+\section{Training}
+We train for $T$ epochs with batch size $B$ and learning rate $\eta_0$, decayed as
+\begin{equation}
+  \eta_t = \eta_0 \, \gamma^{t / T},
+\end{equation}
+where $\gamma$ is the decay factor. The gradient norm $\|\mathbf{g}_t\|_2$ is clipped at
+$G$. Validation uses the score $S_k$ of fold $k$; the mean $\bar{S}$ and spread $s$ are
+given in the table. Further words follow here to fill the second column with plain text
+as a paper would, without any additional symbols at all in these final sentences.
+\end{document}

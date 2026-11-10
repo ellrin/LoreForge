@@ -314,3 +314,40 @@ dialog .quote-box { font-size: 13px; background: var(--surface); border-left: 3p
 .model-row { display: flex; flex-direction: column; gap: 6px; }
 .model-row b { font-size: 13.5px; }
 .model-row .seg { flex-wrap: wrap; }
+
+/* ── Symbols ─────────────────────────────────────────────────────── */
+.textLayer span.sy { box-shadow: inset 0 -.08em 0 color-mix(in srgb, var(--sel) 70%, transparent); cursor: help; }
+.boxflash { position: absolute; z-index: 3; pointer-events: none; border: 2px solid #ff6b35; border-radius: 3px; background: #ff6b3522; animation: flash 1.2s ease-out 2; }
+.tex .katex { font-size: 1.08em; }
+.tex-d .katex-display { margin: 4px 0; }
+.mixed .tex .katex { font-size: 1em; }
+.grade { display: inline-flex; gap: 2px; align-items: center; font: 500 11px var(--sans); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 10px; padding: 0 6px; white-space: nowrap; }
+.grade.g-conflict { color: var(--err); border-color: currentColor; }
+.grade.g-defined, .grade.g-certain { color: var(--ok); border-color: currentColor; }
+.grade.g-inferred { color: var(--warn); border-color: currentColor; }
+.sym-tools { display: flex; gap: 6px; align-items: center; }
+.sym-tools select { height: 28px; font-size: 12.5px; flex: 1; min-width: 0; }
+.sym-list { display: flex; flex-direction: column; gap: 6px; }
+.sym-item { background: var(--surface); border: 1px solid transparent; border-radius: var(--r); padding: 7px 8px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.sym-item:hover { border-color: var(--line-strong); }
+.sym-head { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.sym-head .ico { margin-left: auto; }
+.sym-latex { background: none; border: 0; padding: 0 2px; color: var(--text); font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
+.sym-latex:hover { color: var(--accent-text); }
+.sym-by { font: 500 10.5px var(--mono); color: var(--faint); white-space: nowrap; }
+.sym-mean { overflow-wrap: anywhere; line-height: 1.5; }
+.sym-quote { font-size: 12px; color: var(--muted); border-left: 2px solid var(--accent-text); padding-left: 6px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; line-height: 1.5; }
+.sym-note { font-size: 12px; color: var(--accent-text); }
+.sym-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font: 500 11px var(--mono); color: var(--faint); }
+.pg-chip { font: 500 11px var(--mono); color: var(--accent-text); background: none; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 5px; }
+.pg-chip:hover { border-color: var(--accent-text); }
+.pg-chip.eq { font-family: var(--sans); }
+.sym-sub { margin: 6px 0 0; font: 600 12px var(--mono); color: var(--muted); }
+.eq-item { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 8px; align-items: center; text-align: left; background: var(--surface); border: 1px solid transparent; border-radius: var(--r); padding: 5px 8px; color: var(--text); }
+.eq-item:hover { border-color: var(--line-strong); }
+.eq-no { font: 600 12px var(--mono); color: var(--accent-text); white-space: nowrap; }
+.eq-tex { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; font-size: 12px; }
+.sym-run { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; font-size: 15px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.sym-def { display: flex; flex-direction: column; gap: 4px; }
+.pop .sym-quote { -webkit-line-clamp: 4; }
+.tex-preview { min-height: 34px; padding: 4px 8px; background: var(--surface); border-radius: var(--r); overflow-x: auto; }

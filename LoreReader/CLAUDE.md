@@ -29,7 +29,13 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   offsets shared with the page), `nouns` (track A noun list: inventory, KB n-grams 2–4 over
   titles + aliases, normalisation, `function_words.txt` / `academic_words.txt` /
   `common_words.txt` minus `TERMLIKE`, ignore list, batched classification prompt + schema),
+  `symbols` (step 1 of variables/equations, no model: math runs from item fonts / sizes /
+  baselines / accent positions, `glyphs.toml` + overrides + TeX font-encoding tables (OML /
+  OMS / OT1 / CMEX), display equations, regex definition finder, `SymbolFile` with
+  lore-notation `Entry` + scope / grade / resolved_by, `merge` keeps author / Claude edits),
   `synth` (synthetic PDFs, incl. the ≈8,000-word `long_paper` — never a real paper).
+  `tests/math/`: synthetic LaTeX papers + their pdf.js items (`dump-items.js`); the PDFs are
+  not kept. `examples/symbols_json.rs --tex` = precision / recall against a LaTeX source.
 - `crates/server` (`lr-server`): axum on 127.0.0.1:7890; handlers are plain async fns over
   `Shared`. `kb.rs` = KnowledgeBase client (read only except `POST /api/nodes`, only from
   the author's action, `initial_state` learning|known; `lexicon()` = `GET /api/nodes` titles +
@@ -65,9 +71,12 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
 - Theme: `web/theme.js` = `data-mode` on `<html>`, `lr.mode` in localStorage, then
   `window.LORE_PREFS.theme` from `/prefs.js` (always `null` today). **Later**: a shared, synced
   theme in lore-home prefs fills `theme` server-side in `prefs_js`; pages need no change.
-- Next phase (keep compatible): the per-paper symbol/equation table goes in
-  `papers/<sha256>/` with lore-notation's registry fields + paper scope, grade, who resolved it;
-  the shared glyph→LaTeX table is separate.
+- Symbol table: `papers/<sha256>/symbols.json` (lore-notation fields + scope, grade,
+  resolved_by). Grades are evidence-based: the program gives 🟢 only with the quoted sentence,
+  🔴 only for two definitions in the same paper (never vs the author's notation). Keys are
+  lore-notation canonical keys; ground truth in tests = lore-notation's scan of the source.
+  Glyph table: default in lr-core, overrides `private/shared/glyphs.toml` then
+  `private/LoreReader/glyphs.toml`. KaTeX in `web/vendor/katex` (MIT, same as PaperComposer).
 
 ## Not tested on real hardware
 

@@ -1,0 +1,25 @@
+% Synthetic test paper 1 (invented content, never a real paper): inline math with
+% sub/superscripts, hats, bold vectors, Greek letters and numbered display equations.
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,bm}
+\begin{document}
+\section{Method}
+We segment an image $\mathbf{x} \in \mathbb{R}^{H \times W}$ into a mask. Let $\theta$ be the
+parameters of the network $f_{\theta}$, and let $\hat{y}_i$ denote the predicted probability
+of pixel $i$. The reference label is $y_i \in \{0, 1\}$, where $N$ is the number of pixels.
+The weighted loss is
+\begin{equation}
+  \mathcal{L}_{\mathrm{CE}} = -\frac{1}{N} \sum_{i=1}^{N} w_i \left[ y_i \log \hat{y}_i + (1 - y_i) \log (1 - \hat{y}_i) \right],
+\end{equation}
+where $w_i$ is the weight of pixel $i$. The boundary term uses the curvature $\kappa_i$ of the
+contour, and $\lambda$ denotes the balance between both terms:
+\begin{equation}
+  \mathcal{L} = \mathcal{L}_{\mathrm{CE}} + \lambda \sum_{i} \kappa_i^{2} \, \| \nabla \hat{y}_i \|.
+\end{equation}
+The optimiser updates $\theta_{t+1} = \theta_t - \eta \nabla_{\theta} \mathcal{L}$ with learning
+rate $\eta$ and momentum $\beta$. We write $\bm{\mu}$ for the mean feature vector and
+$\sigma^{2}$ for its variance, so that the normalised feature is $\tilde{\mathbf{z}}$.
+\section{Results}
+On average the Dice score $D$ rises; the ratio $\rho = D / D_{0}$ exceeds one, where $D_{0}$ is
+the score of the baseline. The bound $\bar{\epsilon}$ stays small for every $\alpha \in (0, 1)$.
+\end{document}
