@@ -492,7 +492,8 @@ mod tests {
         let texts: Vec<&str> = paras.iter().map(|p| p.text.as_str()).collect();
         assert_eq!(texts, ["The anisotropic prior helps. It is new.", "Second paragraph about $w$ here.", "We use it."]);
         assert_eq!(paras[2].section_kind, "method");
-        let inv = crate::nouns::inventory(&p, &[], &crate::nouns::Filters::default(), &Default::default());
+        let cats: std::collections::HashMap<String, String> = [("anisotropic".to_string(), "方法".to_string())].into();
+        let inv = crate::nouns::inventory(&p, &[], &crate::nouns::Filters::default(), &cats);
         let mut paras = paras;
         attach_chips(&mut paras, &inv, &SymbolFile::default());
         assert!(paras[0].chips.terms.contains(&"anisotropic".to_string()), "{:?}", paras[0].chips);

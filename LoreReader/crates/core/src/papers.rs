@@ -253,6 +253,18 @@ impl Papers {
         Ok(m)
     }
 
+    /// 「我的論文」: the author's own (published or co-authored) paper.
+    pub fn set_mine(&self, sha: &str, on: bool) -> Result<PaperMeta> {
+        let mut m = self.meta(sha)?.ok_or_else(|| Error::NotFound(sha.into()))?;
+        if on {
+            m.extra.insert("mine".into(), Value::Bool(true));
+        } else {
+            m.extra.remove("mine");
+        }
+        write_json(&self.folder(sha)?.join("paper.json"), &m)?;
+        Ok(m)
+    }
+
     /// Every paper with a `paper.json`, newest first.
     pub fn list(&self) -> Result<Vec<PaperMeta>> {
         let mut out = Vec::new();

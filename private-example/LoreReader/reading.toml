@@ -1,0 +1,4 @@
+# 讀論文的設定。
+# field = 你的領域與程度：名詞分類用它判斷哪些詞對你是「基礎」、不必標紅。
+# 不寫就用預設 "researcher in medical image analysis and deep learning"。
+# field = "researcher in medical image analysis and deep learning"

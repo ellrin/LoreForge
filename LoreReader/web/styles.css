@@ -438,3 +438,14 @@ button.chip.warn { cursor: pointer; }
 @media (max-width: 640px) {
   #editChip { font-size: 0; width: 12px; height: 12px; padding: 0; border-radius: 50%; background: var(--warn); flex: none; }
 }
+
+/* ── red = a term to learn; 用過; 我的論文 ─────────────────────────── */
+.nn-dot.kt-used { background: none; border: 1.5px solid var(--muted); }
+.nn-group { display: flex; gap: 6px; align-items: center; width: 100%; background: var(--surface); border: 0; border-bottom: 1px solid var(--line); padding: 5px 8px; font-size: 12.5px; color: var(--muted); text-align: left; }
+.nn-group:hover { color: var(--text); }
+.nn-group svg.i { width: 14px; height: 14px; }
+.home .cardwrap { position: relative; display: flex; min-width: 0; }
+.home .cardwrap .card { flex: 1; padding-right: 40px; }
+.home .cardwrap .mine { position: absolute; top: 8px; right: 8px; }
+.home .cardwrap .mine[aria-pressed="true"] svg.i { fill: currentColor; }
+.nn-src { flex: none; font: 500 10.5px var(--sans); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 8px; padding: 0 5px; }

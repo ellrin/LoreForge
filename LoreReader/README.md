@@ -50,6 +50,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `quotes.json` | 引用句。`schema: "lorereader.quotes/1"`，`quotes: [{id, text, page, note, created_at}]`。`note` 是一行備註（可空白） |
 | `chat.json` | 問 Claude 的對話。`schema: "lorereader.chat/1"`，`messages: [{role: user\|assistant, text, attachments: [{text, page, context}], at, engine, paragraph?, chip?: {kind: term\|symbol\|equation, id, label}, context?}]`（`context` 是附給模型的段落脈絡，重播歷史時用） |
 | `symbols.json` | 符號表。`schema: "lorereader.symbols/1"`，`sha256`，`generated_at`，`entries`：lore-notation 登錄的欄位（`id`、`kind: "symbol"`、`latex`、`meaning`、`meaning_en`、`defined_at`、`tags`…）加上 `scope`（論文 sha256）、`grade`（`certain` ✅／`defined` 🟢／`inferred` 🟡／`conflict` 🔴／`unresolved` ⚪）、`resolved_by`（`program`／`local`／`claude`／`author`）、`evidence: [{quote, page, by, at?, meaning?}]`、`occurrences: [{page, s, e, bbox, latex, eq?}]`、`first: {page, sentence}`、`equations: [id]`、`note`；`equations`：lore-notation 的 `equation` 條目（`id`、`label: "(3)"`、`latex`、`uses`）加上 `page`、`number`、`bbox`、`s`、`e`。`bbox` 是頁面比例、左上為原點 |
+| `my-vocab.json`（工作區根目錄） | 「我的論文」的詞彙。`schema: "lorereader.my-vocab/1"`，`papers: [sha256]`，`entries: [{key, text, sources: [sha256]}]` |
 | `paragraphs.json` | 段落分析的快取。`schema: "lorereader.paragraphs/1"`，`analyses: {<段落 id>: {role, equations: [{ref, inputs, outputs, target, effect}], motive, results: [{metric, comparison, values, difference, test, significance}], engine, at}}`。段落 id 是段落文字的雜湊，重新開檔不變；段落文字本身不存 |
 | `reading.json` | 「懂了」。`schema: "lorereader.reading/1"`，`understood: [段落 id]` |
 | `nouns.json` | 名詞分類的快取。`schema: "lorereader.nouns/1"`，`categories: {<詞的正規化 key>: 分類}`，`asked: [已經送給模型的 key]`，`engine`，`classified_at`。名詞清單本身每次開檔重算（全文不寫進工作區） |
@@ -98,7 +99,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 3. **詞形還原**：大小寫、複數（含 `matrices`、`analyses` 這類不規則的）、連字號與空格、英式／美式拼法（`normalisation`、`colour`、`tumour`、`centre`、`labelled`、`haem-`、`oedema`…）、連字（ﬁ）、彎引號、**行尾斷字**（`segmen-` 換行 `tation`：全文別處出現過 `segmentation`，或下一段是小寫而且全文沒有 `segmen-tation` 這種寫法，就接回去）。
 4. **扣掉**：功能詞（`function_words.txt`）、學術通用詞（`academic_words.txt`：method、propose、significant…）、日常英文（`common_words.txt`，約 2,600 字；但 `TERMLIKE` 裡在論文中是術語的字不扣，例如 regression、variance、attention、loss、boundary）、以及**忽略清單**。縮寫（兩個以上大寫字母）不扣。
 5. **對知識庫**：記得、學習中／久未複習、沒有卡片。
-6. **沒有卡片的詞整批交給模型分類，一篇只呼叫一次**（任務 `lr-classify-terms`，預設 `local:current`，用 JSON schema）：方法、指標、資料集、統計、臨床／解剖、一般學術詞、人名、其他術語。結果存在 `papers/<sha256>/nouns.json`，問過的詞不會再自動送出（「分類」按鈕可以再送一次還沒有分類的）。沒有模型時清單照樣能用，只是顯示「未分類」。
+6. **沒有卡片的詞整批交給模型分類，一篇只呼叫一次**（任務 `lr-classify-terms`：先地端模型、沒有時用 Haiku；JSON schema）：方法、指標、資料集、統計、臨床／解剖、其他術語、**基礎科學詞**（這個領域的專家早就會的科學、數學、工程詞，例如 pixel、vector、variance）、一般學術詞、人名。提示裡附上**讀者的領域與程度**（模型選單的「你的領域」，存在 `private/LoreReader/reading.toml` 的 `field`；也可放在 `private/shared/profile.toml`；預設 "researcher in medical image analysis and deep learning"），以及讀者已經記得的術語（知識庫「記得」的卡片標題、「我的論文」裡的術語）當程度參考。結果存在 `papers/<sha256>/nouns.json`；分類或提示的版本、或領域改了，快取就作廢重來。**還沒分類的詞不標色**，清單上顯示「未分類」。
 7. 右鍵（或清單裡的眼睛按鈕）「**忽略**」寫進 `private/LoreReader/ignore-words.txt`，清單與內文立刻重畫。舊的 `known-words.txt` 第一次啟動時會自動搬進 `ignore-words.txt`（兩個都有時接在後面），之後只讀新檔名。懂的專有名詞不要放忽略清單：加入知識庫並選「記得」。
 
 一篇約 8,000 字的合成論文會整理成約 270 個詞（測試 `long_paper_reduces_to_a_few_hundred_units`）。
@@ -107,9 +108,11 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 **內文顏色**（工具列的標靶按鈕「標示名詞」打開／關閉）也來自這份清單：
 
-- **紅色（要學）**：專業術語、沒有卡片。分類是「一般學術詞」或「人名」的只列在清單、不標紅；還沒分類的用紅色虛線。
+- **紅色（要學）**：模型判為方法／指標／資料集／統計／臨床解剖／其他術語、而且沒有卡片、也不在「我的論文」裡的詞。基礎科學詞、一般學術詞、人名與還沒分類的詞都不標紅；名詞清單把基礎科學詞收成最後一組。
 - **淡琥珀色（學習中）**：有卡片，學習中、久未複習或還沒有學習紀錄。
-- **細綠底線（記得）**：有卡片，已經記得。
+- **細綠底線（記得）**：有卡片、已經記得；或出現在「我的論文」裡（清單上加註「用過」）。知識庫裡「學習中」的卡片仍然是淡琥珀色。
+
+**我的論文**：書庫卡片右上角的星號把一篇論文標成自己的論文（存在 `paper.json` 的 `mine`）。標記時從全文（References 之前）建出自己的詞彙：所有詞的正規化形式、重複出現的 2–4 字詞組、對到知識庫標題或別名的詞組，存在 `private/LoreReader/my-vocab.json`（每個詞記下來源論文，取消標記就重建）。這些詞算「記得」，也當名詞分類的程度參考；它和忽略清單是分開的。
 
 點有顏色的詞：分類、次數、第一次出現的頁碼；可以看所有出現位置、翻譯、「忽略」、加入知識庫；有卡片的顯示卡片摘要，可在 KnowledgeBase 開啟。參考文獻不會自動加入知識庫；「遇到」也不會記錄（只讀卡片清單，不呼叫 `/api/scan`）。
 
@@ -133,7 +136,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 ## 讀懂段落（B 線）與「問 Claude」的分工
 
-開檔後把全文切成**段落**（pdf.js 的行：粗體或較大、較短、常有編號的行是章節標題；行距變大、首行縮排、句子結束的短行開始新段；獨立方程式留在所屬的段落裡、讀成［式 (n)］，方程式後面的「where …」接在同一段；沒結束的段落接到下一頁），然後在背景依序跑 `lr-paragraph`：**方法段與結果段先跑**，跑完一段就顯示一段，結果存在 `papers/<sha256>/paragraphs.json`，下次開檔不再跑。**不提供整段的中文摘要或翻譯**，只標出卡住的地方。
+開檔後把全文切成**段落**（分析用 `lr-paragraph`：先 Haiku，沒有時用地端模型）（pdf.js 的行：粗體或較大、較短、常有編號的行是章節標題；行距變大、首行縮排、句子結束的短行開始新段；獨立方程式留在所屬的段落裡、讀成［式 (n)］，方程式後面的「where …」接在同一段；沒結束的段落接到下一頁），然後在背景依序跑 `lr-paragraph`：**方法段與結果段先跑**，跑完一段就顯示一段，結果存在 `papers/<sha256>/paragraphs.json`，下次開檔不再跑。**不提供整段的中文摘要或翻譯**，只標出卡住的地方。
 
 「段落」分頁，每一段：
 
@@ -180,6 +183,8 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `GET/PUT /api/glyphs` | 自己的字形 → LaTeX 對照（`private/LoreReader/glyphs.toml`） |
 | `POST/DELETE /api/ignore` | `{term}` → 加進／移出忽略清單 |
 | `GET/PUT /api/models` | 模型選單：`{task, model}` |
+| `GET/PUT /api/reader` | 讀者的領域與程度 `{field}`（名詞分類用） |
+| `POST /api/papers/{sha}/mine` | `{on, pages?}`：「我的論文」標記與重建 my-vocab |
 | `GET /api/kb/status`、`POST /api/kb/cards`、`POST /api/kb/draft`、`GET /api/kb/nodes/{id}` | KnowledgeBase（建立卡片只在明確操作時） |
 | `POST /api/print`、`POST /api/print/ready?id=` | Mac App 的原生列印 |
 | `GET /open?sha=&page=` | 從其他 App 開到某一頁 |

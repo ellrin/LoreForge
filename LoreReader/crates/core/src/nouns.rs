@@ -44,11 +44,22 @@ pub const TERMLIKE: &[&str] = &[
 ];
 
 /// The model's categories, in display order.
-pub const CATEGORIES: [&str; 8] = ["方法", "指標", "資料集", "統計", "臨床／解剖", "一般學術詞", "人名", "其他術語"];
+pub const CATEGORIES: [&str; 9] = ["方法", "指標", "資料集", "統計", "臨床／解剖", "其他術語", "基礎科學詞", "一般學術詞", "人名"];
 
-/// Categories that are listed but never red.
+/// Categories whose no-card terms are red: specialist terms an expert in the author's
+/// field would still have to learn. 基礎科學詞, 一般學術詞, 人名 and unclassified words are
+/// never red.
+pub const SPECIALIST: [&str; 6] = ["方法", "指標", "資料集", "統計", "臨床／解剖", "其他術語"];
+
+/// Bump when the categories or the classification prompt change: cached categories
+/// from another version are dropped.
+pub const CLASSIFY_VERSION: u32 = 2;
+
+/// The field and level "basic" is judged for, unless the author sets their own.
+pub const DEFAULT_FIELD: &str = "researcher in medical image analysis and deep learning";
+
 pub fn is_specialist(category: Option<&str>) -> bool {
-    !matches!(category, Some("一般學術詞") | Some("人名"))
+    category.is_some_and(|c| SPECIALIST.contains(&c))
 }
 
 /// One KB name (a card title or alias) and the card's state for this member.
@@ -90,12 +101,17 @@ pub struct Noun {
     pub first_page: u32,
     /// `[page, start, end]`, UTF-16 offsets in that page's text.
     pub occ: Vec<[u32; 3]>,
+    /// No card, but the author used it in their own papers (my-vocab): counts as 記得
+    /// (never red or amber); a KB card's own state always wins.
+    #[serde(default)]
+    pub used: bool,
 }
 
 impl Noun {
-    /// Red on the page: no card and not a general word or a person's name.
+    /// Red on the page: no card, not used in the author's own papers, and classified
+    /// as a specialist term (never 基礎科學詞, 一般學術詞, 人名 or unclassified).
     pub fn red(&self) -> bool {
-        self.state == "new" && is_specialist(self.category.as_deref())
+        self.state == "new" && !self.used && is_specialist(self.category.as_deref())
     }
 }
 
@@ -540,6 +556,7 @@ fn add(acc: &mut BTreeMap<String, Acc>, id: String, key: &str, surface: &str, so
             count: 0,
             first_page: occ[0],
             occ: vec![],
+            used: false,
         },
         forms: BTreeMap::new(),
     });
@@ -785,22 +802,87 @@ pub fn inventory_masked(paper: &PaperText, kb: &[KbName], filters: &Filters, cat
 }
 
 impl Inventory {
-    /// The no-card units that still need a category (display texts, for the model).
+    /// The no-card units that still need a category (display texts, for the model);
+    /// words the author used in their own papers are not asked about.
     pub fn unclassified(&self) -> Vec<&Noun> {
-        self.entries.iter().filter(|e| e.state == "new" && e.category.is_none()).collect()
+        self.entries.iter().filter(|e| e.state == "new" && !e.used && e.category.is_none()).collect()
     }
+
+    /// Mark the no-card units found in the author's own papers (`my` = my-vocab keys).
+    /// A KB card always wins: only `new` units are marked.
+    pub fn mark_used(&mut self, my: &HashSet<String>) {
+        for e in self.entries.iter_mut().filter(|e| e.state == "new") {
+            e.used = my.contains(&e.key) || e.short.as_ref().is_some_and(|s| my.contains(&word_key(s)));
+        }
+        // my-vocab counts as 記得
+        self.stats.known = self.entries.iter().filter(|e| e.state == "known" || e.used).count();
+        self.stats.no_card = self.entries.iter().filter(|e| e.state == "new" && !e.used).count();
+    }
+}
+
+/// The words and terms of one paper for the author's own vocabulary (my-vocab), with no
+/// model: every listable word of the body (references cut off) by its normalised key,
+/// hyphenated compounds, 2–4-word runs that occur at least twice (no function word at
+/// either end) and runs that are KB titles or aliases. key → spelling.
+pub fn vocabulary(paper: &PaperText, kb: &[KbName], filters: &Filters) -> BTreeMap<String, String> {
+    let ws = words(paper);
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    for w in &ws {
+        if listable(&w.text) && !filters.is_function(&w.text) {
+            out.entry(w.key.clone()).or_insert_with(|| w.text.clone());
+        }
+    }
+    let kb_keys: HashSet<String> = kb.iter().map(|n| phrase_key(&n.name)).filter(|k| k.contains(' ')).collect();
+    let mut grams: HashMap<String, (usize, String)> = HashMap::new();
+    for i in 0..ws.len() {
+        for n in 2..=4 {
+            if i + n > ws.len() || !(i..i + n - 1).all(|k| ws[k].open_next) {
+                break;
+            }
+            let run = &ws[i..i + n];
+            if filters.is_function(&run[0].text) || filters.is_function(&run[n - 1].text) || run.iter().any(|w| !w.text.chars().any(char::is_alphabetic)) {
+                continue;
+            }
+            let key = run.iter().map(|w| w.key.as_str()).collect::<Vec<_>>().join(" ");
+            let hyph = run[..n - 1].iter().all(|w| w.hy_next);
+            let text = run.iter().enumerate().map(|(k, w)| if k + 1 < n && w.hy_next { format!("{}-", w.text) } else if k + 1 < n { format!("{} ", w.text) } else { w.text.clone() }).collect::<String>();
+            let e = grams.entry(key).or_insert((0, text));
+            e.0 += if hyph { 2 } else { 1 };
+        }
+    }
+    for (key, (count, text)) in grams {
+        if count >= 2 || kb_keys.contains(&key) {
+            out.entry(key).or_insert(text);
+        }
+    }
+    out
+}
+
+/// Level anchors for the classifier from my-vocab: multi-word terms first, then rare
+/// single words (not general English), at most `n`.
+pub fn vocab_anchors(vocab: &BTreeMap<String, String>, filters: &Filters, n: usize) -> Vec<String> {
+    let mut multi: Vec<&String> = vocab.iter().filter(|(k, _)| k.contains(' ')).map(|(_, t)| t).filter(|t| !t.split([' ', '-']).all(|w| filters.is_general(w) || filters.is_function(w))).collect();
+    let mut single: Vec<&String> = vocab.iter().filter(|(k, t)| !k.contains(' ') && t.chars().count() >= 6 && !filters.is_general(t)).map(|(_, t)| t).collect();
+    multi.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    single.sort();
+    multi.into_iter().take(n * 2 / 3).chain(single).take(n).cloned().collect()
 }
 
 // ── classification (one call per paper) ──────────────────────────────────
 
-pub const CLASSIFY_SYSTEM: &str = "你是學術論文的術語分類器。使用者會給一份從一篇論文整理出來的英文詞表（一行一個）。\
+pub const CLASSIFY_SYSTEM: &str = "你是學術論文的術語分類器。使用者會給一份從一篇論文整理出來的英文詞表（一行一個），\
+以及讀者的領域與程度、讀者已經記得的術語（程度的參考）。目的是找出**這位讀者還需要學**的專業術語。\
 把每個詞放進一個分類：方法（模型、演算法、技術、損失函數…）、指標（評估指標、測度）、資料集（資料集、基準、資料庫名稱）、\
-統計（統計方法、檢定、統計量）、臨床／解剖（疾病、器官、解剖結構、臨床術語）、一般學術詞（任何領域的論文都會用的普通詞）、\
-人名（作者、以人命名但單獨出現的姓氏）、其他術語（其他專業術語）。只根據詞本身與論文標題判斷，詞要原樣照抄，不要翻譯、不要解釋、不要新增詞。";
+統計（統計方法、檢定、統計量）、臨床／解剖（疾病、器官、解剖結構、臨床術語）、其他術語（其他專業術語）、\
+基礎科學詞（這個領域的專家早就會的基礎科學、數學、工程詞彙，例如 pixel、vector、gradient、variance、boundary、loss；\
+就算是術語，只要對這位讀者是基礎就放這裡）、一般學術詞（任何領域的論文都會用的普通詞）、人名（作者、單獨出現的姓氏）。\
+拿不準是不是基礎時，和讀者已經記得的術語比程度。詞要原樣照抄，不要翻譯、不要解釋、不要新增詞。";
 
-/// The user prompt: the paper title and the words, one per line.
-pub fn classify_prompt(title: &str, terms: &[&str]) -> String {
-    format!("論文標題：{title}\n\n詞表（{} 個）：\n{}", terms.len(), terms.join("\n"))
+/// The user prompt: the reader's field and level, terms they already know (level
+/// anchors), the paper title and the words, one per line.
+pub fn classify_prompt(title: &str, field: &str, known: &[String], terms: &[&str]) -> String {
+    let anchors = if known.is_empty() { "（沒有）".to_string() } else { known.join("、") };
+    format!("讀者的領域與程度：{field}\n讀者已經記得的術語（程度參考）：{anchors}\n論文標題：{title}\n\n詞表（{} 個）：\n{}", terms.len(), terms.join("\n"))
 }
 
 /// JSON schema of the answer: one array of terms per category.
@@ -813,11 +895,13 @@ pub fn classify_schema() -> serde_json::Value {
 }
 
 /// Read the model's answer into key → category for the asked terms only (a term the
-/// model made up or misspelled is dropped; the first category wins).
+/// model made up or misspelled is dropped; a term in two categories gets the non-red one).
 pub fn parse_classification(answer: &serde_json::Value, asked: &[&str]) -> HashMap<String, String> {
     let asked: HashMap<String, ()> = asked.iter().map(|t| (phrase_key(t), ())).collect();
     let mut out = HashMap::new();
-    for c in CATEGORIES {
+    // a term the model put in two categories: the one that is not red wins
+    let order = ["人名", "一般學術詞", "基礎科學詞", "方法", "指標", "資料集", "統計", "臨床／解剖", "其他術語"];
+    for c in order {
         for t in answer[c].as_array().into_iter().flatten().filter_map(|x| x.as_str()) {
             let k = phrase_key(t);
             if asked.contains_key(&k) {
@@ -939,7 +1023,7 @@ mod tests {
         assert!(!t.iter().any(|x| x.contains("Quaternion")));
         let st = &inv.stats;
         assert!(st.unique > st.units && st.no_card == st.units, "{st:?}");
-        assert!(get(&inv, "anisotropic").red());
+        assert!(!get(&inv, "anisotropic").red(), "unclassified words are never red");
     }
 
     #[test]
@@ -958,7 +1042,12 @@ mod tests {
         assert_eq!(inv.stats.classified, 3);
         let s = classify_schema();
         assert_eq!(s["required"].as_array().unwrap().len(), CATEGORIES.len());
-        assert!(classify_prompt("T", &asked).contains("mIoU"));
+        assert!(classify_prompt("T", DEFAULT_FIELD, &["Dice coefficient".into()], &asked).contains("mIoU"));
+        // basic science words and unclassified words are never red
+        let cats2 = parse_classification(&serde_json::json!({ "基礎科學詞": ["dropout"] }), &asked);
+        let inv2 = inventory(&p, &[], &Filters::default(), &cats2);
+        assert!(!get(&inv2, "dropout").red());
+        assert!(!get(&inv2, "miou").red(), "unclassified: not red");
     }
 
     /// The target scenario: a synthetic paper of about 8,000 words reduces to a few
@@ -983,5 +1072,83 @@ mod tests {
         for general in ["implementation", "procedure", "framework", "result", "approach"] {
             assert!(!inv.entries.iter().any(|e| e.key == general), "{general}");
         }
+    }
+}
+
+#[cfg(test)]
+mod red_tests {
+    use super::*;
+
+    /// A MOCK classifier (rules, not a model) that behaves like a sensible one for a
+    /// reader in medical image analysis: basic science words → 基礎科學詞, names → 人名,
+    /// clinical words → 臨床／解剖, the rest → 方法. `basic: false` = the previous
+    /// categories, where basic words had to go to 其他術語.
+    fn mock_classify(terms: &[&str], basic: bool) -> serde_json::Value {
+        const BASIC: &[&str] = &["mask", "pixel", "boundary", "curvature", "momentum", "vector", "variance", "gradient", "noise", "filter", "signal", "frequency", "loss", "label", "segmentation", "entropy", "kernel", "tensor", "probability", "distribution", "sampling", "threshold", "regression", "sigmoid", "softmax", "logit", "encoder", "decoder", "embedding", "dropout", "convolution", "pooling", "residual", "prior", "likelihood", "posterior", "uncertainty", "ensemble", "calibration", "dilation", "erosion", "morphology", "voxel", "upsampling", "downsampling", "overfitting", "underfitting", "warmup", "annealing", "regularizer", "sparsity", "quantile", "hyperparameter", "backpropagation", "manifold", "interpolation", "spline", "mesh", "heatmap", "attention", "transformer", "accuracy", "precision", "recall"];
+        // basic for this reader too: everyday deep-learning, statistics and anatomy words
+        const BASIC2: &[&str] = &["autoencoder", "augmentation", "stochastic", "diffusion", "bootstrap", "bootstrapping", "cosine", "descent", "graph", "topology", "annotation", "supervision", "cluster", "pretraining", "divergence", "deviation", "anisotropic", "isotropy", "anisotropy", "denoising", "registration", "deformation", "bayesian", "adversarial", "contrastive", "permutation", "imputation", "skewness", "kurtosis", "autocorrelation", "quantization", "pruning", "bottleneck", "batchnorm", "tokenizer", "critic", "wavelet", "spectrogram", "pointcloud", "octree", "geodesic", "eigendecomposition", "interval", "correction", "intersection", "statistical", "volumetric", "saliency", "occlusion", "inpainting", "ensembling", "boosting", "lasso", "ridge", "elastic net", "skip connection", "superpixel", "focal", "curriculum", "distillation", "regime", "formulation", "protocol", "imbalance", "stratification", "noisy", "dice", "coefficient", "spectral", "hepatic", "pulmonary", "renal", "retinal", "coronary", "colonic", "optic", "disc", "lesion", "nodule", "polyp", "cortex", "ventricle", "artery", "vasculature", "stenosis", "perfusion", "angiography", "clinician", "centerline", "bifurcation", "tortuous", "tetrahedral", "monte", "carlo", "brier", "kappa", "auroc", "graphlet", "imputation", "deformation"];
+        const NAMES: &[&str] = &["hausdorff", "sobel", "kullback", "gaussian", "laplacian", "wilcoxon", "bonferroni", "cohen", "gumbel", "wasserstein", "ellrin", "daidai", "jacobian", "hessian"];
+        let mut out = serde_json::Map::new();
+        for c in CATEGORIES {
+            out.insert(c.into(), serde_json::json!([]));
+        }
+        for t in terms {
+            let k = phrase_key(t);
+            let c = if NAMES.iter().any(|n| k.split(' ').any(|w| w == *n)) && !k.contains(' ') {
+                "人名"
+            } else if BASIC.iter().chain(BASIC2).any(|b| k == *b) {
+                if basic { "基礎科學詞" } else { "其他術語" }
+            } else if (["ises", "izes", "ifies", "ates", "ains", "ated", "ized", "ised"].iter().any(|e| k.ends_with(e)) || ["constrain", "simplify", "stabilize", "regularize", "accelerate", "generalize", "calibrate", "outperform", "complement"].contains(&k.as_str())) && !k.contains(' ') {
+                "一般學術詞"
+            } else if ["graphy", "pathy", "sclerosis", "lysis", "trophy", "genesis", "metry", "plasty", "artery", "lesion", "nodule", "polyp", "cortex", "stenosis", "perfusion", "vasculature", "ventricle"].iter().any(|s| k.contains(s)) {
+                "臨床／解剖"
+            } else {
+                "方法"
+            };
+            out.get_mut(c).unwrap().as_array_mut().unwrap().push(serde_json::Value::String(t.to_string()));
+        }
+        serde_json::Value::Object(out)
+    }
+
+    #[test]
+    fn red_means_a_term_to_learn_not_a_word_without_a_card() {
+        let pages: Vec<String> = crate::synth::long_paper_lines(7).iter().map(|ls| ls.iter().map(|l| l.trim_start_matches("# ")).collect::<Vec<_>>().join("\n")).collect();
+        let refs: Vec<&str> = pages.iter().map(String::as_str).collect();
+        let p = PaperText::from_strings(&refs);
+        let f = Filters::default();
+        let unclassified = inventory(&p, &[], &f, &HashMap::new());
+        assert_eq!(unclassified.entries.iter().filter(|e| e.red()).count(), 0, "unclassified words are never red");
+        let asked: Vec<&str> = unclassified.unclassified().iter().map(|n| n.text.as_str()).collect();
+        let before = inventory(&p, &[], &f, &parse_classification(&mock_classify(&asked, false), &asked));
+        let after = inventory(&p, &[], &f, &parse_classification(&mock_classify(&asked, true), &asked));
+        let red = |i: &Inventory| i.entries.iter().filter(|e| e.red()).count();
+        let all_new = unclassified.entries.iter().filter(|e| e.state == "new").count();
+        eprintln!("要學 (MOCK classifier) — every no-card unit: {all_new}; before (no 基礎科學詞): {}; after: {}", red(&before), red(&after));
+        if std::env::var("LR_SHOW_RED").is_ok() { eprintln!("{:?}", after.entries.iter().filter(|e| e.red()).map(|e| (e.text.as_str(), e.category.as_deref().unwrap_or(""))).collect::<Vec<_>>()); }
+        assert!(red(&after) * 10 < red(&before) * 8, "{} → {}", red(&before), red(&after));
+        for basic in ["mask", "pixel", "boundary", "curvature", "momentum", "vector", "variance"] {
+            if let Some(e) = after.entries.iter().find(|e| e.key == basic) {
+                assert!(!e.red(), "{basic} is basic for this reader");
+            }
+        }
+        // my-vocab: words the author used are never red; a KB card still wins
+        let mut v = after.clone();
+        v.mark_used(&["tortuosity".to_string(), "skeletonization".to_string()].into_iter().collect());
+        assert!(v.entries.iter().find(|e| e.key == "tortuosity").is_some_and(|e| e.used && !e.red()));
+        assert_eq!(red(&v) + 2, red(&after));
+        assert_eq!(v.stats.known, after.stats.known + 2, "my-vocab counts as 記得");
+    }
+
+    #[test]
+    fn vocabulary_of_own_papers() {
+        let p = PaperText::from_strings(&["We measure vessel tortuosity with a skeletonization step.\nThe skeletonization step and vessel tortuosity again.\nReferences\n[1] Quaternion Wavelets."]);
+        let kb = vec![KbName { name: "Dice coefficient".into(), node_id: "n".into(), title: "Dice coefficient".into(), state: None }];
+        let v = vocabulary(&p, &kb, &Filters::default());
+        assert!(v.contains_key("tortuosity") && v.contains_key("skeletonization"));
+        assert!(v.contains_key("vessel tortuosity") && v.contains_key("skeletonization step"), "{v:?}");
+        assert!(!v.contains_key("quaternion"), "references are not read");
+        assert!(!v.contains_key("the"));
+        let anchors = vocab_anchors(&v, &Filters::default(), 10);
+        assert!(anchors.iter().any(|a| a.contains("tortuosity")), "{anchors:?}");
     }
 }

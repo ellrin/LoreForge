@@ -253,7 +253,8 @@ async fn knowledge_base_terms_and_cards() {
     assert_eq!(entry("hausdorff distance")["state"], "known");
     assert_eq!(entry("u net")["state"], "none", "a card without learning state");
     let sbl = entry("spectral boundary loss");
-    assert_eq!((sbl["state"].as_str(), sbl["short"].as_str(), sbl["red"].as_bool()), (Some("new"), Some("SBL"), Some(true)));
+    // no card, but not classified yet: never red before the model has judged it
+    assert_eq!((sbl["state"].as_str(), sbl["short"].as_str(), sbl["red"].as_bool()), (Some("new"), Some("SBL"), Some(false)));
     assert_eq!(nouns["classification"]["pending"].as_u64(), Some(nouns["stats"]["no_card"].as_u64().unwrap()));
     // Occurrences are [page, start, end] in UTF-16 of the page text that was sent.
     let o = &dice["occ"][0];
@@ -448,7 +449,7 @@ async fn task_engine() -> (String, Arc<Mutex<Vec<Value>>>) {
                 g.lock().unwrap().push(b.clone());
                 let system = b["messages"][0]["content"].as_str().unwrap_or("").to_string();
                 let reply = if system.contains("術語分類器") {
-                    json!({ "方法": ["anisotropic"], "人名": ["Hausdorff"] }).to_string()
+                    json!({ "方法": ["anisotropic", "Spectral Boundary Loss"], "人名": ["Hausdorff"], "基礎科學詞": ["pixels", "curvature"] }).to_string()
                 } else if system.contains("段落") && system.contains("role") {
                     json!({ "role": "method", "equations": [{ "ref": "SBL", "inputs": "像素與邊緣距離", "outputs": "權重", "target": "邊界上的點", "effect": "邊界錯誤罰得更重" }], "motive": "細結構容易被忽略", "results": [] }).to_string()
                 } else {
@@ -472,6 +473,11 @@ async fn paragraphs_run_in_the_background_and_ask_claude_gets_the_context() {
     let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
     let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
     assert_eq!(s, StatusCode::OK);
+    // classification decides which terms are chips (red): the paragraphs follow it
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), None, None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let pixel = v["nouns"]["entries"].as_array().unwrap().iter().find(|n| n["key"] == "pixel").cloned().unwrap();
+    assert_eq!((pixel["category"].as_str(), pixel["red"].as_bool()), (Some("基礎科學詞"), Some(false)));
     // the run streams in; wait until it is done
     let mut v = Value::Null;
     for _ in 0..100 {
@@ -542,4 +548,100 @@ async fn paragraphs_run_in_the_background_and_ask_claude_gets_the_context() {
     }
     assert!(v["status"]["error"].as_str().unwrap().contains("沒有可用的模型"), "{}", v["status"]);
     assert!(!v["paragraphs"].as_array().unwrap().is_empty());
+}
+
+/// A fake engine that classifies every asked term as 方法 (so everything is red unless
+/// it has a card or is in my-vocab).
+async fn all_method_engine() -> String {
+    let app = axum::Router::new().route(
+        "/v1/chat/completions",
+        post(|axum::Json(b): axum::Json<Value>| async move {
+            let user = b["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap_or("").to_string();
+            let terms: Vec<&str> = user.split_once("個）：\n").map(|x| x.1.lines().collect()).unwrap_or_default();
+            let reply = if b["messages"][0]["content"].as_str().unwrap_or("").contains("術語分類器") { json!({ "方法": terms }).to_string() } else { "{}".to_string() };
+            axum::Json(json!({ "choices": [{ "index": 0, "message": { "role": "assistant", "content": reply }, "finish_reason": "stop" }], "usage": { "prompt_tokens": 1, "completion_tokens": 1 } }))
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    format!("http://{addr}/v1")
+}
+
+fn lines_text(pages: &[&[&str]]) -> Value {
+    let p: Vec<Vec<String>> = pages.iter().map(|l| l.iter().map(|s| s.to_string()).collect()).collect();
+    serde_json::to_value(lr_core::synth::paper_text(&p)).unwrap()
+}
+
+#[tokio::test]
+async fn my_papers_vocabulary_is_never_red_and_kb_wins() {
+    let (kb, _) = fake_kb().await;
+    let e = setup(&kb, Some(all_method_engine().await));
+    // two synthetic "own" papers and a third one to read
+    let own1 = lines_text(&[&["# 1. Method", "We measure vessel tortuosity after skeletonization of the mask.", "The Dice coefficient is learning material here.", "# References", "[1] Quaternion Wavelets."]]);
+    let own2 = lines_text(&[&["# 2. Results", "Vessel tortuosity and centerline extraction work.", "Centerline extraction again with skeletonization."]]);
+    let third = lines_text(&[&["# 1. Introduction", "Vessel tortuosity, skeletonization and centerline extraction meet kriging and homotopy.", "We also report the Dice coefficient."]]);
+    let a = import(&e.app, lr_core::synth::numbered_pdf(1, "Own1"), "own1.pdf").await;
+    let b = import(&e.app, lr_core::synth::numbered_pdf(1, "Own2"), "own2.pdf").await;
+    let c = import(&e.app, lr_core::synth::numbered_pdf(1, "Third"), "third.pdf").await;
+
+    let red_of = |v: &Value| -> Vec<String> { v["entries"].as_array().unwrap().iter().filter(|n| n["red"] == true).map(|n| n["key"].as_str().unwrap().to_string()).collect() };
+    call(&e.app, "POST", &format!("/api/papers/{c}/read"), Some(third.clone()), None).await;
+    let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{c}/nouns/classify"), None, None).await;
+    let before = red_of(&v["nouns"]);
+    for k in ["tortuosity", "skeletonization", "centerline", "kriging", "homotopy"] {
+        assert!(before.contains(&k.to_string()), "{k} red before: {before:?}");
+    }
+
+    // flag the two own papers (their text comes with the request, as from the library)
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{a}/mine"), Some(json!({ "on": true, "pages": own1["pages"] })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    call(&e.app, "POST", &format!("/api/papers/{b}/mine"), Some(json!({ "on": true, "pages": own2["pages"] })), None).await;
+    let meta: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/papers").join(&a).join("paper.json")).unwrap()).unwrap();
+    assert_eq!(meta["mine"], true);
+    let vocab: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/my-vocab.json")).unwrap()).unwrap();
+    assert_eq!(vocab["papers"].as_array().unwrap().len(), 2);
+    let entry = |k: &str| vocab["entries"].as_array().unwrap().iter().find(|x| x["key"] == k).cloned();
+    assert_eq!(entry("tortuosity").unwrap()["sources"].as_array().unwrap().len(), 2, "both papers are its sources");
+    assert!(entry("centerline extraction").is_some(), "a recurring 2-gram");
+    assert!(entry("quaternion").is_none(), "references are not read");
+
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{c}/nouns"), None, None).await;
+    let after = red_of(&v);
+    for k in ["tortuosity", "skeletonization", "centerline"] {
+        assert!(!after.contains(&k.to_string()), "{k} is in my papers: {after:?}");
+        let n = v["entries"].as_array().unwrap().iter().find(|n| n["key"] == k).unwrap();
+        assert_eq!((n["used"].as_bool(), n["state"].as_str()), (Some(true), Some("new")));
+    }
+    assert!(after.contains(&"kriging".to_string()) && after.len() < before.len());
+    // they count as 記得 (the stats), and Ask Claude lists them as known
+    assert!(v["stats"]["known"].as_u64().unwrap() >= 3, "{}", v["stats"]);
+    assert_eq!(v["used"].as_u64().unwrap() as usize, before.len() - after.len());
+    // a KB card wins over my-vocab: Dice coefficient (learning) stays learning
+    let dice = v["entries"].as_array().unwrap().iter().find(|n| n["key"] == "dice coefficient").unwrap();
+    assert_eq!((dice["state"].as_str(), dice["used"].as_bool()), (Some("learning"), Some(false)));
+
+    // unflag one: rebuilt from the other; unflag both: empty
+    call(&e.app, "POST", &format!("/api/papers/{a}/mine"), Some(json!({ "on": false })), None).await;
+    let vocab: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/my-vocab.json")).unwrap()).unwrap();
+    assert_eq!(vocab["papers"], json!([b]));
+    assert!(vocab["entries"].as_array().unwrap().iter().all(|x| x["sources"] == json!([b])));
+    assert!(!vocab["entries"].as_array().unwrap().iter().any(|x| x["key"] == "mask"), "only in the unflagged paper");
+    call(&e.app, "POST", &format!("/api/papers/{b}/mine"), Some(json!({ "on": false })), None).await;
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{c}/nouns"), None, None).await;
+    assert_eq!(red_of(&v).len(), before.len());
+    let meta: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/papers").join(&a).join("paper.json")).unwrap()).unwrap();
+    assert!(meta.get("mine").is_none());
+    // my-vocab is not the ignore list
+    assert!(!e.root.join("ws/ignore-words.txt").exists() || !std::fs::read_to_string(e.root.join("ws/ignore-words.txt")).unwrap().contains("tortuosity"));
+    // the classification prompt carries the reader's field and level anchors
+    let (_, v, _) = call(&e.app, "PUT", "/api/reader", Some(json!({ "field": "radiologist, deep learning for CT" })), None).await;
+    assert_eq!(v["field"], "radiologist, deep learning for CT");
+    assert!(std::fs::read_to_string(e.root.join("ws/reading.toml")).unwrap().contains("radiologist"));
+    // categories made for another field (or prompt version) are not used
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{c}/nouns"), None, None).await;
+    assert!(v["entries"].as_array().unwrap().iter().all(|n| n["category"].is_null()), "the cache was made for the old field");
+    assert!(red_of(&v).is_empty());
+    let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{c}/nouns/classify"), None, None).await;
+    assert_eq!(red_of(&v["nouns"]).len(), before.len());
 }

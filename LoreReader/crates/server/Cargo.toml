@@ -13,6 +13,7 @@ lore-llm.workspace = true
 lore-notation.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 tokio.workspace = true
 axum.workspace = true
 tower.workspace = true

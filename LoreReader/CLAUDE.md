@@ -44,8 +44,8 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   `Shared`. `kb.rs` = KnowledgeBase client (read only except `POST /api/nodes`, only from
   the author's action, `initial_state` learning|known; `lexicon()` = `GET /api/nodes` titles +
   aliases), `llm.rs` = lore-llm wired like PaperComposer (`tasks.toml`: `lr-translate`
-  local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` and
-  `lr-paragraph` local:current, no fallback; `complete_on` = the model menu's choice, strict),
+  local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` local:current →
+  claude:haiku, `lr-paragraph` claude:haiku → local:current; `complete_on` = the model menu's choice, strict),
   `reading.rs` = the reading aids over the text the page posts once per open (memory only):
   nouns, symbols, paragraphs (background run per paper, newest run wins, cached per
   paragraph id), 懂了 (`reading.json`), and `chat_context` (title, section, paragraph, chip
@@ -73,8 +73,13 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   once (`POST /api/papers/{sha}/read`); the server never stores the paper's text. KB names
   come from `GET /api/nodes` (read only; no `/api/scan`, no encounters).
   `ignore-words.txt` replaced `known-words.txt` (migrated once by `reading::ignore_file`).
-- Classification: one `lr-classify-terms` call per paper, cached in `nouns.json` (`asked`
-  keys are never re-sent automatically). Math runs and display equations are masked out of
+- Classification: one `lr-classify-terms` call per paper (local first, then Haiku), cached in
+  `nouns.json` under `key = v<CLASSIFY_VERSION>|<field>`; `asked` keys are never re-sent
+  automatically. Red = SPECIALIST categories only (not 基礎科學詞 / 一般學術詞 / 人名 /
+  unclassified), no card, not in my-vocab. The reader's field: `reading.toml` `field`, else
+  `private/shared/profile.toml` `field`, else `nouns::DEFAULT_FIELD`.
+- 我的論文: `paper.json` `mine`; `my-vocab.json` (per-source entries, rebuilt on flag change)
+  marks no-card units `used` = 記得 (a KB card's own state wins). Not the ignore list. Math runs and display equations are masked out of
   the noun list.
 - Track B never writes a Chinese summary or translation of a paragraph. Claude's answers
   reach the symbol table only through 寫回符號表 (`resolved_by: claude`, evidence kept).

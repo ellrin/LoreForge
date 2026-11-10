@@ -28,6 +28,8 @@
 //! | POST | /api/papers/{sha}/paragraphs/{pid}/understood | `{on}` → 懂了 (reading.json; separate from KB state) |
 //! | GET/PUT | /api/glyphs | the author's glyph → LaTeX override (`glyphs.toml`) |
 //! | POST/DELETE | /api/ignore | `{term}` → add to / remove from `ignore-words.txt` (「這不是術語」) |
+//! | POST | /api/papers/{sha}/mine | `{on, pages?}` → 「我的論文」 flag (paper.json) and the rebuilt my-vocab.json |
+//! | GET/PUT | /api/reader | `{field}`: the reader's field and level for term classification (`reading.toml`) |
 //! | GET/PUT | /api/models | the model menu: `{task, model: auto\|local\|haiku\|sonnet\|opus}` |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
 //! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?}` → KB `POST /api/nodes` |
@@ -203,6 +205,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{sha}/paragraphs/run", post(reading::paragraphs_run))
         .route("/api/papers/{sha}/paragraphs/{pid}/understood", post(reading::understood))
         .route("/api/models", get(reading::models_get).put(reading::models_put))
+        .route("/api/reader", get(reading::reader_get).put(reading::reader_put))
+        .route("/api/papers/{sha}/mine", post(reading::mine).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
         .route("/api/kb/status", get(kb_status))
         .route("/api/kb/cards", post(kb_card))
         .route("/api/kb/draft", post(kb_draft))

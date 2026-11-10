@@ -75,12 +75,147 @@ pub struct NounsCache {
     pub engine: Option<String>,
     #[serde(default)]
     pub classified_at: Option<String>,
+    /// The classification version and the reader's field the categories were made for;
+    /// another one drops the cached categories.
+    #[serde(default)]
+    pub key: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
 fn nouns_schema() -> String {
     NOUNS_SCHEMA.into()
+}
+
+pub const READER_FILE: &str = "reading.toml";
+pub const VOCAB_FILE: &str = "my-vocab.json";
+
+/// One word or term of the author's own papers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VocabEntry {
+    pub key: String,
+    pub text: String,
+    /// The papers (sha256) it comes from: the vocabulary is rebuilt from these.
+    pub sources: BTreeSet<String>,
+}
+
+/// `private/LoreReader/my-vocab.json`: the vocabulary of the papers marked 「我的論文」.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MyVocab {
+    #[serde(default)]
+    pub schema: String,
+    #[serde(default)]
+    pub built_at: String,
+    #[serde(default)]
+    pub papers: BTreeSet<String>,
+    #[serde(default)]
+    pub entries: Vec<VocabEntry>,
+}
+
+pub fn load_vocab(ws: &FsPath) -> MyVocab {
+    std::fs::read(ws.join(VOCAB_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Rebuild with `sha`'s words replaced by `words` (`None` = the paper is no longer mine).
+pub fn rebuild_vocab(ws: &FsPath, sha: &str, words: Option<BTreeMap<String, String>>) -> std::io::Result<MyVocab> {
+    let mut v = load_vocab(ws);
+    let mut map: BTreeMap<String, VocabEntry> = v.entries.drain(..).map(|e| (e.key.clone(), e)).collect();
+    for e in map.values_mut() {
+        e.sources.remove(sha);
+    }
+    v.papers.remove(sha);
+    if let Some(w) = words {
+        v.papers.insert(sha.to_string());
+        for (k, t) in w {
+            map.entry(k.clone()).or_insert_with(|| VocabEntry { key: k, text: t, sources: BTreeSet::new() }).sources.insert(sha.to_string());
+        }
+    }
+    v.entries = map.into_values().filter(|e| !e.sources.is_empty()).collect();
+    v.schema = "lorereader.my-vocab/1".into();
+    v.built_at = lr_core::now();
+    let mut b = serde_json::to_vec_pretty(&v).unwrap_or_default();
+    b.push(b'\n');
+    lr_core::write_atomic(&ws.join(VOCAB_FILE), &b)?;
+    Ok(v)
+}
+
+#[derive(Deserialize)]
+pub struct MineBody {
+    pub on: bool,
+    /// The paper's text (as for `/read`); not needed when the paper is open.
+    #[serde(default)]
+    pub pages: Option<Vec<lr_core::text::PageText>>,
+}
+
+/// 「我的論文」 on / off: the flag in paper.json and the rebuilt my-vocab.
+pub async fn mine(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Json<MineBody>) -> R {
+    sha_ok(&sha)?;
+    let words = if b.on {
+        let text = match b.pages {
+            Some(p) if !p.is_empty() => Arc::new(PaperText { pages: p }.normalise()),
+            _ => text_of(&s, &sha)?,
+        };
+        let kb = s.kb.lexicon().await.unwrap_or_default();
+        Some(nouns::vocabulary(&text, &kb, &Filters::default()))
+    } else {
+        None
+    };
+    let _g = s.write.lock().unwrap();
+    let m = s.papers.set_mine(&sha, b.on)?;
+    let v = rebuild_vocab(&s.workspace, &sha, words).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?;
+    Ok(Json(json!({ "paper": m, "mine": b.on, "vocab": { "papers": v.papers.len(), "entries": v.entries.len() } })))
+}
+
+/// The reader's field and level for the classification prompt: `field` in
+/// `private/LoreReader/reading.toml`, else `field` in `private/shared/profile.toml`,
+/// else a neutral default.
+pub fn reader_field(s: &crate::AppState) -> String {
+    let from = |p: Option<std::path::PathBuf>| -> Option<String> {
+        let t = std::fs::read_to_string(p?).ok()?;
+        let v: toml::Value = toml::from_str(&t).ok()?;
+        v.get("field")?.as_str().map(|x| x.trim().to_string()).filter(|x| !x.is_empty())
+    };
+    from(Some(s.workspace.join(READER_FILE))).or_else(|| from(s.home.shared_file("profile.toml"))).unwrap_or_else(|| nouns::DEFAULT_FIELD.to_string())
+}
+
+/// What the cached categories must have been made for.
+fn cache_key(s: &crate::AppState) -> String {
+    format!("v{}|{}", nouns::CLASSIFY_VERSION, reader_field(s))
+}
+
+/// nouns.json, empty when it was made for another classification version or field.
+fn load_cache(s: &crate::AppState, sha: &str) -> Result<NounsCache, ApiError> {
+    let c: NounsCache = s.papers.load(sha, "nouns.json")?.unwrap_or_default();
+    Ok(if c.key == cache_key(s) { c } else { NounsCache { extra: c.extra, ..Default::default() } })
+}
+
+pub async fn reader_get(State(s): State<Shared>) -> R {
+    Ok(Json(json!({ "field": reader_field(&s), "default": nouns::DEFAULT_FIELD })))
+}
+
+#[derive(Deserialize)]
+pub struct FieldBody {
+    pub field: String,
+}
+
+/// The reader's field (the 模型 dialog). Empty = back to the default.
+pub async fn reader_put(State(s): State<Shared>, Json(b): Json<FieldBody>) -> R {
+    let f = b.field.split_whitespace().collect::<Vec<_>>().join(" ");
+    if f.chars().count() > 200 {
+        return Err(bad("太長了"));
+    }
+    let _g = s.write.lock().unwrap();
+    let p = s.workspace.join(READER_FILE);
+    let mut v: toml::Table = std::fs::read_to_string(&p).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default();
+    if f.is_empty() {
+        v.remove("field");
+    } else {
+        v.insert("field".into(), toml::Value::String(f));
+    }
+    let text = format!("# 讀論文的設定。field = 你的領域與程度（名詞分類用來判斷什麼是「基礎」）。\n{}", toml::to_string(&v).unwrap_or_default());
+    lr_core::write_atomic(&p, text.as_bytes()).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?;
+    drop(_g);
+    reader_get(State(s)).await
 }
 
 /// The text of an opened paper, or 409 when the page has not sent it.
@@ -111,10 +246,11 @@ async fn inventory_of(s: &crate::AppState, sha: &str) -> Result<(nouns::Inventor
         Ok(l) => (l, json!({ "ok": true })),
         Err(e) => (vec![], json!({ "ok": false, "down": e.down, "error": e.message })),
     };
-    let cache: NounsCache = s.papers.load(sha, "nouns.json")?.unwrap_or_default();
+    let cache = load_cache(s, sha)?;
     let cats = cache.categories.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let syms: SymbolFile = s.papers.load(sha, "symbols.json")?.unwrap_or_default();
-    let inv = nouns::inventory_masked(&text, &kb, &Filters::with_file(&ignore_file(&s.workspace)), &cats, &math_mask(&syms));
+    let mut inv = nouns::inventory_masked(&text, &kb, &Filters::with_file(&ignore_file(&s.workspace)), &cats, &math_mask(&syms));
+    inv.mark_used(&load_vocab(&s.workspace).entries.iter().map(|e| e.key.clone()).collect());
     Ok((inv, kb_status, cache))
 }
 
@@ -143,6 +279,7 @@ pub async fn nouns_view(s: &crate::AppState, sha: &str) -> Result<Value, ApiErro
     Ok(json!({
         "entries": entries,
         "stats": inv.stats,
+        "used": inv.entries.iter().filter(|n| n.used).count(),
         "kb": kb_status,
         "categories": nouns::CATEGORIES,
         "classification": { "engine": cache.engine, "at": cache.classified_at, "unclassified": inv.unclassified().len(), "pending": pending },
@@ -175,13 +312,26 @@ pub async fn classify(State(s): State<Shared>, Path(sha): Path<String>, body: Op
     let terms: Vec<&str> = todo.iter().map(|n| n.text.as_str()).collect();
     let title = s.papers.meta(&sha)?.map(|m| m.title).unwrap_or_default();
     let choice = model_choice(&s.workspace, "lr-classify-terms");
-    let req = LlmRequest::prompt(nouns::CLASSIFY_SYSTEM, nouns::classify_prompt(&title, &terms)).json(nouns::classify_schema()).max_tokens(8000);
+    // the reader's level: their field and up to 40 terms they already know
+    let mut known: Vec<String> = s.kb.lexicon().await.unwrap_or_default().into_iter().filter(|n| n.state.as_deref() == Some("known")).map(|n| n.title).collect();
+    known.sort();
+    known.dedup();
+    known.truncate(40);
+    // and terms from the author's own papers
+    let vocab: BTreeMap<String, String> = load_vocab(&s.workspace).entries.into_iter().map(|e| (e.key, e.text)).collect();
+    for t in nouns::vocab_anchors(&vocab, &Filters::default(), 30) {
+        if !known.contains(&t) {
+            known.push(t);
+        }
+    }
+    let req = LlmRequest::prompt(nouns::CLASSIFY_SYSTEM, nouns::classify_prompt(&title, &reader_field(&s), &known, &terms)).json(nouns::classify_schema()).max_tokens(8000);
     let a = s.llm.complete_on("lr-classify-terms", choice.as_deref(), req).await.map_err(crate::llm_error)?;
     let v = lore_llm::json::extract_json(&a.text).ok_or_else(|| ApiError(StatusCode::BAD_GATEWAY, json!({ "error": format!("模型（{}）沒有回 JSON", a.engine) })))?;
     let got = nouns::parse_classification(&v, &terms);
     {
         let _g = s.write.lock().unwrap();
-        let mut fresh: NounsCache = s.papers.load(&sha, "nouns.json")?.unwrap_or_default();
+        let mut fresh = load_cache(&s, &sha)?;
+        fresh.key = cache_key(&s);
         fresh.categories.extend(got.clone());
         fresh.asked.extend(todo.iter().map(|n| n.key.clone()));
         fresh.engine = Some(a.engine.clone());
@@ -191,6 +341,8 @@ pub async fn classify(State(s): State<Shared>, Path(sha): Path<String>, body: Op
         cache = fresh;
     }
     let _ = cache;
+    // the red terms changed: so did the paragraphs' chips
+    build_paragraphs(&s, &sha).await?;
     Ok(Json(json!({ "asked": terms.len(), "classified": got.len(), "engine": a.engine, "nouns": nouns_view(&s, &sha).await? })))
 }
 
@@ -641,6 +793,7 @@ pub async fn chat_context(s: &crate::AppState, sha: &str, title: &str, pid: &str
     for n in inv.entries.iter().filter(|n| n.occ.iter().any(|o| inside(o[0], o[1], o[2]))) {
         match n.state.as_str() {
             "known" => known.push(n.text.clone()),
+            "new" if n.used => known.push(n.text.clone()),
             "learning" | "stale" | "none" => learning.push(n.text.clone()),
             _ if n.red() => none.push(n.text.clone()),
             _ => {}

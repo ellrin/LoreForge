@@ -158,10 +158,10 @@ mod tests {
         assert_eq!(t.task["lr-translate"].fallback.as_deref(), Some("claude:selected"));
         assert_eq!(t.task["lr-chat"].default, "claude:selected");
         assert!(t.task["lr-chat"].fallback.is_none());
-        for id in ["lr-classify-terms", "lr-paragraph"] {
-            assert_eq!(t.task[id].default, "local:current", "{id}");
-            assert!(t.task[id].fallback.is_none(), "{id} never falls back to Claude on its own");
-        }
+        assert_eq!(t.task["lr-classify-terms"].default, "local:current");
+        assert_eq!(t.task["lr-classify-terms"].fallback.as_deref(), Some("claude:haiku"));
+        assert_eq!(t.task["lr-paragraph"].default, "claude:haiku");
+        assert_eq!(t.task["lr-paragraph"].fallback.as_deref(), Some("local:current"));
         assert_eq!(model_ref(Some("haiku")).unwrap().as_deref(), Some("claude:haiku"));
         assert_eq!(model_ref(Some("auto")).unwrap(), None);
         assert!(model_ref(Some("gpt")).is_err());
