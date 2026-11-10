@@ -18,14 +18,6 @@ const RD = { open: false, papers: null, sha: null, paper: null, tab: "fig", page
 const rdKey = () => `sc.reader.${S.name}`;
 const rdPage = (sha, n, dpi) => `/api/reader/papers/${sha}/page/${n}?dpi=${dpi}`;
 
-function rdButton() {
-  if ($("#insPaper")) return;
-  const b = h("button", { class: "ico", id: "insPaper", "data-icon": "news", "aria-label": "論文", "aria-pressed": "false", onclick: () => rdToggle() });
-  const after = $("#insComp");
-  if (after) after.after(b); else $("#tools")?.append(b);
-  paintIcons(b.parentElement);
-}
-
 function rdShell() {
   let p = $("#rdPanel");
   if (p) return p;
@@ -337,6 +329,3 @@ function rdFollowSelection() {
   };
 }
 
-// the editor builds its toolbar once; the button joins it
-if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", rdButton);
-else rdButton();

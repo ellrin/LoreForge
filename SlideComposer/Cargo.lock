@@ -1866,6 +1866,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-shell"
+version = "0.1.0"
+
+[[package]]
 name = "markup5ever"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2743,6 +2747,7 @@ dependencies = [
  "lore-math",
  "lore-notation",
  "lore-ooxml",
+ "lore-shell",
  "sc-core",
  "serde",
  "serde_json",

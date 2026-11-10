@@ -53,14 +53,8 @@ function humanError(msg) {
 }
 const deckApi = (p) => `/api/decks/${encodeURIComponent(S.name)}${p}`;
 
-function toast(msg, err = false) {
-  $(".toast")?.remove();
-  const t = document.createElement("div");
-  t.className = "toast" + (err ? " err" : "");
-  t.textContent = msg;
-  document.body.append(t);
-  setTimeout(() => t.remove(), err ? 5000 : 2600);
-}
+/** The shared shell's toast; (msg, true) = error, as before. */
+const toast = (msg, err = false) => LoreShell.toast(msg, typeof err === "object" ? err : { err });
 
 // Every server transaction goes through one queue, in order (a later op never
 // races an earlier one; undo waits for pending edits).
@@ -105,14 +99,11 @@ function absorb(r, { edited = true } = {}) {
 }
 
 function savedChip() {
-  $("#saveChip").className = "saved";
+  if (!S.file) shell.setStatus("saved");
   undoButtons();
 }
 function undoButtons() {
-  $("#actUndo").disabled = !S.status.undo;
-  $("#actRedo").disabled = !S.status.redo;
-  $("#actUndo").setAttribute("aria-label", S.status.undo ? `復原「${S.status.undo}」(⌘Z)` : "復原 (⌘Z)");
-  $("#actRedo").setAttribute("aria-label", S.status.redo ? `重做「${S.status.redo}」(⇧⌘Z)` : "重做 (⇧⌘Z)");
+  shell.setUndo({ undo: S.status.undo, redo: S.status.redo });
 }
 
 async function undo() { await exitEdit(); flushNudge(); return serial(async () => { try { absorb(await api(deckApi("/undo"), { body: {} })); } catch (e) { toast(e.message, true); } }); }
@@ -122,21 +113,22 @@ async function redo() { await exitEdit(); flushNudge(); return serial(async () =
 // The server writes deck.json on every edit; the file itself is written
 // after a short pause (debounce), never over a file changed elsewhere.
 const FILE = { timer: 0, busy: null, asked: false };
-const FILE_LABEL = { saved: "已儲存", pending: "儲存中", saving: "儲存中", changed: "檔案已變更", missing: "找不到檔案", error: "未能儲存" };
+// the bound .pptx → the shell's one status chip
+const FILE_CHIP = {
+  saved: ["saved"],
+  pending: ["saving"],
+  saving: ["saving"],
+  changed: ["error", { label: "已在別處修改", action: () => { $(".ext-bar")?.remove(); changedOnDisk(); } }],
+  missing: ["error", { label: "找不到檔案", action: () => askConflict() }],
+  error: ["error", { action: () => writeFile() }],
+};
 function setFile(f) {
   S.file = f ?? null;
   if (S.file?.state !== "changed") $(".ext-bar")?.remove();
-  const b = $("#fileState");
-  b.hidden = !S.file;
-  $("#saveChip").hidden = !!S.file; // the file state next to the name says it all
-  if (!S.file) return;
+  if (!S.file) { shell.setStatus(document.body.classList.contains("at-home") ? null : "saved"); return; } // an unbound deck is saved on every edit
   const st = S.file.state;
-  b.className = `fstate ed-only ${st}`;
-  b.textContent = "";
-  const dot = document.createElement("i");
-  b.append(dot, FILE_LABEL[st] ?? "");
-  b.title = S.file.path;
-  b.setAttribute("aria-label", `${S.file.file}：${FILE_LABEL[st] ?? ""}`);
+  const [kind, o] = FILE_CHIP[st] ?? ["error"];
+  shell.setStatus(kind, { ...o, title: S.file.path });
   if (st === "pending") scheduleWrite();
   if (st === "changed") changedOnDisk();
   else if (st === "missing" && !FILE.asked) askConflict();
@@ -192,20 +184,20 @@ function flushFileOnLeave() {
   if (!S.file || !S.name || !["pending", "saving"].includes(S.file.state)) return;
   navigator.sendBeacon?.(deckApi("/file/write"), new Blob(["{}"], { type: "application/json" }));
 }
-/** The file changed elsewhere (or vanished): the author decides. */
-function askConflict() {
+/** The file changed elsewhere (or vanished): the author decides. Esc / clicking away keeps everything as is. */
+async function askConflict() {
   FILE.asked = true;
   const missing = S.file.state === "missing";
-  dialog((box, close) => {
-    const done = (fn) => async () => { close(); FILE.asked = false; await fn(); };
-    const btns = [];
-    if (!missing) btns.push(h("button", { class: "btn", onclick: done(reloadFile) }, h("span", { "data-icon": "refresh" }), "重新載入"));
-    btns.push(h("button", { class: "btn", onclick: done(() => writeFile(true)) }, h("span", { "data-icon": "save" }), missing ? "寫回原位置" : "保留我的版本，覆蓋"));
-    btns.push(h("button", { class: "btn primary", onclick: done(saveAs) }, h("span", { "data-icon": "download" }), "另存新檔…"));
-    box.append(h("h3", {}, missing ? `找不到 ${S.file.file}` : `${S.file.file} 已在別處修改`), h("div", { class: "info mono" }, S.file.path), h("div", { class: "actions" }, ...btns));
-  });
-  // Esc / closing keeps everything as is (nothing is written); ask again on the next save
-  $("#dlg").addEventListener("close", () => { FILE.asked = false; }, { once: true });
+  const v = await LoreShell.ask($(".top .fstate"), [missing ? `找不到 ${S.file.file}` : `${S.file.file} 已在別處修改`, S.file.path], [
+    { label: "取消", value: null },
+    ...(missing ? [] : [{ label: "重新載入", icon: "refresh", value: "reload" }]),
+    { label: missing ? "寫回原位置" : "保留我的版本，覆蓋", icon: "save", value: "force" },
+    { label: "另存新檔…", icon: "save", value: "saveas", primary: true },
+  ]);
+  FILE.asked = false; // asked again on the next save
+  if (v === "reload") await reloadFile();
+  else if (v === "force") await writeFile(true);
+  else if (v === "saveas") await saveAs();
 }
 async function reloadFile(auto = false) {
   if (FILE.reloading) return;
@@ -424,6 +416,7 @@ function renderCanvas() {
   if (S.editingCell) mountCellEditor();
   renderGuides();
   renderOverlay();
+  if (typeof paintFind === "function") paintFind(); // ⌘F highlights (find.js)
 }
 
 /** Screen box (in the overlay's px) of a frame. */
@@ -1551,7 +1544,7 @@ function onKey(ev) {
   if (mod && k.toLowerCase() === "g") { ev.preventDefault(); ev.shiftKey ? ungroup() : group(); return; }
   if (mod && (k === "]" || k === "}")) { ev.preventDefault(); zorder(ev.shiftKey ? "front" : "forward"); return; }
   if (mod && (k === "[" || k === "{")) { ev.preventDefault(); zorder(ev.shiftKey ? "back" : "backward"); return; }
-  if (mod && k.toLowerCase() === "s") { ev.preventDefault(); if (ev.shiftKey) { saveAs(); return; } if (S.file) { writeFile(); return; } api(deckApi("/save"), { body: {} }).then(() => toast("已儲存")); return; }
+  if (mod && k.toLowerCase() === "s" && ev.shiftKey) { ev.preventDefault(); saveAs(); return; }
   if (mod && k.toLowerCase() === "o") { ev.preventDefault(); openFile(); return; }
   if (k === "Delete" || k === "Backspace") { if (S.sel.length) { ev.preventDefault(); deleteSel(); } return; }
   if (k === "Escape") { if (poly) { poly = null; setTool("select"); renderOverlay(); return; } S.crop = null; S.sel = []; setTool("select"); renderOverlay(); renderSide(); return; }
@@ -1689,25 +1682,16 @@ async function insertImageFile(file) {
   } catch (e) { toast(e.message, true); }
 }
 
-// ── Narrow widths: slide list and side panel become drawers ───────────────
-function togglePanel(which, force) {
-  const app = $("#app");
-  const cls = which === "sorter" ? "show-sorter" : "show-side";
-  const on = force ?? !app.classList.contains(cls);
-  app.classList.toggle(cls, on);
-  $(which === "sorter" ? "#toggleSorter" : "#toggleSide").setAttribute("aria-pressed", on ? "true" : "false");
-}
-
 // ── Boot ──────────────────────────────────────────────────────────────────
 // Fonts the deck names that this machine lacks: a chip in the top bar, a list
 // on click (what each one becomes), closed by Esc or a click elsewhere.
 function showFonts(list) {
-  const chip = $("#fontChip"), pop = $("#fontPop");
+  const chip = fontChip, pop = $("#fontPop");
   const off = (list ?? []).filter((f) => f.how === "substitute" || f.how === "missing");
   pop.hidden = true;
   chip.setAttribute("aria-expanded", "false");
-  chip.hidden = !off.length;
-  if (!off.length) return;
+  if (!off.length) { chip.remove(); return; }
+  shell.slots.lead.append(chip);
   const missing = off.filter((f) => f.how === "missing").length;
   chip.textContent = `字型代替 ${off.length}`;
   chip.title = "這份簡報用到的字型，這台電腦有些沒有；點開看用什麼代替";
@@ -1744,11 +1728,12 @@ async function openDeck(name) {
   S.arr = null;
   loadArrangements().then(() => { renderSide(); renderGuides(); }).catch(() => {});
   S.sel = [];
-  $("#deckName").textContent = name;
+  shell.setName(name);
+  shell.home(false);
+  shell.editing(true);
   document.title = `${name} · SlideComposer`;
   $("#home").hidden = true;
   document.body.classList.remove("at-home");
-  $("#saveChip").className = "saved";
   undoButtons();
   FILE.asked = false;
   setFile(r.file);
@@ -1780,7 +1765,8 @@ function openByName(name) {
 async function showHome() {
   $("#home").hidden = false;
   document.body.classList.add("at-home");
-  $("#deckName").textContent = "";
+  shell.setName("");
+  shell.home(true);
   setFile(null);
   document.title = "SlideComposer";
   S.reveal = null;
@@ -1802,12 +1788,6 @@ async function showHome() {
     card.onclick = () => openByName(d.name);
     list.append(card);
     coverWhenVisible(card.querySelector(".frame"), d.name);
-  }
-  $("#envInfo").textContent = "";
-  for (const [k, v, ok] of [["資料夾", info.workspace, true], ["簡報", info.decks_dir, true], ["pandoc", info.pandoc ? "✓" : "✗  brew install pandoc", info.pandoc], ["Chrome", info.chrome ? "✓" : "✗  Google Chrome", info.chrome]]) {
-    const dt = document.createElement("dt"); dt.textContent = k;
-    const dd = document.createElement("dd"); dd.textContent = v; if (!ok) dd.className = "bad";
-    $("#envInfo").append(dt, dd);
   }
 }
 function shortDate(sec) {
@@ -1903,49 +1883,33 @@ async function drawStyleCover(frame, id) {
   frame.append(node);
 }
 
-/** Top-bar menus: the deck picker (recent decks + 新簡報) and export. */
-function popMenu(anchor, items) {
-  $(".menu")?.remove();
-  const m = document.createElement("div");
-  m.className = "menu";
-  m.setAttribute("role", "menu");
-  for (const it of items) {
-    if (it === "-") { const hr = document.createElement("div"); hr.className = "menu-sep"; m.append(hr); continue; }
-    const b = document.createElement("button");
-    b.setAttribute("role", "menuitem");
-    if (it.icon) { const i = document.createElement("span"); i.dataset.icon = it.icon; b.append(i); }
-    b.append(it.label);
-    if (it.current) b.setAttribute("aria-current", "true");
-    b.onclick = () => { m.remove(); anchor.setAttribute("aria-expanded", "false"); it.run(); };
-    m.append(b);
-  }
-  document.body.append(m);
-  paintIcons(m);
-  const r = anchor.getBoundingClientRect();
-  m.style.top = `${r.bottom + 4}px`;
-  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
-  anchor.setAttribute("aria-expanded", "true");
-  setTimeout(() => document.addEventListener("pointerdown", (e) => { if (!m.contains(e.target)) { m.remove(); anchor.setAttribute("aria-expanded", "false"); } }, { once: true }), 0);
-}
-async function deckMenu(anchor) {
+/** 文件選單: the recent decks (the shell adds the actions and 首頁). */
+async function deckRecent() {
   const info = await api("/api/info");
   S.info = info;
-  const decks = [...info.decks].sort((a, b) => b.modified - a.modified).slice(0, 10);
-  popMenu(anchor, [
-    ...decks.map((d) => ({ label: d.name, current: d.name === S.name, run: () => { if (d.name !== S.name) openByName(d.name); } })),
-    "-",
-    { icon: "folder", label: "開啟…", run: openFile },
-    { icon: "download", label: "另存新檔…", run: saveAs },
-    "-",
-    { icon: "plus", label: "新簡報", run: openNewDeck },
-    { icon: "back", label: "首頁", run: goHome },
-  ]);
+  return [...info.decks].sort((a, b) => b.modified - a.modified).slice(0, 10)
+    .map((d) => ({ label: d.name, current: d.name === S.name, run: () => { if (d.name !== S.name) openByName(d.name); } }));
 }
-function exportMenu(anchor) {
-  popMenu(anchor, [
-    { icon: "download", label: "PPTX", run: async () => { toast("匯出 PPTX…"); try { const r = await api(deckApi("/export"), { body: {} }); exportCard(r.path, r.warning); } catch (e) { toast(e.message, true); } } },
-    { icon: "pdf", label: "PDF", run: async () => { toast("產生 PDF…"); try { const r = await api(deckApi("/pdf"), { body: {} }); exportCard(r.path); } catch (e) { toast(e.message, true); } } },
-  ]);
+const exportItems = () => [
+  { icon: "download", label: "PPTX", run: async () => { toast("匯出 PPTX…"); try { const r = await api(deckApi("/export"), { body: {} }); exportCard(r.path, r.warning); } catch (e) { toast(e.message, true); } } },
+  { icon: "pdf", label: "PDF", run: async () => { toast("產生 PDF…"); try { const r = await api(deckApi("/pdf"), { body: {} }); exportCard(r.path); } catch (e) { toast(e.message, true); } } },
+  "-",
+  { icon: "printer", label: "列印", run: printDeck },
+];
+/** 列印: print.html (every visible slide on its own page) in a hidden frame, then the system print dialog. */
+function printDeck() {
+  $(".print-frame")?.remove();
+  toast("準備列印…");
+  const f = h("iframe", { class: "print-frame", src: `print.html?deck=${encodeURIComponent(S.name)}&print=1`, "aria-hidden": "true", tabindex: "-1" });
+  const end = () => { removeEventListener("message", onMsg); clearTimeout(timer); f.remove(); };
+  const onMsg = (e) => {
+    if (e.source !== f.contentWindow) return;
+    if (e.data?.sc === "print-ready") { $(".toast")?.remove(); f.contentWindow.print(); }
+    else if (e.data?.sc === "print-done") end();
+  };
+  const timer = setTimeout(end, 10 * 60 * 1000);
+  addEventListener("message", onMsg);
+  document.body.append(f);
 }
 /** After an export: file name, page count, 在 Finder 顯示 and 開啟. */
 function exportCard(path, warning) {
@@ -1966,7 +1930,7 @@ function exportCard(path, warning) {
   setTimeout(() => card.remove(), warning ? 20000 : 12000);
 }
 
-// ── 方程式與變數: the deck's notation registry (shared <notation-panel>) ──────
+// ── 對照表: the deck's notation registry (shared <notation-panel>) ──────
 const NT = { lines: {}, timer: 0 };
 async function openNotation() {
   const r = await api(deckApi("/notation"));
@@ -2015,25 +1979,75 @@ function wireNotation() {
   };
 }
 
-// ── Settings: 外觀 (the theme all LoreForge apps share, theme.js) and folders ─────────
-function wireSettings() {
-  LoreTheme.picker($("#themePick"));
-  $("#actLook").onclick = () => dialog((box, close) => {
-    const pick = h("div", {});
-    LoreTheme.picker(pick);
-    box.append(h("h3", {}, "外觀"), pick, h("div", { class: "actions" }, h("button", { type: "button", class: "btn", onclick: close }, "關閉")));
-  });
-}
-async function openSettings() {
+// ── Gear → 一般: where the files are and what the machine has (外觀 is the shell's) ──
+async function buildGeneral(el) {
   if (!S.info) { try { S.info = await api("/api/info"); } catch {} }
-  if (S.info && !$("#envInfo").childElementCount) {
-    for (const [k, v] of [["資料夾", S.info.workspace], ["簡報", S.info.decks_dir]]) {
-      const dt = document.createElement("dt"); dt.textContent = k;
-      const dd = document.createElement("dd"); dd.textContent = v;
-      $("#envInfo").append(dt, dd);
-    }
-  }
-  $("#dlgSet").showModal();
+  const i = S.info;
+  if (!i) { el.append(h("div", { class: "set-empty" }, "—")); return; }
+  const row = (k, v, ok = true) => h("div", { class: "set-row" }, h("span", { class: "k" }, k), h("span", { class: "v mono" + (ok ? "" : " no"), title: v }, v));
+  el.append(h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "路徑"), row("資料夾", i.workspace), row("簡報", i.decks_dir)),
+    h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "工具"),
+      row("pandoc", i.pandoc ? "✓" : "✗  brew install pandoc", !!i.pandoc), row("Chrome", i.chrome ? "✓" : "✗  Google Chrome", !!i.chrome)));
+}
+
+/** ⌘S: the bound file now (not after the pause), else the server copy. */
+async function saveNow() {
+  if (S.editing || S.editingCell) await exitEdit();
+  flushNudge();
+  if (S.file) { await writeFile(); toast("已儲存"); return; }
+  api(deckApi("/save"), { body: {} }).then(() => toast("已儲存")).catch((e) => toast(e.message, true));
+}
+
+let shell, fontChip;
+/** The top bar, gear, drawers, ⌘F / ⌘S / ⌘, — the shared Lore shell (commons/ui/shell.js). */
+function mountShell() {
+  shell = LoreShell.mount({
+    app: "sc", brand: "SLIDE/COMPOSER", home: goHome, host: $("header.top"),
+    picker: { icon: "cards", name: "", recent: deckRecent, actions: [
+      { icon: "folder", label: "開啟…", kbd: "⌘O", run: openFile },
+      { icon: "save", label: "另存新檔…", kbd: "⇧⌘S", run: saveAs },
+      { icon: "plus", label: "新簡報", run: openNewDeck },
+    ] },
+    primary: [
+      { id: "actShow", icon: "play", label: "放映 ⌘↵", menu: [
+        { icon: "play", label: "從這頁放映", run: () => startShow(true) },
+        { icon: "refresh", label: "從頭放映", run: () => startShow(false) },
+        { icon: "panel", label: "簡報者檢視（延伸螢幕）", run: () => startShow(true, "presenter") },
+      ] },
+      { id: "insPaper", icon: "news", label: "論文", pressed: false, run: () => rdToggle() },
+    ],
+    // the flow-chart module (lore-flow) has no UI yet: the slot is kept, the entry is off
+    ai: { icon: "spark", label: "AI", menu: [{ icon: "graph", label: "流程圖", disabled: true, title: "即將推出" }] },
+    notation: openNotation,
+    export: exportItems(),
+    undo: { undo, redo },
+    drawers: { left: "#sorter", leftLabel: "投影片", leftIcon: "cards", right: "#side", rightLabel: "面板" },
+    search: () => openFind(), // find.js loads after this file
+    save: saveNow,
+    general: buildGeneral,
+    keys: [
+      { label: "放映（從這頁）", keys: "⌘↵" }, { label: "從頭放映", keys: "⇧⌘↵" },
+      { label: "開啟", keys: "⌘O" }, { label: "另存新檔", keys: "⇧⌘S" },
+      { label: "複製", keys: "⌘C" }, { label: "剪下", keys: "⌘X" }, { label: "貼上", keys: "⌘V" }, { label: "複製物件", keys: "⌘D" }, { label: "全選", keys: "⌘A" },
+      { label: "粗體", keys: "⌘B" }, { label: "斜體", keys: "⌘I" }, { label: "底線", keys: "⌘U" },
+      { label: "群組", keys: "⌘G" }, { label: "取消群組", keys: "⇧⌘G" },
+      { label: "上移一層", keys: "⌘]" }, { label: "下移一層", keys: "⌘[" }, { label: "移到最上層", keys: "⇧⌘]" }, { label: "移到最下層", keys: "⇧⌘[" },
+      { label: "微移", keys: "← ↑ ↓ →" }, { label: "刪除", keys: "⌫" }, { label: "取消選取", keys: "Esc" },
+      { label: "上一張／下一張", keys: "↑ ↓" }, { label: "編輯文字", keys: "↵" },
+    ],
+  });
+  // fonts this machine lacks: a chip beside the name (shown by showFonts), the list in a popover
+  const chip = fontChip = h("button", { type: "button", class: "chip", id: "fontChip", "aria-haspopup": "true", "aria-expanded": "false" });
+  chip.onclick = (e) => {
+    e.stopPropagation();
+    const pop = $("#fontPop"), open = pop.hidden;
+    pop.hidden = !open;
+    chip.setAttribute("aria-expanded", String(open));
+    if (open) { const r = chip.getBoundingClientRect(); pop.style.top = `${r.bottom + 6}px`; pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`; }
+  };
+  const shut = () => { $("#fontPop").hidden = true; chip.setAttribute("aria-expanded", "false"); };
+  document.addEventListener("click", (e) => { if (!e.target.closest("#fontPop")) shut(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#fontPop").hidden) shut(); });
 }
 
 function wire() {
@@ -2048,39 +2062,17 @@ function wire() {
   document.addEventListener("keydown", onKey);
   addEventListener("resize", () => { if (S.deck) { renderCanvas(); } });
   $$("[data-tool]").forEach((b) => (b.onclick = () => setTool(b.dataset.tool)));
-  $("#actUndo").onclick = undo;
-  $("#actRedo").onclick = redo;
+  mountShell();
   $("#actZoomIn").onclick = () => { S.fit = false; S.zoom = Math.min(4, S.zoom * 1.25); renderCanvas(); };
   $("#actZoomOut").onclick = () => { S.fit = false; S.zoom = Math.max(0.2, S.zoom / 1.25); renderCanvas(); };
   $("#actFit").onclick = () => { S.fit = true; renderCanvas(); };
   $("#actGrid").onclick = (e) => { S.grid = !S.grid; e.currentTarget.setAttribute("aria-pressed", S.grid); renderCanvas(); };
   $("#actSnap").onclick = (e) => { S.snap = !S.snap; e.currentTarget.setAttribute("aria-pressed", S.snap); };
-  $("#actHome").onclick = goHome;
   $("#zoomChip").onclick = () => { S.fit = true; renderCanvas(); };
-  $("#actSettings").onclick = openSettings;
-  $("#deckPicker").onclick = (e) => deckMenu(e.currentTarget);
-  $("#fileState").onclick = () => { if (S.file?.state === "changed") { $(".ext-bar")?.remove(); changedOnDisk(); } else if (S.file?.state === "missing") askConflict(); else if (S.file?.state === "error" || S.file?.state === "pending") writeFile(); };
   addEventListener("pagehide", flushFileOnLeave);
   watchFile();
-  $("#actExport").onclick = (e) => exportMenu(e.currentTarget);
-  $("#actShow").onclick = (e) => popMenu(e.currentTarget, [
-    { icon: "play", label: "從這頁放映", run: () => startShow(true) },
-    { icon: "refresh", label: "從頭放映", run: () => startShow(false) },
-    { icon: "panel", label: "簡報者檢視（延伸螢幕）", run: () => startShow(true, "presenter") },
-  ]);
-  $("#actNotation").onclick = openNotation;
   wireNotation();
   wireHome();
-  wireSettings();
-  $("#fontChip").onclick = (e) => {
-    e.stopPropagation();
-    const pop = $("#fontPop"), open = pop.hidden;
-    pop.hidden = !open;
-    $("#fontChip").setAttribute("aria-expanded", String(open));
-    if (open) { const r = $("#fontChip").getBoundingClientRect(); pop.style.top = `${r.bottom + 6}px`; pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`; }
-  };
-  document.addEventListener("click", (e) => { if (!e.target.closest("#fontPop")) { $("#fontPop").hidden = true; $("#fontChip").setAttribute("aria-expanded", "false"); } });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#fontPop").hidden) { $("#fontPop").hidden = true; $("#fontChip").setAttribute("aria-expanded", "false"); } });
   $("#slideAdd").onclick = addSlide;
   $("#slideDup").onclick = dupSlide;
   $("#slideDel").onclick = delSlide;
@@ -2108,8 +2100,6 @@ function wire() {
     if (sl && e.target.value !== (sl.notes ?? "")) commit([{ op: "set_slide", slide: uid, path: "/notes", value: e.target.value }], "講者備註");
   });
   $("#notes").addEventListener("blur", () => setTimeout(() => (notesUid = null), 0));
-  $("#toggleSorter").onclick = () => togglePanel("sorter");
-  $("#toggleSide").onclick = () => togglePanel("side");
   wireSorter();
   addEventListener("popstate", boot);
   const pane = $("#viewport");

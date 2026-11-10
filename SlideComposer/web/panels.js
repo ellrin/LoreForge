@@ -204,7 +204,7 @@ function arrangeSection(objs) {
     row(ib("alignL", "靠左對齊", () => alignTo("left")), ib("alignC", "水平置中", () => alignTo("center")), ib("alignR", "靠右對齊", () => alignTo("right")),
       ib("alignT", "靠上對齊", () => alignTo("top")), ib("alignM", "垂直置中", () => alignTo("middle")), ib("alignB", "靠下對齊", () => alignTo("bottom")),
       ib("distH", "水平均分", () => distribute("h")), ib("distV", "垂直均分", () => distribute("v"))),
-    row(ib("front", "移到最上層 (⇧⌘])", () => zorder("front")), ib("back", "移到最下層 (⇧⌘[)", () => zorder("back")),
+    row(ib("front", "移到最上層 (⇧⌘])", () => zorder("front")), ib("sendBack", "移到最下層 (⇧⌘[)", () => zorder("back")),
       h("button", { class: "btn small", onclick: () => zorder("forward") }, "上移一層"), h("button", { class: "btn small", onclick: () => zorder("backward") }, "下移一層")),
     row(ib("group", "群組 (⌘G)", group), ib("ungroup", "取消群組 (⇧⌘G)", ungroup), ib("dup", "複製 (⌘D)", duplicate), ib("trash", "刪除", deleteSel),
       one ? h("label", { class: "row" }, h("input", { type: "checkbox", checked: !!one.hidden, onchange: (e) => commit([setObj(one.id, "/hidden", e.target.checked)], "隱藏物件") }), "隱藏") : null));

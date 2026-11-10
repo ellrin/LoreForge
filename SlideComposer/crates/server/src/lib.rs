@@ -169,7 +169,13 @@ pub fn default_workspace() -> Workspace {
 }
 
 pub fn routes() -> Router<Shared> {
+    // the shared shell: /icons.js /base.css /shell.js (commons/ui, compiled in)
+    let mut shell = Router::new();
+    for (path, mime, body) in lore_shell::FILES {
+        shell = shell.route(path, get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
+    }
     Router::new()
+        .merge(shell)
         .route("/theme.css", get(theme_css))
         .route("/theme.js", get(theme_js))
         .route("/api/theme", get(theme_get).put(theme_put))

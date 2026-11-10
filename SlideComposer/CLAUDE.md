@@ -63,7 +63,7 @@ when working on lore-canvas in parallel with other agents.
 - `apps/desktop` (`slidecomposer`): Tauri shell; starts sc-server in-process on a free port,
   `web/` bundled as a resource, workspace from `sc_server::default_workspace()`. Icon source
   `icons/logo.svg` (PaperComposer's neon style).
-- `web/`: static HTML/CSS/JS, no build step. `render.js` is the only renderer (editor canvas,
+- `web/`: static HTML/CSS/JS, no build step; the top bar, gear, menus, toast, ask and drawers are the shared shell (`lore_shell::FILES` serves `/icons.js` `/base.css` `/shell.js`; `mountShell` in `app.js`), ⌘F is `find.js`. `render.js` is the only renderer (editor canvas,
   thumbnails, `print.html` for PDF). UI text in Traditional Chinese; icons from
   KnowledgeBase/PaperComposer. Colours: the theme all LoreForge apps share — `/theme.css` and
   `/theme.js` are `commons/ui/theme.{css,js}` (through `lore_home::theme`), `/api/theme` reads and

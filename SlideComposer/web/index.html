@@ -9,34 +9,15 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
   <link rel="stylesheet" href="vendor/katex/katex.min.css">
   <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="base.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="prefs.css">
   <script src="theme.js"></script>
 </head>
 <body class="at-home">
 <div class="app" id="app">
-  <header class="top" data-tauri-drag-region>
-    <button class="ico narrow-only ed-only" id="toggleSorter" data-icon="cards" aria-label="投影片" aria-pressed="false"></button>
-    <button class="brand" id="actHome" aria-label="首頁">SLIDE<b>/</b>COMPOSER</button>
-    <button class="picker ed-only" id="deckPicker" aria-haspopup="menu"><span data-icon="cards"></span><span id="deckName"></span><span data-icon="chevron"></span></button>
-    <button class="fstate ed-only" id="fileState" hidden></button>
-    <button class="chip ed-only" id="fontChip" hidden aria-haspopup="true" aria-expanded="false"></button>
-    <div class="fontpop" id="fontPop" role="dialog" aria-label="字型代替" hidden></div>
-    <div class="top-right">
-      <span class="ed-only top-group">
-        <button class="ico" id="actUndo" data-icon="undo" aria-label="復原 ⌘Z" disabled></button>
-        <button class="ico" id="actRedo" data-icon="redo" aria-label="重做 ⇧⌘Z" disabled></button>
-        <span class="vsep"></span>
-        <button class="ico" id="actNotation" data-icon="book" aria-label="方程式與變數"></button>
-        <button class="ico" id="actShow" data-icon="play" aria-label="放映" aria-haspopup="menu"></button>
-        <button class="ico" id="actExport" data-icon="download" aria-label="匯出" aria-haspopup="menu"></button>
-        <button class="ico narrow-only" id="toggleSide" data-icon="panel" aria-label="面板" aria-pressed="false"></button>
-        <span class="vsep"></span>
-      </span>
-      <button class="ico" id="actSettings" data-icon="gear" aria-label="設定"></button>
-      <button class="ico" id="actLook" data-icon="sun" aria-label="外觀"></button>
-    </div>
-  </header>
+  <header class="top"></header>
+  <div class="fontpop" id="fontPop" role="dialog" aria-label="字型代替" hidden></div>
 
   <aside class="left sorter" id="sorter" aria-label="投影片">
     <div class="nav-head">
@@ -50,7 +31,8 @@
   </aside>
 
   <main class="stage page-area">
-    <nav class="writebar" id="tools" aria-label="工具">
+    <div class="stage-top">
+    <nav class="capsule" id="tools" aria-label="工具">
       <button class="ico" data-tool="select" data-icon="cursor" aria-label="選取 V" aria-pressed="true"></button>
       <button class="ico" data-tool="text" data-icon="text" aria-label="文字方塊 T"></button>
       <span class="vsep"></span>
@@ -77,6 +59,19 @@
       <button class="ico" id="actReveal" data-icon="steps" aria-label="漸進揭露"></button>
       <input type="file" id="imgFile" accept="image/*" hidden>
     </nav>
+    <div class="findbar" id="findBar" role="search" hidden>
+      <span data-icon="search"></span>
+      <input id="findInput" type="text" autocomplete="off" aria-label="搜尋">
+      <span class="count" id="findCount"></span>
+      <button class="ico small" id="findPrev" data-icon="up" aria-label="上一個 ⇧↵"></button>
+      <button class="ico small" id="findNext" data-icon="chevron" aria-label="下一個 ↵"></button>
+      <input id="replaceInput" type="text" autocomplete="off" aria-label="取代為" placeholder="取代為" hidden>
+      <button class="btn small" id="replaceOne" hidden>取代</button>
+      <button class="btn small" id="replaceAll" hidden>全部取代</button>
+      <button class="ico small" id="findReplace" data-icon="replace" aria-label="取代" aria-pressed="false"></button>
+      <button class="ico small" id="findClose" data-icon="x" aria-label="關閉 Esc"></button>
+    </div>
+    </div>
     <div class="viewport" id="viewport">
       <div class="paper-wrap" id="paperWrap">
         <div class="paper editor-canvas" id="paper"></div>
@@ -87,7 +82,6 @@
     <footer class="statusbar">
       <span class="accent" id="stPos"></span>
       <span id="stLayout"></span>
-      <span id="saveChip"><i class="dot"></i>已儲存</span>
       <span class="grow"></span>
       <button class="ico tiny" id="actZoomOut" data-icon="zoomOut" aria-label="縮小"></button>
       <button class="zoom" id="zoomChip" aria-label="符合視窗">100%</button>
@@ -132,25 +126,11 @@
   </form>
 </dialog>
 
-<dialog class="dialog small" id="dlgSet" aria-label="設定">
-  <div class="dlg">
-    <div class="dlg-head">
-      <h2>設定</h2>
-      <button type="button" class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
-    </div>
-    <div class="np-body">
-      <div class="np-label">外觀</div>
-      <div id="themePick"></div>
-      <div class="np-label">路徑</div>
-      <dl class="env" id="envInfo"></dl>
-    </div>
-  </div>
-</dialog>
 
-<dialog class="dialog big" id="dlgNotation" aria-label="方程式與變數">
+<dialog class="dialog big" id="dlgNotation" aria-label="對照表">
   <div class="dlg">
     <div class="dlg-head">
-      <h2>方程式與變數</h2>
+      <h2>對照表</h2>
       <span class="chip" id="ntState" hidden></span>
       <button type="button" class="ghost" id="ntExtract"><span data-icon="spark"></span>擷取</button>
       <button type="button" class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
@@ -163,6 +143,7 @@
 
 <script src="vendor/katex/katex.min.js"></script>
 <script src="icons.js"></script>
+<script src="shell.js"></script>
 <script src="prefs.js"></script>
 <script src="render.js"></script>
 <script src="arrange.js"></script>
@@ -170,6 +151,7 @@
 <script src="notation-panel.js"></script>
 <script src="present.js"></script>
 <script src="app.js"></script>
+<script src="find.js"></script>
 <script src="reader.js"></script>
 </body>
 </html>

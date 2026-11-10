@@ -54,6 +54,11 @@
   await Promise.all([...document.images].map((im) => im.decode().catch(() => {})));
   await document.fonts.ready;
   document.body.dataset.ready = "1";
+  // 列印 from the editor: this page sits in a hidden frame; tell the editor to open the print dialog
+  if (q.get("print") === "1" && parent !== window) {
+    addEventListener("afterprint", () => parent.postMessage({ sc: "print-done" }, "*"));
+    parent.postMessage({ sc: "print-ready" }, "*");
+  }
 })();
 </script>
 </body>
