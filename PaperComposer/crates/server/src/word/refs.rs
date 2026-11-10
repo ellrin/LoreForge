@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn reference_list_as_bibtex() {
         let b = bibtex(&["A. Writer, R&D of widgets, J. Widgets 3 (2020) 1-10.".into()]);
-        assert!(b.starts_with("@article{ref1,\n  author = {Writer, A.},\n  title = {R\\&D of widgets},\n  journal = {J. Widgets},\n  year = {2020},"), "{b}");
+        assert!(b.starts_with("@article{ref1,\n  author = {Writer, A.},\n  title = {{R\\&D of widgets}},\n  journal = {{J. Widgets}},\n  year = {2020},"), "{b}");
         assert!(!b.contains("\n  note ="), "{b}");
     }
 }

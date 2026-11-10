@@ -492,7 +492,13 @@ pub fn entry(key: &str, p: &Parsed) -> String {
     let mut keys: Vec<&String> = p.fields.keys().collect();
     keys.sort_by_key(|k| order.iter().position(|o| o == k).unwrap_or(99));
     for k in keys {
-        out += &format!("  {k} = {{{}}},\n", escape(&p.fields[k]));
+        // titles and venues as the author typed them: braced, so no style changes their case
+        let v = escape(&p.fields[k]);
+        if matches!(k.as_str(), "title" | "booktitle" | "journal" | "publisher") {
+            out += &format!("  {k} = {{{{{v}}}}},\n");
+        } else {
+            out += &format!("  {k} = {{{v}}},\n");
+        }
     }
     out + "}\n\n"
 }
@@ -588,7 +594,7 @@ mod tests {
     fn bibtex_text() {
         let p = parse("A. Writer, R&D of widgets, J. Widgets 3 (2020) 1-10.");
         let e = entry("ref1", &p);
-        assert!(e.starts_with("@article{ref1,\n  author = {Writer, A.},\n  title = {R\\&D of widgets},"), "{e}");
+        assert!(e.starts_with("@article{ref1,\n  author = {Writer, A.},\n  title = {{R\\&D of widgets}},"), "{e}");
         assert!(e.contains("annote = {A. Writer, R\\&D of widgets, J. Widgets 3 (2020) 1-10.}"), "{e}");
     }
 }

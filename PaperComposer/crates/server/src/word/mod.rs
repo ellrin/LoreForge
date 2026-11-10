@@ -247,10 +247,10 @@ fn norm_title(t: &str) -> String {
 /// The notation registry's reference checks on the converted paper: typed
 /// numbers left ("Table 1" with no table 1 found) and \ref to no label.
 pub fn reference_findings(dir: &Path, registry: &lore_notation::Notation) -> Vec<String> {
-    let mut files = vec![("main.tex".to_string(), std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default())];
-    for f in paper::section_files(dir) {
-        files.push((format!("sections/{f}"), std::fs::read_to_string(dir.join("sections").join(&f)).unwrap_or_default()));
-    }
+    let files: Vec<(String, String)> = pc_core::open::source_files(dir)
+        .into_iter()
+        .map(|p| (p.strip_prefix(dir).unwrap_or(&p).to_string_lossy().replace('\\', "/"), std::fs::read_to_string(&p).unwrap_or_default()))
+        .collect();
     let doc = lore_notation::Document::from_files(&files);
     let report = lore_notation::check_document(doc, registry, &Default::default());
     report.issues.iter().filter(|i| ["hardcoded_reference", "ref_undefined"].contains(&i.code.as_str())).map(|i| i.message.clone()).collect()
@@ -375,8 +375,8 @@ mod tests {
         assert!(all.contains("We study folded widgets") && !all.contains("very simple") && all.contains("added in review") && !all.contains("was removed"), "{all}");
         assert!(!all.chars().any(|c| ('\u{E000}'..='\u{E0FF}').contains(&c)), "no markers left");
         let bib = std::fs::read_to_string(dest.join("refs.bib")).unwrap();
-        assert!(bib.contains("@article{ref1,") && bib.contains("title = {Folded widgets}") && bib.contains("year = {2020}"), "{bib}");
-        assert!(bib.contains("@inproceedings{ref3,") && bib.contains("booktitle = {Proceedings of Widget Day}"), "{bib}");
+        assert!(bib.contains("@article{ref1,") && bib.contains("title = {{Folded widgets}}") && bib.contains("year = {2020}"), "{bib}");
+        assert!(bib.contains("@inproceedings{ref3,") && bib.contains("booktitle = {{Proceedings of Widget Day}}"), "{bib}");
 
         // review.json: three changes by daidai, one comment
         let r = review::load(&dest);
@@ -410,5 +410,137 @@ mod tests {
         // a second conversion into the same folder is refused
         assert!(convert(&docx, &dest, &people).await.is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Word → paper → Word → paper: the same changes, comments (replies,
+    /// done), references and labels come back (needs pandoc; skipped without it).
+    #[tokio::test]
+    async fn word_round_trip_keeps_review_and_references() {
+        if !has_pandoc() {
+            eprintln!("pandoc not installed: skipped");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("pc-word-rt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let docx = root.join("Widgets.docx");
+        std::fs::write(&docx, synth::docx()).unwrap();
+        let first = root.join("first");
+        convert(&docx, &first, &[]).await.unwrap();
+        // review mode adds a reply, a resolved comment of its own and a deleted sentence's neighbour stays
+        let mut r = review::load(&first);
+        r.comments[0].replies.push(review::Reply { id: "r1".into(), author: "ellrin".into(), at: "2026-11-03T08:00:00Z".into(), text: "Added one.".into(), extra: Default::default() });
+        let method = paper::section_files(&first)[1].clone();
+        r.comments.push(Comment {
+            id: "m-own".into(),
+            author: "ellrin".into(),
+            at: "2026-11-03T09:00:00Z".into(),
+            file: method.clone(),
+            index: 0,
+            exact: "lists the widgets".into(),
+            prefix: String::new(),
+            suffix: String::new(),
+            text: "Checked.".into(),
+            replies: vec![],
+            resolved: true,
+            orphan: false,
+            source: None,
+            extra: Default::default(),
+        });
+        review::save(&first, &r).unwrap();
+
+        let name = format!("pc-word-rt-{}", std::process::id());
+        let rep = crate::export::build_docx(&first, &name, &["refs.bib".into()]).await.unwrap();
+        let _ = std::fs::remove_dir_all(crate::export::cache_dir(&name));
+        assert!(rep.ok, "{rep:?}");
+        let exported = first.join("export").join(format!("{name}.docx"));
+        let parts = docx_parts(&exported);
+        let doc = &parts["word/document.xml"];
+        assert!(doc.contains("<w:ins w:id=") && doc.contains("w:author=\"daidai\"") && doc.contains("<w:delText"), "tracked changes in Word");
+        assert!(doc.contains("<w:rPr><w:del ") && doc.contains("<w:rPr><w:ins "), "whole paragraphs carry their marks");
+        assert!(parts["word/comments.xml"].matches("<w:comment ").count() == 3, "comment, reply, own comment");
+        assert!(parts["word/commentsExtended.xml"].contains("w15:paraIdParent=") && parts["word/commentsExtended.xml"].contains("w15:done=\"1\""));
+        assert!(parts["[Content_Types].xml"].contains("commentsExtended") && parts["word/_rels/document.xml.rels"].contains("commentsExtended.xml"));
+        assert!(!doc.contains("n.d.") && !doc.contains("[eq:1]") && !doc.contains("[fig:1]"), "numbers, not keys");
+        for (n, x) in &parts {
+            if n.ends_with(".xml") || n.ends_with(".rels") {
+                assert!(well_formed(x), "{n} is not well-formed");
+            }
+        }
+        let ids: Vec<&str> = doc.match_indices("<w:ins w:id=\"").chain(doc.match_indices("<w:del w:id=\"")).map(|(i, _)| doc[i + 13..].split('"').next().unwrap()).collect();
+        let mut uniq = ids.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(ids.len(), uniq.len(), "change ids are unique");
+
+        if let Ok(k) = std::env::var("PC_RT_KEEP") { std::fs::copy(&exported, k).unwrap(); }
+        // …and back
+        let second = root.join("second");
+        let c = convert(&exported, &second, &[]).await.unwrap();
+        assert_eq!((c.sections, c.figures, c.equations, c.references), (3, 1, 1, 3), "{c:?}");
+        assert!(c.notation.is_empty(), "{:?}", c.notation);
+        let (a, b) = (review::load(&first), review::load(&second));
+        let changes = |r: &Review| {
+            let mut v: Vec<(Option<String>, Option<String>, String, String)> = r.changes.iter().map(|c| (c.before.as_deref().map(review::norm), c.after.as_deref().map(review::norm), c.author.clone(), c.at.clone())).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(changes(&a), changes(&b));
+        let comments = |r: &Review| {
+            let mut v: Vec<(String, String, String, bool, Vec<(String, String)>)> =
+                r.comments.iter().map(|c| (c.author.clone(), c.text.clone(), review::norm(&c.exact), c.resolved, c.replies.iter().map(|x| (x.author.clone(), x.text.clone())).collect())).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(comments(&a), comments(&b));
+        // references: the same fields
+        let bib = |d: &Path| pc_core::bib::parse(&std::fs::read_to_string(d.join("refs.bib")).unwrap()).0.into_iter().map(|mut e| {
+            e.fields.remove("annote");
+            (e.kind, e.key, e.fields)
+        }).collect::<Vec<_>>();
+        assert_eq!(bib(&first), bib(&second));
+        // the text: citations and references to labels
+        let all: String = paper::section_files(&second).iter().map(|f| std::fs::read_to_string(second.join("sections").join(f)).unwrap()).collect();
+        assert!(all.contains("\\cite{ref1}") && all.contains("\\cite{ref2,ref3}"), "{all}");
+        assert!(all.contains("Fig.~\\ref{fig:1}") && all.contains("Table~\\ref{tab:1}") && all.contains("Eq.~\\eqref{eq:1}") && all.contains("Section~\\ref{sec:2}"), "{all}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn docx_parts(p: &Path) -> HashMap<String, String> {
+        use std::io::Read;
+        let mut z = zip::ZipArchive::new(std::fs::File::open(p).unwrap()).unwrap();
+        let mut out = HashMap::new();
+        for i in 0..z.len() {
+            let mut f = z.by_index(i).unwrap();
+            let mut b = Vec::new();
+            f.read_to_end(&mut b).unwrap();
+            out.insert(f.name().to_string(), String::from_utf8_lossy(&b).to_string());
+        }
+        out
+    }
+
+    /// Tags balance and attributes are quoted (enough to catch a broken rewrite).
+    fn well_formed(x: &str) -> bool {
+        let mut stack: Vec<String> = Vec::new();
+        let mut rest = x;
+        while let Some(i) = rest.find('<') {
+            let Some(e) = rest[i..].find('>').map(|e| i + e) else { return false };
+            let tag = &rest[i + 1..e];
+            rest = &rest[e + 1..];
+            if tag.starts_with('?') || tag.starts_with('!') {
+                continue;
+            }
+            if tag.matches('"').count() % 2 != 0 {
+                return false;
+            }
+            if let Some(name) = tag.strip_prefix('/') {
+                if stack.pop().as_deref() != Some(name.trim()) {
+                    return false;
+                }
+            } else if !tag.ends_with('/') {
+                stack.push(tag.split_whitespace().next().unwrap_or("").to_string());
+            }
+        }
+        stack.is_empty()
     }
 }

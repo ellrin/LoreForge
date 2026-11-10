@@ -268,7 +268,8 @@ fn locate(paper: &Path, errors: &mut [Problem]) {
 /// engine again until cross-references settle (at most four runs).
 pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<Report, String> {
     let start = Instant::now();
-    let main = std::fs::read_to_string(paper.join("main.tex")).map_err(|_| "論文沒有 main.tex".to_string())?;
+    let main_path = pc_core::open::main_file(paper);
+    let main = std::fs::read_to_string(&main_path).map_err(|_| "論文沒有主檔".to_string())?;
     let engine = engine_for(&main);
     let tex = tool(engine).ok_or_else(|| format!("找不到 {engine}：請先安裝 TeX"))?;
     let out = cache_dir(name);
@@ -301,7 +302,8 @@ pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<R
         }
     }
     let sep = if cfg!(windows) { ";" } else { ":" };
-    let main_arg = fonts.as_ref().and_then(|f| f.prep.main.clone()).unwrap_or_else(|| PathBuf::from("main.tex"));
+    // a paper opened as it is keeps its own main file name; the job is "main" either way
+    let main_arg = fonts.as_ref().and_then(|f| f.prep.main.clone()).unwrap_or_else(|| main_path.strip_prefix(paper).map(Path::to_path_buf).unwrap_or_else(|_| PathBuf::from("main.tex")));
     let latex = |out: &Path| {
         let mut c = crate::proc::cmd(&tex);
         if let Some(f) = &fonts {
@@ -322,6 +324,7 @@ pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<R
             // .eps figures, nothing else
             .args(["-interaction=nonstopmode", "-halt-on-error", "-file-line-error"])
             .arg(format!("-output-directory={}", out.display()))
+            .arg("-jobname=main")
             .arg(&main_arg);
         c
     };
@@ -483,12 +486,12 @@ pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Rep
     let filter = work.join("figures.lua");
     std::fs::write(&filter, figure_filter(paper).await).map_err(|e| e.to_string())?;
     let io = |e: std::io::Error| e.to_string();
-    let main = std::fs::read_to_string(paper.join("main.tex")).unwrap_or_default();
+    let main = std::fs::read_to_string(pc_core::open::main_file(paper)).unwrap_or_default();
 
     // The review: open changes and comments as markers in copies of the sections.
     let (marked, marks) = out::mark(paper, &pc_core::review::load(paper));
     let input = if marked.is_empty() {
-        paper.join("main.tex")
+        pc_core::open::main_file(paper)
     } else {
         let f = work.join("review-main.tex");
         std::fs::write(&f, out::main_with(&main, &marked)).map_err(io)?;
@@ -587,7 +590,7 @@ const APP_FILES: &[&str] = &["citations.csv", "main.bbl", "main.tex", "00README.
 /// the .bbl is current.
 pub fn build_latex_zip(paper: &Path, name: &str) -> Result<String, String> {
     use std::io::Write;
-    let main = std::fs::read_to_string(paper.join("main.tex")).map_err(|e| e.to_string())?;
+    let main = std::fs::read_to_string(pc_core::open::main_file(paper)).map_err(|e| e.to_string())?;
     let merged = paper::flatten(paper, paper, &main, &mut Vec::new(), 0);
 
     // Files to ship, top folder first, each with a name at the top level.
@@ -764,9 +767,9 @@ pub fn pandoc_warnings(stderr: &str, cites: &mut Vec<String>) -> Vec<String> {
 /// found the way LaTeX finds it (graphicspath, missing extension), PDF and
 /// EPS figures converted to PNG.
 async fn figure_filter(paper: &Path) -> String {
-    let mut tex = std::fs::read_to_string(paper.join("main.tex")).unwrap_or_default();
-    for f in paper::section_files(paper) {
-        tex += &std::fs::read_to_string(paper.join("sections").join(f)).unwrap_or_default();
+    let mut tex = String::new();
+    for f in pc_core::open::source_files(paper) {
+        tex += &std::fs::read_to_string(f).unwrap_or_default();
     }
     let cache = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("PaperComposer/figures");
     let mut map = String::new();

@@ -360,6 +360,38 @@ fn clean_blocks(blocks: &mut Vec<Value>, found: &mut Found, top: bool) {
                 continue;
             }
         }
+        // a paragraph holding only a picture, then one that reads "Figure N. …"
+        // in a style pandoc does not know as a caption: a figure
+        if matches!(t(&b), "Para" | "Plain") && image_only(&b) {
+            let next = queue.front().map(|n| if t(n) == "Div" && attr_get(&n["c"][0], "custom-style").is_some() { n["c"][1].get(0).cloned().unwrap_or(Value::Null) } else { n.clone() });
+            if let Some(cap) = next.filter(|n| matches!(t(n), "Para" | "Plain") && caption_number(&stringify(n)).is_some_and(|(k, _, _)| k == "fig")) {
+                queue.pop_front();
+                queue.push_front(json!({"t": "Figure", "c": [["", [], []], [null, [{"t": "Plain", "c": cap["c"].clone()}]], [{"t": "Plain", "c": b["c"].clone()}]]}));
+                continue;
+            }
+        }
+        // a table's caption also written as a paragraph beside it: once is enough
+        if t(&b) == "Table" {
+            let cap = stringify(&b["c"][1][1]);
+            let same = |n: &Value| !cap.is_empty() && matches!(t(n), "Para" | "Plain" | "Div") && stringify(n) == cap;
+            if out.last().is_some_and(same) {
+                out.pop();
+            }
+            if queue.front().is_some_and(same) {
+                queue.pop_front();
+            }
+        }
+        // a picture in a one-cell table with a "Figure N" caption (how pandoc
+        // and many templates write figures): a figure
+        if t(&b) == "Table" && has_image(&b) {
+            unwrap_caption_divs(&mut b["c"][1]);
+            if caption_number(&stringify(&b["c"][1][1])).is_some_and(|(k, _, _)| k == "fig") {
+                let mut inner = Vec::new();
+                collect_cell_blocks(&b["c"][4], &mut inner);
+                queue.push_front(json!({"t": "Figure", "c": [b["c"][0].clone(), b["c"][1].clone(), inner]}));
+                continue;
+            }
+        }
         match t(&b) {
             "Table" => {
                 if let Some((label, tex)) = equation_table(&b) {
@@ -400,6 +432,33 @@ fn clean_blocks(blocks: &mut Vec<Value>, found: &mut Found, top: bool) {
         push_block(b, &mut out, &mut refs_level, found, top);
     }
     *blocks = out;
+}
+
+fn image_only(b: &Value) -> bool {
+    let inl = b["c"].as_array().cloned().unwrap_or_default();
+    inl.iter().any(|x| t(x) == "Image") && inl.iter().all(|x| matches!(t(x), "Image" | "Space" | "SoftBreak" | "LineBreak"))
+}
+
+fn has_image(v: &Value) -> bool {
+    match v {
+        Value::Array(a) => a.iter().any(has_image),
+        Value::Object(_) if t(v) == "Image" => true,
+        Value::Object(o) => o.get("c").is_some_and(has_image),
+        _ => false,
+    }
+}
+
+/// The blocks of every cell of a table body list, in order.
+fn collect_cell_blocks(bodies: &Value, out: &mut Vec<Value>) {
+    for body in bodies.as_array().into_iter().flatten() {
+        for rows in [&body[2], &body[3]] {
+            for row in rows.as_array().into_iter().flatten() {
+                for cell in row[1].as_array().into_iter().flatten() {
+                    out.extend(cell[4].as_array().cloned().unwrap_or_default());
+                }
+            }
+        }
+    }
 }
 
 fn unwrap_caption_divs(caption: &mut Value) {
@@ -544,6 +603,35 @@ pub fn tables_to_tex(doc: &mut Value) {
 /// Clean the document: headings, equations, captions, references, images.
 pub fn clean(doc: &mut Value) -> Found {
     let mut found = Found::default();
+    // links inside the document (Word's cross-references, "Fig. 1" pointing
+    // at a bookmark) become their text: the typed numbers become \refs below
+    fn unlink(v: &mut Value) {
+        match v {
+            Value::Array(a) => {
+                let mut out = Vec::with_capacity(a.len());
+                for mut x in std::mem::take(a) {
+                    if t(&x) == "Link" && x["c"][2][0].as_str().is_some_and(|u| u.starts_with('#')) {
+                        let mut inner = x["c"][1].take();
+                        unlink(&mut inner);
+                        out.extend(inner.as_array().cloned().unwrap_or_default());
+                        continue;
+                    }
+                    unlink(&mut x);
+                    out.push(x);
+                }
+                *a = out;
+            }
+            Value::Object(o) => {
+                if let Some(c) = o.get_mut("c") {
+                    unlink(c);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(b) = doc.get_mut("blocks") {
+        unlink(b);
+    }
     if let Some(blocks) = doc.get_mut("blocks").and_then(|b| b.as_array_mut()) {
         clean_blocks(blocks, &mut found, true);
     }

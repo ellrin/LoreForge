@@ -436,18 +436,21 @@ fn comment_block(p: &str, ids: &[usize]) -> String {
 }
 
 /// The section files with markers, and what the markers stand for.
-/// Keys of the map: section file names (under `sections/`).
+/// Keys of the map: the files' paths in the paper folder.
 pub fn mark(dir: &Path, r: &Review) -> (HashMap<String, String>, Marks) {
     let mut marks = Marks::default();
     let mut files = HashMap::new();
-    for file in paper::section_files(dir) {
-        let Ok(text) = std::fs::read_to_string(dir.join("sections").join(&file)) else { continue };
+    let custom = pc_core::open::is_custom(dir);
+    for sec in pc_core::open::sections(dir) {
+        let file = sec.file.clone();
+        // where its text is: sections/<file>, or the file itself in a paper opened as it is
+        let rel = if custom { file.clone() } else { format!("sections/{file}") };
+        let Ok(text) = std::fs::read_to_string(dir.join(&rel)) else { continue };
         let changes: Vec<&review::Change> = r.changes.iter().filter(|c| c.file == file).collect();
         let comments: Vec<&review::Comment> = r.comments.iter().filter(|c| c.file == file).collect();
         if changes.is_empty() && comments.is_empty() {
             continue;
         }
-        let sec = paper::parse_section(&file, &text);
         let paras = &sec.paragraphs;
         // the change on each paragraph, and deleted paragraphs by gap
         let mut on: Vec<Option<(Option<String>, usize)>> = vec![None; paras.len()];
@@ -494,6 +497,10 @@ pub fn mark(dir: &Path, r: &Review) -> (HashMap<String, String>, Marks) {
             if paras.is_empty() {
                 break;
             }
+            // the app's own notes (no author: e.g. typed numbers after a Word import) stay here
+            if c.author.trim().is_empty() {
+                continue;
+            }
             let i = c.index.min(paras.len() - 1);
             let mut ids = vec![marks.comments.len()];
             let parent = marks.comments.len();
@@ -526,7 +533,7 @@ pub fn mark(dir: &Path, r: &Review) -> (HashMap<String, String>, Marks) {
             out.push(format!("{}{}{}", mk(DEL_S, g.2), g.3, mk(DEL_E, g.2)));
         }
         let head = if text.lines().any(|l| l.trim_start().starts_with("\\section")) { format!("\\section{{{}}}{}\n\n", sec.title, sec.tail) } else { String::new() };
-        files.insert(file, format!("{head}{}\n", out.join("\n\n")));
+        files.insert(rel, format!("{head}{}\n", out.join("\n\n")));
     }
     (files, marks)
 }
@@ -535,7 +542,7 @@ fn who(a: &str) -> String {
     if a.trim().is_empty() { "PaperComposer".into() } else { a.to_string() }
 }
 
-/// main.tex with each marked section's `\input` replaced by its text.
+/// The main file with each marked section's `\input` replaced by its text.
 pub fn main_with(main: &str, files: &HashMap<String, String>) -> String {
     let mut out = String::new();
     for line in main.lines() {
@@ -545,7 +552,7 @@ pub fn main_with(main: &str, files: &HashMap<String, String>) -> String {
             let Some(i) = code.find(cmd) else { continue };
             let Some(e) = code[i + cmd.len()..].find('}') else { continue };
             let arg = code[i + cmd.len()..i + cmd.len() + e].trim();
-            let name = arg.trim_start_matches("./").strip_prefix("sections/").unwrap_or("");
+            let name = arg.trim_start_matches("./");
             let name = if name.ends_with(".tex") { name.to_string() } else { format!("{name}.tex") };
             if let Some(t) = files.get(&name) {
                 out += &code[..i];
@@ -1384,7 +1391,7 @@ mod tests {
     #[test]
     fn main_tex_gets_the_marked_sections() {
         let mut f = HashMap::new();
-        f.insert("01-intro.tex".to_string(), "\\section{Intro}\n\nMarked.".to_string());
+        f.insert("sections/01-intro.tex".to_string(), "\\section{Intro}\n\nMarked.".to_string());
         let m = main_with("\\begin{document}\n\\input{sections/01-intro}\n\\input{sections/02-rest}\n\\end{document}\n", &f);
         assert_eq!(m, "\\begin{document}\n\n\\section{Intro}\n\nMarked.\n\n\\input{sections/02-rest}\n\\end{document}\n");
     }
