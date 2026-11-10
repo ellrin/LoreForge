@@ -1924,20 +1924,9 @@ function wireNotation() {
   };
 }
 
-// ── Settings: 外觀 (theme × mode, same as PaperComposer) and folders ─────────
-function applyTheme() {
-  const root = document.documentElement;
-  let t = "orange", m = "dark";
-  try { t = localStorage.getItem("sc.theme") || t; m = localStorage.getItem("sc.mode") || m; } catch {}
-  root.dataset.theme = t;
-  root.dataset.mode = m;
-  $$(".theme[data-theme]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.theme === t)));
-  $$("#lookMode button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === m)));
-}
+// ── Settings: 外觀 (the theme all LoreForge apps share, theme.js) and folders ─────────
 function wireSettings() {
-  $$(".theme[data-theme]").forEach((b) => (b.onclick = () => { try { localStorage.setItem("sc.theme", b.dataset.theme); } catch {} applyTheme(); }));
-  $$("#lookMode button").forEach((b) => (b.onclick = () => { try { localStorage.setItem("sc.mode", b.dataset.v); } catch {} applyTheme(); }));
-  applyTheme();
+  LoreTheme.picker($("#themePick"));
 }
 async function openSettings() {
   if (!S.info) { try { S.info = await api("/api/info"); } catch {} }

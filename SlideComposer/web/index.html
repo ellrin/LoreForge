@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant" data-theme="orange" data-mode="dark">
+<html lang="zh-Hant" data-theme="giftbox" data-mode="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="prefs.css">
-  <script>try { const t = localStorage.getItem("sc.theme"), m = localStorage.getItem("sc.mode"); if (["orange", "night", "terminal"].includes(t)) document.documentElement.dataset.theme = t; if (m === "light" || m === "dark") document.documentElement.dataset.mode = m; } catch {}</script>
+  <script src="theme.js"></script>
 </head>
 <body class="at-home">
 <div class="app" id="app">
@@ -141,16 +141,7 @@
     </div>
     <div class="np-body">
       <div class="np-label">外觀</div>
-      <div class="look-row"><span class="lbl">主題</span>
-        <div class="themes">
-          <button class="theme" data-theme="orange" aria-label="深灰橘"><span class="swatch"><i style="background:#27272a"></i><i style="background:#ff6b35"></i><i style="background:#f0f0f1"></i></span></button>
-          <button class="theme" data-theme="night" aria-label="藍紫黃"><span class="swatch"><i style="background:#0c0b24"></i><i style="background:#5b3df5"></i><i style="background:#f3e600"></i></span></button>
-          <button class="theme" data-theme="terminal" aria-label="綠黑"><span class="swatch"><i style="background:#080d0a"></i><i style="background:#11965a"></i><i style="background:#2ef08a"></i></span></button>
-        </div>
-      </div>
-      <div class="look-row"><span class="lbl">模式</span>
-        <div class="seg" id="lookMode"><button data-v="light">淺色</button><button data-v="dark">深色</button></div>
-      </div>
+      <div id="themePick"></div>
       <div class="np-label">路徑</div>
       <dl class="env" id="envInfo"></dl>
     </div>

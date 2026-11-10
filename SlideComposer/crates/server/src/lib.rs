@@ -169,6 +169,8 @@ pub fn default_workspace() -> Workspace {
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/theme.css", get(theme_css))
+        .route("/theme.js", get(theme_js))
+        .route("/api/theme", get(theme_get).put(theme_put))
         .route("/notation-panel.js", get(notation_panel_js))
         .route("/api/decks/{name}/notation", get(notation_get).put(notation_put))
         .route("/api/decks/{name}/arrangements", get(arrangements_get))
@@ -207,10 +209,28 @@ pub fn routes() -> Router<Shared> {
         .route("/api/shell/dialog", post(shell_dialog))
 }
 
-/// The LoreForge app themes (shared with PaperComposer), compiled in so the
-/// bundled app serves the same file.
+/// The LoreForge themes (commons/ui/theme.css, the same file in every app),
+/// compiled in so the bundled app serves it too.
 async fn theme_css() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../../../../commons/ui/theme.css"))
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], lore_home::theme::CSS)
+}
+
+/// commons/ui/theme.js with the shared choice in front (first paint has the theme).
+async fn theme_js(State(s): State<Shared>) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], lore_home::theme::script(&s.home))
+}
+
+/// The theme every LoreForge app shows (`private/shared/ui.toml`); null = none chosen yet.
+async fn theme_get(State(s): State<Shared>) -> Json<Value> {
+    Json(json!({ "theme": s.home.theme() }))
+}
+
+async fn theme_put(State(s): State<Shared>, Json(b): Json<Value>) -> R {
+    let id = b["theme"].as_str().unwrap_or_default();
+    match s.home.set_theme(id) {
+        Ok(t) => Ok(Json(json!({ "theme": t }))),
+        Err(e) => Err(bad(e.to_string())),
+    }
 }
 
 /// 版型: the author's named arrangements and this deck's page areas per kind.
@@ -317,13 +337,18 @@ pub fn router(shared: Shared) -> Router {
 }
 
 pub fn state(ws: Workspace, web: PathBuf) -> Shared {
+    state_at(ws, web, lore_home::Home::discover(&repo_dir()))
+}
+
+/// With the LoreForge folder named (tests use a temporary one).
+pub fn state_at(ws: Workspace, web: PathBuf, home: lore_home::Home) -> Shared {
     Arc::new(AppState {
         ws,
         web,
         port: Mutex::new(0),
         sessions: Mutex::new(HashMap::new()),
         pandoc: lore_math::Pandoc::default(),
-        home: lore_home::Home::discover(&repo_dir()),
+        home,
         fonts: std::sync::OnceLock::new(),
         dialog: std::sync::OnceLock::new(),
         fallback_cache: Mutex::new(HashMap::new()),

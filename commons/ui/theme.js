@@ -155,9 +155,9 @@
           b.type = "button";
           b.dataset.theme = t.id;
           b.setAttribute("aria-label", t.name);
-          const sw = el("span", "sw");
+          const sw = el("span", "theme-sw");
           for (const c of t.sw) { const i = el("i"); i.style.background = c; sw.append(i); }
-          b.append(sw, el("span", "nm", t.name));
+          b.append(sw, el("span", "theme-nm", t.name));
           b.onmouseenter = b.onfocus = () => show(t.id);
           b.onmouseleave = b.onblur = () => show(current());
           b.onclick = () => choose(t.id);

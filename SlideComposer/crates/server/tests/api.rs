@@ -313,4 +313,42 @@ async fn a_pptx_opened_where_it_lives_saves_back_into_it() {
     assert!(to.is_file());
     let (code, _, _) = call(&app, "POST", &format!("/api/decks/{name}/file/save-as"), Some(json!({ "path": docs.join("x.txt") })), None).await;
     assert_eq!(code, StatusCode::BAD_REQUEST);
+
+/// One theme for every LoreForge app: the page gets it before first paint
+/// (`/theme.js`), `/api/theme` reads and sets the shared choice.
+#[tokio::test]
+async fn theme_is_the_shared_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = sc_core::Workspace::new(dir.path().join("ws"), None);
+    let home = lore_home::Home::at(dir.path().join("lore"));
+    let app = sc_server::router(sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone()));
+
+    let (st, v, _) = call(&app, "GET", "/api/theme", None, None).await;
+    assert_eq!((st, &v["theme"]), (StatusCode::OK, &Value::Null));
+    let (_, _, js) = call(&app, "GET", "/theme.js", None, None).await;
+    assert!(String::from_utf8(js).unwrap().starts_with("window.LORE_THEME = null;"));
+    let (st, _, _) = call(&app, "PUT", "/api/theme", Some(json!({ "theme": "orange" })), None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    let (st, v, _) = call(&app, "PUT", "/api/theme", Some(json!({ "theme": "shibuya" })), None).await;
+    assert_eq!((st, v["theme"].as_str()), (StatusCode::OK, Some("shibuya")));
+    assert_eq!(home.theme(), Some("shibuya"));
+    let (_, _, js) = call(&app, "GET", "/theme.js", None, None).await;
+    assert!(String::from_utf8(js).unwrap().starts_with("window.LORE_THEME = \"shibuya\";"));
+    let (_, _, css) = call(&app, "GET", "/theme.css", None, None).await;
+    let css = String::from_utf8(css).unwrap();
+
+    // the page uses the shared files; slides, PDF pages and equation pictures have no theme
+    let web = sc_server::repo_dir().join("web");
+    let index = std::fs::read_to_string(web.join("index.html")).unwrap();
+    assert!(index.contains("href=\"theme.css\"") && index.contains("<script src=\"theme.js\"></script>"));
+    for f in ["object.html", "print.html"] {
+        let s = std::fs::read_to_string(web.join(f)).unwrap();
+        assert!(!s.contains("theme.css") && !s.contains("theme.js"), "{f}");
+    }
+    for id in lore_home::theme::THEMES {
+        assert!(css.contains(&format!(":root[data-theme=\"{id}\"]")), "{id}");
+    }
+    let styles = std::fs::read_to_string(web.join("styles.css")).unwrap();
+    assert!(!styles.contains("[data-theme="), "palettes live in commons/ui/theme.css only");
 }

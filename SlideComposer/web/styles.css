@@ -1,6 +1,9 @@
-/* SlideComposer editor. Palettes come from theme.css (commons/ui, shared with
-   PaperComposer: orange / night / terminal × light / dark). Components follow
-   PaperComposer. Accent text, line icons and thin borders use --accent-text. */
+/* SlideComposer editor. Palettes come from theme.css (commons/ui, the themes
+   every LoreForge app shares; theme.js picks one). Components follow
+   PaperComposer. Accent text, line icons and thin borders use --accent-text.
+   Slides (.slide and everything render.js draws), thumbnails, the show and
+   the presenter view never use theme tokens: object.html and print.html do
+   not even load theme.css. */
 
 :root {
   --stage: color-mix(in srgb, var(--bg) 82%, #000);
@@ -237,7 +240,7 @@ dialog .actions { display: flex; gap: 8px; justify-content: flex-end; }
 dialog textarea { min-height: 80px; font: 13px var(--mono); }
 .preview { background: #fff; color: #000; border-radius: 6px; padding: 12px; min-height: 48px; overflow-x: auto; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 90; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: var(--r); font-size: 13.5px; max-width: calc(100vw - 32px); }
-.toast.err { background: var(--err); color: #fff; }
+.toast.err { background: var(--err); color: var(--bg); }
 
 /* ── Home ────────────────────────────── */
 .home { position: fixed; inset: 48px 0 0 0; z-index: 30; overflow: auto; padding: 32px 24px 48px; background-color: var(--bg); background-image: radial-gradient(var(--dot) 1px, transparent 1px); background-size: 16px 16px; }
@@ -252,7 +255,7 @@ dialog textarea { min-height: 80px; font: 13px var(--mono); }
 .tile.over { border: 1.5px dashed var(--accent-text); background: var(--accent-soft); }
 .recent { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .deck-card { display: flex; flex-direction: column; gap: 6px; padding: 0; background: none; border: 0; text-align: left; color: var(--text); min-width: 0; }
-.deck-card .frame { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 4px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-strong); }
+.deck-card .frame { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 4px; background: #fff; box-shadow: 0 0 0 1px var(--line-strong); }
 .deck-card .frame > .slide { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
 .deck-card:hover .frame { box-shadow: 0 0 0 2px var(--accent-text); }
 .deck-card .name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -280,18 +283,10 @@ dialog textarea { min-height: 80px; font: 13px var(--mono); }
 .base-opt:has(input:checked) { border-color: var(--accent-text); box-shadow: 0 0 0 1px var(--accent-text); }
 .base-opt:has(input:focus-visible) { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .base-opt input { position: absolute; opacity: 0; pointer-events: none; }
-.base-opt .thumb16 { position: relative; overflow: hidden; aspect-ratio: 16 / 9; border-radius: 4px; background: var(--paper); box-shadow: 0 0 0 1px var(--line); }
+.base-opt .thumb16 { position: relative; overflow: hidden; aspect-ratio: 16 / 9; border-radius: 4px; background: #fff; box-shadow: 0 0 0 1px var(--line); }
 .base-opt .thumb16 > .slide { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
 .base-opt .thumb16.blank { background-image: none; outline: 1px dashed var(--line-strong); outline-offset: -10px; }
 .base-opt span { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.look-row { display: flex; align-items: center; gap: 12px; }
-.look-row .lbl { font-size: 12.5px; color: var(--muted); width: 36px; }
-.themes { display: flex; gap: 6px; align-items: center; }
-.theme { display: grid; place-items: center; width: 40px; height: 32px; padding: 0; border-radius: var(--r); border: 1px solid var(--line); background: var(--panel); }
-.theme:hover { border-color: var(--line-strong); }
-.theme[aria-pressed="true"] { border-color: var(--accent-text); box-shadow: 0 0 0 1px var(--accent-text); }
-.swatch { display: inline-flex; border-radius: 2px; overflow: hidden; }
-.swatch i { width: 8px; height: 16px; display: block; }
 .env { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12px; }
 .env dt { color: var(--faint); font-family: var(--mono); font-size: 11px; }
 .env dd { margin: 0; font-family: var(--mono); font-size: 11.5px; word-break: break-all; color: var(--muted); }
@@ -428,7 +423,7 @@ dialog textarea { min-height: 80px; font: 13px var(--mono); }
 .arr-default[aria-pressed="true"], .recipe[aria-pressed="true"] { border-color: var(--accent-text); box-shadow: 0 0 0 1px var(--accent-text); }
 .arr-default span, .recipe span { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recipe[aria-pressed="true"] span, .arr-default[aria-pressed="true"] span { color: var(--text); }
-.rthumb { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 3px; background: var(--paper); box-shadow: 0 0 0 1px var(--line); }
+.rthumb { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 3px; background: #fff; box-shadow: 0 0 0 1px var(--line); }
 .rthumb > .slide { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
 .rthumb.none { display: grid; place-items: center; color: var(--faint); font-size: 12px; }
 .seg.filters { display: grid; grid-template-columns: repeat(3, 1fr); margin: 10px 0 8px; }
