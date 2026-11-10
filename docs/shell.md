@@ -73,6 +73,114 @@ KB 套用：上方列、齒輪、提示與詢問框、跨 app 連結、狀態列
 - LR 右側改成編號區塊：名詞、註記預設展開；符號、段落、引用句預設收起；問這篇是上方列的 AI 鈕。
 - 同一篇論文在不同工具裡內容要一致：從 LR 帶進來的符號與方程式，自動登記到這份文件（論文或簡報）的對照表，id 沿用 LR 的 `symbols.json`；全域對照表不自動寫入。PC 目前只複製 LaTeX，要改成自動登記。
 
+## F. 共用外殼的介面（`commons/ui`，2026-11-11）
+
+示範：`cd commons/ui && python3 -m http.server`，開 `/demo/shell.html`（`?theme=<id>`，API 是假的）。
+伺服器透過 `lore-shell` crate 提供三個檔：`lore_shell::FILES` → `/icons.js`、`/base.css`、`/shell.js`。
+頁面載入順序：`theme.css → base.css → styles.css`；`theme.js → icons.js → shell.js → app.js`。
+app 自己的 `icons.js` 拿掉（兩份都宣告 `ICONS`）。`cargo test -p lore-shell` 檢查圖示沒有重複、四個 app 用到的名稱都在、base.css 只用 theme.css 的 token。
+
+### 圖示（`icons.js`）
+
+四套的聯集，一個圖形一個名稱；API 不變（`ICONS`、`data-icon`、`paintIcons`、`icon`、`iconButton`）。
+同一功能畫法不同時用 SC（其次 LR）的畫法、名稱不變（file、pdf、save、image、star、moon、fit）。
+舊名照用：`ICON_ALIASES`（export→download、list→listUl、listOrdered→listOl、panelRight→panel）。
+同名不同意思要改呼叫處：`ICON_RENAMES`（SC／LR 的 z 順序 back→sendBack，LR insert→insertPage、quote→excerpt、merge→mergeFiles，PC 重新生成 redo→recast）。
+共同位置的圖示：首頁 home · 文件選單 chevron · 對照表 book · 匯出 download · 列印 printer · 另存新檔 save · 開啟 folder · AI spark · 設定 gear · 復原 undo · 重做 redo · 搜尋 search · 同步 cloud／cloudOff · 抽屜 panelLeft／panel。
+
+### 外殼（`shell.js`）
+
+```js
+const shell = LoreShell.mount({
+  app, brand: "SLIDE/COMPOSER", home,                       // 品牌（按了回首頁）
+  picker: { icon, name, recent: async () => [...], actions: [...] },   // 文件選單；最後自動加「首頁」
+  status: { onClick(state) },                               // 狀態標籤可點時做什麼（LR：另存新檔）
+  primary: [{ id, icon, label, run | menu }],               // 2–4 個；ai 固定在最後一格
+  ai: { icon: "spark", label, run | menu },
+  notation, export: [...含列印],                            // 右側：對照表 · 匯出▾ · 齒輪（固定，不收別的）
+  undo: { undo, redo },                                     // 只在 shell.editing(true) 時出現
+  drawers: { left, leftLabel, leftIcon, right, rightLabel },  // ≤1100px 變抽屜，≤760px 藏品牌字
+  search, save,                                             // ⌘F、⌘S；⌘, 開設定
+  general(el), look(el), sync(el), settingsTabs: [{ id, label, build }],   // 齒輪裡本工具的內容
+  modelSetup(kind),                                         // 模型頁「下載…／登入…」交回 app（金鑰只在 app 裡處理）
+  keys: [{ label, keys }],                                  // 沒有按鈕的快捷鍵
+  host,                                                     // 要填的 <header>（預設在 body 最前面新建）
+});
+shell.slots.lead / primary / right   // 給本工具的小東西（SC 字型標籤、KB 使用者）
+shell.setName(n) · shell.setStatus(state, { label, title, action }) · shell.editing(on) · shell.setUndo({ undo, redo }) · shell.drawer(w, on)
+LoreShell.toast(msg, { err, action: { label, run }, ms })
+LoreShell.ask(anchor, lines, buttons) → Promise（值或 null；Esc、點外面＝null）
+LoreShell.menu(anchor, items) · LoreShell.settings(tab) · LoreShell.block({ n, title, count, help, open, key })
+LoreShell.engineChip({ task, value, used, onChange }) · LoreShell.shortcuts()
+LoreLinks.open(app, params) · LoreLinks.url(app, params) · LoreLinks.ports
+```
+
+狀態：`saved` 已儲存、`saving` 儲存中、`dirty` 未儲存、`syncing` 同步中、`unsynced` 未同步、`error`（app 給字，例如 SC「已在別處修改」）。
+`dirty`／`unsynced`／`error` 可點（`status.onClick`），或每次 `setStatus` 自帶 `action`。
+提示、詢問框、選單放在開著的 dialog 裡（不然被齒輪視窗蓋住）。`.help[data-tip]` 由外殼統一處理，app 拿掉自己的。
+
+快捷鍵頁由按鈕的 `aria-label` 產生：標籤最後一段是按鍵（`復原 ⌘Z`、`選取 V`、`粗體　Ctrl+B`、`關閉 Esc`），或放在括號裡（`復原「移動」(⌘Z)`，「…」會略過）。
+例外用 `data-keys="⌘K"`；分組依位置（上方列、工具、左側、右側、狀態列、其他），或 `data-keys-group`。
+
+### 跨 app 連結（`LoreLinks`）
+
+| app | 連結 | http 備援（開發用預設埠） |
+|---|---|---|
+| pc | `lore-pc://open?path=<檔案>` | `http://127.0.0.1:7878/?open=<檔案>` |
+| sc | `lore-sc://deck/<名稱>` | `http://127.0.0.1:7880/?deck=<名稱>` |
+| lr | `lore-lr://paper/<sha>?page=<n>` | `http://127.0.0.1:7890/?paper=<sha>&page=<n>` |
+| kb | `lore-kb://node/<id>` | `http://127.0.0.1:7700/#/node/<id>` |
+
+`lore-<app>://` 不帶路徑＝開那個 app 的首頁。`open()` 依序：桌面版注入的 `window.LoreDesktop.openUrl(url)` →
+本 app 伺服器的 `POST /api/links/open {url}`（只接受 `lore-(pc|sc|lr|kb)://`，交給系統開啟，成功 204）→ 新視窗開 http 備援。
+桌面版用的是空閒埠，要改 `LoreLinks.ports`。註冊 URL scheme（Info.plist）各 app 之後自己做。
+
+### 模型：`GET/PUT /api/engines`
+
+設定存在 `private/shared/engine.toml`（lore-home `Home::engine()`／`set_engine()` 已有 `[engine]`），建議加兩個表：
+
+```toml
+[engine]            # 已有：本機模型
+url = "http://127.0.0.1:8080/v1"
+model = "qwen3.5-9b-q8"
+
+[claude]            # 建議：Claude 連線（不放金鑰；金鑰在鑰匙圈）
+via = "subscription"   # subscription | api
+model = "sonnet"       # catalog 別名
+
+[route]             # 建議：依任務類別的走向
+create = "auto"     # auto | cloud | local
+tidy = "auto"
+ask = "auto"
+```
+
+| 類別 id | 名稱 | 自動的先後 |
+|---|---|---|
+| `create` | 創作與審稿 | 雲 → 地 |
+| `tidy` | 整理與格式 | 地 → 雲 |
+| `ask` | 問答 | 地 → 雲（本機可用就用本機） |
+
+走向：`auto`＝上表的先後，第一個不能用就換另一個；`cloud`＝只用 Claude；`local`＝只用本機（不能用就報錯，不換）。
+功能旁的引擎標籤是 app 自己的覆寫（存在 `private/<App>/`，例如 LR 的 `models.json`），優先於類別走向；`auto`＝跟類別走。
+
+`GET /api/engines` →
+
+```json
+{
+  "local":  { "state": "ready", "url": "http://127.0.0.1:8080/v1", "model": "qwen3.5-9b-q8", "label": "Qwen 3.5 9B", "vision": false,
+              "models": [{ "id": "qwen3.5-9b-q8", "label": "Qwen 3.5 9B", "vision": false }] },
+  "claude": { "state": "ready", "via": "subscription", "vias": { "subscription": true, "api": false }, "model": "sonnet", "vision": true,
+              "models": [{ "id": "sonnet", "label": "Sonnet", "vision": true }] },
+  "classes": [{ "id": "create", "label": "創作與審稿", "route": "auto", "auto": ["claude", "local"] }],
+  "tasks": [{ "id": "pc-draft-turn", "label": "討論草稿", "class": "ask", "last": "local:qwen3.5-9b-q8" }],
+  "overrides": { "pc-draft-turn": "auto" }
+}
+```
+
+`state`：`ready` 可用、`starting` 啟動中、`off` 未連線、`missing` 未安裝、`error`。`vision`＝能看圖。`tasks` 只列本 app 的任務；`last`＝上次實際用的模型（標籤顯示用）。
+`PUT /api/engines` 送要改的部分：`{ local: { model }, claude: { via, model }, routes: { create: "cloud" }, overrides: { "<task>": "local" } }`，回傳完整的 GET 內容；
+值不對 → 400 `{ "error": "一行中文" }`。沒有這個路由（404）時模型頁只顯示「—」。登入、輸入金鑰、下載模型不經過這個介面（`modelSetup` 交回 app）。
+
 ## 順序
 
 先做外殼再補功能：互補功能需要外殼先把位置留好。
