@@ -342,7 +342,7 @@ input[aria-invalid] { border-color: var(--err) !important; }
 #dlgNotation notation-panel { flex: 1; min-height: 0; border: 0; border-radius: 0;
   --np-bg: var(--bg); --np-fg: var(--text); --np-mute: var(--muted); --np-line: var(--line); --np-soft: var(--panel);
   --np-accent: var(--accent-text); --np-hi: var(--accent-soft); --np-err: var(--err); --np-warn: var(--warn); --np-info: var(--muted); }
-#ntPanel .np-tabs, #ntPanel .np-seg { display: none; }
+#ntPanel .np-tabs, #ntPanel .np-seg, #ntPanel td.np-ops .np-btn:not(.quiet) { display: none; }
 
 /* ── Narrow (the shell's breakpoints: drawers ≤1100px, brand text hidden ≤760px) ── */
 @media (max-width: 1100px) {
