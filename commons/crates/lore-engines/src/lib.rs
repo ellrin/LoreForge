@@ -63,6 +63,9 @@ pub struct Engines {
     /// [`router`] installs the shared file as the process routing (off: the settings page
     /// works, routing stays the tasks' own order; for app tests that must not depend on it).
     pub install_routing: bool,
+    /// Whether an API key exists, read once off the async threads (a keychain read can
+    /// wait on a password prompt; it must never stall the server). Cleared by PUT.
+    api_known: Arc<std::sync::Mutex<Option<bool>>>,
 }
 
 impl Engines {
@@ -88,6 +91,7 @@ impl Engines {
             opener: Arc::new(os_open),
             probe: true,
             install_routing: true,
+            api_known: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -195,7 +199,16 @@ impl Engines {
 
     async fn claude(&self, s: &EngineSettings) -> Value {
         let st = self.cc.get(&self.cli, false).await;
-        let api = self.keys.get(None, &Account::Single).is_some();
+        let known = *self.api_known.lock().unwrap_or_else(|e| e.into_inner());
+        let api = match known {
+            Some(b) => b,
+            None => {
+                let keys = self.keys.clone();
+                let b = tokio::task::spawn_blocking(move || keys.get(None, &Account::Single).is_some()).await.unwrap_or(false);
+                *self.api_known.lock().unwrap_or_else(|e| e.into_inner()) = Some(b);
+                b
+            }
+        };
         let via = match s.claude_via {
             Some(lore_llm::router::ClaudeVia::Api) => "api",
             Some(_) => "subscription",
@@ -397,6 +410,8 @@ pub fn router<S: Clone + Send + Sync + 'static>(e: Engines) -> axum::Router<S> {
                 let e = p.clone();
                 async move {
                     let Some(Json(body)) = body else { return bad("要送 JSON 物件") };
+                    // a key may have been saved meanwhile (the app's own setup flow)
+                    *e.api_known.lock().unwrap_or_else(|x| x.into_inner()) = None;
                     match e.update(&body).await {
                         Ok(()) => Json(e.state().await).into_response(),
                         Err(m) => bad(m),
