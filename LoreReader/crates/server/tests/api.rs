@@ -897,3 +897,24 @@ async fn margin_line_numbers_leave_the_text_and_the_noun_list() {
     assert!(terms.iter().all(|t| !t.chars().any(|c| c.is_ascii_digit())), "{terms:?}");
     assert!(terms.contains(&"anisotropic") && terms.contains(&"tortuosity"), "{terms:?}");
 }
+
+#[tokio::test]
+async fn the_shared_local_engine_classifies_when_the_config_names_none() {
+    // no [engine] in LoreReader's config; the engine every app shares is in
+    // private/shared/engine.toml (inside the test workspace when isolated), without a model name
+    let reply = r#"{"方法": ["anisotropic"], "指標": [], "資料集": [], "統計": [], "臨床／解剖": [], "一般學術詞": [], "人名": [], "其他術語": []}"#;
+    let (url, hits) = counting_engine(reply).await;
+    let e = setup(&dead_url(), None);
+    let (_, v, _) = call(&e.app, "GET", "/api/models", None, None).await;
+    assert_eq!(v["local_engine"], false);
+    std::fs::create_dir_all(e.root.join("ws/shared")).unwrap();
+    std::fs::write(e.root.join("ws/shared/engine.toml"), format!("[engine]\nurl = \"{url}\"\n")).unwrap();
+    let (_, v, _) = call(&e.app, "GET", "/api/models", None, None).await;
+    assert_eq!(v["local_engine"], true, "picked up without a restart");
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), None, None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(*hits.lock().unwrap(), 1);
+    assert_eq!(v["engine"], "llama-server:local");
+}
