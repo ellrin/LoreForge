@@ -93,7 +93,7 @@ fn arrow(out: &mut String, tip: (f64, f64), from: (f64, f64), kind: &str, s: &St
         return;
     }
     let (ux, uy) = (dx / len, dy / len);
-    let size = 3.0 * s.width_pt.max(1.6);
+    let size = 3.0 * s.width_pt.max(1.0);
     let (bx, by) = (tip.0 - ux * size, tip.1 - uy * size);
     let (px, py) = (-uy * size / 2.0, ux * size / 2.0);
     match kind {
@@ -109,7 +109,7 @@ fn polyline(out: &mut String, pts: &[(f64, f64)], s: &Stroke) {
     }
     // stop the line inside the arrowhead so thick lines do not poke through the tip
     let mut p: Vec<(f64, f64)> = pts.to_vec();
-    let size = 3.0 * s.width_pt.max(1.6);
+    let size = 3.0 * s.width_pt.max(1.0);
     let shorten = |a: (f64, f64), b: (f64, f64)| {
         let (dx, dy) = (a.0 - b.0, a.1 - b.1);
         let len = (dx * dx + dy * dy).sqrt();
@@ -210,6 +210,79 @@ fn text_svg(out: &mut String, tb: &TextBody, x: f64, y: f64, w: f64, h: f64, sca
     }
 }
 
+fn path_tokens(path: &str) -> Vec<String> {
+    let mut toks = Vec::new();
+    for t in path.replace(',', " ").split_whitespace() {
+        let mut cur = String::new();
+        for ch in t.chars() {
+            if ch.is_ascii_alphabetic() {
+                if !cur.is_empty() {
+                    toks.push(std::mem::take(&mut cur));
+                }
+                toks.push(ch.to_string());
+            } else {
+                cur.push(ch);
+            }
+        }
+        if !cur.is_empty() {
+            toks.push(cur);
+        }
+    }
+    toks
+}
+
+/// A custom path (0..1 box, M/L/Q/C/Z) as SVG path data through `map`.
+fn svg_path(path: &str, map: impl Fn(f64, f64) -> (f64, f64)) -> String {
+    let toks = path_tokens(path);
+    let mut d = String::new();
+    let mut i = 0;
+    while i < toks.len() {
+        let c = toks[i].clone();
+        i += 1;
+        let k = match c.as_str() {
+            "M" | "L" => 1,
+            "Q" => 2,
+            "C" => 3,
+            "Z" | "z" => {
+                d.push_str("Z ");
+                continue;
+            }
+            _ => continue,
+        };
+        d.push_str(&c);
+        for _ in 0..k {
+            let u = toks.get(i).and_then(|t| t.parse::<f64>().ok()).unwrap_or(0.0);
+            let v = toks.get(i + 1).and_then(|t| t.parse::<f64>().ok()).unwrap_or(0.0);
+            i += 2;
+            let (px, py) = map(u, v);
+            d.push_str(&format!("{} {} ", n(px), n(py)));
+        }
+    }
+    d.trim().to_string()
+}
+
+/// (start, first control) and (last control, end) of an open path, 0..1 box.
+fn curve_ends(path: &str) -> (Option<((f64, f64), (f64, f64))>, Option<((f64, f64), (f64, f64))>) {
+    let toks = path_tokens(path);
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        if toks[i].chars().all(|c| c.is_ascii_alphabetic()) {
+            i += 1;
+            continue;
+        }
+        let u = toks[i].parse::<f64>().unwrap_or(0.0);
+        let v = toks.get(i + 1).and_then(|t| t.parse::<f64>().ok()).unwrap_or(0.0);
+        pts.push((u, v));
+        i += 2;
+    }
+    if pts.len() < 2 {
+        return (None, None);
+    }
+    let l = pts.len();
+    (Some((pts[0], pts[1])), Some((pts[l - 2], pts[l - 1])))
+}
+
 /// Path of a preset shape in its frame; `open` = stroke only.
 fn preset_path(prst: &str, sp: &SpObj, x: f64, y: f64, w: f64, h: f64) -> (String, bool) {
     let adj = |k: &str, d: f64| sp.geom.adj.get(k).copied().unwrap_or(d) / 100_000.0;
@@ -269,7 +342,23 @@ fn draw(out: &mut String, o: &Object, xf: &Xf, st: &mut State) {
                         let closed = path.trim_end().ends_with(['Z', 'z']);
                         let pts = lore_canvas::geom::path_vertices(&path);
                         let abs: Vec<(f64, f64)> = pts.iter().map(|(u, v)| (x + if f.flip_h { 1.0 - u } else { *u } * w, y + if f.flip_v { 1.0 - v } else { *v } * h)).collect();
-                        if closed {
+                        if path.contains(['C', 'Q']) {
+                            // curves: the path itself, mapped into the frame
+                            let d = svg_path(&path, |u, v| (x + if f.flip_h { 1.0 - u } else { u } * w, y + if f.flip_v { 1.0 - v } else { v } * h));
+                            match (&sp.line, closed) {
+                                (Some(s), false) => {
+                                    out.push_str(&format!("<path d=\"{d}\" fill=\"none\" {} stroke-linecap=\"round\"/>", stroke_attr(&Some(s.clone()))));
+                                    // heads follow the last and first control legs
+                                    let ctl = curve_ends(&path);
+                                    if let (Some((a0, a1)), Some((b0, b1))) = ctl {
+                                        let m = |p: (f64, f64)| (x + if f.flip_h { 1.0 - p.0 } else { p.0 } * w, y + if f.flip_v { 1.0 - p.1 } else { p.1 } * h);
+                                        arrow(out, m(b1), m(b0), &s.tail, s);
+                                        arrow(out, m(a0), m(a1), &s.head, s);
+                                    }
+                                }
+                                _ => out.push_str(&format!("<path d=\"{d}\" {paint} stroke-linejoin=\"round\"/>")),
+                            }
+                        } else if closed {
                             out.push_str(&format!("<polygon points=\"{}\" {paint} stroke-linejoin=\"round\"/>", abs.iter().map(|p| format!("{},{}", n(p.0), n(p.1))).collect::<Vec<_>>().join(" ")));
                         } else if let Some(s) = &sp.line {
                             polyline(out, &abs, s);

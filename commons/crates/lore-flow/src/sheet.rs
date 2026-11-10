@@ -18,6 +18,7 @@ pub fn sample(kind: &str, style: &str) -> Node {
         "label" => ("Output", serde_json::json!({})),
         "encoder" => ("Enc", serde_json::json!({})),
         "decoder" => ("Dec", serde_json::json!({})),
+        "autoencoder" => ("", serde_json::json!({})),
         "layer-bars" => ("", serde_json::json!({ "layers": ["Conv", "Pool", "Conv", "FC"] })),
         "cuboid-seq" => ("", serde_json::json!({ "shape": "hourglass", "n": 5 })),
         "nn" => ("", serde_json::json!({ "layers": [3, 4, 2] })),
@@ -54,34 +55,46 @@ pub fn catalogue(lib: &Library) -> Vec<(String, Vec<String>)> {
 pub fn contact_sheet(theme: &Theme, lib: &Library, math: &dyn MathSource) -> (Vec<Object>, f64, f64) {
     let vars = Vars::default();
     let cat = catalogue(lib);
-    let (cell_w, cell_h, head_w, margin) = (104.0, 92.0, 92.0, 18.0);
-    let cols = cat.iter().map(|c| c.1.len()).max().unwrap_or(1);
-    let (page_w, page_h) = (2.0 * margin + head_w + cols as f64 * cell_w, 2.0 * margin + cat.len() as f64 * cell_h);
+    let (cell_h, head_w, margin, per_line) = (104.0, 92.0, 18.0, 9usize);
+    // the matched pair is twice as wide; long rows wrap
+    let cell_w_of = |kind: &str| if kind == "autoencoder" { 208.0 } else { 104.0 };
+    let per = |kind: &str| if kind == "autoencoder" { per_line / 2 } else { per_line };
+    let mut lines: Vec<(&str, usize, &[String])> = Vec::new();
+    for (kind, styles) in &cat {
+        for (i, chunk) in styles.chunks(per(kind)).enumerate() {
+            lines.push((kind.as_str(), i, chunk));
+        }
+    }
+    let page_w = 2.0 * margin + head_w + per_line as f64 * 104.0;
+    let page_h = 2.0 * margin + lines.len() as f64 * cell_h;
     let mut objs = Vec::new();
     let mut id = 2;
     let base = Ctx { theme, vars: &vars, math, lib, k: 1.0, symmetric: false, image_size: &modules::no_images };
-    for (ri, (kind, styles)) in cat.iter().enumerate() {
+    for (ri, (kind, part, styles)) in lines.iter().enumerate() {
+        let (kind, part) = (*kind, *part);
         let y = margin + ri as f64 * cell_h;
-        let mut rule = modules::shape("", "rect", margin, y, page_w - 2.0 * margin, 0.0, lore_canvas::Paint::None, Some(lore_canvas::Stroke::new("D9D9D9", 0.5)));
-        rule.id = id;
-        rule.name = format!("sheet:{kind}/rule");
-        id += 1;
-        objs.push(rule);
-        let (mut head, hw, hh) = base.text("", kind, &base.ty(1.0, true, &theme.colors.ink), 0.0, 0.0);
-        head.frame.x = modules::emu(margin);
-        head.frame.y = modules::emu(y + (cell_h - hh) / 2.0);
-        let _ = hw;
-        head.id = id;
-        head.name = format!("sheet:{kind}/name");
-        id += 1;
-        objs.push(head);
+        if part == 0 {
+            let mut rule = modules::shape("", "rect", margin, y, page_w - 2.0 * margin, 0.0, lore_canvas::Paint::None, Some(lore_canvas::Stroke::new("D9D9D9", 0.5)));
+            rule.id = id;
+            rule.name = format!("sheet:{kind}/rule");
+            id += 1;
+            objs.push(rule);
+            let (mut head, _, hh) = base.text("", kind, &base.ty(1.0, true, &theme.colors.ink), 0.0, 0.0);
+            head.frame.x = modules::emu(margin);
+            head.frame.y = modules::emu(y + (cell_h - hh) / 2.0);
+            head.id = id;
+            head.name = format!("sheet:{kind}/name");
+            id += 1;
+            objs.push(head);
+        }
+        let cell_w = cell_w_of(kind);
         for (ci, style) in styles.iter().enumerate() {
             let x = margin + head_w + ci as f64 * cell_w;
             let node = sample(kind, if style == modules::DEFAULT_STYLE && modules::generator_styles(kind).is_empty() && lib.get(kind, style).is_none() { "" } else { style });
             // as large as the cell allows, never more than 1.4 ×
             let natural = modules::make(&node, &base);
             let k = ((cell_w - 14.0) / natural.reserve_w.max(1.0)).min((cell_h - 26.0) / natural.h.max(1.0)).min(1.4);
-            let cx = Ctx { k, ..Ctx { theme, vars: &vars, math, lib, k, symmetric: false, image_size: &modules::no_images } };
+            let cx = Ctx { theme, vars: &vars, math, lib, k, symmetric: false, image_size: &modules::no_images };
             let body = modules::make(&node, &cx);
             let (bw, bh) = (body.w, body.h);
             let (o, next) = modules::place(body, &format!("sheet:{kind}/{style}"), x + (cell_w - bw) / 2.0, y + 6.0 + (cell_h - 22.0 - bh) / 2.0, id);
@@ -99,22 +112,30 @@ pub fn contact_sheet(theme: &Theme, lib: &Library, math: &dyn MathSource) -> (Ve
 }
 
 /// The built-in art styles as module drawings (what `modules/<kind>/<style>.json`
-/// holds), so they can be copied into a library and reworked there.
+/// holds), so they can be copied into a library and reworked there. Colours
+/// of layer types stay `layer:<type>`, the module's own colours `role:*`.
 pub fn builtin_templates(theme: &Theme) -> Vec<ModuleTemplate> {
     let vars = Vars::default();
     let lib = Library::default();
     let cx = Ctx { theme, vars: &vars, math: &crate::text::NoMath, lib: &lib, k: 1.0, symmetric: false, image_size: &modules::no_images };
     let mut out = Vec::new();
     for (kind, description) in MODULES {
+        if !matches!(kind, "encoder" | "decoder" | "autoencoder" | "nn" | "brace") {
+            continue;
+        }
         for style in modules::generator_styles(kind) {
-            if !matches!(kind, "encoder" | "decoder" | "nn" | "brace") {
-                continue;
-            }
             let mut node = sample(kind, style);
             let label = if node.label.is_empty() { None } else { Some(node.label.clone()) };
             node.role = "model".into();
             let body = modules::make(&node, &cx);
+            let legend = body.legend.clone();
             let (o, _) = modules::place(body, "m", 0.0, 0.0, 2);
+            // layer colours become placeholders before the role colours are picked
+            let mut text = serde_json::to_string(&o).unwrap_or_default();
+            for sw in &legend {
+                text = text.replace(&format!("\"color\":\"{}\"", sw.color.to_uppercase()), &format!("\"color\":\"layer:{}\"", sw.key));
+            }
+            let Ok(o) = serde_json::from_str::<Object>(&text) else { continue };
             let opt = SaveOptions { kind: kind.to_string(), style: style.to_string(), description: description.to_string(), label, role_colours: true };
             if let Ok(t) = modules::template_from_objects(std::slice::from_ref(&o), &opt) {
                 out.push(t);

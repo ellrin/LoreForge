@@ -338,6 +338,27 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         objects.push(o);
     }
 
+    // colour legend
+    for s in &lay.swatches {
+        let a = &s.at;
+        let mut sw = modules::shape("", "rect", a.x, a.y, a.w, a.h, Paint::solid(&s.swatch.color), Some(Stroke::new(&theme.colors.ink, 0.5 * k)));
+        sw.id = id;
+        sw.name = format!("flow:{fig}/colours:{}", s.swatch.key);
+        id += 1;
+        objects.push(sw);
+        let ty = cx.small(&theme.colors.ink);
+        let (mut o, _, h) = cx.text("", &s.swatch.label, &ty, 0.0, 0.0);
+        o.frame.x = emu(s.text.x);
+        o.frame.y = emu(s.text.cy() - h / 2.0);
+        if let Some(tb) = o.kind.sp_mut().and_then(|sp| sp.text.as_mut()) {
+            tb.paras.iter_mut().for_each(|p| p.align = "l".into());
+        }
+        o.id = id;
+        o.name = format!("flow:{fig}/colours:{}/label", s.swatch.key);
+        id += 1;
+        objects.push(o);
+    }
+
     // plain numbers in the file: widths to 1/100 pt, type sizes to 1/10 pt
     fn tidy(o: &mut Object) {
         let r2 = |v: f64| (v * 100.0).round() / 100.0;

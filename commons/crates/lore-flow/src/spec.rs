@@ -9,7 +9,7 @@ use serde_json::Value;
 
 /// Module kinds the program can draw (the closed list an LLM picks from).
 /// Module templates loaded from a library extend it at run time.
-pub const MODULES: [(&str, &str); 16] = [
+pub const MODULES: [(&str, &str); 17] = [
     ("box", "a named step or model: rectangle with the label inside (params: shape=rect|round|trapezoid, vertical=true for an upright bar)"),
     ("op", "operator circle; label is one of + x . C (add, multiply, element-wise, concatenate) or a short word such as Or"),
     ("loss", "a loss or metric; label is its math, e.g. $\\mathcal L_{seg}$"),
@@ -22,9 +22,10 @@ pub const MODULES: [(&str, &str); 16] = [
     ("layer-bars", "a network drawn as a row of upright layer bars (params: layers=[names], taper=true)"),
     ("cuboid-seq", "a network drawn as 3-D blocks (params: shape=down|up|hourglass|flat, n, or dims=[[w,h,d],..])"),
     ("unet", "a flat U-shaped encoder-decoder with skip lines (params: depth)"),
-    ("encoder", "an encoder as one block that narrows along the flow"),
-    ("decoder", "a decoder as one block that widens along the flow"),
-    ("nn", "a small fully connected network: neurons and the lines between layers (params: layers=[3,4,2])"),
+    ("encoder", "an encoder that narrows along the flow (style: trapezoid, bars, cubes, slabs = SegNet, planes, lenet, fc, resnet, dense, unet, transformer, rnn, vit, fpn, vae, graph, layers)"),
+    ("decoder", "a decoder that widens along the flow (same styles as encoder, mirrored)"),
+    ("autoencoder", "an encoder, its bottleneck and the mirrored decoder as one drawing with one colour legend (style: as encoder; params: latent=vector|neurons|context|none)"),
+    ("nn", "a small network of units (style: circles, labelled, dropout, neuron, pills, fans, attention, graph, recurrent, lstm, conv, residual, heads, moe, rbm; params: layers=[3,4,2])"),
     ("brace", "a brace or dimension mark that gathers several things (params: dir=right|left|up|down)"),
 ];
 

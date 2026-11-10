@@ -786,41 +786,169 @@ fn saved_drawings_are_module_kinds_and_styles() {
     assert!(Library::load_dir(&tmp.path().join("nothing-here")).unwrap().templates.is_empty());
 }
 
+/// What a drawing is made of, without its paint: per part its kind, its
+/// geometry (rounded corners count as a rectangle; for a freeform only the
+/// path's commands) and its place in the drawing to 1/25 of the size.
+fn structure(objs: &[Object]) -> Vec<String> {
+    let parts: Vec<&Object> = objs.iter().filter(|o| !o.name.ends_with("port") && o.name != "label" && !o.name.ends_with("/label")).collect();
+    let b = lore_canvas::geom::bounds(parts.iter().map(|o| &o.frame));
+    let (bw, bh) = (b.w.max(1) as f64, b.h.max(1) as f64);
+    let q = |v: f64| (v * 25.0).round() as i64;
+    let mut out = Vec::new();
+    for o in parts {
+        let geom = match &o.kind {
+            Kind::Shape(sp) | Kind::Text(sp) => match sp.geom.prst.as_str() {
+                "roundRect" => "rect".to_string(),
+                "custom" => format!("custom:{}", sp.geom.path.as_deref().unwrap_or("").chars().filter(|c| c.is_ascii_alphabetic()).collect::<String>()),
+                p => p.to_string(),
+            },
+            Kind::Connector(c) => c.geom.clone(),
+            Kind::Group(g) => format!("group{:?}", structure(&g.children)),
+            _ => String::new(),
+        };
+        let text = o.kind.sp().and_then(|s| s.text.as_ref()).is_some_and(|t| !t.plain_text().trim().is_empty());
+        let f = &o.frame;
+        out.push(format!("{}:{geom}:{}:{},{},{},{}", o.kind.name(), text, q((f.x - b.x) as f64 / bw), q((f.y - b.y) as f64 / bh), q(f.w as f64 / bw), q(f.h as f64 / bh)));
+    }
+    out.sort();
+    out
+}
+
+fn drawn(kind: &str, style: &str, finish: &str) -> Vec<Object> {
+    let mut node = lore_flow::sheet::sample(kind, style);
+    if !finish.is_empty() {
+        node.params.insert("finish".into(), finish.into());
+    }
+    let theme = Theme::classic_bw();
+    let vars = Vars::default();
+    let lib = Library::default();
+    let cx = lore_flow::modules::Ctx { theme: &theme, vars: &vars, math: &NoMath, lib: &lib, k: 1.0, symmetric: false, image_size: &lore_flow::modules::no_images };
+    lore_flow::modules::make(&node, &cx).objs
+}
+
 #[test]
-fn every_built_in_style_draws_and_differs() {
+fn styles_are_constructions_and_finish_is_paint() {
     use lore_flow::modules::generator_styles;
-    for kind in ["encoder", "decoder", "nn", "brace"] {
+    for kind in ["encoder", "decoder", "autoencoder", "nn", "brace", "feature-stack", "image-stack", "loss", "op", "box", "unet"] {
         let styles = generator_styles(kind);
-        assert!(styles.len() >= 5, "{kind} has {} styles", styles.len());
-        let mut seen = BTreeSet::new();
+        if matches!(kind, "encoder" | "decoder" | "nn") {
+            assert!(styles.len() >= 15, "{kind} has {} styles", styles.len());
+        }
+        // a finish is never a style
+        for s in styles {
+            assert!(!lore_flow::finish::WORDS.contains(s) && !["default", "rounded", "filled", "gradient", "outline", "dots", "squares"].contains(s), "{kind}/{s} is a finish, not a style");
+        }
+        // no two styles of a kind are the same drawing once the paint is fixed
+        let mut seen: Vec<(&str, Vec<String>)> = Vec::new();
         for style in styles {
+            let sig = structure(&drawn(kind, style, "solid mono"));
+            assert!(!sig.is_empty(), "{kind}/{style} draws nothing");
+            if let Some((other, _)) = seen.iter().find(|(_, s)| *s == sig) {
+                panic!("{kind}/{style} is the same drawing as {kind}/{other}");
+            }
+            seen.push((style, sig));
+        }
+        // and every finish leaves the drawing as it is
+        for style in styles {
+            let base = structure(&drawn(kind, style, "solid mono"));
+            for finish in ["outline", "gradient translucent", "flat round", "typed bold", "outline thin square"] {
+                assert_eq!(structure(&drawn(kind, style, finish)), base, "{kind}/{style} with finish {finish}");
+            }
+        }
+    }
+    assert!(lore_flow::finish::Finish::of(&lore_flow::sheet::sample("box", "rect"), &Theme::classic_bw()).apply("glossy").is_err());
+}
+
+#[test]
+fn every_built_in_style_draws_and_lines_meet_it() {
+    use lore_flow::modules::generator_styles;
+    for kind in ["encoder", "decoder", "autoencoder", "nn", "brace"] {
+        for style in generator_styles(kind) {
             let g = dsl::parse(&format!("fig k\na: box \"A\"\nm: {kind} \"M\" style={style}\nb: box \"B\"\na -> m -> b\n")).unwrap();
             let f = fig(&g);
             assert!(f.routes.iter().all(|r| r.bends() == 0 && !r.forced), "{kind}/{style}");
             let o = f.objects().iter().find(|o| o.name == "flow:k/m").unwrap();
-            let mut o2 = o.clone();
-            o2.frame = Default::default();
-            assert!(seen.insert(serde_json::to_string(&o2).unwrap()), "{kind}/{style} looks like another style");
             // connection sites are where the lines end
             let sites = lore_canvas::geom::sites(o);
             let end = f.routes[0].points[1];
             assert!((sites[1].0 / 12_700.0 - end.0).abs() < 0.01 && (sites[1].1 / 12_700.0 - end.1).abs() < 0.01, "{kind}/{style}");
+            // every part is a native shape, text or line
+            walk(std::slice::from_ref(o), &mut |p| assert!(matches!(p.kind.name(), "shape" | "text" | "connector" | "group"), "{kind}/{style}: {}", p.name));
         }
     }
-    // the theme can choose the style and the colours of a kind
+    // the theme can choose the style and the colours of a kind; a node's finish wins
     let t = Theme::from_toml("[modules.encoder]\nstyle = \"bars\"\nfill = \"C8C1FF\"\nline = \"1D3B63\"\n[modules.unet]\nfill = \"C8C1FF\"\n").unwrap();
-    let g = dsl::parse("fig k\ne: encoder \"E\"\nu: unet \"U\"\no: encoder \"O\" style=outline\ne -> u -> o\n").unwrap();
+    let g = dsl::parse("fig k\ne: encoder \"E\"\nu: unet \"U\"\no: encoder \"O\" style=trapezoid finish=outline\ne -> u -> o\n").unwrap();
     let f = draw(&g, &Drawing { theme: t, ..Default::default() }).unwrap();
     assert_eq!(find(&f, "flow:k/e/bar0").kind.sp().unwrap().fill, lore_canvas::Paint::solid("C8C1FF"));
     assert_eq!(find(&f, "flow:k/e/bar0").kind.sp().unwrap().line.as_ref().unwrap().color, "1D3B63");
     assert_eq!(find(&f, "flow:k/u/bar0").kind.sp().unwrap().fill, lore_canvas::Paint::solid("C8C1FF"));
-    assert!(find(&f, "flow:k/o/body").kind.sp().unwrap().fill.is_none(), "a node's own style wins over the theme's");
+    assert_eq!(find(&f, "flow:k/o/body").kind.sp().unwrap().fill, lore_canvas::Paint::solid("FFFFFF"), "outline = paper inside, the line carries the colour");
+    // the theme's finish applies to every module
+    let t = Theme::from_toml("[node]\nfinish = \"gradient round\"\n").unwrap();
+    let f = draw(&dsl::parse("fig k\ne: encoder \"E\" style=bars\n").unwrap(), &Drawing { theme: t, ..Default::default() }).unwrap();
+    let bar = find(&f, "flow:k/e/bar0");
+    assert!(matches!(bar.kind.sp().unwrap().fill, lore_canvas::Paint::Gradient { .. }));
+    assert_eq!(bar.kind.sp().unwrap().geom.prst, "roundRect");
+}
+
+#[test]
+fn layer_types_are_coloured_and_named_in_one_legend() {
+    let t = Theme::from_toml("[layers.conv]\ncolor = \"4472C4\"\nlabel = \"Conv + BN + ReLU\"\n[layers.pool]\ncolor = \"70AD47\"\n").unwrap();
+    let g = dsl::parse("fig s\nx: image \"$x$\"\ne: encoder \"Encoder\" style=slabs\nd: decoder \"Decoder\" style=slabs\ny: image \"$y$\" look=mask\nx -> e -> d -> y\n").unwrap();
+    let f = draw(&g, &Drawing { theme: t.clone(), ..Default::default() }).unwrap();
+    let front = find(&f, "flow:s/e/s0-0-front");
+    assert_eq!(front.kind.sp().unwrap().fill, lore_canvas::Paint::solid("4472C4"));
+    // one legend for both modules, over the figure, every type once
+    let keys: Vec<&str> = f.layout.swatches.iter().map(|s| s.swatch.key.as_str()).collect();
+    assert_eq!(keys, ["conv", "pool", "up", "softmax"]);
+    let sw = find(&f, "flow:s/colours:conv");
+    assert_eq!(sw.kind.sp().unwrap().fill, lore_canvas::Paint::solid("4472C4"));
+    assert!(sw.frame.y < find(&f, "flow:s/e").frame.y, "the colour legend is over the figure");
+    let label = find(&f, "flow:s/colours:conv/label");
+    assert_eq!(label.kind.sp().unwrap().text.as_ref().unwrap().plain_text(), "Conv + BN + ReLU");
+    // mono: one colour, no legend; legend off: no legend
+    let g2 = dsl::parse("fig s\ne: encoder \"E\" style=slabs finish=mono\n").unwrap();
+    assert!(draw(&g2, &Drawing { theme: t.clone(), ..Default::default() }).unwrap().layout.swatches.is_empty());
+    let mut g3 = g.clone();
+    g3.legend = Some(false);
+    assert!(draw(&g3, &Drawing { theme: t, ..Default::default() }).unwrap().layout.swatches.is_empty());
+}
+
+#[test]
+fn a_matched_pair_joins_its_halves() {
+    let names = |src: &str| -> Vec<String> {
+        let f = fig(&dsl::parse(src).unwrap());
+        let mut v = Vec::new();
+        walk(f.objects(), &mut |o| v.push(o.name.clone()));
+        v
+    };
+    // SegNet: pooling indices from every pooling layer to its upsampling layer
+    let n = names("fig p\nae: autoencoder style=slabs\n");
+    assert_eq!(n.iter().filter(|s| s.contains("/index")).count(), 4);
+    assert!(n.iter().any(|s| s.ends_with("/enc-name")) && n.iter().any(|s| s.ends_with("/dec-name")));
+    // U-Net: skips at every level but the deepest, which is one arrow
+    let n = names("fig p\nae: autoencoder style=unet\n");
+    assert_eq!(n.iter().filter(|s| s.contains("/skip")).count(), 3);
+    // FC autoencoder: neurons in the latent space, named
+    let n = names("fig p\nae: autoencoder style=fc\n");
+    assert!(n.iter().any(|s| s.ends_with("/latent-name")) && n.iter().any(|s| s.ends_with("/z0")));
+    // seq2seq: a context vector between the RNNs
+    let n = names("fig p\nae: autoencoder style=rnn\n");
+    assert!(n.iter().any(|s| s.ends_with("/c")));
+    // transformer: the encoder's output enters the decoder's cross-attention
+    let n = names("fig p\nae: autoencoder style=transformer\n");
+    assert!(n.iter().any(|s| s.ends_with("/memory")));
+    // the pair's role colours are a legend too
+    let f = fig(&dsl::parse("fig p\nae: autoencoder style=fc\n").unwrap());
+    let keys: Vec<&str> = f.layout.swatches.iter().map(|s| s.swatch.key.as_str()).collect();
+    assert_eq!(keys, ["enc", "latent", "dec"]);
 }
 
 #[test]
 fn a_selection_becomes_a_module_file() {
     // draw something, "select" it, save it as a module, use it
-    let g = dsl::parse("fig s\nn: nn \"Net\" style=filled layers=[2,3,1] fill=C8C1FF\n").unwrap();
+    let g = dsl::parse("fig s\nn: nn \"Net\" style=circles layers=[2,3,1] fill=C8C1FF\n").unwrap();
     let f = fig(&g);
     let group = f.objects().iter().find(|o| o.name == "flow:s/n").unwrap();
     let Kind::Group(gr) = &group.kind else { panic!() };
@@ -861,12 +989,25 @@ fn a_selection_becomes_a_module_file() {
     assert!(template_from_objects(&[], &opt).is_err());
     // the built-in styles can be written out as files for a library
     let all = lore_flow::sheet::builtin_templates(&Theme::classic_bw());
-    assert!(all.len() >= 7 + 7 + 5 + 5);
+    assert!(all.len() >= 15 + 15 + 15 + 15 + 5);
+    let slabs = serde_json::to_string(&all.iter().find(|t| t.kind == "encoder" && t.style == "slabs").unwrap().objects).unwrap();
+    assert!(slabs.contains("layer:conv") && slabs.contains("layer:pool"), "layer colours stay themeable");
     let mut lib2 = Library::default();
     for t in all {
         lib2.add(t).unwrap();
     }
-    assert!(lib2.styles("encoder").contains(&"gradient".to_string()));
+    assert!(lib2.styles("encoder").contains(&"slabs".to_string()));
+    // a saved drawing takes the theme's layer colours
+    let t = Theme::from_toml("[layers.conv]\ncolor = \"4472C4\"\n").unwrap();
+    let g3 = dsl::parse("fig v\ne: encoder \"E\" style=slabs\n").unwrap();
+    let f3 = draw(&g3, &Drawing { theme: t, library: lib2, ..Default::default() }).unwrap();
+    let mut blue = 0;
+    walk(f3.objects(), &mut |o| {
+        if o.kind.sp().is_some_and(|s| s.fill == lore_canvas::Paint::solid("4472C4")) {
+            blue += 1;
+        }
+    });
+    assert_eq!(blue, 10, "the ten conv layers");
 }
 
 #[test]
@@ -875,7 +1016,7 @@ fn the_contact_sheet_shows_every_kind_and_style() {
     let cat = lore_flow::sheet::catalogue(&lib);
     assert_eq!(cat.len(), lore_flow::spec::MODULES.len() + 2);
     let enc = cat.iter().find(|c| c.0 == "encoder").unwrap();
-    assert!(enc.1.contains(&"3d".to_string()) && enc.1.contains(&"plain".to_string()));
+    assert!(enc.1.contains(&"slabs".to_string()) && enc.1.contains(&"plain".to_string()));
     let (objs, w, h) = lore_flow::sheet::contact_sheet(&Theme::classic_bw(), &lib, &NoMath);
     for (kind, styles) in &cat {
         for s in styles {
@@ -889,7 +1030,8 @@ fn the_contact_sheet_shows_every_kind_and_style() {
         assert!(f.x as f64 / 12_700.0 <= w && f.y as f64 / 12_700.0 <= h);
     });
     assert!(pptx::single_slide(&objs, w, h).is_ok());
-    assert!(preview::svg(&objs, w, h, 1.0).contains("linearGradient"));
+    // arcs (pooling indices, dense and residual skips) are curves in the preview too
+    assert!(preview::svg(&objs, w, h, 1.0).contains("<path d=\"M"));
 }
 
 #[test]
@@ -1014,7 +1156,7 @@ fn everything_stays_an_editable_native_object() {
     let enc = slide.objects.iter().find(|o| o.name == "flow:e/enc").unwrap();
     let Kind::Group(grp) = &enc.kind else { panic!("a module is a group") };
     let n_children = grp.children.len();
-    let front = grp.children.iter().find(|c| c.name.ends_with("b0-front")).unwrap().id;
+    let front = grp.children.iter().find(|c| c.name.ends_with("s0-conv-front")).unwrap().id;
     ed.apply(vec![lore_canvas::Op::SetObj { slide: uid.clone(), id: front, path: "/fill".into(), value: serde_json::json!({ "kind": "solid", "color": "FFC000" }) }], "recolour").unwrap();
     let before = ed.deck.slide(&uid).unwrap().objects.len();
     ed.apply(vec![lore_canvas::Op::Ungroup { slide: uid.clone(), id: enc.id }], "ungroup").unwrap();

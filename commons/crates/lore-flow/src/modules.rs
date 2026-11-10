@@ -65,7 +65,8 @@ pub struct ModuleTemplate {
     pub port: Option<PortRect>,
     /// Canvas objects, frames in EMU relative to the drawing's top-left corner.
     /// Colours may be `role:fill`, `role:line`, `role:text`, `theme:ink`,
-    /// `theme:muted`, `theme:paper`, `theme:image`, `theme:tensor`; a run whose
+    /// `theme:muted`, `theme:paper`, `theme:image`, `theme:tensor`,
+    /// `layer:<type>` (the theme's colour of a layer type); a run whose
     /// text is `{{label}}` receives the node's label.
     pub objects: Value,
 }
@@ -184,7 +185,7 @@ impl Library {
 /// `role:*` / `theme:*` replaced by a real colour so the objects parse.
 fn placeholder_colours(v: &Value) -> Value {
     match v {
-        Value::String(s) if s.starts_with("role:") || s.starts_with("theme:") => Value::String("000000".into()),
+        Value::String(s) if s.starts_with("role:") || s.starts_with("theme:") || s.starts_with("layer:") => Value::String("000000".into()),
         Value::Array(a) => Value::Array(a.iter().map(placeholder_colours).collect()),
         Value::Object(m) => Value::Object(m.iter().map(|(k, x)| (k.clone(), placeholder_colours(x))).collect()),
         other => other.clone(),
@@ -291,7 +292,7 @@ pub fn template_from_objects(objects: &[Object], opt: &SaveOptions) -> Result<Mo
         fn count(v: &Value, key: Option<&str>, in_look: bool, out: &mut [BTreeMap<String, usize>; 3]) {
             match v {
                 Value::Object(m) => {
-                    if let Some(Value::String(c)) = m.get("color") {
+                    if let Some(Value::String(c)) = m.get("color").filter(|c| c.as_str().is_some_and(|c| !c.contains(':'))) {
                         let slot = if in_look {
                             Some(2)
                         } else if key == Some("fill") {
@@ -388,34 +389,42 @@ pub struct Body {
     pub single: bool,
     /// The single shape is an ellipse (8 connection sites).
     pub ellipse: bool,
+    /// Layer types it coloured, for the figure's colour legend.
+    pub legend: Vec<crate::art::Swatch>,
 }
 
-struct Core {
-    w: f64,
-    h: f64,
-    objs: Vec<Object>,
-    single: bool,
-    ellipse: bool,
+#[derive(Default)]
+pub(crate) struct Core {
+    pub w: f64,
+    pub h: f64,
+    pub objs: Vec<Object>,
+    pub single: bool,
+    pub ellipse: bool,
     /// Where the node's label goes when the core did not draw it.
-    label: LabelPos,
+    pub label: LabelPos,
+    /// Layer types the drawing coloured (for the figure's colour legend).
+    pub legend: Vec<crate::art::Swatch>,
+    /// Named points (scaled, in the core's frame) a matched pair joins up.
+    pub anchors: Vec<(String, (f64, f64))>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum LabelPos {
+#[derive(Clone, Copy, PartialEq, Default)]
+pub(crate) enum LabelPos {
+    #[default]
     Drawn,
     Above,
     Below,
 }
 
-fn obj(name: &str, fr: Frame, kind: Kind) -> Object {
+pub(crate) fn obj(name: &str, fr: Frame, kind: Kind) -> Object {
     Object { id: 0, name: name.into(), frame: fr, hidden: false, ph: None, slot: None, kind, src: None }
 }
 
-fn paint(hex: &str, alpha: f64) -> Paint {
+pub(crate) fn paint(hex: &str, alpha: f64) -> Paint {
     if hex == "none" || hex.is_empty() { Paint::None } else { Paint::Solid { color: hex.to_uppercase(), alpha } }
 }
 
-fn stroke(hex: &str, w: f64) -> Option<Stroke> {
+pub(crate) fn stroke(hex: &str, w: f64) -> Option<Stroke> {
     if hex == "none" || hex.is_empty() || w <= 0.0 { None } else { Some(Stroke::new(hex, w)) }
 }
 
@@ -478,6 +487,9 @@ impl Ctx<'_> {
         let o = obj(name, frame(cx - w / 2.0, y, w, h), Kind::Text(SpObj { geom: Geom::preset("rect"), fill: Paint::None, line: None, text: Some(tb), equation: has_math }));
         (o, w, h)
     }
+    pub(crate) fn put_text_pub(&self, o: &mut Object, s: &str, ty: &Type, vert: bool) {
+        self.put_text(o, s, ty, vert)
+    }
     fn put_text(&self, o: &mut Object, s: &str, ty: &Type, vert: bool) {
         let s = self.vars.resolve(s);
         let (mut tb, has_math) = text::body(&s, ty, self.vars, self.math, "ctr", "ctr");
@@ -491,7 +503,7 @@ impl Ctx<'_> {
     }
 }
 
-fn hex_param(n: &Node, k: &str) -> Option<String> {
+pub(crate) fn hex_param(n: &Node, k: &str) -> Option<String> {
     let v = n.str(k)?;
     let v = v.trim_start_matches('#');
     (v == "none" || (v.len() == 6 && v.chars().all(|c| c.is_ascii_hexdigit()))).then(|| v.to_uppercase())
@@ -501,7 +513,6 @@ struct Style {
     fill: String,
     line: String,
     text: String,
-    lw: f64,
 }
 
 fn style(n: &Node, cx: &Ctx) -> Style {
@@ -513,7 +524,6 @@ fn style(n: &Node, cx: &Ctx) -> Style {
         fill: pick("fill", m.and_then(|m| m.fill.as_ref()), &r.fill),
         line: pick("line", m.and_then(|m| m.line.as_ref()), &r.line),
         text: m.and_then(|m| m.text.clone()).unwrap_or_else(|| r.text.clone()),
-        lw: n.num("line_w").unwrap_or(cx.theme.node.line_w) * cx.k,
     }
 }
 
@@ -523,12 +533,6 @@ pub fn style_name(n: &Node, theme: &Theme) -> String {
         return n.style.clone();
     }
     theme.modules.get(&n.module).and_then(|m| m.style.clone()).unwrap_or_default()
-}
-
-/// A fill for parts that must show on paper: the role's fill unless it is
-/// none or the paper colour, then the tensor colour.
-fn solid_fill(st: &Style, cx: &Ctx) -> String {
-    if st.fill == "none" || st.fill.eq_ignore_ascii_case(&cx.theme.colors.paper) { cx.theme.colors.tensor.clone() } else { st.fill.clone() }
 }
 
 fn op_symbol(label: &str) -> String {
@@ -542,15 +546,15 @@ fn op_symbol(label: &str) -> String {
     }
 }
 
-fn round_adj(sp: &mut Object, radius: f64) {
+pub(crate) fn round_adj(sp: &mut Object, radius: f64) {
     if let Some(s) = sp.kind.sp_mut() {
         s.geom.adj.insert("adj".into(), (radius * 100_000.0).round().clamp(0.0, 50_000.0));
     }
 }
 
 fn gen_box(n: &Node, cx: &Ctx) -> Core {
-    let st = style(n, cx);
-    let ty = cx.ty(1.0, n.flag("bold"), &st.text);
+    let mut f = crate::finish::Finish::of(n, cx.theme);
+    let ty = cx.ty(1.0, n.flag("bold"), &f.text);
     let label = cx.vars.resolve(&n.label);
     let (tw, lines) = text::block(&label, ty.size);
     let lh = ty.size * 1.25;
@@ -563,57 +567,104 @@ fn gen_box(n: &Node, cx: &Ctx) -> Core {
         h = cx.s(v);
     }
     let named = style_name(n, cx.theme);
-    let kind = n.str("shape").unwrap_or(if !named.is_empty() { named.as_str() } else if cx.theme.node.radius > 0.0 { "round" } else { "rect" });
+    let kind = n.str("shape").unwrap_or(if named.is_empty() { "rect" } else { named.as_str() });
+    // round and pill are corner radii (a finish) of the rectangle
+    match kind {
+        "round" if f.radius <= 0.0 => f.radius = 0.18,
+        "pill" => f.radius = 0.5,
+        _ => {}
+    }
     let prst = match kind {
-        "round" => "roundRect",
-        "rect" => "rect",
-        "pill" => "roundRect",
         "trapezoid" => "trapezoid",
         "parallelogram" => "parallelogram",
-        "diamond" => "diamond",
         "hexagon" => "hexagon",
         "ellipse" => "ellipse",
+        "can" | "cylinder" => "can",
+        _ if f.radius > 0.0 => "roundRect",
         _ => "rect",
     };
-    let mut o = shape("", prst, 0.0, 0.0, w, h, paint(&st.fill, 1.0), stroke(&st.line, st.lw));
-    match kind {
-        "round" => round_adj(&mut o, if cx.theme.node.radius > 0.0 { cx.theme.node.radius } else { 0.18 }),
-        "pill" => round_adj(&mut o, 0.5),
-        _ => {}
+    if prst == "ellipse" {
+        w *= 1.2;
+        h *= 1.15;
+    }
+    let (fill, line) = f.part(&f.fill, cx.k);
+    let mut o = shape("", prst, 0.0, 0.0, w, h, fill, line);
+    if prst == "roundRect" {
+        round_adj(&mut o, f.radius);
     }
     cx.put_text(&mut o, &n.label, &ty, vertical);
     // rectangles have PowerPoint's four mid-side sites; other presets do not, so they get a port frame
     let single = matches!(prst, "rect" | "roundRect" | "ellipse");
-    Core { w, h, objs: vec![o], single, ellipse: prst == "ellipse", label: LabelPos::Drawn }
+    Core { w, h, objs: vec![o], single, ellipse: prst == "ellipse", label: LabelPos::Drawn, ..Default::default() }
 }
 
 fn gen_op(n: &Node, cx: &Ctx) -> Core {
-    let st = style(n, cx);
+    let f = crate::finish::Finish::of(n, cx.theme);
     let sym = op_symbol(&n.label);
-    let ty = cx.ty(if sym == "C" || sym.chars().count() > 1 { 0.95 } else { 1.25 }, sym.chars().count() == 1, &st.text);
+    let named = style_name(n, cx.theme);
+    let ty = cx.ty(if sym == "C" || sym.chars().count() > 1 { 0.95 } else { 1.25 }, sym.chars().count() == 1, &f.text);
     let d = cx.s(n.num("size").unwrap_or(20.0));
     let w = d.max(text::width(&sym, ty.size) + cx.s(8.0));
-    let mut o = shape("", "ellipse", 0.0, 0.0, w, d, paint(&st.fill, 1.0), stroke(&st.line, st.lw));
-    cx.put_text(&mut o, &sym, &ty, false);
-    Core { w, h: d, objs: vec![o], single: true, ellipse: true, label: LabelPos::Drawn }
+    let (fill, line) = f.part(&f.fill, cx.k);
+    match named.as_str() {
+        "box" | "square" => {
+            let mut o = shape("", "rect", 0.0, 0.0, w, d, fill, line);
+            cx.put_text(&mut o, &sym, &ty, false);
+            Core { w, h: d, objs: vec![o], single: true, label: LabelPos::Drawn, ..Default::default() }
+        }
+        "plain" => {
+            let mut o = obj("", frame(0.0, 0.0, w, d), Kind::Text(SpObj { geom: Geom::preset("rect"), fill: Paint::None, line: None, text: None, equation: false }));
+            cx.put_text(&mut o, &sym, &ty, false);
+            Core { w, h: d, objs: vec![o], single: true, label: LabelPos::Drawn, ..Default::default() }
+        }
+        "glyph" if matches!(sym.as_str(), "+" | "×") => {
+            // the circle and its cross drawn as lines (⊕, ⊗), no text
+            let ring = shape("ring", "ellipse", 0.0, 0.0, d, d, fill, line);
+            let st = Stroke::new(&f.line, f.lw * cx.k);
+            let r = d / 2.0;
+            let (a, b) = if sym == "+" { (((r, 0.0), (r, d)), ((0.0, r), (d, r))) } else {
+                let q = r * std::f64::consts::FRAC_1_SQRT_2;
+                (((r - q, r - q), (r + q, r + q)), ((r - q, r + q), (r + q, r - q)))
+            };
+            let objs = vec![ring, seg("bar1", a.0, a.1, st.clone()), seg("bar2", b.0, b.1, st)];
+            Core { w: d, h: d, objs, label: LabelPos::Drawn, ..Default::default() }
+        }
+        _ => {
+            let mut o = shape("", "ellipse", 0.0, 0.0, w, d, fill, line);
+            cx.put_text(&mut o, &sym, &ty, false);
+            Core { w, h: d, objs: vec![o], single: true, ellipse: true, label: LabelPos::Drawn, ..Default::default() }
+        }
+    }
 }
 
 fn gen_loss(n: &Node, cx: &Ctx) -> Core {
-    let st = style(n, cx);
-    let ty = cx.ty(1.0, false, &st.text);
+    let mut f = crate::finish::Finish::of(n, cx.theme);
+    let ty = cx.ty(1.0, false, &f.text);
     let label = cx.vars.resolve(&n.label);
     let (tw, lines) = text::block(&label, ty.size);
     let named = style_name(n, cx.theme);
-    let look = n.str("look").map(str::to_string).unwrap_or(if named.is_empty() { cx.theme.node.loss.clone() } else { named });
+    let mut look = n.str("look").map(str::to_string).unwrap_or(if named.is_empty() { cx.theme.node.loss.clone() } else { named });
+    if look == "pill" {
+        // a pill is a box with round ends (a finish)
+        look = "box".into();
+        f.radius = 0.5;
+    }
     let pad = if look == "plain" { cx.s(6.0) } else { cx.s(16.0) };
-    let (w, h) = (tw + pad, lines as f64 * ty.size * 1.25 + if look == "plain" { cx.s(4.0) } else { cx.s(10.0) });
+    let (mut w, mut h) = (tw + pad, lines as f64 * ty.size * 1.25 + if look == "plain" { cx.s(4.0) } else { cx.s(10.0) });
+    let (fill, line) = f.part(&f.fill, cx.k);
     let mut o = match look.as_str() {
-        "pill" => {
-            let mut o = shape("", "roundRect", 0.0, 0.0, w, h, paint(&st.fill, 1.0), stroke(&st.line, st.lw));
-            round_adj(&mut o, 0.5);
+        "box" => {
+            let mut o = shape("", if f.radius > 0.0 { "roundRect" } else { "rect" }, 0.0, 0.0, w, h, fill, line);
+            if f.radius > 0.0 {
+                round_adj(&mut o, f.radius);
+            }
             o
         }
-        "box" => shape("", "rect", 0.0, 0.0, w, h, paint(&st.fill, 1.0), stroke(&st.line, st.lw)),
+        "circle" => {
+            w = w.max(h) * 1.1;
+            h = h.max(w * 0.7);
+            shape("", "ellipse", 0.0, 0.0, w, h, fill, line)
+        }
         _ => {
             let mut o = shape("", "rect", 0.0, 0.0, w, h, Paint::None, None);
             if let Kind::Shape(sp) = o.kind {
@@ -623,7 +674,7 @@ fn gen_loss(n: &Node, cx: &Ctx) -> Core {
         }
     };
     cx.put_text(&mut o, &n.label, &ty, false);
-    Core { w, h, objs: vec![o], single: true, ellipse: false, label: LabelPos::Drawn }
+    Core { w, h, objs: vec![o], single: true, ellipse: look == "circle", label: LabelPos::Drawn, ..Default::default() }
 }
 
 fn gen_label(n: &Node, cx: &Ctx) -> Core {
@@ -634,7 +685,7 @@ fn gen_label(n: &Node, cx: &Ctx) -> Core {
     let (w, h) = (tw + cx.s(6.0), lines as f64 * ty.size * 1.25 + cx.s(2.0));
     let mut o = obj("", frame(0.0, 0.0, w, h), Kind::Text(SpObj { geom: Geom::preset("rect"), fill: Paint::None, line: None, text: None, equation: false }));
     cx.put_text(&mut o, &n.label, &ty, false);
-    Core { w, h, objs: vec![o], single: true, ellipse: false, label: LabelPos::Drawn }
+    Core { w, h, objs: vec![o], single: true, ellipse: false, label: LabelPos::Drawn, ..Default::default() }
 }
 
 /// A picture placeholder drawn with shapes (photo, mask, heat map, plot).
@@ -725,11 +776,11 @@ fn gen_image(n: &Node, cx: &Ctx) -> Core {
     let lw = n.num("line_w").unwrap_or(0.75) * cx.k;
     if let Some(src) = n.str("src").filter(|s| !s.is_empty()) {
         let (w, h) = photo_size(n, cx, src, 44.0);
-        return Core { w, h, objs: vec![photo("picture", src, 0.0, 0.0, w, h, &outline, lw, cx)], single: false, ellipse: false, label: LabelPos::Below };
+        return Core { w, h, objs: vec![photo("picture", src, 0.0, 0.0, w, h, &outline, lw, cx)], single: false, ellipse: false, label: LabelPos::Below, ..Default::default() };
     }
     let (w, h) = pic_size(n, cx, 44.0);
     let objs = picture("", n.str("look").unwrap_or("photo"), 0.0, 0.0, w, h, &outline, lw, cx, true);
-    Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Below }
+    Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Below, ..Default::default() }
 }
 
 fn gen_image_stack(n: &Node, cx: &Ctx) -> Core {
@@ -749,45 +800,166 @@ fn gen_image_stack(n: &Node, cx: &Ctx) -> Core {
     let outline = hex_param(n, "line").unwrap_or_else(|| cx.theme.colors.ink.clone());
     let lw = n.num("line_w").unwrap_or(0.75) * cx.k;
     let look = n.str("look").unwrap_or("photo");
-    let total = off * (count - 1) as f64;
+    let named = style_name(n, cx.theme);
+    let one = |i: usize, x: f64, y: f64, w: f64, h: f64, detail: bool, objs: &mut Vec<Object>| match srcs.get(i) {
+        Some(src) => objs.push(photo(&format!("p{i}"), src, x, y, w, h, &outline, lw, cx)),
+        None => objs.extend(picture(&format!("p{i}"), look, x, y, w, h, &outline, lw, cx, detail)),
+    };
     let mut objs = Vec::new();
-    // back to front: the front picture is bottom-left
-    for i in 0..count {
-        let back = (count - 1 - i) as f64;
-        match srcs.get(i) {
-            Some(src) => objs.push(photo(&format!("p{i}"), src, back * off, total - back * off, w, h, &outline, lw, cx)),
-            None => objs.extend(picture(&format!("p{i}"), look, back * off, total - back * off, w, h, &outline, lw, cx, i == count - 1)),
+    match named.as_str() {
+        "film" => {
+            // frames on a strip with sprocket holes: a video
+            let (fw, fh, gap, rim) = (w * 0.62, h * 0.62, cx.s(3.0), cx.s(6.0));
+            let total = count as f64 * fw + (count + 1) as f64 * gap;
+            objs.push(shape("strip", "rect", 0.0, 0.0, total, fh + 2.0 * rim, paint(&cx.theme.colors.ink, 1.0), None));
+            let holes = ((total / cx.s(6.0)) as usize).max(4);
+            for i in 0..holes {
+                let x = (i as f64 + 0.5) * total / holes as f64 - cx.s(1.2);
+                for (j, y) in [rim * 0.3, fh + rim * 1.25].iter().enumerate() {
+                    objs.push(shape(&format!("hole{i}-{j}"), "rect", x, *y, cx.s(2.4), rim * 0.45, paint(&cx.theme.colors.paper, 1.0), None));
+                }
+            }
+            for i in 0..count {
+                one(i, gap + i as f64 * (fw + gap), rim, fw, fh, true, &mut objs);
+            }
+            Core { w: total, h: fh + 2.0 * rim, objs, label: LabelPos::Below, ..Default::default() }
+        }
+        "mosaic" => {
+            // a 2 × 2 grid of pictures: a batch
+            let (cw, ch, gap) = (w * 0.55, h * 0.55, cx.s(2.0));
+            for i in 0..4 {
+                one(i, (i % 2) as f64 * (cw + gap), (i / 2) as f64 * (ch + gap), cw, ch, true, &mut objs);
+            }
+            Core { w: 2.0 * cw + gap, h: 2.0 * ch + gap, objs, label: LabelPos::Below, ..Default::default() }
+        }
+        "row" => {
+            // a few frames side by side and an ellipsis: a sequence
+            let (cw, ch, gap) = (w * 0.6, h * 0.6, cx.s(3.0));
+            let shown = count.min(3);
+            for i in 0..shown {
+                one(i, i as f64 * (cw + gap), 0.0, cw, ch, true, &mut objs);
+            }
+            let ty = cx.ty(1.0, true, &cx.theme.colors.ink);
+            let (o, tw, th) = cx.text("more", "…", &ty, shown as f64 * (cw + gap) + cx.s(6.0), (ch - ty.size * 1.25) / 2.0);
+            let _ = th;
+            objs.push(o);
+            Core { w: shown as f64 * (cw + gap) + tw.max(cx.s(12.0)), h: ch, objs, label: LabelPos::Below, ..Default::default() }
+        }
+        _ => {
+            let total = off * (count - 1) as f64;
+            // back to front: the front picture is bottom-left
+            for i in 0..count {
+                let back = (count - 1 - i) as f64;
+                one(i, back * off, total - back * off, w, h, i == count - 1, &mut objs);
+            }
+            Core { w: w + total, h: h + total, objs, label: LabelPos::Below, ..Default::default() }
         }
     }
-    Core { w: w + total, h: h + total, objs, single: false, ellipse: false, label: LabelPos::Below }
 }
 
 fn gen_feature_stack(n: &Node, cx: &Ctx) -> Core {
     let size = cx.s(n.num("size").unwrap_or(34.0));
     let count = n.num("n").unwrap_or(4.0).clamp(2.0, 10.0) as usize;
     let off = cx.s(n.num("offset").unwrap_or(4.0));
-    let fill = hex_param(n, "fill").unwrap_or_else(|| cx.theme.colors.tensor.clone());
-    let line = hex_param(n, "line").unwrap_or_else(|| cx.theme.colors.ink.clone());
-    let lw = 0.5 * cx.k;
-    let alpha = n.num("alpha").unwrap_or(0.85);
+    let mut f = crate::finish::Finish::of(n, cx.theme);
+    if hex_param(n, "fill").is_none() && cx.theme.modules.get("feature-stack").and_then(|m| m.fill.as_ref()).is_none() {
+        f.fill = cx.theme.colors.tensor.clone();
+    }
+    if hex_param(n, "line").is_none() && cx.theme.modules.get("feature-stack").and_then(|m| m.line.as_ref()).is_none() {
+        f.line = cx.theme.colors.ink.clone();
+    }
+    f.lw = n.num("line_w").unwrap_or(0.5);
+    f.alpha = n.num("alpha").unwrap_or(if f.alpha < 1.0 { f.alpha } else { 0.85 });
     let total = off * (count - 1) as f64;
     let mut objs = Vec::new();
-    if n.str("look") == Some("3d") || style_name(n, cx.theme) == "3d" {
-        // upright sheets seen from the side: parallelograms
-        let (sw, skew) = (size * 0.45, size * 0.28);
-        for i in 0..count {
-            let x = i as f64 * off * 1.6;
-            let pts = [(x, skew), (x + sw, 0.0), (x + sw, size), (x, size + skew)];
-            objs.push(poly(&format!("sheet{i}"), &pts, true, paint(&fill, alpha), stroke(&line, lw)));
+    let named = style_name(n, cx.theme);
+    let style = if n.str("look") == Some("3d") { "3d" } else { named.as_str() };
+    let col = f.base();
+    let k = cx.k;
+    match style {
+        "3d" => {
+            // upright sheets seen from the side: parallelograms
+            let (sw, skew) = (size * 0.45, size * 0.28);
+            for i in 0..count {
+                let x = i as f64 * off * 1.6;
+                let pts = [(x, skew), (x + sw, 0.0), (x + sw, size), (x, size + skew)];
+                let (p, s) = f.part(&col, k);
+                objs.push(poly(&format!("sheet{i}"), &pts, true, p, s));
+            }
+            Core { w: sw + (count - 1) as f64 * off * 1.6, h: size + skew, objs, label: LabelPos::Below, ..Default::default() }
         }
-        return Core { w: sw + (count - 1) as f64 * off * 1.6, h: size + skew, objs, single: false, ellipse: false, label: LabelPos::Below };
+        "cube" => {
+            // one tensor as a block with H, W and C on its edges
+            let (fw, fh, d) = (size * 0.75, size * 0.75, size * 0.55);
+            let (dx, dy) = (d * 0.6, d * 0.45);
+            let fa = |t: f64| f.face(&col, t, k);
+            let (p, s) = fa(cx.theme.shade.top);
+            objs.push(poly("top", &[(0.0, dy), (dx, 0.0), (dx + fw, 0.0), (fw, dy)], true, p, s));
+            let (p, s) = fa(cx.theme.shade.side);
+            objs.push(poly("side", &[(fw, dy), (fw + dx, 0.0), (fw + dx, fh), (fw, fh + dy)], true, p, s));
+            let (p, s) = fa(0.0);
+            objs.push(shape("front", "rect", 0.0, dy, fw, fh, p, s));
+            let ty = cx.small(&cx.theme.colors.muted);
+            let mut ty = ty;
+            ty.size *= 0.85;
+            let (o, _, th) = cx.text("H", "$H$", &ty, -cx.s(4.0), dy + fh / 2.0 - ty.size * 0.62);
+            objs.push(o);
+            let (o, _, _) = cx.text("W", "$W$", &ty, fw / 2.0, dy + fh + cx.s(0.5));
+            objs.push(o);
+            let (o, _, _) = cx.text("C", "$C$", &ty, fw + dx * 0.5 + cx.s(5.0), fh + dy * 0.3);
+            objs.push(o);
+            let _ = th;
+            Core { w: fw + dx, h: fh + dy, objs, label: LabelPos::Below, ..Default::default() }
+        }
+        "grid" => {
+            // the front map shows its pixels
+            for i in 0..count {
+                let back = (count - 1 - i) as f64;
+                let (x, y) = (back * off, total - back * off);
+                let (p, s) = f.part(&col, k);
+                objs.push(shape(&format!("map{i}"), "rect", x, y, size, size, p, s));
+                if i == count - 1 {
+                    let cells = 5;
+                    let c = size / cells as f64;
+                    let st = Stroke::new(&f.line, 0.35 * k);
+                    for j in 1..cells {
+                        objs.push(seg(&format!("v{j}"), (x + j as f64 * c, y), (x + j as f64 * c, y + size), st.clone()));
+                        objs.push(seg(&format!("h{j}"), (x, y + j as f64 * c), (x + size, y + j as f64 * c), st.clone()));
+                    }
+                }
+            }
+            Core { w: size + total, h: size + total, objs, label: LabelPos::Below, ..Default::default() }
+        }
+        "row" => {
+            // channels apart, side by side
+            let (sw, skew, gap) = (size * 0.38, size * 0.22, size * 0.2);
+            for i in 0..count.min(4) {
+                let x = i as f64 * (sw + gap);
+                let pts = [(x, skew), (x + sw, 0.0), (x + sw, size), (x, size + skew)];
+                let c = cx.theme.cycle(i).to_string();
+                let c = if f.typed && cx.theme.colors.cycle.len() > 1 { shade(&c, 0.45) } else { col.clone() };
+                let (p, s) = f.part(&c, k);
+                objs.push(poly(&format!("sheet{i}"), &pts, true, p, s));
+            }
+            let m = count.min(4) as f64;
+            Core { w: m * sw + (m - 1.0) * gap, h: size + skew, objs, label: LabelPos::Below, ..Default::default() }
+        }
+        _ => {
+            for i in 0..count {
+                let back = (count - 1 - i) as f64;
+                let front = i == count - 1;
+                let (p, s) = f.part(&col, k);
+                let s = s.map(|mut s| {
+                    if front {
+                        s.width_pt *= 2.0;
+                    }
+                    s
+                });
+                objs.push(shape(&format!("map{i}"), "rect", back * off, total - back * off, size, size, p, s));
+            }
+            Core { w: size + total, h: size + total, objs, label: LabelPos::Below, ..Default::default() }
+        }
     }
-    for i in 0..count {
-        let back = (count - 1 - i) as f64;
-        let front = i == count - 1;
-        objs.push(shape(&format!("map{i}"), "rect", back * off, total - back * off, size, size, paint(&fill, alpha), stroke(&line, if front { lw * 2.0 } else { lw })));
-    }
-    Core { w: size + total, h: size + total, objs, single: false, ellipse: false, label: LabelPos::Below }
 }
 
 fn gen_vector_bar(n: &Node, cx: &Ctx) -> Core {
@@ -807,7 +979,7 @@ fn gen_vector_bar(n: &Node, cx: &Ctx) -> Core {
         objs.push(shape(&format!("cell{i}"), "rect", x, y, cell, cell, paint(&f, 1.0), stroke(&line, 0.5 * cx.k)));
     }
     let (w, h) = if horiz { (cell * count as f64, cell) } else { (cell, cell * count as f64) };
-    Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Below }
+    Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Below, ..Default::default() }
 }
 
 fn gen_matrix(n: &Node, cx: &Ctx) -> Core {
@@ -824,7 +996,7 @@ fn gen_matrix(n: &Node, cx: &Ctx) -> Core {
             objs.push(shape(&format!("r{r}c{c}"), "rect", c as f64 * cell, r as f64 * cell, cell, cell, paint(&f, 1.0), stroke(&line, 0.5 * cx.k)));
         }
     }
-    Core { w: cell * cols as f64, h: cell * rows as f64, objs, single: false, ellipse: false, label: LabelPos::Below }
+    Core { w: cell * cols as f64, h: cell * rows as f64, objs, single: false, ellipse: false, label: LabelPos::Below, ..Default::default() }
 }
 
 /// The kind of a layer: its name without index, subscripts or math.
@@ -866,7 +1038,7 @@ fn gen_layer_bars(n: &Node, cx: &Ctx) -> Core {
         cx.put_text(&mut o, name, &ty, true);
         objs.push(o);
     }
-    Core { w: count as f64 * (bw + gap) - gap, h: full, objs, single: false, ellipse: false, label: LabelPos::Above }
+    Core { w: count as f64 * (bw + gap) - gap, h: full, objs, single: false, ellipse: false, label: LabelPos::Above, ..Default::default() }
 }
 
 /// Block sizes (thickness, height, depth) of a cuboid sequence.
@@ -940,13 +1112,16 @@ fn gen_cuboid_seq(n: &Node, cx: &Ctx) -> Core {
     for o in &mut objs {
         o.frame.y += emu(half - mid);
     }
-    Core { w, h: 2.0 * half, objs, single: false, ellipse: false, label: LabelPos::Above }
+    Core { w, h: 2.0 * half, objs, single: false, ellipse: false, label: LabelPos::Above, ..Default::default() }
 }
 
 fn gen_unet(n: &Node, cx: &Ctx) -> Core {
+    if style_name(n, cx.theme) == "lineart" {
+        return unet_lineart(n, cx);
+    }
     let depth = n.num("depth").unwrap_or(3.0).clamp(1.0, 6.0) as usize;
-    let st = style(n, cx);
-    let fill = solid_fill(&st, cx);
+    let f = crate::finish::Finish::of(n, cx.theme);
+    let fill = f.base();
     let (bw, gap, h0, step) = (cx.s(8.0), cx.s(8.0), cx.s(42.0), cx.s(11.0));
     let hl = |l: usize| h0 * 0.68f64.powi(l as i32);
     let count = 2 * depth + 1;
@@ -967,171 +1142,80 @@ fn gen_unet(n: &Node, cx: &Ctx) -> Core {
     for i in 0..count {
         let l = level(i);
         let x = i as f64 * (bw + gap);
-        objs.push(shape(&format!("bar{i}"), "rect", x, l as f64 * step, bw, hl(l), paint(&fill, 1.0), stroke(&st.line, st.lw)));
+        let (p, s) = f.part(&fill, cx.k);
+        let mut o = shape(&format!("bar{i}"), if f.radius > 0.0 { "roundRect" } else { "rect" }, x, l as f64 * step, bw, hl(l), p, s);
+        if f.radius > 0.0 {
+            round_adj(&mut o, f.radius);
+        }
+        objs.push(o);
     }
-    Core { w: count as f64 * (bw + gap) - gap, h: total_h, objs, single: false, ellipse: false, label: LabelPos::Above }
+    Core { w: count as f64 * (bw + gap) - gap, h: total_h, objs, label: LabelPos::Above, ..Default::default() }
+}
+
+/// The U-Net paper's line art: input picture, the U of conv pairs, skips
+/// across, the output mask.
+fn unet_lineart(n: &Node, cx: &Ctx) -> Core {
+    let mut m = n.clone();
+    m.style = "unet".into();
+    let mut c = crate::art::pair(&m, cx);
+    // drop the Encoder / Decoder names: the U says it
+    c.objs.retain(|o| !o.name.ends_with("-name"));
+    let k = cx.k;
+    let s = cx.s(18.0);
+    let (w, h) = (c.w, c.h);
+    let pad = cx.s(8.0);
+    for o in &mut c.objs {
+        o.frame.x += emu(s + pad);
+    }
+    let ink = cx.theme.colors.ink.clone();
+    let mut objs = picture("input", "photo", 0.0, cx.s(4.0), s, s, &ink, 0.5 * k, cx, true);
+    objs.extend(std::mem::take(&mut c.objs));
+    objs.extend(picture("output", "mask", s + 2.0 * pad + w, cx.s(4.0), s, s, &ink, 0.5 * k, cx, true));
+    let st = {
+        let mut st = Stroke::new(&ink, 0.75 * k);
+        st.tail = "triangle".into();
+        st
+    };
+    objs.push(seg("in", (s + cx.s(1.0), cx.s(4.0) + s / 2.0), (s + pad - cx.s(1.0), cx.s(4.0) + s / 2.0), st.clone()));
+    objs.push(seg("out", (s + pad + w + cx.s(1.0), cx.s(4.0) + s / 2.0), (s + 2.0 * pad + w - cx.s(1.0), cx.s(4.0) + s / 2.0), st));
+    Core { w: 2.0 * (s + pad) + w, h, objs, label: LabelPos::Above, legend: c.legend, ..Default::default() }
 }
 
 /// Built-in art styles of the generator kinds (the first is the default).
+/// A style is a construction; fill, outline, gradient, radius and colours
+/// are the finish ([`crate::finish`]).
 pub fn generator_styles(kind: &str) -> &'static [&'static str] {
     match kind {
-        "encoder" | "decoder" => &["trapezoid", "outline", "rounded", "gradient", "bars", "3d", "stacked"],
-        "nn" => &["circles", "filled", "dots", "pills", "squares"],
-        "brace" => &["curly", "square", "line", "arrow", "angle"],
-        "feature-stack" => &["flat", "3d"],
-        "loss" => &["plain", "pill", "box"],
-        "box" => &["rect", "round", "pill"],
+        "encoder" | "decoder" | "autoencoder" | "nn" => crate::art::styles(kind),
+        "brace" => &["curly", "bracket", "paren", "angle", "dimension", "span"],
+        "feature-stack" => &["offset", "3d", "cube", "grid", "row"],
+        "image-stack" => &["stack", "film", "mosaic", "row"],
+        "loss" => &["plain", "box", "circle"],
+        "op" => &["circle", "box", "plain", "glyph"],
+        "box" => &["rect", "trapezoid", "parallelogram", "hexagon", "ellipse", "can"],
+        "unet" => &["bars", "lineart"],
         _ => &[],
     }
 }
 
-/// encoder / decoder: a block that narrows (encoder) or widens (decoder) along the flow.
-fn gen_coder(n: &Node, cx: &Ctx, decoder: bool) -> Core {
-    let st = style(n, cx);
-    let which = style_name(n, cx.theme);
-    let (w, h) = (cx.s(n.num("w").unwrap_or(58.0)), cx.s(n.num("h").unwrap_or(46.0)));
-    let ty = cx.ty(1.0, false, &st.text);
-    // heights at the wide and the narrow end
-    let narrow = 0.5;
-    let frac = |t: f64| if decoder { narrow + (1.0 - narrow) * t } else { 1.0 - (1.0 - narrow) * t };
-    let outline = |fill: Paint, lw: f64| {
-        let (a, b) = (frac(0.0), frac(1.0));
-        let pts = [(0.0, h * (1.0 - a) / 2.0), (w, h * (1.0 - b) / 2.0), (w, h * (1.0 + b) / 2.0), (0.0, h * (1.0 + a) / 2.0)];
-        poly("", &pts, true, fill, stroke(&st.line, lw))
-    };
-    let steps = n.num("n").unwrap_or(4.0).clamp(2.0, 8.0) as usize;
-    match which.as_str() {
-        "rounded" => {
-            let mut o = shape("", "roundRect", 0.0, 0.0, w, h * 0.8, paint(&st.fill, 1.0), stroke(&st.line, st.lw));
-            round_adj(&mut o, 0.28);
-            cx.put_text(&mut o, &n.label, &ty, false);
-            Core { w, h: h * 0.8, objs: vec![o], single: true, ellipse: false, label: LabelPos::Drawn }
-        }
-        "outline" => {
-            let mut o = outline(Paint::None, st.lw * 1.5);
-            cx.put_text(&mut o, &n.label, &ty, false);
-            Core { w, h, objs: vec![o], single: false, ellipse: false, label: LabelPos::Drawn }
-        }
-        "gradient" => {
-            let base = solid_fill(&st, cx);
-            let (from, to) = if decoder { (shade(&base, 0.75), base.clone()) } else { (base.clone(), shade(&base, 0.75)) };
-            let stops = vec![lore_canvas::Stop { pos: 0.0, color: from, alpha: 1.0 }, lore_canvas::Stop { pos: 1.0, color: to, alpha: 1.0 }];
-            let mut o = outline(Paint::Gradient { stops, angle: 0.0, path: false }, st.lw);
-            cx.put_text(&mut o, &n.label, &ty, false);
-            Core { w, h, objs: vec![o], single: false, ellipse: false, label: LabelPos::Drawn }
-        }
-        "bars" => {
-            let fill = solid_fill(&st, cx);
-            let (bw, gap) = (cx.s(9.0), cx.s(5.0));
-            let mut objs = Vec::new();
-            for i in 0..steps {
-                let bh = h * frac(i as f64 / (steps - 1) as f64);
-                let mut o = shape(&format!("bar{i}"), "roundRect", i as f64 * (bw + gap), (h - bh) / 2.0, bw, bh, paint(&fill, 1.0), stroke(&st.line, st.lw));
-                round_adj(&mut o, 0.3);
-                objs.push(o);
-            }
-            Core { w: steps as f64 * (bw + gap) - gap, h, objs, single: false, ellipse: false, label: LabelPos::Above }
-        }
-        "3d" => {
-            let mut m = n.clone();
-            let dims: Vec<Value> = (0..steps)
-                .map(|i| {
-                    let f = frac(i as f64 / (steps - 1) as f64);
-                    serde_json::json!([5.0 + 8.0 * (1.0 - f) / (1.0 - narrow), 46.0 * f, 14.0 * f])
-                })
-                .collect();
-            m.params.insert("dims".into(), Value::Array(dims));
-            if hex_param(n, "fill").is_none() {
-                m.params.insert("fill".into(), Value::String(solid_fill(&st, cx)));
-            }
-            gen_cuboid_seq(&m, cx)
-        }
-        "stacked" => {
-            // translucent sheets one behind the other
-            let fill = solid_fill(&st, cx);
-            let (sw, off, skew) = (cx.s(16.0), cx.s(9.0), cx.s(7.0));
-            let mut objs = Vec::new();
-            for i in 0..steps {
-                let sh = (h - skew) * frac(i as f64 / (steps - 1) as f64);
-                let x = i as f64 * off;
-                let y0 = (h - skew - sh) / 2.0;
-                let pts = [(x, y0 + skew), (x + sw, y0), (x + sw, y0 + sh), (x, y0 + sh + skew)];
-                objs.push(poly(&format!("sheet{i}"), &pts, true, paint(&fill, 0.55), stroke(&st.line, 0.75 * cx.k)));
-            }
-            Core { w: (steps - 1) as f64 * off + sw, h, objs, single: false, ellipse: false, label: LabelPos::Above }
-        }
-        _ => {
-            let mut o = outline(paint(&st.fill, 1.0), st.lw);
-            cx.put_text(&mut o, &n.label, &ty, false);
-            Core { w, h, objs: vec![o], single: false, ellipse: false, label: LabelPos::Drawn }
-        }
-    }
-}
-
-/// nn: a small fully connected network, neurons and the lines between layers.
-fn gen_nn(n: &Node, cx: &Ctx) -> Core {
-    let st = style(n, cx);
-    let which = style_name(n, cx.theme);
-    let mut layers: Vec<usize> = n.list("layers").iter().filter_map(|l| l.trim().parse::<f64>().ok()).map(|v| v.clamp(1.0, 8.0) as usize).collect();
-    if layers.is_empty() {
-        layers = vec![3, 4, 2];
-    }
-    let (d, vgap, lgap) = match which.as_str() {
-        "dots" => (cx.s(5.0), cx.s(6.0), cx.s(22.0)),
-        "pills" => (cx.s(8.0), cx.s(3.0), cx.s(26.0)),
-        _ => (cx.s(9.0), cx.s(5.0), cx.s(24.0)),
-    };
-    let pad = if which == "pills" { cx.s(3.0) } else { 0.0 };
-    let tallest = *layers.iter().max().unwrap() as f64;
-    let h = tallest * d + (tallest - 1.0) * vgap + 2.0 * pad;
-    let centre = |li: usize, ni: usize| {
-        let count = layers[li] as f64;
-        let col_h = count * d + (count - 1.0) * vgap;
-        (pad + li as f64 * (d + lgap + 2.0 * pad) + d / 2.0, (h - col_h) / 2.0 + ni as f64 * (d + vgap) + d / 2.0)
-    };
-    let mut objs = Vec::new();
-    let wire = Stroke::new(if which == "dots" { &cx.theme.colors.muted } else { &st.line }, (if which == "dots" { 0.35 } else { 0.5 }) * cx.k);
-    for li in 0..layers.len().saturating_sub(1) {
-        for a in 0..layers[li] {
-            for b in 0..layers[li + 1] {
-                let (p, q) = (centre(li, a), centre(li + 1, b));
-                // from edge to edge of the neurons, so outlined neurons stay clean
-                objs.push(seg(&format!("w{li}-{a}-{b}"), (p.0 + d / 2.0 + pad, p.1), (q.0 - d / 2.0 - pad, q.1), wire.clone()));
-            }
-        }
-    }
-    for (li, count) in layers.iter().enumerate() {
-        if which == "pills" {
-            let (x, _) = centre(li, 0);
-            let col_h = *count as f64 * d + (*count as f64 - 1.0) * vgap + 2.0 * pad;
-            let mut o = shape(&format!("layer{li}"), "roundRect", x - d / 2.0 - pad, (h - col_h) / 2.0, d + 2.0 * pad, col_h, paint(&cx.theme.colors.paper, 1.0), stroke(&st.line, st.lw));
-            round_adj(&mut o, 0.5);
-            objs.push(o);
-        }
-        for ni in 0..*count {
-            let (x, y) = centre(li, ni);
-            let (prst, fill, line) = match which.as_str() {
-                "filled" | "pills" => ("ellipse", paint(&solid_fill(&st, cx), 1.0), stroke(&st.line, 0.5 * cx.k)),
-                "dots" => ("ellipse", paint(&st.line, 1.0), None),
-                "squares" => ("rect", paint(&cx.theme.colors.paper, 1.0), stroke(&st.line, st.lw)),
-                _ => ("ellipse", paint(&cx.theme.colors.paper, 1.0), stroke(&st.line, st.lw)),
-            };
-            objs.push(shape(&format!("n{li}-{ni}"), prst, x - d / 2.0, y - d / 2.0, d, d, fill, line));
-        }
-    }
-    let w = layers.len() as f64 * (d + 2.0 * pad) + (layers.len() - 1) as f64 * lgap;
-    Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Above }
-}
-
 /// brace: gathers what is on its open side (`dir` = the side it points to).
 fn gen_brace(n: &Node, cx: &Ctx) -> Core {
-    let st = style(n, cx);
+    let f = crate::finish::Finish::of(n, cx.theme);
     let which = style_name(n, cx.theme);
+    let which = match which.as_str() {
+        "line" | "arrow" => "dimension".to_string(),
+        "square" => "bracket".to_string(),
+        _ => which,
+    };
     let len = cx.s(n.num("size").unwrap_or(56.0));
-    let thick = cx.s(n.num("thick").unwrap_or(if which == "line" || which == "arrow" { 8.0 } else { 10.0 }));
+    let thick = cx.s(n.num("thick").unwrap_or(match which.as_str() {
+        "dimension" => 8.0,
+        "span" => 14.0,
+        _ => 10.0,
+    }));
     let dir = n.str("dir").unwrap_or("right").to_string();
     let vertical = dir == "left" || dir == "right";
-    let line = Stroke::new(&st.line, st.lw);
+    let line = Stroke::new(&f.line, f.lw * cx.k);
     // drawn pointing right in a (thick × len) box, then turned
     let (w, h) = if vertical { (thick, len) } else { (len, thick) };
     let turn = |p: (f64, f64)| -> (f64, f64) {
@@ -1143,15 +1227,32 @@ fn gen_brace(n: &Node, cx: &Ctx) -> Core {
         }
     };
     let path = |pts: &[(f64, f64)], name: &str, st: Stroke| poly(name, &pts.iter().map(|p| turn(*p)).collect::<Vec<_>>(), false, Paint::None, Some(st));
+    let heads = |mut s: Stroke| {
+        s.head = "triangle".into();
+        s.tail = "triangle".into();
+        s
+    };
     let objs = match which.as_str() {
-        "square" => vec![path(&[(0.0, 0.0), (thick, 0.0), (thick, len), (0.0, len)], "", line)],
+        "bracket" => vec![path(&[(0.0, 0.0), (thick, 0.0), (thick, len), (0.0, len)], "", line)],
         "angle" => vec![path(&[(0.0, 0.0), (thick, len / 2.0), (0.0, len)], "", line)],
-        "line" => vec![path(&[(0.0, 0.0), (thick, 0.0)], "tick0", line.clone()), path(&[(thick / 2.0, 0.0), (thick / 2.0, len)], "bar", line.clone()), path(&[(0.0, len), (thick, len)], "tick1", line)],
-        "arrow" => {
-            let mut both = line.clone();
-            both.head = "triangle".into();
-            both.tail = "triangle".into();
-            vec![path(&[(0.0, 0.0), (thick, 0.0)], "tick0", line.clone()), path(&[(thick / 2.0, 0.0), (thick / 2.0, len)], "bar", both), path(&[(0.0, len), (thick, len)], "tick1", line)]
+        "paren" => {
+            // a parenthesis: one quadratic curve
+            let pts = [turn((0.0, 0.0)), turn((thick * 2.0, len / 2.0)), turn((0.0, len))];
+            let (bw, bh) = (w.max(0.01), h.max(0.01));
+            let u = |p: (f64, f64)| format!("{:.4} {:.4}", p.0 / bw, p.1 / bh);
+            let geom = Geom { prst: "custom".into(), adj: BTreeMap::new(), path: Some(format!("M{} Q{} {}", u(pts[0]), u(pts[1]), u(pts[2]))) };
+            vec![obj("", frame(0.0, 0.0, w, h), Kind::Shape(SpObj { geom, fill: Paint::None, line: Some(line), text: None, equation: false }))]
+        }
+        "dimension" => {
+            // a dimension line: end ticks and a double arrow (heads=none for a plain bar)
+            let bar = if n.str("heads") == Some("none") { line.clone() } else { heads(line.clone()) };
+            vec![path(&[(0.0, 0.0), (thick, 0.0)], "tick0", line.clone()), path(&[(thick / 2.0, 0.0), (thick / 2.0, len)], "bar", bar), path(&[(0.0, len), (thick, len)], "tick1", line)]
+        }
+        "span" => {
+            // dashed end lines across, a double arrow between them (a section of a network)
+            let mut dash = line.clone();
+            dash.dash = "sysDash".into();
+            vec![path(&[(0.0, 0.0), (thick, 0.0)], "end0", dash.clone()), path(&[(thick * 0.5, cx.s(1.0)), (thick * 0.5, len - cx.s(1.0))], "bar", heads(line.clone())), path(&[(0.0, len), (thick, len)], "end1", dash)]
         }
         _ => {
             // PowerPoint's own brace, turned for the up/down directions
@@ -1163,7 +1264,7 @@ fn gen_brace(n: &Node, cx: &Ctx) -> Core {
             vec![o]
         }
     };
-    Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Below }
+    Core { w, h, objs, label: LabelPos::Below, ..Default::default() }
 }
 
 fn resolve_colour(s: &str, st: &Style, t: &Theme) -> Option<String> {
@@ -1176,6 +1277,7 @@ fn resolve_colour(s: &str, st: &Style, t: &Theme) -> Option<String> {
         "theme:paper" => t.colors.paper.clone(),
         "theme:image" => t.colors.image.clone(),
         "theme:tensor" => t.colors.tensor.clone(),
+        s if s.starts_with("layer:") => t.layer(&s["layer:".len()..]).to_string(),
         _ => return None,
     })
 }
@@ -1292,7 +1394,7 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx) -> Core {
         scale_obj(o, cx.k);
         fill_label(o, &label, cx, &mut drawn);
     }
-    Core { w: cx.s(t.w), h: cx.s(t.h), objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below } }
+    Core { w: cx.s(t.w), h: cx.s(t.h), objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below }, ..Default::default() }
 }
 
 /// Draw a node at scale `cx.k`.
@@ -1324,9 +1426,10 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         (None, "layer-bars") => gen_layer_bars(n, cx),
         (None, "cuboid-seq") => gen_cuboid_seq(n, cx),
         (None, "unet") => gen_unet(n, cx),
-        (None, "encoder") => gen_coder(n, cx, false),
-        (None, "decoder") => gen_coder(n, cx, true),
-        (None, "nn") => gen_nn(n, cx),
+        (None, "encoder") => crate::art::coder(n, cx, false),
+        (None, "decoder") => crate::art::coder(n, cx, true),
+        (None, "autoencoder") => crate::art::pair(n, cx),
+        (None, "nn") => crate::art::nn(n, cx),
         (None, "brace") => gen_brace(n, cx),
         // a library kind whose named style is missing falls back to its default drawing
         (None, other) => match cx.lib.get(other, "") {
@@ -1353,8 +1456,9 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     }
     if above.is_empty() && below.is_empty() && core.single {
         let (w, h) = (core.w, core.h);
-        return Body { w, h, cy: h / 2.0, reserve_w: w, objs: core.objs, single: true, ellipse: core.ellipse };
+        return Body { w, h, cy: h / 2.0, reserve_w: w, objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend };
     }
+    let legend = core.legend;
     let pad = cx.s(2.0);
     let measure = |v: &[(String, &str, Type)]| -> f64 { v.iter().map(|(s, _, t)| text::block(&cx.vars.resolve(s), t.size).1 as f64 * t.size * 1.25).sum::<f64>() + if v.is_empty() { 0.0 } else { pad } };
     let (top, bottom) = (measure(&above), measure(&below));
@@ -1385,7 +1489,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         reserve_w = reserve_w.max(tw);
         objs.push(o);
     }
-    Body { w, h, cy: h / 2.0, reserve_w, objs, single: false, ellipse: false }
+    Body { w, h, cy: h / 2.0, reserve_w, objs, single: false, ellipse: false, legend }
 }
 
 /// Wrap a body's objects into what goes on the slide: the single shape, or a

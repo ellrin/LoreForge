@@ -23,6 +23,10 @@ pub struct Theme {
     /// Per module kind (`[modules.unet]`): colours and art style, over the role's.
     #[serde(default)]
     pub modules: BTreeMap<String, ModuleStyle>,
+    /// Colour and legend name of each layer type (`[layers.conv]`), used by
+    /// drawings coloured by layer type or role.
+    #[serde(default)]
+    pub layers: BTreeMap<String, LayerStyle>,
     pub shade: Shade,
     pub space: Space,
 }
@@ -68,6 +72,21 @@ pub struct ModuleStyle {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    /// Finish words (see [`crate::finish`]), after `[node] finish`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_w: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
+}
+
+/// One layer type: its colour and the name the colour legend gives it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct LayerStyle {
+    pub color: String,
+    #[serde(default)]
+    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -101,6 +120,10 @@ pub struct NodeStyle {
     pub line_w: f64,
     pub radius: f64,
     pub loss: String,
+    /// Finish of every module (see [`crate::finish`]): `solid`, `outline`,
+    /// `gradient`, `flat`, `translucent`, `typed` / `mono` …
+    #[serde(default)]
+    pub finish: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -205,6 +228,9 @@ impl Theme {
                 cols.push(("modules.*", c));
             }
         }
+        for l in self.layers.values() {
+            cols.push(("layers.*.color", &l.color));
+        }
         if let Some((k, v)) = cols.into_iter().find(|(_, v)| !hex_ok(v)) {
             return Err(format!("theme: {k} = {v:?} is not a 6-digit hex colour"));
         }
@@ -234,6 +260,18 @@ impl Theme {
     }
     pub fn panel_line(&self, i: usize) -> &str {
         if self.panel.lines.is_empty() { &self.panel.line } else { &self.panel.lines[i % self.panel.lines.len()] }
+    }
+    /// Colour of a layer type (`conv`, `pool`, `enc` …); unknown types take
+    /// the `other` entry, else the tensor colour.
+    pub fn layer(&self, key: &str) -> &str {
+        self.layers.get(key).or_else(|| self.layers.get("other")).map(|l| l.color.as_str()).unwrap_or(&self.colors.tensor)
+    }
+    /// Legend name of a layer type.
+    pub fn layer_label(&self, key: &str) -> String {
+        match self.layers.get(key) {
+            Some(l) if !l.label.is_empty() => l.label.clone(),
+            _ => key.to_string(),
+        }
     }
     /// Colour of the `i`-th class (layer kinds, cells).
     pub fn cycle(&self, i: usize) -> &str {

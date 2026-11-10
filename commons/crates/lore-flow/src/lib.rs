@@ -21,8 +21,10 @@
 //! assert!(fig.objects().iter().any(|o| o.name == "flow:demo/f"));
 //! ```
 
+pub mod art;
 pub mod build;
 pub mod dsl;
+pub mod finish;
 pub mod layout;
 #[cfg(feature = "llm")]
 pub mod llm;

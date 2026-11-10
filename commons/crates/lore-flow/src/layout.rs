@@ -151,12 +151,23 @@ pub struct LegendItem {
     pub text: Rect,
 }
 
+/// One entry of the colour legend (layer types, roles): a swatch and its name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwatchItem {
+    pub swatch: crate::art::Swatch,
+    pub at: Rect,
+    pub text: Rect,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
     /// One per graph node, same order.
     pub nodes: Vec<Placed>,
     pub panels: Vec<PanelBox>,
     pub legend: Vec<LegendItem>,
+    /// The colour legend over the figure: every layer type a module coloured,
+    /// when there are two or more.
+    pub swatches: Vec<SwatchItem>,
     /// Bounding box of the whole figure.
     pub bounds: Rect,
     /// Scale applied to the natural size.
@@ -170,6 +181,7 @@ struct Size {
     cy: f64,
     single: bool,
     ellipse: bool,
+    legend: Vec<crate::art::Swatch>,
 }
 
 struct PanelPlan {
@@ -514,7 +526,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         .map(|n| {
             let cx = Ctx { theme, vars, math: &NoMath, lib, k: 1.0, symmetric: !down_panels.contains(n.panel.as_str()), image_size };
             let b = modules::make(n, &cx);
-            Size { w: b.w, h: b.h, reserve_w: b.reserve_w, cy: b.cy, single: b.single, ellipse: b.ellipse }
+            Size { w: b.w, h: b.h, reserve_w: b.reserve_w, cy: b.cy, single: b.single, ellipse: b.ellipse, legend: b.legend }
         })
         .collect();
 
@@ -697,6 +709,46 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         bounds.h = y - bounds.y;
     }
 
+    // colour legend: one centred row (wrapping) over the figure
+    let mut swatches = Vec::new();
+    let mut seen: Vec<crate::art::Swatch> = Vec::new();
+    for s in sizes.iter().flat_map(|s| s.legend.iter()) {
+        if !seen.iter().any(|x| x.key == s.key) {
+            seen.push(s.clone());
+        }
+    }
+    if g.legend != Some(false) && seen.len() >= 2 {
+        let size = theme.small_size();
+        let (sq, sp, between) = (size * 0.9, 4.0, 12.0);
+        let widths: Vec<f64> = seen.iter().map(|s| sq + sp + text::width(&s.label, size) + 2.0).collect();
+        let mut rows: Vec<Vec<usize>> = vec![vec![]];
+        let mut cur = 0.0;
+        for (i, w) in widths.iter().enumerate() {
+            if cur + w > bounds.w.max(240.0) && !rows.last().unwrap().is_empty() {
+                rows.push(vec![]);
+                cur = 0.0;
+            }
+            rows.last_mut().unwrap().push(i);
+            cur += w + between;
+        }
+        let lh = size * 1.6;
+        let height = lh * rows.len() as f64;
+        let mut y = bounds.y - gap * 0.6 - height;
+        for r in rows {
+            let total: f64 = r.iter().map(|i| widths[*i]).sum::<f64>() + between * (r.len() - 1) as f64;
+            let mut x = bounds.x + (bounds.w - total) / 2.0;
+            for i in r {
+                let cy = y + lh / 2.0;
+                swatches.push(SwatchItem { swatch: seen[i].clone(), at: Rect::new(x, cy - sq / 2.0, sq, sq), text: Rect::new(x + sq + sp, y, widths[i] - sq - sp, lh) });
+                x += widths[i] + between;
+            }
+            y += lh;
+        }
+        let top = bounds.y - gap * 0.6 - height;
+        bounds.h += bounds.y - top;
+        bounds.y = top;
+    }
+
     // fit into the frame
     let k = (opt.frame.w / bounds.w).min(opt.frame.h / bounds.h).min(opt.max_scale);
     let ox = opt.frame.x + (opt.frame.w - bounds.w * k) / 2.0 - bounds.x * k;
@@ -716,5 +768,9 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         l.line = ((ox + l.line.0.0 * k, oy + l.line.0.1 * k), (ox + l.line.1.0 * k, oy + l.line.1.1 * k));
         l.text = l.text.map(ox, oy, k);
     }
-    Layout { nodes, panels, legend, bounds: bounds.map(ox, oy, k), scale: k }
+    for s in &mut swatches {
+        s.at = s.at.map(ox, oy, k);
+        s.text = s.text.map(ox, oy, k);
+    }
+    Layout { nodes, panels, legend, swatches, bounds: bounds.map(ox, oy, k), scale: k }
 }

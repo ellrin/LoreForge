@@ -33,7 +33,11 @@ title = "inside-top-left"
 [node]
 line_w = 1.0
 radius = 0.0         # corner radius of boxes, as a fraction of the short side (0 = square)
-loss = "plain"       # plain (just the math) | pill | box
+loss = "plain"       # plain (just the math) | box | circle
+# finish of every module: solid | outline | gradient | flat, plus translucent, typed | mono,
+# round | square, thin | bold. [modules.<kind>] finish / line_w / radius refine it per kind,
+# a node's finish=… last. A finish never changes what is drawn, only how it is painted.
+finish = "solid typed"
 
 [roles.default]
 fill = "FFFFFF"
@@ -146,6 +150,58 @@ color = "7F7F7F"
 width = 0.5
 dash = "solid"
 tail = "none"
+
+# Layer types: drawings coloured by type (SegNet slabs, layer lists, transformer blocks …) and
+# by role (encoder / latent / decoder) take these colours and name them in the colour legend.
+# Grey levels here, far enough apart to tell in black and white.
+[layers.conv]
+color = "C8C8C8"
+label = "Conv + BN + ReLU"
+[layers.pool]
+color = "7F7F7F"
+label = "Pooling"
+[layers.up]
+color = "F0F0F0"
+label = "Upsampling"
+[layers.softmax]
+color = "404040"
+label = "Softmax"
+[layers.fc]
+color = "A6A6A6"
+label = "Fully connected"
+[layers.attn]
+color = "D9D9D9"
+label = "Multi-head attention"
+[layers.norm]
+color = "F7F7F7"
+label = "Add & Norm"
+[layers.ffn]
+color = "B3B3B3"
+label = "Feed forward"
+[layers.embed]
+color = "E6E6E6"
+label = "Embedding"
+[layers.token]
+color = "D0D0D0"
+label = "Token"
+[layers.cls]
+color = "595959"
+label = "Class token"
+[layers.cell]
+color = "D9D9D9"
+label = "Recurrent cell"
+[layers.enc]
+color = "BFBFBF"
+label = "Encoder"
+[layers.latent]
+color = "595959"
+label = "Latent"
+[layers.dec]
+color = "E6E6E6"
+label = "Decoder"
+[layers.other]
+color = "BFBFBF"
+label = "Layer"
 
 # 3-D blocks: top and side faces are the front colour made lighter (> 0) or darker (< 0).
 [shade]
