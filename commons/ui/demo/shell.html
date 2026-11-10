@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="giftbox" data-mode="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LoreForge shell 示範</title>
+<!-- Works from `python3 -m http.server` in commons/ui (open /demo/shell.html).
+     ?theme=<id> picks a theme; the APIs (/api/engines, /api/links/open) are mocked below. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="../theme.css">
+<link rel="stylesheet" href="../base.css">
+<script src="../theme.js"></script>
+<style>
+  /* the app's own layout: what each app keeps in its styles.css */
+  html, body { height: 100%; overflow: hidden; }
+  .app { display: grid; height: 100vh; grid-template: "top top top" var(--top-h) "left stage side" 1fr / 248px 1fr 300px; }
+  .app > .top { grid-area: top; }
+  .left { grid-area: left; background: var(--panel); border-right: 1px solid var(--line); padding: 14px 16px; overflow-y: auto; }
+  .left h2 { margin: 0 0 10px; font: 700 15px var(--sans); }
+  .left ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .left li { display: grid; grid-template-columns: 18px 1fr; gap: 6px; font: 500 11px var(--mono); color: var(--muted); }
+  .left li i { display: block; aspect-ratio: 16 / 9; border-radius: 3px; background: #fff; box-shadow: 0 0 0 1px var(--line-strong); }
+  .left li[aria-current] i { box-shadow: 0 0 0 2px var(--accent-text); }
+  .stage { grid-area: stage; display: flex; flex-direction: column; min-width: 0; min-height: 0; background-color: color-mix(in srgb, var(--bg) 88%, #000); background-image: radial-gradient(var(--dot) 1px, transparent 1px); background-size: 16px 16px; }
+  .sheet { margin: auto; flex: none; width: min(640px, calc(100% - 48px)); aspect-ratio: 16 / 9; background: #fff; box-shadow: 0 10px 40px #0005; }
+  .side { grid-area: side; background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 14px 16px 40px; }
+  .side .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .side p { margin: 0 0 6px; font-size: 12.5px; color: var(--muted); }
+  @media (max-width: 1100px) { .app { grid-template: "top" var(--top-h) "stage" 1fr / 1fr; } }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top" id="top"></header>
+
+  <aside class="left" id="left" aria-label="投影片">
+    <h2>投影片</h2>
+    <ol><li><span>1</span><i></i></li><li aria-current="true"><span>2</span><i></i></li><li><span>3</span><i></i></li></ol>
+  </aside>
+
+  <main class="stage">
+    <nav class="capsule" aria-label="工具" role="toolbar">
+      <button class="ico" data-icon="cursor" aria-label="選取 V" aria-pressed="true"></button>
+      <button class="ico" data-icon="text" aria-label="文字方塊 T"></button>
+      <span class="vsep"></span>
+      <button class="ico" data-icon="square" aria-label="矩形"></button>
+      <button class="ico" data-icon="circle" aria-label="橢圓"></button>
+      <button class="ico" data-icon="arrow" aria-label="箭頭"></button>
+      <span class="vsep"></span>
+      <button class="ico" data-icon="image" aria-label="圖片"></button>
+      <button class="ico" data-icon="table" aria-label="表格"></button>
+      <button class="ico" data-icon="sigma" aria-label="方程式"></button>
+      <span class="vsep"></span>
+      <button class="ico" data-icon="bold" aria-label="粗體　Ctrl+B"></button>
+      <button class="ico" data-icon="magnet" aria-label="吸附 ⌥" aria-pressed="true"></button>
+    </nav>
+    <div class="findbar" id="find" hidden>
+      <span data-icon="search"></span><input id="findQ" placeholder="搜尋" aria-label="搜尋"><span class="count">0／0</span>
+      <button class="ico small" data-icon="x" aria-label="關閉 Esc" id="findX"></button>
+    </div>
+    <div class="sheet"></div>
+    <footer class="statusbar">
+      <span>2 / 3</span><span class="grow"></span><span id="stModel"></span>
+      <button class="ico" data-icon="zoomOut" aria-label="縮小 ⌘-"></button><button>100%</button><button class="ico" data-icon="zoomIn" aria-label="放大 ⌘+"></button>
+    </footer>
+  </main>
+
+  <aside class="side" id="side" aria-label="面板"></aside>
+</div>
+
+<script src="../icons.js"></script>
+<script src="../shell.js"></script>
+<script>
+  // ── mock server ─────────────────────────────────────────────────────
+  const ENG = {
+    local: { state: "ready", model: "qwen3.5-9b-q8", label: "Qwen 3.5 9B", vision: false, url: "http://127.0.0.1:8080/v1",
+      models: [{ id: "qwen3.5-9b-q8", label: "Qwen 3.5 9B", vision: false }, { id: "gemma-4-12b-q8", label: "Gemma 4 12B", vision: true }] },
+    claude: { state: "ready", via: "subscription", vias: { subscription: true, api: true }, model: "sonnet", vision: true,
+      models: [{ id: "haiku", label: "Haiku", vision: true }, { id: "sonnet", label: "Sonnet", vision: true }, { id: "opus", label: "Opus", vision: true }] },
+    classes: [
+      { id: "create", label: "創作與審稿", route: "auto", auto: ["claude", "local"] },
+      { id: "tidy", label: "整理與格式", route: "auto", auto: ["local", "claude"] },
+      { id: "ask", label: "問答", route: "auto", auto: ["local", "claude"] },
+    ],
+    overrides: {},
+    tasks: [{ id: "sc-flow-ai", label: "流程圖資料流", class: "create", last: "claude:sonnet" }],
+  };
+  const realFetch = window.fetch;
+  window.fetch = async (u, o = {}) => {
+    const path = new URL(u, location.href).pathname;
+    const json = (v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
+    if (path === "/api/engines") {
+      if ((o.method ?? "GET") === "PUT") {
+        const p = JSON.parse(o.body);
+        if (p.local) {
+          if (p.local.model) {
+            const m = ENG.local.models.find((x) => x.id === p.local.model);
+            if (m) Object.assign(ENG.local, { model: m.id, label: m.label, vision: m.vision });
+          }
+        }
+        if (p.claude) Object.assign(ENG.claude, p.claude);
+        for (const [k, v] of Object.entries(p.routes ?? {})) { const c = ENG.classes.find((x) => x.id === k); if (c) c.route = v; }
+        Object.assign(ENG.overrides, p.overrides ?? {});
+      }
+      return json(ENG);
+    }
+    if (path.startsWith("/api/")) return json({ error: "not found" }, 404);
+    return realFetch(u, o);
+  };
+
+  // ── the shell ───────────────────────────────────────────────────────
+  const q = new URLSearchParams(location.search);
+  if (q.get("theme")) LoreTheme.choose(q.get("theme"));
+  const shell = LoreShell.mount({
+    app: "sc",
+    host: "#top",
+    brand: "LORE/SHELL",
+    home: () => LoreShell.toast("首頁"),
+    picker: {
+      icon: "cards", name: "示範簡報.pptx",
+      recent: () => [{ label: "示範簡報.pptx", current: true }, { label: "ellrin 的研究簡報.pptx", run: () => shell.setName("ellrin 的研究簡報.pptx") }, { label: "daidai 週報.pptx" }],
+      actions: [{ icon: "folder", label: "開啟…", kbd: "⌘O" }, { icon: "save", label: "另存新檔…", kbd: "⇧⌘S" }, { icon: "plus", label: "新簡報" }],
+    },
+    status: { onClick: (st) => LoreShell.toast(`${st}：另存新檔…`) },
+    primary: [
+      { id: "actShow", icon: "play", label: "放映", menu: [{ icon: "play", label: "從這頁放映" }, { icon: "refresh", label: "從頭放映" }] },
+      { id: "actFind", icon: "search", label: "搜尋 ⌘F", run: () => openFind() },
+    ],
+    ai: { icon: "spark", label: "AI", menu: [{ icon: "graph", label: "流程圖資料流" }, { icon: "layers", label: "設計建議" }] },
+    notation: () => LoreShell.toast("對照表"),
+    export: [{ icon: "download", label: "PPTX" }, { icon: "pdf", label: "PDF" }, "-", { icon: "printer", label: "列印", kbd: "⌘P" }],
+    undo: { undo: () => LoreShell.toast("復原"), redo: () => LoreShell.toast("重做") },
+    drawers: { left: "#left", leftLabel: "投影片", leftIcon: "cards", right: "#side", rightLabel: "面板" },
+    search: () => openFind(),
+    save: () => LoreShell.toast("已儲存"),
+    general: (el) => el.append(row("你的領域", input("資訊工程")), row("資料夾", text("private/SlideComposer"))),
+    look: (el) => el.append(row("紙張", seg(["白", "調暗"]))),
+    sync: (el) => el.append(row("repo", text("ellrin/private")), row("狀態", text("已同步 · 2 分鐘前"))),
+    settingsTabs: [{ id: "paths", label: "路徑", build: (el) => el.append(row("簡報", text("decks/")), row("樣式", text("styles/"))) }],
+    modelSetup: (k) => LoreShell.toast(`${k === "local" ? "本機模型" : "Claude"}：在 app 裡設定`),
+    keys: [{ label: "下一張", keys: "→" }, { label: "上一張", keys: "←" }],
+  });
+  shell.setStatus("saved");
+  shell.editing(true);
+  shell.setUndo({ undo: "移動", redo: null });
+  shell.slots.lead.append(Object.assign(document.createElement("span"), { className: "chip warn", textContent: "字型 2" }));
+
+  // settings helpers (the app's own content of 一般 / 同步 / its tabs)
+  function row(k, v) { const r = document.createElement("div"); r.className = "set-row"; const s = document.createElement("span"); s.className = "k"; s.textContent = k; r.append(s, v); return r; }
+  function text(t) { const s = document.createElement("span"); s.className = "v mono"; s.textContent = t; return s; }
+  function input(v) { const i = document.createElement("input"); i.className = "set-input"; i.value = v; return i; }
+  function seg(opts) { const s = document.createElement("div"); s.className = "seg"; opts.forEach((o, i) => { const b = document.createElement("button"); b.type = "button"; b.textContent = o; b.setAttribute("aria-pressed", String(i === 0)); b.onclick = () => s.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); s.append(b); }); return s; }
+
+  // ⌘F: the search bar under the capsule
+  function openFind() { $find.hidden = false; document.getElementById("findQ").focus(); }
+  const $find = document.getElementById("find");
+  document.getElementById("findX").onclick = () => ($find.hidden = true);
+
+  // ── right panel: numbered blocks + the demo controls ───────────────
+  const side = document.getElementById("side");
+  const b1 = LoreShell.block({ n: "01", title: "名詞", count: "12", help: "這篇論文裡的名詞，點一下看定義。" });
+  b1.body.append(Object.assign(document.createElement("p"), { textContent: "attention · encoder · residual" }));
+  const b2 = LoreShell.block({ n: "02", title: "符號", count: "4", open: false });
+  const b3 = LoreShell.block({ n: "03", title: "設計建議", help: "引擎選擇只影響這個功能。" });
+  const chip = LoreShell.engineChip({ task: "sc-flow-ai", value: "auto", used: "Sonnet" });
+  const r3 = document.createElement("div"); r3.className = "row";
+  r3.append(chip, Object.assign(document.createElement("button"), { className: "btn small", textContent: "建議" }));
+  b3.body.append(r3);
+  const b4 = LoreShell.block({ n: "04", title: "示範" });
+  const btn = (label, run, cls = "btn small") => Object.assign(document.createElement("button"), { type: "button", className: cls, textContent: label, onclick: run });
+  const states = document.createElement("div"); states.className = "row";
+  for (const st of ["saved", "saving", "dirty", "syncing", "unsynced", "error"]) states.append(btn(st, () => shell.setStatus(st, st === "error" ? { label: "已在別處修改", action: () => LoreShell.toast("重新載入？") } : {})));
+  const more = document.createElement("div"); more.className = "row";
+  more.append(
+    btn("提示", () => LoreShell.toast("已匯出 示範簡報.pdf")),
+    btn("錯誤", () => LoreShell.toast("找不到 pandoc", { err: true })),
+    btn("復原提示", () => LoreShell.toast("已刪除「attention」", { action: { label: "復原", run: () => LoreShell.toast("已復原") } })),
+    btn("詢問", async (e) => { const v = await LoreShell.ask(e.currentTarget, ["刪除這張投影片？", "講者備註也會刪除。"], [{ label: "取消", value: null }, { label: "刪除", value: "del", danger: true, primary: true }]); LoreShell.toast(v ? "已刪除" : "取消"); }),
+    btn("編輯中", () => shell.editing(!shell.el.classList.contains("editing"))),
+    btn("設定", () => LoreShell.settings()),
+    btn("開 LoreReader", () => LoreLinks.open("lr", { paper: "abc123", page: 4 })),
+  );
+  b4.body.append(states, more);
+  side.append(b1, b2, b3, b4);
+  paintIcons();
+  document.getElementById("stModel").textContent = "模型 · Sonnet";
+</script>
+</body>
+</html>
