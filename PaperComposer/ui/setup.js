@@ -1,12 +1,19 @@
-// Settings: workspace & sync, local model, Claude, appearance.
-// On first run it walks through the first three as steps; the gear in the
-// top bar reopens it as plain settings, without the step buttons.
+// Settings in the shared gear (LoreShell.settings, commons/ui/shell.js):
+//   一般  the workspace's folder and the commit author
+//   外觀  the shared theme (the shell) and 紙張 (white or dimmed page)
+//   模型  connections and routes (/api/engines, the shell); 下載／登入… open this
+//         app's own steps in a window over it (本機模型: download, start; Claude:
+//         sign in, API key, model)
+//   同步  the workspace: sync now, new / clone / open another folder
+// The steps' markup is #setupParts in index.html; each tab moves its part in.
+// On first run the gear opens by itself on the first thing still to do; the gear
+// (markSettings in app.js) and those tabs carry a dot until it is done.
 // Every user points the app at their own private workspace; nothing here is
 // tied to a particular account or repository.
 
 const Setup = (() => {
   let st = null;
-  let step = 0;
+  let shown = null; // "local" | "claude" while the model window shows that part
   let mode = null; // workspace tab; defaults to "new" until a workspace is set
   let selected = null;
   let poll = null;
@@ -14,41 +21,17 @@ const Setup = (() => {
 
   const gb = (bytes) => `${(bytes / 1024 ** 3).toFixed(bytes > 1024 ** 3 * 10 ? 0 : 1)} GB`;
   const mb = (bytes) => bytes < 1024 ** 3 ? `${Math.round(bytes / 1024 ** 2)} MB` : gb(bytes);
+  const part = (id) => document.getElementById(id);
+  const row = (k, ...v) => { const r = el("div", "set-row"); r.append(el("span", "k", k), ...v); return r; };
+  const btn = (label, onclick) => { const b = el("button", "btn small", label); b.type = "button"; b.onclick = onclick; return b; };
 
   async function refresh() {
-    try { st = await api("/api/setup/status"); } catch (e) { flash(e.message); return; }
+    try { st = await api("/api/setup/status"); } catch (e) { LoreShell.toast(e.message, { err: true }); return; }
     render();
-  }
-
-  const STEPS = ["workspace", "model", "claude", "look"];
-  const LAST = 2; // the guided steps end at Claude; appearance is settings only
-  let guided = false;
-
-  /** Open on step `s` (index or name), or on the first unfinished one. */
-  async function open(s, showVia, settings = true) {
-    if (typeof s === "string") s = STEPS.indexOf(s);
-    guided = !settings;
-    const dlg = $("#dlgSetup");
-    if (!dlg.open) dlg.showModal();
-    if (showVia) via = showVia;
-    await Promise.all([refresh(), loadEngines(true)]);
-    if (s == null) { const i = done().indexOf(false); s = i < 0 ? 0 : i; }
-    step = s;
-    render();
-  }
-
-  const close = () => $("#dlgSetup").close();
-
-  // Runs however the dialog closes: button, Esc, backdrop or "完成".
-  function onClosed() {
-    clearInterval(poll);
-    clearInterval(ccPoll); ccPoll = null;
-    via = null;
-    store.set("pc.setupSeen", true);
-    if (changed) location.reload();
   }
 
   const gitOk = () => st.git_tool.installed && !!st.git_tool.name && !!st.git_tool.email;
+  /** [workspace, local model, Claude] set up? */
   const done = () => [
     // A workspace that syncs also needs Git and a commit author.
     !!st && !st.workspace.demo && st.workspace.has_profile && (!st.workspace.git?.remote || gitOk()),
@@ -56,22 +39,134 @@ const Setup = (() => {
     !!(state.engines?.subscription.configured || state.engines?.api.configured),
   ];
 
+  /** Redraw whatever part is on screen. */
   function render() {
     if (!st) return;
-    const d = done();
-    document.querySelectorAll("#wzTabs button").forEach((b, i) => {
-      b.setAttribute("aria-selected", String(i === step));
-      b.querySelector(".st").textContent = d[i] ? "✓" : "";
-      b.onclick = () => { step = i; render(); };
-    });
-    document.querySelectorAll(".wizard .step").forEach((s) => (s.hidden = +s.dataset.step !== step));
-    $(".wz-foot").hidden = !guided || step > LAST;
-    $("#wzPrev").disabled = step === 0;
-    $("#wzNext").textContent = step === LAST ? "完成" : "下一步";
-    [renderWorkspace, renderModels, renderClaude, () => {}][step]();
+    if (part("partWorkspace").isConnected) renderWorkspace();
+    if (part("partGit").isConnected) renderGit();
+    if (shown === "local") renderModels();
+    if (shown === "claude") renderClaude();
+    renderGeneral();
+    renderSyncState();
+    markTabs();
   }
 
-  // ── 01 workspace ──
+  /** Older entry points by step name: the tab, or the model window. */
+  function open(s, showVia) {
+    if (s === "model" || s === "local") return model("local");
+    if (s === "claude") return model("claude", showVia);
+    LoreShell.settings(s === "workspace" ? "sync" : s === "look" ? "look" : undefined);
+  }
+
+  // ── the gear's tabs ──
+  let generalBox = null, syncBox = null;
+  function general(box) {
+    generalBox = el("div", "set-sec");
+    box.append(generalBox, part("partGit"));
+    renderGeneral();
+    refresh();
+  }
+  function renderGeneral() {
+    if (!generalBox?.isConnected || !st) return;
+    const w = st.workspace;
+    const where = el("span", "v mono", w.demo ? "示範資料" : w.root);
+    where.title = w.root ?? "";
+    generalBox.replaceChildren(el("div", "set-label", "工作區"),
+      row("資料夾", where, btn("更換…", () => LoreShell.settings("sync"))),
+      row("同步", el("span", "v", w.git?.remote ?? "只存在這台電腦")));
+  }
+  function sync(box) {
+    syncBox = el("div", "set-sec");
+    const ws = el("div", "set-sec");
+    ws.append(el("div", "set-label", "工作區"), part("partWorkspace"));
+    box.append(syncBox, ws);
+    renderSyncState();
+    refresh();
+  }
+  function renderSyncState() {
+    if (!syncBox?.isConnected) return;
+    const g = state.git;
+    const now = btn(state.syncing ? "同步中…" : "立即同步", async () => { await syncNow(); renderSyncState(); });
+    now.disabled = !g?.repo || !!state.syncing;
+    const what = !g?.repo ? "只存在這台電腦" : g.changed.length ? `${g.changed.length} 項未同步` : g.ahead ? `${g.ahead} 個 commit 未推送` : !g.remote ? "已存檔（沒有遠端）" : state.lastSync ? `已同步 ${state.lastSync}` : "已同步";
+    syncBox.replaceChildren(el("div", "set-label", "同步"), row("狀態", el("span", "v", what), now));
+  }
+  function look(box) { box.append(part("partPaper")); applyTheme(); }
+
+  /** 下載／登入…: this app's own steps for one connection, in a window over the gear. */
+  async function model(kind, showVia) {
+    const dlg = $("#dlgModel");
+    shown = kind;
+    $("#dlgModelTitle").textContent = kind === "local" ? "本機模型" : "Claude";
+    $("#dlgModelBody").replaceChildren(part(kind === "local" ? "partLocal" : "partClaude"));
+    if (showVia) via = showVia;
+    if (!dlg.open) dlg.showModal();
+    paintIcons(dlg);
+    await Promise.all([refresh(), loadEngines(true)]);
+    render();
+  }
+
+  // The first-run dots on the tabs still to do (the gear's own dot: markSettings).
+  function markTabs() {
+    const dlg = document.querySelector("dialog.lore-settings[open]");
+    if (!dlg || !st) return;
+    const d = done();
+    const need = { sync: !d[0], model: !d[1] && !d[2] };
+    dlg.querySelectorAll(".tabs button[data-tab]").forEach((b) => {
+      const on = !!need[b.dataset.tab];
+      if (b.classList.contains("attn") !== on) b.classList.toggle("attn", on);
+    });
+  }
+
+  // 模型 while /api/engines is not there (the shell shows 「—」): this app's two
+  // connections stay reachable from the gear.
+  function modelFallback(dlg) {
+    const body = dlg.querySelector('.dlg-body[data-tab="model"]');
+    if (!body || !body.querySelector(":scope > .set-empty")) return;
+    const e = state.engines;
+    const local = e?.local.status.connected ? e.local.status.name : e?.local.models?.length ? "已下載" : "未安裝";
+    const claude = claudeReady() ? `${VIA[claudeVia()]} · ${modelName(e.model)}` : "未連線";
+    const sec = el("div", "set-sec pc-model");
+    sec.append(el("div", "set-label", "連線"),
+      row("本機", el("span", "v mono", local), btn("設定…", () => model("local"))),
+      row("Claude", el("span", "v mono", claude), btn("設定…", () => model("claude"))));
+    body.replaceChildren(sec);
+  }
+
+  /** Watch the shell's settings dialog: tab dots, the 模型 fallback, closing. */
+  function watchSettings() {
+    const hook = (dlg) => {
+      if (dlg._pc) return;
+      dlg._pc = true;
+      new MutationObserver(() => { markTabs(); modelFallback(dlg); }).observe(dlg, { childList: true, subtree: true });
+      dlg.addEventListener("close", onClosed);
+      markTabs();
+      modelFallback(dlg);
+    };
+    const find = () => { const d = document.querySelector("dialog.lore-settings"); if (d) hook(d); return d; };
+    if (!find()) {
+      const mo = new MutationObserver(() => { if (find()) mo.disconnect(); });
+      mo.observe(document.body, { childList: true });
+    }
+  }
+
+  // Runs however the gear and the model window close.
+  function onClosed() {
+    if (document.querySelector("dialog.lore-settings[open], #dlgModel[open]")) return;
+    clearInterval(poll);
+    clearInterval(ccPoll); ccPoll = null;
+    via = null;
+    shown = null;
+    store.set("pc.setupSeen", true);
+    if (changed) location.reload();
+  }
+
+  /** What frame.js hands LoreShell.mount. */
+  function shellParts() {
+    return { general, look, sync, modelSetup: (kind) => model(kind === "claude" ? "claude" : "local") };
+  }
+
+  // ── workspace ──
   function check(ok, text) { const li = el("li"); li.append(el("span", `status ${ok ? "" : "warning"}`), el("span", "", text)); return li; }
 
   function renderWorkspace() {
@@ -89,13 +184,12 @@ const Setup = (() => {
       b.setAttribute("aria-pressed", String(b.dataset.v === mode));
       b.onclick = () => { mode = b.dataset.v; renderWorkspace(); };
     });
-    document.querySelectorAll('.step[data-step="0"] .form').forEach((f) => (f.hidden = f.dataset.mode !== mode));
+    part("partWorkspace").querySelectorAll(".form").forEach((f) => (f.hidden = f.dataset.mode !== mode));
     // Example paths in this OS's style.
     const home = isWin ? "C:\\Users\\you\\Documents" : "/Users/you/Documents";
     $("#wzNewPath").placeholder = `${home}${isWin ? "\\" : "/"}my-paper-workspace`;
     $("#wzCloneParent").placeholder = home;
     $("#wzOpenPath").placeholder = `${home}${isWin ? "\\" : "/"}my-paper-workspace`;
-    renderGit();
   }
 
   async function visibility(input, out) {
@@ -116,13 +210,13 @@ const Setup = (() => {
     try {
       const r = await api(path, body);
       changed = true;
-      flash(r.note ?? `已使用 ${r.root}${r.added ? `，補上 ${r.added} 個檔案` : ""}`, r.note ? 8000 : 3000);
+      LoreShell.toast(r.note ?? `已使用 ${r.root}${r.added ? `，補上 ${r.added} 個檔案` : ""}`, { ms: r.note ? 8000 : 3000 });
       await refresh();
-    } catch (e) { flash(e.message, 8000); }
+    } catch (e) { LoreShell.toast(e.message, { err: true, ms: 8000 }); }
     finally { btn.disabled = false; }
   }
 
-  // Git: only shown when the workspace syncs, or is about to.
+  // Git and the commit author (一般): shown when the workspace syncs, or is about to.
   let editAuthor = false;
   function renderGit() {
     const g = st.git_tool;
@@ -142,7 +236,7 @@ const Setup = (() => {
     if (!$("#wzGitEmail").value) $("#wzGitEmail").value = g.email ?? "";
   }
 
-  // ── 03 local model ──
+  // ── 本機模型 ──
   function renderModels() {
     const s = st.system;
     const sys = $("#wzSys");
@@ -189,7 +283,7 @@ const Setup = (() => {
       const b = el("button", "primary small", "啟用");
       b.onclick = async () => {
         b.disabled = true; b.textContent = "啟動中…";
-        try { await api("/api/models/start", { id: selected }); flash("模型已啟用"); } catch (e) { flash(e.message, 8000); }
+        try { await api("/api/models/start", { id: selected }); LoreShell.toast("模型已啟用"); } catch (e) { LoreShell.toast(e.message, { err: true, ms: 8000 }); }
         refresh();
       };
       acts.append(b);
@@ -206,7 +300,7 @@ const Setup = (() => {
     btn.disabled = true; btn.textContent = "查詢檔案中…";
     let plan;
     try { plan = await api("/api/models/plan", { id: selected }); }
-    catch (e) { flash(e.message, 8000); btn.disabled = false; btn.textContent = "準備下載"; return; }
+    catch (e) { LoreShell.toast(e.message, { err: true, ms: 8000 }); btn.disabled = false; btn.textContent = "準備下載"; return; }
     const box = $("#wzPlan");
     box.innerHTML = "";
     const t = el("table", "plan");
@@ -227,7 +321,7 @@ const Setup = (() => {
 
   async function install() {
     try { await api("/api/models/install", { id: selected }); }
-    catch (e) { flash(e.message, 8000); return; }
+    catch (e) { LoreShell.toast(e.message, { err: true, ms: 8000 }); return; }
     const box = $("#wzPlan");
     box.dataset.busy = "1";
     clearInterval(poll);
@@ -249,16 +343,16 @@ const Setup = (() => {
         box.dataset.busy = "0";
         await refresh();
         if (phase === "ready") {
-          flash("本機模型已啟用");
+          LoreShell.toast("本機模型已啟用");
           loadEngines();
         }
       }
     }, 1000);
   }
 
-  // ── 04 claude ──
-  // Which connection the Claude step is showing; switching tabs to a ready
-  // one also switches what Claude uses.
+  // ── Claude ──
+  // Which connection the Claude part is showing; switching to a ready one also
+  // switches what Claude uses.
   let via = null;
   let ccPoll = null;
   const isWin = /Win/i.test(navigator.platform);
@@ -266,7 +360,7 @@ const Setup = (() => {
 
   async function refreshCC() {
     await loadEngines(true);
-    if (step === 2) renderClaude();
+    if (shown === "claude") renderClaude();
   }
 
   function renderClaude() {
@@ -285,7 +379,7 @@ const Setup = (() => {
         renderClaude();
       };
     });
-    document.querySelectorAll(".step[data-step=\"2\"] .via").forEach((d) => (d.hidden = d.dataset.via !== via));
+    part("partClaude").querySelectorAll(".via").forEach((d) => (d.hidden = d.dataset.via !== via));
 
     // subscription
     const cc = e.subscription.status;
@@ -322,8 +416,8 @@ const Setup = (() => {
 
   async function loginCC() {
     try { await api("/api/claude-code/login", {}); }
-    catch (err) { flash(err.message, 8000); return; }
-    flash("已在瀏覽器開啟 claude.ai 登入頁，完成後回到這裡", 6000);
+    catch (err) { LoreShell.toast(err.message, { err: true, ms: 8000 }); return; }
+    LoreShell.toast("已在瀏覽器開啟 claude.ai 登入頁，完成後回到這裡", { ms: 6000 });
     let tries = 0;
     clearInterval(ccPoll);
     ccPoll = setInterval(async () => {
@@ -332,9 +426,9 @@ const Setup = (() => {
       const ok = state.engines?.subscription.configured;
       if (ok || tries > 100) {
         clearInterval(ccPoll); ccPoll = null;
-        if (ok) { store.set("pc.claudeVia", "subscription"); flash("已用 claude.ai 帳號登入"); renderEngineSwitch(); renderStatus(); }
+        if (ok) { store.set("pc.claudeVia", "subscription"); LoreShell.toast("已用 claude.ai 帳號登入"); renderEngineSwitch(); renderStatus(); }
       }
-      if (step === 2) renderClaude();
+      if (shown === "claude") renderClaude();
     }, 3000);
     renderClaude();
   }
@@ -353,7 +447,7 @@ const Setup = (() => {
   let editingKey = false;
   function editKey(on) {
     if (on && st?.claude.source === "env") {
-      flash("這把 key 來自環境變數，App 改不到。請改用 scripts/dev.sh --reset-key 更換", 8000);
+      LoreShell.toast("這把 key 來自環境變數，App 改不到。請改用 scripts/dev.sh --reset-key 更換", { ms: 8000 });
       return;
     }
     editingKey = on;
@@ -365,8 +459,8 @@ const Setup = (() => {
   async function saveClaude(body) {
     let ok = true;
     try { state.claude = await api("/api/settings/claude", body); }
-    catch (e) { ok = false; flash(e.message, 8000); }
-    if (ok) flash(body.key === "" ? "已移除 Claude key" : body.key ? "已儲存 Claude key" : "已切換模型");
+    catch (e) { ok = false; LoreShell.toast(e.message, { err: true, ms: 8000 }); }
+    if (ok) LoreShell.toast(body.key === "" ? "已移除 Claude key" : body.key ? "已儲存 Claude key" : "已切換模型");
     if (ok && body.key) store.set("pc.claudeVia", "api");
     await loadEngines();
     if (ok && body.key !== undefined) { editingKey = false; $("#wzClaudeKey").value = ""; }
@@ -374,21 +468,18 @@ const Setup = (() => {
   }
 
   function wire() {
-    $("#wzPrev").onclick = () => { if (step > 0) { step--; render(); } };
-    $("#wzNext").onclick = () => { if (step < LAST) { step++; render(); } else close(); };
-    $("#wzSkip").onclick = () => { if (step < LAST) { step++; render(); } else close(); };
-    const dlg = $("#dlgSetup");
-    dlg.addEventListener("close", onClosed);
-    // A click on the backdrop lands on the <dialog> itself, not its content.
-    dlg.addEventListener("click", (e) => { if (e.target === dlg) close(); });
-    $("#wzClose").onclick = close;
+    watchSettings();
+    const md = $("#dlgModel");
+    md.addEventListener("close", () => { shown = null; onClosed(); });
+    md.querySelector(".close").onclick = () => md.close();
+    md.addEventListener("click", (e) => { if (e.target === md) md.close(); });
 
     $("#wzOpen").onclick = (e) => workspaceAction("/api/setup/workspace", { path: $("#wzOpenPath").value, init: $("#wzOpenInit").checked }, e.target);
     $("#wzClone").onclick = (e) => workspaceAction("/api/setup/clone", { url: $("#wzCloneUrl").value, parent: $("#wzCloneParent").value }, e.target);
     $("#wzNew").onclick = (e) => workspaceAction("/api/setup/new", { path: $("#wzNewPath").value, remote: $("#wzNewRemote").value || null }, e.target);
     $("#wzGhNew").onclick = async () => {
-      try { await api("/api/open/github-new-repo", {}); flash("建好後把網址貼回來"); }
-      catch (e) { flash(e.message, 6000); }
+      try { await api("/api/open/github-new-repo", {}); LoreShell.toast("建好後把網址貼回來"); }
+      catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
       $("#wzNewRemote").focus();
     };
     $("#wzNewRemote").oninput = renderGit;
@@ -396,12 +487,15 @@ const Setup = (() => {
     $("#wzNewRemote").onchange = () => visibility($("#wzNewRemote"), $("#wzNewVis"));
 
     $("#wzGitSave").onclick = async () => {
-      try { await api("/api/setup/git-identity", { name: $("#wzGitName").value, email: $("#wzGitEmail").value }); flash("已設定作者"); editAuthor = false; }
-      catch (e) { flash(e.message, 6000); }
+      try { await api("/api/setup/git-identity", { name: $("#wzGitName").value, email: $("#wzGitEmail").value }); LoreShell.toast("已設定作者"); editAuthor = false; }
+      catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
       refresh();
     };
     $("#wzClaudeGetKey").onclick = () => openKeysPage("#wzClaudeKey");
-    $("#wzClaudeRemove").onclick = () => { if (confirm("從這台電腦的金鑰圈移除 Claude key？")) saveClaude({ key: "" }); };
+    $("#wzClaudeRemove").onclick = async (e) => {
+      const yes = await LoreShell.ask(e.currentTarget, "從這台電腦的金鑰圈移除 Claude key？", [{ label: "取消", value: null }, { label: "移除", value: true, danger: true, primary: true }]);
+      if (yes) saveClaude({ key: "" });
+    };
     $("#wzKeyEdit").onclick = () => editKey(true);
     $("#wzKeyCancel").onclick = () => editKey(false);
     $("#wzClaudeModel").onchange = () => saveClaude({ model: $("#wzClaudeModel").value });
@@ -412,18 +506,24 @@ const Setup = (() => {
     };
     $("#ccRecheck").onclick = refreshCC;
     $("#ccLogin").onclick = loginCC;
-    $("#ccCopy").onclick = () => { navigator.clipboard?.writeText(INSTALL); flash("已複製安裝指令"); };
+    $("#ccCopy").onclick = () => { navigator.clipboard?.writeText(INSTALL); LoreShell.toast("已複製安裝指令"); };
     $("#wzTest").onclick = testClaude;
     $("#wzClaudeKey").onkeydown = (e) => { if (e.key === "Enter") $("#wzClaudeSave").click(); };
   }
 
-  /** First run: no workspace configured yet. */
+  /** First run: no workspace yet. The gear opens on the first thing to do. */
   async function maybeOpen() {
     try {
       const s = await api("/api/setup/status");
-      if (s.first_run && !store.get("pc.setupSeen", false)) open(0, null, false);
+      if (!s.first_run || store.get("pc.setupSeen", false)) return;
+      st = s;
+      const d = done();
+      if (!d[0]) LoreShell.settings("sync");
+      else if (!d[1] && !d[2]) LoreShell.settings("model");
+      else return;
+      render();
     } catch {}
   }
 
-  return { open, wire, maybeOpen };
+  return { open, model, wire, maybeOpen, shellParts, syncShown: () => renderSyncState() };
 })();

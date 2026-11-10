@@ -109,8 +109,7 @@ async function openPaper(name, { keepHome = false } = {}) {
   } catch (e) {
     state.paper = null;
   }
-  $("#paperName").textContent = state.paper?.name ?? "—";
-  $("#paperName").title = state.paper?.path ?? "";
+  PCFrame.setName(state.paper?.name ?? "—", state.paper?.path ?? state.paper?.name ?? "");
   // the checks, and every figure's size (so its place is kept before it loads)
   await Promise.all([checkAll(), loadFigureSizes()]);
   if (!same) $("#pageArea").scrollTop = 0;
@@ -150,14 +149,20 @@ async function saveSection(i, force = false) {
   // the file changed elsewhere since it was read: ask before writing over it (open.js)
   const base = force || paper.force ? undefined : paper.base?.[s.file];
   let saved;
+  state.saving = (state.saving ?? 0) + 1;
+  PCFrame.status();
   try {
     saved = await api(`/api/papers/${encodeURIComponent(paper.name)}/sections/${encodeURIComponent(s.file)}`,
       { title: s.title, paragraphs: s.paragraphs, base }, "PUT");
+    state.saveError = null;
   } catch (e) {
-    if (e.status !== 409) throw e;
+    if (e.status !== 409) { state.saveError = e.message; throw e; }
     if (await PCOpen.conflict() === "mine") return saveSection(i, true);
     await openPaper(paper.name, { keepHome: true });
     return;
+  } finally {
+    state.saving--;
+    PCFrame.status();
   }
   const reread = paper.force;
   paper.force = false;
@@ -248,9 +253,9 @@ function renderKeyValue() {
       try {
         state.paper.meta = await api(`/api/papers/${encodeURIComponent(state.paper.name)}/meta`, { key_value: input.value }, "PUT");
         state.soft = {};
-        flash("已更新 Key value");
+        LoreShell.toast("已更新 Key value");
         refreshGit();
-      } catch (e) { flash(e.message, 6000); }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
       renderKeyValue();
     };
     input.oninput = recount;
@@ -642,8 +647,9 @@ function edit(p, si, pi) {
   const ta = document.createElement("textarea");
   const was = sections()[si].paragraphs[pi] ?? "";
   ta.value = was;
+  ta._was = was; // the status chip shows 未儲存 once it differs
   const fit = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
-  ta.oninput = fit;
+  ta.oninput = () => { fit(); PCFrame.status(); };
   // Esc: put the text back as it was, nothing saved (a new paragraph goes away).
   // ⌘↵ / Ctrl+↵ or a click elsewhere saves. A blank line starts a new paragraph.
   ta.onkeydown = (e) => {
@@ -658,7 +664,7 @@ function edit(p, si, pi) {
     if (v === was.trim() && v) { refreshSection(si); return; } // unchanged: nothing to write
     if (v) list[pi] = v; else list.splice(pi, 1);
     if (!v && !was.trim()) { refreshSection(si); return; } // a new paragraph left empty
-    try { await saveSection(si); } catch (e) { flash(`儲存失敗：${e.message}`); }
+    try { await saveSection(si); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true }); }
     refreshSection(si);
     refreshGit();
     // a \section{…} typed here becomes a section of its own (editor.js)
@@ -704,7 +710,7 @@ function editField(n) {
         const r = await api(`/api/papers/${encodeURIComponent(state.paper.name)}/front`, { field, index, value: v }, "PUT");
         Object.assign(state.paper, { front: r.front, back: r.back, fields: r.fields });
         refreshGit();
-      } catch (e) { flash(`儲存失敗：${e.message}`, 6000); }
+      } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true, ms: 6000 }); }
     }
     render();
   };
@@ -798,7 +804,7 @@ async function softCheck(again) {
   finally { wait.end(); }
   state.soft[key] = res.stopped ? undefined : res.error ? { error: res.error } : { results: res.results };
   if (res.stopped) delete state.soft[key];
-  if (!again && res.cached) flash("沿用上次的檢查結果");
+  if (!again && res.cached) LoreShell.toast("沿用上次的檢查結果");
   // Only redraw if the user is still on this paragraph.
   if (softKey() === key) renderFindings();
 }
@@ -840,7 +846,7 @@ function chosenEngine() {
 }
 
 async function loadEngines(fresh = false) {
-  try { state.engines = await api(`/api/engines${fresh ? "?fresh=1" : ""}`); } catch { state.engines = null; }
+  try { state.engines = await api(`/api/pc/engines${fresh ? "?fresh=1" : ""}`); } catch { state.engines = null; }
   renderEngineSwitch();
   renderStatus();
   markSettings();
@@ -852,83 +858,62 @@ const modelName = (id) => {
   return `${family[0].toUpperCase()}${family.slice(1)} ${ver.join(".")}`.trim();
 };
 
-/** Place the shared engine menu under its button. */
-function showEngineMenu(m, btn) {
-  m.hidden = false;
-  const r = btn.getBoundingClientRect();
-  m.style.top = `${r.bottom + 4}px`;
-  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
-}
-
 /** Local menu: the downloaded models; picking one starts it in place of the running one. */
 function toggleLocalMenu(btn) {
-  const m = $("#modelMenu");
-  if (!m.hidden && m.dataset.for === "local") { m.hidden = true; return; }
-  m.dataset.for = "local";
   const loc = state.engines.local;
-  m.innerHTML = "";
-  m.append(el("div", "hm-title", "本機模型"));
-  loc.models.forEach((x) => {
-    const b = el("button", "", x.name);
-    if (x.uncensored) b.append(el("span", "tag warn", "Uncensored"));
-    b.append(el("span", "v", x.variant.replace(/^abliterated /, "")));
-    b.setAttribute("aria-current", String(x.id === loc.running));
-    b.title = x.summary;
-    b.onclick = async () => {
-      m.hidden = true;
-      store.set("pc.engine", "local");
-      if (x.id !== loc.running) {
-        flash(`啟動 ${x.name}…`, 120000);
-        try { await api("/api/models/start", { id: x.id }); flash(`已改用 ${x.name} ${x.variant}`); }
-        catch (err) { flash(err.message, 8000); }
-      }
-      loadEngines();
-    };
-    m.append(b);
-  });
-  m.append(el("div", "sep"));
-  const more = el("button", "", "下載或管理模型…");
-  more.onclick = () => { m.hidden = true; Setup.open("model"); };
-  m.append(more);
-  showEngineMenu(m, btn);
+  LoreShell.menu(btn, [
+    { head: "本機模型" },
+    ...loc.models.map((x) => ({
+      label: `${x.name} ${x.variant.replace(/^abliterated /, "")}${x.uncensored ? " · Uncensored" : ""}`,
+      title: x.summary,
+      current: x.id === loc.running,
+      run: async () => {
+        store.set("pc.engine", "local");
+        if (x.id !== loc.running) {
+          LoreShell.toast(`啟動 ${x.name}…`, { ms: 120000 });
+          try { await api("/api/models/start", { id: x.id }); LoreShell.toast(`已改用 ${x.name} ${x.variant}`); }
+          catch (err) { LoreShell.toast(err.message, { err: true, ms: 8000 }); }
+        }
+        loadEngines();
+      },
+    })),
+    "-",
+    { label: "下載或管理模型…", run: () => Setup.model("local") },
+  ]);
 }
 
 /** Claude menu: the model, and how Claude connects. */
 function toggleModelMenu(btn) {
-  const m = $("#modelMenu");
-  if (!m.hidden && m.dataset.for === "claude") { m.hidden = true; return; }
-  m.dataset.for = "claude";
   const e = state.engines;
-  m.innerHTML = "";
-  m.append(el("div", "hm-title", "模型"));
-  e.models.forEach((id) => {
-    const b = el("button", "", modelName(id));
-    b.setAttribute("aria-current", String(id === e.model));
-    b.onclick = async () => {
-      m.hidden = true;
-      try { await api("/api/settings/claude", { model: id }); flash(`已改用 ${modelName(id)}`); }
-      catch (err) { flash(err.message, 6000); }
-      loadEngines();
-    };
-    m.append(b);
-  });
-  m.append(el("div", "sep"), el("div", "hm-title", "連線方式"));
-  [["subscription", "登入帳號（訂閱）"], ["api", "API key"]].forEach(([via, label]) => {
-    const ready = !!e[via]?.configured;
-    const b = el("button", ready ? "" : "off", ready ? label : `${label}・未設定`);
-    b.setAttribute("aria-current", String(via === claudeVia() && ready));
-    b.onclick = () => {
-      m.hidden = true;
-      if (!ready) { setTimeout(() => Setup.open("claude", via)); return; }
-      store.set("pc.claudeVia", via);
-      store.set("pc.engine", "claude");
-      flash(`Claude 改用${label}`);
-      renderEngineSwitch();
-      renderStatus();
-    };
-    m.append(b);
-  });
-  showEngineMenu(m, btn);
+  LoreShell.menu(btn, [
+    { head: "模型" },
+    ...e.models.map((id) => ({
+      label: modelName(id),
+      current: id === e.model,
+      run: async () => {
+        try { await api("/api/settings/claude", { model: id }); LoreShell.toast(`已改用 ${modelName(id)}`); }
+        catch (err) { LoreShell.toast(err.message, { err: true, ms: 6000 }); }
+        loadEngines();
+      },
+    })),
+    "-",
+    { head: "連線方式" },
+    ...[["subscription", "登入帳號（訂閱）"], ["api", "API key"]].map(([via, label]) => {
+      const ready = !!e[via]?.configured;
+      return {
+        label: ready ? label : `${label}・未設定`,
+        current: via === claudeVia() && ready,
+        run: () => {
+          if (!ready) { Setup.model("claude", via); return; }
+          store.set("pc.claudeVia", via);
+          store.set("pc.engine", "claude");
+          LoreShell.toast(`Claude 改用${label}`);
+          renderEngineSwitch();
+          renderStatus();
+        },
+      };
+    }),
+  ]);
 }
 
 function renderEngineSwitch() {
@@ -987,7 +972,7 @@ async function compose() {
   btn.classList.add("waiting");
   const wait = (state.composing = PCWait.start((n) => { btn.firstElementChild.textContent = `停止 · ${n} 秒`; }));
   try { state.composed = await api("/api/compose", body, "POST", { signal: wait.signal }); }
-  catch (e) { state.composed = PCWait.aborted(e) ? null : { error: e.message, references: [] }; if (!state.composed) flash("已停止生成"); }
+  catch (e) { state.composed = PCWait.aborted(e) ? null : { error: e.message, references: [] }; if (!state.composed) LoreShell.toast("已停止生成"); }
   finally { wait.end(); state.composing = null; btn.classList.remove("waiting"); btn.firstElementChild.textContent = "生成"; }
   renderResult();
 }
@@ -1022,7 +1007,7 @@ function renderResult() {
     acts.append(
       iconButton("insert", "插入到目前段落之後", () => placeDraft(text, "insert")),
       iconButton("replace", "取代目前段落", () => placeDraft(text, "replace")),
-      iconButton("redo", "重新生成", compose),
+      iconButton("recast", "重新生成", compose),
       iconButton("copy", "複製", () => navigator.clipboard?.writeText(text.replace(/\n/g, " "))),
     );
     wrap.append(acts);
@@ -1059,7 +1044,7 @@ async function placeDraft(text, how) {
     sec.paragraphs.splice(at, 0, text);
     state.cur.p = at;
   }
-  try { await saveSection(state.cur.s); } catch (e) { flash(`儲存失敗：${e.message}`); }
+  try { await saveSection(state.cur.s); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true }); }
   refreshSection(state.cur.s);
   refreshGit();
 }
@@ -1079,38 +1064,23 @@ function renderStatus() {
   dot.style.background = ok ? "var(--ok)" : "var(--faint)";
   eng.append(dot, name);
   eng.title = "寫作引擎（右側可切換）";
-  eng.onclick = () => Setup.open(pick && pick !== "local" ? "claude" : "model");
+  eng.onclick = () => Setup.model(pick && pick !== "local" ? "claude" : "local");
   bar.append(eng, PCZoom.control());
-  paintSync();
+  PCFrame.status();
 }
 
 // The gear carries a dot while the app still needs setting up: no workspace
 // of the user's own, or no model to write with.
 function markSettings() {
   const need = !state.profile || state.profile.demo || !state.engines || !(state.engines.local.status.connected || state.engines.subscription.configured || state.engines.api.configured);
-  $("#actSettings").classList.toggle("attn", !!need);
-  $("#actSettings").setAttribute("aria-label", state.profile?.demo ? "設定（還沒連接你的工作區）" : need ? "設定（還沒連接模型）" : "設定");
+  const gear = $("#actSettings");
+  if (!gear) return;
+  gear.classList.toggle("attn", !!need);
+  gear.setAttribute("aria-label", state.profile?.demo ? "設定（還沒連接你的工作區） ⌘," : need ? "設定（還沒連接模型） ⌘," : "設定 ⌘,");
 }
 
 // ── Git sync ───────────────────────────────────────────
-// The cloud in the top bar: synced, changes waiting, or not set up.
-function paintSync() {
-  const g = state.git;
-  const b = $("#actSync");
-  let label, st;
-  if (state.syncing) { label = "同步中"; st = "busy"; }
-  else if (!g?.repo) { label = "設定同步"; st = "off"; }
-  else if (g.changed.length) { label = `${g.changed.length} 項未同步　Ctrl+S`; st = "pending"; }
-  else if (g.ahead) { label = `${g.ahead} 個 commit 未推送　Ctrl+S`; st = "pending"; }
-  else if (!g.remote) { label = "已存檔（沒有遠端）"; st = "ok"; }
-  else { label = state.lastSync ? `已同步 ${state.lastSync}` : "已同步"; st = "ok"; }
-  b.dataset.state = st;
-  b.dataset.icon = st === "off" ? "cloudOff" : "cloud";
-  paintIcons(b.parentElement);
-  b.setAttribute("aria-label", label);
-  b.disabled = !!state.syncing;
-}
-
+// Its state is part of the status chip in the top bar (frame.js).
 async function refreshGit() {
   try { state.git = await api("/api/git/status"); } catch { state.git = null; }
   renderStatus();
@@ -1130,25 +1100,15 @@ async function syncNow() {
     state.lastSync = new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false });
     if (r.pulled && state.paper) await openPaper(state.paper.name, { keepHome: true });
     if (r.pulled) PCHome.refresh();
-    flash(r.committed ? `已同步：${r.committed}` : "沒有新的修改");
+    LoreShell.toast(r.committed ? `已同步：${r.committed}` : "沒有新的修改");
+    Setup.syncShown();
   } catch (e) {
-    flash(e.message, 8000);
+    LoreShell.toast(e.message, { err: true, ms: 8000 });
     await refreshGit();
   } finally {
     state.syncing = false;
     renderStatus();
   }
-}
-
-let flashTimer;
-function flash(msg, ms = 3000) {
-  let t = $("#flash");
-  if (!t) { t = el("div", "tip flash"); t.id = "flash"; }
-  // An open modal dialog sits in the top layer; anything outside it is hidden behind.
-  ($("dialog[open]") ?? document.body).append(t);
-  t.textContent = msg;
-  clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => t.remove(), ms);
 }
 
 // ── Windows ────────────────────────────────────────────
@@ -1172,80 +1132,22 @@ function openDbTab(name) {
   openDb();
 }
 
-// Closing with unsaved database edits asks first.
-function closeWindow(d) {
-  if (d.id === "dlgDb" && state.db.dirty.size && !confirm("資料庫有未儲存的修改，仍要關閉？")) return;
-  if (d.id === "dlgNew" && PCNew.dirty() && !confirm("新論文還沒建立，填的內容會不見，仍要關閉？")) return;
+// Closing with unsaved database edits asks first (next to the window's close button).
+async function closeWindow(d) {
+  const ask = (line) => LoreShell.ask(d.querySelector(".close"), line, [{ label: "取消", value: null }, { label: "關閉", value: true, danger: true, primary: true }]);
+  if (d.id === "dlgDb" && state.db.dirty.size && !(await ask("資料庫有未儲存的修改，仍要關閉？"))) return;
+  if (d.id === "dlgNew" && PCNew.dirty() && !(await ask("新論文還沒建立，填的內容會不見，仍要關閉？"))) return;
   d.close();
 }
 
 function wireWindows() {
-  document.querySelectorAll("dialog.dialog:not(#dlgSetup)").forEach((d) => {
+  document.querySelectorAll("dialog.dialog:not(#dlgModel)").forEach((d) => {
     d.querySelector(".close")?.addEventListener("click", () => closeWindow(d));
     // A click on the backdrop lands on the <dialog> itself, not its content.
     // Windows you fill in (new paper) stay open on a stray click outside.
     if (d.id !== "dlgNew" && d.id !== "dlgDraft") d.addEventListener("click", (e) => { if (e.target === d) closeWindow(d); });
     d.addEventListener("cancel", (e) => { e.preventDefault(); closeWindow(d); });
   });
-}
-
-// ── Hover menus on the top-bar icons ───────────────────
-// Clicking an icon does its main thing; hovering offers the finer entries.
-const MENUS = {
-  db: () => [
-    ...TABLES.map(([name, label]) => [label, () => openDbTab(name), dbOpen() && state.db.name === name]),
-    ["文獻庫", () => openDbTab("@refs"), dbOpen() && state.db.name === "@refs"],
-    "-",
-    ["拆解好句子…", () => { openDbTab(state.db.name === "@refs" ? TABLES[0][0] : state.db.name); setTimeout(() => $("#dcText").focus(), 50); }],
-  ],
-  export: () => [
-    ["PDF　Ctrl+P", () => PCExport.run("pdf")],
-    ["Word", () => PCExport.run("docx")],
-    ["LaTeX（zip）", () => PCExport.run("latex")],
-    "-",
-    ["在資料夾中顯示", PCExport.reveal],
-  ],
-};
-
-const hm = { btn: null, timer: null };
-function openHoverMenu(btn) {
-  const m = $("#hoverMenu");
-  m.innerHTML = "";
-  m.append(el("div", "hm-title", btn.getAttribute("aria-label")));
-  MENUS[btn.dataset.menu]().forEach((it) => {
-    if (it === "-") { m.append(el("div", "sep")); return; }
-    const [label, fn, current] = it;
-    const b = el("button", "", label);
-    b.setAttribute("aria-current", String(!!current));
-    // Run after this click has finished bubbling: the document click handler
-    // closes open menus, and would close the one this item just opened.
-    b.onclick = () => { closeHoverMenu(true); setTimeout(fn); };
-    m.append(b);
-  });
-  m.hidden = false;
-  const r = btn.getBoundingClientRect();
-  m.style.top = `${r.bottom + 4}px`;
-  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
-  hm.btn = btn;
-}
-function closeHoverMenu(now) {
-  clearTimeout(hm.timer);
-  const go = () => { $("#hoverMenu").hidden = true; hm.btn = null; };
-  if (now) go(); else hm.timer = setTimeout(go, 220);
-}
-function wireHoverMenus() {
-  document.querySelectorAll("[data-menu]").forEach((b) => {
-    b.addEventListener("mouseenter", () => {
-      clearTimeout(hm.timer);
-      if (hm.btn === b) return;
-      hm.timer = setTimeout(() => openHoverMenu(b), hm.btn ? 0 : 120);
-    });
-    b.addEventListener("mouseleave", () => closeHoverMenu());
-    b.addEventListener("click", () => closeHoverMenu(true));
-  });
-  const m = $("#hoverMenu");
-  m.addEventListener("mouseenter", () => clearTimeout(hm.timer));
-  m.addEventListener("mouseleave", () => closeHoverMenu());
 }
 
 // A small form in the paper menu, under `anchor` (the paper button by
@@ -1272,7 +1174,7 @@ function importForm(anchor) {
   const kv = el("input", "field");
   kv.placeholder = "Key value（必填）：通篇要強調的一件事";
   name.kv = kv;
-  const need = () => { if (kv.value.trim()) return true; flash("Key value 必填"); kv.focus(); return false; };
+  const need = () => { if (kv.value.trim()) return true; LoreShell.toast("Key value 必填"); kv.focus(); return false; };
   const fromPc = el("div", "form-label", "從這台電腦");
   const row = el("div", "form-row");
   const file = el("button", "ghost wide", "壓縮檔或 .tex…");
@@ -1304,12 +1206,12 @@ async function importArxiv(input, nameInput) {
   const id = input.value.trim();
   if (!id) { input.focus(); return; }
   input.disabled = true;
-  flash("從 arXiv 下載中…", 60000);
+  LoreShell.toast("從 arXiv 下載中…", { ms: 60000 });
   try {
     const r = await api("/api/papers/import-arxiv", { id, name: nameInput.value.trim() || null, key_value: nameInput.kv.value });
     await opened(r.name, r);
   } catch (e) {
-    flash(e.message, 6000);
+    LoreShell.toast(e.message, { err: true, ms: 6000 });
     input.disabled = false;
     input.focus();
   }
@@ -1339,12 +1241,12 @@ function pickFolder(input) {
   f.onchange = async () => {
     const files = [...f.files].filter((x) => !(x.webkitRelativePath || x.name).split("/").some((seg) => seg.startsWith(".")));
     if (!files.length) return;
-    if (!files.some((x) => /\.tex$/i.test(x.name))) { flash("這個資料夾裡沒有 .tex 檔", 5000); return; }
+    if (!files.some((x) => /\.tex$/i.test(x.name))) { LoreShell.toast("這個資料夾裡沒有 .tex 檔", { ms: 5000 }); return; }
     const top = (files[0].webkitRelativePath || "").split("/")[0];
     try {
       const tar = await packTar(files);
       uploadProject(input, input.value.trim() || importName(top), tar);
-    } catch (e) { flash(e.message, 6000); }
+    } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   };
   f.click();
 }
@@ -1388,13 +1290,13 @@ async function packTar(files) {
 
 async function uploadProject(input, name, body) {
   input.disabled = true;
-  flash("匯入中…", 60000);
+  LoreShell.toast("匯入中…", { ms: 60000 });
   try {
     const r = await fetch(`/api/papers/import?name=${encodeURIComponent(name)}&key_value=${encodeURIComponent(input.kv.value)}`, { method: "POST", body });
     if (!r.ok) throw new Error(await r.text());
     await opened(name, await r.json().catch(() => null));
   } catch (e) {
-    flash(e.message, 6000);
+    LoreShell.toast(e.message, { err: true, ms: 6000 });
   } finally {
     input.disabled = false;
   }
@@ -1405,7 +1307,7 @@ async function opened(name, result) {
   $("#fileMenu").hidden = true;
   await openPaper(result?.name || name);
   refreshGit();
-  flash(`已匯入 ${result?.name || name}`);
+  LoreShell.toast(`已匯入 ${result?.name || name}`);
   if (result) importCard(result.name || name, result, true);
 }
 
@@ -1415,7 +1317,7 @@ async function opened(name, result) {
 async function importCard(name, info, fresh = false) {
   if (!info) {
     try { info = await api(`/api/papers/${encodeURIComponent(name)}/import-summary`); }
-    catch (e) { flash(e.message, 6000); return; }
+    catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); return; }
   }
   const m = menuForm(fresh ? "匯入完成：下一步" : "整理與文獻", "整理只動這篇論文的資料夾：圖檔改成沒有空格的名字（\\includegraphics 跟著改）、移除沒載入的 .cls，並讓 Git 略過編譯產生的 *-eps-converted-to.pdf。加入文獻庫會把論文自己的 .bib 條目複製到 refs/library.bib，已有的（同 key 或同 DOI）會略過。");
   m.classList.add("next-card");
@@ -1449,7 +1351,7 @@ async function importCard(name, info, fresh = false) {
         go.remove();
         if (done.renames?.length) await openPaper(name);
         refreshGit();
-      } catch (e) { flash(e.message, 6000); go.disabled = false; }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); go.disabled = false; }
     };
     tidyBox.append(ul, go);
   }
@@ -1472,7 +1374,7 @@ async function importCard(name, info, fresh = false) {
           txt.replaceWith(el("span", "nc-ok", `已加入 ${done.added?.length ?? 0} 筆`));
           go.remove();
           refreshGit();
-        } catch (e) { flash(e.message, 6000); go.disabled = false; }
+        } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); go.disabled = false; }
       };
       bibBox.append(go);
     }
@@ -1497,8 +1399,8 @@ function keepOnScreen(m) {
 
 /** Open the Console key page in the system browser, then wait in the key field. */
 async function openKeysPage(input) {
-  try { await api("/api/open/anthropic-keys", {}); flash("建立 key 後貼回這裡"); }
-  catch (e) { flash(e.message, 6000); }
+  try { await api("/api/open/anthropic-keys", {}); LoreShell.toast("建立 key 後貼回這裡"); }
+  catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   $(input).focus();
 }
 
@@ -1629,12 +1531,12 @@ async function saveDb() {
       state.db.issues[name] = await api(`/api/tables/${name}`, { headers: t.headers, rows: t.rows.map((r) => [...r]) }, "PUT");
       state.db.dirty.delete(name);
       t.rows.forEach((r) => delete r._new);
-    } catch (e) { flash(`${name} 儲存失敗：${e.message}`); }
+    } catch (e) { LoreShell.toast(`${name} 儲存失敗：${e.message}`, { err: true }); }
   }
   try { state.profile = await api("/api/profile"); } catch {}
   showTable(state.db.name);
   const n = Object.values(state.db.issues).flat().length;
-  flash(n ? `已儲存，有 ${n} 筆格式問題` : "已儲存");
+  LoreShell.toast(n ? `已儲存，有 ${n} 筆格式問題` : "已儲存");
   refreshGit();
 }
 
@@ -1708,54 +1610,23 @@ function wire() {
     };
   });
 
-  let tip;
-  const closeTip = () => { tip?.remove(); tip = null; document.querySelectorAll(".help").forEach((h) => h.setAttribute("aria-expanded", "false")); };
-  // "?" tips, also for ones added later (menus, forms)
-  const toggleTip = (h) => {
-    const was = h.getAttribute("aria-expanded") === "true";
-    closeTip();
-    if (was) return;
-    tip = el("div", "tip", h.dataset.tip);
-    (h.closest("dialog") ?? document.body).append(tip);
-    const r = h.getBoundingClientRect();
-    tip.style.top = `${r.bottom + 6}px`;
-    tip.style.left = `${Math.max(8, Math.min(r.left - 100, innerWidth - 260))}px`;
-    h.setAttribute("aria-expanded", "true");
-  };
   document.addEventListener("click", (e) => {
-    const help = e.target.closest?.(".help");
-    if (help) { toggleTip(help); return; }
-    closeTip();
     // a control that replaced itself (a menu turning into a form) is not "outside"
     if (!e.target.isConnected) return;
-    if (!e.target.closest("#fileMenu, #actFile, [data-opens-menu]")) $("#fileMenu").hidden = true;
-    if (!e.target.closest("#modelMenu, #cEngine")) $("#modelMenu").hidden = true;
-    if (!e.target.closest("#exportPop, #actExport, #hoverMenu") && !PCExport.busy) PCExport.close();
+    if (!e.target.closest("#fileMenu, #actFile, [data-opens-menu], .menu, .ask")) $("#fileMenu").hidden = true;
+    if (!e.target.closest("#exportPop, #actExport, .menu") && !PCExport.busy) PCExport.close();
   });
   document.addEventListener("keydown", (e) => {
-    // Ctrl+S: save database edits, then commit and push the workspace.
-    if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); syncNow(); return; }
     // Ctrl+P: the submission PDF instead of printing the page.
     if ((e.ctrlKey || e.metaKey) && e.key === "p") { e.preventDefault(); if (!document.querySelector("dialog[open]")) PCExport.run("pdf"); return; }
-    // Esc closes tips, menus and popovers; open windows close themselves.
+    // Esc closes the paper menu's forms and the export panel; open windows close themselves.
     if (e.key !== "Escape" || document.querySelector("dialog[open]")) return;
-    closeTip(); $("#fileMenu").hidden = true; $("#modelMenu").hidden = true; closeHoverMenu(true); PCExport.close();
+    $("#fileMenu").hidden = true; PCExport.close();
   });
 
   PCZoom.init();
   PCNew.wire();
-  wireHoverMenus();
   wireWindows();
-  $("#actFile").onclick = () => PCHome.toggle();
-  $("#actRefs").onclick = () => openWindow("dlgPaperRefs");
-  $("#actDraft").onclick = () => PCDraft.open();
-  $("#actExport").onclick = () => PCExport.run("pdf");
-  $("#actDb").onclick = () => openDbTab(state.db.name);
-  $("#actTpl").onclick = () => openWindow("dlgTpl");
-  $("#actSync").onclick = () => (state.git?.repo ? syncNow() : Setup.open("workspace"));
-  $("#actSettings").onclick = () => Setup.open();
-
-  LoreTheme.picker($("#themePick"));
 
   document.querySelectorAll(".seg").forEach((s) => {
     s.querySelectorAll("button").forEach((b) => {
@@ -1780,6 +1651,9 @@ function wire() {
 }
 
 async function boot() {
+  // the shell's parts come from scripts after this one (review.js, setup.js)
+  if (document.readyState === "loading") await new Promise((ok) => document.addEventListener("DOMContentLoaded", ok, { once: true }));
+  PCFrame.mount();
   // formulas and figures are drawn near the view: the page (held in place
   // while they are drawn above it) and the navigator's open items
   PCLazy.attach($("#paper"), $("#pageArea"), (c) => c.children, true);
@@ -1795,8 +1669,8 @@ async function boot() {
   // Bring in work from other devices before showing anything.
   try {
     const r = await api("/api/git/pull", {});
-    if (r?.pulled) flash("已從遠端更新");
-  } catch (e) { flash(e.message, 8000); }
+    if (r?.pulled) LoreShell.toast("已從遠端更新");
+  } catch (e) { LoreShell.toast(e.message, { err: true, ms: 8000 }); }
   await store.load();
   applyTheme();
   PCZoom.restore();
@@ -1814,7 +1688,7 @@ async function boot() {
     markSettings();
     state.profile.functions.forEach((f) => $("#cFunction").append(new Option(f.replace(/_/g, " "), f)));
   } catch {
-    flash("伺服器未啟動", 8000);
+    LoreShell.toast("伺服器未啟動", { err: true, ms: 8000 });
   }
   // the app opens on the start screen; a paper opens from there
   render();

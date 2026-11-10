@@ -15,7 +15,7 @@
 // (生成, 軟規則, 拆解). 停止 aborts the fetch; the server drops the work
 // with the connection (tests/abort.rs).
 //
-// Uses app.js globals (state, sections, api, el, flash, openPaper…) only
+// Uses app.js globals (state, sections, api, el, openPaper…) only
 // inside functions, so it may load before app.js. Its styles are editor.css.
 
 (() => {
@@ -201,7 +201,7 @@ const PCSections = (() => {
         const r = await api(`${base()}/section-ops/add`, { title: t, after: sections()[si]?.file ?? null });
         closeMenu();
         await reload(r.stamp, r.file);
-        flash(`已新增「${t}」`);
+        LoreShell.toast(`已新增「${t}」`);
       } catch (e) { err.textContent = e.message; go.disabled = false; }
     };
     go.onclick = submit;
@@ -244,7 +244,7 @@ const PCSections = (() => {
           const back = await api(`${base()}/section-ops/restore`, r); // what the delete said, as it is
           await reload(back.stamp, back.file);
         });
-      } catch (e) { closeMenu(); flash(`刪除失敗：${e.message}`, 6000); }
+      } catch (e) { closeMenu(); LoreShell.toast(`刪除失敗：${e.message}`, { err: true, ms: 6000 }); }
     };
   }
 
@@ -259,7 +259,7 @@ const PCSections = (() => {
     b.onclick = async () => {
       clearTimeout(timer);
       t.remove();
-      try { await undo(); flash("已復原"); } catch (e) { flash(`無法復原：${e.message}`, 6000); }
+      try { await undo(); LoreShell.toast("已復原"); } catch (e) { LoreShell.toast(`無法復原：${e.message}`, { err: true, ms: 6000 }); }
     };
   }
 
@@ -272,7 +272,7 @@ const PCSections = (() => {
     try {
       const r = await api(`${base()}/section-ops/order`, { files });
       await reload(r.stamp, f);
-    } catch (e) { flash(`無法移動：${e.message}`, 6000); }
+    } catch (e) { LoreShell.toast(`無法移動：${e.message}`, { err: true, ms: 6000 }); }
   }
 
   /** Rename section `si` on its heading on the page: Enter / outside saves, Esc cancels. */
@@ -291,11 +291,11 @@ const PCSections = (() => {
       if (done) return;
       const v = input.value.trim();
       const bad = save && v !== was.trim() ? titleError(v) : null;
-      if (bad) { flash(bad, 4000); input.focus(); return; }
+      if (bad) { LoreShell.toast(bad, { ms: 4000 }); input.focus(); return; }
       done = true;
       if (!save || v === was.trim()) { draw(); return; }
       sec.title = v;
-      try { await saveSection(si); } catch (e) { sec.title = was; flash(`儲存失敗：${e.message}`, 6000); }
+      try { await saveSection(si); } catch (e) { sec.title = was; LoreShell.toast(`儲存失敗：${e.message}`, { err: true, ms: 6000 }); }
       draw();
       renderNavSection(si);
       markCurrent();
@@ -369,9 +369,9 @@ const PCSections = (() => {
       const r = await api(`${base()}/section-ops/split`, { file: sec.file });
       if (!r.files?.length) return false;
       const at = await reload(r.stamp, r.files[0]);
-      flash(r.files.length > 1 ? `已分出 ${r.files.length} 個章節` : `已新增章節「${PCTex.stripComments(sections()[at]?.title ?? "")}」`);
+      LoreShell.toast(r.files.length > 1 ? `已分出 ${r.files.length} 個章節` : `已新增章節「${PCTex.stripComments(sections()[at]?.title ?? "")}」`);
       return true;
-    } catch (e) { flash(`無法分出章節：${e.message}`, 6000); return false; }
+    } catch (e) { LoreShell.toast(`無法分出章節：${e.message}`, { err: true, ms: 6000 }); return false; }
   }
 
   return { decorate, addRow, rename, splitTyped, openMenu, titleError };

@@ -376,7 +376,7 @@ const PCFind = (() => {
     busy = true;
     try {
       for (const x of secs.values()) {
-        try { await saveSection(x.si); } catch (e) { flash(`儲存失敗：${e.message}`, 6000); }
+        try { await saveSection(x.si); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true, ms: 6000 }); }
         x.after = [...sections()[x.si].paragraphs];
         refreshSection(x.si);
       }
@@ -385,7 +385,7 @@ const PCFind = (() => {
           const res = await api(`${apiBase()}/front`, { field: f.field, index: f.index, value: f.after }, "PUT");
           Object.assign(state.paper, { front: res.front, back: res.back, fields: res.fields });
           f.after = res.fields.find((x) => x.field === f.field && x.index === f.index)?.value ?? f.after;
-        } catch (e) { flash(`儲存失敗：${e.message}`, 6000); }
+        } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true, ms: 6000 }); }
       }
       if (front.length) render();
       refreshGit();
@@ -413,21 +413,21 @@ const PCFind = (() => {
     const intact = state.paper?.name === u.paper
       && u.secs.every((x) => sections()[x.si]?.file === x.file && eq(sections()[x.si].paragraphs, x.after))
       && u.front.every((f) => state.paper.fields.find((x) => x.field === f.field && x.index === f.index)?.value === f.after);
-    if (!intact) { flash("之後已修改，無法復原"); undo = null; note.hidden = true; return; }
+    if (!intact) { LoreShell.toast("之後已修改，無法復原"); undo = null; note.hidden = true; return; }
     undo = null;
     note.hidden = true;
     busy = true;
     try {
       for (const x of u.secs) {
         sections()[x.si].paragraphs = [...x.before];
-        try { await saveSection(x.si); } catch (e) { flash(`儲存失敗：${e.message}`, 6000); }
+        try { await saveSection(x.si); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true, ms: 6000 }); }
         refreshSection(x.si);
       }
       for (const f of u.front) {
         try {
           const res = await api(`${apiBase()}/front`, { field: f.field, index: f.index, value: f.before }, "PUT");
           Object.assign(state.paper, { front: res.front, back: res.back, fields: res.fields });
-        } catch (e) { flash(`儲存失敗：${e.message}`, 6000); }
+        } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true, ms: 6000 }); }
       }
       if (u.front.length) render();
       refreshGit();
@@ -627,7 +627,8 @@ const PCFind = (() => {
     if (document.querySelector("dialog[open]")) return;
     const mod = e.ctrlKey || e.metaKey;
     const k = e.code.startsWith("Key") ? e.code.slice(3).toLowerCase() : e.key.toLowerCase(); // Alt changes e.key on macOS
-    if (mod && !e.shiftKey && k === "f") { e.preventDefault(); open(e.altKey); return; }
+    // ⌘F is the shell's (search in frame.js); ⌘⌥F opens with replace
+    if (mod && !e.shiftKey && e.altKey && k === "f") { e.preventDefault(); open(true); return; }
     // Ctrl+H = replace, except on macOS where Ctrl+H deletes backward in text fields (there: ⌘⌥F)
     if (!MAC && e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && k === "h") { e.preventDefault(); open(true); return; }
     if (!isOpen()) return;

@@ -62,7 +62,7 @@ const PCConvert = (() => {
         store.set("pc.convertJob", job.id);
         from = 0;
         draw(await api(`/api/convert/${enc()}`));
-      } catch (e) { flash(e.message, 6000); }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
     };
     name.onkeydown = (e) => { if (e.key === "Enter") go.click(); };
     const form = el("div", "tpl-form");
@@ -78,7 +78,7 @@ const PCConvert = (() => {
   async function upload(role, files) {
     for (const f of files) {
       const r = await fetch(`/api/convert/${enc()}/upload?role=${role}&name=${encodeURIComponent(f.name)}`, { method: "POST", body: f });
-      if (!r.ok) { flash(await r.text(), 6000); break; }
+      if (!r.ok) { LoreShell.toast(await r.text(), { ms: 6000 }); break; }
     }
     draw(await api(`/api/convert/${enc()}`));
   }
@@ -144,7 +144,7 @@ const PCConvert = (() => {
         job = await api(`/api/convert/${enc()}/run`, { instruction: say.value });
         say.value = "";
         poll();
-      } catch (e) { flash(e.message, 8000); go.disabled = false; }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 8000 }); go.disabled = false; }
     };
     say.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) go.click(); };
     stop.onclick = async () => { await api(`/api/convert/${enc()}/stop`, {}); poll(); };
@@ -157,9 +157,12 @@ const PCConvert = (() => {
     const check = el("button", "ghost", "預覽");
     check.onclick = () => preview(out, check);
     const save = el("button", "primary small", "存進模板庫");
-    save.onclick = () => saveIt(r.files ?? []);
+    save.onclick = () => saveIt(save);
     const fresh = el("button", "ghost", "重新開始");
-    fresh.onclick = () => { if (confirm("放下這次轉換，重新開始？")) { store.set("pc.convertJob", null); clearInterval(timer); job = null; nameStep(); } };
+    fresh.onclick = async () => {
+      if (!(await LoreShell.ask(fresh, "放下這次轉換，重新開始？", [{ label: "取消", value: null }, { label: "重新開始", value: true, danger: true, primary: true }]))) return;
+      store.set("pc.convertJob", null); clearInterval(timer); job = null; nameStep();
+    };
     const acts = el("div", "tpl-actions");
     acts.append(check, save, fresh);
     host.append(acts, out);
@@ -220,24 +223,24 @@ const PCConvert = (() => {
         }
         out.append(pages);
       }
-    } catch (e) { out.innerHTML = ""; flash(e.message, 6000); }
+    } catch (e) { out.innerHTML = ""; LoreShell.toast(e.message, { err: true, ms: 6000 }); }
     btn.disabled = false;
   }
 
-  async function saveIt() {
+  async function saveIt(anchor) {
     const r = await api(`/api/convert/${enc()}`);
     const files = r.files ?? [];
-    if (!files.includes("sample.tex")) return flash("還沒有 sample.tex：請先讓 Claude 完成轉換", 6000);
-    if (!confirm(`存進模板庫的檔案（${files.length} 個）：\n\n${files.join("\n")}`)) return;
+    if (!files.includes("sample.tex")) return LoreShell.toast("還沒有 sample.tex：請先讓 Claude 完成轉換", { ms: 6000 });
+    if (!(await LoreShell.ask(anchor, [`存進模板庫的檔案（${files.length} 個）`, files.join("、")], [{ label: "取消", value: null }, { label: "存進模板庫", value: true, primary: true }]))) return;
     try {
       const s = await api(`/api/convert/${enc()}/save`, {});
       store.set("pc.convertJob", null);
       store.set("pc.template", s.id);
       try { state.workspace = await api("/api/workspace"); } catch {}
-      flash("已存進模板庫");
+      LoreShell.toast("已存進模板庫");
       refreshGit();
       PCTemplates.open(s.id);
-    } catch (e) { flash(e.message, 6000); }
+    } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   }
 
   return { open };

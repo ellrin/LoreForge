@@ -17,14 +17,14 @@ const PCOpen = (() => {
   /** 開啟 LaTeX…: a project's .tex (its folder opens) or an archive. */
   async function latex(anchor) {
     if (!desktop()) { importForm(anchor); return; }
-    const p = await dialog("latex").catch((e) => { flash(e.message, 6000); return null; });
+    const p = await dialog("latex").catch((e) => { LoreShell.toast(e.message, { err: true, ms: 6000 }); return null; });
     if (p) await path(p, anchor);
   }
 
   /** 開啟 Word…: a .docx, converted into a LaTeX folder (the .docx stays as it is). */
   async function word(anchor) {
     if (!desktop()) { uploadWord(); return; }
-    const p = await dialog("word").catch((e) => { flash(e.message, 6000); return null; });
+    const p = await dialog("word").catch((e) => { LoreShell.toast(e.message, { err: true, ms: 6000 }); return null; });
     if (p) await path(p, anchor);
   }
 
@@ -35,7 +35,7 @@ const PCOpen = (() => {
     f.onchange = async () => {
       const file = f.files[0];
       if (!file) return;
-      flash("轉換中…", 60000);
+      LoreShell.toast("轉換中…", { ms: 60000 });
       try {
         const r = await fetch(`/api/open/word-upload?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
         if (!r.ok) throw new Error(await r.text());
@@ -49,7 +49,7 @@ const PCOpen = (() => {
   async function path(p, anchor = $("#actFile")) {
     let r;
     try { r = await api("/api/open/inspect", { path: p }); }
-    catch (e) { flash(e.message, 6000); return; }
+    catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); return; }
     await route(r, anchor);
   }
 
@@ -74,7 +74,7 @@ const PCOpen = (() => {
       if (c.changes) bits.push(`${c.changes} 處修訂`);
       if (c.comments) bits.push(`${c.comments} 則註解`);
       if (c.notation?.length) bits.push(`${c.notation.length} 處編號沒對上，已列在審閱`);
-      flash(`已轉成 LaTeX：${bits.join("、")}`, c.notation?.length ? 12000 : 5000);
+      LoreShell.toast(`已轉成 LaTeX：${bits.join("、")}`, { ms: c.notation?.length ? 12000 : 5000 });
       if (c.changes || c.comments || c.notation?.length) window.PCReview?.setMode("review");
     }
   }
@@ -159,7 +159,7 @@ const PCOpen = (() => {
     ok.onclick = async () => {
       ok.disabled = true; no.disabled = true; alt.disabled = true;
       try { await done(await api("/api/open/latex", { path: r.path, stamp: plan.stamp, restructure })); }
-      catch (e) { flash(e.message, 7000); ok.disabled = false; no.disabled = false; alt.disabled = false; }
+      catch (e) { LoreShell.toast(e.message, { err: true, ms: 7000 }); ok.disabled = false; no.disabled = false; alt.disabled = false; }
     };
     f.append(no, alt, ok);
     m.append(f);
@@ -181,9 +181,9 @@ const PCOpen = (() => {
     const line = row(m, label, where);
     if (desktop()) line.append(change);
     foot(m, okLabel, async () => {
-      flash(`${okLabel}中…`, 120000);
+      LoreShell.toast(`${okLabel}中…`, { ms: 120000 });
       const res = await api(endpoint, { path: r.path, dest });
-      flash("", 1);
+      LoreShell.toast("", { ms: 1 });
       if (res.kind === "paper") await done(res);
       else await route(res, anchor);
     });
@@ -204,7 +204,7 @@ const PCOpen = (() => {
 
   function pandocOr(e, anchor) {
     if (String(e.message).includes("pandoc-missing")) pandocCard(anchor ?? $("#actFile"));
-    else flash(e.message, 7000);
+    else LoreShell.toast(e.message, { err: true, ms: 7000 });
   }
 
   // ── Edits made elsewhere ──────────────────────────────
@@ -238,7 +238,7 @@ const PCOpen = (() => {
     const ta = editing();
     if (!ta) {
       await openPaper(p.name, { keepHome: true });
-      flash("已載入別處的修改");
+      LoreShell.toast("已載入別處的修改");
       return;
     }
     const pick = await conflict();

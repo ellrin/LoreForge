@@ -393,7 +393,7 @@ const PCReview = (() => {
       if (si == null) { si = state.cur.s; pi = state.cur.p; sel = null; }
     }
     const sec = sections()[si];
-    if (!sec || sec.paragraphs[pi] == null) { flash("先點一下要註解的段落"); return; }
+    if (!sec || sec.paragraphs[pi] == null) { LoreShell.toast("先點一下要註解的段落"); return; }
     const anchor = anchorFrom(si, pi, sel);
     const p = paraEl(si, pi);
     const r = sel?.range?.getBoundingClientRect?.() ?? (sel?.ta ? sel.ta.getBoundingClientRect() : p?.getBoundingClientRect());
@@ -406,7 +406,7 @@ const PCReview = (() => {
         getSelection()?.removeAllRanges();
         after();
         return true;
-      } catch (e) { flash(e.message, 6000); return false; }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); return false; }
     });
   }
 
@@ -431,7 +431,7 @@ const PCReview = (() => {
       await checkSection(si);
       refreshSection(si);
     }
-    if (res.issues?.length) flash(res.issues.slice(0, 3).join("　"), 6000);
+    if (res.issues?.length) LoreShell.toast(res.issues.slice(0, 3).join("　"), { ms: 6000 });
     if (res.sections?.length) refreshGit();
     after();
   }
@@ -444,7 +444,7 @@ const PCReview = (() => {
       const next = items();
       cur = next[Math.min(Math.max(at, 0), next.length - 1)]?.key ?? null;
       paint(); renderPanel();
-    } catch (e) { flash(e.message, 6000); }
+    } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   }
 
   async function all(action) {
@@ -452,18 +452,18 @@ const PCReview = (() => {
     try {
       const res = await api(`${base()}/review/all`, { action });
       await applied(res);
-      if (res.skipped) flash(`${res.skipped} 項段落之後又改過，沒有拒絕`, 6000);
-    } catch (e) { flash(e.message, 6000); }
+      if (res.skipped) LoreShell.toast(`${res.skipped} 項段落之後又改過，沒有拒絕`, { ms: 6000 });
+    } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   }
 
   async function editComment(id, body) {
     try { data = await api(`${base()}/review/comments/${encodeURIComponent(id)}`, body, "PUT"); after(); }
-    catch (e) { flash(e.message, 6000); }
+    catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   }
 
   async function setTracking(on) {
     try { data = await api(`${base()}/review/tracking`, { on }, "PUT"); paper = state.paper.name; after(); }
-    catch (e) { flash(e.message, 6000); }
+    catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   }
 
   // ── Current item ────────────────────────────────────
@@ -785,13 +785,12 @@ const PCReview = (() => {
     panel.hidden = !reviewing();
     if (panel.hidden) return;
     const scroll = panel.scrollTop;
-    panel.replaceChildren();
-    const head = el("div", "block-head rv-head");
-    head.append(el("span", "n", "01"), el("h3", "", "審閱"));
-    panel.append(head);
+    const box = panel.body;
+    box.replaceChildren();
     const list = items();
     const nChg = list.filter((x) => x.kind === "change").length;
     const nCm = list.filter((x) => x.kind === "comment" && !x.c.resolved).length;
+    panel.setCount(nChg + nCm || "");
     const tabs = el("div", "rv-tabs");
     [["all", "全部", nChg + nCm], ["changes", "修改", nChg], ["comments", "註解", nCm]].forEach(([k, label, n]) => {
       const b = el("button", "", label);
@@ -800,21 +799,21 @@ const PCReview = (() => {
       b.onclick = () => { tab = k; renderPanel(); renderBar(); };
       tabs.append(b);
     });
-    panel.append(tabs);
+    box.append(tabs);
     const shown = visibleItems();
-    if (!shown.length) panel.append(el("p", "rv-empty", "沒有待處理的項目"));
+    if (!shown.length) box.append(el("p", "rv-empty", "沒有待處理的項目"));
     shown.forEach((x) => {
       const card = x.kind === "change" ? changeCard(x) : commentCard(x);
       card.classList.toggle("cur", x.key === cur);
       card.onclick = () => go(x.key);
-      panel.append(card);
+      box.append(card);
     });
     // resolved comments: hidden from counts, shown on request
     const nRes = data?.comments.filter((c) => c.resolved).length ?? 0;
     if (nRes && tab !== "changes") {
       const t = el("button", "link rv-resolved", `${resolvedShown ? "隱藏" : "顯示"}已解決 ${nRes}`);
       t.onclick = () => { resolvedShown = !resolvedShown; after(); };
-      panel.append(t);
+      box.append(t);
     }
     refsRow();
     panel.scrollTop = scroll;
@@ -836,12 +835,12 @@ const PCReview = (() => {
         const bits = [`已更新 ${r.updated.length}`];
         if (r.ambiguous.length) bits.push(`待確認 ${r.ambiguous.join("、")}`);
         if (r.missing.length) bits.push(`查不到 ${r.missing.join("、")}`);
-        flash(bits.join("；"), 6000);
-      } catch (e) { flash(e.message, 6000); }
+        LoreShell.toast(bits.join("；"), { ms: 6000 });
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
       refsBusy = false; renderPanel();
     };
     row.append(b);
-    panel.append(row);
+    panel.body.append(row);
   }
 
   // ── Everything after the data or the mode changed ───
@@ -860,13 +859,15 @@ const PCReview = (() => {
   }
 
   function init() {
-    bar = el("div", "writebar reviewbar");
+    bar = el("div", "writebar capsule reviewbar");
     bar.id = "reviewbar";
     bar.setAttribute("role", "toolbar");
     bar.setAttribute("aria-label", "審閱工具");
     bar.hidden = true;
     $("#writebar").after(bar);
-    panel = el("section", "rv-panel");
+    // the review list: the shell's numbered block (01 審閱 N ±)
+    panel = LoreShell.block({ n: "01", title: "審閱", key: "pc.review" });
+    panel.classList.add("rv-panel");
     panel.hidden = true;
     $("aside.right").append(panel);
     observer = new MutationObserver(schedule);

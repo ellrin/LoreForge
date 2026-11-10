@@ -26,9 +26,9 @@ const PCWrite = (() => {
   function editor() {
     const ta = active();
     if (ta) return ta;
-    if (!state.paper || !curSection()) { flash("先開啟一篇論文"); return null; }
+    if (!state.paper || !curSection()) { LoreShell.toast("先開啟一篇論文"); return null; }
     const p = paraEl(state.cur.s, state.cur.p);
-    if (!p) { flash("先點一下要寫的段落"); return null; }
+    if (!p) { LoreShell.toast("先點一下要寫的段落"); return null; }
     edit(p, state.cur.s, state.cur.p);
     const t = active();
     if (t) t.setSelectionRange(t.value.length, t.value.length);
@@ -77,10 +77,10 @@ const PCWrite = (() => {
       changed(ta);
       return;
     }
-    if (!state.paper || !curSection()) return flash("先開啟一篇論文");
+    if (!state.paper || !curSection()) return LoreShell.toast("先開啟一篇論文");
     const si = state.cur.s, pi = sections()[si].paragraphs.length ? state.cur.p + 1 : 0;
     sections()[si].paragraphs.splice(pi, 0, text);
-    try { await saveSection(si); } catch (e) { flash(`儲存失敗：${e.message}`); }
+    try { await saveSection(si); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true }); }
     state.cur = { s: si, p: pi };
     refreshSection(si);
     const p = paraEl(si, pi);
@@ -195,7 +195,7 @@ const PCWrite = (() => {
     const ORDER = ["fig", "tab", "eq", "thm", "alg", "sec"];
     const rank = (k) => { const i = ORDER.indexOf(kinds[k]); return i < 0 ? ORDER.length : i; };
     const keys = Object.keys(labels).map((k, i) => [k, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([k]) => k);
-    if (!keys.length) return flash("論文裡還沒有 \\label");
+    if (!keys.length) return LoreShell.toast("論文裡還沒有 \\label");
     const ta = pick ? null : editor();
     if (!pick && !ta) return;
     const texts = describeLabels();
@@ -260,7 +260,7 @@ const PCWrite = (() => {
    *  phrases, the user ticks what to keep, and it is saved in one step. */
   async function collect(anchor, picked) {
     const text = (picked ?? selectedText()).trim();
-    if (!text) return flash("先選取想收藏的句子");
+    if (!text) return LoreShell.toast("先選取想收藏的句子");
     const section = roleOf(curSection()?.title ?? "Any");
     const { row, wait } = PCWait.row("拆解中");
     const p = popover(anchor, (p) => {
@@ -315,20 +315,20 @@ const PCWrite = (() => {
         chosen.phrases.forEach((x) => addRow("phrases.csv", { section: x.section, function: x.function, position: x.position, template: x.template, example: x.example, tags: (x.tags ?? []).join(";") }));
         chosen.expressions.forEach((x) => addRow("expressions.csv", { kind: x.kind, text: x.text, usage: x.usage, section: x.section, example: x.example }));
         p.remove();
-        return flash("資料庫有未儲存的修改：已加進編輯中的表格，記得儲存", 6000);
+        return LoreShell.toast("資料庫有未儲存的修改：已加進編輯中的表格，記得儲存", { ms: 6000 });
       }
       save.disabled = true; save.textContent = "儲存中…";
       try {
         const r = await api("/api/phrases/add", chosen);
         const n = r.phrases.length + r.expressions.length;
         const skipped = chosen.phrases.length + chosen.expressions.length - n;
-        flash(n ? `已加入 ${n} 筆${skipped ? `（${skipped} 筆已經有了）` : ""}` : "都已經在句型庫裡了");
+        LoreShell.toast(n ? `已加入 ${n} 筆${skipped ? `（${skipped} 筆已經有了）` : ""}` : "都已經在句型庫裡了");
         try { state.profile = await api("/api/profile"); } catch {}
         if (typeof refreshGit === "function") refreshGit();
         p.remove();
       } catch (e) {
         save.disabled = false; save.textContent = "加入句型庫";
-        flash(e.message, 6000);
+        LoreShell.toast(e.message, { err: true, ms: 6000 });
       }
     };
     p.append(save);

@@ -256,7 +256,7 @@ const PCNewTemplate = (() => {
           ...v,
         };
         const j = await api(`/api/newtemplate/${job}/create`, meta);
-        flash("已建立模板");
+        LoreShell.toast("已建立模板");
         await done(j.id);
       } catch (e) { out.textContent = e.message; out.className = "tpl-out bad"; go.disabled = false; }
     };

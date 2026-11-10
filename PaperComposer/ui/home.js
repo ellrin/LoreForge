@@ -2,7 +2,7 @@
 // a new mode is one entry), then 最近 (one list, both kinds of papers). At launch the
 // paper that was open last opens again. Level 2 (寫論文): new paper, import, and the
 // workspace's papers to continue, most recently edited first.
-// The paper button in the top bar comes back here.
+// The brand and 首頁 in the paper menu come back here.
 
 const PCHome = (() => {
   // 討論草稿 phases (session.json `phase`) as draft.js names its steps
@@ -24,7 +24,7 @@ const PCHome = (() => {
     level = n;
     root().hidden = false;
     document.querySelector(".app").classList.add("at-home");
-    $("#actFile").setAttribute("aria-expanded", "true");
+    PCFrame.home(true);
     $("#fileMenu").hidden = true;
     draw(true);
     reopenLast();
@@ -34,15 +34,10 @@ const PCHome = (() => {
     if (!isOpen()) return;
     root().hidden = true;
     document.querySelector(".app").classList.remove("at-home");
-    $("#actFile").setAttribute("aria-expanded", "false");
+    PCFrame.home(false);
     $("#fileMenu").hidden = true;
   }
 
-  /** The top-bar paper button: open this screen, or go back to the open paper. */
-  function toggle() {
-    if (isOpen() && state.paper) close();
-    else show(isOpen() ? 1 : level);
-  }
 
   function card(art, label, onClick, enabled = true) {
     const b = el("button", "home-card");
@@ -120,7 +115,7 @@ const PCHome = (() => {
     };
     if (papers) fill();
     try { papers = await api("/api/home/papers"); }
-    catch (e) { papers = papers ?? []; flash(e.message, 6000); }
+    catch (e) { papers = papers ?? []; LoreShell.toast(e.message, { err: true, ms: 6000 }); }
     if (grid.isConnected) fill(); // unless the screen was redrawn or left meanwhile
   }
 
@@ -237,5 +232,5 @@ const PCHome = (() => {
   /** Redraw level 2 after the papers changed (sync, import). */
   const refresh = () => { if (isOpen()) draw(false); };
 
-  return { show, close, toggle, isOpen, refresh, wire, MODES };
+  return { show, close, isOpen, refresh, wire, MODES };
 })();

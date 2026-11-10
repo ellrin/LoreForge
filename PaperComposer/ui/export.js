@@ -1,6 +1,7 @@
 // Export: compile the paper to PDF with the journal's class, or convert it to
 // Word. The result opens in a small panel under the export button: pages and
-// time, or the errors with a jump to the paragraph each one is in.
+// time, or the errors with a jump to the paragraph each one is in. The menu
+// itself (PDF Word LaTeX 列印 在資料夾中顯示) is the shell's 匯出 ▾ (frame.js).
 
 const PCExport = (() => {
   const KIND = { pdf: "PDF", docx: "Word", latex: "LaTeX" };
@@ -9,8 +10,9 @@ const PCExport = (() => {
 
   const paperUrl = () => `/api/papers/${encodeURIComponent(state.paper.name)}`;
 
+  /** → true when it compiled (列印 waits for it). */
   async function run(kind = "pdf") {
-    if (!state.paper || busy) return;
+    if (!state.paper || busy) return false;
     // A paragraph being edited saves on blur; let that land first.
     const ta = document.querySelector(".para textarea");
     if (ta) { ta.blur(); await new Promise((r) => setTimeout(r, 400)); }
@@ -31,11 +33,12 @@ const PCExport = (() => {
         render();
       } catch { /* keep the page as is */ }
     }
+    return !!r.ok;
   }
 
   async function open(kind, reveal) {
     try { await api(`${paperUrl()}/export/open`, { kind, reveal }); }
-    catch (e) { flash(e.message); }
+    catch (e) { LoreShell.toast(e.message, { err: true }); }
   }
 
   // Where an error is: the section's title and paragraph, or the file name.

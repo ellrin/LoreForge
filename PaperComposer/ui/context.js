@@ -241,7 +241,7 @@ const PCContext = (() => {
   /** The paragraph's text now, if it is still the one clicked. */
   function fresh(at) {
     const t = sections()[at.si]?.paragraphs[at.pi];
-    if (t == null || (at.sig != null && stripped(t) !== at.sig)) { flash("段落已變更，請再點一次"); return null; }
+    if (t == null || (at.sig != null && stripped(t) !== at.sig)) { LoreShell.toast("段落已變更，請再點一次"); return null; }
     return t;
   }
 
@@ -297,13 +297,8 @@ const PCContext = (() => {
     const lines = [...(r.blocking ?? []), ...(r.shown ?? []), ...(symLine ? [symLine] : [])];
     if (r.blocking?.length) return ask(at, lines, symLine, target);
     if (lines.length) {
-      flash(lines.slice(0, 3).join("　"), 6000);
-      const t = document.querySelector("#flash");
-      if (t && symLine && typeof PCNotation !== "undefined") {
-        t.classList.add("ctx-link");
-        t.title = "開啟對照表";
-        t.onclick = () => { t.remove(); PCNotation.open(target); };
-      }
+      const link = symLine && typeof PCNotation !== "undefined" ? { label: "對照表", run: () => PCNotation.open(target) } : undefined;
+      LoreShell.toast(lines.slice(0, 3).join("　"), { ms: 6000, action: link });
     }
     return true;
   }
@@ -314,7 +309,7 @@ const PCContext = (() => {
     const sec = sections()[at.si];
     sec.paragraphs[at.pi] = now;
     if (block != null) sec.paragraphs.splice(at.pi + 1, 0, block);
-    try { await saveSection(at.si); } catch (e) { flash(`儲存失敗：${e.message}`, 6000); return false; }
+    try { await saveSection(at.si); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true, ms: 6000 }); return false; }
     return true;
   }
 
@@ -397,7 +392,7 @@ const PCContext = (() => {
       const where = state.paper.captions?.table;
       if (where === "above" || where === "below") t.caption_below = where === "below";
       let text = r.text;
-      try { text = (await api("/api/textable/render", t)).text; } catch (e) { flash(e.message, 6000); unmark(); return null; }
+      try { text = (await api("/api/textable/render", t)).text; } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); unmark(); return null; }
       const now = withRef(at, was, "tab", t.label);
       if (!(await commit(at, was, now, text))) { unmark(); return null; }
       return { si: at.si, pi: at.pi + 1, text: sections()[at.si].paragraphs[at.pi + 1], table: t, after: () => { land(at, was); unmark(); } };
@@ -420,13 +415,13 @@ const PCContext = (() => {
       cap.placeholder = "圖說";
       const engine = chosenEngine();
       const gen = iconButton("ai", engine ? "自動產生圖說" : "連接寫作引擎後可自動產生", async () => {
-        if (!file.files[0]) return flash("先選擇圖檔");
+        if (!file.files[0]) return LoreShell.toast("先選擇圖檔");
         gen.disabled = true; cap.placeholder = "產生中…";
         try {
           const title = state.paper.fields?.find((f) => f.field === "title")?.value ?? "";
           const r = await api("/api/wizard/caption", { kind: "figure", data: "", file: file.files[0].name, section: sections()[at.si]?.title ?? "", key_value: state.paper.meta?.key_value ?? "", title, engine: chosenEngine() });
-          if (r.caption) cap.value = r.caption; else flash("從檔名看不出這張圖的內容，請自己填圖說");
-        } catch (e) { flash(e.message, 5000); }
+          if (r.caption) cap.value = r.caption; else LoreShell.toast("從檔名看不出這張圖的內容，請自己填圖說");
+        } catch (e) { LoreShell.toast(e.message, { err: true, ms: 5000 }); }
         gen.disabled = false; cap.placeholder = "圖說";
       });
       gen.disabled = !engine;
@@ -464,7 +459,7 @@ const PCContext = (() => {
     let fname = `${stem}.${ext}`;
     for (let k = 2; used.has(fname); k++) fname = `${stem}-${k}.${ext}`;
     const up = await fetch(`${base()}/figures?file=${encodeURIComponent(fname)}`, { method: "POST", body: f });
-    if (!up.ok) { flash(await up.text(), 6000); return false; }
+    if (!up.ok) { LoreShell.toast(await up.text(), { ms: 6000 }); return false; }
     const n = Object.values(PCTex.kinds).filter((k) => k === "fig").length + 1;
     const label = newLabel("fig", caption || stem, n);
     const capLines = [`  \\caption{${texText(caption)}}`, `  \\label{${label}}`];
@@ -475,7 +470,7 @@ const PCContext = (() => {
     if (!(await commit(at, was, now, block))) return false;
     try {
       const r = await api(`${base()}/packages`, { packages: ["graphicx"] });
-      if (r.added?.length) flash(`main.tex 已加入 \\usepackage{graphicx}`, 5000);
+      if (r.added?.length) LoreShell.toast(`main.tex 已加入 \\usepackage{graphicx}`, { ms: 5000 });
     } catch {}
     refreshSection(at.si);
     refreshGit();
@@ -492,11 +487,11 @@ const PCContext = (() => {
       if (document.execCommand(cut ? "cut" : "copy")) return;
       navigator.clipboard?.writeText(d.text).then(() => {
         if (cut) { d.ta.setRangeText("", d.a, d.b, "end"); d.ta.dispatchEvent(new Event("input")); }
-      }, () => flash("無法使用剪貼簿"));
+      }, () => LoreShell.toast("無法使用剪貼簿"));
       return;
     }
     if (String(getSelection() ?? "") === d.text && document.execCommand("copy")) return;
-    navigator.clipboard?.writeText(d.text).catch(() => flash("無法使用剪貼簿"));
+    navigator.clipboard?.writeText(d.text).catch(() => LoreShell.toast("無法使用剪貼簿"));
   }
 
   // ── the marker ──

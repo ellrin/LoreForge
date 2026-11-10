@@ -12,6 +12,7 @@ lore-llm.workspace = true
 lore-gitsync.workspace = true
 lore-home.workspace = true
 lore-notation.workspace = true
+lore-shell.workspace = true
 lore-fonts.workspace = true
 async-trait = "0.1"
 serde.workspace = true

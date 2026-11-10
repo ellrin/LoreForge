@@ -6,8 +6,11 @@
 //   key), inserts \cite{key} and writes the paper's .bib like the library tab does.
 //   A paper opens to its quotes, highlights and notes: each goes in as a quotation
 //   (``…''~\cite[p.~N]{key}) or as a paraphrase draft written by the model, with the
-//   citation; and to its symbols, each opening the 對照表 (PCNotation) at that
-//   LaTeX — nothing is registered from here.
+//   citation; and to its symbols and equations: 插入 puts one in (inline $…$, an
+//   equation as an equation environment with its label) and registers it — with
+//   the symbols an equation uses — in this paper's 對照表 under LoreReader's id
+//   (POST /api/papers/{name}/reader/notation; never the global registry). A LaTeX the
+//   對照表 already has keeps its row: the inserted text uses that row's macro.
 // - The right panel gets 「讀過的」 while the current paragraph cites a paper read in
 //   LoreReader: that paper's quotes and notes, read-only, each with its page linked
 //   back to LoreReader.
@@ -51,7 +54,7 @@ const PCReader = (() => {
   };
 
   function openPage(sha, page) {
-    api("/api/reader/open", { sha, page }).catch((e) => flash(e.message, 5000));
+    api("/api/reader/open", { sha, page }).catch((e) => LoreShell.toast(e.message, { err: true, ms: 5000 }));
   }
   function pageLink(sha, page) {
     const a = el("button", "rd-page", page ? `p.${page}` : "");
@@ -96,7 +99,7 @@ const PCReader = (() => {
     return /(^|[.!?。:;])\s*$/.test(was.slice(0, i));
   }
 
-  /** Put `make(sentence)` at `at`, checked, saved, the .bib written. */
+  /** Put `make(sentence)` at `at`, checked, saved, the .bib written (when `key`: a citation). */
   async function put(at, key, make) {
     if (!state.paper) return false;
     const given = !!at.vet;
@@ -113,11 +116,13 @@ const PCReader = (() => {
     if (given) { if (!(await at.vet(was ?? "", now))) return false; }
     else if (window.PCContext?.vet && !(await PCContext.vet([was ?? ""], [now], at))) return false;
     if (was == null) sec.paragraphs.push(now); else sec.paragraphs[at.pi] = now;
-    try { await saveSection(at.si); } catch (e) { flash(`儲存失敗：${e.message}`, 6000); return false; }
-    try {
-      const r = await api(`/api/papers/${encodeURIComponent(state.paper.name)}/bib`, {});
-      if (r.missing.length) flash(`文獻庫裡沒有：${r.missing.join(", ")}`, 6000);
-    } catch (e) { flash(e.message, 6000); }
+    try { await saveSection(at.si); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true, ms: 6000 }); return false; }
+    if (key) {
+      try {
+        const r = await api(`/api/papers/${encodeURIComponent(state.paper.name)}/bib`, {});
+        if (r.missing.length) LoreShell.toast(`文獻庫裡沒有：${r.missing.join(", ")}`, { ms: 6000 });
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
+    }
     refreshSection(at.si);
     refreshGit();
     if (given) at.done?.(was ?? "", now);
@@ -139,13 +144,13 @@ const PCReader = (() => {
     if (r.key) return r.key;
     const ask = (body) => api(`/api/reader/papers/${r.sha}/cite`, { paper: state.paper?.name, ...body });
     let res;
-    try { res = await ask({}); } catch (e) { flash(e.message, 6000); return null; }
+    try { res = await ask({}); } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); return null; }
     while (res && !res.key) {
       res = await question(host, r, res, ask);
     }
     if (!res) return null;
     r.key = res.key;
-    if (res.added) { flash(`已加入文獻庫：${res.key}`); PCRefs.load?.(); }
+    if (res.added) { LoreShell.toast(`已加入文獻庫：${res.key}`); PCRefs.load?.(); }
     return res.key;
   }
 
@@ -168,10 +173,10 @@ const PCReader = (() => {
       go.onclick = async () => {
         if (!doi.value.trim()) return doi.focus();
         go.disabled = true;
-        try { finish(await ask({ doi: doi.value.trim() })); } catch (e) { flash(e.message, 6000); go.disabled = false; }
+        try { finish(await ask({ doi: doi.value.trim() })); } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); go.disabled = false; }
       };
       doi.onkeydown = (e) => { if (e.key === "Enter") go.click(); };
-      own.onclick = async () => { try { finish(await ask({ doi: doi.value.trim() || undefined, minimal: true })); } catch (e) { flash(e.message, 6000); } };
+      own.onclick = async () => { try { finish(await ask({ doi: doi.value.trim() || undefined, minimal: true })); } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); } };
       cancel.onclick = () => finish(null);
       row.append(doi, go);
       if (res.need_doi || res.can_minimal) row.append(own);
@@ -200,7 +205,7 @@ const PCReader = (() => {
 
   async function insertParaphrase(r, item, at, host, btn) {
     const engine = typeof chosenEngine === "function" ? chosenEngine() : null;
-    if (!engine) { flash("連接本機模型或 Claude 後可改寫", 5000); return false; }
+    if (!engine) { LoreShell.toast("連接本機模型或 Claude 後可改寫", { ms: 5000 }); return false; }
     const key = await ensureKey(r, host);
     if (!key) return false;
     const lang = document.querySelector('#cLang [aria-pressed="true"]')?.dataset.v ?? "en";
@@ -210,7 +215,7 @@ const PCReader = (() => {
     try { res = await api("/api/reader/paraphrase", { text: item.text, note: item.note, language: lang, engine }); }
     catch (e) { res = { error: e.message }; }
     if (btn) { btn.disabled = false; btn.textContent = label; }
-    if (!res.text) { flash(res.error ?? "改寫失敗", 6000); return false; }
+    if (!res.text) { LoreShell.toast(res.error ?? "改寫失敗", { ms: 6000 }); return false; }
     const s = prose(res.text.trim()).replace(/[.。]\s*$/, "");
     return put(at, key, (whole) => `${whole ? s : s.replace(/^./, (c) => c.toLowerCase())}~\\cite{${key}}${whole ? "." : ""}`);
   }
@@ -239,26 +244,36 @@ const PCReader = (() => {
     return row;
   }
 
-  function symbolRow(r, s) {
+  /** 插入: register in this paper's 對照表 (LoreReader's id), then put it in. */
+  async function insertSymbol(r, s, at) {
+    if (!state.paper) return false;
+    let res;
+    try { res = await api(`/api/papers/${encodeURIComponent(state.paper.name)}/reader/notation`, { sha: r.sha, ids: [s.id] }); }
+    catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); return false; }
+    const row = res.use?.[s.id];
+    if (!row?.latex) { LoreShell.toast("這個符號沒有 LaTeX", { err: true }); return false; }
+    const body = row.macro ? `\\${row.macro}` : row.latex;
+    const text = row.kind === "equation"
+      ? `\\begin{equation}\n${body}${row.label ? `\n\\label{${row.label}}` : ""}\n\\end{equation}`
+      : `$${body}$`;
+    const ok = await put(at, null, () => text);
+    if (ok && res.added?.length) LoreShell.toast(`對照表新增 ${res.added.length} 筆`, { action: { label: "對照表", run: () => PCNotation.open(row.id) } });
+    return ok;
+  }
+
+  function symbolRow(r, s, at, onDone) {
     const row = el("div", "rd-sym");
     const m = el("span", "rd-math");
-    try { m.innerHTML = window.katex ? katex.renderToString(s.latex, { throwOnError: false }) : ""; } catch {}
+    try { m.innerHTML = window.katex ? katex.renderToString(s.latex, { throwOnError: false, displayMode: false }) : ""; } catch {}
     if (!m.innerHTML) m.textContent = s.latex;
     const body = el("span", "rd-sym-main");
-    body.append(el("span", "", s.meaning || s.meaning_en || "—"));
+    body.append(el("span", "", s.meaning || s.meaning_en || (s.kind === "equation" ? `式 ${s.number ?? ""}`.trim() : "—")));
     if (s.quote) body.title = s.quote;
     row.append(m, body, s.page ? pageLink(r.sha, s.page) : el("span"));
-    // the 對照表 opens at this symbol; nothing is written from here (notation.js adds rows)
-    if (typeof PCNotation !== "undefined") {
-      const open = el("button", "ghost small", "對照表");
-      open.title = "在對照表查看或新增（LaTeX 會複製）";
-      open.onclick = () => {
-        navigator.clipboard?.writeText(s.latex).catch(() => {});
-        document.querySelector("#refPop")?.remove();
-        PCNotation.open({ latex: s.latex });
-      };
-      row.append(open);
-    }
+    const go = el("button", "ghost small", "插入");
+    go.onmousedown = (e) => e.preventDefault(); // keep the caret in the paragraph
+    go.onclick = async () => { go.disabled = true; if (await insertSymbol(r, s, at())) onDone?.(); go.disabled = false; };
+    row.append(go);
     return row;
   }
 
@@ -350,10 +365,11 @@ const PCReader = (() => {
     try { d = await detail(r.sha); } catch (e) { body.append(el("p", "empty", e.message)); return; }
     if (!d.items.length) body.append(el("p", "empty", "沒有劃線或引用句"));
     d.items.forEach((it) => body.append(itemRow(r, it, () => at, ask, close)));
-    if (d.symbols.length) {
-      const t = el("div", "rd-sub", `符號 ${d.symbols.length}`);
-      body.append(t);
-      d.symbols.forEach((s) => body.append(symbolRow(r, s)));
+    const syms = d.symbols.filter((s) => s.kind !== "equation"), eqs = d.symbols.filter((s) => s.kind === "equation");
+    for (const [label, list] of [["符號", syms], ["方程式", eqs]]) {
+      if (!list.length) continue;
+      body.append(el("div", "rd-sub", `${label} ${list.length}`));
+      list.forEach((s) => body.append(symbolRow(r, s, () => at, close)));
     }
     fit(box.closest(".cite-pop"));
   }
@@ -381,16 +397,12 @@ const PCReader = (() => {
   function makeBlock() {
     const aside = document.querySelector("aside.right");
     if (!aside) return null;
-    const b = el("section", "block rd-block");
-    b.dataset.open = "true";
+    // the shell's numbered block, after 01 寫作 and 02 檢查
+    const n = String(aside.querySelectorAll(":scope > .block:not(.rv-panel)").length + 1).padStart(2, "0");
+    const b = LoreShell.block({ n, title: "讀過的", key: "pc.read" });
+    b.classList.add("rd-block");
+    b.body.classList.add("rd-side");
     b.hidden = true;
-    const head = el("div", "block-head");
-    const toggle = el("button", "toggle", "−");
-    toggle.setAttribute("aria-label", "展開或收合");
-    toggle.onclick = () => { const open = b.dataset.open !== "true"; b.dataset.open = String(open); toggle.textContent = open ? "−" : "+"; };
-    head.append(el("span", "n", String(aside.querySelectorAll(":scope > .block").length + 1).padStart(2, "0")), el("h3", "", "讀過的"), toggle);
-    const body = el("div", "block-body rd-side");
-    b.append(head, body);
     aside.append(b);
     return b;
   }

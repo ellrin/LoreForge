@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
   <link rel="stylesheet" href="vendor/katex/katex.min.css">
   <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="base.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="prefs.css">
   <link rel="stylesheet" href="paper-start.css">
@@ -18,42 +19,22 @@
 </head>
 <body>
 <div class="app at-home">
-  <header class="top">
-    <!-- narrow windows: the navigator and the right panel open as drawers (layout.js) -->
-    <button class="ico narrow-only" id="toggleLeft" aria-label="導覽" aria-pressed="false"></button>
-    <div class="brand">PAPER<b>/</b>COMPOSER</div>
-    <!-- this paper: switch, its references, export -->
-    <div class="paper-bar">
-      <button class="picker" id="actFile" aria-label="回到封面"><span data-icon="file"></span><span id="paperName">—</span></button>
-      <button class="ico" id="actRefs" data-icon="quote" aria-label="本篇文獻"></button>
-      <button class="ico" id="actDraft" data-icon="ai" aria-label="討論草稿"></button>
-      <button class="ico" id="actExport" data-icon="export" data-menu="export" aria-label="匯出"></button>
-    </div>
-    <!-- 寫作｜審閱 (review.js) -->
-    <div class="seg modes" id="modeSwitch" role="group" aria-label="模式" hidden></div>
-    <div class="top-right">
-      <!-- the workspace: shared by every paper -->
-      <button class="ico" id="actDb" data-icon="database" data-menu="db" aria-label="資料庫"></button>
-      <button class="ico" id="actTpl" data-icon="layout" aria-label="模板"></button>
-      <button class="ico narrow-only" id="toggleRight" aria-label="面板" aria-pressed="false"></button>
-      <span class="vsep"></span>
-      <!-- the app -->
-      <button class="ico" id="actSync" data-icon="cloud" aria-label="同步"></button>
-      <button class="ico" id="actSettings" data-icon="gear" aria-label="設定"></button>
-    </div>
-  </header>
+  <!-- the shared Lore shell fills it (frame.js: LoreShell.mount) -->
+  <header class="top"></header>
+  <!-- 寫作｜審閱 (review.js): goes into the top bar's lead slot -->
+  <div class="seg modes" id="modeSwitch" role="group" aria-label="模式" hidden></div>
 
   <aside class="left" aria-label="導覽">
     <div class="nav-head">
       <h2 class="panel-title" id="navTitle"></h2>
-      <button class="ico small" id="navOpenAll" data-icon="chevron" aria-label="全部展開（Alt+點標題：展開或收合整個分支）"></button>
+      <button class="ico small" id="navOpenAll" data-icon="chevron" aria-label="全部展開" title="Alt＋點標題：展開或收合整個分支"></button>
       <button class="ico small" id="navCloseAll" data-icon="up" aria-label="全部收合"></button>
     </div>
     <ol class="nav" id="nav"></ol>
   </aside>
 
   <main class="page-area" id="pageArea">
-    <div class="writebar" id="writebar" role="toolbar" aria-label="寫作工具"></div>
+    <div class="writebar capsule" id="writebar" role="toolbar" aria-label="寫作工具"></div>
     <div class="keyvalue" id="keyValue" hidden></div>
     <article class="paper" id="paper"></article>
     <div class="statusbar" id="statusbar"></div>
@@ -195,23 +176,10 @@
     </div>
   </dialog>
 
-  <!-- Settings: a guided setup on first run, reopened from the gear -->
-  <dialog class="dialog" id="dlgSetup" aria-label="設定">
-    <div class="dlg" tabindex="-1" autofocus>
-      <div class="dlg-head">
-        <h2>設定</h2>
-        <div class="tabs" id="wzTabs" role="tablist">
-          <button data-step="0"><span class="c">01</span>工作區與同步<span class="st"></span></button>
-          <button data-step="1"><span class="c">02</span>本機模型<span class="st"></span></button>
-          <button data-step="2"><span class="c">03</span>Claude<span class="st"></span></button>
-          <button data-step="3">外觀<span class="st"></span></button>
-        </div>
-        <button class="ico" id="wzClose" data-icon="x" aria-label="關閉 Esc"></button>
-      </div>
-      <div class="wizard">
-        <!-- 01 workspace & sync: each user links their own private workspace;
-             Git shows up only when a repo is involved -->
-        <section class="step" data-step="0">
+  <!-- Settings pieces (setup.js): moved into the gear's tabs (LoreShell.settings:
+       一般 workspace and author, 同步, 外觀 紙張) and the model window (模型 → 下載／登入…) -->
+  <div id="setupParts" hidden>
+        <section class="pc-part" id="partWorkspace">
           <div class="now" id="wzWsNow"></div>
           <div class="seg-row">
             <div class="seg wide" id="wzWsMode">
@@ -237,6 +205,8 @@
             <button class="primary small" id="wzOpen">開啟</button>
           </div>
 
+        </section>
+        <section class="pc-part" id="partGit">
           <div class="git-box" id="wzGitBox" hidden>
             <ul class="checks" id="wzGitNow"></ul>
             <div class="form" id="wzGitForm" hidden>
@@ -246,16 +216,12 @@
             </div>
           </div>
         </section>
-
-        <!-- 02 local model -->
-        <section class="step" data-step="1" hidden>
+        <section class="pc-part" id="partLocal">
           <div class="now" id="wzSys"></div>
           <ul class="models" id="wzModels"></ul>
           <div id="wzPlan"></div>
         </section>
-
-        <!-- 03 claude: two ways to connect, the user picks and can switch -->
-        <section class="step" data-step="2" hidden>
+        <section class="pc-part" id="partClaude">
           <div class="seg-row">
             <div class="seg wide" id="wzVia">
               <button data-v="subscription">登入帳號（訂閱）</button>
@@ -294,31 +260,28 @@
             <span class="note" id="wzTestOut"></span>
           </div>
         </section>
-
-        <!-- appearance -->
-        <section class="step" data-step="3" hidden>
-          <div id="themePick"></div>
-          <div class="look-row"><span class="lbl">紙張</span>
+          <div class="look-row" id="partPaper"><span class="lbl">紙張</span>
             <div class="seg" id="lookPaper"><button data-v="white">白</button><button data-v="dim">調暗</button></div>
           </div>
-        </section>
+  </div>
 
-        <div class="wz-foot">
-          <button class="ghost" id="wzPrev">上一步</button>
-          <button class="ghost" id="wzSkip">略過</button>
-          <button class="primary small" id="wzNext">下一步</button>
-        </div>
+  <!-- 本機模型 / Claude: the connection's own steps (download, sign in, key), over the gear -->
+  <dialog class="dialog" id="dlgModel" aria-label="模型">
+    <div class="dlg">
+      <div class="dlg-head">
+        <h2 id="dlgModelTitle">模型</h2>
+        <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
       </div>
+      <div class="dlg-body" id="dlgModelBody"></div>
     </div>
   </dialog>
 
   <div class="menu" id="fileMenu" hidden role="menu"></div>
-  <div class="menu hover" id="hoverMenu" hidden role="menu"></div>
-  <div class="menu" id="modelMenu" hidden role="menu"></div>
   <div class="pop export-pop" id="exportPop" hidden></div>
 </div>
 <script src="vendor/katex/katex.min.js"></script>
 <script src="icons.js"></script>
+<script src="shell.js"></script>
 <script src="tex.js"></script>
 <script src="lazy.js"></script>
 <script src="table.js"></script>
@@ -339,9 +302,9 @@
 <script src="open.js"></script>
 <script src="home.js"></script>
 <script src="editor.js"></script>
+<script src="frame.js"></script>
 <script src="app.js"></script>
 <script src="review.js"></script>
-<script src="layout.js"></script>
 <script src="setup.js"></script>
 </body>
 </html>

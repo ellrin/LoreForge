@@ -93,7 +93,7 @@ const PCNew = (() => {
   function checkName() {
     if (st.name.trim()) return true;
     $("#npName")?.focus();
-    flash("請填資料夾名稱");
+    LoreShell.toast("請填資料夾名稱");
     return false;
   }
 
@@ -224,7 +224,7 @@ const PCNew = (() => {
         await loadPeople();
         st.chosen.push({ id: r.id, corresponding: !st.chosen.length, equal: false });
         draw();
-      } catch (e) { flash(e.message, 6000); save.disabled = false; }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); save.disabled = false; }
     };
     const grid = el("div", "np-grid");
     grid.append(given, family, email, orcid);
@@ -248,7 +248,7 @@ const PCNew = (() => {
       await openPaper(r.name);
       refreshGit();
       if (start === "ai") openWindow("dlgDraft");
-    } catch (e) { flash(e.message, 6000); if (st) { st.busy = false; draw(); } }
+    } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); if (st) { st.busy = false; draw(); } }
   }
 
   function label(text, tip) {
@@ -314,8 +314,8 @@ const PCNew = (() => {
       if (t.kind !== "figure" && grid(t.data).length < 2) return;
       t.capBusy = true; repaintCaption(t);
       t.capJob = api("/api/wizard/caption", { kind: t.kind, data: t.data ?? "", file: t.kind === "figure" ? t.file.name : "", section: t.section, key_value: opts.keyValue ?? "", title: opts.title ?? "", engine: chosenEngine() })
-        .then((r) => { if (r.caption && (!t.caption.trim() || force)) t.caption = r.caption; else if (force && !r.caption) flash("從檔名看不出這張圖的內容，請自己填標題"); })
-        .catch((e) => flash(e.message, 5000))
+        .then((r) => { if (r.caption && (!t.caption.trim() || force)) t.caption = r.caption; else if (force && !r.caption) LoreShell.toast("從檔名看不出這張圖的內容，請自己填標題"); })
+        .catch((e) => LoreShell.toast(e.message, { err: true, ms: 5000 }))
         .finally(() => { t.capBusy = false; t.capJob = null; repaintCaption(t); });
       return t.capJob;
     }
@@ -411,7 +411,7 @@ const PCNew = (() => {
     async function save() {
       const list = tables.filter((t) => t.kind === "figure" || t.data.trim());
       if (!list.length || busy) return;
-      if (list.some((t) => t.kind !== "figure" && grid(t.data).length < 2)) { flash("表格至少要有表頭和一列資料"); return; }
+      if (list.some((t) => t.kind !== "figure" && grid(t.data).length < 2)) { LoreShell.toast("表格至少要有表頭和一列資料"); return; }
       busy = true; render();
       try {
         await Promise.all(list.map((t) => autoCaption(t)));
@@ -427,7 +427,7 @@ const PCNew = (() => {
         });
         tables.length = 0;
         opts.onSaved?.(v);
-      } catch (e) { flash(e.message, 6000); }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
       busy = false; render();
     }
 

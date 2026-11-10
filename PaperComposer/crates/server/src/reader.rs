@@ -16,6 +16,7 @@
 //! | GET | /api/reader/papers/{sha} | its quotes, highlights and notes (by page) and its symbols |
 //! | POST | /api/reader/papers/{sha}/cite | `{paper?, doi?, minimal?}` → `{key, added}`: the library entry (Crossref BibTeX from the DOI; deduped by DOI, title and key), or `{need_doi}` / `{error, can_minimal}` |
 //! | POST | /api/reader/open | `{sha, page}` → LoreReader's `/open?sha=&page=` link |
+//! | POST | /api/papers/{name}/reader/notation | `{sha, ids}` → `{added, renamed, skipped, use}`: those symbols and equations (and the symbols an equation uses) into **this paper's** notation.json with LoreReader's ids; the global registry is read, never written |
 //! | POST | /api/reader/paraphrase | `{text, note?, language?, engine?}` → `{text}` (task `pc-compose-paragraph`) |
 
 use super::{bad, bib_files, load_library, paper_dir, refs_root, save_library, writing_complete, Shared, BIB_MARK, LIBRARY_LOCK};
@@ -197,7 +198,8 @@ pub fn material(dir: &Path, sha: &str) -> Vec<Material> {
     out
 }
 
-/// The paper's symbol table as lore-notation entries plus what LoreReader knows of each.
+/// The paper's symbol table as lore-notation entries plus what LoreReader knows of each:
+/// its symbols, then its equations (`kind` "equation", with `number` when the PDF numbers it).
 pub fn symbols(dir: &Path, sha: &str) -> Vec<Value> {
     if !valid_sha(sha) {
         return vec![];
@@ -207,6 +209,7 @@ pub fn symbols(dir: &Path, sha: &str) -> Vec<Value> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .chain(f.get("equations").and_then(Value::as_array).into_iter().flatten())
         .filter_map(|v| {
             let e: NotationEntry = serde_json::from_value(v.clone()).ok()?;
             e.latex.as_ref()?;
@@ -216,7 +219,9 @@ pub fn symbols(dir: &Path, sha: &str) -> Vec<Value> {
                 "grade": v.get("grade").and_then(Value::as_str).unwrap_or(""),
                 "quote": ev.and_then(|q| q.get("quote")).and_then(Value::as_str).unwrap_or(""),
                 "page": ev.and_then(|q| q.get("page")).and_then(Value::as_u64)
-                    .or_else(|| v.get("first").and_then(|f| f.get("page")).and_then(Value::as_u64)),
+                    .or_else(|| v.get("first").and_then(|f| f.get("page")).and_then(Value::as_u64))
+                    .or_else(|| v.get("page").and_then(Value::as_u64)),
+                "number": v.get("number").and_then(Value::as_str),
             }))
         })
         .collect()
@@ -509,6 +514,108 @@ pub(crate) async fn paraphrase(State(s): State<Shared>, Json(b): Json<Paraphrase
     }
 }
 
+// ── a symbol or equation inserted from LoreReader goes into this paper's 對照表 ──
+
+/// Copy entries `ids` of LoreReader's `symbols.json` (`entries` and `equations`)
+/// into the paper's registry `doc`, with LoreReader's id; an equation also brings
+/// the symbols it uses. `glob` is the author's global registry (read, never
+/// written): a LaTeX that either already has keeps that row. An id taken by
+/// another row gets a free one. → `{added, renamed, skipped, use}` where `use`
+/// maps each asked id to the row now standing for it (`id`, `latex`, `macro`,
+/// `label`, `kind`), so the inserted text uses the registered macro and label.
+pub fn register_into(doc: &mut lore_notation::Notation, glob: &lore_notation::Notation, table: &Value, ids: &[String]) -> Value {
+    let all: Vec<&Value> = table["entries"].as_array().into_iter().flatten().chain(table["equations"].as_array().into_iter().flatten()).collect();
+    let find = |id: &str| all.iter().find(|e| e["id"].as_str() == Some(id)).copied();
+    let mut want: Vec<String> = vec![];
+    for id in ids {
+        if let Some(e) = find(id) {
+            for u in e["uses"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                if !want.iter().any(|w| w == u) {
+                    want.push(u.to_string());
+                }
+            }
+            if !want.contains(id) {
+                want.push(id.clone());
+            }
+        }
+    }
+    let (mut added, mut skipped) = (vec![], vec![]);
+    let mut renamed = std::collections::BTreeMap::new();
+    let mut stands: std::collections::BTreeMap<String, String> = Default::default();
+    for id in &want {
+        let Some(v) = find(id) else { continue };
+        let Ok(mut e) = serde_json::from_value::<NotationEntry>(v.clone()) else {
+            skipped.push(id.clone());
+            continue;
+        };
+        let latex = e.latex.clone().unwrap_or_default();
+        if latex.trim().is_empty() {
+            skipped.push(id.clone());
+            continue;
+        }
+        let eff = lore_notation::Notation::effective(glob, doc);
+        if let Some(have) = eff.find_latex(&latex) {
+            if have.id != e.id {
+                renamed.insert(e.id.clone(), have.id.clone());
+            }
+            stands.insert(id.clone(), have.id.clone());
+            skipped.push(id.clone());
+            continue;
+        }
+        if eff.get(&e.id).is_some() {
+            let new = eff.free_id(&e.id);
+            renamed.insert(e.id.clone(), new.clone());
+            e.id = new;
+        }
+        if e.kind == Some(lore_notation::Kind::Equation) && e.label.as_deref().is_none_or(|l| l.trim().is_empty()) {
+            e.label = Some(format!("eq:{}", e.id));
+        }
+        e.uses = e.uses.iter().map(|u| renamed.get(u).cloned().unwrap_or_else(|| u.clone())).collect();
+        stands.insert(id.clone(), e.id.clone());
+        added.push(e.id.clone());
+        doc.entries.push(e);
+    }
+    let eff = lore_notation::Notation::effective(glob, doc);
+    let used: serde_json::Map<String, Value> = ids
+        .iter()
+        .filter_map(|id| {
+            let e = eff.get(stands.get(id)?)?;
+            Some((id.clone(), serde_json::json!({ "id": e.id, "kind": e.kind, "latex": e.latex, "macro": e.macro_name, "label": e.label })))
+        })
+        .collect();
+    serde_json::json!({ "added": added, "renamed": renamed, "skipped": skipped, "use": used })
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RegisterBody {
+    sha: String,
+    ids: Vec<String>,
+}
+
+/// POST /api/papers/{name}/reader/notation `{sha, ids}`: into the paper's own
+/// notation.json (never the global file).
+pub(crate) async fn register(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RegisterBody>) -> axum::response::Response {
+    let Some(dir) = reader_dir() else { return not_here() };
+    if !valid_sha(&b.sha) {
+        return bad("invalid sha");
+    }
+    let Some(table) = read_json(&dir.join("papers").join(&b.sha).join("symbols.json")) else {
+        return (StatusCode::NOT_FOUND, "這篇還沒有符號表").into_response();
+    };
+    let paper = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let Some(ws) = s.loaded.read().await.workspace.clone() else { return bad("no workspace") };
+    let glob = crate::notation::load_global(&ws);
+    let file = pc_core::paper::app_dir(&paper).join("notation.json");
+    let mut doc = lore_notation::Notation::load(&file).unwrap_or_default();
+    let out = register_into(&mut doc, &glob, &table, &b.ids);
+    if out["added"].as_array().is_some_and(|a| !a.is_empty()) {
+        if let Err(e) = doc.save(&file) {
+            return bad(&e);
+        }
+    }
+    Json(out).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,6 +670,42 @@ mod tests {
         assert_eq!((list[0].authors.as_str(), list[0].year.as_str()), ("Ellrin Lee and Daidai Wu", "2025"));
         // nothing was written into LoreReader's folder
         assert_eq!(std::fs::read_dir(lr.join("papers").join(SHA_A)).unwrap().count(), 4);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn symbols_and_equations_register_into_the_paper_only_with_lorereaders_ids() {
+        use lore_notation::{Entry, Kind, Notation};
+        let root = tmp("register");
+        let lr = reader_ws(&root);
+        let table = read_json(&lr.join("papers").join(SHA_A).join("symbols.json")).unwrap();
+        let mut t = table.clone();
+        t["equations"] = serde_json::json!([{ "id": "eq1", "kind": "equation", "latex": "y = w_{i} \\mathbf{x}", "uses": ["w", "x"], "scope": SHA_A, "page": 3, "number": "1" }]);
+        // the author's global registry already has \mathbf{x} under its own id, with a macro
+        let glob = Notation { entries: vec![Entry { id: "vx".into(), kind: Some(Kind::Symbol), latex: Some("\\mathbf{x}".into()), macro_name: Some("vx".into()), ..Default::default() }], ..Default::default() };
+        let glob_before = serde_json::to_string(&glob).unwrap();
+        // the paper already uses the id "w" for something else
+        let mut doc = Notation { entries: vec![Entry { id: "w".into(), kind: Some(Kind::Symbol), latex: Some("\\omega".into()), ..Default::default() }], ..Default::default() };
+        let out = register_into(&mut doc, &glob, &t, &["eq1".into()]);
+        assert_eq!(out["added"], serde_json::json!(["w-2", "eq1"]), "{out}");
+        assert_eq!(out["renamed"]["w"], "w-2");
+        assert_eq!(out["renamed"]["x"], "vx", "the global row stands for x");
+        let eq = doc.get("eq1").unwrap();
+        assert_eq!(eq.uses, ["w-2", "vx"]);
+        assert_eq!(eq.label.as_deref(), Some("eq:eq1"));
+        assert_eq!(out["use"]["eq1"]["label"], "eq:eq1");
+        assert_eq!(serde_json::to_string(&glob).unwrap(), glob_before, "the global registry is not written");
+        // a symbol on its own: the existing row (with its macro) is what goes in
+        let again = register_into(&mut doc, &glob, &t, &["x".into()]);
+        assert_eq!(again["added"], serde_json::json!([]));
+        assert_eq!(again["use"]["x"]["macro"], "vx");
+        // symbols() lists the equations too
+        let mut withq = table;
+        withq["equations"] = t["equations"].clone();
+        std::fs::write(lr.join("papers").join(SHA_A).join("symbols.json"), serde_json::to_vec(&withq).unwrap()).unwrap();
+        let s = symbols(&lr, SHA_A);
+        assert_eq!(s.last().unwrap()["kind"], "equation");
+        assert_eq!(s.last().unwrap()["number"], "1");
         let _ = std::fs::remove_dir_all(&root);
     }
 

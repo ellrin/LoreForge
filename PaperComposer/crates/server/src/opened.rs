@@ -279,6 +279,12 @@ async fn workspace_names(s: &Shared) -> Vec<String> {
     s.loaded.read().await.workspace.as_ref().map(|w| subdirs(&w.join("papers"))).unwrap_or_default()
 }
 
+/// 另存新檔 (shell.rs): register a copied folder as an opened paper; its id.
+pub(crate) async fn register(s: &Shared, dir: &Path) -> Result<String, String> {
+    let v = opened(s, dir, "latex", None).await?;
+    Ok(v["id"].as_str().unwrap_or_default().to_string())
+}
+
 /// Register an opened paper folder and give the page its id.
 async fn opened(s: &Shared, dir: &Path, kind: &str, source: Option<&Path>) -> Result<serde_json::Value, String> {
     if let Some(name) = workspace_name(s, dir).await {

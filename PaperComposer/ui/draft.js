@@ -43,15 +43,16 @@ const PCDraft = (() => {
   const lens = () => D.data.lens;
 
   async function open() {
-    if (!state.paper?.name) { flash("先開啟一篇論文"); return; }
+    if (!state.paper?.name) { LoreShell.toast("先開啟一篇論文"); return; }
     const d = $("#dlgDraft");
     if (!d.open) d.showModal();
     if (!D || D.name !== state.paper.name) D = { name: state.paper.name, data: null, step: null, group: null, busy: null, err: null };
     if (!D.tableStyles) { try { D.tableStyles = await api("/api/textable/styles"); } catch { D.tableStyles = []; } }
     $("#dfModel").value = store.get("pc.draftModel", "auto");
     $("#dfModel").onchange = (e) => store.set("pc.draftModel", e.target.value);
-    $("#dfRestart").onclick = () => {
-      if (!D?.data || D.busy || !confirm("重新開始？目前的討論會移到 draft/archive/。")) return;
+    $("#dfRestart").onclick = async (e) => {
+      if (!D?.data || D.busy) return;
+      if (!(await LoreShell.ask(e.currentTarget, ["重新開始？", "目前的討論會移到 draft/archive/。"], [{ label: "取消", value: null }, { label: "重新開始", value: true, danger: true, primary: true }]))) return;
       run("重新開始", async () => { const v = await call("/restart"); D.step = 0; D.group = null; D.comments = null; D.draftAnswer = null; return v; });
     };
     await reload();
@@ -91,7 +92,7 @@ const PCDraft = (() => {
 
   // ── references ───────────────────────────────────────
   const refOf = (key) => D.data.material?.refs.find((r) => r.key === key);
-  function openDoi(doi) { api("/api/open-link", { doi }).catch((e) => flash(e.message)); }
+  function openDoi(doi) { api("/api/open-link", { doi }).catch((e) => LoreShell.toast(e.message, { err: true })); }
   /** A reference as a chip: key, short title, DOI link when there is one. */
   function refChip(key) {
     const r = refOf(key);
@@ -143,8 +144,8 @@ const PCDraft = (() => {
       if (i < phaseAt) {
         const r = el("button", "df-rewind", "從這步重來");
         r.disabled = !!D.busy;
-        r.onclick = () => {
-          if (!confirm(`回到「${label}」？之後步驟的結果會清掉（先存一份在 draft/archive/）。`)) return;
+        r.onclick = async () => {
+          if (!(await LoreShell.ask(r, [`回到「${label}」？`, "之後步驟的結果會清掉（先存一份在 draft/archive/）。"], [{ label: "取消", value: null }, { label: "從這步重來", value: true, danger: true, primary: true }]))) return;
           run("重來", async () => { const v = await call("/rewind", { phase: k }); D.step = i; return v; });
         };
         li.append(r);
@@ -611,7 +612,7 @@ const PCDraft = (() => {
       const d = sess().drafts.find((x) => x.section === sec);
       const r = row(el("h4", "", `${sec}　${SEC_ZH[sec]}`), btn(d ? "重新生成" : "生成", () => run(`生成 ${sec}`, () => call("/compose", { section: sec, engine: chosenEngine() })), "ghost"));
       if (d?.engine) r.append(engineTag(d.engine));
-      if (d) r.append(btn("複製", () => { navigator.clipboard.writeText(d.paras.map((p) => p.text).join("\n\n")); flash("已複製"); }, "ghost"));
+      if (d) r.append(btn("複製", () => { navigator.clipboard.writeText(d.paras.map((p) => p.text).join("\n\n")); LoreShell.toast("已複製"); }, "ghost"));
       box.append(r);
       if (d?.new_symbols?.length) box.append(newSymbols(d.new_symbols));
       d?.paras.forEach((p) => {

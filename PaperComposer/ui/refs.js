@@ -36,12 +36,12 @@ const PCRefs = (() => {
 
   async function openPdf(r) {
     try { await api(`/api/refs/${encodeURIComponent(r.key)}/open`, {}); }
-    catch (e) { flash(e.message, 4000); }
+    catch (e) { LoreShell.toast(e.message, { err: true, ms: 4000 }); }
   }
 
   async function saveNote(r, body) {
     try { await api(`/api/refs/${encodeURIComponent(r.key)}`, body, "PUT"); Object.assign(r, body); refreshGit(); }
-    catch (e) { flash(e.message, 6000); }
+    catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   }
 
   // ── library page ──
@@ -286,8 +286,8 @@ const PCRefs = (() => {
     try { r = await api("/api/refs/propose", { ...body, engine: chosenEngine() }, "POST", { signal: wait.signal }); }
     catch (e) { r = PCWait.aborted(e) ? null : { error: e.message, ...body }; }
     finally { busy--; endWait(row, wait); }
-    if (!r) { flash("已停止"); return; }
-    if (r.exists) flash(`已在文獻庫：${r.exists}`);
+    if (!r) { LoreShell.toast("已停止"); return; }
+    if (r.exists) LoreShell.toast(`已在文獻庫：${r.exists}`);
     else queue.push(r);
     drawQueue();
   }
@@ -346,10 +346,10 @@ const PCRefs = (() => {
       try {
         const r = await api("/api/refs/add", { bibtex: q.bibtex, summary: sum.value.trim(), one_liner: one.value.trim(), tags: [...chosen], pdf: q.pdf });
         drop();
-        flash(`已加入 ${r.key}`);
+        LoreShell.toast(`已加入 ${r.key}`);
         refreshGit();
         renderPage();
-      } catch (e) { flash(e.message, 6000); }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
     };
     const foot = el("div", "row-end");
     if (q.title_mismatch) {
@@ -441,11 +441,11 @@ const PCRefs = (() => {
       go.onclick = async () => {
         try {
           const r = await api("/api/refs/import", { bibtex: ta.value });
-          flash(`加入 ${r.added.length} 篇${r.skipped.length ? `，略過重複 ${r.skipped.length} 篇` : ""}${r.errors.length ? `，${r.errors.length} 筆格式錯誤` : ""}`, 5000);
+          LoreShell.toast(`加入 ${r.added.length} 篇${r.skipped.length ? `，略過重複 ${r.skipped.length} 篇` : ""}${r.errors.length ? `，${r.errors.length} 筆格式錯誤` : ""}`, { ms: 5000 });
           p.remove();
           renderPage();
           refreshGit();
-        } catch (e) { flash(e.message, 6000); }
+        } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
       };
       const row2 = el("div", "row-end");
       row2.append(file, go);
@@ -460,8 +460,8 @@ const PCRefs = (() => {
       input.placeholder = "/Users/you/Papers";
       const go = el("button", "primary small", "儲存");
       go.onclick = async () => {
-        try { await api("/api/settings/pdf-dir", { path: input.value }); flash("已設定"); p.remove(); renderPage(); }
-        catch (e) { flash(e.message, 6000); }
+        try { await api("/api/settings/pdf-dir", { path: input.value }); LoreShell.toast("已設定"); p.remove(); renderPage(); }
+        catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
       };
       const row2 = el("div", "row-end");
       row2.append(input, go);
@@ -506,7 +506,7 @@ const PCRefs = (() => {
   /** `given` ({ si, pi, nonWs, vet?, done? }, context.js): insert there instead of
    *  at the caret; vet(before, after) may stop it, done(before, after) follows. */
   async function picker(anchor, given) {
-    if (!state.paper || !curSection()) return flash("先開啟一篇論文");
+    if (!state.paper || !curSection()) return LoreShell.toast("先開啟一篇論文");
     const at = given ?? target();
     if (at.ta) at.ta.blur(); // save the paragraph being edited first
     await load();
@@ -555,13 +555,13 @@ const PCRefs = (() => {
         if (at.vet && !(await at.vet(was ?? "", now))) return;
         if (was == null) sec.paragraphs.push(now);
         else sec.paragraphs[at.pi] = now;
-        try { await saveSection(at.si); } catch (e) { flash(`儲存失敗：${e.message}`); return; }
+        try { await saveSection(at.si); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true }); return; }
         const name = encodeURIComponent(state.paper.name);
         if (purpose.value.trim()) for (const k of keys) await api(`/api/papers/${name}/citations`, { key: k, purpose: purpose.value.trim() }).catch(() => {});
         try {
           const r = await api(`/api/papers/${name}/bib`, {});
-          if (r.missing.length) flash(`文獻庫裡沒有：${r.missing.join(", ")}`, 6000);
-        } catch (e) { flash(e.message, 6000); }
+          if (r.missing.length) LoreShell.toast(`文獻庫裡沒有：${r.missing.join(", ")}`, { ms: 6000 });
+        } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
         refreshSection(at.si);
         refreshGit();
         at.done?.(was ?? "", now);
@@ -630,11 +630,11 @@ const PCRefs = (() => {
           const row = el("div", "hit-row");
           const main = el("span", "c-main");
           const t = el("b", "link", c.title);
-          t.onclick = () => api("/api/open-link", { doi: c.doi }).catch((e) => flash(e.message));
+          t.onclick = () => api("/api/open-link", { doi: c.doi }).catch((e) => LoreShell.toast(e.message, { err: true }));
           main.append(t, el("span", "meta", [c.authors, c.year, c.venue, `cited ${c.cited_by}`].filter(Boolean).join(" · ")));
           if (c.reason) main.append(el("span", "why", c.reason));
           const side = el("span", "c-side");
-          if (c.oa_url) side.append(iconButton("pdf", "開啟免費 PDF", () => api("/api/open-link", { url: c.oa_url }).catch((e) => flash(e.message))));
+          if (c.oa_url) side.append(iconButton("pdf", "開啟免費 PDF", () => api("/api/open-link", { url: c.oa_url }).catch((e) => LoreShell.toast(e.message, { err: true }))));
           const add = el("button", "ghost", c.in_library ? "已在文獻庫" : "加入");
           const pick = (key) => { chosen.add(key); go.textContent = `插入 ${chosen.size}`; add.textContent = "✓ 已選"; add.disabled = true; };
           add.onclick = async () => {
@@ -649,7 +649,7 @@ const PCRefs = (() => {
               await load();
               refreshGit();
               pick(r.key);
-            } catch (e) { flash(e.message, 6000); add.disabled = false; add.textContent = "加入"; }
+            } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); add.disabled = false; add.textContent = "加入"; }
           };
           side.append(add);
           row.append(main, side);
@@ -699,7 +699,7 @@ const PCRefs = (() => {
       purpose.value = c.purposes[key] ?? "";
       purpose.onchange = async () => {
         try { await api(`/api/papers/${name}/citations`, { key, purpose: purpose.value }); refreshGit(); }
-        catch (e) { flash(e.message, 5000); }
+        catch (e) { LoreShell.toast(e.message, { err: true, ms: 5000 }); }
       };
       main.append(purpose);
       li.append(main);

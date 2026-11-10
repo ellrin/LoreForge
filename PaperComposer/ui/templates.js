@@ -254,7 +254,7 @@ const PCTemplates = (() => {
 
   async function open(select) {
     kind ??= store.get("pc.tplKind", "journal");
-    try { list = await api("/api/templates"); } catch (e) { list = []; flash(e.message, 5000); }
+    try { list = await api("/api/templates"); } catch (e) { list = []; LoreShell.toast(e.message, { err: true, ms: 5000 }); }
     const picked = select && list.find((j) => j.id === select);
     if (picked) { current = picked.id; kind = kindOf(picked); store.set("pc.tplKind", kind); store.set("pc.template", picked.id); }
     if (current && !list.some((j) => j.id === current)) current = null;
@@ -341,7 +341,7 @@ const PCTemplates = (() => {
     const head = el("div", "tpl-head");
     head.append(el("h3", "", j.name));
     if (j.url) {
-      const go = iconButton("external", "作者須知", () => api("/api/open-link", { url: j.url }).catch((e) => flash(e.message)));
+      const go = iconButton("external", "作者須知", () => api("/api/open-link", { url: j.url }).catch((e) => LoreShell.toast(e.message, { err: true })));
       head.append(go);
     }
     const sub = el("div", "tpl-sub", [`publishers/${j.id}`, j.based_on ? `衍生自 ${j.based_on}` : ""].filter(Boolean).join(" · "));
@@ -371,11 +371,11 @@ const PCTemplates = (() => {
           class_options: opts.value, bib_style: style.value, ...rules.value(),
         }, "PUT");
         Object.assign(j, r);
-        flash("已儲存模板");
+        LoreShell.toast("已儲存模板");
         await refreshWorkspace();
         draw();
         refreshGit();
-      } catch (e) { flash(e.message, 6000); }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
       save.disabled = false;
     };
     const check = el("button", "ghost", "試編譯");
@@ -441,7 +441,7 @@ const PCTemplates = (() => {
         await refreshWorkspace();
         await open();
         refreshGit();
-      } catch (e) { flash(e.message, 6000); go.disabled = false; }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); go.disabled = false; }
     };
     const acts = el("div", "tpl-actions");
     acts.append(go);
@@ -454,7 +454,7 @@ const PCTemplates = (() => {
     const main = $("#tplMain");
     let text;
     try { text = await fetch(`/api/templates/${encodeURIComponent(j.id)}/sample`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("讀取失敗")))); }
-    catch (e) { flash(e.message); return; }
+    catch (e) { LoreShell.toast(e.message, { err: true }); return; }
     main.innerHTML = "";
     const head = el("div", "tpl-head");
     head.append(el("h3", "", `${j.name} · sample.tex`));
@@ -463,8 +463,8 @@ const PCTemplates = (() => {
     ta.spellcheck = false;
     const save = el("button", "primary small", "儲存");
     save.onclick = async () => {
-      try { await api(`/api/templates/${encodeURIComponent(j.id)}/sample`, { text: ta.value }, "PUT"); flash("已儲存範本"); await open(); refreshGit(); }
-      catch (e) { flash(e.message, 6000); }
+      try { await api(`/api/templates/${encodeURIComponent(j.id)}/sample`, { text: ta.value }, "PUT"); LoreShell.toast("已儲存範本"); await open(); refreshGit(); }
+      catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
     };
     const back = el("button", "ghost", "取消");
     back.onclick = detail;
@@ -483,7 +483,7 @@ const PCTemplates = (() => {
         await api("/api/papers", { name: n.value.trim(), template: j.id });
         $("#dlgTpl").close();
         await opened(n.value.trim());
-      } catch (e) { flash(e.message, 6000); }
+      } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
     };
     go.onclick = make;
     n.onkeydown = (e) => { if (e.key === "Enter") make(); };

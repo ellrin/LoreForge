@@ -18,6 +18,7 @@ mod home;
 mod notation;
 mod newtemplate; // templates.js: 新增期刊 from a LaTeX kit or a Word sample, rules from the guidelines
 mod sections;
+mod shell; // the shared Lore shell: its files, 列印, 另存新檔
 pub mod export;
 pub mod import;
 pub mod opened;
@@ -3303,6 +3304,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/reader/papers/{sha}/cite", post(reader::cite))
         .route("/api/reader/open", post(reader::open))
         .route("/api/reader/paraphrase", post(reader::paraphrase))
+        .route("/api/papers/{name}/reader/notation", post(reader::register)) // reader.js: 插入 a symbol or equation
         .route("/api/settings/pdf-dir", post(set_pdf_dir))
         .route("/api/papers/{name}/sections/{file}", put(put_section))
         .route("/api/papers/{name}/notation/check", post(notation_check)) // find.js
@@ -3333,7 +3335,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/textable/new", post(table_new))
         .route("/api/check/soft", post(soft_check))
         .route("/api/engine", get(engine_status))
-        .route("/api/engines", get(engines_status))
+        .route("/api/pc/engines", get(engines_status)) // setup.js, the 寫作 engine switch; /api/engines is the shared contract (docs/shell.md)
         .route("/api/engines/test", post(test_engine))
         .route("/api/claude-code/login", post(claude_code_login))
         .route("/api/compose", post(compose_paragraph))
@@ -3342,6 +3344,7 @@ pub fn router(paths: Paths) -> Router {
         .merge(sections::routes())
         .merge(opened::routes())
         .merge(notation::routes())
+        .merge(shell::routes())
         // the UI is read fresh each time: a new server must not meet an old script
         .fallback_service(Router::new().fallback_service(ServeDir::new(paths.ui)).layer(axum::middleware::map_response(no_cache)))
         .with_state(state)

@@ -119,14 +119,14 @@ const PCTable = (() => {
     if (!pkgs?.length || !state.paper) return;
     try {
       const r = await api(`/api/papers/${encodeURIComponent(state.paper.name)}/packages`, { packages: pkgs });
-      if (r.added.length) flash(`main.tex 已加入 ${r.added.map((p) => `\\usepackage{${p}}`).join(" ")}`, 5000);
-    } catch (e) { flash(e.message, 6000); }
+      if (r.added.length) LoreShell.toast(`main.tex 已加入 ${r.added.map((p) => `\\usepackage{${p}}`).join(" ")}`, { ms: 5000 });
+    } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   }
 
   async function restyle(box, st) {
     let r;
     try { r = await api("/api/textable/apply", { table: box.t, style: st.id }); }
-    catch (e) { flash(e.message, 6000); return; }
+    catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); return; }
     await change(box, (t) => { Object.keys(t).forEach((k) => delete t[k]); Object.assign(t, r.table); });
     needPackages(r.packages);
   }
@@ -136,11 +136,11 @@ const PCTable = (() => {
    *  returning { si, pi, text, table, after? } or null to stop. */
   async function insertNew(anchor, place) {
     const sec = curSection();
-    if (!sec) return flash("先開啟一篇論文");
+    if (!sec) return LoreShell.toast("先開啟一篇論文");
     gallery(anchor, store.get("pc.tableStyle", "booktabs"), async (st) => {
       store.set("pc.tableStyle", st.id);
       let r;
-      try { r = await api("/api/textable/new", { style: st.id }); } catch (e) { flash(e.message, 6000); return; }
+      try { r = await api("/api/textable/new", { style: st.id }); } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); return; }
       if (place) {
         const done = await place(r);
         if (!done) return;
@@ -157,7 +157,7 @@ const PCTable = (() => {
       const at = sec.paragraphs.length ? state.cur.p + 1 : 0;
       sec.paragraphs.splice(at, 0, r.text);
       cache.set(r.text, { table: r.table });
-      try { await saveSection(si); } catch (e) { flash(`儲存失敗：${e.message}`); return; }
+      try { await saveSection(si); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true }); return; }
       await needPackages(r.packages);
       focusNext = { si, pi: at };
       state.cur = { s: si, p: at };
@@ -416,10 +416,10 @@ const PCTable = (() => {
   async function save(box) {
     let text;
     try { text = (await api("/api/textable/render", box.t)).text; }
-    catch (e) { flash(`表格無法寫回：${e.message}`, 6000); return; }
+    catch (e) { LoreShell.toast(`表格無法寫回：${e.message}`, { err: true, ms: 6000 }); return; }
     cache.set(text, { table: clone(box.t) });
     sections()[box.si].paragraphs[box.pi] = text;
-    try { await saveSection(box.si); } catch (e) { flash(`儲存失敗：${e.message}`); }
+    try { await saveSection(box.si); } catch (e) { LoreShell.toast(`儲存失敗：${e.message}`, { err: true }); }
     refreshGit();
   }
 
@@ -451,7 +451,7 @@ const PCTable = (() => {
 
   function deleteRows(t, r0, r1) {
     const n = r1 - r0 + 1;
-    if (n >= t.rows.length) return flash("至少要留一列");
+    if (n >= t.rows.length) return LoreShell.toast("至少要留一列");
     t.cols.forEach((_, c) => {
       for (let r = 0; r < t.rows.length; r++) {
         const x = t.rows[r][c];
@@ -490,7 +490,7 @@ const PCTable = (() => {
 
   function deleteCols(t, c0, c1) {
     const n = c1 - c0 + 1;
-    if (n >= t.cols.length) return flash("至少要留一欄");
+    if (n >= t.cols.length) return LoreShell.toast("至少要留一欄");
     t.rows.forEach((row) => {
       for (let c = 0; c < row.length; c++) {
         const x = row[c];
@@ -535,7 +535,7 @@ const PCTable = (() => {
 
   function merge(t, s) {
     const { r0, r1, c0, c1 } = snap(t, s);
-    if (r0 === r1 && c0 === c1) return flash("先拖曳選取要合併的格子");
+    if (r0 === r1 && c0 === c1) return LoreShell.toast("先拖曳選取要合併的格子");
     const texts = [];
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
       const x = t.rows[r][c];
@@ -555,7 +555,7 @@ const PCTable = (() => {
       for (let rr = r; rr < r + x.rowspan; rr++) for (let cc = c; cc < c + x.colspan; cc++) t.rows[rr][cc] = blank();
       t.rows[r][c] = { ...blank(), text: x.text };
     }
-    if (!any) flash("選取的格子沒有合併");
+    if (!any) LoreShell.toast("選取的格子沒有合併");
   }
 
   // Toggle a rule at boundary b across the selected columns.

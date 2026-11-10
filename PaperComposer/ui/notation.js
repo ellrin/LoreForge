@@ -101,7 +101,7 @@ const PCNotation = (() => {
         stateEl.textContent = "已儲存";
       } catch (e) {
         stateEl.textContent = "儲存失敗";
-        flash(e.message, 5000);
+        LoreShell.toast(e.message, { err: true, ms: 5000 });
       }
     }, 500);
   }
@@ -111,7 +111,7 @@ const PCNotation = (() => {
     const { file, para } = e.detail ?? {};
     const secs = state.paper?.sections ?? [];
     const si = secs.findIndex((s) => file === s.file || file === `sections/${s.file}` || file?.endsWith(`/${s.file}`));
-    if (si < 0) return flash("這個位置不在正文裡");
+    if (si < 0) return LoreShell.toast("這個位置不在正文裡");
     const pi = Math.max(0, Math.min(para ?? 0, (secs[si].paragraphs?.length ?? 1) - 1));
     dlg.close();
     select(si, pi);
@@ -150,32 +150,23 @@ const PCNotation = (() => {
   }
 
   async function open(target) {
-    if (!state.paper) return flash("先開啟一篇論文");
+    if (!state.paper) return LoreShell.toast("先開啟一篇論文");
     try {
       await assets();
       build();
       show(await api(base()));
     } catch (e) {
-      return flash(e.message, 5000);
+      return LoreShell.toast(e.message, { err: true, ms: 5000 });
     }
     stateEl.hidden = true;
     if (!dlg.open) dlg.showModal();
     if (target && typeof target === "object" && target.tab) panel.showTab(target.tab);
     const hit = find(target);
     if (hit) panel.select(hit.id);
-    else if (target && typeof target === "string") flash(`對照表沒有 ${target}`);
+    else if (target && typeof target === "string") LoreShell.toast(`對照表沒有 ${target}`);
   }
 
   function init() {
-    const b = el("button", "ico");
-    b.id = "actNotation";
-    b.dataset.icon = "book";
-    b.setAttribute("aria-label", "對照表");
-    b.onclick = () => open();
-    const anchor = document.querySelector("#actDraft");
-    if (anchor) anchor.after(b);
-    else document.querySelector(".paper-bar")?.append(b);
-    paintIcons(b.parentElement);
     document.addEventListener("click", (e) => {
       const t = e.target.closest?.("[data-notation]");
       if (!t) return;
