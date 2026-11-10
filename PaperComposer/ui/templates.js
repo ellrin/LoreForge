@@ -122,7 +122,7 @@ const PCTemplates = (() => {
     node.lastChild.append(
       block("引用", refHead, grid, sample),
       block("圖表說明", caps),
-      block("篇幅", pageRow),
+      // 篇幅 ([limits]) stays out of sight until something uses it; its values still round-trip
       block("字數上限", wordRow, secs, more),
     );
     paint();

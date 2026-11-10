@@ -1386,3 +1386,9 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .ctx-fig .ctx-file svg.i { width: 14px; height: 14px; }
 .ctx-fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--mono); color: var(--muted); }
 .ctx-fig .search { flex: 1; }
+
+/* the notation question before an insertion (context.js) */
+.menu.ctx-ask { position: fixed; z-index: 60; width: min(420px, calc(100vw - 16px)); padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+.ctx-ask-msg { display: flex; flex-direction: column; gap: 4px; color: var(--warn); overflow-wrap: anywhere; }
+.ctx-ask-acts { display: flex; justify-content: flex-end; gap: 6px; }
+.menu.ctx-ask .ctx-ask-acts button { flex: none; width: auto; white-space: nowrap; }

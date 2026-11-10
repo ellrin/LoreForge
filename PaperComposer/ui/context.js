@@ -246,19 +246,50 @@ const PCContext = (() => {
   }
 
   /** The notation registry's checks on what changes; true when it may go ahead. */
-  async function vet(before, after) {
+  /** A question beside the paragraph, in the app's own look: true = 仍要插入. Esc / outside = 取消. */
+  function ask(at, lines) {
+    return new Promise((resolve) => {
+      const box = el("div", "menu ctx-ask");
+      box.setAttribute("role", "alertdialog");
+      const msg = el("div", "ctx-ask-msg");
+      lines.slice(0, 6).forEach((l) => msg.append(el("div", "", l)));
+      const acts = el("div", "ctx-ask-acts");
+      const no = el("button", "ghost", "取消"), yes = el("button", "primary small", "仍要插入");
+      acts.append(no, yes);
+      box.append(msg, acts);
+      document.body.append(box);
+      const r = (paraEl(at.si, at.pi) ?? $("#paper")).getBoundingClientRect();
+      box.style.left = `${Math.max(8, Math.min(r.left, innerWidth - box.offsetWidth - 8))}px`;
+      box.style.top = `${Math.max(8, Math.min(r.bottom + 6, innerHeight - box.offsetHeight - 8))}px`;
+      const done = (v) => {
+        box.remove();
+        document.removeEventListener("keydown", key, true);
+        document.removeEventListener("mousedown", outside, true);
+        resolve(v);
+      };
+      const key = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); } };
+      const outside = (e) => { if (!box.contains(e.target)) done(false); };
+      document.addEventListener("keydown", key, true);
+      document.addEventListener("mousedown", outside, true);
+      no.onclick = () => done(false);
+      yes.onclick = () => done(true);
+      yes.focus();
+    });
+  }
+
+  async function vet(before, after, at) {
     let r;
     try { r = await api(`${base()}/notation/check`, { before, texts: after, find: "" }); }
-    catch (e) { return confirm(`對照表檢查失敗：${e.message}\n\n仍要插入？`); }
+    catch (e) { return ask(at, [`對照表檢查失敗：${e.message}`]); }
     const lines = [...(r.blocking ?? []), ...(r.shown ?? []), ...(r.new_symbols?.length ? [`對照表沒有的符號：${r.new_symbols.join("、")}`] : [])];
-    if (r.blocking?.length) return confirm(`${lines.slice(0, 6).join("\n")}\n\n仍要插入？`);
+    if (r.blocking?.length) return ask(at, lines);
     if (lines.length) flash(lines.slice(0, 3).join("　"), 6000);
     return true;
   }
 
   /** Put `now` in place of the clicked paragraph (and `block` after it), checked and saved. */
   async function commit(at, was, now, block) {
-    if (!(await vet([was], block ? [now, block] : [now]))) return false;
+    if (!(await vet([was], block ? [now, block] : [now], at))) return false;
     const sec = sections()[at.si];
     sec.paragraphs[at.pi] = now;
     if (block != null) sec.paragraphs.splice(at.pi + 1, 0, block);
@@ -299,7 +330,7 @@ const PCContext = (() => {
   function cite(at) {
     PCRefs.picker(marker, {
       si: at.si, pi: at.pi, nonWs: at.nonWs,
-      vet: async (was, now) => (fresh(at) != null) && vet([was], [now]),
+      vet: async (was, now) => (fresh(at) != null) && vet([was], [now], at),
       done: (was) => { land(at, was); unmark(); },
     });
     keepMarker();
@@ -532,13 +563,13 @@ const PCContext = (() => {
     if (at.nonWs != null) {
       add("quote", "引用文獻…", () => { settle().then(() => cite(at)); });
       // the list opens where the menu was, from this item down
-      add("ref", "參照圖表", (b) => {
+      add("ref", "參照圖表…", (b) => {
         const r = b.getBoundingClientRect(), a = el("div", "ctx-anchor");
         Object.assign(a.style, { left: `${r.left}px`, top: `${r.top - 6}px` });
         document.body.append(a);
         reference(at, a);
         a.remove();
-      }, "sub");
+      });
     }
     add("image", "新增圖…", () => { figure(at); });
     add("tableStyle", "新增表…", () => { table(at); });

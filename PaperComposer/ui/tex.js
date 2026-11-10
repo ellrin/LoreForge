@@ -535,7 +535,8 @@ window.PCTex = (() => {
     const lab = body.match(/\\label\{([^}]*)\}/g)?.pop()?.slice(7, -1);
     const k = kind === "fig" ? "fig" : kind;
     const c = el(kind === "tab" ? "div" : "figcaption", "caption");
-    const b = el("b", "", `${kind === "tab" ? "Table" : kind === "alg" ? "Algorithm" : "Fig."} `);
+    // the journal's word when set (the PDF's own label is still the class's)
+    const b = el("b", "", `${refWord(kind === "tab" ? "tab" : kind === "alg" ? "alg" : "fig", false, REF_PREFIX)} `);
     b.append(numNode(k, lab, next(k, lab)));
     c.append(b, ". ");
     c.append(render(cap));

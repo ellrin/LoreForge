@@ -204,7 +204,13 @@ const PCWrite = (() => {
       const q = el("input", "search");
       q.placeholder = "搜尋圖、表、式、章節";
       const list = el("div", "ref-pick");
-      const NAME = { fig: "Fig.", tab: "Table", eq: "式", sec: "Section", alg: "Algorithm", thm: "Theorem" };
+      const NAME = { fig: "Fig.", tab: "Table", eq: "", sec: "Section", alg: "Algorithm", thm: "Theorem" };
+      // each row reads as the reference will read in the text (the journal's word; equations as (1))
+      const label = (k) => {
+        const kind = kinds[k], n = labels[k];
+        const w = (PCTex.refWord?.(kind, false, NAME) ?? NAME[kind] ?? "").trim();
+        return (kind === "eq" ? `${w} (${n})` : `${w} ${n}`).trim();
+      };
       const choose = (k) => {
         p.remove();
         if (pick) return pick(kinds[k], k);
@@ -214,7 +220,7 @@ const PCWrite = (() => {
         list.innerHTML = "";
         const f = q.value.trim().toLowerCase();
         keys.forEach((k) => {
-          const what = `${NAME[kinds[k]] ?? ""} ${labels[k]}`.trim();
+          const what = label(k);
           const [cap, tex] = texts[k] ?? ["", false];
           if (f && ![k, what, cap].some((x) => x.toLowerCase().includes(f))) return;
           const b = el("button");
