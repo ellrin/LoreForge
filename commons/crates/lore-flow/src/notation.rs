@@ -189,6 +189,11 @@ pub fn check_graph(g: &mut Graph, notation: &Notation) -> NotationReport {
         if !n.var.is_empty() && !vars.ids.contains_key(&n.var) {
             add("unknown_ref", format!("variable {:?} is neither in the notation table nor in vars_new", n.var), Some(&n.id));
         }
+        if let Some(w) = n.str("finish")
+            && let Err(e) = crate::finish::Finish::of(&Node::default(), &crate::theme::Theme::classic_bw()).apply(w)
+        {
+            add("finish_word", e, Some(&n.id));
+        }
         if n.module == "loss" {
             let math = text::math_of(&vars.resolve(&n.label));
             if !math.is_empty() && !math.iter().any(|m| m.contains("\\mathcal")) {

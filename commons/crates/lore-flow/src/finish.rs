@@ -76,7 +76,7 @@ impl Finish {
     }
 
     /// The finish of a node: theme, then its kind, then the node itself.
-    /// Words that do not parse are ignored here (`notation::lint` reports them).
+    /// Words that do not parse are skipped here; `notation::check_graph` reports them (`finish_word`).
     pub fn of(n: &Node, theme: &Theme) -> Finish {
         let r = theme.role(n.role_or_default());
         let m = theme.modules.get(&n.module);

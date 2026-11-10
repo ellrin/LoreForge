@@ -1209,3 +1209,32 @@ fn the_preview_draws_every_object() {
     assert!(svg.contains("ℒ"), "math is drawn as text");
     assert!(!svg.contains("NaN"));
 }
+
+#[test]
+fn layer_bars_and_blocks_join_the_colour_legend() {
+    let t = Theme::from_toml("[colors]\ncycle = [\"D46A8C\", \"7B4FA0\", \"2E75B6\"]\n[layers.gated]\ncolor = \"BDD7EE\"\nlabel = \"Gated convolution\"\n[layers.dilated]\ncolor = \"F4B183\"\nlabel = \"Dilated gated convolution\"\n").unwrap();
+    // a kind of layer has one colour in every module of the figure
+    let g = dsl::parse("fig b\na: layer-bars layers=[Conv,MBConv,MBConv]\nb: layer-bars layers=[Dense,Conv]\na -> b\n").unwrap();
+    let f = draw(&g, &Drawing { theme: t.clone(), ..Default::default() }).unwrap();
+    let line = |n: &str| find(&f, n).kind.sp().unwrap().line.as_ref().unwrap().color.clone();
+    assert_eq!(line("flow:b/a/bar0"), line("flow:b/b/bar1"), "Conv is the same colour in both");
+    let labels: Vec<&str> = f.layout.swatches.iter().map(|s| s.swatch.label.as_str()).collect();
+    assert_eq!(labels, ["Conv", "MBConv", "Dense"]);
+    // in black and white the bars are all black: no colour legend
+    assert!(fig(&g).layout.swatches.is_empty());
+    // 3-D blocks name their types through the theme
+    let g = dsl::parse("fig c\ng: cuboid-seq n=3 classes=[gated,dilated,gated]\n").unwrap();
+    let f = draw(&g, &Drawing { theme: t, ..Default::default() }).unwrap();
+    assert_eq!(find(&f, "flow:c/g/b1-front").kind.sp().unwrap().fill, lore_canvas::Paint::solid("F4B183"));
+    let labels: Vec<&str> = f.layout.swatches.iter().map(|s| s.swatch.label.as_str()).collect();
+    assert_eq!(labels, ["Gated convolution", "Dilated gated convolution"]);
+}
+
+#[test]
+fn a_mistyped_finish_is_reported() {
+    let mut g = dsl::parse("fig t\ne: encoder \"E\" style=bars finish=outlin\n").unwrap();
+    let rep = lore_flow::notation::check_graph(&mut g, &lore_notation::Notation::default());
+    assert_eq!(rep.by_code("finish_word").len(), 1);
+    // and the drawing still comes out, in the theme's finish
+    assert!(fig(&g).objects().iter().any(|o| o.name == "flow:t/e"));
+}

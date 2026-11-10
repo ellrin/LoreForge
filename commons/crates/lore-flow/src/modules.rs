@@ -617,18 +617,6 @@ fn gen_op(n: &Node, cx: &Ctx) -> Core {
             cx.put_text(&mut o, &sym, &ty, false);
             Core { w, h: d, objs: vec![o], single: true, label: LabelPos::Drawn, ..Default::default() }
         }
-        "glyph" if matches!(sym.as_str(), "+" | "×") => {
-            // the circle and its cross drawn as lines (⊕, ⊗), no text
-            let ring = shape("ring", "ellipse", 0.0, 0.0, d, d, fill, line);
-            let st = Stroke::new(&f.line, f.lw * cx.k);
-            let r = d / 2.0;
-            let (a, b) = if sym == "+" { (((r, 0.0), (r, d)), ((0.0, r), (d, r))) } else {
-                let q = r * std::f64::consts::FRAC_1_SQRT_2;
-                (((r - q, r - q), (r + q, r + q)), ((r - q, r + q), (r + q, r - q)))
-            };
-            let objs = vec![ring, seg("bar1", a.0, a.1, st.clone()), seg("bar2", b.0, b.1, st)];
-            Core { w: d, h: d, objs, label: LabelPos::Drawn, ..Default::default() }
-        }
         _ => {
             let mut o = shape("", "ellipse", 0.0, 0.0, w, d, fill, line);
             cx.put_text(&mut o, &sym, &ty, false);
@@ -1000,7 +988,7 @@ fn gen_matrix(n: &Node, cx: &Ctx) -> Core {
 }
 
 /// The kind of a layer: its name without index, subscripts or math.
-fn layer_class(name: &str) -> String {
+pub(crate) fn layer_class(name: &str) -> String {
     let p = text::plain(name);
     let s: String = p.chars().take_while(|c| c.is_alphabetic() || *c == ' ').collect();
     let s = s.trim();
@@ -1020,7 +1008,10 @@ fn gen_layer_bars(n: &Node, cx: &Ctx) -> Core {
     let full = n.num("bar_h").map(|v| cx.s(v)).unwrap_or((longest + cx.s(12.0)).max(cx.s(52.0)));
     let taper = n.flag("taper");
     let solid = n.flag("solid");
-    let mut classes: Vec<String> = Vec::new();
+    // the figure's classes in order (draw() hands them in), so a kind of layer has one colour everywhere
+    let mut classes: Vec<String> = n.list("_classes");
+    let mut legend = Vec::new();
+    let typed = crate::finish::Finish::of(n, cx.theme).typed && cx.theme.colors.cycle.len() > 1;
     let mut objs = Vec::new();
     let count = layers.len();
     for (i, name) in layers.iter().enumerate() {
@@ -1030,6 +1021,9 @@ fn gen_layer_bars(n: &Node, cx: &Ctx) -> Core {
             classes.len() - 1
         });
         let colour = cx.theme.cycle(ci).to_string();
+        if typed && !legend.iter().any(|s: &crate::art::Swatch| s.key == format!("bars:{cls}")) {
+            legend.push(crate::art::Swatch { key: format!("bars:{cls}"), label: cls.clone(), color: colour.clone() });
+        }
         // tapering keeps room for the name
         let h = if taper { (full * (1.0 - 0.4 * i as f64 / (count.max(2) - 1) as f64)).max(text::width(&cx.vars.resolve(name), ty.size) + cx.s(6.0)) } else { full };
         let x = i as f64 * (bw + gap);
@@ -1038,7 +1032,7 @@ fn gen_layer_bars(n: &Node, cx: &Ctx) -> Core {
         cx.put_text(&mut o, name, &ty, true);
         objs.push(o);
     }
-    Core { w: count as f64 * (bw + gap) - gap, h: full, objs, single: false, ellipse: false, label: LabelPos::Above, ..Default::default() }
+    Core { w: count as f64 * (bw + gap) - gap, h: full, objs, single: false, ellipse: false, label: LabelPos::Above, legend, ..Default::default() }
 }
 
 /// Block sizes (thickness, height, depth) of a cuboid sequence.
@@ -1076,6 +1070,9 @@ fn gen_cuboid_seq(n: &Node, cx: &Ctx) -> Core {
     let dims = cuboid_dims(n);
     let fill = hex_param(n, "fill").unwrap_or_else(|| cx.theme.colors.tensor.clone());
     let fills = n.list("fills");
+    // classes=[conv,pool,…]: each block takes its layer type's colour and name from the theme
+    let classes = n.list("classes");
+    let mut legend: Vec<crate::art::Swatch> = Vec::new();
     let line = hex_param(n, "line").unwrap_or_else(|| cx.theme.colors.ink.clone());
     let alpha = n.num("alpha").unwrap_or(1.0);
     let lw = 0.5 * cx.k;
@@ -1094,7 +1091,13 @@ fn gen_cuboid_seq(n: &Node, cx: &Ctx) -> Core {
         let (t, h, dep) = (cx.s(d[0]), cx.s(d[1]), cx.s(d[2]));
         let (dx, dy) = (dep * ox, dep * oy);
         let y = mid - h / 2.0;
-        let c = fills.get(i).map(|f| f.trim_start_matches('#').to_uppercase()).filter(|f| f.len() == 6).unwrap_or_else(|| fill.clone());
+        let mut c = fills.get(i).map(|f| f.trim_start_matches('#').to_uppercase()).filter(|f| f.len() == 6).unwrap_or_else(|| fill.clone());
+        if let Some(key) = classes.get(i).filter(|k| !k.is_empty()) {
+            c = cx.theme.layer(key).to_string();
+            if !legend.iter().any(|s| s.key == *key) {
+                legend.push(crate::art::Swatch { key: key.clone(), label: cx.theme.layer_label(key), color: c.clone() });
+            }
+        }
         objs.push(poly(&format!("b{i}-top"), &[(x, y), (x + dx, y - dy), (x + t + dx, y - dy), (x + t, y)], true, paint(&shade(&c, cx.theme.shade.top), alpha), stroke(&line, lw)));
         objs.push(poly(&format!("b{i}-side"), &[(x + t, y), (x + t + dx, y - dy), (x + t + dx, y + h - dy), (x + t, y + h)], true, paint(&shade(&c, cx.theme.shade.side), alpha), stroke(&line, lw)));
         objs.push(shape(&format!("b{i}-front"), "rect", x, y, t, h, paint(&c, alpha), stroke(&line, lw)));
@@ -1112,7 +1115,7 @@ fn gen_cuboid_seq(n: &Node, cx: &Ctx) -> Core {
     for o in &mut objs {
         o.frame.y += emu(half - mid);
     }
-    Core { w, h: 2.0 * half, objs, single: false, ellipse: false, label: LabelPos::Above, ..Default::default() }
+    Core { w, h: 2.0 * half, objs, single: false, ellipse: false, label: LabelPos::Above, legend, ..Default::default() }
 }
 
 fn gen_unet(n: &Node, cx: &Ctx) -> Core {
@@ -1187,11 +1190,11 @@ fn unet_lineart(n: &Node, cx: &Ctx) -> Core {
 pub fn generator_styles(kind: &str) -> &'static [&'static str] {
     match kind {
         "encoder" | "decoder" | "autoencoder" | "nn" => crate::art::styles(kind),
-        "brace" => &["curly", "bracket", "paren", "angle", "dimension", "span"],
+        "brace" => &["curly", "bracket", "paren", "angle", "dimension"],
         "feature-stack" => &["offset", "3d", "cube", "grid", "row"],
         "image-stack" => &["stack", "film", "mosaic", "row"],
         "loss" => &["plain", "box", "circle"],
-        "op" => &["circle", "box", "plain", "glyph"],
+        "op" => &["circle", "box", "plain"],
         "box" => &["rect", "trapezoid", "parallelogram", "hexagon", "ellipse", "can"],
         "unet" => &["bars", "lineart"],
         _ => &[],
@@ -1203,14 +1206,16 @@ fn gen_brace(n: &Node, cx: &Ctx) -> Core {
     let f = crate::finish::Finish::of(n, cx.theme);
     let which = style_name(n, cx.theme);
     let which = match which.as_str() {
-        "line" | "arrow" => "dimension".to_string(),
+        "line" | "arrow" | "span" => "dimension".to_string(),
         "square" => "bracket".to_string(),
         _ => which,
     };
     let len = cx.s(n.num("size").unwrap_or(56.0));
+    // dashed ends (`ends=dash`, or the old style name span) mark a section of a network
+    let dashed = n.str("ends") == Some("dash") || style_name(n, cx.theme) == "span";
     let thick = cx.s(n.num("thick").unwrap_or(match which.as_str() {
+        "dimension" if dashed => 14.0,
         "dimension" => 8.0,
-        "span" => 14.0,
         _ => 10.0,
     }));
     let dir = n.str("dir").unwrap_or("right").to_string();
@@ -1244,15 +1249,14 @@ fn gen_brace(n: &Node, cx: &Ctx) -> Core {
             vec![obj("", frame(0.0, 0.0, w, h), Kind::Shape(SpObj { geom, fill: Paint::None, line: Some(line), text: None, equation: false }))]
         }
         "dimension" => {
-            // a dimension line: end ticks and a double arrow (heads=none for a plain bar)
+            // a dimension line: end ticks (dashed: a section) and a double arrow (heads=none for a plain bar)
             let bar = if n.str("heads") == Some("none") { line.clone() } else { heads(line.clone()) };
-            vec![path(&[(0.0, 0.0), (thick, 0.0)], "tick0", line.clone()), path(&[(thick / 2.0, 0.0), (thick / 2.0, len)], "bar", bar), path(&[(0.0, len), (thick, len)], "tick1", line)]
-        }
-        "span" => {
-            // dashed end lines across, a double arrow between them (a section of a network)
-            let mut dash = line.clone();
-            dash.dash = "sysDash".into();
-            vec![path(&[(0.0, 0.0), (thick, 0.0)], "end0", dash.clone()), path(&[(thick * 0.5, cx.s(1.0)), (thick * 0.5, len - cx.s(1.0))], "bar", heads(line.clone())), path(&[(0.0, len), (thick, len)], "end1", dash)]
+            let mut end = line.clone();
+            if dashed {
+                end.dash = "sysDash".into();
+            }
+            let inset = if dashed { cx.s(1.0) } else { 0.0 };
+            vec![path(&[(0.0, 0.0), (thick, 0.0)], "tick0", end.clone()), path(&[(thick / 2.0, inset), (thick / 2.0, len - inset)], "bar", bar), path(&[(0.0, len), (thick, len)], "tick1", end)]
         }
         _ => {
             // PowerPoint's own brace, turned for the up/down directions

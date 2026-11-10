@@ -68,6 +68,27 @@ impl Default for Drawing<'_> {
     }
 }
 
+/// Layer bars colour a kind of layer the same in every module of a figure:
+/// the figure's layer kinds, in order, go to each layer-bars node.
+fn with_layer_classes(g: &Graph) -> Graph {
+    let mut classes: Vec<String> = Vec::new();
+    for n in g.nodes.iter().filter(|n| n.module == "layer-bars") {
+        for l in n.list("layers") {
+            let c = modules::layer_class(&l);
+            if !classes.contains(&c) {
+                classes.push(c);
+            }
+        }
+    }
+    let mut g = g.clone();
+    if classes.len() > 1 {
+        for n in g.nodes.iter_mut().filter(|n| n.module == "layer-bars") {
+            n.params.insert("_classes".into(), serde_json::Value::Array(classes.iter().cloned().map(serde_json::Value::String).collect()));
+        }
+    }
+    g
+}
+
 /// A drawn figure with the layout and routes it was built from.
 #[derive(Debug, Clone)]
 pub struct Figure {
@@ -85,6 +106,7 @@ impl Figure {
 /// Graph → layout → routes → objects.
 pub fn draw(g: &Graph, d: &Drawing) -> Result<Figure, SpecError> {
     g.validate(&d.library.kinds())?;
+    let g = &with_layer_classes(g);
     let mut vars = d.notation.map(Vars::from_notation).unwrap_or_default();
     vars.add_new(&g.vars_new);
     let size = |src: &str| d.pictures.and_then(|f| f(src)).and_then(|b| pptx::image_size(&b));

@@ -244,13 +244,18 @@ fn count(n: &Node, key: &str, default: usize, lo: usize, hi: usize) -> usize {
 /// Built-in styles of the kinds with art styles (the first is the default).
 pub fn styles(kind: &str) -> &'static [&'static str] {
     match kind {
-        "encoder" | "decoder" | "autoencoder" => &CODER,
+        "encoder" | "autoencoder" => &CODER,
+        "decoder" => &DECODER,
         "nn" => &NN,
         _ => &[],
     }
 }
 
 pub const CODER: [&str; 17] = ["trapezoid", "bars", "cubes", "slabs", "planes", "lenet", "fc", "resnet", "dense", "unet", "transformer", "rnn", "vit", "fpn", "vae", "graph", "layers"];
+
+/// The decoder's styles: the encoder's mirrored, without `vae` (its decoder
+/// is the trapezoid after a z square; it is drawn in a pair and by name).
+pub const DECODER: [&str; 16] = ["trapezoid", "bars", "cubes", "slabs", "planes", "lenet", "fc", "resnet", "dense", "unet", "transformer", "rnn", "vit", "fpn", "graph", "layers"];
 
 pub const NN: [&str; 15] = ["circles", "labelled", "dropout", "neuron", "pills", "fans", "attention", "graph", "recurrent", "lstm", "conv", "residual", "heads", "moe", "rbm"];
 
@@ -588,15 +593,15 @@ fn dense(n: &Node, p: &mut Pen, dec: bool) -> Core {
     let _ = x;
     p.anchor("in", (0.0, hh - h / 2.0));
     p.anchor("out", (w, hh - h / 2.0));
-    p.core(w, hh, LabelPos::Below)
+    p.core(w, hh, LabelPos::Above)
 }
 
 /// U-Net line art, one half: a pair of conv layers per level, each level
 /// below the last (encoder) or above it (decoder).
 fn unet_half(n: &Node, p: &mut Pen, dec: bool) -> Core {
     let levels = count(n, "depth", 4, 2, 5);
-    let (bw, pair_gap, vgap) = (4.0, 6.0, 6.0);
-    let h0 = 26.0;
+    let (bw, pair_gap, vgap) = (5.0, 7.0, 6.0);
+    let h0 = 30.0;
     let ink = p.f.ink.clone();
     let c = p.main();
     let step = { let c = p.col(if dec { "up" } else { "pool" }); p.ink_of(&c) };

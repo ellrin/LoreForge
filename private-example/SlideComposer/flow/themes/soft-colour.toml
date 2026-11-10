@@ -1,0 +1,82 @@
+# soft-colour — a neutral coloured theme: white paper, dark slate lines, pale module fills,
+# one clear colour per layer type (blue convolutions, green pooling, red upsampling,
+# yellow softmax) and per role in an encoder–decoder pair (blue, red, orange).
+# Only what differs from classic-bw is listed.
+
+id = "soft-colour"
+name = "Soft colour"
+
+[colors]
+ink = "1F2937"
+muted = "6B7280"
+image = "E5E7EB"
+tensor = "9DC3E6"
+# layer bars: one outline colour per kind of layer
+cycle = ["D46A8C", "7B4FA0", "2E75B6", "C9962B", "3E8E5E", "8C8C8C"]
+
+[panel]
+fills = ["F7FAFD", "FDF8F4", "F5FAF2"]
+line = "9CA3AF"
+line_w = 1.0
+radius = 0.08
+
+[node]
+radius = 0.12
+finish = "solid typed"
+
+[roles.default]
+fill = "FFFFFF"
+line = "1F2937"
+text = "1F2937"
+
+[roles.model]
+fill = "DCE9F5"
+line = "1D3B63"
+text = "1F2937"
+
+[roles.loss]
+fill = "FFF4E5"
+line = "1F2937"
+text = "1F2937"
+
+[layers.conv]
+color = "5B8DD6"
+[layers.pool]
+color = "6BB36B"
+[layers.up]
+color = "E06666"
+[layers.softmax]
+color = "F2C14E"
+[layers.fc]
+color = "A78BCF"
+[layers.attn]
+color = "F4B183"
+[layers.norm]
+color = "FFF2CC"
+[layers.ffn]
+color = "A9D18E"
+[layers.embed]
+color = "F8CBAD"
+[layers.token]
+color = "BDD7EE"
+[layers.cls]
+color = "ED7D31"
+[layers.cell]
+color = "9DC3E6"
+[layers.enc]
+color = "5B9BD5"
+[layers.latent]
+color = "E06666"
+[layers.dec]
+color = "F4A259"
+[layers.other]
+color = "BFBFBF"
+
+[edges.data]
+color = "1F2937"
+
+[edges.feedback]
+color = "C8601C"
+width = 2.0
+dash = "dash"
+tail = "triangle"
