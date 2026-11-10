@@ -280,8 +280,12 @@ mod tests {
         std::fs::write(d.join("sections/results.tex"), "\\section{Results}\nFirst paragraph. It has two sentences.\n\nSecond paragraph about Table 1.\n").unwrap();
         d
     }
-    fn rand_tag() -> u128 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    /// A distinct folder per call: tests run in parallel, and the clock alone
+    /// (microseconds on macOS) can hand two of them the same name.
+    fn rand_tag() -> String {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("{}-{n}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
     }
 
     #[test]
