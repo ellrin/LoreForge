@@ -1,0 +1,45 @@
+/* 讀過的論文 (reader.js): the cite popup's tab and the right panel's block.
+   Theme tokens only (theme.css / styles.css). */
+
+.cite-pop .rd-tabs { margin-bottom: 8px; }
+.cite-pop .rd-tabs button { padding: 5px 0; }
+.rd-mode .search { width: 100%; }
+
+.rd-head { justify-content: flex-start; }
+.rd-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rd-title b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-title .meta, .rd-side-head .meta { font-size: 11.5px; color: var(--faint); }
+.rd-body { max-height: min(360px, calc(100vh - 220px)); gap: 0; }
+
+.rd-askbox { border: 1px solid var(--line-strong); border-radius: var(--r); padding: 8px; background: var(--surface); }
+.rd-ask { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.rd-ask .rd-doi { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r); color: var(--text); padding: 6px 8px; font: 12px var(--mono); }
+
+.rd-item { padding: 7px 4px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; }
+.rd-item:last-child { border-bottom: 0; }
+.rd-item-head { display: flex; align-items: center; gap: 6px; min-height: 24px; }
+.rd-kind { font: 500 10.5px var(--sans); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 9px; padding: 0 7px; }
+.rd-item.quote .rd-kind { color: var(--accent-text); border-color: var(--accent-text); }
+.rd-page { border: 0; background: none; padding: 0 2px; font: 500 11px var(--mono); color: var(--accent-text); cursor: pointer; }
+.rd-page:hover { text-decoration: underline; }
+.rd-acts { margin-left: auto; display: flex; gap: 4px; }
+.ghost.small { padding: 2px 8px; font-size: 11.5px; }
+.rd-text { font: 12.5px/1.55 var(--serif); color: var(--text); }
+.rd-note { font-size: 12px; color: var(--muted); }
+.rd-note::before { content: "— "; }
+
+.rd-sub { font: 600 11px var(--sans); color: var(--muted); padding: 10px 4px 4px; }
+.rd-sym { display: flex; align-items: center; gap: 8px; padding: 4px; border-bottom: 1px solid var(--line); }
+.rd-math { min-width: 56px; color: var(--text); }
+.rd-sym-main { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* right panel: side material for the paragraph */
+.rd-side { display: flex; flex-direction: column; max-height: 46vh; overflow-y: auto; }
+.rd-side-head { display: flex; flex-direction: column; padding: 2px 4px 6px; border-bottom: 1px solid var(--line); }
+.rd-side-head b { font-weight: 600; font-size: 12.5px; }
+.rd-side .rd-acts { opacity: 0; transition: opacity .12s; }
+.rd-side .rd-item:hover .rd-acts, .rd-side .rd-item:focus-within .rd-acts { opacity: 1; }
+@media (hover: none) { .rd-side .rd-acts { opacity: 1; } }
+
+/* context.js: a warning line that opens the 對照表 */
+.ctx-link { cursor: pointer; color: var(--accent-text); text-decoration: underline dotted; text-underline-offset: 3px; }
