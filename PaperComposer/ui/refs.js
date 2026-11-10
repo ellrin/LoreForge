@@ -467,7 +467,9 @@ const PCRefs = (() => {
     return { si: state.cur.s, pi: state.cur.p, nonWs: null };
   }
 
-  function insertAt(text, nonWs, cite) {
+  /** `sep` goes between the text before and `cite`: "~" keeps a citation on
+   *  the line of its word; a reference (Fig.~\ref) takes a space. */
+  function insertAt(text, nonWs, cite, sep = "~") {
     let at;
     if (nonWs == null) {
       // end of the paragraph, before its final punctuation
@@ -480,14 +482,16 @@ const PCRefs = (() => {
     }
     const pre = text.slice(0, at).replace(/\s+$/, "");
     const post = text.slice(at).replace(/^[ \t]+/, "");
-    const glue = pre && !pre.endsWith("~") ? "~" : "";
+    const glue = pre && !pre.endsWith("~") && !(sep === " " && /[([{]$/.test(pre)) ? sep : "";
     const after = post && !/^[\s.,;:!?)\]]/.test(post) ? " " : "";
     return `${pre}${glue}${cite}${after}${post}`;
   }
 
-  async function picker(anchor) {
+  /** `given` ({ si, pi, nonWs, vet?, done? }, context.js): insert there instead of
+   *  at the caret; vet(before, after) may stop it, done(before, after) follows. */
+  async function picker(anchor, given) {
     if (!state.paper || !curSection()) return flash("先開啟一篇論文");
-    const at = target();
+    const at = given ?? target();
     if (at.ta) at.ta.blur(); // save the paragraph being edited first
     await load();
     const f = { q: "", tags: new Set() };
@@ -526,12 +530,15 @@ const PCRefs = (() => {
         if (!chosen.size) return;
         const keys = [...chosen];
         p.remove();
-        await new Promise((r) => setTimeout(r, 250)); // let the paragraph save land
+        if (!given) await new Promise((r) => setTimeout(r, 250)); // let the paragraph save land
         const sec = sections()[at.si];
         if (!sec) return;
         const cite = `\\cite{${keys.join(",")}}`;
-        if (!sec.paragraphs.length) sec.paragraphs.push(cite);
-        else sec.paragraphs[at.pi] = insertAt(sec.paragraphs[at.pi], at.nonWs, cite);
+        const was = sec.paragraphs.length ? sec.paragraphs[at.pi] : null;
+        const now = was == null ? cite : insertAt(was, at.nonWs, cite);
+        if (at.vet && !(await at.vet(was ?? "", now))) return;
+        if (was == null) sec.paragraphs.push(now);
+        else sec.paragraphs[at.pi] = now;
         try { await saveSection(at.si); } catch (e) { flash(`儲存失敗：${e.message}`); return; }
         const name = encodeURIComponent(state.paper.name);
         if (purpose.value.trim()) for (const k of keys) await api(`/api/papers/${name}/citations`, { key: k, purpose: purpose.value.trim() }).catch(() => {});
@@ -541,6 +548,7 @@ const PCRefs = (() => {
         } catch (e) { flash(e.message, 6000); }
         refreshSection(at.si);
         refreshGit();
+        at.done?.(was ?? "", now);
       };
       const foot = el("div", "row-end");
       foot.append(purpose, go);

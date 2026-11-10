@@ -131,14 +131,28 @@ const PCTable = (() => {
     needPackages(r.packages);
   }
 
-  /** Insert a new table after the current paragraph, chosen from the gallery. */
-  async function insertNew(anchor) {
+  /** Insert a new table after the current paragraph, chosen from the gallery.
+   *  `place(r)` (context.js) puts { text, table } in and saves it itself,
+   *  returning { si, pi, text, table, after? } or null to stop. */
+  async function insertNew(anchor, place) {
     const sec = curSection();
     if (!sec) return flash("先開啟一篇論文");
     gallery(anchor, store.get("pc.tableStyle", "booktabs"), async (st) => {
       store.set("pc.tableStyle", st.id);
       let r;
       try { r = await api("/api/textable/new", { style: st.id }); } catch (e) { flash(e.message, 6000); return; }
+      if (place) {
+        const done = await place(r);
+        if (!done) return;
+        cache.set(done.text, { table: done.table });
+        await needPackages(r.packages);
+        focusNext = { si: done.si, pi: done.pi };
+        state.cur = { s: done.si, p: done.pi };
+        refreshSection(done.si);
+        refreshGit();
+        done.after?.();
+        return;
+      }
       const si = state.cur.s;
       const at = sec.paragraphs.length ? state.cur.p + 1 : 0;
       sec.paragraphs.splice(at, 0, r.text);

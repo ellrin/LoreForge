@@ -1358,3 +1358,31 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .tr-add { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 12px; }
 .tr-add svg.i { width: 14px; height: 14px; }
 @media (max-width: 700px) { .tr-grid { grid-template-columns: 1fr; } }
+/* ── Context menu (context.js) ── */
+.menu.ctx-menu { z-index: 40; min-width: 184px; }
+.ctx-menu button { font-size: 13px; padding: 6px 10px; }
+.ctx-menu button.on { background: var(--surface-hover); }
+.ctx-menu button svg.i { width: 15px; height: 15px; color: var(--muted); flex: none; }
+.ctx-menu button.on svg.i { color: var(--accent); }
+.ctx-menu .lbl { flex: 1; white-space: nowrap; }
+.ctx-menu .more { color: var(--faint); font-size: 11px; }
+.ctx-menu .ctx-clip { display: flex; gap: 2px; }
+.ctx-menu .ctx-clip button { flex: 1; justify-content: center; }
+.ctx-caret { position: fixed; z-index: 39; width: 2px; margin-left: -1px; background: var(--accent); border-radius: 1px; pointer-events: none; box-shadow: 0 0 0 2px var(--accent-soft); }
+.ctx-caret.off { opacity: 0; box-shadow: none; }
+.ctx-anchor { position: fixed; width: 1px; height: 0; pointer-events: none; }
+#paper .ctx-new { border-radius: 2px; outline: 1.5px solid var(--accent); outline-offset: 1px; animation: blink 2.2s ease-out; }
+.wb-pop.ref-pop { width: min(400px, calc(100vw - 16px)); }
+.ref-pick button { justify-content: flex-start; align-items: baseline; }
+.ref-pick .what { flex: none; min-width: 64px; font: 500 12px var(--mono); color: var(--muted); }
+.ref-pick .cap { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.ref-pick .cap.tex { font: 11.5px var(--mono); color: var(--faint); }
+.ref-pick button:focus-visible { outline: none; background: var(--surface-hover); }
+.ref-pick .empty { margin: 6px 8px; color: var(--faint); font-size: 12px; }
+.wb-pop.ctx-fig { width: min(320px, calc(100vw - 16px)); }
+.ctx-fig .ctx-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ctx-fig .ctx-row.end { justify-content: flex-end; }
+.ctx-fig .ctx-file { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.ctx-fig .ctx-file svg.i { width: 14px; height: 14px; }
+.ctx-fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--mono); color: var(--muted); }
+.ctx-fig .search { flex: 1; }

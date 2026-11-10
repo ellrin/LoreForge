@@ -96,7 +96,9 @@ const PCWrite = (() => {
     build(p);
     document.body.append(p);
     const r = anchor.getBoundingClientRect();
-    p.style.top = `${r.bottom + 6}px`;
+    const h = p.offsetHeight;
+    // below the anchor; above it when there is no room (a right-click near the bottom)
+    p.style.top = `${r.bottom + 6 + h > innerHeight - 8 && r.top - h - 6 > 8 ? r.top - h - 6 : Math.max(8, Math.min(r.bottom + 6, innerHeight - h - 8))}px`;
     p.style.left = `${Math.max(8, Math.min(r.left, innerWidth - p.offsetWidth - 8))}px`;
     const close = (e) => { if (!p.contains(e.target) && e.target !== anchor) { p.remove(); document.removeEventListener("mousedown", close, true); } };
     setTimeout(() => document.addEventListener("mousedown", close, true));
@@ -136,31 +138,104 @@ const PCWrite = (() => {
     });
   }
 
-  function references(anchor) {
+  /** What a reference to `key` writes: the template's form (tex.js) or the default prefix. */
+  function refSnippet(kind, key, atSentenceStart) {
+    return PCTex.refSnippet?.(kind, key, atSentenceStart) ?? `${REF_PREFIX[kind] ?? "\\ref"}{${key}}`;
+  }
+  /** Nothing but spaces since the last . ! ? (or the paragraph's start). */
+  const sentenceStart = (before) => { const t = before.replace(/[\s~]+$/, ""); return !t || /[.!?]$/.test(t); };
+
+  // ── what each label stands for: a caption's start, a heading, an equation ──
+  const labelCache = new Map(); // paragraph text → { key: [text, isTex] }
+  /** Inside of the {…} group opening at i. */
+  function groupAt(s, i) {
+    let d = 0;
+    for (let k = i; k < s.length; k++) {
+      if (s[k] === "\\") { k++; continue; }
+      if (s[k] === "{") d++;
+      else if (s[k] === "}" && --d === 0) return s.slice(i + 1, k);
+    }
+    return s.slice(i + 1);
+  }
+  const plain = (tex) => PCFind.mask(tex).replace(/[\0\u0001]/g, "").replace(/[\s~]+/g, " ").trim();
+  function labelTexts(text) {
+    let out = labelCache.get(text);
+    if (out) return out;
+    out = {};
+    const opened = (re) => [...text.matchAll(re)].map((m) => ({ at: m.index, body: groupAt(text, m.index + m[0].length - 1) }));
+    const caps = opened(/\\caption\*?\s*(?:\[[^\]]*\])?\s*\{/g);
+    const heads = opened(/\\(?:sub)*section\*?\s*\{/g);
+    const near = (list, at) => [...list].reverse().find((c) => c.at < at) ?? list.find((c) => c.at > at);
+    for (const m of text.matchAll(/\\label\s*\{([^}]*)\}/g)) {
+      const c = near(caps, m.index) ?? near(heads, m.index);
+      if (c) { out[m[1]] = [plain(c.body), false]; continue; }
+      // an equation: its own LaTeX up to the label
+      const b = text.lastIndexOf("\\begin{", m.index);
+      const from = b < 0 ? 0 : text.indexOf("}", b) + 1;
+      out[m[1]] = [text.slice(from, m.index).replace(/\s+/g, " ").trim(), true];
+    }
+    if (labelCache.size > 2000) labelCache.clear();
+    labelCache.set(text, out);
+    return out;
+  }
+  function describeLabels() {
+    const all = {};
+    sections().forEach((s) => {
+      (s.tail?.match(/\\label\{([^}]*)\}/g) ?? []).forEach((l) => (all[l.slice(7, -1)] = [plain(s.title), false]));
+      s.paragraphs.forEach((t) => { if (t.includes("\\label")) Object.assign(all, labelTexts(t)); });
+    });
+    return all;
+  }
+
+  /** Pick a label to refer to: number and the start of its caption, heading or
+   *  equation. Without `pick` the reference goes in at the caret of the
+   *  paragraph being edited; with it, pick(kind, key) inserts it. */
+  function references(anchor, pick) {
     const labels = PCTex.labels, kinds = PCTex.kinds;
-    const keys = Object.keys(labels);
+    const ORDER = ["fig", "tab", "eq", "thm", "alg", "sec"];
+    const rank = (k) => { const i = ORDER.indexOf(kinds[k]); return i < 0 ? ORDER.length : i; };
+    const keys = Object.keys(labels).map((k, i) => [k, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([k]) => k);
     if (!keys.length) return flash("論文裡還沒有 \\label");
-    const ta = editor();
-    if (!ta) return;
-    popover(anchor, (p) => {
+    const ta = pick ? null : editor();
+    if (!pick && !ta) return;
+    const texts = describeLabels();
+    return popover(anchor, (p) => {
       p.classList.add("ref-pop");
       const q = el("input", "search");
-      q.placeholder = "搜尋標籤";
+      q.placeholder = "搜尋圖、表、式、章節";
       const list = el("div", "ref-pick");
       const NAME = { fig: "Fig.", tab: "Table", eq: "式", sec: "Section", alg: "Algorithm", thm: "Theorem" };
+      const choose = (k) => {
+        p.remove();
+        if (pick) return pick(kinds[k], k);
+        put(refSnippet(kinds[k], k, sentenceStart(ta.value.slice(0, ta.selectionStart))));
+      };
       const draw = () => {
         list.innerHTML = "";
         const f = q.value.trim().toLowerCase();
-        keys.filter((k) => !f || k.toLowerCase().includes(f)).forEach((k) => {
+        keys.forEach((k) => {
+          const what = `${NAME[kinds[k]] ?? ""} ${labels[k]}`.trim();
+          const [cap, tex] = texts[k] ?? ["", false];
+          if (f && ![k, what, cap].some((x) => x.toLowerCase().includes(f))) return;
           const b = el("button");
-          b.append(el("span", "what", `${NAME[kinds[k]] ?? ""} ${labels[k]}`.trim()), el("span", "key", k));
+          b.title = k;
+          b.append(el("span", "what", what), el("span", `cap${tex || !cap ? " tex" : ""}`, cap || k));
           b.onmousedown = (e) => e.preventDefault();
-          b.onclick = () => { put(`${REF_PREFIX[kinds[k]] ?? "\\ref"}{${k}}`); p.remove(); };
+          b.onclick = () => choose(k);
           list.append(b);
         });
+        if (!list.firstChild) list.append(el("p", "empty", "沒有符合的項目"));
+      };
+      const move = (d) => {
+        const bs = [...list.querySelectorAll("button")];
+        const i = bs.indexOf(document.activeElement);
+        (i + d < 0 ? q : bs[Math.min(i + d, bs.length - 1)])?.focus();
       };
       q.oninput = draw;
-      q.onkeydown = (e) => { if (e.key === "Enter") list.querySelector("button")?.click(); };
+      p.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); move(e.key === "ArrowDown" ? 1 : -1); }
+        else if (e.key === "Enter" && e.target === q) list.querySelector("button")?.click();
+      });
       draw();
       p.append(q, list);
       setTimeout(() => q.focus());
@@ -177,8 +252,8 @@ const PCWrite = (() => {
 
   /** Select a sentence, click: the engine splits it into a pattern and
    *  phrases, the user ticks what to keep, and it is saved in one step. */
-  async function collect(anchor) {
-    const text = selectedText().trim();
+  async function collect(anchor, picked) {
+    const text = (picked ?? selectedText()).trim();
     if (!text) return flash("先選取想收藏的句子");
     const section = roleOf(curSection()?.title ?? "Any");
     const p = popover(anchor, (p) => {
@@ -292,5 +367,5 @@ const PCWrite = (() => {
     });
   }
 
-  return { build, wrap, put, block };
+  return { build, wrap, put, block, references, collect, popover, refSnippet, sentenceStart };
 })();

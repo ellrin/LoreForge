@@ -636,6 +636,8 @@ const PCFind = (() => {
     }
   });
 
-  return { open, close, badge, visible, isOpen };
+  /** The masked source (context.js maps a click in the drawn page back to it). */
+  const mask = (src, o = {}) => visible(src, !!o.all);
+  return { open, close, badge, visible, mask, HOLE, ESC, isOpen };
 })();
 window.PCFind = PCFind;
