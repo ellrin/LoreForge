@@ -97,7 +97,7 @@ async function openPaper(name, { keepHome = false } = {}) {
   if (!keepHome) PCHome.close();
   try {
     const res = await api(`/api/papers/${encodeURIComponent(name)}`);
-    state.paper = { name, sections: res.sections, front: res.front ?? "", back: res.back ?? "", fields: res.fields ?? [], bibliography: res.bibliography ?? [], meta: res.meta ?? { key_value: "", authors: [] }, word_limits: res.word_limits ?? {} };
+    state.paper = { name, sections: res.sections, front: res.front ?? "", back: res.back ?? "", fields: res.fields ?? [], bibliography: res.bibliography ?? [], meta: res.meta ?? { key_value: "", authors: [] }, word_limits: res.word_limits ?? {}, ref_words: res.ref_words ?? {}, captions: res.captions ?? {}, limits: res.limits ?? {} };
     PCTex.setMacros(res.macros ?? {});
     PCTex.setNumbers(res.numbers);
     PCTex.setFigureBase(`/api/papers/${encodeURIComponent(name)}/figure`);

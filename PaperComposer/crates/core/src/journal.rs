@@ -29,6 +29,53 @@ pub struct Meta {
     /// Word limits the journal sets, for the word count in the status bar.
     #[serde(default, skip_serializing_if = "WordLimits::is_empty")]
     pub word_limits: WordLimits,
+    /// `[ref_words]`: the word before `\ref` for figures, tables, equations
+    /// and sections, at the start of a sentence, or cleveref.
+    #[serde(default, skip_serializing_if = "RefWords::is_empty")]
+    pub ref_words: RefWords,
+    /// `[captions]`: where table and figure captions go.
+    #[serde(default, skip_serializing_if = "Captions::is_empty")]
+    pub captions: Captions,
+    /// `[limits]`: page limit, double-blind.
+    #[serde(default, skip_serializing_if = "Limits::is_empty")]
+    pub limits: Limits,
+}
+
+pub use lore_notation::RefWords;
+
+/// `[captions]` in template.toml: `table` / `figure` = "above" or "below".
+/// Text, so a template with another value still loads; only those two count.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
+pub struct Captions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub figure: Option<String>,
+}
+
+impl Captions {
+    pub fn is_empty(&self) -> bool {
+        self.table.is_none() && self.figure.is_none()
+    }
+}
+
+/// `[limits]` in template.toml.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
+pub struct Limits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages: Option<u32>,
+    /// The page limit leaves the references out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pages_exclude_refs: bool,
+    /// Double-blind review: no author names in the submission.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub anonymous: bool,
+}
+
+impl Limits {
+    pub fn is_empty(&self) -> bool {
+        *self == Limits::default()
+    }
 }
 
 /// `[word_limits]` in template.toml: `abstract`, `total` (the body), and
@@ -62,6 +109,19 @@ pub struct Journal {
     pub bib_style: String,
     pub bib_styles: Vec<String>,
     pub has_sample: bool,
+    /// sample.tex loads cleveref.
+    pub cleveref: bool,
+}
+
+impl Journal {
+    /// The reference words papers follow: `[ref_words]`, or, when the
+    /// template sets none and its sample loads cleveref, cleveref mode.
+    pub fn effective_ref_words(&self) -> RefWords {
+        if self.meta.ref_words.is_empty() && self.cleveref {
+            return RefWords { mode: Some("cleveref".into()), ..Default::default() };
+        }
+        self.meta.ref_words.clone()
+    }
 }
 
 /// sample.tex as text; Latin-1 samples are read byte for byte.
@@ -167,7 +227,7 @@ pub fn load(publishers: &Path, id: &str) -> Option<Journal> {
         bib_style: sample.as_deref().map(|s| current_style(s, &bsts)).unwrap_or_default(),
         bib_styles: bsts,
         has_sample: sample.is_some(),
-
+        cleveref: sample.as_deref().is_some_and(|s| packages(s).iter().any(|p| p == "cleveref")),
     })
 }
 
@@ -240,6 +300,19 @@ pub fn create(publishers: &Path, mut meta: Meta, based_on: &str) -> Result<Strin
     if meta.kind.is_empty() {
         meta.kind = base_meta.kind;
     }
+    // the house rules come along with the files
+    if meta.word_limits.is_empty() {
+        meta.word_limits = base_meta.word_limits;
+    }
+    if meta.ref_words.is_empty() {
+        meta.ref_words = base_meta.ref_words;
+    }
+    if meta.captions.is_empty() {
+        meta.captions = base_meta.captions;
+    }
+    if meta.limits.is_empty() {
+        meta.limits = base_meta.limits;
+    }
     meta.based_on = based_on.to_string();
     write_meta(&dir, &meta)?;
     Ok(id)
@@ -253,6 +326,16 @@ pub struct Update {
     pub class_options: Option<String>,
     #[serde(default)]
     pub bib_style: Option<String>,
+    /// The house rules: left out, what template.toml has stays; sent (even
+    /// empty), they replace it.
+    #[serde(default)]
+    pub word_limits: Option<WordLimits>,
+    #[serde(default)]
+    pub ref_words: Option<RefWords>,
+    #[serde(default)]
+    pub captions: Option<Captions>,
+    #[serde(default)]
+    pub limits: Option<Limits>,
 }
 
 /// Save a journal's description, and its class options and bibliography
@@ -262,9 +345,15 @@ pub fn update(publishers: &Path, id: &str, u: Update) -> Result<Journal, String>
     let cur = load(publishers, id).ok_or("找不到模板")?;
     let mut meta = u.meta;
     meta.based_on = cur.meta.based_on.clone();
-    if meta.word_limits.is_empty() {
-        // the template editor does not send them: keep what template.toml has
-        meta.word_limits = cur.meta.word_limits.clone();
+    // rules not sent stay as template.toml has them
+    meta.word_limits = u.word_limits.unwrap_or_else(|| if meta.word_limits.is_empty() { cur.meta.word_limits.clone() } else { meta.word_limits });
+    meta.ref_words = u.ref_words.unwrap_or_else(|| if meta.ref_words.is_empty() { cur.meta.ref_words.clone() } else { meta.ref_words });
+    meta.captions = u.captions.unwrap_or_else(|| if meta.captions.is_empty() { cur.meta.captions.clone() } else { meta.captions });
+    meta.limits = u.limits.unwrap_or_else(|| if meta.limits.is_empty() { cur.meta.limits.clone() } else { meta.limits });
+    for (what, v) in [("表", &meta.captions.table), ("圖", &meta.captions.figure)] {
+        if v.as_deref().is_some_and(|p| p != "above" && p != "below") {
+            return Err(format!("{what}說明位置只能是 above 或 below"));
+        }
     }
     if meta.name.trim().is_empty() {
         return Err("請輸入期刊名稱".into());
@@ -330,8 +419,16 @@ fn fingerprint(bytes: &[u8]) -> (usize, u64) {
 pub fn used_style_files(paper: &Path) -> Vec<PathBuf> {
     let main = std::fs::read(paper.join("main.tex")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
     let mut names: Vec<String> = document_class(&main).map(|(_, _, c)| vec![format!("{c}.cls")]).unwrap_or_default();
-    let begin = main.find("\\begin{document}").unwrap_or(main.len());
-    for (_, code) in code_lines(&main[..begin]) {
+    names.extend(packages(&main).into_iter().map(|n| format!("{n}.sty")));
+    names.into_iter().map(|n| paper.join(n)).filter(|p| p.is_file()).collect()
+}
+
+/// Packages the preamble loads with `\usepackage` / `\RequirePackage`
+/// (commented-out lines do not count).
+pub fn packages(src: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let begin = src.find("\\begin{document}").unwrap_or(src.len());
+    for (_, code) in code_lines(&src[..begin]) {
         for cmd in ["\\usepackage", "\\RequirePackage"] {
             let mut rest = code;
             while let Some(i) = rest.find(cmd) {
@@ -339,12 +436,12 @@ pub fn used_style_files(paper: &Path) -> Vec<PathBuf> {
                 let r = rest.trim_start();
                 let r = if r.starts_with('[') { r.find(']').map_or("", |e| &r[e + 1..]) } else { r };
                 if let Some(arg) = r.trim_start().strip_prefix('{').and_then(|a| a.split('}').next()) {
-                    names.extend(arg.split(',').map(|n| format!("{}.sty", n.trim())).filter(|n| n.len() > 4));
+                    names.extend(arg.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()));
                 }
             }
         }
     }
-    names.into_iter().map(|n| paper.join(n)).filter(|p| p.is_file()).collect()
+    names
 }
 
 /// The template a paper was written with: the publisher folder holding
@@ -432,6 +529,60 @@ mod tests {
     }
 
     #[test]
+    fn house_rules_load_save_and_carry_over() {
+        let root = setup("rules");
+        let sn = root.join("springer-nature");
+        let toml_text = "name = \"Example Journal\"\n\n[word_limits]\nabstract = 200\n\n[ref_words]\nfig = \"Figure\"\neq = \"\"\nsentence_start = { tab = \"Table\" }\n\n[captions]\ntable = \"above\"\nfigure = \"below\"\n\n[limits]\npages = 8\npages_exclude_refs = true\nanonymous = true\n";
+        std::fs::write(sn.join("template.toml"), toml_text).unwrap();
+        let j = load(&root, "springer-nature").unwrap();
+        assert_eq!(j.meta.ref_words.fig.as_deref(), Some("Figure"));
+        assert_eq!(j.meta.ref_words.eq.as_deref(), Some(""), "an empty word round-trips");
+        assert_eq!(j.meta.ref_words.snippet("tab", "tab:a", true), "Table~\\ref{tab:a}");
+        assert_eq!(j.meta.captions.table.as_deref(), Some("above"));
+        assert_eq!(j.meta.limits, Limits { pages: Some(8), pages_exclude_refs: true, anonymous: true });
+        // written back the same way
+        let again: Meta = toml::from_str(&toml::to_string_pretty(&j.meta).unwrap()).unwrap();
+        assert_eq!(again, j.meta);
+
+        // the editor's JSON: rules left out stay, rules sent replace (even empty)
+        let u: Update = serde_json::from_str(r#"{"name":"Example Journal","notes":"x"}"#).unwrap();
+        let j = update(&root, "springer-nature", u).unwrap();
+        assert_eq!((j.meta.ref_words.fig.as_deref(), j.meta.limits.pages, j.meta.word_limits.abstract_), (Some("Figure"), Some(8), Some(200)));
+        let u: Update = serde_json::from_str(r#"{"name":"Example Journal","limits":{},"word_limits":{"total":5000},"ref_words":{"mode":"cleveref"}}"#).unwrap();
+        let j = update(&root, "springer-nature", u).unwrap();
+        assert!(j.meta.limits.is_empty(), "cleared");
+        assert_eq!((j.meta.word_limits.abstract_, j.meta.word_limits.total), (None, Some(5000)));
+        assert!(j.meta.ref_words.cleveref() && j.meta.ref_words.fig.is_none());
+        assert_eq!(j.meta.captions.table.as_deref(), Some("above"), "not sent: kept");
+        let bad: Update = serde_json::from_str(r#"{"name":"Example Journal","captions":{"table":"left"}}"#).unwrap();
+        assert!(update(&root, "springer-nature", bad).is_err());
+
+        // a journal made from this one starts with the same rules
+        let id = create(&root, Meta { name: "Derived Journal".into(), ..Default::default() }, "springer-nature").unwrap();
+        let d = load(&root, &id).unwrap();
+        assert_eq!((d.meta.word_limits.total, d.meta.captions.table.as_deref()), (Some(5000), Some("above")));
+        assert!(d.meta.ref_words.cleveref());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cleveref_in_the_sample_is_the_default_mode() {
+        let root = setup("cleveref");
+        let ieee = root.join("ieee-journal");
+        assert!(load(&root, "ieee-journal").unwrap().effective_ref_words().is_empty(), "no cleveref, no rules: defaults");
+        std::fs::write(ieee.join("sample.tex"), "\\documentclass{IEEEtran}\n% \\usepackage{cleveref}\n\\begin{document}\n\\end{document}\n").unwrap();
+        assert!(!load(&root, "ieee-journal").unwrap().cleveref, "a commented-out line does not count");
+        std::fs::write(ieee.join("sample.tex"), "\\documentclass{IEEEtran}\n\\usepackage{hyperref}\n\\usepackage[capitalise,noabbrev]{cleveref}\n\\begin{document}\n\\end{document}\n").unwrap();
+        let j = load(&root, "ieee-journal").unwrap();
+        assert!(j.cleveref && j.effective_ref_words().cleveref());
+        assert!(j.meta.ref_words.is_empty(), "detected, not written");
+        // words the template sets win
+        std::fs::write(ieee.join("template.toml"), "name = \"IEEE\"\n[ref_words]\nfig = \"Fig.\"\n").unwrap();
+        assert!(!load(&root, "ieee-journal").unwrap().effective_ref_words().cleveref());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn reads_templates_old_and_new() {
         let root = setup("read");
         let v = list(&root);
@@ -454,6 +605,7 @@ mod tests {
             meta: Meta { name: "Journal of Imaging Informatics in Medicine".into(), short: "JIIM".into(), publisher: "Springer".into(), notes: "Refs numbered by first citation.".into(), ..Default::default() },
             bib_style: Some("sn-vancouver-num".into()),
             class_options: None,
+            ..Default::default()
         }).unwrap();
         assert_eq!(j.bib_style, "sn-vancouver-num");
         assert_eq!(j.class_options, "pdflatex,sn-vancouver-num");
@@ -463,7 +615,7 @@ mod tests {
         assert!(std::fs::read_to_string(root.join("springer-nature/sample.tex")).unwrap().contains("sn-mathphys-num"), "the base is untouched");
         // IEEE: the style lives in \bibliographystyle; options are added where there were none
         let t = create(&root, Meta { name: "IEEE Transactions on Medical Imaging".into(), short: "TMI".into(), ..Default::default() }, "ieee-journal").unwrap();
-        let j = update(&root, &t, Update { meta: Meta { name: "IEEE Transactions on Medical Imaging".into(), ..Default::default() }, class_options: Some("journal".into()), bib_style: Some("IEEEtranN".into()) }).unwrap();
+        let j = update(&root, &t, Update { meta: Meta { name: "IEEE Transactions on Medical Imaging".into(), ..Default::default() }, class_options: Some("journal".into()), bib_style: Some("IEEEtranN".into()), ..Default::default() }).unwrap();
         assert_eq!((j.class_options.as_str(), j.bib_style.as_str()), ("journal", "IEEEtranN"));
         assert!(create(&root, Meta { name: "IEEE Transactions on Medical Imaging".into(), short: "TMI".into(), ..Default::default() }, "ieee-journal").unwrap() == "tmi-2");
         let _ = std::fs::remove_dir_all(&root);

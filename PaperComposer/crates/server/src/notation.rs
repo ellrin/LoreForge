@@ -5,7 +5,7 @@
 //! The registry is `profile/notation.json` (the author's habits) merged with
 //! `papers/<p>/notation.json` (this paper); the paper file wins.
 
-use lore_notation::{check_document, CheckOptions, Document, Entry, Issue, Kind, Notation};
+use lore_notation::{check_document, CheckOptions, Document, Entry, Issue, Kind, Notation, RefWords};
 use std::path::Path;
 
 /// Findings in generated text that must be fixed before it is kept.
@@ -14,6 +14,7 @@ const BLOCKING: &[&str] = &["hardcoded_reference", "ref_undefined"];
 const SHOWN: &[&str] = &[
     "hardcoded_reference",
     "ref_undefined",
+    "ref_word_style",
     "abbrev_never_expanded",
     "abbrev_used_before_expansion",
     "undefined_symbol",
@@ -27,21 +28,54 @@ pub fn load(workspace: &Path, paper: &Path) -> Notation {
     Notation::effective(&global, &doc)
 }
 
+/// The reference words of the paper's journal (`[ref_words]` in its
+/// template, or cleveref when its sample loads it); None when the paper has
+/// no journal or the journal sets nothing.
+pub fn ref_words(workspace: &Path, paper: &Path) -> Option<RefWords> {
+    let j = pc_core::meta::read_meta(paper).journal?;
+    let rw = pc_core::journal::load(&workspace.join("publishers"), &j)?.effective_ref_words();
+    (!rw.is_empty()).then_some(rw)
+}
+
+/// Check options for the paper: the defaults plus its journal's reference words.
+pub fn options(workspace: &Path, paper: &Path) -> CheckOptions {
+    CheckOptions { ref_words: ref_words(workspace, paper), ..Default::default() }
+}
+
 fn kind_entries(n: &Notation, k: Kind) -> Vec<&Entry> {
     n.entries.iter().filter(|e| e.kind() == k).collect()
 }
 
 /// Prompt text: the rules, then the registry (cut to a sensible size).
-pub fn describe(n: &Notation) -> String {
+/// `words`: the journal's reference words, when it sets them.
+pub fn describe(n: &Notation, words: Option<&RefWords>) -> String {
+    let refs = match words {
+        None => "- Refer to figures, tables, equations and sections only with \\ref{label} (Table~\\ref{tab:x}, Fig.~\\ref{fig:y}, \
+Eq.~\\eqref{eq:z}); never type a number such as \"Table 1\" or \"Section 3\".\n"
+            .to_string(),
+        Some(w) if w.cleveref() => "- Refer to figures, tables, equations and sections only with \\cref{label} (\\Cref{label} at the start of a \
+sentence), with no word before it: the journal's class prints \"Figure\", \"Table\", …; never type a number such as \"Table 1\" or \"Section 3\".\n"
+            .to_string(),
+        Some(w) => {
+            let mut forms: Vec<String> = ["tab", "fig", "eq", "sec"].iter().map(|k| w.snippet(k, &format!("{k}:x"), false)).collect();
+            for (k, _) in &w.sentence_start {
+                forms.push(format!("{} at the start of a sentence", w.snippet(k, &format!("{k}:x"), true)));
+            }
+            format!(
+                "- Refer to figures, tables, equations and sections only with \\ref{{label}}, written as the journal does: {}; \
+never type a number such as \"Table 1\" or \"Section 3\".\n",
+                forms.join(", ")
+            )
+        }
+    };
     let mut s = String::from(
         "\n## The author's notation registry — follow it in every piece of LaTeX\n\
-- Write a registered symbol with its macro when it has one (\\vw, not \\boldsymbol{w}), else with its registered LaTeX.\n\
-- Refer to figures, tables, equations and sections only with \\ref{label} (Table~\\ref{tab:x}, Fig.~\\ref{fig:y}, \
-Eq.~\\eqref{eq:z}); never type a number such as \"Table 1\" or \"Section 3\".\n\
-- Expand an abbreviation at its first use in the body unless the registry marks it conventional.\n\
-- A symbol the registry does not have must be defined in the sentence where it first appears; prefer an existing one.\n\
-- Every piece of math, even a single symbol or an assignment such as $\\lambda = 0.5$, goes inside $…$.\n",
+- Write a registered symbol with its macro when it has one (\\vw, not \\boldsymbol{w}), else with its registered LaTeX.\n",
     );
+    s += &refs;
+    s += "- Expand an abbreviation at its first use in the body unless the registry marks it conventional.\n\
+- A symbol the registry does not have must be defined in the sentence where it first appears; prefer an existing one.\n\
+- Every piece of math, even a single symbol or an assignment such as $\\lambda = 0.5$, goes inside $…$.\n";
     let line = |e: &Entry| -> String {
         let what = e.meaning_en.as_deref().or(e.meaning.as_deref()).unwrap_or("");
         match (e.macro_name(), e.latex.as_deref()) {
@@ -98,7 +132,7 @@ pub struct Checked {
 
 const FRAGMENT: &str = "sections/zz-generated.tex";
 
-pub fn check(paper: &Path, n: &Notation, others: &[String], text: &str) -> Checked {
+pub fn check(paper: &Path, n: &Notation, opt: &CheckOptions, others: &[String], text: &str) -> Checked {
     let mut main = std::fs::read_to_string(paper.join("main.tex")).unwrap_or_else(|_| "\\documentclass{article}\n\\begin{document}\n\\end{document}\n".into());
     let mut files: Vec<(String, String)> = vec![];
     for f in pc_core::paper::section_files(paper) {
@@ -120,7 +154,7 @@ pub fn check(paper: &Path, n: &Notation, others: &[String], text: &str) -> Check
     }
     let mut all = vec![("main.tex".to_string(), main)];
     all.extend(files);
-    let report = check_document(Document::from_files(&all), n, &CheckOptions::default());
+    let report = check_document(Document::from_files(&all), n, opt);
     let here = |i: &&Issue| i.locations.iter().any(|l| l.file == FRAGMENT);
     let msg = |i: &Issue| i.message.clone();
     let blocking = report.issues.iter().filter(here).filter(|i| BLOCKING.contains(&i.code.as_str())).map(msg).collect();
@@ -184,8 +218,14 @@ mod tests {
     fn prompts_carry_the_rules_and_the_registry() {
         let p = paper();
         let n = load(&p, &p);
-        let d = describe(&n);
+        let d = describe(&n, None);
+        assert!(d.contains("Table~\\ref{tab:x}, Fig.~\\ref{fig:y}, Eq.~\\eqref{eq:z}"), "the default rule as before");
         assert!(d.contains("\\vw = \\boldsymbol{w} — frame weight"));
+        let w = RefWords { fig: Some("Figure".into()), sentence_start: [("fig".to_string(), "Figure".to_string())].into(), ..Default::default() };
+        let j = describe(&n, Some(&w));
+        assert!(j.contains("Figure~\\ref{fig:x}") && j.contains("\\eqref{eq:x}") && !j.contains("Fig.~"), "{j}");
+        let c = describe(&n, Some(&RefWords { mode: Some("cleveref".into()), ..Default::default() }));
+        assert!(c.contains("\\cref{label}") && c.contains("\\Cref{label}"));
         assert!(d.contains("tab:main — Main comparison") && d.contains("CV — cross-validation"));
         assert!(d.contains("never type a number"));
         let _ = std::fs::remove_dir_all(&p);
@@ -195,10 +235,15 @@ mod tests {
     fn typed_references_block_and_new_symbols_are_found() {
         let p = paper();
         let n = load(&p, &p);
-        let bad = check(&p, &n, &[], "Table 1 shows that $\\vw$ and the new margin $\\gamma$ matter.\n");
+        let opt = CheckOptions::default();
+        let bad = check(&p, &n, &opt, &[], "Table 1 shows that $\\vw$ and the new margin $\\gamma$ matter.\n");
         assert!(!bad.blocking.is_empty(), "a typed 'Table 1' must be fixed");
-        let good = check(&p, &n, &[], "Table~\\ref{tab:main} shows that $\\vw$ matters.\n");
+        let good = check(&p, &n, &opt, &[], "Table~\\ref{tab:main} shows that $\\vw$ matters.\n");
         assert!(good.blocking.is_empty(), "{:?}", good.blocking);
+        // a journal that writes "Tab." shows the difference, without blocking
+        let tab = CheckOptions { ref_words: Some(RefWords { tab: Some("Tab.".into()), ..Default::default() }), ..Default::default() };
+        let j = check(&p, &n, &tab, &[], "Table~\\ref{tab:main} shows that $\\vw$ matters.\n");
+        assert!(j.blocking.is_empty() && j.shown.iter().any(|m| m.contains("Tab.")), "{:?}", j.shown);
         assert_eq!(register(&p, &bad.new_symbols).unwrap(), bad.new_symbols.len());
         let reg = Notation::load(&p.join("notation.json")).unwrap();
         for s in &bad.new_symbols {

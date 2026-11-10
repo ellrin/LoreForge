@@ -181,7 +181,7 @@ your-private-repo/
 - 只比對看得到的文字：`\cite{}`、`\ref{}`、`\label{}` 這類指令的內容和數學式不會被搜到或改到（除非打開「搜尋公式與指令」）。範圍包含標題區的標題、摘要、關鍵字。
 - **全部取代**前會跑對照表檢查：會改到登記過的符號、縮寫、標籤，或產生新問題（例如把 `\ref{…}` 換成手打的編號）時先提醒，建議改對照表。取代後可以按「復原」或 Ctrl+Z 一次還原。
 - **字數**在下方狀態列（本節／全文）。點開可以逐章勾選要不要算、是否包含圖表標題、表格內容、註腳；公式和引用指令不算。英文算單字、中文算字，合計以「字」表示。勾選結果每篇論文各自記住。
-- 期刊的字數上限寫在出版社範本的 `template.toml`（`[word_limits]`，格式見 [`publishers/README.md`](../private-example/PaperComposer/publishers/README.md)），超過時數字變紅。
+- 期刊的字數上限寫在出版社範本的 `template.toml`（`[word_limits]`，格式見 [`publishers/README.md`](../private-example/PaperComposer/publishers/README.md)），在「模板」的「投稿規則」裡也能改，超過時數字變紅。
 
 ## 公式
 
@@ -228,6 +228,8 @@ tlmgr search --global --file /xxx.sty
 | ACM | [CTAN：acmart](https://ctan.org/pkg/acmart) | `acm/` |
 
 以上 IEEE、Springer Nature、MICCAI／LNCS、CVPR 範本已在 macOS + BasicTeX（補上述套件與 Ghostscript）實際編譯通過。
+
+**投稿規則**：每個期刊模板可以記下自己的寫法（在「模板」頁的「投稿規則」編輯，存在 `template.toml`）：引用前面寫 `Fig.` 還是 `Figure`、句首是否改用全名、或用 cleveref（`\cref`）；表與圖的說明放上方或下方；頁數上限、是否雙盲；字數上限。插入的引用照期刊的字寫，預覽的 `\cref` 也印出同一個字；對照表檢查會指出與期刊不同的寫法（`ref_word_style`），AI 撰寫與修改也照這個寫。沒設定時一切與以前相同（`Fig.~\ref`、`Table~\ref`、`\eqref`）；範本的 `sample.tex` 載入 cleveref 而沒設定時，視為 cleveref。上傳模板讓 Claude 轉換時，會請它把範本或投稿須知裡寫明的規則一併填入，並在投稿規定附上出處。格式見 [`publishers/README.md`](../private-example/PaperComposer/publishers/README.md)。
 
 **表格**：論文裡的表格可以直接在畫面上編輯（選取、雙擊打字、增刪列欄、合併、加減線、字體），並套用 22 種樣式（各期刊官方範例的寫法、通用、數據、版面）。每種樣式都以實際編譯驗證；需要的套件會自動加進 `main.tex`。讀不懂的表格寫法會改用 LaTeX 原始碼編輯，不會被改寫。
 
@@ -390,7 +392,7 @@ scripts/            Git hooks
 | POST | `/api/papers/{name}/figures?file=` | 上傳圖片到論文的 `figures/`（body 為檔案內容） |
 | POST | `/api/wizard/caption` `{ kind, data?, file?, section?, key_value?, title?, engine? }` | 表格或圖片的標題建議（寫作引擎） |
 | GET／PUT | `/api/settings` | 工作區 `config.toml` 的 `[ui]` 介面設定 |
-| GET | `/api/papers/{name}` | 論文各章節與段落、`meta`（Key value 與作者） |
+| GET | `/api/papers/{name}` | 論文各章節與段落、`meta`（Key value 與作者），以及期刊的 `word_limits`、`ref_words`、`captions`、`limits` |
 | PUT | `/api/papers/{name}/meta` `{ key_value }` | 修改 Key value |
 | GET / POST | `/api/people` | 作者與機構清單；新增一位作者（可同時新增機構） |
 | POST | `/api/wizard/outline` `{ template?, outline, key_value, engine }` | 大綱 → 標題建議與章節架構（Claude） |

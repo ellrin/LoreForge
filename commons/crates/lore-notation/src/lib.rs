@@ -16,13 +16,15 @@ pub mod extract;
 pub mod macros;
 pub mod math;
 pub mod model;
+pub mod refs;
 pub mod scan;
 pub mod source;
 pub mod symbols;
 
 pub use check::{check, CheckOptions, Issue, Report, Severity};
 pub use extract::{draft, refine, Draft, MockAssistant, NotationAssistant, Suggestion};
-pub use macros::{insert_text, katex_macros, notation_tex, write_notation_tex, InsertMode};
+pub use macros::{insert_text, insert_text_with, katex_macros, notation_tex, notation_tex_with, write_notation_tex, InsertMode};
+pub use refs::RefWords;
 pub use model::{Conflict, Entry, Ignored, Kind, MergedEntry, Notation, Origin};
 pub use scan::{Scan, ScanOptions};
 pub use source::{Document, Loc};

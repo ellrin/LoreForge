@@ -9,3 +9,4 @@ serde_json.workspace = true
 toml.workspace = true
 csv.workspace = true
 thiserror.workspace = true
+lore-notation.workspace = true

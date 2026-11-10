@@ -19,6 +19,147 @@ const PCTemplates = (() => {
   };
   const input = (value = "", placeholder = "") => { const i = el("input"); i.value = value; i.placeholder = placeholder; return i; };
 
+  // ── House rules: [ref_words], [captions], [limits], [word_limits] ──
+  const REF_KINDS = [["fig", "圖"], ["tab", "表"], ["eq", "式"], ["sec", "節"]];
+  const REF_DEFAULT = { fig: "Fig.", tab: "Table", eq: "", sec: "Section" };
+  const num = (v, ph = "") => { const i = el("input"); i.type = "number"; i.min = "0"; i.inputMode = "numeric"; i.value = v ?? ""; i.placeholder = ph; return i; };
+  const intOf = (i) => { const n = parseInt(i.value, 10); return Number.isFinite(n) && n > 0 ? n : undefined; };
+  const block = (title, ...kids) => { const b = el("div", "tr-block"); b.append(el("div", "tr-h", title), ...kids); return b; };
+  const tick = (label, on) => { const l = el("label", "tr-tick"); const c = el("input"); c.type = "checkbox"; c.checked = !!on; l.append(c, el("span", "", label)); return [l, c]; };
+
+  /** The rules section of a journal: { node, value() } — value() is what PUT sends. */
+  function rulesSection(j) {
+    const rw = j.ref_words ?? {};
+    const cleverDetected = !!j.cleveref && !Object.keys(rw).length;
+    let mode = /^\s*cleveref\s*$/i.test(rw.mode ?? "") || cleverDetected ? "cleveref" : "words";
+
+    // references: mode, then a word per kind (mid-sentence / sentence start)
+    const modeSeg = el("div", "seg tr-mode");
+    const modes = [["words", "文字＋\\ref"], ["cleveref", "\\cref"]];
+    const grid = el("div", "tr-words");
+    grid.append(el("span"), el("span", "tr-col", "句中"), el("span", "tr-col", "句首"));
+    const inputs = {};
+    for (const [k, label] of REF_KINDS) {
+      const mid = input(rw[k] ?? "", REF_DEFAULT[k] || (k === "eq" ? "\\eqref" : ""));
+      const start = input(rw.sentence_start?.[k] ?? "", "同句中");
+      mid.setAttribute("aria-label", `${label} 句中`);
+      start.setAttribute("aria-label", `${label} 句首`);
+      inputs[k] = [mid, start];
+      grid.append(el("span", "tr-kind", label), mid, start);
+    }
+    const sample = el("code", "tr-sample");
+    const snippet = (k, atStart) => {
+      if (mode === "cleveref") return `\\${atStart ? "Cref" : "cref"}{${k}:1}`;
+      const [mid, start] = inputs[k];
+      const w = (atStart && start.value.trim()) || mid.value.trim() || REF_DEFAULT[k];
+      const cmd = k === "eq" ? "eqref" : "ref";
+      return w ? `${w}~\\${cmd}{${k}:1}` : `\\${cmd}{${k}:1}`;
+    };
+    const paint = () => {
+      modeSeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === mode)));
+      grid.hidden = mode === "cleveref";
+      sample.textContent = mode === "cleveref" ? `${snippet("fig", true)} · ${snippet("fig", false)}`
+        : ["fig", "tab", "eq", "sec"].map((k) => snippet(k, false)).join(" · ");
+    };
+    for (const [v, label] of modes) {
+      const b = el("button", "", label);
+      b.type = "button";
+      b.dataset.v = v;
+      b.onclick = () => { mode = v; paint(); };
+      modeSeg.append(b);
+    }
+    grid.addEventListener("input", paint);
+    const refHead = el("div", "tr-row");
+    refHead.append(modeSeg);
+    if (cleverDetected) refHead.append(el("span", "tr-note", "範本載入 cleveref"));
+
+    // captions
+    const capSel = (v) => {
+      const s = el("select");
+      [["", "—"], ["above", "上方"], ["below", "下方"]].forEach(([k, l]) => s.append(new Option(l, k)));
+      s.value = v === "above" || v === "below" ? v : "";
+      return s;
+    };
+    const capTab = capSel(j.captions?.table);
+    const capFig = capSel(j.captions?.figure);
+    const caps = el("div", "tr-pairs");
+    caps.append(field("表說明", capTab), field("圖說明", capFig));
+
+    // pages
+    const pages = num(j.limits?.pages, "—");
+    const [exLabel, exRefs] = tick("不含參考文獻", j.limits?.pages_exclude_refs);
+    const [anLabel, anon] = tick("雙盲匿名", j.limits?.anonymous);
+    const pageRow = el("div", "tr-pairs");
+    pageRow.append(field("頁數上限", pages), el("div", "tr-ticks"));
+    pageRow.lastChild.append(exLabel, anLabel);
+
+    // word limits
+    const wl = j.word_limits ?? {};
+    const abs = num(wl.abstract, "—");
+    const total = num(wl.total, "—");
+    const wordRow = el("div", "tr-pairs");
+    wordRow.append(field("摘要", abs), field("全文", total));
+    const secs = el("div", "tr-secs");
+    const addSec = (title = "", n = "") => {
+      const row = el("div", "tr-sec");
+      const t = input(title, "章節標題");
+      const c = num(n, "字數");
+      row.append(t, c, iconButton("x", "移除", () => row.remove()));
+      secs.append(row);
+      return t;
+    };
+    Object.entries(wl.sections ?? {}).forEach(([t, n]) => addSec(t, n));
+    const more = el("button", "ghost small tr-add", "章節");
+    more.type = "button";
+    more.prepend(icon("plus"));
+    more.onclick = () => addSec().focus();
+
+    const node = el("section", "tpl-rules");
+    node.append(
+      el("h4", "", "投稿規則"),
+      el("div", "tr-grid"),
+    );
+    node.lastChild.append(
+      block("引用", refHead, grid, sample),
+      block("圖表說明", caps),
+      block("篇幅", pageRow),
+      block("字數上限", wordRow, secs, more),
+    );
+    paint();
+
+    function value() {
+      const words = {};
+      const start = {};
+      for (const [k] of REF_KINDS) {
+        const [mid, st] = inputs[k];
+        if (mid.value.trim()) words[k] = mid.value.trim();
+        if (st.value.trim()) start[k] = st.value.trim();
+      }
+      if (Object.keys(start).length) words.sentence_start = start;
+      // cleveref in sample.tex counts while nothing is set: write the mode only when it differs
+      if (mode === "cleveref") { if (Object.keys(words).length || !j.cleveref) words.mode = "cleveref"; }
+      else if (!Object.keys(words).length && j.cleveref) words.mode = "words";
+      const captions = {};
+      if (capTab.value) captions.table = capTab.value;
+      if (capFig.value) captions.figure = capFig.value;
+      const limits = {};
+      if (intOf(pages)) limits.pages = intOf(pages);
+      if (exRefs.checked) limits.pages_exclude_refs = true;
+      if (anon.checked) limits.anonymous = true;
+      const word_limits = {};
+      if (intOf(abs)) word_limits.abstract = intOf(abs);
+      if (intOf(total)) word_limits.total = intOf(total);
+      const sections = {};
+      secs.querySelectorAll(".tr-sec").forEach((r) => {
+        const [t, c] = r.querySelectorAll("input");
+        if (t.value.trim() && intOf(c)) sections[t.value.trim()] = intOf(c);
+      });
+      if (Object.keys(sections).length) word_limits.sections = sections;
+      return { ref_words: words, captions, limits, word_limits };
+    }
+    return { node, value };
+  }
+
   async function open(select) {
     kind ??= store.get("pc.tplKind", "journal");
     try { list = await api("/api/templates"); } catch (e) { list = []; flash(e.message, 5000); }
@@ -126,6 +267,7 @@ const PCTemplates = (() => {
     const notesField = field("投稿規定", notes);
     notesField.classList.add("wide");
     grid.append(notesField);
+    const rules = rulesSection(j);
 
     const out = el("div", "tpl-out");
     const save = el("button", "primary small", "儲存");
@@ -134,7 +276,7 @@ const PCTemplates = (() => {
       try {
         const r = await api(`/api/templates/${encodeURIComponent(j.id)}`, {
           name: name.value, short: short.value, publisher: publisher.value, kind: kindSel.value, url: url.value, notes: notes.value,
-          class_options: opts.value, bib_style: style.value,
+          class_options: opts.value, bib_style: style.value, ...rules.value(),
         }, "PUT");
         Object.assign(j, r);
         flash("已儲存模板");
@@ -161,7 +303,7 @@ const PCTemplates = (() => {
     use.onclick = () => usePaper(j, main);
     const acts = el("div", "tpl-actions");
     acts.append(save, check, sample, use, out);
-    main.append(head, sub, grid, acts);
+    main.append(head, sub, grid, rules.node, acts);
   }
 
   function newForm() {

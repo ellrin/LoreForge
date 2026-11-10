@@ -418,14 +418,41 @@ window.PCTex = (() => {
     return n;
   }
 
+  // The journal's reference words (template.toml [ref_words], on
+  // state.paper.ref_words): { fig, tab, eq, sec, sentence_start: { kind: word }, mode }.
+  // Without them: what \cref prints here (REF_PREFIX) and what an inserted
+  // reference starts with (INSERT_WORD), as always.
   const REF_PREFIX = { fig: "Fig.", tab: "Table", eq: "Eq.", sec: "Section", alg: "Algorithm", thm: "Theorem" };
+  const INSERT_WORD = { fig: "Fig.", tab: "Table", eq: "", sec: "Section", alg: "Algorithm", thm: "Theorem" };
+  const RULE_KINDS = ["fig", "tab", "eq", "sec"];
+  const refRules = () => (typeof state !== "undefined" && state.paper?.ref_words) || {};
+  const cleveref = () => /^\s*cleveref\s*$/i.test(refRules().mode ?? "");
+  /** The word before a reference of `kind`: the journal's sentence-start word, its word, else `fallback`'s. */
+  function refWord(kind, atSentenceStart, fallback = INSERT_WORD) {
+    const r = refRules();
+    const start = r.sentence_start?.[kind];
+    if (atSentenceStart && typeof start === "string") return start.trim();
+    if (RULE_KINDS.includes(kind) && typeof r[kind] === "string") return r[kind].trim();
+    return fallback[kind] ?? "";
+  }
+  /** LaTeX for a reference to `key` as the journal writes it: `Fig.~\ref{fig:a}`,
+   *  `\eqref{eq:a}`, or `\cref{…}` / `\Cref{…}` (sentence start) for cleveref. */
+  function refSnippet(kind, key, atSentenceStart = false) {
+    if (cleveref()) return `\\${atSentenceStart ? "Cref" : "cref"}{${key}}`;
+    const cmd = kind === "eq" ? "eqref" : "ref";
+    const w = refWord(kind, atSentenceStart);
+    return w ? `${w}~\\${cmd}{${key}}` : `\\${cmd}{${key}}`;
+  }
   /** What \cmd{key} prints: [text, missing]. */
   function refText(cmd, key) {
     const num = labels[key] ?? compiled[key];
     if (!num) return [`[${key}]`, true];
     const kind = kinds[key] ?? (key.match(/^(fig|tab|eq|sec|alg|thm)/)?.[1]);
     if (cmd === "eqref") return [`(${num})`, false];
-    if (/^(autoref|cref|Cref)$/.test(cmd)) return [`${REF_PREFIX[kind] ?? ""} ${kind === "eq" ? `(${num})` : num}`.trim(), false];
+    if (/^(autoref|cref|Cref)$/.test(cmd)) {
+      const w = refWord(kind, cmd === "Cref", REF_PREFIX) || REF_PREFIX[kind] || "";
+      return [`${w} ${kind === "eq" ? `(${num})` : num}`.trim(), false];
+    }
     return [num, false];
   }
   function refNode(cmd, key) {
@@ -1008,6 +1035,7 @@ window.PCTex = (() => {
     setMacros, setNumbers, setFigureBase, setFigureSizes, number, resetCounters, renumber, updateRefs, lazily, hydrate, hasPending, fullImages, frontNode, bibliographyNode, render, isDisplay, heading, headingNumber, needsWhole, stripComments, tabularNode,
     numberEquations: (paragraphs) => number([{ paragraphs }]),
     citeNumber: (key) => cites[key]?.n ?? null,
+    refSnippet, refWord,
     get labels() { return labels; },
     get kinds() { return kinds; },
   };

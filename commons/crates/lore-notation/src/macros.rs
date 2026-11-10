@@ -5,6 +5,7 @@
 
 use crate::math;
 use crate::model::{Entry, Kind, Notation};
+use crate::refs::RefWords;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -88,7 +89,7 @@ pub fn balanced(s: &str) -> bool {
 }
 
 /// What a macro expands to in LaTeX (inside `\newcommand{\m}{…}`), or None.
-fn tex_body(e: &Entry) -> Option<(bool, String)> {
+fn tex_body(e: &Entry, words: &RefWords) -> Option<(bool, String)> {
     let latex = e.latex.as_deref().map(str::trim).filter(|s| !s.is_empty());
     Some(match e.kind() {
         Kind::Symbol => (false, format!("\\ensuremath{{{}}}", latex?)),
@@ -108,14 +109,20 @@ fn tex_body(e: &Entry) -> Option<(bool, String)> {
         }
         Kind::Abbrev => (false, e.short.clone()?),
         Kind::Term => (false, e.meaning_en.clone().or(e.short.clone()).or(latex.map(String::from))?),
-        Kind::Figure => (false, format!("Fig.~\\ref{{{}}}", e.label.as_deref()?)),
-        Kind::Table => (false, format!("Table~\\ref{{{}}}", e.label.as_deref()?)),
+        Kind::Figure => (false, words.snippet("fig", e.label.as_deref()?, false)),
+        Kind::Table => (false, words.snippet("tab", e.label.as_deref()?, false)),
     })
 }
 
 /// Contents of `notation.tex`. Entries with an invalid or clobbering macro
 /// name are left out and listed as `% skipped` comments.
 pub fn notation_tex(n: &Notation, existing: &BTreeSet<String>) -> String {
+    notation_tex_with(n, existing, &RefWords::default())
+}
+
+/// [`notation_tex`] with a journal's reference words (figure and table macros
+/// print `Figure~\ref{…}`, or `\cref{…}` in cleveref mode).
+pub fn notation_tex_with(n: &Notation, existing: &BTreeSet<String>, words: &RefWords) -> String {
     let mut out = String::new();
     out.push_str(GENERATED_HEADER);
     out.push('\n');
@@ -131,7 +138,7 @@ pub fn notation_tex(n: &Notation, existing: &BTreeSet<String>) -> String {
             out.push_str(&format!("% skipped {}: \\{name} 重複\n", e.id));
             continue;
         }
-        let Some((op, body)) = tex_body(e) else {
+        let Some((op, body)) = tex_body(e, words) else {
             out.push_str(&format!("% skipped {}: 缺少內容\n", e.id));
             continue;
         };
@@ -178,7 +185,7 @@ pub fn katex_macros(n: &Notation) -> BTreeMap<String, String> {
         if !name.chars().all(|c| c.is_ascii_alphabetic()) {
             continue;
         }
-        let Some((op, body)) = tex_body(e) else { continue };
+        let Some((op, body)) = tex_body(e, &RefWords::default()) else { continue };
         let body = if op {
             format!("\\operatorname{{{body}}}")
         } else if matches!(e.kind(), Kind::Abbrev | Kind::Term) {
@@ -209,6 +216,11 @@ pub enum InsertMode {
 /// What an "插入" button puts at the caret. `in_math`: the caret is already
 /// inside math. Macro mode falls back to literal when the entry has no macro.
 pub fn insert_text(e: &Entry, mode: InsertMode, in_math: bool) -> String {
+    insert_text_with(e, mode, in_math, &RefWords::default())
+}
+
+/// [`insert_text`] with a journal's reference words (mid-sentence form).
+pub fn insert_text_with(e: &Entry, mode: InsertMode, in_math: bool, words: &RefWords) -> String {
     let mac = e.macro_name().filter(|_| mode == InsertMode::Macro);
     // in math a trailing control word (`\speed`, `\alpha`) gets a space so a
     // letter typed next does not merge into it (`\speedx`)
@@ -219,16 +231,13 @@ pub fn insert_text(e: &Entry, mode: InsertMode, in_math: bool) -> String {
             None => wrap(e.latex.clone().unwrap_or_default()),
         },
         Kind::Equation => match (&e.label, mac) {
-            (Some(l), _) if !in_math => format!("\\eqref{{{l}}}"),
+            (Some(l), _) if !in_math => words.snippet("eq", l, false),
             (_, Some(m)) => wrap(format!("\\{m}")),
             _ => wrap(e.latex.clone().unwrap_or_default()),
         },
         Kind::Figure | Kind::Table => match mac {
             Some(m) => format!("\\{m}{{}}"),
-            None => {
-                let p = if e.kind() == Kind::Figure { "Fig." } else { "Table" };
-                format!("{p}~\\ref{{{}}}", e.label.clone().unwrap_or_default())
-            }
+            None => words.snippet(if e.kind() == Kind::Figure { "fig" } else { "tab" }, e.label.as_deref().unwrap_or_default(), false),
         },
         Kind::Abbrev => match mac {
             Some(m) => format!("\\{m}{{}}"),
@@ -405,6 +414,30 @@ mod tests {
         let mut f = Entry::new("f1", Kind::Figure);
         f.label = Some("fig:a".into());
         assert_eq!(insert_text(&f, InsertMode::Macro, false), "Fig.~\\ref{fig:a}");
+        let mut t = Entry::new("t1", Kind::Table);
+        t.label = Some("tab:a".into());
+        assert_eq!(insert_text(&t, InsertMode::Macro, false), "Table~\\ref{tab:a}");
+        let mut q = Entry::new("e1", Kind::Equation);
+        q.label = Some("eq:a".into());
+        assert_eq!(insert_text(&q, InsertMode::Macro, false), "\\eqref{eq:a}");
+    }
+
+    #[test]
+    fn insert_text_follows_the_journal() {
+        let mut f = Entry::new("f1", Kind::Figure);
+        f.label = Some("fig:a".into());
+        f.macro_name = Some("figa".into());
+        let words = RefWords { fig: Some("Figure".into()), eq: Some("Eq.".into()), ..Default::default() };
+        assert_eq!(insert_text_with(&f, InsertMode::Literal, false, &words), "Figure~\\ref{fig:a}");
+        let mut q = Entry::new("e1", Kind::Equation);
+        q.label = Some("eq:a".into());
+        assert_eq!(insert_text_with(&q, InsertMode::Macro, false, &words), "Eq.~\\eqref{eq:a}");
+        let mut n = Notation::default();
+        n.entries = vec![f.clone()];
+        assert!(notation_tex(&n, &BTreeSet::new()).contains("\\newcommand{\\figa}{Fig.~\\ref{fig:a}}"), "default unchanged");
+        assert!(notation_tex_with(&n, &BTreeSet::new(), &words).contains("\\newcommand{\\figa}{Figure~\\ref{fig:a}}"));
+        let c = RefWords { mode: Some("cleveref".into()), ..Default::default() };
+        assert_eq!(insert_text_with(&f, InsertMode::Literal, false, &c), "\\cref{fig:a}");
     }
 
     #[test]

@@ -87,6 +87,13 @@ notation_tex(&n, &existing) -> String                       // \newcommand / \De
 write_notation_tex(dir, &n, &existing) -> io::Result<PathBuf>
 katex_macros(&n) -> BTreeMap<"\\name", body>               // for previews (PCTex.setMacros)
 insert_text(&entry, InsertMode::{Macro,Literal}, in_math) -> String  // in math a trailing \name gets a space (`\speed ` + x ≠ `\speedx`)
+insert_text_with(.., &RefWords) / notation_tex_with(.., &RefWords)  // a journal's reference words; the plain versions use RefWords::default()
+
+// a journal's reference words ([ref_words] in a PaperComposer template)
+RefWords { fig, tab, eq, sec: Option<String>, sentence_start: {kind → word}, mode: Option<"words"|"cleveref"> }
+RefWords::default().snippet("fig", "fig:a", false) == "Fig.~\ref{fig:a}"   // also Table~\ref, Section~\ref, bare \eqref
+rw.snippet(kind, key, sentence_start) -> String              // "Figure~\ref{…}", "Eq.~\eqref{…}", \cref / \Cref in cleveref mode
+rw.word(kind, sentence_start) -> String                      // sentence_start word, else the kind's word, else the default
 macros::nomenclature_tex(&n, "zh"|"en") -> String
 macros::rename_macro(text, old, new) -> (String, n)          // rewrite uses when a macro is renamed
 macros::replace_symbol(text, old_latex, new_latex) -> (String, replaced, skipped)  // literal mode
@@ -106,7 +113,9 @@ extract::refine(&mut draft, &dyn NotationAssistant, "zh-TW") -> usize
 `CheckOptions`: `caption_defines` (false — a caption that uses a symbol first
 is reported), `grace_sentences` (3 — "…equation… where $x$ is …"),
 `allow_abbrevs`, `section_labels`, `abstract_abbrevs`, `index_letters`
-(`i j k l t d`), `max_locations`.
+(`i j k l t d`), `max_locations`, `ref_words` (None — a journal's
+`RefWords`: references are checked against its words instead of only for
+mixed forms).
 
 ### Report
 
@@ -137,7 +146,8 @@ the sentence in the paragraph, headings excluded; `context` is
 | `ref_undefined` / `label_duplicate` | ref | error | |
 | `hardcoded_reference` | ref | warning | "Section III-C", "Fig. 2", "Table 1", "Eq. (3)" typed instead of `\ref` |
 | `caption_style` | style | info | caption period / initial capital / Title Case / table caption above-below inconsistent |
-| `ref_prefix_style` | style | info | `Fig.~\ref` and `Figure~\ref` mixed mid-sentence |
+| `ref_prefix_style` | style | info | `Fig.~\ref` and `Figure~\ref` mixed mid-sentence (only without `ref_words`) |
+| `ref_word_style` | style | warning/info | with `ref_words`: a word naming the label's kind differs from the journal's (mid-sentence, or its `sentence_start` word); a word before `\cref`; in cleveref mode a word before plain `\ref` (info) or `\cref` at a sentence start (info). Plurals and other wording are not compared |
 | `unused_entry` / `unregistered_symbol` / `registry_invalid` | registry | info/info/error | registry vs text; bad or clobbering macro names |
 
 ### How definitions are recognised (heuristics)

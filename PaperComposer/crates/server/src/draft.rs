@@ -71,7 +71,7 @@ async fn ctx(s: &Shared, name: &str) -> Result<Ctx, Resp> {
 /// with the registered macros and labels.
 fn material_of(c: &Ctx) -> (Material, String) {
     let m = material::load(&c.ws, &c.dir);
-    let text = material::describe(&m) + &crate::notation::describe(&crate::notation::load(&c.ws, &c.dir));
+    let text = material::describe(&m) + &crate::notation::describe(&crate::notation::load(&c.ws, &c.dir), crate::notation::ref_words(&c.ws, &c.dir).as_ref());
     (m, text)
 }
 
@@ -819,7 +819,8 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
         return bad("沒有可用的寫作引擎");
     }
     let notation = crate::notation::load(&c.ws, &c.dir);
-    let style = style_text(&c.ws) + &crate::notation::describe(&notation);
+    let check_opt = crate::notation::options(&c.ws, &c.dir);
+    let style = style_text(&c.ws) + &crate::notation::describe(&notation, check_opt.ref_words.as_ref());
     let (mat, _) = material_of(&c);
     // Other sections already drafted count as context for the notation checks.
     let other_drafts: Vec<String> = sess.drafts.iter().filter(|d| d.section != b.section).map(|d| d.paras.iter().map(|p| p.text.clone()).collect::<Vec<_>>().join("\n\n")).collect();
@@ -866,7 +867,7 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
                     // The registry's checks, in the context of the paper and the drafts so far.
                     let mut ctx_texts = other_drafts.clone();
                     ctx_texts.push(out.iter().map(|x| x.text.clone()).collect::<Vec<_>>().join("\n\n"));
-                    let nc = crate::notation::check(&c.dir, &notation, &ctx_texts, &text);
+                    let nc = crate::notation::check(&c.dir, &notation, &check_opt, &ctx_texts, &text);
                     let mut problems = check.problems.clone();
                     problems.extend(nc.shown.iter().map(|m| format!("對照表：{m}")));
                     if (check.ok() && nc.blocking.is_empty()) || done.is_some() {
@@ -1087,8 +1088,9 @@ async fn plan_revision(State(s): State<Shared>, AxPath((name, id)): AxPath<(Stri
     let mut plan = tri!(ask_model(&s, "pc-draft-revise", None, &prompt, rv::plan_schema(), |x| rv::parse_plan(x, &dir)).await);
     // The registry's checks on every change; findings join the effects.
     let notation = crate::notation::load(&c.ws, &c.dir);
+    let check_opt = crate::notation::options(&c.ws, &c.dir);
     for ch in &plan.changes {
-        let nc = crate::notation::check(&c.dir, &notation, &[], &ch.text);
+        let nc = crate::notation::check(&c.dir, &notation, &check_opt, &[], &ch.text);
         plan.effects.extend(nc.shown.iter().map(|m| format!("{}：對照表：{m}", ch.id)));
         plan.new_symbols.extend(nc.new_symbols);
     }

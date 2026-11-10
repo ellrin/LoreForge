@@ -2003,9 +2003,12 @@ async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> imp
             let main = std::fs::read_to_string(dir.join("main.tex")).unwrap_or_default();
             let (front, back) = preview::front_back(&main);
             let m = meta::read_meta(&dir);
-            // the journal's word limits, for the word count
+            // the journal's house rules: word limits for the word count,
+            // reference words and caption places for inserting, page limits
             let ws = s.loaded.read().await.workspace.clone();
-            let word_limits = m.journal.as_deref().zip(ws).and_then(|(j, ws)| pc_core::journal::load(&ws.join("publishers"), j)).map(|j| j.meta.word_limits).unwrap_or_default();
+            let journal = m.journal.as_deref().zip(ws).and_then(|(j, ws)| pc_core::journal::load(&ws.join("publishers"), j));
+            let ref_words = journal.as_ref().map(|j| j.effective_ref_words()).unwrap_or_default();
+            let (word_limits, captions, limits) = journal.map(|j| (j.meta.word_limits, j.meta.captions, j.meta.limits)).unwrap_or_default();
             Json(serde_json::json!({
             "sections": paper::load_paper(&dir),
             "macros": paper::paper_macros(&dir),
@@ -2016,6 +2019,9 @@ async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> imp
             "bibliography": preview::bibliography(&dir, &export::cache_dir(&name)),
             "meta": m,
             "word_limits": word_limits,
+            "ref_words": ref_words,
+            "captions": captions,
+            "limits": limits,
         }))
         .into_response()
         }
@@ -2378,7 +2384,8 @@ async fn notation_check(State(s): State<Shared>, AxPath(name): AxPath<String>, J
 /// their numbers, which hold line positions), plus the entries `find` touches.
 fn replace_check(ws: &Path, dir: &Path, before: &[String], after: &[String], find: &str) -> serde_json::Value {
     let n = crate::notation::load(ws, dir);
-    let run = |texts: &[String]| crate::notation::check(dir, &n, &[], &texts.join("\n\n"));
+    let opt = crate::notation::options(ws, dir);
+    let run = |texts: &[String]| crate::notation::check(dir, &n, &opt, &[], &texts.join("\n\n"));
     let (old, new) = (run(before), run(after));
     let key = |m: &String| m.chars().filter(|c| !c.is_ascii_digit()).collect::<String>();
     let added = |was: &[String], now: &[String]| -> Vec<String> {

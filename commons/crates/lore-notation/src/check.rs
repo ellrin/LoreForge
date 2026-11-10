@@ -7,6 +7,7 @@
 use crate::abbrev;
 use crate::math;
 use crate::model::{Kind, Notation};
+use crate::refs::RefWords;
 use crate::scan::{Area, ItemKind, Scan};
 use crate::source::Loc;
 use crate::symbols::{self, DefKind, SymbolInfo, Symbols};
@@ -104,6 +105,10 @@ pub struct CheckOptions {
     pub index_letters: Vec<String>,
     /// Cap on locations listed per issue.
     pub max_locations: usize,
+    /// The journal's reference words (`[ref_words]` in its template). When
+    /// set, a reference written another way is reported (`ref_word_style`)
+    /// instead of only mixed forms (`ref_prefix_style`).
+    pub ref_words: Option<RefWords>,
 }
 
 impl Default for CheckOptions {
@@ -116,6 +121,7 @@ impl Default for CheckOptions {
             abstract_abbrevs: true,
             index_letters: math::DEFAULT_INDEX.iter().map(|s| s.to_string()).collect(),
             max_locations: 30,
+            ref_words: None,
         }
     }
 }
@@ -525,8 +531,7 @@ impl<'a> Ctx<'a> {
                 // an equation label nobody cites is harmless (numbering only): a hint
                 let (sev, fix) = match l.kind.as_str() {
                     "eq" => (Severity::Info, "不需要引用的話可以拿掉 \\label".to_string()),
-                    "fig" => (Severity::Warning, format!("在正文用 Fig.~\\ref{{{}}} 提到它", l.key)),
-                    "tab" => (Severity::Warning, format!("在正文用 Table~\\ref{{{}}} 提到它", l.key)),
+                    "fig" | "tab" => (Severity::Warning, format!("在正文用 {} 提到它", self.opt.ref_words.clone().unwrap_or_default().snippet(&l.kind, &l.key, false))),
                     _ => (Severity::Warning, format!("用 \\ref{{{}}} 提到它，或拿掉標籤", l.key)),
                 };
                 let msg = format!("{what}標籤 {} 從未被引用 — {fix}", l.key);
@@ -603,6 +608,10 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
+        if let Some(rw) = &self.opt.ref_words {
+            self.ref_words(rw, &kinds);
+            return;
+        }
         let mut per_kind: BTreeMap<&str, Vec<(String, Vec<usize>)>> = BTreeMap::new();
         for ((k, f), offs) in forms {
             per_kind.entry(k).or_default().push((f, offs));
@@ -616,6 +625,84 @@ impl<'a> Ctx<'a> {
             let locs = v[1..].iter().flat_map(|(_, o)| o.iter().map(|x| scan.loc(*x, scan.area_at(*x).as_str()))).collect();
             let msg = format!("引用前綴不一致：{} — 統一寫成「{}」", names.join("、"), v[0].0);
             self.push("ref_prefix_style", "style", Severity::Info, msg, None, locs);
+        }
+    }
+
+    /// References against the journal's words: `Figure~\ref` where it says
+    /// `Fig.` (or its sentence-start word), a word before `\cref`, and plain
+    /// `\ref` in a cleveref journal. Only a word that names the label's kind
+    /// is compared ("see~\ref", plurals and other wording are left alone).
+    fn ref_words(&mut self, rw: &RefWords, kinds: &BTreeMap<&str, &str>) {
+        const VARIANTS: &[(&str, &[&str])] = &[
+            ("fig", &["Fig.", "Fig", "Figure"]),
+            ("tab", &["Table", "Tab.", "Tab"]),
+            ("eq", &["Eq.", "Eq", "Eqn.", "Eqn", "Equation"]),
+            ("sec", &["Section", "Sec.", "Sec"]),
+        ];
+        let scan = self.scan;
+        let items = &scan.items;
+        let starts = |i: usize| scan.sentences.get(items[i].sentence).is_some_and(|s| s.items.start == i);
+        // (message, subject) → places
+        let mut found: BTreeMap<(String, String, u8), Vec<usize>> = BTreeMap::new();
+        for r in &scan.refs {
+            let Some(&kind) = kinds.get(r.key.as_str()) else { continue };
+            let Some((_, variants)) = VARIANTS.iter().find(|(k, _)| *k == kind) else { continue };
+            if r.item >= items.len() {
+                continue;
+            }
+            // the word right before: "Fig." / "Figure" / none
+            let (word, first) = match r.item.checked_sub(1).map(|k| (k, &items[k].kind)) {
+                Some((k, ItemKind::Punct('.'))) if k > 0 => match &items[k - 1].kind {
+                    ItemKind::Word(w) => (Some(format!("{w}.")), starts(k - 1)),
+                    _ => (None, starts(r.item)),
+                },
+                Some((k, ItemKind::Word(w))) => (Some(w.clone()), starts(k)),
+                _ => (None, starts(r.item)),
+            };
+            let word = word.filter(|w| variants.contains(&w.as_str()));
+            let cref = matches!(r.cmd.as_str(), "cref" | "Cref");
+            let plain = matches!(r.cmd.as_str(), "ref" | "eqref");
+            if cref {
+                if let Some(w) = &word {
+                    found.entry((format!("「{w}~\\{}」會把名稱印兩次 — 只寫 \\{}{{…}}", r.cmd, r.cmd), w.clone(), 1)).or_default().push(r.off);
+                }
+                if rw.cleveref() && first && r.cmd == "cref" {
+                    found.entry(("句首用 \\Cref{…}".into(), "cref".into(), 2)).or_default().push(r.off);
+                }
+                continue;
+            }
+            if !plain {
+                continue;
+            }
+            if rw.cleveref() {
+                if word.is_some() {
+                    let want = rw.snippet(kind, "…", first);
+                    found.entry((format!("期刊用 cleveref：寫成 {want}"), r.cmd.clone(), 2)).or_default().push(r.off);
+                }
+                continue;
+            }
+            // only kinds the journal sets a word for (at this position)
+            let set = rw.configured(kind).is_some() || first && rw.sentence_start.contains_key(kind);
+            let Some(w) = word.filter(|_| set) else { continue };
+            let want = rw.word(kind, first);
+            if w != want {
+                let cmd = if kind == "eq" { "eqref" } else { "ref" };
+                let at = if first { "句首" } else { "句中" };
+                let msg = if want.is_empty() {
+                    format!("期刊{at}只寫 \\{cmd}{{…}}，不加「{w}」")
+                } else {
+                    format!("期刊{at}寫「{want}~\\{cmd}」：這裡是「{w}~\\{cmd}」")
+                };
+                found.entry((msg, w, 0)).or_default().push(r.off);
+            }
+        }
+        for ((msg, subject, sev), offs) in found {
+            let sev = match sev {
+                0 | 1 => Severity::Warning,
+                _ => Severity::Info,
+            };
+            let locs = offs.iter().map(|x| scan.loc(*x, scan.area_at(*x).as_str())).collect();
+            self.push("ref_word_style", "style", sev, msg, Some(subject), locs);
         }
     }
 

@@ -34,6 +34,34 @@
   - `publisher`: publisher or organiser.
   - `url`: author instructions, if the template states them.
   - `notes`: rules found in the template (page or word limits, reference style, figure formats, anonymity, required sections).
+  - Structured rules, only those the template or its guidelines actually state (leave the rest out; never guess). For each one you fill, quote the evidence in `notes` (file and the sentence).
+    ```toml
+    [ref_words]            # the word before \ref in running text
+    fig = "Fig."           # or "Figure"
+    tab = "Table"
+    eq = "Eq."             # "" when equations are cited only as (1)
+    sec = "Section"
+    sentence_start = { fig = "Figure" }   # only when the guidelines name a different word at the start of a sentence
+    mode = "cleveref"      # when the template loads \usepackage{cleveref} and cites with \cref; then leave the words out
+
+    [captions]
+    table = "above"        # "above" or "below", exactly
+    figure = "below"
+
+    [limits]
+    pages = 8              # an integer
+    pages_exclude_refs = true
+    anonymous = true       # double-blind review
+
+    [word_limits]
+    abstract = 250
+    total = 6000
+
+    [word_limits.sections]
+    Introduction = 1000    # by section title
+    ```
+  - Check `sample.tex` for `\usepackage{cleveref}` (also inside `\usepackage{…,cleveref}`): if it is loaded, set `mode = "cleveref"`.
+  - Words, positions and numbers must be valid TOML values of these types, or the whole file is ignored.
 
 ## Word templates
 - Read `_upload/prep/word-format.txt` and `_upload/prep/word.md`.
