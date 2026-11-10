@@ -17,7 +17,10 @@
 //! citations `[n]` become `\cite{refn}` and typed "Fig. 1" / "Table 1" /
 //! "Eq. (1)" / "Section 2" become `\ref`s to those labels (`refs`).
 
+pub mod api;
 pub mod ast;
+pub mod bibparse;
+pub mod out;
 pub mod refs;
 pub mod synth;
 
@@ -353,7 +356,8 @@ mod tests {
         assert!(all.contains("We study folded widgets") && !all.contains("very simple") && all.contains("added in review") && !all.contains("was removed"), "{all}");
         assert!(!all.chars().any(|c| ('\u{E000}'..='\u{E0FF}').contains(&c)), "no markers left");
         let bib = std::fs::read_to_string(dest.join("refs.bib")).unwrap();
-        assert!(bib.contains("@misc{ref1,") && bib.contains("Folded widgets"), "{bib}");
+        assert!(bib.contains("@article{ref1,") && bib.contains("title = {Folded widgets}") && bib.contains("year = {2020}"), "{bib}");
+        assert!(bib.contains("@inproceedings{ref3,") && bib.contains("booktitle = {Proceedings of Widget Day}"), "{bib}");
 
         // review.json: three changes by daidai, one comment
         let r = review::load(&dest);

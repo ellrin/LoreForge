@@ -122,33 +122,11 @@ pub fn rewrite(text: &str, labels: &[String], refs: usize) -> String {
     typed(&citations(text, refs), labels)
 }
 
-/// The typed reference list as BibTeX: `ref1`, `ref2`, … holding the text
-/// as written (a `note`), until each is matched to its record.
+/// The typed reference list as BibTeX: `ref1`, `ref2`, … in list order
+/// (the typed citations point at these keys), each read into its fields
+/// (`bibparse`); the text as written stays in `annote`.
 pub fn bibtex(refs: &[String]) -> String {
-    let esc = |s: &str| -> String {
-        let mut o = String::new();
-        let mut depth = 0i32;
-        for c in s.chars() {
-            match c {
-                '&' | '%' | '$' | '#' | '_' => {
-                    o.push('\\');
-                    o.push(c);
-                }
-                '{' => {
-                    depth += 1;
-                    o.push(c);
-                }
-                '}' if depth > 0 => {
-                    depth -= 1;
-                    o.push(c);
-                }
-                '}' | '\\' => {}
-                _ => o.push(c),
-            }
-        }
-        o + &"}".repeat(depth.max(0) as usize)
-    };
-    refs.iter().enumerate().map(|(i, r)| format!("@misc{{ref{},\n  note = {{{}}}\n}}\n\n", i + 1, esc(r))).collect()
+    refs.iter().enumerate().map(|(i, r)| super::bibparse::entry(&format!("ref{}", i + 1), &super::bibparse::parse(r))).collect()
 }
 
 #[cfg(test)]
@@ -175,7 +153,8 @@ mod tests {
 
     #[test]
     fn reference_list_as_bibtex() {
-        let b = bibtex(&["A. Writer, R&D of widgets, J. 3 (2020) 1-10.".into()]);
-        assert_eq!(b, "@misc{ref1,\n  note = {A. Writer, R\\&D of widgets, J. 3 (2020) 1-10.}\n}\n\n");
+        let b = bibtex(&["A. Writer, R&D of widgets, J. Widgets 3 (2020) 1-10.".into()]);
+        assert!(b.starts_with("@article{ref1,\n  author = {Writer, A.},\n  title = {R\\&D of widgets},\n  journal = {J. Widgets},\n  year = {2020},"), "{b}");
+        assert!(!b.contains("\n  note ="), "{b}");
     }
 }

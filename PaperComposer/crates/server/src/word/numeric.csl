@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<style xmlns="http://purl.org/net/xbiblio/csl" class="in-text" version="1.0" demote-non-dropping-particle="sort-only" default-locale="en-US">
+  <info>
+    <title>PaperComposer numeric</title>
+    <id>https://github.com/ellrin/PaperComposer/numeric</id>
+    <updated>2026-11-10T00:00:00+00:00</updated>
+  </info>
+  <macro name="author">
+    <names variable="author">
+      <name initialize-with=". " delimiter=", " and="text"/>
+      <substitute>
+        <names variable="editor"/>
+      </substitute>
+    </names>
+  </macro>
+  <macro name="title">
+    <choose>
+      <if type="book thesis report" match="any">
+        <text variable="title" font-style="italic"/>
+      </if>
+      <else>
+        <text variable="title" quotes="true"/>
+      </else>
+    </choose>
+  </macro>
+  <macro name="venue">
+    <choose>
+      <if type="paper-conference chapter" match="any">
+        <text variable="container-title" prefix="in " font-style="italic"/>
+      </if>
+      <else>
+        <text variable="container-title" font-style="italic"/>
+      </else>
+    </choose>
+  </macro>
+  <citation collapse="citation-number">
+    <sort>
+      <key variable="citation-number"/>
+    </sort>
+    <layout prefix="[" suffix="]" delimiter=", ">
+      <text variable="citation-number"/>
+    </layout>
+  </citation>
+  <bibliography entry-spacing="0">
+    <layout suffix=".">
+      <text variable="citation-number" prefix="[" suffix="] "/>
+      <group delimiter=", ">
+        <text macro="author"/>
+        <text macro="title"/>
+        <text macro="venue"/>
+        <text variable="publisher"/>
+        <group delimiter=" ">
+          <text term="volume" form="short"/>
+          <text variable="volume"/>
+        </group>
+        <group delimiter=" ">
+          <text term="issue" form="short"/>
+          <text variable="issue"/>
+        </group>
+        <group delimiter=" ">
+          <label variable="page" form="short"/>
+          <text variable="page"/>
+        </group>
+        <date variable="issued">
+          <date-part name="year"/>
+        </date>
+        <text variable="DOI" prefix="doi: "/>
+      </group>
+    </layout>
+  </bibliography>
+</style>
