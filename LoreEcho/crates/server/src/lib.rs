@@ -108,7 +108,10 @@ fn engines(shared: &Shared) -> lore_engines::Engines {
 }
 
 pub fn router(shared: Shared) -> Router {
-    let e = engines(&shared);
+    let mut e = engines(&shared);
+    if let Some(rt) = shared.llm.local_rt.clone() {
+        e = e.shared(rt); // 本機 status, 釋放, and this app's share of the idle checks
+    }
     router_with(shared, e)
 }
 

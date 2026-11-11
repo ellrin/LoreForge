@@ -319,7 +319,12 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while building LoreEcho")
-        .run(|_, _| {});
+        .run(|_, event| {
+            // quitting: this app's hold on the shared local model goes (the last user stops it)
+            if let tauri::RunEvent::Exit = event {
+                le_server::llm::quit();
+            }
+        });
 }
 
 #[cfg(test)]

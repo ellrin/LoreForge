@@ -26,7 +26,9 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   `figure_scale` / `figure_offset_y` clamped, sent as `figure`), `chat.rs` (transcript checks, system prompt =
   persona + name + `BREVITY_RULE`, SSE `start/delta/done/error`), `llm.rs` (task `le-chat` from
   `tasks.toml`, class `ask`: `local:current` then `claude:selected`; local engine =
-  `LOREECHO_LLM_URL` else `private/shared/engine.toml`; keys via `SharedKeys::for_app("LoreEcho")`).
+  `LOREECHO_LLM_URL` else the shared model id of `private/shared/engine.toml` on the machine's one
+  llama-server (lore-llm `shared_runtime`, `../docs/local-models.md`; `llm::quit()` at exit); keys via
+  `SharedKeys::for_app("LoreEcho")`).
   Theme, `/prefs.css`, lore-shell `FILES` and the lore-engines router exactly as in KnowledgeBase.
   `DesktopHook`: `PUT /api/window {expanded}` and `PUT /api/settings {shortcut}` reach the desktop app.
 - `apps/desktop` (`loreecho`): server in-process; one frameless, transparent, always-on-top window

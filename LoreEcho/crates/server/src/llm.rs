@@ -4,9 +4,9 @@
 //! ANTHROPIC_API_KEY, never a file.
 //!
 //! The local engine (`local:current`): `LOREECHO_LLM_URL` (+ `LOREECHO_LLM_MODEL`), else the
-//! engine all LoreForge apps share, `private/shared/engine.toml` `[engine] url / model`
-//! (re-read on every call: the server may change port). LoreEcho never starts a
-//! llama-server itself.
+//! model all LoreForge apps share (`private/shared/engine.toml` `[engine] model`, re-read on
+//! every call) on the machine's one llama-server: lore-llm `shared_runtime` acquires it per
+//! request and starts it when nobody has (docs/local-models.md).
 
 use std::sync::Arc;
 
@@ -14,6 +14,7 @@ use lore_llm::catalog::Catalog;
 use lore_llm::claude_code::{Cache, Cli};
 use lore_llm::router::{ApiAccess, ExternalServer, LocalAccess, ProviderFactory, RouteError, StandardFactory, SubscriptionAccess};
 use lore_llm::secrets::{Account, SharedKeys};
+use lore_llm::shared_runtime::SharedRuntime;
 use lore_llm::{Route, RouteOptions, Router, TaskTable};
 use serde_json::Value;
 
@@ -21,6 +22,14 @@ pub const TASKS: &str = include_str!("../tasks.toml");
 /// The keychain service read before the shared one's old names.
 pub const SERVICE: &str = "LoreEcho";
 pub const TASK_CHAT: &str = "le-chat";
+/// Short name in the shared local-model registry (and `ports.json`).
+pub const APP: &str = "le";
+
+/// At quit: this app's hold on the shared local model goes; the server stops when no other
+/// app uses it.
+pub fn quit() {
+    SharedRuntime::shutdown_process();
+}
 
 pub struct Llm {
     catalog: Catalog,
@@ -30,6 +39,8 @@ pub struct Llm {
     cc: Arc<Cache>,
     /// `LOREECHO_LLM_URL`, when set.
     external: Option<ExternalServer>,
+    /// The machine's shared llama-server (`None`: tests).
+    pub local_rt: Option<Arc<SharedRuntime>>,
     /// Where the shared engine is kept (`private/shared/engine.toml`).
     shared: Option<lore_home::Home>,
     base_url: String,
@@ -56,6 +67,7 @@ impl Llm {
             cli: Cli::default(),
             cc: Arc::new(Cache::default()),
             external: env("LOREECHO_LLM_URL").map(|url| ExternalServer { url, model: env("LOREECHO_LLM_MODEL") }),
+            local_rt: home.as_ref().and_then(|_| SharedRuntime::process(APP)),
             shared: home,
             base_url: env("LOREECHO_CLAUDE_BASE_URL").unwrap_or_else(|| lore_llm::claude_api::DEFAULT_BASE_URL.into()),
             fake: None,
@@ -68,6 +80,7 @@ impl Llm {
         let mut l = Llm::new(None, None);
         l.external = None;
         l.shared = None;
+        l.local_rt = None;
         l.keys.isolate();
         l.cli = Cli { bin: Some(std::env::temp_dir().join("le-no-such-claude")), config_dir: None };
         l
@@ -86,12 +99,9 @@ impl Llm {
         TaskTable::load(base, user_file.filter(|p| p.is_file()))
     }
 
-    /// The local server: `LOREECHO_LLM_URL`, else the shared one.
+    /// The own server: `LOREECHO_LLM_URL`, when set.
     fn external(&self) -> Option<ExternalServer> {
-        self.external.clone().or_else(|| {
-            let e = self.shared.as_ref()?.engine()?;
-            Some(ExternalServer { url: e.url?, model: e.model })
-        })
+        self.external.clone()
     }
 
     fn factory(&self) -> StandardFactory {
@@ -99,7 +109,15 @@ impl Llm {
         f.prefer_subscription = true;
         f.api = self.keys.get(None, &Account::Single).map(|(k, _)| ApiAccess { base_url: self.base_url.clone(), api_key: k, fallbacks: true });
         f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: false, temp_prefix: "loreecho-claude".into() });
-        f.local = Some(LocalAccess { external: self.external(), zh_tw: true, ..Default::default() });
+        let e = self.shared.as_ref().and_then(|h| h.engine()).unwrap_or_default();
+        f.local = Some(LocalAccess {
+            external: self.external(),
+            shared: self.local_rt.clone(),
+            default_model: e.model,
+            vision_model: e.vision_model,
+            zh_tw: true,
+            ..Default::default()
+        });
         f
     }
 
