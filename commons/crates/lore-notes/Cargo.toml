@@ -1,0 +1,14 @@
+[package]
+name = "lore-notes"
+version.workspace = true
+edition.workspace = true
+description = "PaperComposer notes (筆記 and 靈感): the .tex file format with its front matter, unique names, the trash, and the lore-notation check every write runs."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+lore-notation = { path = "../lore-notation" }
+
+[dev-dependencies]
+tempfile.workspace = true

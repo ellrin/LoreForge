@@ -1175,6 +1175,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-notes"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "lore-notation",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "lore-ooxml"
 version = "0.1.0"
 dependencies = [
