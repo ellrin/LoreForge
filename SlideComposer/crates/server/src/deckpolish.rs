@@ -19,7 +19,7 @@
 //! | Method | Path | |
 //! |---|---|---|
 //! | GET | /api/decks/{name}/polish | the last report (`{items: []}` when none) |
-//! | POST | /api/decks/{name}/polish | `{engine?, terms?}` → run the checks, the report |
+//! | POST | /api/decks/{name}/polish | `{engine?, terms?, terms_only?, roles?}` → run the checks, the report |
 //! | POST | /api/decks/{name}/polish/{item} | `{action: undo \| apply}` → changed slides + `item` |
 //! | POST | /api/decks/{name}/polish/changes | `{action, changes, label?}` → changed slides (a fix from another report) |
 
@@ -528,7 +528,8 @@ fn check_captions_refs(deck: &Deck, roles: &[String], profile: Option<&Profile>,
     // pictures: captioned anywhere → fine; otherwise one item per picture
     let mut captioned: BTreeSet<String> = BTreeSet::new();
     let mut missing: Vec<(String, String, u32)> = vec![];
-    let target = profile.map(|p| p.refs.prefix.clone()).filter(|p| !p.is_empty()).unwrap_or_else(|| "Ref:".into());
+    // the author's prefix only when seen often enough; else the form todeck writes
+    let target = profile.filter(|p| p.refs.lines >= 3).map(|p| p.refs.prefix.clone()).filter(|p| !p.is_empty()).unwrap_or_else(|| "Ref:".into());
     for (s, role) in deck.slides.iter().zip(roles) {
         if matches!(role.as_str(), "cover" | "thanks") || s.hidden {
             continue;
@@ -1000,6 +1001,9 @@ pub struct Options {
     pub terms: Option<bool>,
     /// Title → role hints (the plan's), see [`roles_for`].
     pub roles: Vec<(String, String)>,
+    /// Only the model's term suggestions (after the 論文報告 job's deterministic pass): the
+    /// deck's report keeps its other items, earlier term suggestions are replaced.
+    pub terms_only: bool,
 }
 
 /// Polish deck `name`: the deterministic checks (applied and saved), then the model's term
@@ -1008,10 +1012,18 @@ pub async fn polish(s: &Shared, name: &str, profile: Option<&Profile>, opt: &Opt
     let sess = crate::session(s, name).map_err(|e| e.1)?;
     let (mut rep, deck, dir) = {
         let mut sess = sess.lock().unwrap();
-        let (_, notation) = crate::notation::load(&sess.dir, None);
-        let roles = roles_for(&sess.editor.deck, &opt.roles);
-        let rep = run_checks(&mut sess.editor, &Input { profile, notation: &notation, roles });
-        sess.save().map_err(|e| e.to_string())?;
+        let rep = if opt.terms_only {
+            let mut r = load_report(&sess.dir);
+            r.items.retain(|i| !(i.check == 6 && i.object.is_none() && i.state == "suggested"));
+            r.notes.clear();
+            r
+        } else {
+            let (_, notation) = crate::notation::load(&sess.dir, None);
+            let roles = roles_for(&sess.editor.deck, &opt.roles);
+            let rep = run_checks(&mut sess.editor, &Input { profile, notation: &notation, roles });
+            sess.save().map_err(|e| e.to_string())?;
+            rep
+        };
         (rep, sess.editor.deck.clone(), sess.dir.clone())
     };
     if opt.terms != Some(false) {

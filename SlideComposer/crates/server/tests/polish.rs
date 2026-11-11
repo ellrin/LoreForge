@@ -248,6 +248,7 @@ fn profile() -> Profile {
     p.roles.insert("takeaway".into(), deckstyle::RoleStyle { fixed_title: Some("Take home messages".into()), ..Default::default() });
     p.bullets = deckstyle::Stat { n: 30, median: 3.0, p90: 5.0, max: 6.0 };
     p.refs.prefix = "Ref:".into();
+    p.refs.lines = 5;
     p.captions.fig_form = "Fig.".into();
     p
 }
@@ -418,6 +419,13 @@ async fn polish_over_http_with_a_mock_model() {
     // the saved report remembers the states
     let (_, v) = call(&app, "GET", &format!("/api/decks/{name}/polish"), None).await;
     assert_eq!(v["items"].as_array().unwrap().iter().find(|i| i["id"].as_u64() == Some(id)).unwrap()["state"], "undone");
+    // only the term step again: the other items stay, no duplicate suggestion
+    let n = v["items"].as_array().unwrap().len();
+    let (s, v) = call(&app, "POST", &format!("/api/decks/{name}/polish"), Some(json!({ "terms_only": true }))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), n + 1, "the undone suggestion stays, a fresh one is offered");
+    assert_eq!(items.iter().filter(|i| i["state"] == "suggested").count(), 1);
 }
 
 #[tokio::test]

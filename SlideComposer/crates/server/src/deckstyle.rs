@@ -24,7 +24,7 @@ use lore_canvas::{Bullet, Deck, Kind, Object, Slide, TextBody};
 use serde::{Deserialize, Serialize};
 
 /// Bump when the profile's fields or rules change (invalidates the cache).
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// Page roles of a paper report, in the author's order (design §7.1; same names as todeck).
 pub const ROLES: [&str; 13] = ["cover", "background", "challenge", "overview", "method", "loss", "training", "results", "ablation", "visual", "opinion", "takeaway", "thanks"];
@@ -117,6 +117,8 @@ pub struct Refs {
     pub prefix: String,
     /// Share of reference lines in the bottom quarter of the slide.
     pub bottom: f64,
+    /// Reference lines seen (the prefix counts from 3 on).
+    pub lines: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -668,7 +670,7 @@ fn finish(acc: Acc) -> Profile {
         bullets: Stat::of(&acc.bullets),
         take_home,
         captions: Captions { figure_slides: acc.fig_slides, with_caption: share(acc.fig_captioned, acc.fig_slides), fig_form, fig_abbrev: acc.fig.0, fig_full: acc.fig.1 },
-        refs: Refs { share: share(acc.ref_pages, acc.content_pages), by_role, prefix, bottom: share(acc.ref_bottom, acc.ref_lines) },
+        refs: Refs { share: share(acc.ref_pages, acc.content_pages), by_role, prefix, bottom: share(acc.ref_bottom, acc.ref_lines), lines: acc.ref_lines },
         emphasis: Emphasis {
             per_page: acc.em_spans.iter().map(|(e, n)| (e.clone(), share(*n, acc.content_pages))).collect(),
             key_pages: share(acc.key_pages, acc.content_pages),
@@ -856,7 +858,7 @@ impl Profile {
             o += &format!("- Captions under {} of figures{}.\n", pct(c.with_caption), if c.fig_form.is_empty() { String::new() } else { format!("; write \"{}\"", c.fig_form) });
         }
         let r = &self.refs;
-        if !r.prefix.is_empty() {
+        if !r.prefix.is_empty() && r.lines >= 3 {
             let mut top: Vec<(&String, &f64)> = r.by_role.iter().filter(|(_, v)| **v >= 0.3).collect();
             top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap());
             let roles = top.iter().take(3).map(|(k, v)| format!("{} {}", role_label(k), pct(**v))).collect::<Vec<_>>().join(", ");
