@@ -171,3 +171,11 @@ needs = { json = true }
 default = "claude:selected"
 fallback = "local:current"
 offline = true
+
+[task.pc-kb-paraphrase]
+label = "知識卡定義改寫"
+class = "tidy"
+needs = { json = true }
+default = "local:current"
+fallback = "claude:selected"
+offline = true

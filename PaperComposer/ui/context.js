@@ -352,6 +352,16 @@ const PCContext = (() => {
     keepMarker();
   }
 
+  /** 知識卡… (kbcards.js): the list at the clicked place; what goes in is checked like a citation. */
+  function cards(at) {
+    PCKbCards.openAt(marker, {
+      si: at.si, pi: at.pi, nonWs: at.nonWs,
+      vet: async (was, now) => (fresh(at) != null) && vet([was], [now], at),
+      done: (was) => { land(at, was); unmark(); },
+    });
+    keepMarker();
+  }
+
   function reference(at, anchor) {
     PCWrite.references(anchor ?? marker, async (kind, key) => {
       await settle();
@@ -587,6 +597,7 @@ const PCContext = (() => {
         a.remove();
       });
     }
+    if (window.PCKbCards) add("cards", "知識卡…", () => { cards(at); });
     add("image", "新增圖…", () => { figure(at); });
     add("tableStyle", "新增表…", () => { table(at); });
     if (d.text.trim()) {

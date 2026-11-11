@@ -25,6 +25,7 @@ pub mod opened;
 pub mod llm;
 pub mod preview;
 pub mod proc;
+mod kb; // kbcards.js: 知識卡 (KnowledgeBase cards, read-only)
 mod reader;
 pub mod models;
 pub mod refimport;
@@ -674,6 +675,8 @@ async fn compose_paragraph(State(s): State<Shared>, Json(body): Json<ComposeBody
         let prompt = compose::build_prompt(p, &req, &points, &refs);
         (points, refs, prompt)
     };
+    // 生成時參考知識卡 (off by default): the author's cards for the terms in the points and the paragraph
+    let prompt = kb::with_cards(&s, prompt, &[req.points.as_str(), req.before.as_deref().unwrap_or("")].join("\n")).await;
     if points.is_empty() {
         return (StatusCode::BAD_REQUEST, "no points given").into_response();
     }
@@ -3305,6 +3308,10 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/reader/open", post(reader::open))
         .route("/api/reader/paraphrase", post(reader::paraphrase))
         .route("/api/papers/{name}/reader/notation", post(reader::register)) // reader.js: 插入 a symbol or equation
+        .route("/api/kb/cards", post(kb::cards)) // kb.rs: 知識卡 for a paragraph or a search
+        .route("/api/kb/settings", get(kb::settings_get).put(kb::settings_put))
+        .route("/api/kb/paraphrase", post(kb::paraphrase))
+        .route("/api/papers/{name}/kb/notation", post(kb::register))
         .route("/api/settings/pdf-dir", post(set_pdf_dir))
         .route("/api/papers/{name}/sections/{file}", put(put_section))
         .route("/api/papers/{name}/notation/check", post(notation_check)) // find.js

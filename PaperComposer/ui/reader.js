@@ -440,6 +440,7 @@ const PCReader = (() => {
   const paper = document.querySelector("#paper");
   if (paper) new MutationObserver(side).observe(paper, { subtree: true, attributes: true, attributeFilter: ["class"], childList: true });
 
-  return { load, attach, side, tex };
+  // kbcards.js puts its definitions, symbols and equations in the same way
+  return { load, attach, side, tex, put, ensureKey, target, prose, papers: () => list ?? [] };
 })();
 window.PCReader = PCReader;

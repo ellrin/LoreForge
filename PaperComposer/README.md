@@ -277,6 +277,7 @@ tlmgr search --global --file /xxx.sty
 
   找到的直接建檔（書目來自資料庫，簡介與標籤由模型寫），三篇同時進行並顯示進度。需要確認的列出候選讓你選；資料庫都沒有的（例如 Holm 1979，沒有 DOI 也不在 PubMed）可以按「用我貼的書目建檔」，BibTeX 會註明 *Bibliographic data as entered by the author*。在文獻頁使用時，可勾選把備註記到目前開啟的論文。
 - **讀過的論文**（LoreReader）：引用視窗的「讀過的」分頁列出 LoreReader 裡讀過的論文，可以引用、引用原句（附頁碼），或寫成改寫草稿。段落引用了讀過的論文時，右側面板的「讀過的」列出那篇的摘錄與筆記（唯讀），頁碼可以在 LoreReader 開啟。LoreReader 的資料夾只讀取、不寫入（`reader.rs`）。
+- **知識卡**（KnowledgeBase）：右側「知識卡」區塊列出目前段落提到的卡（卡名或別名出現在段落裡），可搜尋；右鍵「知識卡…」是同一份清單。每張卡有摘要、來源（讀過的論文可在 LoreReader 開到該頁）、開啟（`lore-kb://`）；「定義句」由設定的引擎改寫成一句草稿（任務 `pc-kb-paraphrase`，tidy 類），卡有 LoreReader 論文來源時附 `\cite`；符號與方程式「插入」會先登記到這篇的對照表（`kb` 欄記卡 id）；「貼到筆記」把摘要貼成這段的註解。寫作區塊的「生成時參考知識卡」（預設關）讓生成段落的提示帶入相關的卡當作術語脈絡。卡片資料夾只讀取、不寫入，KnowledgeBase 沒開也能用（`kb.rs`：`KB_SPACES`、KnowledgeBase 的 config.toml、`private/KnowledgeBase`）。
 - **引用一定送得到 BibTeX，作者的 `.bib` 一律不改寫**：`\bibliography{…}` 列出的每個檔案都會讀取；文獻庫裡有、論文的 `.bib` 沒有的引用，寫到 App 管理的 `pc-refs.bib` 並自動加進 `\bibliography{…}`。論文沒有自己的 `.bib` 時，產生一個只含這篇引用的檔案。
 
 ## 開啟 LaTeX… 與開啟 Word…
@@ -511,6 +512,9 @@ scripts/            Git hooks
 | GET／POST | `/api/papers/{name}/word-refs`、POST `/word-refs/confirm` | 從 Word 讀進的文獻清單；查證 Crossref／PubMed |
 | GET | `/api/reader/papers`（`?paper=`）、`/api/reader/papers/{sha}` | LoreReader 讀過的論文與其摘錄、筆記（唯讀） |
 | POST | `/api/reader/papers/{sha}/cite`、`/api/reader/open`、`/api/reader/paraphrase` | 引用讀過的論文、在 LoreReader 開啟某一頁、改寫草稿 |
+| POST | `/api/kb/cards`、`/api/kb/paraphrase` | 知識卡：段落提到的或搜尋到的卡；定義改寫成草稿句 |
+| GET/PUT | `/api/kb/settings` | 生成時參考知識卡（config.toml 的 `[kb] context`，預設關） |
+| POST | `/api/papers/{name}/kb/notation` | `{id, index}`：卡的符號／方程式登記到這篇的對照表 |
 | GET／POST | `/api/templates`、`/api/convert…` | 期刊模板列表與建立；上傳模板讓 Claude 轉換 |
 | `/api/textable/*` | 論文裡表格的編輯器：解析、畫出、套用樣式、新增 |
 
