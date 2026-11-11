@@ -56,6 +56,15 @@ when working on lore-canvas in parallel with other agents.
   PDFs read-only (`LOREREADER_WORKSPACE`, else lore-home's `private/LoreReader`; the library from LoreReader's
   config). Pages are rendered with `pdftoppm` into the workspace's `cache/lorereader/`; a figure is the whole
   page as one asset, cropped by the picture. Symbols and equations register into the deck's own `notation.json`.
+- 論文報告 (home tile, `web/todeck.js`; PaperComposer's 做成簡報 calls the same route): `crates/server/src/todeck.rs`
+  turns a PaperComposer LaTeX folder or a LoreReader PDF (lore-docsrc, read-only) into a paper-report deck: one
+  lore-llm call (`sc-paper-deck`, class `create`, `crates/server/tasks.toml`; `llm.rs`) plans the slides in the
+  design §7.1 order by material id; `sc-crop-modules` (vision, optional) boxes the main figure's modules for the
+  method slides (whole figure ghosted + the module cropped back on top, framed); slots come from the academic
+  arrangements, text from the style's tags, tables native, equations OMML (registry macros expanded), `Ref:` from
+  cited keys, typed "Fig. 3" stripped, the big picture expanded by `reveal`; the paper's notation joins the
+  deck's `notation.json` with its ids. `/api/todeck*` and `/api/info` answer 127.0.0.1 / localhost origins (CORS).
+  PaperComposer papers are found like PaperComposer does (`PAPERCOMPOSER_WORKSPACE`, its config, lore-home).
 - `crates/core` (`sc-core`): `Workspace` (styles/, decks/), `Session` (open deck: editor,
   source package, layout backdrops, LaTeX cache), export PPTX/PDF, `layout_titles`.
 - `crates/server` (`sc-server`): axum on 127.0.0.1:7880; handlers are plain async fns over
