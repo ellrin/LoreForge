@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 pub const APP: &str = "LoreEcho";
-/// Short name in `ports.json` and links (`lore-le://`).
+/// Short name in `ports.json` (no `lore-le://` link: other apps never open LoreEcho).
 pub const SHORT: &str = "le";
 pub const DEFAULT_PORT: u16 = 7860;
 

@@ -32,7 +32,7 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   (64 px bubble ⇄ 380×560 panel sharing the bottom-right corner, kept inside the monitor's work
   area); moves saved debounced as the bubble's place; tray item (left click = show/hide, menu =
   show/hide, quit); global shortcut (`tauri-plugin-global-shortcut`, from settings.toml);
-  macOS: `macOSPrivateApi`, accessory activation policy (no Dock icon), `lore-le://` in Info.plist.
+  macOS: `macOSPrivateApi`, accessory activation policy (no Dock icon). No `lore-le://` URL scheme: other apps never open LoreEcho (author, 2026-11-11).
   `capabilities/default.json` lets the page on `http://127.0.0.1:*` call `startDragging` only.
   Icon source `icons/logo.svg` (= `docs/assets/loreecho-logo-draft.svg`, approved; do not redesign).
 - `web/`: no build step. Shared shell (`LoreShell.mount` into the panel header: collapse · name ·

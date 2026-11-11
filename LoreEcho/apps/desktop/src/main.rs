@@ -316,17 +316,7 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while building LoreEcho")
-        .run(|app, event| {
-            // lore-le:// (Info.plist): bring the bubble up
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            if let tauri::RunEvent::Opened { urls } = &event
-                && urls.iter().any(|u| u.scheme() == "lore-le")
-            {
-                show(app);
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-            let _ = (app, event);
-        });
+        .run(|_, _| {});
 }
 
 #[cfg(test)]
@@ -361,9 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn plist_and_capability() {
-        let plist = include_str!("../Info.plist");
-        assert!(plist.contains("CFBundleURLTypes") && plist.contains("<string>lore-le</string>"));
+    fn capability_and_config() {
         let cap = include_str!("../capabilities/default.json");
         assert!(cap.contains("core:window:allow-start-dragging") && cap.contains("http://127.0.0.1:*"));
         let conf = include_str!("../tauri.conf.json");

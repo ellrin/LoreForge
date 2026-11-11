@@ -110,7 +110,7 @@ private/<App>/characters/<id>/
 
 ## 9. 待作者決定
 
-1. ~~名稱~~ → **LoreEcho**：資料夾 `LoreEcho/`、`private/LoreEcho/`，短名 `le`（`lore-le://`、`ports.json` 的 `le`），任務前綴 `le-`。
+1. ~~名稱~~ → **LoreEcho**：資料夾 `LoreEcho/`、`private/LoreEcho/`，短名 `le`（`ports.json` 的 `le`；**沒有** `lore-le://`，其他 app 不需要打開它），任務前綴 `le-`。
 2. ~~筆記格式~~ → **LaTeX**（`.tex`，過 `lore-notation`）。
 3. ~~新知識卡~~ → **先進待審區**，在 KB 確認後才成為正式卡。KB 需要新增待審區（清單＋確認／修改／丟掉）。
 4. ~~模型管家~~ → 先採**獨立的小背景程序** `lore-modeld`（2026-11-11 開工，作者說「開始做」時採用建議值；要改再說）。
