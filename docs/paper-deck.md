@@ -61,93 +61,111 @@
 
 ## API（SlideComposer 伺服器）
 
-所有路徑在 SlideComposer 的伺服器上（`/api/todeck*` 也回應 127.0.0.1 / localhost 的跨來源 GET/POST；`PUT …/review` 與 `DELETE` 只給 SlideComposer 自己的頁面）。時間一律是 Unix 毫秒。錯誤：HTTP 狀態碼 + `{ "error": "一行中文" }`。
+實作：`SlideComposer/crates/server/src/jobs.rs`（通用的工作執行器）與 `src/todeck/`（這條流程的各階段）。所有路徑在 SlideComposer 的伺服器上；`/api/todeck*` 也回應 127.0.0.1 / localhost 的跨來源 GET/POST（`DELETE` 與 `PUT` 只給 SlideComposer 自己的頁面）。時間是 Unix 毫秒。錯誤：HTTP 狀態碼 + `{ "error": "一行中文" }`。
 
 ### 工作物件（job）
 
-`GET /api/todeck/jobs/{id}`、`POST /api/todeck/jobs`、`…/resume`、`…/cancel`、`PUT …/review` 都回傳這個形狀：
+`GET /api/todeck/jobs/{id}` 與其他工作路徑都回傳這個形狀：
 
 ```json
 {
-  "id": "j18f3a2b4c5d",
-  "created": 1762850000000,
+  "id": "j19a6f3c2b1d4",
   "title": "Two-Stage Grading of Synthetic Lesions",
-  "source": { "kind": "pc", "path": "/…/papers/two-stage" },
-  "options": { "length": "standard", "lang": "zh", "style": "blank", "engine": null },
+  "created": 1762850000000,
+  "state": "running",
   "direct": false,
-  "status": "running",
   "step": 5,
-  "done_steps": 4,
+  "doneSteps": 4,
   "total": 8,
   "seq": 42,
-  "stages": [
-    { "id": "source",   "label": "讀論文",   "state": "done",    "model": false, "started": 1762850000100, "elapsed_ms": 820,
-      "counts": { "figures": 3, "figures_total": 4, "tables": 2, "equations": 5, "sections": 6, "refs": 31 } },
-    { "id": "notation", "label": "對照表",   "state": "done",    "model": false, "elapsed_ms": 12, "counts": { "entries": 14 } },
-    { "id": "terms",    "label": "名詞",     "state": "done",    "model": false, "elapsed_ms": 40, "counts": { "terms": 37, "unknown": 6 } },
-    { "id": "profile",  "label": "風格",     "state": "done",    "model": false, "elapsed_ms": 5,  "counts": {} },
-    { "id": "outline",  "label": "大綱",     "state": "running", "model": true,  "started": 1762850001000, "elapsed_ms": 41200,
-      "chars": 5310, "last_activity": 1762850042100, "counts": {} },
-    { "id": "review",   "label": "微調",     "state": "pending", "model": false, "counts": {} },
-    { "id": "slides",   "label": "投影片",   "state": "pending", "model": false, "counts": {} },
-    { "id": "polish",   "label": "排版用字", "state": "pending", "model": false, "counts": {} }
-  ],
+  "resumable": false,
   "error": null,
-  "result": null
+  "failure": null,
+  "deck": null,
+  "result": null,
+  "stages": [
+    { "id": "source",   "label": "讀論文",   "state": "done",    "model": false, "ms": 820, "started": 1762850000100,
+      "counts": { "fig": 3, "figTotal": 4, "table": 2, "eq": 5, "sections": 6, "refs": 31 } },
+    { "id": "notation", "label": "對照表",   "state": "done",    "model": false, "ms": 12,  "counts": { "entries": 14 } },
+    { "id": "terms",    "label": "名詞",     "state": "done",    "model": false, "ms": 40,  "counts": { "terms": 37, "unknown": 6 } },
+    { "id": "profile",  "label": "風格",     "state": "done",    "model": false, "ms": 5,   "counts": {} },
+    { "id": "outline",  "label": "大綱",     "state": "running", "model": true,  "ms": 41200, "started": 1762850001000,
+      "chars": 5310, "lastActivity": 1762850042100, "agoMs": 700, "counts": {} },
+    { "id": "review",   "label": "微調",     "state": "pending", "model": false, "ms": 0, "counts": {} },
+    { "id": "slides",   "label": "投影片",   "state": "pending", "model": false, "ms": 0, "counts": {} },
+    { "id": "polish",   "label": "排版用字", "state": "pending", "model": false, "ms": 0, "counts": {} }
+  ]
 }
 ```
 
-- `status`：`running`（在跑）· `waiting`（停在 `review` 等作者）· `done` · `failed` · `cancelled`（按了停止）· `stopped`（上次 app 結束時沒做完；伺服器啟動後從快取讀到的就是這個）。
-- `step`：目前（或下一個要做）的階段，從 1 起算；`done_steps`：已完成（含略過）的階段數，「上次做到第 N 步」的 N 用它。
-- `stages[].state`：`pending` · `running` · `waiting` · `done` · `skipped`（`review` 在直接產生時）· `failed` · `cancelled`。
-- `elapsed_ms`：該階段已花的時間（進行中的會一直增加；頁面可用 `started` 自己算秒數）。`chars` / `last_activity` 只在 `model: true` 的階段出現：模型串流到目前的字數與最後一次收到字的時間。
-- `counts` 各階段的鍵：`source` `{figures, figures_total, tables, equations, sections, refs}`（圖 n/N：`figures` 是有圖檔的，`figures_total` 是全部）· `notation` `{entries}` · `terms` `{terms, unknown}` · `profile` `{}` · `outline` `{slides, questions, boxes}`（完成後）· `review` `{}` · `slides` `{slide, total}`（第 n/N 頁）· `polish` `{checks, fixes}`。
-- `error`（`failed` 時）：`{ "stage": "outline", "status": 503, "error": "一行中文", "alternative": {…} }`，`alternative` 與 lore-llm 的錯誤內容相同（頁面據此提供「改用本機／改用 Claude」，按下去就是帶 `engine` 的 `resume`）。
-- `result`（`done` 時）：`{ "name": "<deck 資料夾>", "slides": 14, "engine": "Claude", "boxes": 3, "notation": 1, "warnings": [] }`。
+- `state`：`running`（在跑）· `review`（停在微調，等作者）· `done` · `failed` · `stopped`（按了停止）· `interrupted`（上次 app 結束時還沒做完：伺服器啟動後從快取讀到的 `running` / `review` 都變成這個）。
+- `step`：目前（或下一個要做）的階段，從 1 起算 —「上次做到第 N 步，繼續？」的 N。`doneSteps`：已完成（含略過）的階段數。`resumable`：`stopped` / `failed` / `interrupted`。
+- `stages[].state`：`pending` · `running`（`review` 等作者時也是 `running`）· `done` · `failed`。直接產生時 `review` 是 `done` 加 `"skipped": true`。
+- `ms`：該階段已花的時間（取樣當下；進行中的頁面自己往上加）。`chars` / `lastActivity` / `agoMs` 只在 `model: true` 的階段：模型串流到目前的字數、最後收到字的時間、距今毫秒。
+- `counts`：`source` `{fig, figTotal, table, eq, sections, refs}`（圖 n/N：`fig` 有圖檔的，`figTotal` 全部）· `notation` `{entries}` · `terms` `{terms, unknown}` · `profile` `{}` · `outline` `{slides, boxes}`（完成後）· `review` `{}` · `slides` `{slide, slides}`（第 n/N 頁）· `polish` `{checks, fixes}`。
+- `error`（`failed` 時）：一行中文。`failure`：`{ stage, status, error, alternative? }`，`alternative` 與 lore-llm 的錯誤內容相同（頁面據此提供「改用本機／改用 Claude」= 帶 `engine` 的 `resume`）。
+- `deck` / `result`（`done` 時）：簡報資料夾名稱；`{ name, slides, engine, boxes, notation, warnings, polish: {checks, fixes} }`。
+- `review`（只在 `state: "review"` 時）：
+
+```json
+{
+  "outline": [ { "id": "s3", "kind": "overview", "title": "Big picture", "figs": ["fig1"], "point": "" } ],
+  "figures": [ { "id": "fig1", "label": "圖 1", "caption": "…", "thumb": "/api/todeck/jobs/<id>/img/fig1.png" },
+               { "id": "tab1", "label": "表 1", "caption": "…", "thumb": null } ],
+  "unknown": [ { "term": "InfoNCE", "n": 4 } ]
+}
+```
+
+  `kind` 是頁的角色：`cover background challenge overview method loss training results ablation visual opinion takeaway thanks`。`figs` 是這頁用的圖／表 id（圖與表各最多一個）；`point` 是 take-away，沒有就是第一個要點。`thumb` 是同源的圖（LaTeX 的表沒有圖）。
 
 ### 路徑
 
 | Method | Path | Body | 回傳 |
 |---|---|---|---|
-| GET | `/api/todeck/papers` | | `{pc: [{path, title, name}], lr: [{sha, title, pdf}]}`（不變） |
-| POST | `/api/todeck/jobs` | `{source: {kind: "pc", path} \| {kind: "lr", sha}, length?, lang?, style?, engine?, direct?}` | 工作物件（201）；伺服器立刻在背景開始做 |
-| GET | `/api/todeck/jobs` | | `{jobs: [工作物件…]}`，新的在前；`resumable` 的（`stopped` / `cancelled` / `failed` / `waiting`）就是要提示「上次做到第 N 步，繼續？」的 |
+| GET | `/api/todeck/papers` | | `{pc: [{path, title, name}], lr: [{sha, title, pdf}]}` |
+| POST | `/api/todeck` | `{source: {kind: "pc", path} \| {kind: "lr", sha}, style?, length?, lang?, engine?, mode: "review" \| "direct"}` | `{job: "<id>", …工作物件}`；伺服器在背景開始做 |
+| POST | `/api/todeck`（沒有 `mode`） | 同上 | 舊的一次完成：直接產生並等做完，回 `result`；失敗回 `failure.status` 與 `{error, alternative?}`（給還沒改版的「做成簡報」） |
+| POST | `/api/todeck/jobs` | 同上（或 `direct: true`） | 201，`{job, …工作物件}` |
+| GET | `/api/todeck/jobs` | `?unfinished=1` 只列 `interrupted` / `stopped` / `failed` / `review` | `{jobs: [工作物件…]}`，新的在前 |
 | GET | `/api/todeck/jobs/{id}` | | 工作物件 |
-| GET | `/api/todeck/jobs/{id}/events?after={seq}` | | 長輪詢：工作的 `seq` 大於 `after` 時立刻回傳工作物件，否則最多等 25 秒（沒變化就回傳目前的）。頁面拿回傳的 `seq` 再問下一次。關掉頁面不影響工作 |
-| GET | `/api/todeck/jobs/{id}/stages/{stage}` | | 該階段的產出（見下）；還沒做完 404 |
-| POST | `/api/todeck/jobs/{id}/cancel` | | 工作物件（`cancelled`）；正在進行的模型請求會被中止 |
-| POST | `/api/todeck/jobs/{id}/resume` | `{engine?: "local" \| "claude"}`（可省） | 工作物件；從最後完成的階段接著做（完成的階段不重做）；正在跑時 409 |
-| PUT | `/api/todeck/jobs/{id}/review` | 見下 | 工作物件；寫下作者的決定並繼續做 |
+| GET | `/api/todeck/jobs/{id}/events?after={seq}` | | 長輪詢：`seq` 大於 `after` 時立刻回傳工作物件，否則最多等 25 秒。每秒 GET 一次也可以 |
+| POST | `/api/todeck/jobs/{id}/stop` | | 工作物件（`stopped`）；進行中的模型請求被中止，工作的執行緒被釋放（`…/cancel` 同義） |
+| POST | `/api/todeck/jobs/{id}/resume` | `{engine?: "local" \| "claude"}` | 工作物件；從第一個沒有檢查點的階段接著做；正在跑時 409 |
+| POST | `/api/todeck/jobs/{id}/review` | 見下（`PUT` 同義） | 工作物件；不在 `review` 時 409 |
 | DELETE | `/api/todeck/jobs/{id}` | | 204；刪掉這個工作的快取資料夾（正在跑時 409） |
-| POST | `/api/todeck` | 同 `POST /api/todeck/jobs`（一律直接產生） | 舊的一次完成：等工作做完才回 `result` 的內容；失敗時回 `error` 的狀態碼與 `{error, alternative?}` |
+| GET | `/api/todeck/jobs/{id}/stages/{stage}` | | 該階段的檢查點內容（`outline`：`{plan: {venue, keywords, slides: [PlanSlide…]}, questions: [], boxes, engine}`；`terms`：`{terms: [{term, unknown, n, kind, card}]}`）；沒做完 404 |
+| GET | `/api/todeck/jobs/{id}/img/{file}` | | 論文的圖（PNG / JPEG） |
 
-每個工作物件另有 `"resumable": true|false`。
+桌面版連結：`lore-sc://job/<id>` → `/?job=<id>`（`LoreLinks.open("sc", {job})`）。
 
-### 階段產出（`…/stages/{stage}`）
+### 微調（`POST …/{id}/review`）
 
-- `outline`：`{ "plan": { "venue": "", "keywords": [], "slides": [PlanSlide…] }, "questions": [], "boxes": [{label, bbox: [x0,y0,x1,y1]}], "engine": "claude-code:…" }`。
-  `PlanSlide` = `{role, title, bullets[], figure, table, equations[], takeaway, steps[], module, kv[[k,v]…], cites[], notes}`（`role` 是 `cover background challenge overview method loss training results ablation visual opinion takeaway thanks` 之一）。
-  `questions`：`[{id, text, options[]}]`，最多 4 題（目前一律空陣列）。
-- `terms`：`{ "terms": [{ "term": "…", "unknown": true, "card": null, "kind": "abbr" }] }`。
-- `review`：作者送出的內容（直接產生時 `{ "skipped": true }`）。
-- 其他階段的產出是內部格式，頁面不需要讀。
+```json
+{ "skip": true }
+```
 
-### 微調（`PUT …/review`）
+或
 
 ```json
 {
-  "skipped": false,
-  "plan": { "venue": "", "keywords": [], "slides": [ … 改過的 PlanSlide … ] },
-  "answers": { "q1": "…" },
-  "known": ["term a"],
-  "remember": ["term a"]
+  "outline": [ { "id": "s3", "kind": "overview", "title": "…", "figs": ["fig1"], "point": "…" } ],
+  "answers": { "audience": "lab", "mainFig": "fig2", "modules": 3, "opinion": false },
+  "known": ["InfoNCE"],
+  "remember": true
 }
 ```
 
-全部可省：`skipped: true` 等於「全部略過」；沒有 `plan` 就用模型的大綱；`known` = 勾了「我懂」的詞（清掉標示）；`remember` = 另外勾了「同時存進知識庫」的詞。只有停在 `review`（`status: waiting`）的工作可以送，否則 409。
+- `outline`：照頁面的順序；刪掉的列就是不要的頁；`id` 對回模型的頁（新頁可用沒有的 id，配 `kind`）；改了的 `point` 寫回 take-away（或第一個要點）。
+- `answers`：每題可為 `null`。`mainFig` 換掉大架構與方法頁的圖（模組框隨之不用）；`opinion: false` 拿掉「我的看法」頁，`true` 而沒有就加一頁空的。`audience`、`modules` 目前只記錄。
+- `known`：勾了「我懂」的詞（清掉標示）；`remember`：是否同時存進知識庫（`terms` / 不熟標示的實作者讀 `review.json`）。
+
+### 檢查點
+
+`<SlideComposer workspace>/cache/todeck/<id>/`：`job.json`（參數、狀態、各階段時間與數字）、每個完成的階段一個 `<stage>.json`（`{stage, output, counts, elapsed_ms, finished}`）、`img/`（論文的圖）。全部原子寫入。檔案讀不到的階段重做，其他不動；`slides` 做到一半當掉時，下次先刪掉那份做一半的簡報（`slides.pending`）。
 
 ### 模型設定（`/api/engines`，每個 app 都有）
 
-- `GET` 的 `local` 多了 `idle_minutes`（數字，0 = 不自動釋放，預設 10）與 `can_release`（只有管理本機模型的 app，也就是 PaperComposer，是 `true`）。
-- `PUT {local: {idle_minutes: 15}}` 改閒置釋放的分鐘數（存在 `private/shared/engine.toml` 的 `[local]`，各 app 共用）。
-- `PUT {local: {release: true}}` 立刻釋放本機模型（停掉 llama-server）；不是管理本機模型的 app 回 400。
+- `GET` 的 `local` 多了 `idle_minutes`（0 = 不自動釋放，預設 10）與 `can_release`（只有管理本機模型的 app ＝ PaperComposer 是 `true`）。
+- `PUT {local: {idle_minutes: 15}}`：存在 `private/shared/engine.toml` 的 `[local]`，各 app 共用；PaperComposer 的 llama-server 每次檢查時讀它。
+- `PUT {local: {release: true}}`：立刻停掉 llama-server；其他 app 回 400。
+- 「使用中」以 llama-server 的 `/slots` 判斷（有 slot 在處理，或 task id 有變），所以 SlideComposer 等直接打網址的請求也算；app 結束時照舊 `kill_now`。
