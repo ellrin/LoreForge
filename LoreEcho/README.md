@@ -2,8 +2,8 @@
 
 個人學習夥伴：桌面右下角一顆圓形小泡泡，點開變成像視覺小說一樣的視窗：左邊站著人物的全身圖，右邊是對話。接 Claude 或本機模型（經過 `lore-llm`），回答偏短、以繁體中文為主；只記這一次的對話，不寫進任何檔案。設計見 `../docs/loreecho.md`。
 
-> 開發中（階段 2：骨架）。已完成：泡泡／展開視窗（無邊框、透明、置頂、可拖曳、位置記在 private）、選單列圖示、全域快捷鍵、文字對話（串流）、範本人物、齒輪（一般、外觀、模型、快捷鍵）。
-> 之後：接 KnowledgeBase（階段 3）、特化按鈕（階段 4）、語音（階段 5，麥克風按鈕目前是停用的預留位置）。
+> 開發中（階段 2：骨架）。已完成：泡泡／展開視窗（無邊框、透明、置頂、可拖曳、位置記在 private）、選單列圖示、全域快捷鍵、文字對話（串流）、範本人物、齒輪（一般、外觀、模型、快捷鍵）、讀 KnowledgeBase 的卡（只讀；每輪附上相關的卡與熟悉度，「從知識庫抽兩張」「今天要複習什麼」「考我」「有哪些…的卡」「記住這個」，回答下方「引用：…」可開卡；記得／忘了只在 KnowledgeBase 開著時經它的 API 記下）。
+> 之後：特化按鈕（階段 4）、語音（階段 5，麥克風按鈕目前是停用的預留位置）。
 
 ## 執行
 
@@ -57,7 +57,8 @@ state.toml                       泡泡的位置、是否展開
 | GET | `/api/characters` | 人物清單與目前的人物（每個人物：`avatars`、`full` 有圖的狀態，`full` 空＝沒有全身圖；`figure: { scale, offset_y }`） |
 | GET | `/api/characters/{id}/avatar/{state}` | 頭像（缺的狀態用 idle） |
 | GET | `/api/characters/{id}/full/{state}` | 全身圖（`full/<state>` → `full/idle` → 該狀態的頭像） |
-| POST | `/api/chat` | `{ messages, character }` → 串流回答（server-sent events） |
+| POST | `/api/chat` | `{ messages, character , kb? }` → 串流回答（server-sent events；有知識庫時先送 `search`、`cards`） |
+| POST | `/api/kb/recall` | `{ id, outcome }` → 經 KnowledgeBase 的 API 記下複習結果（它沒開時回一句說明） |
 
 ## 圖示
 

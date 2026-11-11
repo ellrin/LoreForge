@@ -483,7 +483,14 @@ pub fn intent(text: &str) -> Option<Intent> {
     if has_any(t, &["考我", "考考我", "抽考"]) || has_any(&lower, &["quiz me", "test me"]) {
         return Some(Intent::Quiz(topic_of(&strip(t, &["抽考"]))));
     }
-    if has_any(t, &["複習"]) || has_any(&lower, &["to review", "review today", "due today", "cards due", "what's due", "due cards"]) {
+    // 「我昨天複習了卷積」 is a normal turn; 「幫我複習 X」 is a quiz on X
+    if has_any(t, &["幫我複習", "考考我複習", "陪我複習"]) && !has_any(t, &["今天", "什麼", "哪些", "哪幾"]) {
+        let topic = topic_of(&strip(t, &["幫我複習", "陪我複習", "考考我複習"]));
+        if !topic.is_empty() {
+            return Some(Intent::Quiz(topic));
+        }
+    }
+    if has_any(t, &["今天要複習", "今天該複習", "要複習什麼", "該複習什麼", "複習什麼", "要複習哪", "複習哪", "待複習", "到期", "有哪些要複習", "幫我複習", "陪我複習"]) || has_any(&lower, &["to review", "review today", "due today", "cards due", "what's due", "due cards"]) {
         return Some(Intent::Review(n.unwrap_or(5).clamp(1, 10)));
     }
     let listing = has_any(t, &["有哪些卡", "哪些卡", "有什麼卡", "有幾張"]) || (t.contains('找') && t.contains('卡')) || (t.contains("關於") && t.contains("的卡"))
@@ -813,6 +820,10 @@ mod tests {
         assert_eq!(intent("抽 50 張"), Some(Intent::Draw(10)), "at most ten");
         assert_eq!(intent("今天要複習什麼？"), Some(Intent::Review(5)));
         assert_eq!(intent("what's due today"), Some(Intent::Review(5)));
+        assert_eq!(intent("該複習哪幾張？"), Some(Intent::Review(5)));
+        assert_eq!(intent("幫我複習傅立葉轉換"), Some(Intent::Quiz("傅立葉轉換".into())));
+        assert_eq!(intent("幫我複習"), Some(Intent::Review(5)));
+        assert_eq!(intent("我昨天複習了卷積，還是不懂"), None);
         assert_eq!(intent("考我"), Some(Intent::Quiz(String::new())));
         assert_eq!(intent("考考我傅立葉轉換"), Some(Intent::Quiz("傅立葉轉換".into())));
         assert_eq!(intent("quiz me on entropy"), Some(Intent::Quiz("entropy".into())));
