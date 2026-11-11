@@ -187,6 +187,7 @@ async fn fake_kb() -> (String, Arc<Mutex<Vec<Value>>>) {
     use axum::routing::{get, post};
     let got = Arc::new(Mutex::new(vec![]));
     let g = got.clone();
+    let g2 = got.clone();
     let app = axum::Router::new()
         .route("/api/spaces", get(|| async { axum::Json(json!({ "spaces": [{ "id": "family", "kind": "household", "is_member": true }, { "id": "me", "kind": "personal", "is_member": true }] })) }))
         .route(
@@ -196,6 +197,17 @@ async fn fake_kb() -> (String, Arc<Mutex<Vec<Value>>>) {
                 async move {
                     g.lock().unwrap().push(b);
                     axum::Json(json!({ "node": { "id": "n99" } }))
+                }
+            }),
+        )
+        .route(
+            "/api/recall/{id}",
+            post(move |axum::extract::Path(id): axum::extract::Path<String>, axum::Json(mut b): axum::Json<Value>| {
+                let g = g2.clone();
+                async move {
+                    b["recall"] = id.into();
+                    g.lock().unwrap().push(b);
+                    axum::Json(json!({ "ok": true }))
                 }
             }),
         );
@@ -218,7 +230,7 @@ async fn understood_clears_marks_export_never_has_them_and_kb_card_goes_through_
     let s2 = d["deck"]["slides"][1]["uid"].as_str().unwrap().to_string();
 
     // generated text with marks, as the slides stage leaves it
-    let kb = vec![];
+    let kb = kbterms::load_names(&[space(dir.path())], "ellrin");
     let mut terms = kbterms::find_terms(&paper(), &kb, &Filters::default());
     let mut t = body(vec![vec![run("We add a HAG to each skip. The momentum queues stay. Plain words here.", "body", None), run(" +3.1 Dice", "body", Some("key"))]]);
     kbterms::mark_body(&mut t, &terms.matcher(), true);
@@ -258,14 +270,23 @@ async fn understood_clears_marks_export_never_has_them_and_kb_card_goes_through_
     assert_eq!(v["kb"]["saved"], false);
     assert!(v["kb"]["message"].as_str().unwrap().contains("沒有開啟"), "{v}");
     // … running: a minimal card in state 記得 in the personal space, through its API
-    let (url, got) = fake_kb().await;
+    let (url, rec) = fake_kb().await;
     unsafe { std::env::set_var("KB_URL", &url) };
     let (_, v, _) = call(&app, "PUT", "/api/decks/demo/learn", Some(json!({ "term": "momentum queue", "kb": true })), None).await;
     assert_eq!(v["kb"]["saved"], true, "{v}");
-    let got = got.lock().unwrap().clone();
+    let got = rec.lock().unwrap().clone();
     assert_eq!(got.len(), 1);
     assert_eq!(got[0]["space"], "me");
     assert_eq!(got[0]["title"], "momentum queue");
     assert_eq!(got[0]["initial_state"], "known");
+    // a term whose card says 要學: the card gets the answer 記得, no second card
+    let (_, v, _) = call(&app, "PUT", "/api/decks/demo/learn", Some(json!({ "term": "Dice coefficient", "kb": true })), None).await;
+    assert_eq!((v["kb"]["saved"].clone(), v["kb"]["id"].clone()), (json!(true), json!("n03")), "{v}");
+    let got = rec.lock().unwrap().clone();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!((got[1]["recall"].clone(), got[1]["outcome"].clone()), (json!("n03"), json!("remembered")));
     unsafe { std::env::remove_var("KB_URL") };
+    // a deck that is not there: refused before anything reaches KnowledgeBase
+    let (st, _, _) = call(&app, "PUT", "/api/decks/nope/learn", Some(json!({ "term": "x", "kb": true })), None).await;
+    assert!(!st.is_success());
 }

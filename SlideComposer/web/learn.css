@@ -1,0 +1,15 @@
+/* 不熟 (em `learn`): the top-bar toggle and the thumbnail badge (UI chrome: theme tokens).
+   The red marks on the slide itself are drawn by render.js (slide content, no tokens). */
+#learnSeg button { white-space: nowrap; }
+.thumb .learn-badge {
+  position: absolute; top: 3px; right: 3px; z-index: 2; pointer-events: none;
+  font: 600 10px/1 var(--mono); padding: 2px 4px; border-radius: 3px;
+  color: var(--surface); background: var(--err);
+}
+/* narrow windows: short labels so the top bar does not overlap */
+@media (max-width: 1100px) {
+  #learnSeg button { font-size: 0; padding: 3px 7px; }
+  #learnSeg button::after { font-size: 12px; }
+  #learnSeg button[data-v="1"]::after { content: "不熟"; }
+  #learnSeg button[data-v="0"]::after { content: "報告"; }
+}

@@ -369,10 +369,7 @@ function learnBadge(t, sl) {
     b.className = "learn-badge";
     b.textContent = "不熟";
     b.title = "這頁大部分是不熟的內容";
-    Object.assign(b.style, { position: "absolute", top: "3px", right: "3px", font: "600 10px/1 var(--mono)", padding: "2px 4px", borderRadius: "3px", color: "#fff", background: "var(--err)", pointerEvents: "none", zIndex: "2" });
-    const f = t.querySelector(".frame");
-    f.style.position = "relative";
-    f.append(b);
+    t.querySelector(".frame").append(b); // styles: learn.css
   }
 }
 

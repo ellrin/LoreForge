@@ -550,10 +550,12 @@ pub fn find_terms(items: &[(String, String)], kb: &[KbName], f: &Filters) -> Ter
 }
 
 /// The `terms` stage in one call: the author's KnowledgeBase (read-only) against `items`
-/// (`(section, text)`), filtered with the built-in lists.
+/// (`(section, text)`), filtered like LoreReader: the built-in lists plus the author's
+/// `private/LoreReader/ignore-words.txt` (read-only).
 pub fn terms_for(home: &lore_home::Home, items: &[(String, String)]) -> TermsResult {
     let kb = load_names(&space_dirs(home), &member(home));
-    find_terms(items, &kb, &Filters::default())
+    let filters = home.app_dir("LoreReader").map(|d| Filters::with_file(&d.join("ignore-words.txt"))).unwrap_or_default();
+    find_terms(items, &kb, &filters)
 }
 
 /// Page roles (todeck's `ROLES`) whose sentences are marked whole: background and method narration.
@@ -834,27 +836,34 @@ pub fn kb_url() -> String {
     format!("http://127.0.0.1:{port}")
 }
 
-/// Create a minimal card in state 記得 through KnowledgeBase's API. `Err` = a line for the author.
-pub async fn save_known(base: &str, term: &str) -> Result<String, String> {
+/// 同時存進知識庫（記得）through KnowledgeBase's API: a new minimal card in state 記得, or, for a
+/// term that already has a card (`card`), the answer 記得 on that card (no duplicate).
+/// `Err` = a line for the author; KnowledgeBase not running = nothing written, nothing queued.
+pub async fn save_known(base: &str, term: &str, card: Option<&str>) -> Result<String, String> {
     let down = || "KnowledgeBase 沒有開啟，沒有存進知識庫".to_string();
     let http = reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(2)).timeout(Duration::from_secs(8)).build().map_err(|e| e.to_string())?;
-    let spaces: Value = http.get(format!("{base}/api/spaces")).send().await.map_err(|_| down())?.json().await.map_err(|_| down())?;
-    let list = spaces["spaces"].as_array().cloned().unwrap_or_default();
-    let space = list
-        .iter()
-        .find(|s| s["kind"] == "personal" && s["is_member"] == true)
-        .or_else(|| list.iter().find(|s| s["is_member"] == true))
-        .and_then(|s| s["id"].as_str())
-        .ok_or("知識庫沒有你能寫入的空間")?
-        .to_string();
-    let body = json!({ "space": space, "via": "slidecomposer", "kind": "concept", "title": term.trim(), "initial_state": "known" });
-    let res = http.post(format!("{base}/api/nodes")).json(&body).send().await.map_err(|_| down())?;
+    let (url, body) = match card {
+        Some(id) => (format!("{base}/api/recall/{id}"), json!({ "outcome": "remembered", "via": "slidecomposer" })),
+        None => {
+            let spaces: Value = http.get(format!("{base}/api/spaces")).send().await.map_err(|_| down())?.json().await.map_err(|_| down())?;
+            let list = spaces["spaces"].as_array().cloned().unwrap_or_default();
+            let space = list
+                .iter()
+                .find(|s| s["kind"] == "personal" && s["is_member"] == true)
+                .or_else(|| list.iter().find(|s| s["is_member"] == true))
+                .and_then(|s| s["id"].as_str())
+                .ok_or("知識庫沒有你能寫入的空間")?
+                .to_string();
+            (format!("{base}/api/nodes"), json!({ "space": space, "via": "slidecomposer", "kind": "concept", "title": term.trim(), "initial_state": "known" }))
+        }
+    };
+    let res = http.post(url).json(&body).send().await.map_err(|_| down())?;
     let ok = res.status().is_success();
     let v: Value = res.json().await.unwrap_or(Value::Null);
     if !ok {
         return Err(format!("知識庫：{}", v["error"].as_str().unwrap_or("沒有存進去")));
     }
-    Ok(v["node"]["id"].as_str().or(v["id"].as_str()).unwrap_or_default().to_string())
+    Ok(card.map(str::to_string).or_else(|| v["node"]["id"].as_str().or(v["id"].as_str()).map(str::to_string)).unwrap_or_default())
 }
 
 /// `PUT /api/decks/{name}/learn`: 我懂 — clear the term's marks (one undoable step).
@@ -863,9 +872,15 @@ pub async fn understood(State(s): State<Shared>, AxPath(name): AxPath<String>, J
     if term.is_empty() {
         return Err(bad("缺少名詞"));
     }
+    // the deck first (no card for a deck that is not there), and the term's card if it has one
+    let dir = crate::session(&s, &name)?.lock().unwrap().dir.clone();
+    let card = load_terms(&dir).and_then(|t| {
+        let k = phrase_key(&term);
+        t.terms.into_iter().find(|x| x.text == term || x.key == term || x.forms.iter().any(|f| phrase_key(f) == k)).and_then(|x| x.card)
+    });
     let kb = if b.kb {
-        match save_known(&kb_url(), &term).await {
-            Ok(id) => json!({ "saved": true, "id": id, "message": "已存進知識庫（記得）" }),
+        match save_known(&kb_url(), &term, card.as_deref()).await {
+            Ok(id) => json!({ "saved": true, "id": id, "message": if card.is_some() { "知識庫的卡片記為「記得」" } else { "已存進知識庫（記得）" } }),
             Err(m) => json!({ "saved": false, "message": m }),
         }
     } else {
