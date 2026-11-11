@@ -58,7 +58,7 @@ icon 草圖：`docs/assets/loreecho-logo-draft.svg`（賽博龐克機器人頭�
 - 位置：`private/PaperComposer/notes/<日期>-<標題>.tex`（作者定案：**LaTeX**，可以直接用進論文），前面一段 front matter：
   來源（學習夥伴／手寫）、建立時間、相關的 KB 卡 id、標籤。
 - PaperComposer 上方列加「筆記」：清單、閱讀、編輯；可以「插入到論文」（之後再做）。
-- 一律照 `lore-notation`：方程式用登記過的巨集、參照用 `\\ref{…}`、產生的文字跑它的檢查，存檔前檢查不過就先給作者看。
+- 一律照 `lore-notation`：方程式用登記過的巨集、參照用 `\ref{…}`、產生的文字跑它的檢查，存檔前檢查不過就先給作者看。
 
 ## 6. 人物（全部在 private）
 
