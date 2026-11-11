@@ -14,10 +14,12 @@
 //! | GET/PUT | /api/settings | `{ character?, shortcut }` (`settings.toml`) |
 //! | GET/POST | /api/characters | GET `{ characters: [{ id, name, voice, language, avatars, full, figure }], current, states, chains }` (`full` = states with a full-body picture; `chains` = fallback order per state); POST `{ name }` = a new character, a copy of the example |
 //! | POST | /api/characters/import | a zip (body) → a new character; GET /api/characters/{id}/export = that zip |
-//! | GET/PUT | /api/characters/{id} | `{ id, name, persona, voice }` / `{ name?, persona?, voice? }` |
+//! | GET/PUT | /api/characters/{id} | `{ id, name, persona, voice, voice_rate, language, theme, profile, background_limit }` / `{ name?, persona?, voice?, voice_rate?, theme_loop?, theme_volume?, profile? }` |
+//! | GET/PUT/DELETE | /api/characters/{id}/theme | the theme song (GET with byte ranges; PUT = mp3 m4a aac wav ogg opus flac, ≤ 30 MB) |
 //! | GET/PUT/DELETE | /api/characters/{id}/{avatar\|full}/{state} | the picture (GET follows the state's fallback chain, `full` then the portrait); PUT = the picture bytes (png, jpg, webp, svg, ≤ 10 MB); DELETE = empty the slot |
-//! | POST | /api/chat | `{ messages, character?, engine? }` → the reply as server-sent events ([`chat`]) |
+//! | POST | /api/chat | `{ messages, character?, engine?, kb?, speak? }` → the reply as server-sent events ([`chat`]) |
 //! | POST | /api/kb/recall | `{ id, outcome }` → a review outcome through KnowledgeBase's API while it runs ([`kbctx`]) |
+//! | … | /api/voice… | listening and speaking ([`voice`]) |
 
 pub mod api;
 pub mod characters;
@@ -26,6 +28,7 @@ pub mod config;
 pub mod kbctx;
 pub mod llm;
 pub mod store;
+pub mod voice;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -62,6 +65,8 @@ pub struct AppState {
     pub hook: Option<DesktopHook>,
     /// The author's KnowledgeBase, read-only ([`kbctx`]).
     pub kb: kbctx::Kb,
+    /// Listening and speaking (lore-voice; unavailable in tests unless a fake is given).
+    pub voice: lore_voice::Voice,
     /// One writer of the two settings files at a time.
     pub(crate) write: Mutex<()>,
 }
@@ -71,6 +76,11 @@ pub type Shared = Arc<AppState>;
 impl AppState {
     /// `home`'s `private/LoreEcho`, seeded from `private-example/LoreEcho` the first time.
     pub fn new(home: lore_home::Home, web: PathBuf, llm: llm::Llm, hook: Option<DesktopHook>) -> Shared {
+        AppState::with_voice(home, web, llm, hook, lore_voice::Voice::unavailable("這裡沒有語音"))
+    }
+
+    /// [`AppState::new`] with a voice (the system's, or a fake in tests).
+    pub fn with_voice(home: lore_home::Home, web: PathBuf, llm: llm::Llm, hook: Option<DesktopHook>, voice: lore_voice::Voice) -> Shared {
         let dir = match home.seed_app(config::APP) {
             Ok(d) => d,
             Err(e) => {
@@ -78,14 +88,15 @@ impl AppState {
                 None
             }
         };
-        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), write: Mutex::new(()) })
+        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), voice, write: Mutex::new(()) })
     }
 
-    /// The real engines (`private/LoreEcho/tasks.toml` may override the task's model).
+    /// The real engines (`private/LoreEcho/tasks.toml` may override the task's model) and the
+    /// system's voice.
     pub fn system(home: lore_home::Home, web: PathBuf, hook: Option<DesktopHook>) -> Shared {
         let user_tasks = home.app_dir(config::APP).map(|d| d.join("tasks.toml"));
         let llm = llm::Llm::new(Some(home.clone()), user_tasks.as_deref());
-        let s = AppState::new(home, web, llm, hook);
+        let s = AppState::with_voice(home, web, llm, hook, lore_voice::Voice::system());
         s.kb.use_system();
         s
     }
@@ -143,7 +154,7 @@ fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
     for (path, mime, body) in lore_shell::FILES {
         kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
     }
-    api::routes().route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
+    api::routes().merge(voice::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`config.port` (0 = any free port); the address, the state and the server.

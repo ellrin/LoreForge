@@ -512,4 +512,17 @@ mod tests {
         let conf = include_str!("../tauri.conf.json");
         assert!(conf.contains("\"macOSPrivateApi\": true") && conf.contains("\"withGlobalTauri\": true"));
     }
+
+    #[test]
+    fn info_plist_asks_for_the_microphone_and_speech_recognition() {
+        let plist = include_str!("../Info.plist");
+        for key in ["NSMicrophoneUsageDescription", "NSSpeechRecognitionUsageDescription"] {
+            let at = plist.find(&format!("<key>{key}</key>")).unwrap_or_else(|| panic!("{key}"));
+            let text = plist[at..].split("<string>").nth(1).and_then(|r| r.split("</string>").next()).unwrap_or("");
+            assert!(!text.trim().is_empty(), "{key} has a reason");
+        }
+        // the helper goes into the bundle next to the app
+        let conf = include_str!("../tauri.conf.json");
+        assert!(conf.contains("\"MacOS/lore-voice-helper\": \"bin/lore-voice-helper\""));
+    }
 }

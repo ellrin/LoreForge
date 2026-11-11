@@ -2,6 +2,7 @@
 //! `claude` CLI, for trying the UI: `cargo run -p le-server --example isolated_server -- <empty folder> [port]`.
 //! `--kb` adds the synthetic KnowledgeBase space of the tests (copied into the folder, member
 //! `ellrin`, KnowledgeBase not running); `--mock "<reply>"` answers every message with that reply.
+//! `LOREECHO_VOICE=1`: with the system's voice (the Apple engines on macOS).
 use std::path::{Path, PathBuf};
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -32,7 +33,8 @@ async fn main() {
         }
         None => le_server::llm::Llm::none(),
     };
-    let shared = le_server::AppState::new(lore_home::Home::at(&root), le_server::config::repo_dir().join("web"), llm, None);
+    let voice = if std::env::var_os("LOREECHO_VOICE").is_some() { lore_voice::Voice::system() } else { lore_voice::Voice::unavailable("這裡沒有語音") };
+    let shared = le_server::AppState::with_voice(lore_home::Home::at(&root), le_server::config::repo_dir().join("web"), llm, None, voice);
     if flag("--kb").is_some() {
         let kb = root.join("kb");
         copy_dir(&le_server::config::repo_dir().join("crates/server/tests/fixtures/kb"), &kb);

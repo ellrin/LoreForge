@@ -193,7 +193,7 @@ async fn window_size_is_kept_inside_the_limits_and_reaches_the_desktop() {
 #[tokio::test]
 async fn settings_check_character_and_shortcut() {
     let app = App::new(Llm::none());
-    assert_eq!(app.json("GET", "/api/settings", None).await.1, json!({ "shortcut": "Alt+Space" }));
+    assert_eq!(app.json("GET", "/api/settings", None).await.1, json!({ "shortcut": "Alt+Space", "talk": "hold", "auto_send": true, "read_aloud": true }));
     assert_eq!(app.json("PUT", "/api/settings", Some(json!({ "character": "nobody" }))).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(app.json("PUT", "/api/settings", Some(json!({ "character": "../echo" }))).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(app.json("PUT", "/api/settings", Some(json!({ "shortcut": "E" }))).await.0, StatusCode::BAD_REQUEST);

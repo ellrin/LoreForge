@@ -6,8 +6,11 @@ persona = """
 你陪他把想法說清楚：先抓住他真正想問的，必要時反問一句，幫他找出還沒弄懂的地方。
 不確定的事就直說不確定，不要編造。
 """
-# 聲音：語音功能（之後的階段）才會用到，現在先留空。
+# 聲音：系統聲音的 id（齒輪 → 人物 → 聲音 挑）；空白 = 這個語言的系統預設聲音。
 voice = ""
+# 角色設定（全部選填，齒輪 → 人物 → 角色設定）：background 身分與背景、speech_style 說話風格、
+# catchphrases 口頭禪（陣列）、call_user 怎麼稱呼你、relationship 和你的關係、likes、dislikes、
+# [[examples]] user = "…" / reply = "…" 範例對話。主題曲放在 theme.mp3（或 m4a、wav…）。
 language = "zh-TW"
 # 展開視窗裡的全身圖（full/）：1.0 = 從頭到腳剛好放進視窗高度；大於 1 = 放大、腳下超出視窗底邊被裁掉（像視覺小說的立繪）。
 figure_scale = 1.35

@@ -12,6 +12,9 @@
 //! # settings.toml — the author's choices (the gear's 一般 tab)
 //! character = "echo"
 //! shortcut = "Alt+Space"
+//! talk = "hold"       # the mic: "hold" = press and hold to talk, "continuous" = 常駐 (sentence by pause)
+//! auto_send = true    # a finished sentence is sent at once (false: it waits for ↵)
+//! read_aloud = true   # 朗讀回覆: replies are spoken
 //! ```
 //!
 //! Writes are atomic (a temporary file, then a rename); keys this version does not know are
@@ -64,11 +67,20 @@ pub struct Settings {
     pub character: Option<String>,
     /// Shows / hides LoreEcho from anywhere ("" = no shortcut).
     pub shortcut: String,
+    /// The mic button: [`TALK_HOLD`] (press and hold) or [`TALK_CONTINUOUS`] (常駐).
+    pub talk: String,
+    /// Send what was said as soon as it is final (else it waits in the input for ↵).
+    pub auto_send: bool,
+    /// Speak the replies (朗讀回覆).
+    pub read_aloud: bool,
 }
+
+pub const TALK_HOLD: &str = "hold";
+pub const TALK_CONTINUOUS: &str = "continuous";
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { character: None, shortcut: DEFAULT_SHORTCUT.into() }
+        Settings { character: None, shortcut: DEFAULT_SHORTCUT.into(), talk: TALK_HOLD.into(), auto_send: true, read_aloud: true }
     }
 }
 
@@ -77,6 +89,9 @@ impl Default for Settings {
 pub struct SettingsPatch {
     pub character: Option<String>,
     pub shortcut: Option<String>,
+    pub talk: Option<String>,
+    pub auto_send: Option<bool>,
+    pub read_aloud: Option<bool>,
 }
 
 fn read_table(path: &Path) -> toml::Table {
@@ -186,9 +201,21 @@ pub fn set_settings(dir: &Path, p: &SettingsPatch) -> Result<Settings, String> {
     if let Some(k) = &p.shortcut {
         s.shortcut = check_shortcut(k)?;
     }
+    if let Some(m) = &p.talk {
+        if m != TALK_HOLD && m != TALK_CONTINUOUS {
+            return Err(format!("不認得的說話方式「{m}」"));
+        }
+        s.talk = m.clone();
+    }
+    if let Some(v) = p.auto_send {
+        s.auto_send = v;
+    }
+    if let Some(v) = p.read_aloud {
+        s.read_aloud = v;
+    }
     let path = dir.join(SETTINGS_FILE);
     let mut t = read_table(&path);
-    merge(&mut t, &s, &["character", "shortcut"]);
+    merge(&mut t, &s, &["character", "shortcut", "talk", "auto_send", "read_aloud"]);
     write_table(&path, &t).map_err(|e| format!("無法寫入 {SETTINGS_FILE}：{e}"))?;
     Ok(s)
 }
@@ -252,10 +279,21 @@ mod tests {
     }
 
     #[test]
+    fn voice_settings() {
+        let d = tempfile::tempdir().unwrap();
+        let s = settings(d.path());
+        assert_eq!((s.talk.as_str(), s.auto_send, s.read_aloud), (TALK_HOLD, true, true), "defaults");
+        let s = set_settings(d.path(), &SettingsPatch { talk: Some(TALK_CONTINUOUS.into()), auto_send: Some(false), ..Default::default() }).unwrap();
+        assert_eq!((s.talk.as_str(), s.auto_send, s.read_aloud), (TALK_CONTINUOUS, false, true));
+        assert_eq!(settings(d.path()), s);
+        assert!(set_settings(d.path(), &SettingsPatch { talk: Some("shout".into()), ..Default::default() }).is_err());
+    }
+
+    #[test]
     fn unknown_keys_are_kept() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join(SETTINGS_FILE), "later = 1\n").unwrap();
-        set_settings(d.path(), &SettingsPatch { character: Some("echo".into()), shortcut: None }).unwrap();
+        set_settings(d.path(), &SettingsPatch { character: Some("echo".into()), ..Default::default() }).unwrap();
         let s = std::fs::read_to_string(d.path().join(SETTINGS_FILE)).unwrap();
         assert!(s.contains("later = 1") && s.contains("character = \"echo\"") && s.contains("Alt+Space"), "{s}");
     }

@@ -15,6 +15,8 @@ lore-shell.workspace = true
 kb-core.workspace = true
 lore-store.workspace = true
 reqwest.workspace = true
+lore-voice.workspace = true
+tower = { version = "0.5", features = ["util"] }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

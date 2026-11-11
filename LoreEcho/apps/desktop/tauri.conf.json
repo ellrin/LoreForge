@@ -25,6 +25,11 @@
     ],
     "resources": {
       "../../web": "web"
+    },
+    "macOS": {
+      "files": {
+        "MacOS/lore-voice-helper": "bin/lore-voice-helper"
+      }
     }
   }
 }

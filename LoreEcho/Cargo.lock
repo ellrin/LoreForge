@@ -2030,6 +2030,7 @@ dependencies = [
  "lore-llm",
  "lore-shell",
  "lore-store",
+ "lore-voice",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2215,11 +2216,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-voice"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "loreecho"
 version = "0.1.0"
 dependencies = [
  "le-server",
  "lore-home",
+ "lore-voice",
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",

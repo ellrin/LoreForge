@@ -26,6 +26,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/characters/import", post(character_import).layer(DefaultBodyLimit::max(80 << 20)))
         .route("/api/characters/{id}", get(character_get).put(character_put))
         .route("/api/characters/{id}/export", get(character_export))
+        .route("/api/characters/{id}/theme", get(theme_get_song).put(theme_put_song).delete(theme_delete_song).layer(DefaultBodyLimit::max(32 << 20)))
         .route("/api/characters/{id}/{kind}/{state}", get(image_get).put(image_put).delete(image_delete).layer(DefaultBodyLimit::max(16 << 20)))
         .route("/api/chat", post(chat_post))
 }
@@ -163,7 +164,7 @@ async fn character_get(State(s): State<Shared>, Path(id): Path<String>) -> Respo
     }
 }
 
-/// `{ name?, persona?, voice? }`
+/// `{ name?, persona?, voice?, voice_rate?, theme_loop?, theme_volume?, profile? }`
 async fn character_put(State(s): State<Shared>, Path(id): Path<String>, body: Option<Json<characters::MetaPatch>>) -> Response {
     let Some(Json(p)) = body else { return bad(StatusCode::BAD_REQUEST, "要送 { name, persona, voice }") };
     let dir = match store_dir(&s) { Ok(d) => d, Err(r) => return r };
@@ -183,6 +184,39 @@ async fn character_new(State(s): State<Shared>, body: Option<Json<Value>>) -> Re
     match characters::create(&dir, template.as_deref(), &name) {
         Ok(d) => (StatusCode::CREATED, Json(d)).into_response(),
         Err(e) => bad(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+/// The theme song, with byte ranges (the WebView's audio player asks for them).
+async fn theme_get_song(State(s): State<Shared>, Path(id): Path<String>, req: axum::extract::Request) -> Response {
+    let Some((path, mime)) = s.dir.as_deref().and_then(|d| characters::theme(d, &id)) else { return bad(StatusCode::NOT_FOUND, "沒有主題曲") };
+    use tower::ServiceExt;
+    match tower_http::services::ServeFile::new(&path).oneshot(req).await {
+        Ok(mut r) => {
+            r.headers_mut().insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static(mime));
+            r.headers_mut().insert(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-cache"));
+            r.into_response()
+        }
+        Err(e) => bad(StatusCode::NOT_FOUND, e.to_string()),
+    }
+}
+
+/// The body is the song itself.
+async fn theme_put_song(State(s): State<Shared>, Path(id): Path<String>, body: Bytes) -> Response {
+    let dir = match store_dir(&s) { Ok(d) => d, Err(r) => return r };
+    let _g = s.write.lock().unwrap_or_else(|e| e.into_inner());
+    match characters::save_theme(&dir, &id, &body) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn theme_delete_song(State(s): State<Shared>, Path(id): Path<String>) -> Response {
+    let dir = match store_dir(&s) { Ok(d) => d, Err(r) => return r };
+    let _g = s.write.lock().unwrap_or_else(|e| e.into_inner());
+    match characters::remove_theme(&dir, &id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(StatusCode::NOT_FOUND, e),
     }
 }
 
@@ -252,5 +286,10 @@ async fn chat_post(State(s): State<Shared>, body: Option<Json<chat::ChatBody>>) 
         Err(payload) => return (StatusCode::SERVICE_UNAVAILABLE, Json(payload)).into_response(),
     };
     let kb = crate::kbctx::Pre::new(&s, &b.messages, b.kb.clone());
-    chat::stream(route, chat::request(&character, messages), Some(kb)).into_response()
+    // 朗讀回覆: the reply is spoken sentence by sentence as it streams (a new reply stops the old one)
+    let speaker = (b.speak && s.voice.available()).then(|| {
+        s.voice.stop_speaking();
+        s.voice.speaker(&character.voice, character.voice_rate, &character.language)
+    });
+    chat::stream(route, chat::request(&character, messages), Some(kb), speaker).into_response()
 }

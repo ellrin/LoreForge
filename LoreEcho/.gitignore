@@ -3,3 +3,5 @@
 .DS_Store
 # Tauri generated files
 /apps/desktop/gen/
+# The voice helper copied by apps/desktop/build.rs
+/apps/desktop/bin/

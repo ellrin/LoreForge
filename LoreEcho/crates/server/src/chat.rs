@@ -2,8 +2,9 @@
 //! and sends all of it with every turn; the server keeps nothing. The reply streams back
 //! as server-sent events through lore-llm's router (task `le-chat`).
 //!
-//! `POST /api/chat { messages: [{ role: "user" | "assistant", text }], character?, engine? }`
-//! → `text/event-stream`:
+//! `POST /api/chat { messages: [{ role: "user" | "assistant", text }], character?, engine?, speak? }`
+//! → `text/event-stream` (`speak: true`: the reply is also read aloud sentence by sentence with the
+//! character's voice, lore-voice; the page follows it on `/api/voice/events`):
 //!
 //! | event | data |
 //! |---|---|
@@ -53,12 +54,63 @@ pub struct ChatBody {
     /// The page's KnowledgeBase context (quiz in progress, cards of the last reply).
     #[serde(default)]
     pub kb: Option<crate::kbctx::Ask>,
+    /// Read the reply aloud as it streams (朗讀回覆).
+    #[serde(default)]
+    pub speak: bool,
 }
 
-/// The persona, the character's name and the fixed brevity rule.
+/// How much of 身分與背景 goes into the prompt (characters; the rest is left out with "…").
+pub const BACKGROUND_LIMIT: usize = 800;
+/// Each other profile line.
+pub const LINE_LIMIT: usize = 120;
+/// Example pairs sent as earlier turns, and characters per line of them.
+pub const EXAMPLE_PAIRS: usize = 4;
+pub const EXAMPLE_LIMIT: usize = 200;
+
+/// `s` cut to `max` characters ("…" marks the cut).
+pub fn clip(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max { s.to_string() } else { format!("{}…", s.chars().take(max).collect::<String>()) }
+}
+
+/// Persona, name, the 角色設定 as short labelled lines, then the fixed brevity rule.
 pub fn system_prompt(c: &Character) -> String {
     let persona = if c.persona.trim().is_empty() { Character::builtin().persona } else { c.persona.trim().to_string() };
-    format!("{persona}\n\n你的名字是「{}」。\n\n{BREVITY_RULE}", c.name)
+    let p = &c.profile;
+    let mut lines: Vec<String> = vec![];
+    fn line(lines: &mut Vec<String>, label: &str, v: &str, max: usize) {
+        if !v.trim().is_empty() {
+            lines.push(format!("{label}：{}", clip(&v.replace('\n', " "), max)));
+        }
+    }
+    line(&mut lines, "身分與背景", &p.background, BACKGROUND_LIMIT);
+    line(&mut lines, "說話風格", &p.speech_style, LINE_LIMIT);
+    let phrases: Vec<String> = p.catchphrases.iter().filter(|x| !x.trim().is_empty()).take(5).map(|x| format!("「{}」", clip(x, 30))).collect();
+    if !phrases.is_empty() {
+        lines.push(format!("口頭禪：{}（偶爾自然地用，不要每句都用）", phrases.join("")));
+    }
+    line(&mut lines, "稱呼使用者", &p.call_user, 30);
+    line(&mut lines, "和使用者的關係", &p.relationship, LINE_LIMIT);
+    line(&mut lines, "喜歡", &p.likes, LINE_LIMIT);
+    line(&mut lines, "不喜歡", &p.dislikes, LINE_LIMIT);
+    let about = if p.background.trim().is_empty() {
+        "被問到你是誰、你的來歷或名字由來時，照上面的個性和設定回答，不要只重複名字；沒有設定的事就說你還沒想過，不要自己編身世。"
+    } else {
+        "被問到你是誰、你的來歷或名字由來時，根據「身分與背景」回答，不要只重複名字；沒寫到的事就說你還沒想過，不要編出和設定矛盾的身世。"
+    };
+    let profile = if lines.is_empty() { String::new() } else { format!("\n\n角色設定：\n{}", lines.join("\n")) };
+    format!("{persona}\n\n你的名字是「{}」。{profile}\n\n{about}\n\n{BREVITY_RULE}", c.name)
+}
+
+/// The character's example pairs as earlier turns (user, character, …), oldest first.
+pub fn example_turns(c: &Character) -> Vec<Message> {
+    c.profile
+        .examples
+        .iter()
+        .filter(|e| !e.user.trim().is_empty() && !e.reply.trim().is_empty())
+        .take(EXAMPLE_PAIRS)
+        .flat_map(|e| [Message::user(clip(&e.user, EXAMPLE_LIMIT)), Message::assistant(clip(&e.reply, EXAMPLE_LIMIT))])
+        .collect()
 }
 
 /// The page's turns as a transcript for lore-llm: empty turns dropped, the last
@@ -89,9 +141,11 @@ pub fn transcript(turns: &[Turn]) -> Result<Vec<Message>, String> {
     }
 }
 
-/// The request for `le-chat`.
+/// The request for `le-chat`: the example turns, then the conversation.
 pub fn request(c: &Character, messages: Vec<Message>) -> LlmRequest {
-    LlmRequest::chat(system_prompt(c), messages).temperature(LOCAL_TEMPERATURE)
+    let mut all = example_turns(c);
+    all.extend(messages);
+    LlmRequest::chat(system_prompt(c), all).temperature(LOCAL_TEMPERATURE)
 }
 
 fn event(name: &str, data: serde_json::Value) -> Event {
@@ -99,10 +153,12 @@ fn event(name: &str, data: serde_json::Value) -> Event {
 }
 
 /// Run `req` on `route` and stream it, after `kb` (the turn's KnowledgeBase cards: `search`,
-/// `cards`, the prompt note). Stops the call when the page goes away.
-pub fn stream(route: lore_llm::Route, req: LlmRequest, kb: Option<crate::kbctx::Pre>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+/// `cards`, the prompt note); each piece also goes to `speaker` when reading aloud. Stops the call
+/// when the page goes away (and queues nothing more to speak).
+pub fn stream(route: lore_llm::Route, req: LlmRequest, kb: Option<crate::kbctx::Pre>, speaker: Option<lore_voice::Speaker>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     let engine = route.provider.id();
+    let speaker = std::sync::Arc::new(std::sync::Mutex::new(speaker));
     tokio::spawn(async move {
         let req = match kb {
             Some(kb) => kb.run(req, |name, data| { let _ = tx.send(event(name, data)); }).await,
@@ -111,15 +167,25 @@ pub fn stream(route: lore_llm::Route, req: LlmRequest, kb: Option<crate::kbctx::
         let _ = tx.send(event("start", json!({ "engine": engine, "label": crate::llm::engine_label(&engine) })));
         let req = route.apply(req);
         let pieces = tx.clone();
+        let sp = speaker.clone();
         let on = move |ev: StreamEvent| {
             if let StreamEvent::Text { text } = ev
                 && !text.is_empty()
             {
+                if let Some(s) = sp.lock().unwrap().as_mut() {
+                    s.push(&text);
+                }
                 let _ = pieces.send(event("delta", json!({ "text": text })));
+            }
+        };
+        let finish = |cancel: bool| {
+            if let Some(s) = speaker.lock().unwrap().as_mut() {
+                if cancel { s.cancel() } else { s.finish() }
             }
         };
         tokio::select! {
             r = route.provider.stream(&req, &on) => {
+                finish(false);
                 let _ = match r {
                     Ok(r) => tx.send(event("done", json!({ "engine": engine, "text": r.text }))),
                     Err(e) => {
@@ -128,7 +194,7 @@ pub fn stream(route: lore_llm::Route, req: LlmRequest, kb: Option<crate::kbctx::
                     }
                 };
             }
-            _ = tx.closed() => {}
+            _ = tx.closed() => finish(true),
         }
     });
     let s = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|e| (Ok(e), rx)) });
@@ -164,6 +230,49 @@ mod tests {
         assert!(m.len() <= MAX_TURNS);
         assert_eq!(m[0].role, lore_llm::Role::User);
         assert_eq!(m.last().unwrap().text(), "last");
+    }
+
+    #[test]
+    fn the_profile_goes_into_the_prompt_as_labelled_lines() {
+        let mut c = Character::builtin();
+        c.name = "King".into();
+        c.profile = crate::characters::Profile {
+            background: "從北方的圖書館來，\n管理一座會說話的書架。".into(),
+            speech_style: "慢條斯理".into(),
+            catchphrases: vec!["嗯哼".into(), "".into()],
+            call_user: "小鬼".into(),
+            ..Default::default()
+        };
+        let s = system_prompt(&c);
+        assert!(s.contains("角色設定：\n身分與背景：從北方的圖書館來， 管理一座會說話的書架。"), "{s}");
+        assert!(s.contains("說話風格：慢條斯理") && s.contains("口頭禪：「嗯哼」") && s.contains("稱呼使用者：小鬼"));
+        assert!(!s.contains("喜歡：") && !s.contains("和使用者的關係"), "empty fields leave no line");
+        assert!(s.contains("根據「身分與背景」回答"));
+        assert!(s.ends_with(BREVITY_RULE), "the brevity rule stays last");
+        // without a profile: no 角色設定 block, still told not to answer with the name only
+        let plain = system_prompt(&Character::builtin());
+        assert!(!plain.contains("角色設定") && plain.contains("不要只重複名字") && plain.ends_with(BREVITY_RULE));
+    }
+
+    #[test]
+    fn a_long_background_is_cut() {
+        let mut c = Character::builtin();
+        c.profile.background = "字".repeat(BACKGROUND_LIMIT + 500);
+        let s = system_prompt(&c);
+        assert!(s.contains(&format!("{}…", "字".repeat(BACKGROUND_LIMIT))));
+        assert!(!s.contains(&"字".repeat(BACKGROUND_LIMIT + 1)));
+    }
+
+    #[test]
+    fn examples_come_before_the_conversation_in_order() {
+        use crate::characters::Example;
+        let mut c = Character::builtin();
+        c.profile.examples = (1..=6).map(|i| Example { user: format!("問{i}"), reply: format!("答{i}") }).collect();
+        c.profile.examples.insert(0, Example { user: "沒有回答".into(), reply: " ".into() });
+        let req = request(&c, transcript(&[t("user", "真的問題")]).unwrap());
+        let texts: Vec<String> = req.messages.iter().map(|m| m.text().to_string()).collect();
+        assert_eq!(texts, vec!["問1", "答1", "問2", "答2", "問3", "答3", "問4", "答4", "真的問題"]);
+        assert_eq!(req.messages[1].role, lore_llm::Role::Assistant);
     }
 
     #[test]
