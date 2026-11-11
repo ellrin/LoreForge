@@ -186,16 +186,104 @@ async function showHome() {
   S.info = info;
   $("#libError").hidden = !info.library_error;
   $("#libError").textContent = info.library_error ?? "";
-  const cards = list.papers.map((p) => h("div", { class: "cardwrap" }, h("button", { class: `card${p.present ? "" : " missing"}`, onclick: () => p.present ? go(p.sha256, 1) : toast("這份 PDF 不在這台電腦的書庫裡", true) },
-    h("b", { title: p.title }, p.title),
-    h("span", { class: "meta", title: p.original_name }, `${p.pages} 頁 · ${p.added_at.slice(0, 10)}${p.original_name.replace(/\.pdf$/i, "") === p.title ? "" : ` · ${p.original_name}`}`),
-    p.doi ? h("span", { class: "meta" }, `doi:${p.doi}`) : null,
-    p.derived_from ? h("span", { class: "tag" }, "編輯版") : null,
-    p.present ? null : h("span", { class: "tag" }, "不在這台電腦")),
-    p.present ? h("button", { class: "ico small rename", "aria-label": "改標題", "data-icon": "pen", onclick: () => renameDialog(p) }) : null,
-    p.present ? h("button", { class: "ico small mine", "aria-label": "我的論文", "aria-pressed": p.mine ? "true" : "false", "data-icon": "star", onclick: (ev) => toggleMine(p, ev.currentTarget) }) : null));
-  $("#paperList").replaceChildren(...(cards.length ? cards : [h("p", { class: "empty" }, "書庫是空的")]));
+  HOME.papers = list.papers;
+  renderHome();
+}
+
+// 首頁: 01 開始 (tiles) · 02 最近 (first-page thumbnails) · 03 書庫 (filter + sort)
+const HOME = { papers: [], sort: "opened", q: "" };
+try { HOME.sort = localStorage.getItem("lr.homeSort") || "opened"; } catch {}
+const openedAt = () => { try { return JSON.parse(localStorage.getItem("lr.opened") || "{}"); } catch { return {}; } };
+const recentOrder = () => { try { return JSON.parse(localStorage.getItem("lr.recent") || "[]"); } catch { return []; } };
+function shortDate(ms) {
+  const d = new Date(ms), now = new Date(), p = (n) => String(n).padStart(2, "0");
+  return d.toDateString() === now.toDateString() ? `${p(d.getHours())}:${p(d.getMinutes())}` : `${d.getFullYear() === now.getFullYear() ? "" : d.getFullYear() + "/"}${p(d.getMonth() + 1)}/${p(d.getDate())}`;
+}
+/** Author / year when the paper's record carries them (free fields of paper.json). */
+function byline(p) {
+  const a = Array.isArray(p.authors) ? p.authors.join(", ") : (p.authors || p.author || "");
+  return [a, p.year].filter(Boolean).join(" · ");
+}
+const where = (p) => p.original_path || p.original_name || p.title;
+function missingToast() { toast("這份 PDF 不在這台電腦的書庫裡", true); }
+
+function renderHome() {
+  const at = openedAt(), order = recentOrder();
+  const rank = (p) => { const i = order.indexOf(p.sha256); return i < 0 ? 1e9 : i; };
+  // 02 最近: papers opened here, newest first
+  const recent = HOME.papers.filter((p) => p.present && order.includes(p.sha256)).sort((x, y) => rank(x) - rank(y)).slice(0, 8);
+  $("#recentBlock").hidden = !recent.length;
+  $("#recentList").replaceChildren(...recent.map((p) => {
+    const frame = h("div", { class: "frame" });
+    const card = h("button", { class: "paper-card", title: where(p), onclick: () => go(p.sha256, 1) }, frame,
+      h("span", { class: "name" }, p.title), h("span", { class: "when" }, at[p.sha256] ? shortDate(at[p.sha256]) : ""));
+    thumbWhenVisible(frame, p.sha256);
+    return card;
+  }));
+  renderLibrary();
+}
+
+function renderLibrary() {
+  const at = openedAt(), order = recentOrder();
+  const rank = (p) => { const i = order.indexOf(p.sha256); return i < 0 ? 1e9 : i; };
+  const q = HOME.q.trim().toLowerCase();
+  const hay = (p) => [p.title, p.original_name, p.doi, byline(p)].filter(Boolean).join("\n").toLowerCase();
+  const cmp = {
+    opened: (x, y) => (at[y.sha256] ?? 0) - (at[x.sha256] ?? 0) || rank(x) - rank(y) || String(y.added_at).localeCompare(String(x.added_at)),
+    added: (x, y) => String(y.added_at).localeCompare(String(x.added_at)),
+    title: (x, y) => x.title.localeCompare(y.title, "zh-Hant"),
+  }[HOME.sort];
+  const list = HOME.papers.filter((p) => !q || hay(p).includes(q)).sort(cmp);
+  $("#libCount").textContent = q ? `${list.length} / ${HOME.papers.length}` : HOME.papers.length || "";
+  $$("#libSort button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.sort === HOME.sort)));
+  const rows = list.map((p) => {
+    const meta = [byline(p), `${p.pages} 頁`, p.added_at.slice(0, 10), p.doi ? `doi:${p.doi}` : "", p.derived_from ? "編輯版" : "", p.present ? "" : "不在這台電腦"].filter(Boolean).join(" · ");
+    return h("div", { class: `lib-row${p.present ? "" : " missing"}` },
+      h("button", { class: "lib-open", title: where(p), onclick: () => p.present ? go(p.sha256, 1) : missingToast() },
+        h("b", {}, p.title), h("span", { class: "meta" }, meta)),
+      p.present ? h("button", { class: "ico small rename", "aria-label": "改標題", "data-icon": "pen", onclick: () => renameDialog(p) }) : null,
+      p.present ? h("button", { class: "ico small mine", "aria-label": "我的論文", "aria-pressed": p.mine ? "true" : "false", "data-icon": "star", onclick: (ev) => toggleMine(p, ev.currentTarget) }) : null);
+  });
+  $("#paperList").replaceChildren(...(rows.length ? rows : [h("p", { class: "empty" }, HOME.papers.length ? "沒有符合的論文" : "書庫是空的")]));
   paintIcons($("#paperList"));
+}
+
+/** First-page thumbnail, drawn once when the card scrolls into view (own loader, document released). */
+const thumbCache = new Map();
+const thumbSeen = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { thumbSeen.unobserve(e.target); drawThumb(e.target).catch(() => {}); } }));
+function thumbWhenVisible(frame, sha) { frame.dataset.sha = sha; thumbSeen.observe(frame); }
+async function drawThumb(frame) {
+  const sha = frame.dataset.sha;
+  let url = thumbCache.get(sha);
+  if (!url) {
+    const task = pdfjsLib.getDocument({ url: `/api/papers/${sha}/pdf`, standardFontDataUrl: FONTS, isEvalSupported: false });
+    const doc = await task.promise;
+    try {
+      const pg = await doc.getPage(1);
+      const base = pg.getViewport({ scale: 1 });
+      const vp = pg.getViewport({ scale: (180 * Math.min(2, devicePixelRatio || 1)) / base.width });
+      const cv = document.createElement("canvas");
+      cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+      await pg.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
+      url = cv.toDataURL("image/jpeg", 0.85);
+      thumbCache.set(sha, url);
+    } finally { await doc.destroy(); }
+  }
+  frame.append(h("img", { src: url, alt: "" }));
+}
+
+/** 貼上路徑: a small form (the browser has no real file path). */
+async function pathDialog() {
+  let inp;
+  await LoreShell.form({
+    title: "貼上路徑",
+    build: (body) => { inp = h("input", { class: "np-input", placeholder: "PDF 的完整路徑", "aria-label": "PDF 路徑", autocomplete: "off" }); body.append(inp); },
+    actions: [{ label: "加入", primary: true, run: async () => {
+      const path = inp.value.trim();
+      if (!path) return false;
+      try { const r = await api("/api/papers/import", { body: { path } }); go(r.paper.sha256, 1); } catch (x) { fail(x); return false; }
+    } }],
+  });
 }
 
 /** 「我的論文」: its words become the author's own vocabulary (never red). */
@@ -2255,6 +2343,7 @@ function remember(sha) {
   try {
     const r = JSON.parse(localStorage.getItem("lr.recent") || "[]").filter((x) => x !== sha);
     localStorage.setItem("lr.recent", JSON.stringify([sha, ...r].slice(0, 12)));
+    localStorage.setItem("lr.opened", JSON.stringify({ ...JSON.parse(localStorage.getItem("lr.opened") || "{}"), [sha]: Date.now() }));
   } catch {}
 }
 async function recentPapers() {
@@ -2324,7 +2413,9 @@ function wire() {
   LoreShell.engines.get().then((d) => { S.engines = d; renderSide(); });
   document.addEventListener("lore-engines", (e) => { S.engines = e.detail; renderSide(); });
   $("#openFile").onchange = async (e) => { const p = await importFiles([...e.target.files]); e.target.value = ""; if (p) go(p.sha256, 1); else if (!S.sha) showHome(); };
-  $("#pathForm").onsubmit = async (e) => { e.preventDefault(); try { const r = await api("/api/papers/import", { body: { path: $("#pathInput").value.trim() } }); $("#pathInput").value = ""; go(r.paper.sha256, 1); } catch (x) { fail(x); } };
+  $("#tilePath").onclick = () => pathDialog();
+  $("#libFilter").oninput = (e) => { HOME.q = e.target.value; renderLibrary(); };
+  $$("#libSort button").forEach((b) => { b.onclick = () => { HOME.sort = b.dataset.sort; try { localStorage.setItem("lr.homeSort", HOME.sort); } catch {} renderLibrary(); }; });
   $("#actMerge").onclick = () => mergeDialog().catch(fail);
   $("#actPrev").onclick = () => scrollToPage(Math.max(0, S.cur - 1));
   $("#actNext").onclick = () => scrollToPage(Math.min(S.pages.length - 1, S.cur + 1));
@@ -2377,6 +2468,11 @@ function wire() {
   addEventListener("beforeunload", (e) => { if (S.exp?.dirty) { e.preventDefault(); e.returnValue = ""; } });
   // Drop PDFs anywhere to add them.
   document.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
+  let drag = 0;
+  const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes("Files");
+  document.addEventListener("dragenter", (e) => { if (hasFiles(e)) { drag++; $("#tileAdd").classList.add("over"); } });
+  document.addEventListener("dragleave", (e) => { if (hasFiles(e) && --drag <= 0) { drag = 0; $("#tileAdd").classList.remove("over"); } });
+  document.addEventListener("drop", () => { drag = 0; $("#tileAdd").classList.remove("over"); }, true);
   document.addEventListener("drop", async (e) => {
     const files = [...e.dataTransfer.files].filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
     if (!files.length) return;

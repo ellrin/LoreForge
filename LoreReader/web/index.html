@@ -60,14 +60,33 @@
 </div>
 
 <section class="home" id="home">
-  <div class="home-head">
-    <h2>書庫</h2>
-    <label class="btn primary"><span data-icon="upload"></span>加入 PDF<input type="file" id="openFile" accept="application/pdf,.pdf" multiple hidden></label>
-    <button class="btn" id="actMerge"><span data-icon="layers"></span>合併 PDF…</button>
+  <div class="home-inner">
+    <section class="block" data-open="true">
+      <div class="block-head"><span class="n">01</span><h3>開始</h3></div>
+      <div class="block-body tiles">
+        <label class="tile" id="tileAdd"><span data-icon="upload"></span>加入 PDF…<input type="file" id="openFile" accept="application/pdf,.pdf" multiple hidden></label>
+        <button class="tile" id="actMerge"><span data-icon="layers"></span>合併 PDF…</button>
+        <button class="tile" id="tilePath"><span data-icon="folder"></span>貼上路徑…</button>
+      </div>
+    </section>
+    <div class="warn-box" id="libError" hidden></div>
+    <section class="block" data-open="true" id="recentBlock" hidden>
+      <div class="block-head"><span class="n">02</span><h3>最近</h3></div>
+      <div class="block-body recent" id="recentList"></div>
+    </section>
+    <section class="block" data-open="true">
+      <div class="block-head"><span class="n">03</span><h3>書庫</h3><span class="c" id="libCount"></span></div>
+      <div class="block-body">
+        <div class="lib-bar">
+          <label class="lib-find"><span data-icon="search"></span><input id="libFilter" type="search" placeholder="標題、作者、年份" aria-label="篩選書庫" autocomplete="off"></label>
+          <span class="seg" id="libSort" role="group" aria-label="排序">
+            <button type="button" data-sort="opened">最近開啟</button><button type="button" data-sort="added">加入日期</button><button type="button" data-sort="title">標題</button>
+          </span>
+        </div>
+        <div class="lib-list" id="paperList"></div>
+      </div>
+    </section>
   </div>
-  <div class="warn-box" id="libError" hidden></div>
-  <div class="cards" id="paperList"></div>
-  <form id="pathForm" class="pathform"><input id="pathInput" placeholder="或貼上 PDF 路徑"> <button class="btn">加入</button></form>
 </section>
 
 <div class="selbar" id="selBar" role="toolbar" aria-label="選取工具" hidden></div>
