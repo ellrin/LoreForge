@@ -57,6 +57,8 @@ async function boot() {
   try {
     const [health, win] = await Promise.all([api("GET", "/api/health"), api("GET", "/api/window")]);
     S.desktop = !!health.desktop;
+    setWinSize(win.w, win.h);
+    wireResize();
     await loadCharacters();
     show(!!win.expanded, false);
   } catch (e) {
@@ -195,6 +197,45 @@ function wireChoices() {
     const i = rows.indexOf(document.activeElement);
     rows[(i + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length].focus();
   });
+}
+
+// ── the open window's size (420–1000 px, remembered with the bubble's place) ──
+const WIN_MIN = 420, WIN_MAX = 1000;
+const clampWin = (v) => Math.min(WIN_MAX, Math.max(WIN_MIN, Math.round(v)));
+function setWinSize(w, h) {
+  const root = document.documentElement.style;
+  if (w) root.setProperty("--win-w", `${clampWin(w)}px`);
+  if (h) root.setProperty("--win-h", `${clampWin(h)}px`);
+}
+// The window keeps its bottom-right corner, so its left and top edges (and their corner) are
+// the grips; the desktop app resizes the window itself (PUT /api/window {w, h}).
+function wireResize() {
+  const win = $("win");
+  for (const edge of ["l", "t", "tl"]) win.append(h("div", { class: `grip grip-${edge}`, "data-edge": edge, "aria-hidden": "true" }));
+  let drag = null, queued = false;
+  const push = () => {
+    queued = false;
+    if (drag) api("PUT", "/api/window", { w: drag.w, h: drag.h }).catch(() => {});
+  };
+  win.addEventListener("pointerdown", (e) => {
+    const g = e.target.closest?.(".grip");
+    if (!g || e.button !== 0) return;
+    e.preventDefault();
+    g.setPointerCapture(e.pointerId);
+    drag = { edge: g.dataset.edge, x: e.screenX, y: e.screenY, w0: win.offsetWidth, h0: win.offsetHeight, w: win.offsetWidth, h: win.offsetHeight };
+  });
+  win.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    if (drag.edge.includes("l")) drag.w = clampWin(drag.w0 - (e.screenX - drag.x));
+    if (drag.edge.includes("t")) drag.h = clampWin(drag.h0 - (e.screenY - drag.y));
+    setWinSize(drag.w, drag.h);
+    if (!queued) { queued = true; requestAnimationFrame(push); }
+  });
+  const end = () => { if (drag) { push(); drag = null; } };
+  win.addEventListener("pointerup", end);
+  win.addEventListener("pointercancel", end);
+  // the desktop window resized from outside (the system's own edge drag): the page follows it
+  if (S.desktop) addEventListener("resize", () => { if (S.expanded && !drag) setWinSize(innerWidth, innerHeight); });
 }
 
 // ── bubble ⇄ open window ────────────────────────────────────────

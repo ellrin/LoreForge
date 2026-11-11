@@ -94,7 +94,7 @@ async fn window_get(State(s): State<Shared>) -> Json<WindowState> {
     Json(s.window())
 }
 
-/// `{ x?, y?, expanded? }`: what changes. `expanded` also opens / closes the desktop panel.
+/// `{ x?, y?, expanded?, w?, h? }`: what changes. `expanded` also opens / closes the desktop panel; `w` / `h` (the open window's size) resize it.
 async fn window_put(State(s): State<Shared>, body: Option<Json<WindowPatch>>) -> Response {
     let Some(Json(p)) = body else { return bad(StatusCode::BAD_REQUEST, "要送 { x, y, expanded }") };
     if s.dir.is_none() {
@@ -104,6 +104,9 @@ async fn window_put(State(s): State<Shared>, body: Option<Json<WindowPatch>>) ->
         Ok(w) => {
             if let Some(e) = p.expanded {
                 s.tell(DesktopEvent::Expanded(e));
+            } else if p.w.is_some() || p.h.is_some() {
+                let (w, h) = w.size();
+                s.tell(DesktopEvent::Size(w, h));
             }
             Json(w).into_response()
         }

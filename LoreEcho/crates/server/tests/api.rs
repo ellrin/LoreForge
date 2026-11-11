@@ -179,6 +179,18 @@ async fn window_state_round_trip() {
 }
 
 #[tokio::test]
+async fn window_size_is_kept_inside_the_limits_and_reaches_the_desktop() {
+    let app = App::new(Llm::none());
+    let (s, w) = app.json("PUT", "/api/window", Some(json!({ "w": 700.0, "h": 5000.0 }))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!((w["w"].clone(), w["h"].clone()), (json!(700.0), json!(1000.0)), "clamped to 420..1000");
+    let (_, w) = app.json("PUT", "/api/window", Some(json!({ "w": 100.0 }))).await;
+    assert_eq!((w["w"].clone(), w["h"].clone()), (json!(420.0), json!(1000.0)));
+    assert_eq!(*app.events.lock().unwrap(), vec![DesktopEvent::Size(700.0, 1000.0), DesktopEvent::Size(420.0, 1000.0)]);
+    assert_eq!(app.json("GET", "/api/window", None).await.1, w);
+}
+
+#[tokio::test]
 async fn settings_check_character_and_shortcut() {
     let app = App::new(Llm::none());
     assert_eq!(app.json("GET", "/api/settings", None).await.1, json!({ "shortcut": "Alt+Space" }));

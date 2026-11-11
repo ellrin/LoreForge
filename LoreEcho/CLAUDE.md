@@ -32,10 +32,10 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   Theme, `/prefs.css`, lore-shell `FILES` and the lore-engines router exactly as in KnowledgeBase.
   `DesktopHook`: `PUT /api/window {expanded}` and `PUT /api/settings {shortcut}` reach the desktop app.
 - `apps/desktop` (`loreecho`): server in-process; one frameless, transparent, always-on-top window
-  (64 px bubble ⇄ 620×620 open window, `WIN_W`/`WIN_H` = `--win-w`/`--win-h` in `web/styles.css`
-  (a test checks), sharing the bottom-right corner, kept inside the monitor's work area); moves saved debounced as the bubble's place; tray item (left click = show/hide, menu =
+  (64 px bubble ⇄ open window, default 620×620 = `WIN_W`/`WIN_H` = `--win-w`/`--win-h` in `web/styles.css`
+  (a test checks), resizable 420–1000 px (`MIN_WIN`/`MAX_WIN` in `store.rs`; the page's left/top grips send `PUT /api/window {w,h}` → `DesktopEvent::Size`, the window keeps its bottom-right corner; `w`,`h` saved in state.toml), sharing the bottom-right corner, kept inside the monitor's work area); moves saved debounced as the bubble's place; tray item (left click = show/hide, menu =
   show/hide, quit); global shortcut (`tauri-plugin-global-shortcut`, from settings.toml);
-  macOS: `macOSPrivateApi`, accessory activation policy (no Dock icon). No `lore-le://` URL scheme: other apps never open LoreEcho (author, 2026-11-11).
+  macOS: `macOSPrivateApi`, regular activation policy (Dock icon, installed into the Dock by `scripts/install-apps.sh`; Dock click = `RunEvent::Reopen` → show/unminimize; own menu bar: app 隱藏/結束 ⌘Q, 編輯, 視窗 最小化 ⌘M as custom items). No `lore-le://` URL scheme: other apps never open LoreEcho (author, 2026-11-11).
   `capabilities/default.json` lets the page on `http://127.0.0.1:*` call `startDragging` only.
   Icon source `icons/logo.svg` (= `docs/assets/loreecho-logo-draft.svg`, approved; do not redesign).
 - `web/`: no build step. Open window = `.figure` (left, only the picture, `--fig-scale`/`--fig-dy`

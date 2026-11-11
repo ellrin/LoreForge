@@ -35,6 +35,12 @@ html, body { background: transparent; height: 100%; overflow: hidden; }
 .win.closing { animation: grow .12s ease-in reverse forwards; }
 @keyframes grow { from { transform: scale(.12); opacity: 0; } to { transform: none; opacity: 1; } }
 
+/* resize grips on the left and top edges (the window keeps its bottom-right corner) */
+.grip { position: absolute; z-index: 6; touch-action: none; }
+.grip-l { left: 0; top: 14px; bottom: 0; width: 6px; cursor: ew-resize; }
+.grip-t { top: 0; left: 14px; right: 0; height: 6px; cursor: ns-resize; }
+.grip-tl { top: 0; left: 0; width: 14px; height: 14px; cursor: nwse-resize; }
+
 /* the character: only the figure, above the column */
 /* its box (left of the column) drags the window; the picture itself lets clicks through where
    it overlaps the column */

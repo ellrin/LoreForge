@@ -8,7 +8,7 @@
 # Tauri App（PaperComposer、SlideComposer、KnowledgeBase、LoreReader、LoreEcho）裝到 /Applications，
 # NeonDeck 用它自己的 build.sh 裝到 ~/Applications。安裝前會先結束正在執行的舊版。
 # Dock：每個 App 一個項目；名稱相同但指向別的位置（例如舊的編譯資料夾）的項目會被換掉，
-# 其他項目不動；LoreEcho 是選單列小工具，不放進 Dock。
+# 其他項目不動。
 # 簽章是 ad-hoc（沒有 Developer ID），所以換版後第一次讀鑰匙圈時系統會再問一次。
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -42,7 +42,7 @@ for a in $apps; do
   rm -rf "/Applications/$a.app"
   cp -R "$root/$a/target/release/bundle/macos/$a.app" /Applications/
   echo "✔ /Applications/$a.app"
-  [[ $a == LoreEcho ]] || installed+="/Applications/$a.app"   # menu-bar only, no Dock tile
+  installed+="/Applications/$a.app"
 done
 
 if (( dock )); then

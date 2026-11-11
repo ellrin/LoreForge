@@ -42,6 +42,8 @@ pub use config::Config;
 pub enum DesktopEvent {
     /// Open the panel (true) or go back to the bubble (false).
     Expanded(bool),
+    /// The page dragged the open window's edge: the new size (already inside the limits).
+    Size(f64, f64),
     /// The global shortcut changed ("" = none).
     Shortcut(String),
 }

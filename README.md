@@ -26,7 +26,7 @@ cd PaperComposer && cargo run -p pc-server     # 見 PaperComposer/README.md
 cd LoreEcho && cargo run -p le-server          # http://127.0.0.1:7860（桌面泡泡：cargo run -p loreecho）
 ```
 
-**Mac App**：`scripts/install-apps.sh` 編譯 PaperComposer、SlideComposer、KnowledgeBase、LoreReader、LoreEcho（Tauri，裝到 `/Applications`）與 NeonDeck（裝到 `~/Applications`），並放進 Dock（LoreEcho 是選單列小工具，不放）；只更新其中幾個就在後面寫名稱，例如 `scripts/install-apps.sh SlideComposer`。需要 `cargo install tauri-cli --version "^2" --locked`。App 從編譯時的 LoreForge 資料夾找 `private/`，所以 repo 不要搬家（搬了就重跑一次）。
+**Mac App**：`scripts/install-apps.sh` 編譯 PaperComposer、SlideComposer、KnowledgeBase、LoreReader、LoreEcho（Tauri，裝到 `/Applications`）與 NeonDeck（裝到 `~/Applications`），並放進 Dock；只更新其中幾個就在後面寫名稱，例如 `scripts/install-apps.sh SlideComposer`。需要 `cargo install tauri-cli --version "^2" --locked`。App 從編譯時的 LoreForge 資料夾找 `private/`，所以 repo 不要搬家（搬了就重跑一次）。
 
 第一次啟動時，知識庫、簡報編輯器、LoreReader 與 LoreEcho 會從 `private-example/<App>/` 複製一份到 `private/<App>/`（只補缺的檔案），之後只讀寫 `private/`。PaperComposer 有 `private/PaperComposer/` 就用它，否則先開示範資料，再由設定頁建立工作區。
 

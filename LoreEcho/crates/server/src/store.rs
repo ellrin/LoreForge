@@ -6,6 +6,8 @@
 //! x = 1600.0          # the bubble's top-left corner, logical pixels; missing = bottom-right
 //! y = 940.0
 //! expanded = false
+//! w = 620.0           # the open window's size (420..1000), missing = 620 × 620
+//! h = 620.0
 //!
 //! # settings.toml — the author's choices (the gear's 一般 tab)
 //! character = "echo"
@@ -24,6 +26,10 @@ pub const SETTINGS_FILE: &str = "settings.toml";
 pub const DEFAULT_SHORTCUT: &str = "Alt+Space";
 /// Positions further out than this are nonsense (a broken file, a bad request).
 const MAX_COORD: f64 = 100_000.0;
+/// The open window's size limits (logical pixels) and its default.
+pub const MIN_WIN: f64 = 420.0;
+pub const MAX_WIN: f64 = 1000.0;
+pub const DEFAULT_WIN: f64 = 620.0;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -33,6 +39,10 @@ pub struct WindowState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub y: Option<f64>,
     pub expanded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub w: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h: Option<f64>,
 }
 
 /// A change to the window state; missing fields stay as they are.
@@ -42,6 +52,8 @@ pub struct WindowPatch {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub expanded: Option<bool>,
+    pub w: Option<f64>,
+    pub h: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,8 +115,20 @@ fn finite(v: f64) -> Result<f64, String> {
     if v.is_finite() && v.abs() <= MAX_COORD { Ok(v) } else { Err(format!("位置不對：{v}")) }
 }
 
+/// A window size, kept inside the limits.
+fn size(v: f64) -> Result<f64, String> {
+    if v.is_finite() { Ok(v.clamp(MIN_WIN, MAX_WIN)) } else { Err(format!("大小不對：{v}")) }
+}
+
 impl WindowState {
+    /// The open window's size: the saved one inside the limits, else 620 × 620.
+    pub fn size(&self) -> (f64, f64) {
+        (self.w.unwrap_or(DEFAULT_WIN).clamp(MIN_WIN, MAX_WIN), self.h.unwrap_or(DEFAULT_WIN).clamp(MIN_WIN, MAX_WIN))
+    }
+
     fn clean(mut self) -> WindowState {
+        self.w = self.w.filter(|v| v.is_finite()).map(|v| v.clamp(MIN_WIN, MAX_WIN));
+        self.h = self.h.filter(|v| v.is_finite()).map(|v| v.clamp(MIN_WIN, MAX_WIN));
         self.x = self.x.filter(|v| finite(*v).is_ok());
         self.y = self.y.filter(|v| finite(*v).is_ok());
         if self.x.is_none() || self.y.is_none() {
@@ -131,11 +155,17 @@ pub fn set_window(dir: &Path, p: &WindowPatch) -> Result<WindowState, String> {
     if let Some(e) = p.expanded {
         w.expanded = e;
     }
+    if let Some(v) = p.w {
+        w.w = Some(size(v)?);
+    }
+    if let Some(v) = p.h {
+        w.h = Some(size(v)?);
+    }
     let w = w.clean();
     let path = dir.join(STATE_FILE);
     let mut t = read_table(&path);
     let mut wt = t.get("window").and_then(|v| v.as_table()).cloned().unwrap_or_default();
-    merge(&mut wt, &w, &["x", "y", "expanded"]);
+    merge(&mut wt, &w, &["x", "y", "expanded", "w", "h"]);
     t.insert("window".into(), toml::Value::Table(wt));
     write_table(&path, &t).map_err(|e| format!("無法寫入 {STATE_FILE}：{e}"))?;
     Ok(w)
@@ -216,7 +246,7 @@ mod tests {
     fn half_a_position_is_none() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join(STATE_FILE), "[window]\nx = 10.0\nexpanded = true\n").unwrap();
-        assert_eq!(window(d.path()), WindowState { x: None, y: None, expanded: true });
+        assert_eq!(window(d.path()), WindowState { x: None, y: None, expanded: true, w: None, h: None });
         std::fs::write(d.path().join(STATE_FILE), "not toml [").unwrap();
         assert_eq!(window(d.path()), WindowState::default());
     }

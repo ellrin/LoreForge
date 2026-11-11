@@ -16,18 +16,19 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use le_server::store::WindowPatch;
+use le_server::store::{DEFAULT_WIN, MAX_WIN, MIN_WIN, WindowPatch};
 use le_server::{DesktopEvent, DesktopHook, Shared};
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const BUBBLE: f64 = 64.0;
-/// The open window: figure + dialogue panel. The page lays them out in this box; the same
-/// numbers are `--win-w` / `--win-h` in `web/styles.css` (a test checks they agree).
-const WIN_W: f64 = 620.0;
-const WIN_H: f64 = 620.0;
+/// The open window's default size: figure + dialogue panel. The same numbers are `--win-w` /
+/// `--win-h` in `web/styles.css` (a test checks they agree). The user can resize it between
+/// `MIN_WIN` and `MAX_WIN` (le-server `store`); the size is remembered in `state.toml`.
+const WIN_W: f64 = DEFAULT_WIN;
+const WIN_H: f64 = DEFAULT_WIN;
 /// Distance of the default bubble from the screen's corner.
 const MARGIN: f64 = 24.0;
 /// Moves within this time after the app placed the window itself are not the user's.
@@ -62,9 +63,16 @@ fn keep_inside(r: Rect, work: Rect) -> Rect {
     Rect { x, y, ..r }
 }
 
-/// The open window grown from the bubble at `b`: same bottom-right corner, kept on screen.
-fn panel_for(b: (f64, f64), work: Rect) -> Rect {
-    keep_inside(Rect { x: b.0 + BUBBLE - WIN_W, y: b.1 + BUBBLE - WIN_H, w: WIN_W, h: WIN_H }, work)
+/// `size` inside the limits and no larger than the work area (when that is still above the minimum).
+fn clamp_size(size: (f64, f64), work: Rect) -> (f64, f64) {
+    let one = |v: f64, avail: f64| v.min(avail.max(MIN_WIN)).clamp(MIN_WIN, MAX_WIN);
+    (one(size.0, work.w), one(size.1, work.h))
+}
+
+/// The open window of `size` grown from the bubble at `b`: same bottom-right corner, kept on screen.
+fn panel_for(b: (f64, f64), work: Rect, size: (f64, f64)) -> Rect {
+    let (w, h) = clamp_size(size, work);
+    keep_inside(Rect { x: b.0 + BUBBLE - w, y: b.1 + BUBBLE - h, w, h }, work)
 }
 
 /// Where the bubble goes when the open window at `p` collapses (its bottom-right corner).
@@ -120,16 +128,32 @@ fn bubble_place(app: &AppHandle) -> (f64, f64) {
     }
 }
 
-/// Size and place the window for the bubble or the panel.
+/// The open window's remembered size.
+fn saved_size(app: &AppHandle) -> (f64, f64) {
+    shared(app).map(|s| s.window().size()).unwrap_or((WIN_W, WIN_H))
+}
+
+/// Size and place the window for the bubble or the panel. The open window may be resized
+/// (limits `MIN_WIN`..`MAX_WIN`), the bubble not.
 fn place(win: &WebviewWindow, expanded: bool) {
     let app = win.app_handle();
     let b = bubble_place(app);
+    let size = saved_size(app);
     let r = match (expanded, work_at(app, Some(b))) {
-        (true, Some(work)) => panel_for(b, work),
-        (true, None) => Rect { x: b.0 + BUBBLE - WIN_W, y: b.1 + BUBBLE - WIN_H, w: WIN_W, h: WIN_H },
+        (true, Some(work)) => panel_for(b, work, size),
+        (true, None) => Rect { x: b.0 + BUBBLE - size.0, y: b.1 + BUBBLE - size.1, w: size.0, h: size.1 },
         (false, _) => Rect { x: b.0, y: b.1, w: BUBBLE, h: BUBBLE },
     };
     *app.state::<Desk>().quiet_until.lock().unwrap() = Some(Instant::now() + QUIET);
+    if expanded {
+        let _ = win.set_resizable(true);
+        let _ = win.set_min_size(Some(LogicalSize::new(MIN_WIN, MIN_WIN)));
+        let _ = win.set_max_size(Some(LogicalSize::new(MAX_WIN, MAX_WIN)));
+    } else {
+        let _ = win.set_min_size(None::<LogicalSize<f64>>);
+        let _ = win.set_max_size(None::<LogicalSize<f64>>);
+        let _ = win.set_resizable(false);
+    }
     let _ = win.set_size(LogicalSize::new(r.w, r.h));
     let _ = win.set_position(LogicalPosition::new(r.x, r.y));
     if expanded {
@@ -137,7 +161,27 @@ fn place(win: &WebviewWindow, expanded: bool) {
     }
 }
 
-/// The user moved the window: remember the bubble's place once it rests.
+/// The page dragged an edge: resize the open window, keeping its bottom-right corner.
+fn resize_panel(win: &WebviewWindow, (w, h): (f64, f64)) {
+    let app = win.app_handle();
+    let (Ok(pos), Ok(size), Ok(scale)) = (win.outer_position(), win.outer_size(), win.scale_factor()) else { return };
+    let (p, s) = (pos.to_logical::<f64>(scale), size.to_logical::<f64>(scale));
+    if s.width < BUBBLE * 1.5 {
+        return; // the bubble does not resize
+    }
+    let (w, h) = (w.clamp(MIN_WIN, MAX_WIN), h.clamp(MIN_WIN, MAX_WIN));
+    let b = (p.x + s.width - BUBBLE, p.y + s.height - BUBBLE);
+    let r = match work_at(app, Some(b)) {
+        Some(work) => panel_for(b, work, (w, h)),
+        None => Rect { x: b.0 + BUBBLE - w, y: b.1 + BUBBLE - h, w, h },
+    };
+    *app.state::<Desk>().quiet_until.lock().unwrap() = Some(Instant::now() + QUIET);
+    let _ = win.set_size(LogicalSize::new(r.w, r.h));
+    let _ = win.set_position(LogicalPosition::new(r.x, r.y));
+}
+
+/// The user moved or resized the window: remember the bubble's place (and the open window's
+/// size) once it rests.
 fn moved(win: &WebviewWindow) {
     let app = win.app_handle().clone();
     let desk = app.state::<Desk>();
@@ -154,9 +198,11 @@ fn moved(win: &WebviewWindow) {
         let (Ok(pos), Ok(size), Ok(scale)) = (win.outer_position(), win.outer_size(), win.scale_factor()) else { return };
         let (p, s) = (pos.to_logical::<f64>(scale), size.to_logical::<f64>(scale));
         let r = Rect { x: p.x, y: p.y, w: s.width, h: s.height };
-        let b = if r.w > BUBBLE * 1.5 { bubble_from_panel(r) } else { (r.x, r.y) };
+        let open = r.w > BUBBLE * 1.5;
+        let b = if open { bubble_from_panel(r) } else { (r.x, r.y) };
+        let size = open.then_some((r.w.clamp(MIN_WIN, MAX_WIN), r.h.clamp(MIN_WIN, MAX_WIN)));
         if let Some(sh) = shared(&app)
-            && let Err(e) = sh.save_window(&WindowPatch { x: Some(b.0), y: Some(b.1), expanded: None })
+            && let Err(e) = sh.save_window(&WindowPatch { x: Some(b.0), y: Some(b.1), expanded: None, w: size.map(|s| s.0), h: size.map(|s| s.1) })
         {
             eprintln!("loreecho: {e}");
         }
@@ -165,20 +211,71 @@ fn moved(win: &WebviewWindow) {
 
 fn toggle(app: &AppHandle) {
     let Some(w) = app.get_webview_window("main") else { return };
-    if w.is_visible().unwrap_or(false) {
+    if w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false) {
         let _ = w.hide();
     } else {
+        show(app);
+    }
+}
+
+/// Bring the bubble or the open window to the front (also out of the Dock when minimised).
+fn show(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
     }
 }
 
-#[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
-fn show(app: &AppHandle) {
+fn minimize(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.set_focus();
+        let _ = w.minimize();
     }
+}
+
+/// The usual macOS menus: app (隱藏, 結束 ⌘Q), 編輯 (the input needs copy / paste), 視窗 (最小化 ⌘M).
+fn app_menu(app: &AppHandle) -> tauri::Result<()> {
+    let quit = MenuItem::with_id(app, "app-quit", "結束 LoreEcho", true, Some("CmdOrCtrl+Q"))?;
+    let appm = Submenu::with_items(
+        app,
+        "LoreEcho",
+        true,
+        &[
+            &PredefinedMenuItem::hide(app, Some("隱藏 LoreEcho"))?,
+            &PredefinedMenuItem::hide_others(app, Some("隱藏其他"))?,
+            &PredefinedMenuItem::show_all(app, Some("全部顯示"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )?;
+    let edit = Submenu::with_items(
+        app,
+        "編輯",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, Some("復原"))?,
+            &PredefinedMenuItem::redo(app, Some("重做"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, Some("剪下"))?,
+            &PredefinedMenuItem::copy(app, Some("拷貝"))?,
+            &PredefinedMenuItem::paste(app, Some("貼上"))?,
+            &PredefinedMenuItem::select_all(app, Some("全選"))?,
+        ],
+    )?;
+    // a custom item: the frameless window is minimised by us, not by AppKit's performMiniaturize
+    let mini = MenuItem::with_id(app, "app-minimize", "最小化", true, Some("CmdOrCtrl+M"))?;
+    let front = MenuItem::with_id(app, "app-front", "顯示 LoreEcho", true, None::<&str>)?;
+    let window = Submenu::with_items(app, "視窗", true, &[&mini, &front])?;
+    #[cfg(target_os = "macos")]
+    let _ = window.set_as_windows_menu_for_nsapp();
+    app.set_menu(Menu::with_items(app, &[&appm, &edit, &window])?)?;
+    app.on_menu_event(|app, ev| match ev.id().as_ref() {
+        "app-quit" => app.exit(0),
+        "app-minimize" => minimize(app),
+        "app-front" => show(app),
+        _ => {}
+    });
+    Ok(())
 }
 
 /// Register `keys` as the show / hide shortcut (replacing the old one). "" = none.
@@ -207,6 +304,11 @@ fn on_desktop_event(app: &AppHandle, e: DesktopEvent) {
         DesktopEvent::Expanded(on) => {
             if let Some(w) = app2.get_webview_window("main") {
                 place(&w, on);
+            }
+        }
+        DesktopEvent::Size(w, h) => {
+            if let Some(win) = app2.get_webview_window("main") {
+                resize_panel(&win, (w, h));
             }
         }
         DesktopEvent::Shortcut(keys) => set_shortcut(&app2, &keys),
@@ -251,9 +353,9 @@ fn main() {
         )
         .manage(Desk::default())
         .setup(|app| {
-            // a menu-bar companion, not a Dock app
+            // a regular app: Dock icon, app menu (the tray item stays as a second way in)
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
             let mut config = le_server::Config::load(&[])?;
             config.port = 0;
@@ -301,7 +403,8 @@ fn main() {
                 .shadow(false)
                 .always_on_top(true)
                 .visible_on_all_workspaces(true)
-                .skip_taskbar(true)
+                .skip_taskbar(false)
+                .minimizable(true)
                 .resizable(false)
                 .build()?;
             if state.expanded {
@@ -309,20 +412,25 @@ fn main() {
             }
             let w2 = win.clone();
             win.on_window_event(move |ev| {
-                if let WindowEvent::Moved(_) = ev {
+                if let WindowEvent::Moved(_) | WindowEvent::Resized(_) = ev {
                     moved(&w2);
                 }
             });
+            app_menu(app.handle())?;
             tray(app.handle())?;
             set_shortcut(app.handle(), &keys);
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building LoreEcho")
-        .run(|_, event| {
+        .run(|app, event| match event {
             // quitting: this app's hold on the shared local model goes (the last user stops it)
-            if let tauri::RunEvent::Exit = event {
-                le_server::llm::quit();
+            tauri::RunEvent::Exit => le_server::llm::quit(),
+            // a click on the Dock icon: the bubble or the open window comes to the front
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => show(app),
+            _ => {
+                let _ = app;
             }
         });
 }
@@ -341,14 +449,14 @@ mod tests {
     #[test]
     fn the_panel_grows_from_the_bubble_and_stays_on_screen() {
         let b = default_bubble(SCREEN);
-        let p = panel_for(b, SCREEN);
+        let p = panel_for(b, SCREEN, (WIN_W, WIN_H));
         assert_eq!(bubble_from_panel(p), b, "same bottom-right corner");
         // a bubble at the top-left: the panel is pushed back on screen
-        let p = panel_for((10.0, 10.0), SCREEN);
+        let p = panel_for((10.0, 10.0), SCREEN, (WIN_W, WIN_H));
         assert_eq!((p.x, p.y, p.w, p.h), (0.0, 0.0, WIN_W, WIN_H));
         // a second monitor to the right
         let right = Rect { x: 1440.0, y: 0.0, w: 1920.0, h: 1080.0 };
-        let p = panel_for((1450.0, 500.0), right);
+        let p = panel_for((1450.0, 500.0), right, (WIN_W, WIN_H));
         assert!(p.x >= right.x && p.y + p.h <= right.y + right.h);
     }
 
@@ -356,19 +464,33 @@ mod tests {
     fn the_wide_window_keeps_the_corner_when_it_fits() {
         // a bubble in the middle of the screen: no push, the corner is shared exactly
         let b = (900.0, 700.0);
-        let p = panel_for(b, SCREEN);
+        let p = panel_for(b, SCREEN, (WIN_W, WIN_H));
         assert_eq!((p.x, p.y, p.w, p.h), (900.0 + 64.0 - WIN_W, 700.0 + 64.0 - WIN_H, WIN_W, WIN_H));
         // a bubble near the left edge: pushed right only, bottom edge still the bubble's
-        let p = panel_for((100.0, 700.0), SCREEN);
+        let p = panel_for((100.0, 700.0), SCREEN, (WIN_W, WIN_H));
         assert_eq!((p.x, p.y + p.h), (0.0, 700.0 + 64.0));
         // near the top: pushed down only
-        let p = panel_for((900.0, 40.0), SCREEN);
+        let p = panel_for((900.0, 40.0), SCREEN, (WIN_W, WIN_H));
         assert_eq!((p.x + p.w, p.y), (900.0 + 64.0, 0.0));
         // a work area with a menu bar and a Dock: stays inside it
         let work = Rect { x: 0.0, y: 25.0, w: 1440.0, h: 800.0 };
-        let p = panel_for(default_bubble(work), work);
+        let p = panel_for(default_bubble(work), work, (WIN_W, WIN_H));
         assert!(p.x >= work.x && p.y >= work.y && p.x + p.w <= work.x + work.w && p.y + p.h <= work.y + work.h);
         assert_eq!(bubble_from_panel(p), default_bubble(work));
+    }
+
+    #[test]
+    fn a_resized_window_keeps_the_corner_and_the_limits() {
+        // bigger: same bottom-right corner, pushed back only where it would leave the screen
+        let b = (1000.0, 700.0);
+        let p = panel_for(b, SCREEN, (900.0, 800.0));
+        assert_eq!((p.w, p.h), (900.0, 800.0));
+        assert_eq!((p.x + p.w, p.y), (b.0 + BUBBLE, 0.0), "pushed down to the work area, corner x kept");
+        // outside 420..1000 the size is clamped
+        assert_eq!(clamp_size((100.0, 5000.0), SCREEN), (MIN_WIN, MAX_WIN.min(SCREEN.h)));
+        // a small work area never goes below the minimum
+        let tiny = Rect { x: 0.0, y: 0.0, w: 300.0, h: 300.0 };
+        assert_eq!(clamp_size((700.0, 700.0), tiny), (MIN_WIN, MIN_WIN));
     }
 
     #[test]
