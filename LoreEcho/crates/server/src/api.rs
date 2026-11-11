@@ -2,7 +2,8 @@
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -21,9 +22,11 @@ pub fn routes() -> Router<Shared> {
         .route("/api/theme", get(theme_get).put(theme_put))
         .route("/api/window", get(window_get).put(window_put))
         .route("/api/settings", get(settings_get).put(settings_put))
-        .route("/api/characters", get(characters_list))
-        .route("/api/characters/{id}/avatar/{state}", get(avatar))
-        .route("/api/characters/{id}/full/{state}", get(full_body))
+        .route("/api/characters", get(characters_list).post(character_new))
+        .route("/api/characters/import", post(character_import).layer(DefaultBodyLimit::max(80 << 20)))
+        .route("/api/characters/{id}", get(character_get).put(character_put))
+        .route("/api/characters/{id}/export", get(character_export))
+        .route("/api/characters/{id}/{kind}/{state}", get(image_get).put(image_put).delete(image_delete).layer(DefaultBodyLimit::max(16 << 20)))
         .route("/api/chat", post(chat_post))
 }
 
@@ -141,21 +144,95 @@ async fn characters_list(State(s): State<Shared>) -> Json<Value> {
     if list.is_empty() {
         list.push(Character::builtin());
     }
-    Json(json!({ "characters": list, "current": s.character(None).id, "states": characters::STATES }))
+    let chains: serde_json::Map<String, Value> = characters::STATES.iter().map(|st| (st.to_string(), json!(characters::chain(st)))).collect();
+    Json(json!({ "characters": list, "current": s.character(None).id, "states": characters::STATES, "chains": chains }))
 }
 
-async fn avatar(State(s): State<Shared>, Path((id, state)): Path<(String, String)>) -> Response {
-    picture(s.dir.as_deref().and_then(|d| characters::avatar(d, &id, &state))).await
+fn store_dir(s: &Shared) -> Result<std::path::PathBuf, Response> {
+    s.dir.clone().ok_or_else(|| no_store("儲存人物"))
 }
 
-async fn full_body(State(s): State<Shared>, Path((id, state)): Path<(String, String)>) -> Response {
-    picture(s.dir.as_deref().and_then(|d| characters::full_body(d, &id, &state))).await
+async fn character_get(State(s): State<Shared>, Path(id): Path<String>) -> Response {
+    let Some(dir) = s.dir.as_deref() else { return bad(StatusCode::NOT_FOUND, "沒有這個人物") };
+    match characters::detail(dir, &id) {
+        Ok(d) => Json(d).into_response(),
+        Err(e) => bad(StatusCode::NOT_FOUND, e),
+    }
+}
+
+/// `{ name?, persona?, voice? }`
+async fn character_put(State(s): State<Shared>, Path(id): Path<String>, body: Option<Json<characters::MetaPatch>>) -> Response {
+    let Some(Json(p)) = body else { return bad(StatusCode::BAD_REQUEST, "要送 { name, persona, voice }") };
+    let dir = match store_dir(&s) { Ok(d) => d, Err(r) => return r };
+    let _g = s.write.lock().unwrap_or_else(|e| e.into_inner());
+    match characters::save_meta(&dir, &id, &p) {
+        Ok(d) => Json(d).into_response(),
+        Err(e) => bad(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+/// `{ name }`: a new character, a copy of the public example's.
+async fn character_new(State(s): State<Shared>, body: Option<Json<Value>>) -> Response {
+    let name = body.as_ref().and_then(|b| b["name"].as_str()).unwrap_or_default().to_string();
+    let dir = match store_dir(&s) { Ok(d) => d, Err(r) => return r };
+    let template = s.home.example_dir(crate::config::APP).and_then(|d| characters::example_template(&d));
+    let _g = s.write.lock().unwrap_or_else(|e| e.into_inner());
+    match characters::create(&dir, template.as_deref(), &name) {
+        Ok(d) => (StatusCode::CREATED, Json(d)).into_response(),
+        Err(e) => bad(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn character_export(State(s): State<Shared>, Path(id): Path<String>) -> Response {
+    let Some(dir) = s.dir.as_deref() else { return bad(StatusCode::NOT_FOUND, "沒有這個人物") };
+    match characters::export(dir, &id) {
+        Ok(zip) => ([(header::CONTENT_TYPE, "application/zip".to_string()), (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{id}.zip\""))], zip).into_response(),
+        Err(e) => bad(StatusCode::NOT_FOUND, e),
+    }
+}
+
+/// The body is a zip (see [`characters::import`]).
+async fn character_import(State(s): State<Shared>, body: Bytes) -> Response {
+    let dir = match store_dir(&s) { Ok(d) => d, Err(r) => return r };
+    let _g = s.write.lock().unwrap_or_else(|e| e.into_inner());
+    match characters::import(&dir, &body) {
+        Ok(d) => (StatusCode::CREATED, Json(d)).into_response(),
+        Err(e) => bad(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn image_get(State(s): State<Shared>, Path((id, kind, state)): Path<(String, String, String)>) -> Response {
+    let found = s.dir.as_deref().and_then(|d| match kind.as_str() {
+        characters::AVATAR => characters::avatar(d, &id, &state),
+        characters::FULL => characters::full_body(d, &id, &state),
+        _ => None,
+    });
+    picture(found).await
+}
+
+/// The body is the picture itself (png, jpg, webp or svg).
+async fn image_put(State(s): State<Shared>, Path((id, kind, state)): Path<(String, String, String)>, body: Bytes) -> Response {
+    let dir = match store_dir(&s) { Ok(d) => d, Err(r) => return r };
+    let _g = s.write.lock().unwrap_or_else(|e| e.into_inner());
+    match characters::save_image(&dir, &id, &kind, &state, &body) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn image_delete(State(s): State<Shared>, Path((id, kind, state)): Path<(String, String, String)>) -> Response {
+    let dir = match store_dir(&s) { Ok(d) => d, Err(r) => return r };
+    let _g = s.write.lock().unwrap_or_else(|e| e.into_inner());
+    match characters::remove_image(&dir, &id, &kind, &state) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(StatusCode::NOT_FOUND, e),
+    }
 }
 
 async fn picture(found: Option<(std::path::PathBuf, &'static str)>) -> Response {
     let Some((path, mime)) = found else { return bad(StatusCode::NOT_FOUND, "沒有這張人物圖") };
     match tokio::fs::read(&path).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "no-cache")], bytes).into_response(),
+        Ok(bytes) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "no-cache"), (header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'unsafe-inline'; sandbox")], bytes).into_response(),
         Err(e) => bad(StatusCode::NOT_FOUND, e.to_string()),
     }
 }

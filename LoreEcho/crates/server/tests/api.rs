@@ -211,9 +211,10 @@ async fn characters_and_avatar_fallback() {
     let echo = &c["characters"][0];
     assert_eq!(echo["name"], "回聲");
     assert_eq!(echo["language"], "zh-TW");
-    assert_eq!(echo["avatars"], json!(["idle", "listening", "thinking", "speaking"]));
+    let all = json!(["idle", "listening", "thinking", "speaking", "happy", "unsure", "surprised", "waiting", "searching", "noting"]);
+    assert_eq!(echo["avatars"], all);
     assert!(echo.get("persona").is_none(), "the persona stays on the server");
-    assert_eq!(echo["full"], json!(["idle", "listening", "thinking", "speaking"]));
+    assert_eq!(echo["full"], all);
     assert_eq!(echo["figure"], json!({ "scale": 1.35, "offset_y": 0.0 }), "the example stands like a VN sprite");
     assert_eq!(c["characters"][1]["figure"], json!({ "scale": 1.0, "offset_y": 0.0 }), "defaults");
     assert_eq!(c["characters"][1]["avatars"], json!(["idle"]));
@@ -252,7 +253,7 @@ async fn full_body_fallback_chain() {
     let chars = app.dir().join("characters");
     let echo = chars.join("echo");
     // the example: one full body per state, all SVG
-    for state in ["idle", "listening", "thinking", "speaking"] {
+    for state in le_server::characters::STATES {
         let (s, b, ct) = app.call("GET", &format!("/api/characters/echo/full/{state}"), None).await;
         assert_eq!((s, ct.as_str()), (StatusCode::OK, "image/svg+xml"), "{state}");
         assert_eq!(b, std::fs::read(echo.join(format!("full/{state}.svg"))).unwrap(), "{state}");
@@ -369,4 +370,137 @@ async fn a_failing_engine_ends_the_stream_with_an_error() {
     let events = sse(&b);
     assert_eq!(events.last().unwrap().0, "error", "{events:?}");
     assert!(events.iter().all(|(n, _)| n != "done"));
+}
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n fake";
+
+async fn put_raw(app: &App, uri: &str, method: &str, bytes: Vec<u8>) -> (StatusCode, Vec<u8>) {
+    let req = Request::builder().method(method).uri(uri).body(Body::from(bytes)).unwrap();
+    let res = le_server::router_isolated(app.shared.clone()).oneshot(req).await.unwrap();
+    (res.status(), res.into_body().collect().await.unwrap().to_bytes().to_vec())
+}
+
+fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write;
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in files {
+        z.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(bytes).unwrap();
+    }
+    z.finish().unwrap().into_inner()
+}
+
+#[tokio::test]
+async fn the_new_states_follow_their_fallback_chain() {
+    use le_server::characters::chain;
+    assert_eq!(chain("searching"), ["searching", "thinking", "idle"]);
+    assert_eq!(chain("noting"), ["noting", "speaking", "idle"]);
+    assert_eq!(chain("waiting"), ["waiting", "thinking", "idle"]);
+    assert_eq!(chain("happy"), ["happy", "idle"]);
+    assert_eq!(chain("idle"), ["idle"]);
+
+    let app = App::new(Llm::none());
+    let x = app.dir().join("characters/x");
+    std::fs::create_dir_all(x.join("avatar")).unwrap();
+    std::fs::write(x.join("character.toml"), "name = \"x\"\n").unwrap();
+    std::fs::write(x.join("avatar/idle.png"), b"\x89PNG idle").unwrap();
+    std::fs::write(x.join("avatar/thinking.png"), b"\x89PNG thinking").unwrap();
+    std::fs::write(x.join("avatar/speaking.png"), b"\x89PNG speaking").unwrap();
+    for (state, want) in [("searching", &b"\x89PNG thinking"[..]), ("waiting", b"\x89PNG thinking"), ("noting", b"\x89PNG speaking"), ("surprised", b"\x89PNG idle")] {
+        assert_eq!(app.call("GET", &format!("/api/characters/x/avatar/{state}"), None).await.1, want, "{state}");
+    }
+    // an own picture wins
+    std::fs::write(x.join("avatar/searching.webp"), b"RIFF\0\0\0\0WEBPsearch").unwrap();
+    assert_eq!(app.call("GET", "/api/characters/x/avatar/searching", None).await.1, b"RIFF\0\0\0\0WEBPsearch");
+    // the page gets the chains
+    let c = app.json("GET", "/api/characters", None).await.1;
+    assert_eq!(c["chains"]["noting"], json!(["noting", "speaking", "idle"]));
+    assert_eq!(c["states"].as_array().unwrap().len(), 10);
+}
+
+#[tokio::test]
+async fn character_save_load_and_pictures() {
+    let app = App::new(Llm::none());
+    let (s, d) = app.json("PUT", "/api/characters/echo", Some(json!({ "name": "小回", "persona": "你很安靜。", "voice": "v1" }))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(d["name"], "小回");
+    let d = app.json("GET", "/api/characters/echo", None).await.1;
+    assert_eq!((d["persona"].as_str(), d["voice"].as_str()), (Some("你很安靜。"), Some("v1")));
+    let c = app.json("GET", "/api/characters", None).await.1;
+    assert_eq!(c["characters"][0]["figure"]["scale"], 1.35, "figure_scale survives a save");
+    assert_eq!(app.json("PUT", "/api/characters/echo", Some(json!({ "bogus": 1 }))).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(app.json("PUT", "/api/characters/nobody", Some(json!({ "name": "x" }))).await.0, StatusCode::BAD_REQUEST);
+
+    // a picture replaces the SVG of its slot, is served, then removed (the slot falls back)
+    let echo = app.dir().join("characters/echo");
+    assert!(echo.join("full/happy.svg").is_file());
+    assert_eq!(put_raw(&app, "/api/characters/echo/full/happy", "PUT", PNG.to_vec()).await.0, StatusCode::NO_CONTENT);
+    assert!(echo.join("full/happy.png").is_file() && !echo.join("full/happy.svg").exists());
+    let (s, b, ct) = app.call("GET", "/api/characters/echo/full/happy", None).await;
+    assert_eq!((s, ct.as_str(), b.as_slice()), (StatusCode::OK, "image/png", PNG));
+    assert_eq!(app.call("DELETE", "/api/characters/echo/full/happy", None).await.0, StatusCode::NO_CONTENT);
+    let (_, b, ct) = app.call("GET", "/api/characters/echo/full/happy", None).await;
+    assert_eq!((ct.as_str(), b), ("image/svg+xml", std::fs::read(echo.join("full/idle.svg")).unwrap()));
+    assert_eq!(app.call("DELETE", "/api/characters/echo/full/happy", None).await.0, StatusCode::NOT_FOUND);
+
+    // refused: other formats, code in SVG, bad slots, empty
+    for (uri, body) in [
+        ("/api/characters/echo/avatar/happy", b"GIF89a".to_vec()),
+        ("/api/characters/echo/avatar/happy", b"<svg xmlns='x'><script>1</script></svg>".to_vec()),
+        ("/api/characters/echo/avatar/happy", b"<svg xmlns='x' onload='x()'/>".to_vec()),
+        ("/api/characters/echo/avatar/dancing", PNG.to_vec()),
+        ("/api/characters/echo/body/happy", PNG.to_vec()),
+        ("/api/characters/echo/avatar/happy", vec![]),
+    ] {
+        assert_eq!(put_raw(&app, uri, "PUT", body).await.0, StatusCode::BAD_REQUEST, "{uri}");
+    }
+    assert_eq!(put_raw(&app, "/api/characters/echo/avatar/happy", "PUT", b"<?xml version='1.0'?><svg viewBox='0 0 1 1'/>".to_vec()).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(put_raw(&app, "/api/characters/echo/avatar/unsure", "PUT", vec![0xFF, 0xD8, 0xFF, 0xE0, 1]).await.0, StatusCode::NO_CONTENT);
+    assert!(echo.join("avatar/unsure.jpg").is_file() && !echo.join("avatar/unsure.svg").exists());
+    assert_eq!(put_raw(&app, "/api/characters/echo/avatar/noting", "PUT", b"RIFF\0\0\0\0WEBPVP8 ".to_vec()).await.0, StatusCode::NO_CONTENT);
+    assert!(echo.join("avatar/noting.webp").is_file());
+}
+
+#[tokio::test]
+async fn new_character_copies_the_example_and_the_zip_round_trips() {
+    let app = App::new(Llm::none());
+    let chars = app.dir().join("characters");
+    let (s, d) = app.json("POST", "/api/characters", Some(json!({ "name": "小明" }))).await;
+    assert_eq!((s, d["name"].as_str()), (StatusCode::CREATED, Some("小明")));
+    let id = d["id"].as_str().unwrap().to_string();
+    assert_eq!(id, "char");
+    assert!(chars.join(&id).join("full/noting.svg").is_file(), "a copy of the example, pictures included");
+    assert_eq!(app.json("POST", "/api/characters", Some(json!({ "name": "Ada Lin" }))).await.1["id"], "ada-lin");
+    assert_eq!(app.json("POST", "/api/characters", Some(json!({ "name": "  " }))).await.0, StatusCode::BAD_REQUEST);
+    assert!(!app.root.join("private-example/LoreEcho/characters/char").exists(), "nothing written into the example");
+
+    // customise, export, import: the import is a new character, nothing overwritten
+    put_raw(&app, &format!("/api/characters/{id}/avatar/happy"), "PUT", PNG.to_vec()).await;
+    app.json("PUT", &format!("/api/characters/{id}"), Some(json!({ "persona": "你愛笑。" }))).await;
+    let (s, zip, ct) = app.call("GET", &format!("/api/characters/{id}/export"), None).await;
+    assert_eq!((s, ct.as_str()), (StatusCode::OK, "application/zip"));
+    let (s, b) = put_raw(&app, "/api/characters/import", "POST", zip.clone()).await;
+    assert_eq!(s, StatusCode::CREATED);
+    let imp: Value = serde_json::from_slice(&b).unwrap();
+    assert_eq!(imp["id"], "char-2", "the folder name is kept, a taken one gets -2");
+    assert_eq!((imp["name"].as_str(), imp["persona"].as_str()), (Some("小明"), Some("你愛笑。")));
+    let (a, b2) = (chars.join(&id), chars.join("char-2"));
+    for rel in ["character.toml", "avatar/happy.png", "avatar/idle.svg", "full/noting.svg", "full/idle.svg"] {
+        assert_eq!(std::fs::read(a.join(rel)).unwrap(), std::fs::read(b2.join(rel)).unwrap(), "{rel}");
+    }
+    assert_eq!(put_raw(&app, "/api/characters/import", "POST", zip).await.0, StatusCode::CREATED);
+    assert!(chars.join("char-3").is_dir());
+
+    // not a zip / no character.toml / a picture that is not a picture
+    assert_eq!(put_raw(&app, "/api/characters/import", "POST", b"nope".to_vec()).await.0, StatusCode::BAD_REQUEST);
+    let bad = zip_of(&[("a/avatar/idle.png", b"hello")]);
+    assert_eq!(put_raw(&app, "/api/characters/import", "POST", bad).await.0, StatusCode::BAD_REQUEST);
+    let bad = zip_of(&[("a/character.toml", b"name = \"a\"\n"), ("a/avatar/idle.png", b"hello")]);
+    assert_eq!(put_raw(&app, "/api/characters/import", "POST", bad).await.0, StatusCode::BAD_REQUEST);
+    assert!(!chars.join("a").exists(), "a failed import leaves nothing behind");
+    // zip paths cannot reach outside the characters folder
+    let sneaky = zip_of(&[("../../evil/character.toml", b"name = \"e\"\n"), ("../outside/avatar/idle.png", PNG)]);
+    let (s, b) = put_raw(&app, "/api/characters/import", "POST", sneaky).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "entries with .. are skipped: {}", String::from_utf8_lossy(&b));
+    assert!(!app.root.join("private/evil").exists() && !app.root.join("private/outside").exists() && !chars.join("evil").exists());
 }

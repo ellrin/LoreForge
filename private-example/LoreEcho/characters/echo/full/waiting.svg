@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="60 100 900 2820" width="900" height="2820">
+  <!-- LoreEcho example character, full body, waiting: head to feet, no background -->
+  <g transform="translate(-88 130) scale(2)" stroke-linejoin="round" stroke-linecap="round">
+    <!-- legs and boots -->
+    <g fill="#16131F" stroke="#12AFC0" stroke-width="8">
+      <path d="M190 770 L200 1300 L286 1300 L292 852 Q300 842 308 852 L314 1300 L400 1300 L410 770 Z"/>
+      <path d="M196 1300 L288 1300 L294 1380 L168 1380 L174 1340 Z"/>
+      <path d="M312 1300 L404 1300 L426 1340 L432 1380 L306 1380 Z"/>
+    </g>
+    <!-- arms (behind the jacket front) -->
+    <g fill="#16131F" stroke="#12AFC0" stroke-width="8">
+      <path d="M178 386 C150 450 140 560 142 690 L146 772 L196 772 L198 690 C196 610 200 520 208 446 Z"/>
+      <path d="M422 386 C450 450 460 560 458 690 L454 772 L404 772 L402 690 C404 610 400 520 392 446 Z"/>
+      <ellipse cx="170" cy="796" rx="26" ry="30"/><ellipse cx="430" cy="796" rx="26" ry="30"/>
+    </g>
+    <!-- jacket -->
+    <g fill="#16131F" stroke="#12AFC0" stroke-width="8">
+      <path d="M232 334 L178 384 L184 560 L200 760 L400 760 L416 560 L422 384 L368 334 Z"/>
+      <!-- the big shoulder plate -->
+      <path d="M158 404 C146 356 186 326 240 330 L258 352 C222 358 196 378 188 414 Z"/>
+    </g>
+    <g fill="none" stroke-width="8">
+      <path stroke="#12AFC0" d="M300 344 L300 760"/>
+      <path stroke="#E0A100" d="M216 540 L258 540 M342 540 L384 540"/>
+      <path stroke="#12AFC0" d="M232 334 L244 298 L270 320 L300 344 L330 320 L356 298 L368 334"/>
+    </g>
+  </g>
+  <path fill="#16131F" d="M512 262 C646 262 722 330 724 440 L718 548 C714 616 680 668 628 704 L576 742 L448 742 L396 704 C344 668 310 616 306 548 L300 440 C302 330 378 262 512 262 Z"/>
+  <g fill="none" stroke-linejoin="round" stroke-linecap="round">
+    <g stroke="#12AFC0" stroke-width="16">
+      <path d="M512 262 C646 262 722 330 724 440 L718 548 C714 616 680 668 628 704 L576 742 L448 742 L396 704 C344 668 310 616 306 548 L300 440 C302 330 378 262 512 262 Z"/>
+      <polyline points="300,428 344,428 344,484 300,484"/>
+      <polyline points="724,428 680,428 680,484 724,484"/>
+      <line x1="498" y1="456" x2="526" y2="456"/>
+      <path d="M514 486 L502 572 Q512 582 530 574"/>
+    </g>
+    <g stroke="#E0A100" stroke-width="14">
+      <path d="M352 330 C392 214 520 168 664 214"/><path d="M420 300 C470 220 580 206 690 262"/>
+      <circle cx="432" cy="456" r="66"/><circle cx="592" cy="456" r="66"/>
+      <polyline points="490,742 512,806 534,742"/>
+    </g>
+    <g stroke="#12AFC0" stroke-width="11"><path d="M372 396 Q420 392 478 388"/><path d="M546 388 Q604 392 652 396"/><path d="M474 644 L550 644"/></g>
+    <g stroke="#E0A100" stroke-width="11"><path d="M372 468 L492 468"/><path d="M532 468 L652 468"/></g>
+    <g fill="#E0A100" stroke="none"><circle cx="434" cy="494" r="10"/><circle cx="590" cy="494" r="10"/></g>
+    <g fill="none" stroke="#E0249F" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"><circle cx="770" cy="330" r="6"/><circle cx="804" cy="330" r="6"/><circle cx="838" cy="330" r="6"/></g>
+  </g>
+</svg>

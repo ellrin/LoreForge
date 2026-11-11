@@ -12,9 +12,10 @@
 //! | GET/PUT | /api/engines, GET /api/links/ports, POST /api/links/open | lore-engines (the 模型 tab) |
 //! | GET/PUT | /api/window | `{ x?, y?, expanded }`: the bubble's place, panel open or not (`state.toml`) |
 //! | GET/PUT | /api/settings | `{ character?, shortcut }` (`settings.toml`) |
-//! | GET | /api/characters | `{ characters: [{ id, name, voice, language, avatars, full, figure: { scale, offset_y } }], current }` (`full` = states with a full-body picture; empty = none) |
-//! | GET | /api/characters/{id}/avatar/{state} | the portrait (idle / listening / thinking / speaking; idle when missing) |
-//! | GET | /api/characters/{id}/full/{state} | the full body (`full/<state>`, else `full/idle`, else the portrait of that state) |
+//! | GET/POST | /api/characters | GET `{ characters: [{ id, name, voice, language, avatars, full, figure }], current, states, chains }` (`full` = states with a full-body picture; `chains` = fallback order per state); POST `{ name }` = a new character, a copy of the example |
+//! | POST | /api/characters/import | a zip (body) → a new character; GET /api/characters/{id}/export = that zip |
+//! | GET/PUT | /api/characters/{id} | `{ id, name, persona, voice }` / `{ name?, persona?, voice? }` |
+//! | GET/PUT/DELETE | /api/characters/{id}/{avatar\|full}/{state} | the picture (GET follows the state's fallback chain, `full` then the portrait); PUT = the picture bytes (png, jpg, webp, svg, ≤ 10 MB); DELETE = empty the slot |
 //! | POST | /api/chat | `{ messages, character?, engine? }` → the reply as server-sent events ([`chat`]) |
 
 pub mod api;
@@ -121,7 +122,7 @@ pub fn router_isolated(shared: Shared) -> Router {
 fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|o, _| allowed_origin(o)))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
         .allow_headers([header::CONTENT_TYPE]);
     // `no-cache`: the desktop WebView revalidates and picks up new web/ files.
     let web = Router::new()

@@ -2,8 +2,9 @@
 // Needs theme.js, icons.js and shell.js (LoreShell) first. No build step.
 //
 // Server: GET/PUT /api/window, GET/PUT /api/settings, GET /api/characters,
-// /api/characters/<id>/avatar/<state> (portrait: the bubble), /api/characters/<id>/full/<state>
-// (full body: the open window), POST /api/chat (server-sent events).
+// /api/characters/<id>/avatar/<state> (portrait: the bubble, name tag), /api/characters/<id>/full/<state>
+// (full body: the open window; both follow the state's fallback chain), the 人物 tab's PUT/DELETE of
+// those, POST /api/characters (+ /import, /<id>/export), POST /api/chat (server-sent events).
 // In the desktop app, PUT /api/window { expanded } also resizes the window, and the page
 // drags the window itself through Tauri (window.__TAURI__, withGlobalTauri).
 
@@ -13,6 +14,11 @@ const $ = (id) => document.getElementById(id);
 const S = {
   desktop: false,
   chars: [],
+  states: [],          // the ten states, from the server
+  chains: {},          // state → [state, …, "idle"]: what a state without a picture shows
+  rev: 0,              // bumped when a picture changes (cache-buster)
+  state: "idle",
+  timers: { wait: 0, mood: 0 },
   char: null,          // { id, name, avatars, full, figure: { scale, offset_y } }
   msgs: [],            // [{ role, text }] — never saved
   line: null,          // the reply shown in the dialogue box (moves to the history on the next turn)
@@ -67,6 +73,7 @@ function mountShell() {
       { id: "actNew", icon: "plus", label: "新對話", run: newChat },
     ],
     general: buildGeneral,
+    settingsTabs: [{ id: "character", label: "人物", build: buildCharacters }],
     keys: [{ label: "換行", keys: "⇧↵" }, { label: "功能列表：上一個／下一個", keys: "↑ ↓" }],
   });
   const collapse = h("button", { type: "button", class: "ico", id: "actCollapse", "aria-label": "收起 Esc", title: "收起成泡泡（對話會清掉）" }, h("span", { "data-icon": "chevron" }));
@@ -79,9 +86,12 @@ function mountShell() {
 async function loadCharacters() {
   const c = await api("GET", "/api/characters");
   S.chars = c.characters;
+  S.states = c.states ?? [];
+  S.chains = c.chains ?? {};
   S.char = S.chars.find((x) => x.id === c.current) ?? S.chars[0] ?? null;
   const name = S.char?.name ?? "LoreEcho";
   $("who").textContent = name;
+  S.rev++;
   $("nametag").setAttribute("aria-label", `${name}（換人物）`);
   $("bubble").setAttribute("aria-label", `打開 LoreEcho（${name}）`);
   const f = S.char?.figure ?? {};
@@ -90,21 +100,17 @@ async function loadCharacters() {
   $("figure").classList.toggle("portrait", !(S.char?.full?.length > 0));
   setState("idle");
   setImg($("bubbleImg"), $("bubbleIcon"), "avatar", "idle");
-  // fetch the other states' full bodies now, so a state change does not flicker
-  for (const st of ["listening", "thinking", "speaking"]) { const u = picUrl("full", st); if (u) new Image().src = u; }
+  // fetch the other states' pictures now, so a state change does not flicker
+  for (const st of S.states) for (const kind of ["full", "avatar"]) { const u = picUrl(kind, st); if (u) new Image().src = u; }
 }
 
 /** The picture of `kind` (avatar = portrait, full = full body) for `state`, or null when the
- *  character has none. A missing state is idle's; a character without full bodies shows its
- *  portrait in the open window (the server's full/ route falls back the same way). */
+ *  character has no pictures at all. The server resolves a missing state along its chain
+ *  (and a character without full bodies shows its portrait in the open window). */
 function picUrl(kind, state) {
   const c = S.char;
-  if (!c) return null;
-  const useFull = kind === "full" && c.full?.length > 0;
-  const own = (useFull ? c.full : c.avatars) ?? [];
-  if (!own.length) return null;
-  const s = own.includes(state) ? state : "idle";
-  return `/api/characters/${encodeURIComponent(c.id)}/${useFull ? "full" : "avatar"}/${s}`;
+  if (!c || !(c.avatars?.length || c.full?.length)) return null;
+  return `/api/characters/${encodeURIComponent(c.id)}/${kind}/${state}?v=${S.rev}`;
 }
 
 /** Show the character's picture (the app icon when it has none at all). */
@@ -114,10 +120,40 @@ function setImg(img, icon, kind, state) {
   if (url && img.dataset.src !== url) { img.dataset.src = url; img.src = url; }
 }
 
-/** idle | listening | thinking | speaking */
+/** One of the ten states (idle listening thinking speaking happy unsure surprised waiting
+ *  searching noting): the full body, and the small portrait on the name tag. */
 function setState(state) {
+  S.state = state;
   $("figure").dataset.state = state;
   setImg($("full"), $("fullIcon"), "full", state);
+  const url = picUrl("avatar", state);
+  $("whoImg").hidden = !url;
+  if (url && $("whoImg").dataset.src !== url) { $("whoImg").dataset.src = url; $("whoImg").src = url; }
+}
+
+/** Show `state` while `work()` runs, then go back (hook for the moments that have no signal
+ *  yet: searching while KnowledgeBase is asked, noting while a note is written). */
+async function whileState(state, work) {
+  const before = S.state;
+  setState(state);
+  try { return await work(); }
+  finally { if (S.state === state) setState(S.busy ? "thinking" : before === "listening" ? "idle" : before); }
+}
+window.LoreEcho = { setState, whileState };
+
+/** A simple cue in a finished reply: happy | unsure | surprised | null. */
+function moodOf(text) {
+  if (/不確定|不太確定|不太清楚|不一定|我猜|也許|說不準|不知道/.test(text)) return "unsure";
+  if (/^(咦|哇|欸|啊)|沒想到|竟然|居然|真的嗎|嚇/.test(text)) return "surprised";
+  if (/太好了|恭喜|很棒|答對|沒錯|說得對|成功了|做得好/.test(text)) return "happy";
+  return null;
+}
+
+/** After a reply: show its mood for a few seconds, then idle. */
+function settle(mood) {
+  clearTimeout(S.timers.mood);
+  setState(mood ?? "idle");
+  if (mood) S.timers.mood = setTimeout(() => { if (!S.busy && S.state === mood) setState("idle"); }, 4000);
 }
 
 /** Switch to character `id` (settings.toml, same as 齒輪 → 一般); a new conversation starts. */
@@ -134,7 +170,7 @@ async function switchCharacter(id) {
 /** The name tag's menu: every character, the current one marked. */
 function characterMenu() {
   const items = S.chars.map((c) => ({ label: c.name === c.id ? c.id : `${c.name}（${c.id}）`, current: c.id === S.char?.id, run: () => switchCharacter(c.id) }));
-  items.push("-", { icon: "gear", label: "人物設定…", run: () => LoreShell.settings("general") });
+  items.push("-", { icon: "gear", label: "人物設定…", run: () => LoreShell.settings("character") });
   LoreShell.menu($("nametag"), items);
 }
 
@@ -207,6 +243,9 @@ function wire() {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(); }
   });
   t.addEventListener("input", grow);
+  // the character listens while the message is being written (the voice phase will use the same state for recording)
+  t.addEventListener("input", () => { if (!S.busy) setState(t.value.trim() ? "listening" : "idle"); });
+  t.addEventListener("blur", () => { if (!S.busy && S.state === "listening") setState("idle"); });
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !S.expanded || document.querySelector("dialog[open]") || document.querySelector(".menu, .ask")) return;
     e.preventDefault();
@@ -245,6 +284,7 @@ const GREETING = "想聊什麼都可以。對話只留在這個視窗裡，按�
 function newChat() {
   S.busy?.abort();
   S.busy = null;
+  clearTimeout(S.timers.wait); clearTimeout(S.timers.mood);
   S.msgs = [];
   S.line = null;
   $("hist").replaceChildren();
@@ -268,7 +308,10 @@ async function send(engine) {
   const ctrl = new AbortController();
   S.busy = ctrl;
   $("send").disabled = true;
+  clearTimeout(S.timers.mood);
   setState("thinking");
+  clearTimeout(S.timers.wait);
+  S.timers.wait = setTimeout(() => { if (S.busy === ctrl && !reply) setState("waiting"); }, 8000);   // a long wait for the model
   setLine("", "pending");
   let reply = "";
   try {
@@ -284,7 +327,7 @@ async function send(engine) {
     for await (const [ev, data] of events(r.body)) {
       if (ctrl.signal.aborted) return;
       if (ev === "start") { $("engine").textContent = data.label; $("engine").title = data.engine; $("engine").className = "engine chip"; $("engine").hidden = false; }
-      else if (ev === "delta") { if (!reply) setState("speaking"); reply += data.text; setLine(reply, "pending"); }
+      else if (ev === "delta") { if (!reply) { clearTimeout(S.timers.wait); setState("speaking"); } reply += data.text; setLine(reply, "pending"); }
       else if (ev === "done") { reply = data.text || reply; }
       else if (ev === "error") { if (reply) keep(reply); failed(data.error); return; }
     }
@@ -295,7 +338,8 @@ async function send(engine) {
     if (reply) keep(reply);
     failed(e.message);
   } finally {
-    if (S.busy === ctrl) { S.busy = null; $("send").disabled = false; setState("idle"); }
+    clearTimeout(S.timers.wait);
+    if (S.busy === ctrl) { S.busy = null; $("send").disabled = false; settle(reply.trim() ? moodOf(reply) : null); }
   }
 }
 
@@ -343,12 +387,8 @@ async function* events(body) {
 // ── settings: 一般 ───────────────────────────────────────────────
 async function buildGeneral(el) {
   el.append($("tplGeneral").content.cloneNode(true));
-  const sel = el.querySelector("#setCharacter");
   const key = el.querySelector("#setShortcut");
-  for (const c of S.chars) sel.append(h("option", { value: c.id }, c.name === c.id ? c.id : `${c.name}（${c.id}）`));
-  sel.value = S.char?.id ?? "";
   try { key.value = (await api("GET", "/api/settings")).shortcut ?? ""; } catch {}
-  sel.addEventListener("change", () => switchCharacter(sel.value));
   key.addEventListener("change", async () => {
     try {
       const s = await api("PUT", "/api/settings", { shortcut: key.value });
@@ -356,4 +396,140 @@ async function buildGeneral(el) {
       LoreShell.toast(s.shortcut ? `快捷鍵：${s.shortcut}` : "不用快捷鍵");
     } catch (e) { LoreShell.toast(e.message, { err: true }); }
   });
+}
+
+// ── settings: 人物 (design §6) ───────────────────────────────────
+const STATE_LABEL = { idle: "待機", listening: "聽", thinking: "想", speaking: "說", happy: "開心", unsure: "不確定", surprised: "驚訝", waiting: "等待", searching: "查知識庫", noting: "記筆記" };
+const ROWS = [["avatar", "縮圖"], ["full", "對話人物"]];
+const label = (c) => (c.name === c.id ? c.id : `${c.name}（${c.id}）`);
+
+async function buildCharacters(el) {
+  el.replaceChildren();
+  const c = S.char;
+  const sec = (title, ...kids) => h("div", { class: "set-sec" }, h("div", { class: "set-label" }, title), ...kids);
+  const row = (k, ...kids) => h("div", { class: "set-row" }, h("span", { class: "k" }, k), ...kids);
+  const rebuild = () => buildCharacters(el);
+  const pickFile = (accept, onFile) => {
+    const f = h("input", { type: "file", accept, hidden: true });
+    f.addEventListener("change", () => { if (f.files[0]) onFile(f.files[0]); f.remove(); });
+    document.body.append(f); f.click();
+  };
+
+  // 切換人物 · 新增 · 匯出 · 匯入
+  const sel = h("select", { class: "set-input", "aria-label": "人物" }, S.chars.map((x) => h("option", { value: x.id }, label(x))));
+  sel.value = c?.id ?? "";
+  sel.addEventListener("change", async () => { await switchCharacter(sel.value); rebuild(); });
+  const btn = (icon, text, run, attrs = {}) => h("button", { type: "button", class: "btn", onclick: run, ...attrs }, h("span", { "data-icon": icon }), text);
+  const bar = h("div", { class: "set-row" }, sel,
+    btn("plus", "新增人物", (e) => newCharacter(e.currentTarget, rebuild)),
+    btn("download", "匯出", () => exportCharacter(c), { disabled: !c || c.id === "default" }),
+    btn("upload", "匯入", () => pickFile(".zip,application/zip", (f) => importCharacter(f, rebuild))));
+  el.append(sec("切換人物", bar));
+  if (!c || c.id === "default") { el.append(h("div", { class: "set-empty" }, "沒有人物。")); paintIcons(el); return; }
+
+  // name · persona · voice
+  const d = await api("GET", `/api/characters/${encodeURIComponent(c.id)}`).catch(() => null);
+  const save = async (patch) => {
+    try { await api("PUT", `/api/characters/${encodeURIComponent(c.id)}`, patch); if (patch.name != null) await loadCharacters(); }
+    catch (e) { LoreShell.toast(e.message, { err: true }); }
+  };
+  const name = h("input", { class: "set-input", value: d?.name ?? c.name, "aria-label": "名稱", style: "flex:1" });
+  name.addEventListener("change", () => save({ name: name.value }));
+  const persona = h("textarea", { class: "set-input", rows: 4, "aria-label": "個性", style: "flex:1;resize:vertical" }, d?.persona ?? "");
+  persona.addEventListener("change", () => save({ persona: persona.value }));
+  const voice = h("input", { class: "set-input", value: d?.voice ?? "", "aria-label": "聲音", placeholder: "之後的階段", disabled: true, style: "flex:1" });
+  el.append(sec("角色", row("名稱", name), row("個性", persona), row("聲音", voice)));
+
+  // the pictures: one row of drop zones per kind
+  for (const [kind, title] of ROWS) {
+    const grid = h("div", { class: "pic-grid" + (kind === "full" ? " tall" : ""), role: "group", "aria-label": title });
+    el.append(sec(title, grid));
+    const paint = () => {
+      grid.replaceChildren(...S.states.map((st) => cell(kind, st, c, paint, rebuildPics)));
+      paintIcons(grid);
+    };
+    el._paints = [...(el._paints ?? []), paint];
+    paint();
+  }
+  function rebuildPics() { for (const p of el._paints) p(); }
+  paintIcons(el);
+}
+
+/** One drop zone: preview (or the fallback, dimmed), the state's name, 選擇圖片… / 移除. */
+function cell(kind, st, c, paint, paintAll) {
+  const own = (kind === "avatar" ? c.avatars : c.full)?.includes(st);
+  const via = own ? null : S.chains[st]?.find((x) => x !== st && (kind === "avatar" ? c.avatars : c.full)?.includes(x));
+  const url = (own || via) ? `/api/characters/${encodeURIComponent(c.id)}/${kind}/${own ? st : via}?v=${S.rev}` : null;
+  const zone = h("div", { class: "pic-zone" + (own ? " own" : ""), tabindex: 0, role: "button", "aria-label": `${STATE_LABEL[st]}：選擇圖片`, title: via ? `沒有圖，用「${STATE_LABEL[via]}」` : own ? "" : "沒有圖" },
+    url ? h("img", { src: url, alt: "", draggable: "false" }) : h("span", { class: "none", "data-icon": "image" }));
+  const upload = async (file) => {
+    if (!file) return;
+    try {
+      const r = await fetch(`/api/characters/${encodeURIComponent(c.id)}/${kind}/${st}`, { method: "PUT", body: file });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `${r.status}`);
+      await refreshChars(); paintAll();
+    } catch (e) { LoreShell.toast(e.message, { err: true }); }
+  };
+  const choose = () => {
+    const f = h("input", { type: "file", accept: ".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml", hidden: true });
+    f.addEventListener("change", () => { upload(f.files[0]); f.remove(); });
+    document.body.append(f); f.click();
+  };
+  zone.addEventListener("click", choose);
+  zone.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(); } });
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+  zone.addEventListener("drop", (e) => { e.preventDefault(); zone.classList.remove("over"); upload(e.dataTransfer.files[0]); });
+  const rm = h("button", { type: "button", class: "ico small", "aria-label": `移除${STATE_LABEL[st]}的圖`, title: "移除", disabled: !own }, h("span", { "data-icon": "trash" }));
+  rm.addEventListener("click", async () => {
+    if (!(await LoreShell.ask(rm, [`移除「${STATE_LABEL[st]}」的圖？`], [{ label: "取消", value: null }, { label: "移除", value: true, danger: true }]))) return;
+    try { await api("DELETE", `/api/characters/${encodeURIComponent(c.id)}/${kind}/${st}`); await refreshChars(); paintAll(); }
+    catch (e) { LoreShell.toast(e.message, { err: true }); }
+  });
+  return h("div", { class: "pic-cell" }, zone,
+    h("div", { class: "pic-foot" }, h("span", { class: "pic-name" }, STATE_LABEL[st], via ? h("small", {}, `→ ${STATE_LABEL[via]}`) : null), rm));
+}
+
+/** Reload the list after a picture changed (pictures on screen follow). */
+async function refreshChars() {
+  const id = S.char?.id;
+  await loadCharacters();
+  if (id && S.char?.id !== id) S.char = S.chars.find((x) => x.id === id) ?? S.char;
+}
+
+function newCharacter(anchor, done) {
+  let input;
+  LoreShell.form({
+    title: "新增人物",
+    build: (body) => { input = h("input", { class: "set-input", "aria-label": "名稱", placeholder: "名稱", style: "width:100%" }); body.append(input); setTimeout(() => input.focus(), 0); },
+    actions: [{ label: "取消" }, {
+      label: "新增", primary: true,
+      run: async () => {
+        try {
+          const d = await api("POST", "/api/characters", { name: input.value });
+          await switchCharacter(d.id); done();
+        } catch (e) { LoreShell.toast(e.message, { err: true }); return false; }
+      },
+    }],
+  });
+}
+
+async function exportCharacter(c) {
+  try {
+    const r = await fetch(`/api/characters/${encodeURIComponent(c.id)}/export`, { cache: "no-store" });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `${r.status}`);
+    const a = h("a", { href: URL.createObjectURL(await r.blob()), download: `${c.id}.zip` });
+    document.body.append(a); a.click(); a.remove();
+    LoreShell.toast(`已匯出 ${c.id}.zip`);
+  } catch (e) { LoreShell.toast(e.message, { err: true }); }
+}
+
+async function importCharacter(file, done) {
+  try {
+    const r = await fetch("/api/characters/import", { method: "POST", body: file });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `${r.status}`);
+    await switchCharacter(d.id); done();
+    LoreShell.toast(`已匯入「${d.name}」`);
+  } catch (e) { LoreShell.toast(e.message, { err: true }); }
 }

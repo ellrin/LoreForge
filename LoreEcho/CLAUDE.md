@@ -22,7 +22,7 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   desktop app, registered as `le` in `ports.json`). `api.rs` handlers (route table in `lib.rs`),
   `store.rs` (`state.toml` = bubble place + expanded, `settings.toml` = character + shortcut;
   atomic, unknown keys kept), `characters.rs` (`characters/<id>/character.toml` + `avatar/<state>.*` portraits +
-  `full/<state>.*` full bodies; missing state → idle, no full body → the portrait, no character → built-in;
+  `full/<state>.*` full bodies; ten states, a missing one follows `chain()` (searching/waiting → thinking → idle, noting → speaking → idle, else idle), no full body → the portrait, no character → built-in; editing (`save_meta`, `save_image` with format sniffing and no scripts in SVG, `remove_image`, `create` = copy of the example, `export`/`import` zip, only known paths read);
   `figure_scale` / `figure_offset_y` clamped, sent as `figure`), `chat.rs` (transcript checks, system prompt =
   persona + name + `BREVITY_RULE`, SSE `start/delta/done/error`), `llm.rs` (task `le-chat` from
   `tasks.toml`, class `ask`: `local:current` then `claude:selected`; local engine =
@@ -39,11 +39,12 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
 - `web/`: no build step. Open window = `.figure` (left, only the picture, `--fig-scale`/`--fig-dy`
   from `figure`, may run off the bottom, overlaps the column by ≤ `--overlap`) + `.col` (right): card
   with the shared shell header (collapse · engine chip · 功能列表 toggle · 新對話 · gear with 一般 外觀
-  模型 快捷鍵) and the quiet history, `.choices` (功能列表 as VN choice rows, ↑↓/Enter, disabled
+  模型 快捷鍵 人物; 人物 = name, persona, per-state drop zones for 縮圖 and 對話人物, switch/new/export/import) and the quiet history, `.choices` (功能列表 as VN choice rows, ↑↓/Enter, disabled
   「下一階段」 until phase 4), `.box` (name tag = character switcher, the current line, input row).
   `styles.css` uses theme tokens only, the character pictures are shown as they are. The conversation lives only in the page (`S.msgs`); collapsing or
   新對話 clears it. Mic button is a disabled placeholder for the voice phase.
-- `../private-example/LoreEcho/`: one neutral character `echo` (avatars = the icon's outline).
+  States in the page (`setState`, also `window.LoreEcho.setState / whileState`): listening while a message is typed (the voice phase reuses it for recording), thinking while waiting for the model, waiting after 8 s without a first token, speaking while streaming, happy/unsure/surprised from a keyword cue in the finished reply (`moodOf`, 4 s); searching (KnowledgeBase) and noting (writing a note) have no signal yet: hooks only, wrap the future call in `whileState`. The name tag shows the avatar of the current state.
+- `../private-example/LoreEcho/`: one neutral character `echo` (avatars = the icon's outline, full bodies; all ten states in both rows).
 
 ## Rules
 

@@ -36,7 +36,7 @@
         <button type="button" class="choice" aria-disabled="true" title="下一階段" data-tool="idea"><span class="desc">一句話先存起來</span><span class="label">記下靈感</span></button>
       </div>
       <section class="box" id="box" aria-label="對話框">
-        <button type="button" class="nametag" id="nametag" aria-haspopup="menu" title="換人物"><span id="who">LoreEcho</span><span data-icon="chevron"></span></button>
+        <button type="button" class="nametag" id="nametag" aria-haspopup="menu" title="換人物"><img id="whoImg" class="who-img" alt="" draggable="false" hidden><span id="who">LoreEcho</span><span data-icon="chevron"></span></button>
         <div class="line empty" id="line" aria-live="polite">想聊什麼都可以。對話只留在這個視窗裡，按「新對話」或收起就清掉。</div>
         <form class="input" id="form" autocomplete="off">
           <button type="button" class="ico" id="mic" disabled aria-label="語音（之後的階段）" title="語音輸入：之後的階段才會有"><span data-icon="mic"></span></button>
@@ -53,18 +53,8 @@
 
   <template id="tplGeneral">
     <div class="set-sec">
-      <div class="set-label">人物</div>
-      <div class="set-row"><span class="k">目前的人物</span><select class="set-input" id="setCharacter" aria-label="人物"></select></div>
-      <div class="set-empty">人物放在 <code>private/LoreEcho/characters/&lt;名稱&gt;/</code>（character.toml、avatar/ 頭像、full/ 全身）。</div>
-    </div>
-    <div class="set-sec">
       <div class="set-label">叫出／收起</div>
       <div class="set-row"><span class="k">全域快捷鍵</span><input class="set-input" id="setShortcut" placeholder="Alt+Space" aria-label="全域快捷鍵" spellcheck="false"></div>
-      <div class="set-empty">例如 Alt+Space、CmdOrCtrl+Shift+E；留空＝不用快捷鍵。選單列的圖示也可以叫出或收起。</div>
-    </div>
-    <div class="set-sec">
-      <div class="set-label">對話</div>
-      <div class="set-empty">對話只在記憶體裡，不寫進任何檔案。回答預設 1–3 句；說「詳細一點」才會展開。</div>
     </div>
   </template>
 
