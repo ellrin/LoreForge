@@ -97,6 +97,5 @@ LoreEcho finds the port in lore-home's `ports.json` (`pc`); without it, it write
 ## Opening a note (「打開」)
 
 PaperComposer's page opens the 筆記 window on a note at `/?note=<id>` (`/?note=` = the list),
-e.g. `http://127.0.0.1:<pc port>/?note=<id>`. A `lore-pc://note/<id>` form still needs the `pc`
-entry of `LoreLinks` (commons `ui/shell.js`) and PaperComposer's desktop link handler to map it
-to `/?note=<id>`.
+so `LoreLinks.open("pc", { note: id })` (`lore-pc://note/<id>`, which the desktop app maps to
+`/?note=<id>`) lands on the saved note.

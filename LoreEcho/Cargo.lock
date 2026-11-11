@@ -2029,6 +2029,7 @@ dependencies = [
  "lore-home",
  "lore-llm",
  "lore-notation",
+ "lore-notes",
  "lore-shell",
  "lore-store",
  "lore-voice",
@@ -2194,6 +2195,16 @@ dependencies = [
 name = "lore-notation"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lore-notes"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "lore-notation",
  "serde",
  "serde_json",
 ]

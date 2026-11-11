@@ -24,7 +24,8 @@ fn page(pairs: &[(&str, &str)]) -> String {
     format!("/?{}", u.query().unwrap_or_default())
 }
 
-/// The page a `lore-pc://` link stands for: `lore-pc://` → `/`, `lore-pc://open?path=<file>` → `/?open=<file>`.
+/// The page a `lore-pc://` link stands for: `lore-pc://` → `/`, `lore-pc://open?path=<file>` → `/?open=<file>`,
+/// `lore-pc://note/<id>` → `/?note=<id>` (the 筆記 window on that note).
 fn link_page(u: &url::Url) -> Option<String> {
     if u.scheme() != "lore-pc" {
         return None;
@@ -34,6 +35,12 @@ fn link_page(u: &url::Url) -> Option<String> {
         "open" => {
             let path = u.query_pairs().find(|(k, _)| k == "path").map(|(_, v)| v.into_owned()).filter(|v| !v.is_empty())?;
             Some(page(&[("open", &path)]))
+        }
+        // 筆記 (LoreEcho's 「打開」): `lore-pc://note/<id>` → `/?note=<id>`; no id = the list
+        "note" => {
+            let seg = u.path_segments().and_then(|mut s| s.next()).unwrap_or("");
+            let id: String = url::form_urlencoded::parse(format!("n={}", seg.replace('+', "%2B")).as_bytes()).next().map(|(_, v)| v.into_owned()).unwrap_or_default();
+            Some(page(&[("note", &id)]))
         }
         _ => None,
     }
@@ -193,6 +200,11 @@ mod tests {
         assert_eq!(p("lore-pc://open"), None);
         assert_eq!(p("lore-pc://open?path="), None);
         assert_eq!(p("lore-pc://other"), None);
+        assert_eq!(p("lore-pc://note/2026-11-12-loss-weights"), Some("/?note=2026-11-12-loss-weights".into()));
+        // LoreLinks encodes the id (encodeURIComponent): a CJK slug comes back as the same id
+        let page = p("lore-pc://note/2026-11-12-%E6%A2%AF%E5%BA%A6").unwrap();
+        assert_eq!(url::Url::parse(&format!("http://x{page}")).unwrap().query_pairs().next().unwrap().1, "2026-11-12-梯度");
+        assert_eq!(p("lore-pc://note"), Some("/?note=".into()));
         assert_eq!(p("lore-sc://deck/x"), None);
     }
 

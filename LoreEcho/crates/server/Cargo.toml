@@ -15,6 +15,7 @@ lore-shell.workspace = true
 kb-core.workspace = true
 lore-store.workspace = true
 lore-notation.workspace = true
+lore-notes.workspace = true
 reqwest.workspace = true
 lore-voice.workspace = true
 tower = { version = "0.5", features = ["util"] }

@@ -21,6 +21,8 @@ kb-core = { path = "../commons/crates/kb-core" }
 lore-store = { path = "../commons/crates/lore-store" }
 # 整理成筆記 / 記下靈感: the note's LaTeX is checked against the notation registry before it is saved.
 lore-notation = { path = "../commons/crates/lore-notation" }
+# PaperComposer's 筆記 files, written here when PaperComposer is closed (same format, unique names, checks).
+lore-notes = { path = "../commons/crates/lore-notes" }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 # Listening and speaking (macOS: the Apple engines through a Swift helper).
 lore-voice = { path = "../commons/crates/lore-voice" }

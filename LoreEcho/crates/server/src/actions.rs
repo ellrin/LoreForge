@@ -383,28 +383,26 @@ pub fn slug(title: &str, kind: &str) -> String {
     if s.is_empty() { kind.to_string() } else { s }
 }
 
-/// ADAPTER: lore-notes — until PaperComposer's notes crate lands, the file is written here in
-/// the §4a format: `<notes>/<YYYY-MM-DD>-<slug>.tex`, never over another file (`-2`, `-3`, …).
-/// Returns `(id, path)`.
-pub fn write_note_file(notes: &Path, n: &Note, now: &kb_core::clock::Time) -> Result<(String, PathBuf), String> {
-    std::fs::create_dir_all(notes).map_err(|e| format!("建不了筆記資料夾：{e}"))?;
-    let base = format!("{}-{}", now.format("%Y-%m-%d"), slug(&n.title, &n.kind));
-    let text = format!("{}\n{}\n", front_matter(n, &now.to_rfc3339()), n.body);
-    for i in 1..1000 {
-        let id = if i == 1 { base.clone() } else { format!("{base}-{i}") };
-        let path = notes.join(format!("{id}.tex"));
-        // create_new: two saves at once never share a name
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut f) => {
-                use std::io::Write;
-                f.write_all(text.as_bytes()).map_err(|e| format!("筆記沒有寫好：{e}"))?;
-                return Ok((id, path));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(format!("筆記沒有寫好：{e}")),
+/// The note as a file in PaperComposer's notes folder, through `lore-notes` (the format
+/// PaperComposer reads: `<notes>/<YYYY-MM-DD>-<slug>.tex`, never over another file: `-2`, `-3`, …),
+/// checked against the author's registry first. Returns `(id, path)`.
+pub fn write_note_file(notes: &Path, n: &Note, now: &kb_core::clock::Time, notation: &lore_notation::Notation) -> Result<(String, PathBuf), String> {
+    let new = lore_notes::NewNote {
+        title: n.title.clone(),
+        body: n.body.clone(),
+        kind: if n.kind == "idea" { lore_notes::Kind::Idea } else { lore_notes::Kind::Note },
+        tags: n.tags.clone(),
+        kb: n.kb.clone(),
+        source: Some(n.source.clone()),
+    };
+    match lore_notes::Notes::new(notes).create_at(new, notation, *now) {
+        Ok(saved) => Ok((saved.id, saved.path)),
+        Err(lore_notes::Error::Blocked(f)) => {
+            let why: Vec<&str> = f.iter().filter(|x| x.blocking).map(|x| x.message.as_str()).collect();
+            Err(format!("記號檢查沒過，沒有存：{}", why.join("；")))
         }
+        Err(e) => Err(format!("筆記沒有寫好：{e}")),
     }
-    Err("同名的筆記太多".into())
 }
 
 async fn note_save(State(s): State<Shared>, body: Option<Json<Note>>) -> Response {
@@ -439,7 +437,8 @@ async fn note_save(State(s): State<Shared>, body: Option<Json<Note>>) -> Respons
     }
     let Some(notes) = s.home.app_dir(PC_APP).map(|d| d.join("notes")) else { return bad(StatusCode::SERVICE_UNAVAILABLE, "沒有 LoreForge 的 private 資料夾，無法存筆記") };
     let now = SystemClock.now();
-    match tokio::task::spawn_blocking(move || write_note_file(&notes, &n, &now)).await {
+    let notation = s.home.shared_file("notation.json").and_then(|p| lore_notation::Notation::load(&p).ok()).unwrap_or_default();
+    match tokio::task::spawn_blocking(move || write_note_file(&notes, &n, &now, &notation)).await {
         Ok(Ok((id, path))) => Json(json!({ "via": "file", "id": id, "path": path, "findings": findings })).into_response(),
         Ok(Err(e)) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
         Err(e) => bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -698,11 +697,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let now = SystemClock.now();
         let n = Note { title: "梯度".into(), body: "\\section*{問題}".into(), kind: "note".into(), tags: vec![], kb: vec![], source: "loreecho".into() };
-        let (a, pa) = write_note_file(tmp.path(), &n, &now).unwrap();
-        let (b, _) = write_note_file(tmp.path(), &n, &now).unwrap();
+        let reg = lore_notation::Notation::default();
+        let (a, pa) = write_note_file(tmp.path(), &n, &now, &reg).unwrap();
+        let (b, _) = write_note_file(tmp.path(), &n, &now, &reg).unwrap();
         assert_eq!(b, format!("{a}-2"));
         assert!(a.ends_with("-梯度") && a.starts_with(&now.format("%Y-%m-%d").to_string()));
         let text = std::fs::read_to_string(pa).unwrap();
-        assert!(text.starts_with("% ---\n% source: loreecho\n% created: ") && text.ends_with("% ---\n\n\\section*{問題}\n"), "{text}");
+        assert!(text.starts_with("% ---\n% source: loreecho\n% created: ") && text.ends_with("% ---\n\\section*{問題}\n"), "{text}");
     }
 }
