@@ -49,11 +49,12 @@ By \eqref{eq:loss}, \(\vw\) shrinks …
 ## Check (every write)
 
 `check(body, &notation)` runs `lore_notation::check_document` on the body as a fragment plus a
-structure check. **Blocking** (`BLOCKING`; nothing is written): `hardcoded_reference` (a typed
-"Table 1", "Eq. (3)"), `label_duplicate`, `registry_invalid`, `note_structure` (unbalanced `{}`,
-`$`, `\begin`/`\end`; `\documentclass` or `\begin{document}`). Everything else is reported, not
-blocking. `ref_undefined` is a warning (the label may be the paper's) and is dropped for labels the
-registry knows; findings about the registry as a whole (`unused_entry`, registry warnings) are dropped. Blocking findings have severity `error`. Finding lines count from the body's first line.
+structure check. **Blocking** (`BLOCKING`; nothing is written) — PaperComposer's own pair for
+written text, `hardcoded_reference` (a typed "Table 1", "Eq. (3)") and `ref_undefined` (a `\ref`
+to a label neither the note nor the registry defines), plus `label_duplicate`, `registry_invalid`,
+`note_structure` (unbalanced `{}`, `$`, `\begin`/`\end`; `\documentclass` or
+`\begin{document}`). Everything else is reported, not blocking. A `\ref` to a label the registry
+knows (equation/figure/table entries) is fine; findings about the registry as a whole (`unused_entry`, registry warnings) are dropped. Blocking findings have severity `error`. Finding lines count from the body's first line.
 
 ## API
 
@@ -92,3 +93,10 @@ parse(id, text) -> Note  ·  to_tex(&Note) -> String  ·  slug(title)  ·  valid
 
 LoreEcho finds the port in lore-home's `ports.json` (`pc`); without it, it writes with
 `Notes::create` and PaperComposer lists the file the next time its 筆記 panel polls.
+
+## Opening a note (「打開」)
+
+PaperComposer's page opens the 筆記 window on a note at `/?note=<id>` (`/?note=` = the list),
+e.g. `http://127.0.0.1:<pc port>/?note=<id>`. A `lore-pc://note/<id>` form still needs the `pc`
+entry of `LoreLinks` (commons `ui/shell.js`) and PaperComposer's desktop link handler to map it
+to `/?note=<id>`.

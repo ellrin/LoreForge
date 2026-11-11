@@ -283,13 +283,26 @@ window.PCNotes = (() => {
   }
 
   // ── open / close ──────────────────────────────────────
-  async function open() {
+  /** Open the window; with an id, on that note (LoreEcho's 「打開」: `/?note=<id>`). */
+  async function open(id) {
     if (!dlg) build();
     if (!dlg.open) dlg.showModal();
     await macros();
     await refresh(true);
+    const n = typeof id === "string" && st.notes.find((x) => x.id === id);
+    if (n && !st.edit) {
+      st.kind = n.kind;
+      st.sel = n.id;
+      renderList();
+    }
     startPoll();
   }
+
+  // `/?note=<id>` (or `/?note=` for the list) opens the window once the page is up
+  window.addEventListener("load", () => {
+    const id = new URLSearchParams(location.search).get("note");
+    if (id !== null) setTimeout(() => open(id), 0);
+  });
 
   async function close() {
     if (!(await leaveEdit())) return;

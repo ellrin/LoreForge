@@ -10,9 +10,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Findings that stop a save. `ref_undefined` is not here: a note is a
-/// fragment of a paper, its `\ref{…}` may point at a label of the paper.
-pub const BLOCKING: &[&str] = &["label_duplicate", "registry_invalid", "hardcoded_reference", "note_structure"];
+/// Findings that stop a save: PaperComposer's own blocking pair for written
+/// text (`hardcoded_reference`, `ref_undefined`) plus what breaks a fragment.
+/// A `\ref{…}` is defined when the note or the registry has the label.
+pub const BLOCKING: &[&str] = &["hardcoded_reference", "ref_undefined", "label_duplicate", "registry_invalid", "note_structure"];
 
 /// The trash folder inside the notes folder.
 pub const TRASH: &str = ".trash";
@@ -374,13 +375,11 @@ pub fn check(body: &str, notation: &Notation) -> Vec<Finding> {
             continue;
         }
         let blocking = BLOCKING.contains(&i.code.as_str());
-        // a note is a fragment: a label the paper defines is not an error here
-        let severity = match (i.code.as_str(), i.severity) {
+        let severity = match i.severity {
             _ if blocking => "error",
-            ("ref_undefined", _) => "warning",
-            (_, Severity::Error) => "error",
-            (_, Severity::Warning) => "warning",
-            (_, Severity::Info) => "info",
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Info => "info",
         };
         let loc = i.locations.first();
         out.push(Finding {

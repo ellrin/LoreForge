@@ -136,13 +136,15 @@ fn lore_notation_blocks() {
     }
     assert!(notes.list().is_empty(), "nothing written");
 
-    // a \ref to a registry label, or to a label of the paper, is fine; the
-    // latter is a warning, a registered macro is used as is
-    let ok = notes.create_at(new("Fine", "By \\eqref{eq:loss}, \\(\\vw\\) shrinks; see also \\ref{fig:arch}. A 100\\% \\{ok\\} rate."), &reg, t).unwrap();
-    assert!(!ok.findings.iter().any(|f| f.blocking));
+    // a \ref to a label the registry knows is fine, a registered macro is used as is;
+    // a label nobody defines blocks (PaperComposer's rule for written text)
+    let ok = notes.create_at(new("Fine", "By \\eqref{eq:loss}, \\(\\vw\\) shrinks. A 100\\% \\{ok\\} rate."), &reg, t).unwrap();
+    assert!(!ok.findings.iter().any(|f| f.blocking), "{:?}", ok.findings);
     assert!(!ok.findings.iter().any(|f| f.subject.as_deref() == Some("eq:loss")));
-    let r = ok.findings.iter().find(|f| f.code == "ref_undefined").expect("paper label reported");
-    assert_eq!(r.severity, "warning");
+    let Err(Error::Blocked(f)) = notes.create_at(new("Unknown", "See \\ref{fig:arch}."), &reg, t) else { panic!("not blocked") };
+    assert!(f.iter().any(|x| x.code == "ref_undefined" && x.blocking));
+    // a label the note defines itself
+    assert!(notes.create_at(new("Own", "\\begin{equation}x\\label{eq:own}\\end{equation}\nBy \\eqref{eq:own}."), &reg, t).is_ok());
 
     // an update runs the same check and leaves the file as it was
     let before = std::fs::read_to_string(&ok.path).unwrap();
