@@ -22,7 +22,7 @@
 /* ── Frame ───────────────────────────────────────── */
 .app {
   display: grid; height: 100vh;
-  grid-template: "top top top" 48px "left page right" 1fr / 248px 1fr 300px;
+  grid-template: "top top top" 48px "left page right" 1fr / var(--left-w, 248px) 1fr var(--right-w, 300px);
 }
 
 html, body { height: 100%; }

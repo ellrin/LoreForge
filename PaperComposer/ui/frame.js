@@ -117,6 +117,7 @@ const PCFrame = (() => {
   function mount() {
     shell = LoreShell.mount({
       app: "pc",
+      resize: { left: "aside.left", right: "aside.right", defaults: { left: 248, right: 300 } },
       brand: "PAPER/COMPOSER",
       host: "header.top",
       home: () => PCHome.show(1),

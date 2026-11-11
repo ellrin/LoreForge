@@ -41,6 +41,8 @@ const PCZoom = (() => {
       const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
       set(z * Math.exp(-Math.max(-50, Math.min(50, dy)) * 0.003), e.clientX, e.clientY);
     }, { passive: false });
+    // Outside the page (panels, bars) the WebView's own page zoom stays off too.
+    document.addEventListener("wheel", (e) => { if (e.ctrlKey || e.metaKey) e.preventDefault(); }, { passive: false });
     // WebKit (macOS) reports a trackpad pinch as gesture events.
     let start = 1;
     a.addEventListener("gesturestart", (e) => { e.preventDefault(); start = z; });

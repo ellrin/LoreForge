@@ -36,7 +36,7 @@ select { height: 30px; }
 .grow { flex: 1; }
 
 /* ── Frame ───────────────────────────── */
-.app { display: grid; height: 100vh; grid-template: "top top top" var(--top-h) "sorter stage side" 1fr / 196px minmax(0, 1fr) 360px; }
+.app { display: grid; height: 100vh; grid-template: "top top top" var(--top-h) "sorter stage side" 1fr / var(--left-w, 196px) minmax(0, 1fr) var(--right-w, 360px); }
 .app > .top { grid-area: top; }
 .app.at-home { grid-template-rows: var(--top-h) 1fr; }
 .at-home .rd-only { display: none !important; }

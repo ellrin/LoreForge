@@ -544,13 +544,86 @@ function scrollWithin(box, el, block = "center", top = 0) {
   box.scrollTo({ top: Math.max(0, y), left: Math.max(0, x) });
 }
 
-function setZoom(z, fit = false) {
+/** Zoom to z. `at` = a point {x, y} in the viewport that stays under the same spot
+ *  (default: the centre); fit = the 符合寬度 mode (it is cleared by every manual zoom). */
+function setZoom(z, fit = false, at = null) {
   const vpEl = $("#viewport");
-  const frac = vpEl.scrollTop / Math.max(1, vpEl.scrollHeight);
+  const vr = vpEl.getBoundingClientRect();
+  const cx = vr.left + (at?.x ?? vpEl.clientWidth / 2), cy = vr.top + (at?.y ?? vpEl.clientHeight / 2);
+  const old = S.zoom;
+  // the page point under (cx, cy): the page that holds it (or the nearest one), as a fraction of its size
+  let anchor = null, best = Infinity;
+  S.pages.forEach((p, i) => {
+    const r = p.el?.getBoundingClientRect();
+    if (!r) return;
+    const d = cy < r.top ? r.top - cy : cy > r.bottom ? cy - r.bottom : 0;
+    if (d < best) { best = d; anchor = { i, fx: (cx - r.left) / old, fy: (cy - r.top) / old }; }
+  });
   S.fit = fit;
   S.zoom = clamp(z, 0.3, 4);
   layoutPages();
-  vpEl.scrollTop = frac * vpEl.scrollHeight;
+  const r = anchor && S.pages[anchor.i].el.getBoundingClientRect();
+  if (r) {
+    vpEl.scrollLeft += r.left + anchor.fx * S.zoom - cx;
+    vpEl.scrollTop += r.top + anchor.fy * S.zoom - cy;
+  }
+}
+
+/* Pinch, ⌘/Ctrl + wheel and ⌘ +/−/0. While the gesture lasts the laid-out pages are only
+   scaled with a CSS transform around the pointer (cheap, immediate); the canvases and text
+   layers are re-made once, when the gesture has settled. */
+const ZG = { g: null, raf: 0, timer: 0 };
+function gestureStep(scale, ev) {
+  if (!S.sha || !S.pages?.length) return;
+  const vpEl = $("#viewport"), box = $("#pages");
+  const r = vpEl.getBoundingClientRect();
+  let g = ZG.g;
+  if (!g) g = ZG.g = { base: S.zoom, scale: 1, cx: ev.clientX - r.left, cy: ev.clientY - r.top };
+  g.scale = clamp(scale(g), 0.3 / g.base, 4 / g.base);
+  if (!ZG.raf) ZG.raf = requestAnimationFrame(() => {
+    ZG.raf = 0;
+    if (!ZG.g) return;
+    const { base, scale: s, cx, cy } = ZG.g;
+    box.style.transformOrigin = `${vpEl.scrollLeft + cx - box.offsetLeft}px ${vpEl.scrollTop + cy - box.offsetTop}px`;
+    box.style.transform = `scale(${s})`;
+    $("#zoomChip").textContent = `${Math.round(base * s * 100)}%`;
+  });
+  clearTimeout(ZG.timer);
+  ZG.timer = setTimeout(gestureEnd, 140);
+}
+function gestureEnd() {
+  const g = ZG.g;
+  if (!g) return;
+  ZG.g = null;
+  cancelAnimationFrame(ZG.raf); ZG.raf = 0;
+  const box = $("#pages");
+  box.style.transform = ""; box.style.transformOrigin = "";
+  if (Math.abs(g.scale - 1) < 0.005) { $("#zoomChip").textContent = `${Math.round(S.zoom * 100)}%`; return; }
+  setZoom(g.base * g.scale, false, { x: g.cx, y: g.cy });
+}
+function wireZoomGestures() {
+  const vpEl = $("#viewport");
+  document.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault(); // also keeps the WebView's own page zoom out
+    if (!vpEl.contains(e.target)) return;
+    const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+    gestureStep((g) => g.scale * Math.exp(-Math.max(-60, Math.min(60, dy)) * 0.01), e);
+  }, { passive: false });
+  // WebKit (the desktop app): a trackpad pinch is a gesture event with a running scale
+  let start = 1;
+  document.addEventListener("gesturestart", (e) => { e.preventDefault(); start = ZG.g?.scale ?? 1; });
+  document.addEventListener("gesturechange", (e) => { e.preventDefault(); if (vpEl.contains(e.target)) gestureStep(() => start * e.scale, e); });
+  document.addEventListener("gestureend", (e) => e.preventDefault());
+  document.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey || !S.sha) return;
+    if (document.querySelector("dialog[open]")) return;
+    const up = e.key === "=" || e.key === "+" || e.code === "NumpadAdd", down = e.key === "-" || e.key === "_" || e.code === "NumpadSubtract", zero = e.key === "0" || e.code === "Numpad0";
+    if (!up && !down && !zero) return;
+    e.preventDefault();
+    gestureEnd();
+    setZoom(zero ? 1 : up ? S.zoom * 1.2 : S.zoom / 1.2);
+  });
 }
 
 function scrollToPage(i, smooth = true) {
@@ -2346,6 +2419,7 @@ async function recentPapers() {
 function mountShell() {
   shell = LoreShell.mount({
     app: "lr",
+    resize: { left: "#sorter", right: "#side", defaults: { left: 196, right: 360 }, min: { left: 160, right: 240 } },
     host: "header.top",
     brand: "LORE/READER",
     home: () => go(null),
@@ -2409,6 +2483,7 @@ function wire() {
   $("#actZoomIn").onclick = () => setZoom(S.zoom * 1.2);
   $("#actZoomOut").onclick = () => setZoom(S.zoom / 1.2);
   $("#zoomChip").onclick = () => setZoom(1);
+  wireZoomGestures();
   $("#actFit").onclick = () => setZoom(fitZoom(), true);
   $("#pgDup").onclick = dupPage;
   $("#pgDel").onclick = delPage;
@@ -2445,7 +2520,9 @@ function wire() {
     onSelKey(e);
   });
   let rt;
-  addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { if (S.sha && S.fit) setZoom(fitZoom(), true); if (isOpen("paras")) foldChips(); }, 150); });
+  const refit = () => { clearTimeout(rt); rt = setTimeout(() => { if (S.sha && S.fit) setZoom(fitZoom(), true); if (isOpen("paras")) foldChips(); }, 150); };
+  addEventListener("resize", refit);
+  document.addEventListener("lore-resize", refit); // a side panel was dragged: 符合寬度 follows
   addEventListener("popstate", async () => {
     const to = new URL(location.href).searchParams.get("paper");
     if (S.sha && to !== S.sha && !(await confirmLeave())) { history.pushState(null, "", `?paper=${S.sha}&page=${S.pages[S.cur]?.page ?? 1}`); return; }

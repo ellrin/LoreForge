@@ -839,7 +839,7 @@ let shell = null;
 function mountShell() {
   const inEditor = () => S.view === "editor" && !!S.ed;
   shell = LoreShell.mount({
-    app: "kb", brand: "KNOWLEDGE/BASE", host: "header.top",
+    app: "kb", resize: { left: "#left", defaults: { left: 248 } }, brand: "KNOWLEDGE/BASE", host: "header.top",
     home: () => setView("cards"),
     status: { onClick: () => saveCard() },
     primary: [{ id: "actNew", icon: "plus", label: "新增知識卡", run: () => openEditor(null) }],

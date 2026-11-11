@@ -175,6 +175,14 @@ svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-widt
 .slot-lead:not(:has(> :not([hidden], [style*="display: none"]))) { display: none; }
 .top.at-home :is(.picker, .fstate, .slot-lead, .slot-primary, .edit-only, #actNotation, #actExport) { display: none !important; }
 
+/* ── resizable side panels: a thin handle on the inner edge (hit area 10px, line on hover/drag) ── */
+.panel-resize { position: fixed; width: 10px; z-index: 15; cursor: col-resize; touch-action: none; outline: none; }
+.panel-resize[hidden] { display: none; }
+.panel-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; border-radius: 1px; background: transparent; transition: background .12s; }
+.panel-resize:hover::after, .panel-resize:focus-visible::after, .panel-resize.dragging::after { background: var(--accent-text, var(--accent)); }
+body.panel-resizing { cursor: col-resize; user-select: none; }
+body.panel-resizing iframe { pointer-events: none; }
+
 /* ── drawers: the left and right panels slide over the content ≤1100px ── */
 @media (max-width: 1100px) {
   .narrow-only { display: inline-grid !important; }

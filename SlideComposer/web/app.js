@@ -429,6 +429,50 @@ function renderThumbs(force = false) {
   });
 }
 
+/** Zoom to z around the viewport point (cx, cy) (client coordinates; default the centre). */
+function zoomAt(z, cx, cy) {
+  const wrap = $("#paperWrap"), vp = $("#viewport");
+  if (!wrap || !S.deck) return;
+  const r = vp.getBoundingClientRect();
+  if (cx == null) { cx = r.left + r.width / 2; cy = r.top + r.height / 2; }
+  const r0 = wrap.getBoundingClientRect();
+  const lx = (cx - r0.left) / S.zoom, ly = (cy - r0.top) / S.zoom;
+  S.fit = false;
+  S.zoom = Math.min(4, Math.max(0.2, z));
+  renderCanvas();
+  const r1 = wrap.getBoundingClientRect();
+  vp.scrollLeft += r1.left + lx * S.zoom - cx;
+  vp.scrollTop += r1.top + ly * S.zoom - cy;
+}
+/** Pinch / ⌘ or Ctrl + wheel / ⌘ + − 0 (100%); one re-render per frame. */
+function wireZoomGestures() {
+  const vp = $("#viewport");
+  let want = null, raf = 0;
+  const go = (z, e) => {
+    want = { z, x: e?.clientX, y: e?.clientY };
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; const w = want; want = null; if (w) zoomAt(w.z, w.x, w.y); });
+  };
+  const cur = () => want?.z ?? S.zoom;
+  document.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    if (!vp.contains(e.target)) return;
+    const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+    go(cur() * Math.exp(-Math.max(-60, Math.min(60, dy)) * 0.01), e);
+  }, { passive: false });
+  let start = 1;
+  document.addEventListener("gesturestart", (e) => { e.preventDefault(); start = cur(); });
+  document.addEventListener("gesturechange", (e) => { e.preventDefault(); if (vp.contains(e.target)) go(start * e.scale, e); });
+  document.addEventListener("gestureend", (e) => e.preventDefault());
+  document.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey || !S.deck || document.querySelector("dialog[open]")) return;
+    const up = e.key === "=" || e.key === "+" || e.code === "NumpadAdd", down = e.key === "-" || e.key === "_" || e.code === "NumpadSubtract", zero = e.key === "0" || e.code === "Numpad0";
+    if (!up && !down && !zero) return;
+    e.preventDefault();
+    zoomAt(zero ? 1 : up ? S.zoom * 1.25 : S.zoom / 1.25);
+  });
+}
+
 function fitZoom() {
   const vp = $("#viewport");
   const W = SC.px(S.deck.size.w), H = SC.px(S.deck.size.h);
@@ -2044,7 +2088,7 @@ let shell, fontChip;
 /** The top bar, gear, drawers, ⌘F / ⌘S / ⌘, — the shared Lore shell (commons/ui/shell.js). */
 function mountShell() {
   shell = LoreShell.mount({
-    app: "sc", brand: "SLIDE/COMPOSER", home: goHome, host: $("header.top"),
+    app: "sc", resize: { left: "#sorter", right: "#side", defaults: { left: 248, right: 300 } }, brand: "SLIDE/COMPOSER", home: goHome, host: $("header.top"),
     picker: { icon: "cards", name: "", recent: deckRecent, actions: [
       { icon: "folder", label: "開啟…", kbd: "⌘O", run: openFile },
       { icon: "save", label: "另存新檔…", kbd: "⇧⌘S", run: saveAs },
@@ -2105,9 +2149,11 @@ function wire() {
   addEventListener("resize", () => { if (S.deck) { renderCanvas(); } });
   $$("[data-tool]").forEach((b) => (b.onclick = () => setTool(b.dataset.tool)));
   mountShell();
-  $("#actZoomIn").onclick = () => { S.fit = false; S.zoom = Math.min(4, S.zoom * 1.25); renderCanvas(); };
-  $("#actZoomOut").onclick = () => { S.fit = false; S.zoom = Math.max(0.2, S.zoom / 1.25); renderCanvas(); };
+  $("#actZoomIn").onclick = () => zoomAt(S.zoom * 1.25);
+  $("#actZoomOut").onclick = () => zoomAt(S.zoom / 1.25);
   $("#actFit").onclick = () => { S.fit = true; renderCanvas(); };
+  wireZoomGestures();
+  let rfit; document.addEventListener("lore-resize", () => { clearTimeout(rfit); rfit = setTimeout(() => { if (S.deck && S.fit) renderCanvas(); }, 100); });
   $("#actGrid").onclick = (e) => { S.grid = !S.grid; e.currentTarget.setAttribute("aria-pressed", S.grid); renderCanvas(); };
   $("#actSnap").onclick = (e) => { S.snap = !S.snap; e.currentTarget.setAttribute("aria-pressed", S.snap); };
   $("#zoomChip").onclick = () => { S.fit = true; renderCanvas(); };

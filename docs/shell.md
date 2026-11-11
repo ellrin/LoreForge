@@ -106,6 +106,7 @@ const shell = LoreShell.mount({
   keys: [{ label, keys }],                                  // 沒有按鈕的快捷鍵
   host,                                                     // 要填的 <header>（預設在 body 最前面新建）
 });
+`resize: { left: "#sel", right: "#sel", defaults: { left, right }, min, max }`：左右面板內緣的拖曳把手（>1100px；游標 col-resize，滑過／拖曳時顯示細線，連點兩下還原，聚焦後 ←/→ 微調、Shift 加大、Home 還原）。寬度寫在 `<html>` 的 `--left-w` / `--right-w`，app 的 grid 用 `var(--left-w, 預設)`；每個 app 各自記在 localStorage `lore.panels.<app>`；每次變動在 document 送 `lore-resize`（LR、SC 的符合寬度跟著重排）。預設範圍 180–480px，`min`／`max` 可給數字或 `{ left, right }`。`shell.resize.set(side, px)` / `.reset(side)`。
 shell.slots.lead / primary / right   // 給本工具的小東西（SC 字型標籤、KB 使用者）
 shell.setName(n) · shell.setStatus(state, { label, title, action }) · shell.editing(on) · shell.setUndo({ undo, redo }) · shell.drawer(w, on) · shell.home(on)（首頁：只留品牌、抽屜鈕、齒輪）
 LoreShell.toast(msg, { err, action: { label, run }, ms })

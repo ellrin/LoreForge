@@ -439,6 +439,84 @@
     parts.forEach((p, i) => { if (i) b.append(h("b", {}, "/")); b.append(p); });
     return b;
   }
+  /** Resizable side panels. cfg = { left: "#sel", right: "#sel", defaults: { left, right },
+   *  min: 180 | { left, right }, max: 480 | { left, right } }. The width lives in the CSS vars
+   *  --left-w / --right-w on <html> (apps use them in their grid, with their default as the
+   *  fallback), is remembered per app in localStorage (a convenience), and every change fires
+   *  `lore-resize` on document. Handle: pointer drag, arrows (Shift = x4), double-click = default. */
+  function mountResize(app, cfg) {
+    const key = `lore.panels.${app}`;
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(key)) ?? {}; } catch {}
+    const pick = (v, w, d) => (v && typeof v === "object" ? v[w] : v) ?? d;
+    const root = document.documentElement;
+    const sides = {};
+    const narrow = matchMedia("(max-width: 1100px)");
+    function apply(w, px, persist) {
+      const sd = sides[w];
+      px = Math.round(Math.min(sd.max, Math.max(sd.min, px)));
+      sd.w = px;
+      root.style.setProperty(`--${w}-w`, `${px}px`);
+      if (persist) { try { localStorage.setItem(key, JSON.stringify(Object.fromEntries(Object.entries(sides).map(([k, v]) => [k, v.w])))); } catch {} }
+      sd.handle.setAttribute("aria-valuenow", String(px));
+      place();
+      document.dispatchEvent(new CustomEvent("lore-resize", { detail: { side: w, width: px } }));
+    }
+    function place() {
+      for (const [w, sd] of Object.entries(sides)) {
+        const el = document.querySelector(cfg[w]);
+        const r = el?.getBoundingClientRect();
+        const show = !!el && r.width > 0 && r.height > 0 && !narrow.matches && !document.querySelector(".at-home") && getComputedStyle(el).display !== "none";
+        if (sd.handle.hidden === show) sd.handle.hidden = !show;
+        if (!show) continue;
+        const css = `left:${Math.round((w === "left" ? r.right : r.left) - 5)}px;top:${Math.round(r.top)}px;height:${Math.round(r.height)}px`;
+        if (sd.css !== css) { sd.css = css; sd.handle.style.cssText = css; }
+      }
+    }
+    for (const w of ["left", "right"]) {
+      const el = cfg[w] && document.querySelector(cfg[w]);
+      if (!el) continue;
+      const handle = h("div", { class: "panel-resize", "data-side": w, role: "separator", "aria-orientation": "vertical", tabindex: "0", "aria-label": w === "left" ? "調整左側寬度" : "調整右側寬度", title: "拖曳調整寬度，連點兩下還原", hidden: true });
+      const sd = sides[w] = { handle, w: 0, css: "", def: cfg.defaults?.[w] ?? (Math.round(el.getBoundingClientRect().width) || 260), min: pick(cfg.min, w, 180), max: pick(cfg.max, w, 480) };
+      handle.setAttribute("aria-valuemin", String(sd.min));
+      handle.setAttribute("aria-valuemax", String(sd.max));
+      document.body.append(handle);
+      let drag = null;
+      handle.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        handle.setPointerCapture(e.pointerId);
+        drag = { x: e.clientX, w: sd.w };
+        handle.classList.add("dragging");
+        document.body.classList.add("panel-resizing");
+      });
+      handle.addEventListener("pointermove", (e) => {
+        if (drag) apply(w, drag.w + (e.clientX - drag.x) * (w === "left" ? 1 : -1), false);
+      });
+      const end = () => { if (!drag) return; drag = null; handle.classList.remove("dragging"); document.body.classList.remove("panel-resizing"); apply(w, sd.w, true); };
+      handle.addEventListener("pointerup", end);
+      handle.addEventListener("pointercancel", end);
+      handle.addEventListener("dblclick", () => apply(w, sd.def, true));
+      handle.addEventListener("keydown", (e) => {
+        if (e.key === "Home") { e.preventDefault(); apply(w, sd.def, true); return; }
+        const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+        if (!dir) return;
+        e.preventDefault();
+        apply(w, sd.w + dir * (w === "left" ? 1 : -1) * (e.shiftKey ? 48 : 12), true);
+      });
+      new ResizeObserver(place).observe(el);
+      const start = Number(saved[w]);
+      apply(w, Number.isFinite(start) && start > 0 ? start : sd.def, false);
+    }
+    narrow.addEventListener("change", place);
+    addEventListener("resize", place);
+    // the app shows/hides panels (home vs. document): re-place on class/hidden changes (not on our own handles)
+    new MutationObserver((rs) => { if (rs.some((r) => !r.target.classList?.contains("panel-resize"))) requestAnimationFrame(place); })
+      .observe(document.body, { attributes: true, subtree: true, attributeFilter: ["hidden", "class"] });
+    requestAnimationFrame(place);
+    return { set: (w, px) => sides[w] && apply(w, px, true), reset: (w) => sides[w] && apply(w, sides[w].def, true), place };
+  }
+
   function mount(opts) {
     S.opts = opts;
     let top = $(opts.host);
@@ -525,6 +603,8 @@
       else if (k === "s" && !e.shiftKey && opts.save) { e.preventDefault(); opts.save(); }
       else if (k === "," && !e.shiftKey) { e.preventDefault(); settings(); }
     });
+    // draggable inner edges of the side panels (≥1100px): --left-w / --right-w on <html>
+    const resize = opts.resize ? mountResize(opts.app ?? "app", opts.resize) : null;
     // back to wide: drawers close
     matchMedia("(max-width: 1100px)").addEventListener("change", (m) => { if (!m.matches) { drawer("left", false); drawer("right", false); } });
 
@@ -532,6 +612,7 @@
       el: top,
       slots: { lead, primary, right },
       drawer,
+      resize,
       setName(n) { if (nameEl) { nameEl.textContent = n ?? ""; pick.title = n ?? ""; } },
       /** state: saved saving dirty syncing unsynced error | null (hidden). label/title/action override per call. */
       setStatus(state, o = {}) {
