@@ -17,11 +17,13 @@
 //! | GET/PUT | /api/characters/{id} | `{ id, name, persona, voice }` / `{ name?, persona?, voice? }` |
 //! | GET/PUT/DELETE | /api/characters/{id}/{avatar\|full}/{state} | the picture (GET follows the state's fallback chain, `full` then the portrait); PUT = the picture bytes (png, jpg, webp, svg, ≤ 10 MB); DELETE = empty the slot |
 //! | POST | /api/chat | `{ messages, character?, engine? }` → the reply as server-sent events ([`chat`]) |
+//! | POST | /api/kb/recall | `{ id, outcome }` → a review outcome through KnowledgeBase's API while it runs ([`kbctx`]) |
 
 pub mod api;
 pub mod characters;
 pub mod chat;
 pub mod config;
+pub mod kbctx;
 pub mod llm;
 pub mod store;
 
@@ -58,6 +60,8 @@ pub struct AppState {
     pub llm: llm::Llm,
     /// The desktop app, when there is one.
     pub hook: Option<DesktopHook>,
+    /// The author's KnowledgeBase, read-only ([`kbctx`]).
+    pub kb: kbctx::Kb,
     /// One writer of the two settings files at a time.
     pub(crate) write: Mutex<()>,
 }
@@ -74,14 +78,16 @@ impl AppState {
                 None
             }
         };
-        Arc::new(AppState { home, dir, web, llm, hook, write: Mutex::new(()) })
+        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), write: Mutex::new(()) })
     }
 
     /// The real engines (`private/LoreEcho/tasks.toml` may override the task's model).
     pub fn system(home: lore_home::Home, web: PathBuf, hook: Option<DesktopHook>) -> Shared {
         let user_tasks = home.app_dir(config::APP).map(|d| d.join("tasks.toml"));
         let llm = llm::Llm::new(Some(home.clone()), user_tasks.as_deref());
-        AppState::new(home, web, llm, hook)
+        let s = AppState::new(home, web, llm, hook);
+        s.kb.use_system();
+        s
     }
 
     pub(crate) fn tell(&self, e: DesktopEvent) {
@@ -137,7 +143,7 @@ fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
     for (path, mime, body) in lore_shell::FILES {
         kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
     }
-    api::routes().with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
+    api::routes().route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`config.port` (0 = any free port); the address, the state and the server.

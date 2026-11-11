@@ -1,0 +1,18 @@
+{
+  "id": "nAAAAAAAAAAAAAAAAAAAAAAAAA1",
+  "kind": "concept",
+  "title": "傅立葉轉換",
+  "aliases": [
+    "Fourier transform"
+  ],
+  "summary": "把訊號拆成不同頻率的正弦波，看每個頻率有多少。",
+  "sources": [
+    {
+      "type": "book",
+      "ref": "isbn:0",
+      "title": "Signals, a primer"
+    }
+  ],
+  "created_at": "2026-10-01T09:00:00Z",
+  "updated_at": "2026-10-01T09:00:00Z"
+}

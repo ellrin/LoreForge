@@ -16,6 +16,10 @@ lore-llm = { path = "../commons/crates/lore-llm" }
 # The shared 模型 tab (/api/engines, /api/links/*) and UI kit (icons.js, base.css, shell.js).
 lore-engines = { path = "../commons/crates/lore-engines" }
 lore-shell = { path = "../commons/crates/lore-shell" }
+# The author's KnowledgeBase cards, read from disk (never written); reviews go through its API.
+kb-core = { path = "../commons/crates/kb-core" }
+lore-store = { path = "../commons/crates/lore-store" }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

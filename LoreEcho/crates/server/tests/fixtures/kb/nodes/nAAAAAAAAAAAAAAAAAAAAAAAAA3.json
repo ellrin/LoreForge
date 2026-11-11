@@ -1,0 +1,12 @@
+{
+  "id": "nAAAAAAAAAAAAAAAAAAAAAAAAA3",
+  "kind": "concept",
+  "title": "取樣定理",
+  "aliases": [
+    "Nyquist"
+  ],
+  "summary": "取樣頻率要大於訊號最高頻率的兩倍，才能完整還原。",
+  "sources": [],
+  "created_at": "2026-10-03T09:00:00Z",
+  "updated_at": "2026-10-03T09:00:00Z"
+}

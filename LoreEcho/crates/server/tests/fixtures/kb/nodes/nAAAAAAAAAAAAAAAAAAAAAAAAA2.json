@@ -1,0 +1,12 @@
+{
+  "id": "nAAAAAAAAAAAAAAAAAAAAAAAAA2",
+  "kind": "concept",
+  "title": "卷積",
+  "aliases": [
+    "convolution"
+  ],
+  "summary": "一個訊號滑過另一個、逐點相乘再加總；在頻率上等於相乘。",
+  "sources": [],
+  "created_at": "2026-10-02T09:00:00Z",
+  "updated_at": "2026-10-02T09:00:00Z"
+}

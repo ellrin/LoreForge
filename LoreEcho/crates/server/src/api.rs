@@ -251,5 +251,6 @@ async fn chat_post(State(s): State<Shared>, body: Option<Json<chat::ChatBody>>) 
         Ok(r) => r,
         Err(payload) => return (StatusCode::SERVICE_UNAVAILABLE, Json(payload)).into_response(),
     };
-    chat::stream(route, chat::request(&character, messages)).into_response()
+    let kb = crate::kbctx::Pre::new(&s, &b.messages, b.kb.clone());
+    chat::stream(route, chat::request(&character, messages), Some(kb)).into_response()
 }

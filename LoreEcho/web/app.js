@@ -336,6 +336,7 @@ function newChat() {
   clearTimeout(S.timers.wait); clearTimeout(S.timers.mood);
   S.msgs = [];
   S.line = null;
+  window.LoreEchoKb?.clear();
   $("hist").replaceChildren();
   setLine(GREETING, "empty");
   S.chip.actual("");
@@ -368,7 +369,7 @@ async function send(engine) {
   try {
     const r = await fetch("/api/chat", {
       method: "POST", headers: { "content-type": "application/json" }, signal: ctrl.signal,
-      body: JSON.stringify({ messages: S.msgs, character: S.char?.id, engine }),
+      body: JSON.stringify({ messages: S.msgs, character: S.char?.id, engine, kb: window.LoreEchoKb?.ask() }),
     });
     if (!r.ok || !(r.headers.get("content-type") || "").startsWith("text/event-stream")) {
       const data = await r.json().catch(() => ({}));
@@ -377,7 +378,8 @@ async function send(engine) {
     }
     for await (const [ev, data] of events(r.body)) {
       if (ctrl.signal.aborted) return;
-      if (ev === "start") { S.chip.actual(data.label); }
+      if (ev === "search" || ev === "cards") window.LoreEchoKb?.event(ev, data);   // kbcards.js
+      else if (ev === "start") { S.chip.actual(data.label); }
       else if (ev === "delta") { if (!reply) { clearTimeout(S.timers.wait); setState("speaking"); } reply += data.text; setLine(reply, "pending"); }
       else if (ev === "done") { reply = data.text || reply; }
       else if (ev === "error") { if (reply) keep(reply); failed(data.error); return; }

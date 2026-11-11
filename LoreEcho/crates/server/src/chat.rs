@@ -7,6 +7,8 @@
 //!
 //! | event | data |
 //! |---|---|
+//! | `search` | `{}` the author's KnowledgeBase is being read (only when there is one) |
+//! | `cards` | `{ cards, intent, quiz?, grade?, recorded?, notice?, available }` the cards this turn uses ([`crate::kbctx`]) |
 //! | `start` | `{ engine, label }` (label 「本機 Gemma 4 12B」／「Claude Sonnet」, the catalog's name) |
 //! | `delta` | `{ text }` the next piece |
 //! | `done` | `{ engine, text }` the whole reply |
@@ -48,6 +50,9 @@ pub struct ChatBody {
     pub character: Option<String>,
     /// `local` | `claude`: only that engine (the one-click alternative).
     pub engine: Option<String>,
+    /// The page's KnowledgeBase context (quiz in progress, cards of the last reply).
+    #[serde(default)]
+    pub kb: Option<crate::kbctx::Ask>,
 }
 
 /// The persona, the character's name and the fixed brevity rule.
@@ -93,13 +98,18 @@ fn event(name: &str, data: serde_json::Value) -> Event {
     Event::default().event(name).data(data.to_string())
 }
 
-/// Run `req` on `route` and stream it. Stops the call when the page goes away.
-pub fn stream(route: lore_llm::Route, req: LlmRequest) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+/// Run `req` on `route` and stream it, after `kb` (the turn's KnowledgeBase cards: `search`,
+/// `cards`, the prompt note). Stops the call when the page goes away.
+pub fn stream(route: lore_llm::Route, req: LlmRequest, kb: Option<crate::kbctx::Pre>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     let engine = route.provider.id();
-    let _ = tx.send(event("start", json!({ "engine": engine, "label": crate::llm::engine_label(&engine) })));
-    let req = route.apply(req);
     tokio::spawn(async move {
+        let req = match kb {
+            Some(kb) => kb.run(req, |name, data| { let _ = tx.send(event(name, data)); }).await,
+            None => req,
+        };
+        let _ = tx.send(event("start", json!({ "engine": engine, "label": crate::llm::engine_label(&engine) })));
+        let req = route.apply(req);
         let pieces = tx.clone();
         let on = move |ev: StreamEvent| {
             if let StreamEvent::Text { text } = ev

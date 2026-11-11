@@ -1,0 +1,12 @@
+{
+  "id": "nAAAAAAAAAAAAAAAAAAAAAAAAA5",
+  "kind": "concept",
+  "title": "梯度",
+  "aliases": [
+    "gradient"
+  ],
+  "summary": "函數增加最快的方向。",
+  "sources": [],
+  "created_at": "2026-10-05T09:00:00Z",
+  "updated_at": "2026-10-05T09:00:00Z"
+}
