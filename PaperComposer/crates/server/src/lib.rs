@@ -33,6 +33,7 @@ pub mod settings;
 pub mod texfonts;
 pub mod texmeasure;
 pub mod thumb;
+mod todeck; // todeck.js: 做成簡報 (SlideComposer makes the deck)
 pub mod wizard;
 pub mod word;
 
@@ -3352,6 +3353,7 @@ pub fn router(paths: Paths) -> Router {
         .merge(opened::routes())
         .merge(notation::routes())
         .merge(shell::routes())
+        .merge(todeck::routes())
         // GET/PUT /api/engines (the gear's 模型) and POST /api/links/open, shared by every app
         .merge(lore_engines::router(engines_settings(&state)))
         // the UI is read fresh each time: a new server must not meet an old script
