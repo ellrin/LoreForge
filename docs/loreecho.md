@@ -47,7 +47,7 @@ icon 草圖：`docs/assets/loreecho-logo-draft.svg`（賽博龐克機器人頭�
 | 按鈕 | 做什麼 | 存到哪 |
 |---|---|---|
 | 整理成筆記 | 把這段討論整理成完整筆記（問題、討論過程、結論、待查） | **PaperComposer 新增的「筆記」功能**（§5） |
-| 做成知識卡 | 抽出 1–N 張卡的候選（標題、內容、標籤、連結到既有卡），逐張勾選 | KnowledgeBase（新卡預設 `learning`） |
+| 做成知識卡 | 抽出 1–N 張卡的候選（標題、內容、標籤、連結到既有卡），逐張勾選 | KnowledgeBase 的**待審區**（作者定案），回 KB 確認後才變成正式卡（`learning`） |
 | 記下靈感 | 一句話的快速記錄，不整理 | 筆記的「靈感」收件匣 |
 
 寫入的路徑：對方 app 開著時走它的 API（`ports.json` 找埠，例如 KB 的 `POST /api/nodes`），
@@ -55,10 +55,10 @@ icon 草圖：`docs/assets/loreecho-logo-draft.svg`（賽博龐克機器人頭�
 
 ## 5. PaperComposer 新增「筆記」
 
-- 位置：`private/PaperComposer/notes/<日期>-<標題>.md`（或 `.tex`，見 §9），前面一段 front matter：
+- 位置：`private/PaperComposer/notes/<日期>-<標題>.tex`（作者定案：**LaTeX**，可以直接用進論文），前面一段 front matter：
   來源（學習夥伴／手寫）、建立時間、相關的 KB 卡 id、標籤。
 - PaperComposer 上方列加「筆記」：清單、閱讀、編輯；可以「插入到論文」（之後再做）。
-- 牽涉 LaTeX 的部分照 `lore-notation`：方程式用登記過的巨集，產生的文字跑它的檢查。
+- 一律照 `lore-notation`：方程式用登記過的巨集、參照用 `\\ref{…}`、產生的文字跑它的檢查，存檔前檢查不過就先給作者看。
 
 ## 6. 人物（全部在 private）
 
@@ -72,19 +72,22 @@ private/<App>/characters/<id>/
 - 可以有多個人物，在齒輪裡切換；`private-example/<App>/` 只放一個中性的範本人物（用 icon 的輪廓當 avatar）。
 - 上傳幾張圖 → 裁切成四種狀態（第一版手動指定，之後可以讓模型幫忙去背／挑表情）。
 
-## 7. 語音
+## 7. 語音（macOS，Apple 內建）
 
-新的共用 crate `commons/crates/lore-voice`（`commons/CLAUDE.md` 早就留了名字，但還不存在）：
+作者定案（2026-11-11）：**先做 macOS，語音走 Apple 內建（Apple Intelligence 那一套）**。
+共用 catalog 早就把它們列為預設：`ears = apple-speech`（`SpeechTranscriber`）、`mouth = macos-voices`，0 GB、由系統下載。
 
-| 部分 | 第一版 | 之後 |
-|---|---|---|
-| 聽（STT） | whisper.cpp 本機（中文夠好）；或 macOS 內建語音辨識 | — |
-| 說（TTS） | macOS 內建聲音（`AVSpeechSynthesizer`），零設定 | 本機可複製聲音的 TTS（例如 GPT-SoVITS／F5-TTS／CosyVoice 這類，用幾十秒參考音就能做中文聲線）；每個人物一個聲音 |
-| 常駐 | 按鈕切換：麥克風一直開，VAD（偵測有人說話）切句；收合時只亮光環 | 喚醒詞（可選） |
+| 部分 | 做法 |
+|---|---|
+| 聽（STT） | Apple `SpeechAnalyzer`／`SpeechTranscriber`（裝置上辨識）；catalog 的摘要目前寫「英、日」，**中文（台灣）是否支援要在真機上確認**，不行時退回舊的 `SFSpeechRecognizer`（zh-TW） |
+| 說（TTS） | `AVSpeechSynthesizer`，系統聲音（Premium／加強版中文聲音在系統設定免費下載）；每個人物可指定一個聲音 |
+| 自訂聲音 | 先看 Apple 的 Personal Voice（在系統設定錄音、裝置上訓練，app 經授權後可用）是否支援中文；不支援再考慮本機可複製聲線的 TTS（之後的事，受 §8 管理） |
+| 常駐 | 按鈕切換：麥克風一直開，用語音辨識本身的停頓切句；收合時只亮光環。喚醒詞之後再說 |
 
-- 預設是按住說話；常駐要你自己打開，關掉面板不會自動常駐。
-- 測試只用假的 STT／TTS 引擎；真的引擎標 **not tested on real hardware**。
-- 語音模型和本機 LLM 一樣放在 `LOCAL_LLM_HOME`，也受 §8 的記憶體管理。
+- 這些都是 Swift／Apple 框架，Rust 這邊透過一個小的 Swift 輔助程式（或 Tauri 外掛）呼叫；共用的介面放在 `commons/crates/lore-voice`（`commons/CLAUDE.md` 早就留了名字），NeonDeck 是現成的 Swift 專案可參考。
+- 預設是按住說話；常駐要你自己打開。
+- 測試只用假的 STT／TTS；Apple 引擎一律標 **not tested on real hardware**（雲端是 Linux，跑不了）。
+- 之後可以評估：Apple 裝置上的 Foundation Models 當成另一個「本機腦」，不佔 llama-server 的記憶體（要確認中文品質）。
 
 ## 8. 本機模型共用與優先權（對所有 app 都有用）
 
@@ -108,10 +111,10 @@ private/<App>/characters/<id>/
 ## 9. 待作者決定
 
 1. ~~名稱~~ → **LoreEcho**：資料夾 `LoreEcho/`、`private/LoreEcho/`，短名 `le`（`lore-le://`、`ports.json` 的 `le`），任務前綴 `le-`。
-2. **筆記格式**：Markdown（好讀、好整理）還是 LaTeX（直接可貼進論文，要過 `lore-notation`）？
-3. **新知識卡**：直接進 KB（`learning`），還是先進「待審」區，回 KB 再確認？
+2. ~~筆記格式~~ → **LaTeX**（`.tex`，過 `lore-notation`）。
+3. ~~新知識卡~~ → **先進待審區**，在 KB 確認後才成為正式卡。KB 需要新增待審區（清單＋確認／修改／丟掉）。
 4. ~~模型管家~~ → 先採**獨立的小背景程序** `lore-modeld`（2026-11-11 開工，作者說「開始做」時採用建議值；要改再說）。
-5. **平台**：只做 macOS（透明置頂視窗、系統聲音最順），還是也要 Windows？
+5. ~~平台~~ → **先做 macOS**；語音配 Apple 內建（§7）。
 
 ## 10. 建議的施工順序
 
