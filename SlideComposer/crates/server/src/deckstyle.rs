@@ -147,7 +147,7 @@ pub struct Profile {
 // ── Reading a deck ───────────────────────────────────────────────────────────
 
 /// Placeholders that are never content.
-fn chrome_ph(o: &Object) -> bool {
+pub fn chrome_ph(o: &Object) -> bool {
     matches!(o.ph.as_deref(), Some("ftr" | "sldNum" | "dt" | "hdr"))
 }
 
@@ -158,13 +158,13 @@ pub fn body_of(o: &Object) -> Option<&TextBody> {
     }
 }
 
-fn norm_text(s: &str) -> String {
+pub fn norm_text(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
 /// Text and pictures repeated on many slides of one deck (footers, confidential marks,
 /// presenter lines, logos): normalised text and picture assets.
-fn boilerplate(deck: &Deck) -> (BTreeSet<String>, BTreeSet<String>) {
+pub fn boilerplate(deck: &Deck) -> (BTreeSet<String>, BTreeSet<String>) {
     let n = deck.slides.len();
     let mut texts: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
     let mut pics: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
@@ -222,7 +222,7 @@ pub fn role_of_title(title: &str) -> Option<&'static str> {
     }
     let rules: [(&str, &[&str]); 12] = [
         ("thanks", &["thank", "謝謝", "感謝", "q&a", "q & a", "any question"]),
-        ("takeaway", &["take home", "take-home", "takeaway", "take away", "conclusion", "結論", "總結", "summary"]),
+        ("takeaway", &["take home", "take-home", "takeaway", "take away", "key message", "lessons", "conclusion", "結論", "總結", "summary"]),
         ("opinion", &["opinion", "discussion", "comment", "my view", "thought", "limitation", "心得", "討論", "看法"]),
         ("ablation", &["ablation", "消融"]),
         ("visual", &["visuali", "qualitative", "case stud", "failure case", "examples", "視覺化"]),
@@ -265,6 +265,17 @@ pub fn classify(titles: &[String]) -> Vec<String> {
             seen_method = true;
         }
         out.push(role);
+    }
+    // keyword-less slides between the last background page and the first loss / training /
+    // results page are the method's modules ("Encoder", "Fusion")
+    let first_late = out.iter().position(|r| matches!(r.as_str(), "loss" | "training" | "results" | "ablation"));
+    let last_bg = (0..first_late.unwrap_or(0)).rev().find(|&i| matches!(out[i].as_str(), "challenge" | "overview") || (out[i] == "background" && role_of_title(&titles[i]) == Some("background")));
+    if let (Some(end), Some(start)) = (first_late, last_bg) {
+        for i in start + 1..end {
+            if out[i] == "background" && role_of_title(&titles[i]).is_none() {
+                out[i] = "method".into();
+            }
+        }
     }
     out
 }
@@ -335,7 +346,7 @@ fn starts_with_verb(s: &str) -> bool {
 }
 
 /// Non-empty paragraphs counted as bullets of a body object.
-fn bullet_count(o: &Object) -> usize {
+pub fn bullet_count(o: &Object) -> usize {
     let Some(b) = body_of(o) else { return 0 };
     let body_ph = matches!(o.ph.as_deref(), Some("body" | "obj"));
     b.paras
@@ -677,7 +688,7 @@ pub fn profile_of(decks: &[Deck]) -> Option<Profile> {
     let mut acc = Acc::default();
     let mut seen = BTreeSet::new();
     for d in decks.iter().filter(|d| qualifies(d)) {
-        let sig = lore_canvas::fp(&(d.slides.len(), d.slides.iter().map(|s| title_text(s, d.size.h)).collect::<Vec<_>>()));
+        let sig = lore_canvas::fp(&d.slides);
         if !seen.insert(sig) {
             continue;
         }

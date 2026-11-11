@@ -32,6 +32,7 @@ pub mod kbterms;
 pub mod llm;
 mod notation;
 mod reader;
+pub mod deckpolish;
 pub mod deckstyle;
 pub mod todeck;
 
@@ -201,6 +202,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/decks/import", post(import).layer(DefaultBodyLimit::max(300 * 1024 * 1024)))
         .route("/api/decks/{name}", get(open))
         .route("/api/decks/{name}/ops", post(ops))
+        .route("/api/decks/{name}/polish", get(deckpolish::get_report).post(deckpolish::run))
+        .route("/api/decks/{name}/polish/{item}", post(deckpolish::item))
         .route("/api/decks/{name}/undo", post(undo))
         .route("/api/decks/{name}/redo", post(redo))
         .route("/api/decks/{name}/reveal", post(do_reveal))
