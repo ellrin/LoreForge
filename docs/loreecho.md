@@ -70,6 +70,8 @@ private/<App>/characters/<id>/
   voice/           聲音設定；自訓聲音的參考音檔或模型路徑
 ```
 
+- **狀態（2026-11-11 作者要求至少 8 種）**：`idle` 待機 · `listening` 聽 · `thinking` 想 · `speaking` 說 · `happy` 開心 · `unsure` 不確定 · `surprised` 驚訝 · `waiting` 等待（長時間工作）· `searching` 查知識庫 · `noting` 記筆記。`avatar/`（縮圖、泡泡用）和 `full/`（對話人物、展開視窗用）**各自**每個狀態一張，都能換；缺的狀態依序退回 `idle`（`searching`→`thinking`→`idle`、`noting`→`speaking`→`idle`、`waiting`→`thinking`→`idle`、其他→`idle`），缺圖不會壞。
+- 齒輪的 app 分頁「人物」：名稱、個性、每個狀態一格拖放區（縮圖和全身各一排，附預覽）、切換人物、匯出／匯入人物資料夾。圖存在 `private/LoreEcho/characters/<id>/`（工具資料），不進 repo。
 - 可以有多個人物，在齒輪裡切換；`private-example/<App>/` 只放一個中性的範本人物（用 icon 的輪廓當 avatar）。
 - 上傳幾張圖 → 裁切成四種狀態（第一版手動指定，之後可以讓模型幫忙去背／挑表情）。
 
@@ -91,6 +93,8 @@ private/<App>/characters/<id>/
 - 之後可以評估：Apple 裝置上的 Foundation Models 當成另一個「本機腦」，不佔 llama-server 的記憶體（要確認中文品質）。
 
 ## 8. 本機模型共用與優先權（對所有 app 都有用）
+
+> **2026-11-11 作者改定，本節被 `docs/local-models.md` 取代**：不做獨立管家程式，改成每個 app 內建同一套共用規則（`lore-llm` 的 `shared_runtime`），一次只留一個模型。以下保留作為歷史。
 
 現況：`LocalRuntime` 在**一個程序內**保證只開一個 llama-server，由 PaperComposer 開；其他 app 讀
 `private/shared/engine.toml` 的 url 連過去。沒有人管「誰先」，PaperComposer 關了模型也跟著停。
@@ -114,7 +118,7 @@ private/<App>/characters/<id>/
 1. ~~名稱~~ → **LoreEcho**：資料夾 `LoreEcho/`、`private/LoreEcho/`，短名 `le`（`ports.json` 的 `le`；**沒有** `lore-le://`，其他 app 不需要打開它），任務前綴 `le-`。
 2. ~~筆記格式~~ → **LaTeX**（`.tex`，過 `lore-notation`）。
 3. ~~新知識卡~~ → **先進待審區**，在 KB 確認後才成為正式卡。KB 需要新增待審區（清單＋確認／修改／丟掉）。
-4. ~~模型管家~~ → 先採**獨立的小背景程序** `lore-modeld`（2026-11-11 開工，作者說「開始做」時採用建議值；要改再說）。
+4. ~~模型管家~~ → ~~先採獨立的小背景程序 `lore-modeld`~~ → **2026-11-11 改定**：每個 app 內建共用規則，見 `docs/local-models.md`。
 5. ~~平台~~ → **先做 macOS**；語音配 Apple 內建（§7）。
 
 ## 10. 建議的施工順序
