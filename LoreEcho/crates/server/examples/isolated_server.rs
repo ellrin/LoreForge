@@ -1,7 +1,7 @@
 //! The server on a throwaway folder (the example data copied in), with no model, keychain or
 //! `claude` CLI, for trying the UI: `cargo run -p le-server --example isolated_server -- <empty folder> [port]`.
 //! `--kb` adds the synthetic KnowledgeBase space of the tests (copied into the folder, member
-//! `ellrin`, KnowledgeBase not running); `--mock "<reply>"` answers every message with that reply.
+//! `ellrin`, KnowledgeBase not running); `--mock "<reply>"` answers every message with that reply (several `--mock`: in turn, the last one forever).
 //! `LOREECHO_VOICE=1`: with the system's voice (the Apple engines on macOS; it plays sound).
 //! `LOREECHO_VOICE=paced`: a silent voice that "speaks" 5 characters a second with word events
 //! (to look at 文字跟著聲音 without sound).
@@ -28,12 +28,15 @@ async fn main() {
     let flag = |name: &str| rest.iter().position(|a| a == name);
     copy_dir(&le_server::config::repo_dir().join("../private-example/LoreEcho"), &root.join("private-example/LoreEcho"));
     std::fs::create_dir_all(root.join("private")).expect("create private");
-    let llm = match flag("--mock").and_then(|i| rest.get(i + 1)) {
-        Some(reply) => {
-            let mock = std::sync::Arc::new(lore_llm::MockProvider::new(vec![reply.clone()]).named("mock:local"));
+    // every `--mock "<reply>"`, in order (the last one forever): e.g. a chat reply, then the
+    // JSON of 整理成筆記, then that of 做成知識卡
+    let replies: Vec<String> = rest.iter().enumerate().filter(|(_, a)| *a == "--mock").filter_map(|(i, _)| rest.get(i + 1).cloned()).collect();
+    let llm = match replies.is_empty() {
+        false => {
+            let mock = std::sync::Arc::new(lore_llm::MockProvider::new(replies).named("mock:local"));
             le_server::llm::Llm::with_factory(lore_llm::router::MockFactory::default().with("local:current", mock))
         }
-        None => le_server::llm::Llm::none(),
+        true => le_server::llm::Llm::none(),
     };
     let voice = match std::env::var("LOREECHO_VOICE").as_deref() {
         Ok("paced") => lore_voice::Voice::new(Box::new(Paced::default())),

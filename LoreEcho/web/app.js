@@ -150,7 +150,7 @@ async function whileState(state, work) {
   finally { if (S.state === state) setState(S.busy ? "thinking" : before === "listening" ? "idle" : before); }
 }
 // voice.js (the mic, 朗讀回覆, the theme song) reads and drives the page through these
-window.LoreEcho = { setState, whileState, state: () => S.state, busy: () => !!S.busy, send: () => send(), character: () => S.char, reloadCharacters: () => refreshChars() };
+window.LoreEcho = { setState, whileState, messages: () => S.msgs.slice(), state: () => S.state, busy: () => !!S.busy, send: () => send(), character: () => S.char, reloadCharacters: () => refreshChars() };
 
 /** A simple cue in a finished reply: happy | unsure | surprised | null. */
 function moodOf(text) {
@@ -185,7 +185,7 @@ function characterMenu() {
   LoreShell.menu($("nametag"), items);
 }
 
-// ── 功能列表: choice rows (design §4), wired in a later phase ─────
+// ── 功能列表: choice rows (design §4); the previews are actions.js ─────
 function choiceRows() { return [...document.querySelectorAll("#choices .choice")]; }
 
 function toggleChoices(on = $("choices").hidden) {
@@ -196,7 +196,7 @@ function toggleChoices(on = $("choices").hidden) {
 
 function wireChoices() {
   for (const b of choiceRows()) {
-    b.addEventListener("click", () => LoreShell.toast(`「${b.querySelector(".label").textContent}」下一階段才會有`));
+    b.addEventListener("click", () => { toggleChoices(false); window.LoreEchoActions?.run(b.dataset.tool); });
     b.addEventListener("mouseenter", () => b.focus({ preventScroll: true }));
   }
   $("choices").addEventListener("keydown", (e) => {
@@ -303,6 +303,7 @@ function wire() {
     if (e.key !== "Escape" || !S.expanded || document.querySelector("dialog[open]") || document.querySelector(".menu, .ask")) return;
     e.preventDefault();
     if (window.LoreVoice?.escape()) return;      // speaking or listening: Esc stops that first
+    if (window.LoreEchoActions?.escape()) return;   // a 功能列表 preview: closed when untouched, kept when edited
     if (!$("choices").hidden) { toggleChoices(false); $("text").focus(); }
     else show(false);
   });
@@ -343,6 +344,7 @@ function newChat() {
   S.msgs = [];
   S.line = null;
   window.LoreEchoKb?.clear();
+  window.LoreEchoActions?.close();               // a preview of this conversation goes with it
   $("hist").replaceChildren();
   setLine(GREETING, "empty");
   S.chip.actual("");

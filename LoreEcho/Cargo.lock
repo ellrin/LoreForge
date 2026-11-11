@@ -2028,6 +2028,7 @@ dependencies = [
  "lore-engines",
  "lore-home",
  "lore-llm",
+ "lore-notation",
  "lore-shell",
  "lore-store",
  "lore-voice",
@@ -2187,6 +2188,14 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "lore-notation"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

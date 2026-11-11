@@ -40,7 +40,15 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   `tasks.toml`, class `ask`: `local:current` then `claude:selected`; local engine =
   `LOREECHO_LLM_URL` else the shared model id of `private/shared/engine.toml` on the machine's one
   llama-server (lore-llm `shared_runtime`, `../docs/local-models.md`; `llm::quit()` at exit); keys via
-  `SharedKeys::for_app("LoreEcho")`).
+  `SharedKeys::for_app("LoreEcho")`), `actions.rs` (功能列表, design §4/§4a: `/api/actions/note/{draft,check,save}`,
+  `/api/actions/cards/{draft,save}`; drafts = tasks `le-note` / `le-cards` (class `tidy`, one JSON reply via
+  `complete_json`, the conversation as one labelled text, the author's related cards from kbctx offered by id and
+  only those kept); the note's LaTeX through lore-notation (`check`: an empty registry, error = blocking, 422);
+  saves: PaperComposer's `POST /api/notes` while it runs (`Pc`: ports.json `pc`, else 7878, `GET /api/notes`
+  answers; pinned in tests), else the §4a file in `private/PaperComposer/notes/` (`write_note_file`, ADAPTER until
+  lore-notes lands; never overwrites); cards: KnowledgeBase's `POST /api/pending` while it runs, else
+  `kb_core::pending::add` on the member's personal space (only `pending/`); a refusal from a running app is shown,
+  never followed by a local copy; 記下靈感 = `kind: idea`, no model, `% & #` escaped).
   Theme, `/prefs.css`, lore-shell `FILES` and the lore-engines router exactly as in KnowledgeBase.
   `DesktopHook`: `PUT /api/window {expanded}` and `PUT /api/settings {shortcut}` reach the desktop app.
 - `apps/desktop` (`loreecho`): server in-process; one frameless, transparent, always-on-top window
@@ -53,8 +61,9 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
 - `web/`: no build step. Open window = `.figure` (left, only the picture, `--fig-scale`/`--fig-dy`
   from `figure`, may run off the bottom, overlaps the column by ≤ `--overlap`) + `.col` (right): card
   with the shared shell header (collapse · engine chip · 功能列表 toggle · 新對話 · gear with 一般 外觀
-  模型 快捷鍵 人物; 人物 = name, persona, per-state drop zones for 縮圖 and 對話人物, switch/new/export/import) and the quiet history, `.choices` (功能列表 as VN choice rows, ↑↓/Enter, disabled
-  「下一階段」 until phase 4), `.box` (name tag = character switcher, the current line, input row).
+  模型 快捷鍵 人物; 人物 = name, persona, per-state drop zones for 縮圖 and 對話人物, switch/new/export/import) and the quiet history, `.choices` (功能列表 as VN choice rows, ↑↓/Enter; a row opens
+  its preview from `actions.js` + `actions.css` in place of the history, KaTeX from `web/vendor/katex` loaded on first use,
+  Esc closes an untouched preview, 新對話/collapse close it, toast with 打開 = `LoreLinks.open("pc", {note})` / `("kb", {pending})`), `.box` (name tag = character switcher, the current line, input row).
   `styles.css` uses theme tokens only, the character pictures are shown as they are. The conversation lives only in the page (`S.msgs`); collapsing or
   新對話 clears it. Voice: `voice.js` (mic hold/continuous, 朗讀回覆 toggle, theme song button + ducking/fade, 一般 → 語音
   (麥克風, 說完就送出, 朗讀回覆, 文字跟著聲音), 人物 → 聲音 (個人聲音 group first, system voices of the character's language first,
@@ -64,12 +73,12 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   any speech; the whole reply stays in `S.msgs` and goes to the history; `LoreVoice.opened` warms the voice) and `profile.js` (人物 → 角色設定), hooked from app.js through `window.LoreVoice` / `window.LoreEcho`;
   `voice.css`. Desktop: `apps/desktop/Info.plist` (mic + speech usage strings, merged by the bundler), `build.rs` copies the
   helper to `bin/` (ignored) → `bundle.macOS.files` → `Contents/MacOS/lore-voice-helper`.
-  States in the page (`setState`, also `window.LoreEcho.setState / whileState`): listening while a message is typed (the voice phase reuses it for recording), thinking while waiting for the model, waiting after 8 s without a first token, speaking while streaming and while the voice reads the reply (`LoreVoice.afterReply` delays the mood), listening also while recording, happy/unsure/surprised from a keyword cue in the finished reply (`moodOf`, 4 s); searching while the server reads KnowledgeBase (SSE `search`, `web/kbcards.js`, which also draws the 「引用：…」 row under the line, opening cards with `LoreLinks.open("kb", {node})`, and 記得／忘了 after a quiz answer); noting (writing a note) has no signal yet: wrap the future call in `whileState`. The name tag shows the avatar of the current state.
+  States in the page (`setState`, also `window.LoreEcho.setState / whileState`): listening while a message is typed (the voice phase reuses it for recording), thinking while waiting for the model, waiting after 8 s without a first token, speaking while streaming and while the voice reads the reply (`LoreVoice.afterReply` delays the mood), listening also while recording, happy/unsure/surprised from a keyword cue in the finished reply (`moodOf`, 4 s); searching while the server reads KnowledgeBase (SSE `search`, `web/kbcards.js`, which also draws the 「引用：…」 row under the line, opening cards with `LoreLinks.open("kb", {node})`, and 記得／忘了 after a quiz answer); noting while a 功能列表 draft is written (`whileState` in actions.js). The name tag shows the avatar of the current state.
 - `../private-example/LoreEcho/`: one neutral character `echo` (avatars = the icon's outline, full bodies; all ten states in both rows).
 
 ## Rules
 
-- The server never writes a conversation anywhere. Tests use temp dirs (`Home::at`), the real
+- The server never writes a conversation anywhere (only what the author confirms in a 功能列表 preview; a pending card keeps his first question as `from_conversation`). Tests use temp dirs (`Home::at`), the real
   `private-example/LoreEcho` copied in, `MockProvider`/`MockFactory`, `router_isolated`; never real
   Claude, the `claude` CLI, llama-server or the network.
 - Transparency, the tray, the global shortcut, dragging from the page and multi-monitor placement

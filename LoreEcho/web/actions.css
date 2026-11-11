@@ -1,0 +1,60 @@
+/* 功能列表 previews (actions.js): in the card, in place of the history. Theme tokens only. */
+.act { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 0 0 var(--overlap); }
+.act-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 4px 10px; }
+.act-title { flex: 1; font-weight: 700; font-size: 13px; color: var(--accent-text); letter-spacing: .04em; }
+.act-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 8px 10px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.act-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); }
+.act-wait { flex: 1; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+.act-err { flex: 1; padding: 12px; color: var(--err); font-size: 13px; overflow-wrap: anywhere; }
+.act-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.act-engine { color: var(--faint); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.act .set-input { width: 100%; min-width: 0; }
+.act .act-name { font-weight: 700; font-size: 14px; }
+.act textarea { width: 100%; min-width: 0; resize: vertical; padding: 6px 8px; line-height: 1.5; font: inherit; color: var(--text);
+  background: var(--bg); border: 1px solid var(--line-strong); border-radius: var(--r); outline: none; }
+.act textarea:focus, .act .set-input:focus { border-color: var(--accent-text); }
+.act .act-src { min-height: 180px; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; }
+.act-note .act-src { flex: 1; }
+.act-field { display: flex; align-items: center; gap: 8px; }
+.act-field .k { flex: none; color: var(--muted); font-size: 12px; min-width: 3em; }
+
+/* the rendered note */
+.tex { line-height: 1.65; color: var(--text); padding: 2px 2px 4px; border-bottom: 1px dashed var(--line); }
+.tex h4 { margin: 10px 0 2px; font-size: 13.5px; color: var(--accent-text); }
+.tex h4:first-child { margin-top: 0; }
+.tex h5 { margin: 8px 0 2px; font-size: 13px; }
+.tex p { margin: 2px 0 6px; }
+.tex ul, .tex ol { margin: 2px 0 6px; padding-left: 1.4em; }
+.tex .eq { display: flex; align-items: center; gap: 8px; overflow-x: auto; }
+.tex .eq .katex-display { flex: 1; margin: 6px 0; }
+.tex .lbl, .tex .ref { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11px; color: var(--accent-text); background: var(--accent-soft); border-radius: 4px; padding: 0 4px; }
+
+/* lore-notation findings: blocking ones in the error colour */
+.findings { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.findings[hidden] { display: none; }
+.findings li { padding-left: 14px; position: relative; color: var(--muted); }
+.findings li::before { content: ""; position: absolute; left: 3px; top: .6em; width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
+.findings .f-warning::before { background: var(--warn, var(--accent)); }
+.findings .f-error { color: var(--err); }
+.findings .f-error::before { background: var(--err); }
+
+/* links to existing cards */
+.act-links { display: flex; flex-wrap: wrap; gap: 4px; }
+.link-chip { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 8px; height: 22px; border-radius: 11px; background: var(--accent-soft); color: var(--text); font-size: 12px; }
+.link-chip .x { border: 0; background: none; color: var(--muted); width: 18px; height: 18px; border-radius: 50%; font-size: 13px; line-height: 1; cursor: pointer; }
+.link-chip .x:hover { color: var(--text); background: var(--surface-hover); }
+
+/* candidate cards */
+.cands { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.cand { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.cand.off { opacity: .5; }
+.cand.off :is(textarea, .set-input:not(:first-child)) { pointer-events: none; }
+.cand-head { display: flex; align-items: center; gap: 8px; }
+.cand-head input[type="checkbox"] { flex: none; width: 16px; height: 16px; accent-color: var(--accent); }
+.cand .act-src { min-height: 72px; }
+.cand details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.cand details[open] summary { margin-bottom: 4px; }
+
+/* 記下靈感 */
+.act-idea { font-size: 15px; }
+.act-idea:only-child { margin-top: 4px; }

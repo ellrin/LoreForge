@@ -18,3 +18,25 @@ default = "local:current"
 fallback = "claude:selected"
 offline = true
 max_tokens = 1200
+
+# 功能列表 (design §4): 整理與格式 (class tidy: the local model when it is there, else Claude).
+# One JSON reply each, shown to the author as a preview; nothing is saved until he confirms.
+# 記下靈感 uses no model.
+
+[task.le-note]
+label = "LoreEcho 整理成筆記"
+class = "tidy"
+needs = { json = true, context = 16000 }
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+max_tokens = 3000
+
+[task.le-cards]
+label = "LoreEcho 做成知識卡"
+class = "tidy"
+needs = { json = true, context = 16000 }
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+max_tokens = 2500

@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="kbcards.css">
   <link rel="stylesheet" href="voice.css">
+  <link rel="stylesheet" href="actions.css">
   <link rel="stylesheet" href="prefs.css">
   <script src="theme.js"></script>
 </head>
@@ -33,9 +34,9 @@
         <ol class="hist" id="hist" aria-label="這次的對話" data-tauri-drag-region></ol>
       </section>
       <div class="choices" id="choices" role="group" aria-label="功能列表" hidden>
-        <button type="button" class="choice" aria-disabled="true" title="下一階段" data-tool="note"><span class="desc">把剛剛的討論整理成一篇筆記</span><span class="label">整理成筆記</span></button>
-        <button type="button" class="choice" aria-disabled="true" title="下一階段" data-tool="cards"><span class="desc">挑出值得記住的概念</span><span class="label">做成知識卡</span></button>
-        <button type="button" class="choice" aria-disabled="true" title="下一階段" data-tool="idea"><span class="desc">一句話先存起來</span><span class="label">記下靈感</span></button>
+        <button type="button" class="choice" data-tool="note"><span class="desc">把剛剛的討論整理成一篇筆記</span><span class="label">整理成筆記</span></button>
+        <button type="button" class="choice" data-tool="cards"><span class="desc">挑出值得記住的概念</span><span class="label">做成知識卡</span></button>
+        <button type="button" class="choice" data-tool="idea"><span class="desc">一句話先存起來</span><span class="label">記下靈感</span></button>
       </div>
       <section class="box" id="box" aria-label="對話框">
         <button type="button" class="nametag" id="nametag" aria-haspopup="menu" title="換人物"><img id="whoImg" class="who-img" alt="" draggable="false" hidden><span id="who">LoreEcho</span><span data-icon="chevron"></span></button>
@@ -64,6 +65,7 @@
   <script src="shell.js"></script>
   <script src="kbcards.js"></script>
   <script src="app.js"></script>
+  <script src="actions.js"></script>
   <script src="voice.js"></script>
   <script src="profile.js"></script>
 </body>

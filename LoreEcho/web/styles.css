@@ -75,14 +75,13 @@ html, body { background: transparent; height: 100%; overflow: hidden; }
 .hist .assistant { align-self: flex-start; color: var(--muted); }
 .hist .err { align-self: stretch; max-width: none; color: var(--err); }
 
-/* 功能列表 as choice rows (design §4; wired in a later phase) */
+/* 功能列表 as choice rows (design §4; the previews: actions.js / actions.css) */
 .choices { display: flex; flex-direction: column; gap: 6px; margin-left: calc(var(--overlap) - 8px); }
 .choice { display: flex; align-items: center; gap: 12px; min-height: 36px; padding: 6px 14px; border-radius: 8px; text-align: left; color: var(--text); font-size: 13px; }
 .choice .desc { flex: 1; min-width: 0; color: var(--muted); }
 .choice .label { font-weight: 700; white-space: nowrap; }
 .choice:hover, .choice:focus-visible { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); outline: none; }
 .choice:hover .desc, .choice:focus-visible .desc { color: inherit; opacity: .85; }
-.choice[aria-disabled="true"] { cursor: default; }
 
 /* the dialogue box: name tag on its top edge, the current line, the input row */
 .box { position: relative; margin-top: 12px; border-radius: 12px; background: color-mix(in srgb, var(--surface) 94%, transparent);
