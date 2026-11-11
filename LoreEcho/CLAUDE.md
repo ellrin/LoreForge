@@ -60,7 +60,7 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   (麥克風, 說完就送出, 朗讀回覆, 文字跟著聲音), 人物 → 聲音 (個人聲音 group first, system voices of the character's language first,
   better quality marked, Eloquence voices last in 其他（機械音）) + 試聽 / 更多聲音 hint / 個人聲音 state row / 語速 / 音調 / 主題曲;
   `LoreVoice.follow` = 文字跟著聲音: the line reveals per sentence when its utterance starts, by the voice's word events (exact
-  for system voices; paced at 4.5 chars/s until they come), whole on stop, cancel, the reply ending quietly or 4 s without
+  for system voices; paced at 4.5 chars/s until they come), whole on stop, cancel, the reply ending quietly or 4 s after the first queued sentence without
   any speech; the whole reply stays in `S.msgs` and goes to the history; `LoreVoice.opened` warms the voice) and `profile.js` (人物 → 角色設定), hooked from app.js through `window.LoreVoice` / `window.LoreEcho`;
   `voice.css`. Desktop: `apps/desktop/Info.plist` (mic + speech usage strings, merged by the bundler), `build.rs` copies the
   helper to `bin/` (ignored) → `bundle.macOS.files` → `Contents/MacOS/lore-voice-helper`.

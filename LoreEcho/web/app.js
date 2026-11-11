@@ -373,7 +373,7 @@ async function send(engine) {
   setLine("", "pending");
   S.chip.actual("");   // until this reply says which model answers, the prediction shows
   S.chip.busy(true);
-  let reply = "";
+  let reply = "", streamed = "";   // streamed: the deltas exactly (the spans of `say` count in it)
   // 文字跟著聲音: the line shows as the voice says it (voice.js), else as it streams
   const follow = window.LoreVoice?.follow?.(speak, setLine) ?? null;
   try {
@@ -390,12 +390,12 @@ async function send(engine) {
       if (ctrl.signal.aborted) return;
       if (ev === "search" || ev === "cards") window.LoreEchoKb?.event(ev, data);   // kbcards.js
       else if (ev === "start") { S.chip.actual(data.label); }
-      else if (ev === "delta") { if (!reply) { clearTimeout(S.timers.wait); setState("speaking"); } reply += data.text; if (follow) follow.text(reply); else setLine(reply, "pending"); }
+      else if (ev === "delta") { if (!reply) { clearTimeout(S.timers.wait); setState("speaking"); } reply += data.text; streamed += data.text; if (follow) follow.text(streamed); else setLine(reply, "pending"); }
       else if (ev === "say") follow?.say(data);
       else if (ev === "done") { reply = data.text || reply; }
       else if (ev === "error") { follow?.all(); if (reply) keep(reply); failed(data.error); return; }
     }
-    if (reply.trim()) keep(reply, follow);
+    if (reply.trim()) keep(reply, follow, streamed);
     else { follow?.all(); failed("沒有收到回答"); }
   } catch (e) {
     if (ctrl.signal.aborted) return;
@@ -417,10 +417,10 @@ async function send(engine) {
 
 /** A finished (or cut-off) reply: part of the conversation (whole, for the history), shown in
  *  the box (as the voice reaches it with 文字跟著聲音). */
-function keep(reply, follow) {
+function keep(reply, follow, streamed) {
   S.msgs.push({ role: "assistant", text: reply });
   S.line = reply;
-  if (follow) follow.final(reply); else setLine(reply);
+  if (follow) follow.final(streamed || reply); else setLine(reply);
 }
 
 /** A problem: in the box when nothing was said, else under the history; with

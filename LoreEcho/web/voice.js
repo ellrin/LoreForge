@@ -189,7 +189,7 @@
   // The chat stream says where each queued sentence is (`say {id, start, end, spoken}`, UTF-16
   // units of the reply); the voice events say when it starts, which word is being said (system
   // voices: exact) and when it ends. Text between sentences that is not said (a Markdown rule)
-  // shows when the next sentence starts. Nothing heard within WATCHDOG of the first text, the
+  // shows when the next sentence starts. Nothing heard within WATCHDOG of the first sentence queued, the
   // voice stopping, or the reply ending quietly: the whole reply shows.
   const WATCHDOG = 4000;
   const CPS = 4.5;   // characters a second, for a sentence without word events
@@ -213,10 +213,14 @@
       text(reply) {
         F.reply = reply;
         if (F.off) return paint(reply, "pending");
-        if (!F.dog && !F.begun) F.dog = setTimeout(() => { if (!F.begun) F.all(); }, WATCHDOG);
         F.draw();
       },
-      say(s) { F.spans.set(s.id, s); if (F.early.delete(s.id)) F.begin(s.id); },
+      say(s) {
+        F.spans.set(s.id, s);
+        // the voice was asked: if it never starts, show the text after all
+        if (!F.dog && !F.begun) F.dog = setTimeout(() => { if (!F.begun) F.all(); }, WATCHDOG);
+        if (F.early.delete(s.id)) F.begin(s.id);
+      },
       started(id) { if (F.spans.has(id)) F.begin(id); else F.early.add(id); },
       begin(id) {
         clearTimeout(F.dog); clearInterval(F.tick);
