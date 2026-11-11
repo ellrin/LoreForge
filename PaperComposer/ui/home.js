@@ -13,6 +13,7 @@ const PCHome = (() => {
     { id: "book", icon: "modeBook", label: "寫書", enabled: false },
     { id: "latex", icon: "openLatex", label: "開啟 LaTeX", enabled: true, onOpen: (card) => PCOpen.latex(card) },
     { id: "word", icon: "openWord", label: "開啟 Word", enabled: true, onOpen: (card) => PCOpen.word(card) },
+    { id: "notes", icon: "notebook", label: "筆記", enabled: true, onOpen: () => PCNotes.open() },
   ];
 
   let level = 1;
