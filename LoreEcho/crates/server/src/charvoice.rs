@@ -1,7 +1,7 @@
 //! A character's own voice (design §7, 自訂聲音): `characters/<id>/voice/`
 //!
 //! ```text
-//! voice.toml      mode = "system" | "design" | "accent" | "clone", pitch (semitones), taiwan
+//! voice.toml      mode = "design" (default; the system voice until a take is picked) | "accent" | "clone" | "system", pitch (semitones), taiwan
 //!                 (Taiwan readings), han (和 as hàn), [chosen] (the picked candidate: kind, description,
 //!                 apple_voice, text, seed), [clone] (text, consent)
 //! chosen.wav      the picked candidate (a designed voice or the Taiwan-accent take): what the
@@ -50,7 +50,7 @@ pub struct VoiceFile {
 
 impl Default for VoiceFile {
     fn default() -> Self {
-        VoiceFile { mode: "system".into(), pitch: 0.0, taiwan: true, han: false, chosen: None, clone: None }
+        VoiceFile { mode: "design".into(), pitch: 0.0, taiwan: true, han: false, chosen: None, clone: None }
     }
 }
 
@@ -349,7 +349,7 @@ mod tests {
         let c = characters::load(&app, "echo").unwrap();
         let r = template(Some(&app), &c);
         assert_eq!((r.voice.as_str(), r.custom.is_none()), ("apple.tw", true));
-        assert_eq!(view(&app, "echo").file.mode, "system");
+        assert_eq!(view(&app, "echo").file.mode, "design", "描述 is where the tab opens; nothing picked yet = the system voice");
     }
 
     #[test]
