@@ -47,7 +47,7 @@ LoreForge/
     SlideComposer/          風格包、簡報（SlideComposer-private）
     LoreReader/             論文的註記、引用句、對話（PDF 本身在 repo 外的書庫）
     PaperComposer/          句型、範本、論文（PaperComposer-private）
-    LoreEcho/               人物（立繪、頭像、個性）、視窗位置與設定（LoreEcho-private）
+    LoreEcho/               人物（立繪、頭像、個性）、視窗位置與設定（只在本機，不必是 git repo）
 ```
 
 讀取順序：`private/shared/<檔案>` → 沒有才用 `private-example/shared/<檔案>`。要個人化就把範本複製到 `private/shared/` 再改，公開的程式碼和範本都不用動。例如公司或買來的字型：字型檔裝在系統裡，名稱與代替規則寫在 `private/shared/fonts.toml`，App 執行時才讀進頁面，公開 repo 裡不會出現。
