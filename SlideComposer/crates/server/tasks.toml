@@ -14,3 +14,13 @@ default = "claude:selected"
 fallback = "local:current"
 offline = true
 max_tokens = 12000
+
+# An equation LoreReader could not read from the PDF's text: a vision engine reads its crop
+# (todeck/eqread.rs); a reading that does not typeset is shown as the crop instead.
+[task.sc-read-equation]
+label = "從截圖讀出方程式"
+class = "tidy"
+needs = { vision = true, json = true }
+default = "claude:selected"
+fallback = "local:current"
+max_tokens = 2000

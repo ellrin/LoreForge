@@ -147,6 +147,54 @@ pub struct Eq {
     pub id: String,
     pub latex: String,
     pub label: Option<String>,
+    /// Where it is in the PDF (LoreReader): page and `[x0, y0, x1, y1]` page fractions.
+    pub page: Option<u32>,
+    pub bbox: Option<[f64; 4]>,
+    /// How the LaTeX was read: `text` (the PDF's text), `vision` (a model read the crop),
+    /// `picture` (no reliable LaTeX: the slide shows `image`, the crop).
+    pub read: String,
+    pub image: Option<Img>,
+}
+
+impl Eq {
+    /// LaTeX a slide may show as an equation (not a picture-only one).
+    pub fn usable(&self) -> bool {
+        self.read != "picture" && !self.latex.trim().is_empty()
+    }
+}
+
+/// A symbol of the paper for the notes under an equation: its LaTeX and meaning, in the
+/// paper's registry language (`meaning`, the author's) and in English (`meaning_en`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct SymbolNote {
+    pub latex: String,
+    pub meaning: Option<String>,
+    pub meaning_en: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for SymbolNote {
+    /// Also the older `[latex, meaning]` pairs of a saved job.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum In {
+            Pair(String, String),
+            Full {
+                latex: String,
+                #[serde(default)]
+                meaning: Option<String>,
+                #[serde(default)]
+                meaning_en: Option<String>,
+            },
+        }
+        Ok(match In::deserialize(d)? {
+            In::Pair(latex, m) => {
+                let zh = m.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+                SymbolNote { latex, meaning: zh.then(|| m.clone()), meaning_en: (!zh).then_some(m) }
+            }
+            In::Full { latex, meaning, meaning_en } => SymbolNote { latex, meaning, meaning_en },
+        })
+    }
 }
 
 /// Everything the plan and the build use, from either source.
@@ -171,8 +219,8 @@ pub struct Material {
     pub notation: Notation,
     /// LoreReader's symbols.json (its rows are registered through `reader::register_into`).
     pub lr_symbols: Option<Value>,
-    /// Symbols of the paper's registry (LaTeX, meaning), for the notes under an equation.
-    pub symbols: Vec<(String, String)>,
+    /// Symbols of the paper's registry, for the notes under an equation.
+    pub symbols: Vec<SymbolNote>,
     /// Name for the deck folder.
     pub slug: String,
 }
@@ -200,7 +248,7 @@ pub fn jpeg_size(b: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-fn img_from(bytes: Vec<u8>, ext: &str) -> Option<Img> {
+pub(crate) fn img_from(bytes: Vec<u8>, ext: &str) -> Option<Img> {
     let (w, h) = match ext {
         "png" => png_size(&bytes)?,
         "jpg" | "jpeg" => jpeg_size(&bytes)?,
@@ -290,7 +338,7 @@ pub fn from_latex(dir: &Path, cache: &Path) -> Result<Material, String> {
             AssetKind::Table => m.tables.push(Fig { id: a.id.clone(), caption: a.caption.clone().unwrap_or_default(), image: None, grid: a.grid.clone().filter(|g| !g.is_empty()) }),
             AssetKind::Equation => {
                 if let Some(t) = a.text.as_deref().filter(|t| !t.trim().is_empty()) {
-                    m.equations.push(Eq { id: a.id.clone(), latex: t.trim().to_string(), label: a.label.clone() });
+                    m.equations.push(Eq { id: a.id.clone(), latex: t.trim().to_string(), label: a.label.clone(), read: "text".into(), ..Default::default() });
                 }
             }
             _ => {}
@@ -305,7 +353,8 @@ pub fn from_latex(dir: &Path, cache: &Path) -> Result<Material, String> {
         .entries
         .iter()
         .filter(|e| matches!(e.kind(), lore_notation::Kind::Symbol | lore_notation::Kind::Operator))
-        .filter_map(|e| Some((e.latex.clone()?, e.meaning.clone().or_else(|| e.meaning_en.clone())?)))
+        .filter_map(|e| Some(SymbolNote { latex: e.latex.clone()?, meaning: e.meaning.clone(), meaning_en: e.meaning_en.clone() }))
+        .filter(|n| n.meaning.is_some() || n.meaning_en.is_some())
         .collect();
     let who = match m.authors.len() {
         0 => String::new(),
@@ -356,49 +405,78 @@ pub fn from_lorereader(r: &Reader, sha: &str, cache: &Path) -> Result<Material, 
             _ => {}
         }
     }
-    // equations: LoreReader's own LaTeX (symbols.json), ids kept
-    for e in m.lr_symbols.as_ref().and_then(|v| v["equations"].as_array().cloned()).unwrap_or_default() {
-        let (Some(id), Some(latex)) = (e["id"].as_str(), e["latex"].as_str()) else { continue };
-        if !latex.trim().is_empty() {
-            m.equations.push(Eq { id: id.to_string(), latex: latex.trim().to_string(), label: None });
-        }
+    // equations: LoreReader's own LaTeX (symbols.json), ids and numbers kept
+    if let Some(v) = &m.lr_symbols {
+        m.equations = lr_equations(v);
+        m.symbols = lr_symbol_notes(v);
     }
     for r in &cat.references {
         m.refs.insert(r.key.clone(), r.text.trim().to_string());
     }
-    m.symbols = m
-        .lr_symbols
-        .as_ref()
-        .and_then(|v| v["entries"].as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|e| Some((e["latex"].as_str()?.to_string(), e["meaning"].as_str().or_else(|| e["meaning_en"].as_str())?.to_string())))
-        .filter(|(l, m)| !l.trim().is_empty() && !m.trim().is_empty())
-        .collect();
     m.slug = slug(&m.title);
     Ok(m)
 }
 
+/// LoreReader's display equations (symbols.json `equations`): the label is the paper's
+/// number (`(1)`); a paper bound twice (a manuscript and its marked-up copy) gives every
+/// equation twice — the second copy (same LaTeX, or the same number) is left out; an
+/// equation without LaTeX is left out.
+pub fn lr_equations(v: &Value) -> Vec<Eq> {
+    let mut out: Vec<Eq> = vec![];
+    let squeeze = |s: &str| s.split_whitespace().collect::<String>();
+    for e in v["equations"].as_array().into_iter().flatten() {
+        let (Some(id), Some(latex)) = (e["id"].as_str(), e["latex"].as_str()) else { continue };
+        let latex = latex.trim();
+        if latex.is_empty() {
+            continue;
+        }
+        let label = e["label"].as_str().map(str::to_string).or_else(|| e["number"].as_str().map(|n| format!("({n})"))).filter(|l| !l.trim().is_empty());
+        let dup = out.iter().any(|o| o.id == id || squeeze(&o.latex) == squeeze(latex) || (label.is_some() && o.label == label));
+        if dup {
+            continue;
+        }
+        let bbox = e["bbox"].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<_>>()).filter(|b| b.len() == 4 && b[2] > b[0] && b[3] > b[1]).map(|b| [b[0], b[1], b[2], b[3]]);
+        let page = e["page"].as_u64().map(|p| p as u32);
+        out.push(Eq { id: id.to_string(), latex: latex.to_string(), label, page, bbox, read: "text".into(), image: None });
+    }
+    out
+}
+
+/// LoreReader's symbol rows with a meaning (the author's / Claude's `meaning`, or the
+/// definition the program found, `meaning_en`).
+pub fn lr_symbol_notes(v: &Value) -> Vec<SymbolNote> {
+    let s = |e: &Value, k: &str| e[k].as_str().map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+    v["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| Some(SymbolNote { latex: s(e, "latex")?, meaning: s(e, "meaning"), meaning_en: s(e, "meaning_en") }))
+        .filter(|n| n.meaning.is_some() || n.meaning_en.is_some())
+        .collect()
+}
+
 impl Material {
+    fn pictures_mut(&mut self) -> impl Iterator<Item = (String, &mut Img)> {
+        let figs = self.figures.iter_mut().chain(self.tables.iter_mut()).filter_map(|f| Some((f.id.clone(), f.image.as_mut()?)));
+        let eqs = self.equations.iter_mut().filter_map(|e| Some((e.id.clone(), e.image.as_mut()?)));
+        figs.chain(eqs)
+    }
+
     /// Every picture's bytes into `dir` (`<id>.<ext>`), its file name kept in the picture.
     pub fn save_images(&mut self, dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        for f in self.figures.iter_mut().chain(self.tables.iter_mut()) {
-            if let Some(im) = f.image.as_mut() {
-                let name = format!("{}.{}", safe_name(&f.id), im.ext);
-                crate::jobs::write_atomic(&dir.join(&name), &im.bytes)?;
-                im.file = name;
-            }
+        for (id, im) in self.pictures_mut() {
+            let name = format!("{}.{}", safe_name(&id), im.ext);
+            crate::jobs::write_atomic(&dir.join(&name), &im.bytes)?;
+            im.file = name;
         }
         Ok(())
     }
 
     /// The pictures' bytes back from `dir`; a missing file is an error (the stage is redone).
     pub fn load_images(&mut self, dir: &Path) -> Result<(), String> {
-        for f in self.figures.iter_mut().chain(self.tables.iter_mut()) {
-            if let Some(im) = f.image.as_mut() {
-                im.bytes = std::fs::read(dir.join(&im.file)).map_err(|e| format!("{}: {e}", im.file))?;
-            }
+        for (_, im) in self.pictures_mut() {
+            im.bytes = std::fs::read(dir.join(&im.file)).map_err(|e| format!("{}: {e}", im.file))?;
         }
         Ok(())
     }

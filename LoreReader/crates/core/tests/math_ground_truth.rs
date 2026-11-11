@@ -40,7 +40,7 @@ fn score(name: &str) -> (Score, symbols::Detection, PaperText) {
 #[test]
 fn precision_and_recall_on_synthetic_latex_papers() {
     let (mut tp, mut fp, mut fn_) = (0, 0, 0);
-    for name in ["paper1", "paper2", "paper3"] {
+    for name in ["paper1", "paper2", "paper3", "paper4"] {
         let (s, _, _) = score(name);
         let p = s.tp as f64 / (s.tp + s.fp.len()).max(1) as f64;
         let r = s.tp as f64 / (s.tp + s.fn_.len()).max(1) as f64;
@@ -58,7 +58,7 @@ fn precision_and_recall_on_synthetic_latex_papers() {
 
 #[test]
 fn numbered_display_equations() {
-    for (name, want) in [("paper1", vec!["1", "2"]), ("paper2", vec!["1", "2", "3"]), ("paper3", vec!["1", "2", "3"])] {
+    for (name, want) in [("paper1", vec!["1", "2"]), ("paper2", vec!["1", "2", "3"]), ("paper3", vec!["1", "2", "3"]), ("paper4", vec!["1", "2", "3", "4"])] {
         let (_, det, _) = score(name);
         let nums: Vec<String> = det.equations.iter().filter_map(|q| q.number.clone()).collect();
         assert_eq!(nums, want, "{name}: {:?}", det.equations);
@@ -78,7 +78,7 @@ fn nested_scripts_expectations_and_norms() {
         assert!(keys.contains(k), "{k} not in {keys:?}");
     }
     let latex: Vec<String> = det.spans.iter().map(|s| s.latex.replace(' ', "")).collect();
-    for want in ["\\mathbb{P}_{\\theta^{\\prime}}", "g_{\\theta^{\\prime}}", "\\mathbb{P}_{\\theta_{t}}", "\\mathbb{E}_{x\\sim\\mathbb{P}_{r}}", "\\|f\\|_{L}", "\\mathbb{E}_{z\\simp(z)}", "\\Pi(\\mathbb{P}_{r},"] {
+    for want in ["\\mathbb{P}_{\\theta'}", "g_{\\theta'}", "\\mathbb{P}_{\\theta_{t}}", "\\mathbb{E}_{x\\sim\\mathbb{P}_{r}}", "\\|f\\|_{L}", "\\mathbb{E}_{z\\simp(z)}", "\\Pi(\\mathbb{P}_{r},"] {
         assert!(latex.iter().any(|l| l.contains(want)), "{want} not in {latex:?}");
     }
 }
@@ -121,4 +121,25 @@ fn paragraphs_keep_display_equations_and_math_is_not_a_noun() {
         assert!(!inv.entries.iter().any(|e| e.key == junk), "{junk} is math, not a noun");
     }
     assert!(inv.entries.iter().any(|e| e.key == "curvature"));
+}
+
+/// A least-squares GAN loss (paper4): stacked \frac{1}{2} rebuilt, `\sim` over named
+/// distributions, a tilde and a prime on the letter, three rows sharing number (1) and two
+/// rows sharing (2) as `aligned`, one equation per number.
+#[test]
+fn fractions_rows_tildes_and_primes() {
+    let (_, det, _) = score("paper4");
+    let eq: Vec<(&str, &str)> = det.equations.iter().map(|q| (q.id.as_str(), q.latex.as_str())).collect();
+    assert_eq!(eq.len(), 4, "{eq:#?}");
+    assert_eq!(
+        eq[0].1,
+        "\\begin{aligned}\\mathcal{L}_{D}(D_{p}) &=\\frac{1}{2} \\mathbb{E}_{x_{p}\\sim P_{\\mathrm{real}}}[(D_{p}(x_{p}) - 1)^{2}] \\\\ \
+         &\\quad +\\frac{1}{2} \\mathbb{E}_{\\tilde{x}_{p}\\sim P_{\\mathrm{syn}}}[D_{p}( \\tilde{x}_{p})^{2}] \\\\ \
+         \\mathcal{L}_{G}(G_{p}) &=\\frac{1}{2} \\mathbb{E}_{\\tilde{x}_{p}\\sim P_{\\mathrm{syn}}}[(D_{p}( \\tilde{x}_{p}) - 1)^{2}]\\end{aligned}"
+    );
+    assert_eq!(eq[1].1, "\\begin{aligned}\\mathcal{L}_{\\mathrm{rec}} &= \\mathbb{E}_{x_{p}\\sim P_{\\mathrm{real}}}[\\|x_{p}- x'_{p}\\|_{2}] \\\\ x'_{p} &= R_{p}(D_{p}(x_{p}))\\end{aligned}");
+    assert_eq!(eq[2].1, "\\mathcal{L}_{\\mathrm{dis}}= \\lambda_{a}\\mathcal{L}_{D}+ \\lambda_{b}\\mathcal{L}_{\\mathrm{rec}}");
+    assert_eq!(eq[3].1, "\\mathcal{L}_{\\mathrm{gen}}= \\lambda_{a}\\mathcal{L}_{G}");
+    let keys = symbols::detected_keys(&det);
+    assert!(keys.contains("x_{p}^{\\prime}") && keys.contains("\\tilde{x}_{p}") && keys.contains("P_{\\mathrm{real}}"), "{keys:?}");
 }

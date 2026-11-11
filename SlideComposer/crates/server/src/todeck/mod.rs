@@ -7,7 +7,9 @@
 //!   figure files, table grids, equations with labels, bibliography) and the paper's own
 //!   `notation.json`; LoreReader → `pdf::extract` on the library PDF (crops cached in this
 //!   workspace's `cache/todeck/<sha>/`) and LoreReader's `symbols.json`. The pictures are kept
-//!   in the job folder (`img/`).
+//!   in the job folder (`img/`). An equation whose text LaTeX would not typeset
+//!   (`lore_math::check::check_reading`) is read from its page crop by a vision engine
+//!   (`sc-read-equation`, `eqread.rs`), else shown as that crop.
 //! - `notation`: the entries the deck registers (the paper's ids) and the registry macros.
 //! - `terms` / `profile` / `polish`: other owners' functions (`terms.rs`, `profile.rs`,
 //!   `polish.rs`; signatures documented there).
@@ -40,6 +42,7 @@ use crate::reader::Reader;
 use crate::{AppState, R, Shared, bad};
 
 pub mod build;
+pub mod eqread;
 pub mod outline;
 pub mod plan;
 pub mod polish;
@@ -366,6 +369,64 @@ mod tests {
     fn macros_expand_until_stable() {
         let m: BTreeMap<String, String> = [("\\vx".to_string(), "\\mathbf{x}".to_string()), ("\\loss".to_string(), "\\mathcal{L}(\\vx)".to_string())].into();
         assert_eq!(expand_macros("\\loss = \\vxy + \\vx", &m), "\\mathcal{L}(\\mathbf{x}) = \\vxy + \\mathbf{x}");
+    }
+
+    /// LoreReader's equations of a paper bound twice (synthetic): one copy each, the
+    /// number as label, the page box kept; an equation without LaTeX left out.
+    #[test]
+    fn lorereader_equations_once_with_numbers() {
+        let v = json!({ "equations": [
+            { "id": "eq:1", "latex": "\\mathcal{L} = \\frac{1}{2} a", "label": "(1)", "number": "1", "page": 3, "bbox": [0.2, 0.7, 0.7, 0.86] },
+            { "id": "eq:2", "latex": "x'_{p} = R(x)", "number": "2", "page": 4, "bbox": [0.3, 0.2, 0.6, 0.3] },
+            { "id": "eq:5", "label": "(5)", "page": 4, "bbox": [1.0, 1.0, 0.0, 0.0] },
+            { "id": "eq:1-2", "latex": "\\mathcal{L} = \\frac{1}{2}  a", "label": "(1)", "page": 28 },
+            { "id": "eq:2", "latex": "x'_{p} = R(x)", "label": "(2)", "page": 29 }
+        ], "entries": [
+            { "latex": "r", "meaning_en": "a predefined hyperparameter" },
+            { "latex": "\\mathcal{P}_{\\mathrm{real}}", "meaning": "真實影像的分布", "meaning_en": "the distribution of real images" },
+            { "latex": "N" }
+        ] });
+        let eqs = lr_equations(&v);
+        let got: Vec<(&str, Option<&str>, Option<u32>)> = eqs.iter().map(|e| (e.id.as_str(), e.label.as_deref(), e.page)).collect();
+        assert_eq!(got, [("eq:1", Some("(1)"), Some(3)), ("eq:2", Some("(2)"), Some(4))]);
+        assert_eq!(eqs[0].bbox, Some([0.2, 0.7, 0.7, 0.86]));
+        assert!(eqs.iter().all(|e| e.read == "text" && e.usable()));
+        let notes = lr_symbol_notes(&v);
+        assert_eq!(notes.len(), 2, "a row without a meaning is no note");
+        // older saved jobs: [latex, meaning] pairs
+        let old: Vec<SymbolNote> = serde_json::from_value(json!([["r", "a radius"], ["x", "輸入影像"]])).unwrap();
+        assert_eq!((old[0].meaning_en.as_deref(), old[1].meaning.as_deref()), (Some("a radius"), Some("輸入影像")));
+    }
+
+    /// The notes under an equation: only symbols that occur in it (not a letter of a
+    /// subscript name), each once, in the deck's language, an English-only meaning as
+    /// `$r$：…` (never `為a`).
+    #[test]
+    fn symbol_notes_only_for_symbols_in_the_equation() {
+        let notes = vec![
+            SymbolNote { latex: "r".into(), meaning: None, meaning_en: Some("a predefined hyperparameter".into()) },
+            SymbolNote { latex: "\\mathcal{P}_{\\mathrm{real}}".into(), meaning: Some("真實影像的分布".into()), meaning_en: Some("the distribution of real images".into()) },
+            SymbolNote { latex: "\\boldsymbol{x}_{\\boldsymbol{p}}".into(), meaning: None, meaning_en: Some("an image patch".into()) },
+            SymbolNote { latex: "\\boldsymbol{x}_{\\boldsymbol{p}}".into(), meaning: None, meaning_en: Some("an image patch".into()) },
+        ];
+        let e1 = "\\mathcal{L}_{\\mathrm{reco}} = \\mathbb{E}_{\\boldsymbol{x}_{\\boldsymbol{p}}\\sim\\mathcal{P}_{\\mathrm{real}}}[\\|\\boldsymbol{x}_{\\boldsymbol{p}} - \\boldsymbol{x}'_{\\boldsymbol{p}}\\|_{2}]";
+        let mut used = equation_keys(e1);
+        // the old reading, italic letters in the subscript: still no `r`
+        used.extend(equation_keys("\\mathcal{L}_{reco} = \\lambda_{reco} a"));
+        assert!(!used.contains("r"), "{used:?}");
+        assert_eq!(symbol_notes(&notes, &used, "zh"), ["$\\mathcal{P}_{\\mathrm{real}}$ 為真實影像的分布", "$\\boldsymbol{x}_{\\boldsymbol{p}}$：an image patch"]);
+        assert_eq!(symbol_notes(&notes, &used, "en"), ["where $\\mathcal{P}_{\\mathrm{real}}$ denotes the distribution of real images", "where $\\boldsymbol{x}_{\\boldsymbol{p}}$ denotes an image patch"]);
+        assert!(symbol_notes(&notes, &equation_keys("r = 2 s"), "zh").contains(&"$r$：a predefined hyperparameter".to_string()));
+    }
+
+    #[test]
+    fn captions_keep_whole_sentences_and_math() {
+        let c = "Illustration of the pipeline. The classifier, $C_{\\mathrm{enc}}$, a SOTA model, takes the full-size image as input. The model consists of a generator $G_{p}$ and more words here.";
+        assert_eq!(caption_clip(c, 140), "Illustration of the pipeline. The classifier, $C_{\\mathrm{enc}}$, a SOTA model, takes the full-size image as input.");
+        assert_eq!(caption_clip("A very long first sentence with $x_{1}$ and $C_{\\mathrm{enc}}$ in it", 40), "A very long first sentence with $x_{1}$…");
+        assert_eq!(caption_clip("Short.", 140), "Short.");
+        assert_eq!(math_plain("C_{\\mathrm{enc}}"), "C_enc");
+        assert_eq!(math_plain("\\tilde{x} \\sim P_{\\alpha}"), "x ∼ P_α");
     }
 
     #[test]

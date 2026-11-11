@@ -12,6 +12,8 @@
 | `pptx_to_word` / `word_to_pptx` | 兩種 OMML 方言互轉 |
 | `equation_shape(id, name, rect, math, fallback_rel)` | PowerPoint 寫法的方程式文字方塊：`mc:AlternateContent`（a14 Choice ＋ 可選的圖片 Fallback） |
 | `slide_equations(doc)` | 取出一頁所有 `a14:m` |
+| `check::check(latex)` | 不開瀏覽器判斷 KaTeX 會不會拒絕：組合字元／控制字元／數學字母碼位、`{}`／`\left…\right`／`\begin…\end` 不成對、不認得的指令或環境、指令缺參數、空的或重複的上下標、對齊環境外的 `&` |
+| `check::check_reading(latex)` | 從 PDF 讀出的式子再多檢查：括號要成對、沒有當關係用的 `~`、`\mathcal` 不接小寫字母 |
 | `MathRenderer` / `NoRenderer` | Fallback 圖片（PNG/SVG）渲染掛勾；目前是 stub（TODO：KaTeX/MathJax 旁掛或 Typst） |
 
 實測（4 份真實簡報，`examples/deck_equations.rs`）：93 個原生方程式 OMML→LaTeX 全部成功，再轉回 OMML 90/93。

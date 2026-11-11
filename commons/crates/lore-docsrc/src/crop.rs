@@ -78,6 +78,22 @@ impl Renderer {
     }
 }
 
+/// Cut `frac` (`[x0, y0, x1, y1]` as fractions of the page, top-left origin) out of a page
+/// PNG, `pad` pixels around it; returns the PNG of the crop.
+pub fn crop_png_fraction(png: &[u8], frac: [f64; 4], pad: u32) -> Result<Vec<u8>> {
+    let page = image::load_from_memory(png)?.to_rgba8();
+    let (w, h) = page.dimensions();
+    let px = |f: f64, n: u32| (f.clamp(0.0, 1.0) * n as f64).round() as i64;
+    let x0 = (px(frac[0].min(frac[2]), w) - pad as i64).clamp(0, w as i64 - 1) as u32;
+    let y0 = (px(frac[1].min(frac[3]), h) - pad as i64).clamp(0, h as i64 - 1) as u32;
+    let x1 = (px(frac[0].max(frac[2]), w) + pad as i64).clamp(x0 as i64 + 1, w as i64) as u32;
+    let y1 = (px(frac[1].max(frac[3]), h) + pad as i64).clamp(y0 as i64 + 1, h as i64) as u32;
+    let img = page.view(x0, y0, x1 - x0, y1 - y0).to_image();
+    let mut buf = std::io::Cursor::new(vec![]);
+    img.write_to(&mut buf, image::ImageFormat::Png)?;
+    Ok(buf.into_inner())
+}
+
 /// Cut a box (points) out of a page image rendered at `dpi`; masks are painted white.
 pub fn crop_image(page: &RgbaImage, bbox: &BBox, dpi: u32, masks: &[BBox]) -> RgbaImage {
     let s = dpi as f64 / 72.0;
@@ -236,6 +252,16 @@ pub fn add_module_regions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crop_by_page_fraction() {
+        let page = RgbaImage::from_pixel(200, 100, Rgba([255, 255, 255, 255]));
+        let mut buf = std::io::Cursor::new(vec![]);
+        page.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        let out = crop_png_fraction(&buf.into_inner(), [0.25, 0.5, 0.75, 0.6], 2).unwrap();
+        let img = image::load_from_memory(&out).unwrap();
+        assert_eq!(img.dimensions(), (104, 14));
+    }
 
     fn cat() -> AssetCatalog {
         let mut c = AssetCatalog::default();

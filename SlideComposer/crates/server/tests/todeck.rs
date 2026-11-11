@@ -421,7 +421,7 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     assert_eq!(v["title"], "Two-Stage Grading of Synthetic Lesions");
     let stages = v["stages"].as_array().unwrap();
     assert_eq!(stages.iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["source", "notation", "terms", "profile", "outline", "review", "slides", "polish"]);
-    assert_eq!(stages[0]["counts"], json!({ "fig": 1, "figTotal": 1, "table": 1, "eq": 1, "sections": 4, "refs": 1 }));
+    assert_eq!(stages[0]["counts"], json!({ "fig": 1, "figTotal": 1, "table": 1, "eq": 1, "eqVision": 0, "eqPicture": 0, "sections": 4, "refs": 1 }));
     assert_eq!(stages[1]["counts"]["entries"], 1);
     // 不熟: no KnowledgeBase here, so every term is unfamiliar
     let unknown = stages[2]["counts"]["unknown"].as_u64().unwrap();

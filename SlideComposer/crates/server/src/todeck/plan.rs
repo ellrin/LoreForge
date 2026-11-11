@@ -135,7 +135,12 @@ Rules:\n\
     }
     u += "\n## Equations (id: LaTeX)\n";
     for e in &m.equations {
-        u += &format!("- {}: {}\n", e.id, clip(&e.latex, 300));
+        let label = e.label.as_deref().map(|l| format!(" {l}")).unwrap_or_default();
+        if e.usable() {
+            u += &format!("- {}{label}: {}\n", e.id, clip(&e.latex, 300));
+        } else if e.image.is_some() {
+            u += &format!("- {}{label}: (shown as a picture of the paper's equation)\n", e.id);
+        }
     }
     if !m.refs.is_empty() {
         u += "\n## Bibliography (key: entry)\n";

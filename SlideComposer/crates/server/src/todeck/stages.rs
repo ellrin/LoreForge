@@ -168,8 +168,25 @@ impl Pipeline for PaperDeck {
 async fn source(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     let p = params(cx)?;
     let (home, cache, img) = (s.home.clone(), s.ws.root.join("cache/todeck"), cx.dir().join("img"));
+    let src = p.source.clone();
+    let (h2, c2) = (home.clone(), cache.clone());
+    let mut m = tokio::task::spawn_blocking(move || read_source(&src, &h2, &c2).map_err(|e| StageError::new(422, e))).await.map_err(join_err)??;
+    // equations whose text LaTeX would not typeset: read from the page crop, else the crop
+    if p.source.kind == "lr" && m.equations.iter().any(super::eqread::unreliable) {
+        let sha = p.source.sha.clone().unwrap_or_default();
+        let crops: Vec<(String, Option<super::source::Img>)> = {
+            let (eqs, home, cache, sha) = (m.equations.clone(), home.clone(), cache.clone(), sha.clone());
+            tokio::task::spawn_blocking(move || {
+                let r = Reader::discover(&home);
+                eqs.iter().filter(|e| super::eqread::unreliable(e)).map(|e| (e.id.clone(), r.as_ref().and_then(|r| equation_crop(r, &sha, e, &cache)))).collect()
+            })
+            .await
+            .map_err(join_err)?
+        };
+        let notes = super::eqread::read_equations(super::llm(s), &mut m, &|e| crops.iter().find(|(id, _)| *id == e.id).and_then(|(_, c)| c.clone())).await;
+        cx.counts(json!({ "eqNotes": notes }));
+    }
     let m = tokio::task::spawn_blocking(move || -> Result<Material, StageError> {
-        let mut m = read_source(&p.source, &home, &cache).map_err(|e| StageError::new(422, e))?;
         m.save_images(&img).map_err(|e| StageError::new(500, format!("無法寫入快取：{e}")))?;
         Ok(m)
     })
@@ -181,10 +198,22 @@ async fn source(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
         "figTotal": m.figures.len(),
         "table": m.tables.len(),
         "eq": m.equations.len(),
+        "eqVision": m.equations.iter().filter(|e| e.read == "vision").count(),
+        "eqPicture": m.equations.iter().filter(|e| e.read == "picture").count(),
         "sections": m.sections.len(),
         "refs": m.refs.len(),
     }));
     to_value(&m)
+}
+
+/// The crop of a LoreReader equation (its page at 200 dpi, the box with a margin).
+fn equation_crop(r: &Reader, sha: &str, e: &super::source::Eq, cache: &Path) -> Option<super::source::Img> {
+    let (page, b) = (e.page?, e.bbox?);
+    let tool = crate::reader::pdftoppm()?;
+    let pdf = r.pdf(sha)?;
+    let png = crate::reader::render_page(&tool, &pdf, sha, page, 200, cache).ok()?;
+    let crop = lore_docsrc::crop::crop_png_fraction(&png, b, 14).ok()?;
+    super::source::img_from(crop, "png")
 }
 
 /// `notation.json` of the job: the entries the deck registers (the paper's ids kept) and the

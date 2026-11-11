@@ -169,11 +169,137 @@ impl Ctx<'_> {
                     look.ea_font = "Cambria Math".into();
                     out.push(Run { kind: "math".into(), text: latex.clone(), tag: None, em: None, look, field: None, omml: Some(omml), latex: Some(latex), src: None, k: 0 });
                 }
-                None => out.push(self.run(&format!("${part}$"), tag, em)),
+                // no OMML (pandoc missing): readable text, not LaTeX source
+                None => out.push(self.run(&math_plain(part), tag, em)),
             }
         }
         out
     }
+}
+
+/// Inline LaTeX as plain text when it cannot become OMML: font and accent commands and
+/// braces dropped, Greek letters and a few operators as characters, scripts as `_` / `^`
+/// (`C_{\mathrm{enc}}` → `C_enc`).
+pub fn math_plain(latex: &str) -> String {
+    const SYM: &[(&str, &str)] = &[
+        ("alpha", "α"), ("beta", "β"), ("gamma", "γ"), ("delta", "δ"), ("epsilon", "ε"), ("varepsilon", "ε"), ("theta", "θ"), ("lambda", "λ"), ("mu", "μ"),
+        ("sigma", "σ"), ("phi", "φ"), ("varphi", "φ"), ("psi", "ψ"), ("omega", "ω"), ("pi", "π"), ("rho", "ρ"), ("tau", "τ"), ("eta", "η"), ("kappa", "κ"),
+        ("Gamma", "Γ"), ("Delta", "Δ"), ("Theta", "Θ"), ("Lambda", "Λ"), ("Sigma", "Σ"), ("Phi", "Φ"), ("Psi", "Ψ"), ("Omega", "Ω"), ("sim", "∼"),
+        ("in", "∈"), ("leq", "≤"), ("geq", "≥"), ("neq", "≠"), ("approx", "≈"), ("times", "×"), ("cdot", "·"), ("sum", "Σ"), ("infty", "∞"), ("to", "→"),
+        ("ell", "ℓ"), ("partial", "∂"), ("nabla", "∇"), ("prime", "′"), ("|", "‖"),
+    ];
+    let cs: Vec<char> = latex.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        i += 1;
+        match c {
+            '\\' => {
+                let start = i;
+                while i < cs.len() && cs[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                if i == start && i < cs.len() {
+                    i += 1;
+                }
+                let name: String = cs[start..i].iter().collect();
+                if let Some((_, u)) = SYM.iter().find(|(n, _)| *n == name) {
+                    out.push_str(u);
+                } else if matches!(name.as_str(), "quad" | "qquad" | "," | ";" | " ") {
+                    out.push(' ');
+                }
+            }
+            '{' | '}' => {}
+            c => out.push(c),
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A caption for the slide: whole sentences up to `n` characters (the first sentence when
+/// it alone is longer, cut at a word with `…`), never inside `$…$`.
+pub fn caption_clip(s: &str, n: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    // sentence ends outside math
+    let mut ends = vec![];
+    let mut math = false;
+    let cs: Vec<char> = s.chars().collect();
+    for (i, &c) in cs.iter().enumerate() {
+        if c == '$' {
+            math = !math;
+        } else if !math && c == '.' && cs.get(i + 1).is_none_or(|x| x.is_whitespace()) {
+            ends.push(i + 1);
+        }
+    }
+    if let Some(&e) = ends.iter().rev().find(|&&e| e <= n) {
+        return cs[..e].iter().collect();
+    }
+    let mut cut: String = cs[..n].iter().collect();
+    if let Some(sp) = cut.rfind(' ') {
+        cut.truncate(sp);
+    }
+    if cut.matches('$').count() % 2 == 1 {
+        let open = cut.rfind('$').unwrap_or(0);
+        cut.truncate(open);
+    }
+    cut.trim_end().to_string() + "…"
+}
+
+/// Symbol keys (lore-notation canonical) an equation uses: its symbols and those in its
+/// index scripts (`x` and `P` of `\mathbb{E}_{x\sim P}`), not the letters of a name
+/// subscript (`r` of `\mathcal{L}_{rec}` is no symbol of the equation).
+pub fn equation_keys(latex: &str) -> BTreeSet<String> {
+    use lore_notation::math;
+    fn walk(s: &math::Sym, out: &mut BTreeSet<String>) {
+        out.insert(s.key());
+        for u in &s.script_uses {
+            walk(u, out);
+        }
+    }
+    let idx: Vec<String> = math::DEFAULT_INDEX.iter().map(|s| s.to_string()).collect();
+    let atoms = math::parse(&math::tokenize(latex, 0), &math::Options { index_letters: &idx });
+    let mut syms = vec![];
+    math::collect_syms(&atoms, &mut syms);
+    let mut out = BTreeSet::new();
+    for s in &syms {
+        walk(s, &mut out);
+    }
+    out
+}
+
+/// The note lines under a slide's equations: each registry symbol the equations use, once,
+/// in the deck's language — the author's meaning (`meaning`, the registry language) for a
+/// Chinese deck, the English one for an English deck; a meaning only in the other language
+/// is written `$x$：meaning`.
+pub fn symbol_notes(symbols: &[super::source::SymbolNote], used: &BTreeSet<String>, lang: &str) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut out = vec![];
+    let zh = |t: &str| t.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+    for n in symbols {
+        let key = lore_notation::math::canonical(&n.latex);
+        if !used.contains(&key) || !seen.insert(key) {
+            continue;
+        }
+        let (mine, en) = (n.meaning.as_deref().map(str::trim).filter(|m| !m.is_empty()), n.meaning_en.as_deref().map(str::trim).filter(|m| !m.is_empty()));
+        let sym = n.latex.trim();
+        let line = if lang == "en" {
+            match en.or(mine.filter(|m| !zh(m))) {
+                Some(m) => format!("where ${sym}$ denotes {m}"),
+                None => format!("${sym}$: {}", mine.unwrap_or_default()),
+            }
+        } else {
+            match mine.filter(|m| zh(m)) {
+                Some(m) => format!("${sym}$ 為{m}"),
+                None => format!("${sym}$：{}", mine.or(en).unwrap_or_default()),
+            }
+        };
+        out.push(line);
+    }
+    out
 }
 
 /// Registry macros (`\vx` → `\mathbf{x}`) expanded so pandoc and KaTeX read the equation;
@@ -477,8 +603,9 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                     }
                     if cap_h > 0 {
                         let t = cx.tag(&["caption"]);
-                        let cap = strip_typed_refs(&clip(&img.caption, 140));
-                        extra.push(text_obj("圖說", Frame::new(vf.x, pf.y + pf.h + h / 120, vf.w, cap_h), body(vec![cx.para(vec![cx.run(&cap, &t, None)], &t)], "t"), Some("caption-1")));
+                        let cap = strip_typed_refs(&caption_clip(&img.caption, 140));
+                        let runs = cx.rich(&cap, &t, None);
+                        extra.push(text_obj("圖說", Frame::new(vf.x, pf.y + pf.h + h / 120, vf.w, cap_h), body(vec![cx.para(runs, &t)], "t"), Some("caption-1")));
                     }
                 }
                 if let Some(tf) = &text_f {
@@ -510,40 +637,62 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                         p.after_pt = Some(6.0);
                         paras.push(p);
                     }
-                    // equations of the slide: native OMML, one per line
+                    // equations of the slide: native OMML, one per line; one the PDF's text
+                    // could not give is its crop (a picture above the text), never LaTeX as text
                     let eq_tag = cx.tag(&["equation", "body"]);
+                    let mut eq_pics: Vec<&Img> = vec![];
+                    let mut used_keys: BTreeSet<String> = BTreeSet::new();
                     for id in &ps.equations {
                         let Some(e) = m.equations.iter().find(|e| &e.id == id) else { continue };
                         let latex = cx.expand(&e.latex);
-                        let used = latex.clone();
                         let size = cx.look(&eq_tag, None).size;
-                        let mut p = match cx.omml(&latex, true, size) {
+                        let omml = if e.usable() { cx.omml(&latex, true, size) } else { None };
+                        let mut p = match omml {
                             Some(omml) => {
                                 let look = cx.look(&eq_tag, None);
                                 let tag = cx.st.tag("equation").map(|_| "equation".to_string());
+                                used_keys.extend(equation_keys(&latex));
                                 cx.para(vec![Run { kind: "math".into(), text: latex.clone(), tag, em: None, look, field: None, omml: Some(omml), latex: Some(latex), src: None, k: 0 }], &eq_tag)
                             }
-                            None => cx.para(vec![cx.run(&format!("$${latex}$$"), &t, None)], &t),
+                            None => {
+                                match e.image.as_ref() {
+                                    Some(im) => eq_pics.push(im),
+                                    None => cx.warnings.push(format!("{}：方程式無法排版，投影片沒有放", e.label.clone().unwrap_or_else(|| e.id.clone()))),
+                                }
+                                continue;
+                            }
                         };
                         p.align = "ctr".into();
                         p.before_pt = Some(6.0);
                         p.after_pt = Some(6.0);
                         paras.push(p);
-                        // the symbols it uses, from the paper's registry, as notes under it (§7.1: 符號說明)
-                        let note_tag = cx.tag(&["caption", "body"]);
-                        let em = cx.st.pack.emphasis.contains_key("note").then_some("note");
-                        let mut seen = BTreeSet::new();
-                        for (sym, meaning) in &m.symbols {
-                            if !used.contains(sym.as_str()) || !seen.insert(sym.clone()) {
-                                continue;
-                            }
-                            let line = if inp.lang == "en" { format!("where ${sym}$ denotes {meaning}") } else { format!("${sym}$ 為{meaning}") };
-                            let runs = cx.rich(&line, &note_tag, em);
-                            let mut p = cx.para(runs, &note_tag);
-                            p.align = "ctr".into();
-                            paras.push(p);
-                        }
                     }
+                    // the symbols the slide's equations use, once each, from the paper's
+                    // registry, as notes under them (§7.1: 符號說明)
+                    let note_tag = cx.tag(&["caption", "body"]);
+                    let em = cx.st.pack.emphasis.contains_key("note").then_some("note");
+                    for line in symbol_notes(&m.symbols, &used_keys, inp.lang) {
+                        let runs = cx.rich(&line, &note_tag, em);
+                        let mut p = cx.para(runs, &note_tag);
+                        p.align = "ctr".into();
+                        paras.push(p);
+                    }
+                    // equation crops: stacked at the top of the text area, the text below
+                    let mut tf = tf.clone();
+                    if !eq_pics.is_empty() {
+                        let gap = h / 60;
+                        let share = if paras.is_empty() { tf.h } else { tf.h * 3 / 5 };
+                        let each = ((share - gap * (eq_pics.len() as i64 - 1)) / eq_pics.len() as i64).max(h / 12);
+                        let mut y = tf.y;
+                        for (k, im) in eq_pics.iter().enumerate() {
+                            let asset = sc_core::store_asset(&cx.deck_dir, &im.bytes, &im.ext).map_err(|e| e.to_string())?;
+                            let pf = contain(&Frame::new(tf.x, y, tf.w, each), im.w, im.h);
+                            extra.push(pic(&format!("方程式 {}", k + 1), Frame::new(pf.x, y, pf.w, pf.h), &asset, Crop::default(), 1.0, None));
+                            y += pf.h + gap;
+                        }
+                        tf = Frame::new(tf.x, y, tf.w, (tf.y + tf.h - y).max(h / 8));
+                    }
+                    let tf = &tf;
                     if !paras.is_empty() {
                         let f = if ps.steps.is_empty() {
                             tf.clone()

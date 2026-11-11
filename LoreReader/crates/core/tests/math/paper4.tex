@@ -1,0 +1,34 @@
+% Synthetic test paper 4 (invented content): a least-squares adversarial loss with
+% fractions, expectations over named distributions (\mathrm subscripts), a tilde and
+% a prime, multi-line displays sharing one number, and one number per line.
+% Never a real paper.
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb}
+\begin{document}
+\section{Training}
+A discriminator $D_p$ judges image patches $x_p$, and a generator $G_p$ produces
+synthetic patches $\tilde{x}_p$. The adversarial losses are
+\begin{equation}
+\begin{aligned}
+  \mathcal{L}_{D}(D_p) &= \frac{1}{2}\mathbb{E}_{x_p \sim P_{\mathrm{real}}}[(D_p(x_p) - 1)^2] \\
+  &\quad + \frac{1}{2}\mathbb{E}_{\tilde{x}_p \sim P_{\mathrm{syn}}}[D_p(\tilde{x}_p)^2] \\
+  \mathcal{L}_{G}(G_p) &= \frac{1}{2}\mathbb{E}_{\tilde{x}_p \sim P_{\mathrm{syn}}}[(D_p(\tilde{x}_p) - 1)^2]
+\end{aligned}
+\end{equation}
+where $P_{\mathrm{real}}$ denotes the distribution of real patches. A reconstructor
+$R_p$ maps the discriminator features back to a patch $x'_p$:
+\begin{equation}
+\begin{aligned}
+  \mathcal{L}_{\mathrm{rec}} &= \mathbb{E}_{x_p \sim P_{\mathrm{real}}}[\|x_p - x'_p\|_2] \\
+  x'_p &= R_p(D_p(x_p))
+\end{aligned}
+\end{equation}
+Here $r$ is a fixed radius of the label map. The total losses are
+\begin{equation}
+  \mathcal{L}_{\mathrm{dis}} = \lambda_{a}\mathcal{L}_{D} + \lambda_{b}\mathcal{L}_{\mathrm{rec}}
+\end{equation}
+\begin{equation}
+  \mathcal{L}_{\mathrm{gen}} = \lambda_{a}\mathcal{L}_{G}
+\end{equation}
+with weights $\lambda_a$ and $\lambda_b$.
+\end{document}

@@ -109,6 +109,173 @@ pub fn join_lines<'b>(lines: impl Iterator<Item = &'b Line>) -> String {
     out
 }
 
+/// One Unicode math character (Word's 𝐶 𝑝 𝔁 ℒ …) as LaTeX; `None` for anything else.
+fn math_char(c: char) -> Option<String> {
+    let u = c as u32;
+    if (0x1D400..0x1D6A4).contains(&u) {
+        let i = u - 0x1D400;
+        let (style, k) = (i / 52, i % 52);
+        let small = k >= 26;
+        let l = if small { (b'a' + (k - 26) as u8) as char } else { (b'A' + k as u8) as char };
+        return Some(match (style, small) {
+            (0, _) => format!("\\mathbf{{{l}}}"),
+            (1, _) => l.to_string(),
+            (2, _) => format!("\\boldsymbol{{{l}}}"),
+            (3 | 4, false) => format!("\\mathcal{{{l}}}"),
+            (3, true) => l.to_string(),
+            (4, true) => format!("\\boldsymbol{{{l}}}"),
+            (6, false) => format!("\\mathbb{{{l}}}"),
+            _ => l.to_string(),
+        });
+    }
+    Some(
+        match c {
+            'ℎ' => "h",
+            'ℒ' => "\\mathcal{L}",
+            'ℛ' => "\\mathcal{R}",
+            'ℬ' => "\\mathcal{B}",
+            'ℰ' => "\\mathcal{E}",
+            'ℱ' => "\\mathcal{F}",
+            'ℋ' => "\\mathcal{H}",
+            'ℐ' => "\\mathcal{I}",
+            'ℳ' => "\\mathcal{M}",
+            'ℝ' => "\\mathbb{R}",
+            'ℕ' => "\\mathbb{N}",
+            'ℤ' => "\\mathbb{Z}",
+            _ => return None,
+        }
+        .to_string(),
+    )
+}
+
+/// A word made only of math characters, as LaTeX (`𝐶` → `C`).
+fn math_word(w: &str) -> Option<String> {
+    if w.is_empty() {
+        return None;
+    }
+    w.chars().map(math_char).collect::<Option<Vec<_>>>().map(|v| v.concat())
+}
+
+/// A line's text with Word's math words as `$…$`: a math word right after another, smaller
+/// and lowered (raised), is its subscript (superscript) — `𝐶 𝑒𝑛𝑐` → `$C_{\mathrm{enc}}$`
+/// (three or more letters in a script are a name). Punctuation right after math sticks.
+pub fn line_text_math(l: &Line) -> String {
+    line_math(l, None).0
+}
+
+/// [`line_text_math`] with an accent carried over from the line before (Word may end a
+/// line with the combining tilde of the letter that starts the next); returns the accent
+/// left at the end of this line.
+fn line_math(l: &Line, carry: Option<&'static str>) -> (String, Option<&'static str>) {
+    // trailing punctuation of a math word is its own (glued) word: `𝑛.` → `𝑛` `.`
+    let mut ws: Vec<Word> = vec![];
+    for w in &l.words {
+        let core = w.text.trim_end_matches([',', '.', ';', ':', ')']);
+        if core.len() < w.text.len() && math_word(core).is_some() {
+            let f = core.chars().count() as f64 / w.text.chars().count() as f64;
+            let cut = w.bbox.x0 + (w.bbox.x1 - w.bbox.x0) * f;
+            ws.push(Word { bbox: BBox::new(w.bbox.x0, w.bbox.y0, cut, w.bbox.y1), text: core.to_string() });
+            ws.push(Word { bbox: BBox::new(cut, w.bbox.y0, w.bbox.x1, w.bbox.y1), text: w.text[core.len()..].to_string() });
+        } else {
+            ws.push(w.clone());
+        }
+    }
+    let accent = |w: &str| -> Option<&'static str> {
+        let mut cs = w.chars();
+        let c = cs.next()?;
+        if cs.next().is_some() {
+            return None;
+        }
+        Some(match c {
+            '\u{0303}' => "tilde",
+            '\u{0302}' => "hat",
+            '\u{0304}' | '\u{0305}' => "bar",
+            '\u{0307}' => "dot",
+            '\u{0308}' => "ddot",
+            '\u{20D7}' => "vec",
+            _ => return None,
+        })
+    };
+    let mut out = String::new();
+    let mut i = 0;
+    let mut pending: Option<&'static str> = carry;
+    while i < ws.len() {
+        let w = &ws[i];
+        // a combining accent set as its own word goes on the math letter next to it
+        if let Some(a) = accent(&w.text) {
+            if i + 1 == ws.len() || ws.get(i + 1).is_some_and(|n| math_word(&n.text).is_some()) {
+                pending = Some(a);
+            } else if out.ends_with('$') && let Some(open) = out[..out.len() - 1].rfind('$') {
+                let inner = out[open + 1..out.len() - 1].to_string();
+                out.truncate(open);
+                out.push_str(&format!("$\\{a}{{{inner}}}$"));
+            }
+            i += 1;
+            continue;
+        }
+        let Some(mut base) = math_word(&w.text) else {
+            if !out.is_empty() {
+                let glued = out.ends_with('$') && w.text.chars().all(|c| ",.;:)".contains(c)) && i > 0 && w.bbox.x0 - ws[i - 1].bbox.x1 < 0.5 * l.height();
+                if !glued {
+                    out.push(' ');
+                }
+            }
+            out.push_str(&w.text);
+            i += 1;
+            continue;
+        };
+        if let Some(a) = pending.take() {
+            base = format!("\\{a}{{{base}}}");
+        }
+        let mut tex = base;
+        let mut j = i + 1;
+        while j < ws.len() {
+            let (a, b) = (&ws[j - 1], &ws[j]);
+            let Some(next) = math_word(&b.text) else { break };
+            let touching = b.bbox.x0 - a.bbox.x1 < 0.15 * w.bbox.height();
+            let smaller = b.bbox.height() < w.bbox.height() * 0.85;
+            if !(touching && smaller) {
+                break;
+            }
+            let name = if b.text.chars().count() >= 3 && b.text.chars().all(|c| c.is_alphabetic()) && next.chars().all(|c| c.is_ascii_alphabetic()) { format!("\\mathrm{{{next}}}") } else { next };
+            if b.bbox.y1 > w.bbox.y1 + 0.1 * w.bbox.height() {
+                tex.push_str(&format!("_{{{name}}}"));
+            } else if b.bbox.y0 < w.bbox.y0 - 0.1 * w.bbox.height() {
+                tex.push_str(&format!("^{{{name}}}"));
+            } else {
+                break;
+            }
+            j += 1;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&format!("${tex}$"));
+        i = j;
+    }
+    (out, pending)
+}
+
+/// [`join_lines`] with math words as `$…$` ([`line_text_math`]), for captions.
+pub fn join_lines_math<'b>(lines: impl Iterator<Item = &'b Line>) -> String {
+    let mut out = String::new();
+    let mut carry = None;
+    for l in lines {
+        let (t, c) = line_math(l, carry);
+        carry = c;
+        if out.ends_with('-') && t.chars().next().is_some_and(|c| c.is_lowercase()) && out[..out.len() - 1].chars().last().is_some_and(|c| c.is_alphabetic()) {
+            out.pop();
+            out.push_str(&t);
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&t);
+    }
+    out
+}
+
 impl Doc {
     pub fn new(pages: &[TextPage], inks: Vec<Option<Ink>>) -> Doc {
         let cols = Columns::detect(pages);
@@ -213,7 +380,14 @@ impl Doc {
                 while j < p.lines.len() {
                     let prev = &p.lines[j - 1];
                     let n = &p.lines[j];
-                    let same_block = n.block == l.block;
+                    let same_block = n.block == prev.block;
+                    // a sentence cut at the line end goes on in the next block (Word's math
+                    // words split a caption into blocks): same left edge, right below
+                    let ends = prev.text().trim_end().ends_with(['.', ':', '!', '?']);
+                    let goes_on = !ends
+                        && (n.bbox.x0 - p.lines[lines[0]].bbox.x0).abs() < self.h()
+                        && n.bbox.y0 - prev.bbox.y1 < 0.6 * self.h()
+                        && n.bbox.y0 - prev.bbox.y1 > -0.5 * self.h();
                     let gap = n.bbox.y0 - prev.bbox.y1;
                     // a "Table 1" line alone: the title is the next line(s) even across blocks
                     let short_head = lines.len() == 1
@@ -222,7 +396,7 @@ impl Doc {
                     let close = gap < 0.6 * self.h()
                         && gap > -0.5 * self.h()
                         && n.bbox.x_overlap(&l.bbox.union(&prev.bbox)) > 0.0;
-                    if !(same_block || short_head && close)
+                    if !(same_block || short_head && close || goes_on)
                         || gap > 0.9 * self.h()
                         || n.max_gap() > 2.5 * self.h()
                     {
@@ -248,7 +422,7 @@ impl Doc {
                     .map(|&k| p.lines[k].bbox)
                     .reduce(|a, b| a.union(&b))
                     .unwrap();
-                let text = join_lines(lines.iter().map(|&k| &p.lines[k]));
+                let text = join_lines_math(lines.iter().map(|&k| &p.lines[k]));
                 for &k in &lines {
                     self.roles[pi][k] = Role::Caption;
                 }
@@ -1436,6 +1610,33 @@ pub(crate) mod tests {
                 "Brown, T., 2020. Language models."
             ]
         );
+    }
+
+    /// Word's math words in a caption (synthetic): `𝐶` + lowered smaller `𝑒𝑛𝑐` is a
+    /// subscripted symbol, a combining tilde as its own word goes on the next letter,
+    /// trailing punctuation sticks.
+    #[test]
+    fn caption_math_words() {
+        let w = |t: &str, x0: f64, y0: f64, x1: f64, y1: f64| Word { bbox: BBox::new(x0, y0, x1, y1), text: t.to_string() };
+        let words = vec![
+            w("The", 300.0, 340.0, 320.0, 352.0),
+            w("classifier,", 323.0, 340.0, 375.0, 352.0),
+            w("\u{1D436}", 430.0, 339.0, 437.0, 352.0),
+            w("\u{1D452}\u{1D45B}\u{1D450}", 437.0, 344.0, 449.0, 354.0),
+            w(",", 452.0, 340.0, 455.0, 352.0),
+            w("patch", 287.2, 289.1, 311.0, 299.1),
+            w("\u{303}", 315.5, 287.3, 322.3, 299.3),
+            w("\u{1D501}", 315.4, 288.1, 322.5, 299.1),
+            w("\u{1D491}", 322.5, 292.8, 327.5, 300.9),
+            w("\u{1D45B}.", 330.0, 289.1, 340.0, 299.1),
+        ];
+        let bbox = words.iter().map(|w| w.bbox).reduce(|a, b| a.union(&b)).unwrap();
+        let l = Line { bbox, words, block: 0 };
+        assert_eq!(line_text_math(&l), "The classifier, $C_{\\mathrm{enc}}$, patch $\\tilde{\\boldsymbol{x}}_{\\boldsymbol{p}}$ $n$.");
+        // the tilde ends a line, its letter starts the next
+        let a = Line { bbox: BBox::new(0.0, 0.0, 60.0, 12.0), words: vec![w("a", 0.0, 0.0, 6.0, 12.0), w("patch", 9.0, 0.0, 40.0, 12.0), w("\u{303}", 44.0, -1.0, 50.0, 12.0)], block: 0 };
+        let b = Line { bbox: BBox::new(0.0, 14.0, 60.0, 27.0), words: vec![w("\u{1D501}", 0.0, 14.0, 7.0, 26.0), w("\u{1D491}.", 7.0, 20.0, 15.0, 29.0)], block: 0 };
+        assert_eq!(join_lines_math([a, b].iter()), "a patch $\\tilde{\\boldsymbol{x}}_{\\boldsymbol{p}}$.");
     }
 
     #[test]

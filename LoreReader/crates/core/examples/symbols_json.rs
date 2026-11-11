@@ -15,7 +15,9 @@ fn main() {
     };
     let opt = |name: &str| a.iter().position(|x| x == name).and_then(|i| a.get(i + 1));
     let paper: lr_core::text::PaperText = serde_json::from_slice(&std::fs::read(input).expect("read")).expect("json");
-    let paper = paper.normalise();
+    // as the server does: margin line numbers blanked before any analysis
+    let mut paper = paper.normalise();
+    lr_core::text::blank_line_numbers(&mut paper);
     let det = lr_core::symbols::detect(&paper, &lr_core::symbols::Glyphs::default());
     for s in &det.spans {
         println!("p{:<3} {:<6} {}", s.page, s.eq.map(|e| format!("eq{e}")).unwrap_or_default(), s.latex);

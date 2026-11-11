@@ -18,9 +18,19 @@
 //! author's override files). Symbols are read out of that LaTeX with lore-notation's own
 //! math parser, so keys are lore-notation canonical keys (`\bm{x}_i` → `\boldsymbol{x}`).
 //!
+//! Word's equations (Cambria Math) come as Unicode math letters: combining accents
+//! (x + U+0303) become `\tilde{x}`, `~` / `∼` between symbols `\sim`, a script small word
+//! (`𝓇ℯ𝒶ℓ`) or a math-italic word in a script (`𝑠𝑦𝑛`) `\mathrm{…}`, a script small letter the
+//! letter itself (`\mathcal` has capitals only), a prime on the letter `x'`. A stacked
+//! fraction (numerator raised, denominator lowered around a baseline, at the line's size)
+//! is rebuilt as `\frac{…}{…}` by geometry, whatever the text order.
+//!
 //! **Display equations**: a line that is mostly math, roughly centred in its column, with
-//! `(n)` at the right; neighbouring centred math lines (fractions, aligned rows) join it.
-//! Bounding box and number are recorded; the LaTeX is best effort.
+//! `(n)` at the right (or a little off the row's baseline); neighbouring centred math lines
+//! join it while they have at most one number between them. Several rows are one
+//! `aligned` block ([`join_rows`]); a number per row makes separate equations. Ids are
+//! unique (`eq:1`, then `eq:1-2` when a bound-twice paper repeats a number). Bounding box
+//! and number are recorded; the LaTeX is best effort.
 //!
 //! **Definitions** come from regular expressions over each sentence with math runs
 //! replaced by placeholders: "where ⟦x⟧ is/denotes/represents …", "⟦x⟧ denotes …",
@@ -151,6 +161,11 @@ pub fn math_alnum(c: char) -> Option<String> {
         let style = (i / 52) as usize;
         let k = i % 52;
         let letter = if k < 26 { (b'A' + k as u8) as char } else { (b'a' + (k - 26) as u8) as char };
+        // \mathcal has capitals only: a script small letter (Word's 𝓍, 𝔁) is the letter
+        // itself, bold when the script is bold
+        if (style == 3 || style == 4) && k >= 26 {
+            return Some(if style == 4 { format!("\\boldsymbol{{{letter}}}") } else { letter.to_string() });
+        }
         let wrap = LATIN.get(style).copied().unwrap_or("");
         return Some(if wrap.is_empty() { letter.to_string() } else { format!("{wrap}{{{letter}}}") });
     }
@@ -174,6 +189,39 @@ pub fn math_alnum(c: char) -> Option<String> {
         return Some(d.to_string());
     }
     None
+}
+
+/// A script small letter as its plain letter (`𝓇` `𝒶` `ℯ` `ℓ` `𝔁` → r a e l x): Word sets a
+/// word typed in a script style (`𝓇ℯ𝒶ℓ`) letter by letter.
+fn script_small(c: char) -> Option<char> {
+    let u = c as u32;
+    for start in [0x1D49C + 26, 0x1D4D0 + 26] {
+        if (start..start + 26).contains(&u) {
+            return Some((b'a' + (u - start) as u8) as char);
+        }
+    }
+    match c {
+        'ℯ' => Some('e'),
+        'ℊ' => Some('g'),
+        'ℴ' => Some('o'),
+        'ℓ' => Some('l'),
+        _ => None,
+    }
+}
+
+/// A Unicode math italic letter (`𝑠` `𝐷`, `ℎ`) as its plain letter.
+fn math_italic(c: char) -> Option<char> {
+    let u = c as u32;
+    if (0x1D434..0x1D434 + 52).contains(&u) {
+        let k = u - 0x1D434;
+        return Some(if k < 26 { (b'A' + k as u8) as char } else { (b'a' + (k - 26) as u8) as char });
+    }
+    (c == 'ℎ').then_some('h')
+}
+
+/// Combining marks (U+0300–036F, U+20D0–20FF): Word writes x̃ as `x` + U+0303.
+fn is_combining(c: char) -> bool {
+    matches!(c as u32, 0x0300..=0x036F | 0x20D0..=0x20FF)
 }
 
 // ── fonts ────────────────────────────────────────────────────────────────
@@ -307,17 +355,149 @@ struct PageCtx<'a> {
     roles: Vec<Role>,
     /// (item, char index) → accent name
     accents: HashMap<(usize, usize), String>,
+    /// Stacked fractions (display `\frac`): first numerator item → the fraction.
+    fracs: HashMap<usize, Frac>,
+    /// Numerator / denominator item → the first numerator item of its fraction.
+    frac_of: HashMap<usize, usize>,
+}
+
+/// A fraction read from its layout: numerator items above the line's baseline, the
+/// denominator below, both at the line's size (the bar is a rule, not text).
+#[derive(Debug, Clone)]
+struct Frac {
+    num: Vec<usize>,
+    den: Vec<usize>,
+    /// Baseline of the line the fraction sits on.
+    base: f32,
+    size: f32,
+    /// The line's items right before and after it (where the fraction goes in a run).
+    before: Option<usize>,
+    after: Option<usize>,
 }
 
 impl<'a> PageCtx<'a> {
     fn new(p: &'a PageText, g: &'a Glyphs) -> PageCtx<'a> {
         let body = weighted_mode(p.items.iter().filter(|i| i.size > 0.0).map(|i| (((i.size * 2.0).round() as i32), i.str.chars().count()))).map(|k| k as f32 / 2.0).unwrap_or(10.0);
-        let items = split_items(&p.items, g);
+        let items = join_letters(split_items(&p.items, g), body);
         let classes: Vec<FontClass> = items.iter().map(|i| font_class(&i.font, i.italic, i.bold, g)).collect();
-        let mut c = PageCtx { p, items, g, body, classes, roles: vec![], accents: HashMap::new() };
+        let mut c = PageCtx { p, items, g, body, classes, roles: vec![], accents: HashMap::new(), fracs: HashMap::new(), frac_of: HashMap::new() };
         c.roles = c.classify();
         c.attach_accents();
+        c.find_fractions();
         c
+    }
+
+    /// Stacked fractions, by geometry (pdf.js may give the numerator before the row
+    /// starts): a short group of items raised above a baseline and one lowered below it,
+    /// overlapping in x, both at the line's size (limits of a big operator are smaller and
+    /// stay scripts), with an item of that line right before or after them.
+    fn find_fractions(&mut self) {
+        let items = &self.items;
+        let n = items.len();
+        let solid = |j: usize| !items[j].str.trim().is_empty();
+        // groups: consecutive items on one baseline (their own scripts allowed)
+        let mut groups: Vec<Vec<usize>> = vec![];
+        let mut i = 0;
+        while i < n {
+            if !solid(i) || self.roles[i] == Role::Script || items[i].size < self.body * 0.6 {
+                i += 1;
+                continue;
+            }
+            let (y0, s) = (items[i].y, items[i].size);
+            let mut g = vec![i];
+            let mut j = i + 1;
+            while j < n && g.len() < 12 {
+                if !solid(j) {
+                    j += 1;
+                    continue;
+                }
+                let it = &items[j];
+                let script = it.size < s * 0.9;
+                if (it.y - y0).abs() < s * 0.12 && it.size >= s * 0.9 || script && (it.y - y0).abs() < s * 0.45 {
+                    g.push(j);
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if g.iter().map(|&m| items[m].str.trim().chars().count()).sum::<usize>() <= 30 {
+                groups.push(g);
+            }
+            i = j;
+        }
+        let span = |v: &[usize]| v.iter().fold((f32::MAX, f32::MIN), |(l, r), &m| (l.min(items[m].x), r.max(items[m].x + items[m].w)));
+        // every raised / lowered pair first; a pair whose baseline item is itself part of
+        // another pair is not a fraction (rows of a multi-line display line up the same way)
+        let mut cands: Vec<(usize, usize, Option<usize>, Option<usize>)> = vec![];
+        for (gi, num) in groups.iter().enumerate() {
+            let a = &items[num[0]];
+            let s = a.size;
+            let (nl, nr) = span(num);
+            for (gj, den) in groups.iter().enumerate() {
+                if gj == gi {
+                    continue;
+                }
+                let d = &items[den[0]];
+                let drop = a.y - d.y;
+                let (dl, dr) = span(den);
+                if !(drop > s * 0.9 && drop < s * 2.6 && (d.size - s).abs() < s * 0.15 && nr.min(dr) - nl.max(dl) > -s * 0.2 && (nl - dl).abs() < s * 3.0) {
+                    continue;
+                }
+                let (fl, fr) = (nl.min(dl), nr.max(dr));
+                // the baseline: an item of the line between them, right before or after
+                let between = |m: usize| {
+                    let it = &items[m];
+                    solid(m) && it.y > d.y + s * 0.25 && it.y < a.y - s * 0.25 && it.size >= s * 0.85 && s >= it.size * 0.85 && !num.contains(&m) && !den.contains(&m)
+                };
+                let before = (0..n).filter(|&m| between(m) && {
+                    let end = items[m].x + items[m].w;
+                    end <= fl + s * 0.5 && end > fl - s * 2.0
+                }).max_by(|&x, &y| (items[x].x + items[x].w).partial_cmp(&(items[y].x + items[y].w)).unwrap_or(std::cmp::Ordering::Equal));
+                let after = (0..n).filter(|&m| between(m) && items[m].x >= fr - s * 0.5 && items[m].x < fr + s * 2.0).min_by(|&x, &y| items[x].x.partial_cmp(&items[y].x).unwrap_or(std::cmp::Ordering::Equal));
+                if before.is_some() || after.is_some() {
+                    cands.push((gi, gj, before, after));
+                }
+            }
+        }
+        // small parts first; a group is in one fraction only, and a baseline item is never
+        // part of a fraction already taken
+        // the baseline halfway between numerator and denominator first
+        let asym = |gi: usize, gj: usize, m: Option<usize>| -> f32 {
+            let (a, d) = (&items[groups[gi][0]], &items[groups[gj][0]]);
+            m.map_or(9.0, |m| ((a.y - items[m].y) - (items[m].y - d.y)).abs() / a.size.max(1.0))
+        };
+        cands.retain(|&(gi, gj, b, a)| asym(gi, gj, b.or(a)) < 0.5);
+        cands.sort_by_key(|&(gi, gj, b, a)| ((asym(gi, gj, b.or(a)) * 8.0) as usize, groups[gi].len() + groups[gj].len()));
+        let mut parts: BTreeSet<usize> = BTreeSet::new();
+        let mut used: BTreeSet<usize> = BTreeSet::new();
+        let mut found: Vec<Frac> = vec![];
+        for (gi, gj, before, after) in cands {
+            if used.contains(&gi) || used.contains(&gj) {
+                continue;
+            }
+            let (before, after) = (before.filter(|b| !parts.contains(b)), after.filter(|b| !parts.contains(b)));
+            let Some(m) = before.or(after) else { continue };
+            used.insert(gi);
+            used.insert(gj);
+            parts.extend(groups[gi].iter().chain(groups[gj].iter()).copied());
+            found.push(Frac { num: groups[gi].clone(), den: groups[gj].clone(), base: items[m].y, size: items[groups[gi][0]].size, before, after });
+        }
+        for f in found {
+            // the line's items next to it are math (`) =` before a fraction is not prose)
+            for m in [f.before, f.after].into_iter().flatten() {
+                if self.roles[m] == Role::Text && is_connector_text(&items[m].str) {
+                    self.roles[m] = Role::Connector;
+                }
+            }
+            let start = f.num[0];
+            for &x in f.num.iter().chain(f.den.iter()) {
+                self.frac_of.insert(x, start);
+                if matches!(self.roles[x], Role::Text | Role::Connector) {
+                    self.roles[x] = Role::Math;
+                }
+            }
+            self.fracs.insert(start, f);
+        }
     }
 
     fn items(&self) -> &[Item] {
@@ -387,11 +567,13 @@ impl<'a> PageCtx<'a> {
             if matches!(roles[i], Role::Space | Role::Accent) {
                 continue;
             }
-            let Some(prev) = (0..i).rev().find(|&j| matches!(roles[j], Role::Math | Role::Script)) else { continue };
-            if (prev + 1..i).any(|j| !matches!(roles[j], Role::Space)) {
+            // a closing bracket in the text font carries scripts too: `(…)^{2}`
+            let closing = |j: usize, roles: &[Role]| roles[j] == Role::Connector && items[j].str.trim_end().ends_with([')', ']', '|', '}']);
+            let Some(prev) = (0..i).rev().find(|&j| matches!(roles[j], Role::Math | Role::Script) || closing(j, &roles)) else { continue };
+            if (prev + 1..i).any(|j| !matches!(roles[j], Role::Space | Role::Accent)) {
                 continue;
             }
-            let Some(main) = (0..=prev).rev().take_while(|&j| matches!(roles[j], Role::Math | Role::Script | Role::Space)).find(|&j| roles[j] == Role::Math && items[j].size > 0.0 && (roles[j] != Role::Script)).filter(|&j| j == prev || roles[prev] == Role::Script) else { continue };
+            let Some(main) = (0..=prev).rev().take_while(|&j| matches!(roles[j], Role::Math | Role::Script | Role::Space | Role::Accent) || closing(j, &roles)).find(|&j| (roles[j] == Role::Math || closing(j, &roles)) && items[j].size > 0.0).filter(|&j| j == prev || roles[prev] == Role::Script) else { continue };
             let (m, a, b) = (&items[main], &items[prev], &items[i]);
             let base = m.size.max(1.0);
             let gap = b.x - (a.x + a.w);
@@ -410,8 +592,8 @@ impl<'a> PageCtx<'a> {
             if roles[i] != Role::Connector && roles[i] != Role::Text {
                 continue;
             }
-            let prev = (0..i).rev().find(|&j| roles[j] != Role::Space);
-            let next = (i + 1..n).find(|&j| roles[j] != Role::Space);
+            let prev = (0..i).rev().find(|&j| !matches!(roles[j], Role::Space | Role::Accent));
+            let next = (i + 1..n).find(|&j| !matches!(roles[j], Role::Space | Role::Accent));
             let mathish = |j: Option<usize>| j.is_some_and(|j| matches!(roles[j], Role::Math | Role::Script) && (items[j].y - items[i].y).abs() < self.body * 0.9);
             let word = items[i].str.trim();
             if roles[i] == Role::Connector {
@@ -430,6 +612,7 @@ impl<'a> PageCtx<'a> {
     fn attach_accents(&mut self) {
         let items = self.items();
         let mut found = vec![];
+        let mut lone_tilde = vec![];
         for (a, ai) in items.iter().enumerate() {
             if self.roles[a] != Role::Accent {
                 continue;
@@ -440,7 +623,7 @@ impl<'a> PageCtx<'a> {
             let best = items
                 .iter()
                 .enumerate()
-                .filter(|(j, it)| matches!(self.roles[*j], Role::Math | Role::Text) && self.roles[*j] != Role::Accent && it.w > 0.0)
+                .filter(|(j, it)| matches!(self.roles[*j], Role::Math | Role::Text | Role::Script) && it.w > 0.0)
                 .filter(|(_, it)| {
                     let dy = ai.y - it.y;
                     let pad = it.size * 0.35;
@@ -454,14 +637,19 @@ impl<'a> PageCtx<'a> {
                 let n = it.str.chars().count().max(1);
                 let k = (((cx - it.x) / it.w.max(0.1)) * n as f32).floor().clamp(0.0, (n - 1) as f32) as usize;
                 found.push((a, j, k, name));
+            } else if c == '~' {
+                lone_tilde.push(a); // over nothing: "distributed as"
             }
+        }
+        for a in lone_tilde {
+            self.roles[a] = Role::Math;
         }
         for (a, j, k, name) in found {
             // an accented upright letter in text is a math letter too
             if self.roles[j] == Role::Text && self.items()[j].str.trim().chars().count() == 1 {
                 self.roles[j] = Role::Math;
             }
-            if self.roles[j] == Role::Math {
+            if matches!(self.roles[j], Role::Math | Role::Script) {
                 self.accents.insert((j, k), name);
                 self.roles[a] = Role::Space;
             }
@@ -479,24 +667,62 @@ impl<'a> PageCtx<'a> {
         {
             return if OPERATOR_WORDS.contains(&word) && word != "E" { format!("\\{word} ") } else { format!("\\mathrm{{{word}}}") };
         }
-        let mut out = String::new();
+        let script = self.roles.get(i) == Some(&Role::Script);
+        // A word in a script set letter by letter in Word's math italic (`𝑠𝑦𝑛`, `𝑑𝑖𝑠𝑐`):
+        // a name, upright (`\mathrm{syn}`), not a product of single-letter symbols.
+        if script && fc == FontClass::UnicodeMath && word.chars().count() >= 3 && word.chars().all(|c| math_italic(c).is_some()) {
+            return format!("\\mathrm{{{}}}", word.chars().filter_map(math_italic).collect::<String>());
+        }
+        let mut pieces: Vec<String> = vec![];
         let lead = it.str.len() - it.str.trim_start().len();
         let lead_chars = it.str[..lead].chars().count();
-        for (k, c) in it.str.trim().chars().enumerate() {
+        let chars: Vec<char> = it.str.trim().chars().collect();
+        let mut k = 0;
+        while k < chars.len() {
+            let c = chars[k];
+            k += 1;
             if c.is_whitespace() {
-                out.push(' ');
+                pieces.push(" ".into());
                 continue;
             }
+            // two or more script small letters in a row: a word (`𝓇ℯ𝒶ℓ` → \mathrm{real})
+            if script_small(c).is_some() {
+                let n = chars[k - 1..].iter().take_while(|&&x| script_small(x).is_some()).count();
+                if n >= 2 {
+                    let w: String = chars[k - 1..k - 1 + n].iter().filter_map(|&x| script_small(x)).collect();
+                    pieces.push(format!("\\mathrm{{{w}}}"));
+                    k += n - 1;
+                    continue;
+                }
+            }
+            // a combining accent (x + U+0303) goes on the piece before it
+            if is_combining(c) {
+                if let (Some(acc), Some(last)) = (self.g.accent(c), pieces.pop()) {
+                    pieces.push(format!("\\{acc}{{{}}}", last.trim()));
+                }
+                continue;
+            }
+            // `∼` / `~` between symbols is "distributed as" (`~` alone is a LaTeX space)
+            if c == '~' || c == '∼' {
+                pieces.push("\\sim ".into());
+                continue;
+            }
+            // a prime set on the letter itself (Word's `𝔁′`): x', not a raised \prime
+            if (c == '′' || c == '″') && !script {
+                pieces.push(if c == '′' { "'".into() } else { "''".into() });
+                continue;
+            }
+            let k0 = k - 1;
             if let Some(code) = tex_code(fc, &it.font, c) {
                 if !code.is_empty() {
                     let mut piece = code.to_string();
                     if piece.starts_with('\\') && piece.ends_with(|x: char| x.is_ascii_alphabetic()) {
                         piece.push(' ');
                     }
-                    if let Some(acc) = self.accents.get(&(i, k + lead_chars)) {
+                    if let Some(acc) = self.accents.get(&(i, k0 + lead_chars)) {
                         piece = format!("\\{acc}{{{}}}", piece.trim());
                     }
-                    out += &piece;
+                    pieces.push(piece);
                 }
                 continue; // "7" in CMSY is \mapstochar (the bar of ↦): nothing
             }
@@ -504,8 +730,7 @@ impl<'a> PageCtx<'a> {
                 && let Some(op) = cmex(c)
             {
                 if !op.is_empty() {
-                    out += op;
-                    out.push(' ');
+                    pieces.push(format!("{op} "));
                 }
                 continue;
             }
@@ -533,12 +758,12 @@ impl<'a> PageCtx<'a> {
                 FontClass::Text { italic: false, .. } if c.is_ascii_alphabetic() => format!("\\mathrm{{{c}}}"),
                 _ => piece,
             };
-            if let Some(acc) = self.accents.get(&(i, k + lead_chars)) {
+            if let Some(acc) = self.accents.get(&(i, k0 + lead_chars)) {
                 piece = format!("\\{acc}{{{}}}", piece.trim());
             }
-            out += &piece;
+            pieces.push(piece);
         }
-        out
+        pieces.concat()
     }
 
     /// Runs of math items: (first, last) item indexes.
@@ -564,7 +789,8 @@ impl<'a> PageCtx<'a> {
                 }
             }
             while let Some(&f) = cur.first() {
-                if self.roles[f] == Role::Connector && !items[f].str.trim().chars().any(|c| "([{|".contains(c)) || self.roles[f] == Role::Space {
+                let before_frac = self.fracs.values().any(|fr| fr.before == Some(f));
+                if self.roles[f] == Role::Connector && !before_frac && !items[f].str.trim().chars().any(|c| "([{|".contains(c)) || self.roles[f] == Role::Space {
                     cur.remove(0);
                 } else {
                     break;
@@ -575,7 +801,20 @@ impl<'a> PageCtx<'a> {
             }
             cur.clear();
         };
+        // same line, not far to the right
+        let near = |l: usize, i: usize| {
+            let (a, b) = (&items[l], &items[i]);
+            (b.y - a.y).abs() < self.body * 0.9 && b.x - (a.x + a.w) < self.body * 1.6 && b.x > a.x - self.body * 3.0
+        };
+        // fractions go into the run next to the line's item before (or after) them
+        let member = |i: usize| self.frac_of.contains_key(&i);
+        let mut placed: BTreeSet<usize> = BTreeSet::new();
+        let frac_items = |f: &Frac| f.num.iter().chain(f.den.iter()).copied().collect::<Vec<usize>>();
+        let base_of = |cur: &[usize]| cur.iter().rev().copied().find(|&m| self.roles[m] != Role::Space);
         for i in 0..items.len() {
+            if member(i) {
+                continue;
+            }
             let r = self.roles[i];
             let joins = match r {
                 Role::Math | Role::Script => true,
@@ -583,21 +822,34 @@ impl<'a> PageCtx<'a> {
                 _ => false,
             };
             if joins
-                && let Some(&l) = cur.iter().rev().find(|&&j| self.roles[j] != Role::Space)
+                && let Some(l) = base_of(&cur)
+                && !near(l, i)
+                && r != Role::Script
             {
-                // same line, not far to the right
-                let (a, b) = (&items[l], &items[i]);
-                let near = (b.y - a.y).abs() < self.body * 0.9 && b.x - (a.x + a.w) < self.body * 1.6 && b.x > a.x - self.body * 3.0;
-                if !near && r != Role::Script {
-                    close(&mut cur, &mut out);
-                }
+                close(&mut cur, &mut out);
             }
             if joins {
                 if r == Role::Space && cur.is_empty() {
                     continue;
                 }
+                for (st, f) in &self.fracs {
+                    if f.after == Some(i) && f.before.is_none_or(|b| !cur.contains(&b)) && placed.insert(*st) {
+                        cur.extend(frac_items(f));
+                    }
+                }
                 cur.push(i);
-                if items[i].eol && r != Role::Script {
+                for (st, f) in &self.fracs {
+                    if f.before == Some(i) && placed.insert(*st) {
+                        cur.extend(frac_items(f));
+                    }
+                }
+                // a line end closes the run unless the math goes on right there (pdf.js
+                // marks a line end before a lowered script)
+                let goes_on = (i + 1..items.len()).find(|&j| !items[j].str.trim().is_empty() && !member(j)).is_some_and(|j| {
+                    let last = base_of(&cur).unwrap_or(i);
+                    matches!(self.roles[j], Role::Math | Role::Script | Role::Connector) && (self.roles[j] == Role::Script || near(last, j))
+                });
+                if items[i].eol && r != Role::Script && !goes_on {
                     close(&mut cur, &mut out);
                 }
             } else {
@@ -627,12 +879,32 @@ impl<'a> PageCtx<'a> {
     /// LaTeX of a run: scripts as `_{…}` / `^{…}` relative to the item before; a smaller
     /// script after a script nests (`P_{\theta_{t}}`).
     fn run_latex(&self, run: &[usize]) -> String {
+        self.latex_of(run, true)
+    }
+
+    /// `fracs`: write stacked fractions (off inside a numerator / denominator).
+    fn latex_of(&self, run: &[usize], fracs: bool) -> String {
+        if run.is_empty() {
+            return String::new();
+        }
         let items = self.items();
         let mut out = String::new();
         let mut base: (f32, f32) = (items[run[0]].y, self.body); // (baseline, size) of the last main item
         let mut levels: Vec<(f32, f32)> = vec![]; // open script groups: (baseline, size)
         for &i in run {
             let it = &items[i];
+            if let Some(f) = self.fracs.get(&i).filter(|_| fracs) {
+                for _ in levels.drain(..) {
+                    out.push('}');
+                }
+                let part = |v: &[usize]| self.latex_of(&v.iter().copied().filter(|&m| run.contains(&m)).collect::<Vec<_>>(), false);
+                out += &format!("\\frac{{{}}}{{{}}}", part(&f.num), part(&f.den));
+                base = (f.base, f.size.max(1.0));
+                continue;
+            }
+            if fracs && self.frac_of.contains_key(&i) {
+                continue; // inside the fraction written above
+            }
             match self.roles[i] {
                 Role::Space => {
                     if levels.is_empty() {
@@ -650,6 +922,9 @@ impl<'a> PageCtx<'a> {
                         }
                         if levels.is_empty() || it.size < rs * 0.9 {
                             let kind = if it.y < ry - rs * 0.05 { '_' } else { '^' };
+                            while out.ends_with(' ') {
+                                out.pop();
+                            }
                             out.push(kind);
                             out.push('{');
                             levels.push((it.y, it.size));
@@ -672,7 +947,8 @@ impl<'a> PageCtx<'a> {
         for _ in levels.drain(..) {
             out.push('}');
         }
-        tidy_latex(&out)
+        // a prime is written x', as in the source (`x^{\prime}_{p}` → `x'_{p}`)
+        tidy_latex(&out).replace("^{\\prime\\prime}", "''").replace("^{\\prime}", "'")
     }
 }
 
@@ -793,6 +1069,33 @@ fn split_items(items: &[Item], g: &Glyphs) -> Vec<Item> {
     out
 }
 
+/// Letters of one word set as separate items (Word: `𝓇` `ℯ` `𝒶` `ℓ`, or `𝑠` `𝑦` `𝑛` in a
+/// script) back into one item: touching, same size and baseline, adjacent in the text.
+fn join_letters(items: Vec<Item>, body: f32) -> Vec<Item> {
+    let script_word = |t: &str| !t.is_empty() && t.chars().all(|c| script_small(c).is_some());
+    let small_italic = |it: &Item| it.size < body * 0.88 && !it.str.is_empty() && it.str.chars().all(|c| math_italic(c).is_some());
+    let mut out: Vec<Item> = Vec::with_capacity(items.len());
+    for it in items {
+        if let Some(last) = out.last_mut()
+            && last.e == it.s
+            && !last.eol
+            && (it.size - last.size).abs() < last.size * 0.05
+            && (it.y - last.y).abs() < last.size * 0.05
+            && (it.x - (last.x + last.w)).abs() < last.size * 0.3
+            && last.font == it.font
+            && (script_word(&last.str) && script_word(&it.str) || small_italic(last) && small_italic(&it))
+        {
+            last.str.push_str(&it.str);
+            last.e = it.e;
+            last.w = it.x + it.w - last.x;
+            last.eol = it.eol;
+            continue;
+        }
+        out.push(it);
+    }
+    out
+}
+
 fn eq_number(t: &str) -> Option<String> {
     let t = t.trim();
     let inner = t.strip_prefix('(')?.strip_suffix(')')?.trim();
@@ -819,20 +1122,30 @@ pub fn detect(paper: &PaperText, g: &Glyphs) -> Detection {
             let (s, e) = (items[run[0]].s, items[*run.last().unwrap()].e);
             det.spans.push(MathSpan { page: p.page, s, e, bbox: cx.bbox(run), latex, eq: None });
         }
-        display_equations(&cx, &runs, &mut det, first_span);
+        display_equations(&cx, &mut det, first_span);
+    }
+    // one id per equation: a paper bound twice (a manuscript and its marked-up copy)
+    // repeats its numbers — the later ones get `eq:1-2`
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    for q in &mut det.equations {
+        let n = seen.entry(q.id.clone()).or_default();
+        *n += 1;
+        if *n > 1 {
+            q.id = format!("{}-{n}", q.id);
+        }
     }
     det
 }
 
 /// Lines of a page: clusters of item indexes by baseline (main-size items define lines;
 /// smaller ones join the nearest line).
-fn lines(cx: &PageCtx) -> Vec<Vec<usize>> {
+fn lines(cx: &PageCtx) -> Vec<(f32, Vec<usize>)> {
     let items = cx.items();
     let mut order: Vec<usize> = (0..items.len()).filter(|&i| cx.roles[i] != Role::Space).collect();
     order.sort_by(|&a, &b| items[b].y.partial_cmp(&items[a].y).unwrap_or(std::cmp::Ordering::Equal));
     let mut lines: Vec<(f32, Vec<usize>)> = vec![];
     for &i in &order {
-        if items[i].size < cx.body * 0.88 && cx.roles[i] == Role::Script {
+        if items[i].size < cx.body * 0.88 && cx.roles[i] == Role::Script || cx.frac_of.contains_key(&i) {
             continue;
         }
         match lines.iter_mut().find(|(y, _)| (items[i].y - *y).abs() < cx.body * 0.3) {
@@ -841,28 +1154,87 @@ fn lines(cx: &PageCtx) -> Vec<Vec<usize>> {
         }
     }
     for &i in &order {
-        if items[i].size < cx.body * 0.88
-            && cx.roles[i] == Role::Script
-            && let Some((_, v)) = lines.iter_mut().filter(|(y, _)| (items[i].y - *y).abs() < cx.body * 1.0).min_by(|a, b| (items[i].y - a.0).abs().partial_cmp(&(items[i].y - b.0).abs()).unwrap_or(std::cmp::Ordering::Equal))
+        if !(items[i].size < cx.body * 0.88 && cx.roles[i] == Role::Script) {
+            continue;
+        }
+        // the line of its base (the item before it that is not a script), else the nearest
+        let base = (0..i).rev().find(|&j| cx.roles[j] != Role::Space && cx.roles[j] != Role::Script && !cx.frac_of.contains_key(&j));
+        let own = base.and_then(|b| lines.iter().position(|(_, v)| v.contains(&b))).filter(|&k| (items[i].y - lines[k].0).abs() < cx.body * 1.0);
+        let near = || lines.iter().enumerate().filter(|(_, (y, _))| (items[i].y - *y).abs() < cx.body * 1.0).min_by(|a, b| (items[i].y - a.1.0).abs().partial_cmp(&(items[i].y - b.1.0).abs()).unwrap_or(std::cmp::Ordering::Equal)).map(|(k, _)| k);
+        if let Some(k) = own.or_else(near) {
+            lines[k].1.push(i);
+        }
+    }
+    // numerators and denominators belong to the line of their fraction's baseline
+    for &i in &order {
+        if let Some(f) = cx.frac_of.get(&i).and_then(|f| cx.fracs.get(f))
+            && let Some((_, v)) = lines.iter_mut().min_by(|a, b| (f.base - a.0).abs().partial_cmp(&(f.base - b.0).abs()).unwrap_or(std::cmp::Ordering::Equal))
         {
             v.push(i);
         }
     }
-    let mut out: Vec<Vec<usize>> = lines.into_iter().map(|(_, mut v)| {
-        v.sort_by(|&a, &b| items[a].x.partial_cmp(&items[b].x).unwrap_or(std::cmp::Ordering::Equal));
-        v
-    }).collect();
-    out.sort_by(|a, b| items[b[0]].y.partial_cmp(&items[a[0]].y).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out: Vec<(f32, Vec<usize>)> = lines
+        .into_iter()
+        .map(|(y, mut v)| {
+            v.sort_by(|&a, &b| items[a].x.partial_cmp(&items[b].x).unwrap_or(std::cmp::Ordering::Equal));
+            (y, v)
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     out
 }
 
-fn display_equations(cx: &PageCtx, runs: &[Vec<usize>], det: &mut Detection, first_span: usize) {
+/// Rows of one display equation as one LaTeX: a single row as it is; several rows as
+/// `aligned` at their first relation (a row without one continues the row before).
+pub fn join_rows(rows: &[String]) -> String {
+    let rows: Vec<&str> = rows.iter().map(|r| r.trim()).filter(|r| !r.is_empty()).collect();
+    match rows.len() {
+        0 => return String::new(),
+        1 => return rows[0].to_string(),
+        _ => {}
+    }
+    let rel = |r: &str| -> Option<usize> {
+        let b = r.as_bytes();
+        let mut depth = 0i32;
+        for (i, &c) in b.iter().enumerate() {
+            match c {
+                b'{' => depth += 1,
+                b'}' => depth -= 1,
+                b'=' | b'<' | b'>' if depth == 0 => return Some(i),
+                b'\\' if depth == 0 => {
+                    for w in ["\\leq", "\\geq", "\\approx", "\\equiv", "\\propto", "\\coloneqq"] {
+                        if r[i..].starts_with(w) && !r[i + w.len()..].starts_with(|c: char| c.is_ascii_alphabetic()) {
+                            return Some(i);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    };
+    if rows.iter().all(|r| rel(r).is_none()) {
+        return format!("\\begin{{gathered}}{}\\end{{gathered}}", rows.join(" \\\\ "));
+    }
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|r| match rel(r) {
+            Some(i) => format!("{} &{}", r[..i].trim_end(), &r[i..]),
+            None => format!("&\\quad {r}"),
+        })
+        .collect();
+    format!("\\begin{{aligned}}{}\\end{{aligned}}", lines.join(" \\\\ "))
+}
+
+fn display_equations(cx: &PageCtx, det: &mut Detection, first_span: usize) {
     let items = cx.items();
     let w = cx.p.width.max(1.0);
-    let ls = lines(cx);
-    if ls.is_empty() {
+    let all = lines(cx);
+    if all.is_empty() {
         return;
     }
+    let ys: Vec<f32> = all.iter().map(|l| l.0).collect();
+    let ls: Vec<Vec<usize>> = all.into_iter().map(|l| l.1).collect();
     let x0 = |l: &Vec<usize>| l.iter().map(|&i| items[i].x).fold(f32::MAX, f32::min);
     let x1 = |l: &Vec<usize>| l.iter().map(|&i| items[i].x + items[i].w).fold(f32::MIN, f32::max);
     // Columns: two when many lines sit wholly in each half.
@@ -906,57 +1278,99 @@ fn display_equations(cx: &PageCtx, runs: &[Vec<usize>], det: &mut Detection, fir
             kinds[k] = Some(number);
         }
     }
-    // A number on a line of its own (centred between the rows of a multi-line equation):
-    // the math rows next to it are that equation.
+    // A number on a line of its own: the row level with it is that equation (Word sets the
+    // number a little off the row's baseline); else it sits between the rows of a
+    // multi-line equation, and the math rows next to it are that equation.
+    let mut gone = vec![false; ls.len()]; // number lines merged into their row
     for k in 0..ls.len() {
         let l = &ls[k];
-        if l.len() != 1 || eq_number(&items[l[0]].str).is_none() {
+        let Some(num) = (l.len() == 1).then(|| eq_number(&items[l[0]].str)).flatten() else { continue };
+        let (cl, cr) = column(l);
+        if items[l[0]].x + items[l[0]].w < cr - (cr - cl) * 0.06 {
             continue;
         }
-        let (_, cr) = column(l);
-        if items[l[0]].x + items[l[0]].w < cr - (cr - column(l).0) * 0.06 {
+        let level = (0..ls.len())
+            .filter(|&r| r != k && !gone[r] && (ys[r] - ys[k]).abs() < cx.body * 0.6 && !matches!(kinds[r], Some(Some(_))) && math_share(&ls[r]) >= 0.4)
+            .min_by(|&a, &b| (ys[a] - ys[k]).abs().partial_cmp(&(ys[b] - ys[k]).abs()).unwrap_or(std::cmp::Ordering::Equal));
+        if let Some(r) = level {
+            kinds[r] = Some(Some(num));
+            gone[k] = true;
             continue;
         }
-        kinds[k] = Some(eq_number(&items[l[0]].str));
+        kinds[k] = Some(Some(num));
         for j in [k.wrapping_sub(1), k + 1] {
             if let Some(m) = ls.get(j)
                 && kinds[j].is_none()
-                && (items[m[0]].y - items[l[0]].y).abs() < cx.body * 1.6
+                && (ys[j] - ys[k]).abs() < cx.body * 1.6
                 && math_share(m) >= 0.4
             {
                 kinds[j] = Some(None);
             }
         }
     }
-    // Group neighbouring equation lines; a group is one equation when it has at most one number.
-    let mut k = 0;
-    while k < ls.len() {
+    // Group neighbouring equation lines; a group is one equation when it has at most one
+    // number. Rows of a display with fractions are far apart: up to three body lines.
+    let order: Vec<usize> = (0..ls.len()).filter(|&k| !gone[k]).collect();
+    let mut p = 0;
+    while p < order.len() {
+        let k = order[p];
         let Some(num) = kinds[k].clone() else {
-            k += 1;
+            p += 1;
             continue;
         };
         let mut members = vec![k];
         let mut number = num;
-        let mut j = k + 1;
-        while j < ls.len() {
-            let gap = items[ls[j - 1][0]].y - items[ls[j][0]].y;
+        let mut q = p + 1;
+        while q < order.len() {
+            let j = order[q];
+            let gap = ys[order[q - 1]] - ys[j];
             match &kinds[j] {
-                Some(n) if gap < cx.body * 2.4 && (number.is_none() || n.is_none()) => {
+                Some(n) if gap < cx.body * 3.0 && (number.is_none() || n.is_none()) => {
                     if number.is_none() {
                         number = n.clone();
                     }
                     members.push(j);
-                    j += 1;
+                    q += 1;
                 }
                 _ => break,
             }
         }
-        let idx: Vec<usize> = members.iter().flat_map(|&m| ls[m].iter().copied()).filter(|&i| number.as_ref().is_none_or(|n| eq_number(&items[i].str).as_deref() != Some(n.as_str()))).collect();
+        p = q;
+        let is_number = |i: usize| number.as_ref().is_some_and(|n| eq_number(&items[i].str).as_deref() == Some(n.as_str()));
+        let mut rows: Vec<(f32, Vec<usize>)> = members.iter().map(|&m| (ys[m], ls[m].iter().copied().filter(|&i| !is_number(i)).collect::<Vec<_>>())).filter(|r| !r.1.is_empty()).collect();
+        // a line of small type only (the limits under \sup, \sum) belongs to the row above or below
+        let small = |r: &[usize]| r.iter().all(|&i| items[i].size < cx.body * 0.88);
+        while rows.len() > 1
+            && let Some(k) = rows.iter().position(|r| small(&r.1))
+        {
+            let y = rows[k].0;
+            let (_, v) = rows.remove(k);
+            if let Some(t) = (0..rows.len()).filter(|&t| !small(&rows[t].1)).min_by(|&a, &b| (rows[a].0 - y).abs().partial_cmp(&(rows[b].0 - y).abs()).unwrap_or(std::cmp::Ordering::Equal)) {
+                rows[t].1.extend(v);
+            } else {
+                rows.insert(k, (y, v));
+                break;
+            }
+        }
+        let rows: Vec<Vec<usize>> = rows.into_iter().map(|r| r.1).collect();
+        let idx: Vec<usize> = rows.iter().flatten().copied().collect();
+        if idx.is_empty() {
+            continue;
+        }
         let s = idx.iter().map(|&i| items[i].s).min().unwrap_or(0);
         let e = idx.iter().map(|&i| items[i].e).max().unwrap_or(0);
         let eqi = det.equations.len();
         let in_eq: Vec<usize> = (first_span..det.spans.len()).filter(|&si| det.spans[si].s >= s && det.spans[si].e <= e).collect();
-        let latex = in_eq.iter().map(|&si| det.spans[si].latex.clone()).collect::<Vec<_>>().join(" ");
+        // each run to the row its first item is on
+        let row_latex: Vec<String> = rows
+            .iter()
+            .map(|r| {
+                let starts: BTreeSet<usize> = r.iter().map(|&i| items[i].s).collect();
+                in_eq.iter().filter(|&&si| starts.contains(&det.spans[si].s)).map(|&si| det.spans[si].latex.clone()).collect::<Vec<_>>().join(" ")
+            })
+            .collect();
+        let placed: usize = rows.iter().map(|r| r.iter().map(|&i| items[i].s).collect::<BTreeSet<_>>()).map(|st| in_eq.iter().filter(|&&si| st.contains(&det.spans[si].s)).count()).sum();
+        let latex = if placed == in_eq.len() { join_rows(&row_latex) } else { in_eq.iter().map(|&si| det.spans[si].latex.clone()).collect::<Vec<_>>().join(" ") };
         for si in &in_eq {
             det.spans[*si].eq = Some(eqi);
         }
@@ -964,9 +1378,7 @@ fn display_equations(cx: &PageCtx, runs: &[Vec<usize>], det: &mut Detection, fir
             Some(n) => format!("eq:{n}"),
             None => format!("eq:p{}-{}", cx.p.page, det.equations.iter().filter(|e| e.page == cx.p.page).count() + 1),
         };
-        let _ = runs;
         det.equations.push(DisplayEq { id, page: cx.p.page, number, bbox: cx.bbox(&idx), latex, s, e });
-        k = j;
     }
 }
 
@@ -1476,6 +1888,195 @@ mod tests {
             y -= 12.0;
         }
         PageText { page: 1, text: t, items, width: 612.0, height: 792.0 }
+    }
+
+    /// A page as Word writes equations (Cambria Math, Unicode math letters, one item per
+    /// run), synthetic: a least-squares GAN loss over three rows with stacked ½ (numerator
+    /// before the row in the text), a combining tilde, `~` for "distributed as", a script
+    /// word in a subscript, a prime on the letter, a two-row equation whose number sits
+    /// between its rows, and numbers set a little below their row's baseline.
+    fn word_page() -> PageText {
+        let mut s = 0;
+        let mut t = String::new();
+        let mut items: Vec<Item> = vec![];
+        let m = "ABCDEE+Cambria Math";
+        let tx = "Times New Roman";
+        let mut put = |str_: &str, font: &str, size: f32, x: f32, y: f32, w: f32, eol: bool| {
+            let mut it = item(&mut s, &mut t, str_, font, size, x, y, w);
+            it.eol = eol;
+            items.push(it);
+            if eol {
+                t.push('\n');
+                s += 1;
+            }
+        };
+        let mut y = 740.0;
+        for _ in 0..6 {
+            put("Plain body text continues across the whole column width here.", tx, 12.0, 76.0, y, 440.0, true);
+            y -= 18.0;
+        }
+        // (1), row 1: L_disc(D_p) = ½ E_{x_p ~ P_real}[(D_p(x_p) − 1)^2] +
+        put("", m, 12.0, 171.0, 620.0, 0.0, true);
+        put("ℒ", m, 12.0, 171.0, 620.0, 7.1, false);
+        put("𝑑𝑖𝑠𝑐", m, 8.52, 178.3, 617.6, 20.3, false);
+        put("(𝐷", m, 12.0, 199.1, 620.0, 13.3, false);
+        put("𝑝", m, 8.52, 212.4, 617.6, 4.8, false);
+        put(") =", m, 12.0, 217.7, 620.0, 17.1, false);
+        put(" ", m, 12.0, 234.9, 620.0, 10.7, false);
+        put("1", m, 12.0, 245.6, 629.2, 6.6, true);
+        put("2 ", m, 12.0, 245.6, 612.0, 8.6, false);
+        put("𝔼", m, 12.0, 254.2, 620.0, 7.6, false);
+        put("𝔁", m, 8.52, 261.9, 617.6, 5.5, false);
+        put("𝒑", m, 6.96, 267.4, 616.0, 4.3, false);
+        put("~𝒫", m, 8.52, 272.1, 617.6, 12.3, false);
+        put("𝓇ℯ𝒶ℓ", m, 6.96, 284.4, 615.8, 16.4, false);
+        put(" ", m, 6.96, 300.9, 615.8, 1.0, false);
+        put("[(𝐷", m, 12.0, 301.9, 620.0, 17.5, false);
+        put("𝑝", m, 8.52, 319.4, 617.6, 4.8, false);
+        put("(𝔁", m, 12.0, 324.7, 620.0, 12.8, false);
+        put("𝒑", m, 8.52, 337.4, 617.6, 5.3, false);
+        put(") − 1)", m, 12.0, 343.1, 620.0, 30.8, false);
+        put("2", m, 8.52, 374.0, 624.5, 4.7, false);
+        put("]", m, 12.0, 379.1, 620.0, 4.2, false);
+        put(" ", m, 12.0, 383.3, 620.0, 10.1, false);
+        put("+", m, 12.0, 393.4, 620.0, 9.0, false);
+        // row 2: ½ E_{x̃_p ~ P_syn}[D_p(x̃_p)^2]      (1)
+        put("", m, 12.0, 275.2, 598.7, 0.0, true);
+        put("1", m, 12.0, 275.2, 598.7, 6.6, true);
+        put("2 ", m, 12.0, 275.2, 581.5, 8.5, false);
+        put("𝔼", m, 12.0, 283.7, 589.6, 7.6, false);
+        put("𝔁\u{303}", m, 8.52, 291.4, 587.2, 5.5, false);
+        put("𝒑", m, 6.96, 296.9, 585.5, 4.3, false);
+        put("~𝒫", m, 8.52, 301.6, 587.2, 12.3, false);
+        put("𝑠𝑦𝑛", m, 6.96, 313.9, 585.5, 13.2, false);
+        put(" ", m, 6.96, 327.0, 585.5, 0.9, false);
+        put("[𝐷", m, 12.0, 327.9, 589.6, 12.0, false);
+        put("𝑝", m, 8.52, 339.9, 587.2, 4.8, false);
+        put("(𝔁\u{303}", m, 12.0, 345.2, 589.6, 12.7, false);
+        put("𝒑", m, 8.52, 357.9, 587.2, 5.3, false);
+        put(")", m, 12.0, 363.7, 589.6, 4.0, false);
+        put("2", m, 8.52, 368.0, 594.0, 4.7, false);
+        put("]", m, 12.0, 373.2, 589.6, 4.2, false);
+        put("", tx, 12.0, 504.8, 589.3, 0.0, true);
+        put("(1)", tx, 12.0, 504.8, 589.3, 14.0, false);
+        // row 3: L_gene(G_p) = ½ E_{x̃_p ~ P_syn}[(D_p(x̃_p) − 1)^2]
+        put("", m, 12.0, 186.9, 559.1, 0.0, true);
+        put("ℒ", m, 12.0, 186.9, 559.1, 7.1, false);
+        put("𝑔𝑒𝑛𝑒", m, 8.52, 194.0, 556.7, 19.8, false);
+        put("(𝐺", m, 12.0, 214.1, 559.1, 12.6, false);
+        put("𝑝", m, 8.52, 226.7, 556.7, 4.8, false);
+        put(") = ", m, 12.0, 232.0, 559.1, 20.5, false);
+        put("1", m, 12.0, 252.5, 568.2, 6.6, true);
+        put("2 ", m, 12.0, 252.5, 551.0, 8.6, false);
+        put("𝔼", m, 12.0, 261.2, 559.1, 7.6, false);
+        put("𝔁\u{303}", m, 8.52, 268.9, 556.7, 5.5, false);
+        put("𝒑", m, 6.96, 274.4, 555.0, 4.3, false);
+        put("~𝒫", m, 8.52, 279.1, 556.7, 12.3, false);
+        put("𝑠𝑦𝑛", m, 6.96, 291.3, 555.0, 13.2, false);
+        put(" ", m, 6.96, 304.5, 555.0, 0.9, false);
+        put("[(𝐷", m, 12.0, 305.3, 559.1, 17.5, false);
+        put("𝑝", m, 8.52, 322.9, 556.7, 4.8, false);
+        put("(𝔁\u{303}", m, 12.0, 328.1, 559.1, 12.7, false);
+        put("𝒑", m, 8.52, 340.9, 556.7, 5.3, false);
+        put(") − 1)", m, 12.0, 346.6, 559.1, 30.8, false);
+        put("2", m, 8.52, 377.5, 563.5, 4.7, false);
+        put("]", m, 12.0, 382.6, 559.1, 4.2, true);
+        put("where the rows share one number and the body goes on here.", tx, 12.0, 76.0, 530.0, 440.0, true);
+        // (2): L_reco = E[‖x_p − x'_p‖_2] / x'_p = R_p(D_p(x_p)), number between the rows
+        put("", m, 12.0, 194.2, 500.0, 0.0, true);
+        put("ℒ", m, 12.0, 194.2, 500.0, 7.1, false);
+        put("𝑟𝑒𝑐𝑜", m, 8.52, 201.3, 497.6, 21.7, false);
+        put(" ", m, 8.52, 223.0, 497.6, 3.8, false);
+        put("=", m, 12.0, 226.7, 500.0, 9.0, false);
+        put(" ", m, 12.0, 235.7, 500.0, 10.7, false);
+        put("𝔼[‖𝔁", m, 12.0, 246.4, 500.0, 26.0, false);
+        put("𝒑", m, 8.52, 272.4, 497.6, 5.3, false);
+        put(" ", m, 8.52, 277.7, 497.6, 10.6, false);
+        put("−", m, 12.0, 288.3, 500.0, 9.0, false);
+        put(" ", m, 12.0, 297.3, 500.0, 10.0, false);
+        put("𝔁′", m, 12.0, 307.3, 500.0, 10.9, false);
+        put("𝒑", m, 8.52, 318.2, 497.6, 5.3, false);
+        put("‖", m, 12.0, 324.0, 500.0, 6.3, false);
+        put("2", m, 8.52, 330.3, 493.9, 4.7, false);
+        put("]", m, 12.0, 335.5, 500.0, 4.2, false);
+        put("", m, 12.0, 240.2, 461.7, 0.0, true);
+        put("𝔁′", m, 12.0, 240.2, 461.7, 10.9, false);
+        put("𝒑", m, 8.52, 251.1, 459.3, 5.3, false);
+        put(" ", m, 8.52, 256.4, 459.3, 3.7, false);
+        put("= ℛ", m, 12.0, 260.1, 461.7, 21.2, false);
+        put("𝑝", m, 8.52, 281.3, 459.3, 4.8, false);
+        put("(𝐷", m, 12.0, 286.6, 461.7, 13.3, false);
+        put("𝑝", m, 8.52, 299.9, 459.3, 4.8, false);
+        put("(𝔁", m, 12.0, 305.1, 461.7, 12.8, false);
+        put("𝒑", m, 8.52, 317.9, 459.3, 5.3, false);
+        put("))", m, 12.0, 323.7, 461.7, 9.9, false);
+        put("", tx, 12.0, 504.8, 479.2, 0.0, true);
+        put("(2)", tx, 12.0, 504.8, 479.2, 14.0, true);
+        // (3) and (4): one number per row, each a little below its baseline
+        put("ℒ", m, 12.0, 232.7, 437.9, 7.1, false);
+        put("𝑡𝑜𝑡𝑎𝑙", m, 8.52, 239.8, 435.6, 18.8, false);
+        put(" = ℒ", m, 12.0, 258.6, 437.9, 25.0, false);
+        put("𝐺", m, 8.52, 283.6, 435.6, 5.1, false);
+        put(" ", m, 8.52, 288.7, 435.6, 100.0, false);
+        put("(3)", tx, 12.0, 504.8, 432.6, 14.0, true);
+        put("ℒ", m, 12.0, 232.7, 412.1, 7.1, false);
+        put("𝐺", m, 8.52, 239.8, 409.8, 5.1, false);
+        put(" = 𝜆ℒ", m, 12.0, 244.9, 412.1, 30.0, false);
+        put("𝐷", m, 8.52, 274.9, 409.8, 5.1, false);
+        put(" ", m, 8.52, 280.0, 409.8, 100.0, false);
+        put("(4)", tx, 12.0, 504.8, 406.8, 14.0, true);
+        let mut y = 380.0;
+        for _ in 0..6 {
+            put("Plain body text continues across the whole column width here.", tx, 12.0, 76.0, y, 440.0, true);
+            y -= 18.0;
+        }
+        PageText { page: 1, text: t, items, width: 595.0, height: 842.0 }
+    }
+
+    #[test]
+    fn word_equations_fractions_accents_words_primes_and_numbers() {
+        let p = PaperText { pages: vec![word_page()] };
+        let det = detect(&p, &Glyphs::default());
+        let eqs: Vec<(&str, Option<&str>, &str)> = det.equations.iter().map(|q| (q.id.as_str(), q.number.as_deref(), q.latex.as_str())).collect();
+        assert_eq!(eqs.len(), 4, "{eqs:#?}");
+        let e1 = det.equations[0].latex.as_str();
+        assert_eq!(det.equations[0].number.as_deref(), Some("1"));
+        assert_eq!(
+            e1,
+            "\\begin{aligned}\\mathcal{L}_{\\mathrm{disc}}(D_{p}) &=\\frac{1}{2} \\mathbb{E}_{\\boldsymbol{x}_{\\boldsymbol{p}}\\sim\\mathcal{P}_{\\mathrm{real}}}[(D_{p}(\\boldsymbol{x}_{\\boldsymbol{p}}) - 1)^{2}] + \\\\ \
+             &\\quad \\frac{1}{2}\\mathbb{E}_{\\tilde{\\boldsymbol{x}}_{\\boldsymbol{p}}\\sim\\mathcal{P}_{\\mathrm{syn}}}[D_{p}(\\tilde{\\boldsymbol{x}}_{\\boldsymbol{p}})^{2}] \\\\ \
+             \\mathcal{L}_{\\mathrm{gene}}(G_{p}) &=\\frac{1}{2}\\mathbb{E}_{\\tilde{\\boldsymbol{x}}_{\\boldsymbol{p}}\\sim\\mathcal{P}_{\\mathrm{syn}}}[(D_{p}(\\tilde{\\boldsymbol{x}}_{\\boldsymbol{p}}) - 1)^{2}]\\end{aligned}"
+        );
+        let e2 = &det.equations[1];
+        assert_eq!(e2.number.as_deref(), Some("2"));
+        assert_eq!(e2.latex, "\\begin{aligned}\\mathcal{L}_{\\mathrm{reco}} &= \\mathbb{E}[\\|\\boldsymbol{x}_{\\boldsymbol{p}}- \\boldsymbol{x}'_{\\boldsymbol{p}}\\|_{2}] \\\\ \\boldsymbol{x}'_{\\boldsymbol{p}} &= \\mathcal{R}_{p}(D_{p}(\\boldsymbol{x}_{\\boldsymbol{p}}))\\end{aligned}");
+        assert_eq!((det.equations[2].number.as_deref(), det.equations[2].latex.as_str()), (Some("3"), "\\mathcal{L}_{\\mathrm{total}}= \\mathcal{L}_{G}"));
+        assert_eq!((det.equations[3].number.as_deref(), det.equations[3].latex.as_str()), (Some("4"), "\\mathcal{L}_{G}= \\lambda\\mathcal{L}_{D}"));
+        for q in &det.equations {
+            assert!(q.latex.is_ascii() && !q.latex.contains('~') && !q.latex.contains("\\mathcal{x}") && !q.latex.contains("\\prime"), "{}", q.latex);
+        }
+        // no single letters out of the subscript words, no \mathcal on small letters
+        let keys = detected_keys(&det);
+        for k in ["r", "e", "a", "s", "y", "n", "\\mathcal{r}"] {
+            assert!(!keys.contains(k), "{k} in {keys:?}");
+        }
+        for k in ["\\mathcal{L}_{\\mathrm{disc}}", "\\boldsymbol{x}_{\\boldsymbol{p}}", "\\tilde{\\boldsymbol{x}}_{\\boldsymbol{p}}"] {
+            assert!(keys.contains(k), "{k} not in {keys:?}");
+        }
+        // a paper bound twice keeps one id per equation
+        let mut p2 = p.clone();
+        let mut again = word_page();
+        again.page = 2;
+        p2.pages.push(again);
+        let ids: Vec<String> = detect(&p2, &Glyphs::default()).equations.iter().map(|q| q.id.clone()).collect();
+        assert_eq!(ids, ["eq:1", "eq:2", "eq:3", "eq:4", "eq:1-2", "eq:2-2", "eq:3-2", "eq:4-2"]);
+    }
+
+    #[test]
+    fn join_rows_aligns_at_the_first_relation() {
+        assert_eq!(join_rows(&["a = b +".into(), "c".into(), "d \\leq e".into()]), "\\begin{aligned}a &= b + \\\\ &\\quad c \\\\ d &\\leq e\\end{aligned}");
+        assert_eq!(join_rows(&["x_{a=1}".into(), "y".into()]), "\\begin{gathered}x_{a=1} \\\\ y\\end{gathered}");
+        assert_eq!(join_rows(&["  ".into(), "x = 1".into()]), "x = 1");
     }
 
     #[test]

@@ -9,6 +9,10 @@
 //! * [`equation_shape`] builds the `mc:AlternateContent` text box PowerPoint
 //!   writes (a14 math choice + optional picture fallback).
 //! * [`MathRenderer`]: hook for PNG/SVG fallback images (stub for now).
+//! * [`check`]: what KaTeX would refuse to typeset, without a browser ([`check::check`]),
+//!   and [`check::check_reading`] for LaTeX read out of a PDF (brackets must pair too).
+
+pub mod check;
 
 use std::io::Write;
 use std::path::PathBuf;
