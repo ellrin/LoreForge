@@ -328,7 +328,7 @@ impl Worker {
             .env("TOKENIZERS_PARALLELISM", "false")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(std::fs::File::create(dir.join("worker.log")).map(Stdio::from).unwrap_or_else(|_| Stdio::null())) // what Python says, for when it does not start
             .spawn()
             .map_err(|e| format!("無法啟動自訂聲音：{e}"))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
@@ -348,7 +348,7 @@ impl Worker {
         // first line: {"ready":true} once mlx-audio's imports are done
         match w.rx.recv_timeout(Duration::from_secs(120)) {
             Ok(v) if v["ready"] == true => Ok(w),
-            _ => Err("自訂聲音沒有啟動（Python 環境可能壞了，請重新下載）".into()),
+            _ => Err(format!("自訂聲音沒有啟動（Python 環境可能壞了，請重新下載；記錄在 {}）", dir.join("worker.log").display())),
         }
     }
 

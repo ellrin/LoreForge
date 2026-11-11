@@ -233,7 +233,7 @@ async fn a_recording_needs_consent_and_stays_out_of_exports_by_default() {
     assert_eq!((v["has_reference"].as_bool(), v["clone"]["consent"].as_bool(), v["speaking_with"].as_str()), (Some(true), Some(false), Some("")));
     // removing it
     let (s, v) = app.json("DELETE", "/api/characters/echo/voice/reference", None).await;
-    assert_eq!((s, v["mode"].as_str()), (StatusCode::OK, Some("system")));
+    assert_eq!((s, v["mode"].as_str()), (StatusCode::OK, Some("design")));
 }
 
 #[tokio::test]

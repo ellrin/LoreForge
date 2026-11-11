@@ -252,14 +252,14 @@ pub fn save_reference(app_dir: &Path, id: &str, bytes: &[u8], consent: bool, tex
     Ok(view(app_dir, id))
 }
 
-/// Remove the recording (and its consent); a `clone` character speaks with the system voice again.
+/// Remove the recording (and its consent); a `clone` character goes back to 描述 (its picked take, or the system voice).
 pub fn remove_reference(app_dir: &Path, id: &str) -> Result<View, String> {
     characters::load(app_dir, id)?;
     let _ = std::fs::remove_file(folder(app_dir, id).join(REFERENCE));
     let mut f = read(app_dir, id);
     f.clone = None;
     if f.mode == "clone" {
-        f.mode = "system".into();
+        f.mode = "design".into();
     }
     write(app_dir, id, &f)?;
     Ok(view(app_dir, id))
@@ -282,7 +282,7 @@ pub fn export_files(app_dir: &Path, id: &str, with_reference: bool) -> Vec<(Stri
         _ => {
             f.clone = None;
             if f.mode == "clone" {
-                f.mode = "system".into();
+                f.mode = "design".into();
             }
         }
     }
@@ -385,7 +385,7 @@ mod tests {
         let v = patch(&app, "echo", &Patch { clone_text: Some("一二三四五".into()), ..Default::default() }).unwrap();
         assert_eq!(v.speaking_with, REFERENCE);
         let v = remove_reference(&app, "echo").unwrap();
-        assert!(!v.has_reference && v.file.mode == "system" && v.file.clone.is_none());
+        assert!(!v.has_reference && v.file.mode == "design" && v.file.clone.is_none());
     }
 
     #[test]
@@ -400,7 +400,7 @@ mod tests {
         let names: Vec<&str> = plain.iter().map(|f| f.0.as_str()).collect();
         assert_eq!(names, ["voice/chosen.wav", "voice/voice.toml"]);
         let toml_text = String::from_utf8(plain[1].1.clone()).unwrap();
-        assert!(!toml_text.contains("consent") && toml_text.contains("mode = \"system\""), "{toml_text}");
+        assert!(!toml_text.contains("consent") && toml_text.contains("mode = \"design\""), "{toml_text}");
         let with = export_files(&app, "echo", true);
         assert!(with.iter().any(|f| f.0 == "voice/reference.wav"));
         // into another character
