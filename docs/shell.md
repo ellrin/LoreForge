@@ -111,16 +111,20 @@ shell.setName(n) · shell.setStatus(state, { label, title, action }) · shell.ed
 LoreShell.toast(msg, { err, action: { label, run }, ms })
 LoreShell.ask(anchor, lines, buttons) → Promise（值或 null；Esc、點外面＝null）
 LoreShell.form({ title, build(body, dlg), actions: [{ label, primary, run }] }) → Promise（小表單對話框）
-LoreShell.menu(anchor, items) · LoreShell.settings(tab) · LoreShell.block({ n, title, count, help, open, key })
+LoreShell.menu(anchor, items)（anchor＝元素，或右鍵的 `{ x, y }`；元素被隱藏時，例如首頁的文件鈕，改掛在品牌下；`LoreShell.place(el, anchor)` 給 app 自己的浮層用）· LoreShell.settings(tab) · LoreShell.block({ n, title, count, help, open, key })
 LoreShell.engineChip({ task, value, used, onChange }) · LoreShell.shortcuts()
 LoreLinks.open(app, params) · LoreLinks.url(app, params) · LoreLinks.ports
 ```
 
+`<notation-panel>`（`commons/ui/notation-panel`）：顏色預設取主題 token（`--bg --text --muted --line --panel --accent-text --err --warn --accent-soft`），沒有 token 才用內建亮／暗色，仍可用 `--np-*` 覆寫；`readonly` 屬性（或單列 `entry.readonly`）＝不能改、不能刪（面板層級也不顯示「新增」）；`panel.actions = [{ id, label, title, show(e), disabled(e), run(e) }]` 每列加按鈕，並送出 `notation-action`。
+
 狀態：`saved` 已儲存、`saving` 儲存中、`dirty` 未儲存、`syncing` 同步中、`unsynced` 未同步、`error`（app 給字，例如 SC「已在別處修改」）。
 `dirty`／`unsynced`／`error` 可點（`status.onClick`），或每次 `setStatus` 自帶 `action`。
+提示：帶按鈕的提示會留滿它的時間，一般提示疊在它下面（各自只取代同類的上一則），下一則提示不會把它蓋掉。
+模型頁：`/api/engines` 沒回應（404）時，仍顯示 app 的「下載…／登入…」（`modelSetup`）。
 提示、詢問框、選單放在開著的 dialog 裡（不然被齒輪視窗蓋住）。`.help[data-tip]` 由外殼統一處理，app 拿掉自己的。
 
-快捷鍵頁由按鈕的 `aria-label` 產生：標籤最後一段是按鍵（`復原 ⌘Z`、`選取 V`、`粗體　Ctrl+B`、`關閉 Esc`），或放在括號裡（`復原「移動」(⌘Z)`，「…」會略過）。
+快捷鍵頁由按鈕的 `aria-label` 產生：標籤最後一段是按鍵（`復原 ⌘Z`、`選取 V`、`粗體　Ctrl+B`、`關閉 Esc`），或放在括號裡（`復原「移動」(⌘Z)`，「…」會略過）。括號裡只認真正的按鍵（⌘⇧⌥⌃、`Ctrl+B`、`F5`、`Esc`、`↵`）；單一字母、數字或說明文字不算，說明請放 `title`。
 例外用 `data-keys="⌘K"`；分組依位置（上方列、工具、左側、右側、狀態列、其他），或 `data-keys-group`。
 
 ### 跨 app 連結（`LoreLinks`）

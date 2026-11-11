@@ -401,7 +401,6 @@ html, body, .app { overflow: clip; }
 
 /* 對照表: the panel draws its own palette, mapped onto the theme here; base.css's bare
    .primary (the one filled button) must not reach the panel's 新增 */
-.lr-notation notation-panel { --np-bg: var(--bg); --np-fg: var(--text); --np-mute: var(--muted); --np-line: var(--line); --np-soft: var(--panel); --np-accent: var(--accent-text); --np-err: var(--err); --np-warn: var(--warn); --np-hi: var(--accent-soft); }
 .lr-notation notation-panel .np-btn.primary { width: auto; display: inline-block; padding: 3px 9px; font-weight: 400; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: 6px; }
 .lr-notation notation-panel .np-seg button[aria-pressed=true] { background: var(--accent-soft); color: var(--text); }
 /* the engine chip next to a feature's own button */

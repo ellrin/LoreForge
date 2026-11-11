@@ -59,8 +59,16 @@
   };
   /** Fixed-position layers go into the open modal dialog, else they sit under its top layer. */
   const layer = (near) => near?.closest?.("dialog[open]") ?? [...document.querySelectorAll("dialog[open]")].pop() ?? document.body;
+  /** An anchor is an element, or a point { x, y } (right-click). A hidden element (the picker on the home screen) falls back to the brand. */
+  const rectOf = (el, anchor) => {
+    if (anchor && typeof anchor.x === "number" && typeof anchor.y === "number" && !anchor.getBoundingClientRect) return { left: anchor.x, right: anchor.x, top: anchor.y, bottom: anchor.y };
+    let r = anchor?.getBoundingClientRect?.();
+    if (r && !r.width && !r.height && anchor instanceof Element) r = document.querySelector(".top .brand")?.getBoundingClientRect() ?? r;
+    return r ?? { left: innerWidth / 2 - el.offsetWidth / 2, right: 0, top: 56, bottom: 56 };
+  };
+  const isEl = (a) => a instanceof Element;
   const place = (el, anchor, gap = 4) => {
-    const r = anchor?.getBoundingClientRect?.() ?? { left: innerWidth / 2 - el.offsetWidth / 2, right: 0, top: 56, bottom: 56 };
+    const r = rectOf(el, anchor);
     const w = el.offsetWidth, hh = el.offsetHeight;
     const below = r.bottom + gap + hh < innerHeight - 8 || r.top - gap - hh < 8;
     el.style.top = `${below ? r.bottom + gap : r.top - gap - hh}px`;
@@ -71,14 +79,14 @@
   let openMenu = null;
   function closeMenu() {
     if (!openMenu) return;
-    openMenu.anchor?.setAttribute("aria-expanded", "false");
+    if (isEl(openMenu.anchor)) openMenu.anchor.setAttribute("aria-expanded", "false");
     openMenu.el.remove();
     document.removeEventListener("pointerdown", openMenu.away, true);
     document.removeEventListener("keydown", openMenu.key, true);
     openMenu = null;
   }
   function menu(anchor, items) {
-    const same = openMenu?.anchor === anchor;
+    const same = isEl(anchor) && openMenu?.anchor === anchor;
     closeMenu();
     if (same) return null;
     const m = h("div", { class: "menu", role: "menu" });
@@ -94,12 +102,12 @@
     }
     layer(anchor).append(m);
     place(m, anchor);
-    anchor?.setAttribute("aria-expanded", "true");
-    const away = (e) => { if (!m.contains(e.target) && !anchor?.contains(e.target)) closeMenu(); };
+    if (isEl(anchor)) anchor.setAttribute("aria-expanded", "true");
+    const away = (e) => { if (!m.contains(e.target) && !(isEl(anchor) && anchor.contains(e.target))) closeMenu(); };
     const key = (e) => {
       const list = [...m.querySelectorAll("button:not(:disabled)")];
       const i = list.indexOf(document.activeElement);
-      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeMenu(); anchor?.focus?.(); }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeMenu(); if (isEl(anchor)) anchor.focus(); }
       else if (e.key === "ArrowDown") { e.preventDefault(); list[(i + 1) % list.length]?.focus(); }
       else if (e.key === "ArrowUp") { e.preventDefault(); list[(i - 1 + list.length) % list.length]?.focus(); }
     };
@@ -115,15 +123,20 @@
   };
 
   // ── toast ──────────────────────────────────────────────────────────
-  let toastTimer = 0;
+  // An action toast stays for its time; plain toasts stack below it (each kind replaces its own predecessor).
   function toast(msg, opt = {}) {
     if (typeof opt === "boolean") opt = { err: opt };
-    document.querySelectorAll(".toast").forEach((t) => t.remove());
-    clearTimeout(toastTimer);
-    const t = h("div", { class: "toast" + (opt.err ? " err" : ""), role: opt.err ? "alert" : "status" }, h("span", {}, msg));
-    if (opt.action) t.append(h("button", { type: "button", class: "toast-act", onclick: () => { t.remove(); opt.action.run(); } }, opt.action.label));
-    layer().append(t);
-    toastTimer = setTimeout(() => t.remove(), opt.ms ?? (opt.action ? 8000 : opt.err ? 5000 : 2600));
+    const host = layer();
+    let stack = host.querySelector(":scope > .toast-stack");
+    if (!stack) { stack = h("div", { class: "toast-stack" }); host.append(stack); }
+    const kind = opt.action ? "act" : "plain";
+    stack.querySelectorAll(`.toast[data-kind="${kind}"]`).forEach((x) => x.close?.());
+    const t = h("div", { class: "toast" + (opt.err ? " err" : ""), role: opt.err ? "alert" : "status", "data-kind": kind }, h("span", {}, msg));
+    let timer = 0;
+    t.close = () => { clearTimeout(timer); t.remove(); if (!stack.children.length) stack.remove(); };
+    if (opt.action) t.append(h("button", { type: "button", class: "toast-act", onclick: () => { t.close(); opt.action.run(); } }, opt.action.label));
+    if (opt.action) stack.prepend(t); else stack.append(t);
+    timer = setTimeout(t.close, opt.ms ?? (opt.action ? 8000 : opt.err ? 5000 : 2600));
     return t;
   }
 
@@ -215,7 +228,8 @@
   function parseKeys(label) {
     const s = String(label ?? "").replace(/「[^」]*」/g, " ").replace(/\s+$/, "");
     let m = /^(.*?)\s*[(（]\s*([^()（）]+?)\s*[)）]$/.exec(s);
-    if (m && m[2].split(/\s*[/／]\s*/).every((k) => KEY.test(k))) return { label: m[1].trim(), keys: m[2] };
+    // in parentheses only real key patterns count; a bare letter or digit there is explanation
+    if (m && m[2].split(/\s*[/／]\s*/).every((k) => KEY.test(k) && !/^[A-Z0-9]$/.test(k))) return { label: m[1].trim(), keys: m[2] };
     m = /^(.*?)[\s　]+(\S+)$/.exec(s);
     if (m && m[1].trim() && KEY.test(m[2])) return { label: m[1].trim(), keys: m[2] };
     return null;
@@ -287,7 +301,15 @@
   async function buildModels(el) {
     el.textContent = "";
     const d = await engines.get(true);
-    if (!d) { el.append(h("div", { class: "set-empty" }, "—")); return; }
+    if (!d) {
+      // no /api/engines (404): the app's own setup buttons still work
+      if (!S.opts?.modelSetup) { el.append(h("div", { class: "set-empty" }, "—")); return; }
+      const sec = h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "連線"));
+      const r = (k, label, kind) => h("div", { class: "set-row" }, h("span", { class: "k" }, k), h("button", { type: "button", class: "btn small", onclick: () => S.opts.modelSetup(kind) }, label));
+      sec.append(r("本機", "下載…", "local"), r("Claude", "登入…", "claude"));
+      el.append(sec);
+      return;
+    }
     const conn = h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "連線"));
     const row = (k, ...v) => h("div", { class: "set-row" }, h("span", { class: "k" }, k), ...v);
     const L = d.local ?? {}, C = d.claude ?? {};
@@ -528,7 +550,7 @@
     return shell;
   }
 
-  window.LoreShell = { mount, toast, ask, form, menu, closeMenu, settings, engineChip, engines, block, shortcuts, parseKeys };
+  window.LoreShell = { mount, place, toast, ask, form, menu, closeMenu, settings, engineChip, engines, block, shortcuts, parseKeys };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wireTips); else wireTips();
 })();
 

@@ -95,12 +95,12 @@ function routeFail(s) {
 
 /** 「改用本機」／「改用 Claude」: once, after the caller's own message (it replaces it). */
 function offerEngine({ error, alternative: alt }) {
-  setTimeout(() => LoreShell.toast(error, { err: true, action: { label: alt.label, run: () => {
+  LoreShell.toast(error, { err: true, action: { label: alt.label, run: () => {
     store.set("pc.engine", alt.engine === "local" ? "local" : "claude");
     renderEngineSwitch();
     renderStatus();
     LoreShell.toast(`已${alt.label}，再試一次`);
-  } } }), 0);
+  } } });
 }
 
 // ── Look ───────────────────────────────────────────────
@@ -1183,12 +1183,8 @@ function menuForm(title, tip, anchor = $("#actFile")) {
   const m = $("#fileMenu");
   m.className = "menu form";
   m.innerHTML = "";
-  // a hidden anchor (the picker on the home screen): under the brand instead
-  let r = anchor.getBoundingClientRect();
-  if (!r.width && !r.height) r = document.querySelector(".top .brand")?.getBoundingClientRect() ?? r;
-  m.style.top = `${r.bottom + 4}px`;
-  m.style.left = `${r.left}px`;
   m.hidden = false;
+  LoreShell.place(m, anchor); // a hidden anchor (the home screen's picker): under the brand
   const head = el("div", "form-head");
   head.append(iconButton("back", "返回", () => { m.hidden = true; }), el("b", "", title));
   if (tip) { const h = el("button", "help", "?"); h.dataset.tip = tip; head.append(h); }

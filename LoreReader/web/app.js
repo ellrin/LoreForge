@@ -1541,16 +1541,11 @@ async function nounPopover(n, anchor, p) {
 /** Right-click on a coloured term (no selection): the term's own menu. */
 function nounMenu(n, x, y) {
   const i = S.nouns.entries.indexOf(n);
-  LoreShell.menu(pointAnchor(x, y), [
+  LoreShell.menu({ x, y }, [
     { head: n.text },
     { icon: "search", label: `${n.count} 處`, run: () => { setTab("nouns"); focusNoun(i, 0); } },
     ...(n.kb ? [] : [{ icon: "eyeOff", label: "忽略", run: () => ignoreNoun(n) }, { icon: "cards", label: "加入知識庫…", run: () => nounCard(n) }]),
   ]);
-}
-
-/** A menu at a point (right-click): the shell's menu wants an anchor element. */
-function pointAnchor(x, y) {
-  return { getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y, width: 0, height: 0 }), contains: () => false, setAttribute() {}, focus() {} };
 }
 
 const NOUN_COLS = [["text", "詞"], ["category", "分類"], ["count", "次數"], ["page", "頁"]];
@@ -2224,7 +2219,7 @@ async function print() {
 // 對照表 (shared/notation.json) already has shows 全域; 加入全域 copies the selected row
 // there. Edits of LaTeX / 意思 / 原文定義 / 備註 go to the paper's symbol table;
 // 插入 copies the LaTeX; 新增 opens 新增符號; rows are not deleted here.
-let ntDlg = null, ntPanel = null, ntSel = null, ntGlobal = new Set();
+let ntDlg = null, ntPanel = null, ntGlobal = new Set();
 const NT_FIELDS = { latex: "latex", meaning: "meaning", meaning_en: "meaning_en", note: "note" };
 const texKey = (t) => String(t ?? "").replace(/\s+/g, "");
 
@@ -2242,30 +2237,24 @@ function notationView() {
   const f = S.symbols ?? {};
   const origin = (e) => (e.latex && ntGlobal.has(texKey(e.latex)) ? "global" : "document");
   const sym = (f.entries ?? []).map((e) => ({ ...e, kind: e.kind ?? "symbol", origin: origin(e) }));
-  const eqs = (f.equations ?? []).map((e) => ({ ...e, kind: "equation", origin: origin(e) }));
+  const eqs = (f.equations ?? []).map((e) => ({ ...e, kind: "equation", origin: origin(e), readonly: true }));
   return { version: 1, entries: [...sym, ...eqs] };
-}
-
-function paintNtGlobal() {
-  const b = $("#ntGlobal");
-  if (!b) return;
-  const e = S.symbols?.entries.find((x) => x.id === ntSel);
-  const has = e?.latex && ntGlobal.has(texKey(e.latex));
-  b.disabled = !e || !e.latex || has;
-  b.title = e ? `${e.latex ?? e.id}${has ? "（全域已有）" : ""}` : "";
 }
 
 function buildNotation() {
   ntPanel = document.createElement("notation-panel");
   ntPanel.setAttribute("mode", "literal");
-  const add = h("button", { type: "button", class: "btn small", id: "ntGlobal", disabled: true, onclick: addToGlobal }, h("span", { "data-icon": "upload" }), "加入全域");
   const close = h("button", { type: "button", class: "ico close", "data-icon": "x", "aria-label": "關閉 Esc" });
   ntDlg = h("dialog", { class: "dialog lr-notation", "aria-label": "對照表" },
-    h("div", { class: "dlg" }, h("div", { class: "dlg-head" }, h("h2", {}, "對照表"), h("span", { class: "grow" }), add, close), ntPanel));
+    h("div", { class: "dlg" }, h("div", { class: "dlg-head" }, h("h2", {}, "對照表"), h("span", { class: "grow" }), close), ntPanel));
   document.body.append(ntDlg);
   paintIcons(ntDlg);
   close.onclick = () => ntDlg.close();
-  ntPanel.addEventListener("notation-select", (e) => { ntSel = e.detail.id; paintNtGlobal(); });
+  ntPanel.actions = [{
+    id: "global", label: "加入全域",
+    show: (e) => e.kind !== "equation" && !!e.latex && !ntGlobal.has(texKey(e.latex)),
+    run: (e) => addToGlobal(e.id),
+  }];
   ntPanel.addEventListener("notation-insert", (e) => {
     const t = e.detail.entry?.latex ?? e.detail.text ?? "";
     navigator.clipboard.writeText(t).then(() => toast(`已複製 ${t}`), () => toast("無法複製", true));
@@ -2291,19 +2280,16 @@ async function openNotation() {
   try { ntGlobal = new Set(((await api("/api/notation/global")).entries ?? []).map((e) => texKey(e.latex)).filter(Boolean)); } catch { ntGlobal = new Set(); }
   ntPanel.setAttribute("theme", document.documentElement.dataset.mode === "dark" ? "dark" : "light");
   ntPanel.notation = notationView();
-  ntSel = null;
-  paintNtGlobal();
   if (!ntDlg.open) ntDlg.showModal();
 }
 
-async function addToGlobal() {
-  const e = S.symbols?.entries.find((x) => x.id === ntSel);
+async function addToGlobal(id) {
+  const e = S.symbols?.entries.find((x) => x.id === id);
   if (!e) return;
   try {
     await api(`/api/papers/${S.sha}/symbols/${encodeURIComponent(e.id)}/global`, { body: {} });
     ntGlobal.add(texKey(e.latex));
     ntPanel.notation = notationView();
-    paintNtGlobal();
     toast(`已加入全域：${e.latex}`);
   } catch (x) { fail(x); }
 }

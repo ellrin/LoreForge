@@ -8,6 +8,10 @@
 //            panel.mode     = "macro" | "literal"       (插入 mode: 用巨集 / 符號直接寫)
 //            panel.docMacros = ["foo", …]               commands the document already defines (macro check)
 //            attributes src="notation.json" report-src="report.json" mode="macro"
+//            attribute readonly (or entry.readonly on one row): no inline edit, no 刪除 (and no 新增 when on the panel)
+//            panel.actions = [{ id, label, title?, show?(entry), disabled?(entry), run?(entry) }]  extra buttons per row
+//            Colours come from the app's theme tokens (--bg --text --muted --line --panel --accent-text …) when
+//            they exist, else the built-in light/dark palette; set --np-* on the element to override.
 // Events out (bubbling, composed; data in event.detail):
 //   notation-insert  {id, entry, mode, math, text}   text to put at the caret (math: caret already in math)
 //   notation-change  {id, field, value, entry, notation}   one field edited inline; id null and field
@@ -16,6 +20,7 @@
 //   notation-delete  {id, entry, notation}
 //   notation-jump    {file, line, col, para, sentence, context, issue}
 //   notation-select  {id, entry}
+//   notation-action  {action, id, entry}              a custom row action was pressed
 //   notation-loaded  {what: "notation"|"report", url}   after src / report-src finished loading
 // Globals: NotationPanel (the class, with static helpers), NotationTooltip.
 
@@ -29,28 +34,28 @@
   const CONVENTIONAL_CODES = ["abbrev_never_expanded", "abbrev_abstract", "abbrev_used_before_expansion", "undefined_symbol", "unregistered_symbol"];
 
   const STYLE = `
-notation-panel{--np-bg:#fff;--np-fg:#1d2228;--np-mute:#6b7280;--np-line:#e3e6ea;--np-soft:#f5f7f9;--np-accent:#2563eb;
-  --np-err:#c62828;--np-warn:#b26a00;--np-on-warn:#fff;--np-info:#4b6584;--np-hi:#fff7d6;--np-eq-max:220px;
+notation-panel{--np-bg:var(--bg,#fff);--np-fg:var(--text,#1d2228);--np-mute:var(--muted,#6b7280);--np-line:var(--line,#e3e6ea);--np-soft:var(--panel,#f5f7f9);--np-accent:var(--accent-text,#2563eb);--np-ink:var(--accent-ink,#fff);
+  --np-err:var(--err,#c62828);--np-warn:var(--warn,#b26a00);--np-on-warn:var(--bg,#fff);--np-info:var(--muted,#4b6584);--np-hi:var(--accent-soft,#fff7d6);--np-eq-max:220px;
   position:relative;display:flex;flex-direction:column;min-height:0;font:13px/1.45 "Noto Sans TC",system-ui,sans-serif;color:var(--np-fg);background:var(--np-bg);border:1px solid var(--np-line);border-radius:8px;overflow:hidden}
-@media (prefers-color-scheme:dark){notation-panel:not([theme=light]){--np-bg:#16191d;--np-fg:#e6e8eb;--np-mute:#9aa3ad;--np-line:#2b3036;--np-soft:#1e2227;--np-accent:#6ea8fe;--np-err:#ff6b6b;--np-warn:#f0b54a;--np-on-warn:#1d1a12;--np-info:#9fb3c8;--np-hi:#3a3420}}
-notation-panel[theme=dark]{--np-bg:#16191d;--np-fg:#e6e8eb;--np-mute:#9aa3ad;--np-line:#2b3036;--np-soft:#1e2227;--np-accent:#6ea8fe;--np-err:#ff6b6b;--np-warn:#f0b54a;--np-on-warn:#1d1a12;--np-info:#9fb3c8;--np-hi:#3a3420}
+@media (prefers-color-scheme:dark){notation-panel:not([theme=light]){--np-bg:var(--bg,#16191d);--np-fg:var(--text,#e6e8eb);--np-mute:var(--muted,#9aa3ad);--np-line:var(--line,#2b3036);--np-soft:var(--panel,#1e2227);--np-accent:var(--accent-text,#6ea8fe);--np-ink:var(--accent-ink,#0b1220);--np-err:var(--err,#ff6b6b);--np-warn:var(--warn,#f0b54a);--np-on-warn:var(--bg,#1d1a12);--np-info:var(--muted,#9fb3c8);--np-hi:var(--accent-soft,#3a3420)}}
+notation-panel[theme=dark]{--np-bg:var(--bg,#16191d);--np-fg:var(--text,#e6e8eb);--np-mute:var(--muted,#9aa3ad);--np-line:var(--line,#2b3036);--np-soft:var(--panel,#1e2227);--np-accent:var(--accent-text,#6ea8fe);--np-ink:var(--accent-ink,#0b1220);--np-err:var(--err,#ff6b6b);--np-warn:var(--warn,#f0b54a);--np-on-warn:var(--bg,#1d1a12);--np-info:var(--muted,#9fb3c8);--np-hi:var(--accent-soft,#3a3420)}
 notation-panel .np-tabs{display:flex;gap:2px;border-bottom:1px solid var(--np-line);background:var(--np-soft);padding:4px 6px 0}
 notation-panel .np-tab{border:0;background:none;color:var(--np-mute);padding:6px 12px;border-radius:6px 6px 0 0;cursor:pointer;font:inherit}
 notation-panel .np-tab[aria-selected=true]{background:var(--np-bg);color:var(--np-fg);font-weight:600;box-shadow:0 -1px 0 var(--np-line) inset}
 notation-panel .np-badge{display:inline-block;min-width:18px;padding:0 5px;margin-left:4px;border-radius:9px;background:var(--np-line);font-size:11px;text-align:center}
-notation-panel .np-badge.err{background:var(--np-err);color:#fff}
+notation-panel .np-badge.err{background:var(--np-err);color:var(--np-on-warn)}
 notation-panel .np-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px;border-bottom:1px solid var(--np-line)}
 notation-panel .np-chip{border:1px solid var(--np-line);background:var(--np-bg);color:var(--np-fg);border-radius:14px;padding:2px 10px;cursor:pointer;font:inherit;white-space:nowrap}
 notation-panel .np-chip[aria-pressed=true]{border-color:var(--np-accent);color:var(--np-accent);font-weight:600}
 notation-panel .np-search{flex:1;min-width:120px;border:1px solid var(--np-line);border-radius:6px;padding:4px 8px;background:var(--np-bg);color:var(--np-fg);font:inherit}
 notation-panel .np-btn{border:1px solid var(--np-line);background:var(--np-bg);color:var(--np-fg);border-radius:6px;padding:3px 9px;cursor:pointer;font:inherit;white-space:nowrap}
 notation-panel .np-btn:hover{border-color:var(--np-accent)}
-notation-panel .np-btn.primary{background:var(--np-accent);border-color:var(--np-accent);color:#fff}
+notation-panel .np-btn.primary{width:auto;display:inline-block;padding:3px 9px;border:1px solid var(--np-accent);border-radius:6px;font-weight:400;background:var(--np-accent);color:var(--np-ink)}
 notation-panel .np-btn.quiet{border-color:transparent;color:var(--np-mute);padding:3px 6px}
 notation-panel .np-btn.quiet:hover{color:var(--np-fg);border-color:var(--np-line)}
 notation-panel .np-seg{display:inline-flex;border:1px solid var(--np-line);border-radius:6px;overflow:hidden}
 notation-panel .np-seg button{border:0;background:var(--np-bg);color:var(--np-mute);padding:3px 9px;cursor:pointer;font:inherit;white-space:nowrap}
-notation-panel .np-seg button[aria-pressed=true]{background:var(--np-accent);color:#fff}
+notation-panel .np-seg button[aria-pressed=true]{background:var(--np-accent);color:var(--np-ink)}
 notation-panel .np-body{flex:1;min-height:0;overflow:auto}
 notation-panel table{border-collapse:separate;border-spacing:0;width:100%}
 notation-panel th{position:sticky;top:0;z-index:2;background:var(--np-soft);text-align:left;font-weight:600;color:var(--np-mute);padding:5px 8px;border-bottom:1px solid var(--np-line);cursor:pointer;white-space:nowrap;user-select:none}
@@ -80,7 +85,7 @@ notation-panel .np-flag.info{background:none;color:var(--np-info);border:1px sol
 notation-panel .np-issue{padding:7px 10px;border-bottom:1px solid var(--np-line);display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 8px}
 notation-panel .np-issue.dismissed{opacity:.55}
 notation-panel .np-sev{font-size:11px;font-weight:600;border-radius:4px;padding:0 5px;height:fit-content;margin-top:1px;white-space:nowrap}
-notation-panel .np-sev.error{color:#fff;background:var(--np-err)}
+notation-panel .np-sev.error{color:var(--np-on-warn);background:var(--np-err)}
 notation-panel .np-sev.warning{color:var(--np-on-warn);background:var(--np-warn)}
 notation-panel .np-sev.info{color:var(--np-info);border:1px solid var(--np-info)}
 notation-panel .np-msg{grid-column:2;overflow-wrap:anywhere}
@@ -92,8 +97,8 @@ notation-panel .np-loc.more{font-family:inherit;color:var(--np-mute)}
 notation-panel .np-loc small{font-family:"Noto Sans TC",system-ui,sans-serif;color:var(--np-mute);margin-left:4px}
 notation-panel .np-details{grid-column:2;color:var(--np-mute);font-size:12px;margin:2px 0 0;padding-left:16px}
 notation-panel .np-empty{padding:24px;text-align:center;color:var(--np-mute)}
-notation-panel .np-toast{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);z-index:5;display:flex;gap:10px;align-items:center;max-width:calc(100% - 24px);padding:7px 10px 7px 14px;border-radius:8px;background:#1f2937;color:#f3f4f6;box-shadow:0 6px 24px rgba(0,0,0,.25)}
-notation-panel .np-toast .np-btn{background:transparent;color:#93c5fd;border-color:#4b5563}
+notation-panel .np-toast{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);z-index:5;display:flex;gap:10px;align-items:center;max-width:calc(100% - 24px);padding:7px 10px 7px 14px;border-radius:8px;background:var(--np-fg);color:var(--np-bg);box-shadow:0 6px 24px rgba(0,0,0,.25)}
+notation-panel .np-toast .np-btn{background:transparent;color:inherit;border-color:currentColor}
 notation-panel[data-narrow] thead{display:none}
 notation-panel[data-narrow] table,notation-panel[data-narrow] tbody{display:block}
 notation-panel[data-narrow] tr{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;padding:8px 10px;border-bottom:1px solid var(--np-line)}
@@ -106,9 +111,9 @@ notation-panel[data-narrow] td[data-label]:not(.np-prim):not(.np-kind):not(.np-o
 notation-panel[data-narrow] td.np-ops{position:static;box-shadow:none;text-align:right;padding-top:4px}
 notation-panel[data-narrow] .np-clamp{--np-eq-max:100%;max-width:100%}
 notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
-.np-tip{position:fixed;z-index:10000;max-width:min(640px,92vw);padding:8px 10px;border-radius:8px;background:#1f2937;color:#f3f4f6;font:13px/1.45 "Noto Sans TC",system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.25);pointer-events:none;overflow:hidden}
+.np-tip{position:fixed;z-index:10000;max-width:min(640px,92vw);padding:8px 10px;border-radius:8px;background:var(--text,#1f2937);color:var(--bg,#f3f4f6);font:13px/1.45 "Noto Sans TC",system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.25);pointer-events:none;overflow:hidden}
 .np-tip .np-tip-sym{font-size:18px;margin-bottom:4px;overflow:hidden}
-.np-tip .np-tip-meta{color:#9ca3af;font-size:12px;margin-top:4px}
+.np-tip .np-tip-meta{opacity:.7;font-size:12px;margin-top:4px}
 `;
 
   function injectStyle() {
@@ -281,7 +286,7 @@ notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
   const sameIgnore = (a, b) => a.code === b.code && (a.subject ?? null) === (b.subject ?? null);
 
   class NotationPanel extends HTMLElement {
-    static get observedAttributes() { return ["src", "report-src", "mode"]; }
+    static get observedAttributes() { return ["src", "report-src", "mode", "readonly"]; }
 
     constructor() {
       super();
@@ -300,6 +305,7 @@ notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
       this._onlyEntry = null;
       this._expanded = new Set();
       this.macros = {};
+      this.actions = [];
       this.docMacros = [];
       this.inMath = () => false;
     }
@@ -327,7 +333,11 @@ notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
       if (name === "src" && val) this.load(val);
       if (name === "report-src" && val) this.loadReport(val);
       if (name === "mode" && val) this.mode = val;
+      if (name === "readonly" && this._built) this._render();
     }
+
+    get readOnly() { return this.hasAttribute("readonly"); }
+    set readOnly(v) { this.toggleAttribute("readonly", !!v); }
 
     get notation() { return this._notation; }
     set notation(n) {
@@ -503,7 +513,7 @@ notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
       }
       const add = el("button", "np-btn primary", "新增");
       add.onclick = () => this._add();
-      bar.append(q, seg, add);
+      if (this.readOnly) bar.append(q, seg); else bar.append(q, seg, add);
       this._renderRows();
     }
 
@@ -680,10 +690,21 @@ notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
       ins.title = this._mode === "macro" && macroName(e) ? `插入 \\${macroName(e)}` : "插入 LaTeX";
       ins.onmousedown = (ev) => ev.preventDefault(); // keep the editor's caret
       ins.onclick = () => this.insert(e.id);
-      const del = el("button", "np-btn quiet", "刪除");
-      del.title = "刪除這一列（可以復原）";
-      del.onclick = () => this.remove(e.id);
-      ops.append(ins, " ", del);
+      ops.append(ins);
+      for (const a of this.actions ?? []) {
+        if (a.show && !a.show(e)) continue;
+        const ab = el("button", "np-btn", a.label);
+        if (a.title) ab.title = a.title;
+        ab.disabled = !!a.disabled?.(e);
+        ab.onclick = () => { a.run?.(e); this._emit("notation-action", { action: a.id, id: e.id, entry: e }); };
+        ops.append(" ", ab);
+      }
+      if (!this.readOnly && !e.readonly) {
+        const del = el("button", "np-btn quiet", "刪除");
+        del.title = "刪除這一列（可以復原）";
+        del.onclick = () => this.remove(e.id);
+        ops.append(" ", del);
+      }
       tr.append(ops);
       return tr;
     }
@@ -745,6 +766,7 @@ notation-panel[data-narrow] .np-txt{max-width:none;display:inline}
     }
 
     _editable(td, e, field) {
+      if (this.readOnly || e.readonly) return;
       td.title = td.title || "雙擊編輯";
       td._field = field;
       td._edit = () => {

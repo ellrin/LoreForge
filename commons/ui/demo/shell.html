@@ -70,6 +70,7 @@
 
 <script src="../icons.js"></script>
 <script src="../shell.js"></script>
+<script src="../notation-panel/notation-panel.js"></script>
 <script>
   // ── mock server ─────────────────────────────────────────────────────
   const ENG = {
@@ -86,9 +87,11 @@
     tasks: [{ id: "sc-flow-ai", label: "流程圖資料流", class: "create", last: "claude:sonnet" }],
   };
   const realFetch = window.fetch;
+  const q = new URLSearchParams(location.search);
   window.fetch = async (u, o = {}) => {
     const path = new URL(u, location.href).pathname;
     const json = (v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
+    if (path === "/api/engines" && q.get("noengines")) return json({ error: "not found" }, 404);
     if (path === "/api/engines") {
       if ((o.method ?? "GET") === "PUT") {
         const p = JSON.parse(o.body);
@@ -109,7 +112,6 @@
   };
 
   // ── the shell ───────────────────────────────────────────────────────
-  const q = new URLSearchParams(location.search);
   if (q.get("theme")) LoreTheme.choose(q.get("theme"));
   const shell = LoreShell.mount({
     app: "sc",
@@ -176,12 +178,23 @@
     btn("錯誤", () => LoreShell.toast("找不到 pandoc", { err: true })),
     btn("復原提示", () => LoreShell.toast("已刪除「attention」", { action: { label: "復原", run: () => LoreShell.toast("已復原") } })),
     btn("詢問", async (e) => { const v = await LoreShell.ask(e.currentTarget, ["刪除這張投影片？", "講者備註也會刪除。"], [{ label: "取消", value: null }, { label: "刪除", value: "del", danger: true, primary: true }]); LoreShell.toast(v ? "已刪除" : "取消"); }),
+    btn("疊提示", () => { LoreShell.toast("已刪除「attention」", { action: { label: "復原", run: () => LoreShell.toast("已復原") }, ms: 12000 }); LoreShell.toast("已儲存"); }),
+    btn("首頁", () => { shell.home(!shell.el.classList.contains("at-home")); }),
+    btn("首頁選單", () => LoreShell.menu(shell.el.querySelector(".picker"), [{ label: "開啟 LaTeX…" }, { label: "新論文" }])),
+    btn("座標選單", (e) => { const r = e.currentTarget.getBoundingClientRect(); LoreShell.menu({ x: r.left, y: r.bottom + 6 }, [{ head: "attention" }, { icon: "search", label: "3 處" }, { icon: "cards", label: "加入知識庫…" }]); }),
     btn("編輯中", () => shell.editing(!shell.el.classList.contains("editing"))),
     btn("設定", () => LoreShell.settings()),
     btn("開 LoreReader", () => LoreLinks.open("lr", { paper: "abc123", page: 4 })),
   );
   b4.body.append(states, more);
-  side.append(b1, b2, b3, b4);
+  const b5 = LoreShell.block({ n: "05", title: "對照表" });
+  const np = document.createElement("notation-panel");
+  np.setAttribute("mode", "literal");
+  np.style.height = "320px";
+  np.actions = [{ id: "global", label: "加入全域", show: (e) => e.kind !== "equation", run: (e) => LoreShell.toast(`已加入全域：${e.latex ?? e.id}`) }];
+  b5.body.append(np);
+  realFetch("../notation-panel/demo/sample-notation.json").then((r) => r.json()).then((n) => { n.entries.forEach((e) => { if (e.kind === "equation") e.readonly = true; }); np.notation = n; });
+  side.append(b1, b2, b3, b4, b5);
   paintIcons();
   document.getElementById("stModel").textContent = "模型 · Sonnet";
 </script>
