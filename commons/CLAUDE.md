@@ -8,9 +8,9 @@ design is in `../private/shared/docs/ecosystem-design.md` (author's private note
 
 - `crates/<name>/` — one crate per module (`lore-llm`, `lore-secrets`, `lore-gitsync`, `lore-store`, `kb-core`,
   `lore-notation`, `lore-voice`, `lore-docsrc`, `lore-canvas`, `lore-ooxml`, `lore-math`, `lore-fonts`, `lore-home`, `lore-flow`, `lore-shell` (serves `ui/icons.js`, `base.css`, `shell.js`),
-  `lore-engines` (the shared 模型 settings: `/api/engines`, `/api/links/open`),
-  `lore-modeld` (the shared local-model broker: one llama-server per machine, priority for
-  the focused app; binary `lore-modeld`, client in `lore_llm::broker`)).
+  `lore-engines` (the shared 模型 settings: `/api/engines`, `/api/links/open`)).
+  Local models: one llama-server per machine shared by every app in-process,
+  `lore_llm::shared_runtime` (`../docs/local-models.md`; no broker process).
   Each crate knows nothing about any app. Apps depend on them by path
   (`../commons/crates/<name>` from an app folder).
 - `ui/` — framework-free Web Components (no build step), one folder per component,

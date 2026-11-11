@@ -34,18 +34,21 @@ LoreForge/
 
 ## 本機模型（`lore_home::engine`）
 
-所有 App 共用的本機模型伺服器存在 `private/shared/engine.toml`：
+所有 App 共用的本機模型**選擇**存在 `private/shared/engine.toml`（只有 catalog id；正在跑的
+llama-server 在哪裡、誰在用，是執行期資料，由 lore-llm `shared_runtime` 放在快取資料夾，見
+`docs/local-models.md`）：
 
 ```toml
 [engine]
-url = "http://127.0.0.1:8080/v1"   # OpenAI 相容伺服器（llama-server、Ollama、LM Studio）
-model = "qwen3.5-9b-q8"            # 可省略
+model = "qwen3.5-9b-q8"            # 共用預設模型（local:current）
+vision_model = "gemma-4-12b-q8"    # 可省略：需要看圖而預設模型不能看圖時改用
 ```
 
 | API | 用途 |
 |---|---|
-| `home.engine()` | 有設定（`url` 不是空的）才是 `Some`；App 自己的 `[engine]` 優先，沒有才用這個。每次用都重讀（伺服器可能換埠） |
-| `home.set_engine(url, model)` | 管理本機模型的 App（PaperComposer）在作者選定／啟動模型時寫入；`url = None` 清掉。檔案裡其他表格保留 |
+| `home.engine()` | 有 `model` 或 `vision_model` 才是 `Some`。舊檔的 `url` 讀到也忽略 |
+| `home.set_engine_model(model)`、`set_vision_model(model)` | 齒輪 → 模型選定時寫入；`None`／空字串刪掉。順便刪掉舊的 `url`，其他鍵與表格保留 |
+| `home.forget_engine_url()` | 刪掉舊的 `[engine] url`（沒有就不寫檔）；lore-engines 掛上時呼叫一次 |
 | `home.engine_settings()` | 整個檔：`[engine]`、`[claude] via／model`、`[route]`（類別 → 走向）、`[overrides]`（任務 → 走向）；不認得的值略過（＝自動） |
 | `home.set_claude(via, model)`、`set_route(class, route)`、`set_override(task, route)` | 改一項、其他保留；`via` ∈ `VIAS`、類別 ∈ `CLASSES`、走向 ∈ `ROUTES`；覆寫設成 `auto`／`None` 就刪掉那行 |
 

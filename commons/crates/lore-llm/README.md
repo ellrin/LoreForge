@@ -20,9 +20,9 @@ lore-llm = { path = "../commons/crates/lore-llm" }   # default feature: zhtw (Op
 | `mock` | `MockProvider` — queued replies, records `seen` requests, configurable capabilities |
 | `json` | `extract_json`, `validate` (JSON Schema subset: `type`, `properties`, `required`, `items`, `enum`, `const`, `anyOf`, `oneOf`, `allOf`, `additionalProperties: false`; other keywords accepted as is), `complete_json` / `complete_as<T>` (validate + one retry) |
 | `catalog` | `Catalog` (one schema for all apps; bundled `catalog.json`), `Model`, `CloudModel`, aliases (`sonnet` → id), `resolve_local` (exact id or prefix), `plan`, `gpu_usable`, `recommend(&Machine)` |
-| `local` | `LOCAL_LLM_HOME` layout (`<home>/gguf/<owner>/<repo>/<file>`, `<home>/runtimes/llama.cpp/…/llama-server`): `home`, `find_model`, `find_mmproj`, `find_runtime`, `installed`, `missing`, `server_args`, `start`; `Layout` (`shared(home)` or `new(gguf_dir, runtime_dir)` for an app's own folders; same `find_*`/`installed`/`missing` as methods; `start_in`); `LocalRuntime` (one server at a time: `ensure(home, m)` / `ensure_in(&layout, m)`, `current_info`, `stop`, `kill_now`, `phase`) |
-| `broker` | client of the shared model broker (`lore-modeld`): `Priority::{Interactive, Background}` (`from_header`), `APP_HEADER` / `PRIORITY_HEADER`, `state_path` (`<cache>/modeld.json`, `LOREFORGE_CACHE`), `read_state` / `write_state`, `find` / `find_at`, `status`, `binary` (`LORE_MODELD`, next to the executable, `PATH`), `Launch` + `ensure` (find or start detached), `focus(base, app)` / `focus_running(app)`, `BrokerAccess { app, priority, url, launch }` (`base_url`, `running_url`, `available`, `headers`, `config`, `provider`) |
-| `router` | `TaskTable` (tasks.toml + `[override]`), `ModelRef` (`claude:`, `claude-api:`, `claude-code:`, `local:`, `mock:`), `Router::provider_for(task) -> Route`, `Router::provider_for_with(task, &RouteOptions { override_ref, strict })` (`RouteOptions::only(ref)` / `::prefer(ref)`), `candidates_with`, `RouteError::{UnknownTask, NeedsNetwork, Unavailable}` + `.reason()`, `ProviderFactory` (also for `Arc<F>`, `&F`, `Arc<dyn ProviderFactory>`), `StandardFactory` (`selected_claude`, `claude_model`, `local_layout`, `current_local`), `LocalAccess` (`Default`, `layout`, `broker`, `.current(&catalog)`), `LOCAL_CURRENT`, `CLAUDE_SELECTED`, `MockFactory`, `probe_online` |
+| `local` | `LOCAL_LLM_HOME` layout (`<home>/gguf/<owner>/<repo>/<file>`, `<home>/runtimes/llama.cpp/…/llama-server`): `home`, `find_model`, `find_mmproj`, `find_runtime`, `installed`, `missing`, `server_args`, `start`; `Layout` (`shared(home)` or `new(gguf_dir, runtime_dir)` for an app's own folders; same `find_*`/`installed`/`missing` as methods); `DEFAULT_IDLE_MINUTES`. Starting and stopping the server is `shared_runtime`'s |
+| `shared_runtime` | one llama-server per machine, shared by every app in-process (docs/local-models.md): `SharedRuntime::{new(app, dir, Timing), process(app), shutdown_process()}`, `acquire(&layout, &model, Priority) -> Ticket` (url; dropping it records the use), `snapshot() -> Snapshot { registry, status, can_release }`, `check_idle(idle)`, `watch_idle(source)`, `release()` (the 釋放 button; `Err("X 正在用")`), `shutdown()` (quit); `Registry`/`Server`/`Lease`/`Want` = `<cache>/LoreForge/local-model.json` under `flock` on `local-model.lock`; `Timing` (min residency 60 s, hold 120 s, promotion 120 s, idle tick 30 s); `Priority::{Interactive, Background}` + `for_class`; `LocalStatus` + `.text(&catalog)` (the words every app shows), `app_label`; `SharedLocal` (the router's provider); `current_model` (`local:current` incl. the vision swap) |
+| `router` | `TaskTable` (tasks.toml + `[override]`), `ModelRef` (`claude:`, `claude-api:`, `claude-code:`, `local:`, `mock:`), `Router::provider_for(task) -> Route`, `Router::provider_for_with(task, &RouteOptions { override_ref, strict, priority })` (`RouteOptions::only(ref)` / `::prefer(ref)`, `.with_priority(p)`), `candidates_with`, `RouteError::{UnknownTask, NeedsNetwork, Unavailable}` + `.reason()`, `ProviderFactory` (also for `Arc<F>`, `&F`, `Arc<dyn ProviderFactory>`), `StandardFactory` (`selected_claude`, `claude_model`, `local_layout`, `current_local`), `LocalAccess` (`Default`, `layout`, `external`, `shared`, `default_model`, `vision_model`, `.current(&catalog)` = the external server), `LOCAL_CURRENT`, `CLAUDE_SELECTED`, `MockFactory`, `probe_online` |
 | `secrets` | re-export of the `lore-secrets` crate (keyring only; apps that only store keys depend on it directly): `KeyStore::anthropic(service, app_dir)` with `get(explicit, &Account)` / `save`; `Account::{Single, User(Who), Nobody}`; `KeySource`; `mask`; `KEYS_PAGE` |
 | `zhtw` | `to_taiwan` (OpenCC s2twp with keep-list) |
 
@@ -78,7 +78,8 @@ let route = router.provider_for_with("jl-generate", &RouteOptions::only("claude-
 
 - `local:current` (`LOCAL_CURRENT`): the local engine that is connected — `LocalAccess.external`
   with any model name (the catalog adds vision/context when it knows the name; no name =
-  `local`), else whatever `LocalRuntime` is running. Fails with "沒有連接本機模型".
+  `local`), else the shared default model (see below). Fails with "沒有連接本機模型" when
+  neither is set up.
 - `claude:selected` / `claude-api:selected` / `claude-code:selected` (`CLAUDE_SELECTED`): the
   model in `StandardFactory.selected_claude` (alias or id; an id not in the catalog is used as
   is with a 200k context), or `catalog.cloud.default` when unset.
@@ -92,20 +93,26 @@ let route = router.provider_for_with("jl-generate", &RouteOptions::only("claude-
 - An app's own model folders: `LocalAccess { layout: Some(Layout::new(gguf, runtime)), .. }`
   (wins over `home`).
 
-### The shared model broker (`broker`)
+### The shared local model (`shared_runtime`)
 
-`LocalAccess { broker: Some(BrokerAccess::new("pc", Priority::Interactive)), .. }` sends local
-models through `lore-modeld` instead of a `LocalRuntime` in this process:
+`LocalAccess { shared: SharedRuntime::process("sc"), default_model, vision_model, .. }`
+(the two ids from `engine.toml` `[engine]`, re-read when the factory is built):
 
-- `local:<model>`: the catalog checks (uncensored, vision, context, files when `layout`/`home`
-  is known) as before, then an `OpenAiCompat` on `<broker>/v1` (id `lore-modeld:<model>`) with
-  `X-Lore-App` / `X-Lore-Priority`. The broker is found from `modeld.json` or started
-  (`BrokerAccess.launch`: binary, args such as `--gguf <dir> --runtime <dir>`, wait).
-- `local:current`: the model the running broker has loaded (`GET /api/status`); nothing is
-  started for it. `check` passes when a broker runs or its binary is found.
-- `external` still wins over the broker; `runtime` is unused while `broker` is set.
-  With `broker: None` (the default) nothing changes.
-- Focus: `broker::focus_running(Some("pc"))` on window focus (never starts the broker).
+- `local:<model>`: the catalog checks (uncensored, vision, context, files in `layout`/`home`),
+  then a `SharedLocal` (id `llama-server:<model>`): every request acquires the machine's
+  one llama-server for that model (starting it, or waiting in line while another model is
+  in use), and acquires once more when the server died under it. Routing starts nothing.
+- `local:current`: the external server when the app has one; else the shared default model,
+  or for a task that needs images and a default that cannot see, `vision_model`, else the
+  smallest installed local model that sees; none → an error (the router offers 改用 Claude).
+- Priority: `RouteOptions.priority`, else the task's `priority`, else the class default
+  (`ask` interactive, `create` / `tidy` background). A caller with someone waiting on screen
+  passes `Priority::Interactive`.
+- Registry `<cache>/LoreForge/local-model.json` (format in the module doc), log
+  `<cache>/LoreForge/llama-server.log`. Every app runs `watch_idle` (lore-engines `.shared(rt)`
+  does) and `SharedRuntime::shutdown_process()` at quit.
+- Tests: `tests/shared_runtime.rs` with real child processes of `lore-llm-testkit` (an app
+  client, and a fake llama-server when copied as `llama-server`).
 
 ### Task classes and shared routes (`shared`)
 
@@ -155,7 +162,7 @@ say "改用本機模型（Claude：離線）". `claude:` tries the subscription 
 | `MockProvider { seen, seen_chats }` | `MockProvider { seen }` (one list of `LlmRequest`) |
 | `claude_code::{Cli, binary, status, Status, Cache, start_login, parse_output, fake, ALLOW_ENV, STRIP_ENV, INSTALL_HINT, SETUP_PAGE}` | same names in `lore_llm::claude_code` (fake now also answers `--help`; default account `ellrin@example.com`; `reply.txt` for plain replies) |
 | `ClaudeCodeProvider::new(cli, model, effort)`, `.args(req)` | `ClaudeCode::new(cli, model, effort)` (+ `temp_prefix = "jelearner-claude"`), `.args(req, isolation)` |
-| `local_llm::{home, find_model, find_mmproj, find_runtime, missing, start, Running}` | `lore_llm::local::{…}` same signatures; plus `LocalRuntime` for the start/stop bookkeeping in `settings.rs` |
+| `local_llm::{home, find_model, find_mmproj, find_runtime, missing, start, Running}` | `lore_llm::local::{…}` same signatures; start/stop through `shared_runtime::SharedRuntime` |
 | `catalog::{Catalog, Model, Cloud, CloudModel, Defaults, plan, gpu_usable}` | `lore_llm::catalog::{…}`; `Defaults.ears/mouth` are `Option`; filter `brains(false)` (no abliterated models in JL) |
 | `models/catalog.json` | the shared `lore-llm/catalog.json` (v2: adds `vision`, `uncensored`, `cloud.aliases`, cloud `context`); JL may keep its own file in v2 shape via `Catalog::load(Some(path))` |
 | `Task::Generate` / `Task::Realtime` + `provider_task` | tasks `jl-generate` / `jl-realtime` through `Router` (or keep `provider_task` building `ClaudeApi` from `catalog.cloud.realtime`) |
@@ -179,7 +186,7 @@ say "改用本機模型（Claude：離線）". `claude:` tries the subscription 
 | `models::{Catalog, ModelEntry}` | `catalog::{Catalog, Model}`: `default` → `defaults.brain`; `approx_gb` f32→f64; `min_memory_gb` u32→f64; `context` u32→`Option<u32>` (`context_or_default()`) |
 | `models::recommend(&cat, &SystemInfo)` | `catalog::recommend(&cat, &Machine { memory_gb, gpu_memory_gb })` (`system_info` stays in PC) |
 | `models::{llm_home, models_dir, runtime_dir, runtime_binary, find_local}` | `local::Layout`: `Layout::shared(home)` with `LOCAL_LLM_HOME`, else `Layout::new(<data>/models, <data>/llama.cpp)` (PC's first layout); `.find_runtime()`, `.find_model(m)`, `.installed(cat, true)` |
-| `models::{Manager, start, stop, kill_runtime, register, Running}` | `local::LocalRuntime::{ensure_in(&layout, m), current_info, stop, kill_now, phase}` (download progress map stays in PC) |
+| `models::{Manager, start, stop, register}` | `shared_runtime::SharedRuntime::{acquire, release, snapshot}`; at quit `SharedRuntime::shutdown_process()` (download progress map stays in PC) |
 | `models::{plan, install, hf_find, pick_runtime, extract, InstalledModel, installed}` | stay in PC for now (downloads); `local::installed` covers catalog models already on disk |
 | "writing: local engine else Claude" | PC tasks (`pc-compose-paragraph`, …): `default = "local:current"`, `fallback = "claude:selected"` via `Router` |
 
@@ -189,9 +196,9 @@ say "改用本機模型（Claude：離線）". `claude:` tries the subscription 
   `pause_turn` resumption.
 - `ClaudeCode` with a real account / real CLI (fake CLI only), incl. `--tools WebSearch
   --allowedTools WebSearch`, `CLAUDE_CONFIG_DIR` on macOS (Keychain-held credentials).
-- `LocalRuntime` with a real llama-server (`cargo test -p lore-llm real_local -- --ignored`
+- The shared runtime with a real llama-server (`cargo test -p lore-llm real_local -- --ignored`
   needs `LOCAL_LLM_HOME` with llama.cpp and Qwen3.5 4B); vision through `--mmproj`.
 - `secrets` (`lore-secrets`) against the real OS keychain (tests use the file fallback only).
-- `broker::ensure` starting the real `lore-modeld` from an app bundle (detached on macOS /
-  Windows); the tests use a running fake broker or a missing binary.
+- `shared_runtime` with a real llama-server and real models (the tests use the fake
+  `lore-llm-testkit` server); other platforms than macOS / Unix.
 - `temperature` / `top_p` with a real llama-server (request bodies checked against mocks).

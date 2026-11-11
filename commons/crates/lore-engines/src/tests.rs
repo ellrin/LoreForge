@@ -68,11 +68,14 @@ async fn get_follows_the_contract() {
     assert!(test["class"].is_null() && test["last"].is_null());
     assert_eq!(v["overrides"], json!({ "pc-compose-paragraph": "auto", "pc-draft-turn": "auto", "pc-engine-test": "auto" }));
 
-    // the shared engine (not probed in tests): off, with its model and catalog label
-    Home::at(d.path()).set_engine(Some("http://127.0.0.1:9/v1"), Some("qwen3.5-9b-q8")).unwrap();
+    // the shared default model (nothing loaded): off, with its model and catalog label;
+    // an old url in the file is never used
+    std::fs::create_dir_all(d.path().join("private/shared")).unwrap();
+    std::fs::write(d.path().join("private/shared/engine.toml"), "[engine]\nurl = \"http://127.0.0.1:9/v1\"\nmodel = \"qwen3.5-9b-q8\"\n").unwrap();
     let (_, v) = call(&app, "GET", "/api/engines", None).await;
     let l = &v["local"];
-    assert_eq!((l["state"].as_str(), l["url"].as_str(), l["model"].as_str()), (Some("off"), Some("http://127.0.0.1:9/v1"), Some("qwen3.5-9b-q8")));
+    assert_eq!((l["state"].as_str(), l["url"].as_str(), l["model"].as_str()), (Some("missing"), None, Some("qwen3.5-9b-q8")), "not downloaded here");
+    assert_eq!(l["status"], "未載入");
     assert_eq!(l["label"], "Qwen3.5 9B");
     assert_eq!(l["vision"], true);
     assert_eq!(l["models"][0]["id"], "qwen3.5-9b-q8");
@@ -127,7 +130,8 @@ async fn bad_values_are_400_and_nothing_is_written() {
         json!({ "overrides": { "pc-draft-turn": "nowhere" } }),
         json!({ "claude": { "via": "pigeon" } }),
         json!({ "claude": { "model": "gpt" } }),
-        json!({ "local": { "model": "qwen3.5-9b-q8" } }),
+        json!({ "local": { "model": "no-such-model" } }),
+        json!({ "local": { "model": "gemma-4-12b-abl-q4" } }),
         // a good part with a bad one: neither is written
         json!({ "routes": { "tidy": "local" }, "claude": { "model": 3 } }),
         json!([1, 2]),
@@ -143,19 +147,32 @@ async fn bad_values_are_400_and_nothing_is_written() {
 }
 
 #[tokio::test]
-async fn an_app_with_a_runtime_checks_the_model_before_starting_it() {
+async fn picking_a_local_model_only_writes_its_id() {
     let _g = SERIAL.lock().await;
     let d = tempfile::tempdir().unwrap();
+    let home = Home::at(d.path());
     let layout = Layout::new(d.path().join("models"), d.path().join("llama.cpp"));
-    let e = engines(d.path()).runtime(Arc::new(LocalRuntime::new()), layout);
-    let app: axum::Router = router(e);
+    let rt = SharedRuntime::new("pc", d.path().join("cache"), Default::default());
+    let app: axum::Router = router(engines(d.path()).shared(rt).layout(layout));
     let (_, v) = call(&app, "GET", "/api/engines", None).await;
     assert_eq!(v["local"]["state"], "missing");
+    assert_eq!(v["local"]["status"], "未載入");
     let (st, v) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "model": "qwen3.5-9b-q8" } }))).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
     assert!(v["error"].as_str().unwrap().contains("llama.cpp"), "not downloaded: {v}");
     let (st, _) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "model": "no-such-model" } }))).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
+    // on disk: the id is written, nothing starts
+    let m = Catalog::bundled().get("qwen3.5-9b-q8").unwrap().clone();
+    for p in [d.path().join("llama.cpp/llama-server"), d.path().join("models").join(&m.repo).join(&m.file_suffix)] {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "x").unwrap();
+    }
+    let (st, v) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "model": "qwen3.5-9b-q8" } }))).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(home.engine().unwrap().model.as_deref(), Some("qwen3.5-9b-q8"));
+    assert_eq!((v["local"]["state"].as_str(), v["local"]["model"].as_str(), v["local"]["status"].as_str()), (Some("off"), Some("qwen3.5-9b-q8"), Some("未載入")));
+    assert!(!std::fs::read_to_string(d.path().join("private/shared/engine.toml")).unwrap().contains("url"));
     shared::uninstall();
 }
 
@@ -279,25 +296,37 @@ async fn idle_release_is_shared_and_only_the_owner_releases() {
     assert_eq!(v["local"]["idle_minutes"], 15);
     assert_eq!(home.engine_settings().claude.via.as_deref(), Some("api"), "the file's other tables stay");
     let (st, v) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "release": true } }))).await;
-    assert_eq!(st, StatusCode::BAD_REQUEST);
-    assert!(v["error"].as_str().unwrap().contains("PaperComposer"));
+    assert_eq!(st, StatusCode::BAD_REQUEST, "isolated: no shared server here");
+    assert!(v["error"].as_str().unwrap().contains("釋放"), "{v}");
     for bad in [json!(-1), json!(99999), json!("ten")] {
         let (st, _) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "idle_minutes": bad } }))).await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
     }
     assert_eq!(idle_minutes(&home), 15, "nothing written by a bad value");
 
-    // PaperComposer: its runtime follows the shared minutes and can be released
-    let rt = Arc::new(LocalRuntime::new());
-    let pc: axum::Router = router(engines(d.path()).runtime(rt.clone(), Layout::new(d.path().join("gguf"), d.path().join("rt"))));
-    assert_eq!(rt.idle(), Some(std::time::Duration::from_secs(15 * 60)));
+    // another app (a live process) holds a lease: 釋放 says who
+    let other = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    let cache = d.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    let reg = json!({ "leases": [ { "app": "sc", "pid": other.id(), "since": 1, "last_used": 1, "priority": "background" } ],
+                      "wanting": [ { "app": "le", "pid": other.id(), "model": "qwen3.5-4b-q8", "priority": "interactive", "since": 1 } ] });
+    std::fs::write(cache.join(lore_llm::shared_runtime::REGISTRY), reg.to_string()).unwrap();
+    let rt = SharedRuntime::new("pc", &cache, Default::default());
+    let pc: axum::Router = router(engines(d.path()).shared(rt));
     let (_, v) = call(&pc, "GET", "/api/engines", None).await;
-    assert_eq!(v["local"]["can_release"], true);
+    let l = &v["local"];
+    assert_eq!((l["can_release"].as_bool(), l["status"].as_str()), (Some(false), Some("未載入")), "{l}");
+    assert_eq!(l["users"], json!(["SlideComposer"]));
+    assert_eq!(l["waiting"][0]["app"], "LoreEcho");
+    let (st, v) = call(&pc, "PUT", "/api/engines", Some(json!({ "local": { "release": true } }))).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_eq!(v["error"], "SlideComposer 正在用");
+    let mut other = other;
+    let _ = other.kill();
+    let _ = other.wait();
+    // the lease of a process that is gone is pruned: nothing loaded, nothing to refuse
     let (st, v) = call(&pc, "PUT", "/api/engines", Some(json!({ "local": { "release": true } }))).await;
     assert_eq!(st, StatusCode::OK, "{v}");
-    assert_eq!(rt.phase(), Phase::Idle);
-    // set in another app, applied here: 0 = never
-    let (st, _) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "idle_minutes": 0 } }))).await;
-    assert_eq!(st, StatusCode::OK);
-    assert_eq!(rt.idle(), None);
+    assert_eq!(v["local"]["users"], json!([]));
+    shared::uninstall();
 }

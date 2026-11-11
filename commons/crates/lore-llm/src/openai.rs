@@ -41,8 +41,8 @@ pub struct OpenAiCompatConfig {
     /// The server is somewhere on the internet (not this machine / LAN).
     pub needs_network: bool,
     pub timeout: Duration,
-    /// Extra request headers sent with every call (the model broker's
-    /// `X-Lore-App` / `X-Lore-Priority`); empty for a plain server.
+    /// Extra request headers sent with every call (a proxy in front of the server);
+    /// empty for a plain server.
     pub headers: Vec<(String, String)>,
 }
 

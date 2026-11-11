@@ -10,19 +10,20 @@
 //!
 //! Two refs mean "what the user set up in the app" rather than a catalog
 //! entry: `local:current` ([`LOCAL_CURRENT`]: the external server, or the
-//! model [`LocalRuntime`] is running) and `claude:selected`
+//! shared default model of `engine.toml`, acquired from the machine's one
+//! llama-server, [`crate::shared_runtime`]) and `claude:selected`
 //! ([`CLAUDE_SELECTED`]: [`StandardFactory::selected_claude`]). A per-call
 //! engine choice goes through [`Router::provider_for_with`] and
 //! [`RouteOptions`] (`strict`: that engine or an error, never a fallback).
 
-use crate::broker::{self, BrokerAccess};
 use crate::catalog::{Catalog, CloudModel};
 use crate::claude_api::{ClaudeApi, ClaudeApiConfig};
 use crate::claude_code::{Cache, ClaudeCode, Cli};
-use crate::local::{self, Layout, LocalRuntime};
+use crate::local::{self, Layout};
 use crate::openai::{OpenAiCompat, OpenAiCompatConfig};
 use crate::provider::LlmProvider;
 use crate::shared::{self, Alternative, EngineKind, EngineSettings, RouteMode, TaskClass};
+use crate::shared_runtime::{Priority, SharedLocal, SharedRuntime};
 use crate::types::{LlmRequest, Needs};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -34,8 +35,8 @@ use std::sync::{Arc, RwLock};
 
 const BUNDLED: &str = include_str!("../tasks.toml");
 
-/// `local:current`: the local engine that is connected now (the external
-/// server, else whatever [`LocalRuntime`] is running), whatever its model.
+/// `local:current`: the external server when the app has one, else the shared default
+/// local model (`engine.toml` `[engine] model`; `vision_model` for a task that reads images).
 pub const LOCAL_CURRENT: &str = "current";
 /// `claude:selected` (also `claude-api:selected`, `claude-code:selected`):
 /// the Claude model the app's settings picked ([`StandardFactory::selected_claude`]).
@@ -121,6 +122,10 @@ pub struct TaskSpec {
     /// are installed ([`crate::shared`]). Unset = the task's own order.
     #[serde(default)]
     pub class: Option<TaskClass>,
+    /// Local-model priority; unset = the class default ([`Priority::for_class`]). The
+    /// router passes the effective one (a call's [`RouteOptions::priority`] first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<Priority>,
 }
 
 /// A tasks.toml file: task definitions and user overrides.
@@ -307,16 +312,24 @@ pub struct RouteOptions {
     /// the reason instead of silently falling back. Without `override_ref`
     /// it has no effect.
     pub strict: bool,
+    /// How urgent a local-model call is (someone waits on screen: `Interactive`);
+    /// `None` = the task's, else its class default.
+    pub priority: Option<Priority>,
 }
 
 impl RouteOptions {
     /// This engine for this call, or an error (no fallback).
     pub fn only(model_ref: impl Into<String>) -> RouteOptions {
-        RouteOptions { override_ref: Some(model_ref.into()), strict: true }
+        RouteOptions { override_ref: Some(model_ref.into()), strict: true, priority: None }
     }
     /// This engine first, then the task's usual candidates.
     pub fn prefer(model_ref: impl Into<String>) -> RouteOptions {
-        RouteOptions { override_ref: Some(model_ref.into()), strict: false }
+        RouteOptions { override_ref: Some(model_ref.into()), strict: false, priority: None }
+    }
+    /// The same, at this local-model priority.
+    pub fn with_priority(mut self, p: Priority) -> RouteOptions {
+        self.priority = Some(p);
+        self
     }
 }
 
@@ -583,6 +596,9 @@ impl<F: ProviderFactory> Router<F> {
     /// choice while offline.
     pub async fn provider_for_with(&self, task: &str, opts: &RouteOptions) -> Result<Route, RouteError> {
         let spec = self.tasks.get(task).ok_or_else(|| RouteError::UnknownTask(task.into()))?;
+        let mut eff = spec.clone();
+        eff.priority = Some(opts.priority.or(spec.priority).unwrap_or_else(|| Priority::for_class(spec.class)));
+        let spec = &eff;
         let label = spec.label.clone().unwrap_or_else(|| task.to_string());
         let online = self.is_online();
         let plan = plan(task, spec, self.override_for(task), opts, self.settings().as_ref());
@@ -676,7 +692,7 @@ pub struct ExternalServer {
     pub model: Option<String>,
 }
 
-/// Local models: an external server, or llama-server started on demand.
+/// Local models: an external server, or the machine's shared llama-server.
 #[derive(Clone, Default)]
 pub struct LocalAccess {
     /// Shared folder; `None` = `LOCAL_LLM_HOME`.
@@ -684,23 +700,24 @@ pub struct LocalAccess {
     /// The app's own folders instead of the shared layout of `home`
     /// (wins over `home` when set).
     pub layout: Option<Layout>,
+    /// An app's own server (its config or environment, never `private/`); wins when set.
     pub external: Option<ExternalServer>,
-    pub runtime: Option<Arc<LocalRuntime>>,
+    /// The machine's shared llama-server (this process's side of the protocol).
+    pub shared: Option<Arc<SharedRuntime>>,
+    /// `local:current`: `engine.toml` `[engine] model`.
+    pub default_model: Option<String>,
+    /// `engine.toml` `[engine] vision_model` (for a task that reads images).
+    pub vision_model: Option<String>,
     /// Rewrite Chinese replies in Taiwan usage.
     pub zh_tw: bool,
     /// Allow abliterated models (PaperComposer yes, household apps no).
     pub include_uncensored: bool,
-    /// Send local models through the shared model broker (`lore-modeld`) instead of
-    /// starting llama-server in this process. `external` still wins when set;
-    /// `runtime` is not used while this is set.
-    pub broker: Option<BrokerAccess>,
 }
 
 impl LocalAccess {
-    /// `local:current`: the external server (any model name; the catalog
+    /// The external server as `local:current` (any model name; the catalog
     /// supplies vision/context when it knows the name, `local` when there is
-    /// no name), else the model the runtime is running. `Err` when no local
-    /// engine is connected.
+    /// no name). `Err` without one (the shared server is [`StandardFactory::make`]'s).
     pub async fn current(&self, catalog: &Catalog) -> Result<OpenAiCompat, String> {
         let mut cfg = if let Some(ext) = &self.external {
             let m = ext.model.clone().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| "local".into());
@@ -709,25 +726,6 @@ impl LocalAccess {
                 c.vision = entry.vision;
                 c.context = entry.context_or_default();
             }
-            c
-        } else if let Some(b) = &self.broker {
-            // what the broker has loaded now (it is not started for this)
-            let base = b.running_url().await.ok_or("沒有連接本機模型")?;
-            let st = broker::status(&base).await?;
-            let m = st["loaded"].as_str().filter(|m| !m.is_empty()).ok_or("沒有連接本機模型")?.to_string();
-            let mut c = b.config(&base, &m);
-            if let Some(entry) = catalog.get(&m) {
-                c.vision = entry.vision;
-                c.context = entry.context_or_default();
-            }
-            c
-        } else if let Some(info) = match &self.runtime {
-            Some(rt) => rt.current_info().await,
-            None => None,
-        } {
-            let mut c = OpenAiCompatConfig::llama_server(info.url, info.model_id);
-            c.vision = info.vision;
-            c.context = info.context;
             c
         } else {
             return Err("沒有連接本機模型".into());
@@ -778,10 +776,23 @@ impl StandardFactory {
         la.layout.clone().or_else(|| local::home(la.home.as_deref()).map(|h| Layout::shared(&h)))
     }
 
-    /// `local:current` ([`LocalAccess::current`]). `Err` when no local
-    /// engine is set up or connected.
+    /// The external server as `local:current` ([`LocalAccess::current`]). `Err` when there is none.
     pub async fn current_local(&self) -> Result<OpenAiCompat, String> {
         self.local.as_ref().ok_or("沒有設定本機模型")?.current(&self.catalog).await
+    }
+
+    /// The catalog model `local:current` means for `task` on the shared server.
+    fn current_model(&self, task: &TaskSpec) -> Result<&crate::catalog::Model, String> {
+        let la = self.local.as_ref().ok_or("沒有設定本機模型")?;
+        let layout = self.local_layout();
+        crate::shared_runtime::current_model(
+            &self.catalog,
+            layout.as_ref(),
+            la.default_model.as_deref(),
+            la.vision_model.as_deref(),
+            task.needs.vision,
+            la.include_uncensored,
+        )
     }
 
     async fn claude(&self, model: &str, via: ClaudeVia, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
@@ -838,12 +849,16 @@ impl StandardFactory {
 
     async fn local(&self, r: &str, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
         let la = self.local.as_ref().ok_or("沒有設定本機模型")?;
-        if r == LOCAL_CURRENT {
+        if r == LOCAL_CURRENT && (la.external.is_some() || la.shared.is_none()) {
             return Ok(Arc::new(self.current_local().await?));
         }
         let layout = self.local_layout();
         let on_disk = |m: &crate::catalog::Model| layout.as_ref().is_some_and(|l| l.find_model(m).is_some());
-        let m = self.catalog.resolve_local(r, on_disk).ok_or_else(|| format!("模型目錄裡沒有本機模型「{r}」"))?;
+        let m = if r == LOCAL_CURRENT {
+            self.current_model(task)?
+        } else {
+            self.catalog.resolve_local(r, on_disk).ok_or_else(|| format!("模型目錄裡沒有本機模型「{r}」"))?
+        };
         if m.uncensored && !la.include_uncensored {
             return Err("這個 App 不使用移除拒答的模型".into());
         }
@@ -855,7 +870,7 @@ impl StandardFactory {
         {
             return Err(format!("{} 的上下文只有 {}", m.name, m.context_or_default()));
         }
-        let mut cfg = if let Some(ext) = &la.external {
+        if let Some(ext) = &la.external {
             if let Some(serving) = &ext.model
                 && serving != &m.id
             {
@@ -864,33 +879,24 @@ impl StandardFactory {
             let mut c = OpenAiCompatConfig::llama_server(ext.url.clone(), m.id.clone());
             c.vision = m.vision;
             c.context = m.context_or_default();
-            c
-        } else if let Some(b) = &la.broker {
-            // the broker starts the model; files are checked here when the folder is known
-            if let Some(l) = &layout
-                && let Some(why) = l.missing(m)
-            {
-                return Err(why);
-            }
-            let base = b.base_url().await?;
-            let mut c = b.config(&base, &m.id);
-            c.vision = m.vision && layout.as_ref().is_none_or(|l| l.find_mmproj(m).is_some());
-            c.context = m.context_or_default();
-            c
-        } else {
-            let rt = la.runtime.as_ref().ok_or("沒有設定本機 llama-server")?;
-            let layout = layout.as_ref().ok_or("沒有設定共用模型資料夾（LOCAL_LLM_HOME）")?;
-            if let Some(why) = layout.missing(m) {
-                return Err(why);
-            }
-            let info = rt.ensure_in(layout, m).await?;
-            let mut c = OpenAiCompatConfig::llama_server(info.url, m.id.clone());
-            c.vision = info.vision;
-            c.context = info.context;
-            c
-        };
-        cfg.zh_tw = la.zh_tw;
-        Ok(Arc::new(OpenAiCompat::new(cfg)))
+            c.zh_tw = la.zh_tw;
+            return Ok(Arc::new(OpenAiCompat::new(c)));
+        }
+        // the shared server: files checked now, the model acquired per request
+        let rt = la.shared.clone().ok_or("沒有設定本機 llama-server")?;
+        let layout = layout.ok_or("沒有設定共用模型資料夾（LOCAL_LLM_HOME）")?;
+        if let Some(why) = layout.missing(m) {
+            return Err(why);
+        }
+        let vision = m.vision && layout.find_mmproj(m).is_some();
+        Ok(Arc::new(SharedLocal {
+            rt,
+            model: m.clone(),
+            vision,
+            layout,
+            priority: task.priority.unwrap_or_else(|| Priority::for_class(task.class)),
+            zh_tw: la.zh_tw,
+        }))
     }
 }
 
@@ -905,26 +911,29 @@ impl ProviderFactory for StandardFactory {
     }
 
     /// Claude: the same checks as [`make`](ProviderFactory::make) (nothing is started).
-    /// Local: `local:current` is connected, or the model is served / on disk; nothing is started.
+    /// Local: the external server, or the model (for `local:current`, the shared default)
+    /// is on disk with llama.cpp; nothing is started.
     async fn check(&self, model: &ModelRef, task: &TaskSpec) -> Result<(), String> {
         match model {
             ModelRef::Claude { model, via } => self.claude(model, *via, task).await.map(|_| ()),
-            ModelRef::Local(r) if r == LOCAL_CURRENT => self.current_local().await.map(|_| ()),
             ModelRef::Local(r) => {
                 let la = self.local.as_ref().ok_or("沒有設定本機模型")?;
+                if r == LOCAL_CURRENT && (la.external.is_some() || la.shared.is_none()) {
+                    return self.current_local().await.map(|_| ());
+                }
                 let layout = self.local_layout();
                 let on_disk = |m: &crate::catalog::Model| layout.as_ref().is_some_and(|l| l.find_model(m).is_some());
-                let m = self.catalog.resolve_local(r, on_disk).ok_or_else(|| format!("模型目錄裡沒有本機模型「{r}」"))?;
+                let m = if r == LOCAL_CURRENT {
+                    self.current_model(task)?
+                } else {
+                    self.catalog.resolve_local(r, on_disk).ok_or_else(|| format!("模型目錄裡沒有本機模型「{r}」"))?
+                };
                 match (&la.external, &layout) {
                     (Some(ext), _) => match &ext.model {
                         Some(serving) if serving != &m.id => Err(format!("外部 llama-server 跑的是 {serving}，不是 {}", m.id)),
                         _ => Ok(()),
                     },
-                    (None, l) if la.broker.is_some() => match l.as_ref().and_then(|l| l.missing(m)) {
-                        Some(why) => Err(why),
-                        None => la.broker.as_ref().expect("checked").available().await,
-                    },
-                    (None, Some(l)) if la.runtime.is_some() => l.missing(m).map_or(Ok(()), Err),
+                    (None, Some(l)) if la.shared.is_some() => l.missing(m).map_or(Ok(()), Err),
                     _ => Err("沒有設定本機 llama-server".into()),
                 }
             }
@@ -1101,7 +1110,7 @@ max_tokens = 9000
     // ── StandardFactory (no network: fake CLI, mock HTTP, temp folders) ──
 
     fn spec(needs: Needs) -> TaskSpec {
-        TaskSpec { label: None, needs, default: "claude:sonnet".into(), fallback: None, offline: None, effort: None, max_tokens: None, class: None }
+        TaskSpec { label: None, needs, default: "claude:sonnet".into(), fallback: None, offline: None, effort: None, max_tokens: None, class: None, priority: None }
     }
 
     #[cfg(unix)]
@@ -1147,7 +1156,7 @@ max_tokens = 9000
         f.local = Some(LocalAccess {
             home: Some(dir.path().to_path_buf()),
             external: None,
-            runtime: Some(Arc::new(LocalRuntime::new())),
+            shared: Some(SharedRuntime::new("t", dir.path().join("reg"), Default::default())),
             zh_tw: true,
             include_uncensored: false,
             ..Default::default()
@@ -1177,7 +1186,6 @@ max_tokens = 9000
         f.local = Some(LocalAccess {
             home: None,
             external: Some(ExternalServer { url: "http://127.0.0.1:9/v1".into(), model: None }),
-            runtime: None,
             zh_tw: false,
             include_uncensored: false,
             ..Default::default()
@@ -1260,10 +1268,11 @@ max_tokens = 9000
     }
 
     #[tokio::test]
-    async fn local_current_is_the_external_server_or_the_running_model() {
+    async fn local_current_is_the_external_server_or_the_shared_default() {
+        let dir = tempfile::tempdir().unwrap();
         let mut f = StandardFactory::new(Catalog::bundled());
         let cur = ModelRef::parse("local:current").unwrap();
-        f.local = Some(LocalAccess { runtime: Some(Arc::new(LocalRuntime::new())), zh_tw: true, ..Default::default() });
+        f.local = Some(LocalAccess { zh_tw: true, ..Default::default() });
         assert!(f.make(&cur, &spec(Needs::default())).await.err().unwrap().contains("沒有連接本機模型"));
 
         // An external server with a name the catalog does not know (Ollama, LM Studio).
@@ -1278,71 +1287,29 @@ max_tokens = 9000
         assert!(f.current_local().await.unwrap().capabilities().vision);
         assert!(f.current_local().await.unwrap().config().zh_tw);
 
-        // No external server: whatever the runtime is running.
-        #[cfg(unix)]
-        {
-            f.local.as_mut().unwrap().external = None;
-            let rt = f.local.as_ref().unwrap().runtime.clone().unwrap();
-            let child = tokio::process::Command::new("sleep").arg("30").kill_on_drop(true).spawn().unwrap();
-            rt.adopt(crate::local::Running { child, model_id: "gemma-4-12b-q8".into(), url: "http://127.0.0.1:9/v1".into(), vision: true, context: 32768 }).await;
-            let p = f.make(&cur, &spec(Needs { vision: true, ..Default::default() })).await.unwrap();
-            assert_eq!(p.id(), "llama-server:gemma-4-12b-q8");
-            assert_eq!(p.capabilities().context, 32768);
-            rt.stop().await;
-            assert!(f.current_local().await.is_err());
+        // No external server: the shared default model, acquired per request (nothing starts here).
+        let home = dir.path();
+        let la = f.local.as_mut().unwrap();
+        la.external = None;
+        la.home = Some(home.to_path_buf());
+        la.shared = Some(SharedRuntime::new("t", home.join("reg"), Default::default()));
+        assert!(f.make(&cur, &spec(Needs::default())).await.err().unwrap().contains("還沒選"), "no model chosen");
+        f.local.as_mut().unwrap().default_model = Some("gemma-4-12b-q8".into());
+        let e = f.make(&cur, &spec(Needs::default())).await.err().unwrap();
+        assert!(e.contains("llama.cpp"), "nothing on disk: {e}");
+        let m = Catalog::bundled().get("gemma-4-12b-q8").unwrap().clone();
+        for p in [home.join("runtimes/llama.cpp/llama-server"), home.join("gguf").join(&m.repo).join(&m.file_suffix)] {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "x").unwrap();
         }
-    }
-
-    /// With a broker, `local:<model>` points at the broker with the app and priority
-    /// headers (nothing is started in this process); `local:current` is what it has loaded.
-    #[tokio::test]
-    async fn local_models_go_through_the_broker() {
-        use axum::{Json, routing::get, routing::post};
-        let loaded = Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
-        let l2 = loaded.clone();
-        let app = axum::Router::new()
-            .route("/api/status", get(move || {
-                let l = l2.clone();
-                async move { Json(serde_json::json!({ "service": "lore-modeld", "loaded": *l.lock().unwrap() })) }
-            }))
-            .route(
-                "/v1/chat/completions",
-                post(|h: axum::http::HeaderMap, Json(b): Json<serde_json::Value>| async move {
-                    let v = |k: &str| h.get(k).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-                    let text = format!("{}|{}|{}", v("x-lore-app"), v("x-lore-priority"), b["model"].as_str().unwrap_or(""));
-                    Json(serde_json::json!({"choices": [{"message": {"content": text}, "finish_reason": "stop"}]}))
-                }),
-            );
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://{}", l.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-
-        let rt = Arc::new(LocalRuntime::new());
-        let mut f = StandardFactory::new(Catalog::bundled());
-        let mut b = BrokerAccess::new("sc", broker::Priority::Interactive);
-        b.url = Some(base.clone());
-        f.local = Some(LocalAccess { runtime: Some(rt.clone()), broker: Some(b), ..Default::default() });
-        let q = ModelRef::parse("local:qwen3.5-9b-q8").unwrap();
-        assert!(f.check(&q, &spec(Needs::default())).await.is_ok());
-        let p = f.make(&q, &spec(Needs::default())).await.unwrap();
-        assert_eq!(p.id(), "lore-modeld:qwen3.5-9b-q8");
-        assert_eq!(p.complete(&LlmRequest::prompt("s", "u")).await.unwrap(), "sc|interactive|qwen3.5-9b-q8");
-        assert_eq!(rt.phase(), crate::local::Phase::Idle, "this process started nothing");
-        // An app layout without the weights: the reason comes before any broker call.
-        let dir = tempfile::tempdir().unwrap();
-        f.local.as_mut().unwrap().layout = Some(Layout::new(dir.path().join("gguf"), dir.path().join("rt")));
-        assert!(f.make(&q, &spec(Needs::default())).await.err().unwrap().contains("llama.cpp"));
-        f.local.as_mut().unwrap().layout = None;
-
-        let cur = ModelRef::parse("local:current").unwrap();
-        assert!(f.make(&cur, &spec(Needs::default())).await.err().unwrap().contains("沒有連接本機模型"), "nothing loaded");
-        *loaded.lock().unwrap() = serde_json::json!("gemma-4-12b-q8");
+        assert!(f.check(&cur, &spec(Needs::default())).await.is_ok());
         let p = f.make(&cur, &spec(Needs::default())).await.unwrap();
-        assert_eq!(p.id(), "lore-modeld:gemma-4-12b-q8");
-        assert!(p.capabilities().vision, "from the catalog");
-        // An external server still wins.
-        f.local.as_mut().unwrap().external = Some(ExternalServer { url: "http://127.0.0.1:9/v1".into(), model: None });
-        assert_eq!(f.make(&q, &spec(Needs::default())).await.unwrap().id(), "llama-server:qwen3.5-9b-q8");
+        assert_eq!(p.id(), "llama-server:gemma-4-12b-q8");
+        assert_eq!(p.capabilities().context, m.context_or_default());
+        assert!(!p.capabilities().vision, "no projector on disk");
+        assert!(!home.join("reg").join(crate::shared_runtime::REGISTRY).exists(), "routing starts and registers nothing");
+        let e = f.make(&cur, &spec(Needs { vision: true, ..Default::default() })).await.err().unwrap();
+        assert!(e.contains("不能看圖"), "{e}");
     }
 
     #[tokio::test]
@@ -1355,7 +1322,7 @@ max_tokens = 9000
         f.local = Some(LocalAccess {
             home: Some(data.join("unused")),
             layout: Some(Layout::new(data.join("models"), data.join("llama.cpp"))),
-            runtime: Some(Arc::new(LocalRuntime::new())),
+            shared: Some(SharedRuntime::new("t", data.join("reg"), Default::default())),
             ..Default::default()
         });
         assert_eq!(f.local_layout().unwrap().gguf, data.join("models"));

@@ -2,7 +2,7 @@
 name = "lore-llm"
 version.workspace = true
 edition.workspace = true
-description = "The single LLM layer for every app: providers (Claude API, Claude subscription via Claude Code, llama-server / OpenAI-compatible, mock), the shared model catalog, local llama-server lifecycle, task routing (tasks.toml) and API-key secrets."
+description = "The single LLM layer for every app: providers (Claude API, Claude subscription via Claude Code, llama-server / OpenAI-compatible, mock), the shared model catalog, the local llama-server shared by every app, task routing (tasks.toml) and API-key secrets."
 
 [features]
 default = ["zhtw"]
@@ -19,6 +19,7 @@ tokio.workspace = true
 reqwest.workspace = true
 futures-util.workspace = true
 base64.workspace = true
+libc = "0.2"
 lore-secrets = { path = "../lore-secrets" }
 lore-home = { path = "../lore-home" }
 ferrous-opencc = { workspace = true, optional = true }
@@ -26,3 +27,10 @@ ferrous-opencc = { workspace = true, optional = true }
 [dev-dependencies]
 tempfile.workspace = true
 axum.workspace = true
+
+# Test helper (fake llama-server + a client app process for the shared-runtime tests).
+[[bin]]
+name = "lore-llm-testkit"
+path = "testkit/main.rs"
+test = false
+doc = false

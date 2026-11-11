@@ -11,10 +11,15 @@
 //! - `PUT /api/engines` with the parts to change: `{ local: { model }, claude: { via, model },
 //!   routes: { create: "cloud" }, overrides: { "<task>": "local" } }` → the full GET body;
 //!   a bad value → 400 `{ "error": "一行中文" }` and nothing is written.
+//! - The local model is the machine's one shared llama-server (lore-llm `shared_runtime`,
+//!   docs/local-models.md): `local.status` = the words every app shows (「已載入 …」,
+//!   「等待 X 用完模型」…), `local.loaded`, `local.users` / `local.waiting` (who uses it, who
+//!   waits), from the registry in the cache folder. PUT `{ local: { model } }` only writes the
+//!   shared default model id (`engine.toml` `[engine] model`); the model loads when a task needs it.
 //! - Memory of the local model: `local.idle_minutes` (GET; PUT `{ local: { idle_minutes: 15 } }`,
-//!   0 = never; kept in `engine.toml` `[local]`, shared by every app) and `local.can_release`;
-//!   PUT `{ local: { release: true } }` stops the app's own llama-server now. Only the app that
-//!   runs the server ([`Engines::runtime`], PaperComposer) releases; the others get a 400.
+//!   0 = never; kept in `engine.toml` `[local]`, shared by every app) and `local.can_release`
+//!   (no other app holds a lease); PUT `{ local: { release: true } }` stops the server now, or
+//!   400 「X 正在用」.
 //! - `GET /api/links/ports` → `{ "sc": 51234, … }`: the desktop apps running now (lore-home `ports`).
 //! - `POST /api/links/open { url }` → hands a `lore-(pc|sc|lr|kb)://` or
 //!   `http://127.0.0.1…` URL to the OS opener (204); anything else → 400.
@@ -31,9 +36,10 @@ use axum::routing::{get, post};
 use lore_home::Home;
 use lore_llm::catalog::Catalog;
 use lore_llm::claude_code::{Cache, Cli};
-use lore_llm::local::{Layout, LocalRuntime, Phase};
+use lore_llm::local::Layout;
 use lore_llm::secrets::{Account, SharedKeys};
 use lore_llm::shared::{self, EngineSettings, TaskClass};
+use lore_llm::shared_runtime::{LocalStatus, SharedRuntime, app_label};
 use lore_llm::{OpenAiCompat, OpenAiCompatConfig, TaskTable};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -48,9 +54,9 @@ pub struct Engines {
     /// The app's tasks (`tasks.toml`): the ones `tasks` / `overrides` list and accept.
     pub tasks: TaskTable,
     pub catalog: Catalog,
-    /// The llama-server the app runs itself, if any (PaperComposer): its phase is the
-    /// local state, and `PUT local.model` starts that model.
-    pub runtime: Option<Arc<LocalRuntime>>,
+    /// This process's side of the shared llama-server (the local state, 釋放, idle checks);
+    /// `None` in tests and isolated servers.
+    pub shared: Option<Arc<SharedRuntime>>,
     /// Where downloaded models are (`LOCAL_LLM_HOME` by default), for the model list.
     pub layout: Option<Layout>,
     /// The app's own `[engine] url` (wins over the shared one, as in the app's routing).
@@ -87,7 +93,7 @@ impl Engines {
             home,
             tasks,
             catalog: Catalog::bundled(),
-            runtime: None,
+            shared: None,
             layout: lore_llm::local::home(None).map(|h| Layout::shared(&h)),
             external: None,
             include_uncensored: false,
@@ -103,15 +109,26 @@ impl Engines {
         }
     }
 
-    /// The app's own llama-server and model folders. The runtime follows the shared idle
-    /// setting (`[local] idle_minutes`) and its idle watcher is started.
-    pub fn runtime(mut self, rt: Arc<LocalRuntime>, layout: Layout) -> Self {
-        let home = self.home.clone();
-        rt.idle_from(Arc::new(move || idle_duration(idle_minutes(&home))));
-        rt.watch_idle();
-        self.runtime = Some(rt);
+    /// The shared llama-server, as this process sees it. Its idle check (every app, the
+    /// shared `[local] idle_minutes`) starts here, or on the first request when there is no
+    /// async runtime yet.
+    pub fn shared(mut self, rt: Arc<SharedRuntime>) -> Self {
+        self.shared = Some(rt);
+        self.watch();
+        self
+    }
+
+    /// The app's own model folders (PaperComposer before `LOCAL_LLM_HOME`).
+    pub fn layout(mut self, layout: Layout) -> Self {
         self.layout = Some(layout);
         self
+    }
+
+    fn watch(&self) {
+        if let Some(rt) = &self.shared {
+            let home = self.home.clone();
+            rt.watch_idle(Arc::new(move || idle_duration(idle_minutes(&home))));
+        }
     }
 
     /// The app's `[engine]` (an external server), when it has one.
@@ -144,6 +161,7 @@ impl Engines {
         self.keys.isolate();
         self.cli = Cli { bin: Some(std::env::temp_dir().join("lore-engines-no-claude")), config_dir: None };
         self.layout = None;
+        self.shared = None;
         self.probe = false;
         self.ports_file = None;
         self.opener = Arc::new(|_| Err("isolated".into()));
@@ -160,8 +178,8 @@ impl Engines {
     }
 
     async fn local(&self) -> Value {
-        let shared = self.home.engine();
-        let ext = self.external.clone().or_else(|| shared.and_then(|e| Some((e.url?, e.model))));
+        let chosen = self.home.engine().and_then(|e| e.model);
+        let ext = self.external.clone();
         let mut models: Vec<Value> = match &self.layout {
             Some(l) => l
                 .installed(&self.catalog, self.include_uncensored)
@@ -171,22 +189,25 @@ impl Engines {
                 .collect(),
             None => vec![],
         };
-        let phase = self.runtime.as_ref().map(|r| r.phase()).unwrap_or(Phase::Idle);
-        let (state, url, model, vision) = match phase {
-            Phase::Starting { model } => ("starting", None, Some(model), None),
-            Phase::Ready { model, url } => {
-                let vision = self.runtime.as_ref().unwrap().current_info().await.map(|i| i.vision);
-                ("ready", Some(url), Some(model), vision)
+        let snap = match &self.shared {
+            Some(rt) if ext.is_none() => Some(rt.snapshot().await),
+            _ => None,
+        };
+        let me = self.shared.as_ref().map_or(0, |r| r.pid);
+        let loaded = snap.as_ref().and_then(|s| s.registry.server.clone());
+        let (state, url, model, vision) = match (&ext, &snap) {
+            (Some((url, model)), _) => {
+                let up = self.probe && OpenAiCompat::new(OpenAiCompatConfig::llama_server(url.clone(), model.clone().unwrap_or_else(|| "local".into()))).ping().await;
+                (if up { "ready" } else { "off" }, Some(url.clone()), model.clone(), None)
             }
-            Phase::Error { .. } => ("error", None, None, None),
-            Phase::Idle => match ext {
-                Some((url, model)) => {
-                    let up = self.probe && OpenAiCompat::new(OpenAiCompatConfig::llama_server(url.clone(), model.clone().unwrap_or_else(|| "local".into()))).ping().await;
-                    (if up { "ready" } else { "off" }, Some(url), model, None)
-                }
-                None if models.is_empty() => ("missing", None, None, None),
-                None => ("off", None, None, None),
+            (None, Some(s)) => match (&s.status, &loaded) {
+                (LocalStatus::Loading { .. } | LocalStatus::Switching { .. }, Some(sv)) => ("starting", None, chosen.clone().or(Some(sv.model.clone())), None),
+                (_, Some(sv)) => ("ready", Some(sv.url.clone()), chosen.clone().or(Some(sv.model.clone())), Some(sv.vision).filter(|_| chosen.as_deref().is_none_or(|c| c == sv.model))),
+                (_, None) if models.is_empty() => ("missing", None, chosen.clone(), None),
+                (_, None) => ("off", None, chosen.clone(), None),
             },
+            (None, None) if models.is_empty() => ("missing", None, chosen.clone(), None),
+            (None, None) => ("off", None, chosen.clone(), None),
         };
         let vision = vision.unwrap_or_else(|| model.as_deref().and_then(|m| self.catalog.get(m)).is_some_and(|m| m.vision));
         if let Some(m) = &model
@@ -194,15 +215,31 @@ impl Engines {
         {
             models.insert(0, json!({ "id": m, "label": self.label(m), "vision": vision }));
         }
+        let status = match (&ext, &snap) {
+            (Some(_), _) => None,
+            (None, Some(s)) => Some(s.status.text(&self.catalog)),
+            (None, None) => Some(LocalStatus::Off.text(&self.catalog)),
+        };
+        let users: Vec<String> = snap.as_ref().map(|s| s.users(me).iter().map(|a| app_label(a)).collect()).unwrap_or_default();
+        let waiting: Vec<Value> = snap
+            .as_ref()
+            .map(|s| s.registry.wanting.iter().map(|w| json!({ "app": app_label(&w.app), "model": w.model, "label": self.label(&w.model) })).collect())
+            .unwrap_or_default();
+        let can_release = snap.as_ref().is_some_and(|s| s.can_release);
         json!({
             "state": state,
+            "status": status,
             "url": url,
             "model": model,
             "label": model.as_deref().map(|m| self.label(m)),
+            "loaded": loaded.as_ref().map(|s| s.model.clone()),
             "vision": vision,
             "models": models,
+            "users": users,
+            "waiting": waiting,
             "idle_minutes": idle_minutes(&self.home),
-            "can_release": self.runtime.is_some(),
+            "can_release": can_release,
+            "release_blocked": (!can_release && loaded.is_some()).then(|| users.first().map(|u| format!("{u} 正在用"))).flatten(),
         })
     }
 
@@ -262,9 +299,7 @@ impl Engines {
 
     /// The `GET /api/engines` body.
     pub async fn state(&self) -> Value {
-        if let Some(rt) = &self.runtime {
-            rt.watch_idle(); // armed here too when the router was built outside a runtime
-        }
+        self.watch(); // armed here too when the router was built outside a runtime
         let s = self.settings();
         let classes: Vec<Value> = TaskClass::ALL
             .iter()
@@ -289,13 +324,11 @@ impl Engines {
 
     /// Apply a `PUT /api/engines` body (all checked before anything is written).
     pub async fn update(&self, body: &Value) -> Result<(), String> {
-        if let Some(rt) = &self.runtime {
-            rt.watch_idle();
-        }
+        self.watch();
         let obj = body.as_object().ok_or("要送 JSON 物件")?;
         let str_of = |v: &Value, what: &str| v.as_str().map(str::trim).map(String::from).ok_or(format!("{what}要是文字"));
         // local
-        let mut start = None;
+        let mut pick = None;
         let mut idle = None;
         let mut release = None;
         if let Some(l) = obj.get("local").filter(|v| !v.is_null()) {
@@ -304,33 +337,21 @@ impl Engines {
                 idle = Some(n);
             }
             if l.get("release").and_then(Value::as_bool) == Some(true) {
-                release = Some(self.runtime.clone().ok_or("本機模型請在 PaperComposer 釋放")?);
+                release = Some(self.shared.clone().ok_or("沒有本機模型可釋放")?);
             }
         }
         if let Some(l) = obj.get("local").filter(|v| !v.is_null())
             && let Some(m) = l.get("model").filter(|v| !v.is_null())
         {
-            {
-                let m = str_of(m, "本機模型")?;
-                let current = self.home.engine().and_then(|e| e.model);
-                let running = match &self.runtime {
-                    Some(r) => r.current_info().await.map(|i| i.model_id),
-                    None => None,
-                };
-                if running.as_deref() != Some(m.as_str()) && current.as_deref() != Some(m.as_str()) {
-                    let (Some(rt), Some(layout)) = (&self.runtime, &self.layout) else {
-                        return Err("本機模型請在 PaperComposer 切換".into());
-                    };
-                    let model = self.catalog.get(&m).filter(|x| x.is_brain()).ok_or(format!("模型目錄裡沒有本機模型「{m}」"))?;
-                    if model.uncensored && !self.include_uncensored {
-                        return Err("這個工具不使用移除拒答的模型".into());
-                    }
-                    if let Some(why) = layout.missing(model) {
-                        return Err(why);
-                    }
-                    start = Some((rt.clone(), layout.clone(), model.clone()));
-                }
+            let m = str_of(m, "本機模型")?;
+            let model = self.catalog.get(&m).filter(|x| x.is_brain()).ok_or(format!("模型目錄裡沒有本機模型「{m}」"))?;
+            if model.uncensored && !self.include_uncensored {
+                return Err("這個工具不使用移除拒答的模型".into());
             }
+            if let Some(why) = self.layout.as_ref().and_then(|l| l.missing(model)) {
+                return Err(why);
+            }
+            pick = Some(m);
         }
         // claude
         let mut claude = None;
@@ -389,8 +410,12 @@ impl Engines {
         if let Some(n) = idle {
             set_idle_minutes(&self.home, n).map_err(io)?;
         }
+        if let Some(m) = pick {
+            // only the shared default id; the model loads when a task needs it
+            self.home.set_engine_model(Some(&m)).map_err(io)?;
+        }
         if let Some(rt) = release {
-            rt.release().await;
+            rt.release().await?;
         }
         if let Some((via, model)) = claude {
             self.home.set_claude(via.as_deref(), model.as_deref()).map_err(io)?;
@@ -400,15 +425,6 @@ impl Engines {
         }
         for (t, m) in overrides {
             self.home.set_override(&t, Some(&m)).map_err(io)?;
-        }
-        if let Some((rt, layout, model)) = start {
-            // the app's phase hook publishes the server in [engine] once it is ready
-            tokio::spawn(async move {
-                if let Err(e) = rt.ensure_in(&layout, &model).await {
-                    eprintln!("lore-engines: {e}");
-                }
-            });
-            tokio::task::yield_now().await;
         }
         Ok(())
     }
@@ -475,6 +491,10 @@ fn bad(msg: impl Into<String>) -> Response {
 pub fn router<S: Clone + Send + Sync + 'static>(e: Engines) -> axum::Router<S> {
     if e.install_routing {
         install(&e.home);
+    }
+    if e.shared.is_some() {
+        // the server's URL is runtime data now: an old `[engine] url` goes
+        let _ = e.home.forget_engine_url();
     }
     let e = Arc::new(e);
     let (g, p, o, q) = (e.clone(), e.clone(), e.clone(), e);

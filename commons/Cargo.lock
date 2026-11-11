@@ -1145,6 +1145,7 @@ dependencies = [
  "base64 0.22.1",
  "ferrous-opencc",
  "futures-util",
+ "libc",
  "lore-home",
  "lore-secrets",
  "reqwest",
@@ -1163,23 +1164,6 @@ dependencies = [
  "lore-ooxml",
  "tempfile",
  "thiserror",
-]
-
-[[package]]
-name = "lore-modeld"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "futures-util",
- "lore-engines",
- "lore-home",
- "lore-llm",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
