@@ -253,7 +253,7 @@ function consoleSide() {
   next.textContent = "";
   if (SHOW.step < SHOW.groups.length) next.append(Object.assign(document.createElement("div"), { className: "pv-more", textContent: `本頁還有 ${SHOW.groups.length - SHOW.step} 個動畫` }));
   if (nx) {
-    const n = SC.renderSlide(nx, ctxFor(nx, { slideNo: slideNo(nx.uid) }));
+    const n = SC.renderSlide(nx, ctxFor(nx, { slideNo: slideNo(nx.uid), learn: false })); // 不熟 marks never show
     n.classList.add("pv-thumb");
     next.append(n);
     const W = SC.px(S.deck.size.w);
@@ -284,7 +284,7 @@ function showRender(step = 0, animate = false) {
   if (SHOW.bar && SHOW.mode === "single") stage.append(SHOW.bar);
   stage.classList.toggle("black", SHOW.black || SHOW.end);
   const sl = SHOW.list[SHOW.i];
-  const node = SC.renderSlide(sl, ctxFor(sl, { slideNo: slideNo(sl.uid) }));
+  const node = SC.renderSlide(sl, ctxFor(sl, { slideNo: slideNo(sl.uid), learn: false })); // 不熟 marks never show
   node.classList.add("show-slide");
   stage.append(node);
   const dot = document.createElement("div");

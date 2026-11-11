@@ -549,6 +549,18 @@ pub fn find_terms(items: &[(String, String)], kb: &[KbName], f: &Filters) -> Ter
     r
 }
 
+/// The `terms` stage in one call: the author's KnowledgeBase (read-only) against `items`
+/// (`(section, text)`), filtered with the built-in lists.
+pub fn terms_for(home: &lore_home::Home, items: &[(String, String)]) -> TermsResult {
+    let kb = load_names(&space_dirs(home), &member(home));
+    find_terms(items, &kb, &Filters::default())
+}
+
+/// Page roles (todeck's `ROLES`) whose sentences are marked whole: background and method narration.
+pub fn sentence_role(role: &str) -> bool {
+    matches!(role, "background" | "challenge" | "overview" | "method" | "loss")
+}
+
 // ── marks ────────────────────────────────────────────────────────────────────
 
 /// Term spellings to find in slide text (by word keys, so plurals and hyphens match).

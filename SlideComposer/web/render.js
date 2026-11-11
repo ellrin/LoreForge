@@ -226,6 +226,12 @@ function renderRuns(p, para, pi, ctx, scale, editable) {
       if (r.kind === "field" && r.field === "slidenum" && ctx.slideNo) t = String(ctx.slideNo);
       span.textContent = t;
       if (r.kind === "raw") span.contentEditable = "false";
+      // 「不熟」 (em `learn`): drawn only when the editor asks (ctx.learn); print, the show and
+      // exports never do. Slide content, so a fixed red, not a theme token.
+      if (r.em === "learn" && ctx.learn) {
+        span.classList.add("learn");
+        Object.assign(span.style, { color: LEARN_RED, textDecorationLine: "underline", textDecorationStyle: "dotted", textDecorationColor: LEARN_RED, textUnderlineOffset: "0.18em" });
+      }
     }
     if (editable) { span.dataset.pi = pi; span.dataset.ri = ri; }
     p.append(span);
@@ -493,6 +499,27 @@ function renderSlide(slide, ctx) {
   return root;
 }
 
+// ── 「不熟」 ─────────────────────────────────────────────────────────────────
+const LEARN_RED = "#D61F1F";
+/** Share of a slide's text (characters) in `learn` runs: ≥ 0.5 = a mostly unfamiliar slide. */
+function learnShare(slide) {
+  let all = 0, learn = 0;
+  const tb = (t) => t?.paras?.forEach((p) => p.runs.forEach((r) => {
+    if (r.kind !== "text") return;
+    const n = (r.text ?? "").replace(/\s+/g, "").length;
+    all += n;
+    if (r.em === "learn") learn += n;
+  }));
+  const visit = (o) => {
+    tb(o.text);
+    (o.rows ?? []).forEach((rw) => rw.cells.forEach((c) => tb(c.text)));
+    (o.children ?? []).forEach(visit);
+  };
+  (slide?.objects ?? []).forEach(visit);
+  return all ? learn / all : 0;
+}
+const hasLearn = (slide) => learnShare(slide) > 0;
+
 /** Problems a renderer cannot draw faithfully (for the acceptance report). */
 function renderWarnings(slide) {
   const w = [];
@@ -508,4 +535,4 @@ function renderWarnings(slide) {
   return w;
 }
 
-window.SC = { EMU_PX, px, ptpx, rgba, fontStack, addFontStacks: addStacks, renderSlide, renderObject, renderText, renderWarnings, geomPath, KNOWN_GEOMS };
+window.SC = { EMU_PX, px, ptpx, rgba, fontStack, addFontStacks: addStacks, renderSlide, renderObject, renderText, renderWarnings, geomPath, KNOWN_GEOMS, learnShare, hasLearn };

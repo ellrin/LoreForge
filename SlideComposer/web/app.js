@@ -330,8 +330,50 @@ function ctxFor(sl, extra = {}) {
     assetUrl: (a) => `${deckApi("/asset")}?id=${encodeURIComponent(a)}`,
     latex: (omml) => S.latex.get(omml),
     needLatex: (omml) => { if (omml && !S.latex.has(omml)) { S.latexWant.add(omml); queueLatex(); } },
+    learn: LEARN.on, // 不熟 marks (the show passes learn: false)
     ...extra,
   };
+}
+
+// ── 不熟 (em `learn`): top-bar toggle 標示我不熟的／報告模式, thumbnail badge ──────────
+const LEARN = { on: true, seg: null };
+try { LEARN.on = localStorage.getItem("sc.learnMarks") !== "0"; } catch {}
+const deckHasLearn = () => !!S.deck?.slides.some((s) => SC.hasLearn(s));
+/** The toggle sits in the top bar's lead only while the open deck has marks. */
+function learnToggle() {
+  if (!S.deck || !deckHasLearn()) { LEARN.seg?.remove(); return; }
+  if (!LEARN.seg) {
+    LEARN.seg = h("div", { class: "seg", id: "learnSeg", role: "group", "aria-label": "不熟標示" },
+      h("button", { type: "button", "data-v": "1" }, "標示我不熟的"),
+      h("button", { type: "button", "data-v": "0" }, "報告模式"));
+    LEARN.seg.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (!b || (b.dataset.v === "1") === LEARN.on) return;
+      LEARN.on = b.dataset.v === "1";
+      try { localStorage.setItem("sc.learnMarks", LEARN.on ? "1" : "0"); } catch {}
+      learnToggle();
+      renderThumbs(true);
+      renderCanvas();
+    });
+  }
+  if (!LEARN.seg.isConnected) shell.slots.lead.prepend(LEARN.seg);
+  LEARN.seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.v === "1") === LEARN.on)));
+}
+/** Red corner badge on a thumbnail whose slide is mostly 不熟 (≥ half its text). */
+function learnBadge(t, sl) {
+  let b = t.querySelector(".learn-badge");
+  const on = LEARN.on && SC.learnShare(sl) >= 0.5;
+  if (!on) { b?.remove(); return; }
+  if (!b) {
+    b = document.createElement("span");
+    b.className = "learn-badge";
+    b.textContent = "不熟";
+    b.title = "這頁大部分是不熟的內容";
+    Object.assign(b.style, { position: "absolute", top: "3px", right: "3px", font: "600 10px/1 var(--mono)", padding: "2px 4px", borderRadius: "3px", color: "#fff", background: "var(--err)", pointerEvents: "none", zIndex: "2" });
+    const f = t.querySelector(".frame");
+    f.style.position = "relative";
+    f.append(b);
+  }
 }
 
 let latexTimer = null;
@@ -351,6 +393,7 @@ function queueLatex() {
 }
 
 function renderAll() {
+  learnToggle(); // 不熟
   renderThumbs();
   renderCanvas();
   renderSide();
@@ -383,6 +426,7 @@ function renderThumbs(force = false) {
     }
     t.querySelector(".no").textContent = i + 1;
     t.classList.toggle("hidden-slide", !!sl.hidden);
+    learnBadge(t, sl); // 不熟
     t.setAttribute("aria-current", sl.uid === S.cur ? "true" : "false");
     box.append(t);
   });
@@ -1771,6 +1815,7 @@ async function showHome() {
   document.title = "SlideComposer";
   S.reveal = null;
   S.deck = null;
+  learnToggle(); // 不熟
   renderSide();
   const info = await api("/api/info");
   S.info = info;
