@@ -260,7 +260,7 @@ mod tests {
         let rt = crate::shared_runtime::SharedRuntime::new("test", reg.path(), Default::default());
         let p = crate::shared_runtime::SharedLocal {
             rt: rt.clone(),
-            layout: Layout::shared(&home),
+            layout: Some(Layout::shared(&home)),
             model: m.clone(),
             priority: crate::shared_runtime::Priority::Interactive,
             zh_tw: false,

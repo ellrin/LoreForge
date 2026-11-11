@@ -143,7 +143,8 @@ fn client() {
         probe_timeout: Duration::from_millis(800),
     };
     let rt = SharedRuntime::new(app, &dir, timing);
-    let layout = lore_llm::local::Layout::shared(&home);
+    // `-` = an app that does not know the model folder
+    let layout = (args[3] != "-").then(|| lore_llm::local::Layout::shared(&home));
     let catalog = Catalog::bundled();
     let tokio = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("tokio");
     let mut held = Vec::new();
@@ -170,7 +171,7 @@ fn client() {
             }
             Some("acquire") => {
                 let Some(m) = model(1) else { say("err unknown model".into()); continue };
-                match tokio.block_on(rt.acquire(&layout, &m, prio(2))) {
+                match tokio.block_on(rt.acquire(layout.as_ref(), &m, prio(2))) {
                     Ok(tk) => {
                         say(format!("ok {}", tk.url));
                         held.push(tk);

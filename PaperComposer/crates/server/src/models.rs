@@ -433,7 +433,7 @@ pub async fn start(mgr: &Manager, cat: &Catalog, id: &str) -> Result<String, Str
     let m = cat.brains(true).find(|m| m.id == id).ok_or("目錄裡沒有這個模型")?;
     mgr.note(None).await;
     let rt = mgr.local_rt.as_ref().ok_or("沒有本機模型伺服器")?;
-    let ticket = rt.acquire(&layout(), m, Priority::Interactive).await?;
+    let ticket = rt.acquire(Some(&layout()), m, Priority::Interactive).await?;
     Ok(ticket.url.clone())
 }
 

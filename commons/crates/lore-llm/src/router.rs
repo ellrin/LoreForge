@@ -882,13 +882,13 @@ impl StandardFactory {
             c.zh_tw = la.zh_tw;
             return Ok(Arc::new(OpenAiCompat::new(c)));
         }
-        // the shared server: files checked now, the model acquired per request
+        // the shared server: files checked now when the folder is known, the model acquired
+        // per request (without the folder this app can use a server another app started)
         let rt = la.shared.clone().ok_or("沒有設定本機 llama-server")?;
-        let layout = layout.ok_or("沒有設定共用模型資料夾（LOCAL_LLM_HOME）")?;
-        if let Some(why) = layout.missing(m) {
+        if let Some(why) = layout.as_ref().and_then(|l| l.missing(m)) {
             return Err(why);
         }
-        let vision = m.vision && layout.find_mmproj(m).is_some();
+        let vision = m.vision && layout.as_ref().is_none_or(|l| l.find_mmproj(m).is_some());
         Ok(Arc::new(SharedLocal {
             rt,
             model: m.clone(),
@@ -933,7 +933,7 @@ impl ProviderFactory for StandardFactory {
                         Some(serving) if serving != &m.id => Err(format!("外部 llama-server 跑的是 {serving}，不是 {}", m.id)),
                         _ => Ok(()),
                     },
-                    (None, Some(l)) if la.shared.is_some() => l.missing(m).map_or(Ok(()), Err),
+                    (None, l) if la.shared.is_some() => l.as_ref().and_then(|l| l.missing(m)).map_or(Ok(()), Err),
                     _ => Err("沒有設定本機 llama-server".into()),
                 }
             }

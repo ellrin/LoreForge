@@ -405,6 +405,7 @@ pub struct SharedRuntime {
     pub dir: PathBuf,
     pub timing: Timing,
     watching: AtomicBool,
+    idle: std::sync::Mutex<Option<IdleSource>>,
 }
 
 /// A request's hold on the server: its URL; dropping it records the use.
@@ -493,6 +494,7 @@ impl Snapshot {
     /// Apps (short names) that hold a lease, other than `pid`.
     pub fn users(&self, except: u32) -> Vec<String> {
         let mut v: Vec<String> = self.registry.leases.iter().filter(|l| l.pid != except).map(|l| l.app.clone()).collect();
+        v.sort();
         v.dedup();
         v
     }
@@ -527,7 +529,7 @@ static PROCESS: OnceLock<Arc<SharedRuntime>> = OnceLock::new();
 impl SharedRuntime {
     /// A runtime over the registry in `dir` (tests: a temp folder).
     pub fn new(app: impl Into<String>, dir: impl Into<PathBuf>, timing: Timing) -> Arc<SharedRuntime> {
-        Arc::new(SharedRuntime { app: app.into(), pid: std::process::id(), dir: dir.into(), timing, watching: AtomicBool::new(false) })
+        Arc::new(SharedRuntime { app: app.into(), pid: std::process::id(), dir: dir.into(), timing, watching: AtomicBool::new(false), idle: std::sync::Mutex::new(None) })
     }
 
     /// This process's runtime over the real cache folder (`<cache>/LoreForge`,
@@ -686,7 +688,7 @@ impl SharedRuntime {
     }
 
     /// One locked look: take the server, start one, or wait.
-    fn step(&self, layout: &Layout, m: &Model, priority: Priority) -> Result<Step, String> {
+    fn step(&self, layout: Option<&Layout>, m: &Model, priority: Priority) -> Result<Step, String> {
         let t = &self.timing;
         let res = self.locked(true, |reg| -> Result<Step, String> {
             let n = now();
@@ -716,6 +718,12 @@ impl SharedRuntime {
             if (first.0, first.1.as_str()) != (self.pid, m.id.as_str()) {
                 return Ok(Step::Wait);
             }
+            // our turn to start a server: only with the model folder (an app without one can
+            // use a server another app started, never start one)
+            let Some(layout) = layout else {
+                reg.wanting.retain(|w| !(w.pid == self.pid && w.model == m.id));
+                return Err("這個 App 不知道模型資料夾（LOCAL_LLM_HOME），無法啟動本機模型；請先在 PaperComposer 用一次本機模型".to_string());
+            };
             let from = match reg.server.clone() {
                 None => None,
                 Some(s) => {
@@ -806,7 +814,9 @@ impl SharedRuntime {
     }
 
     /// Blocking [`SharedRuntime::acquire`].
-    pub fn acquire_blocking(self: &Arc<Self>, layout: &Layout, m: &Model, priority: Priority) -> Result<Ticket, String> {
+    /// `layout`: where llama-server and the weights are (`None`: this app can only use a
+    /// server another app started).
+    pub fn acquire_blocking(self: &Arc<Self>, layout: Option<&Layout>, m: &Model, priority: Priority) -> Result<Ticket, String> {
         let mut pause = self.timing.poll_min;
         loop {
             match self.step(layout, m, priority)? {
@@ -823,9 +833,10 @@ impl SharedRuntime {
     /// The server running `m` for one request: the loaded one, one started now, or after
     /// waiting for the model to change (docs/local-models.md §3). Keep the [`Ticket`] while
     /// the request runs.
-    pub async fn acquire(self: &Arc<Self>, layout: &Layout, m: &Model, priority: Priority) -> Result<Ticket, String> {
-        let (rt, layout, m) = (self.clone(), layout.clone(), m.clone());
-        tokio::task::spawn_blocking(move || rt.acquire_blocking(&layout, &m, priority)).await.map_err(|e| e.to_string())?
+    pub async fn acquire(self: &Arc<Self>, layout: Option<&Layout>, m: &Model, priority: Priority) -> Result<Ticket, String> {
+        self.rearm();
+        let (rt, layout, m) = (self.clone(), layout.cloned(), m.clone());
+        tokio::task::spawn_blocking(move || rt.acquire_blocking(layout.as_ref(), &m, priority)).await.map_err(|e| e.to_string())?
     }
 
     /// A request ended: `active` down, `last_used` and `last_activity` now.
@@ -891,7 +902,10 @@ impl SharedRuntime {
 
     /// Check for an idle server now and every [`Timing::idle_tick`] (once per runtime; needs
     /// a tokio runtime, else `false`).
+    /// The source is kept: when there is no runtime yet, the next [`SharedRuntime::acquire`]
+    /// starts the watcher.
     pub fn watch_idle(self: &Arc<Self>, idle: IdleSource) -> bool {
+        *self.idle.lock().unwrap_or_else(|e| e.into_inner()) = Some(idle.clone());
         let Ok(handle) = tokio::runtime::Handle::try_current() else { return false };
         if self.watching.swap(true, Ordering::SeqCst) {
             return true;
@@ -904,6 +918,17 @@ impl SharedRuntime {
             }
         });
         true
+    }
+
+    /// Start the idle watcher when a source was given before a runtime existed.
+    fn rearm(self: &Arc<Self>) {
+        if self.watching.load(Ordering::SeqCst) {
+            return;
+        }
+        let src = self.idle.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(src) = src {
+            self.watch_idle(src);
+        }
     }
 
     /// The 釋放 button: stop the server now, unless another app holds a lease (then why).
@@ -949,7 +974,8 @@ impl SharedRuntime {
 /// A `local:` model through the shared server: acquired per request.
 pub struct SharedLocal {
     pub rt: Arc<SharedRuntime>,
-    pub layout: Layout,
+    /// Where llama-server and the weights are (`None`: only a server another app started).
+    pub layout: Option<Layout>,
     pub model: Model,
     pub priority: Priority,
     /// Rewrite Chinese replies in Taiwan usage.
@@ -968,7 +994,7 @@ impl SharedLocal {
     }
 
     async fn ticket(&self) -> Result<Ticket, LlmError> {
-        self.rt.acquire(&self.layout, &self.model, self.priority).await.map_err(|e| LlmError::Api("llama-server".into(), 503, e))
+        self.rt.acquire(self.layout.as_ref(), &self.model, self.priority).await.map_err(|e| LlmError::Api("llama-server".into(), 503, e))
     }
 }
 

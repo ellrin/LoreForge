@@ -49,8 +49,13 @@ impl Env {
     }
 
     fn app(&self, name: &str) -> App {
+        self.app_in(name, self.home.to_str().unwrap())
+    }
+
+    /// `home` = `-`: an app that does not know the model folder.
+    fn app_in(&self, name: &str, home: &str) -> App {
         let mut child = Command::new(env!("CARGO_BIN_EXE_lore-llm-testkit"))
-            .args(["client", self.reg.to_str().unwrap(), self.home.to_str().unwrap(), name])
+            .args(["client", self.reg.to_str().unwrap(), home, name])
             .env("LORE_TESTKIT_TIMING", &self.timing)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -178,6 +183,21 @@ fn two_apps_share_one_server_and_the_last_to_quit_stops_it() {
     le.quit();
     assert!(gone(pid), "the last user stops the server");
     assert!(env.registry().server.is_none() && env.registry().leases.is_empty());
+}
+
+/// An app launched without the model folder (no LOCAL_LLM_HOME) uses a server another app
+/// started, and says why when it would have to start one itself.
+#[test]
+fn an_app_without_the_model_folder_uses_but_never_starts() {
+    let env = Env::new("0,0,120");
+    let mut le = env.app_in("le", "-");
+    let r = le.cmd(&format!("chat {A} interactive hi"));
+    assert!(r.starts_with("err") && r.contains("LOCAL_LLM_HOME"), "{r}");
+    assert!(env.registry().server.is_none() && env.registry().wanting.is_empty());
+    let mut pc = env.app("pc");
+    assert!(pc.cmd(&format!("chat {A} interactive hi")).starts_with("ok"));
+    assert_eq!(le.cmd(&format!("chat {A} interactive again")), format!("ok {A}: again"));
+    assert_eq!(env.registry().leases.len(), 2);
 }
 
 #[test]

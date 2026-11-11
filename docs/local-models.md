@@ -28,14 +28,17 @@
     "started_by": { "app": "pc", "pid": 1200 },
     "since": 1794363123,
     "started_at": "Wed Nov 11 20:15:02 2026",
-    "vision": false
+    "vision": false,
+    "loading": true,
+    "from": "gemma-4-12b-q8"
   },
-  "leases":  [ { "app": "le", "pid": 1500, "since": 1794363200, "last_used": 1794363300, "priority": "interactive" } ],
+  "leases":  [ { "app": "le", "pid": 1500, "since": 1794363200, "last_used": 1794363300, "priority": "interactive", "active": 1 } ],
   "wanting": [ { "app": "pc", "pid": 1200, "model": "gemma-4-31b-q4", "priority": "background", "since": 1794363310 } ],
   "last_activity": 1794363300
 }
 ```
 
+- `loading`（載入權重中，只在這段期間出現）、`from`（換掉的模型；有它就是「切換」而不是第一次「載入」）、`active`（這個程序正在跑的請求數）沒有值時不寫。換模型除了問 `/slots`，也看所有 lease 的 `active`。
 - 所有讀寫都在 `local-model.lock` 的 `flock` 之下（持有者死掉時作業系統自動放開）。只支援 macOS（之後再談其他平台）。
 - 每次讀取先清掉死掉的 pid（lease、wanting：`kill -0`）。`server` 另外驗證：`/health` 有回應**而且**該 pid 的指令是 llama-server、啟動時間和登記的一致（`ps -o comm=,lstart=`）；任一不符就當作已死、只刪登記，**絕不對沒驗證過的 pid 發訊號**。
 - 檔案壞掉 → 當作空的，並用 `/health` 探測 `server.url`，還活著就補回。
@@ -45,7 +48,7 @@
 **acquire(model, priority) → url**
 1. 鎖住、清理。
 2. 載入的就是這個模型而且活著 → 新增或更新自己的 lease，回傳 url。
-3. 沒有在跑 → 自己啟動 llama-server，登記 `server`，加 lease，回傳 url。啟動規則：`setsid`（脫離 app 的程序群組，app 結束它不會跟著死）；stdout/stderr 寫到 `<cache>/LoreForge/llama-server.log`（每次啟動清空）；執行檔和模型檔從共用的 `LOCAL_LLM_HOME` 位置（`Layout::shared`）找，所以**任何 app 都能啟動**。下載模型仍只在 PaperComposer。
+3. 沒有在跑 → 自己啟動 llama-server（加 `--alias <模型 id>`，`/v1/models` 回報 catalog id，檔案壞掉時用來補回），登記 `server`（`loading: true`），等 `/health` 回 200 再加 lease、回傳 url；等待期間不持有鎖。不知道模型資料夾的 app 只能用別人開好的 server，輪到它啟動時回報錯誤。啟動規則：`setsid`（脫離 app 的程序群組，app 結束它不會跟著死）；stdout/stderr 寫到 `<cache>/LoreForge/llama-server.log`（每次啟動清空）；執行檔和模型檔從共用的 `LOCAL_LLM_HOME` 位置（`Layout::shared`）找，所以**任何 app 都能啟動**。下載模型仍只在 PaperComposer。
 4. 載入的是別的模型 → 加入 `wanting`，解鎖，等待（下一節）。
 
 **換模型（一次只留一個）**
