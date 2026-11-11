@@ -102,7 +102,11 @@
 - 清理後，每個 lease／wanting 的 pid 都還活著。
 - 有 `server` ⇒ `/health` 有回應，否則下次清理就刪掉。
 - 沒有任何 app 從 `private/` 讀模型網址。
-- 範圍：只管 llama-server 模型；LoreEcho 的語音（Apple 內建）不受影響。
+- 範圍：只管 llama-server 模型。LoreEcho 的語音：Apple 內建的不受影響；**自訂聲音（Qwen3-TTS，2026-11-12）是說明過的例外**：
+  它是 LoreEcho 自己的子程序（不是 `setsid`、不登記 lease），一次只載入一個小模型（說話用 0.6B ≈ 3–4 GB；挑聲音時的 1.7B 設計模型，
+  換回說話時就卸下），閒置 10 分鐘或 LoreEcho 結束時停掉。32 GB 的機器上和 9B–12B 的語言模型可以並存，所以不加入「一次只留一個模型」的輪替
+  （否則每句話都要等語言模型讓位）。檔案放在同一個模型資料夾的 `tts/`，只在作者按「下載」時安裝（`commons/crates/lore-voice/README.md`）。
+  若之後要配 31B 這類大模型同時用，再把它改成 lease 的一種。
 
 ## 7a. 圖像工具（畫質提升）
 

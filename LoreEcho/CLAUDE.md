@@ -12,6 +12,7 @@ cargo run -p le-server           # http://127.0.0.1:7860, data ../private/LoreEc
 cargo run -p loreecho            # desktop bubble (Tauri); not in default-members
 cargo test -p loreecho           # geometry, Info.plist, capability (needs the WebView libraries)
 LOREECHO_VOICE=1 cargo run -p le-server --example isolated_server -- <empty dir> 7987   # UI with the real voice
+LOREECHO_TTS=<scratch model folder> cargo run -p le-server --example isolated_server -- <empty dir> 7987   # + custom voices
 cargo run -p lore-voice --example check_mac -- <dir>   # (in ../commons) voices, synth → file → transcript, no mic
 LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local OpenAI-compatible server
 ```
@@ -31,7 +32,14 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   persona + name + 角色設定 lines (background cut at `BACKGROUND_LIMIT`) + the about-yourself rule + `BREVITY_RULE`, example pairs as
   earlier turns; `speak: true` = the deltas also go to a lore-voice `Speaker`; SSE `search/cards/start/delta/done/error`),
   `voice.rs` (`/api/voice*`: status, voices, events SSE, listen/stop, speak/stop, open-settings (only with the real engine);
-  `AppState.voice` = `Voice::system()` in `system()`, unavailable in `new()`, `with_voice()` for fakes), `kbctx.rs` (design §3: the author's KnowledgeBase cards read from disk with kb-core, never written; per turn titles/aliases in the message and recent turns + key words → a few cards within `BUDGET_CHARS` into the prompt as his own cards with their state; 抽／複習／考我／有哪些卡／記住這個 (zh/en, counts) chosen in code, the model only phrases; quiz carried by the page (`kb.quiz`, `kb.cited`); review outcomes only through KnowledgeBase's `POST /api/recall/{id}` while it runs (`POST /api/kb/recall`); `AppState::new` reads only its home's `private/KnowledgeBase`, `system()` also KB_SPACES/KB config/its server; tests pin a space, `tests/fixtures/kb`), `llm.rs` (task `le-chat` from
+  `AppState.voice` = `Voice::system_with(Qwen)` in `system()`, unavailable in `new()`, `with_voice()` for fakes; a `voice` id in
+  `/api/voice/speak` = that system voice, else the character's custom voice), `charvoice.rs` (custom voice of a character:
+  `voice/voice.toml` mode design|accent|clone|system, pitch, taiwan, han, `[chosen]`, `[clone]` text+consent; `chosen.wav`,
+  `reference.wav` (3–30 s, afconvert to 24 kHz, consent required); `template()` = the SpeakRequest of a character; export leaves
+  the recording out unless `?voice_ref=1`, import clears consent), `tts.rs` (`/api/tts*` status/download/cancel, one job at a
+  time; `/api/characters/{id}/voice*` get/put, 4 candidates (design: description + 台灣口音 hint; accent: a zh-TW system voice
+  reads `ACCENT_PASSAGE`, then cloned) in `<cache>/LoreEcho/voice/candidates`, pick, clips, reference; `AppState.tts` set in
+  `system()` with `Qwen` at the shared model folder), `kbctx.rs` (design §3: the author's KnowledgeBase cards read from disk with kb-core, never written; per turn titles/aliases in the message and recent turns + key words → a few cards within `BUDGET_CHARS` into the prompt as his own cards with their state; 抽／複習／考我／有哪些卡／記住這個 (zh/en, counts) chosen in code, the model only phrases; quiz carried by the page (`kb.quiz`, `kb.cited`); review outcomes only through KnowledgeBase's `POST /api/recall/{id}` while it runs (`POST /api/kb/recall`); `AppState::new` reads only its home's `private/KnowledgeBase`, `system()` also KB_SPACES/KB config/its server; tests pin a space, `tests/fixtures/kb`), `llm.rs` (task `le-chat` from
   `tasks.toml`, class `ask`: `local:current` then `claude:selected`; local engine =
   `LOREECHO_LLM_URL` else the shared model id of `private/shared/engine.toml` on the machine's one
   llama-server (lore-llm `shared_runtime`, `../docs/local-models.md`; `llm::quit()` at exit); keys via
@@ -52,7 +60,8 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   「下一階段」 until phase 4), `.box` (name tag = character switcher, the current line, input row).
   `styles.css` uses theme tokens only, the character pictures are shown as they are. The conversation lives only in the page (`S.msgs`); collapsing or
   新對話 clears it. Voice: `voice.js` (mic hold/continuous, 朗讀回覆 toggle, theme song button + ducking/fade, 一般 → 語音,
-  人物 → 聲音/語速/主題曲) and `profile.js` (人物 → 角色設定), hooked from app.js through `window.LoreVoice` / `window.LoreEcho`;
+  人物 → 聲音/語速/主題曲), `tts.js` + `tts.css` (人物 → 聲音 source: 描述 / 台灣口音 / 我的錄音 / 系統聲音, 下載 with progress,
+  candidates, 音高; wraps `LoreVoice.characterRows` and `exportCharacter`) and `profile.js` (人物 → 角色設定), hooked from app.js through `window.LoreVoice` / `window.LoreEcho`;
   `voice.css`. Desktop: `apps/desktop/Info.plist` (mic + speech usage strings, merged by the bundler), `build.rs` copies the
   helper to `bin/` (ignored) → `bundle.macOS.files` → `Contents/MacOS/lore-voice-helper`.
   States in the page (`setState`, also `window.LoreEcho.setState / whileState`): listening while a message is typed (the voice phase reuses it for recording), thinking while waiting for the model, waiting after 8 s without a first token, speaking while streaming and while the voice reads the reply (`LoreVoice.afterReply` delays the mood), listening also while recording, happy/unsure/surprised from a keyword cue in the finished reply (`moodOf`, 4 s); searching while the server reads KnowledgeBase (SSE `search`, `web/kbcards.js`, which also draws the 「引用：…」 row under the line, opening cards with `LoreLinks.open("kb", {node})`, and 記得／忘了 after a quiz answer); noting (writing a note) has no signal yet: wrap the future call in `whileState`. The name tag shows the avatar of the current state.
@@ -65,7 +74,8 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   Claude, the `claude` CLI, llama-server or the network.
 - Transparency, the tray, the global shortcut, dragging from the page and multi-monitor placement
   are **not tested on real hardware** (Linux CI only type-checks the desktop crate). Voice: tests use
-  `lore_voice::fake`; the microphone, permission prompts, live listening and the bundled helper are
-  **not tested on real hardware**.
+  `lore_voice::fake` (`FakeTts` for custom voices); the microphone, permission prompts, live listening and the bundled helper are
+  **not tested on real hardware**. Qwen3-TTS was run on a Mac from a scratch folder (install, clone, design, the UI's
+  candidates); playback through the helper's `play` and the accent by ear are not checked.
 - Commits: ellrin is the only author; no `Co-Authored-By` or AI attribution trailers.
 - Replies to the author in Traditional Chinese (繁體中文).

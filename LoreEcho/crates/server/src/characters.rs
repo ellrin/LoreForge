@@ -10,6 +10,7 @@
 //! avatar/          <state>.png .svg .webp .jpg   (portrait: the bubble, the name tag)
 //! full/            the same states, full body (head to feet, transparent background): the open window
 //! theme.<ext>      the theme song (mp3 m4a aac wav ogg opus flac), optional
+//! voice/           the custom voice (`crate::charvoice`): voice.toml, chosen.wav, reference.wav
 //! ```
 //!
 //! Ten states ([`STATES`]); a state without its own picture follows [`chain`] (searching →
@@ -621,8 +622,14 @@ pub fn example_template(example_app_dir: &Path) -> Option<PathBuf> {
     Some(folder(example_app_dir, &c.id))
 }
 
-/// The character as a zip: `<id>/character.toml`, `<id>/avatar/…`, `<id>/full/…`, `<id>/theme.<ext>`.
+/// The character as a zip: `<id>/character.toml`, `<id>/avatar/…`, `<id>/full/…`, `<id>/theme.<ext>`,
+/// `<id>/voice/…` (without the author's recording).
 pub fn export(app_dir: &Path, id: &str) -> Result<Vec<u8>, String> {
+    export_with(app_dir, id, false)
+}
+
+/// [`export`]; `with_reference`: the author's voice recording goes in too.
+pub fn export_with(app_dir: &Path, id: &str, with_reference: bool) -> Result<Vec<u8>, String> {
     load(app_dir, id)?;
     let dir = folder(app_dir, id);
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -643,6 +650,10 @@ pub fn export(app_dir: &Path, id: &str) -> Result<Vec<u8>, String> {
             }
         }
     }
+    for (rel, bytes) in crate::charvoice::export_files(app_dir, id, with_reference) {
+        zip.start_file(format!("{id}/{rel}"), opts).map_err(|e| e.to_string())?;
+        zip.write_all(&bytes).map_err(|e| e.to_string())?;
+    }
     Ok(zip.finish().map_err(|e| e.to_string())?.into_inner())
 }
 
@@ -657,6 +668,7 @@ pub fn import(app_dir: &Path, zip_bytes: &[u8]) -> Result<Detail, String> {
     let mut toml_text: Option<(String, String)> = None; // (folder name, text)
     let mut pics: Vec<(&'static str, String, Vec<u8>)> = vec![];
     let mut song: Option<Vec<u8>> = None;
+    let mut voice_files: Vec<(String, Vec<u8>)> = vec![];
     let mut total = 0usize;
     for i in 0..z.len() {
         let mut f = z.by_index(i).map_err(|e| e.to_string())?;
@@ -679,6 +691,17 @@ pub fn import(app_dir: &Path, zip_bytes: &[u8]) -> Result<Detail, String> {
             f.by_ref().take(MAX_AUDIO as u64 + 1).read_to_end(&mut buf).map_err(|e| e.to_string())?;
             sniff_audio(&buf).map_err(|e| format!("{name}：{e}"))?;
             song = Some(buf);
+            continue;
+        }
+        if let [.., crate::charvoice::DIR, file] = parts.as_slice()
+            && crate::charvoice::importable(file)
+        {
+            if f.size() as usize > MAX_AUDIO {
+                return Err(format!("{name}：檔案太大"));
+            }
+            let mut buf = Vec::new();
+            f.by_ref().take(MAX_AUDIO as u64 + 1).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+            voice_files.push((file.to_string(), buf));
             continue;
         }
         // (kind, state) for a picture, None for character.toml
@@ -726,6 +749,7 @@ pub fn import(app_dir: &Path, zip_bytes: &[u8]) -> Result<Detail, String> {
         if let Some(bytes) = &song {
             save_theme(app_dir, &id, bytes)?;
         }
+        crate::charvoice::import_files(app_dir, &id, &voice_files)?;
         detail(app_dir, &id)
     })();
     if result.is_err() {

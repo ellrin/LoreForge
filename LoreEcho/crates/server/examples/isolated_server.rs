@@ -2,7 +2,8 @@
 //! `claude` CLI, for trying the UI: `cargo run -p le-server --example isolated_server -- <empty folder> [port]`.
 //! `--kb` adds the synthetic KnowledgeBase space of the tests (copied into the folder, member
 //! `ellrin`, KnowledgeBase not running); `--mock "<reply>"` answers every message with that reply.
-//! `LOREECHO_VOICE=1`: with the system's voice (the Apple engines on macOS).
+//! `LOREECHO_VOICE=1`: with the system's voice (the Apple engines on macOS). `LOREECHO_TTS=<model folder>`:
+//! also custom voices (Qwen3-TTS installed under `<model folder>/tts`; use a scratch folder).
 use std::path::{Path, PathBuf};
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -33,8 +34,16 @@ async fn main() {
         }
         None => le_server::llm::Llm::none(),
     };
-    let voice = if std::env::var_os("LOREECHO_VOICE").is_some() { lore_voice::Voice::system() } else { lore_voice::Voice::unavailable("這裡沒有語音") };
+    let tts: Option<std::sync::Arc<dyn lore_voice::qwen::Tts>> = std::env::var_os("LOREECHO_TTS").map(|h| std::sync::Arc::new(lore_voice::qwen::Qwen::new(Some(h.into()))) as _);
+    let voice = match (&tts, std::env::var_os("LOREECHO_VOICE").is_some()) {
+        (Some(t), _) => lore_voice::Voice::system_with(t.clone(), root.join("cache/say")),
+        (None, true) => lore_voice::Voice::system(),
+        (None, false) => lore_voice::Voice::unavailable("這裡沒有語音"),
+    };
     let shared = le_server::AppState::with_voice(lore_home::Home::at(&root), le_server::config::repo_dir().join("web"), llm, None, voice);
+    if let Some(t) = tts {
+        shared.tts.set(t, root.join("cache/candidates"));
+    }
     if flag("--kb").is_some() {
         let kb = root.join("kb");
         copy_dir(&le_server::config::repo_dir().join("crates/server/tests/fixtures/kb"), &kb);

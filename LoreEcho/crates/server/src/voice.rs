@@ -120,7 +120,17 @@ async fn speak(State(s): State<Shared>, body: Option<Json<SpeakBody>>) -> Respon
         return bad(StatusCode::BAD_REQUEST, "太長了");
     }
     let c = s.character(b.character.as_deref());
-    let req = lore_voice::SpeakRequest { text, voice: b.voice.unwrap_or(c.voice), rate: b.rate.unwrap_or(c.voice_rate), language: c.language };
+    // the character's custom voice and pitch when it has one (crate::charvoice); a voice id
+    // asked for by name is a system voice (the 系統聲音 row's 試聽)
+    let mut req = crate::charvoice::template(s.dir.as_deref(), &c);
+    req.text = text;
+    if let Some(v) = b.voice {
+        req.voice = v;
+        req.custom = None;
+    }
+    if let Some(r) = b.rate {
+        req.rate = r;
+    }
     match s.voice.speak(&req) {
         Ok(id) => Json(json!({ "id": id })).into_response(),
         Err(e) => bad(StatusCode::SERVICE_UNAVAILABLE, e),
