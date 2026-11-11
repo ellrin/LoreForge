@@ -352,3 +352,211 @@ async fn other_origins_get_no_cors() {
     assert!(h.get("access-control-allow-origin").is_none(), "only the 論文報告 routes and /api/info");
     assert!(sc_server::local_origin("http://127.0.0.1:7878") && !sc_server::local_origin("http://127.0.0.1.evil.com:80") && !sc_server::local_origin("http://127.0.0.1:"));
 }
+
+// ── the job (docs/paper-deck.md "API") ────────────────────────────────────────
+
+/// A model call that never answers until dropped (the job's 停止 must abort it).
+struct Hangs {
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct OnDrop(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for OnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl lore_llm::LlmProvider for Hangs {
+    fn id(&self) -> String {
+        "mock-hangs".into()
+    }
+    fn capabilities(&self) -> lore_llm::Capabilities {
+        lore_llm::Capabilities { json: true, vision: true, web: false, streaming: true, context: 1_000_000, needs_network: false }
+    }
+    fn send<'a, 'b, 'c>(&'a self, _req: &'b lore_llm::LlmRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<lore_llm::LlmResponse, lore_llm::LlmError>> + Send + 'c>>
+    where
+        'a: 'c,
+        'b: 'c,
+        Self: 'c,
+    {
+        let flag = self.dropped.clone();
+        Box::pin(async move {
+            let _guard = OnDrop(flag);
+            std::future::pending::<()>().await;
+            unreachable!()
+        })
+    }
+}
+
+async fn job_until(app: &axum::Router, id: &str, what: &str, f: impl Fn(&Value) -> bool) -> Value {
+    for _ in 0..1000 {
+        let (_, v, _) = call(app, "GET", &format!("/api/todeck/jobs/{id}"), None, None).await;
+        if f(&v) {
+            return v;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("job never got to {what}");
+}
+
+#[tokio::test]
+async fn a_job_waits_for_the_review_and_applies_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = paper(dir.path());
+    let ws = workspace(dir.path());
+    let home = lore_home::Home::at(dir.path().join("home"));
+    let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
+    let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![plan("is slow").to_string()])));
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
+    let app = sc_server::router_isolated(shared.clone());
+
+    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "short", "lang": "en", "style": "blank", "mode": "review" });
+    let (st, v, _) = call(&app, "POST", "/api/todeck", Some(body), Some("http://127.0.0.1:7878")).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let id = v["job"].as_str().unwrap().to_string();
+    let v = job_until(&app, &id, "review", |v| v["state"] == "review").await;
+    assert_eq!(v["step"], 6);
+    assert_eq!(v["title"], "Two-Stage Grading of Synthetic Lesions");
+    let stages = v["stages"].as_array().unwrap();
+    assert_eq!(stages.iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["source", "notation", "terms", "profile", "outline", "review", "slides", "polish"]);
+    assert_eq!(stages[0]["counts"], json!({ "fig": 1, "figTotal": 1, "table": 1, "eq": 1, "sections": 4, "refs": 1 }));
+    assert_eq!(stages[1]["counts"]["entries"], 1);
+    assert_eq!(stages[2]["counts"], json!({ "terms": 0, "unknown": 0 }));
+    assert!(stages[4]["chars"].as_u64().unwrap() > 100, "the plan was streamed: {}", stages[4]);
+    assert_eq!(stages[5]["state"], "running");
+    let rv = &v["review"];
+    assert_eq!(rv["outline"].as_array().unwrap().len(), 12);
+    assert_eq!(rv["outline"][2], json!({ "id": "s3", "kind": "overview", "title": "Big picture", "figs": ["fig1"], "point": "" }));
+    let thumb = rv["figures"][0]["thumb"].as_str().unwrap().to_string();
+    assert_eq!(rv["figures"][1]["label"], "表 1");
+    let res = app.clone().oneshot(Request::builder().uri(&thumb).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.headers()["content-type"], "image/png");
+    // the plan as written (a stage output) and nothing made yet
+    let (st, o, _) = call(&app, "GET", &format!("/api/todeck/jobs/{id}/stages/outline"), None, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(o["plan"]["slides"].as_array().unwrap().len(), 12);
+    assert!(shared.ws.deck_names().is_empty());
+    // listed as unfinished
+    let (_, l, _) = call(&app, "GET", "/api/todeck/jobs?unfinished=1", None, None).await;
+    assert_eq!(l["jobs"][0]["id"], id.as_str());
+
+    // the author drops the opinion slide and retitles the results
+    let mut rows: Vec<Value> = rv["outline"].as_array().unwrap().iter().filter(|r| r["kind"] != "opinion").cloned().collect();
+    let res_row = rows.iter_mut().find(|r| r["kind"] == "results").unwrap();
+    res_row["title"] = json!("What the numbers say");
+    let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/review"), Some(json!({ "outline": rows, "answers": { "audience": "lab", "mainFig": null, "modules": null, "opinion": null }, "known": [], "remember": false })), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let v = job_until(&app, &id, "done", |v| v["state"] == "done").await;
+    let name = v["deck"].as_str().unwrap().to_string();
+    assert_eq!(v["stages"][6]["counts"], json!({ "slide": 11, "slides": 11 }));
+    assert_eq!(v["stages"][7]["counts"], json!({ "checks": 0, "fixes": 0 }));
+    let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
+    assert_eq!(d["deck"]["slides"].as_array().unwrap().len(), 13, "11 planned, the big picture as 3");
+    let text = all_text(&d["deck"]);
+    assert!(text.contains("What the numbers say") && !text.contains("Some opinions"));
+    // a second review is refused
+    let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/review"), Some(json!({ "skip": true })), None).await;
+    assert_eq!(st, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn direct_skips_the_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = paper(dir.path());
+    let ws = workspace(dir.path());
+    let home = lore_home::Home::at(dir.path().join("home"));
+    let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
+    let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![plan("is slow").to_string()])));
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
+    let app = sc_server::router_isolated(shared.clone());
+    let body = json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "lang": "en", "direct": true });
+    let (st, v, _) = call(&app, "POST", "/api/todeck/jobs", Some(body), None).await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    let v = job_until(&app, &id, "done", |v| v["state"] == "done").await;
+    assert_eq!(v["stages"][5]["skipped"], true);
+    assert_eq!(v["result"]["notation"], 1);
+    assert!(shared.ws.deck_names().iter().any(|d| d.name == v["deck"].as_str().unwrap()));
+    let (st, r, _) = call(&app, "GET", &format!("/api/todeck/jobs/{id}/stages/review"), None, None).await;
+    assert_eq!((st, r), (StatusCode::OK, json!({ "skipped": true })));
+}
+
+#[tokio::test]
+async fn stop_aborts_the_model_call_and_a_new_process_resumes() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = paper(dir.path());
+    let home = lore_home::Home::at(dir.path().join("home"));
+    let shared = sc_server::state_at(workspace(dir.path()), sc_server::repo_dir().join("web"), home.clone());
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let f = MockFactory::default().with("claude:selected", Arc::new(Hangs { dropped: dropped.clone() }));
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home.clone(), f)).is_ok());
+    let app = sc_server::router_isolated(shared.clone());
+    let body = json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "lang": "en", "mode": "direct" });
+    let (_, v, _) = call(&app, "POST", "/api/todeck", Some(body.clone()), None).await;
+    let id = v["job"].as_str().unwrap().to_string();
+    job_until(&app, &id, "outline", |v| v["stages"][4]["state"] == "running").await;
+
+    // a second job hangs too: a fresh process finds it interrupted at the outline
+    let (_, v2, _) = call(&app, "POST", "/api/todeck", Some(body), None).await;
+    let id2 = v2["job"].as_str().unwrap().to_string();
+    job_until(&app, &id2, "outline", |v| v["stages"][4]["state"] == "running").await;
+
+    // 停止: the request is dropped, the worker released, the job resumable
+    let t = std::time::Instant::now();
+    let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/stop"), None, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["state"], "stopped", "{v}");
+    assert!(t.elapsed() < std::time::Duration::from_secs(3));
+    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst), "the in-flight model call was aborted");
+    assert_eq!(v["resumable"], true);
+    assert_eq!(v["stages"][4]["state"], "pending");
+
+    // the app ends (the old state is simply abandoned) and starts again on the same workspace
+    let source_before = std::fs::read(shared.ws.root.join(format!("cache/todeck/{id2}/source.json"))).unwrap();
+    let home2 = lore_home::Home::at(dir.path().join("home"));
+    let shared2 = sc_server::state_at(sc_core::Workspace::new(dir.path().join("sc"), None), sc_server::repo_dir().join("web"), home2.clone());
+    let planner = Arc::new(MockProvider::new(vec![plan("is slow").to_string()]));
+    assert!(shared2.llm.set(sc_server::llm::Llm::with_factory(home2, MockFactory::default().with("claude:selected", planner.clone()))).is_ok());
+    let app2 = sc_server::router_isolated(shared2.clone());
+    let (_, l, _) = call(&app2, "GET", "/api/todeck/jobs?unfinished=1", None, None).await;
+    let j = l["jobs"].as_array().unwrap().iter().find(|j| j["id"] == id2.as_str()).cloned().unwrap();
+    assert_eq!(j["state"], "interrupted");
+    assert_eq!((j["doneSteps"].as_u64(), j["step"].as_u64()), (Some(4), Some(5)), "上次做到第 5 步");
+    let (st, v, _) = call(&app2, "POST", &format!("/api/todeck/jobs/{id2}/resume"), Some(json!({})), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let v = job_until(&app2, &id2, "done", |v| v["state"] == "done").await;
+    assert_eq!(planner.seen.lock().unwrap().len(), 1, "only the outline asked the model");
+    assert_eq!(std::fs::read(shared2.ws.root.join(format!("cache/todeck/{id2}/source.json"))).unwrap(), source_before, "source was not redone");
+    assert!(shared2.ws.deck_names().iter().any(|d| d.name == v["deck"].as_str().unwrap()));
+    // a finished job can be deleted; ids are folder names only
+    let (st, _, _) = call(&app2, "DELETE", &format!("/api/todeck/jobs/{id2}"), None, None).await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+    let (st, _, _) = call(&app2, "GET", &format!("/api/todeck/jobs/{id2}"), None, None).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    let (st, _, _) = call(&app2, "GET", "/api/todeck/jobs/..%2Fx", None, None).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn events_long_poll_answers_on_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = paper(dir.path());
+    let home = lore_home::Home::at(dir.path().join("home"));
+    let shared = sc_server::state_at(workspace(dir.path()), sc_server::repo_dir().join("web"), home.clone());
+    let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![plan("is slow").to_string()])));
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
+    let app = sc_server::router_isolated(shared.clone());
+    let (_, v, _) = call(&app, "POST", "/api/todeck/jobs", Some(json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "mode": "review" })), None).await;
+    let id = v["id"].as_str().unwrap().to_string();
+    let mut seq = 0;
+    for _ in 0..200 {
+        let (_, v, _) = call(&app, "GET", &format!("/api/todeck/jobs/{id}/events?after={seq}"), None, None).await;
+        assert!(v["seq"].as_u64().unwrap() > seq);
+        seq = v["seq"].as_u64().unwrap();
+        if v["state"] == "review" {
+            return;
+        }
+    }
+    panic!("never reached the review");
+}
