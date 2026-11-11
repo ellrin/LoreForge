@@ -1,0 +1,20 @@
+# LoreEcho's LLM tasks, layered over lore-llm's shared tasks.toml. A user file
+# `private/LoreEcho/tasks.toml` in the same format can add an `[override]`.
+#
+#   local:current     the local engine that is connected: LOREECHO_LLM_URL, else the
+#                     shared `private/shared/engine.toml` [engine] url
+#   claude:selected   the Claude model chosen in the shared 模型 tab (else the catalog
+#                     default); the subscription (Claude Code) first, then the API key
+#
+# 問答 (class ask): the local model when it is there, else Claude. The reply is streamed
+# to the page; Claude through the subscription cannot stream and answers in one piece
+# (design §2), so `needs.streaming` stays off: it would rule the subscription out.
+
+[task.le-chat]
+label = "LoreEcho 對話"
+class = "ask"
+needs = { context = 8000 }
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+max_tokens = 1200

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="giftbox" data-mode="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LoreEcho</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9' fill='none' stroke='%2312AFC0' stroke-width='2'/%3E%3Ccircle cx='9' cy='11' r='2' fill='none' stroke='%23E0A100' stroke-width='1.5'/%3E%3Ccircle cx='15' cy='11' r='2' fill='none' stroke='%23E0A100' stroke-width='1.5'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="prefs.css">
+  <script src="theme.js"></script>
+</head>
+<body>
+  <!-- collapsed: the bubble (drag to move, click to open) -->
+  <button type="button" class="bubble" id="bubble" aria-label="打開 LoreEcho" title="LoreEcho（拖曳可移動）">
+    <img id="bubbleImg" alt="" draggable="false" hidden>
+    <span class="fallback" id="bubbleIcon" data-icon="chat"></span>
+  </button>
+
+  <!-- expanded: header · character · messages · input -->
+  <section class="panel" id="panel" aria-label="LoreEcho" hidden>
+    <header class="top"></header>
+    <div class="stage" id="stage" data-state="idle" data-tauri-drag-region>
+      <img id="avatar" alt="" draggable="false" data-tauri-drag-region hidden>
+      <span class="fallback" id="avatarIcon" data-icon="chat" data-tauri-drag-region></span>
+      <span class="engine" id="engine" hidden></span>
+    </div>
+    <ol class="msgs" id="msgs" aria-live="polite">
+      <li class="empty" id="empty">想聊什麼都可以。對話只留在這個視窗裡，按「新對話」或收起就清掉。</li>
+    </ol>
+    <form class="input" id="form" autocomplete="off">
+      <button type="button" class="ico" id="mic" disabled aria-label="語音（之後的階段）" title="語音輸入：之後的階段才會有"><span data-icon="mic"></span></button>
+      <textarea id="text" rows="1" placeholder="說點什麼…（Shift+↵ 換行）" aria-label="訊息"></textarea>
+      <button type="submit" class="ico" id="send" aria-label="送出 ↵"><span data-icon="send"></span></button>
+    </form>
+  </section>
+
+  <template id="tplGeneral">
+    <div class="set-sec">
+      <div class="set-label">人物</div>
+      <div class="set-row"><span class="k">目前的人物</span><select class="set-input" id="setCharacter" aria-label="人物"></select></div>
+      <div class="set-empty">人物放在 <code>private/LoreEcho/characters/&lt;名稱&gt;/</code>（character.toml 與 avatar/）。</div>
+    </div>
+    <div class="set-sec">
+      <div class="set-label">叫出／收起</div>
+      <div class="set-row"><span class="k">全域快捷鍵</span><input class="set-input" id="setShortcut" placeholder="Alt+Space" aria-label="全域快捷鍵" spellcheck="false"></div>
+      <div class="set-empty">例如 Alt+Space、CmdOrCtrl+Shift+E；留空＝不用快捷鍵。選單列的圖示也可以叫出或收起。</div>
+    </div>
+    <div class="set-sec">
+      <div class="set-label">對話</div>
+      <div class="set-empty">對話只在記憶體裡，不寫進任何檔案。回答預設 1–3 句；說「詳細一點」才會展開。</div>
+    </div>
+  </template>
+
+  <script src="icons.js"></script>
+  <script src="shell.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

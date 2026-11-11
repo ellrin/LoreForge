@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A0B33"/>
+      <stop offset="0.6" stop-color="#0C0619"/>
+      <stop offset="1" stop-color="#05030C"/>
+    </linearGradient>
+    <radialGradient id="haze" cx="0.5" cy="0.95" r="0.6">
+      <stop offset="0" stop-color="#00F0FF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#00F0FF" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="tile">
+      <rect x="32" y="32" width="960" height="960" rx="216"/>
+    </clipPath>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="12" result="b1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="30" result="b2"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- the head outline, reused for the ghosts -->
+    <path id="head" d="M512 262 C646 262 722 330 724 440 L718 548 C714 616 680 668 628 704 L576 742 L448 742 L396 704 C344 668 310 616 306 548 L300 440 C302 330 378 262 512 262 Z"/>
+    <path id="collar" d="M396 730 L276 870 M628 730 L748 870 M276 870 L332 960 M748 870 L692 960 M436 770 L512 830 L588 770"/>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#haze)"/>
+    <g fill="#FFFFFF" fill-opacity="0.035">
+      <rect x="0" y="120" width="1024" height="6"/>
+      <rect x="0" y="240" width="1024" height="6"/>
+      <rect x="0" y="360" width="1024" height="6"/>
+      <rect x="0" y="480" width="1024" height="6"/>
+      <rect x="0" y="600" width="1024" height="6"/>
+      <rect x="0" y="720" width="1024" height="6"/>
+    </g>
+  </g>
+
+  <!-- chromatic-aberration ghosts -->
+  <g fill="none" stroke-width="20" stroke-linejoin="round" stroke-linecap="round" opacity="0.6">
+    <g stroke="#FF2BD6" transform="translate(-10 0)"><use href="#head"/><use href="#collar"/></g>
+    <g stroke="#00F0FF" transform="translate(10 0)"><use href="#head"/><use href="#collar"/></g>
+  </g>
+
+  <g fill="none" stroke-linejoin="round" stroke-linecap="round" filter="url(#glow)">
+    <!-- head and collar -->
+    <g stroke="#B8FBFF" stroke-width="18"><use href="#head"/><use href="#collar"/></g>
+    <!-- swept hair crest -->
+    <g stroke="#FCEE0A" stroke-width="16"><path d="M352 330 C392 214 520 168 664 214"/><path d="M420 300 C470 220 580 206 690 262"/><path d="M500 276 C560 230 640 236 704 300"/></g>
+    <!-- forehead seam -->
+    <polyline stroke="#FF2BD6" stroke-width="12" points="612,318 642,350 624,386 650,404"/>
+    <!-- goggles: side brackets, bridge, lenses -->
+    <g stroke="#B8FBFF" stroke-width="14">
+      <polyline points="300,428 344,428 344,484 300,484"/>
+      <polyline points="724,428 680,428 680,484 724,484"/>
+      <line x1="498" y1="456" x2="526" y2="456"/>
+    </g>
+    <g stroke="#FCEE0A" stroke-width="18" fill="#0A0616">
+      <circle cx="432" cy="456" r="66"/>
+      <circle cx="592" cy="456" r="66"/>
+    </g>
+    <!-- weary face: worried brows, nose, cheek lines, frown -->
+    <g stroke="#B8FBFF" stroke-width="11">
+      <path d="M372 384 Q420 372 478 346"/>
+      <path d="M546 346 Q604 372 652 384"/>
+      <path d="M514 486 L502 572 Q512 582 530 574"/>
+      <path d="M458 572 Q438 610 452 646"/>
+      <path d="M566 572 Q586 610 572 646"/>
+      <path d="M470 640 Q512 614 554 640"/>
+    </g>
+    <!-- jaw plates -->
+    <polyline stroke="#00F0FF" stroke-width="14" points="384,612 444,690 512,702 580,690 640,612"/>
+    <!-- goatee -->
+    <polyline stroke="#FCEE0A" stroke-width="12" points="490,742 512,806 534,742"/>
+  </g>
+  <!-- half-closed lids -->
+  <g fill="#0A0616"><path d="M371 450 A62 62 0 0 1 493 446 Q432 436 371 450 Z"/><path d="M531 446 A62 62 0 0 1 653 450 Q592 436 531 446 Z"/></g>
+  <g fill="none" stroke="#FCEE0A" stroke-width="12" stroke-linecap="round" filter="url(#glow)"><path d="M370 452 Q432 432 494 446"/><path d="M530 446 Q592 432 654 452"/></g>
+  <!-- pupils -->
+  <g fill="#FCEE0A" filter="url(#glow)"><circle cx="434" cy="478" r="13"/><circle cx="590" cy="478" r="13"/></g>
+
+  <!-- glitch slice -->
+  <rect x="660" y="586" width="128" height="14" fill="#FF2BD6" opacity="0.9"/>
+  <rect x="236" y="640" width="76" height="8" fill="#00F0FF" opacity="0.9"/>
+</svg>

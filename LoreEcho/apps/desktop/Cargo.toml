@@ -1,0 +1,21 @@
+[package]
+name = "loreecho"
+version.workspace = true
+edition.workspace = true
+description = "LoreEcho desktop app"
+
+# Desktop shell: starts the local server in-process on a free 127.0.0.1 port and opens a
+# small frameless, transparent, always-on-top window on it: a bubble that opens into the
+# chat panel. A tray / menu-bar item and a global shortcut show and hide it.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+le-server = { path = "../../crates/server" }
+# macos-private-api: a transparent window on macOS; tray-icon: the menu-bar item.
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+url = "2"
+lore-home.workspace = true

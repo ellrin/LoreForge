@@ -1,0 +1,54 @@
+/* LoreEcho: the bubble and the chat panel. Colours only from theme.css tokens (no palette
+   of its own); the character pictures are shown as they are. The desktop window is
+   transparent and exactly the size of the bubble or the panel; in a browser both sit at
+   the bottom-right of the page. */
+
+html, body { background: transparent; height: 100%; overflow: hidden; }
+
+/* ── the bubble ─────────────────────────────────────────────── */
+.bubble { position: fixed; right: 0; bottom: 0; width: 64px; height: 64px; padding: 0; border-radius: 50%;
+  border: 2px solid var(--accent-text); background: var(--panel); color: var(--accent-text);
+  display: grid; place-items: center; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+.bubble:hover { background: var(--surface-hover); }
+.bubble img { width: 100%; height: 100%; object-fit: contain; padding: 6px; pointer-events: none; }
+.bubble .fallback svg.i { width: 26px; height: 26px; }
+
+/* ── the panel ──────────────────────────────────────────────── */
+.panel { position: fixed; right: 0; bottom: 0; width: min(100vw, 380px); height: min(100vh, 560px);
+  display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line-strong);
+  border-radius: 14px; overflow: hidden; transform-origin: 100% 100%; }
+.panel.opening { animation: grow .16s ease-out; }
+.panel.closing { animation: grow .12s ease-in reverse forwards; }
+@keyframes grow { from { transform: scale(.17); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .panel.opening, .panel.closing { animation: none; } }
+
+/* the shared top bar, compact: collapse · name … 新對話 · gear */
+.panel .top { gap: 8px; padding: 0 8px 0 6px; }
+.panel .top .who { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* the character */
+.stage { position: relative; flex: 0 0 172px; display: grid; place-items: center; background: var(--panel); border-bottom: 1px solid var(--line); user-select: none; -webkit-user-select: none; }
+.stage img { max-width: 100%; height: 156px; object-fit: contain; pointer-events: none; }
+.stage .fallback { color: var(--accent-text); }
+.stage .fallback svg.i { width: 56px; height: 56px; stroke-width: 1.2; }
+.stage[data-state="thinking"] img, .stage[data-state="thinking"] .fallback { animation: think 1.4s ease-in-out infinite; }
+@keyframes think { 50% { opacity: .65; } }
+.stage .engine { position: absolute; right: 8px; bottom: 6px; }
+
+/* the conversation */
+.msgs { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 12px; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.msgs .empty { color: var(--faint); font-size: 13px; text-align: center; margin: auto 8px; }
+.msg { max-width: 86%; padding: 7px 11px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+.msg.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid var(--line); border-bottom-right-radius: 4px; }
+.msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.msg.assistant.pending::after { content: "…"; color: var(--faint); }
+.msg.err { align-self: stretch; max-width: none; background: none; border: 1px solid var(--err); color: var(--err); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.msg.err .btn { margin-left: auto; }
+
+/* the input row */
+.input { display: flex; align-items: flex-end; gap: 4px; padding: 8px; border-top: 1px solid var(--line); background: var(--panel); }
+.input textarea { flex: 1; min-width: 0; resize: none; max-height: 120px; padding: 6px 10px; line-height: 1.45;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r); outline: none; }
+.input textarea:focus { border-color: var(--accent-text); }
+.input .ico[disabled] { opacity: .45; cursor: default; }
+#send:not([disabled]) { color: var(--accent-text); }

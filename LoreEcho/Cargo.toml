@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/server", "apps/desktop"]
+# `cargo build` / `cargo test` skip the desktop app so they need no WebView
+# libraries; build it with `cargo run -p loreecho` or `cargo tauri build`.
+default-members = ["crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+lore-home = { path = "../commons/crates/lore-home" }
+# Model calls (task le-chat): local model first, Claude when chosen/available.
+lore-llm = { path = "../commons/crates/lore-llm" }
+# The shared 模型 tab (/api/engines, /api/links/*) and UI kit (icons.js, base.css, shell.js).
+lore-engines = { path = "../commons/crates/lore-engines" }
+lore-shell = { path = "../commons/crates/lore-shell" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs", "cors", "set-header"] }
+futures-util = "0.3"
+tempfile = "3"

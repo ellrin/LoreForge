@@ -11,6 +11,7 @@ private-example/              （公開，在 LoreForge repo 裡）
     docs/                     私人筆記、設計文件
   KnowledgeBase/              知識庫的空白 space
   SlideComposer/              簡報：styles/、decks/
+  LoreEcho/                   學習夥伴：一個範本人物（characters/echo/）
   PaperComposer/              論文：profile/、papers/、publishers/、prompts/
 ```
 
