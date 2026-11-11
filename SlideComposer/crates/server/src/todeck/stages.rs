@@ -364,14 +364,16 @@ async fn polish_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageErr
     let made = cx.output("slides")?;
     let name = made["name"].as_str().unwrap_or("").to_string();
     let prof: StyleProfile = typed(cx, "profile").unwrap_or_default();
-    let s = s.clone();
-    let report = tokio::task::spawn_blocking(move || -> Result<polish::PolishReport, StageError> {
-        let api = |e: crate::ApiError| StageError::new(e.0.as_u16(), e.1);
-        let st = s.ws.style(&p.style).map_err(|e| api(e.into()))?;
-        let mut sess = s.ws.open(&name).map_err(|e| api(e.into()))?;
+    let api = |e: crate::ApiError| StageError::new(e.0.as_u16(), e.1);
+    // the deck's shared session: a page that has it open sees the fixes and never saves over them
+    let sess = crate::session(s, &name).map_err(api)?;
+    let (s2, style, lang) = (s.clone(), p.style.clone(), p.lang.clone());
+    let (mut report, deck) = tokio::task::spawn_blocking(move || -> Result<(polish::PolishReport, lore_canvas::Deck), StageError> {
+        let st = s2.ws.style(&style).map_err(|e| api(e.into()))?;
+        let mut sess = sess.lock().unwrap_or_else(|e| e.into_inner());
         let (_, doc) = crate::notation::load(&sess.dir, None);
         let mut slides = sess.editor.deck.slides.clone();
-        let report = polish::polish(&mut slides, &polish::PolishInput { st: &st, profile: &prof, notation: &doc, lang: &p.lang });
+        let report = polish::polish(&mut slides, &polish::PolishInput { st: &st, profile: &prof, notation: &doc, lang: &lang });
         if !report.fixes.is_empty() {
             let mut ops: Vec<Op> = sess.editor.deck.slides.iter().map(|sl| Op::DeleteSlide { slide: sl.uid.clone() }).collect();
             for (i, sl) in slides.into_iter().enumerate() {
@@ -380,11 +382,17 @@ async fn polish_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageErr
             sess.editor.apply(ops, "排版用字微調").map_err(|e| api(e.into()))?;
             sess.save().map_err(|e| api(e.into()))?;
         }
-        Ok(report)
+        Ok((report, sess.editor.deck.clone()))
     })
     .await
     .map_err(join_err)??;
+    // rule 6's model step (one term per concept): suggestions only, never applied here
     cx.counts(json!({ "checks": report.checks, "fixes": report.fixes.len() }));
+    if let Ok((groups, terms, _)) = crate::deckpolish::suggest_terms(super::llm(s), &deck, p.engine.as_deref()).await {
+        let mut rep = crate::deckpolish::Report { items: std::mem::take(&mut report.items), ..Default::default() };
+        crate::deckpolish::term_items(&deck, &groups, &terms, &mut rep);
+        report.items = rep.items;
+    }
     to_value(&report)
 }
 

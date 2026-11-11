@@ -456,7 +456,7 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     let v = job_until(&app, &id, "done", |v| v["state"] == "done").await;
     let name = v["deck"].as_str().unwrap().to_string();
     assert_eq!(v["stages"][6]["counts"], json!({ "slide": 11, "slides": 11 }));
-    assert_eq!(v["stages"][7]["counts"], json!({ "checks": 0, "fixes": 0 }));
+    assert_eq!(v["stages"][7]["counts"]["checks"], 6);
     let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
     assert_eq!(d["deck"]["slides"].as_array().unwrap().len(), 13, "11 planned, the big picture as 3");
     let text = all_text(&d["deck"]);
@@ -538,7 +538,8 @@ async fn stop_aborts_the_model_call_and_a_new_process_resumes() {
     let (st, v, _) = call(&app2, "POST", &format!("/api/todeck/jobs/{id2}/resume"), Some(json!({})), None).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     let v = job_until(&app2, &id2, "done", |v| v["state"] == "done").await;
-    assert_eq!(planner.seen.lock().unwrap().len(), 1, "only the outline asked the model");
+    let outlines = planner.seen.lock().unwrap().iter().filter(|r| r.system.starts_with("You plan a paper-report")).count();
+    assert_eq!(outlines, 1, "the outline was asked once (polish's term step may ask too)");
     assert_eq!(std::fs::read(shared2.ws.root.join(format!("cache/todeck/{id2}/source.json"))).unwrap(), source_before, "source was not redone");
     assert!(shared2.ws.deck_names().iter().any(|d| d.name == v["deck"].as_str().unwrap()));
     // a finished job can be deleted; ids are folder names only
