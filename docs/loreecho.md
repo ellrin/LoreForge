@@ -143,3 +143,18 @@ private/<App>/characters/<id>/
 | 4 | 特化按鈕：知識卡 → KB；PaperComposer 筆記功能 → 整理成筆記、記下靈感 |
 | 5 | **已完成（2026-11-11，和階段 2 一起）**：語音：`lore-voice`（STT＋系統 TTS）、按住說話、常駐模式 |
 | 6 | 自訂聲音、多人物、avatar 動畫 |
+
+## 4a. 特化按鈕的介面約定（2026-11-12，三個 app 同時做）
+
+**PaperComposer 筆記**（§5）
+- 檔案：`private/PaperComposer/notes/<YYYY-MM-DD>-<slug>.tex`，開頭 `% ---` front matter 區塊（`% source: loreecho`、`% created: <ISO>`、`% kind: note|idea`、`% kb: id1, id2`、`% tags: a, b`、`% title: …`），之後是 LaTeX 內文（過 lore-notation 檢查）。靈感（`kind: idea`）收在同一個資料夾，清單裡分開顯示。
+- API（PaperComposer 開著時）：`GET /api/notes`、`GET /api/notes/{id}`、`POST /api/notes {title, body, kind, tags, kb, source}` → `{id, path, findings}`（lore-notation 檢查結果；有阻擋性問題時回 422 和問題清單，不寫入）、`PUT /api/notes/{id}`、`DELETE`（移到 `notes/.trash/`）。
+- PaperComposer 沒開時：LoreEcho 直接照上面的格式寫檔（同樣先跑 lore-notation 檢查、不覆蓋：撞名加 `-2`），PaperComposer 下次開啟時列出。
+
+**KnowledgeBase 待審區**（§4 作者定案）
+- 檔案：每個空間的 `pending/<id>.json`（kb-core 的卡片欄位＋`source`、`created`、`from_conversation`）。待審卡不出現在一般清單、複習、搜尋。
+- API（KnowledgeBase 開著時）：`GET /api/pending`、`POST /api/pending {cards:[{title, summary, body, tags, links, kind, source}]}` → `{ids}`、`POST /api/pending/{id}/accept`（可帶修改）→ 成為正式卡（狀態 learning）、`DELETE /api/pending/{id}`。
+- KnowledgeBase 沒開時：LoreEcho 用 kb-core 直接寫進 `pending/`（只寫這個資料夾），KB 下次開啟時看得到。
+- KB 介面：左側導覽「待審 N」，清單＋逐張 確認／修改／丟掉。
+
+**LoreEcho 按鈕**：整理成筆記、做成知識卡、記下靈感。都是「先預覽、作者確認才存」；預覽可以直接改；存好後一行提示附「打開」（`LoreLinks.open("pc"|"kb", …)`）。用的模型照任務類別（`le-note`、`le-cards` = 整理與格式；`le-idea` 不用模型）。
