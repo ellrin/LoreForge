@@ -263,3 +263,41 @@ fn every_shared_task_has_a_class() {
         }
     }
 }
+
+#[tokio::test]
+async fn idle_release_is_shared_and_only_the_owner_releases() {
+    let _g = SERIAL.lock().await;
+    let d = tempfile::tempdir().unwrap();
+    let home = Home::at(d.path());
+    home.set_claude(Some("api"), None).unwrap();
+    // SlideComposer: no runtime of its own
+    let app: axum::Router = router(engines(d.path()));
+    let (_, v) = call(&app, "GET", "/api/engines", None).await;
+    assert_eq!((v["local"]["idle_minutes"].as_u64(), v["local"]["can_release"].as_bool()), (Some(10), Some(false)), "{}", v["local"]);
+    let (st, v) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "idle_minutes": 15 } }))).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["local"]["idle_minutes"], 15);
+    assert_eq!(home.engine_settings().claude.via.as_deref(), Some("api"), "the file's other tables stay");
+    let (st, v) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "release": true } }))).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert!(v["error"].as_str().unwrap().contains("PaperComposer"));
+    for bad in [json!(-1), json!(99999), json!("ten")] {
+        let (st, _) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "idle_minutes": bad } }))).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(idle_minutes(&home), 15, "nothing written by a bad value");
+
+    // PaperComposer: its runtime follows the shared minutes and can be released
+    let rt = Arc::new(LocalRuntime::new());
+    let pc: axum::Router = router(engines(d.path()).runtime(rt.clone(), Layout::new(d.path().join("gguf"), d.path().join("rt"))));
+    assert_eq!(rt.idle(), Some(std::time::Duration::from_secs(15 * 60)));
+    let (_, v) = call(&pc, "GET", "/api/engines", None).await;
+    assert_eq!(v["local"]["can_release"], true);
+    let (st, v) = call(&pc, "PUT", "/api/engines", Some(json!({ "local": { "release": true } }))).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(rt.phase(), Phase::Idle);
+    // set in another app, applied here: 0 = never
+    let (st, _) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "idle_minutes": 0 } }))).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(rt.idle(), None);
+}

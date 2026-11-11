@@ -24,7 +24,8 @@
 use crate::catalog::{Catalog, Model};
 use crate::openai::{OpenAiCompat, OpenAiCompatConfig};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use tokio::process::Child;
 use tokio::sync::Mutex;
 
@@ -275,6 +276,13 @@ pub enum Phase {
 /// right model, otherwise stops it and starts the new one. Starts are
 /// serialized, so a model restored at launch and a pick from a menu do not
 /// race. The server is killed when the runtime is dropped.
+///
+/// Memory: after [`LocalRuntime::idle`] without use (default
+/// [`DEFAULT_IDLE_MINUTES`]) the server is stopped by the watcher
+/// ([`LocalRuntime::watch_idle`]), and [`LocalRuntime::release`] stops it at
+/// once. Other apps talk to the server's URL directly, so "use" is measured at
+/// the server too: a slot that is processing, or a task id that moved since the
+/// last look (llama-server's `/slots`, on by default), counts as activity.
 pub struct LocalRuntime {
     running: Mutex<Option<Running>>,
     phase: std::sync::Mutex<Phase>,
@@ -282,10 +290,35 @@ pub struct LocalRuntime {
     pub wait: Duration,
     /// Told about every phase change (an app publishes the running server for the others).
     hook: std::sync::Mutex<Option<PhaseHook>>,
+    /// Unload after this long unused (`None`: never).
+    idle: std::sync::Mutex<Option<Duration>>,
+    /// Read on every watcher tick when set (the shared setting); wins over `idle`.
+    idle_source: std::sync::Mutex<Option<IdleSource>>,
+    last_used: std::sync::Mutex<Instant>,
+    /// Highest `/slots` task id seen (activity from any app).
+    last_task: std::sync::Mutex<Option<i64>>,
+    watching: AtomicBool,
 }
 
 /// See [`LocalRuntime::on_phase`].
 pub type PhaseHook = std::sync::Arc<dyn Fn(&Phase) + Send + Sync>;
+
+/// See [`LocalRuntime::idle_from`]: the idle time to use now (`None`: never unload).
+pub type IdleSource = std::sync::Arc<dyn Fn() -> Option<Duration> + Send + Sync>;
+
+/// Minutes unused before the local model is released, unless set otherwise.
+pub const DEFAULT_IDLE_MINUTES: u64 = 10;
+
+/// What llama-server's `/slots` says: a slot is processing, and the highest task id.
+async fn slots(v1_url: &str) -> Option<(bool, Option<i64>)> {
+    let base = v1_url.trim_end_matches('/').trim_end_matches("/v1");
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(3)).build().ok()?;
+    let v: serde_json::Value = http.get(format!("{base}/slots")).send().await.ok()?.error_for_status().ok()?.json().await.ok()?;
+    let a = v.as_array()?;
+    let busy = a.iter().any(|s| s["is_processing"].as_bool().unwrap_or(false));
+    let task = a.iter().filter_map(|s| s["id_task"].as_i64()).max();
+    Some((busy, task))
+}
 
 impl Default for LocalRuntime {
     fn default() -> Self {
@@ -295,6 +328,11 @@ impl Default for LocalRuntime {
             starting: Mutex::new(()),
             wait: Duration::from_secs(180),
             hook: std::sync::Mutex::new(None),
+            idle: std::sync::Mutex::new(Some(Duration::from_secs(DEFAULT_IDLE_MINUTES * 60))),
+            idle_source: std::sync::Mutex::new(None),
+            last_used: std::sync::Mutex::new(Instant::now()),
+            last_task: std::sync::Mutex::new(None),
+            watching: AtomicBool::new(false),
         }
     }
 }
@@ -314,6 +352,88 @@ impl LocalRuntime {
             h(&p);
         }
         *self.phase.lock().unwrap_or_else(|e| e.into_inner()) = p;
+    }
+
+    /// Unload after `d` unused (`None`: never).
+    pub fn set_idle(&self, d: Option<Duration>) {
+        *self.idle.lock().unwrap_or_else(|e| e.into_inner()) = d;
+    }
+
+    /// Read the idle time from `f` on every watcher tick (the shared setting, so a change
+    /// made in another app applies here); wins over [`LocalRuntime::set_idle`].
+    pub fn idle_from(&self, f: IdleSource) {
+        *self.idle_source.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+    }
+
+    /// The idle time in force.
+    pub fn idle(&self) -> Option<Duration> {
+        let src = self.idle_source.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        match src {
+            Some(f) => f(),
+            None => *self.idle.lock().unwrap_or_else(|e| e.into_inner()),
+        }
+    }
+
+    /// The server was used now.
+    pub fn touch(&self) {
+        *self.last_used.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+    }
+
+    /// Start the idle watcher (once; it ends when the runtime is dropped). Needs a tokio
+    /// runtime; without one nothing happens and `false` is returned.
+    pub fn watch_idle(self: &std::sync::Arc<Self>) -> bool {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else { return false };
+        if self.watching.swap(true, Ordering::SeqCst) {
+            return true;
+        }
+        let weak = std::sync::Arc::downgrade(self);
+        handle.spawn(async move {
+            loop {
+                let tick = match weak.upgrade() {
+                    Some(rt) => rt.idle().map_or(Duration::from_secs(30), |d| (d / 4).clamp(Duration::from_millis(20), Duration::from_secs(30))),
+                    None => return,
+                };
+                tokio::time::sleep(tick).await;
+                match weak.upgrade() {
+                    Some(rt) => {
+                        rt.check_idle().await;
+                    }
+                    None => return,
+                }
+            }
+        });
+        true
+    }
+
+    /// Stop the server when it has been unused for the idle time. Returns whether it did.
+    pub async fn check_idle(&self) -> bool {
+        let Some(idle) = self.idle() else { return false };
+        // never during a start (a large model takes a while to load)
+        let Ok(_one) = self.starting.try_lock() else { return false };
+        let url = self.running.lock().await.as_ref().map(|r| r.url.clone());
+        let Some(url) = url else { return false };
+        if let Some((busy, task)) = slots(&url).await {
+            let mut last = self.last_task.lock().unwrap_or_else(|e| e.into_inner());
+            if busy || (task.is_some() && task != *last) {
+                *last = task;
+                drop(last);
+                self.touch();
+                return false;
+            }
+        }
+        let unused = self.last_used.lock().unwrap_or_else(|e| e.into_inner()).elapsed();
+        if unused < idle {
+            return false;
+        }
+        eprintln!("lore-llm: local model unused for {} s, released", unused.as_secs());
+        self.stop().await;
+        true
+    }
+
+    /// Free the memory now (the 釋放 button): stop the server. The next request that needs
+    /// the model starts it again.
+    pub async fn release(&self) {
+        self.stop().await;
     }
 
     /// Call `f` on every phase change (Ready / Idle / Error …).
@@ -350,12 +470,15 @@ impl LocalRuntime {
         if let Some((id, url, vision, context)) = self.current().await
             && id == m.id
         {
+            self.touch();
             return Ok(ServerInfo { model_id: id, url, vision, context });
         }
         self.stop().await;
         self.set(Phase::Starting { model: m.id.clone() });
         match start_in(layout, m, self.wait).await {
             Ok(run) => {
+                self.touch();
+                *self.last_task.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 let out = ServerInfo { model_id: run.model_id.clone(), url: run.url.clone(), vision: run.vision, context: run.context };
                 self.set(Phase::Ready { model: run.model_id.clone(), url: run.url.clone() });
                 *self.running.lock().await = Some(run);
@@ -371,6 +494,7 @@ impl LocalRuntime {
     /// Tests: treat an already running process as the server for `model_id`.
     #[cfg(test)]
     pub(crate) async fn adopt(&self, run: Running) {
+        self.touch();
         self.set(Phase::Ready { model: run.model_id.clone(), url: run.url.clone() });
         *self.running.lock().await = Some(run);
     }
@@ -481,6 +605,100 @@ mod tests {
         assert!(e.contains("out of memory"), "{e}");
         assert!(matches!(rt.phase(), Phase::Error { .. }));
         assert!(rt.current().await.is_none());
+    }
+
+    /// A stand-in llama-server process (`sleep`) at `url`.
+    #[cfg(unix)]
+    fn sleeper(url: &str) -> Running {
+        let child = tokio::process::Command::new("sleep").arg("60").kill_on_drop(true).spawn().unwrap();
+        Running { child, model_id: "m".into(), url: url.into(), vision: false, context: 4096 }
+    }
+
+    #[cfg(unix)]
+    async fn until(what: &str, f: impl Fn() -> bool) {
+        for _ in 0..300 {
+            if f() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("timed out: {what}");
+    }
+
+    /// Unused for the idle time: released (the phase goes Idle, the process is gone).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_idle_server_is_released() {
+        let rt = std::sync::Arc::new(LocalRuntime::new());
+        assert_eq!(rt.idle(), Some(Duration::from_secs(600)), "10 minutes by default");
+        rt.set_idle(Some(Duration::from_millis(200)));
+        rt.adopt(sleeper("http://127.0.0.1:9/v1")).await;
+        assert!(rt.watch_idle());
+        // in use: touched more often than the idle time
+        for _ in 0..8 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            rt.touch();
+        }
+        assert!(matches!(rt.phase(), Phase::Ready { .. }), "still in use");
+        until("released", || rt.phase() == Phase::Idle).await;
+        assert!(rt.running.lock().await.is_none());
+        // never: nothing is released
+        rt.set_idle(None);
+        rt.adopt(sleeper("http://127.0.0.1:9/v1")).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(!rt.check_idle().await);
+        assert!(matches!(rt.phase(), Phase::Ready { .. }));
+        rt.release().await;
+        assert_eq!(rt.phase(), Phase::Idle);
+    }
+
+    /// Another app's request is running on the server (its `/slots` says so): not released.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_busy_server_is_kept() {
+        use axum::routing::get;
+        let busy = std::sync::Arc::new(AtomicBool::new(true));
+        let b = busy.clone();
+        let app = axum::Router::new().route(
+            "/slots",
+            get(move || {
+                let b = b.clone();
+                async move { axum::Json(serde_json::json!([{ "id": 0, "id_task": 7, "is_processing": b.load(Ordering::SeqCst) }])) }
+            }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        let rt = LocalRuntime::new();
+        rt.set_idle(Some(Duration::from_millis(50)));
+        rt.adopt(sleeper(&url)).await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(!rt.check_idle().await, "processing: counts as use");
+        busy.store(false, Ordering::SeqCst);
+        assert!(!rt.check_idle().await, "just used");
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(rt.check_idle().await, "the same task id, nothing processing: idle");
+        assert_eq!(rt.phase(), Phase::Idle);
+    }
+
+    /// The app's quit path (`kill_now`) kills the server synchronously, also while the
+    /// idle watcher runs.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn quit_kills_the_server_now() {
+        let rt = std::sync::Arc::new(LocalRuntime::new());
+        rt.adopt(sleeper("http://127.0.0.1:9/v1")).await;
+        rt.watch_idle();
+        rt.kill_now();
+        for _ in 0..200 {
+            if let Some(r) = rt.running.lock().await.as_mut()
+                && r.child.try_wait().unwrap().is_some()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("llama-server still running after kill_now");
     }
 
     /// Real hardware: llama-server and Qwen3.5 4B from the shared folder, one

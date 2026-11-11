@@ -44,6 +44,11 @@ fn link_page(u: &url::Url) -> Option<String> {
             let name = decode(u.path().trim_matches('/'));
             (!name.is_empty() && !name.contains('/')).then(|| page(&[("deck", &name)]))
         }
+        // a 論文報告 job (PaperComposer's 做成簡報 opens its progress here)
+        "job" => {
+            let id = decode(u.path().trim_matches('/'));
+            sc_server::jobs::valid_id(&id).then(|| page(&[("job", &id)]))
+        }
         _ => None,
     }
 }
@@ -249,6 +254,8 @@ mod tests {
         assert_eq!(p("lore-sc://deck/%E7%B0%A1%E5%A0%B1"), Some("/?deck=%E7%B0%A1%E5%A0%B1".into()));
         assert_eq!(p("lore-sc://deck/"), None);
         assert_eq!(p("lore-sc://deck/a%2Fb"), None);
+        assert_eq!(p("lore-sc://job/j18f3a2b4c5d1"), Some("/?job=j18f3a2b4c5d1".into()));
+        assert_eq!(p("lore-sc://job/..%2Fx"), None);
         assert_eq!(p("lore-sc://nope"), None);
         assert_eq!(p("lore-pc://deck/x"), None);
     }

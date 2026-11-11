@@ -318,6 +318,18 @@
     if (lsel) lsel.onchange = () => engines.put({ local: { model: lsel.value } }).then(() => buildModels(el)).catch((e) => toast(e.message, { err: true }));
     conn.append(row("本機", lsel ?? lv, h("span", { class: "chip" + (L.state === "ready" ? " ok" : "") }, STATE[L.state] ?? "—"), vision(!!L.vision),
       S.opts?.modelSetup ? h("button", { type: "button", class: "btn small", onclick: () => S.opts.modelSetup("local") }, L.state === "ready" ? "切換…" : "下載…") : null));
+    if (L.idle_minutes != null) {
+      // memory: release after N idle minutes (0 = never); 釋放 only where the model runs
+      const idle = h("input", { type: "number", class: "set-input", min: 0, max: 1440, step: 1, value: L.idle_minutes, "aria-label": "閒置釋放（分）", style: "width:5em" });
+      idle.onchange = () => {
+        const n = Math.max(0, Math.min(1440, Math.round(Number(idle.value) || 0)));
+        idle.value = n;
+        engines.put({ local: { idle_minutes: n } }).catch((e) => { idle.value = L.idle_minutes; toast(e.message, { err: true }); });
+      };
+      const rel = L.can_release ? h("button", { type: "button", class: "btn small", disabled: L.state !== "ready" && L.state !== "starting" }, "釋放") : null;
+      if (rel) rel.onclick = () => engines.put({ local: { release: true } }).then(() => buildModels(el)).catch((e) => toast(e.message, { err: true }));
+      conn.append(row("閒置釋放", idle, h("span", { class: "v" }, "分"), rel));
+    }
     const csel = C.models?.length ? h("select", { class: "set-input", "aria-label": "Claude 模型" }, ...C.models.map((m) => h("option", { value: m.id, selected: m.id === C.model }, m.label ?? m.id))) : h("span", { class: "v mono" }, C.model ?? "—");
     if (csel.tagName === "SELECT") csel.onchange = () => engines.put({ claude: { model: csel.value } }).catch((e) => toast(e.message, { err: true }));
     const vias = Object.entries(C.vias ?? {}).filter(([, ok]) => ok).map(([v]) => [v, v === "subscription" ? "訂閱" : "金鑰"]);
@@ -557,6 +569,7 @@
 // ── links between the Lore apps: lore-<app>://… with an http fallback ──
 //   lore-pc://open?path=<file>          http://127.0.0.1:7878/?open=<file>
 //   lore-sc://deck/<name>               http://127.0.0.1:7880/?deck=<name>
+//   lore-sc://job/<id>                  http://127.0.0.1:7880/?job=<id>   (論文報告 job)
 //   lore-lr://paper/<sha>?page=<n>      http://127.0.0.1:7890/?paper=<sha>&page=<n>
 //   lore-kb://node/<id>                 http://127.0.0.1:7700/#/node/<id>
 //   lore-<app>://                       the app's home
@@ -570,7 +583,7 @@
   const ports = { pc: 7878, sc: 7880, lr: 7890, kb: 7700 };
   const FORMS = {
     pc: (p) => (p.path ? [`open?path=${enc(p.path)}`, `/?open=${enc(p.path)}`] : ["", "/"]),
-    sc: (p) => (p.deck ? [`deck/${enc(p.deck)}`, `/?deck=${enc(p.deck)}`] : ["", "/"]),
+    sc: (p) => (p.deck ? [`deck/${enc(p.deck)}`, `/?deck=${enc(p.deck)}`] : p.job ? [`job/${enc(p.job)}`, `/?job=${enc(p.job)}`] : ["", "/"]),
     lr: (p) => (p.paper ? [`paper/${enc(p.paper)}${p.page ? `?page=${enc(p.page)}` : ""}`, `/?paper=${enc(p.paper)}${p.page ? `&page=${enc(p.page)}` : ""}`] : ["", "/"]),
     kb: (p) => (p.node ? [`node/${enc(p.node)}`, `/#/node/${enc(p.node)}`] : ["", "/"]),
   };

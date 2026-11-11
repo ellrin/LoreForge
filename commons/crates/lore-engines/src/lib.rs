@@ -11,6 +11,10 @@
 //! - `PUT /api/engines` with the parts to change: `{ local: { model }, claude: { via, model },
 //!   routes: { create: "cloud" }, overrides: { "<task>": "local" } }` → the full GET body;
 //!   a bad value → 400 `{ "error": "一行中文" }` and nothing is written.
+//! - Memory of the local model: `local.idle_minutes` (GET; PUT `{ local: { idle_minutes: 15 } }`,
+//!   0 = never; kept in `engine.toml` `[local]`, shared by every app) and `local.can_release`;
+//!   PUT `{ local: { release: true } }` stops the app's own llama-server now. Only the app that
+//!   runs the server ([`Engines::runtime`], PaperComposer) releases; the others get a 400.
 //! - `GET /api/links/ports` → `{ "sc": 51234, … }`: the desktop apps running now (lore-home `ports`).
 //! - `POST /api/links/open { url }` → hands a `lore-(pc|sc|lr|kb)://` or
 //!   `http://127.0.0.1…` URL to the OS opener (204); anything else → 400.
@@ -99,8 +103,12 @@ impl Engines {
         }
     }
 
-    /// The app's own llama-server and model folders.
+    /// The app's own llama-server and model folders. The runtime follows the shared idle
+    /// setting (`[local] idle_minutes`) and its idle watcher is started.
     pub fn runtime(mut self, rt: Arc<LocalRuntime>, layout: Layout) -> Self {
+        let home = self.home.clone();
+        rt.idle_from(Arc::new(move || idle_duration(idle_minutes(&home))));
+        rt.watch_idle();
         self.runtime = Some(rt);
         self.layout = Some(layout);
         self
@@ -193,6 +201,8 @@ impl Engines {
             "label": model.as_deref().map(|m| self.label(m)),
             "vision": vision,
             "models": models,
+            "idle_minutes": idle_minutes(&self.home),
+            "can_release": self.runtime.is_some(),
         })
     }
 
@@ -280,6 +290,17 @@ impl Engines {
         let str_of = |v: &Value, what: &str| v.as_str().map(str::trim).map(String::from).ok_or(format!("{what}要是文字"));
         // local
         let mut start = None;
+        let mut idle = None;
+        let mut release = None;
+        if let Some(l) = obj.get("local").filter(|v| !v.is_null()) {
+            if let Some(v) = l.get("idle_minutes").filter(|v| !v.is_null()) {
+                let n = v.as_u64().filter(|n| *n <= MAX_IDLE_MINUTES).ok_or(format!("閒置釋放要是 0–{MAX_IDLE_MINUTES} 的整數分鐘"))?;
+                idle = Some(n);
+            }
+            if l.get("release").and_then(Value::as_bool) == Some(true) {
+                release = Some(self.runtime.clone().ok_or("本機模型請在 PaperComposer 釋放")?);
+            }
+        }
         if let Some(l) = obj.get("local").filter(|v| !v.is_null())
             && let Some(m) = l.get("model").filter(|v| !v.is_null())
         {
@@ -359,6 +380,12 @@ impl Engines {
             }
         }
         let io = |e: std::io::Error| format!("無法儲存設定：{e}");
+        if let Some(n) = idle {
+            set_idle_minutes(&self.home, n).map_err(io)?;
+        }
+        if let Some(rt) = release {
+            rt.release().await;
+        }
         if let Some((via, model)) = claude {
             self.home.set_claude(via.as_deref(), model.as_deref()).map_err(io)?;
         }
@@ -379,6 +406,47 @@ impl Engines {
         }
         Ok(())
     }
+}
+
+/// Longest idle time that can be set (a day).
+pub const MAX_IDLE_MINUTES: u64 = 1440;
+
+fn engine_toml(home: &Home) -> Option<std::path::PathBuf> {
+    home.shared_dir().map(|d| d.join(lore_home::engine::FILE))
+}
+
+/// `[local] idle_minutes` of the shared engine file (default
+/// [`lore_llm::local::DEFAULT_IDLE_MINUTES`]; 0 = never release).
+pub fn idle_minutes(home: &Home) -> u64 {
+    let t: Option<toml::Table> = engine_toml(home).and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| s.parse().ok());
+    t.as_ref()
+        .and_then(|t| t.get("local"))
+        .and_then(|l| l.get("idle_minutes"))
+        .and_then(toml::Value::as_integer)
+        .and_then(|n| u64::try_from(n).ok())
+        .map(|n| n.min(MAX_IDLE_MINUTES))
+        .unwrap_or(lore_llm::local::DEFAULT_IDLE_MINUTES)
+}
+
+/// Minutes → the runtime's idle time (0 = never).
+pub fn idle_duration(minutes: u64) -> Option<std::time::Duration> {
+    (minutes > 0).then(|| std::time::Duration::from_secs(minutes * 60))
+}
+
+/// Write `[local] idle_minutes` (the file's other tables and keys stay; atomic).
+pub fn set_idle_minutes(home: &Home, minutes: u64) -> std::io::Result<()> {
+    let path = engine_toml(home).ok_or_else(|| std::io::Error::other("no shared settings folder"))?;
+    let mut t: toml::Table = std::fs::read_to_string(&path).ok().and_then(|s| s.parse().ok()).unwrap_or_default();
+    let e = t.entry("local").or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if !e.is_table() {
+        *e = toml::Value::Table(toml::Table::new());
+    }
+    e.as_table_mut().expect("a table").insert("idle_minutes".into(), toml::Value::Integer(minutes.min(MAX_IDLE_MINUTES) as i64));
+    let dir = path.parent().ok_or_else(|| std::io::Error::other("no shared settings folder"))?;
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{}.{}.idle.tmp", lore_home::engine::FILE, std::process::id()));
+    std::fs::write(&tmp, t.to_string())?;
+    std::fs::rename(&tmp, &path)
 }
 
 /// `private/shared/engine.toml` as lore-llm's routing settings.
