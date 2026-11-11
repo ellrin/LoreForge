@@ -100,6 +100,7 @@
     <section class="block" data-open="true">
       <div class="block-head"><span class="n">01</span><h3>開始</h3></div>
       <div class="block-body tiles">
+        <button class="tile" id="tilePaper"><span data-icon="file"></span>論文報告</button>
         <label class="tile drop" id="tileImport"><span data-icon="pen"></span>開啟…<input type="file" id="impFile" accept=".pptx" hidden></label>
         <button class="tile" id="tileNew"><span data-icon="plus"></span>新簡報</button>
       </div>
@@ -127,6 +128,27 @@
 </dialog>
 
 
+<dialog class="dialog small" id="dlgPaper" aria-label="論文報告">
+  <form class="dlg" id="paperForm" method="dialog">
+    <div class="dlg-head">
+      <h2>論文報告</h2>
+      <button type="button" class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
+    </div>
+    <div class="np-body">
+      <div class="np-label">論文</div>
+      <div class="seg pd-src" id="pdSrc" role="radiogroup"><button type="button" data-src="pc" aria-pressed="true">PaperComposer</button><button type="button" data-src="lr" aria-pressed="false">LoreReader</button></div>
+      <div class="pd-papers" id="pdPapers" role="radiogroup" aria-label="論文"></div>
+      <div class="pd-two">
+        <div><div class="np-label">長度</div><div class="seg" id="pdLen" role="radiogroup"><button type="button" data-v="short">短 10</button><button type="button" data-v="standard">標準 15–20</button><button type="button" data-v="long">長</button></div></div>
+        <div><div class="np-label">語言</div><div class="seg" id="pdLang" role="radiogroup"><button type="button" data-v="zh">中文</button><button type="button" data-v="en">English</button></div></div>
+      </div>
+      <div class="np-label">底版</div>
+      <div class="bases" id="pdBases" role="radiogroup" aria-label="底版"></div>
+    </div>
+    <div class="np-foot"><div class="pd-bar" id="pdBar" hidden></div><span class="grow"></span><button class="primary small" id="pdGo">建立<kbd>↵</kbd></button></div>
+  </form>
+</dialog>
+
 <dialog class="dialog big" id="dlgNotation" aria-label="對照表">
   <div class="dlg">
     <div class="dlg-head">
@@ -153,5 +175,6 @@
 <script src="app.js"></script>
 <script src="find.js"></script>
 <script src="reader.js"></script>
+<script src="todeck.js"></script>
 </body>
 </html>

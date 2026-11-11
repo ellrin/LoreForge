@@ -836,12 +836,12 @@ fn pic(name: &str, frame: Frame, asset: &str, crop: Crop, alpha: f64, slot: Opti
     }
 }
 
-/// Fit `iw × ih` inside `f` (contain, centred).
+/// Fit `iw × ih` inside `f` (contain, centred across, at the top).
 fn contain(f: &Frame, iw: u32, ih: u32) -> Frame {
     let (iw, ih) = (iw.max(1) as f64, ih.max(1) as f64);
     let s = (f.w as f64 / iw).min(f.h as f64 / ih);
     let (w, h) = ((iw * s) as i64, (ih * s) as i64);
-    Frame::new(f.x + (f.w - w) / 2, f.y + (f.h - h) / 2, w, h)
+    Frame::new(f.x + (f.w - w) / 2, f.y, w, h)
 }
 
 /// Module box of the main figure, in pixels of its image.
@@ -1008,7 +1008,10 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                         let t = block("text").unwrap_or_else(|| Frame::new(content.x + content.w * 58 / 100, content.y, content.w * 42 / 100, content.h));
                         (Some(v), Some(t))
                     }
-                    (true, false) => (Some(block("table").filter(|_| table_grid.is_some()).or_else(|| block("image")).or_else(|| block("text")).unwrap_or(content.clone())), None),
+                    (true, false) => {
+                        let lone_image = block("image").filter(|_| block("text").is_none());
+                        (Some(block("table").filter(|_| table_grid.is_some()).or(lone_image).unwrap_or(content.clone())), None)
+                    }
                     (false, _) => (None, Some(block("text").unwrap_or(content.clone()))),
                 };
                 // the takeaway: the base's band, the arrangement's block, else a line under the content
@@ -1027,7 +1030,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
 
                 let mut step_ids: Vec<Vec<u32>> = vec![];
                 if let (Some(vf), Some(grid)) = (&vis_f, &table_grid) {
-                    extra.push(table_obj(&cx, vf, grid, kv.is_some()));
+                    extra.push(table_obj(&mut cx, vf, grid, kv.is_some()));
                 } else if let (Some(vf), Some(img)) = (&vis_f, image) {
                     let im = img.image.as_ref().unwrap();
                     let asset = match assets.get(&img.id) {
@@ -1232,38 +1235,40 @@ fn takeaway_obj(cx: &Ctx, f: &Frame, text: &str, band: bool) -> Object {
 }
 
 /// A native table (無樣式、表格格線): first row bold as header; key-value tables have no header.
-fn table_obj(cx: &Ctx, f: &Frame, grid: &[Vec<String>], kv: bool) -> Object {
+fn table_obj(cx: &mut Ctx, f: &Frame, grid: &[Vec<String>], kv: bool) -> Object {
     let t = cx.tag(&["table", "body-dense", "body"]);
     let ncol = grid.iter().map(Vec::len).max().unwrap_or(1).max(1);
     let nrow = grid.len().max(1) as i64;
     let rh = (f.h / nrow).min(EMU_IN * 2 / 5).max(EMU_IN / 5);
-    let cols: Vec<i64> = if kv && ncol == 2 { vec![f.w * 2 / 5, f.w - f.w * 2 / 5] } else { vec![f.w / ncol as i64; ncol] };
-    let rows: Vec<Row> = grid
-        .iter()
-        .enumerate()
-        .map(|(ri, r)| Row {
-            h: rh,
-            cells: (0..ncol)
-                .map(|ci| {
-                    let text = r.get(ci).map(|s| strip_typed_refs(&lore_docsrc::latex::plain::tidy(s))).unwrap_or_default();
-                    let em = ((!kv && ri == 0) || (kv && ci == 0)).then_some("strong").filter(|e| cx.st.pack.emphasis.contains_key(*e));
-                    let mut runs = vec![cx.run(&text, &t, em)];
-                    if em.is_none() && ((!kv && ri == 0) || (kv && ci == 0)) {
-                        runs[0].look.bold = true;
-                    }
-                    let mut tb = body(vec![cx.para(runs, &t)], "ctr");
-                    tb.insets = [91_440, 45_720, 91_440, 45_720];
-                    Cell { text: tb, span: 1, rspan: 1, hmerge: false, vmerge: false, fill: None, borders: [None, None, None, None], src: None }
-                })
-                .collect(),
-            src: None,
-        })
-        .collect();
+    // narrow tables stay narrow (about 2.6 in a column)
+    let tw = f.w.min(ncol as i64 * EMU_IN * 13 / 5);
+    let cols: Vec<i64> = if kv && ncol == 2 { vec![tw * 2 / 5, tw - tw * 2 / 5] } else { vec![tw / ncol as i64; ncol] };
+    let mut rows: Vec<Row> = vec![];
+    for (ri, r) in grid.iter().enumerate() {
+        let mut cells = vec![];
+        for ci in 0..ncol {
+            let text = r.get(ci).map(|s| strip_typed_refs(&lore_docsrc::latex::plain::tidy(s))).unwrap_or_default();
+            let head = (!kv && ri == 0) || (kv && ci == 0);
+            let em = head.then_some("strong").filter(|e| cx.st.pack.emphasis.contains_key(*e));
+            // `$…$` in a cell is native math, like in the bullets
+            let mut runs = cx.rich(&text, &t, em);
+            if runs.is_empty() {
+                runs.push(cx.run("", &t, em));
+            }
+            if head && em.is_none() {
+                runs.iter_mut().for_each(|r| r.look.bold = true);
+            }
+            let mut tb = body(vec![cx.para(runs, &t)], "ctr");
+            tb.insets = [91_440, 45_720, 91_440, 45_720];
+            cells.push(Cell { text: tb, span: 1, rspan: 1, hmerge: false, vmerge: false, fill: None, borders: [None, None, None, None], src: None });
+        }
+        rows.push(Row { h: rh, cells, src: None });
+    }
     let height = rh * nrow;
     Object {
         id: 0,
         name: if kv { "訓練細節".into() } else { "表".into() },
-        frame: Frame::new(f.x, f.y, f.w, height),
+        frame: Frame::new(f.x, f.y, cols.iter().sum(), height),
         hidden: false,
         ph: None,
         slot: Some("table-1".into()),

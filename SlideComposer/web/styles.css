@@ -191,7 +191,7 @@ dialog textarea { min-height: 80px; font: 13px var(--mono); }
 /* ── Home ────────────────────────────── */
 .home { position: fixed; inset: 48px 0 0 0; z-index: 30; overflow: auto; padding: 32px 24px 48px; background-color: var(--bg); background-image: radial-gradient(var(--dot) 1px, transparent 1px); background-size: 16px 16px; }
 .home-inner { max-width: 720px; margin: 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
-.tiles { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.tiles { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .block[data-open="true"] .tiles { display: grid; }
 .tile { height: 104px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--text); font: 600 13px var(--sans); cursor: pointer; }
 .tile svg.i { width: 26px; height: 26px; color: var(--muted); stroke-width: 1.5; }
@@ -360,3 +360,20 @@ dialog .actions .btn.primary { width: auto; margin: 0; padding: 0 12px; }
 dialog .actions { flex-wrap: wrap; }
 
 .ask p { overflow-wrap: anywhere; }
+
+/* 論文報告 (todeck.js) */
+.pd-src { align-self: flex-start; }
+.pd-papers { display: flex; flex-direction: column; max-height: 190px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.pd-papers button { display: flex; align-items: baseline; gap: 8px; text-align: left; padding: 7px 10px; background: none; border: 0; border-bottom: 1px solid var(--line); color: var(--text); font: 13px var(--sans); }
+.pd-papers button:last-child { border-bottom: 0; }
+.pd-papers button:hover { background: var(--surface-hover); }
+.pd-papers button[aria-checked="true"] { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent-text); }
+.pd-papers button .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pd-papers button .w { font: 500 10.5px var(--mono); color: var(--faint); white-space: nowrap; }
+.pd-papers .empty { padding: 14px 10px; color: var(--faint); font-size: 12.5px; }
+.pd-two { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.pd-bar { flex: 1; max-width: 220px; height: 3px; border-radius: 2px; background: var(--accent-soft); overflow: hidden; }
+.pd-bar::before { content: ""; display: block; width: 35%; height: 100%; background: var(--accent-text); animation: pd-run 1.4s ease-in-out infinite; }
+@keyframes pd-run { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+@media (prefers-reduced-motion: reduce) { .pd-bar::before { animation: none; width: 100%; opacity: .5; } }
+@media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
