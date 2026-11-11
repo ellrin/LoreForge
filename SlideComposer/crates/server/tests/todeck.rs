@@ -299,6 +299,10 @@ async fn paper_becomes_a_report_deck() {
     assert!(n["notation"]["entries"].as_array().unwrap().iter().any(|e| e["id"] == "x" && e["origin"] == "document"));
     let codes: Vec<String> = n["report"]["issues"].as_array().map(|a| a.iter().filter_map(|i| i["code"].as_str().map(String::from)).collect()).unwrap_or_default();
     assert!(!codes.iter().any(|c| c == "hardcoded_reference"), "{codes:?}");
+    // the paper's registered symbol is explained under the equation that uses it
+    let undefined_x = n["report"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "undefined_symbol" && i["entry"] == "x");
+    assert!(!undefined_x, "{}", n["report"]["issues"]);
+    assert!(all_text(&d["deck"]).contains("denotes input image"));
 
     // the paper is untouched; the deck exports
     assert_eq!(snapshot(&p), before);

@@ -222,6 +222,8 @@ pub struct Material {
     pub notation: Notation,
     /// LoreReader's symbols.json (its rows are registered through `reader::register_into`).
     pub lr_symbols: Option<Value>,
+    /// Symbols of the paper's registry (LaTeX, meaning), for the notes under an equation.
+    pub symbols: Vec<(String, String)>,
     /// Name for the deck folder.
     pub slug: String,
 }
@@ -349,6 +351,13 @@ pub fn from_latex(dir: &Path, cache: &Path) -> Result<Material, String> {
         m.refs.insert(r.key.clone(), short_ref(&r.fields, &r.text));
     }
     m.notation = Notation::load(&dir.join("notation.json")).unwrap_or_default();
+    m.symbols = m
+        .notation
+        .entries
+        .iter()
+        .filter(|e| matches!(e.kind(), lore_notation::Kind::Symbol | lore_notation::Kind::Operator))
+        .filter_map(|e| Some((e.latex.clone()?, e.meaning.clone().or_else(|| e.meaning_en.clone())?)))
+        .collect();
     let who = match m.authors.len() {
         0 => String::new(),
         1 => m.authors[0].clone(),
@@ -408,6 +417,15 @@ pub fn from_lorereader(r: &Reader, sha: &str, cache: &Path) -> Result<Material, 
     for r in &cat.references {
         m.refs.insert(r.key.clone(), r.text.trim().to_string());
     }
+    m.symbols = m
+        .lr_symbols
+        .as_ref()
+        .and_then(|v| v["entries"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|e| Some((e["latex"].as_str()?.to_string(), e["meaning"].as_str().or_else(|| e["meaning_en"].as_str())?.to_string())))
+        .filter(|(l, m)| !l.trim().is_empty() && !m.trim().is_empty())
+        .collect();
     m.slug = slug(&m.title);
     Ok(m)
 }
@@ -1104,6 +1122,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                     for id in &ps.equations {
                         let Some(e) = m.equations.iter().find(|e| &e.id == id) else { continue };
                         let latex = cx.expand(&e.latex);
+                        let used = latex.clone();
                         let size = cx.look(&eq_tag, None).size;
                         let mut p = match cx.omml(&latex, true, size) {
                             Some(omml) => {
@@ -1117,6 +1136,20 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                         p.before_pt = Some(6.0);
                         p.after_pt = Some(6.0);
                         paras.push(p);
+                        // the symbols it uses, from the paper's registry, as notes under it (§7.1: 符號說明)
+                        let note_tag = cx.tag(&["caption", "body"]);
+                        let em = cx.st.pack.emphasis.contains_key("note").then_some("note");
+                        let mut seen = BTreeSet::new();
+                        for (sym, meaning) in &m.symbols {
+                            if !used.contains(sym.as_str()) || !seen.insert(sym.clone()) {
+                                continue;
+                            }
+                            let line = if inp.lang == "en" { format!("where ${sym}$ denotes {meaning}") } else { format!("${sym}$ 為{meaning}") };
+                            let runs = cx.rich(&line, &note_tag, em);
+                            let mut p = cx.para(runs, &note_tag);
+                            p.align = "ctr".into();
+                            paras.push(p);
+                        }
                     }
                     if !paras.is_empty() {
                         let f = if ps.steps.is_empty() {
