@@ -1,0 +1,61 @@
+/* 論文報告 job view and review window: shell tokens only */
+.tdj { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-size: 13px; }
+.tdj[hidden] { display: none; }
+.tdj-head { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 16px; border-bottom: 1px solid var(--line); flex: none; }
+.tdj-head h2 { margin: 0; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tdj-body { flex: 1; overflow: auto; width: 100%; max-width: 640px; margin: 0 auto; padding: 24px 16px; box-sizing: border-box; }
+.tdj-body.wide { max-width: 1040px; display: grid; gap: 14px; align-content: start; }
+.tdj-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); flex: none; }
+.tdj-msg { margin: 16px 0 0; color: var(--muted); }
+.tdj-msg.err { color: var(--err); }
+.tdj-stages { list-style: none; margin: 0; padding: 0; display: grid; }
+.tdj-st { display: grid; grid-template-columns: 22px 64px 1fr auto; align-items: baseline; gap: 8px; padding: 9px 10px; border-radius: var(--r); color: var(--muted); }
+.tdj-st .mk { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line-strong); align-self: center; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
+.tdj-st.done { color: var(--text); }
+.tdj-st.done .mk { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.tdj-st.done .mk svg { width: 10px; height: 10px; }
+.tdj-st.running { color: var(--text); background: var(--accent-soft); }
+.tdj-st.running .mk { border-color: var(--accent); border-top-color: transparent; animation: tdj-spin 1s linear infinite; }
+.tdj-st .nm { font-weight: 600; }
+.tdj-st .ct { font: 12px var(--mono); color: var(--muted); display: flex; flex-wrap: wrap; gap: 0 8px; }
+.tdj-st .ct i { font-style: normal; opacity: .5; }
+.tdj-st .ct .stale { color: var(--err); }
+.tdj-st .tm { font: 12px var(--mono); color: var(--muted); text-align: right; }
+@keyframes tdj-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .tdj-st.running .mk { animation: none; border-top-color: var(--accent); } }
+
+.tdj-outline { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.tdj-outline .row { display: grid; grid-template-columns: 22px 54px minmax(120px, 1.1fr) minmax(48px, auto) minmax(120px, 1.4fr) 26px; gap: 8px; align-items: center; padding: 5px 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.tdj-outline .mv { display: grid; }
+.tdj-outline .mv .ico { height: 14px; width: 20px; }
+.tdj-outline .mv svg { width: 12px; height: 12px; }
+.tdj-outline .down svg { transform: rotate(180deg); }
+.tdj-outline .kd { font: 500 11px var(--mono); color: var(--accent-text); }
+.tdj-outline input { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid transparent; background: transparent; color: var(--text); font: inherit; padding: 4px 6px; border-radius: var(--r); }
+.tdj-outline input:hover { border-color: var(--line); }
+.tdj-outline input:focus { border-color: var(--accent); outline: none; background: var(--bg); }
+.tdj-outline .pt { color: var(--muted); }
+.tdj-outline .th { display: flex; gap: 4px; }
+.tdj-outline .fig { width: 44px; height: 28px; padding: 0; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--surface-hover); overflow: hidden; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
+.tdj-outline .fig img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tdj-outline .fig:hover { border-color: var(--accent); }
+.tdj-outline .fig.add { border-style: dashed; background: none; }
+.tdj-outline .fig.add svg { width: 12px; height: 12px; }
+.tdj-q { display: grid; grid-template-columns: 130px 1fr; align-items: center; gap: 10px; padding: 5px 0; }
+.tdj-q .seg { justify-self: start; }
+.tdj-q .ql { color: var(--muted); }
+.tdj-sel { justify-self: start; min-width: 120px; height: 26px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); color: var(--text); font: inherit; padding: 0 6px; }
+.tdj-terms { list-style: none; margin: 0 0 10px; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 2px 14px; }
+.tdj-terms label { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
+.tdj-terms .tm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12.5px; }
+.tdj-terms .n, .tdj-terms .kn { color: var(--muted); font-size: 11.5px; }
+.tdj-terms input:not(:checked) ~ .kn { visibility: hidden; }
+.tdj-terms input:checked ~ .tm { color: var(--muted); text-decoration: line-through; }
+.tdj-rem { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+@media (max-width: 900px) {
+  .tdj-outline .row { grid-template-columns: 22px 46px 1fr 26px; }
+  .tdj-outline .th, .tdj-outline .pt { grid-column: 3; }
+  .tdj-q { grid-template-columns: 1fr; gap: 4px; }
+  .tdj-st { grid-template-columns: 22px 54px 1fr; }
+  .tdj-st .tm { grid-column: 3; text-align: left; }
+}

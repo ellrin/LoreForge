@@ -56,7 +56,7 @@ when working on lore-canvas in parallel with other agents.
   PDFs read-only (`LOREREADER_WORKSPACE`, else lore-home's `private/LoreReader`; the library from LoreReader's
   config). Pages are rendered with `pdftoppm` into the workspace's `cache/lorereader/`; a figure is the whole
   page as one asset, cropped by the picture. Symbols and equations register into the deck's own `notation.json`.
-- 論文報告 (home tile, `web/todeck.js`; PaperComposer's 做成簡報 calls the same route): `crates/server/src/todeck.rs`
+- 論文報告 (home tile, `web/todeck.js`; PaperComposer's 做成簡報 calls the same route): `crates/server/src/todeck/ (stages) + src/jobs.rs (runner; 論文報告 is a job, see docs/paper-deck.md §API)`
   turns a PaperComposer LaTeX folder or a LoreReader PDF (lore-docsrc, read-only) into a paper-report deck: one
   lore-llm call (`sc-paper-deck`, class `create`, `crates/server/tasks.toml`; `llm.rs`) plans the slides in the
   design §7.1 order by material id; `sc-crop-modules` (vision, optional) boxes the main figure's modules for the

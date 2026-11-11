@@ -1,6 +1,6 @@
 // 做成簡報: this paper as a paper-report deck in SlideComposer, in one action.
 // The button sits in the top bar's primary slot, before AI. Its card picks the
-// length, the language and SlideComposer's base; 建立 asks SlideComposer (its
+// length, the language and SlideComposer's base; 先看大綱 (primary) or 直接產生 asks SlideComposer (its
 // server, POST /api/todeck) to make the deck from the paper's folder — the paper
 // is only read — then opens SlideComposer on it (LoreLinks, lore-sc://deck/<name>).
 // The styles live here (one script line in index.html, no stylesheet of its own).
@@ -150,8 +150,9 @@ const PCToDeck = (() => {
     const row = h("div", { class: "tdk-row" }, h("span", { class: "tdk-label" }, "底版"));
     const list = h("div", { class: "tdk-bases", role: "radiogroup" }, h("span", { class: "tdk-note" }, "…"));
     row.append(list);
-    const go = h("button", { type: "button", class: "btn primary small", disabled: true, onclick: () => create() }, "建立");
-    card.append(row, h("div", { class: "tdk-foot" }, go));
+    const go = h("button", { type: "button", class: "btn primary small", disabled: true, onclick: () => create(undefined, "review") }, "先看大綱");
+    const direct = h("button", { type: "button", class: "btn small", disabled: true, onclick: () => create(undefined, "direct") }, "直接產生");
+    card.append(row, h("div", { class: "tdk-foot" }, direct, go));
     place();
     let styles;
     try {
@@ -161,6 +162,7 @@ const PCToDeck = (() => {
       if (!card) return;
       list.textContent = "";
       list.append(h("span", { class: "tdk-note" }, "SlideComposer 沒有開啟"));
+      direct.remove();
       go.replaceWith(
         h("button", { type: "button", class: "btn small", onclick: () => LoreLinks.open("sc") }, "開啟 SlideComposer"),
         h("button", { type: "button", class: "btn small", onclick: draw }, "重試"),
@@ -178,13 +180,20 @@ const PCToDeck = (() => {
       } }, st.name || st.id));
     }
     if (want) pref.set("style", want);
-    go.disabled = !styles.length;
+    go.disabled = direct.disabled = !styles.length;
     place();
     go.focus();
   }
 
+  /** SlideComposer's job view: lore-sc://job/<id> in the desktop app, else its page (?job=<id>). */
+  function openJob(id) {
+    const q = encodeURIComponent(id);
+    if (window.LoreDesktop?.openUrl) return window.LoreDesktop.openUrl(`lore-sc://job/${q}`);
+    window.open(`${sc()}/?job=${q}`, "sc-job");
+  }
+
   /** Ask SlideComposer for the deck; `engine` = 改用本機／改用 Claude after a route failed. */
-  async function create(engine) {
+  async function create(engine, mode = "review") {
     if (job || !state.paper) return;
     const name = state.paper.name;
     job = { name };
@@ -193,7 +202,7 @@ const PCToDeck = (() => {
     try {
       const src = await (await fetch(`/api/papers/${encodeURIComponent(name)}/todeck`)).json();
       if (!src.path) throw new Error(src.error ?? "找不到論文資料夾");
-      const body = { source: { kind: "pc", path: src.path }, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), style: pref.get("style"), engine };
+      const body = { source: { kind: "pc", path: src.path }, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), style: pref.get("style"), engine, mode };
       await reach(() => LoreShell.toast("正在開啟 SlideComposer…"));
       let r;
       try {
@@ -202,10 +211,16 @@ const PCToDeck = (() => {
       const v = await r.json().catch(() => ({}));
       if (!r.ok) throw Object.assign(new Error(v.error ?? `SlideComposer：${r.status}`), { alt: v.alternative });
       close();
+      if (v.job) {
+        // the work runs in SlideComposer as a job; open its progress view there
+        openJob(v.job);
+        LoreShell.toast("在 SlideComposer 進行中", { action: { label: "前往", run: () => openJob(v.job) }, ms: 8000 });
+        return;
+      }
       LoreShell.toast(`簡報已建立（${v.slides} 頁）`, { action: { label: "開啟", run: () => LoreLinks.open("sc", { deck: v.name }) }, ms: 8000 });
       LoreLinks.open("sc", { deck: v.name });
     } catch (e) {
-      const action = e.alt ? { label: e.alt.label, run: () => create(e.alt.engine) } : e.open ? { label: "開啟 SlideComposer", run: () => LoreLinks.open("sc") } : null;
+      const action = e.alt ? { label: e.alt.label, run: () => create(e.alt.engine, mode) } : e.open ? { label: "開啟 SlideComposer", run: () => LoreLinks.open("sc") } : null;
       LoreShell.toast(e.message, { err: true, action, ms: 9000 });
     } finally {
       job = null;
