@@ -14,6 +14,27 @@
 | `scan` | 術語掃描：Aho-Corasick（標題＋別名，不分大小寫、英文複數、CJK 不需字界），回傳 UTF-16 位置、狀態、是否第一次出現 |
 | `llm` | `CardAssistant`（起草卡片、抽候選術語）＋ `MockAssistant`（僅測試）；`clean_source` / `draft_prompt` / `parse_draft`：真正的起草由 app 伺服器經 lore-llm 執行 |
 | `kb` | `KnowledgeBase`：create / `create_as(space, fields, via, State::Known)`（新卡直接「記得」：`Progress::new_known`）/ update（revision+1、updated_at）/ trash / restore（從 `trash/` 復原最近一份）/ recall / encounter / share / scan / 查詢 / 資產 |
+| `pending` | 待審區：每個 space 的 `pending/<id>.json`（`p`+ULID）。**不是卡片**：索引、清單、複習、搜尋都不讀。見下 |
+
+### 待審區 API（LoreEcho 在 KnowledgeBase 沒開時直接呼叫）
+
+只需要一個 `Space`（不必開 `KnowledgeBase`）；只寫 `pending/`（丟掉時移到 `trash/pending/`）：
+
+```rust
+let space = lore_store::Space::open(root)?;            // <private>/KnowledgeBase 的 space
+let now = kb_core::SystemClock.now();
+let cards = kb_core::pending::add(&space, now, vec![NewPending {
+    title: "…".into(), summary: "…".into(), body: "…".into(), tags: vec![], kind: "concept".into(), // 空 = concept
+    links: vec![/* Link { to: <既有卡 id>, rel: "related", .. } */], source: "對話標題".into(),
+    from_conversation: Some("conv-id".into()), ..Default::default() }])?; // -> Vec<PendingCard>（含 id）
+kb_core::pending::list(&space); get(&space, id); update(&space, id, NodeFields); discard(&space, id);
+```
+
+`KnowledgeBase` 上同樣有 `pending_add / pending_list / pending_get / pending_update / pending_discard`，另有
+`pending_duplicates(space, &card)`（同標題或別名，不分大小寫）、`pending_accept(space, id, edits)`（成為正式卡，
+狀態 learning，`sources` 記來源；目標不存在的連結丟掉、未知連結型別改 `related`、未知 kind 改 `concept`）、
+`pending_merge(space, id, into_id, edits)`（併入既有卡：標題與別名成為別名、標籤／連結聯集、空摘要補上、不同內文接在後面）。
+檔案欄位：卡片欄位（kind, title, aliases, lang, domains, tags, summary, body, links）＋ `source`、`created`、`from_conversation`。
 
 ## 規則
 

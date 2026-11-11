@@ -352,3 +352,61 @@ fn draft_through_mock_assistant() {
     assert_eq!(d.title.as_deref(), Some("FID"));
     assert_eq!(d.summary.as_deref(), Some("We report FID on 5k samples."));
 }
+
+mod pending_tests {
+    use super::*;
+    use kb_core::NewPending;
+
+    fn np(title: &str) -> NewPending {
+        NewPending { title: title.into(), summary: "s".into(), body: "b".into(), source: "chat".into(), from_conversation: Some("c1".into()), ..Default::default() }
+    }
+
+    #[test]
+    fn storage_and_exclusion() {
+        let mut e = env_as("ellrin");
+        let kb = &mut e.kb;
+        let made = kb.pending_add("me", vec![np("Softmax"), np("Sigmoid")]).unwrap();
+        assert!(e.root.join("personal/pending").join(format!("{}.json", made[0].id)).is_file());
+        assert!(kb.pending_add("me", vec![np("ok"), np("  ")]).is_err());
+        assert_eq!(kb.pending_list(None).unwrap().len(), 2);
+        assert_eq!(kb.pending_list(Some("home")).unwrap().len(), 0);
+        assert!(kb.list(&Filter::default()).unwrap().is_empty());
+        assert!(kb.list(&Filter { q: Some("Softmax".into()), ..Default::default() }).unwrap().is_empty());
+        assert!(kb.due(50).unwrap().is_empty());
+        kb.rebuild().unwrap();
+        assert!(kb.list(&Filter::default()).unwrap().is_empty());
+        assert_eq!(kb.pending_get("me", &made[1].id).unwrap().title, "Sigmoid");
+        assert!(kb.pending_get("me", "../x").is_err());
+    }
+
+    #[test]
+    fn accept_discard_merge() {
+        let mut e = env_as("ellrin");
+        let kb = &mut e.kb;
+        let old = kb.create("me", fields("Softmax", &["SM"]), None).unwrap();
+        let mut a = np("softmax");
+        a.links = vec![Link { to: old.id.clone(), rel: "bogus".into(), extra: Default::default() }, Link { to: "nXXXXXXXXXXXXXXXXXXXXXXXXXX".into(), rel: "related".into(), extra: Default::default() }];
+        a.kind = "nokind".into();
+        let ids = kb.pending_add("me", vec![a, np("Sigmoid"), np("Tanh")]).unwrap();
+        let dups = kb.pending_duplicates("me", &ids[0]).unwrap();
+        assert_eq!(dups.len(), 1);
+        assert_eq!(dups[0].id, old.id);
+        assert!(kb.pending_duplicates("me", &ids[1]).unwrap().is_empty());
+
+        let n = kb.pending_accept("me", &ids[0].id, Some(NodeFields { title: Some("Softmax 2".into()), ..Default::default() })).unwrap();
+        assert_eq!((n.title.as_str(), n.kind.as_str(), n.links.len(), n.links[0].rel.as_str()), ("Softmax 2", "concept", 1, "related"));
+        assert_eq!(n.sources[0].reference, "chat");
+        assert_eq!(kb.progress(&n.id).unwrap().unwrap().state, kb_core::State::Learning);
+        assert!(kb.pending_get("me", &ids[0].id).is_err());
+        assert!(e.root.join("personal/trash/pending").join(format!("{}.json", ids[0].id)).is_file());
+
+        kb.pending_discard("me", &ids[1].id).unwrap();
+        assert!(kb.pending_discard("me", &ids[1].id).is_err());
+
+        let m = kb.pending_merge("me", &ids[2].id, &old.id, None).unwrap();
+        assert!(m.aliases.contains(&"Tanh".to_string()) && m.aliases.contains(&"SM".to_string()));
+        assert_eq!((m.revision, m.summary.as_str(), m.body.as_str()), (2, "s", "b"));
+        assert!(kb.pending_list(None).unwrap().is_empty());
+        assert_eq!(kb.list(&Filter::default()).unwrap().len(), 2);
+    }
+}

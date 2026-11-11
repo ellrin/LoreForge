@@ -12,6 +12,7 @@
 //! - [`scan`]: term scanner (Aho-Corasick over titles + aliases).
 //! - [`llm`]: card drafting / term extraction trait with a mock — the lore-llm
 //!   integration point.
+//! - [`pending`]: 待審區 — `pending/<id>.json` candidates (LoreEcho writes, KnowledgeBase confirms); not nodes.
 //! - [`kb`]: [`KnowledgeBase`], the façade apps use (create / edit / trash / recall /
 //!   share / queries).
 
@@ -22,6 +23,7 @@ pub mod index;
 pub mod kb;
 pub mod llm;
 pub mod node;
+pub mod pending;
 pub mod progress;
 pub mod registry;
 pub mod scan;
@@ -32,6 +34,7 @@ pub use index::{Filter, GraphQuery, GraphView, NodeSummary, TimelineDay};
 pub use kb::{KbOptions, KnowledgeBase, SpaceInfo};
 pub use llm::{CardAssistant, DraftPrompt, DraftRequest, MockAssistant, clean_source, draft_prompt, parse_draft};
 pub use node::{Node, NodeFields};
+pub use pending::{Duplicate, NewPending, PendingCard};
 pub use progress::{Intervals, Outcome, Progress, State};
 pub use registry::Registry;
 pub use scan::{ScanOptions, ScanSpan};
