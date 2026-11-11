@@ -28,6 +28,7 @@
 //! | POST | /api/shell/dialog | `{kind: open\|save, name?}` → `{path}` native dialog (desktop app only, else 501) |
 
 mod export_open;
+pub mod jobs;
 pub mod kbterms;
 pub mod llm;
 mod notation;
