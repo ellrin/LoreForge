@@ -5,7 +5,8 @@
 //! folder, in the same shape. Files are resolved at download time through the
 //! Hugging Face API by suffix, and llama.cpp comes from its latest GitHub
 //! release, so neither exact build names nor download links are hard-coded.
-//! Starting and stopping llama-server is lore-llm's `LocalRuntime`.
+//! The model runs on the machine's one llama-server, shared with every Lore app (lore-llm
+//! `shared_runtime`, docs/local-models.md); downloads stay here.
 //!
 //! Nothing downloads without the user first seeing the plan (file names,
 //! sizes, sources) and confirming it.
@@ -19,7 +20,8 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use lore_llm::catalog::{Catalog, Machine, Model};
-use lore_llm::local::{self, Layout, LocalRuntime, Phase};
+use lore_llm::local::{self, Layout};
+use lore_llm::shared_runtime::{LocalStatus, Priority, SharedRuntime};
 
 /// The shared catalog, or a user override in the app data folder. Without
 /// an override, the descriptions are PaperComposer's own
@@ -301,27 +303,37 @@ pub struct Progress {
 #[derive(Default)]
 pub struct Manager {
     pub progress: Mutex<HashMap<String, Progress>>,
-    /// The llama-server, one at a time: the app restores the last model at
-    /// launch, and a pick from the menu meanwhile would otherwise load two
-    /// large models at once and overflow GPU memory.
-    pub runtime: Arc<LocalRuntime>,
+    /// The machine's shared llama-server (one model at a time for every app; PaperComposer
+    /// no longer owns it). `None` in tests.
+    pub local_rt: Option<Arc<SharedRuntime>>,
     /// Downloading, or why a download or start failed; `None` = the
     /// runtime's own state.
     note: Mutex<Option<String>>,
 }
 
 impl Manager {
+    /// Downloads here, models on the shared llama-server `rt` (`None`: tests).
+    pub fn with_runtime(rt: Option<Arc<SharedRuntime>>) -> Manager {
+        Manager { local_rt: rt, ..Manager::default() }
+    }
+
     /// "idle" | "downloading" | "starting" | "ready" | "error: …"
     pub async fn phase(&self) -> String {
         if let Some(n) = self.note.lock().await.clone() {
             return n;
         }
-        match self.runtime.phase() {
-            Phase::Idle => "idle".into(),
-            Phase::Starting { .. } => "starting".into(),
-            Phase::Ready { .. } => "ready".into(),
-            Phase::Error { message } => format!("error: {message}"),
+        let Some(rt) = &self.local_rt else { return "idle".into() };
+        match rt.snapshot().await.status {
+            LocalStatus::Loading { .. } | LocalStatus::Switching { .. } => "starting".into(),
+            LocalStatus::Loaded { .. } => "ready".into(),
+            LocalStatus::Off | LocalStatus::Waiting { .. } => "idle".into(),
         }
+    }
+
+    /// The loaded model and its URL (any app may have loaded it).
+    pub async fn running(&self) -> Option<(String, String)> {
+        let s = self.local_rt.as_ref()?.snapshot().await.registry.server?;
+        (!s.loading).then_some((s.model, s.url))
     }
 
     pub async fn note(&self, n: Option<String>) {
@@ -415,11 +427,14 @@ pub async fn install(mgr: Arc<Manager>, plan: Plan) -> Result<(), String> {
     Ok(())
 }
 
-/// Start llama-server for a downloaded model; returns its /v1 base URL once it answers.
+/// Load a downloaded model on the shared llama-server now (switching when another model is
+/// loaded and free, or waiting for it); returns its /v1 base URL once it answers.
 pub async fn start(mgr: &Manager, cat: &Catalog, id: &str) -> Result<String, String> {
     let m = cat.brains(true).find(|m| m.id == id).ok_or("目錄裡沒有這個模型")?;
     mgr.note(None).await;
-    mgr.runtime.ensure_in(&layout(), m).await.map(|r| r.url)
+    let rt = mgr.local_rt.as_ref().ok_or("沒有本機模型伺服器")?;
+    let ticket = rt.acquire(&layout(), m, Priority::Interactive).await?;
+    Ok(ticket.url.clone())
 }
 
 static MANAGER: std::sync::OnceLock<Arc<Manager>> = std::sync::OnceLock::new();
@@ -428,17 +443,19 @@ pub fn register(mgr: Arc<Manager>) {
     let _ = MANAGER.set(mgr);
 }
 
-/// Synchronous stop for app exit: the desktop shell calls this so the model
-/// server never outlives the window.
-pub fn kill_runtime() {
-    if let Some(mgr) = MANAGER.get() {
-        mgr.runtime.kill_now();
-    }
+/// At quit (synchronous, for the desktop shell): this app's lease goes; the shared server
+/// stops only when no other app uses it.
+pub fn quit() {
+    SharedRuntime::shutdown_process();
 }
 
-pub async fn stop(mgr: &Manager) {
-    mgr.runtime.stop().await;
+/// Free the memory now: stop the shared server, unless another app uses it (then why).
+pub async fn stop(mgr: &Manager) -> Result<(), String> {
     mgr.note(None).await;
+    match &mgr.local_rt {
+        Some(rt) => rt.release().await,
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -493,7 +510,7 @@ mod tests {
         assert_eq!(m.phase().await, "idle");
         m.note(Some("downloading".into())).await;
         assert_eq!(m.phase().await, "downloading");
-        stop(&m).await;
+        stop(&m).await.unwrap();
         assert_eq!(m.phase().await, "idle");
     }
 

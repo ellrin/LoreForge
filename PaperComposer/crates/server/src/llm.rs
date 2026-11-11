@@ -24,7 +24,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 use lore_llm::catalog::Catalog;
 use lore_llm::claude_code::{Cache, Cli};
-use lore_llm::local::{Layout, LocalRuntime};
+use lore_llm::local::Layout;
+use lore_llm::shared_runtime::{LocalStatus, Priority, SharedRuntime};
 use lore_llm::router::{ApiAccess, CLAUDE_SELECTED, ExternalServer, LOCAL_CURRENT, LocalAccess, StandardFactory, SubscriptionAccess};
 use lore_llm::secrets::{Account, KeySource, SharedKeys};
 use lore_llm::{LlmRequest, Route, RouteOptions, Router, TaskTable};
@@ -102,8 +103,10 @@ pub struct Llm {
     pub cli: Cli,
     /// Claude Code login status, refreshed at most once a minute.
     pub cc: Arc<Cache>,
-    /// The llama-server for a downloaded model (one at a time).
-    pub runtime: Arc<LocalRuntime>,
+    /// The machine's shared llama-server (lore-llm `shared_runtime`; `None` in tests).
+    pub local_rt: Option<Arc<SharedRuntime>>,
+    /// Where the shared model choice is kept (`private/shared/engine.toml` `[engine] model`).
+    shared: RwLock<Option<lore_home::Home>>,
     /// Where models and llama.cpp live (LOCAL_LLM_HOME, or the app's own folders).
     pub layout: Layout,
     /// An external server from config.toml or the environment.
@@ -115,7 +118,7 @@ pub struct Llm {
 }
 
 impl Llm {
-    pub fn new(catalog: Catalog, tasks: TaskTable, runtime: Arc<LocalRuntime>, layout: Layout, external: EngineConfig, model: Option<String>) -> Llm {
+    pub fn new(catalog: Catalog, tasks: TaskTable, local_rt: Option<Arc<SharedRuntime>>, layout: Layout, external: EngineConfig, model: Option<String>) -> Llm {
         let model = model.filter(|m| !m.trim().is_empty()).unwrap_or_else(|| catalog.cloud.default.clone());
         Llm {
             catalog,
@@ -123,7 +126,8 @@ impl Llm {
             keys: SharedKeys::for_app(SERVICE, None),
             cli: Cli::default(),
             cc: Arc::new(Cache::default()),
-            runtime,
+            local_rt,
+            shared: RwLock::new(None),
             layout,
             external: RwLock::new(external),
             model: RwLock::new(model),
@@ -178,9 +182,19 @@ impl Llm {
         }
     }
 
-    /// A local engine is connected: an external server, or a running model.
+    /// Read the shared model choice from `home` (re-read on every call).
+    pub fn share_engine(&self, home: lore_home::Home) {
+        *self.shared.write().unwrap_or_else(|e| e.into_inner()) = Some(home);
+    }
+
+    /// `engine.toml` `[engine]`: the shared default model ids.
+    pub fn shared_engine(&self) -> lore_home::engine::SharedEngine {
+        self.shared.read().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|h| h.engine()).unwrap_or_default()
+    }
+
+    /// A local engine to ask: an external server, or a chosen model on the shared llama-server.
     pub async fn local_configured(&self) -> bool {
-        self.external().is_some() || self.runtime.current().await.is_some()
+        self.external().is_some() || (self.local_rt.is_some() && self.shared_engine().model.is_some())
     }
 
     pub async fn ready(&self, e: EngineChoice) -> bool {
@@ -195,10 +209,13 @@ impl Llm {
     /// catalog models from the model folder; Taiwan usage, abliterated
     /// models allowed.
     fn local_access(&self) -> LocalAccess {
+        let e = self.shared_engine();
         LocalAccess {
             layout: Some(self.layout.clone()),
             external: self.external(),
-            runtime: Some(self.runtime.clone()),
+            shared: self.local_rt.clone(),
+            default_model: e.model,
+            vision_model: e.vision_model,
             zh_tw: true,
             include_uncensored: true,
             ..Default::default()
@@ -207,16 +224,24 @@ impl Llm {
 
     /// Status light for the local engine.
     pub async fn local_status(&self) -> EngineStatus {
-        let name = match (self.external(), self.runtime.current_info().await) {
-            (Some(ext), _) => ext.model.unwrap_or_else(|| "本機模型".into()),
-            (None, Some(run)) => self.catalog.get(&run.model_id).map(|m| format!("{} {}", m.name, m.variant)).unwrap_or(run.model_id),
-            (None, None) => return EngineStatus { connected: false, name: "未連接模型".into() },
-        };
-        let connected = match self.local_access().current(&self.catalog).await {
-            Ok(p) => p.ping().await,
-            Err(_) => false,
-        };
-        EngineStatus { connected, name }
+        let label = |id: &str| self.catalog.get(id).map(|m| format!("{} {}", m.name, m.variant)).unwrap_or_else(|| id.to_string());
+        if let Some(ext) = self.external() {
+            let connected = match self.local_access().current(&self.catalog).await {
+                Ok(p) => p.ping().await,
+                Err(_) => false,
+            };
+            return EngineStatus { connected, name: ext.model.unwrap_or_else(|| "本機模型".into()) };
+        }
+        let chosen = self.shared_engine().model;
+        let Some(rt) = &self.local_rt else { return EngineStatus { connected: false, name: "未連接模型".into() } };
+        let snap = rt.snapshot().await;
+        match (&snap.status, chosen) {
+            // loaded (by any app): ready to answer
+            (LocalStatus::Loaded { model }, _) => EngineStatus { connected: true, name: label(model) },
+            // chosen, loads on the first request (or waits / loads now): the same words as every app
+            (st, Some(m)) => EngineStatus { connected: false, name: format!("{} · {}", label(&m), st.text(&self.catalog)) },
+            (_, None) => EngineStatus { connected: false, name: "未連接模型".into() },
+        }
     }
 
     /// Engines for the current settings.
@@ -232,8 +257,10 @@ impl Llm {
 
     /// The engine for a task. A choice from the engine switch is that
     /// engine or nothing (the reason); without one the task's order decides.
+    /// Every call here answers an open request (a generate button, a draft step), so a local
+    /// model is asked at interactive priority.
     pub async fn route(&self, task: &str, choice: Option<EngineChoice>) -> Result<Route, String> {
-        let opts = choice.map(|c| RouteOptions::only(c.model_ref())).unwrap_or_default();
+        let opts = choice.map(|c| RouteOptions::only(c.model_ref())).unwrap_or_default().with_priority(Priority::Interactive);
         let router = Router::new(self.tasks.clone(), self.factory());
         router.provider_for_with(task, &opts).await.map_err(|e| route_error(&e, choice.is_some()))
     }
@@ -242,7 +269,7 @@ impl Llm {
     /// no fallback: the draft window's model picker.
     pub async fn complete_on(&self, task: &str, model_ref: &str, prompt: &Prompt, extra: Option<&str>, schema: Option<serde_json::Value>) -> Result<String, String> {
         let router = Router::new(self.tasks.clone(), self.factory());
-        let route = router.provider_for_with(task, &RouteOptions::only(model_ref)).await.map_err(|e| route_error(&e, true))?;
+        let route = router.provider_for_with(task, &RouteOptions::only(model_ref).with_priority(Priority::Interactive)).await.map_err(|e| route_error(&e, true))?;
         route.provider.complete(&request(&route, prompt, extra, schema)).await.map_err(|e| e.to_string())
     }
 
@@ -286,7 +313,7 @@ mod tests {
     fn llm(external: Option<String>) -> Arc<Llm> {
         let tasks = Llm::task_table(None).unwrap();
         let home = std::env::temp_dir().join(format!("pc-llm-{}", std::process::id()));
-        let mut l = Llm::new(Catalog::bundled(), tasks, Arc::new(LocalRuntime::new()), Layout::shared(&home), EngineConfig { url: external, model: None }, Some("claude-haiku-5-5".into()));
+        let mut l = Llm::new(Catalog::bundled(), tasks, None, Layout::shared(&home), EngineConfig { url: external, model: None }, Some("claude-haiku-5-5".into()));
         l.keys.isolate(); // never the real keychain in tests
         l.cli = Cli { bin: Some(std::env::temp_dir().join("pc-no-such-claude")), config_dir: None };
         Arc::new(l)

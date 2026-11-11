@@ -575,7 +575,7 @@ async fn engines_status(State(s): State<Shared>, AxQuery(f): AxQuery<Fresh>) -> 
         .filter(|m| have.contains(&m.id))
         .map(|m| serde_json::json!({ "id": m.id, "name": m.name, "variant": m.variant, "summary": m.summary, "uncensored": m.uncensored }))
         .collect();
-    let running = s.models.runtime.current().await.map(|r| r.0);
+    let running = s.models.running().await.map(|r| r.0);
     Json(serde_json::json!({
         "local": { "configured": s.llm.local_configured().await, "status": s.llm.local_status().await, "models": local_models, "running": running },
         "subscription": { "configured": cc.ready, "status": cc },
@@ -2937,7 +2937,7 @@ async fn setup_status(State(s): State<Shared>) -> impl IntoResponse {
     let recommended = models::recommend(cat, &sys);
     let pool = sys.memory_gb.max(sys.gpu_memory_gb.unwrap_or(0.0)) as f64;
     let installed = models::installed(cat);
-    let running = s.models.runtime.current().await.map(|r| r.0);
+    let running = s.models.running().await.map(|r| r.0);
     Json(serde_json::json!({
         "first_run": !env_ws && cfg.workspace_path.is_none() && cfg.profile_path.is_none(),
         "config_path": config_path().map(|p| p.display().to_string()),
@@ -3141,12 +3141,14 @@ async fn model_plan(State(s): State<Shared>, Json(b): Json<ModelBody>) -> impl I
     }
 }
 
-/// Start a downloaded model; it becomes the local engine in place of any
-/// external server until it is stopped.
+/// Pick a downloaded model: it becomes the shared default (`engine.toml` `[engine] model`,
+/// every app's `local:current`) in place of any external server, and is loaded now on the
+/// machine's shared llama-server.
 async fn activate(s: &Shared, id: &str) -> Result<(), String> {
-    models::start(&s.models, &s.llm.catalog, id).await?;
+    loreforge_home().set_engine_model(Some(id)).map_err(|e| format!("無法儲存本機模型：{e}"))?;
     s.llm.set_external(EngineConfig::default());
-    write_config_value("model", "active", id)
+    write_config_value("model", "active", id)?;
+    models::start(&s.models, &s.llm.catalog, id).await.map(|_| ())
 }
 
 /// Re-plans on the server (the client never supplies URLs), downloads, then starts.
@@ -3172,7 +3174,7 @@ async fn model_install(State(s): State<Shared>, Json(b): Json<ModelBody>) -> imp
 
 async fn model_progress(State(s): State<Shared>) -> impl IntoResponse {
     let files: Vec<models::Progress> = s.models.progress.lock().await.values().cloned().collect();
-    let running = s.models.runtime.current().await.map(|r| (r.0, r.1));
+    let running = s.models.running().await;
     Json(serde_json::json!({ "phase": s.models.phase().await, "files": files, "running": running }))
 }
 
@@ -3184,25 +3186,21 @@ async fn model_start(State(s): State<Shared>, Json(b): Json<ModelBody>) -> impl 
 }
 
 async fn model_stop(State(s): State<Shared>) -> impl IntoResponse {
-    models::stop(&s.models).await;
+    if let Err(e) = models::stop(&s.models).await {
+        return (StatusCode::CONFLICT, e).into_response();
+    }
     s.llm.set_external(EngineConfig::resolve(read_config().engine));
-    StatusCode::NO_CONTENT
+    StatusCode::NO_CONTENT.into_response()
 }
 
 pub fn router(paths: Paths) -> Router {
     let cfg = read_config();
     let engine_cfg = EngineConfig::resolve(cfg.engine);
     let external = engine_cfg.url.is_some();
-    let manager = Arc::new(models::Manager::default());
-    // the other Lore apps use the model PaperComposer runs (private/shared/engine.toml, lore-home)
-    manager.runtime.on_phase(Arc::new(|p: &lore_llm::local::Phase| {
-        let shared = loreforge_home();
-        let _ = match p {
-            lore_llm::local::Phase::Ready { model, url } => shared.set_engine(Some(url), Some(model)),
-            lore_llm::local::Phase::Idle | lore_llm::local::Phase::Error { .. } => shared.set_engine(None, None),
-            lore_llm::local::Phase::Starting { .. } => Ok(()),
-        };
-    }));
+    // the machine's one llama-server, shared with every Lore app (lore-llm shared_runtime):
+    // PaperComposer no longer owns it; tests and the isolated example never touch it
+    let local_rt = if cfg!(test) || engines_isolated() { None } else { lore_llm::shared_runtime::SharedRuntime::process("pc") };
+    let manager = Arc::new(models::Manager::with_runtime(local_rt.clone()));
     let catalog = models::catalog();
     // The app's tasks, and the user's overrides when their file is readable.
     let user_tasks = config_path().map(|p| p.with_file_name("tasks.toml"));
@@ -3210,7 +3208,8 @@ pub fn router(paths: Paths) -> Router {
         eprintln!("{e}");
         Llm::task_table(None).expect("bundled tasks.toml is valid")
     });
-    let llm = Llm::new(catalog, tasks, manager.runtime.clone(), models::layout(), engine_cfg, cfg.claude.and_then(|c| c.model));
+    let llm = Llm::new(catalog, tasks, local_rt, models::layout(), engine_cfg, cfg.claude.and_then(|c| c.model));
+    llm.share_engine(loreforge_home());
     let state: Shared = Arc::new(AppState {
         loaded: RwLock::new(load(&paths)),
         llm: Arc::new(llm),
@@ -3219,16 +3218,14 @@ pub fn router(paths: Paths) -> Router {
         soft_cache: Default::default(),
     });
     models::register(state.models.clone());
-    // Start the chosen local model with the app, unless an external engine is set.
-    if let (false, Some(id)) = (external, cfg.model.and_then(|m| m.active)) {
-        if models::installed(&state.llm.catalog).contains(&id) {
-            let s = state.clone();
-            tokio::spawn(async move {
-                if let Err(e) = activate(&s, &id).await {
-                    eprintln!("local model: {e}");
-                }
-            });
-        }
+    // The model loads when a task needs it (any app may start the shared server). Once:
+    // the model this app used to start at launch becomes the shared default when none is set.
+    if let (false, Some(id), true) = (external, cfg.model.and_then(|m| m.active), state.llm.local_rt.is_some())
+        && state.llm.shared_engine().model.is_none()
+        && models::installed(&state.llm.catalog).contains(&id)
+        && let Err(e) = loreforge_home().set_engine_model(Some(&id))
+    {
+        eprintln!("local model: {e}");
     }
     Router::new()
         .route("/prefs.css", get(prefs_css))
@@ -3366,14 +3363,22 @@ pub fn router(paths: Paths) -> Router {
 /// real engine.toml routing.
 fn engines_settings(state: &Shared) -> lore_engines::Engines {
     let mut e = lore_engines::Engines::new(loreforge_home(), "PaperComposer", include_str!("../tasks.toml"))
-        .runtime(state.llm.runtime.clone(), state.llm.layout.clone())
+        .layout(state.llm.layout.clone())
         .cli(state.llm.cli.clone(), state.llm.cc.clone())
         .claude_model(Some(state.llm.model()));
     e.include_uncensored = true;
-    if cfg!(test) || std::env::var_os("PAPERCOMPOSER_ENGINES_ISOLATED").is_some() {
+    if cfg!(test) || engines_isolated() {
         e.install_routing = false;
+    } else if let Some(rt) = state.llm.local_rt.clone() {
+        e = e.shared(rt); // 本機 status, 釋放, and this app's share of the idle checks
     }
     e
+}
+
+/// `PAPERCOMPOSER_ENGINES_ISOLATED` (tests, the isolated example): no shared settings
+/// routing and no shared llama-server.
+fn engines_isolated() -> bool {
+    std::env::var_os("PAPERCOMPOSER_ENGINES_ISOLATED").is_some()
 }
 
 /// Bind on 127.0.0.1 (port 0 = any free port) and return the bound address

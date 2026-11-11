@@ -159,8 +159,8 @@ fn main() {
         .expect("error while building PaperComposer")
         .run(|app, event| {
             if let RunEvent::Exit = event {
-                // The local model server must not outlive the app.
-                pc_server::models::kill_runtime();
+                // this app's hold on the shared local model goes (the last user stops the server)
+                pc_server::models::quit();
                 return;
             }
             #[cfg(any(target_os = "macos", target_os = "ios"))]
