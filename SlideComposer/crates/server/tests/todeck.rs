@@ -76,6 +76,7 @@ We grade synthetic lesions in two stages: an encoder finds them, a fusion step w
 \end{abstract}
 \section{Introduction}
 Grading synthetic lesions by hand is slow \cite{ellrin2025synthetic}.
+A Lesion Grading Network (LGN) needs experts; the LGN is slow.
 \section{Method}
 The pipeline in Fig.~\ref{fig:arch} has three modules: encoder, fusion and decoder.
 \begin{figure}[t]
@@ -422,10 +423,14 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     assert_eq!(stages.iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["source", "notation", "terms", "profile", "outline", "review", "slides", "polish"]);
     assert_eq!(stages[0]["counts"], json!({ "fig": 1, "figTotal": 1, "table": 1, "eq": 1, "sections": 4, "refs": 1 }));
     assert_eq!(stages[1]["counts"]["entries"], 1);
-    assert_eq!(stages[2]["counts"], json!({ "terms": 0, "unknown": 0 }));
+    // 不熟: no KnowledgeBase here, so every term is unfamiliar
+    let unknown = stages[2]["counts"]["unknown"].as_u64().unwrap();
+    assert!(unknown >= 1 && stages[2]["counts"]["terms"].as_u64().unwrap() >= unknown, "{}", stages[2]);
     assert!(stages[4]["chars"].as_u64().unwrap() > 100, "the plan was streamed: {}", stages[4]);
     assert_eq!(stages[5]["state"], "running");
     let rv = &v["review"];
+    let lgn = rv["unknown"].as_array().unwrap().iter().find(|t| t["term"].as_str().unwrap().contains("Lesion Grading Network")).cloned().unwrap_or_else(|| panic!("{}", rv["unknown"]));
+    assert!(lgn["n"].as_u64().unwrap() >= 1);
     assert_eq!(rv["outline"].as_array().unwrap().len(), 12);
     assert_eq!(rv["outline"][2], json!({ "id": "s3", "kind": "overview", "title": "Big picture", "figs": ["fig1"], "point": "" }));
     let thumb = rv["figures"][0]["thumb"].as_str().unwrap().to_string();
@@ -445,7 +450,8 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     let mut rows: Vec<Value> = rv["outline"].as_array().unwrap().iter().filter(|r| r["kind"] != "opinion").cloned().collect();
     let res_row = rows.iter_mut().find(|r| r["kind"] == "results").unwrap();
     res_row["title"] = json!("What the numbers say");
-    let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/review"), Some(json!({ "outline": rows, "answers": { "audience": "lab", "mainFig": null, "modules": null, "opinion": null }, "known": [], "remember": false })), None).await;
+    // 我懂 on the network: its marks never appear
+    let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/review"), Some(json!({ "outline": rows, "answers": { "audience": "lab", "mainFig": null, "modules": null, "opinion": null }, "known": [lgn["term"]], "remember": false })), None).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     let v = job_until(&app, &id, "done", |v| v["state"] == "done").await;
     let name = v["deck"].as_str().unwrap().to_string();
@@ -455,6 +461,9 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     assert_eq!(d["deck"]["slides"].as_array().unwrap().len(), 13, "11 planned, the big picture as 3");
     let text = all_text(&d["deck"]);
     assert!(text.contains("What the numbers say") && !text.contains("Some opinions"));
+    assert_eq!(v["stages"][2]["counts"]["unknown"].as_u64().unwrap(), unknown - 1, "我懂 updated the terms");
+    let saved: Value = serde_json::from_slice(&std::fs::read(shared.ws.decks.join(&name).join("terms.json")).unwrap()).unwrap();
+    assert!(saved["terms"].as_array().unwrap().iter().any(|t| t["text"] == lgn["term"] && t["understood"] == true), "{saved}");
     // a second review is refused
     let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/review"), Some(json!({ "skip": true })), None).await;
     assert_eq!(st, StatusCode::CONFLICT);
@@ -467,7 +476,7 @@ async fn direct_skips_the_review() {
     let ws = workspace(dir.path());
     let home = lore_home::Home::at(dir.path().join("home"));
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
-    let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![plan("is slow").to_string()])));
+    let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![plan("with the LGN").to_string()])));
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
     let body = json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "lang": "en", "direct": true });
@@ -477,6 +486,9 @@ async fn direct_skips_the_review() {
     let v = job_until(&app, &id, "done", |v| v["state"] == "done").await;
     assert_eq!(v["stages"][5]["skipped"], true);
     assert_eq!(v["result"]["notation"], 1);
+    assert!(v["result"]["unknown"].as_u64().unwrap() >= 1);
+    let (_, d, _) = call(&app, "GET", &format!("/api/decks/{}", v["deck"].as_str().unwrap()), None, None).await;
+    assert!(d.to_string().contains("\"em\":\"learn\""), "the unfamiliar LGN is marked");
     assert!(shared.ws.deck_names().iter().any(|d| d.name == v["deck"].as_str().unwrap()));
     let (st, r, _) = call(&app, "GET", &format!("/api/todeck/jobs/{id}/stages/review"), None, None).await;
     assert_eq!((st, r), (StatusCode::OK, json!({ "skipped": true })));

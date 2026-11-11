@@ -239,6 +239,21 @@ impl Job {
         self.checkpoint(stage).map(|mut c| c["output"].take())
     }
 
+    /// Rewrite a finished stage's output (e.g. the author's 我懂 on the terms) and its counts;
+    /// the rest of its checkpoint stays.
+    pub fn replace_output(&self, stage: &str, output: Value, counts: Value) -> std::io::Result<()> {
+        let mut cp = self.checkpoint(stage).ok_or_else(|| std::io::Error::other("no checkpoint"))?;
+        cp["output"] = output;
+        cp["counts"] = counts.clone();
+        write_json(&self.stage_file(stage), &cp)?;
+        self.stage_edit(stage, true, |s| {
+            if let Value::Object(m) = counts {
+                s.counts = m;
+            }
+        });
+        Ok(())
+    }
+
     /// Stop the current run (the stage's future is dropped; an in-flight request aborts).
     pub fn cancel(&self) {
         self.cancel.fire();

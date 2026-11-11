@@ -319,6 +319,13 @@ async fn review(State(s): State<Shared>, UrlPath(id): UrlPath<String>, body: Opt
         return err(StatusCode::BAD_REQUEST, "outline 要是陣列");
     }
     let js = jobs(&s);
+    if job.is_running() || job.status() != jobs::status::REVIEW {
+        return err(StatusCode::CONFLICT, "這個工作沒有在等微調");
+    }
+    let notes = stages::review_terms(&job, &b).await;
+    if !notes.is_empty() {
+        b["notes"] = json!(notes);
+    }
     match js.submit(&job, "review", b) {
         Ok(()) => Json(js.view(&job)).into_response(),
         Err(m) => err(StatusCode::CONFLICT, m),

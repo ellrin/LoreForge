@@ -214,7 +214,7 @@ async fn terms_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageErro
     let n: NotationOut = typed(cx, "notation")?;
     let home = s.home.clone();
     let out = tokio::task::spawn_blocking(move || terms::terms(&terms::TermsInput { material: &m, notation: &n.doc, home: &home })).await.map_err(join_err)?;
-    cx.counts(json!({ "terms": out.terms.len(), "unknown": out.terms.iter().filter(|t| t.unknown).count() }));
+    cx.counts(json!({ "terms": out.total, "unknown": out.unfamiliar }));
     to_value(&out)
 }
 
@@ -264,6 +264,8 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     let m = material(cx, true)?;
     let n: NotationOut = typed(cx, "notation")?;
     let o: OutlineOut = typed(cx, "outline")?;
+    // the terms as the review left them (我懂 already applied)
+    let tr: terms::TermsResult = typed(cx, "terms").unwrap_or_default();
     let review = cx.output("review").unwrap_or(json!({ "skipped": true }));
     let main_before = o.plan.slides.iter().find(|s| s.role == "overview").map(|s| s.figure.clone());
     let plan = apply_review(o.plan, &review, &m);
@@ -274,13 +276,13 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     cx.counts(json!({ "slide": 0, "slides": total }));
     let count = cx.counter();
     let (s, dir, engine) = (s.clone(), cx.dir().to_path_buf(), o.engine);
-    tokio::task::spawn_blocking(move || make_deck(&s, &dir, &p, &m, &n, &plan, boxes, &engine, &|i, t| count(json!({ "slide": i, "slides": t })))).await.map_err(join_err)?
+    tokio::task::spawn_blocking(move || make_deck(&s, &dir, &p, &m, &n, &plan, &tr, boxes, &engine, &|i, t| count(json!({ "slide": i, "slides": t })))).await.map_err(join_err)?
 }
 
 /// The deck from the plan (blocking: pandoc, files). A crash half-way leaves the deck's name
 /// in `slides.pending`; the next try removes that half-made deck first.
 #[allow(clippy::too_many_arguments)]
-fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut, plan: &Plan, boxes: Vec<ModuleBox>, engine: &str, progress: &dyn Fn(usize, usize)) -> Result<Value, StageError> {
+fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut, plan: &Plan, tr: &terms::TermsResult, boxes: Vec<ModuleBox>, engine: &str, progress: &dyn Fn(usize, usize)) -> Result<Value, StageError> {
     let pending = dir.join("slides.pending");
     if let Ok(old) = std::fs::read_to_string(&pending) {
         let old = old.trim();
@@ -303,6 +305,14 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
                 .map_err(|e| StageError::new(422, e))?
         };
         let mut slides = built.slides;
+        // 不熟: learn marks on the unfamiliar terms (whole sentences in background / method
+        // narration), before the big picture is split so its steps keep them
+        let matcher = tr.matcher();
+        if !matcher.is_empty() {
+            for (sl, ps) in slides.iter_mut().zip(&plan.slides) {
+                crate::kbterms::mark_slide(sl, &matcher, crate::kbterms::sentence_role(&ps.role));
+            }
+        }
         // the big picture, one slide per numbered step
         if let Some((idx, steps)) = &built.reveal {
             let rules = st.pack.ghost.clone();
@@ -318,6 +328,7 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
         }
         sess.editor.apply(ops, "論文報告").map_err(|e| api(e.into()))?;
         sess.save().map_err(|e| api(e.into()))?;
+        crate::kbterms::save_terms(&sess.dir, tr).map_err(|e| StageError::new(500, e.to_string()))?;
         // the paper's notation, with its ids, into the deck's own file
         let (_, mut doc) = crate::notation::load(&sess.dir, None);
         let mut added = 0;
@@ -336,6 +347,7 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
             "engine": crate::llm::engine_label(engine),
             "boxes": boxes.len(),
             "notation": added,
+            "unknown": tr.unfamiliar,
             "warnings": built.warnings,
         }))
     })();
@@ -401,9 +413,40 @@ fn review_view(job: &Job) -> Value {
     let thumb = |f: &super::source::Fig| f.image.as_ref().filter(|im| !im.file.is_empty()).map(|im| format!("/api/todeck/jobs/{}/img/{}", job.id, im.file));
     let mut figures: Vec<Value> = m.figures.iter().enumerate().map(|(i, f)| json!({ "id": f.id, "label": format!("圖 {}", i + 1), "caption": f.caption, "thumb": thumb(f) })).collect();
     figures.extend(m.tables.iter().enumerate().map(|(i, f)| json!({ "id": f.id, "label": format!("表 {}", i + 1), "caption": f.caption, "thumb": thumb(f) })));
-    let terms: terms::TermsOutput = job.output("terms").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
-    let unknown: Vec<Value> = terms.terms.iter().filter(|t| t.unknown).map(|t| json!({ "term": t.term, "n": t.n })).collect();
+    let terms: terms::TermsResult = job.output("terms").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+    let unknown: Vec<Value> = terms.terms.iter().filter(|t| t.unfamiliar()).map(|t| json!({ "term": t.text, "n": t.count })).collect();
     json!({ "outline": outline, "figures": figures, "unknown": unknown })
+}
+
+/// 我懂 from the review window, before the slides are made: the terms checkpoint marks them
+/// `understood`; with `remember` each one is also saved in KnowledgeBase as 記得 (its own card
+/// when it has one). Returns one line per term saving that failed.
+pub async fn review_terms(job: &Job, review: &Value) -> Vec<String> {
+    let known: Vec<String> = review["known"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
+    if known.is_empty() {
+        return vec![];
+    }
+    let Some(mut tr) = job.output("terms").and_then(|v| serde_json::from_value::<terms::TermsResult>(v).ok()) else { return vec![] };
+    for k in &known {
+        tr.understood(k);
+    }
+    if let Ok(v) = serde_json::to_value(&tr)
+        && let Err(e) = job.replace_output("terms", v, json!({ "terms": tr.total, "unknown": tr.unfamiliar }))
+    {
+        return vec![format!("無法更新名詞：{e}")];
+    }
+    let mut notes = vec![];
+    if review["remember"] == true {
+        let base = crate::kbterms::kb_url();
+        for k in &known {
+            let card = tr.terms.iter().find(|t| t.understood && (t.text == *k || t.key == *k || t.forms.iter().any(|f| f == k))).and_then(|t| t.card.clone());
+            if let Err(e) = crate::kbterms::save_known(&base, k, card.as_deref()).await {
+                notes.push(e);
+                break; // KnowledgeBase not open: once is enough
+            }
+        }
+    }
+    notes
 }
 
 /// The plan after the author's review (docs/paper-deck.md "API", 微調): rows reordered,
