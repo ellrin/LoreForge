@@ -6,15 +6,15 @@
 //! [`LlmFail`]: lore-llm's JSON payload with the one-click alternative (「改用本機」…).
 //!
 //! The local engine (`local:current`): config.toml `[engine]` / `LOREREADER_LLM_URL`, else
-//! the engine all LoreForge apps share, `private/shared/engine.toml` `[engine] url / model`
-//! (`lore_home::engine`, re-read on every call: the server may change port).
+//! the model all LoreForge apps share (`private/shared/engine.toml` `[engine] model`, re-read on
+//! every call) on the machine's one llama-server (lore-llm `shared_runtime`, docs/local-models.md).
 
 use std::sync::Arc;
 
 use lore_llm::catalog::Catalog;
 use lore_llm::claude_code::{Cache, Cli};
-use lore_llm::local::LocalRuntime;
 use lore_llm::router::{ApiAccess, ExternalServer, LocalAccess, StandardFactory, SubscriptionAccess};
+use lore_llm::shared_runtime::SharedRuntime;
 use lore_llm::secrets::{Account, SharedKeys};
 use lore_llm::{LlmRequest, RouteOptions, Router, TaskTable};
 use lr_core::config::EngineConfig;
@@ -22,6 +22,14 @@ use lr_core::config::EngineConfig;
 pub const TASKS: &str = include_str!("../tasks.toml");
 pub const SERVICE: &str = "LoreReader";
 pub const LOCAL_TEMPERATURE: f32 = 0.2;
+/// Short name in the shared local-model registry (and `ports.json`).
+pub const APP: &str = "lr";
+
+/// At quit: this app's hold on the shared local model goes; the server stops when no other
+/// app uses it.
+pub fn quit() {
+    SharedRuntime::shutdown_process();
+}
 
 pub struct Llm {
     pub catalog: Catalog,
@@ -29,10 +37,11 @@ pub struct Llm {
     pub keys: SharedKeys,
     pub cli: Cli,
     pub cc: Arc<Cache>,
-    runtime: Arc<LocalRuntime>,
+    /// The machine's shared llama-server (`None`: isolated).
+    pub local_rt: Option<Arc<SharedRuntime>>,
     external: Option<ExternalServer>,
-    /// Where the shared engine is kept (`private/shared/engine.toml`), used when the
-    /// app's own config names none.
+    /// Where the shared model choice is kept (`private/shared/engine.toml`), used when the
+    /// app's own config names no server.
     shared: Option<lore_home::Home>,
     model: String,
     base_url: String,
@@ -76,7 +85,7 @@ impl Llm {
             keys: SharedKeys::for_app(SERVICE, None),
             cli: Cli::default(),
             cc: Arc::new(Cache::default()),
-            runtime: Arc::new(LocalRuntime::new()),
+            local_rt: SharedRuntime::process(APP),
             external: engine.url.clone().map(|url| ExternalServer { url, model: engine.model.clone() }),
             shared: None,
             model,
@@ -88,6 +97,7 @@ impl Llm {
     pub fn isolate(&mut self) {
         self.keys.isolate();
         self.cli = Cli { bin: Some(std::env::temp_dir().join("lr-no-such-claude")), config_dir: None };
+        self.local_rt = None;
     }
 
     /// The app's tasks over lore-llm's shared ones, then the user's file.
@@ -96,21 +106,24 @@ impl Llm {
         TaskTable::load(base, user_file.filter(|p| p.is_file()))
     }
 
-    /// Use the shared engine of `home` when the app's own config names none.
+    /// Use the shared model choice of `home` when the app's own config names no server.
     pub fn share_engine(&mut self, home: lore_home::Home) {
         self.shared = Some(home);
     }
 
-    /// The local server: the app's own `[engine]`, else the shared one.
+    /// The app's own server (`[engine]` / `LOREREADER_LLM_URL`), when set.
     pub fn external(&self) -> Option<ExternalServer> {
-        self.external.clone().or_else(|| {
-            let e = self.shared.as_ref()?.engine()?;
-            Some(ExternalServer { url: e.url?, model: e.model })
-        })
+        self.external.clone()
     }
 
+    /// `engine.toml` `[engine]` (the shared default model ids).
+    fn shared_engine(&self) -> lore_home::engine::SharedEngine {
+        self.shared.as_ref().and_then(|h| h.engine()).unwrap_or_default()
+    }
+
+    /// A local engine to ask: the own server, or a shared model on the shared llama-server.
     pub fn has_local(&self) -> bool {
-        self.external().is_some()
+        self.external().is_some() || (self.local_rt.is_some() && self.shared_engine().model.is_some())
     }
 
     fn factory(&self) -> StandardFactory {
@@ -119,9 +132,12 @@ impl Llm {
         f.selected_claude = Some(self.model.clone());
         f.api = self.keys.get(None, &Account::Single).map(|(k, _)| ApiAccess { base_url: self.base_url.clone(), api_key: k, fallbacks: true });
         f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: false, temp_prefix: "lorereader-claude".into() });
+        let e = self.shared_engine();
         f.local = Some(LocalAccess {
             external: self.external(),
-            runtime: Some(self.runtime.clone()),
+            shared: self.local_rt.clone(),
+            default_model: e.model,
+            vision_model: e.vision_model,
             zh_tw: true,
             ..Default::default()
         });
@@ -140,9 +156,15 @@ impl Llm {
         let router = Router::new(self.tasks.clone(), self.factory());
         let pick = model_ref(choice).map_err(LlmFail::message)?;
         let strict = pick.is_some();
+        // translation and the chat are read on screen as they come: interactive for a local
+        // model; term classification and paragraph runs keep their class default (background)
+        let prio = |o: RouteOptions| match task {
+            "lr-translate" | "lr-chat" => o.with_priority(lore_llm::shared_runtime::Priority::Interactive),
+            _ => o,
+        };
         let route = match pick {
-            Some(r) => router.provider_for_with(task, &RouteOptions::only(r)).await,
-            None => router.provider_for(task).await,
+            Some(r) => router.provider_for_with(task, &prio(RouteOptions::only(r))).await,
+            None => router.provider_for_with(task, &prio(RouteOptions::default())).await,
         }
         .map_err(|e| LlmFail(e.payload(strict)))?;
         let req = route.apply(req.temperature(LOCAL_TEMPERATURE));
@@ -223,18 +245,20 @@ mod tests {
     }
 
     #[test]
-    fn the_shared_engine_is_the_default_and_the_own_config_wins() {
+    fn the_shared_model_is_the_default_and_the_own_config_wins() {
         let d = tempfile::tempdir().unwrap();
         let home = lore_home::Home::at(d.path());
         let mut l = Llm::new(&EngineConfig::default(), None, None);
+        // a runtime over a temp registry, never the real cache folder
+        l.local_rt = Some(SharedRuntime::new(APP, d.path().join("cache"), Default::default()));
         l.share_engine(home.clone());
         assert!(!l.has_local());
-        home.set_engine(Some("http://127.0.0.1:8123/v1"), Some("qwen3.5-4b-q8")).unwrap();
-        let e = l.external().unwrap();
-        assert_eq!((e.url.as_str(), e.model.as_deref()), ("http://127.0.0.1:8123/v1", Some("qwen3.5-4b-q8")));
-        // a new port is picked up without a restart
-        home.set_engine(Some("http://127.0.0.1:8124/v1"), None).unwrap();
-        assert_eq!(l.external().unwrap().url, "http://127.0.0.1:8124/v1");
+        home.set_engine_model(Some("qwen3.5-4b-q8")).unwrap();
+        assert!(l.has_local(), "a shared model is picked up without a restart");
+        assert!(l.external().is_none(), "never a URL from engine.toml");
+        assert_eq!(l.factory().local.unwrap().default_model.as_deref(), Some("qwen3.5-4b-q8"));
+        l.isolate();
+        assert!(!l.has_local(), "isolated: no shared server");
         let mut own = Llm::new(&EngineConfig { url: Some("http://127.0.0.1:7000/v1".into()), model: None }, None, None);
         own.share_engine(home);
         assert_eq!(own.external().unwrap().url, "http://127.0.0.1:7000/v1");

@@ -393,6 +393,11 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building LoreReader")
         .run(|app, event| {
+            // quitting: this app's hold on the shared local model goes (the last user stops it)
+            if let RunEvent::Exit = event {
+                lr_server::llm::quit();
+                return;
+            }
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             if let RunEvent::Opened { urls } = event {
                 for u in urls {

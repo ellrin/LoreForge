@@ -54,8 +54,9 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   aliases), `llm.rs` = lore-llm wired like PaperComposer (`tasks.toml`: `lr-translate`
   local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` and `lr-paragraph`
   local:current → claude:haiku; `complete_on` = a per-call choice or the old models.json one (`auto | local | cloud | haiku | sonnet | opus`), strict, else the shared routes / overrides; errors are `LlmFail` = lore-llm's `payload` (with `alternative`); keys `SharedKeys::for_app("LoreReader")`; the local
-  engine is config `[engine]`, else the shared `private/shared/engine.toml` via
-  `lore_home::engine`, re-read per call),
+  engine is config `[engine]`, else the shared model id of `private/shared/engine.toml` (re-read per
+  call) on the machine's one llama-server (lore-llm `shared_runtime`, `../docs/local-models.md`;
+  `llm::quit()` on Quit / ⌘Q / Ctrl-C)),
   `reading.rs` = the reading aids over the text the page posts once per open (memory only):
   nouns, symbols, paragraphs (background run per paper, newest run wins, cached per
   paragraph id), 懂了 (`reading.json`), and `chat_context` (title, section, paragraph, chip

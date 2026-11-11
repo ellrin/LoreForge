@@ -33,4 +33,5 @@ async fn main() {
         r = serve => r.expect("server"),
         _ = tokio::signal::ctrl_c() => {}
     }
+    lr_server::llm::quit();
 }

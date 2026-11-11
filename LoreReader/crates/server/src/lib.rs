@@ -289,7 +289,10 @@ fn engines(s: &AppState) -> lore_engines::Engines {
         .claude_model(s.config.claude_model.clone())
         .cli(s.llm.cli.clone(), s.llm.cc.clone());
     if !s.isolated {
-        return e;
+        return match &s.llm.local_rt {
+            Some(rt) => e.shared(rt.clone()), // 本機 status, 釋放, this app's share of the idle checks
+            None => e,
+        };
     }
     let mut e = e.isolated();
     e.install_routing = false;

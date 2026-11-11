@@ -38,7 +38,7 @@ url = "http://127.0.0.1:8080/v1"             # LOREREADER_LLM_URL
 model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 ```
 
-沒寫 `[engine]` 時，本機模型用所有 LoreForge App 共用的 `private/shared/engine.toml`（`[engine] url`、`model`，`lore_home::engine`；每次呼叫重讀，伺服器換埠也跟得上），同一個本機模型不必在每個 App 各設一次。
+沒寫 `[engine]` 時，本機模型用所有 LoreForge App 共用的選擇（`private/shared/engine.toml` 的 `[engine] model`，每次呼叫重讀），跑在整台電腦共用的一個 llama-server 上（誰需要誰開、最後一個用完的關，見 `docs/local-models.md`），同一個本機模型不必在每個 App 各設一次。
 
 私人工作區的位置可用 `LOREREADER_WORKSPACE` 改到別處（測試、示範用）。
 
