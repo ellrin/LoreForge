@@ -1,6 +1,6 @@
 # 論文變簡報（paper → deck）
 
-從 PaperComposer 的論文或 LoreReader 的論文產生一份可上台的論文報告簡報。工作在 SlideComposer 裡跑；PaperComposer 的「做成簡報」只是把論文交給 SlideComposer 並打開這個工作。
+從 PaperComposer 的論文或 LoreReader 的論文產生一份可上台的論文報告簡報。工作在 SlideComposer 裡跑；PaperComposer 與 LoreReader 上方列的「做成簡報」（共用的 `commons/ui/makedeck.js`）只是把論文交給 SlideComposer 並打開這個工作；SlideComposer 沒開時先把它打開（`lore-sc://`）、等它回應（最多 30 秒），等不到才顯示「開啟 SlideComposer／重試」。
 
 ## 流程
 

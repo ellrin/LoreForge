@@ -160,6 +160,18 @@ const PCFrame = (() => {
     shell.slots.lead.append($("#modeSwitch"));
     // the paper menu's forms (開啟 LaTeX…, 另存新檔…) hang under the picker
     picker().id = "actFile";
+    // 做成簡報 (commons/ui/makedeck.js): SlideComposer reads the paper's folder
+    LoreMakeDeck.mount({
+      before: "header.top .slot-primary #actDraft",
+      key: "pc.todeck",
+      source: async ({ check }) => {
+        if (typeof state === "undefined" || !state.paper) return null;
+        if (check) return true;
+        const src = await (await fetch(`/api/papers/${encodeURIComponent(state.paper.name)}/todeck`)).json();
+        if (!src.path) throw new Error(src.error ?? "找不到論文資料夾");
+        return { kind: "pc", path: src.path };
+      },
+    });
     wireDrawers();
     return shell;
   }

@@ -2461,6 +2461,8 @@ function mountShell() {
   });
   const terms = h("button", { type: "button", class: "ico", id: "actTerms", "data-icon": "target", "aria-label": "標示名詞", title: "紅：要學 · 黃：學習中 · 綠：記得", "aria-pressed": "false", onclick: toggleTerms });
   shell.slots.lead.append(terms);
+  // 做成簡報 (commons/ui/makedeck.js): SlideComposer reads this PDF from the library
+  LoreMakeDeck.mount({ before: "header.top .slot-primary #actAsk", key: "lr.todeck", source: async () => (S.sha ? { kind: "lr", sha: S.sha } : null) });
   paintIcons(shell.el);
   // the drawer toggles: 段落 chips are measured once the right panel is visible
   shell.el.querySelector(".slot-primary .narrow-only")?.addEventListener("click", () => requestAnimationFrame(foldChips));

@@ -34,7 +34,9 @@ async fn todeck_names_the_paper_folder_and_writes_nothing() {
     assert_eq!(names, vec!["main.tex"]);
     // the page loads the button script and the icon it draws
     let index = std::fs::read_to_string(pc_server::Paths::from_repo().ui.join("index.html")).unwrap();
-    assert!(index.contains("<script src=\"todeck.js\"></script>"));
+    assert!(index.contains("<script src=\"makedeck.js\"></script>"));
+    let js = http.get(format!("http://{addr}/makedeck.js")).send().await.unwrap().text().await.unwrap();
+    assert!(js.contains("window.LoreMakeDeck"));
     let icons = http.get(format!("http://{addr}/icons.js")).send().await.unwrap().text().await.unwrap();
     assert!(icons.contains("deckOutline:"));
     let _ = std::fs::remove_dir_all(&root);

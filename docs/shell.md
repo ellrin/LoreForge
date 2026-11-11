@@ -76,7 +76,7 @@ KB 套用：上方列、齒輪、提示與詢問框、跨 app 連結、狀態列
 ## F. 共用外殼的介面（`commons/ui`，2026-11-11）
 
 示範：`cd commons/ui && python3 -m http.server`，開 `/demo/shell.html`（`?theme=<id>`，API 是假的）。
-伺服器透過 `lore-shell` crate 提供三個檔：`lore_shell::FILES` → `/icons.js`、`/base.css`、`/shell.js`。
+伺服器透過 `lore-shell` crate 提供四個檔：`lore_shell::FILES` → `/icons.js`、`/base.css`、`/shell.js`、`/makedeck.js`（「做成簡報」按鈕與卡片，`LoreMakeDeck.mount({ before, source, key })`，有論文的 app 掛在 AI 鈕前面：PaperComposer、LoreReader）。
 頁面載入順序：`theme.css → base.css → styles.css`；`theme.js → icons.js → shell.js → app.js`。
 app 自己的 `icons.js` 拿掉（兩份都宣告 `ICONS`）。`cargo test -p lore-shell` 檢查圖示沒有重複、四個 app 用到的名稱都在、base.css 只用 theme.css 的 token。
 

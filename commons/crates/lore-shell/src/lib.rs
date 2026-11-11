@@ -1,6 +1,6 @@
-//! The shared LoreForge shell (`docs/shell.md`): `commons/ui/icons.js`, `base.css` and
-//! `shell.js`, compiled in like `lore_home::theme`, so an app server only needs
-//! three routes:
+//! The shared LoreForge shell (`docs/shell.md`): `commons/ui/icons.js`, `base.css`,
+//! `shell.js` and `makedeck.js`, compiled in like `lore_home::theme`, so an app server only needs
+//! these routes:
 //!
 //! ```ignore
 //! for (path, mime, body) in lore_shell::FILES { router = router.route(path, get(move || async move { ([("content-type", *mime)], *body) })); }
@@ -16,12 +16,15 @@ pub const ICONS_JS: &str = include_str!("../../../ui/icons.js");
 pub const BASE_CSS: &str = include_str!("../../../ui/base.css");
 /// `commons/ui/shell.js`: `LoreShell` (top bar, settings, toast, ask, engine chip) and `LoreLinks`.
 pub const SHELL_JS: &str = include_str!("../../../ui/shell.js");
+/// `commons/ui/makedeck.js`: `LoreMakeDeck`, the 做成簡報 button and card (apps with papers mount it).
+pub const MAKEDECK_JS: &str = include_str!("../../../ui/makedeck.js");
 
 /// `(route, content type, body)` for each file.
 pub const FILES: &[(&str, &str, &str)] = &[
     ("/icons.js", "text/javascript; charset=utf-8", ICONS_JS),
     ("/base.css", "text/css; charset=utf-8", BASE_CSS),
     ("/shell.js", "text/javascript; charset=utf-8", SHELL_JS),
+    ("/makedeck.js", "text/javascript; charset=utf-8", MAKEDECK_JS),
 ];
 
 /// The names in `const ICONS = { … }` of an icons.js, in order (duplicates kept).
@@ -229,8 +232,9 @@ mod tests {
 
     #[test]
     fn files_are_served() {
-        assert_eq!(FILES.len(), 3);
+        assert_eq!(FILES.len(), 4);
         assert!(FILES.iter().all(|(p, _, b)| p.starts_with('/') && !b.is_empty()));
         assert!(SHELL_JS.contains("window.LoreShell") && SHELL_JS.contains("window.LoreLinks"));
+        assert!(MAKEDECK_JS.contains("window.LoreMakeDeck") && MAKEDECK_JS.contains("/api/todeck"));
     }
 }

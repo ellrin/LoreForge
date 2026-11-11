@@ -1,22 +1,24 @@
-// 做成簡報: this paper as a paper-report deck in SlideComposer, in one action.
-// The button sits in the top bar's primary slot, before AI. Its card picks the
-// length, the language and SlideComposer's base; 先看大綱 (primary) or 直接產生 asks SlideComposer (its
-// server, POST /api/todeck) to make the deck from the paper's folder — the paper
-// is only read — then opens SlideComposer on it (LoreLinks, lore-sc://deck/<name>).
-// The styles live here (one script line in index.html, no stylesheet of its own).
+// 做成簡報: the open paper as a paper-report deck in SlideComposer, in one action — the same
+// button and card in every app that has papers (PaperComposer, LoreReader). Served as
+// `/makedeck.js` by `lore_shell::FILES`; loaded after shell.js. An app mounts it once:
+//
+//   LoreMakeDeck.mount({
+//     before: "#actAsk",                   // the top-bar button it sits before (the AI button)
+//     source: async () => ({ kind: "lr", sha }),   // SlideComposer's /api/todeck source; null = no paper open
+//     key: "lr.todeck",                    // localStorage key for length / language / base
+//   });
+//
+// The card picks the length, the language and SlideComposer's base; 先看大綱 (primary) or
+// 直接產生 asks SlideComposer (POST /api/todeck) to make the deck — the paper is only read —
+// then opens SlideComposer's job view. SlideComposer not running: it is opened and waited for.
 "use strict";
 
-const PCToDeck = (() => {
+window.LoreMakeDeck = (() => {
   const LEN = [["short", "短 10"], ["standard", "標準 15–20"], ["long", "長"]];
   const LANG = [["zh", "中文"], ["en", "English"]];
-  const KEY = "pc.todeck";
-  const pref = (() => {
-    let v = {};
-    try { v = JSON.parse(localStorage.getItem(KEY) ?? "{}") ?? {}; } catch {}
-    return { get: (k, d) => v[k] ?? d, set: (k, x) => { v[k] = x; try { localStorage.setItem(KEY, JSON.stringify(v)); } catch {} } };
-  })();
+  const WAIT_MS = 30000;
   const sc = () => `http://127.0.0.1:${LoreLinks.ports.sc}`;
-  let btn = null, card = null, job = null;
+  let opts = null, pref = null, btn = null, card = null, job = null;
 
   function h(tag, attrs = {}, ...kids) {
     const e = document.createElement(tag);
@@ -28,6 +30,12 @@ const PCToDeck = (() => {
     }
     for (const c of kids.flat()) if (c != null && c !== false) e.append(c);
     return e;
+  }
+
+  function store(key) {
+    let v = {};
+    try { v = JSON.parse(localStorage.getItem(key) ?? "{}") ?? {}; } catch {}
+    return { get: (k, d) => v[k] ?? d, set: (k, x) => { v[k] = x; try { localStorage.setItem(key, JSON.stringify(v)); } catch {} } };
   }
 
   const CSS = `
@@ -64,17 +72,6 @@ const PCToDeck = (() => {
 @media (prefers-reduced-motion: reduce) { .tdk-card .tdk-bar::before { animation: none; width: 100%; opacity: .5; } }
 `;
 
-  function mount() {
-    const ai = document.querySelector("header.top .slot-primary #actDraft");
-    if (!ai) return false;
-    if (document.getElementById("actDeck")) return true;
-    if (!document.getElementById("todeckCss")) document.head.append(h("style", { id: "todeckCss" }, CSS));
-    btn = h("button", { type: "button", class: "ico", id: "actDeck", "aria-label": "做成簡報", "aria-haspopup": "dialog", "aria-expanded": "false", onclick: toggle });
-    btn.append(icon("deckOutline"));
-    ai.before(btn);
-    return true;
-  }
-
   function place() {
     if (!card || !btn) return;
     const r = btn.getBoundingClientRect();
@@ -94,9 +91,9 @@ const PCToDeck = (() => {
   const away = (e) => { if (card && !card.contains(e.target) && !btn.contains(e.target)) close(); };
   const esc = (e) => { if (e.key === "Escape" && card) { e.stopPropagation(); close(); btn.focus(); } };
 
-  function toggle() {
+  async function toggle() {
     if (card) return close();
-    if (typeof state === "undefined" || !state.paper) { LoreShell.toast("先開一篇論文"); return; }
+    if (!job && !(await opts.source({ check: true }).catch(() => null))) { LoreShell.toast("先開一篇論文"); return; }
     card = h("div", { class: "tdk-card", role: "dialog", "aria-label": "做成簡報" });
     document.body.append(card);
     btn.setAttribute("aria-expanded", "true");
@@ -118,12 +115,23 @@ const PCToDeck = (() => {
     return s;
   }
 
-  /** SlideComposer's port: running already, else opened and waited for (「正在開啟 SlideComposer…」). */
-  async function reach(wait) {
+  /** SlideComposer answers: its port from the desktop apps' file, or the dev server's default. */
+  async function alive() {
     await LoreLinks.refresh();
-    if (LoreLinks.live.sc) return;
-    try { if ((await fetch(`${sc()}/api/info`)).ok) return; } catch {}
-    if (!(await LoreLinks.ensure("sc", { onWait: wait }))) throw Object.assign(new Error("SlideComposer 沒有開啟"), { open: true });
+    try { return (await fetch(`${sc()}/api/info`, { cache: "no-store" })).ok; } catch { return false; }
+  }
+
+  /** Running already, else opened (lore-sc://, which starts the app) and waited for. */
+  async function reach(onWait) {
+    if (await alive()) return;
+    onWait?.();
+    await LoreLinks.open("sc");
+    const end = Date.now() + WAIT_MS;
+    while (Date.now() < end) {
+      await new Promise((ok) => setTimeout(ok, 600));
+      if (await alive()) return;
+    }
+    throw Object.assign(new Error("SlideComposer 沒有開啟"), { open: true });
   }
 
   async function bases() {
@@ -136,10 +144,9 @@ const PCToDeck = (() => {
   async function draw() {
     if (!card) return;
     card.textContent = "";
-    const head = h("div", { class: "tdk-head" }, icon("deckOutline"), "做成簡報");
-    card.append(head);
+    card.append(h("div", { class: "tdk-head" }, icon("deckOutline"), "做成簡報"));
     if (job) {
-      card.append(h("div", { class: "tdk-foot" }, h("div", { class: "tdk-bar" }), h("span", { class: "tdk-note" }, "產生中…")));
+      card.append(h("div", { class: "tdk-foot" }, h("div", { class: "tdk-bar" }), h("span", { class: "tdk-note" }, job.note ?? "產生中…")));
       place();
       return;
     }
@@ -165,7 +172,7 @@ const PCToDeck = (() => {
       direct.remove();
       go.replaceWith(
         h("button", { type: "button", class: "btn small", onclick: () => LoreLinks.open("sc") }, "開啟 SlideComposer"),
-        h("button", { type: "button", class: "btn small", onclick: draw }, "重試"),
+        h("button", { type: "button", class: "btn small primary", onclick: draw }, "重試"),
       );
       place();
       return;
@@ -185,25 +192,17 @@ const PCToDeck = (() => {
     go.focus();
   }
 
-  /** SlideComposer's job view: lore-sc://job/<id> in the desktop app, else its page (?job=<id>). */
-  function openJob(id) {
-    const q = encodeURIComponent(id);
-    if (window.LoreDesktop?.openUrl) return window.LoreDesktop.openUrl(`lore-sc://job/${q}`);
-    window.open(`${sc()}/?job=${q}`, "sc-job");
-  }
-
   /** Ask SlideComposer for the deck; `engine` = 改用本機／改用 Claude after a route failed. */
   async function create(engine, mode = "review") {
-    if (job || !state.paper) return;
-    const name = state.paper.name;
-    job = { name };
+    if (job) return;
+    job = {};
     btn.classList.add("busy");
     draw();
     try {
-      const src = await (await fetch(`/api/papers/${encodeURIComponent(name)}/todeck`)).json();
-      if (!src.path) throw new Error(src.error ?? "找不到論文資料夾");
-      const body = { source: { kind: "pc", path: src.path }, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), style: pref.get("style"), engine, mode };
-      await reach(() => LoreShell.toast("正在開啟 SlideComposer…"));
+      const source = await opts.source({});
+      if (!source) throw new Error("先開一篇論文");
+      const body = { source, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), style: pref.get("style"), engine, mode };
+      await reach(() => { job.note = "正在開啟 SlideComposer…"; draw(); });
       let r;
       try {
         r = await fetch(`${sc()}/api/todeck`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -212,9 +211,9 @@ const PCToDeck = (() => {
       if (!r.ok) throw Object.assign(new Error(v.error ?? `SlideComposer：${r.status}`), { alt: v.alternative });
       close();
       if (v.job) {
-        // the work runs in SlideComposer as a job; open its progress view there
-        openJob(v.job);
-        LoreShell.toast("在 SlideComposer 進行中", { action: { label: "前往", run: () => openJob(v.job) }, ms: 8000 });
+        // the work runs in SlideComposer as a job; its progress view opens there
+        LoreLinks.open("sc", { job: v.job });
+        LoreShell.toast("在 SlideComposer 進行中", { action: { label: "前往", run: () => LoreLinks.open("sc", { job: v.job }) }, ms: 8000 });
         return;
       }
       LoreShell.toast(`簡報已建立（${v.slides} 頁）`, { action: { label: "開啟", run: () => LoreLinks.open("sc", { deck: v.name }) }, ms: 8000 });
@@ -229,10 +228,26 @@ const PCToDeck = (() => {
     }
   }
 
-  // the shell builds the top bar after this script runs: wait for its AI button
-  if (!mount()) {
-    const mo = new MutationObserver(() => { if (mount()) mo.disconnect(); });
-    mo.observe(document.documentElement, { childList: true, subtree: true });
+  function attach() {
+    const anchor = document.querySelector(opts.before);
+    if (!anchor) return false;
+    if (document.getElementById("actDeck")) return true;
+    if (!document.getElementById("makedeckCss")) document.head.append(h("style", { id: "makedeckCss" }, CSS));
+    btn = h("button", { type: "button", class: "ico", id: "actDeck", "aria-label": "做成簡報", title: "做成簡報", "aria-haspopup": "dialog", "aria-expanded": "false", onclick: toggle });
+    btn.append(icon("deckOutline"));
+    anchor.before(btn);
+    return true;
   }
-  return { open: toggle, create };
+
+  /** Put the button before `before` (now, or once the shell has built the top bar). */
+  function mount(o) {
+    opts = o;
+    pref = store(o.key ?? "lore.todeck");
+    if (!attach()) {
+      const mo = new MutationObserver(() => { if (attach()) mo.disconnect(); });
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+    }
+  }
+
+  return { mount, open: () => toggle(), create };
 })();
