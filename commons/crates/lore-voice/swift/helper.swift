@@ -5,7 +5,9 @@
 // {"cmd":"voices","req":1}                              {"ev":"voices","req":1,"voices":[{id,name,language,quality}]}
 // {"cmd":"permissions","req":2}                         {"ev":"permissions","req":2,"microphone":"granted|denied|undetermined","speech":…}
 // {"cmd":"speak","id":5,"text","voice","rate","language"} {"ev":"speak_start","id":5} {"ev":"word","id":5,"start","len"} {"ev":"speak_end","id":5,"cancelled":false}
-// {"cmd":"stop_speaking"}
+// {"cmd":"play","id":6,"path","rate","pitch"}          {"ev":"speak_start","id":6} {"ev":"speak_end","id":6,"cancelled":false}
+//   (a synthesised sentence, e.g. Qwen3-TTS: queued after the files before it; rate 0.5–2 keeps the pitch, pitch in semitones)
+// {"cmd":"stop_speaking"}                               (stops the system voice and the files)
 // {"cmd":"listen","language":"zh-TW","continuous":false} {"ev":"listen_start","engine"} {"ev":"partial","text"} {"ev":"final","text"} {"ev":"listen_end"}
 // {"cmd":"stop_listening"}
 // {"cmd":"synth_file","req":3,"text","voice","rate","language","path"}   {"ev":"file","req":3,"path","frames"}
@@ -441,9 +443,73 @@ func transcribeFile(req: Any, path: String, language: String) {
     }
 }
 
+// MARK: playing synthesised sentences (files) with rate and pitch
+
+final class FilePlayer {
+    struct Item { let id: Int; let path: String; let rate: Double; let pitch: Double }
+    let engine = AVAudioEngine()
+    let node = AVAudioPlayerNode()
+    let tp = AVAudioUnitTimePitch()
+    var queue: [Item] = []
+    var current: Item?
+    var generation = 0
+    var wired = false
+
+    func play(_ it: Item) {
+        queue.append(it)
+        if current == nil { next() }
+    }
+
+    private func next() {
+        guard current == nil, !queue.isEmpty else { return }
+        let it = queue.removeFirst()
+        let file: AVAudioFile
+        do { file = try AVAudioFile(forReading: URL(fileURLWithPath: it.path)) } catch {
+            emit(["ev": "speak_end", "id": it.id, "cancelled": true])
+            fail("failed", "播不了：\(error.localizedDescription)")
+            return next()
+        }
+        if !wired {
+            engine.attach(node); engine.attach(tp)
+            wired = true
+        }
+        engine.disconnectNodeOutput(node); engine.disconnectNodeOutput(tp)
+        engine.connect(node, to: tp, format: file.processingFormat)
+        engine.connect(tp, to: engine.mainMixerNode, format: file.processingFormat)
+        tp.rate = Float(min(2, max(0.5, it.rate.isFinite && it.rate > 0 ? it.rate : 1)))
+        tp.pitch = Float(min(12, max(-12, it.pitch.isFinite ? it.pitch : 0)) * 100)
+        do { if !engine.isRunning { try engine.start() } } catch {
+            emit(["ev": "speak_end", "id": it.id, "cancelled": true])
+            fail("failed", "音訊裝置：\(error.localizedDescription)")
+            return
+        }
+        current = it
+        let gen = generation
+        node.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { _ in
+            DispatchQueue.main.async {
+                guard gen == self.generation, self.current?.id == it.id else { return }
+                self.current = nil
+                emit(["ev": "speak_end", "id": it.id, "cancelled": false])
+                self.next()
+            }
+        }
+        node.play()
+        emit(["ev": "speak_start", "id": it.id])
+    }
+
+    func stop() {
+        generation += 1
+        let dropped = (current.map { [$0] } ?? []) + queue
+        current = nil; queue = []
+        node.stop()
+        for it in dropped { emit(["ev": "speak_end", "id": it.id, "cancelled": true]) }
+    }
+}
+
 // MARK: main
 
 let speaker = Speaker()
+let player = FilePlayer()
 let listener = Listener()
 
 func handle(_ c: [String: Any]) {
@@ -455,7 +521,9 @@ func handle(_ c: [String: Any]) {
     case "permissions": emit(["ev": "permissions", "req": req, "microphone": micStatus(), "speech": speechStatus()])
     case "speak":
         speaker.speak(id: (c["id"] as? Int) ?? -1, text: str("text") ?? "", voice: str("voice"), rate: rate, language: str("language"))
-    case "stop_speaking": speaker.stop()
+    case "play":
+        player.play(.init(id: (c["id"] as? Int) ?? -1, path: str("path") ?? "", rate: rate, pitch: (c["pitch"] as? Double) ?? 0))
+    case "stop_speaking": speaker.stop(); player.stop()
     case "listen": listener.start(language: str("language") ?? "zh-TW", continuous: (c["continuous"] as? Bool) ?? false)
     case "stop_listening": listener.stop()
     case "synth_file":

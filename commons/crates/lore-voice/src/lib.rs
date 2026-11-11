@@ -19,6 +19,8 @@
 
 pub mod fake;
 pub mod helper;
+pub mod qwen;
+pub mod readings;
 pub mod split;
 
 use std::collections::BTreeSet;
@@ -86,6 +88,12 @@ pub struct SpeakRequest {
     pub rate: f64,
     #[serde(default)]
     pub language: String,
+    /// Semitones up (+) or down (−), custom voices only (clamped to [`PITCH`]).
+    #[serde(default)]
+    pub pitch: f64,
+    /// Speak with this custom voice ([`qwen`]); `voice` is then the fallback system voice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<qwen::CustomVoice>,
 }
 
 fn one() -> f64 {
@@ -97,6 +105,13 @@ pub const RATE: (f64, f64) = (0.5, 2.0);
 
 pub fn clamp_rate(r: f64) -> f64 {
     if r.is_finite() { r.clamp(RATE.0, RATE.1) } else { 1.0 }
+}
+
+/// Pitch limits of a custom voice (semitones).
+pub const PITCH: (f64, f64) = (-6.0, 6.0);
+
+pub fn clamp_pitch(p: f64) -> f64 {
+    if p.is_finite() { p.clamp(PITCH.0, PITCH.1) } else { 0.0 }
 }
 
 /// Why listening or speaking cannot go on.
@@ -147,6 +162,10 @@ pub trait Backend: Send + Sync + 'static {
     fn speak(&self, id: u64, r: &SpeakRequest) -> Result<(), String>;
     /// Stop now and drop the queue.
     fn stop_speaking(&self);
+    /// Synthesise `r` with a system voice into an audio file at `path`, no sound (blocking).
+    fn synth_file(&self, _r: &SpeakRequest, _path: &std::path::Path) -> Result<(), String> {
+        Err("這個語音引擎不能存成檔案".into())
+    }
 }
 
 struct Inner {
@@ -231,8 +250,21 @@ impl Voice {
     pub fn system() -> Voice {
         match helper::HelperBackend::find() {
             Some(b) => Voice::new(Box::new(b)),
-            None => Voice::unavailable(if cfg!(target_os = "macos") { "找不到語音輔助程式（lore-voice-helper）" } else { "語音目前只支援 macOS" }),
+            None => Voice::unavailable(Voice::no_helper()),
         }
+    }
+
+    /// [`Voice::system`] that also speaks custom voices with `tts` ([`qwen::Mixed`]; sentence
+    /// files go to `cache`).
+    pub fn system_with(tts: Arc<dyn qwen::Tts>, cache: std::path::PathBuf) -> Voice {
+        match helper::HelperBackend::find() {
+            Some(b) => Voice::new(Box::new(qwen::Mixed::new(b, tts, cache))),
+            None => Voice::unavailable(Voice::no_helper()),
+        }
+    }
+
+    fn no_helper() -> &'static str {
+        if cfg!(target_os = "macos") { "找不到語音輔助程式（lore-voice-helper）" } else { "語音目前只支援 macOS" }
     }
 
     pub fn available(&self) -> bool {
@@ -260,6 +292,11 @@ impl Voice {
         self.backend()?.voices()
     }
 
+    /// [`Backend::synth_file`]: `r` in a system voice to an audio file (no sound; blocks).
+    pub fn synth_file(&self, r: &SpeakRequest, path: &std::path::Path) -> Result<(), String> {
+        self.backend()?.synth_file(r, path)
+    }
+
     pub fn listening(&self) -> bool {
         self.inner.listening.load(Ordering::SeqCst)
     }
@@ -282,7 +319,7 @@ impl Voice {
     pub fn speak(&self, r: &SpeakRequest) -> Result<u64, String> {
         let b = self.backend()?;
         let id = self.inner.next.fetch_add(1, Ordering::SeqCst);
-        let r = SpeakRequest { rate: clamp_rate(r.rate), ..r.clone() };
+        let r = SpeakRequest { rate: clamp_rate(r.rate), pitch: clamp_pitch(r.pitch), ..r.clone() };
         let first = {
             let mut p = self.inner.pending.lock().unwrap();
             p.insert(id);
@@ -314,7 +351,12 @@ impl Voice {
 
     /// Speak a streamed text sentence by sentence with this voice id, rate and language.
     pub fn speaker(&self, voice: &str, rate: f64, language: &str) -> Speaker {
-        Speaker { voice: self.clone(), split: Splitter::new(), template: SpeakRequest { text: String::new(), voice: voice.into(), rate, language: language.into() }, stopped: false }
+        self.speaker_from(SpeakRequest { text: String::new(), voice: voice.into(), rate, language: language.into(), ..Default::default() })
+    }
+
+    /// [`Voice::speaker`] with every setting of `template` (a custom voice, pitch); its text is ignored.
+    pub fn speaker_from(&self, template: SpeakRequest) -> Speaker {
+        Speaker { voice: self.clone(), split: Splitter::new(), template, stopped: false }
     }
 }
 

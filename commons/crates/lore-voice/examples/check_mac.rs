@@ -26,7 +26,7 @@ fn main() {
     }
     let text = "今天我們來複習一下微積分的基本定理。";
     let path = dir.join("lore-voice-check.caf");
-    let frames = b.synth_file(&SpeakRequest { text: text.into(), voice: String::new(), rate: 1.0, language: "zh-TW".into() }, &path).expect("synth");
+    let frames = b.synth_file(&SpeakRequest { text: text.into(), voice: String::new(), rate: 1.0, language: "zh-TW".into(), ..Default::default() }, &path).expect("synth");
     let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     println!("synthesised {frames} frames, {bytes} bytes → {}", path.display());
     assert!(frames > 0 && bytes > 0, "empty audio");

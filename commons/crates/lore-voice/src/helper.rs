@@ -240,6 +240,16 @@ impl Backend for HelperBackend {
     fn stop_speaking(&self) {
         let _ = self.send(json!({ "cmd": "stop_speaking" }));
     }
+
+    fn synth_file(&self, r: &SpeakRequest, path: &std::path::Path) -> Result<(), String> {
+        HelperBackend::synth_file(self, r, path).map(|_| ())
+    }
+}
+
+impl crate::qwen::Player for HelperBackend {
+    fn play(&self, id: u64, path: &std::path::Path, rate: f64, pitch: f64) -> Result<(), String> {
+        self.send(json!({ "cmd": "play", "id": id, "path": path, "rate": rate, "pitch": pitch }))
+    }
 }
 
 #[cfg(test)]
