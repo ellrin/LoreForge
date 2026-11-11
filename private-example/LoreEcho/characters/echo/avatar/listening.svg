@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="160 110 704 870" width="704" height="870">
+  <!-- LoreEcho example character, listening: the app icon's outline, no background -->
+  <g fill="none" stroke-linejoin="round" stroke-linecap="round">
+    <g stroke="#12AFC0" stroke-width="16">
+      <path d="M512 262 C646 262 722 330 724 440 L718 548 C714 616 680 668 628 704 L576 742 L448 742 L396 704 C344 668 310 616 306 548 L300 440 C302 330 378 262 512 262 Z"/>
+      <path d="M396 730 L276 870 M628 730 L748 870 M276 870 L332 960 M748 870 L692 960 M436 770 L512 830 L588 770"/>
+      <polyline points="300,428 344,428 344,484 300,484"/>
+      <polyline points="724,428 680,428 680,484 724,484"/>
+      <line x1="498" y1="456" x2="526" y2="456"/>
+      <path d="M514 486 L502 572 Q512 582 530 574"/>
+    </g>
+    <g stroke="#E0A100" stroke-width="14">
+      <path d="M352 330 C392 214 520 168 664 214"/><path d="M420 300 C470 220 580 206 690 262"/>
+      <circle cx="432" cy="456" r="66"/><circle cx="592" cy="456" r="66"/>
+      <polyline points="490,742 512,806 534,742"/>
+    </g>
+    <g stroke="#12AFC0" stroke-width="11"><path d="M376 370 Q424 350 476 356"/><path d="M548 356 Q600 350 648 370"/><path d="M474 634 L550 634"/></g>
+    <g fill="#E0A100" stroke="none"><circle cx="432" cy="460" r="16"/><circle cx="592" cy="460" r="16"/></g>
+    <g stroke="#E0249F" stroke-width="10"><path d="M258 410 Q232 456 258 502"/><path d="M226 384 Q188 456 226 528"/><path d="M766 410 Q792 456 766 502"/><path d="M798 384 Q836 456 798 528"/></g>
+  </g>
+</svg>

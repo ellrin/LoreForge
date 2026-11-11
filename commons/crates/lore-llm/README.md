@@ -16,12 +16,13 @@ lore-llm = { path = "../commons/crates/lore-llm" }   # default feature: zhtw (Op
 | `provider` | `trait LlmProvider { id, capabilities, send, stream(req, on), complete }`; `OnEvent = &(dyn Fn(StreamEvent) + Send + Sync)` |
 | `claude_api` | `ClaudeApi` + `ClaudeApiConfig` — Messages API, `anthropic-version: 2026-10-21`, no sampling params, `output_config.{format,effort}`, `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`, not for Haiku), `stop_reason` checks (`refusal`, `max_tokens`, `pause_turn` resumed), SSE streaming, web search (`web_search_20260209`), base64 image blocks |
 | `claude_code` | `ClaudeCode` — the user's subscription via `claude -p`: empty temp folder, env allowlist (`ALLOW_ENV`; billing vars `STRIP_ENV` never pass), `--safe-mode` (or older equivalents read from `--help`), `--tools ""`, `--json-schema`, prompt on stdin, per-user `CLAUDE_CONFIG_DIR`; optional WebSearch (`allow_web`). Also `Cli`, `binary`, `status`, `Cache`, `start_login`, `parse_output`, `fake` (test CLI) |
-| `openai` | `OpenAiCompat` (= `LlamaServer`) + `OpenAiCompatConfig::llama_server(url, model)` — `/v1/chat/completions`, `response_format: json_schema`, `temperature` / `top_p` when the request sets them, `image_url` data URLs, SSE streaming, `ping()`, optional `zh_tw` post-processing |
+| `openai` | `OpenAiCompat` (= `LlamaServer`) + `OpenAiCompatConfig::llama_server(url, model)` (`headers`: extra request headers, empty by default) — `/v1/chat/completions`, `response_format: json_schema`, `temperature` / `top_p` when the request sets them, `image_url` data URLs, SSE streaming, `ping()`, optional `zh_tw` post-processing |
 | `mock` | `MockProvider` — queued replies, records `seen` requests, configurable capabilities |
 | `json` | `extract_json`, `validate` (JSON Schema subset: `type`, `properties`, `required`, `items`, `enum`, `const`, `anyOf`, `oneOf`, `allOf`, `additionalProperties: false`; other keywords accepted as is), `complete_json` / `complete_as<T>` (validate + one retry) |
 | `catalog` | `Catalog` (one schema for all apps; bundled `catalog.json`), `Model`, `CloudModel`, aliases (`sonnet` → id), `resolve_local` (exact id or prefix), `plan`, `gpu_usable`, `recommend(&Machine)` |
 | `local` | `LOCAL_LLM_HOME` layout (`<home>/gguf/<owner>/<repo>/<file>`, `<home>/runtimes/llama.cpp/…/llama-server`): `home`, `find_model`, `find_mmproj`, `find_runtime`, `installed`, `missing`, `server_args`, `start`; `Layout` (`shared(home)` or `new(gguf_dir, runtime_dir)` for an app's own folders; same `find_*`/`installed`/`missing` as methods; `start_in`); `LocalRuntime` (one server at a time: `ensure(home, m)` / `ensure_in(&layout, m)`, `current_info`, `stop`, `kill_now`, `phase`) |
-| `router` | `TaskTable` (tasks.toml + `[override]`), `ModelRef` (`claude:`, `claude-api:`, `claude-code:`, `local:`, `mock:`), `Router::provider_for(task) -> Route`, `Router::provider_for_with(task, &RouteOptions { override_ref, strict })` (`RouteOptions::only(ref)` / `::prefer(ref)`), `candidates_with`, `RouteError::{UnknownTask, NeedsNetwork, Unavailable}` + `.reason()`, `ProviderFactory` (also for `Arc<F>`, `&F`, `Arc<dyn ProviderFactory>`), `StandardFactory` (`selected_claude`, `claude_model`, `local_layout`, `current_local`), `LocalAccess` (`Default`, `layout`, `.current(&catalog)`), `LOCAL_CURRENT`, `CLAUDE_SELECTED`, `MockFactory`, `probe_online` |
+| `broker` | client of the shared model broker (`lore-modeld`): `Priority::{Interactive, Background}` (`from_header`), `APP_HEADER` / `PRIORITY_HEADER`, `state_path` (`<cache>/modeld.json`, `LOREFORGE_CACHE`), `read_state` / `write_state`, `find` / `find_at`, `status`, `binary` (`LORE_MODELD`, next to the executable, `PATH`), `Launch` + `ensure` (find or start detached), `focus(base, app)` / `focus_running(app)`, `BrokerAccess { app, priority, url, launch }` (`base_url`, `running_url`, `available`, `headers`, `config`, `provider`) |
+| `router` | `TaskTable` (tasks.toml + `[override]`), `ModelRef` (`claude:`, `claude-api:`, `claude-code:`, `local:`, `mock:`), `Router::provider_for(task) -> Route`, `Router::provider_for_with(task, &RouteOptions { override_ref, strict })` (`RouteOptions::only(ref)` / `::prefer(ref)`), `candidates_with`, `RouteError::{UnknownTask, NeedsNetwork, Unavailable}` + `.reason()`, `ProviderFactory` (also for `Arc<F>`, `&F`, `Arc<dyn ProviderFactory>`), `StandardFactory` (`selected_claude`, `claude_model`, `local_layout`, `current_local`), `LocalAccess` (`Default`, `layout`, `broker`, `.current(&catalog)`), `LOCAL_CURRENT`, `CLAUDE_SELECTED`, `MockFactory`, `probe_online` |
 | `secrets` | re-export of the `lore-secrets` crate (keyring only; apps that only store keys depend on it directly): `KeyStore::anthropic(service, app_dir)` with `get(explicit, &Account)` / `save`; `Account::{Single, User(Who), Nobody}`; `KeySource`; `mask`; `KEYS_PAGE` |
 | `zhtw` | `to_taiwan` (OpenCC s2twp with keep-list) |
 
@@ -90,6 +91,21 @@ let route = router.provider_for_with("jl-generate", &RouteOptions::only("claude-
   flag for them, so `ClaudeApi` and `ClaudeCode` leave them out (no error).
 - An app's own model folders: `LocalAccess { layout: Some(Layout::new(gguf, runtime)), .. }`
   (wins over `home`).
+
+### The shared model broker (`broker`)
+
+`LocalAccess { broker: Some(BrokerAccess::new("pc", Priority::Interactive)), .. }` sends local
+models through `lore-modeld` instead of a `LocalRuntime` in this process:
+
+- `local:<model>`: the catalog checks (uncensored, vision, context, files when `layout`/`home`
+  is known) as before, then an `OpenAiCompat` on `<broker>/v1` (id `lore-modeld:<model>`) with
+  `X-Lore-App` / `X-Lore-Priority`. The broker is found from `modeld.json` or started
+  (`BrokerAccess.launch`: binary, args such as `--gguf <dir> --runtime <dir>`, wait).
+- `local:current`: the model the running broker has loaded (`GET /api/status`); nothing is
+  started for it. `check` passes when a broker runs or its binary is found.
+- `external` still wins over the broker; `runtime` is unused while `broker` is set.
+  With `broker: None` (the default) nothing changes.
+- Focus: `broker::focus_running(Some("pc"))` on window focus (never starts the broker).
 
 ### Task classes and shared routes (`shared`)
 
@@ -176,4 +192,6 @@ say "改用本機模型（Claude：離線）". `claude:` tries the subscription 
 - `LocalRuntime` with a real llama-server (`cargo test -p lore-llm real_local -- --ignored`
   needs `LOCAL_LLM_HOME` with llama.cpp and Qwen3.5 4B); vision through `--mmproj`.
 - `secrets` (`lore-secrets`) against the real OS keychain (tests use the file fallback only).
+- `broker::ensure` starting the real `lore-modeld` from an app bundle (detached on macOS /
+  Windows); the tests use a running fake broker or a missing binary.
 - `temperature` / `top_p` with a real llama-server (request bodies checked against mocks).

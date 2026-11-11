@@ -8,6 +8,8 @@
 //!   OpenAI-compatible servers), [`MockProvider`].
 //! - [`catalog`]: the shared model catalog; [`local`]: the shared
 //!   `LOCAL_LLM_HOME` folder and the llama-server lifecycle.
+//! - [`broker`]: the client of the shared model broker (`lore-modeld`): find or start
+//!   it, route `local:` models through it with the app and priority headers, `focus`.
 //! - [`shared`]: the engine choices all apps share (task classes, routes, the Claude
 //!   connection) and the one-click alternative after a fixed route fails.
 //! - [`router`]: task routing from `tasks.toml` (needs → model, fallback,
@@ -20,6 +22,7 @@
 //! task's provider. Tests never call real Claude, the real CLI or a real
 //! llama-server (mock HTTP servers and a fake CLI instead).
 
+pub mod broker;
 pub mod catalog;
 pub mod claude_api;
 pub mod claude_code;

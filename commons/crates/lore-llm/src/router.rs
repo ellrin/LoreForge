@@ -15,6 +15,7 @@
 //! engine choice goes through [`Router::provider_for_with`] and
 //! [`RouteOptions`] (`strict`: that engine or an error, never a fallback).
 
+use crate::broker::{self, BrokerAccess};
 use crate::catalog::{Catalog, CloudModel};
 use crate::claude_api::{ClaudeApi, ClaudeApiConfig};
 use crate::claude_code::{Cache, ClaudeCode, Cli};
@@ -689,6 +690,10 @@ pub struct LocalAccess {
     pub zh_tw: bool,
     /// Allow abliterated models (PaperComposer yes, household apps no).
     pub include_uncensored: bool,
+    /// Send local models through the shared model broker (`lore-modeld`) instead of
+    /// starting llama-server in this process. `external` still wins when set;
+    /// `runtime` is not used while this is set.
+    pub broker: Option<BrokerAccess>,
 }
 
 impl LocalAccess {
@@ -700,6 +705,17 @@ impl LocalAccess {
         let mut cfg = if let Some(ext) = &self.external {
             let m = ext.model.clone().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| "local".into());
             let mut c = OpenAiCompatConfig::llama_server(ext.url.clone(), m.clone());
+            if let Some(entry) = catalog.get(&m) {
+                c.vision = entry.vision;
+                c.context = entry.context_or_default();
+            }
+            c
+        } else if let Some(b) = &self.broker {
+            // what the broker has loaded now (it is not started for this)
+            let base = b.running_url().await.ok_or("沒有連接本機模型")?;
+            let st = broker::status(&base).await?;
+            let m = st["loaded"].as_str().filter(|m| !m.is_empty()).ok_or("沒有連接本機模型")?.to_string();
+            let mut c = b.config(&base, &m);
             if let Some(entry) = catalog.get(&m) {
                 c.vision = entry.vision;
                 c.context = entry.context_or_default();
@@ -849,6 +865,18 @@ impl StandardFactory {
             c.vision = m.vision;
             c.context = m.context_or_default();
             c
+        } else if let Some(b) = &la.broker {
+            // the broker starts the model; files are checked here when the folder is known
+            if let Some(l) = &layout
+                && let Some(why) = l.missing(m)
+            {
+                return Err(why);
+            }
+            let base = b.base_url().await?;
+            let mut c = b.config(&base, &m.id);
+            c.vision = m.vision && layout.as_ref().is_none_or(|l| l.find_mmproj(m).is_some());
+            c.context = m.context_or_default();
+            c
         } else {
             let rt = la.runtime.as_ref().ok_or("沒有設定本機 llama-server")?;
             let layout = layout.as_ref().ok_or("沒有設定共用模型資料夾（LOCAL_LLM_HOME）")?;
@@ -891,6 +919,10 @@ impl ProviderFactory for StandardFactory {
                     (Some(ext), _) => match &ext.model {
                         Some(serving) if serving != &m.id => Err(format!("外部 llama-server 跑的是 {serving}，不是 {}", m.id)),
                         _ => Ok(()),
+                    },
+                    (None, l) if la.broker.is_some() => match l.as_ref().and_then(|l| l.missing(m)) {
+                        Some(why) => Err(why),
+                        None => la.broker.as_ref().expect("checked").available().await,
                     },
                     (None, Some(l)) if la.runtime.is_some() => l.missing(m).map_or(Ok(()), Err),
                     _ => Err("沒有設定本機 llama-server".into()),
@@ -1259,6 +1291,58 @@ max_tokens = 9000
             rt.stop().await;
             assert!(f.current_local().await.is_err());
         }
+    }
+
+    /// With a broker, `local:<model>` points at the broker with the app and priority
+    /// headers (nothing is started in this process); `local:current` is what it has loaded.
+    #[tokio::test]
+    async fn local_models_go_through_the_broker() {
+        use axum::{Json, routing::get, routing::post};
+        let loaded = Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
+        let l2 = loaded.clone();
+        let app = axum::Router::new()
+            .route("/api/status", get(move || {
+                let l = l2.clone();
+                async move { Json(serde_json::json!({ "service": "lore-modeld", "loaded": *l.lock().unwrap() })) }
+            }))
+            .route(
+                "/v1/chat/completions",
+                post(|h: axum::http::HeaderMap, Json(b): Json<serde_json::Value>| async move {
+                    let v = |k: &str| h.get(k).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                    let text = format!("{}|{}|{}", v("x-lore-app"), v("x-lore-priority"), b["model"].as_str().unwrap_or(""));
+                    Json(serde_json::json!({"choices": [{"message": {"content": text}, "finish_reason": "stop"}]}))
+                }),
+            );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+
+        let rt = Arc::new(LocalRuntime::new());
+        let mut f = StandardFactory::new(Catalog::bundled());
+        let mut b = BrokerAccess::new("sc", broker::Priority::Interactive);
+        b.url = Some(base.clone());
+        f.local = Some(LocalAccess { runtime: Some(rt.clone()), broker: Some(b), ..Default::default() });
+        let q = ModelRef::parse("local:qwen3.5-9b-q8").unwrap();
+        assert!(f.check(&q, &spec(Needs::default())).await.is_ok());
+        let p = f.make(&q, &spec(Needs::default())).await.unwrap();
+        assert_eq!(p.id(), "lore-modeld:qwen3.5-9b-q8");
+        assert_eq!(p.complete(&LlmRequest::prompt("s", "u")).await.unwrap(), "sc|interactive|qwen3.5-9b-q8");
+        assert_eq!(rt.phase(), crate::local::Phase::Idle, "this process started nothing");
+        // An app layout without the weights: the reason comes before any broker call.
+        let dir = tempfile::tempdir().unwrap();
+        f.local.as_mut().unwrap().layout = Some(Layout::new(dir.path().join("gguf"), dir.path().join("rt")));
+        assert!(f.make(&q, &spec(Needs::default())).await.err().unwrap().contains("llama.cpp"));
+        f.local.as_mut().unwrap().layout = None;
+
+        let cur = ModelRef::parse("local:current").unwrap();
+        assert!(f.make(&cur, &spec(Needs::default())).await.err().unwrap().contains("沒有連接本機模型"), "nothing loaded");
+        *loaded.lock().unwrap() = serde_json::json!("gemma-4-12b-q8");
+        let p = f.make(&cur, &spec(Needs::default())).await.unwrap();
+        assert_eq!(p.id(), "lore-modeld:gemma-4-12b-q8");
+        assert!(p.capabilities().vision, "from the catalog");
+        // An external server still wins.
+        f.local.as_mut().unwrap().external = Some(ExternalServer { url: "http://127.0.0.1:9/v1".into(), model: None });
+        assert_eq!(f.make(&q, &spec(Needs::default())).await.unwrap().id(), "llama-server:qwen3.5-9b-q8");
     }
 
     #[tokio::test]
