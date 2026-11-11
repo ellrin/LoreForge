@@ -48,6 +48,9 @@ html, body { background: transparent; height: 100%; overflow: hidden; }
 .figure img, .figure .fallback { pointer-events: none; }
 .figure img { position: absolute; left: var(--fig-cx); top: calc(var(--fig-top) + var(--fig-dy) * 100%);
   height: calc((100% - var(--fig-top)) * var(--fig-scale)); width: auto; max-width: none; transform: translateX(-50%); }
+/* a wide figure (coat, pose) never reaches past the overlap strip, so it never covers the text;
+   it shrinks to fit (contain), and never grows past its own pixels (blur) */
+.figure img { max-width: calc(2 * min(var(--fig-cx), var(--col-x) + var(--overlap) - var(--fig-cx))); object-fit: contain; object-position: 50% 0; }
 /* a character with portraits only: the portrait, fitted to the strip, at chest height */
 .figure.portrait img { top: auto; bottom: 34%; height: auto; width: calc(var(--col-x) - 12px); max-height: 60%; object-fit: contain; }
 .figure .fallback { position: absolute; left: var(--fig-cx); top: 40%; transform: translateX(-50%); color: var(--accent-text); }

@@ -119,7 +119,11 @@ function picUrl(kind, state) {
 function setImg(img, icon, kind, state) {
   const url = picUrl(kind, state);
   img.hidden = !url; icon.hidden = !!url;
-  if (url && img.dataset.src !== url) { img.dataset.src = url; img.src = url; }
+  if (url && img.dataset.src !== url) {
+    img.dataset.src = url; img.src = url;
+    // never draw a picture taller than its own pixels (a small raster would blur)
+    img.onload = () => { img.style.maxHeight = img.naturalHeight ? `${img.naturalHeight}px` : ""; };
+  }
 }
 
 /** One of the ten states (idle listening thinking speaking happy unsure surprised waiting
