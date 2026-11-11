@@ -1,0 +1,7 @@
+[package]
+name = "lore-words"
+version.workspace = true
+edition.workspace = true
+description = "Word-frequency filter for domain terms (LoreReader's lists): function words, general academic and everyday English (SCOWL), term-like exceptions, and the normalisers (plural, British/American spelling, acronyms) that group and compare terms."
+
+[dependencies]

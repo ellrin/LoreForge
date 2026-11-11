@@ -18,6 +18,10 @@ lore-shell.workspace = true
 lore-engines.workspace = true
 lore-llm.workspace = true
 lore-docsrc.workspace = true
+lore-words.workspace = true
+kb-core.workspace = true
+lore-store.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 regex = "1"
 serde.workspace = true
 serde_json.workspace = true

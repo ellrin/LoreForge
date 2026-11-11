@@ -1157,6 +1157,17 @@ pub fn export(cd: &Deck, src: &ODeck, style: Option<&StyleSystem>, assets: &dyn 
 /// Export; also returns the slide/notes parts that were not regenerated (their
 /// source bytes can be kept verbatim).
 pub fn export_parts(cd: &Deck, src: &ODeck, style: Option<&StyleSystem>, assets: &dyn Assets) -> Result<(ODeck, Vec<String>), ExportError> {
+    // 「不熟」 marks are editor-only: never exported (a stripped run matches its source
+    // fingerprint again, so untouched slides stay byte-identical)
+    let stripped;
+    let cd = if crate::style::has_learn(cd) {
+        let mut d = cd.clone();
+        crate::style::strip_learn(&mut d);
+        stripped = d;
+        &stripped
+    } else {
+        cd
+    };
     let mut od = src.clone();
     let mut keep: Vec<String> = Vec::new();
     let pres = od.pres_part.clone();

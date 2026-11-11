@@ -1,0 +1,70 @@
+# General academic words: the vocabulary every paper uses, whatever the field
+# (verbs of reporting, structure words, evaluation words). Never specialist terms.
+# Lowercase base forms; plurals, -ed, -ing, -ly and British spellings are folded.
+abstract introduction conclusion conclusions discussion background related work works
+method methods methodology approach approaches technique framework scheme strategy procedure
+propose proposed present presented introduce introduced describe described report reported
+study studies paper article manuscript section sections chapter appendix supplementary figure
+figures fig table tables equation equations eq eqs example examples case cases
+result results finding findings outcome outcomes evidence observation observations
+analysis analyses analyze analyse evaluate evaluation evaluations assess assessment
+experiment experiments experimental setting settings setup configuration implementation implement
+significant significance significantly substantial substantially considerable considerably
+demonstrate demonstrated show shown showed indicate indicated suggest suggested reveal revealed
+achieve achieved obtain obtained perform performed performance improve improved improvement
+compare compared comparison comparable comparative relative relatively respectively
+increase increased decrease decreased reduce reduced reduction enhance enhanced
+consider considered define defined definition denote denoted represent represented
+assume assumed assumption assumptions apply applied application applications use used using
+require required requirement provide provided include included including consist consists
+contain contained involve involved enable enabled allow allowed ensure ensured
+focus focused address addressed aim aimed goal goals objective objectives purpose
+problem problems issue issues challenge challenges limitation limitations advantage advantages
+contribution contributions novel new existing previous prior recent recently current currently
+main mainly key important importantly major minor primary secondary general generally specific
+specifically particular particularly various variety common commonly typical typically
+standard conventional traditional overall total final initial further additional additionally
+moreover finally firstly secondly thirdly lastly similarly likewise conversely consequently
+accordingly notably namely i.e e.g respectively approximately roughly exactly
+high higher highest low lower lowest large larger largest small smaller smallest
+good better best poor worse worst strong stronger weak weaker effective effectiveness efficient efficiency
+robust robustness accurate accuracy precise reliable reliability valid validity
+simple complex complexity difficult easy possible impossible available availability
+number numbers amount value values level levels degree range ranges rate rates ratio ratios
+set sets group groups type types kind kinds form forms part parts component components
+element elements feature features factor factors aspect aspects property properties
+process processes processing step steps stage stages phase phases procedure procedures
+source sources target targets input inputs output outputs parameter parameters variable variables
+function functions structure structures system systems design designed develop developed development
+information knowledge understanding insight insights idea ideas concept concepts notion
+condition conditions context contexts scenario scenarios situation situations environment
+task tasks domain domains field fields area areas region regions scope extent
+term terms word words phrase sentence text texts description descriptions
+author authors researcher researchers literature reference references cite cited
+note noted notice observe observed find found see seen look address
+fact facts reason reasons cause caused effect effects impact impacts influence role
+relationship relationships relation relations association associated correlation correlated
+difference differences different differ similar similarity same consistent consistency
+change changes changed vary varied variation variations trend trends pattern patterns
+estimate estimated estimation measure measured measurement measurements calculate calculated
+compute computed computation determine determined identify identified detect detected
+select selected selection choose chosen choice collect collected collection
+test tested testing train trained training learn learned learning validate validated validation
+base based basis depend depends dependent independent independently
+order ordered sequence sequential series average averaged mean overall
+detail details detailed brief briefly summary summarize summarized summarise overview review
+term long short time times period periods day days year years month months week weeks
+first second minute minutes hour hours
+person people participant participants subject subjects individual individuals population
+sample samples size sizes scale scales dimension dimensions length width height
+point points line lines curve curves space spaces location locations position positions
+left right top bottom side sides center centre middle end beginning start
+way ways manner mean means meant whereas instead otherwise
+able unable likely unlikely clear clearly obvious obviously evident evidently
+correct correctly incorrect true false real actual actually potential potentially
+critical crucial essential necessary sufficient adequate appropriate suitable relevant
+direct directly indirect indirectly explicit explicitly implicit implicitly
+extend extended extension generalize generalization limit limited
+research researcher work worked working investigate investigated investigation explore explored
+argue argued claim claimed state stated statement explain explained explanation
+interpret interpreted interpretation discuss discussed mention mentioned

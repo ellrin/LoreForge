@@ -28,6 +28,7 @@
 //! | POST | /api/shell/dialog | `{kind: open\|save, name?}` → `{path}` native dialog (desktop app only, else 501) |
 
 mod export_open;
+pub mod kbterms;
 pub mod llm;
 mod notation;
 mod reader;
@@ -219,6 +220,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/decks/{name}/file/save-as", post(file_save_as))
         .route("/api/shell/dialog", post(shell_dialog))
         .route("/api/export/open", post(export_open::export_open))
+        .route("/api/decks/{name}/learn", axum::routing::put(kbterms::understood))
         .merge(reader::routes())
         .merge(todeck::routes().layer(local_cors()))
         .route("/api/info", get(info).layer(local_cors()))

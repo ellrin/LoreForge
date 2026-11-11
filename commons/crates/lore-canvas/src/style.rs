@@ -16,6 +16,78 @@ use crate::model::*;
 /// Reserved emphasis applied by the progressive-reveal generator.
 pub const GHOST_EM: &str = "ghost";
 
+/// Reserved emphasis 「不熟」: a word or sentence the author does not know yet (no card in
+/// the knowledge base, or one to learn). Editor-only: it never changes the run's look
+/// (the editor draws it red with a dotted underline when 標示我不熟的 is on), it is not
+/// a style-pack emphasis (so it never collides with the key-result red bold), and
+/// export, print and the show drop it ([`strip_learn`]).
+pub const LEARN_EM: &str = "learn";
+
+/// Emphases every style accepts without defining them.
+pub fn is_reserved_em(e: &str) -> bool {
+    e == GHOST_EM || e == LEARN_EM
+}
+
+/// Every text body of an object (shape/text box text, table cells, group children).
+pub fn texts_mut(o: &mut Object, f: &mut dyn FnMut(&mut TextBody)) {
+    match &mut o.kind {
+        Kind::Text(s) | Kind::Shape(s) => {
+            if let Some(t) = &mut s.text {
+                f(t);
+            }
+        }
+        Kind::Table(t) => {
+            for row in &mut t.rows {
+                for c in &mut row.cells {
+                    f(&mut c.text);
+                }
+            }
+        }
+        Kind::Group(g) => {
+            for c in &mut g.children {
+                texts_mut(c, f);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn obj_has_learn(o: &Object) -> bool {
+    let tb = |t: &TextBody| t.paras.iter().any(|p| p.runs.iter().any(|r| r.em.as_deref() == Some(LEARN_EM)));
+    match &o.kind {
+        Kind::Text(s) | Kind::Shape(s) => s.text.as_ref().is_some_and(tb),
+        Kind::Table(t) => t.rows.iter().any(|r| r.cells.iter().any(|c| tb(&c.text))),
+        Kind::Group(g) => g.children.iter().any(obj_has_learn),
+        _ => false,
+    }
+}
+
+/// Does any run of the deck carry [`LEARN_EM`]?
+pub fn has_learn(deck: &Deck) -> bool {
+    deck.slides.iter().any(|s| s.objects.iter().any(obj_has_learn))
+}
+
+/// Drop the editor-only [`LEARN_EM`] from every run of the deck. Returns how many runs
+/// carried it. Export calls this on its own copy, so `learn` never reaches a file.
+pub fn strip_learn(deck: &mut Deck) -> usize {
+    let mut n = 0;
+    for s in &mut deck.slides {
+        for o in &mut s.objects {
+            texts_mut(o, &mut |t| {
+                for p in &mut t.paras {
+                    for r in &mut p.runs {
+                        if r.em.as_deref() == Some(LEARN_EM) {
+                            r.em = None;
+                            n += 1;
+                        }
+                    }
+                }
+            });
+        }
+    }
+    n
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct StyleSystem {
     pub pack: StylePack,
@@ -96,6 +168,8 @@ impl StyleSystem {
             Some(GHOST_EM) => {
                 l.color = norm(&self.pack.ghost.text_color);
             }
+            // editor-only mark: the run keeps its tag's look
+            Some(LEARN_EM) => {}
             Some(e) => {
                 if let Some(e) = self.pack.emphasis.get(e) {
                     if let Some(c) = &e.color {
@@ -202,7 +276,7 @@ impl StyleSystem {
             }
         }
         if let Some(e) = &r.em
-            && e != GHOST_EM
+            && !is_reserved_em(e)
             && !self.pack.emphasis.contains_key(e)
         {
             return Err(RuleError::UnknownEmphasis(e.clone()));
@@ -246,7 +320,7 @@ impl StyleSystem {
                         .unwrap_or(false)
                 });
                 if let Some(e) = &run.em
-                    && e != GHOST_EM
+                    && !is_reserved_em(e)
                     && !self.pack.emphasis.contains_key(e)
                 {
                     return Err(RuleError::UnknownEmphasis(e.clone()));
