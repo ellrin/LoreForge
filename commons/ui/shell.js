@@ -432,7 +432,9 @@
     let last = null;
     try { last = localStorage.getItem("lore.settings.tab"); } catch {}
     show(tabs.find((t) => t.id === arg) ?? tabs.find((t) => t.id === last) ?? tabs[0]);
-    if (!dlg.open) dlg.showModal();
+    // focus the panel, not the first tab: a freshly focused tab drew a clipped focus ring
+    body.tabIndex = -1;
+    if (!dlg.open) { dlg.showModal(); body.focus({ preventScroll: true }); }
     S.gear?.setAttribute("aria-expanded", "true");
     return dlg;
   }
