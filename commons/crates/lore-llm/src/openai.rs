@@ -41,6 +41,9 @@ pub struct OpenAiCompatConfig {
     /// The server is somewhere on the internet (not this machine / LAN).
     pub needs_network: bool,
     pub timeout: Duration,
+    /// Extra request headers sent with every call (the model broker's
+    /// `X-Lore-App` / `X-Lore-Priority`); empty for a plain server.
+    pub headers: Vec<(String, String)>,
 }
 
 impl OpenAiCompatConfig {
@@ -56,6 +59,7 @@ impl OpenAiCompatConfig {
             label: "llama-server".into(),
             needs_network: false,
             timeout: Duration::from_secs(600),
+            headers: Vec::new(),
         }
     }
 }
@@ -126,6 +130,9 @@ impl OpenAiCompat {
         let mut rb = self.http.post(format!("{}/chat/completions", self.cfg.url.trim_end_matches('/'))).json(body);
         if let Some(k) = &self.cfg.api_key {
             rb = rb.bearer_auth(k);
+        }
+        for (k, v) in &self.cfg.headers {
+            rb = rb.header(k.as_str(), v.as_str());
         }
         let resp = rb.send().await.map_err(|e| LlmError::Network(self.cfg.label.clone(), e.to_string()))?;
         let status = resp.status();
@@ -261,6 +268,22 @@ mod tests {
         assert_eq!(r.usage.unwrap().output_tokens, 2);
         assert_eq!(p.id(), "llama-server:gemma-4-12b-q8");
         assert!(matches!(p.send(&req.clone().max_tokens(1)).await, Err(LlmError::Truncated(_))));
+    }
+
+    #[tokio::test]
+    async fn extra_headers_are_sent() {
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|h: axum::http::HeaderMap| async move {
+                let v = |k: &str| h.get(k).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                Json(json!({"choices": [{"message": {"content": format!("{}|{}", v("x-lore-app"), v("x-lore-priority"))}, "finish_reason": "stop"}]}))
+            }),
+        );
+        let base = serve(app).await;
+        let mut cfg = OpenAiCompatConfig::llama_server(format!("{base}/v1"), "m");
+        assert_eq!(OpenAiCompat::new(cfg.clone()).complete(&LlmRequest::prompt("s", "u")).await.unwrap(), "|", "none by default");
+        cfg.headers = vec![("X-Lore-App".into(), "pc".into()), ("X-Lore-Priority".into(), "interactive".into())];
+        assert_eq!(OpenAiCompat::new(cfg).complete(&LlmRequest::prompt("s", "u")).await.unwrap(), "pc|interactive");
     }
 
     #[test]

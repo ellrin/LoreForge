@@ -20,6 +20,7 @@ reqwest.workspace = true
 futures-util.workspace = true
 base64.workspace = true
 lore-secrets = { path = "../lore-secrets" }
+lore-home = { path = "../lore-home" }
 ferrous-opencc = { workspace = true, optional = true }
 
 [dev-dependencies]
