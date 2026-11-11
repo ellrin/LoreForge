@@ -89,6 +89,8 @@ private/<App>/characters/<id>/
 
 - 這些都是 Swift／Apple 框架，Rust 這邊透過一個小的 Swift 輔助程式（或 Tauri 外掛）呼叫；共用的介面放在 `commons/crates/lore-voice`（`commons/CLAUDE.md` 早就留了名字），NeonDeck 是現成的 Swift 專案可參考。
 - 預設是按住說話；常駐要你自己打開。
+- **2026-11-11 已做（作者：「語音為啥是之後的階段？一起補吧」）**：`commons/crates/lore-voice`（Swift 輔助程式 `lore-voice-helper`，由 build.rs 用 swiftc 編；聽 = `SpeechTranscriber`，這台 macOS 27 支援且已安裝中文（台灣），不支援或沒下載時退回 `SFSpeechRecognizer`；說 = `AVSpeechSynthesizer`），LoreEcho 的麥克風（按住說話／常駐、說完就送出）、朗讀回覆（串流一句一句念、Esc 或點人物停止、人物在念完前都是 speaking）、人物的聲音與語速。在這台 Mac 上確認過：列出聲音、合成到檔案、再用 SpeechTranscriber 辨識回文字；麥克風、權限提示與實際音質要作者自己試。
+- 同一輪也加了人物的**主題曲**（`theme.<ext>`，播放鈕、說話／聆聽時調小聲、收起或換人物淡出、不自動播放）和**角色設定**（身分與背景、說話風格、口頭禪、稱呼、關係、喜歡／不喜歡、範例對話；組進系統提示，範例當成前幾輪對話）。
 - 測試只用假的 STT／TTS；Apple 引擎一律標 **not tested on real hardware**（雲端是 Linux，跑不了）。
 - 之後可以評估：Apple 裝置上的 Foundation Models 當成另一個「本機腦」，不佔 llama-server 的記憶體（要確認中文品質）。
 
@@ -130,5 +132,5 @@ private/<App>/characters/<id>/
 | 2 | **進行中**：新 app 骨架：泡泡／展開視窗、拖曳、文字對話、範本人物、齒輪（共用分頁） |
 | 3 | 接 KB：相關卡＋熟悉度放進提示，顯示參考了哪些卡 |
 | 4 | 特化按鈕：知識卡 → KB；PaperComposer 筆記功能 → 整理成筆記、記下靈感 |
-| 5 | 語音：`lore-voice`（STT＋系統 TTS）、按住說話、常駐模式 |
+| 5 | **已完成（2026-11-11，和階段 2 一起）**：語音：`lore-voice`（STT＋系統 TTS）、按住說話、常駐模式 |
 | 6 | 自訂聲音、多人物、avatar 動畫 |

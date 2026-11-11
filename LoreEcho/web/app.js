@@ -104,6 +104,7 @@ async function loadCharacters() {
   $("win").style.setProperty("--fig-dy", f.offset_y ?? 0);
   $("figure").classList.toggle("portrait", !(S.char?.full?.length > 0));
   setState("idle");
+  window.LoreVoice?.characterChanged(S.char);
   setImg($("bubbleImg"), $("bubbleIcon"), "avatar", "idle");
   // fetch the other states' pictures now, so a state change does not flicker
   for (const st of S.states) for (const kind of ["full", "avatar"]) { const u = picUrl(kind, st); if (u) new Image().src = u; }
@@ -148,7 +149,8 @@ async function whileState(state, work) {
   try { return await work(); }
   finally { if (S.state === state) setState(S.busy ? "thinking" : before === "listening" ? "idle" : before); }
 }
-window.LoreEcho = { setState, whileState };
+// voice.js (the mic, 朗讀回覆, the theme song) reads and drives the page through these
+window.LoreEcho = { setState, whileState, state: () => S.state, send: () => send(), character: () => S.char, reloadCharacters: () => refreshChars() };
 
 /** A simple cue in a finished reply: happy | unsure | surprised | null. */
 function moodOf(text) {
@@ -248,6 +250,7 @@ function wireResize() {
 // ── bubble ⇄ open window ────────────────────────────────────────
 async function show(expanded, save = true) {
   if (!expanded && S.expanded) {
+    window.LoreVoice?.reset(true);               // quiet: no voice, the song fades out
     newChat();                                   // closing the window ends the conversation (design §2)
     const p = $("win");
     p.classList.remove("opening"); p.classList.add("closing");
@@ -298,6 +301,7 @@ function wire() {
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !S.expanded || document.querySelector("dialog[open]") || document.querySelector(".menu, .ask")) return;
     e.preventDefault();
+    if (window.LoreVoice?.escape()) return;      // speaking or listening: Esc stops that first
     if (!$("choices").hidden) { toggleChoices(false); $("text").focus(); }
     else show(false);
   });
@@ -331,6 +335,7 @@ function setLine(text, look = "") {
 const GREETING = "想聊什麼都可以。對話只留在這個視窗裡，按「新對話」或收起就清掉。";
 
 function newChat() {
+  window.LoreVoice?.reset(false);
   S.busy?.abort();
   S.busy = null;
   clearTimeout(S.timers.wait); clearTimeout(S.timers.mood);
@@ -347,6 +352,8 @@ function newChat() {
 
 async function send(engine) {
   if (S.busy) return;
+  window.LoreVoice?.beforeSend();
+  const speak = !!window.LoreVoice?.wantsSpeech();   // 朗讀回覆: the server speaks it sentence by sentence
   if (!engine) {
     const text = $("text").value.trim();
     if (!text) return;
@@ -369,7 +376,7 @@ async function send(engine) {
   try {
     const r = await fetch("/api/chat", {
       method: "POST", headers: { "content-type": "application/json" }, signal: ctrl.signal,
-      body: JSON.stringify({ messages: S.msgs, character: S.char?.id, engine, kb: window.LoreEchoKb?.ask() }),
+      body: JSON.stringify({ messages: S.msgs, character: S.char?.id, engine, kb: window.LoreEchoKb?.ask(), speak }),
     });
     if (!r.ok || !(r.headers.get("content-type") || "").startsWith("text/event-stream")) {
       const data = await r.json().catch(() => ({}));
@@ -393,7 +400,13 @@ async function send(engine) {
   } finally {
     clearTimeout(S.timers.wait);
     S.chip.busy(false);
-    if (S.busy === ctrl) { S.busy = null; $("send").disabled = false; settle(reply.trim() ? moodOf(reply) : null); }
+    if (S.busy === ctrl) {
+      S.busy = null; $("send").disabled = false;
+      const mood = reply.trim() ? moodOf(reply) : null;
+      // the character keeps speaking while the voice reads the reply, then shows its mood
+      if (window.LoreVoice) window.LoreVoice.afterReply(speak && !!reply.trim(), () => { if (!S.busy) settle(mood); });
+      else settle(mood);
+    }
   }
 }
 
@@ -441,6 +454,7 @@ async function* events(body) {
 // ── settings: 一般 ───────────────────────────────────────────────
 async function buildGeneral(el) {
   el.append($("tplGeneral").content.cloneNode(true));
+  window.LoreVoice?.buildGeneral(el);
   const key = el.querySelector("#setShortcut");
   try { key.value = (await api("GET", "/api/settings")).shortcut ?? ""; } catch {}
   key.addEventListener("change", async () => {
@@ -491,8 +505,10 @@ async function buildCharacters(el) {
   name.addEventListener("change", () => save({ name: name.value }));
   const persona = h("textarea", { class: "set-input", rows: 4, "aria-label": "個性", style: "flex:1;resize:vertical" }, d?.persona ?? "");
   persona.addEventListener("change", () => save({ persona: persona.value }));
-  const voice = h("input", { class: "set-input", value: d?.voice ?? "", "aria-label": "聲音", placeholder: "之後的階段", disabled: true, style: "flex:1" });
-  el.append(sec("角色", row("名稱", name), row("個性", persona), row("聲音", voice)));
+  // 聲音 · 語速 · 主題曲 (voice.js), then 角色設定 (profile.js)
+  const voiceRows = window.LoreVoice?.characterRows(c, d, save, row) ?? [];
+  el.append(sec("角色", row("名稱", name), row("個性", persona), ...voiceRows));
+  if (window.LoreProfile) el.append(window.LoreProfile.section(d, save));
 
   // the pictures: one row of drop zones per kind
   for (const [kind, title] of ROWS) {

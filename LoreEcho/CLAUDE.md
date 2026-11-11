@@ -11,6 +11,8 @@ cargo test                       # le-server: unit + API tests, offline
 cargo run -p le-server           # http://127.0.0.1:7860, data ../private/LoreEcho
 cargo run -p loreecho            # desktop bubble (Tauri); not in default-members
 cargo test -p loreecho           # geometry, Info.plist, capability (needs the WebView libraries)
+LOREECHO_VOICE=1 cargo run -p le-server --example isolated_server -- <empty dir> 7987   # UI with the real voice
+cargo run -p lore-voice --example check_mac -- <dir>   # (in ../commons) voices, synth → file → transcript, no mic
 LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local OpenAI-compatible server
 ```
 
@@ -20,11 +22,16 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
 
 - `crates/server` (`le-server`): axum on 127.0.0.1 (7860 in browser mode, a free port in the
   desktop app, registered as `le` in `ports.json`). `api.rs` handlers (route table in `lib.rs`),
-  `store.rs` (`state.toml` = bubble place + expanded, `settings.toml` = character + shortcut;
+  `store.rs` (`state.toml` = bubble place + expanded, `settings.toml` = character + shortcut + `talk` (hold|continuous) + `auto_send` + `read_aloud`;
   atomic, unknown keys kept), `characters.rs` (`characters/<id>/character.toml` + `avatar/<state>.*` portraits +
   `full/<state>.*` full bodies; ten states, a missing one follows `chain()` (searching/waiting → thinking → idle, noting → speaking → idle, else idle), no full body → the portrait, no character → built-in; editing (`save_meta`, `save_image` with format sniffing and no scripts in SVG, `remove_image`, `create` = copy of the example, `export`/`import` zip, only known paths read);
-  `figure_scale` / `figure_offset_y` clamped, sent as `figure`), `chat.rs` (transcript checks, system prompt =
-  persona + name + `BREVITY_RULE`, SSE `search/cards/start/delta/done/error`), `kbctx.rs` (design §3: the author's KnowledgeBase cards read from disk with kb-core, never written; per turn titles/aliases in the message and recent turns + key words → a few cards within `BUDGET_CHARS` into the prompt as his own cards with their state; 抽／複習／考我／有哪些卡／記住這個 (zh/en, counts) chosen in code, the model only phrases; quiz carried by the page (`kb.quiz`, `kb.cited`); review outcomes only through KnowledgeBase's `POST /api/recall/{id}` while it runs (`POST /api/kb/recall`); `AppState::new` reads only its home's `private/KnowledgeBase`, `system()` also KB_SPACES/KB config/its server; tests pin a space, `tests/fixtures/kb`), `llm.rs` (task `le-chat` from
+  `figure_scale` / `figure_offset_y` clamped, sent as `figure`; `voice`, `voice_rate` (0.5–2); `Profile` = 角色設定
+  (background, speech_style, catchphrases, call_user, relationship, likes, dislikes, examples; `clean()` limits);
+  theme song `theme.<ext>` sniffed by `sniff_audio`, `theme_loop`/`theme_volume`, in export/import), `chat.rs` (transcript checks, system prompt =
+  persona + name + 角色設定 lines (background cut at `BACKGROUND_LIMIT`) + the about-yourself rule + `BREVITY_RULE`, example pairs as
+  earlier turns; `speak: true` = the deltas also go to a lore-voice `Speaker`; SSE `search/cards/start/delta/done/error`),
+  `voice.rs` (`/api/voice*`: status, voices, events SSE, listen/stop, speak/stop, open-settings (only with the real engine);
+  `AppState.voice` = `Voice::system()` in `system()`, unavailable in `new()`, `with_voice()` for fakes), `kbctx.rs` (design §3: the author's KnowledgeBase cards read from disk with kb-core, never written; per turn titles/aliases in the message and recent turns + key words → a few cards within `BUDGET_CHARS` into the prompt as his own cards with their state; 抽／複習／考我／有哪些卡／記住這個 (zh/en, counts) chosen in code, the model only phrases; quiz carried by the page (`kb.quiz`, `kb.cited`); review outcomes only through KnowledgeBase's `POST /api/recall/{id}` while it runs (`POST /api/kb/recall`); `AppState::new` reads only its home's `private/KnowledgeBase`, `system()` also KB_SPACES/KB config/its server; tests pin a space, `tests/fixtures/kb`), `llm.rs` (task `le-chat` from
   `tasks.toml`, class `ask`: `local:current` then `claude:selected`; local engine =
   `LOREECHO_LLM_URL` else the shared model id of `private/shared/engine.toml` on the machine's one
   llama-server (lore-llm `shared_runtime`, `../docs/local-models.md`; `llm::quit()` at exit); keys via
@@ -44,8 +51,11 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   模型 快捷鍵 人物; 人物 = name, persona, per-state drop zones for 縮圖 and 對話人物, switch/new/export/import) and the quiet history, `.choices` (功能列表 as VN choice rows, ↑↓/Enter, disabled
   「下一階段」 until phase 4), `.box` (name tag = character switcher, the current line, input row).
   `styles.css` uses theme tokens only, the character pictures are shown as they are. The conversation lives only in the page (`S.msgs`); collapsing or
-  新對話 clears it. Mic button is a disabled placeholder for the voice phase.
-  States in the page (`setState`, also `window.LoreEcho.setState / whileState`): listening while a message is typed (the voice phase reuses it for recording), thinking while waiting for the model, waiting after 8 s without a first token, speaking while streaming, happy/unsure/surprised from a keyword cue in the finished reply (`moodOf`, 4 s); searching while the server reads KnowledgeBase (SSE `search`, `web/kbcards.js`, which also draws the 「引用：…」 row under the line, opening cards with `LoreLinks.open("kb", {node})`, and 記得／忘了 after a quiz answer); noting (writing a note) has no signal yet: wrap the future call in `whileState`. The name tag shows the avatar of the current state.
+  新對話 clears it. Voice: `voice.js` (mic hold/continuous, 朗讀回覆 toggle, theme song button + ducking/fade, 一般 → 語音,
+  人物 → 聲音/語速/主題曲) and `profile.js` (人物 → 角色設定), hooked from app.js through `window.LoreVoice` / `window.LoreEcho`;
+  `voice.css`. Desktop: `apps/desktop/Info.plist` (mic + speech usage strings, merged by the bundler), `build.rs` copies the
+  helper to `bin/` (ignored) → `bundle.macOS.files` → `Contents/MacOS/lore-voice-helper`.
+  States in the page (`setState`, also `window.LoreEcho.setState / whileState`): listening while a message is typed (the voice phase reuses it for recording), thinking while waiting for the model, waiting after 8 s without a first token, speaking while streaming and while the voice reads the reply (`LoreVoice.afterReply` delays the mood), listening also while recording, happy/unsure/surprised from a keyword cue in the finished reply (`moodOf`, 4 s); searching while the server reads KnowledgeBase (SSE `search`, `web/kbcards.js`, which also draws the 「引用：…」 row under the line, opening cards with `LoreLinks.open("kb", {node})`, and 記得／忘了 after a quiz answer); noting (writing a note) has no signal yet: wrap the future call in `whileState`. The name tag shows the avatar of the current state.
 - `../private-example/LoreEcho/`: one neutral character `echo` (avatars = the icon's outline, full bodies; all ten states in both rows).
 
 ## Rules
@@ -54,6 +64,8 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   `private-example/LoreEcho` copied in, `MockProvider`/`MockFactory`, `router_isolated`; never real
   Claude, the `claude` CLI, llama-server or the network.
 - Transparency, the tray, the global shortcut, dragging from the page and multi-monitor placement
-  are **not tested on real hardware** (Linux CI only type-checks the desktop crate).
+  are **not tested on real hardware** (Linux CI only type-checks the desktop crate). Voice: tests use
+  `lore_voice::fake`; the microphone, permission prompts, live listening and the bundled helper are
+  **not tested on real hardware**.
 - Commits: ellrin is the only author; no `Co-Authored-By` or AI attribution trailers.
 - Replies to the author in Traditional Chinese (繁體中文).

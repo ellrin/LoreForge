@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="base.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="kbcards.css">
+  <link rel="stylesheet" href="voice.css">
   <link rel="stylesheet" href="prefs.css">
   <script src="theme.js"></script>
 </head>
@@ -40,8 +41,8 @@
         <button type="button" class="nametag" id="nametag" aria-haspopup="menu" title="換人物"><img id="whoImg" class="who-img" alt="" draggable="false" hidden><span id="who">LoreEcho</span><span data-icon="chevron"></span></button>
         <div class="line empty" id="line" aria-live="polite">想聊什麼都可以。對話只留在這個視窗裡，按「新對話」或收起就清掉。</div>
         <form class="input" id="form" autocomplete="off">
-          <button type="button" class="ico" id="mic" disabled aria-label="語音（之後的階段）" title="語音輸入：之後的階段才會有"><span data-icon="mic"></span></button>
-          <textarea id="text" rows="1" placeholder="說點什麼…（Shift+↵ 換行）" aria-label="訊息"></textarea>
+          <button type="button" class="ico" id="mic" aria-label="按住說話" title="按住說話"><span data-icon="mic"></span></button>
+          <textarea id="text" rows="1" placeholder="說點什麼…" aria-label="訊息"></textarea>
           <button type="submit" class="ico" id="send" aria-label="送出 ↵"><span data-icon="send"></span></button>
         </form>
       </section>
@@ -63,5 +64,7 @@
   <script src="shell.js"></script>
   <script src="kbcards.js"></script>
   <script src="app.js"></script>
+  <script src="voice.js"></script>
+  <script src="profile.js"></script>
 </body>
 </html>

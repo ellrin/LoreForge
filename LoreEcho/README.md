@@ -2,8 +2,8 @@
 
 個人學習夥伴：桌面右下角一顆圓形小泡泡，點開變成像視覺小說一樣的視窗：左邊站著人物的全身圖，右邊是對話。接 Claude 或本機模型（經過 `lore-llm`），回答偏短、以繁體中文為主；只記這一次的對話，不寫進任何檔案。設計見 `../docs/loreecho.md`。
 
-> 開發中（階段 2：骨架）。已完成：泡泡／展開視窗（無邊框、透明、置頂、可拖曳、位置記在 private）、選單列圖示、全域快捷鍵、文字對話（串流）、範本人物、齒輪（一般、外觀、模型、快捷鍵）、讀 KnowledgeBase 的卡（只讀；每輪附上相關的卡與熟悉度，「從知識庫抽兩張」「今天要複習什麼」「考我」「有哪些…的卡」「記住這個」，回答下方「引用：…」可開卡；記得／忘了只在 KnowledgeBase 開著時經它的 API 記下）。
-> 之後：特化按鈕（階段 4）、語音（階段 5，麥克風按鈕目前是停用的預留位置）。
+> 開發中（階段 2：骨架＋語音）。已完成：泡泡／展開視窗（無邊框、透明、置頂、可拖曳、位置記在 private）、選單列圖示、全域快捷鍵、文字對話（串流）、範本人物、齒輪（一般、外觀、模型、快捷鍵、人物）、語音（macOS：按住說話／常駐、朗讀回覆）、人物的主題曲與角色設定、讀 KnowledgeBase 的卡（只讀；每輪附上相關的卡與熟悉度，「從知識庫抽兩張」「今天要複習什麼」「考我」「有哪些…的卡」「記住這個」，回答下方「引用：…」可開卡；記得／忘了只在 KnowledgeBase 開著時經它的 API 記下）。
+> 之後：特化按鈕（階段 4）。
 
 ## 執行
 
@@ -15,11 +15,16 @@ cargo run -p loreecho         # 桌面泡泡（Tauri）
 資料在 `../private/LoreEcho/`，第一次啟動時從 `../private-example/LoreEcho/` 複製（之後不會再寫進範本）：
 
 ```
-characters/<id>/character.toml   名稱、個性、聲音（之後）、語言、全身圖的大小（figure_scale、figure_offset_y）
+characters/<id>/character.toml   名稱、個性、語言、聲音（voice＝系統聲音 id，voice_rate＝語速倍數）、
+                                 角色設定（background speech_style catchphrases call_user relationship
+                                 likes dislikes [[examples]]）、主題曲（theme_loop、theme_volume）、
+                                 全身圖的大小（figure_scale、figure_offset_y）
+characters/<id>/theme.<ext>      主題曲（mp3 m4a aac wav ogg opus flac，30 MB 以內，可以沒有）
 characters/<id>/avatar/          頭像：idle listening thinking speaking（泡泡用；缺的用 idle）
 characters/<id>/full/            全身圖：同樣四種狀態，從頭到腳、去背（展開視窗用；缺的用 full/idle，
                                  完全沒有 full/ 就用頭像）
-settings.toml                    目前的人物、快捷鍵（預設 Alt+Space）
+settings.toml                    目前的人物、快捷鍵（預設 Alt+Space）、麥克風（talk = hold｜continuous）、
+                                 說完就送出（auto_send）、朗讀回覆（read_aloud）
 state.toml                       泡泡的位置、是否展開
 ```
 
@@ -45,6 +50,23 @@ state.toml                       泡泡的位置、是否展開
 - Dock：像一般 App 有 Dock 圖示，點它會顯示泡泡或把視窗帶到最前面；⌘M 最小化、⌘H 隱藏、⌘Q 結束。
 - 選單列圖示：左鍵顯示／隱藏，右鍵選單可以結束。快捷鍵在齒輪 →「一般」改。
 
+## 語音（macOS）
+
+- 輸入列左邊：麥克風、朗讀回覆（喇叭，開／關）、主題曲（人物有主題曲才出現；播放／暫停）。
+- 麥克風預設「按住說話」：按住時人物是 listening，說的話即時出現在輸入框（接在原本打的字後面），放開就送出。
+  齒輪 →「一般」→ 語音 可以改成「常駐」（按一下開、再按一下關，說完一句停一下就送出；回答和朗讀時先停聽，結束後再接著聽），
+  也可以關掉「說完就送出」（改成留在輸入框等你按 ↵）。
+- 朗讀回覆：回答一邊串流一邊一句一句念出來，人物在念完之前都是 speaking；Esc 或點人物停止。
+- 聽：Apple `SpeechTranscriber`（裝置上辨識，這台 macOS 支援中文（台灣））；不支援或模型還沒下載時用 `SFSpeechRecognizer`。
+  說：系統聲音（齒輪 → 人物 → 聲音，中文（台灣）排前面；系統設定 → 輔助使用 → 朗讀內容 可以免費下載高品質聲音）。
+- 第一次按麥克風時 macOS 會問麥克風（和必要時語音辨識）權限；拒絕過的話會出現一行提示和「開啟系統設定」。
+- 主題曲：齒輪 → 人物 → 主題曲（選擇或拖進音樂檔、試聽、移除、循環、音量）。只在按播放時才播；說話、聆聽時自動調小聲，收起或換人物時淡出。
+  WebKit 播不了 ogg／opus 時會提示。
+- 角色設定：齒輪 → 人物 → 角色設定（身分與背景、說話風格、口頭禪、怎麼稱呼你、和你的關係、喜歡／不喜歡、範例對話）。
+  全部選填；系統提示依序是個性、名字、這些設定、固定的簡短規則；範例對話當成前幾輪對話送出。
+  身分與背景只送前 800 字（欄位下面有字數）。
+- 實作：`../commons/crates/lore-voice`（Swift 輔助程式 `lore-voice-helper`，打包在 App 的 `Contents/MacOS/`）。
+
 ## API
 
 | 方法 | 路徑 | 說明 |
@@ -53,12 +75,16 @@ state.toml                       泡泡的位置、是否展開
 | GET/PUT | `/api/theme`，`/theme.css`，`/theme.js` | 共用主題 |
 | GET/PUT | `/api/engines` | 共用的模型設定 |
 | GET/PUT | `/api/window` | `{ x, y, expanded }` |
-| GET/PUT | `/api/settings` | `{ character, shortcut }` |
+| GET/PUT | `/api/settings` | `{ character, shortcut, talk, auto_send, read_aloud }` |
 | GET | `/api/characters` | 人物清單與目前的人物（每個人物：`avatars`、`full` 有圖的狀態，`full` 空＝沒有全身圖；`figure: { scale, offset_y }`） |
 | GET | `/api/characters/{id}/avatar/{state}` | 頭像（缺的狀態用 idle） |
 | GET | `/api/characters/{id}/full/{state}` | 全身圖（`full/<state>` → `full/idle` → 該狀態的頭像） |
-| POST | `/api/chat` | `{ messages, character , kb? }` → 串流回答（server-sent events；有知識庫時先送 `search`、`cards`） |
+| GET/PUT | `/api/characters/{id}` | 名稱、個性、聲音、語速、主題曲設定、角色設定（`profile`） |
+| GET/PUT/DELETE | `/api/characters/{id}/theme` | 主題曲 |
+| POST | `/api/chat` | `{ messages, character, kb?, speak? }` → 串流回答（server-sent events；有知識庫時先送 `search`、`cards`；`speak` = 一邊念出來） |
 | POST | `/api/kb/recall` | `{ id, outcome }` → 經 KnowledgeBase 的 API 記下複習結果（它沒開時回一句說明） |
+| GET | `/api/voice`，`/api/voice/voices`，`/api/voice/events` | 語音狀態、系統聲音、語音事件（server-sent events） |
+| POST | `/api/voice/listen`，`/listen/stop`，`/speak`，`/stop`，`/open-settings` | 聽、停、說（試聽）、停止說、開系統設定的隱私頁 |
 
 ## 圖示
 
