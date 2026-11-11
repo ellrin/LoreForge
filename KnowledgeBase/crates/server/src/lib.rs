@@ -42,7 +42,9 @@ impl AppState {
 
     /// With the LoreForge folder named (tests use a temporary one).
     pub fn with_home(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders, home: lore_home::Home) -> Shared {
-        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home, llm: llm::Llm::new(reminders::app_dir().as_deref()) })
+        let mut llm = llm::Llm::new(reminders::app_dir().as_deref());
+        llm.share_engine(home.clone());
+        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home, llm })
     }
 
     /// Like [`AppState::new`] with the given model access (tests use mock engines).
@@ -85,7 +87,10 @@ fn engines(shared: &Shared) -> lore_engines::Engines {
 }
 
 pub fn router(shared: Shared) -> Router {
-    let e = engines(&shared);
+    let mut e = engines(&shared);
+    if let Some(rt) = shared.llm.local_rt.clone() {
+        e = e.shared(rt); // 本機 status, 釋放, and this app's share of the idle checks
+    }
     router_with(shared, e)
 }
 

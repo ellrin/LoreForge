@@ -1,13 +1,16 @@
 //! Model calls through lore-llm, wired like LoreReader's: the card draft is the task
 //! `kb-summarize-card` (`tasks.toml`: `local:current`, then `claude:selected`). The API key
 //! comes from the OS keychain (service `KnowledgeBase`) or ANTHROPIC_API_KEY, never a file.
+//! Local: the own `[engine] url` / `KB_LLM_URL` when set, else the model all apps share
+//! (`private/shared/engine.toml` `[engine] model`) on the machine's one llama-server
+//! (lore-llm `shared_runtime`, docs/local-models.md).
 
 use std::path::Path;
 use std::sync::Arc;
 
 use lore_llm::catalog::Catalog;
 use lore_llm::claude_code::{Cache, Cli};
-use lore_llm::local::LocalRuntime;
+use lore_llm::shared_runtime::SharedRuntime;
 use lore_llm::router::{ApiAccess, ExternalServer, LocalAccess, ProviderFactory, RouteError, RouteOptions, StandardFactory, SubscriptionAccess};
 use lore_llm::secrets::{Account, SharedKeys};
 use lore_llm::{LlmRequest, Router, TaskTable};
@@ -16,6 +19,14 @@ use serde::Deserialize;
 const TASKS: &str = include_str!("../tasks.toml");
 pub const SERVICE: &str = "KnowledgeBase";
 pub const TASK_DRAFT: &str = "kb-summarize-card";
+/// Short name in the shared local-model registry (and `ports.json`).
+pub const APP: &str = "kb";
+
+/// At quit: this app's hold on the shared local model goes; the server stops when no other
+/// app uses it.
+pub fn quit() {
+    SharedRuntime::shutdown_process();
+}
 const LOCAL_TEMPERATURE: f32 = 0.2;
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -45,7 +56,10 @@ pub struct Llm {
     keys: SharedKeys,
     cli: Cli,
     cc: Arc<Cache>,
-    runtime: Arc<LocalRuntime>,
+    /// The machine's shared llama-server (`None`: tests).
+    pub local_rt: Option<Arc<SharedRuntime>>,
+    /// Where the shared model choice is kept (`private/shared/engine.toml`).
+    shared: Option<lore_home::Home>,
     external: Option<ExternalServer>,
     model: String,
     /// Tests: these providers instead of the real engines.
@@ -78,7 +92,8 @@ impl Llm {
             keys: SharedKeys::for_app(SERVICE, None),
             cli: Cli::default(),
             cc: Arc::new(Cache::default()),
-            runtime: Arc::new(LocalRuntime::new()),
+            local_rt: SharedRuntime::process(APP),
+            shared: None,
             external: url.map(|url| ExternalServer { url, model: env("KB_LLM_MODEL").or(file.engine.model) }),
             model,
             fake: None,
@@ -89,6 +104,7 @@ impl Llm {
     pub fn none() -> Llm {
         let mut l = Llm::new(None);
         l.external = None;
+        l.local_rt = None;
         l.keys.isolate();
         l.cli = Cli { bin: Some(std::env::temp_dir().join("kb-no-such-claude")), config_dir: None };
         l
@@ -106,6 +122,11 @@ impl Llm {
         TaskTable::load(base, user_file.filter(|p| p.is_file()))
     }
 
+    /// Use the shared model choice of `home` (re-read on every call).
+    pub fn share_engine(&mut self, home: lore_home::Home) {
+        self.shared = Some(home);
+    }
+
     fn factory(&self) -> StandardFactory {
         let mut f = StandardFactory::new(self.catalog.clone());
         f.prefer_subscription = true;
@@ -113,7 +134,15 @@ impl Llm {
         let base = std::env::var("KNOWLEDGEBASE_CLAUDE_BASE_URL").unwrap_or_else(|_| lore_llm::claude_api::DEFAULT_BASE_URL.into());
         f.api = self.keys.get(None, &Account::Single).map(|(k, _)| ApiAccess { base_url: base, api_key: k, fallbacks: true });
         f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: false, temp_prefix: "knowledgebase-claude".into() });
-        f.local = Some(LocalAccess { external: self.external.clone(), runtime: Some(self.runtime.clone()), zh_tw: true, ..Default::default() });
+        let e = self.shared.as_ref().and_then(|h| h.engine()).unwrap_or_default();
+        f.local = Some(LocalAccess {
+            external: self.external.clone(),
+            shared: self.local_rt.clone(),
+            default_model: e.model,
+            vision_model: e.vision_model,
+            zh_tw: true,
+            ..Default::default()
+        });
         f
     }
 
@@ -125,7 +154,9 @@ impl Llm {
             Some("local") => RouteOptions::only("local:current"),
             Some("claude") => RouteOptions::only("claude:selected"),
             _ => RouteOptions::default(),
-        };
+        }
+        // the 起草摘要 button waits for it: interactive for a local model
+        .with_priority(lore_llm::shared_runtime::Priority::Interactive);
         let route = match &self.fake {
             Some(f) => Router::new(self.tasks.clone(), f.clone()).provider_for_with(task, &opts).await,
             None => Router::new(self.tasks.clone(), self.factory()).provider_for_with(task, &opts).await,
