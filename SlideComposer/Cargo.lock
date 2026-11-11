@@ -2183,6 +2183,8 @@ dependencies = [
  "base64 0.22.1",
  "ferrous-opencc",
  "futures-util",
+ "libc",
+ "lore-home",
  "lore-secrets",
  "reqwest 0.12.28",
  "serde",

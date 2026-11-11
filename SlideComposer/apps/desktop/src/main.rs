@@ -216,6 +216,7 @@ fn main() {
                 if let Some((shared, _)) = app.state::<Opener>().ready.lock().unwrap().clone() {
                     sc_server::flush_files(&shared);
                 }
+                sc_server::llm::quit();
                 return;
             }
             #[cfg(any(target_os = "macos", target_os = "ios"))]

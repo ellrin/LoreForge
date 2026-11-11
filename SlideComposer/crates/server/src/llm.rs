@@ -8,13 +8,21 @@ use std::sync::Arc;
 
 use lore_llm::catalog::Catalog;
 use lore_llm::claude_code::{Cache, Cli};
-use lore_llm::local::LocalRuntime;
-use lore_llm::router::{ApiAccess, ExternalServer, LocalAccess, ProviderFactory, RouteError, RouteOptions, StandardFactory, SubscriptionAccess};
+use lore_llm::router::{ApiAccess, LocalAccess, ProviderFactory, RouteError, RouteOptions, StandardFactory, SubscriptionAccess};
+use lore_llm::shared_runtime::SharedRuntime;
 use lore_llm::secrets::{Account, SharedKeys};
 use lore_llm::{LlmRequest, Route, Router, TaskTable};
 
 pub const TASKS: &str = include_str!("../tasks.toml");
 pub const SERVICE: &str = "SlideComposer";
+/// Short name in the shared local-model registry (and `ports.json`).
+pub const APP: &str = "sc";
+
+/// At quit: this app's hold on the shared local model goes; the server stops when no other
+/// app uses it.
+pub fn quit() {
+    SharedRuntime::shutdown_process();
+}
 pub const TASK_PAPER_DECK: &str = "sc-paper-deck";
 const TEMPERATURE: f32 = 0.3;
 
@@ -32,7 +40,8 @@ pub struct Llm {
     keys: SharedKeys,
     cli: Cli,
     cc: Arc<Cache>,
-    runtime: Arc<LocalRuntime>,
+    /// The machine's shared llama-server (`None`: no local engine).
+    shared: Option<Arc<SharedRuntime>>,
     no_local: bool,
     fake: Option<Arc<dyn ProviderFactory>>,
 }
@@ -53,7 +62,7 @@ impl Llm {
             keys: SharedKeys::for_app(SERVICE, None),
             cli: Cli::default(),
             cc: Arc::new(Cache::default()),
-            runtime: Arc::new(LocalRuntime::new()),
+            shared: SharedRuntime::process(APP),
             no_local: false,
             fake: None,
         }
@@ -65,6 +74,7 @@ impl Llm {
         l.keys.isolate();
         l.cli = Cli { bin: Some(std::env::temp_dir().join("sc-no-such-claude")), config_dir: None };
         l.no_local = true;
+        l.shared = None;
         l
     }
 
@@ -84,8 +94,9 @@ impl Llm {
         f.api = api_key.map(|k| ApiAccess { base_url: base, api_key: k, fallbacks: true });
         f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: false, temp_prefix: "slidecomposer-claude".into() });
         if !self.no_local {
-            let external = self.home.engine().and_then(|e| Some(ExternalServer { url: e.url?, model: e.model }));
-            f.local = Some(LocalAccess { external, runtime: Some(self.runtime.clone()), zh_tw: true, ..Default::default() });
+            // the shared default model of engine.toml, acquired from the machine's one llama-server
+            let e = settings.engine.clone().unwrap_or_default();
+            f.local = Some(LocalAccess { shared: self.shared.clone(), default_model: e.model, vision_model: e.vision_model, zh_tw: true, ..Default::default() });
         }
         f
     }
@@ -96,7 +107,9 @@ impl Llm {
             Some("local") => RouteOptions::only("local:current"),
             Some("claude") => RouteOptions::only("claude:selected"),
             _ => RouteOptions::default(),
-        };
+        }
+        // someone watches the result (the 論文報告 progress, a button): interactive for a local model
+        .with_priority(lore_llm::shared_runtime::Priority::Interactive);
         match &self.fake {
             Some(f) => Router::new(self.tasks.clone(), f.clone()).provider_for_with(task, &opts).await,
             None => {
