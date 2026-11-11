@@ -146,7 +146,7 @@ LoreLinks.open(app, params) · LoreLinks.url(app, params) · LoreLinks.ports
 
 ### 模型：`GET/PUT /api/engines`
 
-設定存在 `private/shared/engine.toml`（lore-home `Home::engine()`／`set_engine()` 已有 `[engine]`），建議加兩個表：
+設定存在 `private/shared/engine.toml`（lore-home `Home::engine()`／`set_engine_model()`：`[engine]` 只存模型 id；正在跑的 llama-server 是執行期資料，見 `docs/local-models.md`），建議加兩個表：
 
 ```toml
 [engine]            # 已有：本機模型

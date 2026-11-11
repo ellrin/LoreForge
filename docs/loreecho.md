@@ -126,7 +126,7 @@ private/<App>/characters/<id>/
 | 階段 | 內容 |
 |---|---|
 | 0 | 本稿＋icon 定案（icon 已減線條，表情照作者的參考圖：八字眉、半垂眼皮、下垂嘴角） |
-| 1 | **進行中**：模型管家（`lore-modeld`）＋ `lore-llm` 改走它；PaperComposer 把開模型的工作交出去 |
+| 1 | **已完成（改定）**：本機模型共用規則（`lore-llm` 的 `shared_runtime`，見 `docs/local-models.md`）；PaperComposer 不再擁有模型，所有 app 經 `acquire` 用同一個 llama-server |
 | 2 | **進行中**：新 app 骨架：泡泡／展開視窗、拖曳、文字對話、範本人物、齒輪（共用分頁） |
 | 3 | 接 KB：相關卡＋熟悉度放進提示，顯示參考了哪些卡 |
 | 4 | 特化按鈕：知識卡 → KB；PaperComposer 筆記功能 → 整理成筆記、記下靈感 |

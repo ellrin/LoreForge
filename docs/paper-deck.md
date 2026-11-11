@@ -29,7 +29,7 @@
 
 ## 本機模型的記憶體
 
-本機模型由 PaperComposer 管理的 llama-server 提供（`private/shared/engine.toml` 公布網址），SlideComposer 只是使用者，不能關掉它。釋放記憶體由 lore-llm 的 `LocalRuntime` 負責：閒置 N 分鐘自動釋放（預設 10 分，在 齒輪 → 模型 設定），另有「釋放」按鈕；app 結束時照舊 `kill_now`。
+本機模型是整台電腦共用的一個 llama-server（lore-llm `shared_runtime`，見 `docs/local-models.md`）：任何 app 需要時都能啟動，SlideComposer 和其他 app 一樣經 `acquire` 使用。釋放記憶體：閒置 N 分鐘由任何 app 停掉（預設 10 分，在 齒輪 → 模型 設定）；「釋放」按鈕只在沒有其他 app 在用時能按；最後一個在用的 app 結束時停掉。
 
 ## 內容順序與風格
 
