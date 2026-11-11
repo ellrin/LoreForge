@@ -3,14 +3,15 @@
 //
 // Commands                                              Events
 // {"cmd":"voices","req":1}                              {"ev":"voices","req":1,"voices":[{id,name,language,quality}]}
+// {"cmd":"personal_voice","req":5,"ask":false}          {"ev":"personal_voice","req":5,"status":"authorized|denied|not_determined|unsupported"} (ask: the system's prompt when not determined)
 // {"cmd":"permissions","req":2}                         {"ev":"permissions","req":2,"microphone":"granted|denied|undetermined","speech":…}
-// {"cmd":"speak","id":5,"text","voice","rate","language"} {"ev":"speak_start","id":5} {"ev":"word","id":5,"start","len"} {"ev":"speak_end","id":5,"cancelled":false}
-// {"cmd":"play","id":6,"path","rate","pitch"}          {"ev":"speak_start","id":6} {"ev":"speak_end","id":6,"cancelled":false}
-//   (a synthesised sentence, e.g. Qwen3-TTS: queued after the files before it; rate 0.5–2 keeps the pitch, pitch in semitones)
-// {"cmd":"stop_speaking"}                               (stops the system voice and the files)
+// {"cmd":"speak","id":5,"text","voice","rate","pitch","language"} {"ev":"speak_start","id":5} {"ev":"word","id":5,"start","len"} {"ev":"speak_end","id":5,"cancelled":false}
+//   (word: the UTF-16 range of `text` about to be spoken)
+// {"cmd":"stop_speaking"}
+// {"cmd":"warm","voice","language"}                    (loads the voice silently; no answer)
 // {"cmd":"listen","language":"zh-TW","continuous":false} {"ev":"listen_start","engine"} {"ev":"partial","text"} {"ev":"final","text"} {"ev":"listen_end"}
 // {"cmd":"stop_listening"}
-// {"cmd":"synth_file","req":3,"text","voice","rate","language","path"}   {"ev":"file","req":3,"path","frames"}
+// {"cmd":"synth_file","req":3,"text","voice","rate","pitch","language","path"}   {"ev":"file","req":3,"path","frames"}
 // {"cmd":"transcribe_file","req":4,"path","language"}   {"ev":"transcript","req":4,"text","engine"}
 // errors: {"ev":"error","kind":"microphone|speech|unavailable|failed","message","req"?}
 //
@@ -56,15 +57,45 @@ func qualityName(_ q: AVSpeechSynthesisVoiceQuality) -> String {
     }
 }
 
+/// Chinese and English voices without the novelty ones, plus the author's Personal Voice (any
+/// language; listed by the system only once this program is authorized to use it).
 func listVoices() -> [[String: Any]] {
     AVSpeechSynthesisVoice.speechVoices()
-        .filter { $0.language.hasPrefix("zh") || $0.language.hasPrefix("en") }
+        .filter { isPersonal($0) || $0.language.hasPrefix("zh") || $0.language.hasPrefix("en") }
         .filter { !$0.voiceTraits.contains(.isNoveltyVoice) }
-        .map { ["id": $0.identifier, "name": $0.name, "language": $0.language, "quality": qualityName($0.quality)] }
+        .map { ["id": $0.identifier, "name": $0.name, "language": $0.language, "quality": qualityName($0.quality), "personal": isPersonal($0)] }
+}
+
+func isPersonal(_ v: AVSpeechSynthesisVoice) -> Bool {
+    if #available(macOS 14, *) { return v.voiceTraits.contains(.isPersonalVoice) }
+    return false
+}
+
+/// Personal Voice authorization: the current state, or (ask) the system's prompt first. The
+/// prompt is attributed to the app this helper runs in (its responsible process).
+func personalVoice(req: Any, ask: Bool) {
+    guard #available(macOS 14, *) else {
+        emit(["ev": "personal_voice", "req": req, "status": "unsupported"]); return
+    }
+    func name(_ st: AVSpeechSynthesizer.PersonalVoiceAuthorizationStatus) -> String {
+        switch st {
+        case .authorized: return "authorized"
+        case .denied: return "denied"
+        case .unsupported: return "unsupported"
+        default: return "not_determined"
+        }
+    }
+    let now = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
+    if !ask || now != .notDetermined {
+        emit(["ev": "personal_voice", "req": req, "status": name(now)]); return
+    }
+    AVSpeechSynthesizer.requestPersonalVoiceAuthorization { st in
+        DispatchQueue.main.async { emit(["ev": "personal_voice", "req": req, "status": name(st)]) }
+    }
 }
 
 /// `rate` is a multiplier: 1 = the system's normal speed.
-func utterance(_ text: String, voice: String?, rate: Double, language: String?) -> AVSpeechUtterance {
+func utterance(_ text: String, voice: String?, rate: Double, language: String?, pitch: Double = 1) -> AVSpeechUtterance {
     let u = AVSpeechUtterance(string: text)
     if let v = voice, !v.isEmpty, let vv = AVSpeechSynthesisVoice(identifier: v) {
         u.voice = vv
@@ -73,6 +104,7 @@ func utterance(_ text: String, voice: String?, rate: Double, language: String?) 
     }
     let r = Double(AVSpeechUtteranceDefaultSpeechRate) * (rate.isFinite && rate > 0 ? rate : 1)
     u.rate = Float(min(Double(AVSpeechUtteranceMaximumSpeechRate), max(Double(AVSpeechUtteranceMinimumSpeechRate), r)))
+    u.pitchMultiplier = Float(min(2, max(0.5, pitch.isFinite ? pitch : 1)))
     return u
 }
 
@@ -80,14 +112,15 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     let synth = AVSpeechSynthesizer()
     var ids: [ObjectIdentifier: Int] = [:]
     var fileSynth: AVSpeechSynthesizer?
+    var warmSynth: AVSpeechSynthesizer?
 
     override init() {
         super.init()
         synth.delegate = self
     }
 
-    func speak(id: Int, text: String, voice: String?, rate: Double, language: String?) {
-        let u = utterance(text, voice: voice, rate: rate, language: language)
+    func speak(id: Int, text: String, voice: String?, rate: Double, language: String?, pitch: Double) {
+        let u = utterance(text, voice: voice, rate: rate, language: language, pitch: pitch)
         ids[ObjectIdentifier(u)] = id
         synth.speak(u)
     }
@@ -114,14 +147,26 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
         ids.removeValue(forKey: ObjectIdentifier(u))
     }
 
+    /// Load `voice` now (into a throwaway buffer, no sound), so the first sentence spoken with
+    /// it starts without the voice's loading time.
+    func warm(voice: String?, language: String?) {
+        let s = AVSpeechSynthesizer()
+        warmSynth = s
+        s.write(utterance("嗯。", voice: voice, rate: 1, language: language)) { buffer in
+            if let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength == 0 {
+                DispatchQueue.main.async { if self.warmSynth === s { self.warmSynth = nil } }
+            }
+        }
+    }
+
     /// Synthesise to a file (tests on a real Mac, previews): no sound is played.
-    func toFile(req: Any, text: String, voice: String?, rate: Double, language: String?, path: String) {
+    func toFile(req: Any, text: String, voice: String?, rate: Double, language: String?, pitch: Double, path: String) {
         let s = AVSpeechSynthesizer()
         fileSynth = s
         var file: AVAudioFile?
         var frames: AVAudioFrameCount = 0
         var done = false
-        s.write(utterance(text, voice: voice, rate: rate, language: language)) { buffer in
+        s.write(utterance(text, voice: voice, rate: rate, language: language, pitch: pitch)) { buffer in
             guard let pcm = buffer as? AVAudioPCMBuffer else { return }
             if pcm.frameLength == 0 {
                 if !done {
@@ -443,91 +488,28 @@ func transcribeFile(req: Any, path: String, language: String) {
     }
 }
 
-// MARK: playing synthesised sentences (files) with rate and pitch
-
-final class FilePlayer {
-    struct Item { let id: Int; let path: String; let rate: Double; let pitch: Double }
-    let engine = AVAudioEngine()
-    let node = AVAudioPlayerNode()
-    let tp = AVAudioUnitTimePitch()
-    var queue: [Item] = []
-    var current: Item?
-    var generation = 0
-    var wired = false
-
-    func play(_ it: Item) {
-        queue.append(it)
-        if current == nil { next() }
-    }
-
-    private func next() {
-        guard current == nil, !queue.isEmpty else { return }
-        let it = queue.removeFirst()
-        let file: AVAudioFile
-        do { file = try AVAudioFile(forReading: URL(fileURLWithPath: it.path)) } catch {
-            emit(["ev": "speak_end", "id": it.id, "cancelled": true])
-            fail("failed", "播不了：\(error.localizedDescription)")
-            return next()
-        }
-        if !wired {
-            engine.attach(node); engine.attach(tp)
-            wired = true
-        }
-        engine.disconnectNodeOutput(node); engine.disconnectNodeOutput(tp)
-        engine.connect(node, to: tp, format: file.processingFormat)
-        engine.connect(tp, to: engine.mainMixerNode, format: file.processingFormat)
-        tp.rate = Float(min(2, max(0.5, it.rate.isFinite && it.rate > 0 ? it.rate : 1)))
-        tp.pitch = Float(min(12, max(-12, it.pitch.isFinite ? it.pitch : 0)) * 100)
-        do { if !engine.isRunning { try engine.start() } } catch {
-            emit(["ev": "speak_end", "id": it.id, "cancelled": true])
-            fail("failed", "音訊裝置：\(error.localizedDescription)")
-            return
-        }
-        current = it
-        let gen = generation
-        node.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { _ in
-            DispatchQueue.main.async {
-                guard gen == self.generation, self.current?.id == it.id else { return }
-                self.current = nil
-                emit(["ev": "speak_end", "id": it.id, "cancelled": false])
-                self.next()
-            }
-        }
-        node.play()
-        emit(["ev": "speak_start", "id": it.id])
-    }
-
-    func stop() {
-        generation += 1
-        let dropped = (current.map { [$0] } ?? []) + queue
-        current = nil; queue = []
-        node.stop()
-        for it in dropped { emit(["ev": "speak_end", "id": it.id, "cancelled": true]) }
-    }
-}
-
 // MARK: main
 
 let speaker = Speaker()
-let player = FilePlayer()
 let listener = Listener()
 
 func handle(_ c: [String: Any]) {
     let req = c["req"] ?? NSNull()
     let str = { (k: String) in c[k] as? String }
     let rate = (c["rate"] as? Double) ?? 1
+    let pitch = (c["pitch"] as? Double) ?? 1
     switch str("cmd") ?? "" {
     case "voices": emit(["ev": "voices", "req": req, "voices": listVoices()])
+    case "personal_voice": personalVoice(req: req, ask: (c["ask"] as? Bool) ?? false)
     case "permissions": emit(["ev": "permissions", "req": req, "microphone": micStatus(), "speech": speechStatus()])
     case "speak":
-        speaker.speak(id: (c["id"] as? Int) ?? -1, text: str("text") ?? "", voice: str("voice"), rate: rate, language: str("language"))
-    case "play":
-        player.play(.init(id: (c["id"] as? Int) ?? -1, path: str("path") ?? "", rate: rate, pitch: (c["pitch"] as? Double) ?? 0))
-    case "stop_speaking": speaker.stop(); player.stop()
+        speaker.speak(id: (c["id"] as? Int) ?? -1, text: str("text") ?? "", voice: str("voice"), rate: rate, language: str("language"), pitch: pitch)
+    case "stop_speaking": speaker.stop()
+    case "warm": speaker.warm(voice: str("voice"), language: str("language"))
     case "listen": listener.start(language: str("language") ?? "zh-TW", continuous: (c["continuous"] as? Bool) ?? false)
     case "stop_listening": listener.stop()
     case "synth_file":
-        speaker.toFile(req: req, text: str("text") ?? "", voice: str("voice"), rate: rate, language: str("language"), path: str("path") ?? "")
+        speaker.toFile(req: req, text: str("text") ?? "", voice: str("voice"), rate: rate, language: str("language"), pitch: pitch, path: str("path") ?? "")
     case "transcribe_file": transcribeFile(req: req, path: str("path") ?? "", language: str("language") ?? "zh-TW")
     case let other: fail("failed", "unknown command \(other)", req: req)
     }

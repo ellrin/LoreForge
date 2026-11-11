@@ -19,8 +19,6 @@
 
 pub mod fake;
 pub mod helper;
-pub mod qwen;
-pub mod readings;
 pub mod split;
 
 use std::collections::BTreeSet;
@@ -40,6 +38,22 @@ pub struct VoiceInfo {
     /// BCP 47, e.g. `zh-TW`.
     pub language: String,
     pub quality: Quality,
+    /// The author's own Personal Voice (made in System Settings → Accessibility → Personal Voice).
+    #[serde(default)]
+    pub personal: bool,
+}
+
+/// Whether this app may speak with the author's Personal Voice (macOS 14+).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonalVoice {
+    /// Not asked yet: [`Voice::personal_voice`] with `ask` shows the system's prompt.
+    NotDetermined,
+    Denied,
+    /// Not on this Mac (older macOS, or no engine).
+    Unsupported,
+    /// Allowed; [`Voice::voices`] lists the voices made (none until one is made in System Settings).
+    Authorized,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -50,7 +64,7 @@ pub enum Quality {
     Premium,
 }
 
-/// Voices in the order a picker shows them: `language` first (e.g. zh-TW), then the same
+/// Voices in the order a picker shows them: Personal Voices first, then `language` (e.g. zh-TW), then the same
 /// language family (zh-*), then the rest; better quality first, Apple's own voices before the
 /// Eloquence ones (Eddy, Flo, …), then by name.
 pub fn sort_voices(v: &mut [VoiceInfo], language: &str) {
@@ -65,7 +79,7 @@ pub fn sort_voices(v: &mut [VoiceInfo], language: &str) {
         }
     };
     let retro = |x: &VoiceInfo| x.id.contains(".eloquence.");
-    v.sort_by(|a, b| rank(a).cmp(&rank(b)).then(b.quality.cmp(&a.quality)).then(retro(a).cmp(&retro(b))).then(a.language.cmp(&b.language)).then(a.name.cmp(&b.name)));
+    v.sort_by(|a, b| b.personal.cmp(&a.personal).then(rank(a).cmp(&rank(b))).then(b.quality.cmp(&a.quality)).then(retro(a).cmp(&retro(b))).then(a.language.cmp(&b.language)).then(a.name.cmp(&b.name)));
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -77,7 +91,7 @@ pub struct ListenOptions {
     pub continuous: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpeakRequest {
     pub text: String,
     /// A voice id from [`Voice::voices`]; empty = the system's voice for `language`.
@@ -88,16 +102,19 @@ pub struct SpeakRequest {
     pub rate: f64,
     #[serde(default)]
     pub language: String,
-    /// Semitones up (+) or down (−), custom voices only (clamped to [`PITCH`]).
-    #[serde(default)]
+    /// Voice pitch, 1.0 = the voice's own (a multiplier, clamped to [`PITCH`]).
+    #[serde(default = "one")]
     pub pitch: f64,
-    /// Speak with this custom voice ([`qwen`]); `voice` is then the fallback system voice.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub custom: Option<qwen::CustomVoice>,
 }
 
 fn one() -> f64 {
     1.0
+}
+
+impl Default for SpeakRequest {
+    fn default() -> Self {
+        SpeakRequest { text: String::new(), voice: String::new(), rate: 1.0, language: String::new(), pitch: 1.0 }
+    }
 }
 
 /// Speaking speed limits (a multiplier of the system's normal rate).
@@ -107,11 +124,11 @@ pub fn clamp_rate(r: f64) -> f64 {
     if r.is_finite() { r.clamp(RATE.0, RATE.1) } else { 1.0 }
 }
 
-/// Pitch limits of a custom voice (semitones).
-pub const PITCH: (f64, f64) = (-6.0, 6.0);
+/// Pitch limits (a multiplier of the voice's own pitch; AVSpeechUtterance.pitchMultiplier).
+pub const PITCH: (f64, f64) = (0.5, 2.0);
 
 pub fn clamp_pitch(p: f64) -> f64 {
-    if p.is_finite() { p.clamp(PITCH.0, PITCH.1) } else { 0.0 }
+    if p.is_finite() { p.clamp(PITCH.0, PITCH.1) } else { 1.0 }
 }
 
 /// Why listening or speaking cannot go on.
@@ -166,6 +183,13 @@ pub trait Backend: Send + Sync + 'static {
     fn synth_file(&self, _r: &SpeakRequest, _path: &std::path::Path) -> Result<(), String> {
         Err("這個語音引擎不能存成檔案".into())
     }
+    /// Personal Voice permission; `ask`: show the system's prompt when it was never asked.
+    fn personal_voice(&self, _ask: bool) -> Result<PersonalVoice, String> {
+        Ok(PersonalVoice::Unsupported)
+    }
+    /// Get ready to speak with `r.voice` soon (start the engine, load the voice), silently and
+    /// without waiting.
+    fn warm(&self, _r: &SpeakRequest) {}
 }
 
 struct Inner {
@@ -254,15 +278,6 @@ impl Voice {
         }
     }
 
-    /// [`Voice::system`] that also speaks custom voices with `tts` ([`qwen::Mixed`]; sentence
-    /// files go to `cache`).
-    pub fn system_with(tts: Arc<dyn qwen::Tts>, cache: std::path::PathBuf) -> Voice {
-        match helper::HelperBackend::find() {
-            Some(b) => Voice::new(Box::new(qwen::Mixed::new(b, tts, cache))),
-            None => Voice::unavailable(Voice::no_helper()),
-        }
-    }
-
     fn no_helper() -> &'static str {
         if cfg!(target_os = "macos") { "找不到語音輔助程式（lore-voice-helper）" } else { "語音目前只支援 macOS" }
     }
@@ -290,6 +305,18 @@ impl Voice {
     /// Chinese and English system voices (not sorted; see [`sort_voices`]). Blocks up to a few seconds.
     pub fn voices(&self) -> Result<Vec<VoiceInfo>, String> {
         self.backend()?.voices()
+    }
+
+    /// [`Backend::personal_voice`] (blocks while the system's prompt is open).
+    pub fn personal_voice(&self, ask: bool) -> Result<PersonalVoice, String> {
+        self.backend()?.personal_voice(ask)
+    }
+
+    /// [`Backend::warm`]: the first sentence of the next reply starts sooner. No sound.
+    pub fn warm(&self, r: &SpeakRequest) {
+        if let Ok(b) = self.backend() {
+            b.warm(r);
+        }
     }
 
     /// [`Backend::synth_file`]: `r` in a system voice to an audio file (no sound; blocks).
@@ -351,12 +378,12 @@ impl Voice {
 
     /// Speak a streamed text sentence by sentence with this voice id, rate and language.
     pub fn speaker(&self, voice: &str, rate: f64, language: &str) -> Speaker {
-        self.speaker_from(SpeakRequest { text: String::new(), voice: voice.into(), rate, language: language.into(), ..Default::default() })
+        self.speaker_from(SpeakRequest { voice: voice.into(), rate, language: language.into(), ..Default::default() })
     }
 
-    /// [`Voice::speaker`] with every setting of `template` (a custom voice, pitch); its text is ignored.
+    /// [`Voice::speaker`] with every setting of `template`; its text is ignored.
     pub fn speaker_from(&self, template: SpeakRequest) -> Speaker {
-        Speaker { voice: self.clone(), split: Splitter::new(), template, stopped: false }
+        Speaker { voice: self.clone(), split: Splitter::new(), template, stopped: false, at: 0 }
     }
 }
 
@@ -366,21 +393,33 @@ pub struct Speaker {
     split: Splitter,
     template: SpeakRequest,
     stopped: bool,
+    /// Characters of the stream handed to the splitter so far (where the next piece starts).
+    at: usize,
+}
+
+/// One sentence queued by a [`Speaker`]: its utterance id and where it is in the streamed text,
+/// in UTF-16 units (what a web page counts), `start..end` of everything pushed; `spoken` = the
+/// UTF-16 length of what is actually said (Markdown marks dropped), which [`Event::Word`]
+/// ranges refer to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Said {
+    pub id: u64,
+    pub start: usize,
+    pub end: usize,
+    pub spoken: usize,
 }
 
 impl Speaker {
-    /// The next piece of the reply; finished sentences are queued at once.
-    pub fn push(&mut self, piece: &str) {
-        for s in self.split.push(piece) {
-            self.say(s);
-        }
+    /// The next piece of the reply; finished sentences are queued at once (and returned).
+    pub fn push(&mut self, piece: &str) -> Vec<Said> {
+        let pieces = self.split.push_pieces(piece);
+        pieces.into_iter().filter_map(|p| self.say(p)).collect()
     }
 
     /// The reply is complete: the rest is queued.
-    pub fn finish(&mut self) {
-        if let Some(s) = self.split.finish() {
-            self.say(s);
-        }
+    pub fn finish(&mut self) -> Option<Said> {
+        let p = self.split.finish_piece()?;
+        self.say(p)
     }
 
     /// Stop queueing (what is already queued is left to [`Voice::stop_speaking`]).
@@ -389,13 +428,21 @@ impl Speaker {
         self.split = Splitter::new();
     }
 
-    fn say(&mut self, text: String) {
+    fn say(&mut self, p: split::Piece) -> Option<Said> {
+        let start = self.at;
+        self.at += p.raw;
+        let text = p.text?;
         if self.stopped {
-            return;
+            return None;
         }
-        if let Err(e) = self.voice.speak(&SpeakRequest { text, ..self.template.clone() }) {
-            self.voice.inner.send(Event::Error { kind: ErrorKind::Failed, message: e });
-            self.stopped = true;
+        let spoken = text.encode_utf16().count();
+        match self.voice.speak(&SpeakRequest { text, ..self.template.clone() }) {
+            Ok(id) => Some(Said { id, start, end: self.at, spoken }),
+            Err(e) => {
+                self.voice.inner.send(Event::Error { kind: ErrorKind::Failed, message: e });
+                self.stopped = true;
+                None
+            }
         }
     }
 }
@@ -419,7 +466,7 @@ mod tests {
         let v = Voice::new(Box::new(fake));
         let mut rx = v.subscribe();
         let a = v.speak(&SpeakRequest { text: "一。".into(), rate: 1.0, ..Default::default() }).unwrap();
-        let b = v.speak(&SpeakRequest { text: "二。".into(), rate: 9.0, ..Default::default() }).unwrap();
+        let b = v.speak(&SpeakRequest { text: "二。".into(), rate: 9.0, pitch: 0.1, ..Default::default() }).unwrap();
         assert!(v.speaking());
         ctl.emit(Event::SpeakStarted { id: a });
         ctl.emit(Event::SpeakFinished { id: a, cancelled: false });
@@ -441,7 +488,7 @@ mod tests {
             ]
         );
         // the rate was clamped before it reached the engine
-        assert!(ctl.calls().iter().any(|c| matches!(c, Call::Speak(_, r) if r.text == "二。" && r.rate == RATE.1)));
+        assert!(ctl.calls().iter().any(|c| matches!(c, Call::Speak(_, r) if r.text == "二。" && r.rate == RATE.1 && r.pitch == PITCH.0)));
     }
 
     #[test]
@@ -516,6 +563,32 @@ mod tests {
     }
 
     #[test]
+    fn the_speaker_says_where_each_sentence_is_in_the_stream() {
+        let (fake, ctl) = FakeBackend::new();
+        let v = Voice::new(Box::new(fake));
+        let mut sp = v.speaker("", 1.0, "zh-TW");
+        let mut said = vec![];
+        for piece in ["**好**。", "---\n", "第二句，", "對吧？尾"] {
+            said.extend(sp.push(piece));
+        }
+        said.extend(sp.finish());
+        let texts: Vec<String> = ctl.calls().into_iter().filter_map(|c| if let Call::Speak(_, r) = c { Some(r.text) } else { None }).collect();
+        assert_eq!(texts, ["好。", "第二句，對吧？", "尾"]);
+        // "**好**。" = 0..6, "---\n" unspoken = 6..10, then 10..17 and 17..18
+        assert_eq!(said, vec![Said { id: 1, start: 0, end: 6, spoken: 2 }, Said { id: 2, start: 10, end: 17, spoken: 7 }, Said { id: 3, start: 17, end: 18, spoken: 1 }]);
+    }
+
+    #[test]
+    fn warming_goes_to_the_engine_and_is_harmless_without_one() {
+        let (fake, ctl) = FakeBackend::new();
+        let v = Voice::new(Box::new(fake));
+        v.warm(&SpeakRequest { voice: "fake.zh-TW.d".into(), language: "zh-TW".into(), ..Default::default() });
+        assert!(ctl.calls().contains(&Call::Warm("fake.zh-TW.d".into())));
+        assert!(!v.speaking());
+        Voice::unavailable("沒有").warm(&SpeakRequest::default());
+    }
+
+    #[test]
     fn unavailable_says_why() {
         let v = Voice::unavailable("沒有");
         assert_eq!(v.status(), (false, "沒有".into()));
@@ -536,9 +609,9 @@ mod tests {
 
     #[test]
     fn voices_are_sorted_for_the_picker() {
-        let mk = |id: &str, lang: &str, q| VoiceInfo { id: id.into(), name: id.into(), language: lang.into(), quality: q };
-        let mut v = vec![mk("en", "en-US", Quality::Premium), mk("cn", "zh-CN", Quality::Default), mk("a.eloquence.tw", "zh-TW", Quality::Default), mk("tw", "zh-TW", Quality::Default), mk("tw+", "zh-TW", Quality::Enhanced)];
+        let mk = |id: &str, lang: &str, q| VoiceInfo { id: id.into(), name: id.into(), language: lang.into(), quality: q, personal: false };
+        let mut v = vec![mk("en", "en-US", Quality::Premium), mk("cn", "zh-CN", Quality::Default), mk("a.eloquence.tw", "zh-TW", Quality::Default), mk("tw", "zh-TW", Quality::Default), mk("tw+", "zh-TW", Quality::Enhanced), VoiceInfo { personal: true, ..mk("me", "en-US", Quality::Premium) }];
         sort_voices(&mut v, "zh-TW");
-        assert_eq!(v.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), vec!["tw+", "tw", "a.eloquence.tw", "cn", "en"]);
+        assert_eq!(v.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), vec!["me", "tw+", "tw", "a.eloquence.tw", "cn", "en"]);
     }
 }

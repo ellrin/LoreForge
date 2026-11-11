@@ -138,7 +138,7 @@ impl HelperBackend {
 
     /// Synthesise `r` into an audio file at `path` (no sound); the number of frames written.
     pub fn synth_file(&self, r: &SpeakRequest, path: &std::path::Path) -> Result<u64, String> {
-        let v = self.ask(json!({ "cmd": "synth_file", "text": r.text, "voice": r.voice, "rate": r.rate, "language": r.language, "path": path }), Duration::from_secs(60))?;
+        let v = self.ask(json!({ "cmd": "synth_file", "text": r.text, "voice": r.voice, "rate": r.rate, "pitch": r.pitch, "language": r.language, "path": path }), Duration::from_secs(60))?;
         Ok(v["frames"].as_u64().unwrap_or(0))
     }
 
@@ -190,6 +190,15 @@ pub fn parse(v: &Value) -> Option<Event> {
     })
 }
 
+fn personal_status(s: &str) -> crate::PersonalVoice {
+    match s {
+        "authorized" => crate::PersonalVoice::Authorized,
+        "denied" => crate::PersonalVoice::Denied,
+        "not_determined" => crate::PersonalVoice::NotDetermined,
+        _ => crate::PersonalVoice::Unsupported,
+    }
+}
+
 fn quality(q: &str) -> Quality {
     match q {
         "premium" => Quality::Premium,
@@ -218,6 +227,7 @@ impl Backend for HelperBackend {
                         name: x["name"].as_str().unwrap_or("").into(),
                         language: x["language"].as_str().unwrap_or("").into(),
                         quality: quality(x["quality"].as_str().unwrap_or("")),
+                        personal: x["personal"] == true,
                     })
                     .filter(|x| !x.id.is_empty())
                     .collect()
@@ -234,21 +244,25 @@ impl Backend for HelperBackend {
     }
 
     fn speak(&self, id: u64, r: &SpeakRequest) -> Result<(), String> {
-        self.send(json!({ "cmd": "speak", "id": id, "text": r.text, "voice": r.voice, "rate": r.rate, "language": r.language }))
+        self.send(json!({ "cmd": "speak", "id": id, "text": r.text, "voice": r.voice, "rate": r.rate, "pitch": r.pitch, "language": r.language }))
     }
 
     fn stop_speaking(&self) {
         let _ = self.send(json!({ "cmd": "stop_speaking" }));
     }
 
+    fn personal_voice(&self, ask: bool) -> Result<crate::PersonalVoice, String> {
+        // asking waits for the author to answer the system's prompt
+        let v = self.ask(json!({ "cmd": "personal_voice", "ask": ask }), Duration::from_secs(if ask { 300 } else { 10 }))?;
+        Ok(personal_status(v["status"].as_str().unwrap_or("")))
+    }
+
+    fn warm(&self, r: &SpeakRequest) {
+        let _ = self.send(json!({ "cmd": "warm", "voice": r.voice, "language": r.language }));
+    }
+
     fn synth_file(&self, r: &SpeakRequest, path: &std::path::Path) -> Result<(), String> {
         HelperBackend::synth_file(self, r, path).map(|_| ())
-    }
-}
-
-impl crate::qwen::Player for HelperBackend {
-    fn play(&self, id: u64, path: &std::path::Path, rate: f64, pitch: f64) -> Result<(), String> {
-        self.send(json!({ "cmd": "play", "id": id, "path": path, "rate": rate, "pitch": pitch }))
     }
 }
 
@@ -265,6 +279,9 @@ mod tests {
         assert_eq!(p(r#"{"ev":"error","kind":"microphone","message":"x"}"#), Some(Event::Error { kind: ErrorKind::Microphone, message: "x".into() }));
         assert_eq!(p(r#"{"ev":"speak_start","id":-1}"#), None, "an utterance the app did not queue");
         assert_eq!(p(r#"{"ev":"ready"}"#), None);
+        assert_eq!(personal_status("authorized"), crate::PersonalVoice::Authorized);
+        assert_eq!(personal_status("not_determined"), crate::PersonalVoice::NotDetermined);
+        assert_eq!(personal_status("whatever"), crate::PersonalVoice::Unsupported);
     }
 
     #[test]

@@ -1,11 +1,8 @@
 //! A backend for tests: records the calls, sends the events a test scripts. No audio.
-//! [`FakeTts`]: a custom-voice engine for tests (writes a few bytes, can be not installed or fail).
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::qwen::{DesignJob, OnProgress, Player, Progress, SynthJob, Tts, TtsStatus};
 use crate::{Backend, Event, ListenOptions, Quality, Sink, SpeakRequest, VoiceInfo};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,10 +10,10 @@ pub enum Call {
     Listen(ListenOptions),
     StopListening,
     Speak(u64, SpeakRequest),
-    /// A synthesised sentence file played (id, path, rate, pitch).
-    Play(u64, PathBuf, f64, f64),
     StopSpeaking,
     SynthFile(SpeakRequest),
+    /// The voice id warmed.
+    Warm(String),
 }
 
 #[derive(Default)]
@@ -27,6 +24,10 @@ struct State {
     /// Answer every speak with start + finish at once.
     auto: bool,
     synth_seconds: Option<f64>,
+    /// Personal Voice: the state, and what the prompt answers.
+    personal: Option<(crate::PersonalVoice, crate::PersonalVoice)>,
+    /// A Personal Voice has been made (listed once authorized).
+    personal_made: bool,
 }
 
 pub struct FakeBackend {
@@ -71,6 +72,13 @@ impl FakeControl {
         self.state.lock().unwrap().synth_seconds = Some(s);
     }
 
+    /// Personal Voice starts as `now`; the prompt answers `answer`; `made`: the author has made one.
+    pub fn personal(&self, now: crate::PersonalVoice, answer: crate::PersonalVoice, made: bool) {
+        let mut s = self.state.lock().unwrap();
+        s.personal = Some((now, answer));
+        s.personal_made = made;
+    }
+
     pub fn fail_speak(&self, on: bool) {
         self.state.lock().unwrap().fail_speak = on;
     }
@@ -78,12 +86,13 @@ impl FakeControl {
 
 /// The voices the fake lists.
 pub fn voices() -> Vec<VoiceInfo> {
-    let mk = |id: &str, name: &str, lang: &str, q| VoiceInfo { id: id.into(), name: name.into(), language: lang.into(), quality: q };
+    let mk = |id: &str, name: &str, lang: &str, q| VoiceInfo { id: id.into(), name: name.into(), language: lang.into(), quality: q, personal: false };
     vec![
         mk("fake.en-US.a", "Alpha", "en-US", Quality::Enhanced),
         mk("fake.zh-CN.b", "Beta", "zh-CN", Quality::Default),
         mk("fake.zh-TW.c", "Gamma", "zh-TW", Quality::Default),
         mk("fake.zh-TW.d", "Delta", "zh-TW", Quality::Premium),
+        mk("com.apple.eloquence.zh-TW.Eddy", "Eddy", "zh-TW", Quality::Default),
     ]
 }
 
@@ -97,7 +106,22 @@ impl Backend for FakeBackend {
     }
 
     fn voices(&self) -> Result<Vec<VoiceInfo>, String> {
-        Ok(voices())
+        let s = self.state.lock().unwrap();
+        let mut v = voices();
+        if s.personal_made && matches!(s.personal, Some((crate::PersonalVoice::Authorized, _))) {
+            v.push(VoiceInfo { id: "fake.personal.me".into(), name: "My Voice".into(), language: "en-US".into(), quality: Quality::Premium, personal: true });
+        }
+        Ok(v)
+    }
+
+    fn personal_voice(&self, ask: bool) -> Result<crate::PersonalVoice, String> {
+        let mut s = self.state.lock().unwrap();
+        let Some((now, answer)) = s.personal else { return Ok(crate::PersonalVoice::Unsupported) };
+        if ask && now == crate::PersonalVoice::NotDetermined {
+            s.personal = Some((answer, answer));
+            return Ok(answer);
+        }
+        Ok(now)
     }
 
     fn listen(&self, o: &ListenOptions) -> Result<(), String> {
@@ -129,6 +153,10 @@ impl Backend for FakeBackend {
         self.state.lock().unwrap().calls.push(Call::StopSpeaking);
     }
 
+    fn warm(&self, r: &SpeakRequest) {
+        self.state.lock().unwrap().calls.push(Call::Warm(r.voice.clone()));
+    }
+
     /// Writes [`silent_wav`] (a valid wav of 0.1 s; [`FakeControl::synth_seconds`] makes it longer).
     fn synth_file(&self, r: &SpeakRequest, path: &Path) -> Result<(), String> {
         let secs = {
@@ -137,117 +165,28 @@ impl Backend for FakeBackend {
             s.synth_seconds
         };
         let n = (24000.0 * secs.unwrap_or(0.1)) as usize;
-        std::fs::write(path, crate::qwen::wav_bytes(&vec![0i16; n], 24000)).map_err(|e| e.to_string())
+        std::fs::write(path, wav_bytes(&vec![0i16; n], 24000)).map_err(|e| e.to_string())
     }
 }
 
-impl Player for FakeBackend {
-    fn play(&self, id: u64, path: &Path, rate: f64, pitch: f64) -> Result<(), String> {
-        let (auto, sink) = {
-            let mut s = self.state.lock().unwrap();
-            s.calls.push(Call::Play(id, path.to_path_buf(), rate, pitch));
-            (s.auto, s.sink.clone())
-        };
-        if auto && let Some(s) = sink {
-            s(Event::SpeakStarted { id });
-            s(Event::SpeakFinished { id, cancelled: false });
-        }
-        Ok(())
+/// A 16-bit mono PCM wav.
+pub fn wav_bytes(samples: &[i16], rate: u32) -> Vec<u8> {
+    let data = (samples.len() * 2) as u32;
+    let mut v = Vec::with_capacity(44 + data as usize);
+    v.extend_from_slice(b"RIFF");
+    v.extend_from_slice(&(36 + data).to_le_bytes());
+    v.extend_from_slice(b"WAVEfmt ");
+    v.extend_from_slice(&16u32.to_le_bytes());
+    v.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    v.extend_from_slice(&1u16.to_le_bytes()); // mono
+    v.extend_from_slice(&rate.to_le_bytes());
+    v.extend_from_slice(&(rate * 2).to_le_bytes());
+    v.extend_from_slice(&2u16.to_le_bytes());
+    v.extend_from_slice(&16u16.to_le_bytes());
+    v.extend_from_slice(b"data");
+    v.extend_from_slice(&data.to_le_bytes());
+    for s in samples {
+        v.extend_from_slice(&s.to_le_bytes());
     }
-}
-
-#[derive(Default)]
-struct TtsState {
-    ready: bool,
-    design: bool,
-    fail: bool,
-    /// Each synth waits this long (to test stopping in the middle).
-    delay_ms: u64,
-    synths: Vec<SynthJob>,
-    designs: Vec<DesignJob>,
-    installs: usize,
-}
-
-/// A [`Tts`] for tests: `synth`/`design` write a tiny wav-like file to `out`.
-#[derive(Clone, Default)]
-pub struct FakeTts {
-    state: Arc<Mutex<TtsState>>,
-}
-
-impl FakeTts {
-    /// Installed (`ready`, `design`) or not.
-    pub fn new(ready: bool) -> FakeTts {
-        let t = FakeTts::default();
-        {
-            let mut s = t.state.lock().unwrap();
-            s.ready = ready;
-            s.design = ready;
-        }
-        t
-    }
-    pub fn fail(&self, on: bool) {
-        self.state.lock().unwrap().fail = on;
-    }
-    pub fn delay(&self, ms: u64) {
-        self.state.lock().unwrap().delay_ms = ms;
-    }
-    pub fn synths(&self) -> Vec<SynthJob> {
-        self.state.lock().unwrap().synths.clone()
-    }
-    pub fn designs(&self) -> Vec<DesignJob> {
-        self.state.lock().unwrap().designs.clone()
-    }
-    pub fn installs(&self) -> usize {
-        self.state.lock().unwrap().installs
-    }
-}
-
-/// The bytes the fake writes (a valid, silent 0.1 s 24 kHz mono wav).
-pub fn silent_wav() -> Vec<u8> {
-    crate::qwen::wav_bytes(&vec![0i16; 2400], 24000)
-}
-
-impl Tts for FakeTts {
-    fn status(&self) -> TtsStatus {
-        let s = self.state.lock().unwrap();
-        TtsStatus { ready: s.ready, design: s.design, missing_bytes: if s.design { 0 } else { 6_000_000_000 }, why: String::new() }
-    }
-
-    fn install(&self, progress: OnProgress, cancel: &AtomicBool) -> Result<(), String> {
-        for (i, phase) in ["下載 uv", "Python", "套件", "模型"].into_iter().enumerate() {
-            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err("cancelled".into());
-            }
-            progress(Progress { phase: phase.into(), done: i as u64 * 25, total: 100 });
-        }
-        let mut s = self.state.lock().unwrap();
-        s.installs += 1;
-        s.ready = true;
-        s.design = true;
-        Ok(())
-    }
-
-    fn synth(&self, job: &SynthJob) -> Result<(), String> {
-        let delay = {
-            let mut s = self.state.lock().unwrap();
-            s.synths.push(job.clone());
-            if s.fail {
-                return Err("fake: synth failed".into());
-            }
-            s.delay_ms
-        };
-        std::thread::sleep(std::time::Duration::from_millis(delay));
-        std::fs::write(&job.out, silent_wav()).map_err(|e| e.to_string())
-    }
-
-    fn design(&self, job: &DesignJob) -> Result<(), String> {
-        {
-            let mut s = self.state.lock().unwrap();
-            s.designs.push(job.clone());
-            if s.fail {
-                return Err("fake: design failed".into());
-            }
-        }
-        std::fs::write(&job.out, silent_wav()).map_err(|e| e.to_string())
-    }
+    v
 }

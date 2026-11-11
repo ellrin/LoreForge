@@ -5,12 +5,26 @@ const ENDS: &[char] = &['。', '！', '？', '!', '?', '；', ';', '…', '\n'];
 const CLOSERS: &[char] = &['」', '』', '"', '\'', '”', '’', '）', ')', '】', '》'];
 /// A clause this long without an end is cut at its last comma (speaking starts sooner).
 pub const LONG: usize = 80;
+/// The first sentence of a stream is cut at its first comma once at least this many
+/// characters come before it, so the voice starts after a few words instead of a whole sentence.
+pub const FIRST: usize = 6;
+const COMMAS: &[char] = &['，', ',', '、', '：', ':'];
+
+/// What the stream had up to a cut: `raw` = its length in UTF-16 units (what a web page
+/// counts), `text` = the line to speak ([`speakable`]; `None` when nothing in it is said).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Piece {
+    pub raw: usize,
+    pub text: Option<String>,
+}
 
 /// Feed it the pieces of a streamed text with [`Splitter::push`]; it hands back each finished
 /// sentence once, cleaned for speaking ([`speakable`]). [`Splitter::finish`] returns the rest.
 #[derive(Debug, Default, Clone)]
 pub struct Splitter {
     buf: String,
+    /// Something has been handed out to speak (the first-sentence cut is used up).
+    spoke: bool,
 }
 
 impl Splitter {
@@ -20,27 +34,54 @@ impl Splitter {
 
     /// The sentences finished by `piece` (possibly none).
     pub fn push(&mut self, piece: &str) -> Vec<String> {
-        self.buf.push_str(piece);
-        let mut out = vec![];
-        while let Some(end) = self.boundary() {
-            let s: String = self.buf.drain(..end).collect();
-            if let Some(s) = speakable(&s) {
-                out.push(s);
-            }
-        }
-        out
+        self.push_pieces(piece).into_iter().filter_map(|p| p.text).collect()
     }
 
     /// What is left at the end of the stream.
     pub fn finish(&mut self) -> Option<String> {
+        self.finish_piece().and_then(|p| p.text)
+    }
+
+    /// [`Splitter::push`] with every cut, said or not, and how much of the stream it covers.
+    pub fn push_pieces(&mut self, piece: &str) -> Vec<Piece> {
+        self.buf.push_str(piece);
+        let mut out = vec![];
+        while let Some(end) = self.boundary() {
+            let s: String = self.buf.drain(..end).collect();
+            out.push(self.piece(&s));
+        }
+        out
+    }
+
+    /// [`Splitter::finish`] as a [`Piece`] (`None` when nothing was left).
+    pub fn finish_piece(&mut self) -> Option<Piece> {
         let s = std::mem::take(&mut self.buf);
-        speakable(&s)
+        (!s.is_empty()).then(|| self.piece(&s))
+    }
+
+    fn piece(&mut self, s: &str) -> Piece {
+        let text = speakable(s);
+        self.spoke |= text.is_some();
+        Piece { raw: s.encode_utf16().count(), text }
     }
 
     /// Byte index just past the first sentence in the buffer, if one is complete.
     fn boundary(&self) -> Option<usize> {
         let b = &self.buf;
         let chars: Vec<(usize, char)> = b.char_indices().collect();
+        // the first words of the reply: cut at its first comma that has enough before it
+        if !self.spoke {
+            let mut words = 0;
+            for &(at, c) in &chars {
+                if ENDS.contains(&c) {
+                    break;
+                }
+                if COMMAS.contains(&c) && words >= FIRST {
+                    return Some(at + c.len_utf8());
+                }
+                words += usize::from(c.is_alphanumeric());
+            }
+        }
         for (i, &(at, c)) in chars.iter().enumerate() {
             let is_end = ENDS.contains(&c)
                 // "." ends an English sentence only before a space (3.14, e.g. stay whole)
@@ -65,7 +106,7 @@ impl Splitter {
         }
         // a very long clause: cut after its last comma
         if chars.len() > LONG
-            && let Some(&(at, c)) = chars.iter().rev().find(|(_, c)| matches!(c, '，' | ',' | '、' | '：' | ':'))
+            && let Some(&(at, c)) = chars.iter().rev().find(|(_, c)| COMMAS.contains(c))
         {
             return Some(at + c.len_utf8());
         }
@@ -120,6 +161,26 @@ mod tests {
     fn markdown_and_empty_lines_are_not_spoken() {
         assert_eq!(all(&["**重點**：", "一\n\n", "- 二\n", "---\n"]), vec!["重點：一", "二"]);
         assert_eq!(speakable("  ** \n"), None);
+    }
+
+    #[test]
+    fn the_first_sentence_is_cut_at_a_comma_when_it_has_a_few_words_before_it() {
+        assert_eq!(all(&["你上次說微積分", "還不太熟，我們今天", "就從那裡開始吧。先看定義，再做題。"]), vec!["你上次說微積分還不太熟，", "我們今天就從那裡開始吧。", "先看定義，再做題。"]);
+        assert_eq!(all(&["嗯，這題不難。"]), vec!["嗯，這題不難。"], "too short before the comma");
+        assert_eq!(all(&["---\n", "這一段很長很長，所以"]), vec!["這一段很長很長，", "所以"], "after something unspoken it still applies");
+        assert_eq!(all(&["**重點**\n", "這一段很長很長，所以"]), vec!["重點", "這一段很長很長，所以"], "only the first line said");
+    }
+
+    #[test]
+    fn pieces_cover_the_whole_stream_in_utf16_units() {
+        let mut sp = Splitter::new();
+        let mut got = sp.push_pieces("---\n😀 好棒啊，對吧。");
+        got.extend(sp.finish_piece());
+        let raw: usize = got.iter().map(|p| p.raw).sum();
+        assert_eq!(raw, "---\n😀 好棒啊，對吧。".encode_utf16().count());
+        assert_eq!(got[0], Piece { raw: 4, text: None });
+        assert_eq!(got.iter().filter_map(|p| p.text.clone()).collect::<Vec<_>>(), vec!["😀 好棒啊，對吧。"]);
+        assert_eq!(Splitter::new().finish_piece(), None);
     }
 
     #[test]
