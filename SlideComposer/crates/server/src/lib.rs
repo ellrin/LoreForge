@@ -32,6 +32,7 @@ pub mod kbterms;
 pub mod llm;
 mod notation;
 mod reader;
+pub mod deckstyle;
 pub mod todeck;
 
 use std::collections::HashMap;
