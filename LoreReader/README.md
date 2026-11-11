@@ -49,7 +49,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | 檔案 | 內容 |
 |---|---|
 | `paper.json` | `schema: "lorereader.paper/1"`、`sha256`、`title`（PDF 的 Title，沒有就用檔名）、`original_name`、`doi`（前兩頁找到的第一個 DOI，沒有為 `null`）、`pages`、`added_at`、`derived_from`（頁面操作產生的新 PDF：`{op, from: [sha256…]}`）、`original_path`（從 Finder 或路徑開啟時原檔的位置，存檔對話框預設在它旁邊）、`source_sha`（這份 PDF 是 LoreReader 存出的「含筆記」檔，對應原本那篇的 sha256） |
-| `annotations.json` | `schema: "lorereader.annotations/1"`，`annotations: [{id, page, kind: "highlight" \| "note", color: yellow\|green\|blue\|pink, quote: {exact, prefix, suffix}, rects: [[x0,y0,x1,y1]…], note, created_at, updated_at}]`。`rects` 是相對於頁面的比例（左上為原點），所以任何縮放都對得上；`quote` 是原文與前後文，之後換渲染方式也能重新定位 |
+| `annotations.json` | `schema: "lorereader.annotations/1"`，`annotations: [{id, page, kind: "highlight" \| "note" \| "text", color: yellow\|green\|blue\|pink, quote: {exact, prefix, suffix}, rects: [[x0,y0,x1,y1]…], note, created_at, updated_at}]`。`rects` 是相對於頁面的比例（左上為原點），所以任何縮放都對得上；`quote` 是原文與前後文，之後換渲染方式也能重新定位。`kind: "text"` 是放在頁面任意位置的文字框：一個 rect 是框，`note` 是文字，`quote` 空白 |
 | `quotes.json` | 引用句。`schema: "lorereader.quotes/1"`，`quotes: [{id, text, page, note, created_at}]`。`note` 是一行備註（可空白） |
 | `export.json` | 上一次「另存新檔（含筆記）」：`schema: "lorereader.export/1"`、`hash`（當時註記的 sha256）、`path`（存到哪裡；瀏覽器下載為 `null`）、`at`、`declined`（關閉時按「不儲存」的那一版註記） |
 | `chat.json` | 問 Claude 的對話。`schema: "lorereader.chat/1"`，`messages: [{role: user\|assistant, text, attachments: [{text, page, context}], at, engine, paragraph?, chip?: {kind: term\|symbol\|equation, id, label}, context?}]`（`context` 是附給模型的段落脈絡，重播歷史時用） |
@@ -88,7 +88,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 - 「頁面未儲存」（頁面操作）時要先在縮圖欄「另存…」頁面；筆記未儲存看狀態標籤。
 - **關閉視窗或 ⌘Q**（Mac App）：有沒存進 PDF 的註記時，每篇問一次「儲存筆記到新的 PDF？」：儲存…／不儲存／取消。存過的直接覆寫那份；「不儲存」之後同一版註記不再問；「取消」不關。
 
-寫法（任何 PDF 閱讀器都看得到）：每個螢光是 `/Highlight` 註解（`/QuadPoints`、顏色、外觀串流 `/AP`，Preview 才畫得出來）；「註記」另外在旁邊加一個便利貼（`/Text`，內容是註記文字）。每個註解有 `/NM (lr:<id>)` 和整筆註記的 JSON，再存一次會先移除 `lr:` 開頭的註解（別的工具加的不動）。文件資訊裡的 `/LoreReaderSource` 是原本那篇的 sha256。位置換算用 CropBox（沒有就 MediaBox）與 `/Rotate`。
+寫法（任何 PDF 閱讀器都看得到）：每個螢光是 `/Highlight` 註解（`/QuadPoints`、顏色、外觀串流 `/AP`，Preview 才畫得出來）；「註記」另外在旁邊加一個便利貼（`/Text`，內容是註記文字）；文字框是 `/FreeText`（`/Contents`、`/DA`、畫好框與文字的 `/AP`，旋轉頁也是正的；英數用 Helvetica，中文用不內嵌的 Adobe-CNS1 字型 `MSung-Light`，Preview／Acrobat／poppler 會換成系統的中文字型；顏色固定，不跟主題）。每個註解有 `/NM (lr:<id>)` 和整筆註記的 JSON，再存一次會先移除 `lr:` 開頭的註解（別的工具加的不動）。文件資訊裡的 `/LoreReaderSource` 是原本那篇的 sha256。位置換算用 CropBox（沒有就 MediaBox）與 `/Rotate`。
 
 **再開啟這份檔案**（例如 `private/` 被清掉之後，從 Finder 打開）：註記依 id 合併回來（不重複），這份檔案記為「上一次存的」。原本那篇還在書庫 → 就是那篇（同一個 sha256，知識庫連結與引用句不變）；不在 → 去掉 LoreReader 註解後的 PDF 成為一篇新的論文，`source_sha` 指向原本那篇，`/open?sha=<原本的>` 也會開到它。在別的閱讀器改過的註記文字以 PDF 上看得到的為準。
 
@@ -105,6 +105,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 - **複製**。
 - **螢光標記**（黃、綠、藍、粉紅）與**加註記…**：存在 `annotations.json`，右邊「註記」分頁列出，點一下跳到那裡。
+- **文字框**：在頁面任何地方（文字、空白、圖）點兩下，就在那裡開一個文字框直接打字；Enter 換行，⌘↵ 或點外面存，空的框不留（Esc 丟掉）。點一下編輯、拖曳移動、右下角調大小、選取時按 × 或 ⌫ 刪除，⌘Z 復原。點兩下不再反白；點三下只選那一行。
 - **翻譯**：lore-llm 任務 `lr-translate`，先用本機模型（`local:current`），連不上才用 Claude（`claude:selected`），與 PaperComposer 的順序相同。結果在小視窗顯示，可以「加入知識庫」。
 - **問 Claude**：把選取的文字、頁碼和所在段落附到右邊的對話（任務 `lr-chat` → `claude:selected`；送出旁的引擎標籤可以改）。對話存在這篇論文的 `chat.json`。
 - **存成引用句…**：句子（可修剪）＋一行備註，存在 `quotes.json`；右邊「引用句」分頁列出。
@@ -192,7 +193,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `GET /api/info` | 書庫、匯出、工作區位置與錯誤、KnowledgeBase 位址、是否有本機模型、是否是 Mac App |
 | `GET /api/papers`、`POST /api/papers/import?name=` | 論文清單；匯入（內容是 PDF，或 JSON `{path}`） |
 | `GET/PUT /api/papers/{sha}`、`GET /api/papers/{sha}/pdf` | 論文資料／改標題；PDF 本身 |
-| `GET/POST /api/papers/{sha}/annotations`、`PUT/DELETE …/annotations/{id}` | 註記 |
+| `GET/POST /api/papers/{sha}/annotations`、`PUT/DELETE …/annotations/{id}` | 註記（PUT `{color?, note?, rects?}`） |
 | `GET/POST /api/papers/{sha}/quotes`、`DELETE …/quotes/{id}`、`GET /api/quotes` | 引用句（單篇／全部） |
 | `GET/POST/DELETE /api/papers/{sha}/chat` | 對話（送出 `{text, attachments, paragraph?, chip?: {kind, id}}` 會回覆並存檔；有 `paragraph` 時伺服器附上段落脈絡） |
 | `POST /api/compose` | `{pages: [{sha, page}], title?, op?}` → 新 PDF（書庫＋匯出） |

@@ -1,0 +1,41 @@
+/* Text boxes on the page (notes.js). The box is page content: its fill, border and ink are
+   the exported /FreeText's (annotate.rs TEXT_FILL / TEXT_LINE / TEXT_INK), the same in every
+   theme, like the page and the highlights. Only the selection chrome follows the theme.
+   Sizes are points × --scale-factor (10 pt type, 4 pt padding, line height 1.3). */
+:root { --tn-fill: #fff8c8; --tn-line: #d9b948; --tn-ink: #222; }
+
+/* Never part of a text selection: page-number labels, the thumbnail strip. */
+.page .pgno, .page > canvas, #sorter { -webkit-user-select: none; user-select: none; }
+.page .tn-layer { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.tn {
+  position: absolute; box-sizing: border-box; pointer-events: auto; cursor: grab;
+  padding: calc(4px * var(--scale-factor, 1));
+  background: var(--tn-fill); border: calc(.75px * var(--scale-factor, 1)) solid var(--tn-line);
+  box-shadow: 0 1px 3px #0002; color-scheme: light; touch-action: none;
+}
+.tn.dragging { cursor: grabbing; opacity: .92; }
+.tn .tn-text {
+  display: block; box-sizing: border-box; width: 100%; min-height: calc(13px * var(--scale-factor, 1));
+  margin: 0; padding: 0; border: 0; outline: none; resize: none; overflow: hidden;
+  background: transparent; color: var(--tn-ink); caret-color: var(--tn-ink);
+  font: 400 calc(10px * var(--scale-factor, 1)) / 1.3 Helvetica, Arial, "PingFang TC", "Noto Sans TC", sans-serif;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tn:not(.editing) .tn-text { pointer-events: none; user-select: none; -webkit-user-select: none; }
+.tn.editing { cursor: move; }
+.tn.editing .tn-text { cursor: text; }
+.tn.editing, .tn.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tn .tn-del, .tn .tn-grip { display: none; }
+.tn.editing .tn-del, .tn.sel .tn-del, .tn.sel .tn-grip, .tn.editing .tn-grip { display: block; }
+.tn .tn-del {
+  position: absolute; top: -11px; right: -11px; width: 20px; height: 20px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--line-strong); background: var(--surface);
+  color: var(--accent-text); font: 600 14px/18px var(--sans); text-align: center; cursor: pointer;
+}
+.tn .tn-del:hover { background: var(--surface-hover); }
+.tn .tn-grip {
+  position: absolute; right: -6px; bottom: -6px; width: 11px; height: 11px; box-sizing: border-box;
+  border-radius: 2px; background: var(--surface); border: 2px solid var(--accent); cursor: nwse-resize;
+}
+.tn.flash { animation: flash 1.2s ease-out 2; }
+.item .dot.tn-dot { border-radius: 2px; background: var(--tn-fill); border: 1px solid var(--tn-line); box-sizing: border-box; }

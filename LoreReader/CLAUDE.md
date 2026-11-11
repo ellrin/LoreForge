@@ -26,7 +26,7 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   addressed, never modified; refuses a git work tree; exports with free names), `papers`
   (`private/LoreReader/papers/<sha256>/{paper,annotations,quotes,chat,export}.json`, atomic writes,
   unknown fields kept; dirty = annotations hash ≠ last export), `annotate` (notes ⇄ PDF
-  annotations: `/Highlight` + `/AP`, sticky `/Text` for notes, `/NM (lr:<id>)`, Info
+  annotations: `/Highlight` + `/AP`, sticky `/Text` for notes, `/FreeText` + `/AP` for `kind: "text"` boxes (web/notes.js), `/NM (lr:<id>)`, Info
   `/LoreReaderSource`; display fractions ⇄ user space via CropBox + `/Rotate`), `pdfops` (lopdf `compose(sources, picks)` = every page operation;
   title, DOI), `text` (the page's pdf.js text: items with font name, size, position; UTF-16
   offsets shared with the page; `blank_line_numbers` = a manuscript's margin line numbers

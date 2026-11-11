@@ -1049,13 +1049,14 @@ async function noteDialog(info) {
 function drawHighlights(p) {
   const layer = p.el.querySelector(".hl-layer");
   if (!layer) return;
-  const own = S.annotations.filter((a) => p.sha === S.sha && a.page === p.page);
+  const own = S.annotations.filter((a) => p.sha === S.sha && a.page === p.page && a.kind !== "text");
   layer.replaceChildren(...own.flatMap((a) => (a.rects ?? []).map((r, k) => {
     const d = h("div", { class: `hl c-${a.color}${a.note && k === 0 ? " has-note" : ""}`, dataset: { id: a.id }, title: a.note || "" });
     Object.assign(d.style, { left: `${r[0] * 100}%`, top: `${r[1] * 100}%`, width: `${(r[2] - r[0]) * 100}%`, height: `${(r[3] - r[1]) * 100}%` });
     return d;
   })));
   markUnderHl(p);
+  window.LRNotes?.draw(p); // text boxes (notes.js)
 }
 
 function jumpTo(page, id) {
@@ -1067,7 +1068,7 @@ function jumpTo(page, id) {
   const y = p.el.offsetTop + (a?.rects?.[0] ? a.rects[0][1] * p.el.offsetHeight - vpEl.clientHeight * 0.3 : -12);
   vpEl.scrollTo({ top: y, behavior: "smooth" });
   setCur(i);
-  if (id) setTimeout(() => $$(`.hl[data-id="${id}"]`).forEach((x) => { x.classList.remove("flash"); void x.offsetWidth; x.classList.add("flash"); }), 450);
+  if (id) setTimeout(() => $$(`.hl[data-id="${id}"], .tn[data-id="${id}"]`).forEach((x) => { x.classList.remove("flash"); void x.offsetWidth; x.classList.add("flash"); }), 450);
   if (innerWidth <= 1100) shell.drawer("right", false);
 }
 
@@ -1213,7 +1214,7 @@ async function decorate(p) {
  *  underline only (`.under-hl`). */
 function markUnderHl(p) {
   if (!p.el) return;
-  const rects = p.sha === S.sha ? S.annotations.filter((a) => a.page === p.page).flatMap((a) => a.rects ?? []) : [];
+  const rects = p.sha === S.sha ? S.annotations.filter((a) => a.page === p.page && a.kind !== "text").flatMap((a) => a.rects ?? []) : [];
   const marks = p.el.querySelectorAll(".mk.kt-new, .mk.kt-learn, .mk.under-hl");
   if (!marks.length) return;
   const pr = rects.length ? p.el.getBoundingClientRect() : null;
@@ -2069,9 +2070,9 @@ function renderSide(which) {
 }
 
 function notesPane() {
-  if (!S.annotations.length) return [h("p", { class: "empty" }, "選取文字後按 1–4（螢光）或 N（註記）")];
+  if (!S.annotations.length) return [h("p", { class: "empty" }, "選取文字後按 1–4（螢光）或 N（註記）；在頁面上點兩下加文字")];
   const sorted = [...S.annotations].sort((a, b) => a.page - b.page || (a.rects?.[0]?.[1] ?? 0) - (b.rects?.[0]?.[1] ?? 0));
-  return [h("ul", { class: "items" }, sorted.map((a) => h("li", { class: "item", onclick: (e) => { if (!e.target.closest("button")) jumpTo(a.page, a.id); } },
+  return [h("ul", { class: "items" }, sorted.map((a) => a.kind === "text" && window.LRNotes ? window.LRNotes.item(a) : h("li", { class: "item", onclick: (e) => { if (!e.target.closest("button")) jumpTo(a.page, a.id); } },
     h("span", { class: `dot c-${a.color}` }),
     h("span", { class: "body" }, h("span", { class: "txt" }, a.quote?.exact || "（無文字）"), a.note ? h("span", { class: "note" }, a.note) : null, h("span", { class: "meta" }, `p.${a.page} · ${a.created_at.slice(5, 10)}`)),
     h("span", { class: "acts" },
@@ -2562,4 +2563,5 @@ wire();
 updateLegend();
 route();
 // For checks and the console.
+window.LRHost = { S, h, api, renderSide, refreshExport, jumpTo }; // for notes.js (text boxes)
 window.LR = { S, pageText, pageRich, decorate, focusNoun, setZoom };
