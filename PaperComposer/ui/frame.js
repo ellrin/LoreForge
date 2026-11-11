@@ -136,6 +136,7 @@ const PCFrame = (() => {
         { id: "actRefs", icon: "quote", label: "本篇文獻", run: () => openWindow("dlgPaperRefs") },
         { id: "actDb", icon: "database", label: "資料庫", menu: DB_TABLES },
         { id: "actTpl", icon: "layout", label: "模板", run: () => openWindow("dlgTpl") },
+        { id: "actNotes", icon: "notebook", label: "筆記", run: () => PCNotes.open() },
       ],
       ai: { id: "actDraft", icon: "spark", label: "討論草稿", run: () => PCDraft.open() },
       notation: () => PCNotation.open(),

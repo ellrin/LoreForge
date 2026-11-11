@@ -53,7 +53,7 @@ structure check. **Blocking** (`BLOCKING`; nothing is written): `hardcoded_refer
 "Table 1", "Eq. (3)"), `label_duplicate`, `registry_invalid`, `note_structure` (unbalanced `{}`,
 `$`, `\begin`/`\end`; `\documentclass` or `\begin{document}`). Everything else is reported, not
 blocking. `ref_undefined` is a warning (the label may be the paper's) and is dropped for labels the
-registry knows. Finding lines count from the body's first line.
+registry knows; findings about the registry as a whole (`unused_entry`, registry warnings) are dropped. Blocking findings have severity `error`. Finding lines count from the body's first line.
 
 ## API
 

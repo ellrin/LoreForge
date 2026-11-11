@@ -20,6 +20,7 @@ lore-llm = { path = "../commons/crates/lore-llm" }
 lore-gitsync = { path = "../commons/crates/lore-gitsync" }
 lore-home = { path = "../commons/crates/lore-home" }
 lore-notation = { path = "../commons/crates/lore-notation" }
+lore-notes = { path = "../commons/crates/lore-notes" }
 lore-shell = { path = "../commons/crates/lore-shell" }
 lore-engines = { path = "../commons/crates/lore-engines" }
 lore-fonts = { path = "../commons/crates/lore-fonts" }

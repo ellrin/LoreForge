@@ -16,6 +16,7 @@ pub mod convert;
 mod draft;
 mod home;
 mod notation;
+mod notes; // notes.js: 筆記 (lore-notes files in the workspace's notes/)
 mod newtemplate; // templates.js: 新增期刊 from a LaTeX kit or a Word sample, rules from the guidelines
 mod sections;
 mod shell; // the shared Lore shell: its files, 列印, 另存新檔
@@ -3356,6 +3357,7 @@ pub fn router(paths: Paths) -> Router {
         .merge(sections::routes())
         .merge(opened::routes())
         .merge(notation::routes())
+        .merge(notes::routes())
         .merge(shell::routes())
         .merge(todeck::routes())
         // GET/PUT /api/engines (the gear's 模型) and POST /api/links/open, shared by every app

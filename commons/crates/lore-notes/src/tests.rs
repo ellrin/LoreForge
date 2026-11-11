@@ -124,7 +124,8 @@ fn lore_notation_blocks() {
     let reg = registry();
     // a typed reference number
     let Err(Error::Blocked(f)) = notes.create_at(new("Typed", "As Table 1 shows, the loss drops."), &reg, t) else { panic!("not blocked") };
-    assert!(f.iter().any(|x| x.code == "hardcoded_reference" && x.blocking && x.line == Some(1)), "{f:?}");
+    assert!(f.iter().any(|x| x.code == "hardcoded_reference" && x.blocking && x.severity == "error" && x.line == Some(1)), "{f:?}");
+    assert!(!f.iter().any(|x| x.code == "unused_entry"), "registry-wide findings are not the note's");
     // a label defined twice
     let Err(Error::Blocked(f)) = notes.create_at(new("Dup", "\\begin{equation}a\\label{eq:a}\\end{equation}\n\\begin{equation}b\\label{eq:a}\\end{equation}\nSee \\eqref{eq:a}."), &reg, t) else { panic!() };
     assert!(f.iter().any(|x| x.code == "label_duplicate"));

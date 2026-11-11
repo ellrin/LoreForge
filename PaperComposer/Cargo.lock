@@ -2368,6 +2368,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-notes"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "lore-notation",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lore-secrets"
 version = "0.1.0"
 dependencies = [
@@ -2931,6 +2941,7 @@ version = "0.1.0"
 dependencies = [
  "csv",
  "lore-notation",
+ "lore-notes",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

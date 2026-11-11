@@ -369,8 +369,14 @@ pub fn check(body: &str, notation: &Notation) -> Vec<Finding> {
         if i.code == "ref_undefined" && i.subject.as_deref().is_some_and(|s| known.contains(s)) {
             continue;
         }
+        // about the whole registry, not this note (a note uses a few entries at most)
+        if i.code == "unused_entry" || i.category == "registry" && i.severity != Severity::Error {
+            continue;
+        }
+        let blocking = BLOCKING.contains(&i.code.as_str());
         // a note is a fragment: a label the paper defines is not an error here
         let severity = match (i.code.as_str(), i.severity) {
+            _ if blocking => "error",
             ("ref_undefined", _) => "warning",
             (_, Severity::Error) => "error",
             (_, Severity::Warning) => "warning",
@@ -378,7 +384,7 @@ pub fn check(body: &str, notation: &Notation) -> Vec<Finding> {
         };
         let loc = i.locations.first();
         out.push(Finding {
-            blocking: BLOCKING.contains(&i.code.as_str()),
+            blocking,
             code: i.code,
             severity: severity.into(),
             message: i.message,
