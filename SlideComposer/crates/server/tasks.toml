@@ -1,0 +1,16 @@
+# SlideComposer's own LLM tasks, in lore-llm's tasks.toml format, merged with lore-flow's
+# (sc-flow-graph) and lore-llm's shared table (sc-crop-modules) in `engines()` / `llm.rs`.
+#
+#   claude:selected   the Claude model chosen in 設定 → 模型 (subscription first, then the API key)
+#   local:current     the local engine that is connected (private/shared/engine.toml [engine])
+#
+# The class decides the order when the shared route is `auto` (create: Claude, then local).
+
+[task.sc-paper-deck]
+label = "論文做成簡報"
+class = "create"
+needs = { json = true, context = 32000 }
+default = "claude:selected"
+fallback = "local:current"
+offline = true
+max_tokens = 12000

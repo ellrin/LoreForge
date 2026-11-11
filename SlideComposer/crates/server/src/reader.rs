@@ -168,6 +168,16 @@ impl Reader {
         out
     }
 
+    /// LoreReader's paper.json of one paper.
+    pub fn paper_json(&self, sha: &str) -> Option<Value> {
+        self.json(sha, "paper.json")
+    }
+
+    /// LoreReader's symbols.json (symbols and equations) of one paper.
+    pub fn symbols_json(&self, sha: &str) -> Option<Value> {
+        self.json(sha, "symbols.json")
+    }
+
     fn list_in(&self, sha: &str, file: &str, key: &str) -> Vec<Value> {
         self.json(sha, file).and_then(|v| v.get(key).and_then(Value::as_array).cloned()).unwrap_or_default()
     }
@@ -202,7 +212,7 @@ fn authors_short(m: &Value) -> String {
     }
 }
 
-fn title_of(m: &Value) -> String {
+pub fn title_of(m: &Value) -> String {
     let t = s(m, "title");
     if t.is_empty() { s(m, "original_name").trim_end_matches(".pdf").to_string() } else { t }
 }

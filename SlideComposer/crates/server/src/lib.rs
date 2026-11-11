@@ -28,8 +28,10 @@
 //! | POST | /api/shell/dialog | `{kind: open\|save, name?}` → `{path}` native dialog (desktop app only, else 501) |
 
 mod export_open;
+pub mod llm;
 mod notation;
 mod reader;
+pub mod todeck;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -64,6 +66,8 @@ pub struct AppState {
     /// Equation fallback pictures already rendered: `<deck>/<key>/<object hash>` → PNG,
     /// so autosaves do not run Chrome again for unchanged equations.
     pub fallback_cache: Mutex<HashMap<String, Vec<u8>>>,
+    /// Model engines (論文報告); tests set it before the first request (`llm::Llm::with_factory`).
+    pub llm: std::sync::OnceLock<llm::Llm>,
 }
 
 /// A native file dialog request from the page (`/api/shell/dialog`).
@@ -187,7 +191,6 @@ pub fn routes() -> Router<Shared> {
         .route("/prefs.css", get(prefs_css))
         .route("/prefs.js", get(prefs_js))
         .route("/fonts/{file}", get(font_file))
-        .route("/api/info", get(info))
         .route("/api/styles/{id}", get(style))
         .route("/api/styles/{id}/preview/{n}", get(style_preview))
         .route("/api/styles/{id}/sample", get(style_sample))
@@ -217,6 +220,24 @@ pub fn routes() -> Router<Shared> {
         .route("/api/shell/dialog", post(shell_dialog))
         .route("/api/export/open", post(export_open::export_open))
         .merge(reader::routes())
+        .merge(todeck::routes().layer(local_cors()))
+        .route("/api/info", get(info).layer(local_cors()))
+}
+
+/// Pages of the other Lore apps (127.0.0.1 / localhost on any port, the desktop webviews) may
+/// call the routes with this layer: PaperComposer's 做成簡報 lists the bases and starts a deck here.
+fn local_cors() -> tower_http::cors::CorsLayer {
+    use tower_http::cors::{AllowOrigin, CorsLayer};
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|o, _| local_origin(o.to_str().unwrap_or(""))))
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_headers([header::CONTENT_TYPE])
+}
+
+pub fn local_origin(o: &str) -> bool {
+    ["http://127.0.0.1:", "http://localhost:"].iter().any(|p| o.strip_prefix(p).is_some_and(|port| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())))
+        || o == "tauri://localhost"
+        || o == "http://tauri.localhost"
 }
 
 /// The LoreForge themes (commons/ui/theme.css, the same file in every app),
@@ -337,7 +358,7 @@ async fn prefs_js(State(s): State<Shared>) -> impl IntoResponse {
 
 /// The settings behind the 模型 tab: the shared engine file, with this app's tasks (lore-flow's).
 fn engines(shared: &Shared) -> lore_engines::Engines {
-    lore_engines::Engines::new(shared.home.clone(), "SlideComposer", include_str!("../../../../commons/crates/lore-flow/tasks.toml"))
+    lore_engines::Engines::new(shared.home.clone(), "SlideComposer", llm::TASKS).with_tasks(lore_llm::TaskTable::parse(include_str!("../../../../commons/crates/lore-flow/tasks.toml")).unwrap_or_default())
 }
 
 pub fn router(shared: Shared) -> Router {
@@ -379,6 +400,7 @@ pub fn state_at(ws: Workspace, web: PathBuf, home: lore_home::Home) -> Shared {
         fonts: std::sync::OnceLock::new(),
         dialog: std::sync::OnceLock::new(),
         fallback_cache: Mutex::new(HashMap::new()),
+        llm: std::sync::OnceLock::new(),
     })
 }
 
