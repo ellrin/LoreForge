@@ -9,6 +9,7 @@
 | [`KnowledgeBase/`](KnowledgeBase/) | 個人知識庫：一張卡一個 JSON 檔、連結與網路圖、熟悉度與複習提醒 |
 | [`SlideComposer/`](SlideComposer/) | 任務式簡報編輯器：標籤字型、漸進揭露、無損 PPTX、輸出 PPTX／PDF |
 | [`LoreReader/`](LoreReader/) | PDF 論文閱讀器：沒學過的術語標紅、註記、引用句、翻譯、問 Claude、明確加入知識庫（原型） |
+| [`LoreEcho/`](LoreEcho/) | 學習夥伴：桌面右下角的泡泡，展開是視覺小說式的人物＋對話；知道你知識庫裡懂什麼（開發中） |
 | [`NeonDeck/`](NeonDeck/) | macOS 桌面小工具（含「最近學到」知識卡） |
 | [`private-example/`](private-example/) | `private/` 的公開範本：每個 App 能打開的最小內容 |
 
@@ -22,11 +23,12 @@ cd KnowledgeBase && cargo run -p kb-server     # http://127.0.0.1:7700
 cd SlideComposer && cargo run -p sc-server     # http://127.0.0.1:7880
 cd LoreReader && cargo run -p lr-server        # http://127.0.0.1:7890
 cd PaperComposer && cargo run -p pc-server     # 見 PaperComposer/README.md
+cd LoreEcho && cargo run -p le-server          # http://127.0.0.1:7860（桌面泡泡：cargo run -p loreecho）
 ```
 
-**Mac App**：`scripts/install-apps.sh` 編譯 PaperComposer、SlideComposer、KnowledgeBase、LoreReader（Tauri，裝到 `/Applications`）與 NeonDeck（裝到 `~/Applications`），並放進 Dock；只更新其中幾個就在後面寫名稱，例如 `scripts/install-apps.sh SlideComposer`。需要 `cargo install tauri-cli --version "^2" --locked`。App 從編譯時的 LoreForge 資料夾找 `private/`，所以 repo 不要搬家（搬了就重跑一次）。
+**Mac App**：`scripts/install-apps.sh` 編譯 PaperComposer、SlideComposer、KnowledgeBase、LoreReader、LoreEcho（Tauri，裝到 `/Applications`）與 NeonDeck（裝到 `~/Applications`），並放進 Dock（LoreEcho 是選單列小工具，不放）；只更新其中幾個就在後面寫名稱，例如 `scripts/install-apps.sh SlideComposer`。需要 `cargo install tauri-cli --version "^2" --locked`。App 從編譯時的 LoreForge 資料夾找 `private/`，所以 repo 不要搬家（搬了就重跑一次）。
 
-第一次啟動時，知識庫、簡報編輯器與 LoreReader 會從 `private-example/<App>/` 複製一份到 `private/<App>/`（只補缺的檔案），之後只讀寫 `private/`。PaperComposer 有 `private/PaperComposer/` 就用它，否則先開示範資料，再由設定頁建立工作區。
+第一次啟動時，知識庫、簡報編輯器、LoreReader 與 LoreEcho 會從 `private-example/<App>/` 複製一份到 `private/<App>/`（只補缺的檔案），之後只讀寫 `private/`。PaperComposer 有 `private/PaperComposer/` 就用它，否則先開示範資料，再由設定頁建立工作區。
 
 ## 私人資料：`private/`
 
@@ -45,6 +47,7 @@ LoreForge/
     SlideComposer/          風格包、簡報（SlideComposer-private）
     LoreReader/             論文的註記、引用句、對話（PDF 本身在 repo 外的書庫）
     PaperComposer/          句型、範本、論文（PaperComposer-private）
+    LoreEcho/               人物（立繪、頭像、個性）、視窗位置與設定（LoreEcho-private）
 ```
 
 讀取順序：`private/shared/<檔案>` → 沒有才用 `private-example/shared/<檔案>`。要個人化就把範本複製到 `private/shared/` 再改，公開的程式碼和範本都不用動。例如公司或買來的字型：字型檔裝在系統裡，名稱與代替規則寫在 `private/shared/fonts.toml`，App 執行時才讀進頁面，公開 repo 裡不會出現。
