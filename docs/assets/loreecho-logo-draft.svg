@@ -71,8 +71,6 @@
       <path d="M566 572 Q586 610 572 646"/>
       <path d="M470 640 Q512 614 554 640"/>
     </g>
-    <!-- jaw plates -->
-    <polyline stroke="#00F0FF" stroke-width="14" points="384,612 444,690 512,702 580,690 640,612"/>
     <!-- goatee -->
     <polyline stroke="#FCEE0A" stroke-width="12" points="490,742 512,806 534,742"/>
   </g>
