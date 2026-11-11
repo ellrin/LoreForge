@@ -408,6 +408,13 @@ async fn polish_over_http_with_a_mock_model() {
     let manual = items.iter().find(|i| i["state"] == "manual").unwrap()["id"].as_u64().unwrap();
     let (s, _) = call(&app, "POST", &format!("/api/decks/{name}/polish/{manual}"), Some(json!({ "action": "apply" }))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+    // a fix from another report (the job's), undone by its changes; a second time is stale
+    let fix = items.iter().find(|i| i["state"] == "applied" && i["check"] == 3).unwrap();
+    let body = json!({ "action": "undo", "changes": fix["changes"], "label": "標題" });
+    let (s, v) = call(&app, "POST", &format!("/api/decks/{name}/polish/changes"), Some(body.clone())).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, _) = call(&app, "POST", &format!("/api/decks/{name}/polish/changes"), Some(body)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
     // the saved report remembers the states
     let (_, v) = call(&app, "GET", &format!("/api/decks/{name}/polish"), None).await;
     assert_eq!(v["items"].as_array().unwrap().iter().find(|i| i["id"].as_u64() == Some(id)).unwrap()["state"], "undone");

@@ -203,6 +203,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/decks/{name}", get(open))
         .route("/api/decks/{name}/ops", post(ops))
         .route("/api/decks/{name}/polish", get(deckpolish::get_report).post(deckpolish::run))
+        .route("/api/decks/{name}/polish/changes", post(deckpolish::changes))
         .route("/api/decks/{name}/polish/{item}", post(deckpolish::item))
         .route("/api/decks/{name}/undo", post(undo))
         .route("/api/decks/{name}/redo", post(redo))

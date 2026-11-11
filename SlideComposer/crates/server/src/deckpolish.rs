@@ -21,6 +21,7 @@
 //! | GET | /api/decks/{name}/polish | the last report (`{items: []}` when none) |
 //! | POST | /api/decks/{name}/polish | `{engine?, terms?}` → run the checks, the report |
 //! | POST | /api/decks/{name}/polish/{item} | `{action: undo \| apply}` → changed slides + `item` |
+//! | POST | /api/decks/{name}/polish/changes | `{action, changes, label?}` → changed slides (a fix from another report) |
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -1063,4 +1064,27 @@ pub async fn item(State(s): State<Shared>, UrlPath((name, id)): UrlPath<(String,
     let Json(mut v) = crate::changed(&mut sess, a)?;
     v["item"] = serde_json::to_value(item).unwrap_or_default();
     Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+pub struct ChangesBody {
+    pub action: String,
+    pub changes: Vec<Change>,
+    #[serde(default)]
+    pub label: String,
+}
+
+/// Undo / apply one fix from a report kept elsewhere (the 論文報告 job's `polish.json`): the
+/// values are checked first, so a stale or edited fix is refused, never forced.
+pub async fn changes(State(s): State<Shared>, UrlPath(name): UrlPath<String>, Json(b): Json<ChangesBody>) -> R {
+    let forward = match b.action.as_str() {
+        "undo" => false,
+        "apply" => true,
+        _ => return Err(bad("不認得的動作")),
+    };
+    let sess = crate::session(&s, &name)?;
+    let mut sess = sess.lock().unwrap();
+    let mut it = Item::new(0, "", None, if b.label.is_empty() { "排版用字".into() } else { b.label }, if forward { "suggested" } else { "applied" }, b.changes);
+    let a = commit(&mut sess.editor, &mut it, forward).map_err(bad)?;
+    crate::changed(&mut sess, a)
 }
