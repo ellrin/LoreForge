@@ -12,9 +12,9 @@
 
 :root {
   --win-w: 620px; --win-h: 620px;
-  --col-x: 196px;                 /* the conversation column's left edge */
+  --col-x: clamp(196px, calc(min(100vw, var(--win-w)) * 0.38), 420px); /* the conversation column's left edge (grows with the window) */
   --overlap: 44px;                /* the strip of the column the figure may cover */
-  --fig-cx: 128px;                /* the figure's centre line */
+  --fig-cx: calc((var(--col-x) + var(--overlap)) / 2); /* the figure's centre line */
   --fig-top: 12px;                /* where the head starts (figure_scale 1 = feet on the bottom) */
   --fig-scale: 1; --fig-dy: 0;    /* per character, from character.toml */
 }
