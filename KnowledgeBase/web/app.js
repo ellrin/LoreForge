@@ -126,10 +126,13 @@ async function boot() {
   if (!route()) setView("cards");
   window.addEventListener("hashchange", route);
   refreshDue();
+  refreshPending();
+  setInterval(refreshPending, 20000);
+  window.addEventListener("focus", refreshPending);
 }
 
 // ── Routes ─────────────────────────────────────────────
-const VIEWS = ["cards", "review", "timeline", "graph"];
+const VIEWS = ["cards", "review", "pending", "timeline", "graph"];
 /** Show what the URL hash names; false when it names nothing. */
 function route() {
   const m = location.hash.match(/^#\/(\w+)(?:\/([\w-]+))?/);
@@ -145,7 +148,8 @@ function route() {
   }
   if (m[1] === "settings") { LoreShell.settings(); setHash(S.view === "editor" ? edHash() : `#/${S.view}`); return true; }
   if (m[1] === "node" && m[2]) { if (target !== edHash() || S.view !== "editor") openEditor(m[2]); return true; }
-  if (m[1] === "new") { if (S.view !== "editor" || S.ed?.id) openEditor(null); return true; }
+  if (m[1] === "new") { if (S.view !== "editor" || S.ed?.id || S.ed?.pending) openEditor(null); return true; }
+  if (m[1] === "pending" && m[2]) { if (S.view !== "editor" || S.ed?.pending?.id !== m[2]) openPending(m[2]); return true; }
   if (m[1] === "graph") { S.graphCenter = m[2] ?? null; setView("graph"); return true; }
   if (VIEWS.includes(m[1])) { setView(m[1]); return true; }
   return false;
@@ -182,7 +186,7 @@ async function refreshMeta() {
     S.spaces = sp.spaces; S.reg = reg;
     renderSpacesFoot(); renderTags();
     await refreshNames();
-    refreshDue();
+    refreshDue(); refreshPending();
   } catch (e) { fail(e); }
 }
 
@@ -198,7 +202,8 @@ function setView(v) {
 function showView(v) {
   S.view = v;
   document.querySelectorAll(".view").forEach((s) => (s.hidden = s.dataset.view !== v));
-  document.querySelectorAll("#views button").forEach((b) => b.toggleAttribute("aria-current", b.dataset.view === v || (v === "editor" && b.dataset.view === "cards")));
+  const navFor = v === "editor" ? (S.ed?.pending ? "pending" : "cards") : v;
+  document.querySelectorAll("#views button").forEach((b) => b.toggleAttribute("aria-current", b.dataset.view === navFor));
   document.querySelectorAll("#views button[aria-current]").forEach((b) => b.setAttribute("aria-current", "page"));
   $("filters").hidden = !(v === "cards");
   shell.drawer("left", false);
@@ -206,6 +211,7 @@ function showView(v) {
   if (v !== "graph") Graph.hide();
   if (v === "cards") loadCards();
   if (v === "review") loadReview();
+  if (v === "pending") loadPending();
   if (v === "timeline") loadTimeline();
   if (v === "graph") loadGraph();
   if (VIEWS.includes(v)) setHash(v === "graph" && S.graphCenter ? `#/graph/${S.graphCenter}` : `#/${v}`);
@@ -354,8 +360,8 @@ function unpeek() { if (peekEl) peekEl.hidden = true; }
 // Unsaved changes: the form is compared with a snapshot taken when the card was opened or
 // saved. While it differs, the head shows 「未儲存」, a draft is kept in localStorage
 // (`kb.draft.<id|new>`, offered back next time) and leaving asks first.
-const draftKey = (id) => `kb.draft.${id ?? "new"}`;
-const edHash = () => (S.ed?.id ? `#/node/${S.ed.id}` : "#/new");
+const draftKey = (id) => (id == null && S.ed?.pending ? `kb.draft.${S.ed.pending.id}` : `kb.draft.${id ?? "new"}`);
+const edHash = () => (S.ed?.pending ? `#/pending/${S.ed.pending.id}` : S.ed?.id ? `#/node/${S.ed.id}` : "#/new");
 const edState = () => JSON.stringify({ ...fieldsFromForm(), space: $("edSpace").value });
 const isDirty = () => S.view === "editor" && !!S.ed && !S.ed.leaving && S.ed.snap != null && edState() !== S.ed.snap;
 function markClean() {
@@ -411,7 +417,8 @@ function applyState(st) {
 }
 
 function wireEditor() {
-  $("edBack").onclick = () => setView("cards");
+  $("edBack").onclick = () => setView(S.ed?.pending ? "pending" : "cards");
+  $("edDiscard").onclick = discardPending;
   $("edSave").onclick = saveCard;
   $("edForm").addEventListener("submit", (e) => { e.preventDefault(); saveCard(); });
   let pt;
@@ -467,8 +474,9 @@ function wireEditor() {
 }
 
 async function openEditor(id) {
-  if (S.view === "editor" && (S.ed?.id ?? null) !== (id ?? null) && isDirty() && !(await askLeave())) { setHash(edHash()); return; }
+  if (S.view === "editor" && edHash() !== (id ? `#/node/${id}` : "#/new") && isDirty() && !(await askLeave())) { setHash(edHash()); return; }
   if (S.view === "editor" && S.ed) S.ed.leaving = true;
+  pendingMode(null);
   setView("editor");
   setHash(id ? `#/node/${id}` : "#/new");
   const isNew = !id;
@@ -623,6 +631,7 @@ function fieldsFromForm() {
 
 async function saveCard() {
   if (!S.ed || S.ed.saving) return;
+  if (S.ed.pending) return acceptPending();
   if (!$("edTitle").value.trim()) { toast("請輸入標題", true); $("edTitle").focus(); return; }
   S.ed.saving = true; $("edSave").disabled = true; paintStatus();
   try {
@@ -1134,3 +1143,100 @@ function renderEmail() {
 }
 
 boot();
+
+// ── 待審 (pending cards from LoreEcho) ──────────────────
+// Files live in <space>/pending/; they are not cards (not in the list, search or review) until
+// 確認. The editor opens in 待審 mode: 確認 (primary) makes a normal card, 丟掉 throws it away,
+// and a card with the same title or alias as an existing one offers 合併到既有卡.
+S.pending = [];
+async function refreshPending() {
+  try {
+    const { pending } = await api("GET", "/api/pending");
+    S.pending = pending;
+    $("cPending").textContent = pending.length || "";
+    $("navPending").hidden = !pending.length;
+    if (S.view === "pending") renderPending();
+  } catch {}
+}
+async function loadPending() { await refreshPending(); renderPending(); }
+function renderPending() {
+  $("pendingInfo").textContent = S.pending.length ? `${S.pending.length} 張` : "";
+  const list = $("pendingList");
+  if (!S.pending.length) { list.replaceChildren(h("div", { class: "empty" }, h("b", {}, "沒有待審的卡"))); return; }
+  list.replaceChildren(h("ul", {}, S.pending.map((c) => h("li", {}, h("button", { type: "button", onclick: () => { location.hash = `#/pending/${c.id}`; } },
+    h("span", { class: "t" }, c.title),
+    c.duplicates.length ? h("span", { class: "dup", title: `已有同名卡：${c.duplicates.map((d) => d.title).join("、")}` }, "重複") : null,
+    h("span", { class: "src" }, c.source || "—"),
+    h("span", { class: "when mono" }, fmtWhen(c.created)))))));
+}
+
+/** Editor chrome for a pending card (`c`) or back to normal (null). */
+function pendingMode(c) {
+  $("edDiscard").hidden = !c;
+  $("edSave").lastChild.textContent = c ? "確認" : "儲存";
+  $("edDupBar").hidden = true;
+  if (c) { $("edDelete").hidden = true; $("edGraph").hidden = true; $("edShareWrap").hidden = true; $("edDraftBar").hidden = true; }
+}
+
+async function openPending(id) {
+  if (S.view === "editor" && edHash() !== `#/pending/${id}` && isDirty() && !(await askLeave())) { setHash(edHash()); return; }
+  if (S.view === "editor" && S.ed) S.ed.leaving = true;
+  await refreshPending();
+  const c = S.pending.find((x) => x.id === id);
+  if (!c) { toast("這張待審卡已經不在了", true); S.ed = null; setView("pending"); return; }
+  S.ed = { id: null, space: c.space, revision: null, images: [], links: c.links ?? [], pending: c };
+  setView("editor");
+  setHash(`#/pending/${id}`);
+  pendingMode(c);
+  $("edHeading").textContent = "待審";
+  $("edSpace").disabled = true; $("edSpace").value = c.space;
+  $("edTitle").value = c.title; $("edAliases").value = (c.aliases ?? []).join(", ");
+  $("edKind").value = S.reg.kinds.some((k) => k.id === c.kind) ? c.kind : "concept";
+  $("edTags").value = (c.tags ?? []).join(", "); $("edDomains").value = (c.domains ?? []).join(", ");
+  $("edSummary").value = c.summary ?? ""; $("edBody").value = c.body ?? "";
+  $("edMeta").textContent = [c.source, fmtWhen(c.created)].filter(Boolean).join(" · ");
+  $("edBacklinks").replaceChildren(); $("edProgress").replaceChildren();
+  renderEdLists(); renderPreview();
+  S.ed.snap = edState(); paintStatus();
+  if (c.duplicates.length) {
+    const bar = $("edDupBar");
+    bar.replaceChildren(
+      h("span", {}, `已有同名卡：${c.duplicates.map((d) => d.title).join("、")}`),
+      ...c.duplicates.map((d) => h("button", { type: "button", class: "btn small", onclick: () => mergePending(d) }, c.duplicates.length > 1 ? `合併到「${d.title}」` : "合併到既有卡")));
+    bar.hidden = false;
+  }
+}
+
+async function acceptPending() {
+  if (!$("edTitle").value.trim()) { toast("請輸入標題", true); $("edTitle").focus(); return; }
+  await finishPending(() => api("POST", `/api/pending/${S.ed.pending.id}/accept`, fieldsFromForm()), "已加入知識卡");
+}
+async function mergePending(d) {
+  await finishPending(() => api("POST", `/api/pending/${S.ed.pending.id}/accept`, { ...fieldsFromForm(), merge_into: d.id }), `已合併到「${d.title}」`, true);
+}
+async function finishPending(call, msg, openAfter = false) {
+  if (!S.ed?.pending || S.ed.saving) return;
+  S.ed.saving = true; $("edSave").disabled = true; paintStatus();
+  try {
+    const r = await call();
+    markClean(); S.ed.leaving = true;
+    toast(msg);
+    await refreshMeta();
+    if (openAfter) await openEditor(r.node.id);
+    else setView(S.pending.length ? "pending" : "cards");
+  } catch (e) { fail(e); }
+  finally { S.ed && (S.ed.saving = false); $("edSave").disabled = false; paintStatus(); }
+}
+async function discardPending() {
+  if (!S.ed?.pending) return;
+  const ok = await LoreShell.ask($("edDiscard"), ["丟掉這張待審卡？"], [{ label: "留下", value: false }, { label: "丟掉", value: true, primary: true }]);
+  if (ok !== true) return;
+  try {
+    await api("DELETE", `/api/pending/${S.ed.pending.id}`);
+    S.ed.leaving = true;
+    try { localStorage.removeItem(draftKey(null)); } catch {}
+    await refreshPending();
+    toast("已丟掉");
+    setView(S.pending.length ? "pending" : "cards");
+  } catch (e) { fail(e); }
+}

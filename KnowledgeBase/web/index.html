@@ -22,6 +22,7 @@
     <ol class="views" id="views">
       <li><button data-view="cards"><span data-icon="cards"></span><span class="t">知識卡</span><span class="count" id="cCards"></span></button></li>
       <li><button data-view="review"><span data-icon="target"></span><span class="t">複習</span><span class="count hot" id="cDue"></span></button></li>
+      <li id="navPending" hidden><button data-view="pending"><span data-icon="layers"></span><span class="t">待審</span><span class="count hot" id="cPending"></span></button></li>
       <li><button data-view="timeline"><span data-icon="calendar"></span><span class="t">時間軸</span></button></li>
       <li><button data-view="graph"><span data-icon="graph"></span><span class="t">圖譜</span></button></li>
     </ol>
@@ -72,6 +73,11 @@
       <div class="cards" id="cardList"></div>
     </section>
 
+    <section class="view" data-view="pending" hidden>
+      <div class="view-head"><h2>待審</h2><span class="muted" id="pendingInfo"></span></div>
+      <div class="pending-list" id="pendingList"></div>
+    </section>
+
     <section class="view" data-view="editor" hidden>
       <div class="view-head">
         <button class="ico" id="edBack" data-icon="back" aria-label="回到清單"></button>
@@ -84,10 +90,12 @@
             <button class="btn" id="edShare"><span data-icon="share"></span>分享</button>
           </span>
           <button class="ico" id="edDelete" data-icon="trash" aria-label="移到垃圾桶" hidden></button>
+          <button class="btn" id="edDiscard" hidden><span data-icon="trash"></span>丟掉</button>
           <button class="btn primary" id="edSave"><span data-icon="check"></span>儲存</button>
         </div>
       </div>
       <div class="draft-bar" id="edDraftBar" role="status" hidden></div>
+      <div class="draft-bar dup-bar" id="edDupBar" role="status" hidden></div>
       <div class="editor">
         <form class="ed-form" id="edForm" autocomplete="off">
           <div class="row2">

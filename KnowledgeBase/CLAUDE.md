@@ -77,6 +77,7 @@ cd ../commons && cargo test -p kb-core -p lore-store
   (`crates/server/tasks.toml`: `local:current` then `claude:selected`; engine URL in config.toml
   `[engine]` or `KB_LLM_URL`; optional body `engine: "local"|"claude"`). Never saved; no engine = 503 with
   one line. Candidate terms still use `CardAssistant`/`MockAssistant` (tests and offline only).
+- 待審區: `<space>/pending/<id>.json` (kb-core `pending`, README there), not nodes (never in list/search/review). `GET/POST /api/pending`, `POST /api/pending/{id}/accept` (edits; `merge_into` folds into an existing card), `DELETE`. UI: left nav 待審 N (hidden at 0), `#/pending`, `#/pending/<id>` = card editor in 待審 mode (確認 · 丟掉; 合併到既有卡 when title/alias matches).
 - iCloud placeholders (`.<name>.icloud`) are fetched with `brctl download` through an injected
   runner: **not tested on real hardware**. Tests never touch the real iCloud folder.
 - Reminders: a notification slot is handled once (NeonDeck claims it; kb-server shows it with

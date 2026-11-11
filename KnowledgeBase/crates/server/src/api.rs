@@ -23,6 +23,10 @@
 //! | POST | /api/assets?space=&ext= | raw bytes → `{asset, ext, url}` |
 //! | GET | /api/assets/{space}/{hex.ext} | the file |
 //! | POST | /api/draft | `{term, context, kind?, lang?}` → card draft (mock until lore-llm) |
+//! | GET | /api/pending?space= | 待審卡 `{pending:[{space, …card, duplicates}], count}` (not in /api/nodes, review or search) |
+//! | POST | /api/pending | `{space?, cards:[{title, summary?, body?, tags?, links?, kind?, source?, from_conversation?}]}` → `{space, ids}` |
+//! | POST | /api/pending/{id}/accept | optional edits `{…fields, merge_into?}` → normal card (learning); `merge_into` folds it into that card instead |
+//! | DELETE | /api/pending/{id} | throw away (file moves to `trash/pending/`) |
 //! | POST | /api/reindex | rebuild the index from the files |
 //! | GET | /api/stats | today's numbers (+ notification times for NeonDeck) |
 //! | GET/PUT | /api/reminders | e-mail / notification settings, state, password status |
@@ -106,6 +110,9 @@ pub fn routes() -> Router<Shared> {
         .route("/api/timeline", get(timeline))
         .route("/api/assets", post(put_asset).layer(DefaultBodyLimit::max(30 * 1024 * 1024)))
         .route("/api/assets/{space}/{file}", get(get_asset))
+        .route("/api/pending", get(pending_list).post(pending_add))
+        .route("/api/pending/{id}", axum::routing::delete(pending_discard))
+        .route("/api/pending/{id}/accept", post(pending_accept))
         .route("/api/draft", post(draft))
         .route("/api/reindex", post(reindex))
         .route("/api/stats", get(stats))
@@ -487,4 +494,69 @@ async fn theme_put(State(s): State<Shared>, Json(b): Json<Value>) -> axum::respo
         Ok(t) => Json(json!({ "theme": t })).into_response(),
         Err(e) => (axum::http::StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))).into_response(),
     }
+}
+
+// ── 待審區 ─────────────────────────────────────────────
+fn pending_space(kb: &kb_core::KnowledgeBase, id: &str) -> Result<String, ApiError> {
+    kb.pending_list(None)?.into_iter().find(|(_, c)| c.id == id).map(|(s, _)| s).ok_or_else(|| KbError::NotFound(format!("pending card `{id}`")).into())
+}
+
+async fn pending_list(State(s): State<Shared>, Query(q): Query<SpaceQ>) -> R {
+    let kb = kb!(s);
+    let mut out = Vec::new();
+    for (space, c) in kb.pending_list(q.space.as_deref())? {
+        let dups = kb.pending_duplicates(&space, &c)?;
+        let mut v = serde_json::to_value(&c).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string(), "internal"))?;
+        v["space"] = json!(space);
+        v["duplicates"] = json!(dups);
+        out.push(v);
+    }
+    ok(json!({ "count": out.len(), "pending": out }))
+}
+
+#[derive(Deserialize)]
+struct PendingAdd {
+    space: Option<String>,
+    #[serde(default)]
+    cards: Vec<kb_core::NewPending>,
+}
+
+async fn pending_add(State(s): State<Shared>, Json(b): Json<PendingAdd>) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if b.cards.is_empty() {
+        return Err(bad("`cards` is empty"));
+    }
+    let kb = kb!(s);
+    let space = match b.space.filter(|x| !x.is_empty()) {
+        Some(sp) => sp,
+        None => kb.spaces().default_for(kb.member()).map(|s| s.id().to_string()).ok_or_else(|| bad("no space"))?,
+    };
+    let made = kb.pending_add(&space, b.cards)?;
+    Ok((StatusCode::CREATED, Json(json!({ "space": space, "ids": made.iter().map(|c| &c.id).collect::<Vec<_>>() }))))
+}
+
+#[derive(Deserialize, Default)]
+struct AcceptBody {
+    merge_into: Option<String>,
+    #[serde(flatten)]
+    fields: NodeFields,
+}
+
+async fn pending_accept(State(s): State<Shared>, Path(id): Path<String>, body: Bytes) -> R {
+    let b: AcceptBody = if body.iter().all(u8::is_ascii_whitespace) { AcceptBody::default() } else { serde_json::from_slice(&body).map_err(|e| bad(e.to_string()))? };
+    let mut kb = kb!(s);
+    let space = pending_space(&kb, &id)?;
+    let edits = Some(b.fields);
+    let node = match b.merge_into.filter(|x| !x.is_empty()) {
+        Some(into) => kb.pending_merge(&space, &id, &into, edits)?,
+        None => kb.pending_accept(&space, &id, edits)?,
+    };
+    let summary = kb.summary(&node.id)?;
+    ok(json!({ "space": space, "node": node, "summary": summary }))
+}
+
+async fn pending_discard(State(s): State<Shared>, Path(id): Path<String>) -> R {
+    let kb = kb!(s);
+    let space = pending_space(&kb, &id)?;
+    kb.pending_discard(&space, &id)?;
+    ok(json!({ "discarded": id }))
 }

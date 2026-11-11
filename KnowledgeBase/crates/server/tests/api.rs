@@ -323,3 +323,55 @@ async fn notation_is_the_global_registry() {
     let (s, v) = call(&app, "PUT", "/api/notation", Some(json!({ "entries": "nope" }))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
 }
+
+#[tokio::test]
+async fn pending_cards_api() {
+    let (d, app, _clock) = setup();
+    let (_, old) = call(&app, "POST", "/api/nodes", Some(json!({ "space": "me", "title": "Softmax", "aliases": ["SM"] }))).await;
+    let old_id = old["node"]["id"].as_str().unwrap().to_string();
+
+    let (s, v) = call(&app, "POST", "/api/pending", Some(json!({ "cards": [
+        { "title": "softmax", "summary": "s1", "body": "b1", "tags": ["nn"], "source": "chat A", "from_conversation": "c1" },
+        { "title": "Sigmoid", "summary": "s2" }, { "title": "Tanh" } ] }))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["space"], "me");
+    let ids: Vec<String> = v["ids"].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect();
+    assert!(d.path().join("personal/pending").join(format!("{}.json", ids[0])).is_file());
+    assert_eq!(call(&app, "POST", "/api/pending", Some(json!({ "cards": [{ "title": " " }] }))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "POST", "/api/pending", Some(json!({ "cards": [] }))).await.0, StatusCode::BAD_REQUEST);
+
+    let (_, v) = call(&app, "GET", "/api/pending", None).await;
+    assert_eq!(v["count"], 3);
+    assert_eq!(v["pending"][0]["duplicates"][0]["id"], old_id.as_str());
+    assert_eq!(v["pending"][0]["source"], "chat A");
+    assert_eq!(v["pending"][1]["duplicates"].as_array().unwrap().len(), 0);
+
+    let (_, v) = call(&app, "GET", "/api/nodes", None).await;
+    assert_eq!(v["nodes"].as_array().unwrap().len(), 1);
+    let (_, v) = call(&app, "GET", "/api/nodes?q=Sigmoid", None).await;
+    assert_eq!(v["nodes"].as_array().unwrap().len(), 0);
+    let (_, v) = call(&app, "GET", "/api/recall/due?limit=50", None).await;
+    assert!(v["nodes"].as_array().unwrap().len() <= 1, "only the existing card");
+
+    let (s, v) = call(&app, "POST", &format!("/api/pending/{}/accept", ids[1]), Some(json!({ "title": "Sigmoid function", "tags": ["nn"] }))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["node"]["title"], "Sigmoid function");
+    assert_eq!(v["summary"]["state"], "learning");
+    let new_id = v["node"]["id"].as_str().unwrap();
+    let (s, _) = call(&app, "GET", &format!("/api/nodes/{new_id}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(call(&app, "POST", &format!("/api/pending/{}/accept", ids[1]), None).await.0, StatusCode::NOT_FOUND);
+
+    let (s, v) = call(&app, "POST", &format!("/api/pending/{}/accept", ids[0]), Some(json!({ "merge_into": old_id }))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["node"]["id"], old_id.as_str());
+    assert_eq!(v["node"]["revision"], 2);
+    assert_eq!(v["node"]["summary"], "s1");
+
+    assert_eq!(call(&app, "DELETE", &format!("/api/pending/{}", ids[2]), None).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "DELETE", &format!("/api/pending/{}", ids[2]), None).await.0, StatusCode::NOT_FOUND);
+    let (_, v) = call(&app, "GET", "/api/pending", None).await;
+    assert_eq!(v["count"], 0);
+    let (_, v) = call(&app, "GET", "/api/nodes", None).await;
+    assert_eq!(v["nodes"].as_array().unwrap().len(), 2);
+}
