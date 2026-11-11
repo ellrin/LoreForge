@@ -7,7 +7,7 @@
 //!
 //! | event | data |
 //! |---|---|
-//! | `start` | `{ engine, label }` (label 「本機」／「Claude」) |
+//! | `start` | `{ engine, label }` (label 「本機 Gemma 4 12B」／「Claude Sonnet」, the catalog's name) |
 //! | `delta` | `{ text }` the next piece |
 //! | `done` | `{ engine, text }` the whole reply |
 //! | `error` | `{ error }` one line, the call failed after it started |

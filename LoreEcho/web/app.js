@@ -81,7 +81,10 @@ function mountShell() {
   const collapse = h("button", { type: "button", class: "ico", id: "actCollapse", "aria-label": "收起 Esc", title: "收起成泡泡（對話會清掉）" }, h("span", { "data-icon": "chevron" }));
   collapse.addEventListener("click", () => show(false));
   S.shell.el.prepend(collapse);
-  S.shell.slots.lead.append(h("span", { class: "engine", id: "engine", hidden: true }));
+  // which model answers: the next reply's (自動 · 本機 Gemma 4 12B), then the one that answered; click = 自動／雲／地
+  S.chip = LoreShell.engineChip({ task: "le-chat", live: true, label: "這次回答用的模型" });
+  S.chip.id = "engine";
+  S.shell.slots.lead.append(S.chip);
 }
 
 // ── characters ──────────────────────────────────────────────────
@@ -259,6 +262,7 @@ async function show(expanded, save = true) {
   $("win").hidden = !expanded;
   $("bubble").hidden = expanded;
   if (expanded) {
+    S.chip?.refresh();
     const p = $("win");
     p.classList.remove("closing"); p.classList.add("opening");
     setTimeout(() => p.classList.remove("opening"), 200);
@@ -334,7 +338,7 @@ function newChat() {
   S.line = null;
   $("hist").replaceChildren();
   setLine(GREETING, "empty");
-  $("engine").hidden = true;
+  S.chip.actual("");
   setState("idle");
   $("send").disabled = false;
   if (S.expanded) $("text").focus();
@@ -358,6 +362,8 @@ async function send(engine) {
   clearTimeout(S.timers.wait);
   S.timers.wait = setTimeout(() => { if (S.busy === ctrl && !reply) setState("waiting"); }, 8000);   // a long wait for the model
   setLine("", "pending");
+  S.chip.actual("");   // until this reply says which model answers, the prediction shows
+  S.chip.busy(true);
   let reply = "";
   try {
     const r = await fetch("/api/chat", {
@@ -371,7 +377,7 @@ async function send(engine) {
     }
     for await (const [ev, data] of events(r.body)) {
       if (ctrl.signal.aborted) return;
-      if (ev === "start") { $("engine").textContent = data.label; $("engine").title = data.engine; $("engine").className = "engine chip"; $("engine").hidden = false; }
+      if (ev === "start") { S.chip.actual(data.label); }
       else if (ev === "delta") { if (!reply) { clearTimeout(S.timers.wait); setState("speaking"); } reply += data.text; setLine(reply, "pending"); }
       else if (ev === "done") { reply = data.text || reply; }
       else if (ev === "error") { if (reply) keep(reply); failed(data.error); return; }
@@ -384,6 +390,7 @@ async function send(engine) {
     failed(e.message);
   } finally {
     clearTimeout(S.timers.wait);
+    S.chip.busy(false);
     if (S.busy === ctrl) { S.busy = null; $("send").disabled = false; settle(reply.trim() ? moodOf(reply) : null); }
   }
 }

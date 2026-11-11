@@ -75,7 +75,7 @@ async fn get_follows_the_contract() {
     let (_, v) = call(&app, "GET", "/api/engines", None).await;
     let l = &v["local"];
     assert_eq!((l["state"].as_str(), l["url"].as_str(), l["model"].as_str()), (Some("missing"), None, Some("qwen3.5-9b-q8")), "not downloaded here");
-    assert_eq!(l["status"], "未載入");
+    assert_eq!(l["status"], "未載入 · 用到時自動載入");
     assert_eq!(l["label"], "Qwen3.5 9B");
     assert_eq!(l["vision"], true);
     assert_eq!(l["models"][0]["id"], "qwen3.5-9b-q8");
@@ -156,7 +156,7 @@ async fn picking_a_local_model_only_writes_its_id() {
     let app: axum::Router = router(engines(d.path()).shared(rt).layout(layout));
     let (_, v) = call(&app, "GET", "/api/engines", None).await;
     assert_eq!(v["local"]["state"], "missing");
-    assert_eq!(v["local"]["status"], "未載入");
+    assert_eq!(v["local"]["status"], "未載入 · 用到時自動載入");
     let (st, v) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "model": "qwen3.5-9b-q8" } }))).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
     assert!(v["error"].as_str().unwrap().contains("llama.cpp"), "not downloaded: {v}");
@@ -171,7 +171,7 @@ async fn picking_a_local_model_only_writes_its_id() {
     let (st, v) = call(&app, "PUT", "/api/engines", Some(json!({ "local": { "model": "qwen3.5-9b-q8" } }))).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(home.engine().unwrap().model.as_deref(), Some("qwen3.5-9b-q8"));
-    assert_eq!((v["local"]["state"].as_str(), v["local"]["model"].as_str(), v["local"]["status"].as_str()), (Some("off"), Some("qwen3.5-9b-q8"), Some("未載入")));
+    assert_eq!((v["local"]["state"].as_str(), v["local"]["model"].as_str(), v["local"]["status"].as_str()), (Some("off"), Some("qwen3.5-9b-q8"), Some("未載入 · 用到時自動載入")));
     assert!(!std::fs::read_to_string(d.path().join("private/shared/engine.toml")).unwrap().contains("url"));
     shared::uninstall();
 }
@@ -315,7 +315,7 @@ async fn idle_release_is_shared_and_only_the_owner_releases() {
     let pc: axum::Router = router(engines(d.path()).shared(rt));
     let (_, v) = call(&pc, "GET", "/api/engines", None).await;
     let l = &v["local"];
-    assert_eq!((l["can_release"].as_bool(), l["status"].as_str()), (Some(false), Some("未載入")), "{l}");
+    assert_eq!((l["can_release"].as_bool(), l["status"].as_str()), (Some(false), Some("未載入 · 用到時自動載入")), "{l}");
     assert_eq!(l["users"], json!(["SlideComposer"]));
     assert_eq!(l["waiting"][0]["app"], "LoreEcho");
     let (st, v) = call(&pc, "PUT", "/api/engines", Some(json!({ "local": { "release": true } }))).await;
@@ -328,5 +328,46 @@ async fn idle_release_is_shared_and_only_the_owner_releases() {
     let (st, v) = call(&pc, "PUT", "/api/engines", Some(json!({ "local": { "release": true } }))).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(v["local"]["users"], json!([]));
+    shared::uninstall();
+}
+
+#[tokio::test]
+async fn claude_vision_only_on_the_api_route_with_a_key() {
+    let _g = SERIAL.lock().await;
+    let d = tempfile::tempdir().unwrap();
+    let e = engines(d.path());
+    let app: axum::Router = router(e.clone());
+    let key = |on: bool| *e.api_known.lock().unwrap() = Some(on);
+    let vision = |v: &Value| (v["claude"]["via"].as_str().unwrap().to_string(), v["claude"]["vision"].as_bool().unwrap());
+    // a key exists but the subscription route is chosen: no images
+    call(&app, "PUT", "/api/engines", Some(json!({ "claude": { "via": "subscription" } }))).await;
+    key(true);
+    let (_, v) = call(&app, "GET", "/api/engines", None).await;
+    assert_eq!(vision(&v), ("subscription".into(), false), "{v}");
+    // the API route with a key: images
+    let (_, v) = call(&app, "PUT", "/api/engines", Some(json!({ "claude": { "via": "api" } }))).await;
+    key(true);
+    let (_, v2) = call(&app, "GET", "/api/engines", None).await;
+    assert_eq!(vision(&v2), ("api".into(), true), "{v} {v2}");
+    // the API route without a key: no
+    key(false);
+    let (_, v) = call(&app, "GET", "/api/engines", None).await;
+    assert_eq!(vision(&v), ("api".into(), false));
+    shared::uninstall();
+}
+
+#[tokio::test]
+async fn tasks_report_the_last_model_with_its_time() {
+    let _g = SERIAL.lock().await;
+    let d = tempfile::tempdir().unwrap();
+    let app: axum::Router = router(engines(d.path()));
+    let (_, v) = call(&app, "GET", "/api/engines", None).await;
+    let t = |v: &Value| v["tasks"].as_array().unwrap().iter().find(|t| t["id"] == "pc-draft-turn").unwrap().clone();
+    assert!(t(&v)["last_label"].is_null() && t(&v)["last_at"].is_null());
+    shared::record_used("pc-draft-turn", "llama-server:gemma-4-12b-q8");
+    let (_, v) = call(&app, "GET", "/api/engines", None).await;
+    let t = t(&v);
+    assert_eq!((t["last"].as_str(), t["last_label"].as_str()), (Some("local:gemma-4-12b-q8"), Some("本機 Gemma 4 12B")));
+    assert!(t["last_at"].as_u64().unwrap() > 1_700_000_000);
     shared::uninstall();
 }

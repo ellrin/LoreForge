@@ -186,6 +186,10 @@ ask = "auto"
 }
 ```
 
+`local.status` 的字：`未載入 · 用到時自動載入`、`已載入 · <app、app> 正在用`、載入／切換／等待（§4）。`claude.vision`＝只有走金鑰（`via=api`）且有金鑰才 ✓，訂閱 ✗（標題「訂閱不能傳圖」）。
+`tasks[]` 另有 `last_label`（「本機 Gemma 4 12B」）和 `last_at`（Unix 秒）；模型頁每個走向列顯示該類別最近一次「上次：… · N 分鐘前」（只算本 app 的任務，記在行程內）。
+`engineChip({ live: true })`：送出前顯示下一次會用的（自動 · 本機 Gemma 4 12B，依覆寫／類別走向／可用性），回答後 `chip.actual(名稱)` 顯示實際用的。
+
 `state`：`ready` 可用、`starting` 啟動中、`off` 未連線、`missing` 未安裝、`error`。`vision`＝能看圖。`tasks` 只列本 app 的任務；`last`＝上次實際用的模型（標籤顯示用）。
 `PUT /api/engines` 送要改的部分：`{ local: { model }, claude: { via, model }, routes: { create: "cloud" }, overrides: { "<task>": "local" } }`，回傳完整的 GET 內容；
 值不對 → 400 `{ "error": "一行中文" }`。沒有這個路由（404）時模型頁只顯示「—」。登入、輸入金鑰、下載模型不經過這個介面（`modelSetup` 交回 app）。

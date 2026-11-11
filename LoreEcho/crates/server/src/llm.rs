@@ -157,15 +157,13 @@ fn payload(e: &RouteError, strict: bool) -> Value {
     v
 }
 
-/// A few characters for the page: 「本機」 or 「Claude」.
-pub fn engine_label(id: &str) -> &'static str {
-    if id.starts_with("claude") {
-        "Claude"
-    } else if id.starts_with("mock") {
-        "mock"
-    } else {
-        "本機"
+/// What the page shows for the engine that answers: 「本機 Gemma 4 12B」 / 「Claude Sonnet」
+/// (the catalog's names; 「本機」／「Claude」 when the model is not known).
+pub fn engine_label(id: &str) -> String {
+    if id.starts_with("mock") {
+        return "mock".into();
     }
+    Catalog::bundled().engine_name(id).unwrap_or_else(|| "本機".into())
 }
 
 #[cfg(test)]
@@ -190,7 +188,9 @@ mod tests {
 
     #[test]
     fn labels() {
-        assert_eq!(engine_label("llama-server:qwen"), "本機");
-        assert_eq!(engine_label("claude-code:haiku"), "Claude");
+        assert_eq!(engine_label("llama-server:gemma-4-12b-q8"), "本機 Gemma 4 12B");
+        assert_eq!(engine_label("llama-server:unknown-x"), "本機 unknown-x");
+        assert_eq!(engine_label("claude-subscription:claude-sonnet-5-5"), "Claude Sonnet");
+        assert_eq!(engine_label("claude:claude-haiku-5-5"), "Claude Haiku");
     }
 }

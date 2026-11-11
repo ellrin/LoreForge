@@ -33,6 +33,7 @@
 //   LoreShell.menu(anchor, items)                    items: { icon, label, run, kbd, current, disabled } | "-"
 //   LoreShell.settings(tab?)                         the gear dialog: 一般 外觀 模型 同步 快捷鍵 + the app's tabs
 //   LoreShell.engineChip({ task, value, used, onChange })   a feature's own engine choice;
+//       live: true → shows what the next request will use (自動 · 本機 Gemma 4 12B); chip.actual(name) after it
 //       chip.busy(true|false) around its request shows the shared model's status (載入模型中 · N 秒 / 等待 X 用完模型)
 //   LoreShell.block({ n: "01", title, count, help, open, key }) → element with .body
 //   LoreShell.shortcuts(root) → [{ group, label, keys }]  (from aria-labels that end in keys)
@@ -301,7 +302,31 @@
   }
   /** The shared model is loading, switching or kept by another app (local.status words). */
   const localBusy = (L) => /^(載入|切換|等待)/.test(L?.status ?? "") || L?.state === "starting";
-  const vision = (ok) => h("span", { class: ok ? "yes" : "no", title: "看圖" }, `看圖 ${ok ? "✓" : "✗"}`);
+  const vision = (ok, why) => h("span", { class: ok ? "yes" : "no", title: ok ? "看圖" : why || "看圖" }, `看圖 ${ok ? "✓" : "✗"}`);
+  /** 「2 分鐘前」 for a Unix time in seconds. */
+  const ago = (t) => {
+    const n = Math.max(0, Math.round(Date.now() / 1000 - t));
+    return n < 60 ? "剛剛" : n < 3600 ? `${Math.floor(n / 60)} 分鐘前` : n < 86400 ? `${Math.floor(n / 3600)} 小時前` : `${Math.floor(n / 86400)} 天前`;
+  };
+  /** The most recent run of a class's tasks in this app: 「上次：本機 Gemma 4 12B · 2 分鐘前」 (or ""). */
+  function lastOfClass(d, cls) {
+    const t = (d.tasks ?? []).filter((x) => x.class === cls && x.last_at && (x.last_label || x.last)).sort((a, b) => b.last_at - a.last_at)[0];
+    return t ? `上次：${t.last_label || t.last} · ${ago(t.last_at)}` : "";
+  }
+  /** What the next reply of `task` will use: { mode, label } from /api/engines (the override, else the
+   *  class route; auto = the class order, the first engine that is available). label "" = none can answer. */
+  function nextEngine(task, d = engines.data) {
+    if (!d) return null;
+    const t = (d.tasks ?? []).find((x) => x.id === task);
+    const cls = (d.classes ?? []).find((c) => c.id === t?.class);
+    const mode = d.overrides?.[task] && d.overrides[task] !== "auto" ? d.overrides[task] : cls?.route ?? "auto";
+    const L = d.local ?? {}, C = d.claude ?? {};
+    const have = { local: L.state && L.state !== "missing", claude: C.state === "ready" };
+    const name = { local: `本機 ${L.label ?? L.model ?? ""}`.trim(), claude: `Claude ${(C.models ?? []).find((m) => m.id === C.model)?.label ?? C.model ?? ""}`.trim() };
+    const order = mode === "cloud" ? ["claude"] : mode === "local" ? ["local"] : cls?.auto ?? ["local", "claude"];
+    const kind = mode === "auto" ? order.find((k) => have[k]) : order[0];
+    return { mode, kind: kind ?? null, label: kind ? name[kind] : "" };
+  }
   async function buildModels(el) {
     el.textContent = "";
     const d = await engines.get(true);
@@ -338,12 +363,12 @@
     const csel = C.models?.length ? h("select", { class: "set-input", "aria-label": "Claude 模型" }, ...C.models.map((m) => h("option", { value: m.id, selected: m.id === C.model }, m.label ?? m.id))) : h("span", { class: "v mono" }, C.model ?? "—");
     if (csel.tagName === "SELECT") csel.onchange = () => engines.put({ claude: { model: csel.value } }).catch((e) => toast(e.message, { err: true }));
     const vias = Object.entries(C.vias ?? {}).filter(([, ok]) => ok).map(([v]) => [v, v === "subscription" ? "訂閱" : "金鑰"]);
-    conn.append(row("Claude", csel, vias.length > 1 ? seg(vias, C.via, (v) => engines.put({ claude: { via: v } }), "連線方式") : h("span", { class: "chip" + (C.state === "ready" ? " ok" : "") }, C.state === "ready" ? (C.via === "api" ? "金鑰" : "訂閱") : STATE[C.state] ?? "—"), vision(!!C.vision),
+    conn.append(row("Claude", csel, vias.length > 1 ? seg(vias, C.via, (v) => engines.put({ claude: { via: v } }), "連線方式") : h("span", { class: "chip" + (C.state === "ready" ? " ok" : "") }, C.state === "ready" ? (C.via === "api" ? "金鑰" : "訂閱") : STATE[C.state] ?? "—"), vision(!!C.vision, C.via === "subscription" ? "訂閱不能傳圖" : "需要金鑰"),
       S.opts?.modelSetup ? h("button", { type: "button", class: "btn small", onclick: () => S.opts.modelSetup("claude") }, C.state === "ready" ? "更換…" : "登入…") : null));
     const route = h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "走向"));
     for (const c of d.classes ?? []) {
       route.append(row(c.label, seg([["auto", "自動"], ["cloud", "雲"], ["local", "地"]], c.route ?? "auto", (v) => engines.put({ routes: { [c.id]: v } }), c.label),
-        h("span", { class: "v no", title: "自動" }, (c.auto ?? []).map((x) => ENGINE_LABEL[x] ?? x).join(" → "))));
+        h("span", { class: "v no", title: "自動：" + (c.auto ?? []).map((x) => ENGINE_LABEL[x] ?? x).join(" → ") }, lastOfClass(d, c.id) || (c.auto ?? []).map((x) => ENGINE_LABEL[x] ?? x).join(" → "))));
     }
     el.append(conn, route);
     // while the model is loading / switching / waited for: refresh the state every 2 s, only while this tab is open
@@ -355,15 +380,23 @@
   }
   const STATE = { ready: "可用", starting: "啟動中", off: "未連線", missing: "未安裝", error: "錯誤" };
   /** A feature's own engine choice: 自動 · Sonnet. onChange(v) or PUT overrides. */
-  function engineChip({ task, value = "auto", used = "", onChange, label = "模型" } = {}) {
+  function engineChip({ task, value = "auto", used = "", onChange, label = "模型", live = false } = {}) {
     const b = h("button", { type: "button", class: "engine-chip", "aria-haspopup": "menu", "aria-label": label });
+    // live: before a request the chip says what the next one will use (自動 · 本機 Gemma 4 12B),
+    // after it what answered (b.actual(name)); both follow /api/engines
+    let actual = "", next = null;
     const paint = () => {
       b.textContent = "";
+      if (live) {
+        next = nextEngine(task);
+        if (next) { value = next.mode; used = actual || next.label || "無可用模型"; }
+      }
       b.classList.toggle("set", value !== "auto");
       b.append(ROUTE_LABEL[value] ?? value);
-      if (used) b.append(h("span", { class: "used" }, `· ${used}`));
       const L = engines.data?.local;
-      const wait = working && value !== "cloud" && localBusy(L) && L.status;
+      const wait = working && value !== "cloud" && (!live || !next || next.kind === "local" || /本機/.test(actual)) && localBusy(L) && L.status;
+      // while waiting the status replaces the model name (the chip is narrow)
+      if (used && !(wait && live)) b.append(h("span", { class: "used" }, `· ${used}`));
       if (wait) b.append(h("span", { class: "wait" }, `· ${L.status}`));
       b.title = wait || "";
     };
@@ -371,6 +404,13 @@
     // (載入模型中 · N 秒 / 等待 X 用完模型) and refreshes it every 2 s; b.busy(false) when done
     let working = false, timer = 0;
     const onEng = () => paint();
+    b.actual = (name) => { actual = name || ""; paint(); };
+    b.refresh = () => engines.get(true);
+    if (live) {
+      const follow = () => { if (b.isConnected) paint(); else if (!working) document.removeEventListener("lore-engines", follow); };
+      document.addEventListener("lore-engines", follow);
+      engines.get(true);
+    }
     b.busy = (on) => {
       working = !!on;
       clearInterval(timer);
@@ -385,6 +425,7 @@
     b.set = (v, u = used) => { value = v ?? value; used = u; paint(); };
     b.onclick = () => menu(b, Object.entries(ROUTE_LABEL).map(([v, text]) => ({ label: text, current: v === value, run: async () => {
       const old = value;
+      actual = "";
       b.set(v);
       try { await (onChange ? onChange(v) : engines.put({ overrides: { [task]: v } })); } catch (e) { b.set(old); toast(e.message, { err: true }); }
     } })));

@@ -220,7 +220,7 @@ pub fn installed() -> Option<EngineSettings> {
 #[cfg(test)]
 pub(crate) static TEST_GLOBAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-static LAST: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+static LAST: Mutex<BTreeMap<String, (String, u64)>> = Mutex::new(BTreeMap::new());
 
 /// `llama-server:qwen…` → `local:qwen…`, `claude-subscription:claude-…` → `claude:claude-…`.
 pub fn used_ref(provider_id: &str) -> String {
@@ -233,11 +233,17 @@ pub fn used_ref(provider_id: &str) -> String {
 
 /// Remember that `task` ran on `provider_id` (the router does this for every route).
 pub fn record_used(task: &str, provider_id: &str) {
-    LAST.lock().unwrap_or_else(|e| e.into_inner()).insert(task.to_string(), used_ref(provider_id));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    LAST.lock().unwrap_or_else(|e| e.into_inner()).insert(task.to_string(), (used_ref(provider_id), now));
 }
 
 /// What `task` last ran on in this process (`local:<model>` / `claude:<model id>`).
 pub fn last_used(task: &str) -> Option<String> {
+    LAST.lock().unwrap_or_else(|e| e.into_inner()).get(task).map(|(r, _)| r.clone())
+}
+
+/// [`last_used`] with the Unix time (seconds) it happened.
+pub fn last_used_at(task: &str) -> Option<(String, u64)> {
     LAST.lock().unwrap_or_else(|e| e.into_inner()).get(task).cloned()
 }
 

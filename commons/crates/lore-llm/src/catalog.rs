@@ -139,6 +139,29 @@ impl Catalog {
         self.models.iter().find(|m| m.id == id)
     }
 
+    /// What to show for a model ref or provider id: 「本機 Gemma 4 12B」 / 「Claude Sonnet」
+    /// (`local:<id>`, `llama-server:<id>`, `claude:<alias or id>`, `claude-subscription:…`).
+    /// A model the catalog does not know shows its id; `None` for an id of neither kind.
+    pub fn engine_name(&self, r: &str) -> Option<String> {
+        let (kind, m) = r.split_once(':').unwrap_or((r, ""));
+        match kind {
+            "local" | "llama-server" => {
+                let name = self.get(m).map(|x| x.name.clone()).unwrap_or_else(|| m.to_string());
+                Some(if name.is_empty() || m == "current" { "本機".into() } else { format!("本機 {name}") })
+            }
+            "claude" | "claude-subscription" | "claude-code" => {
+                let name = self
+                    .cloud_model(m)
+                    .and_then(|c| c.summary.split('・').next())
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .unwrap_or_else(|| m.to_string());
+                Some(if name.is_empty() || m == "selected" { "Claude".into() } else { format!("Claude {name}") })
+            }
+            _ => None,
+        }
+    }
+
     /// Local LLMs, optionally without abliterated ones (household apps).
     pub fn brains(&self, include_uncensored: bool) -> impl Iterator<Item = &Model> {
         self.models.iter().filter(move |m| m.is_brain() && (include_uncensored || !m.uncensored))
@@ -216,6 +239,18 @@ pub fn recommend(cat: &Catalog, m: &Machine) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engine_names_for_the_page() {
+        let c = Catalog::bundled();
+        assert_eq!(c.engine_name("llama-server:gemma-4-12b-q8").as_deref(), Some("本機 Gemma 4 12B"));
+        assert_eq!(c.engine_name("local:gemma-4-12b-q4").as_deref(), Some("本機 Gemma 4 12B"));
+        assert_eq!(c.engine_name("claude-subscription:claude-sonnet-5-5").as_deref(), Some("Claude Sonnet"));
+        assert_eq!(c.engine_name("claude:sonnet").as_deref(), Some("Claude Sonnet"));
+        assert_eq!(c.engine_name("claude:selected").as_deref(), Some("Claude"));
+        assert_eq!(c.engine_name("local:current").as_deref(), Some("本機"));
+        assert_eq!(c.engine_name("mock:x"), None);
+    }
 
     #[test]
     fn bundled_catalog_is_consistent() {

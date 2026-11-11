@@ -218,8 +218,19 @@ impl Engines {
         }
         let status = match (&ext, &snap) {
             (Some(_), _) => None,
-            (None, Some(s)) => Some(s.status.text(&self.catalog)),
-            (None, None) => Some(LocalStatus::Off.text(&self.catalog)),
+            (None, Some(s)) => Some(match &s.status {
+                LocalStatus::Off => "未載入 · 用到時自動載入".to_string(),
+                LocalStatus::Loaded { .. } => {
+                    // every app holding the server (this one too), not only the others
+                    let mut apps: Vec<String> = s.registry.leases.iter().map(|l| app_label(&l.app)).collect();
+                    apps.sort();
+                    apps.dedup();
+                    let name = loaded.as_ref().map(|sv| self.label(&sv.model)).unwrap_or_default();
+                    if apps.is_empty() { format!("已載入 {name}") } else { format!("已載入 · {} 正在用", apps.join("、")) }
+                }
+                other => other.text(&self.catalog),
+            }),
+            (None, None) => Some("未載入 · 用到時自動載入".to_string()),
         };
         let users: Vec<String> = snap.as_ref().map(|s| s.users(me).iter().map(|a| app_label(a)).collect()).unwrap_or_default();
         let waiting: Vec<Value> = snap
@@ -292,8 +303,8 @@ impl Engines {
             "via": via,
             "vias": { "subscription": st.ready, "api": api },
             "model": model,
-            // the subscription (Claude Code) cannot read images here; the API can
-            "vision": api,
+            // the subscription (Claude Code) cannot send images here; only the API route with a key can
+            "vision": via == "api" && api,
             "models": models,
         })
     }
@@ -310,7 +321,15 @@ impl Engines {
             .tasks
             .task
             .iter()
-            .map(|(id, t)| json!({ "id": id, "label": t.label.clone().unwrap_or_else(|| id.clone()), "class": t.class.map(TaskClass::id), "last": shared::last_used(id) }))
+            .map(|(id, t)| {
+                let last = shared::last_used_at(id);
+                json!({
+                    "id": id, "label": t.label.clone().unwrap_or_else(|| id.clone()), "class": t.class.map(TaskClass::id),
+                    "last": last.as_ref().map(|l| l.0.clone()),
+                    "last_label": last.as_ref().and_then(|l| self.catalog.engine_name(&l.0)),
+                    "last_at": last.as_ref().map(|l| l.1),
+                })
+            })
             .collect();
         let overrides: serde_json::Map<String, Value> =
             self.tasks.task.keys().map(|id| (id.clone(), Value::from(s.overrides.get(id).map_or("auto", |m| m.id())))).collect();
