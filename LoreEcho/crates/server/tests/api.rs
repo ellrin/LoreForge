@@ -120,6 +120,7 @@ async fn seeding_copies_the_example_and_never_writes_into_it() {
     let before = snapshot(&app.root.join("private-example"));
     assert!(app.dir().join("characters/echo/character.toml").is_file());
     assert!(app.dir().join("characters/echo/avatar/idle.svg").is_file());
+    assert!(app.dir().join("characters/echo/full/idle.svg").is_file());
     // writes land in private/LoreEcho only
     app.json("PUT", "/api/window", Some(json!({ "x": 10.0, "y": 20.0, "expanded": true }))).await;
     app.json("PUT", "/api/settings", Some(json!({ "character": "echo", "shortcut": "Alt+E" }))).await;
@@ -212,7 +213,11 @@ async fn characters_and_avatar_fallback() {
     assert_eq!(echo["language"], "zh-TW");
     assert_eq!(echo["avatars"], json!(["idle", "listening", "thinking", "speaking"]));
     assert!(echo.get("persona").is_none(), "the persona stays on the server");
+    assert_eq!(echo["full"], json!(["idle", "listening", "thinking", "speaking"]));
+    assert_eq!(echo["figure"], json!({ "scale": 1.35, "offset_y": 0.0 }), "the example stands like a VN sprite");
+    assert_eq!(c["characters"][1]["figure"], json!({ "scale": 1.0, "offset_y": 0.0 }), "defaults");
     assert_eq!(c["characters"][1]["avatars"], json!(["idle"]));
+    assert_eq!(c["characters"][1]["full"], json!([]), "two has no full body");
 
     let (s, b, ct) = app.call("GET", "/api/characters/echo/avatar/thinking", None).await;
     assert_eq!(s, StatusCode::OK);
@@ -237,6 +242,52 @@ async fn characters_and_avatar_fallback() {
     let c = app.json("GET", "/api/characters", None).await.1;
     assert_eq!(c["current"], BUILTIN);
     assert_eq!(c["characters"][0]["avatars"], json!([]));
+    assert_eq!(c["characters"][0]["full"], json!([]));
+    assert_eq!(app.call("GET", "/api/characters/default/full/idle", None).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn full_body_fallback_chain() {
+    let app = App::new(Llm::none());
+    let chars = app.dir().join("characters");
+    let echo = chars.join("echo");
+    // the example: one full body per state, all SVG
+    for state in ["idle", "listening", "thinking", "speaking"] {
+        let (s, b, ct) = app.call("GET", &format!("/api/characters/echo/full/{state}"), None).await;
+        assert_eq!((s, ct.as_str()), (StatusCode::OK, "image/svg+xml"), "{state}");
+        assert_eq!(b, std::fs::read(echo.join(format!("full/{state}.svg"))).unwrap(), "{state}");
+    }
+    // only a full idle (png) and portraits: other states use full/idle, not the portrait
+    let three = chars.join("three");
+    std::fs::create_dir_all(three.join("full")).unwrap();
+    std::fs::create_dir_all(three.join("avatar")).unwrap();
+    std::fs::write(three.join("character.toml"), "name = \"三號\"\n").unwrap();
+    std::fs::write(three.join("full/idle.png"), b"\x89PNG full idle").unwrap();
+    std::fs::write(three.join("avatar/speaking.png"), b"\x89PNG face speaking").unwrap();
+    let (s, b, ct) = app.call("GET", "/api/characters/three/full/speaking", None).await;
+    assert_eq!((s, ct.as_str(), b.as_slice()), (StatusCode::OK, "image/png", &b"\x89PNG full idle"[..]));
+    // portraits only: the portrait of that state, then the portrait idle
+    let two = chars.join("two");
+    std::fs::create_dir_all(two.join("avatar")).unwrap();
+    std::fs::write(two.join("character.toml"), "name = \"二號\"\n").unwrap();
+    std::fs::write(two.join("avatar/idle.png"), b"\x89PNG face idle").unwrap();
+    std::fs::write(two.join("avatar/thinking.webp"), b"RIFF face thinking").unwrap();
+    let (s, b, ct) = app.call("GET", "/api/characters/two/full/thinking", None).await;
+    assert_eq!((s, ct.as_str(), b.as_slice()), (StatusCode::OK, "image/webp", &b"RIFF face thinking"[..]));
+    let (s, b, _) = app.call("GET", "/api/characters/two/full/speaking", None).await;
+    assert_eq!((s, b.as_slice()), (StatusCode::OK, &b"\x89PNG face idle"[..]));
+    let c = app.json("GET", "/api/characters", None).await.1;
+    let by_id = |id: &str| c["characters"].as_array().unwrap().iter().find(|x| x["id"] == id).unwrap().clone();
+    assert_eq!(by_id("three")["full"], json!(["idle"]));
+    assert_eq!(by_id("three")["avatars"], json!(["speaking"]));
+    assert_eq!(by_id("two")["full"], json!([]));
+    // no pictures at all, bad state, bad id: 404
+    let four = chars.join("four");
+    std::fs::create_dir_all(&four).unwrap();
+    std::fs::write(four.join("character.toml"), "name = \"四號\"\n").unwrap();
+    for bad in ["/api/characters/four/full/idle", "/api/characters/echo/full/dancing", "/api/characters/nobody/full/idle", "/api/characters/..%2Fecho/full/idle", "/api/characters/echo/full/..%2Favatar%2Fidle"] {
+        assert_eq!(app.call("GET", bad, None).await.0, StatusCode::NOT_FOUND, "{bad}");
+    }
 }
 
 #[tokio::test]

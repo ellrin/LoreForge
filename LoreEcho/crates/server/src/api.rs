@@ -23,6 +23,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/settings", get(settings_get).put(settings_put))
         .route("/api/characters", get(characters_list))
         .route("/api/characters/{id}/avatar/{state}", get(avatar))
+        .route("/api/characters/{id}/full/{state}", get(full_body))
         .route("/api/chat", post(chat_post))
 }
 
@@ -144,7 +145,14 @@ async fn characters_list(State(s): State<Shared>) -> Json<Value> {
 }
 
 async fn avatar(State(s): State<Shared>, Path((id, state)): Path<(String, String)>) -> Response {
-    let found = s.dir.as_deref().and_then(|d| characters::avatar(d, &id, &state));
+    picture(s.dir.as_deref().and_then(|d| characters::avatar(d, &id, &state))).await
+}
+
+async fn full_body(State(s): State<Shared>, Path((id, state)): Path<(String, String)>) -> Response {
+    picture(s.dir.as_deref().and_then(|d| characters::full_body(d, &id, &state))).await
+}
+
+async fn picture(found: Option<(std::path::PathBuf, &'static str)>) -> Response {
     let Some((path, mime)) = found else { return bad(StatusCode::NOT_FOUND, "沒有這張人物圖") };
     match tokio::fs::read(&path).await {
         Ok(bytes) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "no-cache")], bytes).into_response(),

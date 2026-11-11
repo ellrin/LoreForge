@@ -20,29 +20,42 @@
     <span class="fallback" id="bubbleIcon" data-icon="chat"></span>
   </button>
 
-  <!-- expanded: header · character · messages · input -->
-  <section class="panel" id="panel" aria-label="LoreEcho" hidden>
-    <header class="top"></header>
-    <div class="stage" id="stage" data-state="idle" data-tauri-drag-region>
-      <img id="avatar" alt="" draggable="false" data-tauri-drag-region hidden>
-      <span class="fallback" id="avatarIcon" data-icon="chat" data-tauri-drag-region></span>
-      <span class="engine" id="engine" hidden></span>
+  <!-- expanded, like a visual novel: the character stands large on the left (only the figure
+       is drawn, the legs may run off the bottom), the conversation on the right — header and a
+       quiet history, the 功能列表 as choice rows (toggled from the header), and the dialogue
+       box with the character's name tag, the current line and the input row. -->
+  <div class="win" id="win" hidden>
+    <div class="col">
+      <section class="card" aria-label="LoreEcho">
+        <header class="top" data-tauri-drag-region></header>
+        <ol class="hist" id="hist" aria-label="這次的對話" data-tauri-drag-region></ol>
+      </section>
+      <div class="choices" id="choices" role="group" aria-label="功能列表" hidden>
+        <button type="button" class="choice" aria-disabled="true" title="下一階段" data-tool="note"><span class="desc">把剛剛的討論整理成一篇筆記</span><span class="label">整理成筆記</span></button>
+        <button type="button" class="choice" aria-disabled="true" title="下一階段" data-tool="cards"><span class="desc">挑出值得記住的概念</span><span class="label">做成知識卡</span></button>
+        <button type="button" class="choice" aria-disabled="true" title="下一階段" data-tool="idea"><span class="desc">一句話先存起來</span><span class="label">記下靈感</span></button>
+      </div>
+      <section class="box" id="box" aria-label="對話框">
+        <button type="button" class="nametag" id="nametag" aria-haspopup="menu" title="換人物"><span id="who">LoreEcho</span><span data-icon="chevron"></span></button>
+        <div class="line empty" id="line" aria-live="polite">想聊什麼都可以。對話只留在這個視窗裡，按「新對話」或收起就清掉。</div>
+        <form class="input" id="form" autocomplete="off">
+          <button type="button" class="ico" id="mic" disabled aria-label="語音（之後的階段）" title="語音輸入：之後的階段才會有"><span data-icon="mic"></span></button>
+          <textarea id="text" rows="1" placeholder="說點什麼…（Shift+↵ 換行）" aria-label="訊息"></textarea>
+          <button type="submit" class="ico" id="send" aria-label="送出 ↵"><span data-icon="send"></span></button>
+        </form>
+      </section>
     </div>
-    <ol class="msgs" id="msgs" aria-live="polite">
-      <li class="empty" id="empty">想聊什麼都可以。對話只留在這個視窗裡，按「新對話」或收起就清掉。</li>
-    </ol>
-    <form class="input" id="form" autocomplete="off">
-      <button type="button" class="ico" id="mic" disabled aria-label="語音（之後的階段）" title="語音輸入：之後的階段才會有"><span data-icon="mic"></span></button>
-      <textarea id="text" rows="1" placeholder="說點什麼…（Shift+↵ 換行）" aria-label="訊息"></textarea>
-      <button type="submit" class="ico" id="send" aria-label="送出 ↵"><span data-icon="send"></span></button>
-    </form>
-  </section>
+    <div class="figure" id="figure" data-state="idle" data-tauri-drag-region aria-hidden="true">
+      <img id="full" alt="" draggable="false" data-tauri-drag-region hidden>
+      <span class="fallback" id="fullIcon" data-icon="chat" data-tauri-drag-region></span>
+    </div>
+  </div>
 
   <template id="tplGeneral">
     <div class="set-sec">
       <div class="set-label">人物</div>
       <div class="set-row"><span class="k">目前的人物</span><select class="set-input" id="setCharacter" aria-label="人物"></select></div>
-      <div class="set-empty">人物放在 <code>private/LoreEcho/characters/&lt;名稱&gt;/</code>（character.toml 與 avatar/）。</div>
+      <div class="set-empty">人物放在 <code>private/LoreEcho/characters/&lt;名稱&gt;/</code>（character.toml、avatar/ 頭像、full/ 全身）。</div>
     </div>
     <div class="set-sec">
       <div class="set-label">叫出／收起</div>

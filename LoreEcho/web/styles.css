@@ -1,54 +1,106 @@
-/* LoreEcho: the bubble and the chat panel. Colours only from theme.css tokens (no palette
-   of its own); the character pictures are shown as they are. The desktop window is
-   transparent and exactly the size of the bubble or the panel; in a browser both sit at
-   the bottom-right of the page. */
+/* LoreEcho: the bubble and the open window. Colours only from theme.css tokens (no palette
+   of its own); the character pictures are shown as they are, with nothing behind them.
+   The desktop window is transparent and exactly the size of the bubble or of the open
+   window (--win-w × --win-h, the same numbers as WIN_W / WIN_H in apps/desktop/src/main.rs);
+   in a browser both sit at the bottom-right of the page.
+
+   The open window borrows a visual novel's composition (not its look): the character's full
+   body stands large on the left — head near the top, `figure_scale` × the window height
+   (character.toml, set by the page as --fig-scale / --fig-dy), the legs may run off the
+   bottom — and overlaps the conversation column, which starts at --col-x, by about
+   --overlap; the column keeps that strip free of text. */
+
+:root {
+  --win-w: 620px; --win-h: 620px;
+  --col-x: 196px;                 /* the conversation column's left edge */
+  --overlap: 44px;                /* the strip of the column the figure may cover */
+  --fig-cx: 128px;                /* the figure's centre line */
+  --fig-top: 12px;                /* where the head starts (figure_scale 1 = feet on the bottom) */
+  --fig-scale: 1; --fig-dy: 0;    /* per character, from character.toml */
+}
 
 html, body { background: transparent; height: 100%; overflow: hidden; }
 
-/* ── the bubble ─────────────────────────────────────────────── */
+/* ── the bubble: the idle portrait cropped into the circle ───── */
 .bubble { position: fixed; right: 0; bottom: 0; width: 64px; height: 64px; padding: 0; border-radius: 50%;
   border: 2px solid var(--accent-text); background: var(--panel); color: var(--accent-text);
   display: grid; place-items: center; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
 .bubble:hover { background: var(--surface-hover); }
-.bubble img { width: 100%; height: 100%; object-fit: contain; padding: 6px; pointer-events: none; }
+.bubble img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 32%; transform: scale(1.12); pointer-events: none; }
 .bubble .fallback svg.i { width: 26px; height: 26px; }
 
-/* ── the panel ──────────────────────────────────────────────── */
-.panel { position: fixed; right: 0; bottom: 0; width: min(100vw, 380px); height: min(100vh, 560px);
-  display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line-strong);
-  border-radius: 14px; overflow: hidden; transform-origin: 100% 100%; }
-.panel.opening { animation: grow .16s ease-out; }
-.panel.closing { animation: grow .12s ease-in reverse forwards; }
-@keyframes grow { from { transform: scale(.17); opacity: 0; } to { transform: none; opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .panel.opening, .panel.closing { animation: none; } }
+/* ── the open window ────────────────────────────────────────── */
+.win { position: fixed; right: 0; bottom: 0; width: min(100vw, var(--win-w)); height: min(100vh, var(--win-h)); overflow: hidden; transform-origin: 100% 100%; }
+.win.opening { animation: grow .16s ease-out; }
+.win.closing { animation: grow .12s ease-in reverse forwards; }
+@keyframes grow { from { transform: scale(.12); opacity: 0; } to { transform: none; opacity: 1; } }
 
-/* the shared top bar, compact: collapse · name … 新對話 · gear */
-.panel .top { gap: 8px; padding: 0 8px 0 6px; }
-.panel .top .who { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* the character: only the figure, above the column */
+/* its box (left of the column) drags the window; the picture itself lets clicks through where
+   it overlaps the column */
+.figure { position: absolute; inset: 0 auto 0 0; width: var(--col-x); z-index: 2; user-select: none; -webkit-user-select: none; }
+.figure img, .figure .fallback { pointer-events: none; }
+.figure img { position: absolute; left: var(--fig-cx); top: calc(var(--fig-top) + var(--fig-dy) * 100%);
+  height: calc((100% - var(--fig-top)) * var(--fig-scale)); width: auto; max-width: none; transform: translateX(-50%); }
+/* a character with portraits only: the portrait, fitted to the strip, at chest height */
+.figure.portrait img { top: auto; bottom: 34%; height: auto; width: calc(var(--col-x) - 12px); max-height: 60%; object-fit: contain; }
+.figure .fallback { position: absolute; left: var(--fig-cx); top: 40%; transform: translateX(-50%); color: var(--accent-text); }
+.figure .fallback svg.i { width: 72px; height: 72px; stroke-width: 1.2; }
+.figure[data-state="thinking"] img, .figure[data-state="thinking"] .fallback { animation: think 1.4s ease-in-out infinite; }
+@keyframes think { 50% { opacity: .7; } }
 
-/* the character */
-.stage { position: relative; flex: 0 0 172px; display: grid; place-items: center; background: var(--panel); border-bottom: 1px solid var(--line); user-select: none; -webkit-user-select: none; }
-.stage img { max-width: 100%; height: 156px; object-fit: contain; pointer-events: none; }
-.stage .fallback { color: var(--accent-text); }
-.stage .fallback svg.i { width: 56px; height: 56px; stroke-width: 1.2; }
-.stage[data-state="thinking"] img, .stage[data-state="thinking"] .fallback { animation: think 1.4s ease-in-out infinite; }
-@keyframes think { 50% { opacity: .65; } }
-.stage .engine { position: absolute; right: 8px; bottom: 6px; }
+/* the conversation column */
+.col { position: absolute; inset: 0 0 0 var(--col-x); display: flex; flex-direction: column; gap: 8px; }
+.card, .box, .choice { background: color-mix(in srgb, var(--bg) 92%, transparent); border: 1px solid var(--line-strong);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.card { flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; }
+.card .top { gap: 8px; padding: 0 8px 0 6px; }
+.card .top .engine { flex: none; }
 
-/* the conversation */
-.msgs { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 12px; list-style: none; display: flex; flex-direction: column; gap: 8px; }
-.msgs .empty { color: var(--faint); font-size: 13px; text-align: center; margin: auto 8px; }
-.msg { max-width: 86%; padding: 7px 11px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
-.msg.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid var(--line); border-bottom-right-radius: 4px; }
-.msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
-.msg.assistant.pending::after { content: "…"; color: var(--faint); }
-.msg.err { align-self: stretch; max-width: none; background: none; border: 1px solid var(--err); color: var(--err); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.msg.err .btn { margin-left: auto; }
+/* earlier turns: quiet and compact */
+.hist { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 10px 12px 10px calc(var(--overlap) + 10px); list-style: none;
+  display: flex; flex-direction: column; gap: 6px; font-size: 13px; line-height: 1.5; }
+.hist li { max-width: 88%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hist li:first-child { margin-top: auto; }
+.hist .user { align-self: flex-end; padding: 3px 9px; border-radius: 10px; background: var(--accent-soft); color: var(--text); }
+.hist .assistant { align-self: flex-start; color: var(--muted); }
+.hist .err { align-self: stretch; max-width: none; color: var(--err); }
 
-/* the input row */
-.input { display: flex; align-items: flex-end; gap: 4px; padding: 8px; border-top: 1px solid var(--line); background: var(--panel); }
+/* 功能列表 as choice rows (design §4; wired in a later phase) */
+.choices { display: flex; flex-direction: column; gap: 6px; margin-left: calc(var(--overlap) - 8px); }
+.choice { display: flex; align-items: center; gap: 12px; min-height: 36px; padding: 6px 14px; border-radius: 8px; text-align: left; color: var(--text); font-size: 13px; }
+.choice .desc { flex: 1; min-width: 0; color: var(--muted); }
+.choice .label { font-weight: 700; white-space: nowrap; }
+.choice:hover, .choice:focus-visible { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); outline: none; }
+.choice:hover .desc, .choice:focus-visible .desc { color: inherit; opacity: .85; }
+.choice[aria-disabled="true"] { cursor: default; }
+
+/* the dialogue box: name tag on its top edge, the current line, the input row */
+.box { position: relative; margin-top: 12px; border-radius: 12px; background: color-mix(in srgb, var(--surface) 94%, transparent);
+  padding: 20px 10px 8px calc(var(--overlap) + 12px); display: flex; flex-direction: column; gap: 8px; }
+.nametag { position: absolute; top: -14px; left: calc(var(--overlap) + 4px); height: 28px; padding: 0 8px 0 12px; display: inline-flex; align-items: center; gap: 4px;
+  border-radius: 7px; border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 14px; letter-spacing: .04em; }
+.nametag:hover { filter: brightness(1.08); }
+.nametag svg.i { width: 14px; height: 14px; }
+.line { font-size: 16px; line-height: 1.7; min-height: calc(3 * 1.7em); max-height: 190px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 4px; }
+.line.empty { color: var(--faint); font-size: 14px; }
+.line.pending::after { content: "…"; color: var(--faint); }
+.line.err { color: var(--err); font-size: 14px; }
+.line.err .btn { margin-left: 8px; }
+
+.input { display: flex; align-items: flex-end; gap: 4px; padding-top: 8px; border-top: 1px solid var(--line); }
 .input textarea { flex: 1; min-width: 0; resize: none; max-height: 120px; padding: 6px 10px; line-height: 1.45;
-  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r); outline: none; }
+  background: var(--bg); border: 1px solid var(--line-strong); border-radius: var(--r); outline: none; }
 .input textarea:focus { border-color: var(--accent-text); }
 .input .ico[disabled] { opacity: .45; cursor: default; }
 #send:not([disabled]) { color: var(--accent-text); }
+
+@media (prefers-reduced-motion: reduce) {
+  .win.opening, .win.closing, .figure[data-state] img, .figure[data-state] .fallback { animation: none; }
+}
+
+/* narrow (a small browser window): no figure, the conversation takes the whole width */
+@media (max-width: 520px), (max-height: 380px) {
+  .figure { display: none; }
+  :root { --col-x: 0px; --overlap: 0px; }
+}

@@ -14,7 +14,7 @@ icon 草圖：`docs/assets/loreecho-logo-draft.svg`（賽博龐克機器人頭�
 | 狀態 | 樣子 |
 |---|---|
 | 收合 | 圓形泡泡（約 64px），預設在右下角，**可拖曳**，位置記在 private；常駐時外圈有麥克風收音的光環 |
-| 展開 | 從泡泡長出的面板（約 380×560）：上半是人物（avatar），下半是對話；底部是輸入列、麥克風、特化按鈕 |
+| 展開 | 從泡泡長出的透明視窗（620×620，作者 2026-11-11 改成視覺小說的構圖）：左邊站著人物的全身圖（`full/`，可以大到腳下被視窗底邊裁掉），稍微壓在右邊的對話欄上；右邊是上方列＋較早的對話、功能列表（選項列）、掛著人物名牌的對話框（目前這句話）和輸入列（麥克風） |
 | 人物狀態 | `idle`／`listening`／`thinking`／`speaking` 四張圖（或一張圖＋動畫），說話時嘴型可先用簡單的開合切換 |
 
 - Tauri 無邊框、透明、置頂的小視窗（不是一般 app 視窗）；系統匣／選單列有圖示可以叫出來。
@@ -65,7 +65,8 @@ icon 草圖：`docs/assets/loreecho-logo-draft.svg`（賽博龐克機器人頭�
 ```
 private/<App>/characters/<id>/
   character.toml   名稱、個性提示（話少、語氣）、預設聲音、語言
-  avatar/          idle.png listening.png thinking.png speaking.png（或 sprite）
+  avatar/          idle.png listening.png thinking.png speaking.png（頭像：泡泡）
+  full/            同樣四種狀態的全身圖（從頭到腳、去背：展開視窗；沒有就用頭像）
   voice/           聲音設定；自訓聲音的參考音檔或模型路徑
 ```
 

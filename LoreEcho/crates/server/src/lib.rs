@@ -12,8 +12,9 @@
 //! | GET/PUT | /api/engines, GET /api/links/ports, POST /api/links/open | lore-engines (the 模型 tab) |
 //! | GET/PUT | /api/window | `{ x?, y?, expanded }`: the bubble's place, panel open or not (`state.toml`) |
 //! | GET/PUT | /api/settings | `{ character?, shortcut }` (`settings.toml`) |
-//! | GET | /api/characters | `{ characters: [{ id, name, voice, language, avatars }], current }` |
-//! | GET | /api/characters/{id}/avatar/{state} | the picture (idle / listening / thinking / speaking; idle when missing) |
+//! | GET | /api/characters | `{ characters: [{ id, name, voice, language, avatars, full, figure: { scale, offset_y } }], current }` (`full` = states with a full-body picture; empty = none) |
+//! | GET | /api/characters/{id}/avatar/{state} | the portrait (idle / listening / thinking / speaking; idle when missing) |
+//! | GET | /api/characters/{id}/full/{state} | the full body (`full/<state>`, else `full/idle`, else the portrait of that state) |
 //! | POST | /api/chat | `{ messages, character?, engine? }` → the reply as server-sent events ([`chat`]) |
 
 pub mod api;

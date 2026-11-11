@@ -3,8 +3,9 @@
 
 //! LoreEcho's desktop shell: the local server runs in-process on a free port; one small
 //! frameless, transparent, always-on-top window shows the page. Collapsed it is a 64 px
-//! bubble, expanded a 380×560 panel whose bottom-right corner is the bubble's (moved back
-//! on screen when it would not fit). The page drags the window itself (Tauri's
+//! bubble, expanded a 620×620 window (the character's full body on the left, standing over
+//! the dialogue panel on the right; the rest is transparent) whose bottom-right corner is
+//! the bubble's (moved back on screen when it would not fit). The page drags the window itself (Tauri's
 //! `startDragging`) and asks for the panel through `PUT /api/window`, which reaches this
 //! file as a [`le_server::DesktopEvent`]. Moves are saved (debounced) as the bubble's
 //! place in `private/LoreEcho/state.toml`. A tray / menu-bar item and a global shortcut
@@ -23,8 +24,10 @@ use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, WebviewUr
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const BUBBLE: f64 = 64.0;
-const PANEL_W: f64 = 380.0;
-const PANEL_H: f64 = 560.0;
+/// The open window: figure + dialogue panel. The page lays them out in this box; the same
+/// numbers are `--win-w` / `--win-h` in `web/styles.css` (a test checks they agree).
+const WIN_W: f64 = 620.0;
+const WIN_H: f64 = 620.0;
 /// Distance of the default bubble from the screen's corner.
 const MARGIN: f64 = 24.0;
 /// Moves within this time after the app placed the window itself are not the user's.
@@ -59,12 +62,12 @@ fn keep_inside(r: Rect, work: Rect) -> Rect {
     Rect { x, y, ..r }
 }
 
-/// The panel grown from the bubble at `b`: same bottom-right corner, kept on screen.
+/// The open window grown from the bubble at `b`: same bottom-right corner, kept on screen.
 fn panel_for(b: (f64, f64), work: Rect) -> Rect {
-    keep_inside(Rect { x: b.0 + BUBBLE - PANEL_W, y: b.1 + BUBBLE - PANEL_H, w: PANEL_W, h: PANEL_H }, work)
+    keep_inside(Rect { x: b.0 + BUBBLE - WIN_W, y: b.1 + BUBBLE - WIN_H, w: WIN_W, h: WIN_H }, work)
 }
 
-/// Where the bubble goes when a panel at `p` collapses (its bottom-right corner).
+/// Where the bubble goes when the open window at `p` collapses (its bottom-right corner).
 fn bubble_from_panel(p: Rect) -> (f64, f64) {
     (p.x + p.w - BUBBLE, p.y + p.h - BUBBLE)
 }
@@ -123,7 +126,7 @@ fn place(win: &WebviewWindow, expanded: bool) {
     let b = bubble_place(app);
     let r = match (expanded, work_at(app, Some(b))) {
         (true, Some(work)) => panel_for(b, work),
-        (true, None) => Rect { x: b.0 + BUBBLE - PANEL_W, y: b.1 + BUBBLE - PANEL_H, w: PANEL_W, h: PANEL_H },
+        (true, None) => Rect { x: b.0 + BUBBLE - WIN_W, y: b.1 + BUBBLE - WIN_H, w: WIN_W, h: WIN_H },
         (false, _) => Rect { x: b.0, y: b.1, w: BUBBLE, h: BUBBLE },
     };
     *app.state::<Desk>().quiet_until.lock().unwrap() = Some(Instant::now() + QUIET);
@@ -337,11 +340,36 @@ mod tests {
         assert_eq!(bubble_from_panel(p), b, "same bottom-right corner");
         // a bubble at the top-left: the panel is pushed back on screen
         let p = panel_for((10.0, 10.0), SCREEN);
-        assert_eq!((p.x, p.y, p.w, p.h), (0.0, 0.0, PANEL_W, PANEL_H));
+        assert_eq!((p.x, p.y, p.w, p.h), (0.0, 0.0, WIN_W, WIN_H));
         // a second monitor to the right
         let right = Rect { x: 1440.0, y: 0.0, w: 1920.0, h: 1080.0 };
         let p = panel_for((1450.0, 500.0), right);
         assert!(p.x >= right.x && p.y + p.h <= right.y + right.h);
+    }
+
+    #[test]
+    fn the_wide_window_keeps_the_corner_when_it_fits() {
+        // a bubble in the middle of the screen: no push, the corner is shared exactly
+        let b = (900.0, 700.0);
+        let p = panel_for(b, SCREEN);
+        assert_eq!((p.x, p.y, p.w, p.h), (900.0 + 64.0 - WIN_W, 700.0 + 64.0 - WIN_H, WIN_W, WIN_H));
+        // a bubble near the left edge: pushed right only, bottom edge still the bubble's
+        let p = panel_for((100.0, 700.0), SCREEN);
+        assert_eq!((p.x, p.y + p.h), (0.0, 700.0 + 64.0));
+        // near the top: pushed down only
+        let p = panel_for((900.0, 40.0), SCREEN);
+        assert_eq!((p.x + p.w, p.y), (900.0 + 64.0, 0.0));
+        // a work area with a menu bar and a Dock: stays inside it
+        let work = Rect { x: 0.0, y: 25.0, w: 1440.0, h: 800.0 };
+        let p = panel_for(default_bubble(work), work);
+        assert!(p.x >= work.x && p.y >= work.y && p.x + p.w <= work.x + work.w && p.y + p.h <= work.y + work.h);
+        assert_eq!(bubble_from_panel(p), default_bubble(work));
+    }
+
+    #[test]
+    fn the_page_uses_the_same_window_size() {
+        let css = include_str!("../../../web/styles.css");
+        assert!(css.contains(&format!("--win-w: {}px", WIN_W)) && css.contains(&format!("--win-h: {}px", WIN_H)), "web/styles.css --win-w / --win-h");
     }
 
     #[test]

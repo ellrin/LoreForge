@@ -1,8 +1,9 @@
-// LoreEcho page: the bubble, the panel, the conversation (memory only).
+// LoreEcho page: the bubble, the open window (character + conversation), memory only.
 // Needs theme.js, icons.js and shell.js (LoreShell) first. No build step.
 //
 // Server: GET/PUT /api/window, GET/PUT /api/settings, GET /api/characters,
-// /api/characters/<id>/avatar/<state>, POST /api/chat (server-sent events).
+// /api/characters/<id>/avatar/<state> (portrait: the bubble), /api/characters/<id>/full/<state>
+// (full body: the open window), POST /api/chat (server-sent events).
 // In the desktop app, PUT /api/window { expanded } also resizes the window, and the page
 // drags the window itself through Tauri (window.__TAURI__, withGlobalTauri).
 
@@ -12,8 +13,9 @@ const $ = (id) => document.getElementById(id);
 const S = {
   desktop: false,
   chars: [],
-  char: null,          // { id, name, avatars }
+  char: null,          // { id, name, avatars, full, figure: { scale, offset_y } }
   msgs: [],            // [{ role, text }] — never saved
+  line: null,          // the reply shown in the dialogue box (moves to the history on the next turn)
   busy: null,          // AbortController of the running reply
   expanded: false,
   shell: null,
@@ -59,15 +61,18 @@ async function boot() {
 
 function mountShell() {
   S.shell = LoreShell.mount({
-    app: "le", brand: "LORE/ECHO", host: "#panel header.top",
-    primary: [{ id: "actNew", icon: "plus", label: "新對話", run: newChat }],
+    app: "le", brand: "LORE/ECHO", host: "#win header.top",
+    primary: [
+      { id: "actChoices", icon: "listUl", label: "功能列表", run: () => toggleChoices() },
+      { id: "actNew", icon: "plus", label: "新對話", run: newChat },
+    ],
     general: buildGeneral,
-    keys: [{ label: "換行", keys: "⇧↵" }],
+    keys: [{ label: "換行", keys: "⇧↵" }, { label: "功能列表：上一個／下一個", keys: "↑ ↓" }],
   });
   const collapse = h("button", { type: "button", class: "ico", id: "actCollapse", "aria-label": "收起 Esc", title: "收起成泡泡（對話會清掉）" }, h("span", { "data-icon": "chevron" }));
   collapse.addEventListener("click", () => show(false));
   S.shell.el.prepend(collapse);
-  S.shell.slots.lead.append(h("span", { class: "who", id: "who", "data-tauri-drag-region": true }));
+  S.shell.slots.lead.append(h("span", { class: "engine", id: "engine", hidden: true }));
 }
 
 // ── characters ──────────────────────────────────────────────────
@@ -75,35 +80,92 @@ async function loadCharacters() {
   const c = await api("GET", "/api/characters");
   S.chars = c.characters;
   S.char = S.chars.find((x) => x.id === c.current) ?? S.chars[0] ?? null;
-  $("who").textContent = S.char?.name ?? "LoreEcho";
-  $("bubble").setAttribute("aria-label", `打開 LoreEcho（${S.char?.name ?? ""}）`);
+  const name = S.char?.name ?? "LoreEcho";
+  $("who").textContent = name;
+  $("nametag").setAttribute("aria-label", `${name}（換人物）`);
+  $("bubble").setAttribute("aria-label", `打開 LoreEcho（${name}）`);
+  const f = S.char?.figure ?? {};
+  $("win").style.setProperty("--fig-scale", f.scale ?? 1);
+  $("win").style.setProperty("--fig-dy", f.offset_y ?? 0);
+  $("figure").classList.toggle("portrait", !(S.char?.full?.length > 0));
   setState("idle");
-  setImg($("bubbleImg"), $("bubbleIcon"), "idle");
+  setImg($("bubbleImg"), $("bubbleIcon"), "avatar", "idle");
+  // fetch the other states' full bodies now, so a state change does not flicker
+  for (const st of ["listening", "thinking", "speaking"]) { const u = picUrl("full", st); if (u) new Image().src = u; }
 }
 
-const avatarUrl = (state) => `/api/characters/${encodeURIComponent(S.char.id)}/avatar/${state}`;
+/** The picture of `kind` (avatar = portrait, full = full body) for `state`, or null when the
+ *  character has none. A missing state is idle's; a character without full bodies shows its
+ *  portrait in the open window (the server's full/ route falls back the same way). */
+function picUrl(kind, state) {
+  const c = S.char;
+  if (!c) return null;
+  const useFull = kind === "full" && c.full?.length > 0;
+  const own = (useFull ? c.full : c.avatars) ?? [];
+  if (!own.length) return null;
+  const s = own.includes(state) ? state : "idle";
+  return `/api/characters/${encodeURIComponent(c.id)}/${useFull ? "full" : "avatar"}/${s}`;
+}
 
-/** Show the character's picture for `state` (idle's when it has none; the icon when it has none at all). */
-function setImg(img, icon, state) {
-  const has = S.char?.avatars?.length > 0;
-  img.hidden = !has; icon.hidden = has;
-  if (!has) return;
-  const s = S.char.avatars.includes(state) ? state : "idle";
-  const url = avatarUrl(s);
-  if (img.dataset.src !== url) { img.dataset.src = url; img.src = url; }
+/** Show the character's picture (the app icon when it has none at all). */
+function setImg(img, icon, kind, state) {
+  const url = picUrl(kind, state);
+  img.hidden = !url; icon.hidden = !!url;
+  if (url && img.dataset.src !== url) { img.dataset.src = url; img.src = url; }
 }
 
 /** idle | listening | thinking | speaking */
 function setState(state) {
-  $("stage").dataset.state = state;
-  setImg($("avatar"), $("avatarIcon"), state);
+  $("figure").dataset.state = state;
+  setImg($("full"), $("fullIcon"), "full", state);
 }
 
-// ── bubble ⇄ panel ──────────────────────────────────────────────
+/** Switch to character `id` (settings.toml, same as 齒輪 → 一般); a new conversation starts. */
+async function switchCharacter(id) {
+  if (id === S.char?.id) return;
+  try {
+    await api("PUT", "/api/settings", { character: id });
+    await loadCharacters();
+    newChat();
+    LoreShell.toast(`換成「${S.char?.name}」`);
+  } catch (e) { LoreShell.toast(e.message, { err: true }); }
+}
+
+/** The name tag's menu: every character, the current one marked. */
+function characterMenu() {
+  const items = S.chars.map((c) => ({ label: c.name === c.id ? c.id : `${c.name}（${c.id}）`, current: c.id === S.char?.id, run: () => switchCharacter(c.id) }));
+  items.push("-", { icon: "gear", label: "人物設定…", run: () => LoreShell.settings("general") });
+  LoreShell.menu($("nametag"), items);
+}
+
+// ── 功能列表: choice rows (design §4), wired in a later phase ─────
+function choiceRows() { return [...document.querySelectorAll("#choices .choice")]; }
+
+function toggleChoices(on = $("choices").hidden) {
+  $("choices").hidden = !on;
+  $("actChoices")?.setAttribute("aria-pressed", String(on));
+  if (on) choiceRows()[0]?.focus();
+}
+
+function wireChoices() {
+  for (const b of choiceRows()) {
+    b.addEventListener("click", () => LoreShell.toast(`「${b.querySelector(".label").textContent}」下一階段才會有`));
+    b.addEventListener("mouseenter", () => b.focus({ preventScroll: true }));
+  }
+  $("choices").addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const rows = choiceRows();
+    const i = rows.indexOf(document.activeElement);
+    rows[(i + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length].focus();
+  });
+}
+
+// ── bubble ⇄ open window ────────────────────────────────────────
 async function show(expanded, save = true) {
   if (!expanded && S.expanded) {
-    newChat();                                   // closing the panel ends the conversation (design §2)
-    const p = $("panel");
+    newChat();                                   // closing the window ends the conversation (design §2)
+    const p = $("win");
     p.classList.remove("opening"); p.classList.add("closing");
     await new Promise((r) => setTimeout(r, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 120));
     p.classList.remove("closing");
@@ -113,10 +175,10 @@ async function show(expanded, save = true) {
     try { await api("PUT", "/api/window", { expanded }); }
     catch (e) { if (expanded) LoreShell.toast(e.message, { err: true }); }
   }
-  $("panel").hidden = !expanded;
+  $("win").hidden = !expanded;
   $("bubble").hidden = expanded;
   if (expanded) {
-    const p = $("panel");
+    const p = $("win");
     p.classList.remove("closing"); p.classList.add("opening");
     setTimeout(() => p.classList.remove("opening"), 200);
     $("text").focus();
@@ -137,6 +199,8 @@ function wire() {
   b.addEventListener("pointerup", () => { if (down && !down.dragged) show(true); down = null; });
   b.addEventListener("click", (e) => { if (e.detail === 0) show(true); });   // keyboard
 
+  $("nametag").addEventListener("click", characterMenu);
+  wireChoices();
   $("form").addEventListener("submit", (e) => { e.preventDefault(); send(); });
   const t = $("text");
   t.addEventListener("keydown", (e) => {
@@ -144,7 +208,10 @@ function wire() {
   });
   t.addEventListener("input", grow);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && S.expanded && !document.querySelector("dialog[open]") && !document.querySelector(".menu, .ask")) { e.preventDefault(); show(false); }
+    if (e.key !== "Escape" || !S.expanded || document.querySelector("dialog[open]") || document.querySelector(".menu, .ask")) return;
+    e.preventDefault();
+    if (!$("choices").hidden) { toggleChoices(false); $("text").focus(); }
+    else show(false);
   });
 }
 
@@ -154,23 +221,34 @@ function grow() {
   t.style.height = `${Math.min(t.scrollHeight, 120)}px`;
 }
 
-// ── the conversation ────────────────────────────────────────────
-function scrollDown() { const m = $("msgs"); m.scrollTop = m.scrollHeight; }
+// ── the conversation: earlier turns in the history, the current line in the box ──
+function scrollDown() { const m = $("hist"); m.scrollTop = m.scrollHeight; $("line").scrollTop = $("line").scrollHeight; }
 
-function addMsg(role, text) {
-  $("empty").hidden = true;
-  const li = h("li", { class: `msg ${role}` }, text);
-  $("msgs").append(li);
+function addHist(role, text) {
+  const li = h("li", { class: role }, text);
+  $("hist").append(li);
   scrollDown();
   return li;
 }
+
+/** The dialogue box: `text` with a look (""/pending/err/empty). */
+function setLine(text, look = "") {
+  const l = $("line");
+  l.className = `line ${look}`.trim();
+  l.textContent = text;
+  l.scrollTop = l.scrollHeight;
+  return l;
+}
+
+const GREETING = "想聊什麼都可以。對話只留在這個視窗裡，按「新對話」或收起就清掉。";
 
 function newChat() {
   S.busy?.abort();
   S.busy = null;
   S.msgs = [];
-  $("msgs").replaceChildren($("empty"));
-  $("empty").hidden = false;
+  S.line = null;
+  $("hist").replaceChildren();
+  setLine(GREETING, "empty");
   $("engine").hidden = true;
   setState("idle");
   $("send").disabled = false;
@@ -183,14 +261,15 @@ async function send(engine) {
     const text = $("text").value.trim();
     if (!text) return;
     $("text").value = ""; grow();
+    if (S.line) { addHist("assistant", S.line); S.line = null; }   // the last reply joins the history
     S.msgs.push({ role: "user", text });
-    addMsg("user", text);
+    addHist("user", text);
   }
   const ctrl = new AbortController();
   S.busy = ctrl;
   $("send").disabled = true;
   setState("thinking");
-  const li = addMsg("assistant pending", "");
+  setLine("", "pending");
   let reply = "";
   try {
     const r = await fetch("/api/chat", {
@@ -199,35 +278,42 @@ async function send(engine) {
     });
     if (!r.ok || !(r.headers.get("content-type") || "").startsWith("text/event-stream")) {
       const data = await r.json().catch(() => ({}));
-      li.remove();
       failed(data.error || `${r.status}`, data.alternative);
       return;
     }
     for await (const [ev, data] of events(r.body)) {
       if (ctrl.signal.aborted) return;
       if (ev === "start") { $("engine").textContent = data.label; $("engine").title = data.engine; $("engine").className = "engine chip"; $("engine").hidden = false; }
-      else if (ev === "delta") { if (!reply) setState("speaking"); reply += data.text; li.textContent = reply; scrollDown(); }
-      else if (ev === "done") { reply = data.text || reply; li.textContent = reply; }
-      else if (ev === "error") { if (!reply) li.remove(); failed(data.error); return; }
+      else if (ev === "delta") { if (!reply) setState("speaking"); reply += data.text; setLine(reply, "pending"); }
+      else if (ev === "done") { reply = data.text || reply; }
+      else if (ev === "error") { if (reply) keep(reply); failed(data.error); return; }
     }
-    li.classList.remove("pending");
-    if (reply.trim()) S.msgs.push({ role: "assistant", text: reply });
-    else li.remove();
+    if (reply.trim()) keep(reply);
+    else failed("沒有收到回答");
   } catch (e) {
     if (ctrl.signal.aborted) return;
-    if (!reply) li.remove();
+    if (reply) keep(reply);
     failed(e.message);
   } finally {
-    li.classList.remove("pending");
     if (S.busy === ctrl) { S.busy = null; $("send").disabled = false; setState("idle"); }
   }
 }
 
-/** One error line in the conversation, with 「改用本機／改用 Claude」 when the server offers it. */
+/** A finished (or cut-off) reply: part of the conversation, shown in the box. */
+function keep(reply) {
+  S.msgs.push({ role: "assistant", text: reply });
+  S.line = reply;
+  setLine(reply);
+}
+
+/** A problem: in the box when nothing was said, else under the history; with
+ *  「改用本機／改用 Claude」 when the server offers it. */
 function failed(msg, alt) {
-  const li = addMsg("err", msg);
+  let el;
+  if (S.line && S.msgs.at(-1)?.role === "assistant") el = addHist("err", msg);
+  else el = setLine(msg, "err");
   if (alt?.engine) {
-    li.append(h("button", { type: "button", class: "btn", onclick: () => { li.remove(); send(alt.engine); } }, alt.label || "改用另一個"));
+    el.append(h("button", { type: "button", class: "btn", onclick: (e) => { e.currentTarget.remove(); send(alt.engine); } }, alt.label || "改用另一個"));
   }
 }
 
@@ -262,14 +348,7 @@ async function buildGeneral(el) {
   for (const c of S.chars) sel.append(h("option", { value: c.id }, c.name === c.id ? c.id : `${c.name}（${c.id}）`));
   sel.value = S.char?.id ?? "";
   try { key.value = (await api("GET", "/api/settings")).shortcut ?? ""; } catch {}
-  sel.addEventListener("change", async () => {
-    try {
-      await api("PUT", "/api/settings", { character: sel.value });
-      await loadCharacters();
-      newChat();
-      LoreShell.toast(`換成「${S.char?.name}」`);
-    } catch (e) { LoreShell.toast(e.message, { err: true }); }
-  });
+  sel.addEventListener("change", () => switchCharacter(sel.value));
   key.addEventListener("change", async () => {
     try {
       const s = await api("PUT", "/api/settings", { shortcut: key.value });
