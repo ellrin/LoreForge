@@ -150,7 +150,7 @@ async function whileState(state, work) {
   finally { if (S.state === state) setState(S.busy ? "thinking" : before === "listening" ? "idle" : before); }
 }
 // voice.js (the mic, 朗讀回覆, the theme song) reads and drives the page through these
-window.LoreEcho = { setState, whileState, state: () => S.state, send: () => send(), character: () => S.char, reloadCharacters: () => refreshChars() };
+window.LoreEcho = { setState, whileState, state: () => S.state, busy: () => !!S.busy, send: () => send(), character: () => S.char, reloadCharacters: () => refreshChars() };
 
 /** A simple cue in a finished reply: happy | unsure | surprised | null. */
 function moodOf(text) {

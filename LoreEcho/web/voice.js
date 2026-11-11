@@ -94,7 +94,9 @@
     on("speaking", (d) => {
       V.speaking = !!d.on; duck();
       if (V.speaking) app().setState?.("speaking");
-      else { const w = V.waits; V.waits = []; w.forEach((f) => f()); }
+      else if (V.waits.length) { const w = V.waits; V.waits = []; w.forEach((f) => f()); }
+      // e.g. 試聽: nothing waits; back to idle (not mid-reply: the queue may drain between sentences)
+      else if (!app().busy?.() && app().state?.() === "speaking") app().setState?.("idle");
     });
     on("notice", (d) => toast(d.message));
     on("error", (d) => problem(d));
@@ -125,12 +127,13 @@
 
   function finalText(text) {
     const said = (text || "").trim();
-    if (said) put(said); else put("");
-    V.prefix = "";
+    put(said);
     const all = $("text").value.trim();
-    if (!all) return;
-    if (V.autoSend) app().send?.();
-    else $("text").focus();
+    if (!all) { V.prefix = ""; return; }
+    if (!V.autoSend) { V.prefix = all; $("text").focus(); return; }   // the next sentence goes after it
+    V.prefix = "";
+    // still answering: send it as soon as the reply is done
+    if (app().busy?.()) V.pendingSend = true; else app().send?.();
   }
 
   function start(continuous) {
@@ -175,7 +178,11 @@
 
   /** Called when the reply text is complete: `done()` runs once the voice is quiet too. */
   function afterReply(spoke, done) {
-    const resume = () => { done(); if (V.continuous && V.paused) { V.paused = false; start(true); } };
+    const resume = () => {
+      done();
+      if (V.pendingSend) { V.pendingSend = false; if ($("text").value.trim()) { app().send?.(); return; } }
+      if (V.continuous && V.paused) { V.paused = false; start(true); }
+    };
     if (!spoke) return resume();
     if (V.speaking) { V.waits.push(resume); return; }
     // the first sentence may still be on its way: wait a moment for "speaking"
@@ -248,6 +255,7 @@
 
   // ── hooks for app.js ──────────────────────────────────────────
   function beforeSend() {
+    V.prefix = "";
     stopSpeaking();
     if (V.continuous && V.listening) { V.paused = true; stopListening(); }
   }
@@ -261,7 +269,7 @@
   /** 新對話 / collapse: quiet. */
   function reset(collapsing) {
     stopSpeaking();
-    V.waits = [];
+    V.waits = []; V.pendingSend = false; V.prefix = "";
     if (V.listening || V.continuous) { V.continuous = false; V.paused = false; V.holding = false; stopListening(); paintMic(); }
     if (collapsing) { fadeOut(); V.songOn = false; if ($("songBtn")) paintSong(); }
   }
