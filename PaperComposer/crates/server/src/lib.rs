@@ -3210,6 +3210,13 @@ pub fn router(paths: Paths) -> Router {
     });
     let llm = Llm::new(catalog, tasks, local_rt, models::layout(), engine_cfg, cfg.claude.and_then(|c| c.model));
     llm.share_engine(loreforge_home());
+    // the model folder, for apps opened from Finder (no LOCAL_LLM_HOME there): engine.toml [local] home
+    // (only where it is known; tests and the isolated example never write the real private/shared)
+    if !cfg!(test) && !engines_isolated() && let Some(h) = models::llm_home() {
+        if let Err(e) = loreforge_home().set_local_home(Some(&h)) {
+            eprintln!("local model folder: {e}");
+        }
+    }
     let state: Shared = Arc::new(AppState {
         loaded: RwLock::new(load(&paths)),
         llm: Arc::new(llm),

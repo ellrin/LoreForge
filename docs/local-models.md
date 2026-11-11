@@ -13,6 +13,7 @@
 | 內容 | 位置 | 分層 |
 |---|---|---|
 | 選的模型 id、閒置釋放分鐘數、走向 | `private/shared/engine.toml`（已有：`[engine] model`、`[local] idle_minutes`、`[route]`） | 工具設定（private） |
+| 這台電腦的模型資料夾 | `engine.toml` 的 `[local] home = "<路徑>"`（lore-home `local_home()`／`set_local_home()`）。PaperComposer 每次啟動、知道資料夾時寫入；從 Finder 開的 app 沒有 `LOCAL_LLM_HOME`，靠它找到模型與 llama.cpp，所以任何 app 都能啟動。解析順序：app 自己的設定 → 環境變數 `LOCAL_LLM_HOME` → `[local] home` → 錯誤。路徑只存在這台電腦的 `private/shared`，不進 repo，測試用暫存目錄 | 工具設定（private） |
 | 正在跑的 llama-server、誰在用、誰在等 | `<cache>/LoreForge/local-model.json`＋`local-model.lock`（`LOREFORGE_CACHE` 可改；和 `ports.json` 同一個資料夾） | 執行期（可刪的快取） |
 
 `engine.toml` 的 `[engine] url` 不再寫入（網址是執行期資料，不屬於 private）；舊檔裡有的照讀一次後忽略。
@@ -48,7 +49,7 @@
 **acquire(model, priority) → url**
 1. 鎖住、清理。
 2. 載入的就是這個模型而且活著 → 新增或更新自己的 lease，回傳 url。
-3. 沒有在跑 → 自己啟動 llama-server（加 `--alias <模型 id>`，`/v1/models` 回報 catalog id，檔案壞掉時用來補回），登記 `server`（`loading: true`），等 `/health` 回 200 再加 lease、回傳 url；等待期間不持有鎖。不知道模型資料夾的 app 只能用別人開好的 server，輪到它啟動時回報錯誤。啟動規則：`setsid`（脫離 app 的程序群組，app 結束它不會跟著死）；stdout/stderr 寫到 `<cache>/LoreForge/llama-server.log`（每次啟動清空）；執行檔和模型檔從共用的 `LOCAL_LLM_HOME` 位置（`Layout::shared`）找，所以**任何 app 都能啟動**。下載模型仍只在 PaperComposer。
+3. 沒有在跑 → 自己啟動 llama-server（加 `--alias <模型 id>`，`/v1/models` 回報 catalog id，檔案壞掉時用來補回），登記 `server`（`loading: true`），等 `/health` 回 200 再加 lease、回傳 url；等待期間不持有鎖。連 `[local] home` 都沒有的 app 只能用別人開好的 server，輪到它啟動時回報錯誤。啟動規則：`setsid`（脫離 app 的程序群組，app 結束它不會跟著死）；stdout/stderr 寫到 `<cache>/LoreForge/llama-server.log`（每次啟動清空）；執行檔和模型檔從共用的 `LOCAL_LLM_HOME` 位置（`Layout::shared`）找，所以**任何 app 都能啟動**。下載模型仍只在 PaperComposer。
 4. 載入的是別的模型 → 加入 `wanting`，解鎖，等待（下一節）。
 
 **換模型（一次只留一個）**

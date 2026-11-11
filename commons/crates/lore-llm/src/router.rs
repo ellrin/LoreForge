@@ -697,6 +697,9 @@ pub struct ExternalServer {
 pub struct LocalAccess {
     /// Shared folder; `None` = `LOCAL_LLM_HOME`.
     pub home: Option<PathBuf>,
+    /// Last resort for the folder: `engine.toml` `[local] home` (`Home::local_home`), for
+    /// an app opened from Finder that has no `LOCAL_LLM_HOME`.
+    pub fallback_home: Option<PathBuf>,
     /// The app's own folders instead of the shared layout of `home`
     /// (wins over `home` when set).
     pub layout: Option<Layout>,
@@ -770,10 +773,10 @@ impl StandardFactory {
     }
 
     /// Where local models live: `LocalAccess.layout`, else the shared layout
-    /// of its `home` (or `LOCAL_LLM_HOME`).
+    /// of its `home`, else `LOCAL_LLM_HOME`, else `fallback_home`.
     pub fn local_layout(&self) -> Option<Layout> {
         let la = self.local.as_ref()?;
-        la.layout.clone().or_else(|| local::home(la.home.as_deref()).map(|h| Layout::shared(&h)))
+        la.layout.clone().or_else(|| local::home_or(la.home.as_deref(), la.fallback_home.as_deref()).map(|h| Layout::shared(&h)))
     }
 
     /// The external server as `local:current` ([`LocalAccess::current`]). `Err` when there is none.

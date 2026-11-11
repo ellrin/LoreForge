@@ -5,6 +5,9 @@
 //! model = "qwen3.5-9b-q8"            # the default every app asks the shared llama-server for
 //! vision_model = "gemma-4-12b-q8"    # optional: loaded instead for a task that reads images
 //!
+//! [local]                            # this machine's model folder (LOCAL_LLM_HOME), written by
+//! home = "/path/to/llm-home"         # PaperComposer so apps opened from Finder find the model
+//!
 //! [claude]                           # the Claude connection (never a key: keys are in the keychain)
 //! via = "subscription"               # subscription | api
 //! model = "sonnet"                   # catalog alias or id
@@ -154,6 +157,24 @@ impl Home {
         self.set_engine_key("model", model)
     }
 
+    /// `[local] home` = this machine's model folder (`LOCAL_LLM_HOME` layout), when set.
+    /// A machine path: it lives in `private/shared`, never in the repo.
+    pub fn local_home(&self) -> Option<PathBuf> {
+        let t: toml::Table = std::fs::read_to_string(self.engine_file()?).ok()?.parse().ok()?;
+        let h = t.get("local")?.get("home")?.as_str()?.trim();
+        (!h.is_empty()).then(|| PathBuf::from(h))
+    }
+
+    /// Write `[local] home` (`None` or empty removes it). Nothing is written when the
+    /// value is already that, so calling it at every start does not touch the file.
+    pub fn set_local_home(&self, path: Option<&std::path::Path>) -> std::io::Result<()> {
+        let v = path.map(|p| p.to_string_lossy().trim().to_string()).filter(|v| !v.is_empty());
+        if self.local_home().map(|p| p.to_string_lossy().into_owned()) == v {
+            return Ok(());
+        }
+        self.edit_engine_file(|t| set_in(t, "local", "home", v.as_deref()))
+    }
+
     /// `[engine] vision_model` (`None` or empty removes it).
     pub fn set_vision_model(&self, model: Option<&str>) -> std::io::Result<()> {
         self.set_engine_key("vision_model", model)
@@ -244,6 +265,19 @@ fn set_in(t: &mut toml::Table, table: &str, key: &str, value: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_home_round_trip() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path());
+        assert_eq!(home.local_home(), None);
+        home.set_local_home(Some(std::path::Path::new("/tmp/llm-home-test"))).unwrap();
+        assert_eq!(home.local_home(), Some(PathBuf::from("/tmp/llm-home-test")));
+        home.set_engine_model(Some("x")).unwrap();
+        assert_eq!(home.local_home(), Some(PathBuf::from("/tmp/llm-home-test")), "other setters keep it");
+        home.set_local_home(None).unwrap();
+        assert_eq!(home.local_home(), None);
+    }
 
     #[test]
     fn engine_round_trip_and_empty_values() {

@@ -137,6 +137,7 @@ impl Llm {
             external: self.external(),
             shared: self.local_rt.clone(),
             default_model: e.model,
+            fallback_home: self.shared.as_ref().and_then(|h| h.local_home()),
             vision_model: e.vision_model,
             zh_tw: true,
             ..Default::default()

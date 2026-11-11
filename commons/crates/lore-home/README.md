@@ -48,6 +48,7 @@ vision_model = "gemma-4-12b-q8"    # 可省略：需要看圖而預設模型不�
 |---|---|
 | `home.engine()` | 有 `model` 或 `vision_model` 才是 `Some`。舊檔的 `url` 讀到也忽略 |
 | `home.set_engine_model(model)`、`set_vision_model(model)` | 齒輪 → 模型選定時寫入；`None`／空字串刪掉。順便刪掉舊的 `url`，其他鍵與表格保留 |
+| `home.local_home()`、`set_local_home(path)` | `[local] home`＝這台電腦的模型資料夾（PaperComposer 啟動時寫入；`LOCAL_LLM_HOME` 之後的備援，給從 Finder 開的 app）。值相同就不寫檔 |
 | `home.forget_engine_url()` | 刪掉舊的 `[engine] url`（沒有就不寫檔）；lore-engines 掛上時呼叫一次 |
 | `home.engine_settings()` | 整個檔：`[engine]`、`[claude] via／model`、`[route]`（類別 → 走向）、`[overrides]`（任務 → 走向）；不認得的值略過（＝自動） |
 | `home.set_claude(via, model)`、`set_route(class, route)`、`set_override(task, route)` | 改一項、其他保留；`via` ∈ `VIAS`、類別 ∈ `CLASSES`、走向 ∈ `ROUTES`；覆寫設成 `auto`／`None` 就刪掉那行 |

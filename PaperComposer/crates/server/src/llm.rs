@@ -215,6 +215,7 @@ impl Llm {
             external: self.external(),
             shared: self.local_rt.clone(),
             default_model: e.model,
+            fallback_home: crate::loreforge_home().local_home(),
             vision_model: e.vision_model,
             zh_tw: true,
             include_uncensored: true,

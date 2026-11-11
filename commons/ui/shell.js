@@ -32,7 +32,8 @@
 //   LoreShell.ask(anchor, lines, buttons) → Promise<value | null>     (never a native confirm)
 //   LoreShell.menu(anchor, items)                    items: { icon, label, run, kbd, current, disabled } | "-"
 //   LoreShell.settings(tab?)                         the gear dialog: 一般 外觀 模型 同步 快捷鍵 + the app's tabs
-//   LoreShell.engineChip({ task, value, used, onChange })   a feature's own engine choice
+//   LoreShell.engineChip({ task, value, used, onChange })   a feature's own engine choice;
+//       chip.busy(true|false) around its request shows the shared model's status (載入模型中 · N 秒 / 等待 X 用完模型)
 //   LoreShell.block({ n: "01", title, count, help, open, key }) → element with .body
 //   LoreShell.shortcuts(root) → [{ group, label, keys }]  (from aria-labels that end in keys)
 //   LoreLinks.open(app, params) · LoreLinks.url(app, params)
@@ -270,6 +271,7 @@
         const r = await fetch("/api/engines", { cache: "no-store" });
         this.data = r.ok ? await r.json() : null;
       } catch { this.data = null; }
+      document.dispatchEvent(new CustomEvent("lore-engines", { detail: this.data }));
       return this.data;
     },
     async put(patch) {
@@ -297,6 +299,8 @@
     }
     return s;
   }
+  /** The shared model is loading, switching or kept by another app (local.status words). */
+  const localBusy = (L) => /^(載入|切換|等待)/.test(L?.status ?? "") || L?.state === "starting";
   const vision = (ok) => h("span", { class: ok ? "yes" : "no", title: "看圖" }, `看圖 ${ok ? "✓" : "✗"}`);
   async function buildModels(el) {
     el.textContent = "";
@@ -316,7 +320,8 @@
     const lv = h("span", { class: "v mono" }, L.label ?? L.model ?? "—");
     const lsel = L.models?.length > 1 ? h("select", { class: "set-input", "aria-label": "本機模型" }, ...L.models.map((m) => h("option", { value: m.id, selected: m.id === L.model }, m.label ?? m.id))) : null;
     if (lsel) lsel.onchange = () => engines.put({ local: { model: lsel.value } }).then(() => buildModels(el)).catch((e) => toast(e.message, { err: true }));
-    conn.append(row("本機", lsel ?? lv, h("span", { class: "chip" + (L.state === "ready" ? " ok" : "") }, STATE[L.state] ?? "—"), vision(!!L.vision),
+    const statusChip = h("span", { class: "chip" + (L.state === "ready" ? " ok" : "") + (localBusy(L) ? " busy" : ""), "aria-live": "polite" }, L.status || (STATE[L.state] ?? "—"));
+    conn.append(row("本機", lsel ?? lv, statusChip, vision(!!L.vision),
       S.opts?.modelSetup ? h("button", { type: "button", class: "btn small", onclick: () => S.opts.modelSetup("local") }, L.state === "ready" ? "切換…" : "下載…") : null));
     if (L.idle_minutes != null) {
       // memory: release after N idle minutes (0 = never); 釋放 only where the model runs
@@ -326,7 +331,7 @@
         idle.value = n;
         engines.put({ local: { idle_minutes: n } }).catch((e) => { idle.value = L.idle_minutes; toast(e.message, { err: true }); });
       };
-      const rel = L.can_release ? h("button", { type: "button", class: "btn small", disabled: L.state !== "ready" && L.state !== "starting" }, "釋放") : null;
+      const rel = L.can_release || L.release_blocked ? h("button", { type: "button", class: "btn small", disabled: !!L.release_blocked || (L.state !== "ready" && L.state !== "starting"), title: L.release_blocked || null }, "釋放") : null;
       if (rel) rel.onclick = () => engines.put({ local: { release: true } }).then(() => buildModels(el)).catch((e) => toast(e.message, { err: true }));
       conn.append(row("閒置釋放", idle, h("span", { class: "v" }, "分"), rel));
     }
@@ -341,6 +346,12 @@
         h("span", { class: "v no", title: "自動" }, (c.auto ?? []).map((x) => ENGINE_LABEL[x] ?? x).join(" → "))));
     }
     el.append(conn, route);
+    // while the model is loading / switching / waited for: refresh the state every 2 s, only while this tab is open
+    if (localBusy(L)) {
+      setTimeout(() => {
+        if (el.isConnected && el.dataset.tab === "model" && dlg?.open) buildModels(el);
+      }, 2000);
+    }
   }
   const STATE = { ready: "可用", starting: "啟動中", off: "未連線", missing: "未安裝", error: "錯誤" };
   /** A feature's own engine choice: 自動 · Sonnet. onChange(v) or PUT overrides. */
@@ -351,6 +362,25 @@
       b.classList.toggle("set", value !== "auto");
       b.append(ROUTE_LABEL[value] ?? value);
       if (used) b.append(h("span", { class: "used" }, `· ${used}`));
+      const L = engines.data?.local;
+      const wait = working && value !== "cloud" && localBusy(L) && L.status;
+      if (wait) b.append(h("span", { class: "wait" }, `· ${L.status}`));
+      b.title = wait || "";
+    };
+    // b.busy(true) while the feature's request runs: shows the shared model's status
+    // (載入模型中 · N 秒 / 等待 X 用完模型) and refreshes it every 2 s; b.busy(false) when done
+    let working = false, timer = 0;
+    const onEng = () => paint();
+    b.busy = (on) => {
+      working = !!on;
+      clearInterval(timer);
+      document.removeEventListener("lore-engines", onEng);
+      if (working) {
+        document.addEventListener("lore-engines", onEng);
+        timer = setInterval(() => { if (!b.isConnected) b.busy(false); else engines.get(true); }, 2000);
+        engines.get(true);
+      }
+      paint();
     };
     b.set = (v, u = used) => { value = v ?? value; used = u; paint(); };
     b.onclick = () => menu(b, Object.entries(ROUTE_LABEL).map(([v, text]) => ({ label: text, current: v === value, run: async () => {

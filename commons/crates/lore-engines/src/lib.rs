@@ -89,12 +89,13 @@ impl Engines {
             eprintln!("lore-engines: {e}");
             TaskTable::default()
         });
+        let layout = lore_llm::local::home_or(None, home.local_home().as_deref()).map(|h| Layout::shared(&h));
         Engines {
             home,
             tasks,
             catalog: Catalog::bundled(),
             shared: None,
-            layout: lore_llm::local::home(None).map(|h| Layout::shared(&h)),
+            layout,
             external: None,
             include_uncensored: false,
             cli: Cli::default(),

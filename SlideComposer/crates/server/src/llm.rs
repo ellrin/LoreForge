@@ -96,7 +96,7 @@ impl Llm {
         if !self.no_local {
             // the shared default model of engine.toml, acquired from the machine's one llama-server
             let e = settings.engine.clone().unwrap_or_default();
-            f.local = Some(LocalAccess { shared: self.shared.clone(), default_model: e.model, vision_model: e.vision_model, zh_tw: true, ..Default::default() });
+            f.local = Some(LocalAccess { shared: self.shared.clone(), default_model: e.model, vision_model: e.vision_model, fallback_home: self.home.local_home(), zh_tw: true, ..Default::default() });
         }
         f
     }

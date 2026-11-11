@@ -74,6 +74,7 @@ svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-widt
 .chip.warn { color: var(--warn); border-color: currentColor; background: none; }
 .chip.err { color: var(--err); border-color: currentColor; background: none; }
 .chip.ok { color: var(--ok); }
+.chip.busy { color: var(--warn); }
 
 /* ── menus (fixed, under their button) ─────────────────────────── */
 .menu { position: fixed; z-index: 60; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r); box-shadow: 0 6px 24px #0007; padding: 4px; display: flex; flex-direction: column; min-width: 180px; max-width: min(360px, calc(100vw - 16px)); max-height: calc(100vh - 64px); overflow-y: auto; }
@@ -211,6 +212,7 @@ body.panel-resizing iframe { pointer-events: none; }
 .engine-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 999px; background: none; color: var(--muted); font: 500 10.5px var(--mono); white-space: nowrap; }
 .engine-chip:hover, .engine-chip[aria-expanded="true"] { color: var(--text); border-color: var(--accent-text); }
 .engine-chip .used { color: var(--faint); }
+.engine-chip .wait { color: var(--warn); }
 .engine-chip.set { color: var(--accent-text); border-color: var(--accent-text); }
 
 /* ── settings (the gear dialog): one height for every tab ───────── */

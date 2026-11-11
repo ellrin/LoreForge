@@ -31,6 +31,11 @@ pub fn home(configured: Option<&Path>) -> Option<PathBuf> {
         .or_else(|| std::env::var_os("LOCAL_LLM_HOME").filter(|v| !v.is_empty()).map(PathBuf::from))
 }
 
+/// [`home`], then `fallback` (`engine.toml` `[local] home`): configured, env, shared file.
+pub fn home_or(configured: Option<&Path>, fallback: Option<&Path>) -> Option<PathBuf> {
+    home(configured).or_else(|| fallback.filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf))
+}
+
 pub fn gguf_dir(home: &Path) -> PathBuf {
     home.join("gguf")
 }
@@ -188,6 +193,16 @@ pub const DEFAULT_IDLE_MINUTES: u64 = 10;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn home_order_is_config_env_then_shared_file() {
+        let (a, b) = (Path::new("/a"), Path::new("/b"));
+        assert_eq!(home_or(Some(a), Some(b)), Some(a.to_path_buf()));
+        match std::env::var_os("LOCAL_LLM_HOME").filter(|v| !v.is_empty()) {
+            Some(env) => assert_eq!(home_or(None, Some(b)), Some(PathBuf::from(env))),
+            None => assert_eq!(home_or(None, Some(b)), Some(b.to_path_buf())),
+        }
+    }
+
     use super::*;
 
     fn touch(p: &Path) {

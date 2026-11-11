@@ -88,6 +88,20 @@
   };
   const realFetch = window.fetch;
   const q = new URLSearchParams(location.search);
+  // ?local=loading | waiting | blocked  mocks the shared model's status (local.status words)
+  const t0 = Date.now();
+  function mockLocal() {
+    const L = ENG.local; L.idle_minutes ??= 10; const secs = Math.floor((Date.now() - t0) / 1000) + 12;
+    delete L.release_blocked;
+    L.can_release = false;
+    switch (q.get("local")) {
+      case "loading": Object.assign(L, { state: "starting", status: `載入模型中 · ${secs} 秒`, can_release: true }); break;
+      case "waiting": Object.assign(L, { state: "ready", status: "等待 LoreReader 用完模型" }); break;
+      case "blocked": Object.assign(L, { state: "ready", status: "已載入 Qwen 3.5 9B", release_blocked: "LoreReader 正在用" }); break;
+      default: Object.assign(L, { state: "ready", status: "已載入 Qwen 3.5 9B", can_release: true });
+    }
+    return ENG;
+  }
   window.fetch = async (u, o = {}) => {
     const path = new URL(u, location.href).pathname;
     const json = (v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
@@ -105,7 +119,7 @@
         for (const [k, v] of Object.entries(p.routes ?? {})) { const c = ENG.classes.find((x) => x.id === k); if (c) c.route = v; }
         Object.assign(ENG.overrides, p.overrides ?? {});
       }
-      return json(ENG);
+      return json(mockLocal());
     }
     if (path.startsWith("/api/")) return json({ error: "not found" }, 404);
     return realFetch(u, o);
@@ -166,7 +180,8 @@
   const b3 = LoreShell.block({ n: "03", title: "設計建議", help: "引擎選擇只影響這個功能。" });
   const chip = LoreShell.engineChip({ task: "sc-flow-ai", value: "auto", used: "Sonnet" });
   const r3 = document.createElement("div"); r3.className = "row";
-  r3.append(chip, Object.assign(document.createElement("button"), { className: "btn small", textContent: "建議" }));
+  let working = false;
+  r3.append(chip, Object.assign(document.createElement("button"), { className: "btn small", textContent: "建議", onclick: (e) => { working = !working; chip.busy(working); e.currentTarget.textContent = working ? "停止" : "建議"; } }));
   b3.body.append(r3);
   const b4 = LoreShell.block({ n: "04", title: "示範" });
   const btn = (label, run, cls = "btn small") => Object.assign(document.createElement("button"), { type: "button", className: cls, textContent: label, onclick: run });
