@@ -931,6 +931,12 @@ mod tests {
 
         // What a viewer shows (poppler; Preview uses the same /AP): ink inside every box,
         // one upright line at the top-left for the single-line notes.
+        // CJK needs poppler-data's Adobe-CNS1 cMaps and a CJK system font: checked on macOS
+        // (Homebrew poppler) or with LR_RENDER_CHECK=1, skipped elsewhere.
+        if !cfg!(target_os = "macos") && std::env::var_os("LR_RENDER_CHECK").is_none() {
+            eprintln!("rendering check skipped (not macOS; LR_RENDER_CHECK=1 to run it)");
+            return;
+        }
         let Some(img1) = render(&out, 1) else {
             eprintln!("pdftoppm not installed: rendering check skipped");
             return;

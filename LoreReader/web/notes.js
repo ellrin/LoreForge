@@ -101,8 +101,15 @@ function box(a, p) {
     // the third click of a triple-click lands on the box the double-click just opened
     if (e.detail >= 3 && !a.id && !(NT.edit?.text ?? "").trim()) { e.preventDefault(); dropEdit(); selectLine(e.clientX, e.clientY); }
   });
-  del.addEventListener("pointerdown", (e) => e.stopPropagation());
-  del.addEventListener("click", () => { if (a.id) remove(a.id); else dropEdit(); });
+  // × keeps the focus in the text (no blur → save first), then drops the box
+  del.addEventListener("pointerdown", (e) => { e.stopPropagation(); e.preventDefault(); });
+  del.addEventListener("mousedown", (e) => e.preventDefault());
+  del.addEventListener("click", () => {
+    const e = NT.edit;
+    if (e && (e.id ? e.id === a.id : !a.id)) NT.edit = null;
+    if (a.id) remove(a.id);
+    else if (e) redraw(e.sha, e.page);
+  });
   el.addEventListener("pointerdown", (e) => onPointer(e, el, a, p, e.target === grip ? "resize" : "move"));
   return el;
 }
@@ -110,6 +117,14 @@ function box(a, p) {
 // ── move, resize, click to edit ───────────────────────────────────────────
 function onPointer(e, el, a, p, mode) {
   if (e.button !== 0) return;
+  // The third click of a triple-click on the edge of the box the double-click just opened
+  // (preventing pointerdown below would also swallow its mousedown, which carries detail 3).
+  if (!a.id && NT.edit && !NT.edit.id && !NT.edit.text.trim() && Date.now() - NT.edit.at < 700) {
+    e.preventDefault();
+    dropEdit();
+    selectLine(e.clientX, e.clientY);
+    return;
+  }
   const editing = el.classList.contains("editing");
   if (editing && mode === "move" && e.target.tagName === "TEXTAREA") return; // caret, text selection
   e.preventDefault();
@@ -312,6 +327,8 @@ function selectLine(cx, cy) {
   const sel = getSelection();
   sel.removeAllRanges();
   sel.addRange(range);
+  // the selection toolbar opens on the page's mouseup, which a prevented pointerdown swallows
+  document.getElementById("pages").dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
 }
 const dist = (r, x) => (x < r.left ? r.left - x : x > r.right ? x - r.right : 0);
 

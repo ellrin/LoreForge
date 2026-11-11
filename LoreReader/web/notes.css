@@ -24,7 +24,7 @@
 .tn:not(.editing) .tn-text { pointer-events: none; user-select: none; -webkit-user-select: none; }
 .tn.editing { cursor: move; }
 .tn.editing .tn-text { cursor: text; }
-.tn.editing, .tn.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tn.editing, .tn.sel { z-index: 1; outline: 2px solid var(--accent); outline-offset: 2px; }
 .tn .tn-del, .tn .tn-grip { display: none; }
 .tn.editing .tn-del, .tn.sel .tn-del, .tn.sel .tn-grip, .tn.editing .tn-grip { display: block; }
 .tn .tn-del {
