@@ -39,8 +39,11 @@
     const aloud = btn("aloud", "speaker", "朗讀回覆");
     const play = btn("songBtn", "play", "主題曲");
     play.hidden = true;
-    mic.after(aloud, play);
-    icons(row);
+    mic.after(aloud);
+    // the theme song belongs to the window, not the conversation: top bar, after the primary buttons
+    const top = document.getElementById("actNew") ?? document.getElementById("actChoices");
+    if (top) top.after(play); else mic.after(play);
+    icons(row); icons(play.parentElement);
     try {
       const [st, set] = await Promise.all([fetch("/api/voice").then((r) => r.json()), fetch("/api/settings").then((r) => r.json())]);
       V.available = !!st.available; V.why = st.why || "";
