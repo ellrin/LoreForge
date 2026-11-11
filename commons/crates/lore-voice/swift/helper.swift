@@ -31,6 +31,13 @@ func emit(_ d: [String: Any]) {
     outLock.unlock()
 }
 
+/// A task that was cancelled (stop, a new start): the end of listening, never shown as an error.
+func isCancel(_ e: Error) -> Bool {
+    if e is CancellationError { return true }
+    let ns = e as NSError
+    return ns.domain == "Swift.CancellationError" || ns.code == NSUserCancelledError
+}
+
 func fail(_ kind: String, _ message: String, req: Any? = nil) {
     var d: [String: Any] = ["ev": "error", "kind": kind, "message": message]
     if let r = req { d["req"] = r }
@@ -211,7 +218,7 @@ final class Listener {
            let loc = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: language)) {
             let installed = await SpeechTranscriber.installedLocales.contains { $0.identifier(.bcp47) == loc.identifier(.bcp47) }
             if installed {
-                do { try await startAnalyzer(loc); return } catch { fail("failed", "SpeechTranscriber：\(error.localizedDescription)") }
+                do { try await startAnalyzer(loc); return } catch where isCancel(error) { return } catch { fail("failed", "SpeechTranscriber：\(error.localizedDescription)") }
             } else {
                 download(loc)
             }
@@ -276,6 +283,8 @@ final class Listener {
                     let text = String(r.text.characters)
                     await MainActor.run { self.result(text, final: r.isFinal) }
                 }
+            } catch where isCancel(error) {
+                // stopping (or a new start) ends the stream this way: not an error
             } catch {
                 fail("failed", error.localizedDescription)
             }

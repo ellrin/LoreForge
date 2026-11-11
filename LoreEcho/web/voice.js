@@ -114,6 +114,8 @@
         err: true, ms: 12000,
         action: { label: "開啟系統設定", run: () => post("/api/voice/open-settings", { what }).catch((e) => toast(e.message, { err: true })) },
       });
+    } else if (/CancellationError|cancell?ed/i.test(d.message || "")) {
+      V.listening = false; paintMic();               // stopping ends the stream this way: not an error
     } else if (d.message) {
       if (d.kind === "unavailable") { V.listening = false; V.speaking = false; paintMic(); }
       toast(d.message, { err: true });
