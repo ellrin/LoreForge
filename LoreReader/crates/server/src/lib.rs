@@ -9,8 +9,8 @@
 //! | POST | /api/papers/import?name= | body = PDF bytes, or JSON `{path}` → copied into the library |
 //! | GET/PUT | /api/papers/{sha} | meta / `{title}` |
 //! | GET | /api/papers/{sha}/pdf | the PDF |
-//! | GET/POST | /api/papers/{sha}/annotations | list / add `{page, kind, color, quote, rects, note}` |
-//! | PUT/DELETE | /api/papers/{sha}/annotations/{id} | `{color?, note?}` / remove |
+//! | GET/POST | /api/papers/{sha}/annotations | list / add `{page, kind (highlight / note / text), color, quote, rects, note}` |
+//! | PUT/DELETE | /api/papers/{sha}/annotations/{id} | `{color?, note?, rects?}` / remove |
 //! | GET/POST | /api/papers/{sha}/quotes | citable sentences / add `{text, page, note?}` |
 //! | DELETE | /api/papers/{sha}/quotes/{id} | |
 //! | GET | /api/quotes | citable sentences of every paper (`sha256`, `paper_title`, `doi`) |

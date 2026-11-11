@@ -13,6 +13,13 @@
 //! - The first of the two carries `/LoreReader` = the annotation as JSON (id, quote, rects,
 //!   colour, dates), so a re-import is exact. The visible `/Contents` wins over the JSON note
 //!   (a note edited in another viewer comes back edited).
+//! - `kind: "text"` (a text box placed on the page) → `/Subtype /FreeText` with `/NM (lr:<id>)`,
+//!   `/Rect` = the box (grown downwards when the text needs more room), `/Contents` = the
+//!   text, `/DA`, and an `/AP` that draws the box and the wrapped text, upright on rotated
+//!   pages (the form's `/Matrix` turns it with `/Rotate`). Its colours are fixed ([`TEXT_FILL`]).
+//!   Latin-1 runs use Helvetica; every other character the non-embedded Adobe-CNS1 font
+//!   `MSung-Light` (`/UniCNS-UTF16-H`), which Preview, Acrobat and poppler replace with a
+//!   system CJK face: the file stays small and Chinese shows without regenerating.
 //! - Document info `/LoreReaderSource` = sha256 of the paper the notes belong to.
 //!
 //! Re-exporting first removes every annotation whose `/NM` starts with `lr:`; annotations
@@ -34,6 +41,15 @@ pub const NM_PREFIX: &str = "lr:";
 const DATA_KEY: &str = "LoreReader";
 /// Sticky-note icon size in points.
 const ICON: f64 = 16.0;
+
+/// Text box: font size (pt), padding (pt), line height (× size), fill, border, ink. The web
+/// box (notes.css) uses the same numbers so the wrap on screen and in the PDF agree.
+pub const TEXT_PT: f64 = 10.0;
+pub const TEXT_PAD: f64 = 4.0;
+pub const TEXT_LEAD: f64 = 1.3;
+pub const TEXT_FILL: [f64; 3] = [1.0, 0.973, 0.784];
+const TEXT_LINE: [f64; 3] = [0.851, 0.725, 0.282];
+const TEXT_INK: [f64; 3] = [0.133, 0.133, 0.133];
 
 /// The colours of `papers::COLORS` (same as the web UI's `--hl-*`).
 pub fn rgb(color: &str) -> [f64; 3] {
@@ -238,6 +254,174 @@ fn strip_in(doc: &mut Document) -> usize {
     removed
 }
 
+/// Helvetica advance widths (1/1000 em) for ASCII 32..=126.
+const HELV: [u16; 95] = [
+    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+];
+
+/// Drawn with Helvetica (WinAnsi) rather than the CJK font.
+fn latin(c: char) -> bool {
+    matches!(c as u32, 0x20..=0x7e | 0xa0..=0xff)
+}
+
+/// Advance width of `c` in 1/1000 em (CJK font: every glyph 1 em).
+fn width(c: char) -> f64 {
+    match c as u32 {
+        n @ 0x20..=0x7e => HELV[(n - 0x20) as usize] as f64,
+        0xa0..=0xff => 556.0,
+        _ => 1000.0,
+    }
+}
+
+fn text_width(s: &str) -> f64 {
+    s.chars().map(width).sum::<f64>() * TEXT_PT / 1000.0
+}
+
+/// `text` broken into lines no wider than `max` points at [`TEXT_PT`]: at spaces between
+/// Latin words, anywhere between CJK characters, inside a word only when it alone is too wide.
+pub fn wrap(text: &str, max: f64) -> Vec<String> {
+    let mut out = vec![];
+    for para in text.split('\n') {
+        // tokens: a Latin word with its trailing spaces, or one other character
+        let mut toks: Vec<String> = vec![];
+        for c in para.chars().filter(|c| !c.is_control()) {
+            let last = toks.last().and_then(|t| t.chars().last());
+            let join = match last {
+                Some(l) if c == ' ' => latin(l),
+                Some(l) => latin(c) && latin(l) && l != ' ',
+                None => false,
+            };
+            if join {
+                toks.last_mut().unwrap().push(c);
+            } else {
+                toks.push(c.to_string());
+            }
+        }
+        let mut line = String::new();
+        for t in toks {
+            if line.is_empty() || text_width(&format!("{line}{}", t.trim_end())) <= max {
+                line.push_str(&t);
+            } else {
+                out.push(line.trim_end().to_string());
+                line = t.trim_start().to_string();
+            }
+            // A word wider than the box on its own: cut it.
+            while text_width(line.trim_end()) > max && line.chars().count() > 1 {
+                let chars: Vec<char> = line.chars().collect();
+                let mut k = 1;
+                while k < chars.len() && text_width(&chars[..=k].iter().collect::<String>()) <= max {
+                    k += 1;
+                }
+                out.push(chars[..k].iter().collect());
+                line = chars[k..].iter().collect();
+            }
+        }
+        out.push(line.trim_end().to_string());
+    }
+    out
+}
+
+/// One line as content-stream operators, switching between Helvetica and the CJK font.
+fn show_line(line: &str) -> String {
+    let mut ops = String::new();
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let l = latin(chars[i]);
+        let mut j = i;
+        while j < chars.len() && latin(chars[j]) == l {
+            j += 1;
+        }
+        let hex: String = if l {
+            chars[i..j].iter().map(|&c| format!("{:02X}", c as u32)).collect()
+        } else {
+            chars[i..j].iter().flat_map(|c| c.encode_utf16(&mut [0; 2]).to_vec()).map(|u| format!("{u:04X}")).collect()
+        };
+        ops += &format!("/{} {} Tf <{hex}> Tj ", if l { "Helv" } else { "CJK" }, f(TEXT_PT));
+        i = j;
+    }
+    ops
+}
+
+/// The fonts of a text box's appearance: Helvetica and MSung-Light (Adobe-CNS1, not embedded).
+fn text_fonts(doc: &mut Document) -> Dictionary {
+    let desc = doc.add_object(dictionary! {
+        "Type" => "FontDescriptor", "FontName" => "MSung-Light", "Flags" => 6,
+        "FontBBox" => reals(&[-160.0, -249.0, 1015.0, 1071.0]), "ItalicAngle" => 0,
+        "Ascent" => 880, "Descent" => -120, "CapHeight" => 880, "StemV" => 93,
+    });
+    let cid = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType0", "BaseFont" => "MSung-Light",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("CNS1"), "Supplement" => 0 },
+        "FontDescriptor" => desc, "DW" => 1000,
+    });
+    let cjk = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "MSung-Light", "Encoding" => "UniCNS-UTF16-H",
+        "DescendantFonts" => vec![cid.into()],
+    });
+    let helv = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "Encoding" => "WinAnsiEncoding" });
+    dictionary! { "Helv" => helv, "CJK" => cjk }
+}
+
+/// The form matrix that turns a box drawn upright (as displayed) into user space.
+fn rotation_matrix(rotate: i64) -> [f64; 6] {
+    match rotate {
+        90 => [0.0, 1.0, -1.0, 0.0, 0.0, 0.0],
+        180 => [-1.0, 0.0, 0.0, -1.0, 0.0, 0.0],
+        270 => [0.0, -1.0, 1.0, 0.0, 0.0, 0.0],
+        _ => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    }
+}
+
+/// A text box's displayed rect (fractions) grown downwards to fit its wrapped text, and the lines.
+pub fn text_layout(g: &PageGeom, r: [f64; 4], text: &str) -> ([f64; 4], Vec<String>) {
+    let (dw, dh) = g.display_size();
+    let (dw, dh) = (dw.max(1.0), dh.max(1.0));
+    let w = ((r[2] - r[0]) * dw).max(2.0 * TEXT_PAD + TEXT_PT);
+    let lines = wrap(text.trim_end(), w - 2.0 * TEXT_PAD);
+    let need = 2.0 * TEXT_PAD + lines.len() as f64 * TEXT_PT * TEXT_LEAD;
+    let h = ((r[3] - r[1]) * dh).max(need);
+    let (x0, y0) = (r[0].clamp(0.0, 1.0), r[1].clamp(0.0, 1.0));
+    ([x0, y0, x0 + w / dw, y0 + h / dh], lines)
+}
+
+fn add_freetext(doc: &mut Document, page: ObjectId, g: &PageGeom, a: &Annotation, data: &str) -> Option<ObjectId> {
+    let (r, lines) = text_layout(g, *a.rects.first()?, &a.note);
+    let (dw, dh) = g.display_size();
+    let (w, h) = ((r[2] - r[0]) * dw, (r[3] - r[1]) * dh);
+    let rect = bbox(&[g.to_user(r[0], r[1]), g.to_user(r[2], r[3])], 0.0);
+    let c = |v: [f64; 3]| format!("{} {} {}", f(v[0]), f(v[1]), f(v[2]));
+    let mut ops = format!("q {} rg 0 0 {} {} re f {} RG 0.75 w 0.375 0.375 {} {} re S Q\n", c(TEXT_FILL), f(w), f(h), c(TEXT_LINE), f(w - 0.75), f(h - 0.75));
+    // Each line box is TEXT_LEAD × size; the baseline sits 0.8 em below the line box's
+    // half-leading (the web box uses the same line height and padding).
+    let lead = TEXT_PT * TEXT_LEAD;
+    let first = h - TEXT_PAD - (lead - TEXT_PT) / 2.0 - 0.8 * TEXT_PT;
+    ops += &format!("q 0 0 {} {} re W n BT {} rg {} TL 1 0 0 1 {} {} Tm\n", f(w), f(h), c(TEXT_INK), f(lead), f(TEXT_PAD), f(first));
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            ops += "T* ";
+        }
+        ops += &show_line(line);
+        ops += "\n";
+    }
+    ops += "ET Q\n";
+    let fonts = text_fonts(doc);
+    let form = dictionary! {
+        "Type" => "XObject", "Subtype" => "Form", "FormType" => 1,
+        "BBox" => reals(&[0.0, 0.0, w, h]), "Matrix" => reals(&rotation_matrix(g.rotate)),
+        "Resources" => dictionary! { "Font" => fonts },
+    };
+    let ap = doc.add_object(Stream::new(form, ops.into_bytes()));
+    let d = dictionary! {
+        "Type" => "Annot", "Subtype" => "FreeText", "Rect" => reals(&rect),
+        "Contents" => text_string(&a.note), "DA" => Object::string_literal(format!("/Helv {} Tf {} rg", f(TEXT_PT), c(TEXT_INK))),
+        "Q" => 0, "C" => reals(&TEXT_FILL), "BS" => dictionary! { "W" => 0.75, "S" => "S" },
+        "F" => 4, "P" => page, "NM" => text_string(&format!("{NM_PREFIX}{}", a.id)), "T" => text_string("LoreReader"),
+        "AP" => dictionary! { "N" => ap }, DATA_KEY => text_string(data),
+    };
+    Some(doc.add_object(d))
+}
+
 fn add_highlight(doc: &mut Document, page: ObjectId, g: &PageGeom, a: &Annotation, contents: &str, data: Option<&str>) -> ObjectId {
     let quads: Vec<[(f64, f64); 4]> = a.rects.iter().map(|&r| g.quad(r)).collect();
     let pts: Vec<(f64, f64)> = quads.iter().flatten().copied().collect();
@@ -324,6 +508,17 @@ pub fn write(bytes: &[u8], annots: &[Annotation], source_sha: &str) -> Result<Ve
         let Some(&page) = pages.get(&a.page) else { continue };
         let g = page_geom(&doc, page)?;
         let json = serde_json::to_string(a)?;
+        if a.kind == "text" {
+            if a.note.trim().is_empty() {
+                continue;
+            }
+            if let Some(id) = add_freetext(&mut doc, page, &g, a, &json) {
+                let mut list = annots_of(&doc, page);
+                list.push(Object::Reference(id));
+                doc.get_dictionary_mut(page)?.set("Annots", Object::Array(list));
+            }
+            continue;
+        }
         let sticky = a.kind == "note" && !a.note.trim().is_empty() || a.rects.is_empty();
         let mut ids = vec![];
         if !a.rects.is_empty() {
@@ -401,6 +596,12 @@ pub fn read(bytes: &[u8]) -> Result<Embedded> {
                 }
                 None => {
                     // No JSON (another tool rewrote the annotation): rebuild from geometry.
+                    if d.get(b"Subtype").and_then(|s| s.as_name()).is_ok_and(|s| s == b"FreeText") {
+                        let Some(r) = rect4(&doc, d.get(b"Rect").ok()) else { continue };
+                        let rects = vec![g.rect_of(&[(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])])];
+                        out.push(serde_json::from_value(serde_json::json!({ "id": id, "page": n, "kind": "text", "rects": rects })).expect("annotation"));
+                        continue;
+                    }
                     let mut rects = vec![];
                     if let Some(q) = d.get(b"QuadPoints").ok().and_then(|q| doc.dereference(q).ok()).and_then(|(_, q)| q.as_array().ok()) {
                         let v: Vec<f64> = q.iter().filter_map(|x| num(&doc, x)).collect();
@@ -580,5 +781,177 @@ mod tests {
         // The source is untouched; a plain PDF carries nothing.
         assert_eq!(src, rotated_demo());
         assert!(read(&crate::synth::demo_paper()).unwrap().is_empty());
+    }
+
+    fn text_note(id: &str, page: u32, r: [f64; 4], text: &str) -> Annotation {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "page": page, "kind": "text", "rects": [r], "note": text,
+            "created_at": "2026-11-11T09:00:00+08:00", "updated_at": "2026-11-11T09:00:00+08:00",
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn wrap_breaks_latin_at_spaces_and_cjk_anywhere() {
+        assert_eq!(wrap("", 100.0), vec![""]);
+        assert_eq!(wrap("a\n\nb", 100.0), vec!["a", "", "b"]);
+        // 10 pt: "hello " ≈ 24.5 pt, so two words fit in 55 pt, three do not.
+        assert_eq!(wrap("hello hello hello", 55.0), vec!["hello hello", "hello"]);
+        // CJK: 10 pt per character.
+        assert_eq!(wrap("一二三四五六七", 30.0), vec!["一二三", "四五六", "七"]);
+        assert_eq!(wrap("看 Dice 係數", 45.0), vec!["看 Dice", "係數"]);
+        // A word wider than the box is cut.
+        let w = wrap("Supercalifragilistic", 40.0);
+        assert!(w.len() > 1 && w.iter().all(|l| text_width(l) <= 40.0), "{w:?}");
+        assert_eq!(w.concat(), "Supercalifragilistic");
+    }
+
+    /// Page `n` of `pdf` rendered by poppler at 72 dpi (1 px = 1 pt of the displayed page),
+    /// as (width, height, rgb), or None when pdftoppm is not installed.
+    fn render(pdf: &[u8], n: u32) -> Option<(usize, usize, Vec<u8>)> {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("x.pdf");
+        std::fs::write(&f, pdf).unwrap();
+        let out = dir.path().join("p");
+        let ok = std::process::Command::new("pdftoppm")
+            .args(["-r", "72", "-cropbox", "-f", &n.to_string(), "-l", &n.to_string(), "-singlefile"])
+            .arg(&f)
+            .arg(&out)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?
+            .success();
+        assert!(ok, "pdftoppm failed");
+        let b = std::fs::read(dir.path().join("p.ppm")).unwrap();
+        // P6\n<w> <h>\n255\n<rgb…>
+        let mut fields = vec![];
+        let mut i = 0;
+        while fields.len() < 4 {
+            while b[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let s = i;
+            while !b[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            fields.push(String::from_utf8_lossy(&b[s..i]).to_string());
+        }
+        let (w, h) = (fields[1].parse().unwrap(), fields[2].parse().unwrap());
+        Some((w, h, b[i + 1..].to_vec()))
+    }
+
+    /// Ink pixels (dark grey) inside the displayed rect `r` (fractions), shrunk by 2 px, and
+    /// their bounding box in px relative to the rect's top-left; plus whether the note fill shows.
+    fn ink_in(img: &(usize, usize, Vec<u8>), r: [f64; 4]) -> (usize, [usize; 4], bool) {
+        let (w, h, px) = img;
+        let (x0, y0) = ((r[0] * *w as f64) as usize + 2, (r[1] * *h as f64) as usize + 2);
+        let (x1, y1) = ((r[2] * *w as f64) as usize - 2, (r[3] * *h as f64) as usize - 2);
+        let (mut n, mut bb, mut fill) = (0, [usize::MAX, usize::MAX, 0, 0], false);
+        for y in y0..y1.min(*h) {
+            for x in x0..x1.min(*w) {
+                let p = &px[(y * w + x) * 3..][..3];
+                if p.iter().all(|&c| c < 110) {
+                    n += 1;
+                    bb = [bb[0].min(x - x0), bb[1].min(y - y0), bb[2].max(x - x0), bb[3].max(y - y0)];
+                }
+                fill |= p[0] > 245 && p[1] > 235 && (180..225).contains(&p[2]);
+            }
+        }
+        (n, bb, fill)
+    }
+
+    #[test]
+    fn text_notes_export_as_freetext_with_appearance() {
+        let src = rotated_demo();
+        let list = vec![
+            text_note("t1", 1, [0.1, 0.86, 0.5, 0.9], "Check the Dice proof"),
+            text_note("t2", 1, [0.55, 0.86, 0.9, 0.9], "要再查證明"),
+            text_note("t3", 2, [0.1, 0.1, 0.45, 0.16], "旋轉頁 rotate"),
+            text_note("t4", 3, [0.2, 0.8, 0.6, 0.86], "裁切與二七〇"),
+            text_note("t5", 1, [0.1, 0.1, 0.2, 0.12], "  "),
+        ];
+        let sha = "cd".repeat(32);
+        let out = write(&src, &list, &sha).unwrap();
+        let doc = load(&out).unwrap();
+        let pages = doc.get_pages();
+        let p1 = annots_of(&doc, pages[&1]);
+        assert_eq!(p1.len(), 2, "the blank note is not written");
+        let d = annot_dict(&doc, &p1[1]).unwrap();
+        assert_eq!(d.get(b"Subtype").unwrap().as_name().unwrap(), b"FreeText");
+        assert_eq!(text_of(&doc, d, b"NM").as_deref(), Some("lr:t2"));
+        assert_eq!(text_of(&doc, d, b"Contents").as_deref(), Some("要再查證明"));
+        assert!(text_of(&doc, d, b"DA").unwrap().starts_with("/Helv 10 Tf"));
+        let ap = doc.get_object(d.get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap().as_reference().unwrap()).unwrap().as_stream().unwrap();
+        let fonts = ap.dict.get(b"Resources").unwrap().as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap();
+        let cjk = doc.get_dictionary(fonts.get(b"CJK").unwrap().as_reference().unwrap()).unwrap();
+        assert_eq!(cjk.get(b"Encoding").unwrap().as_name().unwrap(), b"UniCNS-UTF16-H");
+        // 要 = U+8981 in UTF-16BE inside the content.
+        assert!(String::from_utf8_lossy(&ap.content).contains("/CJK 10 Tf <8981"), "{}", String::from_utf8_lossy(&ap.content));
+        // Rect of t1 on the unrotated Letter page: x 61.2…, top at 792·(1 − 0.86).
+        let r = rect4(&doc, annot_dict(&doc, &p1[0]).unwrap().get(b"Rect").ok()).unwrap();
+        assert!((r[0] - 61.2).abs() < 0.01 && (r[3] - 110.88).abs() < 0.01, "{r:?}");
+        // Rotated pages: the form turns with /Rotate.
+        let m = |n: u32| {
+            let a = annots_of(&doc, pages[&n]);
+            let d = annot_dict(&doc, &a[0]).unwrap();
+            let ap = doc.get_object(d.get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap().as_reference().unwrap()).unwrap().as_stream().unwrap();
+            ap.dict.get(b"Matrix").unwrap().as_array().unwrap().iter().map(|x| x.as_float().unwrap() as f64).collect::<Vec<_>>()
+        };
+        assert_eq!(m(2), vec![0.0, 1.0, -1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(m(3), vec![0.0, -1.0, 1.0, 0.0, 0.0, 0.0]);
+
+        // Round trip: exact through the JSON; without it, rebuilt from /Rect and /Contents.
+        let e = read(&out).unwrap();
+        assert_eq!(e.annotations, list[..4].to_vec());
+        let mut doc = load(&out).unwrap();
+        for (_, page) in doc.get_pages() {
+            for o in annots_of(&doc, page) {
+                let id = o.as_reference().unwrap();
+                let d = doc.get_dictionary_mut(id).unwrap();
+                d.remove(DATA_KEY.as_bytes());
+                if text_of_raw(d, b"NM").as_deref() == Some("lr:t3") {
+                    d.set("Contents", text_string("改過的文字"));
+                }
+            }
+        }
+        let mut bare = vec![];
+        doc.save_to(&mut bare).unwrap();
+        let e = read(&bare).unwrap();
+        assert_eq!(e.annotations.len(), 4);
+        for (a, b) in e.annotations.iter().zip(&list) {
+            assert_eq!((a.id.as_str(), a.kind.as_str(), a.page), (b.id.as_str(), "text", b.page));
+            // left/top/width as written (the height may have grown to fit the text)
+            let (x, y) = (a.rects[0], b.rects[0]);
+            assert!((x[0] - y[0]).abs() < 1e-3 && (x[1] - y[1]).abs() < 1e-3 && (x[2] - y[2]).abs() < 1e-3, "{x:?} vs {y:?}");
+        }
+        assert_eq!(e.annotations[2].note, "改過的文字");
+        // Re-export replaces, strip removes.
+        assert_eq!(read(&write(&out, &list[..1], &sha).unwrap()).unwrap().annotations, list[..1].to_vec());
+        assert!(read(&strip(&out).unwrap()).unwrap().annotations.is_empty());
+
+        // What a viewer shows (poppler; Preview uses the same /AP): ink inside every box,
+        // one upright line at the top-left for the single-line notes.
+        let Some(img1) = render(&out, 1) else {
+            eprintln!("pdftoppm not installed: rendering check skipped");
+            return;
+        };
+        let geom = |n: u32| page_geom(&doc, doc.get_pages()[&n]).unwrap();
+        for (img, a) in [(&img1, &list[0]), (&img1, &list[1]), (&render(&out, 2).unwrap(), &list[2]), (&render(&out, 3).unwrap(), &list[3])] {
+            assert_eq!((img.0, img.1), { let (w, h) = geom(a.page).display_size(); (w.round() as usize, h.round() as usize) });
+            let (r, lines) = text_layout(&geom(a.page), a.rects[0], &a.note);
+            assert_eq!(lines.len(), 1, "{}", a.note);
+            let (n, bb, fill) = ink_in(img, r);
+            assert!(fill, "{}: no note fill", a.id);
+            assert!(n > 25, "{}: {n} ink pixels", a.id);
+            assert!(bb[2] - bb[0] > 3 * (bb[3] - bb[1]), "{}: not one horizontal line {bb:?}", a.id);
+            assert!(bb[0] < 6 && bb[1] < 8, "{}: text not at the top-left {bb:?}", a.id);
+        }
+        // Nothing there in the plain PDF's render of the CJK box: the ink is the note's.
+        let (n0, _, fill0) = ink_in(&render(&src, 1).unwrap(), text_layout(&geom(1), list[1].rects[0], &list[1].note).0);
+        assert!(n0 == 0 && !fill0, "{n0}");
+    }
+
+    fn text_of_raw(d: &Dictionary, k: &[u8]) -> Option<String> {
+        Some(decode_text_string(d.get(k).ok()?.as_str().ok()?))
     }
 }

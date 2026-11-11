@@ -18,11 +18,13 @@
 //! `annotations.json`
 //! ```json
 //! { "schema": "lorereader.annotations/1", "annotations": [
-//!   { "id": "a…", "page": 3, "kind": "highlight" | "note", "color": "yellow",
+//!   { "id": "a…", "page": 3, "kind": "highlight" | "note" | "text", "color": "yellow",
 //!     "quote": { "exact": "…", "prefix": "…", "suffix": "…" },
 //!     "rects": [[x0, y0, x1, y1], …],          // fractions of the page box, top-left origin
 //!     "note": "…", "created_at": "…", "updated_at": "…" } ] }
 //! ```
+//! `kind: "text"` is a text box placed anywhere on the page (double-click): one rect = the
+//! box, `note` = its text, `quote` empty, `color` unused (the box colour is fixed).
 //! `quotes.json` (citable sentences; PaperComposer will read this format)
 //! ```json
 //! { "schema": "lorereader.quotes/1", "quotes": [
@@ -147,6 +149,8 @@ fn yellow() -> String {
 }
 
 pub const COLORS: [&str; 4] = ["yellow", "green", "blue", "pink"];
+/// Annotation kinds: a highlight, a highlight with a note, a text box placed on the page.
+pub const KINDS: [&str; 3] = ["highlight", "note", "text"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CitableQuote {
@@ -221,6 +225,21 @@ struct ChatFile {
 pub struct AnnotationPatch {
     pub color: Option<String>,
     pub note: Option<String>,
+    /// New rects (a text box moved or resized).
+    #[serde(default)]
+    pub rects: Option<Vec<[f64; 4]>>,
+}
+
+/// Rects as page fractions: each clamped to [0, 1] and ordered (x0 ≤ x1, y0 ≤ y1).
+fn clean_rects(rects: &mut [[f64; 4]]) -> Result<()> {
+    for r in rects.iter_mut() {
+        if r.iter().any(|x| !x.is_finite()) {
+            return Err(Error::Invalid("位置不是數字".into()));
+        }
+        let c = |x: f64| x.clamp(0.0, 1.0);
+        *r = [c(r[0].min(r[2])), c(r[1].min(r[3])), c(r[0].max(r[2])), c(r[1].max(r[3]))];
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -346,12 +365,16 @@ impl Papers {
         if a.page == 0 {
             return Err(Error::Invalid("頁碼從 1 開始".into()));
         }
-        if !matches!(a.kind.as_str(), "highlight" | "note") {
-            return Err(Error::Invalid("kind 只能是 highlight 或 note".into()));
+        if !KINDS.contains(&a.kind.as_str()) {
+            return Err(Error::Invalid("kind 只能是 highlight、note 或 text".into()));
         }
         check_color(&a.color)?;
+        clean_rects(&mut a.rects)?;
         if a.quote.exact.trim().is_empty() && a.rects.is_empty() {
             return Err(Error::Invalid("註記需要選取的文字或位置".into()));
+        }
+        if a.kind == "text" && (a.rects.len() != 1 || a.note.trim().is_empty()) {
+            return Err(Error::Invalid("文字框需要一個位置和文字".into()));
         }
         let now = crate::now();
         a.id = crate::new_id("a");
@@ -372,6 +395,13 @@ impl Papers {
         }
         if let Some(n) = patch.note {
             a.note = n;
+        }
+        if let Some(mut r) = patch.rects {
+            clean_rects(&mut r)?;
+            if r.is_empty() || a.kind == "text" && r.len() != 1 {
+                return Err(Error::Invalid("位置不對".into()));
+            }
+            a.rects = r;
         }
         a.updated_at = crate::now();
         let out = a.clone();
@@ -401,7 +431,7 @@ impl Papers {
             if !COLORS.contains(&a.color.as_str()) {
                 a.color = "yellow".into();
             }
-            if !matches!(a.kind.as_str(), "highlight" | "note") {
+            if !KINDS.contains(&a.kind.as_str()) {
                 a.kind = "highlight".into();
             }
             if a.id.is_empty() {
@@ -590,15 +620,27 @@ mod tests {
             .add_annotation(&sha, Annotation { id: String::new(), page: 2, kind: "highlight".into(), color: "green".into(), quote: TextQuote { exact: "Dice".into(), prefix: "the ".into(), suffix: " score".into() }, rects: vec![[0.1, 0.2, 0.3, 0.25]], note: String::new(), created_at: String::new(), updated_at: String::new(), extra: Map::new() })
             .unwrap();
         assert!(a.id.starts_with('a'));
-        let u = ps.update_annotation(&sha, &a.id, AnnotationPatch { note: Some("重要".into()), color: None }).unwrap();
+        let u = ps.update_annotation(&sha, &a.id, AnnotationPatch { note: Some("重要".into()), ..Default::default() }).unwrap();
         assert_eq!(u.note, "重要");
-        assert!(ps.update_annotation(&sha, &a.id, AnnotationPatch { color: Some("red".into()), note: None }).is_err());
+        assert!(ps.update_annotation(&sha, &a.id, AnnotationPatch { color: Some("red".into()), ..Default::default() }).is_err());
 
         // An unknown top-level field survives our writes.
         let p = d.path().join(&sha).join("annotations.json");
         let mut v: Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
         v["future"] = 1.into();
         std::fs::write(&p, serde_json::to_vec(&v).unwrap()).unwrap();
+        // A text box: one rect, text in `note`; moved with `rects`, clamped to the page.
+        let tb: Annotation = serde_json::from_value(serde_json::json!({ "page": 1, "kind": "text", "rects": [[0.5, 0.4, 0.2, 0.3]], "note": "看這裡" })).unwrap();
+        let t = ps.add_annotation(&sha, tb.clone()).unwrap();
+        assert_eq!((t.kind.as_str(), t.rects[0]), ("text", [0.2, 0.3, 0.5, 0.4]));
+        assert!(ps.add_annotation(&sha, Annotation { note: " ".into(), ..tb.clone() }).is_err(), "an empty text box is not kept");
+        assert!(ps.add_annotation(&sha, Annotation { kind: "box".into(), ..tb.clone() }).is_err());
+        let m = ps.update_annotation(&sha, &t.id, AnnotationPatch { rects: Some(vec![[0.9, 0.9, 1.2, 0.95]]), ..Default::default() }).unwrap();
+        assert_eq!(m.rects, vec![[0.9, 0.9, 1.0, 0.95]]);
+        assert!(ps.update_annotation(&sha, &t.id, AnnotationPatch { rects: Some(vec![]), ..Default::default() }).is_err());
+        assert_eq!(ps.merge_annotations(&sha, vec![Annotation { updated_at: "9999".into(), note: "改".into(), ..m.clone() }]).unwrap(), 1);
+        assert_eq!(ps.annotations(&sha).unwrap().iter().find(|x| x.id == t.id).unwrap().kind, "text");
+        ps.delete_annotation(&sha, &t.id).unwrap();
         ps.delete_annotation(&sha, &a.id).unwrap();
         let v: Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
         assert_eq!((v["future"].as_i64(), v["annotations"].as_array().unwrap().len()), (Some(1), 0));
@@ -627,7 +669,7 @@ mod tests {
         ps.set_exported(&other, &ps.annotations_hash(&other).unwrap(), Some("/x/y (筆記).pdf")).unwrap();
         assert!(!ps.is_dirty(&other).unwrap());
         assert_eq!(ps.export_state(&other).unwrap().unwrap().path.as_deref(), Some("/x/y (筆記).pdf"));
-        ps.update_annotation(&other, &n1.id, AnnotationPatch { note: Some("two".into()), color: None }).unwrap();
+        ps.update_annotation(&other, &n1.id, AnnotationPatch { note: Some("two".into()), ..Default::default() }).unwrap();
         assert!(ps.is_dirty(&other).unwrap());
         ps.set_declined(&other).unwrap();
         assert!(!ps.is_dirty(&other).unwrap());
