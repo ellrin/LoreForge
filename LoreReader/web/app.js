@@ -2320,7 +2320,7 @@ async function generalTab(el) {
 /** A KnowledgeBase card: `lore-kb://node/<id>` (the app), else the KB's http address. */
 function openKbCard(id) {
   const port = +new URL(S.info?.kb_url ?? "http://127.0.0.1:7700").port;
-  if (port) LoreLinks.ports.kb = port;
+  if (port && !LoreLinks.live?.kb) LoreLinks.ports.kb = port;
   LoreLinks.open("kb", { node: id });
 }
 

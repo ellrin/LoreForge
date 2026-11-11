@@ -2060,6 +2060,7 @@ name = "lore-home"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "toml 0.8.23",
 ]
 
@@ -3654,6 +3655,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "slidecomposer"
 version = "0.1.0"
 dependencies = [
+ "lore-home",
  "sc-server",
  "tauri",
  "tauri-build",

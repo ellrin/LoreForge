@@ -90,6 +90,7 @@ fn main() {
                 rx.recv()??
             };
 
+            lore_home::ports::register("kb", addr.port());
             let url = url::Url::parse(&format!("http://{addr}/"))?;
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                 .title("KnowledgeBase")
@@ -117,4 +118,19 @@ fn main() {
             #[cfg(not(any(target_os = "macos", target_os = "ios")))]
             let _ = (app, event);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn link_hash_and_plist() {
+        let h = |s: &str| link_hash(&url::Url::parse(s).unwrap());
+        assert_eq!(h("lore-kb://node/abc-1"), Some("#/node/abc-1".into()));
+        assert_eq!(h("lore-kb://node/"), None);
+        assert_eq!(h("lore-kb://other/x"), None);
+        let plist = include_str!("../Info.plist");
+        assert!(plist.contains("CFBundleURLTypes") && plist.contains("<string>lore-kb</string>"));
+    }
 }

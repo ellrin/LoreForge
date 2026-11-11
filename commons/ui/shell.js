@@ -562,8 +562,9 @@
 //   lore-<app>://                       the app's home
 // open(): the desktop shell's hook (window.LoreDesktop.openUrl) when there is
 // one, else POST /api/links/open { url } on this app's server (it hands the URL
-// to the OS), else the http address in a new window. The ports are the dev
-// servers' defaults; a desktop app on a free port overrides LoreLinks.ports.
+// to the OS: it starts the app when it is not running), else the http address in a new
+// window. The ports are the dev servers' defaults; LoreLinks.ports is overridden by what
+// the running desktop apps recorded (ready / refresh()); ensure(app) opens and waits.
 (() => {
   const enc = encodeURIComponent;
   const ports = { pc: 7878, sc: 7880, lr: 7890, kb: 7700 };
@@ -588,5 +589,35 @@
     } catch {}
     window.open(u.http, "_blank", "noopener");
   }
-  window.LoreLinks = { url, open, ports };
+  // The desktop apps run on free ports and record them (GET /api/links/ports, from the
+  // servers' shared runtime file): fetched once at startup, then on demand.
+  const live = {};
+  async function refresh() {
+    try {
+      const r = await fetch("/api/links/ports", { cache: "no-store" });
+      if (r.ok) {
+        const m = await r.json();
+        for (const k of Object.keys(live)) delete live[k];
+        for (const [app, port] of Object.entries(m ?? {})) if (Number.isInteger(port) && port > 0 && port < 65536) { live[app] = port; ports[app] = port; }
+      }
+    } catch {}
+    return live;
+  }
+  // The other app's port: when it is not running, open it (the scheme starts the app) and
+  // wait for its port to appear. onWait() fires once when the wait starts. null = it did not come.
+  async function ensure(app, { timeout = 20000, onWait } = {}) {
+    await refresh();
+    if (live[app]) return live[app];
+    onWait?.();
+    await open(app);
+    const end = Date.now() + timeout;
+    while (Date.now() < end) {
+      await new Promise((ok) => setTimeout(ok, 500));
+      await refresh();
+      if (live[app]) return live[app];
+    }
+    return null;
+  }
+  const ready = refresh();
+  window.LoreLinks = { url, open, ports, live, ready, refresh, ensure };
 })();

@@ -138,7 +138,10 @@ LoreLinks.open(app, params) · LoreLinks.url(app, params) · LoreLinks.ports
 
 `lore-<app>://` 不帶路徑＝開那個 app 的首頁。`open()` 依序：桌面版注入的 `window.LoreDesktop.openUrl(url)` →
 本 app 伺服器的 `POST /api/links/open {url}`（只接受 `lore-(pc|sc|lr|kb)://`，交給系統開啟，成功 204）→ 新視窗開 http 備援。
-桌面版用的是空閒埠，要改 `LoreLinks.ports`。註冊 URL scheme（Info.plist）各 app 之後自己做。
+桌面版用的是空閒埠：各桌面 app 綁埠時把 `{port, pid}` 寫進 OS 快取資料夾的 `LoreForge/ports.json`（lore-home `ports`，死掉的 pid 忽略），
+`GET /api/links/ports`（lore-engines）回傳還在跑的 `{ pc, sc, lr, kb }`，`LoreLinks` 啟動時取一次並覆寫 `LoreLinks.ports`
+（`LoreLinks.live` ＝ 實際在跑的、`refresh()`、`ready`）。`LoreLinks.ensure(app, { timeout, onWait })`：沒在跑就用 scheme 開起來，等埠出現（預設 20 秒），回傳埠或 null。
+四個桌面 app 的 Info.plist 都註冊了 `lore-<app>://`，`RunEvent::Opened` 把它轉成頁面（`/?open=`、`/?deck=`、`/?paper=&page=`、`/#/node/`）。
 
 ### 模型：`GET/PUT /api/engines`
 

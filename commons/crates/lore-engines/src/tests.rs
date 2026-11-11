@@ -235,6 +235,26 @@ async fn merges_into_an_app_router_with_its_own_state() {
     shared::uninstall();
 }
 
+#[tokio::test]
+async fn links_ports_lists_the_live_apps() {
+    let _g = SERIAL.lock().await;
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("ports.json");
+    let mut e = engines(d.path());
+    // isolated: no ports file, nothing live
+    let app: axum::Router = router(e.clone());
+    let (st, v) = call(&app, "GET", "/api/links/ports", None).await;
+    assert_eq!((st, v), (StatusCode::OK, json!({})));
+    lore_home::ports::register_at(&f, "sc", 51234, std::process::id()).unwrap();
+    lore_home::ports::register_at(&f, "pc", 51235, u32::MAX - 1).unwrap();
+    e.ports_file = Some(f);
+    let app: axum::Router = router(e);
+    let (st, v) = call(&app, "GET", "/api/links/ports", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v, json!({ "sc": 51234 }), "the dead pc entry is ignored");
+    shared::uninstall();
+}
+
 #[test]
 fn every_shared_task_has_a_class() {
     for (name, toml) in [("lore-llm", include_str!("../../lore-llm/tasks.toml")), ("lore-flow", include_str!("../../lore-flow/tasks.toml"))] {

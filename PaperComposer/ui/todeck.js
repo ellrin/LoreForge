@@ -118,6 +118,14 @@ const PCToDeck = (() => {
     return s;
   }
 
+  /** SlideComposer's port: running already, else opened and waited for (「正在開啟 SlideComposer…」). */
+  async function reach(wait) {
+    await LoreLinks.refresh();
+    if (LoreLinks.live.sc) return;
+    try { if ((await fetch(`${sc()}/api/info`)).ok) return; } catch {}
+    if (!(await LoreLinks.ensure("sc", { onWait: wait }))) throw Object.assign(new Error("SlideComposer 沒有開啟"), { open: true });
+  }
+
   async function bases() {
     const r = await fetch(`${sc()}/api/info`);
     if (!r.ok) throw new Error(String(r.status));
@@ -146,7 +154,10 @@ const PCToDeck = (() => {
     card.append(row, h("div", { class: "tdk-foot" }, go));
     place();
     let styles;
-    try { styles = await bases(); } catch {
+    try {
+      await reach(() => { list.textContent = ""; list.append(h("span", { class: "tdk-note" }, "正在開啟 SlideComposer…")); place(); });
+      styles = await bases();
+    } catch {
       if (!card) return;
       list.textContent = "";
       list.append(h("span", { class: "tdk-note" }, "SlideComposer 沒有開啟"));
@@ -183,6 +194,7 @@ const PCToDeck = (() => {
       const src = await (await fetch(`/api/papers/${encodeURIComponent(name)}/todeck`)).json();
       if (!src.path) throw new Error(src.error ?? "找不到論文資料夾");
       const body = { source: { kind: "pc", path: src.path }, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), style: pref.get("style"), engine };
+      await reach(() => LoreShell.toast("正在開啟 SlideComposer…"));
       let r;
       try {
         r = await fetch(`${sc()}/api/todeck`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });

@@ -2066,6 +2066,7 @@ name = "lore-home"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "toml 0.8.23",
 ]
 
@@ -2111,6 +2112,7 @@ version = "0.1.0"
 name = "lorereader"
 version = "0.1.0"
 dependencies = [
+ "lore-home",
  "lr-core",
  "lr-server",
  "serde_json",

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the bundle's Info.plist by tauri build: lore-pc:// opens PaperComposer (lore-pc://open?path=<file>
+     opens that paper) -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>io.github.ellrin.papercomposer</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>lore-pc</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>

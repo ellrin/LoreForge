@@ -13,6 +13,54 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 struct Opener {
     addr: Mutex<Option<std::net::SocketAddr>>,
     pending: Mutex<Vec<PathBuf>>,
+    /// `lore-pc://` pages that arrived before the server did.
+    pending_pages: Mutex<Vec<String>>,
+}
+
+/// `/?k=v&…` with the values percent-encoded.
+fn page(pairs: &[(&str, &str)]) -> String {
+    let mut u = url::Url::parse("http://x/").expect("url");
+    u.query_pairs_mut().extend_pairs(pairs);
+    format!("/?{}", u.query().unwrap_or_default())
+}
+
+/// The page a `lore-pc://` link stands for: `lore-pc://` → `/`, `lore-pc://open?path=<file>` → `/?open=<file>`.
+fn link_page(u: &url::Url) -> Option<String> {
+    if u.scheme() != "lore-pc" {
+        return None;
+    }
+    match u.host_str().unwrap_or("") {
+        "" => Some("/".into()),
+        "open" => {
+            let path = u.query_pairs().find(|(k, _)| k == "path").map(|(_, v)| v.into_owned()).filter(|v| !v.is_empty())?;
+            Some(page(&[("open", &path)]))
+        }
+        _ => None,
+    }
+}
+
+fn open_link(app: &AppHandle, u: url::Url) {
+    let Some(pg) = link_page(&u) else {
+        eprintln!("not a PaperComposer link: {u}");
+        return;
+    };
+    let st = app.state::<Opener>();
+    let Some(addr) = *st.addr.lock().unwrap() else {
+        st.pending_pages.lock().unwrap().push(pg);
+        return;
+    };
+    navigate_page(app, addr, &pg);
+}
+
+fn navigate_page(app: &AppHandle, addr: std::net::SocketAddr, pg: &str) {
+    if let Ok(target) = url::Url::parse(&format!("http://{addr}{pg}"))
+        && let Some(w) = app.get_webview_window("main")
+    {
+        let _ = w.navigate(target);
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
 }
 
 fn open_file(app: &AppHandle, path: PathBuf) {
@@ -92,11 +140,16 @@ fn main() {
                 .min_inner_size(1000.0, 640.0)
                 .build()?;
             // files Finder handed over while starting up
+            lore_home::ports::register("pc", addr.port());
             *app.state::<Opener>().addr.lock().unwrap() = Some(addr);
             let pending: Vec<PathBuf> = std::mem::take(&mut *app.state::<Opener>().pending.lock().unwrap());
             // one page at a time: the last file wins
             if let Some(p) = pending.into_iter().last() {
                 open_file(app.handle(), p);
+            }
+            let pages: Vec<String> = std::mem::take(&mut *app.state::<Opener>().pending_pages.lock().unwrap());
+            if let Some(pg) = pages.into_iter().last() {
+                navigate_page(app.handle(), addr, &pg);
             }
             Ok(())
         })
@@ -113,7 +166,9 @@ fn main() {
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             if let RunEvent::Opened { urls } = event {
                 for u in urls {
-                    if let Ok(p) = u.to_file_path() {
+                    if u.scheme() == "lore-pc" {
+                        open_link(app, u);
+                    } else if let Ok(p) = u.to_file_path() {
                         open_file(app, p);
                     }
                 }
@@ -121,4 +176,29 @@ fn main() {
             #[cfg(not(any(target_os = "macos", target_os = "ios")))]
             let _ = (app, event);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(s: &str) -> Option<String> {
+        link_page(&url::Url::parse(s).unwrap())
+    }
+
+    #[test]
+    fn links_map_to_pages() {
+        assert_eq!(p("lore-pc://"), Some("/".into()));
+        assert_eq!(p("lore-pc://open?path=%2Ftmp%2Fa%20b%2Fmain.tex"), Some("/?open=%2Ftmp%2Fa+b%2Fmain.tex".into()));
+        assert_eq!(p("lore-pc://open"), None);
+        assert_eq!(p("lore-pc://open?path="), None);
+        assert_eq!(p("lore-pc://other"), None);
+        assert_eq!(p("lore-sc://deck/x"), None);
+    }
+
+    #[test]
+    fn info_plist_registers_the_scheme() {
+        let plist = include_str!("../Info.plist");
+        assert!(plist.contains("CFBundleURLTypes") && plist.contains("<string>lore-pc</string>"));
+    }
 }

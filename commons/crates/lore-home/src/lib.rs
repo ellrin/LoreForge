@@ -29,6 +29,7 @@
 //! `lore-secrets`), and local models in `LOCAL_LLM_HOME` (see `lore-llm`).
 
 pub mod engine;
+pub mod ports;
 pub mod theme;
 
 use serde::Deserialize;

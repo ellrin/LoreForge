@@ -2335,6 +2335,7 @@ name = "lore-home"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "toml 0.8.23",
 ]
 
@@ -2889,6 +2890,7 @@ dependencies = [
 name = "papercomposer"
 version = "0.1.0"
 dependencies = [
+ "lore-home",
  "pc-server",
  "tauri",
  "tauri-build",

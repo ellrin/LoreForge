@@ -2018,6 +2018,7 @@ version = "0.1.0"
 dependencies = [
  "kb-core",
  "kb-server",
+ "lore-home",
  "tauri",
  "tauri-build",
  "tokio",
@@ -2175,6 +2176,7 @@ name = "lore-home"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "toml 0.8.23",
 ]
 

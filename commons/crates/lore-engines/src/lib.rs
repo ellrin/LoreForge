@@ -11,6 +11,7 @@
 //! - `PUT /api/engines` with the parts to change: `{ local: { model }, claude: { via, model },
 //!   routes: { create: "cloud" }, overrides: { "<task>": "local" } }` → the full GET body;
 //!   a bad value → 400 `{ "error": "一行中文" }` and nothing is written.
+//! - `GET /api/links/ports` → `{ "sc": 51234, … }`: the desktop apps running now (lore-home `ports`).
 //! - `POST /api/links/open { url }` → hands a `lore-(pc|sc|lr|kb)://` or
 //!   `http://127.0.0.1…` URL to the OS opener (204); anything else → 400.
 //!
@@ -63,6 +64,8 @@ pub struct Engines {
     /// [`router`] installs the shared file as the process routing (off: the settings page
     /// works, routing stays the tasks' own order; for app tests that must not depend on it).
     pub install_routing: bool,
+    /// The runtime ports file `GET /api/links/ports` reads (default: the OS cache dir's).
+    pub ports_file: Option<std::path::PathBuf>,
     /// Whether an API key exists, read once off the async threads (a keychain read can
     /// wait on a password prompt; it must never stall the server). Cleared by PUT.
     api_known: Arc<std::sync::Mutex<Option<bool>>>,
@@ -91,6 +94,7 @@ impl Engines {
             opener: Arc::new(os_open),
             probe: true,
             install_routing: true,
+            ports_file: lore_home::ports::default_path(),
             api_known: Arc::new(std::sync::Mutex::new(None)),
         }
     }
@@ -133,6 +137,7 @@ impl Engines {
         self.cli = Cli { bin: Some(std::env::temp_dir().join("lore-engines-no-claude")), config_dir: None };
         self.layout = None;
         self.probe = false;
+        self.ports_file = None;
         self.opener = Arc::new(|_| Err("isolated".into()));
         self
     }
@@ -398,7 +403,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(e: Engines) -> axum::Router<S> {
         install(&e.home);
     }
     let e = Arc::new(e);
-    let (g, p, o) = (e.clone(), e.clone(), e);
+    let (g, p, o, q) = (e.clone(), e.clone(), e.clone(), e);
     axum::Router::new()
         .route(
             "/api/engines",
@@ -416,6 +421,19 @@ pub fn router<S: Clone + Send + Sync + 'static>(e: Engines) -> axum::Router<S> {
                         Ok(()) => Json(e.state().await).into_response(),
                         Err(m) => bad(m),
                     }
+                }
+            }),
+        )
+        .route(
+            "/api/links/ports",
+            get(move || {
+                let e = q.clone();
+                async move {
+                    let live = match e.ports_file.clone() {
+                        Some(f) => tokio::task::spawn_blocking(move || lore_home::ports::live_at(&f)).await.unwrap_or_default(),
+                        None => Default::default(),
+                    };
+                    Json(live)
                 }
             }),
         )

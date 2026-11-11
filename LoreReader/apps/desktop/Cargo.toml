@@ -18,5 +18,6 @@ lr-core = { path = "../../crates/core" }
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 url = "2"
+lore-home.workspace = true
 serde_json.workspace = true
 tauri-plugin-dialog = "2"

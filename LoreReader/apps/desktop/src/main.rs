@@ -19,6 +19,66 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, Me
 struct Opener {
     addr: Mutex<Option<SocketAddr>>,
     pending: Mutex<Vec<PathBuf>>,
+    /// `lore-lr://` pages that arrived before the server did.
+    pending_pages: Mutex<Vec<String>>,
+}
+
+/// `v=<segment>` decoded the way a URL path segment is.
+fn decode(seg: &str) -> String {
+    url::form_urlencoded::parse(format!("v={}", seg.replace('+', "%2B")).as_bytes()).next().map(|(_, v)| v.into_owned()).unwrap_or_default()
+}
+
+/// `/?k=v&…` with the values percent-encoded.
+fn page(pairs: &[(&str, &str)]) -> String {
+    let mut u = url::Url::parse("http://x/").expect("url");
+    u.query_pairs_mut().extend_pairs(pairs);
+    format!("/?{}", u.query().unwrap_or_default())
+}
+
+/// The page a `lore-lr://` link stands for: `lore-lr://` → `/`,
+/// `lore-lr://paper/<sha256>?page=<n>` → `/?paper=<sha256>&page=<n>`.
+fn link_page(u: &url::Url) -> Option<String> {
+    if u.scheme() != "lore-lr" {
+        return None;
+    }
+    match u.host_str().unwrap_or("") {
+        "" => Some("/".into()),
+        "paper" => {
+            let sha = decode(u.path().trim_matches('/'));
+            if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            match u.query_pairs().find(|(k, _)| k == "page").and_then(|(_, v)| v.parse::<u32>().ok()).filter(|n| *n > 0) {
+                Some(n) => Some(page(&[("paper", &sha), ("page", &n.to_string())])),
+                None => Some(page(&[("paper", &sha)])),
+            }
+        }
+        _ => None,
+    }
+}
+
+fn open_link(app: &AppHandle, u: url::Url) {
+    let Some(pg) = link_page(&u) else {
+        eprintln!("not a LoreReader link: {u}");
+        return;
+    };
+    let st = app.state::<Opener>();
+    let Some(addr) = *st.addr.lock().unwrap() else {
+        st.pending_pages.lock().unwrap().push(pg);
+        return;
+    };
+    navigate_page(app, addr, &pg);
+}
+
+fn navigate_page(app: &AppHandle, addr: std::net::SocketAddr, pg: &str) {
+    if let Ok(target) = url::Url::parse(&format!("http://{addr}{pg}"))
+        && let Some(w) = app.get_webview_window("main")
+    {
+        let _ = w.navigate(target);
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
 }
 
 /// A JSON request to the server at `addr` (in-process or reused); the JSON reply.
@@ -295,10 +355,15 @@ fn main() {
                 .min_inner_size(900.0, 600.0)
                 .build()?;
             // files Finder handed over while starting up
+            lore_home::ports::register("lr", addr.port());
             *app.state::<Opener>().addr.lock().unwrap() = Some(addr);
             let pending: Vec<PathBuf> = std::mem::take(&mut *app.state::<Opener>().pending.lock().unwrap());
             for p in pending {
                 open_file(app.handle(), p);
+            }
+            let pages: Vec<String> = std::mem::take(&mut *app.state::<Opener>().pending_pages.lock().unwrap());
+            if let Some(pg) = pages.into_iter().last() {
+                navigate_page(app.handle(), addr, &pg);
             }
             Ok(())
         })
@@ -331,7 +396,9 @@ fn main() {
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             if let RunEvent::Opened { urls } = event {
                 for u in urls {
-                    if let Ok(p) = u.to_file_path() {
+                    if u.scheme() == "lore-lr" {
+                        open_link(app, u);
+                    } else if let Ok(p) = u.to_file_path() {
                         open_file(app, p);
                     }
                 }
@@ -339,4 +406,31 @@ fn main() {
             #[cfg(not(any(target_os = "macos", target_os = "ios")))]
             let _ = (app, event);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(s: &str) -> Option<String> {
+        link_page(&url::Url::parse(s).unwrap())
+    }
+
+    #[test]
+    fn info_plist_registers_the_scheme() {
+        let plist = include_str!("../Info.plist");
+        assert!(plist.contains("CFBundleURLTypes") && plist.contains("<string>lore-lr</string>"));
+    }
+
+    #[test]
+    fn links_map_to_pages() {
+        let sha = "ab".repeat(32);
+        assert_eq!(p("lore-lr://"), Some("/".into()));
+        assert_eq!(p(&format!("lore-lr://paper/{sha}?page=3")), Some(format!("/?paper={sha}&page=3")));
+        assert_eq!(p(&format!("lore-lr://paper/{sha}")), Some(format!("/?paper={sha}")));
+        assert_eq!(p(&format!("lore-lr://paper/{sha}?page=0")), Some(format!("/?paper={sha}")));
+        assert_eq!(p("lore-lr://paper/short?page=3"), None);
+        assert_eq!(p("lore-lr://paper/"), None);
+        assert_eq!(p("lore-kb://paper/x"), None);
+    }
 }

@@ -18,3 +18,4 @@ kb-core.workspace = true
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 url = "2"
+lore-home.workspace = true
