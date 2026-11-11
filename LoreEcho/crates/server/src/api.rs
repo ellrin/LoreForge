@@ -164,7 +164,7 @@ async fn character_get(State(s): State<Shared>, Path(id): Path<String>) -> Respo
     }
 }
 
-/// `{ name?, persona?, voice?, voice_rate?, theme_loop?, theme_volume?, profile? }`
+/// `{ name?, persona?, voice?, voice_rate?, voice_pitch?, theme_loop?, theme_volume?, profile? }`
 async fn character_put(State(s): State<Shared>, Path(id): Path<String>, body: Option<Json<characters::MetaPatch>>) -> Response {
     let Some(Json(p)) = body else { return bad(StatusCode::BAD_REQUEST, "要送 { name, persona, voice }") };
     let dir = match store_dir(&s) { Ok(d) => d, Err(r) => return r };
@@ -220,11 +220,9 @@ async fn theme_delete_song(State(s): State<Shared>, Path(id): Path<String>) -> R
     }
 }
 
-/// `?voice_ref=1`: the author's voice recording goes in too (left out by default).
-async fn character_export(State(s): State<Shared>, Path(id): Path<String>, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> Response {
+async fn character_export(State(s): State<Shared>, Path(id): Path<String>) -> Response {
     let Some(dir) = s.dir.as_deref() else { return bad(StatusCode::NOT_FOUND, "沒有這個人物") };
-    let with_ref = q.get("voice_ref").is_some_and(|v| v == "1" || v == "true");
-    match characters::export_with(dir, &id, with_ref) {
+    match characters::export(dir, &id) {
         Ok(zip) => ([(header::CONTENT_TYPE, "application/zip".to_string()), (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{id}.zip\""))], zip).into_response(),
         Err(e) => bad(StatusCode::NOT_FOUND, e),
     }
@@ -291,7 +289,7 @@ async fn chat_post(State(s): State<Shared>, body: Option<Json<chat::ChatBody>>) 
     // 朗讀回覆: the reply is spoken sentence by sentence as it streams (a new reply stops the old one)
     let speaker = (b.speak && s.voice.available()).then(|| {
         s.voice.stop_speaking();
-        s.voice.speaker_from(crate::charvoice::template(s.dir.as_deref(), &character))
+        s.voice.speaker_from(crate::voice::template(&character))
     });
     chat::stream(route, chat::request(&character, messages), Some(kb), speaker).into_response()
 }

@@ -15,6 +15,7 @@
 //! talk = "hold"       # the mic: "hold" = press and hold to talk, "continuous" = 常駐 (sentence by pause)
 //! auto_send = true    # a finished sentence is sent at once (false: it waits for ↵)
 //! read_aloud = true   # 朗讀回覆: replies are spoken
+//! text_follows = true # 文字跟著聲音: while a reply is read aloud, its line shows as it is spoken
 //! ```
 //!
 //! Writes are atomic (a temporary file, then a rename); keys this version does not know are
@@ -73,6 +74,8 @@ pub struct Settings {
     pub auto_send: bool,
     /// Speak the replies (朗讀回覆).
     pub read_aloud: bool,
+    /// 文字跟著聲音: with 朗讀回覆, the line appears as it is spoken (else at once).
+    pub text_follows: bool,
 }
 
 pub const TALK_HOLD: &str = "hold";
@@ -80,7 +83,7 @@ pub const TALK_CONTINUOUS: &str = "continuous";
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { character: None, shortcut: DEFAULT_SHORTCUT.into(), talk: TALK_HOLD.into(), auto_send: true, read_aloud: true }
+        Settings { character: None, shortcut: DEFAULT_SHORTCUT.into(), talk: TALK_HOLD.into(), auto_send: true, read_aloud: true, text_follows: true }
     }
 }
 
@@ -92,6 +95,7 @@ pub struct SettingsPatch {
     pub talk: Option<String>,
     pub auto_send: Option<bool>,
     pub read_aloud: Option<bool>,
+    pub text_follows: Option<bool>,
 }
 
 fn read_table(path: &Path) -> toml::Table {
@@ -213,9 +217,12 @@ pub fn set_settings(dir: &Path, p: &SettingsPatch) -> Result<Settings, String> {
     if let Some(v) = p.read_aloud {
         s.read_aloud = v;
     }
+    if let Some(v) = p.text_follows {
+        s.text_follows = v;
+    }
     let path = dir.join(SETTINGS_FILE);
     let mut t = read_table(&path);
-    merge(&mut t, &s, &["character", "shortcut", "talk", "auto_send", "read_aloud"]);
+    merge(&mut t, &s, &["character", "shortcut", "talk", "auto_send", "read_aloud", "text_follows"]);
     write_table(&path, &t).map_err(|e| format!("無法寫入 {SETTINGS_FILE}：{e}"))?;
     Ok(s)
 }
@@ -282,11 +289,13 @@ mod tests {
     fn voice_settings() {
         let d = tempfile::tempdir().unwrap();
         let s = settings(d.path());
-        assert_eq!((s.talk.as_str(), s.auto_send, s.read_aloud), (TALK_HOLD, true, true), "defaults");
+        assert_eq!((s.talk.as_str(), s.auto_send, s.read_aloud, s.text_follows), (TALK_HOLD, true, true, true), "defaults");
         let s = set_settings(d.path(), &SettingsPatch { talk: Some(TALK_CONTINUOUS.into()), auto_send: Some(false), ..Default::default() }).unwrap();
         assert_eq!((s.talk.as_str(), s.auto_send, s.read_aloud), (TALK_CONTINUOUS, false, true));
         assert_eq!(settings(d.path()), s);
         assert!(set_settings(d.path(), &SettingsPatch { talk: Some("shout".into()), ..Default::default() }).is_err());
+        let s = set_settings(d.path(), &SettingsPatch { text_follows: Some(false), ..Default::default() }).unwrap();
+        assert!(!s.text_follows && settings(d.path()) == s);
     }
 
     #[test]

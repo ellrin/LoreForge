@@ -7,9 +7,11 @@
 //! | GET | /api/voice/events | server-sent events, one per lore-voice `Event` (event name = its `type`) |
 //! | POST | /api/voice/listen | `{ continuous?, language? }` (language: the character's when missing) |
 //! | POST | /api/voice/listen/stop | press-and-hold released / 常駐 off: the last words come as `final` |
-//! | POST | /api/voice/speak | `{ text, voice?, rate?, character? }` → `{ id }` (試聽; the character's voice when missing) |
+//! | POST | /api/voice/speak | `{ text, voice?, rate?, pitch?, character? }` → `{ id }` (試聽; the character's voice when missing) |
 //! | POST | /api/voice/stop | stop speaking now (the queue is dropped) |
-//! | POST | /api/voice/open-settings | `{ what: "microphone" \| "speech" }`: System Settings at that privacy page (macOS, real engine only) |
+//! | POST | /api/voice/open-settings | `{ what: "microphone" \| "speech" \| "personal-voice" \| "voices" }`: System Settings at that page (macOS, real engine only) |
+//! | POST | /api/voice/warm | `{ character? }`: load the character's voice now, silently (the window opened) |
+//! | GET/POST | /api/voice/personal | Personal Voice: `{ status, voices }`; POST = 使用個人聲音 (the system's prompt when never asked) |
 //!
 //! A reply read aloud as it streams goes through `POST /api/chat { speak: true }` (`chat.rs`).
 
@@ -36,6 +38,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/voice/speak", post(speak))
         .route("/api/voice/stop", post(stop))
         .route("/api/voice/open-settings", post(open_settings))
+        .route("/api/voice/warm", post(warm))
+        .route("/api/voice/personal", get(personal_get).post(personal_ask))
 }
 
 fn bad(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -110,7 +114,13 @@ struct SpeakBody {
     text: String,
     voice: Option<String>,
     rate: Option<f64>,
+    pitch: Option<f64>,
     character: Option<String>,
+}
+
+/// How `c` speaks (the text is filled in per sentence).
+pub fn template(c: &crate::characters::Character) -> lore_voice::SpeakRequest {
+    lore_voice::SpeakRequest { voice: c.voice.clone(), rate: c.voice_rate, pitch: c.voice_pitch, language: c.language.clone(), ..Default::default() }
 }
 
 async fn speak(State(s): State<Shared>, body: Option<Json<SpeakBody>>) -> Response {
@@ -120,16 +130,17 @@ async fn speak(State(s): State<Shared>, body: Option<Json<SpeakBody>>) -> Respon
         return bad(StatusCode::BAD_REQUEST, "太長了");
     }
     let c = s.character(b.character.as_deref());
-    // the character's custom voice and pitch when it has one (crate::charvoice); a voice id
-    // asked for by name is a system voice (the 系統聲音 row's 試聽)
-    let mut req = crate::charvoice::template(s.dir.as_deref(), &c);
+    // the character's voice, rate and pitch unless the 試聽 asks for others (not saved yet)
+    let mut req = template(&c);
     req.text = text;
     if let Some(v) = b.voice {
         req.voice = v;
-        req.custom = None;
     }
     if let Some(r) = b.rate {
         req.rate = r;
+    }
+    if let Some(p) = b.pitch {
+        req.pitch = p;
     }
     match s.voice.speak(&req) {
         Ok(id) => Json(json!({ "id": id })).into_response(),
@@ -142,18 +153,58 @@ async fn stop(State(s): State<Shared>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
-/// The two privacy pages of System Settings (nothing else can be opened from here).
+/// The System Settings pages the page may open (nothing else can be opened from here):
+/// the two privacy pages, Accessibility → Personal Voice (make one; let apps ask to use it) and
+/// Accessibility → Spoken Content (download better system voices).
 pub fn settings_url(what: &str) -> Option<&'static str> {
     match what {
         "microphone" => Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"),
         "speech" => Some("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"),
+        "personal-voice" => Some("x-apple.systempreferences:com.apple.Accessibility-Settings.extension?PersonalVoice"),
+        "voices" => Some("x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent"),
         _ => None,
     }
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct WarmBody {
+    character: Option<String>,
+}
+
+/// The open window: get the character's voice ready (no sound) so the first reply starts sooner.
+async fn warm(State(s): State<Shared>, body: Option<Json<WarmBody>>) -> StatusCode {
+    let c = s.character(body.and_then(|Json(b)| b.character).as_deref());
+    s.voice.warm(&template(&c));
+    StatusCode::NO_CONTENT
+}
+
+fn personal_json(r: Result<lore_voice::PersonalVoice, String>, voice: &lore_voice::Voice) -> Response {
+    match r {
+        Ok(st) => {
+            // how many the author has made (listed only once allowed)
+            let made = if st == lore_voice::PersonalVoice::Authorized { voice.voices().map(|v| v.iter().filter(|x| x.personal).count()).unwrap_or(0) } else { 0 };
+            Json(json!({ "status": st, "voices": made })).into_response()
+        }
+        Err(e) => bad(StatusCode::SERVICE_UNAVAILABLE, e),
+    }
+}
+
+/// `{ status: not_determined | denied | unsupported | authorized, voices }` (asks nothing).
+async fn personal_get(State(s): State<Shared>) -> Response {
+    let v = s.voice.clone();
+    tokio::task::spawn_blocking(move || personal_json(v.personal_voice(false), &v)).await.unwrap_or_else(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// 使用個人聲音: the system's prompt (only when never asked), then the same as GET.
+async fn personal_ask(State(s): State<Shared>) -> Response {
+    let v = s.voice.clone();
+    tokio::task::spawn_blocking(move || personal_json(v.personal_voice(true), &v)).await.unwrap_or_else(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
 async fn open_settings(State(s): State<Shared>, body: Option<Json<Value>>) -> Response {
     let what = body.as_ref().and_then(|Json(b)| b["what"].as_str()).unwrap_or("").to_string();
-    let Some(url) = settings_url(&what) else { return bad(StatusCode::BAD_REQUEST, "what = microphone | speech") };
+    let Some(url) = settings_url(&what) else { return bad(StatusCode::BAD_REQUEST, "what = microphone | speech | personal-voice | voices") };
     // only with the real engine on macOS (tests and other systems open nothing)
     if s.voice.status().1 != "apple" || !cfg!(target_os = "macos") {
         return Json(json!({ "opened": false, "url": url })).into_response();

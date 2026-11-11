@@ -271,6 +271,7 @@ async function show(expanded, save = true) {
     setTimeout(() => p.classList.remove("opening"), 200);
     $("text").focus();
     scrollDown();
+    window.LoreVoice?.opened?.();                // the voice gets ready for the first reply
   }
 }
 
@@ -373,6 +374,8 @@ async function send(engine) {
   S.chip.actual("");   // until this reply says which model answers, the prediction shows
   S.chip.busy(true);
   let reply = "";
+  // 文字跟著聲音: the line shows as the voice says it (voice.js), else as it streams
+  const follow = window.LoreVoice?.follow?.(speak, setLine) ?? null;
   try {
     const r = await fetch("/api/chat", {
       method: "POST", headers: { "content-type": "application/json" }, signal: ctrl.signal,
@@ -387,14 +390,16 @@ async function send(engine) {
       if (ctrl.signal.aborted) return;
       if (ev === "search" || ev === "cards") window.LoreEchoKb?.event(ev, data);   // kbcards.js
       else if (ev === "start") { S.chip.actual(data.label); }
-      else if (ev === "delta") { if (!reply) { clearTimeout(S.timers.wait); setState("speaking"); } reply += data.text; setLine(reply, "pending"); }
+      else if (ev === "delta") { if (!reply) { clearTimeout(S.timers.wait); setState("speaking"); } reply += data.text; if (follow) follow.text(reply); else setLine(reply, "pending"); }
+      else if (ev === "say") follow?.say(data);
       else if (ev === "done") { reply = data.text || reply; }
-      else if (ev === "error") { if (reply) keep(reply); failed(data.error); return; }
+      else if (ev === "error") { follow?.all(); if (reply) keep(reply); failed(data.error); return; }
     }
-    if (reply.trim()) keep(reply);
-    else failed("沒有收到回答");
+    if (reply.trim()) keep(reply, follow);
+    else { follow?.all(); failed("沒有收到回答"); }
   } catch (e) {
     if (ctrl.signal.aborted) return;
+    follow?.all();
     if (reply) keep(reply);
     failed(e.message);
   } finally {
@@ -404,17 +409,18 @@ async function send(engine) {
       S.busy = null; $("send").disabled = false;
       const mood = reply.trim() ? moodOf(reply) : null;
       // the character keeps speaking while the voice reads the reply, then shows its mood
-      if (window.LoreVoice) window.LoreVoice.afterReply(speak && !!reply.trim(), () => { if (!S.busy) settle(mood); });
+      if (window.LoreVoice) window.LoreVoice.afterReply(speak && !!reply.trim(), () => { follow?.all(); if (!S.busy) settle(mood); });
       else settle(mood);
     }
   }
 }
 
-/** A finished (or cut-off) reply: part of the conversation, shown in the box. */
-function keep(reply) {
+/** A finished (or cut-off) reply: part of the conversation (whole, for the history), shown in
+ *  the box (as the voice reaches it with 文字跟著聲音). */
+function keep(reply, follow) {
   S.msgs.push({ role: "assistant", text: reply });
   S.line = reply;
-  setLine(reply);
+  if (follow) follow.final(reply); else setLine(reply);
 }
 
 /** A problem: in the box when nothing was said, else under the history; with

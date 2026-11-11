@@ -56,9 +56,12 @@ state.toml                       泡泡的位置、是否展開
 - 麥克風預設「按住說話」：按住時人物是 listening，說的話即時出現在輸入框（接在原本打的字後面），放開就送出。
   齒輪 →「一般」→ 語音 可以改成「常駐」（按一下開、再按一下關，說完一句停一下就送出；回答和朗讀時先停聽，結束後再接著聽），
   也可以關掉「說完就送出」（改成留在輸入框等你按 ↵）。
-- 朗讀回覆：回答一邊串流一邊一句一句念出來，人物在念完之前都是 speaking；Esc 或點人物停止。
+- 朗讀回覆：回答一邊串流一邊一句一句念出來（第一句念到第一個逗號就先開始），人物在念完之前都是 speaking；Esc 或點人物停止。
+  「文字跟著聲音」（齒輪 → 一般 → 語音，預設開）：對話框的字跟著聲音一句一句出現，像視覺小說；完整的回覆照樣留在對話紀錄。
 - 聽：Apple `SpeechTranscriber`（裝置上辨識，這台 macOS 支援中文（台灣））；不支援或模型還沒下載時用 `SFSpeechRecognizer`。
-  說：系統聲音（齒輪 → 人物 → 聲音，中文（台灣）排前面；系統設定 → 輔助使用 → 朗讀內容 可以免費下載高品質聲音）。
+  說：系統聲音（齒輪 → 人物 → 聲音，中文（台灣）排前面，標出加強版／高品質，機械音放最後的「其他（機械音）」；
+  系統設定 → 輔助使用 → 朗讀內容 → 管理聲音 可以免費下載更好的聲音）。語速、音調（0.5–2 倍）每個人物各自存。
+  個人聲音（macOS 14+）：按「使用個人聲音」才會問權限；允許後自己的聲音排在最上面；沒有做過的話到 系統設定 → 輔助使用 → 個人聲音。
 - 第一次按麥克風時 macOS 會問麥克風（和必要時語音辨識）權限；拒絕過的話會出現一行提示和「開啟系統設定」。
 - 主題曲：齒輪 → 人物 → 主題曲（選擇或拖進音樂檔、試聽、移除、循環、音量）。只在按播放時才播；說話、聆聽時自動調小聲，收起或換人物時淡出。
   WebKit 播不了 ogg／opus 時會提示。
@@ -75,7 +78,7 @@ state.toml                       泡泡的位置、是否展開
 | GET/PUT | `/api/theme`，`/theme.css`，`/theme.js` | 共用主題 |
 | GET/PUT | `/api/engines` | 共用的模型設定 |
 | GET/PUT | `/api/window` | `{ x, y, expanded }` |
-| GET/PUT | `/api/settings` | `{ character, shortcut, talk, auto_send, read_aloud }` |
+| GET/PUT | `/api/settings` | `{ character, shortcut, talk, auto_send, read_aloud, text_follows }` |
 | GET | `/api/characters` | 人物清單與目前的人物（每個人物：`avatars`、`full` 有圖的狀態，`full` 空＝沒有全身圖；`figure: { scale, offset_y }`） |
 | GET | `/api/characters/{id}/avatar/{state}` | 頭像（缺的狀態用 idle） |
 | GET | `/api/characters/{id}/full/{state}` | 全身圖（`full/<state>` → `full/idle` → 該狀態的頭像） |
@@ -84,7 +87,8 @@ state.toml                       泡泡的位置、是否展開
 | POST | `/api/chat` | `{ messages, character, kb?, speak? }` → 串流回答（server-sent events；有知識庫時先送 `search`、`cards`；`speak` = 一邊念出來） |
 | POST | `/api/kb/recall` | `{ id, outcome }` → 經 KnowledgeBase 的 API 記下複習結果（它沒開時回一句說明） |
 | GET | `/api/voice`，`/api/voice/voices`，`/api/voice/events` | 語音狀態、系統聲音、語音事件（server-sent events） |
-| POST | `/api/voice/listen`，`/listen/stop`，`/speak`，`/stop`，`/open-settings` | 聽、停、說（試聽）、停止說、開系統設定的隱私頁 |
+| POST | `/api/voice/listen`，`/listen/stop`，`/speak`，`/stop`，`/open-settings`，`/warm` | 聽、停、說（試聽，可帶 `pitch`）、停止說、開系統設定（隱私、個人聲音、朗讀內容）、打開視窗時先載入聲音 |
+| GET/POST | `/api/voice/personal` | 個人聲音的權限 `{ status, voices }`；POST = 使用個人聲音（從沒問過才會跳系統提示） |
 
 ## 圖示
 

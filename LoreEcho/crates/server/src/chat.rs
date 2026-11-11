@@ -12,6 +12,7 @@
 //! | `cards` | `{ cards, intent, quiz?, grade?, recorded?, notice?, available }` the cards this turn uses ([`crate::kbctx`]) |
 //! | `start` | `{ engine, label }` (label 「本機 Gemma 4 12B」／「Claude Sonnet」, the catalog's name) |
 //! | `delta` | `{ text }` the next piece |
+//! | `say` | `{ id, start, end, spoken }` (`speak: true`) a sentence queued to speak: utterance `id` of `/api/voice/events`, `start..end` of the reply so far in UTF-16 units, `spoken` = the UTF-16 length of what is said (word events count in it) |
 //! | `done` | `{ engine, text }` the whole reply |
 //! | `error` | `{ error }` one line, the call failed after it started |
 //!
@@ -172,15 +173,20 @@ pub fn stream(route: lore_llm::Route, req: LlmRequest, kb: Option<crate::kbctx::
             if let StreamEvent::Text { text } = ev
                 && !text.is_empty()
             {
-                if let Some(s) = sp.lock().unwrap().as_mut() {
-                    s.push(&text);
-                }
+                let said = sp.lock().unwrap().as_mut().map(|s| s.push(&text)).unwrap_or_default();
                 let _ = pieces.send(event("delta", json!({ "text": text })));
+                for x in said {
+                    let _ = pieces.send(event("say", json!(x)));
+                }
             }
         };
         let finish = |cancel: bool| {
             if let Some(s) = speaker.lock().unwrap().as_mut() {
-                if cancel { s.cancel() } else { s.finish() }
+                if cancel {
+                    s.cancel();
+                } else if let Some(x) = s.finish() {
+                    let _ = tx.send(event("say", json!(x)));
+                }
             }
         };
         tokio::select! {

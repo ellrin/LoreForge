@@ -94,21 +94,25 @@ async fn voice_status_voices_listen_and_speak() {
     // the character's language (zh-TW) first, better quality first
     let (_, v) = app.json("GET", "/api/voice/voices", None).await;
     let ids: Vec<&str> = v["voices"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, vec!["fake.zh-TW.d", "fake.zh-TW.c", "fake.zh-CN.b", "fake.en-US.a"]);
+    assert_eq!(ids, vec!["fake.zh-TW.d", "fake.zh-TW.c", "com.apple.eloquence.zh-TW.Eddy", "fake.zh-CN.b", "fake.en-US.a"]);
 
     assert_eq!(app.json("POST", "/api/voice/listen", Some(json!({ "continuous": true }))).await.0, StatusCode::NO_CONTENT);
     assert_eq!(app.json("POST", "/api/voice/listen/stop", None).await.0, StatusCode::NO_CONTENT);
     assert_eq!(app.fake.calls()[..2], [Call::Listen(lore_voice::ListenOptions { language: "zh-TW".into(), continuous: true }), Call::StopListening]);
 
     // 試聽 with the character's voice, or the one given
-    app.json("PUT", "/api/characters/echo", Some(json!({ "voice": "fake.zh-TW.c", "voice_rate": 1.5 }))).await;
+    let (_, d) = app.json("PUT", "/api/characters/echo", Some(json!({ "voice": "fake.zh-TW.c", "voice_rate": 1.5, "voice_pitch": 0.8 }))).await;
+    assert_eq!(d["voice_pitch"], 0.8);
     let (s, v) = app.json("POST", "/api/voice/speak", Some(json!({ "text": "你好。" }))).await;
     assert_eq!(s, StatusCode::OK);
     assert!(v["id"].as_u64().is_some());
-    app.json("POST", "/api/voice/speak", Some(json!({ "text": "試聽", "voice": "fake.zh-TW.d", "rate": 0.8 }))).await;
+    app.json("POST", "/api/voice/speak", Some(json!({ "text": "試聽", "voice": "fake.zh-TW.d", "rate": 0.8, "pitch": 1.3 }))).await;
     let said = app.spoken();
-    assert_eq!((said[0].voice.as_str(), said[0].rate, said[0].language.as_str()), ("fake.zh-TW.c", 1.5, "zh-TW"));
-    assert_eq!((said[1].voice.as_str(), said[1].rate), ("fake.zh-TW.d", 0.8));
+    assert_eq!((said[0].voice.as_str(), said[0].rate, said[0].pitch, said[0].language.as_str()), ("fake.zh-TW.c", 1.5, 0.8, "zh-TW"));
+    assert_eq!((said[1].voice.as_str(), said[1].rate, said[1].pitch), ("fake.zh-TW.d", 0.8, 1.3));
+    // the open window warms the character's voice
+    assert_eq!(app.json("POST", "/api/voice/warm", Some(json!({}))).await.0, StatusCode::NO_CONTENT);
+    assert!(app.fake.calls().contains(&Call::Warm("fake.zh-TW.c".into())));
     assert_eq!(app.json("POST", "/api/voice/speak", Some(json!({ "text": " ** " }))).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(app.json("POST", "/api/voice/stop", None).await.0, StatusCode::NO_CONTENT);
     assert!(app.fake.calls().contains(&Call::StopSpeaking));
@@ -165,6 +169,68 @@ async fn a_reply_is_read_aloud_sentence_by_sentence() {
     // without speak: silent
     app.json("POST", "/api/chat", Some(json!({ "messages": [{ "role": "user", "text": "嗨" }] }))).await;
     assert_eq!(app.spoken().len(), 3);
+}
+
+#[tokio::test]
+async fn the_reply_stream_says_where_each_spoken_sentence_is() {
+    let reply = "好的，**重點**是這個。\n---\n再來一句";
+    let mock = Arc::new(MockProvider::new(vec![reply.into()]).named("mock:local"));
+    let app = App::new(Llm::with_factory(MockFactory::default().with("local:current", mock)));
+    let body = json!({ "messages": [{ "role": "user", "text": "嗨" }], "speak": true });
+    let req = Request::post("/api/chat").header("content-type", "application/json").body(Body::from(body.to_string())).unwrap();
+    let (_, _, b) = app.raw(req).await;
+    let text = String::from_utf8(b).unwrap();
+    let says: Vec<Value> = text.split("\n\n").filter(|e| e.starts_with("event: say")).map(|e| serde_json::from_str(e.split("data: ").nth(1).unwrap()).unwrap()).collect();
+    let spoken: Vec<String> = app.spoken().into_iter().map(|r| r.text).collect();
+    assert_eq!(spoken, vec!["好的，重點是這個。", "再來一句"]);
+    // spans in UTF-16 units of the reply: 0..12, the unspoken "---" line skipped, then the rest
+    let n = |s: &str| s.encode_utf16().count() as u64;
+    assert_eq!(says.len(), 2, "{text}");
+    assert_eq!((says[0]["start"].as_u64(), says[0]["end"].as_u64(), says[0]["spoken"].as_u64()), (Some(0), Some(n("好的，**重點**是這個。\n")), Some(n("好的，重點是這個。"))));
+    assert_eq!((says[1]["start"].as_u64(), says[1]["end"].as_u64()), (Some(n("好的，**重點**是這個。\n---\n")), Some(n(reply))));
+    assert!(says[0]["id"].as_u64().unwrap() < says[1]["id"].as_u64().unwrap());
+}
+
+#[tokio::test]
+async fn personal_voice_states() {
+    use lore_voice::PersonalVoice::*;
+    let app = App::new(Llm::none());
+    // the fake's default: not on this Mac
+    assert_eq!(app.json("GET", "/api/voice/personal", None).await.1["status"], "unsupported");
+    // never asked: GET asks nothing; 使用個人聲音 asks, the author allows, none made yet
+    app.fake.personal(NotDetermined, Authorized, false);
+    assert_eq!(app.json("GET", "/api/voice/personal", None).await.1["status"], "not_determined");
+    let (s, v) = app.json("POST", "/api/voice/personal", None).await;
+    assert_eq!((s, v), (StatusCode::OK, json!({ "status": "authorized", "voices": 0 })));
+    // one made: listed first in the picker
+    app.fake.personal(Authorized, Authorized, true);
+    assert_eq!(app.json("GET", "/api/voice/personal", None).await.1, json!({ "status": "authorized", "voices": 1 }));
+    let (_, v) = app.json("GET", "/api/voice/voices", None).await;
+    assert_eq!((v["voices"][0]["id"].as_str(), v["voices"][0]["personal"].as_bool()), (Some("fake.personal.me"), Some(true)));
+    // refused: asking again changes nothing (the system never asks twice)
+    app.fake.personal(Denied, Authorized, true);
+    assert_eq!(app.json("POST", "/api/voice/personal", None).await.1["status"], "denied");
+    let (_, v) = app.json("GET", "/api/voice/voices", None).await;
+    assert!(v["voices"].as_array().unwrap().iter().all(|x| x["personal"] == false));
+    let (_, v) = app.json("POST", "/api/voice/open-settings", Some(json!({ "what": "personal-voice" }))).await;
+    assert!(v["url"].as_str().unwrap().contains("PersonalVoice"));
+}
+
+#[tokio::test]
+async fn a_character_with_an_old_custom_voice_speaks_with_its_system_voice() {
+    let app = App::new(Llm::none());
+    let v = app.dir().join("characters/echo/voice");
+    std::fs::create_dir_all(&v).unwrap();
+    std::fs::write(v.join("voice.toml"), "mode = \"design\"\n[chosen]\nkind = \"design\"\ntext = \"你好\"\n").unwrap();
+    std::fs::write(v.join("chosen.wav"), lore_voice::fake::wav_bytes(&[0; 2400], 24000)).unwrap();
+    app.json("PUT", "/api/characters/echo", Some(json!({ "voice": "fake.zh-TW.d" }))).await;
+    let (s, _) = app.json("POST", "/api/voice/speak", Some(json!({ "text": "你好。" }))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(app.spoken()[0].voice, "fake.zh-TW.d");
+    // and the folder is not exported any more
+    let (_, _, zip) = app.raw(Request::get("/api/characters/echo/export").body(Body::empty()).unwrap()).await;
+    let z = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+    assert!(z.file_names().all(|n| !n.contains("/voice/")));
 }
 
 #[tokio::test]

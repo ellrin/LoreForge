@@ -3,6 +3,7 @@
 //! ```text
 //! character.toml   name, persona (the system prompt's personality), language,
 //!                  voice (a system voice id, "" = the language's default), voice_rate (1 = normal),
+//!                  voice_pitch (1 = the voice's own),
 //!                  the profile (角色設定: background, speech_style, catchphrases, call_user,
 //!                  relationship, likes, dislikes, [[examples]] user/reply), see [`Profile`],
 //!                  theme_loop, theme_volume (the theme song),
@@ -10,7 +11,6 @@
 //! avatar/          <state>.png .svg .webp .jpg   (portrait: the bubble, the name tag)
 //! full/            the same states, full body (head to feet, transparent background): the open window
 //! theme.<ext>      the theme song (mp3 m4a aac wav ogg opus flac), optional
-//! voice/           the custom voice (`crate::charvoice`): voice.toml, chosen.wav, reference.wav
 //! ```
 //!
 //! Ten states ([`STATES`]); a state without its own picture follows [`chain`] (searching →
@@ -56,6 +56,7 @@ struct File {
     persona: String,
     voice: String,
     voice_rate: Option<f64>,
+    voice_pitch: Option<f64>,
     language: String,
     figure_scale: Option<f64>,
     figure_offset_y: Option<f64>,
@@ -161,6 +162,13 @@ fn voice_rate(v: Option<f64>) -> f64 {
     v.filter(|v| v.is_finite()).map_or(1.0, |v| v.clamp(VOICE_RATE.0, VOICE_RATE.1))
 }
 
+/// Pitch limits (a multiplier of the voice's own, 1 = unchanged; lore-voice clamps the same way).
+pub const VOICE_PITCH: (f64, f64) = (0.5, 2.0);
+
+fn voice_pitch(v: Option<f64>) -> f64 {
+    v.filter(|v| v.is_finite()).map_or(1.0, |v| v.clamp(VOICE_PITCH.0, VOICE_PITCH.1))
+}
+
 /// How the full body stands in the open window (a visual-novel sprite): `scale` 1.0 = head
 /// to feet fit the window height, more = bigger, the legs run off the window's bottom edge;
 /// `offset_y` moves it down by that fraction of the window height (negative = up).
@@ -198,6 +206,8 @@ pub struct Character {
     pub voice: String,
     /// 1.0 = normal speed.
     pub voice_rate: f64,
+    /// 1.0 = the voice's own pitch.
+    pub voice_pitch: f64,
     pub language: String,
     /// The theme song's settings, when there is a `theme.<ext>`.
     pub theme: Option<Theme>,
@@ -222,6 +232,7 @@ impl Character {
             persona: "你是使用者的學習夥伴：安靜、好奇、有耐心。你陪他把想法說清楚，必要時反問一句，幫他找出還不懂的地方。".into(),
             voice: String::new(),
             voice_rate: 1.0,
+            voice_pitch: 1.0,
             language: "zh-TW".into(),
             theme: None,
             profile: Profile::default(),
@@ -266,6 +277,7 @@ pub fn load(app_dir: &Path, id: &str) -> Result<Character, String> {
         persona: f.persona.trim().into(),
         voice: f.voice.trim().into(),
         voice_rate: voice_rate(f.voice_rate),
+        voice_pitch: voice_pitch(f.voice_pitch),
         language: Some(f.language.trim()).filter(|l| !l.is_empty()).unwrap_or("zh-TW").into(),
         theme: theme_file(&dir).map(|_| Theme::from(f.theme_loop, f.theme_volume)),
         profile: f.profile,
@@ -334,6 +346,7 @@ pub struct Detail {
     pub persona: String,
     pub voice: String,
     pub voice_rate: f64,
+    pub voice_pitch: f64,
     pub language: String,
     pub theme: Option<Theme>,
     pub profile: Profile,
@@ -343,7 +356,7 @@ pub struct Detail {
 
 pub fn detail(app_dir: &Path, id: &str) -> Result<Detail, String> {
     let c = load(app_dir, id)?;
-    Ok(Detail { id: c.id, name: c.name, persona: c.persona, voice: c.voice, voice_rate: c.voice_rate, language: c.language, theme: c.theme, profile: c.profile, background_limit: crate::chat::BACKGROUND_LIMIT })
+    Ok(Detail { id: c.id, name: c.name, persona: c.persona, voice: c.voice, voice_rate: c.voice_rate, voice_pitch: c.voice_pitch, language: c.language, theme: c.theme, profile: c.profile, background_limit: crate::chat::BACKGROUND_LIMIT })
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -353,6 +366,7 @@ pub struct MetaPatch {
     pub persona: Option<String>,
     pub voice: Option<String>,
     pub voice_rate: Option<f64>,
+    pub voice_pitch: Option<f64>,
     pub theme_loop: Option<bool>,
     pub theme_volume: Option<f64>,
     /// The whole 角色設定 (replaces the one there).
@@ -385,6 +399,9 @@ pub fn save_meta(app_dir: &Path, id: &str, p: &MetaPatch) -> Result<Detail, Stri
     }
     if let Some(r) = p.voice_rate {
         t.insert("voice_rate".into(), toml::Value::Float(voice_rate(Some(r))));
+    }
+    if let Some(r) = p.voice_pitch {
+        t.insert("voice_pitch".into(), toml::Value::Float(voice_pitch(Some(r))));
     }
     if let Some(l) = p.theme_loop {
         t.insert("theme_loop".into(), toml::Value::Boolean(l));
@@ -622,14 +639,8 @@ pub fn example_template(example_app_dir: &Path) -> Option<PathBuf> {
     Some(folder(example_app_dir, &c.id))
 }
 
-/// The character as a zip: `<id>/character.toml`, `<id>/avatar/…`, `<id>/full/…`, `<id>/theme.<ext>`,
-/// `<id>/voice/…` (without the author's recording).
+/// The character as a zip: `<id>/character.toml`, `<id>/avatar/…`, `<id>/full/…`, `<id>/theme.<ext>`.
 pub fn export(app_dir: &Path, id: &str) -> Result<Vec<u8>, String> {
-    export_with(app_dir, id, false)
-}
-
-/// [`export`]; `with_reference`: the author's voice recording goes in too.
-pub fn export_with(app_dir: &Path, id: &str, with_reference: bool) -> Result<Vec<u8>, String> {
     load(app_dir, id)?;
     let dir = folder(app_dir, id);
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -650,10 +661,6 @@ pub fn export_with(app_dir: &Path, id: &str, with_reference: bool) -> Result<Vec
             }
         }
     }
-    for (rel, bytes) in crate::charvoice::export_files(app_dir, id, with_reference) {
-        zip.start_file(format!("{id}/{rel}"), opts).map_err(|e| e.to_string())?;
-        zip.write_all(&bytes).map_err(|e| e.to_string())?;
-    }
     Ok(zip.finish().map_err(|e| e.to_string())?.into_inner())
 }
 
@@ -668,7 +675,6 @@ pub fn import(app_dir: &Path, zip_bytes: &[u8]) -> Result<Detail, String> {
     let mut toml_text: Option<(String, String)> = None; // (folder name, text)
     let mut pics: Vec<(&'static str, String, Vec<u8>)> = vec![];
     let mut song: Option<Vec<u8>> = None;
-    let mut voice_files: Vec<(String, Vec<u8>)> = vec![];
     let mut total = 0usize;
     for i in 0..z.len() {
         let mut f = z.by_index(i).map_err(|e| e.to_string())?;
@@ -691,17 +697,6 @@ pub fn import(app_dir: &Path, zip_bytes: &[u8]) -> Result<Detail, String> {
             f.by_ref().take(MAX_AUDIO as u64 + 1).read_to_end(&mut buf).map_err(|e| e.to_string())?;
             sniff_audio(&buf).map_err(|e| format!("{name}：{e}"))?;
             song = Some(buf);
-            continue;
-        }
-        if let [.., crate::charvoice::DIR, file] = parts.as_slice()
-            && crate::charvoice::importable(file)
-        {
-            if f.size() as usize > MAX_AUDIO {
-                return Err(format!("{name}：檔案太大"));
-            }
-            let mut buf = Vec::new();
-            f.by_ref().take(MAX_AUDIO as u64 + 1).read_to_end(&mut buf).map_err(|e| e.to_string())?;
-            voice_files.push((file.to_string(), buf));
             continue;
         }
         // (kind, state) for a picture, None for character.toml
@@ -749,7 +744,6 @@ pub fn import(app_dir: &Path, zip_bytes: &[u8]) -> Result<Detail, String> {
         if let Some(bytes) = &song {
             save_theme(app_dir, &id, bytes)?;
         }
-        crate::charvoice::import_files(app_dir, &id, &voice_files)?;
         detail(app_dir, &id)
     })();
     if result.is_err() {

@@ -20,7 +20,6 @@
 //! | POST | /api/chat | `{ messages, character?, engine?, kb?, speak? }` → the reply as server-sent events ([`chat`]) |
 //! | POST | /api/kb/recall | `{ id, outcome }` → a review outcome through KnowledgeBase's API while it runs ([`kbctx`]) |
 //! | … | /api/voice… | listening and speaking ([`voice`]) |
-//! | … | /api/tts…, /api/characters/{id}/voice… | custom voices: download, candidates, pick, recording ([`tts`], [`charvoice`]) |
 
 pub mod api;
 pub mod characters;
@@ -29,8 +28,6 @@ pub mod config;
 pub mod kbctx;
 pub mod llm;
 pub mod store;
-pub mod charvoice;
-pub mod tts;
 pub mod voice;
 
 use std::net::SocketAddr;
@@ -70,8 +67,6 @@ pub struct AppState {
     pub kb: kbctx::Kb,
     /// Listening and speaking (lore-voice; unavailable in tests unless a fake is given).
     pub voice: lore_voice::Voice,
-    /// Custom voices (Qwen3-TTS): none unless set ([`tts::Engine::set`]).
-    pub tts: tts::Engine,
     /// One writer of the two settings files at a time.
     pub(crate) write: Mutex<()>,
 }
@@ -93,7 +88,7 @@ impl AppState {
                 None
             }
         };
-        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), voice, tts: tts::Engine::default(), write: Mutex::new(()) })
+        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), voice, write: Mutex::new(()) })
     }
 
     /// The real engines (`private/LoreEcho/tasks.toml` may override the task's model) and the
@@ -101,11 +96,7 @@ impl AppState {
     pub fn system(home: lore_home::Home, web: PathBuf, hook: Option<DesktopHook>) -> Shared {
         let user_tasks = home.app_dir(config::APP).map(|d| d.join("tasks.toml"));
         let llm = llm::Llm::new(Some(home.clone()), user_tasks.as_deref());
-        // custom voices: Qwen3-TTS in the shared model folder, sentence files in the cache
-        let qwen: Arc<dyn lore_voice::qwen::Tts> = Arc::new(lore_voice::qwen::Qwen::new(tts::model_home(&home)));
-        let cache = lore_home::ports::cache_dir().unwrap_or_else(std::env::temp_dir).join("LoreEcho").join("voice");
-        let s = AppState::with_voice(home, web, llm, hook, lore_voice::Voice::system_with(qwen.clone(), cache.join("say")));
-        s.tts.set(qwen, cache.join("candidates"));
+        let s = AppState::with_voice(home, web, llm, hook, lore_voice::Voice::system());
         s.kb.use_system();
         s
     }
@@ -163,7 +154,7 @@ fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
     for (path, mime, body) in lore_shell::FILES {
         kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
     }
-    api::routes().merge(voice::routes()).merge(tts::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
+    api::routes().merge(voice::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`config.port` (0 = any free port); the address, the state and the server.
