@@ -382,7 +382,10 @@ impl LocalRuntime {
     /// Start the idle watcher (once; it ends when the runtime is dropped). Needs a tokio
     /// runtime; without one nothing happens and `false` is returned.
     pub fn watch_idle(self: &std::sync::Arc<Self>) -> bool {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else { return false };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            eprintln!("lore-llm: no async runtime yet, the idle release starts on first use");
+            return false;
+        };
         if self.watching.swap(true, Ordering::SeqCst) {
             return true;
         }

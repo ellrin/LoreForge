@@ -262,6 +262,9 @@ impl Engines {
 
     /// The `GET /api/engines` body.
     pub async fn state(&self) -> Value {
+        if let Some(rt) = &self.runtime {
+            rt.watch_idle(); // armed here too when the router was built outside a runtime
+        }
         let s = self.settings();
         let classes: Vec<Value> = TaskClass::ALL
             .iter()
@@ -286,6 +289,9 @@ impl Engines {
 
     /// Apply a `PUT /api/engines` body (all checked before anything is written).
     pub async fn update(&self, body: &Value) -> Result<(), String> {
+        if let Some(rt) = &self.runtime {
+            rt.watch_idle();
+        }
         let obj = body.as_object().ok_or("要送 JSON 物件")?;
         let str_of = |v: &Value, what: &str| v.as_str().map(str::trim).map(String::from).ok_or(format!("{what}要是文字"));
         // local
