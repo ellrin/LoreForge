@@ -736,10 +736,10 @@
   const enc = encodeURIComponent;
   const ports = { pc: 7878, sc: 7880, lr: 7890, kb: 7700 };
   const FORMS = {
-    pc: (p) => (p.path ? [`open?path=${enc(p.path)}`, `/?open=${enc(p.path)}`] : ["", "/"]),
+    pc: (p) => (p.note ? [`note/${enc(p.note)}`, `/?note=${enc(p.note)}`] : p.path ? [`open?path=${enc(p.path)}`, `/?open=${enc(p.path)}`] : ["", "/"]),
     sc: (p) => (p.deck ? [`deck/${enc(p.deck)}`, `/?deck=${enc(p.deck)}`] : p.job ? [`job/${enc(p.job)}`, `/?job=${enc(p.job)}`] : ["", "/"]),
     lr: (p) => (p.paper ? [`paper/${enc(p.paper)}${p.page ? `?page=${enc(p.page)}` : ""}`, `/?paper=${enc(p.paper)}${p.page ? `&page=${enc(p.page)}` : ""}`] : ["", "/"]),
-    kb: (p) => (p.node ? [`node/${enc(p.node)}`, `/#/node/${enc(p.node)}`] : ["", "/"]),
+    kb: (p) => (p.pending ? [`pending/${enc(p.pending)}`, `/#/pending/${enc(p.pending)}`] : p.node ? [`node/${enc(p.node)}`, `/#/node/${enc(p.node)}`] : ["", "/"]),
   };
   function url(app, params = {}) {
     const f = FORMS[app];

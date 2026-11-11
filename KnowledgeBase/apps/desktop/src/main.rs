@@ -19,8 +19,9 @@ struct Links {
 /// The page hash a `lore-kb://` link stands for: `node/<id>` → `#/node/<id>`.
 fn link_hash(u: &url::Url) -> Option<String> {
     let id = u.path().trim_matches('/');
-    let ok = u.host_str() == Some("node") && !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    ok.then(|| format!("#/node/{id}"))
+    let host = u.host_str()?;
+    let ok = matches!(host, "node" | "pending") && !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    ok.then(|| format!("#/{host}/{id}"))
 }
 
 fn open_link(app: &AppHandle, u: url::Url) {
@@ -134,6 +135,7 @@ mod tests {
         let h = |s: &str| link_hash(&url::Url::parse(s).unwrap());
         assert_eq!(h("lore-kb://node/abc-1"), Some("#/node/abc-1".into()));
         assert_eq!(h("lore-kb://node/"), None);
+        assert_eq!(h("lore-kb://pending/p01abc"), Some("#/pending/p01abc".into()));
         assert_eq!(h("lore-kb://other/x"), None);
         let plist = include_str!("../Info.plist");
         assert!(plist.contains("CFBundleURLTypes") && plist.contains("<string>lore-kb</string>"));
