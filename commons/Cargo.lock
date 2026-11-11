@@ -1216,6 +1216,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-voice"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "lore-words"
 version = "0.1.0"
 

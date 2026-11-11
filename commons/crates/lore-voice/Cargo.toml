@@ -1,0 +1,17 @@
+[package]
+name = "lore-voice"
+version.workspace = true
+edition.workspace = true
+description = "Listening (speech to text) and speaking (text to speech) for LoreForge apps: one small interface, the Apple engines through a Swift helper on macOS, fakes for tests."
+# build.rs compiles swift/helper.swift with swiftc on macOS and passes its path on (`links`
+# metadata: DEP_LORE_VOICE_HELPER for an app's build script that bundles the helper).
+links = "lore_voice"
+build = "build.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
