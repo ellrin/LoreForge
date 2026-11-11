@@ -104,6 +104,14 @@
 - 沒有任何 app 從 `private/` 讀模型網址。
 - 範圍：只管 llama-server 模型；LoreEcho 的語音（Apple 內建）不受影響。
 
+## 7a. 圖像工具（畫質提升）
+
+`local-model.json` 多一個 `tools`：`[ { "app": "sc", "pid": 1500, "tool": "upscale", "since": 1794363400 } ]`（沒有時不寫）。
+`lore-upscale` 執行時呼叫 `SharedRuntime::begin_tool_blocking`：等沒有本機模型請求在跑、也沒有別的工具佔著，才登記；
+登記期間所有 `acquire` 都等（顯示「等待 <app> 用完模型」），不做閒置釋放。已載入的語言模型**不卸載**（Real-ESRGAN 很小），
+只讓出 GPU 時間；工具結束（或程序死掉、清理時發現 pid 不在）就放開。之後「以圖產圖」的大模型（Qwen-Image-Edit）
+是真的要換掉語言模型，那一步另外設計（屆時 `tools` 的 `tool` 可帶需要的記憶體）。
+
 ## 8. 選 (a) 的代價（作者已接受）
 
 - PaperComposer 為某個任務載入另一個大模型時，LoreEcho 的對話會等它用完，或在它用完後才換回來。

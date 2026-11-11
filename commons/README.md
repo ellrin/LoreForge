@@ -8,6 +8,7 @@
 
 | crate | 用途 |
 |---|---|
+| `lore-upscale` | 畫質提升：Real-ESRGAN ncnn-vulkan（BSD-3）子程序、進度與取消、第一次由作者按下載（官方 release、SHA-256 釘住）、執行時佔共用執行環境的位子（本機語言模型讓位） |
 | `lore-llm` | LLM 抽象：Claude API（串流、web search、看圖）、Claude Code 訂閱、llama-server／OpenAI 相容端點、Mock；模型清單、地端模型、依任務選模型（`tasks.toml`）、Keychain 金鑰 |
 | `lore-secrets` | 金鑰存在系統鑰匙圈（鑰匙圈不能用時才存成只有自己可讀的檔案，且絕不寫進 git repository） |
 | `lore-home` | LoreForge 的私人資料位置：`private/<App>`（從 `private-example/` 建立）、共用個人設定 `private/shared`（profile、fonts…） |

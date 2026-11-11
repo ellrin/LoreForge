@@ -1,0 +1,21 @@
+[package]
+name = "lore-upscale"
+version.workspace = true
+edition.workspace = true
+description = "The shared image upscaler: Real-ESRGAN ncnn-vulkan (BSD-3-Clause) run as a child process, with progress, cancellation, a one-time checksum-pinned download into the shared model folder, and the shared runtime's slot (the local language model yields while it runs)."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+zip.workspace = true
+sha2 = "0.10"
+lore-home = { path = "../lore-home" }
+lore-llm = { path = "../lore-llm", default-features = false }
+
+[dev-dependencies]
+tempfile.workspace = true
+axum.workspace = true

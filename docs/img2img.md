@@ -27,7 +27,7 @@
 
 ## 分階段
 
-1. 畫質提升套件（Real-ESRGAN）：共用 crate ＋ 打包。
+1. 畫質提升套件（Real-ESRGAN）：共用 crate `commons/crates/lore-upscale`（完成：`upscale()`、進度、取消、下載、佔位）。二進位與模型不進 repo，放 `<[local] home>/runtimes/realesrgan/`，由 UI 在作者按下載時呼叫 `download()`。
 2. 以圖產圖核心：模型下載、生成、候選、背景工作、與一次一個模型的規則整合。
 3. LoreEcho「從一張圖建立角色」。
 4. SlideComposer「以圖產圖」插入。

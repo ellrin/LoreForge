@@ -1216,6 +1216,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-upscale"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "lore-home",
+ "lore-llm",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "zip",
+]
+
+[[package]]
 name = "lore-voice"
 version = "0.1.0"
 dependencies = [

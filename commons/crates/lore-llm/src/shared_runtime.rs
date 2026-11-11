@@ -34,6 +34,10 @@
 //!   `/health` answers (or it is still loading). Nothing is ever signalled without that
 //!   check. A broken file is read as empty and the server named in it is put back when it
 //!   still answers.
+//! - **Image tools** (`tools` in the file): the upscaler ([`SharedRuntime::begin_tool_blocking`])
+//!   waits for the running requests to end, then registers; while it runs, requests for the
+//!   local model wait and no idle release happens. The loaded model stays in memory (the tool
+//!   is small); only GPU time is yielded.
 //! - **Release**: a request's [`Ticket`] updates `last_used`; [`SharedRuntime::check_idle`]
 //!   (every app, every [`Timing::idle_tick`]) stops a server unused for the idle time; the
 //!   last lease holder to quit ([`SharedRuntime::shutdown`]) stops it.
@@ -218,8 +222,23 @@ pub struct Registry {
     pub leases: Vec<Lease>,
     #[serde(default)]
     pub wanting: Vec<Want>,
+    /// Image tools (upscaler, ...) running now; while any does, local-model requests wait
+    /// ([`SharedRuntime::begin_tool_blocking`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolUse>,
     #[serde(default)]
     pub last_activity: u64,
+}
+
+/// An app process running an image tool (a small GPU job next to the loaded model): the
+/// language model yields for as long as it runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolUse {
+    pub app: String,
+    pub pid: u32,
+    /// What runs (`upscale`).
+    pub tool: String,
+    pub since: u64,
 }
 
 fn now() -> u64 {
@@ -436,6 +455,21 @@ impl Drop for Ticket {
     }
 }
 
+/// An image tool's hold on the runtime; dropping it lets the language model back.
+pub struct ToolTicket {
+    rt: Arc<SharedRuntime>,
+    tool: String,
+}
+
+impl Drop for ToolTicket {
+    fn drop(&mut self) {
+        let _ = self.rt.locked(false, |reg| {
+            reg.tools.retain(|u| !(u.pid == self.rt.pid && u.tool == self.tool));
+            reg.last_activity = now();
+        });
+    }
+}
+
 /// What this process sees, for the UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
@@ -503,6 +537,9 @@ impl Snapshot {
 /// What `pid` sees in `reg` at `n`.
 fn status_of(reg: &Registry, pid: u32, n: u64) -> LocalStatus {
     let mine = reg.wanting.iter().find(|w| w.pid == pid);
+    if let (Some(w), Some(u)) = (mine, reg.tools.first()) {
+        return LocalStatus::Waiting { app: u.app.clone(), model: w.model.clone() };
+    }
     match (&reg.server, mine) {
         (Some(s), Some(w)) if !s.loading && s.model != w.model => {
             let app = reg.user(pid).map(|l| l.app.clone()).unwrap_or_else(|| s.started_by.app.clone());
@@ -601,6 +638,7 @@ impl SharedRuntime {
     fn prune(&self, reg: &mut Registry) {
         reg.leases.retain(|l| pid_alive(l.pid));
         reg.wanting.retain(|w| pid_alive(w.pid));
+        reg.tools.retain(|u| pid_alive(u.pid));
         let t = &self.timing;
         if let Some(s) = reg.server.as_mut() {
             let ok = verified(s.pid, &s.started_at)
@@ -692,8 +730,9 @@ impl SharedRuntime {
         let t = &self.timing;
         let res = self.locked(true, |reg| -> Result<Step, String> {
             let n = now();
+            let blocked = !reg.tools.is_empty(); // an image tool runs: the model yields
             match reg.server.as_ref() {
-                Some(s) if s.model == m.id && !s.loading => {
+                Some(s) if !blocked && s.model == m.id && !s.loading => {
                     let (url, vision) = (s.url.clone(), s.vision);
                     reg.wanting.retain(|w| !(w.pid == self.pid && w.model == m.id));
                     let l = self.lease_mut(reg, priority);
@@ -711,6 +750,9 @@ impl SharedRuntime {
                     }
                 }
                 None => reg.wanting.push(Want { app: self.app.clone(), pid: self.pid, model: m.id.clone(), priority, since: n }),
+            }
+            if blocked {
+                return Ok(Step::Wait);
             }
             let Some(first) = reg.line(n, t).first().map(|w| (w.pid, w.model.clone(), reg.effective(w, n, t))) else {
                 return Ok(Step::Wait); // our model is loading
@@ -839,6 +881,45 @@ impl SharedRuntime {
         tokio::task::spawn_blocking(move || rt.acquire_blocking(layout.as_ref(), &m, priority)).await.map_err(|e| e.to_string())?
     }
 
+    /// An image tool (the upscaler) takes the runtime: waits until no model request runs and
+    /// no other tool holds it, then registers; until the [`ToolTicket`] drops, requests for
+    /// the local model wait (the loaded model stays in memory, the tool is small). `cancel`
+    /// is polled while waiting. Blocking.
+    pub fn begin_tool_blocking(self: &Arc<Self>, tool: &str, cancel: &dyn Fn() -> bool) -> Result<ToolTicket, String> {
+        let t = &self.timing;
+        let mut pause = t.poll_min;
+        loop {
+            if cancel() {
+                return Err("已取消".into());
+            }
+            let got = self
+                .locked(true, |reg| {
+                    let n = now();
+                    if !reg.tools.is_empty() {
+                        return false;
+                    }
+                    if let Some(s) = reg.server.as_ref() {
+                        if s.loading || reg.leases.iter().any(|l| l.active > 0) {
+                            return false;
+                        }
+                        if slots_busy(&s.url, t) {
+                            reg.last_activity = n;
+                            return false;
+                        }
+                    }
+                    reg.tools.push(ToolUse { app: self.app.clone(), pid: self.pid, tool: tool.to_string(), since: n });
+                    reg.last_activity = n;
+                    true
+                })
+                .map_err(|e| format!("無法讀寫 {}：{e}", self.registry_path().display()))?;
+            if got {
+                return Ok(ToolTicket { rt: self.clone(), tool: tool.to_string() });
+            }
+            std::thread::sleep(pause);
+            pause = (pause + pause / 2).min(t.poll_max);
+        }
+    }
+
     /// A request ended: `active` down, `last_used` and `last_activity` now.
     fn finished(&self) {
         let _ = self.locked(false, |reg| {
@@ -876,7 +957,7 @@ impl SharedRuntime {
         self.locked(true, |reg| {
             let n = now();
             let Some(s) = reg.server.clone() else { return false };
-            if s.loading || reg.leases.iter().any(|l| l.active > 0) || !reg.wanting.is_empty() {
+            if s.loading || !reg.tools.is_empty() || reg.leases.iter().any(|l| l.active > 0) || !reg.wanting.is_empty() {
                 return false;
             }
             if slots_busy(&s.url, t) {
@@ -960,6 +1041,7 @@ impl SharedRuntime {
             let mine = reg.leases.iter().any(|l| l.pid == self.pid) || reg.server.as_ref().is_some_and(|s| s.started_by.pid == self.pid);
             reg.leases.retain(|l| l.pid != self.pid);
             reg.wanting.retain(|w| w.pid != self.pid);
+            reg.tools.retain(|u| u.pid != self.pid);
             if mine && reg.leases.is_empty() && reg.wanting.is_empty() {
                 if let Some(s) = reg.server.take() {
                     stop_server(&s, t.stop_grace);
@@ -1186,5 +1268,30 @@ mod tests {
         assert!(e.contains("不能看圖"), "no projector on disk: {e}");
         put(dir.path().join("gguf").join(&q.repo).join(q.mmproj_suffix.as_deref().unwrap()));
         assert_eq!(current_model(&c, Some(&l), Some("qwen3.5-4b-q8"), None, true, false).unwrap().id, "qwen3.5-4b-q8", "it sees now");
+    }
+
+    /// An image tool holds the runtime alone; a second one waits (and can be cancelled);
+    /// the language model's acquire waits while it runs; dropping the ticket frees it.
+    #[test]
+    fn image_tool_takes_the_slot() {
+        let dir = std::env::temp_dir().join(format!("lore-llm-tool-{}", std::process::id()));
+        let rt = SharedRuntime::new("sc", &dir, Timing { poll_min: Duration::from_millis(10), poll_max: Duration::from_millis(20), ..Timing::default() });
+        let t1 = rt.begin_tool_blocking("upscale", &|| false).unwrap();
+        assert_eq!(rt.snapshot_blocking().registry.tools.len(), 1);
+        let cancelled = AtomicBool::new(false);
+        let waiter = std::thread::scope(|sc| {
+            let h = sc.spawn(|| rt.begin_tool_blocking("upscale", &|| cancelled.load(Ordering::SeqCst)).err());
+            std::thread::sleep(Duration::from_millis(80));
+            cancelled.store(true, Ordering::SeqCst);
+            h.join().unwrap()
+        });
+        assert_eq!(waiter.as_deref(), Some("已取消"));
+        let m = Catalog::bundled().get("qwen3.5-4b-q8").unwrap().clone();
+        assert!(matches!(rt.step(None, &m, Priority::Interactive), Ok(Step::Wait)), "the model yields");
+        assert!(matches!(rt.snapshot_blocking().status, LocalStatus::Waiting { .. }));
+        drop(t1);
+        assert!(rt.snapshot_blocking().registry.tools.is_empty());
+        assert!(rt.begin_tool_blocking("upscale", &|| false).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
