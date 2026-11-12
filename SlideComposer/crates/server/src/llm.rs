@@ -24,6 +24,8 @@ pub fn quit() {
     SharedRuntime::shutdown_process();
 }
 pub const TASK_PAPER_DECK: &str = "sc-paper-deck";
+/// 微調's 建議 (todeck/suggest.rs).
+pub const TASK_OUTLINE_REVIEW: &str = "sc-outline-review";
 const TEMPERATURE: f32 = 0.3;
 
 /// What a model answered, and with which engine.
@@ -178,6 +180,8 @@ mod tests {
         assert_eq!(spec.default, "claude:selected");
         assert_eq!(spec.fallback.as_deref(), Some("local:current"));
         assert_eq!(spec.class, Some(lore_llm::TaskClass::Create));
+        let review = &t.task[TASK_OUTLINE_REVIEW];
+        assert_eq!((review.class, review.default.as_str()), (Some(lore_llm::TaskClass::Create), "claude:selected"));
         assert!(t.task.contains_key("sc-flow-graph") && t.task.contains_key(lore_docsrc::boxer::TASK_ID));
     }
 

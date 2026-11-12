@@ -24,3 +24,14 @@ needs = { vision = true, json = true }
 default = "claude:selected"
 fallback = "local:current"
 max_tokens = 2000
+
+# 微調's 建議: right after the outline, a few concrete edits with a one-line reason each
+# (todeck/suggest.rs). Best-effort: the review window simply shows none when this cannot run.
+[task.sc-outline-review]
+label = "大綱建議"
+class = "create"
+needs = { json = true, context = 16000 }
+default = "claude:selected"
+fallback = "local:current"
+offline = true
+max_tokens = 2000

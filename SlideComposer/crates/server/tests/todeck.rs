@@ -573,3 +573,59 @@ async fn events_long_poll_answers_on_change() {
     }
     panic!("never reached the review");
 }
+
+/// 微調: the 建議 come with the outline (cleaned, at most 5); 語言／長度 redo only the outline
+/// and the job waits again; 底版 needs no redo.
+#[tokio::test]
+async fn review_suggestions_and_changing_language_redoes_the_outline() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = paper(dir.path());
+    let ws = workspace(dir.path());
+    let home = lore_home::Home::at(dir.path().join("home"));
+    let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
+    let sugg = json!({ "suggestions": [
+        { "op": "retitle", "id": "s9", "title": "What the numbers say", "reason": "結果頁標題太籠統" },
+        { "op": "remove", "id": "s1", "reason": "封面" },
+        { "op": "figure", "id": "s2", "fig": "fig1", "reason": "背景頁沒有圖" }
+    ] });
+    let replies = vec![plan("is slow").to_string(), sugg.to_string(), plan("zh again").to_string(), json!({ "suggestions": [] }).to_string()];
+    let model = Arc::new(MockProvider::new(replies));
+    let f = MockFactory::default().with("claude:selected", model.clone());
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
+    let app = sc_server::router_isolated(shared.clone());
+    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "short", "lang": "en", "style": "blank", "mode": "review" });
+    let (_, v, _) = call(&app, "POST", "/api/todeck", Some(body), None).await;
+    let id = v["job"].as_str().unwrap().to_string();
+    let v = job_until(&app, &id, "review", |v| v["state"] == "review").await;
+    assert_eq!(v["options"], json!({ "length": "short", "lang": "en", "style": "blank" }));
+    let s = v["review"]["suggestions"].as_array().unwrap();
+    assert_eq!(s.len(), 2, "the cover is never edited: {s:?}");
+    assert_eq!((s[0]["op"].as_str(), s[0]["id"].as_str(), s[0]["title"].as_str()), (Some("retitle"), Some("s9"), Some("What the numbers say")));
+    assert_eq!(v["stages"][4]["counts"]["suggestions"], 2);
+    let seen = model.seen.lock().unwrap().clone();
+    assert!(seen[1].system.starts_with("You review the outline") && seen[1].flatten().contains("- s9 · results · Main results"), "{}", seen[1].flatten());
+    let source_before = std::fs::read(shared.ws.root.join(format!("cache/todeck/{id}/source.json"))).unwrap();
+
+    // bad values and a job not waiting are refused
+    let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "lang": "fr" })), None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    // 底版 alone: no redo
+    let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "style": "blank" })), None).await;
+    assert_eq!((st, v["state"].as_str()), (StatusCode::OK, Some("review")));
+    assert_eq!(model.seen.lock().unwrap().len(), 2);
+    // 語言: the outline again, then back to the review with the new rows
+    let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "lang": "zh" })), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let v = job_until(&app, &id, "review again", |v| v["state"] == "review" && v["options"]["lang"] == "zh" && v["stages"][4]["state"] == "done").await;
+    let seen = model.seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 4, "plan + suggestions again, nothing else");
+    assert!(seen[2].system.contains("Traditional Chinese"));
+    assert_eq!(v["review"]["suggestions"], json!([]));
+    assert_eq!(v["review"]["outline"][1]["point"], "Grade by hand zh again", "the review shows the new outline");
+    assert_eq!(std::fs::read(shared.ws.root.join(format!("cache/todeck/{id}/source.json"))).unwrap(), source_before, "source not redone");
+    // not waiting any more: refused
+    let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/review"), Some(json!({ "skip": true })), None).await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "lang": "en" })), None).await;
+    assert_eq!(st, StatusCode::CONFLICT);
+}

@@ -19,7 +19,8 @@ use super::build::{BuildInput, ModuleBox, build};
 use super::plan::{Plan, PlanSlide, ROLES, clean_plan, prompt, schema};
 use super::profile::{ProfileInput, StyleProfile};
 use super::source::{Material, from_latex, from_lorereader, is_paper};
-use super::{outline, polish, profile, terms};
+use super::suggest::point_of;
+use super::{outline, polish, profile, suggest, terms};
 use crate::AppState;
 use crate::jobs::{Job, Pipeline, StageCx, StageError, StageFuture, StageSpec, status};
 use crate::llm::TASK_PAPER_DECK;
@@ -58,7 +59,7 @@ pub struct Params {
 pub struct PaperDeck {
     s: Weak<AppState>,
     /// The review material per job (read once from the checkpoints).
-    review_view: Mutex<HashMap<String, Value>>,
+    review_view: Mutex<HashMap<String, (Option<std::time::SystemTime>, Value)>>,
 }
 
 impl PaperDeck {
@@ -138,6 +139,8 @@ impl Pipeline for PaperDeck {
 
     fn decorate(&self, job: &Job, snap: &mut Map<String, Value>) {
         let st = job.status();
+        let p = job.meta().params;
+        snap.insert("options".into(), json!({ "length": p["length"], "lang": p["lang"], "style": p["style"] }));
         if st == status::DONE
             && let Some(out) = job.output("slides")
         {
@@ -149,12 +152,14 @@ impl Pipeline for PaperDeck {
             snap.insert("result".into(), result);
         }
         if st == status::REVIEW {
-            let cached = self.review_view.lock().unwrap_or_else(|e| e.into_inner()).get(&job.id).cloned();
+            // keyed by the outline file's time: a redone outline (語言／長度) is read again
+            let stamp = std::fs::metadata(job.stage_file("outline")).and_then(|m| m.modified()).ok();
+            let cached = self.review_view.lock().unwrap_or_else(|e| e.into_inner()).get(&job.id).filter(|(t, _)| *t == stamp).map(|(_, v)| v.clone());
             let v = match cached {
                 Some(v) => v,
                 None => {
                     let v = review_view(job);
-                    self.review_view.lock().unwrap_or_else(|e| e.into_inner()).insert(job.id.clone(), v.clone());
+                    self.review_view.lock().unwrap_or_else(|e| e.into_inner()).insert(job.id.clone(), (stamp, v.clone()));
                     v
                 }
             };
@@ -264,6 +269,8 @@ pub struct OutlineOut {
     pub boxes: Vec<ModuleBox>,
     /// Provider id that wrote the plan.
     pub engine: String,
+    /// 微調's 建議 (`suggest.rs`): at most 5 edits on the review rows, often none.
+    pub suggestions: Vec<suggest::Suggestion>,
 }
 
 async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
@@ -284,8 +291,11 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
         return Err(StageError::new(502, "模型的大綱太短"));
     }
     let boxes = outline::module_boxes(llm, &m, &plan).await;
-    cx.counts(json!({ "slides": plan.slides.len(), "boxes": boxes.len() }));
-    to_value(&OutlineOut { plan, questions: vec![], boxes, engine })
+    // 建議: the progress keeps counting characters after the plan's
+    let base = cx.job.meta().stages.get("outline").and_then(|s| s.chars).unwrap_or(0);
+    let suggestions = suggest::suggest(llm, &plan, &m, &p.length, &p.lang, &prof.summary, "", p.engine.as_deref(), &|n| cx.chars(base + n)).await;
+    cx.counts(json!({ "slides": plan.slides.len(), "boxes": boxes.len(), "suggestions": suggestions.len() }));
+    to_value(&OutlineOut { plan, questions: vec![], boxes, engine, suggestions })
 }
 
 async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
@@ -427,32 +437,19 @@ async fn polish_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageErr
 
 // ── the review window ────────────────────────────────────────────────────────
 
-/// The line a review row shows under its title: the take-away, else the first bullet.
-fn point_of(s: &PlanSlide) -> String {
-    if !s.takeaway.trim().is_empty() { s.takeaway.clone() } else { s.bullets.first().cloned().unwrap_or_default() }
-}
-
-fn figs_of(s: &PlanSlide) -> Vec<String> {
-    [&s.figure, &s.table].into_iter().filter(|x| !x.is_empty()).cloned().collect()
-}
-
 /// `review` of the job object while it waits: the outline rows, the paper's figures and
 /// tables (thumbnails from the job folder) and the unknown terms.
 fn review_view(job: &Job) -> Value {
-    let plan: Plan = job.output("outline").and_then(|o| serde_json::from_value(o["plan"].clone()).ok()).unwrap_or_default();
+    let out: OutlineOut = job.output("outline").and_then(|o| serde_json::from_value(o).ok()).unwrap_or_default();
+    let plan = out.plan;
     let m: Material = job.output("source").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
-    let outline: Vec<Value> = plan
-        .slides
-        .iter()
-        .enumerate()
-        .map(|(i, s)| json!({ "id": format!("s{}", i + 1), "kind": s.role, "title": s.title, "figs": figs_of(s), "point": point_of(s) }))
-        .collect();
+    let outline = suggest::rows(&plan);
     let thumb = |f: &super::source::Fig| f.image.as_ref().filter(|im| !im.file.is_empty()).map(|im| format!("/api/todeck/jobs/{}/img/{}", job.id, im.file));
     let mut figures: Vec<Value> = m.figures.iter().enumerate().map(|(i, f)| json!({ "id": f.id, "label": format!("圖 {}", i + 1), "caption": f.caption, "thumb": thumb(f) })).collect();
     figures.extend(m.tables.iter().enumerate().map(|(i, f)| json!({ "id": f.id, "label": format!("表 {}", i + 1), "caption": f.caption, "thumb": thumb(f) })));
     let terms: terms::TermsResult = job.output("terms").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
     let unknown: Vec<Value> = terms.terms.iter().filter(|t| t.unfamiliar()).map(|t| json!({ "term": t.text, "n": t.count })).collect();
-    json!({ "outline": outline, "figures": figures, "unknown": unknown })
+    json!({ "outline": outline, "figures": figures, "unknown": unknown, "suggestions": out.suggestions })
 }
 
 /// 我懂 from the review window, before the slides are made: the terms checkpoint marks them

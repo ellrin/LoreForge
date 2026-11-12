@@ -49,6 +49,7 @@ pub mod polish;
 pub mod profile;
 pub mod source;
 pub mod stages;
+pub mod suggest;
 pub mod terms;
 
 pub use build::*;
@@ -69,6 +70,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/todeck/jobs/{id}/cancel", post(stop))
         .route("/api/todeck/jobs/{id}/resume", post(resume))
         .route("/api/todeck/jobs/{id}/review", post(review).put(review))
+        .route("/api/todeck/jobs/{id}/params", post(change_params))
 }
 
 pub(crate) fn llm(s: &AppState) -> &Llm {
@@ -333,6 +335,51 @@ async fn review(State(s): State<Shared>, UrlPath(id): UrlPath<String>, body: Opt
         Ok(()) => Json(js.view(&job)).into_response(),
         Err(m) => err(StatusCode::CONFLICT, m),
     }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ParamsBody {
+    #[serde(default)]
+    length: Option<String>,
+    #[serde(default)]
+    lang: Option<String>,
+    #[serde(default)]
+    style: Option<String>,
+}
+
+/// 微調's 語言／長度／底版 while the job waits for the author: 語言 or 長度 redo the outline (the
+/// job runs again and comes back to the review); 底版 only changes what the slides are made with.
+async fn change_params(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(b): Json<ParamsBody>) -> Response {
+    let job = match find(&s, &id) {
+        Ok(j) => j,
+        Err(r) => return r,
+    };
+    let js = jobs(&s);
+    if job.is_running() || job.status() != jobs::status::REVIEW {
+        return err(StatusCode::CONFLICT, "這個工作沒有在等微調");
+    }
+    if b.length.as_deref().is_some_and(|l| !matches!(l, "short" | "standard" | "long")) || b.lang.as_deref().is_some_and(|l| !matches!(l, "zh" | "en")) {
+        return err(StatusCode::BAD_REQUEST, "不認得的長度或語言");
+    }
+    if let Some(st) = &b.style
+        && let Err(e) = s.ws.style(st)
+    {
+        return crate::ApiError::from(e).into_response();
+    }
+    let p = job.meta().params;
+    let changed = |k: &str, v: &Option<String>| v.as_deref().is_some_and(|v| p[k].as_str() != Some(v));
+    let redo = changed("length", &b.length) || changed("lang", &b.lang);
+    js.set_params(&job, |p| {
+        for (k, v) in [("length", &b.length), ("lang", &b.lang), ("style", &b.style)] {
+            if let Some(v) = v {
+                p[k] = v.clone().into();
+            }
+        }
+    });
+    if redo && let Err(m) = js.redo_from(&job, "outline") {
+        return err(StatusCode::CONFLICT, m);
+    }
+    Json(js.view(&job)).into_response()
 }
 
 async fn remove(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {

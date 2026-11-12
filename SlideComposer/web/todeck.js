@@ -148,12 +148,14 @@ const TDAPI = {
   resume: (id) => TDAPI.post(`/api/todeck/jobs/${encodeURIComponent(id)}/resume`),
   discard: (id) => TDAPI.j(`/api/todeck/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
   review: (id, body) => TDAPI.post(`/api/todeck/jobs/${encodeURIComponent(id)}/review`, body),
+  params: (id, body) => TDAPI.post(`/api/todeck/jobs/${encodeURIComponent(id)}/params`, body),
 };
 
 // A synthetic job on a client clock: stages advance by time, the review stage waits for the author.
 const TDMOCK = (() => {
   const at = new URL(location.href).searchParams.get("at") ?? "run";
-  let t0 = Date.now(), reviewed = null, stopped = false;
+  let t0 = Date.now(), reviewed = null, stopped = false, redoAt = 0;
+  const options = { length: "standard", lang: "zh", style: null };
   const svg = (c, n) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='64' height='40'><rect width='64' height='40' fill='${c}'/><text x='32' y='25' font-size='14' text-anchor='middle' fill='#fff' font-family='sans-serif'>${n}</text></svg>`)}`;
   const figures = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ id: `fig${n}`, label: `圖 ${n}`, thumb: svg(["#4a7", "#58b", "#a65", "#86a"][n % 4], n) }));
   const outline = [
@@ -165,6 +167,12 @@ const TDMOCK = (() => {
   ].map(([kind, title, figs, point], i) => ({ id: `s${i + 1}`, kind, title, figs, point }));
   const unknown = ["contrastive loss", "InfoNCE", "ablation", "temperature τ", "hard negative", "MoCo", "projection head", "linear probe", "cosine schedule", "EMA teacher", "BYOL", "SimCLR"].map((term, i) => ({ term, n: 12 - i }));
   const title = "Contrastive Learning for Sparse Signals";
+  let suggestions = [
+    { op: "split", id: "s6", title: "模組二：對齊損失", point: "溫度 τ 決定負樣本的權重", reason: "兩張圖加公式，一頁放不下" },
+    { op: "figure", id: "s3", fig: "fig8", reason: "缺口這頁沒有圖" },
+    { op: "move", id: "s9", to: "s10", reason: "你的簡報習慣把討論放在 Take home 後" },
+    { op: "retitle", id: "s7", title: "主要結果：比基線高 4.2 點", reason: "你的結果頁標題常用「：」句型" },
+  ];
   function snapshot() {
     if (at === "interrupted") return { id: "mock", title, state: "interrupted", step: 4, stages: TD_STAGES.map(([id], i) => ({ id, state: i < 3 ? "done" : "pending", ms: i < 3 ? 4000 : 0 })) };
     const dur = [6, 3, 5, 2, 14];
@@ -184,7 +192,15 @@ const TDMOCK = (() => {
     const reviewing = cur == null;
     const out = { id: "mock", title, state: reviewing ? "review" : "running", stage: reviewing ? "review" : TD_STAGES[cur][0] };
     out.stages = TD_STAGES.map(([id], i) => st[i] ?? { id, state: "pending", ms: 0 });
-    if (reviewing) { out.stages[5] = { id: "review", state: "running", ms: 0 }; out.review = { outline, figures, unknown }; }
+    if (reviewing) { out.stages[5] = { id: "review", state: "running", ms: 0 }; out.review = { outline, figures, unknown, suggestions }; }
+    out.options = { ...options, style: options.style ?? S.info?.style_list?.[0]?.id ?? S.info?.styles?.[0] ?? null };
+    // 語言／長度 changed: the outline is written again for a few seconds
+    if (redoAt && Date.now() - redoAt < 3500 && !reviewed) {
+      out.state = "running";
+      out.stages = TD_STAGES.map(([id], i) => ({ id, state: i < 4 ? "done" : i === 4 ? "running" : "pending", ms: i === 4 ? Date.now() - redoAt : 4000 }));
+      out.stages[4].chars = Math.round((Date.now() - redoAt) / 2); out.stages[4].agoMs = 300;
+      delete out.review;
+    }
     if (reviewed || at === "done") {
       out.state = "done";
       out.deck = "demo";
@@ -200,6 +216,10 @@ const TDMOCK = (() => {
     resume: async () => { stopped = false; t0 = Date.now(); },
     discard: async () => {},
     review: async (_id, body) => { reviewed = body; window.__tdReview = body; },
+    params: async (_id, body) => {
+      if ((body.lang && body.lang !== options.lang) || (body.length && body.length !== options.length)) { redoAt = Date.now(); suggestions = []; }
+      Object.assign(options, body);
+    },
   };
 })();
 const tdApi = () => (new URL(location.href).searchParams.get("job") === "mock" || TDJ.id === "mock" ? TDMOCK : TDAPI);
@@ -297,14 +317,22 @@ const TDJ = (() => {
     const root = shell();
     const rows = rv.outline.map((r) => ({ ...r, figs: [...(r.figs ?? [])] }));
     const figs = new Map(rv.figures.map((f) => [f.id, f]));
-    const ans = { audience: null, mainFig: null, modules: null, opinion: null };
-    const known = new Set();
-    let remember = false;
+    // answers, 我懂 and 記得 survive a redone outline (語言／長度)
+    const keep = J.keep?.id === J.id ? J.keep : null;
+    const ans = { audience: null, mainFig: null, modules: null, opinion: null, ...(keep?.ans ?? {}) };
+    const known = new Set(keep?.known ?? []);
+    let remember = keep?.remember ?? false;
+    const opts = { length: "standard", lang: "zh", style: null, ...(snap.options ?? {}) };
+    let sugg = (rv.suggestions ?? []).map((x, i) => ({ ...x, k: i, state: "" }));
+    let newId = 0;
 
     const body = E("div", { class: "tdj-body wide" });
-    const bOut = LoreShell.block({ n: "01", title: "大綱", count: String(rows.length), key: "tdj.outline" });
-    const bQ = LoreShell.block({ n: "02", title: "問題", key: "tdj.q" });
-    const bT = LoreShell.block({ n: "03", title: `這 ${rv.unknown.length} 個詞不在你的知識庫`, key: "tdj.terms" });
+    const hasS = sugg.length > 0;
+    const nb = (i) => String(i + (hasS ? 1 : 0)).padStart(2, "0");
+    const bS = hasS ? LoreShell.block({ n: "01", title: "建議", count: String(sugg.length), key: "tdj.sugg" }) : null;
+    const bOut = LoreShell.block({ n: nb(1), title: "大綱", count: String(rows.length), key: "tdj.outline" });
+    const bQ = LoreShell.block({ n: nb(2), title: "問題", key: "tdj.q" });
+    const bT = LoreShell.block({ n: nb(3), title: `這 ${rv.unknown.length} 個詞不在你的知識庫`, key: "tdj.terms" });
 
     const list = E("ol", { class: "tdj-outline" });
     function paintRows() {
@@ -328,7 +356,68 @@ const TDJ = (() => {
           E("button", { type: "button", class: "ico tiny", "aria-label": "刪除", onclick: () => { rows.splice(i, 1); paintRows(); } }, ic("trash"))));
       });
       paint(list);
+      paintSugg();
     }
+
+    // 建議: one structured edit each, 套用 changes the rows above, 忽略 drops it
+    const at = (id) => rows.findIndex((r) => r.id === id);
+    const pg = (id) => `第 ${at(id) + 1} 頁`;
+    const figName = (id) => (id ? figs.get(id)?.label ?? id : "不放圖");
+    function describe(x) {
+      switch (x.op) {
+        case "add": return `${x.to ? `${pg(x.to)}後` : "最前面"}加一頁：${x.title}`;
+        case "remove": return `刪掉${pg(x.id)}`;
+        case "move": return `${pg(x.id)}移到${x.to ? `${pg(x.to)}後` : "最前面"}`;
+        case "retitle": return `${pg(x.id)}標題 → ${x.title}`;
+        case "point": return `${pg(x.id)}重點 → ${x.point}`;
+        case "figure": return `${pg(x.id)} → ${figName(x.fig)}`;
+        case "merge": return `${pg(x.with)}併入${pg(x.id)}`;
+        case "split": return `${pg(x.id)}拆成兩頁：${x.title}`;
+        default: return x.op;
+      }
+    }
+    const usable = (x) => [x.id, x.with, x.to].every((id) => !id || at(id) >= 0);
+    function applyS(x) {
+      const i = at(x.id), fresh = () => `n${++newId}`;
+      const row = (kind, title, point, fig) => ({ id: fresh(), kind, title: title ?? "", point: point ?? "", figs: fig ? [fig] : [] });
+      switch (x.op) {
+        case "add": rows.splice(x.to ? at(x.to) + 1 : 0, 0, row(x.kind, x.title, x.point, x.fig)); break;
+        case "remove": rows.splice(i, 1); break;
+        case "move": { const [r] = rows.splice(i, 1); rows.splice(x.to ? at(x.to) + 1 : 0, 0, r); break; }
+        case "retitle": rows[i].title = x.title; break;
+        case "point": rows[i].point = x.point; break;
+        case "figure": {
+          const isTab = (id) => id?.startsWith("tab");
+          const r = rows[i];
+          if (!x.fig) r.figs = [];
+          else r.figs = [x.fig, ...r.figs.filter((f) => isTab(f) !== isTab(x.fig))];
+          break;
+        }
+        case "merge": { const w = rows[at(x.with)]; if (x.title) rows[i].title = x.title; for (const f of w.figs) if (!rows[i].figs.includes(f)) rows[i].figs.push(f); rows.splice(at(x.with), 1); break; }
+        case "split": rows.splice(i + 1, 0, row(rows[i].kind, x.title, x.point)); break;
+      }
+      x.state = "applied";
+      paintRows();
+    }
+    const sl = E("ul", { class: "tdj-sugg" });
+    function paintSugg() {
+      if (!bS) return;
+      sl.textContent = "";
+      const open = sugg.filter((x) => x.state !== "ignored");
+      bS.setCount(String(open.filter((x) => !x.state).length));
+      for (const x of open) {
+        const done = x.state === "applied", ok = usable(x);
+        sl.append(E("li", { class: done ? "done" : "" },
+          E("span", { class: "why" }, x.reason),
+          E("span", { class: "what" }, describe(x)),
+          done ? E("span", { class: "st" }, ic("check"), "已套用")
+            : E("span", { class: "acts" },
+              E("button", { type: "button", class: "btn small", onclick: () => { x.state = "ignored"; paintSugg(); } }, "忽略"),
+              E("button", { type: "button", class: "btn small", disabled: !ok, title: ok ? null : "這一頁已刪除", onclick: () => applyS(x) }, "套用"))));
+      }
+      paint(sl);
+    }
+    if (bS) bS.body.append(sl);
     function swap(anchor, r, cur) {
       const items = rv.figures.map((f) => ({ label: f.label, current: f.id === cur, run: () => { if (cur == null) r.figs.push(f.id); else r.figs[r.figs.indexOf(cur)] = f.id; paintRows(); } }));
       if (cur != null) items.push({ label: "移除", run: () => { r.figs = r.figs.filter((x) => x !== cur); paintRows(); } });
@@ -341,13 +430,13 @@ const TDJ = (() => {
     const q = (label, ctl) => E("div", { class: "tdj-q" }, E("span", { class: "ql" }, label), ctl);
     const seg = (opts, key) => {
       const s = E("div", { class: "seg", role: "radiogroup" });
-      for (const [v, t] of opts) s.append(E("button", { type: "button", "aria-pressed": "false", "data-v": String(v), onclick: () => {
+      for (const [v, t] of opts) s.append(E("button", { type: "button", "aria-pressed": String(ans[key] === v), "data-v": String(v), onclick: () => {
         ans[key] = ans[key] === v ? null : v;
         s.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === String(ans[key]))));
       } }, t));
       return s;
     };
-    const figSel = E("select", { class: "tdj-sel", "aria-label": "主架構圖", onchange: (e) => (ans.mainFig = e.target.value || null) }, E("option", { value: "" }, "—"), ...rv.figures.map((f) => E("option", { value: f.id }, f.label)));
+    const figSel = E("select", { class: "tdj-sel", "aria-label": "主架構圖", onchange: (e) => (ans.mainFig = e.target.value || null) }, E("option", { value: "" }, "—"), ...rv.figures.map((f) => E("option", { value: f.id, selected: f.id === ans.mainFig }, f.label)));
     bQ.body.append(
       q("聽眾", seg([["lab", "實驗室組會"], ["seminar", "研討會"], ["defense", "口試"]], "audience")),
       q("主架構圖", figSel),
@@ -356,17 +445,55 @@ const TDJ = (() => {
 
     const tl = E("ul", { class: "tdj-terms" });
     for (const t of rv.unknown) {
-      tl.append(E("li", {}, E("label", {}, E("input", { type: "checkbox", onchange: (e) => (e.target.checked ? known.add(t.term) : known.delete(t.term)) }), E("span", { class: "tm" }, t.term), t.n ? E("span", { class: "n" }, `×${t.n}`) : null, E("span", { class: "kn" }, "我懂"))));
+      tl.append(E("li", {}, E("label", {}, E("input", { type: "checkbox", checked: known.has(t.term), onchange: (e) => (e.target.checked ? known.add(t.term) : known.delete(t.term)) }), E("span", { class: "tm" }, t.term), t.n ? E("span", { class: "n" }, `×${t.n}`) : null, E("span", { class: "kn" }, "我懂"))));
     }
-    bT.body.append(tl, E("label", { class: "tdj-rem" }, E("input", { type: "checkbox", onchange: (e) => (remember = e.target.checked) }), "同時存進知識庫（記得）"));
+    bT.body.append(tl, E("label", { class: "tdj-rem" }, E("input", { type: "checkbox", checked: remember, onchange: (e) => (remember = e.target.checked) }), "同時存進知識庫（記得）"));
     if (!rv.unknown.length) bT.style.display = "none";
 
-    body.append(bOut, bQ, bT);
+    // 語言／長度 redo the outline (the job runs again and comes back here); 底版 is kept for the slides
+    const stash = () => { J.keep = { id: J.id, ans: { ...ans }, known: [...known], remember }; };
+    const setOpt = async (key, v) => {
+      if (J.busy || opts[key] === v) return;
+      J.busy = true;
+      try {
+        stash();
+        await tdApi().params(J.id, { [key]: v });
+        opts[key] = v;
+        if (key !== "style") { J.mode = ""; J.live = true; poll(); }
+        else box.querySelectorAll("input").forEach((r) => (r.checked = r.value === v));
+      } catch (e) { toast(e.message, true); paintOpts(); } finally { J.busy = false; }
+    };
+    const optSeg = (key, list) => {
+      const g = E("div", { class: "seg", role: "radiogroup", "data-k": key });
+      for (const [v, t] of list) g.append(E("button", { type: "button", "aria-pressed": String(opts[key] === v), "data-v": v, onclick: () => setOpt(key, v) }, t));
+      return g;
+    };
+    const box = E("div", { class: "tdj-bases", role: "radiogroup", "aria-label": "底版" });
+    const strip = E("div", { class: "tdj-opts" },
+      E("span", { class: "ql" }, "長度"), optSeg("length", [["short", "短 10"], ["standard", "標準 15–20"], ["long", "長"]]),
+      E("span", { class: "ql" }, "語言"), optSeg("lang", [["zh", "中文"], ["en", "English"]]),
+      E("span", { class: "ql" }, "底版"), box);
+    function paintOpts() { strip.querySelectorAll(".seg").forEach((g) => g.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(opts[g.dataset.k] === b.dataset.v)))); }
+    (async () => {
+      if (!S.info) { try { S.info = await api("/api/info"); } catch {} }
+      const styles = S.info?.style_list ?? (S.info?.styles ?? []).map((id) => ({ id, name: id }));
+      for (const st of styles) {
+        const l = E("label", { class: "base-opt", title: st.name }, E("input", { type: "radio", name: "tdjbase", value: st.id }), E("div", { class: "thumb16" }), E("span", {}, st.name));
+        const r = l.querySelector("input");
+        r.checked = st.id === opts.style;
+        r.onchange = () => setOpt("style", st.id);
+        box.append(l);
+        drawStyleCover(l.querySelector(".thumb16"), st.id).catch(() => l.querySelector(".thumb16").classList.add("blank"));
+      }
+    })();
+
+    body.append(strip, ...(bS ? [bS] : []), bOut, bQ, bT);
     const submit = async (skip) => {
       if (J.busy) return;
       J.busy = true;
       try {
         await tdApi().review(J.id, skip ? { skip: true } : { outline: rows.map((r) => ({ id: r.id, kind: r.kind, title: r.title, figs: r.figs, point: r.point })), answers: ans, known: [...known], remember });
+        J.keep = null;
         J.mode = "";
         J.live = true;
         poll();

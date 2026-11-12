@@ -500,6 +500,30 @@ impl Jobs {
         job.edit(true, |m| f(&mut m.params));
     }
 
+    /// Redo from `stage` on: its checkpoint and every later one are removed, then the run starts
+    /// again (finished earlier stages are kept). `Err` while a run is going on.
+    pub fn redo_from(self: &Arc<Self>, job: &Arc<Job>, stage: &str) -> Result<(), String> {
+        if job.is_running() {
+            return Err("工作正在進行".into());
+        }
+        let specs = self.specs();
+        let at = specs.iter().position(|s| s.id == stage).ok_or_else(|| format!("沒有這個階段：{stage}"))?;
+        for sp in &specs[at..] {
+            match std::fs::remove_file(job.stage_file(sp.id)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        job.edit(true, |m| {
+            for sp in &specs[at..] {
+                m.stages.insert(sp.id.to_string(), StageMeta { state: "pending".into(), ..Default::default() });
+            }
+        });
+        self.start(job);
+        Ok(())
+    }
+
     /// The author's input for the waiting stage: written as its checkpoint, then the run
     /// goes on. `Err` when the job is not waiting there.
     pub fn submit(self: &Arc<Self>, job: &Arc<Job>, stage: &str, output: Value) -> Result<(), String> {
@@ -776,6 +800,26 @@ mod tests {
         assert_eq!(runs, vec![1, 2, 0, 1], "only b again");
         assert_eq!(j2.output("b").unwrap()["n"], 2);
         assert_eq!(std::fs::read(j2.stage_file("c")).unwrap(), c_before);
+    }
+
+    /// 微調's 語言／長度: the job goes back to `b`, later stages are redone, earlier ones kept,
+    /// and it waits for the author again.
+    #[tokio::test]
+    async fn redo_from_reruns_only_that_stage_and_waits_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = fake(false);
+        let jobs = Jobs::open(dir.path().to_path_buf(), p.clone());
+        let job = jobs.create(json!({ "lang": "zh" }), false, "t").unwrap();
+        until(&job, |m| m.status == status::REVIEW).await;
+        job.settled().await;
+        jobs.set_params(&job, |v| v["lang"] = "en".into());
+        jobs.redo_from(&job, "b").unwrap();
+        until(&job, |m| m.status == status::REVIEW && m.stages.get("b").is_some_and(|s| s.state == "done")).await;
+        job.settled().await;
+        let runs: Vec<usize> = p.runs.iter().map(|r| r.load(Ordering::SeqCst)).collect();
+        assert_eq!(runs, vec![1, 2, 0, 0], "a kept, b again, still waiting before c");
+        assert_eq!(job.meta().params["lang"], "en");
+        assert!(jobs.redo_from(&job, "nope").is_err());
     }
 
     #[test]
