@@ -204,3 +204,35 @@ async fn deploy_keys_are_never_made_inside_a_git_repo() {
     assert!(err.contains("git repository"), "{err}");
     assert!(!key.exists());
 }
+
+#[tokio::test]
+async fn local_only_repo_is_never_synced_or_pushed() {
+    let t = tempfile::tempdir().unwrap();
+    let bare = t.path().join("remote.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    Repo::new(&bare).git(&["init", "--quiet", "--bare", "-b", "main"]).await.unwrap();
+    let dir = t.path().join("catalog");
+    write(&dir, "files/a.json", "{}\n");
+    let r = repo(&dir);
+    r.init_and_push(None, "Create", None).await.unwrap();
+    write(&dir, LOCAL_ONLY_MARKER, "local only\n");
+
+    let e = r.git(&["remote", "add", "origin", bare.to_str().unwrap()]).await.unwrap_err();
+    assert_eq!(e.kind, ErrorKind::LocalOnly);
+    // Even with a remote added behind our back, nothing goes up.
+    std::process::Command::new("git").arg("-C").arg(&dir).args(["remote", "add", "origin", bare.to_str().unwrap()]).status().unwrap();
+    assert_eq!(r.sync(&SyncOptions::default()).await.unwrap_err().kind, ErrorKind::LocalOnly);
+    assert_eq!(r.pull().await.unwrap_err().kind, ErrorKind::LocalOnly);
+    assert_eq!(r.git(&["push", "-q", "origin", "main"]).await.unwrap_err().kind, ErrorKind::LocalOnly);
+    assert_eq!(r.git(&["fetch", "origin"]).await.unwrap_err().kind, ErrorKind::LocalOnly);
+    // From a subfolder too.
+    assert_eq!(repo(&dir.join("files")).git(&["push"]).await.unwrap_err().kind, ErrorKind::LocalOnly);
+    assert!(r.status().await.repo, "status still works");
+    let other = t.path().join("other");
+    write(&other, "x.txt", "x\n");
+    assert_eq!(repo(&other).init_and_push(Some(bare.to_str().unwrap()), "x", None).await.ok().map(|_| ()), Some(()), "unmarked repos unaffected");
+    let refs = Repo::new(&bare).git(&["for-each-ref"]).await.unwrap();
+    assert!(refs.contains("refs/heads/main"));
+    let log = Repo::new(&bare).git(&["log", "--format=%s", "main"]).await.unwrap();
+    assert_eq!(log, "x", "only the unmarked repo reached the remote");
+}

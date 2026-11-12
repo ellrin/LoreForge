@@ -20,7 +20,11 @@
 //! - failures carry an [`ErrorKind`] (`offline`, `auth`, `conflict`, …) so a
 //!   UI can stay quiet when offline and speak up when it matters; a local
 //!   commit made before a failed push is reported in [`GitError::committed`]
-//!   (the commit stays and goes up next time).
+//!   (the commit stays and goes up next time);
+//! - a repo with a [`LOCAL_ONLY_MARKER`] file at its root (the LoreShelf
+//!   catalog) is never synced: `sync`, `pull`, `init_and_push` with a remote
+//!   and any raw `push` / `fetch` / `pull` / `remote add` fail with
+//!   [`ErrorKind::LocalOnly`].
 
 pub mod vcs;
 
@@ -49,6 +53,8 @@ pub enum ErrorKind {
     Identity,
     /// Target folder already exists (clone).
     Exists,
+    /// The repo is marked local-only ([`LOCAL_ONLY_MARKER`]); never synced.
+    LocalOnly,
     Other,
 }
 
@@ -87,6 +93,29 @@ impl GitError {
         self.committed = c.clone();
         self
     }
+}
+
+/// Marker file at the root of a repo that must never reach a remote (same
+/// constant as `lore_catalog::LOCAL_ONLY_MARKER`).
+pub const LOCAL_ONLY_MARKER: &str = ".lore-local-only";
+
+/// The marker file governing `dir`: `dir` and its parents up to the nearest
+/// work-tree root (the first folder holding `.git`).
+pub fn local_only_marker(dir: &Path) -> Option<PathBuf> {
+    for a in dir.ancestors() {
+        let m = a.join(LOCAL_ONLY_MARKER);
+        if m.exists() {
+            return Some(m);
+        }
+        if a.join(".git").exists() {
+            break;
+        }
+    }
+    None
+}
+
+fn local_only_error(dir: &Path) -> Option<GitError> {
+    local_only_marker(dir).map(|m| GitError::new(ErrorKind::LocalOnly, "這個資料夾只能存在本機（.lore-local-only），不會同步或推送", m.display().to_string()))
 }
 
 #[derive(Debug, Clone, Serialize, Default, PartialEq, Eq)]
@@ -201,6 +230,9 @@ impl Repo {
     /// something came in. Both sides ahead → [`ErrorKind::Diverged`] (sync
     /// replays local work on top).
     pub async fn pull(&self) -> Result<bool, GitError> {
+        if let Some(e) = local_only_error(&self.dir) {
+            return Err(e);
+        }
         let before = self.status().await;
         if !before.repo || before.remote.is_none() {
             return Ok(false);
@@ -237,6 +269,9 @@ impl Repo {
     /// On save: commit (everything, or only `opts.only`), bring in remote
     /// work (rebasing local commits on top), push.
     pub async fn sync(&self, opts: &SyncOptions) -> Result<SyncResult, GitError> {
+        if let Some(e) = local_only_error(&self.dir) {
+            return Err(e);
+        }
         let st = self.status().await;
         if !st.repo {
             return Err(GitError::new(ErrorKind::NotRepo, "工作區不是 Git repository", ""));
@@ -339,6 +374,11 @@ impl Repo {
     /// `git init` a new workspace, make the first commit, and push it to the
     /// user's empty private repo when a remote URL is given.
     pub async fn init_and_push(&self, remote: Option<&str>, first_message: &str, author: Option<&Author>) -> Result<String, GitError> {
+        if remote.is_some()
+            && let Some(e) = local_only_error(&self.dir)
+        {
+            return Err(e);
+        }
         if self.status().await.repo {
             return Ok("已是 Git repository".into());
         }
@@ -366,6 +406,10 @@ fn strs(v: &[String]) -> Vec<&str> {
 async fn run(dir: &Path, args: &[&str], config: &[(String, String)], ssh: Option<&str>, timeout: Duration) -> Result<String, GitError> {
     if args.first() == Some(&"push") && args.iter().any(|a| *a == "-f" || a.starts_with("--force") || a.starts_with('+') || *a == "--mirror") {
         return Err(GitError::new(ErrorKind::Other, "不允許 force push", args.join(" ")));
+    }
+    let network = matches!(args.first(), Some(&"push" | &"fetch" | &"pull")) || (args.first() == Some(&"remote") && args.get(1) == Some(&"add"));
+    if network && let Some(e) = local_only_error(dir) {
+        return Err(e);
     }
     let mut c = Command::new("git");
     #[cfg(windows)]

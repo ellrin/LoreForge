@@ -21,8 +21,11 @@ lore-gitsync = { path = "../commons/crates/lore-gitsync" }
 - `SyncOptions::only` commits only those path prefixes (family mode
   `profiles/<member>/`, `knowledge/progress/<member>/`); other edits stay uncommitted.
 - Errors carry `kind` (`offline`, `auth`, `conflict`, `diverged`, `secret`, `notrepo`,
-  `nogit`, `identity`, `exists`, `other`), a user message (zh-TW), git's `detail`, and
+  `nogit`, `identity`, `exists`, `localonly`, `other`), a user message (zh-TW), git's `detail`, and
   `committed` when a local commit was made before the failure (it goes up next time).
+- A repo with `.lore-local-only` at its root (`LOCAL_ONLY_MARKER`, the LoreShelf catalog) is
+  never synced: `sync`, `pull`, `init_and_push` with a remote and raw `push` / `fetch` /
+  `pull` / `remote add` return `ErrorKind::LocalOnly` (`local_only_marker(dir)` tells).
 - No prompts ever (`GIT_TERMINAL_PROMPT=0`), `LC_ALL=C`, timeouts; no console windows on
   Windows.
 
