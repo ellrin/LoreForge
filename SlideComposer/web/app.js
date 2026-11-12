@@ -1823,6 +1823,11 @@ async function openDeck(name) {
   FILE.asked = false;
   setFile(r.file);
   renderAll();
+  // 排版用字: open right after a 論文報告 job (?polish=1), else kept for the AI menu
+  const u = new URL(location.href);
+  POLISH.open = false;
+  loadPolish(name, u.searchParams.get("polish") === "1");
+  if (u.searchParams.has("polish")) { u.searchParams.delete("polish"); try { history.replaceState(null, "", u); } catch {} }
 }
 
 /** Status bar: position, layout, save state (zoom is set by renderCanvas). */
@@ -2103,7 +2108,7 @@ function mountShell() {
       { id: "insPaper", icon: "news", label: "論文", pressed: false, run: () => rdToggle() },
     ],
     // the flow-chart module (lore-flow) has no UI yet: the slot is kept, the entry is off
-    ai: { icon: "spark", label: "AI", menu: [{ icon: "graph", label: "流程圖", disabled: true, title: "即將推出" }] },
+    ai: { icon: "spark", label: "AI", menu: [{ icon: "check", label: "排版用字", run: () => openPolish() }, { icon: "graph", label: "流程圖", disabled: true, title: "即將推出" }] },
     notation: openNotation,
     export: exportItems(),
     undo: { undo, redo },

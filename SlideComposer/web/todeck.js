@@ -224,6 +224,11 @@ const TDMOCK = (() => {
 })();
 const tdApi = () => (new URL(location.href).searchParams.get("job") === "mock" || TDJ.id === "mock" ? TDMOCK : TDAPI);
 
+/** The finished deck, with its 排版用字 report open in the right panel. */
+function openReport(name) {
+  location.search = `?deck=${encodeURIComponent(name)}&polish=1`;
+}
+
 const TDJ = (() => {
   const E = (tag, attrs = {}, ...kids) => {
     const e = document.createElement(tag);
@@ -300,7 +305,7 @@ const TDJ = (() => {
     const foot = E("footer", { class: "tdj-foot" }, spacer());
     const msg = snap.state === "failed" ? snap.error ?? "沒有完成" : snap.state === "stopped" ? "已停止" : snap.state === "interrupted" ? `上次做到第 ${snap.step ?? stepOf(snap)} 步` : "";
     if (snap.state === "running") foot.append(E("button", { type: "button", class: "btn danger", onclick: stop }, "停止"));
-    else if (snap.state === "done") foot.append(E("button", { type: "button", class: "btn primary", onclick: () => openByName(snap.deck) }, "打開簡報"));
+    else if (snap.state === "done") foot.append(E("button", { type: "button", class: "btn primary", onclick: () => openReport(snap.deck) }, "打開簡報"));
     else foot.append(E("button", { type: "button", class: "btn", onclick: discard }, "捨棄"), E("button", { type: "button", class: "btn primary", onclick: resume }, "繼續"));
     root.replaceChildren(head(snap), E("div", { class: "tdj-body" }, list, msg ? E("p", { class: "tdj-msg" + (snap.state === "failed" ? " err" : "") }, msg) : null), foot);
     paint(root);
@@ -515,7 +520,7 @@ const TDJ = (() => {
       if (snap.state === "review") { if (J.mode !== "review") paintReview(); }
       else {
         paintProgress();
-        if (snap.state === "done" && snap.deck && J.live) { J.live = false; const id = J.id; setTimeout(() => J.id === id && openByName(snap.deck), 1200); }
+        if (snap.state === "done" && snap.deck && J.live) { J.live = false; const id = J.id; setTimeout(() => J.id === id && openReport(snap.deck), 1200); }
       }
       if (snap.state === "running" || snap.state === "review") J.timer = setTimeout(poll, 1000);
     } catch (e) {

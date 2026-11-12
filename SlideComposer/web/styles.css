@@ -377,3 +377,13 @@ dialog .actions { flex-wrap: wrap; }
 @keyframes pd-run { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
 @media (prefers-reduced-motion: reduce) { .pd-bar::before { animation: none; width: 100%; opacity: .5; } }
 @media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* 排版用字 report (right panel) */
+.pol-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.pol { display: grid; grid-template-columns: 26px 1fr auto; gap: 6px; align-items: center; padding: 3px 0; font-size: 12.5px; }
+.pol .pg { height: 20px; border: 1px solid var(--line); border-radius: var(--r); background: none; color: var(--accent-text); font-size: 11px; padding: 0; cursor: pointer; }
+.pol .pg:hover { border-color: var(--accent-text); }
+.pol .msg { min-width: 0; overflow-wrap: anywhere; }
+.pol.undone .msg { color: var(--muted); text-decoration: line-through; }
+.pol.manual .msg { color: var(--muted); }
+.pol .st { font-size: 11px; color: var(--muted); }

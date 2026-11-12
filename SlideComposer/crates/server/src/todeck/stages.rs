@@ -407,7 +407,7 @@ async fn polish_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageErr
     // the deck's shared session: a page that has it open sees the fixes and never saves over them
     let sess = crate::session(s, &name).map_err(api)?;
     let (s2, style, lang) = (s.clone(), p.style.clone(), p.lang.clone());
-    let (mut report, deck) = tokio::task::spawn_blocking(move || -> Result<(polish::PolishReport, lore_canvas::Deck), StageError> {
+    let (mut report, deck, deck_dir) = tokio::task::spawn_blocking(move || -> Result<(polish::PolishReport, lore_canvas::Deck, PathBuf), StageError> {
         let st = s2.ws.style(&style).map_err(|e| api(e.into()))?;
         let mut sess = sess.lock().unwrap_or_else(|e| e.into_inner());
         let (_, doc) = crate::notation::load(&sess.dir, None);
@@ -421,17 +421,24 @@ async fn polish_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageErr
             sess.editor.apply(ops, "排版用字微調").map_err(|e| api(e.into()))?;
             sess.save().map_err(|e| api(e.into()))?;
         }
-        Ok((report, sess.editor.deck.clone()))
+        Ok((report, sess.editor.deck.clone(), sess.dir.clone()))
     })
     .await
     .map_err(join_err)??;
     // rule 6's model step (one term per concept): suggestions only, never applied here
     cx.counts(json!({ "checks": report.checks, "fixes": report.fixes.len() }));
-    if let Ok((groups, terms, _)) = crate::deckpolish::suggest_terms(super::llm(s), &deck, p.engine.as_deref()).await {
-        let mut rep = crate::deckpolish::Report { items: std::mem::take(&mut report.items), ..Default::default() };
-        crate::deckpolish::term_items(&deck, &groups, &terms, &mut rep);
-        report.items = rep.items;
+    let mut rep = crate::deckpolish::Report { items: std::mem::take(&mut report.items), ..Default::default() };
+    match crate::deckpolish::suggest_terms(super::llm(s), &deck, p.engine.as_deref()).await {
+        Ok((groups, terms, engine)) => {
+            crate::deckpolish::term_items(&deck, &groups, &terms, &mut rep);
+            rep.engine = engine;
+        }
+        Err(e) => rep.notes.push(format!("用詞一致的建議沒有做：{e}")),
     }
+    // the deck's own report (`decks/<name>/polish.json`): the editor shows it, 復原 and 套用
+    // go through `POST /api/decks/{name}/polish/{item}` (the editor's undo path)
+    crate::deckpolish::save_report(&deck_dir, &rep).map_err(|e| StageError::new(500, e))?;
+    report.items = rep.items;
     to_value(&report)
 }
 

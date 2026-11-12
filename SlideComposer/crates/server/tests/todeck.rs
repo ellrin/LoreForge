@@ -146,7 +146,7 @@ fn plan(lang_text: &str) -> Value {
             { "role": "overview", "title": "Big picture", "bullets": [], "figure": "fig1", "steps": ["Encode the image", "Fuse the lesions", "Decode the grade"] },
             { "role": "method", "title": "Encoder", "bullets": ["Finds lesions as in Fig. 3"], "figure": "fig1", "module": 1 },
             { "role": "method", "title": "Fusion", "bullets": ["Weighs each lesion by $\\vx$"], "figure": "fig1", "module": 2 },
-            { "role": "method", "title": "Decoder", "bullets": ["Grades the image"], "figure": "fig1", "module": 3, "equations": ["eq1", "eq99"] },
+            { "role": "method", "title": "Decoder.", "bullets": ["Grades the image"], "figure": "fig1", "module": 3, "equations": ["eq1", "eq99"] },
             { "role": "loss", "title": "Reconstruction loss", "bullets": ["Penalises the distance (Eq. (1))"], "equations": ["eq1"] },
             { "role": "training", "title": "Training details", "bullets": [], "kv": [["Epochs", "30"], ["Optimiser", "AdamW"], ["Learning rate", "$10^{-4}$"]] },
             { "role": "results", "title": "Main results", "bullets": [], "table": "tab1", "takeaway": "Ours wins on both metrics, see Table 1" },
@@ -181,6 +181,46 @@ fn workspace(root: &Path) -> sc_core::Workspace {
     let example = sc_server::repo_dir().join("../private-example/SlideComposer");
     lore_home::copy_missing(&example, &root.join("sc")).unwrap();
     sc_core::Workspace::new(root.join("sc"), None)
+}
+
+/// The author's own earlier decks (synthetic, "imported": slides carry `src`) in the temp home's
+/// `private/SlideComposer/decks`, for the profile and the voice examples. Footers, a confidential
+/// mark and a presenter line repeat on every slide; a `Ref:` line and a name on one.
+pub fn author_decks(home: &lore_home::Home) {
+    use lore_canvas::{Bullet, Deck, Frame, Geom, Kind, Look, Object, Paint, Para, Run, Slide, SlideSrc, SpObj, TextBody};
+    const W: i64 = 12_192_000;
+    const H: i64 = 6_858_000;
+    let text = |id: u32, f: Frame, lines: &[&str], ph: Option<&str>| {
+        let paras = lines.iter().map(|t| { let mut r = Run::text(*t, "body", Look { size: 18.0, ..Look::default() }); r.tag = None; let mut p = Para::new(vec![r]); if ph.is_none() { p.bullet = Bullet::Char { ch: "•".into() }; } p }).collect();
+        Object { id, name: "t".into(), frame: f, hidden: false, ph: ph.map(String::from), slot: None, kind: Kind::Text(SpObj { geom: Geom::preset("rect"), fill: Paint::None, line: None, text: Some(TextBody { paras, ..Default::default() }), equation: false }), src: None }
+    };
+    let pages: [(&str, &[&str]); 8] = [
+        ("Grading lesions with daidai", &["ellrin · lab meeting"]),
+        ("Background", &["臨床上 grading 很花時間", "Experts disagree on borderline cases"]),
+        ("Overview", &["Split the task into detect and grade"]),
+        ("Encoder", &["Use a small CNN to find lesion candidates", "Keep the input at full resolution"]),
+        ("Results", &["Beats the baseline on every metric", "Ref: Ellrin et al., Synthetic Lesions, 2025"]),
+        ("Ablation study", &["Removing fusion costs the most"]),
+        ("Take home messages", &["1. Split hard tasks into small steps", "2. Check every stage by hand"]),
+        ("Thanks", &["Questions?"]),
+    ];
+    let decks = home.app_dir("SlideComposer").unwrap().join("decks");
+    for (k, n) in ["talk-a", "talk-b", "talk-c"].iter().enumerate() {
+        let mut d = Deck::new(W, H, Some("blank".into()));
+        for (i, (title, body)) in pages.iter().enumerate() {
+            let mut sl = Slide::new(d.new_uid(), None);
+            sl.src = Some(SlideSrc { part: format!("ppt/slides/slide{i}.xml"), k: i as u64, notes_k: 0, anims_k: 0 });
+            sl.objects.push(text(2, Frame::new(W / 25, H / 20, W * 9 / 10, H / 8), &[title], Some("title")));
+            let mine: Vec<String> = body.iter().map(|b| if k == 0 { b.to_string() } else { format!("{b} ({n})") }).collect();
+            let mine: Vec<&str> = mine.iter().map(String::as_str).collect();
+            sl.objects.push(text(3, Frame::new(W / 25, H / 4, W * 9 / 10, H / 2), &mine, None));
+            sl.objects.push(text(4, Frame::new(W / 25, H * 9 / 10, W / 2, H / 20), &["CONFIDENTIAL · Example Lab"], Some("ftr")));
+            sl.objects.push(text(5, Frame::new(W * 3 / 5, H * 9 / 10, W / 3, H / 20), &["Presented by ellrin"], None));
+            d.slides.push(sl);
+        }
+        std::fs::create_dir_all(decks.join(n)).unwrap();
+        std::fs::write(decks.join(n).join("deck.json"), serde_json::to_vec(&d).unwrap()).unwrap();
+    }
 }
 
 fn texts(v: &Value, out: &mut Vec<String>) {
@@ -407,6 +447,7 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     let p = paper(dir.path());
     let ws = workspace(dir.path());
     let home = lore_home::Home::at(dir.path().join("home"));
+    author_decks(&home);
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
     let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![plan("is slow").to_string()])));
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
@@ -467,6 +508,22 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     // a second review is refused
     let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/review"), Some(json!({ "skip": true })), None).await;
     assert_eq!(st, StatusCode::CONFLICT);
+
+    // 排版用字: the job's report is the deck's own report, every fix undoable through the editor
+    let (_, job_rep, _) = call(&app, "GET", &format!("/api/todeck/jobs/{id}/stages/polish"), None, None).await;
+    let (st, rep, _) = call(&app, "GET", &format!("/api/decks/{name}/polish"), None, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(rep["items"], job_rep["items"], "{rep}");
+    let items = rep["items"].as_array().unwrap();
+    let fix = items.iter().find(|i| i["state"] == "applied").expect("the author's titles have no final period: one fix");
+    {
+        let (st, r, _) = call(&app, "POST", &format!("/api/decks/{name}/polish/{}", fix["id"]), Some(json!({ "action": "undo" })), None).await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+        assert_eq!(r["item"]["state"], "undone");
+        assert!(r["slides"].as_array().is_some_and(|s| !s.is_empty()) && r["order"].is_array(), "the changed slides, as an edit answers: {r}");
+        let (_, again, _) = call(&app, "GET", &format!("/api/decks/{name}/polish"), None, None).await;
+        assert_eq!(again["items"].as_array().unwrap().iter().find(|i| i["id"] == fix["id"]).unwrap()["state"], "undone");
+    }
 }
 
 #[tokio::test]
@@ -628,4 +685,32 @@ async fn review_suggestions_and_changing_language_redoes_the_outline() {
     assert_eq!(st, StatusCode::OK);
     let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "lang": "en" })), None).await;
     assert_eq!(st, StatusCode::CONFLICT);
+}
+
+/// UI check only (never in CI): a finished 論文報告 job in `SC_UI_DIR` (synthetic paper, synthetic
+/// author decks, mock engines) to look at the 排版用字 report with the isolated server:
+/// `SC_UI_DIR=<empty dir> cargo test -p sc-server --test todeck ui_fixture -- --ignored`, then
+/// `SLIDECOMPOSER_WORKSPACE=<dir>/sc cargo run -p sc-server --example isolated_server -- <dir> <port>`.
+#[tokio::test]
+#[ignore]
+async fn ui_fixture() {
+    let Ok(d) = std::env::var("SC_UI_DIR") else { return };
+    let dir = std::path::PathBuf::from(d);
+    let p = paper(&dir);
+    let ws = workspace(&dir);
+    let home = lore_home::Home::at(dir.join("home"));
+    author_decks(&home);
+    let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
+    let mut pl = plan("is slow");
+    pl["slides"][4]["bullets"] = json!(["Weighs each lesion with a segmentation mask", "The mask map guides the fusion"]);
+    pl["slides"][3]["title"] = json!("Encoder.");
+    let terms = json!({ "groups": [{ "preferred": "segmentation mask", "variants": ["mask map"] }] });
+    let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![pl.to_string(), json!({ "suggestions": [] }).to_string(), terms.to_string()])));
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
+    let app = sc_server::router_isolated(shared.clone());
+    let body = json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "lang": "en", "mode": "direct" });
+    let (_, v, _) = call(&app, "POST", "/api/todeck", Some(body), None).await;
+    let id = v["job"].as_str().unwrap().to_string();
+    let v = job_until(&app, &id, "done", |v| v["state"] == "done").await;
+    println!("deck {} {}", v["deck"], v["result"]["polish"]);
 }

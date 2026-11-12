@@ -987,7 +987,7 @@ pub fn load_report(deck_dir: &Path) -> Report {
     std::fs::read(report_path(deck_dir)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
 
-fn save_report(deck_dir: &Path, rep: &Report) -> Result<(), String> {
+pub(crate) fn save_report(deck_dir: &Path, rep: &Report) -> Result<(), String> {
     sc_core::write_atomic(&report_path(deck_dir), &serde_json::to_vec_pretty(rep).unwrap_or_default()).map_err(|e| e.to_string())
 }
 

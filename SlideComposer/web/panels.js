@@ -391,6 +391,9 @@ function arrangePane() {
 
 // ── Side panel: numbered blocks (PaperComposer); explanations only behind "?" ──
 const BLOCKS = [
+  { id: "polish", title: "排版用字", when: () => POLISH.open && POLISH.name === S.name, kids: () => polishPane(),
+    key: () => [POLISH.ver, S.deck?.slides.map((s) => s.uid).join(",")].join("|"),
+    help: "產生簡報後自動做的排版與用字修正。每一項可以單獨復原；用詞一致是建議，按套用才會改。都會進復原紀錄（⌘Z）。" },
   { id: "reveal", title: "漸進揭露", when: () => !!S.reveal, kids: () => revealPane(),
     help: "這一頁複製成數頁，每頁強調一組物件，其餘依底版的規則變淡（圖片透明、文字灰、線條淡）。在投影片上選物件（Shift 多選）後加入步驟，至少兩步。議程加粗：清單的每個第一層項目產生一頁，當前項目加粗。" },
   { id: "arr", n: "00", title: "版型", kids: () => arrangePane(),
@@ -404,7 +407,7 @@ const BLOCKS = [
     help: "選物件後加入進場動畫，依清單順序播放。通常用漸進揭露代替動畫。" },
 ];
 const blockOpen = (() => { try { return JSON.parse(localStorage.getItem("sc.blocks") ?? "{}"); } catch { return {}; } })();
-function isOpen(b) { return b.id === "reveal" || (blockOpen[b.id] ?? b.id !== "anim"); }
+function isOpen(b) { return b.id === "reveal" || b.id === "polish" || (blockOpen[b.id] ?? b.id !== "anim"); }
 
 function renderSide() {
   const box = $("#blocks");
@@ -430,8 +433,8 @@ function renderSide() {
 }
 function blockShell(b) {
   const head = h("div", { class: "block-head" }, b.n ? h("span", { class: "n" }, b.n) : null, h("h3", {}, b.title), helpButton(b.help));
-  if (b.id === "reveal") {
-    const close = ib("x", "關閉", () => { S.reveal = null; renderSide(); });
+  if (b.id === "reveal" || b.id === "polish") {
+    const close = ib("x", "關閉", () => { if (b.id === "polish") POLISH.open = false; else S.reveal = null; renderSide(); });
     close.classList.add("small");
     close.style.marginLeft = "auto";
     head.append(close);
@@ -714,4 +717,77 @@ function revealPane() {
         try { absorb(await api(deckApi("/reveal"), { body: { slide: R.uid, spec } })); S.reveal = null; renderSide(); toast("已產生漸進揭露頁"); } catch (e) { toast(e.message, true); }
       });
     } }, R.mode === "ghost" ? `產生 ${R.steps.length} 頁` : "產生")))];
+}
+
+
+// ── 排版用字 report (decks/<name>/polish.json, docs/paper-deck.md): the 論文報告 job writes it;
+// opened with ?polish=1 after the job, or from the AI menu. 復原／套用 go through Rust
+// (POST /api/decks/{name}/polish/{item}), so they are ordinary undoable edits. ──
+const POLISH = { name: null, rep: null, open: false, ver: 0, busy: false };
+
+async function loadPolish(name, open) {
+  try {
+    const rep = await api(`/api/decks/${encodeURIComponent(name)}/polish`);
+    if (S.name !== name) return;
+    Object.assign(POLISH, { name, rep, ver: POLISH.ver + 1 });
+    if (open && rep.items?.length) showPolish();
+    else renderSide();
+  } catch {}
+}
+
+/** AI menu → 排版用字: the report, or a fresh check when the deck has none. */
+async function openPolish() {
+  if (!S.name) return;
+  if (POLISH.name !== S.name) await loadPolish(S.name, false);
+  if (!POLISH.rep?.items?.length) {
+    toast("檢查排版用字…");
+    try { POLISH.rep = await api(deckApi("/polish"), { body: {} }); POLISH.name = S.name; POLISH.ver++; } catch (e) { toast(e.message, true); return; }
+    // the check applied its fixes: the slides changed
+    try { const r = await api(`/api/decks/${encodeURIComponent(S.name)}`); S.deck.slides = r.deck.slides; S.status = r.status; undoButtons(); renderAll(); } catch {}
+  }
+  showPolish();
+}
+
+/** The report block, first in the right panel (the drawer is opened on narrow windows). */
+function showPolish() {
+  POLISH.open = true;
+  renderSide();
+  const side = $("#side"), r = side?.getBoundingClientRect();
+  if (r && (r.width === 0 || r.left >= innerWidth - 4)) shell.drawer?.("right", true);
+  $(`.block[data-id="polish"]`)?.scrollIntoView({ block: "start" });
+}
+
+async function polishAct(it, action) {
+  if (POLISH.busy) return;
+  POLISH.busy = true;
+  await exitEdit();
+  try {
+    const r = await serial(() => api(deckApi(`/polish/${it.id}`), { body: { action } }));
+    Object.assign(it, r.item);
+    POLISH.ver++;
+    absorb(r);
+  } catch (e) { toast(e.message, true); } finally { POLISH.busy = false; }
+}
+
+function polishPane() {
+  const items = POLISH.rep?.items ?? [];
+  const no = (uid) => S.deck.slides.findIndex((s) => s.uid === uid) + 1;
+  const line = (it, btn) => h("li", { class: `pol ${it.state}` },
+    h("button", { class: "pg mono", title: "到這一頁", onclick: () => no(it.slide) && gotoSlide(it.slide) }, no(it.slide) ? String(no(it.slide)) : "—"),
+    h("span", { class: "msg" }, it.message),
+    btn);
+  const act = (it) => {
+    if (it.state === "applied") return h("button", { class: "btn small", onclick: () => polishAct(it, "undo") }, "復原");
+    if (it.state === "suggested" || it.state === "undone") return h("button", { class: "btn small", onclick: () => polishAct(it, "apply") }, "套用");
+    return h("span", { class: "st" }, "手動");
+  };
+  // the model's one-term-per-concept suggestions are deck-wide (no object)
+  const terms = items.filter((i) => i.check === 6 && i.object == null && i.state !== "manual");
+  const fixes = items.filter((i) => !terms.includes(i));
+  const kids = [];
+  if (fixes.length) kids.push(sec(`修正 ${fixes.filter((i) => i.state === "applied").length}`, h("ul", { class: "pol-list" }, fixes.map((i) => line(i, act(i))))));
+  if (terms.length) kids.push(sec(`用詞 ${terms.length}`, h("ul", { class: "pol-list" }, terms.map((i) => line(i, act(i))))));
+  if (POLISH.rep?.notes?.length) kids.push(h("div", { class: "info" }, POLISH.rep.notes.join("；")));
+  if (!kids.length) kids.push(h("div", { class: "empty" }, "沒有要修正的"));
+  return kids;
 }
