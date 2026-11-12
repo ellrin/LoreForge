@@ -255,7 +255,15 @@ async fn terms_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageErro
 async fn profile_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     let p = params(cx)?;
     let s = s.clone();
-    let out = tokio::task::spawn_blocking(move || profile::profile(&ProfileInput { home: &s.home, ws: &s.ws, style: &p.style, lang: &p.lang })).await.map_err(join_err)?;
+    let (out, voice) = tokio::task::spawn_blocking(move || {
+        let out = profile::profile(&ProfileInput { home: &s.home, ws: &s.ws, style: &p.style, lang: &p.lang });
+        // the author's example lines (語氣): kept in the private workspace, never in this checkpoint
+        let voice = crate::deckvoice::refresh(&s.home, &s.ws.root.join("cache")).map_or(0, |v| v.count());
+        (out, voice)
+    })
+    .await
+    .map_err(join_err)?;
+    cx.counts(json!({ "voice": voice }));
     to_value(&out)
 }
 
@@ -281,6 +289,14 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     if !prof.summary.trim().is_empty() {
         system += &format!("\n\nThe presenter's own decks, summarised — follow these habits:\n{}", prof.summary.trim());
     }
+    // 語氣: example lines from the author's own decks, the ones closest to this paper
+    let voice = crate::deckvoice::load(&s.home);
+    let query = format!("{} {} {} {}", m.title, m.keywords.join(" "), m.abstract_text, m.sections.iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join(" "));
+    let voice_block = |budget| voice.as_ref().map(|v| v.block(&query, &p.lang, budget)).unwrap_or_default();
+    let examples = voice_block(2600);
+    if !examples.is_empty() {
+        system += &format!("\n\n{examples}");
+    }
     let req = LlmRequest::prompt(system, user).json(schema()).max_tokens(12000);
     let llm = super::llm(s);
     cx.chars(0);
@@ -293,7 +309,7 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     let boxes = outline::module_boxes(llm, &m, &plan).await;
     // 建議: the progress keeps counting characters after the plan's
     let base = cx.job.meta().stages.get("outline").and_then(|s| s.chars).unwrap_or(0);
-    let suggestions = suggest::suggest(llm, &plan, &m, &p.length, &p.lang, &prof.summary, "", p.engine.as_deref(), &|n| cx.chars(base + n)).await;
+    let suggestions = suggest::suggest(llm, &plan, &m, &p.length, &p.lang, &prof.summary, &voice_block(1200), p.engine.as_deref(), &|n| cx.chars(base + n)).await;
     cx.counts(json!({ "slides": plan.slides.len(), "boxes": boxes.len(), "suggestions": suggestions.len() }));
     to_value(&OutlineOut { plan, questions: vec![], boxes, engine, suggestions })
 }

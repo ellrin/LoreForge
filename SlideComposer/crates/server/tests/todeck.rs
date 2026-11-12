@@ -191,7 +191,7 @@ pub fn author_decks(home: &lore_home::Home) {
     const W: i64 = 12_192_000;
     const H: i64 = 6_858_000;
     let text = |id: u32, f: Frame, lines: &[&str], ph: Option<&str>| {
-        let paras = lines.iter().map(|t| { let mut r = Run::text(*t, "body", Look { size: 18.0, ..Look::default() }); r.tag = None; let mut p = Para::new(vec![r]); if ph.is_none() { p.bullet = Bullet::Char { ch: "•".into() }; } p }).collect();
+        let paras = lines.iter().map(|t| { let mut r = Run::text(t, "body", Look { size: 18.0, ..Look::default() }); r.tag = None; let mut p = Para::new(vec![r]); if ph.is_none() { p.bullet = Bullet::Char { ch: "•".into() }; } p }).collect();
         Object { id, name: "t".into(), frame: f, hidden: false, ph: ph.map(String::from), slot: None, kind: Kind::Text(SpObj { geom: Geom::preset("rect"), fill: Paint::None, line: None, text: Some(TextBody { paras, ..Default::default() }), equation: false }), src: None }
     };
     let pages: [(&str, &[&str]); 8] = [
@@ -448,9 +448,11 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     let ws = workspace(dir.path());
     let home = lore_home::Home::at(dir.path().join("home"));
     author_decks(&home);
+    let decks_before = snapshot(&home.app_dir("SlideComposer").unwrap().join("decks"));
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
-    let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![plan("is slow").to_string()])));
-    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
+    let model = Arc::new(MockProvider::new(vec![plan("is slow").to_string()]));
+    let f = MockFactory::default().with("claude:selected", model.clone());
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home.clone(), f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
 
     let body = json!({ "source": { "kind": "pc", "path": p }, "length": "short", "lang": "en", "style": "blank", "mode": "review" });
@@ -459,6 +461,22 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     let id = v["job"].as_str().unwrap().to_string();
     let v = job_until(&app, &id, "review", |v| v["state"] == "review").await;
     assert_eq!(v["step"], 6);
+    // 語氣: the author's own lines reach the outline prompt (never footers, marks, presenter
+    // lines, references or the cover); they live in his private workspace, not in the job
+    let voice_file = home.app_dir("SlideComposer").unwrap().join("voice/examples.json");
+    assert!(voice_file.is_file());
+    assert!(v["stages"][3]["counts"]["voice"].as_u64().unwrap() > 5, "{}", v["stages"][3]);
+    let sys = model.seen.lock().unwrap()[0].system.clone();
+    assert!(sys.starts_with("You plan a paper-report") && sys.contains("Write like the presenter") && sys.contains("take-home lines \"2. Check every stage by hand\" · \"1. Split hard tasks into small steps\""), "the closest to the paper first, no near-copies: {sys}");
+    assert!(sys.contains("titles \"Ablation study\"") && sys.contains("臨床上 grading 很花時間"), "{sys}");
+    for never in ["CONFIDENTIAL", "Presented by", "Ref: Ellrin", "daidai", "Questions?"] {
+        assert!(!sys.contains(never), "{never}");
+    }
+    let suggest_sys = model.seen.lock().unwrap()[1].system.clone();
+    assert!(suggest_sys.contains("Write like the presenter"));
+    let prof = std::fs::read_to_string(shared.ws.root.join(format!("cache/todeck/{id}/profile.json"))).unwrap();
+    assert!(!prof.contains("Split hard tasks"), "no example text in the job's cache");
+    assert_eq!(snapshot(&home.app_dir("SlideComposer").unwrap().join("decks")), decks_before, "the author's decks are read-only");
     assert_eq!(v["title"], "Two-Stage Grading of Synthetic Lesions");
     let stages = v["stages"].as_array().unwrap();
     assert_eq!(stages.iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["source", "notation", "terms", "profile", "outline", "review", "slides", "polish"]);

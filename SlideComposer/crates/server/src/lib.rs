@@ -34,6 +34,7 @@ pub mod llm;
 mod notation;
 mod reader;
 pub mod deckpolish;
+pub mod deckvoice;
 pub mod deckstyle;
 pub mod todeck;
 

@@ -3,7 +3,8 @@
 //! deck format) and reduce them to a compact summary — page share per role, title length
 //! and patterns per role, bullets per slide, how take-home messages are phrased, caption
 //! and `Ref:` habits, emphasis use. The outline prompt receives [`Profile::prompt_text`],
-//! never a deck.
+//! never a deck; the author's own example lines (語氣) are [`crate::deckvoice`]'s, stored in
+//! the private workspace.
 //!
 //! What it keeps: counts, shares, lengths and pattern names. What it never keeps: bullet,
 //! caption or cover text, footers, confidential marks, logos (text or pictures repeated on

@@ -169,6 +169,7 @@ pub fn clean(list: Vec<Suggestion>, plan: &Plan, m: &Material) -> Vec<Suggestion
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 /// Ask for the suggestions (best-effort: `[]` on any failure). `on_chars`: streamed characters.
 pub async fn suggest(llm: &Llm, plan: &Plan, m: &Material, length: &str, lang: &str, style: &str, voice: &str, engine: Option<&str>, on_chars: &(dyn Fn(u64) + Send + Sync)) -> Vec<Suggestion> {
     let (system, user) = prompt(plan, m, length, lang, style, voice);
