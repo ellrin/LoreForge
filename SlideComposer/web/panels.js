@@ -735,16 +735,11 @@ async function loadPolish(name, open) {
   } catch {}
 }
 
-/** AI menu → 排版用字: the report, or a fresh check when the deck has none. */
+/** AI menu → 排版用字: the report of a deck a 論文報告 job made. */
 async function openPolish() {
   if (!S.name) return;
   if (POLISH.name !== S.name) await loadPolish(S.name, false);
-  if (!POLISH.rep?.items?.length) {
-    toast("檢查排版用字…");
-    try { POLISH.rep = await api(deckApi("/polish"), { body: {} }); POLISH.name = S.name; POLISH.ver++; } catch (e) { toast(e.message, true); return; }
-    // the check applied its fixes: the slides changed
-    try { const r = await api(`/api/decks/${encodeURIComponent(S.name)}`); S.deck.slides = r.deck.slides; S.status = r.status; undoButtons(); renderAll(); } catch {}
-  }
+  if (!POLISH.rep?.items?.length) { toast("這份簡報沒有排版用字報告"); return; }
   showPolish();
 }
 

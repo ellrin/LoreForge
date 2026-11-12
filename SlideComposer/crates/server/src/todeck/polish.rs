@@ -16,7 +16,10 @@
 //!   `POST /api/decks/{name}/polish/changes {action: undo, changes}`.
 //! - `checks` = how many checks ran (the progress shows 「檢查 n 項」); `items` = every finding,
 //!   fixed or not (`manual`: listed only, `suggested`: offered).
-//! - The stage stores the report as `polish.json` (`counts.checks`, `counts.fixes`).
+//! - The stage stores the report as `polish.json` (`counts.checks`, `counts.fixes`) and also as
+//!   the deck's own `decks/<name>/polish.json` (with the term suggestions): the editor's
+//!   排版用字 block reads that one and undoes / applies an item with
+//!   `POST /api/decks/{name}/polish/{item} {action}`.
 
 use lore_canvas::{Deck, Editor, Slide, StyleSystem};
 use serde::{Deserialize, Serialize};
