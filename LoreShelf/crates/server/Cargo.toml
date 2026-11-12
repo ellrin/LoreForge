@@ -1,0 +1,23 @@
+[package]
+name = "shelf-server"
+version.workspace = true
+edition.workspace = true
+description = "LoreShelf local server on 127.0.0.1: serves web/ with the shared theme and shell kit, and a read-only JSON API over the local catalog (files, details, neighbours, open / reveal)."
+
+[dependencies]
+lore-catalog.workspace = true
+lore-home.workspace = true
+lore-shell.workspace = true
+lore-words.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+chrono.workspace = true
+image.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

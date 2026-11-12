@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The page comes from the in-process shelf-server on 127.0.0.1 (any port): it may drag and resize its window (data-tauri-drag-region on the top bar) and call this app's own commands (hide, frame). Everything else goes through the server's HTTP API.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*/*", "http://localhost:*/*"]
+  },
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-start-resize-dragging", "allow-hide", "allow-frame"]
+}

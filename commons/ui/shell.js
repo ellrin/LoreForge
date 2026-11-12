@@ -734,7 +734,7 @@
 // the running desktop apps recorded (ready / refresh()); ensure(app) opens and waits.
 (() => {
   const enc = encodeURIComponent;
-  const ports = { pc: 7878, sc: 7880, lr: 7890, kb: 7700 };
+  const ports = { pc: 7878, sc: 7880, lr: 7890, kb: 7700, ls: 7900 };
   const FORMS = {
     pc: (p) => (p.note ? [`note/${enc(p.note)}`, `/?note=${enc(p.note)}`] : p.path ? [`open?path=${enc(p.path)}`, `/?open=${enc(p.path)}`] : ["", "/"]),
     sc: (p) => (p.deck ? [`deck/${enc(p.deck)}`, `/?deck=${enc(p.deck)}`] : p.job ? [`job/${enc(p.job)}`, `/?job=${enc(p.job)}`] : ["", "/"]),

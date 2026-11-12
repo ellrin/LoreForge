@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LoreShelf</title>
+  <!-- Served by shelf-server (`cargo run -p shelf-server` in LoreShelf/): the shared theme and
+       shell kit come from root paths; theme.js sets data-theme before the first paint.
+       Without /api/files the page falls back to demo-data.js (synthetic, generic names). -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 7v12h18V9h-9l-2-2z' fill='none' stroke='%23888' stroke-width='1.6'/%3E%3Ccircle cx='12' cy='14' r='1.6' fill='%23888'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="styles.css">
+  <script src="/theme.js"></script>
+</head>
+<body>
+  <div class="shelf" id="shelf">
+    <header class="top" id="top"></header>
+    <main class="stage" id="stage" aria-label="相近的檔案">
+      <!-- back to front: the ground (¼ res), the wire globe (½ res), the compass and bonds; nodes are DOM -->
+      <canvas class="layer" id="lback" aria-hidden="true"></canvas>
+      <canvas class="layer" id="lglobe" aria-hidden="true"></canvas>
+      <canvas class="layer" id="lbond" aria-hidden="true"></canvas>
+      <div class="axes" id="axes" aria-hidden="true"></div>
+      <div class="nodes" id="nodes"></div>
+      <div class="preview" id="preview" hidden>
+        <canvas></canvas>
+        <div class="pv-acts"><span class="pv-open"><span data-icon="external"></span>開啟</span><button type="button" class="pv-reveal" aria-label="在 Finder 顯示"><span data-icon="folder"></span></button></div>
+      </div>
+      <div class="areas" id="areas" hidden></div>
+      <section class="dsview" id="dsview" hidden aria-label="資料集">
+        <header class="ds-head" id="dsHead"></header>
+        <div class="ds-grid" id="dsGrid" tabindex="-1"><div class="ds-inner" id="dsInner"></div></div>
+      </section>
+    </main>
+    <aside class="filters" id="filters" aria-label="篩選"></aside>
+    <section class="card" id="card" aria-live="polite">
+      <div class="card-head"><span class="kind" id="cKind"></span><h1 id="cTitle"></h1></div>
+      <p id="cDesc"></p>
+      <dl class="times" id="cTimes"></dl>
+      <ul class="members" id="cMembers" hidden></ul>
+      <div class="uses" id="cUses"></div>
+    </section>
+    <div class="echo-spot" id="echoSpot" hidden>LoreEcho</div>
+  </div>
+  <button type="button" class="reopen" id="reopen" hidden>LoreShelf</button>
+
+  <script src="/icons.js"></script>
+  <script src="/shell.js"></script>
+  <script src="demo-data.js"></script>
+  <script src="compass.js"></script>
+  <script src="scene.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

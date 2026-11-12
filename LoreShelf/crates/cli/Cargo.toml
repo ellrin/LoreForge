@@ -1,0 +1,15 @@
+[package]
+name = "loreshelf-cli"
+version.workspace = true
+edition.workspace = true
+description = "LoreShelf command line: read-only scan of chosen folders into the local catalog, and the scan report."
+
+[[bin]]
+name = "loreshelf"
+path = "src/main.rs"
+
+[dependencies]
+lore-catalog.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

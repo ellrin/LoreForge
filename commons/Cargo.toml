@@ -25,3 +25,7 @@ tempfile = "3"
 # lore-ooxml / lore-math (A4)
 quick-xml = "0.42"
 zip = { version = "2.6", default-features = false, features = ["deflate"] }
+# lore-catalog (LoreShelf): download URLs (kMDItemWhereFroms is a binary plist), xattrs, PDF Info dates
+plist = "1"
+xattr = "1"
+lopdf = { version = "0.42", default-features = false }

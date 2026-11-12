@@ -1,0 +1,25 @@
+[package]
+name = "lore-catalog"
+version.workspace = true
+edition.workspace = true
+description = "Read-only file catalog for LoreShelf: content hashes (sha256, incremental cache), project folders as one unit, time axes with their sources (fs, download xattrs, PDF / OOXML dates), per-content records, duplicate and coverage reports, local-only catalog guard."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+quick-xml.workspace = true
+zip.workspace = true
+plist.workspace = true
+lopdf.workspace = true
+sha2 = "0.10"
+hex = "0.4"
+dirs = "6"
+lore-home = { path = "../lore-home" }
+
+[target.'cfg(unix)'.dependencies]
+xattr.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
