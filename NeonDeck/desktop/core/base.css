@@ -38,6 +38,15 @@ button { font: inherit; cursor: pointer; }
 .w-tag:empty { display: none; }
 .w-title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .w-title:empty { display: none; }
+/* 標題列當按鈕用（小工具加 class .w-head-btn）：點擊範圍往外加大，滑過去底部亮一條線 */
+.w-head.w-head-btn { position: relative; cursor: pointer; }
+.w-head.w-head-btn::before { content: ''; position: absolute; inset: -8px -8px -12px -8px; }
+.w-head.w-head-btn::after { content: ''; position: absolute; left: 0; right: 0; bottom: -4px; height: 2px;
+  background: currentColor; opacity: 0; transition: opacity .15s; }
+.w-head.w-head-btn:hover::after { opacity: .85; }
+.w-head.w-head-btn:hover { filter: brightness(1.25); }
+body.editing .w-head.w-head-btn { cursor: inherit; }
+body.editing .w-head.w-head-btn:hover::after { opacity: 0; }
 .w-body { flex: 1; min-height: 0; position: relative; }
 .w-error { padding: 10px; color: #ff5470; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
 

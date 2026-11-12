@@ -169,6 +169,11 @@ export default {
     // 跨日時自動更新「今天」
     const iv = setInterval(() => { if (!sameDay(selected, new Date()) && sameDay(selected, new Date(Date.now() - 60000))) { selected = new Date(); load(); } }, 60000);
     load();
+    // 標題列（CAL / CALENDAR）本身就是開啟行事曆的按鈕；編輯模式下仍是拖曳
+    const head = ctx.el.querySelector('.w-head');
+    head.classList.add('w-head-btn');
+    head.title = '開啟行事曆';
+    head.addEventListener('click', () => { if (!ctx.editing) showCal(selected, 'day'); });
     return { destroy: () => clearInterval(iv) };
   },
 };
