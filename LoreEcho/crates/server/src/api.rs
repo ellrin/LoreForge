@@ -281,15 +281,25 @@ async fn chat_post(State(s): State<Shared>, body: Option<Json<chat::ChatBody>>) 
         Err(e) => return bad(StatusCode::BAD_REQUEST, e),
     };
     let character = s.character(b.character.as_deref());
-    let route = match s.llm.route(llm::TASK_CHAT, b.engine.as_deref()).await {
+    // the author's files (LoreShelf, while it runs): a turn that carries them is answered on this
+    // machine when a local model can, whatever engine is chosen — file names never go to a cloud model
+    let last = b.messages.iter().rev().find(|t| t.role == "user").map(|t| t.text.clone()).unwrap_or_default();
+    let found = if s.shelf.load(std::sync::atomic::Ordering::Relaxed) { crate::shelfctx::lookup(&last).await } else { None };
+    let mut route = match s.llm.route(llm::TASK_CHAT, b.engine.as_deref()).await {
         Ok(r) => r,
         Err(payload) => return (StatusCode::SERVICE_UNAVAILABLE, Json(payload)).into_response(),
     };
+    let is_local = |r: &lore_llm::Route| !matches!(r.model, lore_llm::ModelRef::Claude { .. });
+    if found.is_some() && !is_local(&route) && let Ok(r) = s.llm.route(llm::TASK_CHAT, Some("local")).await {
+        route = r;
+    }
     let kb = crate::kbctx::Pre::new(&s, &b.messages, b.kb.clone());
     // 朗讀回覆: the reply is spoken sentence by sentence as it streams (a new reply stops the old one)
     let speaker = (b.speak && s.voice.available()).then(|| {
         s.voice.stop_speaking();
         s.voice.speaker_from(crate::voice::template(&character))
     });
-    chat::stream(route, chat::request(&character, messages), Some(kb), speaker).into_response()
+    let local = is_local(&route);
+    let shelf = found.map(|f| crate::shelfctx::Pre::new(f, local));
+    chat::stream(route, chat::request(&character, messages), Some(kb), shelf, speaker).into_response()
 }

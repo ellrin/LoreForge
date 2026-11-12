@@ -69,12 +69,35 @@
     show(...parts);
   }
 
+  // the author's files (server: shelfctx.rs, while LoreShelf runs): 「檔案：a、b」 under the line;
+  // a click turns LoreShelf's globe to that file
+  let fileRow = null;
+  function files(d) {
+    const list = d?.files || [];
+    if (!fileRow?.isConnected) {
+      const anchor = row() || document.getElementById("line");
+      if (!anchor) return;
+      fileRow = el("div", { class: "cites files", id: "shelfFiles" });
+      anchor.after(fileRow);
+    }
+    const go = (f) => fetch("/api/shelf/focus", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: f.id }) }).catch(() => {});
+    const parts = list.length ? [el("span", { class: "k" }, "檔案：")] : [];
+    list.forEach((f, i) => {
+      if (i) parts.push("、");
+      parts.push(el("button", { type: "button", class: "cite", title: f.date ? `${f.name}（${f.date}）` : f.name, onclick: () => go(f) }, f.name));
+    });
+    fileRow.replaceChildren(...parts);
+    fileRow.hidden = !parts.length;
+  }
+
   window.LoreEchoKb = {
+    files,
     /** The `kb` part of the next chat body (a quiz is answered once); clears the row. */
     ask() {
       const out = { quiz: K.quiz, cited: K.cited };
       K.quiz = null;
       show();
+      files(null);
       return out;
     },
     /** `search` / `cards` from the chat stream. */
@@ -87,6 +110,6 @@
       window.LoreEcho?.setState("thinking");
     },
     /** 新對話 / collapse. */
-    clear() { K.quiz = null; K.cited = []; show(); },
+    clear() { K.quiz = null; K.cited = []; show(); files(null); },
   };
 })();

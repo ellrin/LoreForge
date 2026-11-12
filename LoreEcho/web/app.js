@@ -391,6 +391,7 @@ async function send(engine) {
     for await (const [ev, data] of events(r.body)) {
       if (ctrl.signal.aborted) return;
       if (ev === "search" || ev === "cards") window.LoreEchoKb?.event(ev, data);   // kbcards.js
+      else if (ev === "files") window.LoreEchoKb?.files(data);   // LoreShelf's files for this turn
       else if (ev === "start") { S.chip.actual(data.label); }
       else if (ev === "delta") { if (!reply) { clearTimeout(S.timers.wait); setState("speaking"); } reply += data.text; streamed += data.text; if (follow) follow.text(streamed); else setLine(reply, "pending"); }
       else if (ev === "say") follow?.say(data);

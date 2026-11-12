@@ -40,7 +40,7 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   `tasks.toml`, class `ask`: `local:current` then `claude:selected`; local engine =
   `LOREECHO_LLM_URL` else the shared model id of `private/shared/engine.toml` on the machine's one
   llama-server (lore-llm `shared_runtime`, `../docs/local-models.md`; `llm::quit()` at exit); keys via
-  `SharedKeys::for_app("LoreEcho")`), `actions.rs` (功能列表, design §4/§4a: `/api/actions/note/{draft,check,save}`,
+  `SharedKeys::for_app("LoreEcho")`), `shelfctx.rs` (the author's files, only in the real app (`AppState.shelf`) and while LoreShelf runs (ports.json `ls`): per turn `GET /api/search?loose=1&q=<the message>` → SSE `files` (the 「檔案：…」 row in `kbcards.js`; a click = `POST /api/shelf/focus` → LoreShelf `POST /api/act`), the globe turned to the first one right away, and a note in the prompt; asked before the engine is chosen (`lookup`): a turn with files is answered by the local model when one can, whatever the chip says, and only a local model gets the names (`note`) — Claude is only told that some were found), `actions.rs` (功能列表, design §4/§4a: `/api/actions/note/{draft,check,save}`,
   `/api/actions/cards/{draft,save}`; drafts = tasks `le-note` / `le-cards` (class `tidy`, one JSON reply via
   `complete_json`, the conversation as one labelled text, the author's related cards from kbctx offered by id and
   only those kept); the note's LaTeX through lore-notation (`check`: an empty registry, error = blocking, 422);
@@ -55,7 +55,7 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   (64 px bubble ⇄ open window, default 620×620 = `WIN_W`/`WIN_H` = `--win-w`/`--win-h` in `web/styles.css`
   (a test checks), resizable 420–1000 px (`MIN_WIN`/`MAX_WIN` in `store.rs`; the page's left/top grips send `PUT /api/window {w,h}` → `DesktopEvent::Size`, the window keeps its bottom-right corner; `w`,`h` saved in state.toml), sharing the bottom-right corner, kept inside the monitor's work area); moves saved debounced as the bubble's place; tray item (left click = show/hide, menu =
   show/hide, quit); global shortcut (`tauri-plugin-global-shortcut`, from settings.toml);
-  macOS: `macOSPrivateApi`, regular activation policy (Dock icon, installed into the Dock by `scripts/install-apps.sh`; Dock click = `RunEvent::Reopen` → show/unminimize; own menu bar: app 隱藏/結束 ⌘Q, 編輯, 視窗 最小化 ⌘M as custom items). No `lore-le://` URL scheme: other apps never open LoreEcho (author, 2026-11-11).
+  macOS: `macOSPrivateApi`, regular activation policy (Dock icon, installed into the Dock by `scripts/install-apps.sh`; Dock click = `RunEvent::Reopen` → show/unminimize; own menu bar: app 隱藏/結束 ⌘Q, 編輯, 視窗 最小化 ⌘M as custom items). No `lore-le://` URL scheme. LoreShelf's 開啟時同步開啟 LoreEcho (author, 2026-11-13) launches the app with `open -g -a LoreEcho` and seats the window through `PUT /api/window {x, y, w, h, expanded}`.
   `capabilities/default.json` lets the page on `http://127.0.0.1:*` call `startDragging` only.
   Icon source `icons/logo.svg` (= `docs/assets/loreecho-logo-draft.svg`, approved; do not redesign).
 - `web/`: no build step. Open window = `.figure` (left, only the picture, `--fig-scale`/`--fig-dy`

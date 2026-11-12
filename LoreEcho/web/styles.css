@@ -62,7 +62,7 @@ html, body { background: transparent; height: 100%; overflow: hidden; }
 .col { position: absolute; inset: 0 0 0 var(--col-x); display: flex; flex-direction: column; gap: 8px; }
 .card, .box, .choice { background: color-mix(in srgb, var(--bg) 92%, transparent); border: 1px solid var(--line-strong);
   -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.card { flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; }
+.card { flex: 1; min-height: 44px; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; }
 .card .top { gap: 8px; padding: 0 8px 0 6px; }
 .card .top .engine-chip { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 
@@ -83,14 +83,15 @@ html, body { background: transparent; height: 100%; overflow: hidden; }
 .choice:hover, .choice:focus-visible { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); outline: none; }
 .choice:hover .desc, .choice:focus-visible .desc { color: inherit; opacity: .85; }
 
-/* the dialogue box: name tag on its top edge, the current line, the input row */
-.box { position: relative; margin-top: 12px; border-radius: 12px; background: color-mix(in srgb, var(--surface) 94%, transparent);
+/* the dialogue box: name tag on its top edge, the current line, the input row. It never pushes the
+   top bar or its own input row out of the window: the line and the rows under it scroll inside. */
+.box { position: relative; flex: none; margin-top: 12px; border-radius: 12px; background: color-mix(in srgb, var(--surface) 94%, transparent);
   padding: 20px 10px 8px calc(var(--overlap) + 12px); display: flex; flex-direction: column; gap: 8px; }
 .nametag { position: absolute; top: -14px; left: calc(var(--overlap) + 4px); height: 28px; padding: 0 8px 0 12px; display: inline-flex; align-items: center; gap: 4px;
   border-radius: 7px; border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 14px; letter-spacing: .04em; }
 .nametag:hover { filter: brightness(1.08); }
 .nametag svg.i { width: 14px; height: 14px; }
-.line { font-size: 16px; line-height: 1.7; min-height: calc(3 * 1.7em); max-height: 190px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 4px; }
+.line { font-size: 16px; line-height: 1.7; min-height: calc(3 * 1.7em); max-height: min(190px, 30vh); overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 4px; }
 .line.empty { color: var(--faint); font-size: 14px; }
 .line.pending::after { content: "…"; color: var(--faint); }
 .line.err { color: var(--err); font-size: 14px; }

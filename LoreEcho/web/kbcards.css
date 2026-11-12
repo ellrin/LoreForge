@@ -1,10 +1,12 @@
 /* 「引用：卡片A、卡片B」 under the current line (kbcards.js); theme tokens only. */
-.cites { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+/* at most two rows each (引用, 檔案); more scrolls inside, so a long list never pushes the input row away */
+.cites { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; font-size: 12px; line-height: 1.6; color: var(--muted); max-height: calc(2 * 1.6em + 4px); overflow-y: auto; flex: none; }
 .cites[hidden] { display: none; }
 .cites .k { color: var(--faint); }
-.cites .cite { padding: 0 2px; border: 0; background: none; color: var(--accent-text); font: inherit; cursor: pointer; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+.cites .cite { padding: 0 2px; text-align: left; border: 0; background: none; color: var(--accent-text); font: inherit; cursor: pointer; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
 .cites .cite:hover, .cites .cite:focus-visible { text-decoration-color: currentColor; outline: none; }
 .cites .grade { display: inline-flex; gap: 6px; margin-left: 10px; }
 .cites .grade .btn { padding: 1px 10px; font-size: 12px; }
 .cites .note { margin-left: 10px; color: var(--muted); }
 .cites > .note:first-child { margin-left: 0; }
+.cites.files .cite { color: var(--accent-2-text); }

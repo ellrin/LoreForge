@@ -309,13 +309,15 @@
 
   const target = () => (V.char?.theme?.volume ?? 0.5) * (V.listening || V.speaking || V.holding ? DUCK : 1);
 
+  // one fade per <audio>: a fade on the next song must not cut short the one that is taking the
+  // previous song down to its pause (it would keep playing with no button left to stop it)
   function ramp(a, to, ms, then) {
-    clearInterval(V.fade);
+    clearInterval(a._fade);
     const from = a.volume, t0 = performance.now();
-    V.fade = setInterval(() => {
+    a._fade = setInterval(() => {
       const k = Math.min(1, (performance.now() - t0) / ms);
       a.volume = Math.max(0, Math.min(1, from + (to - from) * k));
-      if (k >= 1) { clearInterval(V.fade); then?.(); }
+      if (k >= 1) { clearInterval(a._fade); then?.(); }
     }, 30);
   }
 
@@ -324,7 +326,7 @@
   function toggleSong() {
     const c = V.char;
     if (!c?.theme) return;
-    if (V.songOn) { V.songOn = false; paintSong(); if (V.song) ramp(V.song, 0, 400, () => V.song?.pause()); return; }
+    if (V.songOn) { V.songOn = false; paintSong(); const a = V.song; if (a) ramp(a, 0, 400, () => a.pause()); return; }
     if (!V.song) {
       V.song = new Audio(songUrl(c));
       V.song.addEventListener("error", () => { V.songOn = false; paintSong(); toast("這台播不了這個音樂格式", { err: true }); });

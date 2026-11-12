@@ -154,15 +154,20 @@ fn event(name: &str, data: serde_json::Value) -> Event {
 }
 
 /// Run `req` on `route` and stream it, after `kb` (the turn's KnowledgeBase cards: `search`,
-/// `cards`, the prompt note); each piece also goes to `speaker` when reading aloud. Stops the call
+/// `cards`, the prompt note) and `shelf` (the turn's files from LoreShelf: `files`); each piece also goes to `speaker` when reading aloud. Stops the call
 /// when the page goes away (and queues nothing more to speak).
-pub fn stream(route: lore_llm::Route, req: LlmRequest, kb: Option<crate::kbctx::Pre>, speaker: Option<lore_voice::Speaker>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+pub fn stream(route: lore_llm::Route, req: LlmRequest, kb: Option<crate::kbctx::Pre>, shelf: Option<crate::shelfctx::Pre>, speaker: Option<lore_voice::Speaker>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     let engine = route.provider.id();
     let speaker = std::sync::Arc::new(std::sync::Mutex::new(speaker));
     tokio::spawn(async move {
         let req = match kb {
             Some(kb) => kb.run(req, |name, data| { let _ = tx.send(event(name, data)); }).await,
+            None => req,
+        };
+        // the author's files (LoreShelf, while it runs): SSE `files`, a note in the prompt
+        let req = match shelf {
+            Some(sh) => sh.run(req, |name, data| { let _ = tx.send(event(name, data)); }).await,
             None => req,
         };
         let _ = tx.send(event("start", json!({ "engine": engine, "label": crate::llm::engine_label(&engine) })));

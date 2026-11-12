@@ -29,6 +29,7 @@ pub mod chat;
 pub mod config;
 pub mod kbctx;
 pub mod llm;
+pub mod shelfctx;
 pub mod store;
 pub mod voice;
 
@@ -67,6 +68,8 @@ pub struct AppState {
     pub hook: Option<DesktopHook>,
     /// The author's KnowledgeBase, read-only ([`kbctx`]).
     pub kb: kbctx::Kb,
+    /// Ask the running LoreShelf about the author's files ([`shelfctx`]); only the real app does.
+    pub shelf: std::sync::atomic::AtomicBool,
     /// PaperComposer, for 整理成筆記 / 記下靈感 ([`actions`]).
     pub pc: actions::Pc,
     /// Listening and speaking (lore-voice; unavailable in tests unless a fake is given).
@@ -92,7 +95,7 @@ impl AppState {
                 None
             }
         };
-        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), pc: actions::Pc::default(), voice, write: Mutex::new(()) })
+        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), shelf: std::sync::atomic::AtomicBool::new(false), pc: actions::Pc::default(), voice, write: Mutex::new(()) })
     }
 
     /// The real engines (`private/LoreEcho/tasks.toml` may override the task's model) and the
@@ -103,6 +106,7 @@ impl AppState {
         let s = AppState::with_voice(home, web, llm, hook, lore_voice::Voice::system());
         s.kb.use_system();
         s.pc.use_system();
+        s.shelf.store(true, std::sync::atomic::Ordering::Relaxed);
         s
     }
 
@@ -159,7 +163,7 @@ fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
     for (path, mime, body) in lore_shell::FILES {
         kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
     }
-    api::routes().merge(voice::routes()).merge(actions::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
+    api::routes().merge(voice::routes()).merge(actions::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).route("/api/shelf/focus", axum::routing::post(shelfctx::focus_post)).with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`config.port` (0 = any free port); the address, the state and the server.
