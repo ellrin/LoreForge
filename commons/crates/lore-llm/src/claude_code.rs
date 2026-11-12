@@ -19,14 +19,19 @@
 //! - Web search (optional, [`ClaudeCode::allow_web`]): only the `WebSearch`
 //!   tool is enabled for that call (`--tools WebSearch --allowedTools
 //!   WebSearch`). **Not tested with the real CLI.**
-//! - No images and no token streaming here (capabilities say so); the router
-//!   sends vision tasks elsewhere.
+//! - Images: written into that empty folder (`img1.png`, …) and only the `Read`
+//!   tool is enabled (`--tools Read`, no `--allowedTools`), so Claude Code can open
+//!   files in its own folder and nothing else: a read outside it is a permission
+//!   prompt, which `-p` refuses. Checked by hand with Claude Code 2.1.316
+//!   (an equation PNG read back as LaTeX; a file outside the folder denied).
+//! - No token streaming here (capabilities say so).
 //!
 //! Tested with a fake `claude` executable only ([`fake`]).
 
 use crate::error::LlmError;
 use crate::provider::{LlmProvider, check_request};
-use crate::types::{Capabilities, LlmRequest, LlmResponse};
+use crate::types::{Capabilities, LlmRequest, LlmResponse, Part};
+use base64::Engine as _;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -242,10 +247,25 @@ impl ClaudeCode {
     pub fn args(&self, req: &LlmRequest, isolation: &[&str]) -> Vec<String> {
         let mut a: Vec<String> = ["-p", "--output-format", "json", "--no-session-persistence"].iter().map(|s| s.to_string()).collect();
         a.extend(isolation.iter().map(|s| s.to_string()));
-        if req.web_search && self.allow_web {
-            a.extend(["--tools", "WebSearch", "--allowedTools", "WebSearch"].map(String::from));
-        } else {
+        let web = req.web_search && self.allow_web;
+        // Read: only for the images in the call's own folder (reads elsewhere are not allowed)
+        let mut tools: Vec<String> = Vec::new();
+        if req.has_images() {
+            tools.push("Read".into());
+        }
+        if web {
+            tools.push("WebSearch".into());
+        }
+        if tools.is_empty() {
             a.extend(["--tools".into(), String::new()]);
+        } else {
+            a.push("--tools".into());
+            a.extend(tools);
+            // whatever the account's settings say: asking first, which -p refuses
+            a.extend(["--permission-mode", "default"].map(String::from));
+        }
+        if web {
+            a.extend(["--allowedTools", "WebSearch"].map(String::from));
         }
         a.extend(["--model".into(), self.model.clone(), "--system-prompt".into(), req.system.clone()]);
         if let Some(e) = req.effort.as_ref().or(self.effort.as_ref()) {
@@ -269,7 +289,7 @@ impl LlmProvider for ClaudeCode {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { json: true, vision: false, web: self.allow_web, streaming: false, context: self.context, needs_network: true }
+        Capabilities { json: true, vision: true, web: self.allow_web, streaming: false, context: self.context, needs_network: true }
     }
 
     async fn send(&self, req: &LlmRequest) -> Result<LlmResponse, LlmError> {
@@ -281,8 +301,8 @@ impl LlmProvider for ClaudeCode {
         std::fs::create_dir_all(&dir).map_err(|e| LlmError::Network(NAME.into(), e.to_string()))?;
         let mut c = command(&bin, self.cli.config_dir.as_deref());
         c.current_dir(&dir).args(self.args(req, isolation)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let prompt = req.flatten();
         let result = async {
+            let prompt = with_images(&dir, req)?;
             let mut child = c.spawn().map_err(|e| LlmError::Network(NAME.into(), format!("無法啟動 Claude Code：{e}")))?;
             if let Some(mut stdin) = child.stdin.take() {
                 stdin.write_all(prompt.as_bytes()).await.map_err(|e| LlmError::Network(NAME.into(), e.to_string()))?;
@@ -297,6 +317,36 @@ impl LlmProvider for ClaudeCode {
         let _ = std::fs::remove_dir_all(&dir);
         Ok(LlmResponse { text: result?, provider: self.id(), sources: vec![], usage: None })
     }
+}
+
+/// The images of `req` as files in `dir` (`img1.png`, …), named at the top of the prompt.
+fn with_images(dir: &Path, req: &LlmRequest) -> Result<String, LlmError> {
+    let mut names = Vec::new();
+    for m in &req.messages {
+        for p in &m.content {
+            let Part::Image(img) = p else { continue };
+            let ext = match img.media_type.as_str() {
+                "image/jpeg" => "jpg",
+                "image/webp" => "webp",
+                "image/gif" => "gif",
+                _ => "png",
+            };
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(img.data.as_bytes())
+                .map_err(|e| LlmError::Parse(NAME.into(), format!("圖片資料壞了：{e}")))?;
+            let name = format!("img{}.{ext}", names.len() + 1);
+            std::fs::write(dir.join(&name), bytes).map_err(|e| LlmError::Network(NAME.into(), e.to_string()))?;
+            names.push(format!("./{name}"));
+        }
+    }
+    let prompt = req.flatten();
+    if names.is_empty() {
+        return Ok(prompt);
+    }
+    Ok(format!(
+        "The images for this request are in the working folder: {}. Open each with the Read tool (in this order) before answering.\n\n{prompt}",
+        names.join(", ")
+    ))
 }
 
 /// The `--output-format json` result: `structured_output` when a schema was
@@ -327,7 +377,7 @@ pub fn parse_output(stdout: &[u8], stderr: &[u8]) -> Result<String, LlmError> {
 /// `auth login` and `-p`. Sign-in is kept per `CLAUDE_CONFIG_DIR` (or the
 /// fake's own folder): signed in when that folder has `fake-login`; the
 /// account name comes from `fake-account`. Evidence is left in the fake's
-/// folder: `last-args`, `last-stdin`, `cwd-entries`, `last-config-dir`,
+/// folder: `last-args`, `last-stdin`, `cwd-entries`, `cwd-names`, `last-config-dir`,
 /// `last-env-names`, `login-called`. Put a JSON reply in `reply.json` for
 /// `--json-schema` calls and a text reply in `reply.txt` for the rest. If
 /// any variable from [`STRIP_ENV`] reaches it, it fails loudly.
@@ -357,6 +407,7 @@ printf '%s' "$CLAUDE_CONFIG_DIR" > "$D/last-config-dir"
 env | cut -d= -f1 | sort > "$D/last-env-names"
 cat > "$D/last-stdin"
 ls -A | wc -l | tr -d ' ' > "$D/cwd-entries"
+ls -A > "$D/cwd-names"
 if [ -n "$ANTHROPIC_API_KEY$ANTHROPIC_AUTH_TOKEN$ANTHROPIC_BASE_URL$CLAUDE_CODE_USE_BEDROCK$CLAUDE_CODE_OAUTH_TOKEN" ]; then
   echo '{{"type":"result","is_error":true,"result":"billing variable leaked"}}'; exit 1
 fi
@@ -421,6 +472,21 @@ mod tests {
         let chat = LlmRequest::chat("s", vec![Message::user("hi"), Message::assistant("hello"), Message::user("bye")]);
         assert_eq!(p.complete(&chat).await.unwrap(), "OK");
         assert!(std::fs::read_to_string(dir.path().join("last-stdin")).unwrap().contains("<turn role=\"assistant\">\nhello"));
+
+        // Images: files in the call's own folder, only Read.
+        let img = LlmRequest::prompt("s", "read the equation")
+            .image(Image::from_bytes("image/png", b"\x89PNG fake"))
+            .image(Image::from_bytes("image/jpeg", b"jpeg"));
+        assert!(p.capabilities().vision);
+        assert_eq!(p.complete(&img).await.unwrap(), "OK");
+        let names = std::fs::read_to_string(dir.path().join("cwd-names")).unwrap();
+        assert_eq!(names.lines().collect::<Vec<_>>(), ["img1.png", "img2.jpg"]);
+        let stdin = std::fs::read_to_string(dir.path().join("last-stdin")).unwrap();
+        assert!(stdin.contains("./img1.png, ./img2.jpg") && stdin.ends_with("read the equation"), "{stdin}");
+        let args: Vec<String> = std::fs::read_to_string(dir.path().join("last-args")).unwrap().lines().map(String::from).collect();
+        let at = args.iter().position(|a| a == "--tools").unwrap();
+        assert_eq!(args[at + 1..at + 4], ["Read", "--permission-mode", "default"]);
+        assert!(!args.iter().any(|a| a == "--allowedTools"), "no reads allowed beyond the folder");
     }
 
     #[cfg(unix)]
@@ -465,13 +531,18 @@ mod tests {
         let a = p.args(&req, &[]);
         assert!(has(&a, "--tools", "WebSearch") && has(&a, "--allowedTools", "WebSearch"));
         assert!(has(&p.args(&LlmRequest::prompt("s", "u"), &[]), "--tools", ""), "other calls keep all tools off");
+        // images and web together: both tools, only WebSearch pre-allowed
+        let both = p.args(&LlmRequest::prompt("s", "u").web(true).image(Image::from_bytes("image/png", b"x")), &[]);
+        let at = both.iter().position(|x| x == "--tools").unwrap();
+        assert_eq!(both[at + 1..at + 3], ["Read", "WebSearch"]);
+        assert!(has(&both, "--allowedTools", "WebSearch") && has(&both, "--permission-mode", "default"));
     }
 
     #[tokio::test]
-    async fn images_and_disallowed_web_are_refused_before_spawning() {
+    async fn disallowed_web_is_refused_before_spawning() {
         let p = ClaudeCode::new(Cli { bin: Some("/nonexistent/claude".into()), config_dir: None }, "m", None);
         let img = LlmRequest::prompt("s", "u").image(Image::from_bytes("image/png", b"x"));
-        assert!(matches!(p.send(&img).await, Err(LlmError::Unsupported(..))));
+        assert!(matches!(p.send(&img).await, Err(LlmError::NotConfigured(_))), "images are taken");
         assert!(matches!(p.send(&LlmRequest::prompt("s", "u").web(true)).await, Err(LlmError::Unsupported(..))));
         assert!(matches!(p.send(&LlmRequest::prompt("s", "u")).await, Err(LlmError::NotConfigured(_))));
     }

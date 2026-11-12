@@ -432,7 +432,7 @@ class = "create"
         let r = router(true, true, s);
         assert_eq!(r.candidates("c"), vec!["claude-code:sonnet", "local:qwen"], "a task's own model stays");
         assert_eq!(r.candidates("a"), vec!["local:current", "claude-code:sonnet"]);
-        assert_eq!(r.candidates("see"), vec!["claude:opus", "local:current"], "selected = the shared model; images: the API may still take it");
+        assert_eq!(r.candidates("see"), vec!["claude-code:opus", "local:current"], "selected = the shared model and way in, images too");
         assert_eq!(r.candidates_with("t", &RouteOptions::only("claude-api:selected")), vec!["claude-api:opus"]);
     }
 

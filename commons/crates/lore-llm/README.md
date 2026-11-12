@@ -31,7 +31,7 @@ lore-llm = { path = "../commons/crates/lore-llm" }   # default feature: zhtw (Op
 | Engine | json | vision | web | streaming | network |
 |---|---|---|---|---|---|
 | `ClaudeApi` | yes | yes | yes (server tool) | yes (SSE) | yes |
-| `ClaudeCode` | yes (`--json-schema`) | no | only with `allow_web` | no (one piece) | yes |
+| `ClaudeCode` | yes (`--json-schema`) | yes (images written into the call's empty folder, `--tools Read`, `--permission-mode default`: reads outside that folder are refused) | only with `allow_web` | no (one piece) | yes |
 | `OpenAiCompat` (llama-server) | yes (`json_schema`) | when started with mmproj | no | yes | no (local) |
 | `MockProvider` | configurable | | | | |
 
@@ -131,7 +131,7 @@ process reads the shared settings on each route; before that, nothing changes.
   Offline with `cloud` is `Unavailable` (skip 「離線」) with the local alternative.
 - A strict per-call choice ignores routes; its failure offers the other engine too.
 - `[claude] model` replaces `selected` in `claude:selected`; `[claude] via` turns `claude:`
-  into `claude-code:` / `claude-api:` (not for tasks that need images).
+  into `claude-code:` / `claude-api:` (images included).
 - `TaskTable::candidates_for(task, opts)` = the same list for code that walks candidates
   itself; `shared::last_used(task)` = what the task last ran on.
 - Keys: `secrets::SharedKeys::for_app(app, dir)` reads the `LoreForge` keychain service,
@@ -141,7 +141,7 @@ Candidate order without shared settings is (call's ref →) override → default
 the factory builds it (or says why not: "Claude 訂閱尚未登入", "還沒下載 …", "不能看圖");
 its capabilities must cover `needs`. `Route.fallback_used` and `Route.skipped` let the UI
 say "改用本機模型（Claude：離線）". `claude:` tries the subscription first when
-`prefer_subscription`, but skips it for needs it lacks (vision, streaming, web without
+`prefer_subscription`, but skips it for needs it lacks (streaming, web without
 `allow_web`).
 
 ## Migration map

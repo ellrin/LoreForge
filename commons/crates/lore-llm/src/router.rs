@@ -397,9 +397,8 @@ pub struct Plan {
     pub mode: RouteMode,
 }
 
-/// `claude:selected` → the shared Claude model, `claude:` → the shared way in (not for
-/// tasks that need images: the subscription cannot read them, the API key may).
-fn rewrite(r: &str, s: &EngineSettings, spec: &TaskSpec) -> String {
+/// `claude:selected` → the shared Claude model, `claude:` → the shared way in.
+fn rewrite(r: &str, s: &EngineSettings) -> String {
     match ModelRef::parse(r) {
         Ok(ModelRef::Claude { model, via }) => {
             let model = match &s.claude_model {
@@ -407,7 +406,7 @@ fn rewrite(r: &str, s: &EngineSettings, spec: &TaskSpec) -> String {
                 _ => model,
             };
             let via = match s.claude_via {
-                Some(v) if via == ClaudeVia::Auto && !spec.needs.vision => v,
+                Some(v) if via == ClaudeVia::Auto => v,
                 _ => via,
             };
             ModelRef::Claude { model, via }.to_string()
@@ -432,7 +431,7 @@ fn push(out: &mut Vec<String>, r: String) {
 ///   `local:current` when it names no model of that kind. `auto` orders them by the
 ///   class ([`TaskClass::auto_order`]); `cloud` / `local` keep only that kind.
 pub fn plan(task: &str, spec: &TaskSpec, saved: Option<String>, opts: &RouteOptions, settings: Option<&EngineSettings>) -> Plan {
-    let rw = |r: &str| settings.map_or_else(|| r.to_string(), |s| rewrite(r, s, spec));
+    let rw = |r: &str| settings.map_or_else(|| r.to_string(), |s| rewrite(r, s));
     // every ref the task could use, for the alternative
     let mut pool: Vec<String> = Vec::new();
     for r in [saved.clone(), Some(spec.default.clone()), spec.fallback.clone(), Some(format!("claude:{CLAUDE_SELECTED}")), Some(format!("local:{LOCAL_CURRENT}"))]
@@ -1135,13 +1134,11 @@ max_tokens = 9000
         f.subscription.as_mut().unwrap().cache = Arc::new(Cache::default());
         let p = f.make(&sonnet, &spec(Needs::default())).await.unwrap();
         assert_eq!(p.id(), "claude-subscription:claude-sonnet-5-5");
-        // Vision is not offered by the subscription: the API takes it.
+        // Vision too: the subscription reads the images from its folder (Read only).
         let p = f.make(&sonnet, &spec(Needs { vision: true, ..Default::default() })).await.unwrap();
-        assert_eq!(p.id(), "claude:claude-sonnet-5-5");
-        // Subscription only and vision: a clear reason.
+        assert_eq!(p.id(), "claude-subscription:claude-sonnet-5-5");
         let only = ModelRef::parse("claude-code:sonnet").unwrap();
-        let e = f.make(&only, &spec(Needs { vision: true, ..Default::default() })).await.err().unwrap();
-        assert!(e.contains("看圖"), "{e}");
+        assert!(f.make(&only, &spec(Needs { vision: true, ..Default::default() })).await.unwrap().capabilities().vision);
         f.api = None;
         f.subscription = None;
         let e = f.make(&sonnet, &spec(Needs::default())).await.err().unwrap();
