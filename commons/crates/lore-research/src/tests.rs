@@ -292,3 +292,32 @@ fn record_json_shape() {
     let s = serde_json::to_value(Source::SemanticScholar).unwrap();
     assert_eq!(s, "s2");
 }
+
+#[test]
+fn licence_from_openalex_and_reuse_rule() {
+    let v: serde_json::Value = serde_json::from_str(include_str!("../tests/fixtures/openalex_search.json")).unwrap();
+    let recs = crate::openalex::parse(&v);
+    let gold = recs.iter().find(|r| r.title.starts_with("Gold")).unwrap();
+    assert_eq!(gold.license.as_deref(), Some("cc-by"));
+    assert!(recs.iter().find(|r| r.title.starts_with("Sparse")).unwrap().license.is_none());
+    for ok in ["cc-by", "CC BY", "cc-by-sa", "cc0", "public-domain", "https://creativecommons.org/licenses/by/4.0/"] {
+        assert!(crate::figure_reuse_allowed(Some(ok)), "{ok}");
+    }
+    for no in ["cc-by-nc", "cc-by-nd", "cc-by-nc-sa", "publisher-specific-oa", "other-oa", ""] {
+        assert!(!crate::figure_reuse_allowed(Some(no)), "{no}");
+    }
+    assert!(!crate::figure_reuse_allowed(None));
+}
+
+#[test]
+fn arxiv_states_its_own_licence() {
+    let rec = |lic: &str| format!("<OAI-PMH><GetRecord><record><metadata><arXiv xmlns=\"http://arxiv.org/OAI/arXiv/\"><id>2401.00001</id>{lic}</arXiv></metadata></record></GetRecord></OAI-PMH>");
+    assert_eq!(crate::arxiv::oai_license(&rec("<license>http://arxiv.org/licenses/nonexclusive-distrib/1.0/</license>")).as_deref(), Some("arxiv-nonexclusive"));
+    assert_eq!(crate::arxiv::oai_license(&rec("")).as_deref(), Some("arxiv-nonexclusive"), "no licence named: arXiv's default");
+    assert_eq!(crate::arxiv::oai_license(&rec("<license>http://creativecommons.org/licenses/by/4.0/</license>")).as_deref(), Some("cc-by"));
+    assert_eq!(crate::arxiv::oai_license(&rec("<license>http://creativecommons.org/licenses/by-nc-sa/4.0/</license>")).as_deref(), Some("cc-by-nc-sa"));
+    assert_eq!(crate::arxiv::oai_license(&rec("<license>http://creativecommons.org/publicdomain/zero/1.0/</license>")).as_deref(), Some("cc0"));
+    assert_eq!(crate::arxiv::oai_license("<error code=\"idDoesNotExist\"/>"), None);
+    assert!(crate::figure_reuse_allowed(Some("cc-by")) && !crate::figure_reuse_allowed(Some("arxiv-nonexclusive")) && !crate::figure_reuse_allowed(Some("cc-by-nc-sa")));
+    assert!(crate::arxiv::oai_url("arXiv:2401.00001v2").contains("oai%3AarXiv.org%3A2401.00001") || crate::arxiv::oai_url("2401.00001").contains("2401.00001"));
+}

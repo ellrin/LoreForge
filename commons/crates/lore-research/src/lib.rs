@@ -79,6 +79,20 @@ pub struct Record {
     /// Every source that found it (after [`dedupe`]).
     pub sources: Vec<Source>,
     pub citations: Option<u64>,
+    /// The open-access copy's licence as the source names it (`cc-by`, `cc-by-nc-nd`, …;
+    /// OpenAlex `best_oa_location.license`, S2 `openAccessPdf.license`); None = not stated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+/// May a figure of a paper under this licence be reproduced (with attribution) in the
+/// author's own notes? Only CC BY, CC BY-SA, CC0 and public domain: NonCommercial and
+/// NoDerivatives licences, publisher licences and unstated ones are redrawn or described instead.
+pub fn figure_reuse_allowed(license: Option<&str>) -> bool {
+    let Some(l) = license else { return false };
+    let l = l.trim().to_ascii_lowercase().replace([' ', '_'], "-");
+    let l = l.trim_start_matches("https://creativecommons.org/licenses/").trim_end_matches('/');
+    matches!(l, "cc-by" | "cc-by-sa" | "cc0" | "public-domain" | "pd" | "publicdomain") || l.starts_with("cc-by-4") || l.starts_with("cc-by-3") || l.starts_with("cc-by-sa-") || l.starts_with("by/") || l.starts_with("by-sa/")
 }
 
 impl Record {
@@ -285,6 +299,15 @@ impl Client {
         })
     }
 
+    /// The licence arXiv states for paper `id` (see [`arxiv::oai_license`]); None when arXiv
+    /// does not answer with a record. Use it over a source's `license` for anything on arXiv.
+    pub async fn arxiv_license(&self, id: &str) -> Result<Option<String>, Error> {
+        Ok(match self.call(Source::Arxiv, Request::get(arxiv::oai_url(id))).await? {
+            None => None,
+            Some(r) => arxiv::oai_license(&r.text()),
+        })
+    }
+
     /// One source's search.
     pub async fn search_in(&self, src: Source, query: &str, limit: usize) -> Result<Vec<Record>, Error> {
         let mailto = self.cfg.mailto.as_deref();
@@ -447,6 +470,7 @@ pub fn dedupe(records: Vec<Record>) -> Vec<Record> {
                 }
                 o.year = o.year.or(r.year);
                 o.venue = o.venue.take().or(r.venue);
+                o.license = o.license.take().or(r.license);
                 o.doi = o.doi.take().or(r.doi);
                 o.arxiv = o.arxiv.take().or(r.arxiv);
                 o.abstract_text = o.abstract_text.take().or(r.abstract_text);

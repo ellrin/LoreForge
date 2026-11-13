@@ -28,7 +28,11 @@ let rep = import_into_reader(&*c.http(), "http://127.0.0.1:7890", &files).await;
 ```
 
 - `Record`: `title, authors, year, venue, doi` (bare, lower-case), `arxiv` (no version),
-  `abstract, is_oa, pdf_url` (an OA PDF only), `url, source, sources, citations`. JSON:
+  `abstract, is_oa, pdf_url` (an OA PDF only), `url, source, sources, citations`, `license` (the OA copy's
+  licence as OpenAlex `best_oa_location.license` / S2 `openAccessPdf.license` name it; None = not stated).
+  `figure_reuse_allowed(license)`: CC BY, CC BY-SA, CC0, public domain only (NC / ND / publisher / unknown: no).
+  OpenAlex labels arXiv copies `cc-by` whatever the authors chose: `Client::arxiv_license(id)` reads the licence
+  arXiv states (OAI-PMH, `arxiv::oai_license`; none named = `arxiv-nonexclusive`, arXiv's default). JSON:
   `source` is `openalex | arxiv | s2`, the abstract is `abstract`.
 - `Config`: `user_agent` (default `LoreForge/0.1 (+https://github.com/ellrin/LoreForge)`),
   `mailto` (OpenAlex's optional polite-pool e-mail; **None by default**, the author's setting),

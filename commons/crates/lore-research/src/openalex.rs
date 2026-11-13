@@ -81,5 +81,6 @@ fn work(w: &Value) -> Option<Record> {
         source: Source::OpenAlex,
         sources: vec![Source::OpenAlex],
         citations: w.get("cited_by_count").and_then(Value::as_u64),
+        license: str_of(w.pointer("/best_oa_location/license")).or_else(|| str_of(w.pointer("/primary_location/license"))),
     })
 }

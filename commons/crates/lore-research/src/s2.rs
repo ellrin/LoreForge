@@ -47,5 +47,6 @@ fn paper(p: &Value) -> Option<Record> {
         source: Source::SemanticScholar,
         sources: vec![Source::SemanticScholar],
         citations: p.get("citationCount").and_then(Value::as_u64),
+        license: str_of(p.pointer("/openAccessPdf/license")),
     })
 }

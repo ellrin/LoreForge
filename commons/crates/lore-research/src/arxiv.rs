@@ -23,6 +23,30 @@ pub fn id_url(id: &str) -> String {
     crate::url_with(BASE, &[("id_list", crate::norm_arxiv(id)), ("max_results", "1".into())])
 }
 
+/// OAI-PMH record of one paper in arXiv's own format: the only place that states the licence the
+/// authors chose (OpenAlex labels arXiv copies `cc-by` whatever they are).
+pub fn oai_url(id: &str) -> String {
+    crate::url_with("https://export.arxiv.org/oai2", &[("verb", "GetRecord".into()), ("identifier", format!("oai:arXiv.org:{}", crate::norm_arxiv(id))), ("metadataPrefix", "arXiv".into())])
+}
+
+/// The licence of an OAI record: `cc-by`, `cc-by-sa`, `cc-by-nc-sa`, `cc0`, …, or
+/// `arxiv-nonexclusive` (arXiv's default licence, also when the record names none). None = not a record.
+pub fn oai_license(xml: &str) -> Option<String> {
+    if !xml.contains("<arXiv") {
+        return None;
+    }
+    let url = xml.split_once("<license>").and_then(|(_, r)| r.split_once("</license>")).map(|(l, _)| l.trim().to_string()).unwrap_or_default();
+    let tail = url.split("/licenses/").nth(1).unwrap_or("").trim_matches('/');
+    let mut parts = tail.split('/');
+    let kind = parts.next().unwrap_or("");
+    Some(match kind {
+        _ if url.contains("publicdomain/zero") => "cc0".into(),
+        _ if url.contains("publicdomain") => "public-domain".into(),
+        "" | "nonexclusive-distrib" => "arxiv-nonexclusive".into(),
+        k => format!("cc-{k}"),
+    })
+}
+
 pub fn pdf_url(id: &str) -> String {
     format!("https://arxiv.org/pdf/{}", crate::norm_arxiv(id))
 }
