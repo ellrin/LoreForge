@@ -376,7 +376,7 @@ async function openPaper(sha, page) {
     S.nouns = null; S.nounMarks = new Map(); S.focusNoun = null;
     S.symbols = null; S.symSpans = []; S.symMarks = new Map();
     S.paras = null; S.curPara = null; S.chatCtx = null; S.chatScope = "all";
-    S.view = r.paper.view_mode === "flip" ? "flip" : "scroll"; S.fit = true; FL.spread = null; S.cur = Math.max(0, page - 1);
+    S.view = r.paper.view_mode === "flip" ? "flip" : "scroll"; S.fit = true; FL.spread = null; S.cur = Math.max(0, page - 1); $("#pageInput").value = "";
     markView();
     await Promise.all([loadAnnotations(), loadQuotes(), loadChat(), refreshExport()]);
     await buildView();
@@ -2733,6 +2733,9 @@ function mountShell() {
       { group: "選取文字", label: "存成引用句", keys: "Q" },
       { group: "選取文字", label: "加入知識庫", keys: "K" },
       { group: "問這篇", label: "送出", keys: "⌘↵" },
+      { group: "翻頁", label: "下一頁 · 上一頁", keys: "→ ← / PageDown PageUp" },
+      { group: "翻頁", label: "下一頁 · 上一頁", keys: "空白鍵 · ⇧空白鍵" },
+      { group: "翻頁", label: "第一頁 · 最後一頁", keys: "Home · End" },
     ],
   });
   const terms = h("button", { type: "button", class: "ico", id: "actTerms", "data-icon": "target", "aria-label": "標示名詞", title: "紅：要學 · 黃：學習中 · 綠：記得", "aria-pressed": "false", onclick: toggleTerms });

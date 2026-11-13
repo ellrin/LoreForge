@@ -152,6 +152,8 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
 
 - The Tauri app (no WebKitGTK here: `apps/desktop` does not compile on this Linux box), the
   native print dialog and a real printer; real local models / Claude; real papers.
+- 翻頁 in WKWebView (the 3D turn, `backface-visibility`), a real trackpad swipe and touch; checked only
+  in headless Chrome with synthetic events.
 
 ## Rules
 
