@@ -223,9 +223,9 @@ fn public_styles_parse_and_match_the_index() {
         assert!(s.pointer("/colors/palette").and_then(Value::as_array).is_some_and(|p| p.len() >= 3), "{id}");
         assert!(s.get("base").is_none());
         // public presets name only free fonts (the author's choice lives in his private settings)
-        let fams = s.pointer("/font/family").unwrap().to_string().to_lowercase();
-        for licensed in ["times new roman", "arial", "helvetica\"", "calibri", "cambria"] {
-            assert!(!fams.contains(licensed), "{id} names a licensed font: {fams}");
+        const FREE: &[&str] = &["STIX Two Text", "TeX Gyre Termes", "Liberation Serif", "Tinos", "serif", "Liberation Sans", "Arimo", "TeX Gyre Heros", "Nimbus Sans", "sans-serif"];
+        for f in s.pointer("/font/family").unwrap().as_array().unwrap() {
+            assert!(FREE.contains(&f.as_str().unwrap()), "{id} names a font outside the free list: {f}");
         }
     }
     // Nature: 89 mm single column, 5–7 pt type
@@ -497,9 +497,8 @@ fn assist_prompt_is_neutral_and_filled() {
     assert!(!sys.contains("{catalogue}") && !sys.contains("{venue}") && !sys.contains("{style_preset}"));
     assert!(sys.contains("B1 bar") && sys.contains("R2 roc") && sys.contains("never write code"));
     assert!(sys.contains("Venue: Nature"));
-    for name in ["Times New Roman", "Arial", "Helvetica"] {
-        assert!(!assist::PROMPT.contains(name), "the public prompt names {name}");
-    }
+    // the public prompt names no font at all (fonts come from the style preset)
+    assert!(!assist::PROMPT.to_lowercase().contains("font-family") && !assist::PROMPT.contains("Roman"));
     let mut c = assist_ctx();
     c.preferences = "Default style for papers: mine.".into();
     assert!(assist::system(&c).contains("Default style for papers: mine."));
