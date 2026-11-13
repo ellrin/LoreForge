@@ -254,7 +254,7 @@ const PCTemplates = (() => {
 
   async function open(select) {
     kind ??= store.get("pc.tplKind", "journal");
-    try { list = await api("/api/templates"); } catch (e) { list = []; LoreShell.toast(e.message, { err: true, ms: 5000 }); }
+    try { list = (await api("/api/templates")).filter((j) => j.kind !== "book"); } catch (e) { list = []; LoreShell.toast(e.message, { err: true, ms: 5000 }); }
     const picked = select && list.find((j) => j.id === select);
     if (picked) { current = picked.id; kind = kindOf(picked); store.set("pc.tplKind", kind); store.set("pc.template", picked.id); }
     if (current && !list.some((j) => j.id === current)) current = null;

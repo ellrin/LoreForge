@@ -7,6 +7,7 @@
 
 pub mod authors;
 pub mod bib;
+pub mod book; // 寫書
 pub mod check;
 pub mod compose;
 pub mod decompose;

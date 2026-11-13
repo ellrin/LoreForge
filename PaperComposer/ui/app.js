@@ -262,8 +262,9 @@ function refreshSection(si) {
 function renderKeyValue() {
   const bar = $("#keyValue");
   bar.innerHTML = "";
-  bar.hidden = !state.paper;
-  if (!state.paper) return;
+  // a book (寫書) has no key value
+  bar.hidden = !state.paper || state.paper.meta?.kind === "book";
+  if (bar.hidden) return;
   const kv = state.paper.meta?.key_value ?? "";
   bar.append(el("span", "k", "KEY VALUE"));
   const v = el("button", kv ? "v" : "v empty", kv || "尚未設定：點這裡填寫這篇論文通篇要強調的一件事");

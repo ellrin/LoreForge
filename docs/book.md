@@ -46,7 +46,8 @@
 | Method | Path | Body | 回傳 |
 |---|---|---|---|
 | GET | `/api/info` | — | 至少 `{ app: "pc", books: [{id, title, path, papers}] }` |
-| GET | `/api/books` | — | 書的清單（`books.toml`） |
+| GET | `/api/books` | — | `{ books: [{id, title, path, papers, modified, thumb}], folder }`（`books.toml`；`folder` 是新書預設的資料夾） |
+| POST | `/api/books` | `{ title, folder }` | `{ id, path }`：從模板建立一本空的書（第一階段已有） |
 | POST | `/api/book` | `{ source: {kind: "lr", sha}, book: "new" \| "<id>", length: "short"\|"standard"\|"long", lang: "en-zh"\|"en"\|"zh", mode: "review"\|"direct", extras?: {terms: [{term, n}], stuck: [段落 id], questions: [text]}, folder?: path }` | `{ job: "<id>", …工作物件 }` |
 | GET | `/api/book/jobs/{id}` | `?after=<seq>` 長輪詢 | 工作物件 |
 | POST | `/api/book/jobs/{id}/review` | 作者在微調視窗的決定 | 工作物件 |
@@ -55,6 +56,16 @@
 | GET | `/api/book/jobs/{id}/imports` | — | `pending_imports`（頁面補做 LoreReader 匯入用） |
 
 頁面：PaperComposer 用 `?book-job=<id>` 打開工作畫面（LoreLinks `lore-pc://bookjob/<id>`）；完成後打開那本書。
+
+## 第一階段（2026-11-13 完成）：文件類型、書的清單、模板
+
+流程（上面的工作與 `/api/book*`）還沒做，等作者看過模板樣張再開始。已經有的：
+
+- **文件類型**：`paper.toml` 的 `kind = "book"`（`pc_core::meta::PaperMeta::kind`，沒寫＝論文）。書沒有 Key value 列，也沒有期刊規則；其他（章節編輯、對照表、文獻、匯出）和論文相同。設計文件 §6 的 `kinds/` 沒做：目前只有 `book` 一種，差別只有上面兩項，等真的需要不同的檢查或大綱層級再做。
+- **書的清單**：`books.toml`（PaperComposer 的設定資料夾，`opened.toml` 旁邊；`[[book]] path, title, papers` 與 `last_folder`）。書也登記在 `opened.toml`，用那裡的 id 打開。`GET`／`POST /api/books`（`PaperComposer/crates/server/src/books.rs`）。
+- **首頁「寫書」**：書的清單（最近改過的在前）與「＋ 新書」（書名、資料夾：預設上次的；桌面版用系統對話框選）。建立時資料夾以書名命名、不覆蓋既有資料夾。
+- **模板**：`private-example/PaperComposer/publishers/lecture-notes/`（`template.toml` 的 `kind = "book"`；`lorenotes.sty` 是自己寫的），也內建在 App（`pc_core::book`），工作區有自己的書模板時用工作區的。XeLaTeX（main.tex 第一行 `% !TEX program = xelatex`，匯出照這行選引擎），只用 BasicTeX 有的套件：沒有用 xeCJK、tcolorbox、titlesec（BasicTeX 沒有）；中文用 XeTeX 的字元類別自動切換字型，字型依序找這台電腦有的（Songti TC、PingFang TC 等 macOS 內建，Noto CJK、Fandol 為其他系統的備選）。指令：`\course` `\title` `\author` `\date` `\keywords`、`abstract`、`\term{英文}{中文}`、`\sidenote{…}`、`definition`／`keyidea`／`intuition`／`remark`、`natbib`（`\cite` → [1]）。
+- **檢查**：新書通過 lore-notation 的檢查（`pc_core::book` 的測試）；有 XeLaTeX 的電腦上測試會實際編譯一本含名詞、邊註、各種框與中文的書。
 
 ## 依賴
 

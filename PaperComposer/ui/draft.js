@@ -543,7 +543,7 @@ const PCDraft = (() => {
   async function template(main) {
     const id = (D.drawId = (D.drawId ?? 0) + 1);
     if (!D.tpls) {
-      try { D.tpls = await api("/api/templates"); } catch { D.tpls = []; }
+      try { D.tpls = (await api("/api/templates")).filter((j) => j.kind !== "book"); } catch { D.tpls = []; }
     }
     let choice = null;
     try { choice = await api(base() + "/templates"); } catch { choice = { current: null, suggested: [] }; }

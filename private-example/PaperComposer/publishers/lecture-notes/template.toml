@@ -1,0 +1,3 @@
+name = "Lecture notes"
+kind = "book"
+notes = "寫書的模板：課程講義筆記（XeLaTeX）。"

@@ -1,7 +1,8 @@
 // Start screen (封面). Level 1: what to do, one large card per mode (MODES:
 // a new mode is one entry), then 最近 (one list, both kinds of papers). At launch the
 // paper that was open last opens again. Level 2 (寫論文): new paper, import, and the
-// workspace's papers to continue, most recently edited first.
+// workspace's papers to continue, most recently edited first. Level 2 (寫書): 新書 and
+// the books in books.toml, most recently edited first.
 // The brand and 首頁 in the paper menu come back here.
 
 const PCHome = (() => {
@@ -10,19 +11,22 @@ const PCHome = (() => {
 
   const MODES = [
     { id: "paper", icon: "modePaper", label: "寫論文", enabled: true, onOpen: () => show(2) },
-    { id: "book", icon: "modeBook", label: "寫書", enabled: false },
+    { id: "book", icon: "modeBook", label: "寫書", enabled: true, onOpen: () => show(2, "book") },
     { id: "latex", icon: "openLatex", label: "開啟 LaTeX", enabled: true, onOpen: (card) => PCOpen.latex(card) },
     { id: "word", icon: "openWord", label: "開啟 Word", enabled: true, onOpen: (card) => PCOpen.word(card) },
     { id: "notes", icon: "notebook", label: "筆記", enabled: true, onOpen: () => PCNotes.open() },
   ];
 
   let level = 1;
+  let mode = "paper"; // which level 2: "paper" (寫論文) or "book" (寫書)
   let papers = null; // last /api/home/papers
+  let books = null; // last /api/books
   const root = () => $("#home");
   const isOpen = () => !root().hidden;
 
-  function show(n = level) {
+  function show(n = level, m = n === 2 ? mode : "paper") {
     level = n;
+    mode = m;
     root().hidden = false;
     document.querySelector(".app").classList.add("at-home");
     PCFrame.home(true);
@@ -89,6 +93,7 @@ const PCHome = (() => {
     const inner = el("div", "home-inner wide");
     box.append(inner);
     box = inner;
+    if (mode === "book") return drawBooks(box, focus);
     const head = el("div", "home-head");
     const back = iconButton("back", "返回", () => show(1));
     const add = el("button", "primary small", "＋ 新論文");
@@ -110,14 +115,102 @@ const PCHome = (() => {
     // the last list at once, then the fresh one
     const fill = () => {
       const had = grid.contains(document.activeElement) && document.activeElement.dataset.paper;
-      sub.hidden = !papers?.length;
-      grid.replaceChildren(...(papers ?? []).map(paperCard));
+      sub.hidden = !papers?.some((p) => p.kind !== "book");
+      grid.replaceChildren(...(papers ?? []).filter((p) => p.kind !== "book").map(paperCard));
       if (had) grid.querySelector(`[data-paper="${CSS.escape(had)}"]`)?.focus();
     };
     if (papers) fill();
     try { papers = await api("/api/home/papers"); }
     catch (e) { papers = papers ?? []; LoreShell.toast(e.message, { err: true, ms: 6000 }); }
     if (grid.isConnected) fill(); // unless the screen was redrawn or left meanwhile
+  }
+
+  // ── 寫書 ──────────────────────────────────────────────
+  async function drawBooks(box, focus) {
+    const head = el("div", "home-head");
+    const add = el("button", "primary small", "＋ 新書");
+    add.dataset.opensMenu = "";
+    add.onclick = () => newBookForm(add);
+    head.append(iconButton("back", "返回", () => show(1)), el("h2", "", "寫書"), el("span", "grow"), add);
+    const sub = el("div", "home-sub", "繼續");
+    const grid = el("div", "home-grid papers");
+    box.append(head, sub, grid);
+    if (focus) add.focus();
+    const fill = () => {
+      sub.hidden = !books?.books?.length;
+      grid.replaceChildren(...(books?.books ?? []).map(bookCard));
+    };
+    if (books) fill();
+    try { books = await api("/api/books"); }
+    catch (e) { books = books ?? { books: [] }; LoreShell.toast(e.message, { err: true, ms: 6000 }); }
+    if (grid.isConnected) fill();
+  }
+
+  function bookCard(b) {
+    const art = el("div", "home-art page");
+    const faux = () => fauxPage({ title: b.title, name: b.title });
+    if (b.thumb) {
+      const img = el("img");
+      img.alt = "";
+      img.loading = "lazy";
+      img.src = `/api/home/papers/${encodeURIComponent(b.id)}/thumb?t=${b.modified}`;
+      img.onerror = () => img.replaceWith(faux());
+      art.append(img);
+    } else art.append(faux());
+    const c = card(art, b.title || b.id, () => openPaper(b.id));
+    c.dataset.paper = b.id;
+    c.title = b.path;
+    c.setAttribute("aria-current", String(b.id === state.paper?.name));
+    const item = el("div", "home-item");
+    item.append(c);
+    return item;
+  }
+
+  /** 新書: title and the folder it goes in (the last one used by default). */
+  function newBookForm(anchor) {
+    const m = menuForm("新書", null, anchor);
+    const title = el("input", "field");
+    title.placeholder = "書名";
+    const row = el("div", "form-row");
+    const folder = el("input", "field");
+    folder.placeholder = "存放的資料夾";
+    folder.value = books?.folder ?? "";
+    row.append(folder);
+    if (PCOpen.desktop()) {
+      const pick = el("button", "ghost fit", "選擇…");
+      pick.prepend(icon("folder"));
+      pick.onclick = async () => {
+        try {
+          const r = await api("/api/shell/dialog", { kind: "folder", start: folder.value || null });
+          if (r.path) folder.value = r.path;
+        } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
+      };
+      row.append(pick);
+    }
+    const go = el("button", "primary small", "建立");
+    const create = async () => {
+      if (!title.value.trim()) { title.focus(); return; }
+      if (!folder.value.trim()) { folder.focus(); return; }
+      go.disabled = true;
+      try {
+        const r = await api("/api/books", { title: title.value.trim(), folder: folder.value.trim() });
+        m.hidden = true;
+        books = null;
+        await openPaper(r.id);
+        LoreShell.toast("已建立");
+      } catch (e) {
+        LoreShell.toast(e.message, { err: true, ms: 6000 });
+        go.disabled = false;
+      }
+    };
+    go.onclick = create;
+    for (const i of [title, folder]) i.onkeydown = (e) => { if (e.key === "Enter") create(); if (e.key === "Escape") m.hidden = true; };
+    const foot = el("div", "form-row end");
+    foot.append(go);
+    m.append(title, row, foot);
+    keepOnScreen(m);
+    folder.scrollLeft = folder.scrollWidth; // the folder's own name, not the start of the path
+    title.focus();
   }
 
   const baseName = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
@@ -133,7 +226,7 @@ const PCHome = (() => {
       b.dataset.paper = p.name;
       b.title = p.path ?? p.name;
       const where = p.path ? baseName(p.path.replace(/[\\/][^\\/]*[\\/]?$/, "")) : "";
-      b.append(icon(p.path ? "openLatex" : "modePaper"), el("span", "open-name", p.name), el("span", "open-where", where));
+      b.append(icon(p.kind === "book" ? "modeBook" : p.path ? "openLatex" : "modePaper"), el("span", "open-name", p.name), el("span", "open-where", where));
       b.onclick = () => openPaper(p.name);
       li.append(b);
       ul.append(li);

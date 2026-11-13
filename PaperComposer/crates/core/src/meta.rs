@@ -24,6 +24,19 @@ pub struct PaperMeta {
     /// and style files match byte for byte). None = the plain article.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub journal: Option<String>,
+    /// What the document is: `book` (寫書, course notes) or a paper (left
+    /// out of paper.toml; anything else reads as a paper too).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+}
+
+pub const KIND_BOOK: &str = "book";
+
+impl PaperMeta {
+    /// A book (寫書): no key value, no journal rules.
+    pub fn is_book(&self) -> bool {
+        self.kind == KIND_BOOK
+    }
 }
 
 fn is_cjk(c: char) -> bool {
@@ -140,6 +153,12 @@ mod tests {
         let m = PaperMeta { key_value: "提升效能".into(), authors: vec![PaperAuthor { id: "A001".into(), corresponding: true, equal: false }], ..Default::default() };
         write_meta(&dir, &m).unwrap();
         assert_eq!(read_meta(&dir), m);
+        assert!(!std::fs::read_to_string(dir.join(META_FILE)).unwrap().contains("kind"), "a paper's paper.toml is as before");
+        assert!(!m.is_book());
+        let b = PaperMeta { kind: KIND_BOOK.into(), ..Default::default() };
+        write_meta(&dir, &b).unwrap();
+        assert!(std::fs::read_to_string(dir.join(META_FILE)).unwrap().contains("kind = \"book\""));
+        assert!(read_meta(&dir).is_book());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

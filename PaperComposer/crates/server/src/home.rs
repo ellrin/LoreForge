@@ -24,9 +24,12 @@ pub struct Card {
     /// Where it is, for a paper opened outside the workspace.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// `book` for a book (寫書); none for a paper.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
-fn card(dir: &Path, name: String) -> Card {
+pub(crate) fn card(dir: &Path, name: String) -> Card {
     Card {
         modified: newest(dir, 3),
         title: std::fs::read_to_string(pc_core::open::main_file(dir)).ok().and_then(|t| title(&t)),
@@ -34,6 +37,7 @@ fn card(dir: &Path, name: String) -> Card {
         thumb: compiled_pdf(dir, &name).is_some(),
         name,
         path: None,
+        kind: pc_core::meta::read_meta(dir).is_book().then(|| pc_core::meta::KIND_BOOK.to_string()),
     }
 }
 

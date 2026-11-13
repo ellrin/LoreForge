@@ -23,7 +23,7 @@ const PCNew = (() => {
   async function open() {
     $("#fileMenu").hidden = true;
     st = { step: "authors", name: "", nameEdited: false, template: store.get("pc.newTemplate", ""), tpls: [], people: { authors: [], affiliations: [] }, chosen: [], busy: false };
-    try { st.tpls = await api("/api/templates"); } catch {}
+    try { st.tpls = (await api("/api/templates")).filter((j) => j.kind !== "book"); } catch {}
     if (st.template && !st.tpls.some((t) => t.id === st.template)) st.template = "";
     await loadPeople();
     const d = $("#dlgNew");

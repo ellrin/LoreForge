@@ -14,6 +14,7 @@
 pub mod citecheck;
 pub mod convert;
 mod draft;
+mod books; // 寫書: books.toml and 新書
 mod home;
 mod notation;
 mod notes; // notes.js: 筆記 (lore-notes files in the workspace's notes/)
@@ -1298,7 +1299,7 @@ async fn import_bytes(s: &Shared, name: &str, key_value: &str, bytes: &[u8], tid
         // authors named in the paper's own \author block who are in the profile (none guessed)
         let main = std::fs::read_to_string(pc_core::open::main_file(&dir)).unwrap_or_default();
         let authors = pc_core::authors::match_block(&main, &profile_authors);
-        meta::write_meta(&dir, &PaperMeta { key_value, journal: journal.clone(), authors: authors.clone() }).map(|_| (dir, journal, authors))
+        meta::write_meta(&dir, &PaperMeta { key_value, journal: journal.clone(), authors: authors.clone(), ..Default::default() }).map(|_| (dir, journal, authors))
     });
     let (dir, journal, authors) = match res {
         Ok(x) => x,
@@ -3354,6 +3355,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/compose", post(compose_paragraph))
         .merge(draft::routes())
         .merge(home::routes())
+        .merge(books::routes())
         .merge(sections::routes())
         .merge(opened::routes())
         .merge(notation::routes())

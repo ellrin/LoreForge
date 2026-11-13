@@ -1,0 +1,185 @@
+% lorenotes.sty -- course lecture-notes layout for PaperComposer books (寫書).
+% Written for LoreForge; needs XeLaTeX and only packages that ship with
+% BasicTeX (fontspec, geometry, xcolor, fancyhdr, amsmath, natbib, hyperref).
+%
+%   \course{...}  \title{...}  \author{...}  \date{...}  \keywords{...}
+%   \begin{abstract} ... \end{abstract}       summary under the title
+%   \term{contrastive learning}{對比學習}       a term at its first mention
+%   \sidenote{...}                            a note in the right margin
+%   definition / keyidea / intuition / remark environments
+%
+% Chinese is typeset with the first CJK font this computer has (serif in
+% text, sans in headings); \lnCJKserif / \lnCJKsans in the preamble choose
+% another one.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{lorenotes}[2026/11/13 LoreForge lecture notes]
+
+\RequirePackage{iftex}
+\RequireXeTeX
+\RequirePackage{fontspec}
+\RequirePackage[a4paper,top=24mm,bottom=26mm,left=24mm,textwidth=118mm,
+  marginparsep=7mm,marginparwidth=44mm,headsep=8mm,footskip=12mm]{geometry}
+\RequirePackage{xcolor}
+\RequirePackage{amsmath,amssymb}
+\RequirePackage{graphicx}
+\RequirePackage{booktabs}
+\RequirePackage{fancyhdr}
+\RequirePackage[numbers,square,sort&compress]{natbib}
+\RequirePackage{microtype}
+
+% ── Colours (the document's own; never the app theme) ─────────────────
+\definecolor{lnaccent}{RGB}{28,74,112}
+\definecolor{lnink}{RGB}{33,37,41}
+\definecolor{lnmuted}{RGB}{96,104,112}
+\definecolor{lnrule}{RGB}{200,206,212}
+\definecolor{lndefbg}{RGB}{241,245,249}
+\definecolor{lnideabg}{RGB}{250,247,238}
+\definecolor{lnidea}{RGB}{176,126,30}
+
+% ── Chinese inside English text (XeTeX character classes) ─────────────
+\newcommand\ln@pickfont[2]{% #1 = macro to define, #2 = font names, first that exists wins
+  \def\ln@found{}%
+  \@for\ln@f:=#2\do{%
+    \ifx\ln@found\@empty\IfFontExistsTF{\ln@f}{\let\ln@found\ln@f}{}\fi}%
+  \ifx\ln@found\@empty
+    \PackageWarningNoLine{lorenotes}{No CJK font found among: #2}%
+    \let#1\relax
+  \else
+    \expandafter\newfontfamily\expandafter#1\expandafter{\ln@found}[Scale=MatchUppercase]%
+  \fi}
+\newcommand\lnCJKserif[1]{\def\ln@serifnames{#1}}
+\newcommand\lnCJKsans[1]{\def\ln@sansnames{#1}}
+\lnCJKserif{Songti TC,LiSong Pro,Noto Serif CJK TC,Noto Serif TC,Source Han Serif TC,AR PL UMing TW,FandolSong}
+\lnCJKsans{PingFang TC,Heiti TC,Noto Sans CJK TC,Noto Sans TC,Source Han Sans TC,FandolHei}
+
+\newXeTeXintercharclass\ln@cjk
+\newcommand\ln@setclass[2]{%
+  \count@=#1\relax
+  \loop\XeTeXcharclass\count@=\ln@cjk\relax
+    \ifnum\count@<#2\relax\advance\count@\@ne\repeat}
+\ln@setclass{"2E80}{"2FDF}% radicals
+\ln@setclass{"3000}{"303F}% CJK punctuation
+\ln@setclass{"3040}{"30FF}% kana
+\ln@setclass{"3100}{"312F}% bopomofo
+\ln@setclass{"3190}{"31FF}
+\ln@setclass{"3400}{"4DBF}% extension A
+\ln@setclass{"4E00}{"9FFF}% unified ideographs
+\ln@setclass{"F900}{"FAFF}
+\ln@setclass{"FE30}{"FE4F}
+\ln@setclass{"FF00}{"FFEF}% full-width forms （），：
+\XeTeXinterchartoks 0 \ln@cjk = {\begingroup\ln@zh}
+\XeTeXinterchartoks 4095 \ln@cjk = {\begingroup\ln@zh}
+\XeTeXinterchartoks \ln@cjk 0 = {\endgroup}
+\XeTeXinterchartoks \ln@cjk 4095 = {\endgroup}
+\def\ln@zh{\ifx\f@family\ln@sffamily\ln@zhsans\else\ln@zhserif\fi}
+\AtBeginDocument{%
+  \ln@pickfont\ln@zhserif\ln@serifnames
+  \ln@pickfont\ln@zhsans\ln@sansnames
+  \ifx\ln@zhsans\relax\let\ln@zhsans\ln@zhserif\fi
+  \ifx\ln@zhserif\relax\let\ln@zhserif\ln@zhsans\fi
+  \edef\ln@sffamily{\sfdefault}%
+  \XeTeXlinebreaklocale "zh"%
+  \XeTeXlinebreakskip=0pt plus 0.5pt\relax
+  \XeTeXinterchartokenstate=1\relax}
+
+% ── Page ───────────────────────────────────────────────────────────────
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55\baselineskip plus 2pt minus 1pt}
+\linespread{1.08}
+\color{lnink}
+\def\@course{}
+\newcommand\course[1]{\def\@course{#1}}
+\def\@keywords{}
+\newcommand\keywords[1]{\def\@keywords{#1}}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{{\color{lnrule}\hrule height\headrulewidth width\headwidth}}
+\fancyheadoffset[R]{\dimexpr\marginparsep+\marginparwidth\relax}
+\fancyhead[L]{\footnotesize\sffamily\color{lnmuted}\@course}
+\fancyhead[R]{\footnotesize\sffamily\color{lnmuted}\@title\quad\textcolor{lnaccent}{\thepage}}
+\fancypagestyle{plain}{\fancyhf{}\renewcommand{\headrulewidth}{0pt}%
+  \fancyfoot[R]{\footnotesize\sffamily\color{lnmuted}\thepage}}
+
+% ── Title block ────────────────────────────────────────────────────────
+\def\ln@byline{{\sffamily\small\color{lnmuted}\@author
+  \ifx\@author\@empty\else\ifx\@date\@empty\else\quad\textperiodcentered\quad\fi\fi\@date\par}}
+\renewcommand\maketitle{%
+  \thispagestyle{plain}%
+  \begingroup\raggedright
+  \ifx\@course\@empty\else
+    {\sffamily\small\bfseries\color{lnaccent}\MakeUppercase{\@course}\par}\vspace{5pt}%
+  \fi
+  {\sffamily\fontsize{20}{25}\selectfont\bfseries\@title\par}\vspace{6pt}%
+  \ifx\@author\@empty\ifx\@date\@empty\else\ln@byline\fi\else\ln@byline\fi
+  \vspace{8pt}{\color{lnaccent}\hrule height 1.2pt}\vspace{8pt}%
+  \ifx\@keywords\@empty\else
+    {\small\textsf{\textbf{Keyphrases:}} \textit{\@keywords}\par}\vspace{4pt}%
+  \fi
+  \endgroup}
+\renewenvironment{abstract}{\small\itshape\color{lnmuted}}{\par\vspace{6pt}}
+
+% ── Headings ───────────────────────────────────────────────────────────
+\renewcommand\@seccntformat[1]{\textcolor{lnaccent}{\csname the#1\endcsname}\hspace{0.7em}}
+\renewcommand\section{\@startsection{section}{1}{0pt}%
+  {-3.2ex plus -1ex minus -.2ex}{1.4ex plus .2ex}%
+  {\sffamily\Large\bfseries\raggedright}}
+\renewcommand\subsection{\@startsection{subsection}{2}{0pt}%
+  {-2.6ex plus -1ex minus -.2ex}{0.8ex plus .2ex}%
+  {\sffamily\large\bfseries\raggedright}}
+\renewcommand\subsubsection{\@startsection{subsubsection}{3}{0pt}%
+  {-2ex plus -.5ex minus -.2ex}{0.5ex plus .1ex}%
+  {\sffamily\normalsize\bfseries\raggedright}}
+\renewcommand\paragraph{\@startsection{paragraph}{4}{0pt}%
+  {1.6ex plus .5ex minus .2ex}{-1em}{\sffamily\normalsize\bfseries}}
+\numberwithin{equation}{section}
+
+% ── Terms and margin notes ─────────────────────────────────────────────
+% \term{English}{中文}: the first time a term appears.
+\newcommand\term[2]{\textbf{#1}\ifx\relax#2\relax\else\ (#2)\fi}
+\newcommand\sidenote[1]{\marginpar{\raggedright\footnotesize\sffamily\color{lnmuted}%
+  \setlength{\parskip}{3pt}{\color{lnaccent}\rule[0.3ex]{1.2em}{0.6pt}}\par #1}}
+
+% ── Boxes ──────────────────────────────────────────────────────────────
+\newcounter{definition}[section]
+\renewcommand\thedefinition{\thesection.\arabic{definition}}
+\newsavebox\ln@box
+\newlength\ln@boxw
+% \begin{definition}[name] ... \end{definition}: shaded, numbered.
+\newenvironment{definition}[1][]{%
+  \refstepcounter{definition}%
+  \def\ln@name{#1}%
+  \setlength\ln@boxw{\dimexpr\linewidth-20pt\relax}%
+  \begin{lrbox}{\ln@box}\begin{minipage}{\ln@boxw}%
+  \setlength{\parskip}{4pt}%
+  {\sffamily\small\bfseries\color{lnaccent}Definition \thedefinition
+    \ifx\ln@name\@empty\else\ \textmd{(\ln@name)}\fi\par}%
+}{%
+  \end{minipage}\end{lrbox}%
+  \par\vspace{4pt}\noindent
+  \fboxsep=0pt\colorbox{lndefbg}{\hbox{\color{lnaccent}\vrule width 2.5pt\hspace{7.5pt}%
+    \vbox{\vspace{8pt}\copy\ln@box\vspace{8pt}}\hspace{10pt}}}%
+  \par\vspace{4pt}}
+% Left-ruled boxes with a label: key idea, intuition.
+\newcommand\ln@ruledbox[3]{% label, rule colour, background
+  \def\ln@label{#1}\def\ln@rc{#2}\def\ln@bg{#3}%
+  \setlength\ln@boxw{\dimexpr\linewidth-20pt\relax}%
+  \begin{lrbox}{\ln@box}\begin{minipage}{\ln@boxw}\setlength{\parskip}{4pt}%
+  {\sffamily\small\bfseries\color{#2}#1\par}}
+\newcommand\ln@endruledbox{%
+  \end{minipage}\end{lrbox}%
+  \par\vspace{4pt}\noindent
+  \fboxsep=0pt\colorbox{\ln@bg}{\hbox{\color{\ln@rc}\vrule width 2.5pt\hspace{7.5pt}%
+    \vbox{\vspace{7pt}\copy\ln@box\vspace{7pt}}\hspace{10pt}}}%
+  \par\vspace{4pt}}
+\newenvironment{keyidea}{\ln@ruledbox{Key idea}{lnidea}{lnideabg}}{\ln@endruledbox}
+\newenvironment{intuition}{\ln@ruledbox{Intuition}{lnaccent}{white}}{\ln@endruledbox}
+\newenvironment{remark}{\par\small\color{lnmuted}\textsf{\textbf{Remark.}}\ }{\par}
+
+% ── Bibliography and links ─────────────────────────────────────────────
+\renewcommand\bibsection{\section*{References}}
+\renewcommand\bibfont{\small}
+\setlength{\bibsep}{3pt}
+\RequirePackage[colorlinks,linkcolor=lnaccent,citecolor=lnaccent,urlcolor=lnaccent]{hyperref}
+\endinput

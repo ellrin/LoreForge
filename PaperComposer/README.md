@@ -151,6 +151,15 @@ your-private-repo/
 
 **生成段落的限制**：句型依重點的用字檢索。重點用中文寫、段落要英文時，中文重點對不到英文句型，生成時幾乎不會用到你的句型；想要段落有自己的語氣，重點請用英文寫。
 
+## 寫書
+
+首頁的「寫書」列出你的書（最近改過的在前），點一下打開；「＋ 新書」填書名、選存放的資料夾（預設上次用的資料夾；桌面版按「選擇…」開系統對話框），建立後直接打開。書是一個 LaTeX 資料夾，放在你選的地方，和論文一樣編輯、匯出 PDF；`paper.toml` 寫著 `kind = "book"`（沒寫的是論文，原有的論文不受影響）。書沒有 Key value，也不套期刊規則（字數、頁數上限）。整個流程見 [`../docs/book.md`](../docs/book.md)。
+
+- **書的清單**：`books.toml`，和 `opened.toml` 放在同一個設定資料夾（`[[book]] path, title, papers`，加上 `last_folder`）；只記這台電腦的路徑，不同步。
+- **模板**：課程講義筆記的樣式（課程與書名的標題區、Keyphrases、編號章節、定義框與重點框、右側邊註、名詞第一次出現附中文、`\cite` 與 `refs.bib`），由 [`publishers/lecture-notes/`](../private-example/PaperComposer/publishers/lecture-notes/README.md) 的 `lorenotes.sty` 排版，用 XeLaTeX 編譯，只用 BasicTeX 就有的套件。模板也內建在 App 裡；工作區的 `publishers/` 有 `template.toml` 寫 `kind = "book"` 的模板時，用你的。書的模板不出現在新論文與「模板」頁的期刊清單。
+- **中文字型**：用這台電腦有的第一個（內文 Songti TC → LiSong Pro → Noto Serif CJK TC …；標題與邊註 PingFang TC → Heiti TC → Noto Sans CJK TC …），不需要另外安裝。
+- **對照表**：新書帶一份 lore-notation 產生的 `notation.tex`（`\input{notation}`），和論文一樣登記符號、方程式，用 `\ref{…}` 引用。
+
 ## 討論草稿
 
 已經做完實驗、有實驗記錄時，用對話把它變成論文草稿。開啟論文後按上方的 AI 圖示（或檔案選單的「討論草稿…」）。所有內容存在論文資料夾的 `draft/`（`session.json`、`transcript.jsonl`、`records/`；原地開啟的論文在 `.papercomposer/draft/`），隨工作區同步，可以隨時接著做。
@@ -448,6 +457,8 @@ scripts/            Git hooks
 | POST | `/api/papers/{name}/export/open` `{ kind, reveal }` | 開啟匯出的檔案，或在資料夾中顯示 |
 | POST | `/api/papers/import?name=&key_value=&tidy=` （本文為 .zip／.tar.gz／.tex） | 匯入現有的 LaTeX 專案；回覆含對應到的模板 `journal`（名稱 `journal_name`）、對到的作者 `authors`、可做的整理 `tidy`（`tidy=1` 時直接整理，結果在 `tidied`）與 `.bib` 併入文獻庫的試算 `bib` |
 | POST | `/api/papers/import-arxiv` `{ id, name?, key_value, tidy? }` | 從 arXiv 匯入原始檔 |
+| GET | `/api/books` | 寫書：`{ books: [{ id, title, path, papers, modified, thumb }], folder }`（`folder` 是新書預設的資料夾） |
+| POST | `/api/books` `{ title, folder }` | 新書：在 `folder` 裡建立以書名命名的資料夾（不覆蓋），記進 `books.toml`，回覆 `{ id, path }`（`id` 用來打開） |
 | POST | `/api/shell/dialog` `{ kind: "latex" \| "word" \| "folder", start? }` | 桌面版的系統開檔對話框，回覆 `{ path }`；瀏覽器模式 501 |
 | POST | `/api/open/inspect` `{ path }` | 看路徑是什麼：已可開啟的論文 `{kind:"paper", id}`、要先整理的 LaTeX 資料夾 `{kind:"latex", plan}`（不寫入任何檔案）、壓縮檔 `{kind:"archive", dest}`、Word `{kind:"word", dest, pandoc}` |
 | POST | `/api/open/latex` `{ path, stamp }` | 照預覽（`plan.stamp`）原地整理並開啟；預覽後資料夾有變動則拒絕 |

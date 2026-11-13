@@ -226,7 +226,7 @@ async fn convert_in(docx: &Path, dest: &Path, people: &[Author], work: &Path) ->
 
     // paper.toml: the profile's people named as authors
     let authors = pc_core::authors::match_block(&std::fs::read_to_string(dest.join("main.tex")).unwrap_or_default(), people);
-    meta::write_meta(dest, &PaperMeta { key_value: String::new(), journal: None, authors })?;
+    meta::write_meta(dest, &PaperMeta { key_value: String::new(), journal: None, authors, ..Default::default() })?;
 
     Ok(Converted {
         dir: dest.to_path_buf(),

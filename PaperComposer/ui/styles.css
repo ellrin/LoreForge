@@ -847,6 +847,8 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .menu .form-row { display: flex; gap: 6px; align-items: center; }
 .menu .form-row > * { flex: 1; min-width: 0; }
 .menu .form-row > .primary.small { flex: none; white-space: nowrap; padding: 7px 10px; }
+.menu .form-row > .ghost.fit { flex: none; white-space: nowrap; }
+.menu .form-row.end { justify-content: flex-end; }
 .menu .form-foot button { width: auto; }
 /* import: next-step card */
 .menu.form.next-card { width: min(420px, calc(100vw - 16px)); max-height: calc(100vh - 80px); overflow-y: auto; }
