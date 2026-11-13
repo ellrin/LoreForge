@@ -74,6 +74,8 @@ when working on lore-canvas in parallel with other agents.
   out) live in `private/SlideComposer/voice/examples.json` (through lore-home; rewritten only when they change);
   the outline and 建議 prompts get the lines closest to the paper, bounded. Never put example text in code,
   tests (synthetic decks only), the job cache or this repo.
+- 繪圖 (toolbar 圖表, `web/figplot.js`, `crates/server/src/plot.rs`, `../docs/plot.md`): the shared lore-plot editor (`/plot/*`); the figure is a
+  300 dpi PNG picture that carries its spec (`iTXt`, survives the .pptx); double-click re-opens it and replaces the image in place (one undo step).
 - `crates/core` (`sc-core`): `Workspace` (styles/, decks/), `Session` (open deck: editor,
   source package, layout backdrops, LaTeX cache), export PPTX/PDF, `layout_titles`.
 - `crates/server` (`sc-server`): axum on 127.0.0.1:7880; handlers are plain async fns over

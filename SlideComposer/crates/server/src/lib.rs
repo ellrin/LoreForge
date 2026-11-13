@@ -31,6 +31,7 @@ mod export_open;
 pub mod jobs;
 pub mod kbterms;
 pub mod llm;
+mod plot; // web/figplot.js: 繪圖 (lore-plot editor, a PNG picture that carries its spec)
 mod notation;
 mod reader;
 pub mod deckpolish;
@@ -367,7 +368,9 @@ async fn prefs_js(State(s): State<Shared>) -> impl IntoResponse {
 
 /// The settings behind the 模型 tab: the shared engine file, with this app's tasks (lore-flow's).
 fn engines(shared: &Shared) -> lore_engines::Engines {
-    lore_engines::Engines::new(shared.home.clone(), "SlideComposer", llm::TASKS).with_tasks(lore_llm::TaskTable::parse(include_str!("../../../../commons/crates/lore-flow/tasks.toml")).unwrap_or_default())
+    lore_engines::Engines::new(shared.home.clone(), "SlideComposer", llm::TASKS)
+        .with_tasks(lore_llm::TaskTable::parse(include_str!("../../../../commons/crates/lore-flow/tasks.toml")).unwrap_or_default())
+        .with_tasks(lore_plot::assist::task_table())
 }
 
 pub fn router(shared: Shared) -> Router {
@@ -393,7 +396,8 @@ fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
             axum::http::HeaderValue::from_static("no-cache"),
         ))
         .service(ServeDir::new(&shared.web).append_index_html_on_directories(true));
-    routes().with_state(shared).merge(lore_engines::router(engines)).fallback_service(web)
+    let plots = plot::plot_router(&shared);
+    routes().merge(plot::routes()).with_state(shared).merge(plots).merge(lore_engines::router(engines)).fallback_service(web)
 }
 
 pub fn state(ws: Workspace, web: PathBuf) -> Shared {

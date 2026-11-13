@@ -353,3 +353,69 @@ async fn theme_is_the_shared_choice() {
     let styles = std::fs::read_to_string(web.join("styles.css")).unwrap();
     assert!(!styles.contains("[data-theme="), "palettes live in commons/ui/theme.css only");
 }
+
+/// A 1×1 PNG built by hand (signature, IHDR, IDAT, IEND).
+fn tiny_png() -> Vec<u8> {
+    fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend_from_slice(data);
+        out.extend_from_slice(&body);
+        let mut c = 0xffff_ffffu32;
+        for &b in &body {
+            c ^= b as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        out.extend_from_slice(&(!c).to_be_bytes());
+    }
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    chunk(&mut out, b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
+    chunk(&mut out, b"IDAT", &[0x78, 0x01, 0x63, 0xf8, 0xff, 0xff, 0x3f, 0x00, 0x05, 0xfe, 0x02, 0xfe]);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+/// 繪圖: a picture made by the plot editor carries its spec (re-opens after a .pptx round trip);
+/// the /plot routes are mounted; a broken spec is refused before any rendering.
+#[tokio::test]
+async fn plot_pictures_carry_their_spec() {
+    let (_dir, app) = setup();
+    let (st, v, _) = call(&app, "POST", "/api/decks/import?name=demo&style=test", None, Some(common::synthetic_deck())).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let spec = json!({ "lore_plot": 1, "style": "slide", "set": {}, "size": null, "grid": { "cols": 1, "rows": 1 },
+        "data": { "t1": { "columns": ["method", "Dice"], "rows": [["A", 0.8], ["B", 0.9]] } },
+        "panels": [{ "type": "bar", "data": "t1", "x": "method", "series": [{ "y": "Dice" }] }] });
+    let png = lore_plot::export::png_with_spec(&tiny_png(), &spec.to_string()).unwrap();
+    let (_, a, _) = call(&app, "POST", "/api/decks/demo/assets?ext=png", None, Some(png)).await;
+    let asset = a["asset"].as_str().unwrap().to_string();
+    let (st, v, _) = call(&app, "GET", &format!("/api/decks/demo/plot?asset={asset}"), None, None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["spec"]["panels"][0]["type"], "bar");
+    // an ordinary picture is not one
+    let (_, b, _) = call(&app, "POST", "/api/decks/demo/assets?ext=png", None, Some(tiny_png())).await;
+    let (st, _, _) = call(&app, "GET", &format!("/api/decks/demo/plot?asset={}", b["asset"].as_str().unwrap()), None, None).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    // the picture's bytes go into the .pptx unchanged, spec included
+    let (_, d, _) = call(&app, "GET", "/api/decks/demo", None, None).await;
+    let s1 = d["deck"]["slides"][0]["uid"].as_str().unwrap().to_string();
+    let pic = json!({ "id": 900, "name": "figure", "type": "picture", "frame": { "x": 0, "y": 0, "w": 3000000, "h": 2000000, "rot": 0 }, "asset": asset, "crop": { "l": 0, "t": 0, "r": 0, "b": 0 }, "alpha": 1, "clip": "rect" });
+    let (st, v, _) = call(&app, "POST", "/api/decks/demo/ops", Some(json!({ "ops": [{ "op": "insert_obj", "slide": s1, "parent": null, "index": 99, "obj": pic }], "label": "插入圖表" })), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let (_, _, pptx) = call(&app, "GET", "/api/decks/demo/pptx", None, None).await;
+    let pkg = lore_ooxml::Deck::from_bytes(&pptx).unwrap().pkg;
+    let found = pkg.names().filter(|n| n.starts_with("ppt/media/")).any(|n| pkg.get(n).and_then(lore_plot::figure::spec_in_png).is_some());
+    assert!(found, "the figure's spec rides in the exported .pptx");
+    // mounted: the editor's files and the style list
+    let (st, _, page) = call(&app, "GET", "/plot/", None, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&page).contains("LorePlot.edit"));
+    let (st, v, _) = call(&app, "GET", "/plot/api/styles", None, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(v["styles"].as_array().unwrap().iter().any(|s| s["id"] == "slide"));
+    // a spec that is not usable never reaches the renderer
+    let bad = json!({ "lore_plot": 1, "data": {}, "panels": [] });
+    let (st, _, _) = call(&app, "POST", "/api/decks/demo/plot", Some(json!({ "spec": bad, "svg": "<svg/>" })), None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}
