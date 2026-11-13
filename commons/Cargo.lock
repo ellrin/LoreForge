@@ -1278,6 +1278,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-learn"
+version = "0.1.0"
+dependencies = [
+ "kb-core",
+ "lore-home",
+ "lore-store",
+ "lore-words",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "lore-llm"
 version = "0.1.0"
 dependencies = [

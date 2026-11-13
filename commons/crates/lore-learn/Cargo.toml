@@ -1,0 +1,17 @@
+[package]
+name = "lore-learn"
+description = "What the author knows and has read: a paper's terms against the KnowledgeBase (熟／不熟), card prerequisites, LoreReader's files read-only"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+kb-core = { path = "../kb-core" }
+lore-store = { path = "../lore-store" }
+lore-home = { path = "../lore-home" }
+lore-words = { path = "../lore-words" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

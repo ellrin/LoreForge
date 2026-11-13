@@ -73,7 +73,9 @@ when working on lore-canvas in parallel with other agents.
   example lines from the author's own imported decks (cover, chrome, repeated text, refs, names, deny words left
   out) live in `private/SlideComposer/voice/examples.json` (through lore-home; rewritten only when they change);
   the outline and 建議 prompts get the lines closest to the paper, bounded. Never put example text in code,
-  tests (synthetic decks only), the job cache or this repo.
+  tests (synthetic decks only), the job cache or this repo. The terms stage's finder
+  (`kbterms.rs`: terms, KnowledgeBase states, `Matcher`) lives in `../commons/crates/lore-learn`, shared with
+  PaperComposer's 寫書; `kbterms.rs` re-exports it and keeps the slide marks, 我懂 and the KnowledgeBase write.
 - 繪圖 (toolbar 圖表, `web/figplot.js`, `crates/server/src/plot.rs`, `../docs/plot.md`): the shared lore-plot editor (`/plot/*`); the figure is a
   300 dpi PNG picture that carries its spec (`iTXt`, survives the .pptx); double-click re-opens it and replaces the image in place (one undo step).
 - `crates/core` (`sc-core`): `Workspace` (styles/, decks/), `Session` (open deck: editor,

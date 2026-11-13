@@ -10,7 +10,8 @@ design is in `../private/shared/docs/ecosystem-design.md` (author's private note
   `lore-notation`, `lore-notes` (PaperComposer 筆記 files), `lore-voice`, `lore-docsrc`, `lore-canvas`, `lore-ooxml`, `lore-math`, `lore-fonts`, `lore-home`, `lore-flow`, `lore-upscale`, `lore-shell` (serves `ui/icons.js`, `base.css`, `shell.js`),
   `lore-engines` (the shared 模型 settings: `/api/engines`, `/api/links/open`),
   `lore-catalog` (LoreShelf's read-only file catalog: hashes, time axes, projects, reports, local-only guard),
-  `lore-jobs` (long-running background jobs: stages, checkpoints, progress, stop/resume, review wait; SlideComposer's 論文報告),
+  `lore-jobs` (long-running background jobs: stages, checkpoints, progress, stop/resume, review wait; SlideComposer's 論文報告, PaperComposer's 寫書),
+  `lore-learn` (what the author knows and read, read-only: a paper's terms against the KnowledgeBase, card prerequisites, LoreReader's files),
   `lore-research` (related papers on the web, open access only: OpenAlex / arXiv / Semantic Scholar, dedupe, OA PDF download, BibTeX, LoreReader import; `docs/book.md`),
   `lore-plot` (繪圖: figure spec, data import, style presets, Chrome/poppler export, `plot-propose`, the `/plot` routes; `ui/plot/`, `../docs/plot.md`)).
   Local models: one llama-server per machine shared by every app in-process,
