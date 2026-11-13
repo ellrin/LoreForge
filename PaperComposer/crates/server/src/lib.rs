@@ -247,6 +247,11 @@ fn demo_workspace(paths: &Paths) -> PathBuf {
 }
 
 pub(crate) fn loreforge_home() -> lore_home::Home {
+    // unit tests never read the author's private folders (registry, prefs): an empty per-process home
+    #[cfg(test)]
+    if std::env::var_os("LOREFORGE_PRIVATE").is_none() {
+        return lore_home::Home::at(std::env::temp_dir().join(format!("pc-unit-home-{}", std::process::id())));
+    }
     lore_home::Home::discover(Path::new(env!("CARGO_MANIFEST_DIR")))
 }
 
