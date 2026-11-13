@@ -293,6 +293,11 @@ fn one_picture_scales_text_lines_and_keeps_its_aspect() {
     ed.undo().unwrap();
     ed.undo().unwrap();
     assert_eq!(ed.deck.slides[1].find(60).unwrap(), &g0);
+    // turned back into a plain group, and ungrouped: what it holds stays legal
+    ed.apply(vec![Op::SetObj { slide: s.clone(), id: 60, path: "/lock_aspect".into(), value: serde_json::Value::Bool(false) }], "plain").unwrap();
+    ed.apply(vec![Op::Ungroup { slide: s.clone(), id: 60 }], "ungroup").unwrap();
+    ed.undo().unwrap();
+    ed.undo().unwrap();
     // the lock survives the PPTX
     ed.redo().unwrap();
     let bytes = pptx_out::export_bytes(&ed.deck, &od, Some(&style()), &no_assets).unwrap();

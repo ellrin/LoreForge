@@ -292,13 +292,13 @@ impl StyleSystem {
         let mut old_runs = Vec::new();
         let mut old_cols = BTreeSet::new();
         if let Some(o) = old {
-            collect(o, &mut old_runs, &mut old_cols, false);
+            collect(o, &mut old_runs, &mut old_cols, false, false);
         }
         let mut new_runs = Vec::new();
         let mut new_cols = BTreeSet::new();
         // objects that still carry their source XML are imported content: their
         // own formatting stays legal until edited (edits are checked via `old`)
-        collect(new, &mut new_runs, &mut new_cols, old.is_none());
+        collect(new, &mut new_runs, &mut new_cols, old.is_none(), true);
         for r in new_runs {
             let Ok(run) = serde_json::from_value::<Run>(r.clone()) else {
                 continue;
@@ -345,14 +345,17 @@ impl StyleSystem {
 
 /// Collect runs (objects with `look`) and colours (`color` strings outside
 /// runs' looks, since run colours follow tags) from a JSON value.
-fn collect(v: &Value, runs: &mut Vec<Value>, cols: &mut BTreeSet<String>, skip_src: bool) {
+/// `is_new`: collecting the value after the change (a picture's contents are skipped
+/// there only, so a picture turned back into a plain group compares with what it held).
+fn collect(v: &Value, runs: &mut Vec<Value>, cols: &mut BTreeSet<String>, skip_src: bool, is_new: bool) {
     match v {
         Value::Object(m) => {
             if skip_src && m.contains_key("frame") && m.get("src").is_some_and(|s| !s.is_null()) {
                 return;
             }
-            // one picture (a figure group): drawn content, not slide text or slide colours
-            if m.get("type").and_then(Value::as_str) == Some("group") && m.get("lock_aspect").and_then(Value::as_bool) == Some(true) {
+            // one picture (a figure group): drawn content, not slide text or slide colours;
+            // a flow figure's parts too (lore-flow names them `flow:<fig>/…`), also once ungrouped
+            if is_new && m.contains_key("frame") && (m.get("lock_aspect").and_then(Value::as_bool) == Some(true) || m.get("name").and_then(Value::as_str).is_some_and(|n| n.starts_with("flow:"))) {
                 return;
             }
             if m.contains_key("look") && m.contains_key("kind") {
@@ -366,11 +369,11 @@ fn collect(v: &Value, runs: &mut Vec<Value>, cols: &mut BTreeSet<String>, skip_s
                         cols.insert(h);
                     }
                 } else if k != "src" {
-                    collect(x, runs, cols, skip_src);
+                    collect(x, runs, cols, skip_src, is_new);
                 }
             }
         }
-        Value::Array(a) => a.iter().for_each(|x| collect(x, runs, cols, skip_src)),
+        Value::Array(a) => a.iter().for_each(|x| collect(x, runs, cols, skip_src, is_new)),
         _ => {}
     }
 }

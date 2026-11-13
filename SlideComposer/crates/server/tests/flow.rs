@@ -136,6 +136,11 @@ async fn a_flow_figure_is_one_picture_that_reopens_in_its_editor() {
     let ar = |g: &Value| g["frame"]["w"].as_f64().unwrap() / g["frame"]["h"].as_f64().unwrap();
     assert!((ar(&g0) - ar(&g1)).abs() < 0.01);
 
+    // a figure can still be taken apart and touched up by hand (its parts are not slide text)
+    let (code, v, _) = call(&app, "POST", &format!("/api/decks/{name}/ops"), Some(json!({ "ops": [{ "op": "set_obj", "slide": s2, "id": id, "path": "/lock_aspect", "value": false }, { "op": "ungroup", "slide": s2, "id": id }], "label": "取消群組" }))).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    call(&app, "POST", &format!("/api/decks/{name}/undo"), None).await;
+
     // re-edit: «block 2 改成直的» → the same place and width, the new spec; one undo step back
     let mut spec2 = g1["data"].clone();
     spec2["dirs"] = json!({ "b": "down" });
