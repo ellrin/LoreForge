@@ -2300,6 +2300,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-canvas"
+version = "0.1.0"
+dependencies = [
+ "lore-ooxml",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "lore-docsrc"
 version = "0.1.0"
 dependencies = [
@@ -2325,6 +2335,26 @@ dependencies = [
  "lore-llm",
  "serde",
  "serde_json",
+ "tokio",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "lore-flow"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "lore-canvas",
+ "lore-home",
+ "lore-llm",
+ "lore-math",
+ "lore-notation",
+ "lore-ooxml",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
  "tokio",
  "toml 0.8.23",
 ]
@@ -2398,6 +2428,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-math"
+version = "0.1.0"
+dependencies = [
+ "lore-ooxml",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "lore-notation"
 version = "0.1.0"
 dependencies = [
@@ -2413,6 +2451,18 @@ dependencies = [
  "lore-notation",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lore-ooxml"
+version = "0.1.0"
+dependencies = [
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "toml 0.8.23",
+ "zip",
 ]
 
 [[package]]
@@ -3036,6 +3086,7 @@ dependencies = [
  "kb-core",
  "lore-docsrc",
  "lore-engines",
+ "lore-flow",
  "lore-fonts",
  "lore-gitsync",
  "lore-home",

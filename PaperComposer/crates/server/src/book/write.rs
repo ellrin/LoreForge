@@ -374,7 +374,8 @@ fn assemble(ctx: &Ctx<'_>, book: &Path, reply: &Value, c: &Chapter, m: &Material
         };
         let caption = match f["kind"].as_str() {
             // attribution: the paper and its licence
-            Some("paper") => format!("{} Reproduced from \\cite{{{}}} ({}).", caption.trim_end_matches('.'), r.start_key, r.license.clone().unwrap_or_default().to_uppercase()).replacen(" .", ".", 1),
+            // «Reproduced from [n], CC BY-NC 4.0.» — always the citation and the licence
+            Some("paper") => reused_caption(&caption, &r.start_key, r.license.as_deref()),
             _ => caption,
         };
         match made_file.and_then(|path| super::super::floats::figure_block(ctx.ws, book, &path, &caption, &caption, &new_labels)) {
@@ -466,7 +467,34 @@ pub async fn file_sources(ws: Option<&Path>, r: &Research) -> Result<BTreeMap<St
 }
 
 /// The LaTeX of a field of main.tex, set when the template has it.
-fn set_front(book: &Path, field: &str, value: &str) {
+/// The caption of a figure reproduced from a paper: always its citation and its licence
+/// («… Reproduced from \\cite{key}, CC BY-NC 4.0.»).
+pub fn reused_caption(caption: &str, key: &str, license: Option<&str>) -> String {
+    let lic = license.and_then(lore_research::licence_label).map(|l| format!(", {l}")).unwrap_or_default();
+    let cap = caption.trim().trim_end_matches('.');
+    let sep = if cap.is_empty() { "" } else { ". " };
+    format!("{cap}{sep}Reproduced from \\cite{{{key}}}{lic}.")
+}
+
+/// What the back of the title page says: the plan's abstract, else one built from the plan
+/// (the source paper and the chapters in order), so the page is never a lone heading.
+pub fn about_text(plan: &Plan, source_title: &str) -> String {
+    let a = plan.abstract_text.trim();
+    if !a.is_empty() {
+        return a.to_string();
+    }
+    let chapters: Vec<&str> = plan.chapters.iter().map(|c| c.title.trim()).filter(|t| !t.is_empty()).collect();
+    let src = source_title.trim();
+    let mut s = if src.is_empty() { "These notes explain, one chapter at a time, the terms a paper builds on".to_string() } else { format!("These notes explain, one chapter at a time, the terms behind {src}") };
+    if chapters.is_empty() {
+        s.push('.');
+    } else {
+        s += &format!(": {}.", chapters.join("; "));
+    }
+    pc_core::meta::tex_text(&s)
+}
+
+pub(crate) fn set_front(book: &Path, field: &str, value: &str) {
     let path = pc_core::open::main_file(book);
     let Ok(main) = std::fs::read_to_string(&path) else { return };
     let new = match field {
@@ -549,9 +577,8 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, m: &Material, plan: &Plan,
             }
         }
         set_front(&book, "course", "Reading notes");
-        if !plan.abstract_text.is_empty() {
-            set_front(&book, "abstract", &plan.abstract_text);
-        }
+        // the back of the title page (About these notes) is never left with a heading and nothing under it
+        set_front(&book, "abstract", &about_text(plan, &m.title));
         let kw: Vec<String> = plan.chapters.iter().flat_map(|c| c.terms.iter().take(2).cloned()).take(8).collect();
         set_front(&book, "keywords", &pc_core::meta::tex_text(&kw.join(", ")));
     }

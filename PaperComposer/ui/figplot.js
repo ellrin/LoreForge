@@ -2,7 +2,7 @@
 // figures/<stem>.pdf + <stem>.plot.json by the server (crates/server/src/plot.rs).
 //
 //   PCPlot.create()            → { file, caption } | null   (context.js inserts the figure block)
-//   double-click on a figure   → re-edit when its .plot.json is next to it; the image reloads
+//   PCPlot.reedit(path)        → re-edit when its .plot.json is next to it (the figure's 編輯 button, figedit.js)
 (() => {
   const base = () => `/api/papers/${encodeURIComponent(state.paper.name)}`;
   let loading = null;
@@ -21,7 +21,7 @@
       document.head.append(s);
     });
     // the order lore_plot::assets::SCRIPTS lists
-    loading = ["plot.js", "charts.js", "charts3d.js", "formats.js", "editor.js"].reduce((p, f) => p.then(() => script(`/plot/${f}`)), Promise.resolve()).then(() => { window.LorePlot.katexBase = "/plot/katex/"; });
+    loading = ["mathsvg.js", "plot.js", "charts.js", "charts3d.js", "formats.js", "editor.js"].reduce((p, f) => p.then(() => script(`/plot/${f}`)), Promise.resolve()).then(() => { window.LorePlot.katexBase = "/plot/katex/"; });
     loading.catch(() => (loading = null));
     return loading;
   }
@@ -72,7 +72,7 @@
       save: async ({ spec, svg }) => {
         try {
           const saved = await save({ replace: path, spec, svg });
-          refresh(path, saved.file);
+          window.PCFigures?.reload(path, saved.file);
           if (saved.file !== path) LoreShell.toast(`另存為 ${saved.file}`);
           return true;
         } catch (e) { return e.message; }
@@ -80,28 +80,5 @@
     });
     return true;
   }
-  function refresh(path, file) {
-    for (const img of document.querySelectorAll("#paper .tex-figure img")) {
-      if (img._path !== path && img._path !== path.replace(/\.pdf$/, "")) continue;
-      if (file !== path) continue;
-      const u = new URL(img.src, location.href);
-      u.searchParams.set("v", Date.now());
-      img.src = u.toString();
-    }
-  }
-
-  // double-click on a figure made here → the editor (else the paragraph editor as before)
-  document.addEventListener("dblclick", async (e) => {
-    const img = e.target.closest?.("#paper .tex-figure img");
-    if (!img?._path || !/(^|\/)[^/]+(\.pdf)?$/i.test(img._path) || /\.(png|jpe?g|eps)$/i.test(img._path)) return;
-    e.stopPropagation();
-    e.preventDefault();
-    const path = /\.pdf$/i.test(img._path) ? img._path : `${img._path}.pdf`;
-    if (!(await reedit(path))) {
-      // not ours: what a double-click did before (edit the paragraph)
-      img.closest(".para, [data-pi]")?.ondblclick?.(new MouseEvent("dblclick"));
-    }
-  }, true);
-
   window.PCPlot = { create, reedit };
 })();

@@ -1,7 +1,7 @@
 # 繪圖工具（lore-plot）
 
 作者 2026-11-13 的要求：論文與簡報的結果圖（長條、折線、散佈、ROC…）用 GUI 調整到好看，也能從資料＋一句話自動產生，再手動微調。
-不是 Dock 上的 app，是共用套件：PaperComposer 與 SlideComposer 從文件裡打開、插入、雙擊重新編輯。
+不是 Dock 上的 app，是共用套件：PaperComposer 與 SlideComposer 從文件裡打開、插入，選取圖時角落的「編輯」小按鈕重新編輯（雙擊不特別處理，2026-11-13 作者決定，和流程圖一樣）。
 
 - 程式：`commons/crates/lore-plot`（圖的規格、資料匯入、樣式、輸出、LLM 任務、axum 路由）
   與 `commons/ui/plot/`（`plot.js` 畫圖、`editor.js` 編輯器、`demo.html`）。
@@ -240,7 +240,7 @@ label = "簡潔"
 | PNG | 有 `pdftoppm` 就從 PDF 轉（`-r <dpi>`，和 PDF 一模一樣）；沒有就用 Chrome 截圖 | 簡報 |
 
 - 規格永遠跟著圖：PaperComposer 是 `figures/<名稱>.plot.json`（和 PDF 同名）；PNG 把規格寫進自己的 `iTXt` 區塊（`lore-plot`），
-  SVG 寫進 `<metadata>`。所以 SlideComposer 的圖片就算經過 .pptx 存檔再打開，雙擊仍能重新編輯。
+  SVG 寫進 `<metadata>`。所以 SlideComposer 的圖片就算經過 .pptx 存檔再打開，仍能重新編輯。
 - 沒有 Chrome：輸出失敗並說明（「需要 Chrome 才能輸出 PDF」），編輯與儲存規格不受影響。**輸出不在離線測試內**（需要瀏覽器）。
 
 ## 7. 自動產生（LLM 任務 `plot-propose`）
@@ -289,7 +289,7 @@ app 伺服器：`router = router.merge(lore_plot::router(lore_plot::Plot::new(ho
   → 伺服器輸出 `figures/<stem>.pdf`＋`figures/<stem>.plot.json` → 和「新增圖…」同一條路插入
   `\begin{figure}[t] \centering \includegraphics[width=\linewidth]{figures/<stem>.pdf} \caption{…} \label{fig:…} \end{figure}`
   （標籤由 `newLabel` 取、不重複；游標處插 `\ref{fig:…}`，不打「Figure 1」；需要時 main.tex 加 graphicx）。
-- 雙擊頁面上的圖：圖檔旁有 `.plot.json` 才打開編輯器（沒有就照舊編輯段落）；完成後覆寫同一個 PDF 與規格（有規格就代表是這個工具產生的檔），圖片重新載入。
+- 點頁面上的圖：圖檔旁有 `.plot.json` 時角落出現「編輯」小按鈕（`ui/figedit.js`，流程圖的 `.flow.json` 同一個按鈕），按了打開編輯器；雙擊照舊；完成後覆寫同一個 PDF 與規格（有規格就代表是這個工具產生的檔），圖片重新載入。
 - lore-notation：插入的區塊用登記的 `\label`／`\ref`，不動 `notation.tex`；`lore-plot` 的測試把產生的區塊放進合成論文跑 `check_document`。
 
 ### SlideComposer
@@ -297,7 +297,7 @@ app 伺服器：`router = router.merge(lore_plot::router(lore_plot::Plot::new(ho
 - 上方「插入」選單「圖表」：編輯器（`target: "slide"`，預設樣式 `slide`）→ 完成 → `POST /api/decks/{name}/plot`（`{ spec, svg, dpi }`）
   → 伺服器輸出 PNG（預設 300 dpi，規格寫在 PNG 裡）存成 deck 的 asset → 插入圖片物件。
   PPTX 的圖片只放 PNG：lore-canvas 的 PPTX 輸出沒有 `svgBlip`＋PNG 備援，PowerPoint 不能直接顯示 SVG。
-- 雙擊圖片：asset 是帶規格的 PNG 才打開編輯器；完成後同一張圖片換 asset（一個 `set_obj`，一步復原）。
+- 選取圖片：asset 是帶規格的 PNG 時選取框右上角有「編輯圖表」小按鈕（`SC_FIGURE_TOOLS`，流程圖同一個位置），按了打開編輯器；雙擊照舊；完成後同一張圖片換 asset（一個 `set_obj`，一步復原）。
 
 ## 9. 狀態與之後（2026-11-13）
 

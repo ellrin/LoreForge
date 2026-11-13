@@ -74,6 +74,8 @@ async fn book_routes_answer_lorereader_and_refuse_what_they_should() {
     assert_eq!(r.status().as_u16(), 200);
     let v: Value = r.json().await.unwrap();
     let id = v["job"].as_str().unwrap().to_string();
+    // the review window shows where the new book goes
+    assert_eq!(v["options"]["folder"].as_str().map(std::path::PathBuf::from), Some(root.join("Books")));
     assert_eq!(v["stages"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["source", "terms", "plan", "research", "review", "write", "check"]);
     let mut state = String::new();
     for _ in 0..100 {
@@ -90,6 +92,8 @@ async fn book_routes_answer_lorereader_and_refuse_what_they_should() {
     assert_eq!(r.status().as_u16(), 409, "not waiting for the review");
     let r = http.post(url(&format!("/api/book/jobs/{id}/params"))).json(&json!({ "length": "long" })).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 409);
+    let r = http.post(url(&format!("/api/book/jobs/{id}/params"))).json(&json!({ "folder": "relative/path" })).send().await.unwrap();
+    assert!(matches!(r.status().as_u16(), 400 | 409));
     let jobs: Value = http.get(url("/api/book/jobs?unfinished=1")).send().await.unwrap().json().await.unwrap();
     assert_eq!(jobs["jobs"].as_array().unwrap().len(), 1);
     assert_eq!(http.get(url(&format!("/api/book/jobs/{id}/open"))).send().await.unwrap().status().as_u16(), 404);

@@ -500,6 +500,18 @@ const PCContext = (() => {
     if (!(await placeFile(at, was, r.file, r.caption, stem))) unmark();
   }
 
+  /** 流程圖…: the shared flow editor (figflow.js), then the same insertion as 新增圖…. */
+  async function flowFigure(at) {
+    keepMarker();
+    const r = await PCFlow.create();
+    if (!r) { unmark(); return; }
+    await settle();
+    const was = fresh(at);
+    if (was == null) { unmark(); return; }
+    const stem = r.file.split("/").pop().replace(/\.pdf$/, "");
+    if (!(await placeFile(at, was, r.file, r.caption, stem))) unmark();
+  }
+
   // ── clipboard ──
   function copy(d, cut) {
     if (d.ta) {
@@ -611,6 +623,7 @@ const PCContext = (() => {
     if (window.PCKbCards) add("cards", "知識卡…", () => { cards(at); });
     add("image", "新增圖…", () => { figure(at); });
     if (window.PCPlot) add("chart", "繪圖…", () => { plotFigure(at); });
+    if (window.PCFlow) add("graph", "流程圖…", () => { flowFigure(at); });
     add("tableStyle", "新增表…", () => { table(at); });
     if (d.text.trim()) {
       sep();

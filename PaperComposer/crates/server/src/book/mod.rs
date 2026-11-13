@@ -15,7 +15,7 @@
 //! | GET | /api/book/jobs/{id}/events | same as `?after=` |
 //! | GET | /api/book/jobs/{id}/stages/{stage} | a checkpoint |
 //! | POST | /api/book/jobs/{id}/review | `{chapters: [{id, title, depth, include, terms?}]}` or `{skip: true}` |
-//! | POST | /api/book/jobs/{id}/params | `{length?, lang?, page?}`: length or language → the plan again |
+//! | POST | /api/book/jobs/{id}/params | `{length?, lang?, page?, folder?}`: length or language → the plan again; `folder` = where a new book goes (absolute; the last one used is the default) |
 //! | POST | /api/book/jobs/{id}/stop · /resume | `{engine?}` on resume |
 //! | GET · POST | /api/book/jobs/{id}/imports | `{pending}` · hand the waiting PDFs to LoreReader again → `{imported, pending, failed}` |
 //! | GET | /api/book/jobs/{id}/open | the finished book's id in opened.toml → `{id, path}` |
@@ -349,6 +349,9 @@ async fn review(State(s): State<Shared>, AxPath(id): AxPath<String>, body: Optio
 
 #[derive(Debug, Default, Deserialize)]
 struct ParamsBody {
+    /// A new book's folder (absolute), chosen in the review window.
+    #[serde(default)]
+    folder: Option<PathBuf>,
     #[serde(default)]
     length: Option<String>,
     #[serde(default)]
@@ -371,6 +374,14 @@ async fn change_params(State(s): State<Shared>, AxPath(id): AxPath<String>, Json
         return err(StatusCode::BAD_REQUEST, "不認得的篇幅、語言或頁面大小");
     }
     let p = job.meta().params;
+    if let Some(f) = &b.folder {
+        if p["book"].as_str() != Some("new") {
+            return err(StatusCode::BAD_REQUEST, "加進現有的書：存放的資料夾就是那本書");
+        }
+        if !f.is_absolute() {
+            return err(StatusCode::BAD_REQUEST, "資料夾要是完整路徑");
+        }
+    }
     let changed = |k: &str, v: &Option<String>| v.as_deref().is_some_and(|v| p[k].as_str() != Some(v));
     let redo = changed("length", &b.length) || changed("lang", &b.lang);
     js.set_params(&job, |p| {
@@ -378,6 +389,9 @@ async fn change_params(State(s): State<Shared>, AxPath(id): AxPath<String>, Json
             if let Some(v) = v {
                 p[k] = v.clone().into();
             }
+        }
+        if let Some(f) = &b.folder {
+            p["folder"] = f.display().to_string().into();
         }
     });
     if redo && let Err(m) = js.redo_from(&job, "plan") {

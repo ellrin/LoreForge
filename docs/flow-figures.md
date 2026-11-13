@@ -62,12 +62,12 @@
 
 **SlideComposer**：工具列「流程圖」與 AI 選單「流程圖」打開編輯器（出發點預設帶入 論文 面板開著的那篇的題目與摘要）；「插入投影片」＝伺服器畫出原生物件
 （形狀、連接線、文字，數學式是 Office Math），整張圖是**一張圖**：一個群組，固定長寬比，放大縮小時字、線寬、箭頭一起縮放（`Op::Scale`，一步復原），
-規格掛在群組上（`deck.json` 與 .pptx 的編輯器狀態區，存檔再打開仍可重新編輯）。雙擊（⌥ 雙擊＝照舊改字）或 排列 →「編輯流程圖」重新打開，完成後原地換掉（同位置、同寬，一步復原）。
+規格掛在群組上（`deck.json` 與 .pptx 的編輯器狀態區，存檔再打開仍可重新編輯）。選取圖時選取框右上角的「編輯流程圖」小按鈕或 排列 →「編輯流程圖」重新打開（雙擊照舊改字，2026-11-13 作者決定），完成後原地換掉（同位置、同寬，一步復原）。
 圖裡的新變數登記到這份簡報的 `notation.json`。任何物件或群組：排列 →「一張圖」（多選＝組成一張圖；單一群組＝開／關鎖定比例）、「另存圖片」PNG／SVG／PDF（存到簡報的 exports/）。
 
 沒有在真的環境測過：真的模型（測試與截圖都是假模型）、PowerPoint 打開含一張圖的 .pptx（鎖定比例旗標是 `a:grpSpLocks noChangeAspect`）。
 
-## 6. PaperComposer（下一步，等寫書的工作做完再接）
+## 6. PaperComposer（2026-11-13 已接上；論文與書同一條路）
 
 和「新增圖…／繪圖…」同一條路，不另做一套：
 
@@ -83,5 +83,9 @@
    標籤由伺服器取、不重複；游標處插 `\ref{fig:…}`，從不打「Figure 1」；需要時 main.tex 加 graphicx。
 5. **對照表**：圖裡的新變數（`vars_new`）用 `lore_flow::notation::register_new` 寫進這篇論文自己的對照表（標 `flow-draft`，不寫全域、不動 `notation.tex`）；
    圖裡的標籤用 `@id` 指向登記的符號，登記過的巨集在畫圖前展開。插入的區塊跑 lore-notation 的 `check_document`。
-6. **重新編輯**：雙擊頁面上的圖：旁邊有 `.flow.json` 才打開流程圖編輯器（`.plot.json` → 繪圖編輯器，都沒有 → 照舊），完成後覆寫同一個 PDF 與規格。
+6. **重新編輯**：點頁面上的圖，旁邊有 `.flow.json`（或 `.plot.json`）時圖角出現「編輯」小按鈕（`ui/figedit.js`），打開那個工具的編輯器，完成後覆寫同一個 PDF 與規格；雙擊照舊。
 7. **測試**（離線、合成論文、假模型）：存檔產生 PDF 規格兩個檔（沒有 Chrome 時只檢查規格與錯誤訊息）、作者自己的 PDF 不被覆寫、插入的區塊通過 `check_document`、`\ref` 不是打字的編號、新變數只進論文的對照表。
+
+做好的（2026-11-13）：`PaperComposer/crates/server/src/flow.rs`、`ui/figflow.js`、`ui/figedit.js`；出發點＝題目、摘要、方法一節（lore-docsrc 讀 main.tex；書讀 `\chapter`）；
+數學式：`/flow/api/svg` 帶 `tex: true` 時每行數學標 `data-tex`，`LoreFlow.paperSvg` 用共用的 `commons/ui/mathsvg.js`（從 `plot.js` 抽出來，繪圖工具也用它）換成 TeX 字形；
+PDF 由伺服器用 lore-plot 的 Chrome 輸出。繪圖工具也不會覆寫流程圖的 PDF（`.flow.json` 算已占用）。測試：`tests/flow_api.rs`（論文與書各跑一次，假的 PDF，不開瀏覽器）。

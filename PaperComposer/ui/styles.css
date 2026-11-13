@@ -1451,3 +1451,6 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
   .seg.modes button { padding: 4px 8px; }
   .page-area { padding: 0 16px; }
 }
+/* the 編輯 button on a figure a tool made (figedit.js) */
+.fig-edit { position: fixed; z-index: 30; background: var(--panel); border: 1px solid var(--line-strong); box-shadow: 0 2px 8px #0003; }
+.paper .tex-figure.fig-picked img { outline: 2px solid var(--accent-text); outline-offset: 2px; }

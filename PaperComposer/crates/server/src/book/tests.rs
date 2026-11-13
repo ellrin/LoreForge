@@ -274,7 +274,7 @@ async fn a_book_from_a_paper_end_to_end() {
             assert!(text.contains(&format!("\\label{{{l}}}")) && text.contains(&format!("\\ref{{{l}}}")), "{l}: {text}");
         }
     }
-    assert!(text.contains("Reproduced from \\cite{") && text.contains("(CC-BY)"), "{text}");
+    assert!(text.contains("Reproduced from \\cite{") && text.contains(", CC BY."), "{text}");
     assert!(text.contains("\\begin{table}"), "the table through the paper's table path");
     // references: in the workspace library, the book's bib from what it cites
     let lib = std::fs::read_to_string(s.root.join("ws/refs/library.bib")).unwrap();
@@ -342,3 +342,34 @@ async fn offline_and_direct_still_finishes_and_adds_to_a_book() {
     std::fs::remove_dir_all(&s.root).unwrap();
 }
 
+
+/// A plan the model gave no abstract: the back of the title page still says what the notes are
+/// (it once printed «About these notes» over nothing).
+#[test]
+fn the_title_pages_back_is_never_a_lone_heading() {
+    let ch = |t: &str| plan::Chapter { title: t.into(), ..Default::default() };
+    let mut plan = plan::Plan { title: "Notes".into(), abstract_text: String::new(), chapters: vec![ch("Learning Representations Without Labels"), ch("Contrastive Losses")] };
+    let about = write::about_text(&plan, "A Simple Framework for 100% Contrastive Learning");
+    assert!(about.starts_with("These notes explain") && about.contains("100\\% Contrastive") && about.contains(plan.chapters[0].title.trim()), "{about}");
+    let dir = std::env::temp_dir().join(format!("pc-about-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("main.tex"), "\\documentclass{article}\n\\title{T}\n\\begin{document}\n\\maketitle\n\n\\begin{abstract}\n\\end{abstract}\n\n\\end{document}\n").unwrap();
+    write::set_front(&dir, "abstract", &about);
+    let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+    let body = main.split("\\begin{abstract}").nth(1).unwrap().split("\\end{abstract}").next().unwrap();
+    assert!(body.contains("These notes explain"), "{main}");
+    // the model's own abstract wins
+    plan.abstract_text = "Notes that build up to the gated InfoNCE loss.".into();
+    assert_eq!(write::about_text(&plan, "x"), "Notes that build up to the gated InfoNCE loss.");
+    assert!(plan::schema()["required"].as_array().unwrap().iter().any(|r| r == "abstract"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn reused_figures_always_cite_and_name_their_licence() {
+    assert_eq!(write::reused_caption("The framework.", "chen2020", Some("cc-by-nc")), "The framework. Reproduced from \\cite{chen2020}, CC BY-NC.");
+    assert_eq!(write::reused_caption("", "k", Some("https://creativecommons.org/licenses/by-nc-nd/4.0/")), "Reproduced from \\cite{k}, CC BY-NC-ND 4.0.");
+    // NonCommercial copies may be reused in the author's own notes; unknown ones never
+    assert!(lore_research::figure_reuse_allowed(Some("cc-by-nc-sa")) && !lore_research::figure_reuse_allowed(Some("arxiv-nonexclusive")) && !lore_research::figure_reuse_allowed(None));
+}

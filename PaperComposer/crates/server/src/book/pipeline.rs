@@ -128,7 +128,7 @@ impl Pipeline for BookJob {
 
     fn decorate(&self, job: &Job, snap: &mut Map<String, Value>) {
         let p: Params = serde_json::from_value(job.meta().params).unwrap_or_default();
-        snap.insert("options".into(), json!({ "length": p.length, "lang": p.lang, "page": p.page, "book": p.book }));
+        snap.insert("options".into(), json!({ "length": p.length, "lang": p.lang, "page": p.page, "book": p.book, "folder": p.folder }));
         let research: Option<Research> = job.output("research").and_then(|v| serde_json::from_value(v).ok());
         if let Some(r) = &research {
             snap.insert("pending_imports".into(), r.pending_imports.len().into());

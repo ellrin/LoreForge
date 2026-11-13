@@ -28,6 +28,7 @@ lore-fonts = { path = "../commons/crates/lore-fonts" }
 kb-core = { path = "../commons/crates/kb-core" }
 lore-store = { path = "../commons/crates/lore-store" }
 lore-plot = { path = "../commons/crates/lore-plot" }
+lore-flow = { path = "../commons/crates/lore-flow" }
 # 寫書 (crates/server/src/book): the job runner, web search for open-access papers, PDF material,
 # KnowledgeBase terms and LoreReader's files.
 lore-jobs = { path = "../commons/crates/lore-jobs" }

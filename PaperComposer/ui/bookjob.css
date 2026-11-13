@@ -98,3 +98,6 @@
 @media (max-width: 600px) {
   .bkj-opts { grid-template-columns: auto minmax(0, 1fr); }
 }
+/* a new book's folder: its own row in the options strip */
+.bkj-opts .bkj-folder { grid-column: 2 / span 4; min-width: 0; font: 12px var(--mono); }
+@media (max-width: 760px) { .bkj-opts .bkj-folder { grid-column: auto; } }

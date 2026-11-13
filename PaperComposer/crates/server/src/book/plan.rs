@@ -73,7 +73,7 @@ pub fn chapter_range(length: &str) -> (usize, usize) {
 pub fn schema() -> Value {
     json!({
         "type": "object",
-        "required": ["title", "chapters"],
+        "required": ["title", "abstract", "chapters"],
         "properties": {
             "title": { "type": "string" },
             "abstract": { "type": "string" },

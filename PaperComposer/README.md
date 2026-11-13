@@ -160,7 +160,7 @@ your-private-repo/
 - **中文字型**：用這台電腦有的第一個（內文 Songti TC → LiSong Pro → Noto Serif CJK TC …；標題與邊註 PingFang TC → Heiti TC → Noto Sans CJK TC …），不需要另外安裝。
 - **對照表**：新書帶一份 lore-notation 產生的 `notation.tex`（`\input{notation}`），和論文一樣登記符號、方程式，用 `\ref{…}` 引用。
 - **書的版面**：像一本書一樣兩頁對開：內外邊界對稱、邊註在外側、左頁頁首是書名、右頁是章名、標題頁單獨在第 1 頁、每章從右頁開始。頁面 B5（預設）或 A4，新書時選，之後在 main.tex 的 `\usepackage[b5]{lorenotes}` 改。
-- **從論文寫**：LoreReader 的「寫 review」或首頁「寫書」的「從論文寫…」。PaperComposer 在背景整理（讀論文 → 名詞 → 大綱 → 找資料 → 微調 → 撰寫 → 檢查），關掉視窗不會停；微調視窗可以勾選與排序章節、改章名與深度、篇幅、語言、頁面，套用或忽略建議。你在知識庫標為「記得」的名詞不寫，其他的一定解釋；每個說法都附引用；只用開放授權允許的論文圖。上網找到的開放取用論文會加進 LoreReader 書庫（LoreReader 沒開時，畫面上按「開啟 LoreReader」補上）。寫好的書和論文一樣編輯：新增圖、繪圖、表格、對照表、文獻、匯出都是同一套。流程細節見 [`../docs/book.md`](../docs/book.md)。
+- **從論文寫**：LoreReader 的「寫 review」或首頁「寫書」的「從論文寫…」。PaperComposer 在背景整理（讀論文 → 名詞 → 大綱 → 找資料 → 微調 → 撰寫 → 檢查），關掉視窗不會停；微調視窗可以勾選與排序章節、改章名與深度、篇幅、語言、頁面、存放的資料夾（預設上次用的，「選擇…」換），套用或忽略建議。你在知識庫標為「記得」的名詞不寫，其他的一定解釋；每個說法都附引用；別篇論文的圖只用 Creative Commons（含 NC）、CC0、公眾領域的，每張都引用並在圖說寫授權；授權不明的不用。上網找到的開放取用論文會加進 LoreReader 書庫（LoreReader 沒開時，畫面上按「開啟 LoreReader」補上）。寫好的書和論文一樣編輯：新增圖、繪圖、流程圖、表格、對照表、文獻、匯出都是同一套。流程細節見 [`../docs/book.md`](../docs/book.md)。
 
 ## 討論草稿
 
@@ -463,7 +463,8 @@ scripts/            Git hooks
 | POST | `/api/books` `{ title, folder, page? }` | 新書：在 `folder` 裡建立以書名命名的資料夾（不覆蓋），記進 `books.toml`，回覆 `{ id, path }`（`id` 用來打開）；`page` = `b5`（預設）或 `a4` |
 | POST | `/api/book` …、`/api/book/jobs/{id}/…` | 寫書的工作（`docs/book.md` §API） |
 | GET | `/api/info` | `{ app: "pc", books }`（LoreReader 的「寫 review」用；和 `/api/book*`、`/api/books` 一樣回應本機其他 App 的跨來源請求） |
-| POST | `/api/papers/{name}/figure-block` `{ path, caption, stem? }` | `figures/` 裡一張圖的 figure 環境：沒用過的 `\label`、期刊的圖說位置、載入 graphicx → `{ label, block, added }`（新增圖…、繪圖…、寫書共用） |
+| POST | `/api/papers/{name}/figure-block` `{ path, caption, stem? }` | `figures/` 裡一張圖的 figure 環境：沒用過的 `\label`、期刊的圖說位置、載入 graphicx → `{ label, block, added }`（新增圖…、繪圖…、流程圖…、寫書共用） |
+| GET/POST | `/api/papers/{name}/flow` | 流程圖（`docs/flow-figures.md` §6）：`?file=` 讀 `.flow.json`；POST `{ stem, replace, spec, svg }` → `figures/<stem>.pdf`＋`.flow.json`，新變數進這篇的對照表 → `{ file, stem, registered }`；`/flow/source` 出發點的文字 |
 | POST | `/api/shell/dialog` `{ kind: "latex" \| "word" \| "folder", start? }` | 桌面版的系統開檔對話框，回覆 `{ path }`；瀏覽器模式 501 |
 | POST | `/api/open/inspect` `{ path }` | 看路徑是什麼：已可開啟的論文 `{kind:"paper", id}`、要先整理的 LaTeX 資料夾 `{kind:"latex", plan}`（不寫入任何檔案）、壓縮檔 `{kind:"archive", dest}`、Word `{kind:"word", dest, pandoc}` |
 | POST | `/api/open/latex` `{ path, stamp }` | 照預覽（`plan.stamp`）原地整理並開啟；預覽後資料夾有變動則拒絕 |

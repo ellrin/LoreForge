@@ -48,7 +48,7 @@ const PCBookJob = (() => {
   const MOCK = (() => {
     const at = new URL(location.href).searchParams.get("at") ?? "run";
     let t0 = Date.now(), reviewed = null, stopped = false, pending = 2;
-    const opts = { length: "standard", lang: "en-zh", page: "b5" };
+    const opts = { length: "standard", lang: "en-zh", page: "b5", book: "new", folder: "/Users/ellrin/Documents/Books" };
     const t = (term, state = "unknown") => ({ term, state });
     const chapters = [
       { id: "c1", title: "Vectors and similarity", depth: "brief", terms: [t("cosine similarity", "learning"), t("dot product", "learning"), t("embedding")], figures: 1, sources: 3 },
@@ -324,6 +324,22 @@ const PCBookJob = (() => {
       E("span", { class: "ql" }, "篇幅"), optSeg("length", [["short", "短"], ["standard", "標準"], ["long", "長"]]),
       E("span", { class: "ql" }, "語言"), optSeg("lang", [["en-zh", "英中"], ["en", "English"], ["zh", "中文"]]),
       ...(opts.book && opts.book !== "new" ? [] : [E("span", { class: "ql" }, "頁面"), optSeg("page", [["b5", "B5"], ["a4", "A4"]])]));
+    // a new book: where it goes (the last folder used, changeable here)
+    if (!opts.book || opts.book === "new") {
+      const path = E("input", { class: "set-input bkj-folder", value: opts.folder ?? "", "aria-label": "存放的資料夾", spellcheck: "false" });
+      const setFolder = async (f) => {
+        f = String(f ?? "").trim();
+        if (!f || f === opts.folder || J.busy) return;
+        J.busy = true;
+        try { await api().params(J.id, { folder: f }); opts.folder = f; path.value = f; toast("書會存在這裡"); } catch (e) { toast(e.message, true); path.value = opts.folder ?? ""; } finally { J.busy = false; }
+      };
+      path.onchange = () => setFolder(path.value);
+      const pick = window.PCOpen?.desktop?.() ? E("button", { type: "button", class: "btn small", onclick: async () => {
+        try { const r = await API.post("/api/shell/dialog", { kind: "folder", start: path.value || null }); if (r?.path) setFolder(r.path); } catch (e) { toast(e.message, true); }
+      } }, ic("folder"), "選擇…") : null;
+      strip.append(E("span", { class: "ql" }, "存放"), path, ...(pick ? [pick] : []));
+      setTimeout(() => (path.scrollLeft = path.scrollWidth));
+    }
     function paintOpts() { strip.querySelectorAll(".seg").forEach((g) => g.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(opts[g.dataset.k] === b.dataset.v)))); }
 
     body.append(strip, ...(bS ? [bS] : []), bOut);
