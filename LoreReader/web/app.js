@@ -2463,9 +2463,23 @@ function mountShell() {
   shell.slots.lead.append(terms);
   // 做成簡報 (commons/ui/makedeck.js): SlideComposer reads this PDF from the library
   LoreMakeDeck.mount({ before: "header.top .slot-primary #actAsk", key: "lr.todeck", source: async () => (S.sha ? { kind: "lr", sha: S.sha } : null) });
+  // 寫 review (commons/ui/makebook.js): PaperComposer's 寫書 reads this PDF; the red terms, the
+  // paragraphs without 懂了 and 問這篇's questions go along (PaperComposer also reads them from disk)
+  LoreMakeBook.mount({ before: "header.top .slot-primary #actAsk", key: "lr.tobook", source: async () => (S.sha ? { kind: "lr", sha: S.sha } : null), extras: readingExtras });
   paintIcons(shell.el);
   // the drawer toggles: 段落 chips are measured once the right panel is visible
   shell.el.querySelector(".slot-primary .narrow-only")?.addEventListener("click", () => requestAnimationFrame(foldChips));
+}
+
+/** What this reading has shown so far (memory only): red terms with their counts, paragraphs
+ *  not marked 懂了, the questions asked in 問這篇. Empty parts are left out by makebook.js. */
+function readingExtras() {
+  if (!S.sha) return null;
+  return {
+    terms: (S.nouns?.entries ?? []).filter((e) => e.red).map((e) => ({ term: e.text, n: e.count })),
+    stuck: (S.paras?.paragraphs ?? []).filter((p) => p.section_kind !== "front" && !p.understood).map((p) => p.id),
+    questions: (S.chat ?? []).filter((m) => m.role === "user" && !m.pending && m.text?.trim()).map((m) => m.text.trim()),
+  };
 }
 
 function wire() {

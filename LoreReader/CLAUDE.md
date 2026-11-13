@@ -4,7 +4,10 @@ Local-first PDF reader for research papers, Rust, later a Mac app (Tauri). Same 
 habits as SlideComposer / PaperComposer / KnowledgeBase. Goal: learn fast what a paper needs you
 to master; the KB holds only what was digested (cards only on explicit action); the main output
 is citable sentences for PaperComposer. Not in scope: PDF content editing, slide wizard (the top bar's 做成簡報 =
-`commons/ui/makedeck.js` hands the PDF to SlideComposer's 論文報告, `{kind: "lr", sha}`).
+`commons/ui/makedeck.js` hands the PDF to SlideComposer's 論文報告, `{kind: "lr", sha}`), writing a review
+(the top bar's 寫 review = `commons/ui/makebook.js` hands it to PaperComposer's 寫書, `docs/book.md`, with
+`readingExtras()` = red terms, paragraphs without 懂了, 問這篇 questions). Downloaded open-access papers come
+in through `POST /api/papers/import {path}` (`lore_research::import_into_reader`).
 
 ## Commands
 

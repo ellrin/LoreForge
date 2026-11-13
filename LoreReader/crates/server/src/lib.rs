@@ -33,7 +33,7 @@
 //! | GET/PUT | /api/models | per-feature engine (the engine chips): `{task, model: auto\|local\|cloud\|haiku\|sonnet\|opus}` |
 //! | POST | /api/papers/{sha}/symbols/{id}/global | 加入全域: the row into the global 對照表 (`shared/notation.json`) |
 //! | GET | /api/notation/global | the global 對照表 (`shared/notation.json`; empty when missing) |
-//! | GET | /icons.js, /base.css, /shell.js | the shared shell (`lore_shell::FILES`); /notation-panel.js the shared 對照表 component |
+//! | GET | /icons.js, /base.css, /shell.js, /makedeck.js, /makebook.js | the shared shell (`lore_shell::FILES`); /notation-panel.js the shared 對照表 component |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
 //! | POST | /api/kb/open | start the KnowledgeBase app (macOS, local KB only; never when isolated) |
 //! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?}` → KB `POST /api/nodes` |
