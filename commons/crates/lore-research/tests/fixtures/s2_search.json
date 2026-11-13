@@ -1,0 +1,32 @@
+{
+  "total": 2,
+  "offset": 0,
+  "data": [
+    {
+      "paperId": "0000000000000000000000000000000000000001",
+      "title": "Sparse widgets for synthetic demo tasks",
+      "authors": [ { "authorId": "1", "name": "Ellrin Example" } ],
+      "year": 2024,
+      "venue": "Journal of Demo Studies",
+      "externalIds": { "DOI": "10.5555/DEMO.2024.001", "ArXiv": "2401.00001" },
+      "abstract": null,
+      "isOpenAccess": true,
+      "openAccessPdf": { "url": "https://example.org/papers/demo-001.pdf", "status": "GREEN" },
+      "citationCount": 15,
+      "url": "https://www.semanticscholar.org/paper/0000000000000000000000000000000000000001"
+    },
+    {
+      "paperId": "0000000000000000000000000000000000000004",
+      "title": "Closed Demo Benchmark",
+      "authors": [ { "authorId": "2", "name": "Daidai Example" } ],
+      "year": 2021,
+      "venue": "",
+      "externalIds": { "DOI": "10.5555/demo.2021.004" },
+      "abstract": "Placeholder text.",
+      "isOpenAccess": false,
+      "openAccessPdf": { "url": "", "status": null },
+      "citationCount": 2,
+      "url": "https://www.semanticscholar.org/paper/0000000000000000000000000000000000000004"
+    }
+  ]
+}

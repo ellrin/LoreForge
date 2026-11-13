@@ -1340,6 +1340,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-research"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "quick-xml",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "lore-secrets"
 version = "0.1.0"
 dependencies = [

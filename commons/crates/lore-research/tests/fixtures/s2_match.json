@@ -1,0 +1,16 @@
+{
+  "data": [
+    {
+      "paperId": "0000000000000000000000000000000000000002",
+      "title": "Notes on Placeholder Gradients",
+      "matchScore": 211.3,
+      "authors": [ { "authorId": "2", "name": "Daidai Example" } ],
+      "year": 2024,
+      "venue": "Demo Letters",
+      "externalIds": { "ArXiv": "2402.12345" },
+      "isOpenAccess": true,
+      "openAccessPdf": { "url": "https://arxiv.org/pdf/2402.12345", "status": "GREEN" },
+      "citationCount": 1
+    }
+  ]
+}

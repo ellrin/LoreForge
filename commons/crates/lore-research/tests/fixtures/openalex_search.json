@@ -1,0 +1,42 @@
+{
+  "meta": { "count": 3, "page": 1, "per_page": 3 },
+  "results": [
+    {
+      "id": "https://openalex.org/W0000000001",
+      "doi": "https://doi.org/10.5555/Demo.2024.001",
+      "display_name": "Sparse Widgets for Synthetic Demo Tasks",
+      "publication_year": 2024,
+      "ids": { "openalex": "https://openalex.org/W0000000001", "doi": "https://doi.org/10.5555/Demo.2024.001" },
+      "authorships": [ { "author": { "display_name": "Ellrin Example" } }, { "author": { "display_name": "Daidai Example" } } ],
+      "primary_location": { "is_oa": true, "landing_page_url": "https://example.org/papers/demo-001", "pdf_url": null, "source": { "display_name": "Journal of Demo Studies" } },
+      "best_oa_location": { "is_oa": true, "landing_page_url": "https://arxiv.org/abs/2401.00001", "pdf_url": "https://arxiv.org/pdf/2401.00001" },
+      "locations": [],
+      "open_access": { "is_oa": true, "oa_status": "green", "oa_url": "https://arxiv.org/pdf/2401.00001" },
+      "cited_by_count": 12,
+      "abstract_inverted_index": { "We": [0], "study": [1], "demo": [2, 5], "widgets": [3], "with": [4], "data.": [6] }
+    },
+    {
+      "id": "https://openalex.org/W0000000002",
+      "doi": "https://doi.org/10.5555/demo.2023.777",
+      "display_name": "A Closed Placeholder Study",
+      "publication_year": 2023,
+      "authorships": [ { "author": { "display_name": "Daidai Example" } } ],
+      "primary_location": { "is_oa": false, "landing_page_url": "https://example.org/papers/closed-777", "pdf_url": null, "source": { "display_name": "Proceedings of Placeholders" } },
+      "best_oa_location": null,
+      "open_access": { "is_oa": false, "oa_status": "closed", "oa_url": null },
+      "cited_by_count": 3,
+      "abstract_inverted_index": null
+    },
+    {
+      "id": "https://openalex.org/W0000000003",
+      "doi": null,
+      "display_name": "Gold Access Demo Report",
+      "publication_year": 2022,
+      "authorships": [ { "author": { "display_name": "Ellrin Example" } } ],
+      "primary_location": { "is_oa": true, "landing_page_url": "https://example.org/papers/gold-3", "pdf_url": "https://example.org/papers/gold-3.pdf", "source": null },
+      "best_oa_location": { "is_oa": true, "landing_page_url": "https://example.org/papers/gold-3", "pdf_url": "https://example.org/papers/gold-3.pdf" },
+      "open_access": { "is_oa": true, "oa_status": "gold", "oa_url": "https://example.org/papers/gold-3.pdf" },
+      "cited_by_count": 0
+    }
+  ]
+}
