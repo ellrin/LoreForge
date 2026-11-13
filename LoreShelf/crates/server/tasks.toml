@@ -1,0 +1,25 @@
+# LoreShelf's LLM tasks, layered over lore-llm's shared tasks.toml.
+#
+#   local:current   the model all LoreForge apps share (private/shared/engine.toml) on the machine's
+#                   one llama-server (lore-llm shared_runtime)
+#
+# Sorting the term pool reads sentences from all the author's files, papers or not: local only,
+# no fallback (author, 2026-11-13: files other than papers and slide decks never go to a cloud
+# model). It runs in the background and gives way to any app the author is using.
+
+[task.shelf-classify-terms]
+label = "候選詞分類"
+class = "tidy"
+needs = { json = true, context = 16000 }
+default = "local:current"
+offline = true
+max_tokens = 6000
+
+# The known cards' titles (the author, 2026-11-13: run on Claude Haiku). Only terms found in a paper
+# or a slide deck are sent, with sentences from those files only, never a file name or path.
+[task.shelf-card-titles]
+label = "卡片標題"
+class = "tidy"
+needs = { json = true, context = 16000 }
+default = "claude:haiku"
+max_tokens = 8000

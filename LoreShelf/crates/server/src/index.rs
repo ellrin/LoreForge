@@ -58,6 +58,9 @@ pub struct Item {
     pub categories: Vec<String>,
     /// In a sensitive category (證件): the UI blurs it.
     pub sensitive: bool,
+    /// A cloud model may read it (author, 2026-11-13): an academic paper (decided here, by the
+    /// rules or the author) or a slide deck — never a sensitive item. Everything else: local only.
+    pub cloud_ok: bool,
 }
 
 /// One item plus what only the detail and the similarity need.
@@ -82,7 +85,7 @@ impl Entry {
     pub fn synthetic(id: &str, downloaded: Option<&str>, doc_created: Option<&str>, created: &str) -> Entry {
         let times = Times { created: Some(created.into()), modified: None, downloaded: downloaded.map(Into::into), opened: None, doc_created: doc_created.map(Into::into) };
         Entry {
-            item: Item { id: id.into(), kind: "pdf".into(), name: format!("{id}.pdf"), ext: "pdf".into(), size: 1, times, download_host: None, seen_count: 1, group: String::new(), group_size: 1, categories: vec!["pdf".into()], sensitive: false },
+            item: Item { id: id.into(), kind: "pdf".into(), name: format!("{id}.pdf"), ext: "pdf".into(), size: 1, times, download_host: None, seen_count: 1, group: String::new(), group_size: 1, categories: vec!["pdf".into()], sensitive: false, cloud_ok: false },
             paths: vec![],
             description: String::new(),
             hits: vec![],
@@ -101,6 +104,9 @@ pub struct Index {
     pub by_id: HashMap<String, usize>,
     /// group → entry indices.
     pub groups: HashMap<String, Vec<usize>>,
+    /// The whole text of the files that have one (`fulltext.rs`; empty until `loreshelf extract` ran).
+    /// Shared between rebuilds that keep the same entries (an edit of a category).
+    pub ft: std::sync::Arc<crate::fulltext::FullIndex>,
 }
 
 fn is_unit(kind: &str) -> bool {
@@ -354,6 +360,11 @@ fn categorize(kind: &str, facts: &Facts, author: Option<Vec<String>>) -> (Vec<St
     (cats, hits)
 }
 
+/// Papers and slide decks may be read by a cloud model; never a sensitive item.
+pub fn cloud_ok(cats: &[String]) -> bool {
+    !sensitive(cats) && cats.iter().any(|c| c == "paper" || c == "slides")
+}
+
 fn sensitive(cats: &[String]) -> bool {
     cats.iter().any(|c| category::SENSITIVE.contains(&c.as_str()))
 }
@@ -496,6 +507,7 @@ fn from_file(r: FileRecord, ex: Option<Extract>, author: Option<Vec<String>>) ->
             group: String::new(),
             group_size: 1,
             sensitive: sensitive(&categories),
+            cloud_ok: cloud_ok(&categories),
             categories,
         },
         paths,
@@ -553,6 +565,7 @@ fn from_unit(u: UnitRecord, author: Option<Vec<String>>) -> Raw {
             group: String::new(),
             group_size: 1,
             sensitive: sensitive(&categories),
+            cloud_ok: cloud_ok(&categories),
             categories,
         },
         paths,
@@ -566,6 +579,11 @@ impl Index {
     /// Read every record of the catalog at `dir` (missing folders = empty);
     /// `extract` = the extract cache (`<cache>/LoreForge/shelf/extract`).
     pub fn load(dir: &Path, extract: &Path) -> Index {
+        Index::load_with(dir, extract, None)
+    }
+
+    /// [`Index::load`], reusing `ft` (the whole-text index of the same entries) when given.
+    pub fn load_with(dir: &Path, extract: &Path, ft: Option<std::sync::Arc<crate::fulltext::FullIndex>>) -> Index {
         let mut raws = Vec::new();
         if let Ok(rd) = std::fs::read_dir(dir.join("files")) {
             let mut names: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.ends_with(".json")).collect();
@@ -584,7 +602,16 @@ impl Index {
                 raws.push(from_unit(u, author));
             }
         }
-        Index::build(raws)
+        let mut idx = Index::build(raws);
+        // the full text sits next to the extract cache (`<cache>/LoreForge/shelf/fulltext`)
+        if let Some(ft) = ft {
+            idx.ft = ft;
+        } else if let Some(cache) = extract.parent() {
+            let dir = lore_catalog::fulltext::FullText::dir(cache);
+            let ids: Vec<(usize, String)> = idx.entries.iter().enumerate().filter(|(_, e)| !is_unit(&e.item.kind)).map(|(i, e)| (i, e.item.id.clone())).collect();
+            idx.ft = std::sync::Arc::new(crate::fulltext::FullIndex::load(&dir, ids.into_iter()));
+        }
+        idx
     }
 
     fn build(raws: Vec<Raw>) -> Index {
@@ -645,7 +672,7 @@ impl Index {
             let text = std::mem::take(&mut raw.text);
             entries.push(Entry { item: raw.item, paths: raw.paths, description: raw.description, hits: raw.hits, mentions, text, tokens: v, days, folders });
         }
-        let mut idx = Index { entries, by_id, groups: HashMap::new() };
+        let mut idx = Index { entries, by_id, groups: HashMap::new(), ft: Default::default() };
         idx.assign_groups();
         idx
     }
@@ -676,7 +703,7 @@ impl Index {
     /// An index over ready entries (tests; groups recomputed).
     pub fn from_entries(entries: Vec<Entry>) -> Index {
         let by_id = entries.iter().enumerate().map(|(i, e)| (e.item.id.clone(), i)).collect();
-        let mut idx = Index { entries, by_id, groups: HashMap::new() };
+        let mut idx = Index { entries, by_id, groups: HashMap::new(), ft: Default::default() };
         idx.assign_groups();
         idx
     }

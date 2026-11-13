@@ -29,8 +29,12 @@
 //! is written (the theme choice goes to `private/shared/ui.toml` like every app).
 //! The index is rebuilt when the catalog's latest report changes.
 
+pub mod cards;
+pub mod classify;
 pub mod dataset;
+pub mod fulltext;
 pub mod index;
+pub mod llm;
 pub mod search;
 pub mod thumbs;
 pub mod timeline;
@@ -116,6 +120,8 @@ pub struct AppState {
     members: Mutex<HashMap<String, Arc<Vec<dataset::Member>>>>,
     ql: tokio::sync::Semaphore,
     cache: Mutex<Option<(Option<PathBuf>, Arc<Index>)>>,
+    /// The whole-text index, kept across an edit's rebuild (same entries); its key = `cache`'s.
+    ft: Mutex<Option<(Option<PathBuf>, Arc<fulltext::FullIndex>)>>,
     /// What another app asked the page to do (`POST /api/act`): a counter and the last request.
     acts: tokio::sync::watch::Sender<(u64, Value)>,
 }
@@ -135,6 +141,7 @@ impl AppState {
             members: Mutex::new(HashMap::new()),
             ql: tokio::sync::Semaphore::new(thumbs::MAX_PARALLEL),
             cache: Mutex::new(None),
+            ft: Mutex::new(None),
             acts: tokio::sync::watch::channel((0, Value::Null)).0,
         })
     }
@@ -152,14 +159,23 @@ impl AppState {
 
     /// The index, rebuilt when a new scan report appeared.
     pub fn index(&self) -> Arc<Index> {
-        let stamp = lore_catalog::Catalog::latest_report(&self.catalog);
+        // a new scan report, or a finished `loreshelf extract`, makes a new index
+        let ft_stamp = self.extract.parent().map(|c| lore_catalog::fulltext::FullText::dir(c).join(lore_catalog::fulltext::STAMP)).and_then(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+        let stamp = lore_catalog::Catalog::latest_report(&self.catalog).map(|p| match ft_stamp {
+            Some(t) => p.join(format!("{:?}", t)),
+            None => p,
+        });
         let mut c = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((s, idx)) = c.as_ref()
             && *s == stamp
         {
             return idx.clone();
         }
-        let idx = Arc::new(Index::load(&self.catalog, &self.extract));
+        // an edit (a category) keeps the entries and their order: the whole-text index stays
+        let mut ftc = self.ft.lock().unwrap_or_else(|e| e.into_inner());
+        let reuse = ftc.as_ref().filter(|(s, _)| *s == stamp).map(|(_, f)| f.clone());
+        let idx = Arc::new(Index::load_with(&self.catalog, &self.extract, reuse));
+        *ftc = Some((stamp.clone(), idx.ft.clone()));
         *c = Some((stamp, idx.clone()));
         idx
     }
@@ -362,11 +378,11 @@ async fn search_h(State(s): State<Shared>, Query(q): Query<SearchQ>) -> Json<Val
     let f = Filter::parse(q.cat.as_deref());
     if q.loose.is_some() {
         let found = search::loose(&idx, q.q.as_deref().unwrap_or_default(), &f, q.limit.unwrap_or(5));
-        let items: Vec<Value> = found.iter().map(|x| json!({ "item": x.item, "via": x.via, "score": (x.score * 10.0).round() / 10.0 })).collect();
+        let items: Vec<Value> = found.iter().map(|x| json!({ "item": x.item, "via": x.via, "score": (x.score * 10.0).round() / 10.0, "at": x.at })).collect();
         return Json(json!({ "total": items.len(), "items": items, "facets": [] }));
     }
     let (found, total, facets) = search::search(&idx, q.q.as_deref().unwrap_or_default(), &f, q.limit.unwrap_or(30));
-    let items: Vec<Value> = found.iter().map(|x| json!({ "item": x.item, "via": x.via, "snippet": x.snippet })).collect();
+    let items: Vec<Value> = found.iter().map(|x| json!({ "item": x.item, "via": x.via, "snippet": x.snippet, "at": x.at })).collect();
     Json(json!({ "total": total, "items": items, "facets": facets }))
 }
 

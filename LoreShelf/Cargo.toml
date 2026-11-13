@@ -15,6 +15,7 @@ shelf-server = { path = "crates/server" }
 lore-home = { path = "../commons/crates/lore-home" }
 lore-shell = { path = "../commons/crates/lore-shell" }
 lore-words = { path = "../commons/crates/lore-words" }
+lore-llm = { path = "../commons/crates/lore-llm" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }

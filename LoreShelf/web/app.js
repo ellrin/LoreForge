@@ -1422,7 +1422,7 @@
     const rows = (r.items ?? []).map((x, i) => h("button", { type: "button", class: "frow" + (i === find.sel ? " sel" : ""), onclick: () => goFind(x.item.id) },
       h("span", { class: "kind" }, KIND_LABEL[x.item.kind] ?? (x.item.ext || "").toUpperCase()),
       h("span", { class: "fmain" }, h("span", { class: "fname" }, x.item.name), x.snippet ? h("span", { class: "fsnip" }, x.snippet) : null),
-      h("span", { class: "fvia" }, (x.via ?? []).map((v) => VIA[v]).filter(Boolean).join("・"))));
+      h("span", { class: "fvia" }, [x.at, ...(x.via ?? []).map((v) => VIA[v])].filter(Boolean).join("・"))));
     const asked = find.q.trim() || find.cats.size;
     findEl.replaceChildren(...[
       chosen.length + chips.length ? h("div", { class: "fchips" }, ...chosen, ...chips) : null,

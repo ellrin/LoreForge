@@ -5,6 +5,8 @@ edition.workspace = true
 description = "LoreShelf local server on 127.0.0.1: serves web/ with the shared theme and shell kit, and a read-only JSON API over the local catalog (files, details, neighbours, open / reveal)."
 
 [dependencies]
+lore-llm.workspace = true
+async-trait = "0.1"
 lore-catalog.workspace = true
 lore-home.workspace = true
 lore-shell.workspace = true

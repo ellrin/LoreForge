@@ -15,6 +15,13 @@ cargo run -p loreshelf                       # desktop window (Tauri); not in de
 cd ../commons && cargo test -p lore-catalog -p lore-gitsync
 cargo run --release -p loreshelf-cli -- scan ~/Downloads   # read-only scan; prints a summary and the report path
 cargo run --release -p loreshelf-cli -- report            # latest report path
+cargo run --release -p loreshelf-cli -- extract           # whole text of PDFs / pptx / docx / text into the cache (only new ones; ~1 min)
+cargo run --release -p loreshelf-cli -- terms             # the term pool from that text and the KnowledgeBase (~20 s; run from inside LoreForge)
+cargo run --release -p loreshelf-cli -- mastered <dir>...  # folders he knows all of (catalog `mastered.json`, local only)
+cargo run --release -p loreshelf-cli -- known-cards [--write]  # their terms (model verdict `term`) → known KB cards (API while KB runs, else kb-core); no file names in cards
+cargo run --release -p loreshelf-cli -- classify [N]      # the local model sorts the pool; per batch, resumable, background priority (hours); then ignore-words --write
+cargo run --release -p loreshelf-cli -- ignore-words [--write]  # general words + names → private/LoreReader/ignore-words.txt (「這不是術語」, every paper reader; lines tagged `# LoreShelf`)
+cargo run --release -p loreshelf-cli -- card-titles       # Claude Haiku (subscription CLI, else ANTHROPIC_API_KEY; never the keychain) checks the mastered terms once and titles the cards; paper / slide terms and sentences only
 LORESHELF_HOME=/tmp/shelf LOREFORGE_CACHE=/tmp/cache cargo run -p loreshelf-cli -- scan <dir>   # throwaway catalog
 ```
 
@@ -22,7 +29,7 @@ LORESHELF_HOME=/tmp/shelf LOREFORGE_CACHE=/tmp/cache cargo run -p loreshelf-cli 
 
 ## Layout
 
-- `crates/cli` (package `loreshelf-cli`, `loreshelf` binary): `scan <dir>...`, `report`. Reads `LORESHELF_HOME` and the
+- `crates/cli` (package `loreshelf-cli`, `loreshelf-cli` binary): `scan <dir>...`, `report`. Reads `LORESHELF_HOME` and the
   cache dir; everything else is in `lore-catalog`.
 - `crates/server` (`shelf-server`): axum on 127.0.0.1 only. Serves `web/` (no-cache), the shared
   theme (`/theme.css`, `/theme.js`, `/api/theme`) and shell kit (`/icons.js`, `/base.css`,
@@ -65,6 +72,20 @@ LORESHELF_HOME=/tmp/shelf LOREFORGE_CACHE=/tmp/cache cargo run -p loreshelf-cli 
   `POST /api/act {focus}` + `GET /api/events?after=` (long poll, `AppState.acts`): another local app
   turns the page to a file. `/api/health` carries `build` (the program file's mtime): the desktop app
   joins a running server only of its own build.
+  Whole text (`fulltext.rs`): `Index.ft` = token → (entry, part) only (Latin words, CJK pairs;
+  a Latin query word matches tokens it starts); the text is read from `<cache>/fulltext/` only for a
+  shown snippet; search results carry `at` (第 30 頁 / 第 4 張投影片 / 第 3 段). `/api/search` text hits
+  and `loose` use it (a text-only hit weighs by its rarity among the texts, so one rare word passes).
+  The index is rebuilt after a new report or a finished `loreshelf-cli extract` (`.stamp`). Items carry
+  `cloud_ok` (a paper or a slide deck, never a sensitive item). Model calls (`llm.rs`, `tasks.toml`):
+  `shelf-classify-terms`, local only, background priority (`classify.rs`: batches of 20, skipped keys
+  asked again at once, saved per batch, mastered terms first, then terms next to known cards;
+  `settle` = a single everyday word (`lore_words::Filters::is_everyday`: general, familiar or TERMLIKE)
+  is never a term; `ignore_lines` = general words and names for the shared ignore list). The pool
+  never takes the ignore list's words or my-vocab's. `shelf-card-titles` = Claude Haiku (`cards.rs`):
+  keep / title / field per mastered `term` with `cloud_ok`, answers in `<cache>/card-titles.json`
+  (beside the pool, so a running classify never drops them); `known-cards` makes one card per title,
+  none the KB already has.
   `web/` (no build step; shared files from root paths): `app.js` = the globe (the focus at the pole of a
   wire sphere, neighbours on it as small round nodes, drag = turning it, `place` → `toVec`; canvases
   `lback` ¼ res / `lglobe` ½ res / `lbond` full res, nodes are DOM), the callouts outside the limb

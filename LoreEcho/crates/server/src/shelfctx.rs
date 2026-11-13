@@ -3,10 +3,11 @@
 //! finds is listed under the reply (SSE `files`; a click turns LoreShelf's globe to that file), and
 //! the globe turns to the best one right away.
 //!
-//! File names never leave the machine. A turn for which LoreShelf found files is answered by the
-//! local model whenever one can (even when the author's choice is Claude — `api::chat_post`), and
-//! only then do the names go into the prompt. If no local model can answer, Claude is told only
-//! that LoreShelf found something and listed it.
+//! A cloud model may read papers and slide decks, nothing else (author, 2026-11-13; LoreShelf
+//! marks each item `cloud_ok`). A turn whose files are all `cloud_ok` goes to the chosen engine
+//! with the names; any other file found → the local model answers whenever one can (even when the
+//! author's choice is Claude — `api::chat_post`), and only then do the names go into the prompt.
+//! If no local model can answer, Claude is told only that LoreShelf found something and listed it.
 
 use lore_llm::LlmRequest;
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,12 @@ pub struct File {
     /// `YYYY-MM-DD` of the time it is filed under (downloaded, else the document's date, else created).
     #[serde(default)]
     pub date: String,
+    /// LoreShelf says a cloud model may read it (a paper or a slide deck, author 2026-11-13).
+    #[serde(default)]
+    pub cloud_ok: bool,
+    /// Where in it the words were found (第 19 頁), when it was its text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
 }
 
 /// LoreShelf's address while it runs.
@@ -48,7 +55,7 @@ fn files_of(v: &Value) -> Vec<File> {
                     let it = &x["item"];
                     let t = &it["times"];
                     let date = ["downloaded", "doc_created", "created", "modified"].iter().find_map(|k| t[*k].as_str()).map(|s| s.chars().take(10).collect()).unwrap_or_default();
-                    Some(File { id: it["id"].as_str()?.to_string(), name: it["name"].as_str()?.to_string(), kind: it["kind"].as_str().unwrap_or_default().to_string(), date })
+                    Some(File { id: it["id"].as_str()?.to_string(), name: it["name"].as_str()?.to_string(), kind: it["kind"].as_str().unwrap_or_default().to_string(), date, cloud_ok: it["cloud_ok"].as_bool().unwrap_or(false), at: x["at"].as_str().map(str::to_string) })
                 })
                 .take(MAX_FILES)
                 .collect()
@@ -74,7 +81,8 @@ pub async fn focus(base: &str, id: &str) -> bool {
     client().post(format!("{base}/api/act")).json(&json!({ "focus": id })).send().await.is_ok_and(|r| r.status().is_success())
 }
 
-/// What the model is told. `local`: the reply is written on this machine, so the names may be said.
+/// What the model is told. `local`: the reply is written on this machine, or every file is one a
+/// cloud model may read — so the names may be said.
 pub fn note(files: &[File], local: bool, turned: bool) -> String {
     if files.is_empty() {
         return String::new();
@@ -82,7 +90,7 @@ pub fn note(files: &[File], local: bool, turned: bool) -> String {
     if !local {
         return format!("LoreShelf 在使用者的電腦上找到 {} 個可能相關的檔案，檔名已經列在你的回覆下方（你看不到檔名）。LoreShelf 已經轉到最相關的那一個。如果他在找檔案，請他看 LoreShelf 和下方的清單；不要猜檔名。", files.len());
     }
-    let list = files.iter().enumerate().map(|(i, f)| format!("{}. 〈{}〉{}", i + 1, f.name, if f.date.is_empty() { String::new() } else { format!("（{}）", f.date) })).collect::<Vec<_>>().join("\n");
+    let list = files.iter().enumerate().map(|(i, f)| format!("{}. 〈{}〉{}{}", i + 1, f.name, if f.date.is_empty() { String::new() } else { format!("（{}）", f.date) }, f.at.as_deref().map(|a| format!("，相關內容在{a}")).unwrap_or_default())).collect::<Vec<_>>().join("\n");
     format!(
         "使用者的電腦上（LoreShelf）有這些可能相關的檔案：\n{list}\n如果他在找檔案，就從這幾個裡面告訴他是哪一個（照檔名說，不要編造清單以外的檔案）{}，其他的列在回覆下方可以點。如果他不是在找檔案，就不用提這些。",
         if turned { "，並說 LoreShelf 已經轉到第一個" } else { "" }
@@ -94,6 +102,13 @@ pub fn note(files: &[File], local: bool, turned: bool) -> String {
 pub struct Found {
     base: String,
     pub files: Vec<File>,
+}
+
+impl Found {
+    /// Every file is a paper or a slide deck: the author's chosen engine may answer, cloud or not.
+    pub fn cloud_ok(&self) -> bool {
+        self.files.iter().all(|f| f.cloud_ok)
+    }
 }
 
 /// Ask the running LoreShelf about `text` (`None`: not running, or nothing found).
@@ -124,7 +139,8 @@ impl Pre {
         // the globe turns to the best one right away (author, 2026-11-13: no click needed)
         let turned = focus(&base, &files[0].id).await;
         req.system.push_str("\n\n");
-        req.system.push_str(&note(&files, self.local, turned));
+        let open = self.local || files.iter().all(|f| f.cloud_ok);
+        req.system.push_str(&note(&files, open, turned));
         send("files", json!({ "files": files, "turned": turned, "local": self.local }));
         req
     }
@@ -146,7 +162,7 @@ mod tests {
     use super::*;
 
     fn f(name: &str) -> File {
-        File { id: format!("id-{name}"), name: name.into(), kind: "pdf".into(), date: "2026-10-05".into() }
+        File { id: format!("id-{name}"), name: name.into(), kind: "pdf".into(), date: "2026-10-05".into(), cloud_ok: false, at: None }
     }
 
     #[test]
@@ -159,8 +175,10 @@ mod tests {
     #[test]
     fn names_reach_only_a_local_model() {
         let files = vec![f("biomechanics-notes.pdf"), f("hw2.pdf")];
+        let mut files = files;
+        files[0].at = Some("第 19 頁".into());
         let local = note(&files, true, true);
-        assert!(local.contains("1. 〈biomechanics-notes.pdf〉（2026-10-05）") && local.contains("2. 〈hw2.pdf〉") && local.contains("已經轉到第一個"));
+        assert!(local.contains("1. 〈biomechanics-notes.pdf〉（2026-10-05），相關內容在第 19 頁") && local.contains("2. 〈hw2.pdf〉") && local.contains("已經轉到第一個"));
         let cloud = note(&files, false, true);
         assert!(cloud.contains("2 個") && !cloud.contains("biomechanics") && !cloud.contains("hw2"), "{cloud}");
         assert_eq!(note(&[], true, false), "");
@@ -172,7 +190,7 @@ mod tests {
             { "item": { "id": "a", "name": "x.pdf", "kind": "pdf", "times": { "created": "2026-01-02T03:04:05+08:00", "downloaded": "2026-02-03T00:00:00+08:00" } }, "via": ["name"] },
             { "item": { "name": "no id" } },
         ] });
-        assert_eq!(files_of(&v), vec![File { id: "a".into(), name: "x.pdf".into(), kind: "pdf".into(), date: "2026-02-03".into() }]);
+        assert_eq!(files_of(&v), vec![File { id: "a".into(), name: "x.pdf".into(), kind: "pdf".into(), date: "2026-02-03".into(), cloud_ok: false, at: None }]);
     }
 
     #[tokio::test]
@@ -215,5 +233,11 @@ mod tests {
         let out = Pre::new(lookup_at(&base, "生物力學是什麼").await.unwrap(), false).run(LlmRequest::prompt("", "生物力學是什麼"), |_, _| {}).await;
         assert!(!out.system.contains("生物力學期中考筆記") && out.system.contains("1 個"));
         assert_eq!(asked.lock().unwrap().last().unwrap(), "act f1");
+        // a paper: the chosen cloud engine may know its name
+        let paper = Found { base: base.clone(), files: vec![File { cloud_ok: true, ..f("cxr-study.pdf") }] };
+        assert!(paper.cloud_ok());
+        let out = Pre::new(paper, false).run(LlmRequest::prompt("", "那篇 cxr"), |_, _| {}).await;
+        assert!(out.system.contains("〈cxr-study.pdf〉"), "{}", out.system);
+        assert!(!Found { base: base.clone(), files: vec![File { cloud_ok: true, ..f("a.pdf") }, f("hw.pdf")] }.cloud_ok(), "one private file → local");
     }
 }

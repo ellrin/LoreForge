@@ -19,12 +19,14 @@
 
 pub mod category;
 pub mod extract;
+pub mod fulltext;
 pub mod hash;
 pub mod project;
 pub mod record;
 pub mod report;
 pub mod scan;
 pub mod store;
+pub mod terms;
 pub mod times;
 
 pub use record::{Download, FileRecord, SeenAt, TimePoint};

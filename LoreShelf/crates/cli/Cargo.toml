@@ -5,11 +5,19 @@ edition.workspace = true
 description = "LoreShelf command line: read-only scan of chosen folders into the local catalog, and the scan report."
 
 [[bin]]
-name = "loreshelf"
+# not `loreshelf`: that is the desktop app's binary, built into the same target folder
+name = "loreshelf-cli"
 path = "src/main.rs"
 
 [dependencies]
 lore-catalog.workspace = true
+lore-home.workspace = true
+lore-words.workspace = true
+shelf-server.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+kb-core = { path = "../../../commons/crates/kb-core" }
+lore-store = { path = "../../../commons/crates/lore-store" }
 
 [dev-dependencies]
 tempfile.workspace = true

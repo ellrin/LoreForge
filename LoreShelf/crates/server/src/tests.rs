@@ -367,6 +367,11 @@ async fn categories_filters_and_the_authors_choice() {
     assert_eq!(names_of(&json_of(&f.app, "GET", "/api/files?cat=homework,id-doc").await), vec!["HW2.pdf", "daidai 護照.jpg"], "OR within a group");
     let id_doc = json_of(&f.app, "GET", "/api/files?cat=id-doc").await;
     assert_eq!(id_doc[0]["sensitive"], true);
+    assert_eq!(id_doc[0]["cloud_ok"], false);
+    let all = json_of(&f.app, "GET", "/api/files").await;
+    let ok = |n: &str| all.as_array().unwrap().iter().find(|i| i["name"] == n).unwrap()["cloud_ok"].as_bool().unwrap();
+    assert!(ok("cxr-study.pdf"), "a paper may go to a cloud model");
+    assert!(!ok("HW2.pdf"), "homework is not academic: local only");
     assert!(json_of(&f.app, "GET", "/api/files").await.as_array().unwrap().iter().filter(|i| i["sensitive"] == true).count() == 1);
 
     // The author overrides the rules (a local git commit in the catalog).

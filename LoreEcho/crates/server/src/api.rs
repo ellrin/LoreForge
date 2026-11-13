@@ -281,8 +281,8 @@ async fn chat_post(State(s): State<Shared>, body: Option<Json<chat::ChatBody>>) 
         Err(e) => return bad(StatusCode::BAD_REQUEST, e),
     };
     let character = s.character(b.character.as_deref());
-    // the author's files (LoreShelf, while it runs): a turn that carries them is answered on this
-    // machine when a local model can, whatever engine is chosen — file names never go to a cloud model
+    // the author's files (LoreShelf, while it runs): a turn that carries a file a cloud model may not
+    // read (anything but papers and slides) is answered on this machine when a local model can
     let last = b.messages.iter().rev().find(|t| t.role == "user").map(|t| t.text.clone()).unwrap_or_default();
     let found = if s.shelf.load(std::sync::atomic::Ordering::Relaxed) { crate::shelfctx::lookup(&last).await } else { None };
     let mut route = match s.llm.route(llm::TASK_CHAT, b.engine.as_deref()).await {
@@ -290,7 +290,8 @@ async fn chat_post(State(s): State<Shared>, body: Option<Json<chat::ChatBody>>) 
         Err(payload) => return (StatusCode::SERVICE_UNAVAILABLE, Json(payload)).into_response(),
     };
     let is_local = |r: &lore_llm::Route| !matches!(r.model, lore_llm::ModelRef::Claude { .. });
-    if found.is_some() && !is_local(&route) && let Ok(r) = s.llm.route(llm::TASK_CHAT, Some("local")).await {
+    // papers and slide decks may go to a cloud model (author, 2026-11-13); anything else found → local
+    if found.as_ref().is_some_and(|f| !f.cloud_ok()) && !is_local(&route) && let Ok(r) = s.llm.route(llm::TASK_CHAT, Some("local")).await {
         route = r;
     }
     let kb = crate::kbctx::Pre::new(&s, &b.messages, b.kb.clone());

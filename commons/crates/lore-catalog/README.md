@@ -108,3 +108,17 @@ privacy settings), `Io`.
 ```sh
 cargo test -p lore-catalog   # temp dirs, synthetic PDFs / pptx / git dirs / xattrs (macOS)
 ```
+
+## Whole text and the term pool
+
+- `fulltext`: `read(path, kind, size)` → `FullText { unit: page | slide | block, parts: [{n, text}] }`
+  (PDF pages through lopdf, pptx slides + notes and docx paragraphs through zip + quick-xml, text
+  files; capped at `MAX_PARTS` / `MAX_CHARS`, never panics); `fill(catalog, cache, progress)` reads
+  every catalogued file not read yet into `<cache>/fulltext/<sha>.json` and writes `.stamp`.
+- `terms`: `build(fulltext_dir, sources, known, ignore, filters)` → `Pool` (`<cache>/terms.json`):
+  Latin words, acronyms and two-word phrases the KnowledgeBase's titles and aliases lack, with
+  files, counts, up to three example sentences (`cloud_ok` per sentence), the known cards they sit
+  next to (2+ shared parts and `NEAR_LIFT` × more than chance) and those cards' domains. Names
+  (capitalised away from a sentence start), ligature-broken words (`Filters::ligature_losses`),
+  word tails and citation bits are left out. The best `MAX_TERMS` overall plus every file's own best
+  `PER_FILE`. `verdict` / `field` come from a model later; `carry_verdicts` keeps them across rebuilds.

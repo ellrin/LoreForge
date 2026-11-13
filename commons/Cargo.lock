@@ -1175,6 +1175,7 @@ dependencies = [
  "hex",
  "lopdf",
  "lore-home",
+ "lore-words",
  "plist",
  "quick-xml",
  "serde",

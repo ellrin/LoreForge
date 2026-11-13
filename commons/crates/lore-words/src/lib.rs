@@ -105,8 +105,42 @@ impl Filters {
         !forms.iter().any(|f| self.termlike.contains(f)) && forms.iter().any(|f| self.familiar.contains(f))
     }
 
+    /// An everyday word for someone in the field: any general, familiar or [`TERMLIKE`] word
+    /// (`loss`, `mask`, `segmentation`). A single such word is a word the author already reads
+    /// without stopping, never a card; hyphenated words count when every part is one.
+    pub fn is_everyday(&self, w: &str) -> bool {
+        let parts: Vec<&str> = w.split(is_hyphen).filter(|p| !p.is_empty()).collect();
+        !parts.is_empty()
+            && parts.iter().all(|p| {
+                if parts.len() > 1 && ["pre", "post", "non", "re", "co", "multi", "semi", "self", "sub", "over", "under", "cross", "inter", "intra", "high", "low"].contains(&p.to_lowercase().as_str()) {
+                    return true;
+                }
+                let forms = variants(p);
+                forms.iter().any(|f| self.general.contains(f) || self.function.contains(f) || self.familiar.contains(f) || self.termlike.contains(f))
+            })
+    }
+
     pub fn is_ignored(&self, key: &str) -> bool {
         self.ignore.contains(key)
+    }
+
+    /// Every general and familiar word with one of the ligatures a PDF often loses (`fi`, `ff`,
+    /// `fl`, `ffi`, `ffl`, `ft`) taken out: `significant` → `signicant`. A word in this set is a
+    /// word broken by its PDF, not a term.
+    pub fn ligature_losses(&self) -> HashSet<String> {
+        let mut out = HashSet::new();
+        for w in self.general.iter().chain(self.familiar.iter()) {
+            for lig in ["ffi", "ffl", "fi", "ff", "fl", "ft"] {
+                let mut from = 0;
+                while let Some(i) = w[from..].find(lig) {
+                    let at = from + i;
+                    out.insert(format!("{}{}", &w[..at], &w[at + lig.len()..]));
+                    from = at + 1;
+                }
+            }
+        }
+        out.retain(|x| x.len() >= 3 && !self.general.contains(x) && !self.familiar.contains(x));
+        out
     }
 }
 
@@ -306,6 +340,14 @@ mod tests {
         assert!(!f.is_general("segmentation") && !f.is_general("entropy"), "TERMLIKE words are never general");
         assert!(!f.is_general("hippocampus"));
         assert!(Filters::new(&["foo bar".into()]).is_ignored("foo bar"));
+        assert!(Filters::new(&["loss  # LoreShelf".into()]).is_ignored("loss"), "comments after a word");
+    }
+
+    #[test]
+    fn everyday_words_include_termlike_ones() {
+        let f = Filters::default();
+        for w in ["loss", "Masks", "segmentation", "pre-trained"] { assert!(f.is_everyday(w), "{w}"); }
+        for w in ["discriminator", "glomeruli", "U-Net", "softmax"] { assert!(!f.is_everyday(w), "{w}"); }
     }
 
     #[test]

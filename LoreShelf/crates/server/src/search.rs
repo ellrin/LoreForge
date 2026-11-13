@@ -12,12 +12,14 @@ use crate::index::{Index, Item, kind_label};
 use lore_catalog::category::{self, Filter};
 use std::collections::BTreeMap;
 
-/// One result: where the terms matched and, for a text match, the words around it.
+/// One result: where the terms matched and, for a text match, the words around it and the part
+/// they are in (第 30 頁, 第 4 張投影片).
 pub struct Found<'a> {
     pub item: &'a Item,
     pub score: f64,
     pub via: Vec<&'static str>,
     pub snippet: Option<String>,
+    pub at: Option<String>,
 }
 
 /// A way to narrow: a category (`cat`) or a term to add (`term`: a year, a host).
@@ -44,7 +46,7 @@ fn filed(item: &Item) -> Option<&str> {
     [&t.downloaded, &t.doc_created, &t.created, &t.modified].into_iter().find_map(|x| x.as_deref())
 }
 
-fn snippet(text: &str, lower: &str, at: usize, len: usize) -> String {
+pub fn snippet(text: &str, lower: &str, at: usize, len: usize) -> String {
     // the lower-cased text has the same characters in the same places (nearly always): cut by characters
     let start = lower[..at].chars().count();
     let n = lower[at..at + len].chars().count();
@@ -58,7 +60,10 @@ pub fn search<'a>(idx: &'a Index, q: &str, filter: &Filter, limit: usize) -> (Ve
     let terms: Vec<String> = q.split_whitespace().map(str::to_lowercase).collect();
     let mut found: Vec<Found> = Vec::new();
     let mut matched: Vec<&Item> = Vec::new();
-    for e in idx.entries() {
+    // the whole text: where each term may be (entry → parts), checked against the text when shown
+    let in_text: Vec<std::collections::HashMap<u32, Vec<u32>>> = terms.iter().map(|t| idx.ft.candidates(t)).collect();
+    let mut text_parts: std::collections::HashMap<usize, (usize, Vec<u32>)> = std::collections::HashMap::new();
+    for (ei, e) in idx.entries().iter().enumerate() {
         let item = &e.item;
         if !filter.accepts(&item.categories) {
             continue;
@@ -67,7 +72,7 @@ pub fn search<'a>(idx: &'a Index, q: &str, filter: &Filter, limit: usize) -> (Ve
             matched.push(item);
             // only a category chosen: what is in it (newest first); nothing asked at all: only the ways in
             if !filter.is_empty() {
-                found.push(Found { item, score: 0.0, via: Vec::new(), snippet: None });
+                found.push(Found { item, score: 0.0, via: Vec::new(), snippet: None, at: None });
             }
             continue;
         }
@@ -102,7 +107,13 @@ pub fn search<'a>(idx: &'a Index, q: &str, filter: &Filter, limit: usize) -> (Ve
             if datey && times.iter().any(|x| x.as_deref().is_some_and(|x| x.starts_with(term.as_str()))) {
                 hit(1.0, "time");
             }
-            if let Some(at) = text.find(term.as_str()) {
+            let ti = terms.iter().position(|x| x == term).unwrap_or(0);
+            if idx.ft.has(ei) {
+                if let Some(parts) = in_text[ti].get(&(ei as u32)) {
+                    hit(1.0, "text");
+                    text_parts.entry(ei).or_insert((ti, parts.clone()));
+                }
+            } else if let Some(at) = text.find(term.as_str()) {
                 hit(1.0, "text");
                 if snip.is_none() && !item.sensitive {
                     snip = Some(snippet(&e.text, &text, at, term.len()));
@@ -124,13 +135,22 @@ pub fn search<'a>(idx: &'a Index, q: &str, filter: &Filter, limit: usize) -> (Ve
         if all {
             matched.push(item);
             let snippet = if via.contains(&"text") { snip } else { None };
-            found.push(Found { item, score, via, snippet });
+            found.push(Found { item, score, via, snippet, at: None });
         }
     }
     // best first; among equals the most recently filed
     found.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| filed(b.item).cmp(&filed(a.item))));
     let total = matched.len();
     found.truncate(limit.min(MAX_RESULTS));
+    // the words around a match in the whole text, and the part it is in (read only for what is shown)
+    for f in found.iter_mut().filter(|f| f.via.contains(&"text") && f.snippet.is_none() && !f.item.sensitive) {
+        let Some(&ei) = idx.by_id.get(&f.item.id) else { continue };
+        let Some((ti, parts)) = text_parts.get(&ei) else { continue };
+        if let Some((unit, n, s)) = idx.ft.find(ei, parts, &terms[*ti]) {
+            f.snippet = Some(s);
+            f.at = Some(crate::fulltext::where_label(&unit, n));
+        }
+    }
     (found, total, facets(&matched, &terms, filter))
 }
 
@@ -234,34 +254,60 @@ pub fn loose<'a>(idx: &'a Index, sentence: &str, filter: &Filter, limit: usize) 
     let names: Vec<String> = entries.iter().map(|e| e.item.name.to_lowercase()).collect();
     let n = names.len() as f64;
     let weight: Vec<f64> = tokens.iter().map(|t| ((n + 1.0) / (1.0 + names.iter().filter(|x| x.contains(t.as_str())).count() as f64)).ln()).collect();
+    let in_text: Vec<std::collections::HashMap<u32, Vec<u32>>> = tokens.iter().map(|t| idx.ft.candidates(t)).collect();
+    let text_weight: Vec<f64> = in_text.iter().map(|m| ((n + 1.0) / (1.0 + m.len() as f64)).ln()).collect();
     let mut found: Vec<Found> = Vec::new();
     for (e, name) in entries.iter().zip(&names) {
         if !filter.accepts(&e.item.categories) {
             continue;
         }
         let labels: Vec<String> = e.item.categories.iter().map(|c| cat_label(c).to_lowercase()).collect();
+        let ei = idx.by_id.get(&e.item.id).copied().unwrap_or(usize::MAX);
         let mut text: Option<String> = None;
         let (mut score, mut via) = (0.0, Vec::new());
-        for (t, w) in tokens.iter().zip(&weight) {
+        for (ti, (t, w)) in tokens.iter().zip(&weight).enumerate() {
             let (k, where_) = if name.contains(t.as_str()) {
-                (3.0, "name")
+                (3.0 * w, "name")
             } else if labels.iter().any(|l| !l.is_empty() && l.contains(t.as_str())) {
-                (1.5, "category")
+                (1.5 * w, "category")
+            } else if idx.ft.has(ei) {
+                // in the whole text: weighed by how rare it is among the texts, so one rare word
+                // (a tissue in page 30 of the notes) is enough on its own
+                if !in_text[ti].contains_key(&(ei as u32)) {
+                    continue;
+                }
+                (text_weight[ti], "text")
             } else if !e.text.is_empty() && text.get_or_insert_with(|| e.text.to_lowercase()).contains(t.as_str()) {
-                (0.6, "text")
+                (0.6 * w, "text")
             } else {
                 continue;
             };
-            score += k * w;
+            score += k;
             if !via.contains(&where_) {
                 via.push(where_);
             }
         }
         if score >= LOOSE_MIN {
-            found.push(Found { item: &e.item, score, via, snippet: None });
+            found.push(Found { item: &e.item, score, via, snippet: None, at: None });
         }
     }
     found.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| filed(b.item).cmp(&filed(a.item))));
     found.truncate(limit.min(MAX_RESULTS));
+    // where in the text: the part holding the rarest of the sentence's words that are there
+    for f in found.iter_mut().filter(|f| f.via.contains(&"text") && !f.item.sensitive) {
+        let Some(&ei) = idx.by_id.get(&f.item.id) else { continue };
+        let mut best: Option<(f64, usize)> = None;
+        for (ti, m) in in_text.iter().enumerate() {
+            if m.contains_key(&(ei as u32)) && best.is_none_or(|(w, _)| text_weight[ti] > w) {
+                best = Some((text_weight[ti], ti));
+            }
+        }
+        if let Some((_, ti)) = best
+            && let Some((unit, n, s)) = idx.ft.find(ei, &in_text[ti][&(ei as u32)], &tokens[ti])
+        {
+            f.at = Some(crate::fulltext::where_label(&unit, n));
+            f.snippet = Some(s);
+        }
+    }
     found
 }
