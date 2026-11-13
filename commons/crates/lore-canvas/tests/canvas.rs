@@ -299,7 +299,6 @@ fn one_picture_scales_text_lines_and_keeps_its_aspect() {
     ed.undo().unwrap();
     ed.undo().unwrap();
     // the lock survives the PPTX
-    ed.redo().unwrap();
     let bytes = pptx_out::export_bytes(&ed.deck, &od, Some(&style()), &no_assets).unwrap();
     let back = pptx_in::import(&ODeck::from_bytes(&bytes).unwrap(), Some(&style()), None);
     let g = back.slides[1].objects.iter().find(|o| o.name == "flow:demo").expect("group kept");
