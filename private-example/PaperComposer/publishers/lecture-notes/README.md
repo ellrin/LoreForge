@@ -12,3 +12,6 @@ PaperComposer 寫書的模板（`template.toml` 的 `kind = "book"`；不會出�
 
 中文字型：依序用這台電腦有的第一個（內文明體：Songti TC → LiSong Pro → Noto Serif CJK TC …；標題黑體：PingFang TC → Heiti TC → Noto Sans CJK TC …）。
 要換字型，在 main.tex 的 `\usepackage{lorenotes}` 後面寫 `\lnCJKserif{字型A,字型B}`、`\lnCJKsans{…}`。
+
+框（definition、keyidea、intuition）不會跨頁，框裡也不能放 `\sidenote`：每個框保持幾句話，邊註寫在框外。
+`\term` 的中文用半形括號 `(對比學習)`；要全形，改 `lorenotes.sty` 裡 `\term` 那一行。
