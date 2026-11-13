@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>繪圖 示範</title>
+<!-- Works from `python3 -m http.server` in commons/ui (open /plot/demo.html). ?theme=<id>; ?sample=<id> opens a
+     synthetic sample in the editor. No server: CSV/TSV/JSON in the page, SVG export only, no 自動. -->
+<link rel="stylesheet" href="../theme.css">
+<link rel="stylesheet" href="../base.css">
+<link rel="stylesheet" href="editor.css">
+<script src="../theme.js"></script>
+<script src="../icons.js"></script>
+<script src="../shell.js"></script>
+<script src="plot.js"></script>
+<script src="editor.js"></script>
+<script src="samples.js"></script>
+<style>body { padding: 24px; } .tiles { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }</style>
+</head>
+<body>
+<h1 style="font-size:16px">繪圖 示範</h1>
+<div class="tiles" id="tiles"><button class="ghost" id="blank">空白（貼上資料）</button></div>
+<pre id="out" style="font-size:11px;white-space:pre-wrap"></pre>
+<script>
+LorePlot.katexBase = "../notation-panel/vendor/katex/";
+const q = new URLSearchParams(location.search);
+if (q.get("theme")) { document.documentElement.dataset.theme = q.get("theme"); }
+const open = async (spec, title) => {
+  const r = await LorePlot.edit({ spec, title, api: null, target: q.get("target"), save: async ({ spec, svg }) => { document.getElementById("out").textContent = JSON.stringify(spec).slice(0, 600) + "…"; return true; } });
+};
+document.getElementById("blank").onclick = () => open(null, "新圖");
+for (const s of LorePlotSamples.list(q.get("style") || "clean")) {
+  const b = document.createElement("button"); b.className = "ghost"; b.textContent = s.label;
+  b.onclick = () => open(s.spec, s.label); document.getElementById("tiles").append(b);
+}
+if (q.get("sample")) { const s = LorePlotSamples.list(q.get("style") || "clean").find((x) => x.id === q.get("sample")); if (s) open(s.spec, s.label); }
+</script>
+</body>
+</html>

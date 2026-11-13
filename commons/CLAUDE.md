@@ -11,7 +11,8 @@ design is in `../private/shared/docs/ecosystem-design.md` (author's private note
   `lore-engines` (the shared 模型 settings: `/api/engines`, `/api/links/open`),
   `lore-catalog` (LoreShelf's read-only file catalog: hashes, time axes, projects, reports, local-only guard),
   `lore-jobs` (long-running background jobs: stages, checkpoints, progress, stop/resume, review wait; SlideComposer's 論文報告),
-  `lore-research` (related papers on the web, open access only: OpenAlex / arXiv / Semantic Scholar, dedupe, OA PDF download, BibTeX, LoreReader import; `docs/book.md`)).
+  `lore-research` (related papers on the web, open access only: OpenAlex / arXiv / Semantic Scholar, dedupe, OA PDF download, BibTeX, LoreReader import; `docs/book.md`),
+  `lore-plot` (繪圖: figure spec, data import, style presets, Chrome/poppler export, `plot-propose`, the `/plot` routes; `ui/plot/`, `../docs/plot.md`)).
   Local models: one llama-server per machine shared by every app in-process,
   `lore_llm::shared_runtime` (`../docs/local-models.md`; no broker process).
   Each crate knows nothing about any app. Apps depend on them by path

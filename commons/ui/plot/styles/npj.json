@@ -1,0 +1,7 @@
+{
+  "id": "npj",
+  "base": "nature",
+  "label": "npj Digital Medicine",
+  "note": "Nature Portfolio 的規定（89／183 mm、5–7 pt 無襯線），Paul Tol muted 色盤",
+  "colors": { "palette": ["#332288", "#88CCEE", "#44AA99", "#117733", "#999933", "#DDCC77", "#CC6677", "#882255", "#AA4499"], "cmap": "cividis" }
+}

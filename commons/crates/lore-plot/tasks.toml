@@ -1,0 +1,11 @@
+# LLM task of lore-plot, in lore-llm's tasks.toml format. An app merges this table into its own
+# (TaskTable::merge) so the router and the 模型 tab know it.
+
+[task.plot-propose]
+label = "自動產生圖表"
+class = "create"
+needs = { json = true, context = 16000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 4000

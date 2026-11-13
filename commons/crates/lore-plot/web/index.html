@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>繪圖</title>
+<!-- /plot/ in any app that mounts lore_plot::router: the editor on its own (export only). -->
+<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/base.css">
+<link rel="stylesheet" href="editor.css">
+<script src="/theme.js"></script>
+<script src="/icons.js"></script>
+<script src="/shell.js"></script>
+<script src="plot.js"></script>
+<script src="editor.js"></script>
+</head>
+<body>
+<script>
+(async function again() {
+  await LorePlot.edit({ api: "/plot/api", title: "新圖" });
+  again();
+})();
+</script>
+</body>
+</html>

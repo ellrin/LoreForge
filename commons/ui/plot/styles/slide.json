@@ -1,0 +1,14 @@
+{
+  "id": "slide",
+  "base": "clean",
+  "label": "簡報",
+  "note": "寬 240 mm、無襯線 16 pt、線粗點大，遠看也清楚",
+  "size": { "w": 240, "h": 135, "widths": [120, 180, 240] },
+  "font": { "kind": "sans", "family": ["Liberation Sans", "Arimo", "TeX Gyre Heros", "Nimbus Sans", "sans-serif"],
+            "size": 16, "title": 18, "label": 16, "tick": 14, "legend": 14, "panel": 18 },
+  "axes": { "line": 1.2, "tick_len": 5, "pad": 6, "grid": "y", "grid_dash": "solid", "grid_color": "#e3e3e3", "grid_width": 0.8 },
+  "lines": { "width": 2.6, "marker": 8 },
+  "bars": { "cap": 6 },
+  "scatter": { "size": 6 },
+  "legend": { "size": 14 }
+}

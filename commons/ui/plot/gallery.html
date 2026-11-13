@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>繪圖樣式一覽</title>
+<!-- Every sample figure (synthetic data) in one style: ?style=<id>&zoom=2&only=<sample id>.
+     Works from `python3 -m http.server` in commons/ui (open /plot/gallery.html). -->
+<style>
+  body { margin: 0; padding: 24px; background: #e9e9ec; font: 13px system-ui, sans-serif; color: #222; }
+  h1 { font-size: 16px; margin: 0 0 16px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+  figure { margin: 0; background: #fff; box-shadow: 0 1px 4px #0002; }
+  figcaption { padding: 6px 10px; font-size: 12px; color: #555; background: #f6f6f6; }
+  .fig svg { display: block; }
+  .warn { color: #b00; padding: 4px 10px; }
+</style>
+<script src="samples.js"></script>
+<script src="plot.js"></script>
+</head>
+<body>
+<h1 id="h"></h1>
+<div class="grid" id="grid"></div>
+<script>
+LorePlot.katexBase = "../notation-panel/vendor/katex/";
+(async () => {
+  const q = new URLSearchParams(location.search);
+  const id = q.get("style") || "clean";
+  const zoom = +(q.get("zoom") || 2);
+  const ids = await (await fetch("styles/index.json")).json();
+  const styles = await Promise.all(ids.map(async (i) => (await fetch(`styles/${i}.json`)).json()));
+  const st = styles.find((s) => s.id === id);
+  document.getElementById("h").textContent = `${st?.label ?? id} — ${st?.note ?? ""}`;
+  const grid = document.getElementById("grid");
+  for (const s of LorePlotSamples.list(id)) {
+    if (q.get("only") && q.get("only") !== s.id) continue;
+    const r = await LorePlot.render(s.spec, { styles });
+    const f = document.createElement("figure");
+    const box = document.createElement("div");
+    box.className = "fig";
+    box.innerHTML = r.svg;
+    const svg = box.firstChild;
+    svg.style.width = `${r.w * zoom * 96 / 25.4}px`;
+    svg.style.height = `${r.h * zoom * 96 / 25.4}px`;
+    const cap = document.createElement("figcaption");
+    cap.textContent = `${s.label} · ${r.w}×${r.h} mm`;
+    f.append(box, cap);
+    for (const w of r.warnings) { const d = document.createElement("div"); d.className = "warn"; d.textContent = w; f.append(d); }
+    grid.append(f);
+  }
+  document.body.dataset.ready = "1";
+})().catch((e) => { document.body.textContent = "錯誤：" + e.stack; document.body.dataset.ready = "1"; });
+</script>
+</body>
+</html>
