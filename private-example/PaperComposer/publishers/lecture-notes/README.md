@@ -3,11 +3,14 @@
 PaperComposer 寫書的模板（`template.toml` 的 `kind = "book"`；不會出現在新論文的版型裡）。
 `lorenotes.sty` 是 LoreForge 自己寫的，用 XeLaTeX 編譯，只用 BasicTeX 就有的套件。
 
+書的版面：雙面（內外邊界對稱）、邊註在外側、左頁頁首書名、右頁頁首章名、頁碼在外側、標題頁單獨在第 1 頁、摘要在它的背面、每章（`\section`）從右頁開始。
+頁面大小：`\usepackage[b5]{lorenotes}`（預設）或 `[a4]`。
+
 | 指令 | |
 |---|---|
 | `\course{…}` `\title{…}` `\author{…}` `\date{…}` `\keywords{…}` | 標題區（課程、書名、作者、Keyphrases） |
 | `\term{contrastive learning}{對比學習}` | 名詞第一次出現：英文粗體，後面附中文 |
-| `\sidenote{…}` | 右邊的邊註 |
+| `\sidenote{…}` | 外側的邊註（偶數頁在左、奇數頁在右） |
 | `definition`（可加 `[名稱]`）、`keyidea`、`intuition`、`remark` | 定義框（編號）、重點、直覺、補充 |
 
 中文字型：依序用這台電腦有的第一個（內文明體：Songti TC → LiSong Pro → Noto Serif CJK TC …；標題黑體：PingFang TC → Heiti TC → Noto Sans CJK TC …）。

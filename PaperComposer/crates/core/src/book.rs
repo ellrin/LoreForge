@@ -68,6 +68,63 @@ fn free_name(parent: &Path, base: &str) -> String {
     (1..).map(|k| if k == 1 { base.to_string() } else { format!("{base} {k}") }).find(|n| !parent.join(n).exists()).expect("a free name")
 }
 
+/// Page sizes a book can have (`\usepackage[<page>]{lorenotes}`); the first is the default.
+pub const PAGES: &[&str] = &["b5", "a4"];
+
+/// The book's page size, as main.tex loads the template (`b5` when it names none).
+pub fn page_of(dir: &Path) -> String {
+    let main = std::fs::read_to_string(crate::open::main_file(dir)).unwrap_or_default();
+    main.lines()
+        .map(|l| l.split('%').next().unwrap_or(""))
+        .find_map(|l| {
+            let i = l.find("\\usepackage[")?;
+            let rest = &l[i + "\\usepackage[".len()..];
+            let (opts, after) = rest.split_once(']')?;
+            after.trim_start().starts_with("{lorenotes}").then(|| opts.split(',').map(str::trim).find(|o| PAGES.contains(o)).map(String::from))?
+        })
+        .unwrap_or_else(|| PAGES[0].to_string())
+}
+
+/// Set the page size: the option of `\usepackage[…]{lorenotes}` in main.tex (a `\usepackage{lorenotes}`
+/// gets one). Main.tex is the one place it is kept, so the file compiles the same anywhere.
+pub fn set_page(dir: &Path, page: &str) -> Result<(), String> {
+    if !PAGES.contains(&page) {
+        return Err("不認得的頁面大小".into());
+    }
+    let path = crate::open::main_file(dir);
+    let main = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut done = false;
+    let out: Vec<String> = main
+        .lines()
+        .map(|l| {
+            let code = l.split('%').next().unwrap_or("");
+            if done || !code.contains("{lorenotes}") || !code.contains("\\usepackage") {
+                return l.to_string();
+            }
+            done = true;
+            match (code.find("\\usepackage["), code.find("\\usepackage{lorenotes}")) {
+                (Some(i), _) => {
+                    let start = i + "\\usepackage[".len();
+                    let end = start + code[start..].find(']').unwrap_or(0);
+                    let opts: Vec<&str> = code[start..end].split(',').map(str::trim).filter(|o| !o.is_empty() && !PAGES.contains(o)).collect();
+                    let opts = std::iter::once(page).chain(opts).collect::<Vec<_>>().join(",");
+                    format!("{}{opts}{}", &l[..start], &l[end..])
+                }
+                (None, Some(_)) => l.replacen("\\usepackage{lorenotes}", &format!("\\usepackage[{page}]{{lorenotes}}"), 1),
+                _ => l.to_string(),
+            }
+        })
+        .collect();
+    if !done {
+        return Err("main.tex 沒有載入 lorenotes".into());
+    }
+    let mut text = out.join("\n");
+    if main.ends_with('\n') {
+        text.push('\n');
+    }
+    crate::paper::write_atomic(&path, &text).map_err(|e| e.to_string())
+}
+
 /// Make a book in a new folder under `parent`, named after `title`, from
 /// the template folder `template`: main.tex + sections/ (the template's
 /// sample split as for a paper), the template's style and refs.bib,
@@ -161,6 +218,13 @@ mod tests {
         assert!(lore_notation::macros::is_generated(&notation), "{notation}");
         let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
         assert!(main.starts_with("% !TEX program = xelatex\n"), "{main}");
+        assert_eq!(page_of(&dir), "b5", "B5 unless chosen");
+        set_page(&dir, "a4").unwrap();
+        assert_eq!(page_of(&dir), "a4");
+        assert!(set_page(&dir, "letter").is_err());
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        assert!(main.contains("\\usepackage[a4]{lorenotes}") && main.contains("twoside"), "{main}");
+        set_page(&dir, "b5").unwrap();
         assert!(main.contains("\\title{Contrastive learning \\& friends}") && main.contains("\\input{notation}") && main.contains("\\bibliography{refs}"), "{main}");
         assert_eq!(paper::section_files(&dir).len(), 1);
         assert_eq!(crate::open::sections(&dir)[0].title, "Introduction");
