@@ -973,3 +973,46 @@ async fn a_symbol_goes_into_the_global_notation_once() {
     assert_eq!(s, StatusCode::OK, "{v}");
     assert!(v["tasks"].as_array().unwrap().iter().any(|t| t["id"] == "lr-chat" && t["choice"] == "cloud"));
 }
+
+#[tokio::test]
+async fn reading_mode_per_paper_and_default() {
+    let e = setup("http://127.0.0.1:9", None);
+    let a = import(&e.app, lr_core::synth::numbered_pdf(6, "A"), "a.pdf").await;
+    let b = import(&e.app, lr_core::synth::numbered_pdf(3, "B"), "b.pdf").await;
+    // vertical scroll unless chosen
+    let (_, v, _) = call(&e.app, "GET", "/api/view", None, None).await;
+    assert_eq!(v["default"], "scroll");
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{a}"), None, None).await;
+    assert_eq!(v["paper"]["view_mode"], "scroll");
+    // an unknown field in paper.json survives the write
+    let pj = e.root.join("ws/papers").join(&a).join("paper.json");
+    let mut meta: Value = serde_json::from_slice(&std::fs::read(&pj).unwrap()).unwrap();
+    meta["someday"] = json!({ "kept": true });
+    std::fs::write(&pj, serde_json::to_vec(&meta).unwrap()).unwrap();
+    let (s, v, _) = call(&e.app, "PUT", &format!("/api/papers/{a}/view"), Some(json!({ "view": "flip" })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["paper"]["view_mode"], "flip");
+    let meta: Value = serde_json::from_slice(&std::fs::read(&pj).unwrap()).unwrap();
+    assert_eq!(meta["view"], "flip");
+    assert_eq!(meta["someday"]["kept"], true);
+    let (s, _, _) = call(&e.app, "PUT", &format!("/api/papers/{a}/view"), Some(json!({ "view": "sideways" })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    // the global default applies to papers without their own; a paper's choice wins
+    let (s, _, _) = call(&e.app, "PUT", "/api/view", Some(json!({ "default": "nope" })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    std::fs::write(e.root.join("ws/view.json"), r#"{"default":"scroll","later":1}"#).unwrap();
+    let (s, v, _) = call(&e.app, "PUT", "/api/view", Some(json!({ "default": "flip" })), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let file: Value = serde_json::from_slice(&std::fs::read(e.root.join("ws/view.json")).unwrap()).unwrap();
+    assert_eq!((file["default"].clone(), file["later"].clone()), (json!("flip"), json!(1)));
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{b}"), None, None).await;
+    assert_eq!(v["paper"]["view_mode"], "flip");
+    call(&e.app, "PUT", "/api/view", Some(json!({ "default": "scroll" })), None).await;
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{a}"), None, None).await;
+    assert_eq!(v["paper"]["view_mode"], "flip");
+    // forgetting it: back to the default
+    call(&e.app, "PUT", &format!("/api/papers/{a}/view"), Some(json!({ "view": null })), None).await;
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{a}"), None, None).await;
+    assert_eq!(v["paper"]["view_mode"], "scroll");
+    assert!(v["paper"].get("view").is_none());
+}

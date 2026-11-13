@@ -85,6 +85,41 @@ select { height: 30px; }
 .statusbar .pagebox input { width: 40px; height: 22px; padding: 0 4px; text-align: center; font: 500 11px var(--mono); }
 .statusbar .ico[aria-pressed="true"] { color: var(--accent-text); background: none; }
 #zoomChip { min-width: 40px; text-align: center; }
+.view-seg button { display: inline-flex; align-items: center; gap: 4px; }
+.view-seg button svg { width: 14px; height: 14px; }
+.view-seg button[aria-pressed="true"] { color: var(--accent-text); }
+@media (max-width: 760px) { .view-seg .lbl { display: none; } }
+
+/* 翻頁: a spread of the book (page 1 alone on the right); the stash holds the neighbours,
+   laid out but unseen. Paper, shadows and the spine are fixed colours, never the theme. */
+.pages.flip { flex-direction: row; justify-content: center; align-items: center; gap: 0; padding: 20px 24px 36px; min-height: 100%; position: relative; }
+.book { display: grid; grid-template-columns: var(--pw) var(--pw); height: var(--ph); position: relative; flex: none; }
+.book.single { grid-template-columns: var(--pw); }
+.book.single .bk-l { display: none; }
+.bk-l, .bk-r { display: flex; align-items: center; min-width: 0; }
+.bk-l { justify-content: flex-end; }
+.bk-r { justify-content: flex-start; }
+.book.single .bk-r { justify-content: center; }
+.flip .page .pgno { right: auto; left: 0; width: 100%; top: calc(100% + 6px); text-align: center; }
+.book:not(.single) .page::after { content: ""; position: absolute; top: 0; bottom: 0; width: 7%; pointer-events: none; z-index: 2; }
+.book:not(.single) .bk-l .page::after { right: 0; background: linear-gradient(to right, #0000, #00000021); }
+.book:not(.single) .bk-r .page::after { left: 0; background: linear-gradient(to left, #0000, #00000021); }
+.stash { position: absolute; left: 0; top: 0; width: 0; height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
+.turn { position: absolute; inset: 0; pointer-events: none; z-index: 5; perspective: calc(var(--pw) * 3.2); }
+.turn .still, .turn .leaf { position: absolute; top: 0; width: var(--pw); height: var(--ph); }
+.turn .on-l, .turn .on-c { left: 0; }
+.turn .on-r { left: var(--pw); }
+.turn .still, .leaf .face { display: flex; align-items: center; }
+.turn .at-l { justify-content: flex-end; }
+.turn .at-r { justify-content: flex-start; }
+.turn .at-c { justify-content: center; }
+.leaf { transform-style: preserve-3d; will-change: transform; }
+.leaf .face { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.leaf .back { transform: rotateY(180deg); }
+.sheet { position: relative; background: #fff; box-shadow: 0 2px 12px #0006; overflow: hidden; flex: none; }
+.sheet canvas { display: block; width: 100%; height: 100%; }
+.sheet .shade { position: absolute; inset: 0; background: linear-gradient(to right, #00000059, #0000 60%); opacity: 0; }
+.at-l .shade { background: linear-gradient(to left, #00000059, #0000 60%); }
 
 /* pdf.js text layer (from pdf.js's pdf_viewer.css, Apache-2.0) */
 .textLayer { position: absolute; text-align: initial; inset: 0; overflow: clip; opacity: 1; line-height: 1; -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; caret-color: CanvasText; z-index: 0; color-scheme: only light;

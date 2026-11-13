@@ -80,7 +80,12 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   at ~216 dpi. The shared shell (`docs/shell.md`): `/icons.js`, `/base.css`, `/shell.js` are
   `lore_shell::FILES` (no icons.js in web/), `/notation-panel.js` the shared 對照表 component;
   `LoreShell.mount` builds the top bar, gear (一般 · 外觀 · 模型 · 快捷鍵), drawers, ⌘F / ⌘S;
-  the right panel is `LoreShell.block`s (01 名詞 … 06 問這篇). `/api/engines` (the 模型 tab, the
+  the right panel is `LoreShell.block`s (01 名詞 … 06 問這篇). 翻頁 (`S.view = "flip"`, the `FL` section of
+  app.js): the same page elements in a `.book` (`.bk-l`/`.bk-r`, page 1 alone on the right; one page when
+  ≤1100px or portrait), the spread's neighbours in a laid-out invisible `.stash` (pre-rendered, text layers
+  measure right), the rest unrendered and detached; `scrollToPage` / `jumpTo` / `flashBox` go through
+  `showPage`; a turn = a `.turn` leaf of canvas copies rotating about the spine (Web Animations; reduced
+  motion = a fade). `/api/engines` (the 模型 tab, the
   engine chips' `overrides`) and `/api/links/open` are `lore_engines::router` (isolated: no
   keychain / CLI / opener, process routing not installed). styles.css keeps only what base.css
   does not own.
@@ -121,6 +126,10 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   (`text::title_from_first_page`); a placeholder `/Title` counts as `file`. The author's edit wins.
 - Track B never writes a Chinese summary or translation of a paragraph. Claude's answers
   reach the symbol table only through 存進符號表… (`resolved_by: claude`, evidence kept).
+- Reading mode: `paper.json` `view` (`scroll` | `flip`; `PUT /api/papers/{sha}/view`, `null` forgets) wins
+  over `private/LoreReader/view.json` `default` (`GET`/`PUT /api/view`, unknown fields kept); `GET
+  /api/papers/{sha}` returns the resolved `view_mode`. Scroll stays the default. The PC / SC readers ignore
+  the extra field.
 - Readers elsewhere: PaperComposer (`crates/server/src/reader.rs`, the 讀過的 tab and panel) and
   SlideComposer (`crates/server/src/reader.rs`, the 論文 panel) read the library's `papers/<sha256>/*.json`
   and PDFs straight from disk, read-only; they do not call `/api/quotes`. Changing these files' schema

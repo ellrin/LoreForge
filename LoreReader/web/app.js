@@ -82,6 +82,7 @@ const S = {
   exp: null,                // GET /api/papers/{sha}/export: dirty, last export, defaults
   pages: [],                // view items: {sha, page, w, h, el, token, rendered, divs, strs}
   zoom: 1, fit: true, cur: 0,
+  view: "scroll",           // scroll | flip (翻頁: a book's spreads, page 1 alone on the right)
   annotations: [], quotes: [], chat: [], att: [],
   termsOn: false,
   models: null,             // GET /api/models: each feature's engine choice (the engine chips)
@@ -375,6 +376,8 @@ async function openPaper(sha, page) {
     S.nouns = null; S.nounMarks = new Map(); S.focusNoun = null;
     S.symbols = null; S.symSpans = []; S.symMarks = new Map();
     S.paras = null; S.curPara = null; S.chatCtx = null; S.chatScope = "all";
+    S.view = r.paper.view_mode === "flip" ? "flip" : "scroll"; S.fit = true; FL.spread = null; S.cur = Math.max(0, page - 1);
+    markView();
     await Promise.all([loadAnnotations(), loadQuotes(), loadChat(), refreshExport()]);
     await buildView();
     refreshKb();
@@ -436,13 +439,19 @@ async function buildView() {
 }
 
 function fitZoom() {
-  const vw = $("#viewport").clientWidth - 40;
+  const vpEl = $("#viewport");
   const maxW = Math.max(...S.pages.map((p) => p.w), 1);
-  return clamp(vw / maxW, 0.3, 3);
+  if (!isFlip()) return clamp((vpEl.clientWidth - 40) / maxW, 0.3, 3);
+  // 翻頁: the whole spread (or the one page) in the window
+  const maxH = Math.max(...S.pages.map((p) => p.h), 1);
+  const cols = flipSingle() ? 1 : 2;
+  return clamp(Math.min((vpEl.clientWidth - 48) / (cols * maxW), (vpEl.clientHeight - 56) / maxH), 0.3, 3);
 }
 
 function layoutPages() {
   pageObserver?.disconnect();
+  if (isFlip()) { layoutBook(); return; }
+  $("#pages").classList.remove("flip");
   pageObserver = new IntersectionObserver((es) => {
     for (const e of es) {
       const p = S.pages[+e.target.dataset.i];
@@ -554,8 +563,8 @@ function setZoom(z, fit = false, at = null) {
   // the page point under (cx, cy): the page that holds it (or the nearest one), as a fraction of its size
   let anchor = null, best = Infinity;
   S.pages.forEach((p, i) => {
-    const r = p.el?.getBoundingClientRect();
-    if (!r) return;
+    if (!p.el?.isConnected || p.el.closest(".stash")) return; // 翻頁: only the pages in view
+    const r = p.el.getBoundingClientRect();
     const d = cy < r.top ? r.top - cy : cy > r.bottom ? cy - r.bottom : 0;
     if (d < best) { best = d; anchor = { i, fx: (cx - r.left) / old, fy: (cy - r.top) / old }; }
   });
@@ -629,6 +638,7 @@ function wireZoomGestures() {
 function scrollToPage(i, smooth = true) {
   const p = S.pages[i];
   if (!p) return;
+  if (isFlip()) { showPage(i); return; }
   const vpEl = $("#viewport");
   vpEl.scrollTo({ top: p.el.offsetTop - 12, behavior: smooth ? "smooth" : "auto" });
   setCur(i);
@@ -638,7 +648,8 @@ function setCur(i) {
   if (i === S.cur && $("#pageInput").value === String(i + 1)) return;
   S.cur = i;
   $("#pageInput").value = i + 1;
-  $$(".thumb").forEach((t) => t.setAttribute("aria-current", +t.dataset.i === i ? "true" : "false"));
+  const lit = isFlip() && FL.spread != null ? spreadSides(FL.spread) : [i];
+  $$(".thumb").forEach((t) => t.setAttribute("aria-current", lit.includes(+t.dataset.i) ? "true" : "false"));
   const t = $(`.thumb[data-i="${i}"]`);
   if (t && !$("#sorter").matches(":hover")) scrollWithin($("#sorter"), t, "nearest", $(".sorter-head")?.offsetHeight ?? 0);
   if (S.sha && !S.arr) {
@@ -651,6 +662,7 @@ function setCur(i) {
 let scrollRaf = 0;
 function onScroll() {
   cancelAnimationFrame(scrollRaf);
+  if (isFlip()) return; // 翻頁: the current page changes only by turning
   scrollRaf = requestAnimationFrame(() => {
     const vpEl = $("#viewport");
     const mid = vpEl.scrollTop + vpEl.clientHeight * 0.35;
@@ -658,6 +670,252 @@ function onScroll() {
     if (i < 0) i = S.pages.length - 1;
     setCur(i);
   });
+}
+
+// ── 翻頁: book spreads ────────────────────────────────────────────────────
+/* The same page elements as the scroll view, a spread at a time: page 1 alone on the right
+   (the title page), then 2–3, 4–5 … (even pages on the left); one page at a time in a
+   narrow (≤1100px) or portrait window. Only the spread in view and its neighbours are
+   rendered; the neighbours wait laid out but invisible in .stash, so their text layers
+   measure right. A turn is a leaf (two faces = copies of the page canvases) rotating about
+   the spine; with reduced motion, a short fade. */
+const FL = { spread: null, single: false, anim: null, pending: 0, wheel: 0, wheelLock: false, wheelTimer: 0, down: null, popOpen: false };
+const isFlip = () => S.view === "flip";
+const flipSingle = () => innerWidth <= 1100 || innerHeight > innerWidth;
+const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+const spreadCount = () => (FL.single ? S.pages.length : Math.floor(S.pages.length / 2) + 1);
+const spreadOf = (i) => (FL.single ? i : i === 0 ? 0 : Math.floor((i + 1) / 2));
+/** [left, right] page indices of spread s (null = an empty side). */
+function spreadSides(s) {
+  const n = S.pages.length, ok = (i) => (i >= 0 && i < n ? i : null);
+  if (FL.single) return [null, ok(s)];
+  return s === 0 ? [null, ok(0)] : [ok(2 * s - 1), ok(2 * s)];
+}
+
+function markView() {
+  $$("#viewSeg button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.view === S.view ? "true" : "false"));
+  $("#actFit").setAttribute("aria-label", isFlip() ? "符合頁面" : "符合寬度");
+}
+
+/** 捲動 ⇄ 翻頁 on the same page; `save` = remember it for this paper (paper.json `view`). */
+async function setView(v, save = false) {
+  v = v === "flip" ? "flip" : "scroll";
+  if (v !== S.view) {
+    const i = S.cur;
+    finishTurn();
+    S.view = v; FL.spread = null; S.fit = true;
+    markView();
+    if (S.pages.length) { S.zoom = fitZoom(); layoutPages(); scrollToPage(i, false); }
+  }
+  if (save && S.sha) {
+    try { S.paper = (await api(`/api/papers/${S.sha}/view`, { method: "PUT", body: { view: v } })).paper; } catch (e) { fail(e); }
+  }
+}
+
+function layoutBook() {
+  finishTurn();
+  FL.single = flipSingle();
+  S.pages.forEach((p, i) => {
+    p.rendered = false; p.token++;
+    p.el = h("div", { class: "page", dataset: { i } }, h("span", { class: "pgno" }, i + 1));
+    sizePage(p);
+  });
+  const W = Math.floor(Math.max(...S.pages.map((p) => p.w), 1) * S.zoom), H = Math.floor(Math.max(...S.pages.map((p) => p.h), 1) * S.zoom);
+  const book = h("div", { class: `book${FL.single ? " single" : ""}` }, h("div", { class: "bk-l" }), h("div", { class: "bk-r" }));
+  book.style.setProperty("--pw", `${W}px`);
+  book.style.setProperty("--ph", `${H}px`);
+  const box = $("#pages");
+  box.classList.add("flip");
+  box.replaceChildren(book, h("div", { class: "stash", "aria-hidden": "true" }));
+  $("#zoomChip").textContent = `${Math.round(S.zoom * 100)}%`;
+  $("#actFit").setAttribute("aria-pressed", S.fit ? "true" : "false");
+  S.cur = clamp(S.cur, 0, Math.max(0, S.pages.length - 1));
+  FL.spread = null;
+  if (S.pages.length) placeSpread(spreadOf(S.cur));
+}
+
+/** Put spread s in the book, its neighbours in the stash; render those, drop the rest. */
+function placeSpread(s) {
+  const book = $("#pages .book"), stash = $("#pages .stash");
+  if (!book) return;
+  const [l, r] = spreadSides(s);
+  const near = new Set([l, r]);
+  for (const t of [s - 1, s + 1]) if (t >= 0 && t < spreadCount()) spreadSides(t).forEach((x) => near.add(x));
+  near.delete(null);
+  $(".bk-l", book).replaceChildren(...(l != null ? [S.pages[l].el] : []));
+  $(".bk-r", book).replaceChildren(...(r != null ? [S.pages[r].el] : []));
+  stash.replaceChildren(...[...near].filter((i) => i !== l && i !== r).map((i) => S.pages[i].el));
+  S.pages.forEach((p, i) => {
+    if (near.has(i)) return;
+    if (p.rendered) unrenderPage(p);
+    p.el.remove();
+  });
+  FL.spread = s;
+  for (const i of [l, r, ...near]) if (i != null && !S.pages[i].rendered) renderPage(S.pages[i]);
+}
+
+/** The spread holding page i (search hits, notes, thumbnails, links, the page box). */
+function showPage(i) {
+  if (!S.pages.length) return;
+  i = clamp(i, 0, S.pages.length - 1);
+  goSpread(spreadOf(i), i);
+}
+
+/** The next / previous spread (翻頁) or page (捲動). */
+function turn(d) {
+  if (!S.pages.length) return;
+  if (!isFlip()) { scrollToPage(clamp(S.cur + d, 0, S.pages.length - 1)); return; }
+  const s = (FL.spread ?? spreadOf(S.cur)) + d;
+  if (s >= 0 && s < spreadCount()) goSpread(s);
+}
+
+function goSpread(s, cur) {
+  const from = FL.spread;
+  if (s !== from) {
+    finishTurn();
+    const dir = from == null ? 0 : Math.sign(s - from);
+    const leaf = dir && Math.abs(s - from) === 1 && !reducedMotion() ? leafFor(from, s, dir) : null;
+    placeSpread(s);
+    $("#viewport").scrollTop = 0;
+    if (leaf) runLeaf(leaf);
+    else if (from != null) $("#pages .book")?.animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 140, easing: "ease-out" });
+  }
+  const [l, r] = spreadSides(s);
+  setCur(cur ?? l ?? r);
+}
+
+/** A copy of page i as a white sheet (its canvas as drawn now); i = null → blank paper the size of page `like`. */
+function sheetOf(i, like = i) {
+  const p = S.pages[like];
+  const sheet = h("div", { class: "sheet" }, h("div", { class: "shade" }));
+  if (!p) return sheet;
+  sheet.style.width = `${Math.floor(p.w * S.zoom)}px`;
+  sheet.style.height = `${Math.floor(p.h * S.zoom)}px`;
+  const c = i == null ? null : S.pages[i].el?.querySelector("canvas.pg");
+  if (c?.width) {
+    const k = h("canvas");
+    k.width = c.width; k.height = c.height;
+    k.getContext("2d").drawImage(c, 0, 0);
+    sheet.prepend(k);
+  }
+  return sheet;
+}
+
+/** What the turn from spread `from` to `to` shows, taken before the pages move. Forward:
+ *  the right page lifts about the spine and lands on the left, its back = the new left
+ *  page; the old left page stays until it is covered. Backward: the mirror image. One
+ *  page at a time: the page lifts away to the left (back = blank paper), or the previous
+ *  one comes back over it. */
+function leafFor(from, to, dir) {
+  const [ol, or] = spreadSides(from), [nl, nr] = spreadSides(to);
+  if (FL.single) {
+    return dir > 0
+      ? { side: "c", origin: "left", a: 0, b: -180, front: sheetOf(or), back: sheetOf(null, or), fade: true }
+      : { side: "c", origin: "left", a: -180, b: 0, front: sheetOf(nr), back: sheetOf(null, nr), still: sheetOf(or), stillSide: "c", hide: nr };
+  }
+  return dir > 0
+    ? { side: "r", origin: "left", a: 0, b: -180, front: sheetOf(or), back: sheetOf(nl), backSide: "l", still: ol != null ? sheetOf(ol) : null, stillSide: "l", hide: nl }
+    : { side: "l", origin: "right", a: 0, b: 180, front: sheetOf(ol), back: sheetOf(nr), backSide: "r", still: or != null ? sheetOf(or) : null, stillSide: "r", hide: nr };
+}
+
+function runLeaf(c) {
+  const book = $("#pages .book");
+  if (!book) return;
+  const face = (cls, side, sheet) => h("div", { class: `face ${cls} at-${side}` }, sheet);
+  const leaf = h("div", { class: `leaf on-${c.side}` }, face("front", c.side, c.front), face("back", c.backSide ?? c.side, c.back));
+  leaf.style.transformOrigin = `${c.origin} center`;
+  const turnEl = h("div", { class: "turn" }, ...(c.still ? [h("div", { class: `still on-${c.stillSide} at-${c.stillSide}` }, c.still)] : []), leaf);
+  book.append(turnEl);
+  const hidden = c.hide != null ? S.pages[c.hide]?.el : null;
+  if (hidden) hidden.style.visibility = "hidden";
+  const opt = { duration: 380, easing: "cubic-bezier(.4,.05,.3,1)" };
+  const spin = [{ transform: `rotateY(${c.a}deg)` }, { transform: `rotateY(${c.b}deg)` }];
+  const anims = [
+    leaf.animate(spin, opt),
+    // one page at a time: the leaf fades as it leaves (on the faces: opacity on the leaf
+    // itself would flatten it and show the front through the back)
+    ...(c.fade ? $$(".face", leaf).map((f) => f.animate([{ opacity: 1 }, { opacity: 1, offset: 0.5 }, { opacity: 0 }], opt)) : []),
+    $(".front .shade", leaf).animate([{ opacity: 0 }, { opacity: 0.35 }], opt), // the page darkens as it lifts
+    $(".back .shade", leaf).animate([{ opacity: 0.35 }, { opacity: 0 }], opt),
+  ];
+  const st = {
+    anims,
+    done() {
+      if (FL.anim !== st) return;
+      FL.anim = null;
+      turnEl.remove();
+      if (hidden) hidden.style.visibility = "";
+    },
+  };
+  FL.anim = st;
+  anims[0].onfinish = st.done;
+}
+
+/** End a running turn at once (a new turn, a relayout). */
+function finishTurn() {
+  const a = FL.anim;
+  if (!a) return;
+  a.anims.forEach((x) => x.cancel());
+  a.done();
+}
+
+function wireFlip() {
+  const pages = $("#pages"), vpEl = $("#viewport");
+  // a click on the outer half of a page turns it (after the double-click time: a double
+  // click makes a text box, notes.js)
+  pages.addEventListener("mousedown", (e) => {
+    clearTimeout(FL.pending); FL.pending = 0;
+    FL.down = { x: e.clientX, y: e.clientY };
+    FL.popOpen = !$("#pop").hidden || !$("#selBar").hidden || !$("#ctxMenu").hidden;
+  }, true);
+  pages.addEventListener("click", (e) => {
+    if (!isFlip() || e.button !== 0 || e.detail > 1 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (FL.popOpen || !getSelection().isCollapsed) return;
+    if (FL.down && Math.hypot(e.clientX - FL.down.x, e.clientY - FL.down.y) > 4) return;
+    if (e.target.closest(".mk[data-t], .tn, a, button, input, textarea")) return;
+    const pg = e.target.closest(".page");
+    if (!pg || pg.closest(".stash")) return;
+    const r = pg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width;
+    const onRight = !!pg.closest(".bk-r");
+    const d = FL.single ? (x >= 0.5 ? 1 : -1) : onRight && x >= 0.5 ? 1 : !onRight && x < 0.5 ? -1 : 0;
+    if (!d) return;
+    FL.pending = setTimeout(() => { FL.pending = 0; if (getSelection().isCollapsed) turn(d); }, 260);
+  });
+  // ←/→, PageUp/PageDown, space (⇧space back), Home/End
+  document.addEventListener("keydown", (e) => {
+    if (!isFlip() || !S.sha || !$("#home").hidden || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+    if (document.querySelector("dialog[open]")) return;
+    const t = e.target;
+    if (t.closest?.("input, textarea, select, [contenteditable], .menu, #pop, .findbar, [role=separator]")) return;
+    const space = e.key === " ";
+    if (space && t.closest?.("button, a, [role=button], summary")) return;
+    if (e.shiftKey && !space) return; // ⇧← / ⇧→ extend a selection
+    const k = e.key;
+    const d = k === "ArrowRight" || k === "PageDown" || (space && !e.shiftKey) ? 1 : k === "ArrowLeft" || k === "PageUp" || space ? -1 : 0;
+    if (d) { e.preventDefault(); turn(d); }
+    else if (k === "Home" || k === "End") { e.preventDefault(); showPage(k === "Home" ? 0 : S.pages.length - 1); }
+  });
+  // a two-finger horizontal swipe (one turn per swipe); a zoomed spread scrolls sideways first
+  vpEl.addEventListener("wheel", (e) => {
+    if (!isFlip() || e.ctrlKey || e.metaKey || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+    const canScroll = e.deltaX > 0 ? vpEl.scrollLeft + vpEl.clientWidth < vpEl.scrollWidth - 1 : vpEl.scrollLeft > 0;
+    if (canScroll && !FL.wheelLock && !FL.wheel) return;
+    e.preventDefault();
+    clearTimeout(FL.wheelTimer);
+    FL.wheelTimer = setTimeout(() => { FL.wheel = 0; FL.wheelLock = false; }, 220);
+    if (FL.wheelLock) return;
+    FL.wheel += e.deltaX;
+    if (Math.abs(FL.wheel) > 50) { FL.wheelLock = true; turn(Math.sign(FL.wheel)); }
+  }, { passive: false });
+  // touch: a horizontal swipe
+  let t0 = null;
+  vpEl.addEventListener("touchstart", (e) => { t0 = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null; }, { passive: true });
+  vpEl.addEventListener("touchend", (e) => {
+    if (!isFlip() || !t0) return;
+    const c = e.changedTouches[0], dx = c.clientX - t0.x, dy = c.clientY - t0.y;
+    t0 = null;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy) && getSelection().isCollapsed && vpEl.scrollWidth <= vpEl.clientWidth + 1) turn(dx < 0 ? 1 : -1);
+  }, { passive: true });
 }
 
 // ── thumbnails ────────────────────────────────────────────────────────────
@@ -1065,9 +1323,14 @@ function jumpTo(page, id) {
   const p = S.pages[i];
   const a = id && S.annotations.find((x) => x.id === id);
   const vpEl = $("#viewport");
-  const y = p.el.offsetTop + (a?.rects?.[0] ? a.rects[0][1] * p.el.offsetHeight - vpEl.clientHeight * 0.3 : -12);
-  vpEl.scrollTo({ top: y, behavior: "smooth" });
-  setCur(i);
+  if (isFlip()) {
+    showPage(i);
+    if (a?.rects?.[0]) setTimeout(() => scrollWithin(vpEl, $(`.hl[data-id="${id}"], .tn[data-id="${id}"]`)), 420);
+  } else {
+    const y = p.el.offsetTop + (a?.rects?.[0] ? a.rects[0][1] * p.el.offsetHeight - vpEl.clientHeight * 0.3 : -12);
+    vpEl.scrollTo({ top: y, behavior: "smooth" });
+    setCur(i);
+  }
   if (id) setTimeout(() => $$(`.hl[data-id="${id}"], .tn[data-id="${id}"]`).forEach((x) => { x.classList.remove("flash"); void x.offsetWidth; x.classList.add("flash"); }), 450);
   if (innerWidth <= 1100) shell.drawer("right", false);
 }
@@ -1327,12 +1590,13 @@ function flashBox(page, bbox) {
   if (i < 0) { toast("這一頁不在目前的頁面清單裡", true); return; }
   const p = S.pages[i];
   const vpEl = $("#viewport");
-  vpEl.scrollTo({ top: p.el.offsetTop + bbox[1] * p.el.offsetHeight - vpEl.clientHeight * 0.3, behavior: "smooth" });
-  setCur(i);
+  if (isFlip()) showPage(i);
+  else { vpEl.scrollTo({ top: p.el.offsetTop + bbox[1] * p.el.offsetHeight - vpEl.clientHeight * 0.3, behavior: "smooth" }); setCur(i); }
   const pad = 0.004;
   const d = h("div", { class: "boxflash" });
   Object.assign(d.style, { left: `${(bbox[0] - pad) * 100}%`, top: `${(bbox[1] - pad) * 100}%`, width: `${(bbox[2] - bbox[0] + 2 * pad) * 100}%`, height: `${(bbox[3] - bbox[1] + 2 * pad) * 100}%` });
   p.el.append(d);
+  if (isFlip()) setTimeout(() => scrollWithin(vpEl, d), 420);
   setTimeout(() => d.remove(), 2600);
   if (innerWidth <= 1100) shell.drawer("right", false);
 }
@@ -2385,7 +2649,19 @@ async function generalTab(el) {
     } catch (e) { fail(e); }
   });
   const path = (p) => h("span", { class: "v mono", title: p ?? "" }, p ?? "—");
+  // the reading mode of papers without their own (private/LoreReader/view.json)
+  let vd = "scroll";
+  try { vd = (await api("/api/view")).default; } catch {}
+  const viewSeg = h("span", { class: "seg", role: "group", "aria-label": "預設閱讀方式" });
+  const paintSeg = () => [...viewSeg.children].forEach((b) => b.setAttribute("aria-pressed", b.dataset.view === vd ? "true" : "false"));
+  for (const [v, label] of [["scroll", "捲動"], ["flip", "翻頁"]]) {
+    viewSeg.append(h("button", { type: "button", dataset: { view: v }, onclick: async () => {
+      try { vd = (await api("/api/view", { method: "PUT", body: { default: v } })).default; paintSeg(); } catch (e) { fail(e); }
+    } }, label));
+  }
+  paintSeg();
   el.append(
+    h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "閱讀"), setRow("預設", viewSeg)),
     h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "名詞"), setRow("你的領域", field)),
     h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "資料夾"), setRow("書庫", path(S.info.library)), setRow("匯出", path(S.info.exports))),
     h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "KnowledgeBase"), setRow("網址", path(S.info.kb_url))));
@@ -2494,8 +2770,10 @@ function wire() {
   $("#libFilter").oninput = (e) => { HOME.q = e.target.value; renderLibrary(); };
   $$("#libSort button").forEach((b) => { b.onclick = () => { HOME.sort = b.dataset.sort; try { localStorage.setItem("lr.homeSort", HOME.sort); } catch {} renderLibrary(); }; });
   $("#actMerge").onclick = () => mergeDialog().catch(fail);
-  $("#actPrev").onclick = () => scrollToPage(Math.max(0, S.cur - 1));
-  $("#actNext").onclick = () => scrollToPage(Math.min(S.pages.length - 1, S.cur + 1));
+  $("#actPrev").onclick = () => turn(-1);
+  $("#actNext").onclick = () => turn(1);
+  $$("#viewSeg button").forEach((b) => { b.onclick = () => setView(b.dataset.view, true); });
+  wireFlip();
   $("#pageInput").addEventListener("change", (e) => scrollToPage(clamp((+e.target.value || 1) - 1, 0, S.pages.length - 1)));
   $("#actZoomIn").onclick = () => setZoom(S.zoom * 1.2);
   $("#actZoomOut").onclick = () => setZoom(S.zoom / 1.2);
@@ -2537,7 +2815,11 @@ function wire() {
     onSelKey(e);
   });
   let rt;
-  const refit = () => { clearTimeout(rt); rt = setTimeout(() => { if (S.sha && S.fit) setZoom(fitZoom(), true); if (isOpen("paras")) foldChips(); }, 150); };
+  const refit = () => { clearTimeout(rt); rt = setTimeout(() => {
+    if (S.sha && S.fit) setZoom(fitZoom(), true);
+    else if (S.sha && isFlip() && FL.single !== flipSingle()) layoutPages(); // one page ⇄ two
+    if (isOpen("paras")) foldChips();
+  }, 150); };
   addEventListener("resize", refit);
   document.addEventListener("lore-resize", refit); // a side panel was dragged: 符合寬度 follows
   addEventListener("popstate", async () => {

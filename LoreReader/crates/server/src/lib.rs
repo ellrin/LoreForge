@@ -221,6 +221,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers", get(list_papers))
         .route("/api/papers/import", post(import).layer(DefaultBodyLimit::max(400 * 1024 * 1024)))
         .route("/api/papers/{sha}", get(paper).put(rename))
+        .route("/api/papers/{sha}/view", put(set_view))
+        .route("/api/view", get(view_get).put(view_put))
         .route("/api/papers/{sha}/pdf", get(pdf))
         .route("/api/papers/{sha}/annotations", get(annotations).post(add_annotation))
         .route("/api/papers/{sha}/annotations/{id}", put(update_annotation).delete(delete_annotation))
@@ -404,6 +406,9 @@ async fn info(State(s): State<Shared>) -> R {
 fn paper_view(s: &AppState, m: &PaperMeta) -> Value {
     let mut v = serde_json::to_value(m).unwrap_or(Value::Null);
     v["present"] = s.library.as_ref().is_ok_and(|l| l.has(&m.sha256)).into();
+    // the mode the page opens in: the paper's own, else the global default
+    let own = m.extra.get("view").and_then(|x| x.as_str()).filter(|x| lr_core::papers::VIEWS.contains(x));
+    v["view_mode"] = own.map(str::to_string).unwrap_or_else(|| default_view(&s.workspace)).into();
     v
 }
 
@@ -532,6 +537,57 @@ async fn rename(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Json<
     let _g = s.write.lock().unwrap();
     let m = s.papers.set_title(&sha, &b.title)?;
     Ok(Json(json!({ "paper": paper_view(&s, &m) })))
+}
+
+#[derive(Deserialize)]
+struct ViewBody {
+    view: Option<String>,
+}
+
+/// Remember the reading mode of one paper (`null` = forget it, the default applies).
+async fn set_view(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Json<ViewBody>) -> R {
+    sha_ok(&sha)?;
+    let _g = s.write.lock().unwrap();
+    let m = s.papers.set_view(&sha, b.view.as_deref())?;
+    drop(_g);
+    Ok(Json(json!({ "paper": paper_view(&s, &m) })))
+}
+
+fn view_file(ws: &std::path::Path) -> PathBuf {
+    ws.join("view.json")
+}
+
+fn load_view(ws: &std::path::Path) -> serde_json::Map<String, Value> {
+    std::fs::read(view_file(ws)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| v.as_object().cloned()).unwrap_or_default()
+}
+
+/// The reading mode for papers without their own (`private/LoreReader/view.json` `default`).
+fn default_view(ws: &std::path::Path) -> String {
+    load_view(ws).get("default").and_then(|v| v.as_str()).filter(|v| lr_core::papers::VIEWS.contains(v)).unwrap_or("scroll").to_string()
+}
+
+async fn view_get(State(s): State<Shared>) -> R {
+    Ok(Json(json!({ "default": default_view(&s.workspace), "views": lr_core::papers::VIEWS })))
+}
+
+#[derive(Deserialize)]
+struct ViewDefaultBody {
+    default: String,
+}
+
+async fn view_put(State(s): State<Shared>, Json(b): Json<ViewDefaultBody>) -> R {
+    if !lr_core::papers::VIEWS.contains(&b.default.as_str()) {
+        return Err(bad(format!("閱讀方式只能是 {}", lr_core::papers::VIEWS.join("、"))));
+    }
+    let _g = s.write.lock().unwrap();
+    let mut v = load_view(&s.workspace);
+    v.insert("schema".into(), "lorereader.view/1".into());
+    v.insert("default".into(), b.default.into());
+    let mut bytes = serde_json::to_vec_pretty(&Value::Object(v)).unwrap_or_default();
+    bytes.push(b'\n');
+    lr_core::write_atomic(&view_file(&s.workspace), &bytes).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() })))?;
+    drop(_g);
+    view_get(State(s)).await
 }
 
 async fn pdf(State(s): State<Shared>, Path(sha): Path<String>) -> Result<Response, ApiError> {

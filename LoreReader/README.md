@@ -49,7 +49,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 
 | 檔案 | 內容 |
 |---|---|
-| `paper.json` | `schema: "lorereader.paper/1"`、`sha256`、`title`（PDF 的 Title，沒有就用檔名）、`original_name`、`doi`（前兩頁找到的第一個 DOI，沒有為 `null`）、`pages`、`added_at`、`derived_from`（頁面操作產生的新 PDF：`{op, from: [sha256…]}`）、`original_path`（從 Finder 或路徑開啟時原檔的位置，存檔對話框預設在它旁邊）、`source_sha`（這份 PDF 是 LoreReader 存出的「含筆記」檔，對應原本那篇的 sha256） |
+| `paper.json` | `schema: "lorereader.paper/1"`、`sha256`、`title`（PDF 的 Title，沒有就用檔名）、`original_name`、`doi`（前兩頁找到的第一個 DOI，沒有為 `null`）、`pages`、`added_at`、`derived_from`（頁面操作產生的新 PDF：`{op, from: [sha256…]}`）、`original_path`（從 Finder 或路徑開啟時原檔的位置，存檔對話框預設在它旁邊）、`source_sha`（這份 PDF 是 LoreReader 存出的「含筆記」檔，對應原本那篇的 sha256）、`view`（這篇記住的閱讀方式 `scroll`／`flip`，沒有＝用預設） |
 | `annotations.json` | `schema: "lorereader.annotations/1"`，`annotations: [{id, page, kind: "highlight" \| "note" \| "text", color: yellow\|green\|blue\|pink, quote: {exact, prefix, suffix}, rects: [[x0,y0,x1,y1]…], note, created_at, updated_at}]`。`rects` 是相對於頁面的比例（左上為原點），所以任何縮放都對得上；`quote` 是原文與前後文，之後換渲染方式也能重新定位。`kind: "text"` 是放在頁面任意位置的文字框：一個 rect 是框，`note` 是文字，`quote` 空白 |
 | `quotes.json` | 引用句。`schema: "lorereader.quotes/1"`，`quotes: [{id, text, page, note, created_at}]`。`note` 是一行備註（可空白） |
 | `export.json` | 上一次「另存新檔（含筆記）」：`schema: "lorereader.export/1"`、`hash`（當時註記的 sha256）、`path`（存到哪裡；瀏覽器下載為 `null`）、`at`、`declined`（關閉時按「不儲存」的那一版註記） |
@@ -60,7 +60,7 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 | `reading.json` | 「懂了」。`schema: "lorereader.reading/1"`，`understood: [段落 id]` |
 | `nouns.json` | 名詞分類的快取。`schema: "lorereader.nouns/1"`，`categories: {<詞的正規化 key>: 分類}`，`asked: [已經送給模型的 key]`，`engine`，`classified_at`。名詞清單本身每次開檔重算（全文不寫進工作區） |
 
-工作區根目錄另有 `ignore-words.txt`（忽略清單，一行一個字或詞組，`#` 之後是註解）與 `models.json`（`{schema: "lorereader.models/1", choices: {<任務>: auto\|local\|haiku\|sonnet\|opus}}`）。
+工作區根目錄另有 `ignore-words.txt`（忽略清單，一行一個字或詞組，`#` 之後是註解）、`models.json`（`{schema: "lorereader.models/1", choices: {<任務>: auto\|local\|haiku\|sonnet\|opus}}`）與 `view.json`（`{schema: "lorereader.view/1", default: scroll\|flip}`：沒選過閱讀方式的論文用它，沒有這個檔＝捲動）。
 
 `GET /api/quotes` 回傳所有論文的引用句（每筆加上 `sha256`、`paper_title`、`doi`）。PaperComposer 的「讀過的」與 SlideComposer 的「論文」面板不經過這個 API，它們直接唯讀讀取書庫與論文資料夾（兩邊的 `crates/server/src/reader.rs`）。
 
@@ -71,7 +71,9 @@ model = "qwen3.5-9b-q8"                      # LOREREADER_LLM_MODEL
 - 外框是所有 LoreForge App 共用的外殼（`commons/ui` 的 icons.js、base.css、shell.js，`docs/shell.md`）：上方列＝品牌（回首頁）· 文件選單（最近的論文、加入 PDF…、合併 PDF…、改標題…、另存新檔（含筆記）…、首頁）· 狀態標籤 · 標示名詞 · 搜尋 · 做成簡報 · 問這篇（AI）… 右邊 對照表 · 匯出▾（另存新檔（含筆記）、列印）· 齒輪。
 - 左邊縮圖、中間頁面、右邊編號區塊（01 名詞、02 註記 預設展開；03 符號、04 段落、05 引用句、06 問這篇 預設收起，上方列的「問這篇」打開 06）；≤1100px 縮圖與面板變成抽屜。
 - 齒輪：一般（你的領域、書庫與匯出資料夾、KnowledgeBase 網址）、外觀（配色，與其他 App 共用）、模型（共用的連線與走向，`/api/engines`）、快捷鍵。
-- pdf.js 文字層可以選取文字；下方狀態列：頁碼跳頁、縮小／實際大小／放大、符合寬度。⌘F 在頁面上方開搜尋列（Enter 下一個、⇧Enter 上一個、Esc 關閉）。只繪製視窗附近的頁面，縮圖捲到才畫。
+- pdf.js 文字層可以選取文字；下方狀態列：頁碼跳頁、縮小／實際大小／放大、符合寬度、閱讀方式（捲動／翻頁）。⌘F 在頁面上方開搜尋列（Enter 下一個、⇧Enter 上一個、Esc 關閉）。只繪製視窗附近的頁面，縮圖捲到才畫。
+- **翻頁**（像翻一本書）：兩頁並排、整個跨頁放進視窗；第 1 頁（書名頁）單獨在右邊，接著 2–3、4–5…（偶數頁在左）。視窗 ≤1100px 或直立時一次一頁。翻頁：←／→、PageUp／PageDown、空白鍵（⇧空白鍵往回）、Home／End、點頁面外側那一半、觸控板左右滑、狀態列的上一頁／下一頁；翻頁動畫約 0.4 秒（系統設定「減少動態效果」時改成短暫淡入）。跳頁、搜尋、註記、符號、名詞、知識庫連結（`?paper=<sha>&page=n`）與縮圖都翻到含那一頁的跨頁。選取文字與選取選單、螢光／註記／文字框、紅黃綠標示照常；只繪製這個跨頁與前後各一個跨頁。預設符合頁面，仍可放大縮小（放大後可捲動，觸控板左右滑先捲到邊才翻頁）。
+- 閱讀方式**每篇各自記住**（`paper.json` 的 `view`）；沒選過的論文用齒輪「一般 → 閱讀 → 預設」（`view.json`，預設為捲動）。
 
 ## 頁面操作（不破壞原檔）
 

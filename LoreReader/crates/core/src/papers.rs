@@ -52,6 +52,9 @@ pub const PAPER_SCHEMA: &str = "lorereader.paper/1";
 pub const ANNOTATIONS_SCHEMA: &str = "lorereader.annotations/1";
 pub const QUOTES_SCHEMA: &str = "lorereader.quotes/1";
 pub const CHAT_SCHEMA: &str = "lorereader.chat/1";
+/// Reading modes: vertical scroll, or book-style spreads turned page by page.
+pub const VIEWS: [&str; 2] = ["scroll", "flip"];
+
 pub const EXPORT_SCHEMA: &str = "lorereader.export/1";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -319,6 +322,24 @@ impl Papers {
         f(&mut m);
         write_json(&self.folder(sha)?.join("paper.json"), &m)?;
         Ok(m)
+    }
+
+    /// The reading mode remembered for this paper (`paper.json` `view`: `scroll` | `flip`);
+    /// `None` forgets it (the global default applies).
+    pub fn set_view(&self, sha: &str, view: Option<&str>) -> Result<PaperMeta> {
+        if let Some(v) = view
+            && !VIEWS.contains(&v)
+        {
+            return Err(Error::Invalid(format!("閱讀方式只能是 {}", VIEWS.join("、"))));
+        }
+        self.update_meta(sha, |m| match view {
+            Some(v) => {
+                m.extra.insert("view".into(), Value::String(v.into()));
+            }
+            None => {
+                m.extra.remove("view");
+            }
+        })
     }
 
     /// 「我的論文」: the author's own (published or co-authored) paper.
