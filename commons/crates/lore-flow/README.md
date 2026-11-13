@@ -122,6 +122,37 @@ lore-notation's checks on the figure's text; `notation::register_new` adds the n
 `Proposal { graph, dsl, notation, … }`. Closed lists in the JSON schema; a graph that does not
 hold together is sent back once.
 
+## The figure spec and the shared editor
+
+`figure::FlowSpec` (`lore_flow: 1`) is what rides with a document: the L1 text (`dsl`) plus the
+author's choices — `layout` (a template id), `dirs` (block → `right`/`down`), `theme`, `types`
+(kinds of block with fill/outline), `blocks` / `nodes` (→ a type), `lines` (line kind → colour, dash,
+width, meaning), `legend` (`show` auto|on|off, `pos` below|above, `rows` of `line:<kind>` /
+`type:<id>` / `block:<id>` with words), `frame` (pt), `discussion` (the steps' answers). Unknown keys
+are kept. `FlowSpec::prepare` turns it into graph + theme + `LayoutOptions` (template, directions,
+panel fills, node `fill=`/`line=`, edge looks, `LegendChoice`); `figure::render` draws it,
+`preview_svg` crops a plain SVG, `as_picture` wraps the objects as one group (`lock_aspect`, the spec
+in `data`, connectors retargeted for PowerPoint), `linear` gives one line per block.
+
+Layout templates (`layouts.json`, 20 neutral ones: rows, columns, grids, small/big splits, two small +
+one big, wide top + two/three below …; `FlowLayout`: `arrange` row|column|grid or fraction `panels`,
+`dir` / `dirs`) and themes are data: `Catalogue::load_all([private/shared/flow, <app>/flow])` adds
+the author's `layouts/*.json` (or `templates/*.json`), `themes/*.toml`, `modules/`; a private id wins.
+
+`web::router(Flow::new(home).with_llm(…).with_notation(…).with_app_dir(…))` mounts the editor like
+lore-plot's `/plot/*` — `/flow/` (`commons/ui/flow/editor.js`, `LoreFlow.edit({ spec, doc, frame,
+target, source, sources, save })`) and `/flow/api/{catalogue, notation, preview, layouts, discuss,
+graph, assist, svg}` (table in `src/web.rs`). The author's own files in `private/shared/flow/`:
+`layouts/`, `themes/`, `modules/`, `palette.json` (block colours `[[name, fill, line]]`),
+`examples/*.json` (`{description, dsl}`, few-shot for the graph task), `assist.md` (habits, appended
+to the discussion and assistant prompts). `examples/serve.rs` runs the editor with a scripted model.
+
+LLM tasks (all through the app's `llm::Llm`, the same shape as lore-plot's): `flow-discuss` (class
+`create`; one step of the discussion: `discuss::STEPS` start → outline → blocks → focus → detail →
+vars → io, closed reply schema per step), `sc-flow-graph` (the last step: the decisions → L1),
+`flow-assist` (class `tidy`; `assist::adjust` → spec-path changes, checked by drawing them;
+`assist::alternatives` → 2–4 layouts of the same content with thumbnails). Prompts in `prompts/`.
+
 ## Command line
 
 ```sh

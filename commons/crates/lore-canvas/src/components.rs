@@ -211,6 +211,8 @@ pub fn instantiate(
                 kind: Kind::Group(GroupObj {
                     ch: fr,
                     children: vec![card, label],
+                    lock_aspect: false,
+                    data: None,
                 }),
                 src: None,
             }

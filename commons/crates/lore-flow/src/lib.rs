@@ -22,8 +22,13 @@
 //! ```
 
 pub mod art;
+#[cfg(feature = "web")]
+pub mod assist;
 pub mod build;
+#[cfg(feature = "web")]
+pub mod discuss;
 pub mod dsl;
+pub mod figure;
 pub mod finish;
 pub mod layout;
 #[cfg(feature = "llm")]
@@ -37,6 +42,8 @@ pub mod sheet;
 pub mod spec;
 pub mod text;
 pub mod theme;
+#[cfg(feature = "web")]
+pub mod web;
 
 pub use build::{Built, insert_ops, retarget_for_pptx};
 pub use layout::{Layout, LayoutOptions, PanelTemplate, Rect};

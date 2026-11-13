@@ -6,9 +6,11 @@ edition.workspace = true
 publish = false
 
 [features]
-default = ["llm"]
+default = ["llm", "web"]
 # The LLM task (description → graph) and the command-line tool.
-llm = ["dep:lore-llm", "dep:tokio"]
+llm = ["dep:lore-llm", "dep:tokio", "dep:async-trait"]
+# The shared editor: /flow/* routes (axum), the discussion and assistant tasks.
+web = ["llm", "dep:axum", "dep:lore-home"]
 
 [dependencies]
 lore-canvas = { path = "../lore-canvas" }
@@ -22,9 +24,14 @@ toml = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
 tokio = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+lore-home = { path = "../lore-home", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+async-trait = { workspace = true }
+lore-shell = { path = "../lore-shell" }
 
 [[bin]]
 name = "lore-flow"

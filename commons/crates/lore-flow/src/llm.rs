@@ -274,6 +274,35 @@ fn parse_graph(v: Value, lib: &Library) -> Result<Graph, String> {
     Ok(g)
 }
 
+/// How an app runs a JSON request for a task (its own routing, engines, keys);
+/// the same shape as lore-plot's, so one adapter serves both editors.
+#[async_trait::async_trait]
+pub trait Llm: Send + Sync {
+    /// The reply as JSON (schema-checked) and the engine that answered.
+    async fn complete_json(&self, task: &str, req: LlmRequest) -> Result<(Value, String), String>;
+}
+
+/// As [`propose`], through an app's [`Llm`] (task [`task_for`]).
+pub async fn propose_via(llm: &dyn Llm, p: &FlowPrompt<'_>) -> Result<Proposal, String> {
+    let task = task_for(p.image.is_some());
+    let req = request(p);
+    let (v, engine) = llm.complete_json(task, req.clone()).await?;
+    let (mut graph, retried) = match parse_graph(v.clone(), p.library) {
+        Ok(g) => (g, None),
+        Err(why) => {
+            let mut again = req;
+            again.messages.push(Message::assistant(v.to_string()));
+            again.messages.push(Message::user(format!("That graph cannot be drawn: {why}. Return the whole corrected JSON object.")));
+            let (v2, _) = llm.complete_json(task, again).await?;
+            (parse_graph(v2, p.library).map_err(|e| format!("模型給的圖畫不出來：{e}"))?, Some(why))
+        }
+    };
+    let empty = Notation { version: 1, entries: vec![], conventional: vec![], ignored: vec![] };
+    let notation = check_graph(&mut graph, p.notation.unwrap_or(&empty));
+    let dsl = crate::dsl::to_dsl(&graph);
+    Ok(Proposal { graph, dsl, notation, provider: engine, retried })
+}
+
 /// Ask `provider` for the graph of a description. A reply that does not hold
 /// together (unknown node in an edge, duplicate id …) is sent back once with
 /// the reason.

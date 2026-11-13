@@ -351,6 +351,10 @@ fn collect(v: &Value, runs: &mut Vec<Value>, cols: &mut BTreeSet<String>, skip_s
             if skip_src && m.contains_key("frame") && m.get("src").is_some_and(|s| !s.is_null()) {
                 return;
             }
+            // one picture (a figure group): drawn content, not slide text or slide colours
+            if m.get("type").and_then(Value::as_str) == Some("group") && m.get("lock_aspect").and_then(Value::as_bool) == Some(true) {
+                return;
+            }
             if m.contains_key("look") && m.contains_key("kind") {
                 runs.push(v.clone());
                 return;

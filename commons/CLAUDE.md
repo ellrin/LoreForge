@@ -7,7 +7,7 @@ design is in `../private/shared/docs/ecosystem-design.md` (author's private note
 ## Layout
 
 - `crates/<name>/` — one crate per module (`lore-llm`, `lore-secrets`, `lore-gitsync`, `lore-store`, `kb-core`,
-  `lore-notation`, `lore-notes` (PaperComposer 筆記 files), `lore-voice`, `lore-docsrc`, `lore-canvas`, `lore-ooxml`, `lore-math`, `lore-fonts`, `lore-home`, `lore-flow`, `lore-upscale`, `lore-shell` (serves `ui/icons.js`, `base.css`, `shell.js`),
+  `lore-notation`, `lore-notes` (PaperComposer 筆記 files), `lore-voice`, `lore-docsrc`, `lore-canvas`, `lore-ooxml`, `lore-math`, `lore-fonts`, `lore-home`, `lore-flow` (流程圖: L1 → layout → canvas objects; the figure spec, layout templates, the shared editor `ui/flow/` and its `/flow` routes, `../docs/flow-figures.md`), `lore-upscale`, `lore-shell` (serves `ui/icons.js`, `base.css`, `shell.js`),
   `lore-engines` (the shared 模型 settings: `/api/engines`, `/api/links/open`),
   `lore-catalog` (LoreShelf's read-only file catalog: hashes, time axes, projects, reports, local-only guard),
   `lore-jobs` (long-running background jobs: stages, checkpoints, progress, stop/resume, review wait; SlideComposer's 論文報告, PaperComposer's 寫書),

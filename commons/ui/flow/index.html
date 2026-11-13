@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>流程圖</title>
+<!-- /flow/ in any app that mounts lore_flow::web::router: the editor on its own (SVG download only). -->
+<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/base.css">
+<link rel="stylesheet" href="editor.css">
+<script src="/theme.js"></script>
+<script src="/icons.js"></script>
+<script src="/shell.js"></script>
+<script src="editor.js"></script>
+</head>
+<body>
+<script>
+(async function again() {
+  const q = new URL(location.href).searchParams;
+  let spec = null;
+  if (q.get("spec")) try { spec = await (await fetch(q.get("spec"))).json(); } catch {}
+  await LoreFlow.edit({ api: "/flow/api", title: "新流程圖", spec, source: q.get("source") ?? "" });
+  again();
+})();
+</script>
+</body>
+</html>

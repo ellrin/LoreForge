@@ -578,6 +578,15 @@ pub struct GroupObj {
     /// Child coordinate space (chOff / chExt).
     pub ch: Frame,
     pub children: Vec<Object>,
+    /// One picture: resized with its aspect ratio kept, and text sizes, line
+    /// widths and arrowheads scale with it ([`crate::Op::Scale`]). PPTX:
+    /// `a:grpSpLocks noChangeAspect="1"`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lock_aspect: bool,
+    /// App data riding with the group (a flow figure's spec, …). Not part of the
+    /// PPTX shape: an app keeps it in its own state part to survive a round trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

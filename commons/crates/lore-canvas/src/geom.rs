@@ -307,3 +307,79 @@ pub fn path_vertices(path: &str) -> Vec<(f64, f64)> {
     }
     out
 }
+
+/// Scale an object by `k` about the origin of its parent's space: frame, text
+/// sizes and insets, line widths (arrowheads follow the width), table cell
+/// sizes, and a group's child space and children. A group resized as one
+/// picture ([`crate::Op::Scale`]) uses this on its children.
+pub fn scale_object(o: &mut Object, k: f64) {
+    let sc = |v: Emu| (v as f64 * k).round() as Emu;
+    o.frame.x = sc(o.frame.x);
+    o.frame.y = sc(o.frame.y);
+    o.frame.w = sc(o.frame.w);
+    o.frame.h = sc(o.frame.h);
+    fn text(tb: &mut TextBody, k: f64) {
+        for i in &mut tb.insets {
+            *i = (*i as f64 * k).round() as Emu;
+        }
+        for p in &mut tb.paras {
+            for r in &mut p.runs {
+                r.look.size = (r.look.size * k * 10.0).round() / 10.0;
+            }
+            if let Some(e) = &mut p.end {
+                e.size = (e.size * k * 10.0).round() / 10.0;
+            }
+        }
+    }
+    match &mut o.kind {
+        Kind::Text(sp) | Kind::Shape(sp) => {
+            if let Some(l) = &mut sp.line {
+                l.width_pt *= k;
+            }
+            if let Some(tb) = &mut sp.text {
+                text(tb, k);
+            }
+        }
+        Kind::Connector(c) => {
+            if let Some(l) = &mut c.line {
+                l.width_pt *= k;
+            }
+        }
+        Kind::Picture(p) => {
+            if let Some(l) = &mut p.line {
+                l.width_pt *= k;
+            }
+        }
+        Kind::Group(g) => {
+            g.ch.x = sc(g.ch.x);
+            g.ch.y = sc(g.ch.y);
+            g.ch.w = sc(g.ch.w);
+            g.ch.h = sc(g.ch.h);
+            for c in &mut g.children {
+                scale_object(c, k);
+            }
+        }
+        Kind::Table(t) => {
+            for c in &mut t.cols {
+                *c = sc(*c);
+            }
+            for r in &mut t.rows {
+                r.h = sc(r.h);
+                for c in &mut r.cells {
+                    text(&mut c.text, k);
+                }
+            }
+        }
+        Kind::Locked(_) => {}
+    }
+}
+
+/// `o` resized to `w` wide as one picture: aspect kept, contents scaled
+/// ([`scale_object`]), the top-left corner at (`x`, `y`).
+pub fn scaled_to(o: &Object, x: Emu, y: Emu, w: Emu) -> Object {
+    let k = if o.frame.w > 0 { w as f64 / o.frame.w as f64 } else { 1.0 };
+    let mut n = o.clone();
+    scale_object(&mut n, k);
+    n.frame = Frame { x, y, w: (o.frame.w as f64 * k).round() as Emu, h: (o.frame.h as f64 * k).round() as Emu, ..o.frame.clone() };
+    n
+}

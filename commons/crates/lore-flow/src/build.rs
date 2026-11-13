@@ -321,19 +321,34 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
     objects.extend(labels);
 
     // legend
-    for l in &lay.legend {
-        let mut line = modules::seg("", l.line.0, l.line.1, stroke_of(theme, l.kind, k));
+    for (li, l) in lay.legend.iter().enumerate() {
+        let key = if l.boxed.is_some() { format!("box{li}") } else { l.kind.as_str().to_string() };
+        let mut line = match &l.boxed {
+            Some((fill, stroke)) => {
+                let (a, b) = l.line;
+                let paint = if fill == "none" { Paint::None } else { Paint::solid(fill) };
+                let st = if stroke == "none" { None } else { Some(Stroke::new(stroke, 0.75 * k)) };
+                modules::shape("", "rect", a.0, a.1, b.0 - a.0, b.1 - a.1, paint, st)
+            }
+            None => modules::seg("", l.line.0, l.line.1, stroke_of(theme, l.kind, k)),
+        };
         line.id = id;
-        line.name = format!("flow:{fig}/legend:{}", l.kind.as_str());
+        line.name = format!("flow:{fig}/legend:{key}");
         id += 1;
         objects.push(line);
         let ty = cx.small(&theme.colors.ink);
-        let (mut o, w, h) = cx.text("", l.kind.label(), &ty, 0.0, 0.0);
+        let words = if l.label.is_empty() { l.kind.label() } else { l.label.as_str() };
+        let (mut o, w, h) = cx.text("", words, &ty, 0.0, 0.0);
         o.frame.x = emu(l.text.x);
         o.frame.y = emu(l.text.cy() - h / 2.0);
         let _ = w;
         o.id = id;
-        o.name = format!("flow:{fig}/legend:{}/label", l.kind.as_str());
+        if l.boxed.is_some()
+            && let Some(tb) = o.kind.sp_mut().and_then(|sp| sp.text.as_mut())
+        {
+            tb.paras.iter_mut().for_each(|p| p.align = "l".into());
+        }
+        o.name = format!("flow:{fig}/legend:{key}/label");
         id += 1;
         objects.push(o);
     }

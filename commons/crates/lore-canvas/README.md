@@ -5,10 +5,10 @@
 
 | 模組 | 內容 |
 |---|---|
-| `model` | `Deck` → `Slide`（uid、版面配置、隱藏、備註、動畫、來源）→ `Object`（id、名稱、`Frame` EMU＋旋轉＋翻轉、placeholder）＋ `Kind`：`Text`/`Shape`（`SpObj`：幾何 prst/custom、`Paint`、`Stroke`、`TextBody`、equation）、`Connector`（起訖黏著、箭頭、虛線）、`Picture`（asset、裁切、透明度、外框、白色遮罩、效果）、`Group`（chOff/chExt）、`Table`、`Locked`。文字：`Para`（對齊含左右對齊、兩層、項目符號／編號、行距、段距）→ `Run`（`tag`＋`em`＋`look`；text/br/field/math，math 存 OMML＋LaTeX）。指紋 `object_ks` / `changed_fields` / `untouched` / `slide_k` |
-| `style` | `StyleSystem`（包 `lore_ooxml::style::StylePack`）：`look(tag, em)`、`match_look`（匯入時把格式對回標籤）、`palette_hex`、`color("numbered-circle[2]")`、`check_change`（標籤必須已定義、新顏色必須在色票；匯入的原格式不受限直到被改動）；保留強調 `ghost` |
-| `ops` | `Op`：`set_obj`（JSON pointer）、`insert_obj`、`delete_obj`、`move_obj`、`set_slide`、`insert_slide`、`delete_slide`、`move_slide`、巨集 `group`/`ungroup`；`Editor::apply`（驗證、原子、黏著連接線自動重排）、`undo`、`redo` |
-| `geom` | `bounds`、群組座標、`sites`（連接點：矩形 4 個、橢圓 8 個，依 PowerPoint 順序）、`connector_points`、`reroute`、`snap_site`、`align`、`distribute` |
+| `model` | `Deck` → `Slide`（uid、版面配置、隱藏、備註、動畫、來源）→ `Object`（id、名稱、`Frame` EMU＋旋轉＋翻轉、placeholder）＋ `Kind`：`Text`/`Shape`（`SpObj`：幾何 prst/custom、`Paint`、`Stroke`、`TextBody`、equation）、`Connector`（起訖黏著、箭頭、虛線）、`Picture`（asset、裁切、透明度、外框、白色遮罩、效果）、`Group`（chOff/chExt；`lock_aspect`＝一張圖：等比縮放、字和線一起縮，PPTX 的 `a:grpSpLocks noChangeAspect`；`data`＝app 掛在群組上的資料，例如流程圖的規格，不寫進圖形 XML）、`Table`、`Locked`。文字：`Para`（對齊含左右對齊、兩層、項目符號／編號、行距、段距）→ `Run`（`tag`＋`em`＋`look`；text/br/field/math，math 存 OMML＋LaTeX）。指紋 `object_ks` / `changed_fields` / `untouched` / `slide_k` |
+| `style` | `StyleSystem`（包 `lore_ooxml::style::StylePack`）：`look(tag, em)`、`match_look`（匯入時把格式對回標籤）、`palette_hex`、`color("numbered-circle[2]")`、`check_change`（標籤必須已定義、新顏色必須在色票；匯入的原格式不受限直到被改動；一張圖（`lock_aspect` 群組）裡的內容是圖，不受這些規則）；保留強調 `ghost` |
+| `ops` | `Op`：`set_obj`（JSON pointer）、`insert_obj`、`delete_obj`、`move_obj`、`set_slide`、`insert_slide`、`delete_slide`、`move_slide`、巨集 `group`（`lock_aspect`）/`ungroup`/`scale`（一張圖等比縮放到新寬度：字級、內距、線寬（箭頭跟著線寬）、表格尺寸一起乘，展開成整個物件的 `set_obj`，復原是精確的）；`Editor::apply`（驗證、原子、黏著連接線自動重排）、`undo`、`redo` |
+| `geom` | `bounds`、群組座標、`sites`（連接點：矩形 4 個、橢圓 8 個，依 PowerPoint 順序）、`connector_points`、`reroute`、`snap_site`、`align`、`distribute`、`scale_object`、`scaled_to` |
 | `reveal` | `RevealSpec::Ghost { steps, future }`（每步一頁，其他步驟依變淡規則：圖片 alpha、文字灰、線條／填色 alpha、方程式灰）、`Agenda { obj, paras, em }`（每個第一層、有內容的段落一頁，略過空白行與第二層項目；`agenda_items` 列出這些段落；當前項加粗） |
 | `components` | 風格包元件 → 物件：編號圓圈（色序）、模型梯形、標籤卡（群組）、重點框、語意遮罩；`arrow(style)` |
 | `pptx_in` | `import(deck, style, id)`：每個物件保留原 XML＋逐欄位指紋；placeholder 位置與文字樣式依版面配置／母片繼承解析；`backdrops`（版面配置＋母片的非 placeholder 圖形，顯示用）；`cust_path`（custGeom → SVG） |

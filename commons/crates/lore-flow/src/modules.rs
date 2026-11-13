@@ -1557,7 +1557,7 @@ pub fn place(body: Body, name: &str, x: f64, y: f64, first_id: u32) -> (Object, 
     }
     let fr = frame(x, y, body.w, body.h);
     let ch = Frame::new(0, 0, fr.w, fr.h);
-    let mut group = obj(name, fr, Kind::Group(GroupObj { ch, children }));
+    let mut group = obj(name, fr, Kind::Group(GroupObj { ch, children, lock_aspect: false, data: None }));
     group.id = gid;
     (group, id)
 }

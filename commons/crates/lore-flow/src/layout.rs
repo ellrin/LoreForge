@@ -85,6 +85,29 @@ impl PanelTemplate {
     }
 }
 
+/// A legend the author chose (instead of the automatic one): rows of
+/// marks and words, one centred block under (or over) the figure.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LegendChoice {
+    pub rows: Vec<LegendRow>,
+    /// Over the figure instead of under it.
+    pub above: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegendRow {
+    pub label: String,
+    pub mark: LegendMark,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LegendMark {
+    /// A short sample of a line kind as the theme draws it.
+    Line(EdgeKind),
+    /// A small box in these colours (a block type).
+    Box { fill: String, line: String },
+}
+
 #[derive(Debug, Clone)]
 pub struct LayoutOptions {
     /// Where the figure goes on the slide (pt).
@@ -93,12 +116,15 @@ pub struct LayoutOptions {
     pub max_scale: f64,
     /// Used when the graph's `template` names it.
     pub template: Option<PanelTemplate>,
+    /// The author's legend; `None` = automatic (line kinds under, layer
+    /// colours over the figure). `Some` with no rows = no legend.
+    pub legend: Option<LegendChoice>,
 }
 
 impl Default for LayoutOptions {
     fn default() -> Self {
         // a 16:9 slide of 10 in with a margin
-        LayoutOptions { frame: Rect::new(24.0, 24.0, 672.0, 357.0), max_scale: 1.5, template: None }
+        LayoutOptions { frame: Rect::new(24.0, 24.0, 672.0, 357.0), max_scale: 1.5, template: None, legend: None }
     }
 }
 
@@ -145,6 +171,10 @@ pub struct PanelBox {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LegendItem {
     pub kind: EdgeKind,
+    /// The words; empty = the line kind's name.
+    pub label: String,
+    /// Drawn as a box in (fill, line) instead of a line sample.
+    pub boxed: Option<(String, String)>,
     /// Sample line from → to.
     pub line: ((f64, f64), (f64, f64)),
     /// Top-left of the text and its size.
@@ -680,7 +710,49 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         }
     }
     let wanted = g.legend.unwrap_or(kinds.iter().filter(|k| **k != EdgeKind::Data).count() >= 4);
-    if wanted && kinds.len() > 1 {
+    if let Some(choice) = opt.legend.as_ref().filter(|c| !c.rows.is_empty()) {
+        // the author's rows, centred, wrapping at the figure's width
+        let size = theme.small_size();
+        let (sample, sq, sp, between) = (26.0, size * 0.9, 5.0, 16.0);
+        let mark_w = |r: &LegendRow| if matches!(r.mark, LegendMark::Line(_)) { sample } else { sq };
+        let widths: Vec<f64> = choice.rows.iter().map(|r| mark_w(r) + sp + text::width(&r.label, size) + 2.0).collect();
+        let mut rows: Vec<Vec<usize>> = vec![vec![]];
+        let mut cur = 0.0;
+        for (i, w) in widths.iter().enumerate() {
+            if cur + w > bounds.w.max(240.0) && !rows.last().unwrap().is_empty() {
+                rows.push(vec![]);
+                cur = 0.0;
+            }
+            rows.last_mut().unwrap().push(i);
+            cur += w + between;
+        }
+        let lh = size * 1.6;
+        let height = lh * rows.len() as f64;
+        let mut y = if choice.above { bounds.y - gap * 0.6 - height } else { bounds.bottom() + gap * 0.6 };
+        let top = y;
+        for r in rows {
+            let total: f64 = r.iter().map(|i| widths[*i]).sum::<f64>() + between * (r.len() - 1) as f64;
+            let mut x = bounds.x + (bounds.w - total) / 2.0;
+            for i in r {
+                let row = &choice.rows[i];
+                let cy = y + lh / 2.0;
+                let mw = mark_w(row);
+                let (kind, boxed, line) = match &row.mark {
+                    LegendMark::Line(k) => (*k, None, ((x, cy), (x + mw, cy))),
+                    LegendMark::Box { fill, line } => (EdgeKind::Data, Some((fill.clone(), line.clone())), ((x, cy - sq / 2.0), (x + sq, cy + sq / 2.0))),
+                };
+                legend.push(LegendItem { kind, label: row.label.clone(), boxed, line, text: Rect::new(x + mw + sp, y, widths[i] - mw - sp, lh) });
+                x += widths[i] + between;
+            }
+            y += lh;
+        }
+        if choice.above {
+            bounds.h += bounds.y - top;
+            bounds.y = top;
+        } else {
+            bounds.h = y - bounds.y;
+        }
+    } else if opt.legend.is_none() && wanted && kinds.len() > 1 {
         let size = theme.small_size();
         let (sample, sp, between) = (26.0, 5.0, 16.0);
         let widths: Vec<f64> = kinds.iter().map(|k| sample + sp + text::width(k.label(), size) + 2.0).collect();
@@ -701,7 +773,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
             let mut x = bounds.x + (bounds.w - total) / 2.0;
             for i in r {
                 let cy = y + lh / 2.0;
-                legend.push(LegendItem { kind: kinds[i], line: ((x, cy), (x + sample, cy)), text: Rect::new(x + sample + sp, y, widths[i] - sample - sp, lh) });
+                legend.push(LegendItem { kind: kinds[i], label: String::new(), boxed: None, line: ((x, cy), (x + sample, cy)), text: Rect::new(x + sample + sp, y, widths[i] - sample - sp, lh) });
                 x += widths[i] + between;
             }
             y += lh;
@@ -717,7 +789,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
             seen.push(s.clone());
         }
     }
-    if g.legend != Some(false) && seen.len() >= 2 {
+    if opt.legend.is_none() && g.legend != Some(false) && seen.len() >= 2 {
         let size = theme.small_size();
         let (sq, sp, between) = (size * 0.9, 4.0, 12.0);
         let widths: Vec<f64> = seen.iter().map(|s| sq + sp + text::width(&s.label, size) + 2.0).collect();

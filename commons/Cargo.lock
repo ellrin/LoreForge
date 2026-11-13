@@ -1223,12 +1223,16 @@ dependencies = [
 name = "lore-flow"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "axum",
  "base64 0.22.1",
  "lore-canvas",
+ "lore-home",
  "lore-llm",
  "lore-math",
  "lore-notation",
  "lore-ooxml",
+ "lore-shell",
  "serde",
  "serde_json",
  "tempfile",

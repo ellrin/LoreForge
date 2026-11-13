@@ -19,3 +19,24 @@ default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
 offline = true
 max_tokens = 8000
+
+# The discussion before a figure: one short exchange per step (outline, blocks, focus, detail,
+# variables, inputs/outputs); the author decides each step (docs/flow-figures.md §3).
+[task.flow-discuss]
+label = "流程圖討論"
+class = "create"
+needs = { json = true, context = 32000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 3000
+
+# The flow assistant beside the editor: spec values only (changes or alternative layouts), never code.
+[task.flow-assist]
+label = "流程圖助手"
+class = "tidy"
+needs = { json = true, context = 32000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 6000

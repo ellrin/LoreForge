@@ -742,6 +742,8 @@ pub(crate) fn object_of(ctx: &Ctx, s: &Shape) -> Object {
                 kind: Kind::Group(GroupObj {
                     ch,
                     children: g.children.iter().map(|c| object_of(&inner, c)).collect(),
+                    lock_aspect: g.nv.kind.locks.as_ref().and_then(|l| l.attrs.get_bool("noChangeAspect")).unwrap_or(false),
+                    data: None,
                 }),
                 src: None,
             }

@@ -896,6 +896,16 @@ pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
                 }
             };
             set_nv(&mut grp.nv, o, &changed);
+            // one picture: PowerPoint keeps the aspect ratio when it is resized
+            let locked = grp.nv.kind.locks.as_ref().and_then(|l| l.attrs.get_bool("noChangeAspect")).unwrap_or(false);
+            if g.lock_aspect != locked {
+                if g.lock_aspect {
+                    let l = grp.nv.kind.locks.get_or_insert_with(|| lore_ooxml::xml::Element::new("a:grpSpLocks"));
+                    l.attrs.set("noChangeAspect", "1");
+                } else if let Some(l) = grp.nv.kind.locks.as_mut() {
+                    l.attrs.remove("noChangeAspect");
+                }
+            }
             set_xfrm(&mut grp.props.xfrm, &o.frame, "a:xfrm");
             if let Some(x) = grp.props.xfrm.as_mut() {
                 x.ch_off = Some((g.ch.x, g.ch.y));

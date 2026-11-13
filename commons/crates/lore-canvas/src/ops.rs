@@ -51,7 +51,14 @@ pub enum Op {
         id: Option<u32>,
         #[serde(default)]
         name: Option<String>,
+        /// The group is one picture (aspect kept, contents scale with it).
+        #[serde(default)]
+        lock_aspect: bool,
     },
+    /// Macro: resize an object as one picture to `w` wide at (`x`, `y`): the
+    /// aspect ratio is kept and text sizes, line widths and arrowheads scale
+    /// with it (expands to a whole-object `SetObj`, so undo is exact).
+    Scale { slide: String, id: u32, x: Emu, y: Emu, w: Emu },
     /// Macro: dissolve a top-level group, children go to slide space.
     Ungroup { slide: String, id: u32 },
 }
@@ -131,6 +138,18 @@ fn set_ptr(root: &mut Value, path: &str, value: Value) -> Result<Value, OpError>
     }
 }
 
+/// Is object `id` inside a group that is one picture (`lock_aspect`)?
+fn in_locked_group(s: &Slide, id: u32) -> bool {
+    let mut cur = s.locate(id).and_then(|(p, _)| p);
+    while let Some(p) = cur {
+        if matches!(s.find(p).map(|o| &o.kind), Some(Kind::Group(g)) if g.lock_aspect) {
+            return true;
+        }
+        cur = s.locate(p).and_then(|(pp, _)| pp);
+    }
+    false
+}
+
 impl Editor {
     pub fn new(deck: Deck, style: Option<StyleSystem>) -> Self {
         Editor {
@@ -157,6 +176,7 @@ impl Editor {
                 ids,
                 id,
                 name,
+                lock_aspect,
             } => {
                 let s = self
                     .deck
@@ -185,7 +205,7 @@ impl Editor {
                     hidden: false,
                     ph: None,
                     slot: None,
-                    kind: Kind::Group(GroupObj { ch: b, children }),
+                    kind: Kind::Group(GroupObj { ch: b, children, lock_aspect, data: None }),
                     src: None,
                 };
                 let mut out: Vec<Op> = ids
@@ -202,6 +222,21 @@ impl Editor {
                     obj: g,
                 });
                 Ok(out)
+            }
+            Op::Scale { slide, id, x, y, w } => {
+                let s = self
+                    .deck
+                    .slide(&slide)
+                    .ok_or_else(|| OpError::NoSlide(slide.clone()))?;
+                let (parent, idx) = s.locate(id).ok_or(OpError::NoObject(id))?;
+                if parent.is_some() {
+                    return Err(OpError::Bad("只能縮放最上層物件".into()));
+                }
+                if w <= 0 {
+                    return Err(OpError::Bad("寬度必須大於 0".into()));
+                }
+                let value = serde_json::to_value(geom::scaled_to(&s.objects[idx], x, y, w)).map_err(|e| OpError::Bad(e.to_string()))?;
+                Ok(vec![Op::SetObj { slide, id, path: String::new(), value }])
             }
             Op::Ungroup { slide, id } => {
                 let s = self
@@ -252,10 +287,12 @@ impl Editor {
                 path,
                 value,
             } => {
+                // inside one picture (a figure group) the style rules do not apply
+                let in_picture = validate && self.deck.slide(slide).is_some_and(|s| in_locked_group(s, *id));
                 let s = self.slide_mut(slide)?;
                 let o = s.find_mut(*id).ok_or(OpError::NoObject(*id))?;
                 let mut v = serde_json::to_value(&*o).map_err(|e| OpError::Bad(e.to_string()))?;
-                let before = if validate { Some(v.clone()) } else { None };
+                let before = if validate && !in_picture { Some(v.clone()) } else { None };
                 let old = set_ptr(&mut v, path, value.clone())?;
                 if let Some(b) = &before {
                     self.check(Some(b), &v)?;
@@ -395,7 +432,7 @@ impl Editor {
                     index: i,
                 })
             }
-            Op::Group { .. } | Op::Ungroup { .. } => Err(OpError::Bad("macro not expanded".into())),
+            Op::Group { .. } | Op::Ungroup { .. } | Op::Scale { .. } => Err(OpError::Bad("macro not expanded".into())),
         }
     }
 

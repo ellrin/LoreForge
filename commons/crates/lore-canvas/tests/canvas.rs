@@ -225,7 +225,7 @@ fn undo_redo_and_grouping() {
     let before = cd.clone();
     let mut ed = Editor::new(cd, Some(style()));
     let s = ed.deck.slides[1].uid.clone();
-    ed.apply(vec![Op::Group { slide: s.clone(), ids: vec![3, 4], id: Some(50), name: None }], "group").unwrap();
+    ed.apply(vec![Op::Group { slide: s.clone(), ids: vec![3, 4], id: Some(50), name: None, lock_aspect: false }], "group").unwrap();
     assert!(matches!(ed.deck.slides[1].find(50).unwrap().kind, Kind::Group(_)));
     assert!(ed.deck.slides[1].objects.iter().all(|o| o.id != 3));
     ed.apply(vec![Op::Ungroup { slide: s.clone(), id: 50 }], "ungroup").unwrap();
@@ -245,6 +245,60 @@ fn undo_redo_and_grouping() {
     assert_eq!(ed.deck.slides[0].uid, s);
     ed.undo().unwrap();
     assert_eq!(ed.deck.slides.len(), 2);
+}
+
+#[test]
+fn one_picture_scales_text_lines_and_keeps_its_aspect() {
+    let (od, cd) = load();
+    let mut ed = Editor::new(cd, Some(style()));
+    let s = ed.deck.slides[1].uid.clone();
+    // a figure group: off-palette colours and untagged text inside are allowed (drawn content)
+    ed.apply(vec![Op::Group { slide: s.clone(), ids: vec![3, 4], id: Some(60), name: Some("flow:demo".into()), lock_aspect: true }], "picture").unwrap();
+    let g0 = ed.deck.slides[1].find(60).unwrap().clone();
+    let Kind::Group(gg) = &g0.kind else { panic!() };
+    assert!(gg.lock_aspect);
+    let size0 = |o: &Object| -> Vec<f64> {
+        let mut v = vec![];
+        fn walk(o: &Object, v: &mut Vec<f64>) {
+            if let Some(tb) = o.kind.sp().and_then(|sp| sp.text.as_ref()) {
+                v.extend(tb.paras.iter().flat_map(|p| p.runs.iter().map(|r| r.look.size)));
+            }
+            if let Some(l) = o.kind.sp().and_then(|sp| sp.line.as_ref()) {
+                v.push(l.width_pt);
+            }
+            if let Kind::Group(g) = &o.kind {
+                g.children.iter().for_each(|c| walk(c, v));
+            }
+        }
+        walk(o, &mut v);
+        v
+    };
+    let before = size0(&g0);
+    assert!(!before.is_empty());
+    let w = g0.frame.w * 3 / 2;
+    ed.apply(vec![Op::Scale { slide: s.clone(), id: 60, x: g0.frame.x, y: g0.frame.y, w }], "縮放").unwrap();
+    let g1 = ed.deck.slides[1].find(60).unwrap().clone();
+    assert_eq!(g1.frame.w, w);
+    let ar0 = g0.frame.w as f64 / g0.frame.h as f64;
+    let ar1 = g1.frame.w as f64 / g1.frame.h as f64;
+    assert!((ar0 - ar1).abs() < 1e-3, "aspect kept");
+    for (a, b) in before.iter().zip(size0(&g1)) {
+        assert!((b - a * 1.5).abs() < 0.06, "{a} → {b}");
+    }
+    // editing text inside the picture is not held to the slide's text tags
+    let Kind::Group(g) = &g1.kind else { panic!() };
+    let child = g.children.iter().find(|c| c.kind.sp().is_some_and(|sp| sp.text.is_some())).unwrap().id;
+    ed.apply(vec![Op::SetObj { slide: s.clone(), id: child, path: "/text/paras/0/runs/0/tag".into(), value: serde_json::Value::Null }], "text").unwrap();
+    // one undo step back to the old size
+    ed.undo().unwrap();
+    ed.undo().unwrap();
+    assert_eq!(ed.deck.slides[1].find(60).unwrap(), &g0);
+    // the lock survives the PPTX
+    ed.redo().unwrap();
+    let bytes = pptx_out::export_bytes(&ed.deck, &od, Some(&style()), &no_assets).unwrap();
+    let back = pptx_in::import(&ODeck::from_bytes(&bytes).unwrap(), Some(&style()), None);
+    let g = back.slides[1].objects.iter().find(|o| o.name == "flow:demo").expect("group kept");
+    assert!(matches!(&g.kind, Kind::Group(x) if x.lock_aspect));
 }
 
 #[test]
