@@ -470,10 +470,15 @@ const PCContext = (() => {
     for (let k = 2; used.has(fname); k++) fname = `${stem}-${k}.${ext}`;
     const up = await fetch(`${base()}/figures?file=${encodeURIComponent(fname)}`, { method: "POST", body: f });
     if (!up.ok) { LoreShell.toast(await up.text(), { ms: 6000 }); return false; }
+    return placeFile(at, was, `figures/${fname}`, caption, stem);
+  }
+
+  /** The figure block for a file already in figures/ (新增圖…, 繪圖…): label, \ref at the click, checks. */
+  async function placeFile(at, was, path, caption, stem) {
     const n = Object.values(PCTex.kinds).filter((k) => k === "fig").length + 1;
     const label = newLabel("fig", caption || stem, n);
     const capLines = [`  \\caption{${texText(caption)}}`, `  \\label{${label}}`];
-    const img = `  \\includegraphics[width=\\linewidth]{figures/${fname}}`;
+    const img = `  \\includegraphics[width=\\linewidth]{${path}}`;
     const body = state.paper.captions?.figure === "above" ? [...capLines, img] : [img, ...capLines];
     const block = ["\\begin{figure}[t]", "  \\centering", ...body, "\\end{figure}"].join("\n");
     const now = withRef(at, was, "fig", label);
@@ -487,6 +492,18 @@ const PCContext = (() => {
     land(at, was);
     unmark();
     return true;
+  }
+
+  /** 繪圖…: the shared plot editor (figplot.js), then the same insertion as 新增圖…. */
+  async function plotFigure(at) {
+    keepMarker();
+    const r = await PCPlot.create();
+    if (!r) { unmark(); return; }
+    await settle();
+    const was = fresh(at);
+    if (was == null) { unmark(); return; }
+    const stem = r.file.split("/").pop().replace(/\.pdf$/, "");
+    if (!(await placeFile(at, was, r.file, r.caption, stem))) unmark();
   }
 
   // ── clipboard ──
@@ -599,6 +616,7 @@ const PCContext = (() => {
     }
     if (window.PCKbCards) add("cards", "知識卡…", () => { cards(at); });
     add("image", "新增圖…", () => { figure(at); });
+    if (window.PCPlot) add("chart", "繪圖…", () => { plotFigure(at); });
     add("tableStyle", "新增表…", () => { table(at); });
     if (d.text.trim()) {
       sep();

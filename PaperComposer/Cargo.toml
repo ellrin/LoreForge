@@ -27,3 +27,4 @@ lore-fonts = { path = "../commons/crates/lore-fonts" }
 # 知識卡 (kb.rs): KnowledgeBase's cards, read-only.
 kb-core = { path = "../commons/crates/kb-core" }
 lore-store = { path = "../commons/crates/lore-store" }
+lore-plot = { path = "../commons/crates/lore-plot" }

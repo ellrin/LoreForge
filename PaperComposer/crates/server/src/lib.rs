@@ -18,6 +18,7 @@ mod books; // 寫書: books.toml and 新書
 mod home;
 mod notation;
 mod notes; // notes.js: 筆記 (lore-notes files in the workspace's notes/)
+mod plot; // figplot.js: 繪圖 (lore-plot editor, figures/<stem>.pdf + .plot.json)
 mod newtemplate; // templates.js: 新增期刊 from a LaTeX kit or a Word sample, rules from the guidelines
 mod sections;
 mod shell; // the shared Lore shell: its files, 列印, 另存新檔
@@ -3362,6 +3363,7 @@ pub fn router(paths: Paths) -> Router {
         .merge(notes::routes())
         .merge(shell::routes())
         .merge(todeck::routes())
+        .merge(plot::routes(&state))
         // GET/PUT /api/engines (the gear's 模型) and POST /api/links/open, shared by every app
         .merge(lore_engines::router(engines_settings(&state)))
         // the UI is read fresh each time: a new server must not meet an old script
@@ -3374,6 +3376,7 @@ pub fn router(paths: Paths) -> Router {
 /// real engine.toml routing.
 fn engines_settings(state: &Shared) -> lore_engines::Engines {
     let mut e = lore_engines::Engines::new(loreforge_home(), "PaperComposer", include_str!("../tasks.toml"))
+        .with_tasks(lore_plot::propose::task_table())
         .layout(state.llm.layout.clone())
         .cli(state.llm.cli.clone(), state.llm.cc.clone())
         .claude_model(Some(state.llm.model()));
