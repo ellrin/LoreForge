@@ -578,6 +578,16 @@ impl MathSource for NoMath {
     }
 }
 
+/// Keeps every `$…$` as a math run with its LaTeX (no Office Math): for drawings whose maths
+/// are typeset later from the LaTeX (a paper figure: KaTeX in the page, TeX glyphs in the PDF).
+pub struct TexMath;
+
+impl MathSource for TexMath {
+    fn omml(&self, _: &str, _: f64) -> Option<String> {
+        Some(String::new())
+    }
+}
+
 /// pandoc (through lore-math), with a cache per formula and size.
 pub struct PandocMath {
     pandoc: lore_math::Pandoc,
@@ -648,7 +658,7 @@ pub fn runs(s: &str, ty: &Type, vars: &Vars, math: &dyn MathSource) -> (Vec<Run>
                     let look = Look { font: ty.math_font.clone(), size: ty.size, color: ty.color.clone(), ..Look::default() };
                     let mut r = text_run(&m, look);
                     r.kind = "math".into();
-                    r.omml = Some(if ty.color != "000000" { recolor(&omml, &ty.color) } else { omml });
+                    r.omml = Some(if ty.color != "000000" && !omml.is_empty() { recolor(&omml, &ty.color) } else { omml });
                     r.latex = Some(m.clone());
                     out.push(r);
                 } else {

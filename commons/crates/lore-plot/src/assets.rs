@@ -4,6 +4,7 @@
 /// `(path under /plot/, content type, bytes)`.
 pub const FILES: &[(&str, &str, &[u8])] = &[
     ("index.html", "text/html; charset=utf-8", include_bytes!("../web/index.html")),
+    ("mathsvg.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/mathsvg.js")),
     ("plot.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/plot.js")),
     ("charts.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/charts.js")),
     ("charts3d.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/charts3d.js")),
@@ -43,7 +44,7 @@ pub const KATEX_FONTS: &[(&str, &[u8])] = &[
 ];
 
 /// The scripts a page loads, in order, before `LorePlot.edit` / `LorePlot.render` work.
-pub const SCRIPTS: &[&str] = &["plot.js", "charts.js", "charts3d.js", "formats.js", "editor.js"];
+pub const SCRIPTS: &[&str] = &["mathsvg.js", "plot.js", "charts.js", "charts3d.js", "formats.js", "editor.js"];
 
 /// A file by its path under `/plot/`.
 pub fn get(path: &str) -> Option<(&'static str, &'static [u8])> {

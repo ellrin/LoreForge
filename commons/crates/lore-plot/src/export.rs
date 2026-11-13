@@ -372,7 +372,7 @@ pub fn render_spec(tools: &Tools, spec_json: &str, styles: &serde_json::Value) -
         let page = format!(
             "<!doctype html><meta charset=\"utf-8\"><body><pre id=\"out\"></pre>\n\
 <script>window.__F={{\"palettes.json\":{pal},\"formats.json\":{fmt}}};const __f=window.fetch;window.fetch=(u,o)=>{{const n=String(u).split('/').pop();return n in window.__F?Promise.resolve({{ok:true,json:async()=>window.__F[n]}}):__f(u,o);}};</script>\n\
-<script src=\"plot.js\"></script><script src=\"charts.js\"></script><script src=\"charts3d.js\"></script><script src=\"formats.js\"></script>\n\
+<script src=\"mathsvg.js\"></script><script src=\"plot.js\"></script><script src=\"charts.js\"></script><script src=\"charts3d.js\"></script><script src=\"formats.js\"></script>\n\
 <script>LorePlot.render({spec},{{styles:{styles}}}).then(r=>{{document.getElementById('out').textContent=r.svg;}}).catch(e=>{{document.getElementById('out').textContent='ERROR '+e;}});</script>\n",
             pal = safe(&json_of("palettes.json")),
             fmt = safe(&json_of("formats.json")),

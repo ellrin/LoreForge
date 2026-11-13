@@ -115,7 +115,7 @@ fn palettes_are_static_and_readable_on_white() {
     // a copy of each of the 20 app themes (values copied, never theme tokens)
     assert_eq!(themes, 20);
     assert!(!include_str!("../../../ui/plot/palettes.json").contains("var(--"));
-    for f in ["plot.js", "charts.js", "charts3d.js"] {
+    for f in ["../mathsvg.js", "plot.js", "charts.js", "charts3d.js"] {
         let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/plot").join(f)).unwrap();
         for token in ["--accent", "--text", "--bg", "--panel", "--line", "--muted", "--paper", "--surface", "--ok", "--warn", "--err"] {
             assert!(!src.contains(&format!("var({token}")), "{f}: figures never use theme tokens ({token})");
@@ -375,6 +375,10 @@ fn paper_figures_never_overwrite_the_authors_files() {
     assert_eq!(figure::free_stem(&dir, "bars", true), "bars");
     assert_eq!(figure::free_stem(&dir, "bars", false), "bars-2");
     assert_eq!(figure::spec_next_to(&dir.join("bars.pdf")).unwrap(), spec);
+    // a flow figure's PDF is not the plotting tool's to replace
+    std::fs::write(dir.join("method.pdf"), b"%PDF flow").unwrap();
+    std::fs::write(dir.join("method.flow.json"), b"{}").unwrap();
+    assert_eq!(figure::free_stem(&dir, "method", true), "method-2");
     assert!(figure::spec_next_to(&dir.join("results.pdf")).is_none());
     assert_eq!(std::fs::read(dir.join("results.pdf")).unwrap(), b"%PDF mine");
     // no temp files left

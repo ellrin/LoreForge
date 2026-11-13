@@ -85,14 +85,56 @@ pub struct Record {
     pub license: Option<String>,
 }
 
-/// May a figure of a paper under this licence be reproduced (with attribution) in the
-/// author's own notes? Only CC BY, CC BY-SA, CC0 and public domain: NonCommercial and
-/// NoDerivatives licences, publisher licences and unstated ones are redrawn or described instead.
+/// A licence as one canonical Creative Commons id (`by`, `by-sa`, `by-nc`, `by-nc-sa`,
+/// `by-nc-nd`, `by-nd`, `cc0`, `pd`) and its version when stated; None = not a CC / public-domain
+/// licence (publisher licences, arXiv's non-exclusive licence, unstated).
+pub fn cc_licence(license: &str) -> Option<(&'static str, Option<String>)> {
+    let l = license.trim().to_ascii_lowercase().replace([' ', '_'], "-");
+    let l = l.trim_start_matches("https://").trim_start_matches("http://").trim_start_matches("creativecommons.org/licenses/").trim_start_matches("creativecommons.org/publicdomain/").trim_end_matches('/').to_string();
+    if matches!(l.as_str(), "cc0" | "zero" | "public-domain" | "pd" | "publicdomain") || l.starts_with("zero/") || l.starts_with("cc0-") {
+        return Some(if l.contains("cc0") || l.starts_with("zero") { ("cc0", None) } else { ("pd", None) });
+    }
+    let l = l.trim_start_matches("cc-").replace('/', "-");
+    // by-nc-sa-4.0 → ("by-nc-sa", 4.0)
+    let mut parts: Vec<&str> = l.split('-').collect();
+    let version = parts.last().filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit())).map(|v| v.to_string());
+    if version.is_some() {
+        parts.pop();
+    }
+    let id = match parts.join("-").as_str() {
+        "by" => "by",
+        "by-sa" => "by-sa",
+        "by-nc" => "by-nc",
+        "by-nc-sa" => "by-nc-sa",
+        "by-nc-nd" | "by-nd-nc" => "by-nc-nd",
+        "by-nd" => "by-nd",
+        _ => return None,
+    };
+    Some((id, version))
+}
+
+/// The licence as a caption names it: `CC BY-NC 4.0`, `CC0`, `public domain`.
+pub fn licence_label(license: &str) -> Option<String> {
+    let (id, v) = cc_licence(license)?;
+    Some(match id {
+        "cc0" => "CC0".into(),
+        "pd" => "public domain".into(),
+        _ => format!("CC {}{}", id.to_uppercase(), v.map(|v| format!(" {v}")).unwrap_or_default()),
+    })
+}
+
+/// May a figure of a paper under this licence be reproduced in the author's own study notes
+/// (a book for himself), always with a citation and the licence in the caption? Every Creative
+/// Commons licence (NonCommercial and NoDerivatives too: the notes are not sold and the figure is
+/// reproduced unchanged), CC0 and public domain. Unstated, publisher and all-rights-reserved
+/// licences (arXiv's non-exclusive one included) are redrawn from numbers or described instead.
 pub fn figure_reuse_allowed(license: Option<&str>) -> bool {
-    let Some(l) = license else { return false };
-    let l = l.trim().to_ascii_lowercase().replace([' ', '_'], "-");
-    let l = l.trim_start_matches("https://creativecommons.org/licenses/").trim_end_matches('/');
-    matches!(l, "cc-by" | "cc-by-sa" | "cc0" | "public-domain" | "pd" | "publicdomain") || l.starts_with("cc-by-4") || l.starts_with("cc-by-3") || l.starts_with("cc-by-sa-") || l.starts_with("by/") || l.starts_with("by-sa/")
+    license.and_then(cc_licence).is_some()
+}
+
+/// The stricter rule for a publication (a paper): CC BY, CC BY-SA, CC0 and public domain only.
+pub fn figure_reuse_allowed_published(license: Option<&str>) -> bool {
+    matches!(license.and_then(cc_licence).map(|l| l.0), Some("by" | "by-sa" | "cc0" | "pd"))
 }
 
 impl Record {

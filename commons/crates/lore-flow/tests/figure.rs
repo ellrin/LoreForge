@@ -321,3 +321,21 @@ fn a_flow_picture_scales_as_one_and_exports() {
 
 #[allow(dead_code)]
 fn _unused(_: Arc<()>) {}
+
+#[test]
+fn a_paper_figure_keeps_its_latex_for_tex_glyphs_and_has_a_print_size() {
+    let cat = Catalogue::builtin();
+    let s = FlowSpec { frame: Some([496.0, 300.0]), ..spec() };
+    let (fig, _) = render(&s, &cat, None, &TexMath, s.frame_rect(), 2).unwrap();
+    let svg = svg_mm(&fig);
+    // print size in mm on the root (lore-plot's PDF export reads it)
+    let head = &svg[svg.find("<svg").unwrap()..];
+    let head = &head[..head.find('>').unwrap()];
+    assert!(head.contains("mm\"") && head.contains("width=\"") && head.contains("height=\""), "{head}");
+    // each line with maths carries its LaTeX source for KaTeX
+    assert!(svg.contains("data-tex=\"$\\mathbf{x}$\""), "{}", &svg[..svg.len().min(400)]);
+    assert!(svg.contains("data-tex=\"$\\mathcal{L}_{seg}$\""));
+    // without TexMath (previews) nothing is marked
+    let (fig, _) = render(&s, &cat, None, &NoMath, s.frame_rect(), 2).unwrap();
+    assert!(!preview_svg(&fig, 400.0).contains("data-tex"));
+}

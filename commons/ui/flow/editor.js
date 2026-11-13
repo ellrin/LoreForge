@@ -78,6 +78,44 @@
   const DASH_SVG = { solid: "", dash: "4 3", sysDash: "3 1", sysDot: "1 1", lgDash: "8 3", dashDot: "4 3 1 3", lgDashDot: "8 3 1 3" };
   const LINE_NAMES = { data: "資料流", supervision: "監督", feedback: "回饋", "loss-out": "損失輸出", compare: "比較", optional: "可選", shared: "共享權重", skip: "跳接", concat: "串接", down: "降採樣", up: "升採樣", cross: "跨 block", stage: "階段", repeat: "重複", zoom: "放大" };
 
+  /**
+   * The figure for a paper: its print size in mm, every line holding LaTeX set again with TeX glyphs
+   * (KaTeX flattened into SVG by the shared commons/ui/mathsvg.js, as the plotting tool does), so the
+   * PDF the server prints has real maths. `macros`: the document's registered macros.
+   */
+  LF.paperSvg = async function ({ spec, api = "/flow/api", doc = "", macros = {} }) {
+    const base = api.replace(/\/api$/, "");
+    const r = await fetch(`${api}/svg`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ spec, doc, tex: true }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `${r.status}`);
+    const text = await r.text();
+    if (!window.LoreMathSvg) await new Promise((ok, no) => { const sc = h("script", { src: `${base}/mathsvg.js` }); sc.onload = ok; sc.onerror = () => no(new Error("讀不到 mathsvg.js")); document.head.append(sc); });
+    const MS = window.LoreMathSvg;
+    await MS.loadKatex(`${base}/katex/`);
+    const dom = new DOMParser().parseFromString(text, "image/svg+xml");
+    const lines = [...dom.querySelectorAll("text[data-tex]")];
+    const fontOf = (el) => {
+      const f = el.getAttribute("data-font") || "";
+      return f === "KaTeX_Main" || !f ? "KaTeX_Main, 'Times New Roman', serif" : `'${f}', Carlito, 'Helvetica Neue', Arial, sans-serif`;
+    };
+    // the fonts load before anything is measured (measurements are cached)
+    const host = MS.ensureHost();
+    const probe = document.createElement("span");
+    probe.className = "lp-t";
+    probe.innerHTML = lines.map((el) => MS.htmlOf(el.getAttribute("data-tex"), macros)).join(" ");
+    host.append(probe);
+    try { await document.fonts.ready; } catch {}
+    probe.remove();
+    for (const el of lines) {
+      const m = MS.measure(el.getAttribute("data-tex"), { family: fontOf(el), size: +el.getAttribute("data-size") || 10, weight: el.getAttribute("data-bold") ? 700 : 400, math: "katex", color: el.getAttribute("data-color") || "#000" }, macros);
+      const anchor = el.getAttribute("text-anchor") || "start";
+      const g = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${m.place(+el.getAttribute("x"), +el.getAttribute("y"), { anchor })}</svg>`, "image/svg+xml").documentElement.firstElementChild;
+      if (!g) continue;
+      const node = dom.importNode(g, true);
+      if (el.getAttribute("transform")) { const w = dom.createElementNS("http://www.w3.org/2000/svg", "g"); w.setAttribute("transform", el.getAttribute("transform")); w.append(node); el.replaceWith(w); } else el.replaceWith(node);
+    }
+    return new XMLSerializer().serializeToString(dom.documentElement);
+  };
+
   LF.edit = function (opts = {}) {
     return new Promise((resolve) => openEditor(opts, resolve));
   };

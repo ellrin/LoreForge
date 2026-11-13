@@ -529,6 +529,29 @@ pub fn preview_svg(fig: &Figure, width_px: f64) -> String {
     crate::preview::svg(&objs, b.w, b.h, zoom)
 }
 
+/// The figure as an SVG file of its print size (`width`/`height` in mm, 1 pt = 25.4/72 mm),
+/// cropped to it: a paper figure (lore-plot's PDF export reads the mm size).
+pub fn svg_mm(fig: &Figure) -> String {
+    let b = fig.layout.bounds.inflate(6.0);
+    let svg = preview_svg(fig, b.w);
+    let mm = |v: f64| format!("{:.2}mm", v * 25.4 / 72.0);
+    let Some(start) = svg.find("<svg") else { return svg };
+    let end = start + svg[start..].find('>').unwrap_or(0);
+    let head = &svg[start..end];
+    let set = |head: &str, k: &str, v: &str| -> String {
+        match head.find(&format!(" {k}=\"")) {
+            Some(i) => {
+                let j = i + k.len() + 3;
+                let close = j + head[j..].find('"').unwrap_or(0);
+                format!("{}{v}{}", &head[..j], &head[close..])
+            }
+            None => head.to_string(),
+        }
+    };
+    let head = set(&set(head, "width", &mm(b.w)), "height", &mm(b.h));
+    format!("{}{}{}", &svg[..start], head, &svg[end..])
+}
+
 /// The drawn objects as one picture: a group named `flow:<fig>` that keeps its
 /// aspect ratio (text, line widths and arrowheads scale with it) and carries the
 /// spec, ready to insert (`id` = the group's id).

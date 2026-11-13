@@ -30,7 +30,9 @@ let rep = import_into_reader(&*c.http(), "http://127.0.0.1:7890", &files).await;
 - `Record`: `title, authors, year, venue, doi` (bare, lower-case), `arxiv` (no version),
   `abstract, is_oa, pdf_url` (an OA PDF only), `url, source, sources, citations`, `license` (the OA copy's
   licence as OpenAlex `best_oa_location.license` / S2 `openAccessPdf.license` name it; None = not stated).
-  `figure_reuse_allowed(license)`: CC BY, CC BY-SA, CC0, public domain only (NC / ND / publisher / unknown: no).
+  `figure_reuse_allowed(license)` (the author's own study notes): every Creative Commons licence — NC and ND too —,
+  CC0, public domain; publisher, all-rights-reserved and unknown: no. `figure_reuse_allowed_published` (a paper):
+  CC BY, CC BY-SA, CC0, public domain only. `cc_licence` (canonical id + version), `licence_label` (`CC BY-NC 4.0`).
   OpenAlex labels arXiv copies `cc-by` whatever the authors chose: `Client::arxiv_license(id)` reads the licence
   arXiv states (OAI-PMH, `arxiv::oai_license`; none named = `arxiv-nonexclusive`, arXiv's default). JSON:
   `source` is `openalex | arxiv | s2`, the abstract is `abstract`.

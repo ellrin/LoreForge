@@ -49,7 +49,8 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// `replace` and the PDF there was made by this tool (its spec is next to it).
 pub fn free_stem(dir: &Path, stem: &str, replace: bool) -> String {
     let ours = |s: &str| dir.join(format!("{s}.plot.json")).is_file();
-    let taken = |s: &str| dir.join(format!("{s}.pdf")).exists() || dir.join(format!("{s}.plot.json")).exists();
+    // a flow figure's PDF (`.flow.json` next to it) belongs to the flow editor, not to this tool
+    let taken = |s: &str| dir.join(format!("{s}.pdf")).exists() || dir.join(format!("{s}.plot.json")).exists() || dir.join(format!("{s}.flow.json")).exists();
     if replace && ours(stem) || !taken(stem) {
         return stem.to_string();
     }

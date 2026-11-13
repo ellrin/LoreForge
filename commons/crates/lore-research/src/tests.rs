@@ -300,13 +300,23 @@ fn licence_from_openalex_and_reuse_rule() {
     let gold = recs.iter().find(|r| r.title.starts_with("Gold")).unwrap();
     assert_eq!(gold.license.as_deref(), Some("cc-by"));
     assert!(recs.iter().find(|r| r.title.starts_with("Sparse")).unwrap().license.is_none());
-    for ok in ["cc-by", "CC BY", "cc-by-sa", "cc0", "public-domain", "https://creativecommons.org/licenses/by/4.0/"] {
+    // the author's own study notes: every CC licence, CC0, public domain — with a citation and the licence in the caption
+    for ok in ["cc-by", "CC BY", "cc-by-sa", "cc0", "public-domain", "https://creativecommons.org/licenses/by/4.0/", "cc-by-nc", "cc-by-nc-sa", "cc-by-nc-nd", "https://creativecommons.org/licenses/by-nc-nd/4.0/", "cc-by-nd"] {
         assert!(crate::figure_reuse_allowed(Some(ok)), "{ok}");
     }
-    for no in ["cc-by-nc", "cc-by-nd", "cc-by-nc-sa", "publisher-specific-oa", "other-oa", ""] {
+    // unknown, publisher, all rights reserved: never
+    for no in ["publisher-specific-oa", "other-oa", "arxiv-nonexclusive", "all-rights-reserved", "implied-oa", ""] {
         assert!(!crate::figure_reuse_allowed(Some(no)), "{no}");
     }
     assert!(!crate::figure_reuse_allowed(None));
+    // a publication keeps the strict rule
+    assert!(crate::figure_reuse_allowed_published(Some("cc-by")) && !crate::figure_reuse_allowed_published(Some("cc-by-nc")));
+    // how a caption names them
+    assert_eq!(crate::licence_label("cc-by-nc").as_deref(), Some("CC BY-NC"));
+    assert_eq!(crate::licence_label("https://creativecommons.org/licenses/by-nc-sa/4.0/").as_deref(), Some("CC BY-NC-SA 4.0"));
+    assert_eq!(crate::licence_label("cc0").as_deref(), Some("CC0"));
+    assert_eq!(crate::licence_label("public-domain").as_deref(), Some("public domain"));
+    assert_eq!(crate::licence_label("other-oa"), None);
 }
 
 #[test]
@@ -318,6 +328,6 @@ fn arxiv_states_its_own_licence() {
     assert_eq!(crate::arxiv::oai_license(&rec("<license>http://creativecommons.org/licenses/by-nc-sa/4.0/</license>")).as_deref(), Some("cc-by-nc-sa"));
     assert_eq!(crate::arxiv::oai_license(&rec("<license>http://creativecommons.org/publicdomain/zero/1.0/</license>")).as_deref(), Some("cc0"));
     assert_eq!(crate::arxiv::oai_license("<error code=\"idDoesNotExist\"/>"), None);
-    assert!(crate::figure_reuse_allowed(Some("cc-by")) && !crate::figure_reuse_allowed(Some("arxiv-nonexclusive")) && !crate::figure_reuse_allowed(Some("cc-by-nc-sa")));
+    assert!(crate::figure_reuse_allowed(Some("cc-by")) && !crate::figure_reuse_allowed(Some("arxiv-nonexclusive")) && crate::figure_reuse_allowed(Some("cc-by-nc-sa")));
     assert!(crate::arxiv::oai_url("arXiv:2401.00001v2").contains("oai%3AarXiv.org%3A2401.00001") || crate::arxiv::oai_url("2401.00001").contains("2401.00001"));
 }

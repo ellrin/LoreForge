@@ -50,7 +50,7 @@ pub use layout::{Layout, LayoutOptions, PanelTemplate, Rect};
 pub use modules::{Library, ModuleTemplate, SaveOptions, template_from_objects};
 pub use route::Route;
 pub use spec::{Edge, EdgeKind, Graph, Node, Panel, SpecError, VarNew};
-pub use text::{MathSource, NoMath, PandocMath, Vars};
+pub use text::{MathSource, NoMath, PandocMath, TexMath, Vars};
 pub use theme::Theme;
 
 /// Everything besides the graph that decides how a figure is drawn.

@@ -159,7 +159,20 @@ fn text_svg(out: &mut String, tb: &TextBody, x: f64, y: f64, w: f64, h: f64, sca
         if p.runs.is_empty() {
             continue;
         }
-        out.push_str(&format!("<text x=\"{}\" y=\"{}\" text-anchor=\"{anchor}\"{rot}>", n(tx), n(base)));
+        // a line holding LaTeX maths says so (its source, size, font, colour), so a page can set it
+        // again with TeX glyphs (KaTeX) in place of the Unicode approximation drawn here
+        let tex = p.runs.iter().any(|r| r.kind == "math" && r.latex.is_some()).then(|| {
+            let src: String = p.runs.iter().map(|r| match (r.kind.as_str(), &r.latex) {
+                ("math", Some(l)) => format!("${l}$"),
+                ("br", _) => " ".to_string(),
+                _ => r.text.replace('$', "\\$"),
+            }).collect();
+            let first = p.runs.iter().find(|r| r.kind != "br");
+            let fam = first.map(|r| if r.kind == "math" { "KaTeX_Main".to_string() } else { r.look.font.clone() }).unwrap_or_default();
+            let bold = p.runs.iter().any(|r| r.kind != "math" && r.look.bold);
+            format!(" data-tex=\"{}\" data-size=\"{}\" data-font=\"{}\" data-color=\"#{}\"{}", esc(&src), n(*size), esc(&fam), first.map(|r| r.look.color.as_str()).unwrap_or("000000"), if bold { " data-bold=\"1\"" } else { "" })
+        }).unwrap_or_default();
+        out.push_str(&format!("<text x=\"{}\" y=\"{}\" text-anchor=\"{anchor}\"{rot}{tex}>", n(tx), n(base)));
         for r in &p.runs {
             let fs = r.look.size * scale;
             let mut span = |text: &str, italic: bool, bold: bool, script: i8, font: &str| {

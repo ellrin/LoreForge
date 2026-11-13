@@ -15,7 +15,7 @@
 //! | `POST /flow/api/discuss` | `{step, source, answers, doc}` → `{say, options, pick, question, rows?, engine}` |
 //! | `POST /flow/api/graph` | `{source, answers, doc}` → `{dsl, linear, vars_new, findings, engine}` |
 //! | `POST /flow/api/assist` | `{mode: adjust｜alternatives, spec, request, doc}` → `{spec, changes, note, question}` ｜ `{alternatives}` |
-//! | `POST /flow/api/svg` | `{spec, doc}` → the figure as an SVG file |
+//! | `POST /flow/api/svg` | `{spec, doc, tex}` → the figure as an SVG file (`tex`: print size in mm, each line with LaTeX maths marked `data-tex` for TeX glyphs — `LoreFlow.paperSvg`) |
 //!
 //! `doc` names the document whose notation registry is in force; the app resolves it
 //! ([`Flow::with_notation`]). The author's own templates, themes, block colours,
@@ -126,6 +126,7 @@ pub const FILES: &[(&str, &str, &[u8])] = &[
     ("index.html", "text/html; charset=utf-8", include_bytes!("../../../ui/flow/index.html")),
     ("editor.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/flow/editor.js")),
     ("editor.css", "text/css; charset=utf-8", include_bytes!("../../../ui/flow/editor.css")),
+    ("mathsvg.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/mathsvg.js")),
     ("katex/katex.min.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/notation-panel/vendor/katex/katex.min.js")),
     ("katex/katex.min.css", "text/css; charset=utf-8", include_bytes!("../../../ui/notation-panel/vendor/katex/katex.min.css")),
 ];
@@ -235,6 +236,9 @@ struct SpecBody {
     doc: String,
     #[serde(default)]
     width: Option<f64>,
+    /// `/svg`: maths kept as LaTeX (`data-tex` on each line) for TeX glyphs, size in mm.
+    #[serde(default)]
+    tex: bool,
 }
 
 #[derive(Deserialize)]
@@ -402,7 +406,9 @@ pub fn router<S: Clone + Send + Sync + 'static>(flow: Flow) -> axum::Router<S> {
                     let spec = match spec_of(b.spec) { Ok(s) => s, Err(r) => return r };
                     let cat = f.catalogue();
                     let n = f.notation_of(&b.doc);
-                    match render(&spec, &cat, n.as_ref(), &NoMath, spec.frame_rect(), 2) {
+                    let math: &dyn crate::MathSource = if b.tex { &crate::TexMath } else { &NoMath };
+                    match render(&spec, &cat, n.as_ref(), math, spec.frame_rect(), 2) {
+                        Ok((fig, _)) if b.tex => ([(header::CONTENT_TYPE, "image/svg+xml")], crate::figure::svg_mm(&fig)).into_response(),
                         Ok((fig, _)) => {
                             let b = fig.layout.bounds;
                             ([(header::CONTENT_TYPE, "image/svg+xml")], preview_svg(&fig, b.w.max(1.0) * 4.0 / 3.0)).into_response()
