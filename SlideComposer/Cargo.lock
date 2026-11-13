@@ -2176,6 +2176,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-jobs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "lore-llm"
 version = "0.1.0"
 dependencies = [
@@ -3432,6 +3441,7 @@ dependencies = [
  "lore-engines",
  "lore-fonts",
  "lore-home",
+ "lore-jobs",
  "lore-llm",
  "lore-math",
  "lore-notation",

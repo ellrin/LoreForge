@@ -1268,6 +1268,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-jobs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "lore-llm"
 version = "0.1.0"
 dependencies = [

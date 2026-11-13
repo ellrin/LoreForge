@@ -71,7 +71,7 @@
 
 ## API（SlideComposer 伺服器）
 
-實作：`SlideComposer/crates/server/src/jobs.rs`（通用的工作執行器）與 `src/todeck/`（這條流程的各階段）。所有路徑在 SlideComposer 的伺服器上；`/api/todeck*` 也回應 127.0.0.1 / localhost 的跨來源 GET/POST（`DELETE` 與 `PUT` 只給 SlideComposer 自己的頁面）。時間是 Unix 毫秒。錯誤：HTTP 狀態碼 + `{ "error": "一行中文" }`。
+實作：`commons/crates/lore-jobs`（通用的工作執行器，SlideComposer 以 `sc_server::jobs` 轉出）與 `src/todeck/`（這條流程的各階段）。所有路徑在 SlideComposer 的伺服器上；`/api/todeck*` 也回應 127.0.0.1 / localhost 的跨來源 GET/POST（`DELETE` 與 `PUT` 只給 SlideComposer 自己的頁面）。時間是 Unix 毫秒。錯誤：HTTP 狀態碼 + `{ "error": "一行中文" }`。
 
 ### 工作物件（job）
 
