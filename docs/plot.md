@@ -177,6 +177,10 @@
 （`theme-<id>`：從 theme.css 複製一次、加深到白紙上對比 ≥ 3:1；圖永遠不跟 app 主題變）。
 `series.ours = true`：這條用強調色（`colors.emphasis`，預設色盤第一色），其他系列向灰色淡化（`colors.mute`）；只有一個系列、「我們的」是一個類別時用 `opts.emphasis: ["Ours"]`（B1 會自動選名字是 Ours／Proposed 的類別）。每個樣式都套用同一規則。`opts.highlight` 指定要突出的系列，其他變灰。
 公開樣式與標為色盲友善的色盤，前五色在紅綠、藍黃色盲模擬下兩兩 ΔE ≥ 10（測試檢查）。
+顏色規則（`formats.json` 的 `rules.colour`，助手照著做）：強調色只給標為「我們的」系列或類別，且是整組最深的顏色；基準方法較淺、照資料順序；
+只有一個系列又沒標「我們的」時用樣式的中性色（`colors.single`，可選 `opts.ramp` 依數值由淺到深），從不用強調色；不是方法比較的系列
+（訓練／驗證、指標、類別）不用強調色，訓練曲線驗證實線、訓練虛線（L1）。ROC／PR 與嵌入圖不畫格線；放大小圖 0.4 pt 細框、淡色連線、不畫格線；
+誤差線 0.6 pt、端點約 2 pt（`bars.err_width`、`bars.cap`）；盒鬚圖填色 60%（`box.alpha`）；有框圖例可用 0.3 pt 淺灰框（`legend.frame = "light"`、`frame_width`、`frame_color`）。
 
 ### 組合圖（一張圖 ＝ 版面＋多格）
 

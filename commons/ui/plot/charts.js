@@ -21,17 +21,23 @@
     const anyOurs = list.some((q) => q.ours);
     let fill = pal[i % pal.length];
     let color = kind === "line" && lines ? lines[i % lines.length] : fill;
+    // emphasis only for a series marked "ours" (the darkest colour); baselines lighter, in data order
+    const emph = st.colors.emphasis;
+    const separate = !!emph && !pal.includes(emph);
     if (s.ours) {
-      fill = color = st.colors.emphasis || (kind === "line" && lines ? lines[0] : pal[0]);
+      fill = color = emph || (kind === "line" && lines ? lines[0] : pal[0]);
     } else if (anyOurs) {
       const k = list.filter((q) => !q.ours).indexOf(s);
-      const b = pal[(k + 1) % pal.length], c2 = kind === "line" && lines ? lines[(k + 1) % lines.length] : b;
+      const at = separate ? k : k + 1;
+      const b = pal[at % pal.length], c2 = kind === "line" && lines ? lines[at % lines.length] : b;
       const m = st.colors.mute ?? 0.45;
       fill = mix(b, "#bdbdbd", m);
       color = mix(c2, "#bdbdbd", m);
     }
     const hl = p?.opts?.highlight;
     if (Array.isArray(hl) && hl.length && !hl.includes(s.label) && !hl.includes(s.y) && !s.ours) fill = color = st.colors.other ?? "#b0b0b0";
+    // a single series that is not "ours": the neutral colour, never the emphasis
+    if (!s.ours && list.length === 1 && kind !== "line" && st.colors.single) fill = color = st.colors.single;
     if (s.color) fill = color = s.color;
     const markers = st.lines.markers ?? [];
     const dashes = st.lines.dashes?.length ? st.lines.dashes : ["solid"];
@@ -54,8 +60,8 @@
   const screen = (c, pts) => pts.map((q) => [c.sx(q[0]), c.sy(q[1])]);
 
   function errBars(pts, ys, err, c, st, color, horiz) {
-    const cap = st.bars.cap / 2;
-    const w = Math.max(0.5, st.axes.line);
+    const cap = (st.bars.cap ?? 2) / 2;
+    const w = st.bars.err_width ?? 0.6;
     let d = "";
     pts.forEach((q, k) => {
       const e = err?.[k];
@@ -187,8 +193,12 @@
           const emph = Array.isArray(p.opts?.emphasis) ? p.opts.emphasis.map(String) : [];
           const pal = st.colors.palette;
           const catFill = (k, base) => {
-            if (!emph.length || ser.length !== 1 || ser[0].s.color) return base;
-            return emph.includes(cats[k]) ? st.colors.emphasis || pal[0] : mix(pal[1 % pal.length], "#bdbdbd", st.colors.mute ?? 0.45);
+            if (ser.length !== 1 || ser[0].s.color) return base;
+            const single = st.colors.single || pal[0];
+            if (emph.length) return emph.includes(cats[k]) ? st.colors.emphasis || pal[0] : mix(single, "#ffffff", 0.25);
+            // optional light → dark ramp by value
+            if (p.opts?.ramp) { const v = ser[0].ys, lo = Math.min(...v.filter(isNum)), hi = Math.max(...v.filter(isNum)); return mix(single, "#ffffff", 0.6 * (1 - (v[k] - lo) / (hi - lo || 1))); }
+            return base;
           };
           const base = new Array(cats.length).fill(0);
           const edge = st.bars.edge > 0 ? ` stroke="${st.bars.edge_color || "#000"}" stroke-width="${st.bars.edge}"` : "";
@@ -326,7 +336,7 @@
       const o = p.opts ?? {};
       const n = xs.filter(isNum).length;
       // many points: smaller and lighter (size ∝ 1/log n), tunable
-      const auto = o.auto_size !== false && n > 200 ? clamp(st.scatter.size * (2.2 / Math.log10(n)), 0.8, st.scatter.size) : st.scatter.size;
+      const auto = isNum(o.point_size) ? o.point_size : o.auto_size !== false && n > 200 ? clamp(st.scatter.size * (2.2 / Math.log10(n)), 0.8, st.scatter.size) : st.scatter.size;
       const sty = names.map((g, i) => {
         const s = (p.series ?? []).find((q) => q.group === g) ?? (groups ? { group: g } : p.series?.[0] ?? {});
         return { name: g, i, s, st: seriesStyle(st, s, i, "scatter", { series: names.map((nm) => (p.series ?? []).find((q) => q.group === nm) ?? { group: nm }) }), label: s.label || g };
@@ -346,6 +356,8 @@
         y: { kind: "linear", values: vals.y },
         square: !!o.square || !!o.identity,
         noTicks: !!o.no_ticks,
+        // embeddings: frame only, no grid
+        noGrid: !!o.no_ticks || o.grid === false,
         spines: o.no_ticks ? "box" : undefined,
         legend: hex ? [] : legend,
         legendPos: o.legend_pos,
@@ -539,7 +551,7 @@
                 const cx = cb + (rain ? step * 0.04 : 0);
                 const r = rect(cx - w / 2, cx + w / 2, q1, q3);
                 g.push(`<path d="${seg(cx, lo, cx, q1)}${seg(cx, q3, cx, hi)}${rain ? "" : seg(cx - w / 4, lo, cx + w / 4, lo) + seg(cx - w / 4, hi, cx + w / 4, hi)}" stroke="${ink}" stroke-width="${lw}" fill="none"/>`);
-                g.push(`<rect x="${r2(r.x)}" y="${r2(r.y)}" width="${r2(r.w)}" height="${r2(r.h)}" fill="${rain ? "#ffffff" : sst.fill}" fill-opacity="${rain ? 1 : st.bars.alpha}" stroke="${ink}" stroke-width="${lw}"/>`);
+                g.push(`<rect x="${r2(r.x)}" y="${r2(r.y)}" width="${r2(r.w)}" height="${r2(r.h)}" fill="${rain ? "#ffffff" : sst.fill}" fill-opacity="${rain ? 1 : st.box?.alpha ?? 0.6}" stroke="${ink}" stroke-width="${lw}"/>`);
                 g.push(`<path d="${seg(cx - w / 2, q2, cx + w / 2, q2)}" stroke="${ink}" stroke-width="${r2(lw * 1.4)}"/>`);
                 if (!showPts) for (const v of sorted) if (v < lo || v > hi) { const q = P(cx, v); g.push(markerPath("o", q[0], q[1], 2.4, ink, { hollow: true, stroke: 0.5 })); }
               } else {
@@ -760,6 +772,8 @@
           x: { kind: "linear", values: [0, 1], fixed: [0, 1] },
           y: { kind: "linear", values: [0, 1], fixed: [0, 1.0] },
           square: p.opts?.square !== false,
+          // the diagonal / prevalence line is the only reference: no grid
+          noGrid: p.opts?.grid !== true,
           legend: ser.map((r) => ({ label: r.label, kind: "line", ...r.st, marker: "none", part: `series:${r.i}` })),
           legendPos: kind === "roc" ? "lower right" : "lower left",
           points: ser.flatMap((r) => r.xs.map((x, k) => [x, r.ys[k]])),

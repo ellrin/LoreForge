@@ -135,6 +135,8 @@
         if (pick != null) q.opts = { ...(q.opts ?? {}), emphasis: [pick] };
       }
       if (a.ref_last && q.series?.length > 1) q.series[q.series.length - 1].ref = true;
+      // training curves: validation solid, training dashed (a neutral pair, no emphasis)
+      if (a.train_dashed) for (const x of q.series ?? []) if (/train/i.test(x.label ?? x.y ?? "") && !x.dash) x.dash = "dash";
       if (a.highlight) q.opts = { ...(q.opts ?? {}), highlight: (q.series ?? []).slice(0, a.highlight).map((x) => x.label || x.y) };
       if (a.log_x_if_decades && shape.decades >= (rules.log_x_decades ?? a.log_x_if_decades)) q.xaxis = { ...(q.xaxis ?? {}), scale: "log" };
       if (a.brackets && q.series?.length > 1) {

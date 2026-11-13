@@ -92,6 +92,14 @@
    "nothing overlaps the data",
    "minimum font sizes",
    "fewer decorations"
+  ],
+  "colour": [
+   "The emphasis colour is only for a series (or category) marked ours; it is the darkest colour of the set.",
+   "Baselines are lighter than ours and keep the data order of the palette.",
+   "One series with nothing marked ours: the style's neutral colour (colors.single), optionally a light-to-dark ramp by value (opts.ramp); never the emphasis colour.",
+   "Non-method series (train/validation, metrics, classes) never use the emphasis colour; training curves: validation solid, training dashed.",
+   "ROC/PR and embedding plots: no grid (the diagonal or prevalence line is the reference); insets have no grid, a 0.4 pt frame and light connectors.",
+   "Error bars 0.6 pt with ~2 pt caps; box fills at ~60 % with points darker than the fill."
   ]
  },
  "formats": [
@@ -292,7 +300,10 @@
      "pos": "best"
     }
    },
-   "note": "平滑線＋原始線 25% 透明；loss 圖例右上、accuracy 右下"
+   "note": "平滑線＋原始線 25% 透明；驗證實線、訓練虛線（中性的一對顏色，不用強調色）；loss 圖例右上、accuracy 右下",
+   "apply": {
+    "train_dashed": true
+   }
   },
   {
    "code": "L2",
@@ -412,7 +423,9 @@
     "opts": {
      "no_ticks": true,
      "square": true,
-     "centroids": false
+     "centroids": false,
+     "alpha": 0.55,
+     "point_size": 1.6
     },
     "legend": {
      "pos": "outside right"

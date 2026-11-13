@@ -63,15 +63,19 @@
     // grid: none | y | x | both; minor lines (grid_minor) at grid_density subdivisions; always behind the data
     axes: { line: 0.6, tick_len: 3, tick_dir: "out", spines: "lb", grid: "none", grid_dash: "solid", grid_color: "#000000", grid_alpha: 0.2, grid_width: 0.4, grid_minor: false, grid_density: 2, pad: 3, padding: 0.05, max_ticks: 7 },
     lines: { width: 1.2, marker: 3.5, markers: ["o", "s", "^", "D", "v", "x"], dashes: ["solid"] },
-    bars: { width: 0.8, gap: 0.04, edge: 0, edge_color: "", cap: 3, alpha: 1, break_mark: false },
+    bars: { width: 0.8, gap: 0.04, edge: 0, edge_color: "", cap: 2, err_width: 0.6, alpha: 1, break_mark: false },
+    box: { alpha: 0.6 },
+    inset: { frame: 0.4, connector: 0.3, connector_color: "#c4c4c4" },
     scatter: { size: 3, alpha: 0.8 },
     // legend: inside the emptiest corner (85 % white backing), else one row above (≤ top_max entries), else outside right
-    legend: { frame: false, pos: "best", size: 7, backing: 0.85, top_max: 6 },
+    legend: { frame: false, pos: "best", size: 7, backing: 0.85, top_max: 6, frame_width: 0.3, frame_color: "#c8c8c8" },
     colors: {
       palette: ["#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "#F0E442", "#000000"],
       lines: [], cmap: "viridis", diverging: "rdbu", text: "#000000", axis: "#000000", background: "#ffffff",
       // "ours" (series.ours): the emphasis colour; the other series muted toward grey by `mute` (0–1)
       emphasis: "", mute: 0.45, other: "#b0b0b0",
+      // one series (nothing marked "ours"): a neutral mid-tone, never the emphasis colour
+      single: "#6E86A0",
     },
   };
   /** The style `id` from `styles` (a list or a map), its `base` chain applied, then `set`. */
@@ -737,7 +741,8 @@
       draw(x, y, inside) {
         const g = [];
         const backing = st.legend.backing ?? 0.85;
-        if (frame) g.push(`<rect x="${r2(x)}" y="${r2(y)}" width="${r2(this.w)}" height="${r2(h)}" fill="#ffffff" fill-opacity="${backing}" stroke="${frame === "light" ? "#cccccc" : st.colors.axis}" stroke-width="${r2(Math.max(0.4, st.axes.line * 0.8))}" rx="${frame === "round" ? r2(fs * 0.3) : 0}"/>`);
+        const light = frame === "light";
+        if (frame) g.push(`<rect x="${r2(x)}" y="${r2(y)}" width="${r2(this.w)}" height="${r2(h)}" fill="#ffffff" fill-opacity="${backing}" stroke="${light ? st.legend.frame_color ?? "#c8c8c8" : st.colors.axis}" stroke-width="${r2(light ? st.legend.frame_width ?? 0.3 : Math.max(0.4, st.axes.line * 0.8))}" rx="${frame === "round" ? r2(fs * 0.3) : 0}"/>`);
         else if (inside && backing > 0) g.push(`<rect x="${r2(x)}" y="${r2(y)}" width="${r2(this.w)}" height="${r2(h)}" fill="#ffffff" fill-opacity="${backing}"/>`);
         let y0 = y + pad;
         if (title) { g.push(title.place(x + pad, y0 + title.asc)); y0 += title.h + rowGap; }
@@ -907,15 +912,16 @@
     const ib = { x: box.x + at[0] * box.w, y: box.y + (1 - at[1] - at[3]) * box.h, w: at[2] * box.w, h: at[3] * box.h };
     const fx = p.inset.x ?? [0, 0.1], fy = p.inset.y ?? [0.8, 1];
     const fT = { ...fontOf(st, "tick"), size: st.font.tick * 0.85 };
-    const yt = linearTicks(Math.min(...fy), Math.max(...fy), 2), xt = linearTicks(Math.min(...fx), Math.max(...fx), 2);
+    const yt = linearTicks(Math.min(...fy), Math.max(...fy), 3), xt = linearTicks(Math.min(...fx), Math.max(...fx), 3);
+    const ins = st.inset ?? {};
     const sx = linScale(fx[0], fx[1], ib.x, ib.x + ib.w), sy = linScale(fy[0], fy[1], ib.y + ib.h, ib.y);
     const g = [];
-    const grey = st.inset_color ?? "#9a9a9a";
+    const grey = st.inset?.connector_color ?? "#c4c4c4";
     // the zoomed region on the main plot and thin grey connectors to the inset
     if (p.inset.mark !== false && main) {
       const zx0 = main.sx(fx[0]), zx1 = main.sx(fx[1]), zy0 = main.sy(fy[0]), zy1 = main.sy(fy[1]);
       const zr = { x: Math.min(zx0, zx1), y: Math.min(zy0, zy1), w: Math.abs(zx1 - zx0), h: Math.abs(zy1 - zy0) };
-      g.push(`<rect x="${r2(zr.x)}" y="${r2(zr.y)}" width="${r2(zr.w)}" height="${r2(zr.h)}" fill="none" stroke="${grey}" stroke-width="0.5"/>`);
+      g.push(`<rect x="${r2(zr.x)}" y="${r2(zr.y)}" width="${r2(zr.w)}" height="${r2(zr.h)}" fill="none" stroke="${grey}" stroke-width="${st.inset?.connector ?? 0.3}"/>`);
       // connect the two corners that face the inset
       const right = ib.x > zr.x + zr.w, below = ib.y > zr.y + zr.h;
       const zc = [[right ? zr.x + zr.w : zr.x, zr.y], [right ? zr.x + zr.w : zr.x, zr.y + zr.h]];
@@ -924,21 +930,21 @@
         zc[0] = [zr.x, below ? zr.y + zr.h : zr.y]; zc[1] = [zr.x + zr.w, below ? zr.y + zr.h : zr.y];
         ic[0] = [ib.x, below ? ib.y : ib.y + ib.h]; ic[1] = [ib.x + ib.w, below ? ib.y : ib.y + ib.h];
       }
-      g.push(`<path d="M${r2(zc[0][0])} ${r2(zc[0][1])}L${r2(ic[0][0])} ${r2(ic[0][1])}M${r2(zc[1][0])} ${r2(zc[1][1])}L${r2(ic[1][0])} ${r2(ic[1][1])}" stroke="${grey}" stroke-width="0.4"${dashArray("dash", 0.4)} fill="none"/>`);
+      g.push(`<path d="M${r2(zc[0][0])} ${r2(zc[0][1])}L${r2(ic[0][0])} ${r2(ic[0][1])}M${r2(zc[1][0])} ${r2(zc[1][1])}L${r2(ic[1][0])} ${r2(ic[1][1])}" stroke="${grey}" stroke-width="${st.inset?.connector ?? 0.3}"${dashArray("dash", 0.4)} fill="none"/>`);
     }
     g.push(`<rect x="${r2(ib.x)}" y="${r2(ib.y)}" width="${r2(ib.w)}" height="${r2(ib.h)}" fill="#ffffff"/>`);
     const gs = ` stroke="${st.axes.grid_color}" stroke-width="${st.axes.grid_width}" stroke-opacity="${st.axes.grid_alpha ?? 1}"${dashArray(st.axes.grid_dash, st.axes.grid_width)}`;
-    if (st.axes.grid !== "none" || p.inset.grid) g.push(`<path d="${xt.map((v) => `M${r2(sx(v))} ${r2(ib.y)}L${r2(sx(v))} ${r2(ib.y + ib.h)}`).join("")}${yt.map((v) => `M${r2(ib.x)} ${r2(sy(v))}L${r2(ib.x + ib.w)} ${r2(sy(v))}`).join("")}"${gs}/>`);
+    if (p.inset.grid) g.push(`<path d="${xt.map((v) => `M${r2(sx(v))} ${r2(ib.y)}L${r2(sx(v))} ${r2(ib.y + ib.h)}`).join("")}${yt.map((v) => `M${r2(ib.x)} ${r2(sy(v))}L${r2(ib.x + ib.w)} ${r2(sy(v))}`).join("")}"${gs}/>`);
     const clip = `${uid}i${pi}`;
     const d = [];
     plan.draw({ sx, sy, out: d, T, font: (w) => fontOf(st, w), inset: true, shapes: { points: [], lines: [], rects: [] } });
     g.push(`<clipPath id="${clip}"><rect x="${r2(ib.x)}" y="${r2(ib.y)}" width="${r2(ib.w)}" height="${r2(ib.h)}"/></clipPath><g clip-path="url(#${clip})">${d.join("")}</g>`);
-    g.push(`<rect x="${r2(ib.x)}" y="${r2(ib.y)}" width="${r2(ib.w)}" height="${r2(ib.h)}" fill="none" stroke="${st.colors.axis}" stroke-width="${st.axes.line}"/>`);
+    g.push(`<rect x="${r2(ib.x)}" y="${r2(ib.y)}" width="${r2(ib.w)}" height="${r2(ib.h)}" fill="none" stroke="${st.colors.axis}" stroke-width="${ins.frame ?? 0.4}"/>`);
     const tl = st.axes.tick_len * 0.7;
     let tk = "";
     for (const v of xt) { tk += `M${r2(sx(v))} ${r2(ib.y + ib.h)}L${r2(sx(v))} ${r2(ib.y + ib.h + tl)}`; g.push(T(fmtNum(v, "", xt.step), fT).place(sx(v), ib.y + ib.h + tl + 1 + T("0", fT).asc, { anchor: "middle" })); }
     for (const v of yt.filter((v) => Math.abs(sy(v) - (ib.y + ib.h)) > 1)) { tk += `M${r2(ib.x)} ${r2(sy(v))}L${r2(ib.x - tl)} ${r2(sy(v))}`; g.push(T(fmtNum(v, "", yt.step), fT).place(ib.x - tl - 1, sy(v), { anchor: "end", valign: "middle" })); }
-    g.push(`<path d="${tk}" stroke="${st.colors.axis}" stroke-width="${st.axes.line}"/>`);
+    g.push(`<path d="${tk}" stroke="${st.colors.axis}" stroke-width="${ins.frame ?? 0.4}"/>`);
     return { svg: `<g data-part="inset:${pi}">${g.join("")}</g>`, rect: { x: ib.x - 14, y: ib.y - 2, w: ib.w + 16, h: ib.h + 12 } };
   }
 
@@ -1057,9 +1063,9 @@
     const box = { x: plotL, y: plotT, w: W, h: H };
 
     // grid: major (and minor), always behind the data
-    const gridMode = p.grid ?? ax.grid;
-    const gx = X.grid ?? (gridMode === "x" || gridMode === "both");
-    const gy = Y.grid ?? (gridMode === "y" || gridMode === "both");
+    const gridMode = plan.noGrid ? "none" : p.grid ?? ax.grid;
+    const gx = !plan.noGrid && (X.grid ?? (gridMode === "x" || gridMode === "both"));
+    const gy = !plan.noGrid && (Y.grid ?? (gridMode === "y" || gridMode === "both"));
     const minorOn = (a) => a.minor ?? ax.grid_minor ?? false;
     const gs = (w, a) => ` stroke="${ax.grid_color}" stroke-width="${r2(w)}" stroke-opacity="${a}"${dashArray(ax.grid_dash, w)} fill="none"`;
     const grid = [];
