@@ -2,7 +2,7 @@
 // one picture — a group of native shapes, connectors and text that keeps its aspect ratio and carries
 // its spec (crates/server/src/flow.rs), so it re-opens after a .pptx round trip.
 //   toolbar 流程圖 (#insFlow), AI → 流程圖  → a new figure
-//   double-click a flow figure (⌥ double-click: edit its text as usual), 排列 → 編輯流程圖
+//   the selected figure's 編輯 button (a double-click edits its text as usual), 排列 → 編輯流程圖
 //                                          → the editor; 完成 replaces the figure in place (one undo step)
 // Uses app.js's globals: S, api, deckApi, commit, findObj, topObjEl, renderOverlay, renderSide, toast.
 (() => {
@@ -63,18 +63,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => document.getElementById("insFlow")?.addEventListener("click", create));
-  // capture: before the canvas starts editing a text inside the figure
-  document.addEventListener("dblclick", (ev) => {
-    if (typeof S === "undefined" || S.editing || ev.altKey) return;
-    // pointer capture retargets the event to the viewport: hit-test again
-    const target = document.elementFromPoint(ev.clientX, ev.clientY) ?? ev.target;
-    if (!document.getElementById("paperWrap")?.contains(target)) return;
-    const el = topObjEl(target);
-    const o = el && findObj(+el.dataset.id);
-    if (o?.type !== "group" || !o.data?.lore_flow) return;
-    ev.stopPropagation();
-    ev.preventDefault();
-    reedit(o);
-  }, true);
+  // the selected figure's 編輯 button (app.js renderOverlay); a double-click is not special
+  (window.SC_FIGURE_TOOLS ??= []).push({ match: (o) => (o.type === "group" && o.data?.lore_flow ? { label: "編輯流程圖", icon: "graph" } : null), open: (o) => reedit(o) });
   window.SCFlow = { create, reedit };
 })();

@@ -387,3 +387,5 @@ dialog .actions { flex-wrap: wrap; }
 .pol.undone .msg { color: var(--muted); text-decoration: line-through; }
 .pol.manual .msg { color: var(--muted); }
 .pol .st { font-size: 11px; color: var(--muted); }
+/* 編輯 on a figure a tool made (圖表, 流程圖): beside the selection's top-right corner */
+.overlay .fig-edit { position: absolute; pointer-events: auto; background: var(--panel); border: 1px solid var(--line-strong); box-shadow: 0 2px 8px #0003; }

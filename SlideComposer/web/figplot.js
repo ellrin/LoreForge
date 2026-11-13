@@ -1,7 +1,7 @@
 // 繪圖 on a slide (lore-plot, docs/plot.md §8): the shared editor from /plot/; the figure becomes a
 // PNG picture that carries its spec (crates/server/src/plot.rs), so it re-opens after a .pptx round trip.
 //   toolbar 圖表 (#insPlot)     → a new figure, inserted as a picture
-//   double-click a figure picture → the editor; 完成 replaces the picture's image in place (one undo step)
+//   the selected figure's 編輯 button → the editor; 完成 replaces the picture's image in place (one undo step)
 // Uses app.js's globals: S, api, deckApi, commit, insertObj, baseObj, freeSpot, findObj, topObjEl, slide, toast.
 (() => {
   let loading = null;
@@ -20,7 +20,7 @@
       document.head.append(s);
     });
     // the order lore_plot::assets::SCRIPTS lists
-    loading = ["plot.js", "charts.js", "charts3d.js", "formats.js", "editor.js"].reduce((p, f) => p.then(() => script(`/plot/${f}`)), Promise.resolve()).then(() => { window.LorePlot.katexBase = "/plot/katex/"; });
+    loading = ["mathsvg.js", "plot.js", "charts.js", "charts3d.js", "formats.js", "editor.js"].reduce((p, f) => p.then(() => script(`/plot/${f}`)), Promise.resolve()).then(() => { window.LorePlot.katexBase = "/plot/katex/"; });
     loading.catch(() => (loading = null));
     return loading;
   }
@@ -80,14 +80,19 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => document.getElementById("insPlot")?.addEventListener("click", create));
-  // a double-click on a picture: figures made here open in the editor (other pictures: unchanged)
-  document.addEventListener("dblclick", (ev) => {
-    if (typeof S === "undefined" || S.editing || !document.getElementById("paperWrap")?.contains(ev.target)) return;
-    const target = document.elementFromPoint(ev.clientX, ev.clientY) ?? ev.target;
-    const el = topObjEl(target);
-    const o = el && findObj(+el.dataset.id);
-    if (o?.type !== "picture" || !o.asset) return;
-    reedit(o);
+  // the selected figure's 編輯 button (app.js renderOverlay): pictures whose PNG carries a spec
+  const known = new Map(); // asset → true | false (null while asking)
+  (window.SC_FIGURE_TOOLS ??= []).push({
+    match: (o) => {
+      if (o.type !== "picture" || !o.asset) return null;
+      if (!known.has(o.asset)) {
+        known.set(o.asset, null);
+        fetch(`${deckApi("/plot")}?asset=${encodeURIComponent(o.asset)}`).then((r) => { known.set(o.asset, r.ok); if (r.ok) renderOverlay(); }).catch(() => known.set(o.asset, false));
+        return null;
+      }
+      return known.get(o.asset) ? { label: "編輯圖表", icon: "chart" } : null;
+    },
+    open: (o) => reedit(o),
   });
   window.SCPlot = { create, reedit };
 })();

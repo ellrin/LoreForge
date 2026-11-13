@@ -547,6 +547,23 @@ function renderOverlay(guides = []) {
         }
         const [rx, ry] = rotPt(f, f.x + f.w / 2, f.y - (22 / S.zoom) * EMU);
         handle(ov, "rot", sx(rx), sx(ry)).dataset.rotate = "1";
+        // a figure a tool made (圖表, 流程圖): a small 編輯 button at its corner opens that tool
+        for (const a of window.SC_FIGURE_TOOLS ?? []) {
+          const t = a.match(o);
+          if (!t) continue;
+          const [bx, by] = rotPt(f, f.x + f.w, f.y);
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "ico small fig-edit";
+          b.setAttribute("aria-label", t.label);
+          b.title = t.label;
+          b.append(icon(t.icon));
+          Object.assign(b.style, { left: `${sx(bx) + 8}px`, top: `${sx(by) - 4}px` });
+          b.addEventListener("pointerdown", (e) => e.stopPropagation());
+          b.onclick = (e) => { e.stopPropagation(); a.open(o); };
+          ov.append(b);
+          break;
+        }
       }
     }
   }
