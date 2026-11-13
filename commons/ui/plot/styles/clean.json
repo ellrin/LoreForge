@@ -26,8 +26,7 @@
     "tick": 7,
     "legend": 7,
     "panel": 9,
-    "panel_weight": "bold",
-    "math": "text"
+    "panel_weight": "bold"
   },
   "axes": {
     "line": 0.6,

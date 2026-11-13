@@ -183,6 +183,13 @@
         draw(c) {
           const band = horiz ? c.sy : c.sx, val = horiz ? c.sx : c.sy;
           const gw = groupW(band.step), bw = barW(band.step), gap = Math.abs(band.step) * (st.bars.gap ?? 0);
+          // one series whose categories include "ours" (opts.emphasis): that category in the emphasis colour, the rest muted
+          const emph = Array.isArray(p.opts?.emphasis) ? p.opts.emphasis.map(String) : [];
+          const pal = st.colors.palette;
+          const catFill = (k, base) => {
+            if (!emph.length || ser.length !== 1 || ser[0].s.color) return base;
+            return emph.includes(cats[k]) ? st.colors.emphasis || pal[0] : mix(pal[1 % pal.length], "#bdbdbd", st.colors.mute ?? 0.45);
+          };
           const base = new Array(cats.length).fill(0);
           const edge = st.bars.edge > 0 ? ` stroke="${st.bars.edge_color || "#000"}" stroke-width="${st.bars.edge}"` : "";
           const [ra, rb] = [Math.min(...val.range), Math.max(...val.range)];
@@ -199,7 +206,7 @@
               const alpha = r.st.alpha ?? st.bars.alpha;
               const op = alpha < 1 ? ` fill-opacity="${alpha}"` : "";
               const rect = horiz ? { x: Math.min(a, b), y: c0, w: Math.abs(b - a), h: bw } : { x: c0, y: Math.min(a, b), w: bw, h: Math.abs(b - a) };
-              g.push(`<rect x="${r2(rect.x)}" y="${r2(rect.y)}" width="${r2(rect.w)}" height="${r2(rect.h)}" fill="${r.st.fill}"${op}${edge}/>`);
+              g.push(`<rect x="${r2(rect.x)}" y="${r2(rect.y)}" width="${r2(rect.w)}" height="${r2(rect.h)}" fill="${catFill(k, r.st.fill)}"${op}${edge}/>`);
               c.shapes?.rects.push(rect);
               centers.push(horiz ? [b, c0 + bw / 2] : [c0 + bw / 2, b]);
             });

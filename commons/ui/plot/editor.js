@@ -785,7 +785,12 @@
           break;
         case "bar":
           f.push(row("排法", seg(() => o.mode ?? "grouped", set("mode"), [["grouped", "並排"], ["stacked", "堆疊"], ["percent", "百分比"]])), row("排序", seg(() => o.sort ?? "none", (v) => (o.sort = v === "none" ? undefined : v), [["none", "原順序"], ["desc", "大到小"], ["asc", "小到大"]])),
-            rowc(ck("horizontal", "橫向"), ck("values", "標數值"), ck("zoom", "y 不從 0")));
+            rowc(ck("horizontal", "橫向"), ck("values", "標數值"), ck("zoom", "y 不從 0"), ck("break_mark", "斷開記號")));
+          if ((p.series?.length ?? 0) === 1) {
+            const t = S.spec.data[p.data] ?? Object.values(S.spec.data)[0];
+            const cats = (t?.rows ?? []).map((r) => String(r[t.columns.indexOf(p.x)] ?? ""));
+            f.push(row("強調類別", select(() => o.emphasis?.[0], (v) => (o.emphasis = v ? [v] : undefined), [[null, "無"], ...cats.map((c) => [c, c])], { structure: true })));
+          }
           if (o.values) f.push(row("數值格式", text(() => o.fmt, set("fmt"), ".2f、%")));
           break;
         case "scatter":

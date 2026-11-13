@@ -121,7 +121,10 @@
      "show": false
     }
    },
-   "note": "y 軸拉近時軸上有斷開記號，不會默默從非零開始"
+   "note": "y 軸拉近；要軸上斷開記號時在選項勾「斷開記號」",
+   "apply": {
+    "emphasis_category": true
+   }
   },
   {
    "code": "B2",

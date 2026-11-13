@@ -587,3 +587,55 @@ fn assist_reads_the_authors_preferences_privately() {
     let p = assist::preferences(&home);
     assert!(p.contains("dashed lines") && p.contains("Default style for papers: mine."));
 }
+
+/// Colours a reader with deutan, protan or tritan vision can still tell apart: Machado 2009
+/// simulation (severity 1), CIE76 ΔE between every pair of the first five colours.
+fn cvd_min_delta_e(colors: &[&str]) -> f64 {
+    const M: [[[f64; 3]; 3]; 3] = [
+        [[0.367322, 0.860646, -0.227968], [0.280085, 0.672501, 0.047413], [-0.011820, 0.042940, 0.968881]],
+        [[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216], [-0.003882, -0.048116, 1.051998]],
+        [[1.255528, -0.076749, -0.178779], [-0.078411, 0.930809, 0.147602], [0.004733, 0.691367, 0.303900]],
+    ];
+    let lin = |c: f64| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+    let rgb = |h: &str| [1, 3, 5].map(|i| lin(u8::from_str_radix(&h[i..i + 2], 16).unwrap() as f64 / 255.0));
+    let lab = |r: [f64; 3]| {
+        let r = r.map(|v| v.clamp(0.0, 1.0));
+        let x = (0.4124 * r[0] + 0.3576 * r[1] + 0.1805 * r[2]) / 0.95047;
+        let y = 0.2126 * r[0] + 0.7152 * r[1] + 0.0722 * r[2];
+        let z = (0.0193 * r[0] + 0.1192 * r[1] + 0.9505 * r[2]) / 1.08883;
+        let f = |t: f64| if t > 0.008856 { t.cbrt() } else { 7.787 * t + 16.0 / 116.0 };
+        [116.0 * f(y) - 16.0, 500.0 * (f(x) - f(y)), 200.0 * (f(y) - f(z))]
+    };
+    let mut worst = f64::INFINITY;
+    for m in std::iter::once(None).chain(M.iter().map(Some)) {
+        let labs: Vec<[f64; 3]> = colors.iter().take(5).map(|c| {
+            let v = rgb(c);
+            lab(match m { Some(m) => [0, 1, 2].map(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2]), None => v })
+        }).collect();
+        for i in 0..labs.len() {
+            for j in i + 1..labs.len() {
+                let d = ((labs[i][0] - labs[j][0]).powi(2) + (labs[i][1] - labs[j][1]).powi(2) + (labs[i][2] - labs[j][2]).powi(2)).sqrt();
+                worst = worst.min(d);
+            }
+        }
+    }
+    worst
+}
+
+#[test]
+fn public_palettes_stay_distinct_for_colour_blind_readers() {
+    for s in style::resolved(&style::raw(None), &style::Fonts::default()) {
+        let cols: Vec<&str> = s.pointer("/colors/palette").unwrap().as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        let d = cvd_min_delta_e(&cols);
+        assert!(d >= 10.0, "{}: two of the first five colours look alike to colour-blind readers (ΔE {d:.1})", s["id"]);
+    }
+    let pals: Value = serde_json::from_str(include_str!("../../../ui/plot/palettes.json")).unwrap();
+    for (id, p) in pals.as_object().unwrap() {
+        if p["cb_safe"] == true {
+            let cols: Vec<&str> = p["colors"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            assert!(cvd_min_delta_e(&cols) >= 10.0, "{id} is marked colour-blind safe but is not");
+        }
+    }
+    // the check means something: near-identical light blues fail it
+    assert!(cvd_min_delta_e(&["#87CEEB", "#A6D8FF", "#DDA0DD"]) < 10.0);
+}

@@ -168,14 +168,15 @@
 ### 軸
 
 `xaxis/yaxis.scale`：`linear`、`log`（log₁₀）、`symlog`（`linthresh`）、`stretch`（`segments: [[a, b, 權重], …]`，例如 `[[0.8, 1, 3]]` 把 0.8–1.0 拉長三倍；
-權重 0 ＝斷軸，用來處理離群值）。分段交界與斷開處在軸上畫斷開記號 `//`。長條圖的值軸不從 0 開始時一定畫斷開記號（不會默默從非零開始）。
+權重 0 ＝斷軸，用來處理離群值）。分段交界與斷開處在軸上畫斷開記號 `//`。長條圖的值軸不從 0 開始時，斷開記號預設不畫，每張圖自己開（`opts.break_mark`，編輯器選項「斷開記號」；助手也可以建議）。
 格線：`axes.grid`（none／y／x／both）、`grid_minor`＋`grid_density`（每個主格分幾格）、`grid_dash`、`grid_color`＋`grid_alpha`（預設黑 20%、0.4 pt），永遠畫在資料後面。
 
 ### 色盤
 
 `colors.palette` 可以是顏色清單或 `palettes.json` 的名稱：Okabe–Ito、Paul Tol（bright／muted／vibrant）、重點一色＋灰，以及 20 個 Lore 主題配色的**靜態複本**
 （`theme-<id>`：從 theme.css 複製一次、加深到白紙上對比 ≥ 3:1；圖永遠不跟 app 主題變）。
-`series.ours = true`：這條用強調色（`colors.emphasis`，預設色盤第一色），其他系列向灰色淡化（`colors.mute`）；`opts.highlight` 指定要突出的系列，其他變灰。
+`series.ours = true`：這條用強調色（`colors.emphasis`，預設色盤第一色），其他系列向灰色淡化（`colors.mute`）；只有一個系列、「我們的」是一個類別時用 `opts.emphasis: ["Ours"]`（B1 會自動選名字是 Ours／Proposed 的類別）。每個樣式都套用同一規則。`opts.highlight` 指定要突出的系列，其他變灰。
+公開樣式與標為色盲友善的色盤，前五色在紅綠、藍黃色盲模擬下兩兩 ΔE ≥ 10（測試檢查）。
 
 ### 組合圖（一張圖 ＝ 版面＋多格）
 
@@ -223,7 +224,7 @@ label = "簡潔"
 - 標題、軸標籤、圖例、註記都可以寫 `$…$`；用 commons 已 vendor 的 KaTeX（`commons/ui/notation-panel/vendor/katex`，0.16.47）。
 - KaTeX 輸出是 HTML，不是 SVG。`plot.js` 把排好的 KaTeX 量好位置後**攤平成 SVG**：每段字是一個 `<text>`（字型 KaTeX_Main、KaTeX_Math…），
   分數線是 `<rect>`，根號等延伸符號是 KaTeX 自己的 `<svg>` 路徑。所以 SVG 裡沒有 `foreignObject`，PDF 裡數學式是向量字。
-- `font.math = "text"`：數學式裡的字母、數字改用圖的字型（斜體），符號（∑、∫、括號）仍是 KaTeX 的字；`katex`：全部用 KaTeX 的字（Computer Modern 風格）。
+- `font.math`：預設 `katex`＝`$…$` 裡的變數與方程式全部用 TeX 字型（作者 2026-11-13 決定）；`$…$` 外的文字用樣式的字型。`text`＝數學式裡的字母、數字改用圖的字型。
 - 從 PaperComposer 打開時，論文對照表（lore-notation）的巨集交給 KaTeX，所以 `$\Lrec$` 這種登記過的巨集畫得出來。
 
 ## 6. 輸出

@@ -58,12 +58,12 @@
     font: {
       kind: "serif",
       family: ["STIX Two Text", "TeX Gyre Termes", "Liberation Serif", "Tinos", "serif"],
-      size: 8, title: 8, label: 8, tick: 7, legend: 7, panel: 9, panel_weight: "bold", title_weight: "normal", math: "text",
+      size: 8, title: 8, label: 8, tick: 7, legend: 7, panel: 9, panel_weight: "bold", title_weight: "normal", math: "katex", // maths: TeX fonts ("text": letters in the text font)
     },
     // grid: none | y | x | both; minor lines (grid_minor) at grid_density subdivisions; always behind the data
     axes: { line: 0.6, tick_len: 3, tick_dir: "out", spines: "lb", grid: "none", grid_dash: "solid", grid_color: "#000000", grid_alpha: 0.2, grid_width: 0.4, grid_minor: false, grid_density: 2, pad: 3, padding: 0.05, max_ticks: 7 },
     lines: { width: 1.2, marker: 3.5, markers: ["o", "s", "^", "D", "v", "x"], dashes: ["solid"] },
-    bars: { width: 0.8, gap: 0.04, edge: 0, edge_color: "", cap: 3, alpha: 1, break_mark: true },
+    bars: { width: 0.8, gap: 0.04, edge: 0, edge_color: "", cap: 3, alpha: 1, break_mark: false },
     scatter: { size: 3, alpha: 0.8 },
     // legend: inside the emptiest corner (85 % white backing), else one row above (≤ top_max entries), else outside right
     legend: { frame: false, pos: "best", size: 7, backing: 0.85, top_max: 6 },
@@ -1152,9 +1152,9 @@
     for (const [u, v] of sy.gaps ?? []) { marks.push(breakMark(false, plotL, sy(u), ink, aw), breakMark(false, plotL, sy(v), ink, aw)); }
     for (const v of sx.marks ?? []) marks.push(breakMark(true, sx(v), plotT + H, ink, aw));
     for (const [u, v] of sx.gaps ?? []) { marks.push(breakMark(true, sx(u), plotT + H, ink, aw), breakMark(true, sx(v), plotT + H, ink, aw)); }
-    // a bar axis that does not start at zero shows it (never a silent non-zero baseline)
-    if (plan.zeroBase && !plan.horizontal && sy.kind !== "band" && Math.min(...sy.domain) > 0 && st.bars.break_mark !== false) marks.push(breakMark(false, plotL, plotT + H - Math.min(6, H * 0.04), ink, aw));
-    if (plan.zeroBase && plan.horizontal && sx.kind !== "band" && Math.min(...sx.domain) > 0 && st.bars.break_mark !== false) marks.push(breakMark(true, plotL + Math.min(6, W * 0.04), plotT + H, ink, aw));
+    // a bar axis that does not start at zero: a break mark when the figure asks for one (opts.break_mark / bars.break_mark)
+    if (plan.zeroBase && !plan.horizontal && sy.kind !== "band" && Math.min(...sy.domain) > 0 && (p.opts?.break_mark ?? st.bars.break_mark)) marks.push(breakMark(false, plotL, plotT + H - Math.min(6, H * 0.04), ink, aw));
+    if (plan.zeroBase && plan.horizontal && sx.kind !== "band" && Math.min(...sx.domain) > 0 && (p.opts?.break_mark ?? st.bars.break_mark)) marks.push(breakMark(true, plotL + Math.min(6, W * 0.04), plotT + H, ink, aw));
     if (marks.length) out.push(`<g data-part="axes:${pi}">${marks.join("")}</g>`);
     if (xl) {
       const y = plotB + tickOut + tp + xTickH + pad * 0.7 + xl.asc;

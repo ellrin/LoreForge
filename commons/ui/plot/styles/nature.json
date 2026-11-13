@@ -3,13 +3,67 @@
   "base": "clean",
   "label": "Nature",
   "note": "單欄 89 mm／雙欄 183 mm，無襯線 5–7 pt，格標 8 pt 粗體小寫，無格線，色盲友善",
-  "size": { "w": 89, "h": 62, "widths": [89, 120, 183] },
-  "font": { "kind": "sans", "family": ["Liberation Sans", "Arimo", "TeX Gyre Heros", "Nimbus Sans", "sans-serif"],
-            "size": 7, "title": 7, "label": 7, "tick": 6, "legend": 6, "panel": 8, "panel_weight": "bold", "math": "text" },
-  "axes": { "line": 0.5, "tick_len": 2.5, "tick_dir": "out", "spines": "lb", "grid": "none" },
-  "lines": { "width": 1.0, "marker": 3.0 },
-  "bars": { "width": 0.75, "gap": 0.03, "cap": 2.5 },
-  "scatter": { "size": 2.6, "alpha": 0.8 },
-  "legend": { "frame": false, "size": 6 },
-  "colors": { "palette": ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#F0E442", "#000000"], "cmap": "viridis" }
+  "size": {
+    "w": 89,
+    "h": 62,
+    "widths": [
+      89,
+      120,
+      183
+    ]
+  },
+  "font": {
+    "kind": "sans",
+    "family": [
+      "Liberation Sans",
+      "Arimo",
+      "TeX Gyre Heros",
+      "Nimbus Sans",
+      "sans-serif"
+    ],
+    "size": 7,
+    "title": 7,
+    "label": 7,
+    "tick": 6,
+    "legend": 6,
+    "panel": 8,
+    "panel_weight": "bold"
+  },
+  "axes": {
+    "line": 0.5,
+    "tick_len": 2.5,
+    "tick_dir": "out",
+    "spines": "lb",
+    "grid": "none"
+  },
+  "lines": {
+    "width": 1.0,
+    "marker": 3.0
+  },
+  "bars": {
+    "width": 0.75,
+    "gap": 0.03,
+    "cap": 2.5
+  },
+  "scatter": {
+    "size": 2.6,
+    "alpha": 0.8
+  },
+  "legend": {
+    "frame": false,
+    "size": 6
+  },
+  "colors": {
+    "palette": [
+      "#0072B2",
+      "#D55E00",
+      "#009E73",
+      "#CC79A7",
+      "#E69F00",
+      "#56B4E9",
+      "#F0E442",
+      "#000000"
+    ],
+    "cmap": "viridis"
+  }
 }

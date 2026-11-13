@@ -127,6 +127,13 @@
         [q.xaxis, q.yaxis] = [q.yaxis ?? {}, q.xaxis ?? {}];
       }
       if (a.ours_last && q.series?.length && !q.series.some((x) => x.ours)) q.series[q.series.length - 1].ours = true;
+      // one series: the category that is "ours" (by name, else the last one) is emphasised
+      if (a.emphasis_category && (q.series?.length ?? 0) === 1 && !q.opts?.emphasis?.length) {
+        const t = s.data[q.data] ?? Object.values(s.data)[0];
+        const cats = col(t, q.x).map(String);
+        const pick = cats.find((c) => /\b(ours|proposed)\b/i.test(c)) ?? cats.at(-1);
+        if (pick != null) q.opts = { ...(q.opts ?? {}), emphasis: [pick] };
+      }
       if (a.ref_last && q.series?.length > 1) q.series[q.series.length - 1].ref = true;
       if (a.highlight) q.opts = { ...(q.opts ?? {}), highlight: (q.series ?? []).slice(0, a.highlight).map((x) => x.label || x.y) };
       if (a.log_x_if_decades && shape.decades >= (rules.log_x_decades ?? a.log_x_if_decades)) q.xaxis = { ...(q.xaxis ?? {}), scale: "log" };

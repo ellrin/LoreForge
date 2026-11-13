@@ -2,7 +2,7 @@
   "id": "pastel",
   "base": "clean",
   "label": "柔和",
-  "note": "淡色長條＋同色系深色折線，y 方向虛線格線，有框的圖例",
+  "note": "淡色長條（Paul Tol light）＋同色系深色折線，y 方向虛線格線，有框的圖例；色盲模擬下仍分得開",
   "axes": {
     "spines": "box",
     "grid": "y",
@@ -27,20 +27,20 @@
   },
   "colors": {
     "palette": [
-      "#9ecae1",
-      "#a1d99b",
-      "#fdae6b",
-      "#bcbddc",
-      "#fa9fb5",
-      "#c7e9c0"
+      "#77AADD",
+      "#EE8866",
+      "#44BB99",
+      "#FFAABB",
+      "#EEDD88",
+      "#99DDFF"
     ],
     "lines": [
-      "#3182bd",
-      "#31a354",
-      "#e6550d",
-      "#756bb1",
-      "#c51b8a",
-      "#41ab5d"
+      "#1C4D94",
+      "#924C1E",
+      "#2B977C",
+      "#981338",
+      "#A29021",
+      "#3A8FB7"
     ],
     "cmap": "purples"
   }

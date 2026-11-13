@@ -14,6 +14,8 @@
   figcaption { padding: 6px 10px; font-size: 12px; color: #555; background: #f6f6f6; }
   .fig svg { display: block; }
   .warn { color: #b00; padding: 4px 10px; }
+  .pair { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; width: 100%; padding-bottom: 8px; border-bottom: 1px solid #ccc; }
+  .pair h3 { width: 100%; margin: 6px 0 0; font-size: 13px; }
 </style>
 <script src="plot.js"></script>
 <script src="charts.js"></script>
@@ -41,6 +43,30 @@ if (!q.get("api")) LorePlot.katexBase = "../notation-panel/vendor/katex/";
   const only = (q.get("only") || "").split(",").filter(Boolean);
   for (const s of await LorePlotSamples.all(id, styles)) {
     if (only.length && !only.some((o) => s.id === o || (o.endsWith("*") && s.id.startsWith(o.slice(0, -1))))) continue;
+    // ?compare=<style>: the same figure in that style first (之前), then in ?style (之後)
+    if (q.get("compare")) {
+      const row = document.createElement("div");
+      row.className = "pair";
+      const head = document.createElement("h3");
+      head.textContent = s.label;
+      row.append(head);
+      for (const [sid, word] of [[q.get("compare"), "之前"], [id, "之後"]]) {
+        const spec = { ...s.spec, style: sid };
+        const r = await LorePlot.render(spec, { styles });
+        const f = document.createElement("figure");
+        f.innerHTML = r.svg;
+        const svg = f.firstChild;
+        svg.style.width = `${r.w * zoom * 96 / 25.4}px`;
+        svg.style.height = `${r.h * zoom * 96 / 25.4}px`;
+        svg.style.display = "block";
+        const cap = document.createElement("figcaption");
+        cap.textContent = `${word}（${styles.find((x) => x.id === sid)?.label ?? sid}）`;
+        f.append(cap);
+        row.append(f);
+      }
+      grid.append(row);
+      continue;
+    }
     const r = await LorePlot.render(s.spec, { styles });
     const f = document.createElement("figure");
     const box = document.createElement("div");
