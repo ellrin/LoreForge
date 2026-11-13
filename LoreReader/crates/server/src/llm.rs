@@ -250,6 +250,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let home = lore_home::Home::at(d.path());
         let mut l = Llm::new(&EngineConfig::default(), None, None);
+        l.keys.isolate(); // factory() reads keys: never the real keychain (it can wait on a prompt)
         // a runtime over a temp registry, never the real cache folder
         l.local_rt = Some(SharedRuntime::new(APP, d.path().join("cache"), Default::default()));
         l.share_engine(home.clone());
