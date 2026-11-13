@@ -722,6 +722,7 @@
 
 // ── links between the Lore apps: lore-<app>://… with an http fallback ──
 //   lore-pc://open?path=<file>          http://127.0.0.1:7878/?open=<file>
+//   lore-pc://bookjob/<id>              http://127.0.0.1:7878/?book-job=<id>   (寫書 job, docs/book.md)
 //   lore-sc://deck/<name>               http://127.0.0.1:7880/?deck=<name>
 //   lore-sc://job/<id>                  http://127.0.0.1:7880/?job=<id>   (論文報告 job)
 //   lore-lr://paper/<sha>?page=<n>      http://127.0.0.1:7890/?paper=<sha>&page=<n>
@@ -736,7 +737,7 @@
   const enc = encodeURIComponent;
   const ports = { pc: 7878, sc: 7880, lr: 7890, kb: 7700, ls: 7900 };
   const FORMS = {
-    pc: (p) => (p.note ? [`note/${enc(p.note)}`, `/?note=${enc(p.note)}`] : p.path ? [`open?path=${enc(p.path)}`, `/?open=${enc(p.path)}`] : ["", "/"]),
+    pc: (p) => (p.bookjob ? [`bookjob/${enc(p.bookjob)}`, `/?book-job=${enc(p.bookjob)}`] : p.note ? [`note/${enc(p.note)}`, `/?note=${enc(p.note)}`] : p.path ? [`open?path=${enc(p.path)}`, `/?open=${enc(p.path)}`] : ["", "/"]),
     sc: (p) => (p.deck ? [`deck/${enc(p.deck)}`, `/?deck=${enc(p.deck)}`] : p.job ? [`job/${enc(p.job)}`, `/?job=${enc(p.job)}`] : ["", "/"]),
     lr: (p) => (p.paper ? [`paper/${enc(p.paper)}${p.page ? `?page=${enc(p.page)}` : ""}`, `/?paper=${enc(p.paper)}${p.page ? `&page=${enc(p.page)}` : ""}`] : ["", "/"]),
     kb: (p) => (p.pending ? [`pending/${enc(p.pending)}`, `/#/pending/${enc(p.pending)}`] : p.node ? [`node/${enc(p.node)}`, `/#/node/${enc(p.node)}`] : ["", "/"]),

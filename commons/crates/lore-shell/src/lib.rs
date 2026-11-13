@@ -1,5 +1,5 @@
 //! The shared LoreForge shell (`docs/shell.md`): `commons/ui/icons.js`, `base.css`,
-//! `shell.js` and `makedeck.js`, compiled in like `lore_home::theme`, so an app server only needs
+//! `shell.js`, `makedeck.js` and `makebook.js`, compiled in like `lore_home::theme`, so an app server only needs
 //! these routes:
 //!
 //! ```ignore
@@ -18,6 +18,8 @@ pub const BASE_CSS: &str = include_str!("../../../ui/base.css");
 pub const SHELL_JS: &str = include_str!("../../../ui/shell.js");
 /// `commons/ui/makedeck.js`: `LoreMakeDeck`, the 做成簡報 button and card (apps with papers mount it).
 pub const MAKEDECK_JS: &str = include_str!("../../../ui/makedeck.js");
+/// `commons/ui/makebook.js`: `LoreMakeBook`, the 寫 review button and card (PaperComposer's 寫書; LoreReader mounts it).
+pub const MAKEBOOK_JS: &str = include_str!("../../../ui/makebook.js");
 
 /// `(route, content type, body)` for each file.
 pub const FILES: &[(&str, &str, &str)] = &[
@@ -25,6 +27,7 @@ pub const FILES: &[(&str, &str, &str)] = &[
     ("/base.css", "text/css; charset=utf-8", BASE_CSS),
     ("/shell.js", "text/javascript; charset=utf-8", SHELL_JS),
     ("/makedeck.js", "text/javascript; charset=utf-8", MAKEDECK_JS),
+    ("/makebook.js", "text/javascript; charset=utf-8", MAKEBOOK_JS),
 ];
 
 /// The names in `const ICONS = { … }` of an icons.js, in order (duplicates kept).
@@ -232,9 +235,14 @@ mod tests {
 
     #[test]
     fn files_are_served() {
-        assert_eq!(FILES.len(), 4);
+        assert_eq!(FILES.len(), 5);
         assert!(FILES.iter().all(|(p, _, b)| p.starts_with('/') && !b.is_empty()));
         assert!(SHELL_JS.contains("window.LoreShell") && SHELL_JS.contains("window.LoreLinks"));
         assert!(MAKEDECK_JS.contains("window.LoreMakeDeck") && MAKEDECK_JS.contains("/api/todeck"));
+        assert!(MAKEBOOK_JS.contains("window.LoreMakeBook") && MAKEBOOK_JS.contains("/api/book") && MAKEBOOK_JS.contains("bookjob"));
+        // the icons the two cards draw
+        let u = union();
+        assert!(u.contains("deckOutline") && u.contains("bookWrite"));
+        assert!(SHELL_JS.contains("`bookjob/${enc(p.bookjob)}`, `/?book-job=${enc(p.bookjob)}`"));
     }
 }

@@ -154,6 +154,8 @@ const ICONS = {
   layout: '<rect x="3" y="3" width="18" height="7" rx="1"/><rect x="3" y="14" width="9" height="7" rx="1"/><rect x="16" y="14" width="5" height="7" rx="1"/>',
   // SlideComposer's app icon (three stacked slides) as a line icon: 做成簡報 in PaperComposer
   deckOutline: '<path class="deck-3" d="M7 6h12.5a1 1 0 0 1 1 1v6.5"/><path class="deck-2" d="M5 8.5h12.5a1 1 0 0 1 1 1v6.5"/><rect class="deck-1" x="2.5" y="11" width="13.5" height="7.5" rx="1"/>',
+  // 寫 review (LoreReader → PaperComposer's 寫書): a book being written
+  bookWrite: '<path class="bk-cover" d="M4 18V5.5A2.5 2.5 0 0 1 6.5 3H17v11.5"/><path d="M4 18a2.5 2.5 0 0 1 2.5-2.5H12M4 18a2.5 2.5 0 0 0 2.5 2.5H11"/><path class="bk-lines" d="M8 7h5M8 10h3"/><path class="bk-pen" d="M13.5 21.5l.8-3 5.2-5.2a1.4 1.4 0 0 1 2 2l-5.2 5.2Z"/>',
   ai: '<text x="12" y="17.2" text-anchor="middle" font-size="15" font-weight="700" font-family="Noto Sans TC, -apple-system, sans-serif" fill="currentColor" stroke="none" letter-spacing=".5">AI</text>',
   palette: '<path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.84-.44-1.13-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.55-2.5 5.55-5.55C21.97 6.01 17.46 2 12 2Z"/><circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/>',
   contrast: '<circle cx="12" cy="12" r="9"/><path d="M12 18a6 6 0 0 0 0-12Z" fill="currentColor"/>',
