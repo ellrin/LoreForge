@@ -245,6 +245,20 @@ label = "簡潔"
 輸出（JSON schema，清單都是封閉的）：圖的種類、用哪些欄、系列名稱、軸標籤（可含 `$…$`）、格數、樣式 id、圖說草稿。
 模型不給顏色、大小、座標；這些來自樣式。回答再經 `Spec::validate`（欄名必須存在）才交給編輯器。
 
+## 7b. 圖表助手（LLM 任務 `plot-assist`，類別 `tidy`）
+
+編輯器上方「助手」打開右側的助手欄。助手**只輸出規格的值**（給現有的圖表函式用），從不寫程式：
+
+- **幾種畫法**：目前的資料（＋一句話）→ 2–4 個不同種類或格式的圖，每個一句說明，縮圖並排，按「套用」換成那一個（可以復原）。資料原樣帶著，不改、不捨入。
+- **照這句改**：「拉寬一點」「把 0.8–1.0 拉長」「legend 擋到曲線」「跟其他圖一致」→ 具體的修改 `[{ path, value, why }]`（規格裡的 JSON pointer，永遠不碰 `/data`），
+  在伺服器套到副本上、檢查 `Spec::problems`，頁面一次套用（一步復原），並列出「改了什麼：前 → 後、為什麼」。勾「附上目前的圖」時把目前的圖（110 dpi PNG）
+  交給能看圖的引擎（`plot-assist-vision`）。
+- 最多問一個問題（資料意義不明時，例如某欄是什麼、越高越好嗎），其他自己決定並說明假設。
+
+提示詞在 `commons/crates/lore-plot/prompts/assist.md`（公開、中性，不寫字型名稱），執行時填入 `{catalogue}`（formats.json 一格一行）、`{style_preset}`、`{venue}`，
+以及作者自己的偏好：`private/shared/plot/assist.md`（自由文字）＋他的預設樣式（經 lore-home）。PaperComposer 與 SlideComposer 的任務表都合併了這三個任務
+（`plot-propose`、`plot-assist`、`plot-assist-vision`），所以從論文重新打開圖 → 編輯器 → 助手 → 存回，會更新同一個圖檔。
+
 ## 8. 接到 app
 
 ### 共用部分
@@ -258,8 +272,9 @@ app 伺服器：`router = router.merge(lore_plot::router(lore_plot::Plot::new(ho
 | `POST /plot/api/import?name=<檔名>` | 檔案內容（CSV、TSV、JSON、XLSX、含 tabular 的 .tex、貼上的文字）→ `{ tables: [{ name, columns, rows }] }` |
 | `POST /plot/api/export` | `{ svg, spec, format: pdf/svg/png, dpi }` → 檔案 |
 | `POST /plot/api/propose` | `{ tables, sentence, style }` → `{ spec, engine }` |
+| `POST /plot/api/assist` | `{ mode: alternatives｜adjust, spec, tables, request, style, svg, look }` → `{ alternatives[] ｜ spec＋changes[], note, question, engine }` |
 
-頁面：`/plot/plot.js` + `/plot/editor.js` + `/plot/editor.css`，然後
+頁面依序載入 `/plot/` 的 `plot.js`、`charts.js`、`charts3d.js`、`formats.js`、`editor.js`（`lore_plot::assets::SCRIPTS`）與 `editor.css`，然後
 `LorePlot.edit({ spec, macros, title, target: "paper" | "slide", save: async ({ spec, svg }) => … })` 打開全螢幕編輯器（`<dialog>`），
 按「完成」呼叫 `save`；`save` 由 app 寫檔。
 

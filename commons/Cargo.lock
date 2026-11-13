@@ -1351,6 +1351,7 @@ dependencies = [
  "lore-home",
  "lore-llm",
  "lore-notation",
+ "lore-shell",
  "quick-xml",
  "serde",
  "serde_json",

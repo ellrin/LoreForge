@@ -472,3 +472,119 @@ fn private_examples_are_read_without_their_data() {
     assert!(ex[0].1.get("data").is_none());
     assert!(propose::examples(&tmp.path().join("missing")).is_empty());
 }
+
+// ── the figure assistant ─────────────────────────────────────────────────
+
+struct Script(std::sync::Mutex<Vec<Value>>, std::sync::Mutex<Vec<String>>);
+
+#[async_trait::async_trait]
+impl propose::Llm for Script {
+    async fn complete_json(&self, task: &str, req: lore_llm::LlmRequest) -> Result<(Value, String), String> {
+        self.1.lock().unwrap().push(task.to_string());
+        let v = self.0.lock().unwrap().remove(0);
+        lore_llm::json::validate(&v, req.json_schema.as_ref().unwrap())?;
+        Ok((v, "mock".into()))
+    }
+}
+
+fn assist_ctx() -> assist::Context {
+    assist::Context { catalogue: assist::catalogue_text(include_str!("../../../ui/plot/formats.json")), style_preset: "clean".into(), venue: "Nature".into(), preferences: String::new() }
+}
+
+#[test]
+fn assist_prompt_is_neutral_and_filled() {
+    let sys = assist::system(&assist_ctx());
+    assert!(!sys.contains("{catalogue}") && !sys.contains("{venue}") && !sys.contains("{style_preset}"));
+    assert!(sys.contains("B1 bar") && sys.contains("R2 roc") && sys.contains("never write code"));
+    assert!(sys.contains("Venue: Nature"));
+    for name in ["Times New Roman", "Arial", "Helvetica"] {
+        assert!(!assist::PROMPT.contains(name), "the public prompt names {name}");
+    }
+    let mut c = assist_ctx();
+    c.preferences = "Default style for papers: mine.".into();
+    assert!(assist::system(&c).contains("Default style for papers: mine."));
+    // both tasks are in the table an app merges
+    let t = assist::task_table();
+    for id in [propose::TASK, assist::TASK, assist::TASK_VISION] {
+        assert!(t.task.contains_key(id), "{id}");
+    }
+}
+
+#[test]
+fn assist_alternatives_keep_the_data_and_drop_unusable_ones() {
+    let tables = tables();
+    let styles = vec!["clean".to_string(), "nature".to_string()];
+    let formats: Vec<String> = ["B1", "B3", "V1"].iter().map(|s| s.to_string()).collect();
+    let reply = json!({ "note": "兩種畫法", "alternatives": [
+        { "why": "長條比較兩個方法", "panels": [{ "type": "bar", "format": "B3", "table": "t1", "x": "method", "series": [{ "y": "Dice", "err": "Dice_sd", "ours": true }], "yaxis": { "label": "Dice", "min": 0.7 }, "legend": { "pos": "above" } }] },
+        { "why": "每個指標一格", "grid_cols": 2, "panels": [
+            { "type": "bar", "table": "t1", "x": "method", "series": [{ "y": "Dice" }] },
+            { "type": "bar", "table": "t1", "x": "method", "series": [{ "y": "HD95", "label": "$\\mathrm{HD}_{95}$" }], "yaxis": { "scale": "log" } }] },
+        { "why": "壞的", "panels": [{ "type": "scatter", "x": "method", "y": null, "group": null, "series": [] }] } ] });
+    let fake = Script(std::sync::Mutex::new(vec![reply]), Default::default());
+    let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let r = rt.block_on(assist::alternatives(&fake, &assist_ctx(), &assist::AlternativesAsk { tables: &tables, sentence: "", styles: &styles, style: "clean", formats: &formats })).unwrap();
+    // the third (a scatter with no y column) is not a usable figure: left out, with its reason
+    assert_eq!(r.alternatives.len(), 2, "{:?}", r.skipped);
+    assert_eq!(r.alternatives[0].why, "長條比較兩個方法");
+    assert_eq!(r.alternatives[0].spec.panels[0].rest["format"], "B3");
+    assert_eq!(r.alternatives[0].spec.data["t1"].rows.len(), 2, "the data rides along, untouched");
+    assert_eq!(r.alternatives[1].spec.panels.len(), 2);
+    assert_eq!(r.alternatives[1].spec.rest["grid"]["cols"], 2);
+    assert_eq!(fake.1.lock().unwrap().as_slice(), [assist::TASK]);
+}
+
+#[test]
+fn assist_changes_are_applied_checked_and_listed() {
+    let spec = sample_spec();
+    let reply = json!({ "note": "y 軸 0.8–1.0 拉長三倍，圖例移到上方", "changes": [
+        { "path": "/panels/0/yaxis/scale", "value": "stretch", "why": "差異在上段" },
+        { "path": "/panels/0/yaxis/segments", "value": [[0.8, 1.0, 3]] },
+        { "path": "/panels/0/legend/pos", "value": "above" },
+        { "path": "/size/w", "value": 120 },
+        { "path": "/set/legend.size", "value": 6.5 } ] });
+    let mut spec = spec;
+    spec["size"] = Value::Null; // a figure at its style's size: /size/w still applies
+    let (new, changes) = assist::apply_changes(&spec, &reply).unwrap();
+    assert_eq!(changes.len(), 5);
+    assert_eq!(changes[0].before, Value::Null);
+    assert_eq!(changes[3].before, Value::Null);
+    assert_eq!(changes[3].after, json!(120));
+    let v = serde_json::to_value(&new).unwrap();
+    assert_eq!(v["panels"][0]["yaxis"]["segments"][0][2], 3);
+    assert_eq!(v["panels"][0]["legend"]["pos"], "above");
+    assert_eq!(v["set"]["legend.size"], 6.5);
+    // never the data, never a broken figure
+    assert!(assist::apply_changes(&spec, &json!({ "note": "", "changes": [{ "path": "/data/t1/rows/0/1", "value": 0.99 }] })).is_err());
+    assert!(assist::apply_changes(&spec, &json!({ "note": "", "changes": [{ "path": "/panels/0/series/0/y", "value": "Nope" }] })).unwrap_err().contains("Nope"));
+    assert!(assist::apply_changes(&spec, &json!({ "note": "", "changes": [{ "path": "/panels/7/title", "value": "x" }] })).is_err());
+    // the prompt carries the spec without its rows
+    let short = assist::spec_for_prompt(&spec);
+    assert_eq!(short["data"]["t1"]["row_count"], 2);
+}
+
+#[test]
+fn assist_adjust_retries_once_then_uses_vision_task_with_a_picture() {
+    let spec = sample_spec();
+    let bad = json!({ "note": "", "changes": [{ "path": "/data/t1/name", "value": "x" }] });
+    let good = json!({ "note": "拉寬", "changes": [{ "path": "/size/w", "value": 183 }] });
+    let fake = Script(std::sync::Mutex::new(vec![bad, good]), Default::default());
+    let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let img = lore_llm::Image::from_bytes("image/png", &tiny_png());
+    let r = rt.block_on(assist::adjust(&fake, &assist_ctx(), &spec, "拉寬一點", Some(img))).unwrap();
+    assert_eq!(r.changes[0].after, json!(183));
+    assert_eq!(fake.1.lock().unwrap().as_slice(), [assist::TASK_VISION, assist::TASK_VISION]);
+}
+
+#[test]
+fn assist_reads_the_authors_preferences_privately() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = lore_home::Home::at(tmp.path());
+    assert_eq!(assist::preferences(&home), "");
+    let plot = tmp.path().join("private/shared/plot");
+    std::fs::create_dir_all(&plot).unwrap();
+    std::fs::write(plot.join("assist.md"), "Prefer dashed lines with circle markers.").unwrap();
+    std::fs::write(plot.join("settings.toml"), "default_style = \"mine\"\n").unwrap();
+    let p = assist::preferences(&home);
+    assert!(p.contains("dashed lines") && p.contains("Default style for papers: mine."));
+}

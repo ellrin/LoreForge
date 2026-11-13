@@ -34,10 +34,12 @@ impl Table {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Size {
-    /// mm
-    pub w: f64,
-    /// mm
-    pub h: f64,
+    /// mm (None: the style's)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub w: Option<f64>,
+    /// mm (None: the style's)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -99,6 +101,26 @@ pub struct Panel {
 }
 
 impl Panel {
+    /// What this chart type needs and the panel does not name (None = complete).
+    pub fn missing(&self) -> Option<&'static str> {
+        let has = |c: &Option<String>| c.as_deref().is_some_and(|v| !v.is_empty());
+        let sers = |f: &dyn Fn(&Series) -> bool| !self.series.is_empty() && self.series.iter().all(f);
+        let ok = match self.kind.as_str() {
+            "line" | "area" | "bar" | "radar" => has(&self.x) && sers(&|s| has(&s.y)),
+            "dumbbell" => has(&self.x) && self.series.len() >= 2 && sers(&|s| has(&s.y)),
+            "pie" => has(&self.x) && self.series.first().is_some_and(|s| has(&s.y)),
+            "scatter" => has(&self.x) && (has(&self.y) || self.series.first().is_some_and(|s| has(&s.y))),
+            "bland" => self.series.first().is_some_and(|s| has(&s.y) && has(&s.y2)),
+            "box" | "violin" | "hist" | "ridge" | "ecdf" => (has(&self.group) && (has(&self.y) || self.series.first().is_some_and(|s| has(&s.y)))) || sers(&|s| has(&s.y)),
+            "roc" | "pr" => sers(&|s| (has(&s.score) && has(&s.truth)) || (has(&s.x) || has(&self.x)) && has(&s.y)),
+            "calib" | "dca" => sers(&|s| has(&s.score) && has(&s.truth)),
+            "km" => has(&self.x) && has(&self.event),
+            "contour" | "surface" | "scatter3d" => has(&self.x) && has(&self.y) && (has(&self.z) || self.series.first().is_some_and(|s| has(&s.y))),
+            _ => true,
+        };
+        (!ok).then_some("這種圖需要的欄還沒選")
+    }
+
     pub fn columns(&self) -> Vec<&str> {
         let mut v: Vec<&str> = [&self.x, &self.y, &self.group, &self.size, &self.event, &self.z, &self.hue].into_iter().filter_map(|c| c.as_deref()).collect();
         for s in &self.series {
@@ -174,10 +196,9 @@ impl Spec {
             out.push("沒有任何一格".into());
         }
         if let Some(s) = self.size
-            && !(10.0..=1000.0).contains(&s.w)
-            | !(10.0..=1000.0).contains(&s.h)
+            && [s.w, s.h].into_iter().flatten().any(|v| !(10.0..=1000.0).contains(&v))
         {
-            out.push(format!("大小 {}×{} mm 不合理（10–1000）", s.w, s.h));
+            out.push(format!("大小 {}×{} mm 不合理（10–1000）", s.w.unwrap_or(0.0), s.h.unwrap_or(0.0)));
         }
         for (i, p) in self.panels.iter().enumerate() {
             let n = i + 1;
@@ -192,6 +213,9 @@ impl Spec {
                 if !t.has(c) {
                     out.push(format!("第 {n} 格：資料裡沒有「{c}」這欄"));
                 }
+            }
+            if let Some(why) = p.missing() {
+                out.push(format!("第 {n} 格：{why}"));
             }
         }
         out

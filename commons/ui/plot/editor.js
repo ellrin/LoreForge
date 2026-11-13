@@ -152,7 +152,7 @@
     const undoB = iconBtn("undo", "復原 ⌘Z", () => undo());
     const redoB = iconBtn("redo", "重做 ⇧⌘Z", () => redo());
     const styleSel = h("select", { class: "set-input lp-style", "aria-label": "樣式" });
-    const aiB = h("button", { type: "button", class: "ghost", "aria-label": "自動產生" }, ic("spark"), h("span", { class: "lp-lbl" }, "自動"));
+    const aiB = h("button", { type: "button", class: "ghost", "aria-label": "助手", "aria-pressed": "false" }, ic("spark"), h("span", { class: "lp-lbl" }, "助手"));
     const expB = iconBtn("download", "匯出", (e) => exportMenu(e.currentTarget));
     const cancelB = h("button", { type: "button", class: "ghost" }, "取消");
     const doneB = h("button", { type: "button", class: "primary small" }, opts.target === "slide" ? "插入投影片" : opts.target === "paper" ? "存入論文" : "完成");
@@ -166,7 +166,9 @@
     const info = h("span", { class: "lp-info" });
     const warn = h("span", { class: "lp-warn" });
     const status = h("footer", { class: "statusbar lp-status" }, info, warn, h("span", { class: "grow" }), zoomSel);
-    dlg.append(top, h("div", { class: "lp-body" }, left, h("div", { class: "lp-mid" }, stage, status), right));
+    const assist = h("aside", { class: "lp-assist", "aria-label": "助手", hidden: true });
+    const body = h("div", { class: "lp-body" }, left, h("div", { class: "lp-mid" }, stage, status), assist, right);
+    dlg.append(top, body);
     dlg.showModal();
     if (typeof window.paintIcons === "function") window.paintIcons(dlg);
 
@@ -902,39 +904,79 @@
       return b;
     }
 
-    // ── AI ──
-    aiB.onclick = () => {
-      if (!api) return toast("示範頁沒有模型");
-      const tables = S.spec ? Object.values(S.spec.data) : [];
-      if (!tables.length) return toast("先放資料");
-      const ta = h("textarea", { class: "set-input lp-paste", rows: 4, placeholder: "例：比較我們的方法與 4 個 baseline 的 Dice 和 HD95，分組長條加誤差線" });
-      const ok = h("button", { type: "button", class: "primary small" }, ic("spark"), "產生");
-      const no = h("button", { type: "button", class: "ghost" }, "取消");
-      const d = h("dialog", { class: "dialog small" }, h("div", { class: "dlg-head" }, h("h2", {}, "自動產生")), h("div", { class: "dlg-body" }, ta), h("div", { class: "dlg-foot" }, h("span", { class: "grow" }), no, ok));
-      dlg.append(d);
-      d.showModal();
-      if (typeof window.paintIcons === "function") window.paintIcons(d);
-      no.onclick = () => d.remove();
-      ok.onclick = async () => {
-        if (!ta.value.trim()) return;
-        ok.disabled = true;
-        ok.lastChild.textContent = "產生中…";
-        try {
-          const r = await fetch(`${api}/propose`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tables, sentence: ta.value, style: S.spec.style ?? S.defStyle, target: opts.target ?? null }) });
-          const j = await r.json().catch(() => ({}));
-          if (!r.ok) throw new Error(j.error ?? r.statusText);
-          change((sp) => { Object.assign(sp, { ...j.spec, data: sp.data }); }, "structure");
-          S.pi = 0;
-          refresh(true);
-          d.remove();
-          if (j.engine) toast(`用 ${j.engine} 產生`);
-        } catch (e) {
-          toast(e.message, { err: true, ms: 6000 });
-          ok.disabled = false;
-          ok.lastChild.textContent = "產生";
-        }
+    // ── the figure assistant (plot-assist): spec values only, never code ──
+    const KEYS = { panels: "格", xaxis: "x 軸", yaxis: "y 軸", legend: "圖例", opts: "選項", size: "大小", w: "寬", h: "高", grid: "版面", set: "樣式", series: "系列", scale: "尺度", segments: "分段", pos: "位置", min: "最小", max: "最大", label: "標籤", title: "標題", inset: "小圖", notes: "註記", format: "格式", type: "種類", style: "樣式預設", cols: "欄", rows: "列" };
+    const human = (path) => path.split("/").filter(Boolean).map((k, i, a) => (a[i - 1] === "panels" && /^\d+$/.test(k) ? String.fromCharCode(97 + +k) : KEYS[k] ?? k)).filter((k) => k !== "格" || true).join(" · ");
+    const shown = (v) => (v == null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
+    function buildAssist() {
+      assist.textContent = "";
+      const ta = h("textarea", { class: "set-input lp-ask", rows: 3, placeholder: "例：把 0.8–1.0 拉長、圖例擋到曲線、拉寬一點" });
+      const look = h("input", { type: "checkbox" });
+      const go = h("button", { type: "button", class: "primary small" }, "照這句改");
+      const alts = h("button", { type: "button", class: "ghost" }, ic("layout"), "幾種畫法");
+      const out = h("div", { class: "lp-assist-out" });
+      assist.append(h("div", { class: "lp-gh" }, ic("spark"), "助手", h("span", { class: "lp-grow" }), iconBtn("x", "關閉助手", () => toggleAssist(false), "ico tiny")),
+        ta, h("div", { class: "lp-row" }, go, alts, h("label", { class: "lp-check" }, look, "附上目前的圖")), out);
+      if (!api) { out.append(h("p", { class: "lp-dim" }, "示範頁沒有模型")); go.disabled = alts.disabled = true; }
+      const busy = (on, b) => { go.disabled = alts.disabled = on; b.dataset.label ??= b.lastChild.textContent; b.lastChild.textContent = on ? "想一下…" : b.dataset.label; };
+      const call = async (body) => {
+        const r = await fetch(`${api}/assist`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error ?? r.statusText);
+        return j;
       };
-    };
+      const head = (j) => {
+        out.textContent = "";
+        if (j.note) out.append(h("p", { class: "lp-note" }, j.note));
+        if (j.question) out.append(h("p", { class: "lp-q" }, j.question));
+        if (j.engine) out.append(h("p", { class: "lp-dim" }, j.engine));
+      };
+      go.onclick = async () => {
+        if (!S.spec) return toast("先放資料");
+        if (!ta.value.trim()) return ta.focus();
+        busy(true, go);
+        try {
+          const j = await call({ mode: "adjust", spec: S.spec, request: ta.value, style: S.spec.style ?? S.defStyle, svg: look.checked ? S.last?.svg : undefined, look: look.checked });
+          change((sp) => replaceAll(sp, j.spec), "structure");
+          head(j);
+          const ul = h("ul", { class: "lp-changes" }, ...j.changes.map((c) => h("li", {}, h("b", {}, human(c.path)), h("span", {}, ` ${shown(c.before)} → ${shown(c.after)}`), c.why ? h("i", {}, c.why) : null)));
+          out.append(ul, h("button", { type: "button", class: "ghost", onclick: () => { undo(); out.textContent = ""; } }, ic("undo"), "復原這次"));
+        } catch (e) { toast(e.message, { err: true, ms: 7000 }); }
+        busy(false, go);
+      };
+      alts.onclick = async () => {
+        const tables = S.spec ? S.spec.data : null;
+        if (!tables || !Object.keys(tables).length) return toast("先放資料");
+        busy(true, alts);
+        try {
+          const j = await call({ mode: "alternatives", tables, request: ta.value, style: S.spec?.style ?? S.defStyle });
+          head(j);
+          const grid = h("div", { class: "lp-alts" });
+          out.append(grid);
+          for (const a of j.alternatives) {
+            const card = h("div", { class: "lp-alt" });
+            const pic = h("div", { class: "lp-alt-pic" });
+            const use = h("button", { type: "button", class: "ghost lp-chipbtn" }, "套用");
+            use.onclick = () => change((sp) => replaceAll(sp, { ...a.spec, caption: sp.caption ?? "" }), "structure");
+            card.append(pic, h("p", {}, a.why), use);
+            grid.append(card);
+            LP.render(a.spec, { styles: S.styleList, macros: opts.macros }).then((r) => { pic.innerHTML = r.svg; }).catch((e) => { pic.textContent = e.message; });
+          }
+        } catch (e) { toast(e.message, { err: true, ms: 7000 }); }
+        busy(false, alts);
+      };
+      if (typeof window.paintIcons === "function") window.paintIcons(assist);
+    }
+    function toggleAssist(on = assist.hidden) {
+      assist.hidden = !on;
+      body.classList.toggle("lp-with-assist", on);
+      aiB.setAttribute("aria-pressed", String(on));
+      if (on && !assist.firstChild) buildAssist();
+      if (on) assist.querySelector("textarea")?.focus();
+      clearTimeout(timer);
+      timer = setTimeout(draw, 80);
+    }
+    aiB.onclick = () => toggleAssist();
 
     // ── export / done ──
     async function finalSvg() {

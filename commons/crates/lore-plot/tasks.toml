@@ -9,3 +9,23 @@ default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
 offline = true
 max_tokens = 4000
+
+# The figure assistant beside the editor: spec values only (alternatives or concrete changes), never code.
+[task.plot-assist]
+label = "圖表助手"
+class = "tidy"
+needs = { json = true, context = 32000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 6000
+
+# The same with a rendering of the current figure attached.
+[task.plot-assist-vision]
+label = "圖表助手（看圖）"
+class = "tidy"
+needs = { json = true, vision = true, context = 32000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 6000

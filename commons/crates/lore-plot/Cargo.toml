@@ -25,4 +25,5 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+lore-shell = { path = "../lore-shell" }
 lore-notation = { path = "../lore-notation" }
