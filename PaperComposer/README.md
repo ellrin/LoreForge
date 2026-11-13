@@ -159,6 +159,8 @@ your-private-repo/
 - **模板**：課程講義筆記的樣式（課程與書名的標題區、Keyphrases、編號章節、定義框與重點框、右側邊註、名詞第一次出現附中文、`\cite` 與 `refs.bib`），由 [`publishers/lecture-notes/`](../private-example/PaperComposer/publishers/lecture-notes/README.md) 的 `lorenotes.sty` 排版，用 XeLaTeX 編譯，只用 BasicTeX 就有的套件。模板也內建在 App 裡；工作區的 `publishers/` 有 `template.toml` 寫 `kind = "book"` 的模板時，用你的。書的模板不出現在新論文與「模板」頁的期刊清單。
 - **中文字型**：用這台電腦有的第一個（內文 Songti TC → LiSong Pro → Noto Serif CJK TC …；標題與邊註 PingFang TC → Heiti TC → Noto Sans CJK TC …），不需要另外安裝。
 - **對照表**：新書帶一份 lore-notation 產生的 `notation.tex`（`\input{notation}`），和論文一樣登記符號、方程式，用 `\ref{…}` 引用。
+- **書的版面**：像一本書一樣兩頁對開：內外邊界對稱、邊註在外側、左頁頁首是書名、右頁是章名、標題頁單獨在第 1 頁、每章從右頁開始。頁面 B5（預設）或 A4，新書時選，之後在 main.tex 的 `\usepackage[b5]{lorenotes}` 改。
+- **從論文寫**：LoreReader 的「寫 review」或首頁「寫書」的「從論文寫…」。PaperComposer 在背景整理（讀論文 → 名詞 → 大綱 → 找資料 → 微調 → 撰寫 → 檢查），關掉視窗不會停；微調視窗可以勾選與排序章節、改章名與深度、篇幅、語言、頁面，套用或忽略建議。你在知識庫標為「記得」的名詞不寫，其他的一定解釋；每個說法都附引用；只用開放授權允許的論文圖。上網找到的開放取用論文會加進 LoreReader 書庫（LoreReader 沒開時，畫面上按「開啟 LoreReader」補上）。寫好的書和論文一樣編輯：新增圖、繪圖、表格、對照表、文獻、匯出都是同一套。流程細節見 [`../docs/book.md`](../docs/book.md)。
 
 ## 討論草稿
 
@@ -458,7 +460,10 @@ scripts/            Git hooks
 | POST | `/api/papers/import?name=&key_value=&tidy=` （本文為 .zip／.tar.gz／.tex） | 匯入現有的 LaTeX 專案；回覆含對應到的模板 `journal`（名稱 `journal_name`）、對到的作者 `authors`、可做的整理 `tidy`（`tidy=1` 時直接整理，結果在 `tidied`）與 `.bib` 併入文獻庫的試算 `bib` |
 | POST | `/api/papers/import-arxiv` `{ id, name?, key_value, tidy? }` | 從 arXiv 匯入原始檔 |
 | GET | `/api/books` | 寫書：`{ books: [{ id, title, path, papers, modified, thumb }], folder }`（`folder` 是新書預設的資料夾） |
-| POST | `/api/books` `{ title, folder }` | 新書：在 `folder` 裡建立以書名命名的資料夾（不覆蓋），記進 `books.toml`，回覆 `{ id, path }`（`id` 用來打開） |
+| POST | `/api/books` `{ title, folder, page? }` | 新書：在 `folder` 裡建立以書名命名的資料夾（不覆蓋），記進 `books.toml`，回覆 `{ id, path }`（`id` 用來打開）；`page` = `b5`（預設）或 `a4` |
+| POST | `/api/book` …、`/api/book/jobs/{id}/…` | 寫書的工作（`docs/book.md` §API） |
+| GET | `/api/info` | `{ app: "pc", books }`（LoreReader 的「寫 review」用；和 `/api/book*`、`/api/books` 一樣回應本機其他 App 的跨來源請求） |
+| POST | `/api/papers/{name}/figure-block` `{ path, caption, stem? }` | `figures/` 裡一張圖的 figure 環境：沒用過的 `\label`、期刊的圖說位置、載入 graphicx → `{ label, block, added }`（新增圖…、繪圖…、寫書共用） |
 | POST | `/api/shell/dialog` `{ kind: "latex" \| "word" \| "folder", start? }` | 桌面版的系統開檔對話框，回覆 `{ path }`；瀏覽器模式 501 |
 | POST | `/api/open/inspect` `{ path }` | 看路徑是什麼：已可開啟的論文 `{kind:"paper", id}`、要先整理的 LaTeX 資料夾 `{kind:"latex", plan}`（不寫入任何檔案）、壓縮檔 `{kind:"archive", dest}`、Word `{kind:"word", dest, pandoc}` |
 | POST | `/api/open/latex` `{ path, stamp }` | 照預覽（`plan.stamp`）原地整理並開啟；預覽後資料夾有變動則拒絕 |

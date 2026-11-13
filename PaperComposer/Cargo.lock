@@ -2358,6 +2358,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-jobs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "lore-learn"
+version = "0.1.0"
+dependencies = [
+ "kb-core",
+ "lore-home",
+ "lore-store",
+ "lore-words",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lore-llm"
 version = "0.1.0"
 dependencies = [
@@ -2415,6 +2436,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-research"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "quick-xml",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "lore-secrets"
 version = "0.1.0"
 dependencies = [
@@ -2439,6 +2474,10 @@ dependencies = [
  "thiserror 2.0.21",
  "toml 0.8.23",
 ]
+
+[[package]]
+name = "lore-words"
+version = "0.1.0"
 
 [[package]]
 name = "lru-slab"
@@ -2995,15 +3034,20 @@ dependencies = [
  "flate2",
  "futures-util",
  "kb-core",
+ "lore-docsrc",
  "lore-engines",
  "lore-fonts",
  "lore-gitsync",
  "lore-home",
+ "lore-jobs",
+ "lore-learn",
  "lore-llm",
  "lore-notation",
  "lore-plot",
+ "lore-research",
  "lore-shell",
  "lore-store",
+ "lore-words",
  "pc-core",
  "pdf-extract",
  "reqwest 0.12.28",

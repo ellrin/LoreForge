@@ -48,18 +48,36 @@
 | GET | `/api/info` | — | 至少 `{ app: "pc", books: [{id, title, path, papers}] }` |
 | GET | `/api/books` | — | `{ books: [{id, title, path, papers, modified, thumb}], folder }`（`books.toml`；`folder` 是新書預設的資料夾） |
 | POST | `/api/books` | `{ title, folder }` | `{ id, path }`：從模板建立一本空的書（第一階段已有） |
-| POST | `/api/book` | `{ source: {kind: "lr", sha}, book: "new" \| "<id>", length: "short"\|"standard"\|"long", lang: "en-zh"\|"en"\|"zh", mode: "review"\|"direct", extras?: {terms: [{term, n}], stuck: [段落 id], questions: [text]}, folder?: path }` | `{ job: "<id>", …工作物件 }` |
+| POST | `/api/book` | `{ source: {kind: "lr", sha}, book: "new" \| "<id>", length: "short"\|"standard"\|"long", lang: "en-zh"\|"en"\|"zh", mode: "review"\|"direct", extras?: {terms: [{term, n}], stuck: [段落 id], questions: [text]}, folder?: path, page?: "b5"\|"a4", engine?: "local"\|"subscription"\|"api" }` | `{ job: "<id>", …工作物件 }`（`folder` 沒給：上次新書的資料夾） |
 | GET | `/api/book/jobs/{id}` | `?after=<seq>` 長輪詢 | 工作物件 |
 | POST | `/api/book/jobs/{id}/review` | 作者在微調視窗的決定 | 工作物件 |
-| POST | `/api/book/jobs/{id}/params` | `{length?, lang?}` | 從 `plan` 重做 |
+| POST | `/api/book/jobs/{id}/params` | `{length?, lang?, page?}` | 篇幅或語言變了：從 `plan` 重做；頁面大小只影響 `write` |
 | POST | `/api/book/jobs/{id}/stop`、`/resume` | — | 工作物件 |
-| GET | `/api/book/jobs/{id}/imports` | — | `pending_imports`（頁面補做 LoreReader 匯入用） |
+| GET | `/api/book/jobs/{id}/imports` | — | `{pending}`（頁面補做 LoreReader 匯入用） |
+| POST | `/api/book/jobs/{id}/imports` | — | 頁面用 `LoreLinks.ensure("lr")` 打開 LoreReader 之後：伺服器再把等著的 PDF 交給它 → `{imported, pending, failed}` |
+| GET | `/api/book/jobs/{id}/open` | — | 寫好的書在 `opened.toml` 的 id → `{id, path}`（頁面據此打開） |
+| GET | `/api/book/jobs` | `?unfinished=1` | `{jobs}`（首頁「寫書」的進行中、「上次做到第 N 步，繼續？」） |
+| DELETE | `/api/book/jobs/{id}` | — | 刪掉工作的快取資料夾 |
 
 頁面：PaperComposer 用 `?book-job=<id>` 打開工作畫面（LoreLinks `lore-pc://bookjob/<id>`）；完成後打開那本書。
 
+## 第二階段（2026-11-13 完成）：寫書的工作
+
+`PaperComposer/crates/server/src/book/`（`pipeline.rs` 階段、`plan.rs`、`research.rs`、`write.rs`、`source.rs`、`model.rs`、`tools.rs`），頁面 `PaperComposer/ui/bookjob.js`。
+
+- **一樣的文件、一樣的路徑**：書就是 PaperComposer 的文件，工作寫 LaTeX 只走論文本來的路：章節（`paper::add_section`、`render_section`）、圖與表（`floats.rs`：檔名、`\label`、圖說位置、`graphicx`；編輯器的 新增圖…／繪圖… 也改成呼叫同一個 `POST /api/papers/{name}/figure-block`；繪圖的圖是 lore-plot 的 `save_paper_figure`，留著 `.plot.json` 可以再用 繪圖… 修改）、表格（`textable` 的樣式與 `render`，和 新增表… 一樣）、文獻（進工作區的文獻庫 `refs/library.bib`，再由 `write_paper_bib` 產生書的 bib，和「文獻」一樣）、符號（`reader::register_into` 進書自己的 `notation.json`，和 LoreReader 面板的「插入」一樣）。寫好的書在編輯器裡和論文一樣改。
+- **名詞**：`commons/crates/lore-learn`（從 SlideComposer 的 `kbterms.rs` 抽出：找名詞、對知識庫、卡片的 `prerequisite` 連結；SlideComposer 仍用它，行為不變）。`known` 以外都要講；`learning` 標成短一點。LoreReader 卡片送來的紅字名詞補進去。加進既有的書：書裡已經 `\term{…}` 過的名詞不再講。沒排進章節的名詞列在微調視窗。
+- **大綱**：`pc-book-plan`（class create）；章節依知識庫的先備關係重排（`plan::order`）。`pc-book-suggest`：最多 5 個建議（改章名、深度、移動、不寫、合併、加一章），失敗就沒有。
+- **找資料**：先查這篇論文的開放授權（OpenAlex 的 `license`；在 arXiv 上的論文以 arXiv 自己標的授權為準，因為 OpenAlex 把 arXiv 的版本一律標成 cc-by，arXiv 預設的授權不允許轉載）；只有 CC BY、CC BY-SA、CC0、公眾領域可以把論文的圖放進書（圖說附來源與授權）。其他授權：有數字的圖改用 lore-plot 依論文的數字重畫（引用），示意圖用文字說明。流程圖等 PaperComposer 有流程圖工具（和編輯器同一條路）再加。回答「太多請求」的來源，這個工作就不再問它（只重試一次、最多等 8 秒），不會卡在限流上。知識卡當脈絡（不能引用）。LoreReader 書庫裡標題含章節名詞的論文與作者的引用句。上網：每章最多 2 個查詢、取 2 篇開放取用論文，下載到快取、由伺服器交給 LoreReader；LoreReader 沒開就留在 `pending_imports`，頁面上「開啟 LoreReader」補做。沒網路照常完成並註明。
+- **撰寫**：每章一次 `pc-book-chapter`（JSON：本文、圖、表）。只准引用這章的資料（不存在的 key 拿掉並列出）；圖用 `%%FIGURE:id` 位置與 `\ref{fig:id}`，換成真正的標籤；畫不出來的圖連同參照一起拿掉。每章跑對照表檢查（`notation::check`），手打的「Section 2」、不存在的 `\ref` 會請模型重寫一次，還有的列在結果。新符號登記為待確認。全書寫完後，沒有被引用的方程式標籤拿掉（連同只剩標籤的那一行）。`notation.tex` 只在它還是 lore-notation 產生的檔案時由 lore-notation 重寫。
+- **檢查**：整本書的 lore-notation 檢查（`hardcoded_reference`、`ref_undefined`、`label_*`）、每個 `\cite` 都有條目、每個 `\includegraphics` 檔案都在、XeLaTeX 編譯（`export::build_pdf`，和匯出 PDF 一樣；沒有 TeX 就註明沒編譯）。
+- **頁面**：`?book-job=<id>` 打開工作畫面（進度、微調、完成後「打開書」）；`?book-job=mock&at=run|review|done|interrupted` 不用模型看每個狀態。首頁「寫書」：進行中的工作、「從論文寫…」（LoreReader 的論文）、新書的頁面大小。
+- **檢查點**：`<OS 快取>/PaperComposer/book/jobs/<id>/`（`PAPERCOMPOSER_CACHE` 可改），`write.state.json` 記已建立的章節與寫好的章，中斷後接著寫不重複。
+- **書的版面（作者 2026-11-13 補充）**：`lorenotes.sty` 是書的版面：雙面、內外邊界對稱、邊註在外側（偶數頁在左、奇數頁在右）、左頁頁首書名、右頁頁首章名、頁碼在外側、標題頁單獨在第 1 頁（右頁）、摘要在標題頁背面、每章從右頁開始（前一頁空白不印頁首）。頁面大小 B5（預設）或 A4：`main.tex` 的 `\usepackage[b5]{lorenotes}`（`pc_core::book::page_of`／`set_page`；放在 main.tex 而不是 paper.toml，檔案自己就能在別處編譯）；新書表單、`POST /api/books {page}`、工作的 `page` 與微調視窗都可以選。
+
 ## 第一階段（2026-11-13 完成）：文件類型、書的清單、模板
 
-流程（上面的工作與 `/api/book*`）還沒做，等作者看過模板樣張再開始。已經有的：
+已經有的：
 
 - **文件類型**：`paper.toml` 的 `kind = "book"`（`pc_core::meta::PaperMeta::kind`，沒寫＝論文）。書沒有 Key value 列，也沒有期刊規則；其他（章節編輯、對照表、文獻、匯出）和論文相同。設計文件 §6 的 `kinds/` 沒做：目前只有 `book` 一種，差別只有上面兩項，等真的需要不同的檢查或大綱層級再做。
 - **書的清單**：`books.toml`（PaperComposer 的設定資料夾，`opened.toml` 旁邊；`[[book]] path, title, papers` 與 `last_folder`）。書也登記在 `opened.toml`，用那裡的 id 打開。`GET`／`POST /api/books`（`PaperComposer/crates/server/src/books.rs`）。

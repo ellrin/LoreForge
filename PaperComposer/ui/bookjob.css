@@ -1,0 +1,100 @@
+/* 寫書 job view and review window (the look of SlideComposer's 論文報告): shell tokens only */
+.bkj { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-size: 13px; }
+.bkj[hidden] { display: none; }
+.bkj-head { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 16px; border-bottom: 1px solid var(--line); flex: none; }
+.bkj-head h2 { margin: 0; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bkj-body { flex: 1; overflow: auto; width: 100%; max-width: 640px; margin: 0 auto; padding: 24px 16px; box-sizing: border-box; }
+.bkj-body.wide { max-width: 1040px; display: grid; gap: 14px; align-content: start; }
+.bkj-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); flex: none; }
+.bkj-msg { margin: 16px 0 0; color: var(--muted); }
+.bkj-msg.err { color: var(--err); }
+.bkj-stages { list-style: none; margin: 0; padding: 0; display: grid; }
+.bkj-st { display: grid; grid-template-columns: 22px 64px 1fr auto; align-items: baseline; gap: 8px; padding: 9px 10px; border-radius: var(--r); color: var(--muted); }
+.bkj-st .mk { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line-strong); align-self: center; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
+.bkj-st.done { color: var(--text); }
+.bkj-st.done .mk { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.bkj-st.done .mk svg { width: 10px; height: 10px; }
+.bkj-st.running { color: var(--text); background: var(--accent-soft); }
+.bkj-st.running .mk { border-color: var(--accent); border-top-color: transparent; animation: bkj-spin 1s linear infinite; }
+.bkj-st .nm { font-weight: 600; }
+.bkj-st .ct { font: 12px var(--mono); color: var(--muted); display: flex; flex-wrap: wrap; gap: 0 8px; }
+.bkj-st .ct i { font-style: normal; opacity: .5; }
+.bkj-st .ct .stale { color: var(--err); }
+.bkj-st .tm { font: 12px var(--mono); color: var(--muted); text-align: right; }
+@keyframes bkj-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .bkj-st.running .mk { animation: none; border-top-color: var(--accent); } }
+
+@media (max-width: 900px) {
+  .bkj-st { grid-template-columns: 22px 54px 1fr; }
+  .bkj-st .tm { grid-column: 3; text-align: left; }
+}
+
+/* 微調: 長度 / 語言 / 底版 strip and 建議 */
+.bkj-opts { display: grid; grid-template-columns: auto auto auto auto auto 1fr; align-items: center; gap: 8px 10px; }
+.bkj-opts .ql { color: var(--muted); }
+.bkj-opts .seg { justify-self: start; }
+.bkj-sugg { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.bkj-sugg li { display: grid; grid-template-columns: minmax(140px, 0.8fr) minmax(0, 1.6fr) auto; gap: 10px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.bkj-sugg .why { font-weight: 500; }
+.bkj-sugg .what { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bkj-sugg .acts { display: flex; gap: 6px; }
+.bkj-sugg li.done { background: none; }
+.bkj-sugg li.done .why, .bkj-sugg li.done .what { color: var(--muted); }
+.bkj-sugg .st { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-text); font-size: 12px; }
+.bkj-sugg .st svg { width: 12px; height: 12px; }
+@media (max-width: 900px) {
+  .bkj-opts { grid-template-columns: auto 1fr; }
+  .bkj-sugg li { grid-template-columns: 1fr auto; }
+  .bkj-sugg .what { grid-column: 1; grid-row: 2; white-space: normal; }
+  .bkj-sugg .acts, .bkj-sugg .st { grid-column: 2; grid-row: 1 / span 2; }
+}
+
+/* 寫書: the chapter rows, notes, the finished book */
+.bkj-head > [data-icon] { color: var(--accent-2-text); }
+.bkj-chapters { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.bkj-chapters .row { display: grid; grid-template-columns: 18px 22px 22px minmax(140px, 1fr) auto minmax(160px, 1.3fr); gap: 8px; align-items: center; padding: 5px 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.bkj-chapters .row.off { opacity: .55; }
+.bkj-chapters .row.off .ti { text-decoration: line-through; }
+.bkj-chapters .mv { display: grid; }
+.bkj-chapters .mv .ico { height: 14px; width: 20px; }
+.bkj-chapters .mv svg { width: 12px; height: 12px; }
+.bkj-chapters .down svg { transform: rotate(180deg); }
+.bkj-chapters .no { font: 500 11px var(--mono); color: var(--accent-text); }
+.bkj-chapters .ti { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid transparent; background: transparent; color: var(--text); font: inherit; font-weight: 600; padding: 4px 6px; border-radius: var(--r); }
+.bkj-chapters .ti:hover { border-color: var(--line); }
+.bkj-chapters .ti:focus { border-color: var(--accent); outline: none; background: var(--bg); }
+.bkj-chapters .tm { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.bkj-chapters .chip, .bkj-left .chip { padding: 2px 6px; font-size: 11px; }
+.bkj-chapters .chip.unknown { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.bkj-left { display: flex; flex-wrap: wrap; gap: 4px; }
+.bkj-note { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--muted); margin-top: 12px; }
+.bkj-note > [data-icon] svg { width: 14px; height: 14px; }
+.bkj-done { display: grid; gap: 10px; margin-top: 16px; }
+.bkj-book { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent-2); border-radius: var(--r); background: var(--surface); }
+.bkj-book .muted, .bkj-list.muted { color: var(--muted); font-size: 12px; }
+.bkj-list { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+@media (max-width: 900px) {
+  .bkj-chapters .row { grid-template-columns: 18px 22px 22px 1fr; }
+  .bkj-chapters .seg, .bkj-chapters .tm { grid-column: 4; }
+}
+
+/* home 寫書: unfinished jobs above the books; 新書's page size */
+.home-jobs { max-width: 1180px; width: 100%; margin: 10px auto 0; display: grid; gap: 4px; }
+.home-jobs:empty { display: none; }
+.home-job { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 7px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent-2); border-radius: var(--r); background: var(--surface); color: var(--text); }
+.home-job:hover { background: var(--surface-hover); }
+.home-job > [data-icon], .home-job > svg { color: var(--accent-2-text); }
+.home-job .open-where { direction: ltr; }
+.menu .form-row > .seg { flex: none; }
+.menu .form-row > .form-label { flex: none; margin: 0; }
+
+/* narrow windows: nothing wider than the window, the footer always in view */
+.bkj-body { min-height: 0; }
+.bkj-body.wide { grid-template-columns: minmax(0, 1fr); }
+.bkj-body > * { max-width: 100%; box-sizing: border-box; }
+.bkj-note { flex-wrap: wrap; }
+.bkj-note > span { min-width: 0; overflow-wrap: anywhere; }
+.bkj-chapters .chip { white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .bkj-opts { grid-template-columns: auto minmax(0, 1fr); }
+}

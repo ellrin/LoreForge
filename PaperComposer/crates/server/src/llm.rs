@@ -323,11 +323,11 @@ mod tests {
     #[test]
     fn app_tasks_parse_and_cover_every_use() {
         let t = Llm::task_table(None).unwrap();
-        for id in ["pc-compose-paragraph", "pc-soft-check", "pc-decompose", "pc-outline", "pc-caption", "pc-ref-queries", "pc-ref-rank", "pc-ref-notes", "pc-cite-extract", "pc-engine-test"] {
+        for id in ["pc-compose-paragraph", "pc-soft-check", "pc-decompose", "pc-outline", "pc-caption", "pc-ref-queries", "pc-ref-rank", "pc-ref-notes", "pc-cite-extract", "pc-engine-test", "pc-book-plan", "pc-book-suggest", "pc-book-chapter"] {
             assert!(t.task.contains_key(id), "{id}");
         }
         // Claude first, then the local model.
-        for id in ["pc-outline", "pc-ref-queries", "pc-ref-rank", "pc-cite-extract"] {
+        for id in ["pc-outline", "pc-ref-queries", "pc-ref-rank", "pc-cite-extract", "pc-book-plan", "pc-book-suggest", "pc-book-chapter"] {
             assert_eq!(t.task[id].default, "claude:selected");
             assert_eq!(t.task[id].fallback.as_deref(), Some("local:current"));
         }

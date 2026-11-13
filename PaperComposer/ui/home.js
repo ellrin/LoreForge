@@ -131,19 +131,43 @@ const PCHome = (() => {
     const add = el("button", "primary small", "＋ 新書");
     add.dataset.opensMenu = "";
     add.onclick = () => newBookForm(add);
-    head.append(iconButton("back", "返回", () => show(1)), el("h2", "", "寫書"), el("span", "grow"), add);
+    const fromPaper = el("button", "ghost small", "從論文寫…");
+    fromPaper.dataset.opensMenu = "";
+    fromPaper.onclick = () => paperMenu(fromPaper);
+    head.append(iconButton("back", "返回", () => show(1)), el("h2", "", "寫書"), el("span", "grow"), fromPaper, add);
+    const jobsBox = el("div", "home-jobs");
     const sub = el("div", "home-sub", "繼續");
     const grid = el("div", "home-grid papers");
-    box.append(head, sub, grid);
+    box.append(head, jobsBox, sub, grid);
     if (focus) add.focus();
     const fill = () => {
       sub.hidden = !books?.books?.length;
       grid.replaceChildren(...(books?.books ?? []).map(bookCard));
     };
     if (books) fill();
+    PCBookJob.list().then((jobs) => {
+      // unfinished 寫書 jobs: waiting for the review, stopped, failed, interrupted
+      jobsBox.replaceChildren(...jobs.map((j) => {
+        const b = el("button", "home-job");
+        const state = j.state === "review" ? "等你微調" : j.state === "running" ? "進行中" : j.state === "failed" ? "沒有完成" : `做到第 ${j.step ?? "?"} 步`;
+        b.append(icon("bookWrite"), el("span", "open-name", j.title || "寫書"), el("span", "open-where", state));
+        b.onclick = () => PCBookJob.open(j.id);
+        return b;
+      }));
+    }).catch(() => {});
     try { books = await api("/api/books"); }
     catch (e) { books = books ?? { books: [] }; LoreShell.toast(e.message, { err: true, ms: 6000 }); }
     if (grid.isConnected) fill();
+  }
+
+  /** 從論文寫…: LoreReader's papers; one starts a new book (the review window first). */
+  async function paperMenu(anchor) {
+    let papers = [];
+    try { papers = (await api("/api/reader/papers")).papers ?? []; } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); return; }
+    if (!papers.length) { LoreShell.toast("LoreReader 沒有論文"); return; }
+    LoreShell.menu(anchor, papers.slice(0, 30).map((p) => ({ label: p.title || p.sha.slice(0, 8), run: async () => {
+      try { await PCBookJob.start(p.sha, { folder: books?.folder ?? undefined }); } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
+    } })));
   }
 
   function bookCard(b) {
@@ -176,6 +200,17 @@ const PCHome = (() => {
     folder.placeholder = "存放的資料夾";
     folder.value = books?.folder ?? "";
     row.append(folder);
+    let page = "b5";
+    const pages = el("div", "seg");
+    for (const [v, t] of [["b5", "B5"], ["a4", "A4"]]) {
+      const b = el("button", "", t);
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(v === page));
+      b.onclick = () => { page = v; pages.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); };
+      pages.append(b);
+    }
+    const pageRow = el("div", "form-row");
+    pageRow.append(el("span", "form-label", "頁面"), pages);
     if (PCOpen.desktop()) {
       const pick = el("button", "ghost fit", "選擇…");
       pick.prepend(icon("folder"));
@@ -193,7 +228,7 @@ const PCHome = (() => {
       if (!folder.value.trim()) { folder.focus(); return; }
       go.disabled = true;
       try {
-        const r = await api("/api/books", { title: title.value.trim(), folder: folder.value.trim() });
+        const r = await api("/api/books", { title: title.value.trim(), folder: folder.value.trim(), page });
         m.hidden = true;
         books = null;
         await openPaper(r.id);
@@ -207,7 +242,7 @@ const PCHome = (() => {
     for (const i of [title, folder]) i.onkeydown = (e) => { if (e.key === "Enter") create(); if (e.key === "Escape") m.hidden = true; };
     const foot = el("div", "form-row end");
     foot.append(go);
-    m.append(title, row, foot);
+    m.append(title, row, pageRow, foot);
     keepOnScreen(m);
     folder.scrollLeft = folder.scrollWidth; // the folder's own name, not the start of the path
     title.focus();

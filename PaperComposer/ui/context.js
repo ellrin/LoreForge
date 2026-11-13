@@ -475,18 +475,12 @@ const PCContext = (() => {
 
   /** The figure block for a file already in figures/ (新增圖…, 繪圖…): label, \ref at the click, checks. */
   async function placeFile(at, was, path, caption, stem) {
-    const n = Object.values(PCTex.kinds).filter((k) => k === "fig").length + 1;
-    const label = newLabel("fig", caption || stem, n);
-    const capLines = [`  \\caption{${texText(caption)}}`, `  \\label{${label}}`];
-    const img = `  \\includegraphics[width=\\linewidth]{${path}}`;
-    const body = state.paper.captions?.figure === "above" ? [...capLines, img] : [img, ...capLines];
-    const block = ["\\begin{figure}[t]", "  \\centering", ...body, "\\end{figure}"].join("\n");
-    const now = withRef(at, was, "fig", label);
-    if (!(await commit(at, was, now, block))) return false;
-    try {
-      const r = await api(`${base()}/packages`, { packages: ["graphicx"] });
-      if (r.added?.length) LoreShell.toast(`main.tex 已加入 \\usepackage{graphicx}`, { ms: 5000 });
-    } catch {}
+    // label, caption side and graphicx come from the server (floats.rs), the same path 寫書 uses
+    let r;
+    try { r = await api(`${base()}/figure-block`, { path, caption, stem }); } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); return false; }
+    const now = withRef(at, was, "fig", r.label);
+    if (!(await commit(at, was, now, r.block))) return false;
+    if (r.added?.length) LoreShell.toast(`main.tex 已加入 \\usepackage{graphicx}`, { ms: 5000 });
     refreshSection(at.si);
     refreshGit();
     land(at, was);

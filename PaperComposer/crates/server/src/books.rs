@@ -7,7 +7,7 @@
 //! | Method | Path | |
 //! |---|---|---|
 //! | GET | /api/books | `{books: [{id, title, path, papers, modified, thumb}], folder}`: newest first; `folder` = where 新書 puts the next one |
-//! | POST | /api/books | `{title, folder}` → `{id, path}`: a new book from the book template; the folder is remembered |
+//! | POST | /api/books | `{title, folder, page?}` → `{id, path}` (`page`: `b5` default or `a4`): a new book from the book template; the folder is remembered |
 
 use super::*;
 
@@ -69,18 +69,65 @@ pub fn registry_file() -> PathBuf {
 
 static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn update<T>(f: impl FnOnce(&mut Registry) -> T) -> Result<T, String> {
+fn update_in<T>(file: &Path, f: impl FnOnce(&mut Registry) -> T) -> Result<T, String> {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let file = registry_file();
-    let mut r = Registry::load(&file);
+    let mut r = Registry::load(file);
     let out = f(&mut r);
-    r.save(&file)?;
+    r.save(file)?;
     Ok(out)
 }
 
 /// Where 新書 suggests: the last folder used, else Documents (or home).
 fn default_folder(r: &Registry) -> Option<PathBuf> {
     r.last_folder.clone().filter(|d| d.is_dir()).or_else(dirs::document_dir).or_else(dirs::home_dir)
+}
+
+/// A new book from `template` with its page size, and listed in books.toml (the folder remembered).
+pub fn new_book(folder: &Path, title: &str, template: &Path, page: Option<&str>) -> Result<PathBuf, String> {
+    let dir = pc_core::book::create(folder, title, template)?;
+    if let Some(p) = page.filter(|p| !p.is_empty())
+        && let Err(e) = pc_core::book::set_page(&dir, p)
+    {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(e);
+    }
+    Ok(dir)
+}
+
+/// Record a book (and the paper it was written from) in books.toml.
+pub fn remember(dir: &Path, title: &str, paper: Option<&str>, folder: Option<&Path>) -> Result<(), String> {
+    remember_in(&registry_file(), dir, title, paper, folder)
+}
+
+/// [`remember`] in a given books.toml.
+pub fn remember_in(file: &Path, dir: &Path, title: &str, paper: Option<&str>, folder: Option<&Path>) -> Result<(), String> {
+    update_in(file, |r| {
+        r.add(dir, title);
+        if let Some(sha) = paper
+            && let Some(b) = r.books.iter_mut().find(|b| b.path == dir)
+            && !b.papers.iter().any(|p| p == sha)
+        {
+            b.papers.push(sha.to_string());
+        }
+        if let Some(f) = folder {
+            r.last_folder = Some(f.to_path_buf());
+        }
+    })
+}
+
+/// Where 新書 puts the next book (books.toml's last folder, else Documents).
+pub fn next_folder() -> Option<PathBuf> {
+    default_folder(&Registry::load(&registry_file()))
+}
+
+/// The workspace's book template, else the built-in one written into `scratch`.
+pub fn template(ws: Option<&Path>, scratch: &Path) -> Result<PathBuf, String> {
+    if let Some(t) = ws.and_then(|w| pc_core::book::workspace_template(&w.join("publishers"))) {
+        return Ok(t);
+    }
+    let t = scratch.join(pc_core::book::TEMPLATE_ID);
+    pc_core::book::write_builtin(&t).map_err(|e| e.to_string())?;
+    Ok(t)
 }
 
 // ── Handlers ────────────────────────────────────────────
@@ -95,13 +142,18 @@ async fn id_of(s: &Shared, dir: &Path) -> Option<String> {
 }
 
 async fn list(State(s): State<Shared>) -> impl IntoResponse {
+    Json(listing(&s).await)
+}
+
+/// What `GET /api/books` answers (also `/api/info`'s `books`).
+pub(crate) async fn listing(s: &Shared) -> serde_json::Value {
     let r = Registry::load(&registry_file());
     let mut out = Vec::new();
     for b in &r.books {
         if !pc_core::open::is_paper(&b.path) {
             continue; // moved or on a drive that is not here: kept in books.toml
         }
-        let Some(id) = id_of(&s, &b.path).await else { continue };
+        let Some(id) = id_of(s, &b.path).await else { continue };
         let c = home::card(&b.path, id.clone());
         out.push(serde_json::json!({
             "id": id,
@@ -113,13 +165,16 @@ async fn list(State(s): State<Shared>) -> impl IntoResponse {
         }));
     }
     out.sort_by(|a, b| b["modified"].as_u64().cmp(&a["modified"].as_u64()));
-    Json(serde_json::json!({ "books": out, "folder": default_folder(&r) }))
+    serde_json::json!({ "books": out, "folder": default_folder(&r) })
 }
 
 #[derive(Deserialize)]
 struct NewBook {
     title: String,
     folder: PathBuf,
+    /// `b5` (default) or `a4`.
+    #[serde(default)]
+    page: Option<String>,
 }
 
 async fn create(State(s): State<Shared>, Json(b): Json<NewBook>) -> impl IntoResponse {
@@ -132,24 +187,15 @@ async fn create(State(s): State<Shared>, Json(b): Json<NewBook>) -> impl IntoRes
     // the workspace's book template, else the built-in one
     let ws = s.loaded.read().await.workspace.clone();
     let scratch = std::env::temp_dir().join(format!("pc-book-template-{}", std::process::id()));
-    let template = match ws.as_ref().and_then(|w| pc_core::book::workspace_template(&w.join("publishers"))) {
-        Some(t) => t,
-        None => {
-            let t = scratch.join(pc_core::book::TEMPLATE_ID);
-            if let Err(e) = pc_core::book::write_builtin(&t) {
-                return bad(&e.to_string());
-            }
-            t
-        }
+    let template = match template(ws.as_deref(), &scratch) {
+        Ok(t) => t,
+        Err(e) => return bad(&e),
     };
-    let made = pc_core::book::create(&b.folder, &b.title, &template);
+    let made = new_book(&b.folder, &b.title, &template, b.page.as_deref());
     let _ = std::fs::remove_dir_all(&scratch);
     let dir = match made { Ok(d) => d, Err(e) => return bad(&e) };
     let title = b.title.split_whitespace().collect::<Vec<_>>().join(" ");
-    if let Err(e) = update(|r| {
-        r.add(&dir, &title);
-        r.last_folder = Some(b.folder.clone());
-    }) {
+    if let Err(e) = remember(&dir, &title, None, Some(&b.folder)) {
         return bad(&e);
     }
     match opened::register(&s, &dir).await {

@@ -339,6 +339,10 @@ fn text_hash(t: &str) -> String {
 }
 
 /// Every `\label{…}` in the main file and the section files.
+pub fn labels(paper: &Path) -> Vec<String> {
+    paper_labels(paper)
+}
+
 fn paper_labels(paper: &Path) -> Vec<String> {
     let mut out = Vec::new();
     for f in crate::open::source_files(paper) {

@@ -14,6 +14,8 @@
 pub mod citecheck;
 pub mod convert;
 mod draft;
+pub mod floats; // figures and tables, one path for the editor and 寫書
+pub mod book; // 寫書: the job that writes a book from a paper (docs/book.md)
 mod books; // 寫書: books.toml and 新書
 mod home;
 mod notation;
@@ -908,10 +910,9 @@ async fn put_figure(State(s): State<Shared>, AxPath(name): AxPath<String>, AxQue
     if !figure_name_ok(&q.file) {
         return bad("圖檔要是 PNG、JPG、PDF 或 EPS，名稱只用英數字與 - _ .");
     }
-    let figs = dir.join("figures");
-    match std::fs::create_dir_all(&figs).and_then(|_| std::fs::write(figs.join(&q.file), &body)) {
-        Ok(()) => Json(serde_json::json!({ "path": format!("figures/{}", q.file) })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    match floats::save_figure_file(&dir, &q.file, &body) {
+        Ok(path) => Json(serde_json::json!({ "path": path })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
 }
 
@@ -3271,6 +3272,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/papers/{name}/export", post(export_paper))
         .route("/api/papers/{name}/figure", get(paper_figure))
         .route("/api/papers/{name}/figure-sizes", post(paper_figure_sizes))
+        .route("/api/papers/{name}/figure-block", post(floats::figure_block_route))
         .route("/api/papers/{name}/figures", post(put_figure).layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)))
         .route("/api/papers/{name}/front", put(put_front))
         .route("/api/papers/{name}/meta", put(put_meta))
@@ -3356,7 +3358,8 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/compose", post(compose_paragraph))
         .merge(draft::routes())
         .merge(home::routes())
-        .merge(books::routes())
+        .merge(books::routes().layer(book::local_cors()))
+        .merge(book::routes())
         .merge(sections::routes())
         .merge(opened::routes())
         .merge(notation::routes())

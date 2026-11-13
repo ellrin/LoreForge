@@ -18,13 +18,18 @@ lore-fonts.workspace = true
 kb-core.workspace = true
 lore-store.workspace = true
 lore-plot.workspace = true
+lore-jobs.workspace = true
+lore-research.workspace = true
+lore-docsrc.workspace = true
+lore-learn.workspace = true
+lore-words = { path = "../../../commons/crates/lore-words" }
 async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "process", "time"] }
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
 dirs = "6"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 sysinfo = { version = "0.37", default-features = false, features = ["system"] }

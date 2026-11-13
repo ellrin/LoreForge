@@ -179,3 +179,28 @@ needs = { json = true }
 default = "local:current"
 fallback = "claude:selected"
 offline = true
+
+# 寫書 (src/book, docs/book.md): the plan of the chapters, 建議 on it, and each chapter.
+[task.pc-book-plan]
+label = "寫書：大綱"
+class = "create"
+needs = { json = true }
+default = "claude:selected"
+fallback = "local:current"
+offline = false
+
+[task.pc-book-suggest]
+label = "寫書：建議"
+class = "create"
+needs = { json = true }
+default = "claude:selected"
+fallback = "local:current"
+offline = false
+
+[task.pc-book-chapter]
+label = "寫書：撰寫章節"
+class = "create"
+needs = { json = true }
+default = "claude:selected"
+fallback = "local:current"
+offline = false
