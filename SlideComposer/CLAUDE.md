@@ -78,6 +78,11 @@ when working on lore-canvas in parallel with other agents.
   PaperComposer's 寫書; `kbterms.rs` re-exports it and keeps the slide marks, 我懂 and the KnowledgeBase write.
 - 繪圖 (toolbar 圖表, `web/figplot.js`, `crates/server/src/plot.rs`, `../docs/plot.md`): the shared lore-plot editor (`/plot/*`); the figure is a
   300 dpi PNG picture that carries its spec (`iTXt`, survives the .pptx); double-click re-opens it and replaces the image in place (one undo step).
+- 流程圖 (toolbar 流程圖 and AI → 流程圖, `web/figflow.js`, `crates/server/src/flow.rs`, `../docs/flow-figures.md`): the shared lore-flow editor (`/flow/*`,
+  `doc` = the deck → its notation); the figure is one picture — a group of native shapes/connectors/text with `lock_aspect` (resizing = `Op::Scale`:
+  text, line widths, arrowheads scale together) and the spec in `GroupObj::data` (kept in the editor-state part, `SlideState::data`, so it survives the
+  .pptx); double-click (⌥ = edit text) or 排列 → 編輯流程圖 replaces it in place (one undo step); new variables go to the deck's `notation.json`.
+  排列 → 一張圖 (group as one picture / toggle the lock), 另存圖片 PNG/SVG/PDF of any object (`/api/decks/{name}/image`, object.html through Chrome).
 - `crates/core` (`sc-core`): `Workspace` (styles/, decks/), `Session` (open deck: editor,
   source package, layout backdrops, LaTeX cache), export PPTX/PDF, `layout_titles`.
 - `crates/server` (`sc-server`): axum on 127.0.0.1:7880; handlers are plain async fns over

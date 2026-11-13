@@ -987,7 +987,12 @@ function resizeTo(d, p, keepAspect, tol) {
     if (d.k.includes("s")) { const s = snap1([cy0 + b], L.ys, tol); if (s) { b += s.d; guides.push({ h: s.line }); } }
   }
   let w = Math.max(EMU, r - l), h = Math.max(EMU, b - tp);
-  if (keepAspect && d.k.length === 2 && f.w && f.h) {
+  // one picture (a figure group): the aspect is kept from the side handles too, centred on the other axis
+  if (d.o.lock_aspect && d.k.length === 1 && f.w && f.h) {
+    const ar = f.w / f.h;
+    if (d.k === "e" || d.k === "w") { h = w / ar; tp = -h / 2; b = h / 2; } else { w = h * ar; l = -w / 2; r = w / 2; }
+  }
+  if ((keepAspect || d.o.lock_aspect) && d.k.length === 2 && f.w && f.h) {
     const ar = f.w / f.h;
     if (w / h > ar) h = w / ar; else w = h * ar;
     if (d.k.includes("w")) l = r - w; else r = l + w;
@@ -1031,6 +1036,9 @@ async function onPointerUp(ev) {
   $$(".site").forEach((s) => s.remove());
   if (d.kind === "move" && d.moved) {
     await commit(d.starts.map((s) => setObj(s.o.id, "/frame", s.o.frame)), "移動");
+  } else if (d.kind === "resize" && d.o.lock_aspect && !d.o.frame.rot) {
+    // one picture: text sizes, line widths and arrowheads scale with it (server-side, one undo step)
+    await commit([{ op: "scale", slide: S.cur, id: d.o.id, x: d.o.frame.x, y: d.o.frame.y, w: d.o.frame.w }], "縮放");
   } else if (d.kind === "resize" || d.kind === "rotate") {
     await commit([setObj(d.o.id, "/frame", d.o.frame)], d.kind === "resize" ? "縮放" : "旋轉");
   } else if (d.kind === "end") {
@@ -1601,6 +1609,31 @@ async function group() {
   S.sel = [id];
   renderOverlay(); renderSide();
 }
+/** 組成一張圖: the selection as one group that keeps its aspect ratio (text and lines scale with it);
+ *  on a group alone, turn that on or off. */
+async function groupAsPicture() {
+  const o = selObjs()[0];
+  if (S.sel.length === 1 && o?.type === "group") {
+    await commit([setObj(o.id, "/lock_aspect", !o.lock_aspect)], o.lock_aspect ? "取消一張圖" : "組成一張圖");
+    renderOverlay(); renderSide();
+    return;
+  }
+  if (S.sel.length < 2) return;
+  const id = maxId() + 1;
+  await commit([{ op: "group", slide: S.cur, ids: S.sel, id, lock_aspect: true }], "組成一張圖");
+  S.sel = [id];
+  renderOverlay(); renderSide();
+}
+/** 另存圖片: one object or group as PNG / SVG / PDF in the deck's exports. */
+async function saveObjectImage(format) {
+  const o = selObjs()[0];
+  if (!o) return;
+  toast("輸出圖片…");
+  try {
+    const r = await api(deckApi("/image"), { body: { slide: S.cur, id: o.id, format } });
+    exportCard(r.path, r.warning, format.toUpperCase());
+  } catch (e) { toast(e.message, true); }
+}
 async function ungroup() {
   const o = selObjs()[0];
   if (!o || o.type !== "group") return;
@@ -2003,14 +2036,14 @@ function printDeck() {
   document.body.append(f);
 }
 /** After an export: file name, page count, 在 Finder 顯示 and 開啟. */
-function exportCard(path, warning) {
+function exportCard(path, warning, note) {
   $(".toast")?.remove();
   $(".export-card")?.remove();
   const name = String(path).split(/[\\/]/).pop();
   const pages = S.deck?.slides.filter((s) => !s.hidden).length ?? 0;
   const act = (reveal) => () => api("/api/export/open", { body: { path, reveal } }).catch((e) => toast(e.message, true));
   const card = h("div", { class: "export-card", role: "status" },
-    h("div", { class: "ec-main" }, h("b", { class: "ec-name", title: path }, name), h("span", { class: "muted" }, `${pages} 頁`)),
+    h("div", { class: "ec-main" }, h("b", { class: "ec-name", title: path }, name), h("span", { class: "muted" }, note ?? `${pages} 頁`)),
     warning ? h("div", { class: "ec-warn" }, warning) : null,
     h("div", { class: "ec-actions" },
       h("button", { class: "btn small", onclick: act(true) }, h("span", { "data-icon": "folder" }), "在 Finder 顯示"),
@@ -2107,8 +2140,8 @@ function mountShell() {
       ] },
       { id: "insPaper", icon: "news", label: "論文", pressed: false, run: () => rdToggle() },
     ],
-    // the flow-chart module (lore-flow) has no UI yet: the slot is kept, the entry is off
-    ai: { icon: "spark", label: "AI", menu: [{ icon: "check", label: "排版用字", run: () => openPolish() }, { icon: "graph", label: "流程圖", disabled: true, title: "即將推出" }] },
+    // 流程圖: the shared lore-flow editor (figflow.js), the same as the toolbar button
+    ai: { icon: "spark", label: "AI", menu: [{ icon: "check", label: "排版用字", run: () => openPolish() }, { icon: "graph", label: "流程圖", run: () => window.SCFlow?.create() }] },
     notation: openNotation,
     export: exportItems(),
     undo: { undo, redo },

@@ -1,6 +1,6 @@
 //! `POST /api/export/open`: 開啟 / 在 Finder 顯示 for a file the app just exported.
 //! Only files inside the workspace's decks folder (the `exports/` of a deck) with a
-//! .pptx / .pdf extension are accepted: the local API must not open arbitrary files.
+//! .pptx / .pdf / .png / .svg extension are accepted: the local API must not open arbitrary files.
 
 use axum::Json;
 use axum::extract::State;
@@ -19,7 +19,7 @@ pub struct OpenBody {
 pub async fn export_open(State(s): State<Shared>, Json(b): Json<OpenBody>) -> R {
     let path = std::path::PathBuf::from(&b.path).canonicalize().map_err(|_| bad("找不到檔案"))?;
     let root = s.ws.decks.canonicalize().map_err(|_| bad("找不到簡報資料夾"))?;
-    let ext_ok = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pptx") || e.eq_ignore_ascii_case("pdf"));
+    let ext_ok = path.extension().and_then(|e| e.to_str()).is_some_and(|e| ["pptx", "pdf", "png", "svg"].iter().any(|x| e.eq_ignore_ascii_case(x)));
     if !path.starts_with(&root) || !path.is_file() || !ext_ok {
         return Err(ApiError(axum::http::StatusCode::FORBIDDEN, "只能開啟匯出的檔案".into()));
     }

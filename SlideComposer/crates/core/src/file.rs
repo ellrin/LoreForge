@@ -107,6 +107,9 @@ pub struct SlideState {
     /// Empty slots (never exported): their position in the slide's object list and the object.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub empty: Vec<(usize, Object)>,
+    /// Group id → the app data it carries (a flow figure's spec, so it re-opens in its editor).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub data: BTreeMap<u32, serde_json::Value>,
 }
 
 impl EditorState {
@@ -118,19 +121,22 @@ impl EditorState {
             .enumerate()
             .filter_map(|(i, s)| {
                 let mut st = SlideState { i, sld: sld.get(i).copied().unwrap_or(0), arrangement: s.arrangement.clone(), ..Default::default() };
-                fn walk(v: &[Object], out: &mut BTreeMap<u32, String>) {
+                fn walk(v: &[Object], out: &mut BTreeMap<u32, String>, data: &mut BTreeMap<u32, serde_json::Value>) {
                     for o in v {
                         if let (Some(sl), false) = (&o.slot, o.is_empty_slot()) {
                             out.insert(o.id, sl.clone());
                         }
                         if let lore_canvas::Kind::Group(g) = &o.kind {
-                            walk(&g.children, out);
+                            if let Some(d) = &g.data {
+                                data.insert(o.id, d.clone());
+                            }
+                            walk(&g.children, out, data);
                         }
                     }
                 }
-                walk(&s.objects, &mut st.slots);
+                walk(&s.objects, &mut st.slots, &mut st.data);
                 st.empty = s.objects.iter().enumerate().filter(|(_, o)| o.is_empty_slot()).map(|(j, o)| (j, o.clone())).collect();
-                (st.arrangement.is_some() || !st.slots.is_empty() || !st.empty.is_empty()).then_some(st)
+                (st.arrangement.is_some() || !st.slots.is_empty() || !st.empty.is_empty() || !st.data.is_empty()).then_some(st)
             })
             .collect();
         EditorState { v: 1, deck_id: deck_id.into(), style: deck.style.clone(), defaults: deck.defaults.clone(), slides }
@@ -149,6 +155,13 @@ impl EditorState {
             for (id, slot) in &st.slots {
                 if let Some(o) = s.find_mut(*id) {
                     o.slot = Some(slot.clone());
+                }
+            }
+            for (id, d) in &st.data {
+                if let Some(o) = s.find_mut(*id)
+                    && let lore_canvas::Kind::Group(g) = &mut o.kind
+                {
+                    g.data = Some(d.clone());
                 }
             }
             for (at, o) in &st.empty {

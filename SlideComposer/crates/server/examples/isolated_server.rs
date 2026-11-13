@@ -39,6 +39,8 @@ async fn serve(dir: std::path::PathBuf, port: u16) {
     };
     let _ = shared.llm.set(llm);
     let l = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.expect("bind");
+    // headless Chrome renders object.html from this server (equation fallbacks, 另存圖片)
+    *shared.port.lock().unwrap() = l.local_addr().unwrap().port();
     eprintln!("http://{}", l.local_addr().unwrap());
     axum::serve(l, sc_server::router_isolated(shared)).await.unwrap();
 }

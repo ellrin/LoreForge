@@ -243,7 +243,12 @@ function renderText(tb, ctx, editable = false, cellMode = false) {
   const [l, t, r, b] = tb.insets;
   Object.assign(box.style, { paddingLeft: `${px(l)}px`, paddingTop: `${px(t)}px`, paddingRight: `${px(r)}px`, paddingBottom: `${px(b)}px` });
   box.style.justifyContent = { t: "flex-start", ctr: "center", b: "flex-end" }[tb.anchor] ?? "flex-start";
-  if (!tb.wrap) box.classList.add("nowrap");
+  if (!tb.wrap) {
+    box.classList.add("nowrap");
+    // unwrapped text keeps its alignment against the box, as PowerPoint does (centred text grows both ways)
+    const al = { ctr: "center", r: "flex-end" }[tb.paras?.[0]?.align];
+    if (al) box.style.alignItems = al;
+  }
   if (tb.vert && tb.vert !== "horz") box.style.writingMode = tb.vert === "eaVert" || tb.vert === "vert" ? "vertical-rl" : "vertical-lr";
   if (cellMode) box.classList.add("cell-tx");
   const scale = tb.font_scale ?? 1;

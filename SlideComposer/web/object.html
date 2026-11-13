@@ -18,7 +18,8 @@
 <script src="render.js"></script>
 <script>
 // One object of a deck, alone, at its own size: headless Chrome screenshots it
-// as the fallback picture of an equation box (viewers without Office Math).
+// as the fallback picture of an equation box (viewers without Office Math), or as
+// 另存圖片 (PNG; ?print=1 prints it as a one-page PDF).
 (async () => {
   const q = new URL(location.href).searchParams;
   const name = q.get("deck"), uid = q.get("slide"), id = Number(q.get("obj"));
@@ -41,6 +42,12 @@
     } catch {}
   }
   const size = { w: obj.frame.w, h: obj.frame.h };
+  // ?print=1: one page the object's size (save a picture as PDF)
+  if (q.get("print")) {
+    const st = document.createElement("style");
+    st.textContent = `@page { size: ${SC.px(size.w)}px ${SC.px(size.h)}px; margin: 0; } html, body { width: ${SC.px(size.w)}px; height: ${SC.px(size.h)}px; }`;
+    document.head.append(st);
+  }
   const ctx = { size, backdrops: null, slideNo: 0, assetUrl: (a) => `/api/decks/${encodeURIComponent(name)}/asset?id=${encodeURIComponent(a)}`, latex: (m) => latex.get(m), transparent: true };
   const el = SC.renderSlide({ ...slide, objects: [one], bg: null }, ctx);
   el.style.background = "transparent";

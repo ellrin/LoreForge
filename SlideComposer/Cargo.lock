@@ -2157,6 +2157,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-flow"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "lore-canvas",
+ "lore-home",
+ "lore-llm",
+ "lore-math",
+ "lore-notation",
+ "lore-ooxml",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "lore-fonts"
 version = "0.1.0"
 dependencies = [
@@ -3472,6 +3492,7 @@ dependencies = [
  "lore-canvas",
  "lore-docsrc",
  "lore-engines",
+ "lore-flow",
  "lore-fonts",
  "lore-home",
  "lore-jobs",

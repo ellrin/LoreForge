@@ -1,6 +1,6 @@
 # 流程圖與論文圖（規劃）
 
-作者 2026-11-13 的要求，記下來給之後的工作用。程式在 `commons/crates/lore-flow`（L1 圖的內容 → L2 位置與連線 → L3 lore-canvas 物件），目前只有 SlideComposer 在用。
+作者 2026-11-13 的要求，記下來給之後的工作用。程式在 `commons/crates/lore-flow`（L1 圖的內容 → L2 位置與連線 → L3 lore-canvas 物件）與共用編輯器 `commons/ui/flow/`；SlideComposer 已接上（§5），PaperComposer 是下一步（§6）。
 
 ## 1. 共用功能，不屬於任何一個 app
 
@@ -11,7 +11,7 @@
 
 - 流程圖的物件可以組成群組，變成「一張圖」；群組後固定長寬比放大縮小（字、線寬、箭頭一起縮放）。
 - 任何物件或群組可以另存成圖片（PNG，之後加 SVG / PDF），在 SlideComposer 與 PaperComposer 都可以。
-- 已有：L3 的模組是可拆開的群組；`lore-flow draw … --png` 從命令列出 PNG。要補：編輯器裡「組成一張圖／鎖定比例／另存圖片」。
+- 已有：L3 的模組是可拆開的群組；`lore-flow draw … --png` 從命令列出 PNG；SlideComposer 的「一張圖」與「另存圖片」（§5）。
 
 ## 3. 從題目到圖的步驟（照作者畫圖的習慣）
 
@@ -38,9 +38,50 @@
 11. **圖下方的說明（圖例）**：例如「綠色虛線＝…」「粉色 block＝conv block」；要不要放、放哪些，由作者決定。
 12. **生成**：產生可編輯的原生物件（SlideComposer 的投影片物件；PaperComposer 輸出圖檔或 TikZ，之後再定）。
 
-已有：L1 文字格式、`sc-flow-graph` 從描述／參考圖提出 L1、`arrange` 與面板模板、模組庫、依類型上色與一列圖例。要補：上面 1–8 的逐步討論、9 的版面模板庫（大量）、11 的圖例選擇介面、PaperComposer 端的接法。
+已有（2026-11-13）：上面 1–12 全部，見 §5。要補：PaperComposer 端的接法（§6）。
 
 ## 4. 之後（下下下階段，不急）
 
 - 完整的論文繪圖工具：論文常見的圖都要能畫（流程圖、架構圖、結果圖表、示意圖、比較圖格……）。
 - 美術風格可客製（作者自己的風格包，像 SlideComposer 的風格版型）。
+
+## 5. 現況（2026-11-13）
+
+**共用編輯器**（像繪圖工具一樣是共用功能）：`lore_flow::web::router` 掛在 app 的 `/flow/*`，頁面 `LoreFlow.edit({ spec, doc, frame, target, source, sources, save })`
+打開全螢幕編輯器，外框和繪圖編輯器同一套（上方列：流程圖 · 名稱 · 復原／重做 · 助手 · 下載 SVG · 取消 · 插入投影片／存入論文）。
+
+- 左邊：步驟 1–8。每一步「問模型」＝一次 `flow-discuss`（類別 create，JSON，每步封閉的回答格式）：模型說兩三句、給 2–4 個選項（★ 是建議），作者點選或自己寫，「下一步」自動問下一步。
+  6 變數與方程式：模型從對照表提出符號（KaTeX 顯示，新的標「新」），作者勾選，也可以「從對照表加…」。7 每個 block 一張小卡（輸入、輸出、是什麼）。
+  8 線性列表：「產生列表」＝ `sc-flow-graph`（討論的決定 → L1），每個 block 一行 `block 1 (…): a -> b -> c`。
+- 右邊：01 列表（L1 文字，直接改）· 02 版面（每個模板用目前這張圖畫縮圖；每個 block 的方向 自動／→／↓）· 03 顏色與線（block 種類：顏色＋名稱，指定給 block 或模組；
+  每種線：顏色、實線／虛線…、意思）· 04 圖例（自動／自選／不放；自選＝勾選要放的列、改文字，圖下方或上方）。
+- 助手（`flow-assist`，類別 tidy）：「照這句改」只改規格的值（`/dirs/b`、`/legend/pos`…，伺服器先畫一次確認畫得出來），列出改了什麼；「幾種版面」給 2–4 個同內容的版面縮圖，「套用」。
+- 規格（`FlowSpec`，`lore_flow: 1`）：L1 文字＋版面、方向、主題、block 種類與顏色、線的樣式與意思、圖例、框的大小、討論的決定。圖的顏色從不跟 app 主題。
+- 資料：公開中性的 20 個版面模板（`commons/crates/lore-flow/layouts.json`）、9 個 block 色（`figure::PALETTE`）；作者自己的放 `private/shared/flow/`
+  （`layouts/`、`themes/`、`modules/`、`palette.json`、`examples/*.json` 給列表那一步當範例、`assist.md` 作者的習慣），各 app 的 `private/<App>/flow/` 也會讀（SlideComposer 原有的 `templates/`、`themes/`）。
+
+**SlideComposer**：工具列「流程圖」與 AI 選單「流程圖」打開編輯器（出發點預設帶入 論文 面板開著的那篇的題目與摘要）；「插入投影片」＝伺服器畫出原生物件
+（形狀、連接線、文字，數學式是 Office Math），整張圖是**一張圖**：一個群組，固定長寬比，放大縮小時字、線寬、箭頭一起縮放（`Op::Scale`，一步復原），
+規格掛在群組上（`deck.json` 與 .pptx 的編輯器狀態區，存檔再打開仍可重新編輯）。雙擊（⌥ 雙擊＝照舊改字）或 排列 →「編輯流程圖」重新打開，完成後原地換掉（同位置、同寬，一步復原）。
+圖裡的新變數登記到這份簡報的 `notation.json`。任何物件或群組：排列 →「一張圖」（多選＝組成一張圖；單一群組＝開／關鎖定比例）、「另存圖片」PNG／SVG／PDF（存到簡報的 exports/）。
+
+沒有在真的環境測過：真的模型（測試與截圖都是假模型）、PowerPoint 打開含一張圖的 .pptx（鎖定比例旗標是 `a:grpSpLocks noChangeAspect`）。
+
+## 6. PaperComposer（下一步，等寫書的工作做完再接）
+
+和「新增圖…／繪圖…」同一條路，不另做一套：
+
+1. **入口**：論文右鍵選單「流程圖…」（在「繪圖…」旁，`ui/context.js` 的 `add("graph", "流程圖…", …)`）；`ui/figflow.js`（像 `figplot.js`）載入 `/flow/editor.css`、`/flow/editor.js`，
+   `LoreFlow.edit({ target: "paper", doc: <論文名稱>, frame: [版心寬 pt, 高], source: 論文題目＋摘要＋方法一節（lore-docsrc 讀 main.tex）, sources: LoreReader 的論文, save })`。
+2. **伺服器**：`router.merge(lore_flow::web::router(Flow::new(home).with_llm(FlowLlm).with_notation(<這篇論文的對照表>).with_app_dir(private/PaperComposer/flow)))`，
+   任務表合併 `lore_flow::llm::task_table()`（`flow-discuss`、`flow-assist`、`sc-flow-graph`）；`FlowLlm` 和 `plot.rs` 的 `PlotLlm` 是同一個轉接（兩個 trait 形狀相同）。
+3. **存檔**：`POST /api/papers/{name}/flow`（`{stem, replace, spec, svg}`）→ `figures/<stem>.pdf`＋`figures/<stem>.flow.json`（規格，含討論）。
+   PDF 的數學式要是 TeX 字形，不是預覽 SVG 的 Unicode：編輯器在「存入論文」時把圖畫成 SVG、`$…$` 交給 KaTeX 攤平成 SVG（`plot.js` 已有的做法，抽成共用函式），
+   伺服器用 `lore_plot::export::pdf`（Chrome）出 PDF、有 `pdftocairo` 時也出 SVG。登記過的巨集交給 KaTeX（`/api/papers/{name}/plot/macros` 同一份）。
+   `figures/` 裡沒有 `.flow.json` 的 PDF 是作者自己的檔，永遠不覆寫（同繪圖的規則）。
+4. **插入**：`placeFile(at, was, "figures/<stem>.pdf", caption, stem)` → `figure-block`（`floats.rs`）：`\begin{figure}… \includegraphics… \caption{…} \label{fig:…}`，
+   標籤由伺服器取、不重複；游標處插 `\ref{fig:…}`，從不打「Figure 1」；需要時 main.tex 加 graphicx。
+5. **對照表**：圖裡的新變數（`vars_new`）用 `lore_flow::notation::register_new` 寫進這篇論文自己的對照表（標 `flow-draft`，不寫全域、不動 `notation.tex`）；
+   圖裡的標籤用 `@id` 指向登記的符號，登記過的巨集在畫圖前展開。插入的區塊跑 lore-notation 的 `check_document`。
+6. **重新編輯**：雙擊頁面上的圖：旁邊有 `.flow.json` 才打開流程圖編輯器（`.plot.json` → 繪圖編輯器，都沒有 → 照舊），完成後覆寫同一個 PDF 與規格。
+7. **測試**（離線、合成論文、假模型）：存檔產生 PDF 規格兩個檔（沒有 Chrome 時只檢查規格與錯誤訊息）、作者自己的 PDF 不被覆寫、插入的區塊通過 `check_document`、`\ref` 不是打字的編號、新變數只進論文的對照表。

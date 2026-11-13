@@ -31,6 +31,7 @@ mod export_open;
 pub mod jobs;
 pub mod kbterms;
 pub mod llm;
+mod flow; // web/figflow.js: 流程圖 (lore-flow editor, one picture that carries its spec)
 mod plot; // web/figplot.js: 繪圖 (lore-plot editor, a PNG picture that carries its spec)
 mod notation;
 mod reader;
@@ -397,7 +398,8 @@ fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
         ))
         .service(ServeDir::new(&shared.web).append_index_html_on_directories(true));
     let plots = plot::plot_router(&shared);
-    routes().merge(plot::routes()).with_state(shared).merge(plots).merge(lore_engines::router(engines)).fallback_service(web)
+    let flows = flow::flow_router(&shared);
+    routes().merge(plot::routes()).merge(flow::routes()).with_state(shared).merge(plots).merge(flows).merge(lore_engines::router(engines)).fallback_service(web)
 }
 
 pub fn state(ws: Workspace, web: PathBuf) -> Shared {
