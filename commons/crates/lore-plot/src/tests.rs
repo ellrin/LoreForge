@@ -639,3 +639,19 @@ fn public_palettes_stay_distinct_for_colour_blind_readers() {
     // the check means something: near-identical light blues fail it
     assert!(cvd_min_delta_e(&["#87CEEB", "#A6D8FF", "#DDA0DD"]) < 10.0);
 }
+
+/// Headless render of a spec (needs Chrome; run by hand: `cargo test -p lore-plot render_spec -- --ignored`).
+#[test]
+#[ignore]
+fn render_spec_in_headless_chrome() {
+    let tools = crate::export::Tools::find();
+    if tools.chrome.is_none() {
+        return;
+    }
+    let styles = serde_json::Value::Array(crate::style::resolved(&crate::style::raw(None), &Default::default()));
+    let spec = r#"{"lore_plot":1,"style":"clean","size":{"w":80,"h":55},"data":{"t":{"columns":["x","y"],"rows":[[0,0],[1,1],[2,4],[3,9]]}},"panels":[{"type":"line","data":"t","x":"x","series":[{"y":"y","label":"$y=x^2$"}],"xaxis":{"label":"$x$"},"yaxis":{"label":"$y$"}}]}"#;
+    let svg = crate::export::render_spec(&tools, spec, &styles).unwrap();
+    assert!(svg.starts_with("<svg") && svg.contains("mm"), "{}", &svg[..svg.len().min(300)]);
+    let pdf = crate::export::export(&tools, &svg, Some(spec), crate::export::Format::Pdf, 0).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+}

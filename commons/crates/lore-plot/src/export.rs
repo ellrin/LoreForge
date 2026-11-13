@@ -348,6 +348,97 @@ pub fn pdf(tools: &Tools, svg_doc: &str, w_mm: f64, h_mm: f64) -> Result<Vec<u8>
     bytes.map_err(|_| ExportError::Failed("Chrome 沒有產生 PDF".into()))
 }
 
+/// The figure's SVG without a page open: headless Chrome runs `LorePlot.render` (the same
+/// `plot.js` the editor uses, from [`assets::FILES`]) on `spec_json` with `styles` (what
+/// `GET /plot/api/styles` answers as `styles`) and the DOM is read back. For jobs on the server
+/// (PaperComposer's 寫書) that make figures with no editor open.
+pub fn render_spec(tools: &Tools, spec_json: &str, styles: &serde_json::Value) -> Result<String, ExportError> {
+    let chrome = tools.chrome.as_ref().ok_or(ExportError::NoChrome)?;
+    serde_json::from_str::<serde_json::Value>(spec_json).map_err(|e| ExportError::Failed(format!("規格不是 JSON：{e}")))?;
+    let dir = tmp_dir()?;
+    let result = (|| {
+        std::fs::create_dir_all(dir.join("katex/fonts"))?;
+        for (path, _, bytes) in assets::FILES {
+            if !path.ends_with(".html") {
+                std::fs::write(dir.join(path), bytes)?;
+            }
+        }
+        for (file, bytes) in assets::KATEX_FONTS {
+            std::fs::write(dir.join("katex/fonts").join(file), bytes)?;
+        }
+        let json_of = |name: &str| assets::get(name).map(|(_, b)| String::from_utf8_lossy(b).to_string()).unwrap_or_else(|| "{}".into());
+        // `</` inside a script would end it
+        let safe = |s: &str| s.replace("</", "<\\/");
+        let page = format!(
+            "<!doctype html><meta charset=\"utf-8\"><body><pre id=\"out\"></pre>\n\
+<script>window.__F={{\"palettes.json\":{pal},\"formats.json\":{fmt}}};const __f=window.fetch;window.fetch=(u,o)=>{{const n=String(u).split('/').pop();return n in window.__F?Promise.resolve({{ok:true,json:async()=>window.__F[n]}}):__f(u,o);}};</script>\n\
+<script src=\"plot.js\"></script><script src=\"charts.js\"></script><script src=\"charts3d.js\"></script><script src=\"formats.js\"></script>\n\
+<script>LorePlot.render({spec},{{styles:{styles}}}).then(r=>{{document.getElementById('out').textContent=r.svg;}}).catch(e=>{{document.getElementById('out').textContent='ERROR '+e;}});</script>\n",
+            pal = safe(&json_of("palettes.json")),
+            fmt = safe(&json_of("formats.json")),
+            spec = safe(spec_json),
+            styles = safe(&styles.to_string()),
+        );
+        let html = dir.join("render.html");
+        std::fs::write(&html, page)?;
+        let mut args = chrome_args();
+        args.extend(["--virtual-time-budget=15000".to_string(), "--dump-dom".into(), file_url(&html)]);
+        let out = run_capture(chrome, &args, Duration::from_secs(60))?;
+        let text = String::from_utf8_lossy(&out);
+        let inner = text.split_once("<pre id=\"out\">").and_then(|(_, r)| r.split_once("</pre>")).map(|(a, _)| a).unwrap_or("");
+        let svg = inner.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", "\u{a0}").replace("&amp;", "&");
+        if let Some(e) = svg.strip_prefix("ERROR ") {
+            return Err(ExportError::Failed(format!("畫圖失敗：{}", e.lines().next().unwrap_or(""))));
+        }
+        if !svg.trim_start().starts_with("<svg") {
+            return Err(ExportError::Failed("Chrome 沒有畫出圖".into()));
+        }
+        Ok(svg)
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+/// [`run`] keeping what the program writes to stdout.
+fn run_capture(bin: &Path, args: &[String], limit: Duration) -> Result<Vec<u8>, ExportError> {
+    let mut cmd = Command::new(bin);
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().map_err(|e| ExportError::Failed(format!("{}：{e}", bin.display())))?;
+    let mut stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = vec![];
+        if let Some(o) = stdout.as_mut() {
+            let _ = std::io::Read::read_to_end(o, &mut buf);
+        }
+        buf
+    });
+    let start = Instant::now();
+    let done = loop {
+        match child.try_wait()? {
+            Some(st) => break Some(st),
+            None if start.elapsed() >= limit => break None,
+            None => std::thread::sleep(Duration::from_millis(40)),
+        }
+    };
+    #[cfg(unix)]
+    // SAFETY: kill(2) on the process group made for this child.
+    unsafe {
+        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let out = reader.join().unwrap_or_default();
+    match done {
+        None => Err(ExportError::Failed(format!("{} 超過 {} 秒沒有完成", bin.file_name().and_then(|n| n.to_str()).unwrap_or(""), limit.as_secs()))),
+        Some(_) => Ok(out),
+    }
+}
+
 /// PDF → SVG with glyphs as paths (poppler), or None without pdftocairo.
 pub fn svg_from_pdf(tools: &Tools, pdf: &[u8]) -> Option<String> {
     let bin = tools.pdftocairo.as_ref()?;
