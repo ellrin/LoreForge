@@ -13,6 +13,7 @@ pub const FILES: &[(&str, &str, &[u8])] = &[
     ("editor.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/editor.js")),
     ("editor.css", "text/css; charset=utf-8", include_bytes!("../../../ui/plot/editor.css")),
     ("samples.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/samples.js")),
+    ("gallery.html", "text/html; charset=utf-8", include_bytes!("../../../ui/plot/gallery.html")),
     ("katex/katex.min.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/notation-panel/vendor/katex/katex.min.js")),
     ("katex/katex.min.css", "text/css; charset=utf-8", include_bytes!("../../../ui/notation-panel/vendor/katex/katex.min.css")),
 ];

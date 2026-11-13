@@ -25,13 +25,16 @@
 <h1 id="h"></h1>
 <div class="grid" id="grid"></div>
 <script>
-LorePlot.katexBase = "../notation-panel/vendor/katex/";
+// From commons/ui (python3 -m http.server): the public styles. Under an app's /plot/ (?api=1): the
+// styles the server lists, the author's private ones included.
+const q = new URLSearchParams(location.search);
+if (!q.get("api")) LorePlot.katexBase = "../notation-panel/vendor/katex/";
 (async () => {
-  const q = new URLSearchParams(location.search);
   const id = q.get("style") || "clean";
   const zoom = +(q.get("zoom") || 2);
-  const ids = await (await fetch("styles/index.json")).json();
-  const styles = await Promise.all(ids.map(async (i) => (await fetch(`styles/${i}.json`)).json()));
+  const styles = q.get("api")
+    ? (await (await fetch("api/styles")).json()).styles
+    : await Promise.all((await (await fetch("styles/index.json")).json()).map(async (i) => (await fetch(`styles/${i}.json`)).json()));
   const st = styles.find((s) => s.id === id);
   document.getElementById("h").textContent = `${st?.label ?? id} — ${st?.note ?? ""}`;
   const grid = document.getElementById("grid");

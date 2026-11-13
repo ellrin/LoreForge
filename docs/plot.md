@@ -294,6 +294,18 @@ app 伺服器：`router = router.merge(lore_plot::router(lore_plot::Plot::new(ho
   PPTX 的圖片只放 PNG：lore-canvas 的 PPTX 輸出沒有 `svgBlip`＋PNG 備援，PowerPoint 不能直接顯示 SVG。
 - 雙擊圖片：asset 是帶規格的 PNG 才打開編輯器；完成後同一張圖片換 asset（一個 `set_obj`，一步復原）。
 
-## 9. 狀態與之後
+## 9. 狀態與之後（2026-11-13）
 
-見 `commons/crates/lore-plot/README.md`。
+已完成：規格、22 種圖、54 個格式（B1–C4）、組合圖、軸（log／symlog／分段拉伸／斷軸）、圖例佔用度、放大小圖、色盤（含 20 個主題的靜態複本）、
+編輯器（格式、組合、助手）、匯入（CSV／TSV／JSON／XLSX／LaTeX 表）、輸出（PDF／SVG／PNG，規格跟著檔案）、PaperComposer 插入與重新編輯、
+SlideComposer 插入與重新編輯、`plot-propose`／`plot-assist`。
+
+沒有在真的環境測過：模型（自動、助手只用假模型測；`examples/serve.rs` 是假模型）、Windows／沒有 Chrome 的電腦。
+
+之後：
+- 圖說：存入論文時用圖的規格寫圖說草稿（現在是編輯器「圖說」欄或空白）。
+- SlideComposer：簡報上的圖若要跟著投影片的配色，現在只有私人樣式 `mine-slide`；簡報風格包（style pack）的配色還沒接。
+- 3D 曲面的軸刻度字在角落會擠在一起（只標最小／最大值）。
+- 組合圖拖曳：現在拖的是格的標籤，不是圖上的格。
+- 從 LoreReader 的論文 PDF 抓表格（lore-docsrc 的 PDF 表格）還沒接；LaTeX 表可以。
+
