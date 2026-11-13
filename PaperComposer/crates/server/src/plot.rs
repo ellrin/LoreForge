@@ -4,6 +4,7 @@
 //! |---|---|---|
 //! | * | /plot/… | `lore_plot::router`: the editor's files, styles, data import, export, 自動 |
 //! | GET | /api/papers/{name}/plot?file=figures/x.pdf | the spec saved next to that figure (404: not made here) |
+//! | GET | /api/papers/{name}/plot/list | `[{file, spec}]`: figures/*.plot.json (pulled into a composite) |
 //! | GET | /api/papers/{name}/plot/macros | the paper's notation macros for KaTeX (`{"\\vw": "\\boldsymbol{w}"}`) |
 //! | POST | /api/papers/{name}/plot | `{stem, replace, spec, svg}` → `figures/<stem>.pdf` + `.plot.json` → `{file, stem}` |
 //!
@@ -35,6 +36,7 @@ pub(crate) fn routes(state: &Shared) -> Router<Shared> {
     Router::new()
         .route("/api/papers/{name}/plot", get(spec_get).post(save).layer(axum::extract::DefaultBodyLimit::max(60 * 1024 * 1024)))
         .route("/api/papers/{name}/plot/macros", get(macros))
+        .route("/api/papers/{name}/plot/list", get(list))
         .merge(lore_plot::router(plot))
 }
 
@@ -69,6 +71,21 @@ async fn macros(State(s): State<Shared>, AxPath(name): AxPath<String>) -> axum::
     let n = crate::notation::load(&ws, &dir);
     let m: serde_json::Map<String, serde_json::Value> = lore_notation::katex_macros(&n).into_iter().map(|(k, v)| (k, v.into())).collect();
     Json(serde_json::Value::Object(m)).into_response()
+}
+
+async fn list(State(s): State<Shared>, AxPath(name): AxPath<String>) -> axum::response::Response {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir.join("figures")) {
+        let mut files: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().ends_with(".plot.json")).collect();
+        files.sort();
+        for f in files {
+            let Some(spec) = std::fs::read_to_string(&f).ok().and_then(|t| lore_plot::Spec::from_json(&t).ok()) else { continue };
+            let stem = f.file_name().and_then(|n| n.to_str()).unwrap_or("").trim_end_matches(".plot.json").to_string();
+            out.push(serde_json::json!({ "file": format!("figures/{stem}.pdf"), "spec": spec }));
+        }
+    }
+    Json(serde_json::Value::Array(out)).into_response()
 }
 
 #[derive(Deserialize)]

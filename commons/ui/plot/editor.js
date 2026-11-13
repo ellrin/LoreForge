@@ -136,8 +136,10 @@
   const PART_BLOCK = { series: "series", group: "series", xaxis: "axes", yaxis: "axes", legend: "legend", title: "panel", panellabel: "layout", note: "notes", colorbar: "opts", cells: "opts", inset: "inset", grid: "style", axes: "axes", figure: "layout" };
   const MARKERS = [["o", "●"], ["s", "■"], ["^", "▲"], ["v", "▼"], ["D", "◆"], ["x", "✕"], ["+", "+"], ["none", "無"]];
   const DASHES = [["solid", "實線"], ["dash", "虛線"], ["dot", "點線"], ["dashdot", "點虛線"]];
-  const LEG_POS = [["best", "自動"], ["upper right", "右上"], ["upper left", "左上"], ["lower right", "右下"], ["lower left", "左下"], ["upper center", "上中"], ["lower center", "下中"], ["center right", "右中"], ["outside right", "圖外右側"], ["below", "圖下方"], ["above", "圖上方"]];
-  const TYPE_ICON = { line: "chart", bar: "chart", scatter: "chart", box: "chart", violin: "chart", hist: "chart", heatmap: "grid", roc: "chart", pr: "chart", bland: "chart", km: "chart", radar: "chart" };
+  const LEG_POS = [["best", "自動"], ["upper right", "右上"], ["upper left", "左上"], ["lower right", "右下"], ["lower left", "左下"], ["upper center", "上中"], ["lower center", "下中"], ["center right", "右中"], ["outside right", "圖外右側"], ["below", "圖下方"], ["above", "圖上方"], ["direct", "線尾直接標"]];
+  const TYPE_ICON = { heatmap: "grid", contour: "layers", surface: "layers", scatter3d: "layers", pie: "target", radar: "target" };
+  /** Replace the spec's contents with `next` (so change() records one undo step). */
+  const replaceAll = (sp, next) => { for (const k of Object.keys(sp)) delete sp[k]; Object.assign(sp, next); };
 
   async function openEditor(opts, resolve) {
     const api = opts.api === undefined ? (location.protocol.startsWith("http") && !/\/commons\/ui\//.test(location.pathname) ? "/plot/api" : null) : opts.api;
@@ -198,15 +200,15 @@
     try {
       const st = opts.styles ? { styles: opts.styles, default: opts.defaultStyle } : await loadStyles(api);
       S.styleList = st.styles ?? [];
-      S.defStyle = (opts.target === "slide" ? "slide" : null) ?? st.default ?? "clean";
-      if (opts.target === "slide" && !S.styleList.some((s) => s.id === "slide")) S.defStyle = st.default ?? "clean";
-      if (opts.target !== "slide") S.defStyle = st.default ?? "clean";
+      const want = opts.target === "slide" ? st.slide ?? "slide" : st.default ?? "clean";
+      S.defStyle = S.styleList.some((s) => s.id === want) ? want : st.default ?? "clean";
     } catch (e) {
       toast("讀不到樣式：" + e.message, { err: true });
     }
     for (const s of S.styleList) styleSel.append(h("option", { value: s.id }, s.label ?? s.id));
     styleSel.onchange = () => change((sp) => { sp.style = styleSel.value; sp.size = null; }, "樣式");
 
+    await LP.data();
     S.spec = opts.spec ? clone(opts.spec) : null;
     if (S.spec && !S.spec.panels?.length) S.spec = null;
 
@@ -246,7 +248,7 @@
       clearTimeout(timer);
       timer = setTimeout(draw, 60);
     }
-    const style = () => LP.resolveStyle(S.spec?.style ?? S.defStyle, S.styleList, S.spec?.set);
+    const style = () => LP.styleFor(S.spec?.style ?? S.defStyle, S.styleList, S.spec?.set);
     async function draw() {
       if (!S.spec) { sheet.innerHTML = ""; sheet.append(h("div", { class: "lp-empty" }, "左邊匯入或貼上資料")); sheet.style.cssText = ""; return; }
       const my = ++tok;
@@ -334,6 +336,21 @@
         }
         bType.body.append(grid);
         left.append(bType);
+        // formats of this chart family: best match for the data first
+        const bFmt = block(null, "格式", "format");
+        const ranked = LP.suggestFormats(S.spec, S.pi);
+        const order = new Map(ranked.map((r, k) => [r.code, k]));
+        const fl = LP.formatsFor(p.type).slice().sort((a, b) => (order.get(a.code) ?? 99) - (order.get(b.code) ?? 99));
+        const fg = h("div", { class: "lp-fmts" });
+        fl.forEach((f, k) => {
+          const why = ranked.find((r) => r.code === f.code)?.why ?? [];
+          const b = h("button", { type: "button", "aria-pressed": String(p.format === f.code || (f.code.startsWith("C") && S.spec.format === f.code)), title: [f.note, why.join("、")].filter(Boolean).join("　") },
+            h("b", {}, f.code), h("span", {}, f.label), k === 0 && !f.code.startsWith("C") ? h("i", {}, "建議") : null);
+          b.onclick = () => change((sp) => replaceAll(sp, LP.applyFormat(sp, S.pi, f.code, style())), "structure");
+          fg.append(b);
+        });
+        bFmt.body.append(fg);
+        left.append(bFmt);
       }
       if (typeof window.paintIcons === "function") window.paintIcons(left);
     }
@@ -444,16 +461,37 @@
       return firstNumeric ? "line" : "bar";
     }
     function setType(type) {
+      change((sp) => replaceAll(sp, LP.changeType(sp, S.pi, type)), "structure");
+    }
+    /** Another figure (.plot.json) pulled in: its tables (renamed when taken) and panels appended. */
+    function mergeFigure(other) {
       change((sp) => {
-        const p = sp.panels[S.pi];
-        const t = sp.data[p.data] ?? Object.values(sp.data)[0];
-        const fresh = LP.starter(type, t, sp.style).panels[0];
-        const keep = { title: p.title, legend: p.legend, notes: p.notes, data: p.data, span: p.span };
-        // keep the series the author already named / coloured when the new type uses columns the same way
-        if (["line", "bar", "box", "violin", "hist", "radar"].includes(type) && ["line", "bar", "box", "violin", "hist", "radar"].includes(p.type) && p.series?.length) fresh.series = p.series;
-        if (["line", "bar", "radar"].includes(type) && ["line", "bar", "radar"].includes(p.type)) { fresh.xaxis = p.xaxis; fresh.yaxis = p.yaxis; fresh.x = p.x; }
-        sp.panels[S.pi] = { ...fresh, ...Object.fromEntries(Object.entries(keep).filter(([, v]) => v !== undefined)), type };
+        const rename = {};
+        for (const [id, t] of Object.entries(other.data ?? {})) {
+          let k = 1;
+          while (sp.data[`t${k}`]) k++;
+          sp.data[`t${k}`] = t;
+          rename[id] = `t${k}`;
+        }
+        const first = Object.keys(other.data ?? {})[0];
+        for (const q of other.panels ?? []) sp.panels.push({ ...q, data: rename[q.data ?? first] ?? q.data });
+        const n = sp.panels.length;
+        const cols = Math.min(n, Math.max(sp.grid?.cols ?? 1, n <= 3 ? n : 2));
+        sp.grid = { ...(sp.grid ?? {}), cols, rows: Math.ceil(n / cols), labels: sp.grid?.labels && sp.grid.labels !== "none" ? sp.grid.labels : "a" };
+        const st = style();
+        sp.size = { w: st.size.widths?.at(-1) ?? 175, h: Math.min(st.size.max_h ?? 170, ((st.size.widths?.at(-1) ?? 175) / cols) * 0.75 * Math.ceil(n / cols)) };
       }, "structure");
+    }
+    async function pickFigure(anchor) {
+      const lib = opts.library ? await opts.library().catch(() => []) : [];
+      const fromFile = () => {
+        const fi = h("input", { type: "file", accept: ".json,application/json", hidden: true });
+        fi.onchange = async () => { try { mergeFigure(JSON.parse(await fi.files[0].text())); } catch (e) { toast("不是圖的規格：" + e.message, { err: true }); } };
+        dlg.append(fi);
+        fi.click();
+      };
+      if (!lib.length) return fromFile();
+      menu(anchor, [...lib.map((f) => ({ label: f.name, run: () => mergeFigure(f.spec) })), { sep: true }, { label: "從檔案…", run: fromFile }]);
     }
 
     // ── right: properties ──
@@ -477,7 +515,8 @@
       return i;
     }
     function number(get, set, o = {}) {
-      const i = h("input", { class: "set-input lp-num", type: "number", step: o.step ?? "any", value: get() ?? "", placeholder: o.ph ?? "自動" });
+      const v0 = get();
+      const i = h("input", { class: "set-input lp-num", type: "number", step: o.step ?? "any", value: isNum(v0) ? String(Math.round(v0 * 1000) / 1000) : v0 ?? "", placeholder: o.ph ?? "自動" });
       if (o.min != null) i.min = o.min;
       i.oninput = () => change(() => set(i.value === "" ? null : +i.value), "edit", i);
       return i;
@@ -523,59 +562,86 @@
       }
       const sp = S.spec, p = panel();
       const st = style();
-      // 01 版面
+      // 01 版面: page size targets, grid, shared legend / axes / colours, other figures
       const bL = block("01", "版面", "layout");
       const widths = st.size.widths ?? [];
-      const wNames = ["單欄", "1.5 欄", "雙欄"];
-      const sizeRow = h("div", { class: "lp-row" }, ...widths.map((w, k) => {
-        const on = Math.abs((sp.size?.w ?? st.size.w) - w) < 0.05;
-        const b = h("button", { type: "button", class: "ghost lp-chipbtn", "aria-pressed": String(on) }, `${wNames[k] ?? ""} ${w}`);
-        b.onclick = () => change((s) => { s.size = { w, h: s.size?.h ?? st.size.h }; }, "structure");
+      const maxH = st.size.max_h ?? 170;
+      const targets = [["單欄", widths[0], null], ["1.5 欄", widths[1], null], ["雙欄", widths.at(-1), null], ["整頁", widths.at(-1), maxH]].filter((t) => isNum(t[1]));
+      const sizeRow = h("div", { class: "lp-row" }, ...targets.map(([name, w, hh]) => {
+        const on = Math.abs((sp.size?.w ?? st.size.w) - w) < 0.05 && (hh == null || Math.abs((sp.size?.h ?? 0) - hh) < 0.05);
+        const b = h("button", { type: "button", class: "ghost lp-chipbtn", "aria-pressed": String(on) }, `${name} ${Math.round(w)}`);
+        b.onclick = () => change((s2) => { s2.size = { w, h: hh ?? s2.size?.h ?? st.size.h }; }, "structure");
         return b;
       }));
       bL.body.append(sizeRow,
-        row("寬 mm", number(() => sp.size?.w ?? st.size.w, (v) => { sp.size = { w: v ?? st.size.w, h: sp.size?.h ?? st.size.h }; }, { step: 1 })),
-        row("高 mm", number(() => sp.size?.h ?? st.size.h, (v) => { sp.size = { w: sp.size?.w ?? st.size.w, h: v ?? st.size.h }; }, { step: 1 })),
+        row("寬 × 高", number(() => sp.size?.w ?? st.size.w, (v) => { sp.size = { w: v ?? st.size.w, h: sp.size?.h ?? st.size.h }; }, { step: 1 }), h("span", { class: "lp-x" }, "×"), number(() => sp.size?.h ?? st.size.h, (v) => { sp.size = { w: sp.size?.w ?? st.size.w, h: v ?? st.size.h }; }, { step: 1 }), h("span", { class: "lp-x" }, "mm")),
         row("格", number(() => sp.grid?.cols ?? 1, (v) => { sp.grid = { ...(sp.grid ?? {}), cols: Math.max(1, Math.round(v ?? 1)) }; }, { step: 1, min: 1 }), h("span", { class: "lp-x" }, "欄 ×"),
           number(() => sp.grid?.rows ?? 1, (v) => { sp.grid = { ...(sp.grid ?? {}), rows: Math.max(1, Math.round(v ?? 1)) }; }, { step: 1, min: 1 }), h("span", { class: "lp-x" }, "列")),
         row("間距 mm", number(() => sp.grid?.gap ?? 5, (v) => { sp.grid = { ...(sp.grid ?? {}), gap: v ?? 5 }; }, { step: 0.5 })),
-        row("格標", seg(() => sp.grid?.labels ?? "none", (v) => { sp.grid = { ...(sp.grid ?? {}), labels: v }; }, [["none", "無"], ["a", "a"], ["A", "A"], ["(a)", "(a)"]])));
+        row("格標", seg(() => sp.grid?.labels ?? (sp.panels.length > 1 ? "a" : "none"), (v) => { sp.grid = { ...(sp.grid ?? {}), labels: v }; }, [["none", "無"], ["a", "a"], ["A", "A"], ["(a)", "(a)"]])));
+      if (sp.panels.length > 1) {
+        bL.body.append(
+          row("共用圖例", seg(() => sp.grid?.legend ?? "none", (v) => { sp.grid = { ...(sp.grid ?? {}), legend: v === "none" ? undefined : v }; }, [["none", "各自"], ["top", "上"], ["right", "右"], ["bottom", "下"]])),
+          h("div", { class: "lp-row" },
+            check(() => sp.grid?.sharey, (v) => { sp.grid = { ...(sp.grid ?? {}), sharey: v || undefined }; }, "共用 y 軸"),
+            check(() => sp.grid?.sharex, (v) => { sp.grid = { ...(sp.grid ?? {}), sharex: v || undefined }; }, "共用 x 軸"),
+            check(() => sp.grid?.share_color, (v) => { sp.grid = { ...(sp.grid ?? {}), share_color: v || undefined }; }, "共用色條")));
+      }
+      const mergeB = h("button", { type: "button", class: "ghost" }, ic("plus"), "併入其他圖…");
+      mergeB.onclick = () => pickFigure(mergeB);
+      bL.body.append(mergeB);
       right.append(bL);
 
       // 02 格
       const bP = block("02", "格", "panel", sp.panels.length > 1 ? `${S.pi + 1}/${sp.panels.length}` : "");
+      // panel chips: click to edit, drag to reorder
+      let dragFrom = null;
       const tabs = h("div", { class: "lp-row lp-ptabs" }, ...sp.panels.map((q, k) => {
-        const b = h("button", { type: "button", class: "ghost lp-chipbtn", "aria-pressed": String(k === S.pi) }, String.fromCharCode(97 + k));
+        const b = h("button", { type: "button", class: "ghost lp-chipbtn", draggable: "true", "aria-pressed": String(k === S.pi), title: `${LP.CHARTS[q.type]?.label ?? q.type}（拖曳排順序）` }, `${String.fromCharCode(97 + k)} ${LP.CHARTS[q.type]?.label ?? q.type}`);
         b.onclick = () => { S.pi = k; buildLeft(); buildRight(); mark(); };
+        b.ondragstart = (e) => { dragFrom = k; e.dataTransfer.effectAllowed = "move"; };
+        b.ondragover = (e) => { e.preventDefault(); b.classList.add("lp-dropto"); };
+        b.ondragleave = () => b.classList.remove("lp-dropto");
+        b.ondrop = (e) => {
+          e.preventDefault();
+          if (dragFrom == null || dragFrom === k) return;
+          change((s2) => { const [m] = s2.panels.splice(dragFrom, 1); s2.panels.splice(k, 0, m); S.pi = k; }, "structure");
+        };
         return b;
-      }),
-      iconBtn("plus", "加一格", () => change((s) => {
-        const cp = clone(s.panels[S.pi]);
-        cp.title = "";
-        s.panels.splice(S.pi + 1, 0, cp);
-        const n = s.panels.length, cols = s.grid?.cols ?? 1, rows = s.grid?.rows ?? 1;
-        if (n > cols * rows) s.grid = { ...(s.grid ?? {}), cols: cols * rows === cols ? cols + 1 : cols, rows: cols * rows === cols ? rows : rows + 1, labels: s.grid?.labels && s.grid.labels !== "none" ? s.grid.labels : "a" };
-        if (s.size?.w || true) s.size = { w: (s.size?.w ?? st.size.w) < (widths.at(-1) ?? 175) && n > 1 ? widths.at(-1) ?? 175 : s.size?.w ?? st.size.w, h: s.size?.h ?? st.size.h };
-        S.pi += 1;
-      }, "structure"), "ico small"),
-      sp.panels.length > 1 ? iconBtn("trash", "刪除這格", () => change((s) => { s.panels.splice(S.pi, 1); S.pi = Math.max(0, S.pi - 1); }, "structure"), "ico small") : null);
+      }));
+      const growGrid = (s2) => {
+        const n = s2.panels.length, cols = s2.grid?.cols ?? 1, rows = s2.grid?.rows ?? 1;
+        if (n > cols * rows) s2.grid = { ...(s2.grid ?? {}), cols: cols <= rows ? cols + 1 : cols, rows: cols <= rows ? rows : rows + 1, labels: s2.grid?.labels && s2.grid.labels !== "none" ? s2.grid.labels : "a" };
+        if ((s2.size?.w ?? st.size.w) < (widths.at(-1) ?? 175)) s2.size = { w: widths.at(-1) ?? 175, h: s2.size?.h ?? st.size.h };
+      };
+      const addB = iconBtn("plus", "加一格", () => menu(addB, [
+        { label: "複製這一格", run: () => change((s2) => { const cp = clone(s2.panels[S.pi]); cp.title = ""; s2.panels.splice(S.pi + 1, 0, cp); growGrid(s2); S.pi += 1; }, "structure") },
+        { sep: true },
+        ...LP.TYPES.map((t) => ({ label: t.label, run: () => change((s2) => { const tb = s2.data[s2.panels[S.pi].data] ?? Object.values(s2.data)[0]; const np = LP.starterPanel(t.id, tb); np.data = s2.panels[S.pi].data; s2.panels.splice(S.pi + 1, 0, np); growGrid(s2); S.pi += 1; }, "structure") })),
+      ]), "ico small");
+      tabs.append(addB);
+      if (sp.panels.length > 1) tabs.append(iconBtn("trash", "刪除這格", () => change((s2) => { s2.panels.splice(S.pi, 1); S.pi = Math.max(0, S.pi - 1); }, "structure"), "ico small"));
       bP.body.append(tabs, row("標題", text(() => p.title, (v) => (p.title = v), "可寫 $…$")));
-      if ((sp.grid?.cols ?? 1) > 1) bP.body.append(row("佔幾欄", number(() => p.span ?? 1, (v) => (p.span = v && v > 1 ? Math.round(v) : undefined), { step: 1, min: 1 })));
+      if ((sp.grid?.cols ?? 1) > 1 || (sp.grid?.rows ?? 1) > 1) bP.body.append(row("佔", number(() => p.span ?? 1, (v) => (p.span = v && v > 1 ? Math.round(v) : undefined), { step: 1, min: 1 }), h("span", { class: "lp-x" }, "欄 ×"), number(() => p.rowspan ?? 1, (v) => (p.rowspan = v && v > 1 ? Math.round(v) : undefined), { step: 1, min: 1 }), h("span", { class: "lp-x" }, "列")));
+      bP.body.append(row("資料", select(() => p.data, (v) => (p.data = v), Object.entries(sp.data).map(([id, t]) => [id, t.name || id]), { structure: true })));
       // columns used by this type
       const colsFor = {
         line: [["x", "x 欄"]], bar: [["x", "類別欄"]], radar: [["x", "軸名稱欄"]], heatmap: [["x", "列名欄"]],
         scatter: [["x", "x 欄"], ["y", "y 欄"], ["group", "分組欄"], ["size", "大小欄"]],
-        box: [["group", "分組欄（長格式）"], ["y", "數值欄（長格式）"]], violin: [["group", "分組欄（長格式）"], ["y", "數值欄（長格式）"]],
+        box: [["group", "分組欄（長格式）"], ["hue", "條件欄"], ["y", "數值欄（長格式）"]], violin: [["group", "分組欄（長格式）"], ["hue", "條件欄"], ["y", "數值欄（長格式）"]],
+        ridge: [["group", "分組欄（長格式）"], ["y", "數值欄（長格式）"]],
         km: [["x", "時間欄"], ["event", "事件欄（1／0）"], ["group", "分組欄"]],
+        pie: [["x", "名稱欄"]], dumbbell: [["x", "類別欄"]], area: [["x", "x 欄"]],
+        contour: [["x", "x 欄"], ["y", "y 欄"], ["z", "z 欄"]], surface: [["x", "x 欄"], ["y", "y 欄"], ["z", "z 欄"]], scatter3d: [["x", "x 欄"], ["y", "y 欄"], ["z", "z 欄"], ["group", "分組欄"]],
       }[p.type] ?? [];
       for (const [k, label] of colsFor) bP.body.append(row(label, colSel(p, () => p[k], (v) => { p[k] = v; })));
       right.append(bP);
 
       // 03 系列
-      if (!["heatmap", "km", "scatter"].includes(p.type) || p.type === "scatter") right.append(seriesBlock(p, st));
+      if (!["heatmap", "km", "contour", "surface", "scatter3d"].includes(p.type)) right.append(seriesBlock(p, st));
 
       // 04 軸
-      if (p.type !== "radar") {
+      if (!["radar", "pie", "surface", "scatter3d"].includes(p.type)) {
         const bA = block("04", "軸", "axes");
         for (const [k, nm] of [["xaxis", "x"], ["yaxis", "y"]]) {
           const ax = (p[k] ??= {});
@@ -585,8 +651,11 @@
             row("範圍", number(() => ax.min, (v) => (ax.min = v ?? undefined)), h("span", { class: "lp-x" }, "到"), number(() => ax.max, (v) => (ax.max = v ?? undefined))),
             row("刻度", text(() => (ax.ticks ?? []).join(", "), (v) => (ax.ticks = v.trim() ? v.split(/[,\s]+/).map(Number).filter(Number.isFinite) : undefined), "自動，或 0, 0.5, 1")),
             row("格式", select(() => ax.fmt, (v) => (ax.fmt = v ?? undefined), [[null, "自動"], [".1f", "0.1"], [".2f", "0.12"], [".3f", "0.123"], ["%", "百分比"], [".1%", "12.3%"], ["d", "整數"], ["e", "10ⁿ"]])),
-            h("div", { class: "lp-row" },
-              check(() => ax.log, (v) => (ax.log = v || undefined), "對數"),
+            row("尺度", select(() => ax.scale ?? (ax.log ? "log" : "linear"), (v) => { ax.scale = v === "linear" ? undefined : v; delete ax.log; if (v === "stretch" && !ax.segments) ax.segments = [[0.8, 1, 3]]; }, [["linear", "線性"], ["log", "對數 log₁₀"], ["symlog", "對稱對數"], ["stretch", "分段拉伸／斷軸"]], { structure: true })));
+          if (ax.scale === "symlog") g.append(row("線性區", number(() => ax.linthresh, (v) => (ax.linthresh = v ?? undefined), { ph: "1" })));
+          if (ax.scale === "stretch") g.append(row("分段", text(() => (ax.segments ?? []).map((q) => `${q[0]}–${q[1]}×${q[2]}`).join(", "), (v) => (ax.segments = v.split(/[,;]/).map((t) => t.match(/(-?[\d.]+)\s*[-–~]\s*(-?[\d.]+)\s*[x×*]\s*([\d.]+)/)).filter(Boolean).map((m) => [+m[1], +m[2], +m[3]])), "0.8–1×3, 0.2–0.5×0（0 ＝斷開）")));
+          g.append(h("div", { class: "lp-row" },
+              check(() => ax.minor, (v) => (ax.minor = v || undefined), "次刻度"),
               check(() => ax.reverse, (v) => (ax.reverse = v || undefined), "反向"),
               check(() => ax.grid, (v) => (ax.grid = v), "格線"),
               check(() => ax.hidden, (v) => (ax.hidden = v || undefined), "隱藏")));
@@ -677,6 +746,7 @@
         }[p.type] ?? [["y", "數值欄"]];
         for (const [k, label] of fields) box.append(row(label, colSel(p, () => s[k], (v) => (s[k] = v ?? undefined))));
         box.append(row("名稱", text(() => s.label, (v) => (s.label = v), "可寫 $…$")));
+        box.append(h("div", { class: "lp-row" }, check(() => s.ours, (v) => (s.ours = v || undefined), "我們的（強調色）"), p.type === "radar" ? check(() => s.ref, (v) => (s.ref = v || undefined), "參考（灰虛線）") : null));
         box.append(row("顏色", color(() => s.color, (v) => (s.color = v || undefined), auto)));
         if (["line", "roc", "pr", "radar", "km"].includes(p.type)) {
           box.append(row("線", select(() => s.dash, (v) => (s.dash = v ?? undefined), [[null, "樣式"], ...DASHES]), number(() => s.width, (v) => (s.width = v ?? undefined), { step: 0.1, ph: "粗細" })));
@@ -700,29 +770,58 @@
 
     function optsBlock(p) {
       const o = (p.opts ??= {});
-      const set = (k) => (v) => (o[k] = v === false || v == null ? undefined : v);
+      const set = (k) => (v) => (o[k] = v === false || v == null || v === "" ? undefined : v);
       const get = (k) => () => o[k];
+      const ck = (k, label) => check(get(k), set(k), label);
+      const rowc = (...xs) => h("div", { class: "lp-row" }, ...xs.filter(Boolean));
+      const num = (label, k, o2) => row(label, number(() => o[k], set(k), o2));
       const f = [];
       switch (p.type) {
-        case "line": f.push(row("誤差", seg(() => o.err_style ?? "band", set("err_style"), [["band", "色帶"], ["bars", "誤差線"]])), check(get("step"), set("step"), "階梯")); break;
+        case "line": case "area":
+          f.push(row("誤差", seg(() => o.err_style ?? "band", set("err_style"), [["band", "色帶"], ["bars", "誤差線"]])), row("面積", seg(() => o.area ?? "none", (v) => (o.area = v === "none" ? undefined : v), [["none", "無"], ["fill", "填色"], ["stack", "堆疊"]])),
+            num("平滑", "smooth", { step: 0.05, ph: "0–0.99" }), rowc(ck("step", "階梯")));
+          break;
         case "bar":
-          f.push(row("排法", seg(() => o.mode ?? "grouped", set("mode"), [["grouped", "並排"], ["stacked", "堆疊"]])), h("div", { class: "lp-row" }, check(get("horizontal"), set("horizontal"), "橫向"), check(get("values"), set("values"), "標數值")));
+          f.push(row("排法", seg(() => o.mode ?? "grouped", set("mode"), [["grouped", "並排"], ["stacked", "堆疊"], ["percent", "百分比"]])), row("排序", seg(() => o.sort ?? "none", (v) => (o.sort = v === "none" ? undefined : v), [["none", "原順序"], ["desc", "大到小"], ["asc", "小到大"]])),
+            rowc(ck("horizontal", "橫向"), ck("values", "標數值"), ck("zoom", "y 不從 0")));
           if (o.values) f.push(row("數值格式", text(() => o.fmt, set("fmt"), ".2f、%")));
           break;
-        case "scatter": f.push(h("div", { class: "lp-row" }, check(get("ellipse"), set("ellipse"), "95% 橢圓"), check(get("hull"), set("hull"), "外框（凸包）")), row("透明度", number(() => o.alpha, set("alpha"), { step: 0.05 }))); break;
-        case "box": case "violin": f.push(h("div", { class: "lp-row" }, check(get("points"), set("points"), "疊上資料點"), check(get("mean"), set("mean"), "平均（▲）"))); break;
-        case "hist": f.push(row("組數", number(() => o.bins, set("bins"), { step: 1, min: 2 })), h("div", { class: "lp-row" }, check(get("density"), set("density"), "密度"), check(get("stacked"), set("stacked"), "堆疊"))); break;
+        case "scatter":
+          f.push(rowc(ck("ellipse", "95% 橢圓"), ck("hull", "凸包"), ck("centroids", "群組名")), rowc(ck("fit", "迴歸線＋CI"), o.fit ? check(() => o.stats !== false, (v) => (o.stats = v ? undefined : false), "r、p") : null, ck("identity", "y = x"), ck("counts", "上／下數")),
+            rowc(ck("square", "正方形"), ck("no_ticks", "無刻度"), check(() => !!o.hexbin, (v) => (o.hexbin = v ? 30 : undefined), "hexbin")), num("透明度", "alpha", { step: 0.05 }));
+          break;
+        case "box": case "violin":
+          f.push(rowc(ck("points", "資料點"), ck("mean", "平均 ▲"), ck("paired", "成對連線")), rowc(ck("horizontal", "橫向"), ck("raincloud", "雨雲"), ck("mono", "單色")), row("排序", seg(() => o.sort ?? "none", (v) => (o.sort = v === "none" ? undefined : v), [["none", "原順序"], ["desc", "中位數大→小"], ["asc", "小→大"]])));
+          break;
+        case "hist": f.push(num("組數", "bins", { step: 1, min: 2, ph: "FD 自動" }), rowc(ck("density", "密度"), ck("stacked", "堆疊"), ck("kde", "KDE"))); break;
+        case "ridge": f.push(num("重疊", "overlap", { step: 0.1, ph: "1.6" })); break;
         case "heatmap":
-          f.push(row("色彩", select(() => o.cmap, set("cmap"), [[null, "樣式"], ...LP.CMAPS.map((c) => [c, c])])), row("正規化", seg(() => o.normalize ?? "none", (v) => (o.normalize = v === "none" ? undefined : v), [["none", "原值"], ["rows", "每列"]])),
-            h("div", { class: "lp-row" }, check(() => o.values !== false, (v) => (o.values = v ? undefined : false), "標數值"), check(get("colorbar"), set("colorbar"), "色條"), check(get("top"), set("top"), "欄名在上")), row("數值格式", text(() => o.fmt, set("fmt"), "d、.2f")));
+          f.push(row("色彩", select(() => o.cmap, set("cmap"), [[null, "樣式"], ...LP.CMAPS.map((c) => [c, c])])),
+            row("標註", seg(() => o.annot ?? (o.values === false ? "none" : "value"), set("annot"), [["value", "數值"], ["count+row%", "數＋列%"], ["none", "無"]])),
+            row("正規化", seg(() => o.normalize ?? "none", (v) => (o.normalize = v === "none" ? undefined : v), [["none", "原值"], ["rows", "每列"]])),
+            row("三角", seg(() => o.triangle ?? "none", (v) => (o.triangle = v === "none" ? undefined : v), [["none", "全部"], ["lower", "下"], ["upper", "上"]])),
+            row("最好", select(() => o.best, set("best"), [[null, "不標"], ["col-max", "每欄最大"], ["col-min", "每欄最小"], ["row-max", "每列最大"], ["max", "全部最大"], ["min", "全部最小"]])),
+            num("中心值", "center", { ph: "雙色時填 0" }), rowc(ck("colorbar", "色條"), ck("top", "欄名在上"), check(() => !!o.sep, (v) => (o.sep = v ? 1 : undefined), "白色分隔"), ck("image", "影像")),
+            row("數值格式", text(() => o.fmt, set("fmt"), "d、.2f")));
           break;
         case "roc": case "pr":
-          f.push(h("div", { class: "lp-row" }, check(() => o.auc !== false, (v) => (o.auc = v ? undefined : false), "圖例寫 AUC"), p.type === "roc" ? check(() => o.diagonal !== false, (v) => (o.diagonal = v ? undefined : false), "對角線") : null),
+          f.push(rowc(check(() => o.auc !== false, (v) => (o.auc = v ? undefined : false), "圖例寫 AUC"), p.type === "roc" ? check(() => o.diagonal !== false, (v) => (o.diagonal = v ? undefined : false), "對角線") : check(() => o.baseline !== false, (v) => (o.baseline = v ? undefined : false), "盛行率線")),
             row("AUC 名稱", text(() => o.auc_label, set("auc_label"), p.type === "roc" ? "AUC、AUROC" : "AP、AUPRC")));
           break;
+        case "calib": f.push(num("組數", "bins", { step: 1, min: 3, ph: "10" })); break;
+        case "dca": f.push(num("門檻上限", "max", { step: 0.05, ph: "0.6" })); break;
         case "bland": f.push(check(() => o.limits !== false, (v) => (o.limits = v ? undefined : false), "標平均差與 ±1.96 SD")); break;
         case "km": f.push(check(() => o.censor !== false, (v) => (o.censor = v ? undefined : false), "設限記號")); break;
-        case "radar": f.push(check(() => o.fill !== false, (v) => (o.fill = v ? undefined : false), "填色")); break;
+        case "radar": f.push(rowc(check(() => o.fill !== false, (v) => (o.fill = v ? undefined : false), "填色"), ck("normalize", "各軸正規化"))); break;
+        case "pie":
+          f.push(row("標示", seg(() => o.labels ?? "direct", set("labels"), [["direct", "直接標"], ["legend", "圖例"]])), num("甜甜圈", "donut", { step: 0.05, ph: "0＝圓餅，0.55" }),
+            num("併成 Other", "other", { step: 0.01, ph: "比例，如 0.04" }), rowc(check(() => o.total !== false, (v) => (o.total = v ? undefined : false), "中間寫總數"), check(() => o.sort !== false, (v) => (o.sort = v ? undefined : false), "大到小")), row("總數說明", text(() => o.total_label, set("total_label"), "cases")));
+          break;
+        case "contour": f.push(num("等高線數", "levels", { step: 1, ph: "8" }), rowc(check(() => o.lines !== false, (v) => (o.lines = v ? undefined : false), "等高線")), row("色彩", select(() => o.cmap, set("cmap"), [[null, "樣式"], ...LP.CMAPS.map((c) => [c, c])]))); break;
+        case "surface": case "scatter3d":
+          f.push(row("視角", number(() => o.azim, set("azim"), { step: 5, ph: "方位 −55" }), number(() => o.elev, set("elev"), { step: 5, ph: "仰角 28" })));
+          if (p.type === "scatter3d") f.push(rowc(ck("walls", "投影到底面")));
+          break;
       }
       if (!f.length) return null;
       const b = block("06", "選項", "opts");
@@ -734,7 +833,7 @@
       const b = block("07", "註記", "notes", p.notes?.length ? String(p.notes.length) : "");
       (p.notes ?? []).forEach((n, k) => {
         const box = h("div", { class: "lp-ser", "data-note": String(k) });
-        box.append(h("div", { class: "lp-gh" }, { text: "文字", arrow: "箭頭", bracket: "顯著性", hline: "水平線", vline: "垂直線" }[n.type] ?? "文字", h("span", { class: "lp-grow" }),
+        box.append(h("div", { class: "lp-gh" }, { text: "文字", arrow: "箭頭", bracket: "顯著性", hline: "水平線", vline: "垂直線", point: "操作點" }[n.type] ?? "文字", h("span", { class: "lp-grow" }),
           iconBtn("trash", "刪除註記", () => change(() => p.notes.splice(k, 1), "structure"), "ico tiny")));
         box.append(row("文字", text(() => n.text, (v) => (n.text = v), n.type === "bracket" ? "*、**、n.s.、$p<0.01$" : "可寫 $…$")));
         const nb = (key, label) => row(label, number(() => n[key], (v) => (n[key] = v ?? undefined), { step: "any" }));
@@ -756,6 +855,7 @@
         { label: "箭頭", run: () => addNote({ type: "arrow", text: "", x: 0.5, y: 0.5, x2: 0.7, y2: 0.7, coords: "axes" }) },
         { label: "顯著性括號", run: () => addNote({ type: "bracket", x: 0, x2: 1, text: "*" }) },
         { label: "水平線", run: () => addNote({ type: "hline", y: 0.5, text: "" }) },
+        { label: "操作點", run: () => addNote({ type: "point", x: 0.5, y: 0.5, text: "operating point" }) },
         { label: "垂直線", run: () => addNote({ type: "vline", x: 0.5, text: "" }) },
       ]);
       const addNote = (n) => change(() => { p.notes ??= []; p.notes.push(n); S.open.notes = true; }, "structure");
@@ -768,25 +868,36 @@
       const set = (k) => (v) => { sp.set ??= {}; if (v == null || v === "") delete sp.set[k]; else sp.set[k] = v; };
       const get = (k) => () => LP.getPath(st, k);
       const b = block("09", "樣式", "style", Object.keys(sp.set ?? {}).length ? `改了 ${Object.keys(sp.set).length} 項` : "");
+      const pals = LP.dataSync()?.palettes ?? {};
+      const palNow = typeof sp.set?.["colors.palette"] === "string" ? sp.set["colors.palette"] : "";
       const pal = st.colors.palette ?? [];
       const sw = h("div", { class: "lp-row lp-pal" }, ...pal.map((c, k) => {
         const i = h("input", { type: "color", class: "lp-color", value: c, title: `顏色 ${k + 1}` });
-        i.oninput = () => change(() => { const a = [...pal]; a[k] = i.value; set("colors.palette")(a); }, "edit", i);
+        i.oninput = () => change(() => { const a2 = [...pal]; a2[k] = i.value; set("colors.palette")(a2); }, "edit", i);
         return i;
       }));
+      const gridRow = h("div", { class: "lp-group" }, h("div", { class: "lp-gh" }, "格線（永遠在資料後面）"),
+        row("方向", seg(() => st.axes.grid, set("axes.grid"), [["none", "無"], ["y", "橫線"], ["x", "直線"], ["both", "全部"]])),
+        h("div", { class: "lp-row" }, check(get("axes.grid_minor"), set("axes.grid_minor"), "次格線"), h("span", { class: "lp-x" }, "每格分"), number(get("axes.grid_density"), set("axes.grid_density"), { step: 1, min: 1 })),
+        row("線", select(get("axes.grid_dash"), set("axes.grid_dash"), [["solid", "實線"], ["dash", "虛線"], ["dot", "點線"], ["dashdot", "點虛線"]]), number(get("axes.grid_width"), set("axes.grid_width"), { step: 0.1, ph: "粗細" })),
+        row("顏色", color(() => sp.set?.["axes.grid_color"], set("axes.grid_color"), st.axes.grid_color), h("span", { class: "lp-x" }, "透明"), number(get("axes.grid_alpha"), set("axes.grid_alpha"), { step: 0.05 })));
       b.body.append(
         h("div", { class: "lp-dim lp-fontname" }, (st.font.family ?? [])[0] ?? ""),
         row("字級 pt", number(get("font.size"), (v) => { for (const k of ["font.size", "font.label", "font.title"]) set(k)(v); }, { step: 0.5 }), h("span", { class: "lp-x" }, "刻度"), number(get("font.tick"), set("font.tick"), { step: 0.5 })),
         row("圖例 pt", number(get("legend.size"), set("legend.size"), { step: 0.5 }), h("span", { class: "lp-x" }, "格標"), number(get("font.panel"), set("font.panel"), { step: 0.5 })),
         row("線寬 pt", number(get("lines.width"), set("lines.width"), { step: 0.1 }), h("span", { class: "lp-x" }, "軸"), number(get("axes.line"), set("axes.line"), { step: 0.1 })),
         row("點 pt", number(get("lines.marker"), set("lines.marker"), { step: 0.5 }), h("span", { class: "lp-x" }, "散佈"), number(get("scatter.size"), set("scatter.size"), { step: 0.5 })),
-        row("格線", seg(() => st.axes.grid, set("axes.grid"), [["none", "無"], ["y", "y"], ["x", "x"], ["both", "全部"]])),
+        gridRow,
         row("外框", seg(() => st.axes.spines, set("axes.spines"), [["lb", "左下"], ["box", "四邊"], ["none", "無"]])),
         row("刻度", seg(() => st.axes.tick_dir, set("axes.tick_dir"), [["out", "朝外"], ["in", "朝內"]])),
         row("長條寬", number(get("bars.width"), set("bars.width"), { step: 0.05 }), h("span", { class: "lp-x" }, "間隙"), number(get("bars.gap"), set("bars.gap"), { step: 0.01 })),
+        row("圖例底", number(get("legend.backing"), set("legend.backing"), { step: 0.05, ph: "0.85" })),
         row("數學字", seg(() => st.font.math, set("font.math"), [["text", "同內文"], ["katex", "TeX"]])),
         row("背景", seg(() => (st.colors.background === "none" ? "none" : "white"), (v) => set("colors.background")(v === "none" ? "none" : null), [["white", "白"], ["none", "透明"]])),
-        h("div", { class: "lp-gh" }, "色盤"), sw);
+        h("div", { class: "lp-gh" }, "色盤"),
+        row("預設色盤", select(() => palNow, (v) => set("colors.palette")(v || null), [["", "樣式的"], ...Object.entries(pals).map(([id, q]) => [id, q.label + (q.cb_safe ? " ✓" : "")])], { structure: true })),
+        sw,
+        row("強調色", color(() => sp.set?.["colors.emphasis"], set("colors.emphasis"), pal[0]), h("span", { class: "lp-x" }, "其他淡化"), number(get("colors.mute"), set("colors.mute"), { step: 0.05 })));
       if (Object.keys(sp.set ?? {}).length) b.body.append(h("button", { type: "button", class: "ghost", onclick: () => change(() => (sp.set = {}), "structure") }, ic("refresh"), "回到樣式預設"));
       return b;
     }

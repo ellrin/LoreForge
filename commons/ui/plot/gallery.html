@@ -15,8 +15,11 @@
   .fig svg { display: block; }
   .warn { color: #b00; padding: 4px 10px; }
 </style>
-<script src="samples.js"></script>
 <script src="plot.js"></script>
+<script src="charts.js"></script>
+<script src="charts3d.js"></script>
+<script src="formats.js"></script>
+<script src="samples.js"></script>
 </head>
 <body>
 <h1 id="h"></h1>
@@ -32,8 +35,9 @@ LorePlot.katexBase = "../notation-panel/vendor/katex/";
   const st = styles.find((s) => s.id === id);
   document.getElementById("h").textContent = `${st?.label ?? id} — ${st?.note ?? ""}`;
   const grid = document.getElementById("grid");
-  for (const s of LorePlotSamples.list(id)) {
-    if (q.get("only") && q.get("only") !== s.id) continue;
+  const only = (q.get("only") || "").split(",").filter(Boolean);
+  for (const s of await LorePlotSamples.all(id, styles)) {
+    if (only.length && !only.some((o) => s.id === o || (o.endsWith("*") && s.id.startsWith(o.slice(0, -1))))) continue;
     const r = await LorePlot.render(s.spec, { styles });
     const f = document.createElement("figure");
     const box = document.createElement("div");
@@ -44,6 +48,7 @@ LorePlot.katexBase = "../notation-panel/vendor/katex/";
     svg.style.height = `${r.h * zoom * 96 / 25.4}px`;
     const cap = document.createElement("figcaption");
     cap.textContent = `${s.label} · ${r.w}×${r.h} mm`;
+    f.dataset.id = s.id;
     f.append(box, cap);
     for (const w of r.warnings) { const d = document.createElement("div"); d.className = "warn"; d.textContent = w; f.append(d); }
     grid.append(f);

@@ -3,10 +3,45 @@
   "base": "clean",
   "label": "柔和",
   "note": "淡色長條＋同色系深色折線，y 方向虛線格線，有框的圖例",
-  "axes": { "spines": "box", "grid": "y", "grid_dash": "dash", "grid_color": "#b3b3b3", "grid_width": 0.4 },
-  "lines": { "width": 1.2, "marker": 3.5, "dashes": ["dash"] },
-  "bars": { "width": 0.75, "gap": 0.06 },
-  "legend": { "frame": true },
-  "colors": { "palette": ["#9ecae1", "#a1d99b", "#fdae6b", "#bcbddc", "#fa9fb5", "#c7e9c0"],
-              "lines": ["#3182bd", "#31a354", "#e6550d", "#756bb1", "#c51b8a", "#41ab5d"], "cmap": "purples" }
+  "axes": {
+    "spines": "box",
+    "grid": "y",
+    "grid_dash": "dash",
+    "grid_color": "#b3b3b3",
+    "grid_width": 0.4,
+    "grid_alpha": 1
+  },
+  "lines": {
+    "width": 1.2,
+    "marker": 3.5,
+    "dashes": [
+      "dash"
+    ]
+  },
+  "bars": {
+    "width": 0.75,
+    "gap": 0.06
+  },
+  "legend": {
+    "frame": true
+  },
+  "colors": {
+    "palette": [
+      "#9ecae1",
+      "#a1d99b",
+      "#fdae6b",
+      "#bcbddc",
+      "#fa9fb5",
+      "#c7e9c0"
+    ],
+    "lines": [
+      "#3182bd",
+      "#31a354",
+      "#e6550d",
+      "#756bb1",
+      "#c51b8a",
+      "#41ab5d"
+    ],
+    "cmap": "purples"
+  }
 }

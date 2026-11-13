@@ -53,12 +53,20 @@
 .lp-types button:hover { color: var(--text); background: var(--surface-hover); }
 .lp-types button[aria-pressed="true"] { border-color: var(--accent-text); background: var(--accent-soft); color: var(--text); font-weight: 600; }
 .lp-tico svg.i { width: 15px; height: 15px; }
+.lp-fmts { display: flex; flex-direction: column; gap: 4px; }
+.lp-fmts button { display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--muted); font-size: 12.5px; text-align: left; }
+.lp-fmts button b { font: 600 11px var(--mono); color: var(--accent-text); min-width: 22px; }
+.lp-fmts button i { margin-left: auto; font-style: normal; font: 600 10.5px var(--mono); color: var(--accent-text); }
+.lp-fmts button:hover { color: var(--text); background: var(--surface-hover); }
+.lp-fmts button[aria-pressed="true"] { border-color: var(--accent-text); background: var(--accent-soft); color: var(--text); }
+.lp-ptabs .lp-chipbtn { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+.lp-dropto { box-shadow: -3px 0 0 var(--accent-text); }
 .lp-thead { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12.5px; }
 .lp-tname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .lp-dim { font: 500 11px var(--mono); color: var(--faint); }
 .lp-pad { padding: 8px 0; }
 .lp-use { height: 22px; font-size: 11.5px; margin-left: auto; }
-.lp-grid { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r); margin-top: 6px; }
+.lp-grid { max-height: 150px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r); margin-top: 6px; }
 .lp-grid table { border-collapse: collapse; font: 11.5px var(--mono); }
 .lp-grid th, .lp-grid td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); padding: 2px 6px; white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 .lp-grid th { position: sticky; top: 0; background: var(--panel); color: var(--accent-text); font-weight: 600; }

@@ -11,7 +11,10 @@ use serde_json::{Map, Value};
 pub const VERSION: u32 = 1;
 
 /// Chart types the renderer knows (`commons/ui/plot/plot.js` CHARTS).
-pub const TYPES: &[&str] = &["line", "bar", "scatter", "box", "violin", "hist", "heatmap", "roc", "pr", "bland", "km", "radar"];
+pub const TYPES: &[&str] = &[
+    "line", "area", "bar", "dumbbell", "scatter", "bland", "box", "violin", "hist", "ridge", "ecdf", "heatmap", "roc", "pr", "calib", "dca", "km", "pie", "radar", "contour", "surface",
+    "scatter3d",
+];
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Table {
@@ -82,6 +85,12 @@ pub struct Panel {
     pub size: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<String>,
+    /// 3-D charts: the z column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z: Option<String>,
+    /// Box / violin: the condition column (groups × conditions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hue: Option<String>,
     #[serde(default)]
     pub series: Vec<Series>,
     /// title, xaxis, yaxis, legend, opts, notes, inset, span …
@@ -91,7 +100,7 @@ pub struct Panel {
 
 impl Panel {
     pub fn columns(&self) -> Vec<&str> {
-        let mut v: Vec<&str> = [&self.x, &self.y, &self.group, &self.size, &self.event].into_iter().filter_map(|c| c.as_deref()).collect();
+        let mut v: Vec<&str> = [&self.x, &self.y, &self.group, &self.size, &self.event, &self.z, &self.hue].into_iter().filter_map(|c| c.as_deref()).collect();
         for s in &self.series {
             v.extend(s.columns());
         }

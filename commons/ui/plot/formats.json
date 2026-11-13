@@ -1,0 +1,1108 @@
+{
+ "version": 1,
+ "note": "Every number here is a tunable default used to suggest a format; any format can be applied to any data. Edit freely.",
+ "venues": {
+  "nature": {
+   "label": "Nature",
+   "single": 89,
+   "double": 183,
+   "max_h": 170,
+   "font_min": 5,
+   "font_max": 7,
+   "panel_label": "8 pt bold lowercase",
+   "checked": "2026-11-13",
+   "source": "research-figure-guide.nature.com (building and exporting figure panels; preparing figures)"
+  },
+  "npj": {
+   "label": "npj Digital Medicine",
+   "single": 89,
+   "double": 183,
+   "max_h": 170,
+   "font_min": 5,
+   "font_max": 7,
+   "checked": "2026-11-13",
+   "source": "Nature Portfolio figure guide (the journal page needs a login; Nature numbers used)"
+  },
+  "ieee": {
+   "label": "IEEE TPAMI / TMI",
+   "single": 88.9,
+   "double": 181.9,
+   "font_min": 8,
+   "font_max": 10,
+   "checked": "2026-11-13",
+   "source": "IEEE author templates: 3.5 in / 7.16 in columns, 8 pt Times callouts"
+  },
+  "cvpr": {
+   "label": "CVPR",
+   "single": 82.6,
+   "double": 174.6,
+   "font_min": 7,
+   "font_max": 9,
+   "checked": "2026-11-13",
+   "source": "CVPR author kit: 3.25 in columns, 6.875 in text width, 10 pt body, 9 pt captions"
+  },
+  "slide": {
+   "label": "簡報 16:9",
+   "single": 120,
+   "double": 240,
+   "max_h": 135,
+   "font_min": 12,
+   "font_max": 20
+  }
+ },
+ "print": {
+  "tick_min_pt": 7,
+  "label_min_pt": 8,
+  "grid": {
+   "color": "#000000",
+   "alpha": 0.2,
+   "width": 0.4,
+   "behind": true
+  }
+ },
+ "rules": {
+  "legend_top_max": 6,
+  "label_chars_horizontal": 12,
+  "inset_auc_gap": 0.02,
+  "inset_max_area": 0.35,
+  "scatter_alpha_above": 5000,
+  "jitter_below": 100,
+  "log_x_decades": 2,
+  "direct_labels_max": 4,
+  "ticks": [
+   4,
+   7
+  ],
+  "padding": 0.05,
+  "legend_order": [
+   "emptiest inside corner",
+   "outside top (one row)",
+   "outside right"
+  ],
+  "legend_default": {
+   "roc": "lower right",
+   "pr": "lower left",
+   "loss": "upper right",
+   "accuracy": "lower right",
+   "bar": "above",
+   "scatter": "outside right"
+  },
+  "priority": [
+   "the comparison is legible at print size",
+   "nothing overlaps the data",
+   "minimum font sizes",
+   "fewer decorations"
+  ]
+ },
+ "formats": [
+  {
+   "code": "B1",
+   "chart": "bar",
+   "label": "少數類別、差異在 y",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "suggest": {
+    "categories": [
+     1,
+     4
+    ],
+    "series": [
+     1,
+     1
+    ]
+   },
+   "panel": {
+    "opts": {
+     "values": true,
+     "zoom": true,
+     "mode": "grouped"
+    },
+    "legend": {
+     "show": false
+    }
+   },
+   "note": "y 軸拉近時軸上有斷開記號，不會默默從非零開始"
+  },
+  {
+   "code": "B2",
+   "chart": "bar",
+   "label": "很多類別、一個系列",
+   "width": "double",
+   "aspect": 2.2,
+   "suggest": {
+    "categories": [
+     8,
+     20
+    ],
+    "series": [
+     1,
+     1
+    ]
+   },
+   "panel": {
+    "opts": {
+     "sort": "desc"
+    },
+    "legend": {
+     "show": false
+    }
+   },
+   "apply": {
+    "horizontal_if_label_chars": 12
+   },
+   "note": "標籤太長時改橫向"
+  },
+  {
+   "code": "B3",
+   "chart": "bar",
+   "label": "分組（類別 × 2–5 系列）",
+   "width": "double",
+   "aspect": 2.2,
+   "suggest": {
+    "categories": [
+     2,
+     12
+    ],
+    "series": [
+     2,
+     5
+    ]
+   },
+   "panel": {
+    "opts": {
+     "mode": "grouped"
+    },
+    "legend": {
+     "pos": "above"
+    }
+   },
+   "apply": {
+    "ours_last": true
+   },
+   "note": "誤差線；圖例在上方一列；我們的方法最搶眼"
+  },
+  {
+   "code": "B4",
+   "chart": "bar",
+   "label": "堆疊",
+   "width": "single",
+   "aspect": 0.8333333333333334,
+   "suggest": {
+    "series": [
+     2,
+     8
+    ]
+   },
+   "panel": {
+    "opts": {
+     "mode": "stacked"
+    },
+    "legend": {
+     "pos": "outside right"
+    }
+   },
+   "note": "opts.mode = percent 改成百分比"
+  },
+  {
+   "code": "B5",
+   "chart": "dumbbell",
+   "label": "成對（啞鈴）",
+   "width": "single",
+   "aspect": 1.0,
+   "suggest": {
+    "series": [
+     2,
+     2
+    ],
+    "categories": [
+     3,
+     30
+    ]
+   },
+   "panel": {
+    "legend": {
+     "pos": "above"
+    }
+   }
+  },
+  {
+   "code": "B6",
+   "chart": "bar",
+   "label": "每個指標一格（小倍數）",
+   "width": "double",
+   "aspect": 3.2,
+   "suggest": {
+    "series": [
+     2,
+     4
+    ]
+   },
+   "spec": {
+    "grid": {
+     "legend": "top",
+     "sharey": true,
+     "labels": "a"
+    }
+   },
+   "apply": {
+    "split": "series"
+   },
+   "note": "單位相同時共用 y 軸"
+  },
+  {
+   "code": "B7",
+   "chart": "bar",
+   "label": "顯著性括號（* / ** / n.s.）",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "panel": {
+    "opts": {
+     "mode": "grouped"
+    }
+   },
+   "apply": {
+    "brackets": "ours_vs_best"
+   },
+   "note": "疊在 B1／B3 上，高度自動錯開"
+  },
+  {
+   "code": "L1",
+   "chart": "line",
+   "label": "訓練曲線",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "suggest": {
+    "series": [
+     2,
+     6
+    ],
+    "points": [
+     30,
+     100000
+    ]
+   },
+   "panel": {
+    "opts": {
+     "smooth": 0.6
+    },
+    "legend": {
+     "pos": "best"
+    }
+   },
+   "note": "平滑線＋原始線 25% 透明；loss 圖例右上、accuracy 右下"
+  },
+  {
+   "code": "L2",
+   "chart": "line",
+   "label": "參數掃描",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "suggest": {
+    "points": [
+     5,
+     10
+    ]
+   },
+   "panel": {
+    "opts": {}
+   },
+   "set": {
+    "lines.marker": 4
+   },
+   "apply": {
+    "log_x_if_decades": 2
+   },
+   "note": "一定有點；跨好幾個數量級時 x 用對數"
+  },
+  {
+   "code": "L3",
+   "chart": "line",
+   "label": "很多系列（>6）",
+   "width": "double",
+   "aspect": 2.2,
+   "suggest": {
+    "series": [
+     7,
+     40
+    ]
+   },
+   "panel": {
+    "legend": {
+     "pos": "outside right"
+    }
+   },
+   "apply": {
+    "highlight": 2
+   },
+   "note": "突出 1–2 條，其餘灰色"
+  },
+  {
+   "code": "L4",
+   "chart": "line",
+   "label": "兩個指標共用 x",
+   "width": "single",
+   "aspect": 0.7142857142857143,
+   "suggest": {
+    "series": [
+     2,
+     2
+    ]
+   },
+   "spec": {
+    "grid": {
+     "sharex": true,
+     "labels": "a"
+    }
+   },
+   "apply": {
+    "split": "series",
+    "rows": true
+   }
+  },
+  {
+   "code": "L5",
+   "chart": "line",
+   "label": "平均 ± 標準差色帶",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "suggest": {
+    "err": true
+   },
+   "panel": {
+    "opts": {
+     "err_style": "band",
+     "band_alpha": 0.2
+    }
+   }
+  },
+  {
+   "code": "L6",
+   "chart": "line",
+   "label": "指標 vs 門檻＋操作點",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "panel": {
+    "notes": [
+     {
+      "type": "point",
+      "x": 0.5,
+      "y": 0.8,
+      "text": "operating point"
+     }
+    ]
+   },
+   "note": "操作點用註記移到實際位置"
+  },
+  {
+   "code": "S1",
+   "chart": "scatter",
+   "label": "嵌入（t-SNE／UMAP）",
+   "width": "single",
+   "aspect": 1.0,
+   "suggest": {
+    "points": [
+     500,
+     50000
+    ]
+   },
+   "panel": {
+    "opts": {
+     "no_ticks": true,
+     "square": true,
+     "centroids": false
+    },
+    "legend": {
+     "pos": "outside right"
+    }
+   },
+   "note": "點的大小 ∝ 1/log n；5000 點以上透明 0.6"
+  },
+  {
+   "code": "S2",
+   "chart": "scatter",
+   "label": "相關＋迴歸線＋r、p",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "suggest": {
+    "points": [
+     50,
+     500
+    ]
+   },
+   "panel": {
+    "opts": {
+     "fit": true,
+     "stats": true
+    }
+   },
+   "note": "同單位時加 identity 線（opts.identity）"
+  },
+  {
+   "code": "S3",
+   "chart": "bland",
+   "label": "Bland–Altman",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "panel": {
+    "opts": {
+     "limits": true
+    }
+   }
+  },
+  {
+   "code": "S4",
+   "chart": "scatter",
+   "label": "氣泡（大小欄）",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "panel": {
+    "opts": {
+     "size_legend": true
+    },
+    "legend": {
+     "pos": "outside right"
+    }
+   },
+   "note": "選大小欄（size）"
+  },
+  {
+   "code": "S5",
+   "chart": "scatter",
+   "label": "逐例 A vs B",
+   "width": "single",
+   "aspect": 1.0,
+   "panel": {
+    "opts": {
+     "identity": true,
+     "counts": true,
+     "square": true
+    }
+   }
+  },
+  {
+   "code": "S6",
+   "chart": "scatter",
+   "label": "大量點（hexbin）",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "suggest": {
+    "points": [
+     50000,
+     10000000
+    ]
+   },
+   "panel": {
+    "opts": {
+     "hexbin": 30
+    }
+   }
+  },
+  {
+   "code": "V1",
+   "chart": "box",
+   "label": "2–5 組分布",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "suggest": {
+    "groups": [
+     2,
+     5
+    ]
+   },
+   "panel": {
+    "opts": {
+     "mean": false
+    }
+   },
+   "note": "n 少於 100 時疊上抖動點"
+  },
+  {
+   "code": "V2",
+   "chart": "box",
+   "label": "組 × 條件",
+   "width": "double",
+   "aspect": 2.2,
+   "panel": {
+    "opts": {},
+    "legend": {
+     "pos": "above"
+    }
+   },
+   "note": "選分組欄（group）與條件欄（hue）"
+  },
+  {
+   "code": "V3",
+   "chart": "box",
+   "label": "很多組（橫向、依中位數排序）",
+   "width": "single",
+   "aspect": 0.8,
+   "suggest": {
+    "groups": [
+     8,
+     60
+    ]
+   },
+   "panel": {
+    "opts": {
+     "horizontal": true,
+     "sort": "desc",
+     "mono": true
+    }
+   }
+  },
+  {
+   "code": "V4",
+   "chart": "box",
+   "label": "成對（每位受試者連線）",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "panel": {
+    "opts": {
+     "paired": true,
+     "points": true
+    }
+   }
+  },
+  {
+   "code": "V5",
+   "chart": "violin",
+   "label": "雨雲圖",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "panel": {
+    "opts": {
+     "raincloud": true
+    }
+   }
+  },
+  {
+   "code": "H1",
+   "chart": "heatmap",
+   "label": "混淆矩陣",
+   "width": "single",
+   "aspect": 1.0,
+   "suggest": {
+    "classes": [
+     2,
+     10
+    ]
+   },
+   "panel": {
+    "opts": {
+     "annot": "count+row%",
+     "sep": 1,
+     "cmap": "blues",
+     "square": true
+    }
+   }
+  },
+  {
+   "code": "H2",
+   "chart": "heatmap",
+   "label": "相關矩陣（下三角）",
+   "width": "single",
+   "aspect": 1.0,
+   "panel": {
+    "opts": {
+     "triangle": "lower",
+     "center": 0,
+     "colorbar": true,
+     "fmt": ".2f",
+     "sep": 0.5
+    }
+   }
+  },
+  {
+   "code": "H3",
+   "chart": "heatmap",
+   "label": "結果表（方法 × 資料集）",
+   "width": "double",
+   "aspect": 2.0,
+   "panel": {
+    "opts": {
+     "best": "col-max",
+     "cmap": "blues",
+     "annot": "value",
+     "fmt": ".3f",
+     "top": true,
+     "cmap_range": [
+      0,
+      0.55
+     ]
+    }
+   },
+   "note": "每欄最好的加框（opts.best = col-min 時越小越好）"
+  },
+  {
+   "code": "H4",
+   "chart": "heatmap",
+   "label": "注意力圖",
+   "width": "single",
+   "aspect": 1.0,
+   "panel": {
+    "opts": {
+     "annot": "none",
+     "colorbar": true,
+     "cmap": "magma",
+     "image": true
+    }
+   }
+  },
+  {
+   "code": "H5",
+   "chart": "heatmap",
+   "label": "兩個超參數的消融格",
+   "width": "single",
+   "aspect": 1.0,
+   "panel": {
+    "opts": {
+     "best": "max",
+     "colorbar": true,
+     "fmt": ".3f"
+    }
+   }
+  },
+  {
+   "code": "R1",
+   "chart": "roc",
+   "label": "ROC（≤5 個方法）",
+   "width": "single",
+   "aspect": 1.0,
+   "suggest": {
+    "series": [
+     1,
+     5
+    ]
+   },
+   "panel": {
+    "opts": {
+     "auc": true,
+     "diagonal": true
+    },
+    "legend": {
+     "pos": "lower right"
+    }
+   }
+  },
+  {
+   "code": "R2",
+   "chart": "roc",
+   "label": "ROC＋左上放大",
+   "width": "single",
+   "aspect": 1.0,
+   "panel": {
+    "opts": {
+     "auc": true
+    },
+    "legend": {
+     "pos": "lower right"
+    },
+    "inset": {
+     "x": [
+      0,
+      0.3
+     ],
+     "y": [
+      0.7,
+      1.0
+     ],
+     "at": [
+      0.5,
+      0.3,
+      0.45,
+      0.42
+     ],
+     "mark": true
+    }
+   },
+   "apply": {
+    "inset_if_auc_gap": 0.02
+   },
+   "note": "AUC 差距小或曲線在左上重疊時"
+  },
+  {
+   "code": "R3",
+   "chart": "pr",
+   "label": "PR",
+   "width": "single",
+   "aspect": 1.0,
+   "panel": {
+    "opts": {
+     "auc": true,
+     "baseline": "auto"
+    },
+    "legend": {
+     "pos": "lower left"
+    }
+   },
+   "note": "虛線＝盛行率"
+  },
+  {
+   "code": "R4",
+   "chart": "roc",
+   "label": "每類／每資料集一格",
+   "width": "double",
+   "aspect": 3.0,
+   "spec": {
+    "grid": {
+     "legend": "top",
+     "labels": "a"
+    }
+   },
+   "apply": {
+    "split": "series"
+   }
+  },
+  {
+   "code": "R5",
+   "chart": "calib",
+   "label": "校準＋數量直方",
+   "width": "single",
+   "aspect": 1.0,
+   "panel": {
+    "opts": {
+     "bins": 10
+    }
+   }
+  },
+  {
+   "code": "R6",
+   "chart": "dca",
+   "label": "決策曲線（全治療／不治療）",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "panel": {
+    "opts": {
+     "max": 0.6
+    }
+   }
+  },
+  {
+   "code": "D1",
+   "chart": "hist",
+   "label": "直方圖（Freedman–Diaconis）",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "panel": {
+    "opts": {}
+   },
+   "note": "opts.bins 可改組數"
+  },
+  {
+   "code": "D2",
+   "chart": "hist",
+   "label": "2–3 組重疊＋KDE",
+   "width": "single",
+   "aspect": 1.3333333333333333,
+   "suggest": {
+    "series": [
+     2,
+     3
+    ]
+   },
+   "panel": {
+    "opts": {
+     "kde": true,
+     "alpha": 0.45
+    }
+   }
+  },
+  {
+   "code": "D3",
+   "chart": "ridge",
+   "label": "山脊圖",
+   "width": "single",
+   "aspect": 0.9,
+   "suggest": {
+    "series": [
+     4,
+     20
+    ]
+   },
+   "panel": {
+    "opts": {
+     "overlap": 1.6
+    }
+   }
+  },
+  {
+   "code": "D4",
+   "chart": "ecdf",
+   "label": "累積分布（ECDF）",
+   "width": "single",
+   "aspect": 1.3333333333333333
+  },
+  {
+   "code": "T1",
+   "chart": "contour",
+   "label": "等高線（優先於曲面）",
+   "width": "single",
+   "aspect": 1.1,
+   "panel": {
+    "opts": {
+     "levels": 8
+    }
+   },
+   "note": "規則格點的 x、y、z 欄"
+  },
+  {
+   "code": "T2",
+   "chart": "surface",
+   "label": "曲面（固定視角）",
+   "width": "single",
+   "aspect": 1.0,
+   "panel": {
+    "opts": {
+     "azim": -55,
+     "elev": 28
+    }
+   },
+   "note": "視角存在規格裡"
+  },
+  {
+   "code": "T3",
+   "chart": "scatter3d",
+   "label": "小型 3D 點雲",
+   "width": "single",
+   "aspect": 1.0,
+   "suggest": {
+    "points": [
+     10,
+     3000
+    ]
+   },
+   "panel": {
+    "opts": {
+     "walls": true
+    }
+   }
+  },
+  {
+   "code": "T4",
+   "chart": "heatmap",
+   "label": "醫學影像三個正交切面",
+   "width": "double",
+   "aspect": 3.0,
+   "panel": {
+    "opts": {
+     "image": true,
+     "annot": "none"
+    }
+   },
+   "spec": {
+    "grid": {
+     "labels": "a",
+     "share_color": true
+    }
+   },
+   "apply": {
+    "split": "tables"
+   },
+   "note": "三個表：axial、coronal、sagittal"
+  },
+  {
+   "code": "P1",
+   "chart": "pie",
+   "label": "≤5 片、直接標百分比",
+   "width": "single",
+   "aspect": 1.0,
+   "suggest": {
+    "categories": [
+     2,
+     5
+    ]
+   },
+   "panel": {
+    "opts": {
+     "labels": "direct"
+    }
+   }
+  },
+  {
+   "code": "P2",
+   "chart": "pie",
+   "label": "甜甜圈（中間寫總數）",
+   "width": "single",
+   "aspect": 1.0,
+   "panel": {
+    "opts": {
+     "donut": 0.55,
+     "total": true
+    }
+   }
+  },
+  {
+   "code": "P3",
+   "chart": "pie",
+   "label": "很多小片併成「Other」",
+   "width": "single",
+   "aspect": 1.0,
+   "suggest": {
+    "categories": [
+     6,
+     40
+    ]
+   },
+   "panel": {
+    "opts": {
+     "other": 0.04
+    }
+   }
+  },
+  {
+   "code": "P4",
+   "chart": "pie",
+   "label": "並排比較",
+   "width": "double",
+   "aspect": 2.2,
+   "spec": {
+    "grid": {
+     "labels": "a",
+     "legend": "right"
+    }
+   },
+   "apply": {
+    "split": "series"
+   },
+   "note": "比較才是重點時，長條通常更清楚"
+  },
+  {
+   "code": "A1",
+   "chart": "radar",
+   "label": "2–4 個方法 × 5–8 指標（正規化）",
+   "width": "single",
+   "aspect": 1.0,
+   "suggest": {
+    "series": [
+     2,
+     4
+    ],
+    "categories": [
+     5,
+     8
+    ]
+   },
+   "panel": {
+    "opts": {
+     "normalize": true
+    },
+    "legend": {
+     "pos": "outside right"
+    }
+   }
+  },
+  {
+   "code": "A2",
+   "chart": "radar",
+   "label": "每個方法一格",
+   "width": "double",
+   "aspect": 3.0,
+   "spec": {
+    "grid": {
+     "labels": "a"
+    }
+   },
+   "apply": {
+    "split": "series"
+   }
+  },
+  {
+   "code": "A3",
+   "chart": "radar",
+   "label": "單一方法 vs 平均／參考",
+   "width": "single",
+   "aspect": 1.0,
+   "panel": {
+    "opts": {
+     "fill": true
+    }
+   },
+   "apply": {
+    "ref_last": true
+   }
+  },
+  {
+   "code": "C1",
+   "chart": "*",
+   "label": "2×2（a–d）",
+   "width": "double",
+   "aspect": 1.0,
+   "spec": {
+    "grid": {
+     "cols": 2,
+     "rows": 2,
+     "labels": "a"
+    }
+   },
+   "apply": {
+    "layout": true
+   }
+  },
+  {
+   "code": "C2",
+   "chart": "*",
+   "label": "1×3",
+   "width": "double",
+   "aspect": 3.0,
+   "spec": {
+    "grid": {
+     "cols": 3,
+     "rows": 1,
+     "labels": "a"
+    }
+   },
+   "apply": {
+    "layout": true
+   }
+  },
+  {
+   "code": "C3",
+   "chart": "*",
+   "label": "左大＋右兩小",
+   "width": "double",
+   "aspect": 1.6,
+   "spec": {
+    "grid": {
+     "cols": 3,
+     "rows": 2,
+     "labels": "a"
+    }
+   },
+   "apply": {
+    "layout": true,
+    "spans": [
+     [
+      2,
+      2
+     ],
+     [
+      1,
+      1
+     ],
+     [
+      1,
+      1
+     ]
+    ]
+   }
+  },
+  {
+   "code": "C4",
+   "chart": "*",
+   "label": "共用色條",
+   "width": "double",
+   "aspect": 3.0,
+   "spec": {
+    "grid": {
+     "cols": 3,
+     "rows": 1,
+     "labels": "a",
+     "share_color": true
+    }
+   },
+   "apply": {
+    "layout": true
+   }
+  }
+ ]
+}

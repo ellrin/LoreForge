@@ -68,7 +68,12 @@
 | `roc`／`pr` | `series[]`: `x`、`y`（已算好的曲線）或 `score`＋`truth`（自己算） | `auc`（圖例加 AUC = 0.943）、`diagonal` |
 | `bland` | `series[0]`: `y`（方法 A）、`y2`（方法 B） | `limits`（平均差 ± 1.96 SD） |
 | `km` | `x`（時間）、`event`（1 = 事件，0 = 設限）、`group` | `censor`（設限記號） |
-| `radar` | `x`（各軸名稱）、`series[]`: `y` | `fill` |
+| `radar` | `x`（各軸名稱）、`series[]`: `y`（`ref` 參考線） | `fill`、`normalize` |
+| `pie` | `x`（名稱）、`series[0].y` | `donut`、`labels`: direct／legend、`other`（併成 Other 的比例）、`total` |
+| `area`／`dumbbell` | 同 line／bar（啞鈴：兩個系列） | `area`: fill／stack |
+| `ridge`／`ecdf` | 同 box（每欄一組分布） | `overlap` |
+| `calib`／`dca` | `series[]`: `score`＋`truth` | `bins`／`max` |
+| `contour`／`surface`／`scatter3d` | `x`、`y`、`z`（規則格點；點雲可有 `group`） | `levels`、`azim`、`elev`、`walls` |
 
 每條 `series` 可以有：`label`（可含 `$…$`）、`color`（不給＝色盤依序）、`marker`（o s ^ v D x + none）、
 `dash`（solid dash dot dashdot）、`width`、`alpha`、`hidden`。
@@ -81,6 +86,106 @@
 - `notes[]`：`text`（`x`,`y`，`coords`: data／axes）、`arrow`（`x`,`y` → `x2`,`y2`，可加 `text`）、
   `bracket`（顯著性括號：類別 `x` 到 `x2`，高 `y`，`text`: `*`、`**`、`n.s.`、`$p<0.01$`）、`hline`／`vline`（`y`／`x`，`label`、`dash`）。
 - `inset`：放大小圖 `{ "x": [0, 0.1], "y": [0.6, 1], "at": [0.45, 0.35, 0.5, 0.5] }`（`at` ＝在軸內的位置與大小，軸的比例）。
+
+## 3b. 格式（formats.json）
+
+每種圖有 4–7 個格式（和色盤、樣式分開）：寬度、比例、圖例、附加元素。資料：`commons/ui/plot/formats.json`。
+格式只是**建議**：依資料形狀排序（類別數、系列數、點數、AUC 差…），裡面的數字（≤4 類、8–20 類、AUC 差 0.02、圖例一列 ≤6 項…）都是可以改的預設值，
+從不擋住任何格式——任何格式都能套在任何資料上，`plot-assist` 也可以在範圍外建議（說明理由）。
+套用（`LorePlot.applyFormat`）只改這一格的外觀與圖的大小；資料對應（哪一欄是 x、哪些系列）保留，可以復原。
+
+| 代號 | 圖 | 用途 | 寬 · 比例 | 說明 |
+|---|---|---|---|---|
+| B1 | bar | 少數類別、差異在 y | 單欄 · 1.33:1 | y 軸拉近時軸上有斷開記號，不會默默從非零開始 |
+| B2 | bar | 很多類別、一個系列 | 雙欄 · 2.2:1 | 標籤太長時改橫向 |
+| B3 | bar | 分組（類別 × 2–5 系列） | 雙欄 · 2.2:1 | 誤差線；圖例在上方一列；我們的方法最搶眼 |
+| B4 | bar | 堆疊 | 單欄 · 0.83:1 | opts.mode = percent 改成百分比 |
+| B5 | dumbbell | 成對（啞鈴） | 單欄 · 1:1 |  |
+| B6 | bar | 每個指標一格（小倍數） | 雙欄 · 3.2:1 | 單位相同時共用 y 軸 |
+| B7 | bar | 顯著性括號（* / ** / n.s.） | 單欄 · 1.33:1 | 疊在 B1／B3 上，高度自動錯開 |
+| L1 | line | 訓練曲線 | 單欄 · 1.33:1 | 平滑線＋原始線 25% 透明；loss 圖例右上、accuracy 右下 |
+| L2 | line | 參數掃描 | 單欄 · 1.33:1 | 一定有點；跨好幾個數量級時 x 用對數 |
+| L3 | line | 很多系列（>6） | 雙欄 · 2.2:1 | 突出 1–2 條，其餘灰色 |
+| L4 | line | 兩個指標共用 x | 單欄 · 0.71:1 |  |
+| L5 | line | 平均 ± 標準差色帶 | 單欄 · 1.33:1 |  |
+| L6 | line | 指標 vs 門檻＋操作點 | 單欄 · 1.33:1 | 操作點用註記移到實際位置 |
+| S1 | scatter | 嵌入（t-SNE／UMAP） | 單欄 · 1:1 | 點的大小 ∝ 1/log n；5000 點以上透明 0.6 |
+| S2 | scatter | 相關＋迴歸線＋r、p | 單欄 · 1.33:1 | 同單位時加 identity 線（opts.identity） |
+| S3 | bland | Bland–Altman | 單欄 · 1.33:1 |  |
+| S4 | scatter | 氣泡（大小欄） | 單欄 · 1.33:1 | 選大小欄（size） |
+| S5 | scatter | 逐例 A vs B | 單欄 · 1:1 |  |
+| S6 | scatter | 大量點（hexbin） | 單欄 · 1.33:1 |  |
+| V1 | box | 2–5 組分布 | 單欄 · 1.33:1 | n 少於 100 時疊上抖動點 |
+| V2 | box | 組 × 條件 | 雙欄 · 2.2:1 | 選分組欄（group）與條件欄（hue） |
+| V3 | box | 很多組（橫向、依中位數排序） | 單欄 · 0.8:1 |  |
+| V4 | box | 成對（每位受試者連線） | 單欄 · 1.33:1 |  |
+| V5 | violin | 雨雲圖 | 單欄 · 1.33:1 |  |
+| H1 | heatmap | 混淆矩陣 | 單欄 · 1:1 |  |
+| H2 | heatmap | 相關矩陣（下三角） | 單欄 · 1:1 |  |
+| H3 | heatmap | 結果表（方法 × 資料集） | 雙欄 · 2:1 | 每欄最好的加框（opts.best = col-min 時越小越好） |
+| H4 | heatmap | 注意力圖 | 單欄 · 1:1 |  |
+| H5 | heatmap | 兩個超參數的消融格 | 單欄 · 1:1 |  |
+| R1 | roc | ROC（≤5 個方法） | 單欄 · 1:1 |  |
+| R2 | roc | ROC＋左上放大 | 單欄 · 1:1 | AUC 差距小或曲線在左上重疊時 |
+| R3 | pr | PR | 單欄 · 1:1 | 虛線＝盛行率 |
+| R4 | roc | 每類／每資料集一格 | 雙欄 · 3:1 |  |
+| R5 | calib | 校準＋數量直方 | 單欄 · 1:1 |  |
+| R6 | dca | 決策曲線（全治療／不治療） | 單欄 · 1.33:1 |  |
+| D1 | hist | 直方圖（Freedman–Diaconis） | 單欄 · 1.33:1 | opts.bins 可改組數 |
+| D2 | hist | 2–3 組重疊＋KDE | 單欄 · 1.33:1 |  |
+| D3 | ridge | 山脊圖 | 單欄 · 0.9:1 |  |
+| D4 | ecdf | 累積分布（ECDF） | 單欄 · 1.33:1 |  |
+| T1 | contour | 等高線（優先於曲面） | 單欄 · 1.1:1 | 規則格點的 x、y、z 欄 |
+| T2 | surface | 曲面（固定視角） | 單欄 · 1:1 | 視角存在規格裡 |
+| T3 | scatter3d | 小型 3D 點雲 | 單欄 · 1:1 |  |
+| T4 | heatmap | 醫學影像三個正交切面 | 雙欄 · 3:1 | 三個表：axial、coronal、sagittal |
+| P1 | pie | ≤5 片、直接標百分比 | 單欄 · 1:1 |  |
+| P2 | pie | 甜甜圈（中間寫總數） | 單欄 · 1:1 |  |
+| P3 | pie | 很多小片併成「Other」 | 單欄 · 1:1 |  |
+| P4 | pie | 並排比較 | 雙欄 · 2.2:1 | 比較才是重點時，長條通常更清楚 |
+| A1 | radar | 2–4 個方法 × 5–8 指標（正規化） | 單欄 · 1:1 |  |
+| A2 | radar | 每個方法一格 | 雙欄 · 3:1 |  |
+| A3 | radar | 單一方法 vs 平均／參考 | 單欄 · 1:1 |  |
+| C1 | * | 2×2（a–d） | 雙欄 · 1:1 |  |
+| C2 | * | 1×3 | 雙欄 · 3:1 |  |
+| C3 | * | 左大＋右兩小 | 雙欄 · 1.6:1 |  |
+| C4 | * | 共用色條 | 雙欄 · 3:1 |  |
+
+期刊數字（`venues`，2026-11-13 查核；Nature 的最大高度現在是 170 mm，不是舊的 247 mm）：
+
+| 期刊 | 單欄 / 雙欄 mm | 最大高 mm | 字 | 來源 |
+|---|---|---|---|---|
+| Nature | 89 / 183 | 170 | 5–7 pt | research-figure-guide.nature.com (building and exporting figure panels; preparing figures)（2026-11-13） |
+| npj Digital Medicine | 89 / 183 | 170 | 5–7 pt | Nature Portfolio figure guide (the journal page needs a login; Nature numbers used)（2026-11-13） |
+| IEEE TPAMI / TMI | 88.9 / 181.9 | — | 8–10 pt | IEEE author templates: 3.5 in / 7.16 in columns, 8 pt Times callouts（2026-11-13） |
+| CVPR | 82.6 / 174.6 | — | 7–9 pt | CVPR author kit: 3.25 in columns, 6.875 in text width, 10 pt body, 9 pt captions（2026-11-13） |
+
+共通規則（`rules`，也是可調的資料）：圖例先找資料最少的內側角落（4×4 佔用度：點、線段、長條、括號、小圖都算），
+沒有就放圖外上方一列（≤ `legend_top_max` 項），再多就圖外右側；不加框時有 85% 白底；≤4 條線且有空間時可改成線尾直接標（`legend.pos = "direct"`）。
+軸 4–7 個主刻度、5% 留白、單位寫在標籤、必要時才用科學記號；刻度字太擠時略過字、保留刻度。
+優先順序：比較在印刷大小下讀得出來 → 不擋資料 → 最小字級 → 越少裝飾越好。
+
+### 軸
+
+`xaxis/yaxis.scale`：`linear`、`log`（log₁₀）、`symlog`（`linthresh`）、`stretch`（`segments: [[a, b, 權重], …]`，例如 `[[0.8, 1, 3]]` 把 0.8–1.0 拉長三倍；
+權重 0 ＝斷軸，用來處理離群值）。分段交界與斷開處在軸上畫斷開記號 `//`。長條圖的值軸不從 0 開始時一定畫斷開記號（不會默默從非零開始）。
+格線：`axes.grid`（none／y／x／both）、`grid_minor`＋`grid_density`（每個主格分幾格）、`grid_dash`、`grid_color`＋`grid_alpha`（預設黑 20%、0.4 pt），永遠畫在資料後面。
+
+### 色盤
+
+`colors.palette` 可以是顏色清單或 `palettes.json` 的名稱：Okabe–Ito、Paul Tol（bright／muted／vibrant）、重點一色＋灰，以及 20 個 Lore 主題配色的**靜態複本**
+（`theme-<id>`：從 theme.css 複製一次、加深到白紙上對比 ≥ 3:1；圖永遠不跟 app 主題變）。
+`series.ours = true`：這條用強調色（`colors.emphasis`，預設色盤第一色），其他系列向灰色淡化（`colors.mute`）；`opts.highlight` 指定要突出的系列，其他變灰。
+
+### 組合圖（一張圖 ＝ 版面＋多格）
+
+`grid: { cols, rows, gap, labels, legend: top|right|bottom, sharey, sharex, share_color }`；每格 `span`（欄）與 `rowspan`（列），依序放進第一個放得下的位置。
+編輯器：加一格（選種類，或複製這一格）、拖曳格的標籤排順序、每格自己的種類與資料、共用圖例／軸／色條、格標 a b c 自動、
+頁面大小（單欄／1.5 欄／雙欄／整頁）、「併入其他圖…」（另一張 `.plot.json`；PaperComposer 列出這篇論文的其他圖）。
+
+### 3D
+
+只用在資料本身是 3D：`contour`（T1，優先）、`surface`（T2，視角 `opts.azim/elev` 存在規格裡）、`scatter3d`（T3），醫學影像用三個正交切面的熱圖（T4）。
 
 ## 4. 樣式預設（資料，不是程式）
 

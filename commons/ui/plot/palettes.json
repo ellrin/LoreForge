@@ -1,0 +1,362 @@
+{
+ "okabe-ito": {
+  "label": "Okabe–Ito（色盲友善）",
+  "cb_safe": true,
+  "colors": [
+   "#0072B2",
+   "#E69F00",
+   "#009E73",
+   "#D55E00",
+   "#CC79A7",
+   "#56B4E9",
+   "#F0E442",
+   "#000000"
+  ]
+ },
+ "tol-bright": {
+  "label": "Paul Tol bright（色盲友善）",
+  "cb_safe": true,
+  "colors": [
+   "#4477AA",
+   "#EE6677",
+   "#228833",
+   "#CCBB44",
+   "#66CCEE",
+   "#AA3377",
+   "#BBBBBB"
+  ]
+ },
+ "tol-muted": {
+  "label": "Paul Tol muted（色盲友善）",
+  "cb_safe": true,
+  "colors": [
+   "#332288",
+   "#88CCEE",
+   "#44AA99",
+   "#117733",
+   "#999933",
+   "#DDCC77",
+   "#CC6677",
+   "#882255",
+   "#AA4499"
+  ]
+ },
+ "tol-vibrant": {
+  "label": "Paul Tol vibrant（色盲友善）",
+  "cb_safe": true,
+  "colors": [
+   "#0077BB",
+   "#33BBEE",
+   "#009988",
+   "#EE7733",
+   "#CC3311",
+   "#EE3377",
+   "#BBBBBB"
+  ]
+ },
+ "emphasis-grey": {
+  "label": "重點一色＋灰",
+  "cb_safe": true,
+  "colors": [
+   "#D55E00",
+   "#4d4d4d",
+   "#8c8c8c",
+   "#b3b3b3",
+   "#d0d0d0"
+  ]
+ },
+ "seaborn-deep": {
+  "label": "柔和深色",
+  "cb_safe": false,
+  "colors": [
+   "#4C72B0",
+   "#DD8452",
+   "#55A868",
+   "#C44E52",
+   "#8172B3",
+   "#937860",
+   "#DA8BC3",
+   "#8C8C8C"
+  ]
+ },
+ "theme-hacker": {
+  "label": "Lore 主題：駭客終端",
+  "from_theme": "hacker",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#00a92a",
+   "#12a941",
+   "#00a827",
+   "#27ac00",
+   "#8c9d0a",
+   "#ff5c50"
+  ]
+ },
+ "theme-amber": {
+  "label": "Lore 主題：琥珀終端",
+  "from_theme": "amber",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#c28600",
+   "#eb7000",
+   "#c78700",
+   "#56a41b",
+   "#ba8900",
+   "#ff5d46"
+  ]
+ },
+ "theme-ice": {
+  "label": "Lore 主題：冰晶藍",
+  "from_theme": "ice",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#00a2c7",
+   "#199ed3",
+   "#009fc2",
+   "#1fa851",
+   "#b78d03",
+   "#fa5d74"
+  ]
+ },
+ "theme-ultraviolet": {
+  "label": "Lore 主題：紫外線",
+  "from_theme": "ultraviolet",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#ab75ff",
+   "#8c5cff",
+   "#a876ff",
+   "#1aaa69",
+   "#c28900",
+   "#ff578c"
+  ]
+ },
+ "theme-redalert": {
+  "label": "Lore 主題：紅色警戒",
+  "from_theme": "redalert",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#ff4752",
+   "#e8323f",
+   "#ff5c64",
+   "#1ea95c",
+   "#c28800",
+   "#ff5b3d"
+  ]
+ },
+ "theme-neon": {
+  "label": "Lore 主題：霓虹夜市",
+  "from_theme": "neon",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#ff3fb4",
+   "#14a5a8",
+   "#b98e00",
+   "#14a77b",
+   "#eb7300",
+   "#ff5775"
+  ]
+ },
+ "theme-shibuya": {
+  "label": "Lore 主題：澀谷雨夜",
+  "from_theme": "shibuya",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#ff5099",
+   "#00a1ce",
+   "#9e7dff",
+   "#1ba768",
+   "#c08800",
+   "#ff5c5c"
+  ]
+ },
+ "theme-hongkong": {
+  "label": "Lore 主題：香港霓虹",
+  "from_theme": "hongkong",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#ff5147",
+   "#14a975",
+   "#c48a00",
+   "#23ab23",
+   "#e17400",
+   "#ff5775"
+  ]
+ },
+ "theme-synthwave": {
+  "label": "Lore 主題：落日合成",
+  "from_theme": "synthwave",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#fa6300",
+   "#ff4fa0",
+   "#a577ff",
+   "#1da87b",
+   "#c28800",
+   "#ff5c5c"
+  ]
+ },
+ "theme-aurora": {
+  "label": "Lore 主題：極光",
+  "from_theme": "aurora",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#09a960",
+   "#009ddf",
+   "#c868ff",
+   "#2ea913",
+   "#c28800",
+   "#ff5672"
+  ]
+ },
+ "theme-lavender": {
+  "label": "Lore 主題：薰衣草",
+  "from_theme": "lavender",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#6f4fd0",
+   "#5232ad",
+   "#8d6edb",
+   "#2a7655",
+   "#835c00",
+   "#b8344f"
+  ]
+ },
+ "theme-lemon": {
+  "label": "Lore 主題：檸檬塔",
+  "from_theme": "lemon",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#b48e08",
+   "#c58900",
+   "#b08d00",
+   "#2e7340",
+   "#9a4f00",
+   "#b3332b"
+  ]
+ },
+ "theme-mint": {
+  "label": "Lore 主題：薄荷",
+  "from_theme": "mint",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#0b7a5d",
+   "#08604a",
+   "#1f9474",
+   "#2a7336",
+   "#865f00",
+   "#b83a44"
+  ]
+ },
+ "theme-blueberry": {
+  "label": "Lore 主題：藍莓",
+  "from_theme": "blueberry",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#3a4bb0",
+   "#2a3888",
+   "#4f63c4",
+   "#287447",
+   "#835c00",
+   "#b83246"
+  ]
+ },
+ "theme-strawberry": {
+  "label": "Lore 主題：草莓",
+  "from_theme": "strawberry",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#c8254f",
+   "#9c1a3c",
+   "#d9547a",
+   "#23784a",
+   "#8f5a00",
+   "#b8261f"
+  ]
+ },
+ "theme-giftbox": {
+  "label": "Lore 主題：甜點禮盒",
+  "from_theme": "giftbox",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#e0457b",
+   "#30a785",
+   "#b48e08",
+   "#287a46",
+   "#8a5a00",
+   "#b8302c"
+  ]
+ },
+ "theme-peachlavender": {
+  "label": "Lore 主題：蜜桃薰衣草",
+  "from_theme": "peachlavender",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#ff5e1f",
+   "#9b7fe6",
+   "#e86a9e",
+   "#287446",
+   "#8a5800",
+   "#b8352a"
+  ]
+ },
+ "theme-sakuramatcha": {
+  "label": "Lore 主題：櫻花抹茶",
+  "from_theme": "sakuramatcha",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#eb6895",
+   "#779f3c",
+   "#8c4f42",
+   "#2f7340",
+   "#8a5a00",
+   "#b3303a"
+  ]
+ },
+ "theme-blueberrylemon": {
+  "label": "Lore 主題：藍莓檸檬",
+  "from_theme": "blueberrylemon",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#4a5fd0",
+   "#b48e08",
+   "#a462d4",
+   "#287447",
+   "#9a5200",
+   "#b83246"
+  ]
+ },
+ "theme-caramelpistachio": {
+  "label": "Lore 主題：焦糖開心果",
+  "from_theme": "caramelpistachio",
+  "cb_safe": false,
+  "note": "theme.css 的顏色複製一份，加深到白紙上對比 ≥ 3:1；不跟著 app 主題變",
+  "colors": [
+   "#d0812b",
+   "#69a343",
+   "#cf6f84",
+   "#2f6f3e",
+   "#8a5400",
+   "#b0352a"
+  ]
+ }
+}

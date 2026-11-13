@@ -35,10 +35,10 @@ fn spec_round_trip_keeps_unknown_fields() {
 fn spec_problems_name_missing_columns_and_types() {
     let mut v = sample_spec();
     v["panels"][0]["series"][1]["y"] = "C".into();
-    v["panels"][0]["type"] = "pie".into();
+    v["panels"][0]["type"] = "pie3d".into();
     let p = Spec::from_value(v).unwrap().problems();
     assert!(p.iter().any(|m| m.contains("「C」")), "{p:?}");
-    assert!(p.iter().any(|m| m.contains("pie")), "{p:?}");
+    assert!(p.iter().any(|m| m.contains("pie3d")), "{p:?}");
     let mut v = sample_spec();
     v["lore_plot"] = 99.into();
     assert!(matches!(Spec::from_value(v), Err(SpecError::Newer(99))));
@@ -47,12 +47,80 @@ fn spec_problems_name_missing_columns_and_types() {
 
 #[test]
 fn renderer_knows_the_same_chart_types() {
-    let js = include_str!("../../../ui/plot/plot.js");
+    let js = [include_str!("../../../ui/plot/charts.js"), include_str!("../../../ui/plot/charts3d.js")].concat();
     for t in spec::TYPES {
-        assert!(js.contains(&format!("CHARTS.{t} =")), "plot.js has no chart {t}");
+        assert!(js.contains(&format!("CHARTS.{t} =")), "the renderer has no chart {t}");
     }
-    let n = js.matches("CHARTS.").filter(|_| true).count();
-    assert!(n >= spec::TYPES.len());
+    let defined = js.matches("  CHARTS.").count();
+    assert_eq!(defined, spec::TYPES.len(), "a chart type the spec model does not list");
+}
+
+#[test]
+fn format_catalogue_is_complete_data() {
+    let cat: Value = serde_json::from_str(include_str!("../../../ui/plot/formats.json")).unwrap();
+    let formats = cat["formats"].as_array().unwrap();
+    let mut codes = std::collections::BTreeSet::new();
+    let mut per_family: BTreeMap<char, usize> = BTreeMap::new();
+    for f in formats {
+        let code = f["code"].as_str().unwrap();
+        assert!(codes.insert(code.to_string()), "{code} twice");
+        let chart = f["chart"].as_str().unwrap();
+        assert!(chart == "*" || spec::TYPES.contains(&chart), "{code}: unknown chart {chart}");
+        assert!(["single", "double", "onehalf", "page"].contains(&f["width"].as_str().unwrap()), "{code}");
+        assert!(f["aspect"].as_f64().unwrap() > 0.2, "{code}");
+        assert!(!f["label"].as_str().unwrap().is_empty());
+        *per_family.entry(code.chars().next().unwrap()).or_default() += 1;
+    }
+    // every chart family has 4–7 formats (the author's requirement)
+    for (fam, n) in &per_family {
+        assert!((3..=7).contains(n), "family {fam} has {n} formats");
+    }
+    for fam in ['B', 'L', 'S', 'V', 'H', 'R', 'D', 'T', 'P', 'A', 'C'] {
+        assert!(per_family.contains_key(&fam), "no {fam} formats");
+    }
+    for (id, v) in cat["venues"].as_object().unwrap() {
+        assert!(v["single"].as_f64().unwrap() < v["double"].as_f64().unwrap(), "{id}");
+    }
+    // thresholds are data (tunable), not code
+    assert!(cat["rules"]["legend_top_max"].as_u64().is_some());
+    let js = include_str!("../../../ui/plot/formats.js");
+    assert!(!js.contains("0.02)") || js.contains("rules.inset_auc_gap"), "thresholds come from the catalogue");
+}
+
+#[test]
+fn palettes_are_static_and_readable_on_white() {
+    let pals: Value = serde_json::from_str(include_str!("../../../ui/plot/palettes.json")).unwrap();
+    let lum = |h: &str| -> f64 {
+        let c = |i: usize| {
+            let v = u8::from_str_radix(&h[i..i + 2], 16).unwrap() as f64 / 255.0;
+            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * c(1) + 0.7152 * c(3) + 0.0722 * c(5)
+    };
+    let mut themes = 0;
+    for (id, p) in pals.as_object().unwrap() {
+        let colors = p["colors"].as_array().unwrap();
+        assert!(colors.len() >= 3, "{id}");
+        for c in colors {
+            let c = c.as_str().unwrap();
+            assert!(c.len() == 7 && c.starts_with('#'), "{id}: {c}");
+            if p.get("from_theme").is_some() {
+                assert!(1.05 / (lum(c) + 0.05) >= 2.95, "{id}: {c} is too light for white paper");
+            }
+        }
+        if p.get("from_theme").is_some() {
+            themes += 1;
+        }
+    }
+    // a copy of each of the 20 app themes (values copied, never theme tokens)
+    assert_eq!(themes, 20);
+    assert!(!include_str!("../../../ui/plot/palettes.json").contains("var(--"));
+    for f in ["plot.js", "charts.js", "charts3d.js"] {
+        let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/plot").join(f)).unwrap();
+        for token in ["--accent", "--text", "--bg", "--panel", "--line", "--muted", "--paper", "--surface", "--ok", "--warn", "--err"] {
+            assert!(!src.contains(&format!("var({token}")), "{f}: figures never use theme tokens ({token})");
+        }
+    }
 }
 
 // ── data ─────────────────────────────────────────────────────────────────
@@ -273,6 +341,18 @@ fn every_katex_font_is_compiled_in() {
     assert!(assets::get("").is_some());
     assert!(assets::get("katex/fonts/KaTeX_Main-Regular.woff2").is_some());
     assert!(assets::get("editor.js").is_some());
+    for f in assets::SCRIPTS {
+        assert!(assets::get(f).is_some(), "{f}");
+    }
+    assert!(assets::get("formats.json").is_some() && assets::get("palettes.json").is_some());
+    // every file in commons/ui/plot that a page needs is compiled in
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/plot");
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        if n.ends_with(".js") || n.ends_with(".css") || n == "formats.json" || n == "palettes.json" {
+            assert!(assets::get(&n).is_some(), "{n} is not served under /plot/");
+        }
+    }
     assert!(assets::get("../secret").is_none());
 }
 

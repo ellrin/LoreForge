@@ -5,6 +5,11 @@
 pub const FILES: &[(&str, &str, &[u8])] = &[
     ("index.html", "text/html; charset=utf-8", include_bytes!("../web/index.html")),
     ("plot.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/plot.js")),
+    ("charts.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/charts.js")),
+    ("charts3d.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/charts3d.js")),
+    ("formats.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/formats.js")),
+    ("formats.json", "application/json", include_bytes!("../../../ui/plot/formats.json")),
+    ("palettes.json", "application/json", include_bytes!("../../../ui/plot/palettes.json")),
     ("editor.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/editor.js")),
     ("editor.css", "text/css; charset=utf-8", include_bytes!("../../../ui/plot/editor.css")),
     ("samples.js", "text/javascript; charset=utf-8", include_bytes!("../../../ui/plot/samples.js")),
@@ -35,6 +40,9 @@ pub const KATEX_FONTS: &[(&str, &[u8])] = &[
     ("KaTeX_Size4-Regular.woff2", include_bytes!("../../../ui/notation-panel/vendor/katex/fonts/KaTeX_Size4-Regular.woff2")),
     ("KaTeX_Typewriter-Regular.woff2", include_bytes!("../../../ui/notation-panel/vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2")),
 ];
+
+/// The scripts a page loads, in order, before `LorePlot.edit` / `LorePlot.render` work.
+pub const SCRIPTS: &[&str] = &["plot.js", "charts.js", "charts3d.js", "formats.js", "editor.js"];
 
 /// A file by its path under `/plot/`.
 pub fn get(path: &str) -> Option<(&'static str, &'static [u8])> {

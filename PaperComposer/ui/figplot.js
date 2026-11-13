@@ -20,12 +20,18 @@
       s.onerror = () => no(new Error(`讀不到 ${src}`));
       document.head.append(s);
     });
-    loading = script("/plot/plot.js").then(() => { window.LorePlot.katexBase = "/plot/katex/"; return script("/plot/editor.js"); });
+    // the order lore_plot::assets::SCRIPTS lists
+    loading = ["plot.js", "charts.js", "charts3d.js", "formats.js", "editor.js"].reduce((p, f) => p.then(() => script(`/plot/${f}`)), Promise.resolve()).then(() => { window.LorePlot.katexBase = "/plot/katex/"; });
     loading.catch(() => (loading = null));
     return loading;
   }
   async function macros() {
     try { const r = await fetch(`${base()}/plot/macros`); return r.ok ? await r.json() : {}; } catch { return {}; }
+  }
+  /** The paper's other figures made here (to pull into a composite). */
+  async function library() {
+    const r = await fetch(`${base()}/plot/list`);
+    return r.ok ? (await r.json()).map((f) => ({ name: f.file, spec: f.spec })) : [];
   }
   async function save(body) {
     const r = await fetch(`${base()}/plot`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -43,7 +49,7 @@
     try { await load(); } catch (e) { LoreShell.toast(e.message, { err: true }); return null; }
     let out = null;
     await LorePlot.edit({
-      target: "paper", title: "新圖", macros: await macros(), api: "/plot/api",
+      target: "paper", title: "新圖", macros: await macros(), api: "/plot/api", library,
       save: async ({ spec, svg }) => {
         try {
           const r = await save({ stem: stemOf(spec), spec, svg });
@@ -62,7 +68,7 @@
     const { spec } = await r.json();
     try { await load(); } catch (e) { LoreShell.toast(e.message, { err: true }); return true; }
     await LorePlot.edit({
-      spec, target: "paper", title: path.split("/").pop(), macros: await macros(), api: "/plot/api",
+      spec, target: "paper", title: path.split("/").pop(), macros: await macros(), api: "/plot/api", library,
       save: async ({ spec, svg }) => {
         try {
           const saved = await save({ replace: path, spec, svg });

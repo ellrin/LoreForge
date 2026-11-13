@@ -13,6 +13,9 @@
 <script src="../icons.js"></script>
 <script src="../shell.js"></script>
 <script src="plot.js"></script>
+<script src="charts.js"></script>
+<script src="charts3d.js"></script>
+<script src="formats.js"></script>
 <script src="editor.js"></script>
 <script src="samples.js"></script>
 <style>body { padding: 24px; } .tiles { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }</style>
@@ -29,11 +32,13 @@ const open = async (spec, title) => {
   const r = await LorePlot.edit({ spec, title, api: null, target: q.get("target"), save: async ({ spec, svg }) => { document.getElementById("out").textContent = JSON.stringify(spec).slice(0, 600) + "…"; return true; } });
 };
 document.getElementById("blank").onclick = () => open(null, "新圖");
-for (const s of LorePlotSamples.list(q.get("style") || "clean")) {
+(async () => { const all = await LorePlotSamples.all(q.get("style") || "clean");
+for (const s of all) {
   const b = document.createElement("button"); b.className = "ghost"; b.textContent = s.label;
   b.onclick = () => open(s.spec, s.label); document.getElementById("tiles").append(b);
 }
-if (q.get("sample")) { const s = LorePlotSamples.list(q.get("style") || "clean").find((x) => x.id === q.get("sample")); if (s) open(s.spec, s.label); }
+if (q.get("sample")) { const s = all.find((x) => x.id === q.get("sample")); if (s) open(s.spec, s.label); }
+})();
 </script>
 </body>
 </html>
