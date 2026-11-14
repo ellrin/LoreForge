@@ -6,7 +6,8 @@
 | API | 用途 |
 |---|---|
 | `ICONS_JS`、`BASE_CSS`、`SHELL_JS` | 三個檔的內容 |
-| `FILES` | `(路徑, content-type, 內容)`：`/icons.js`、`/base.css`、`/shell.js`、`/makedeck.js`（做成簡報）、`/makebook.js`（寫 review，`LoreMakeBook.mount({ before, source, key, extras })`）、`/polish.js`（潤飾，`LorePolish.mount({ doc, language, engine, onLike })`＋`LorePolish.open({ anchor, text, prefix, suffix, context, keep, apply })`；伺服器掛 lore-polish 與 lore-voice 的路由） |
+| `FILES` | `(路徑, content-type, 內容)`：`/icons.js`、`/base.css`、`/shell.js`、`/makedeck.js`（做成簡報）、`/makebook.js`（寫 review，`LoreMakeBook.mount({ before, source, key, extras })`）、`/polish.js`（潤飾，`LorePolish.mount({ doc, language, engine, onLike })`＋`LorePolish.open({ anchor, text, prefix, suffix, context, keep, apply })`；伺服器掛 lore-polish 與 lore-voice 的路由）、`/findfile.js`（搜尋檔案，`LoreFindFile.button({ purpose, exts, context, onAdded })`） |
+| `findfile`（feature `web`） | 搜尋檔案一律交給 LoreEcho：`Finds::new(app, on_pick)` ＋ `router(finds)` ＝ `POST /api/lore/find {purpose, exts, context}`（發 request id、必要時 `open -g -a LoreEcho`、交給 LoreEcho 的 `POST /api/find`）、`GET /api/lore/find/{request}`（`{open, added}`，頁面輪詢）、`POST /api/lore/picked {request, path \| end}`（只收開著的 request、副檔名要符合；交給 app 的 callback，`Pick { purpose, context, path }`）；LoreEcho 那邊用 `send_back`；`with_ask` 給測試 |
 | `icon_names(src)`、`icon_aliases(src)` | 讀 icons.js 的圖示名稱與舊名對照（測試用） |
 | `permissions` | 系統權限：`Permission`（microphone、speech、personal_voice）、`Status`（granted、denied、not_determined、restricted、unsupported）、`Provider`（lore-voice 的 `Voice`、`fake::FakeProvider`）、`Permissions::new(&[…]).with(provider)`（`.isolated()`：測試／隔離，不開系統設定、不在啟動時問）；`request(None)` 依固定順序只問從沒問過的、一次一個、失敗就停；`router(p)`（feature `web`）＝ `GET /api/permissions`、`POST /api/permissions/request {what?}`、`POST /api/permissions/open {what}`，並把這組登記成啟動時要問的；桌面 App 視窗開好後呼叫 `ask_at_launch()`（背景執行緒，每個行程一次） |
 

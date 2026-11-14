@@ -239,3 +239,6 @@ select.set-input { padding: 5px 8px; }
 .kbd-list dd kbd { font-size: 12px; color: var(--muted); }
 .kbd-group { margin: 14px 0 6px; }
 .kbd-group:first-child { margin-top: 0; }
+
+/* 搜尋檔案 (findfile.js): on while LoreEcho has the request */
+.btn.lore-findfile.on { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-text); }

@@ -7,15 +7,16 @@ description = "The shared LoreForge app shell (commons/ui icons.js, base.css, sh
 [features]
 # The shared /api/permissions routes (axum). lore-voice uses the types only.
 default = ["web"]
-web = ["dep:axum", "dep:tokio"]
+web = ["dep:axum", "dep:tokio", "dep:lore-home"]
 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 axum = { workspace = true, optional = true }
 tokio = { version = "1", features = ["rt"], optional = true }
+lore-home = { path = "../lore-home", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

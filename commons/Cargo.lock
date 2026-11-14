@@ -1433,6 +1433,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "http-body-util",
+ "lore-home",
  "serde",
  "serde_json",
  "tokio",

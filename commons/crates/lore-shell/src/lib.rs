@@ -1,5 +1,5 @@
 //! The shared LoreForge shell (`docs/shell.md`): `commons/ui/icons.js`, `base.css`,
-//! `shell.js`, `makedeck.js`, `makebook.js` and `polish.js`, compiled in like `lore_home::theme`, so an app server only needs
+//! `shell.js`, `makedeck.js`, `makebook.js`, `polish.js` and `findfile.js` (with [`findfile`], 搜尋檔案 through LoreEcho), compiled in like `lore_home::theme`, so an app server only needs
 //! these routes:
 //!
 //! ```ignore
@@ -10,6 +10,8 @@
 //! `theme.css → base.css → styles.css` and `theme.js → icons.js → shell.js → app.js`.
 //! The app's own copy of icons.js goes away (both declare `ICONS`).
 
+#[cfg(feature = "web")]
+pub mod findfile;
 pub mod permissions;
 
 /// `commons/ui/icons.js`: the union icon set (`ICONS`, `icon`, `paintIcons`, `iconButton`).
@@ -24,6 +26,8 @@ pub const MAKEDECK_JS: &str = include_str!("../../../ui/makedeck.js");
 pub const MAKEBOOK_JS: &str = include_str!("../../../ui/makebook.js");
 /// `commons/ui/polish.js`: `LorePolish`, the 潤飾 dialog (lore-polish's `/api/polish*`, lore-voice's `/api/voice*`).
 pub const POLISH_JS: &str = include_str!("../../../ui/polish.js");
+/// `commons/ui/findfile.js`: `LoreFindFile`, the 搜尋檔案 button (a find request to LoreEcho, [`findfile`]).
+pub const FINDFILE_JS: &str = include_str!("../../../ui/findfile.js");
 
 /// `(route, content type, body)` for each file.
 pub const FILES: &[(&str, &str, &str)] = &[
@@ -33,6 +37,7 @@ pub const FILES: &[(&str, &str, &str)] = &[
     ("/makedeck.js", "text/javascript; charset=utf-8", MAKEDECK_JS),
     ("/makebook.js", "text/javascript; charset=utf-8", MAKEBOOK_JS),
     ("/polish.js", "text/javascript; charset=utf-8", POLISH_JS),
+    ("/findfile.js", "text/javascript; charset=utf-8", FINDFILE_JS),
 ];
 
 /// The names in `const ICONS = { … }` of an icons.js, in order (duplicates kept).
@@ -281,7 +286,8 @@ mod tests {
 
     #[test]
     fn files_are_served() {
-        assert_eq!(FILES.len(), 6);
+        assert_eq!(FILES.len(), 7);
+        assert!(FINDFILE_JS.contains("window.LoreFindFile") && FINDFILE_JS.contains("/api/lore/find"));
         assert!(FILES.iter().all(|(p, _, b)| p.starts_with('/') && !b.is_empty()));
         assert!(SHELL_JS.contains("window.LoreShell") && SHELL_JS.contains("window.LoreLinks"));
         assert!(MAKEDECK_JS.contains("window.LoreMakeDeck") && MAKEDECK_JS.contains("/api/todeck"));
