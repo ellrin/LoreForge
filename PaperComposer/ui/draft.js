@@ -70,11 +70,33 @@ const PCDraft = (() => {
   }
 
   /** Run a call that returns the new view; keep the window responsive. */
+  // the button just pressed (WebKit does not focus buttons on click, so focus alone can't tell)
+  let pressed = null;
+  document.addEventListener("pointerdown", (e) => { pressed = { el: e.target, t: Date.now() }; }, true);
+  function consumedField() {
+    const byClick = pressed && Date.now() - pressed.t < 1500 ? pressed.el.closest?.("button") : null;
+    const a = byClick ?? document.activeElement;
+    if (!a?.closest?.("#dlgDraft")) return null;
+    if (!byClick && a.matches("input, textarea") && a.dataset.typed) return a;
+    const r = a.closest(".df-row");
+    if (!r) return null;
+    const inRow = r.querySelector("input[data-typed], textarea[data-typed]");
+    if (inRow) return inRow;
+    const prev = r.previousElementSibling;
+    return prev?.matches?.("input[data-typed], textarea[data-typed]") ? prev : null;
+  }
   async function run(label, fn) {
     if (D.busy) return;
+    // the field this action sends (the focused one, or the one in / just above the button's row) is
+    // cleared after a success, kept after a failure
+    const c = consumedField();
+    if (c) c.dataset.consumed = "1";
     D.busy = label; D.err = null; draw();
-    try { const v = await fn(); if (v) D.data = v; }
+    let ok = false;
+    try { const v = await fn(); if (v) D.data = v; ok = true; }
     catch (e) { D.err = e.message; }
+    D.dropConsumed = ok;
+    if (!ok) document.querySelectorAll("#dlgDraft [data-consumed]").forEach((x) => delete x.dataset.consumed);
     D.busy = null; draw();
     schedulePrep();
   }
@@ -141,11 +163,19 @@ const PCDraft = (() => {
   }
 
   // ── frame ────────────────────────────────────────────
-  /** What the author is typing and which folds are open survive a redraw (a save, a poll):
-   * fields are keyed by step + label + their order among fields of that label. */
+  /** What the author typed (and not yet saved) and which folds are open survive a redraw (a poll,
+   * another save). Only fields he typed in are kept, only back into the same field (same label,
+   * same order, same value as when it was drawn), and the field a successful action consumed is
+   * left as the new draw has it. */
+  const FIELDS = "input:not([type=file]):not([type=checkbox]):not([type=radio]), textarea, details";
+  document.addEventListener("input", (e) => {
+    if (!e.isTrusted || !e.target.closest?.("#dlgDraft")) return;
+    e.target.dataset.typed = "1";
+    if (D) D.lastTypedEl = e.target;
+  }, true);
   function fieldKeys(root) {
     const seen = {};
-    return [...root.querySelectorAll("input:not([type=file]):not([type=checkbox]):not([type=radio]), textarea, details")].map((x) => {
+    return [...root.querySelectorAll(FIELDS)].map((x) => {
       const label = x.tagName === "DETAILS" ? `d:${x.querySelector("summary")?.textContent.replace(/（\d+）/, "") ?? ""}` : `${x.tagName}:${x.getAttribute("aria-label") || x.placeholder || x.closest("label")?.textContent || ""}`;
       const k = `${D.step}|${label}`;
       seen[k] = (seen[k] ?? 0) + 1;
@@ -157,18 +187,25 @@ const PCDraft = (() => {
     let focus = null;
     for (const root of [main, side]) for (const [k, x] of fieldKeys(root)) {
       if (x.tagName === "DETAILS") snap.set(k, { open: x.open });
-      else if (x.value !== x.defaultValue) snap.set(k, { value: x.value });
-      if (x === document.activeElement) focus = { k, start: x.selectionStart, end: x.selectionEnd };
+      else if (x.dataset.typed && !(D.dropConsumed && x.dataset.consumed)) snap.set(k, { value: x.value, orig: x.dataset.orig ?? "", consumed: !!x.dataset.consumed });
+      if (x === document.activeElement && !(D.dropConsumed && x.dataset.consumed)) focus = { k, start: x.selectionStart, end: x.selectionEnd };
     }
     return () => {
       for (const root of [main, side]) for (const [k, x] of fieldKeys(root)) {
         const s = snap.get(k);
-        if ((D.clearNext ?? []).some((c) => k.includes(c))) continue;
         if (s && "open" in s) x.open = s.open;
-        else if (s && "value" in s) { x.value = s.value; x.dispatchEvent(new Event("input")); }
+        else if (s && "value" in s && (x.dataset.orig ?? "") === s.orig) {
+          x.value = s.value; x.dataset.typed = "1";
+          if (s.consumed && D.busy) x.dataset.consumed = "1";
+          x.dispatchEvent(new Event("input"));
+        }
         if (focus?.k === k && x.focus) { x.focus(); try { x.setSelectionRange(focus.start, focus.end); } catch { /* not a text field */ } }
       }
     };
+  }
+  /** Each field remembers the value it was drawn with. */
+  function markDrawn(main, side) {
+    for (const root of [main, side]) for (const x of root.querySelectorAll(FIELDS)) if (x.tagName !== "DETAILS") x.dataset.orig = x.value;
   }
 
   function draw() {
@@ -176,7 +213,7 @@ const PCDraft = (() => {
     const main = $("#dfMain"), side = $("#dfSide"), steps = $("#dfSteps");
     const restore = D.drawnStep === D.step ? keepTyping(main, side) : null;
     D.drawnStep = D.step;
-    try { drawInner(main, side, steps); } finally { restore?.(); if (!D.busy) D.clearNext = null; }
+    try { drawInner(main, side, steps); markDrawn(main, side); } finally { restore?.(); D.dropConsumed = false; }
   }
   function drawInner(main, side, steps) {
     main.innerHTML = ""; side.innerHTML = ""; steps.innerHTML = "";
@@ -336,7 +373,6 @@ const PCDraft = (() => {
       run("加入", async () => {
         const r = await fetch(`${base()}/records/text`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: v }) });
         if (!r.ok) throw new Error(await r.text());
-        D.clearNext = ["實驗紀錄文字"];
         return r.json();
       });
     };
@@ -1139,7 +1175,7 @@ const PCDraft = (() => {
     const addP = () => {
       const v = add.value.trim();
       if (!v) return;
-      run("新增待補", async () => { const r = await call("/pending", { items: [...items, { id: "", what: v }] }, "PUT"); D.clearNext = ["還在等的結果"]; return r; });
+      run("新增待補", async () => { const r = await call("/pending", { items: [...items, { id: "", what: v }] }, "PUT"); return r; });
     };
     add.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); addP(); } };
     main.append(row(add, btn("＋ 待補", addP, "ghost")));
