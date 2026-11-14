@@ -88,6 +88,12 @@ const PCDraft = (() => {
     const prev = r.previousElementSibling;
     return prev?.matches?.("input[data-typed], textarea[data-typed]") ? prev : null;
   }
+  // a waiting line counts its seconds, so waiting never looks like being stuck
+  setInterval(() => {
+    if (!D?.busy || !D.busySince) return;
+    const s = Math.round((Date.now() - D.busySince) / 1000);
+    if (s >= 3) document.querySelectorAll("#dlgDraft .df-busy").forEach((x) => (x.dataset.t = `${s} 秒`));
+  }, 1000);
   async function run(label, fn, auto = false) {
     if (D.busy) return;
     // the field this action sends (the focused one, or the one in / just above the button's row) is
@@ -95,7 +101,7 @@ const PCDraft = (() => {
     // itself after a poll) sends none
     const c = auto ? null : consumedField();
     if (c) c.dataset.consumed = "1";
-    D.busy = label; D.err = null; draw();
+    D.busy = label; D.busySince = Date.now(); D.err = null; draw();
     let ok = false;
     try { const v = await fn(); if (v) D.data = v; ok = true; }
     catch (e) { D.err = e.message; }

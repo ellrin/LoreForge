@@ -1626,3 +1626,4 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-actrow { margin-top: 8px; flex-wrap: nowrap; align-items: center; }
 .df-actrow .df-mic, .df-dend .df-mic { flex: none; }
 .df-dend { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); flex-wrap: nowrap; align-items: center; }
+.df-busy[data-t]::after { content: "　" attr(data-t); color: var(--muted); font-variant-numeric: tabular-nums; }

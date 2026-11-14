@@ -1590,8 +1590,17 @@ async fn discuss_open(State(s): State<Shared>, AxPath(name): AxPath<String>, Jso
         return bad("沒有這個題組");
     }
     let Some(q) = ds::read_turns(&c.dir).into_iter().rev().find(|t| t.group == b.group && t.who == Who::Ai) else { return bad("這一組還沒有問題") };
-    dz::open(&mut sess, &b.group, &q.about, &q.text);
+    let fresh = dz::open(&mut sess, &b.group, &q.about, &q.text).messages.is_empty();
     tri!(save(&c.dir, &sess));
+    if fresh {
+        // while the author types the first question: the record goes into the prompt cache
+        let record = ds::records_text(&c.dir, &sess.records, usize::MAX);
+        let warm = dz::warm_prompt(&c.key_value, &record);
+        let s2 = s.clone();
+        tokio::spawn(async move {
+            let _ = engine::discuss(&engines(&s2), &warm).await;
+        });
+    }
     tri!(view(&c, &sess))
 }
 

@@ -77,18 +77,15 @@ const SYSTEM: &str = "You talk with a researcher about one question of an interv
 interview turns the study into a paper). They did not get the question or want to think it through. Explain what \
 the question asks and why the paper needs it, show what their experiment record already says about it, answer \
 what they ask, and help them find their own answer. Do not decide for them; when you suggest something, say it is \
-a suggestion. A few sentences per reply, plain words, plain text (no Markdown: no **bold**, no # headings). Write in Traditional Chinese as used in Taiwan (繁體中文), \
+a suggestion. Answer what they just asked first, in the first sentence. Short replies: at most three sentences \
+(about 120 Chinese characters); they will ask for more if they want it. Plain words, plain text (no Markdown: no \
+**bold**, no # headings, no lists). Write in Traditional Chinese as used in Taiwan (繁體中文), \
 full-width punctuation. Reply with JSON only: {\"reply\": \"…\"}.";
 
 /// Everything the discussion starts from: key value, the record, the question with its item and
 /// group, the interview so far (answers only), then the talk itself.
 pub fn prompt(key_value: &str, s: &Session, record: &str, turns: &[Turn], d: &Discussion) -> Prompt {
-    let mut u = format!("Key value of the paper: {}\n", key_value.trim());
-    let rec: String = record.trim().chars().take(RECORD_CHARS).collect();
-    if !rec.is_empty() {
-        u += &format!("\n## The experiment record\n{rec}\n");
-    }
-    u += &question_block(s, d);
+    let mut u = question_block(s, d);
     let asked: Vec<&Turn> = turns.iter().filter(|t| !t.text.trim().is_empty()).collect();
     if !asked.is_empty() {
         u += "\n## The interview so far\n";
@@ -102,7 +99,25 @@ pub fn prompt(key_value: &str, s: &Session, record: &str, turns: &[Turn], d: &Di
             u += &format!("{}: {}\n", if m.who == Who::Ai { "You" } else { "Author" }, m.text);
         }
     }
-    Prompt { system: SYSTEM.into(), user: u }
+    Prompt { system: system(key_value, record), user: u }
+}
+
+/// The part every reply of a discussion shares, word for word: the rules, the key value and the
+/// record. It is the system prompt so that the provider's prompt cache serves it again on the next
+/// reply (the record is most of what is sent; a reply then only waits for what is new).
+pub fn system(key_value: &str, record: &str) -> String {
+    let mut s = format!("{SYSTEM}\n\nKey value of the paper: {}\n", key_value.trim());
+    let rec: String = record.trim().chars().take(RECORD_CHARS).collect();
+    if !rec.is_empty() {
+        s += &format!("\n## The experiment record\n{rec}\n");
+    }
+    s
+}
+
+/// A reply nobody reads, asked when the discussion opens: it puts the shared part in the prompt
+/// cache while the author is still typing their first question.
+pub fn warm_prompt(key_value: &str, record: &str) -> Prompt {
+    Prompt { system: system(key_value, record), user: "Reply with JSON only: {\"reply\": \"ok\"}".into() }
 }
 
 fn question_block(s: &Session, d: &Discussion) -> String {
@@ -210,7 +225,8 @@ mod tests {
         assert_eq!(d.id, "d1");
         assert_eq!(open(&mut s, "g1", "i1", "為什麼用這種標籤？").id, "d1", "the same question reopens its discussion");
         let p = prompt("kv", &s, "## 資料\n- 12,345 images", &turns, &d);
-        assert!(p.user.contains("12,345 images"), "the record");
+        assert!(p.system.contains("12,345 images") && p.system.contains("Key value of the paper: kv"), "the record, in the part every reply shares");
+        assert_eq!(p.system, warm_prompt("kv", "## 資料\n- 12,345 images").system, "warming asks with the same shared part");
         assert!(p.user.contains("Question: 為什麼用這種標籤？") && p.user.contains("Item: label source") && p.user.contains("purpose: 標籤怎麼選"));
         assert!(p.user.contains("A: 依病人切 8:2"), "the earlier answers");
         assert!(p.system.contains("Do not decide for them"));
