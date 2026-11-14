@@ -20,6 +20,8 @@
 pub mod fake;
 pub mod helper;
 pub mod split;
+#[cfg(feature = "web")]
+pub mod web;
 
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -29,6 +31,40 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 pub use split::Splitter;
+pub use lore_shell::permissions::{Permission, Status};
+
+/// The three permissions voice uses (see [`Voice::permissions`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoicePermissions {
+    pub microphone: Status,
+    pub speech: Status,
+    pub personal_voice: Status,
+}
+
+impl VoicePermissions {
+    pub const UNSUPPORTED: VoicePermissions = VoicePermissions { microphone: Status::Unsupported, speech: Status::Unsupported, personal_voice: Status::Unsupported };
+    /// The permissions voice covers, in the order they are asked.
+    pub const COVERS: [Permission; 3] = [Permission::Microphone, Permission::Speech, Permission::PersonalVoice];
+
+    pub fn get(&self, p: Permission) -> Status {
+        match p {
+            Permission::Microphone => self.microphone,
+            Permission::Speech => self.speech,
+            Permission::PersonalVoice => self.personal_voice,
+        }
+    }
+}
+
+impl From<PersonalVoice> for Status {
+    fn from(p: PersonalVoice) -> Status {
+        match p {
+            PersonalVoice::Authorized => Status::Granted,
+            PersonalVoice::Denied => Status::Denied,
+            PersonalVoice::NotDetermined => Status::NotDetermined,
+            PersonalVoice::Unsupported => Status::Unsupported,
+        }
+    }
+}
 
 /// A system voice.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -187,6 +223,11 @@ pub trait Backend: Send + Sync + 'static {
     fn personal_voice(&self, _ask: bool) -> Result<PersonalVoice, String> {
         Ok(PersonalVoice::Unsupported)
     }
+    /// The three permissions; `ask`: first show the system's prompt, one after another, for each
+    /// of these that was never asked (answered ones are never asked again; blocks meanwhile).
+    fn permissions(&self, _ask: &[Permission]) -> Result<VoicePermissions, String> {
+        Ok(VoicePermissions::UNSUPPORTED)
+    }
     /// Get ready to speak with `r.voice` soon (start the engine, load the voice), silently and
     /// without waiting.
     fn warm(&self, _r: &SpeakRequest) {}
@@ -310,6 +351,25 @@ impl Voice {
     /// [`Backend::personal_voice`] (blocks while the system's prompt is open).
     pub fn personal_voice(&self, ask: bool) -> Result<PersonalVoice, String> {
         self.backend()?.personal_voice(ask)
+    }
+
+    /// Microphone, speech recognition and Personal Voice: where each stands (asks nothing).
+    pub fn permissions(&self) -> Result<VoicePermissions, String> {
+        self.backend()?.permissions(&[])
+    }
+
+    /// Ask every voice permission that was never asked, one after another (microphone, speech,
+    /// Personal Voice); answered ones are left alone. Blocks while a prompt is open.
+    pub fn request_permissions(&self) -> Result<VoicePermissions, String> {
+        self.backend()?.permissions(&VoicePermissions::COVERS)
+    }
+
+    /// [`Voice::request_permissions`] for one of them.
+    pub fn request_permission(&self, p: Permission) -> Result<Status, String> {
+        if !VoicePermissions::COVERS.contains(&p) {
+            return Ok(Status::Unsupported);
+        }
+        Ok(self.backend()?.permissions(&[p])?.get(p))
     }
 
     /// [`Backend::warm`]: the first sentence of the next reply starts sooner. No sound.
@@ -444,6 +504,22 @@ impl Speaker {
                 None
             }
         }
+    }
+}
+
+/// The voice as a source of the shared permission rows (`lore_shell::permissions`).
+impl lore_shell::permissions::Provider for Voice {
+    fn covers(&self) -> Vec<Permission> {
+        VoicePermissions::COVERS.to_vec()
+    }
+    fn available(&self) -> bool {
+        Voice::available(self)
+    }
+    fn status(&self, p: Permission) -> Result<Status, String> {
+        Ok(self.permissions()?.get(p))
+    }
+    fn request(&self, p: Permission) -> Result<Status, String> {
+        self.request_permission(p)
     }
 }
 
@@ -613,5 +689,26 @@ mod tests {
         let mut v = vec![mk("en", "en-US", Quality::Premium), mk("cn", "zh-CN", Quality::Default), mk("a.eloquence.tw", "zh-TW", Quality::Default), mk("tw", "zh-TW", Quality::Default), mk("tw+", "zh-TW", Quality::Enhanced), VoiceInfo { personal: true, ..mk("me", "en-US", Quality::Premium) }];
         sort_voices(&mut v, "zh-TW");
         assert_eq!(v.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), vec!["me", "tw+", "tw", "a.eloquence.tw", "cn", "en"]);
+    }
+
+    #[test]
+    fn permissions_are_asked_only_when_never_asked() {
+        use lore_shell::permissions::Provider;
+        let (fake, ctl) = FakeBackend::new();
+        ctl.permission(Permission::Microphone, Status::NotDetermined, Status::Granted);
+        ctl.permission(Permission::Speech, Status::Denied, Status::Granted);
+        ctl.personal(PersonalVoice::NotDetermined, PersonalVoice::Authorized, false);
+        let v = Voice::new(Box::new(fake));
+        assert_eq!(v.permissions().unwrap(), VoicePermissions { microphone: Status::NotDetermined, speech: Status::Denied, personal_voice: Status::NotDetermined });
+        assert!(ctl.asked().is_empty(), "reading asks nothing");
+        let after = v.request_permissions().unwrap();
+        assert_eq!(after, VoicePermissions { microphone: Status::Granted, speech: Status::Denied, personal_voice: Status::Granted });
+        assert_eq!(ctl.asked(), [Permission::Microphone, Permission::PersonalVoice], "in order; the denied one is never asked");
+        v.request_permissions().unwrap();
+        assert_eq!(ctl.asked().len(), 2, "never twice");
+        // through the shared Provider
+        assert_eq!(Provider::covers(&v), VoicePermissions::COVERS);
+        assert!(!Provider::available(&Voice::unavailable("沒有")));
+        assert!(Voice::unavailable("沒有").permissions().is_err());
     }
 }

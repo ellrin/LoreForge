@@ -347,6 +347,28 @@ fn command(s: &str, name: &str, p: usize, o: &PlainOpts, out: &mut String) -> us
         return after;
     }
     match name {
+        // 待補 draft marks (lore-notation `pending`): shown as marks, never as a number
+        "pending" | "pendingpara" => {
+            let (_, a) = one(p);
+            let (t, after) = one(a);
+            let mut what = String::new();
+            conv(t.unwrap_or(""), o, &mut what);
+            let what = tidy(&what);
+            out.push_str(&if what.is_empty() { "[pending]".to_string() } else { format!("[pending: {what}]") });
+            after
+        }
+        "pendingcell" => {
+            let (_, a) = one(p);
+            out.push_str("[pending]");
+            one(a).1
+        }
+        // a sentence that depends on a pending result says so
+        "pendingdep" => {
+            let kept = out.trim_end().len();
+            out.truncate(kept);
+            out.push_str(" [pending]");
+            one(p).1
+        }
         "begin" => {
             let Some((env, body_start)) = group_text(s, p) else {
                 return p;
@@ -520,6 +542,15 @@ mod tests {
         assert_eq!(
             to_plain(r"Let $x$ be \emph{given} \ref{q}.", &o2),
             "Let be given ??."
+        );
+    }
+
+    #[test]
+    fn pending_marks_stay_marks() {
+        let s = r"Dice is \pending{P1}{Dice on the \textbf{external} set}, above the baseline\pendingdep{P1}. Cell \pendingcell{P1}{Ours / Dice}. \pendingpara{P2}{Compare the sites.}";
+        assert_eq!(
+            tidy(&to_plain(s, &PlainOpts::default())),
+            "Dice is [pending: Dice on the external set], above the baseline [pending]. Cell [pending]. [pending: Compare the sites.]"
         );
     }
 

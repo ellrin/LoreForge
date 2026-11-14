@@ -105,9 +105,10 @@ impl Filters {
         !forms.iter().any(|f| self.termlike.contains(f)) && forms.iter().any(|f| self.familiar.contains(f))
     }
 
-    /// An everyday word for someone in the field: any general, familiar or [`TERMLIKE`] word
-    /// (`loss`, `mask`, `segmentation`). A single such word is a word the author already reads
-    /// without stopping, never a card; hyphenated words count when every part is one.
+    /// An everyday word (author, 2026-11-14: what an ordinary middle schooler knows): a general,
+    /// function or familiar word, never a [`TERMLIKE`] one (`loss`, `mask`, `segmentation` are
+    /// terms in their technical sense). A single such word is never a card; hyphenated words
+    /// count when every part is one.
     pub fn is_everyday(&self, w: &str) -> bool {
         let parts: Vec<&str> = w.split(is_hyphen).filter(|p| !p.is_empty()).collect();
         !parts.is_empty()
@@ -116,7 +117,7 @@ impl Filters {
                     return true;
                 }
                 let forms = variants(p);
-                forms.iter().any(|f| self.general.contains(f) || self.function.contains(f) || self.familiar.contains(f) || self.termlike.contains(f))
+                !forms.iter().any(|f| self.termlike.contains(f)) && forms.iter().any(|f| self.general.contains(f) || self.function.contains(f) || self.familiar.contains(f))
             })
     }
 
@@ -344,9 +345,10 @@ mod tests {
     }
 
     #[test]
-    fn everyday_words_include_termlike_ones() {
+    fn everyday_words_are_never_termlike_ones() {
         let f = Filters::default();
-        for w in ["loss", "Masks", "segmentation", "pre-trained"] { assert!(f.is_everyday(w), "{w}"); }
+        for w in ["house", "pre-trained", "Windows"] { assert!(f.is_everyday(w), "{w}"); }
+        for w in ["loss", "Masks", "segmentation", "kernel"] { assert!(!f.is_everyday(w), "{w}"); }
         for w in ["discriminator", "glomeruli", "U-Net", "softmax"] { assert!(!f.is_everyday(w), "{w}"); }
     }
 

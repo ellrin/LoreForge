@@ -170,6 +170,10 @@ fn skip_args(name: &str) -> Option<usize> {
         | "vspace" | "hspace" | "enlargethispage" | "color" | "pagestyle" | "thispagestyle" | "hyphenation" | "captionsetup" | "scalebox"
         | "raisebox" | "bibitem" | "pagenumbering" | "addvspace" | "linespread" | "setstretch" | "includepdf" | "DeclareGraphicsExtensions"
         | "href" | "textcolor" | "label" | "footnotemark" => 1,
+        // draft marks (crate::pending): ids are no words; what a number or cell names is a note
+        // for the author (gone in the paper); a planned paragraph's frame is text (its \ref count)
+        "pendingpara" | "pendingdep" => 1,
+        "pending" | "pendingcell" => 2,
         "setcounter" | "setlength" | "addtolength" | "rule" | "resizebox" | "multicolumn" | "multirow" | "fontsize" | "DeclareMathOperator" | "providecommand" => 2,
         "definecolor" => 3,
         _ => return None,

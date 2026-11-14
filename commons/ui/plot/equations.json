@@ -1,0 +1,318 @@
+{
+  "version": 1,
+  "about": "Equation templates (docs/plot.md §10): verified building blocks. expr is the safe expression language (lore-plot equation::expr, eqcore.js). Vars: role x (the horizontal axis), param (a slider; value = the usual paper default), vector (fixed values). properties are checked by the server and by the tests.",
+  "templates": [
+    {
+      "id": "ce", "label": "交叉熵", "group": "loss",
+      "aliases": ["cross entropy", "cross-entropy", "negative log likelihood", "nll", "log loss", "-\\log p"],
+      "latex": "\\mathcal{L}_{\\mathrm{CE}} = -\\log p_t",
+      "expr": "ce(p)",
+      "x": { "name": "p", "label": "$p_t$", "min": 0.001, "max": 1 },
+      "vars": [],
+      "y": { "label": "$\\mathcal{L}_{\\mathrm{CE}}$", "min": 0, "max": 5 },
+      "properties": [
+        { "kind": "nonneg", "text": "≥ 0" },
+        { "kind": "decreasing", "text": "隨 $p_t$ 遞減" },
+        { "kind": "zero_at", "value": 1, "text": "$p_t = 1$ 時為 0" }
+      ]
+    },
+    {
+      "id": "bce", "label": "二元交叉熵", "group": "loss",
+      "aliases": ["binary cross entropy", "bce", "logistic loss"],
+      "latex": "\\mathcal{L}_{\\mathrm{BCE}} = -\\left[y\\log p + (1-y)\\log(1-p)\\right]",
+      "expr": "bce(p, y)",
+      "x": { "name": "p", "label": "$p$", "min": 0.001, "max": 0.999 },
+      "vars": [{ "name": "y", "label": "$y$", "role": "param", "value": 1, "min": 0, "max": 1, "step": 0.05 }],
+      "y": { "label": "$\\mathcal{L}_{\\mathrm{BCE}}$", "min": 0, "max": 5 },
+      "animate": { "var": "y" },
+      "properties": [
+        { "kind": "nonneg", "text": "≥ 0" },
+        { "kind": "min_at", "value": "y", "when": { "y": 0.3 }, "text": "最小值在 $p = y$" }
+      ]
+    },
+    {
+      "id": "focal", "label": "Focal loss", "group": "loss",
+      "aliases": ["focal loss", "\\gamma", "(1-p_t)^\\gamma", "retinanet"],
+      "latex": "\\mathcal{L}_{\\mathrm{FL}} = -\\alpha_t\\,(1-p_t)^{\\gamma}\\log p_t",
+      "expr": "focal(p, gamma, alpha)",
+      "x": { "name": "p", "label": "$p_t$", "min": 0.001, "max": 1 },
+      "vars": [
+        { "name": "gamma", "label": "$\\gamma$", "role": "param", "value": 2, "min": 0, "max": 5, "step": 0.1 },
+        { "name": "alpha", "label": "$\\alpha_t$", "role": "param", "value": 0.25, "min": 0.05, "max": 1, "step": 0.05 }
+      ],
+      "y": { "label": "$\\mathcal{L}_{\\mathrm{FL}}$", "min": 0, "max": 2 },
+      "family": { "var": "gamma", "values": [0, 0.5, 1, 2, 5] },
+      "animate": { "var": "gamma" },
+      "properties": [
+        { "kind": "nonneg", "text": "≥ 0" },
+        { "kind": "equals", "expr": "alpha * ce(p)", "when": { "gamma": 0 }, "text": "$\\gamma = 0$ 時等於 $\\alpha_t$ 乘交叉熵" },
+        { "kind": "decreasing", "var": "gamma", "text": "$\\gamma$ 越大越小" },
+        { "kind": "zero_at", "value": 1, "text": "$p_t = 1$ 時為 0" }
+      ]
+    },
+    {
+      "id": "dice", "label": "Soft Dice", "group": "loss",
+      "aliases": ["dice loss", "soft dice", "dice coefficient", "\\frac{2\\sum"],
+      "latex": "\\mathcal{L}_{\\mathrm{Dice}} = 1 - \\frac{2\\sum_i p_i g_i + s}{\\sum_i p_i + \\sum_i g_i + s}",
+      "expr": "dice(vec(i, 1, F + B, if(i <= F, p, q)), vec(i, 1, F + B, ind(i <= F)), s)",
+      "x": { "name": "p", "label": "$p$（前景）", "min": 0, "max": 1 },
+      "vars": [
+        { "name": "q", "label": "$q$（背景）", "role": "param", "value": 0.1, "min": 0, "max": 1, "step": 0.01 },
+        { "name": "F", "label": "$F$", "role": "param", "value": 20, "min": 1, "max": 200, "step": 1, "integer": true },
+        { "name": "B", "label": "$B$", "role": "param", "value": 80, "min": 0, "max": 400, "step": 1, "integer": true },
+        { "name": "s", "label": "$s$", "role": "param", "value": 1, "min": 0, "max": 10, "step": 0.1 }
+      ],
+      "reduction": ["$F$ 個前景像素（$g_i = 1$）都預測 $p$，$B$ 個背景像素（$g_i = 0$）都預測 $q$", "$s$ ＝平滑項"],
+      "y": { "label": "$\\mathcal{L}_{\\mathrm{Dice}}$", "min": 0, "max": 1 },
+      "animate": { "var": "q" },
+      "properties": [
+        { "kind": "bounded", "lo": 0, "hi": 1, "text": "在 0 到 1 之間" },
+        { "kind": "decreasing", "text": "前景預測越高越小" },
+        { "kind": "increasing", "var": "q", "text": "背景誤報越多越大" }
+      ]
+    },
+    {
+      "id": "ce_dice", "label": "交叉熵＋Dice", "group": "loss",
+      "aliases": ["ce + dice", "dice + ce", "\\lambda \\mathcal{L}_{dice}", "combined loss", "compound loss"],
+      "latex": "\\mathcal{L} = -\\log p + \\lambda \\left(1 - \\frac{2\\sum_i p_i g_i + 1}{\\sum_i p_i + \\sum_i g_i + 1}\\right)",
+      "expr": "ce(p) + lambda * dice([p, p, q, q], [1, 1, 0, 0], 1)",
+      "x": { "name": "p", "label": "$p$", "min": 0.01, "max": 1 },
+      "vars": [
+        { "name": "lambda", "label": "$\\lambda$", "role": "param", "value": 1, "min": 0, "max": 3, "step": 0.05 },
+        { "name": "q", "label": "$q$", "role": "param", "value": 0.2, "min": 0, "max": 1, "step": 0.01 }
+      ],
+      "reduction": ["4 個像素：2 個前景（$g_i = 1$）預測 $p$，2 個背景預測 $q$；交叉熵取前景像素", "Dice 的平滑項 1"],
+      "y": { "label": "$\\mathcal{L}$", "min": 0 },
+      "animate": { "var": "lambda" },
+      "properties": [
+        { "kind": "nonneg", "text": "≥ 0" },
+        { "kind": "decreasing", "text": "隨 $p$ 遞減" },
+        { "kind": "equals", "expr": "ce(p)", "when": { "lambda": 0 }, "text": "$\\lambda = 0$ 時只剩交叉熵" },
+        { "kind": "increasing", "var": "q", "text": "背景誤報越多越大" }
+      ]
+    },
+    {
+      "id": "huber", "label": "Huber", "group": "loss",
+      "aliases": ["huber loss", "smooth l1", "smooth-l1", "\\delta"],
+      "latex": "L_\\delta(r) = \\begin{cases} \\tfrac12 r^2 & |r| \\le \\delta \\\\ \\delta\\,(|r| - \\tfrac12\\delta) & \\text{otherwise} \\end{cases}",
+      "expr": "huber(r, delta)",
+      "x": { "name": "r", "label": "$r = y - \\hat{y}$", "min": -3, "max": 3 },
+      "vars": [{ "name": "delta", "label": "$\\delta$", "role": "param", "value": 1, "min": 0.1, "max": 3, "step": 0.05 }],
+      "y": { "label": "$L_\\delta$" },
+      "animate": { "var": "delta" },
+      "properties": [
+        { "kind": "nonneg", "text": "≥ 0" },
+        { "kind": "symmetric", "value": 0, "text": "對 $r = 0$ 對稱" },
+        { "kind": "zero_at", "value": 0, "text": "$r = 0$ 時為 0" },
+        { "kind": "increasing", "var": "delta", "text": "$\\delta$ 越大越大" }
+      ]
+    },
+    {
+      "id": "mse", "label": "MSE", "group": "loss",
+      "aliases": ["mean squared error", "mse", "l2 loss", "squared error", "\\|y - \\hat y\\|_2^2"],
+      "latex": "\\mathcal{L}_{\\mathrm{MSE}} = (y - \\hat{y})^2",
+      "expr": "r^2",
+      "x": { "name": "r", "label": "$y - \\hat{y}$", "min": -3, "max": 3 },
+      "vars": [],
+      "y": { "label": "$\\mathcal{L}_{\\mathrm{MSE}}$" },
+      "properties": [
+        { "kind": "nonneg", "text": "≥ 0" },
+        { "kind": "symmetric", "value": 0, "text": "對 0 對稱" },
+        { "kind": "min_at", "value": 0, "text": "最小值在 0" }
+      ]
+    },
+    {
+      "id": "mae", "label": "MAE", "group": "loss",
+      "aliases": ["mean absolute error", "mae", "l1 loss", "absolute error"],
+      "latex": "\\mathcal{L}_{\\mathrm{MAE}} = |y - \\hat{y}|",
+      "expr": "abs(r)",
+      "x": { "name": "r", "label": "$y - \\hat{y}$", "min": -3, "max": 3 },
+      "vars": [],
+      "y": { "label": "$\\mathcal{L}_{\\mathrm{MAE}}$" },
+      "properties": [
+        { "kind": "nonneg", "text": "≥ 0" },
+        { "kind": "symmetric", "value": 0, "text": "對 0 對稱" },
+        { "kind": "min_at", "value": 0, "text": "最小值在 0" }
+      ]
+    },
+    {
+      "id": "kl_gauss", "label": "KL（兩個高斯）", "group": "loss",
+      "aliases": ["kl divergence", "kullback", "d_{kl}", "vae", "\\mathcal{N}"],
+      "latex": "D_{\\mathrm{KL}}\\!\\left(\\mathcal{N}(\\mu_1, \\sigma_1^2)\\,\\middle\\|\\,\\mathcal{N}(\\mu_2, \\sigma_2^2)\\right) = \\log\\frac{\\sigma_2}{\\sigma_1} + \\frac{\\sigma_1^2 + (\\mu_1 - \\mu_2)^2}{2\\sigma_2^2} - \\frac12",
+      "expr": "kl_gauss(mu1, sigma1, mu2, sigma2)",
+      "x": { "name": "mu1", "label": "$\\mu_1$", "min": -3, "max": 3 },
+      "vars": [
+        { "name": "sigma1", "label": "$\\sigma_1$", "role": "param", "value": 1, "min": 0.1, "max": 3, "step": 0.05 },
+        { "name": "mu2", "label": "$\\mu_2$", "role": "param", "value": 0, "min": -2, "max": 2, "step": 0.05 },
+        { "name": "sigma2", "label": "$\\sigma_2$", "role": "param", "value": 1, "min": 0.1, "max": 3, "step": 0.05 }
+      ],
+      "reduction": ["方向：$D_{\\mathrm{KL}}(q \\,\\|\\, p)$，$q = \\mathcal{N}(\\mu_1, \\sigma_1^2)$（例：VAE 的編碼器），$p = \\mathcal{N}(\\mu_2, \\sigma_2^2)$（例：先驗 $\\mathcal{N}(0, 1)$）"],
+      "y": { "label": "$D_{\\mathrm{KL}}$", "min": 0 },
+      "animate": { "var": "sigma1" },
+      "properties": [
+        { "kind": "nonneg", "text": "≥ 0" },
+        { "kind": "min_at", "value": "mu2", "when": { "mu2": 0.5 }, "text": "最小值在 $\\mu_1 = \\mu_2$" },
+        { "kind": "zero_at", "value": "mu2", "when": { "sigma1": 1, "sigma2": 1 }, "text": "兩個分佈相同時為 0" },
+        { "kind": "symmetric", "value": "mu2", "text": "對 $\\mu_1 = \\mu_2$ 對稱" }
+      ]
+    },
+    {
+      "id": "infonce", "label": "InfoNCE", "group": "loss",
+      "aliases": ["infonce", "info nce", "nt-xent", "contrastive loss", "\\tau", "negatives", "simclr", "moco", "clip"],
+      "latex": "\\mathcal{L}_{\\mathrm{NCE}} = -\\log\\frac{e^{s^{+}/\\tau}}{e^{s^{+}/\\tau} + \\sum_{j=1}^{N} e^{s^{-}_j/\\tau}}",
+      "expr": "softplus((sneg - spos) / tau + log(N))",
+      "x": { "name": "spos", "label": "$s^{+}$", "min": -1, "max": 1 },
+      "vars": [
+        { "name": "tau", "label": "$\\tau$", "role": "param", "value": 0.07, "min": 0.01, "max": 1, "step": 0.01, "log": true },
+        { "name": "sneg", "label": "$s^{-}$", "role": "param", "value": 0, "min": -1, "max": 1, "step": 0.05 },
+        { "name": "N", "label": "$N$", "role": "param", "value": 8, "min": 1, "max": 4096, "step": 1, "integer": true, "log": true }
+      ],
+      "reduction": ["$N$ 個負樣本的相似度都是 $s^{-}$（餘弦相似度，$-1$ 到 $1$）", "這時 $\\mathcal{L} = \\log(1 + N e^{(s^- - s^+)/\\tau})$，不溢位"],
+      "y": { "label": "$\\mathcal{L}_{\\mathrm{NCE}}$", "min": 0 },
+      "animate": { "var": "tau" },
+      "properties": [
+        { "kind": "nonneg", "text": "≥ 0" },
+        { "kind": "decreasing", "text": "正樣本越像越小" },
+        { "kind": "increasing", "var": "N", "text": "負樣本越多越大" },
+        { "kind": "equals", "expr": "info_nce(spos, vec(j, 1, N, sneg), tau)", "when": { "N": 8 }, "text": "和定義（逐項加總 $N$ 個負樣本）相同" },
+        { "kind": "increasing", "var": "tau", "at": { "spos": 0.5 }, "when": { "sneg": 0 }, "text": "$s^+ > s^-$ 時 $\\tau$ 越大越大" }
+      ]
+    },
+    {
+      "id": "triplet", "label": "Triplet", "group": "loss",
+      "aliases": ["triplet loss", "margin", "anchor", "positive", "negative", "d(a, p)"],
+      "latex": "\\mathcal{L}_{\\mathrm{tri}} = \\max\\!\\left(0,\\; d(a, p) - d(a, n) + m\\right)",
+      "expr": "triplet(dap, dan, m)",
+      "x": { "name": "dap", "label": "$d(a, p)$", "min": 0, "max": 2 },
+      "vars": [
+        { "name": "dan", "label": "$d(a, n)$", "role": "param", "value": 1, "min": 0, "max": 2, "step": 0.05 },
+        { "name": "m", "label": "$m$", "role": "param", "value": 0.2, "min": 0, "max": 1, "step": 0.05 }
+      ],
+      "y": { "label": "$\\mathcal{L}_{\\mathrm{tri}}$", "min": 0 },
+      "animate": { "var": "m" },
+      "properties": [
+        { "kind": "nonneg", "text": "≥ 0" },
+        { "kind": "zero_at", "value": 0, "text": "$d(a, p) = 0$ 時為 0" },
+        { "kind": "increasing", "text": "隨 $d(a, p)$ 遞增" },
+        { "kind": "increasing", "var": "m", "text": "$m$ 越大越大" }
+      ]
+    },
+    {
+      "id": "smooth_ce", "label": "Label smoothing", "group": "loss",
+      "aliases": ["label smoothing", "smoothed labels", "\\epsilon / k", "\\varepsilon"],
+      "latex": "\\mathcal{L}_{\\mathrm{LS}} = -\\sum_{k=1}^{K} q_k \\log p_k,\\quad q_k = (1-\\varepsilon)\\,[k = t] + \\tfrac{\\varepsilon}{K}",
+      "expr": "smooth_ce(p, eps, K)",
+      "x": { "name": "p", "label": "$p_t$", "min": 0.01, "max": 0.999 },
+      "vars": [
+        { "name": "eps", "label": "$\\varepsilon$", "role": "param", "value": 0.1, "min": 0, "max": 0.5, "step": 0.01 },
+        { "name": "K", "label": "$K$", "role": "param", "value": 10, "min": 2, "max": 1000, "step": 1, "integer": true, "log": true }
+      ],
+      "reduction": ["正確類別的機率是 $p_t$，其餘 $1 - p_t$ 平均分給另外 $K - 1$ 類"],
+      "y": { "label": "$\\mathcal{L}_{\\mathrm{LS}}$", "min": 0, "max": 5 },
+      "animate": { "var": "eps" },
+      "properties": [
+        { "kind": "min_at", "value": "1 - eps + eps / K", "text": "最小值在 $p_t = 1 - \\varepsilon + \\varepsilon / K$，不是 1" },
+        { "kind": "equals", "expr": "ce(p)", "when": { "eps": 0 }, "text": "$\\varepsilon = 0$ 時等於交叉熵" }
+      ]
+    },
+    {
+      "id": "softmax_t", "label": "Softmax 溫度", "group": "act",
+      "aliases": ["softmax", "temperature", "\\tau", "distillation", "logits"],
+      "latex": "p_k = \\frac{e^{z_k/\\tau}}{\\sum_{j} e^{z_j/\\tau}}",
+      "expr": "softmax(z / tau)",
+      "output": "bars",
+      "vars": [
+        { "name": "z", "label": "$z$", "role": "vector", "value": [2, 1, 0.5, -0.5, -1] },
+        { "name": "tau", "label": "$\\tau$", "role": "param", "value": 1, "min": 0.05, "max": 5, "step": 0.05, "log": true }
+      ],
+      "x": { "name": "k", "label": "類別 $k$" },
+      "y": { "label": "$p_k$", "min": 0, "max": 1 },
+      "animate": { "var": "tau" },
+      "properties": [
+        { "kind": "sums_to", "value": 1, "text": "加起來是 1" },
+        { "kind": "bounded", "lo": 0, "hi": 1, "text": "在 0 到 1 之間" }
+      ]
+    },
+    {
+      "id": "relu", "label": "ReLU／Leaky ReLU", "group": "act",
+      "aliases": ["relu", "leaky relu", "rectified linear", "\\max(0, x)"],
+      "latex": "f(x) = \\max(a x,\\, x)",
+      "expr": "max(a * x, x)",
+      "x": { "name": "x", "label": "$x$", "min": -3, "max": 3 },
+      "vars": [{ "name": "a", "label": "$a$", "role": "param", "value": 0, "min": 0, "max": 0.5, "step": 0.01 }],
+      "y": { "label": "$f(x)$" },
+      "animate": { "var": "a" },
+      "properties": [
+        { "kind": "zero_at", "value": 0, "text": "$f(0) = 0$" },
+        { "kind": "increasing", "text": "遞增" },
+        { "kind": "equals", "expr": "relu(x)", "when": { "a": 0 }, "text": "$a = 0$ 時是 ReLU" }
+      ]
+    },
+    {
+      "id": "gelu", "label": "GELU", "group": "act",
+      "aliases": ["gelu", "gaussian error linear", "\\Phi(x)", "erf"],
+      "latex": "\\mathrm{GELU}(x) = x\\,\\Phi(x) = \\tfrac{x}{2}\\left(1 + \\mathrm{erf}\\!\\left(x/\\sqrt{2}\\right)\\right)",
+      "expr": "gelu(x)",
+      "x": { "name": "x", "label": "$x$", "min": -4, "max": 3 },
+      "vars": [],
+      "y": { "label": "$\\mathrm{GELU}(x)$" },
+      "properties": [
+        { "kind": "zero_at", "value": 0, "text": "$\\mathrm{GELU}(0) = 0$" },
+        { "kind": "min_at", "value": -0.7518, "text": "最小值在 $x \\approx -0.75$" }
+      ]
+    },
+    {
+      "id": "silu", "label": "SiLU／Swish", "group": "act",
+      "aliases": ["silu", "swish", "x \\sigma(x)", "x\\sigma(\\beta x)"],
+      "latex": "f(x) = x\\,\\sigma(\\beta x)",
+      "expr": "x * sigmoid(beta * x)",
+      "x": { "name": "x", "label": "$x$", "min": -4, "max": 3 },
+      "vars": [{ "name": "beta", "label": "$\\beta$", "role": "param", "value": 1, "min": 0.1, "max": 10, "step": 0.1, "log": true }],
+      "y": { "label": "$f(x)$" },
+      "animate": { "var": "beta" },
+      "properties": [
+        { "kind": "zero_at", "value": 0, "text": "$f(0) = 0$" },
+        { "kind": "equals", "expr": "silu(x)", "when": { "beta": 1 }, "text": "$\\beta = 1$ 時是 SiLU" }
+      ]
+    },
+    {
+      "id": "sigmoid", "label": "Sigmoid", "group": "act",
+      "aliases": ["sigmoid", "logistic", "\\sigma(x)", "\\frac{1}{1+e^{-x}}"],
+      "latex": "\\sigma(kx) = \\frac{1}{1 + e^{-kx}}",
+      "expr": "sigmoid(k * x)",
+      "x": { "name": "x", "label": "$x$", "min": -6, "max": 6 },
+      "vars": [{ "name": "k", "label": "$k$", "role": "param", "value": 1, "min": 0.1, "max": 5, "step": 0.1, "log": true }],
+      "y": { "label": "$\\sigma(kx)$", "min": 0, "max": 1 },
+      "animate": { "var": "k" },
+      "properties": [
+        { "kind": "bounded", "lo": 0, "hi": 1, "text": "在 0 到 1 之間" },
+        { "kind": "increasing", "text": "遞增" },
+        { "kind": "equals", "expr": "1 - sigmoid(-k * x)", "text": "$\\sigma(-u) = 1 - \\sigma(u)$" }
+      ]
+    },
+    {
+      "id": "tanh", "label": "tanh", "group": "act",
+      "aliases": ["tanh", "hyperbolic tangent"],
+      "latex": "f(x) = \\tanh(kx)",
+      "expr": "tanh(k * x)",
+      "x": { "name": "x", "label": "$x$", "min": -4, "max": 4 },
+      "vars": [{ "name": "k", "label": "$k$", "role": "param", "value": 1, "min": 0.1, "max": 5, "step": 0.1, "log": true }],
+      "y": { "label": "$\\tanh(kx)$", "min": -1, "max": 1 },
+      "animate": { "var": "k" },
+      "properties": [
+        { "kind": "bounded", "lo": -1, "hi": 1, "text": "在 −1 到 1 之間" },
+        { "kind": "odd", "value": 0, "text": "奇函數" },
+        { "kind": "increasing", "text": "遞增" }
+      ]
+    }
+  ],
+  "scenes": [
+    {"id": "sim-mix", "label": "組合損失", "aliases": ["composite loss", "weighted sum", "forward kl", "reverse kl", "regulariser", "regularizer", "lambda"], "latex": "\\mathcal{L} = a\\,\\mathrm{KL}(p\\|q) + b\\,\\mathrm{KL}(q\\|p) + c\\,(\\mu-\\mu_0)^2", "sim": {"scene": "fit1d", "x": [-6, 6], "target": {"mix": [{"w": 0.45, "mu": -2, "sigma": 0.55}, {"w": 0.55, "mu": 2, "sigma": 0.55}]}, "model": {"mu": 0.35, "sigma": 0.5}, "terms": [{"kind": "kl_pq", "w": 1, "name": "a"}, {"kind": "kl_qp", "w": 0, "name": "b"}, {"kind": "anchor", "w": 0, "mu0": -3.2, "name": "c"}], "opt": {"method": "adam", "lr": 0.045, "steps": 330}, "plan": [{"at": 110, "w": [0.2, 1, 0]}, {"at": 220, "w": [0.2, 1, 0.6]}]}},
+    {"id": "sim-modes", "label": "正向 vs 反向 KL", "aliases": ["kl divergence", "mode seeking", "mode covering", "variational"], "latex": "\\mathcal{L} = a\\,\\mathrm{KL}(p\\|q) + b\\,\\mathrm{KL}(q\\|p)", "sim": {"scene": "fit1d", "x": [-6, 6], "target": {"mix": [{"w": 0.45, "mu": -2, "sigma": 0.55}, {"w": 0.55, "mu": 2, "sigma": 0.55}]}, "model": {"mu": 0.35, "sigma": 0.5}, "terms": [{"kind": "kl_pq", "w": 1, "name": "a"}, {"kind": "kl_qp", "w": 0, "name": "b"}], "opt": {"method": "adam", "lr": 0.045, "steps": 320}, "plan": [{"at": 160, "w": [0, 1], "reset": true}]}},
+    {"id": "sim-softmax", "label": "softmax：one-hot vs label smoothing", "aliases": ["softmax", "label smoothing", "cross entropy", "classification"], "latex": "\\mathcal{L} = -\\textstyle\\sum_k t_k \\log q_k,\\quad q=\\mathrm{softmax}(z)", "sim": {"scene": "classes", "classes": {"K": 6, "y": 3}, "model": {"z": [0.2, -0.3, 0, 0.9, -0.5, 0.3]}, "terms": [{"kind": "ce", "w": 1}, {"kind": "smooth", "w": 0, "eps": 0.1}], "opt": {"method": "gd", "lr": 0.5, "steps": 240}, "plan": [{"at": 120, "w": [0, 1]}]}},
+    {"id": "sim-mixture", "label": "高斯混合（NLL）", "aliases": ["gaussian mixture", "gmm", "maximum likelihood", "negative log likelihood", "density estimation"], "latex": "\\mathcal{L}(\\theta) = -\\tfrac{1}{N}\\textstyle\\sum_i \\log q_\\theta(x_i),\\quad q_\\theta=\\sum_{j=1}^{3}\\pi_j\\,\\mathcal N(\\mu_j,\\Sigma_j)", "sim": {"scene": "fit2d", "target": {"mix": [{"w": 0.4, "mu": [-2, -0.6], "cov": [0.81, 0.45, 0.3725]}, {"w": 0.35, "mu": [1.8, 1.2], "cov": [0.2025, -0.09, 0.29]}, {"w": 0.25, "mu": [1.4, -1.6], "cov": [0.36, 0.18, 0.18]}]}, "samples": {"n": 420, "seed": 11}, "box": [-4.4, 4.0, -3.3, 3.0], "model": {"k": 3, "seed": 3, "sigma": 0.7}, "terms": [{"kind": "nll", "w": 1}], "opt": {"method": "adam", "lr": 0.05, "steps": 220}}},
+    {"id": "sim-kmeans", "label": "k-means", "aliases": ["k-means", "kmeans", "clustering", "lloyd"], "latex": "\\min_{c}\\ \\tfrac1N\\textstyle\\sum_i \\min_j \\|x_i-c_j\\|^2", "sim": {"scene": "cluster", "cluster": {"method": "kmeans", "k": 3}, "target": {"mix": [{"w": 0.4, "mu": [-2, -0.6], "cov": [0.81, 0.45, 0.3725]}, {"w": 0.35, "mu": [1.8, 1.2], "cov": [0.2025, -0.09, 0.29]}, {"w": 0.25, "mu": [1.4, -1.6], "cov": [0.36, 0.18, 0.18]}]}, "samples": {"n": 360, "seed": 5}, "box": [-4.4, 4.0, -3.3, 3.0], "model": {"seed": 1}, "terms": [{"kind": "kmeans", "w": 1}], "opt": {"steps": 20}}},
+    {"id": "sim-em", "label": "GMM（EM）", "aliases": ["expectation maximization", "em algorithm", "gmm", "soft clustering"], "latex": "-\\tfrac1N\\textstyle\\sum_i \\log \\sum_j \\pi_j\\,\\mathcal N(x_i\\mid\\mu_j,\\Sigma_j)", "sim": {"scene": "cluster", "cluster": {"method": "em", "k": 3}, "target": {"mix": [{"w": 0.4, "mu": [-2, -0.6], "cov": [0.81, 0.45, 0.3725]}, {"w": 0.35, "mu": [1.8, 1.2], "cov": [0.2025, -0.09, 0.29]}, {"w": 0.25, "mu": [1.4, -1.6], "cov": [0.36, 0.18, 0.18]}]}, "samples": {"n": 360, "seed": 5}, "box": [-4.4, 4.0, -3.3, 3.0], "model": {"seed": 1}, "terms": [{"kind": "em", "w": 1}], "opt": {"steps": 40}}},
+    {"id": "sim-partition", "label": "softmax 分區", "aliases": ["softmax regression", "multinomial logistic", "decision boundary", "multi-class"], "latex": "\\mathcal{L} = -\\tfrac1N\\textstyle\\sum_i \\log \\mathrm{softmax}(W x_i)_{y_i} + \\tfrac{\\lambda}{2}\\|W\\|^2", "sim": {"scene": "cluster", "cluster": {"method": "ce", "k": 3}, "target": {"mix": [{"w": 0.4, "mu": [-2, -0.6], "cov": [0.81, 0.45, 0.3725]}, {"w": 0.35, "mu": [1.8, 1.2], "cov": [0.2025, -0.09, 0.29]}, {"w": 0.25, "mu": [1.4, -1.6], "cov": [0.36, 0.18, 0.18]}]}, "samples": {"n": 360, "seed": 5}, "box": [-4.4, 4.0, -3.3, 3.0], "model": {"seed": 1}, "terms": [{"kind": "ce", "w": 1}, {"kind": "l2", "w": 0.02, "name": "\\lambda"}], "opt": {"method": "adam", "lr": 0.08, "steps": 260}}}
+  ]
+}

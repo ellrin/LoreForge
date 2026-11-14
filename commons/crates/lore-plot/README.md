@@ -19,7 +19,8 @@ cargo run -p lore-plot --example serve -- 7990            # /plot/ 編輯器＋�
 | `figure` | `save_paper_figure`（`<stem>.pdf`＋`<stem>.plot.json`，作者自己的 PDF 永不覆蓋）、`spec_next_to`、`slide_png`、`spec_in_png`、`figure_block` |
 | `propose` | LLM 任務 `plot-propose`（`tasks.toml`，類別 `create`）：資料＋一句話 → 規格；清單封閉、不決定顏色大小；作者的範例在 `private/shared/plot/examples/*.json` |
 | `assist` | 圖表助手 `plot-assist`／`plot-assist-vision`（類別 `tidy`）：幾種畫法（2–4 個規格）或照一句話改（JSON pointer 修改，不碰資料，套用後檢查）；提示詞 `prompts/assist.md`，作者偏好 `private/shared/plot/assist.md` |
-| `router(Plot)` | `/plot/`、`/plot/{plot.js,charts.js,charts3d.js,formats.js,editor.js,editor.css,formats.json,palettes.json}`、`/plot/katex/*`、`/plot/api/{styles,import,export,propose,assist}` |
+| `equation` | 會動的方程式（`kind: "equation"`，`../../../docs/plot.md` §10）：`expr` 安全算式語言（自己的剖析器，限制長度／巢狀／步數；`ui/plot/eqcore.js` 同一套，`ui/plot/eqtests.json` 兩邊都測）、模板（`ui/plot/equations.json`，也是 lore-notation 的一層：`template_notation`、`color_roles`）、`problems`／`check_properties`／`report`、`sensitivity`、`sweep_frames`、`spec_for`；`propose`（任務 `equation-plot`，`fit_for_auto` ＝能不能沒人看就放進投影片）；`gif`（全域調色盤編碼、`encode_with`：逐格延遲、只存變了的矩形與透明索引、熱圖矩形內 Bayer 抖色；`info`、`spec_from_gif`、`decode_png`）；`raster`（Chrome＋poppler 一次柵格化所有格，`gif_from_svgs_with`）；`sim`（模擬場景 `eq.sim`，§11：`problems`、`values`（共用案例 `ui/plot/simtests.json`）、`schedule`（GIF 節奏）、`suggest`（LaTeX → 場景，不用模型）、`scene`） |
+| `router(Plot)` | `/plot/`、`/plot/{plot.js,charts.js,charts3d.js,formats.js,editor.js,editor.css,formats.json,palettes.json}`、`/plot/katex/*`、`/plot/api/{styles,import,export,propose,assist,gif}`、`/plot/api/equation/{check,propose,roles,scenes}`；`gif_from_body`（`GifBody`：SVG 格、`delays`、`dither`）、`export::render_equation_gif_frames` |
 
 app 接上：
 
@@ -28,6 +29,9 @@ let plot = lore_plot::Plot::new(home.clone()).with_llm(Arc::new(MyLlm));   // My
 router = router.merge(lore_plot::router(plot));
 tasks = tasks.merge(lore_plot::assist::task_table());   // plot-propose, plot-assist, plot-assist-vision
 ```
+
+瀏覽器：`eqcore.js`（語言，DOM 以外）、`equation.js`（`equation` 圖、GIF 的每一格、編輯器的方程式區塊、變數顏色角色）、`eqlive.js`（app 裡的互動畫面：跟主題、曲線變形、3D 曲面與滾珠）、`simcore.js`（模擬的數值核心，DOM 以外，node 測試）、`eqsim.js`（模擬的即時畫面與檔案畫面、`LorePlot.animateLatex`、放映用的 `mount`／`mountCurve`）。
+`cargo test -p lore-plot` 也用 node 跑 `ui/plot/tests/eqcore.test.js`、`eqcolors.test.js`（沒有 node 就略過）。
 
 **沒有在離線測試裡的**：Chrome 輸出 PDF／PNG、poppler 轉 SVG／PNG（需要外部程式；`examples/export.rs` 手動檢查）。
 Chrome 把可變字型（例如 STIX Two Text）內嵌成 Type 3（仍是向量）；靜態 TrueType 字型內嵌成 TrueType。

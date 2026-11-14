@@ -1364,12 +1364,15 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "color_quant",
+ "gif",
  "libc",
  "lore-docsrc",
  "lore-home",
  "lore-llm",
  "lore-notation",
  "lore-shell",
+ "png",
  "quick-xml",
  "serde",
  "serde_json",
@@ -1378,6 +1381,24 @@ dependencies = [
  "tokio",
  "toml",
  "zip",
+]
+
+[[package]]
+name = "lore-polish"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "http-body-util",
+ "lore-home",
+ "lore-llm",
+ "lore-notation",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -1408,6 +1429,14 @@ dependencies = [
 [[package]]
 name = "lore-shell"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
 
 [[package]]
 name = "lore-store"
@@ -1445,9 +1474,14 @@ dependencies = [
 name = "lore-voice"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "futures-util",
+ "http-body-util",
+ "lore-shell",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
 ]
 
 [[package]]

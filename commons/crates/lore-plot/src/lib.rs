@@ -10,6 +10,9 @@
 //! let app = app.merge(lore_plot::router(lore_plot::Plot::new(home).with_llm(Arc::new(my_llm))));
 //! ```
 //!
+//! Equation figures (`kind: "equation"`, [`equation`]): a safe expression language, verified
+//! templates, numeric property checks, the `equation-plot` model task and animated GIFs.
+//!
 //! Documents are the app's business: PaperComposer saves `figures/<stem>.pdf` + `.plot.json`
 //! with [`figure::save_paper_figure`]; SlideComposer stores [`figure::slide_png`] (the spec
 //! inside the PNG) as a deck asset.
@@ -17,6 +20,7 @@
 pub mod assets;
 pub mod assist;
 pub mod data;
+pub mod equation;
 pub mod export;
 pub mod figure;
 pub mod propose;
@@ -169,11 +173,143 @@ pub async fn export_blocking(tools: Arc<Tools>, svg: String, spec_json: Option<S
     tokio::task::spawn_blocking(move || export::export(&tools, &svg, spec_json.as_deref(), format, dpi).map_err(|e| e.to_string())).await.map_err(|e| e.to_string())?
 }
 
-/// `/plot/` (the editor page and its files), `/plot/katex/*`, `/plot/api/{styles,import,export,propose,assist}`.
+#[derive(Deserialize)]
+pub struct GifBody {
+    /// One SVG per frame (the editor renders them: `LorePlot.eq.frameSpecs`).
+    #[serde(default)]
+    pub frames: Vec<String>,
+    /// Per-frame delays (ms), e.g. paced by change with a hold at the end.
+    #[serde(default)]
+    pub delays: Vec<u32>,
+    /// Heatmap rectangles `[x, y, w, h]` (fractions) that get a light ordered dither.
+    #[serde(default)]
+    pub dither: Vec<[f64; 4]>,
+    #[serde(default)]
+    pub spec: Option<Value>,
+    #[serde(default)]
+    pub dpi: Option<u32>,
+    #[serde(default)]
+    pub ms: Option<u32>,
+    /// Widest the GIF may be (px).
+    #[serde(default)]
+    pub max_w: Option<u32>,
+}
+
+/// SVG frames → GIF bytes off the async threads, with per-frame delays and dithered heatmaps.
+pub async fn gif_from_body(tools: Arc<Tools>, b: GifBody, spec_json: Option<String>) -> Result<Vec<u8>, String> {
+    let opts = equation::gif::Opts { delays: b.delays, dither: b.dither };
+    let (dpi, ms, max_w) = (b.dpi.unwrap_or(200), b.ms.unwrap_or(80), b.max_w.unwrap_or(equation::raster::MAX_W_PX));
+    let frames = b.frames;
+    tokio::task::spawn_blocking(move || equation::raster::gif_from_svgs_with(&tools, &frames, dpi, max_w, ms, spec_json.as_deref(), &opts).map_err(|e| e.to_string())).await.map_err(|e| e.to_string())?
+}
+
+/// SVG frames → GIF bytes off the async threads (the spec inside).
+pub async fn gif_blocking(tools: Arc<Tools>, frames: Vec<String>, spec_json: Option<String>, dpi: u32, ms: u32, max_w: u32) -> Result<Vec<u8>, String> {
+    tokio::task::spawn_blocking(move || equation::raster::gif_from_svgs(&tools, &frames, dpi, max_w, ms, spec_json.as_deref()).map_err(|e| e.to_string())).await.map_err(|e| e.to_string())?
+}
+
+#[derive(Deserialize)]
+struct EqProposeBody {
+    latex: String,
+    /// Symbol rows (strings) or `{latex, meaning}` objects.
+    #[serde(default)]
+    symbols: Vec<Value>,
+    #[serde(default)]
+    context: String,
+    #[serde(default)]
+    style: Option<String>,
+}
+
+fn symbol_row(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Object(o) => {
+            let tex = o.get("latex").and_then(Value::as_str).unwrap_or("");
+            let mean = ["meaning", "meaning_en", "description", "name"].iter().find_map(|k| o.get(*k).and_then(Value::as_str).filter(|s| !s.is_empty())).unwrap_or("");
+            (!tex.is_empty() || !mean.is_empty()).then(|| format!("${tex}$: {mean}"))
+        }
+        _ => None,
+    }
+}
+
+async fn eq_propose_route(p: Arc<Plot>, b: EqProposeBody) -> Response {
+    let Some(llm) = p.llm.clone() else { return bad(StatusCode::SERVICE_UNAVAILABLE, "這個 app 沒有接模型") };
+    if b.latex.trim().is_empty() {
+        return bad(StatusCode::BAD_REQUEST, "沒有算式");
+    }
+    let list = style::list(&p.home);
+    let style = b.style.unwrap_or_else(|| list["default"].as_str().unwrap_or("clean").to_string());
+    let ask = equation::propose::Ask { latex: b.latex, symbols: b.symbols.iter().filter_map(symbol_row).collect(), context: b.context };
+    match equation::propose::propose(llm.as_ref(), &ask).await {
+        Ok(pr) => Json(json!({ "spec": equation::spec_for(&pr.eq, &style), "report": pr.report, "engine": pr.engine, "note": pr.note })).into_response(),
+        Err(f) => (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": f.reason, "draft": f.draft.map(|eq| equation::spec_for(&eq, &style)) }))).into_response(),
+    }
+}
+
+/// `/plot/` (the editor page and its files), `/plot/katex/*`, `/plot/api/{styles,import,export,propose,assist,gif}`,
+/// `/plot/api/equation/{check,propose,roles,scenes}`.
 pub fn router<S: Clone + Send + Sync + 'static>(p: Plot) -> axum::Router<S> {
     let p = Arc::new(p);
     let (ps, pe, pp, pa) = (p.clone(), p.clone(), p.clone(), p.clone());
+    let (pg, pq, pr) = (p.clone(), p.clone(), p.clone());
     axum::Router::new()
+        .route(
+            "/plot/api/equation/check",
+            post(|Json(b): Json<Value>| async move {
+                let eq = b.get("eq").cloned().unwrap_or(b);
+                match serde_json::from_value::<equation::Eq>(eq) {
+                    Ok(eq) => match tokio::task::spawn_blocking(move || equation::report(&eq)).await {
+                        Ok(r) => Json(r).into_response(),
+                        Err(e) => bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+                    },
+                    Err(e) => bad(StatusCode::BAD_REQUEST, format!("eq 欄位不對：{e}")),
+                }
+            }),
+        )
+        .route(
+            "/plot/api/equation/scenes",
+            // the simulation scenes that fit a paper's equation (no model): ids, best first
+            post(|Json(b): Json<Value>| async move { Json(json!({ "scenes": equation::sim::suggest(b["latex"].as_str().unwrap_or("")) })) }),
+        )
+        .route(
+            "/plot/api/equation/roles",
+            post(move |Json(b): Json<Value>| {
+                let p = pr.clone();
+                async move {
+                    // the colour role of each symbol: templates < the author's global registry < the document's notation
+                    let global = p.home.shared_file("notation.json").and_then(|f| lore_notation::Notation::load(&f).ok());
+                    let doc: Option<lore_notation::Notation> = serde_json::from_value(b["notation"].clone()).ok();
+                    let layers: Vec<&lore_notation::Notation> = global.iter().chain(doc.iter()).collect();
+                    let roles = equation::color_roles(&layers);
+                    let out: Vec<Value> = b["symbols"].as_array().into_iter().flatten().map(|t| t.as_str().map(|t| lore_notation::math::canonical(t.trim().trim_matches('$'))).and_then(|k| roles.get(&k).copied()).map_or(Value::Null, Value::from)).collect();
+                    Json(json!({ "roles": out })).into_response()
+                }
+            }),
+        )
+        .route(
+            "/plot/api/equation/propose",
+            post(move |Json(b): Json<EqProposeBody>| {
+                let p = pq.clone();
+                async move { eq_propose_route(p, b).await }
+            }),
+        )
+        .route(
+            "/plot/api/gif",
+            post(move |Json(b): Json<GifBody>| {
+                let p = pg.clone();
+                async move {
+                    if b.frames.is_empty() || b.frames.len() > 240 {
+                        return bad(StatusCode::BAD_REQUEST, "格數要在 1–240");
+                    }
+                    let spec_json = b.spec.as_ref().map(|s| serde_json::to_string(s).unwrap_or_default());
+                    match gif_from_body(p.tools.clone(), b, spec_json).await {
+                        Ok(bytes) => ([(header::CONTENT_TYPE, "image/gif")], bytes).into_response(),
+                        Err(e) => bad(StatusCode::UNPROCESSABLE_ENTITY, e),
+                    }
+                }
+            })
+            .layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
+        )
         .route("/plot", get(|| async { axum::response::Redirect::permanent("/plot/") }))
         .route("/plot/", get(|| async { file("index.html") }))
         .route("/plot/{*path}", get(|Path(path): Path<String>| async move { file(&path) }))

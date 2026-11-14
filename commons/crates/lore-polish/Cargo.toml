@@ -1,0 +1,27 @@
+[package]
+name = "lore-polish"
+description = "語句潤飾: rewrite a selected passage by the author's instructions — LaTeX locked, every proposal logged, liked rewrites as the author's tone library; the shared /api/polish routes"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[features]
+default = ["web"]
+# The shared /api/polish routes (axum) over an app's `Host`.
+web = ["dep:axum"]
+
+[dependencies]
+lore-llm = { path = "../lore-llm" }
+lore-home = { path = "../lore-home" }
+lore-notation = { path = "../lore-notation" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

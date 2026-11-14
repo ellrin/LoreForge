@@ -10,11 +10,16 @@ use serde_json::{Map, Value};
 /// Current spec version (`"lore_plot": 1`).
 pub const VERSION: u32 = 1;
 
-/// Chart types the renderer knows (`commons/ui/plot/plot.js` CHARTS).
+/// Chart types the renderer knows (`commons/ui/plot/plot.js` CHARTS) that draw a table.
+/// `equation` (no table, `equation.js`) is [`EQUATION`], kept out of this list so the data
+/// tasks (`plot-propose`, `plot-assist`) never offer it.
 pub const TYPES: &[&str] = &[
     "line", "area", "bar", "dumbbell", "scatter", "bland", "box", "violin", "hist", "ridge", "ecdf", "heatmap", "roc", "pr", "calib", "dca", "km", "pie", "radar", "contour", "surface",
     "scatter3d",
 ];
+
+/// The equation chart type (docs/plot.md §10).
+pub const EQUATION: &str = "equation";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Table {
@@ -202,6 +207,14 @@ impl Spec {
         }
         for (i, p) in self.panels.iter().enumerate() {
             let n = i + 1;
+            // an equation panel has no table: its expression is checked instead
+            if let Some(eq) = crate::equation::eq_of(p) {
+                match eq {
+                    Ok(eq) => out.extend(crate::equation::problems(&eq).into_iter().map(|w| format!("第 {n} 格：{w}"))),
+                    Err(e) => out.push(format!("第 {n} 格：{e}")),
+                }
+                continue;
+            }
             if !TYPES.contains(&p.kind.as_str()) {
                 out.push(format!("第 {n} 格：不認得的種類 {}", p.kind));
             }
@@ -219,6 +232,16 @@ impl Spec {
             }
         }
         out
+    }
+
+    /// An equation figure (`kind: "equation"`, or a panel of type `equation`).
+    pub fn is_equation(&self) -> bool {
+        self.rest.get("kind").and_then(Value::as_str) == Some("equation") || self.panels.iter().any(|p| p.kind == "equation")
+    }
+
+    /// An equation figure whose panel is a simulation scene (`eq.sim`, docs/plot.md §11).
+    pub fn is_simulation(&self) -> bool {
+        self.panels.iter().any(|p| p.kind == "equation" && p.rest.get("eq").is_some_and(|e| e.get("sim").is_some_and(|s| !s.is_null())))
     }
 
     pub fn validate(&self) -> Result<(), SpecError> {

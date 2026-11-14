@@ -29,11 +29,26 @@ interface. First user: LoreEcho (`docs/loreecho.md` §7).
   start, end, spoken }`: the utterance and where it sits in everything pushed (UTF-16 units; `spoken`
   = the length of what is said, which `word` ranges count in), so a page can show the text as it
   is spoken. `Splitter::push_pieces` gives every cut, said or not, with its raw length.
+- `permissions()` → `VoicePermissions { microphone, speech, personal_voice }` (each a
+  `lore_shell::permissions::Status`: `granted | denied | not_determined | restricted | unsupported`; asks nothing);
+  `request_permissions()` asks, one after another, each of the three that was never asked (answered ones never
+  again; blocks while a prompt is open); `request_permission(p)` one of them. `Voice` is a
+  `lore_shell::permissions::Provider`, so an app lists it in its `Permissions` (asked at the first launch,
+  設定 → 一般 → 權限 afterwards).
 - `subscribe()` → `tokio::sync::broadcast::Receiver<Event>`. `Event` (JSON `type` in snake_case):
   `listen_started {engine}`, `partial {text}`, `final {text}`, `listen_ended`, `speaking {on}`
   (true at the first queued sentence, false after the last or a stop), `speak_started {id}`,
   `word {id,start,len}`, `speak_finished {id,cancelled}`, `notice {message}`,
   `error {kind: microphone|speech|unavailable|failed, message}`.
+
+## Routes (feature `web`, on by default)
+
+`web::router(voice, defaults)` = the `/api/voice*` routes every app mounts (LoreEcho, PaperComposer,
+SlideComposer): `GET /api/voice` (`{available, engine | why, listening, speaking}`), `/voices`, `/events` (SSE:
+`hello`, then one event per `Event`), `POST /listen` (`{continuous?, language?}`), `/listen/stop`, `/speak`
+(`{text, voice?, rate?, pitch?, character?}`), `/stop`, `/open-settings`, `/warm`, `GET/POST /personal`.
+`web::Defaults::template(who)` = how `who` speaks and the language to listen in (LoreEcho: its characters; a
+`SpeakRequest` is a fixed default). `web::settings_url(what)`.
 
 ## The helper
 
@@ -44,11 +59,14 @@ failure; `LORE_VOICE_NO_HELPER=1` skips it). `links = "lore_voice"`: an app's bu
 `DEP_LORE_VOICE_HELPER` to put the helper into its bundle. Lookup at run time: `LORE_VOICE_HELPER`,
 next to the program (`Contents/MacOS/`), `../Resources/`, then the built one.
 
-Protocol: JSON lines; commands `voices`, `permissions`, `personal_voice`, `speak`, `warm`, `stop_speaking`, `listen`, `stop_listening`, `synth_file`, `transcribe_file` (the last two: checks without the microphone).
+Protocol: JSON lines; commands `voices`, `permissions` (`{request?, which?}` → `{microphone, speech,
+personal_voice}`; `request`: asks each one in `which` that was never asked, in that order), `personal_voice`, `speak`, `warm`, `stop_speaking`, `listen`, `stop_listening`, `synth_file`, `transcribe_file` (the last two: checks without the microphone).
 The helper starts on first use and again after it exits; it exits when its stdin closes.
 
-Permissions: the microphone is checked (and asked once) before listening; the speech-recognition
-permission only on the `SFSpeechRecognizer` path. A refusal is `error {kind: microphone|speech}`.
+Permissions: the app asks for all of them at its first launch (`lore_shell::permissions`); listening
+still checks the microphone (and asks if it was somehow never asked) and the speech-recognition
+permission only on the `SFSpeechRecognizer` path. A refusal is `error {kind: microphone|speech}`; pages
+point to 開啟系統設定 then, never ask again. `web::settings_url` takes the privacy pages from lore-shell.
 
 ## Personal Voice
 
@@ -67,10 +85,11 @@ from the language model.
 
 ## Tested
 
-`cargo test -p lore-voice`: event flow, the speaking edges, cancel, sentence splitting (first-comma
+`cargo test -p lore-voice`: the routes (status, listening language, speak, unavailable), event flow, the speaking edges, cancel, sentence splitting (first-comma
 cut, pieces in UTF-16 units), where each spoken sentence sits, rate and pitch clamping, warm,
-helper line parsing, Personal Voice states (fake backend; no audio).
+helper line parsing, Personal Voice states, the permissions (asked only when never asked, in order; fake
+backend; no audio).
 `cargo run -p lore-voice --example check_mac -- <dir>` on a Mac: lists voices, the Personal Voice
 state (never asks), synthesises a sentence to a file and transcribes it back, times a first
-sentence cold and warm (no microphone, no sound). The microphone, permission prompts, speaking
-aloud and word timing are **not tested on real hardware**.
+sentence cold and warm (no microphone, no sound). The microphone, permission prompts (their order, attribution
+to the app), speaking aloud and word timing are **not tested on real hardware**.

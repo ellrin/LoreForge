@@ -171,6 +171,17 @@ async fn rate_limit_retries_then_gives_up() {
 }
 
 #[tokio::test]
+async fn a_daily_budget_used_up_says_when_and_does_not_wait() {
+    // OpenAlex without a key: one free budget per IP address; Retry-After is hours away
+    let m = MockHttp::new().on("api.openalex.org", Response::status(429, "").with_header("Retry-After", "57552"));
+    let (c, log) = client(m);
+    let e = c.search_in(Source::OpenAlex, "demo", 5).await.unwrap_err();
+    assert!(matches!(e, Error::Quota("OpenAlex", 16)), "{e:?}");
+    assert_eq!(log.urls().len(), 1);
+    assert_eq!(e.to_string(), "OpenAlex 今天的免費額度用完了，約 16 小時後恢復");
+}
+
+#[tokio::test]
 async fn offline_degrades() {
     let (c, log) = client(MockHttp::new());
     let f = c.search("demo", 5).await;
@@ -330,4 +341,78 @@ fn arxiv_states_its_own_licence() {
     assert_eq!(crate::arxiv::oai_license("<error code=\"idDoesNotExist\"/>"), None);
     assert!(crate::figure_reuse_allowed(Some("cc-by")) && !crate::figure_reuse_allowed(Some("arxiv-nonexclusive")) && crate::figure_reuse_allowed(Some("cc-by-nc-sa")));
     assert!(crate::arxiv::oai_url("arXiv:2401.00001v2").contains("oai%3AarXiv.org%3A2401.00001") || crate::arxiv::oai_url("2401.00001").contains("2401.00001"));
+}
+
+// ── venue: a journal's own open-access articles ──
+
+const VENUE_SOURCES: &str = r#"{"results":[
+ {"id":"https://openalex.org/S900001","display_name":"Journal of Demo Imaging","issn_l":"1234-5678","issn":["1234-5678","8765-4321"],"host_organization_name":"Demo Press","type":"journal","works_count":4200,"homepage_url":"https://example.org/jdi"},
+ {"id":"https://openalex.org/S900002","display_name":"Demo Imaging Letters","issn_l":null,"issn":null,"type":"journal","works_count":12}
+]}"#;
+
+const VENUE_WORKS: &str = r#"{"results":[
+ {"id":"https://openalex.org/W1","doi":"https://doi.org/10.5555/jdi.1","display_name":"Widget Segmentation in Demo Scans","publication_year":2026,"publication_date":"2026-03-01","type":"article",
+  "open_access":{"is_oa":true},
+  "primary_location":{"is_oa":true,"landing_page_url":"https://example.org/jdi/1","pdf_url":"https://example.org/jdi/1.pdf","license":"cc-by","version":"publishedVersion","source":{"display_name":"Journal of Demo Imaging","type":"journal"}},
+  "best_oa_location":{"is_oa":true,"landing_page_url":"https://arxiv.org/abs/2601.00001","pdf_url":"https://arxiv.org/pdf/2601.00001","license":"cc-by","version":"submittedVersion","source":{"display_name":"arXiv","type":"repository"}},
+  "locations":[
+   {"is_oa":true,"landing_page_url":"https://arxiv.org/abs/2601.00001","pdf_url":"https://arxiv.org/pdf/2601.00001","license":"cc-by","version":"submittedVersion","source":{"display_name":"arXiv","type":"repository"}},
+   {"is_oa":true,"landing_page_url":"https://pmc.ncbi.nlm.nih.gov/articles/PMC1","pdf_url":"https://pmc.ncbi.nlm.nih.gov/articles/PMC1/pdf","license":"cc-by","version":"publishedVersion","source":{"display_name":"PubMed Central","type":"repository"}},
+   {"is_oa":true,"landing_page_url":"https://example.org/jdi/1","pdf_url":"https://example.org/jdi/1.pdf","license":"cc-by","version":"publishedVersion","source":{"display_name":"Journal of Demo Imaging","type":"journal"}}
+  ],
+  "keywords":[{"display_name":"Segmentation"},{"display_name":"Deep learning"}],"cited_by_count":3}
+]}"#;
+
+#[test]
+fn venue_urls_send_only_the_venue() {
+    let u = venue::sources_url("Journal of Demo Imaging", 8, None);
+    assert!(u.starts_with("https://api.openalex.org/sources?search=Journal+of+Demo+Imaging"), "{u}");
+    assert!(!u.contains("mailto"));
+    let q = venue::VenueQuery { source_id: "https://openalex.org/S900001".into(), from_date: "2024-11-14".into(), kind: "article".into(), per_page: 40 };
+    let w = venue::works_url(&q, None);
+    assert!(w.contains("filter=primary_location.source.id%3AS900001%2Cis_oa%3Atrue%2Ctype%3Aarticle%2Cfrom_publication_date%3A2024-11-14"), "{w}");
+    assert!(w.contains("sort=publication_date%3Adesc") && w.contains("per-page=40") && !w.contains("mailto"));
+    // the author's opt-in e-mail only when set
+    assert!(venue::works_url(&q, Some("someone@example.org")).contains("mailto="));
+}
+
+#[test]
+fn venue_sources_and_works_parse_with_every_copy() {
+    let s = venue::parse_sources(&serde_json::from_str(VENUE_SOURCES).unwrap());
+    assert_eq!(s.len(), 2);
+    assert_eq!(s[0].id, "S900001");
+    assert_eq!(s[0].issn, ["1234-5678", "8765-4321"]);
+    assert_eq!(s[0].publisher.as_deref(), Some("Demo Press"));
+    assert!(s[1].issn.is_empty() && s[1].issn_l.is_none());
+    let w = venue::parse_works(&serde_json::from_str(VENUE_WORKS).unwrap());
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0].kind, "article");
+    assert_eq!(w[0].date, "2026-03-01");
+    assert_eq!(w[0].keywords, ["Segmentation", "Deep learning"]);
+    // publisher first, then PMC, arXiv last; repeats (primary = a location) once
+    let copies: Vec<&str> = w[0].pdf_copies().iter().map(|l| l.pdf_url.as_deref().unwrap()).collect();
+    assert_eq!(copies, ["https://example.org/jdi/1.pdf", "https://pmc.ncbi.nlm.nih.gov/articles/PMC1/pdf", "https://arxiv.org/pdf/2601.00001"]);
+}
+
+#[tokio::test]
+async fn venue_client_calls_and_copy_download() {
+    let dir = tempfile::tempdir().unwrap();
+    let (c, m) = client(
+        MockHttp::new()
+            .on("/sources?", Response::ok(VENUE_SOURCES))
+            .on("/works?", Response::ok(VENUE_WORKS))
+            .on("example.org/jdi/1.pdf", Response::ok("<html>landing</html>"))
+            .on("PMC1/pdf", Response::ok(pdf_bytes("pmc"))),
+    );
+    assert_eq!(c.find_sources("Journal of Demo Imaging", 5).await.unwrap()[0].id, "S900001");
+    let q = venue::VenueQuery { source_id: "S900001".into(), from_date: "2024-11-14".into(), kind: "article".into(), per_page: 30 };
+    let works = c.venue_works(&q).await.unwrap();
+    let copies = works[0].pdf_copies();
+    assert!(matches!(c.download_copy(copies[0], dir.path()).await, Err(Error::NotPdf)));
+    let d = c.download_copy(copies[1], dir.path()).await.unwrap();
+    assert!(d.path.starts_with(dir.path()) && d.url.contains("PMC1"));
+    // a closed copy is never requested
+    let closed = venue::Location { is_oa: false, pdf_url: Some("https://example.org/closed.pdf".into()), ..Default::default() };
+    assert!(matches!(c.download_copy(&closed, dir.path()).await, Err(Error::NotOpenAccess)));
+    assert!(!m.urls().iter().any(|u| u.contains("closed")));
 }

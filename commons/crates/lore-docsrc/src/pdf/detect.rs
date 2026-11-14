@@ -52,6 +52,8 @@ pub struct Doc {
     pub roles: Vec<Vec<Role>>,
     /// Reading order of line indices per page (columns, full-width blocks).
     pub order: Vec<Vec<usize>>,
+    /// Larger-size unnumbered lines count as headings ([`super::PdfOptions::unnumbered_headings`]).
+    pub unnumbered_headings: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -286,6 +288,7 @@ impl Doc {
             .collect();
         let order = pages.iter().map(|p| reading_order(p, &cols)).collect();
         let mut d = Doc {
+            unnumbered_headings: false,
             pages,
             cols,
             inks,
@@ -448,6 +451,43 @@ impl Doc {
             .iter()
             .flat_map(|p| p.lines.iter())
             .any(|l| ROMAN_HEAD.is_match(&l.text()));
+        // Springer-style articles: headings are not numbered, only set in a larger
+        // font. Without numbered headings, a short Title-Case line in a larger size is one.
+        let h0 = self.h();
+        // numbered: a "1 …" and a "2 …" heading (or a "1" / "2" set apart from its
+        // Title-Case title by a quad), in body size or larger
+        let set_apart = |p: &TextPage, l: &Line| {
+            p.lines.iter().any(|o| {
+                (o.bbox.y0 - l.bbox.y0).abs() < 2.0
+                    && o.bbox.x0 > l.bbox.x1
+                    && o.bbox.x0 - l.bbox.x1 < 4.0 * h0
+                    && (1..=6).contains(&o.words.len())
+                    && o.text().chars().next().is_some_and(char::is_uppercase)
+                    && !o.text().ends_with('.')
+            })
+        };
+        let top_numbers: std::collections::HashSet<String> = self
+            .pages
+            .iter()
+            .flat_map(|p| p.lines.iter().map(move |l| (p, l)))
+            .filter(|(_, l)| l.words.len() <= 8 && l.height() >= 0.95 * h0)
+            .filter_map(|(p, l)| {
+                let t = l.squeezed().trim().to_string();
+                if t.ends_with('.') || t.ends_with(',') || t.ends_with('-') {
+                    return None;
+                }
+                if ROMAN_HEAD.is_match(&t) {
+                    return Some("I".to_string());
+                }
+                let n = t.trim_end_matches('.');
+                if (n == "1" || n == "2") && set_apart(p, l) {
+                    return Some(format!("apart{n}"));
+                }
+                NUM_HEAD.captures(&t).map(|c| c[1].trim_end_matches('.').to_string()).filter(|n| n == "1")
+            })
+            .collect();
+        let numbered_doc = !self.unnumbered_headings || top_numbers.contains("I") || top_numbers.contains("1") || (top_numbers.contains("apart1") && top_numbers.contains("apart2"));
+        let mut seen_abstract = false;
         let mut last_top = 0u32;
         let mut in_refs = false;
         for (pi, p) in self.pages.iter().enumerate() {
@@ -514,7 +554,7 @@ impl Doc {
                     } else {
                         Some((2, Some(c[1].to_string()), c[2].trim().to_string()))
                     }
-                } else if !roman_doc && let Some(c) = NUM_HEAD.captures(t) {
+                } else if !roman_doc && numbered_doc && let Some(c) = NUM_HEAD.captures(t) {
                     let num = c[1].to_string();
                     let title = c[2].trim().to_string();
                     let top: u32 = num.split('.').next().unwrap().parse().unwrap_or(99);
@@ -529,15 +569,34 @@ impl Doc {
                     } else {
                         None
                     }
+                } else if !numbered_doc
+                    && seen_abstract
+                    && l.height() >= 1.08 * h0
+                    && l.words.len() <= 10
+                    && title_case(t)
+                    && !t.ends_with('.')
+                    && !t.ends_with(',')
+                    && !t.ends_with(':')
+                    && t.chars().next().is_some_and(char::is_uppercase)
+                    && t.chars().filter(|c| c.is_alphabetic()).count() >= 4
+                {
+                    // two sizes: the larger is a section, the smaller a subsection
+                    Some((if l.height() >= 1.3 * h0 { 1 } else { 2 }, None, t.to_string()))
                 } else {
                     None
                 };
                 let Some((level, number, mut title)) = hit else {
                     continue;
                 };
+                if title.eq_ignore_ascii_case("abstract") {
+                    seen_abstract = true;
+                }
                 // a heading wrapped onto a second short Title-Case line
                 let mut cont = None;
-                if number.is_some()
+                let unnumbered_wrap = number.is_none()
+                    && !numbered_doc
+                    && p.lines.get(li + 1).is_some_and(|n| (n.height() - l.height()).abs() < 0.3 && n.words.len() <= 6 && title_case(&n.text()) && !n.text().ends_with('.'));
+                if (number.is_some() || unnumbered_wrap)
                     && let Some(n) = p.lines.get(li + 1)
                     && n.block == l.block
                     && n.bbox.width() < 0.6 * (x1 - x0)
@@ -1517,6 +1576,15 @@ pub(crate) mod tests {
         fill(BBox::new(60.0, 496.0, 330.0, 497.0));
         let ink = Ink::from_luma(600, 800, &px, 1.0, 200);
         (vec![page], vec![Some(ink)])
+    }
+
+    /// The Springer rule is opt-in: a document read the default way gives the headings it always gave.
+    #[test]
+    fn unnumbered_headings_are_off_by_default() {
+        let (pages, inks) = synthetic();
+        let d = Doc::new(&pages, inks);
+        assert!(!d.unnumbered_headings);
+        assert!(!super::super::PdfOptions::new(std::path::Path::new("/tmp")).unnumbered_headings);
     }
 
     #[test]

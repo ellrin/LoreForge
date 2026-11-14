@@ -74,6 +74,9 @@ impl FullText {
 
 /// Is there anything to read in a file of this kind and name?
 pub fn readable(kind: &str, name: &str) -> bool {
+    if crate::category::secret_name(kind, name) {
+        return false;
+    }
     let ext = name.rsplit_once('.').map(|x| x.1.to_lowercase()).unwrap_or_default();
     match kind {
         "pdf" => true,
@@ -279,6 +282,10 @@ pub fn fill(catalog_dir: &Path, cache_dir: &Path, mut progress: impl FnMut(usize
         let Some(rec) = crate::FileRecord::load(&files, &sha) else { continue };
         let name = rec.names.first().cloned().unwrap_or_default();
         if !readable(&rec.kind, &name) {
+            // a secret read by an older version leaves the cache
+            if rec.names.iter().any(|n| crate::category::secret_name(&rec.kind, n)) {
+                let _ = std::fs::remove_file(FullText::file(&dir, &sha));
+            }
             continue;
         }
         if FullText::load(&dir, &sha).is_some_and(|f| f.version >= VERSION) {

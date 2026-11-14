@@ -2,6 +2,20 @@
 name = "lore-shell"
 version.workspace = true
 edition.workspace = true
-description = "The shared LoreForge app shell (commons/ui icons.js, base.css, shell.js) compiled in, so every app server serves the same files."
+description = "The shared LoreForge app shell (commons/ui icons.js, base.css, shell.js) compiled in, so every app server serves the same files; the permissions every app asks for at its first launch."
+
+[features]
+# The shared /api/permissions routes (axum). lore-voice uses the types only.
+default = ["web"]
+web = ["dep:axum", "dep:tokio"]
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+axum = { workspace = true, optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

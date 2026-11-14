@@ -105,3 +105,8 @@ skipped when poppler is missing).
 
 - `HttpArxiv` against the real arXiv (tests use `MockArxiv`).
 - `LlmModuleBoxer` with a real vision model (tests use `MockProvider` / `MockBoxer`).
+
+**Unnumbered headings (opt-in).** `PdfOptions::unnumbered_headings` (default off): in a document without numbered headings, a short
+Title-Case line set larger than the body is a heading (≥ 1.3× → section, ≥ 1.08× → subsection), after the abstract. Springer journals
+set their headings this way; PaperComposer's 期刊寫法 turns it on. `pdf::analyze_with(…, unnumbered)`; real-paper check:
+`LORE_DOCSRC_UNNUMBERED='a.pdf|b.pdf' cargo test -p lore-docsrc --test real_papers unnumbered -- --ignored`.

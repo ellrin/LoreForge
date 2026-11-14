@@ -22,8 +22,8 @@ fn main() {
     for v in voices.iter().filter(|v| v.language == "zh-TW").take(5) {
         println!("  {} {} {:?}", v.id, v.name, v.quality);
     }
-    match b.permissions() {
-        Ok((mic, speech)) => println!("permissions: microphone {mic}, speech {speech}"),
+    match b.permissions(&[]) {
+        Ok(p) => println!("permissions: microphone {}, speech {}, personal voice {}", p.microphone.word(), p.speech.word(), p.personal_voice.word()),
         Err(e) => println!("permissions: {e}"),
     }
     println!("personal voice (not asked): {:?}", b.personal_voice(false));

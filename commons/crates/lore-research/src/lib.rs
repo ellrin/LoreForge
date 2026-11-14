@@ -19,6 +19,7 @@ pub mod http;
 pub mod openalex;
 pub mod reader;
 pub mod s2;
+pub mod venue;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -165,6 +166,10 @@ pub enum Error {
     Network(String),
     #[error("{0} 要求放慢，稍後再試")]
     RateLimited(&'static str),
+    /// A 429 whose `Retry-After` is hours away: a daily budget is used up (OpenAlex shares one
+    /// free budget per IP address). Said with when it comes back, never waited for.
+    #[error("{0} 今天的免費額度用完了，約 {1} 小時後恢復")]
+    Quota(&'static str, u64),
     #[error("{source_name} 回應 {status}")]
     Status { source_name: String, status: u16 },
     #[error("看不懂 {0} 的回應")]
@@ -315,6 +320,10 @@ impl Client {
             match r.status {
                 200..=299 => return Ok(Some(r)),
                 404 => return Ok(None),
+                429 if r.header("retry-after").and_then(|v| v.trim().parse::<u64>().ok()).is_some_and(|s| Duration::from_secs(s) > self.cfg.pace.max_wait * 4) => {
+                    let secs = r.header("retry-after").and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+                    return Err(Error::Quota(src.label(), secs.div_ceil(3600).max(1)));
+                }
                 429 | 503 if attempt < self.cfg.retries => {
                     let after = r.header("retry-after").and_then(|v| v.trim().parse::<u64>().ok()).map(Duration::from_secs);
                     tokio::time::sleep(after.unwrap_or(wait).min(self.cfg.pace.max_wait)).await;

@@ -32,6 +32,8 @@
 //   LoreShell.ask(anchor, lines, buttons) → Promise<value | null>     (never a native confirm)
 //   LoreShell.menu(anchor, items)                    items: { icon, label, run, kbd, current, disabled } | "-"
 //   LoreShell.settings(tab?)                         the gear dialog: 一般 外觀 模型 同步 快捷鍵 + the app's tabs
+//       一般 ends with 權限 when the server declares permissions (GET /api/permissions, lore-shell)
+//   LoreShell.permissions.get() / .request(what?) / .open(what)   what: microphone | speech | personal_voice
 //   LoreShell.engineChip({ task, value, used, onChange })   a feature's own engine choice;
 //       live: true → shows what the next request will use (自動 · 本機 Gemma 4 12B); chip.actual(name) after it
 //       chip.busy(true|false) around its request shows the shared model's status (載入模型中 · N 秒 / 等待 X 用完模型)
@@ -435,12 +437,74 @@
 
   // ── settings (the gear) ────────────────────────────────────────────
   const SHARED_TABS = [
-    { id: "general", label: "一般", build: (el) => (S.opts?.general ? S.opts.general(el) : el.append(h("div", { class: "set-empty" }, "—"))) },
+    { id: "general", label: "一般", build: buildGeneral },
     { id: "look", label: "外觀", build: (el) => { const p = h("div"); el.append(p); LoreTheme.picker(p); if (S.opts?.look) { const x = h("div", { class: "set-sec" }); el.append(x); S.opts.look(x); } } },
     { id: "model", label: "模型", build: buildModels },
     { id: "sync", label: "同步", build: (el) => S.opts.sync(el), when: () => !!S.opts?.sync },
     { id: "keys", label: "快捷鍵", build: buildKeys },
   ];
+  /** 一般: the app's own rows, then 權限 when the app declared permissions (GET /api/permissions). */
+  async function buildGeneral(el) {
+    if (S.opts?.general) await S.opts.general(el);
+    const box = h("div", { class: "set-sec lore-perms" });
+    el.append(box);
+    const empty = () => !el.childNodes.length || (el.childNodes.length === 1 && el.firstChild === box);
+    // the permissions may take a moment (the helpers start): the tab does not wait for them
+    buildPermissions(box).then(() => {
+      if (!box.isConnected || el.dataset.tab !== "general") return;
+      if (!box.childNodes.length) box.remove(); else paintIcons(box);
+      if (empty() && !el.querySelector(".set-empty")) el.append(h("div", { class: "set-empty" }, "—"));
+    });
+  }
+  // ── permissions (設定 → 一般 → 權限): asked all at once at the first launch, changed here after ──
+  const PERM_STATUS = { granted: "已允許", denied: "已拒絕", not_determined: "尚未詢問", restricted: "受限制", unsupported: "不支援" };
+  const permissions = {
+    /** [{ id, label, status }]; [] when the app declared none (or has no such route). */
+    async get() {
+      try {
+        const r = await fetch("/api/permissions", { cache: "no-store" });
+        return r.ok ? (await r.json()).permissions ?? [] : [];
+      } catch { return []; }
+    },
+    /** Ask `what` (or every never-asked one); the system's prompt shows only when never asked. */
+    async request(what) {
+      const r = await fetch("/api/permissions/request", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(what ? { what } : {}) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `${r.status}`);
+      return (await r.json()).permissions ?? [];
+    },
+    /** System Settings at that permission's page (a denied one is changed there, never asked again). */
+    async open(what) {
+      try {
+        const r = await fetch("/api/permissions/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ what }) });
+        const v = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(v.error ?? `${r.status}`);
+        if (!v.opened) toast("無法開啟系統設定", { err: true });
+      } catch (e) { toast(e.message, { err: true }); }
+    },
+  };
+  async function buildPermissions(box) {
+    const list = await permissions.get();
+    box.textContent = "";
+    if (!list.length) return;
+    box.append(h("div", { class: "set-label" }, "權限"));
+    for (const p of list) {
+      const chip = h("span", { class: "chip" + (p.status === "granted" ? " ok" : "") }, PERM_STATUS[p.status] ?? p.status);
+      const ask = p.status === "not_determined" ? h("button", { type: "button", class: "btn small" }, "詢問") : null;
+      if (ask) ask.onclick = async () => {
+        ask.disabled = true;
+        try { await permissions.request(p.id); } catch (e) { toast(e.message, { err: true }); }
+        if (box.isConnected) buildPermissions(box);
+      };
+      const open = p.status !== "unsupported" ? h("button", { type: "button", class: "btn small", onclick: () => permissions.open(p.id) }, "開啟系統設定") : null;
+      box.append(h("div", { class: "set-row", dataset: { perm: p.id } }, h("span", { class: "k" }, p.label ?? p.id), chip, ask, open));
+    }
+    // back from System Settings: show what changed
+    if (!box.dataset.watch) {
+      box.dataset.watch = "1";
+      const again = () => { if (box.isConnected) buildPermissions(box); else window.removeEventListener("focus", again); };
+      window.addEventListener("focus", again);
+    }
+  }
   function buildKeys(el) {
     const list = shortcuts();
     let g = null, dl = null;
@@ -716,7 +780,7 @@
     return shell;
   }
 
-  window.LoreShell = { mount, place, toast, ask, form, menu, closeMenu, settings, engineChip, engines, block, shortcuts, parseKeys };
+  window.LoreShell = { mount, place, toast, ask, form, menu, closeMenu, settings, engineChip, engines, permissions, block, shortcuts, parseKeys };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wireTips); else wireTips();
 })();
 

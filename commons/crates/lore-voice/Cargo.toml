@@ -8,10 +8,21 @@ description = "Listening (speech to text) and speaking (text to speech) for Lore
 links = "lore_voice"
 build = "build.rs"
 
+[features]
+# The shared /api/voice routes (axum), mounted by LoreEcho, PaperComposer and SlideComposer.
+default = ["web"]
+web = ["dep:axum", "dep:futures-util", "tokio/rt"]
+
 [dependencies]
+# the shared permission words and the Provider trait (no web routes)
+lore-shell = { path = "../lore-shell", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["sync"] }
+axum = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

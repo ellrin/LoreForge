@@ -1,5 +1,5 @@
 //! The shared LoreForge shell (`docs/shell.md`): `commons/ui/icons.js`, `base.css`,
-//! `shell.js`, `makedeck.js` and `makebook.js`, compiled in like `lore_home::theme`, so an app server only needs
+//! `shell.js`, `makedeck.js`, `makebook.js` and `polish.js`, compiled in like `lore_home::theme`, so an app server only needs
 //! these routes:
 //!
 //! ```ignore
@@ -9,6 +9,8 @@
 //! The pages load them after theme.css / theme.js:
 //! `theme.css → base.css → styles.css` and `theme.js → icons.js → shell.js → app.js`.
 //! The app's own copy of icons.js goes away (both declare `ICONS`).
+
+pub mod permissions;
 
 /// `commons/ui/icons.js`: the union icon set (`ICONS`, `icon`, `paintIcons`, `iconButton`).
 pub const ICONS_JS: &str = include_str!("../../../ui/icons.js");
@@ -20,6 +22,8 @@ pub const SHELL_JS: &str = include_str!("../../../ui/shell.js");
 pub const MAKEDECK_JS: &str = include_str!("../../../ui/makedeck.js");
 /// `commons/ui/makebook.js`: `LoreMakeBook`, the 寫 review button and card (PaperComposer's 寫書; LoreReader mounts it).
 pub const MAKEBOOK_JS: &str = include_str!("../../../ui/makebook.js");
+/// `commons/ui/polish.js`: `LorePolish`, the 潤飾 dialog (lore-polish's `/api/polish*`, lore-voice's `/api/voice*`).
+pub const POLISH_JS: &str = include_str!("../../../ui/polish.js");
 
 /// `(route, content type, body)` for each file.
 pub const FILES: &[(&str, &str, &str)] = &[
@@ -28,6 +32,7 @@ pub const FILES: &[(&str, &str, &str)] = &[
     ("/shell.js", "text/javascript; charset=utf-8", SHELL_JS),
     ("/makedeck.js", "text/javascript; charset=utf-8", MAKEDECK_JS),
     ("/makebook.js", "text/javascript; charset=utf-8", MAKEBOOK_JS),
+    ("/polish.js", "text/javascript; charset=utf-8", POLISH_JS),
 ];
 
 /// The names in `const ICONS = { … }` of an icons.js, in order (duplicates kept).
@@ -219,6 +224,22 @@ mod tests {
         assert!(!BASE_CSS.contains("rgb("), "rgb() in base.css");
     }
 
+    /// The 潤飾 dialog has no palette of its own: theme tokens only, accent text as `--accent-text`.
+    #[test]
+    fn polish_css_uses_theme_tokens() {
+        let theme = include_str!("../../../ui/theme.css");
+        let css = &POLISH_JS[POLISH_JS.find("const CSS = `").unwrap()..];
+        let css = &css[..css[13..].find('`').unwrap() + 13];
+        let mut at = 0;
+        while let Some(i) = css[at..].find("var(--") {
+            let s = at + i + 6;
+            let id: String = css[s..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+            assert!(["mono", "r"].contains(&id.as_str()) || theme.contains(&format!("--{id}:")), "polish.js uses --{id}");
+            at = s;
+        }
+        assert!(!css.contains('#') && !css.contains("color: var(--accent)"), "no literal colours in polish.js");
+    }
+
     #[test]
     fn settings_tabs_and_slots() {
         let tabs = &SHELL_JS[SHELL_JS.find("const SHARED_TABS").unwrap()..];
@@ -233,16 +254,45 @@ mod tests {
         assert!(!SHELL_JS.contains("confirm("), "no native confirm");
     }
 
+    /// 一般 → 權限: built from GET /api/permissions, only when the app declared some (an empty
+    /// list or no route = no block); labels only, the System Settings button for each.
+    #[test]
+    fn settings_permissions_block() {
+        let tabs = &SHELL_JS[SHELL_JS.find("const SHARED_TABS").unwrap()..];
+        let tabs = &tabs[..tabs.find("];").unwrap()];
+        assert!(tabs.contains("label: \"一般\", build: buildGeneral"));
+        let f = &SHELL_JS[SHELL_JS.find("async function buildPermissions").unwrap()..];
+        let f = &f[..f.find("\n  function buildKeys").unwrap()];
+        assert!(f.contains("if (!list.length) return;"), "no block without declared permissions");
+        assert!(SHELL_JS.contains("r.ok ? (await r.json()).permissions ?? [] : []"), "a 404 means none");
+        for s in ["\"權限\"", "\"詢問\"", "\"開啟系統設定\"", "p.status === \"not_determined\"", "p.status !== \"unsupported\""] {
+            assert!(f.contains(s), "{s}");
+        }
+        for (k, v) in [("granted", "已允許"), ("denied", "已拒絕"), ("not_determined", "尚未詢問"), ("unsupported", "不支援")] {
+            assert!(SHELL_JS.contains(&format!("{k}: \"{v}\"")), "{k}");
+        }
+        for path in ["/api/permissions\"", "/api/permissions/request", "/api/permissions/open"] {
+            assert!(SHELL_JS.contains(path), "{path}");
+        }
+        assert!(SHELL_JS.contains("engines, permissions, block"), "LoreShell.permissions for feature code");
+        // the 潤飾 microphone points to System Settings, never asks again
+        assert!(POLISH_JS.contains("LoreShell.permissions.open(perm)"));
+    }
+
     #[test]
     fn files_are_served() {
-        assert_eq!(FILES.len(), 5);
+        assert_eq!(FILES.len(), 6);
         assert!(FILES.iter().all(|(p, _, b)| p.starts_with('/') && !b.is_empty()));
         assert!(SHELL_JS.contains("window.LoreShell") && SHELL_JS.contains("window.LoreLinks"));
         assert!(MAKEDECK_JS.contains("window.LoreMakeDeck") && MAKEDECK_JS.contains("/api/todeck"));
         assert!(MAKEBOOK_JS.contains("window.LoreMakeBook") && MAKEBOOK_JS.contains("/api/book") && MAKEBOOK_JS.contains("bookjob"));
-        // the icons the two cards draw
+        assert!(POLISH_JS.contains("window.LorePolish") && POLISH_JS.contains("/api/polish") && POLISH_JS.contains("/api/polish/like") && POLISH_JS.contains("/api/voice/listen"));
+        // the icons the cards draw
         let u = union();
         assert!(u.contains("deckOutline") && u.contains("bookWrite"));
+        for n in ["polish", "thumbUp", "mic", "send", "x"] {
+            assert!(u.contains(n), "{n}");
+        }
         assert!(SHELL_JS.contains("`bookjob/${enc(p.bookjob)}`, `/?book-job=${enc(p.bookjob)}`"));
     }
 }

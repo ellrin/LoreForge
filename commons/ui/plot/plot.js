@@ -299,7 +299,7 @@
   }
   async function warm(spec, st, macros) {
     // ticks on log / symlog axes and some labels are maths too: load KaTeX whenever it may be needed
-    if (strings(spec).some(hasMath) || /"(log|symlog)"|"log":true|"fmt":"e"/.test(JSON.stringify(spec.panels ?? []))) await loadKatex();
+    if (strings(spec).some(hasMath) || /"(log|symlog)"|"log":true|"fmt":"e"|"sim":/.test(JSON.stringify(spec.panels ?? []))) await loadKatex();
     const h = ensureHost();
     const fam = fontCss(st.font.family);
     const probe = document.createElement("span");
@@ -825,7 +825,8 @@
       const lab = Math.max(...(plan.cats ?? []).map((c) => T(c, fTick).w), plan.labelRoom ?? 0, 0);
       const R = Math.max(5, Math.min((right - left) / 2 - lab - 4, (bottom - top) / 2 - fTick.size - 4));
       const cx = (left + right) / 2, cy = (top + bottom) / 2;
-      const c = { out, T, font: (w) => fontOf(st, w), polar: { cx, cy, R }, inset: false };
+      // a free chart (a simulation scene, eqsim.js) draws its own layout in the panel's box
+      const c = { out, T, font: (w) => fontOf(st, w), polar: { cx, cy, R }, box: { x: left, y: top, w: right - left, h: bottom - top }, st, inset: false };
       plan.draw(c);
       if (title) out.push(title.place(cx, cell.y + title.asc, { anchor: "middle", part: `title:${pi}` }));
       if (pl) out.push(pl.place(cell.x, cell.y + pl.asc, { part: `panellabel:${pi}` }));
@@ -863,8 +864,9 @@
     const rad = (Math.abs(rot) * Math.PI) / 180;
     const xTickH = hideXT ? 0 : Math.max(0, ...xTexts.map((t) => (rot ? t.w * Math.sin(rad) + t.h * Math.cos(rad) : t.h)));
     const yTickW = hideYT ? 0 : Math.max(0, ...yTexts.map((t) => t.w));
-    const xl = !X.hidden && !o.shared?.hideXLabel && withUnit(X) ? T(withUnit(X), fLab) : null;
-    const yl = !Y.hidden && !o.shared?.hideYLabel && withUnit(Y) ? T(withUnit(Y), fLab) : null;
+    // a chart may colour its axis labels (equation figures: each variable in its colour)
+    const xl = !X.hidden && !o.shared?.hideXLabel && withUnit(X) ? T(plan.xlabel ?? withUnit(X), fLab) : null;
+    const yl = !Y.hidden && !o.shared?.hideYLabel && withUnit(Y) ? T(plan.ylabel ?? withUnit(Y), fLab) : null;
     const tp = pad * 0.6;
     // direct labels at line ends: room on the right
     const ends = pos === "direct" ? (plan.ends ?? []).map((e) => ({ ...e, t: T(e.label, { ...fLeg, color: e.color }) })) : [];

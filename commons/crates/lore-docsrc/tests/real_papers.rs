@@ -108,3 +108,21 @@ fn latex_vs_pdf() {
     assert!(missing.is_empty(), "no PDF region for {missing:?}");
     assert_eq!(tex.references.len(), pdf.references.len());
 }
+
+/// Springer journals: unnumbered headings in a larger size are sections when asked.
+/// `LORE_DOCSRC_UNNUMBERED='/path/a.pdf|/path/b.pdf' cargo test -p lore-docsrc --test real_papers unnumbered -- --ignored`
+#[test]
+#[ignore]
+fn unnumbered_springer_sections() {
+    let spec = std::env::var("LORE_DOCSRC_UNNUMBERED").expect("set LORE_DOCSRC_UNNUMBERED");
+    for (n, path) in spec.split('|').filter(|s| !s.trim().is_empty()).enumerate() {
+        let (_keep, dir) = out_dir(100 + n);
+        let mut o = PdfOptions::new(&dir);
+        o.render_crops = false;
+        o.unnumbered_headings = true;
+        let c = pdf::extract(Path::new(path.trim()), &o).unwrap();
+        let top: Vec<&str> = c.sections.iter().filter(|s| s.level <= 1).map(|s| s.title.as_str()).collect();
+        println!("{path}: {top:?}");
+        assert!(top.iter().any(|t| t.contains("Introduction") || t.contains("Background")) && top.iter().any(|t| t.contains("Results")), "{path}: {top:?}");
+    }
+}

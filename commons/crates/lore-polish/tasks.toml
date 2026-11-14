@@ -1,0 +1,11 @@
+# 語句潤飾 (lore-polish): one task for every app that rewrites a selected passage
+# (PaperComposer, SlideComposer). Merged into an app's tasks like lore-flow's.
+
+[task.polish]
+label = "語句潤飾"
+class = "create"
+needs = { json = true }
+default = "claude:selected"
+fallback = "local:current"
+offline = true
+max_tokens = 4000

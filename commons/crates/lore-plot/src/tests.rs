@@ -115,7 +115,7 @@ fn palettes_are_static_and_readable_on_white() {
     // a copy of each of the 20 app themes (values copied, never theme tokens)
     assert_eq!(themes, 20);
     assert!(!include_str!("../../../ui/plot/palettes.json").contains("var(--"));
-    for f in ["../mathsvg.js", "plot.js", "charts.js", "charts3d.js"] {
+    for f in ["../mathsvg.js", "plot.js", "charts.js", "charts3d.js", "eqcore.js", "equation.js"] {
         let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/plot").join(f)).unwrap();
         for token in ["--accent", "--text", "--bg", "--panel", "--line", "--muted", "--paper", "--surface", "--ok", "--warn", "--err"] {
             assert!(!src.contains(&format!("var({token}")), "{f}: figures never use theme tokens ({token})");
@@ -658,4 +658,36 @@ fn render_spec_in_headless_chrome() {
     assert!(svg.starts_with("<svg") && svg.contains("mm"), "{}", &svg[..svg.len().min(300)]);
     let pdf = crate::export::export(&tools, &svg, Some(spec), crate::export::Format::Pdf, 0).unwrap();
     assert!(pdf.starts_with(b"%PDF"));
+}
+
+/// The auto-GIF path with a real Chrome (論文報告, SlideComposer's 會動的方程式 save): frames paced by change with
+/// per-frame delays, then encoded. Run by hand: `cargo test -p lore-plot gif_frames_in -- --ignored`.
+#[test]
+#[ignore]
+fn gif_frames_in_headless_chrome() {
+    let tools = crate::export::Tools::find();
+    if tools.chrome.is_none() {
+        return;
+    }
+    let styles = serde_json::Value::Array(crate::style::resolved(&crate::style::raw(None), &Default::default()));
+    let mut eq = crate::equation::template_eq("focal").unwrap();
+    eq.animate = Some(crate::equation::Animate { var: "gamma".into(), frames: Some(16), ms: Some(80) });
+    let sim = crate::equation::sim::scene("sim-modes").unwrap();
+    for spec in [crate::equation::spec_for(&eq, "clean"), {
+        let mut s = crate::equation::spec_for(&eq, "clean");
+        let mut sm = sim["sim"].clone();
+        sm["frames"] = 20.into();
+        sm["opt"]["steps"] = 60.into();
+        s["panels"][0]["eq"] = serde_json::json!({ "expr": "", "latex": sim["latex"], "sim": sm });
+        s
+    }] {
+        let json = spec.to_string();
+        let f = crate::export::render_equation_gif_frames(&tools, &json, &styles, &serde_json::Value::Null).unwrap();
+        assert_eq!(f.frames.len(), f.delays.len());
+        assert!(f.delays.last().unwrap() > f.delays.first().unwrap() || f.delays.iter().max() > f.delays.iter().min(), "held somewhere: {:?}", f.delays);
+        let gif = crate::equation::raster::gif_from_svgs_with(&tools, &f.frames, 120, 900, 80, Some(&json), &crate::equation::gif::Opts { delays: f.delays.clone(), dither: f.dither.clone() }).unwrap();
+        let info = crate::equation::gif::info(&gif).unwrap();
+        assert_eq!(info.frames, f.frames.len());
+        assert!(crate::figure::spec_in_gif(&gif).is_some());
+    }
 }

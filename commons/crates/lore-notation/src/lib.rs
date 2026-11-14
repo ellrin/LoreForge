@@ -16,10 +16,12 @@ pub mod extract;
 pub mod macros;
 pub mod math;
 pub mod model;
+pub mod pending;
 pub mod refs;
 pub mod scan;
 pub mod source;
 pub mod symbols;
+pub mod unicode;
 
 pub use check::{check, CheckOptions, Issue, Report, Severity};
 pub use extract::{draft, refine, Draft, MockAssistant, NotationAssistant, Suggestion};

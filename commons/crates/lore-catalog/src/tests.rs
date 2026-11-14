@@ -523,6 +523,14 @@ fn extract_and_category_rules() {
         let n = names(n);
         assert_eq!(members(&rules(&Facts { kind: "image", names: &n, ..Facts::default() })), vec!["id-doc"], "{n:?}");
     }
+    // 機密 by name or key-file type; a paper or deck about tokens is not one, and is never read.
+    for (kind, n) in [("text", "github_token.txt"), ("text", "github-recovery-codes.txt"), ("spreadsheet", "Chrome 密碼.csv"), ("other", "server.pem")] {
+        let ns = names(&[n]);
+        assert_eq!(members(&rules(&Facts { kind, names: &ns, ..Facts::default() })), vec!["secret"], "{n}");
+        assert!(!crate::fulltext::readable(kind, n), "{n}");
+    }
+    assert!(!crate::category::secret_name("pdf", "token merging for vision transformers.pdf"));
+    assert!(!crate::category::secret_name("text", "tokenizer notes.txt"));
     // Card shape or a one-page scan alone: never 證件 (figures are often card-shaped).
     let n2 = names(&["main.png"]);
     assert!(rules(&Facts { kind: "image", names: &n2, dims: Some((5128, 3208)), ..Facts::default() }).is_empty());

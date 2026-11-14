@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::{Backend, Event, ListenOptions, Quality, Sink, SpeakRequest, VoiceInfo};
+use crate::{Backend, Event, ListenOptions, Permission, Quality, Sink, SpeakRequest, Status, VoiceInfo, VoicePermissions};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Call {
@@ -28,6 +28,10 @@ struct State {
     personal: Option<(crate::PersonalVoice, crate::PersonalVoice)>,
     /// A Personal Voice has been made (listed once authorized).
     personal_made: bool,
+    /// Microphone and speech: the state, and what the prompt answers (missing = unsupported).
+    perms: Vec<(Permission, Status, Status)>,
+    /// Every prompt shown, in order.
+    asked: Vec<Permission>,
 }
 
 pub struct FakeBackend {
@@ -79,6 +83,18 @@ impl FakeControl {
         s.personal_made = made;
     }
 
+    /// Microphone or speech starts as `now`; its prompt answers `answer`.
+    pub fn permission(&self, p: Permission, now: Status, answer: Status) {
+        let mut s = self.state.lock().unwrap();
+        s.perms.retain(|x| x.0 != p);
+        s.perms.push((p, now, answer));
+    }
+
+    /// The prompts shown so far, in order.
+    pub fn asked(&self) -> Vec<Permission> {
+        self.state.lock().unwrap().asked.clone()
+    }
+
     pub fn fail_speak(&self, on: bool) {
         self.state.lock().unwrap().fail_speak = on;
     }
@@ -122,6 +138,23 @@ impl Backend for FakeBackend {
             return Ok(answer);
         }
         Ok(now)
+    }
+
+    fn permissions(&self, ask: &[Permission]) -> Result<VoicePermissions, String> {
+        let mut s = self.state.lock().unwrap();
+        for p in VoicePermissions::COVERS.into_iter().filter(|p| ask.contains(p)) {
+            if p == Permission::PersonalVoice {
+                if let Some((crate::PersonalVoice::NotDetermined, answer)) = s.personal {
+                    s.asked.push(p);
+                    s.personal = Some((answer, answer));
+                }
+            } else if let Some(e) = s.perms.iter_mut().find(|x| x.0 == p && x.1 == Status::NotDetermined) {
+                e.1 = e.2;
+                s.asked.push(p);
+            }
+        }
+        let get = |p: Permission| s.perms.iter().find(|x| x.0 == p).map(|x| x.1).unwrap_or(Status::Unsupported);
+        Ok(VoicePermissions { microphone: get(Permission::Microphone), speech: get(Permission::Speech), personal_voice: s.personal.map(|x| x.0.into()).unwrap_or(Status::Unsupported) })
     }
 
     fn listen(&self, o: &ListenOptions) -> Result<(), String> {

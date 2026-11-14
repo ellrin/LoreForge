@@ -1,6 +1,6 @@
 [package]
 name = "lore-plot"
-description = "The shared plotting tool (繪圖): figure spec, data import (CSV/TSV/JSON/XLSX/LaTeX tables), style presets (public + private through lore-home), export (headless Chrome PDF, SVG, PNG with the spec inside), the plot-propose LLM task and the /plot routes every app mounts."
+description = "The shared plotting tool (繪圖) and equation figures (會動的方程式: safe expression language, templates, property checks, GIF): figure spec, data import (CSV/TSV/JSON/XLSX/LaTeX tables), style presets (public + private through lore-home), export (headless Chrome PDF, SVG, PNG with the spec inside), the plot-propose LLM task and the /plot routes every app mounts."
 version.workspace = true
 edition.workspace = true
 publish = false
@@ -19,6 +19,10 @@ quick-xml = { workspace = true }
 lore-home = { path = "../lore-home" }
 lore-llm = { path = "../lore-llm", default-features = false }
 lore-docsrc = { path = "../lore-docsrc" }
+lore-notation = { path = "../lore-notation" }
+gif = "0.14"
+png = "0.18"
+color_quant = "1.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -26,4 +30,3 @@ libc = "0.2"
 [dev-dependencies]
 tempfile = { workspace = true }
 lore-shell = { path = "../lore-shell" }
-lore-notation = { path = "../lore-notation" }

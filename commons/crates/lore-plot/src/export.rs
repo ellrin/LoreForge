@@ -275,7 +275,7 @@ pub fn png_size(png: &[u8]) -> Option<(u32, u32)> {
 
 // ── running Chrome / poppler ────────────────────────────────────────────
 
-fn tmp_dir() -> std::io::Result<PathBuf> {
+pub(crate) fn tmp_dir() -> std::io::Result<PathBuf> {
     let d = std::env::temp_dir().join(format!(
         "lore-plot-{}-{}",
         std::process::id(),
@@ -286,7 +286,7 @@ fn tmp_dir() -> std::io::Result<PathBuf> {
 }
 
 /// Run a program and wait at most `limit` (its process group killed after).
-fn run(bin: &Path, args: &[String], limit: Duration) -> Result<(), ExportError> {
+pub(crate) fn run(bin: &Path, args: &[String], limit: Duration) -> Result<(), ExportError> {
     let mut cmd = Command::new(bin);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(unix)]
@@ -316,7 +316,7 @@ fn run(bin: &Path, args: &[String], limit: Duration) -> Result<(), ExportError> 
     }
 }
 
-fn chrome_args() -> Vec<String> {
+pub(crate) fn chrome_args() -> Vec<String> {
     let mut a: Vec<String> = ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--use-mock-keychain", "--password-store=basic", "--allow-file-access-from-files"]
         .iter()
         .map(|s| s.to_string())
@@ -327,7 +327,7 @@ fn chrome_args() -> Vec<String> {
     a
 }
 
-fn file_url(p: &Path) -> String {
+pub(crate) fn file_url(p: &Path) -> String {
     let s = p.to_string_lossy().replace('\\', "/").replace(' ', "%20").replace('#', "%23");
     if s.starts_with('/') { format!("file://{s}") } else { format!("file:///{s}") }
 }
@@ -353,8 +353,53 @@ pub fn pdf(tools: &Tools, svg_doc: &str, w_mm: f64, h_mm: f64) -> Result<Vec<u8>
 /// `GET /plot/api/styles` answers as `styles`) and the DOM is read back. For jobs on the server
 /// (PaperComposer's 寫書) that make figures with no editor open.
 pub fn render_spec(tools: &Tools, spec_json: &str, styles: &serde_json::Value) -> Result<String, ExportError> {
-    let chrome = tools.chrome.as_ref().ok_or(ExportError::NoChrome)?;
     serde_json::from_str::<serde_json::Value>(spec_json).map_err(|e| ExportError::Failed(format!("規格不是 JSON：{e}")))?;
+    let out = run_page(tools, &format!("(async()=>{{const r=await LorePlot.render({spec_json},{{styles:__S,macros:__M}});return r.svg;}})()"), styles, &serde_json::json!({}))?;
+    let svg = out.as_str().unwrap_or("").to_string();
+    if !svg.trim_start().starts_with("<svg") {
+        return Err(ExportError::Failed("Chrome 沒有畫出圖".into()));
+    }
+    Ok(svg)
+}
+
+/// The frames of an equation figure's animation (`LorePlot.eq.frameSpecs`: the swept parameter
+/// ping-pong, axes pinned), each drawn by the same `plot.js`, in one Chrome run.
+pub fn render_equation_frames(tools: &Tools, spec_json: &str, frames: usize, styles: &serde_json::Value, macros: &serde_json::Value) -> Result<Vec<String>, ExportError> {
+    serde_json::from_str::<serde_json::Value>(spec_json).map_err(|e| ExportError::Failed(format!("規格不是 JSON：{e}")))?;
+    let out = run_page(tools, &format!("(async()=>{{const fs=LorePlot.eq.frameSpecs({spec_json},{frames});const o=[];for(const s of fs){{o.push((await LorePlot.render(s,{{styles:__S,macros:__M}})).svg);}}return o;}})()"), styles, macros)?;
+    let list: Vec<String> = out.as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    if list.is_empty() || !list.iter().all(|s| s.trim_start().starts_with("<svg")) {
+        return Err(ExportError::Failed("Chrome 沒有畫出動畫的每一格".into()));
+    }
+    Ok(list)
+}
+
+/// An equation figure's GIF frames as the editor makes them (`LorePlot.eq.gifFrames`): SVGs paced by visual
+/// change (sweeps and simulations alike), per-frame delays (the end held), the dithered heatmap rectangles.
+pub struct GifFrames {
+    pub frames: Vec<String>,
+    pub delays: Vec<u32>,
+    pub dither: Vec<[f64; 4]>,
+    pub max_w: Option<u32>,
+}
+
+/// [`GifFrames`] for `spec_json`, drawn in headless Chrome with every plot script.
+pub fn render_equation_gif_frames(tools: &Tools, spec_json: &str, styles: &serde_json::Value, macros: &serde_json::Value) -> Result<GifFrames, ExportError> {
+    serde_json::from_str::<serde_json::Value>(spec_json).map_err(|e| ExportError::Failed(format!("規格不是 JSON：{e}")))?;
+    let out = run_page(tools, &format!("LorePlot.eq.gifFrames({spec_json},{{styles:__S,macros:__M}})"), styles, macros)?;
+    let frames: Vec<String> = out["frames"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    if frames.is_empty() || !frames.iter().all(|s| s.trim_start().starts_with("<svg")) {
+        return Err(ExportError::Failed("Chrome 沒有畫出動畫的每一格".into()));
+    }
+    let delays = out["delays"].as_array().map(|a| a.iter().filter_map(|v| v.as_u64().map(|d| d as u32)).collect()).unwrap_or_default();
+    let dither = serde_json::from_value(out["dither"].clone()).unwrap_or_default();
+    Ok(GifFrames { frames, delays, dither, max_w: out["maxW"].as_u64().map(|v| v as u32) })
+}
+
+/// Run `job` (a JS expression giving a promise) in a page with every plot script loaded;
+/// its result comes back as JSON through the DOM.
+fn run_page(tools: &Tools, job: &str, styles: &serde_json::Value, macros: &serde_json::Value) -> Result<serde_json::Value, ExportError> {
+    let chrome = tools.chrome.as_ref().ok_or(ExportError::NoChrome)?;
     let dir = tmp_dir()?;
     let result = (|| {
         std::fs::create_dir_all(dir.join("katex/fonts"))?;
@@ -369,38 +414,39 @@ pub fn render_spec(tools: &Tools, spec_json: &str, styles: &serde_json::Value) -
         let json_of = |name: &str| assets::get(name).map(|(_, b)| String::from_utf8_lossy(b).to_string()).unwrap_or_else(|| "{}".into());
         // `</` inside a script would end it
         let safe = |s: &str| s.replace("</", "<\\/");
+        let scripts: String = assets::SCRIPTS.iter().filter(|s| **s != "editor.js").map(|s| format!("<script src=\"{s}\"></script>")).collect();
         let page = format!(
             "<!doctype html><meta charset=\"utf-8\"><body><pre id=\"out\"></pre>\n\
-<script>window.__F={{\"palettes.json\":{pal},\"formats.json\":{fmt}}};const __f=window.fetch;window.fetch=(u,o)=>{{const n=String(u).split('/').pop();return n in window.__F?Promise.resolve({{ok:true,json:async()=>window.__F[n]}}):__f(u,o);}};</script>\n\
-<script src=\"mathsvg.js\"></script><script src=\"plot.js\"></script><script src=\"charts.js\"></script><script src=\"charts3d.js\"></script><script src=\"formats.js\"></script>\n\
-<script>LorePlot.render({spec},{{styles:{styles}}}).then(r=>{{document.getElementById('out').textContent=r.svg;}}).catch(e=>{{document.getElementById('out').textContent='ERROR '+e;}});</script>\n",
+<script>window.__F={{\"palettes.json\":{pal},\"formats.json\":{fmt},\"equations.json\":{eqs}}};const __f=window.fetch;window.fetch=(u,o)=>{{const n=String(u).split('/').pop();return n in window.__F?Promise.resolve({{ok:true,json:async()=>window.__F[n]}}):__f(u,o);}};window.__S={styles};window.__M={macros};</script>\n\
+{scripts}\n\
+<script>Promise.resolve().then(()=>{job}).then(r=>{{document.getElementById('out').textContent=JSON.stringify({{ok:r}});}}).catch(e=>{{document.getElementById('out').textContent=JSON.stringify({{error:String(e&&e.message||e)}});}});</script>\n",
             pal = safe(&json_of("palettes.json")),
             fmt = safe(&json_of("formats.json")),
-            spec = safe(spec_json),
+            eqs = safe(&json_of("equations.json")),
             styles = safe(&styles.to_string()),
+            macros = safe(&macros.to_string()),
+            job = safe(job),
         );
         let html = dir.join("render.html");
         std::fs::write(&html, page)?;
         let mut args = chrome_args();
-        args.extend(["--virtual-time-budget=15000".to_string(), "--dump-dom".into(), file_url(&html)]);
-        let out = run_capture(chrome, &args, Duration::from_secs(60))?;
+        args.extend(["--virtual-time-budget=30000".to_string(), "--dump-dom".into(), file_url(&html)]);
+        let out = run_capture(chrome, &args, Duration::from_secs(120))?;
         let text = String::from_utf8_lossy(&out);
         let inner = text.split_once("<pre id=\"out\">").and_then(|(_, r)| r.split_once("</pre>")).map(|(a, _)| a).unwrap_or("");
-        let svg = inner.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", "\u{a0}").replace("&amp;", "&");
-        if let Some(e) = svg.strip_prefix("ERROR ") {
+        let json = inner.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", "\u{a0}").replace("&amp;", "&");
+        let v: serde_json::Value = serde_json::from_str(&json).map_err(|_| ExportError::Failed("Chrome 沒有畫出圖".into()))?;
+        if let Some(e) = v["error"].as_str() {
             return Err(ExportError::Failed(format!("畫圖失敗：{}", e.lines().next().unwrap_or(""))));
         }
-        if !svg.trim_start().starts_with("<svg") {
-            return Err(ExportError::Failed("Chrome 沒有畫出圖".into()));
-        }
-        Ok(svg)
+        Ok(v["ok"].clone())
     })();
     let _ = std::fs::remove_dir_all(&dir);
     result
 }
 
 /// [`run`] keeping what the program writes to stdout.
-fn run_capture(bin: &Path, args: &[String], limit: Duration) -> Result<Vec<u8>, ExportError> {
+pub(crate) fn run_capture(bin: &Path, args: &[String], limit: Duration) -> Result<Vec<u8>, ExportError> {
     let mut cmd = Command::new(bin);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(unix)]

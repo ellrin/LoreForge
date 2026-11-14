@@ -29,3 +29,15 @@ default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
 offline = true
 max_tokens = 6000
+
+# 會動的方程式 (docs/living-equations.md): a paper's LaTeX + symbols → an equation figure
+# (template + the paper's values, or an expression in the safe language with its reduction and
+# checkable properties). The server evaluates and tests the answer before the editor sees it.
+[task.equation-plot]
+label = "方程式動起來"
+class = "create"
+needs = { json = true, context = 16000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 4000

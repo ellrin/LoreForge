@@ -52,7 +52,8 @@ kb-summarize-card = "claude:haiku"
 ```
 
 The bundled sample (`tasks.toml`) has the §9 tasks plus `pc-compose-paragraph`,
-`kb-extract-terms`, `reader-chat`, `jl-generate`, `jl-realtime`.
+`kb-extract-terms`, `reader-chat`, `jl-generate`, `jl-realtime`. Shared crates bring their own tasks for an app to
+merge (`lore_flow::llm::task_table()`, `lore_plot::propose::task_table()`, `lore_polish::task_table()` = `polish`, 語句潤飾).
 
 ```rust
 let tasks = TaskTable::load(TaskTable::bundled(), Some(&user_tasks_toml))?;

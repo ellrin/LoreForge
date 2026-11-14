@@ -54,6 +54,13 @@ let rep = import_into_reader(&*c.http(), "http://127.0.0.1:7890", &files).await;
   letters and digits) → one record: sources joined, first non-empty field, highest citation
   count, an arXiv PDF preferred. Helpers: `norm_doi`, `norm_arxiv`, `arxiv_from_url`,
   `find_doi`, `find_arxiv`.
+- `venue` (a journal's own open-access articles, PaperComposer's 期刊寫法): `sources_url` / `parse_sources` /
+  `Client::find_sources(name_or_issn, limit)` → `SourceInfo { id (S…), name, issn_l, issn, publisher, kind, works_count }`;
+  `works_url(&VenueQuery { source_id, from_date, kind: article|review, per_page })` (`primary_location.source.id`, `is_oa:true`,
+  `type`, `from_publication_date`, newest first — every filter in that one function) / `parse_works` / `Client::venue_works` →
+  `Work { record, kind, date, keywords, locations: [Location { is_oa, pdf_url, landing, license, version, host_kind, host }] }`;
+  `Work::pdf_copies()` = the open copies best first (publisher's published version, PubMed Central, other published, accepted,
+  arXiv last); `Client::download_copy(&location, dir)` = `download` of that one copy. Only the venue's name / id is sent.
 - `bibtex`: `key(r)` = `doi:<doi>`, else `arXiv:<id>`, else `<last name><year><first title word>`
   (`example2024gains`); characters `\cite` cannot take become `-`; `keys` / `bib` add `a`, `b`, …
   to repeats in a set. Values escape `& % $ # _ { } ~ ^ \`; the title is double-braced;
@@ -71,3 +78,6 @@ let rep = import_into_reader(&*c.http(), "http://127.0.0.1:7890", &files).await;
 
 `cargo test -p lore-research` — offline. The fixtures in `tests/fixtures/` have the shape of the
 real responses with synthetic content only.
+
+**Daily budgets.** A 429 whose `Retry-After` is hours away (OpenAlex without a key shares one free daily budget per IP address)
+is `Error::Quota(source, hours)` — "… 今天的免費額度用完了，約 N 小時後恢復" — returned at once instead of waited for.

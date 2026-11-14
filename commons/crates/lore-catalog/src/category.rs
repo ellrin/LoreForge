@@ -31,10 +31,10 @@ pub const TYPES: [(&str, &str); 11] = [
 ];
 
 /// (id, label) of the use categories.
-pub const USES: [(&str, &str); 4] = [("paper", "論文"), ("id-doc", "證件"), ("homework", "作業"), ("ticket", "票券收據")];
+pub const USES: [(&str, &str); 5] = [("paper", "論文"), ("id-doc", "證件"), ("homework", "作業"), ("ticket", "票券收據"), ("secret", "機密")];
 
 /// Use categories whose items are sensitive (thumbnails blurred, never sent anywhere).
-pub const SENSITIVE: [&str; 1] = ["id-doc"];
+pub const SENSITIVE: [&str; 2] = ["id-doc", "secret"];
 
 /// A rule hit at or above this counts as membership.
 pub const INCLUDE_MIN: f32 = 0.5;
@@ -124,6 +124,19 @@ const PAPER_MARKERS: [&str; 14] =
     ["abstract", "references", "journal", "proceedings", "conference", "doi", "keywords", "introduction", "ieee", "elsevier", "springer", "received", "accepted", "©"];
 
 const ID_WORDS: [&str; 14] = ["身分證", "身份證", "護照", "passport", "學生證", "健保卡", "駕照", "居留證", "idcard", "id card", "id_card", "id-card", "residence", "residencecard"];
+const SECRET_WORDS: [&str; 16] = [
+    "token", "password", "passwords", "passwd", "密碼", "密鑰", "金鑰", "recoverycodes", "backupcodes", "credentials", "secret", "secrets", "apikey", "privatekey", "idrsa", "seedphrase",
+];
+const SECRET_EXTS: [&str; 7] = ["pem", "key", "p12", "pfx", "kdbx", "keychain", "ovpn"];
+
+/// A file whose name says it holds a password, a token or a key (a paper or deck about tokens
+/// is not one). Such a file is never read, never sent anywhere and files under `Personal/Secrets`.
+pub fn secret_name(kind: &str, name: &str) -> bool {
+    let ext = name.rsplit_once('.').map(|x| x.1.to_lowercase()).unwrap_or_default();
+    SECRET_EXTS.contains(&ext.as_str())
+        || (!matches!(kind, "pdf" | "slides" | "project" | "dataset" | "latex") && name_has(&[name.to_string()], &SECRET_WORDS))
+}
+
 const HOMEWORK_WORDS: [&str; 5] = ["hw", "homework", "作業", "assignment", "習題"];
 const TICKET_WORDS: [&str; 11] = ["車票", "ticket", "receipt", "收據", "invoice", "發票", "boarding", "機票", "e-ticket", "訂位", "boardingpass"];
 
@@ -228,6 +241,7 @@ pub static RULES: &[Rule] = &[
         confidence: 0.95,
         test: |f| f.kind == "pdf" && f.pages == Some(1) && f.text.is_some_and(|t| t.trim().chars().count() < 20) && name_has(f.names, &ID_WORDS),
     },
+    Rule { category: "secret", reason: "name", confidence: 0.9, test: |f| f.names.iter().any(|n| secret_name(f.kind, n)) },
     Rule { category: "homework", reason: "name", confidence: 0.7, test: |f| f.kind != "dataset" && name_has(f.names, &HOMEWORK_WORDS) },
     Rule { category: "ticket", reason: "name", confidence: 0.7, test: |f| f.kind != "dataset" && f.kind != "project" && name_has(f.names, &TICKET_WORDS) },
 ];

@@ -89,6 +89,11 @@ pub struct Entry {
     /// expansion needed), `auto` (made by auto-extract), `needs-expansion`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Colour role of a variable in figures (equation figures colour each variable the same
+    /// everywhere, 3Blue1Brown style): an index into the palette in force — the app theme in an
+    /// app's interactive view, the deck's / paper's style in exports. Never a literal colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<u8>,
 }
 
 impl Entry {

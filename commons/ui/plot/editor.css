@@ -36,8 +36,8 @@
 .lp-mid { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .lp-stage { flex: 1; min-height: 0; overflow: auto; display: flex; background-color: color-mix(in srgb, var(--bg) 88%, #000); background-image: radial-gradient(var(--dot) 1px, transparent 1px); background-size: 16px 16px; }
 .lp-sheet { margin: auto; padding: 24px; }
-.lp-sheet svg { display: block; background: #fff; box-shadow: 0 8px 32px #0005; }
-.lp-sheet svg [data-part] { cursor: pointer; }
+.lp-sheet > svg { display: block; background: #fff; box-shadow: 0 8px 32px #0005; }
+.lp-sheet > svg [data-part] { cursor: pointer; }
 .lp-sheet svg .lp-cur > rect:first-child { }
 .lp-sheet .lp-cur { outline: 1.5px dashed var(--accent-text); outline-offset: 2px; }
 .lp-empty { color: var(--muted); font-size: 14px; padding: 40px; border: 1px dashed var(--line-strong); border-radius: 10px; }
@@ -104,3 +104,124 @@
   .lp-f > .k { width: 60px; }
   .lp-top { padding: 0 8px; gap: 4px; }
 }
+
+/* equation figures (equation.js): chrome only — the figure keeps its own style */
+.lp-eqtypes .lp-eqgrp { grid-column: 1 / -1; margin: 6px 0 0; color: var(--muted); font-weight: 600; }
+.lp-eqtypes .lp-eqgrp:first-child { margin-top: 0; }
+.lp-eqcmp { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 8px; }
+.lp-eqrow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.lp-eqrow > .k { font-size: 11.5px; color: var(--muted); }
+.lp-eqtex { overflow-x: hidden; overflow-y: hidden; line-height: 1.9; font-size: 12px; padding-bottom: 2px; color: var(--text); }
+.lp-eqtex .katex-display { margin: 0; text-align: left; }
+.lp-eqtex .katex-display > .katex { text-align: left; }
+.lp-eqcode { width: 100%; font: 12px/1.5 var(--mono); resize: vertical; }
+.lp-eqcode.bad { border-color: var(--err); }
+.lp-eqred { margin: 8px 0 4px; padding-left: 16px; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
+.lp-eqchecks { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+.lp-eqchecks li.ok { color: var(--ok); }
+.lp-eqchecks li.bad { color: var(--err); }
+.lp-eqchecks li > span:not(.lp-eqdetail) { color: var(--text); }
+.lp-eqdetail { display: block; padding-left: 16px; font: 11px var(--mono); color: var(--muted); }
+.lp-eqp { display: grid; grid-template-columns: 54px minmax(0, 1fr) 62px; align-items: center; gap: 6px; margin: 6px 0 0; min-height: 28px; }
+.lp-eqp > .lp-eqname { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-eqp > .set-input:not(.lp-eqnum) { grid-column: 2 / -1; padding: 4px 8px; font-size: 12.5px; }
+.lp-eqp:has(> .lp-eqat) { grid-template-columns: 84px minmax(0, 1fr); }
+.lp-eqp > .lp-eqat { font: 11.5px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lp-eqslide { position: relative; display: flex; align-items: center; min-width: 0; }
+.lp-eqslider { width: 100%; margin: 0; accent-color: var(--accent); }
+.lp-eqpaper { position: absolute; top: -7px; width: 8px; height: 8px; padding: 0; border: 0; border-radius: 2px 2px 50% 50%; background: var(--accent-text); cursor: pointer; }
+.lp-eqnum { width: 62px; padding: 3px 6px; font-size: 12.5px; }
+.lp-eqlims { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin: 0 0 4px; }
+.lp-eqlim { width: 58px; flex: none; padding: 1px 6px; font-size: 11px; color: var(--muted); }
+.lp-sens { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 6px; }
+.lp-srow { display: grid; grid-template-columns: 54px minmax(0, 1fr) 46px; align-items: center; gap: 6px; font-size: 13px; }
+.lp-strack { position: relative; height: 10px; border-radius: 3px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+.lp-szero { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line-strong); }
+.lp-sbar { position: absolute; top: 1px; bottom: 1px; border-radius: 2px; }
+.lp-sbar { background: var(--muted); }
+.lp-sbar.anim { background: var(--accent); }
+.lp-sval { font: 11.5px var(--mono); color: var(--muted); text-align: right; }
+
+/* the interactive view (eqlive.js): in-app, so it follows the theme; the exported figure never does */
+.lp-sheet.lp-sheet-live { margin: 0; padding: 14px; width: 100%; height: 100%; box-sizing: border-box; }
+.lp-live { position: relative; width: 100%; height: 100%; border-radius: 12px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }
+.lp-live canvas { display: block; touch-action: none; }
+.lp-live[data-mode="3d"] canvas { cursor: grab; }
+.lp-live[data-mode="3d"] canvas:active { cursor: grabbing; }
+.lp-live-head { position: absolute; left: 18px; top: 12px; right: 140px; color: var(--text); font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.lp-live-read { position: absolute; right: 22px; top: 12px; color: var(--text); font-size: 20px; font-variant-numeric: tabular-nums; pointer-events: none; }
+.lp-live-x { position: absolute; left: 64px; right: 28px; bottom: 6px; text-align: center; color: var(--text); font-size: 14px; pointer-events: none; }
+.lp-live-y { position: absolute; left: 4px; top: 50%; transform: translateY(-50%) rotate(-90deg); transform-origin: left center; translate: 14px 0; color: var(--text); font-size: 14px; white-space: nowrap; pointer-events: none; }
+.lp-viewseg { margin-right: 8px; }
+.lp-viewseg button { padding: 2px 10px; font-size: 12px; }
+.lp-marbles { margin-right: 8px; font-size: 12px; }
+.lp-sens .lp-sbar { opacity: 0.9; }
+.lp-live-ax3 { position: absolute; transform: translate(-50%, -50%); font-size: 15px; pointer-events: none; white-space: nowrap; }
+.lp-eqtex .katex { white-space: normal; }
+
+/* ── simulation scenes (eqsim.js): the live view, theme colours ── */
+.lp-sim { position: relative; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(420px, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; gap: 6px 22px;
+  width: 100%; height: 100%; padding: 14px 20px 12px; box-sizing: border-box; background: var(--bg); color: var(--text); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.4px); background-size: 24px 24px; }
+.lp-sim-top { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 16px; min-width: 0; }
+.lp-sim-head { flex: 1; min-width: 0; font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lp-sim-step { color: var(--faint); font: 12px var(--mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; }
+.lp-sim-main { position: relative; min-height: 0; }
+.lp-sim-cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.lp-sim-side { display: flex; flex-direction: column; gap: 12px; min-height: 0; min-width: 0; padding-right: 16px; }
+/* one grid for all rows (subgrid): the LaTeX column is as wide as the widest term, the columns line up */
+.lp-sim-rows { display: grid; grid-template-columns: 18px 28px minmax(90px, 150px) minmax(max-content, 1fr) 100px 66px; align-content: start; row-gap: 4px; column-gap: 10px; padding-top: 8px; min-width: 0; flex: 1 1 auto; }
+.lp-sim-row { position: relative; grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; column-gap: 10px; padding: 9px 4px; border-radius: 8px; }
+.lp-sim-row.off .lp-sim-tex, .lp-sim-row.off .lp-sim-val, .lp-sim-row.off .lp-sim-pull { opacity: .38; }
+.lp-sim-on { width: 14px; height: 14px; padding: 0; border-radius: 50%; border: 2px solid var(--c); background: transparent; cursor: pointer; }
+.lp-sim-on[aria-pressed="true"] { background: var(--c); box-shadow: 0 0 10px var(--c); }
+.lp-sim-on:disabled { cursor: default; }
+.lp-sim-w { font-size: 20px; text-align: center; }
+.lp-sim-sl { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; }
+.lp-sim-sl input { width: 100%; min-width: 0; accent-color: var(--c); margin: 0; }
+.lp-sim-wv { font: 12px var(--mono, ui-monospace, monospace); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 32px; text-align: right; }
+.lp-sim-tex { font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lp-sim-pull { width: 100px; height: 24px; display: block; }
+.lp-sim-val { font: 14px var(--mono, ui-monospace, monospace); text-align: right; font-variant-numeric: tabular-nums; }
+.lp-sim-rm { position: absolute; right: -14px; top: 50%; translate: 0 -50%; width: 16px; height: 16px; padding: 0; border: 0; background: none; color: var(--faint); cursor: pointer; font-size: 14px; line-height: 1; opacity: 0; }
+.lp-sim-row:hover .lp-sim-rm, .lp-sim-rm:focus-visible { opacity: 1; }
+.lp-sim-add { grid-column: 1 / -1; justify-self: start; margin: 4px 0 0 2px; }
+.lp-sim-lossbox { position: relative; flex: 0 0 38%; min-height: 90px; }
+
+.lp-sim-loss { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.lp-sim-bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; }
+.lp-sim-menu { position: absolute; z-index: 5; display: flex; flex-direction: column; min-width: 180px; padding: 4px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 10px 30px #0008; }
+.lp-sim-menu button { text-align: left; padding: 6px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); cursor: pointer; font-size: 15px; }
+.lp-sim-menu button:hover { background: var(--surface-hover, var(--surface)); }
+.lp-sim[data-role="view"] { border-radius: 0; box-shadow: none; padding: 3vh 3vw; gap: 1vh 2.4vw; }
+.lp-sim[data-role="view"] .lp-sim-head { font-size: clamp(18px, 2.4vw, 40px); }
+.lp-sim[data-role="view"] .lp-sim-rows { grid-template-columns: 1.2em 1.6em minmax(4em, 7em) minmax(max-content, 1fr) 6em 4.4em; font-size: clamp(13px, 1.25vw, 24px); }
+.lp-sim[data-role="view"] .lp-sim-w, .lp-sim[data-role="view"] .lp-sim-tex { font-size: 1.15em; }
+.lp-sim[data-role="view"] .lp-sim-val, .lp-sim[data-role="view"] .lp-sim-wv { font-size: .9em; }
+.lp-sim[data-role="view"] .lp-sim-on { width: .9em; height: .9em; }
+.lp-sim[data-role="view"] .lp-sim-pull { width: 6em; height: 1.5em; }
+.lp-sim-row.algo .lp-sim-on, .lp-sim-row.algo .lp-sim-w, .lp-sim-row.algo .lp-sim-sl, .lp-sim-row.algo .lp-sim-rm { visibility: hidden; }
+.lp-sim-curve { grid-template-rows: minmax(0, 1fr) auto; }
+.lp-sim-curvebox .lp-live { position: absolute; inset: 0; box-shadow: none; }
+.lp-sim-params { align-content: center; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+.lp-sim-prow { display: grid; grid-template-columns: 2.4em minmax(0, 1fr) 4em; align-items: center; gap: 10px; font-size: 18px; }
+.lp-sim-prow input { width: 100%; accent-color: var(--c); }
+.lp-sim-meter { display: block; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.lp-sim-meter i { display: block; height: 100%; width: 0; background: var(--c); box-shadow: 0 0 8px var(--c); transition: width .25s; }
+.lp-sim-row.off .lp-sim-meter i { background: var(--line-strong); box-shadow: none; }
+.lp-sim-close { margin-left: auto; }
+.lp-sim-bar .grow { flex: 1; }
+.lp-sim-names { font: 12px var(--mono, ui-monospace, monospace); color: var(--muted); padding: 4px 6px 2px; }
+.lp-sim-expr { margin: 4px; font: 14px var(--mono, ui-monospace, monospace); }
+.lp-sim-expr[aria-invalid="true"] { border-color: var(--err); }
+.lp-sim-err { color: var(--err); font-size: 12px; padding: 0 6px 4px; max-width: 280px; }
+.lp-sim-one { font: 600 13px var(--mono, ui-monospace, monospace); min-width: 34px; }
+/* narrow (the editor's sheet, a small window): the animation on top, the rows and the stack side by side below */
+.lp-sim-narrow { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto auto; }
+.lp-sim-narrow .lp-sim-side { flex-direction: row; align-items: stretch; min-height: 150px; }
+.lp-sim-narrow .lp-sim-rows { flex: 1 1 62%; }
+.lp-sim-narrow .lp-sim-lossbox { flex: 1 1 38%; }
+.lp-sim-narrow .lp-sim-rows { grid-template-columns: 18px 26px minmax(80px, 130px) minmax(max-content, 1fr) 90px 60px; }
+.lp-sim-narrow .lp-sim-pull { width: 90px; }
+.lp-sim-rows.one { grid-template-columns: minmax(0, 1fr) 70px; }
+.lp-sim-rows.one .lp-sim-on, .lp-sim-rows.one .lp-sim-w, .lp-sim-rows.one .lp-sim-sl, .lp-sim-rows.one .lp-sim-pull { display: none; }

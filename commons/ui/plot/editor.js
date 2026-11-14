@@ -7,7 +7,11 @@
 //     macros,          // KaTeX macros (the document's notation registry)
 //     api,             // "/plot/api" (null: demo, no server — CSV/TSV/JSON in the page, SVG export only)
 //     styles,          // style list (default: GET <api>/styles, or styles/*.json next to this file)
-//     save,            // async ({ spec, svg, w, h }) → true | message; 完成 calls it (null: no 完成)
+//     kind,            // "equation": start from the equation catalogue (docs/plot.md §10) instead of data
+//     latex,           // with kind "equation": a paper's LaTeX to start 「從論文的式子」 with
+//     notation,        // the document's notation entries (lore-notation): variables' colour roles come from them
+//     save,            // async ({ spec, svg, w, h, frames }) → true | message; 完成 calls it (null: no 完成);
+//                      //   frames(n) → the SVGs of an equation figure's animation (LorePlot.eq.frameSvgs)
 //   });                // → { spec, svg } when saved, null when closed
 //
 // Editor chrome uses the app theme (theme.css tokens, base.css widgets); the figure never does.
@@ -143,7 +147,9 @@
 
   async function openEditor(opts, resolve) {
     const api = opts.api === undefined ? (location.protocol.startsWith("http") && !/\/commons\/ui\//.test(location.pathname) ? "/plot/api" : null) : opts.api;
-    const S = { spec: null, pi: 0, hist: [], fut: [], zoom: "fit", styleList: [], defStyle: "clean", last: null, open: { data: true, type: true } };
+    const isEq = () => S.spec?.panels?.[S.pi]?.type === "equation";
+    const eqMode = () => (!S.spec ? opts.kind === "equation" || opts.spec?.kind === "equation" : isEq());
+    const S = { view: opts.view ?? "live", dim: "2d", spec: null, pi: 0, hist: [], fut: [], zoom: "fit", styleList: [], defStyle: "clean", last: null, open: { data: true, type: true } };
     const dlg = h("dialog", { class: "lp-editor", "aria-label": "繪圖" });
     document.body.append(dlg);
 
@@ -165,7 +171,11 @@
     const zoomSel = h("select", { class: "lp-zoom", "aria-label": "縮放" }, ...[["fit", "符合視窗"], ["1", "實際大小"], ["1.5", "150%"], ["2", "200%"], ["3", "300%"]].map(([v, t]) => h("option", { value: v }, t)));
     const info = h("span", { class: "lp-info" });
     const warn = h("span", { class: "lp-warn" });
-    const status = h("footer", { class: "statusbar lp-status" }, info, warn, h("span", { class: "grow" }), zoomSel);
+    // equation figures: 互動 = the interactive view in the app theme (eqlive.js); 輸出 = the figure file as exported
+    const viewSeg = h("div", { class: "seg lp-viewseg", hidden: true });
+    const dimSeg = h("div", { class: "seg lp-viewseg", hidden: true });
+    const marbleB = h("button", { type: "button", class: "ghost lp-marbles", hidden: true }, ic("play"), "滾珠");
+    const status = h("footer", { class: "statusbar lp-status" }, info, warn, h("span", { class: "grow" }), dimSeg, marbleB, viewSeg, zoomSel);
     const assist = h("aside", { class: "lp-assist", "aria-label": "助手", hidden: true });
     const body = h("div", { class: "lp-body" }, left, h("div", { class: "lp-mid" }, stage, status), assist, right);
     dlg.append(top, body);
@@ -212,6 +222,7 @@
 
     await LP.data();
     S.spec = opts.spec ? clone(opts.spec) : null;
+    if (S.spec?.panels?.some((p) => p.type === "equation")) await LP.eqEditor?.assignRoles?.(api, S.spec, opts.notation);
     if (S.spec && !S.spec.panels?.length) S.spec = null;
 
     // ── history ──
@@ -251,8 +262,71 @@
       timer = setTimeout(draw, 60);
     }
     const style = () => LP.styleFor(S.spec?.style ?? S.defStyle, S.styleList, S.spec?.set);
+    let live = null;
+    function liveOff() {
+      if (!live) return;
+      live.destroy();
+      live = null;
+      sheet.classList.remove("lp-sheet-live");
+    }
+    function viewBar() {
+      const eq = isEq();
+      const sim = eq && !!S.spec.panels[S.pi].eq.sim;
+      viewSeg.hidden = !eq;
+      dimSeg.hidden = !eq || sim || S.view !== "live";
+      marbleB.hidden = dimSeg.hidden || S.dim !== "3d";
+      zoomSel.hidden = eq && S.view === "live";
+      const segOf = (el, opts, cur, set) => {
+        el.textContent = "";
+        for (const [v, t] of opts) el.append(h("button", { type: "button", "aria-pressed": String(cur === v), onclick: () => { set(v); viewBar(); clearTimeout(timer); timer = setTimeout(draw, 10); } }, t));
+      };
+      segOf(viewSeg, [["live", "互動"], ["file", "輸出"]], S.view, (v) => { S.view = v; buildRight(); });
+      segOf(dimSeg, [["2d", "2D"], ["3d", "3D"]], S.dim, (v) => { S.dim = v; live?.mode(v); });
+    }
+    marbleB.onclick = () => live?.marbles();
     async function draw() {
-      if (!S.spec) { sheet.innerHTML = ""; sheet.append(h("div", { class: "lp-empty" }, "左邊匯入或貼上資料")); sheet.style.cssText = ""; return; }
+      viewBar();
+      const simP = S.spec && isEq() ? S.spec.panels[S.pi].eq.sim : null;
+      if (simP && S.view === "live" && LP.eqSim) {
+        // a simulation: the live run; what the author changes there (weights, terms, target) is kept in the spec
+        const key = JSON.stringify(simP);
+        if (!live || !live.sim) {
+          liveOff();
+          sheet.innerHTML = "";
+          sheet.style.cssText = "";
+          sheet.classList.add("lp-sheet-live");
+          live = LP.eqSim.mount(sheet, null, {
+            role: "full",
+            // a finished edit (a weight let go, a switch, a term, a dragged target, ↺): one undo step, the run goes on
+            onEdit() {
+              if (!live) return;
+              live.key = JSON.stringify(live.sim());
+              change((sp) => { sp.panels[S.pi].eq.sim = JSON.parse(live.key); }, "模擬");
+            },
+          });
+          live.key = null;
+        }
+        if (live.key !== key) { live.key = key; live.update(S.spec); live.key = key; }
+        info.textContent = "";
+        warn.textContent = "";
+        return;
+      }
+      if (live?.sim) liveOff();
+      if (S.spec && isEq() && S.view === "live" && LP.eqLive) {
+        if (!live) {
+          sheet.innerHTML = "";
+          sheet.style.cssText = "";
+          sheet.classList.add("lp-sheet-live");
+          live = LP.eqLive.mount(sheet, {});
+          live.mode(S.dim);
+        }
+        live.update(S.spec);
+        info.textContent = S.dim === "3d" ? "拖曳旋轉" : "";
+        warn.textContent = "";
+        return;
+      }
+      liveOff();
+      if (!S.spec) { sheet.innerHTML = ""; sheet.append(h("div", { class: "lp-empty" }, eqMode() ? "左邊選一個式子" : "左邊匯入或貼上資料")); sheet.style.cssText = ""; return; }
       const my = ++tok;
       let r;
       try {
@@ -306,6 +380,11 @@
     // ── left: data and chart type ──
     function buildLeft() {
       left.textContent = "";
+      if (eqMode() && LP.eqEditor) {
+        left.append(...LP.eqEditor.left(K));
+        if (typeof window.paintIcons === "function") window.paintIcons(left);
+        return;
+      }
       const bData = block(null, "資料", "data", S.spec ? Object.keys(S.spec.data ?? {}).length : 0);
       const fileIn = h("input", { type: "file", hidden: true, accept: ".csv,.tsv,.txt,.json,.xlsx,.tex,text/csv,application/json" });
       fileIn.onchange = () => { if (fileIn.files[0]) importFile(fileIn.files[0]); fileIn.value = ""; };
@@ -331,7 +410,7 @@
       if (S.spec) {
         const bType = block(null, "種類", "type");
         const grid = h("div", { class: "lp-types" });
-        for (const t of LP.TYPES) {
+        for (const t of LP.TYPES.filter((x) => x.group !== "equation")) {
           const b = h("button", { type: "button", "aria-pressed": String(p?.type === t.id) }, h("span", { class: "lp-tico" }, ic(TYPE_ICON[t.id] ?? "chart")), h("span", {}, t.label));
           b.onclick = () => setType(t.id);
           grid.append(b);
@@ -592,8 +671,11 @@
       const mergeB = h("button", { type: "button", class: "ghost" }, ic("plus"), "併入其他圖…");
       mergeB.onclick = () => pickFigure(mergeB);
       bL.body.append(mergeB);
-      right.append(bL);
+      // the page size belongs to the file: shown with 輸出, not in the interactive view
+      if (!(p.type === "equation" && S.view === "live")) right.append(bL);
 
+      if (p.type === "equation" && LP.eqEditor) right.append(...LP.eqEditor.right(K));
+      else {
       // 02 格
       const bP = block("02", "格", "panel", sp.panels.length > 1 ? `${S.pi + 1}/${sp.panels.length}` : "");
       // panel chips: click to edit, drag to reorder
@@ -619,7 +701,7 @@
       const addB = iconBtn("plus", "加一格", () => menu(addB, [
         { label: "複製這一格", run: () => change((s2) => { const cp = clone(s2.panels[S.pi]); cp.title = ""; s2.panels.splice(S.pi + 1, 0, cp); growGrid(s2); S.pi += 1; }, "structure") },
         { sep: true },
-        ...LP.TYPES.map((t) => ({ label: t.label, run: () => change((s2) => { const tb = s2.data[s2.panels[S.pi].data] ?? Object.values(s2.data)[0]; const np = LP.starterPanel(t.id, tb); np.data = s2.panels[S.pi].data; s2.panels.splice(S.pi + 1, 0, np); growGrid(s2); S.pi += 1; }, "structure") })),
+        ...LP.TYPES.filter((x) => x.group !== "equation").map((t) => ({ label: t.label, run: () => change((s2) => { const tb = s2.data[s2.panels[S.pi].data] ?? Object.values(s2.data)[0]; const np = LP.starterPanel(t.id, tb); np.data = s2.panels[S.pi].data; s2.panels.splice(S.pi + 1, 0, np); growGrid(s2); S.pi += 1; }, "structure") })),
       ]), "ico small");
       tabs.append(addB);
       if (sp.panels.length > 1) tabs.append(iconBtn("trash", "刪除這格", () => change((s2) => { s2.panels.splice(S.pi, 1); S.pi = Math.max(0, S.pi - 1); }, "structure"), "ico small"));
@@ -642,15 +724,18 @@
       // 03 系列
       if (!["heatmap", "km", "contour", "surface", "scatter3d"].includes(p.type)) right.append(seriesBlock(p, st));
 
-      // 04 軸
-      if (!["radar", "pie", "surface", "scatter3d"].includes(p.type)) {
+      }
+      // 04 軸 (a simulation draws its own page: no axes, no legend)
+      const simP = p.type === "equation" && !!p.eq?.sim;
+      if (!["radar", "pie", "surface", "scatter3d"].includes(p.type) && !simP) {
         const bA = block("04", "軸", "axes");
+        const clipY = p.type === "equation" && !!LP.eqClipped?.(p, st);
         for (const [k, nm] of [["xaxis", "x"], ["yaxis", "y"]]) {
           const ax = (p[k] ??= {});
           const g = h("div", { class: "lp-group" }, h("div", { class: "lp-gh" }, `${nm} 軸`));
           g.append(row("標籤", text(() => ax.label, (v) => (ax.label = v), "可寫 $\\alpha$")),
             row("單位", text(() => ax.unit, (v) => (ax.unit = v || undefined), "mm")),
-            row("範圍", number(() => ax.min, (v) => (ax.min = v ?? undefined)), h("span", { class: "lp-x" }, "到"), number(() => ax.max, (v) => (ax.max = v ?? undefined))),
+            row("範圍", number(() => ax.min, (v) => (ax.min = v ?? undefined), { ph: clipY && k === "yaxis" ? "已裁切" : undefined }), h("span", { class: "lp-x" }, "到"), number(() => ax.max, (v) => (ax.max = v ?? undefined), { ph: clipY && k === "yaxis" ? "已裁切" : undefined })),
             row("刻度", text(() => (ax.ticks ?? []).join(", "), (v) => (ax.ticks = v.trim() ? v.split(/[,\s]+/).map(Number).filter(Number.isFinite) : undefined), "自動，或 0, 0.5, 1")),
             row("格式", select(() => ax.fmt, (v) => (ax.fmt = v ?? undefined), [[null, "自動"], [".1f", "0.1"], [".2f", "0.12"], [".3f", "0.123"], ["%", "百分比"], [".1%", "12.3%"], ["d", "整數"], ["e", "10ⁿ"]])),
             row("尺度", select(() => ax.scale ?? (ax.log ? "log" : "linear"), (v) => { ax.scale = v === "linear" ? undefined : v; delete ax.log; if (v === "stretch" && !ax.segments) ax.segments = [[0.8, 1, 3]]; }, [["linear", "線性"], ["log", "對數 log₁₀"], ["symlog", "對稱對數"], ["stretch", "分段拉伸／斷軸"]], { structure: true })));
@@ -676,8 +761,9 @@
         row("欄數", number(() => lg.cols, (v) => (lg.cols = v ? Math.max(1, Math.round(v)) : undefined), { step: 1, min: 1 })),
         row("字級 pt", number(() => lg.size, (v) => (lg.size = v ?? undefined), { step: 0.5 })),
         row("標題", text(() => lg.title, (v) => (lg.title = v || undefined))));
-      right.append(bG);
+      if (!simP) right.append(bG);
 
+      if (p.type !== "equation") {
       // 06 選項 (type-specific)
       const ob = optsBlock(p);
       if (ob) right.append(ob);
@@ -698,6 +784,7 @@
         right.append(bI);
       }
 
+      }
       // 09 樣式（這張圖自己的）
       right.append(styleBlock(st));
       // caption (PaperComposer)
@@ -1013,6 +1100,7 @@
         { label: "SVG", icon: "image", run: () => go("svg") },
         { label: "PNG 300 dpi", icon: "image", run: () => go("png", 300) },
         { label: "PNG 600 dpi", icon: "image", run: () => go("png", 600) },
+        ...(isEq() && api ? [{ label: "GIF（動畫）", icon: "image", run: () => exportGif(anchor) }] : []),
         { sep: true },
         { label: "規格 JSON", icon: "code", run: () => { const a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(S.spec, null, 2)], { type: "application/json" })), download: "figure.plot.json" }); document.body.append(a); a.click(); a.remove(); } },
       ]);
@@ -1024,7 +1112,10 @@
       doneB.textContent = "儲存中…";
       try {
         const r = await finalSvg();
-        const ok = await opts.save({ spec: clone(S.spec), svg: r.svg, w: r.w, h: r.h });
+        const frames = isEq() ? (n) => LP.eq.frameSvgs(clone(S.spec), n, { styles: S.styleList, macros: opts.macros }) : undefined;
+        // GIF frames paced by change, per-frame delays, dithered heatmaps (sims and sweeps alike)
+        const gifFrames = isEq() ? () => LP.eq.gifFrames(clone(S.spec), { styles: S.styleList, macros: opts.macros }) : undefined;
+        const ok = await opts.save({ spec: clone(S.spec), svg: r.svg, w: r.w, h: r.h, frames, gifFrames });
         if (ok === true || ok === undefined) return close({ spec: S.spec, svg: r.svg });
         if (typeof ok === "string") toast(ok, { err: true, ms: 6000 });
       } catch (e) {
@@ -1032,6 +1123,39 @@
       }
       doneB.disabled = false;
       doneB.textContent = label;
+    };
+
+    // ── equation figures (equation.js): what its blocks need from here ──
+    async function exportGif(btn) {
+      if (!S.spec) return;
+      const lbl = btn?.lastChild;
+      const was = lbl?.textContent;
+      if (btn) btn.disabled = true;
+      if (lbl && btn?.tagName === "BUTTON") lbl.textContent = "產生中…";
+      try {
+        const blob = await LP.eq.gif(api, S.spec, { styles: S.styleList, macros: opts.macros });
+        const a = h("a", { href: URL.createObjectURL(blob), download: `${(opts.title || "equation").replace(/\.[a-z]+$/i, "")}.gif` });
+        document.body.append(a);
+        a.click();
+        a.remove();
+      } catch (e) {
+        toast(e.message, { err: true, ms: 7000 });
+      }
+      if (btn) btn.disabled = false;
+      if (lbl && was != null && btn?.tagName === "BUTTON") lbl.textContent = was;
+    }
+    const K = {
+      S, api, h, ic, block, row, number, text, select, check, seg, change, toast, menu, exportGif, sheet, right, left,
+      get macros() { return opts.macros; },
+      /** A paper's LaTeX handed in (LoreReader's 動起來 when the model could not): the left panel starts with it. */
+      latex: opts.latex ?? "",
+      panel, refresh: (r) => refresh(r), live: () => live,
+      /** Start (or replace) the figure with an equation spec; one undo step. */
+      async useSpec(spec) {
+        await LP.eqEditor?.assignRoles?.(api, spec, opts.notation);
+        if (!S.spec) { S.spec = spec; S.hist.push("null"); S.pi = 0; refresh(true); return; }
+        change((sp) => replaceAll(sp, { ...spec, style: sp.style ?? spec.style, size: sp.size ?? spec.size }), "structure");
+      },
     };
 
     S.zoom = "fit";

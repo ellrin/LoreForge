@@ -1,0 +1,215 @@
+{
+ "about": "Simulation term values (docs/plot.md §11): simcore.js (tests/simcore.test.js) and Rust equation::sim both reproduce these. theta: fit1d [mu, log sigma], classes z.",
+ "values": [
+  {
+   "name": "fit1d gaussian target",
+   "sim": {
+    "scene": "fit1d",
+    "x": [
+     -6,
+     6
+    ],
+    "target": {
+     "mix": [
+      {
+       "w": 1,
+       "mu": 1,
+       "sigma": 0.8
+      }
+     ]
+    },
+    "samples": {
+     "n": 50,
+     "seed": 7
+    },
+    "terms": [
+     {
+      "kind": "kl_pq",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "ce",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "kl_qp",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "nll",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "moment",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "anchor",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "entropy",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "expr",
+      "w": 1,
+      "expr": "(mu - 1)^2 + sigma"
+     }
+    ]
+   },
+   "theta": [
+    0,
+    0.1823215567939546
+   ],
+   "expect": [
+    0.4749095538486979,
+    1.6707045318685076,
+    1.000775610872059,
+    1.7981469257680793,
+    1.16,
+    1,
+    -1.6012600899986273,
+    2.2
+   ]
+  },
+  {
+   "name": "fit1d bimodal",
+   "sim": {
+    "scene": "fit1d",
+    "x": [
+     -7,
+     7
+    ],
+    "target": {
+     "mix": [
+      {
+       "w": 0.3,
+       "mu": -2,
+       "sigma": 0.5
+      },
+      {
+       "w": 0.7,
+       "mu": 1.5,
+       "sigma": 0.9
+      }
+     ]
+    },
+    "samples": {
+     "n": 80,
+     "seed": 3
+    },
+    "terms": [
+     {
+      "kind": "kl_pq",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "ce",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "kl_qp",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "nll",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "moment",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "anchor",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "entropy",
+      "w": 1,
+      "mu0": -1
+     },
+     {
+      "kind": "mse",
+      "w": 1,
+      "mu0": -1
+     }
+    ]
+   },
+   "theta": [
+    0.5,
+    -0.35667494393873245
+   ],
+   "expect": [
+    2.1146838757716475,
+    3.8449166364860172,
+    0.9398646723179298,
+    4.150317456166105,
+    1.196936255789507,
+    2.25,
+    -1.0622635892659402,
+    0.27033072499061056
+   ]
+  },
+  {
+   "name": "classes",
+   "sim": {
+    "scene": "classes",
+    "classes": {
+     "K": 4,
+     "y": 2
+    },
+    "terms": [
+     {
+      "kind": "ce",
+      "w": 1
+     },
+     {
+      "kind": "smooth",
+      "w": 1,
+      "eps": 0.2
+     },
+     {
+      "kind": "l2",
+      "w": 1
+     },
+     {
+      "kind": "entropy",
+      "w": 1
+     },
+     {
+      "kind": "expr",
+      "w": 1,
+      "expr": "sum(q^2) + z[y]"
+     }
+    ]
+   },
+   "theta": [
+    0.1,
+    0.5,
+    -0.2,
+    0.3
+   ],
+   "expect": [
+    1.0938128239427083,
+    1.1588128239427085,
+    0.195,
+    -1.3548908169792337,
+    0.7654520849110469
+   ]
+  }
+ ]
+}

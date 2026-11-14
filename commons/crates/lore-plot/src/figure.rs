@@ -94,6 +94,16 @@ pub fn spec_in_png(png: &[u8]) -> Option<Spec> {
     Spec::from_json(&export::spec_from_png(png)?).ok()
 }
 
+/// The spec an equation GIF made here carries (application extension `LOREPLOT1.0`).
+pub fn spec_in_gif(gif: &[u8]) -> Option<Spec> {
+    Spec::from_json(&crate::equation::gif::spec_from_gif(gif)?).ok()
+}
+
+/// The spec a slide picture carries, PNG or GIF.
+pub fn spec_in_picture(bytes: &[u8]) -> Option<Spec> {
+    spec_in_png(bytes).or_else(|| spec_in_gif(bytes))
+}
+
 /// The `figure` environment PaperComposer inserts (same shape as its 新增圖…):
 /// registered `\label`, caption above or below, `\linewidth` wide.
 pub fn figure_block(file: &str, caption: &str, label: &str, caption_above: bool) -> String {

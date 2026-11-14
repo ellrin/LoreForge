@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::{Backend, ErrorKind, Event, ListenOptions, Quality, Sink, SpeakRequest, VoiceInfo};
+use crate::{Backend, ErrorKind, Event, ListenOptions, Permission, Quality, Sink, SpeakRequest, Status, VoiceInfo, VoicePermissions};
 
 pub const NAME: &str = "lore-voice-helper";
 /// Path of the helper `build.rs` compiled (none off macOS or without swiftc).
@@ -148,10 +148,13 @@ impl HelperBackend {
         Ok(v["text"].as_str().unwrap_or("").to_string())
     }
 
-    /// `(microphone, speech)`: "granted" | "denied" | "undetermined" (asks nothing).
-    pub fn permissions(&self) -> Result<(String, String), String> {
-        let v = self.ask(json!({ "cmd": "permissions" }), Duration::from_secs(5))?;
-        Ok((v["microphone"].as_str().unwrap_or("").into(), v["speech"].as_str().unwrap_or("").into()))
+    /// Microphone, speech and Personal Voice; `ask`: the helper first asks each of these that
+    /// was never asked, one after another (waits for the author's answers).
+    pub fn permissions(&self, ask: &[Permission]) -> Result<VoicePermissions, String> {
+        let which: Vec<&str> = VoicePermissions::COVERS.into_iter().filter(|p| ask.contains(p)).map(|p| p.id()).collect();
+        let cmd = if which.is_empty() { json!({ "cmd": "permissions" }) } else { json!({ "cmd": "permissions", "request": true, "which": which }) };
+        let v = self.ask(cmd, Duration::from_secs(if which.is_empty() { 5 } else { 600 }))?;
+        Ok(permissions_line(&v))
     }
 }
 
@@ -188,6 +191,12 @@ pub fn parse(v: &Value) -> Option<Event> {
         },
         _ => return None,
     })
+}
+
+/// The helper's `permissions` line.
+pub fn permissions_line(v: &Value) -> VoicePermissions {
+    let st = |k: &str| v[k].as_str().map(Status::from_word).unwrap_or(Status::Unsupported);
+    VoicePermissions { microphone: st("microphone"), speech: st("speech"), personal_voice: st("personal_voice") }
 }
 
 fn personal_status(s: &str) -> crate::PersonalVoice {
@@ -257,6 +266,10 @@ impl Backend for HelperBackend {
         Ok(personal_status(v["status"].as_str().unwrap_or("")))
     }
 
+    fn permissions(&self, ask: &[Permission]) -> Result<VoicePermissions, String> {
+        HelperBackend::permissions(self, ask)
+    }
+
     fn warm(&self, r: &SpeakRequest) {
         let _ = self.send(json!({ "cmd": "warm", "voice": r.voice, "language": r.language }));
     }
@@ -282,6 +295,9 @@ mod tests {
         assert_eq!(personal_status("authorized"), crate::PersonalVoice::Authorized);
         assert_eq!(personal_status("not_determined"), crate::PersonalVoice::NotDetermined);
         assert_eq!(personal_status("whatever"), crate::PersonalVoice::Unsupported);
+        let v: Value = serde_json::from_str(r#"{"ev":"permissions","req":2,"microphone":"granted","speech":"not_determined","personal_voice":"restricted"}"#).unwrap();
+        assert_eq!(permissions_line(&v), VoicePermissions { microphone: Status::Granted, speech: Status::NotDetermined, personal_voice: Status::Restricted });
+        assert_eq!(permissions_line(&json!({ "ev": "permissions" })), VoicePermissions::UNSUPPORTED);
     }
 
     #[test]

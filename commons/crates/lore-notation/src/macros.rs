@@ -48,6 +48,8 @@ const RESERVED: &[&str] = &[
     "vert", "Vert", "top", "bot", "dagger", "ddagger", "ell", "hbar", "imath", "jmath", "aleph", "Re", "Im", "wp", "angle", "triangle",
     "square", "checkmark", "coloneqq", "triangleq", "S", "P", "AA", "aa", "ae", "AE", "o", "O", "l", "L", "i", "j", "c", "d", "b", "t", "u", "v",
     "H", "k", "r", "G", "ss",
+    // draft marks (crate::pending)
+    "pending", "pendingcell", "pendingpara", "pendingdep",
 ];
 
 /// A valid, non-clobbering macro name (without backslash).

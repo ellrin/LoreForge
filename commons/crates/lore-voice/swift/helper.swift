@@ -4,7 +4,9 @@
 // Commands                                              Events
 // {"cmd":"voices","req":1}                              {"ev":"voices","req":1,"voices":[{id,name,language,quality}]}
 // {"cmd":"personal_voice","req":5,"ask":false}          {"ev":"personal_voice","req":5,"status":"authorized|denied|not_determined|unsupported"} (ask: the system's prompt when not determined)
-// {"cmd":"permissions","req":2}                         {"ev":"permissions","req":2,"microphone":"granted|denied|undetermined","speech":…}
+// {"cmd":"permissions","req":2,"request":false,"which":[…]} {"ev":"permissions","req":2,"microphone","speech","personal_voice"}
+//   (each granted|denied|not_determined|restricted|unsupported; request: first ask, one after another, every one
+//   in `which` (default all three) that was never asked — answered ones are never asked again)
 // {"cmd":"speak","id":5,"text","voice","rate","pitch","language"} {"ev":"speak_start","id":5} {"ev":"word","id":5,"start","len"} {"ev":"speak_end","id":5,"cancelled":false}
 //   (word: the UTF-16 range of `text` about to be spoken)
 // {"cmd":"stop_speaking"}
@@ -94,6 +96,16 @@ func personalVoice(req: Any, ask: Bool) {
     }
 }
 
+/// Run `then` once a Personal Voice id can be used: a new helper process does not see the author's
+/// Personal Voices until it asks for them, so a saved Personal Voice would fall back to the system
+/// voice after every launch. Asking again is silent once the author has allowed it.
+func withPersonalVoice(_ voice: String?, then: @escaping () -> Void) {
+    guard #available(macOS 14, *), let v = voice, v.contains("personalvoice"),
+          AVSpeechSynthesisVoice(identifier: v) == nil,
+          AVSpeechSynthesizer.personalVoiceAuthorizationStatus != .denied else { then(); return }
+    AVSpeechSynthesizer.requestPersonalVoiceAuthorization { _ in DispatchQueue.main.async { then() } }
+}
+
 /// `rate` is a multiplier: 1 = the system's normal speed.
 func utterance(_ text: String, voice: String?, rate: Double, language: String?, pitch: Double = 1) -> AVSpeechUtterance {
     let u = AVSpeechUtterance(string: text)
@@ -120,9 +132,11 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     func speak(id: Int, text: String, voice: String?, rate: Double, language: String?, pitch: Double) {
-        let u = utterance(text, voice: voice, rate: rate, language: language, pitch: pitch)
-        ids[ObjectIdentifier(u)] = id
-        synth.speak(u)
+        withPersonalVoice(voice) {
+            let u = utterance(text, voice: voice, rate: rate, language: language, pitch: pitch)
+            self.ids[ObjectIdentifier(u)] = id
+            self.synth.speak(u)
+        }
     }
 
     func stop() { synth.stopSpeaking(at: .immediate) }
@@ -150,6 +164,10 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     /// Load `voice` now (into a throwaway buffer, no sound), so the first sentence spoken with
     /// it starts without the voice's loading time.
     func warm(voice: String?, language: String?) {
+        withPersonalVoice(voice) { self.warmNow(voice: voice, language: language) }
+    }
+
+    private func warmNow(voice: String?, language: String?) {
         let s = AVSpeechSynthesizer()
         warmSynth = s
         s.write(utterance("嗯。", voice: voice, rate: 1, language: language)) { buffer in
@@ -191,20 +209,71 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
 
 // MARK: permissions
 
-func micStatus() -> String {
-    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+func avName(_ st: AVAuthorizationStatus) -> String {
+    switch st {
     case .authorized: return "granted"
-    case .notDetermined: return "undetermined"
-    default: return "denied"
+    case .denied: return "denied"
+    case .restricted: return "restricted"
+    case .notDetermined: return "not_determined"
+    @unknown default: return "unsupported"
     }
 }
+
+func micStatus() -> String { avName(AVCaptureDevice.authorizationStatus(for: .audio)) }
 
 func speechStatus() -> String {
     switch SFSpeechRecognizer.authorizationStatus() {
     case .authorized: return "granted"
-    case .notDetermined: return "undetermined"
-    default: return "denied"
+    case .denied: return "denied"
+    case .restricted: return "restricted"
+    case .notDetermined: return "not_determined"
+    @unknown default: return "unsupported"
     }
+}
+
+func personalStatus() -> String {
+    guard #available(macOS 14, *) else { return "unsupported" }
+    switch AVSpeechSynthesizer.personalVoiceAuthorizationStatus {
+    case .authorized: return "granted"
+    case .denied: return "denied"
+    case .notDetermined: return "not_determined"
+    default: return "unsupported"
+    }
+}
+
+func emitPermissions(_ req: Any) {
+    emit(["ev": "permissions", "req": req, "microphone": micStatus(), "speech": speechStatus(), "personal_voice": personalStatus()])
+}
+
+/// Ask, one after another, each permission in `which` that was never asked (its state is read
+/// again right before asking: listening or a Personal Voice may have asked meanwhile), then
+/// report all three. Answered ones are never asked again.
+func requestPermissions(req: Any, which: [String]) {
+    var steps: [(@escaping () -> Void) -> Void] = []
+    if which.contains("microphone") {
+        steps.append { next in
+            guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else { next(); return }
+            AVCaptureDevice.requestAccess(for: .audio) { _ in DispatchQueue.main.async { next() } }
+        }
+    }
+    if which.contains("speech") {
+        steps.append { next in
+            guard SFSpeechRecognizer.authorizationStatus() == .notDetermined else { next(); return }
+            SFSpeechRecognizer.requestAuthorization { _ in DispatchQueue.main.async { next() } }
+        }
+    }
+    if which.contains("personal_voice") {
+        steps.append { next in
+            guard #available(macOS 14, *), AVSpeechSynthesizer.personalVoiceAuthorizationStatus == .notDetermined else { next(); return }
+            AVSpeechSynthesizer.requestPersonalVoiceAuthorization { _ in DispatchQueue.main.async { next() } }
+        }
+    }
+    func run(_ i: Int) {
+        if i >= steps.count { emitPermissions(req); return }
+        let step = steps[i]
+        step { run(i + 1) }
+    }
+    run(0)
 }
 
 func withMicrophone(_ go: @escaping () -> Void) {
@@ -501,7 +570,12 @@ func handle(_ c: [String: Any]) {
     switch str("cmd") ?? "" {
     case "voices": emit(["ev": "voices", "req": req, "voices": listVoices()])
     case "personal_voice": personalVoice(req: req, ask: (c["ask"] as? Bool) ?? false)
-    case "permissions": emit(["ev": "permissions", "req": req, "microphone": micStatus(), "speech": speechStatus()])
+    case "permissions":
+        if (c["request"] as? Bool) == true {
+            requestPermissions(req: req, which: (c["which"] as? [String]) ?? ["microphone", "speech", "personal_voice"])
+        } else {
+            emitPermissions(req)
+        }
     case "speak":
         speaker.speak(id: (c["id"] as? Int) ?? -1, text: str("text") ?? "", voice: str("voice"), rate: rate, language: str("language"), pitch: pitch)
     case "stop_speaking": speaker.stop()

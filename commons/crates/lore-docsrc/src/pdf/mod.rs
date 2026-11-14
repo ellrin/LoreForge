@@ -27,6 +27,9 @@ pub struct PdfOptions {
     /// Write `catalog.json`.
     pub save: bool,
     pub poppler: Poppler,
+    /// Read unnumbered headings set in a larger size (Springer journals) as sections. Off by
+    /// default: only callers that need the section structure (PaperComposer's 期刊寫法) turn it on.
+    pub unnumbered_headings: bool,
 }
 
 impl PdfOptions {
@@ -38,6 +41,7 @@ impl PdfOptions {
             render_crops: true,
             save: true,
             poppler: Poppler::discover(),
+            unnumbered_headings: false,
         }
     }
 }
@@ -56,7 +60,7 @@ pub fn extract(pdf: &Path, o: &PdfOptions) -> Result<AssetCatalog> {
         inks.push(Some(Ink::from_png(&png, o.analysis_dpi as f64 / 72.0)?));
         renders.push(Renderer::page_rel(p.number, o.analysis_dpi, true));
     }
-    let mut cat = analyze(&pages, inks, &info);
+    let mut cat = analyze_with(&pages, inks, &info, o.unnumbered_headings);
     cat.source = DocSource::Pdf {
         path: pdf.display().to_string(),
     };
@@ -89,7 +93,18 @@ pub fn analyze(
     inks: Vec<Option<Ink>>,
     info: &poppler::PdfInfo,
 ) -> AssetCatalog {
+    analyze_with(pages, inks, info, false)
+}
+
+/// [`analyze`], with [`PdfOptions::unnumbered_headings`].
+pub fn analyze_with(
+    pages: &[TextPage],
+    inks: Vec<Option<Ink>>,
+    info: &poppler::PdfInfo,
+    unnumbered_headings: bool,
+) -> AssetCatalog {
     let mut d = Doc::new(pages, inks);
+    d.unnumbered_headings = unnumbered_headings;
     let mut cat = AssetCatalog {
         schema: SCHEMA,
         ..Default::default()

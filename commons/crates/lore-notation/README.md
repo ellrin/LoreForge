@@ -162,6 +162,42 @@ tables never define by default. `p<0.05` is the p-value convention. Known
 limits: English prose only; macros with optional arguments are expanded
 without them; `\def` with parameter text is ignored.
 
+## Pending results (待補, `pending`)
+
+Four registered draft marks carry a pending item's id, so the source says where every
+waiting number, cell, planned paragraph and dependent sentence is:
+
+| mark | means | draft PDF |
+|---|---|---|
+| `\pending{P1}{external Dice}` | a number that waits for data | boxed `P1: external Dice` |
+| `\pendingcell{P1}{Ours / Dice}` | a table cell that waits | boxed `P1` |
+| `\pendingpara{P1}{frame}` | a paragraph planned but waiting | `PENDING P1` + the frame in italics |
+| `\pendingdep{P1}` | the sentence it ends depends on P1 | superscript `[P1]` |
+
+```rust
+pending::marks(text) -> Vec<Mark { kind, id, arg, start, end }>   // `%` comments skipped
+pending::ids(text) / valid_id(id)
+pending::fill(text, id, &|mark| Some(value)) -> String          // numbers and cells filled, dependency marks dropped; \pendingpara never
+pending::to_plain(text) -> String                               // "[pending: what]", "[pending]", " [pending]" after a dependent sentence
+pending::tex() / write_tex(dir) -> PathBuf                      // pending.tex: robust commands, ASCII, never over a user's own file
+pending::DRAFT_RGB / DRAFT_HEX                                  // the draft colour (a document colour, never a theme colour)
+```
+
+The names are reserved (`check_macro_name` refuses them); the scanner skips the ids and the
+argument of `\pending` / `\pendingcell` (a note for the author), and scans a planned paragraph's
+frame as text, so marks raise no findings of their own. `Document::load` skips a generated
+`pending.tex`. Colour: `color` is loaded at the end of the preamble only when no colour package
+was (no option clash); without it the marks are still boxed. `tests/pending_marks.rs` compiles a
+draft with pdflatex (when installed) with and without `xcolor[table]`.
+
+## Unicode a model writes (`unicode`)
+
+`unicode::to_latex(text)` writes ≤ ≥ ± × − ° α…ω, super- and subscripts (`x²`, `CD4⁺`, `H₂O`) and a few text symbols as LaTeX
+pdflatex accepts: outside math `\ensuremath{\leq}`, `\textsuperscript{+}`; inside `$…$` / `\(…\)` / `\[…\]` the bare command.
+Idempotent; ASCII, CJK and the punctuation utf8 input already handles (– — “ ” …) pass through. `unicode::unsupported(text)` lists what
+it would change. PaperComposer runs it on every drafted paragraph, rewrite (lore-polish `Host::latex`) and revision, and on the author's
+click over the paper's files (`/fix-unicode`).
+
 ## Auto-extract and the assistant hook
 
 `extract_document` builds a draft: symbols (meaning from the text, `domain` /

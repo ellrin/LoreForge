@@ -38,23 +38,39 @@
     return host;
   }
   const hasMath = (s) => /(^|[^\\])\$/.test(s);
+  // KaTeX's faces load lazily: a formula measured before its face arrived (∑ in KaTeX_Size1 on first use) keeps the
+  // fallback's widths while the SVG names the real face — sub/superscripts then land inside the glyph. So the faces
+  // are loaded before anything is measured, and whatever was measured before is measured again.
+  const FACES = ["KaTeX_Main", "italic 1em KaTeX_Math", "KaTeX_Size1", "KaTeX_Size2", "KaTeX_AMS", "KaTeX_Caligraphic", "italic 1em KaTeX_Main", "bold 1em KaTeX_Main"];
+  let facesReady = null;
+  function loadFaces() {
+    if (facesReady) return facesReady;
+    if (!document.fonts?.load) return (facesReady = Promise.resolve());
+    facesReady = Promise.all(FACES.map((f) => document.fonts.load(f.includes("1em") ? f.replace("1em", "20px") : `20px ${f}`, "∑∫x").catch(() => []))).then(() => cache.clear());
+    return facesReady;
+  }
   function loadKatex(base) {
-    if (window.katex) return Promise.resolve();
+    if (window.katex && document.querySelector("link[data-lp-katex], link[href*='katex']")) return loadFaces();
     if (katexLoading) return katexLoading;
     katexLoading = new Promise((ok) => {
-      if (!document.querySelector(`link[data-lp-katex]`)) {
+      let pending = 2;
+      const done = () => { if (--pending === 0) ok(); };
+      const have = document.querySelector("link[data-lp-katex], link[href*='katex.min.css']");
+      if (!have) {
         const l = document.createElement("link");
         l.rel = "stylesheet";
         l.href = base + "katex.min.css";
         l.dataset.lpKatex = "1";
+        l.onload = l.onerror = done;
         document.head.append(l);
-      }
+      } else done();
+      if (window.katex) return done();
       const s = document.createElement("script");
       s.src = base + "katex.min.js";
-      s.onload = () => ok();
-      s.onerror = () => ok();
+      s.onload = done;
+      s.onerror = done;
       document.head.append(s);
-    });
+    }).then(loadFaces);
     return katexLoading;
   }
   /** Split on unescaped $…$ into [{math:bool, s}]. */
@@ -107,6 +123,9 @@
     const X = (v) => r2((v - box.left) / S), Y = (v) => r2((v - base) / S);
     const parts = [];
     // text runs
+    // \textcolor{…}{…} (equation figures colour each variable): a node's own colour when it differs from the run's
+    const runInk = getComputedStyle(span).color;
+    const own = (c) => (c && c !== runInk ? c : f.color ?? "#000");
     const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
     const nodes = [];
     for (let n = walker.nextNode(); n; n = walker.nextNode()) if (n.nodeValue && n.nodeValue !== "​" && n.nodeValue.trim() !== "") nodes.push(n);
@@ -123,7 +142,7 @@
       const fs = r2(parseFloat(cs.fontSize) / S);
       const wt = cs.fontWeight === "400" || cs.fontWeight === "normal" ? "" : ` font-weight="${cs.fontWeight}"`;
       const it = cs.fontStyle === "normal" ? "" : ` font-style="${cs.fontStyle}"`;
-      parts.push(`<text x="${X(rr.left)}" y="${Y(bl)}" font-family="${famAttr(cs.fontFamily)}" font-size="${fs}"${wt}${it} fill="${f.color ?? "#000"}" xml:space="preserve">${esc(n.nodeValue)}</text>`);
+      parts.push(`<text x="${X(rr.left)}" y="${Y(bl)}" font-family="${famAttr(cs.fontFamily)}" font-size="${fs}"${wt}${it} fill="${own(cs.color)}" xml:space="preserve">${esc(n.nodeValue)}</text>`);
     }
     // rules (fraction bars, over/underlines) and KaTeX's own svg paths
     for (const el of span.querySelectorAll("*")) {
@@ -138,7 +157,7 @@
         inner.setAttribute("width", r2(r.width / S));
         inner.setAttribute("height", r2(r.height / S));
         inner.removeAttribute("style");
-        inner.setAttribute("fill", f.color ?? "#000");
+        inner.setAttribute("fill", own(getComputedStyle(el).color));
         const xml = new XMLSerializer().serializeToString(inner).replace(/ xmlns="http:\/\/www\.w3\.org\/2000\/svg"/, "");
         parts.push(`<svg x="${X(c.left)}" y="${Y(c.top)}" width="${r2(c.width / S)}" height="${r2(c.height / S)}" overflow="hidden">${xml}</svg>`);
         continue;
@@ -150,14 +169,14 @@
         const w = parseFloat(cs[`border${side}Width`]);
         if (w > 0 && cs[`border${side}Style`] !== "none" && r.width > 0) {
           const y = side === "Top" ? r.top : r.bottom - w;
-          parts.push(`<rect x="${X(r.left)}" y="${Y(y)}" width="${r2(r.width / S)}" height="${r2(w / S)}" fill="${f.color ?? "#000"}"/>`);
+          parts.push(`<rect x="${X(r.left)}" y="${Y(y)}" width="${r2(r.width / S)}" height="${r2(w / S)}" fill="${own(cs[`border${side}Color`])}"/>`);
         }
       }
       for (const side of ["Left", "Right"]) {
         const w = parseFloat(cs[`border${side}Width`]);
         if (w > 0 && cs[`border${side}Style`] !== "none" && r.height > 0) {
           const x = side === "Left" ? r.left : r.right - w;
-          parts.push(`<rect x="${X(x)}" y="${Y(r.top)}" width="${r2(w / S)}" height="${r2(r.height / S)}" fill="${f.color ?? "#000"}"/>`);
+          parts.push(`<rect x="${X(x)}" y="${Y(r.top)}" width="${r2(w / S)}" height="${r2(r.height / S)}" fill="${own(cs[`border${side}Color`])}"/>`);
         }
       }
     }
