@@ -33,6 +33,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft", get(get_draft))
         .route("/api/papers/{name}/draft/topic", put(put_topic))
         .route("/api/papers/{name}/draft/records", post(upload_record))
+        .route("/api/papers/{name}/draft/records/path", post(record_from_path))
         .route("/api/papers/{name}/draft/records/{file}", axum::routing::delete(delete_record))
         .route("/api/papers/{name}/draft/record", post(run_record))
         .route("/api/papers/{name}/draft/experiments", put(put_experiments))
@@ -449,37 +450,152 @@ struct RecordQuery {
     file: String,
 }
 
-/// Text records are stored as they are; a PDF is stored as its text.
-async fn upload_record(State(s): State<Shared>, AxPath(name): AxPath<String>, AxQuery(q): AxQuery<RecordQuery>, body: axum::body::Bytes) -> Resp {
-    let c = tri!(ctx(&s, &name).await);
+/// A record file's bytes as stored: text as it is, a PDF as its text; formats to convert first are refused.
+fn record_bytes(name: &str, body: &[u8]) -> Result<(String, Vec<u8>), String> {
     if body.is_empty() {
-        return bad("檔案是空的");
+        return Err("檔案是空的".into());
     }
-    let lower = q.file.to_lowercase();
-    let (file, data): (String, Vec<u8>) = if lower.ends_with(".pdf") {
-        match pdf_extract::extract_text_from_mem(&body) {
-            Ok(t) if !t.trim().is_empty() => (format!("{}.txt", q.file.trim_end_matches(".pdf").trim_end_matches(".PDF")), t.into_bytes()),
-            _ => return bad("讀不到這份 PDF 的文字（可能是掃描檔）"),
+    let lower = name.to_lowercase();
+    if lower.ends_with(".pdf") {
+        match pdf_extract::extract_text_from_mem(body) {
+            Ok(t) if !t.trim().is_empty() => Ok((format!("{}.txt", name.trim_end_matches(".pdf").trim_end_matches(".PDF")), t.into_bytes())),
+            _ => Err("讀不到這份 PDF 的文字（可能是掃描檔）".into()),
         }
     } else if [".xlsx", ".xls", ".docx", ".doc", ".pptx", ".numbers", ".pages"].iter().any(|e| lower.ends_with(e)) {
-        return bad("請另存成 CSV、Markdown 或純文字再上傳（試算表：檔案 → 下載 → CSV）");
-    } else if std::str::from_utf8(&body).is_err() {
-        return bad("只接受文字檔（.md .txt .csv .tsv .json .log）或 PDF");
+        Err("請另存成 CSV、Markdown 或純文字再上傳（試算表：檔案 → 下載 → CSV）".into())
+    } else if std::str::from_utf8(body).is_err() {
+        Err("只接受文字檔（.md .txt .csv .tsv .json .log）或 PDF".into())
     } else {
-        (q.file.clone(), body.to_vec())
-    };
+        Ok((name.to_string(), body.to_vec()))
+    }
+}
+
+/// Store record files (already converted) in the session.
+async fn store_records(c: &Ctx, files: Vec<(String, Vec<u8>)>) -> Resp {
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
-    let rec = match ds::save_record(&c.dir, &file, &data) {
-        Ok(r) => r,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-    };
-    sess.records.push(rec);
+    for (file, data) in files {
+        let rec = match ds::save_record(&c.dir, &file, &data) {
+            Ok(r) => r,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        };
+        sess.records.retain(|r| r.file != rec.file);
+        sess.records.push(rec);
+    }
     if sess.phase < Phase::Record {
         sess.phase = Phase::Record;
     }
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
+}
+
+/// Text records are stored as they are; a PDF is stored as its text.
+async fn upload_record(State(s): State<Shared>, AxPath(name): AxPath<String>, AxQuery(q): AxQuery<RecordQuery>, body: axum::body::Bytes) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    match record_bytes(&q.file, &body) {
+        Ok(f) => store_records(&c, vec![f]).await,
+        Err(e) => bad(&e),
+    }
+}
+
+#[derive(Deserialize)]
+struct RecordPath {
+    path: String,
+}
+
+/// Largest record file read from a path.
+const RECORD_MAX_BYTES: u64 = 20 * 1024 * 1024;
+
+/// A typed or pasted path (`~/…`, quoted, `file://…`) as a path inside the home folder.
+fn record_path(raw: &str, home: &Path) -> Result<PathBuf, String> {
+    let mut s = raw.trim().trim_matches(|c| c == '"' || c == '\'' ).trim().to_string();
+    if let Some(rest) = s.strip_prefix("file://") {
+        s = percent_decode(rest);
+    }
+    let s = s.replace("\\ ", " ");
+    let p = if s == "~" { home.to_path_buf() } else if let Some(r) = s.strip_prefix("~/") { home.join(r) } else { PathBuf::from(&s) };
+    if !p.is_absolute() {
+        return Err("請貼完整路徑（/Users/… 或 ~/…）".into());
+    }
+    let real = p.canonicalize().map_err(|_| format!("找不到：{s}"))?;
+    let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    if !real.starts_with(&home) {
+        return Err("只讀家目錄底下的檔案".into());
+    }
+    Ok(real)
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The record files at a path: the file itself, or a folder's files (not its subfolders),
+/// with the ones that cannot be records listed by name and reason.
+fn record_files_at(p: &Path) -> Result<(Vec<(String, Vec<u8>)>, Vec<String>), String> {
+    let paths: Vec<PathBuf> = if p.is_dir() {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(p).map_err(|e| e.to_string())?.flatten().map(|e| e.path()).filter(|x| x.is_file() && !x.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.'))).collect();
+        v.sort();
+        v
+    } else {
+        vec![p.to_path_buf()]
+    };
+    let (mut ok, mut skipped) = (vec![], vec![]);
+    for f in paths {
+        let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        if !paper::safe_name(&name) {
+            skipped.push(format!("{name}：檔名不能用"));
+            continue;
+        }
+        let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+        if len > RECORD_MAX_BYTES {
+            skipped.push(format!("{name}：超過 20 MB"));
+            continue;
+        }
+        match std::fs::read(&f).map_err(|e| e.to_string()).and_then(|b| record_bytes(&name, &b)) {
+            Ok(x) => ok.push(x),
+            Err(e) => skipped.push(format!("{name}：{e}")),
+        }
+    }
+    Ok((ok, skipped))
+}
+
+/// Add records from a path the author typed or pasted (a file, or every file in a folder).
+async fn record_from_path(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RecordPath>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let Some(home) = dirs::home_dir() else { return bad("找不到家目錄") };
+    let p = match record_path(&b.path, &home) {
+        Ok(p) => p,
+        Err(e) => return bad(&e),
+    };
+    let (files, skipped) = match record_files_at(&p) {
+        Ok(x) => x,
+        Err(e) => return bad(&e),
+    };
+    if files.is_empty() {
+        return bad(&if skipped.is_empty() { "這裡沒有檔案".to_string() } else { format!("沒有可用的檔案：{}", skipped.join("；")) });
+    }
+    let mut r = store_records(&c, files).await;
+    if !skipped.is_empty() {
+        // how many files were left out (the page says so); names stay local to the author's machine
+        if let Ok(v) = axum::http::HeaderValue::from_str(&skipped.len().to_string()) {
+            r.headers_mut().insert("x-skipped", v);
+        }
+    }
+    r
 }
 
 async fn delete_record(State(s): State<Shared>, AxPath((name, file)): AxPath<(String, String)>) -> Resp {
@@ -2206,6 +2322,34 @@ fn open_fill(c: &Ctx, sess: &mut Session, k: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pasted_path_reads_a_file_or_a_folders_files() {
+        let home = std::env::temp_dir().join(format!("pc-recpath-{}", std::process::id()));
+        let dir = home.join("Shelf/Run 1");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("log.md"), "E1 lr 1e-4, AUC 0.81").unwrap();
+        std::fs::write(dir.join("table.csv"), "a,b\n1,2\n").unwrap();
+        std::fs::write(dir.join("sheet.xlsx"), [0u8, 159, 1]).unwrap();
+        std::fs::write(dir.join(".DS_Store"), [0u8]).unwrap();
+        // ~/, quotes, a backslash-escaped space, file:// with %20 all name the same place
+        for raw in ["~/Shelf/Run 1/log.md", "'~/Shelf/Run 1/log.md'", "~/Shelf/Run\\ 1/log.md"] {
+            let p = record_path(raw, &home).unwrap();
+            assert!(p.ends_with("log.md"), "{raw}");
+        }
+        let url = format!("file://{}", home.join("Shelf/Run%201/log.md").display());
+        assert!(record_path(&url, &home).unwrap().ends_with("log.md"));
+        // a folder: its files, the spreadsheet named as skipped, dot files ignored
+        let (ok, skipped) = record_files_at(&record_path("~/Shelf/Run 1", &home).unwrap()).unwrap();
+        assert_eq!(ok.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["log.md", "table.csv"]);
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].starts_with("sheet.xlsx"));
+        // outside the home folder, relative, or missing: refused
+        assert!(record_path("/etc/hosts", &home).is_err());
+        assert!(record_path("Shelf/Run 1", &home).is_err());
+        assert!(record_path("~/nope.md", &home).is_err());
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn a_new_template_keeps_the_text_and_the_notation_checks() {

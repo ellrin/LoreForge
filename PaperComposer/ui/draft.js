@@ -290,7 +290,25 @@ const PCDraft = (() => {
       }
       return v;
     });
-    main.append(file);
+    // a path typed or pasted (LoreShelf's 「拷貝路徑」, Finder's ⌥⌘C): a file, or every file in a folder
+    const path = el("input", "df-path");
+    path.type = "text";
+    path.placeholder = "或貼上路徑（檔案或資料夾）";
+    path.setAttribute("aria-label", "實驗記錄的路徑");
+    const addPath = () => {
+      const v = path.value.trim();
+      if (!v) return;
+      run("加入", async () => {
+        const r = await fetch(`${base()}/records/path`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: v }) });
+        if (!r.ok) throw new Error(await r.text());
+        const skipped = Number(r.headers.get("x-skipped") || 0);
+        if (skipped) LoreShell.toast(`略過 ${skipped} 個不能用的檔案`);
+        path.value = "";
+        return r.json();
+      });
+    };
+    path.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); addPath(); } };
+    main.append(row(file, path, btn("加入", addPath, "small")));
     const list = el("ul", "df-list");
     sess().records.forEach((r) => {
       const li = el("li", "", `${r.file}（${Math.ceil(r.bytes / 1024)} KB）`);

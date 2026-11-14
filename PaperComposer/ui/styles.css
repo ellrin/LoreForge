@@ -1533,3 +1533,4 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-ledger .df-sum { grid-template-columns: 64px 1fr; }
 .df-mic { align-self: flex-start; }
 .df-mic.on { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-text); }
+.df-path { flex: 1; min-width: 16em; }
