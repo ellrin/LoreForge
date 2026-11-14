@@ -49,6 +49,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   lore-notes lands; never overwrites); cards: KnowledgeBase's `POST /api/pending` while it runs, else
   `kb_core::pending::add` on the member's personal space (only `pending/`); a refusal from a running app is shown,
   never followed by a local copy; 記下靈感 = `kind: idea`, no model, `% & #` escaped).
+  `find.rs` (搜尋檔案 for another app, `lore_shell::findfile`: `POST /api/find {request, app, purpose, exts, port}` → find mode (window opens, `web/find.js` + `find.css` in place of the history; the page polls `GET /api/find`); `send()` hands the sentence to find.js, never to the chat; candidates = LoreShelf guided search then loose, ≤ 5 after the extension filter, folder via `/api/files/{id}`, thumbnails proxied (`/api/find/thumb/{id}`, none for sensitive); a click picks at once, 「第二個」/a name part highlights + 「加入這份？」 (only 對/加入 sends), 「好了」/Esc/closing ends (`/api/find/end` tells the app); pick = path from LoreShelf → the app's `POST /api/lore/picked`; nothing is opened; LoreShelf pinned in tests / `isolated_server --shelf <url>`).
   `fix.rs` (修正知識卡, author 2026-11-14): 「這張卡寫錯了／幫我修正…那張卡」 (kbctx `Intent::Fix`: the card he names, else
   the last reply's; the model only says it will check) or the 功能列表 row → `POST /api/actions/fix/draft {messages, card}`:
   the card from KnowledgeBase's `GET /api/nodes/{id}` + his own words only → task `le-fix` (Claude Haiku, web search,

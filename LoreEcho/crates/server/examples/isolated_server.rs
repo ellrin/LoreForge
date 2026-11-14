@@ -2,6 +2,7 @@
 //! `claude` CLI, for trying the UI: `cargo run -p le-server --example isolated_server -- <empty folder> [port]`.
 //! `--kb` adds the synthetic KnowledgeBase space of the tests (copied into the folder, member
 //! `ellrin`, KnowledgeBase not running); `--mock "<reply>"` answers every message with that reply (several `--mock`: in turn, the last one forever).
+//! `--shelf <url>` = the LoreShelf 搜尋檔案 asks.
 //! `LOREECHO_VOICE=1`: with the system's voice (the Apple engines on macOS; it plays sound).
 //! `LOREECHO_VOICE=paced`: a silent voice that "speaks" 5 characters a second with word events
 //! (to look at 文字跟著聲音 without sound).
@@ -48,6 +49,10 @@ async fn main() {
         let kb = root.join("kb");
         copy_dir(&le_server::config::repo_dir().join("crates/server/tests/fixtures/kb"), &kb);
         shared.kb.pin(le_server::kbctx::Pin { spaces: vec![kb], member: "ellrin".into(), url: None });
+    }
+    // `--shelf <url>`: 搜尋檔案 asks this LoreShelf (e.g. the running one, or a mock)
+    if let Some(i) = flag("--shelf") {
+        shared.find.pin_shelf(rest.get(i + 1).expect("--shelf <url>"));
     }
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.expect("bind 127.0.0.1");
     println!("http://{}/  folder {}", listener.local_addr().unwrap(), root.display());

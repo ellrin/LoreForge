@@ -20,6 +20,7 @@
 //! | POST | /api/chat | `{ messages, character?, engine?, kb?, speak? }` → the reply as server-sent events ([`chat`]) |
 //! | POST | /api/kb/recall | `{ id, outcome }` → a review outcome through KnowledgeBase's API while it runs ([`kbctx`]) |
 //! | POST | /api/actions/{note,cards}/… | 功能列表: drafts (tasks `le-note`, `le-cards`) and the confirmed saves to PaperComposer / KnowledgeBase ([`actions`]) |
+//! | POST/GET | /api/find, /api/find/{search,thumb/{id},pick,end} | 搜尋檔案 for another app: find mode ([`find`], `lore_shell::findfile`) |
 //! | … | /api/voice… | listening and speaking ([`voice`]) |
 //! | GET/POST | /api/permissions, /request, /open | microphone, speech, Personal Voice (lore-shell; asked at the desktop app's first launch) |
 
@@ -28,6 +29,7 @@ pub mod api;
 pub mod characters;
 pub mod chat;
 pub mod config;
+pub mod find;
 pub mod fix;
 pub mod kbctx;
 pub mod llm;
@@ -72,6 +74,8 @@ pub struct AppState {
     pub kb: kbctx::Kb,
     /// Ask the running LoreShelf about the author's files ([`shelfctx`]); only the real app does.
     pub shelf: std::sync::atomic::AtomicBool,
+    /// 搜尋檔案 for another app ([`find`]).
+    pub find: find::Finder,
     /// PaperComposer, for 整理成筆記 / 記下靈感 ([`actions`]).
     pub pc: actions::Pc,
     /// Listening and speaking (lore-voice; unavailable in tests unless a fake is given).
@@ -97,7 +101,7 @@ impl AppState {
                 None
             }
         };
-        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), shelf: std::sync::atomic::AtomicBool::new(false), pc: actions::Pc::default(), voice, write: Mutex::new(()) })
+        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), shelf: std::sync::atomic::AtomicBool::new(false), find: find::Finder::default(), pc: actions::Pc::default(), voice, write: Mutex::new(()) })
     }
 
     /// The real engines (`private/LoreEcho/tasks.toml` may override the task's model) and the
@@ -174,7 +178,7 @@ fn router_with(shared: Shared, engines: lore_engines::Engines, perms: lore_shell
         kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
     }
     let voice = voice::routes(&shared);
-    api::routes().merge(actions::routes()).merge(fix::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).route("/api/shelf/focus", axum::routing::post(shelfctx::focus_post)).with_state(shared).merge(voice).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
+    api::routes().merge(actions::routes()).merge(fix::routes()).merge(find::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).route("/api/shelf/focus", axum::routing::post(shelfctx::focus_post)).with_state(shared).merge(voice).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`config.port` (0 = any free port); the address, the state and the server.

@@ -303,6 +303,11 @@ fn on_desktop_event(app: &AppHandle, e: DesktopEvent) {
     let _ = app.run_on_main_thread(move || match e {
         DesktopEvent::Expanded(on) => {
             if let Some(w) = app2.get_webview_window("main") {
+                if on {
+                    // 搜尋檔案 may ask while the window is hidden from the tray or minimised
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                }
                 place(&w, on);
             }
         }

@@ -65,6 +65,7 @@ async function boot() {
     show(true, false);
     LoreShell.toast(`無法連到 LoreEcho 伺服器：${e.message}`, { err: true });
   }
+  window.LoreEchoFind?.start();                  // 搜尋檔案 requests (find.js), after the first show
 }
 
 function mountShell() {
@@ -251,6 +252,7 @@ function wireResize() {
 async function show(expanded, save = true) {
   if (!expanded && S.expanded) {
     window.LoreVoice?.reset(true);               // quiet: no voice, the song fades out
+    window.LoreEchoFind?.closed();               // closing ends 搜尋檔案
     newChat();                                   // closing the window ends the conversation (design §2)
     const p = $("win");
     p.classList.remove("opening"); p.classList.add("closing");
@@ -303,6 +305,7 @@ function wire() {
     if (e.key !== "Escape" || !S.expanded || document.querySelector("dialog[open]") || document.querySelector(".menu, .ask")) return;
     e.preventDefault();
     if (window.LoreVoice?.escape()) return;      // speaking or listening: Esc stops that first
+    if (window.LoreEchoFind?.escape()) return;   // 搜尋檔案: Esc ends find mode
     if (window.LoreEchoActions?.escape()) return;   // a 功能列表 preview: closed when untouched, kept when edited
     if (!$("choices").hidden) { toggleChoices(false); $("text").focus(); }
     else show(false);
@@ -356,6 +359,8 @@ function newChat() {
 async function send(engine) {
   if (S.busy) return;
   window.LoreVoice?.beforeSend();
+  // 搜尋檔案: the sentence describes a file for another app (find.js), never a chat turn
+  if (!engine && window.LoreEchoFind?.take($("text").value.trim())) { $("text").value = ""; grow(); return; }
   const speak = !!window.LoreVoice?.wantsSpeech();   // 朗讀回覆: the server speaks it sentence by sentence
   if (!engine) {
     const text = $("text").value.trim();
