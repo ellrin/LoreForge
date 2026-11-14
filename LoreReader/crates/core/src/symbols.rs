@@ -1806,6 +1806,13 @@ pub fn merge(old: Option<SymbolFile>, mut new: SymbolFile) -> SymbolFile {
     for o in old.entries {
         let latex = o.entry.latex.clone().unwrap_or_default();
         if o.resolved_by == "program" {
+            // a colour role (equation figures, lore-notation `color`) survives a re-detection even on a program row
+            if o.entry.color.is_some()
+                && let Some(n) = new.entries.iter_mut().find(|n| n.entry.id == o.entry.id || n.entry.latex.as_deref() == Some(latex.as_str()))
+                && n.entry.color.is_none()
+            {
+                n.entry.color = o.entry.color;
+            }
             continue;
         }
         match new.entries.iter_mut().find(|n| n.entry.id == o.entry.id || n.entry.latex.as_deref() == Some(latex.as_str())) {
@@ -1827,6 +1834,25 @@ pub fn merge(old: Option<SymbolFile>, mut new: SymbolFile) -> SymbolFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_keeps_the_colour_role() {
+        let row = |id: &str, latex: &str, by: &str, color: Option<u8>| {
+            let mut e = Entry::new(id, lore_notation::Kind::Symbol);
+            e.latex = Some(latex.into());
+            e.color = color;
+            SymbolEntry { entry: e, scope: "s".into(), grade: "defined".into(), resolved_by: by.into(), evidence: vec![], occurrences: vec![], first: None, equations: vec![], note: None }
+        };
+        let file = |entries: Vec<SymbolEntry>| SymbolFile { entries, ..Default::default() };
+        // an author row keeps everything, colour included
+        let m = merge(Some(file(vec![row("g", "\\gamma", "author", Some(4))])), file(vec![row("g", "\\gamma", "program", None)]));
+        assert_eq!(m.entries[0].entry.color, Some(4));
+        // a program row is re-detected, but its colour role stays
+        let m = merge(Some(file(vec![row("p", "p_t", "program", Some(1))])), file(vec![row("p", "p_t", "program", None)]));
+        assert_eq!(m.entries[0].entry.color, Some(1));
+        // and it is written back to symbols.json
+        assert!(serde_json::to_string(&m).unwrap().contains("\"color\":1"));
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn item(s: &mut usize, text: &mut String, str_: &str, font: &str, size: f32, x: f32, y: f32, w: f32) -> Item {

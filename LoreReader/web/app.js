@@ -944,7 +944,8 @@ async function renderThumb(t) {
   if (!p) return;
   try {
     const pg = await (await getDoc(p.sha)).getPage(p.page);
-    const scale = (132 * Math.min(devicePixelRatio || 1, 2)) / p.w;
+    // drawn for the widest the page can be shown (.frame max-width 200px), sharp on retina
+    const scale = (200 * Math.min(devicePixelRatio || 1, 2)) / p.w;
     const vp = pg.getViewport({ scale });
     const c = h("canvas");
     c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
@@ -1654,10 +1655,23 @@ function symbolsPane() {
   out.push(list);
   if (f.equations?.length) {
     out.push(h("h4", { class: "sym-sub" }, "式"));
-    out.push(h("div", { class: "sym-list eqs" }, f.equations.map((q) => h("button", { type: "button", class: "eq-item", onclick: () => flashBox(q.page, q.bbox) },
-      h("span", { class: "eq-no" }, q.label ?? "無編號"), h("span", { class: "src" }, `p.${q.page}`), q.latex ? h("span", { class: "eq-tex" }, tex(q.latex)) : null))));
+    out.push(h("div", { class: "sym-list eqs" }, f.equations.map((q) => h("div", { class: "eq-line" },
+      h("button", { type: "button", class: "eq-item", onclick: () => flashBox(q.page, q.bbox) },
+        h("span", { class: "eq-no" }, q.label ?? "無編號"), h("span", { class: "src" }, `p.${q.page}`), q.latex ? h("span", { class: "eq-tex" }, tex(q.latex)) : null),
+      q.latex ? h("button", { type: "button", class: "ico small eq-go", "aria-label": "動起來", title: "動起來", "data-icon": "spark", onclick: (e) => animateEquation(q.id, "", e.currentTarget) }) : null))));
   }
   return out;
+}
+
+/** 動起來: the equation's LaTeX, its symbols and the sentence around it → the shared equation editor (web/eqplot.js). */
+function animateEquation(id, context = "", anchor = null) {
+  const q = S.symbols?.equations.find((x) => x.id === id);
+  if (!q?.latex) return toast("這條式子沒有抽出 LaTeX");
+  const ents = S.symbols?.entries ?? [];
+  const mine = ents.filter((e) => (e.equations ?? []).includes(id));
+  const symbols = (mine.length ? mine : ents).slice(0, 40).map((e) => ({ latex: e.latex, meaning: symMeaning(e), color: e.color })).filter((e) => e.latex);
+  if (!context) context = (S.paras?.paragraphs ?? []).find((p) => (p.chips?.equations ?? []).includes(id))?.text ?? "";
+  window.LREq?.animate({ latex: q.latex, symbols, context: context.slice(0, 1500), title: `${q_label(id)} · p.${q.page}`, anchor });
 }
 
 function eqChips(ids, f) {
@@ -2017,7 +2031,7 @@ function chipMenu(p, kind, id, ev) {
     { head: kind === "symbol" ? tex(label) : label },
     { icon: "eye", label: "看定義", run: () => showChipDef(kind, id, anchor) },
     { icon: "chat", label: "問這篇", run: () => askClaude(p.id, { kind, id, label }) },
-    ...(kind === "equation" ? [] : [{ icon: "cards", label: "加入知識庫…", run: () => addCardDialog({ title: kind === "symbol" ? "" : label, sha: S.sha, page: p.page, context: p.text.slice(0, 600) }) }]),
+    ...(kind === "equation" ? [{ icon: "spark", label: "動起來", run: () => animateEquation(id, p.text) }] : [{ icon: "cards", label: "加入知識庫…", run: () => addCardDialog({ title: kind === "symbol" ? "" : label, sha: S.sha, page: p.page, context: p.text.slice(0, 600) }) }]),
   ]);
 }
 

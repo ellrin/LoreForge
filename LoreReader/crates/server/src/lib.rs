@@ -33,7 +33,7 @@
 //! | GET/PUT | /api/models | per-feature engine (the engine chips): `{task, model: auto\|local\|cloud\|haiku\|sonnet\|opus}` |
 //! | POST | /api/papers/{sha}/symbols/{id}/global | 加入全域: the row into the global 對照表 (`shared/notation.json`) |
 //! | GET | /api/notation/global | the global 對照表 (`shared/notation.json`; empty when missing) |
-//! | GET | /icons.js, /base.css, /shell.js, /makedeck.js, /makebook.js | the shared shell (`lore_shell::FILES`); /notation-panel.js the shared 對照表 component |
+//! | GET | /icons.js, /base.css, /shell.js, /makedeck.js, /makebook.js, /polish.js | the shared shell (`lore_shell::FILES`); /notation-panel.js the shared 對照表 component |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
 //! | POST | /api/kb/open | start the KnowledgeBase app (macOS, local KB only; never when isolated) |
 //! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?}` → KB `POST /api/nodes` |
@@ -274,19 +274,35 @@ async fn notation_panel_js() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../../../../commons/ui/notation-panel/notation-panel.js"))
 }
 
+/// 動起來 (the shared plotting tool's equation figures, `../docs/living-equations.md`): `/plot/*`
+/// = lore-plot's editor, `/plot/api/equation/{check,propose}`, `/plot/api/gif`; model calls go
+/// through this app's routing.
+struct PlotLlm(Shared);
+
+#[async_trait::async_trait]
+impl lore_plot::propose::Llm for PlotLlm {
+    async fn complete_json(&self, task: &str, req: LlmRequest) -> Result<(Value, String), String> {
+        self.0.llm.complete_json(task, req).await
+    }
+}
+
+fn plot_routes(shared: &Shared) -> Router<Shared> {
+    lore_plot::router(lore_plot::Plot::new(shared.home.clone()).with_llm(Arc::new(PlotLlm(shared.clone()))))
+}
+
 pub fn router(shared: Shared) -> Router {
     // static files: always revalidate (no build step; the desktop WebView keeps old copies otherwise)
     let web = tower::ServiceBuilder::new()
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-cache")))
         .service(ServeDir::new(&shared.web).append_index_html_on_directories(true));
-    routes().merge(lore_engines::router(engines(&shared))).with_state(shared).fallback_service(web)
+    routes().merge(plot_routes(&shared)).merge(lore_engines::router(engines(&shared))).with_state(shared).fallback_service(web)
 }
 
 /// The shell's 模型 tab (`GET/PUT /api/engines`) and `POST /api/links/open`, shared by every
 /// app (lore-engines). Isolated: no keychain, CLI or opener, and the process routing stays
 /// the tasks' own order.
 fn engines(s: &AppState) -> lore_engines::Engines {
-    let e = lore_engines::Engines::new(s.home.clone(), "LoreReader", llm::TASKS)
+    let e = lore_engines::Engines::new(s.home.clone(), "LoreReader", &llm::engine_tasks())
         .external(s.config.engine.url.clone(), s.config.engine.model.clone())
         .claude_model(s.config.claude_model.clone())
         .cli(s.llm.cli.clone(), s.llm.cc.clone());

@@ -102,7 +102,8 @@ impl Llm {
 
     /// The app's tasks over lore-llm's shared ones, then the user's file.
     pub fn task_table(user_file: Option<&std::path::Path>) -> Result<TaskTable, String> {
-        let base = TaskTable::bundled().merge(TaskTable::parse(TASKS)?);
+        // + the plotting tool's tasks (動起來 = `equation-plot`, the editor's 自動／助手)
+        let base = TaskTable::bundled().merge(TaskTable::parse(TASKS)?).merge(lore_plot::propose::task_table());
         TaskTable::load(base, user_file.filter(|p| p.is_file()))
     }
 
@@ -172,6 +173,22 @@ impl Llm {
         let text = route.provider.complete(&req).await.map_err(|e| LlmFail::message(e.to_string()))?;
         Ok(Answer { text: text.trim().to_string(), engine: route.provider.id().to_string(), fallback_used: route.fallback_used })
     }
+}
+
+impl Llm {
+    /// Run `req` as `task` in the task's order and parse the JSON answer (the plotting tool).
+    pub async fn complete_json(&self, task: &str, req: LlmRequest) -> Result<(serde_json::Value, String), String> {
+        let router = Router::new(self.tasks.clone(), self.factory());
+        let route = router.provider_for_with(task, &RouteOptions::default()).await.map_err(|e| e.to_string())?;
+        let req = route.apply(req);
+        let v = lore_llm::complete_json(route.provider.as_ref(), &req).await.map_err(|e| format!("模型沒有回答：{e}"))?;
+        Ok((v, route.provider.id().to_string()))
+    }
+}
+
+/// The tasks of the 模型 tab: LoreReader's and the plotting tool's.
+pub fn engine_tasks() -> String {
+    format!("{TASKS}\n{}", lore_plot::propose::TASKS)
 }
 
 /// The tasks the model menu offers, in menu order.

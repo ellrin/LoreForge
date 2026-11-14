@@ -89,6 +89,8 @@ LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tm
   engine chips' `overrides`) and `/api/links/open` are `lore_engines::router` (isolated: no
   keychain / CLI / opener, process routing not installed). styles.css keeps only what base.css
   does not own.
+- 動起來 (`web/eqplot.js`, `animateEquation` in app.js): lore-plot's router is mounted (`plot_routes`, `/plot/*`), its tasks merged A composite loss or a distribution objective first offers its simulation scenes (`LorePlot.animateLatex`, `/plot/api/equation/scenes`, no model; `../docs/plot.md` §11).
+  (`equation-plot`; `llm::engine_tasks()` for the 模型 tab); the editor opens with the equation's LaTeX, its symbols (colour roles) and paragraph.
 - `../private-example/LoreReader/`: seed of the private workspace (README, `ignore-words.txt`, `papers/`).
 
 ## Decisions

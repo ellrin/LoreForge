@@ -49,12 +49,16 @@ select { height: 30px; }
 .sorter-head { display: flex; gap: 6px; align-items: baseline; position: sticky; top: 0; z-index: 3; background: var(--panel); padding: 10px 0 6px; border-bottom: 1px solid var(--line); min-width: 0; }
 .sorter-head span:first-child { font: 600 12px var(--mono); color: var(--muted); white-space: nowrap; }
 #thumbs { display: flex; flex-direction: column; gap: 6px; }
-.thumb { display: grid; grid-template-columns: 22px 1fr; gap: 6px; align-items: start; cursor: pointer; border-radius: var(--r); padding: 4px; border: 2px solid transparent; }
+/* The current page is marked ON THE PAGE (.frame), never on the whole row: the row is as wide as the
+   panel (resizable, a drawer when narrow), the page is not, so a row highlight only lined up with the
+   page at one panel width. The page fills its column, so the mark always hugs it. */
+.thumb { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 6px; align-items: start; cursor: pointer; padding: 4px 4px 4px 0; }
 .thumb .no { font: 500 11px var(--mono); color: var(--muted); text-align: right; padding-top: 2px; }
-.thumb .frame { position: relative; width: 132px; background: #fff; box-shadow: 0 0 0 1px var(--line-strong); border-radius: 2px; overflow: hidden; }
+.thumb .frame { position: relative; width: 100%; max-width: 200px; background: #fff; box-shadow: 0 0 0 1px var(--line-strong); border-radius: 2px; overflow: hidden; }
 .thumb .frame canvas { display: block; width: 100%; height: 100%; }
 .thumb .frame .from { position: absolute; left: 0; right: 0; bottom: 0; font: 500 10px var(--sans); color: #fff; background: #000a; padding: 1px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.thumb[aria-current="true"] { border-color: var(--accent-text); background: var(--accent-soft); }
+.thumb[aria-current="true"] .frame { box-shadow: 0 0 0 2px var(--accent-text), 0 0 0 5px var(--accent-soft); }
+.thumb[aria-current="true"] .no { color: var(--accent-text); font-weight: 700; }
 .thumb.dragging { opacity: .4; }
 .thumb.drop-before { box-shadow: 0 -3px 0 var(--accent); }
 .thumb.drop-after { box-shadow: 0 3px 0 var(--accent); }
@@ -303,6 +307,8 @@ select { height: 30px; }
 .sym-sub { margin: 6px 0 0; font: 600 12px var(--mono); color: var(--muted); }
 .eq-item { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 8px; align-items: center; text-align: left; background: var(--surface); border: 1px solid transparent; border-radius: var(--r); padding: 5px 8px; color: var(--text); }
 .eq-item:hover { border-color: var(--line-strong); }
+.eq-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
+.eq-go { color: var(--accent-text); }
 .eq-no { font: 600 12px var(--mono); color: var(--accent-text); white-space: nowrap; }
 .eq-tex { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; font-size: 12px; }
 .sym-run { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; font-size: 15px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }

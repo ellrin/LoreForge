@@ -821,6 +821,15 @@ async fn theme_is_the_shared_choice() {
     assert!(!web.join("theme.js").exists(), "theme.js comes from commons/ui through the server");
     let styles = std::fs::read_to_string(web.join("styles.css")).unwrap();
     assert!(!styles.contains("--bg: #"), "palettes live in commons/ui/theme.css only");
+    // The current thumbnail is marked on the page (.frame), never on the row: the row is as wide as the
+    // resizable panel, the page is not, so a row mark lines up with the page at one panel width only
+    // (it broke each time the panel's width or layout changed). The page fills its column.
+    let rule = |sel: &str| styles.split('\n').filter(|l| l.trim_start().starts_with(sel)).collect::<Vec<_>>().join("\n");
+    let row = rule(".thumb[aria-current=\"true\"] {");
+    assert!(!row.contains("background") && !row.contains("border"), "no highlight on the whole thumbnail row: {row}");
+    assert!(rule(".thumb[aria-current=\"true\"] .frame").contains("box-shadow"), "the current page's mark sits on .frame");
+    let frame = rule(".thumb .frame {");
+    assert!(frame.contains("width: 100%") && !frame.contains("width: 132px"), "the page fills its column, no fixed width: {frame}");
     // printed pages take no theme
     let print = std::fs::read_to_string(web.join("print.html")).unwrap();
     assert!(!print.contains("theme.css") && !print.contains("theme.js"));
@@ -1015,4 +1024,56 @@ async fn reading_mode_per_paper_and_default() {
     let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{a}"), None, None).await;
     assert_eq!(v["paper"]["view_mode"], "scroll");
     assert!(v["paper"].get("view").is_none());
+}
+
+/// 動起來: the shared plotting tool is mounted (editor files, the equation checks), the model
+/// task is routed (no engine here: a reason, never a crash), and the page has the entry.
+#[tokio::test]
+async fn equations_come_alive_through_the_shared_plot_tool() {
+    let e = setup(&dead_url(), None);
+    let (st, _, page) = call(&e.app, "GET", "/plot/", None, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&page).contains("equation.js"));
+    for f in ["eqcore.js", "equation.js", "equations.json", "editor.js", "mathsvg.js"] {
+        let (st, _, _) = call(&e.app, "GET", &format!("/plot/{f}"), None, None).await;
+        assert_eq!(st, StatusCode::OK, "{f}");
+    }
+    // a template checks out; a broken expression says why
+    let focal = json!({ "eq": { "expr": "focal(p, gamma, alpha)", "x": { "name": "p", "min": 0.001, "max": 1 },
+        "vars": [{ "name": "gamma", "role": "param", "value": 2, "min": 0, "max": 5, "step": 0.1 }, { "name": "alpha", "role": "param", "value": 0.25, "min": 0.05, "max": 1, "step": 0.05 }],
+        "properties": [{ "kind": "nonneg", "text": "≥ 0" }, { "kind": "decreasing", "var": "gamma", "text": "γ" }] } });
+    let (st, r, _) = call(&e.app, "POST", "/plot/api/equation/check", Some(focal), None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(r["checks"].as_array().unwrap().iter().all(|c| c["ok"] == true));
+    let (_, r, _) = call(&e.app, "POST", "/plot/api/equation/check", Some(json!({ "eq": { "expr": "constructor(p)", "x": { "name": "p", "min": 0, "max": 1 } } })), None).await;
+    assert_eq!(r["ok"], false);
+    assert!(r["problems"][0].as_str().unwrap().contains("constructor"));
+    // no engine in the isolated server: the reason comes back as JSON
+    let (st, r, _) = call(&e.app, "POST", "/plot/api/equation/propose", Some(json!({ "latex": "\\mathcal{L} = -\\log p", "symbols": [{ "latex": "p", "meaning": "probability" }], "context": "" })), None).await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY, "{r}");
+    assert!(r["error"].as_str().is_some_and(|s| !s.is_empty()));
+    // the task is in the routing table and the 模型 tab
+    let t = lr_server::llm::Llm::task_table(None).unwrap();
+    assert!(t.task.contains_key("equation-plot"));
+    assert!(lr_server::llm::engine_tasks().contains("[task.equation-plot]"));
+    // the page: 動起來 on equations
+    let web = lr_server::repo_dir().join("web");
+    assert!(std::fs::read_to_string(web.join("index.html")).unwrap().contains("eqplot.js"));
+    assert!(std::fs::read_to_string(web.join("app.js")).unwrap().contains("動起來"));
+    // a composite loss gets its simulation scenes (no model); a single function gets none
+    let (st, r, _) = call(&e.app, "POST", "/plot/api/equation/scenes", Some(json!({ "latex": "\\mathcal{L} = \\mathcal{L}_{rec} + \\beta\\, D_{KL}(q_\\phi(z|x) \\| p(z))" })), None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(r["scenes"][0], "sim-mix", "{r}");
+    let (_, r, _) = call(&e.app, "POST", "/plot/api/equation/scenes", Some(json!({ "latex": "\\mathrm{GELU}(x) = x \\Phi(x)" })), None).await;
+    assert_eq!(r["scenes"], json!([]));
+    // a simulation spec is checked like any equation figure
+    let (_, r, _) = call(&e.app, "POST", "/plot/api/equation/check", Some(json!({ "eq": { "sim": { "scene": "fit1d", "target": { "mix": [{ "w": 1, "mu": 0, "sigma": 1 }] }, "terms": [{ "kind": "kl_pq" }, { "kind": "expr", "expr": "constructor(mu)" }] } } })), None).await;
+    assert_eq!(r["ok"], false);
+    assert!(r["problems"].to_string().contains("自訂項"), "{r}");
+    // the page loads the simulation scripts with the rest of the plot tool
+    let eqplot = std::fs::read_to_string(web.join("eqplot.js")).unwrap();
+    for f in lore_plot::assets::SCRIPTS {
+        assert!(eqplot.contains(f), "eqplot.js does not load {f}");
+    }
 }
