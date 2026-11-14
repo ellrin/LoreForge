@@ -1,0 +1,30 @@
+# Situational sentence patterns from writing guides (not your voice).
+# PaperComposer sends only the entries whose situation fits the paragraph being drafted,
+# as structure to reuse; they never go into the phrase bank, 潤飾 or 我的風格.
+# situation: thesis_statement, thesis_with_reasons, purpose_to_thesis,
+#            tentative_thesis_from_questions, compare_two, topic_sentence
+# source must be "guide". Examples here are invented.
+
+[[pattern]]
+id = "thesis-topic-claim-reason"
+situation = "thesis_statement"
+when = "The last sentence(s) of the Introduction: the paper's one specific, supportable claim."
+structure = "{topic} {specific claim}, because {reason}."
+example = "Quiet study rooms improve focus because they remove interruptions."
+source = "guide"
+
+[[pattern]]
+id = "compare-differ-both"
+situation = "compare_two"
+when = "Comparing two methods or findings: grant the difference, then make the shared claim."
+structure = "Although {A} and {B} differ in {aspect}, both {shared claim}."
+example = "Although trains and buses differ in speed, both reduce traffic in city centres."
+source = "guide"
+
+[[pattern]]
+id = "topic-key-words"
+situation = "topic_sentence"
+when = "A paragraph's first sentence: topic + key words (the claim about it)."
+structure = "{topic} {key words: the claim about it}."
+example = "Cycling is a practical way to commute for several reasons."
+source = "guide"

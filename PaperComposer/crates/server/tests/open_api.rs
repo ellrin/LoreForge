@@ -175,6 +175,18 @@ async fn opens_latex_and_word_where_they_are() {
         assert_eq!(r["comments"][0]["text"], "Please cite a second source here.");
         let (_, recent) = api.get("/api/open/recent").await;
         assert_eq!(recent[0]["kind"], "word");
+        // the same .docx again: its paper, no second copy
+        let (_, again) = api.post("/api/open/inspect", json!({"path": docx})).await;
+        assert_eq!((again["kind"].as_str(), again["id"].as_str()), (Some("paper"), Some("Widgets LaTeX")), "{again}");
+        assert!(!root.join("Projects/Widgets (LaTeX) 2").exists());
+        // changed since: the page asks, a new conversion would go to a free folder
+        let mut bytes = pc_server::word::synth::docx();
+        bytes.extend_from_slice(b"\0");
+        std::fs::write(&docx, bytes).unwrap();
+        let (_, asks) = api.post("/api/open/inspect", json!({"path": docx})).await;
+        assert_eq!(asks["kind"], "word");
+        assert_eq!(asks["earlier"].as_str().map(PathBuf::from), Some(root.join("Projects/Widgets (LaTeX)")));
+        assert_eq!(asks["dest"].as_str().map(PathBuf::from), Some(root.join("Projects/Widgets (LaTeX) 2")));
     }
 
     // a folder that is gone: greyed in the list, 404 for the paper

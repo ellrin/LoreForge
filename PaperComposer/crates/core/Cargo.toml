@@ -11,3 +11,6 @@ csv.workspace = true
 thiserror.workspace = true
 lore-notation.workspace = true
 lore-notes.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

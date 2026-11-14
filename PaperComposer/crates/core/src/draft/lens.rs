@@ -164,6 +164,8 @@ pub enum Missing {
     Depth(usize),
     Flag(String),
     Number,
+    /// A pending result the author has not explained yet (what, why, expectation, if not).
+    Explain,
 }
 
 /// The parts of an item a lens judges.
@@ -308,6 +310,7 @@ impl Lens {
                     Missing::Depth(_) => p.when_missing == "depth",
                     Missing::Number => p.when_missing == "number",
                     Missing::Flag(f) => &p.when_missing == f,
+                    Missing::Explain => p.when_missing == "explain",
                 })
             })
             .collect()

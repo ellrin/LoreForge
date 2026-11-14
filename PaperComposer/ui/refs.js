@@ -113,7 +113,7 @@ const PCRefs = (() => {
         else if (q.error) { it.state = "error"; it.msg = q.error; }
         else {
           const r = await api("/api/refs/add", { bibtex: q.bibtex, summary: q.summary, one_liner: q.one_liner, tags: q.tags ?? [], pdf: null });
-          it.state = "saved"; it.key = r.key; it.tags = q.tags ?? [];
+          it.state = "saved"; it.key = r.key; it.tags = q.tags ?? []; it.oneLiner = q.one_liner ?? "";
           it.msg = `${r.key}${q.source === "text" ? "（書目取自你貼的文字）" : ""}${q.note_error ? `；簡介沒有產生：${q.note_error}` : ""}`;
         }
       } catch (e) { it.state = "error"; it.msg = e.message; }
@@ -121,10 +121,13 @@ const PCRefs = (() => {
       draw();
     }
 
+    // every paper pasted for this paper joins it (本篇文獻): the author's note is its purpose,
+    // else the one-line summary, else a mark to write one
     async function keepNote(it) {
       const paper = opts.paper?.();
-      if (!paper || !it.key || !it.guess.note || it.noteKept) return;
-      try { await api(`/api/papers/${encodeURIComponent(paper)}/citations`, { key: it.key, purpose: it.guess.note }); it.noteKept = true; } catch {}
+      if (!paper || !it.key || it.noteKept) return;
+      const purpose = it.guess.note || it.oneLiner || "（用途待寫）";
+      try { await api(`/api/papers/${encodeURIComponent(paper)}/citations`, { key: it.key, purpose }); it.noteKept = true; } catch {}
     }
 
     async function check(it) {

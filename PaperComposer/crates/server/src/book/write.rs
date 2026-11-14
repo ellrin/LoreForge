@@ -126,9 +126,9 @@ placed right after the sentence it explains and never inside a box.",
     }
 }
 
-/// The chapter prompt.
+/// The chapter prompt. `style` = the author's style notes (`style_text`; empty: none).
 #[allow(clippy::too_many_arguments)]
-pub fn prompt(book_title: &str, c: &Chapter, plan: &Plan, labels: &BTreeMap<String, (String, String)>, teach: &[Teach], m: &Material, r: &Research, keys: &BTreeMap<String, String>, notation: &str, length: &str, lang: &str) -> (String, String) {
+pub fn prompt(book_title: &str, c: &Chapter, plan: &Plan, labels: &BTreeMap<String, (String, String)>, teach: &[Teach], m: &Material, r: &Research, keys: &BTreeMap<String, String>, notation: &str, style: &str, length: &str, lang: &str) -> (String, String) {
     let (lo, hi) = words_for(&c.depth, length);
     let mut system = format!(
         "You write one chapter of a set of course lecture notes for one reader, in the manner of university lecture notes such as \
@@ -156,6 +156,7 @@ Reply with JSON only: {{\"body\": LaTeX of the chapter, \"figures\": [...], \"ta
         lang = lang_rules(lang)
     );
     system += notation;
+    system += &pc_core::draft::style_block(style);
     let mut user = format!("Notes: {book_title}\nThese notes teach the paper \"{}\".\n\nChapters (label):\n", m.title);
     for x in &plan.chapters {
         let l = labels.get(&x.id).map(|(_, l)| l.as_str()).unwrap_or("");
@@ -618,6 +619,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, m: &Material, plan: &Plan,
         save_state(ctx.job_dir, &st);
     }
     let notation_rules = crate::notation::describe(&eff, None);
+    let style = ctx.ws.map(pc_core::draft::style_text).unwrap_or_default();
     let opt = lore_notation::CheckOptions::default();
     let total = plan.chapters.len();
     for (i, c) in plan.chapters.iter().enumerate() {
@@ -626,7 +628,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, m: &Material, plan: &Plan,
             continue;
         }
         let (file, label) = st.sections[&c.id].clone();
-        let (system, user) = prompt(&title, c, plan, &st.sections, teach, m, r, &st.keys, &notation_rules, ctx.length, ctx.lang);
+        let (system, user) = prompt(&title, c, plan, &st.sections, teach, m, r, &st.keys, &notation_rules, &style, ctx.length, ctx.lang);
         let mut extra = String::new();
         let mut co = ChapterOut::default();
         let mut text = String::new();

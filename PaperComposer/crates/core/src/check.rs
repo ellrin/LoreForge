@@ -4,6 +4,8 @@
 //! - `sentence_count`  threshold "min-max", per paragraph
 //! - `max_words`       threshold "n", per sentence
 //! - `banned_words`    uses vocabulary.csv, per paragraph
+//! - the style checks of [`crate::stylecheck`] (`phrases`, `comma_splice`, `contractions`…),
+//!   threshold = a list in the workspace's `style/checks.toml`
 //!
 //! Soft rules (type = soft) are listed in the report as `pending`; the
 //! `softcheck` module has a model judge them.
@@ -37,6 +39,11 @@ pub struct Finding {
     pub message: String,
     /// 0-based sentence index within the paragraph, when it concerns one.
     pub sentence: Option<usize>,
+    /// What was found and what to write instead (style checks; `suggest` may be empty).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub found: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +82,7 @@ fn check_paragraph(profile: &Profile, index: usize, para: &str, section: Option<
     let words: usize = sents.iter().map(|s| word_count(s)).sum();
     let mut findings = Vec::new();
     let mut pending = Vec::new();
+    let mut prose: Option<Vec<(Option<usize>, String)>> = None;
 
     for rule in profile.rules.iter().filter(|r| applies(r, "paragraph", section)) {
         if rule.kind == RuleKind::Soft {
@@ -95,6 +103,8 @@ fn check_paragraph(profile: &Profile, index: usize, para: &str, section: Option<
                             severity: sev,
                             message: format!("{} ({n})", msg(format!("{lo}-{hi} sentences expected"))),
                             sentence: None,
+                            found: None,
+                            suggest: None,
                         });
                     }
                 }
@@ -109,6 +119,8 @@ fn check_paragraph(profile: &Profile, index: usize, para: &str, section: Option<
                                 severity: sev,
                                 message: format!("{} ({n})", msg(format!("over {max} words"))),
                                 sentence: Some(i),
+                                found: None,
+                                suggest: None,
                             });
                         }
                     }
@@ -130,8 +142,34 @@ fn check_paragraph(profile: &Profile, index: usize, para: &str, section: Option<
                                 severity: sev,
                                 message: hint,
                                 sentence: Some(i),
+                                found: Some(v.avoid.clone()),
+                                suggest: Some(v.prefer.clone()).filter(|p| !p.is_empty()),
                             });
                         }
+                    }
+                }
+            }
+            kind if crate::stylecheck::is_kind(kind) => {
+                let list = profile.style_checks.list(&rule.threshold);
+                if crate::stylecheck::needs_list(kind) && list.is_empty() {
+                    continue;
+                }
+                let prose = prose.get_or_insert_with(|| crate::stylecheck::prose_sentences(para, sents.len()));
+                for (i, s) in prose.iter() {
+                    for h in crate::stylecheck::run(kind, list, s) {
+                        let hint = if h.suggest.is_empty() {
+                            format!("\u{201c}{}\u{201d}", h.found)
+                        } else {
+                            format!("\u{201c}{}\u{201d} \u{2192} \u{201c}{}\u{201d}", h.found, h.suggest)
+                        };
+                        findings.push(Finding {
+                            rule: rule.id.clone(),
+                            severity: sev,
+                            message: if rule.message.is_empty() { hint } else { format!("{} · {hint}", rule.message) },
+                            sentence: *i,
+                            found: Some(h.found),
+                            suggest: Some(h.suggest).filter(|s| !s.is_empty()),
+                        });
                     }
                 }
             }
@@ -176,6 +214,7 @@ mod tests {
             root: Default::default(),
             authors: vec![],
             affiliations: vec![],
+            style_checks: Default::default(),
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },
             phrases: vec![],
             expressions: vec![],
@@ -207,5 +246,61 @@ mod tests {
     fn banned_words_match_whole_words_only() {
         assert!(contains_word(" we utilize it ", "utilize"));
         assert!(!contains_word(" utilized ", "utilize"));
+    }
+
+    #[test]
+    fn style_checks_come_from_the_workspace_data() {
+        let ws = std::env::temp_dir().join(format!("pc-stylecheck-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ws);
+        std::fs::create_dir_all(ws.join("style")).unwrap();
+        std::fs::write(ws.join("style/checks.toml"), "wordy = [{ find = \"in order to\", use = \"to\" }]\nadverbs = [\"however\"]\n").unwrap();
+        let mut p = profile();
+        let hard = |id: &str, check: &str, threshold: &str, sev: &str| Rule {
+            id: id.into(),
+            kind: RuleKind::Hard,
+            scope: "sentence".into(),
+            check: check.into(),
+            threshold: threshold.into(),
+            severity: sev.into(),
+            message: String::new(),
+        };
+        p.rules = vec![
+            hard("S1", "phrases", "wordy", "info"),
+            hard("S2", "comma_splice", "adverbs", "warning"),
+            hard("S3", "contractions", "", "warning"),
+            hard("S4", "phrases", "jargon", "info"),
+        ];
+        let issues = p.load_style_checks(&ws);
+        assert_eq!(issues.len(), 1, "the missing list is named: {issues:?}");
+        assert!(issues[0].message.contains("jargon"));
+        let text = "However, we act in order to learn. It worked, however, it's slow \\cite{in order to}.";
+        let r = check_text(&p, text, None);
+        let f = &r[0].findings;
+        let s1 = f.iter().find(|f| f.rule == "S1").unwrap();
+        assert_eq!((s1.sentence, s1.suggest.as_deref(), s1.severity), (Some(0), Some("to"), Severity::Info));
+        assert!(s1.message.contains("\u{2192}"));
+        assert_eq!(f.iter().filter(|f| f.rule == "S1").count(), 1, "the \\cite argument is no prose");
+        let s2: Vec<_> = f.iter().filter(|f| f.rule == "S2").collect();
+        assert_eq!(s2.len(), 1, "\"However,\" at the start is fine");
+        assert_eq!((s2[0].sentence, s2[0].suggest.as_deref()), (Some(1), Some("; however,")));
+        assert!(f.iter().any(|f| f.rule == "S3" && f.suggest.as_deref() == Some("it is")));
+        // no data file: the rows find nothing and nothing breaks
+        let mut q = profile();
+        q.rules = p.rules.clone();
+        assert!(check_text(&q, text, None)[0].findings.iter().all(|f| f.rule == "S3"));
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn the_example_workspace_style_checks_load_and_fire() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../private-example/PaperComposer");
+        let (mut p, issues) = Profile::load(&ws.join("profile")).unwrap();
+        assert!(issues.iter().all(|i| !i.error), "{issues:?}");
+        assert!(p.load_style_checks(&ws).is_empty(), "every list a rule names is there");
+        let r = check_text(&p, "We trained it in order to learn. It converged, however, it isn't stable!", None);
+        let rules: Vec<&str> = r[0].findings.iter().map(|f| f.rule.as_str()).collect();
+        for want in ["R004", "R006", "R007", "R008"] {
+            assert!(rules.contains(&want), "{want}: {rules:?}");
+        }
     }
 }

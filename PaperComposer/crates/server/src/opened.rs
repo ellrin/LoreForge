@@ -12,7 +12,7 @@
 //! | POST | /api/shell/dialog | `{kind: latex\|word\|folder, start?}` → `{path}`; 501 without the desktop app |
 //! | GET | /api/open/recent | opened folders, newest first, `exists` false when gone |
 //! | POST | /api/open/forget | `{id}`: drop from the list (the folder is not touched) |
-//! | POST | /api/open/inspect | `{path}` → `{kind: paper, id}` / `{kind: latex, plan}` / `{kind: archive, dest}` / `{kind: word, dest, pandoc}` |
+//! | POST | /api/open/inspect | `{path}` → `{kind: paper, id}` / `{kind: latex, plan}` / `{kind: archive, dest}` / `{kind: word, dest, pandoc, earlier?}` (a .docx converted before and unchanged → that paper; changed → `earlier` = its folder, the page asks) |
 //! | POST | /api/open/latex | `{path, stamp, restructure?}`: open as it is (only `.papercomposer/` is added); `restructure` first copies the originals to `.papercomposer/original/` |
 //! | POST | /api/open/extract | `{path, dest}`: unpack an archive, then inspect the folder |
 //! | POST | /api/open/word | `{path, dest}`: convert into a new folder, then open |
@@ -85,7 +85,7 @@ impl Registry {
         self.papers.iter().find(|e| e.id == id)
     }
 
-    fn same(a: &Path, b: &Path) -> bool {
+    pub(crate) fn same(a: &Path, b: &Path) -> bool {
         a == b || a.canonicalize().ok().is_some_and(|x| b.canonicalize().ok().is_some_and(|y| x == y))
     }
 
@@ -120,6 +120,32 @@ impl Registry {
         v.sort_by(|a, b| b.opened.cmp(&a.opened).then_with(|| a.id.cmp(&b.id)));
         v
     }
+}
+
+/// An earlier conversion of `docx`, and whether the .docx changed since:
+/// folders in the registry whose source is it (newest first), then the
+/// default `<name> (LaTeX)` beside it when its record names it (or, made
+/// before records existed, it holds a `reference.docx`). An unchanged one wins.
+pub fn earlier_conversion(reg: &Registry, docx: &Path) -> Option<(PathBuf, bool)> {
+    let mut dirs: Vec<PathBuf> = reg
+        .recent()
+        .into_iter()
+        .filter(|e| e.source.as_deref().is_some_and(|src| Registry::same(src, docx)))
+        .map(|e| e.path.clone())
+        .collect();
+    let d = word::default_dest(docx);
+    let from_it = match word::read_source(&d) {
+        Some(r) => docx.file_name().is_some_and(|n| n.to_string_lossy() == r.name),
+        None => paper::app_dir(&d).join("reference.docx").is_file(),
+    };
+    if from_it && !dirs.iter().any(|x| Registry::same(x, &d)) {
+        dirs.push(d);
+    }
+    let found: Vec<(PathBuf, bool)> = dirs.into_iter().filter(|d| inplace::is_paper(d)).map(|d| {
+        let changed = word::source_changed(docx, &d);
+        (d, changed)
+    }).collect();
+    found.iter().find(|(_, c)| !c).or(found.first()).cloned()
 }
 
 /// `opened.toml` beside config.toml.
@@ -340,7 +366,11 @@ async fn inspect(State(s): State<Shared>, Json(b): Json<PathBody>) -> impl IntoR
     } else if is_archive(&p) {
         Ok(serde_json::json!({ "kind": "archive", "path": p, "dest": archive_dest(&p) }))
     } else if n.ends_with(".docx") {
-        Ok(serde_json::json!({ "kind": "word", "path": p, "dest": word::default_dest(&p), "pandoc": word::has_pandoc() }))
+        // the same .docx again: its earlier paper, never another copy; changed since → the page asks
+        match earlier_conversion(&registry(), &p) {
+            Some((dir, false)) => opened(&s, &dir, "word", Some(&p)).await,
+            earlier => Ok(serde_json::json!({ "kind": "word", "path": p, "dest": word::free_dest(&p), "pandoc": word::has_pandoc(), "earlier": earlier.map(|(d, _)| d) })),
+        }
     } else {
         Err("請選 LaTeX 資料夾、.zip、.tar.gz、.tex 或 .docx".into())
     };
@@ -392,7 +422,7 @@ async fn extract(State(s): State<Shared>, Json(b): Json<PathBody>) -> impl IntoR
 }
 
 async fn open_word(State(s): State<Shared>, Json(b): Json<PathBody>) -> impl IntoResponse {
-    let dest = b.dest.clone().unwrap_or_else(|| word::default_dest(&b.path));
+    let dest = b.dest.clone().unwrap_or_else(|| word::free_dest(&b.path));
     let people = s.loaded.read().await.profile.as_ref().map(|p| p.authors.clone()).unwrap_or_default();
     let mut c = match word::convert(&b.path, &dest, &people).await {
         Ok(c) => c,
@@ -405,6 +435,10 @@ async fn open_word(State(s): State<Shared>, Json(b): Json<PathBody>) -> impl Int
     // typed numbers ("Table 1") become review comments on the spot, so they are not lost with a toast
     if !c.notation.is_empty() {
         c.comments += typed_number_comments(&c.dir);
+    }
+    // what opening the same .docx again compares with (word-source.toml)
+    if let Err(e) = word::record_source(&b.path, &c.dir) {
+        return bad(&e);
     }
     match opened(&s, &c.dir, "word", Some(&b.path)).await {
         Ok(mut v) => {
@@ -537,6 +571,70 @@ mod tests {
         let back = Registry::load(&file);
         assert_eq!(back, r);
         assert_eq!(back.get("Paper").unwrap().source.as_deref(), Some(root.join("x.docx").as_path()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A converted paper as `word::convert` leaves it (no pandoc needed here).
+    fn converted(dir: &Path, docx: &Path, record: bool) {
+        std::fs::create_dir_all(paper::app_dir(dir)).unwrap();
+        std::fs::write(dir.join("main.tex"), "\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n").unwrap();
+        std::fs::copy(docx, paper::app_dir(dir).join("reference.docx")).unwrap();
+        if record {
+            word::record_source(docx, dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_same_docx_opens_its_earlier_paper() {
+        let root = tmp("again");
+        let docx = root.join("Widgets.docx");
+        std::fs::write(&docx, b"word bytes v1").unwrap();
+        let reg = Registry::default();
+        assert_eq!(earlier_conversion(&reg, &docx), None, "never converted");
+        assert_eq!(word::free_dest(&docx), root.join("Widgets (LaTeX)"));
+
+        // the default folder beside it, recorded: unchanged
+        let first = word::default_dest(&docx);
+        converted(&first, &docx, true);
+        assert_eq!(earlier_conversion(&reg, &docx), Some((first.clone(), false)));
+        assert_eq!(word::free_dest(&docx), root.join("Widgets (LaTeX) 2"), "a new conversion never reuses it");
+
+        // only the time changed (a copy, a sync): still the same
+        let f = std::fs::File::options().write(true).open(&docx).unwrap();
+        f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60)).unwrap();
+        drop(f);
+        assert_eq!(earlier_conversion(&reg, &docx), Some((first.clone(), false)));
+
+        // the content changed: found, but changed (the page asks)
+        std::fs::write(&docx, b"word bytes v2, longer").unwrap();
+        assert_eq!(earlier_conversion(&reg, &docx), Some((first.clone(), true)));
+
+        // a conversion elsewhere, in the registry, of the new content wins (unchanged)
+        let mut reg = Registry::default();
+        let other = root.join("elsewhere/Widgets paper");
+        converted(&other, &docx, true);
+        reg.add(&other, "word", Some(&docx), &[]);
+        assert_eq!(earlier_conversion(&reg, &docx), Some((other.clone(), false)));
+        // its folder gone: back to the default one
+        std::fs::remove_dir_all(&other).unwrap();
+        assert_eq!(earlier_conversion(&reg, &docx), Some((first.clone(), true)));
+
+        // another .docx of the same name elsewhere is not this one
+        let twin = root.join("b/Widgets.docx");
+        std::fs::create_dir_all(twin.parent().unwrap()).unwrap();
+        std::fs::write(&twin, b"word bytes v2, longer").unwrap();
+        assert_eq!(earlier_conversion(&reg, &twin), None);
+
+        // made before records existed: the default folder with a reference.docx counts
+        let old = root.join("old.docx");
+        std::fs::write(&old, b"old bytes").unwrap();
+        converted(&word::default_dest(&old), &old, false);
+        assert_eq!(earlier_conversion(&reg, &old), Some((word::default_dest(&old), false)));
+        std::fs::write(&old, b"old bytes, edited").unwrap();
+        assert_eq!(earlier_conversion(&reg, &old), Some((word::default_dest(&old), true)));
+        // a record naming another .docx: not from this one
+        word::record_source(&docx, &word::default_dest(&old)).unwrap();
+        assert_eq!(earlier_conversion(&reg, &old), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

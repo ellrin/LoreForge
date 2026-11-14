@@ -85,18 +85,28 @@ impl Fail {
 /// The task's candidates, tried in order until one gives a result.
 pub struct Attempts {
     task: String,
-    models: std::vec::IntoIter<String>,
+    models: std::collections::VecDeque<String>,
     why: Vec<String>,
 }
 
+/// A safety classifier said no to a normal request (Opus' "safeguards flagged this
+/// message"): another Claude model usually answers the same prompt.
+pub fn is_refusal(why: &str) -> bool {
+    let w = why.to_lowercase();
+    w.contains("safeguards flagged") || w.contains("usage policy") || w.contains("legal/aup")
+}
+
+/// The model to try after a refusal (never the one that refused).
+const AFTER_REFUSAL: &str = "claude:sonnet";
+
 impl Attempts {
     pub fn new(e: &dyn Engines, task: &str, picked: Option<&str>) -> Attempts {
-        Attempts { task: task.into(), models: e.candidates(task, picked).into_iter(), why: vec![] }
+        Attempts { task: task.into(), models: e.candidates(task, picked).into_iter().collect(), why: vec![] }
     }
 
     /// The next engine to try (with its prompt budget when it is small).
     pub async fn next(&mut self, e: &dyn Engines) -> Option<Cand> {
-        let model = self.models.next()?;
+        let model = self.models.pop_front()?;
         let budget = if is_local(&model) { Some(fb::prompt_budget(e.local_context(&self.task).await.unwrap_or(DEFAULT_LOCAL_CONTEXT))) } else { None };
         Some(Cand { model, budget })
     }
@@ -107,7 +117,12 @@ impl Attempts {
     }
 
     pub fn failed(&mut self, c: &Cand, f: Fail) {
-        self.why.push(format!("{}：{}", engine_label(&c.model), f.text()));
+        // Opus refused a normal request: Sonnet next, before any local model
+        if is_refusal(f.text()) && c.model.starts_with("claude") && c.model != AFTER_REFUSAL && !self.models.iter().any(|m| m == AFTER_REFUSAL) {
+            self.models.push_front(AFTER_REFUSAL.into());
+        }
+        let text: String = f.text().chars().take(160).collect();
+        self.why.push(format!("{}：{text}", engine_label(&c.model)));
     }
 
     pub fn error(self) -> String {
@@ -222,6 +237,25 @@ pub async fn plan(e: &dyn Engines, key_value: &str, sess: &Session, lens: &Lens,
             }
         };
         ask(e, task, &c, &p, &schema, |x| dp::parse_plan(x, lens)).await
+    })
+}
+
+/// 預想選項 for `items` (one batched call, run in the background before the
+/// interview; never from a turn). Returns the checked candidates per item.
+pub async fn candidates(e: &dyn Engines, key_value: &str, sess: &Session, lens: &Lens, items: &[&Item], record: &str, material: &str) -> Result<(Vec<pc_core::draft::candidates::Checked>, EngineUsed), String> {
+    use pc_core::draft::candidates as ca;
+    let task = ca::TASK;
+    let schema = ca::schema();
+    let asked: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+    first_working!(e, task, None, |c| {
+        let p = match c.budget {
+            None => ca::prompt(key_value, sess, lens, items, &fb::cut(record, RECORD_MAX_CHARS), material),
+            Some(b) => {
+                let (r, m) = small_parts(b, record, material);
+                ca::prompt(key_value, sess, lens, items, &r, &m)
+            }
+        };
+        ask(e, task, &c, &p, &schema, |x| ca::parse(x).map(|r| ca::validate(r, sess, &asked, record))).await
     })
 }
 
@@ -344,13 +378,14 @@ mod tests {
     struct NoClaude {
         replies: Mutex<Vec<String>>,
         seen: Mutex<Vec<(String, Prompt)>>,
+        tasks: Mutex<Vec<String>>,
         claude: bool,
         context: u32,
     }
 
     impl NoClaude {
         fn new(replies: &[&str]) -> NoClaude {
-            NoClaude { replies: Mutex::new(replies.iter().map(|s| s.to_string()).collect()), seen: Mutex::new(vec![]), claude: false, context: 16_384 }
+            NoClaude { replies: Mutex::new(replies.iter().map(|s| s.to_string()).collect()), seen: Mutex::new(vec![]), tasks: Mutex::new(vec![]), claude: false, context: 16_384 }
         }
         fn calls(&self) -> Vec<(String, Prompt)> {
             self.seen.lock().unwrap().clone()
@@ -367,7 +402,8 @@ mod tests {
             let t = &t.task[task];
             [Some(t.default.clone()), t.fallback.clone()].into_iter().flatten().collect()
         }
-        async fn complete(&self, _task: &str, model_ref: &str, prompt: &Prompt, _extra: Option<&str>, _schema: Value) -> Result<String, String> {
+        async fn complete(&self, task: &str, model_ref: &str, prompt: &Prompt, _extra: Option<&str>, _schema: Value) -> Result<String, String> {
+            self.tasks.lock().unwrap().push(task.into());
             if model_ref.starts_with("claude") && !self.claude {
                 return Err("沒有登入 Claude，也沒有 API key".into());
             }
@@ -382,6 +418,36 @@ mod tests {
 
     fn lens() -> Lens {
         Lens::builtin()
+    }
+
+    /// Opus' safety check refuses a normal record; Sonnet takes it before the local model.
+    struct Refuses;
+    #[async_trait]
+    impl Engines for Refuses {
+        fn candidates(&self, _task: &str, _picked: Option<&str>) -> Vec<String> {
+            vec!["claude:opus".into(), "local:current".into()]
+        }
+        async fn complete(&self, _task: &str, model_ref: &str, _prompt: &Prompt, _extra: Option<&str>, _schema: Value) -> Result<String, String> {
+            match model_ref {
+                "claude:opus" => Err("Claude 訂閱 回傳 0：API Error: Opus 5.5's safeguards flagged this message (https://www.anthropic.com/legal/aup).".into()),
+                "claude:sonnet" => Ok("sonnet".into()),
+                _ => Err("local must not run".into()),
+            }
+        }
+        async fn local_context(&self, _task: &str) -> Option<u32> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refusal_moves_on_to_sonnet_not_local() {
+        let e = Refuses;
+        let p = Prompt { system: String::new(), user: String::new() };
+        let r: Result<(String, EngineUsed), String> = first_working!(&e, "pc-draft-record", None, |c| e.complete("pc-draft-record", &c.model, &p, None, Value::Null).await.map_err(Fail::Engine));
+        let (v, used) = r.unwrap();
+        assert_eq!(v, "sonnet");
+        assert!(used.note.contains("safeguards"), "{used:?}");
+        assert!(is_refusal("Opus 5.5's safeguards flagged this message") && !is_refusal("沒有網路"));
     }
 
     fn fell_back(u: &EngineUsed, from: &str) {
@@ -399,7 +465,7 @@ mod tests {
     #[test]
     fn every_draft_task_falls_back_to_local() {
         let t = crate::llm::Llm::task_table(None).unwrap();
-        for id in ["pc-draft-record", "pc-draft-plan", "pc-draft-turn", "pc-draft-claims", "pc-draft-review", "pc-draft-outline", "pc-draft-audit", "pc-draft-revise"] {
+        for id in ["pc-draft-candidates", "pc-draft-record", "pc-draft-plan", "pc-draft-turn", "pc-draft-claims", "pc-draft-review", "pc-draft-outline", "pc-draft-audit", "pc-draft-revise"] {
             assert!(t.task[id].default.starts_with("claude:"), "{id}: Claude first");
             assert_eq!(t.task[id].fallback.as_deref(), Some("local:current"), "{id}");
             assert_ne!(t.task[id].offline, Some(false), "{id} runs offline on the local model");
@@ -439,6 +505,73 @@ mod tests {
         assert_eq!(r.thoughts[1].about, ["E2", "T2"], "ids follow the merge");
         let made_up = r.tables.iter().find(|t| t.caption == "Made up").unwrap();
         assert!(made_up.note.contains("0.97"), "a number not in the record is flagged: {}", made_up.note);
+    }
+
+    fn planned() -> Session {
+        use pc_core::draft::session::{Experiment, Thought};
+        let mut s = Session::default();
+        s.experiments.push(Experiment { id: "E1".into(), title: "Fuzzy weight".into(), metrics: "Dice".into(), result: "0.72 vs 0.69".into(), ..Default::default() });
+        s.thoughts.push(Thought { id: "H1".into(), text: "模糊影格資訊很多".into(), about: vec!["E1".into()] });
+        s.set_plan(vec![(Group { section: "Methods".into(), title: "Loss".into(), ..Default::default() }, vec![Item { label: "fuzzy weight".into(), role: "core-contribution".into(), ..Default::default() }])]);
+        s
+    }
+
+    #[tokio::test]
+    async fn candidates_are_prepared_on_opus_and_checked_against_the_record() {
+        let reply = r#"{"items":[{"id":"i1","candidates":[
+            {"text":"模糊影格資訊很多，所以降權而不丟掉","kind":"motive","evidence":["H1"],"serves":"s"},
+            {"text":"加權讓 Dice 從 0.69 到 0.72","kind":"result","evidence":["E1"],"serves":"s"},
+            {"text":"加權讓 Dice 到 0.80","kind":"result","evidence":["E1"],"serves":"s"}],"missing":""}]}"#;
+        let e = NoClaude { claude: true, ..NoClaude::new(&[reply]) };
+        let s = planned();
+        let items: Vec<&Item> = s.items.iter().collect();
+        let (checked, used) = candidates(&e, "kv", &s, &lens(), &items, "run log", "").await.unwrap();
+        assert_eq!(e.calls()[0].0, "claude:opus", "the default is Opus");
+        assert_eq!(used.label, "Opus");
+        assert_eq!(e.tasks.lock().unwrap().as_slice(), ["pc-draft-candidates"], "one batched call");
+        assert_eq!(checked[0].kept.len(), 2, "0.80 is not in the record");
+    }
+
+    /// 回填 against the expectation: the model rewrites the dependent paragraph,
+    /// the code puts the numbers in and flags every paragraph that depended on it.
+    #[tokio::test]
+    async fn a_contradicting_fill_in_flags_what_depended_on_it() {
+        use pc_core::draft::pending::{self as pd, Direction, PendingItem, PendingStatus};
+        let d = std::env::temp_dir().join(format!("pc-engine-fill-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sections")).unwrap();
+        std::fs::write(d.join("main.tex"), "\\documentclass{article}\n\\begin{document}\n\\input{sections/results}\n\\input{sections/conclusion}\n\\end{document}\n").unwrap();
+        std::fs::write(d.join("sections/results.tex"), "\\section{Results}\nExternal Dice is \\pending{P1}{external Dice}, which keeps the ranking\\pendingdep{P1}.\n").unwrap();
+        std::fs::write(d.join("sections/conclusion.tex"), "\\section{Conclusion}\nThe gain carries over\\pendingdep{P1}.\n").unwrap();
+        let item = PendingItem { id: "P1".into(), what: "external Dice".into(), result: "0.64".into(), direction: Some(Direction::Contradicts), status: PendingStatus::Filled, ..Default::default() };
+        let mut s = Session::default();
+        s.pending.push(item.clone());
+        let r = Revision { id: "v1".into(), request: pd::request_text(&item, None), group: "v1".into(), pending: Some("P1".into()), ..Default::default() };
+        let reply = r#"{"summary":"外部結果較差","changes":[{"file":"results.tex","action":"replace","index":0,"text":"External Dice is \\pending{P1}{external Dice}, below the baseline: the ranking does not hold.","reason":"結果相反"}],"effects":[],"caption":null}"#;
+        let e = NoClaude { claude: true, ..NoClaude::new(&[reply]) };
+        let (plan, _) = revise(&e, "kv", &s, &r, &d, &pd::plan_rule(&item), "", "A: 外部只有 0.64").await.unwrap();
+        assert!(e.calls()[0].1.system.contains("fills in pending result P1") || e.calls()[0].1.user.contains("fills in pending result P1"), "the model is told what the code does");
+        let (code, _) = pd::fill_changes(&d, &item);
+        let all = pd::merge_plan(&item, plan.changes, code);
+        assert_eq!(all.len(), 2, "the model's results paragraph, the code's conclusion");
+        assert_eq!(all[0].text, "External Dice is 0.64, below the baseline: the ranking does not hold.");
+        assert!(all.iter().all(|c| c.rewrite), "both depended on P1 and the result went the other way");
+        assert_eq!(all[1].text, "The gain carries over.", "the code alone only drops the mark: flagged to rewrite, never applied silently");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn a_turn_never_runs_the_candidates_task() {
+        let e = NoClaude { claude: true, ..NoClaude::new(&[r#"{"updates":[],"summary":{"explain":"","motive":"","conclusion":"","reader_accepts":"","twist":""},"reply":"","question":"為什麼？","item":"i1","options":[],"ref_notes":[],"pending_notes":[]}"#]) };
+        let s = planned();
+        let p = dp::turn_prompt("kv", &s, &lens(), "g1", &[], None, "");
+        let (r, used) = turn(&e, None, &p).await.unwrap();
+        assert_eq!(r.item.as_deref(), Some("i1"));
+        assert_eq!(used.label, "Haiku", "the interview stays on its fast model");
+        assert!(e.tasks.lock().unwrap().iter().all(|t| t == "pc-draft-turn"));
+        let t = crate::llm::Llm::task_table(None).unwrap();
+        assert_eq!(t.task["pc-draft-turn"].default, "claude:haiku");
+        assert_eq!(t.task["pc-draft-candidates"].default, "claude:opus");
     }
 
     #[tokio::test]
@@ -513,7 +646,7 @@ mod tests {
     async fn audit_reads_the_draft_a_section_at_a_time() {
         let mut s = Session::default();
         for (sec, text) in [("Methods", "We use BCE."), ("Results", "Ours drives the improvement.")] {
-            s.drafts.push(DraftSection { section: sec.into(), paras: vec![DraftPara { para: "p1".into(), text: text.into(), problems: vec![] }], new_symbols: vec![], engine: String::new() });
+            s.drafts.push(DraftSection { section: sec.into(), paras: vec![DraftPara { para: "p1".into(), text: text.into(), problems: vec![], pending: vec![] }], new_symbols: vec![], engine: String::new(), placed: false });
         }
         let f = |k: &str| format!(r#"{{"findings":[{{"kind":"{k}","para":"p1","quote":"q","why":"w","ask":""}}]}}"#);
         let e = NoClaude::new(&[&f("missing-why"), &f("overclaim")]);

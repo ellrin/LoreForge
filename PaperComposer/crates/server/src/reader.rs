@@ -475,7 +475,8 @@ pub(crate) struct ParaphraseBody {
     engine: Option<EngineChoice>,
 }
 
-pub fn paraphrase_prompt(text: &str, note: &str, language: &str) -> Prompt {
+/// `style` = the author's style notes (`style_text`; empty: none).
+pub fn paraphrase_prompt(text: &str, note: &str, language: &str, style: &str) -> Prompt {
     let lang = if language.starts_with("zh") { "Traditional Chinese (Taiwan usage)" } else { "English" };
     let system = format!(
         "You help an author cite a passage from a paper he read. Restate the passage in {lang} as one or two sentences \
@@ -490,7 +491,7 @@ Rules:\n\
     if !note.trim().is_empty() {
         user.push_str(&format!("\nThe author's note on it (what he wants it for):\n{}\n", note.trim()));
     }
-    Prompt { system, user }
+    pc_core::draft::with_style(Prompt { system, user }, style)
 }
 
 fn parse_sentence(reply: &str) -> Option<String> {
@@ -504,8 +505,9 @@ pub(crate) async fn paraphrase(State(s): State<Shared>, Json(b): Json<Paraphrase
     if b.text.trim().is_empty() {
         return bad("沒有文字");
     }
+    let style = s.loaded.read().await.workspace.as_deref().map(pc_core::draft::style_text).unwrap_or_default();
     let schema = serde_json::json!({ "type": "object", "properties": { "sentence": { "type": "string" } }, "required": ["sentence"] });
-    match writing_complete(&s, "pc-compose-paragraph", b.engine, &paraphrase_prompt(&b.text, &b.note, &b.language), None, Some(schema)).await {
+    match writing_complete(&s, "pc-compose-paragraph", b.engine, &paraphrase_prompt(&b.text, &b.note, &b.language, &style), None, Some(schema)).await {
         Ok(reply) => match parse_sentence(&reply) {
             Some(t) => Json(serde_json::json!({ "text": t })).into_response(),
             None => Json(serde_json::json!({ "error": "模型的回覆無法讀取" })).into_response(),
@@ -778,8 +780,14 @@ mod tests {
     fn paraphrase_reply_and_prompt() {
         assert_eq!(parse_sentence("ok {\"sentence\": \" Gating  halves the error. \"}").as_deref(), Some("Gating halves the error."));
         assert_eq!(parse_sentence("{\"sentence\": \"\"}"), None);
-        let p = paraphrase_prompt("The gate halves the error.", "主要結果", "en");
+        let p = paraphrase_prompt("The gate halves the error.", "主要結果", "en", "");
         assert!(p.user.contains("The gate halves the error.") && p.user.contains("主要結果"));
-        assert!(p.system.contains("no citation command"));
+        assert!(p.system.contains("no citation command") && !p.system.contains("style rules"));
+        let ws = std::env::temp_dir().join(format!("pc-paraphrase-style-{}", std::process::id()));
+        std::fs::create_dir_all(ws.join("style")).unwrap();
+        std::fs::write(ws.join("style/10-writing.md"), "Simple past for what was done.").unwrap();
+        let styled = paraphrase_prompt("The gate halves the error.", "", "en", &pc_core::draft::style_text(&ws));
+        let _ = std::fs::remove_dir_all(&ws);
+        assert!(styled.system.contains("style rules: follow them") && styled.system.contains("Simple past for what was done."));
     }
 }

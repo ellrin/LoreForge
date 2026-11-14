@@ -7,20 +7,23 @@ const PCExport = (() => {
   const KIND = { pdf: "PDF", docx: "Word", latex: "LaTeX" };
   let busy = false;
   let lastKind = "pdf";
+  let lastSubmission = false;
 
   const paperUrl = () => `/api/papers/${encodeURIComponent(state.paper.name)}`;
 
   /** → true when it compiled (列印 waits for it). */
-  async function run(kind = "pdf") {
+  async function run(kind = "pdf", submission = false) {
     if (!state.paper || busy) return false;
     // A paragraph being edited saves on blur; let that land first.
     const ta = document.querySelector(".para textarea");
     if (ta) { ta.blur(); await new Promise((r) => setTimeout(r, 400)); }
     busy = true;
     lastKind = kind;
+    lastSubmission = submission;
     show(kind, null);
     let r;
-    try { r = await api(`${paperUrl()}/export`, { kind }); }
+    // 投稿版 (and the LaTeX package) is refused while 待補 marks remain; the list jumps to each
+    try { r = await api(`${paperUrl()}/export`, { kind, final: submission }); }
     catch (e) { r = { ok: false, errors: [{ message: e.message }] }; }
     busy = false;
     show(kind, r);
@@ -76,9 +79,12 @@ const PCExport = (() => {
       head.append(el("span", "ex-state busy", kind === "docx" ? "轉換中…" : "編譯中…"));
     } else if (r.ok) {
       const facts = [r.pages ? `${r.pages} 頁` : "", `${r.seconds} 秒`].filter(Boolean).join(" · ");
-      const go = el("button", "primary small", "開啟");
+      const go = el("button", "primary small", r.blind_file ? "完整版" : "開啟");
       go.onclick = () => { close(); open(kind, kind === "latex"); };
-      head.append(el("span", "ex-state ok", facts), go, iconButton("folder", "在資料夾中顯示", () => open(kind, true)));
+      head.append(el("span", "ex-state ok", facts), go);
+      // a double-blind journal: the blinded PDF next to the full one
+      if (r.blind_file) { const bl = el("button", "small", "盲審版"); bl.onclick = () => { close(); open("blind", false); }; head.append(bl); }
+      head.append(iconButton("folder", "在資料夾中顯示", () => open(kind, true)));
     } else {
       head.append(el("span", "ex-state bad", "失敗"));
     }
@@ -94,6 +100,16 @@ const PCExport = (() => {
         }
         ul.append(item("err", e.message, [e.context && el("code", "ex-ctx", e.context), e.hint && el("span", "ex-hint", e.hint), place(e)]));
       });
+      // pdflatex stops on ≤ − ⁺ α …: one click writes them as LaTeX in the paper's files, then compile again
+      if ((r.errors ?? []).some((e) => /Unicode character/.test(e.message))) {
+        const fix = el("button", "small", "全部換成 LaTeX，再編譯");
+        fix.onclick = async () => {
+          fix.disabled = true;
+          try { await api(`${paperUrl()}/fix-unicode`, {}); await openPaper(state.paper.name); run(kind, lastSubmission); }
+          catch (e) { LoreShell.toast(e.message, { err: true }); fix.disabled = false; }
+        };
+        ul.append(item("warn", "pdflatex 不認得的字元", [fix]));
+      }
       if (r.undefined_cites?.length) ul.append(item("warn", "找不到的引用", [el("code", "ex-ctx", r.undefined_cites.join(", "))]));
       if (r.undefined_refs?.length) ul.append(item("warn", "找不到的標籤", [el("code", "ex-ctx", r.undefined_refs.join(", "))]));
       if (r.overfull) ul.append(item("warn", `${r.overfull} 行超出版面`));

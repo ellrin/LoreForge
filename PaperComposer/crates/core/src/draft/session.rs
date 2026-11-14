@@ -186,6 +186,9 @@ pub struct Group {
     /// Answers given in this group.
     #[serde(default)]
     pub turns: usize,
+    /// 預想選項 for the group's items: being prepared, ready, or failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prep: Option<super::candidates::Prep>,
 }
 
 /// One entry in the ledger: a decision, an experiment, a finding, a claim
@@ -216,6 +219,22 @@ pub struct Item {
     /// Reference keys its motive rests on.
     #[serde(default)]
     pub refs: Vec<String>,
+    /// The pending result it stands for (items of the 待補項目 group).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<String>,
+    /// 預想選項: possible answers prepared from the record before the interview.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<super::candidates::Candidate>,
+    /// What the record lacks for more candidates (said by the model).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub candidates_missing: String,
+    /// Candidates the author chose (their answer may edit or combine them).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub picked: Vec<String>,
+    /// Candidates were asked for once (kept or not): never again on their own,
+    /// only when the author asks (重試).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub candidates_tried: bool,
 }
 
 impl Graded for Item {
@@ -314,6 +333,9 @@ pub struct OutlinePara {
     /// Reference keys to cite in this paragraph.
     #[serde(default)]
     pub cites: Vec<String>,
+    /// Pending results (P1, …) the paragraph reports or depends on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -333,6 +355,9 @@ pub struct DraftPara {
     pub text: String,
     #[serde(default)]
     pub problems: Vec<String>,
+    /// Pending results marked in it (`\pending…{P1}`): what depends on what.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -345,6 +370,9 @@ pub struct DraftSection {
     /// The engine that wrote it (`本機`, `Claude`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub engine: String,
+    /// 放進論文 wrote it into the paper (a new 生成 clears it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub placed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -407,6 +435,9 @@ pub struct Session {
     /// 修訂 requests on the existing paper.
     #[serde(default)]
     pub revisions: Vec<super::revise::Revision>,
+    /// 待補: results the paper still waits for ([`super::pending`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<super::pending::PendingItem>,
     /// Which engine produced each step's result (`record`, `plan`, `claims`,
     /// `review`, `outline`, `audit`), shown next to the step's button.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -453,6 +484,12 @@ pub struct Turn {
     /// The engine that asked (AI turns), e.g. `Haiku`, `本機`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub engine: String,
+    /// The item the question is about (AI turns): its candidates are the choices.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub about: String,
+    /// Candidates the author chose for this answer (`i3:k2`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub picked: Vec<String>,
 }
 
 /// Changes the model proposes for one item (by id, or a new one by label).
@@ -624,10 +661,18 @@ impl Session {
     pub fn group_state(&self, lens: &Lens, group: &str) -> GroupState {
         let items: Vec<ItemState> = self
             .items_of(group)
-            .map(|i| ItemState { id: i.id.clone(), missing: lens.missing(i), preferred: lens.preferred(i) })
+            .map(|i| match i.pending.as_deref().filter(|_| i.role == super::pending::ROLE) {
+                // a pending result is done when the author explained it
+                Some(p) => {
+                    let done = self.pending.iter().find(|x| x.id == p).is_none_or(|x| x.note.complete());
+                    ItemState { id: i.id.clone(), missing: if done { vec![] } else { vec![Missing::Explain] }, preferred: None }
+                }
+                None => ItemState { id: i.id.clone(), missing: lens.missing(i), preferred: lens.preferred(i) },
+            })
             .collect();
         let g = self.group(group);
-        let summary_complete = g.is_some_and(|g| g.summary.complete());
+        // 待補項目 has no summary of its own: it is done when every result is explained
+        let summary_complete = if group == super::pending::GROUP_ID { items.iter().all(|i| i.missing.is_empty()) } else { g.is_some_and(|g| g.summary.complete()) };
         let ready = summary_complete && items.iter().all(|i| i.missing.is_empty());
         let over_budget = g.is_some_and(|g| g.turns >= lens.stop.max_turns_per_group);
         GroupState { group: group.into(), items, summary_complete, ready, over_budget }
@@ -693,6 +738,12 @@ impl Session {
         }
         // Later steps' own groups.
         self.revisions.clear();
+        for p in &mut self.pending {
+            p.revision = None;
+            if to < Phase::Interview {
+                p.note = Default::default();
+            }
+        }
         let audit_too = to < Phase::Audit;
         self.groups.retain(|g| !(g.id.starts_with('v') || audit_too && g.id.starts_with('a')));
         let keep: Vec<String> = self.groups.iter().map(|g| g.id.clone()).collect();
@@ -705,7 +756,23 @@ impl Session {
                 g.summary = GroupSummary::default();
             }
             for i in &mut self.items {
-                *i = Item { id: i.id.clone(), group: i.group.clone(), label: i.label.clone(), role: i.role.clone(), ..Default::default() };
+                // the plan's own fields stay: the pending result it stands for, the options prepared from the record
+                *i = Item {
+                    id: i.id.clone(),
+                    group: i.group.clone(),
+                    label: i.label.clone(),
+                    role: i.role.clone(),
+                    pending: i.pending.clone(),
+                    candidates: std::mem::take(&mut i.candidates),
+                    candidates_missing: std::mem::take(&mut i.candidates_missing),
+                    candidates_tried: i.candidates_tried,
+                    ..Default::default()
+                };
+            }
+        }
+        for g in &mut self.groups {
+            if g.prep == Some(super::candidates::Prep::Running) {
+                g.prep = None;
             }
         }
         if all_turns || self.active.as_ref().is_some_and(|a| !keep.contains(a)) {
@@ -823,11 +890,15 @@ pub fn append_turn(paper: &Path, group: &str, who: Who, text: &str, options: Vec
 
 /// [`append_turn`] noting the engine that wrote it.
 pub fn append_turn_by(paper: &Path, group: &str, who: Who, text: &str, options: Vec<String>, engine: &str) -> Result<Turn, String> {
+    append_turn_with(paper, Turn { n: 0, group: group.into(), who, text: text.into(), options, engine: engine.into(), about: String::new(), picked: vec![] })
+}
+
+/// Append `t` (its number is given here).
+pub fn append_turn_with(paper: &Path, mut t: Turn) -> Result<Turn, String> {
     let dir = draft_dir(paper);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // after the max, not the count: a rewind may have dropped turns in between
-    let n = read_turns(paper).iter().map(|t| t.n).max().unwrap_or(0) + 1;
-    let t = Turn { n, group: group.into(), who, text: text.into(), options, engine: engine.into() };
+    t.n = read_turns(paper).iter().map(|t| t.n).max().unwrap_or(0) + 1;
     let mut line = serde_json::to_string(&t).map_err(|e| e.to_string())?;
     line.push('\n');
     use std::io::Write;
@@ -1038,6 +1109,9 @@ max_turns_per_group = 2
         assert_eq!(s.groups[0].status, GroupStatus::Done);
         assert_eq!(s.outline[0].paras[0].id, "p1");
         assert!(s.revisions.is_empty() && s.tables.is_empty());
+        assert!(s.pending.is_empty() && s.items.is_empty() && s.groups[0].prep.is_none(), "待補 and 預想選項 came later");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("pending") && !json.contains("candidates") && !json.contains("prep"), "nothing new is written until used");
         assert_eq!(serde_json::to_string(&Phase::Template).unwrap(), "\"template\"");
         let _ = std::fs::remove_dir_all(&p);
     }
@@ -1060,7 +1134,7 @@ max_turns_per_group = 2
         s.claims.push(Claim { id: "c1".into(), zh: "主張".into(), ..Default::default() });
         s.review = Some(Review::default());
         s.outline.push(OutlineSection { section: "Methods".into(), paras: vec![OutlinePara { id: "p1".into(), zh: "x".into(), ..Default::default() }], ..Default::default() });
-        s.drafts.push(DraftSection { section: "Methods".into(), paras: vec![], new_symbols: vec![], engine: String::new() });
+        s.drafts.push(DraftSection { section: "Methods".into(), paras: vec![], new_symbols: vec![], engine: String::new(), ..Default::default() });
         s.audit.push(Finding { id: "f1".into(), kind: "generic".into(), why: "w".into(), ..Default::default() });
         for gid in ["af1", "v1"] {
             s.groups.push(Group { id: gid.into(), section: "Results".into(), title: gid.into(), ..Default::default() });

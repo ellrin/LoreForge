@@ -2472,10 +2472,14 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "color_quant",
+ "gif",
  "libc",
  "lore-docsrc",
  "lore-home",
  "lore-llm",
+ "lore-notation",
+ "png",
  "quick-xml",
  "serde",
  "serde_json",
@@ -2483,6 +2487,21 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "zip",
+]
+
+[[package]]
+name = "lore-polish"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "lore-home",
+ "lore-llm",
+ "lore-notation",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -2511,6 +2530,12 @@ dependencies = [
 [[package]]
 name = "lore-shell"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "serde",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "lore-store"
@@ -2523,6 +2548,18 @@ dependencies = [
  "sha2",
  "thiserror 2.0.21",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "lore-voice"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "lore-shell",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -3030,6 +3067,8 @@ name = "papercomposer"
 version = "0.1.0"
 dependencies = [
  "lore-home",
+ "lore-shell",
+ "lore-voice",
  "pc-server",
  "tauri",
  "tauri-build",
@@ -3070,6 +3109,7 @@ dependencies = [
  "lore-notes",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "toml 0.8.23",
 ]
@@ -3095,9 +3135,11 @@ dependencies = [
  "lore-llm",
  "lore-notation",
  "lore-plot",
+ "lore-polish",
  "lore-research",
  "lore-shell",
  "lore-store",
+ "lore-voice",
  "lore-words",
  "pc-core",
  "pdf-extract",
@@ -3106,6 +3148,7 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "tar",
+ "tempfile",
  "tokio",
  "toml 0.8.23",
  "tower-http",

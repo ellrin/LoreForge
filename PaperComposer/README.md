@@ -143,13 +143,44 @@ your-private-repo/
    - 可調整順序；建立時依序放在各章節的最後，產生 `\caption`、`\label{tab:…}`／`\label{fig:…}`，需要的套件自動加進 `main.tex`；之後在頁面上照常編輯。
 5. **文獻（選填，需要 Claude 或本機模型）**：把想引用的文章一次貼上，可以夾雜備註（見下方「文獻」的「貼上想引用的文章」）。模型先算出有幾篇，再三篇一組查證、建檔、加標籤存進文獻庫，顯示進度條；可以邊匯入邊回到其他步驟。你對每篇的備註（例如「需注意 · Methods · 只支撐…」）會記成這篇論文的引用用途（`citations.csv`）。
 
+**Key value 檢查**：討論草稿第 1 步、論文上方的 Key value 列、匯入論文的 Key value 欄：離開欄位（或按「檢查」）時，模型（任務 `pc-thesis-check`，本機優先）把它當論文的論點句判斷：完整句子、具體、能用證據支持、只有一個主要想法、不是問句、不只是事實、不只宣告主題、不太廣也不太窄、沒有弱化語氣與模糊用語，最好是「主題＋主張＋理由」。欄位下方列出問題與 1–2 個改寫，點一下就用那句；不理它也可以，從不擋下一步、儲存或匯入。判斷標準取工作區的 `style/_thesis-statement.md`（只用在這件事，有長度上限）；沒有這個檔時用內建的通用標準（不含範例）。
+
 **Key value 是生成與檢查的約束**：生成段落時放進規則；檢查加了一條軟規則 R106（`supports_key_value`），判斷段落、圖表、摘要、contribution、討論是否離題。它是黃燈：延伸討論不一定完全對齊主題，不必每段都綠燈。
+
+**寫作規則與檢查**：
+- `style/` 的筆記（`checks.toml`、`patterns.toml`、`README.md`、`_` 開頭的檔案除外）是寫作規則：寫作、潤飾、圖表標題、新論文大綱、引用改寫、知識卡定義、寫書的章節，以及討論草稿各步都帶上；軟規則檢查不帶（它只看 `rules.csv` 的軟規則）。沒有 `style/` 時提示詞不變。筆記要短，每次都送。
+- 能機械判斷的寫法交給程式：`rules.csv` 的硬規則，`threshold` 是 `style/checks.toml` 裡清單的名字。`phrases`（片語，附建議改法）、`before_number`（後面接數字，如 over 300 → more than 300）、`comma_splice`（`, however,` 接兩個子句；句首 However, 與 `; however,` 不算）、`sentence_start`（句首字）、`end_preposition`（句尾字）、`double_comparative`（more darker）、`contractions`、`exclamation`（後兩個不用清單）。只看文字：`%` 註解、數學、`\cite`／`\ref`／`\label` 的參數、verbatim 與表格不檢查。檢查面板顯示「原文 → 建議」。格式見 [`style/README.md`](../private-example/PaperComposer/style/README.md)。
+
+**寫作三階段**（細節見 [`../docs/long-paper.md`](../docs/long-paper.md) §C）：
+1. **草稿**：寫作的「生成」與討論草稿的逐章草稿：把你要表達的動機、事實、自己的看法寫成段落，照寫作規則（`style/10-writing.md`）與句型庫（你的語氣）。另外帶上 `style/patterns.toml` 裡**符合這一段情境**的寫作指南句構（由程式依章節、段落功能、位置挑選：Introduction 最後一段或 contribution 段 → 論點句；比較的段落 → compare_two；每段的第一句 → 主題句），標明是指南、不是你的語氣，只借結構。
+2. **用字**：寫作工具列的「用字」（正在編輯的整段）或潤飾小對話的「用字」按鈕：只換用詞、不動句構與順序，帶上程式檢查（`rules.csv` 硬規則＋`style/checks.toml`：冗詞、行話、弱化、模糊…）在這段找到的「原文 → 建議」與寫作規則。
+3. **我的風格**：寫作工具列的「我的風格」或小對話的同名按鈕：照你自己的寫法調整開頭與結尾、論證順序、結尾用語、主旨佔段落的比例與位置、長度。依據只來自你自己的資料（`phrases.csv`、`expressions.csv`、`exemplars.csv`，排除標成 `guide` 的列與指南句），整理成每個章節的風格摘要（快取在系統的快取資料夾，來源檔變了才重算），加上同章 2–3 段你自己的範例段落。指南句構不會進這一步。
+
+兩個按鈕都是潤飾的預設：LaTeX 一樣鎖住、套用前一樣跑對照表檢查、⌘Z 一步復原；記錄只寫按鈕名稱。
+
+**寫作指南句構 `style/patterns.toml`**：每筆 `id, situation, when, structure, example, source = "guide"`（`source` 必須是 `guide`）。情境：`thesis_statement`、`thesis_with_reasons`、`purpose_to_thesis`、`tentative_thesis_from_questions`、`compare_two`、`topic_sentence`。它是寫作指南的句子、不是你的：不會整份送給模型（`style_text` 略過它），不會進句型庫（「收藏句型」遇到指南句會略過並告訴你）、潤飾的讚、我的風格、SlideComposer 的語氣。範例見 [`style/patterns.toml`](../private-example/PaperComposer/style/patterns.toml)。
 
 **清單**：寫作工具列有「項目清單」（`itemize`）和「編號清單」（`enumerate`，例如 *Our contributions are as follows:* 後面列點）。
 
 **收藏句型**：在頁面上（或正在編輯的段落裡）選取喜歡的句子，按寫作工具列的星號。右側選的引擎把它拆成句型與片語，勾選後按「加入句型庫」就直接存進 `phrases.csv`／`expressions.csv`，不用開資料庫、也不用另外儲存。內容相同的句型不會重複加入；資料庫視窗有未儲存的修改時，改為加進編輯中的表格。
 
 **生成段落的限制**：句型依重點的用字檢索。重點用中文寫、段落要英文時，中文重點對不到英文句型，生成時幾乎不會用到你的句型；想要段落有自己的語氣，重點請用英文寫。
+
+## 期刊寫法
+
+模板一本期刊一個：除了格式，它帶著**這本期刊的寫法**——從它近兩年約 5 篇開放取用文章整理出的章節安排與命名、各章篇幅與各種內容（臨床價值、前人研究、方法、公式、資料集、結果、比較、優缺點……）的比例與範圍、段落順序、常見小節、圖表與公式數量、引用密度、結構習慣（相關研究是否獨立成節、限制有沒有自己的標題、貢獻是否條列、圖 1 是否整體流程）、必備論點與聲明（5 篇中幾篇），和這本期刊常用的短語（2–5 個字，標出用在什麼情境，不存句子）。細節見 [`../docs/long-paper.md`](../docs/long-paper.md) §D。
+
+- **在哪裡**：新論文的「版型」、討論草稿第 1 步的「投稿期刊」與「★ 版型」：清單裡每本期刊多一行它的寫法；點一本，下方出現「期刊寫法」面板（每章一列比例條，點開看各類別的百分比與範圍、段落順序、小節與標題寫法）。第一次先確認是哪一本（OpenAlex 的期刊，點一下；筆形按鈕可換）。
+- **整理寫法／更新**：背景工作，可以繼續做別的事、可以停止與繼續。超過一年按鈕變成「更新」。用的模型是任務 `pc-venue-profile`（預設 Claude Sonnet，沒有時本機模型），一篇一次。
+- **用手邊的 PDF…**：網路上找不到文章、或 OpenAlex 今天的免費額度用完（沒有 API key 時同一個 IP 一天共用一份，用完會說約幾小時後恢復）時，選這本期刊的 3–6 篇 PDF，同樣整理寫法，不用網路；還沒確認是哪一本時先當這個模板自己。
+  Springer 期刊的章節標題沒有編號，PDF 讀取用字級判斷（只在這裡開）；讀不出章節的 PDF 會跳過，讀不出的圖表數不寫成 0。
+- **新增期刊**：在搜尋框打期刊名稱，清單沒有時按「新增期刊「…」」→ 選 OpenAlex 的期刊 → 建立這本期刊自己的模板（建在出版社的基礎格式上）並開始整理寫法。
+- **基礎格式**：出版社的通用模板（有期刊模板建在它上面、自己不是一本期刊；或 `role = "base"`）不出現在選單。已經用通用模板的論文在「整理與文獻」卡片按「選期刊」換到期刊模板，章節內容不變。
+- **新論文的章節**：有期刊寫法時照這本期刊的章節安排與命名產生；還沒有時是一般的空章節，期刊寫法在背景整理。
+- **隱私**：只送期刊名稱（搜尋時）與 OpenAlex 的期刊 id；論文的關鍵字只在本機排序候選文章，Key value、標題、作者、e-mail 不送。只讀有標明授權的開放取用副本；PDF 放在系統快取（`PaperComposer/venue/`，可刪），期刊寫法放在工作區的 `venues/<模板>/profile.toml`（＋可讀的 `profile.md`），沒有全文。
+- **投稿要求**：`venues/requirements.toml` 的資料寫進各期刊模板的 `[submission]`（打開期刊寫法面板時自動套用有變的部分；也可 `POST /api/venue/requirements/apply`），面板顯示、審稿清單會用；
+  `required_statements` 也決定新論文（或換到這本期刊時）的聲明：Springer 範本的示範後記換成這些聲明的 `[…]` 預留文字，雙盲期刊的致謝、經費、倫理、作者貢獻寫成 `\blinded{完整版}{盲審版}`。
+  已經在這本期刊的 class 上、自己設定好的論文（例如自己寫了 `\blinded` 與聲明），選這本期刊只記下期刊，不重排 main.tex。
 
 ## 寫書
 
@@ -168,29 +199,51 @@ your-private-repo/
 
 | 步驟 | 內容 |
 |---|---|
-| 1 主題 | Key value，加上「有意思的地方」的假說：讀者已經承認什麼、你的轉折是什麼；列出本篇文獻（標籤、你寫的用途、DOI 連結），要加文獻在文獻視窗貼上，照常一篇一篇查證 |
+| 1 主題 | Key value、**投稿期刊**（先選：題組、預想選項、大綱、草稿與審稿都照這本期刊的寫法與投稿要求；選了就看到它的「期刊寫法」，按「儲存，下一步」才套用版型，空白的論文改成這本期刊的章節；之後換期刊會先問，大綱要重新產生），加上「有意思的地方」的假說：讀者已經承認什麼、你的轉折是什麼；列出本篇文獻（標籤、你寫的用途、DOI 連結）；「貼上要引用的文章」貼整份參考文獻清單，每篇查證後都加進本篇文獻（沒寫用途時先用一句簡介） |
 | 2 實驗記錄 | 上傳 `.md .txt .csv .tsv .json .log` 或 PDF（Excel、Word 請另存 CSV／純文字）。Opus 整理成實驗清單、**時間線**（先試了什麼、看到什麼、改了什麼）、**你在記錄裡寫下的想法**（問答時當作選項）、**結果表格**（數字照抄，缺的標「—」，可一鍵插入論文，用期刊的表格樣式），並列出記錄與論文既有表格對不上的數字。論文裡已有的表格、圖、文獻自動帶入，不用重貼 |
 | 3 題組 | 依 Introduction、Methods、Results、Discussion、Conclusion 規劃題組，每組要整理出說明、動機、結論；Results 一張圖表一組；可以直接修改、增刪 |
 | 4 對話 | 一次一題；回答「不確定」時給 2–4 個選項（先用你記錄裡的想法）。動機牽涉前人研究或公認做法時，順便問要對應哪幾篇文獻（依標籤與用途配對）；Results 先問「表 X 是主表嗎、想比較什麼、強調什麼」。右側狀態表顯示每一項還缺什麼，一組問夠了就提示可以結束（由程式依視角判斷，不是模型感覺）；超過題數上限會提示略過 |
 | 4.5 主張 | 主張登記：每個主張只在一個章節完整說一次，其他地方只回扣 |
 | 5 校正 | 檢查題組順序是否形成線性敘事，提出移動、拆分、合併、合成一張表的建議，逐條採用或不採用 |
 | 6 大綱 | 逐段大綱：段落類型、組成（事實 → 理由層級 → 結論）、中文說明與英文重點、要引用的文獻（遵守你寫的用途，例如「只用在 Methods」）；逐章寫意見修改 |
-| 7 草稿 | 逐章用句型庫生成（與「寫作」相同的語氣鎖定），加上大綱的組成、你的風格筆記與 `\cite{}`；會參考同章已寫的段落與校正時採用的建議，避免重述 |
-| 8 審稿 | 找矛盾、宣稱過度、缺數字、不可能的數字、空泛句、重複、埋掉的發想、缺理由的設計、引用超出用途或該引未引；需要你補充的可以「回到對話追問」 |
+| 7 草稿 | 逐章用句型庫生成（與「寫作」相同的語氣鎖定），加上大綱的組成、你的風格筆記、`\cite{}` 與這本期刊這一章的寫法（期刊寫法）；會參考同章已寫的段落與校正時採用的建議，避免重述。最後是 **Abstract**：一段、不分小標、字數照期刊（例如 150–250），從主張登記與方法、結果大綱取材。**放進論文**（每章一個、上方「全部放進論文」）：寫進論文的章節檔（Methods 對到「Materials and Methods」，論文沒有的章節照期刊的命名新增），摘要寫進標題區的 `\abstract{…}`／`abstract` 環境（或它 `\input` 的檔案）；原有文字先存在 `draft/archive/`。生成的 ≤ − ⁺ α 等字元一律換成 LaTeX（pdflatex 不會停） |
+| 8 審稿 | 找矛盾、宣稱過度、缺數字、不可能的數字、空泛句、重複、埋掉的發想、缺理由的設計、引用超出用途或該引未引；這本期刊多數文章都做而你沒做的（期刊寫法），標「期刊要求」；程式另外檢查摘要字數、關鍵字個數、投稿要求的聲明在不在、聲明是不是還是預留文字。需要你補充的可以「回到對話追問」 |
 
 | 9 修訂 | 論文寫好之後要補東西（一審要求外部驗證、老師要多一張圖、多引兩篇）：寫下要補什麼，可附新圖檔、從文獻庫選要加的文獻（會記進本篇引用）。先開一組對話，討論它要支撐什麼、放在哪一段（選項直接用段落編號）、會影響哪些地方、圖的 caption；再由 Opus 產生具體修改（插在某段之前／之後、取代某段、加在章節最後），每一項附原段落與理由，逐項「套用」或「不採用」。套用前會確認那一段還是原來的文字，改過就不寫；對不上的修改與需要你處理的連帶影響列在「還要注意」 |
+
+**待補（還在等資料的結果）**：第 2 步可以把實驗或結果表格的一格／一列／一欄標成「等資料」（記錄裡寫 `?` 也會自動變成待補 P1、P2…）；
+題組會多一組「待補項目」，問每一項是什麼、為什麼必要、預期什麼、相反時要改什麼；草稿照預期方向寫，用 `\pending{P1}{…}`、`\pendingcell`、
+`\pendingpara`、`\pendingdep` 標出數字、表格、預留的段落與依賴它的句子（摘要、討論、結論也算），草稿 PDF 裡是框起來的深橘色，Word 裡是 `[P1: …]`；
+審稿開頭列出待補清單、不把記號當成缺數字；結果出來時按「填結果」：符合預期就由程式只換數字（不叫模型），相反或不確定就開一組修訂對話，
+依賴的句子都標「要改寫」。還有記號時「PDF（投稿版）」與 LaTeX 壓縮檔不輸出。論文畫面狀態列的「待補 N」點了跳到下一個記號。細節見 [`docs/long-paper.md`](../docs/long-paper.md) §E。
+
+**預想選項**：題組規劃完，背景用 Opus（任務 `pc-draft-candidates`）依實驗記錄替每個要問的項目想 2–3 個可能的答案，附依據（E3、T2、H1）；
+依據不存在或數字和記錄不一致的會被丟掉。對話時點選（可以再改、合併兩個）、按 1／2／3、或說「第二個」；都不是就自己說。問答本身仍用 Haiku／Sonnet，
+選項只在對話前準備，不會每題叫 Opus。回答框旁有按住說話（有語音時）。
 
 **對照表（`lore-notation`）**：討論草稿與修訂的每一步都會帶上你的對照表（全域的 `shared/notation.json`，即 LoreForge 的 `private/shared/`，所有 App 共用；沒有私人資料夾時用工作區的 `profile/notation.json`；再加上論文的 `notation.json`）：符號用登記的巨集、圖表公式一律 `\ref{…}`、縮寫第一次出現要展開、數學一律在 `$…$` 裡。每段草稿與每項修訂寫完都跑一次對照表檢查：手打的「Table 1」或不存在的標籤會自動重寫一次，其他問題（縮寫沒展開、符號未定義等）列在段落下方或「還要注意」；對照表裡沒有的新符號可以一鍵登記（標為「待確認」，到對照表補上意思）。
 
 **文獻用途會在對話裡長出來**：審稿說某篇的引用超出你寫的用途時，你在對話裡說明那篇其實還能支撐什麼（例如作者設計方法時觀察到的某個事實），這句會加進那篇在 `citations.csv` 的用途，之後的大綱與審稿就照新的用途判斷。
 
-**什麼重要由你決定**：程式本身是中性的，要追問什麼、回答怎麼判讀、什麼時候算問夠，寫在工作區的 `lens/`；你的寫作風格（段落類型、比例、要避免的習慣、範例段落）寫在 `style/`。兩者都是你私人 repo 的檔案，格式見 [`lens/README.md`](../private-example/PaperComposer/lens/README.md) 與 [`style/README.md`](../private-example/PaperComposer/style/README.md)。沒有 `lens/` 時用內建的中性視角（只分「有沒有理由」）。
+**什麼重要由你決定**：程式本身是中性的，要追問什麼、回答怎麼判讀、什麼時候算問夠，寫在工作區的 `lens/`；你的寫作風格（段落類型、比例、要避免的習慣、範例段落）寫在 `style/`，凡是寫英文的步驟都會帶上（見「寫作規則與檢查」）。兩者都是你私人 repo 的檔案，格式見 [`lens/README.md`](../private-example/PaperComposer/lens/README.md) 與 [`style/README.md`](../private-example/PaperComposer/style/README.md)。沒有 `lens/` 時用內建的中性視角（只分「有沒有理由」）。
 
-**模型**：問答用小模型就夠（預設 Haiku，視窗右上可以改 Sonnet、Opus 或本機模型比較）；整理實驗記錄與審稿用 Opus；題組、主張、校正、大綱用 Sonnet；草稿走「寫作」選的引擎。
+**模型**：問答用小模型就夠（預設 Haiku，視窗右上可以改 Sonnet、Opus 或本機模型比較）；整理實驗記錄、預想選項與審稿用 Opus；題組、主張、校正、大綱用 Sonnet；草稿走「寫作」選的引擎。
+
+## 潤飾
+
+選取一段（排版好的頁面或編輯中的段落都可以），按寫作工具列的潤飾圖示或右鍵「潤飾」：旁邊出現小對話框，說（按住麥克風）或打要怎麼改——哪些詞保留、連接詞增減替換、結尾太冗。模型只改選取的文字，改寫以和原文的差異顯示。
+
+- **套用**：換進段落，⌘Z 一步復原；**再改**：接著說，模型照上一次的改寫繼續改；**👍**：存進你的語調庫，同時開出「收藏句型」的拆解，勾選後加進句型庫。
+- 這一段之前的改寫列成 1 2 3…，點一下拿回來比較，也可以套用那一版。
+- `\cite{}`、`\ref{}`／`\eqref{}`、`\label{}`、數學、對照表登記的巨集在送出前鎖住；回來少了、多了或重複，就不給套用並列出是哪個。套用前再跑一次對照表檢查，改寫新增的問題（手打的「Table 1」等）一樣擋下。
+- 每次改寫都記在論文的 `draft/polish.jsonl`（原地開啟的論文在 `.papercomposer/draft/`）。語調庫是 `private/shared/polish/liked.jsonl`，SlideComposer 共用，之後潤飾拿最像的幾筆當範例。
+- 模型：任務 `polish`（預設 Claude，可在設定的「模型」改）。沒有語音（非 macOS、權限沒開）時麥克風不出現，打字即可。
+- 權限：第一次打開會一次詢問麥克風、語音辨識、個人聲音；之後到 設定 → 一般 → 權限。麥克風被拒絕時提示帶「開啟系統設定」，不會再問。
+- 「用字」「我的風格」兩個按鈕：寫作三階段的第 2、3 階段（見「寫作規則與檢查」）；按下的按鈕跟著每次送出，打的字當補充。
 
 ## 右鍵選單
 
-- 在段落上按右鍵：**引用文獻…**、**參照圖表**（列出編號與圖說／標題開頭，可搜尋）、**新增圖…**（上傳圖檔、可自動產生圖說）、**新增表…**；有選取文字時多了**收藏句型**、**剪下**／**複製**。貼上請用 ⌘V／Ctrl+V。
+- 在段落上按右鍵：**引用文獻…**、**參照圖表**（列出編號與圖說／標題開頭，可搜尋）、**新增圖…**（上傳圖檔、可自動產生圖說）、**新增表…**；有選取文字時多了**潤飾**、**收藏句型**、**剪下**／**複製**。貼上請用 ⌘V／Ctrl+V。
 - 不用先進入編輯：在排版好的段落上按右鍵，點的位置會出現細的插入線，插入後新加的引用或參照會閃一下。點在引用、參照或公式上時，插在它後面。正在編輯的段落則插在游標處。
 - 新圖、新表放在該段落後面，並在點的位置插入 `Fig.~\ref{…}`／`Table~\ref{…}`。寫入前會跑對照表檢查。
 - ⌥ 或 Shift + 右鍵：系統原本的選單（拼字建議等）。
@@ -213,6 +266,11 @@ your-private-repo/
 - **顯示**：標記（預設）／只看結果／原稿。
 - **註解**：選取文字後按「＋ 註解」或右鍵「新增註解」（沒有選取時註解整段）。可以回覆、標為已解決（已解決的不算在數字裡，清單下方可顯示）。文字改過後依原文重新定位；原文不見時保留在清單，標「原文已更動」。
 - 資料存在論文資料夾的 `review.json`，**不寫進 .tex**：PDF 與 LaTeX 匯出都不帶標記，LaTeX 原始碼包也不含它；Word 匯出則把未處理的修改與註解寫成 Word 的追蹤修訂與批註（見「匯出」）。作者名稱取自 `shared/profile.toml` 的 `name`。
+
+## 會動的方程式
+
+右鍵「會動的方程式…」：共用編輯器的方程式（模板或自己寫的算式，滑桿、敏感度），存成 `figures/eq-<名稱>.pdf`＋`.plot.json`，
+和其他圖同一條插入路徑（`\label`、`\ref`、對照表檢查）。點圖角落「編輯」重新打開。說明：`docs/plot.md` §10。
 
 ## 公式
 
@@ -296,13 +354,13 @@ tlmgr search --global --file /xxx.sty
 首頁、「寫論文」與上方列的文件選單（論文名稱 ▾：最近 · 開啟 LaTeX… · 開啟 Word… · 新論文 · 另存新檔… · 首頁）都有這兩個入口；桌面版用系統的開檔對話框，論文**留在原來的地方**直接編輯、自動存檔（暫存檔＋改名，保留檔案權限）。
 
 - **開啟 LaTeX…**：選專案裡的任一個 `.tex`（開啟它所在的資料夾），或 `.zip`／`.tar.gz`／`.tgz`（先問解壓縮到哪裡，預設是壓縮檔旁、同名的資料夾）。**預設保持原樣**：主檔不改名、`\input`／`\include` 的檔案不併入、不移動，作者的檔案一個字都不動，App 只在資料夾裡加 `.papercomposer/`（`layout.toml` 記主檔名）。章節取自主檔本文的 `\input`／`\include`：檔案裡有 `\section` 的，標題讀自該檔；緊跟在主檔 `\section{…}` 之後的檔案是那一章的內文（改標題時只替換主檔那一行）；其他 `\input`（摘要、表格）不當章節、不會被寫入。直接寫在主檔裡的章節保持原樣、不列為章節。預覽卡列出主檔、章節與設定；要用 App 的章節檔結構時，按「整理成章節檔…」：列出新增、改寫、併入、移動的每個檔案，並且**先把每個會被改動的原檔複製到 `.papercomposer/original/`**（已存在時用 `original-2`…）才寫入。主檔沒有分檔章節時只提供整理這一種。預覽之後資料夾有變動就不做，請再開一次。`.git`、隱藏檔與編譯中間檔不動。已經是 PaperComposer 格式的資料夾直接開啟。目前僅編輯、儲存、審閱、引用清單與封面讀取「保持原樣」的結構；匯出、預覽編譯、討論草稿、對照表檢查仍假設 `main.tex` 與 `sections/`（待 `pc_core::open::main_file`／`sources` 接入）。
-- **開啟 Word…**：`.docx` **不會被改寫**。轉成一個新的 LaTeX 資料夾（預設是 `.docx` 旁的 `<檔名> (LaTeX)`），原檔存成 `.papercomposer/reference.docx`，之後匯出 Word 沿用它的版面；匯出 Word 一律寫成新檔。需要 [Pandoc](https://pandoc.org/installing.html)（macOS：`brew install pandoc`），沒有時會提示。轉換做的事：Word 不認得的標題樣式（`Heading1`）當標題、手打的章節編號變成 `\label{sec:N}`、兩欄表格裡的公式＋手打 `(N)` 變成 `equation`＋`\label{eq:N}`、圖與表的說明拿掉手打的「Figure N.」並加上 `\label{fig:N}`／`\label{tab:N}`、表格寫成 `table`＋`tabular`（booktabs）、手打的 `[1]`、`[2, 3]`、`[4–6]` 變成 `\cite{ref1}`…、手打的「Fig. 1」「Table 1」「Eq. (1)」「Section 2」在有對應標籤時變成 `\ref`／`\eqref`（沒有對應的留著，對照表檢查會標出來）、參考文獻清單變成 `refs.bib`（每筆先以原文存為 `note`）、作者對到作者資料庫的寫進 `paper.toml`。**追蹤修訂與註解**不會遺失：論文內容是「全部接受」後的版本，每處修訂（含 Word 的作者與時間）與每則註解放進審閱模式（`review.json`，標示「Word 匯入」），在 PaperComposer 裡逐一接受或拒絕。轉換後會用對照表（lore-notation）檢查手打編號與找不到標籤的 `\ref`。
+- **開啟 Word…**：`.docx` **不會被改寫**。轉成一個新的 LaTeX 資料夾（預設是 `.docx` 旁的 `<檔名> (LaTeX)`），原檔存成 `.papercomposer/reference.docx`，之後匯出 Word 沿用它的版面；匯出 Word 一律寫成新檔。需要 [Pandoc](https://pandoc.org/installing.html)（macOS：`brew install pandoc`），沒有時會提示。轉換做的事：Word 不認得的標題樣式（`Heading1`）當標題、手打的章節編號變成 `\label{sec:N}`、兩欄表格裡的公式＋手打 `(N)` 變成 `equation`＋`\label{eq:N}`、圖與表的說明拿掉手打的「Figure N.」並加上 `\label{fig:N}`／`\label{tab:N}`、表格寫成 `table`＋`tabular`（booktabs）、手打的 `[1]`、`[2, 3]`、`[4–6]` 變成 `\cite{ref1}`…、手打的「Fig. 1」「Table 1」「Eq. (1)」「Section 2」在有對應標籤時變成 `\ref`／`\eqref`（沒有對應的留著，對照表檢查會標出來）、參考文獻清單變成 `refs.bib`（每筆先以原文存為 `note`）、作者對到作者資料庫的寫進 `paper.toml`。**追蹤修訂與註解**不會遺失：論文內容是「全部接受」後的版本，每處修訂（含 Word 的作者與時間）與每則註解放進審閱模式（`review.json`，標示「Word 匯入」），在 PaperComposer 裡逐一接受或拒絕。轉換後會用對照表（lore-notation）檢查手打編號與找不到標籤的 `\ref`。**同一個 `.docx` 再開一次**（Finder、LoreShelf、開啟 Word…）不會再轉一份：開啟上次轉出的論文（`opened.toml` 記的來源，或旁邊的 `<檔名> (LaTeX)` 裡 `.papercomposer/word-source.toml` 記的檔名、大小、時間；論文資料夾裡不記路徑）。`.docx` 之後改過（大小或時間不同，且內容與 `reference.docx` 不同）時問「開啟原本的論文／重新轉換成新的一份」；重新轉換寫到新的資料夾（`<檔名> (LaTeX) 2`…），舊的不動。
 - **章節**：導覽可以新增、改名、刪除（檔案留在 `sections/unused/`，可以還原）、拖曳排序，也能在一個章節裡打的 `\section` 處拆成兩章。原地開啟的論文照樣可用，主檔與 `\input` 路徑一起更新；復原一次還原整個動作。
 - **另存新檔…**（文件選單）：整份論文複製成新名字並開啟；工作區的論文存進工作區，在原地開啟的論文存在同一個上層資料夾（不帶 `export/`、`.git/`、`.papercomposer/original/`，名字已被用就不做）。
 - **最近**：首頁的「最近」與文件選單是同一份清單，工作區的論文與在原地開啟的資料夾合在一起（名稱與上層資料夾名），重新開啟 App 時直接回到上次的論文。在原地開啟的清單存在設定資料夾的 `opened.toml`（與 `config.toml` 同一處，只屬於這台電腦；清除快取不影響）。
 - **PaperComposer 自己的檔案**：在原地開啟的論文，`paper.toml`、`review.json`、`citations.csv`、`notation.json`、討論草稿都放在論文資料夾裡的隱藏資料夾 `.papercomposer/`，論文資料夾最上層只有 LaTeX；`notation.tex` 照常在最上層、可直接編譯。工作區 `papers/` 裡原有的論文維持原樣（這些檔案在論文資料夾最上層）。匯出的檔案一樣放在論文資料夾的 `export/`（附 `.gitignore`）。
 - **在別處改過**：用其他編輯器改了 `.tex` 或 `git pull` 之後，回到 App（或每幾秒）會發現：沒有正在編輯的段落就直接重新載入；正在編輯時問「重新載入／保留我的版本」。存檔時若檔案已被別處改過，同樣會問，不會默默蓋掉。
-- **Finder**：桌面版登記為 `.docx` 與 `.tex` 的「打開方式」之一（不是預設 App）；從 Finder 用 PaperComposer 打開 `.docx` 走開啟 Word，`.tex` 開啟它的資料夾。
+- **Finder**：桌面版登記為 `.docx` 與 `.tex` 的編輯程式；設成預設 App 用 `scripts/set-default-apps.sh`（見根目錄 README）；從 Finder 用 PaperComposer 打開 `.docx` 走開啟 Word，`.tex` 開啟它的資料夾。
 - **瀏覽器開發模式**沒有檔案路徑：開啟 LaTeX 改用下方的匯入（複製進工作區），開啟 Word 上傳 `.docx` 轉成工作區裡的論文。
 
 ## 匯入現有的論文
@@ -331,6 +389,12 @@ tlmgr search --global --file /xxx.sty
 - **字型（XeLaTeX／LuaLaTeX）**：編譯前找出 `main.tex` 與它前言載入的檔案（`\input`、本機 `.sty`）用 `\setmainfont`、`\setsansfont`、`\setmonofont`、`\setCJKmainfont`／`sansfont`／`monofont`、`\newfontfamily`、`\newCJKfontfamily`、`\setmathfont` 指定的字型，交給 `lore-fonts` 判斷這台電腦有沒有（系統字型、TeX 自己的字型資料夾、`private/shared/fonts/`）。沒有時依作者規則（`private/shared/fonts.toml` 的 `[fallback]`）、字寬相同的開源字（Calibri → Carlito）、同類字型找代替字，**在編譯用的副本裡換掉**（原本的 `main.tex`、前言、`notation.tex` 都不動），匯出結果會列出「字型代替：A → B」。私人字型資料夾裡的字型在副本裡改用檔名與 `Path=`，不必安裝進系統；`OSFONTDIR` 也指向那個資料夾。代替順序裡一個都沒有時，不編譯，直接指出是哪個檔案哪一行、要怎麼補。LaTeX 壓縮檔仍是原本的字型名稱（投稿系統用它們自己的字型）。**在真正的 TeX 上尚未實測**（開發環境沒有 TeX；指令解析與改寫有單元測試）。
 - **Word**：需要 [Pandoc](https://pandoc.org/installing.html)（macOS：`brew install pandoc`）。引用依論文資料夾裡的 `.csl` 排版（從模板建立的論文會一起帶過來：IEEE、CVPR 用 `ieee.csl`，Springer Nature 用 `springer-basic-brackets.csl`，LNCS 用 `springer-lecture-notes-in-computer-science.csl`，取自 [CSL styles](https://github.com/citation-style-language/styles)）；有 `reference.docx` 時套用其中的字型與標題樣式。未處理的審閱修改寫成 Word 的追蹤修訂（作者與時間保留，段落標記也記），註解（含回覆與已解決狀態）寫成批註；圖表與公式編號、`[n]` 引用照常。投稿請以 PDF 為準，Word 適合給共同作者修改。
   轉換前會處理 Pandoc 的常見困難：PDF／EPS 圖與省略副檔名的圖轉成 PNG；`subfigure`、`subfig`、`bbm`、`dsfont`、`mathabx` 等套件的指令給相容定義（論文自己定義的優先）；`.bib` 有語法錯誤時改用 App 解析出的乾淨副本（原檔不動）。以 4 篇 arXiv 論文實測，方程式轉成 Word 原生公式、表格、圖片、引用都在；少數寫法不標準的數學式（例如 `\underset{…}\mathop{…}` 第二個參數沒加大括號）會保留 LaTeX 原文並列在警告裡。
+- **待補**：草稿版（PDF、Word）會把待補記號標出來（PDF 需要的定義寫在 `pending.tex`，`main.tex` 前言自動加 `\input{pending}`，最後一個記號填完時拿掉）；
+  「PDF（投稿版）」與 LaTeX 壓縮檔在還有記號時不輸出，逐段列出還缺什麼。
+  **雙盲**：期刊是雙盲（模板 `[limits] anonymous`），或 main.tex 自己用 `\ifdefined\blindmode` 包住作者時，「PDF（投稿版）」同時輸出完整版與盲審版
+  （`export/<名稱>-blind.pdf`：先定義 `\blindmode`，沒有自己包住的作者、單位、e-mail 指令拿掉；論文檔案不動），再用 pdftotext 檢查盲審版裡
+  沒有這篇作者的姓名、e-mail、ORCID、單位，有就不給過。匯出面板多一個「盲審版」按鈕。
+  **pdflatex 不認得的字元**（≤ − ⁺ α…）：錯誤旁說要改成什麼；「全部換成 LaTeX，再編譯」一鍵把論文檔案裡的這些字元換成 LaTeX（逐段、`$…$` 裡用裸指令）。
 - **LaTeX**：產生 `export/<論文>-latex.zip`，可直接上傳投稿系統、arXiv 或 Overleaf：章節併回單一 `main.tex`，附上編譯產生的 `.bbl`、class／樣式檔、`.bib` 與圖片，不含 App 自己的檔案。所有檔案都放在最上層、沒有子資料夾（Editorial Manager 等投稿系統的要求），`\includegraphics{figures/x}` 等路徑自動改寫，同名的不同檔案會加上原資料夾名稱。會先完整編譯一次，確定能編譯才打包。實測 8 篇（4 篇 arXiv 論文與 4 個期刊範本）解壓到空資料夾單獨編譯，頁數與 App 輸出的 PDF 相同。
 
 ## 連接模型
@@ -400,6 +464,7 @@ model = "gemma-4-12b"
 | `pc-draft-turn` | 討論草稿的問答 | Haiku → 本機（視窗可指定 Haiku／Sonnet／Opus／本機） |
 | `pc-draft-plan`、`pc-draft-claims`、`pc-draft-review`、`pc-draft-outline` | 題組、主張、校正、大綱 | Sonnet → 本機 |
 | `pc-draft-record`、`pc-draft-audit`、`pc-draft-revise` | 整理實驗記錄（表格、想法、衝突）、審稿、修訂方案 | Opus → 本機 |
+| `polish` | 潤飾（lore-polish，SlideComposer 共用） | Claude → 本機 |
 
 「本機」是目前連接的本機引擎（自己架設的端點，或「設定」的本機模型步啟動的模型；`tasks.toml` 寫作 `local:current`），以 `temperature` 0.2 寫作；「Claude」先用訂閱（Claude Code），沒有時用 API key，模型是設定裡選的那個（`claude:selected`）。寫作區的引擎切換（本機／訂閱／API）只用你選的那一個，不會悄悄改用別的；自動時照上表的順序。要個別指定某個任務的模型，在 App 設定檔旁邊放 `tasks.toml`（`PaperComposer/tasks.toml`）：
 
@@ -433,11 +498,12 @@ scripts/            Git hooks
 | GET | `/api/phrases?section=&function=&position=&text=&limit=` | 依欄位篩選並排序句型 |
 | POST | `/api/check` `{ text, section }` | 逐段檢查 |
 | GET | `/api/engine` | 模型連線狀態 |
-| POST | `/api/compose` `{ points, section, function, min_words, max_words, language, before, after, key_value? }` | 一次性段落生成 |
+| POST | `/api/compose` `{ points, section, function, min_words, max_words, language, before, after, key_value?, index?, count? }` | 一次性段落生成（`index`／`count`：這段在章節的位置，挑寫作指南句構） |
 | POST | `/api/check/soft` `{ text, section, before, after, engine, key_value? }` | 軟規則檢查（有 Key value 時才問 R106） |
 | POST | `/api/papers` `{ name, template?, key_value, title?, authors?, outline?, tables? }` | 建立論文（Key value 必填；`tables` 為 `{ caption, section, data, style? }`，圖片為 `{ kind: "figure", caption, section, file }`） |
 | POST | `/api/papers/{name}/figures?file=` | 上傳圖片到論文的 `figures/`（body 為檔案內容） |
 | POST | `/api/wizard/caption` `{ kind, data?, file?, section?, key_value?, title?, engine? }` | 表格或圖片的標題建議（寫作引擎） |
+| POST | `/api/keyvalue/check` `{ key_value, title?, engine? }` | Key value 檢查：`{ problems: [{ code, label }], rewrites }`；永遠 200，沒有模型或失敗時是空的（加 `error`） |
 | GET／PUT | `/api/settings` | 工作區 `config.toml` 的 `[ui]` 介面設定 |
 | GET | `/api/papers/{name}` | 論文各章節與段落、`meta`（Key value 與作者），以及期刊的 `word_limits`、`ref_words`、`captions`、`limits` |
 | PUT | `/api/papers/{name}/meta` `{ key_value }` | 修改 Key value |
@@ -455,7 +521,10 @@ scripts/            Git hooks
 | POST | `/api/papers/{name}/review/comments` `{ file, index, exact, prefix, suffix, text }` | 新增註解（`exact` 空白＝整段） |
 | PUT | `/api/papers/{name}/review/comments/{id}` `{ reply?, resolved? }` | 回覆或標為已解決 |
 | GET / PUT | `/api/tables/{file}` | 讀寫資料庫 CSV（句型、片語、用詞、規則、範例、公式、作者、機構） |
-| POST | `/api/papers/{name}/export` `{ kind: "pdf" \| "docx" \| "latex" }` | 匯出：頁數、錯誤（含位置）、找不到的引用與標籤 |
+| POST | `/api/papers/{name}/export` `{ kind: "pdf" \| "docx" \| "latex", final? }` | 匯出：頁數、錯誤（含位置）、找不到的引用與標籤；`final`（投稿版）與 `latex` 在還有待補記號時不輸出，逐段列出；雙盲的投稿版另有 `blind_file` |
+| POST | `/api/papers/{name}/fix-unicode` | 論文檔案裡 pdflatex 不認得的字元換成 LaTeX → `{files}` |
+| POST | `/api/papers/{name}/draft/insert` `{section?}` | 放進論文：草稿寫進章節檔，摘要寫進標題區 |
+| POST | `/api/venue/t/{模板}/pdf?file=` | 用手邊的 PDF：上傳一篇 → `{path, title}`，再給 `make` 的 `local` |
 | POST | `/api/papers/{name}/export/open` `{ kind, reveal }` | 開啟匯出的檔案，或在資料夾中顯示 |
 | POST | `/api/papers/import?name=&key_value=&tidy=` （本文為 .zip／.tar.gz／.tex） | 匯入現有的 LaTeX 專案；回覆含對應到的模板 `journal`（名稱 `journal_name`）、對到的作者 `authors`、可做的整理 `tidy`（`tidy=1` 時直接整理，結果在 `tidied`）與 `.bib` 併入文獻庫的試算 `bib` |
 | POST | `/api/papers/import-arxiv` `{ id, name?, key_value, tidy? }` | 從 arXiv 匯入原始檔 |
@@ -484,7 +553,10 @@ scripts/            Git hooks
 | POST | `/api/papers/{name}/draft/record` | 整理成實驗清單、時間線、想法、結果表格與衝突（Opus）；PUT `/draft/experiments` 手動修改 |
 | POST | `/api/papers/{name}/draft/tables/{id}/insert` `{ section? }` | 把記錄整理出的表格插到章節最後（期刊表格樣式） |
 | POST | `/api/papers/{name}/draft/revisions` `{ request, section?, refs?, figure? }` | 新增修訂（建立對話題組；`refs` 加進本篇引用，`figure` 為已上傳的圖檔） |
-| POST | `/api/papers/{name}/draft/revisions/{id}/plan` | 產生修改方案（Opus） |
+| POST | `/api/papers/{name}/draft/revisions/{id}/plan` | 產生修改方案（Opus）；回填且符合預期時由程式做，不叫模型 |
+| GET/PUT | `/api/papers/{name}/draft/pending` `{ items, tables? }` | 待補項目（新項目給編號 P1…；表格可加等資料的列／欄）；GET 另附待補清單 |
+| POST | `/api/papers/{name}/draft/pending/{id}/fill` `{ result, values, direction }` | 回填：寫回記錄、建立（或更新）那一項的修訂；`direction` = matches／contradicts／unsure |
+| POST | `/api/papers/{name}/draft/group/{id}` `{ action: "prepare" }` | 重試這一組的預想選項（背景，任務 `pc-draft-candidates`） |
 | POST | `/api/papers/{name}/draft/revisions/{id}/changes/{cid}` `{ apply }` | 套用或不採用一項修改（原段落已改過時拒絕） |
 | POST | `/api/papers/{name}/draft/revisions/{id}/status` `{ status }` | open／dropped 等 |
 | POST | `/api/papers/{name}/draft/notation/register` `{ symbols }` | 把草稿或修訂用到的新符號登記進論文的 `notation.json`（標為待確認） |
@@ -523,7 +595,12 @@ scripts/            Git hooks
 | GET | `/api/refs/pdfs` | 這台電腦 PDF 資料夾裡還沒匯入文獻庫的檔案 |
 | GET／POST | `/api/papers/{name}/citations` | 每篇文獻在這篇論文裡的用途 |
 | POST | `/api/papers/{name}/table-fit` | 版型檢查：表格在期刊版面的寬度 |
-| POST | `/api/phrases/add` | 收藏句型：加進句型庫（`phrases.csv`／`expressions.csv`） |
+| POST | `/api/phrases/add` | 收藏句型：加進句型庫（`phrases.csv`／`expressions.csv`）；寫作指南的句子略過，`guide` = 略過幾筆 |
+| POST | `/api/polish` `{ doc, text, prefix, suffix, context, instruction, turns, passage?, engine?, preset?, scope? }` | 潤飾：`{ id, passage, after, ok, problems, engine }`（`doc` = 論文名稱；記進 `draft/polish.jsonl`） |
+| POST | `/api/polish/applied`、`/api/polish/like` `{ doc, id }` | 套用了／👍（語調庫 `private/shared/polish/liked.jsonl`） |
+| GET | `/api/polish/history?doc=&text=` | 這一段之前的改寫 |
+| GET | `/api/polish/presets` | 潤飾的預設 `[{ id, label }]`：`diction` 用字、`voice` 我的風格 |
+| … | `/api/voice…` | 語音（lore-voice）：狀態、按住說話、事件 |
 | POST | `/api/papers/{name}/section-ops/{add,delete,restore,order,split}` | 章節新增、刪除、復原、排序、拆分 |
 | GET／PUT | `/api/papers/{name}/notation` | 對照表（全域＋這篇論文） |
 | GET／POST | `/api/papers/{name}/word-refs`、POST `/word-refs/confirm` | 從 Word 讀進的文獻清單；查證 Crossref／PubMed |
@@ -534,6 +611,15 @@ scripts/            Git hooks
 | POST | `/api/papers/{name}/kb/notation` | `{id, index}`：卡的符號／方程式登記到這篇的對照表 |
 | GET／POST | `/api/templates`、`/api/convert…` | 期刊模板列表與建立；上傳模板讓 Claude 轉換 |
 | `/api/textable/*` | 論文裡表格的編輯器：解析、畫出、套用樣式、新增 |
+| GET | `/api/venue/summaries` | 各期刊模板的寫法摘要（選單用） |
+| GET | `/api/venue/sources?q=` | OpenAlex 的期刊（名稱或 ISSN） |
+| GET · PUT | `/api/venue/t/{模板}` · `/identity {source}` | 期刊寫法面板；確認是哪一本（寫進 `[venue]`） |
+| POST | `/api/venue/t/{模板}/make` `{paper?, kind?, engine?}` | 開始（或更新）期刊寫法的背景工作 |
+| GET | `/api/venue/t/{模板}/skeleton` · `/prompt?section=` | 新論文的章節；給草稿／審稿的區塊（看用） |
+| GET · POST | `/api/venue/jobs/{id}` `?after=` · `/stop` · `/resume` | 工作進度（長輪詢）、停止、繼續 |
+| POST | `/api/venue/journals` `{source, base?}` | 新增期刊：自己的模板＋期刊寫法 |
+| POST | `/api/venue/paper/{論文}/journal` `{template}` | 選期刊 |
+| POST | `/api/venue/requirements/apply` | `venues/requirements.toml` → 各模板的 `[submission]` |
 
 ## 防止洩漏個人資料
 

@@ -221,6 +221,10 @@ async fn until(job: &lore_jobs::Job, want: &str) {
 #[tokio::test]
 async fn a_book_from_a_paper_end_to_end() {
     let s = setup("e2e", true);
+    // the workspace's style notes reach every chapter prompt
+    let ws = s.deps.workspace.clone().unwrap();
+    std::fs::create_dir_all(ws.join("style")).unwrap();
+    std::fs::write(ws.join("style/10-writing.md"), "Define each abbreviation at first use.").unwrap();
     let js = lore_jobs::Jobs::open(s.deps.cache.join("jobs"), Arc::new(pipeline::BookJob { deps: s.deps.clone() }));
     let job = js.create(params(&s.root), false, "").unwrap();
     until(&job, "review").await;
@@ -264,6 +268,7 @@ async fn a_book_from_a_paper_end_to_end() {
     let text: String = pc_core::paper::section_files(&book).iter().map(|f| std::fs::read_to_string(book.join("sections").join(f)).unwrap()).collect::<Vec<_>>().join("\n");
     // the typed reference was asked again once
     assert_eq!(s.model.asked(TASK_CHAPTER).len(), 3);
+    assert!(s.model.asked(TASK_CHAPTER).iter().all(|(sys, _)| sys.contains("style rules: follow them") && sys.contains("Define each abbreviation at first use.")));
     assert!(!text.contains("Section 2") && !text.contains("made-up2020") && !text.contains("%%FIGURE"), "{text}");
     assert!(text.contains("\\term{cosine similarity}{餘弦相似度}") && text.contains("\\sidenote{"));
     // figures through the paper's path: files, labels, \ref pointed at them, the licence in the caption
@@ -318,6 +323,7 @@ async fn offline_and_direct_still_finishes_and_adds_to_a_book() {
     let js = lore_jobs::Jobs::open(s.deps.cache.join("jobs"), Arc::new(pipeline::BookJob { deps: s.deps.clone() }));
     let job = js.create(params(&s.root), true, "").unwrap();
     until(&job, "done").await;
+    assert!(s.model.asked(TASK_CHAPTER).iter().all(|(sys, _)| !sys.contains("style rules")), "no style folder: the prompt is unchanged");
     let r: research::Research = serde_json::from_value(job.output("research").unwrap()).unwrap();
     assert!(!r.reuse_figures && r.sources.iter().all(|x| x.kind != "web"), "no web: no licence known, no web papers");
     assert!(s.http.urls().is_empty(), "nothing asked of the network");

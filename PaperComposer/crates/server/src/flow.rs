@@ -110,6 +110,31 @@ async fn spec_get(State(s): State<Shared>, AxPath(name): AxPath<String>, AxQuery
 /// Title, abstract and the method section(s) of a paper (or a book's chapters on the method):
 /// what the discussion starts from. Bounded; plain text with `$…$` maths.
 pub fn starting_material(dir: &Path) -> String {
+    let from_docsrc = docsrc_material(dir);
+    if !from_docsrc.trim().is_empty() {
+        return from_docsrc;
+    }
+    // the paper's own fields and sections when lore-docsrc cannot read the project (a journal class)
+    let main = std::fs::read_to_string(pc_core::open::main_file(dir)).unwrap_or_default();
+    let fields = pc_core::front::fields_in(dir, &main);
+    let field = |k: &str| fields.iter().find(|f| f.field == k).map(|f| pc_core::text::strip_latex(&f.value)).unwrap_or_default();
+    let mut out = String::new();
+    if !field("title").trim().is_empty() {
+        out += &format!("Title: {}\n\n", field("title").trim());
+    }
+    if !field("abstract").trim().is_empty() {
+        out += &format!("Abstract: {}\n\n", field("abstract").trim());
+    }
+    for sec in pc_core::open::sections(dir).iter().filter(|s| {
+        let t = s.title.to_lowercase();
+        ["method", "approach", "model", "framework", "pipeline", "materials", "方法"].iter().any(|w| t.contains(w))
+    }) {
+        out += &format!("{}\n{}\n\n", pc_core::text::strip_latex(&sec.title), sec.paragraphs.join("\n"));
+    }
+    out.chars().take(9000).collect::<String>().trim().to_string()
+}
+
+fn docsrc_material(dir: &Path) -> String {
     let Ok(cat) = lore_docsrc::latex::extract_dir(dir) else { return String::new() };
     let mut out = String::new();
     if !cat.meta.title.trim().is_empty() {

@@ -18,11 +18,16 @@ pub mod meta;
 pub mod notes; // 筆記 (lore-notes)
 pub mod open;
 pub mod paper;
+pub mod patterns; // guide sentence structures (style/patterns.toml), never the author's voice
 pub mod table;
 pub mod profile;
 pub mod retrieve;
 pub mod review;
 pub mod softcheck;
+pub mod stylecheck;
+pub mod styleprofile; // 我的風格: derived from the author's own rows only
+pub mod thesis; // Key value check
+pub mod venueprofile; // 期刊寫法: a journal template's habits from its own open-access articles
 pub mod text;
 pub mod textable;
 

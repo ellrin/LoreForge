@@ -86,7 +86,7 @@ Each paper keeps its key value and the authors picked for it in
 | `id` | Unique id |
 | `type` | `hard` = checked instantly by code; `soft` = needs a model |
 | `scope` | `paragraph`, `sentence`, or `section:<Name>` |
-| `check` | Hard checks: `sentence_count` (threshold `3-8`), `max_words` (threshold `35`), `banned_words` (uses vocabulary.csv). Soft checks: any name; the model reads `message` |
+| `check` | Hard checks: `sentence_count` (threshold `3-8`), `max_words` (threshold `35`), `banned_words` (uses vocabulary.csv), and the style checks (`phrases`, `before_number`, `comma_splice`, `sentence_start`, `end_preposition`, `double_comparative`: threshold = a list in `style/checks.toml`; `contractions`, `exclamation`: no threshold; see `style/README.md`). Soft checks: any name; the model reads `message` |
 | `threshold` | Depends on `check` |
 | `severity` | `info`, `warning` or `error` |
 | `message` | Short text shown when the rule fires |

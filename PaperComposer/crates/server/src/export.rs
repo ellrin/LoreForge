@@ -36,6 +36,9 @@ pub struct Report {
     pub undefined_refs: Vec<String>,
     pub warnings: Vec<String>,
     pub seconds: f64,
+    /// 投稿版 of a double-blind journal: the blinded PDF next to the full one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blind_file: Option<String>,
 }
 
 /// What the log of one LaTeX run says.
@@ -103,6 +106,14 @@ fn hint_for(msg: &str) -> Option<String> {
     // fontspec (XeLaTeX / LuaLaTeX): a system font the computer does not have
     if let Some(f) = between(msg, "The font \"", '"') {
         return Some(format!("這台電腦沒有安裝字型「{f}」：安裝它，或在 main.tex 換成已安裝的字型"));
+    }
+    // "Unicode character ≤ (U+2264)": pdflatex cannot set it; say what to type instead
+    if let Some(c) = msg.split("Unicode character ").nth(1).and_then(|r| r.chars().next()) {
+        let tex = lore_notation::unicode::to_latex(&c.to_string());
+        if tex != c.to_string() {
+            return Some(format!("pdflatex 不認得「{c}」：改成 {tex}"));
+        }
+        return Some(format!("pdflatex 不認得「{c}」：換成 LaTeX 指令，或改用 XeLaTeX"));
     }
     if msg.contains("Undefined control sequence") {
         return Some("指令拼錯，或少載入它的套件".into());
@@ -269,17 +280,31 @@ fn locate(paper: &Path, errors: &mut [Problem]) {
 /// Compile `main.tex` to `export/<name>.pdf`: engine, bibliography, then
 /// engine again until cross-references settle (at most four runs).
 pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<Report, String> {
+    build_pdf_as(paper, name, prebuilt_bbl, false).await
+}
+
+/// The blinded version for a double-blind journal: `export/<name>-blind.pdf`, built from
+/// [`pc_core::front::blind_main`] (the paper's own files are not touched).
+pub async fn build_blind_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<Report, String> {
+    build_pdf_as(paper, name, prebuilt_bbl, true).await
+}
+
+async fn build_pdf_as(paper: &Path, name: &str, prebuilt_bbl: bool, blind: bool) -> Result<Report, String> {
     let start = Instant::now();
     let main_path = pc_core::open::main_file(paper);
     let main = std::fs::read_to_string(&main_path).map_err(|_| "論文沒有主檔".to_string())?;
     let engine = engine_for(&main);
     let tex = tool(engine).ok_or_else(|| format!("找不到 {engine}：請先安裝 TeX"))?;
-    let out = cache_dir(name);
+    let out = cache_dir(&if blind { format!("{name}-blind") } else { name.to_string() });
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     mirror_dirs(paper, &out);
     let _ = std::fs::remove_file(out.join("main.pdf"));
     if prebuilt_bbl {
         std::fs::copy(paper.join("main.bbl"), out.join("main.bbl")).map_err(|e| e.to_string())?;
+    } else {
+        // last build's bibliography is read on the first pass: one bad entry there (fixed since)
+        // would stop the build before BibTeX ever runs again
+        let _ = std::fs::remove_file(out.join("main.bbl"));
     }
     let mut report = Report::default();
     // fontspec fonts (XeLaTeX / LuaLaTeX): substitutes in copies, or stop here
@@ -305,7 +330,15 @@ pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<R
     }
     let sep = if cfg!(windows) { ";" } else { ":" };
     // a paper opened as it is keeps its own main file name; the job is "main" either way
-    let main_arg = fonts.as_ref().and_then(|f| f.prep.main.clone()).unwrap_or_else(|| main_path.strip_prefix(paper).map(Path::to_path_buf).unwrap_or_else(|_| PathBuf::from("main.tex")));
+    let mut main_arg = fonts.as_ref().and_then(|f| f.prep.main.clone()).unwrap_or_else(|| main_path.strip_prefix(paper).map(Path::to_path_buf).unwrap_or_else(|_| PathBuf::from("main.tex")));
+    if blind {
+        // the blinded main file lives in the build folder; \input paths still resolve from the paper
+        let from = if main_arg.is_absolute() { main_arg.clone() } else { paper.join(&main_arg) };
+        let text = std::fs::read_to_string(&from).map_err(|e| e.to_string())?;
+        let blind_path = out.join("main-blind.tex");
+        std::fs::write(&blind_path, pc_core::front::blind_main(&text)).map_err(|e| e.to_string())?;
+        main_arg = blind_path;
+    }
     let latex = |out: &Path| {
         let mut c = crate::proc::cmd(&tex);
         if let Some(f) = &fonts {
@@ -368,10 +401,11 @@ pub async fn build_pdf(paper: &Path, name: &str, prebuilt_bbl: bool) -> Result<R
     }
     locate(paper, &mut report.errors);
     if report.errors.is_empty() {
-        let dest = export_dir(paper).map_err(|e| e.to_string())?.join(format!("{name}.pdf"));
+        let file = if blind { format!("{name}-blind.pdf") } else { format!("{name}.pdf") };
+        let dest = export_dir(paper).map_err(|e| e.to_string())?.join(&file);
         std::fs::copy(out.join("main.pdf"), &dest).map_err(|_| "編譯完成但沒有產生 PDF".to_string())?;
         report.ok = true;
-        report.file = Some(format!("export/{name}.pdf"));
+        report.file = Some(format!("export/{file}"));
     }
     Ok(report)
 }
@@ -470,6 +504,14 @@ const PANDOC_COMPAT: &[(&str, &str)] = &[
 /// Two passes: LaTeX to pandoc's tree, where review.json's open changes and
 /// comments and the figure / table / equation numbers go in (`word::out`),
 /// then the tree to Word.
+/// The 待補 marks for pandoc: bracketed text, no colour (Word shows them as they are).
+const PANDOC_PENDING: &str = "\\newcommand{\\pending}[2]{[#1: #2]}\n\\newcommand{\\pendingcell}[2]{[#1]}\n\\newcommand{\\pendingpara}[2]{[PENDING #1] #2}\n\\newcommand{\\pendingdep}[1]{ [#1]}\n";
+
+/// The main file without its `\input{pending}` (pandoc gets [`PANDOC_PENDING`] instead).
+fn without_pending_input(main: &str) -> String {
+    main.split_inclusive('\n').filter(|l| !matches!(l.trim(), "\\input{pending}" | "\\input{pending.tex}")).collect()
+}
+
 pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Report, String> {
     use crate::word::out;
     let start = Instant::now();
@@ -492,9 +534,17 @@ pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Rep
 
     // The review: open changes and comments as markers in copies of the sections.
     let (marked, marks) = out::mark(paper, &pc_core::review::load(paper));
-    let input = if marked.is_empty() {
+    // 待補 marks: Word shows them as plain bracketed text (pending.tex is LaTeX-only)
+    let pending = !pc_core::draft::pending::locate(paper).is_empty();
+    if pending {
+        let mut c = std::fs::read_to_string(&compat_file).map_err(io)?;
+        c += PANDOC_PENDING;
+        std::fs::write(&compat_file, c).map_err(io)?;
+    }
+    let input = if marked.is_empty() && !pending {
         pc_core::open::main_file(paper)
     } else {
+        let main = if pending { without_pending_input(&main) } else { main.clone() };
         let f = work.join("review-main.tex");
         std::fs::write(&f, out::main_with(&main, &marked)).map_err(io)?;
         f
@@ -581,7 +631,7 @@ pub async fn build_docx(paper: &Path, name: &str, bibs: &[String]) -> Result<Rep
 }
 
 /// Files of the paper folder that are the app's, not the paper's.
-const APP_FILES: &[&str] = &["citations.csv", "main.bbl", "main.tex", "00README.json", "review.json", "paper.toml", "notation.json", "draft", "reference.docx"];
+const APP_FILES: &[&str] = &["citations.csv", "main.bbl", "main.tex", "00README.json", "review.json", "paper.toml", "notation.json", "draft", "reference.docx", "word-source.toml"];
 
 /// `export/<name>-latex.zip`: a source package that compiles on its own,
 /// as journals and arXiv want it: main.tex with the sections merged back
@@ -830,6 +880,11 @@ pub fn open(path: &Path, reveal: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_unicode_character_says_what_to_type() {
+        assert_eq!(super::hint_for("LaTeX Error: Unicode character ≤ (U+2264)").as_deref(), Some("pdflatex 不認得「≤」：改成 \\ensuremath{\\leq}"));
+    }
+
     use super::*;
 
     /// A paper opened as it is (`ms.tex`, `chapters/intro.tex`): preview, notation

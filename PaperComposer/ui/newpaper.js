@@ -98,15 +98,38 @@ const PCNew = (() => {
   }
 
   // ── 版型 ──
-  /** The template list: search, 建議 first, then journals and conferences.
-   *  opts: tpls, selected ("" = the plain article), suggested (ids), onPick(id). */
+  /** The template list: search, 建議 first, then journals and conferences, each with a
+   *  line of its 期刊寫法 (venue.js); base formats are not offered. Under the list, the
+   *  chosen journal's 期刊寫法 panel; a name that is not there → 新增期刊.
+   *  opts: tpls, selected ("" = the plain article), suggested (ids), onPick(id),
+   *  paper (the paper's name, for its keywords; else the open paper), journalsOnly (no 空白). */
   function templateList(opts) {
     const box = el("div", "np-tpls");
     const q = el("input", "np-input");
     q.type = "search";
     q.placeholder = "搜尋期刊或研討會";
     const list = el("div", "tpl-list");
+    const below = el("div", "np-venue");
     let selected = opts.selected ?? "";
+    const venue = typeof PCVenue !== "undefined" ? PCVenue : null;
+    const paper = () => opts.paper ?? state.paper?.name ?? null;
+    const showPanel = () => {
+      const t = opts.tpls.find((x) => x.id === selected);
+      below.replaceChildren(...(venue && t && !t.hidden ? [venue.panel({ template: selected, paper: paper() })] : []));
+    };
+    const addJournal = (query) => {
+      list.hidden = true;
+      q.hidden = true;
+      below.replaceChildren(venue.newJournal({
+        query,
+        onCancel: () => { list.hidden = false; q.hidden = false; showPanel(); },
+        onDone: async (id) => {
+          try { const all = await api("/api/templates"); opts.tpls.splice(0, opts.tpls.length, ...all.filter((j) => j.kind !== "book")); } catch {}
+          list.hidden = false; q.hidden = false; q.value = "";
+          selected = id; opts.onPick?.(id); fill(); showPanel();
+        },
+      }));
+    };
     const fill = () => {
       list.innerHTML = "";
       const query = q.value.trim().toLowerCase();
@@ -115,28 +138,43 @@ const PCNew = (() => {
         const b = el("button", "tpl");
         b.append(el("span", "name", label));
         if (sub) b.append(el("span", "sub", sub));
+        const habit = t && venue?.summary(t.id);
+        if (habit) b.append(el("span", `habit${habit.stale ? " old" : ""}`, habit.summary));
         b.setAttribute("aria-pressed", String(value === selected));
-        b.onclick = () => { selected = value; opts.onPick?.(value); fill(); };
+        b.onclick = () => { selected = value; opts.onPick?.(value); fill(); showPanel(); setTimeout(() => below.scrollIntoView({ block: "nearest", behavior: "smooth" }), 250); };
         list.append(b);
       };
       const sub = (t) => [t.short, t.publisher].filter(Boolean).join(" · ");
       const hit = (t) => !query || `${t.name} ${t.short ?? ""} ${t.publisher ?? ""} ${t.id}`.toLowerCase().includes(query);
-      const sugg = (opts.suggested ?? []).map((id) => opts.tpls.find((t) => t.id === id)).filter((t) => t && hit(t));
+      // base formats and umbrella entries are not targets (the current one still shows)
+      const offered = (t) => !t.hidden || t.id === selected;
+      const sugg = (opts.suggested ?? []).map((id) => opts.tpls.find((t) => t.id === id)).filter((t) => t && hit(t) && offered(t));
       if (sugg.length) {
         list.append(el("div", "tpl-group", "建議"));
         sugg.forEach((t) => option(t, t.name, sub(t)));
       }
-      if (!query) option(null, "空白", "一般 article");
+      if (!query && !opts.journalsOnly) option(null, "空白", "一般 article");
+      let shown = sugg.length;
       [["journal", "期刊"], ["conference", "研討會"]].forEach(([k, title]) => {
-        const group = opts.tpls.filter((t) => (t.kind === "conference" ? "conference" : "journal") === k && hit(t) && !sugg.includes(t)).sort((a, b) => a.name.localeCompare(b.name));
+        const group = opts.tpls.filter((t) => (t.kind === "conference" ? "conference" : "journal") === k && hit(t) && offered(t) && !sugg.includes(t)).sort((a, b) => a.name.localeCompare(b.name));
         if (!group.length) return;
+        shown += group.length;
         list.append(el("div", "tpl-group", title));
         group.forEach((t) => option(t, t.name, sub(t)));
       });
+      if (venue && query.length >= 2) {
+        const add = el("button", "tpl tpl-add");
+        add.append(el("span", "name", `新增期刊「${q.value.trim()}」`));
+        add.prepend(icon("plus"));
+        add.onclick = () => addJournal(q.value.trim());
+        if (!shown) list.append(add); else { list.append(el("div", "tpl-group", "")); list.append(add); }
+      }
     };
     q.oninput = fill;
     fill();
-    box.append(q, list);
+    venue?.loadSummaries().then(() => { if (box.isConnected || !list.hidden) fill(); });
+    showPanel();
+    box.append(q, list, below);
     setTimeout(() => q.focus());
     return box;
   }
@@ -240,7 +278,15 @@ const PCNew = (() => {
     if (st.busy || !checkName()) return;
     st.busy = true; draw();
     try {
-      const r = await api("/api/papers", { name: st.name.trim(), template: start === "blank" ? st.template || null : null, key_value: "", authors: st.chosen });
+      const template = start === "blank" ? st.template || null : null;
+      // on a journal template: the sections in the journal's own arrangement (期刊寫法); none yet →
+      // the template's sample, and the 期刊寫法 is made in the background
+      let outline = [];
+      if (template) {
+        try { outline = (await api(`/api/venue/t/${encodeURIComponent(template)}/skeleton`)).outline ?? []; } catch {}
+        if (!outline.length) api(`/api/venue/t/${encodeURIComponent(template)}/make`, {}).catch(() => {});
+      }
+      const r = await api("/api/papers", { name: st.name.trim(), template, key_value: "", authors: st.chosen, outline });
       st = null;
       $("#dlgNew").close();
       // a new paper is not an import: open it without the import message
@@ -459,5 +505,49 @@ const PCNew = (() => {
   /** Has the user filled anything in that closing would lose? */
   const dirty = () => !!st && !st.busy && !!(st.nameEdited || st.chosen.length);
 
-  return { open, wire, kvLength, dirty, templateList, floats };
+  // ── Key value check (pc_core::thesis): advice under the field, never a gate ──
+  /** Ask about `value` and show the problems and rewrites in `box`; a rewrite clicked → onPick(text).
+   *  `current()` (optional): the field's value now — stale answers are dropped. */
+  async function kvAdvice(value, box, onPick, current) {
+    const v = (value ?? "").trim();
+    box.replaceChildren();
+    box.hidden = true;
+    if (!v) return;
+    const seq = (box.seq = (box.seq ?? 0) + 1);
+    let r;
+    try { r = await api("/api/keyvalue/check", { key_value: v, engine: typeof chosenEngine === "function" ? chosenEngine() : null }); }
+    catch { return; }
+    if (box.seq !== seq || (current && current().trim() !== v)) return;
+    if (!r?.problems?.length && !r?.rewrites?.length) return;
+    box.append(...(r.problems ?? []).map((p) => el("span", "kv-problem", p.label)));
+    (r.rewrites ?? []).forEach((t) => {
+      const b = el("button", "ghost small kv-rewrite", t);
+      b.title = "用這句";
+      b.onclick = () => { box.replaceChildren(); box.hidden = true; onPick(t); };
+      box.append(b);
+    });
+    box.hidden = false;
+  }
+
+  /** Wire a Key value input: checked on blur (debounced) and by its 檢查 button; returns the box. */
+  function kvCheck(input, onPick = () => {}) {
+    const box = el("div", "kv-advice");
+    box.hidden = true;
+    const btn = el("button", "ghost small kv-check", "檢查");
+    btn.type = "button";
+    let timer = 0, last = "";
+    const run = (force) => {
+      clearTimeout(timer);
+      const v = input.value.trim();
+      if (!force && v === last) return;
+      timer = setTimeout(() => { last = v; kvAdvice(v, box, pick, () => input.value); }, force ? 0 : 400);
+    };
+    const pick = (t) => { input.value = t; last = t.trim(); input.dispatchEvent(new Event("input")); onPick(t); };
+    input.addEventListener("blur", () => run(false));
+    btn.onclick = () => run(true);
+    input.after(btn, box);
+    return box;
+  }
+
+  return { open, wire, kvLength, dirty, templateList, floats, kvAdvice, kvCheck };
 })();

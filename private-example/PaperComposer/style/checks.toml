@@ -1,0 +1,13 @@
+# Word lists for the style checks. A rules.csv hard row turns a check on;
+# its threshold names a list here. An entry is "text" or { find = "…", use = "…" }.
+# This file is data for the checks only: it never goes into a model prompt.
+
+wordy = [
+  { find = "in order to", use = "to" },
+  { find = "due to the fact that", use = "because" },
+  { find = "prior to", use = "before" },
+]
+
+jargon = ["needless to say", "at the end of the day"]
+
+comma_splice = ["however", "therefore"]

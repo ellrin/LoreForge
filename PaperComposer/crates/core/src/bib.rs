@@ -372,7 +372,13 @@ pub fn paper_bib(library: &[Entry], cited: &[String]) -> (String, Vec<String>) {
             None => missing.push(k.clone()),
         }
     }
-    (write(&chosen), missing)
+    (tex_entities(&write(&chosen)), missing)
+}
+
+/// HTML entities that publishers' BibTeX (doi.org, Crossref) carries ("Feature Reuse &amp;
+/// Other Factors") as LaTeX: a bare `&` stops BibTeX's output in pdflatex.
+pub fn tex_entities(bib: &str) -> String {
+    bib.replace("&amp;", "\\&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'").replace("&#x2013;", "--").replace("&#8211;", "--")
 }
 
 /// Find a reference's PDF in this machine's folder: the recorded file name,
@@ -394,6 +400,11 @@ pub fn find_pdf(dir: &Path, note: &Note) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn publisher_html_entities_become_latex() {
+        assert_eq!(tex_entities("journal = {Biomedical Materials &amp; Devices}, title = {A &lt;b&gt;}"), "journal = {Biomedical Materials \\& Devices}, title = {A <b>}");
+    }
+
     use super::*;
 
     const BIB: &str = r#"

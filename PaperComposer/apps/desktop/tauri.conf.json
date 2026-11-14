@@ -21,6 +21,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "files": {
+        "MacOS/lore-voice-helper": "bin/lore-voice-helper"
+      }
+    },
     "resources": {
       "../../ui": "ui",
       "../../../private-example/PaperComposer": "workspace-template"
@@ -29,8 +34,9 @@
       {
         "ext": ["docx"],
         "name": "Word 文件",
-        "role": "Viewer",
+        "role": "Editor",
         "rank": "Alternate",
+        "contentTypes": ["org.openxmlformats.wordprocessingml.document"],
         "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
       },
       {

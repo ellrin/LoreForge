@@ -43,6 +43,19 @@ pub struct Proposals {
     pub expressions: Vec<ProposedExpression>,
 }
 
+impl Proposals {
+    /// Drop every proposal that is guide material (a sentence or structure of
+    /// `style/patterns.toml`, or tagged `guide`): the phrase bank is the author's voice only.
+    /// Returns how many were dropped.
+    pub fn drop_guide(&mut self, guide: &[crate::patterns::Pattern]) -> usize {
+        let n = self.phrases.len() + self.expressions.len();
+        let g = |t: &str| crate::patterns::is_guide_text(guide, t);
+        self.phrases.retain(|p| !(g(&p.template) || g(&p.example) || p.tags.iter().any(|t| crate::styleprofile::is_guide_mark(t))));
+        self.expressions.retain(|e| !(g(&e.text) || g(&e.example)));
+        n - self.phrases.len() - self.expressions.len()
+    }
+}
+
 /// The reply `build_prompt` asks for.
 pub fn reply_schema() -> serde_json::Value {
     use crate::compose::{json_array, json_object, json_string};
@@ -121,6 +134,7 @@ mod tests {
             root: Default::default(),
             authors: vec![],
             affiliations: vec![],
+            style_checks: Default::default(),
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },
             phrases: vec![Phrase {
                 id: "P017".into(),
@@ -154,5 +168,24 @@ mod tests {
         assert_eq!(p.phrases[0].section, "Any");
         assert_eq!(p.phrases[0].position, "body");
         assert_eq!(p.expressions[0].id, "X001");
+    }
+
+    #[test]
+    fn guide_sentences_never_enter_the_phrase_bank() {
+        let guide = crate::patterns::parse("[[pattern]]\nid = \"g\"\nsituation = \"compare_two\"\nstructure = \"Although {A} and {B} differ in {x}, both {y}.\"\nexample = \"Although trains and buses differ in speed, both reduce traffic in city centres.\"\nsource = \"guide\"\n").0;
+        let mut p: Proposals = serde_json::from_value(serde_json::json!({
+            "phrases": [
+                { "section": "Discussion", "function": "comparison", "position": "opening", "template": "Although {A} and {B} differ in {x}, both {y}.", "example": "", "tags": [] },
+                { "section": "Result", "function": "finding", "position": "body", "template": "{method} improved {metric}.", "example": "Although trains and buses differ in speed, both reduce traffic in city centres.", "tags": [] },
+                { "section": "Result", "function": "finding", "position": "body", "template": "{x} is {y} because {z}.", "example": "", "tags": ["guide"] },
+                { "section": "Result", "function": "finding", "position": "body", "template": "{method} improved {metric} on {data}.", "example": "The loss improved recall on long inputs.", "tags": ["paper1"] }
+            ],
+            "expressions": [{ "kind": "phrase", "text": "although trains and buses differ in speed", "usage": "", "section": "", "example": "" }]
+        }))
+        .unwrap();
+        assert_eq!(p.drop_guide(&guide), 4);
+        assert_eq!(p.phrases.len(), 1);
+        assert_eq!(p.phrases[0].template, "{method} improved {metric} on {data}.");
+        assert!(p.expressions.is_empty());
     }
 }

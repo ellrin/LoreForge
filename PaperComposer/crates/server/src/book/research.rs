@@ -208,7 +208,7 @@ pub async fn research(m: &Material, plan: &Plan, env: Env<'_>, progress: &(dyn F
                     if !out.notes.contains(&line) {
                         out.notes.push(line);
                     }
-                    if matches!(e, lore_research::Error::RateLimited(_)) {
+                    if matches!(e, lore_research::Error::RateLimited(_) | lore_research::Error::Quota(..)) {
                         cfg.sources.retain(|s| s != src);
                         dropped = true;
                     }

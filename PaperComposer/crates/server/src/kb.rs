@@ -338,8 +338,8 @@ fn parse_sentence(reply: &str) -> Option<String> {
 }
 
 /// The card's definition for the model: what to restate and which term it is for.
-pub fn definition_prompt(c: &Card, language: &str) -> Prompt {
-    crate::reader::paraphrase_prompt(&c.summary, &format!("This defines the term \"{}\"; the sentence should state what it is.", c.title), language)
+pub fn definition_prompt(c: &Card, language: &str, style: &str) -> Prompt {
+    crate::reader::paraphrase_prompt(&c.summary, &format!("This defines the term \"{}\"; the sentence should state what it is.", c.title), language, style)
 }
 
 pub(crate) async fn paraphrase(State(s): State<Shared>, Json(b): Json<ParaBody>) -> impl IntoResponse {
@@ -349,7 +349,8 @@ pub(crate) async fn paraphrase(State(s): State<Shared>, Json(b): Json<ParaBody>)
     }
     let schema = json!({ "type": "object", "properties": { "sentence": { "type": "string" } }, "required": ["sentence"] });
     let paper = card.sources.iter().find(|s| s.sha.is_some()).map(|s| json!({ "sha": s.sha, "page": s.page }));
-    match writing_complete(&s, "pc-kb-paraphrase", b.engine, &definition_prompt(&card, &b.language), None, Some(schema)).await {
+    let style = s.loaded.read().await.workspace.as_deref().map(pc_core::draft::style_text).unwrap_or_default();
+    match writing_complete(&s, "pc-kb-paraphrase", b.engine, &definition_prompt(&card, &b.language, &style), None, Some(schema)).await {
         Ok(reply) => match parse_sentence(&reply) {
             Some(t) => Json(json!({ "text": t, "paper": paper })).into_response(),
             None => Json(json!({ "error": "模型的回覆無法讀取" })).into_response(),
@@ -495,7 +496,8 @@ mod tests {
     fn definition_prompt_and_reply() {
         let root = space("def");
         let c = load_cards(&[root.clone()]).into_iter().find(|c| c.title == "Gated flow").unwrap();
-        let p = definition_prompt(&c, "en");
+        let p = definition_prompt(&c, "en", "");
+        assert!(definition_prompt(&c, "en", "No contractions.").system.contains("No contractions."));
         assert!(p.user.contains("switched by a learned gate") && p.user.contains("\"Gated flow\""));
         assert!(p.system.contains("no citation command"), "the citation is added by the app, not the model");
         assert_eq!(parse_sentence("{\"sentence\": \"A gate switches edges.\"}").as_deref(), Some("A gate switches edges."));

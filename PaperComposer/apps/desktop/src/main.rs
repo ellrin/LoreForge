@@ -146,6 +146,9 @@ fn main() {
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(1000.0, 640.0)
                 .build()?;
+            // the first launch asks every permission the app needs, once, in the background
+            // (answered ones are never asked again; later changes: 設定 → 一般 → 權限)
+            lore_shell::permissions::ask_at_launch();
             // files Finder handed over while starting up
             lore_home::ports::register("pc", addr.port());
             *app.state::<Opener>().addr.lock().unwrap() = Some(addr);

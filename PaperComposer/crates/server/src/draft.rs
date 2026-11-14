@@ -10,9 +10,12 @@
 //! shown next to the step.
 
 pub(crate) mod engine;
+mod topaper;
 
 use super::*;
+use pc_core::draft::candidates::{self as ca, Prep};
 use pc_core::draft::lens::Lens;
+use pc_core::draft::pending::{self as pd, Direction, PendingStatus};
 use pc_core::draft::material::{self, Material};
 use pc_core::draft::prompts as dp;
 use pc_core::draft::revise::{self as rv, Revision, RevisionStatus};
@@ -39,6 +42,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/review", post(run_review).put(put_review))
         .route("/api/papers/{name}/draft/outline", post(run_outline).put(put_outline))
         .route("/api/papers/{name}/draft/compose", post(run_compose))
+        .route("/api/papers/{name}/draft/insert", post(insert_drafts))
         .route("/api/papers/{name}/draft/audit", post(run_audit).put(put_audit))
         .route("/api/papers/{name}/draft/audit/{id}/ask", post(audit_ask))
         .route("/api/papers/{name}/draft/phase", put(put_phase))
@@ -53,6 +57,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/revisions/{id}/plan", post(plan_revision))
         .route("/api/papers/{name}/draft/revisions/{id}/changes/{cid}", post(decide_change))
         .route("/api/papers/{name}/draft/revisions/{id}/status", post(revision_status))
+        .route("/api/papers/{name}/draft/pending", get(pending_list).put(put_pending))
+        .route("/api/papers/{name}/draft/pending/{id}/fill", post(fill_pending))
 }
 
 type Resp = axum::response::Response;
@@ -84,7 +90,9 @@ fn ref_keys(m: &Material) -> Vec<String> {
 }
 
 fn load(dir: &Path) -> Result<Session, Resp> {
-    Session::load(dir).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e).into_response())
+    let mut s = Session::load(dir).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e).into_response())?;
+    settle_stale_prep(dir, &mut s);
+    Ok(s)
 }
 
 fn save(dir: &Path, sess: &Session) -> Result<(), Resp> {
@@ -111,6 +119,8 @@ fn view(c: &Ctx, sess: &Session) -> Result<Resp, Resp> {
     let states: Vec<_> = sess.groups.iter().map(|g| sess.group_state(&lens, &g.id)).collect();
     Ok(Json(serde_json::json!({
         "key_value": c.key_value,
+        // the journal template (step 1 picks it; 期刊寫法 and the requirements follow it)
+        "journal": meta::read_meta(&c.dir).journal,
         "session": sess,
         "turns": ds::read_turns(&c.dir),
         "lens": {
@@ -123,9 +133,145 @@ fn view(c: &Ctx, sess: &Session) -> Result<Resp, Resp> {
         },
         "states": states,
         "has_style": !style_text(&c.ws).trim().is_empty(),
+        // 待補清單: the paper's marks (and the draft's, before it is copied in)
+        "pending_report": pending_report(c, sess),
         "material": material::load(&c.ws, &c.dir),
     }))
     .into_response())
+}
+
+fn pending_report(c: &Ctx, sess: &Session) -> Vec<pd::ReportEntry> {
+    let mut all = pd::locate(&c.dir);
+    // the session's draft counts only until it is in the paper, and never once filled
+    let in_paper: std::collections::BTreeSet<String> = all.iter().map(|p| p.id.clone()).collect();
+    let filled = |id: &str| sess.pending.iter().any(|p| p.id == id && p.status == PendingStatus::Filled);
+    all.extend(pd::draft_places(sess).into_iter().filter(|p| !in_paper.contains(&p.id) && !filled(&p.id)));
+    pd::report_from(&all, sess)
+}
+
+// ── 預想選項 (in the background, never inside a turn) ───────
+
+/// Groups whose candidates a task of this process is preparing now. A group
+/// saved as `running` that is not here was cut off (the app quit): it shows
+/// as failed, with 重試.
+static PREPARING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn prep_key(dir: &Path, group: &str) -> String {
+    format!("{}#{group}", dir.display())
+}
+
+fn settle_stale_prep(dir: &Path, sess: &mut Session) {
+    let live = PREPARING.lock().map(|v| v.clone()).unwrap_or_default();
+    let items = sess.items.clone();
+    for g in &mut sess.groups {
+        if g.prep == Some(Prep::Running) && !live.contains(&prep_key(dir, &g.id)) {
+            // cut short (the app quit): the items that got their options keep them
+            let some = items.iter().any(|i| i.group == g.id && i.candidates_tried);
+            g.prep = Some(if some { Prep::Done } else { Prep::Failed });
+        }
+    }
+}
+
+/// Mark the groups whose items want candidates as being prepared; returns them.
+fn mark_prep(sess: &mut Session, lens: &Lens, groups: &[String]) -> Vec<String> {
+    let mut out = vec![];
+    for g in groups {
+        if sess.group(g).is_some_and(|x| x.prep == Some(Prep::Running)) || ca::targets(sess, lens, std::slice::from_ref(g)).is_empty() {
+            continue;
+        }
+        if let Some(x) = sess.group_mut(g) {
+            x.prep = Some(Prep::Running);
+            out.push(g.clone());
+        }
+    }
+    out
+}
+
+/// One batched candidates call for `groups` (already marked by [`mark_prep`],
+/// the session saved), on a task of its own: the caller's reply never waits on it.
+fn spawn_candidates(s: &Shared, c: &Ctx, groups: Vec<String>) {
+    if groups.is_empty() {
+        return;
+    }
+    let s2 = s.clone();
+    let c = Ctx { dir: c.dir.clone(), ws: c.ws.clone(), key_value: c.key_value.clone() };
+    let keys: Vec<String> = groups.iter().map(|g| prep_key(&c.dir, g)).collect();
+    if let Ok(mut v) = PREPARING.lock() {
+        v.extend(keys.iter().cloned());
+    }
+    tokio::spawn(async move {
+        // the items, in pieces of ca::BATCH (a long plan never outgrows one reply); each piece is
+        // kept as it lands, a failed piece marks its items tried (重試 asks again)
+        let ready = async {
+            let sess = Session::load(&c.dir)?;
+            let lens = lens_for(&c.ws, &sess).map_err(|_| "lens".to_string())?;
+            let ids: Vec<String> = ca::targets(&sess, &lens, &groups).iter().map(|i| i.id.clone()).collect();
+            let record = ds::records_text(&c.dir, &sess.records, usize::MAX);
+            let (_, mtext) = material_of(&c);
+            let mtext = mtext + &topaper::venue_of(&c).emphasis();
+            Ok::<_, String>((sess, lens, ids, record, mtext))
+        }
+        .await;
+        let mut ok = ready.is_ok();
+        if let Ok((sess, lens, ids, record, mtext)) = ready {
+            // group by group in plan order: the first groups are ready while the later ones wait
+            let order = |id: &String| sess.items.iter().find(|i| &i.id == id).and_then(|i| groups.iter().position(|g| *g == i.group)).unwrap_or(usize::MAX);
+            let mut ids = ids;
+            ids.sort_by_key(order);
+            let mut done_ids: Vec<String> = Vec::new();
+            // three pieces at a time (one Opus reply takes minutes); results land in plan order
+            use futures_util::StreamExt;
+            let pieces: Vec<Vec<String>> = ids.chunks(ca::BATCH).map(|p| p.to_vec()).collect();
+            let (sess_r, lens_r, rec_r, mt_r, kv_r, s_r) = (&sess, &lens, &record, &mtext, &c.key_value, &s2);
+            let mut results = futures_util::stream::iter(pieces.into_iter().map(|piece| async move {
+                let items: Vec<&ds::Item> = sess_r.items.iter().filter(|i| piece.contains(&i.id)).collect();
+                let res = engine::candidates(&engines(s_r), kv_r, sess_r, lens_r, &items, rec_r, mt_r).await;
+                (piece, res)
+            }))
+            .buffered(3);
+            while let Some((piece, res)) = results.next().await {
+                let piece = piece.as_slice();
+                let _g = LOCK.lock().await;
+                let Ok(mut now) = Session::load(&c.dir) else { break };
+                match &res {
+                    Ok((checked, _)) => {
+                        ca::apply(&mut now, piece, checked);
+                    }
+                    Err(e) => {
+                        eprintln!("預想選項: {e}");
+                        ca::mark_tried(&mut now, piece);
+                        ok = false;
+                    }
+                }
+                // a group whose items all had their turn is ready now (the window looks every 3 s)
+                done_ids.extend(piece.iter().cloned());
+                if res.is_ok() {
+                    for g in &groups {
+                        let mine: Vec<&String> = ids.iter().filter(|id| sess.items.iter().any(|i| &i.id == *id && i.group == *g)).collect();
+                        if mine.iter().all(|id| done_ids.contains(id)) {
+                            if let Some(x) = now.group_mut(g) {
+                                if x.prep == Some(Prep::Running) {
+                                    x.prep = Some(Prep::Done);
+                                }
+                            }
+                        }
+                    }
+                }
+                let _ = now.save(&c.dir);
+            }
+        }
+        let _g = LOCK.lock().await;
+        if let Ok(mut v) = PREPARING.lock() {
+            v.retain(|k| !keys.contains(k));
+        }
+        let Ok(mut sess) = Session::load(&c.dir) else { return };
+        for g in &groups {
+            if let Some(x) = sess.group_mut(g) {
+                x.prep = Some(if ok { Prep::Done } else { Prep::Failed });
+            }
+        }
+        let _ = sess.save(&c.dir);
+    });
 }
 
 macro_rules! tri {
@@ -359,10 +505,36 @@ async fn run_record(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
     }
     sess.tables = tables;
     sess.conflicts = r.conflicts;
+    // 待補: items follow their tables; `?` in the record becomes a pending item
+    let tables = sess.tables.clone();
+    pd::rebind_tables(&mut sess.pending, &tables);
+    let exps = sess.experiments.clone();
+    pd::rebind_experiments(&mut sess.pending, &exps);
+    pd::from_record(&mut sess.pending, &exps, &tables);
+    // results already filled stay in the record read again
+    let filled: Vec<String> = sess.pending.iter().filter(|p| p.status == PendingStatus::Filled).map(|p| p.id.clone()).collect();
+    for id in &filled {
+        pd::write_back(&mut sess, id);
+    }
+    // the record now has a waiting result: its 修訂 is made, the conversation settles the direction
+    let mut prep = vec![];
+    for k in pd::arrived(&sess) {
+        // the record's words go into the request, not into the paper: the values come from the author
+        let line = sess.pending[k].experiment.as_ref().and_then(|e| sess.experiments.iter().find(|x| &x.id == e)).map(|e| format!("{} {} {}", e.title, e.metrics, e.result)).unwrap_or_default();
+        let it = &mut sess.pending[k];
+        it.status = PendingStatus::Filled;
+        it.direction = Some(Direction::Unsure);
+        prep.extend(open_fill(&c, &mut sess, k));
+        if let Some(r) = sess.pending[k].revision.clone().and_then(|r| sess.revisions.iter_mut().find(|x| x.id == r)) {
+            r.request = format!("{}。記錄：{}", r.request, line.trim());
+        }
+    }
+    pd::sync_group(&mut sess);
     if sess.phase < Phase::Plan {
         sess.phase = Phase::Plan;
     }
     tri!(save(&c.dir, &sess));
+    spawn_candidates(&s, &c, prep);
     tri!(view(&c, &sess))
 }
 
@@ -402,10 +574,15 @@ async fn run_plan(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp
     }
     sess.engines.insert("plan".into(), used);
     sess.set_plan(groups);
+    pd::sync_group(&mut sess);
     if sess.phase < Phase::Interview {
         sess.phase = Phase::Interview;
     }
+    // 預想選項 for every group, before the interview starts
+    let all: Vec<String> = sess.groups.iter().map(|g| g.id.clone()).collect();
+    let prep = mark_prep(&mut sess, &lens, &all);
     tri!(save(&c.dir, &sess));
+    spawn_candidates(&s, &c, prep);
     tri!(view(&c, &sess))
 }
 
@@ -462,6 +639,8 @@ async fn put_plan(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
     if sess.active.as_ref().is_some_and(|a| !keep.contains(a)) {
         sess.active = None;
     }
+    // the 待補項目 group comes back while results wait
+    pd::sync_group(&mut sess);
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
 }
@@ -471,6 +650,12 @@ async fn put_plan(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
 #[derive(Deserialize)]
 struct TurnBody {
     group: String,
+    /// Candidates the author chose for this answer (ids of the item asked about).
+    #[serde(default)]
+    picked: Vec<String>,
+    /// The item they belong to, when chosen from the ledger (default: the item the last question was about).
+    #[serde(default)]
+    item: Option<String>,
     /// None: open the group with its first question.
     #[serde(default)]
     answer: Option<String>,
@@ -497,24 +682,42 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
         let _g = LOCK.lock().await;
         let mut sess = tri!(load(&c.dir));
         if let Some(r) = sess.revisions.iter().find(|r| r.group == b.group) {
-            mtext += &rv::turn_context(r, &c.dir);
+            match r.pending.as_deref().and_then(|p| sess.pending.iter().find(|x| x.id == p)) {
+                // 回填: what came in, the author's explanation, every dependent sentence
+                Some(item) => {
+                    let rep = pending_report(&c, &sess).into_iter().find(|e| e.id == item.id);
+                    mtext += &pd::turn_context(item, rep.as_ref());
+                    mtext += &rv::turn_context(r, &c.dir);
+                }
+                None => mtext += &rv::turn_context(r, &c.dir),
+            }
         }
         let lens = tri!(lens_for(&c.ws, &sess));
         if sess.group(&b.group).is_none() {
             return bad("沒有這個題組");
         }
         let turns = ds::read_turns(&c.dir);
-        let prompt = dp::turn_prompt(&c.key_value, &sess, &lens, &b.group, &turns, answer.as_deref(), &mtext);
+        // a choice among the prepared candidates: the item asked about last
+        let about = b
+            .item
+            .clone()
+            .filter(|i| sess.items.iter().any(|x| &x.id == i && x.group == b.group))
+            .unwrap_or_else(|| turns.iter().rev().find(|t| t.group == b.group && t.who == Who::Ai).map(|t| t.about.clone()).unwrap_or_default());
+        let (answer, picked) = ca::resolve_answer(&sess, &about, answer, b.picked.clone());
+        let shown = answer.as_ref().map(|a| if picked.is_empty() { a.clone() } else { format!("{a}\n(picked {} for {about})", picked.join(", ")) });
+        let prompt = dp::turn_prompt(&c.key_value, &sess, &lens, &b.group, &turns, shown.as_deref(), &mtext);
         // The answer is kept even if the model call fails; sending it again
         // after a failure does not record it twice.
         let resent = answer.as_ref().is_some_and(|a| turns.iter().rev().find(|t| t.group == b.group).is_some_and(|t| t.who == Who::Me && &t.text == a));
         if let Some(a) = answer.as_ref().filter(|_| !resent) {
-            if let Err(e) = ds::append_turn(&c.dir, &b.group, Who::Me, a, vec![]) {
+            let t = ds::Turn { n: 0, group: b.group.clone(), who: Who::Me, text: a.clone(), options: vec![], engine: String::new(), about: if picked.is_empty() { String::new() } else { about.clone() }, picked: picked.clone() };
+            if let Err(e) = ds::append_turn_with(&c.dir, t) {
                 return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
             }
             if let Some(g) = sess.group_mut(&b.group) {
                 g.turns += 1;
             }
+            ca::note_picked(&mut sess, &about, &picked);
         }
         sess.start_group(&b.group);
         if sess.phase < Phase::Interview {
@@ -531,6 +734,7 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
     if let Err(e) = dp::add_ref_notes(&c.dir, &r.ref_notes, &known) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
+    dp::apply_pending_notes(&mut sess, &r.pending_notes);
     if let Some(g) = sess.group_mut(&b.group) {
         let keep = |new: String, old: &str| if new.trim().is_empty() { old.to_string() } else { new };
         let old = g.summary.clone();
@@ -543,12 +747,19 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
         };
     }
     let say = [r.reply.trim(), r.question.trim()].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join("\n");
+    // the question's item: its prepared candidates are the choices (the turn's options are dropped)
+    let about = r.item.filter(|i| sess.items.iter().any(|x| &x.id == i && x.group == b.group)).unwrap_or_default();
+    let options = if sess.items.iter().any(|x| x.id == about && !x.candidates.is_empty()) { vec![] } else { r.options };
     if !say.is_empty() {
-        if let Err(e) = ds::append_turn_by(&c.dir, &b.group, Who::Ai, &say, r.options, &used.label) {
+        let t = ds::Turn { n: 0, group: b.group.clone(), who: Who::Ai, text: say, options, engine: used.label.clone(), about, picked: vec![] };
+        if let Err(e) = ds::append_turn_with(&c.dir, t) {
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
     }
+    // items the answer added: their candidates come in the background (the turn's own options meanwhile)
+    let prep = mark_prep(&mut sess, &lens, std::slice::from_ref(&b.group));
     tri!(save(&c.dir, &sess));
+    spawn_candidates(&s, &c, prep);
     tri!(view(&c, &sess))
 }
 
@@ -565,9 +776,20 @@ async fn group_action(State(s): State<Shared>, AxPath((name, id)): AxPath<(Strin
     if sess.group(&id).is_none() {
         return bad("沒有這個題組");
     }
+    let mut prep = vec![];
     match b.action.as_str() {
         "start" | "reopen" => {
             sess.start_group(&id);
+            if let Ok(lens) = lens_for(&c.ws, &sess) {
+                prep = mark_prep(&mut sess, &lens, std::slice::from_ref(&id));
+            }
+        }
+        // 重試 the options of this group's items that have none
+        "prepare" => {
+            ca::retry(&mut sess, &id);
+            if let Ok(lens) = lens_for(&c.ws, &sess) {
+                prep = mark_prep(&mut sess, &lens, std::slice::from_ref(&id));
+            }
         }
         "close" => sess.close_group(&id, false),
         "skip" => sess.close_group(&id, true),
@@ -577,6 +799,7 @@ async fn group_action(State(s): State<Shared>, AxPath((name, id)): AxPath<(Strin
         sess.phase = Phase::Claims;
     }
     tri!(save(&c.dir, &sess));
+    spawn_candidates(&s, &c, prep);
     tri!(view(&c, &sess))
 }
 
@@ -717,6 +940,15 @@ fn retemplate(ws: &Path, dir: &Path, template: Option<&str>, people: Option<(Vec
     if pc_core::open::is_custom(dir) {
         return Err("這篇是原地開啟的 LaTeX 專案，版型請在它自己的主檔裡改；按「稍後」繼續".into());
     }
+    // Already on this journal's class (a main file set up by hand: its declarations, its blind
+    // switch): the journal is only recorded, main.tex is not rebuilt.
+    if let Some(t) = template
+        && paper::same_class(dir, &ws.join("publishers").join(t))
+    {
+        m.journal = Some(t.to_string());
+        meta::write_meta(dir, &m)?;
+        return Ok(true);
+    }
     let old = paper::apply_template(dir, template.map(|t| ws.join("publishers").join(t)).as_deref())?;
     let keep = ds::new_archive(dir)?;
     std::fs::write(keep.join("main.tex"), old).map_err(|e| e.to_string())?;
@@ -738,6 +970,9 @@ struct TemplateBody {
     /// 稍後: keep the paper's template and go on.
     #[serde(default)]
     later: bool,
+    /// Chosen in step 1 (主題): the session stays where it is.
+    #[serde(default)]
+    stay: bool,
 }
 
 async fn put_template(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<TemplateBody>) -> Resp {
@@ -745,10 +980,14 @@ async fn put_template(State(s): State<Shared>, AxPath(name): AxPath<String>, Jso
     if !b.later {
         let t = b.template.as_deref().map(str::trim).filter(|t| !t.is_empty());
         tri!(set_paper_template(&s, &c.ws, &c.dir, t).await);
+        // an empty paper takes the journal's own sections (期刊寫法 skeleton)
+        if let Err(e) = topaper::relayout_if_empty(&c.dir, &topaper::venue_of(&c)) {
+            eprintln!("版型：章節沒有重排：{e}");
+        }
     }
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
-    if sess.phase < Phase::Outline {
+    if sess.phase < Phase::Outline && !b.stay {
         sess.phase = Phase::Outline;
     }
     tri!(save(&c.dir, &sess));
@@ -781,7 +1020,8 @@ async fn run_outline(State(s): State<Shared>, AxPath(name): AxPath<String>, body
         _ => None,
     };
     let (mat, mtext) = material_of(&c);
-    let (mut new, used) = tri!(engine::outline(&engines(&s), &c.key_value, &sess, &lens, &style_text(&c.ws), only, &mtext).await.map_err(|e| bad(&e)));
+    let style = style_text(&c.ws) + &topaper::venue_of(&c).outline();
+    let (mut new, used) = tri!(engine::outline(&engines(&s), &c.key_value, &sess, &lens, &style, only, &mtext).await.map_err(|e| bad(&e)));
     let known = ref_keys(&mat);
     for p in new.iter_mut().flat_map(|o| o.paras.iter_mut()) {
         p.cites.retain(|k| known.contains(k));
@@ -841,14 +1081,26 @@ fn bank_section(s: &str) -> &str {
 /// and the author's style notes as extra instructions.
 async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<ComposeDraftBody>) -> Resp {
     let c = tri!(ctx(&s, &name).await);
-    if !ds::SECTIONS.contains(&b.section.as_str()) {
+    let is_abstract = b.section == "Abstract";
+    if !ds::SECTIONS.contains(&b.section.as_str()) && !is_abstract {
         return bad("未知的章節");
     }
     let sess = tri!(load(&c.dir));
-    let paras: Vec<ds::OutlinePara> = sess.outline.iter().filter(|o| o.section == b.section).flat_map(|o| o.paras.clone()).collect();
+    let venue = topaper::venue_of(&c);
+    let paras: Vec<ds::OutlinePara> = if is_abstract {
+        if sess.claims.is_empty() && sess.outline.is_empty() {
+            return bad("先完成主張登記與大綱");
+        }
+        vec![topaper::abstract_para(&sess, &c.key_value)]
+    } else {
+        sess.outline.iter().filter(|o| o.section == b.section).flat_map(|o| o.paras.clone()).collect()
+    };
     if paras.is_empty() {
         return bad("這個章節還沒有大綱");
     }
+    let (min_words, max_words) = if is_abstract { topaper::abstract_words(&venue) } else { (60, 160) };
+    // the journal's habits for this section (期刊寫法), and the abstract's own rules
+    let venue_extra = venue.section(&b.section) + &if is_abstract { topaper::abstract_rules(&venue) } else { String::new() };
     if !has_writing_engine(&s, b.engine).await {
         return bad("沒有可用的寫作引擎");
     }
@@ -860,29 +1112,35 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
     let other_drafts: Vec<String> = sess.drafts.iter().filter(|d| d.section != b.section).map(|d| d.paras.iter().map(|p| p.text.clone()).collect::<Vec<_>>().join("\n\n")).collect();
     let mut new_symbols: Vec<String> = vec![];
     let mut out: Vec<ds::DraftPara> = vec![];
-    for p in &paras {
+    let (guide, _) = pc_core::patterns::load(&c.ws);
+    for (k, p) in paras.iter().enumerate() {
+        // the guide's sentence structures that fit this paragraph (not the author's voice)
+        let guide_block = pc_core::patterns::block(&pc_core::patterns::select(&guide, &pc_core::patterns::Situation { section: &b.section, function: &p.kind, index: k, count: paras.len() }));
         let points = if p.en.is_empty() { p.zh.clone() } else { p.en.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
         let req = ComposeRequest {
             points,
             section: bank_section(&b.section).into(),
             function: None,
-            min_words: 60,
-            max_words: 160,
+            min_words,
+            max_words,
             language: "en".into(),
             before: out.last().map(|d| d.text.clone()),
             after: None,
             key_value: Some(c.key_value.clone()).filter(|k| !k.is_empty()),
+            index: Some(k),
+            count: Some(paras.len()),
         };
         let (pts, refs, prompt) = {
             let l = s.loaded.read().await;
             let Some(prof) = &l.profile else { return (StatusCode::SERVICE_UNAVAILABLE, "profile not loaded").into_response() };
             let pts = compose::parse_points(&req.points);
             let refs = compose::reference_phrases(prof, &req, &pts);
-            let prompt = compose::build_prompt(prof, &req, &pts, &refs);
+            // the style notes go in through compose_extra below, not twice
+            let prompt = compose::with_patterns(compose::build_prompt(prof, &req, &pts, &refs, ""), &guide_block);
             (pts, refs, prompt)
         };
         let earlier: Vec<String> = out.iter().map(|d| d.text.clone()).collect();
-        let extra = dp::compose_extra(p, &sess, &b.section, &style, &earlier, &mat.refs);
+        let extra = dp::compose_extra(p, &sess, &b.section, &style, &earlier, &mat.refs) + &venue_extra;
         let mut feedback = extra.clone();
         let mut done = None;
         let mut err = String::new();
@@ -897,23 +1155,43 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
                     let Some(prof) = &l.profile else { break };
                     let check = compose::check_draft(prof, &req, &pts, &refs, &mut d);
                     drop(l);
-                    let text = d.sentences.iter().map(|x| x.text.trim()).collect::<Vec<_>>().join(" ");
+                    // ≤, −, ⁺… as LaTeX before the checks, so pdflatex never stops on them
+                    let text = lore_notation::unicode::prose_to_latex(&d.sentences.iter().map(|x| x.text.trim()).collect::<Vec<_>>().join(" "));
                     // The registry's checks, in the context of the paper and the drafts so far.
                     let mut ctx_texts = other_drafts.clone();
                     ctx_texts.push(out.iter().map(|x| x.text.clone()).collect::<Vec<_>>().join("\n\n"));
                     let nc = crate::notation::check(&c.dir, &notation, &check_opt, &ctx_texts, &text);
                     let mut problems = check.problems.clone();
                     problems.extend(nc.shown.iter().map(|m| format!("對照表：{m}")));
-                    if (check.ok() && nc.blocking.is_empty()) || done.is_some() {
+                    // a pending result the outline names must be marked, never written as a number
+                    let unmarked = pd::missing_marks(&sess, &p.pending, &text);
+                    problems.extend(unmarked.iter().map(|id| format!("待補 {id} 沒有標記")));
+                    // the record's ids (E1, T2…) are the discussion's, never the paper's
+                    // only ids the record really has (a vertebra "T12" or a slice "P1" in a paper is prose)
+                    let known = ca::known_ids(&sess);
+                    let leaked: Vec<String> = dp::leaked_ids(&text).into_iter().filter(|id| known.contains(id)).collect();
+                    problems.extend(leaked.iter().map(|id| format!("草稿寫出了記錄的編號 {id}")));
+                    // the abstract's word limit is the journal's, counted, not trusted
+                    let n_words = pc_core::text::strip_latex(&text).split_whitespace().count();
+                    let too_long = is_abstract && n_words > max_words;
+                    if too_long {
+                        problems.push(format!("摘要 {n_words} 字，超過 {max_words}"));
+                    }
+                    if (check.ok() && nc.blocking.is_empty() && unmarked.is_empty() && leaked.is_empty() && !too_long) || done.is_some() {
                         new_symbols.extend(nc.new_symbols.clone());
-                        done = Some(ds::DraftPara { para: p.id.clone(), text, problems });
+                        done = Some(ds::DraftPara { pending: lore_notation::pending::ids(&text).into_iter().collect(), para: p.id.clone(), text, problems });
                         break;
                     }
                     let mut why: Vec<String> = check.problems.clone();
                     why.extend(nc.blocking.iter().cloned());
+                    why.extend(unmarked.iter().map(|id| format!("pending result {id} is not marked: use \\pending{{{id}}}{{…}} for its number and end every sentence that depends on it with \\pendingdep{{{id}}}")));
+                    why.extend(leaked.iter().map(|id| format!("the text names the record's id {id}: the reader never saw the record; describe the experiment or table in words (or \\ref the table)")));
+                    if too_long {
+                        why.push(format!("the abstract has {n_words} words; the journal allows at most {max_words}: cut it to {min_words}–{max_words} words"));
+                    }
                     feedback = format!("{extra}\nYour previous answer had problems: {}. Fix them.", why.join("; "));
                     new_symbols.extend(nc.new_symbols.clone());
-                    done = Some(ds::DraftPara { para: p.id.clone(), text, problems });
+                    done = Some(ds::DraftPara { pending: lore_notation::pending::ids(&text).into_iter().collect(), para: p.id.clone(), text, problems });
                 }
                 Err(e) => {
                     err = e;
@@ -936,10 +1214,34 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
         Some(_) => pc_core::draft::fallback::engine_label(&format!("claude:{}", s.llm.model())),
         None => String::new(),
     };
-    sess.drafts.push(ds::DraftSection { section: b.section.clone(), paras: out, new_symbols, engine });
+    sess.drafts.push(ds::DraftSection { section: b.section.clone(), paras: out, new_symbols, engine, placed: false });
     sess.drafts.sort_by_key(|d| ds::SECTIONS.iter().position(|x| *x == d.section));
     if sess.phase < Phase::Draft {
         sess.phase = Phase::Draft;
+    }
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+#[derive(Deserialize, Default)]
+struct InsertDraftBody {
+    /// One drafted section ("Methods", "Abstract"); none = every drafted section.
+    #[serde(default)]
+    section: Option<String>,
+}
+
+/// 放進論文: the drafts into the paper's section files and the abstract into the title block.
+async fn insert_drafts(State(s): State<Shared>, AxPath(name): AxPath<String>, body: Option<Json<InsertDraftBody>>) -> Resp {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    if sess.drafts.is_empty() {
+        return bad("還沒有草稿");
+    }
+    let placed = tri!(topaper::place(&c.dir, &topaper::venue_of(&c), &sess, b.section.as_deref()).map_err(|e| bad(&e)));
+    for d in sess.drafts.iter_mut().filter(|d| placed.sections.iter().any(|(x, _)| *x == d.section)) {
+        d.placed = true;
     }
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
@@ -955,10 +1257,18 @@ async fn run_audit(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
     }
     let lens = tri!(lens_for(&c.ws, &sess));
     let (_, mtext) = material_of(&c);
-    let (findings, used) = tri!(engine::audit(&engines(&s), &c.key_value, &sess, &lens, &style_text(&c.ws), &mtext).await.map_err(|e| bad(&e)));
+    let venue = topaper::venue_of(&c);
+    let (findings, used) = tri!(engine::audit(&engines(&s), &c.key_value, &sess, &lens, &(style_text(&c.ws) + &venue.checklist()), &mtext).await.map_err(|e| bad(&e)));
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
-    sess.audit = findings;
+    // marked pending text is never a missing number or an overclaim
+    sess.audit = pd::filter_findings(findings, &sess);
+    // the journal's requirements, checked by the code (abstract length, keywords, statements)
+    let n = sess.audit.len();
+    for (k, mut f) in topaper::requirement_findings(&c.dir, &venue, &sess).into_iter().enumerate() {
+        f.id = format!("r{}", n + k + 1);
+        sess.audit.push(f);
+    }
     sess.engines.insert("audit".into(), used);
     sess.phase = Phase::Audit;
     tri!(save(&c.dir, &sess));
@@ -1015,7 +1325,9 @@ async fn audit_ask(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, 
     }
     sess.start_group(&gid);
     sess.phase = Phase::Interview;
+    let prep = lens_for(&c.ws, &sess).map(|l| mark_prep(&mut sess, &l, std::slice::from_ref(&gid))).unwrap_or_default();
     tri!(save(&c.dir, &sess));
+    spawn_candidates(&s, &c, prep);
     tri!(view(&c, &sess))
 }
 
@@ -1103,9 +1415,11 @@ async fn new_revision(State(s): State<Shared>, AxPath(name): AxPath<String>, Jso
     sess.groups.push(ds::Group { id: gid.clone(), section, title: format!("修訂：{}", short(&request, 24)), purpose: request.clone(), ..Default::default() });
     let iid = sess.new_item_id();
     sess.items.push(ds::Item { id: iid, group: gid.clone(), label: short(&request, 60), role: "revision".into(), refs: refs.clone(), ..Default::default() });
-    sess.revisions.push(Revision { id, request, group: gid.clone(), refs, figure: b.figure, status: RevisionStatus::Open, plan: None });
+    sess.revisions.push(Revision { id, request, group: gid.clone(), refs, figure: b.figure, status: RevisionStatus::Open, plan: None, pending: None });
     sess.start_group(&gid);
+    let prep = lens_for(&c.ws, &sess).map(|l| mark_prep(&mut sess, &l, std::slice::from_ref(&gid))).unwrap_or_default();
     tri!(save(&c.dir, &sess));
+    spawn_candidates(&s, &c, prep);
     tri!(view(&c, &sess))
 }
 
@@ -1114,6 +1428,30 @@ async fn plan_revision(State(s): State<Shared>, AxPath((name, id)): AxPath<(Stri
     let c = tri!(ctx(&s, &name).await);
     let sess = tri!(load(&c.dir));
     let Some(r) = sess.revisions.iter().find(|r| r.id == id).cloned() else { return bad("沒有這個修訂") };
+    let fill = r.pending.as_deref().and_then(|p| sess.pending.iter().find(|x| x.id == p)).cloned();
+    // 回填 as expected, nothing to write: the code fills the numbers, no model
+    let code = fill.as_ref().map(|i| pd::fill_changes(&c.dir, i));
+    if let (Some(item), Some((changes, effects))) = (&fill, &code)
+        && item.direction == Some(Direction::Matches)
+        && !effects.iter().any(|e| e.contains("預留的段落"))
+    {
+        let mut changes = changes.clone();
+        for (k, ch) in changes.iter_mut().enumerate() {
+            ch.id = format!("x{}", k + 1);
+        }
+        if changes.is_empty() {
+            return bad("論文裡找不到這一項的待補記號");
+        }
+        let plan = rv::RevisionPlan { summary: format!("{} 符合預期：只換數字（{} 處）", item.id, changes.len()), changes, effects: effects.clone(), new_symbols: vec![], engine: String::new() };
+        let _g = LOCK.lock().await;
+        let mut sess = tri!(load(&c.dir));
+        if let Some(x) = sess.revisions.iter_mut().find(|x| x.id == id) {
+            x.plan = Some(plan);
+            x.status = RevisionStatus::Planned;
+        }
+        tri!(save(&c.dir, &sess));
+        return tri!(view(&c, &sess));
+    }
     let conversation = ds::read_turns(&c.dir)
         .iter()
         .filter(|t| t.group == r.group)
@@ -1122,8 +1460,17 @@ async fn plan_revision(State(s): State<Shared>, AxPath((name, id)): AxPath<(Stri
         .join("\n");
     let summary = sess.group(&r.group).map(|g| format!("\nSummary: {} / {} / {}", g.summary.explain, g.summary.motive, g.summary.conclusion)).unwrap_or_default();
     let (_, mtext) = material_of(&c);
+    let mtext = mtext + &fill.as_ref().map(pd::plan_rule).unwrap_or_default();
     let (mut plan, used) = tri!(engine::revise(&engines(&s), &c.key_value, &sess, &r, &c.dir, &mtext, &style_text(&c.ws), &(conversation + &summary)).await.map_err(|e| bad(&e)));
     plan.engine = used.label;
+    // 回填: numbers from the code, every paragraph with a mark covered, dependents flagged
+    if let (Some(item), Some((changes, effects))) = (&fill, code) {
+        plan.changes = pd::merge_plan(item, std::mem::take(&mut plan.changes), changes);
+        plan.effects.extend(effects);
+    }
+    for ch in plan.changes.iter_mut() {
+        ch.text = lore_notation::unicode::prose_to_latex(&ch.text);
+    }
     // The registry's checks on every change; findings join the effects.
     let notation = crate::notation::load(&c.ws, &c.dir);
     let check_opt = crate::notation::options(&c.ws, &c.dir);
@@ -1168,6 +1515,9 @@ async fn decide_change(State(s): State<Shared>, AxPath((name, id, cid)): AxPath<
             return bad(&e);
         }
         crate::review_saved(&c.dir, &ch.file, &old, &paras(&c.dir));
+        if let Err(e) = pd::ensure_tex(&c.dir).and_then(|_| pd::release_tex(&c.dir)) {
+            return bad(&e);
+        }
     }
     ch.applied = Some(b.apply);
     if plan.changes.iter().all(|x| x.applied.is_some()) {
@@ -1230,13 +1580,18 @@ async fn insert_table(State(s): State<Shared>, AxPath((name, id)): AxPath<(Strin
     let Some(t) = sess.tables.iter().find(|t| t.id == id).cloned() else { return bad("沒有這個表格") };
     let spec = TableSpec {
         kind: "table".into(),
-        caption: t.caption.clone(),
+        caption: lore_notation::unicode::prose_to_latex(&t.caption),
         section: b.section.unwrap_or_else(|| "Results".into()),
-        data: t.tsv(),
+        // the record's −0.039 and ≤ as LaTeX: the table compiles with pdflatex
+        data: pd::table_tsv(&t, &sess.pending).lines().map(lore_notation::unicode::prose_to_latex).collect::<Vec<_>>().join("\n"),
         file: String::new(),
         style: None,
     };
     if let Err(e) = add_tables(&c.dir, meta::read_meta(&c.dir).journal.as_deref(), &[spec]) {
+        return bad(&e);
+    }
+    // pending cells compile in the draft (pending.tex, \input in the preamble)
+    if let Err(e) = pd::ensure_tex(&c.dir) {
         return bad(&e);
     }
     if let Some(x) = sess.tables.iter_mut().find(|x| x.id == id) {
@@ -1244,6 +1599,151 @@ async fn insert_table(State(s): State<Shared>, AxPath((name, id)): AxPath<(Strin
     }
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
+}
+
+// ── 待補 ────────────────────────────────────────────────
+
+async fn pending_list(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let sess = tri!(load(&c.dir));
+    Json(serde_json::json!({ "items": sess.pending, "report": pending_report(&c, &sess) })).into_response()
+}
+
+#[derive(Deserialize)]
+struct PendingBody {
+    items: Vec<pd::PendingItem>,
+    /// Results tables with a row or column added for a pending result
+    /// (cells are text; a table already in the paper is not changed).
+    #[serde(default)]
+    tables: Option<Vec<ds::ResultTable>>,
+}
+
+/// The author's 等資料 list (record step): new items get ids, the interview's
+/// notes and results stay; the 待補項目 group follows.
+async fn put_pending(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<PendingBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    for i in &b.items {
+        if !i.id.is_empty() && !lore_notation::pending::valid_id(&i.id) {
+            return bad("待補編號只能用英數字");
+        }
+    }
+    if let Some(new) = b.tables {
+        for t in new {
+            if let Some(x) = sess.tables.iter_mut().find(|x| x.id == t.id && !x.inserted) {
+                if t.rows.iter().all(|r| r.len() == t.columns.len()) {
+                    x.columns = t.columns;
+                    x.rows = t.rows;
+                }
+            }
+        }
+    }
+    sess.pending = pd::merge_edit(&sess.pending, b.items);
+    let exps = sess.experiments.clone();
+    for i in &mut sess.pending {
+        i.experiment_title = i.experiment.as_deref().and_then(|e| exps.iter().find(|x| x.id == e)).map(|e| e.title.clone()).unwrap_or_default();
+    }
+    let tables = sess.tables.clone();
+    for i in &mut sess.pending {
+        if let Some(t) = i.table.as_deref().and_then(|t| tables.iter().find(|x| x.id == t)) {
+            i.table_caption = t.caption.clone();
+        } else {
+            i.table = None;
+            i.cells.clear();
+        }
+    }
+    pd::sync_group(&mut sess);
+    let prep = lens_for(&c.ws, &sess).map(|l| mark_prep(&mut sess, &l, &[pd::GROUP_ID.to_string()])).unwrap_or_default();
+    tri!(save(&c.dir, &sess));
+    spawn_candidates(&s, &c, prep);
+    tri!(view(&c, &sess))
+}
+
+#[derive(Deserialize)]
+struct FillBody {
+    /// The result as the author says it (`0.74`, `Dice 0.74 ± 0.02`).
+    #[serde(default)]
+    result: String,
+    /// Values per cell / per number mark.
+    #[serde(default)]
+    values: std::collections::BTreeMap<String, String>,
+    direction: Direction,
+}
+
+/// 回填: the result came in. The item is filled and a 修訂 is made from it,
+/// carrying the interview's explanation and every place and dependent; the
+/// conversation and the plan go through 修訂 as for any request.
+async fn fill_pending(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, String)>, Json(b): Json<FillBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    if b.result.trim().is_empty() && b.values.values().all(|v| v.trim().is_empty()) {
+        return bad("請填結果");
+    }
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    let Some(k) = sess.pending.iter().position(|x| x.id == id) else { return bad("沒有這個待補項目") };
+    {
+        let it = &mut sess.pending[k];
+        it.result = b.result.trim().to_string();
+        // values given before and not typed again stay
+        for (k, v) in b.values {
+            let v = v.trim().to_string();
+            if v.is_empty() {
+                it.values.remove(&k);
+            } else {
+                it.values.insert(k, v);
+            }
+        }
+        it.direction = Some(b.direction);
+        it.status = PendingStatus::Filled;
+    }
+    let prep = open_fill(&c, &mut sess, k);
+    tri!(save(&c.dir, &sess));
+    spawn_candidates(&s, &c, prep);
+    tri!(view(&c, &sess))
+}
+
+/// The 修訂 of a filled item (made, or the open one updated); the record gets
+/// the result. A conversation opens unless the result is as expected. Returns
+/// the groups whose candidates to prepare.
+fn open_fill(c: &Ctx, sess: &mut Session, k: usize) -> Vec<String> {
+    let id = sess.pending[k].id.clone();
+    // the record has the result now (the experiment's `?`, the table's cells)
+    pd::write_back(sess, &id);
+    let item = sess.pending[k].clone();
+    let rep = pending_report(c, sess).into_iter().find(|e| e.id == id);
+    // one 修訂 per item: filled again = the same request, updated
+    let existing = item.revision.as_deref().and_then(|r| sess.revisions.iter().position(|x| x.id == r && x.status != RevisionStatus::Done));
+    let gid = match existing {
+        Some(at) => {
+            let r = &mut sess.revisions[at];
+            r.request = pd::request_text(&item, rep.as_ref());
+            r.plan = None;
+            r.status = RevisionStatus::Open;
+            r.group.clone()
+        }
+        None => {
+            let n = sess.revisions.len() + 1;
+            let (rid, mut gid) = (format!("v{n}"), format!("v{n}"));
+            while sess.group(&gid).is_some() {
+                gid.push('x');
+            }
+            let section = rep.as_ref().and_then(|r| r.places.first()).map(|p| p.section.clone()).filter(|x| ds::SECTIONS.contains(&x.as_str())).unwrap_or_else(|| "Results".into());
+            sess.groups.push(ds::Group { id: gid.clone(), section, title: format!("回填：{} {}", item.id, short(&item.what, 20)), purpose: pd::request_text(&item, rep.as_ref()), ..Default::default() });
+            let iid = sess.new_item_id();
+            sess.items.push(ds::Item { id: iid, group: gid.clone(), label: format!("{}：{}", item.id, short(&item.what, 50)), role: "revision".into(), ..Default::default() });
+            sess.revisions.push(pd::revision_for(&item, &rid, &gid, rep.as_ref()));
+            sess.pending[k].revision = Some(rid);
+            gid
+        }
+    };
+    pd::sync_group(sess);
+    // as expected = numbers only, nothing to discuss; otherwise the conversation gets its options
+    if item.direction == Some(Direction::Matches) {
+        return vec![];
+    }
+    sess.start_group(&gid);
+    lens_for(&c.ws, sess).map(|l| mark_prep(sess, &l, std::slice::from_ref(&gid))).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1308,6 +1808,38 @@ mod tests {
     }
 
     #[test]
+    fn a_paper_set_up_by_hand_on_the_journal_class_only_records_the_journal() {
+        let ws = std::env::temp_dir().join(format!("pc-draft-own-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ws);
+        let tpl = ws.join("publishers/jx");
+        std::fs::create_dir_all(&tpl).unwrap();
+        std::fs::write(tpl.join("template.toml"), "name = \"Journal X\"\n\n[limits]\nanonymous = true\n\n[submission]\nrequired_statements = [\"Funding\"]\n").unwrap();
+        std::fs::write(tpl.join("sample.tex"), "%% \\documentclass{other}\n\\documentclass[pdflatex]{sn-jnl}\n\\begin{document}\n\\maketitle\n\\section{Introduction}\nSample.\n\\backmatter\n\\bmhead{Acknowledgements}\nAcknowledgements are not compulsory.\n\\bibliography{x}\n\\end{document}\n").unwrap();
+        let dir = ws.join("papers/P");
+        std::fs::create_dir_all(dir.join("sections")).unwrap();
+        let own = "\\documentclass[pdflatex,sn-vancouver-num]{sn-jnl}\n\\newcommand{\\blinded}[2]{\\ifdefined\\blindmode #2\\else #1\\fi}\n\\begin{document}\n\\ifdefined\\blindmode\\else\n\\author{A}\n\\fi\n\\maketitle\n\\input{sections/01-introduction}\n\\backmatter\n\\bmhead{Funding}\n\\blinded{No funding.}{Removed.}\n\\bibliography{x}\n\\end{document}\n";
+        std::fs::write(dir.join("main.tex"), own).unwrap();
+        std::fs::write(dir.join("sections/01-introduction.tex"), "\\section{Introduction}\nOurs.\n").unwrap();
+        assert!(retemplate(&ws, &dir, Some("jx"), None).unwrap());
+        assert_eq!(meta::read_meta(&dir).journal.as_deref(), Some("jx"));
+        assert_eq!(std::fs::read_to_string(dir.join("main.tex")).unwrap(), own, "his main.tex is not rebuilt");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn a_preparation_cut_off_shows_as_failed() {
+        let dir = std::env::temp_dir().join(format!("pc-prep-{}", std::process::id()));
+        let mut s = Session::default();
+        s.groups.push(ds::Group { id: "g1".into(), prep: Some(Prep::Running), ..Default::default() });
+        s.groups.push(ds::Group { id: "g2".into(), prep: Some(Prep::Running), ..Default::default() });
+        PREPARING.lock().unwrap().push(prep_key(&dir, "g2"));
+        settle_stale_prep(&dir, &mut s);
+        assert_eq!(s.groups[0].prep, Some(Prep::Failed), "saved as running, no task here: the app quit");
+        assert_eq!(s.groups[1].prep, Some(Prep::Running), "a task of this process is on it");
+        PREPARING.lock().unwrap().retain(|k| k != &prep_key(&dir, "g2"));
+    }
+
+    #[test]
     fn model_picker_maps_to_refs() {
         assert_eq!(model_ref(None).unwrap(), None);
         assert_eq!(model_ref(Some("auto")).unwrap(), None);
@@ -1326,6 +1858,7 @@ mod tests {
         assert_eq!(t.task["pc-draft-audit"].fallback.as_deref(), Some("local:current"), "without Claude the reviewer pass runs locally");
         assert_eq!(t.task["pc-draft-record"].default, "claude:opus", "reading tables out of a record is Opus work");
         assert_eq!(t.task["pc-draft-revise"].default, "claude:opus", "editing an existing paper is Opus work");
+        assert_eq!(t.task["pc-draft-candidates"].default, "claude:opus", "預想選項 think on Opus, before the interview");
         for id in ["pc-draft-plan", "pc-draft-claims", "pc-draft-review", "pc-draft-outline"] {
             assert_eq!(t.task[id].default, "claude:sonnet", "{id}");
         }

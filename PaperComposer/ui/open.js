@@ -58,6 +58,7 @@ const PCOpen = (() => {
     if (r.kind === "latex") return preview(r, anchor);
     if (r.kind === "archive") return destCard(r, anchor, "存到", "解壓縮", "/api/open/extract");
     if (r.kind === "word") {
+      if (r.earlier) return againCard(r, anchor);
       if (!r.pandoc) return pandocCard(anchor);
       return destCard(r, anchor, "存到", "轉成 LaTeX", "/api/open/word");
     }
@@ -189,6 +190,24 @@ const PCOpen = (() => {
     });
   }
 
+  /** The .docx was converted before and changed since: open that paper, or convert again into a new folder (the old one stays). */
+  function againCard(r, anchor) {
+    const m = menuForm(baseName(r.path), null, anchor);
+    m.classList.add("next-card", "open-card");
+    row(m, "已轉換過", el("span", "open-path", r.earlier));
+    const f = el("div", "form-foot");
+    const no = el("button", "ghost small", "取消");
+    no.onclick = () => { m.hidden = true; };
+    const anew = el("button", "ghost small", "重新轉換成新的一份");
+    anew.onclick = () => { m.hidden = true; route({ ...r, earlier: null }, anchor); };
+    const ok = el("button", "primary small", "開啟原本的論文");
+    ok.onclick = async () => { m.hidden = true; await path(r.earlier, anchor); };
+    f.append(no, anew, ok);
+    m.append(f);
+    keepOnScreen(m);
+    ok.focus();
+  }
+
   function pandocCard(anchor) {
     const m = menuForm("需要 pandoc", null, anchor);
     m.classList.add("next-card", "open-card");
@@ -261,3 +280,5 @@ const PCOpen = (() => {
 
   return { latex, word, path, conflict, watch, desktop };
 })();
+// bookjob.js looks it up as window.PCOpen
+window.PCOpen = PCOpen;

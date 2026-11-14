@@ -44,6 +44,8 @@ impl Tools for RealTools {
         }
         let name = book.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "book".into());
         let name: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
+        // 待補 marks compile in a draft (pending.tex)
+        let _ = pc_core::draft::pending::ensure_tex(book);
         match crate::export::build_pdf(book, &name, false).await {
             Ok(r) => Compiled {
                 skipped: None,

@@ -89,3 +89,27 @@ out. Nothing is written until 建立; `[sources]` keeps the sentences.
   (nothing is written to the file).
 - A value of the wrong type (a word for `pages`, …) makes the whole file
   unreadable: the template then shows only its folder name.
+
+## The journal itself (期刊寫法)
+
+Also in `template.toml`, written by the app:
+
+```toml
+role = "journal"       # or "base" (a publisher's format journals are built on) or
+                       # "umbrella" (a series): both are left out of the template list
+
+[venue]                # which journal it is, confirmed once (OpenAlex source)
+openalex = "S1234567"
+name = "Journal of Synthetic Examples"
+issn_l = "1234-5678"
+confirmed = "2026-11-14"
+
+[submission]           # what the journal requires at submission (see docs/long-paper.md §D)
+abstract_words = 250
+required_statements = ["Data availability"]
+checked = "2026-11-14"
+```
+
+A template other templates are `based_on`, with no `[venue]`, counts as a base format.
+The journal's writing profile is kept beside, in `venues/<template id>/profile.toml`
+(and a readable `profile.md`): no article text, only titles, counts, shares and short phrases.

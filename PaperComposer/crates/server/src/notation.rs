@@ -506,6 +506,21 @@ mod tests {
     }
 
     #[test]
+    fn drafted_pending_marks_pass_the_registry_checks() {
+        // what the draft prompt asks for: marks with ids, a dependent sentence, a planned paragraph
+        let p = paper();
+        let n = Notation::default();
+        let text = "On the external site, the weighted loss reaches a Dice of \\pending{P1}{external Dice}, \
+which keeps it ahead of the baseline\\pendingdep{P1}.\n\n\\pendingpara{P2}{Per-site comparison; the table goes after the main one.}";
+        let c = check(&p, &n, &CheckOptions::default(), &[], text);
+        assert!(c.blocking.is_empty() && c.shown.is_empty() && c.new_symbols.is_empty(), "{:?} {:?}", c.blocking, c.shown);
+        // a typed number still blocks, marks or not
+        let c = check(&p, &n, &CheckOptions::default(), &[], "As Table 1 shows, Dice is \\pending{P1}{external Dice}.");
+        assert!(!c.blocking.is_empty());
+        let _ = std::fs::remove_dir_all(&p);
+    }
+
+    #[test]
     fn typed_references_block_and_new_symbols_are_found() {
         let p = paper();
         let n = load(&p, &p);

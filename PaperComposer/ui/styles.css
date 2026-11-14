@@ -15,6 +15,8 @@
   --paper: #ffffff; --paper-ink: #1b1b1f;
   --paper-mark: color-mix(in srgb, var(--accent) 58%, var(--paper-ink));
   --paper-ok: #1a7f4b; --paper-warn: #b97600; --paper-err: #c62828;
+  /* 待補 marks: the draft colour of the PDF (lore-notation DRAFT_HEX), never a theme colour */
+  --paper-pending: #c2400d;
 }
 :root.dim-paper[data-theme] { --paper: #d8d6d0; }
 
@@ -626,7 +628,7 @@ table.plan .src { color: var(--faint); font-size: 11px; }
 .writebar .grp + .grp { border-left: 1px solid var(--line); }
 .writebar .ico { width: 32px; height: 32px; }
 .wb-pop { width: 300px; display: flex; flex-direction: column; gap: 8px; }
-.wb-pop.collect-pop { width: min(440px, calc(100vw - 16px)); max-height: 70vh; overflow: auto; gap: 4px; }
+.wb-pop.collect-pop { width: min(440px, calc(100vw - 16px)); max-height: 70vh; overflow: auto; gap: 4px; z-index: 75; }  /* above the 潤飾 dialog after 👍 */
 .collect-pop > .primary { align-self: flex-end; margin-top: 6px; }
 .wb-pop .search { width: 100%; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r); color: var(--text); padding: 6px 8px; font: 12.5px var(--sans); outline: none; }
 .sym-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; max-height: 260px; overflow: auto; }
@@ -732,6 +734,25 @@ table.plan .src { color: var(--faint); font-size: 11px; }
 .keyvalue .v { flex: 1; text-align: left; background: none; border: 0; padding: 0; color: var(--text); font: 13px var(--sans); cursor: text; }
 .keyvalue .v.empty { color: var(--warn); font-style: italic; }
 .keyvalue .kv-edit { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--accent-text); border-radius: var(--r); color: var(--text); font: 13px var(--sans); padding: 5px 8px; outline: none; }
+.statusbar .pend { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid var(--warn); border-radius: 12px; background: none; color: var(--warn); font: 600 12px var(--sans); cursor: pointer; }
+.statusbar .pend:hover { background: var(--surface); }
+.statusbar .pend[hidden] { display: none; }
+/* 待補 marks on the sheet */
+.paper .pending { color: var(--paper-pending); border: 1px solid var(--paper-pending); border-radius: 3px; padding: 0 4px; font: 500 .82em var(--sans); white-space: nowrap; }
+.paper .pending .pending-what::before { content: ": "; }
+.paper .pending-what { white-space: normal; }
+.paper .pendingpara { display: block; white-space: normal; text-align: left; border-style: dashed; padding: 6px 9px; margin: 2px 0; font: italic .95em var(--serif); }
+.paper .pendingpara > b { font: 600 .8em var(--sans); font-style: normal; margin-right: 6px; }
+.paper .pendingpara .pending-what::before { content: none; }
+.paper .pending-dep { color: var(--paper-pending); font: 600 .62em var(--sans); margin-left: 1px; }
+.paper .pending-dep::before { content: "["; } .paper .pending-dep::after { content: "]"; }
+.paper .flash-pending { outline: 2px solid var(--paper-pending); outline-offset: 2px; }
+.kv-advice { margin: 4px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+.kv-advice[hidden] { display: none; }
+#kvAdvice { width: min(680px, 100%); margin: -4px auto 10px; }
+.kv-check { align-self: flex-start; }
+.kv-advice .kv-problem { color: var(--warn); border: 1px solid var(--line); border-radius: var(--r); padding: 1px 6px; }
+.kv-advice .kv-rewrite { text-align: left; white-space: normal; flex-basis: 100%; }
 .np-count { font: 500 11px var(--mono); color: var(--faint); white-space: nowrap; margin-left: auto; }
 .np-count.bad { color: var(--err); }
 
@@ -1454,3 +1475,43 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 /* the 編輯 button on a figure a tool made (figedit.js) */
 .fig-edit { position: fixed; z-index: 30; background: var(--panel); border: 1px solid var(--line-strong); box-shadow: 0 2px 8px #0003; }
 .paper .tex-figure.fig-picked img { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+
+/* ── 待補 and 預想選項 in the draft window ─────────── */
+.df-pchips { display: inline-flex; gap: 4px; }
+.df-pchip { padding: 0 6px; border: 1px solid var(--warn); border-radius: 8px; font: 600 10.5px var(--mono); color: var(--warn); }
+.df-pend.filled { opacity: .7; }
+.df-fill { display: flex; flex-direction: column; gap: 6px; }
+.df-fill > summary { cursor: pointer; font-size: 12.5px; color: var(--accent-text); width: max-content; }
+.df-fill[open] { padding-top: 4px; border-top: 1px dashed var(--line); }
+.df-fill-cells { display: grid; grid-template-columns: max-content 1fr; gap: 4px 8px; align-items: center; font: 12px var(--mono); color: var(--muted); }
+.df-plist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font: 13px var(--serif); }
+.df-plist li { display: flex; gap: 8px; align-items: baseline; }
+.df-plist li .df-badge { flex: none; }
+.df-plist li.dep { color: var(--muted); }
+.df-holes { display: flex; flex-direction: column; gap: 6px; }
+.df-table td.hole { color: var(--warn); font: 600 12px var(--mono); vertical-align: middle; background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.df-table.picking th, .df-table.picking td { cursor: pointer; }
+.df-table.picking td:hover, .df-table.picking th:hover { background: var(--surface); }
+.df-change.rewrite { border-left-color: var(--warn); }
+.df-cands { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.df-cand { display: grid; grid-template-columns: 18px 1fr; gap: 2px 8px; align-items: baseline; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--panel); color: var(--text); text-align: left; font: 13px/1.5 var(--sans); white-space: normal; cursor: pointer; }
+.df-cand:hover { border-color: var(--accent-text); }
+.df-cand.on { border-color: var(--accent-text); background: var(--accent-soft); }
+.df-cand .n { font: 600 11px var(--mono); color: var(--faint); }
+.df-cand .ev { grid-column: 2; display: flex; flex-wrap: wrap; gap: 4px; }
+.df-ev { padding: 0 5px; border: 1px solid var(--line); border-radius: 6px; font: 10.5px var(--mono); color: var(--muted); cursor: help; }
+.df-none { align-self: flex-start; font-size: 12.5px; }
+.df-pfields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 10px; }
+.df-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.df-field > span { font-size: 11px; color: var(--faint); }
+.df-field .np-input { width: 100%; }
+.df-pend .df-grow { flex: 1; }
+.df-seg { display: inline-flex; gap: 0; }
+.df-seg button { border-radius: 0; margin-left: -1px; }
+.df-seg button:first-child { border-radius: var(--r) 0 0 var(--r); margin-left: 0; }
+.df-seg button:last-child { border-radius: 0 var(--r) var(--r) 0; }
+.df-seg button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-text); color: var(--accent-text); position: relative; }
+.df-lcands > summary { cursor: pointer; font-size: 11.5px; color: var(--accent-text); }
+.df-ledger .df-sum { grid-template-columns: 64px 1fr; }
+.df-mic { align-self: flex-start; }
+.df-mic.on { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-text); }

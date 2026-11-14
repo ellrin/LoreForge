@@ -1,5 +1,5 @@
 // Writing toolbar over the page: text style, math, inserted elements and
-// links. Inline tools act at the caret of the paragraph being edited (or
+// links, 潤飾 and 收藏句型. Inline tools act at the caret of the paragraph being edited (or
 // start editing the current one); blocks (equation, figure, list) become a
 // paragraph of their own after the caret or after the current paragraph.
 
@@ -321,8 +321,10 @@ const PCWrite = (() => {
       try {
         const r = await api("/api/phrases/add", chosen);
         const n = r.phrases.length + r.expressions.length;
-        const skipped = chosen.phrases.length + chosen.expressions.length - n;
-        LoreShell.toast(n ? `已加入 ${n} 筆${skipped ? `（${skipped} 筆已經有了）` : ""}` : "都已經在句型庫裡了");
+        const guide = r.guide ?? 0;
+        const skipped = chosen.phrases.length + chosen.expressions.length - n - guide;
+        const notes = `${skipped ? `（${skipped} 筆已經有了）` : ""}${guide ? `（${guide} 筆是寫作指南的句子，不加入）` : ""}`;
+        LoreShell.toast(n ? `已加入 ${n} 筆${notes}` : `沒有加入${notes || "：都已經在句型庫裡了"}`);
         try { state.profile = await api("/api/profile"); } catch {}
         if (typeof refreshGit === "function") refreshGit();
         p.remove();
@@ -332,6 +334,81 @@ const PCWrite = (() => {
       }
     };
     p.append(save);
+  }
+
+  // ── 潤飾: the selection's LaTeX, a conversation (commons/ui/polish.js), 套用 as one undo step ──
+  /** The selection as source { si, pi, a, b, src }: exact in the paragraph editor; on the drawn
+   *  page through the right-click menu's mapper (PCContext.sourceRange). */
+  function selectionSource(d) {
+    const open = active();
+    const ta = d?.ta ?? (open && open.selectionEnd > open.selectionStart ? open : null);
+    if (ta) {
+      const p = ta.closest(".para");
+      const a = d?.ta ? d.a : ta.selectionStart, b = d?.ta ? d.b : ta.selectionEnd;
+      return b > a && p ? { si: +p.dataset.s, pi: +p.dataset.p, a, b, src: ta.value } : null;
+    }
+    const sel = getSelection();
+    const range = d?.range ?? (sel?.rangeCount && !sel.isCollapsed ? sel.getRangeAt(0) : null);
+    if (!range) return null;
+    const at = (n) => (n.nodeType === 3 ? n.parentElement : n)?.closest?.("#paper > .para");
+    const p = at(range.startContainer);
+    if (!p || at(range.endContainer) !== p) return p ? { cross: true } : null;
+    const si = +p.dataset.s, pi = +p.dataset.p;
+    const src = sections()[si]?.paragraphs[pi];
+    const r = src == null ? null : PCContext.sourceRange(p, src, range);
+    return r ? { si, pi, ...r, src } : null;
+  }
+
+  /** Put `after` in place of `text` in paragraph (si, pi) through its editor: one ⌘Z. */
+  function applyPolish(s, text, after) {
+    const p = paraEl(s.si, s.pi);
+    let ta = active();
+    if (!ta || ta.closest(".para") !== p) {
+      if (!p || sections()[s.si]?.paragraphs[s.pi] == null) return "段落已變更，請重新選取";
+      edit(p, s.si, s.pi);
+      ta = active();
+    }
+    if (!ta) return "段落已變更，請重新選取";
+    let a = s.a;
+    if (ta.value.slice(a, a + text.length) !== text) {
+      const i = ta.value.indexOf(text);
+      if (i < 0 || ta.value.indexOf(text, i + 1) >= 0) return "這段文字已經改過，請重新選取";
+      a = i;
+    }
+    ta.focus();
+    ta.setSelectionRange(a, a + text.length);
+    // insertText keeps the editor's own undo: ⌘Z takes the whole rewrite back
+    if (!document.execCommand("insertText", false, after)) ta.setRangeText(after, a, a + text.length, "end");
+    ta.setSelectionRange(a, a + after.length);
+    ta.dispatchEvent(new Event("input"));
+    return true;
+  }
+
+  /** 潤飾 the selection (`d`: the right-click menu's capture); `preset`: 用字 / 我的風格 pressed. */
+  function polish(anchor, d, preset) {
+    if (!state.paper) return LoreShell.toast("先開啟一篇論文");
+    const s = selectionSource(d);
+    if (s?.cross) return LoreShell.toast("一次潤飾一個段落裡的文字");
+    if (!s) return LoreShell.toast("先選取要潤飾的文字");
+    const text = s.src.slice(s.a, s.b);
+    const paras = sections()[s.si]?.paragraphs ?? [];
+    LorePolish.open({
+      anchor, text, prefix: s.src.slice(0, s.a), suffix: s.src.slice(s.b),
+      context: [paras[s.pi - 1], paras[s.pi + 1]].filter(Boolean).join("\n\n"),
+      scope: sections()[s.si]?.title ?? "", preset,
+      apply: async (after) => applyPolish(s, text, after),
+    });
+  }
+
+  /** 用字 / 我的風格 on the whole paragraph being edited (writing stages 2 and 3). */
+  function polishParagraph(anchor, preset) {
+    const ta = active();
+    if (!ta || !ta.closest(".para")) return LoreShell.toast("先點一個段落開始編輯");
+    const v = ta.value;
+    const a = v.length - v.trimStart().length, b = v.trimEnd().length;
+    if (b <= a) return LoreShell.toast("這個段落是空的");
+    ta.setSelectionRange(a, b);
+    polish(anchor, null, preset);
   }
 
   // ── the bar ──
@@ -353,7 +430,8 @@ const PCWrite = (() => {
       ["ref", "參照", (b) => references(b)],
       ["footnote", "註腳", () => wrap("\\footnote{", "}")],
     ],
-    [["star", "收藏句型：選取喜歡的句子，拆解後加入句型庫", (b) => collect(b)]],
+    [["polish", "潤飾：選取一段，說或打要怎麼改", (b) => polish(b)], ["star", "收藏句型：選取喜歡的句子，拆解後加入句型庫", (b) => collect(b)]],
+    [["text", "用字：這一段只改用詞", (b) => polishParagraph(b, "diction")], ["pen", "我的風格：這一段照你的寫法調整", (b) => polishParagraph(b, "voice")]],
   ];
 
   function build() {
@@ -378,5 +456,5 @@ const PCWrite = (() => {
     });
   }
 
-  return { build, wrap, put, block, references, collect, popover, refSnippet, sentenceStart };
+  return { build, wrap, put, block, references, collect, polish, popover, refSnippet, sentenceStart };
 })();

@@ -137,7 +137,7 @@ impl Llm {
 
     /// The app's tasks over lore-llm's shared ones, then the user's file.
     pub fn task_table(user_file: Option<&std::path::Path>) -> Result<TaskTable, String> {
-        let base = TaskTable::bundled().merge(TaskTable::parse(TASKS)?).merge(lore_plot::propose::task_table()).merge(lore_flow::llm::task_table());
+        let base = TaskTable::bundled().merge(TaskTable::parse(TASKS)?).merge(lore_plot::propose::task_table()).merge(lore_flow::llm::task_table()).merge(lore_polish::task_table());
         TaskTable::load(base, user_file)
     }
 
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn app_tasks_parse_and_cover_every_use() {
         let t = Llm::task_table(None).unwrap();
-        for id in ["pc-compose-paragraph", "pc-soft-check", "pc-decompose", "pc-outline", "pc-caption", "pc-ref-queries", "pc-ref-rank", "pc-ref-notes", "pc-cite-extract", "pc-engine-test", "pc-book-plan", "pc-book-suggest", "pc-book-chapter"] {
+        for id in ["pc-compose-paragraph", "pc-soft-check", "pc-decompose", "pc-outline", "pc-caption", "pc-thesis-check", "pc-ref-queries", "pc-ref-rank", "pc-ref-notes", "pc-cite-extract", "pc-engine-test", "pc-book-plan", "pc-book-suggest", "pc-book-chapter"] {
             assert!(t.task.contains_key(id), "{id}");
         }
         // Claude first, then the local model.

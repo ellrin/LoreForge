@@ -972,7 +972,8 @@ fn tex_cell(s: &str) -> String {
         out.push(c);
         prev = c;
     }
-    out
+    // −0.039, ≤, ± from a spreadsheet or a record: LaTeX that pdflatex reads
+    lore_notation::unicode::to_latex(&out)
 }
 
 /// A table in a style from a grid of plain text; the first row is the header.
@@ -1374,6 +1375,12 @@ Project & Energy & $\sigma_{calc}$ \\
         assert!(parse(r"\begin{table}\begin{tabularx}{\linewidth}{lX}a&b\\\end{tabularx}\end{table}").is_err());
         assert!(parse(r"\begin{table}\begin{tabular}{>{\bfseries}l}a\\\end{tabular}\end{table}").is_err());
         assert!(parse(r"\begin{tabular}{ll}a & b & c\\\end{tabular}").is_err(), "too many cells");
+    }
+
+    #[test]
+    fn unicode_minus_and_signs_become_latex() {
+        assert_eq!(tex_cell("−0.039 (0.108)"), "\\ensuremath{-}0.039 (0.108)");
+        assert_eq!(tex_cell("$x ≤ 1$"), "$x \\leq 1$");
     }
 
     #[test]

@@ -21,6 +21,7 @@ mod home;
 mod notation;
 mod notes; // notes.js: 筆記 (lore-notes files in the workspace's notes/)
 pub mod flow; // figflow.js: 流程圖 (lore-flow editor, figures/<stem>.pdf + .flow.json)
+mod polish; // polish.js: 潤飾 (lore-polish) and the voice (lore-voice)
 mod plot; // figplot.js: 繪圖 (lore-plot editor, figures/<stem>.pdf + .plot.json)
 mod newtemplate; // templates.js: 新增期刊 from a LaTeX kit or a Word sample, rules from the guidelines
 mod sections;
@@ -40,6 +41,7 @@ pub mod texfonts;
 pub mod texmeasure;
 pub mod thumb;
 mod todeck; // todeck.js: 做成簡報 (SlideComposer makes the deck)
+pub mod venueprof; // venue.js: 期刊寫法 (a journal template's habits from its own open-access articles)
 pub mod wizard;
 pub mod word;
 
@@ -290,7 +292,13 @@ fn locate(paths: &Paths) -> (PathBuf, Option<PathBuf>, bool) {
 fn load(paths: &Paths) -> Loaded {
     let (path, workspace, demo) = locate(paths);
     match Profile::load(&path) {
-        Ok((profile, issues)) => Loaded { profile: Some(profile), issues, error: None, path, workspace, demo },
+        Ok((mut profile, mut issues)) => {
+            // the style checks' word lists (style/checks.toml)
+            if let Some(ws) = &workspace {
+                issues.extend(profile.load_style_checks(ws));
+            }
+            Loaded { profile: Some(profile), issues, error: None, path, workspace, demo }
+        }
         Err(e) => Loaded { profile: None, issues: vec![], error: Some(e), path, workspace, demo },
     }
 }
@@ -684,7 +692,10 @@ async fn compose_paragraph(State(s): State<Shared>, Json(body): Json<ComposeBody
         };
         let points = compose::parse_points(&req.points);
         let refs = compose::reference_phrases(p, &req, &points);
-        let prompt = compose::build_prompt(p, &req, &points, &refs);
+        let style = l.workspace.as_deref().map(pc_core::draft::style_text).unwrap_or_default();
+        // the guide's sentence structures that fit this paragraph (style/patterns.toml; not the author's voice)
+        let guide = l.workspace.as_deref().map(|w| pc_core::patterns::block_for(w, &req.situation())).unwrap_or_default();
+        let prompt = compose::with_patterns(compose::build_prompt(p, &req, &points, &refs, &style), &guide);
         (points, refs, prompt)
     };
     // 生成時參考知識卡 (off by default): the author's cards for the terms in the points and the paragraph
@@ -716,6 +727,9 @@ async fn compose_paragraph(State(s): State<Shared>, Json(body): Json<ComposeBody
         };
         match compose::parse_draft(&reply) {
             Ok(mut draft) => {
+                for x in draft.sentences.iter_mut() {
+                    x.text = lore_notation::unicode::prose_to_latex(&x.text);
+                }
                 let l = s.loaded.read().await;
                 let Some(p) = &l.profile else { break };
                 let check = compose::check_draft(p, &req, &points, &refs, &mut draft);
@@ -1088,7 +1102,8 @@ async fn wizard_outline(State(s): State<Shared>, Json(b): Json<OutlineBody>) -> 
         (Some(ws), Some(t)) => std::fs::read_to_string(ws.join("publishers").join(t).join("sample.tex")).map(|x| wizard::sample_sections(&x)).unwrap_or_default(),
         _ => vec![],
     };
-    let prompt = wizard::outline_prompt(&b.outline, &key_value, &sections, &language);
+    let style = s.loaded.read().await.workspace.as_deref().map(pc_core::draft::style_text).unwrap_or_default();
+    let prompt = wizard::outline_prompt(&b.outline, &key_value, &sections, &language, &style);
     match draft::claude_then_local(&s, "pc-outline", b.engine, &prompt, &wizard::plan_schema(), wizard::parse_plan).await {
         Ok(plan) => Json(plan).into_response(),
         Err(e) => bad(&e),
@@ -1122,11 +1137,38 @@ async fn wizard_caption(State(s): State<Shared>, Json(b): Json<CaptionBody>) -> 
     }
     let language = s.loaded.read().await.profile.as_ref().map(|p| p.manifest.language.clone()).unwrap_or_else(|| "en".into());
     let grid = pc_core::textable::parse_grid(&b.data);
-    let prompt = wizard::caption_prompt(&b.kind, &grid, &b.file, &b.section, &b.key_value, &b.title, &language);
+    let style = s.loaded.read().await.workspace.as_deref().map(pc_core::draft::style_text).unwrap_or_default();
+    let prompt = wizard::caption_prompt(&b.kind, &grid, &b.file, &b.section, &b.key_value, &b.title, &language, &style);
     match writing_complete(&s, "pc-caption", b.engine, &prompt, None, None).await {
         // empty: nothing to say from what was given (a figure named img1.png)
         Ok(reply) => Json(serde_json::json!({ "caption": wizard::clean_caption(&reply).unwrap_or_default() })).into_response(),
         Err(e) => bad(&e),
+    }
+}
+
+#[derive(Deserialize)]
+struct KeyValueCheckBody {
+    key_value: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    engine: Option<EngineChoice>,
+}
+
+/// The Key value as a thesis (`pc_core::thesis`): problems from a fixed list and up to two
+/// rewrites. Advice only: always 200; no engine or a failed call is an empty verdict with
+/// `error`, which the page does not show.
+async fn keyvalue_check(State(s): State<Shared>, Json(b): Json<KeyValueCheckBody>) -> impl IntoResponse {
+    let kv = b.key_value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let empty = |e: &str| Json(serde_json::json!({ "problems": [], "rewrites": [], "error": e })).into_response();
+    if kv.is_empty() {
+        return empty("");
+    }
+    let criteria = pc_core::thesis::criteria(s.loaded.read().await.workspace.as_deref());
+    let prompt = pc_core::thesis::prompt(&kv, &b.title, &criteria);
+    match writing_complete(&s, "pc-thesis-check", b.engine, &prompt, None, Some(pc_core::thesis::schema())).await {
+        Ok(reply) => Json(pc_core::thesis::parse(&reply, &kv)).into_response(),
+        Err(e) => empty(&e),
     }
 }
 
@@ -1968,20 +2010,51 @@ fn add_bib_file(dir: &Path, main: &str, file: &str) -> Result<(), String> {
 
 #[derive(Deserialize)]
 struct ExportBody {
-    /// "pdf" or "docx"
+    /// "pdf", "docx" or "latex"
     kind: String,
+    /// 投稿版: refused while 待補 marks remain. The LaTeX package is always one.
+    #[serde(default, rename = "final")]
+    submission: bool,
+}
+
+/// A submission export with 待補 marks left: every mark as an error that jumps to its paragraph.
+pub fn pending_refusal(dir: &Path) -> Option<serde_json::Value> {
+    let marks = pc_core::draft::pending::blockers(dir);
+    if marks.is_empty() {
+        return None;
+    }
+    let groups = pc_core::draft::pending::blocker_groups(&marks);
+    let mut errors = vec![serde_json::json!({ "message": format!("投稿版不能有待補：還有 {} 段", groups.len()), "hint": "草稿版（PDF、Word）可以匯出，待補會標出來" })];
+    for g in &groups {
+        errors.push(serde_json::json!({ "message": g.message, "file": g.file, "para": g.para, "context": g.context }));
+    }
+    Some(serde_json::json!({ "ok": false, "errors": errors, "pending": marks.len() }))
 }
 
 /// Compile to PDF, or convert to Word; the paper's .bib is brought up to date first.
 async fn export_paper(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<ExportBody>) -> impl IntoResponse {
     let ws = match refs_root(&s).await { Ok(w) => w, Err(r) => return r };
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    if (b.submission || b.kind == "latex")
+        && let Some(r) = pending_refusal(&dir)
+    {
+        return Json(r).into_response();
+    }
+    // a draft with 待補 marks compiles with them shown (pending.tex)
+    // (and, once none is left, the preamble's \input{pending} goes)
+    if let Err(e) = pc_core::draft::pending::ensure_tex(&dir).and_then(|_| pc_core::draft::pending::release_tex(&dir)) {
+        return Json(serde_json::json!({ "ok": false, "errors": [{ "message": e }] })).into_response();
+    }
     let main = std::fs::read_to_string(pc_core::open::main_file(&dir)).unwrap_or_default();
     // An imported paper may come with its bibliography already built (arXiv
     // often ships the .bbl, not the .bib): use it as is.
     let prebuilt = dir.join("main.bbl").is_file() && !bib_files(&main).iter().any(|f| dir.join(f).is_file());
     let bib = export::bib_tool(&main).filter(|_| !prebuilt).and_then(|_| write_paper_bib(&ws, &dir).ok());
     let res = match b.kind.as_str() {
+        "pdf" if b.submission && anonymous_journal(&ws_root(&s).await, &dir) => match export::build_pdf(&dir, &name, prebuilt).await {
+            Ok(r) if r.ok => blind_too(&s, &dir, &name, prebuilt, r).await,
+            other => other,
+        },
         "pdf" => export::build_pdf(&dir, &name, prebuilt).await,
         "docx" => export::build_docx(&dir, &name, bib.as_ref().map(|b| b.files.as_slice()).unwrap_or_default()).await,
         // compile first: the package must build, and carries the fresh .bbl
@@ -1997,8 +2070,13 @@ async fn export_paper(State(s): State<Shared>, AxPath(name): AxPath<String>, Jso
         },
         _ => return bad("unknown export kind"),
     };
+    let submission = b.submission || b.kind == "latex";
     match res {
         Ok(mut r) => {
+            // 投稿版: what still reads like a draft (not blocking; the author decides)
+            if submission {
+                r.warnings.extend(submission_warnings(&dir, &name));
+            }
             // Cited but nowhere to be found: report them as undefined citations.
             for k in bib.map(|b| b.missing).unwrap_or_default() {
                 if !r.undefined_cites.contains(&k) {
@@ -2009,6 +2087,132 @@ async fn export_paper(State(s): State<Shared>, AxPath(name): AxPath<String>, Jso
         }
         Err(e) => Json(serde_json::json!({ "ok": false, "errors": [{ "message": e }] })).into_response(),
     }
+}
+
+/// 換成 LaTeX: the characters pdflatex stops on (≤ − ⁺ α …) in the paper's own files, written as
+/// LaTeX (`lore_notation::unicode`), on the author's click from the export's error list.
+async fn fix_unicode(State(s): State<Shared>, AxPath(name): AxPath<String>) -> impl IntoResponse {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let mut files = pc_core::open::source_files(&dir);
+    let main = std::fs::read_to_string(pc_core::open::main_file(&dir)).unwrap_or_default();
+    files.extend(pc_core::front::fields(&main).iter().filter_map(|f| pc_core::front::input_file(&f.value)).map(|r| dir.join(r)));
+    let mut changed = Vec::new();
+    for f in files {
+        let Ok(text) = std::fs::read_to_string(&f) else { continue };
+        // paragraph by paragraph: `$…$` never spans a blank line, so one stray `$` stays local
+        let out = text.split("\n\n").map(lore_notation::unicode::to_latex).collect::<Vec<_>>().join("\n\n");
+        if out != text {
+            if let Err(e) = paper::write_atomic(&f, &out) {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            }
+            changed.push(f.strip_prefix(&dir).unwrap_or(&f).display().to_string());
+        }
+    }
+    Json(serde_json::json!({ "files": changed })).into_response()
+}
+
+/// 投稿版 warnings: the title is still the folder name, the class sample's abstract or keywords,
+/// the drafts' notes to the author (`[Author to confirm: …]`), statements still `[…]`.
+fn submission_warnings(dir: &Path, name: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let main = std::fs::read_to_string(pc_core::open::main_file(dir)).unwrap_or_default();
+    let fields = pc_core::front::fields_in(dir, &main);
+    let title = fields.iter().find(|f| f.field == "title").map(|f| pc_core::text::strip_latex(&f.value)).unwrap_or_default();
+    if title.trim().is_empty() || title.trim() == name || title.trim() == "Article Title" {
+        out.push("標題還是資料夾名稱".into());
+    }
+    if fields.iter().any(|f| pc_core::front::is_sample_text(&f.value)) {
+        out.push("摘要或關鍵字還是範本的示範文字".into());
+    }
+    // the journal's abstract limit ([submission] abstract_words, else [word_limits] abstract)
+    let tpl = meta::read_meta(dir).journal;
+    let limit = tpl.and_then(|t| {
+        let ws = dir.parent()?.parent()?;
+        let j = pc_core::journal::load(&ws.join("publishers"), &t)?;
+        pc_core::venueprofile::Submission::from_table(j.meta.submission.as_ref()).and_then(|s| s.abstract_words).map(|w| w as usize).or(j.meta.word_limits.abstract_)
+    });
+    if let (Some(limit), Some(a)) = (limit, fields.iter().find(|f| f.field == "abstract")) {
+        let n = pc_core::text::strip_latex(&a.value).split_whitespace().count();
+        if n > limit {
+            out.push(format!("摘要 {n} 字，超過期刊的 {limit} 字"));
+        }
+    }
+    let all: String = pc_core::open::source_files(dir).iter().filter_map(|p| std::fs::read_to_string(p).ok()).collect::<Vec<_>>().join("\n");
+    let notes = all.matches("[Author to confirm").count() + fields.iter().map(|f| f.value.matches("[Author to confirm").count()).sum::<usize>();
+    if notes > 0 {
+        out.push(format!("還有 {notes} 處「[Author to confirm: …]」要確認"));
+    }
+    if let Some(at) = main.find("\\backmatter") {
+        let left = main[at..].lines().filter(|l| { let t = l.trim(); !t.starts_with('%') && (t.starts_with('[') || t.starts_with("\\blinded{[")) && t.contains(".]") }).count();
+        if left > 0 {
+            out.push(format!("聲明還有 {left} 段預留文字"));
+        }
+    }
+    out
+}
+
+async fn ws_root(s: &Shared) -> Option<PathBuf> {
+    s.loaded.read().await.workspace.clone()
+}
+
+/// Is the paper double-blind: its journal says so (`[limits] anonymous`), or its main file has
+/// the `\blindmode` switch (a paper set up by hand, with no journal in paper.toml)?
+fn anonymous_journal(ws: &Option<PathBuf>, dir: &Path) -> bool {
+    let main = std::fs::read_to_string(pc_core::open::main_file(dir)).unwrap_or_default();
+    if pc_core::front::has_blind_switch(&main) {
+        return true;
+    }
+    let (Some(ws), Some(t)) = (ws, meta::read_meta(dir).journal) else { return false };
+    pc_core::journal::load(&ws.join("publishers"), &t).is_some_and(|j| j.meta.limits.anonymous)
+}
+
+/// 投稿版 of a double-blind journal: the blinded PDF too, and its text checked for the authors'
+/// names, e-mails and institutions (a leak is an error, so it never goes out by accident).
+async fn blind_too(s: &Shared, dir: &Path, name: &str, prebuilt: bool, mut full: export::Report) -> Result<export::Report, String> {
+    let blind = export::build_blind_pdf(dir, name, prebuilt).await?;
+    if !blind.ok {
+        full.ok = false;
+        full.errors.push(export::Problem { message: "盲審版編譯失敗".into(), ..Default::default() });
+        full.errors.extend(blind.errors);
+        return Ok(full);
+    }
+    full.blind_file = blind.file.clone();
+    full.seconds = ((full.seconds + blind.seconds) * 10.0).round() / 10.0;
+    let mut who: Vec<String> = Vec::new();
+    if let Ok(Some((people, affils))) = resolve_people(s, &meta::read_meta(dir).authors).await {
+        for p in &people {
+            who.push(format!("{} {}", p.given.trim(), p.family.trim()));
+            who.push(p.email.clone());
+            who.push(p.orcid.clone());
+        }
+        for a in &affils {
+            who.push(a.organization.clone());
+            who.push(a.department.clone());
+        }
+    }
+    if who.iter().all(|w| w.trim().is_empty()) {
+        full.warnings.push("這篇沒有選作者（paper.toml）：盲審版沒有姓名可以比對，請自己看一次".into());
+    }
+    let pdf = dir.join(blind.file.as_deref().unwrap_or_default());
+    // poppler's pdftotext (a GUI app has no shell PATH: the usual places first)
+    let tool = ["/opt/homebrew/bin/pdftotext", "/usr/local/bin/pdftotext"].into_iter().find(|p| Path::new(p).is_file()).unwrap_or("pdftotext");
+    let text = match crate::proc::cmd(tool).arg(&pdf).arg("-").output().await {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => {
+            full.warnings.push("沒有 pdftotext（poppler）：盲審版沒有檢查作者資訊".into());
+            String::new()
+        }
+    };
+    let leaks = pc_core::front::identity_leaks(&text, &who);
+    if !leaks.is_empty() {
+        full.ok = false;
+        full.errors.push(export::Problem {
+            message: format!("盲審版還看得到作者資訊：{}", leaks.join("、")),
+            hint: Some("致謝、經費、倫理審查與作者貢獻寫成 \\blinded{完整版}{盲審版}".into()),
+            ..Default::default()
+        });
+    }
+    Ok(full)
 }
 
 #[derive(Deserialize)]
@@ -2022,6 +2226,7 @@ async fn open_export(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
     let f = dir.join("export").join(match b.kind.as_str() {
         "pdf" | "docx" => format!("{name}.{}", b.kind),
+        "blind" => format!("{name}-blind.pdf"),
         "latex" => format!("{name}-latex.zip"),
         _ => return bad("unknown export kind"),
     });
@@ -2073,7 +2278,7 @@ async fn get_paper(State(s): State<Shared>, AxPath(name): AxPath<String>) -> imp
             "numbers": preview::numbers(&dir, &export::cache_dir(&name)),
             "front": front,
             "back": back,
-            "fields": pc_core::front::fields(&main),
+            "fields": pc_core::front::fields_in(&dir, &main),
             "bibliography": preview::bibliography(&dir, &export::cache_dir(&name)),
             "meta": m,
             "word_limits": word_limits,
@@ -2329,12 +2534,12 @@ async fn put_front(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b
     let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
     let path = pc_core::open::main_file(&dir);
     let main = match std::fs::read_to_string(&path) { Ok(m) => m, Err(e) => return bad(&e.to_string()) };
-    let out = match pc_core::front::set_field(&main, &b.field, b.index, &b.value) { Ok(o) => o, Err(e) => return bad(&e) };
+    let out = match pc_core::front::set_field_in(&dir, &main, &b.field, b.index, &b.value) { Ok(o) => o, Err(e) => return bad(&e) };
     if let Err(e) = paper::write_atomic(&path, &out) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
     let (front, back) = preview::front_back_in(&out, pc_core::open::is_custom(&dir));
-    Json(serde_json::json!({ "front": front, "back": back, "fields": pc_core::front::fields(&out) })).into_response()
+    Json(serde_json::json!({ "front": front, "back": back, "fields": pc_core::front::fields_in(&dir, &out) })).into_response()
 }
 
 #[derive(Deserialize)]
@@ -2826,8 +3031,13 @@ async fn decompose_text(State(s): State<Shared>, Json(b): Json<DecomposeBody>) -
 
 /// Save picked proposals straight into the phrase bank: one step from a
 /// sentence on the page, no trip through the database editor.
-async fn add_proposals(State(s): State<Shared>, Json(p): Json<decompose::Proposals>) -> impl IntoResponse {
-    let dir = s.loaded.read().await.path.clone();
+async fn add_proposals(State(s): State<Shared>, Json(mut p): Json<decompose::Proposals>) -> impl IntoResponse {
+    let (dir, ws) = {
+        let l = s.loaded.read().await;
+        (l.path.clone(), l.workspace.clone())
+    };
+    // guide sentences (style/patterns.toml) are never the author's voice: never into the bank
+    let guide = p.drop_guide(&ws.as_deref().map(|w| pc_core::patterns::load(w).0).unwrap_or_default());
     let phrases: Vec<Vec<(&str, String)>> = p
         .phrases
         .iter()
@@ -2856,7 +3066,7 @@ async fn add_proposals(State(s): State<Shared>, Json(p): Json<decompose::Proposa
     let fresh = load(&s.paths);
     let issues: Vec<Issue> = fresh.issues.iter().filter(|i| i.file == "phrases.csv" || i.file == "expressions.csv").cloned().collect();
     *s.loaded.write().await = fresh;
-    Json(serde_json::json!({ "phrases": ph, "expressions": ex, "issues": issues })).into_response()
+    Json(serde_json::json!({ "phrases": ph, "expressions": ex, "issues": issues, "guide": guide })).into_response()
 }
 
 // ── Git ────────────────────────────────────────────────
@@ -3235,6 +3445,7 @@ pub fn router(paths: Paths) -> Router {
         soft_cache: Default::default(),
     });
     models::register(state.models.clone());
+    let voice = polish::voice();
     // The model loads when a task needs it (any app may start the shared server). Once:
     // the model this app used to start at launch becomes the shared default when none is set.
     if let (false, Some(id), true) = (external, cfg.model.and_then(|m| m.active), state.llm.local_rt.is_some())
@@ -3276,6 +3487,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/papers/{name}/tidy", get(get_tidy).post(post_tidy))
         .route("/api/papers/{name}/import-summary", get(import_summary))
         .route("/api/papers/{name}/export", post(export_paper))
+        .route("/api/papers/{name}/fix-unicode", post(fix_unicode))
         .route("/api/papers/{name}/figure", get(paper_figure))
         .route("/api/papers/{name}/figure-sizes", post(paper_figure_sizes))
         .route("/api/papers/{name}/figure-block", post(floats::figure_block_route))
@@ -3285,6 +3497,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/people", get(people).post(add_person))
         .route("/api/wizard/outline", post(wizard_outline))
         .route("/api/wizard/caption", post(wizard_caption))
+        .route("/api/keyvalue/check", post(keyvalue_check))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/refs/extract", post(extract_refs))
         .route("/api/refs/verify", post(verify_ref))
@@ -3372,7 +3585,11 @@ pub fn router(paths: Paths) -> Router {
         .merge(notes::routes())
         .merge(shell::routes())
         .merge(todeck::routes())
+        .merge(venueprof::routes())
         .merge(plot::routes(&state))
+        .merge(polish::routes(&state, voice.clone()))
+        // 設定 → 一般 → 權限; asked at the desktop app's first launch
+        .merge(lore_shell::permissions::router(polish::permissions(&voice)))
         .merge(flow::routes(&state))
         // GET/PUT /api/engines (the gear's 模型) and POST /api/links/open, shared by every app
         .merge(lore_engines::router(engines_settings(&state)))
@@ -3388,6 +3605,7 @@ fn engines_settings(state: &Shared) -> lore_engines::Engines {
     let mut e = lore_engines::Engines::new(loreforge_home(), "PaperComposer", include_str!("../tasks.toml"))
         .with_tasks(lore_plot::propose::task_table())
         .with_tasks(lore_flow::llm::task_table())
+        .with_tasks(lore_polish::task_table())
         .layout(state.llm.layout.clone())
         .cli(state.llm.cli.clone(), state.llm.cc.clone())
         .claude_model(Some(state.llm.model()));

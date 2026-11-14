@@ -5,6 +5,7 @@
 //! | * | /plot/… | `lore_plot::router`: the editor's files, styles, data import, export, 自動 |
 //! | GET | /api/papers/{name}/plot?file=figures/x.pdf | the spec saved next to that figure (404: not made here) |
 //! | GET | /api/papers/{name}/plot/list | `[{file, spec}]`: figures/*.plot.json (pulled into a composite) |
+//! | GET | /api/papers/{name}/plot/notation | the paper's notation entries (equation figures take each variable's colour role from them) |
 //! | GET | /api/papers/{name}/plot/macros | the paper's notation macros for KaTeX (`{"\\vw": "\\boldsymbol{w}"}`) |
 //! | POST | /api/papers/{name}/plot | `{stem, replace, spec, svg}` → `figures/<stem>.pdf` + `.plot.json` → `{file, stem}` |
 //!
@@ -36,6 +37,7 @@ pub(crate) fn routes(state: &Shared) -> Router<Shared> {
     Router::new()
         .route("/api/papers/{name}/plot", get(spec_get).post(save).layer(axum::extract::DefaultBodyLimit::max(60 * 1024 * 1024)))
         .route("/api/papers/{name}/plot/macros", get(macros))
+        .route("/api/papers/{name}/plot/notation", get(notation_entries))
         .route("/api/papers/{name}/plot/list", get(list))
         .merge(lore_plot::router(plot))
 }
@@ -71,6 +73,14 @@ async fn macros(State(s): State<Shared>, AxPath(name): AxPath<String>) -> axum::
     let n = crate::notation::load(&ws, &dir);
     let m: serde_json::Map<String, serde_json::Value> = lore_notation::katex_macros(&n).into_iter().map(|(k, v)| (k, v.into())).collect();
     Json(serde_json::Value::Object(m)).into_response()
+}
+
+/// The paper's notation (the same registry as its macros): equation figures read colour roles from it.
+async fn notation_entries(State(s): State<Shared>, AxPath(name): AxPath<String>) -> axum::response::Response {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    let Some(ws) = s.loaded.read().await.workspace.clone() else { return Json(serde_json::json!([])).into_response() };
+    let n = crate::notation::load(&ws, &dir);
+    Json(serde_json::to_value(&n.entries).unwrap_or_default()).into_response()
 }
 
 async fn list(State(s): State<Shared>, AxPath(name): AxPath<String>) -> axum::response::Response {

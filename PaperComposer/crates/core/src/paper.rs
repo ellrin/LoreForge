@@ -32,34 +32,45 @@ pub fn safe_name(name: &str) -> bool {
 /// main.tex, then any remaining files in `sections/` alphabetically.
 pub fn section_files(paper: &Path) -> Vec<String> {
     let mut order = Vec::new();
+    // a file the title block reads (`\abstract{\input{sections/01-abstract}}`) is front matter, not a section
+    let mut front: Vec<String> = Vec::new();
     if let Ok(main) = std::fs::read_to_string(paper.join("main.tex")) {
-        for line in main.lines() {
-            let line = line.split('%').next().unwrap_or("");
-            for cmd in ["\\input{", "\\include{"] {
-                if let Some(rest) = line.split(cmd).nth(1) {
-                    if let Some(arg) = rest.split('}').next() {
-                        if let Some(name) = arg.strip_prefix("sections/") {
-                            let file = if name.ends_with(".tex") { name.to_string() } else { format!("{name}.tex") };
-                            if !order.contains(&file) {
-                                order.push(file);
-                            }
-                        }
-                    }
+        front = front_inputs(&main);
+        let masked = crate::front::masked(&main);
+        for cmd in ["\\input{", "\\include{"] {
+            for (at, _) in masked.match_indices(cmd) {
+                let rest = &masked[at + cmd.len()..];
+                let Some(arg) = rest.split('}').next() else { continue };
+                let Some(name) = arg.strip_prefix("sections/") else { continue };
+                let file = if name.ends_with(".tex") { name.to_string() } else { format!("{name}.tex") };
+                if !front.contains(&file) && !order.iter().any(|(_, f)| *f == file) {
+                    order.push((at, file));
                 }
             }
         }
     }
+    order.sort();
+    let mut order: Vec<String> = order.into_iter().map(|(_, f)| f).filter(|f| !front.contains(f)).collect();
     let mut rest: Vec<String> = std::fs::read_dir(paper.join("sections"))
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| n.ends_with(".tex") && !order.contains(n))
+        .filter(|n| n.ends_with(".tex") && !order.contains(n) && !front.contains(n))
         .collect();
     rest.sort();
     order.retain(|f| paper.join("sections").join(f).exists());
     order.extend(rest);
     order
+}
+
+/// Section files the title block reads as a whole field (`\abstract{\input{sections/01-abstract}}`).
+fn front_inputs(main: &str) -> Vec<String> {
+    crate::front::fields(main)
+        .iter()
+        .filter_map(|f| crate::front::input_file(&f.value))
+        .filter_map(|r| r.strip_prefix("sections/").map(str::to_string))
+        .collect()
 }
 
 /// Split a section file into its `\section{}` title and paragraphs.
@@ -229,6 +240,7 @@ struct SectionInput {
 
 fn section_inputs(main: &str, lay: &Layout) -> Vec<SectionInput> {
     let body = main.find("\\begin{document}").unwrap_or(0);
+    let front = front_inputs(main);
     let mut out: Vec<SectionInput> = Vec::new();
     let mut start = 0;
     for line in main.split_inclusive('\n') {
@@ -246,6 +258,10 @@ fn section_inputs(main: &str, lay: &Layout) -> Vec<SectionInput> {
                 }
                 let Some(arg) = after.strip_prefix('{').and_then(|a| a.split_once('}')).map(|(a, _)| a) else { continue };
                 let Some(id) = lay.id_of(arg) else { continue };
+                // the abstract's own file is not a section: `\abstract{\input{sections/01-abstract}}`
+                if arg.strip_prefix("sections/").is_some_and(|n| front.iter().any(|f| f == n || f.trim_end_matches(".tex") == n)) {
+                    continue;
+                }
                 let range = at + i..at + i + cmd.len() + arg.len() + 2;
                 out.push(SectionInput { slot: range.clone(), range, cmd: if cmd == "\\input" { "\\input" } else { "\\include" }, ext: arg.trim().ends_with(".tex"), id });
             }
@@ -952,6 +968,8 @@ pub fn create_paper_with(papers: &Path, name: &str, outline: Option<&[OutlineSec
     }
     let io = |e: std::io::Error| e.to_string();
     std::fs::create_dir_all(dir.join("sections")).map_err(io)?;
+    let (front, body) = outline.map(split_front).unwrap_or_default();
+    let outline = outline.map(|_| body.as_slice());
     let sections: Vec<Section> = match outline.filter(|o| !o.is_empty()) {
         Some(o) => o
             .iter()
@@ -961,7 +979,7 @@ pub fn create_paper_with(papers: &Path, name: &str, outline: Option<&[OutlineSec
         None => BLANK_SECTIONS.iter().map(|(f, t)| Section { file: format!("{f}.tex"), title: (*t).into(), paragraphs: vec![], tail: String::new() }).collect(),
     };
     let inputs: String = sections.iter().map(|s| format!("\\input{{sections/{}}}\n", s.file.trim_end_matches(".tex"))).collect();
-    write_atomic(&dir.join("main.tex"), &blank_main(name, &inputs)).map_err(io)?;
+    write_atomic(&dir.join("main.tex"), &front.apply(&blank_main(name, &inputs))).map_err(io)?;
     for s in &sections {
         write_atomic(&dir.join("sections").join(&s.file), &render_section(s)).map_err(io)?;
     }
@@ -1027,8 +1045,9 @@ pub fn create_paper_from_template_with(papers: &Path, name: &str, template: &Pat
     // Some publishers still ship Latin-1 samples; read those byte for byte.
     let sample = String::from_utf8(bytes).unwrap_or_else(|e| e.into_bytes().iter().map(|&b| b as char).collect());
     let mut split = split_sample(&sample, false).ok_or("sample.tex 裡找不到 \\begin{document}")?;
-    if let Some(o) = outline.filter(|o| !o.is_empty()) {
-        replace_sections(&mut split, o);
+    let (front, body) = outline.map(split_front).unwrap_or_default();
+    if outline.is_some_and(|o| !o.is_empty()) {
+        replace_sections(&mut split, &body);
     }
     let dir = papers.join(name);
     if dir.exists() {
@@ -1047,7 +1066,127 @@ pub fn create_paper_from_template_with(papers: &Path, name: &str, template: &Pat
     }
 
     write_split(&dir, &split)?;
+    {
+        let main_path = dir.join("main.tex");
+        let main = std::fs::read_to_string(&main_path).map_err(io)?;
+        let tidy = journal_back_matter(&main, template);
+        if tidy != main {
+            write_atomic(&main_path, &tidy).map_err(io)?;
+        }
+    }
+    if outline.is_some_and(|o| !o.is_empty()) {
+        // the sample's showcase abstract never stays in a paper made from an outline
+        let main_path = dir.join("main.tex");
+        let main = std::fs::read_to_string(&main_path).map_err(io)?;
+        let has_abstract = crate::front::fields(&main).iter().any(|f| f.field == "abstract");
+        let front = Front { abstract_: front.abstract_.or_else(|| has_abstract.then(String::new)), ..front };
+        write_atomic(&main_path, &front.apply(&main)).map_err(io)?;
+    }
     Ok(dir)
+}
+
+/// Sentences of Springer's sample back matter (sn-jnl): showcase text, never a paper's own.
+const SAMPLE_BACK_MATTER: &[&str] = &["Acknowledgements are not compulsory", "Some journals require declarations to be submitted", "If your article has accompanying supplementary file"];
+
+/// Statements that name the authors or their institution: blinded in a double-blind build.
+fn identifying_statement(s: &str) -> bool {
+    let t = s.to_lowercase();
+    ["acknowledg", "funding", "ethic", "author contribution", "institutional review"].iter().any(|k| t.contains(k))
+}
+
+/// The back matter a journal asks for, in place of the class sample's showcase text: its
+/// required statements (`[submission] required_statements`), each a `[…]` to fill in, and,
+/// for a double-blind journal, the identifying ones as `\blinded{full}{blinded}` (the author's
+/// hand-set convention; [`crate::front::blind_main`] turns `\blindmode` on). Only the sample's
+/// own text is replaced (`\backmatter` … before `\bibliography`); a paper's own back matter,
+/// a class without `\bmhead`, or a template without requirements are left as they are.
+pub fn journal_back_matter(main: &str, template: &Path) -> String {
+    let (Some(publishers), Some(id)) = (template.parent(), template.file_name().and_then(|n| n.to_str())) else { return main.to_string() };
+    let Some(j) = crate::journal::load(publishers, id) else { return main.to_string() };
+    let sub = crate::venueprofile::Submission::from_table(j.meta.submission.as_ref());
+    let statements: Vec<String> = sub.map(|s| s.required_statements).unwrap_or_default();
+    if statements.is_empty() || !main.contains("\\bmhead") {
+        return main.to_string();
+    }
+    // positions in the code only: the sample's comments mention \bibliography too
+    let m = crate::front::masked(main);
+    let Some(start) = m.find("\\backmatter") else { return main.to_string() };
+    let end = m[start..].find("\\bibliography").map(|i| start + i).unwrap_or_else(|| m.rfind("\\end{document}").unwrap_or(m.len()));
+    // back to the start of that line, so a comment block before it goes with the sample text
+    let end = m[..end].rfind('\n').map(|i| i + 1).filter(|&i| i > start).unwrap_or(end);
+    let old = &main[start..end];
+    if !SAMPLE_BACK_MATTER.iter().any(|x| old.contains(x)) {
+        return main.to_string();
+    }
+    let anon = j.meta.limits.anonymous;
+    let fill = |name: &str| {
+        let full = format!("[{name}.]");
+        if anon && identifying_statement(name) { format!("\\blinded{{{full}}}{{Removed for blind review.}}") } else { full }
+    };
+    let mut out = String::from("\\backmatter\n\n");
+    out += &format!("\\bmhead{{Acknowledgements}}\n{}\n\n\\section*{{Declarations}}\n\n", fill("Acknowledgements"));
+    for st in &statements {
+        out += &format!("\\bmhead{{{}}}\n{}\n\n", crate::meta::tex_text(st), fill(st));
+    }
+    let mut text = format!("{}{}{}", &main[..start], out, &main[end..]);
+    // the switch the blinded statements need, once, after the class
+    if anon && text.contains("\\blinded{") && !text.contains("{\\blinded}") {
+        if let Some(dc) = crate::front::masked(&text).find("\\documentclass") {
+            let eol = text[dc..].find('\n').map(|i| dc + i + 1).unwrap_or(text.len());
+            text.insert_str(eol, &format!("{}% \\blinded{{full}}{{blinded}}: the blinded build defines \\blindmode\n", crate::front::BLINDED_MACRO));
+        }
+    }
+    // the sample's appendices go too (an empty appendices environment stays harmless, but showcase text does not)
+    text
+}
+
+/// What an outline puts in the title block rather than in a section.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Front {
+    pub abstract_: Option<String>,
+    pub keywords: Option<String>,
+}
+
+impl Front {
+    /// `main` with the abstract / keywords set (a field the class lacks is left alone).
+    pub fn apply(&self, main: &str) -> String {
+        let mut out = main.to_string();
+        for (field, v) in [("abstract", &self.abstract_), ("keywords", &self.keywords)] {
+            if let Some(v) = v {
+                if let Ok(m) = crate::front::set_field(&out, field, 0, v) {
+                    out = m;
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Is this outline title front or back matter (never a `\section`)?
+pub fn front_role(title: &str) -> Option<&'static str> {
+    let t = crate::text::strip_latex(title).trim().trim_end_matches(':').to_lowercase();
+    match t.as_str() {
+        "abstract" | "summary" => Some("abstract"),
+        "keywords" | "key words" | "index terms" => Some("keywords"),
+        "references" | "bibliography" => Some("references"),
+        _ => None,
+    }
+}
+
+/// An outline split into the title block (abstract, keywords) and the body
+/// sections; references are the class's job and are dropped.
+pub fn split_front(outline: &[OutlineSection]) -> (Front, Vec<OutlineSection>) {
+    let mut front = Front::default();
+    let mut body = Vec::new();
+    for s in outline {
+        match front_role(&s.title) {
+            Some("abstract") => front.abstract_ = Some(s.paragraphs().join("\n\n")),
+            Some("keywords") => front.keywords = Some(s.paragraphs().join(", ")),
+            Some(_) => {}
+            None => body.push(s.clone()),
+        }
+    }
+    (front, body)
 }
 
 /// Packages a paper's content may need, carried over when the template
@@ -1101,11 +1240,21 @@ pub fn apply_template(paper: &Path, template: Option<&Path>) -> Result<String, S
             format!("{}\\begin{{document}}{}\\end{{document}}\n", split.preamble, doc.trim_end().to_string() + "\n")
         }
     };
+    if let Some(t) = template {
+        main = journal_back_matter(&main, t);
+    }
     // the title block
     let had = crate::front::fields(&old);
     for f in ["title", "abstract", "keywords"] {
-        if let Some(v) = had.iter().find(|x| x.field == f && x.index == 0).filter(|x| !x.value.trim().is_empty()) {
-            if let Ok(m) = crate::front::set_field(&main, f, 0, &v.value) {
+        // the paper's own text; an empty abstract or keywords clears the sample's showcase text
+        let own = had.iter().find(|x| x.field == f && x.index == 0).map(|x| x.value.clone());
+        let v = match own {
+            Some(v) if !v.trim().is_empty() && !crate::front::is_sample_text(&v) => v,
+            _ if f != "title" && template.is_some() => String::new(),
+            _ => continue,
+        };
+        if crate::front::fields(&main).iter().any(|x| x.field == f) {
+            if let Ok(m) = crate::front::set_field(&main, f, 0, &v) {
                 main = m;
             }
         }
@@ -1313,6 +1462,24 @@ pub fn find_main_tex(src: &Path) -> Option<PathBuf> {
 }
 
 /// The class in `\documentclass[opts]{class}`.
+/// The class a main file (comments skipped) or a sample uses: `sn-jnl`, `elsarticle`, …
+pub fn class_of(tex: &str) -> Option<String> {
+    document_class(&crate::front::masked(tex)).map(str::to_string)
+}
+
+/// Is the paper already on this template's class (set up by hand, e.g. with its own
+/// declarations and blind switch)? Then choosing the journal only records it.
+/// The plain `article` (the app's own start) does not count: moving it onto an article-based
+/// template still lays it out again.
+pub fn same_class(paper: &Path, template: &Path) -> bool {
+    let main = std::fs::read_to_string(crate::open::main_file(paper)).unwrap_or_default();
+    let sample = read_tex(&template.join("sample.tex")).unwrap_or_default();
+    match (class_of(&main), class_of(&sample)) {
+        (Some(a), Some(b)) if a == b => a != "article" || crate::front::has_blind_switch(&main),
+        _ => false,
+    }
+}
+
 fn document_class(code: &str) -> Option<&str> {
     let rest = code[code.find("\\documentclass")? + "\\documentclass".len()..].trim_start();
     let rest = if rest.starts_with('[') { &rest[rest.find(']')? + 1..] } else { rest };
@@ -2440,4 +2607,78 @@ The loss is\n\\begin{equation}\nL = a. b = c.\n\\end{equation}\nwhere $a$ is sma
         assert_eq!(load_paper(&dir).iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Results", "Intro", "Scope", "Method", "Extra"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn an_abstract_file_read_inside_the_abstract_is_not_a_section() {
+        let dir = std::env::temp_dir().join(format!("pc-abs-input-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sections")).unwrap();
+        std::fs::write(dir.join("main.tex"), "\\documentclass{sn-jnl}\n\\begin{document}\n\\abstract{\\input{sections/01-abstract}}\n\\maketitle\n\\input{sections/02-introduction}\n\\input{sections/03-methods}\n\\end{document}\n").unwrap();
+        std::fs::write(dir.join("sections/01-abstract.tex"), "We weight.\n").unwrap();
+        std::fs::write(dir.join("sections/02-introduction.tex"), "\\section{Introduction}\nA.\n").unwrap();
+        std::fs::write(dir.join("sections/03-methods.tex"), "\\section{Methods}\nB.\n").unwrap();
+        assert_eq!(section_files(&dir), ["02-introduction.tex", "03-methods.tex"]);
+        // a stray brace or a model's bare % in the title block never hides the sections
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        std::fs::write(dir.join("main.tex"), main.replace("\\maketitle", "\\keywords{52.2% {open}\n\\maketitle")).unwrap();
+        assert_eq!(section_files(&dir), ["02-introduction.tex", "03-methods.tex"]);
+        std::fs::write(dir.join("main.tex"), main).unwrap();
+        assert_eq!(load_paper(&dir).iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Introduction", "Methods"]);
+        // adding a section never lands inside the abstract
+        add_section(&dir, "Results", Some("03-methods.tex")).unwrap();
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        assert!(main.contains("\\abstract{\\input{sections/01-abstract}}"), "{main}");
+        assert_eq!(load_paper(&dir).iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Introduction", "Methods", "Results"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_abstract_in_the_outline_goes_into_the_title_block() {
+        use crate::meta::OutlineSection;
+        let root = std::env::temp_dir().join(format!("pc-abs-outline-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let tpl = root.join("tpl");
+        std::fs::create_dir_all(&tpl).unwrap();
+        std::fs::write(tpl.join("sample.tex"), "\\documentclass{sn-jnl}\n\\begin{document}\n\\title{T}\n\\abstract{The abstract serves both as a showcase.}\n\\keywords{a, b}\n\\maketitle\n\\section{Introduction}\nSample.\n\\section{Methods}\nSample.\n\\backmatter\n\\end{document}\n").unwrap();
+        let o = |t: &str, i: &str| OutlineSection { title: t.into(), intent: i.into(), ..Default::default() };
+        let outline = [o("Abstract", "We weight noisy labels."), o("Introduction", ""), o("Materials and Methods", ""), o("References", "")];
+        let dir = create_paper_from_template_with(&root.join("papers"), "P", &tpl, Some(&outline)).unwrap();
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        assert!(main.contains("\\abstract{We weight noisy labels.}"), "{main}");
+        assert!(!main.contains("showcase"));
+        let titles: Vec<String> = load_paper(&dir).into_iter().map(|s| s.title).collect();
+        assert_eq!(titles, ["Introduction", "Materials and Methods"]);
+        // the plain article too, and an outline without an abstract clears the sample's
+        let dir = create_paper_with(&root.join("papers"), "Q", Some(&outline)).unwrap();
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        assert!(main.contains("\\begin{abstract}\nWe weight noisy labels.\n\\end{abstract}"), "{main}");
+        let dir = create_paper_from_template_with(&root.join("papers"), "R", &tpl, Some(&outline[1..2])).unwrap();
+        assert!(!std::fs::read_to_string(dir.join("main.tex")).unwrap().contains("showcase"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_double_blind_journal_gets_its_statements_not_the_sample_text() {
+        let root = std::env::temp_dir().join(format!("pc-backmatter-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let tpl = root.join("publishers/jx");
+        std::fs::create_dir_all(&tpl).unwrap();
+        std::fs::write(tpl.join("template.toml"), "name = \"Journal X\"\n\n[limits]\nanonymous = true\n\n[submission]\nrequired_statements = [\"Funding\", \"Competing Interests\"]\n").unwrap();
+        std::fs::write(tpl.join("sample.tex"), "\\documentclass[pdflatex]{sn-jnl}\n\\begin{document}\n\\title{T}\n\\maketitle\n\\section{Introduction}\nSample.\n\\backmatter\n\\bmhead{Acknowledgements}\nAcknowledgements are not compulsory.\n\\section*{Declarations}\nSome journals require declarations to be submitted in a standardised format.\n%% by copying the reference list, and delete the associated \\verb+\\bibliography+ commands. %%\n\\bibliography{sn-bibliography}\n\\end{document}\n").unwrap();
+        let o = [crate::meta::OutlineSection { title: "Introduction".into(), ..Default::default() }];
+        let dir = create_paper_from_template_with(&root.join("papers"), "P", &tpl, Some(&o)).unwrap();
+        let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+        assert!(!main.contains("not compulsory") && !main.contains("standardised"), "{main}");
+        assert!(main.contains("\\bmhead{Funding}\n\\blinded{[Funding.]}{Removed for blind review.}"), "{main}");
+        assert!(main.contains("\\bmhead{Competing Interests}\n[Competing Interests.]"), "{main}");
+        assert!(main.contains("\\providecommand{\\blinded}"), "{main}");
+        assert!(main.contains("\\bibliography{sn-bibliography}"));
+        // a \bibliography in a comment of the sample is not where the back matter ends
+        assert!(!main.lines().any(|l| l.starts_with("\\bibliography+")), "{main}");
+        // the paper's own back matter is never replaced
+        let own = main.replace("[Funding.]", "No funding was received.");
+        assert_eq!(journal_back_matter(&own, &tpl), own);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
+

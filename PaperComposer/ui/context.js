@@ -1,5 +1,5 @@
 // Right-click menu on the paper: cite, refer to a figure / table / equation,
-// add a figure or a table, collect a phrase, cut and copy.
+// add a figure or a table, polish a passage (潤飾), collect a phrase, cut and copy.
 //
 // In a paragraph being edited (its textarea) things go in at the caret. On a
 // drawn paragraph the paragraph stays as it is: a thin caret marks the
@@ -138,8 +138,10 @@ const PCContext = (() => {
     return r;
   }
 
-  /** { nonWs, rect } for a click at (x, y) on drawn paragraph p; nonWs null = end of paragraph. */
-  function locate(p, src, x, y, target) {
+  /** { nonWs, rect } for a click at (x, y) on drawn paragraph p; nonWs null = end of paragraph.
+   *  `pt` = { node, off, start } instead of a click: a selection's end (start = its first end:
+   *  on an atom, before it), kept where it is inside a word. */
+  function locate(p, src, x, y, target, pt) {
     const drawn = drawnAtoms(p);
     // on a citation, reference, formula or footnote mark: right after it
     const hit = target.closest?.(ATOM);
@@ -147,13 +149,13 @@ const PCContext = (() => {
       const i = drawn.findIndex((d) => d.node === hit || d.node.contains(hit));
       const a = i >= 0 ? sourceAtom(src, drawn, i) : null;
       const r = (drawn[i]?.node ?? hit).getBoundingClientRect();
-      return { nonWs: a ? nonWsBefore(src, a.b) : null, rect: { left: r.right, top: r.top, height: r.height } };
+      return { nonWs: a ? nonWsBefore(src, pt?.start ? a.a : a.b) : null, rect: { left: r.right, top: r.top, height: r.height } };
     }
-    const range = caretAt(x, y);
-    let node = range?.startContainer, off = range?.startOffset ?? 0;
+    const range = pt ? null : caretAt(x, y);
+    let node = pt ? pt.node : range?.startContainer, off = pt ? pt.off : range?.startOffset ?? 0;
     if (!node || node.nodeType !== 3 || !p.contains(node) || node.parentElement.closest(NOT_PROSE)) return { nonWs: null, rect: null };
     // never inside a word: to its end
-    while (off < node.data.length && WORD.test(node.data[off]) && off > 0 && WORD.test(node.data[off - 1])) off++;
+    if (!pt) while (off < node.data.length && WORD.test(node.data[off]) && off > 0 && WORD.test(node.data[off - 1])) off++;
     const rect = caretRect(node, off);
 
     // drawn: letters since the last atom before the click, then what follows them
@@ -211,6 +213,42 @@ const PCContext = (() => {
     }
     if (spaced) while (i < src.length && (SPACE.test(src[i]))) i++;
     return { nonWs: nonWsBefore(src, i), rect };
+  }
+
+  /** A drawn selection (a Range inside paragraph p) → [a, b) in its source src, through
+   *  locate() at both ends (潤飾); null when an end cannot be placed. */
+  function sourceRange(p, src, range) {
+    // a boundary between elements → the text node there
+    const text = (node, off, start) => {
+      if (node.nodeType === 3) return { node, off };
+      const kids = [...node.childNodes];
+      const w = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+      if (start) {
+        const after = kids[off];
+        if (!after) return null;
+        if (after.nodeType === 3) return { node: after, off: 0 };
+        w.currentNode = after; const t = w.nextNode();
+        return t ? { node: t, off: 0 } : null;
+      }
+      const before = kids[off - 1];
+      if (!before) return null;
+      if (before.nodeType === 3) return { node: before, off: before.data.length };
+      let last = before; while (last.lastChild) last = last.lastChild;
+      if (last.nodeType === 3) return { node: last, off: last.data.length };
+      w.currentNode = last; const t = w.previousNode();
+      return t ? { node: t, off: t.data.length } : null;
+    };
+    const end = (node, off, start) => {
+      const t = text(node, off, start);
+      if (!t) return null;
+      return locate(p, src, 0, 0, t.node.parentElement, { ...t, start }).nonWs;
+    };
+    const na = end(range.startContainer, range.startOffset, true), nb = end(range.endContainer, range.endOffset, false);
+    if (na == null || nb == null) return null;
+    let a = offsetOf(src, na);
+    const b = offsetOf(src, nb);
+    while (a < b && /\s/.test(src[a])) a++;
+    return a < b ? { a, b } : null;
   }
 
   function caretRect(node, off) {
@@ -489,9 +527,9 @@ const PCContext = (() => {
   }
 
   /** 繪圖…: the shared plot editor (figplot.js), then the same insertion as 新增圖…. */
-  async function plotFigure(at) {
+  async function plotFigure(at, kind) {
     keepMarker();
-    const r = await PCPlot.create();
+    const r = await PCPlot.create(kind);
     if (!r) { unmark(); return; }
     await settle();
     const was = fresh(at);
@@ -623,10 +661,12 @@ const PCContext = (() => {
     if (window.PCKbCards) add("cards", "知識卡…", () => { cards(at); });
     add("image", "新增圖…", () => { figure(at); });
     if (window.PCPlot) add("chart", "繪圖…", () => { plotFigure(at); });
+    if (window.PCPlot) add("sliders", "會動的方程式…", () => { plotFigure(at, "equation"); });
     if (window.PCFlow) add("graph", "流程圖…", () => { flowFigure(at); });
     add("tableStyle", "新增表…", () => { table(at); });
     if (d.text.trim()) {
       sep();
+      add("polish", "潤飾", () => { PCWrite.polish(marker, d); keepMarker(); });
       add("star", "收藏句型", () => { PCWrite.collect(marker, d.text); keepMarker(); });
       add("comment", "新增註解", () => { window.PCReview?.comment({ si: at.si, pi: at.pi, ta: d.ta, a: d.a, b: d.b, text: d.text, range: d.ta ? null : getSelection()?.rangeCount ? getSelection().getRangeAt(0).cloneRange() : null }); return false; });
       sep();
@@ -668,7 +708,7 @@ const PCContext = (() => {
     if (ta) return { t: Date.now(), ta, a: ta.selectionStart, b: ta.selectionEnd, text: ta.value.slice(ta.selectionStart, ta.selectionEnd) };
     const s = getSelection();
     const text = s && !s.isCollapsed && $("#paper").contains(s.anchorNode) ? String(s) : "";
-    return { t: Date.now(), text };
+    return { t: Date.now(), text, range: text ? s.getRangeAt(0).cloneRange() : null };
   }
 
   document.addEventListener("contextmenu", (e) => {
@@ -705,6 +745,6 @@ const PCContext = (() => {
     show(e.clientX, e.clientY, d, at);
   });
 
-  return { atoms, locate, vet, isOpen: () => !!menu };
+  return { atoms, locate, sourceRange, vet, isOpen: () => !!menu };
 })();
 window.PCContext = PCContext;

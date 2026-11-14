@@ -35,3 +35,6 @@ lore-jobs = { path = "../commons/crates/lore-jobs" }
 lore-research = { path = "../commons/crates/lore-research" }
 lore-docsrc = { path = "../commons/crates/lore-docsrc" }
 lore-learn = { path = "../commons/crates/lore-learn" }
+# 潤飾 (crates/server/src/polish.rs): the shared /api/polish routes; the voice for its hold-to-talk.
+lore-polish = { path = "../commons/crates/lore-polish" }
+lore-voice = { path = "../commons/crates/lore-voice" }

@@ -142,6 +142,7 @@ const PCFrame = (() => {
       notation: () => PCNotation.open(),
       export: [
         { icon: "pdf", label: "PDF", kbd: "⌘P", run: () => PCExport.run("pdf") },
+        { icon: "pdf", label: "PDF（投稿版）", run: () => PCExport.run("pdf", true) },
         { icon: "file", label: "Word", run: () => PCExport.run("docx") },
         { icon: "code", label: "LaTeX（zip）", run: () => PCExport.run("latex") },
         "-",
@@ -172,6 +173,12 @@ const PCFrame = (() => {
         if (!src.path) throw new Error(src.error ?? "找不到論文資料夾");
         return { kind: "pc", path: src.path };
       },
+    });
+    // 潤飾 (commons/ui/polish.js): the paper by name; 👍 opens 收藏句型 on the rewrite
+    LorePolish.mount({
+      doc: () => (typeof state === "undefined" ? null : state.paper?.name),
+      engine: () => chosenEngine() ?? undefined,
+      onLike: (after, anchor) => PCWrite.collect(anchor, after),
     });
     wireDrawers();
     return shell;

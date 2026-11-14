@@ -30,6 +30,19 @@ pub struct ComposeRequest {
     /// What the whole paper argues; every paragraph must serve it.
     #[serde(default)]
     pub key_value: Option<String>,
+    /// Where the new paragraph goes in its section (0-based) and how many paragraphs the
+    /// section will have: picks the guide's sentence structures ([`crate::patterns`]).
+    #[serde(default)]
+    pub index: Option<usize>,
+    #[serde(default)]
+    pub count: Option<usize>,
+}
+
+impl ComposeRequest {
+    /// The paragraph's situation for [`crate::patterns::select`].
+    pub fn situation(&self) -> crate::patterns::Situation<'_> {
+        crate::patterns::Situation { section: &self.section, function: self.function.as_deref().unwrap_or(""), index: self.index.unwrap_or(0), count: self.count.unwrap_or(0) }
+    }
 }
 
 fn default_min() -> usize {
@@ -93,6 +106,8 @@ pub fn reference_phrases(profile: &Profile, req: &ComposeRequest, points: &[Poin
             hits.push(t);
         }
     }
+    // the author's voice only: a row marked as guide material is never offered as his pattern
+    hits.retain(|h| !h.phrase.tags.iter().any(|t| crate::styleprofile::is_guide_mark(t)));
     hits
 }
 
@@ -102,19 +117,20 @@ pub struct Prompt {
     pub user: String,
 }
 
-pub fn build_prompt(profile: &Profile, req: &ComposeRequest, points: &[Point], refs: &[Hit]) -> Prompt {
+/// `style` = the author's style notes (`draft::style_text`; empty: none), as rules to follow.
+pub fn build_prompt(profile: &Profile, req: &ComposeRequest, points: &[Point], refs: &[Hit], style: &str) -> Prompt {
     let lang = if req.language.starts_with("zh") { "Traditional Chinese" } else { "English" };
     let system = format!(
         "You write one paragraph of an academic paper in the author's own voice.\n\
 Rules:\n\
-1. The points are the only source of content: every claim, number and finding comes from them.\n\
+1. The points are the only source of content: they are what the author wants to convey (his motivation, the facts, his own view), and every claim, number and finding comes from them.\n\
 2. Write in the author's voice: phrase as many points as you can with the author's patterns below, filling the {{slots}} from the point and keeping the pattern wording. \
 You may join related points in one sentence and add the transitions the patterns use. \
 A pattern is a sentence frame, never a source of content: its example shows the wording only, \
 and the example's subject, methods, numbers and findings belong to another paper and must never appear. \
 A pattern that fits no point is not used.\n\
 3. Do not polish, embellish, or add rhetoric. Do not add claims, numbers, methods, experiments or citations that are not in the points.\n\
-4. Cover every point. Points marked EMPHASIS must appear in the first or the last sentence.\n\
+4. Cover every point: keep the author's motivation and his own view recognisable, not only the facts. Points marked EMPHASIS must appear in the first or the last sentence.\n\
 5. Length: aim for {min} to {max} words, but never pad: a shorter paragraph is right when the points are few. Language: {lang}.\n\
 6. Avoid these words: {avoid}.\n\
 7. Reply with JSON only: {{\"sentences\":[{{\"text\":\"...\",\"phrase_id\":\"P001\"}}]}}. \
@@ -156,7 +172,16 @@ Use \"phrase_id\": null for a sentence that uses no pattern.",
     if let Some(a) = req.after.as_deref().filter(|s| !s.trim().is_empty()) {
         user += &format!("\nNext paragraph (lead into it):\n{a}\n");
     }
-    Prompt { system, user }
+    crate::draft::with_style(Prompt { system, user }, style)
+}
+
+/// `prompt` with the guide's sentence structures for this paragraph (a [`crate::patterns::block`];
+/// empty: unchanged). They go after the author's own patterns and say they are not his voice.
+pub fn with_patterns(mut prompt: Prompt, block: &str) -> Prompt {
+    if !block.trim().is_empty() {
+        prompt.user += block;
+    }
+    prompt
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -289,6 +314,7 @@ mod tests {
             root: Default::default(),
             authors: vec![],
             affiliations: vec![],
+            style_checks: Default::default(),
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },
             phrases: vec![
                 ph("P1", "Result", "finding", "Compared with {baseline}, {method} improves {metric} by {value}."),
@@ -312,6 +338,8 @@ mod tests {
             before: None,
             after: None,
             key_value: None,
+            index: None,
+            count: None,
         }
     }
 
@@ -320,9 +348,9 @@ mod tests {
         let pr = profile();
         let mut r = req();
         let pts = parse_points(&r.points);
-        assert!(!build_prompt(&pr, &r, &pts, &[]).system.contains("key value"));
+        assert!(!build_prompt(&pr, &r, &pts, &[], "").system.contains("key value"));
         r.key_value = Some("提升骨折判讀的可解釋性".into());
-        assert!(build_prompt(&pr, &r, &pts, &[]).system.contains("8. The whole paper argues one key value: \"提升骨折判讀的可解釋性\""));
+        assert!(build_prompt(&pr, &r, &pts, &[], "").system.contains("8. The whole paper argues one key value: \"提升骨折判讀的可解釋性\""));
     }
 
     #[test]
@@ -332,7 +360,7 @@ mod tests {
         let pr = profile();
         let r = req();
         let pts = parse_points(&r.points);
-        let s = build_prompt(&pr, &r, &pts, &[]).system;
+        let s = build_prompt(&pr, &r, &pts, &[], "").system;
         assert!(s.contains("A pattern that fits no point is not used"));
         assert!(s.contains("phrase as many points as you can with the author's patterns"));
         assert!(s.contains("must never appear"));
@@ -354,9 +382,18 @@ mod tests {
         let pts = parse_points(&r.points);
         let refs = reference_phrases(&pr, &r, &pts);
         assert!(refs.iter().any(|h| h.phrase.id == "T1"), "transitions are always offered");
-        let prompt = build_prompt(&pr, &r, &pts, &refs);
+        let prompt = build_prompt(&pr, &r, &pts, &refs, "");
         assert!(prompt.user.contains("P1") && prompt.user.contains("EMPHASIS: recall improves"));
         assert!(prompt.system.contains("\"utilize\""));
+        assert!(!prompt.system.contains("style rules"), "no notes, nothing added");
+        // the workspace's style notes reach the 寫作 prompt as rules
+        let ws = std::env::temp_dir().join(format!("pc-compose-style-{}", std::process::id()));
+        std::fs::create_dir_all(ws.join("style")).unwrap();
+        std::fs::write(ws.join("style/10-writing.md"), "Never use contractions.").unwrap();
+        let styled = build_prompt(&pr, &r, &pts, &refs, &crate::draft::style_text(&ws));
+        assert!(styled.system.contains("style rules: follow them") && styled.system.contains("Never use contractions."));
+        assert_eq!(styled.user, prompt.user);
+        let _ = std::fs::remove_dir_all(&ws);
     }
 
     #[test]
@@ -373,5 +410,40 @@ mod tests {
         assert!(c.problems.iter().any(|p| p.contains("P9")));
         assert!(c.problems.iter().any(|p| p.contains("utilize")));
         assert!(!c.problems.iter().any(|p| p.contains("emphasised")), "{:?}", c.problems);
+    }
+
+    #[test]
+    fn guide_structures_fit_the_paragraph_and_stay_apart_from_the_voice() {
+        let root = std::env::temp_dir().join(format!("pc-compose-guide-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = &root;
+        std::fs::create_dir_all(dir.join("style")).unwrap();
+        std::fs::write(
+            dir.join("style/patterns.toml"),
+            "[[pattern]]\nid = \"t\"\nsituation = \"thesis_statement\"\nstructure = \"{topic} {claim} because {reason}.\"\nexample = \"Quiet rooms help people focus because they remove interruptions.\"\nsource = \"guide\"\n\n\
+[[pattern]]\nid = \"s\"\nsituation = \"topic_sentence\"\nstructure = \"{topic} {key words}.\"\nexample = \"Cycling is a practical way to commute for several reasons.\"\nsource = \"guide\"\n",
+        )
+        .unwrap();
+        let pr = profile();
+        let mut r = req();
+        let pts = parse_points(&r.points);
+        // the Introduction's last paragraph: thesis and topic sentence
+        r.section = "Introduction".into();
+        (r.index, r.count) = (Some(2), Some(3));
+        let p = with_patterns(build_prompt(&pr, &r, &pts, &[], ""), &crate::patterns::block_for(dir, &r.situation()));
+        let (mine, guide) = p.user.split_once(crate::patterns::HEADING).expect("the guide block is there");
+        assert!(guide.contains("Quiet rooms") && guide.contains("Cycling"));
+        assert!(!mine.contains("Quiet rooms") && !mine.contains("Cycling"), "guide examples are never listed as the author's patterns");
+        assert!(!p.system.contains("Quiet rooms"));
+        // a Method paragraph: the topic sentence only
+        r.section = "Method".into();
+        (r.index, r.count) = (Some(0), Some(3));
+        let p = with_patterns(build_prompt(&pr, &r, &pts, &[], ""), &crate::patterns::block_for(dir, &r.situation()));
+        assert!(p.user.contains("Cycling") && !p.user.contains("Quiet rooms"));
+        // no file: the prompt is unchanged
+        let bare = build_prompt(&pr, &r, &pts, &[], "");
+        assert_eq!(with_patterns(bare.clone(), &crate::patterns::block_for(&dir.join("none"), &r.situation())).user, bare.user);
+        assert!(bare.system.contains("his motivation, the facts, his own view"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

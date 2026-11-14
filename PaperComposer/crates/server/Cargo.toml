@@ -23,6 +23,8 @@ lore-jobs.workspace = true
 lore-research.workspace = true
 lore-docsrc.workspace = true
 lore-learn.workspace = true
+lore-polish.workspace = true
+lore-voice.workspace = true
 lore-words = { path = "../../../commons/crates/lore-words" }
 async-trait = "0.1"
 serde.workspace = true
@@ -39,3 +41,6 @@ flate2 = "1"
 tar = "0.4"
 futures-util = "0.3"
 pdf-extract = "0.12.1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -27,6 +27,46 @@ fn strings() -> Value {
 }
 
 /// The JSON object in a reply (code fences and chatter around it are fine).
+/// The record's own ids (E3, T2, H1, R1, P1, g4) in drafted prose: the reader never saw them.
+/// Ids inside the pending marks (`\pending{P1}{…}`, `\pendingdep{P1}`) are the marks' own and allowed.
+pub fn leaked_ids(text: &str) -> Vec<String> {
+    let mut t = text.to_string();
+    for m in ["\\pendingdep{", "\\pendingcell{", "\\pendingpara{", "\\pending{"] {
+        while let Some(i) = t.find(m) {
+            let end = t[i..].find('}').map(|j| i + j + 1).unwrap_or(t.len());
+            t.replace_range(i..end, " ");
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    for w in t.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let mut cs = w.chars();
+        let ok = matches!(cs.next(), Some('E' | 'T' | 'H' | 'R' | 'P')) && w.len() >= 2 && w.len() <= 3 && cs.all(|c| c.is_ascii_digit());
+        if ok && !out.iter().any(|x| x == w) {
+            out.push(w.to_string());
+        }
+    }
+    out
+}
+
+/// One of [`SECTIONS`] for a section name a model writes in the journal's own words
+/// ("Materials and Methods", "Methodology", "Conclusions", "Background"): by role, never dropped.
+pub fn section_index(name: &str) -> Option<usize> {
+    let n = name.trim();
+    if let Some(i) = SECTIONS.iter().position(|s| s.eq_ignore_ascii_case(n)) {
+        return Some(i);
+    }
+    let role = crate::venueprofile::canonical_role(n);
+    let to = match role {
+        "introduction" | "background" | "related" => "Introduction",
+        "methods" | "data" | "experiments" => "Methods",
+        "results" => "Results",
+        "discussion" | "limitations" => "Discussion",
+        "conclusion" => "Conclusion",
+        _ => return None,
+    };
+    SECTIONS.iter().position(|s| *s == to)
+}
+
 pub fn json_in<T: for<'de> Deserialize<'de>>(reply: &str) -> Result<T, String> {
     let start = reply.find('{').ok_or("回覆裡沒有 JSON")?;
     let end = reply.rfind('}').ok_or("回覆裡沒有 JSON")?;
@@ -90,6 +130,7 @@ pub fn context(key_value: &str, s: &Session, material: &str) -> String {
         c += &s.conflicts.join("; ");
         c += "\n";
     }
+    c += &super::pending::context_block(s);
     c += material;
     c
 }
@@ -144,6 +185,9 @@ ablation. `columns` = header, `rows` = data rows with numbers copied exactly (ke
 not propose a table the paper already has (listed below), unless the record adds rows to it — then say so in `note`.\n\
 6. `conflicts`: every number that differs between the record and the paper's existing tables (Traditional Chinese, \
 one item per conflict, naming both values). Empty when none.\n\
+7. A result the record says is still to come (it writes `?`, \"TBD\", \"waiting\", \"still running\", 「等資料」): write `?` \
+as its `result` or cell — never a guess; the author marks it as pending. A cell the record simply does not report \
+(a combination nobody ran, a number it never gives) is `—`, never `?`.\n\
 Do not invent experiments, numbers or reasons. {TW} Reply with JSON only.",
         modes.join("; ")
     );
@@ -251,7 +295,7 @@ pub fn parse_plan(reply: &str, lens: &Lens) -> Result<Vec<(Group, Vec<Item>)>, S
         .groups
         .into_iter()
         .filter_map(|g| {
-            let sec = SECTIONS.iter().position(|s| s.eq_ignore_ascii_case(g.section.trim()))?;
+            let sec = section_index(&g.section)?;
             let items = g
                 .items
                 .into_iter()
@@ -295,8 +339,10 @@ pub fn turn_schema() -> Value {
         ("summary", summary),
         ("reply", json_string()),
         ("question", json_string()),
+        ("item", json_string_or_null()),
         ("options", strings()),
         ("ref_notes", json_array(json_object(&[("key", json_string()), ("note", json_string())]))),
+        ("pending_notes", json_array(json_object(&[("id", json_string()), ("what", json_string()), ("why", json_string()), ("expect", json_string()), ("if_not", json_string())]))),
     ])
 }
 
@@ -339,6 +385,10 @@ Each turn:
 7. Results groups: open with the group's table or figure itself — \"Is Table X the main table? Which comparison
    in it matters, what do you want to stress, and why?\" — using its actual numbers; ask about the story behind a
    result only after that, and only what other groups have not covered.
+8. `item`: the id of the item your question is about (null for a general question). An item listed with \
+\"candidates\" has answer options the app prepared from the record and shows under your question: do not repeat \
+or replace them, leave `options` empty for it, and phrase the question so that one of them could answer it. An \
+answer that says \"picked k2\" chose that candidate (maybe edited): grade it like any answer.
 Never invent facts about the study. Ask one thing at a time.";
 
 pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns: &[Turn], answer: Option<&str>, material: &str) -> Prompt {
@@ -346,6 +396,9 @@ pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns
     let mut user = context(key_value, s, material);
     user += "\n";
     user += &lens.describe();
+    if group == super::pending::GROUP_ID {
+        user += &super::pending::group_context(s);
+    }
     let talked: Vec<&Group> = s.groups.iter().filter(|g| g.id != group && (g.status == GroupStatus::Done || g.turns > 0)).collect();
     if !talked.is_empty() {
         user += "\n## Already discussed in other groups (do NOT ask about these again; build on them)\n";
@@ -370,6 +423,7 @@ pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns
                         super::lens::Missing::Depth(d) => format!("needs depth {}", lens.level_name(*d)),
                         super::lens::Missing::Flag(f) => format!("needs flag {f}"),
                         super::lens::Missing::Number => "needs its number".to_string(),
+                        super::lens::Missing::Explain => "needs the author's explanation: what, why necessary, expectation, what if opposite".to_string(),
                     })
                     .collect::<Vec<_>>()
                     .join("; ")
@@ -387,6 +441,9 @@ pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns
             );
             if let Some(p) = st.and_then(|x| x.preferred) {
                 user += &format!(" (optional: {} welcome)", lens.level_name(p));
+            }
+            if !it.candidates.is_empty() {
+                user += &format!(" candidates: {}", it.candidates.iter().map(|c| format!("{} \"{}\"", c.id, c.text)).collect::<Vec<_>>().join(" | "));
             }
             let probes = lens.probes_for(&it.role, missing);
             if !probes.is_empty() {
@@ -421,9 +478,41 @@ pub struct TurnReply {
     pub summary: GroupSummary,
     pub reply: String,
     pub question: String,
+    /// The item the question is about (its prepared candidates are the choices).
+    #[serde(default)]
+    pub item: Option<String>,
     pub options: Vec<String>,
     #[serde(default)]
     pub ref_notes: Vec<RefNote>,
+    /// What the author said about pending results (the 待補項目 group).
+    #[serde(default)]
+    pub pending_notes: Vec<PendingNoteUpdate>,
+}
+
+/// The author's words on one pending result, from one turn; empty parts keep what was said before.
+#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
+pub struct PendingNoteUpdate {
+    pub id: String,
+    #[serde(default)]
+    pub what: String,
+    #[serde(default)]
+    pub why: String,
+    #[serde(default)]
+    pub expect: String,
+    #[serde(default)]
+    pub if_not: String,
+}
+
+/// Keep what the author said about each pending result (only known ids).
+pub fn apply_pending_notes(s: &mut Session, notes: &[PendingNoteUpdate]) {
+    for n in notes {
+        let Some(p) = s.pending.iter_mut().find(|p| p.id == n.id.trim()) else { continue };
+        for (dst, src) in [(&mut p.note.what, &n.what), (&mut p.note.why, &n.why), (&mut p.note.expect, &n.expect), (&mut p.note.if_not, &n.if_not)] {
+            if !src.trim().is_empty() {
+                *dst = src.trim().to_string();
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -595,7 +684,7 @@ pub fn parse_review(reply: &str) -> Result<Review, String> {
 // ── Step 6: paragraph-level outline ──────────────────────
 
 pub fn outline_schema() -> Value {
-    let para = json_object(&[("kind", json_string()), ("plan", json_string()), ("zh", json_string()), ("en", strings()), ("sources", strings()), ("cites", strings())]);
+    let para = json_object(&[("kind", json_string()), ("plan", json_string()), ("zh", json_string()), ("en", strings()), ("sources", strings()), ("cites", strings()), ("pending", strings())]);
     let sec = json_object(&[("section", json_string()), ("subsection", json_string_or_null()), ("paras", json_array(para))]);
     json_object(&[("sections", json_array(sec))])
 }
@@ -618,7 +707,10 @@ did not fit and was changed) in the Methods paragraph where they happened.\n\
 note on each reference allows (a note like \"Methods only\" or \"only supports X\" is binding). Never a key that is \
 not in the paper's reference list.\n\
 9. Results: one paragraph group per table or figure, pointing to it and reading its numbers.\n\
-10. Do not invent results, numbers or citations.";
+10. Do not invent results, numbers or citations.\n\
+11. Pending results (listed in the context, ids P1, …): outline them like the results they will be, in the \
+expected direction; `pending` = the ids a paragraph reports or depends on (Results, and every Introduction, \
+Discussion or Conclusion paragraph whose claim rests on one), else [].";
 
 pub fn outline_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str, only: Option<(&str, &str)>, material: &str) -> Prompt {
     let ask = match only {
@@ -700,6 +792,8 @@ struct RawPara {
     en: Vec<String>,
     sources: Vec<String>,
     cites: Vec<String>,
+    #[serde(default)]
+    pending: Vec<String>,
 }
 
 /// Sections in paper order, paragraph ids p1, p2, … across the outline.
@@ -722,12 +816,12 @@ fn parse_outline_in(reply: &str, only: Option<&str>) -> Result<Vec<OutlineSectio
         .sections
         .into_iter()
         .filter_map(|x| {
-            let i = SECTIONS.iter().position(|s| s.eq_ignore_ascii_case(x.section.trim()))?;
+            let i = section_index(&x.section)?;
             let paras = x
                 .paras
                 .into_iter()
                 .filter(|p| !p.zh.trim().is_empty())
-                .map(|p| OutlinePara { id: String::new(), kind: p.kind, plan: p.plan, zh: p.zh, en: p.en.into_iter().filter(|e| !e.trim().is_empty()).collect(), sources: p.sources, cites: p.cites })
+                .map(|p| OutlinePara { id: String::new(), kind: p.kind, plan: p.plan, zh: p.zh, en: p.en.into_iter().filter(|e| !e.trim().is_empty()).collect(), sources: p.sources, cites: p.cites, pending: p.pending })
                 .collect();
             Some((i, OutlineSection { section: SECTIONS[i].into(), subsection: x.subsection.filter(|s| !s.trim().is_empty()), paras, confirmed: false }))
         })
@@ -774,6 +868,13 @@ The key value is the paper's direction, not a phrase to repeat: serve it through
 state it (or its wording) only where the points themselves state it.\n",
         para.kind, para.plan, para.zh
     );
+    let rules = super::pending::draft_rules(s, &[]);
+    if !rules.is_empty() {
+        if !para.pending.is_empty() {
+            x += &format!("This paragraph reports or depends on pending results: {}.\n", para.pending.join(", "));
+        }
+        x += &rules;
+    }
     let full: Vec<&Claim> = s.claims.iter().filter(|c| c.home == section && para.sources.iter().any(|src| src == &c.id)).collect();
     let back: Vec<&Claim> = s.claims.iter().filter(|c| c.home != section && para.sources.iter().any(|src| src == &c.id)).collect();
     if !full.is_empty() {
@@ -844,9 +945,10 @@ improvement\" on a gap inside one standard deviation is an overclaim);\n\
 - missing-why: an own design decision written as procedure with no reason;\n\
 - citation: a reference cited for something its note does not support, or a statement about prior work or accepted \
 practice with no citation.\n\
-Exposition paragraphs need no motive — do not flag them for lacking one. For each finding give `para` (paragraph \
+Exposition paragraphs need no motive — do not flag them for lacking one. {} For each finding give `para` (paragraph \
 id), `quote` (the exact words), `why`, and `ask`: a question for the author when the fix needs their knowledge, \
-else empty. Report only real problems, most serious first. {TW} Reply with JSON only."
+else empty. Report only real problems, most serious first. {TW} Reply with JSON only.",
+        super::pending::AUDIT_RULE
     );
     let mut user = context(key_value, s, material);
     user += "\n";
@@ -899,6 +1001,22 @@ pub fn parse_audit(reply: &str) -> Result<Vec<Finding>, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn record_ids_in_prose_are_caught_but_not_the_pending_marks() {
+        assert_eq!(leaked_ids("The basis remains E1 and E2, see T3; Diff was 0.08 \\pendingdep{P2}. A 3D model, R2D2, H2O."), ["E1", "E2", "T3"]);
+        assert!(leaked_ids("AUC was \\pending{P1}{external AUC} on the T1 images").contains(&"T1".to_string()));
+    }
+
+    #[test]
+    fn a_journal_section_name_is_mapped_by_role_never_dropped() {
+        // the outline prompt carries the journal's naming (期刊寫法): its answer must still land
+        let reply = r#"{"sections":[{"section":"Materials and Methods","paras":[{"kind":"Methods","plan":"x","zh":"資料","en":["Data."],"sources":[],"cites":[]}]},{"section":"Conclusions","paras":[{"kind":"c","plan":"x","zh":"結論","en":["Done."],"sources":[],"cites":[]}]}]}"#;
+        let o = parse_outline(reply).unwrap();
+        assert_eq!(o.iter().map(|s| s.section.as_str()).collect::<Vec<_>>(), ["Methods", "Conclusion"]);
+        assert_eq!(section_index("Methodology"), Some(1));
+        assert_eq!(section_index("Acknowledgements"), None);
+    }
+
     use super::*;
 
     fn lens() -> Lens {
@@ -971,7 +1089,7 @@ mod tests {
             Claim { id: "c1".into(), zh: "z".into(), en: "Reliability is a joint condition.".into(), home: "Results".into(), ..Default::default() },
             Claim { id: "c2".into(), zh: "z".into(), en: "Excluding hard frames is damaging.".into(), home: "Introduction".into(), ..Default::default() },
         ];
-        let p = OutlinePara { id: "p9".into(), kind: "Results key result".into(), plan: "table → numbers → L2".into(), zh: "主表".into(), en: vec![], sources: vec!["c1".into(), "c2".into()], cites: vec!["kim2019".into()] };
+        let p = OutlinePara { id: "p9".into(), kind: "Results key result".into(), plan: "table → numbers → L2".into(), zh: "主表".into(), en: vec![], sources: vec!["c1".into(), "c2".into()], cites: vec!["kim2019".into()], pending: vec![] };
         let mut s = s;
         s.review = Some(Review { chain: vec![], suggestions: vec![Suggestion { id: "s1".into(), kind: "other".into(), detail: "No final scores in Methods.".into(), accepted: Some(true), ..Default::default() }] });
         let refs = vec![super::super::material::RefInfo { key: "kim2019".into(), title: "Excluding hard frames".into(), purpose: "Intro only".into(), ..Default::default() }];
@@ -981,6 +1099,41 @@ mod tests {
         let (full, back) = x.split_once("Only call these back").unwrap();
         assert!(full.contains("joint condition") && back.contains("damaging"));
         assert!(x.contains("80–150"));
+    }
+
+    #[test]
+    fn pending_results_reach_every_prompt() {
+        use super::super::pending::{sync_group, PendingItem, AUDIT_RULE, GROUP_ID};
+        let l = lens();
+        let mut s = Session::default();
+        s.pending.push(PendingItem { id: "P1".into(), what: "external Dice".into(), expected: "略低於內部、排名不變".into(), waits_for: "site B labels".into(), ..Default::default() });
+        s.set_plan(vec![(Group { section: "Results".into(), title: "主表".into(), ..Default::default() }, vec![])]);
+        sync_group(&mut s);
+        // the shared context (claims, outline, audit, revision) lists it
+        assert!(context("kv", &s, "").contains("- P1 external Dice; waits for: site B labels; expected: 略低於內部、排名不變"));
+        // the interview's 待補項目 group asks for the four parts
+        let t = turn_prompt("kv", &s, &l, GROUP_ID, &[], None, "");
+        assert!(t.user.contains("This group is 待補項目") && t.user.contains("`if_not`") && t.user.contains("needs the author's explanation"));
+        assert!(!turn_prompt("kv", &s, &l, "g1", &[], None, "").user.contains("This group is 待補項目"));
+        let r = parse_turn(r#"{"updates":[],"summary":{"explain":"","motive":"","conclusion":"","reader_accepts":"","twist":""},"reply":"","question":"","options":[],
+            "pending_notes":[{"id":"P1","what":"外部醫院的 Dice","why":"證明可推廣","expect":"","if_not":""},{"id":"P9","what":"x","why":"","expect":"","if_not":""}]}"#).unwrap();
+        apply_pending_notes(&mut s, &r.pending_notes);
+        apply_pending_notes(&mut s, &[PendingNoteUpdate { id: "P1".into(), expect: "略低".into(), ..Default::default() }]);
+        assert_eq!((s.pending[0].note.why.as_str(), s.pending[0].note.expect.as_str()), ("證明可推廣", "略低"), "earlier parts are kept");
+        // the outline names what each paragraph depends on
+        assert!(outline_schema()["properties"]["sections"]["items"]["properties"]["paras"]["items"]["required"].as_array().unwrap().contains(&serde_json::json!("pending")));
+        let o = parse_outline(r#"{"sections":[{"section":"Results","subsection":null,"paras":[{"kind":"k","plan":"p","zh":"外部驗證","en":["external"],"sources":[],"cites":[],"pending":["P1"]}]}]}"#).unwrap();
+        assert_eq!(o[0].paras[0].pending, ["P1"]);
+        // drafting: the marks, the expected direction, no hedging
+        let x = compose_extra(&o[0].paras[0], &s, "Results", "", &[], &[]);
+        assert!(x.contains("depends on pending results: P1") && x.contains("\\pending{ID}{") && x.contains("\\pendingdep{ID}") && x.contains("\\pendingpara{ID}") && x.contains("no hedging"));
+        assert!(x.contains("- P1 external Dice"));
+        // the reviewer pass leaves marks alone
+        assert!(audit_prompt("kv", &s, &l, "", "").system.contains(AUDIT_RULE));
+        // nothing pending: the prompts are as before
+        let plain = Session::default();
+        assert!(!compose_extra(&o[0].paras[0], &plain, "Results", "", &[], &[]).contains("pending"));
+        assert!(!context("kv", &plain, "").contains("Pending"));
     }
 
     #[test]

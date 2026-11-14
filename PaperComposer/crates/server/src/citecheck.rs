@@ -268,6 +268,24 @@ fn http() -> reqwest::Client {
         .expect("http client")
 }
 
+/// GET with the databases' manners: a 429 / 503 waits (Retry-After, at most 10 s) and tries
+/// again, three times, so three lookups in parallel never fail a reference for being fast.
+async fn get(url: reqwest::Url, what: &str) -> Result<reqwest::Response, String> {
+    let mut wait = std::time::Duration::from_millis(1200);
+    for attempt in 0..4 {
+        let r = http().get(url.clone()).send().await.map_err(|e| format!("無法連線到 {what}：{e}"))?;
+        let s = r.status();
+        if (s == reqwest::StatusCode::TOO_MANY_REQUESTS || s == reqwest::StatusCode::SERVICE_UNAVAILABLE) && attempt < 3 {
+            let after = r.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok()).map(std::time::Duration::from_secs);
+            tokio::time::sleep(after.unwrap_or(wait).min(std::time::Duration::from_secs(10))).await;
+            wait *= 2;
+            continue;
+        }
+        return Ok(r);
+    }
+    Err(format!("{what} 要求放慢，稍後再試"))
+}
+
 fn base(var: &str, default: &str) -> String {
     std::env::var(var).unwrap_or_else(|_| default.into())
 }
@@ -309,7 +327,8 @@ fn crossref_work(item: &serde_json::Value) -> Work {
 }
 
 async fn crossref_doi(doi: &str) -> Result<Option<Work>, String> {
-    let r = http().get(format!("{}/works/{}", base("PAPERCOMPOSER_CROSSREF_BASE", "https://api.crossref.org"), doi)).send().await.map_err(|e| format!("無法連線到 Crossref：{e}"))?;
+    let url = reqwest::Url::parse(&format!("{}/works/{}", base("PAPERCOMPOSER_CROSSREF_BASE", "https://api.crossref.org"), doi)).map_err(|e| e.to_string())?;
+    let r = get(url, "Crossref").await?;
     if r.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -321,7 +340,7 @@ async fn crossref_search(g: &Guess) -> Result<Vec<Work>, String> {
     let q = [g.title.as_str(), g.authors.as_str(), g.year.as_str()].iter().filter(|s| !s.trim().is_empty()).copied().collect::<Vec<_>>().join(" ");
     let mut url = reqwest::Url::parse(&format!("{}/works", base("PAPERCOMPOSER_CROSSREF_BASE", "https://api.crossref.org"))).map_err(|e| e.to_string())?;
     url.query_pairs_mut().append_pair("query.bibliographic", &q).append_pair("rows", "5").append_pair("select", "DOI,title,author,issued,published,container-title,volume,issue,page");
-    let v: serde_json::Value = http().get(url).send().await.map_err(|e| format!("無法連線到 Crossref：{e}"))?.error_for_status().map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())?;
+    let v: serde_json::Value = get(url, "Crossref").await?.error_for_status().map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())?;
     Ok(v["message"]["items"].as_array().map(|a| a.iter().map(crossref_work).collect()).unwrap_or_default())
 }
 
@@ -389,8 +408,8 @@ async fn pubmed_summaries(ids: &[String]) -> Result<Vec<Work>, String> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
-    let url = format!("{}/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id={}", base("PAPERCOMPOSER_PUBMED_BASE", "https://eutils.ncbi.nlm.nih.gov"), ids.join(","));
-    let v: serde_json::Value = http().get(url).send().await.map_err(|e| format!("無法連線到 PubMed：{e}"))?.json().await.map_err(|e| e.to_string())?;
+    let url = reqwest::Url::parse(&format!("{}/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id={}", base("PAPERCOMPOSER_PUBMED_BASE", "https://eutils.ncbi.nlm.nih.gov"), ids.join(","))).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = get(url, "PubMed").await?.json().await.map_err(|e| e.to_string())?;
     Ok(ids.iter().filter_map(|id| v["result"].get(id)).filter(|x| x["title"].is_string()).map(pubmed_work).collect())
 }
 
@@ -398,7 +417,7 @@ async fn pubmed_search(g: &Guess) -> Result<Vec<Work>, String> {
     let mut url = reqwest::Url::parse(&format!("{}/entrez/eutils/esearch.fcgi", base("PAPERCOMPOSER_PUBMED_BASE", "https://eutils.ncbi.nlm.nih.gov"))).map_err(|e| e.to_string())?;
     let title: String = g.title.chars().map(|c| if c.is_alphanumeric() || c.is_whitespace() || c == '-' { c } else { ' ' }).collect();
     url.query_pairs_mut().append_pair("db", "pubmed").append_pair("retmode", "json").append_pair("retmax", "5").append_pair("term", &format!("{}[Title]", title.split_whitespace().collect::<Vec<_>>().join(" ")));
-    let v: serde_json::Value = http().get(url).send().await.map_err(|e| format!("無法連線到 PubMed：{e}"))?.json().await.map_err(|e| e.to_string())?;
+    let v: serde_json::Value = get(url, "PubMed").await?.json().await.map_err(|e| e.to_string())?;
     let ids: Vec<String> = v["esearchresult"]["idlist"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
     pubmed_summaries(&ids).await
 }

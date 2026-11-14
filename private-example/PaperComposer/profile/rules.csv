@@ -8,3 +8,8 @@ R103,soft,paragraph,links_to_neighbours,,warning,與前後段的銜接
 R104,soft,paragraph,one_complete_idea,,warning,一段講完一個想法
 R105,soft,section:Result,first_sentence_states_finding,,warning,第一句寫出發現
 R106,soft,paragraph,supports_key_value,,warning,支撐論文的核心價值（段落、圖表、摘要、貢獻、討論）
+R004,hard,sentence,phrases,wordy,info,冗詞
+R005,hard,sentence,phrases,jargon,info,口語
+R006,hard,sentence,comma_splice,comma_splice,warning,逗號連接兩個子句
+R007,hard,sentence,contractions,,warning,縮寫形式
+R008,hard,sentence,exclamation,,warning,驚嘆號

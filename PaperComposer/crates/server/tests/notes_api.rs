@@ -34,6 +34,14 @@ async fn notes_api_round_trip_block_and_trash() {
     assert_eq!(v["notes"], json!([]));
     assert!(!dir.exists(), "nothing is created by reading");
 
+    // 設定 → 一般 → 權限: the voice's three (潤飾); isolated = no voice, nothing asked or opened
+    let v: Value = http.get(url("/api/permissions")).send().await.unwrap().json().await.unwrap();
+    let ids: Vec<&str> = v["permissions"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["microphone", "speech", "personal_voice"]);
+    assert!(v["permissions"].as_array().unwrap().iter().all(|r| r["status"] == "unsupported"));
+    let v: Value = http.post(url("/api/permissions/open")).json(&json!({ "what": "microphone" })).send().await.unwrap().json().await.unwrap();
+    assert_eq!(v["opened"], false);
+
     // blocked: a typed reference number; 422 with the findings, no file
     let r = http.post(url("/api/notes")).json(&json!({ "title": "Typed", "body": "As Table 1 shows." })).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 422);

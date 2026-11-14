@@ -179,3 +179,5 @@ const PCNotation = (() => {
 
   return { open };
 })();
+// draft.js looks it up as window.PCNotation (a const is not a window property)
+window.PCNotation = PCNotation;

@@ -32,9 +32,10 @@ const PCDraft = (() => {
     ["revise", "9", "修訂"],
   ];
   const SECTIONS = ["Introduction", "Methods", "Results", "Discussion", "Conclusion"];
-  const SEC_ZH = { Introduction: "前言", Methods: "方法", Results: "結果", Discussion: "討論", Conclusion: "結論" };
+  const SEC_ZH = { Introduction: "前言", Methods: "方法", Results: "結果", Discussion: "討論", Conclusion: "結論", Abstract: "摘要" };
   const REV_ZH = { open: "討論中", planned: "有修改方案", done: "完成", dropped: "放棄" };
-  const ACT_ZH = { "insert-after": "插在這段之後", "insert-before": "插在這段之前", replace: "取代這段", append: "加在章節最後" };
+  const DIR_ZH = { matches: "符合預期", contradicts: "與預期相反", unsure: "不確定" };
+  const ACT_ZH = { "replace-text": "改摘要", "insert-after": "插在這段之後", "insert-before": "插在這段之前", replace: "取代這段", append: "加在章節最後" };
   const STATUS_ZH = { pending: "未開始", active: "進行中", done: "完成", skipped: "略過" };
   let D = null;
 
@@ -61,6 +62,7 @@ const PCDraft = (() => {
   async function reload() {
     try {
       D.data = await api(base());
+      schedulePrep();
       if (D.step == null) D.step = Math.max(0, STEPS.findIndex(([k]) => k === sess().phase));
       D.err = null;
     } catch (e) { D.err = e.message; }
@@ -74,6 +76,18 @@ const PCDraft = (() => {
     try { const v = await fn(); if (v) D.data = v; }
     catch (e) { D.err = e.message; }
     D.busy = null; draw();
+    schedulePrep();
+  }
+
+  /** 預想選項 are prepared in the background: look again until every group has them. */
+  function schedulePrep() {
+    clearTimeout(D.prepTimer);
+    if (!D.data || !sess().groups.some((g) => g.prep === "running")) return;
+    D.prepTimer = setTimeout(async () => {
+      if (!$("#dlgDraft").open || D.busy) { schedulePrep(); return; }
+      try { D.data = await api(base()); draw(); } catch { /* next time */ }
+      schedulePrep();
+    }, 3000);
   }
   const call = (path, body, method) => api(base() + path, body ?? {}, method);
   const go = (i) => { D.step = i; draw(); };
@@ -87,6 +101,7 @@ const PCDraft = (() => {
     if (m.kind === "depth") return `需到 ${levelName(m.what)}`;
     if (m.kind === "flag") return `需要「${flagName(m.what)}」`;
     if (m.kind === "number") return "需要數字";
+    if (m.kind === "explain") return "待說明";
     return m.kind;
   }
 
@@ -134,6 +149,8 @@ const PCDraft = (() => {
     $("#dfLens").textContent = `視角：${lens().name}`;
     const phaseAt = STEPS.findIndex(([k]) => k === sess().phase);
     STEPS.forEach(([k, n, label], i) => {
+      // the journal is chosen in step 1: ★ 版型 only shows for a session that has none yet
+      if (k === "template" && D.data.journal && D.step !== i) return;
       const li = el("li");
       const b = el("button");
       b.append(el("span", "c", n), el("span", "", label));
@@ -207,6 +224,28 @@ const PCDraft = (() => {
     kv.oninput = recount;
     recount();
     main.append(kvHead, kv);
+    PCNew.kvCheck(kv);
+    // the journal first: plan, 預想選項, outline and 審稿 follow its habits (期刊寫法)
+    const jHead = hq("投稿期刊", "規劃、預想選項、大綱、草稿與審稿都照這本期刊的寫法與投稿要求。按「儲存，下一步」才套用；之後也能換，大綱會照新期刊重新產生。");
+    main.append(jHead);
+    const current = D.data.journal ?? "";
+    D.pickJournal ??= current;
+    const jbox = el("div", "df-journal");
+    const showList = () => {
+      // a pick folds the list to one line with the journal's 期刊寫法 under it
+      jbox.replaceChildren(PCNew.templateList({ tpls: D.tpls ?? [], selected: D.pickJournal, suggested: [], journalsOnly: true, paper: D.name, onPick: (v) => { D.pickJournal = v; D.journalOpen = false; setTimeout(showChosen); } }));
+    };
+    const showChosen = () => {
+      const t = (D.tpls ?? []).find((x) => x.id === D.pickJournal);
+      const r = row(el("b", "", t ? t.name : D.pickJournal), btn("換期刊", () => { D.journalOpen = true; showList(); }, "ghost"));
+      jbox.replaceChildren(r);
+      if (typeof PCVenue !== "undefined" && t) jbox.append(PCVenue.panel({ template: t.id, paper: D.name }));
+    };
+    (async () => {
+      if (!D.tpls) { try { D.tpls = (await api("/api/templates")).filter((j) => j.kind !== "book"); } catch { D.tpls = []; } }
+      if (D.pickJournal && !D.journalOpen) showChosen(); else showList();
+    })();
+    main.append(jbox);
     main.append(h("有意思的地方（假說，之後對話會再確認）"));
     const acc = input(sess().hook.reader_accepts, "同行已經承認的事實是什麼？例如：標註不確定的影像通常直接排除", "textarea");
     const tw = input(sess().hook.twist, "你加了什麼讓人意外的東西？例如：不排除，而是依品質與面積降權", "textarea");
@@ -221,6 +260,13 @@ const PCDraft = (() => {
     lens().scale.levels.forEach((l) => levels.append(el("li", "", `${l.id} ${l.label}${l.means ? `：${l.means}` : ""}`)));
     main.append(levels);
     main.append(row(btn("儲存，下一步", () => run("儲存", async () => {
+      const pick = D.pickJournal ?? "";
+      if (pick !== (D.data.journal ?? "")) {
+        if (sess().outline.length && !(await LoreShell.ask($("#dfMain"), ["換投稿期刊？", "章節照新期刊排，大綱要重新產生。"], [{ label: "取消", value: null }, { label: "換期刊", value: true, primary: true }]))) return null;
+        await call("/template", { template: pick || null, stay: true }, "PUT");
+        if (state.paper?.name === D.name) openPaper(D.name);
+      }
+      D.journalOpen = false;
       const v = await call("/topic", { key_value: kv.value, reader_accepts: acc.value, twist: tw.value, lens: sel.value }, "PUT");
       if (state.paper?.name === D.name && state.paper.meta) { state.paper.meta.key_value = v.key_value; renderKeyValue(); }
       D.step = 1;
@@ -273,6 +319,7 @@ const PCDraft = (() => {
       });
       main.append(t);
     }
+    pendingBlock(main);
     if (sess().conflicts.length) {
       main.append(h("記錄與論文對不上的數字"));
       const ul = el("ul", "df-list warn");
@@ -303,10 +350,7 @@ const PCDraft = (() => {
         const card = el("div", "df-card");
         card.append(row(el("span", "df-gid", t.id), el("b", "", t.caption), t.inserted ? el("span", "df-badge flag", "已放進論文") : el("span")));
         if (t.note) card.append(note(t.note));
-        const tb = el("table", "df-table");
-        const hr = el("tr"); t.columns.forEach((c) => hr.append(el("th", "", c))); tb.append(hr);
-        t.rows.forEach((r) => { const tr = el("tr"); r.forEach((c) => tr.append(el("td", "", c))); tb.append(tr); });
-        card.append(tb);
+        card.append(holeTable(t));
         if (!t.inserted) {
           const pick = el("select", "np-input df-home");
           (secs.length ? secs : ["Results"]).forEach((x) => { const o = el("option", "", `放進 ${x}`); o.value = x; pick.append(o); });
@@ -395,20 +439,24 @@ const PCDraft = (() => {
       c.prepend(el("span", "c", g.id.startsWith("v") ? "修訂" : (SEC_ZH[g.section] ?? g.section)));
       c.setAttribute("aria-pressed", String(g.id === D.group));
       if (stateOf(g.id)?.ready && g.status !== "done") c.classList.add("ready");
-      c.onclick = () => { D.group = g.id; draw(); };
+      c.onclick = () => { D.group = g.id; D.picked = null; D.pickItem = null; draw(); };
       chips.append(c);
     });
     main.append(chips);
     const g = groups.find((x) => x.id === D.group);
     const st = stateOf(g.id);
     main.append(el("p", "df-purpose", g.purpose));
+    if (g.prep === "running") main.append(note("準備選項中…"));
+    else if (g.prep === "failed") main.append(row(note("選項沒有準備好", "warn"), btn("重試", () => run("準備選項", () => call(`/group/${g.id}`, { action: "prepare" })), "ghost")));
     const log = el("div", "df-log");
     const turns = turnsOf(g.id);
     turns.forEach((t, i) => {
       const b = el("div", `df-msg ${t.who}`);
       b.append(el("div", "", t.text));
       if (t.who === "ai" && t.engine) b.append(engineTag(t.engine));
-      if (t.who === "ai" && t.options?.length && i === turns.length - 1) {
+      const it = t.who === "ai" && i === turns.length - 1 && t.about ? sess().items.find((x) => x.id === t.about) : null;
+      if (it?.candidates?.length) b.append(candidateCards(it));
+      else if (t.who === "ai" && t.options?.length && i === turns.length - 1) {
         const opts = el("div", "df-opts");
         t.options.forEach((o) => { const ob = el("button", "ghost", o); ob.disabled = !!D.busy; ob.onclick = () => send(o); opts.append(ob); });
         b.append(opts);
@@ -423,12 +471,16 @@ const PCDraft = (() => {
     } else {
       const ta = el("textarea", "np-input df-answer");
       ta.rows = 3;
-      ta.placeholder = "回答（Ctrl+Enter 送出）。不確定也可以直接說，會給你選項。";
+      ta.placeholder = "回答（Ctrl+Enter 送出）";
       ta.value = D.draftAnswer?.[g.id] ?? "";
       ta.oninput = () => ((D.draftAnswer ??= {})[g.id] = ta.value);
       ta.onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(ta.value); };
       main.append(ta);
-      main.append(row(btn("送出", () => send(ta.value)), btn("不確定，給我選項", () => send("不確定，請給我幾個選項"), "ghost")));
+      const mic = micButton(ta, g.id);
+      if (mic) ta.after(mic);
+      const last = turns.at(-1);
+      const shown = last?.who === "ai" && last.about && sess().items.find((x) => x.id === last.about)?.candidates?.length;
+      main.append(row(btn("送出", () => send(ta.value)), ...(shown ? [] : [btn("不確定，給我選項", () => send("不確定，請給我幾個選項"), "ghost")])));
     }
     const foot = row();
     if (st?.ready && g.status !== "done") foot.append(note("這一組的資訊已經足夠。", "ok"));
@@ -446,20 +498,122 @@ const PCDraft = (() => {
     text = (text ?? "").trim();
     if (!text) return;
     const gid = D.group;
+    const picked = [...(D.picked ?? [])];
+    const item = D.pickItem ?? null;
     run("思考下一個問題", async () => {
-      const v = await call("/turn", { group: gid, answer: text, model: $("#dfModel").value });
+      const v = await call("/turn", { group: gid, answer: text, picked, item, model: $("#dfModel").value });
       if (D.draftAnswer) D.draftAnswer[gid] = "";
+      D.picked = null; D.pickItem = null;
       return v;
     });
   }
 
-  function ledger(side, g, st) {
-    side.append(el("h4", "", "這一組要整理出"));
-    const sum = el("dl", "df-sum");
-    [["說明", g.summary.explain], ["動機", g.summary.motive], ["結論", g.summary.conclusion], ["讀者承認", g.summary.reader_accepts], ["轉折", g.summary.twist]].forEach(([k, v]) => {
-      sum.append(el("dt", "", k), el("dd", v ? "" : "empty", v || "還沒有"));
+  // ── 按住說話 (lore-voice, when the machine has it) ─────────
+  let voiceOk = null, vEvents = null, vCur = null;
+  function micButton(ta, gid) {
+    const b = iconButton("mic", "按住說話", () => {});
+    b.classList.add("df-mic");
+    b.hidden = true;
+    (async () => {
+      if (voiceOk == null) { try { voiceOk = !!(await api("/api/voice")).available; } catch { voiceOk = false; } }
+      b.hidden = !voiceOk;
+    })();
+    const text = (e) => { try { return JSON.parse(e.data).text ?? ""; } catch { return ""; } };
+    const put = (t) => { if (!vCur) return; vCur.ta.value = (vCur.base + t).trimStart(); (D.draftAnswer ??= {})[vCur.gid] = vCur.ta.value; };
+    const start = async (e) => {
+      e.preventDefault();
+      if (!vEvents) {
+        vEvents = new EventSource("/api/voice/events");
+        vEvents.addEventListener("partial", (x) => put(text(x)));
+        vEvents.addEventListener("final", (x) => { put(text(x)); vCur?.ta.focus(); });
+        vEvents.addEventListener("error", (x) => { let v = {}; try { v = JSON.parse(x.data ?? "{}"); } catch {} if (v.kind) { voiceOk = false; LoreShell.toast(v.message ?? "語音無法使用", { err: true }); } });
+      }
+      vCur = { ta, gid, base: ta.value ? `${ta.value.trimEnd()} ` : "" };
+      b.classList.add("on");
+      try { await api("/api/voice/listen", { continuous: false, language: "zh-TW" }); } catch (err) { b.classList.remove("on"); LoreShell.toast(err.message, { err: true }); }
+    };
+    const stop = () => { if (!b.classList.contains("on")) return; b.classList.remove("on"); api("/api/voice/listen/stop", {}).catch(() => {}); };
+    b.onpointerdown = start;
+    b.onpointerup = stop;
+    b.onpointerleave = stop;
+    return b;
+  }
+
+  // ── 預想選項 ──────────────────────────────────────────
+  // Possible answers prepared from the record before the interview: a click
+  // puts one in the answer box (click two to combine, edit freely); 1/2/3 on
+  // the keyboard; 「都不是」 = your own words.
+  const evidenceText = (id) => {
+    const x = sess().experiments.find((e) => e.id === id);
+    if (x) return `${x.title}：${x.change} ${x.metrics} ${x.result}`.trim();
+    const th = sess().thoughts.find((e) => e.id === id);
+    if (th) return th.text;
+    const st = sess().timeline.find((e) => `T${e.step}` === id);
+    if (st) return `${st.what} → ${st.observed}`;
+    const tb = sess().tables.find((e) => e.id === id);
+    if (tb) return tb.caption;
+    const pd = (sess().pending ?? []).find((e) => e.id === id);
+    return pd ? pd.what : id;
+  };
+  function candidateCards(it, withNone = true) {
+    const box = el("div", "df-cands");
+    D.picked ??= [];
+    it.candidates.forEach((c, k) => {
+      const b = el("button", `df-cand${D.picked.includes(c.id) ? " on" : ""}`);
+      b.disabled = !!D.busy;
+      b.append(el("span", "n", String(k + 1)), el("span", "t", c.text));
+      if (D.pickItem && D.pickItem !== it.id) b.classList.remove("on");
+      if (c.evidence?.length) {
+        const ev = el("span", "ev");
+        c.evidence.forEach((e) => { const x = el("span", "df-ev", e); x.title = evidenceText(e); ev.append(x); });
+        b.append(ev);
+      }
+      b.onclick = () => pickCandidate(it, c);
+      box.append(b);
     });
-    side.append(sum);
+    if (!withNone) return box;
+    const none = el("button", "ghost df-none", "都不是，我自己說");
+    none.disabled = !!D.busy;
+    none.onclick = () => { D.picked = []; D.pickItem = null; const ta = $(".df-answer"); if (ta) { ta.value = ""; ta.focus(); } box.querySelectorAll(".df-cand").forEach((x) => x.classList.remove("on")); };
+    box.append(none);
+    return box;
+  }
+  function pickCandidate(it, c) {
+    const ta = $(".df-answer");
+    if (!ta) return;
+    // candidates of one item per answer
+    if (D.pickItem && D.pickItem !== it.id) D.picked = [];
+    D.pickItem = it.id;
+    D.picked ??= [];
+    if (D.picked.includes(c.id)) return;
+    D.picked.push(c.id);
+    ta.value = ta.value.trim() ? `${ta.value.trim()}；${c.text}` : c.text;
+    ((D.draftAnswer ??= {})[D.group] = ta.value);
+    ta.focus();
+    draw();
+    const again = $(".df-answer"); if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+  }
+  // 1 / 2 / 3 pick a candidate when the answer box is not being typed in
+  document.addEventListener("keydown", (e) => {
+    if (!D || !$("#dlgDraft")?.open || STEPS[D.step]?.[0] !== "interview") return;
+    if (!/^[1-3]$/.test(e.key) || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (document.activeElement?.matches("textarea, input, select")) return;
+    const last = turnsOf(D.group).at(-1);
+    const it = last?.about && sess().items.find((x) => x.id === last.about);
+    const c = it?.candidates?.[+e.key - 1];
+    if (c) { e.preventDefault(); pickCandidate(it, c); }
+  });
+
+  function ledger(side, g, st) {
+    // 待補項目 has no summary of its own: each result's four parts are on its item
+    if (g.id !== "wp") {
+      side.append(el("h4", "", "這一組要整理出"));
+      const sum = el("dl", "df-sum");
+      [["說明", g.summary.explain], ["動機", g.summary.motive], ["結論", g.summary.conclusion], ["讀者承認", g.summary.reader_accepts], ["轉折", g.summary.twist]].forEach(([k, v]) => {
+        sum.append(el("dt", "", k), el("dd", v ? "" : "empty", v || "還沒有"));
+      });
+      side.append(sum);
+    }
     side.append(el("h4", "", "狀態表"));
     const ul = el("ul", "df-ledger");
     sess().items.filter((i) => i.group === g.id).forEach((it) => {
@@ -476,6 +630,18 @@ const PCDraft = (() => {
       if (s?.preferred != null) tags.append(el("span", "df-badge soft", `可再到 ${levelName(s.preferred)}`));
       li.append(tags);
       if (it.stance) li.append(el("div", "df-stance", it.stance));
+      const lastAbout = turnsOf(g.id).at(-1)?.about;
+      if (it.candidates?.length && lastAbout !== it.id && turnsOf(g.id).length) {
+        const d = el("details", "df-lcands");
+        d.append(el("summary", "", `選項 ${it.candidates.length}`), candidateCards(it, false));
+        li.append(d);
+      }
+      const pi = it.pending && (sess().pending ?? []).find((x) => x.id === it.pending);
+      if (pi) {
+        const dl = el("dl", "df-sum");
+        [["是什麼", pi.note.what], ["為什麼必要", pi.note.why], ["預期", pi.note.expect], ["相反時", pi.note.if_not]].forEach(([k, v]) => dl.append(el("dt", "", k), el("dd", v ? "" : "empty", v || "—")));
+        li.append(dl);
+      }
       if (it.refs?.length) { const rr = el("div", "df-refs"); it.refs.forEach((k) => rr.append(refChip(k))); li.append(rr); }
       ul.append(li);
     });
@@ -514,7 +680,8 @@ const PCDraft = (() => {
   // ── 5 校正 ───────────────────────────────────────────
   function review(main) {
     main.append(h("章節順序與敘事"));
-    main.append(row(btn(sess().review ? "重新校正" : "校正", () => run("校正", () => call("/review"))), stepTag("review"), nextBtn()));
+    const toOutline = D.data.journal ? btn("下一步", () => run("儲存", async () => { const v = await call("/template", { later: true }, "PUT"); D.step = STEPS.findIndex(([k]) => k === "outline"); return v; }), "ghost") : nextBtn();
+    main.append(row(btn(sess().review ? "重新校正" : "校正", () => run("校正", () => call("/review"))), stepTag("review"), toOutline));
     const r = sess().review;
     if (!r) return;
     const title = (id) => sess().groups.find((g) => g.id === id)?.title ?? id;
@@ -558,7 +725,7 @@ const PCDraft = (() => {
     }));
     apply.disabled = !!D.busy || picked === current;
     const later = btn("稍後", () => run("儲存", async () => { const v = await call("/template", { later: true }, "PUT"); D.step = STEPS.findIndex(([k]) => k === "outline"); return v; }), "ghost");
-    main.append(h("版型"), PCNew.templateList({ tpls: D.tpls, selected: current, suggested: choice.suggested, onPick: (v) => { picked = v; apply.disabled = !!D.busy || picked === current; } }), row(later, apply));
+    main.append(h("版型"), PCNew.templateList({ tpls: D.tpls, selected: current, suggested: choice.suggested, paper: D.name, onPick: (v) => { picked = v; apply.disabled = !!D.busy || picked === current; } }), row(later, apply));
   }
 
   // ── 6 大綱 ───────────────────────────────────────────
@@ -588,6 +755,7 @@ const PCDraft = (() => {
           en.oninput = () => (p.en = en.value.split("\n").map((x) => x.trim()).filter(Boolean));
           card.append(zh, en);
           if (p.sources.length) card.append(note(`來源：${p.sources.join("、")}`));
+          if (p.pending?.length) card.append(pendChips(p.pending));
           if (p.cites?.length) { const rr = el("div", "df-refs"); p.cites.forEach((k) => rr.append(refChip(k))); card.append(rr); }
           box.append(card);
         });
@@ -603,22 +771,35 @@ const PCDraft = (() => {
 
   // ── 7 草稿 ───────────────────────────────────────────
   function drafting(main) {
-    main.append(hq("草稿", "逐章生成，每段用你的句型庫寫，並照大綱的組成、你的風格筆記與對照表（登記的巨集、\\ref 標籤、縮寫）。每段寫完會跑一次對照表檢查：手打的「Table 1」或不存在的標籤會自動重寫一次，其他問題列在段落下方。建議最後才生成 Introduction 與 Conclusion。引擎用右側「寫作」選的那個。"));
+    main.append(hq("草稿", "逐章生成，每段用你的句型庫寫，並照大綱的組成、你的風格筆記與對照表（登記的巨集、\\ref 標籤、縮寫）。每段寫完會跑一次對照表檢查：手打的「Table 1」或不存在的標籤會自動重寫一次，其他問題列在段落下方。建議最後才生成 Introduction 與 Conclusion，Abstract 最後。引擎用右側「寫作」選的那個。放進論文：寫進論文的章節檔（Methods 對到 Materials and Methods），摘要寫進標題區；原來的文字先存在 draft/archive/，已插入的表格與圖留著。"));
     if (!sess().outline.length) { main.append(note("先完成大綱。")); return; }
-    const order = ["Methods", "Results", "Discussion", "Introduction", "Conclusion"];
+    const order = ["Methods", "Results", "Discussion", "Introduction", "Conclusion", "Abstract"];
+    const drafts = sess().drafts;
+    const waiting = drafts.filter((d) => !d.placed);
+    const all = row(btn(waiting.length ? `全部放進論文（${waiting.length}）` : "已全部放進論文", () => putIn(null)));
+    all.firstChild.disabled = !!D.busy || !waiting.length;
+    if (drafts.length) main.append(all);
     order.forEach((sec) => {
-      if (!sess().outline.some((o) => o.section === sec)) return;
+      if (sec === "Abstract" ? !drafts.some((x) => x.section !== "Abstract") : !sess().outline.some((o) => o.section === sec)) return;
       const box = el("div", "df-sec");
-      const d = sess().drafts.find((x) => x.section === sec);
-      const r = row(el("h4", "", `${sec}　${SEC_ZH[sec]}`), btn(d ? "重新生成" : "生成", () => run(`生成 ${sec}`, () => call("/compose", { section: sec, engine: chosenEngine() })), "ghost"));
+      const d = drafts.find((x) => x.section === sec);
+      const r = row(el("h4", "", `${sec}　${SEC_ZH[sec]}`), btn(d ? "重新生成" : "生成", () => run(`生成 ${sec}`, () => call("/compose", { section: sec, engine: chosenEngine() })), d ? "ghost" : "primary small"));
       if (d?.engine) r.append(engineTag(d.engine));
-      if (d) r.append(btn("複製", () => { navigator.clipboard.writeText(d.paras.map((p) => p.text).join("\n\n")); LoreShell.toast("已複製"); }, "ghost"));
+      if (d) r.append(d.placed ? el("span", "df-badge flag", "已放進論文") : btn("放進論文", () => putIn(sec), "ghost"));
+      if (d && sec === "Abstract") r.append(el("span", "df-note", `${d.paras.map((p) => p.text).join(" ").split(/\s+/).filter(Boolean).length} 字`));
       box.append(r);
       if (d?.new_symbols?.length) box.append(newSymbols(d.new_symbols));
+      // the same notice on many paragraphs (an abbreviation never spelled out) shows once, above them
+      const key = (x) => x.replace(/\d+ 次/g, "N 次");
+      const seen = {};
+      (d?.paras ?? []).forEach((p) => new Set(p.problems.map(key)).forEach((k) => (seen[k] = (seen[k] ?? 0) + 1)));
+      const common = Object.keys(seen).filter((k) => seen[k] > 1);
+      if (common.length) box.append(note(common.map((k) => k.replace(/在正文用了 N 次，/, "")).join("；"), "warn"));
       d?.paras.forEach((p) => {
         const card = el("div", "df-card");
-        card.append(el("span", "df-gid", p.para), el("p", "df-draft", p.text));
-        if (p.problems.length) card.append(note(p.problems.join("；"), "warn"));
+        card.append(row(el("span", "df-gid", p.para), ...(p.pending?.length ? [pendChips(p.pending)] : [])), el("p", "df-draft", p.text));
+        const own = p.problems.filter((x) => !common.includes(key(x)));
+        if (own.length) card.append(note(own.join("；"), "warn"));
         box.append(card);
       });
       main.append(box);
@@ -626,11 +807,22 @@ const PCDraft = (() => {
     main.append(row(nextBtn("下一步：審稿")));
   }
 
+  /** 放進論文: one drafted section (or all) into the paper; the editor reloads. */
+  function putIn(sec) {
+    run("放進論文", async () => {
+      const v = await call("/insert", sec ? { section: sec } : {});
+      if (state.paper?.name === D.name) openPaper(D.name);
+      LoreShell.toast(sec ? `${sec} 已放進論文` : "已放進論文");
+      return v;
+    });
+  }
+
   // ── 8 審稿 ───────────────────────────────────────────
-  const KIND_ZH = { citation: "引用", contradiction: "矛盾", overclaim: "宣稱過度", "missing-number": "缺數字", impossible: "數字不可能", generic: "空泛", repeat: "重複", "buried-origin": "發想埋太晚", "missing-why": "缺理由" };
+  const KIND_ZH = { venue: "期刊要求", citation: "引用", contradiction: "矛盾", overclaim: "宣稱過度", "missing-number": "缺數字", impossible: "數字不可能", generic: "空泛", repeat: "重複", "buried-origin": "發想埋太晚", "missing-why": "缺理由" };
   function audit(main) {
     main.append(hq("審稿檢查", "檢查矛盾、宣稱強度、缺數字、空泛句、重複與埋掉的發想。需要你補充的，可以回到對話追問。沒有 Claude 時由本機模型逐章審。"));
     main.append(row(btn(sess().audit.length ? "重新審稿" : "審稿", () => run("審稿中", () => call("/audit"))), stepTag("audit")));
+    pendingList(main);
     sess().audit.forEach((f) => {
       const card = el("div", `df-card ${f.resolved ? "no" : ""}`);
       card.append(row(el("span", "df-badge warn", KIND_ZH[f.kind] ?? f.kind), el("span", "df-gid", f.para)));
@@ -656,6 +848,182 @@ const PCDraft = (() => {
     return box;
   }
 
+  // ── 待補 ─────────────────────────────────────────────
+  // Results still waiting for data: marked in the record step (an experiment,
+  // table cells / rows / columns), explained in the 待補項目 group, written in
+  // the expected direction with marks, listed first in 審稿, filled in by 修訂.
+  const pendOf = (id) => (sess().pending ?? []).find((x) => x.id === id);
+  const reportOf = (id) => (D.data.pending_report ?? []).find((x) => x.id === id);
+  /** A sentence of LaTeX as plain words: marks as 「…」, commands dropped, their text kept. */
+  function plainTex(t) {
+    return (t ?? "")
+      .replace(/\\pendingdep\s*\{[^}]*\}/g, "")
+      .replace(/\\pending(?:para)?\s*\{[^}]*\}\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g, "［待補：$1］")
+      .replace(/\\pendingcell\s*\{[^}]*\}\s*\{[^}]*\}/g, "［待補］")
+      .replace(/\\(?:eq)?ref\s*\{([^}]*)\}/g, "$1")
+      .replace(/\\cite[a-z]*\s*(\[[^\]]*\])?\{[^}]*\}/g, "")
+      .replace(/\\[a-zA-Z]+\*?\s*/g, "").replace(/[{}]/g, "").replace(/~/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function pendChips(ids) {
+    const r = el("span", "df-pchips");
+    ids.forEach((id) => { const c = el("span", "df-pchip", id); c.title = pendOf(id)?.what ?? ""; r.append(c); });
+    return r;
+  }
+  function savePending(items, tables) {
+    return run("儲存待補", () => call("/pending", { items, ...(tables ? { tables } : {}) }, "PUT"));
+  }
+  function pendingBlock(main) {
+    const items = (sess().pending ?? []).map((x) => ({ ...x, cells: [...(x.cells ?? [])], note: { ...x.note } }));
+    main.append(hq("待補", "還在等資料、但論文一定要有的結果。對話會問你為什麼需要、預期什麼；草稿照預期方向寫並標出來；結果出來後在這裡「填結果」。"));
+    items.forEach((it) => main.append(pendingCard(it, false, items)));
+    if (items.some((x) => x.status === "waiting")) main.append(row(btn("儲存待補", () => savePending(items), "ghost")));
+    const add = input("", "還在等的結果（例如：外部醫院的 Dice）");
+    add.onkeydown = (e) => { if (e.key === "Enter" && add.value.trim()) savePending([...items, { id: "", what: add.value.trim() }]); };
+    main.append(row(add, btn("＋ 待補", () => { if (add.value.trim()) savePending([...items, { id: "", what: add.value.trim() }]); }, "ghost")));
+  }
+  /** One pending item: its fields (record step) or only its fill-in (修訂). */
+  function pendingCard(it, fillOnly, all) {
+    const card = el("div", `df-card df-pend ${it.status}`);
+    const rep = reportOf(it.id);
+    const where = rep ? `${rep.places.length} 處・依賴 ${rep.dependents.length} 句` : "";
+    card.append(row(el("span", "df-gid", it.id), ...(fillOnly || it.status !== "waiting" ? [el("b", "", it.what)] : []), el("span", `df-badge ${it.status === "waiting" ? "warn" : "flag"}`, it.status === "waiting" ? "等資料" : `已回填${it.direction ? `・${DIR_ZH[it.direction]}` : ""}`), el("span", "df-note", where)));
+    if (!fillOnly && it.status === "waiting") {
+      const f = (k, ph) => { const i = input(it[k], ph); i.oninput = () => (it[k] = i.value); const l = el("label", "df-field"); l.append(el("span", "", ph), i); return l; };
+      const exp = el("select", "np-input df-home");
+      exp.append(el("option", "", "實驗：—"));
+      sess().experiments.forEach((e) => { const o = el("option", "", `${e.id} ${e.title}`); o.value = e.id; exp.append(o); });
+      exp.value = it.experiment ?? ""; if (!it.experiment) exp.selectedIndex = 0;
+      exp.onchange = () => (it.experiment = exp.selectedIndex ? exp.value : null);
+      const ex = el("label", "df-field"); ex.append(el("span", "", "實驗"), exp);
+      exp.options[0].textContent = "—";
+      const grid = el("div", "df-pfields");
+      grid.append(f("what", "量什麼"), f("waits_for", "等什麼資料"), f("expected", "預期方向"), f("due", "預計何時"), ex);
+      card.append(grid);
+      const tb = it.table && sess().tables.find((x) => x.id === it.table);
+      const hole = (hh) => hh.row == null ? `${tb.columns[hh.col] ?? "?"} 欄` : hh.col == null ? `${tb.rows[hh.row]?.[0] ?? "?"} 列` : `${tb.rows[hh.row]?.[0] ?? "?"} / ${tb.columns[hh.col] ?? "?"}`;
+      const foot = row();
+      if (tb && it.cells.length) foot.append(el("span", "df-note", `${it.table}：${it.cells.map(hole).join("、")}`));
+      foot.append(el("span", "df-grow"), iconButton("trash", "刪除", () => savePending(all.filter((x) => x !== it))));
+      card.append(foot);
+    }
+    const left = rep && (rep.places.length || rep.dependents.length);
+    if (it.result) card.append(note(`結果：${it.result}`));
+    if (it.status === "waiting" || left) card.append(fillForm(it, rep));
+    return card;
+  }
+  function fillForm(it, rep) {
+    const box = el("details", "df-fill");
+    box.append(el("summary", "", "填結果"));
+    // what goes into the paper, as typed: each number mark and each table cell
+    const named = [...new Set((rep?.places ?? []).filter((p) => p.kind === "number" || p.kind === "cell").map((p) => p.arg).filter(Boolean))];
+    const vals = { ...(it.values ?? {}) };
+    const grid = el("div", "df-fill-cells");
+    // each mark gets its own value; without named marks, one result
+    const res = input(it.result ?? "", "0.74");
+    if (!named.length) grid.append(el("label", "", "結果"), res);
+    named.forEach((c) => { const i = input(it.values?.[c] ?? ""); i.oninput = () => (vals[c] = i.value); grid.append(el("label", "", c), i); });
+    box.append(grid);
+    let direction = it.direction ?? null;
+    const dirs = el("div", "df-seg");
+    const go1 = btn("回填", () => go(direction));
+    const paint = () => { dirs.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.v === direction))); go1.disabled = !!D.busy || !direction; };
+    Object.entries(DIR_ZH).forEach(([v, label]) => { const x = el("button", "ghost", label); x.dataset.v = v; x.onclick = () => { direction = v; paint(); }; dirs.append(x); });
+    paint();
+    box.append(row(dirs, go1));
+    const go = (direction) => run("回填", async () => {
+      // with named marks each takes its own value; a blank one keeps its mark (never another field's number)
+      const result = named.length ? "" : res.value;
+      const v = await call(`/pending/${encodeURIComponent(it.id)}/fill`, { result, values: vals, direction });
+      const r = v.session.revisions.find((x) => x.pending === it.id);
+      if (direction === "matches") D.step = STEPS.findIndex(([k]) => k === "revise");
+      else if (r) { D.group = r.group; D.step = STEPS.findIndex(([k]) => k === "interview"); }
+      return v;
+    });
+    return box;
+  }
+  /** 待補清單: each item, where it is and what depends on it. */
+  function pendingList(main) {
+    const rep = (D.data.pending_report ?? []).filter((e) => e.places.length || e.dependents.length || e.status === "waiting");
+    if (!rep.length) return;
+    main.append(h(`待補清單（${rep.length}）`));
+    rep.forEach((e) => {
+      const card = el("div", "df-card df-pend");
+      card.append(row(el("span", "df-gid", e.id), el("b", "", e.what || "—"), e.unknown ? el("span", "df-badge warn", "對話沒有這一項") : el("span", "df-badge", e.status === "waiting" ? "等資料" : "已回填")));
+      const ul = el("ul", "df-plist");
+      const at = (p) => p.file.startsWith("draft:") ? `草稿 ${p.file.slice(6)}` : `${p.section || p.file}${p.para != null ? ` ¶${p.para + 1}` : ""}`;
+      // one line per paragraph: the cells of a table together, a sentence once
+      const lines = [];
+      [...e.places.map((p) => [p, false]), ...e.dependents.map((p) => [p, true])].forEach(([p, dep]) => {
+        const key = `${at(p)}|${p.kind === "cell" ? "cell" : plainTex(p.sentence)}`;
+        const was = lines.find((x) => x.key === key);
+        if (was) { if (p.kind === "cell") was.cells.push(p.arg); return; }
+        lines.push({ key, where: at(p), dep: dep && !e.places.some((q) => at(q) === at(p) && q.sentence === p.sentence), cells: p.kind === "cell" ? [p.arg] : [], text: plainTex(p.sentence) });
+      });
+      lines.forEach((x) => { const li = el("li", x.dep ? "dep" : ""); li.append(el("span", `df-badge${x.dep ? " soft" : ""}`, x.where), el("span", "", x.cells.length ? `表格：${x.cells.join("、")}` : x.text)); ul.append(li); });
+      if (ul.childElementCount) card.append(ul);
+      main.append(card);
+    });
+  }
+  /** A results table; with 待補 on, a click marks a cell, a header a column, a row's label the row. */
+  function holeTable(t) {
+    const items = (sess().pending ?? []).filter((x) => x.status === "waiting");
+    const wrap = el("div", "df-holes");
+    const pick = el("select", "np-input df-home");
+    pick.append(el("option", "", "標待補…"));
+    items.forEach((x) => { const o = el("option", "", `${x.id} ${x.what}`); o.value = x.id; pick.append(o); });
+    pick.value = D.holeItem?.[t.id] ?? ""; if (!D.holeItem?.[t.id]) pick.selectedIndex = 0;
+    pick.onchange = () => { (D.holeItem ??= {})[t.id] = pick.selectedIndex ? pick.value : null; draw(); };
+    const cur = D.holeItem?.[t.id];
+    const itemAt = (r, c) => items.find((x) => x.table === t.id && x.cells.some((hh) => (hh.row == null || hh.row === r) && (hh.col == null || hh.col === c) && !(hh.col == null && c === 0)));
+    const toggle = (hole) => {
+      const all = (sess().pending ?? []).map((x) => ({ ...x, cells: [...(x.cells ?? [])] }));
+      const it = all.find((x) => x.id === cur); if (!it) return;
+      if (it.table !== t.id) { it.table = t.id; it.cells = []; }
+      const k = it.cells.findIndex((hh) => hh.row === hole.row && hh.col === hole.col);
+      if (k >= 0) it.cells.splice(k, 1); else it.cells.push(hole);
+      savePending(all);
+    };
+    const tb = el("table", `df-table${cur ? " picking" : ""}`);
+    const hr = el("tr");
+    t.columns.forEach((c, ci) => { const th = el("th", "", c); if (cur && ci > 0) { th.onclick = () => toggle({ row: null, col: ci }); th.title = "整欄待補"; } hr.append(th); });
+    tb.append(hr);
+    t.rows.forEach((r, ri) => {
+      const tr = el("tr");
+      t.columns.forEach((_, ci) => {
+        const x = itemAt(ri, ci);
+        const td = el("td", x ? "hole" : "", x ? x.id : (r[ci] ?? ""));
+        if (cur) { td.onclick = () => toggle(ci === 0 ? { row: ri, col: null } : { row: ri, col: ci }); td.title = ci === 0 ? "整列待補" : "這格待補"; }
+        tr.append(td);
+      });
+      tb.append(tr);
+    });
+    wrap.append(tb);
+    if (items.length && !t.inserted) {
+      const nr = input("", "新的一列（等資料）");
+      const addRow = () => {
+        if (!cur || !nr.value.trim()) return;
+        const tables = sess().tables.map((x) => x.id === t.id ? { ...x, rows: [...x.rows, [nr.value.trim(), ...x.columns.slice(1).map(() => "")]] } : x);
+        const all = (sess().pending ?? []).map((x) => ({ ...x, cells: [...(x.cells ?? [])] }));
+        const it = all.find((x) => x.id === cur);
+        if (it.table !== t.id) { it.table = t.id; it.cells = []; }
+        it.cells.push({ row: t.rows.length, col: null });
+        savePending(all, tables);
+      };
+      const nc = input("", "新的一欄（等資料）");
+      const addCol = () => {
+        if (!cur || !nc.value.trim()) return;
+        const tables = sess().tables.map((x) => x.id === t.id ? { ...x, columns: [...x.columns, nc.value.trim()], rows: x.rows.map((r) => [...r, ""]) } : x);
+        const all = (sess().pending ?? []).map((x) => ({ ...x, cells: [...(x.cells ?? [])] }));
+        const it = all.find((x) => x.id === cur);
+        if (it.table !== t.id) { it.table = t.id; it.cells = []; }
+        it.cells.push({ row: null, col: t.columns.length });
+        savePending(all, tables);
+      };
+      wrap.prepend(row(pick, ...(cur ? [nr, btn("＋ 列", addRow, "ghost"), nc, btn("＋ 欄", addCol, "ghost")] : [])));
+    }
+    return wrap;
+  }
+
   // ── 9 修訂 ───────────────────────────────────────────
   // Something has to go into the finished paper: new data after a review, a
   // figure, more citations. Each request is discussed in its own group, then
@@ -667,6 +1035,11 @@ const PCDraft = (() => {
   }
 
   function revise(main) {
+    const waiting = (sess().pending ?? []).filter((x) => x.status === "waiting" || (reportOf(x.id)?.places.length ?? 0) + (reportOf(x.id)?.dependents.length ?? 0) > 0);
+    if (waiting.length) {
+      main.append(h(`回填（${waiting.length}）`));
+      waiting.forEach((it) => main.append(pendingCard(it, true)));
+    }
     main.append(hq("新增修訂", "老師或審稿人要你補什麼？補了什麼實驗、數據、圖、文獻？寫下來，先討論放在哪裡、會影響哪些地方，再產生具體修改。新的實驗記錄請在第 2 步上傳並重新整理；新文獻先在文獻視窗加入文獻庫。"));
     const req = input(D.revDraft ?? "", "例：審稿人要求外部驗證。我補了另一家醫院 120 張影格，Dice 0.71；想放在 Results 主表之後，並在 Discussion 提一句。", "textarea");
     req.rows = 4;
@@ -729,7 +1102,8 @@ const PCDraft = (() => {
         }
         r.plan.changes.forEach((c) => {
           const cc = el("div", `df-change ${c.applied === true ? "yes" : c.applied === false ? "no" : ""}`);
-          cc.append(row(el("span", "df-gid", c.id), el("span", "df-badge", ACT_ZH[c.action] ?? c.action), el("span", "df-plan", `${c.file}${c.index != null ? ` ¶${c.index}` : ""}`)));
+          cc.append(row(el("span", "df-gid", c.id), el("span", "df-badge", ACT_ZH[c.action] ?? c.action), el("span", "df-plan", `${c.file}${c.index != null ? ` ¶${c.index}` : ""}`), ...(c.rewrite ? [el("span", "df-badge warn", "要改寫")] : [])));
+          if (c.rewrite) cc.classList.add("rewrite");
           if (c.before) { const d = el("details"); d.append(el("summary", "", "原段落"), el("p", "df-old", c.before)); cc.append(d); }
           cc.append(el("p", "df-draft", c.text));
           if (c.reason) cc.append(note(c.reason));

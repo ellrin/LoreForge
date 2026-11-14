@@ -93,6 +93,61 @@ pub fn default_dest(docx: &Path) -> PathBuf {
     docx.with_file_name(format!("{stem} (LaTeX)"))
 }
 
+/// A free folder for another conversion: `<name> (LaTeX)`, else `<name> (LaTeX) 2`, 3…
+/// (missing or empty; an earlier conversion is never written over).
+pub fn free_dest(docx: &Path) -> PathBuf {
+    let base = default_dest(docx);
+    let name = base.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let empty = |d: &Path| !d.exists() || std::fs::read_dir(d).map(|mut x| x.next().is_none()).unwrap_or(false);
+    (1..).map(|k| if k == 1 { base.clone() } else { base.with_file_name(format!("{name} {k}")) }).find(|d| empty(d)).expect("a free name")
+}
+
+/// The .docx a folder was converted from (`.papercomposer/word-source.toml`), as it was then.
+/// Only its file name: the folder may be copied or kept in git, so no machine path
+/// (`opened.toml` holds the full path).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Source {
+    pub name: String,
+    pub size: u64,
+    /// Modified, milliseconds since 1970.
+    pub mtime: u64,
+}
+
+pub const SOURCE_FILE: &str = "word-source.toml";
+
+fn stat(p: &Path) -> Option<(u64, u64)> {
+    let m = std::fs::metadata(p).ok()?;
+    let t = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as u64;
+    Some((m.len(), t))
+}
+
+/// Remember which .docx `dir` came from (with `reference.docx`, its bytes then).
+pub fn record_source(docx: &Path, dir: &Path) -> Result<(), String> {
+    let (size, mtime) = stat(docx).ok_or_else(|| format!("讀不到 {}", docx.display()))?;
+    let name = docx.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let text = toml::to_string(&Source { name, size, mtime }).map_err(|e| e.to_string())?;
+    std::fs::write(paper::app_dir(dir).join(SOURCE_FILE), text).map_err(|e| e.to_string())
+}
+
+pub fn read_source(dir: &Path) -> Option<Source> {
+    toml::from_str(&std::fs::read_to_string(paper::app_dir(dir).join(SOURCE_FILE)).ok()?).ok()
+}
+
+/// The .docx changed since `dir` was converted from it: size or time differ
+/// from the record and the bytes differ from `reference.docx` (a copy or a
+/// sync that only touched the time is no change). Unknown → changed.
+pub fn source_changed(docx: &Path, dir: &Path) -> bool {
+    if let (Some(r), Some((size, mtime))) = (read_source(dir), stat(docx)) {
+        if r.size == size && r.mtime == mtime {
+            return false;
+        }
+    }
+    match (std::fs::read(docx), std::fs::read(paper::app_dir(dir).join("reference.docx"))) {
+        (Ok(a), Ok(b)) => a != b,
+        _ => true,
+    }
+}
+
 /// Convert `docx` into a new paper folder `dest` (missing or empty).
 pub async fn convert(docx: &Path, dest: &Path, people: &[Author]) -> Result<Converted, String> {
     if dest.exists() && std::fs::read_dir(dest).map(|mut d| d.next().is_some()).unwrap_or(true) {
@@ -359,6 +414,8 @@ mod tests {
         let c = convert(&docx, &dest, &people).await.unwrap();
         assert_eq!(std::fs::read(&docx).unwrap(), bytes, "the .docx is never written");
         assert!(dest.join(".papercomposer/reference.docx").is_file());
+        assert!(!source_changed(&docx, &dest), "reference.docx = the .docx");
+        assert_eq!(free_dest(&docx), root.join("Widgets (LaTeX) 2"));
         assert_eq!((c.sections, c.figures, c.equations, c.references), (3, 1, 1, 3), "{c:?}");
 
         let main = std::fs::read_to_string(dest.join("main.tex")).unwrap();

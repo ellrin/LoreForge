@@ -255,6 +255,24 @@ function refreshSection(si) {
   markCurrent();
   renderSide();
   renderStatus();
+  updatePendingChip();
+}
+
+// The Key value check under the bar, after a change (advice only; a rewrite clicked is saved).
+function kvAdviceBar() {
+  const bar = $("#keyValue");
+  let box = $("#kvAdvice");
+  if (!box) { box = el("div", "kv-advice"); box.id = "kvAdvice"; box.hidden = true; bar.after(box); }
+  const name = state.paper?.name;
+  PCNew.kvAdvice(state.paper?.meta?.key_value ?? "", box, async (t) => {
+    if (state.paper?.name !== name) return;
+    try {
+      state.paper.meta = await api(`/api/papers/${encodeURIComponent(name)}/meta`, { key_value: t }, "PUT");
+      state.soft = {};
+      refreshGit();
+    } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
+    renderKeyValue();
+  }, () => (state.paper?.name === name ? state.paper?.meta?.key_value ?? "" : ""));
 }
 
 // The paper's key value over the page: what every paragraph should serve.
@@ -262,6 +280,9 @@ function refreshSection(si) {
 function renderKeyValue() {
   const bar = $("#keyValue");
   bar.innerHTML = "";
+  const adv = $("#kvAdvice");
+  if (adv && (!state.paper || adv.paper !== state.paper.name)) { adv.replaceChildren(); adv.hidden = true; }
+  if (adv) adv.paper = state.paper?.name;
   // a book (寫書) has no key value
   bar.hidden = !state.paper || state.paper.meta?.kind === "book";
   if (bar.hidden) return;
@@ -281,6 +302,7 @@ function renderKeyValue() {
         state.soft = {};
         LoreShell.toast("已更新 Key value");
         refreshGit();
+        kvAdviceBar();
       } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
       renderKeyValue();
     };
@@ -292,6 +314,45 @@ function renderKeyValue() {
     input.focus();
   };
   bar.append(v);
+}
+
+// ── 待補 on the page ──────────────────────────────────
+// How many pending results the paper marks (\pending…{P1}); a click goes to
+// the next paragraph with a mark (the abstract counts but is not a paragraph).
+const PENDING_RE = /\\pending(?:cell|para|dep)?\s*\{\s*([A-Za-z][\w-]*)\s*\}/g;
+function pendingPlaces() {
+  const ids = new Set(), at = [];
+  [...(state.paper?.front ?? "").matchAll(PENDING_RE)].forEach((m) => ids.add(m[1]));
+  sections().forEach((sec, si) => sec.paragraphs.forEach((t, pi) => {
+    const found = [...PCTex.stripComments(t).matchAll(PENDING_RE)].map((m) => m[1]);
+    found.forEach((id) => ids.add(id));
+    if (found.length) at.push([si, pi, [...new Set(found)]]);
+  }));
+  return { ids: [...ids].sort(), at };
+}
+function pendingChip() {
+  const b = el("button", "pend");
+  b.id = "pendChip";
+  updatePendingChip(b);
+  b.onclick = () => {
+    const { at } = pendingPlaces();
+    if (!at.length) return;
+    const k = (state.pendingAt = ((state.pendingAt ?? -1) + 1) % at.length);
+    const [si, pi] = at[k];
+    select(si, pi);
+    const p = paraEl(si, pi);
+    PCLazy.jump(p);
+    p?.classList.add("flash-pending");
+    setTimeout(() => p?.classList.remove("flash-pending"), 1200);
+  };
+  return b;
+}
+function updatePendingChip(b = $("#pendChip")) {
+  if (!b) return;
+  const { ids, at } = pendingPlaces();
+  b.hidden = !ids.length;
+  b.textContent = `待補 ${ids.length}`;
+  b.title = `${ids.join("、")}（${at.length} 段）`;
 }
 
 // ── Navigator ──────────────────────────────────────────
@@ -994,6 +1055,9 @@ async function compose() {
     before: list[state.cur.p] ?? null,
     after: list[state.cur.p + 1] ?? null,
     key_value: state.paper?.meta?.key_value || null,
+    // where the new paragraph goes: picks the guide's sentence structures (style/patterns.toml)
+    index: list.length ? state.cur.p + 1 : 0,
+    count: list.length + 1,
   };
   const btn = $("#generate");
   btn.classList.add("waiting");
@@ -1084,6 +1148,7 @@ function renderStatus() {
   bar.append(el("span", "accent", sec ? `${pad(state.cur.s + 1)} / ${sec.title}` : "—"), el("span", "", `${paras} 段`));
   if (state.paper) bar.lastChild.append(" · ", PCWords.button()); else PCWords.close();
   window.PCReview?.status(bar); // 「審閱 N」 in writing mode
+  if (state.paper) bar.append(pendingChip()); // 「待補 N」: a click goes to the next mark
   const e = state.engines, pick = chosenEngine();
   const eng = el("button", "sync"); const dot = el("span", "dot");
   const [ok, name] = pick === "local" ? [e.local.status.connected, e.local.status.name]
@@ -1200,6 +1265,7 @@ function importForm(anchor) {
   const kv = el("input", "field");
   kv.placeholder = "Key value（必填）：通篇要強調的一件事";
   name.kv = kv;
+  queueMicrotask(() => { if (kv.isConnected) PCNew.kvCheck(kv); });
   const need = () => { if (kv.value.trim()) return true; LoreShell.toast("Key value 必填"); kv.focus(); return false; };
   const fromPc = el("div", "form-label", "從這台電腦");
   const row = el("div", "form-row");
@@ -1354,7 +1420,16 @@ async function importCard(name, info, fresh = false) {
     return d;
   };
   // journal
-  if (info.journal) line("期刊", el("span", "", info.journal_name || info.journal), el("span", "nc-sub", "由 .cls 比對出的模板"));
+  if (info.journal) {
+    const row = line("期刊", el("span", "", info.journal_name || info.journal), el("span", "nc-sub", "由 .cls 比對出的模板"));
+    // on a base format (not one journal): 選期刊 moves it onto a journal template (venue.js)
+    api("/api/templates").then((all) => {
+      if (!all.find((t) => t.id === info.journal)?.hidden) return;
+      const b = el("button", "primary small", "選期刊");
+      b.onclick = () => PCVenue.chooseJournal(name, () => openPaper(name));
+      row.append(b);
+    }).catch(() => {});
+  }
   else line("期刊", el("span", "nc-sub", "沒有對到 publishers/ 裡的模板；論文自帶的 class 照常使用"));
   if (fresh && info.authors) line("作者", info.authors.length ? el("span", "", info.authors.join("、")) : el("span", "nc-sub", "\\author 裡沒有作者資料庫的人"));
   // tidy

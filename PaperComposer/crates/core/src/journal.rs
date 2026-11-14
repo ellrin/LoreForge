@@ -51,6 +51,17 @@ pub struct Meta {
     /// guidelines it was read from, or the class whose convention it is.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub sources: std::collections::BTreeMap<String, String>,
+    /// `base` (a publisher's format journals are built on) or `umbrella` (a series, a
+    /// multi-conference event): hidden from the picker; empty = a journal or conference.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role: String,
+    /// `[venue]`: which journal it is (OpenAlex source; `venueprofile::Identity`). Kept raw so
+    /// an odd value never makes the template unreadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub venue: Option<toml::Table>,
+    /// `[submission]`: the journal's submission requirements (`venueprofile::Submission`), raw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission: Option<toml::Table>,
 }
 
 /// `[requires]` in template.toml.
@@ -149,6 +160,8 @@ pub struct Journal {
     pub has_sample: bool,
     /// sample.tex loads cleveref.
     pub cleveref: bool,
+    /// A base format or an umbrella entry ([`list`] sets it): not offered as a target.
+    pub hidden: bool,
 }
 
 impl Journal {
@@ -266,6 +279,7 @@ pub fn load(publishers: &Path, id: &str) -> Option<Journal> {
         bib_styles: bsts,
         has_sample: sample.is_some(),
         cleveref: sample.as_deref().is_some_and(|s| packages(s).iter().any(|p| p == "cleveref")),
+        hidden: false,
     })
 }
 
@@ -279,6 +293,10 @@ pub fn list(publishers: &Path) -> Vec<Journal> {
         .filter_map(|e| load(publishers, &e.file_name().to_string_lossy()))
         .collect();
     v.sort_by_key(|j| j.meta.name.to_lowercase());
+    let parents: std::collections::BTreeSet<String> = v.iter().map(|j| j.meta.based_on.clone()).filter(|b| !b.is_empty()).collect();
+    for j in &mut v {
+        j.hidden = crate::venueprofile::hidden_role(&j.meta.role, parents.contains(&j.id), crate::venueprofile::Identity::from_table(j.meta.venue.as_ref()).is_some());
+    }
     v
 }
 
@@ -323,6 +341,19 @@ fn check_rules(meta: &Meta) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Change template.toml through `f` (the journal's identity, requirements, role): only what
+/// `f` touches changes; the rest is written back as it was.
+pub fn edit_meta(publishers: &Path, id: &str, f: impl FnOnce(&mut Meta)) -> Result<Journal, String> {
+    let dir = publishers.join(id);
+    if !crate::paper::safe_name(id) || !dir.is_dir() {
+        return Err("找不到模板".into());
+    }
+    let mut m = meta_of(&dir, id);
+    f(&mut m);
+    write_meta(&dir, &m)?;
+    load(publishers, id).ok_or_else(|| "找不到模板".into())
 }
 
 fn write_meta(dir: &Path, m: &Meta) -> Result<(), String> {
@@ -507,6 +538,10 @@ pub fn update(publishers: &Path, id: &str, u: Update) -> Result<Journal, String>
     meta.requires = u.requires.unwrap_or_else(|| if meta.requires.is_empty() { cur.meta.requires.clone() } else { meta.requires });
     meta.sources = u.sources.unwrap_or_else(|| if meta.sources.is_empty() { cur.meta.sources.clone() } else { meta.sources });
     meta.reference_style = u.reference_style.unwrap_or_else(|| if meta.reference_style.is_empty() { cur.meta.reference_style.clone() } else { meta.reference_style });
+    // the journal's identity, requirements and role are set by their own calls, never dropped here
+    meta.role = if meta.role.is_empty() { cur.meta.role.clone() } else { meta.role };
+    meta.venue = meta.venue.or(cur.meta.venue.clone());
+    meta.submission = meta.submission.or(cur.meta.submission.clone());
     check_rules(&meta)?;
     write_meta(&dir, &meta)?;
     if let Some(mut s) = read_sample(&dir) {

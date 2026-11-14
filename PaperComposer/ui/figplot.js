@@ -1,7 +1,8 @@
 // 繪圖 in a paper (lore-plot, docs/plot.md §8): the shared editor from /plot/, figures saved as
 // figures/<stem>.pdf + <stem>.plot.json by the server (crates/server/src/plot.rs).
 //
-//   PCPlot.create()            → { file, caption } | null   (context.js inserts the figure block)
+//   PCPlot.create(kind)        → { file, caption } | null   (context.js inserts the figure block; kind "equation" =
+//                                 an equation figure, docs/plot.md §10: a vector PDF + .plot.json like any other)
 //   PCPlot.reedit(path)        → re-edit when its .plot.json is next to it (the figure's 編輯 button, figedit.js)
 (() => {
   const base = () => `/api/papers/${encodeURIComponent(state.paper.name)}`;
@@ -21,12 +22,16 @@
       document.head.append(s);
     });
     // the order lore_plot::assets::SCRIPTS lists
-    loading = ["mathsvg.js", "plot.js", "charts.js", "charts3d.js", "formats.js", "editor.js"].reduce((p, f) => p.then(() => script(`/plot/${f}`)), Promise.resolve()).then(() => { window.LorePlot.katexBase = "/plot/katex/"; });
+    loading = ["mathsvg.js", "plot.js", "charts.js", "charts3d.js", "eqcore.js", "simcore.js", "equation.js", "eqlive.js", "eqsim.js", "formats.js", "editor.js"].reduce((p, f) => p.then(() => script(`/plot/${f}`)), Promise.resolve()).then(() => { window.LorePlot.katexBase = "/plot/katex/"; });
     loading.catch(() => (loading = null));
     return loading;
   }
   async function macros() {
     try { const r = await fetch(`${base()}/plot/macros`); return r.ok ? await r.json() : {}; } catch { return {}; }
+  }
+  /** The paper's notation entries (colour roles of equation figures come from the same registry). */
+  async function notation() {
+    try { const r = await fetch(`${base()}/plot/notation`); return r.ok ? await r.json() : []; } catch { return []; }
   }
   /** The paper's other figures made here (to pull into a composite). */
   async function library() {
@@ -40,16 +45,17 @@
   }
   const stemOf = (spec) => {
     const p = spec.panels?.[0] ?? {};
+    if (p.type === "equation") return `eq-${(p.eq?.template ?? "custom").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
     const words = [spec.caption, p.title, p.yaxis?.label, p.type].find((s) => s && /[A-Za-z]/.test(s)) ?? "figure";
     return words.replace(/\$[^$]*\$/g, " ").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").split("-").slice(0, 4).join("-") || "figure";
   };
 
   /** A new figure: the editor, then the PDF and spec in figures/. */
-  async function create() {
+  async function create(kind) {
     try { await load(); } catch (e) { LoreShell.toast(e.message, { err: true }); return null; }
     let out = null;
     await LorePlot.edit({
-      target: "paper", title: "新圖", macros: await macros(), api: "/plot/api", library,
+      target: "paper", title: kind === "equation" ? "方程式" : "新圖", kind, macros: await macros(), notation: await notation(), api: "/plot/api", library,
       save: async ({ spec, svg }) => {
         try {
           const r = await save({ stem: stemOf(spec), spec, svg });
@@ -68,7 +74,7 @@
     const { spec } = await r.json();
     try { await load(); } catch (e) { LoreShell.toast(e.message, { err: true }); return true; }
     await LorePlot.edit({
-      spec, target: "paper", title: path.split("/").pop(), macros: await macros(), api: "/plot/api", library,
+      spec, target: "paper", title: path.split("/").pop(), macros: await macros(), notation: await notation(), api: "/plot/api", library,
       save: async ({ spec, svg }) => {
         try {
           const saved = await save({ replace: path, spec, svg });

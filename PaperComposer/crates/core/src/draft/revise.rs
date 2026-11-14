@@ -46,6 +46,10 @@ pub struct Change {
     /// None = undecided, Some(true) = applied, Some(false) = rejected.
     #[serde(default)]
     pub applied: Option<bool>,
+    /// 回填 against the expectation: the paragraph's claim must be rewritten,
+    /// not only its number (shown to the author before it is applied).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rewrite: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -81,6 +85,9 @@ pub struct Revision {
     pub status: RevisionStatus,
     #[serde(default)]
     pub plan: Option<RevisionPlan>,
+    /// 回填: the pending result this revision fills in (P1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<String>,
 }
 
 /// The paper as numbered paragraphs, per section file. `full` = whole
@@ -261,6 +268,7 @@ pub fn parse_plan(reply: &str, paper_dir: &Path) -> Result<RevisionPlan, String>
             text: c.text.trim().to_string(),
             reason: c.reason,
             applied: None,
+            rewrite: false,
         });
     }
     if changes.is_empty() {
@@ -273,6 +281,9 @@ pub fn parse_plan(reply: &str, paper_dir: &Path) -> Result<RevisionPlan, String>
 /// its text (it may have moved if earlier changes inserted paragraphs); if it
 /// no longer exists, nothing is written.
 pub fn apply(paper_dir: &Path, c: &Change) -> Result<(), String> {
+    if c.action == "replace-text" {
+        return apply_main(paper_dir, c);
+    }
     if !crate::open::is_section_file(paper_dir, &c.file) {
         return Err("invalid file".into());
     }
@@ -297,6 +308,20 @@ pub fn apply(paper_dir: &Path, c: &Change) -> Result<(), String> {
         }
     }
     crate::open::write_section(paper_dir, &sec)
+}
+
+/// A change to a block of the main file (the abstract of 回填): `before`
+/// must be there exactly once.
+fn apply_main(paper_dir: &Path, c: &Change) -> Result<(), String> {
+    let main = crate::open::main_file(paper_dir);
+    if main.file_name().and_then(|n| n.to_str()) != Some(c.file.as_str()) {
+        return Err("invalid file".into());
+    }
+    let text = std::fs::read_to_string(&main).map_err(|e| e.to_string())?;
+    if c.before.trim().is_empty() || text.matches(c.before.as_str()).count() != 1 {
+        return Err("那一段已經改過了，請重新產生修改方案".into());
+    }
+    crate::paper::write_atomic(&main, &text.replacen(c.before.as_str(), &c.text, 1)).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

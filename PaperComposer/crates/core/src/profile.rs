@@ -143,9 +143,27 @@ pub struct Profile {
     pub authors: Vec<Author>,
     #[serde(default)]
     pub affiliations: Vec<Affiliation>,
+    /// The lists of the style checks (`style/checks.toml` in the workspace; empty without one).
+    #[serde(skip)]
+    pub style_checks: crate::stylecheck::StyleChecks,
 }
 
 impl Profile {
+    /// Read the workspace's `style/checks.toml` into `style_checks`. Problems come back as
+    /// warnings: a list that does not parse, and a hard rule whose list is missing.
+    pub fn load_style_checks(&mut self, workspace: &Path) -> Vec<Issue> {
+        let file = format!("{}/{}", crate::draft::STYLE_DIR, crate::stylecheck::FILE);
+        let (checks, problems) = crate::stylecheck::StyleChecks::load(&workspace.join(&file));
+        let mut issues: Vec<Issue> = problems.into_iter().map(|m| issue(&file, 0, None, &m, false)).collect();
+        for r in self.rules.iter().filter(|r| r.kind == RuleKind::Hard && crate::stylecheck::needs_list(&r.check)) {
+            if checks.list(&r.threshold).is_empty() {
+                issues.push(issue("rules.csv", 0, Some("threshold"), &format!("{}: {file} has no list \"{}\"", r.id, r.threshold.trim()), false));
+            }
+        }
+        self.style_checks = checks;
+        issues
+    }
+
     /// Load a profile folder. Never fails on bad rows: those are reported as
     /// issues and skipped, so one typo in a CSV does not lock the user out.
     /// Fails only when the folder or its manifest is unusable.
@@ -247,7 +265,7 @@ impl Profile {
         };
 
         Ok((
-            Profile { root: root.to_path_buf(), manifest, phrases, expressions, vocabulary, rules, authors, affiliations },
+            Profile { root: root.to_path_buf(), manifest, phrases, expressions, vocabulary, rules, authors, affiliations, style_checks: Default::default() },
             issues,
         ))
     }

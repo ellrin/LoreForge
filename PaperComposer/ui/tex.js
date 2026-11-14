@@ -840,6 +840,24 @@ window.PCTex = (() => {
       if (/^[a-z]+$/i.test(c[0])) n.style[cmd === "colorbox" ? "background" : "color"] = c[0];
       return { node: n, next: g[1] };
     }
+    // 待補 (lore-notation draft marks): a number, a table cell, a planned paragraph, a dependent sentence
+    if (cmd === "pending" || cmd === "pendingcell" || cmd === "pendingpara") {
+      const a = arg(); if (!a) return null;
+      const b = required(text, a[1]);
+      const id = a[0].trim();
+      const n = el(cmd === "pendingpara" ? "div" : "span", `pending ${cmd}`);
+      n.dataset.pending = id;
+      n.append(el("b", "", cmd === "pendingpara" ? `待補 ${id} ` : id));
+      if (b && cmd !== "pendingcell" && b[0].trim()) { const w = el("span", "pending-what"); w.append(render(b[0])); n.append(w); }
+      if (cmd === "pendingcell" && b) n.title = b[0];
+      return { node: n, next: b ? b[1] : a[1] };
+    }
+    if (cmd === "pendingdep") {
+      const a = arg(); if (!a) return null;
+      const n = el("sup", "pending-dep", a[0].trim());
+      n.dataset.pending = a[0].trim();
+      return { node: n, next: a[1] };
+    }
     if (cmd === "abstract" || cmd === "keywords") {
       const g = arg(); if (!g) return null;
       const d = el("div", cmd === "abstract" ? "tex-abstract" : "tex-keywords");

@@ -48,6 +48,14 @@ default = "claude:selected"
 fallback = "local:current"
 offline = false
 
+[task.pc-thesis-check]
+label = "Key value 檢查"
+class = "tidy"
+needs = { json = true }
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+
 [task.pc-caption]
 label = "圖表標題"
 class = "create"
@@ -116,6 +124,16 @@ needs = { json = true }
 default = "claude:sonnet"
 fallback = "local:current"
 max_tokens = 8000
+
+# 預想選項: 2–3 possible answers per item, from the record, before the interview
+# (one batched call per plan / new group, in the background; never inside a turn)
+[task.pc-draft-candidates]
+label = "預想選項"
+class = "create"
+needs = { json = true }
+default = "claude:opus"
+fallback = "local:current"
+max_tokens = 16000
 
 [task.pc-draft-turn]
 label = "草稿問答"
@@ -203,4 +221,15 @@ class = "create"
 needs = { json = true }
 default = "claude:selected"
 fallback = "local:current"
+offline = false
+
+# 期刊寫法 (src/venueprof.rs, docs/long-paper.md §D): one call per open-access article of the
+# journal, labelling each paragraph with a content category (the shares are computed in code)
+[task.pc-venue-profile]
+label = "期刊寫法：標記段落"
+class = "tidy"
+needs = { json = true }
+default = "claude:sonnet"
+fallback = "local:current"
+max_tokens = 8000
 offline = false

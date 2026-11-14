@@ -14,7 +14,8 @@ pub fn plan_schema() -> serde_json::Value {
     json_object(&[("titles", json_array(json_string())), ("sections", json_array(section))])
 }
 
-pub fn outline_prompt(outline: &str, key_value: &str, template_sections: &[String], language: &str) -> Prompt {
+/// `style` = the author's style notes (`style_text`; empty: none).
+pub fn outline_prompt(outline: &str, key_value: &str, template_sections: &[String], language: &str, style: &str) -> Prompt {
     let lang = if language.starts_with("zh") { "Traditional Chinese" } else { "English" };
     let system = format!(
         "You plan an academic paper before it is written. From the author's bullet outline and key value, \
@@ -34,13 +35,13 @@ skip sample sections that only demonstrate formatting (equations, tables, figure
         user += &format!("Journal sample sections, in order: {}\n", template_sections.join("; "));
     }
     user += &format!("\nOutline:\n{}\n", outline.trim());
-    Prompt { system, user }
+    pc_core::draft::with_style(Prompt { system, user }, style)
 }
 
 /// A caption for a table (from its cells) or a figure (from its file name),
 /// for the section it goes in.
 #[allow(clippy::too_many_arguments)]
-pub fn caption_prompt(kind: &str, grid: &[Vec<String>], file: &str, section: &str, key_value: &str, title: &str, language: &str) -> Prompt {
+pub fn caption_prompt(kind: &str, grid: &[Vec<String>], file: &str, section: &str, key_value: &str, title: &str, language: &str, style: &str) -> Prompt {
     let lang = if language.starts_with("zh") { "Traditional Chinese" } else { "English" };
     let what = if kind == "figure" { "figure" } else { "table" };
     let system = format!(
@@ -73,7 +74,7 @@ Rules:\n\
             user += "\n";
         }
     }
-    Prompt { system, user }
+    pc_core::draft::with_style(Prompt { system, user }, style)
 }
 
 /// The caption out of a reply: first non-empty line, without a label or quotes.
@@ -167,7 +168,18 @@ mod tests {
 
     #[test]
     fn prompt_carries_key_value_outline_and_sample_sections() {
-        let p = outline_prompt("- 背景\n- 方法", "提升可解釋性", &["Introduction".into(), "Methods".into()], "en");
+        let p = outline_prompt("- 背景\n- 方法", "提升可解釋性", &["Introduction".into(), "Methods".into()], "en", "");
+        assert!(!p.system.contains("style rules"));
+        let ws = std::env::temp_dir().join(format!("pc-wizard-style-{}", std::process::id()));
+        std::fs::create_dir_all(ws.join("style")).unwrap();
+        std::fs::write(ws.join("style/10-writing.md"), "Prefer short declarative sentences.").unwrap();
+        let style = pc_core::draft::style_text(&ws);
+        let _ = std::fs::remove_dir_all(&ws);
+        let styled = outline_prompt("- 背景", "提升可解釋性", &[], "en", &style);
+        assert!(styled.system.contains("style rules: follow them") && styled.system.contains("Prefer short declarative sentences."));
+        let cap = caption_prompt("figure", &[], "fig1-roc.png", "", "", "", "en", &style);
+        assert!(cap.system.contains("Prefer short declarative sentences."));
+        assert!(!caption_prompt("figure", &[], "fig1-roc.png", "", "", "", "en", "").system.contains("style rules"));
         assert!(p.user.starts_with("Key value: 提升可解釋性\nJournal sample sections, in order: Introduction; Methods\n"));
         assert!(p.user.contains("Outline:\n- 背景\n- 方法"));
         assert!(p.system.contains("in English"));
@@ -187,10 +199,10 @@ mod tests {
     #[test]
     fn caption_prompt_and_cleanup() {
         let g = vec![vec!["Model".to_string(), "AUC".into()], vec!["ResNet50".into(), "0.91".into()]];
-        let p = caption_prompt("table", &g, "", "Results", "提升可解釋性", "", "en");
+        let p = caption_prompt("table", &g, "", "Results", "提升可解釋性", "", "en", "");
         assert!(p.user.contains("Model | AUC\nResNet50 | 0.91"));
         assert!(p.system.contains("caption of a table"));
-        assert!(caption_prompt("figure", &[], "fig1-roc.png", "", "", "", "en").user.contains("fig1-roc.png"));
+        assert!(caption_prompt("figure", &[], "fig1-roc.png", "", "", "", "en", "").user.contains("fig1-roc.png"));
         assert_eq!(clean_caption("\n\"Table 2: AUC of each model.\"\nmore").as_deref(), Some("AUC of each model."));
         assert_eq!(clean_caption("Caption: ROC curves").as_deref(), Some("ROC curves"));
         assert_eq!(clean_caption("  \n "), None);
