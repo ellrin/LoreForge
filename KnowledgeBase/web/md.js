@@ -10,11 +10,14 @@ const MD = (() => {
 
   function tex(src, display) {
     if (!window.katex) return `<code>${esc(src)}</code>`;
+    let html;
     try {
-      return katex.renderToString(src, { displayMode: display, throwOnError: false, strict: "ignore", output: "html" });
+      html = katex.renderToString(src, { displayMode: display, throwOnError: false, strict: "ignore", output: "html" });
     } catch {
       return `<code>${esc(src)}</code>`;
     }
+    // a display equation can come alive (web/eqlive.js: the shared live view, docs/plot.md §11)
+    return display ? `<span class="eq-block" data-tex="${esc(src)}">${html}<button type="button" class="ico small eq-go" data-icon="spark" aria-label="動起來" title="動起來"></button></span>` : html;
   }
 
   function inline(text, opts, slots) {

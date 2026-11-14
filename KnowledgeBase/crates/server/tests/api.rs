@@ -375,3 +375,26 @@ async fn pending_cards_api() {
     let (_, v) = call(&app, "GET", "/api/nodes", None).await;
     assert_eq!(v["nodes"].as_array().unwrap().len(), 2);
 }
+
+/// A card's display equation can come alive: kb-server serves the shared equation tool (/plot/), the
+/// scenes for a composite loss come back without a model, and the page wires the ✦ to it.
+#[tokio::test]
+async fn card_equations_open_the_shared_live_view() {
+    let (_d, app, _clock) = setup();
+    let res = app.clone().oneshot(Request::get("/plot/eqsim.js").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let (s, v) = call(&app, "POST", "/plot/api/equation/scenes", Some(json!({ "latex": "p(x) = \\sum_{k=1}^{K} \\pi_k \\mathcal{N}(x \\mid \\mu_k, \\Sigma_k)" }))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(v["scenes"].as_array().unwrap().iter().any(|x| x == "sim-mixture"), "{v}");
+    // no model here: proposing says so instead of guessing
+    let (s, _) = call(&app, "POST", "/plot/api/equation/propose", Some(json!({ "latex": "x^2" }))).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    let web = kb_server::config::repo_dir().join("web");
+    let md = std::fs::read_to_string(web.join("md.js")).unwrap();
+    assert!(md.contains("eq-block") && md.contains("動起來"));
+    assert!(std::fs::read_to_string(web.join("index.html")).unwrap().contains("eqlive.js"));
+    let live = std::fs::read_to_string(web.join("eqlive.js")).unwrap();
+    for f in lore_plot::assets::SCRIPTS {
+        assert!(live.contains(f), "eqlive.js does not load {f}");
+    }
+}

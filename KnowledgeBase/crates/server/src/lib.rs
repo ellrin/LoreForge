@@ -116,7 +116,9 @@ fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
     for (path, mime, body) in lore_shell::FILES {
         kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
     }
-    api::routes().merge(notation::routes()).with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
+    // the shared equation tool (/plot/: a card's 動起來, the live view and simulation scenes); no model task here
+    let plot = lore_plot::router(lore_plot::Plot::new(shared.home.clone()));
+    api::routes().merge(notation::routes()).with_state(shared).merge(lore_engines::router(engines)).merge(kit).merge(plot).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`port` (0 = any free port), start the reminder scheduler and return the

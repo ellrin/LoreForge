@@ -15,6 +15,7 @@ lore-home.workspace = true
 lore-llm.workspace = true
 lore-engines.workspace = true
 lore-shell.workspace = true
+lore-plot.workspace = true
 lore-notation.workspace = true
 lettre.workspace = true
 serde.workspace = true

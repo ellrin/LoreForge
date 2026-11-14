@@ -385,3 +385,8 @@ input[aria-invalid] { border-color: var(--err) !important; }
   .ed-preview { position: static; }
   .paper { border-radius: 0; padding: 0; }
 }
+/* a display equation: ✦ 動起來 (web/eqlive.js) on hover */
+.eq-block { position: relative; display: block; }
+.eq-block .eq-go { position: absolute; right: 0; top: 50%; translate: 0 -50%; color: var(--accent-text); opacity: .45; transition: opacity .15s; }
+.eq-block:hover .eq-go, .eq-block .eq-go:focus-visible { opacity: 1; }
+@media print { .eq-block .eq-go { display: none; } }

@@ -49,7 +49,7 @@ cd ../commons && cargo test -p kb-core -p lore-store
   (numbers, 重建索引), 外觀, 模型, 快捷鍵, 提醒 (到期通知), 郵件 (digest; forms are `<template>`s in index.html).
   Status chip only while a card is open. `confirm()` → `LoreShell.ask`, toasts → `LoreShell.toast`.
   對照表 = `<notation-panel>` (`/notation-panel.js`, `notation.rs`) over the global registry
-  `private/shared/notation.json` (`GET/PUT /api/notation`). `/api/engines` is `lore-engines` (mounted in `router`; `router_isolated` + `examples/isolated_server` for tests and screenshots).
+  `private/shared/notation.json` (`GET/PUT /api/notation`). 動起來: kb-server mounts lore-plot's router (`/plot/*`, no model task); a display equation in a card (`md.js` `.eq-block`) has a ✦ that opens the shared equation tool through `LorePlot.animateLatex` (`web/eqlive.js`; simulation scenes for a composite loss or a distribution, `../docs/plot.md` §11). `/api/engines` is `lore-engines` (mounted in `router`; `router_isolated` + `examples/isolated_server` for tests and screenshots).
 - `../private-example/KnowledgeBase/`: starting layout of a personal space (copied to `../private/KnowledgeBase` on first run).
 - NeonDeck widget: `../NeonDeck/desktop/widgets/knowledge.js`.
 - `apps/desktop` (`knowledgebase`): Tauri shell on the configured port (7700, what the NeonDeck
