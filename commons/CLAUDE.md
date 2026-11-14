@@ -34,7 +34,7 @@ cargo test                     # everything, offline
 cargo test -p <crate>          # one crate
 ```
 
-`cargo test` must pass before every commit.
+Before a commit, the tests of the crates you changed must pass (`cargo test -p <crate>`; affected scope only, see the root CLAUDE.md).
 
 ## Rules (same habits as PaperComposer / JELearner)
 

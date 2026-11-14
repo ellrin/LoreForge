@@ -14,7 +14,7 @@ cargo run -p kb-server -- --space <dir> --member ellrin --port 7700
 cd ../commons && cargo test -p kb-core -p lore-store
 ```
 
-`cargo test` (here and for the two commons crates) must pass before every commit.
+Before a commit, the tests of the code you changed must pass (affected scope only, see the root CLAUDE.md).
 
 ## Layout
 

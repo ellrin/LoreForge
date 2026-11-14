@@ -29,7 +29,9 @@ Monorepo of the author's local-first apps. Each top-level folder is its own Carg
 - Never write to the real `private/` repos from tests; tests use temp dirs and synthetic data.
 - Commits: ellrin is the only author; no `Co-Authored-By` or AI attribution trailers.
   Claude is mentioned only in README "開發說明" sections.
-- `cargo test` in every workspace you touched must pass before a commit.
+- Test only the affected scope: the tests of the code you changed (`cargo test -p <crate> <filter>`) plus a
+  direct check of the new behaviour (e.g. a fake document in a temp dir). Run a whole workspace only when a shared
+  commons crate's API or behaviour changes for other apps. Never run unrelated tests (they waste the author's tokens).
 - Anything in PaperComposer or SlideComposer that writes LaTeX (drafting, revisions, imports,
   exports, diffs) must stay compatible with `commons/crates/lore-notation` (the author's
   registry of symbols, equations, abbreviations and labels): use the registered macros,

@@ -17,7 +17,7 @@ cargo run -p lore-voice --example check_mac -- <dir>   # (in ../commons) voices,
 LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local OpenAI-compatible server
 ```
 
-`cargo test` must pass before every commit.
+Before a commit, the tests of the code you changed must pass (affected scope only, see the root CLAUDE.md).
 
 ## Layout
 

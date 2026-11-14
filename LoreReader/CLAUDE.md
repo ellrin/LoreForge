@@ -21,7 +21,7 @@ cargo run -p lr-server --example isolated_server -- <empty folder> [port] [kb ur
 LOREREADER_LIBRARY=/tmp/lib LOREREADER_EXPORTS=/tmp/out LOREREADER_WORKSPACE=/tmp/ws cargo run -p lr-server
 ```
 
-`cargo test` must pass before every commit (and KnowledgeBase's when its web/ or API changes).
+Before a commit, the tests of the code you changed must pass (affected scope only, see the root CLAUDE.md; KnowledgeBase's when its web/ or API changes).
 
 ## Layout
 

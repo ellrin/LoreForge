@@ -19,7 +19,7 @@ LORE_DECKS="a.pptx:b.pptx" LORE_STYLE_DIR=../private/SlideComposer/styles/my-sty
 `CARGO_TARGET_DIR`: this workspace builds into `target/`; commons into `commons/target/canvas`
 when working on lore-canvas in parallel with other agents.
 
-`cargo test` (here and `-p lore-canvas` in commons) must pass before every commit.
+Before a commit, the tests of the code you changed must pass (affected scope only, see the root CLAUDE.md).
 
 ## Layout
 
