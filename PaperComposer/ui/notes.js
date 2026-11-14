@@ -54,7 +54,7 @@ window.PCNotes = (() => {
     q("#notesQ").oninput = (e) => { st.q = e.target.value; renderList(); };
     q("#notesNew").onclick = () => leaveEdit().then((ok) => ok && edit(null));
     q(".close").onclick = () => close();
-    dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
+    dlg.addEventListener("cancel", (e) => { if (e.target !== dlg) return; e.preventDefault(); close(); });
     dlg.addEventListener("close", () => { stopPoll(); if (paperMacros) setMacros(paperMacros); });
   }
 

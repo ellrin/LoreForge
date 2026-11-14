@@ -1239,7 +1239,9 @@ function wireWindows() {
     // A click on the backdrop lands on the <dialog> itself, not its content.
     // Windows you fill in (new paper) stay open on a stray click outside.
     if (d.id !== "dlgNew" && d.id !== "dlgDraft") d.addEventListener("click", (e) => { if (e.target === d) closeWindow(d); });
-    d.addEventListener("cancel", (e) => { e.preventDefault(); closeWindow(d); });
+    // Esc fires "cancel" on the <dialog>; a file picker's Cancel fires "cancel" on its <input>, and
+    // that one bubbles: only the dialog's own cancel closes the window.
+    d.addEventListener("cancel", (e) => { if (e.target !== d) return; e.preventDefault(); closeWindow(d); });
   });
 }
 

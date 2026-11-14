@@ -172,7 +172,7 @@
       if (S.hist.length && !(await confirmLose())) return;
       close(null);
     };
-    dlg.addEventListener("cancel", (e) => { e.preventDefault(); cancelB.click(); });
+    dlg.addEventListener("cancel", (e) => { if (e.target !== dlg) return; e.preventDefault(); cancelB.click(); });
     async function confirmLose() {
       if (window.LoreShell?.ask) return (await window.LoreShell.ask(cancelB, ["放棄這次的修改？"], [{ label: "放棄", value: true }, { label: "繼續編輯", value: null, primary: true }])) === true;
       return confirm("放棄這次的修改？");
