@@ -407,10 +407,16 @@ an item whose answer the record already gives is only confirmed, never asked why
 Never invent facts about the study. Ask one thing at a time.";
 
 pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns: &[Turn], answer: Option<&str>, material: &str) -> Prompt {
-    let system = format!("{}\n{TW} Reply with JSON only.", TURN_SYSTEM.replace("{NOTES}", super::notes::TURN_RULE));
-    let mut user = context(key_value, s, material);
-    user += "\n";
-    user += &lens.describe();
+    // What every turn of an interview shares, word for word (the rules, the study as the record step
+    // left it, the lens), is the system prompt: the provider's prompt cache serves it again on the
+    // next turn, so a turn waits only for what changed.
+    let system = format!(
+        "{}\n{TW} Reply with JSON only.\n\n# The study\n{}\n{}",
+        TURN_SYSTEM.replace("{NOTES}", super::notes::TURN_RULE),
+        context(key_value, s, material),
+        lens.describe()
+    );
+    let mut user = String::new();
     if group == super::pending::GROUP_ID {
         user += &super::pending::group_context(s);
     }
