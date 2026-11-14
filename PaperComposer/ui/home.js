@@ -32,7 +32,6 @@ const PCHome = (() => {
     PCFrame.home(true);
     $("#fileMenu").hidden = true;
     draw(true);
-    reopenLast();
   }
 
   function close() {
@@ -269,19 +268,6 @@ const PCHome = (() => {
     }
     box.append(ul);
     return box;
-  }
-
-  /** At launch: back to the paper that was open last, if it is still there. */
-  let launched = false;
-  async function reopenLast() {
-    if (launched) return;
-    launched = true;
-    const last = store.get("pc.paper", null);
-    if (!last || state.paper || new URLSearchParams(location.search).has("open")) return;
-    try {
-      papers = await api("/api/home/papers");
-      if (!state.paper && papers.some((p) => p.name === last)) await openPaper(last);
-    } catch {}
   }
 
   function paperCard(p) {
