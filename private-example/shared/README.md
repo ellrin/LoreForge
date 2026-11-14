@@ -9,4 +9,6 @@ deny-words.txt   commit 前擋下的字
 my-vocab.json    我的詞彙：自己論文裡的詞與詞組（LoreReader 標「我的論文」時建立；
                  每個詞記下來源：論文 sha256，或 import:<名稱> 的匯入清單），之後
                  SlideComposer、PaperComposer 也會讀；這些詞在 LoreReader 算「記得」
+polish/liked.jsonl  語調庫：潤飾時按 👍 的改寫，一行一筆 {before, after, instruction, app, time}；
+                 App 自己建立，之後潤飾拿最像的幾筆當範例（這裡不放範例）
 ```

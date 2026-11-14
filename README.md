@@ -28,6 +28,29 @@ cd LoreEcho && cargo run -p le-server          # http://127.0.0.1:7860（桌面�
 
 **Mac App**：`scripts/install-apps.sh` 編譯 PaperComposer、SlideComposer、KnowledgeBase、LoreReader、LoreEcho（Tauri，裝到 `/Applications`）與 NeonDeck（裝到 `~/Applications`），並放進 Dock；只更新其中幾個就在後面寫名稱，例如 `scripts/install-apps.sh SlideComposer`。需要 `cargo install tauri-cli --version "^2" --locked`。App 從編譯時的 LoreForge 資料夾找 `private/`，所以 repo 不要搬家（搬了就重跑一次）。
 
+**Finder 預設 App**：`sh scripts/set-default-apps.sh` 讓 Finder 用自己的 App 開檔：`.pdf` → LoreReader、`.pptx` → SlideComposer、`.docx` 與 `.tex` → PaperComposer（不裝 Word／PowerPoint）。只改還不是的類型、印出改了什麼，沒裝的 App 略過；macOS 可能要確認一次。先用 `install-apps.sh` 裝好 App 再跑。`.key`／`.ppt`／`.doc` 沒有 Lore App 讀得了，維持系統預設。
+
+**本機簽章**：鑰匙圈裡有叫「LoreForge Local」的程式碼簽章憑證時，安裝腳本用它簽 App（沒有就 ad-hoc）。身分固定，麥克風、個人聲音、鑰匙圈的允許重裝後都還在。每台 Mac 做一次（自簽、不需要開發者帳號、不用設成信任；私鑰只在鑰匙圈裡）：
+
+```sh
+cat > /tmp/lf.cfg <<'EOF'
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = LoreForge Local
+[ext]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+EOF
+/usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/lf.key -out /tmp/lf.pem -days 3650 -config /tmp/lf.cfg
+/usr/bin/openssl pkcs12 -export -inkey /tmp/lf.key -in /tmp/lf.pem -name "LoreForge Local" -out /tmp/lf.p12 -passout pass:tmp
+security import /tmp/lf.p12 -k ~/Library/Keychains/login.keychain-db -P tmp -T /usr/bin/codesign
+rm /tmp/lf.key /tmp/lf.p12 /tmp/lf.cfg /tmp/lf.pem
+```
+
 第一次啟動時，知識庫、簡報編輯器、LoreReader 與 LoreEcho 會從 `private-example/<App>/` 複製一份到 `private/<App>/`（只補缺的檔案），之後只讀寫 `private/`。PaperComposer 有 `private/PaperComposer/` 就用它，否則先開示範資料，再由設定頁建立工作區。
 
 ## 私人資料：`private/`

@@ -9,7 +9,9 @@
 # NeonDeck 用它自己的 build.sh 裝到 ~/Applications。安裝前會先結束正在執行的舊版。
 # Dock：每個 App 一個項目；名稱相同但指向別的位置（例如舊的編譯資料夾）的項目會被換掉，
 # 其他項目不動。
-# 簽章是 ad-hoc（沒有 Developer ID），所以換版後第一次讀鑰匙圈時系統會再問一次。
+# 簽章：鑰匙圈裡有「LoreForge Local」簽章憑證（本機自己做的，見 README「開發說明」）就用它簽，
+# App 的身分固定，麥克風、個人聲音、鑰匙圈的允許在重裝後都還在；沒有就用 ad-hoc
+# （每次重裝系統都當成新的 App，會再問一次）。可以用 LOREFORGE_SIGN 換成別的憑證名稱。
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 
@@ -24,6 +26,22 @@ for a in "$@"; do
   esac
 done
 (( ${#apps} )) || apps=(PaperComposer SlideComposer KnowledgeBase LoreReader LoreEcho LoreShelf NeonDeck)
+
+sign_id=${LOREFORGE_SIGN:-LoreForge Local}
+security find-identity -p codesigning 2>/dev/null | grep -qF "\"$sign_id\"" || sign_id=""
+[[ -n $sign_id ]] || echo "（沒有「LoreForge Local」簽章憑證：用 ad-hoc 簽章，重裝後權限會再問一次）"
+
+# 先簽 App 裡其他的執行檔（語音小程式），最後簽 App 本身。
+sign_app() {
+  [[ -n $sign_id ]] || return 0
+  local app=$1 f
+  for f in "$app"/Contents/MacOS/*(N.) "$app"/Contents/Resources/**/*(N.); do
+    [[ $f == "$app/Contents/MacOS/$(defaults read "$app/Contents/Info" CFBundleExecutable)" ]] && continue
+    file -b "$f" | grep -q "Mach-O" || continue
+    codesign --force --sign "$sign_id" --timestamp=none "$f"
+  done
+  codesign --force --sign "$sign_id" --timestamp=none "$app"
+}
 
 quit() { osascript -e "tell application id \"$1\" to quit" >/dev/null 2>&1 || true; }
 
@@ -41,6 +59,7 @@ for a in $apps; do
   sleep 1
   rm -rf "/Applications/$a.app"
   cp -R "$root/$a/target/release/bundle/macos/$a.app" /Applications/
+  sign_app "/Applications/$a.app"
   echo "✔ /Applications/$a.app"
   installed+="/Applications/$a.app"
 done

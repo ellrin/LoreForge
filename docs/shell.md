@@ -128,6 +128,22 @@ LoreLinks.open(app, params) · LoreLinks.url(app, params) · LoreLinks.ports
 快捷鍵頁由按鈕的 `aria-label` 產生：標籤最後一段是按鍵（`復原 ⌘Z`、`選取 V`、`粗體　Ctrl+B`、`關閉 Esc`），或放在括號裡（`復原「移動」(⌘Z)`，「…」會略過）。括號裡只認真正的按鍵（⌘⇧⌥⌃、`Ctrl+B`、`F5`、`Esc`、`↵`）；單一字母、數字或說明文字不算，說明請放 `title`。
 例外用 `data-keys="⌘K"`；分組依位置（上方列、工具、左側、右側、狀態列、其他），或 `data-keys-group`。
 
+### 權限（一般 → 權限，2026-11-13）
+
+作者決定：每個 App 第一次打開時一次問完它需要的所有權限；回答之後就定了，之後的改變在設定裡。
+
+| App | 權限 |
+|---|---|
+| LoreEcho | 麥克風、語音辨識、個人聲音 |
+| PaperComposer | 麥克風、語音辨識、個人聲音 |
+| SlideComposer | 麥克風、語音辨識、個人聲音 |
+
+- 伺服器：`lore_shell::permissions`（`Permissions::new(&[…]).with(Arc::new(voice))`，`router(p)`）；`GET /api/permissions` → `{ permissions: [{ id, label, status }] }`，`POST /api/permissions/request {what?}`（只問 `not_determined` 的，依 麥克風 → 語音辨識 → 個人聲音，一次一個），`POST /api/permissions/open {what}`（系統設定的那一頁；測試／隔離不開）。
+- 啟動：桌面 App 視窗開好後 `lore_shell::permissions::ask_at_launch()`，背景執行，每次啟動一次；已允許／已拒絕的系統會記得，不會再問，所以只有第一次會跳詢問，不另存狀態檔。測試、隔離模式、開發伺服器、沒有輔助程式時都不問。
+- 設定：「一般」最後一塊「權限」（沒有宣告或沒有這個路由＝不顯示）：每列 名稱 · 狀態（已允許／已拒絕／尚未詢問／不支援；restricted 暫時顯示「受限制」）· 「詢問」（只在尚未詢問時）· 「開啟系統設定」。從系統設定回到視窗時重新讀一次。
+- 功能遇到被拒絕（潤飾的麥克風、LoreEcho 的個人聲音列）：提示帶「開啟系統設定」，不再詢問。`LoreShell.permissions.get() / request(what) / open(what)`。
+- 示範：`/demo/shell.html?settings=general`（`?noperms=1`＝沒有宣告）。
+
 ### 跨 app 連結（`LoreLinks`）
 
 | app | 連結 | http 備援（開發用預設埠） |

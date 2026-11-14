@@ -7,3 +7,5 @@ target/
 .vscode/
 # Claude Code agent worktrees
 /.claude/worktrees/
+# The voice helper copied by an app's apps/desktop/build.rs
+/*/apps/desktop/bin/
