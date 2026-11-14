@@ -238,6 +238,25 @@ pub struct Item {
     /// 這題不用寫進論文: never asked again, never in the ledger, the claims or the draft.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub excluded: bool,
+    /// What the record itself says on this item (prepared with the candidates): the author
+    /// confirms it with one click instead of being asked from scratch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_record: Option<FromRecord>,
+    /// The record was read for `from_record` once (its own flag: sessions prepared before it
+    /// existed are read again for it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record_tried: bool,
+}
+
+/// The record's answer to an item, and what the author said about it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FromRecord {
+    pub text: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    /// Some(true) 對, Some(false) 不對 (then it is asked like any item), None not yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub said: Option<bool>,
 }
 
 impl Graded for Item {
@@ -506,6 +525,10 @@ pub struct Turn {
     /// Candidates the author chose for this answer (`i3:k2`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub picked: Vec<String>,
+    /// AI turns: the prepared candidates of `about` this question shows (per question, never one
+    /// already picked). None on turns written before this existed (the window then shows the item's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cands: Option<Vec<String>>,
 }
 
 /// Changes the model proposes for one item (by id, or a new one by label).
@@ -549,8 +572,10 @@ pub struct GroupState {
     pub summary_complete: bool,
     /// Every item done and the summary written.
     pub ready: bool,
-    /// The lens's turn budget is spent.
+    /// The group's answer budget (see [`Session::budget`]) is spent.
     pub over_budget: bool,
+    /// The group's answer budget.
+    pub budget: usize,
 }
 
 pub fn draft_dir(paper: &Path) -> PathBuf {
@@ -692,8 +717,19 @@ impl Session {
         // 待補項目 has no summary of its own: it is done when every result is explained
         let summary_complete = if group == super::pending::GROUP_ID { items.iter().all(|i| i.missing.is_empty()) } else { g.is_some_and(|g| g.summary.complete()) };
         let ready = summary_complete && items.iter().all(|i| i.missing.is_empty());
-        let over_budget = g.is_some_and(|g| g.turns >= lens.stop.max_turns_per_group);
-        GroupState { group: group.into(), items, summary_complete, ready, over_budget }
+        let budget = self.budget(lens, group);
+        let over_budget = g.is_some_and(|g| g.turns >= budget);
+        GroupState { group: group.into(), items, summary_complete, ready, over_budget, budget }
+    }
+
+    /// Answers a group is worth, by importance (the lens's `[stop]`): a group holding the core
+    /// contribution, and the groups of 待補 / 修訂 / 審稿, get the full budget; the others their
+    /// section's (Methods details the record covers get fewer than the motive or a reading).
+    pub fn budget(&self, lens: &Lens, group: &str) -> usize {
+        let Some(g) = self.group(group) else { return lens.stop.max_turns_per_group };
+        let core = self.items_of(group).any(|i| i.role == "core-contribution" && !i.excluded);
+        let later = group == super::pending::GROUP_ID || g.id.starts_with('v') || g.id.starts_with('a');
+        lens.stop.budget(&g.section, core || later)
     }
 
     /// The group to talk about next: the active one, else the first pending.
@@ -785,6 +821,8 @@ impl Session {
                     candidates: std::mem::take(&mut i.candidates),
                     candidates_missing: std::mem::take(&mut i.candidates_missing),
                     candidates_tried: i.candidates_tried,
+                    from_record: i.from_record.take().map(|f| FromRecord { said: None, ..f }),
+                    record_tried: i.record_tried,
                     ..Default::default()
                 };
             }
@@ -920,7 +958,7 @@ pub fn append_turn(paper: &Path, group: &str, who: Who, text: &str, options: Vec
 
 /// [`append_turn`] noting the engine that wrote it.
 pub fn append_turn_by(paper: &Path, group: &str, who: Who, text: &str, options: Vec<String>, engine: &str) -> Result<Turn, String> {
-    append_turn_with(paper, Turn { n: 0, group: group.into(), who, text: text.into(), options, engine: engine.into(), about: String::new(), picked: vec![] })
+    append_turn_with(paper, Turn { n: 0, group: group.into(), who, text: text.into(), options, engine: engine.into(), about: String::new(), picked: vec![], cands: None })
 }
 
 /// Take turn `n` out of the interview (a question back moves to 深度討論, never an answer).

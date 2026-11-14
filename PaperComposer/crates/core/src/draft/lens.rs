@@ -139,6 +139,25 @@ pub struct Stop {
     /// Offer 2–4 options when the author is unsure.
     #[serde(default = "yes")]
     pub options_when_unsure: bool,
+    /// Answers per group by section, below `max_turns_per_group` (by importance: the details the
+    /// record covers get fewer than the motive, the reading of results and the discussion).
+    /// A section not listed gets `max_turns_per_group`.
+    #[serde(default = "default_section_turns")]
+    pub section_turns: std::collections::BTreeMap<String, usize>,
+}
+
+fn default_section_turns() -> std::collections::BTreeMap<String, usize> {
+    [("Methods", 3), ("Results", 4), ("Conclusion", 2)].into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+}
+
+impl Stop {
+    /// A group's budget: its section's, or the full one (`full`: it holds what matters most).
+    pub fn budget(&self, section: &str, full: bool) -> usize {
+        match self.section_turns.get(section) {
+            Some(n) if !full => (*n).clamp(1, self.max_turns_per_group.max(1)),
+            _ => self.max_turns_per_group,
+        }
+    }
 }
 
 fn default_turns() -> usize {
@@ -150,7 +169,7 @@ fn yes() -> bool {
 
 impl Default for Stop {
     fn default() -> Self {
-        Stop { max_turns_per_group: default_turns(), options_when_unsure: true }
+        Stop { max_turns_per_group: default_turns(), options_when_unsure: true, section_turns: default_section_turns() }
     }
 }
 

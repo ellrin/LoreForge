@@ -1,10 +1,10 @@
 // 討論草稿: build a paper draft through a conversation.
 //   1 主題      key value, the "interesting" hypothesis, the lens
-//   2 實驗記錄  upload records → experiments and a timeline
-//   3 題組      question groups per section (editable)
-//   4 對話      one question at a time; the ledger on the right says what
-//               each item still lacks (decided by the server from the lens)
-//   4.5 主張    claim register: every claim once, with its home section
+//   2 實驗記錄  upload records → experiments and a timeline (the plan starts when it is read)
+//   3 對話      one question at a time. The plan (question groups and their items) is the
+//               list on the left: progress, jump, delete, add. The record's own answers are
+//               confirmed with one click; the likely next answers are asked ahead (server)
+//   4 主張      claim register: every claim once, with its home section
 //   5 校正      narrative chain and suggestions (accept / reject)
 //   ★ 版型      the journal template, up to 3 suggested; 稍後 keeps the plain
 //               article. Changing it re-lays main.tex; the sections keep every word
@@ -21,9 +21,8 @@ const PCDraft = (() => {
   const STEPS = [
     ["topic", "1", "主題"],
     ["record", "2", "實驗記錄"],
-    ["plan", "3", "題組"],
-    ["interview", "4", "對話"],
-    ["claims", "4.5", "主張"],
+    ["interview", "3", "對話"],
+    ["claims", "4", "主張"],
     ["review", "5", "校正"],
     ["template", "★", "版型"],
     ["outline", "6", "大綱"],
@@ -38,6 +37,9 @@ const PCDraft = (() => {
   const ACT_ZH = { "replace-text": "改摘要", "insert-after": "插在這段之後", "insert-before": "插在這段之前", replace: "取代這段", append: "加在章節最後" };
   const STATUS_ZH = { pending: "未開始", active: "進行中", done: "完成", skipped: "略過" };
   let D = null;
+  /** The step a session phase shows (題組 is part of 對話). */
+  const stepOf = (phase) => Math.max(0, STEPS.findIndex(([k]) => k === (phase === "plan" ? "interview" : phase)));
+  const stepIdx = (k) => STEPS.findIndex(([x]) => x === k);
 
   const base = () => `/api/papers/${encodeURIComponent(D.name)}/draft`;
   const sess = () => D.data.session;
@@ -63,10 +65,11 @@ const PCDraft = (() => {
     try {
       D.data = await api(base());
       schedulePrep();
-      if (D.step == null) D.step = Math.max(0, STEPS.findIndex(([k]) => k === sess().phase));
+      if (D.step == null) { D.step = stepOf(sess().phase); D.wantOpen = true; }
       D.err = null;
     } catch (e) { D.err = e.message; }
     draw();
+    nudge();
   }
 
   /** Run a call that returns the new view; keep the window responsive. */
@@ -85,11 +88,12 @@ const PCDraft = (() => {
     const prev = r.previousElementSibling;
     return prev?.matches?.("input[data-typed], textarea[data-typed]") ? prev : null;
   }
-  async function run(label, fn) {
+  async function run(label, fn, auto = false) {
     if (D.busy) return;
     // the field this action sends (the focused one, or the one in / just above the button's row) is
-    // cleared after a success, kept after a failure
-    const c = consumedField();
+    // cleared after a success, kept after a failure; an automatic run (the first question asked by
+    // itself after a poll) sends none
+    const c = auto ? null : consumedField();
     if (c) c.dataset.consumed = "1";
     D.busy = label; D.err = null; draw();
     let ok = false;
@@ -99,20 +103,21 @@ const PCDraft = (() => {
     if (!ok) document.querySelectorAll("#dlgDraft [data-consumed]").forEach((x) => delete x.dataset.consumed);
     D.busy = null; draw();
     schedulePrep();
+    nudge();
   }
 
   /** 預想選項 are prepared in the background: look again until every group has them. */
   function schedulePrep() {
     clearTimeout(D.prepTimer);
-    if (!D.data || !(sess().groups.some((g) => g.prep === "running") || sess().figures?.running)) return;
+    if (!D.data || !(sess().groups.some((g) => g.prep === "running") || sess().figures?.running || D.data.planning)) return;
     D.prepTimer = setTimeout(async () => {
       if (!$("#dlgDraft").open || D.busy) { schedulePrep(); return; }
-      try { D.data = await api(base()); draw(); } catch { /* next time */ }
+      try { D.data = await api(base()); draw(); nudge(); } catch { /* next time */ }
       schedulePrep();
-    }, 3000);
+    }, D.data.planning ? 1500 : 3000);
   }
   const call = (path, body, method) => api(base() + path, body ?? {}, method);
-  const go = (i) => { D.step = i; draw(); };
+  const go = (i) => { D.step = i; if (STEPS[i]?.[0] === "interview") D.wantOpen = true; draw(); nudge(); };
 
   // ── names from the lens ──────────────────────────────
   const levelName = (d) => { const l = lens().scale.levels[d]; return l ? `${l.id} ${l.label}` : `${d}`; };
@@ -176,7 +181,7 @@ const PCDraft = (() => {
   function fieldKeys(root) {
     const seen = {};
     return [...root.querySelectorAll(FIELDS)].map((x) => {
-      const label = x.tagName === "DETAILS" ? `d:${x.querySelector("summary")?.textContent.replace(/（\d+）/, "") ?? ""}` : `${x.tagName}:${x.getAttribute("aria-label") || x.placeholder || x.closest("label")?.textContent || ""}`;
+      const label = x.tagName === "DETAILS" ? `d:${x.querySelector("summary")?.textContent.replace(/（[^）]*）.*$/, "") ?? ""}` : `${x.tagName}:${x.getAttribute("aria-label") || x.placeholder || x.closest("label")?.textContent || ""}`;
       const k = `${D.step}|${label}`;
       seen[k] = (seen[k] ?? 0) + 1;
       return [`${k}#${seen[k]}`, x];
@@ -219,7 +224,7 @@ const PCDraft = (() => {
     main.innerHTML = ""; side.innerHTML = ""; steps.innerHTML = "";
     if (!D.data) { main.append(el("p", "df-note bad", D.err ?? "載入中…")); return; }
     $("#dfLens").textContent = `視角：${lens().name}`;
-    const phaseAt = STEPS.findIndex(([k]) => k === sess().phase);
+    const phaseAt = stepOf(sess().phase);
     STEPS.forEach(([k, n, label], i) => {
       // the journal is chosen in step 1: ★ 版型 only shows for a session that has none yet
       if (k === "template" && D.data.journal && D.step !== i) return;
@@ -241,10 +246,12 @@ const PCDraft = (() => {
       }
       steps.append(li);
     });
-    if (D.busy) main.append(el("div", "df-busy", `${D.busy}…（模型思考中，可以先看其他步驟）`));
+    const key0 = STEPS[D.step][0];
+    // 對話 shows its wait where the answer goes
+    if (D.busy && key0 !== "interview") main.append(el("div", "df-busy", `${D.busy}…`));
     if (D.err) main.append(el("div", "df-note bad", D.err));
     const key = STEPS[D.step][0];
-    ({ topic, record, plan, interview, claims, review, template, outline, draft: drafting, audit, revise })[key](main, side);
+    ({ topic, record, interview, claims, review, template, outline, draft: drafting, audit, revise })[key](main, side);
     $("#dlgDraft").classList.toggle("with-side", side.childElementCount > 0);
   }
 
@@ -478,207 +485,331 @@ const PCDraft = (() => {
     // the step's one main action, at the end: 整理 until it has run, then 下一步
     const done = sess().experiments.length > 0;
     const tidy = btn(done ? "重新整理" : "整理實驗記錄", () => run("整理實驗記錄", () => call("/record")), done ? "ghost small" : "primary small");
-    main.append(row(tidy, stepTag("record"), el("span", "df-grow"), ...(done ? [btn("下一步", () => go(D.step + 1), "primary small")] : [])));
+    main.append(row(tidy, stepTag("record"), el("span", "df-grow"), ...(done ? [btn("下一步", () => goInterview(), "primary small")] : [])));
   }
 
-  // ── 3 題組 ───────────────────────────────────────────
-  function plan(main) {
-    const started = sess().groups.some((g) => g.turns > 0);
-    main.append(hq("題組", "每一組最後要整理出：說明、動機、結論。題組數只是估計，對話後還會校正。"));
-    // the figure plan is at the end of this page: a way there with its counts
-    const fpl = sess().figures;
-    if (fpl?.items?.length || fpl?.running) {
-      const n = (k) => (fpl.items ?? []).filter((x) => x.kind === k && x.status !== "removed").length;
-      const jump = btn(fpl.running ? "圖表規劃中…" : `圖表規劃：圖 ${n("figure")}、表 ${n("table")} ↓`, () => $("#dfFigPlan")?.scrollIntoView({ behavior: "smooth" }), "ghost small");
-      jump.disabled = false;
-      main.append(row(jump));
-    }
-    const r = row();
-    if (!started) r.append(btn(sess().groups.length ? "重新規劃" : "規劃題組", () => run("規劃題組", () => call("/plan"))), stepTag("plan"));
-    else r.append(note("已經開始對話，只能在下面直接修改。"), stepTag("plan"));
-    main.append(r);
-    if (!sess().groups.length) return;
-    const edit = { groups: sess().groups.map((g) => ({ ...g })), items: [] };
-    const itemsByGroup = {};
-    sess().items.forEach((i) => (itemsByGroup[i.group] ??= []).push({ ...i }));
-    SECTIONS.forEach((sec) => {
-      const gs = edit.groups.filter((g) => g.section === sec);
-      const box = el("div", "df-sec");
-      box.append(el("h4", "", `${sec}　${SEC_ZH[sec]}`));
-      gs.forEach((g) => {
-        const card = el("div", "df-card");
-        const title = input(g.title, "題組標題");
-        title.oninput = () => (g.title = title.value);
-        const purpose = input(g.purpose, "這一組要釐清什麼", "textarea");
-        purpose.oninput = () => (g.purpose = purpose.value);
-        const head = row(el("span", "df-gid", g.id), title);
-        head.append(iconButton("trash", "刪除題組", () => { edit.groups = edit.groups.filter((x) => x !== g); save(); }));
-        card.append(head, purpose);
-        const ul = el("ul", "df-items");
-        (itemsByGroup[g.id] ?? []).forEach((it) => {
-          const li = el("li", "", `${it.label}`);
-          li.append(el("span", "df-role", it.role || "—"));
-          ul.append(li);
-        });
-        const add = input("", "新增要釐清的項目，Enter 加入");
-        add.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && add.value.trim()) { edit.items.push({ id: "", group: g.id, label: add.value.trim(), role: "design" }); save(); } };
-        card.append(ul, add);
-        box.append(card);
-      });
-      const addG = btn(`＋ 新增 ${SEC_ZH[sec]} 題組`, () => { edit.groups.push({ id: "", section: sec, title: "新題組", purpose: "" }); save(); }, "ghost small");
-      box.append(addG);
-      main.append(box);
-    });
-    function save() { run("儲存題組", () => call("/plan", edit, "PUT")); }
-    main.append(row(btn("儲存修改", save), nextBtn("開始對話")));
-    figurePlan(main);
-  }
-
-  // ── 圖表規劃: proposed with the groups; keep, drop, pick how to draw, or say your own ──
-  const TOOL_ZH = { flow: "流程圖", plot: "繪圖", table: "表格", image: "自備影像" };
-  function figurePlan(main) {
-    const fp = sess().figures;
-    const fh = hq("圖表規劃", "依實驗記錄、Key value 和期刊習慣提出的圖表。每張選一種畫法，或刪掉、自己說；大綱和草稿會用這份清單的 \\ref。");
-    fh.id = "dfFigPlan";
-    main.append(fh);
-    const head = row();
-    if (fp?.running) head.append(note("圖表規劃中…"));
-    else head.append(btn(fp?.items?.length ? "重新規劃圖表" : "規劃圖表", () => run("規劃圖表", () => call("/figures")), "ghost"));
-    if (fp?.engine) head.append(engineTag(fp.engine, fp.seconds != null ? `${fp.seconds} 秒` : ""));
-    main.append(head);
-    if (fp?.failed) main.append(note(`沒有完成：${fp.failed}`, "warn"));
-    if (!fp?.items?.length) return;
-    const items = fp.items.map((x) => ({ ...x }));
-    const save = () => run("儲存圖表", () => call("/figures", { items }, "PUT"));
-    const kept = (k) => items.filter((x) => x.kind === k && x.status !== "removed").length;
-    const count = (k, zh, t) => `${zh} ${kept(k)}${t ? `／期刊 ${t[0]}–${t[1]}` : ""}`;
-    const over = (k, t) => t && (kept(k) < t[0] || kept(k) > t[1]);
-    main.append(row(el("span", `df-badge ${over("figure", fp.figures) ? "warn" : ""}`, count("figure", "圖", fp.figures)), el("span", `df-badge ${over("table", fp.tables) ? "warn" : ""}`, count("table", "表", fp.tables))));
-    const list = el("div", "df-figs");
-    items.forEach((it) => {
-      const off = it.status === "removed";
-      const card = el("div", `df-card df-fig ${off ? "no" : ""}`);
-      const top = row(el("span", "df-gid", it.id), el("b", "", it.title), el("span", "df-role", TOOL_ZH[it.tool] ?? it.tool));
-      top.append(el("span", "grow"));
-      // its stand-in is in the paper: make the real figure here, it takes the stand-in's place and label
-      const si = it.kind === "figure" && !off && (D.data.stand_ins ?? []).find((x) => x.label === it.label);
-      if (si) {
-        top.append(btn("用流程圖做", () => makeFromStandIn(it.label, "flow"), "ghost small"), btn("用繪圖做", () => makeFromStandIn(it.label, "plot"), "ghost small"));
-      }
-      top.append(btn(off ? "加回來" : "刪除", () => { it.status = off ? "kept" : "removed"; save(); }, "ghost small"));
-      card.append(top);
-      if (it.supports) card.append(el("p", "df-text", it.supports));
-      // what it is made from (record ids); the claims it backs only as a count
-      const ev = el("div", "df-tags");
-      (it.evidence ?? []).forEach((e) => ev.append(el("span", "df-badge", e)));
-      (it.pending ?? []).forEach((p) => ev.append(el("span", "df-badge warn", `待補 ${p}`)));
-      if (it.claims?.length) ev.append(el("span", "df-fig-claims", `支撐 ${it.claims.length} 個主張`));
-      if (ev.childElementCount) card.append(ev);
-      (it.warnings ?? []).forEach((w) => card.append(note(w, "warn")));
-      if (!off) {
-        // options first; 「都不是，我自己說」 last
-        const opts = el("div", "df-opts");
-        (it.options ?? []).forEach((o, k) => {
-          const b = el("button", "ghost", o);
-          // nothing looks chosen until he chooses (a proposal is not a decision)
-          b.setAttribute("aria-pressed", String(it.status === "kept" && !it.own && (it.chosen ?? 0) === k));
-          b.disabled = !!D.busy;
-          b.onclick = () => { it.chosen = k; it.own = ""; it.status = "kept"; save(); };
-          opts.append(b);
-        });
-        const own = input(it.own, "都不是，我自己說");
-        own.onchange = () => { it.own = own.value; it.status = "kept"; save(); };
-        card.append(opts, own);
-      }
-      list.append(card);
-    });
-    main.append(list);
-    const add = input("", "新增一張圖或表（說它要畫什麼），Enter 加入");
-    add.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && add.value.trim()) { items.push({ id: "", kind: /表|table/i.test(add.value) ? "table" : "figure", label: "", title: add.value.trim(), tool: "" }); save(); } };
-    main.append(add);
-  }
-
-  // ── 4 對話 ───────────────────────────────────────────
+  // ── 3 對話 ───────────────────────────────────────────
+  // The page's job: read one question, answer (pick, type or say it), go on. The plan is the
+  // quiet list on the left (where you are, how much is left); 寫法筆記 and 圖表規劃 are folded
+  // on the right; 深度討論 takes the right side while it is open.
   const stateOf = (gid) => D.data.states.find((s) => s.group === gid);
   const turnsOf = (gid) => D.data.turns.filter((t) => t.group === gid);
+  const model = () => $("#dfModel").value;
+  const live = (g) => g.status !== "done" && g.status !== "skipped";
+  /** Seconds of the author's time per question (reading, answering, waiting), measured on a1. */
+  const SEC_PER_Q = 40;
+  const SHORT_SEC = { Introduction: "前言", Methods: "方法", Results: "結果", Discussion: "討論", Conclusion: "結論" };
+  const groupName = (g) => g.id === "wp" ? "待補" : g.title;
+  /** In the list: the title without its parenthetical (labels, record ids, notes to the model). */
+  const shortName = (g) => g.id === "wp" ? "待補" : (g.title.replace(/[（(][^）)]*[）)]/g, "").trim() || g.title);
+  /** Items still open in a group (done = nothing missing; left out = not counted). */
+  function itemProgress(g) {
+    const st = stateOf(g.id);
+    const items = sess().items.filter((i) => i.group === g.id && !i.excluded);
+    const done = items.filter((i) => { const s = st?.items.find((x) => x.id === i.id); return s && !s.missing.length; }).length;
+    return { done, all: items.length };
+  }
+  /** Items whose record answer waits for 對／不對 (shown before the group's first question). */
+  const toConfirm = (gid) => (D.data.to_confirm?.[gid] ?? []).map((id) => sess().items.find((i) => i.id === id)).filter(Boolean);
+  /** Questions answered, and about how many are left (each open group: its open items, at most its budget). */
+  function overall() {
+    const groups = sess().groups;
+    const asked = groups.reduce((n, g) => n + g.turns, 0);
+    let left = 0;
+    groups.filter(live).forEach((g) => {
+      const st = stateOf(g.id);
+      if (st?.ready || st?.over_budget) return;
+      const p = itemProgress(g);
+      const conf = g.turns ? 0 : toConfirm(g.id).length;
+      left += (conf ? 1 : 0) + Math.max(conf ? 0 : 1, Math.min((st?.budget ?? 8) - g.turns - (conf ? 1 : 0), p.all - p.done - conf));
+    });
+    return { asked, left, mins: Math.max(1, Math.round((left * SEC_PER_Q) / 60)) };
+  }
+  /** The group after `g` still to talk about (in plan order, wrapping). */
+  function nextGroup(g) {
+    const gs = sess().groups;
+    const i = gs.indexOf(g);
+    return [...gs.slice(i + 1), ...gs.slice(0, i)].find((x) => live(x) && x.id !== g.id) ?? null;
+  }
+
+  /** Into 對話 (from 實驗記錄's 下一步, the step list, a group): the plan when there is none,
+   * else the shown group's first question (asked ahead by the server, so usually at once). */
+  function goInterview(gid) {
+    D.step = stepIdx("interview");
+    if (gid) D.group = gid;
+    D.wantOpen = true;
+    draw();
+    if (!sess().groups.length && !D.data.planning) run("準備問題", () => call("/plan"), true);
+    else nudge();
+  }
+  /** After a navigation (never from a redraw alone): ask the shown group's first question once
+   * its options are ready, and have the server prepare what comes next. */
+  function nudge() {
+    if (!D?.data || STEPS[D.step]?.[0] !== "interview" || D.busy) return;
+    const g = sess().groups.find((x) => x.id === D.group);
+    if (!g) return;
+    prefetch(g.id);
+    if (!D.wantOpen) return;
+    if (!live(g) || turnsOf(g.id).length || toConfirm(g.id).length) { D.wantOpen = false; return; }
+    if (g.prep === "running") return;
+    D.wantOpen = false;
+    run("準備第一題", () => call("/turn", { group: g.id, model: model() }), true);
+  }
+  /** The server prepares the group's options and asks its likely next turn ahead (once per state). */
+  function prefetch(gid) {
+    const k = `${gid}|${turnsOf(gid).length}|${sess().groups.find((x) => x.id === gid)?.prep ?? ""}|${model()}`;
+    if (D.prefetched === k) return;
+    D.prefetched = k;
+    api(base() + "/prefetch", { group: gid, model: model() }).catch(() => { /* only ahead of time */ });
+  }
 
   function interview(main, side) {
     const groups = sess().groups;
-    if (!groups.length) { main.append(note("先在「題組」規劃題組。")); return; }
-    if (!D.group || !groups.some((g) => g.id === D.group)) D.group = sess().active ?? groups.find((g) => g.status === "pending")?.id ?? groups[0].id;
-    const chips = el("div", "df-chips");
-    groups.forEach((g) => {
-      const c = el("button", `df-chip s-${g.status}`, g.title);
-      c.prepend(el("span", "c", g.id.startsWith("v") ? "修訂" : (SEC_ZH[g.section] ?? g.section)));
-      c.setAttribute("aria-pressed", String(g.id === D.group));
-      if (stateOf(g.id)?.ready && g.status !== "done") c.classList.add("ready");
-      c.onclick = () => { D.group = g.id; D.picked = null; D.pickItem = null; draw(); };
-      chips.append(c);
-    });
-    main.append(chips);
+    if (!groups.length) {
+      main.append(el("div", "df-busy", D.data.planning || D.busy ? "準備問題…" : ""));
+      if (!D.data.planning && !D.busy) main.replaceChildren(row(btn("準備問題", () => run("準備問題", () => call("/plan")))));
+      return;
+    }
+    if (!D.group || !groups.some((g) => g.id === D.group)) D.group = sess().active ?? groups.find(live)?.id ?? groups[0].id;
     const g = groups.find((x) => x.id === D.group);
-    const st = stateOf(g.id);
-    main.append(el("p", "df-purpose", g.purpose));
-    if (g.prep === "running") main.append(note("準備選項中…"));
-    else if (g.prep === "failed") main.append(row(note("選項沒有準備好", "warn"), btn("重試", () => run("準備選項", () => call(`/group/${g.id}`, { action: "prepare" })), "ghost")));
-    const log = el("div", "df-log");
-    const turns = turnsOf(g.id);
-    turns.forEach((t, i) => {
-      const b = el("div", `df-msg ${t.who}`);
-      b.append(el("div", "", t.text));
-      if (t.who === "ai" && t.engine) b.append(engineTag(t.engine));
-      // the question being asked: talk it over apart from the interview (深度討論)
-      if (t.who === "ai" && i === turns.length - 1) {
-        const n = discussionsOf(g.id).length;
-        const db = btn("深度討論", () => openDiscussion(g.id), "ghost small df-discbtn");
-        if (n) db.append(el("span", "df-disc-n", String(n)));
-        b.append(db);
-      }
-      const it = t.who === "ai" && i === turns.length - 1 && t.about ? sess().items.find((x) => x.id === t.about) : null;
-      if (it?.candidates?.length) b.append(candidateCards(it));
-      else if (t.who === "ai" && t.options?.length && i === turns.length - 1) {
-        const opts = el("div", "df-opts");
-        t.options.forEach((o) => { const ob = el("button", "ghost", o); ob.disabled = !!D.busy; ob.onclick = () => send(o); opts.append(ob); });
-        b.append(opts);
-      }
-      log.append(b);
-    });
-    main.append(log);
-    setTimeout(() => (log.scrollTop = log.scrollHeight), 0);
+    const wrap = el("div", "df-iv");
+    wrap.append(planList(groups, g), questionPane(g));
+    main.append(wrap);
+    const d = D.disc && sess().discussions?.find((x) => x.id === D.disc && x.group === g.id && x.status === "open");
+    if (d) discussion(side, d);
+    else if (D.sidePanel === "notes") writingNotes(side);
+    else if (D.sidePanel === "figs") figureFold(side);
+  }
+  /** 寫法筆記 / 圖表規劃: opened beside the question only when wanted. */
+  function sideToggle(k, label) {
+    const b = btn(label, () => { D.sidePanel = D.sidePanel === k ? null : k; draw(); }, "ghost small df-sidetog");
+    b.disabled = false;
+    b.setAttribute("aria-pressed", String(D.sidePanel === k));
+    if (k === "figs" && figOff()) b.classList.add("warn");
+    return b;
+  }
+  const figLive = (k) => (sess().figures?.items ?? []).filter((x) => x.kind === k && x.status !== "removed").length;
+  const figOff = () => { const fp = sess().figures; const o = (k, t) => t && (figLive(k) < t[0] || figLive(k) > t[1]); return !!fp && (o("figure", fp.figures) || o("table", fp.tables)); };
+  const figCount = () => sess().figures?.running ? "圖表規劃中" : `圖 ${figLive("figure")}・表 ${figLive("table")}`;
 
+  // ── the plan, on the left ───────────────────────────
+  function planList(groups, cur) {
+    const nav = el("nav", "df-plan");
+    nav.setAttribute("aria-label", "題組");
+    let sec = null;
+    groups.forEach((g) => {
+      const s = g.id === "wp" ? "待補" : g.id.startsWith("v") ? "修訂" : g.id.startsWith("a") ? "審稿" : (SHORT_SEC[g.section] ?? g.section);
+      if (s !== sec) { nav.append(el("div", "df-plan-sec", s)); sec = s; }
+      const on = g.id === cur.id;
+      const r = el("div", `df-pg${on ? " on" : ""}${live(g) ? "" : ` ${g.status}`}`);
+      const b = el("button", "df-pg-t");
+      b.title = groupName(g);
+      b.append(el("span", "t", g.id === "wp" ? "還在等的結果" : shortName(g)));
+      const p = itemProgress(g);
+      b.append(el("span", "n", g.status === "done" ? "✓" : g.status === "skipped" ? "—" : p.all ? `${p.done}/${p.all}` : ""));
+      b.setAttribute("aria-current", String(on));
+      b.onclick = () => { D.group = g.id; D.picked = null; D.pickItem = null; D.wantOpen = true; draw(); nudge(); };
+      r.append(b);
+      if (!/^(wp|v|a)/.test(g.id)) {
+        const del = iconButton("trash", "刪除這一組", async (e) => {
+          if (!(await LoreShell.ask(e.currentTarget, [`刪除「${groupName(g)}」？`], [{ label: "取消", value: null }, { label: "刪除", value: true, danger: true, primary: true }]))) return;
+          savePlan({ groups: sess().groups.filter((x) => x.id !== g.id).map((x) => ({ ...x })), items: [] });
+        });
+        del.classList.add("df-pg-del");
+        r.append(del);
+      }
+      nav.append(r);
+      if (on) nav.append(itemList(g));
+    });
+    return nav;
+  }
+  const savePlan = (edit) => run("儲存", () => call("/plan", edit, "PUT"));
+  /** The shown group's items: ✓ done, ○ open; × leaves one out of the paper; add one by typing or voice. */
+  function itemList(g) {
+    const box = el("div", "df-gitems");
+    const st = stateOf(g.id);
+    sess().items.filter((i) => i.group === g.id).forEach((it) => {
+      const s = st?.items.find((x) => x.id === it.id);
+      const ok = !it.excluded && s && !s.missing.length;
+      const r = el("div", `df-gi${ok ? " ok" : ""}${it.excluded ? " off" : ""}`);
+      r.append(el("span", "m", it.excluded ? "–" : ok ? "✓" : "○"), el("span", "t", it.label));
+      r.title = [it.label, it.stance].filter(Boolean).join("\n");
+      const x = iconButton(it.excluded ? "undo" : "x", it.excluded ? "放回來" : "不寫進論文", () => run("更新", () => call(`/items/${it.id}/exclude`, { excluded: !it.excluded })));
+      x.classList.add("df-gi-x");
+      r.append(x);
+      box.append(r);
+    });
+    if (/^(wp|v|a)/.test(g.id)) return box;
+    const add = input("", "加一項");
+    add.setAttribute("aria-label", `加一項 ${g.id}`);
+    const go = () => {
+      const v = add.value.trim();
+      if (!v) return;
+      savePlan({ groups: sess().groups.map((x) => ({ ...x })), items: [{ id: "", group: g.id, label: v, role: "design" }] });
+    };
+    add.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); go(); } };
+    const r = row(add);
+    const mic = micButton(add);
+    if (mic) r.append(mic);
+    r.classList.add("df-gi-add");
+    box.append(r);
+    return box;
+  }
+
+  // ── the question ────────────────────────────────────
+  function questionPane(g) {
+    const pane = el("section", "df-q");
+    const all = overall();
+    const total = all.asked + all.left;
+    const head = el("div", "df-prog");
+    const bar = el("div", "df-bar");
+    const fill = el("span");
+    fill.style.width = `${total ? Math.round((100 * all.asked) / total) : 0}%`;
+    bar.append(fill);
+    head.append(el("span", "df-prog-t", all.left ? `已答 ${all.asked} 題・約剩 ${all.left} 題（約 ${all.mins} 分鐘）` : `已答 ${all.asked} 題`), bar);
+    head.append(sideToggle("notes", `寫法筆記 ${(sess().writing_notes ?? []).length}`), sideToggle("figs", figCount()));
+    if (sess().groups.some(live)) head.append(btn("夠了，下一步", () => go(stepIdx("claims")), "ghost small"));
+    pane.append(head);
+    pane.append(el("h3", "df-qg", groupName(g)));
+    const turns = turnsOf(g.id);
+    const st = stateOf(g.id);
+    const conf = toConfirm(g.id);
+    // the record already says it: one click instead of a question each
+    if (!turns.length && conf.length && live(g)) {
+      pane.append(confirmCard(g, conf));
+      if (D.busy) pane.append(el("div", "df-busy", `${D.busy}…`));
+      return pane;
+    }
     if (!turns.length) {
-      main.append(row(btn("開始這一組", () => run("準備第一個問題", () => call("/turn", { group: g.id, model: $("#dfModel").value })))));
-    } else {
-      // while 深度討論 is open the answer comes from there (one place to write at a time)
+      if (live(g) && (g.prep === "running" || D.busy)) pane.append(el("div", "df-busy", g.prep === "running" ? "準備這一組的選項…" : `${D.busy}…`));
+      else if (live(g)) pane.append(row(btn("問第一題", () => run("準備第一題", () => call("/turn", { group: g.id, model: model() })))));
+      else pane.append(groupFoot(g, st));
+      return pane;
+    }
+    // what was said before: one line, opened on demand; the question being asked stands apart
+    const last = turns.at(-1);
+    const enough = (st?.ready || st?.over_budget) && !D.goOn?.[g.id];
+    const asking = last.who === "ai" && live(g) && !enough;
+    const past = last.who === "ai" && live(g) ? turns.slice(0, -1) : turns;
+    if (past.length) {
+      const fold = el("details", "df-fold df-histfold");
+      fold.append(el("summary", "", `前面的對話（${past.length}）`));
+      const log = el("div", "df-log df-hist");
+      past.forEach((t) => log.append(el("div", `df-msg ${t.who}`, t.text)));
+      fold.append(log);
+      fold.ontoggle = () => { if (fold.open) log.scrollTop = log.scrollHeight; };
+      pane.append(fold);
+    }
+    if (live(g) && enough) {
+      // this group has what it needs: the way on is the page's main thing
+      const nx = nextGroup(g);
+      const card = el("div", "df-enough");
+      card.append(el("b", "", "這一組夠了"));
+      if (nx) card.append(btn(`下一組：${shortName(nx)} →`, () => nextFrom(g, nx)));
+      else card.append(btn("對話完成，下一步：主張", async () => { await closeGroup(g); go(stepIdx("claims")); }));
+      if (last.who === "ai") card.append(btn("繼續回答", () => { (D.goOn ??= {})[g.id] = true; draw(); }, "ghost small"));
+      pane.append(card);
+      if (D.busy) pane.append(el("div", "df-busy", `${D.busy}…`));
+      return pane;
+    }
+    if (asking) {
+      // the reply to the last answer is quiet; the question is what the eye lands on
+      const q = el("div", "df-msg ai cur");
+      const lines = last.text.split("\n").map((x) => x.trim()).filter(Boolean);
+      const ask = lines.pop() ?? "";
+      if (lines.length) q.append(el("div", "df-reply", lines.join(" ")));
+      const qa = el("div", "df-qrow");
+      qa.append(el("div", "df-ask", ask));
+      const n = discussionsOf(g.id).length;
+      const db = btn("不懂這題", () => openDiscussion(g.id), "ghost small");
+      if (n) db.append(el("span", "df-disc-n", String(n)));
+      qa.append(db);
+      q.append(qa);
+      pane.append(q);
+    }
+    if (D.busy) pane.append(el("div", "df-busy", `${D.busy}…`));
+    if (asking) {
       const talking = !!(D.disc && sess().discussions?.some((x) => x.id === D.disc && x.group === g.id && x.status === "open"));
+      const ch = choicesOf(last);
+      if (ch.length) pane.append(choiceCards(ch));
       const ta = el("textarea", "np-input df-answer");
-      ta.rows = 3;
+      ta.rows = 2;
       ta.disabled = talking;
-      ta.placeholder = talking ? "正在深度討論：在右邊整理成回答，或關閉討論" : "回答（Ctrl+Enter 送出）";
+      ta.placeholder = talking ? "深度討論中" : ch.length ? "都不是，我自己說" : "回答";
+      ta.setAttribute("aria-label", `回答 ${g.id}`);
       ta.value = D.draftAnswer?.[g.id] ?? "";
       ta.oninput = () => ((D.draftAnswer ??= {})[g.id] = ta.value);
       ta.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.ctrlKey || e.metaKey)) send(ta.value); };
-      main.append(ta);
-      const mic = micButton(ta, g.id);
-      if (mic) ta.after(mic);
-      const last = turns.at(-1);
-      const shown = last?.who === "ai" && last.about && sess().items.find((x) => x.id === last.about)?.candidates?.length;
-      const sendRow = row(btn("送出", () => send(ta.value)), ...(shown ? [] : [btn("不確定，給我選項", () => send("不確定，請給我幾個選項"), "ghost")]));
-      if (talking) sendRow.querySelectorAll("button").forEach((x) => (x.disabled = true));
-      main.append(sendRow);
+      const ans = row(ta);
+      ans.classList.add("df-ansrow");
+      const mic = micButton(ta);
+      if (mic) ans.append(mic);
+      ans.append(btn("送出", () => send(ta.value)));
+      if (talking) ans.querySelectorAll("button").forEach((x) => (x.disabled = true));
+      pane.append(ans);
+      if (!ch.length) { const r = row(btn("給我選項", () => send("不確定，請給我幾個選項"), "ghost small")); pane.append(r); }
     }
+    pane.append(groupFoot(g, st));
+    return pane;
+  }
+  /** The end of a group: on to the next (main when it has what it needs), or the interview's end. */
+  function groupFoot(g, st) {
     const foot = row();
-    if (st?.ready && g.status !== "done") foot.append(note("這一組的資訊已經足夠。", "ok"));
-    else if (st?.over_budget && g.status !== "done") foot.append(note(`已經問了 ${g.turns} 題，剩下沒問到的可以略過。`, "warn"));
-    foot.append(btn(g.status === "done" ? "重新打開" : "結束這一組", () => run("更新題組", () => call(`/group/${g.id}`, { action: g.status === "done" ? "reopen" : "close" })), st?.ready ? "primary small" : "ghost"));
-    if (g.status !== "done" && g.status !== "skipped") foot.append(btn("略過", () => run("更新題組", () => call(`/group/${g.id}`, { action: "skip" })), "ghost"));
-    const nextG = groups.find((x) => x.status === "pending" && x.id !== g.id);
-    if (nextG) foot.append(btn(`下一組：${nextG.title}`, () => { D.group = nextG.id; draw(); }, "ghost"));
-    else if (groups.every((x) => x.status === "done" || x.status === "skipped")) foot.append(nextBtn("下一步：主張登記"));
-    main.append(foot);
-    const d = D.disc && sess().discussions?.find((x) => x.id === D.disc && x.group === g.id && x.status === "open");
-    if (d) discussion(side, d);
-    else { ledger(side, g, st); writingNotes(side); }
+    foot.classList.add("df-gfoot");
+    const nx = nextGroup(g);
+    const enough = st?.ready || st?.over_budget;
+    if (!live(g)) {
+      foot.append(btn("重新打開", () => run("更新題組", () => call(`/group/${g.id}`, { action: "reopen" })), "ghost small"));
+    }
+    if (!nx && (!live(g) || enough)) {
+      const done = el("div", "df-done");
+      done.append(el("b", "", "對話完成"), btn("下一步：主張", async () => { if (live(g)) await closeGroup(g); go(stepIdx("claims")); }));
+      foot.append(el("span", "df-grow"), done);
+      return foot;
+    }
+    if (enough && live(g)) foot.append(el("span", "df-note ok", "這一組夠了"));
+    foot.append(el("span", "df-grow"));
+    if (nx) foot.append(btn(live(g) && !enough ? "略過，下一組 →" : "下一組 →", () => nextFrom(g, nx), enough || !live(g) ? "primary small" : "ghost small"));
+    return foot;
+  }
+  /** Close this group (略過 when nothing was said) and open the next one. */
+  function nextFrom(g, nx) {
+    run("下一組", async () => {
+      const v = live(g) ? await call(`/group/${g.id}`, { action: g.turns > 0 ? "close" : "skip" }) : null;
+      D.group = nx.id; D.picked = null; D.pickItem = null; D.wantOpen = true;
+      return v;
+    });
+  }
+  const closeGroup = (g) => call(`/group/${g.id}`, { action: g.turns > 0 ? "close" : "skip" }).then((v) => (D.data = v)).catch(() => {});
+
+  /** 記錄寫的，對嗎？ The record's answers of a group: 對 for all at once, 不對 per item. */
+  function confirmCard(g, conf) {
+    const card = el("div", "df-conf");
+    card.append(el("h4", "", "記錄寫的，對嗎？"));
+    D.notRight ??= {};
+    const no = (D.notRight[g.id] ??= []);
+    conf.forEach((it) => {
+      const r = el("div", `df-conf-i${no.includes(it.id) ? " no" : ""}`);
+      const txt = el("div", "t");
+      txt.append(el("b", "", it.label), el("span", "", it.from_record.text));
+      const ev = el("span", "ev");
+      it.from_record.evidence.forEach((e) => { const x = el("span", "df-ev", e); x.title = evidenceText(e); ev.append(x); });
+      txt.append(ev);
+      const t = el("button", "ghost small", "不對");
+      t.setAttribute("aria-pressed", String(no.includes(it.id)));
+      t.disabled = !!D.busy;
+      t.onclick = () => { const k = no.indexOf(it.id); if (k >= 0) no.splice(k, 1); else no.push(it.id); draw(); };
+      r.append(txt, t);
+      card.append(r);
+    });
+    const yes = conf.filter((it) => !no.includes(it.id)).map((it) => it.id);
+    const go1 = btn(no.length ? (yes.length ? "其餘都對，下一題" : "下一題") : "都對，下一題", () => run("下一題", async () => {
+      const v = await call("/confirm", { group: g.id, items: yes, no: [...no], model: model() });
+      delete D.notRight[g.id];
+      return v;
+    }));
+    card.append(row(el("span", "df-grow"), go1));
+    return card;
   }
 
   async function makeFromStandIn(label, tool) {
@@ -693,20 +824,96 @@ const PCDraft = (() => {
     } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   }
 
+  // ── 圖表規劃 (folded in 對話): keep, drop, pick how to draw, or say your own ──
+  const TOOL_ZH = { flow: "流程圖", plot: "繪圖", table: "表格", image: "自備影像" };
+  function figureFold(side) {
+    const fp = sess().figures;
+    const head = el("div", "df-dhead");
+    const h4 = el("h4", "", `圖表規劃　${figCount()}`);
+    head.append(h4, iconButton("x", "收起", () => { D.sidePanel = null; draw(); }));
+    side.append(head);
+    if (fp && figOff()) side.append(el("span", "df-badge warn", `期刊：圖 ${fp.figures?.[0]}–${fp.figures?.[1]}・表 ${fp.tables?.[0]}–${fp.tables?.[1]}`));
+    figurePlan(side);
+  }
+  function figurePlan(main) {
+    const fp = sess().figures;
+    const head = row();
+    if (!fp?.running) head.append(btn(fp?.items?.length ? "重新規劃" : "規劃圖表", () => run("規劃圖表", () => call("/figures")), "ghost small"));
+    if (fp?.engine) head.append(engineTag(fp.engine, fp.seconds != null ? `${fp.seconds} 秒` : ""));
+    main.append(head);
+    if (fp?.failed) main.append(note(`沒有完成：${fp.failed}`, "warn"));
+    if (!fp?.items?.length) return;
+    const items = fp.items.map((x) => ({ ...x }));
+    const save = () => run("儲存圖表", () => call("/figures", { items }, "PUT"));
+    const list = el("div", "df-figs");
+    items.forEach((it) => {
+      const off = it.status === "removed";
+      const card = el("div", `df-card df-fig ${off ? "no" : ""}`);
+      const top = row(el("b", "", it.title), el("span", "df-role", TOOL_ZH[it.tool] ?? it.tool));
+      top.append(el("span", "grow"));
+      // its stand-in is in the paper: make the real figure here, it takes the stand-in's place and label
+      const si = it.kind === "figure" && !off && (D.data.stand_ins ?? []).find((x) => x.label === it.label);
+      if (si) top.append(btn("用流程圖做", () => makeFromStandIn(it.label, "flow"), "ghost small"), btn("用繪圖做", () => makeFromStandIn(it.label, "plot"), "ghost small"));
+      top.append(iconButton(off ? "undo" : "trash", off ? "加回來" : "刪除", () => { it.status = off ? "kept" : "removed"; save(); }));
+      card.append(top);
+      if (it.supports) card.append(el("p", "df-text", it.supports));
+      const ev = el("div", "df-tags");
+      (it.evidence ?? []).forEach((e) => ev.append(el("span", "df-badge", e)));
+      (it.pending ?? []).forEach((p) => ev.append(el("span", "df-badge warn", `待補 ${p}`)));
+      if (it.claims?.length) ev.append(el("span", "df-fig-claims", `支撐 ${it.claims.length} 個主張`));
+      if (ev.childElementCount) card.append(ev);
+      (it.warnings ?? []).forEach((w) => card.append(note(w, "warn")));
+      if (!off) {
+        const opts = el("div", "df-opts");
+        (it.options ?? []).forEach((o, k) => {
+          const b = el("button", "ghost", o);
+          b.setAttribute("aria-pressed", String(it.status === "kept" && !it.own && (it.chosen ?? 0) === k));
+          b.disabled = !!D.busy;
+          b.onclick = () => { it.chosen = k; it.own = ""; it.status = "kept"; save(); };
+          opts.append(b);
+        });
+        const own = input(it.own, "自己說");
+        own.setAttribute("aria-label", `自己說 ${it.id}`);
+        const keepOwn = () => { if (own.value === (it.own ?? "")) return; it.own = own.value; it.status = "kept"; save(); };
+        own.onchange = keepOwn;
+        const r = row(own);
+        const mic = micButton(own, keepOwn);
+        if (mic) r.append(mic);
+        card.append(opts, r);
+      }
+      list.append(card);
+    });
+    main.append(list);
+    const add = input("", "加一張圖或表");
+    add.setAttribute("aria-label", "加一張圖或表");
+    const addIt = () => { const v = add.value.trim(); if (!v) return; items.push({ id: "", kind: /表|table/i.test(v) ? "table" : "figure", label: "", title: v, tool: "" }); save(); };
+    add.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); addIt(); } };
+    const r = row(add);
+    const mic = micButton(add);
+    if (mic) r.append(mic);
+    r.append(btn("加入", addIt, "ghost small"));
+    main.append(r);
+  }
+
   // ── 寫法筆記: how he said to write, in his words; the drafts follow them ──
   const SCOPE_ZH = [["paragraph", "這段"], ["section", "這節"], ["paper", "整篇"]];
   function writingNotes(side, end = false) {
     const ns = sess().writing_notes ?? [];
-    if (!ns.length) return;
-    side.append(el("h4", "", "寫法筆記"));
     const edit = ns.map((n) => ({ ...n }));
     const save = () => run("儲存寫法筆記", () => call("/notes", { notes: edit }, "PUT"));
+    const box = el("div", "df-sidebox");
+    const head = el("div", "df-dhead");
+    head.append(el("h4", "", "寫法筆記"));
+    if (!end) head.append(iconButton("x", "收起", () => { D.sidePanel = null; draw(); }));
+    box.append(head);
     const ul = el("ul", "df-notes");
     edit.forEach((n, k) => {
       const li = el("li");
       const t = input(n.text, "", "textarea");
       t.rows = 2;
-      t.onchange = () => { n.text = t.value; save(); };
+      t.setAttribute("aria-label", `寫法筆記 ${n.id}`);
+      const keepT = () => { if (t.value === n.text) return; n.text = t.value; save(); };
+      t.onchange = keepT;
       const sc = el("select", "np-input df-scope");
       SCOPE_ZH.forEach(([v, z]) => { const o = el("option", "", z); o.value = v; sc.append(o); });
       sc.value = n.scope;
@@ -719,16 +926,30 @@ const PCDraft = (() => {
       cb.disabled = !!n.kept;
       cb.onchange = () => { n.keep = cb.checked; save(); };
       keep.append(cb, document.createTextNode(n.kept ? "已存進我的寫法" : "以後也用"));
-      li.append(t, row(sc, keep, iconButton("trash", "刪除", () => { edit.splice(k, 1); save(); })));
+      const r = row(sc, keep);
+      const mic = micButton(t, keepT);
+      if (mic) r.append(mic);
+      r.append(iconButton("trash", "刪除", () => { edit.splice(k, 1); save(); }));
+      li.append(t, r);
       if (n.conflict) li.append(note("和標點規則衝突：以標點規則為準", "warn"));
       ul.append(li);
     });
-    side.append(ul);
+    box.append(ul);
+    const add = input("", "加一條寫法");
+    add.setAttribute("aria-label", "加一條寫法");
+    const addIt = () => { const v = add.value.trim(); if (!v) return; edit.push({ id: "", text: v, scope: "paper", group: D.group ?? "" }); save(); };
+    add.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); addIt(); } };
+    const r = row(add);
+    const mic = micButton(add);
+    if (mic) r.append(mic);
+    r.append(btn("加入", addIt, "ghost small"));
+    box.append(r);
     if (end || edit.some((n) => n.keep && !n.kept)) {
       const b = btn("存進我的寫法", () => run("存進我的寫法", () => call("/notes/keep")), "ghost small");
       b.disabled = !!D.busy || !edit.some((n) => n.keep && !n.kept);
-      side.append(b);
+      box.append(b);
     }
+    side.append(box);
   }
 
   // ── 深度討論: one question talked over apart from the interview; never material for the paper ──
@@ -750,7 +971,7 @@ const PCDraft = (() => {
     side.append(head, q);
     const log = el("div", "df-log df-dlog");
     for (const m of d.messages) log.append(el("div", `df-msg ${m.who}`, m.text));
-    if (!d.messages.length) log.append(note("問什麼都可以；這裡的內容不會寫進論文。"));
+    if (!d.messages.length) log.append(note("這裡的內容不會寫進論文。"));
     if (D.busy) log.append(el("div", "df-busy", `${D.busy}…`));
     side.append(log);
     setTimeout(() => (log.scrollTop = log.scrollHeight), 0);
@@ -759,15 +980,18 @@ const PCDraft = (() => {
       side.append(el("h4", "", "這題的回答"));
       const ans = input(D.discAnswer, "", "textarea");
       ans.rows = 5;
+      ans.setAttribute("aria-label", "這題的回答");
       ans.oninput = () => (D.discAnswer = ans.value);
-      side.append(ans, row(
-        btn("送出為回答", () => run("送出回答", async () => { const v = await call(`/discuss/${d.id}/close`, { answer: ans.value, model: $("#dfModel").value }); D.disc = null; D.discAnswer = null; return v; })),
-        btn("繼續討論", () => { D.discAnswer = null; draw(); }, "ghost")));
+      const mic = micButton(ans);
+      const r = row(btn("繼續討論", () => { D.discAnswer = null; draw(); }, "ghost"), el("span", "df-grow"), btn("送出為回答", () => run("送出回答", async () => { const v = await call(`/discuss/${d.id}/close`, { answer: ans.value, model: model() }); D.disc = null; D.discAnswer = null; return v; })));
+      if (mic) r.prepend(mic);
+      side.append(ans, r);
       return;
     }
     const ta = el("textarea", "np-input");
     ta.rows = 3;
-    ta.placeholder = "想問的（Ctrl+Enter 送出）";
+    ta.placeholder = "想問的";
+    ta.setAttribute("aria-label", "深度討論");
     ta.value = D.discDraft ?? "";
     ta.oninput = () => (D.discDraft = ta.value);
     const say = () => { const t = ta.value.trim(); if (!t) return; run("討論中", async () => { const v = await call(`/discuss/${d.id}`, { text: t }); D.discDraft = ""; return v; }); };
@@ -775,7 +999,10 @@ const PCDraft = (() => {
     const sum = btn("整理成這題的回答", () => run("整理回答", async () => { const r = await call(`/discuss/${d.id}/answer`, {}); D.discAnswer = r.answer ?? ""; return null; }), "primary small");
     // something to sum up only once the author has said something
     if (!d.messages.some((m) => m.who === "me")) sum.disabled = true;
-    side.append(ta, row(btn("送出", say, "ghost small"), sum));
+    const r = row(btn("送出", say, "ghost small"), el("span", "df-grow"), sum);
+    const mic = micButton(ta);
+    if (mic) r.prepend(mic);
+    side.append(ta, r);
     if (d.item) side.append(row(btn("這題不用寫進論文", () => run("略過這題", async () => { const v = await call(`/discuss/${d.id}/close`, { exclude: true }); D.disc = null; return v; }), "ghost small")));
   }
 
@@ -786,19 +1013,22 @@ const PCDraft = (() => {
     const picked = [...(D.picked ?? [])];
     const item = D.pickItem ?? null;
     run("思考下一個問題", async () => {
-      const v = await call("/turn", { group: gid, answer: text, picked, item, model: $("#dfModel").value });
+      const v = await call("/turn", { group: gid, answer: text, picked, item, model: model() });
       // a question back opened 深度討論 (the model saw it was not an answer)
       const d = v.session.discussions?.find((x) => x.group === gid && x.status === "open");
       if (d && d.messages.at(-1)?.who === "ai") D.disc = d.id;
       if (D.draftAnswer) D.draftAnswer[gid] = "";
-      D.picked = null; D.pickItem = null;
+      D.picked = null; D.pickItem = null; D.pickedOpt = null;
       return v;
     });
   }
 
-  // ── 按住說話 (lore-voice, when the machine has it) ─────────
+  // ── 按住說話 (lore-voice, when the machine has it), on every field of 對話 ─────────
+  // The words go into the field as said; `onFinal` runs when the phrase ends (a field that
+  // saves on change saves then). Voice is not a trusted input event, so the field is marked
+  // typed here: a poll's redraw keeps it like typed text.
   let voiceOk = null, vEvents = null, vCur = null;
-  function micButton(ta, gid) {
+  function micButton(field, onFinal) {
     const b = iconButton("mic", "按住說話", () => {});
     b.classList.add("df-mic");
     b.hidden = true;
@@ -807,16 +1037,22 @@ const PCDraft = (() => {
       b.hidden = !voiceOk;
     })();
     const text = (e) => { try { return JSON.parse(e.data).text ?? ""; } catch { return ""; } };
-    const put = (t) => { if (!vCur) return; vCur.ta.value = (vCur.base + t).trimStart(); (D.draftAnswer ??= {})[vCur.gid] = vCur.ta.value; };
+    const put = (t) => {
+      if (!vCur) return;
+      const f = vCur.field;
+      f.value = (vCur.base + t).trimStart();
+      f.dataset.typed = "1";
+      f.dispatchEvent(new Event("input"));
+    };
     const start = async (e) => {
       e.preventDefault();
       if (!vEvents) {
         vEvents = new EventSource("/api/voice/events");
         vEvents.addEventListener("partial", (x) => put(text(x)));
-        vEvents.addEventListener("final", (x) => { put(text(x)); vCur?.ta.focus(); });
+        vEvents.addEventListener("final", (x) => { put(text(x)); const c = vCur; c?.field.focus(); c?.onFinal?.(); });
         vEvents.addEventListener("error", (x) => { let v = {}; try { v = JSON.parse(x.data ?? "{}"); } catch {} if (v.kind) { voiceOk = false; LoreShell.toast(v.message ?? "語音無法使用", { err: true }); } });
       }
-      vCur = { ta, gid, base: ta.value ? `${ta.value.trimEnd()} ` : "" };
+      vCur = { field, onFinal, base: field.value ? `${field.value.trimEnd()} ` : "" };
       b.classList.add("on");
       try { await api("/api/voice/listen", { continuous: false, language: "zh-TW" }); } catch (err) { b.classList.remove("on"); LoreShell.toast(err.message, { err: true }); }
     };
@@ -828,9 +1064,9 @@ const PCDraft = (() => {
   }
 
   // ── 預想選項 ──────────────────────────────────────────
-  // Possible answers prepared from the record before the interview: a click
-  // puts one in the answer box (click two to combine, edit freely); 1/2/3 on
-  // the keyboard; 「都不是」 = your own words.
+  // Possible answers prepared from the record: per question (the turn names which of the item's
+  // candidates answer it, never one already picked), else the turn's own options. A click puts
+  // one in the answer box (two combine, edit freely); 1/2/3 on the keyboard; or just type.
   const evidenceText = (id) => {
     const x = sess().experiments.find((e) => e.id === id);
     if (x) return `${x.title}：${x.change} ${x.metrics} ${x.result}`.trim();
@@ -843,106 +1079,68 @@ const PCDraft = (() => {
     const pd = (sess().pending ?? []).find((e) => e.id === id);
     return pd ? pd.what : id;
   };
-  function candidateCards(it, withNone = true) {
+  /** The choices under question `t`: its candidates (a turn from before shows the item's), else its options. */
+  function choicesOf(t) {
+    const it = t.about ? sess().items.find((x) => x.id === t.about) : null;
+    const ids = t.cands ?? it?.candidates?.map((c) => c.id) ?? [];
+    const cands = (it?.candidates ?? []).filter((c) => ids.includes(c.id)).map((c) => ({ ...c, item: it.id }));
+    if (cands.length) return cands;
+    return (t.options ?? []).map((o, k) => ({ id: null, key: `o${k}`, text: o, evidence: [] }));
+  }
+  function choiceCards(list) {
     const box = el("div", "df-cands");
     D.picked ??= [];
-    it.candidates.forEach((c, k) => {
-      const b = el("button", `df-cand${D.picked.includes(c.id) ? " on" : ""}`);
+    list.forEach((c, k) => {
+      const on = c.id ? D.picked.includes(c.id) : D.pickedOpt === c.text;
+      const b = el("button", `df-cand${on ? " on" : ""}`);
       b.disabled = !!D.busy;
-      b.append(el("span", "n", String(k + 1)), el("span", "t", c.text));
-      if (D.pickItem && D.pickItem !== it.id) b.classList.remove("on");
+      // a long choice reads as its point, then the rest quieter
+      const m = c.text.match(/^(.{8,}?[。；：]|.{8,60}?，)(.+)$/s);
+      const tx = el("span", "t");
+      if (m && c.text.length > 44) tx.append(el("b", "", m[1].replace(/[；：，]$/, "")), el("span", "more", m[2].trim()));
+      else tx.textContent = c.text;
+      b.append(el("span", "n", String(k + 1)), tx);
       if (c.evidence?.length) {
         const ev = el("span", "ev");
         c.evidence.forEach((e) => { const x = el("span", "df-ev", e); x.title = evidenceText(e); ev.append(x); });
         b.append(ev);
       }
-      b.onclick = () => pickCandidate(it, c);
+      b.onclick = () => pickChoice(c);
       box.append(b);
     });
-    if (!withNone) return box;
-    const none = el("button", "ghost df-none", "都不是，我自己說");
-    none.disabled = !!D.busy;
-    none.onclick = () => { D.picked = []; D.pickItem = null; const ta = $(".df-answer"); if (ta) { ta.value = ""; ta.focus(); } box.querySelectorAll(".df-cand").forEach((x) => x.classList.remove("on")); };
-    box.append(none);
     return box;
   }
-  function pickCandidate(it, c) {
+  function pickChoice(c) {
     const ta = $(".df-answer");
     if (!ta) return;
-    // candidates of one item per answer
-    if (D.pickItem && D.pickItem !== it.id) D.picked = [];
-    D.pickItem = it.id;
-    D.picked ??= [];
-    if (D.picked.includes(c.id)) return;
-    D.picked.push(c.id);
+    if (c.id) {
+      // candidates of one item per answer
+      if (D.pickItem && D.pickItem !== c.item) D.picked = [];
+      D.pickItem = c.item;
+      D.picked ??= [];
+      if (D.picked.includes(c.id)) return;
+      D.picked.push(c.id);
+    } else {
+      if (D.pickedOpt === c.text) return;
+      D.pickedOpt = c.text;
+    }
     ta.value = ta.value.trim() ? `${ta.value.trim()}；${c.text}` : c.text;
+    ta.dataset.typed = "1";
     ((D.draftAnswer ??= {})[D.group] = ta.value);
-    ta.focus();
     draw();
     const again = $(".df-answer"); if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
   }
-  // 1 / 2 / 3 pick a candidate when the answer box is not being typed in
+  // 1 / 2 / 3 pick a choice when the answer box is not being typed in
   document.addEventListener("keydown", (e) => {
     if (!D || !$("#dlgDraft")?.open || STEPS[D.step]?.[0] !== "interview") return;
     if (!/^[1-3]$/.test(e.key) || e.metaKey || e.ctrlKey || e.altKey) return;
     if (document.activeElement?.matches("textarea, input, select")) return;
     const last = turnsOf(D.group).at(-1);
-    const it = last?.about && sess().items.find((x) => x.id === last.about);
-    const c = it?.candidates?.[+e.key - 1];
-    if (c) { e.preventDefault(); pickCandidate(it, c); }
+    const c = last?.who === "ai" ? choicesOf(last)[+e.key - 1] : null;
+    if (c) { e.preventDefault(); pickChoice(c); }
   });
 
-  function ledger(side, g, st) {
-    // 待補項目 has no summary of its own: each result's four parts are on its item
-    if (g.id !== "wp") {
-      side.append(el("h4", "", "這一組要整理出"));
-      const sum = el("dl", "df-sum");
-      [["說明", g.summary.explain], ["動機", g.summary.motive], ["結論", g.summary.conclusion], ["讀者承認", g.summary.reader_accepts], ["轉折", g.summary.twist]].forEach(([k, v]) => {
-        sum.append(el("dt", "", k), el("dd", v ? "" : "empty", v || "還沒有"));
-      });
-      side.append(sum);
-    }
-    side.append(el("h4", "", "狀態表"));
-    const ul = el("ul", "df-ledger");
-    sess().items.filter((i) => i.group === g.id).forEach((it) => {
-      const li = el("li");
-      if (it.excluded) {
-        li.classList.add("excluded");
-        li.append(el("b", "", it.label), row(el("span", "df-badge soft", "不寫進論文"), btn("恢復", () => run("恢復這題", () => call(`/items/${it.id}/exclude`, { excluded: false })), "ghost small")));
-        ul.append(li);
-        return;
-      }
-      const s = st?.items.find((x) => x.id === it.id);
-      li.classList.toggle("ok", !!s && !s.missing.length);
-      li.append(el("b", "", it.label));
-      const tags = el("div", "df-tags");
-      if (it.mode) tags.append(el("span", "df-badge", modeName(it.mode)));
-      if (it.depth != null) tags.append(el("span", "df-badge lv", levelName(it.depth)));
-      it.flags.forEach((f) => tags.append(el("span", "df-badge flag", flagName(f))));
-      if (it.number) tags.append(el("span", "df-badge", it.number));
-      (s?.missing ?? []).forEach((m) => tags.append(el("span", "df-badge warn", missingText(m))));
-      if (s?.preferred != null) tags.append(el("span", "df-badge soft", `可再到 ${levelName(s.preferred)}`));
-      li.append(tags);
-      if (it.stance) li.append(el("div", "df-stance", it.stance));
-      const lastAbout = turnsOf(g.id).at(-1)?.about;
-      if (it.candidates?.length && lastAbout !== it.id && turnsOf(g.id).length) {
-        const d = el("details", "df-lcands");
-        d.append(el("summary", "", `選項 ${it.candidates.length}`), candidateCards(it, false));
-        li.append(d);
-      }
-      const pi = it.pending && (sess().pending ?? []).find((x) => x.id === it.pending);
-      if (pi) {
-        const dl = el("dl", "df-sum");
-        [["是什麼", pi.note.what], ["為什麼必要", pi.note.why], ["預期", pi.note.expect], ["相反時", pi.note.if_not]].forEach(([k, v]) => dl.append(el("dt", "", k), el("dd", v ? "" : "empty", v || "—")));
-        li.append(dl);
-      }
-      if (it.refs?.length) { const rr = el("div", "df-refs"); it.refs.forEach((k) => rr.append(refChip(k))); li.append(rr); }
-      ul.append(li);
-    });
-    side.append(ul);
-  }
-
-  // ── 4.5 主張 ─────────────────────────────────────────
+  // ── 4 主張 ─────────────────────────────────────────
   function claims(main) {
     main.append(hq("主張登記", "每個主張只在一個章節完整說一次，其他地方只簡短回扣；Abstract 與 Conclusion 最後從這裡取最強的主張。"));
     main.append(row(btn(sess().claims.length ? "重新產生" : "產生主張登記", () => run("整理主張", () => call("/claims"))), stepTag("claims"), nextBtn()));
@@ -1125,7 +1323,7 @@ const PCDraft = (() => {
       card.append(el("p", "df-text", f.why));
       if (f.ask) card.append(note(`要問你：${f.ask}`));
       const r = row(btn(f.resolved ? "標為未處理" : "已處理", () => run("儲存", () => call("/audit", { resolved: { [f.id]: !f.resolved } }, "PUT")), "ghost"));
-      if (!f.resolved) r.append(btn("回到對話追問", () => run("建立追問", async () => { const v = await call(`/audit/${f.id}/ask`); D.group = `a${f.id}`; D.step = 3; return v; }), "ghost"));
+      if (!f.resolved) r.append(btn("回到對話追問", () => run("建立追問", async () => { const v = await call(`/audit/${f.id}/ask`); D.group = `a${f.id}`; D.step = stepIdx("interview"); return v; }), "ghost"));
       card.append(r);
       main.append(card);
     });

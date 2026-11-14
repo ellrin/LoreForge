@@ -1538,3 +1538,85 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-fold[open] { padding-bottom: 12px; }
 .df-fold > summary { cursor: pointer; font-weight: 600; color: var(--text); margin: 0; }
 .df-fold > summary ~ * { margin-top: 8px; }
+
+/* ── 討論草稿 對話: the plan on the left, one question in the middle ── */
+.df-main:has(.df-iv) { padding: 0; }
+.df-iv { display: grid; grid-template-columns: 228px minmax(0, 1fr); min-height: 100%; }
+.df-plan { padding: 12px 8px 20px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; overflow-y: auto; }
+.df-plan-sec { margin: 10px 6px 3px; font: 600 10.5px var(--mono); letter-spacing: .06em; color: var(--faint); }
+.df-plan-sec:first-child { margin-top: 0; }
+.df-pg { position: relative; display: flex; align-items: center; border-radius: var(--r); }
+.df-pg-t { flex: 1; min-width: 0; display: flex; gap: 6px; align-items: baseline; padding: 4px 6px; border: 0; background: none; color: var(--text); text-align: left; font-size: 12.5px; }
+.df-pg-t .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.df-pg-t .n { font: 11px var(--mono); color: var(--faint); }
+.df-pg:hover { background: var(--surface); }
+.df-pg.on { background: var(--accent-soft); }
+.df-pg.on .df-pg-t { font-weight: 600; }
+.df-pg.done .df-pg-t { color: var(--muted); }
+.df-pg.done .n { color: var(--ok); }
+.df-pg.skipped .t { text-decoration: line-through; color: var(--faint); }
+.df-pg-del { display: none; width: 22px !important; height: 22px !important; }
+.df-pg:hover .df-pg-del { display: inline-flex; }
+.df-gitems { margin: 2px 0 6px 10px; padding-left: 8px; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 1px; }
+.df-gi { display: flex; align-items: center; gap: 6px; padding: 2px 2px; font-size: 12px; color: var(--muted); }
+.df-gi .m { width: 12px; flex: none; font-size: 11px; color: var(--faint); }
+.df-gi.ok .m { color: var(--ok); }
+.df-gi .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.df-gi.off .t { text-decoration: line-through; color: var(--faint); }
+.df-gi-x { display: none; width: 20px !important; height: 20px !important; }
+.df-gi:hover .df-gi-x { display: inline-flex; }
+.df-gi-add { margin-top: 4px; flex-wrap: nowrap; gap: 4px; }
+.df-gi-add .np-input { min-width: 0; padding: 3px 6px; font-size: 12px; }
+.df-q { padding: 14px 26px 24px; display: flex; flex-direction: column; gap: 10px; min-width: 0; max-width: 860px; }
+.df-prog { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
+.df-prog-t { white-space: nowrap; }
+.df-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.df-bar > span { display: block; height: 100%; background: var(--accent); }
+.df-qg { margin: 6px 0 0; font: 600 15px/1.4 var(--sans); }
+.df-q .df-log { max-height: none; min-height: 0; flex: none; border: 0; padding: 0; background: none; }
+.df-q .df-msg.ai:not(.cur) { color: var(--muted); font-size: 13px; }
+.df-q .df-msg.me { font-size: 13px; }
+.df-q .df-msg.cur { max-width: 100%; font-size: 15px; line-height: 1.7; background: none; padding: 4px 0; }
+.df-ansrow { flex-wrap: nowrap; align-items: flex-end; }
+.df-ansrow .df-answer { flex: 1; min-width: 0; }
+.df-qaside { gap: 6px; }
+.df-gfoot { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.df-done { display: flex; align-items: center; gap: 12px; }
+.df-done b { color: var(--ok); }
+.df-conf { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--panel); }
+.df-conf h4 { margin: 0; font: 600 14px var(--sans); }
+.df-conf-i { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--line); }
+.df-conf-i .t { flex: 1; display: flex; flex-direction: column; gap: 3px; font-size: 13.5px; line-height: 1.6; }
+.df-conf-i .t b { font-size: 12px; color: var(--muted); font-weight: 600; }
+.df-conf-i .ev { display: flex; gap: 4px; flex-wrap: wrap; }
+.df-conf-i.no .t > span:not(.ev) { text-decoration: line-through; color: var(--faint); }
+.df-conf-i button[aria-pressed="true"] { border-color: var(--warn); color: var(--warn); }
+.df-sidefold > summary { font-size: 12.5px; }
+.df-sidefold > summary .df-badge { margin-left: 6px; font-weight: 400; }
+#dlgDraft.with-side .df-body:has(.df-iv) { grid-template-columns: 150px 1fr 280px; }
+.df-pg-t, .df-gi { font-family: var(--sans); }
+.df-hist { max-height: 26vh; border: 0; padding: 0 0 6px; background: none; border-bottom: 1px dashed var(--line); }
+.df-hist .df-msg { font-size: 12.5px; padding: 6px 10px; }
+.df-hist .df-msg.ai { color: var(--muted); }
+.df-sidetog { white-space: nowrap; }
+.df-sidetog[aria-pressed="true"] { border-color: var(--accent-text); background: var(--accent-soft); }
+.df-sidetog.warn { border-color: var(--warn); color: var(--warn); }
+.df-sidebox { display: flex; flex-direction: column; gap: 8px; }
+.df-histfold { border-top: 0; padding: 0; }
+.df-histfold > summary { font-weight: 400; font-size: 12px; color: var(--muted); }
+.df-q .df-msg.cur .df-row { margin-top: 6px; }
+.df-enough { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px; border: 1px solid var(--ok); border-radius: var(--r); }
+.df-enough b { color: var(--ok); font-size: 14px; }
+.df-side .df-opts { flex-direction: column; }
+.df-side .df-opts .ghost, .df-fig .df-opts .ghost { height: auto; min-height: 0; line-height: 1.45; padding: 5px 8px; text-align: left; white-space: normal; width: 100%; }
+
+/* 對話: the question stands out, its reply and the options' detail stay quiet */
+.df-q .df-reply { color: var(--muted); font-size: 13px; line-height: 1.6; margin-bottom: 6px; }
+.df-q .df-qrow { display: flex; align-items: flex-start; gap: 12px; }
+.df-q .df-ask { flex: 1; font-size: 17px; font-weight: 600; line-height: 1.6; color: var(--text); }
+.df-q .df-qrow .btn { flex: none; margin-top: 3px; }
+.df-cand { padding: 9px 12px; }
+.df-cand .t { line-height: 1.55; }
+.df-cand .t b { display: block; font-weight: 600; }
+.df-cand .t .more { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.df-cand .ev { opacity: .7; }

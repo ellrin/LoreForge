@@ -340,6 +340,7 @@ pub fn turn_schema() -> Value {
         ("reply", json_string()),
         ("question", json_string()),
         ("item", json_string_or_null()),
+        ("cands", strings()),
         ("options", strings()),
         ("ref_notes", json_array(json_object(&[("key", json_string()), ("note", json_string())]))),
         ("pending_notes", json_array(json_object(&[("id", json_string()), ("what", json_string()), ("why", json_string()), ("expect", json_string()), ("if_not", json_string())]))),
@@ -376,6 +377,7 @@ Each turn:
    that is never asked; for routine items only confirm. If nothing is open, ask whether anything is missing or
    wrap up, and leave `question` empty when the group is clearly complete.
 5. `options`: when the author said they are unsure, or the question invites a choice, 2–4 short candidate answers
+   (one sentence each, the point first, at most about 50 Chinese characters)
    (Traditional Chinese) built from the record — the author's recorded thoughts (H…) first, in their own words;
    otherwise empty.
 6. References: when a motive rests on prior work or on something readers accept, ask (in the same question, briefly)
@@ -388,14 +390,20 @@ Each turn:
    in it matters, what do you want to stress, and why?\" — using its actual numbers; ask about the story behind a
    result only after that, and only what other groups have not covered.
 8. `item`: the id of the item your question is about (null for a general question). An item listed with \
-\"candidates\" has answer options the app prepared from the record and shows under your question: do not repeat \
-or replace them, leave `options` empty for it, and phrase the question so that one of them could answer it. An \
-answer that says \"picked k2\" chose that candidate (maybe edited): grade it like any answer.
+\"candidates\" has answer options the app prepared from the record: in `cands` give the ids of those that could \
+answer THIS question (never one marked picked, never ones that answer a question already asked); the app shows only \
+those. When none fits, `cands` [] and give 2–3 `options` built from the record (numbers exactly as written). An \
+answer that says \"picked k2\" chose that candidate (maybe edited): grade it like any answer. An answer that \
+starts \"記錄寫的對\" confirms what the record says on the items listed: grade them from that text (a routine \
+setting is mode comply), never ask them again.
 9. When the latest answer asks back, says it does not get the question or wants to talk it over, it is NOT an \
 answer: `discuss` true, `updates` [] and the summary fields empty; `reply` = a few sentences on what the question \
 means and why the paper needs it, with what the record already says (it opens a separate discussion). Otherwise \
 `discuss` false.
 {NOTES}
+11. Order by importance: how the idea came about and the motive, the reading of key results, the discussion first; \
+an item whose answer the record already gives is only confirmed, never asked why. The group has an answer budget \
+(below): when it is reached, leave `question` empty (what is still open is written from the record).
 Never invent facts about the study. Ask one thing at a time.";
 
 pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns: &[Turn], answer: Option<&str>, material: &str) -> Prompt {
@@ -450,7 +458,15 @@ pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns
                 user += &format!(" (optional: {} welcome)", lens.level_name(p));
             }
             if !it.candidates.is_empty() {
-                user += &format!(" candidates: {}", it.candidates.iter().map(|c| format!("{} \"{}\"", c.id, c.text)).collect::<Vec<_>>().join(" | "));
+                let mark = |c: &super::candidates::Candidate| if it.picked.contains(&c.id) { " (picked)" } else { "" };
+                user += &format!(" candidates: {}", it.candidates.iter().map(|c| format!("{} \"{}\"{}", c.id, c.text, mark(c))).collect::<Vec<_>>().join(" | "));
+            }
+            if let Some(r) = &it.from_record {
+                user += &match r.said {
+                    Some(true) => format!(" record says (author confirmed): \"{}\"", r.text),
+                    Some(false) => format!(" record says \"{}\" but the author said that is wrong: ask", r.text),
+                    None => format!(" record says: \"{}\" (only confirm it)", r.text),
+                };
             }
             let probes = lens.probes_for(&it.role, missing);
             if !probes.is_empty() {
@@ -462,7 +478,7 @@ pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns
             "Summary so far: explain=\"{}\" motive=\"{}\" conclusion=\"{}\" accepts=\"{}\" twist=\"{}\"\n",
             g.summary.explain, g.summary.motive, g.summary.conclusion, g.summary.reader_accepts, g.summary.twist
         );
-        user += &format!("Answers so far in this group: {} of {}\n", g.turns, lens.stop.max_turns_per_group);
+        user += &format!("Answers so far in this group: {} of a budget of {}\n", g.turns, s.budget(lens, group));
     }
     let here: Vec<&Turn> = turns.iter().filter(|t| t.group == group).collect();
     if !here.is_empty() {
@@ -479,7 +495,7 @@ pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns
     Prompt { system, user }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TurnReply {
     pub updates: Vec<ItemUpdate>,
     pub summary: GroupSummary,
@@ -488,6 +504,9 @@ pub struct TurnReply {
     /// The item the question is about (its prepared candidates are the choices).
     #[serde(default)]
     pub item: Option<String>,
+    /// The item's prepared candidates that answer this question (ids).
+    #[serde(default)]
+    pub cands: Vec<String>,
     pub options: Vec<String>,
     #[serde(default)]
     pub ref_notes: Vec<RefNote>,

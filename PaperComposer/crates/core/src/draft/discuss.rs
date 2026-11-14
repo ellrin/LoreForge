@@ -199,7 +199,7 @@ mod tests {
     }
 
     fn turn(n: usize, who: Who, text: &str, about: &str) -> Turn {
-        Turn { n, group: "g1".into(), who, text: text.into(), options: vec![], engine: String::new(), about: about.into(), picked: vec![] }
+        Turn { n, group: "g1".into(), who, text: text.into(), options: vec![], engine: String::new(), about: about.into(), picked: vec![], cands: None }
     }
 
     #[test]

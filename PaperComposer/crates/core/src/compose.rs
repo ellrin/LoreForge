@@ -218,6 +218,11 @@ pub fn json_string_or_null() -> serde_json::Value {
     serde_json::json!({ "anyOf": [{ "type": "string" }, { "type": "null" }] })
 }
 
+/// `v`, or null.
+pub fn json_nullable(v: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "anyOf": [v, { "type": "null" }] })
+}
+
 /// The reply `build_prompt` asks for.
 pub fn reply_schema() -> serde_json::Value {
     json_object(&[("sentences", json_array(json_object(&[("text", json_string()), ("phrase_id", json_string_or_null())])))])

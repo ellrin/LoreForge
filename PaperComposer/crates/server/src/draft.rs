@@ -39,6 +39,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/experiments", put(put_experiments))
         .route("/api/papers/{name}/draft/plan", post(run_plan).put(put_plan))
         .route("/api/papers/{name}/draft/turn", post(run_turn))
+        .route("/api/papers/{name}/draft/confirm", post(confirm_record))
+        .route("/api/papers/{name}/draft/prefetch", post(prefetch))
         .route("/api/papers/{name}/draft/group/{id}", post(group_action))
         .route("/api/papers/{name}/draft/items/{id}/exclude", post(exclude_item))
         .route("/api/papers/{name}/draft/figures", post(run_figures).put(put_figures))
@@ -150,6 +152,10 @@ fn view(c: &Ctx, sess: &Session) -> Result<Resp, Resp> {
             "max_turns": lens.stop.max_turns_per_group,
         },
         "states": states,
+        // the record's answers each group shows for 對／不對 before its first question
+        "to_confirm": sess.groups.iter().map(|g| (g.id.clone(), to_confirm(sess, &g.id))).filter(|(_, v)| !v.is_empty()).collect::<std::collections::BTreeMap<_, _>>(),
+        // 規劃題組 started after 整理 is still running
+        "planning": planning(&c.dir),
         "has_style": !style_text(&c.ws).trim().is_empty(),
         // 待補清單: the paper's marks (and the draft's, before it is copied in)
         "pending_report": pending_report(c, sess),
@@ -241,7 +247,10 @@ fn spawn_candidates(s: &Shared, c: &Ctx, groups: Vec<String>) {
             let mut done_ids: Vec<String> = Vec::new();
             // three pieces at a time (one Opus reply takes minutes); results land in plan order
             use futures_util::StreamExt;
-            let pieces: Vec<Vec<String>> = ids.chunks(ca::BATCH).map(|p| p.to_vec()).collect();
+            let first: Vec<String> = ids.iter().take_while(|id| order(id) == ids.first().map(order).unwrap_or(0)).take(ca::BATCH).cloned().collect();
+            let mut pieces: Vec<Vec<String>> = vec![first.clone()];
+            pieces.extend(ids[first.len()..].chunks(ca::BATCH).map(|p| p.to_vec()));
+            pieces.retain(|p| !p.is_empty());
             let (sess_r, lens_r, rec_r, mt_r, kv_r, s_r) = (&sess, &lens, &record, &mtext, &c.key_value, &s2);
             let mut results = futures_util::stream::iter(pieces.into_iter().map(|piece| async move {
                 let items: Vec<&ds::Item> = sess_r.items.iter().filter(|i| piece.contains(&i.id)).collect();
@@ -278,6 +287,10 @@ fn spawn_candidates(s: &Shared, c: &Ctx, groups: Vec<String>) {
                     }
                 }
                 let _ = now.save(&c.dir);
+                // the group the author is on: its next turn asked ahead with the options it now has
+                if let Some(cur) = now.current_group().map(|g| g.id.clone()).filter(|g| piece.iter().any(|id| now.items.iter().any(|i| &i.id == id && &i.group == g))) {
+                    speculate(s_r, &c, &cur);
+                }
             }
         }
         let _g = LOCK.lock().await;
@@ -669,8 +682,12 @@ async fn run_record(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
     if sess.phase < Phase::Plan {
         sess.phase = Phase::Plan;
     }
+    let plan_now = sess.groups.is_empty();
     tri!(save(&c.dir, &sess));
     spawn_candidates(&s, &c, prep);
+    if plan_now {
+        spawn_plan(&s, &c);
+    }
     tri!(view(&c, &sess))
 }
 
@@ -697,20 +714,32 @@ async fn put_experiments(State(s): State<Shared>, AxPath(name): AxPath<String>, 
 
 // ── Step 3 ──────────────────────────────────────────────
 
-async fn run_plan(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
-    let c = tri!(ctx(&s, &name).await);
+/// Papers whose plan a task of this process is making now (started when 整理 finishes: no
+/// decision of the author's lies between the two, so the questions are ready sooner).
+static PLANNING: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+fn planning(dir: &Path) -> bool {
+    PLANNING.lock().is_ok_and(|v| v.iter().any(|d| d == dir))
+}
+
+fn own(c: &Ctx) -> Ctx {
+    Ctx { dir: c.dir.clone(), ws: c.ws.clone(), key_value: c.key_value.clone() }
+}
+
+/// 規劃題組 (with 圖表規劃 beside it and 預想選項 after it); the session it leaves.
+async fn do_plan(s: &Shared, c: &Ctx) -> Result<Session, Resp> {
     // 圖表規劃 at the same time (its own task; the plan never waits for it)
-    if sess_figures_idle(&c) {
-        spawn_figures(&s, &c);
+    if sess_figures_idle(c) {
+        spawn_figures(s, c);
     }
-    let sess = tri!(load(&c.dir));
-    let lens = tri!(lens_for(&c.ws, &sess));
-    let (_, mtext) = material_of(&c);
-    let (groups, used) = tri!(engine::plan(&engines(&s), &c.key_value, &sess, &lens, &style_text(&c.ws), &mtext).await.map_err(|e| bad(&e)));
+    let sess = load(&c.dir)?;
+    let lens = lens_for(&c.ws, &sess)?;
+    let (_, mtext) = material_of(c);
+    let (groups, used) = engine::plan(&engines(s), &c.key_value, &sess, &lens, &style_text(&c.ws), &mtext).await.map_err(|e| bad(&e))?;
     let _g = LOCK.lock().await;
-    let mut sess = tri!(load(&c.dir));
+    let mut sess = load(&c.dir)?;
     if sess.groups.iter().any(|g| g.turns > 0) {
-        return bad("已經開始對話了；要重新規劃請先在題組清單裡調整");
+        return Err(bad("已經開始對話了；要重新規劃請先在題組清單裡調整"));
     }
     sess.engines.insert("plan".into(), used);
     sess.set_plan(groups);
@@ -721,8 +750,41 @@ async fn run_plan(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp
     // 預想選項 for every group, before the interview starts
     let all: Vec<String> = sess.groups.iter().map(|g| g.id.clone()).collect();
     let prep = mark_prep(&mut sess, &lens, &all);
-    tri!(save(&c.dir, &sess));
-    spawn_candidates(&s, &c, prep);
+    save(&c.dir, &sess)?;
+    spawn_candidates(s, c, prep);
+    Ok(sess)
+}
+
+/// The plan on a task of its own (after 整理); the window looks again while it runs.
+fn spawn_plan(s: &Shared, c: &Ctx) {
+    if let Ok(mut v) = PLANNING.lock() {
+        if v.contains(&c.dir) {
+            return;
+        }
+        v.push(c.dir.clone());
+    }
+    let (s2, c2) = (s.clone(), own(c));
+    tokio::spawn(async move {
+        if let Err(e) = do_plan(&s2, &c2).await {
+            eprintln!("規劃題組: {}", e.status());
+        }
+        if let Ok(mut v) = PLANNING.lock() {
+            v.retain(|d| d != &c2.dir);
+        }
+    });
+}
+
+async fn run_plan(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    if planning(&c.dir) {
+        // started after 整理: wait for it instead of asking twice
+        while planning(&c.dir) {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        let sess = tri!(load(&c.dir));
+        return tri!(view(&c, &sess));
+    }
+    let sess = tri!(do_plan(&s, &c).await);
     tri!(view(&c, &sess))
 }
 
@@ -787,7 +849,7 @@ async fn put_plan(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
 
 // ── Step 4 ──────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Default)]
 struct TurnBody {
     group: String,
     /// Candidates the author chose for this answer (ids of the item asked about).
@@ -813,45 +875,308 @@ fn model_ref(m: Option<&str>) -> Result<Option<String>, Resp> {
     }
 }
 
-async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<TurnBody>) -> Resp {
-    let c = tri!(ctx(&s, &name).await);
-    let mref = tri!(model_ref(b.model.as_deref()));
-    let answer = b.answer.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
-    let (mat, mut mtext) = material_of(&c);
-    let prompt = {
-        let _g = LOCK.lock().await;
-        let mut sess = tri!(load(&c.dir));
-        if let Some(r) = sess.revisions.iter().find(|r| r.group == b.group) {
-            match r.pending.as_deref().and_then(|p| sess.pending.iter().find(|x| x.id == p)) {
-                // 回填: what came in, the author's explanation, every dependent sentence
-                Some(item) => {
-                    let rep = pending_report(&c, &sess).into_iter().find(|e| e.id == item.id);
-                    mtext += &pd::turn_context(item, rep.as_ref());
-                    mtext += &rv::turn_context(r, &c.dir);
-                }
-                None => mtext += &rv::turn_context(r, &c.dir),
+/// 記錄寫的對: the author's verdict on the record's answers of a group's items (`yes` 對, `no`
+/// 不對), set on the items; the answer the interview gets, or None when nothing was decided.
+fn apply_confirm(sess: &mut Session, group: &str, yes: &[String], no: &[String]) -> Option<String> {
+    let (mut ok, mut wrong) = (vec![], vec![]);
+    for it in sess.items.iter_mut().filter(|i| i.group == group && !i.excluded) {
+        let Some(r) = it.from_record.as_mut().filter(|r| r.said.is_none()) else { continue };
+        if yes.contains(&it.id) {
+            r.said = Some(true);
+            ok.push(format!("- {}：{}", it.label, r.text));
+        } else if no.contains(&it.id) {
+            r.said = Some(false);
+            wrong.push(it.label.clone());
+        }
+    }
+    let mut a = String::new();
+    if !ok.is_empty() {
+        a += &format!("記錄寫的對：\n{}", ok.join("\n"));
+    }
+    if !wrong.is_empty() {
+        a += &format!("{}這幾項記錄寫的不對：{}", if a.is_empty() { "" } else { "\n" }, wrong.join("、"));
+    }
+    (!a.is_empty()).then_some(a)
+}
+
+/// Items of a group whose record answer waits for the author's 對／不對 (shown before its first question).
+fn to_confirm(sess: &Session, group: &str) -> Vec<String> {
+    ca::to_confirm(sess, group)
+}
+
+/// What a turn sends the model, from the session as it is. Nothing is written: a speculative turn
+/// builds the same prompt, and a real turn with the same prompt takes its reply.
+struct Prepared {
+    prompt: Prompt,
+    answer: Option<String>,
+    picked: Vec<String>,
+    about: String,
+}
+
+fn prepare_turn(c: &Ctx, sess: &Session, lens: &Lens, turns: &[ds::Turn], b: &TurnBody) -> Prepared {
+    let (_, mut mtext) = material_of(c);
+    if let Some(r) = sess.revisions.iter().find(|r| r.group == b.group) {
+        match r.pending.as_deref().and_then(|p| sess.pending.iter().find(|x| x.id == p)) {
+            // 回填: what came in, the author's explanation, every dependent sentence
+            Some(item) => {
+                let rep = pending_report(c, sess).into_iter().find(|e| e.id == item.id);
+                mtext += &pd::turn_context(item, rep.as_ref());
+                mtext += &rv::turn_context(r, &c.dir);
+            }
+            None => mtext += &rv::turn_context(r, &c.dir),
+        }
+    }
+    // a choice among the prepared candidates: the item asked about last
+    let about = b
+        .item
+        .clone()
+        .filter(|i| sess.items.iter().any(|x| &x.id == i && x.group == b.group))
+        .unwrap_or_else(|| turns.iter().rev().find(|t| t.group == b.group && t.who == Who::Ai).map(|t| t.about.clone()).unwrap_or_default());
+    let answer = b.answer.as_ref().map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+    let (answer, picked) = ca::resolve_answer(sess, &about, answer, b.picked.clone());
+    let shown = answer.as_ref().map(|a| if picked.is_empty() { a.clone() } else { format!("{a}\n(picked {} for {about})", picked.join(", ")) });
+    let prompt = dp::turn_prompt(&c.key_value, sess, lens, &b.group, turns, shown.as_deref(), &mtext);
+    Prepared { prompt, answer, picked, about }
+}
+
+// ── 先準備下一題 (speculative turns) ─────────────────────
+
+type TurnResult = Result<(dp::TurnReply, ds::EngineUsed), String>;
+/// The reply, and when it was ready (to report how long after the question it was).
+type SpecCell = std::sync::Arc<(tokio::sync::OnceCell<TurnResult>, std::time::Instant, std::sync::Mutex<Option<f32>>)>;
+/// Replies asked ahead, by paper and prompt (the prompt holds the session state it was made from:
+/// an edit in between changes it, and the real turn then asks again).
+static SPEC: std::sync::Mutex<Vec<(PathBuf, u64, SpecCell)>> = std::sync::Mutex::new(Vec::new());
+/// At most this many speculative calls at once (the options' Opus pieces run beside them).
+static SPEC_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+/// The model picker's last choice per paper (what a speculative turn runs on).
+static LAST_MODEL: std::sync::Mutex<Vec<(PathBuf, Option<String>)>> = std::sync::Mutex::new(Vec::new());
+
+fn spec_key(p: &Prompt, mref: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (&p.system, &p.user, mref).hash(&mut h);
+    h.finish()
+}
+
+fn remember_model(dir: &Path, mref: Option<&str>) {
+    if let Ok(mut v) = LAST_MODEL.lock() {
+        v.retain(|(d, _)| d != dir);
+        v.push((dir.to_path_buf(), mref.map(str::to_string)));
+    }
+}
+
+fn last_model(dir: &Path) -> Option<String> {
+    LAST_MODEL.lock().ok().and_then(|v| v.iter().find(|(d, _)| d == dir).and_then(|x| x.1.clone()))
+}
+
+/// The answers the author is likely to send next in `group`, as the window shows them: each
+/// candidate or option of the question (unedited), the record's answers all confirmed, or the
+/// opening of a group not started; after a group that has what it needs, the next group's opening.
+fn likely_answers(sess: &Session, lens: &Lens, turns: &[ds::Turn], group: &str) -> Vec<(TurnBody, bool)> {
+    let Some(g) = sess.group(group) else { return vec![] };
+    let open = |id: &str| -> Vec<(TurnBody, bool)> {
+        let Some(x) = sess.group(id) else { return vec![] };
+        if x.prep == Some(Prep::Running) || matches!(x.status, ds::GroupStatus::Done | ds::GroupStatus::Skipped) || turns.iter().any(|t| t.group == id) {
+            return vec![];
+        }
+        let conf = to_confirm(sess, id);
+        if conf.is_empty() {
+            vec![(TurnBody { group: id.into(), ..Default::default() }, false)]
+        } else {
+            vec![(TurnBody { group: id.into(), picked: conf, ..Default::default() }, true)]
+        }
+    };
+    if !turns.iter().any(|t| t.group == group) {
+        return open(group);
+    }
+    let st = sess.group_state(lens, group);
+    if st.ready || st.over_budget || matches!(g.status, ds::GroupStatus::Done | ds::GroupStatus::Skipped) {
+        let i = sess.groups.iter().position(|x| x.id == group).unwrap_or(0);
+        let next = sess.groups.iter().skip(i + 1).chain(sess.groups.iter().take(i)).find(|x| x.status == ds::GroupStatus::Pending && x.id != group);
+        return next.map(|n| open(&n.id)).unwrap_or_default();
+    }
+    let Some(last) = turns.iter().rev().find(|t| t.group == group).filter(|t| t.who == Who::Ai) else { return vec![] };
+    let mut out = vec![];
+    if let Some(it) = sess.items.iter().find(|i| i.id == last.about) {
+        for k in shown_cands(turns, last, it) {
+            if let Some(c) = it.candidates.iter().find(|c| c.id == k) {
+                out.push((TurnBody { group: group.into(), answer: Some(c.text.clone()), picked: vec![k], item: Some(it.id.clone()), model: None }, false));
             }
         }
+    }
+    for o in &last.options {
+        out.push((TurnBody { group: group.into(), answer: Some(o.clone()), ..Default::default() }, false));
+    }
+    out
+}
+
+/// The candidate ids a question shows: those the turn named, or (a turn from before) the item's.
+fn shown_cands(_turns: &[ds::Turn], t: &ds::Turn, it: &ds::Item) -> Vec<String> {
+    match &t.cands {
+        Some(ids) => ids.clone(),
+        None => it.candidates.iter().map(|c| c.id.clone()).collect(),
+    }
+}
+
+/// Ask ahead what the author is likely to send next in `group` (on tasks of their own; nothing
+/// is written). A real turn with the same prompt takes the reply, or waits for it if it runs.
+fn speculate(s: &Shared, c: &Ctx, group: &str) {
+    let (s2, c2, group) = (s.clone(), own(c), group.to_string());
+    let mref = last_model(&c.dir);
+    tokio::spawn(async move {
+        let Ok(sess) = Session::load(&c2.dir) else { return };
+        let Ok(lens) = lens_for(&c2.ws, &sess) else { return };
+        let turns = ds::read_turns(&c2.dir);
+        for (mut b, confirm) in likely_answers(&sess, &lens, &turns, &group) {
+            let mut sx = sess.clone();
+            if confirm {
+                let Some(a) = apply_confirm(&mut sx, &b.group, &b.picked, &[]) else { continue };
+                b.answer = Some(a);
+                b.picked = vec![];
+            }
+            let tturns: Vec<ds::Turn> = turns.clone();
+            let p = prepare_turn(&c2, &sx, &lens, &tturns, &b);
+            let key = spec_key(&p.prompt, mref.as_deref());
+            let cell: SpecCell = {
+                let Ok(mut v) = SPEC.lock() else { return };
+                if v.iter().any(|(d, k, _)| d == &c2.dir && *k == key) {
+                    continue;
+                }
+                let cell: SpecCell = std::sync::Arc::new((tokio::sync::OnceCell::new(), std::time::Instant::now(), std::sync::Mutex::new(None)));
+                v.push((c2.dir.clone(), key, cell.clone()));
+                if v.len() > 48 {
+                    v.remove(0);
+                }
+                cell
+            };
+            let (s3, mref3, prompt) = (s2.clone(), mref.clone(), p.prompt);
+            let dir3 = c2.dir.clone();
+            tokio::spawn(async move {
+                let Ok(_slot) = SPEC_SLOTS.acquire().await else { return };
+                // the author answered something else meanwhile: this one is no longer wanted
+                if !SPEC.lock().is_ok_and(|v| v.iter().any(|(d, k, _)| d == &dir3 && *k == key)) {
+                    return;
+                }
+                let t0 = std::time::Instant::now();
+                let r = cell.0.get_or_init(|| async { engine::turn(&engines(&s3), mref3.as_deref(), &prompt).await }).await;
+                if let Ok(mut x) = cell.2.lock() {
+                    x.get_or_insert(cell.1.elapsed().as_secs_f32());
+                }
+                eprintln!("先準備下一題: {:.1} s{}", t0.elapsed().as_secs_f32(), if r.is_err() { "（失敗）" } else { "" });
+            });
+        }
+    });
+}
+
+/// The reply for this prompt: asked ahead (`hit`, or `wait` while it still runs) or asked now
+/// (`miss`); with the seconds it took to be ready since it was asked (ahead: since the question).
+async fn turn_reply(s: &Shared, dir: &Path, mref: Option<&str>, prompt: &Prompt) -> (TurnResult, &'static str, f32) {
+    let key = spec_key(prompt, mref);
+    let cell = SPEC.lock().ok().and_then(|v| v.iter().find(|(d, k, _)| d == dir && *k == key).map(|x| x.2.clone()));
+    if let Some(cell) = cell {
+        let tag = if cell.0.initialized() { "hit" } else { "wait" };
+        let r = cell.0.get_or_init(|| async { engine::turn(&engines(s), mref, prompt).await }).await.clone();
+        let ready = cell.2.lock().ok().and_then(|x| *x).unwrap_or_else(|| cell.1.elapsed().as_secs_f32());
+        if r.is_ok() {
+            return (r, tag, ready);
+        }
+    }
+    let t0 = std::time::Instant::now();
+    let r = engine::turn(&engines(s), mref, prompt).await;
+    (r, "miss", t0.elapsed().as_secs_f32())
+}
+
+fn forget_speculation(dir: &Path) {
+    if let Ok(mut v) = SPEC.lock() {
+        v.retain(|(d, _, _)| d != dir);
+    }
+}
+
+async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<TurnBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    turn_with(&s, &c, b, None).await
+}
+
+#[derive(Deserialize)]
+struct ConfirmBody {
+    group: String,
+    /// Items whose record answer is right (對).
+    #[serde(default)]
+    items: Vec<String>,
+    /// Items whose record answer is wrong (不對): asked like any item.
+    #[serde(default)]
+    no: Vec<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// 對 on the record's answers of a group: one answer for all of them, then the next question.
+async fn confirm_record(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<ConfirmBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let body = TurnBody { group: b.group, model: b.model, ..Default::default() };
+    turn_with(&s, &c, body, Some((b.items, b.no))).await
+}
+
+/// 先準備: the window shows a group (its options and the record's answers are prepared for every
+/// group not yet read; the group's next turn is asked ahead).
+#[derive(Deserialize)]
+struct PrefetchBody {
+    group: String,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+async fn prefetch(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<PrefetchBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let mref = tri!(model_ref(b.model.as_deref()));
+    remember_model(&c.dir, mref.as_deref());
+    let prep = {
+        let _g = LOCK.lock().await;
+        let mut sess = tri!(load(&c.dir));
+        let lens = tri!(lens_for(&c.ws, &sess));
+        // the active group first (its piece lands first)
+        let mut all: Vec<String> = sess.groups.iter().filter(|g| !matches!(g.status, ds::GroupStatus::Done | ds::GroupStatus::Skipped)).map(|g| g.id.clone()).collect();
+        if let Some(i) = all.iter().position(|g| *g == b.group) {
+            let g = all.remove(i);
+            all.insert(0, g);
+        }
+        let prep = mark_prep(&mut sess, &lens, &all);
+        if !prep.is_empty() {
+            tri!(save(&c.dir, &sess));
+        }
+        prep
+    };
+    spawn_candidates(&s, &c, prep);
+    speculate(&s, &c, &b.group);
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn turn_with(s: &Shared, c: &Ctx, b: TurnBody, confirm: Option<(Vec<String>, Vec<String>)>) -> Resp {
+    let mref = tri!(model_ref(b.model.as_deref()));
+    remember_model(&c.dir, mref.as_deref());
+    let mut b = b;
+    let (prompt, lens, me_turn, answer) = {
+        let _g = LOCK.lock().await;
+        let mut sess = tri!(load(&c.dir));
         let lens = tri!(lens_for(&c.ws, &sess));
         if sess.group(&b.group).is_none() {
             return bad("沒有這個題組");
         }
+        if let Some((yes, no)) = &confirm {
+            match apply_confirm(&mut sess, &b.group, yes, no) {
+                Some(a) => b.answer = Some(a),
+                None => return bad("沒有要確認的記錄"),
+            }
+        }
         let turns = ds::read_turns(&c.dir);
-        // a choice among the prepared candidates: the item asked about last
-        let about = b
-            .item
-            .clone()
-            .filter(|i| sess.items.iter().any(|x| &x.id == i && x.group == b.group))
-            .unwrap_or_else(|| turns.iter().rev().find(|t| t.group == b.group && t.who == Who::Ai).map(|t| t.about.clone()).unwrap_or_default());
-        let (answer, picked) = ca::resolve_answer(&sess, &about, answer, b.picked.clone());
-        let shown = answer.as_ref().map(|a| if picked.is_empty() { a.clone() } else { format!("{a}\n(picked {} for {about})", picked.join(", ")) });
-        let prompt = dp::turn_prompt(&c.key_value, &sess, &lens, &b.group, &turns, shown.as_deref(), &mtext);
+        let p = prepare_turn(c, &sess, &lens, &turns, &b);
         // The answer is kept even if the model call fails; sending it again
         // after a failure does not record it twice.
-        let resent = answer.as_ref().is_some_and(|a| turns.iter().rev().find(|t| t.group == b.group).is_some_and(|t| t.who == Who::Me && &t.text == a));
+        let resent = p.answer.as_ref().is_some_and(|a| turns.iter().rev().find(|t| t.group == b.group).is_some_and(|t| t.who == Who::Me && &t.text == a));
         let mut me_turn = None;
-        if let Some(a) = answer.as_ref().filter(|_| !resent) {
-            let t = ds::Turn { n: 0, group: b.group.clone(), who: Who::Me, text: a.clone(), options: vec![], engine: String::new(), about: if picked.is_empty() { String::new() } else { about.clone() }, picked: picked.clone() };
+        if let Some(a) = p.answer.as_ref().filter(|_| !resent) {
+            let t = ds::Turn { n: 0, group: b.group.clone(), who: Who::Me, text: a.clone(), options: vec![], engine: String::new(), about: if p.picked.is_empty() { String::new() } else { p.about.clone() }, picked: p.picked.clone(), cands: None };
             match ds::append_turn_with(&c.dir, t) {
                 Ok(t) => me_turn = Some(t.n),
                 Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
@@ -859,17 +1184,22 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
             if let Some(g) = sess.group_mut(&b.group) {
                 g.turns += 1;
             }
-            ca::note_picked(&mut sess, &about, &picked);
+            ca::note_picked(&mut sess, &p.about, &p.picked);
         }
         sess.start_group(&b.group);
         if sess.phase < Phase::Interview {
             sess.phase = Phase::Interview;
         }
         tri!(save(&c.dir, &sess));
-        (prompt, lens, me_turn, answer)
+        (p.prompt, lens, me_turn, p.answer)
     };
-    let (prompt, lens, me_turn, answer) = prompt;
-    let (mut r, used) = tri!(engine::turn(&engines(&s), mref.as_deref(), &prompt).await.map_err(|e| bad(&e)));
+    let t0 = std::time::Instant::now();
+    let (res, tag, ready) = turn_reply(s, &c.dir, mref.as_deref(), &prompt).await;
+    eprintln!("問答: {:.1} s（{tag}，問題出現後 {ready:.1} s 就緒）", t0.elapsed().as_secs_f32());
+    let ready_h = axum::http::HeaderValue::from_str(&format!("{ready:.1}")).ok();
+    let (mut r, used) = tri!(res.map_err(|e| bad(&e)));
+    forget_speculation(&c.dir);
+    let (mat, _) = material_of(c);
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     // a question back: not an answer. It leaves the interview for 深度討論 (the model's
@@ -894,7 +1224,12 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
             d.messages.push(dz::Message { who: Who::Ai, text: r.reply.trim().to_string() });
         }
         tri!(save(&c.dir, &sess));
-        return tri!(view(&c, &sess));
+        let mut v = tri!(view(c, &sess));
+        v.headers_mut().insert("x-prefetch", axum::http::HeaderValue::from_static(tag));
+        if let Some(h) = ready_h {
+            v.headers_mut().insert("x-ready", h);
+        }
+        return v;
     }
     // a real answer: a discussion still open on this group's question is over (never reopened by itself)
     for d in sess.discussions.iter_mut().filter(|d| d.group == b.group && d.status == dz::Status::Open) {
@@ -907,7 +1242,7 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
     }
     dp::apply_pending_notes(&mut sess, &r.pending_notes);
     // 寫法筆記: how he said to write, in his words (a punctuation wish against his rule is flagged)
-    let guard_on = crate::workspace_guard(&s).await.active();
+    let guard_on = crate::workspace_guard(s).await.active();
     pc_core::draft::notes::add(&mut sess, &b.group, std::mem::take(&mut r.writing_notes), guard_on);
     if let Some(g) = sess.group_mut(&b.group) {
         let keep = |new: String, old: &str| if new.trim().is_empty() { old.to_string() } else { new };
@@ -921,11 +1256,13 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
         };
     }
     let say = [r.reply.trim(), r.question.trim()].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join("\n");
-    // the question's item: its prepared candidates are the choices (the turn's options are dropped)
+    // the question's item: the prepared candidates that answer THIS question (never one already
+    // picked); none named → the turn's own options, number-checked against the record
     let about = r.item.filter(|i| sess.items.iter().any(|x| &x.id == i && x.group == b.group)).unwrap_or_default();
-    let options = if sess.items.iter().any(|x| x.id == about && !x.candidates.is_empty()) { vec![] } else { r.options };
+    let turns_now = ds::read_turns(&c.dir);
+    let (cands, options) = question_choices(&sess, &turns_now, &b.group, &about, r.cands, r.options, || ds::records_text(&c.dir, &sess.records, usize::MAX));
     if !say.is_empty() {
-        let t = ds::Turn { n: 0, group: b.group.clone(), who: Who::Ai, text: say, options, engine: used.label.clone(), about, picked: vec![] };
+        let t = ds::Turn { n: 0, group: b.group.clone(), who: Who::Ai, text: say, options, engine: used.label.clone(), about, picked: vec![], cands };
         if let Err(e) = ds::append_turn_with(&c.dir, t) {
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
@@ -933,8 +1270,43 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
     // items the answer added: their candidates come in the background (the turn's own options meanwhile)
     let prep = mark_prep(&mut sess, &lens, std::slice::from_ref(&b.group));
     tri!(save(&c.dir, &sess));
-    spawn_candidates(&s, &c, prep);
-    tri!(view(&c, &sess))
+    spawn_candidates(s, c, prep);
+    // the next answer is asked ahead while the author reads
+    speculate(s, c, &b.group);
+    let mut v = tri!(view(c, &sess));
+    v.headers_mut().insert("x-prefetch", axum::http::HeaderValue::from_static(tag));
+    if let Some(h) = ready_h {
+        v.headers_mut().insert("x-ready", h);
+    }
+    v
+}
+
+/// The choices under a question: the item's prepared candidates the turn named (existing, not
+/// picked); when it named none and gave no options, the item's candidates no earlier question
+/// showed; options only when no candidate is shown, and only those whose numbers the record has.
+fn question_choices(sess: &Session, turns: &[ds::Turn], group: &str, about: &str, named: Vec<String>, options: Vec<String>, record: impl FnOnce() -> String) -> (Option<Vec<String>>, Vec<String>) {
+    let it = sess.items.iter().find(|i| i.id == about);
+    let mut cands: Vec<String> = vec![];
+    if let Some(it) = it {
+        // shown under an earlier question on this item: never again (picked or passed over)
+        let shown: Vec<String> = turns.iter().filter(|t| t.group == group && t.who == Who::Ai && t.about == about).flat_map(|t| t.cands.clone().unwrap_or_else(|| it.candidates.iter().map(|c| c.id.clone()).collect())).collect();
+        let fresh = |k: &String| it.candidates.iter().any(|c| &c.id == k) && !it.picked.contains(k) && !shown.contains(k);
+        for k in named.iter().filter(|k| fresh(k)) {
+            if !cands.contains(k) {
+                cands.push(k.clone());
+            }
+        }
+        if cands.is_empty() && options.is_empty() {
+            cands = it.candidates.iter().map(|c| c.id.clone()).filter(|k| fresh(k)).collect();
+        }
+    }
+    let options = if cands.is_empty() && !options.is_empty() {
+        let corpus: std::collections::BTreeSet<String> = ca::numbers(&ca::corpus(sess, &record())).into_iter().collect();
+        options.into_iter().filter(|o| ca::numbers(o).iter().all(|n| corpus.contains(n))).collect()
+    } else {
+        vec![]
+    };
+    (Some(cands), options)
 }
 
 #[derive(Deserialize)]
@@ -1158,7 +1530,13 @@ async fn put_notes(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     let mut out = vec![];
+    let mut added = vec![];
     for e in b.notes {
+        // a note the author adds himself (typed or said): it gets an id and its group's section
+        if e.id.is_empty() {
+            added.push(e);
+            continue;
+        }
         let Some(old) = sess.writing_notes.iter().find(|n| n.id == e.id) else { continue };
         let text = e.text.trim().to_string();
         if text.is_empty() {
@@ -1172,6 +1550,11 @@ async fn put_notes(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b
         out.push(n);
     }
     sess.writing_notes = out;
+    let guard_on = crate::workspace_guard(&s).await.active();
+    for e in added {
+        let group = if sess.group(&e.group).is_some() { e.group.clone() } else { sess.active.clone().unwrap_or_default() };
+        pc_core::draft::notes::add(&mut sess, &group, vec![pc_core::draft::notes::NoteUpdate { text: e.text, scope: e.scope, banned: e.banned }], guard_on);
+    }
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
 }

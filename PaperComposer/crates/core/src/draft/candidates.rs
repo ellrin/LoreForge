@@ -66,14 +66,40 @@ pub fn wants(sess: &Session, lens: &Lens, it: &Item) -> bool {
     }
 }
 
-/// The items of `groups` that want candidates.
+/// Items whose answer the record may give for a one-click 對: the Methods and Results details
+/// (a setting, a procedure, a dataset fact, a number). Never the author's mind: the core
+/// contribution, a key result's reading, anything in Introduction, Discussion or Conclusion,
+/// a pending result, a revision or a reviewer's question — those are asked, with options.
+pub fn record_may_answer(sess: &Session, it: &Item) -> bool {
+    let section = sess.group(&it.group).map(|g| g.section.as_str()).unwrap_or("");
+    matches!(section, "Methods" | "Results")
+        && it.pending.is_none()
+        && !matches!(it.role.as_str(), "core-contribution" | "key-result" | "revision" | "audit" | "pending")
+        && !it.group.starts_with('v')
+        && !it.group.starts_with('a')
+}
+
+/// An item asks the record for its own answer (`from_record`) once, while it is still open.
+pub fn wants_record(sess: &Session, lens: &Lens, it: &Item) -> bool {
+    let missing = lens.missing(it);
+    // a flag (how the idea came about) is the author's story: asked, never confirmed
+    !it.record_tried && it.from_record.is_none() && record_may_answer(sess, it) && !missing.is_empty() && !missing.iter().any(|m| matches!(m, super::lens::Missing::Flag(_)))
+}
+
+/// The items of `group` whose record answer waits for the author's 對／不對.
+pub fn to_confirm(sess: &Session, group: &str) -> Vec<String> {
+    sess.items_of(group).filter(|i| !i.excluded && record_may_answer(sess, i) && i.from_record.as_ref().is_some_and(|r| r.said.is_none())).map(|i| i.id.clone()).collect()
+}
+
+/// The items of `groups` that want candidates or the record's answer.
 pub fn targets<'a>(sess: &'a Session, lens: &Lens, groups: &[String]) -> Vec<&'a Item> {
-    sess.items.iter().filter(|i| groups.contains(&i.group) && !i.excluded && wants(sess, lens, i)).collect()
+    sess.items.iter().filter(|i| groups.contains(&i.group) && !i.excluded && (wants(sess, lens, i) || wants_record(sess, lens, i))).collect()
 }
 
 pub fn schema() -> serde_json::Value {
     let c = json_object(&[("text", json_string()), ("kind", json_string()), ("evidence", json_array(json_string())), ("serves", json_string())]);
-    let it = json_object(&[("id", json_string()), ("candidates", json_array(c)), ("missing", json_string())]);
+    let rec = json_object(&[("text", json_string()), ("evidence", json_array(json_string()))]);
+    let it = json_object(&[("id", json_string()), ("candidates", json_array(c)), ("missing", json_string()), ("from_record", crate::compose::json_nullable(rec))]);
     json_object(&[("items", json_array(it))])
 }
 
@@ -89,11 +115,18 @@ timeline steps (T…), the author's written thoughts (H…), tables (R…), pend
 thoughts come first, close to their words.\n\
 2. Numbers only as the record writes them, digit for digit; never a number the record does not have.\n\
 3. Candidates of one item differ in substance (not rewordings) and each says something concrete (\"在 run 3 \
-中心偏離平均後 Dice 掉到 0.61，所以改成依面積降權\"), never a generic phrase.\n\
+中心偏離平均後 Dice 掉到 0.61，所以改成依面積降權\"), never a generic phrase. A candidate is read at a glance and \
+picked with one key: one sentence, the point first, at most about 50 Chinese characters, one number at most unless \
+the point is the comparison itself. Details stay in the record (the ids say where).\n\
 4. `serves`: one short line on how the answer serves the key value. `kind`: motive, reason, result, interpretation \
 or expectation.\n\
 5. If the record cannot support two answers, give fewer (even none) and say in `missing` what the record lacks. \
 Never invent facts, motives the record does not hint at, or references.\n\
+6. `from_record`: when the record itself already states this item's answer — a setting, a procedure, a dataset \
+fact, a number and its plain reading — give it as one or two sentences the author \
+only has to confirm, with the ids it rests on; otherwise null. It must answer what the item asks: an item that \
+asks why (a reason, a trigger, 為何) needs the reason as the record writes it; what was done is not an answer. Never for how the idea came about, a motive or a \
+reading the record does not state. An item marked \"(options exist)\" needs only `from_record` (give no candidates).\n\
 Write `text`, `serves` and `missing` in Traditional Chinese as used in Taiwan with full-width punctuation. Reply with JSON only.";
     let mut user = super::prompts::context(key_value, sess, material);
     user += "\n";
@@ -110,6 +143,12 @@ Write `text`, `serves` and `missing` in Traditional Chinese as used in Taiwan wi
         if !it.stance.is_empty() {
             user += &format!(" — said so far: {}", it.stance);
         }
+        if !it.candidates.is_empty() || it.candidates_tried {
+            user += " (options exist)";
+        }
+        if !record_may_answer(sess, it) {
+            user += " (no from_record: the author's own view)";
+        }
         user += "\n";
     }
     Prompt { system: system.into(), user }
@@ -125,6 +164,14 @@ pub struct RawItem {
     pub candidates: Vec<RawCandidate>,
     #[serde(default)]
     pub missing: String,
+    #[serde(default)]
+    pub from_record: Option<RawRecord>,
+}
+#[derive(Debug, Deserialize)]
+pub struct RawRecord {
+    pub text: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
 }
 #[derive(Debug, Deserialize)]
 pub struct RawCandidate {
@@ -205,6 +252,8 @@ pub struct Checked {
     /// Why each dropped candidate went (for the log / the tests).
     pub dropped: Vec<String>,
     pub missing: String,
+    /// The record's own answer, when it stands on the record like a candidate.
+    pub from_record: Option<super::session::FromRecord>,
 }
 
 /// Keep candidates that stand on the record: evidence ids that do not exist
@@ -223,6 +272,17 @@ pub fn validate(reply: Reply, sess: &Session, asked: &[String], record: &str) ->
             continue;
         }
         let mut ch = Checked { item: id, missing: it.missing.trim().to_string(), ..Default::default() };
+        if let Some(r) = it.from_record.filter(|r| !r.text.trim().is_empty()) {
+            let text = r.text.trim().to_string();
+            let evidence: Vec<String> = r.evidence.iter().map(|e| norm(e)).filter_map(|e| ids.iter().find(|k| k.to_uppercase() == e).cloned()).collect();
+            if evidence.is_empty() {
+                ch.dropped.push(format!("記錄的回答「{text}」：沒有記錄裡存在的依據"));
+            } else if let Some(n) = numbers(&text).into_iter().find(|n| !corpus.contains(n)) {
+                ch.dropped.push(format!("記錄的回答「{text}」：記錄裡沒有 {n}"));
+            } else {
+                ch.from_record = Some(super::session::FromRecord { text, evidence, said: None });
+            }
+        }
         for c in it.candidates {
             let text = c.text.trim().to_string();
             if text.is_empty() || ch.kept.iter().any(|k| k.text == text) {
@@ -252,11 +312,17 @@ pub fn validate(reply: Reply, sess: &Session, asked: &[String], record: &str) ->
 /// Put checked candidates on their items (an item's earlier candidates are kept
 /// unless new ones came). Returns how many items got some.
 pub fn apply(sess: &mut Session, asked: &[String], checked: &[Checked]) -> usize {
+    // an item that already had options keeps them (it was asked only for the record's answer)
+    let had: Vec<String> = sess.items.iter().filter(|i| asked.contains(&i.id) && !i.candidates.is_empty()).map(|i| i.id.clone()).collect();
     mark_tried(sess, asked);
     let mut n = 0;
+    let may: Vec<String> = sess.items.iter().filter(|i| record_may_answer(sess, i)).map(|i| i.id.clone()).collect();
     for c in checked {
         let Some(it) = sess.items.iter_mut().find(|i| i.id == c.item) else { continue };
-        if !c.kept.is_empty() {
+        if it.from_record.is_none() && may.contains(&it.id) {
+            it.from_record = c.from_record.clone();
+        }
+        if !c.kept.is_empty() && !had.contains(&it.id) {
             it.candidates = c.kept.clone();
             n += 1;
         }
@@ -272,6 +338,7 @@ pub fn apply(sess: &mut Session, asked: &[String], checked: &[Checked]) -> usize
 pub fn mark_tried(sess: &mut Session, asked: &[String]) {
     for it in sess.items.iter_mut().filter(|i| asked.contains(&i.id)) {
         it.candidates_tried = true;
+        it.record_tried = true;
     }
 }
 
