@@ -244,6 +244,8 @@ function wire() {
     onCenter: (id) => { S.graphCenter = id; setHash(id ? `#/graph/${id}` : "#/graph"); },
     info: (t) => ($("graphInfo").textContent = t),
     kindLabel, relLabel, spaceName, domainLabel, domainSlot, fail, toast,
+    tagLabel: (t) => S.reg?.tags?.[t]?.label ?? t.split("/").pop(),
+    domains: () => Object.keys(S.reg?.domains ?? {}),
   });
   wireNotation();
   document.addEventListener("keydown", reviewKeys);

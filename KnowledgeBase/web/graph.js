@@ -60,6 +60,9 @@ const Graph = (() => {
   let drag = null, pinch = null, autoFit = true, viewAnim = null;
   const pointers = new Map();
   let play = null; // { t0, t1, cur, running, last }
+  // Tag selection (the bar above the graph, the panel's tree, 「標出這個標籤」): matching cards stay
+  // lit, the rest dim in place — no relayout. `tagLit` = the matching visible cards.
+  let tagLit = null, tagFocus = null, glow = null;
   let P = {}; // palette
   let groupColour = new Map(), groupOrder = [];
   const stats = { nodes: 0, edges: 0, loadAt: 0, settleMs: null, ticks: 0, frames: 0, fps: 0, tickMs: 0, drawMs: 0, _fpsT: 0, _fpsF: 0 };
@@ -130,8 +133,18 @@ const Graph = (() => {
       text: v("--text"), muted: v("--muted"), faint: v("--faint"), line: v("--line"), lineStrong: v("--line-strong"), edge: v("--g-edge") || v("--line-strong"),
       accent: v("--accent"), accentText: v("--accent-text"), panel: v("--panel"), ok: v("--ok"), warn: v("--warn"), stale: v("--stale"),
       groups: Array.from({ length: GROUP_N }, (_, i) => v(`--g${i + 1}`)), sans: v("--sans") || "sans-serif",
+      light: document.documentElement.dataset.mode === "light",
     };
     for (const n of nodes) n.col = colourOf(n);
+  }
+
+  /** A theme colour with alpha (canvas gradients need rgba). */
+  const probe = document.createElement("canvas").getContext("2d");
+  function rgba(c, a) {
+    probe.fillStyle = "#000"; probe.fillStyle = c || "#888";
+    const x = probe.fillStyle;
+    const m = x[0] === "#" ? [1, 3, 5].map((i) => parseInt(x.slice(i, i + 2), 16)) : x.match(/[\d.]+/g).slice(0, 3).map(Number);
+    return `rgba(${m[0]},${m[1]},${m[2]},${a})`;
   }
 
   // ── Init / DOM ─────────────────────────────────────────
@@ -197,6 +210,11 @@ const Graph = (() => {
       el("span", {}, "新增幾張卡片，在內文用 [[標題]] 互相連結，這裡就會長出知識網路。"),
       el("button", { class: "btn primary", type: "button", onclick: () => opts.newCard?.() }, "新增知識卡"));
     wrap.append(ui.searchBox, ui.tools, ui.play, ui.legend, ui.status, ui.empty, ui.tip, ui.card, ui.panel);
+    // The tag bar sits above the canvas (fixed height: choosing a domain never resizes the graph).
+    ui.tagDomains = el("div", { class: "g-tb-row", role: "group", "aria-label": "領域" });
+    ui.tagSubs = el("div", { class: "g-tb-row g-tb-subs", role: "group", "aria-label": "子題" });
+    ui.tagBar = el("div", { class: "g-tb" }, ui.tagDomains, ui.tagSubs);
+    wrap.before(ui.tagBar);
     // Head controls (mode, depth) live in the view head.
     ui.mode = document.getElementById("gMode");
     ui.depth = document.getElementById("gDepth");
@@ -317,6 +335,7 @@ const Graph = (() => {
     stats.nodes = nodes.length; stats.edges = edges.length;
     renderPanel();
     rebuild();
+    renderTagBar();
     if (query) setQuery(query);
     stats.loadAt = performance.now(); stats.settleMs = null; stats.ticks = 0;
     autoFit = true;
@@ -359,15 +378,26 @@ const Graph = (() => {
   }
 
   // ── Filters → active set ───────────────────────────────
-  function tagMatch(tags) {
-    for (const sel of F.tags) for (const t of tags ?? []) if (t === sel || t.startsWith(sel + "/")) return true;
+  /** A card carries `sel`: the tag or one below it; a domain also by the card's domains. */
+  function tagHit(n, sel) {
+    if (!sel.includes("/") && n.domains?.includes(sel)) return true;
+    for (const t of n.tags ?? []) if (t === sel || t.startsWith(sel + "/")) return true;
     return false;
+  }
+  function computeTagLit() {
+    tagLit = F.tags.size ? new Set(active.filter((n) => n.isCard && [...F.tags].some((s) => tagHit(n, s)))) : null;
+  }
+  /** The one way to change the tag selection: dims in place, never rebuilds or reheats. */
+  function setTags(next) {
+    F.tags = next;
+    computeTagLit();
+    renderTagBar(); renderPanel(); renderInfo(); renderLegend();
+    kick();
   }
   function passCard(n) {
     if (F.kinds.size && !F.kinds.has(n.kind)) return false;
     if (F.states.size && !F.states.has(n.state ?? "none")) return false;
     if (F.spaces.size && !F.spaces.has(n.space)) return false;
-    if (F.tags.size && !tagMatch(n.tags)) return false;
     if (F.from && n.day && n.day < F.from) return false;
     if (F.to && n.day && n.day > F.to) return false;
     if (play && Number.isFinite(n.t) && n.t > play.cur) return false;
@@ -426,6 +456,8 @@ const Graph = (() => {
       if (nb && play) { const a = Math.random() * 6.283; n.x = nb.x + Math.cos(a) * 8; n.y = nb.y + Math.sin(a) * 8; n.vx = n.vy = 0; }
     }
     if (hover && !hover.on) hover = null;
+    computeTagLit();
+    if (ui.tagBar && F.tags.size) { const c = ui.tagSubs.querySelector(".g-tb-n"); if (c) c.textContent = `${tagLit.size} 張`; }
     renderInfo();
     renderLegend();
   }
@@ -695,6 +727,10 @@ const Graph = (() => {
     if (focus?.on) { lit = new Set(focus.nb); lit.add(focus); }
     else if (matches) lit = new Set(matches);
     const dim = !!lit;
+    // the tag selection is the base; hover / selection / search go on top of it
+    const base = !lit && tagLit ? tagLit : null;
+    const isBright = (n) => (lit ? lit.has(n) : base ? base.has(n) || n.id === center : true);
+    if (tagLit) drawGlow(inView);
     ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * view.x, dpr * view.y);
     ctx.lineCap = "round";
 
@@ -705,20 +741,23 @@ const Graph = (() => {
       const list = edgeGroups.get(key);
       if (!list?.length) continue;
       const st = REL[key];
-      ctx.beginPath();
-      let any = false;
+      const parts = [[], []]; // faint, full
       for (const e of list) {
         if (!edgeVisible(e)) continue;
         if (focus && (e.a === focus || e.b === focus)) { hot.push(e); continue; }
-        ctx.moveTo(e.a.x, e.a.y); ctx.lineTo(e.b.x, e.b.y); any = true;
+        parts[lit ? 0 : base ? (base.has(e.a) && base.has(e.b) ? 1 : 0) : 1].push(e);
       }
-      if (!any) continue;
-      ctx.strokeStyle = P[st.c] ?? P.muted;
-      ctx.globalAlpha = st.a * (dim ? 0.15 : 1) * (k < 0.7 ? 0.55 + 0.45 * Math.max(0, (k - 0.15) / 0.55) : 1);
-      ctx.lineWidth = st.w / k;
-      ctx.setLineDash(st.dash ? st.dash.map((d) => d / k) : []);
-      ctx.stroke();
-      if (S.arrows && st.arrow && k > 0.45 && !dim) arrows(list.filter((e) => edgeVisible(e) && !(focus && (e.a === focus || e.b === focus))), st, k);
+      parts.forEach((part, full) => {
+        if (!part.length) return;
+        ctx.beginPath();
+        for (const e of part) { ctx.moveTo(e.a.x, e.a.y); ctx.lineTo(e.b.x, e.b.y); }
+        ctx.strokeStyle = P[st.c] ?? P.muted;
+        ctx.globalAlpha = st.a * (full ? 1 : 0.15) * (k < 0.7 ? 0.55 + 0.45 * Math.max(0, (k - 0.15) / 0.55) : 1);
+        ctx.lineWidth = st.w / k;
+        ctx.setLineDash(st.dash ? st.dash.map((d) => d / k) : []);
+        ctx.stroke();
+        if (S.arrows && st.arrow && k > 0.45 && full) arrows(part, st, k);
+      });
     }
     ctx.setLineDash([]);
     // Edges touching the hovered / selected node, on top and in accent.
@@ -737,7 +776,7 @@ const Graph = (() => {
     const batches = new Map();
     for (const n of active) {
       if (!inView(n)) continue;
-      const bright = !dim || lit.has(n);
+      const bright = isBright(n);
       const hollow = n.kind === "missing" || n.kind === "tag";
       const key = `${bright ? 1 : 0}|${n.col}|${hollow ? "h" : "f"}`;
       (batches.get(key) ?? batches.set(key, []).get(key)).push(n);
@@ -773,7 +812,7 @@ const Graph = (() => {
     if (selected?.on) ring(selected, P.accentText, 2.2);
     if (hover?.on && hover !== selected) ring(hover, P.text, 1.5);
 
-    drawLabels(lit, inView);
+    drawLabels(lit, inView, base);
     ctx.globalAlpha = 1;
     stats.drawMs = performance.now() - t0;
   }
@@ -794,7 +833,34 @@ const Graph = (() => {
     ctx.fillStyle = P[st.c] ?? P.muted; ctx.globalAlpha = st.a; ctx.fill();
   }
 
-  function drawLabels(lit, inView) {
+  /** Soft regions around the cards of each selected tag, in its domain's colour: soft discs
+   *  drawn opaque on a half-resolution layer (overlaps merge into one region), laid on at low alpha. */
+  function drawGlow(inView) {
+    const w = Math.max(1, Math.round(W / 2)), h = Math.max(1, Math.round(H / 2));
+    if (!glow) glow = document.createElement("canvas");
+    if (glow.width !== w || glow.height !== h) { glow.width = w; glow.height = h; }
+    const g = glow.getContext("2d"), k = view.k;
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, w, h);
+    g.setTransform(k / 2, 0, 0, k / 2, view.x / 2, view.y / 2);
+    for (const sel of F.tags) {
+      const i = opts.domainSlot?.(sel.split("/")[0]);
+      const c = i == null ? P.accentText : P.groups[i];
+      const c0 = rgba(c, 1), c1 = rgba(c, 0.55), c2 = rgba(c, 0);
+      for (const n of tagLit) {
+        if (!inView(n) || !tagHit(n, sel)) continue;
+        const R = Math.max(radius(n) * 3.4, 48 / k);
+        const gr = g.createRadialGradient(n.x, n.y, 0, n.x, n.y, R);
+        gr.addColorStop(0, c0); gr.addColorStop(0.5, c1); gr.addColorStop(1, c2);
+        g.fillStyle = gr; g.beginPath(); g.arc(n.x, n.y, R, 0, Math.PI * 2); g.fill();
+      }
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = P.light ? 0.22 : 0.26;
+    ctx.drawImage(glow, 0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawLabels(lit, inView, base) {
     const k = view.k;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.font = `500 11.5px ${P.sans}`;
@@ -808,6 +874,7 @@ const Graph = (() => {
       let a;
       if (n === hover || n === selected) a = 1;
       else if (lit) a = lit.has(n) ? 1 : 0;
+      else if (base && !base.has(n)) a = 0;
       else a = Math.max(n.hub && k > 0.2 ? 0.85 : 0, Math.min(1, (rs - th) / (th * 0.25)));
       // Half-faded labels over edges read as noise: a label is either shown or not.
       if (a >= 0.5) cand.push([n, 1, rs]);
@@ -964,6 +1031,7 @@ const Graph = (() => {
       n.kind === "missing" ? el("div", { class: "g-tip-m" }, "尚未建立的 [[連結]] · 點選可建立") : null,
       n.kind === "tag" ? el("div", { class: "g-tip-m" }, `標籤 ${n.tagPath} · ${n.nb.filter((m) => m.isCard).length} 張卡片`) : null,
       n.summary ? el("div", { class: "g-tip-s" }, n.summary) : null,
+      n.isCard && n.tags?.length ? el("div", { class: "g-tip-t" }, n.tags.map((t) => el("span", { class: F.tags.has(t) || F.tags.has(t.split("/")[0]) ? "on" : null }, el("i", { style: dotStyle(t) }), tagName(t)))) : null,
     );
     t.hidden = false;
     const tw = t.offsetWidth, th = t.offsetHeight;
@@ -972,6 +1040,8 @@ const Graph = (() => {
     if (y + th > H - 8) y = p.y - th - 14;
     t.style.left = `${Math.max(8, x)}px`; t.style.top = `${Math.max(8, y)}px`;
   }
+  const tagName = (t) => opts.tagLabel?.(t) ?? t.split("/").pop();
+  const dotStyle = (t) => { const i = opts.domainSlot?.(t.split("/")[0]); return `background:${i == null ? "var(--faint)" : `var(--g${i + 1})`}`; };
   const stateText = (n) => el("span", { class: "st" }, el("i", { class: `st-${n.state ?? "none"}` }), STATE_LABEL[n.state ?? "none"]);
 
   function select(n) {
@@ -1035,7 +1105,7 @@ const Graph = (() => {
       fill(c,el("div", { class: "g-card-h" }, el("span", { class: "tag" }, "標籤"), close),
         el("h3", {}, n.tagPath),
         neighbours(n),
-        el("div", { class: "g-card-a" }, el("button", { class: "btn", type: "button", onclick: () => { F.tags = new Set([n.tagPath]); renderPanel(); rebuild(); reheat(0.4); autoFit = true; } }, ico("search"), "只看這個標籤")));
+        el("div", { class: "g-card-a" }, el("button", { class: "btn", type: "button", onclick: () => { tagFocus = n.tagPath.split("/")[0]; setTags(new Set([n.tagPath])); } }, ico("search"), "標出這個標籤")));
     } else {
       const meta = [n.created_at ? `建立 ${n.created_at.slice(0, 10)}` : null, opts.spaceName?.(n.space) ?? n.space].filter(Boolean).join(" · ");
       fill(c,
@@ -1044,7 +1114,7 @@ const Graph = (() => {
         n.aliases?.length ? el("div", { class: "g-card-al" }, n.aliases.join(" · ")) : null,
         n.summary ? el("p", { class: "g-card-s" }, n.summary) : null,
         el("div", { class: "g-card-m muted small" }, meta),
-        n.tags?.length ? el("div", { class: "g-card-t" }, n.tags.map((t) => el("span", { class: "tag" }, t))) : null,
+        n.tags?.length ? el("div", { class: "g-card-t" }, n.tags.map((t) => el("button", { type: "button", class: "tag", "aria-pressed": String(F.tags.has(t)), onclick: () => toggleTag(t) }, el("i", { class: "g-dot", style: dotStyle(t) }), tagName(t)))) : null,
         el("div", { class: "g-card-a" },
           el("button", { class: "btn primary", type: "button", onclick: () => opts.open?.(n.id) }, ico("pen"), "開啟卡片"),
           n.id !== center ? el("button", { class: "btn", type: "button", onclick: () => setCenter(n.id) }, ico("target"), "局部圖譜") : null,
@@ -1084,8 +1154,9 @@ const Graph = (() => {
     } else {
       const cnt = new Map();
       for (const n of active) if (n.isCard) { const k = groupKey(n); const key = groupColour.has(k) ? k : "__other"; cnt.set(key, (cnt.get(key) ?? 0) + 1); }
-      for (const [k] of groupOrder) if (groupColour.has(k)) items.push(el("span", {}, el("i", { style: `background:var(--g${groupColour.get(k) + 1})` }), groupLabel(k), el("em", {}, cnt.get(k) ?? 0)));
-      if (cnt.get("__other")) items.push(el("span", {}, el("i", { style: "background:var(--faint)" }), "其他", el("em", {}, cnt.get("__other") ?? 0)));
+      // colour by domain: the tag bar above already names each colour
+      if (!(S.colorBy === "domain" && !ui.tagBar?.hidden)) for (const [k] of groupOrder) if (groupColour.has(k)) items.push(el("span", {}, el("i", { style: `background:var(--g${groupColour.get(k) + 1})` }), groupLabel(k), el("em", {}, cnt.get(k) ?? 0)));
+      if (cnt.get("__other") && !(S.colorBy === "domain" && !ui.tagBar?.hidden)) items.push(el("span", {}, el("i", { style: "background:var(--faint)" }), "其他", el("em", {}, cnt.get("__other") ?? 0)));
     }
     if (S.showMissing && active.some((n) => n.kind === "missing")) items.push(el("span", {}, el("i", { class: "hollow dashed" }), "尚未建立"));
     if (S.showTags && active.some((n) => n.kind === "tag")) items.push(el("span", {}, el("i", { class: "hollow" }), "標籤"));
@@ -1112,7 +1183,7 @@ const Graph = (() => {
   function chip(label, on, onclick, ...pre) {
     return el("button", { type: "button", class: "g-chip", "aria-pressed": String(on), onclick }, ...pre, label);
   }
-  const refilter = () => { rebuild(); reheat(0.35); renderPanel(); kick(); };
+  const refilter = () => { rebuild(); reheat(0.35); renderPanel(); renderTagBar(); kick(); };
 
   function renderPanel() {
     if (!ui.panel || ui.panel.hidden && !S.panel) return;
@@ -1195,15 +1266,54 @@ const Graph = (() => {
     const kids = (p) => [...cnt.keys()].filter((t) => (p ? t.startsWith(p + "/") && !t.slice(p.length + 1).includes("/") : !t.includes("/"))).sort((a, b) => cnt.get(b) - cnt.get(a) || a.localeCompare(b));
     const item = (t) => {
       const i = el("input", { type: "checkbox", checked: F.tags.has(t) });
-      i.addEventListener("change", () => { i.checked ? F.tags.add(t) : F.tags.delete(t); refilter(); });
+      i.addEventListener("change", () => toggleTag(t, i.checked));
       const sub = kids(t);
-      const row = el("label", { class: "g-tag" }, i, el("span", {}, t.split("/").pop()), el("em", {}, cnt.get(t)));
+      const row = el("label", { class: "g-tag" }, i, el("span", {}, t.includes("/") ? tagName(t) : opts.domainLabel?.(t) ?? t), el("em", {}, cnt.get(t)));
       if (!sub.length) return el("li", {}, row);
       const open = [...F.tags].some((s) => s.startsWith(t + "/"));
       return el("li", {}, el("details", { open }, el("summary", {}, row), el("ul", {}, sub.map(item))));
     };
     return el("ul", { class: "g-tags" }, kids("").map(item));
   }
+  /** Add or remove one tag; a subtopic narrows its domain (the domain itself is dropped). */
+  function toggleTag(t, on = !F.tags.has(t)) {
+    const next = new Set(F.tags);
+    if (on) { next.add(t); if (t.includes("/")) next.delete(t.split("/")[0]); else for (const x of next) if (x.startsWith(t + "/")) next.delete(x); }
+    else next.delete(t);
+    tagFocus = t.split("/")[0];
+    setTags(next);
+  }
+  // ── Tag bar ────────────────────────────────────────────
+  function renderTagBar() {
+    if (!ui.tagBar) return;
+    const cards = nodes.filter((n) => n.isCard);
+    const dCnt = new Map(), tCnt = new Map();
+    for (const n of cards) {
+      const ds = new Set(n.domains ?? []);
+      for (const t of n.tags ?? []) { const [d, sub] = t.split("/"); ds.add(d); if (sub) { const k = `${d}/${sub}`; tCnt.set(k, (tCnt.get(k) ?? 0) + 1); } }
+      for (const d of ds) dCnt.set(d, (dCnt.get(d) ?? 0) + 1);
+    }
+    // registered domains only (until every card has them, free ones would crowd the bar)
+    const reg = opts.domains?.() ?? [];
+    let doms = (reg.length ? reg : [...dCnt.keys()]).filter((d) => dCnt.get(d));
+    doms.sort((a, b) => dCnt.get(b) - dCnt.get(a) || a.localeCompare(b));
+    ui.tagBar.hidden = !doms.length;
+    if (!doms.length) return;
+    if (tagFocus && !doms.includes(tagFocus)) tagFocus = null;
+    const sel = (k) => F.tags.has(k);
+    const part = (d) => [...F.tags].some((x) => x.startsWith(d + "/"));
+    fill(ui.tagDomains, doms.map((d) => el("button", {
+      type: "button", class: `g-tb-chip${d === tagFocus ? " focus" : ""}${part(d) ? " part" : ""}`, "aria-pressed": String(sel(d)),
+      onclick: () => { if (tagFocus !== d) { tagFocus = d; if (!sel(d) && !part(d)) toggleTag(d, true); else renderTagBar(); } else if (sel(d) || part(d)) { const next = new Set([...F.tags].filter((x) => x !== d && !x.startsWith(d + "/"))); tagFocus = null; setTags(next); } else toggleTag(d, true); },
+    }, el("i", { style: dotStyle(d) }), opts.domainLabel?.(d) ?? d, el("em", {}, dCnt.get(d)))));
+    const subs = tagFocus ? [...tCnt.keys()].filter((t) => t.startsWith(tagFocus + "/")).sort((a, b) => tCnt.get(b) - tCnt.get(a) || a.localeCompare(b)) : [];
+    fill(ui.tagSubs,
+      tagFocus ? subs.map((t) => el("button", { type: "button", class: "g-tb-chip sub", "aria-pressed": String(sel(t)), onclick: () => toggleTag(t) }, tagName(t), el("em", {}, tCnt.get(t))))
+        : el("span", { class: "g-tb-hint" }, "選領域看子題"),
+      F.tags.size ? el("span", { class: "g-tb-n" }, `${tagLit?.size ?? 0} 張`) : null,
+      F.tags.size ? el("button", { type: "button", class: "g-tb-clear", onclick: () => { tagFocus = null; setTags(new Set()); } }, ico("x"), "清除") : null);
+  }
+
   function relayout() {
     memory.clear();
     let i = 0;
@@ -1305,5 +1415,7 @@ const Graph = (() => {
     /** Screen position of a node by id or title (tests). */
     where: (q) => { const n = byId.get(q) ?? nodes.find((m) => m.title === q); return n && { id: n.id, x: n.x * view.k + view.x, y: n.y * view.k + view.y, on: n.on }; },
     togglePanel, togglePlay, setQuery: (q) => { ui.search.value = q; setQuery(q); },
+    /** Select tags (tests): the same path as the bar. */
+    tags: (list) => { tagFocus = list[0]?.split("/")[0] ?? null; setTags(new Set(list)); },
   };
 })();

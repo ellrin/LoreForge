@@ -27,10 +27,11 @@
 
 use lore_catalog::report::human;
 use lore_catalog::{Catalog, Guard, ScanConfig, store};
+use shelf_server::kbtags::Vocabulary;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "用法：\n  loreshelf-cli scan <資料夾>...   只讀掃描，寫入本機目錄與報告\n  loreshelf-cli report            最新報告的位置\n  loreshelf-cli extract           讀取檔案全文到快取（只補還沒讀的）\n  loreshelf-cli terms             整理候選詞（知識庫還沒有的詞）\n  loreshelf-cli mastered <資料夾>...  這些資料夾的檔案我全懂（裡面的術語會做成已懂的卡）\n  loreshelf-cli known-cards [--write]  把上面那些資料夾的術語做成已懂的知識卡（不加 --write 只算數量）\n  loreshelf-cli study-cards [--write]  正在學的領域（private/shared/learning.json）的詞做成不熟的卡（NeonDeck 會跳）\n  loreshelf-cli card-content      用 Claude Haiku 幫已懂的卡寫摘要與說明（基本詞不做卡）\n  loreshelf-cli known-cards --refill [--write]  先前只有原文引句的卡補上摘要與說明，基本詞移到垃圾桶（KnowledgeBase 要開著）\n  loreshelf-cli card-titles       用 Claude Haiku 確認全懂資料夾的術語並給卡片標題（只送論文與簡報裡的詞和句子）\n  loreshelf-cli classify [數量] [--cloud]   本機模型分類候選詞（每批存檔，可中斷續跑；跑完把一般詞寫進忽略清單；--cloud 用 Claude Haiku，只問論文與簡報裡的詞）\n  loreshelf-cli plan [來源資料夾 [頁]]   歸位計畫：每個檔案／資料夾該去新資料夾樹的哪裡（只產生計畫，不搬）\n  loreshelf-cli move <來源資料夾> [--dry]   把規則確定的列搬過去（只改名搬移，不複製不刪除；記在日誌裡）\n  loreshelf-cli undo              復原上一批搬移\n  loreshelf-cli guess [來源資料夾]   規則放不了的檔案問模型（論文只送內容給 Claude，其他只用本機模型）\n  loreshelf-cli labels [--count]  每個檔案 3–5 個英文標籤（同上兩條路；--count 只算數量）\n  loreshelf-cli move <來源資料夾> --model [--dry]   搬模型放的列（先 --dry 看過）\n  loreshelf-cli ignore-words [--write]  一般詞與名稱寫進共用的「這不是術語」清單（不加 --write 只算數量）";
+const USAGE: &str = "用法：\n  loreshelf-cli scan <資料夾>...   只讀掃描，寫入本機目錄與報告\n  loreshelf-cli report            最新報告的位置\n  loreshelf-cli extract           讀取檔案全文到快取（只補還沒讀的）\n  loreshelf-cli terms             整理候選詞（知識庫還沒有的詞）\n  loreshelf-cli mastered <資料夾>...  這些資料夾的檔案我全懂（裡面的術語會做成已懂的卡）\n  loreshelf-cli known-cards [--write]  把上面那些資料夾的術語做成已懂的知識卡（不加 --write 只算數量）\n  loreshelf-cli study-cards [--write]  正在學的領域（private/shared/learning.json）的詞做成不熟的卡（NeonDeck 會跳）\n  loreshelf-cli card-content      用 Claude Haiku 幫已懂的卡寫摘要與說明（基本詞不做卡）\n  loreshelf-cli known-cards --refill [--write]  先前只有原文引句的卡補上摘要與說明，基本詞移到垃圾桶（KnowledgeBase 要開著）\n  loreshelf-cli card-titles       用 Claude Haiku 確認全懂資料夾的術語並給卡片標題（只送論文與簡報裡的詞和句子）\n  loreshelf-cli classify [數量] [--cloud]   本機模型分類候選詞（每批存檔，可中斷續跑；跑完把一般詞寫進忽略清單；--cloud 用 Claude Haiku，只問論文與簡報裡的詞）\n  loreshelf-cli plan [來源資料夾 [頁]]   歸位計畫：每個檔案／資料夾該去新資料夾樹的哪裡（只產生計畫，不搬）\n  loreshelf-cli move <來源資料夾> [--dry]   把規則確定的列搬過去（只改名搬移，不複製不刪除；記在日誌裡）\n  loreshelf-cli undo              復原上一批搬移\n  loreshelf-cli guess [來源資料夾]   規則放不了的檔案問模型（論文只送內容給 Claude，其他只用本機模型）\n  loreshelf-cli labels [--count]  每個檔案 3–5 個英文標籤（同上兩條路；--count 只算數量）\n  loreshelf-cli move <來源資料夾> --model [--dry]   搬模型放的列（先 --dry 看過）\n  loreshelf-cli ignore-words [--write]  一般詞與名稱寫進共用的「這不是術語」清單（不加 --write 只算數量）\n  loreshelf-cli kb-tags [--write] [--sample 數量] [--ids 卡片id,…] [--vocab tags.json]  知識卡的領域與標籤（只從詞彙表選；本機詞做的卡只給本機模型；不加 --write 只列出）";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -155,6 +156,13 @@ fn run(args: &[String]) -> Result<String, String> {
                 ignore_words(&home, &cache_dir, args.get(1).is_some_and(|a| a == "--write"))
             }
         }
+        Some("kb-tags") => {
+            let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
+            let opt = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+            let sample = opt("--sample").map(|n| n.parse::<usize>().map_err(|_| USAGE.to_string())).transpose()?;
+            let ids: Vec<String> = opt("--ids").map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default();
+            kb_tags(&cache_dir, args.iter().any(|a| a == "--write"), sample, &ids, opt("--vocab").map(|p| expand(&p)))
+        }
         Some("report") => Catalog::latest_report(&catalog_dir).map(|p| p.display().to_string()).ok_or_else(|| "還沒有報告；先執行 loreshelf-cli scan <資料夾>".to_string()),
         _ => Err(USAGE.into()),
     }
@@ -221,7 +229,7 @@ fn known_cards_from_mastered(cache_dir: &std::path::Path, write: bool) -> Result
     let have: std::collections::HashSet<String> = known_cards(&home).iter().flat_map(|k| std::iter::once(&k.title).chain(k.aliases.iter())).flat_map(|x| title_keys(x)).collect();
     let picked: Vec<(&lore_catalog::terms::Term, &shelf_server::cards::Titled)> =
         shelf_server::cards::candidates(&pool).filter_map(|t| titles.titles.get(&t.key).filter(|x| x.keep && x.written && !x.title.contains(" / ")).map(|x| (t, x))).filter(|(_, x)| !title_keys(&x.title).iter().any(|k| have.contains(k))).collect();
-    let cards = merge_cards(&picked);
+    let cards = merge_cards(&picked, &kb_vocab(&home));
     let status = format!("全懂資料夾裡的候選詞 {}：可做成已懂的卡 {} 張（已去重、略過知識庫已有的）；Claude 還沒確認 {unchecked}，還沒寫內容 {unwritten}，模型還沒分類 {waiting}，只出現在非論文檔案而不送雲端的術語 {local_only}", mine.len(), cards.len());
     if !write {
         // LORESHELF_LIST=1: the titles, one per line
@@ -288,7 +296,7 @@ fn study_cards(cache_dir: &std::path::Path, write: bool) -> Result<String, Strin
         .filter_map(|t| titles.titles.get(&t.key).filter(|x| x.keep && x.written && !x.title.contains(" / ")).map(|x| (t, x)))
         .filter(|(_, x)| !title_keys(&x.title).iter().any(|k| have.contains(k)))
         .collect();
-    let cards = merge_cards(&picked);
+    let cards = merge_cards(&picked, &kb_vocab(&home));
     if !write {
         if std::env::var_os("LORESHELF_LIST").is_some() {
             for c in cards.values() {
@@ -309,7 +317,9 @@ fn study_cards(cache_dir: &std::path::Path, write: bool) -> Result<String, Strin
 /// One card per concept: titles sharing a name or an acronym (`SSIM` / `Structural Similarity
 /// Index Measure (SSIM)`) are one card under the fullest title, with that title's words.
 /// (title, domains, summary, body)
-fn merge_cards(picked: &[(&lore_catalog::terms::Term, &shelf_server::cards::Titled)]) -> std::collections::BTreeMap<usize, (String, Vec<String>, String, String)> {
+/// Domains are only ever registered ones (`vocab`, the KnowledgeBase's tags.json): a model's free
+/// field (「醫學影像」) is mapped to the one domain it names, else left out for `kb-tags`.
+fn merge_cards(picked: &[(&lore_catalog::terms::Term, &shelf_server::cards::Titled)], vocab: &Vocabulary) -> std::collections::BTreeMap<usize, (String, Vec<String>, String, String)> {
     let mut group: Vec<usize> = (0..picked.len()).collect();
     fn root(g: &mut [usize], i: usize) -> usize {
         let mut r = i;
@@ -344,9 +354,9 @@ fn merge_cards(picked: &[(&lore_catalog::terms::Term, &shelf_server::cards::Titl
             c.2 = x.summary.clone();
             c.3 = x.body.clone();
         }
-        for d in std::iter::once(&x.field).filter(|f| !f.is_empty()).chain(t.domains.iter()) {
-            if !c.1.contains(d) {
-                c.1.push(d.clone());
+        for d in std::iter::once(&x.field).filter(|f| !f.is_empty()).chain(t.domains.iter()).filter_map(|f| vocab.map_field(f)) {
+            if !c.1.contains(&d) {
+                c.1.push(d);
             }
         }
     }
@@ -381,20 +391,7 @@ fn title_keys(title: &str) -> Vec<String> {
 /// One call to KnowledgeBase's API while it runs (ports.json `kb`): (status, body); `None` = not running.
 fn kb_api(method: &str, path: &str, body: Option<&serde_json::Value>) -> Option<Result<(u16, serde_json::Value), String>> {
     let port = lore_home::ports::live().get("kb").copied()?;
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    use std::io::{Read, Write};
-    let run = || -> Result<(u16, serde_json::Value), String> {
-        let mut s = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?;
-        let b = body.map(|b| b.to_string()).unwrap_or_default();
-        let req = format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}", b.len());
-        s.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
-        let mut out = String::new();
-        let _ = s.read_to_string(&mut out);
-        let status = out.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
-        let json = out.split_once("\r\n\r\n").and_then(|(_, b)| serde_json::from_str(b.trim()).ok()).unwrap_or(serde_json::Value::Null);
-        Ok((status, json))
-    };
-    Some(run())
+    Some(kb_api_at(port, method, path, body))
 }
 
 /// The cards LoreShelf made before they had words of their own (2026-11-13: quotes as the body,
@@ -459,6 +456,12 @@ fn made_by_loreshelf(nodes: &std::path::Path, id: &str) -> bool {
 
 /// One card into the KnowledgeBase: its API while it runs (ports.json `kb`), else kb-core on its folder.
 fn kb_create(home: &lore_home::Home, card: &serde_json::Value) -> Result<(), String> {
+    // only registered domains (a free one would be a colour of its own in KnowledgeBase)
+    let vocab = kb_vocab(home);
+    let mut card = card.clone();
+    let doms: Vec<serde_json::Value> = card["domains"].as_array().map(|a| a.iter().filter_map(|d| d.as_str().and_then(|d| vocab.map_field(d))).map(serde_json::Value::from).collect()).unwrap_or_default();
+    card["domains"] = serde_json::Value::from(doms);
+    let card = &card;
     if let Some(port) = lore_home::ports::live().get("kb").copied() {
         // every write names its space: the member's personal one (else the first)
         let mut card = card.clone();
@@ -510,7 +513,9 @@ fn classify(cache_dir: &std::path::Path, max: Option<usize>, cloud: bool) -> Res
     }
     let mut doms: Vec<(&str, usize)> = doms.into_iter().collect();
     doms.sort_by(|a, b| b.1.cmp(&a.1));
-    let fields: Vec<String> = doms.into_iter().take(5).map(|d| d.0.to_string()).collect();
+    // the prompt reads the fields by name: the zh labels of tags.json
+    let vocab = kb_vocab(&home);
+    let fields: Vec<String> = doms.into_iter().take(5).map(|d| vocab.label(d.0).to_string()).collect();
     let llm = shelf_server::llm::Llm::new(home.clone());
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     let t0 = std::time::Instant::now();
@@ -790,6 +795,151 @@ fn known_cards(home: &lore_home::Home) -> Vec<lore_catalog::terms::Known> {
     out
 }
 
+/// The KnowledgeBase's registered domains and tags (`private/KnowledgeBase/tags.json`; empty
+/// when there is none).
+fn kb_vocab(home: &lore_home::Home) -> Vocabulary {
+    home.app_dir("KnowledgeBase").and_then(|d| Vocabulary::load(&d.join("tags.json")).ok()).unwrap_or_default()
+}
+
+/// Where KnowledgeBase writes go: its API while it runs, else kb-core on its folder.
+enum KbTarget {
+    Api(u16),
+    Folder { root: PathBuf, member: String },
+}
+
+fn kb_target(home: &lore_home::Home) -> Result<KbTarget, String> {
+    if let Some(port) = lore_home::ports::live().get("kb").copied() {
+        return Ok(KbTarget::Api(port));
+    }
+    let root = home.app_dir("KnowledgeBase").filter(|d| d.join("space.toml").is_file()).ok_or("找不到知識庫（private/KnowledgeBase）")?;
+    Ok(KbTarget::Folder { root, member: home.prefs().profile.id.unwrap_or_else(|| "me".into()) })
+}
+
+/// One call to a KnowledgeBase on `port`: (status, body).
+fn kb_api_at(port: u16, method: &str, path: &str, body: Option<&serde_json::Value>) -> Result<(u16, serde_json::Value), String> {
+    use std::io::{Read, Write};
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut s = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?;
+    let b = body.map(|b| b.to_string()).unwrap_or_default();
+    let req = format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}", b.len());
+    s.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    let mut out = String::new();
+    let _ = s.read_to_string(&mut out);
+    let status = out.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
+    let json = out.split_once("\r\n\r\n").and_then(|(_, b)| serde_json::from_str(b.trim()).ok()).unwrap_or(serde_json::Value::Null);
+    Ok((status, json))
+}
+
+/// The cards of a KnowledgeBase folder (read only), with their revision.
+fn read_cards(nodes: &std::path::Path) -> Vec<(shelf_server::kbtags::Card, u64)> {
+    let mut out = Vec::new();
+    for f in std::fs::read_dir(nodes).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")) {
+        let Some(v) = std::fs::read(&f).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) else { continue };
+        let strs = |k: &str| -> Vec<String> { v[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default() };
+        let (Some(id), Some(title)) = (v["id"].as_str(), v["title"].as_str()) else { continue };
+        let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+        out.push((shelf_server::kbtags::Card { id: id.into(), title: title.into(), summary: s("summary"), body: s("body"), domains: strs("domains"), tags: strs("tags"), local_only: false }, v["revision"].as_u64().unwrap_or(0)));
+    }
+    out.sort_by(|a, b| a.0.id.cmp(&b.0.id));
+    out
+}
+
+/// Every card's domains and 2–4 tags from the vocabulary (`--vocab`, default the KB's own
+/// tags.json), on Claude Haiku (the local model only when Haiku is unavailable). Without `--write` only a list; with it, the vocabulary goes into tags.json and
+/// each card is edited through KnowledgeBase (its API with the card's revision, else kb-core).
+fn kb_tags(cache_dir: &std::path::Path, write: bool, sample: Option<usize>, ids: &[String], vocab_file: Option<PathBuf>) -> Result<String, String> {
+    use shelf_server::kbtags;
+    let home = lore_home::Home::discover(&std::env::current_dir().unwrap_or_default());
+    let kb_dir = home.app_dir("KnowledgeBase").filter(|d| d.join("nodes").is_dir()).ok_or("找不到知識庫（private/KnowledgeBase）")?;
+    let vocab = match &vocab_file {
+        Some(p) => Vocabulary::load(p)?,
+        None => kb_vocab(&home),
+    };
+    if vocab.tags.is_empty() {
+        return Err("詞彙表沒有標籤（--vocab 指定一個 tags.json，或先在知識庫的 tags.json 寫好領域與標籤）".into());
+    }
+    let _ = cache_dir;
+    let mut cards = read_cards(&kb_dir.join("nodes"));
+    if !ids.is_empty() {
+        cards.retain(|(c, _)| ids.contains(&c.id));
+    } else if let Some(n) = sample.filter(|&n| n > 0 && n < cards.len()) {
+        // spread over the list, local-only ones included
+        let step = cards.len() as f64 / n as f64;
+        cards = (0..n).map(|i| cards[(i as f64 * step) as usize].clone()).collect();
+    }
+    eprintln!("卡片 {}", cards.len());
+    let llm = shelf_server::llm::Llm::new(home.clone());
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    let list: Vec<kbtags::Card> = cards.iter().map(|(c, _)| c.clone()).collect();
+    let r = rt.block_on(async {
+        // every card to Claude Haiku (author, 2026-11-14); the local model only when Haiku is not there
+        let (cloud, local) = match llm.provider(shelf_server::llm::TASK_CARD_TITLES).await {
+            Ok(p) => (Some(p), None),
+            Err(e) => {
+                eprintln!("Claude 不能用（{e}）：改用本機模型");
+                (None, Some(llm.provider(shelf_server::llm::TASK_CARD_LOCAL).await?))
+            }
+        };
+        kbtags::run(&list, &vocab, cloud.as_deref(), local.as_deref(), |d, t| eprintln!("{d} / {t}")).await
+    });
+    // the local model this started is not left running
+    shelf_server::llm::quit();
+    let got = r?;
+    let missing: Vec<&kbtags::Card> = list.iter().filter(|c| !got.contains_key(&c.id)).collect();
+    let mut out = String::new();
+    for c in &list {
+        let Some(t) = got.get(&c.id) else { continue };
+        let doms: Vec<String> = t.domains.iter().map(|d| format!("{}（{d}）", vocab.label(d))).collect();
+        out += &format!("{} · {} · {} → {} | {}\n", c.id, if t.by == "cloud" { "Claude" } else { "本機" }, c.title, doms.join("、"), t.tags.join("、"));
+    }
+    let left = if missing.is_empty() { String::new() } else { format!("；沒有可用答案 {}（{}）", missing.len(), missing.iter().map(|c| c.id.as_str()).collect::<Vec<_>>().join("、")) };
+    if !write {
+        return Ok(format!("{out}有答案 {} 張{left}；加 --write 才會寫進知識庫", got.len()));
+    }
+    let revs: std::collections::HashMap<&str, u64> = cards.iter().map(|(c, r)| (c.id.as_str(), *r)).collect();
+    let writes: Vec<(String, u64, kbtags::Tagged)> = got.iter().map(|(id, t)| (id.clone(), revs.get(id.as_str()).copied().unwrap_or(0), t.clone())).collect();
+    let (done, failed) = write_tags(&kb_target(&home)?, &vocab, &writes)?;
+    Ok(format!("{out}寫了 {done} 張{}{left}", if failed.is_empty() { String::new() } else { format!("；沒寫成 {}（{}）", failed.len(), failed.join("；")) }))
+}
+
+/// The vocabulary into tags.json, then each card's domains and tags (with the revision it was
+/// read at: a card edited meanwhile is left alone). Returns (written, failures).
+fn write_tags(target: &KbTarget, vocab: &Vocabulary, cards: &[(String, u64, shelf_server::kbtags::Tagged)]) -> Result<(usize, Vec<String>), String> {
+    let mut failed = Vec::new();
+    let mut done = 0;
+    match target {
+        KbTarget::Api(port) => {
+            match kb_api_at(*port, "PUT", "/api/tags", Some(&vocab.to_json()))? {
+                (200, _) => {}
+                (s, v) => return Err(format!("tags.json 沒寫成：{s} {}", v["error"].as_str().unwrap_or(""))),
+            }
+            for (id, rev, t) in cards {
+                match kb_api_at(*port, "PUT", &format!("/api/nodes/{id}"), Some(&serde_json::json!({ "revision": rev, "domains": t.domains, "tags": t.tags }))) {
+                    Ok((200, _)) => done += 1,
+                    Ok((s, v)) => failed.push(format!("{id} {s} {}", v["error"].as_str().unwrap_or(""))),
+                    Err(e) => failed.push(format!("{id} {e}")),
+                }
+            }
+        }
+        KbTarget::Folder { root, member } => {
+            let mut spaces = lore_store::Spaces::new();
+            spaces.mount(root).map_err(|e| e.to_string())?;
+            let mut kb = kb_core::KnowledgeBase::open(spaces, member, kb_core::KbOptions::default()).map_err(|e| e.to_string())?;
+            let space = kb.spaces_info().map_err(|e| e.to_string())?.first().map(|s| s.id.clone()).ok_or("知識庫沒有 space")?;
+            let info = |m: &std::collections::BTreeMap<String, String>| m.iter().map(|(k, l)| (k.clone(), kb_core::tags::TagInfo { label: Some(l.clone()), node: None })).collect();
+            kb.set_vocabulary(&space, info(&vocab.domains), info(&vocab.tags)).map_err(|e| format!("tags.json 沒寫成：{e}"))?;
+            for (id, rev, t) in cards {
+                let f = kb_core::NodeFields { domains: Some(t.domains.clone()), tags: Some(t.tags.clone()), ..Default::default() };
+                match kb.update(id, f, Some(*rev)) {
+                    Ok(_) => done += 1,
+                    Err(e) => failed.push(format!("{id} {e}")),
+                }
+            }
+        }
+    }
+    Ok((done, failed))
+}
+
 fn expand(s: &String) -> PathBuf {
     match s.strip_prefix("~/") {
         Some(rest) => std::env::var_os("HOME").map(|h| PathBuf::from(h).join(rest)).unwrap_or_else(|| PathBuf::from(s)),
@@ -836,6 +986,58 @@ mod tests {
         assert_eq!(title_keys("SSIM"), vec!["ssim"]);
         assert!(title_keys("IU X-Ray").contains(&"iuxray".to_string()) && title_keys("IU-Xray").contains(&"iuxray".to_string()));
         assert_eq!(title_keys("CPAB (Continuous Piecewise-Affine Based) Transformations")[1], "cpab transformation");
+    }
+
+    fn test_vocab() -> Vocabulary {
+        Vocabulary::from_json(&serde_json::json!({
+            "domains": { "alpha": { "label": "甲學分析" }, "beta": { "label": "乙學" } },
+            "tags": { "alpha/one": { "label": "一" }, "beta/two": { "label": "二" } }
+        }))
+    }
+
+    fn term(key: &str, domains: &[&str]) -> lore_catalog::terms::Term {
+        lore_catalog::terms::Term { key: key.into(), label: key.into(), files: 1, count: 1, score: 0.0, cloud_ok: true, examples: vec![], near: vec![], near_known: 0, domains: domains.iter().map(|d| d.to_string()).collect(), mastered: true, verdict: Some("term".into()), field: None }
+    }
+
+    /// LoreShelf's cards only carry registered domains: a free field maps to the one it names.
+    #[test]
+    fn made_cards_only_get_registered_domains() {
+        let titled = |t: &str, field: &str| shelf_server::cards::Titled { keep: true, title: t.into(), field: field.into(), written: true, ..Default::default() };
+        let (t1, t2) = (term("dice", &["乙學", "影像評估"]), term("iou", &["alpha"]));
+        let (x1, x2) = (titled("Dice", "甲學"), titled("IoU", "影像評估"));
+        let cards = merge_cards(&[(&t1, &x1), (&t2, &x2)], &test_vocab());
+        let doms: Vec<Vec<String>> = cards.values().map(|c| c.1.clone()).collect();
+        assert_eq!(doms, vec![vec!["alpha".to_string(), "beta".to_string()], vec!["alpha".to_string()]]);
+        assert!(cards.values().all(|c| c.1.iter().all(|d| test_vocab().domains.contains_key(d))));
+    }
+
+    /// kb-tags writes through kb-core when KnowledgeBase is not running: tags.json gets the
+    /// vocabulary, cards their domains and tags with their revision (a stale one is left alone).
+    #[test]
+    fn kb_tags_writes_through_kb_core() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().join("kb");
+        std::fs::create_dir_all(root.join("nodes")).unwrap();
+        std::fs::write(root.join("space.toml"), "id = \"personal\"\nname = \"test\"\nkind = \"personal\"\nmembers = [\"ellrin\"]\n").unwrap();
+        let mut spaces = lore_store::Spaces::new();
+        spaces.mount(&root).unwrap();
+        let mut kb = kb_core::KnowledgeBase::open(spaces, "ellrin", kb_core::KbOptions::default()).unwrap();
+        let mk = |kb: &mut kb_core::KnowledgeBase, title: &str| kb.create("personal", kb_core::NodeFields { title: Some(title.into()), domains: Some(vec!["自由領域".into()]), ..Default::default() }, None).unwrap();
+        let (a, b) = (mk(&mut kb, "Synthetic A"), mk(&mut kb, "Synthetic B"));
+        drop(kb);
+        let cards = read_cards(&root.join("nodes"));
+        assert_eq!(cards.len(), 2);
+        let tag = |d: &str, t: &str| shelf_server::kbtags::Tagged { domains: vec![d.into()], tags: vec![t.into()], by: "cloud" };
+        let target = KbTarget::Folder { root: root.clone(), member: "ellrin".into() };
+        let (done, failed) = write_tags(&target, &test_vocab(), &[(a.id.clone(), a.revision, tag("alpha", "alpha/one")), (b.id.clone(), b.revision + 7, tag("beta", "beta/two"))]).unwrap();
+        assert_eq!((done, failed.len()), (1, 1), "{failed:?}");
+        let card: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("nodes").join(format!("{}.json", a.id))).unwrap()).unwrap();
+        assert_eq!(card["domains"], serde_json::json!(["alpha"]));
+        assert_eq!(card["tags"], serde_json::json!(["alpha/one"]));
+        assert_eq!(card["revision"], a.revision + 1);
+        let tags: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("tags.json")).unwrap()).unwrap();
+        assert_eq!(tags["domains"]["alpha"]["label"], "甲學分析");
+        assert_eq!(tags["tags"]["beta/two"]["label"], "二");
     }
 
     #[test]

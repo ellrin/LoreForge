@@ -7,7 +7,7 @@
 | `node` | 知識卡 JSON（§4.1）；未知欄位保留在 `extra`；`copies` 只存在個人 space |
 | `id` | `n` + ULID（時間排序、同毫秒遞增） |
 | `registry` | 內建種類／連結型別 + `kinds.toml` + `apps.toml`（App 宣告的種類與連結型別） |
-| `tags` | `tags.json`：domains、標籤階層（`deep-learning/cnn`） |
+| `tags` | `tags.json`：domains、標籤階層（`deep-learning/cnn`）；`TagsFile::save`、`KnowledgeBase::set_vocabulary`（換整份詞彙表，已升格成卡的標籤保留 `node`；slug 才收） |
 | `progress` | 每人學習狀態（§4.2）與熟悉度狀態機（§4.4），間隔在 `Intervals` |
 | `edges` | `[[wikilink]]` 解析；明確連結存在節點；索引保存雙向邊 |
 | `index` | rusqlite（bundled，FTS5 `trigram` → 中日文可搜）：清單篩選、到期、最近、圖譜、時間軸 |

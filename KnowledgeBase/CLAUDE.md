@@ -38,8 +38,14 @@ cd ../commons && cargo test -p kb-core -p lore-store
   theme's `--paper`; domain colours `--g1…--g12` only differ between dark and light themes. UI text in Traditional Chinese. KaTeX vendored in `web/vendor/katex`
   (copied from PaperComposer). Graph (`graph.js`): Obsidian-style canvas view, Barnes–Hut force
   layout, global / local (`#/graph/<id>`), filters, playback; data from `/api/graph?full=true&missing=true`.
-  Colour = a card's first domain (`--g1…--g12`, slot = the domain's place in `tags.json`), the
-  same in the graph and the card list. The card list is an index: grouped by domain, one line per
+  Colour = a card's first domain (`--g1…--g12`, slot = the domain's place among `tags.json`'s domains
+  — alphabetical, kb-core keeps them in a BTreeMap — so at most 12 domains), the same in the graph and the
+  card list. Tag bar above the canvas (`renderTagBar`, fixed two rows: domains by count with their colour,
+  then the chosen domain's subtopics): one selection `F.tags` for the bar, the panel's tree and 「標出這個
+  標籤」, set only through `setTags` — matching cards (`tagLit`, recomputed in `rebuild`, so local view and
+  playback keep it) stay lit, the rest dim in place (no rebuild, no reheat), a soft glow per selected tag in
+  its domain colour (`drawGlow`, half-res layer); hover lists a card's tags. `PUT /api/tags` replaces the
+  vocabulary (kb-core `set_vocabulary`; LoreShelf's `kb-tags` writes it). The card list is an index: grouped by domain, one line per
   card, summary in a hover preview. The server sends web/ with `Cache-Control: no-cache` (the
   desktop WebView kept old files otherwise).
 - Shared shell (`../commons/ui`, `docs/shell.md` §F): `icons.js`, `base.css`, `shell.js` are served by

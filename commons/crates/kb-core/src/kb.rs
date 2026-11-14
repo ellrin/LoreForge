@@ -213,6 +213,29 @@ impl KnowledgeBase {
         self.tags.get(space).ok_or_else(|| KbError::NotFound(format!("space `{space}`")))
     }
 
+    /// A new domain / tag vocabulary for `space` (`tags.json`): both lists are replaced, a tag
+    /// that stays keeps its promoted card. Every path must be a slug (`domain/subtopic`), every
+    /// tag under a listed domain.
+    pub fn set_vocabulary(&mut self, space: &str, domains: std::collections::BTreeMap<String, crate::tags::TagInfo>, tags: std::collections::BTreeMap<String, crate::tags::TagInfo>) -> Result<&TagsFile> {
+        let root = self.space(space)?.root.clone();
+        for k in domains.keys() {
+            if !crate::tags::valid_path(k) || k.contains('/') {
+                return Err(KbError::Invalid(format!("domain `{k}`")));
+            }
+        }
+        for k in tags.keys() {
+            if !crate::tags::valid_path(k) || !domains.contains_key(k.split('/').next().unwrap_or("")) {
+                return Err(KbError::Invalid(format!("tag `{k}` (a domain/subtopic slug under a listed domain)")));
+            }
+        }
+        let mut f = self.tags.get(space).cloned().unwrap_or_default();
+        f.version = f.version.max(1);
+        f.replace_vocabulary(domains, tags);
+        f.save(&root)?;
+        self.tags.insert(space.to_string(), f);
+        Ok(&self.tags[space])
+    }
+
     /// Tags used by cards (with counts), merged with `tags.json` entries.
     pub fn tag_counts(&self, space: Option<&str>) -> Result<Vec<(String, u64)>> {
         let mut counts: std::collections::BTreeMap<String, u64> = Default::default();

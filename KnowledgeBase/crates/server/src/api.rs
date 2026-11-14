@@ -6,6 +6,7 @@
 //! | GET | /api/health | status, member, assistant, `reader_url` (LoreReader, for `pdf` sources) |
 //! | GET | /api/spaces | mounted spaces |
 //! | GET | /api/registry?space= | kinds, link types, tags |
+//! | PUT | /api/tags | `{space?, domains:{slug:{label}}, tags:{"domain/sub":{label}}}` → the space's `tags.json` vocabulary (both replaced) |
 //! | GET | /api/nodes?q=&kind=&tag=&domain=&state=&space=&since=&until=&date_field=&sort=&limit=&offset= | card list |
 //! | POST | /api/nodes | create `{space, via?, initial_state?: learning\|known, …fields}` |
 //! | GET | /api/nodes/{id} | card + learning state + backlinks |
@@ -97,6 +98,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/health", get(health))
         .route("/api/spaces", get(spaces))
         .route("/api/registry", get(registry))
+        .route("/api/tags", axum::routing::put(set_tags))
         .route("/api/nodes", get(list).post(create))
         .route("/api/nodes/{id}", get(view).put(update).delete(trash))
         .route("/api/nodes/{id}/restore", post(restore))
@@ -155,6 +157,25 @@ async fn registry(State(s): State<Shared>, Query(q): Query<SpaceQ>) -> R {
     let tags = kb.tags(&space)?;
     let counts: Vec<Value> = kb.tag_counts(None)?.into_iter().map(|(t, n)| json!({ "tag": t, "count": n })).collect();
     ok(json!({ "space": space, "kinds": reg.kinds, "link_types": reg.link_types, "domains": tags.domains, "tags": tags.tags, "tag_counts": counts }))
+}
+
+#[derive(Deserialize)]
+struct TagsBody {
+    space: Option<String>,
+    #[serde(default)]
+    domains: std::collections::BTreeMap<String, kb_core::tags::TagInfo>,
+    #[serde(default)]
+    tags: std::collections::BTreeMap<String, kb_core::tags::TagInfo>,
+}
+
+async fn set_tags(State(s): State<Shared>, Json(b): Json<TagsBody>) -> R {
+    let mut kb = kb!(s);
+    let space = match b.space {
+        Some(sp) => sp,
+        None => kb.spaces().default_for(kb.member()).map(|s| s.id().to_string()).ok_or_else(|| bad("no space"))?,
+    };
+    let f = kb.set_vocabulary(&space, b.domains, b.tags)?;
+    ok(json!({ "space": space, "domains": f.domains, "tags": f.tags }))
 }
 
 async fn list(State(s): State<Shared>, Query(f): Query<Filter>) -> R {

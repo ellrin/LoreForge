@@ -398,3 +398,22 @@ async fn card_equations_open_the_shared_live_view() {
         assert!(live.contains(f), "eqlive.js does not load {f}");
     }
 }
+
+/// The domain / tag vocabulary goes into the space's tags.json through the API (kb-tags uses it).
+#[tokio::test]
+async fn tag_vocabulary_is_replaced_through_the_api() {
+    let (d, app, _clock) = setup();
+    let body = json!({ "space": "me", "domains": { "alpha": { "label": "甲" } }, "tags": { "alpha/one": { "label": "一" } } });
+    let (s, v) = call(&app, "PUT", "/api/tags", Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (_, v) = call(&app, "GET", "/api/registry?space=me", None).await;
+    assert_eq!(v["domains"]["alpha"]["label"], "甲");
+    assert_eq!(v["tags"]["alpha/one"]["label"], "一");
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(d.path().join("personal/tags.json")).unwrap()).unwrap();
+    assert_eq!(file["tags"]["alpha/one"]["label"], "一");
+    // a tag outside the listed domains, or a free-text domain, is refused
+    let (s, _) = call(&app, "PUT", "/api/tags", Some(json!({ "space": "me", "domains": { "alpha": {} }, "tags": { "beta/x": {} } }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _) = call(&app, "PUT", "/api/tags", Some(json!({ "space": "me", "domains": { "醫學影像": {} } }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}

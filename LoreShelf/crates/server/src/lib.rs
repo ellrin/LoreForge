@@ -36,6 +36,7 @@ pub mod filing;
 pub mod filing_ai;
 pub mod fulltext;
 pub mod index;
+pub mod kbtags;
 pub mod llm;
 pub mod openwith;
 pub mod search;
