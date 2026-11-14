@@ -556,10 +556,7 @@ fn record_files_at(p: &Path) -> Result<(Vec<(String, Vec<u8>)>, Vec<String>), St
     let (mut ok, mut skipped) = (vec![], vec![]);
     for f in paths {
         let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        if !paper::safe_name(&name) {
-            skipped.push(format!("{name}：檔名不能用"));
-            continue;
-        }
+        // any name: save_record turns it into a safe one
         let len = f.metadata().map(|m| m.len()).unwrap_or(0);
         if len > RECORD_MAX_BYTES {
             skipped.push(format!("{name}：超過 20 MB"));
@@ -2329,6 +2326,7 @@ mod tests {
         let dir = home.join("Shelf/Run 1");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("log.md"), "E1 lr 1e-4, AUC 0.81").unwrap();
+        std::fs::write(dir.join("看板 (Copy) - x.md"), "H1 想法").unwrap();
         std::fs::write(dir.join("table.csv"), "a,b\n1,2\n").unwrap();
         std::fs::write(dir.join("sheet.xlsx"), [0u8, 159, 1]).unwrap();
         std::fs::write(dir.join(".DS_Store"), [0u8]).unwrap();
@@ -2341,7 +2339,10 @@ mod tests {
         assert!(record_path(&url, &home).unwrap().ends_with("log.md"));
         // a folder: its files, the spreadsheet named as skipped, dot files ignored
         let (ok, skipped) = record_files_at(&record_path("~/Shelf/Run 1", &home).unwrap()).unwrap();
-        assert_eq!(ok.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["log.md", "table.csv"]);
+        assert_eq!(ok.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["log.md", "table.csv", "看板 (Copy) - x.md"]);
+        // a pasted path with spaces, parentheses and Chinese, quoted the way Finder copies it
+        let p = record_path("'~/Shelf/Run 1/看板 (Copy) - x.md'", &home).unwrap();
+        assert_eq!(record_files_at(&p).unwrap().0.len(), 1);
         assert_eq!(skipped.len(), 1);
         assert!(skipped[0].starts_with("sheet.xlsx"));
         // outside the home folder, relative, or missing: refused
