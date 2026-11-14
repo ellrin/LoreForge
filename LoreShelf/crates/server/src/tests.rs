@@ -8,8 +8,9 @@ use http_body_util::BodyExt;
 use std::path::Path;
 use tower::ServiceExt;
 
+/// Calls run, and the apps that count as installed (none unless a test says so).
 #[derive(Default)]
-struct Rec(Mutex<Vec<(String, Vec<String>)>>);
+struct Rec(Mutex<Vec<(String, Vec<String>)>>, Mutex<Vec<String>>);
 
 impl Runner for Rec {
     fn run(&self, program: &str, args: &[String]) -> Result<(), String> {
@@ -27,6 +28,10 @@ impl Runner for Rec {
             std::fs::write(dir.join(format!("{name}.png")), tiny_png(8, 8)).unwrap();
         }
         Ok(())
+    }
+
+    fn installed(&self, app: &str) -> bool {
+        self.1.lock().unwrap().iter().any(|a| a == app)
     }
 }
 
@@ -205,6 +210,30 @@ async fn open_and_reveal_use_the_runner_and_never_launch_apps() {
     let (s, _, _) = call(&f.app, "POST", &format!("/api/open/{pdf}"), None).await;
     assert_eq!(s, StatusCode::GONE);
     assert_eq!(f.rec.0.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn open_hands_files_to_the_installed_lore_app() {
+    let f = fixture();
+    let list = json_of(&f.app, "GET", "/api/files").await;
+    let pdf = id_of(&list, "HW2.pdf");
+    let talk = id_of(&list, "talk");
+    let notes = id_of(&list, "cooking notes.txt");
+    f.rec.1.lock().unwrap().extend(["LoreReader".to_string(), "PaperComposer".to_string()]);
+    for id in [&pdf, &talk, &notes] {
+        assert_eq!(json_of(&f.app, "POST", &format!("/api/open/{id}")).await["opened"], true);
+    }
+    // LoreReader gone: the system default
+    f.rec.1.lock().unwrap().retain(|a| a != "LoreReader");
+    assert_eq!(json_of(&f.app, "POST", &format!("/api/open/{pdf}")).await["opened"], true);
+    if cfg!(target_os = "macos") {
+        let calls = f.rec.0.lock().unwrap().clone();
+        let s = |p: &str| f.root.join(p).to_string_lossy().to_string();
+        assert_eq!(calls[0].1, vec!["-a".to_string(), "LoreReader".into(), s("HW2.pdf")]);
+        assert_eq!(calls[1].1, vec!["-a".to_string(), "PaperComposer".into(), s("talk/main.tex")], "a LaTeX project: its main.tex");
+        assert_eq!(calls[2].1.len(), 1, "a text file: the system default");
+        assert_eq!(calls[3].1, vec![s("HW2.pdf")]);
+    }
 }
 
 #[tokio::test]
@@ -579,4 +608,11 @@ fn default_focus_prefers_opened_documents_and_never_photos() {
     let none_opened = index::Index::from_entries(vec![photo, e("n2", "pdf", "pdf", None, "2026-10-01T00:00:00Z"), new_pdf]);
     assert_eq!(none_opened.default_focus(&Filter::default()).unwrap().id, "new", "else the newest PDF");
     assert!(index::Index::from_entries(vec![]).default_focus(&Filter::default()).is_none());
+    // a document edited after the last one opened wins: opened or modified, whichever is later
+    let mut edited = e("edited", "document", "docx", None, "2025-01-01T00:00:00Z");
+    edited.item.times.modified = Some("2026-11-11T12:00:00Z".into());
+    let mut photo2 = e("photo2", "image", "jpg", None, "2026-11-12T09:00:00Z");
+    photo2.item.times.modified = Some("2026-11-12T09:00:00Z".into());
+    let idx = index::Index::from_entries(vec![photo2, deck, old_pdf, edited]);
+    assert_eq!(idx.default_focus(&Filter::default()).unwrap().id, "edited", "modified after the deck was opened; photos never");
 }

@@ -28,6 +28,8 @@ pub const W_HOST: f64 = 0.10;
 pub const W_FOLDER: f64 = 0.10;
 /// A dataset named in a paper (and the paper seen from the dataset).
 pub const W_MENTION: f64 = 0.50;
+/// Shared labels: what two files are about counts more than how they are named.
+pub const W_LABEL: f64 = 0.80;
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct Times {
@@ -61,6 +63,10 @@ pub struct Item {
     /// A cloud model may read it (author, 2026-11-13): an academic paper (decided here, by the
     /// rules or the author) or a slide deck — never a sensitive item. Everything else: local only.
     pub cloud_ok: bool,
+    /// Its research topic and 3–5 English labels (`filing_ai`), the broadest first; empty until
+    /// a model has looked at it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 /// One item plus what only the detail and the similarity need.
@@ -78,6 +84,8 @@ pub struct Entry {
     tokens: Vec<(usize, f64)>, // (token id, weight), L2-normalised
     days: [Option<f64>; 4],
     folders: HashSet<String>,
+    /// (label key, weight), sorted by key, L2-normalised: rare labels weigh more.
+    labs: Vec<(String, f64)>,
 }
 
 impl Entry {
@@ -85,7 +93,7 @@ impl Entry {
     pub fn synthetic(id: &str, downloaded: Option<&str>, doc_created: Option<&str>, created: &str) -> Entry {
         let times = Times { created: Some(created.into()), modified: None, downloaded: downloaded.map(Into::into), opened: None, doc_created: doc_created.map(Into::into) };
         Entry {
-            item: Item { id: id.into(), kind: "pdf".into(), name: format!("{id}.pdf"), ext: "pdf".into(), size: 1, times, download_host: None, seen_count: 1, group: String::new(), group_size: 1, categories: vec!["pdf".into()], sensitive: false, cloud_ok: false },
+            item: Item { id: id.into(), kind: "pdf".into(), name: format!("{id}.pdf"), ext: "pdf".into(), size: 1, times, download_host: None, seen_count: 1, group: String::new(), group_size: 1, categories: vec!["pdf".into()], sensitive: false, cloud_ok: false, labels: vec![] },
             paths: vec![],
             description: String::new(),
             hits: vec![],
@@ -94,6 +102,7 @@ impl Entry {
             tokens: vec![],
             days: [None; 4],
             folders: HashSet::new(),
+            labs: vec![],
         }
     }
 }
@@ -187,6 +196,8 @@ pub fn group_key(name: &str, stems: &HashSet<String>) -> Option<String> {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Parts {
+    /// Shared labels (what the files are about).
+    pub label: f64,
     pub name: f64,
     pub time: f64,
     pub kind: f64,
@@ -206,6 +217,14 @@ pub struct Neighbor {
     /// The item this one was reached from (the focus for layer 1).
     pub via: String,
     pub parts: Parts,
+    /// The labels it shares with `via`, the most telling first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared: Vec<String>,
+}
+
+/// A label's key: lower case, letters and digits only (`Fuzzy-Systems` = `fuzzy systems`).
+pub fn label_key(l: &str) -> String {
+    l.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
 }
 
 fn ext_of(name: &str) -> String {
@@ -509,6 +528,7 @@ fn from_file(r: FileRecord, ex: Option<Extract>, author: Option<Vec<String>>) ->
             sensitive: sensitive(&categories),
             cloud_ok: cloud_ok(&categories),
             categories,
+            labels: vec![],
         },
         paths,
         description: desc.join(" · "),
@@ -567,6 +587,7 @@ fn from_unit(u: UnitRecord, author: Option<Vec<String>>) -> Raw {
             sensitive: sensitive(&categories),
             cloud_ok: cloud_ok(&categories),
             categories,
+            labels: vec![],
         },
         paths,
         description: desc.join(" · "),
@@ -603,6 +624,7 @@ impl Index {
             }
         }
         let mut idx = Index::build(raws);
+        idx.set_labels(&crate::filing_ai::shown_labels(dir));
         // the full text sits next to the extract cache (`<cache>/LoreForge/shelf/fulltext`)
         if let Some(ft) = ft {
             idx.ft = ft;
@@ -670,7 +692,7 @@ impl Index {
             let folders = raw.paths.iter().map(|p| parent(p)).collect();
             by_id.insert(raw.item.id.clone(), entries.len());
             let text = std::mem::take(&mut raw.text);
-            entries.push(Entry { item: raw.item, paths: raw.paths, description: raw.description, hits: raw.hits, mentions, text, tokens: v, days, folders });
+            entries.push(Entry { item: raw.item, paths: raw.paths, description: raw.description, hits: raw.hits, mentions, text, tokens: v, days, folders, labs: vec![] });
         }
         let mut idx = Index { entries, by_id, groups: HashMap::new(), ft: Default::default() };
         idx.assign_groups();
@@ -708,6 +730,45 @@ impl Index {
         idx
     }
 
+    /// Gives the items their labels (id → labels, the broadest first) and weighs them: a label
+    /// few files carry tells more than one many do.
+    pub fn set_labels(&mut self, labels: &HashMap<String, Vec<String>>) {
+        let mut df: HashMap<String, f64> = HashMap::new();
+        for e in &mut self.entries {
+            e.item.labels = labels.get(&e.item.id).cloned().unwrap_or_default();
+            for k in e.item.labels.iter().map(|l| label_key(l)).collect::<HashSet<_>>() {
+                *df.entry(k).or_default() += 1.0;
+            }
+        }
+        let n = self.entries.iter().filter(|e| !e.item.labels.is_empty()).count().max(1) as f64;
+        for e in &mut self.entries {
+            let mut v: Vec<(String, f64)> = e.item.labels.iter().map(|l| label_key(l)).collect::<std::collections::BTreeSet<_>>().into_iter().map(|k| {
+                let w = (n / (1.0 + df[&k])).ln() + 1.0;
+                (k, w)
+            }).collect();
+            let norm = v.iter().map(|(_, w)| w * w).sum::<f64>().sqrt();
+            if norm > 0.0 {
+                for x in &mut v {
+                    x.1 /= norm;
+                }
+            }
+            e.labs = v;
+        }
+    }
+
+    /// The labels entries `a` and `b` share, as `b` writes them, the most telling first.
+    fn shared_labels(&self, a: usize, b: usize) -> Vec<String> {
+        let (a, b) = (&self.entries[a], &self.entries[b]);
+        let mut out: Vec<(f64, &String)> = b.item.labels.iter().filter_map(|l| {
+            let k = label_key(l);
+            let wa = a.labs.iter().find(|(x, _)| *x == k)?.1;
+            let wb = b.labs.iter().find(|(x, _)| *x == k)?.1;
+            Some((wa * wb, l))
+        }).collect();
+        out.sort_by(|x, y| y.0.total_cmp(&x.0));
+        out.into_iter().map(|(_, l)| l.clone()).collect()
+    }
+
     pub fn get(&self, id: &str) -> Option<&Entry> {
         self.by_id.get(id).map(|&i| &self.entries[i])
     }
@@ -717,10 +778,10 @@ impl Index {
         let (a, b) = (&self.entries[i], &self.entries[j]);
         let mention = if a.mentions.contains(&j) { 1.0 } else { 0.0 };
         let (base, p) = Index::pair(a, b);
-        let parts = [p.name, p.time, p.kind, p.host, p.folder].map(|x| x * base);
+        let parts = [p.name, p.time, p.kind, p.host, p.folder, p.label].map(|x| x * base);
         let score = base + W_MENTION * mention;
         let share = |x: f64| if score > 0.0 { (x / score * 1000.0).round() / 1000.0 } else { 0.0 };
-        (score, Parts { name: share(parts[0]), time: share(parts[1]), kind: share(parts[2]), host: share(parts[3]), folder: share(parts[4]), mention: share(W_MENTION * mention) })
+        (score, Parts { label: share(parts[5]), name: share(parts[0]), time: share(parts[1]), kind: share(parts[2]), host: share(parts[3]), folder: share(parts[4]), mention: share(W_MENTION * mention) })
     }
 
     fn pair(a: &Entry, b: &Entry) -> (f64, Parts) {
@@ -754,10 +815,25 @@ impl Index {
             _ => 0.0,
         };
         let folder = if a.folders.iter().any(|f| b.folders.contains(f)) { 1.0 } else { 0.0 };
-        let w = [W_NAME * name, W_TIME * time, W_KIND * kind, W_HOST * host, W_FOLDER * folder];
+        let label = {
+            let (mut i, mut j, mut s) = (0, 0, 0.0);
+            while i < a.labs.len() && j < b.labs.len() {
+                match a.labs[i].0.cmp(&b.labs[j].0) {
+                    std::cmp::Ordering::Equal => {
+                        s += a.labs[i].1 * b.labs[j].1;
+                        i += 1;
+                        j += 1;
+                    }
+                    std::cmp::Ordering::Less => i += 1,
+                    std::cmp::Ordering::Greater => j += 1,
+                }
+            }
+            s
+        };
+        let w = [W_NAME * name, W_TIME * time, W_KIND * kind, W_HOST * host, W_FOLDER * folder, W_LABEL * label];
         let score: f64 = w.iter().sum();
         let share = |x: f64| if score > 0.0 { (x / score * 1000.0).round() / 1000.0 } else { 0.0 };
-        (score, Parts { name: share(w[0]), time: share(w[1]), kind: share(w[2]), host: share(w[3]), folder: share(w[4]), mention: 0.0 })
+        (score, Parts { label: share(w[5]), name: share(w[0]), time: share(w[1]), kind: share(w[2]), host: share(w[3]), folder: share(w[4]), mention: 0.0 })
     }
 
     /// The `k` most similar items to entry `i` (never itself).
@@ -809,6 +885,7 @@ impl Index {
                             members,
                             via: self.entries[f].item.id.clone(),
                             parts,
+                            shared: self.shared_labels(f, j),
                         });
                         next.push(j);
                     }
@@ -838,7 +915,9 @@ impl Index {
         let ok = |i: &&Item| !i.sensitive && i.kind != "image" && i.kind != "video" && filter.accepts(&i.categories);
         let items: Vec<&Item> = self.entries.iter().map(|e| &e.item).filter(ok).collect();
         let doc = |i: &&&Item| i.kind == "project" || DOC_EXTS.contains(&i.ext.as_str());
-        if let Some(i) = items.iter().filter(doc).filter(|i| i.times.opened.is_some()).max_by(|a, b| a.times.opened.cmp(&b.times.opened).then(b.id.cmp(&a.id))) {
+        // the document last opened or last modified, whichever is later (ISO times compare as text)
+        let recent = |i: &&&Item| i.times.opened.clone().max(i.times.modified.clone());
+        if let Some(i) = items.iter().filter(doc).filter(|i| recent(i).is_some()).max_by(|a, b| recent(a).cmp(&recent(b)).then(b.id.cmp(&a.id))) {
             return Some(i);
         }
         let newest = |i: &&&Item| i.times.downloaded.clone().or(i.times.modified.clone()).or(i.times.created.clone());
@@ -926,4 +1005,20 @@ mod tests {
         assert_eq!(chrono_like_parse("2024-03-01T00:00:00Z"), Some(1_709_251_200));
         assert_eq!(chrono_like_parse("bad"), None);
     }
+    #[test]
+    fn files_about_the_same_thing_are_neighbours_and_say_which_labels_they_share() {
+        let mut idx = Index::from_entries(vec![
+            Entry::synthetic("a", None, None, "2026-01-01T00:00:00Z"),
+            Entry::synthetic("b", None, None, "2020-01-01T00:00:00Z"),
+            Entry::synthetic("c", None, None, "2026-01-02T00:00:00Z"),
+        ]);
+        let labels: HashMap<String, Vec<String>> = [("a", vec!["Fuzzy Systems", "loss"]), ("b", vec!["fuzzy-systems", "IJFS"]), ("c", vec!["Travel"])].into_iter().map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect())).collect();
+        idx.set_labels(&labels);
+        let n = idx.neighbors("a", 2, 1, &Filter::default()).unwrap();
+        assert_eq!(n[0].id, "b", "a shared label outweighs a nearer date");
+        assert_eq!(n[0].shared, vec!["fuzzy-systems"]);
+        assert!(n[0].parts.label > 0.4 && n[1].parts.label == 0.0 && n[1].shared.is_empty());
+        assert_eq!(idx.get("a").unwrap().item.labels, vec!["Fuzzy Systems", "loss"]);
+    }
+
 }

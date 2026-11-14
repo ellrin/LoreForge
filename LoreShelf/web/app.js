@@ -62,7 +62,7 @@
     const t = it.times ?? {};
     const time = [t.modified, t.created, t.downloaded, t.opened].map(ms).find((x) => !Number.isNaN(x)) ?? 0;
     return { id: it.id, name: it.name ?? "", kind: it.kind ?? "", ext: it.ext ?? "", time, host: it.download_host ?? null, times: t, group: it.group ?? null,
-      cats: it.categories ?? [TYPE_OF[it.kind]].filter(Boolean), sensitive: !!it.sensitive, count: null, mainExt: null, size: it.size ?? 0 };
+      cats: it.categories ?? [TYPE_OF[it.kind]].filter(Boolean), labels: it.labels ?? [], sensitive: !!it.sensitive, count: null, mainExt: null, size: it.size ?? 0 };
   }
 
   // ── filters: 類型 and 用途 (OR within a group, AND across); `cat=pdf,paper` (lore_catalog::category ids) ──
@@ -134,6 +134,8 @@
   S.G = mulM(rotAxis([1, 0, 0], -0.42), rotAxis([0, 0, 1], 0.24));   // the wire globe's orientation (object → view)
   const turn = (L) => rotM(S.off[0] / L.R, S.off[1] / L.R);
 
+  // zoom 0–1: from the areas to the globe; 1–2: the globe enlarged by hand (up to MAG_MAX times)
+  const MAG_MAX = 2.1, magOf = (z) => 1 + (MAG_MAX - 1) * clamp(z - 1, 0, 1);
   function layout() {
     const w = innerWidth, hh = innerHeight, narrow = w <= 760, avail = hh - 48;
     // the globe sits in the middle of the window — with LoreEcho seated at the right, in the middle of
@@ -141,8 +143,8 @@
     const left = narrow ? 0 : $("filters").getBoundingClientRect().right;
     const echo = prefs.echo && !narrow ? ECHO_W - 16 : 0;   // its figure's own margin may overlap the callouts' edge
     const cx = echo ? (left + w - echo) / 2 : w / 2;
-    const rv0 = narrow ? Math.min(w * 0.44, avail * 0.3) : Math.max(150, Math.min(avail * 0.37, cx - left - (echo ? 130 : 150)));
-    const sc = 0.72 + 0.28 * S.zoom, rv = rv0 * sc;
+    const rv0 = narrow ? Math.min(w * 0.44, avail * 0.3) : Math.max(150, Math.min(avail * 0.42, cx - left - (echo ? 110 : 120)));
+    const sc = (0.72 + 0.28 * Math.min(S.zoom, 1)) * magOf(S.zoom), rv = rv0 * sc;
     return {
       w, h: hh, narrow, sc, rv0, rv, R: rv / LIMB,
       cx, cy: 48 + avail * (narrow ? 0.38 : 0.47),
@@ -158,6 +160,29 @@
     for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; if ((Math.sin(m) * (CAM - 1)) / (CAM - Math.cos(m)) < r) lo = m; else hi = m; }
     const p = (lo + hi) / 2, sp = Math.sin(p);
     return [sp * Math.cos(th), sp * Math.sin(th), Math.cos(p)];
+  }
+
+  // ── regions: why these files are the neighbours. A region = the neighbours that share one label
+  // with the focus (at most 4: the labels that cover the most of them); each has a colour that
+  // stays with its label, a part of the sphere of its own, and its label written on the sphere.
+  const lkey = (l) => l.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  function regionsOf(l1) {
+    const by = new Map();
+    for (const p of l1) for (const lb of p.n.shared ?? []) { const k = lkey(lb); if (!by.has(k)) by.set(k, { key: k, label: lb, ids: new Set() }); by.get(k).ids.add(p.n.id); }
+    const picked = [], covered = new Set();
+    while (picked.length < 4) {
+      let best = null, bn = 1;
+      for (const c of by.values()) { if (picked.includes(c)) continue; const n = [...c.ids].filter((id) => !covered.has(id)).length; if (n > bn) { bn = n; best = c; } }
+      if (!best) break;
+      best.ids = [...best.ids].filter((id) => !covered.has(id)); best.ids.forEach((id) => covered.add(id)); picked.push(best);
+    }
+    const used = new Set();
+    for (const r of picked) {
+      let ci = [...r.key].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7) % 4;
+      while (used.has(ci)) ci = (ci + 1) % 4;
+      used.add(ci); r.ci = ci;
+    }
+    return picked;
   }
 
   // place the neighbours on the screen plane (then lifted onto the sphere): angle from the factor
@@ -176,13 +201,32 @@
       const r = rv * (0.47 + 0.3 * t);
       out.set(n.id, { n, role: "l1", ang, newer, t, x: Math.cos(ang) * r, y: -Math.sin(ang) * r });
     }
-    spread([...out.values()]);
+    // regions take their own sectors around the focus (the rest keep one, in compass order)
+    const regions = regionsOf([...out.values()]);
+    if (regions.length) {
+      const inR = new Map(); regions.forEach((r, i) => r.ids.forEach((id) => inR.set(id, i)));
+      const rest = [...out.values()].filter((p) => !inR.has(p.n.id)).sort((a, b) => a.ang - b.ang);
+      const groups = [...regions.map((r, i) => ({ i, ps: r.ids.map((id) => out.get(id)).sort((a, b) => a.t - b.t) })), ...(rest.length ? [{ i: null, ps: rest }] : [])];
+      const GAP = 0.2, wsum = groups.reduce((a, g) => a + Math.max(g.ps.length, 2), 0), free = 2 * Math.PI - GAP * groups.length;
+      let a = Math.PI * 0.62;   // the first region starts at the upper left and they go clockwise
+      for (const g of groups) {
+        const span = (free * Math.max(g.ps.length, 2)) / wsum, n = g.ps.length;
+        // the most alike in the middle of its sector, the others alternately to its sides
+        const order = []; g.ps.forEach((p, k) => (k % 2 ? order.push(p) : order.unshift(p)));
+        order.forEach((p, k) => {
+          p.region = g.i; p.ang = a - (span * (k + 0.5)) / n;
+          const r = Math.hypot(p.x, p.y); p.x = Math.cos(p.ang) * r; p.y = -Math.sin(p.ang) * r;
+        });
+        if (g.i != null) Object.assign(regions[g.i], { a0: a - span, a1: a });
+        a -= span + GAP;
+      }
+    } else spread([...out.values()]);
     const rect = (el, pad) => { const b = el.getBoundingClientRect(); return [b.left - L.cx - pad, b.top - L.cy - pad, b.right - L.cx + pad, b.bottom - L.cy + pad]; };
     const panels = [rect($("filters"), 8), rect($("card"), 8), [L.w - 130 - L.cx, L.h - 130 - L.cy, L.w - L.cx, L.h - L.cy]];
     const keep = [...panels, [-L.F / 2 - 14, -L.F / 2 - 14, L.F / 2 + 14, L.F / 2 + 48]];   // the focus and its name
     const items = [...out.values()];
-    const ax = Math.max(L.B, 100) / 2 + 4, ay = L.B / 2 + 13, as = 9;   // footprint: the orb and its name (shifted down)
-    const rmin = L.F / 2 + L.B / 2 + 16, rmax = rv * 0.82;
+    const ax = Math.max(L.B, 150) / 2 + 2, ay = L.B / 2 + 13, as = 9;   // footprint: the orb and its name (shifted down)
+    const rmin = L.F / 2 + L.B / 2 + 16, rmax = rv * (regions.length ? 0.64 : 0.82);   // regions keep the rim for their labels
     for (let iter = 0; iter < 160; iter++) {
       for (let i = 0; i < items.length; i++) {
         const A = items[i];
@@ -227,6 +271,7 @@
       if (panels.some(([x0, y0, x1, y1]) => q.x + L.D > x0 && q.x - L.D < x1 && q.y + L.D > y0 && q.y - L.D < y1)) continue;
       out.set(q.n.id, q);
     }
+    out.regions = regions.map((r) => ({ key: r.key, label: r.label, ci: r.ci, a0: r.a0, a1: r.a1, n: r.ids.length, r0: L.F / 2 + 22, r1: rv * 0.9 }));
     return out;
   }
 
@@ -274,6 +319,19 @@
     if (t) paintOrb(e, t.bmp);
     return e;
   }
+  // under a neighbour: what it is about (its labels, without its region's — that one is written on
+  // the sphere), else the start of its name; the whole name while the pointer is on it
+  const shortName = (name) => { const st = stemOf(name); return st.length > 12 ? `${st.slice(0, 10)}…` : st; };
+  function nameNode(id, e) {
+    const nm = e.el?.querySelector(".nm"); if (!nm) return;
+    for (let i = 0; i < 4; i++) e.el.classList.toggle(`rg${i}`, e.region != null && S.regions[e.region]?.ci === i);
+    if (e.role !== "l1") return;
+    const it = S.items.get(id), rk = e.region != null ? S.regions[e.region].key : null;
+    const labs = it.labels.filter((l) => lkey(l) !== rk).slice(0, 2);
+    const full = membersOf(id).length > 1 ? stemOf(it.name) : it.name;
+    const more = it.labels.filter((l) => !labs.includes(l));
+    nm.replaceChildren(h("span", { class: labs.length ? "lb" : "lb stub" }, labs.length ? labs.join(" · ") : shortName(it.name)), more.length ? h("span", { class: "more" }, more.join(" · ")) : null, h("span", { class: "fn" }, full));
+  }
   // the picture, cropped to fill the circle ("切邊"); a page shows its top
   function paintOrb(e, bmp) {
     const px = Math.round(e.d * dprOf()), cv = e.cv;
@@ -288,6 +346,7 @@
     if (e.role === role && e.el) return;
     const oldD = e.d, old = { el: e.el, cv: e.cv };
     Object.assign(e, makeEl(id, role, L), { role });
+    e.vis = "hidden"; e.zi = undefined;   // a new element starts hidden (makeEl): the per-frame cache must know
     if (old.el) { dropEntry(old); e.k = ((e.k ?? 1) * oldD) / e.d; }   // keep the size it is shown at, then ease
   }
 
@@ -310,8 +369,18 @@
     take(S.focus, "focus", [0, 0, 1], { parts: null, w: 0, kT: 1 });
     for (const [id, p] of placed) {
       const l1 = p.role === "l1";
-      take(id, p.role, toVec(p.x, p.y, R0), { ang: Math.atan2(-p.y, p.x), parts: p.n.parts, newer: l1 ? p.newer : true, via: p.n.via, w: l1 ? 1 - p.t : 0, kT: l1 ? 1 - 0.22 * p.t : 1 });
+      take(id, p.role, toVec(p.x, p.y, R0), { ang: Math.atan2(-p.y, p.x), parts: p.n.parts, newer: l1 ? p.newer : true, via: p.n.via, w: l1 ? 1 - p.t : 0, kT: l1 ? 1 - 0.22 * p.t : 1, region: l1 ? p.region ?? null : null, link: null });
     }
+    S.regions = placed.regions ?? [];
+    S.R0 = R0;
+    // a region's files hang together: the most alike holds on to the focus, the others to the next one towards it
+    S.regions.forEach((r, i) => {
+      const ms = [...next.values()].filter((e) => e.region === i).sort((a, b) => b.ang - a.ang);
+      const hub = ms.reduce((b, e, k) => (e.w > ms[b].w ? k : b), 0);
+      ms.forEach((e, k) => { e.link = k === hub ? null : ms[k < hub ? k + 1 : k - 1].id; });
+    });
+    for (const [id, e] of next) nameNode(id, e);
+    if (!S.hover) updateCard();
     for (const e of S.nodes.values()) { e.aT = 0; e.t = e.v; S.ghosts.push(e); }
     S.nodes = next;
     paintAxes(L);
@@ -325,7 +394,7 @@
   const THUMB_CAP = 48 << 20;
   const IMG_EXT = new Set(["png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp", "heic", "dng", "gif"]);
   // a sensitive item (證件) is never fetched large
-  const thumbSize = (role, it) => (role === "preview" ? (it?.sensitive ? 256 : 512) : role === "focus" ? 256 : role === "l1" ? 128 : 0);
+  const thumbSize = (role, it) => (role === "preview" ? (it?.sensitive ? 256 : 512) : role === "focus" ? 256 : role === "l1" ? (S.zoomT > 1.25 ? 256 : 128) : 0);
   async function getThumb(id, size, url = `/api/thumb/${encodeURIComponent(id)}?s=${size}`) {
     const key = `${id}@${size}`;
     const hit = S.thumbs.get(key);
@@ -372,14 +441,15 @@
     // after a release: coast with the finger's speed, then settle on the node nearest the pole
     if (S.coast) {
       S.off[0] += S.vel[0] * dt; S.off[1] += S.vel[1] * dt;
-      const k = Math.exp(-dt / 230); S.vel = S.vel.map((v) => v * k);
-      if (Math.hypot(...S.vel) < 0.06) { S.coast = false; settle(); }
-      pickCandidate();
+      const k = Math.exp(-dt / 170); S.vel = S.vel.map((v) => v * k);
+      // decide once it is slow (the landing glide takes over); once settled, no candidate is picked again in the same frame
+      if (Math.hypot(...S.vel) < 0.15) { S.coast = false; settle(); } else pickCandidate();
       busy = true;
     } else if (!S.swipe && !S.wheeling && (S.off[0] || S.off[1])) {
       const k = smooth(dt, 90); S.off = S.off.map((x) => (Math.abs(x) < 0.3 ? 0 : x * (1 - k))); busy = true;
     }
-    const kP = smooth(dt, 130), kA = smooth(dt, 130);
+    // landing: globe and nodes glide together; a shorter time constant ends the slow tail sooner
+    const kP = smooth(dt, 85), kA = smooth(dt, 110);
     // landing on a new focus: the wire globe (and what is leaving) turns the same way the nodes glide
     if (S.snap) {
       const da = S.snap.left * kP, Rm = rotAxis(S.snap.axis, da);
@@ -432,6 +502,7 @@
     col.wire = col.light ? col.line : mixc(col.line, col.a2, 0.45);                           // the globe, the rings
     col.bond = col.light ? mixc(col.line, col.muted, 0.6) : mixc(col.muted, col.a2, 0.35);    // neutral bonds
     col.dot = mixc(col.muted, col.a2, 0.4);                                                   // far files
+    col.rg = [v("--accent-2"), v("--accent-3"), v("--warn"), v("--accent")];   // region colours (styles.css .rg0–.rg3)
     col.stamp = (col.stamp || 0) + 1;
     frames.invalidate();
   }
@@ -507,9 +578,58 @@
     });
     frames.invalidate();
   }
-  function paintGlobe(L, MG, near) {
+  // a point of the screen plane (zoom 1, y down) as it is on the turned sphere now: [x, y, z]
+  const onSphere = (x, y, M, L) => { const v = mulV(M, toVec(x, y, S.R0)), p = proj(v, L); return [p[0], p[1], v[2]]; };
+  // a region: a soft light of its colour under each of its files (author's choice, 2026-11-13)
+  function paintRegions(c, L, M, near) {
+    const zl = 1 / CAM;
+    for (const e of S.nodes.values()) {
+      const r = e.region != null ? S.regions[e.region] : null; if (!r) continue;
+      const rgb = col.rg[r.ci], v = mulV(M, e.v), [x, y, s] = proj(v, L), a = near * e.a * smoothstep(zl - 0.05, zl + 0.3, v[2]);
+      if (a < 0.01) continue;
+      const R = L.B * 1.9 * s * L.sc, g = c.createRadialGradient(x, y, 0, x, y, R);
+      g.addColorStop(0, css(rgb, 0.3 * a)); g.addColorStop(0.5, css(rgb, 0.12 * a)); g.addColorStop(1, css(rgb, 0));
+      c.fillStyle = g; c.beginPath(); c.arc(x, y, R, 0, 7); c.fill();
+    }
+  }
+  // words written on the sphere: along the circle of radius `rho` around the pole (screen plane,
+  // zoom 1), centred at angle `mid`; every letter lies in the sphere's surface there, so the line
+  // bends with it and turns with the globe. Upright on the upper half, and on the lower.
+  function sphereText(c, str, M, L, rho, mid, rgb, alpha, px) {
+    const top = Math.sin(mid) >= 0, zl = 1 / CAM;
+    c.font = `700 ${px}px "JetBrains Mono", ui-monospace, monospace`; c.textAlign = "center"; c.textBaseline = "middle";
+    const chars = [...str], adv = chars.map((ch) => c.measureText(ch).width + px * 0.14), total = adv.reduce((a, b) => a + b, 0);
+    let sx = -total / 2;
+    chars.forEach((ch, i) => {
+      const at = sx + adv[i] / 2; sx += adv[i];
+      if (ch === " ") return;
+      const a = mid + ((top ? -1 : 1) * at) / rho, ca = Math.cos(a), sa = Math.sin(a);
+      const x = rho * ca, y = -rho * sa, t = top ? [sa, ca] : [-sa, -ca], u = top ? [ca, -sa] : [-ca, sa];
+      const p0 = onSphere(x, y, M, L), p1 = onSphere(x + t[0] * 2, y + t[1] * 2, M, L), p2 = onSphere(x + u[0] * 2, y + u[1] * 2, M, L);
+      const al = alpha * smoothstep(zl - 0.02, zl + 0.22, p0[2]);
+      if (al < 0.01) return;
+      c.save();
+      c.transform((p1[0] - p0[0]) / 2 / L.sc, (p1[1] - p0[1]) / 2 / L.sc, -(p2[0] - p0[0]) / 2 / L.sc, -(p2[1] - p0[1]) / 2 / L.sc, p0[0], p0[1]);
+      c.scale(L.sc, L.sc);
+      c.fillStyle = css(rgb, al); c.fillText(ch, 0, 0);
+      c.restore();
+    });
+    return total;
+  }
+  function paintRegionWords(c, L, M, near) {
+    for (const r of S.regions ?? []) {
+      const rgb = col.rg[r.ci], mid = (r.a0 + r.a1) / 2, span = r.a1 - r.a0;
+      // on the rim beyond its files, as large as its sector lets it be
+      const str = r.label.toUpperCase(), rho = r.r1 - L.rv0 * 0.05;
+      const px = clamp((span * rho * 0.86) / (str.length * 0.74), 11, L.rv0 * 0.075);
+      sphereText(c, str, M, L, rho, mid, col.light ? mixc(rgb, col.text, 0.35) : rgb, 0.62 * near, px);
+    }
+  }
+
+  function paintGlobe(L, MG, near, M) {
     const c = ctxOf("globe", L);
     if (near < 0.01) return;
+    paintRegions(c, L, M, near);
     const zl = 1 / CAM, { cx, cy, rv } = L;
     const front = new Path2D(), back = new Path2D();
     for (const pts of WIRE) {
@@ -558,7 +678,7 @@
     const key = `${L.w}|${L.h}|${Math.round(L.cx)}|${Math.round(L.cy)}|${Math.round(L.rv)}|${col.stamp}`;
     if (S.backKey !== key) { paintBack(L); S.backKey = key; }
     LAYER.back[0].style.opacity = near.toFixed(3);
-    paintGlobe(L, mulM(M, S.G), near);
+    paintGlobe(L, mulM(M, S.G), near, M);
     // nothing is drawn under the filter panel or the info card: within 24 px of their edge things fade out
     const panels = [$("filters"), $("card")].filter((p) => !p.hidden).map((p) => p.getBoundingClientRect());
     const clear = (x, y, r) => {
@@ -578,8 +698,10 @@
       const a = e.a * near * smoothstep(zl - 0.12, zl + 0.1, v[2]) * (e.role === "l2" ? 0.5 + 0.5 * depth : 0.45 + 0.55 * depth) * clear(x, y, r);
       e.el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) scale(${scale.toFixed(4)})`;
       e.el.style.opacity = a.toFixed(3);
-      e.el.style.visibility = a < 0.01 ? "hidden" : "";
-      e.el.style.zIndex = e.role === "focus" ? 3 : e.role === "l1" ? 2 : 1;
+      // style writes only on change: rewriting them every frame makes the page recompute styles
+      const vis = a < 0.01 ? "hidden" : "", zi = e.role === "focus" ? 3 : e.role === "l1" ? 2 : 1;
+      if (e.vis !== vis) { e.vis = vis; e.el.style.visibility = vis; }
+      if (e.zi !== zi) { e.zi = zi; e.el.style.zIndex = zi; }
       const deep = v[2] < 0.62;   // near the limb the names would pile up: only the frames stay
       if (deep !== e.deep) { e.deep = deep; e.el.classList.toggle("deep", deep); }
       if (id) geo.set(id, { v, x, y, r, a });
@@ -597,10 +719,11 @@
       for (let d = 0; d < 360; d += 6) { const a = (d * Math.PI) / 180, l = d % 30 ? 3 : 8, x = Math.cos(a), y = -Math.sin(a); c.moveTo(L.cx + x * (L.rv + 3), L.cy + y * (L.rv + 3)); c.lineTo(L.cx + x * (L.rv + 3 + l), L.cy + y * (L.rv + 3 + l)); }
       c.strokeStyle = css(col.muted, 0.5 * near); c.stroke();
       if (S.liveTh != null) {
-        c.strokeStyle = css(col.accent, 0.95); c.lineWidth = 2.5; c.lineCap = "round";
-        if (!col.light) { c.shadowColor = css(col.accent, 0.8); c.shadowBlur = 10; }
-        c.beginPath(); c.arc(L.cx, L.cy, L.rv, -S.liveTh - 0.2, -S.liveTh + 0.2); c.stroke();
-        c.shadowBlur = 0;
+        c.lineCap = "round";
+        c.beginPath(); c.arc(L.cx, L.cy, L.rv, -S.liveTh - 0.2, -S.liveTh + 0.2);
+        // the glow: wide faint strokes under the line (no shadowBlur: it blurs the whole layer every frame)
+        if (!col.light) for (const [w, a] of [[11, 0.10], [7, 0.18], [4.5, 0.3]]) { c.strokeStyle = css(col.accent, a); c.lineWidth = w; c.stroke(); }
+        c.strokeStyle = css(col.accent, 0.95); c.lineWidth = 2.5; c.stroke();
       }
       // callouts: from the limb out to what lies that way
       if (near > 0.95) for (const q of S.callouts ?? []) {
@@ -609,14 +732,16 @@
         c.beginPath(); c.moveTo(p0[0], p0[1]); c.lineTo(p1[0], p1[1]); c.lineTo(p2[0], p2[1]); c.stroke();
         c.beginPath(); c.arc(p0[0], p0[1], on ? 2.6 : 2, 0, 7); c.fill();
       }
+      paintRegionWords(c, L, M, near);
       // bonds: arcs along the sphere from frame to frame; thickness = similarity; the candidate's in --accent
       c.lineCap = "round";
       for (const [id, e] of S.nodes) {
         if (e.role === "focus") continue;
-        const A = geo.get(e.role === "l1" ? S.focus : e.via), B = geo.get(id);
+        const A = geo.get(e.role === "l1" ? e.link ?? S.focus : e.via), B = geo.get(id);
+        const rgb = e.region != null && S.regions[e.region] ? col.rg[S.regions[e.region].ci] : col.bond;
         if (!A || !B) continue;
         const lit = id === S.candidate;
-        const a = Math.min(A.a, B.a) * (lit ? 1 : e.role === "l1" ? 0.62 : 0.4);
+        const a = Math.min(A.a, B.a) * (lit ? 1 : e.region != null ? 0.8 : e.role === "l1" ? 0.62 : 0.4);
         if (a < 0.01) continue;
         const N = 12, pts = [];
         for (let i = 0; i <= N; i++) { const t = i / N; pts.push(proj(norm([A.v[0] + (B.v[0] - A.v[0]) * t, A.v[1] + (B.v[1] - A.v[1]) * t, A.v[2] + (B.v[2] - A.v[2]) * t]), L)); }
@@ -627,20 +752,28 @@
         const cut = (p, q, o, r) => { const d0 = Math.hypot(p[0] - o.x, p[1] - o.y), d1 = Math.hypot(q[0] - o.x, q[1] - o.y), t = d1 > d0 ? clamp((r + 3 - d0) / (d1 - d0), 0, 1) : 0; return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]; };
         if (i1 <= i0) continue;
         const s0 = cut(pts[i0], pts[i0 + 1], A, A.r), s1 = cut(pts[i1], pts[i1 - 1], B, B.r);
-        c.strokeStyle = css(lit ? col.accent : col.bond, a);
-        c.lineWidth = lit ? 1.8 : e.role === "l1" ? 0.8 + 0.9 * (e.w ?? 0) : 0.8;
-        if (!col.light && lit) { c.shadowColor = css(col.accent, 0.7); c.shadowBlur = 10; }
         c.beginPath(); c.moveTo(s0[0], s0[1]);
         for (let i = i0 + 1; i < i1; i++) c.lineTo(pts[i][0], pts[i][1]);
-        c.lineTo(s1[0], s1[1]); c.stroke();
-        c.shadowBlur = 0;
+        c.lineTo(s1[0], s1[1]);
+        if (!col.light && lit) for (const [w, ga] of [[9, 0.09], [5.5, 0.16], [3.5, 0.28]]) { c.strokeStyle = css(col.accent, ga * a); c.lineWidth = w; c.stroke(); }
+        c.strokeStyle = css(lit ? col.accent : rgb, a);
+        c.lineWidth = lit ? 1.8 : e.role === "l1" ? 0.8 + 0.9 * (e.w ?? 0) : 0.8;
+        c.stroke();
         // where a bond meets a frame: a small bead
-        c.fillStyle = css(lit ? col.accent : col.bond, Math.min(1, a * 1.5));
+        c.fillStyle = css(lit ? col.accent : rgb, Math.min(1, a * 1.5));
         c.beginPath(); c.arc(s1[0], s1[1], lit ? 2.2 : 1.5, 0, 7); c.fill();
       }
     }
     LAYER.globe[0].style.opacity = "1";
-    const axesOn = near > 0.95 ? "1" : "0";
+    const axesOn = near > 0.95 && S.zoom < 1.04 ? "1" : "0";   // enlarged: the limb is off the window
+    // enlarged: the neighbours say more (all their labels, their names), sharper pictures; a button goes back
+    const mag = S.zoom > 1.25, magBtn = $("magReset");
+    // the words grow less than the globe does, so they keep clear of each other
+    const tk = (1 / Math.pow(magOf(S.zoom), 0.6)).toFixed(2);
+    if (S.tk !== tk) { S.tk = tk; stage.style.setProperty("--tk", tk); }
+    if (stage.classList.contains("mag") !== mag) { stage.classList.toggle("mag", mag); if (mag) loadThumbs(); }
+    if (magBtn.hidden !== S.zoomT <= 1.02) magBtn.hidden = S.zoomT <= 1.02;
+    if (!magBtn.hidden) { const t = `${magOf(S.zoom).toFixed(1)}×`; if (magBtn.lastChild.textContent !== t) magBtn.lastChild.textContent = t; }
     if ($("axes").style.opacity !== axesOn) $("axes").style.opacity = axesOn;
     const areas = $("areas");
     const showAreas = S.zoom < 0.55;
@@ -741,8 +874,8 @@
     const box = $("axes"); box.textContent = ""; S.callouts = [];
     const f = S.items.get(S.focus);
     if (!f || !S.nodes.has(S.focus) || L.narrow) return;
-    const l1 = [...S.nodes.values()].filter((e) => e.role === "l1" && e.parts).sort((a, b) => a.ang - b.ang);
-    const keyOf = (e) => { let bk = null, bv = -1; for (const [k, v] of Object.entries(e.parts)) if (v > bv) { bv = v; bk = k; } return bk === "time" ? (e.newer ? "time+" : "time-") : bk; };
+    const l1 = [...S.nodes.values()].filter((e) => e.role === "l1" && e.parts && e.region == null).sort((a, b) => a.ang - b.ang);
+    const keyOf = (e) => { let bk = null, bv = -1; for (const [k, v] of Object.entries(e.parts)) if (k !== "label" && v > bv) { bv = v; bk = k; } return bk === "time" ? (e.newer ? "time+" : "time-") : bk; };
     let groups = [];
     for (const e of l1) { const k = keyOf(e), g = groups[groups.length - 1]; if (g && g.key === k) g.es.push(e); else groups.push({ key: k, es: [e] }); }
     if (groups.length > 1 && groups[0].key === groups[groups.length - 1].key) groups[0].es = [...groups.pop().es, ...groups[0].es];
@@ -795,15 +928,22 @@
     const d = Math.hypot(...S.off);
     showLive(d > 14 ? Math.atan2(S.off[1], -S.off[0]) : null);
   }
+  let prefetchT = 0;
   function markCandidate(id) {
     if (S.candidate === id) return;
     S.nodes.get(S.candidate)?.el?.classList.remove("cand");
     S.candidate = id;
     if (!id) return;
     S.nodes.get(id)?.el?.classList.add("cand");
-    neighbours(id).catch(() => {});   // fetch ahead, so landing is instant
-    const it = S.items.get(id);
-    if (it && !it.sensitive) getThumb(id, 256);
+    // fetch ahead so landing is instant, but only once the candidate stays a moment: while the
+    // globe sweeps past many nodes, a fetch + thumbnail per node made the drag stutter
+    clearTimeout(prefetchT);
+    prefetchT = setTimeout(() => {
+      if (S.candidate !== id) return;
+      neighbours(id).catch(() => {});
+      const it = S.items.get(id);
+      if (it && !it.sensitive) getThumb(id, 256);
+    }, 120);
   }
   // motion has stopped: the node nearest the pole becomes the focus if it has clearly come over;
   // otherwise everything springs back
@@ -860,6 +1000,8 @@
     $("cKind").textContent = KIND_LABEL[it.kind] ?? (it.ext || it.kind).toUpperCase();
     $("cTitle").textContent = it.name;
     $("cDesc").textContent = "";
+    const rgOf = (l) => (S.regions ?? []).find((r) => r.key === lkey(l));
+    $("cLabels").replaceChildren(...it.labels.map((l) => { const r = id === S.focus ? rgOf(l) : null; return h("span", { class: r ? `lab rg${r.ci}` : "lab" }, l); }));
     // equal dates share one line: 2026-10-05　下載・建立・文件日期
     const byDate = new Map();
     for (const [k, l] of TIME_LABEL) { const d = fmt(it.times[k]); if (!d) continue; if (!byDate.has(d)) byDate.set(d, []); byDate.get(d).push(l); }
@@ -1225,6 +1367,12 @@
   const openItem = (id) => (S.items.get(id)?.kind === "dataset" ? openDataset(id) : act("open", id));
 
   // trackpad: two-finger scroll moves the scene 1:1, momentum included; a 100 ms gap = the end.
+  // two fingers apart on the trackpad (WebKit's gesture events; elsewhere it arrives as ctrl+wheel)
+  let gz = null;
+  stage.addEventListener("gesturestart", (e) => { e.preventDefault(); gz = S.zoomT; });
+  stage.addEventListener("gesturechange", (e) => { e.preventDefault(); if (gz != null) zoomTo(gz + Math.log(e.scale) * 0.9); });
+  stage.addEventListener("gestureend", (e) => { e.preventDefault(); gz = null; });
+  $("magReset").addEventListener("click", () => zoomTo(1));
   // pinch / ctrl+wheel = zoom
   let lastWheel = 0;
   stage.addEventListener("wheel", (e) => {
@@ -1240,7 +1388,7 @@
     S.timers.wheel = setTimeout(settle, 100);
     frames.invalidate();
   }, { passive: false });
-  function zoomTo(z) { S.zoomT = Math.max(0, Math.min(1, z)); frames.invalidate(); }
+  function zoomTo(z) { S.zoomT = Math.max(0, Math.min(2, z)); frames.invalidate(); }
 
   document.addEventListener("keydown", (e) => {
     if (e.target.closest?.("input, textarea, dialog") || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1250,8 +1398,8 @@
     if (e.key in dirs && S.open && near()) { e.preventDefault(); hop((dirs[e.key] * Math.PI) / 180); }
     else if (e.key === "/") { e.preventDefault(); qEl.focus(); qEl.select(); }
     else if (e.key === "0") zoomTo(0);
-    else if (e.key === "=" || e.key === "+") zoomTo(1);
-    else if (e.key === "-") zoomTo(0);
+    else if (e.key === "=" || e.key === "+") zoomTo(S.zoomT < 1 ? 1 : S.zoomT + 0.25);
+    else if (e.key === "-") zoomTo(S.zoomT > 1 ? Math.max(1, S.zoomT - 0.25) : 0);
     else if (e.key === "Enter" && S.open && !S.ds && !e.target.closest("button")) openItem(S.focus);
     else if (e.key === "Escape" && S.ds) closeDataset();
     else if (e.key === "Escape" && S.open) close();

@@ -9,7 +9,10 @@
 "use strict";
 (function (root) {
   function frames(draw, opt) {
-    let raf = 0, last = 0, lastDraw = 0, paused = false;
+    // raf: the scheduled frame id; DRAWING while draw() runs. An invalidate() during draw() only
+    // notes `again`: it must not schedule a second frame (that doubled the work every frame).
+    const DRAWING = -1;
+    let raf = 0, last = 0, lastDraw = 0, paused = false, again = false;
     const tick = (now) => {
       raf = 0;
       if (paused) return;
@@ -17,13 +20,19 @@
       if (fps < 60 && lastDraw && now - lastDraw < 1000 / fps - 2) { raf = requestAnimationFrame(tick); return; }
       const dt = Math.min(64, last ? now - last : 16);
       last = now; lastDraw = now;
-      if (draw(dt, now)) raf = requestAnimationFrame(tick);
+      raf = DRAWING; again = false;
+      let keep = false;
+      try { keep = draw(dt, now); } finally { raf = 0; }
+      if ((keep || again) && !paused) raf = requestAnimationFrame(tick);
       else last = 0;
     };
     return {
-      invalidate() { if (!raf && !paused) raf = requestAnimationFrame(tick); },
-      pause(on) { paused = on; if (on && raf) { cancelAnimationFrame(raf); raf = 0; last = 0; } },
-      get running() { return !!raf; },
+      invalidate() {
+        if (raf === DRAWING) { again = true; return; }
+        if (!raf && !paused) raf = requestAnimationFrame(tick);
+      },
+      pause(on) { paused = on; if (on && raf > 0) { cancelAnimationFrame(raf); raf = 0; last = 0; } },
+      get running() { return raf !== 0; },
     };
   }
 

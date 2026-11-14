@@ -24,7 +24,7 @@ const SENTENCE: usize = 160;
 
 pub const VERDICTS: [&str; 4] = ["term", "general", "name", "junk"];
 
-const SYSTEM: &str = "你幫一位研究者整理他電腦裡檔案出現的英文詞。每個詞附有一兩句原文。\n判斷每個詞是哪一種：\n- term：具體、要查過才懂的專有名詞、方法、模型、指標、解剖或臨床名詞（值得做成知識卡）\n- general：日常英文、一般學術用語，以及這個領域的人天天在用、不必查的基本詞（例如 loss、label、mask、segmentation、encoder、loss function、training set、ground truth）\n- name：人名、地名、學校／機構、期刊、會議、產品或公司名\n- junk：斷字、黏在一起的字、編號、亂碼\n是 term 的，用繁體中文寫它所屬的領域（2–6 個字，例如「醫學影像」「生物力學」「深度學習」）。\n每個詞都要回答，key 照抄。";
+const SYSTEM: &str = "你幫一位研究者整理他電腦裡檔案出現的英文詞。每個詞附有一兩句原文。\n判斷每個詞是哪一種：\n- term：專業用語：方法、模型、架構、指標、資料集、演算法、硬體、作業系統、解剖或臨床名詞等（值得做成知識卡，常見的基本概念如 ReLU、p-value、convolution 也是）\n- general：日常英文：一個沒有專業背景的普通國中生就會的字，用的也是日常的意思（例如 house、begin、important、segment 當「一段」）。同一個字用在專業意思（segmentation、kernel、loss function、encoder）就是 term，再基本也是 term\n- name：人名、地名、學校／機構、期刊、會議、產品或公司名\n- junk：斷字、黏在一起的字、編號、亂碼\n是 term 的，用繁體中文寫它所屬的領域（2–6 個字，例如「醫學影像」「生物力學」「深度學習」）。\n每個詞都要回答，key 照抄。";
 
 pub fn schema() -> Value {
     json!({
@@ -273,7 +273,8 @@ mod tests {
 
     #[test]
     fn everyday_words_are_settled_general_and_go_to_the_ignore_list() {
-        let mut terms: Vec<Term> = ["loss", "discriminator", "Masks", "ellrin model", "daidai lab", "results"].iter().map(|k| term(k, 0, 1.0)).collect();
+        // a middle schooler's word called a term is general; a technical word (loss) stays a term
+        let mut terms: Vec<Term> = ["house", "discriminator", "loss", "ellrin model", "daidai lab", "results"].iter().map(|k| term(k, 0, 1.0)).collect();
         for t in &mut terms[..3] {
             t.verdict = Some("term".into());
         }
@@ -282,11 +283,11 @@ mod tests {
         terms[5].verdict = Some("general".into());
         let mut pool = Pool { version: 1, built: "x".into(), files: 1, terms };
         let f = Filters::default();
-        assert_eq!(settle(&mut pool, &f), 2);
-        assert_eq!(pool.terms[1].verdict.as_deref(), Some("term"));
+        assert_eq!(settle(&mut pool, &f), 1);
+        assert_eq!(pool.terms[0].verdict.as_deref(), Some("general"));
+        assert_eq!(pool.terms[2].verdict.as_deref(), Some("term"), "loss is a term in its technical sense");
         let lines = ignore_lines(&pool, &f, "# header\nDaidai Lab\n");
-        assert_eq!(lines, vec!["loss  # LoreShelf", "Masks  # LoreShelf", "ellrin model  # LoreShelf"], "not already listed, not a word the built-in lists drop");
-        assert!(Filters::new(&lines).is_ignored("mask"));
+        assert_eq!(lines, vec!["ellrin model  # LoreShelf"], "not already listed, not a word the built-in lists drop");
     }
 
     #[tokio::test]

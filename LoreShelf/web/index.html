@@ -30,6 +30,7 @@
         <div class="pv-acts"><span class="pv-open"><span data-icon="external"></span>開啟</span><button type="button" class="pv-reveal" aria-label="在 Finder 顯示"><span data-icon="folder"></span></button></div>
       </div>
       <div class="areas" id="areas" hidden></div>
+      <button type="button" class="mag-reset" id="magReset" hidden aria-label="回到預設大小"><span data-icon="fit"></span><span></span></button>
       <section class="dsview" id="dsview" hidden aria-label="資料集">
         <header class="ds-head" id="dsHead"></header>
         <div class="ds-grid" id="dsGrid" tabindex="-1"><div class="ds-inner" id="dsInner"></div></div>
@@ -38,6 +39,7 @@
     <aside class="filters" id="filters" aria-label="篩選"></aside>
     <section class="card" id="card" aria-live="polite">
       <div class="card-head"><span class="kind" id="cKind"></span><h1 id="cTitle"></h1></div>
+      <div class="labels" id="cLabels"></div>
       <p id="cDesc"></p>
       <dl class="times" id="cTimes"></dl>
       <ul class="members" id="cMembers" hidden></ul>

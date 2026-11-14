@@ -8,7 +8,7 @@
 //! - `GET /api/files?limit=` — items without paths (files, projects, packages, datasets)
 //! - `GET /api/files/{id}` — the item, its paths (local display) and a short description
 //! - `GET /api/neighbors/{id}?k=12&layers=2` — similar items with each factor's share
-//! - `POST /api/open/{id}` — open with the default app (`open`; an `.app` is revealed, never launched)
+//! - `POST /api/open/{id}` — open in the Lore app for its type (`openwith`: `open -a <App>`), else the default app (`open`; an `.app` is revealed, never launched)
 //! - `POST /api/reveal/{id}` — show in Finder (`open -R`)
 //! - `GET /api/thumb/{id}?s=512` — QuickLook PNG (cached, LRU); 404 = use the kind icon
 //! - `GET /api/timeline` — buckets 本週 / 上週 / 本月 / 上個月 / seasons / years
@@ -19,7 +19,7 @@
 //! - `GET /api/categories` — type (exact) and use (rules / the author's choice) categories with counts
 //! - `PUT /api/files/{id}/categories` — the author's use categories (local git commit)
 //! - `GET /api/nearest?from=&cat=` — the closest item that passes the filter
-//! - `GET /api/default-focus?cat=` — where the view starts (last opened document, else newest PDF; never images, videos or sensitive items)
+//! - `GET /api/default-focus?cat=` — where the view starts (the document last opened or modified, whichever is later, else newest PDF; never images, videos or sensitive items)
 //! - `GET /api/datasets/{id}/items?offset=&limit=` and `GET /api/thumb/ds/{id}/{index}` — a dataset's members
 //!
 //! `cat=a,b` (OR within a group, AND across groups) filters files, neighbours,
@@ -32,9 +32,12 @@
 pub mod cards;
 pub mod classify;
 pub mod dataset;
+pub mod filing;
+pub mod filing_ai;
 pub mod fulltext;
 pub mod index;
 pub mod llm;
+pub mod openwith;
 pub mod search;
 pub mod thumbs;
 pub mod timeline;
@@ -67,6 +70,10 @@ pub trait Runner: Send + Sync {
     fn run(&self, program: &str, args: &[String]) -> Result<(), String>;
     /// Run to the end, killed after `timeout` (QuickLook thumbnails).
     fn run_wait(&self, program: &str, args: &[String], timeout: std::time::Duration) -> Result<(), String>;
+    /// `/Applications/<app>.app` is there (`openwith`: else the system default opens the file).
+    fn installed(&self, app: &str) -> bool {
+        openwith::installed(app)
+    }
 }
 
 /// The real opener: `open` on macOS, `xdg-open` elsewhere (no reveal there).
@@ -165,6 +172,9 @@ impl AppState {
             Some(t) => p.join(format!("{:?}", t)),
             None => p,
         });
+        // new labels (`filing-ai.json`) or topic merges (`filing.json`) too
+        let labels_stamp: Vec<_> = [filing_ai::FILE, filing::SETTINGS].iter().map(|f| std::fs::metadata(self.catalog.join(f)).and_then(|m| m.modified()).ok()).collect();
+        let stamp = stamp.map(|p| p.join(format!("{:?}", labels_stamp)));
         let mut c = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((s, idx)) = c.as_ref()
             && *s == stamp
@@ -527,7 +537,10 @@ async fn open(State(s): State<Shared>, UrlPath(id): UrlPath<String>, _b: Bytes) 
     if ext == "app" {
         return run(&s, vec!["-R".into(), path], "revealed");
     }
-    run(&s, vec![path], "opened")
+    // PDF → LoreReader, .pptx → SlideComposer, .docx / .tex / LaTeX project → PaperComposer (`openwith`)
+    let kind = s.index().get(&id).map(|e| e.item.kind.clone()).unwrap_or_default();
+    let (args, _app) = openwith::args(&kind, &ext, std::path::Path::new(&path), &|a| s.runner.installed(a));
+    run(&s, args, "opened")
 }
 
 async fn reveal(State(s): State<Shared>, UrlPath(id): UrlPath<String>, _b: Bytes) -> Response {

@@ -18,7 +18,7 @@ pub const BATCH: usize = 40;
 const SHOWN: usize = 2;
 const SENTENCE: usize = 200;
 
-const SYSTEM: &str = "你幫一位研究者把他已經懂的專有名詞做成知識卡。每個詞來自他讀過的論文或簡報，附一兩句原文（PDF 抽出的文字，可能有斷字、黏字或作者名）。\n對每個詞：\n- keep：是否是一個乾淨、值得做卡的專有名詞（方法、模型、指標、資料集、解剖或臨床名詞等）。斷字、殘缺、只是作者名、一般用語、太泛的基本詞（如 loss function、training set）都 false。\n- title：卡片標題，用該領域通行的寫法（英文、正確大小寫，例如 Transformer Vaswani → Transformer、distance FID → Fréchet Inception Distance (FID)）。keep 為 false 時留空。\n- field：所屬領域，繁體中文 2–6 字。\n每個詞都要回答，key 照抄。";
+const SYSTEM: &str = "你幫一位研究者把他已經懂的專有名詞做成知識卡。每個詞來自他讀過的論文或簡報，附一兩句原文（PDF 抽出的文字，可能有斷字、黏字或作者名）。\n對每個詞：\n- keep：是否是一個乾淨、值得做卡的專有名詞（方法、模型、指標、資料集、解剖或臨床名詞等）。斷字、殘缺、只是作者名、日常英文（普通國中生就會的字，用的也是日常意思）都 false；專業用語再基本也是 true（如 ReLU、p-value、loss function、Batch Normalization）。\n- title：卡片標題，用該領域通行的寫法（英文、正確大小寫，例如 Transformer Vaswani → Transformer、distance FID → Fréchet Inception Distance (FID)）。keep 為 false 時留空。\n- field：所屬領域，繁體中文 2–6 字。\n每個詞都要回答，key 照抄。";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Titled {
@@ -27,6 +27,15 @@ pub struct Titled {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub field: String,
+    /// The card's own words (author, 2026-11-14: quotes from papers are not a card): one sentence…
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    /// …and a few sentences of explanation, in Traditional Chinese, a standard formula in $…$.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body: String,
+    /// The content pass has answered (it may also have dropped the card as a field basic).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub written: bool,
 }
 
 /// `<cache>/card-titles.json`: term key → answer.
@@ -71,10 +80,15 @@ pub fn schema() -> Value {
 
 /// One batch's request: the term, its written form and sentences from papers / slides only.
 pub fn request(batch: &[&Term]) -> LlmRequest {
+    request_with(batch, false)
+}
+
+/// `local` = the local model asks: sentences from any file may go with the term.
+pub fn request_with(batch: &[&Term], local: bool) -> LlmRequest {
     let list = batch
         .iter()
         .map(|t| {
-            let ex = t.examples.iter().filter(|e| e.cloud_ok).take(SHOWN).map(|e| format!("  「{}」", e.text.chars().take(SENTENCE).collect::<String>())).collect::<Vec<_>>().join("\n");
+            let ex = t.examples.iter().filter(|e| local || e.cloud_ok).take(SHOWN).map(|e| format!("  「{}」", e.text.chars().take(SENTENCE).collect::<String>())).collect::<Vec<_>>().join("\n");
             format!("- key: {}（寫作 {}）\n{ex}", t.key, t.label)
         })
         .collect::<Vec<_>>()
@@ -94,16 +108,26 @@ pub fn read_answer(v: &Value, asked: &[&Term]) -> BTreeMap<String, Titled> {
         let title = x["title"].as_str().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
         let keep = keep && !title.is_empty() && title.chars().count() <= 80;
         let field = x["field"].as_str().unwrap_or("").trim().to_string();
-        out.insert(k.to_string(), Titled { keep, title: if keep { title } else { String::new() }, field: if keep { field } else { String::new() } });
+        out.insert(k.to_string(), Titled { keep, title: if keep { title } else { String::new() }, field: if keep { field } else { String::new() }, ..Titled::default() });
     }
     out
 }
 
 /// Ask about every candidate not asked yet; saved after each batch. Returns (asked, answered).
-pub async fn run(cache_dir: &Path, p: &dyn LlmProvider, mut progress: impl FnMut(usize, usize)) -> Result<(usize, usize), String> {
+pub async fn run(cache_dir: &Path, p: &dyn LlmProvider, progress: impl FnMut(usize, usize)) -> Result<(usize, usize), String> {
+    run_for(cache_dir, p, None, false, progress).await
+}
+
+/// [`run`] for these term keys only (`None` = the mastered candidates). Claude (`local` false)
+/// only ever gets terms and sentences from papers and slide decks; the local model gets any.
+pub async fn run_for(cache_dir: &Path, p: &dyn LlmProvider, keys: Option<&std::collections::HashSet<String>>, local: bool, mut progress: impl FnMut(usize, usize)) -> Result<(usize, usize), String> {
     let pool = Pool::load(cache_dir).ok_or("還沒有候選詞；先執行 loreshelf-cli terms")?;
     let mut titles = Titles::load(cache_dir);
-    let todo: Vec<&Term> = candidates(&pool).filter(|t| !titles.titles.contains_key(&t.key)).collect();
+    let todo: Vec<&Term> = match keys {
+        Some(k) => pool.terms.iter().filter(|t| k.contains(&t.key) && (local || t.cloud_ok)).collect(),
+        None => candidates(&pool).collect(),
+    };
+    let todo: Vec<&Term> = todo.into_iter().filter(|t| !titles.titles.contains_key(&t.key)).collect();
     let (total, mut answered, mut failed) = (todo.len(), 0, 0);
     for (bi, chunk) in todo.chunks(BATCH).enumerate() {
         let mut ask: Vec<&Term> = chunk.to_vec();
@@ -111,7 +135,7 @@ pub async fn run(cache_dir: &Path, p: &dyn LlmProvider, mut progress: impl FnMut
             if ask.is_empty() {
                 break;
             }
-            match complete_json(p, &request(&ask)).await {
+            match complete_json(p, &request_with(&ask, local)).await {
                 Ok(v) => {
                     let got = read_answer(&v, &ask);
                     answered += got.len();
@@ -130,6 +154,106 @@ pub async fn run(cache_dir: &Path, p: &dyn LlmProvider, mut progress: impl FnMut
         }
         titles.save(cache_dir)?;
         progress(((bi + 1) * BATCH).min(total), total);
+    }
+    Ok((total, answered))
+}
+
+// ── the card's content (author, 2026-11-14) ──
+
+pub const CONTENT_BATCH: usize = 15;
+
+const CONTENT_SYSTEM: &str = "你幫一位研究者寫知識卡的內容。每張卡是一個他已經懂的專有名詞（附所屬領域，和一兩句他讀到這個詞的原文，只是線索，不要照抄）。
+對每張卡：
+- keep：幾乎都是 true：專業用語再基本也要做卡（例如 ReLU、p-value、Batch Normalization、Cross-Entropy、Image Classification），新概念才連得過去。只有日常英文（普通國中生就會的字，用的也是日常意思）或殘缺的詞才 false。
+- summary：一句話說它是什麼（台灣繁體中文，20–60 字，術語可保留英文）。
+- body：二到四句說明：用來做什麼、怎麼運作或怎麼算（有標準公式就用 $…$ 的 LaTeX 寫出）、和相近概念的差別。不要引用原文，不要 Markdown 標題或粗體。
+keep 為 false 時 summary、body 留空。每張都要回答，key 照抄。";
+
+pub fn content_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "cards": { "type": "array", "items": {
+            "type": "object",
+            "properties": { "key": { "type": "string" }, "keep": { "type": "boolean" }, "summary": { "type": "string" }, "body": { "type": "string" } },
+            "required": ["key", "keep"],
+            "additionalProperties": false
+        } } },
+        "required": ["cards"],
+        "additionalProperties": false
+    })
+}
+
+/// One batch: the card's title and field, and sentences from papers / slides only.
+pub fn content_request(batch: &[(&str, &Titled, Vec<&str>)]) -> LlmRequest {
+    let list = batch
+        .iter()
+        .map(|(k, t, ex)| {
+            let ex = ex.iter().take(SHOWN).map(|e| format!("  「{}」", e.chars().take(SENTENCE).collect::<String>())).collect::<Vec<_>>().join("\n");
+            format!("- key: {k}\n  標題：{}（{}）\n{ex}", t.title, t.field)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut req = LlmRequest::chat(CONTENT_SYSTEM, vec![Message::user(format!("卡（{} 張）：\n{list}", batch.len()))]);
+    req.json_schema = Some(content_schema());
+    req.max_tokens = 12000;
+    req
+}
+
+/// Writes every kept title's summary and body once (saved per batch); a field basic is dropped.
+/// Returns (asked, answered).
+pub async fn write_content(cache_dir: &Path, p: &dyn LlmProvider, progress: impl FnMut(usize, usize)) -> Result<(usize, usize), String> {
+    write_content_for(cache_dir, p, None, false, progress).await
+}
+
+/// [`write_content`] for these keys only; `local` as in [`run_for`] (Claude: paper sentences only,
+/// and only for terms found in papers or slide decks).
+pub async fn write_content_for(cache_dir: &Path, p: &dyn LlmProvider, keys: Option<&std::collections::HashSet<String>>, local: bool, mut progress: impl FnMut(usize, usize)) -> Result<(usize, usize), String> {
+    let pool = Pool::load(cache_dir).ok_or("還沒有候選詞；先執行 loreshelf-cli terms")?;
+    let mut titles = Titles::load(cache_dir);
+    let examples = |k: &str| -> Vec<String> { pool.terms.iter().find(|t| t.key == k).map(|t| t.examples.iter().filter(|e| local || e.cloud_ok).map(|e| e.text.clone()).collect()).unwrap_or_default() };
+    let cloud_term = |k: &str| pool.terms.iter().find(|t| t.key == k).is_none_or(|t| t.cloud_ok);
+    let todo: Vec<String> = titles.titles.iter().filter(|(k, t)| t.keep && !t.written && keys.is_none_or(|ks| ks.contains(*k)) && (local || cloud_term(k))).map(|(k, _)| k.clone()).collect();
+    let (total, mut answered, mut failed) = (todo.len(), 0, 0);
+    for (bi, chunk) in todo.chunks(CONTENT_BATCH).enumerate() {
+        let mut ask: Vec<String> = chunk.to_vec();
+        for _ in 0..2 {
+            if ask.is_empty() {
+                break;
+            }
+            let ex: Vec<Vec<String>> = ask.iter().map(|k| examples(k)).collect();
+            let batch: Vec<(&str, &Titled, Vec<&str>)> = ask.iter().zip(&ex).map(|(k, e)| (k.as_str(), &titles.titles[k], e.iter().map(String::as_str).collect())).collect();
+            match complete_json(p, &content_request(&batch)).await {
+                Ok(v) => {
+                    let mut got = 0;
+                    for x in v["cards"].as_array().into_iter().flatten() {
+                        let (Some(k), Some(keep)) = (x["key"].as_str().map(str::trim), x["keep"].as_bool()) else { continue };
+                        let Some(t) = titles.titles.get_mut(k).filter(|_| ask.iter().any(|a| a == k)) else { continue };
+                        let summary = x["summary"].as_str().unwrap_or("").trim().to_string();
+                        let body = x["body"].as_str().unwrap_or("").trim().to_string();
+                        if keep && summary.is_empty() {
+                            continue; // no words: asked again
+                        }
+                        t.keep = keep;
+                        t.summary = if keep { summary } else { String::new() };
+                        t.body = if keep { body } else { String::new() };
+                        t.written = true;
+                        got += 1;
+                    }
+                    answered += got;
+                    ask.retain(|k| !titles.titles[k].written);
+                }
+                Err(e) => {
+                    failed += 1;
+                    eprintln!("批次 {} 沒有結果：{e}", bi + 1);
+                    if answered == 0 && failed >= 2 {
+                        return Err(format!("Claude 沒有回答：{e}"));
+                    }
+                    break;
+                }
+            }
+        }
+        titles.save(cache_dir)?;
+        progress(((bi + 1) * CONTENT_BATCH).min(total), total);
     }
     Ok((total, answered))
 }
@@ -188,8 +312,47 @@ mod tests {
         let sent = m.0.lock().unwrap().join("\n");
         assert!(sent.contains("from a paper: transformer") && !sent.contains("private note") && !sent.contains("ellrin method") && !sent.contains("daidai net"), "{sent}");
         let got = Titles::load(t.path());
-        assert_eq!(got.titles["transformer"], Titled { keep: true, title: "TRANSFORMER".into(), field: "測試".into() });
+        assert_eq!(got.titles["transformer"], Titled { keep: true, title: "TRANSFORMER".into(), field: "測試".into(), ..Titled::default() });
         assert!(!got.titles["tains"].keep && got.titles["tains"].title.is_empty());
         assert_eq!(run(t.path(), &m, |_, _| {}).await.unwrap(), (0, 0), "never asked twice");
     }
+
+    /// Writes content for every card but drops `relu`; records what it was sent.
+    struct Writer(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl LlmProvider for Writer {
+        fn id(&self) -> String {
+            "mock".into()
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities { json: true, vision: false, web: false, streaming: false, context: 100_000, needs_network: false }
+        }
+        async fn send(&self, req: &LlmRequest) -> Result<LlmResponse, lore_llm::LlmError> {
+            let u = req.messages[0].text();
+            self.0.lock().unwrap().push(u.clone());
+            let cards: Vec<Value> = u.lines().filter_map(|l| l.strip_prefix("- key: ")).map(|k| if k == "relu" { json!({ "key": k, "keep": false }) } else { json!({ "key": k, "keep": true, "summary": format!("{k} 是一種方法。"), "body": "說明。$a=b$" }) }).collect();
+            Ok(LlmResponse { text: json!({ "cards": cards }).to_string(), provider: "mock".into(), sources: vec![], usage: None })
+        }
+    }
+
+    #[tokio::test]
+    async fn every_kept_card_gets_its_own_words_once_and_field_basics_are_dropped() {
+        let t = tempfile::tempdir().unwrap();
+        Pool { version: 1, built: "x".into(), files: 1, terms: vec![term("transformer", true), term("relu", true)] }.save(t.path()).unwrap();
+        let mut titles = Titles { version: 1, ..Titles::default() };
+        titles.titles.insert("transformer".into(), Titled { keep: true, title: "Transformer".into(), field: "深度學習".into(), ..Titled::default() });
+        titles.titles.insert("relu".into(), Titled { keep: true, title: "ReLU".into(), field: "深度學習".into(), ..Titled::default() });
+        titles.titles.insert("tains".into(), Titled::default());
+        titles.save(t.path()).unwrap();
+        let m = Writer(Default::default());
+        assert_eq!(write_content(t.path(), &m, |_, _| {}).await.unwrap(), (2, 2));
+        let sent = m.0.lock().unwrap().join("\n");
+        assert!(sent.contains("標題：Transformer（深度學習）") && sent.contains("from a paper: transformer") && !sent.contains("private note") && !sent.contains("tains"), "{sent}");
+        let got = Titles::load(t.path());
+        assert_eq!((got.titles["transformer"].summary.as_str(), got.titles["transformer"].written), ("transformer 是一種方法。", true));
+        assert!(!got.titles["relu"].keep && got.titles["relu"].written && got.titles["relu"].body.is_empty());
+        assert_eq!(write_content(t.path(), &m, |_, _| {}).await.unwrap(), (0, 0), "never asked twice");
+    }
+
 }

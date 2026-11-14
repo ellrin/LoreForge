@@ -15,6 +15,9 @@
 //! loreshelf-cli classify [N]    the local model sorts the pool (term / general / name / junk), N terms
 //!                           at most; saved per batch, goes on where it stopped; then adds the general
 //!                           words and names to the shared ignore list (`ignore-words` below)
+//! loreshelf-cli plan [<source> [page]]  歸位 phase A: where each file / folder of the source folders
+//!                           should go in the new tree (`<catalog>/filing-plan.json`); a plan only,
+//!                           nothing moves. With a source: its rows, 20 a page
 //! loreshelf-cli ignore-words [--write]  general words and names → `private/LoreReader/ignore-words.txt`
 //!                           (the 「這不是術語」 list every paper reader uses; lines tagged `# LoreShelf`)
 //! ```
@@ -27,7 +30,7 @@ use lore_catalog::{Catalog, Guard, ScanConfig, store};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "用法：\n  loreshelf-cli scan <資料夾>...   只讀掃描，寫入本機目錄與報告\n  loreshelf-cli report            最新報告的位置\n  loreshelf-cli extract           讀取檔案全文到快取（只補還沒讀的）\n  loreshelf-cli terms             整理候選詞（知識庫還沒有的詞）\n  loreshelf-cli mastered <資料夾>...  這些資料夾的檔案我全懂（裡面的術語會做成已懂的卡）\n  loreshelf-cli known-cards [--write]  把上面那些資料夾的術語做成已懂的知識卡（不加 --write 只算數量）\n  loreshelf-cli card-titles       用 Claude Haiku 確認全懂資料夾的術語並給卡片標題（只送論文與簡報裡的詞和句子）\n  loreshelf-cli classify [數量]   本機模型分類候選詞（每批存檔，可中斷續跑；跑完把一般詞寫進忽略清單）\n  loreshelf-cli ignore-words [--write]  一般詞與名稱寫進共用的「這不是術語」清單（不加 --write 只算數量）";
+const USAGE: &str = "用法：\n  loreshelf-cli scan <資料夾>...   只讀掃描，寫入本機目錄與報告\n  loreshelf-cli report            最新報告的位置\n  loreshelf-cli extract           讀取檔案全文到快取（只補還沒讀的）\n  loreshelf-cli terms             整理候選詞（知識庫還沒有的詞）\n  loreshelf-cli mastered <資料夾>...  這些資料夾的檔案我全懂（裡面的術語會做成已懂的卡）\n  loreshelf-cli known-cards [--write]  把上面那些資料夾的術語做成已懂的知識卡（不加 --write 只算數量）\n  loreshelf-cli study-cards [--write]  正在學的領域（private/shared/learning.json）的詞做成不熟的卡（NeonDeck 會跳）\n  loreshelf-cli card-content      用 Claude Haiku 幫已懂的卡寫摘要與說明（基本詞不做卡）\n  loreshelf-cli known-cards --refill [--write]  先前只有原文引句的卡補上摘要與說明，基本詞移到垃圾桶（KnowledgeBase 要開著）\n  loreshelf-cli card-titles       用 Claude Haiku 確認全懂資料夾的術語並給卡片標題（只送論文與簡報裡的詞和句子）\n  loreshelf-cli classify [數量]   本機模型分類候選詞（每批存檔，可中斷續跑；跑完把一般詞寫進忽略清單）\n  loreshelf-cli plan [來源資料夾 [頁]]   歸位計畫：每個檔案／資料夾該去新資料夾樹的哪裡（只產生計畫，不搬）\n  loreshelf-cli move <來源資料夾> [--dry]   把規則確定的列搬過去（只改名搬移，不複製不刪除；記在日誌裡）\n  loreshelf-cli undo              復原上一批搬移\n  loreshelf-cli guess [來源資料夾]   規則放不了的檔案問模型（論文只送內容給 Claude，其他只用本機模型）\n  loreshelf-cli labels [--count]  每個檔案 3–5 個英文標籤（同上兩條路；--count 只算數量）\n  loreshelf-cli move <來源資料夾> --model [--dry]   搬模型放的列（先 --dry 看過）\n  loreshelf-cli ignore-words [--write]  一般詞與名稱寫進共用的「這不是術語」清單（不加 --write 只算數量）";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -83,12 +86,30 @@ fn run(args: &[String]) -> Result<String, String> {
         }
         Some("known-cards") => {
             let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
-            known_cards_from_mastered(&cache_dir, args.get(1).is_some_and(|a| a == "--write"))
+            let write = args.iter().any(|a| a == "--write");
+            if args.iter().any(|a| a == "--refill") { refill_cards(&cache_dir, write) } else { known_cards_from_mastered(&cache_dir, write) }
         }
         Some("classify") => {
             let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
             let max = args.get(1).map(|n| n.parse::<usize>().map_err(|_| USAGE.to_string())).transpose()?;
             classify(&cache_dir, max)
+        }
+        Some("study-cards") => {
+            let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
+            study_cards(&cache_dir, args.iter().any(|a| a == "--write"))
+        }
+        Some("card-content") => {
+            let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
+            let home = lore_home::Home::discover(&std::env::current_dir().unwrap_or_default());
+            let llm = shelf_server::llm::Llm::new(home);
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+            let (asked, answered) = rt.block_on(async {
+                let p = llm.provider(shelf_server::llm::TASK_CARD_TITLES).await?;
+                shelf_server::cards::write_content(&cache_dir, &*p, |done, total| eprintln!("{done} / {total}")).await
+            })?;
+            let t = shelf_server::cards::Titles::load(&cache_dir);
+            let dropped = t.titles.values().filter(|x| x.written && !x.keep).count();
+            Ok(format!("這次寫了 {asked}，答了 {answered}；有內容的卡 {}、當成基本詞不做 {dropped}", t.titles.values().filter(|x| x.written && x.keep).count()))
         }
         Some("card-titles") => {
             let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
@@ -103,10 +124,35 @@ fn run(args: &[String]) -> Result<String, String> {
             let keep = t.titles.values().filter(|x| x.keep).count();
             Ok(format!("這次問了 {asked}，答了 {answered}；全部可做卡 {keep}、不做 {}", t.titles.len() - keep))
         }
+        Some("plan") => {
+            let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
+            plan(&catalog_dir, &cache_dir, args.get(1).map(expand), args.get(2).and_then(|n| n.parse().ok()).unwrap_or(1))
+        }
+        Some("move") => {
+            let src = args.get(1).map(expand).ok_or(USAGE)?;
+            move_certain(&catalog_dir, &src, args.iter().any(|a| a == "--dry"), args.iter().any(|a| a == "--model"))
+        }
+        Some("labels") => {
+            let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
+            labels(&catalog_dir, &cache_dir, args.iter().any(|a| a == "--count"))
+        }
+        Some("guess") => {
+            let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
+            let src = args.get(1).filter(|a| !a.starts_with("--")).map(expand);
+            guess(&catalog_dir, &cache_dir, src)
+        }
+        Some("undo") => {
+            let (back, left) = shelf_server::filing::undo(&catalog_dir.join(shelf_server::filing::JOURNAL))?;
+            Ok(format!("搬回 {back} 個；留在原地 {} 個{}", left.len(), left.iter().map(|l| format!("\n  {l}")).collect::<String>()))
+        }
         Some("ignore-words") => {
             let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
             let home = lore_home::Home::discover(&std::env::current_dir().unwrap_or_default());
-            ignore_words(&home, &cache_dir, args.get(1).is_some_and(|a| a == "--write"))
+            if args.iter().any(|a| a == "--recheck") {
+                recheck_general(&home, &cache_dir, args.iter().any(|a| a == "--write"))
+            } else {
+                ignore_words(&home, &cache_dir, args.get(1).is_some_and(|a| a == "--write"))
+            }
         }
         Some("report") => Catalog::latest_report(&catalog_dir).map(|p| p.display().to_string()).ok_or_else(|| "還沒有報告；先執行 loreshelf-cli scan <資料夾>".to_string()),
         _ => Err(USAGE.into()),
@@ -168,11 +214,98 @@ fn known_cards_from_mastered(cache_dir: &std::path::Path, write: bool) -> Result
     let local_only = mine.iter().filter(|t| t.verdict.as_deref() == Some("term") && !t.cloud_ok).count();
     let titles = shelf_server::cards::Titles::load(cache_dir);
     let unchecked = shelf_server::cards::candidates(&pool).filter(|t| !titles.titles.contains_key(&t.key)).count();
+    let unwritten = titles.titles.values().filter(|x| x.keep && !x.written).count();
     // one card per concept: titles sharing a name or an acronym (`SSIM` / `Structural Similarity
     // Index Measure (SSIM)`) are one card under the fullest title; none the KB already has
     let have: std::collections::HashSet<String> = known_cards(&home).iter().flat_map(|k| std::iter::once(&k.title).chain(k.aliases.iter())).flat_map(|x| title_keys(x)).collect();
     let picked: Vec<(&lore_catalog::terms::Term, &shelf_server::cards::Titled)> =
-        shelf_server::cards::candidates(&pool).filter_map(|t| titles.titles.get(&t.key).filter(|x| x.keep && !x.title.contains(" / ")).map(|x| (t, x))).filter(|(_, x)| !title_keys(&x.title).iter().any(|k| have.contains(k))).collect();
+        shelf_server::cards::candidates(&pool).filter_map(|t| titles.titles.get(&t.key).filter(|x| x.keep && x.written && !x.title.contains(" / ")).map(|x| (t, x))).filter(|(_, x)| !title_keys(&x.title).iter().any(|k| have.contains(k))).collect();
+    let cards = merge_cards(&picked);
+    let status = format!("全懂資料夾裡的候選詞 {}：可做成已懂的卡 {} 張（已去重、略過知識庫已有的）；Claude 還沒確認 {unchecked}，還沒寫內容 {unwritten}，模型還沒分類 {waiting}，只出現在非論文檔案而不送雲端的術語 {local_only}", mine.len(), cards.len());
+    if !write {
+        // LORESHELF_LIST=1: the titles, one per line
+        if std::env::var_os("LORESHELF_LIST").is_some() {
+            for c in cards.values() {
+                println!("{}", c.0);
+            }
+        }
+        return Ok(format!("{status}；加 --write 才會寫進知識庫"));
+    }
+    let mut made = 0;
+    for (title, domains, summary, body) in cards.values() {
+        let card = serde_json::json!({ "title": title, "domains": domains, "summary": summary, "body": body, "initial_state": "known", "via": "loreshelf" });
+        kb_create(&home, &card)?;
+        made += 1;
+    }
+    Ok(format!("做成已懂的知識卡 {made} 張\n{status}"))
+}
+
+/// The fields the author is learning (`private/shared/learning.json`: `{"learning": [...]}`, the
+/// model's field names, matched as parts): their terms become 不熟 (learning) cards.
+fn learning_fields(home: &lore_home::Home) -> Vec<String> {
+    let p = home.shared_file("learning.json");
+    let t: serde_json::Value = p.and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    t.get("learning").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).filter(|x| !x.trim().is_empty()).collect()).unwrap_or_default()
+}
+
+/// Cards for the terms of the fields he is learning (author, 2026-11-14): titles and words by
+/// Claude for terms found in papers and slide decks, by the local model for the rest; written as
+/// 不熟 (learning) cards, which NeonDeck's 知識卡輪播 shows. None the KB already has.
+fn study_cards(cache_dir: &std::path::Path, write: bool) -> Result<String, String> {
+    let home = lore_home::Home::discover(&std::env::current_dir().unwrap_or_default());
+    let fields = learning_fields(&home);
+    if fields.is_empty() {
+        return Err("先在 private/shared/learning.json 寫 {\"learning\": [\"領域\", …]}".into());
+    }
+    let pool = lore_catalog::terms::Pool::load(cache_dir).ok_or("還沒有候選詞；先執行 loreshelf-cli terms")?;
+    let keys: std::collections::HashSet<String> = pool
+        .terms
+        .iter()
+        .filter(|t| !t.mastered && t.verdict.as_deref() == Some("term") && t.field.as_deref().is_some_and(|f| fields.iter().any(|x| f.contains(x.as_str()))))
+        .map(|t| t.key.clone())
+        .collect();
+    let llm = shelf_server::llm::Llm::new(home.clone());
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let cloud = llm.provider(shelf_server::llm::TASK_CARD_TITLES).await?;
+        let local = llm.provider(shelf_server::llm::TASK_CARD_LOCAL).await?;
+        let tick = |d: usize, t: usize| eprintln!("{d} / {t}");
+        shelf_server::cards::run_for(cache_dir, &*cloud, Some(&keys), false, tick).await?;
+        shelf_server::cards::run_for(cache_dir, &*local, Some(&keys), true, tick).await?;
+        shelf_server::cards::write_content_for(cache_dir, &*cloud, Some(&keys), false, tick).await?;
+        shelf_server::cards::write_content_for(cache_dir, &*local, Some(&keys), true, tick).await
+    })?;
+    let titles = shelf_server::cards::Titles::load(cache_dir);
+    let have: std::collections::HashSet<String> = known_cards(&home).iter().flat_map(|k| std::iter::once(&k.title).chain(k.aliases.iter())).flat_map(|x| title_keys(x)).collect();
+    let picked: Vec<(&lore_catalog::terms::Term, &shelf_server::cards::Titled)> = pool
+        .terms
+        .iter()
+        .filter(|t| keys.contains(&t.key))
+        .filter_map(|t| titles.titles.get(&t.key).filter(|x| x.keep && x.written && !x.title.contains(" / ")).map(|x| (t, x)))
+        .filter(|(_, x)| !title_keys(&x.title).iter().any(|k| have.contains(k)))
+        .collect();
+    let cards = merge_cards(&picked);
+    if !write {
+        if std::env::var_os("LORESHELF_LIST").is_some() {
+            for c in cards.values() {
+                println!("{}｜{}", c.0, c.2);
+            }
+        }
+        return Ok(format!("{} 的詞 {}：可做成不熟的卡 {} 張；加 --write 才會寫進知識庫", fields.join("、"), keys.len(), cards.len()));
+    }
+    let mut made = 0;
+    for (title, domains, summary, body) in cards.values() {
+        let card = serde_json::json!({ "title": title, "domains": domains, "summary": summary, "body": body, "initial_state": "learning", "via": "loreshelf" });
+        kb_create(&home, &card)?;
+        made += 1;
+    }
+    Ok(format!("做成不熟的知識卡 {made} 張（NeonDeck 的知識卡輪播會挑它們）"))
+}
+
+/// One card per concept: titles sharing a name or an acronym (`SSIM` / `Structural Similarity
+/// Index Measure (SSIM)`) are one card under the fullest title, with that title's words.
+/// (title, domains, summary, body)
+fn merge_cards(picked: &[(&lore_catalog::terms::Term, &shelf_server::cards::Titled)]) -> std::collections::BTreeMap<usize, (String, Vec<String>, String, String)> {
     let mut group: Vec<usize> = (0..picked.len()).collect();
     fn root(g: &mut [usize], i: usize) -> usize {
         let mut r = i;
@@ -196,44 +329,24 @@ fn known_cards_from_mastered(cache_dir: &std::path::Path, write: bool) -> Result
             }
         }
     }
-    let mut cards: std::collections::BTreeMap<usize, (String, Vec<String>, Vec<String>)> = std::collections::BTreeMap::new();
+    // (title, domains, summary, body): the card's own words, from its fullest title's answer
+    let mut cards: std::collections::BTreeMap<usize, (String, Vec<String>, String, String)> = std::collections::BTreeMap::new();
     for (i, (t, x)) in picked.iter().enumerate() {
-        let c = cards.entry(root(&mut group, i)).or_insert_with(|| (x.title.clone(), Vec::new(), Vec::new()));
+        let c = cards.entry(root(&mut group, i)).or_insert_with(|| (x.title.clone(), Vec::new(), x.summary.clone(), x.body.clone()));
         // the fullest title: one with its acronym, then the longest
         let score = |s: &str| (s.contains('('), s.len());
         if score(&x.title) > score(&c.0) {
             c.0 = x.title.clone();
+            c.2 = x.summary.clone();
+            c.3 = x.body.clone();
         }
         for d in std::iter::once(&x.field).filter(|f| !f.is_empty()).chain(t.domains.iter()) {
             if !c.1.contains(d) {
                 c.1.push(d.clone());
             }
         }
-        // sentences from papers and slide decks only (the KnowledgeBase is a repo with a remote)
-        for e in t.examples.iter().filter(|e| e.cloud_ok).map(|e| e.text.trim()).filter(|e| e.chars().count() >= 40) {
-            if c.2.len() < 3 && !c.2.iter().any(|x| x == e) {
-                c.2.push(e.to_string());
-            }
-        }
     }
-    let status = format!("全懂資料夾裡的候選詞 {}：可做成已懂的卡 {} 張（已去重、略過知識庫已有的）；Claude 還沒確認 {unchecked}，模型還沒分類 {waiting}，只出現在非論文檔案而不送雲端的術語 {local_only}", mine.len(), cards.len());
-    if !write {
-        // LORESHELF_LIST=1: the titles, one per line
-        if std::env::var_os("LORESHELF_LIST").is_some() {
-            for c in cards.values() {
-                println!("{}", c.0);
-            }
-        }
-        return Ok(format!("{status}；加 --write 才會寫進知識庫"));
-    }
-    let mut made = 0;
-    for (title, domains, examples) in cards.values() {
-        let body = examples.iter().map(|e| format!("> {e}")).collect::<Vec<_>>().join("\n\n");
-        let card = serde_json::json!({ "title": title, "domains": domains, "body": body, "initial_state": "known", "via": "loreshelf" });
-        kb_create(&home, &card)?;
-        made += 1;
-    }
-    Ok(format!("做成已懂的知識卡 {made} 張\n{status}"))
+    cards
 }
 
 /// The names a card title goes by: the title without its brackets, and what is in them
@@ -261,9 +374,96 @@ fn title_keys(title: &str) -> Vec<String> {
     out
 }
 
+/// One call to KnowledgeBase's API while it runs (ports.json `kb`): (status, body); `None` = not running.
+fn kb_api(method: &str, path: &str, body: Option<&serde_json::Value>) -> Option<Result<(u16, serde_json::Value), String>> {
+    let port = lore_home::ports::live().get("kb").copied()?;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    use std::io::{Read, Write};
+    let run = || -> Result<(u16, serde_json::Value), String> {
+        let mut s = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?;
+        let b = body.map(|b| b.to_string()).unwrap_or_default();
+        let req = format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}", b.len());
+        s.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+        let mut out = String::new();
+        let _ = s.read_to_string(&mut out);
+        let status = out.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
+        let json = out.split_once("\r\n\r\n").and_then(|(_, b)| serde_json::from_str(b.trim()).ok()).unwrap_or(serde_json::Value::Null);
+        Ok((status, json))
+    };
+    Some(run())
+}
+
+/// The cards LoreShelf made before they had words of their own (2026-11-13: quotes as the body,
+/// no summary) get their summary and body, or go to the KnowledgeBase's trash when the content
+/// pass found them a field basic. Only through KnowledgeBase's API (it must be open).
+fn refill_cards(cache_dir: &std::path::Path, write: bool) -> Result<String, String> {
+    let home = lore_home::Home::discover(&std::env::current_dir().unwrap_or_default());
+    let dir = home.app_dir("KnowledgeBase").map(|d| d.join("nodes")).filter(|d| d.is_dir()).ok_or("找不到知識庫（private/KnowledgeBase）")?;
+    let titles = shelf_server::cards::Titles::load(cache_dir);
+    let by_key: std::collections::HashMap<String, &shelf_server::cards::Titled> = titles.titles.values().filter(|x| x.written && !x.title.is_empty()).flat_map(|x| title_keys(&x.title).into_iter().map(move |k| (k, x))).collect();
+    // dropped titles keep no title: find them by the term key
+    let dropped: std::collections::HashSet<String> = titles.titles.iter().filter(|(_, x)| x.written && !x.keep).map(|(k, _)| k.to_lowercase()).collect();
+    let (mut fill, mut drop, mut left) = (vec![], vec![], 0);
+    for e in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(e.path()).unwrap_or_default()) else { continue };
+        let (summary, body, title) = (v["summary"].as_str().unwrap_or(""), v["body"].as_str().unwrap_or(""), v["title"].as_str().unwrap_or(""));
+        // only cards LoreShelf made (their learning log says so) that still have no words of their own
+        let id = v["id"].as_str().unwrap_or("");
+        if !summary.trim().is_empty() || !(body.trim().is_empty() || body.trim_start().starts_with("> ")) || !made_by_loreshelf(&dir, id) {
+            continue;
+        }
+        let keys = title_keys(title);
+        match keys.iter().find_map(|k| by_key.get(k)) {
+            Some(x) if x.keep => fill.push((v["id"].as_str().unwrap_or("").to_string(), v["revision"].as_u64(), title.to_string(), x.summary.clone(), x.body.clone())),
+            Some(_) => drop.push((v["id"].as_str().unwrap_or("").to_string(), title.to_string())),
+            None if keys.iter().any(|k| dropped.contains(k)) => drop.push((v["id"].as_str().unwrap_or("").to_string(), title.to_string())),
+            None => left += 1,
+        }
+    }
+    let mut out = format!("要補內容 {} 張、移到垃圾桶 {} 張（{}）、還沒有內容可補 {left} 張", fill.len(), drop.len(), drop.iter().map(|d| d.1.as_str()).collect::<Vec<_>>().join("、"));
+    if !write {
+        return Ok(format!("{out}；加 --write 才會改"));
+    }
+    let (mut done, mut trashed) = (0, 0);
+    for (id, rev, title, summary, body) in &fill {
+        match kb_api("PUT", &format!("/api/nodes/{id}"), Some(&serde_json::json!({ "revision": rev, "summary": summary, "body": body }))).ok_or("KnowledgeBase 沒開：打開它再跑")? {
+            Ok((200, _)) => done += 1,
+            Ok((s, v)) => eprintln!("〈{title}〉沒改：{s} {}", v["error"].as_str().unwrap_or("")),
+            Err(e) => eprintln!("〈{title}〉沒改：{e}"),
+        }
+    }
+    for (id, title) in &drop {
+        match kb_api("DELETE", &format!("/api/nodes/{id}"), None).ok_or("KnowledgeBase 沒開：打開它再跑")? {
+            Ok((200, _)) => trashed += 1,
+            Ok((s, v)) => eprintln!("〈{title}〉沒移：{s} {}", v["error"].as_str().unwrap_or("")),
+            Err(e) => eprintln!("〈{title}〉沒移：{e}"),
+        }
+    }
+    out = format!("補好 {done} 張，移到垃圾桶 {trashed} 張（可以從 KnowledgeBase 的垃圾桶救回）");
+    Ok(out)
+}
+
+/// Did LoreShelf make this card? (`progress/<member>/<id>.json`: `{event: created, via: loreshelf}`)
+fn made_by_loreshelf(nodes: &std::path::Path, id: &str) -> bool {
+    let Some(progress) = nodes.parent().map(|d| d.join("progress")) else { return false };
+    std::fs::read_dir(progress).into_iter().flatten().flatten().any(|m| {
+        std::fs::read(m.path().join(format!("{id}.json"))).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()).is_some_and(|v| {
+            v["log"].as_array().is_some_and(|l| l.iter().any(|e| e["event"] == "created" && e["via"] == "loreshelf"))
+        })
+    })
+}
+
 /// One card into the KnowledgeBase: its API while it runs (ports.json `kb`), else kb-core on its folder.
 fn kb_create(home: &lore_home::Home, card: &serde_json::Value) -> Result<(), String> {
     if let Some(port) = lore_home::ports::live().get("kb").copied() {
+        // every write names its space: the member's personal one (else the first)
+        let mut card = card.clone();
+        if card.get("space").is_none() {
+            let (_, v) = kb_api("GET", "/api/spaces", None).ok_or("KnowledgeBase 沒開")??;
+            let spaces = v["spaces"].as_array().cloned().unwrap_or_default();
+            let sp = spaces.iter().find(|x| x["kind"] == "personal" && x["is_member"] == true).or(spaces.first()).and_then(|x| x["id"].as_str()).ok_or("知識庫沒有 space")?;
+            card["space"] = serde_json::json!(sp);
+        }
         let body = card.to_string();
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
         use std::io::{Read, Write};
@@ -282,11 +482,13 @@ fn kb_create(home: &lore_home::Home, card: &serde_json::Value) -> Result<(), Str
     let space = kb.spaces_info().map_err(|e| e.to_string())?.first().map(|s| s.id.clone()).ok_or("知識庫沒有 space")?;
     let fields = kb_core::NodeFields {
         title: card["title"].as_str().map(str::to_string),
+        summary: card["summary"].as_str().map(str::to_string),
         domains: card["domains"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()),
         body: card["body"].as_str().map(str::to_string),
         ..Default::default()
     };
-    kb.create_as(&space, fields, Some("loreshelf"), kb_core::State::Known).map_err(|e| e.to_string())?;
+    let state = if card["initial_state"] == "learning" { kb_core::State::Learning } else { kb_core::State::Known };
+    kb.create_as(&space, fields, Some("loreshelf"), state).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -320,6 +522,169 @@ fn classify(cache_dir: &std::path::Path, max: Option<usize>) -> Result<String, S
         "這次問了 {}，答了 {}（{} 批沒有結果）；全部：術語 {}、一般詞 {}、名稱 {}、雜訊 {}，還沒分 {}；{} 秒\n{added}",
         r.asked, r.answered, r.failed_batches, count("term"), count("general"), count("name"), count("junk"), r.left, t0.elapsed().as_secs()
     ))
+}
+
+/// 歸位 phase A: the plan (settings made once from the home folder), a summary, or one page of rows.
+fn plan(catalog_dir: &std::path::Path, cache_dir: &std::path::Path, source: Option<PathBuf>, page: usize) -> Result<String, String> {
+    use shelf_server::filing::{self, Settings};
+    let settings = match Settings::load(catalog_dir) {
+        Some(s) => s,
+        None => {
+            let home = std::env::var_os("HOME").map(PathBuf::from).ok_or("找不到家目錄")?;
+            let s = Settings::default_for(&home);
+            let b = serde_json::to_vec_pretty(&s).map_err(|e| e.to_string())?;
+            store::write_atomic(&catalog_dir.join(filing::SETTINGS), &b).map_err(|e| e.to_string())?;
+            s
+        }
+    };
+    let mut idx = shelf_server::index::Index::load(catalog_dir, &lore_catalog::extract::Extract::dir(cache_dir));
+    // the catalogue remembers where a file was seen; only where it is now can move
+    for e in &mut idx.entries {
+        e.paths.retain(|p| std::fs::symlink_metadata(p).is_ok());
+    }
+    let made = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs().to_string()).unwrap_or_default();
+    let mut p = filing::plan(&idx.entries, &settings, &made);
+    shelf_server::filing_ai::apply(&mut p, &shelf_server::filing_ai::Guesses::load(catalog_dir), &settings.topics);
+    let b = serde_json::to_vec_pretty(&p).map_err(|e| e.to_string())?;
+    store::write_atomic(&catalog_dir.join(filing::PLAN), &b).map_err(|e| e.to_string())?;
+    if let Some(src) = source {
+        let rows: Vec<&filing::Row> = p.rows.iter().filter(|r| std::path::Path::new(&r.from).starts_with(&src)).collect();
+        let pages = rows.len().div_ceil(20).max(1);
+        let mut out = format!("{}：{} 列，第 {page} / {pages} 頁\n", src.display(), rows.len());
+        for r in rows.iter().skip((page.max(1) - 1) * 20).take(20) {
+            let rel = std::path::Path::new(&r.from).strip_prefix(&src).map(|x| x.display().to_string()).unwrap_or_else(|_| r.from.clone());
+            let what = if r.files > 1 { format!("{rel}/（{} 個檔）", r.files) } else { rel };
+            let to = r.target.clone().unwrap_or_else(|| "（不搬：規則判斷不了）".into());
+            let flags = if r.flags.is_empty() { String::new() } else { format!(" [{}]", r.flags.join(", ")) };
+            out += &format!("  {what}  →  {to}  ·{}{flags}\n", r.reason);
+        }
+        return Ok(out);
+    }
+    let mut out = format!("歸位計畫（只是計畫，沒有搬任何東西）：根資料夾 {}；不動的資料夾 {} 個（{}）\n", settings.root.display(), settings.keep.len(), filing::SETTINGS);
+    out += "來源 · 列 · 檔案 · 判斷不了 · 要定主題 · 要英文名\n";
+    for (s, n) in filing::summary(&p, &settings.sources) {
+        out += &format!("  {s} · {} · {} · {} · {} · {}\n", n[0], n[1], n[2], n[3], n[4]);
+    }
+    let mut tops: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for r in &p.rows {
+        let t = r.target.as_deref().map(|t| t.split('/').take(if t.starts_with("Research") { 3 } else { 2 }).collect::<Vec<_>>().join("/")).unwrap_or_else(|| "（判斷不了）".into());
+        *tops.entry(t).or_default() += r.files;
+    }
+    out += "去向（檔案數）：\n";
+    for (t, n) in tops {
+        out += &format!("  {t}: {n}\n");
+    }
+    Ok(out)
+}
+
+/// 歸位 phase B (from the command line): the rows of the saved plan under `src` that the rules
+/// are sure of, moved as one batch (rename only) and journaled for `undo`.
+fn move_certain(catalog_dir: &std::path::Path, src: &std::path::Path, dry: bool, model: bool) -> Result<String, String> {
+    use shelf_server::filing::{self, Plan};
+    let b = std::fs::read(catalog_dir.join(filing::PLAN)).map_err(|_| "還沒有計畫；先執行 loreshelf-cli plan")?;
+    let p: Plan = serde_json::from_slice(&b).map_err(|e| e.to_string())?;
+    let rows: Vec<filing::Row> = p.rows.into_iter().filter(|r| std::path::Path::new(&r.from).starts_with(src) && if model { r.flags.iter().any(|f| f == "by-model") && r.target.is_some() } else { filing::certain(r) }).collect();
+    let mut out = String::new();
+    if dry {
+        for r in &rows {
+            let to = filing::dest(r, &p.root).map(|d| d.display().to_string()).unwrap_or_default();
+            out += &format!("  {}  →  {to}\n", r.from);
+        }
+        return Ok(format!("{out}{} {} 列（{} 個檔）；沒有搬", if model { "模型放的" } else { "確定的" }, rows.len(), rows.iter().map(|r| r.files).sum::<usize>()));
+    }
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs().to_string()).unwrap_or_default();
+    let (batch, skipped) = filing::apply(&rows, &p.root, &catalog_dir.join(filing::JOURNAL), &at);
+    for m in &batch.moves {
+        out += &format!("  {}  →  {}\n", m.from, m.to);
+    }
+    for s in &skipped {
+        out += &format!("  沒搬：{s}\n");
+    }
+    Ok(format!("{out}搬了 {} 列，沒搬 {}（loreshelf-cli undo 可以整批復原）", batch.moves.len(), skipped.len()))
+}
+
+/// 歸位 phase D: the files under `src` (default: every source) the rules left open, asked of the
+/// models — a paper or deck's text alone to Claude, everything else to the local model — then the
+/// plan again with the answers.
+fn guess(catalog_dir: &std::path::Path, cache_dir: &std::path::Path, src: Option<PathBuf>) -> Result<String, String> {
+    use shelf_server::filing::{self, Plan, OPEN};
+    plan(catalog_dir, cache_dir, None, 1)?;
+    let p: Plan = serde_json::from_slice(&std::fs::read(catalog_dir.join(filing::PLAN)).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let idx = shelf_server::index::Index::load(catalog_dir, &lore_catalog::extract::Extract::dir(cache_dir));
+    let by_id: std::collections::HashMap<&str, &shelf_server::index::Entry> = idx.entries.iter().map(|e| (e.item.id.as_str(), e)).collect();
+    let ft_dir = lore_catalog::fulltext::FullText::dir(cache_dir);
+    let mut asks = Vec::new();
+    for r in &p.rows {
+        let open = r.target.as_deref().is_none_or(|t| t.contains(OPEN));
+        if !open || r.id.is_empty() || r.flags.iter().any(|f| f == "by-model") || src.as_ref().is_some_and(|s| !std::path::Path::new(&r.from).starts_with(s)) {
+            continue;
+        }
+        let Some(e) = by_id.get(r.id.as_str()) else { continue };
+        if let Some(a) = ask_of(e, &ft_dir) {
+            asks.push(a);
+        }
+    }
+    let (asked, answered) = ask_models(catalog_dir, &asks)?;
+    let summary = plan(catalog_dir, cache_dir, None, 1)?;
+    Ok(format!("這次問了 {asked}，答了 {answered}\n{}", summary.lines().take(5).collect::<Vec<_>>().join("\n")))
+}
+
+/// What a file is asked with: never a sensitive one or a secret; its first text (the whole text's
+/// start when the first pages say little); to the cloud only a paper or deck with enough text.
+fn ask_of(e: &shelf_server::index::Entry, ft_dir: &std::path::Path) -> Option<shelf_server::filing_ai::Ask> {
+    if e.item.sensitive || lore_catalog::category::secret_name(&e.item.kind, &e.item.name) {
+        return None;
+    }
+    let mut text = e.text.clone();
+    if text.trim().chars().count() < 200 {
+        if let Some(ft) = lore_catalog::fulltext::FullText::load(ft_dir, &e.item.id) {
+            text = ft.joined().chars().take(3000).collect();
+        }
+    }
+    let cloud = e.item.cloud_ok && text.trim().chars().count() >= 200;
+    Some(shelf_server::filing_ai::Ask { id: e.item.id.clone(), name: e.item.name.clone(), text, cloud })
+}
+
+/// Labels for every catalogued file with something to read (or a project / dataset name), the
+/// same two routes as `guess`; the answers also serve the plan.
+fn labels(catalog_dir: &std::path::Path, cache_dir: &std::path::Path, count_only: bool) -> Result<String, String> {
+    let idx = shelf_server::index::Index::load(catalog_dir, &lore_catalog::extract::Extract::dir(cache_dir));
+    let ft_dir = lore_catalog::fulltext::FullText::dir(cache_dir);
+    let have = shelf_server::filing_ai::Guesses::load(catalog_dir);
+    let asks: Vec<_> = idx
+        .entries
+        .iter()
+        .filter(|e| !have.guesses.contains_key(&e.item.id))
+        .filter(|e| matches!(e.item.kind.as_str(), "pdf" | "document" | "slides" | "text" | "latex" | "spreadsheet" | "code" | "project" | "dataset" | "ebook"))
+        .filter_map(|e| ask_of(e, &ft_dir))
+        .collect();
+    let n_cloud = asks.iter().filter(|a| a.cloud).count();
+    if count_only {
+        return Ok(format!("還沒有標籤的 {}：Claude（只送內容）{n_cloud}、本機 {}", asks.len(), asks.len() - n_cloud));
+    }
+    let (asked, answered) = ask_models(catalog_dir, &asks)?;
+    Ok(format!("這次問了 {asked}，答了 {answered}"))
+}
+
+/// Papers and decks to Claude (their text only), the rest to the local model.
+fn ask_models(catalog_dir: &std::path::Path, asks: &[shelf_server::filing_ai::Ask]) -> Result<(usize, usize), String> {
+    use shelf_server::filing_ai;
+    let home = lore_home::Home::discover(&std::env::current_dir().unwrap_or_default());
+    let llm = shelf_server::llm::Llm::new(home);
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    let n_cloud = asks.iter().filter(|a| a.cloud).count();
+    eprintln!("要問 {}：Claude（只送內容）{n_cloud}、本機 {}", asks.len(), asks.len() - n_cloud);
+    rt.block_on(async {
+        let cloud = match llm.provider(shelf_server::llm::TASK_FILING_PAPERS).await {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!("Claude 不能用（{e}），論文也交給本機模型");
+                None
+            }
+        };
+        let local = llm.provider(shelf_server::llm::TASK_FILING_FILES).await?;
+        filing_ai::run(catalog_dir, asks, cloud.as_deref(), &*local, |d, t| eprintln!("{d} / {t}")).await
+    })
 }
 
 /// The ignore list every reader of papers uses (LoreReader's 「這不是術語」, also read by
@@ -372,6 +737,30 @@ fn ignore_words(home: &lore_home::Home, cache_dir: &std::path::Path, write: bool
     out.push('\n');
     store::write_atomic(&path, out.as_bytes()).map_err(|e| e.to_string())?;
     Ok(format!("「這不是術語」清單加了 {} 個一般詞與名稱（標 {}）", lines.len(), shelf_server::classify::IGNORE_TAG))
+}
+
+/// The words the model called general under the old rule (field basics counted as general) that
+/// are not everyday words (author, 2026-11-14: only what an ordinary middle schooler knows): asked
+/// again by `classify`, and taken off the shared ignore list meanwhile (only `# LoreShelf` lines).
+fn recheck_general(home: &lore_home::Home, cache_dir: &std::path::Path, write: bool) -> Result<String, String> {
+    let mut pool = lore_catalog::terms::Pool::load(cache_dir).ok_or("還沒有候選詞；先執行 loreshelf-cli terms")?;
+    let path = ignore_file(home).ok_or("找不到 private/LoreReader（從 LoreForge 資料夾裡執行）")?;
+    let filters = lore_words::Filters::default();
+    let again: std::collections::HashSet<String> = pool.terms.iter().filter(|t| t.verdict.as_deref() == Some("general") && !filters.is_everyday(&t.label)).map(|t| lore_words::phrase_key(&t.label)).collect();
+    let cur = std::fs::read_to_string(&path).unwrap_or_default();
+    let tag = shelf_server::classify::IGNORE_TAG;
+    let kept: Vec<&str> = cur.lines().filter(|l| !(l.contains(tag) && again.contains(&lore_words::phrase_key(l.split('#').next().unwrap_or("").trim())))).collect();
+    let removed = cur.lines().count() - kept.len();
+    if !write {
+        return Ok(format!("要重新判斷的詞 {}（清單上拿掉 {removed} 行）；加 --write 才會改", again.len()));
+    }
+    for t in pool.terms.iter_mut().filter(|t| t.verdict.as_deref() == Some("general") && again.contains(&lore_words::phrase_key(&t.label))) {
+        t.verdict = None;
+        t.field = None;
+    }
+    pool.save(cache_dir).map_err(|e| e.to_string())?;
+    store::write_atomic(&path, (kept.join("\n") + "\n").as_bytes()).map_err(|e| e.to_string())?;
+    Ok(format!("{} 個詞等 classify 重新判斷；清單拿掉 {removed} 行", again.len()))
 }
 
 /// The KnowledgeBase's cards (titles, aliases, domains) and the member's state of each, read from

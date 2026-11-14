@@ -23,3 +23,29 @@ class = "tidy"
 needs = { json = true, context = 16000 }
 default = "claude:haiku"
 max_tokens = 8000
+
+# 歸位 (author, 2026-11-13): a paper or slide deck the rules cannot place goes to Claude Haiku with
+# its first text only (no file name, path or folder); every other file stays on the machine.
+[task.shelf-filing-papers]
+label = "歸位：論文主題"
+class = "tidy"
+needs = { json = true, context = 16000 }
+default = "claude:haiku"
+max_tokens = 4000
+
+[task.shelf-filing-files]
+label = "歸位：其他檔案"
+class = "tidy"
+needs = { json = true, context = 16000 }
+default = "local:current"
+offline = true
+max_tokens = 3000
+
+# Cards for terms found only in the author's other files (notes, homework): written on the machine.
+[task.shelf-card-local]
+label = "卡片內容（本機）"
+class = "tidy"
+needs = { json = true, context = 16000 }
+default = "local:current"
+offline = true
+max_tokens = 8000

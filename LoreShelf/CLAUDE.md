@@ -20,7 +20,16 @@ cargo run --release -p loreshelf-cli -- terms             # the term pool from t
 cargo run --release -p loreshelf-cli -- mastered <dir>...  # folders he knows all of (catalog `mastered.json`, local only)
 cargo run --release -p loreshelf-cli -- known-cards [--write]  # their terms (model verdict `term`) → known KB cards (API while KB runs, else kb-core); no file names in cards
 cargo run --release -p loreshelf-cli -- classify [N]      # the local model sorts the pool; per batch, resumable, background priority (hours); then ignore-words --write
+cargo run --release -p loreshelf-cli -- plan [<source> [page]]  # 歸位 phase A: where each file / folder should go (`<catalog>/filing-plan.json`); nothing moves
+cargo run --release -p loreshelf-cli -- move <source> [--dry]  # 歸位 phase B (CLI): move the rows the rules are sure of (`filing::certain`), rename only, journaled
+cargo run --release -p loreshelf-cli -- undo  # move the last batch back (`<catalog>/filing-journal.jsonl`)
+cargo run --release -p loreshelf-cli -- guess [<source>]  # 歸位 phase D: rows the rules left open → Haiku (paper / deck text only) or the local model (the rest); `<catalog>/filing-ai.json`
+cargo run --release -p loreshelf-cli -- move <source> --model [--dry]  # move the rows the model placed (only after the author looked at the --dry list)
 cargo run --release -p loreshelf-cli -- ignore-words [--write]  # general words + names → private/LoreReader/ignore-words.txt (「這不是術語」, every paper reader; lines tagged `# LoreShelf`)
+cargo run --release -p loreshelf-cli -- card-content      # Claude Haiku writes each kept card's zh-TW summary + 2–4 sentence body (a card never gets PDF quotes)
+cargo run --release -p loreshelf-cli -- known-cards --refill [--write]  # cards LoreShelf made with quotes only (progress log `via: loreshelf`) get those words, through KnowledgeBase's API
+cargo run --release -p loreshelf-cli -- study-cards [--write]  # terms of the fields in private/shared/learning.json → 不熟 (learning) cards (NeonDeck's 知識卡輪播); paper terms by Claude, the rest by the local model
+cargo run --release -p loreshelf-cli -- ignore-words --recheck [--write]  # words called general under the old rule that are not everyday: off the ignore list, asked again by classify
 cargo run --release -p loreshelf-cli -- card-titles       # Claude Haiku (subscription CLI, else ANTHROPIC_API_KEY; never the keychain) checks the mastered terms once and titles the cards; paper / slide terms and sentences only
 LORESHELF_HOME=/tmp/shelf LOREFORGE_CACHE=/tmp/cache cargo run -p loreshelf-cli -- scan <dir>   # throwaway catalog
 ```
@@ -37,7 +46,10 @@ LORESHELF_HOME=/tmp/shelf LOREFORGE_CACHE=/tmp/cache cargo run -p loreshelf-cli 
   (names only, no paths), `GET /api/files/{id}` (+ `paths`, generated `description`),
   `GET /api/neighbors/{id}?k=12&layers=2` (`index.rs`: name tokens IDF cosine, time kernel,
   kind/ext, download host, shared folder; `parts` = each factor's share), `POST /api/open/{id}`
-  (an `.app` is revealed, never launched), `POST /api/reveal/{id}` (`open -R`). `GET /api/thumb/{id}?s=512`
+  (`openwith.rs`, one table `BY_EXT`: PDF → LoreReader, .pptx → SlideComposer, .docx / .tex / a LaTeX
+  project's `main.tex` → PaperComposer, `open -a <App>`; the app not in `/Applications` (`Runner::installed`)
+  or any other type (.key / .ppt / .doc: no Lore app reads them) → the system default; datasets as before;
+  an `.app` is revealed, never launched), `POST /api/reveal/{id}` (`open -R`). `GET /api/thumb/{id}?s=512`
   (`thumbs.rs`: QuickLook `qlmanage -t` through the `Runner`, 5 s timeout, 2 at a time, cache
   `<cache>/LoreForge/shelf/thumbs/<id>-<s>.png` + `.none` markers, LRU 200 MB; never app bundles,
   datasets, symlinks or dataless files; a project = its `main.pdf`; 404 = kind icon),
@@ -80,12 +92,29 @@ LORESHELF_HOME=/tmp/shelf LOREFORGE_CACHE=/tmp/cache cargo run -p loreshelf-cli 
   `cloud_ok` (a paper or a slide deck, never a sensitive item). Model calls (`llm.rs`, `tasks.toml`):
   `shelf-classify-terms`, local only, background priority (`classify.rs`: batches of 20, skipped keys
   asked again at once, saved per batch, mastered terms first, then terms next to known cards;
-  `settle` = a single everyday word (`lore_words::Filters::is_everyday`: general, familiar or TERMLIKE)
-  is never a term; `ignore_lines` = general words and names for the shared ignore list). The pool
+  `settle` = a single everyday word (`lore_words::Filters::is_everyday`: general, function or familiar, never TERMLIKE;
+  author 2026-11-14: a basic word is one an ordinary middle schooler knows, a technical sense is a term) is never a term; `ignore_lines` = general words and names for the shared ignore list). The pool
   never takes the ignore list's words or my-vocab's. `shelf-card-titles` = Claude Haiku (`cards.rs`):
   keep / title / field per mastered `term` with `cloud_ok`, answers in `<cache>/card-titles.json`
   (beside the pool, so a running classify never drops them); `known-cards` makes one card per title,
   none the KB already has.
+  歸位 (`filing.rs`, phase A, plan only): settings `<catalog>/filing.json` (`root` = `~/Documents/Shelf`,
+  `sources`, `keep` = folders apps use); rows = a folder whose contents agree (course folders under
+  `courses/[<school>/]<term>/<course>`, a research folder = a topic of its own `Research/<path below the
+  opened container>`, a tool's fonts → `Software/<name>`), else its parts; projects / datasets / packages
+  one row; personal papers by name (`PERSONAL` words, never a paper) → `Personal/{IDs, Finance, Medical,
+  Contracts}`, the pictures beside ID scans with them, and never inside another folder's move; what
+  rules cannot place stays (never `Archive` by default); hidden files skipped; flags `need-topic`,
+  `need-name` (not plain ASCII), `sensitive`, `duplicate`. Name words (`BY_NAME`: School/{IRB, Funding, Travel, Forms}, Career,
+  Templates, Software/Manuals, Learning/Languages, Research/?/Manuscripts, Library/Books) place a file
+  only, never its folder (`Place::by_name`); `secret` names (lore-catalog `category::secret_name`) →
+  `Personal/Secrets`, never read into full text. Phase B from the CLI: `move` = `filing::certain` rows
+  (rename only, `free` name beside a taken one, journal per batch, `undo` = last batch back); the
+  plan drops paths no longer on disk. Phase D (`filing_ai.rs`): open rows → Haiku with the text alone
+  (`d1`, `d2` keys; no name / path / folder) or the local model (name + text; answer must be one of
+  `TARGETS`); topic joins an existing `Research/<Topic>` by `match_topic`, else `new-topic`; labels
+  (3–5 English) stay in `filing-ai.json` for LoreShelf's own search (no Finder tags, author
+  2026-11-13); `by-model` rows are never `certain`.
   `web/` (no build step; shared files from root paths): `app.js` = the globe (the focus at the pole of a
   wire sphere, neighbours on it as small round nodes, drag = turning it, `place` → `toVec`; canvases
   `lback` ¼ res / `lglobe` ½ res / `lbond` full res, nodes are DOM), the callouts outside the limb
@@ -116,11 +145,16 @@ LORESHELF_HOME=/tmp/shelf LOREFORGE_CACHE=/tmp/cache cargo run -p loreshelf-cli 
 
 ## Decisions
 
-- **No file moves.** Scanned folders are only read (no xattrs written, no Finder tags, no
-  renames). Placeholders and dataless iCloud files are never opened (no downloads).
+- **Files move only in a batch the author confirms** (歸位, author 2026-11-13). Scans only read
+  (no xattrs written, no Finder tags, no renames); placeholders and dataless iCloud files are never
+  opened (no downloads). Phase A (`filing.rs`, `loreshelf-cli plan`) only writes a plan; the move
+  itself (phase B: popup, 20 rows a page, select all, confirm, undo per batch; same volume = plain
+  rename, other volume = copy, check the hash, then remove) comes later. Every folder name of the
+  new tree is English.
 - **Catalog is local-only.** It holds names and paths: never in a repo with a remote, never in
-  iCloud Drive or this repo, never pushed (hook + `lore-gitsync` refusal). Nothing about a
-  file goes to a cloud model.
+  iCloud Drive or this repo, never pushed (hook + `lore-gitsync` refusal). A cloud model may
+  read the text of a paper or slide deck (`cloud_ok`), never a file name, path or folder name;
+  every other file stays with the local model.
 - **Code is public, data is not.** Tests use temp dirs and synthetic files; no real paths or file
   names in code, docs or tests. Example users `ellrin`, `daidai`.
 - Projects, macOS packages (`.app`, …) and datasets (> 500 files, ≥ 90 % one extension) are one

@@ -16,6 +16,13 @@ use lore_llm::{LlmProvider, RouteOptions, Router, TaskTable};
 pub const TASKS: &str = include_str!("../tasks.toml");
 pub const TASK_CLASSIFY: &str = "shelf-classify-terms";
 pub const TASK_CARD_TITLES: &str = "shelf-card-titles";
+/// 歸位: papers and decks (their text only) → Claude; every other file → the local model only.
+pub const TASK_FILING_PAPERS: &str = "shelf-filing-papers";
+pub const TASK_FILING_FILES: &str = "shelf-filing-files";
+/// Cards for terms found only outside papers and slide decks: the local model writes them.
+pub const TASK_CARD_LOCAL: &str = "shelf-card-local";
+/// Tasks that never leave the machine.
+const LOCAL_ONLY: [&str; 3] = [TASK_CLASSIFY, TASK_FILING_FILES, TASK_CARD_LOCAL];
 /// Short name in the shared local-model registry (and `ports.json`).
 pub const APP: &str = "ls";
 
@@ -54,11 +61,11 @@ impl Llm {
             return Ok(p.clone());
         }
         let e = self.home.as_ref().and_then(|h| h.engine()).unwrap_or_default();
-        if e.model.is_none() && task == TASK_CLASSIFY {
+        if e.model.is_none() && LOCAL_ONLY.contains(&task) {
             return Err("沒有選本機模型（private/shared/engine.toml 的 [engine] model）".into());
         }
         let mut f = StandardFactory::new(Catalog::bundled());
-        if task != TASK_CLASSIFY {
+        if !LOCAL_ONLY.contains(&task) {
             // Claude for the tasks that may use it (their tasks.toml route says which model)
             f.prefer_subscription = true;
             // the API key only from the environment: a command-line run must not stop on a keychain prompt
