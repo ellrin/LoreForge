@@ -28,7 +28,7 @@ pub const STEPS: &[(&str, &str, &str)] = &[
     ("blocks", "幾個 block", "Propose how many blocks (panels) the figure has and which stages go in each; detail as `block 1: …; block 2: …`."),
     ("focus", "重點", "Ask whether the figure is about the model (its architecture) or the process (data and training/inference flow). Options: model, process, both (say which dominates)."),
     ("detail", "細到哪裡", "Propose the level of detail for the modules: only module names; layers; layers with tensor sizes. Detail: what one block would show at that level."),
-    ("vars", "變數與方程式", "Choose which variables and equations appear in the figure (inputs, outputs, predictions, losses). Each option is one symbol: `id` (the registry id, or a new short id), `latex`, `meaning`, `registered`. Recommend at most 8; put registered ones first."),
+    ("vars", "變數與方程式", "Choose which variables and equations appear in the figure (inputs, outputs, predictions, losses). Each option is one symbol: `id` (the registry id, or a new short id), `latex` (the bare symbol, e.g. `\\hat{y}`: no `$`, no `\\in …` definition, which goes into `meaning`), `meaning`, `registered`. Recommend at most 8; put registered ones first."),
     ("io", "輸入與輸出", "For every block decided earlier, say its inputs, its outputs and what the block is (one short phrase). Use the chosen symbols by LaTeX. Fill `rows`, one per block in order; options may stay empty."),
 ];
 

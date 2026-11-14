@@ -168,7 +168,9 @@ fn text_svg(out: &mut String, tb: &TextBody, x: f64, y: f64, w: f64, h: f64, sca
                 _ => r.text.replace('$', "\\$"),
             }).collect();
             let first = p.runs.iter().find(|r| r.kind != "br");
-            let fam = first.map(|r| if r.kind == "math" { "KaTeX_Main".to_string() } else { r.look.font.clone() }).unwrap_or_default();
+            // the words' font, even when the line starts with maths ("@auc, @diff = test AUC − VA AUC" was all
+            // set in KaTeX_Main); a line of maths only is KaTeX_Main
+            let fam = p.runs.iter().find(|r| r.kind != "br" && r.kind != "math").map(|r| r.look.font.clone()).unwrap_or_else(|| "KaTeX_Main".to_string());
             let bold = p.runs.iter().any(|r| r.kind != "math" && r.look.bold);
             format!(" data-tex=\"{}\" data-size=\"{}\" data-font=\"{}\" data-color=\"#{}\"{}", esc(&src), n(*size), esc(&fam), first.map(|r| r.look.color.as_str()).unwrap_or("000000"), if bold { " data-bold=\"1\"" } else { "" })
         }).unwrap_or_default();

@@ -171,7 +171,7 @@ pub fn spec_for_prompt(spec: &Value) -> Value {
 
 pub fn request_adjust(ctx: &Context, spec: &Value, ask: &str, image: Option<Image>) -> LlmRequest {
     let user = format!(
-        "Mode: adjust. The current figure spec (data rows shortened):\n{}\n\nThe author's request: {}\n\nAnswer with `changes`: JSON pointers into the spec (\"/panels/0/yaxis/scale\", \"/size/w\", \"/set/legend.size\") and their new values; never change /data. List every change with why (Traditional Chinese).",
+        "Mode: adjust. The current figure spec (data rows shortened):\n{}\n\nThe author's request: {}\n\nAnswer with `changes`: JSON pointers into the spec (\"/panels/0/yaxis/scale\", \"/size/w\", \"/set/legend.size\") and their new values; never change /data. List every change with why (Traditional Chinese).\n\n{CONVENTIONS}",
         serde_json::to_string(&spec_for_prompt(spec)).unwrap_or_default(),
         ask.trim()
     );
@@ -299,6 +299,22 @@ fn set_pointer(root: &mut Value, path: &str, value: Value) -> Result<(), String>
     Ok(())
 }
 
+/// What an axis (`xaxis`, `yaxis`, `zaxis`) takes; anything else is silently ignored by the charts.
+pub const AXIS_KEYS: &[&str] = &["label", "unit", "min", "max", "log", "ticks", "fmt", "scale", "segments", "minor", "reverse", "rotate", "grid", "hidden", "linthresh"];
+
+/// A change into an axis that names a key the charts do not read (a model's `lim`, `range`): that key.
+fn unknown_axis_key(path: &str, value: &Value) -> Option<String> {
+    let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    let at = parts.iter().position(|p| matches!(*p, "xaxis" | "yaxis" | "zaxis"))?;
+    match parts.get(at + 1) {
+        Some(k) => (!AXIS_KEYS.contains(k)).then(|| k.to_string()),
+        None => value.as_object().and_then(|o| o.keys().find(|k| !AXIS_KEYS.contains(&k.as_str())).cloned()),
+    }
+}
+
+/// How the spec reads, for the adjust request: the names the charts know.
+const CONVENTIONS: &str = "Spec conventions: axes are physical — `xaxis` runs across, `yaxis` up. A dumbbell (`type: dumbbell`) and a horizontal bar chart (`opts.horizontal: true`) have the categories down the y axis and the values across the x axis, so a value range or a value label goes into `xaxis` there. An axis takes only: label, unit, min, max, log, ticks, fmt, scale, segments, minor, reverse, rotate, grid, hidden, linthresh (a range is `min` and `max`). Bars and dumbbells sort with `opts.sort` = \"asc\" | \"desc\" (no other sort keys). Remove a series by replacing the whole `series` array.";
+
 /// Apply the reply's changes to a copy of `spec`: never into /data or /lore_plot; the result must
 /// pass [`Spec::problems`]. Returns the new spec and what changed (before → after).
 pub fn apply_changes(spec: &Value, reply: &Value) -> Result<(Spec, Vec<Change>), String> {
@@ -311,6 +327,9 @@ pub fn apply_changes(spec: &Value, reply: &Value) -> Result<(Spec, Vec<Change>),
         }
         let before = s.pointer(&path).cloned().unwrap_or(Value::Null);
         let after = c.get("value").cloned().unwrap_or(Value::Null);
+        if let Some(bad) = unknown_axis_key(&path, &after) {
+            return Err(format!("座標軸沒有 `{bad}` 這個鍵（只有 {}）", AXIS_KEYS.join("、")));
+        }
         set_pointer(&mut s, &path, after.clone())?;
         out.push(Change { path, before, after, why: c["why"].as_str().unwrap_or("").to_string() });
     }

@@ -41,7 +41,8 @@
 .lp-sheet svg .lp-cur > rect:first-child { }
 .lp-sheet .lp-cur { outline: 1.5px dashed var(--accent-text); outline-offset: 2px; }
 .lp-empty { color: var(--muted); font-size: 14px; padding: 40px; border: 1px dashed var(--line-strong); border-radius: 10px; }
-.lp-status { border-top: 1px solid var(--line); background: var(--panel); }
+/* the host page's own .statusbar (margin, padding, sticky) never reaches the editor's */
+.lp-editor .lp-status { position: static; margin: 0; padding: 6px 16px 8px; border-top: 1px solid var(--line); background: var(--panel); }
 .lp-zoom { background: none; border: 0; color: var(--muted); font: inherit; }
 .lp-warn { color: var(--warn); overflow: hidden; text-overflow: ellipsis; }
 .lp-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }

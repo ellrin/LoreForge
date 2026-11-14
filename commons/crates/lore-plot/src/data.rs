@@ -179,8 +179,9 @@ pub fn latex(text: &str) -> Vec<Table> {
 
 /// LaTeX cell → plain text: formatting commands dropped, `\pm` kept as ±, maths unwrapped.
 fn tex_cell(s: &str) -> String {
-    let mut t = s.replace("\\pm", "±").replace("\\%", "%").replace("\\,", "").replace('~', " ").replace("\\&", "&");
-    for cmd in ["\\textbf", "\\textit", "\\emph", "\\mathbf", "\\mathrm", "\\underline", "\\textrm", "\\textsc", "\\boldsymbol", "\\text"] {
+    // \textminus and \ensuremath{-} (what lore-notation's Unicode → LaTeX writes for "−") are a minus
+    let mut t = s.replace("\\textminus ", "-").replace("\\textminus", "-").replace("\\pm", "±").replace("\\%", "%").replace("\\,", "").replace('~', " ").replace("\\&", "&");
+    for cmd in ["\\textbf", "\\textit", "\\emph", "\\mathbf", "\\mathrm", "\\underline", "\\textrm", "\\textsc", "\\boldsymbol", "\\ensuremath", "\\text"] {
         t = t.replace(cmd, "");
     }
     // \cellcolor{…}, \color{…}: drop with their argument

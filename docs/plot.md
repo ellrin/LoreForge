@@ -70,7 +70,7 @@
 | `km` | `x`（時間）、`event`（1 = 事件，0 = 設限）、`group` | `censor`（設限記號） |
 | `radar` | `x`（各軸名稱）、`series[]`: `y`（`ref` 參考線） | `fill`、`normalize` |
 | `pie` | `x`（名稱）、`series[0].y` | `donut`、`labels`: direct／legend、`other`（併成 Other 的比例）、`total` |
-| `area`／`dumbbell` | 同 line／bar（啞鈴：兩個系列） | `area`: fill／stack |
+| `area`／`dumbbell` | 同 line／bar（啞鈴：兩個系列；類別在 y 軸、數值在 x 軸） | `area`: fill／stack；`dumbbell`: `sort`（asc／desc，依第二個系列） |
 | `ridge`／`ecdf` | 同 box（每欄一組分布） | `overlap` |
 | `calib`／`dca` | `series[]`: `score`＋`truth` | `bins`／`max` |
 | `contour`／`surface`／`scatter3d` | `x`、`y`、`z`（規則格點；點雲可有 `group`） | `levels`、`azim`、`elev`、`walls` |
@@ -259,6 +259,8 @@ label = "簡潔"
   在伺服器套到副本上、檢查 `Spec::problems`，頁面一次套用（一步復原），並列出「改了什麼：前 → 後、為什麼」。勾「附上目前的圖」時把目前的圖（110 dpi PNG）
   交給能看圖的引擎（`plot-assist-vision`）。
 - 最多問一個問題（資料意義不明時，例如某欄是什麼、越高越好嗎），其他自己決定並說明假設。
+- 「照這句改」的請求附上規格的寫法（`assist::CONVENTIONS`）：軸是實體方向（`xaxis` 橫向；啞鈴與橫條圖的數值在 `xaxis`）、軸只有 `AXIS_KEYS` 這些鍵（範圍＝`min`／`max`）、
+  排序用 `opts.sort`。改到軸上不認得的鍵（例如 `lim`）不套用，帶著原因重問一次。
 
 提示詞在 `commons/crates/lore-plot/prompts/assist.md`（公開、中性，不寫字型名稱），執行時填入 `{catalogue}`（formats.json 一格一行）、`{style_preset}`、`{venue}`，
 以及作者自己的偏好：`private/shared/plot/assist.md`（自由文字）＋他的預設樣式（經 lore-home）。PaperComposer 與 SlideComposer 的任務表都合併了這三個任務

@@ -27,7 +27,8 @@
 .lf-sheet { margin: auto; padding: 24px; }
 .lf-sheet svg { display: block; background: #fff; box-shadow: 0 8px 32px #0005; max-width: none; }
 .lf-empty { color: var(--muted); font-size: 14px; padding: 40px; border: 1px dashed var(--line-strong); border-radius: 10px; }
-.lf-status { border-top: 1px solid var(--line); background: var(--panel); }
+/* the host page's own .statusbar (margin, padding, sticky) never reaches the editor's */
+.lf-editor .lf-status { position: static; margin: 0; padding: 6px 16px 8px; border-top: 1px solid var(--line); background: var(--panel); }
 .lf-warn { color: var(--warn); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lf-err { color: var(--err); }
 
@@ -61,12 +62,13 @@
 .lf-wait { color: var(--muted); font-size: 12.5px; }
 .lf-wait::after { content: "…"; animation: lf-dots 1s steps(3) infinite; display: inline-block; width: 1em; overflow: hidden; vertical-align: bottom; }
 @keyframes lf-dots { from { width: 0; } to { width: 1em; } }
-.lf-sym { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: var(--r); font-size: 12.5px; }
+/* symbol, then its meaning on a line of its own (long meanings wrap instead of being cut) */
+.lf-sym { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 1px; padding: 4px 6px; border-radius: var(--r); font-size: 12.5px; }
 .lf-sym:hover { background: var(--surface-hover); }
 .lf-sym input { accent-color: var(--accent); margin: 0; }
 .lf-sym .m { min-width: 44px; }
-.lf-sym .d { color: var(--muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lf-sym .lf-new { font: 600 10.5px var(--mono); color: var(--warn); }
+.lf-sym .d { grid-column: 2 / 4; grid-row: 2; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.lf-sym .lf-new { grid-column: 3; grid-row: 1; font: 600 10.5px var(--mono); color: var(--warn); }
 .lf-bname { width: 100%; margin: 4px 0; padding: 3px 6px; font-weight: 600; font-size: 12.5px; }
 .lf-io { width: 100%; border-collapse: collapse; font-size: 12px; }
 .lf-io th { text-align: left; font-weight: 600; color: var(--muted); padding: 2px 4px; }

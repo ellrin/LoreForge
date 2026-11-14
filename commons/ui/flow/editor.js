@@ -346,7 +346,7 @@
       const b = h("div", { class: "lf-sbody" });
       const a = S.spec.discussion?.answers ?? {};
       if (st.id === "start") {
-        const ta = h("textarea", { class: "set-input lf-ta", rows: 5, placeholder: "論文題目與方法，或一段描述", "aria-label": "出發點" });
+        const ta = h("textarea", { class: "set-input lf-ta", rows: 9, placeholder: "論文題目與方法，或一段描述", "aria-label": "出發點" });
         ta.value = S.spec.discussion?.source ?? "";
         ta.oninput = () => change((sp) => { disc(); sp.discussion.source = ta.value; }, "source");
         b.append(ta);
@@ -359,7 +359,7 @@
             const items = list.map((x) => ({ label: x.label, run: () => { ta.value = x.text; change((sp) => { disc(); sp.discussion.source = x.text; }); } }));
             if (window.LoreShell?.menu) window.LoreShell.menu(pick, items); else items[0].run();
           };
-          b.append(h("div", { class: "lf-row" }, pick));
+          b.pick = pick;
         }
       }
       if (st.id !== "list") b.append(...reply(st.id));
@@ -388,7 +388,7 @@
           }
         }
       }
-      b.append(h("div", { class: "lf-row" }, st.id !== "list" ? askBtn(st.id) : null));
+      b.append(h("div", { class: "lf-row" }, st.id !== "list" ? askBtn(st.id) : null, b.pick ?? null));
       b.append(nav(i));
       return b;
     }

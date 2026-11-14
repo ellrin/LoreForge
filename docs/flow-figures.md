@@ -81,6 +81,8 @@
    `figures/` 裡沒有 `.flow.json` 的 PDF 是作者自己的檔，永遠不覆寫（同繪圖的規則）。
 4. **插入**：`placeFile(at, was, "figures/<stem>.pdf", caption, stem)` → `figure-block`（`floats.rs`）：`\begin{figure}… \includegraphics… \caption{…} \label{fig:…}`，
    標籤由伺服器取、不重複；游標處插 `\ref{fig:…}`，從不打「Figure 1」；需要時 main.tex 加 graphicx。
+   圖說先用各格標題（`(a) …; (b) ….`，存檔回應的 `caption`），作者再改；不會插入空的 `\caption{}`。
+   出發點：lore-docsrc 讀不到期刊 class 的 `\abstract{…}` 時，題目與摘要改由論文自己的標題欄位補上（2026-11-14）。
 5. **對照表**：圖裡的新變數（`vars_new`）用 `lore_flow::notation::register_new` 寫進這篇論文自己的對照表（標 `flow-draft`，不寫全域、不動 `notation.tex`）；
    圖裡的標籤用 `@id` 指向登記的符號，登記過的巨集在畫圖前展開。插入的區塊跑 lore-notation 的 `check_document`。
 6. **重新編輯**：點頁面上的圖，旁邊有 `.flow.json`（或 `.plot.json`）時圖角出現「編輯」小按鈕（`ui/figedit.js`），打開那個工具的編輯器，完成後覆寫同一個 PDF 與規格；雙擊照舊。

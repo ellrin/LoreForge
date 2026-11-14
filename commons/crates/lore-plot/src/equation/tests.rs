@@ -486,7 +486,7 @@ fn the_task_is_in_the_table() {
 
 #[test]
 fn browser_core_passes_the_same_cases_under_node() {
-    for f in ["eqcore.test.js", "eqcolors.test.js", "simcore.test.js"] {
+    for f in ["eqcore.test.js", "eqcolors.test.js", "simcore.test.js", "formats.test.js", "dumbbell.test.js"] {
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/plot/tests").join(f);
         match std::process::Command::new("node").arg(&script).output() {
             Ok(o) => assert!(o.status.success(), "node {f}:\n{}\n{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)),

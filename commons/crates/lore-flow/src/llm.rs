@@ -159,7 +159,7 @@ One panel per stage / sub-figure (a., b., c. …) with its title; `dir` is \"rig
 - Loss functions are $\\mathcal L_{name}$; predictions carry a hat or prime; tensors and images are bold.\n\
 - Refer to a variable of the notation table below by its id: write @id inside a label, or set `var`.\n\
 - A variable that is not in the table goes into vars_new as {id, latex, meaning} and is then referred to the same way (@id / var). \
-Never invent an id without listing it.\n\
+Never invent an id without listing it. `latex` is the bare symbol (`\\hat{y}`): no `$`, no definition such as `\\in \\{0,1\\}^{K}` (that goes into `meaning`).\n\
 - Never write a typed reference such as \"Table 1\" or \"Fig. 2\".\n",
     );
     match p.notation.filter(|n| !n.entries.is_empty()) {
@@ -224,6 +224,7 @@ fn tidy(g: &mut Graph) {
     }
     for v in &mut g.vars_new {
         unescape(&mut v.latex);
+        v.latex = crate::spec::bare_latex(&v.latex);
     }
     for e in &mut g.edges {
         unescape(&mut e.label);

@@ -304,7 +304,7 @@ pub fn parse_with(text: &str, extra_modules: &[String]) -> Result<Graph, DslErro
                 if id.is_empty() || strings.is_empty() {
                     return Err(err("var needs an id and its LaTeX: var w = \"\\omega\"".into()));
                 }
-                let latex = strings.remove(0);
+                let latex = crate::spec::bare_latex(&strings.remove(0));
                 let meaning = strings.into_iter().next().unwrap_or_default();
                 g.vars_new.push(VarNew { id, latex, meaning });
             }

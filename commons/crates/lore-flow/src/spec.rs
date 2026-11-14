@@ -266,6 +266,22 @@ pub struct VarNew {
     pub meaning: String,
 }
 
+/// A variable's LaTeX without the maths delimiters a model sometimes wraps it in (`$\mathbf{x}$`,
+/// `\(\hat{y}\)`): `latex` is the bare maths (the registry, `@id` and the figure put `$…$` around it).
+pub fn bare_latex(s: &str) -> String {
+    let t = s.trim();
+    let inner = t
+        .strip_prefix("$$").and_then(|r| r.strip_suffix("$$"))
+        .or_else(|| t.strip_prefix('$').and_then(|r| r.strip_suffix('$')))
+        .or_else(|| t.strip_prefix("\\(").and_then(|r| r.strip_suffix("\\)")))
+        .or_else(|| t.strip_prefix("\\[").and_then(|r| r.strip_suffix("\\]")));
+    match inner {
+        // only one pair around the whole: `$a$ and $b$` is text, not one formula
+        Some(i) if !i.contains('$') && !i.trim().is_empty() => i.trim().to_string(),
+        _ => t.to_string(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum SpecError {
     #[error("figure has no nodes")]

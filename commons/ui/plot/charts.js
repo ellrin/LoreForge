@@ -247,8 +247,16 @@
   CHARTS.dumbbell = {
     label: "啞鈴（成對）", group: "bar",
     prepare(p, tbl, st) {
-      const cats = col(tbl, p.x).map((v) => String(v ?? ""));
+      let cats = col(tbl, p.x).map((v) => String(v ?? ""));
       const ser = seriesOf(p).slice(0, 2).map((s, i) => ({ s, i, st: seriesStyle(st, s, i, "line", p), ys: ncol(tbl, s.y), label: labelOf(s) }));
+      // sorted by the second value (the "after" of each pair), as bars sort by theirs
+      if ((p.opts?.sort === "asc" || p.opts?.sort === "desc") && ser.length) {
+        const key = ser[ser.length - 1].ys;
+        const v = (k) => (isNum(key[k]) ? key[k] : -Infinity);
+        const order = cats.map((_, k) => k).sort((a, b) => (p.opts.sort === "desc" ? v(b) - v(a) : v(a) - v(b)));
+        cats = order.map((k) => cats[k]);
+        for (const r of ser) r.ys = order.map((k) => r.ys[k]);
+      }
       return {
         x: { kind: "linear", values: ser.flatMap((r) => r.ys) },
         y: { kind: "band", cats, reverse: true },

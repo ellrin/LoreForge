@@ -63,6 +63,8 @@ fn the_request_offers_closed_lists_and_the_notation_table() {
     let p = FlowPrompt { description: "x goes into a U-Net.", image: Some(img), notation: Some(&reg), library: &lib, examples: std::slice::from_ref(&example) };
     let req = llm::request(&p);
     assert!(req.has_images());
+    // a registry symbol is the bare symbol: a model registered `y \in \{0,1\}^{14}` as the symbol y
+    assert!(req.system.contains("no definition such as"), "{}", req.system);
     let schema = req.json_schema.clone().unwrap();
     let modules = schema["properties"]["nodes"]["items"]["properties"]["module"]["enum"].as_array().unwrap();
     assert_eq!(modules.len(), lore_flow::spec::MODULES.len() + 1);
@@ -152,5 +154,11 @@ fn model_ids_are_tidied() {
     assert!(prop.graph.arrange.is_empty());
     assert_eq!(prop.graph.node("x").unwrap().var, "x");
     assert_eq!(prop.graph.fig, "f02");
+    assert_eq!(prop.graph.vars_new[0].latex, "\\theta_{seg}");
+    // a variable wrapped in maths delimiters: the bare LaTeX (else the figure shows the TeX source)
+    let mut v = good();
+    v["vars_new"][0]["latex"] = json!("$\\theta_{seg}$");
+    let mock = MockProvider::new(vec![v.to_string()]);
+    let prop = rt().block_on(llm::propose(&mock, &p)).unwrap();
     assert_eq!(prop.graph.vars_new[0].latex, "\\theta_{seg}");
 }

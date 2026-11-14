@@ -439,7 +439,8 @@ fn split_paragraphs(raw: &str) -> Vec<&str> {
     let mut last = 0;
     let mut i = 0;
     while i < b.len() {
-        if raw[i..].starts_with("\\begin{")
+        // bytes, not `raw[i..]`: `i` walks bytes and may sit inside a multi-byte character (–, é)
+        if b[i..].starts_with(b"\\begin{")
             && let Some((name, after)) = group_text(raw, i + 6)
             && let Some((_, end)) = find_env_end(raw, name.trim(), after)
         {
@@ -636,6 +637,8 @@ const RULES0: &[&str] = &[
     "toprule",
     "midrule",
     "bottomrule",
+    // Springer Nature's sn-jnl closes a table with \botrule
+    "botrule",
     "hhline",
     "noalign",
     "endhead",
@@ -918,6 +921,21 @@ fn references(p: &LatexProject, body: &str) -> Vec<Reference> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn springer_botrule_is_a_rule_not_a_row() {
+        let g = tabular_grid("\\begin{tabular}{@{}lc@{}}\\toprule\nA & B \\\\\n\\midrule\n1 & 2 \\\\\n\\botrule\n\\end{tabular}").unwrap();
+        assert_eq!(g, vec![vec!["A".to_string(), "B".to_string()], vec!["1".to_string(), "2".to_string()]]);
+    }
+
+    #[test]
+    fn paragraphs_with_multibyte_characters_do_not_panic() {
+        // a journal draft: "0.15–0.2" and "é" used to panic at a byte inside the character
+        let raw = "AUC 0.15–0.2 lower.\n\nCafé \\begin{table}\nA\n\nB\n\\end{table} end.\n\nLast – one.";
+        let p = split_paragraphs(raw);
+        assert_eq!(p.len(), 3, "{p:?}");
+        assert!(p[1].contains("\\end{table}"), "an environment stays in one paragraph");
+    }
 
     const DOC: &str = r#"\documentclass{article}
 \graphicspath{{figs/}}

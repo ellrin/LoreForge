@@ -338,4 +338,23 @@ fn a_paper_figure_keeps_its_latex_for_tex_glyphs_and_has_a_print_size() {
     // without TexMath (previews) nothing is marked
     let (fig, _) = render(&s, &cat, None, &NoMath, s.frame_rect(), 2).unwrap();
     assert!(!preview_svg(&fig, 400.0).contains("data-tex"));
+    // a line that starts with maths keeps its words in the label font; a line of maths only is TeX
+    let dsl = "fig t\npanel a \"a. A\"\n  m: box \"Model\"\n  r: label \"@w and text\" role=output\n  o: label \"@w\" role=output\nend\nm -> r\nm -> o\nvar w = \"\\omega\" \"weight\"\n";
+    let s = FlowSpec { lore_flow: 1, dsl: dsl.into(), frame: Some([496.0, 300.0]), ..Default::default() };
+    let (fig, _) = render(&s, &cat, None, &TexMath, s.frame_rect(), 2).unwrap();
+    let svg = svg_mm(&fig);
+    let font_of = |tex: &str| { let at = svg.find(&format!("data-tex=\"{tex}\"")).unwrap_or_else(|| panic!("{tex}: {svg}")); svg[at..].split("data-font=\"").nth(1).unwrap().split('"').next().unwrap().to_string() };
+    assert_ne!(font_of("$\\omega$ and text"), "KaTeX_Main");
+    assert_eq!(font_of("$\\omega$"), "KaTeX_Main");
+}
+
+/// A model often writes a new variable as `$\mathbf{x}$`: the figure then showed the TeX source
+/// ("\mathbf{x}") and the registry got the dollars. The latex is kept bare.
+#[test]
+fn new_variables_lose_the_maths_delimiters_a_model_adds() {
+    let g = lore_flow::dsl::parse("fig t\npanel a \"a. A\"\n  x: image \"Input\" role=input var=x\n  m: box \"Model\"\nend\nx -> m\nvar x = \"$\\mathbf{x}$\" \"input\"\nvar yb = \"\\(y^{\\text{bert}}\\)\"\nvar two = \"$a$ and $b$\"\n").unwrap();
+    let l: Vec<&str> = g.vars_new.iter().map(|v| v.latex.as_str()).collect();
+    assert_eq!(l, vec!["\\mathbf{x}", "y^{\\text{bert}}", "$a$ and $b$"]);
+    assert_eq!(lore_flow::spec::bare_latex("$$\\hat{y}$$"), "\\hat{y}");
+    assert_eq!(lore_flow::spec::bare_latex("\\hat{y}"), "\\hat{y}");
 }

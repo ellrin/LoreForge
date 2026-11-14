@@ -77,8 +77,16 @@
     const fresh = LP.starterPanel(type, t);
     const keep = { title: p.title, legend: p.legend, notes: p.notes, data: p.data, span: p.span, rowspan: p.rowspan };
     if (SAME_SERIES.includes(type) && SAME_SERIES.includes(p.type) && p.series?.length) fresh.series = p.series.map((q) => ({ ...q }));
-    if (["line", "bar", "radar", "area", "dumbbell", "pie"].includes(type) && ["line", "bar", "radar", "area", "dumbbell", "pie"].includes(p.type)) { fresh.xaxis = p.xaxis; fresh.yaxis = p.yaxis; fresh.x = p.x; }
+    if (["line", "bar", "radar", "area", "dumbbell", "pie"].includes(type) && ["line", "bar", "radar", "area", "dumbbell", "pie"].includes(p.type)) {
+      fresh.x = p.x;
+      // the axes are physical (xaxis = across): a dumbbell (or a horizontal bar) has its categories down the
+      // y axis, so the category and value labels change sides with it
+      const catsOnY = (q) => q.type === "dumbbell" || (q.type === "bar" && !!q.opts?.horizontal);
+      if (catsOnY(p) === (type === "dumbbell")) { fresh.xaxis = p.xaxis; fresh.yaxis = p.yaxis; } else { fresh.xaxis = p.yaxis; fresh.yaxis = p.xaxis; }
+    }
     if (type === "pie" && fresh.series.length > 1) fresh.series = fresh.series.slice(0, 1);
+    // a dumbbell joins two values per category: the first two series (the others would be listed but never drawn)
+    if (type === "dumbbell" && fresh.series.length > 2) fresh.series = fresh.series.slice(0, 2);
     s.panels[pi] = { ...fresh, ...Object.fromEntries(Object.entries(keep).filter(([, v]) => v !== undefined)), type };
     return s;
   };

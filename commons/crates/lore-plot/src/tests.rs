@@ -170,6 +170,21 @@ Baseline & 0.812 $\pm$ 0.021 & 12.4 \\
     assert_eq!(t.rows[1][3], json!(9.8));
 }
 
+#[test]
+fn latex_minus_signs_stay_numbers() {
+    // PaperComposer writes "−0.039" as \ensuremath{-}0.039 (lore-notation's Unicode → LaTeX): it read as text
+    let tex = r"\begin{tabular}{lcc}\toprule
+Item & Score & Diff \\ \midrule
+Alpha & 0.762 & \ensuremath{-}0.039 \\
+Beta & 0.832 & \textminus 0.011 \\
+Gamma & 0.714 & $-$0.095 \\ \botrule
+\end{tabular}";
+    let t = &data::import("results.tex", tex.as_bytes()).unwrap()[0];
+    assert_eq!(t.rows[0][2], json!(-0.039));
+    assert_eq!(t.rows[1][2], json!(-0.011));
+    assert_eq!(t.rows[2][2], json!(-0.095));
+}
+
 fn tiny_xlsx() -> Vec<u8> {
     use std::io::Write;
     let mut buf = std::io::Cursor::new(Vec::new());
@@ -354,6 +369,12 @@ fn every_katex_font_is_compiled_in() {
         }
     }
     assert!(assets::get("../secret").is_none());
+    // the editor opens inside an app page: the page's own .statusbar (PaperComposer: margin-top 32px,
+    // no side padding, sticky) left an empty band above the editor's status line and its text at the edge
+    let css = include_str!("../../../ui/plot/editor.css");
+    assert!(css.contains(".lp-editor .lp-status { position: static; margin: 0; padding: 6px 16px 8px;"), "editor.css resets the host's statusbar");
+    let flow = include_str!("../../../ui/flow/editor.css");
+    assert!(flow.contains(".lf-editor .lf-status { position: static; margin: 0; padding: 6px 16px 8px;"), "flow editor.css resets the host's statusbar");
 }
 
 // ── figures in documents ─────────────────────────────────────────────────
@@ -561,6 +582,15 @@ fn assist_changes_are_applied_checked_and_listed() {
     assert!(assist::apply_changes(&spec, &json!({ "note": "", "changes": [{ "path": "/data/t1/rows/0/1", "value": 0.99 }] })).is_err());
     assert!(assist::apply_changes(&spec, &json!({ "note": "", "changes": [{ "path": "/panels/0/series/0/y", "value": "Nope" }] })).unwrap_err().contains("Nope"));
     assert!(assist::apply_changes(&spec, &json!({ "note": "", "changes": [{ "path": "/panels/7/title", "value": "x" }] })).is_err());
+    // an axis key the charts do not read (a model wrote `lim`: nothing changed, no error)
+    let e = assist::apply_changes(&spec, &json!({ "note": "", "changes": [{ "path": "/panels/0/yaxis/lim", "value": [0.5, 1] }] })).unwrap_err();
+    assert!(e.contains("lim") && e.contains("min"), "{e}");
+    assert!(assist::apply_changes(&spec, &json!({ "note": "", "changes": [{ "path": "/panels/0/xaxis", "value": { "label": "Score", "range": [0.5, 1] } }] })).unwrap_err().contains("range"));
+    assert!(assist::apply_changes(&spec, &json!({ "note": "", "changes": [{ "path": "/panels/0/xaxis", "value": { "label": "Score", "min": 0.5, "max": 1 } }] })).is_ok());
+    // the request says which axis holds the values of a dumbbell, and how to sort
+    let req = assist::request_adjust(&assist_ctx(), &spec, "sort", None);
+    let text = serde_json::to_string(&req.messages).unwrap();
+    assert!(text.contains("dumbbell") && text.contains("opts.sort") && text.contains("`min` and `max`"), "{text}");
     // the prompt carries the spec without its rows
     let short = assist::spec_for_prompt(&spec);
     assert_eq!(short["data"]["t1"]["row_count"], 2);

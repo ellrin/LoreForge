@@ -222,17 +222,18 @@ pub fn split_top<'a>(s: &'a str, sep: &str) -> Vec<&'a str> {
     let mut last = 0;
     let mut i = 0;
     while i < b.len() {
-        if s[i..].starts_with("\\begin{") {
+        // bytes, not `s[i..]`: `i` walks bytes and may sit inside a multi-byte character (–, é)
+        if b[i..].starts_with(b"\\begin{") {
             env_depth += 1;
             i += 6;
             continue;
         }
-        if s[i..].starts_with("\\end{") {
+        if b[i..].starts_with(b"\\end{") {
             env_depth -= 1;
             i += 4;
             continue;
         }
-        if depth == 0 && env_depth == 0 && s[i..].starts_with(sep) {
+        if depth == 0 && env_depth == 0 && b[i..].starts_with(sep.as_bytes()) {
             // `\&` is a literal ampersand
             let escaped = sep == "&" && i > 0 && b[i - 1] == b'\\';
             if !escaped {
@@ -301,6 +302,12 @@ pub fn remove_command(s: &str, name: &str, nargs: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_top_with_multibyte_characters_does_not_panic() {
+        assert_eq!(split_top("0.15–0.2 & Café \\& Co & é", "&"), vec!["0.15–0.2 ", " Café \\& Co ", " é"]);
+        assert_eq!(split_top("a – \\begin{x}b & c\\end{x} & d", "&").len(), 2);
+    }
 
     #[test]
     fn comments_keep_lines() {

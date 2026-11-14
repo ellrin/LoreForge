@@ -999,7 +999,13 @@
     // ── the figure assistant (plot-assist): spec values only, never code ──
     const KEYS = { panels: "格", xaxis: "x 軸", yaxis: "y 軸", legend: "圖例", opts: "選項", size: "大小", w: "寬", h: "高", grid: "版面", set: "樣式", series: "系列", scale: "尺度", segments: "分段", pos: "位置", min: "最小", max: "最大", label: "標籤", title: "標題", inset: "小圖", notes: "註記", format: "格式", type: "種類", style: "樣式預設", cols: "欄", rows: "列" };
     const human = (path) => path.split("/").filter(Boolean).map((k, i, a) => (a[i - 1] === "panels" && /^\d+$/.test(k) ? String.fromCharCode(97 + +k) : KEYS[k] ?? k)).filter((k) => k !== "格" || true).join(" · ");
-    const shown = (v) => (v == null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
+    // a change's value for the list: a series list by its names, an object as its keys, never raw JSON
+    const shown = (v) => {
+      if (v == null || v === "") return "—";
+      if (Array.isArray(v)) return v.every((x) => x && typeof x === "object") ? v.map((x) => x.label || x.y || x.text || "·").join("、") : v.map((x) => (x && typeof x === "object" ? "…" : String(x))).join("–");
+      if (typeof v === "object") return Object.entries(v).map(([k, x]) => `${KEYS[k] ?? k} ${x && typeof x === "object" ? "…" : x}`).join("，");
+      return String(v);
+    };
     function buildAssist() {
       assist.textContent = "";
       const ta = h("textarea", { class: "set-input lp-ask", rows: 3, placeholder: "例：把 0.8–1.0 拉長、圖例擋到曲線、拉寬一點" });
