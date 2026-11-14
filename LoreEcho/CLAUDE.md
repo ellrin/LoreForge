@@ -31,12 +31,12 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   theme song `theme.<ext>` sniffed by `sniff_audio`, `theme_loop`/`theme_volume`, in export/import), `chat.rs` (transcript checks, system prompt =
   persona + name + 角色設定 lines (background cut at `BACKGROUND_LIMIT`) + the about-yourself rule + `BREVITY_RULE`, example pairs as
   earlier turns; `speak: true` = the deltas also go to a lore-voice `Speaker`; SSE `search/cards/start/delta/say/done/error`, `say {id,start,end,spoken}` = where a queued sentence is in the reply (UTF-16 units)),
-  `voice.rs` (`/api/voice*`: status, voices, events SSE, listen/stop, speak/stop (`pitch`), open-settings (microphone, speech,
+  `voice.rs` (`/api/voice*` = lore-voice's shared router `lore_voice::web::router`, with the characters as its `Defaults`: status, voices, events SSE, listen/stop, speak/stop (`pitch`), open-settings (microphone, speech,
   personal-voice, voices; only with the real engine), warm (the open window loads the character's voice silently), personal
   (Personal Voice status; POST = 使用個人聲音, the system's prompt only when never asked); `template()` = how a character speaks;
   `AppState.voice` = `Voice::system()` in `system()`, unavailable in `new()`, `with_voice()` for fakes; a `voice` id in
   `/api/voice/speak` = that system voice (試聽 before saving)). Voices are system voices only (author, 2026-11-12: no Qwen3-TTS);
-  a character folder's old `voice/` (an earlier custom voice) is ignored, not exported, and the character speaks with its system voice. `kbctx.rs` (design §3: the author's KnowledgeBase cards read from disk with kb-core, never written; per turn titles/aliases in the message and recent turns + key words → a few cards within `BUDGET_CHARS` into the prompt as his own cards with their state; 抽／複習／考我／有哪些卡／記住這個 (zh/en, counts) chosen in code, the model only phrases; quiz carried by the page (`kb.quiz`, `kb.cited`); review outcomes only through KnowledgeBase's `POST /api/recall/{id}` while it runs (`POST /api/kb/recall`); `AppState::new` reads only its home's `private/KnowledgeBase`, `system()` also KB_SPACES/KB config/its server; tests pin a space, `tests/fixtures/kb`), `llm.rs` (task `le-chat` from
+  a character folder's old `voice/` (an earlier custom voice) is ignored, not exported, and the character speaks with its system voice. `kbctx.rs` (design §3: the author's KnowledgeBase cards read from disk with kb-core, never written from here (修正 goes through KnowledgeBase, see `fix.rs`); per turn titles/aliases in the message and recent turns + key words → a few cards within `BUDGET_CHARS` into the prompt as his own cards with their state; 抽／複習／考我／有哪些卡／記住這個 (zh/en, counts) chosen in code, the model only phrases; quiz carried by the page (`kb.quiz`, `kb.cited`); review outcomes only through KnowledgeBase's `POST /api/recall/{id}` while it runs (`POST /api/kb/recall`); `AppState::new` reads only its home's `private/KnowledgeBase`, `system()` also KB_SPACES/KB config/its server; tests pin a space, `tests/fixtures/kb`), `llm.rs` (task `le-chat` from
   `tasks.toml`, class `ask`: `local:current` then `claude:selected`; local engine =
   `LOREECHO_LLM_URL` else the shared model id of `private/shared/engine.toml` on the machine's one
   llama-server (lore-llm `shared_runtime`, `../docs/local-models.md`; `llm::quit()` at exit); keys via
@@ -49,6 +49,14 @@ LOREECHO_LLM_URL=http://127.0.0.1:8080/v1 cargo run -p le-server   # a local Ope
   lore-notes lands; never overwrites); cards: KnowledgeBase's `POST /api/pending` while it runs, else
   `kb_core::pending::add` on the member's personal space (only `pending/`); a refusal from a running app is shown,
   never followed by a local copy; 記下靈感 = `kind: idea`, no model, `% & #` escaped).
+  `fix.rs` (修正知識卡, author 2026-11-14): 「這張卡寫錯了／幫我修正…那張卡」 (kbctx `Intent::Fix`: the card he names, else
+  the last reply's; the model only says it will check) or the 功能列表 row → `POST /api/actions/fix/draft {messages, card}`:
+  the card from KnowledgeBase's `GET /api/nodes/{id}` + his own words only → task `le-fix` (Claude Haiku, web search,
+  no local fallback; `allow_web` on the subscription, used only by requests that ask for it) → old and new per field,
+  `changes` (what/why/url) and `sources` (http(s) only); 套用 = `POST /api/actions/fix/save` → KnowledgeBase's
+  `PUT /api/nodes/{id}` with the draft's `revision` (409 = changed meanwhile, never overwritten), the web sources added
+  as `{type: "web", ref, title, via: "loreecho"}`; KnowledgeBase closed → 503 and nothing written (no file fallback);
+  `/api/actions/fix/source {url}` opens an http(s) source in the browser.
   Theme, `/prefs.css`, lore-shell `FILES` and the lore-engines router exactly as in KnowledgeBase.
   `DesktopHook`: `PUT /api/window {expanded}` and `PUT /api/settings {shortcut}` reach the desktop app.
 - `apps/desktop` (`loreecho`): server in-process; one frameless, transparent, always-on-top window

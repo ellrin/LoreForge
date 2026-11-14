@@ -312,3 +312,23 @@ async fn profile_and_song_survive_export_and_import() {
     let texts: Vec<String> = seen[0].messages.iter().map(|m| m.text()).collect();
     assert_eq!(texts, vec!["你是誰？", "替書找主人的人。", "為什麼你叫回聲？"]);
 }
+
+#[tokio::test]
+async fn permissions_are_the_voices_three_and_asked_only_when_never_asked() {
+    use lore_voice::{Permission, PersonalVoice, Status};
+    let app = App::new(Llm::none());
+    app.fake.permission(Permission::Microphone, Status::NotDetermined, Status::Granted);
+    app.fake.permission(Permission::Speech, Status::Denied, Status::Granted);
+    app.fake.personal(PersonalVoice::NotDetermined, PersonalVoice::Authorized, false);
+    let (s, v) = app.json("GET", "/api/permissions", None).await;
+    assert_eq!(s, StatusCode::OK);
+    let ids: Vec<&str> = v["permissions"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["microphone", "speech", "personal_voice"]);
+    assert_eq!(v["permissions"][1]["status"], "denied");
+    let (_, v) = app.json("POST", "/api/permissions/request", None).await;
+    assert_eq!(v["permissions"][0]["status"], "granted");
+    assert_eq!(v["permissions"][1]["status"], "denied", "a refusal is never asked again");
+    assert_eq!(app.fake.asked(), [Permission::Microphone, Permission::PersonalVoice]);
+    // isolated: System Settings is not opened
+    assert_eq!(app.json("POST", "/api/permissions/open", Some(json!({ "what": "speech" }))).await.1["opened"], false);
+}

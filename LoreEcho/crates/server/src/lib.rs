@@ -21,12 +21,14 @@
 //! | POST | /api/kb/recall | `{ id, outcome }` → a review outcome through KnowledgeBase's API while it runs ([`kbctx`]) |
 //! | POST | /api/actions/{note,cards}/… | 功能列表: drafts (tasks `le-note`, `le-cards`) and the confirmed saves to PaperComposer / KnowledgeBase ([`actions`]) |
 //! | … | /api/voice… | listening and speaking ([`voice`]) |
+//! | GET/POST | /api/permissions, /request, /open | microphone, speech, Personal Voice (lore-shell; asked at the desktop app's first launch) |
 
 pub mod actions;
 pub mod api;
 pub mod characters;
 pub mod chat;
 pub mod config;
+pub mod fix;
 pub mod kbctx;
 pub mod llm;
 pub mod shelfctx;
@@ -140,17 +142,25 @@ pub fn router(shared: Shared) -> Router {
     if let Some(rt) = shared.llm.local_rt.clone() {
         e = e.shared(rt); // 本機 status, 釋放, and this app's share of the idle checks
     }
-    router_with(shared, e)
+    let perms = permissions(&shared);
+    router_with(shared, e, perms)
+}
+
+/// What LoreEcho asks for at its first launch (設定 → 一般 → 權限 afterwards): the voice's three.
+fn permissions(shared: &Shared) -> lore_shell::permissions::Permissions {
+    use lore_shell::permissions::{Permission, Permissions};
+    Permissions::new(&[Permission::Microphone, Permission::Speech, Permission::PersonalVoice]).with(Arc::new(shared.voice.clone()))
 }
 
 /// Tests: never the keychain, the `claude` CLI, the network, the OS opener or the process routing.
 pub fn router_isolated(shared: Shared) -> Router {
     let mut e = engines(&shared).isolated();
     e.install_routing = false;
-    router_with(shared, e)
+    let perms = permissions(&shared).isolated();
+    router_with(shared, e, perms)
 }
 
-fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
+fn router_with(shared: Shared, engines: lore_engines::Engines, perms: lore_shell::permissions::Permissions) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|o, _| allowed_origin(o)))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
@@ -163,7 +173,8 @@ fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
     for (path, mime, body) in lore_shell::FILES {
         kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
     }
-    api::routes().merge(voice::routes()).merge(actions::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).route("/api/shelf/focus", axum::routing::post(shelfctx::focus_post)).with_state(shared).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
+    let voice = voice::routes(&shared);
+    api::routes().merge(actions::routes()).merge(fix::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).route("/api/shelf/focus", axum::routing::post(shelfctx::focus_post)).with_state(shared).merge(voice).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`config.port` (0 = any free port); the address, the state and the server.

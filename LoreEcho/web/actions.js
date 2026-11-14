@@ -33,7 +33,7 @@
     const card = document.querySelector("#win .card");
     const hist = document.getElementById("hist");
     hist.hidden = true;
-    A.panel = el("section", { class: `act act-${kind}`, "aria-label": { note: "整理成筆記", cards: "做成知識卡", idea: "記下靈感" }[kind] }, ...kids);
+    A.panel = el("section", { class: `act act-${kind}`, "aria-label": { note: "整理成筆記", cards: "做成知識卡", idea: "記下靈感", fix: "修正知識卡" }[kind] }, ...kids);
     card.append(A.panel);
     A.dirty = false;
     A.panel.addEventListener("input", () => { A.dirty = true; });
@@ -265,6 +265,76 @@
     paint();
   }
 
+  // ── 修正知識卡 (server: fix.rs): Claude Haiku checks the card on the web; old and new side by
+  // side with the sources; 套用 writes through KnowledgeBase (it must be open) ──
+  async function fix(cards = window.LoreEchoKb?.cited?.() ?? []) {
+    const title = "修正知識卡";
+    if (!cards.length) {
+      open("fix", head(title), el("div", { class: "act-wait" }, "先說出卡名，或讓我引用那張卡"), foot(el("button", { type: "button", class: "btn", onclick: close }, "關閉")));
+      paint();
+      return;
+    }
+    // the most likely card right away; the others stay one click away (「不是這張？」)
+    const card = cards[0], others = cards.slice(1);
+    const swap = () => others.length ? el("div", { class: "act-field fix-swap" }, el("span", { class: "k" }, "不是這張？"),
+      el("span", {}, others.map((c) => el("button", { type: "button", class: "link-chip", onclick: () => fix([c, ...cards.filter((x) => x !== c)]) }, c.title || c.id)))) : null;
+    open("fix", head(`${title}〈${card.title || ""}〉`), swap(), el("div", { class: "act-wait" }, "上網查證中…"), foot(el("button", { type: "button", class: "btn", onclick: close }, "取消")));
+    paint();
+    A.ctrl = new AbortController();
+    const ctrl = A.ctrl;
+    const msgs = window.LoreEcho?.messages?.() ?? [];
+    let d;
+    try {
+      const run = () => post("/api/actions/fix/draft", { messages: msgs, card: card.id }, ctrl.signal);
+      d = window.LoreEcho?.whileState ? await window.LoreEcho.whileState("searching", run) : await run();
+    } catch (e) {
+      if (e.name === "AbortError" || ctrl.signal.aborted) return;
+      const kbClosed = e.status === 503 && /KnowledgeBase/.test(e.message);
+      open("fix", head(title), el("div", { class: "act-err" }, e.message),
+        foot(el("button", { type: "button", class: "btn", onclick: close }, "取消"),
+          kbClosed ? el("button", { type: "button", class: "btn primary", onclick: () => window.LoreLinks?.open("kb", { node: card.id }) }, "打開 KnowledgeBase") : null,
+          el("button", { type: "button", class: "btn", onclick: () => fix([card]) }, "再試一次")));
+      paint();
+      return;
+    }
+    if (ctrl.signal.aborted) return;
+    await loadKatex();
+    const old = d.card, neu = d.fix;
+    const fields = [["title", "標題"], ["summary", "摘要"], ["body", "內容"]];
+    const edits = {};
+    const rows = fields.filter(([k]) => (old[k] || "").trim() !== (neu[k] || "").trim()).map(([k, label]) => {
+      const box = k === "title" ? el("input", { class: "set-input act-name", value: neu[k], "aria-label": label })
+        : el("textarea", { class: k === "body" ? "act-src" : "act-sum", rows: k === "body" ? 5 : 2, "aria-label": label, spellcheck: "false" }, neu[k]);
+      edits[k] = box;
+      const before = el("div", { class: "fix-old" });
+      before.innerHTML = k === "title" ? esc(old[k] || "") : latexHtml(old[k] || "");
+      return el("li", { class: "cand" }, el("div", { class: "act-field" }, el("span", { class: "k" }, label)), before, box);
+    });
+    const link = (u, t) => el("a", { href: u, class: "fix-src", title: u, onclick: (e) => { e.preventDefault(); post("/api/actions/fix/source", { url: u }).catch((x) => LoreShell.toast(x.message, { err: true })); } }, t || u.replace(/^https?:\/\//, "").split("/")[0]);
+    const why = el("ul", { class: "fix-why" }, (d.changes || []).map((c) => el("li", {}, c.what, c.why ? el("span", { class: "k" }, ` — ${c.why}`) : null, c.url ? [" ", link(c.url)] : null)));
+    const srcs = (d.sources || []).length ? el("div", { class: "act-field fix-srcs" }, el("span", { class: "k" }, "來源"), el("span", {}, d.sources.map((s) => link(s.url, s.title)))) : null;
+    if (!rows.length) {
+      open("fix", head(`${title}〈${old.title}〉`), el("div", { class: "act-body" }, swap(), el("div", { class: "act-bar" }, el("span", {}, "查證後沒有要改的地方"), el("span", { class: "act-engine" }, d.label || "")), why, srcs),
+        foot(el("button", { type: "button", class: "btn", onclick: close }, "關閉")));
+      paint();
+      return;
+    }
+    const apply = el("button", { type: "button", class: "btn primary" }, "套用");
+    apply.addEventListener("click", async () => {
+      apply.disabled = true;
+      const val = (k) => (edits[k] ? edits[k].value : old[k] || "");
+      try {
+        await post("/api/actions/fix/save", { id: old.id, revision: old.revision, title: val("title"), summary: val("summary"), body: val("body"), sources: d.sources || [] });
+        close();
+        saved(`〈${val("title")}〉已修正`, "kb", { node: old.id });
+      } catch (e) { LoreShell.toast(e.message, { err: true }); apply.disabled = e.status === 409; }
+    });
+    open("fix", head(`${title}〈${old.title}〉`),
+      el("div", { class: "act-body" }, swap(), el("div", { class: "act-bar" }, el("span"), el("span", { class: "act-engine" }, d.label || "")), el("ol", { class: "cands" }, rows), why, srcs),
+      foot(el("button", { type: "button", class: "btn", onclick: close }, "取消"), apply));
+    paint();
+  }
+
   // ── 記下靈感 (no model) ──
   function idea() {
     const input = document.getElementById("text");
@@ -287,7 +357,7 @@
     line.focus();
   }
 
-  const TOOLS = { note: () => note(), cards: () => cards(), idea };
+  const TOOLS = { note: () => note(), cards: () => cards(), idea, fix: () => fix() };
 
   window.LoreEchoActions = {
     run(tool) {
@@ -301,6 +371,8 @@
       return true;
     },
     close,
+    /** 「這張卡寫錯了」 in the chat (kbcards.js): the cards it may mean, [{id, title}]. */
+    fix: (cards) => fix(cards),
     isOpen: () => !!A.panel,
     latexHtml,
   };

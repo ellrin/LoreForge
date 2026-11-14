@@ -417,6 +417,8 @@ pub enum Intent {
     List(String, usize),
     /// 記住這個: the last reply's cards as remembered
     Remember,
+    /// 這張卡寫錯了: correct a card (the page opens 修正知識卡; author, 2026-11-14)
+    Fix,
 }
 
 fn zh_digit(c: char) -> Option<usize> {
@@ -479,6 +481,14 @@ pub fn intent(text: &str) -> Option<Intent> {
     let n = count(t);
     if t.chars().count() <= 12 && has_any(t, &["記住這個", "記住這張", "記住它", "記住了"]) || has_any(&lower, &["remember this", "remember that card"]) {
         return Some(Intent::Remember);
+    }
+    // a card is wrong: 「這張卡寫錯了」「幫我修正〈Dice〉那張卡」「fix this card」
+    // 卡 as the card (not 卡住／卡關／卡頓), or 這張／那張 right before it
+    let cs: Vec<char> = t.chars().collect();
+    let card_noun = cs.iter().enumerate().any(|(i, &c)| c == '卡' && !matches!(cs.get(i + 1), Some('住' | '關' | '頓' | '到' | '在')));
+    let about_card = card_noun || lower.contains("card");
+    if about_card && (has_any(t, &["寫錯", "有錯", "錯了", "不對", "修正", "更正", "改正", "改一下", "幫我改", "改掉"]) || has_any(&lower, &["fix this card", "fix the card", "card is wrong", "correct this card", "correct the card", "wrong card"])) {
+        return Some(Intent::Fix);
     }
     if has_any(t, &["考我", "考考我", "抽考"]) || has_any(&lower, &["quiz me", "test me"]) {
         return Some(Intent::Quiz(topic_of(&strip(t, &["抽考"]))));
@@ -577,7 +587,8 @@ pub fn plan(cards: &[Card], turns: &[Turn], ask: &Ask, seed: u64) -> Plan {
     let Some(last) = turns.last() else { return Plan::default() };
     let find = |id: &str| cards.iter().find(|c| c.id == id).cloned();
     let mut p = Plan::default();
-    let wanted = intent(&last.text);
+    // right after a reply that used his cards, 「修正一下」「加點中文解釋」 need not say 卡
+    let wanted = intent(&last.text).or_else(|| (!ask.cited.is_empty() && fix_words(&last.text)).then_some(Intent::Fix));
     if wanted.is_none() && let Some(card) = ask.quiz.as_deref().and_then(find) {
         p.intent = "answer";
         p.grade = Some(card.id.clone());
@@ -661,8 +672,50 @@ pub fn plan(cards: &[Card], turns: &[Turn], ask: &Ask, seed: u64) -> Plan {
             p.intent = "remember";
             p.cards = ask.cited.iter().filter_map(|id| find(id)).collect();
         }
+        Intent::Fix => {
+            // the card he names, else the ones the last reply used; the page opens 修正知識卡 on the first
+            p.intent = "fix";
+            p.cards = fix_targets(cards, turns, ask);
+            p.system = match p.cards.first() {
+                Some(c) => format!("使用者要你修改他的知識卡〈{}〉，程式已經開始處理了。只回一句：好，你會上網查證後改好給他看（他按「套用」才會改）。不要問他任何問題，不要自己講改法，也不要說你做不到。", c.title),
+                None => "使用者要修正一張知識卡，但沒說是哪一張。用一句話請他說出卡名（或先讓你引用那張卡）。不要說你做不到。".into(),
+            };
+        }
     }
     p
+}
+
+/// Letters and digits only, lower case: 「[CLS] Token」 = 「cls token」 = 「CLS-token」.
+fn squash(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// Words that ask for a card to be changed (said right after a reply that used it).
+pub fn fix_words(text: &str) -> bool {
+    has_any(text, &["修正", "更正", "改正", "改一下", "幫我改", "改成", "改寫", "寫錯", "有錯", "補充", "加一點", "加點", "加上"]) || has_any(&text.to_lowercase(), &["fix it", "fix that", "correct it", "rewrite it"])
+}
+
+/// The cards 「修正」 may mean, most likely first: the ones his message names (ignoring brackets,
+/// spaces and case; the longest name first), then the last reply's, then the turns' best matches.
+pub fn fix_targets(cards: &[Card], turns: &[Turn], ask: &Ask) -> Vec<Card> {
+    let text = turns.last().map(|t| squash(&t.text)).unwrap_or_default();
+    let mut named: Vec<(usize, &Card)> = cards
+        .iter()
+        .filter_map(|c| std::iter::once(&c.title).chain(c.aliases.iter()).map(|n| squash(n)).filter(|n| n.chars().count() >= 2 && text.contains(n.as_str())).map(|n| n.chars().count()).max().map(|l| (l, c)))
+        .collect();
+    named.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut out: Vec<Card> = vec![];
+    let cited = ask.cited.iter().filter_map(|id| cards.iter().find(|c| &c.id == id));
+    for c in named.into_iter().map(|(_, c)| c).chain(cited) {
+        if !out.iter().any(|x| x.id == c.id) {
+            out.push(c.clone());
+        }
+    }
+    if out.is_empty() {
+        out = retrieve(cards, turns, 3);
+    }
+    out.truncate(MAX_CARDS);
+    out
 }
 
 fn seed() -> u64 {
@@ -832,6 +885,16 @@ mod tests {
         assert_eq!(intent("知識庫裡有哪些關於訊號的卡"), Some(Intent::List("訊號".into(), 8)));
         assert_eq!(intent("which cards about gating do I have"), Some(Intent::List("gating".into(), 8)));
         assert_eq!(intent("記住這個"), Some(Intent::Remember));
+        assert_eq!(intent("這張卡寫錯了"), Some(Intent::Fix));
+        assert_eq!(intent("幫我修正 Dice 那張卡，分母不對"), Some(Intent::Fix));
+        assert_eq!(intent("fix this card please"), Some(Intent::Fix));
+        assert_eq!(intent("我修正了論文的第二節"), None, "not about a card");
+        assert_eq!(intent("程式卡住了，不對"), None);
+        assert_eq!(intent("這張圖不對"), None);
+        assert_eq!(intent("改一下那張投影片"), None);
+        assert_eq!(intent("卡關了，錯了好幾次"), None);
+        assert_eq!(intent("這張卡不對"), Some(Intent::Fix));
+        assert!(fix_words("保留公式加一點自然語言的中文解釋") && fix_words("幫我修正 CLS") && !fix_words("CLS 是什麼？"));
         assert_eq!(intent("remember this"), Some(Intent::Remember));
         for none in ["今天天氣如何", "我想抽空讀書", "幫我想想傅立葉轉換", "I picked a topic", "考試好難"] {
             assert_eq!(intent(none), None, "{none}");
@@ -960,4 +1023,21 @@ mod tests {
         .unwrap();
         root
     }
+
+    #[test]
+    fn the_card_to_fix_is_found_without_its_brackets_then_from_the_last_reply() {
+        let mut cls = card("nC", "[CLS] Token", &[], "聚合特徵", "learning", false);
+        cls.aliases = vec![];
+        let cards = vec![cls, card("nD", "Dice", &[], "重疊", "known", false)];
+        let ask = Ask { quiz: None, cited: vec!["nD".into()] };
+        let got = fix_targets(&cards, &[t("user", "幫我修正一下 CLS token的那張知識卡")], &ask);
+        assert_eq!(got.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["nC", "nD"]);
+        // a follow-up without 卡 right after a reply that used the card
+        let p = plan(&cards, &[t("user", "保留公式加一點中文解釋")], &Ask { quiz: None, cited: vec!["nC".into()] }, 1);
+        assert_eq!(p.intent, "fix");
+        assert_eq!(p.cards[0].id, "nC");
+        // without cited cards it stays a normal turn
+        assert_eq!(plan(&cards, &[t("user", "保留公式加一點中文解釋")], &Ask::default(), 1).intent, "");
+    }
+
 }

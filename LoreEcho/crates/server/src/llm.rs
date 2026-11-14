@@ -108,7 +108,7 @@ impl Llm {
         let mut f = StandardFactory::new(self.catalog.clone());
         f.prefer_subscription = true;
         f.api = self.keys.get(None, &Account::Single).map(|(k, _)| ApiAccess { base_url: self.base_url.clone(), api_key: k, fallbacks: true });
-        f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: false, temp_prefix: "loreecho-claude".into() });
+        f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: true, temp_prefix: "loreecho-claude".into() });
         let e = self.shared.as_ref().and_then(|h| h.engine()).unwrap_or_default();
         f.local = Some(LocalAccess {
             external: self.external(),
@@ -177,6 +177,15 @@ mod tests {
         assert_eq!(chat.default, "local:current");
         assert_eq!(chat.fallback.as_deref(), Some("claude:selected"));
         assert_eq!(chat.class, Some(lore_llm::TaskClass::Ask));
+    }
+
+    #[test]
+    fn fixing_a_card_is_claude_haiku_with_the_web_and_never_local() {
+        let t = Llm::task_table(None).unwrap();
+        let fix = &t.task[crate::fix::TASK_FIX];
+        assert_eq!(fix.default, "claude:haiku");
+        assert!(fix.fallback.is_none() && fix.offline == Some(false));
+        assert!(fix.needs.web);
     }
 
     #[tokio::test]

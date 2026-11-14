@@ -58,3 +58,16 @@
 /* 記下靈感 */
 .act-idea { font-size: 15px; }
 .act-idea:only-child { margin-top: 4px; }
+
+/* 修正知識卡: the card's text as it is (struck through, quiet) above what it becomes */
+.fix-old { color: var(--faint); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--err) 60%, transparent); font-size: 12.5px; overflow-wrap: anywhere; }
+.fix-why { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.fix-why .k, .fix-srcs .k { color: var(--muted); }
+.fix-srcs > span:last-child { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.fix-src { color: var(--accent-2-text); font-size: 12px; text-decoration: none; overflow-wrap: anywhere; }
+.fix-src:hover { text-decoration: underline; }
+.fix-pick { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.fix-pick .btn { width: 100%; justify-content: flex-start; }
+.fix-swap { padding: 0 12px 0 10px; }
+.fix-swap > span:last-child { display: flex; flex-wrap: wrap; gap: 4px; }
+.fix-swap .link-chip { cursor: pointer; }

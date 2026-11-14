@@ -2221,6 +2221,12 @@ dependencies = [
 [[package]]
 name = "lore-shell"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "serde",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "lore-store"
@@ -2239,6 +2245,9 @@ dependencies = [
 name = "lore-voice"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "futures-util",
+ "lore-shell",
  "serde",
  "serde_json",
  "tokio",
@@ -2250,6 +2259,7 @@ version = "0.1.0"
 dependencies = [
  "le-server",
  "lore-home",
+ "lore-shell",
  "lore-voice",
  "tauri",
  "tauri-build",

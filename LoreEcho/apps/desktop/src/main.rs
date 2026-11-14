@@ -407,6 +407,9 @@ fn main() {
                 .minimizable(true)
                 .resizable(false)
                 .build()?;
+            // the first launch asks every permission the app needs, once, in the background
+            // (answered ones are never asked again; later changes: 設定 → 一般 → 權限)
+            lore_shell::permissions::ask_at_launch();
             if state.expanded {
                 place(&win, true);
             }

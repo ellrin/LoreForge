@@ -106,9 +106,13 @@
       if (ev !== "cards") return;
       K.quiz = d.quiz || null;
       K.cited = (d.cards || []).map((c) => c.id);
+      K.citedCards = (d.cards || []).map((c) => ({ id: c.id, title: c.title }));
       render(d);
+      if (d.intent === "fix") window.LoreEchoActions?.fix(K.citedCards);
       window.LoreEcho?.setState("thinking");
     },
+    /** The cards the last reply used, [{id, title}] (修正知識卡 from the 功能列表). */
+    cited: () => K.citedCards ?? [],
     /** 新對話 / collapse. */
     clear() { K.quiz = null; K.cited = []; show(); files(null); },
   };

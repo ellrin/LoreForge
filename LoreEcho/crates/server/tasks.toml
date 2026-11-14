@@ -40,3 +40,14 @@ default = "local:current"
 fallback = "claude:selected"
 offline = true
 max_tokens = 2500
+
+# 修正知識卡 (author, 2026-11-14): one card he says is wrong is checked on the web by Claude Haiku
+# and a corrected version proposed; he sees old and new and applies it himself. Only this card and
+# his words about it go to Claude. No local model: it cannot search.
+[task.le-fix]
+label = "LoreEcho 修正知識卡"
+class = "tidy"
+needs = { json = true, web = true, context = 16000 }
+default = "claude:haiku"
+offline = false
+max_tokens = 4000
