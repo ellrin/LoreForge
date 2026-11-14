@@ -180,6 +180,12 @@ impl lore_polish::Host for PcHost {
     fn presets(&self) -> Vec<lore_polish::Preset> {
         presets()
     }
+    async fn guard(&self, doc: &str) -> lore_notation::punct::Guard {
+        let Ok(dir) = paper_dir(&self.0, doc).await else { return Default::default() };
+        let l = self.0.loaded.read().await;
+        let rules = l.profile.as_ref().map(|p| p.rules.clone()).unwrap_or_default();
+        l.workspace.as_deref().map(|w| crate::guard::load(w, Some(&dir), &rules)).unwrap_or_default()
+    }
     async fn preset_block(&self, _doc: &str, preset: &str, p: &lore_polish::PresetPassage<'_>) -> String {
         let l = self.0.loaded.read().await;
         let cache = if cfg!(test) { std::env::temp_dir().join("pc-test-cache") } else { cache_root() };

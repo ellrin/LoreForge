@@ -235,6 +235,9 @@ pub struct Item {
     /// only when the author asks (重試).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub candidates_tried: bool,
+    /// 這題不用寫進論文: never asked again, never in the ledger, the claims or the draft.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub excluded: bool,
 }
 
 impl Graded for Item {
@@ -336,6 +339,9 @@ pub struct OutlinePara {
     /// Pending results (P1, …) the paragraph reports or depends on.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<String>,
+    /// Planned figures and tables (labels) the paragraph presents ([`super::figures`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub floats: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -442,6 +448,16 @@ pub struct Session {
     /// `review`, `outline`, `audit`), shown next to the step's button.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub engines: BTreeMap<String, EngineUsed>,
+    /// 深度討論: talks about one question, kept apart from the interview — never material
+    /// for the paper; only an answer the author confirms goes back through the interview.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discussions: Vec<super::discuss::Discussion>,
+    /// 圖表規劃 ([`super::figures`]): proposed with the question groups, kept by the author.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub figures: Option<super::figures::FigurePlan>,
+    /// 寫法筆記: how the author said to write, from the interview ([`super::notes`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writing_notes: Vec<super::notes::WritingNote>,
 }
 
 /// The engine that ran a step: a short label (`Opus`, `Sonnet`, `本機`) and,
@@ -662,6 +678,8 @@ impl Session {
         let items: Vec<ItemState> = self
             .items_of(group)
             .map(|i| match i.pending.as_deref().filter(|_| i.role == super::pending::ROLE) {
+                // left out of the paper by the author: nothing to ask
+                _ if i.excluded => ItemState { id: i.id.clone(), missing: vec![], preferred: None },
                 // a pending result is done when the author explained it
                 Some(p) => {
                     let done = self.pending.iter().find(|x| x.id == p).is_none_or(|x| x.note.complete());
@@ -735,6 +753,7 @@ impl Session {
         if to < Phase::Plan {
             self.groups.clear();
             self.items.clear();
+            self.figures = None;
         }
         // Later steps' own groups.
         self.revisions.clear();
@@ -778,8 +797,19 @@ impl Session {
         if all_turns || self.active.as_ref().is_some_and(|a| !keep.contains(a)) {
             self.active = None;
         }
+        // a discussion belongs to its question: gone with the conversation it is about
+        self.discussions.retain(|d| !all_turns && keep.contains(&d.group));
+        // the notes come from the conversation: they go with the groups they were said in
+        self.writing_notes.retain(|n| n.kept || !all_turns && keep.contains(&n.group));
         if to < Phase::Claims {
             self.claims.clear();
+            for it in self.figures.iter_mut().flat_map(|p| p.items.iter_mut()) {
+                it.claims.clear();
+                it.warnings.retain(|w| !w.starts_with("沒有主張"));
+            }
+        }
+        if let Some(p) = self.figures.as_mut() {
+            p.running = false;
         }
         if to < Phase::Review {
             self.review = None;
@@ -891,6 +921,25 @@ pub fn append_turn(paper: &Path, group: &str, who: Who, text: &str, options: Vec
 /// [`append_turn`] noting the engine that wrote it.
 pub fn append_turn_by(paper: &Path, group: &str, who: Who, text: &str, options: Vec<String>, engine: &str) -> Result<Turn, String> {
     append_turn_with(paper, Turn { n: 0, group: group.into(), who, text: text.into(), options, engine: engine.into(), about: String::new(), picked: vec![] })
+}
+
+/// Take turn `n` out of the interview (a question back moves to 深度討論, never an answer).
+pub fn remove_turn(paper: &Path, n: usize) -> Result<(), String> {
+    let mut turns = read_turns(paper);
+    let before = turns.len();
+    turns.retain(|t| t.n != n);
+    if turns.len() == before {
+        return Ok(());
+    }
+    let mut text = String::new();
+    for t in &turns {
+        text += &serde_json::to_string(t).map_err(|e| e.to_string())?;
+        text.push('\n');
+    }
+    let path = draft_dir(paper).join(TRANSCRIPT_FILE);
+    let tmp = draft_dir(paper).join(".transcript.jsonl.tmp");
+    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 /// Append `t` (its number is given here).

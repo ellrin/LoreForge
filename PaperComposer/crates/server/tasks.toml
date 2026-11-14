@@ -142,6 +142,23 @@ needs = { json = true }
 default = "claude:haiku"
 fallback = "local:current"
 
+# 圖表規劃: the paper's figures and tables from the record and the journal's habit (one call,
+# in parallel with 規劃題組)
+[task.pc-draft-figures]
+label = "圖表規劃"
+class = "create"
+needs = { json = true }
+default = "claude:opus"
+fallback = "claude:sonnet"
+max_tokens = 8000
+
+# 深度討論: a conversation about one interview question (never material for the paper)
+[task.pc-draft-discuss]
+label = "深度討論"
+class = "ask"
+needs = { json = true }
+default = "claude:sonnet"
+
 [task.pc-draft-claims]
 label = "主張登記"
 class = "create"

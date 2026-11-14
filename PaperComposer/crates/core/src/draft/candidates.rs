@@ -68,7 +68,7 @@ pub fn wants(sess: &Session, lens: &Lens, it: &Item) -> bool {
 
 /// The items of `groups` that want candidates.
 pub fn targets<'a>(sess: &'a Session, lens: &Lens, groups: &[String]) -> Vec<&'a Item> {
-    sess.items.iter().filter(|i| groups.contains(&i.group) && wants(sess, lens, i)).collect()
+    sess.items.iter().filter(|i| groups.contains(&i.group) && !i.excluded && wants(sess, lens, i)).collect()
 }
 
 pub fn schema() -> serde_json::Value {

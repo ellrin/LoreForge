@@ -3,6 +3,7 @@
 //! Supported `check` values in rules.csv (type = hard):
 //! - `sentence_count`  threshold "min-max", per paragraph
 //! - `max_words`       threshold "n", per sentence
+//! - `max_commas`      threshold "n", per sentence (numbers, maths, `\cite`, statistics in parentheses do not count)
 //! - `banned_words`    uses vocabulary.csv, per paragraph
 //! - the style checks of [`crate::stylecheck`] (`phrases`, `comma_splice`, `contractions`…),
 //!   threshold = a list in the workspace's `style/checks.toml`
@@ -126,6 +127,24 @@ fn check_paragraph(profile: &Profile, index: usize, para: &str, section: Option<
                     }
                 }
             }
+            // commas per sentence (numbers, maths, citations and statistics in parentheses do not count)
+            "max_commas" => {
+                if let Ok(max) = rule.threshold.trim().parse::<usize>() {
+                    for (i, s) in sents.iter().enumerate() {
+                        let n = lore_notation::punct::sentence_commas(s);
+                        if n > max {
+                            findings.push(Finding {
+                                rule: rule.id.clone(),
+                                severity: sev,
+                                message: format!("{} ({n})", msg(format!("over {max} commas"))),
+                                sentence: Some(i),
+                                found: None,
+                                suggest: None,
+                            });
+                        }
+                    }
+                }
+            }
             "banned_words" => {
                 for (i, s) in sents.iter().enumerate() {
                     let plain = format!(" {} ", strip_latex(s).to_lowercase());
@@ -240,6 +259,16 @@ mod tests {
         // Paragraph 2: third sentence over 8 words.
         assert!(r[1].findings.iter().any(|f| f.rule == "R2" && f.sentence == Some(2)));
         assert_eq!(r[1].status, Some(Severity::Warning));
+    }
+
+    #[test]
+    fn too_many_commas_in_a_sentence() {
+        let mut p = profile();
+        p.rules = vec![Rule { id: "R217".into(), kind: RuleKind::Hard, scope: "sentence".into(), check: "max_commas".into(), threshold: "3".into(), severity: "warning".into(), message: "Too many commas: split the sentence".into() }];
+        let text = "We used A, B, C, D, and E. We used 65,133 images (AUC 0.81, 95\\% CI 0.79, 0.83), A, B and C~\\cite{a,b,c}.";
+        let r = check_text(&p, text, None);
+        assert_eq!(r[0].findings.len(), 1);
+        assert_eq!((r[0].findings[0].sentence, r[0].findings[0].message.as_str()), (Some(0), "Too many commas: split the sentence (4)"));
     }
 
     #[test]

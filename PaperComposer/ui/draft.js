@@ -82,7 +82,7 @@ const PCDraft = (() => {
   /** 預想選項 are prepared in the background: look again until every group has them. */
   function schedulePrep() {
     clearTimeout(D.prepTimer);
-    if (!D.data || !sess().groups.some((g) => g.prep === "running")) return;
+    if (!D.data || !(sess().groups.some((g) => g.prep === "running") || sess().figures?.running)) return;
     D.prepTimer = setTimeout(async () => {
       if (!$("#dlgDraft").open || D.busy) { schedulePrep(); return; }
       try { D.data = await api(base()); draw(); } catch { /* next time */ }
@@ -385,6 +385,14 @@ const PCDraft = (() => {
   function plan(main) {
     const started = sess().groups.some((g) => g.turns > 0);
     main.append(hq("題組", "每一組最後要整理出：說明、動機、結論。題組數只是估計，對話後還會校正。"));
+    // the figure plan is at the end of this page: a way there with its counts
+    const fpl = sess().figures;
+    if (fpl?.items?.length || fpl?.running) {
+      const n = (k) => (fpl.items ?? []).filter((x) => x.kind === k && x.status !== "removed").length;
+      const jump = btn(fpl.running ? "圖表規劃中…" : `圖表規劃：圖 ${n("figure")}、表 ${n("table")} ↓`, () => $("#dfFigPlan")?.scrollIntoView({ behavior: "smooth" }), "ghost small");
+      jump.disabled = false;
+      main.append(row(jump));
+    }
     const r = row();
     if (!started) r.append(btn(sess().groups.length ? "重新規劃" : "規劃題組", () => run("規劃題組", () => call("/plan"))), stepTag("plan"));
     else r.append(note("已經開始對話，只能在下面直接修改。"), stepTag("plan"));
@@ -423,6 +431,65 @@ const PCDraft = (() => {
     });
     function save() { run("儲存題組", () => call("/plan", edit, "PUT")); }
     main.append(row(btn("儲存修改", save), nextBtn("開始對話")));
+    figurePlan(main);
+  }
+
+  // ── 圖表規劃: proposed with the groups; keep, drop, pick how to draw, or say your own ──
+  const TOOL_ZH = { flow: "流程圖", plot: "繪圖", table: "表格", image: "自備影像" };
+  function figurePlan(main) {
+    const fp = sess().figures;
+    const fh = hq("圖表規劃", "依實驗記錄、Key value 和期刊習慣提出的圖表。每張選一種畫法，或刪掉、自己說；大綱和草稿會用這份清單的 \\ref。");
+    fh.id = "dfFigPlan";
+    main.append(fh);
+    const head = row();
+    if (fp?.running) head.append(note("圖表規劃中…"));
+    else head.append(btn(fp?.items?.length ? "重新規劃圖表" : "規劃圖表", () => run("規劃圖表", () => call("/figures")), "ghost"));
+    if (fp?.engine) head.append(engineTag(fp.engine, fp.seconds != null ? `${fp.seconds} 秒` : ""));
+    main.append(head);
+    if (fp?.failed) main.append(note(`沒有完成：${fp.failed}`, "warn"));
+    if (!fp?.items?.length) return;
+    const items = fp.items.map((x) => ({ ...x }));
+    const save = () => run("儲存圖表", () => call("/figures", { items }, "PUT"));
+    const kept = (k) => items.filter((x) => x.kind === k && x.status !== "removed").length;
+    const count = (k, zh, t) => `${zh} ${kept(k)}${t ? `／期刊 ${t[0]}–${t[1]}` : ""}`;
+    const over = (k, t) => t && (kept(k) < t[0] || kept(k) > t[1]);
+    main.append(row(el("span", `df-badge ${over("figure", fp.figures) ? "warn" : ""}`, count("figure", "圖", fp.figures)), el("span", `df-badge ${over("table", fp.tables) ? "warn" : ""}`, count("table", "表", fp.tables))));
+    const list = el("div", "df-figs");
+    items.forEach((it) => {
+      const off = it.status === "removed";
+      const card = el("div", `df-card df-fig ${off ? "no" : ""}`);
+      const top = row(el("span", "df-gid", it.id), el("b", "", it.title), el("span", "df-role", TOOL_ZH[it.tool] ?? it.tool));
+      top.append(el("span", "grow"), btn(off ? "加回來" : "刪除", () => { it.status = off ? "kept" : "removed"; save(); }, "ghost small"));
+      card.append(top);
+      if (it.supports) card.append(el("p", "df-text", it.supports));
+      // what it is made from (record ids); the claims it backs only as a count
+      const ev = el("div", "df-tags");
+      (it.evidence ?? []).forEach((e) => ev.append(el("span", "df-badge", e)));
+      (it.pending ?? []).forEach((p) => ev.append(el("span", "df-badge warn", `待補 ${p}`)));
+      if (it.claims?.length) ev.append(el("span", "df-fig-claims", `支撐 ${it.claims.length} 個主張`));
+      if (ev.childElementCount) card.append(ev);
+      (it.warnings ?? []).forEach((w) => card.append(note(w, "warn")));
+      if (!off) {
+        // options first; 「都不是，我自己說」 last
+        const opts = el("div", "df-opts");
+        (it.options ?? []).forEach((o, k) => {
+          const b = el("button", "ghost", o);
+          // nothing looks chosen until he chooses (a proposal is not a decision)
+          b.setAttribute("aria-pressed", String(it.status === "kept" && !it.own && (it.chosen ?? 0) === k));
+          b.disabled = !!D.busy;
+          b.onclick = () => { it.chosen = k; it.own = ""; it.status = "kept"; save(); };
+          opts.append(b);
+        });
+        const own = input(it.own, "都不是，我自己說");
+        own.onchange = () => { it.own = own.value; it.status = "kept"; save(); };
+        card.append(opts, own);
+      }
+      list.append(card);
+    });
+    main.append(list);
+    const add = input("", "新增一張圖或表（說它要畫什麼），Enter 加入");
+    add.onkeydown = (e) => { if (e.key === "Enter" && add.value.trim()) { items.push({ id: "", kind: /表|table/i.test(add.value) ? "table" : "figure", label: "", title: add.value.trim(), tool: "" }); save(); } };
+    main.append(add);
   }
 
   // ── 4 對話 ───────────────────────────────────────────
@@ -454,6 +521,13 @@ const PCDraft = (() => {
       const b = el("div", `df-msg ${t.who}`);
       b.append(el("div", "", t.text));
       if (t.who === "ai" && t.engine) b.append(engineTag(t.engine));
+      // the question being asked: talk it over apart from the interview (深度討論)
+      if (t.who === "ai" && i === turns.length - 1) {
+        const n = discussionsOf(g.id).length;
+        const db = btn("深度討論", () => openDiscussion(g.id), "ghost small df-discbtn");
+        if (n) db.append(el("span", "df-disc-n", String(n)));
+        b.append(db);
+      }
       const it = t.who === "ai" && i === turns.length - 1 && t.about ? sess().items.find((x) => x.id === t.about) : null;
       if (it?.candidates?.length) b.append(candidateCards(it));
       else if (t.who === "ai" && t.options?.length && i === turns.length - 1) {
@@ -469,9 +543,12 @@ const PCDraft = (() => {
     if (!turns.length) {
       main.append(row(btn("開始這一組", () => run("準備第一個問題", () => call("/turn", { group: g.id, model: $("#dfModel").value })))));
     } else {
+      // while 深度討論 is open the answer comes from there (one place to write at a time)
+      const talking = !!(D.disc && sess().discussions?.some((x) => x.id === D.disc && x.group === g.id && x.status === "open"));
       const ta = el("textarea", "np-input df-answer");
       ta.rows = 3;
-      ta.placeholder = "回答（Ctrl+Enter 送出）";
+      ta.disabled = talking;
+      ta.placeholder = talking ? "正在深度討論：在右邊整理成回答，或關閉討論" : "回答（Ctrl+Enter 送出）";
       ta.value = D.draftAnswer?.[g.id] ?? "";
       ta.oninput = () => ((D.draftAnswer ??= {})[g.id] = ta.value);
       ta.onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(ta.value); };
@@ -480,7 +557,9 @@ const PCDraft = (() => {
       if (mic) ta.after(mic);
       const last = turns.at(-1);
       const shown = last?.who === "ai" && last.about && sess().items.find((x) => x.id === last.about)?.candidates?.length;
-      main.append(row(btn("送出", () => send(ta.value)), ...(shown ? [] : [btn("不確定，給我選項", () => send("不確定，請給我幾個選項"), "ghost")])));
+      const sendRow = row(btn("送出", () => send(ta.value)), ...(shown ? [] : [btn("不確定，給我選項", () => send("不確定，請給我幾個選項"), "ghost")]));
+      if (talking) sendRow.querySelectorAll("button").forEach((x) => (x.disabled = true));
+      main.append(sendRow);
     }
     const foot = row();
     if (st?.ready && g.status !== "done") foot.append(note("這一組的資訊已經足夠。", "ok"));
@@ -491,7 +570,95 @@ const PCDraft = (() => {
     if (nextG) foot.append(btn(`下一組：${nextG.title}`, () => { D.group = nextG.id; draw(); }, "ghost"));
     else if (groups.every((x) => x.status === "done" || x.status === "skipped")) foot.append(nextBtn("下一步：主張登記"));
     main.append(foot);
-    ledger(side, g, st);
+    const d = D.disc && sess().discussions?.find((x) => x.id === D.disc && x.group === g.id && x.status === "open");
+    if (d) discussion(side, d);
+    else { ledger(side, g, st); writingNotes(side); }
+  }
+
+  // ── 寫法筆記: how he said to write, in his words; the drafts follow them ──
+  const SCOPE_ZH = [["paragraph", "這段"], ["section", "這節"], ["paper", "整篇"]];
+  function writingNotes(side, end = false) {
+    const ns = sess().writing_notes ?? [];
+    if (!ns.length) return;
+    side.append(el("h4", "", "寫法筆記"));
+    const edit = ns.map((n) => ({ ...n }));
+    const save = () => run("儲存寫法筆記", () => call("/notes", { notes: edit }, "PUT"));
+    const ul = el("ul", "df-notes");
+    edit.forEach((n, k) => {
+      const li = el("li");
+      const t = input(n.text, "", "textarea");
+      t.rows = 2;
+      t.onchange = () => { n.text = t.value; save(); };
+      const sc = el("select", "np-input df-scope");
+      SCOPE_ZH.forEach(([v, z]) => { const o = el("option", "", z); o.value = v; sc.append(o); });
+      sc.value = n.scope;
+      sc.style.cssText = "width:auto;flex:none";
+      sc.onchange = () => { n.scope = sc.value; save(); };
+      const keep = el("label", "df-keep");
+      const cb = el("input");
+      cb.type = "checkbox";
+      cb.checked = !!n.keep;
+      cb.disabled = !!n.kept;
+      cb.onchange = () => { n.keep = cb.checked; save(); };
+      keep.append(cb, document.createTextNode(n.kept ? "已存進我的寫法" : "以後也用"));
+      li.append(t, row(sc, keep, iconButton("trash", "刪除", () => { edit.splice(k, 1); save(); })));
+      if (n.conflict) li.append(note("和標點規則衝突：以標點規則為準", "warn"));
+      ul.append(li);
+    });
+    side.append(ul);
+    if (end || edit.some((n) => n.keep && !n.kept)) {
+      const b = btn("存進我的寫法", () => run("存進我的寫法", () => call("/notes/keep")), "ghost small");
+      b.disabled = !!D.busy || !edit.some((n) => n.keep && !n.kept);
+      side.append(b);
+    }
+  }
+
+  // ── 深度討論: one question talked over apart from the interview; never material for the paper ──
+  const discussionsOf = (gid) => (sess().discussions ?? []).filter((x) => x.group === gid);
+  function openDiscussion(gid) {
+    run("打開深度討論", async () => {
+      const v = await call("/discuss", { group: gid });
+      const d = v.session.discussions?.filter((x) => x.group === gid && x.status === "open").at(-1);
+      D.disc = d?.id ?? null; D.discAnswer = null;
+      return v;
+    });
+  }
+  function discussion(side, d) {
+    const head = el("div", "df-dhead");
+    head.append(el("h4", "", "深度討論"), iconButton("x", "關閉（不送回答）", () => run("關閉討論", async () => { const v = await call(`/discuss/${d.id}/close`, {}); D.disc = null; D.discAnswer = null; return v; })));
+    const q = el("p", "df-dq", d.question);
+    q.title = "按一下看整題";
+    q.onclick = () => q.classList.toggle("open");
+    side.append(head, q);
+    const log = el("div", "df-log df-dlog");
+    for (const m of d.messages) log.append(el("div", `df-msg ${m.who}`, m.text));
+    if (!d.messages.length) log.append(note("問什麼都可以；這裡的內容不會寫進論文。"));
+    if (D.busy) log.append(el("div", "df-busy", `${D.busy}…`));
+    side.append(log);
+    setTimeout(() => (log.scrollTop = log.scrollHeight), 0);
+    if (D.discAnswer != null) {
+      // the answer drawn from the discussion: the author edits it, then it goes to the interview
+      side.append(el("h4", "", "這題的回答"));
+      const ans = input(D.discAnswer, "", "textarea");
+      ans.rows = 5;
+      ans.oninput = () => (D.discAnswer = ans.value);
+      side.append(ans, row(
+        btn("送出為回答", () => run("送出回答", async () => { const v = await call(`/discuss/${d.id}/close`, { answer: ans.value, model: $("#dfModel").value }); D.disc = null; D.discAnswer = null; return v; })),
+        btn("繼續討論", () => { D.discAnswer = null; draw(); }, "ghost")));
+      return;
+    }
+    const ta = el("textarea", "np-input");
+    ta.rows = 3;
+    ta.placeholder = "想問的（Ctrl+Enter 送出）";
+    ta.value = D.discDraft ?? "";
+    ta.oninput = () => (D.discDraft = ta.value);
+    const say = () => { const t = ta.value.trim(); if (!t) return; run("討論中", async () => { const v = await call(`/discuss/${d.id}`, { text: t }); D.discDraft = ""; return v; }); };
+    ta.onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) say(); };
+    const sum = btn("整理成這題的回答", () => run("整理回答", async () => { const r = await call(`/discuss/${d.id}/answer`, {}); D.discAnswer = r.answer ?? ""; return null; }), "primary small");
+    // something to sum up only once the author has said something
+    if (!d.messages.some((m) => m.who === "me")) sum.disabled = true;
+    side.append(ta, row(btn("送出", say, "ghost small"), sum));
+    if (d.item) side.append(row(btn("這題不用寫進論文", () => run("略過這題", async () => { const v = await call(`/discuss/${d.id}/close`, { exclude: true }); D.disc = null; return v; }), "ghost small")));
   }
 
   function send(text) {
@@ -502,6 +669,9 @@ const PCDraft = (() => {
     const item = D.pickItem ?? null;
     run("思考下一個問題", async () => {
       const v = await call("/turn", { group: gid, answer: text, picked, item, model: $("#dfModel").value });
+      // a question back opened 深度討論 (the model saw it was not an answer)
+      const d = v.session.discussions?.find((x) => x.group === gid && x.status === "open");
+      if (d && d.messages.at(-1)?.who === "ai") D.disc = d.id;
       if (D.draftAnswer) D.draftAnswer[gid] = "";
       D.picked = null; D.pickItem = null;
       return v;
@@ -618,6 +788,12 @@ const PCDraft = (() => {
     const ul = el("ul", "df-ledger");
     sess().items.filter((i) => i.group === g.id).forEach((it) => {
       const li = el("li");
+      if (it.excluded) {
+        li.classList.add("excluded");
+        li.append(el("b", "", it.label), row(el("span", "df-badge soft", "不寫進論文"), btn("恢復", () => run("恢復這題", () => call(`/items/${it.id}/exclude`, { excluded: false })), "ghost small")));
+        ul.append(li);
+        return;
+      }
       const s = st?.items.find((x) => x.id === it.id);
       li.classList.toggle("ok", !!s && !s.missing.length);
       li.append(el("b", "", it.label));
@@ -818,8 +994,9 @@ const PCDraft = (() => {
   }
 
   // ── 8 審稿 ───────────────────────────────────────────
-  const KIND_ZH = { venue: "期刊要求", citation: "引用", contradiction: "矛盾", overclaim: "宣稱過度", "missing-number": "缺數字", impossible: "數字不可能", generic: "空泛", repeat: "重複", "buried-origin": "發想埋太晚", "missing-why": "缺理由" };
-  function audit(main) {
+  const KIND_ZH = { venue: "期刊要求", citation: "引用", contradiction: "矛盾", overclaim: "宣稱過度", "missing-number": "缺數字", impossible: "數字不可能", generic: "空泛", repeat: "重複", "buried-origin": "發想埋太晚", "missing-why": "缺理由", punctuation: "標點句長" };
+  function audit(main, side) {
+    writingNotes(side, true);
     main.append(hq("審稿檢查", "檢查矛盾、宣稱強度、缺數字、空泛句、重複與埋掉的發想。需要你補充的，可以回到對話追問。沒有 Claude 時由本機模型逐章審。"));
     main.append(row(btn(sess().audit.length ? "重新審稿" : "審稿", () => run("審稿中", () => call("/audit"))), stepTag("audit")));
     pendingList(main);

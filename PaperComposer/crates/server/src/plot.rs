@@ -18,14 +18,19 @@ use super::*;
 use lore_plot::figure;
 
 /// The model calls of 自動 (task `plot-propose`), through this app's routing.
-struct PlotLlm(Arc<Llm>);
+struct PlotLlm(Shared);
 
 #[async_trait::async_trait]
 impl lore_plot::propose::Llm for PlotLlm {
     async fn complete_json(&self, task: &str, req: lore_llm::LlmRequest) -> Result<(serde_json::Value, String), String> {
-        let route = self.0.route(task, None).await?;
+        let route = self.0.llm.route(task, None).await?;
         let req = route.apply(req);
-        let v = lore_llm::complete_json(route.provider.as_ref(), &req).await.map_err(|e| format!("模型沒有回答：{e}"))?;
+        let mut v = lore_llm::complete_json(route.provider.as_ref(), &req).await.map_err(|e| format!("模型沒有回答：{e}"))?;
+        // a drafted caption keeps to the author's punctuation rule (mechanical fixes; off by default)
+        if let Some(c) = v.get("caption").and_then(|c| c.as_str()).map(str::to_string) {
+            let g = crate::workspace_guard(&self.0).await;
+            v["caption"] = serde_json::Value::String(g.fix(&c));
+        }
         let id = route.provider.id();
         lore_llm::shared::record_used(task, &id);
         Ok((v, id))
@@ -33,7 +38,7 @@ impl lore_plot::propose::Llm for PlotLlm {
 }
 
 pub(crate) fn routes(state: &Shared) -> Router<Shared> {
-    let plot = lore_plot::Plot::new(loreforge_home()).with_llm(Arc::new(PlotLlm(state.llm.clone())));
+    let plot = lore_plot::Plot::new(loreforge_home()).with_llm(Arc::new(PlotLlm(state.clone())));
     Router::new()
         .route("/api/papers/{name}/plot", get(spec_get).post(save).layer(axum::extract::DefaultBodyLimit::max(60 * 1024 * 1024)))
         .route("/api/papers/{name}/plot/macros", get(macros))

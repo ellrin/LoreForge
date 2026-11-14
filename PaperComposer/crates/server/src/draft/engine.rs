@@ -268,6 +268,27 @@ pub async fn turn(e: &dyn Engines, picked: Option<&str>, prompt: &Prompt) -> Res
     first_working!(e, task, picked, |c| ask(e, task, &c, prompt, &schema, dp::parse_turn).await)
 }
 
+/// 圖表規劃: the list, checked by code.
+pub async fn figures(e: &dyn Engines, prompt: &Prompt, known: &std::collections::BTreeSet<String>, pending: &[String], paper_labels: &[String]) -> Result<(Vec<pc_core::draft::figures::PlannedFloat>, EngineUsed), String> {
+    let task = pc_core::draft::figures::TASK;
+    let schema = pc_core::draft::figures::schema();
+    first_working!(e, task, None, |c| ask(e, task, &c, prompt, &schema, |x| pc_core::draft::figures::parse(x, known, pending, paper_labels)).await)
+}
+
+/// 深度討論: one reply (Sonnet; cloud only, the task has no local fallback).
+pub async fn discuss(e: &dyn Engines, prompt: &Prompt) -> Result<(String, EngineUsed), String> {
+    let task = pc_core::draft::discuss::TASK;
+    let schema = pc_core::draft::discuss::reply_schema();
+    first_working!(e, task, None, |c| ask(e, task, &c, prompt, &schema, pc_core::draft::discuss::parse_reply).await)
+}
+
+/// 整理成這題的回答.
+pub async fn discuss_answer(e: &dyn Engines, prompt: &Prompt) -> Result<(String, EngineUsed), String> {
+    let task = pc_core::draft::discuss::TASK;
+    let schema = pc_core::draft::discuss::answer_schema();
+    first_working!(e, task, None, |c| ask(e, task, &c, prompt, &schema, pc_core::draft::discuss::parse_answer).await)
+}
+
 /// Step 4.5.
 pub async fn claims(e: &dyn Engines, key_value: &str, sess: &Session, lens: &Lens, material: &str) -> Result<(Vec<Claim>, EngineUsed), String> {
     let task = "pc-draft-claims";

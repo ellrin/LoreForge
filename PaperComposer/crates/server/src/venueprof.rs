@@ -422,6 +422,10 @@ impl VenueJob {
         }
         let engine = cx.output("label")?["engine"].as_str().unwrap_or("").to_string();
         let mut prof = vp::build(&p.template, &p.identity, &p.kind, &p.today, &engine, &pairs);
+        // the hand-made figure and table habits stay (same journal)
+        if let Some(old) = vp::load(&p.workspace, &p.template) {
+            prof.keep_floats_from(&old);
+        }
         let skipped: HashMap<String, usize> = serde_json::from_value(cx.output("fetch")?["skipped"].clone()).unwrap_or_default();
         prof.skipped = skipped.into_iter().collect();
         vp::save(&p.workspace, &prof)?;

@@ -923,6 +923,16 @@ impl Habit {
     }
 }
 
+/// A kind of figure or table and how many of the articles have one (`workflow` 4/6).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FloatKind {
+    pub id: String,
+    pub label: String,
+    pub count: usize,
+    pub of: usize,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ArticleUsed {
@@ -962,6 +972,62 @@ pub struct Profile {
     pub categories: Vec<Category>,
     pub habits: Vec<Habit>,
     pub phrases: Vec<Phrase>,
+    /// What Figure 1 usually is (a study workflow in 4 of 6 articles). Hand data; a profile
+    /// rebuilt by the app keeps it from the one before (same journal).
+    pub figure1: Option<FloatKind>,
+    /// Figure kinds the articles show, most common first (ROC curves, Grad-CAM, example images).
+    pub figure_kinds: Vec<FloatKind>,
+    /// Table kinds (Table 1 = dataset characteristics, the main comparison).
+    pub table_kinds: Vec<FloatKind>,
+    /// How many figures / tables to aim for, `[low, high]` (none: from the counts).
+    pub figure_target: Option<[usize; 2]>,
+    pub table_target: Option<[usize; 2]>,
+}
+
+impl Profile {
+    /// Figures and tables to aim for: the profile's own targets, else around the articles' mean.
+    pub fn float_targets(&self) -> ([usize; 2], [usize; 2]) {
+        let around = |s: &Stat| [((s.mean - 2.0).floor().max(s.min)).max(0.0) as usize, s.mean.ceil() as usize];
+        (self.figure_target.unwrap_or_else(|| around(&self.figures)), self.table_target.unwrap_or_else(|| around(&self.tables)))
+    }
+
+    /// The hand data a rebuilt profile carries over from the one before (same journal).
+    pub fn keep_floats_from(&mut self, old: &Profile) {
+        if old.openalex != self.openalex {
+            return;
+        }
+        if self.figure1.is_none() {
+            self.figure1 = old.figure1.clone();
+        }
+        if self.figure_kinds.is_empty() {
+            self.figure_kinds = old.figure_kinds.clone();
+        }
+        if self.table_kinds.is_empty() {
+            self.table_kinds = old.table_kinds.clone();
+        }
+        self.figure_target = self.figure_target.or(old.figure_target);
+        self.table_target = self.table_target.or(old.table_target);
+    }
+
+    /// The figure and table habits as prompt text (empty without data).
+    pub fn floats_block(&self) -> String {
+        if self.figure1.is_none() && self.figure_kinds.is_empty() && self.table_kinds.is_empty() {
+            return String::new();
+        }
+        let (f, t) = self.float_targets();
+        let kinds = |v: &[FloatKind]| v.iter().map(|k| format!("{} [{}] {}/{}", k.label, k.id, k.count, k.of)).collect::<Vec<_>>().join("; ");
+        let mut s = format!("Figures and tables in {}: aim for {}–{} figures and {}–{} tables.\n", self.venue, f[0], f[1], t[0], t[1]);
+        if let Some(k) = &self.figure1 {
+            s += &format!("Figure 1 is usually: {} [{}] ({}/{} articles).\n", k.label, k.id, k.count, k.of);
+        }
+        if !self.figure_kinds.is_empty() {
+            s += &format!("Common figures: {}.\n", kinds(&self.figure_kinds));
+        }
+        if !self.table_kinds.is_empty() {
+            s += &format!("Common tables: {}.\n", kinds(&self.table_kinds));
+        }
+        s
+    }
 }
 
 fn cat_label(cats: &[Category], id: &str) -> String {
@@ -1183,6 +1249,21 @@ pub fn markdown(p: &Profile) -> String {
     let n = p.articles.len();
     let mut s = format!("# 期刊寫法：{}\n\n{} 由 {} 篇開放取用文章整理（{}）。這是期刊的寫法，不是作者的語氣。\n\n", p.venue, p.made, n, if p.engine == "headings" { "只看標題" } else { &p.engine });
     s.push_str(&format!("全文約 {:.0} 字（{:.0}–{:.0}）；圖 {:.1}、表 {:.1}、編號公式 {:.1}。\n\n", p.body_words.mean, p.body_words.min, p.body_words.max, p.figures.mean, p.tables.mean, p.equations.mean));
+    if p.figure1.is_some() || !p.figure_kinds.is_empty() || !p.table_kinds.is_empty() {
+        let (f, t) = p.float_targets();
+        let kinds = |v: &[FloatKind]| v.iter().map(|k| format!("{}（{}/{}）", k.label, k.count, k.of)).collect::<Vec<_>>().join("、");
+        s.push_str(&format!("## 圖表\n\n目標：圖 {}–{}、表 {}–{}。\n", f[0], f[1], t[0], t[1]));
+        if let Some(k) = &p.figure1 {
+            s.push_str(&format!("Figure 1：{}（{}/{}）。\n", k.label, k.count, k.of));
+        }
+        if !p.figure_kinds.is_empty() {
+            s.push_str(&format!("常見的圖：{}。\n", kinds(&p.figure_kinds)));
+        }
+        if !p.table_kinds.is_empty() {
+            s.push_str(&format!("常見的表：{}。\n", kinds(&p.table_kinds)));
+        }
+        s.push('\n');
+    }
     s.push_str("## 章節\n\n");
     for sec in &p.sections {
         let titles: Vec<String> = sec.titles.iter().map(|t| format!("{}（{}/{}）", t.text, t.n, n)).collect();

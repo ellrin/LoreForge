@@ -42,14 +42,16 @@
     if (!r.ok) throw new Error((await r.text()) || r.statusText);
     return r.json();
   }
-  // a paper column (version 1 frame: the text width, about 175 mm), height in proportion
-  const FRAME = [496, 300];
+  // the frame (pt, 1/72 in) of a new figure: the paper's column width as its class sets it (PCPage,
+  // figplot.js), height in proportion; 175 mm when it cannot be measured
+  const MM_PT = 72 / 25.4;
+  const frame = (mm) => { const w = Math.round((mm ?? 175) * MM_PT * 10) / 10; return [w, Math.round((w * 300) / 496)]; };
 
   async function create() {
     try { await load(); } catch (e) { LoreShell.toast(e.message, { err: true }); return null; }
     let out = null;
     await LoreFlow.edit({
-      target: "paper", title: "新流程圖", api: "/flow/api", doc: state.paper.name, frame: FRAME, source: await source(), sources,
+      target: "paper", title: "新流程圖", api: "/flow/api", doc: state.paper.name, frame: frame(await window.PCPage?.width()), pageWidth: await window.PCPage?.width(), source: await source(), sources,
       save: async ({ spec }) => {
         try {
           const r = await save(spec, null);
@@ -68,7 +70,7 @@
     const { spec } = await r.json();
     try { await load(); } catch (e) { LoreShell.toast(e.message, { err: true }); return true; }
     await LoreFlow.edit({
-      spec, target: "paper", title: path.split("/").pop(), api: "/flow/api", doc: state.paper.name, sources,
+      spec, target: "paper", title: path.split("/").pop(), api: "/flow/api", doc: state.paper.name, sources, pageWidth: await window.PCPage?.width(),
       save: async ({ spec }) => {
         try {
           const saved = await save(spec, path);

@@ -108,9 +108,77 @@ pub async fn measure(paper: &Path, t: &TexTable) -> Result<Measured, String> {
     })
 }
 
+/// The page as the paper's class sets it, in millimetres (1 TeX pt = 25.4 / 72.27 mm).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct Page {
+    /// `\linewidth` inside a one-column `figure`: what `\includegraphics[width=\linewidth]` fills.
+    pub column_mm: f64,
+    pub text_mm: f64,
+    pub height_mm: f64,
+}
+
+pub const PT_MM: f64 = 25.4 / 72.27;
+
+/// A document that only reports the page's widths.
+pub fn page_probe(preamble: &str) -> String {
+    format!("{preamble}\n\\begin{{document}}\n\\typeout{{PCW columnwidth \\the\\columnwidth}}\\typeout{{PCW textwidth \\the\\textwidth}}\\typeout{{PCW textheight \\the\\textheight}}\n\\end{{document}}\n")
+}
+
+pub fn parse_page(log: &str) -> Option<Page> {
+    let get = |name: &str| log.lines().find_map(|l| l.strip_prefix("PCW ")?.strip_prefix(name)?.trim().strip_suffix("pt")?.parse::<f64>().ok());
+    let (c, t, h) = (get("columnwidth ")?, get("textwidth ")?, get("textheight ")?);
+    let mm = |x: f64| (x * PT_MM * 10.0).round() / 10.0;
+    (c > 0.0 && t > 0.0).then(|| Page { column_mm: mm(c), text_mm: mm(t), height_mm: mm(h) })
+}
+
+/// Pages measured, by preamble (a pdflatex run takes a second or two; the preamble rarely changes).
+static PAGES: std::sync::Mutex<Vec<(String, Page)>> = std::sync::Mutex::new(Vec::new());
+
+/// The paper's page widths, measured with its own class (cached per preamble).
+pub async fn page(paper: &Path) -> Result<Page, String> {
+    let main = std::fs::read_to_string(pc_core::open::main_file(paper)).map_err(|_| "論文沒有主檔".to_string())?;
+    let pre = preamble(&main).ok_or("主檔沒有 \\begin{document}")?.to_string();
+    if let Some(p) = PAGES.lock().ok().and_then(|v| v.iter().find(|(k, _)| *k == pre).map(|(_, p)| *p)) {
+        return Ok(p);
+    }
+    let tex = pdflatex().ok_or("找不到 pdflatex：請先安裝 TeX")?;
+    let dir = std::env::temp_dir().join(format!("papercomposer-page-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("page.tex"), page_probe(&pre)).map_err(|e| e.to_string())?;
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let _ = tokio::time::timeout(
+        Duration::from_secs(40),
+        crate::proc::cmd(&tex)
+            .current_dir(&dir)
+            .env("TEXINPUTS", format!("{}{sep}", paper.display()))
+            .args(["-interaction=batchmode", "-draftmode", "-no-shell-escape", "-halt-on-error", "page.tex"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "量測逾時".to_string())?;
+    let log = std::fs::read_to_string(dir.join("page.log")).unwrap_or_default();
+    let p = parse_page(&log).ok_or_else(|| log.lines().find(|l| l.starts_with('!')).map(|e| format!("量測失敗：{e}")).unwrap_or_else(|| "量測失敗".into()))?;
+    if let Ok(mut v) = PAGES.lock() {
+        v.push((pre, p));
+    }
+    Ok(p)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_page_width_is_read_in_millimetres() {
+        // sn-jnl: \textwidth 372pt → 130.7 mm; a two-column class gives a narrower column
+        let p = parse_page("PCW columnwidth 372.0pt\nPCW textwidth 372.0pt\nPCW textheight 609.0pt\n").unwrap();
+        assert_eq!((p.column_mm, p.text_mm), (130.7, 130.7));
+        let two = parse_page("PCW columnwidth 252.0pt\nPCW textwidth 516.0pt\nPCW textheight 682.0pt\n").unwrap();
+        assert_eq!((two.column_mm, two.text_mm), (88.6, 181.4));
+        assert!(parse_page("PCW columnwidth 1pt").is_none());
+        assert!(page_probe("\\documentclass{article}").contains("\\typeout{PCW textwidth \\the\\textwidth}"));
+    }
 
     #[test]
     fn reads_widths_from_the_log() {

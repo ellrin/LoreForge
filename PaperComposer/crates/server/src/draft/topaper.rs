@@ -91,6 +91,7 @@ pub(crate) fn abstract_para(sess: &Session, key_value: &str) -> ds::OutlinePara 
         sources: sess.claims.iter().map(|c| c.id.clone()).collect(),
         cites: vec![],
         pending,
+        floats: vec![],
     }
 }
 
@@ -245,8 +246,19 @@ pub(crate) fn place(dir: &Path, ws_venue: &Venue, sess: &Session, only: Option<&
         // tables and figures already in the section (inserted from step 2, 流程圖, 繪圖) stay:
         // the drafted text refers to them with \ref
         let floats: Vec<String> = target.paragraphs.iter().filter(|p| is_float(p) && !paras.contains(p)).cloned().collect();
+        // 圖表規劃: a planned figure or table this section is the first to \ref and the paper
+        // does not have yet gets a stand-in with its label (the real one replaces it)
+        let have = pc_core::open::source_files(dir).iter().filter_map(|f| std::fs::read_to_string(f).ok()).collect::<Vec<_>>().join("\n") + &floats.join("\n");
+        let mut stand_ins: Vec<String> = vec![];
+        for it in sess.figures.iter().flat_map(|p| p.kept()) {
+            let lab = format!("\\label{{{}}}", it.label);
+            if !have.contains(&lab) && paras.iter().any(|p| p.contains(&format!("{{{}}}", it.label))) {
+                stand_ins.push(pc_core::draft::figures::placeholder(it));
+            }
+        }
         target.paragraphs = paras;
         target.paragraphs.extend(floats);
+        target.paragraphs.extend(stand_ins);
         pc_core::open::write_section(dir, &target)?;
         done.sections.push((d.section.clone(), pc_core::text::strip_latex(&target.title)));
     }
@@ -402,6 +414,25 @@ mod tests {
         assert_eq!(std::fs::read_to_string(d.join("sections/01-abstract.tex")).unwrap().trim(), "We weight labels.");
         let main = std::fs::read_to_string(d.join("main.tex")).unwrap();
         assert!(main.contains("\\abstract{\\input{sections/01-abstract}}") && main.contains("\\input{sections/conclusion}"), "{main}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_planned_figure_gets_a_stand_in_with_its_label_once() {
+        use pc_core::draft::figures::{FigurePlan, PlannedFloat, Status};
+        let d = paper_dir("planned");
+        let mut s = Session::default();
+        let fl = |id: &str, label: &str, st: Status| PlannedFloat { id: id.into(), kind: "figure".into(), label: label.into(), title: "t".into(), caption: "AUROC per finding.".into(), options: vec!["bars".into()], status: st, ..Default::default() };
+        s.figures = Some(FigurePlan { items: vec![fl("F1", "fig:auc", Status::Kept), fl("F2", "fig:gone", Status::Removed), fl("F3", "fig:later", Status::Proposed)], ..Default::default() });
+        s.drafts = vec![draft("Results", &["Fig.~\\ref{fig:auc} and Table~\\ref{tab:main} show it."])];
+        place(&d, &Venue::default(), &s, None).unwrap();
+        let r = std::fs::read_to_string(d.join("sections/04-results.tex")).unwrap();
+        assert_eq!(r.matches("\\label{fig:auc}").count(), 1, "{r}");
+        assert!(r.contains("\\caption{AUROC per finding.}") && !r.contains("fig:gone") && !r.contains("fig:later"), "only what the section refers to: {r}");
+        assert_eq!(r.matches("\\label{tab:main}").count(), 1, "the paper's own table is not stood in for");
+        // placed again: the stand-in is already there, not twice
+        place(&d, &Venue::default(), &s, None).unwrap();
+        assert_eq!(std::fs::read_to_string(d.join("sections/04-results.tex")).unwrap().matches("\\label{fig:auc}").count(), 1);
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -56,6 +56,8 @@
     let out = null;
     await LorePlot.edit({
       target: "paper", title: kind === "equation" ? "方程式" : "新圖", kind, macros: await macros(), notation: await notation(), api: "/plot/api", library,
+      // the paper's own column width (\linewidth of a figure), measured with its class: no 欄 to pick
+      pageWidth: await PCPage.width(),
       save: async ({ spec, svg }) => {
         try {
           const r = await save({ stem: stemOf(spec), spec, svg });
@@ -74,7 +76,7 @@
     const { spec } = await r.json();
     try { await load(); } catch (e) { LoreShell.toast(e.message, { err: true }); return true; }
     await LorePlot.edit({
-      spec, target: "paper", title: path.split("/").pop(), macros: await macros(), notation: await notation(), api: "/plot/api", library,
+      spec, target: "paper", title: path.split("/").pop(), macros: await macros(), notation: await notation(), api: "/plot/api", library, pageWidth: await PCPage.width(),
       save: async ({ spec, svg }) => {
         try {
           const saved = await save({ replace: path, spec, svg });
@@ -87,4 +89,18 @@
     return true;
   }
   window.PCPlot = { create, reedit };
+  /** The open paper's column width in mm (null when it cannot be measured: the editors keep their defaults). */
+  const pages = {};
+  window.PCPage = {
+    async width() {
+      const name = state.paper?.name;
+      if (!name) return null;
+      if (!(name in pages)) {
+        pages[name] = fetch(`${base()}/page`).then((r) => (r.ok ? r.json() : {})).then((p) => (p.column_mm > 0 ? p.column_mm : null)).catch(() => null);
+      }
+      const w = await pages[name];
+      if (w == null) delete pages[name];
+      return w;
+    },
+  };
 })();

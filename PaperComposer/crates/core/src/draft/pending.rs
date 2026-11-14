@@ -263,8 +263,11 @@ pub fn from_record(items: &mut Vec<PendingItem>, experiments: &[super::session::
         let i = match at {
             Some(k) => k,
             None => {
+                // named by its waiting cells, not by the table: the table's other cells are known,
+                // and an item named after the whole table made every sentence about it "dependent"
                 let id = next_id(items);
-                items.push(PendingItem { id, what: t.caption.clone(), ..Default::default() });
+                let cells: Vec<String> = holes.iter().map(|h| cell_name(t, h.row.unwrap_or(0), h.col.unwrap_or(0))).collect();
+                items.push(PendingItem { id, what: format!("{} (in \"{}\")", cells.join(", "), t.caption.trim()), ..Default::default() });
                 items.len() - 1
             }
         };
@@ -583,7 +586,7 @@ fn item_line(i: &PendingItem) -> String {
         s += &format!("; experiment {e}");
     }
     if let Some(t) = &i.table {
-        s += &format!("; table {t} ({} cells)", i.cells.len());
+        s += &format!("; table {t}: only {} cell(s) wait, every other value of that table is known", i.cells.len());
     }
     let n = &i.note;
     if !(n.what.is_empty() && n.why.is_empty() && n.expect.is_empty() && n.if_not.is_empty()) {
@@ -704,8 +707,10 @@ pub fn draft_rules(sess: &Session, only: &[String]) -> String {
 the expected direction, no hedging (\"may\", \"might\", \"is expected to\") — and mark them so they are found later:\n\
 - the number itself: \\pending{ID}{short English name of what is measured} (never a made-up number, never \
 \"[Author to confirm]\" for these);\n\
-- every sentence that depends on it (a comparison, a claim, a conclusion, also in the abstract, discussion and \
-conclusion): end it with \\pendingdep{ID} right before its full stop;\n\
+- a sentence that states this result, compares with it or draws a conclusion from it (also in the abstract, \
+discussion and conclusion): end it with \\pendingdep{ID} right before its full stop. Only those: a sentence that \
+uses only known numbers (other cells of the same table, other experiments) does not depend on it, even when it is \
+about the same table or experiment;\n\
 - a paragraph whose whole content waits: write only \\pendingpara{ID}{frame: what the paragraph will say and which \
 figure or table (\\ref{…}) it holds}.\n\
 Use only these ids:\n"
@@ -714,6 +719,95 @@ Use only these ids:\n"
         s += &item_line(i);
     }
     s
+}
+
+/// For a paragraph that depends on no pending result: never a number for one, no marks.
+pub fn not_here(sess: &Session) -> String {
+    let waiting: Vec<&PendingItem> = sess.pending.iter().filter(|i| i.status == PendingStatus::Waiting).collect();
+    if waiting.is_empty() {
+        return String::new();
+    }
+    let ids: Vec<String> = waiting.iter().map(|i| format!("{} {}", i.id, i.what)).collect();
+    format!("Results not in yet (never write a number for them; this paragraph uses no pending marks): {}.\n", ids.join("; "))
+}
+
+/// The code's side of 「依賴句只算直接用到的」: a `\pendingdep` of an id that is not waiting
+/// (filled, or unknown) or that this paragraph does not depend on (`allowed`, from the outline) is
+/// removed, unless its own sentence states the value (`\pending{ID}{…}`).
+///
+/// Also removed: the mark of a sentence whose numbers are all values the record already has
+/// (`known`): it reports known values, not the pending one ("In men, both findings differed
+/// (p = 0.004)…" was marked as depending on a missing cell). The caller passes no `known` for
+/// the abstract and the conclusion: a sentence there that concludes about the pending result
+/// while quoting a known number must keep its mark, so a contradicting result flags it (回填).
+pub fn prune_deps(sess: &Session, allowed: &[String], text: &str, known: &str) -> String {
+    let waiting = |id: &str| sess.pending.iter().any(|p| p.id == id && p.status == PendingStatus::Waiting);
+    // stated in the same sentence (`… is \\pending{P1}{…}, which keeps the ranking\\pendingdep{P1}.`)
+    let stated_here = |m: &Mark| marks::marks(&sentence_at(text, m.start)).iter().any(|x| x.id == m.id && x.kind != MarkKind::Dep);
+    let mut out = text.to_string();
+    for m in marks::marks(text).into_iter().rev().filter(|m| m.kind == MarkKind::Dep) {
+        let only_known = || {
+            let nums = numbers(&marks::to_plain(&sentence_at(text, m.start)));
+            !nums.is_empty() && nums.iter().all(|n| has_number(known, n))
+        };
+        let keep = waiting(&m.id) && (stated_here(&m) || allowed.contains(&m.id) && !only_known());
+        if !keep {
+            // "known 0.72 \\pendingdep{P1}." → "known 0.72."
+            let mut start = m.start;
+            while start > 0 && out.as_bytes()[start - 1] == b' ' {
+                start -= 1;
+            }
+            out.replace_range(start..m.end, "");
+        }
+    }
+    out
+}
+
+/// The numbers written in `s` (`0.078`, `5,159`, `93.31`), with no unit.
+pub fn numbers(s: &str) -> Vec<String> {
+    let b: Vec<char> = s.chars().collect();
+    let mut out = vec![];
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_digit() && (i == 0 || !b[i - 1].is_ascii_alphanumeric()) {
+            let mut j = i;
+            while j < b.len() && (b[j].is_ascii_digit() || matches!(b[j], '.' | ',') && b.get(j + 1).is_some_and(|c| c.is_ascii_digit())) {
+                j += 1;
+            }
+            // a lone digit (two groups, step 3) says nothing about which value it is
+            if j < b.len() && b[j].is_ascii_alphabetic() || j - i < 2 {
+                i = j.max(i + 1);
+                continue;
+            }
+            out.push(b[i..j].iter().collect());
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// `n` written in `known` as a number of its own (not inside a longer one).
+fn has_number(known: &str, n: &str) -> bool {
+    known.match_indices(n).any(|(at, _)| {
+        let before = known[..at].chars().next_back();
+        let after = known[at + n.len()..].chars().next();
+        !before.is_some_and(|c| c.is_ascii_digit() || c == '.') && !after.is_some_and(|c| c.is_ascii_digit()) && !(after == Some('.') && known[at + n.len() + 1..].chars().next().is_some_and(|c| c.is_ascii_digit()))
+    })
+}
+
+/// At most this many dependent sentences of one result in one paragraph; more means the
+/// paragraph marked sentences that only use known values.
+pub const MAX_DEPS: usize = 2;
+
+/// Ids with more than [`MAX_DEPS`] dependent sentences in `text`, with their count.
+pub fn overmarked(text: &str) -> Vec<(String, usize)> {
+    let mut n: BTreeMap<String, usize> = BTreeMap::new();
+    for m in marks::marks(text).into_iter().filter(|m| m.kind == MarkKind::Dep) {
+        *n.entry(m.id).or_default() += 1;
+    }
+    n.into_iter().filter(|(_, k)| *k > MAX_DEPS).collect()
 }
 
 /// The reviewer pass's rule for marks.
@@ -1138,6 +1232,45 @@ mod tests {
         let f = |k: &str, q: &str| Finding { id: "f".into(), kind: k.into(), para: "p3".into(), quote: q.into(), why: "w".into(), ..Default::default() };
         let out = filter_findings(vec![f("overclaim", "clearly better"), f("missing-number", "Recall improved"), f("generic", "clearly better"), f("missing-number", "\\pending{P1}")], &s);
         assert_eq!(out.iter().map(|x| (x.id.as_str(), x.kind.as_str())).collect::<Vec<_>>(), [("f1", "missing-number"), ("f2", "generic")]);
+    }
+
+    #[test]
+    fn only_sentences_that_use_the_pending_value_are_dependent() {
+        // regression (e2e: 11–27 dependent sentences per item): the item was named after the whole
+        // table, every paragraph got every item's rules, and nothing pruned the marks
+        let t = ResultTable {
+            id: "R1".into(),
+            caption: "Cross-site AUC".into(),
+            columns: vec!["Finding".into(), "Site A".into(), "Site B".into()],
+            rows: vec![vec!["Edema".into(), "0.83".into(), "0.79".into()], vec!["Devices".into(), "0.88".into(), "?".into()]],
+            ..Default::default()
+        };
+        let mut s = Session::default();
+        from_record(&mut s.pending, &[], std::slice::from_ref(&t));
+        assert_eq!(s.pending[0].what, "Devices / Site B (in \"Cross-site AUC\")", "named by its waiting cell");
+        s.pending.push(PendingItem { id: "P2".into(), what: "other".into(), status: PendingStatus::Filled, ..Default::default() });
+        let r = draft_rules(&s, &["P1".into()]);
+        assert!(r.contains("only 1 cell(s) wait, every other value of that table is known"));
+        assert!(r.contains("a sentence that uses only known numbers") && !r.contains("every sentence that depends"));
+        assert!(!draft_rules(&s, &["P9".into()]).contains("P1"), "only the paragraph's own items");
+        assert!(not_here(&s).contains("P1") && !not_here(&s).contains("pendingdep"));
+        // the code drops marks of results the paragraph does not depend on, and of filled ones
+        let text = "Edema fell from 0.83 to 0.79 \\pendingdep{P1}. Devices reached \\pending{P1}{Devices Site B AUC}\\pendingdep{P1}. Old\\pendingdep{P2}.";
+        assert_eq!(prune_deps(&s, &[], text, ""), "Edema fell from 0.83 to 0.79. Devices reached \\pending{P1}{Devices Site B AUC}\\pendingdep{P1}. Old.", "stated here: kept; filled: gone");
+        assert_eq!(prune_deps(&s, &[], "A 0.79\\pendingdep{P1}.", ""), "A 0.79.", "neither depended on nor stated: gone");
+        // …but an abstract or conclusion sentence that states the outcome stays marked (回填 rewrites it)
+        assert_eq!(prune_deps(&s, &["P1".into()], "The gain carries over\\pendingdep{P1}.", "0.83 0.79"), "The gain carries over\\pendingdep{P1}.");
+        // a sentence of known values only (even in a paragraph about the result) is not dependent
+        let record = "| Edema | 0.83 | 0.79 |\nIn men p = 0.003671 (E6)";
+        let para = "In men, devices differed (p = 0.003671)\\pendingdep{P1}. Edema fell from 0.83 to 0.80\\pendingdep{P1}. Devices reached \\pending{P1}{x}, so the gap is broad\\pendingdep{P1}.";
+        assert_eq!(prune_deps(&s, &["P1".into()], para, record), "In men, devices differed (p = 0.003671). Edema fell from 0.83 to 0.80\\pendingdep{P1}. Devices reached \\pending{P1}{x}, so the gap is broad\\pendingdep{P1}.", "0.80 is not in the record: kept");
+        assert_eq!(numbers("p = 5.34, n = 5,159 in 2 groups, CT3 and 0.2."), ["5.34", "5,159", "0.2"]);
+        // the abstract / conclusion (no `known`): a conclusion quoting a known number keeps its mark
+        let concl = "Only Edema fell, by 0.04, so the shift is narrow\\pendingdep{P1}.";
+        assert_eq!(prune_deps(&s, &["P1".into()], concl, ""), concl);
+        assert_eq!(prune_deps(&s, &["P1".into()], concl, "0.04"), "Only Edema fell, by 0.04, so the shift is narrow.", "elsewhere it is pruned");
+        assert!(overmarked("a\\pendingdep{P1}. b\\pendingdep{P1}.").is_empty());
+        assert_eq!(overmarked("a\\pendingdep{P1}. b\\pendingdep{P1}. c\\pendingdep{P1}."), [("P1".to_string(), 3)]);
     }
 
     #[test]

@@ -94,6 +94,10 @@ impl StyleChecks {
             Err(e) => return (out, vec![e.to_string()]),
         };
         for (name, v) in table {
+            // the generation guard's tables (lore-notation punct), not word lists
+            if matches!(name.as_str(), "punctuation" | "paragraph_words") {
+                continue;
+            }
             match Vec::<RawEntry>::deserialize(v) {
                 Ok(items) => {
                     let list = items

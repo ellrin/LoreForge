@@ -343,6 +343,8 @@ pub fn turn_schema() -> Value {
         ("options", strings()),
         ("ref_notes", json_array(json_object(&[("key", json_string()), ("note", json_string())]))),
         ("pending_notes", json_array(json_object(&[("id", json_string()), ("what", json_string()), ("why", json_string()), ("expect", json_string()), ("if_not", json_string())]))),
+        ("discuss", json_bool()),
+        ("writing_notes", super::notes::schema()),
     ])
 }
 
@@ -389,10 +391,15 @@ Each turn:
 \"candidates\" has answer options the app prepared from the record and shows under your question: do not repeat \
 or replace them, leave `options` empty for it, and phrase the question so that one of them could answer it. An \
 answer that says \"picked k2\" chose that candidate (maybe edited): grade it like any answer.
+9. When the latest answer asks back, says it does not get the question or wants to talk it over, it is NOT an \
+answer: `discuss` true, `updates` [] and the summary fields empty; `reply` = a few sentences on what the question \
+means and why the paper needs it, with what the record already says (it opens a separate discussion). Otherwise \
+`discuss` false.
+{NOTES}
 Never invent facts about the study. Ask one thing at a time.";
 
 pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns: &[Turn], answer: Option<&str>, material: &str) -> Prompt {
-    let system = format!("{TURN_SYSTEM}\n{TW} Reply with JSON only.");
+    let system = format!("{}\n{TW} Reply with JSON only.", TURN_SYSTEM.replace("{NOTES}", super::notes::TURN_RULE));
     let mut user = context(key_value, s, material);
     user += "\n";
     user += &lens.describe();
@@ -410,7 +417,7 @@ pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns
         user += &format!("\n## Current group {} [{}] {}\nPurpose: {}\n", g.id, g.section, g.title, g.purpose);
         let gs = s.group_state(lens, group);
         user += "Items (what each still lacks, decided by code from the lens):\n";
-        for it in s.items_of(group) {
+        for it in s.items_of(group).filter(|i| !i.excluded) {
             let st = gs.items.iter().find(|x| x.id == it.id);
             let missing = st.map(|x| &x.missing[..]).unwrap_or(&[]);
             let need = if missing.is_empty() {
@@ -487,6 +494,12 @@ pub struct TurnReply {
     /// What the author said about pending results (the 待補項目 group).
     #[serde(default)]
     pub pending_notes: Vec<PendingNoteUpdate>,
+    /// The answer was a question back (see rule 9): nothing is graded.
+    #[serde(default)]
+    pub discuss: bool,
+    /// 寫法筆記 lifted out of the answer.
+    #[serde(default)]
+    pub writing_notes: Vec<super::notes::NoteUpdate>,
 }
 
 /// The author's words on one pending result, from one turn; empty parts keep what was said before.
@@ -553,6 +566,18 @@ pub fn parse_turn(reply: &str) -> Result<TurnReply, String> {
     Ok(r)
 }
 
+/// A question back (the model set `discuss`): nothing in it may reach the ledger, the
+/// references' notes or the pending notes — the code drops it all; it moves to 深度討論.
+pub fn drop_grading(r: &mut TurnReply) {
+    r.discuss = true;
+    r.updates.clear();
+    r.summary = GroupSummary::default();
+    r.ref_notes.clear();
+    r.pending_notes.clear();
+    r.writing_notes.clear();
+}
+
+
 // ── Step 4.5: claim register ─────────────────────────────
 
 pub fn claims_schema() -> Value {
@@ -578,7 +603,7 @@ pub fn ledger_text(s: &Session, lens: &Lens) -> String {
             "\n### {} [{}] {}\nexplain: {}\nmotive: {}\nconclusion: {}\nreaders accept: {}\ntwist: {}\n",
             g.id, g.section, g.title, g.summary.explain, g.summary.motive, g.summary.conclusion, g.summary.reader_accepts, g.summary.twist
         );
-        for it in s.items_of(&g.id) {
+        for it in s.items_of(&g.id).filter(|i| !i.excluded) {
             t += &format!(
                 "- {} {} (role {}, mode {}, depth {}, flags [{}]{}{}) stance: {}\n",
                 it.id,
@@ -684,7 +709,7 @@ pub fn parse_review(reply: &str) -> Result<Review, String> {
 // ── Step 6: paragraph-level outline ──────────────────────
 
 pub fn outline_schema() -> Value {
-    let para = json_object(&[("kind", json_string()), ("plan", json_string()), ("zh", json_string()), ("en", strings()), ("sources", strings()), ("cites", strings()), ("pending", strings())]);
+    let para = json_object(&[("kind", json_string()), ("plan", json_string()), ("zh", json_string()), ("en", strings()), ("sources", strings()), ("cites", strings()), ("pending", strings()), ("floats", strings())]);
     let sec = json_object(&[("section", json_string()), ("subsection", json_string_or_null()), ("paras", json_array(para))]);
     json_object(&[("sections", json_array(sec))])
 }
@@ -709,8 +734,10 @@ not in the paper's reference list.\n\
 9. Results: one paragraph group per table or figure, pointing to it and reading its numbers.\n\
 10. Do not invent results, numbers or citations.\n\
 11. Pending results (listed in the context, ids P1, …): outline them like the results they will be, in the \
-expected direction; `pending` = the ids a paragraph reports or depends on (Results, and every Introduction, \
-Discussion or Conclusion paragraph whose claim rests on one), else [].";
+expected direction; `pending` = the ids whose value a paragraph states or draws a conclusion from, else []. A \
+paragraph that only uses known values (other cells of the same table, other experiments) has none.\n\
+12. Planned figures and tables (listed below when there are any): `floats` = the labels a paragraph presents or \
+points to; every one is presented once, where its result is read (a workflow figure in Methods), else [].";
 
 pub fn outline_prompt(key_value: &str, s: &Session, lens: &Lens, style: &str, only: Option<(&str, &str)>, material: &str) -> Prompt {
     let ask = match only {
@@ -766,6 +793,7 @@ fn outline_prompt_asking(key_value: &str, s: &Session, lens: &Lens, style: &str,
             }
         }
     }
+    user += &super::figures::outline_block(s);
     if !style.trim().is_empty() {
         user += "\n## The author's style\n";
         user += style;
@@ -794,6 +822,8 @@ struct RawPara {
     cites: Vec<String>,
     #[serde(default)]
     pending: Vec<String>,
+    #[serde(default)]
+    floats: Vec<String>,
 }
 
 /// Sections in paper order, paragraph ids p1, p2, … across the outline.
@@ -821,7 +851,7 @@ fn parse_outline_in(reply: &str, only: Option<&str>) -> Result<Vec<OutlineSectio
                 .paras
                 .into_iter()
                 .filter(|p| !p.zh.trim().is_empty())
-                .map(|p| OutlinePara { id: String::new(), kind: p.kind, plan: p.plan, zh: p.zh, en: p.en.into_iter().filter(|e| !e.trim().is_empty()).collect(), sources: p.sources, cites: p.cites, pending: p.pending })
+                .map(|p| OutlinePara { id: String::new(), kind: p.kind, plan: p.plan, zh: p.zh, en: p.en.into_iter().filter(|e| !e.trim().is_empty()).collect(), sources: p.sources, cites: p.cites, pending: p.pending, floats: p.floats })
                 .collect();
             Some((i, OutlineSection { section: SECTIONS[i].into(), subsection: x.subsection.filter(|s| !s.trim().is_empty()), paras, confirmed: false }))
         })
@@ -857,23 +887,27 @@ pub fn replace_section(outline: &mut Vec<OutlineSection>, section: &str, new: Ve
 /// Extra instructions appended to the phrase-bank compose prompt for one
 /// outline paragraph: its unit plan, the claims it may state in full, and the
 /// author's style notes.
-pub fn compose_extra(para: &OutlinePara, s: &Session, section: &str, style: &str, earlier: &[String], refs: &[super::material::RefInfo]) -> String {
+pub fn compose_extra(para: &OutlinePara, s: &Session, section: &str, style: &str, earlier: &[String], refs: &[super::material::RefInfo], facts: &str) -> String {
     let mut x = format!(
         "\nThis paragraph is part of a draft built from an interview with the author.\nParagraph type: {}\nUnit plan, in order: {}\nWhat it must say (author's words): {}\n\
 Never mention a figure, table or equation the points do not mention. Use a transition pattern (\"In contrast\", \
 \"Building on this observation\", \"However\") only when the sentence really contrasts with or builds on the one before; \
-otherwise write the sentence without a pattern. A bracketed note for the author (e.g. [Author to confirm: …]) is \
-fine where the points say something is unknown.\n\
+otherwise write the sentence without a pattern. A bracketed note for the author ([Author to confirm: …]) only for \
+a fact found neither in the points nor in the record below; never ask for a count, dataset, split, setting or \
+number the record gives — use it.\n\
 The key value is the paper's direction, not a phrase to repeat: serve it through the content of the points, and \
 state it (or its wording) only where the points themselves state it.\n",
         para.kind, para.plan, para.zh
     );
-    let rules = super::pending::draft_rules(s, &[]);
-    if !rules.is_empty() {
-        if !para.pending.is_empty() {
+    // pending marks only for the results this paragraph states or concludes from (the outline names them)
+    if !para.pending.is_empty() {
+        let rules = super::pending::draft_rules(s, &para.pending);
+        if !rules.is_empty() {
             x += &format!("This paragraph reports or depends on pending results: {}.\n", para.pending.join(", "));
+            x += &rules;
         }
-        x += &rules;
+    } else {
+        x += &super::pending::not_here(s);
     }
     let full: Vec<&Claim> = s.claims.iter().filter(|c| c.home == section && para.sources.iter().any(|src| src == &c.id)).collect();
     let back: Vec<&Claim> = s.claims.iter().filter(|c| c.home != section && para.sources.iter().any(|src| src == &c.id)).collect();
@@ -910,10 +944,41 @@ the transition they used; do not reuse the same pattern in consecutive paragraph
             x += &format!("- {}\n", e);
         }
     }
+    x += &super::notes::block(&super::notes::for_paragraph(s, section, para));
+    x += &super::figures::paragraph_block(s, &para.floats);
+    x += facts;
     if !style.trim().is_empty() {
         x += "\nThe author's style notes (follow them; never copy example sentences):\n";
         x += style;
         x += "\n";
+    }
+    x
+}
+
+/// What the experiment record says, for drafting: the record itself (its data part holds the
+/// counts, datasets, splits and settings the summary leaves out) and every results table in full.
+/// Data, not rules; empty when there is no record.
+pub fn record_facts(s: &Session, record: &str, max_chars: usize) -> String {
+    let mut x = String::new();
+    let rec = record.trim();
+    if !rec.is_empty() {
+        let cut: String = rec.chars().take(max_chars).collect();
+        x += "\n## The experiment record (facts to use: counts, datasets, splits, settings, numbers; never invent beyond it, never write its ids E1/T2/H1 in the paper)\n";
+        x += &cut;
+        if rec.chars().count() > max_chars {
+            x += "\n[… record cut …]";
+        }
+        x += "\n";
+    }
+    let tables: Vec<&ResultTable> = s.tables.iter().filter(|t| !t.inserted).collect();
+    if !tables.is_empty() {
+        x += "\n## Results tables built from the record (every row)\n";
+        for t in tables {
+            x += &format!("- \"{}\": {}\n", t.caption, t.columns.join(" | "));
+            for r in &t.rows {
+                x += &format!("    | {} |\n", r.join(" | "));
+            }
+        }
     }
     x
 }
@@ -1089,11 +1154,11 @@ mod tests {
             Claim { id: "c1".into(), zh: "z".into(), en: "Reliability is a joint condition.".into(), home: "Results".into(), ..Default::default() },
             Claim { id: "c2".into(), zh: "z".into(), en: "Excluding hard frames is damaging.".into(), home: "Introduction".into(), ..Default::default() },
         ];
-        let p = OutlinePara { id: "p9".into(), kind: "Results key result".into(), plan: "table → numbers → L2".into(), zh: "主表".into(), en: vec![], sources: vec!["c1".into(), "c2".into()], cites: vec!["kim2019".into()], pending: vec![] };
+        let p = OutlinePara { id: "p9".into(), kind: "Results key result".into(), plan: "table → numbers → L2".into(), zh: "主表".into(), en: vec![], sources: vec!["c1".into(), "c2".into()], cites: vec!["kim2019".into()], pending: vec![], floats: vec![] };
         let mut s = s;
         s.review = Some(Review { chain: vec![], suggestions: vec![Suggestion { id: "s1".into(), kind: "other".into(), detail: "No final scores in Methods.".into(), accepted: Some(true), ..Default::default() }] });
         let refs = vec![super::super::material::RefInfo { key: "kim2019".into(), title: "Excluding hard frames".into(), purpose: "Intro only".into(), ..Default::default() }];
-        let x = compose_extra(&p, &s, "Results", "Paragraphs 80–150 words.", &["We first discarded frames.".into()], &refs);
+        let x = compose_extra(&p, &s, "Results", "Paragraphs 80–150 words.", &["We first discarded frames.".into()], &refs, "");
         assert!(x.contains("kim2019 — Excluding hard frames") && x.contains("Intro only"));
         assert!(x.contains("No final scores in Methods.") && x.contains("We first discarded frames."));
         let (full, back) = x.split_once("Only call these back").unwrap();
@@ -1125,15 +1190,32 @@ mod tests {
         let o = parse_outline(r#"{"sections":[{"section":"Results","subsection":null,"paras":[{"kind":"k","plan":"p","zh":"外部驗證","en":["external"],"sources":[],"cites":[],"pending":["P1"]}]}]}"#).unwrap();
         assert_eq!(o[0].paras[0].pending, ["P1"]);
         // drafting: the marks, the expected direction, no hedging
-        let x = compose_extra(&o[0].paras[0], &s, "Results", "", &[], &[]);
+        let x = compose_extra(&o[0].paras[0], &s, "Results", "", &[], &[], "");
         assert!(x.contains("depends on pending results: P1") && x.contains("\\pending{ID}{") && x.contains("\\pendingdep{ID}") && x.contains("\\pendingpara{ID}") && x.contains("no hedging"));
         assert!(x.contains("- P1 external Dice"));
         // the reviewer pass leaves marks alone
         assert!(audit_prompt("kv", &s, &l, "", "").system.contains(AUDIT_RULE));
         // nothing pending: the prompts are as before
         let plain = Session::default();
-        assert!(!compose_extra(&o[0].paras[0], &plain, "Results", "", &[], &[]).contains("pending"));
+        assert!(!compose_extra(&o[0].paras[0], &plain, "Results", "", &[], &[], "").contains("pending"));
         assert!(!context("kv", &plain, "").contains("Pending"));
+    }
+
+    #[test]
+    fn the_records_facts_reach_every_paragraph() {
+        // regression: compose saw only the outline points, so counts the record gives were asked back
+        let mut s = Session::default();
+        let rows: Vec<Vec<String>> = (1..=14).map(|i| vec![format!("Finding{i}"), format!("0.{i:03}")]).collect();
+        s.tables.push(ResultTable { id: "R1".into(), caption: "Cross-site AUC".into(), columns: vec!["Finding".into(), "AUC".into()], rows, ..Default::default() });
+        let record = "## Data\n- Source: 12,345 images from 678 patients; hold-out 901 studies.\n";
+        let facts = record_facts(&s, record, 10_000);
+        let p = OutlinePara { id: "p6".into(), kind: "Methods data".into(), plan: "fact".into(), zh: "資料集".into(), ..Default::default() };
+        let x = compose_extra(&p, &s, "Methods", "", &[], &[], &facts);
+        assert!(x.contains("12,345 images from 678 patients"), "the record's data part");
+        assert!(x.contains("| Finding14 | 0.014 |"), "every table row, not the first ten");
+        assert!(x.contains("never ask for a count, dataset, split, setting or number the record gives"));
+        assert!(record_facts(&Session::default(), "  ", 100).is_empty());
+        assert!(record_facts(&Session::default(), &"x".repeat(50), 10).contains("record cut"));
     }
 
     #[test]

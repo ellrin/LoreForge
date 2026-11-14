@@ -337,3 +337,30 @@ fn ranking_uses_the_topic_locally() {
     assert_eq!(rank(&c, &["retinal segmentation".into()]), [1, 2, 0]);
     assert_eq!(rank(&c, &[]), [2, 0, 1]);
 }
+
+#[test]
+fn figure_habits_are_optional_and_kept_on_a_rebuild() {
+    // a profile written before the figure fields loads, with targets around its counts
+    let old = "schema = 1\ntemplate = \"j\"\nvenue = \"J\"\nopenalex = \"S1\"\n[figures]\nmean = 6.5\nmin = 4.0\nmax = 10.0\n[tables]\nmean = 4.5\nmin = 2.0\nmax = 9.0\n";
+    let p: Profile = toml::from_str(old).unwrap();
+    assert!(p.figure1.is_none() && p.figure_kinds.is_empty());
+    assert_eq!(p.float_targets(), ([4, 7], [2, 5]));
+    assert!(p.floats_block().is_empty());
+    let mut hand = p.clone();
+    hand.figure1 = Some(FloatKind { id: "workflow".into(), label: "study workflow".into(), count: 4, of: 6 });
+    hand.figure_kinds = vec![FloatKind { id: "roc".into(), label: "ROC or PR curves".into(), count: 4, of: 6 }];
+    hand.table_target = Some([2, 4]);
+    assert_eq!(hand.float_targets(), ([4, 7], [2, 4]), "the profile's own target wins");
+    let b = hand.floats_block();
+    assert!(b.contains("aim for 4–7 figures and 2–4 tables") && b.contains("Figure 1 is usually: study workflow [workflow] (4/6") && b.contains("ROC or PR curves [roc] 4/6"), "{b}");
+    assert!(markdown(&hand).contains("Figure 1：study workflow（4/6）"));
+    let back: Profile = toml::from_str(&toml::to_string(&hand).unwrap()).unwrap();
+    assert_eq!(back, hand);
+    // the app rebuilds the profile from articles: the hand data stays (same journal only)
+    let mut rebuilt = p.clone();
+    rebuilt.keep_floats_from(&hand);
+    assert_eq!((rebuilt.figure1, rebuilt.table_target), (hand.figure1.clone(), Some([2, 4])));
+    let mut other = Profile { openalex: "S2".into(), ..p };
+    other.keep_floats_from(&hand);
+    assert!(other.figure1.is_none());
+}

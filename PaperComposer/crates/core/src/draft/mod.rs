@@ -19,8 +19,11 @@
 //! options prepared before the interview in [`candidates`].
 
 pub mod candidates;
+pub mod discuss;
 pub mod fallback;
+pub mod figures;
 pub mod lens;
+pub mod notes;
 pub mod material;
 pub mod pending;
 pub mod prompts;

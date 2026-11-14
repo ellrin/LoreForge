@@ -39,6 +39,7 @@ pub mod refimport;
 pub mod settings;
 pub mod texfonts;
 pub mod texmeasure;
+pub mod guard;
 pub mod thumb;
 mod todeck; // todeck.js: 做成簡報 (SlideComposer makes the deck)
 pub mod venueprof; // venue.js: 期刊寫法 (a journal template's habits from its own open-access articles)
@@ -501,6 +502,15 @@ async fn table_fit(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b
     }
 }
 
+/// The paper's page widths in mm (figures default to the column width: 流程圖, 繪圖).
+async fn page_size(State(s): State<Shared>, AxPath(name): AxPath<String>) -> axum::response::Response {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    match texmeasure::page(&dir).await {
+        Ok(p) => Json(p).into_response(),
+        Err(e) => Json(serde_json::json!({ "error": e })).into_response(),
+    }
+}
+
 async fn table_styles() -> impl IntoResponse {
     Json(pc_core::textable::builtin_styles())
 }
@@ -685,18 +695,21 @@ struct ComposeReply {
 
 async fn compose_paragraph(State(s): State<Shared>, Json(body): Json<ComposeBody>) -> impl IntoResponse {
     let (req, choice) = (body.req, body.engine);
-    let (points, refs, prompt) = {
+    let (points, refs, prompt, guard) = {
         let l = s.loaded.read().await;
         let Some(p) = &l.profile else {
             return (StatusCode::SERVICE_UNAVAILABLE, "profile not loaded").into_response();
         };
+        // the author's punctuation and sentence rules (style/checks.toml; off by default)
+        let guard = l.workspace.as_deref().map(|w| guard::load(w, None, &p.rules)).unwrap_or_default();
         let points = compose::parse_points(&req.points);
         let refs = compose::reference_phrases(p, &req, &points);
         let style = l.workspace.as_deref().map(pc_core::draft::style_text).unwrap_or_default();
         // the guide's sentence structures that fit this paragraph (style/patterns.toml; not the author's voice)
         let guide = l.workspace.as_deref().map(|w| pc_core::patterns::block_for(w, &req.situation())).unwrap_or_default();
-        let prompt = compose::with_patterns(compose::build_prompt(p, &req, &points, &refs, &style), &guide);
-        (points, refs, prompt)
+        let mut prompt = compose::with_patterns(compose::build_prompt(p, &req, &points, &refs, &style), &guide);
+        prompt.system += &guard.rule.prompt_line();
+        (points, refs, prompt, guard)
     };
     // 生成時參考知識卡 (off by default): the author's cards for the terms in the points and the paragraph
     let prompt = kb::with_cards(&s, prompt, &[req.points.as_str(), req.before.as_deref().unwrap_or("")].join("\n")).await;
@@ -732,12 +745,15 @@ async fn compose_paragraph(State(s): State<Shared>, Json(body): Json<ComposeBody
                 }
                 let l = s.loaded.read().await;
                 let Some(p) = &l.profile else { break };
-                let check = compose::check_draft(p, &req, &points, &refs, &mut draft);
-                if check.ok() || feedback.is_some() {
+                let mut check = compose::check_draft(p, &req, &points, &refs, &mut draft);
+                let broken = guard_draft(&guard, &mut draft, false);
+                if (check.ok() && broken.is_empty()) || feedback.is_some() {
+                    // after the repair: the mechanical fixes, and what is left is a problem
+                    check.problems.extend(guard::flags(&guard_draft(&guard, &mut draft, true)));
                     return Json(ComposeReply { references: refs, draft: Some(draft), check: Some(check), error: None, prompt })
                         .into_response();
                 }
-                feedback = Some(format!("Your previous answer had problems: {}. Fix them.", check.problems.join("; ")));
+                feedback = Some(format!("Your previous answer had problems: {}. Fix them.\n{}", check.problems.join("; "), lore_notation::punct::repair_note(&broken)));
             }
             Err(e) => {
                 last_err = Some(format!("unreadable reply: {e}"));
@@ -746,6 +762,24 @@ async fn compose_paragraph(State(s): State<Shared>, Json(body): Json<ComposeBody
         }
     }
     Json(ComposeReply { references: refs, draft: None, check: None, error: last_err, prompt }).into_response()
+}
+
+/// The workspace's guard (no paper: the library's terms only).
+pub(crate) async fn workspace_guard(s: &Shared) -> lore_notation::punct::Guard {
+    let l = s.loaded.read().await;
+    let rules = l.profile.as_ref().map(|p| p.rules.clone()).unwrap_or_default();
+    l.workspace.as_deref().map(|w| guard::load(w, None, &rules)).unwrap_or_default()
+}
+
+/// The guard over a drafted paragraph (its sentences together): the violations, and with
+/// `fix` the mechanical fixes applied sentence by sentence first.
+pub(crate) fn guard_draft(g: &lore_notation::punct::Guard, d: &mut Draft, fix: bool) -> Vec<lore_notation::punct::Violation> {
+    if fix {
+        for x in d.sentences.iter_mut() {
+            x.text = g.fix(&x.text);
+        }
+    }
+    g.check(&d.sentences.iter().map(|x| x.text.trim()).collect::<Vec<_>>().join(" "))
 }
 
 // ── Papers ─────────────────────────────────────────────
@@ -1138,10 +1172,12 @@ async fn wizard_caption(State(s): State<Shared>, Json(b): Json<CaptionBody>) -> 
     let language = s.loaded.read().await.profile.as_ref().map(|p| p.manifest.language.clone()).unwrap_or_else(|| "en".into());
     let grid = pc_core::textable::parse_grid(&b.data);
     let style = s.loaded.read().await.workspace.as_deref().map(pc_core::draft::style_text).unwrap_or_default();
-    let prompt = wizard::caption_prompt(&b.kind, &grid, &b.file, &b.section, &b.key_value, &b.title, &language, &style);
+    let mut prompt = wizard::caption_prompt(&b.kind, &grid, &b.file, &b.section, &b.key_value, &b.title, &language, &style);
+    let guard = workspace_guard(&s).await;
+    prompt.system += &guard.rule.prompt_line();
     match writing_complete(&s, "pc-caption", b.engine, &prompt, None, None).await {
-        // empty: nothing to say from what was given (a figure named img1.png)
-        Ok(reply) => Json(serde_json::json!({ "caption": wizard::clean_caption(&reply).unwrap_or_default() })).into_response(),
+        // empty: nothing to say from what was given (a figure named img1.png); a caption keeps to the punctuation rule
+        Ok(reply) => Json(serde_json::json!({ "caption": guard.fix(&wizard::clean_caption(&reply).unwrap_or_default()) })).into_response(),
         Err(e) => bad(&e),
     }
 }
@@ -3481,6 +3517,7 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/papers/{name}", get(get_paper))
         .route("/api/papers/{name}/packages", post(paper_packages))
         .route("/api/papers/{name}/table-fit", post(table_fit))
+        .route("/api/papers/{name}/page", get(page_size))
         .route("/api/papers/{name}/citations", get(paper_citations).post(set_purpose))
         .route("/api/papers/{name}/bib", post(paper_bib))
         .route("/api/papers/{name}/bib/merge", post(merge_bib))

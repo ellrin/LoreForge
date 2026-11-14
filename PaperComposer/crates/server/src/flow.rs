@@ -264,7 +264,7 @@ pub struct Saved {
     pub caption: String,
 }
 
-/// "(a) Datasets; (b) Label check." from the panels' titles (`a. Datasets`): a first caption the author rewrites.
+/// "(a) Datasets, (b) Label check." from the panels' titles (`a. Datasets`): a first caption the author rewrites.
 pub fn draft_caption(g: &lore_flow::spec::Graph) -> String {
     let titles: Vec<(String, String)> = g
         .panels
@@ -283,7 +283,8 @@ pub fn draft_caption(g: &lore_flow::spec::Graph) -> String {
     match titles.as_slice() {
         [] => String::new(),
         [(_, one)] => format!("{one}."),
-        many => format!("{}.", many.iter().map(|(k, t)| format!("({k}) {t}")).collect::<Vec<_>>().join("; ")),
+        // periods and commas only (the author's rule: no semicolons in captions either)
+        many => format!("{}.", many.iter().map(|(k, t)| format!("({k}) {t}")).collect::<Vec<_>>().join(", ")),
     }
 }
 
@@ -357,7 +358,7 @@ mod tests {
         assert_eq!(sidecar(Path::new("/p/figures/seg.pdf")), PathBuf::from("/p/figures/seg.flow.json"));
         // the figure block gets a first caption from the panels, never an empty \caption{}
         let g = lore_flow::dsl::parse("fig t\npanel a \"a. Datasets & labels\"\n  x: box \"X\"\nend\npanel b \"b. Model\"\n  m: box \"M\"\nend\nx -> m\n").unwrap();
-        assert_eq!(draft_caption(&g), "(a) Datasets & labels; (b) Model.");
+        assert_eq!(draft_caption(&g), "(a) Datasets & labels, (b) Model.");
         let g = lore_flow::dsl::parse("fig t\npanel a \"Pipeline\"\n  x: box \"X\"\nend\n").unwrap();
         assert_eq!(draft_caption(&g), "Pipeline.");
         std::fs::remove_dir_all(&d).unwrap();

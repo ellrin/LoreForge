@@ -14,6 +14,7 @@ mod topaper;
 
 use super::*;
 use pc_core::draft::candidates::{self as ca, Prep};
+use pc_core::draft::discuss as dz;
 use pc_core::draft::lens::Lens;
 use pc_core::draft::pending::{self as pd, Direction, PendingStatus};
 use pc_core::draft::material::{self, Material};
@@ -38,6 +39,14 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/plan", post(run_plan).put(put_plan))
         .route("/api/papers/{name}/draft/turn", post(run_turn))
         .route("/api/papers/{name}/draft/group/{id}", post(group_action))
+        .route("/api/papers/{name}/draft/items/{id}/exclude", post(exclude_item))
+        .route("/api/papers/{name}/draft/figures", post(run_figures).put(put_figures))
+        .route("/api/papers/{name}/draft/notes", put(put_notes))
+        .route("/api/papers/{name}/draft/notes/keep", post(keep_notes))
+        .route("/api/papers/{name}/draft/discuss", post(discuss_open))
+        .route("/api/papers/{name}/draft/discuss/{id}", post(discuss_say))
+        .route("/api/papers/{name}/draft/discuss/{id}/answer", post(discuss_answer))
+        .route("/api/papers/{name}/draft/discuss/{id}/close", post(discuss_close))
         .route("/api/papers/{name}/draft/claims", post(run_claims).put(put_claims))
         .route("/api/papers/{name}/draft/review", post(run_review).put(put_review))
         .route("/api/papers/{name}/draft/outline", post(run_outline).put(put_outline))
@@ -92,6 +101,14 @@ fn ref_keys(m: &Material) -> Vec<String> {
 fn load(dir: &Path) -> Result<Session, Resp> {
     let mut s = Session::load(dir).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e).into_response())?;
     settle_stale_prep(dir, &mut s);
+    // a figure plan cut short (the app quit) is not running any more
+    if let Some(f) = s.figures.as_mut().filter(|f| f.running) {
+        let live = FIGURING.lock().map(|v| v.contains(&dir.display().to_string())).unwrap_or(true);
+        if !live {
+            f.running = false;
+            f.failed = "上次沒有做完（App 關掉了）".into();
+        }
+    }
     Ok(s)
 }
 
@@ -563,6 +580,10 @@ async fn put_experiments(State(s): State<Shared>, AxPath(name): AxPath<String>, 
 
 async fn run_plan(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
     let c = tri!(ctx(&s, &name).await);
+    // 圖表規劃 at the same time (its own task; the plan never waits for it)
+    if sess_figures_idle(&c) {
+        spawn_figures(&s, &c);
+    }
     let sess = tri!(load(&c.dir));
     let lens = tri!(lens_for(&c.ws, &sess));
     let (_, mtext) = material_of(&c);
@@ -678,7 +699,7 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
     let mref = tri!(model_ref(b.model.as_deref()));
     let answer = b.answer.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
     let (mat, mut mtext) = material_of(&c);
-    let (prompt, lens) = {
+    let prompt = {
         let _g = LOCK.lock().await;
         let mut sess = tri!(load(&c.dir));
         if let Some(r) = sess.revisions.iter().find(|r| r.group == b.group) {
@@ -709,10 +730,12 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
         // The answer is kept even if the model call fails; sending it again
         // after a failure does not record it twice.
         let resent = answer.as_ref().is_some_and(|a| turns.iter().rev().find(|t| t.group == b.group).is_some_and(|t| t.who == Who::Me && &t.text == a));
+        let mut me_turn = None;
         if let Some(a) = answer.as_ref().filter(|_| !resent) {
             let t = ds::Turn { n: 0, group: b.group.clone(), who: Who::Me, text: a.clone(), options: vec![], engine: String::new(), about: if picked.is_empty() { String::new() } else { about.clone() }, picked: picked.clone() };
-            if let Err(e) = ds::append_turn_with(&c.dir, t) {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+            match ds::append_turn_with(&c.dir, t) {
+                Ok(t) => me_turn = Some(t.n),
+                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
             }
             if let Some(g) = sess.group_mut(&b.group) {
                 g.turns += 1;
@@ -724,17 +747,49 @@ async fn run_turn(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b)
             sess.phase = Phase::Interview;
         }
         tri!(save(&c.dir, &sess));
-        (prompt, lens)
+        (prompt, lens, me_turn, answer)
     };
-    let (r, used) = tri!(engine::turn(&engines(&s), mref.as_deref(), &prompt).await.map_err(|e| bad(&e)));
+    let (prompt, lens, me_turn, answer) = prompt;
+    let (mut r, used) = tri!(engine::turn(&engines(&s), mref.as_deref(), &prompt).await.map_err(|e| bad(&e)));
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
+    // a question back: not an answer. It leaves the interview for 深度討論 (the model's
+    // explanation opens it); nothing of it is graded or kept as material
+    if r.discuss {
+        dp::drop_grading(&mut r);
+        let last_q = ds::read_turns(&c.dir).into_iter().rev().find(|t| t.group == b.group && t.who == Who::Ai);
+        if let Some(n) = me_turn {
+            if let Err(e) = ds::remove_turn(&c.dir, n) {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+            }
+            if let Some(g) = sess.group_mut(&b.group) {
+                g.turns = g.turns.saturating_sub(1);
+            }
+        }
+        let (question, item) = last_q.map(|t| (t.text, t.about)).unwrap_or_default();
+        let d = pc_core::draft::discuss::open(&mut sess, &b.group, &item, &question);
+        if let Some(a) = answer.as_ref() {
+            d.messages.push(dz::Message { who: Who::Me, text: a.clone() });
+        }
+        if !r.reply.trim().is_empty() {
+            d.messages.push(dz::Message { who: Who::Ai, text: r.reply.trim().to_string() });
+        }
+        tri!(save(&c.dir, &sess));
+        return tri!(view(&c, &sess));
+    }
+    // a real answer: a discussion still open on this group's question is over (never reopened by itself)
+    for d in sess.discussions.iter_mut().filter(|d| d.group == b.group && d.status == dz::Status::Open) {
+        d.status = dz::Status::Closed;
+    }
     let known = ref_keys(&mat);
     sess.apply(&lens, &b.group, &known, r.updates);
     if let Err(e) = dp::add_ref_notes(&c.dir, &r.ref_notes, &known) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
     dp::apply_pending_notes(&mut sess, &r.pending_notes);
+    // 寫法筆記: how he said to write, in his words (a punctuation wish against his rule is flagged)
+    let guard_on = crate::workspace_guard(&s).await.active();
+    pc_core::draft::notes::add(&mut sess, &b.group, std::mem::take(&mut r.writing_notes), guard_on);
     if let Some(g) = sess.group_mut(&b.group) {
         let keep = |new: String, old: &str| if new.trim().is_empty() { old.to_string() } else { new };
         let old = g.summary.clone();
@@ -803,6 +858,332 @@ async fn group_action(State(s): State<Shared>, AxPath((name, id)): AxPath<(Strin
     tri!(view(&c, &sess))
 }
 
+#[derive(Deserialize)]
+struct ExcludeBody {
+    #[serde(default = "yes")]
+    excluded: bool,
+}
+fn yes() -> bool {
+    true
+}
+
+/// 這題不用寫進論文: the item is never asked again, never in the ledger, the claims or the draft.
+async fn exclude_item(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, String)>, Json(b): Json<ExcludeBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    let Some(it) = sess.items.iter_mut().find(|i| i.id == id) else { return bad("沒有這個項目") };
+    it.excluded = b.excluded;
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+// ── 圖表規劃 ─────────────────────────────────────────────
+
+fn sess_figures_idle(c: &Ctx) -> bool {
+    load(&c.dir).map(|s| !s.figures.as_ref().is_some_and(|f| f.running)).unwrap_or(false)
+}
+
+/// Papers whose figure plan a task of this process is making now; a plan saved as running that
+/// is not here was cut off (the app quit): it shows as failed, with 重新規劃圖表.
+static FIGURING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Labels of the tables and figures already in the paper.
+fn paper_labels(c: &Ctx) -> Vec<String> {
+    material::floats(&c.dir).into_iter().map(|f| f.id).collect()
+}
+
+/// One call on a task of its own: the list lands in the session when it is ready (the window
+/// looks again); the author's choices on an earlier list are kept for items with the same label.
+fn spawn_figures(s: &Shared, c: &Ctx) {
+    let s2 = s.clone();
+    let c = Ctx { dir: c.dir.clone(), ws: c.ws.clone(), key_value: c.key_value.clone() };
+    let key = c.dir.display().to_string();
+    if let Ok(mut v) = FIGURING.lock() {
+        v.push(key.clone());
+    }
+    tokio::spawn(async move {
+        struct Done(String);
+        impl Drop for Done {
+            fn drop(&mut self) {
+                if let Ok(mut v) = FIGURING.lock() {
+                    v.retain(|k| *k != self.0);
+                }
+            }
+        }
+        let _done = Done(key);
+        {
+            let _g = LOCK.lock().await;
+            let Ok(mut sess) = Session::load(&c.dir) else { return };
+            let plan = sess.figures.get_or_insert_with(Default::default);
+            plan.running = true;
+            plan.failed.clear();
+            let _ = sess.save(&c.dir);
+        }
+        let t0 = std::time::Instant::now();
+        let sess = match Session::load(&c.dir) { Ok(x) => x, Err(_) => return };
+        let venue = topaper::venue_of(&c);
+        let targets = venue.profile.as_ref().map(|p| p.float_targets());
+        let floats = venue.profile.as_ref().map(|p| p.floats_block()).unwrap_or_default();
+        let (_, mtext) = material_of(&c);
+        let context = dp::context(&c.key_value, &sess, &mtext);
+        let prompt = pc_core::draft::figures::prompt(&context, &floats, targets);
+        let known = ca::known_ids(&sess);
+        let pending: Vec<String> = sess.pending.iter().filter(|p| p.status == PendingStatus::Waiting).map(|p| p.id.clone()).collect();
+        let res = engine::figures(&engines(&s2), &prompt, &known, &pending, &paper_labels(&c)).await;
+        let secs = t0.elapsed().as_secs();
+        eprintln!("圖表規劃: {secs} s");
+        let _g = LOCK.lock().await;
+        let Ok(mut now) = Session::load(&c.dir) else { return };
+        let old = now.figures.take().unwrap_or_default();
+        let mut plan = pc_core::draft::figures::FigurePlan { figures: targets.map(|t| t.0), tables: targets.map(|t| t.1), seconds: Some(secs), ..Default::default() };
+        match res {
+            Ok((mut items, used)) => {
+                for it in items.iter_mut() {
+                    if let Some(o) = old.items.iter().find(|o| o.label == it.label) {
+                        it.status = o.status;
+                        it.own = o.own.clone();
+                        it.chosen = o.chosen.filter(|k| *k < it.options.len());
+                    }
+                }
+                plan.items = items;
+                plan.engine = used.label;
+            }
+            Err(e) => {
+                plan.items = old.items;
+                plan.failed = e;
+            }
+        }
+        now.figures = Some(plan);
+        if !now.claims.is_empty() {
+            pc_core::draft::figures::reconcile(&mut now);
+        }
+        let _ = now.save(&c.dir);
+    });
+}
+
+/// 重新規劃圖表 (or the first time, when the plan already exists).
+async fn run_figures(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    if !sess_figures_idle(&c) {
+        return bad("圖表規劃還在進行");
+    }
+    spawn_figures(&s, &c);
+    // the task marks it running at once; the window looks again
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    let sess = tri!(load(&c.dir));
+    tri!(view(&c, &sess))
+}
+
+#[derive(Deserialize)]
+struct FiguresEdit {
+    items: Vec<pc_core::draft::figures::PlannedFloat>,
+}
+
+/// The author's choices: keep / remove, the rendering, their own words, a new item.
+async fn put_figures(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<FiguresEdit>) -> Resp {
+    use pc_core::draft::figures::{PlannedFloat, Status};
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    let plan = sess.figures.get_or_insert_with(Default::default);
+    let mut out: Vec<PlannedFloat> = vec![];
+    for mut e in b.items {
+        match plan.items.iter().find(|x| !e.id.is_empty() && x.id == e.id) {
+            // only the author's fields change
+            Some(x) => {
+                let mut x = x.clone();
+                x.status = e.status;
+                x.chosen = e.chosen.filter(|k| *k < x.options.len());
+                x.own = e.own.trim().to_string();
+                out.push(x);
+            }
+            None if !e.title.trim().is_empty() => {
+                // an item the author adds: kept, drawn their way
+                let kind = if e.kind == "table" { "table" } else { "figure" };
+                let n = plan.items.iter().chain(out.iter()).filter(|x| x.kind == kind).count() + 1;
+                e.id = format!("{}{n}", if kind == "table" { "T" } else { "F" });
+                e.kind = kind.into();
+                let slug: String = e.title.chars().filter(|c| c.is_ascii_alphanumeric() || *c == ' ').collect::<String>().split_whitespace().take(4).collect::<Vec<_>>().join("-").to_lowercase();
+                e.label = format!("{}:{}", if kind == "table" { "tab" } else { "fig" }, if slug.is_empty() { e.id.to_lowercase() } else { slug });
+                if e.tool.is_empty() {
+                    e.tool = if kind == "table" { "table".into() } else { "image".into() };
+                }
+                if e.own.trim().is_empty() {
+                    e.own = e.title.clone();
+                }
+                e.status = Status::Kept;
+                out.push(e);
+            }
+            None => {}
+        }
+    }
+    plan.items = out;
+    if !sess.claims.is_empty() {
+        pc_core::draft::figures::reconcile(&mut sess);
+    }
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+// ── 寫法筆記 ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct NotesEdit {
+    notes: Vec<pc_core::draft::notes::WritingNote>,
+}
+
+/// The author edits the notes: text, scope, 以後也用; a note left out is deleted.
+async fn put_notes(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<NotesEdit>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    let mut out = vec![];
+    for e in b.notes {
+        let Some(old) = sess.writing_notes.iter().find(|n| n.id == e.id) else { continue };
+        let text = e.text.trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let mut n = old.clone();
+        n.text = text;
+        n.scope = if matches!(e.scope.as_str(), "paper" | "section" | "paragraph") { e.scope } else { n.scope };
+        n.keep = e.keep;
+        n.banned = e.banned.into_iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+        out.push(n);
+    }
+    sess.writing_notes = out;
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+/// 存進我的寫法: the notes marked 以後也用 into the workspace's style/ (only on this click).
+async fn keep_notes(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    let (file, n) = tri!(pc_core::draft::notes::keep(&c.ws, &name, &pc_core::venueprofile::today(), &mut sess).map_err(|e| bad(&e)));
+    tri!(save(&c.dir, &sess));
+    let _ = file;
+    let mut v = tri!(view(&c, &sess));
+    if n > 0 {
+        v.headers_mut().insert("x-kept", axum::http::HeaderValue::from(n as u64));
+    }
+    v
+}
+
+// ── 深度討論 ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct DiscussOpen {
+    group: String,
+}
+
+/// Open (or reopen) the discussion of the group's current question.
+async fn discuss_open(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<DiscussOpen>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    if sess.group(&b.group).is_none() {
+        return bad("沒有這個題組");
+    }
+    let Some(q) = ds::read_turns(&c.dir).into_iter().rev().find(|t| t.group == b.group && t.who == Who::Ai) else { return bad("這一組還沒有問題") };
+    dz::open(&mut sess, &b.group, &q.about, &q.text);
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+#[derive(Deserialize)]
+struct DiscussSay {
+    text: String,
+}
+
+/// The author says something; the discussion model (Sonnet) replies.
+async fn discuss_say(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, String)>, Json(b): Json<DiscussSay>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let text = b.text.trim().to_string();
+    if text.is_empty() {
+        return bad("沒有內容");
+    }
+    let prompt = {
+        let _g = LOCK.lock().await;
+        let mut sess = tri!(load(&c.dir));
+        let Some(d) = sess.discussions.iter_mut().find(|d| d.id == id && d.status == dz::Status::Open) else { return bad("這個討論已經結束") };
+        // resent after a failure: not twice
+        if !d.messages.last().is_some_and(|m| m.who == Who::Me && m.text == text) {
+            d.messages.push(dz::Message { who: Who::Me, text });
+        }
+        let d = d.clone();
+        tri!(save(&c.dir, &sess));
+        let record = ds::records_text(&c.dir, &sess.records, usize::MAX);
+        dz::prompt(&c.key_value, &sess, &record, &ds::read_turns(&c.dir), &d)
+    };
+    let (reply, _) = tri!(engine::discuss(&engines(&s), &prompt).await.map_err(|e| bad(&e)));
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    if let Some(d) = sess.discussions.iter_mut().find(|d| d.id == id) {
+        d.messages.push(dz::Message { who: Who::Ai, text: reply });
+    }
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+/// 整理成這題的回答: the author's answer from the discussion, for them to edit (nothing is sent yet).
+async fn discuss_answer(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, String)>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let sess = tri!(load(&c.dir));
+    let Some(d) = sess.discussions.iter().find(|d| d.id == id) else { return bad("沒有這個討論") };
+    if !d.messages.iter().any(|m| m.who == Who::Me) {
+        return bad("還沒有討論內容");
+    }
+    let p = dz::answer_prompt(&c.key_value, &sess, d);
+    let (answer, _) = tri!(engine::discuss_answer(&engines(&s), &p).await.map_err(|e| bad(&e)));
+    Json(serde_json::json!({ "answer": answer })).into_response()
+}
+
+#[derive(Deserialize)]
+struct DiscussClose {
+    /// The confirmed answer: sent through the interview as the answer to the discussed item.
+    #[serde(default)]
+    answer: Option<String>,
+    /// 這題不用寫進論文
+    #[serde(default)]
+    exclude: bool,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// End a discussion: with the author's confirmed answer (a normal turn, graded like any
+/// answer), without one, or with the item left out of the paper.
+async fn discuss_close(State(s): State<Shared>, AxPath((name, id)): AxPath<(String, String)>, Json(b): Json<DiscussClose>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let answer = b.answer.as_deref().map(str::trim).filter(|a| !a.is_empty()).map(str::to_string);
+    let d = {
+        let _g = LOCK.lock().await;
+        let mut sess = tri!(load(&c.dir));
+        let Some(d) = sess.discussions.iter_mut().find(|d| d.id == id) else { return bad("沒有這個討論") };
+        d.status = if answer.is_some() { dz::Status::Answered } else { dz::Status::Closed };
+        if let Some(a) = &answer {
+            d.answer = a.clone();
+        }
+        let d = d.clone();
+        if b.exclude {
+            if let Some(it) = sess.items.iter_mut().find(|i| i.id == d.item) {
+                it.excluded = true;
+            }
+        }
+        tri!(save(&c.dir, &sess));
+        d
+    };
+    match answer {
+        Some(a) => run_turn(State(s), AxPath(name), Json(TurnBody { group: d.group.clone(), picked: vec![], item: None, answer: Some(dz::as_answer(&d, &a)), model: b.model })).await,
+        None => {
+            let sess = tri!(load(&c.dir));
+            tri!(view(&c, &sess))
+        }
+    }
+}
+
 // ── Step 4.5 and 5 ──────────────────────────────────────
 
 async fn run_claims(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
@@ -818,6 +1199,8 @@ async fn run_claims(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
     sess.claims = claims;
+    // 圖表規劃: each figure and table against the claims it backs
+    pc_core::draft::figures::reconcile(&mut sess);
     sess.engines.insert("claims".into(), used);
     if sess.phase < Phase::Review {
         sess.phase = Phase::Review;
@@ -1020,7 +1403,7 @@ async fn run_outline(State(s): State<Shared>, AxPath(name): AxPath<String>, body
         _ => None,
     };
     let (mat, mtext) = material_of(&c);
-    let style = style_text(&c.ws) + &topaper::venue_of(&c).outline();
+    let style = style_text(&c.ws) + &topaper::venue_of(&c).outline() + &crate::guard::outline_sizes(&crate::guard::paragraph_ranges(&c.ws));
     let (mut new, used) = tri!(engine::outline(&engines(&s), &c.key_value, &sess, &lens, &style, only, &mtext).await.map_err(|e| bad(&e)));
     let known = ref_keys(&mat);
     for p in new.iter_mut().flat_map(|o| o.paras.iter_mut()) {
@@ -1076,6 +1459,9 @@ fn bank_section(s: &str) -> &str {
     }
 }
 
+/// The record's text given to each paragraph (a long record is cut).
+const FACTS_CHARS: usize = 12_000;
+
 /// Draft one section paragraph by paragraph through the phrase bank (the
 /// same tone lock as 寫作), with the outline's unit plan, the claim register
 /// and the author's style notes as extra instructions.
@@ -1099,6 +1485,10 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
         return bad("這個章節還沒有大綱");
     }
     let (min_words, max_words) = if is_abstract { topaper::abstract_words(&venue) } else { (60, 160) };
+    // the author's punctuation, sentence and paragraph rules (style/checks.toml; off by default)
+    let rules = s.loaded.read().await.profile.as_ref().map(|p| p.rules.clone()).unwrap_or_default();
+    let guard = crate::guard::load(&c.ws, Some(&c.dir), &rules);
+    let range = if is_abstract { None } else { crate::guard::paragraph_ranges(&c.ws).get(&b.section).copied() };
     // the journal's habits for this section (期刊寫法), and the abstract's own rules
     let venue_extra = venue.section(&b.section) + &if is_abstract { topaper::abstract_rules(&venue) } else { String::new() };
     if !has_writing_engine(&s, b.engine).await {
@@ -1108,6 +1498,12 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
     let check_opt = crate::notation::options(&c.ws, &c.dir);
     let style = style_text(&c.ws) + &crate::notation::describe(&notation, check_opt.ref_words.as_ref());
     let (mat, _) = material_of(&c);
+    // the record's facts (counts, datasets, settings) and every results table: what the draft
+    // used to ask the author with [Author to confirm …] although the record had it
+    let facts = dp::record_facts(&sess, &ds::records_text(&c.dir, &sess.records, usize::MAX), FACTS_CHARS)
+        + &material::describe(&Material { floats: mat.floats.clone(), refs: vec![] });
+    // the values the record already has: a sentence of only these never waits for a pending result
+    let known_values = ds::records_text(&c.dir, &sess.records, usize::MAX) + &sess.tables.iter().map(|t| t.tsv()).collect::<Vec<_>>().join("\n");
     // Other sections already drafted count as context for the notation checks.
     let other_drafts: Vec<String> = sess.drafts.iter().filter(|d| d.section != b.section).map(|d| d.paras.iter().map(|p| p.text.clone()).collect::<Vec<_>>().join("\n\n")).collect();
     let mut new_symbols: Vec<String> = vec![];
@@ -1117,6 +1513,8 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
         // the guide's sentence structures that fit this paragraph (not the author's voice)
         let guide_block = pc_core::patterns::block(&pc_core::patterns::select(&guide, &pc_core::patterns::Situation { section: &b.section, function: &p.kind, index: k, count: paras.len() }));
         let points = if p.en.is_empty() { p.zh.clone() } else { p.en.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
+        // within the section's range, a different slice for each paragraph (no three alike)
+        let (min_words, max_words) = range.map(|r| r.aim(k)).unwrap_or((min_words, max_words));
         let req = ComposeRequest {
             points,
             section: bank_section(&b.section).into(),
@@ -1140,7 +1538,7 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
             (pts, refs, prompt)
         };
         let earlier: Vec<String> = out.iter().map(|d| d.text.clone()).collect();
-        let extra = dp::compose_extra(p, &sess, &b.section, &style, &earlier, &mat.refs) + &venue_extra;
+        let extra = dp::compose_extra(p, &sess, &b.section, &style, &earlier, &mat.refs, &facts) + &venue_extra + &guard.rule.prompt_line();
         let mut feedback = extra.clone();
         let mut done = None;
         let mut err = String::new();
@@ -1157,14 +1555,23 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
                     drop(l);
                     // ≤, −, ⁺… as LaTeX before the checks, so pdflatex never stops on them
                     let text = lore_notation::unicode::prose_to_latex(&d.sentences.iter().map(|x| x.text.trim()).collect::<Vec<_>>().join(" "));
+                    // dependency marks only for the results this paragraph states or depends on
+                    // not in the abstract and conclusion: a conclusion there quoting a known number still rests on the result
+                    let known = if matches!(b.section.as_str(), "Abstract" | "Conclusion") { "" } else { known_values.as_str() };
+                    // a pending result the outline names must be marked: checked before the pruning
+                    let unmarked_before = pd::missing_marks(&sess, &p.pending, &text);
+                    let text = pd::prune_deps(&sess, &p.pending, &text, known);
+                    let over = pd::overmarked(&text);
                     // The registry's checks, in the context of the paper and the drafts so far.
                     let mut ctx_texts = other_drafts.clone();
+                    // planned figures and tables the paper does not have yet: their labels resolve
+                    ctx_texts.extend(sess.figures.iter().flat_map(|f| f.kept()).filter(|f| !mat.floats.iter().any(|x| x.id == f.label)).map(pc_core::draft::figures::placeholder));
                     ctx_texts.push(out.iter().map(|x| x.text.clone()).collect::<Vec<_>>().join("\n\n"));
                     let nc = crate::notation::check(&c.dir, &notation, &check_opt, &ctx_texts, &text);
                     let mut problems = check.problems.clone();
                     problems.extend(nc.shown.iter().map(|m| format!("對照表：{m}")));
                     // a pending result the outline names must be marked, never written as a number
-                    let unmarked = pd::missing_marks(&sess, &p.pending, &text);
+                    let unmarked = unmarked_before;
                     problems.extend(unmarked.iter().map(|id| format!("待補 {id} 沒有標記")));
                     // the record's ids (E1, T2…) are the discussion's, never the paper's
                     // only ids the record really has (a vertebra "T12" or a slice "P1" in a paper is prose)
@@ -1177,7 +1584,17 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
                     if too_long {
                         problems.push(format!("摘要 {n_words} 字，超過 {max_words}"));
                     }
-                    if (check.ok() && nc.blocking.is_empty() && unmarked.is_empty() && leaked.is_empty() && !too_long) || done.is_some() {
+                    problems.extend(over.iter().map(|(id, n)| format!("待補 {id} 標了 {n} 句依賴句")));
+                    // his own words from the interview: a word he banned is a hard failure
+                    let banned = pc_core::draft::notes::banned_in(&pc_core::draft::notes::for_paragraph(&sess, &b.section, p), &text);
+                    problems.extend(banned.iter().map(|w| format!("用了訪談裡說不要的「{w}」")));
+                    // the punctuation and sentence rules, and the section's paragraph length
+                    let broken = guard.check(&text);
+                    let length = range.and_then(|r| r.problem(&text));
+                    if (check.ok() && nc.blocking.is_empty() && unmarked.is_empty() && leaked.is_empty() && !too_long && over.is_empty() && broken.is_empty() && length.is_none() && banned.is_empty()) || done.is_some() {
+                        if let Some(l) = &length {
+                            problems.push(format!("段落長度：{l}"));
+                        }
                         new_symbols.extend(nc.new_symbols.clone());
                         done = Some(ds::DraftPara { pending: lore_notation::pending::ids(&text).into_iter().collect(), para: p.id.clone(), text, problems });
                         break;
@@ -1186,6 +1603,16 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
                     why.extend(nc.blocking.iter().cloned());
                     why.extend(unmarked.iter().map(|id| format!("pending result {id} is not marked: use \\pending{{{id}}}{{…}} for its number and end every sentence that depends on it with \\pendingdep{{{id}}}")));
                     why.extend(leaked.iter().map(|id| format!("the text names the record's id {id}: the reader never saw the record; describe the experiment or table in words (or \\ref the table)")));
+                    why.extend(over.iter().map(|(id, n)| format!("{n} sentences end in \\pendingdep{{{id}}}: keep it only on the sentences that state {id}'s value or conclude from it, at most {}; a sentence with only known numbers is not dependent", pd::MAX_DEPS)));
+                    if !broken.is_empty() {
+                        why.push(lore_notation::punct::repair_note(&broken));
+                    }
+                    if !banned.is_empty() {
+                        why.push(format!("the author said never to use: {}", banned.join(", ")));
+                    }
+                    if let Some(l) = &length {
+                        why.push(format!("this paragraph has {l}"));
+                    }
                     if too_long {
                         why.push(format!("the abstract has {n_words} words; the journal allows at most {max_words}: cut it to {min_words}–{max_words} words"));
                     }
@@ -1200,7 +1627,13 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
             }
         }
         match done {
-            Some(d) => out.push(d),
+            Some(mut d) => {
+                // after the repair: the safe mechanical fixes; what is left is flagged, never hidden
+                let (t, still) = guard.finish(&d.text);
+                d.text = t;
+                d.problems.extend(crate::guard::flags(&still));
+                out.push(d)
+            }
             None => return bad(&format!("{}：{err}", p.id)),
         }
     }
@@ -1268,6 +1701,17 @@ async fn run_audit(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
     for (k, mut f) in topaper::requirement_findings(&c.dir, &venue, &sess).into_iter().enumerate() {
         f.id = format!("r{}", n + k + 1);
         sess.audit.push(f);
+    }
+    // 圖表規劃 against the journal's habit (warnings)
+    let n = sess.audit.len();
+    for (k, w) in sess.figures.as_ref().map(|f| f.count_warnings()).unwrap_or_default().into_iter().enumerate() {
+        sess.audit.push(ds::Finding { id: format!("g{}", n + k + 1), kind: "venue".into(), para: String::new(), quote: String::new(), why: format!("圖表規劃：{w}"), ask: String::new(), resolved: false });
+    }
+    // the author's punctuation and sentence rules over the whole paper, his own text too (warnings: he decides)
+    let rules = s.loaded.read().await.profile.as_ref().map(|p| p.rules.clone()).unwrap_or_default();
+    let n = sess.audit.len();
+    for (k, (at, why)) in crate::guard::audit(&crate::guard::load(&c.ws, Some(&c.dir), &rules), &c.dir).into_iter().enumerate() {
+        sess.audit.push(ds::Finding { id: format!("u{}", n + k + 1), kind: "punctuation".into(), para: at, quote: String::new(), why, ask: String::new(), resolved: false });
     }
     sess.engines.insert("audit".into(), used);
     sess.phase = Phase::Audit;
@@ -1460,9 +1904,20 @@ async fn plan_revision(State(s): State<Shared>, AxPath((name, id)): AxPath<(Stri
         .join("\n");
     let summary = sess.group(&r.group).map(|g| format!("\nSummary: {} / {} / {}", g.summary.explain, g.summary.motive, g.summary.conclusion)).unwrap_or_default();
     let (_, mtext) = material_of(&c);
-    let mtext = mtext + &fill.as_ref().map(pd::plan_rule).unwrap_or_default();
+    let mtext = mtext + &fill.as_ref().map(pd::plan_rule).unwrap_or_default() + &crate::workspace_guard(&s).await.rule.prompt_line();
     let (mut plan, used) = tri!(engine::revise(&engines(&s), &c.key_value, &sess, &r, &c.dir, &mtext, &style_text(&c.ws), &(conversation + &summary)).await.map_err(|e| bad(&e)));
     plan.engine = used.label;
+    // the model's rewritten paragraphs keep to the author's punctuation rule (mechanical fixes;
+    // what is left is said in the plan). The code's own number fills below are not touched.
+    {
+        let rules = s.loaded.read().await.profile.as_ref().map(|p| p.rules.clone()).unwrap_or_default();
+        let guard = crate::guard::load(&c.ws, Some(&c.dir), &rules);
+        for ch in plan.changes.iter_mut() {
+            let (t, still) = guard.finish(&ch.text);
+            ch.text = t;
+            plan.effects.extend(crate::guard::flags(&still).into_iter().map(|f| format!("{}：{f}", ch.file)));
+        }
+    }
     // 回填: numbers from the code, every paragraph with a mark covered, dependents flagged
     if let (Some(item), Some((changes, effects))) = (&fill, code) {
         plan.changes = pd::merge_plan(item, std::mem::take(&mut plan.changes), changes);
