@@ -459,7 +459,13 @@ const PCDraft = (() => {
       const off = it.status === "removed";
       const card = el("div", `df-card df-fig ${off ? "no" : ""}`);
       const top = row(el("span", "df-gid", it.id), el("b", "", it.title), el("span", "df-role", TOOL_ZH[it.tool] ?? it.tool));
-      top.append(el("span", "grow"), btn(off ? "加回來" : "刪除", () => { it.status = off ? "kept" : "removed"; save(); }, "ghost small"));
+      top.append(el("span", "grow"));
+      // its stand-in is in the paper: make the real figure here, it takes the stand-in's place and label
+      const si = it.kind === "figure" && !off && (D.data.stand_ins ?? []).find((x) => x.label === it.label);
+      if (si) {
+        top.append(btn("用流程圖做", () => makeFromStandIn(it.label, "flow"), "ghost small"), btn("用繪圖做", () => makeFromStandIn(it.label, "plot"), "ghost small"));
+      }
+      top.append(btn(off ? "加回來" : "刪除", () => { it.status = off ? "kept" : "removed"; save(); }, "ghost small"));
       card.append(top);
       if (it.supports) card.append(el("p", "df-text", it.supports));
       // what it is made from (record ids); the claims it backs only as a count
@@ -573,6 +579,18 @@ const PCDraft = (() => {
     const d = D.disc && sess().discussions?.find((x) => x.id === D.disc && x.group === g.id && x.status === "open");
     if (d) discussion(side, d);
     else { ledger(side, g, st); writingNotes(side); }
+  }
+
+  async function makeFromStandIn(label, tool) {
+    const r = tool === "flow" ? await PCFlow.create() : await PCPlot.create();
+    if (!r) return;
+    try {
+      await PCStandIn.replace(label, r);
+      LoreShell.toast(`已取代預留的 ${label}`);
+      if (state.paper?.name) openPaper(state.paper.name);
+      D.data = await api(base());
+      draw();
+    } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
   }
 
   // ── 寫法筆記: how he said to write, in his words; the drafts follow them ──

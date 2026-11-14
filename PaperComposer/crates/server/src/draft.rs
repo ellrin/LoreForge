@@ -153,6 +153,8 @@ fn view(c: &Ctx, sess: &Session) -> Result<Resp, Resp> {
         // 待補清單: the paper's marks (and the draft's, before it is copied in)
         "pending_report": pending_report(c, sess),
         "material": material::load(&c.ws, &c.dir),
+        // 圖表規劃's stand-ins already in the paper (the plan offers 用流程圖做／用繪圖做 on them)
+        "stand_ins": pc_core::draft::figures::stand_ins(&c.dir),
     }))
     .into_response())
 }

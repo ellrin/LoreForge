@@ -526,11 +526,24 @@ const PCContext = (() => {
     return true;
   }
 
+  /** A planned stand-in (圖表規劃) the new figure takes the place of, when the author picks one. */
+  async function replacedStandIn(r) {
+    const label = await window.PCStandIn?.choose();
+    if (!label) return false;
+    try {
+      await PCStandIn.replace(label, r);
+      LoreShell.toast(`已取代預留的 ${label}`);
+      await openPaper(state.paper.name);
+    } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
+    return true;
+  }
+
   /** 繪圖…: the shared plot editor (figplot.js), then the same insertion as 新增圖…. */
   async function plotFigure(at, kind) {
     keepMarker();
     const r = await PCPlot.create(kind);
     if (!r) { unmark(); return; }
+    if (await replacedStandIn(r)) { unmark(); return; }
     await settle();
     const was = fresh(at);
     if (was == null) { unmark(); return; }
@@ -543,6 +556,7 @@ const PCContext = (() => {
     keepMarker();
     const r = await PCFlow.create();
     if (!r) { unmark(); return; }
+    if (await replacedStandIn(r)) { unmark(); return; }
     await settle();
     const was = fresh(at);
     if (was == null) { unmark(); return; }

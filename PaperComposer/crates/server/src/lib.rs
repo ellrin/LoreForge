@@ -3528,6 +3528,8 @@ pub fn router(paths: Paths) -> Router {
         .route("/api/papers/{name}/figure", get(paper_figure))
         .route("/api/papers/{name}/figure-sizes", post(paper_figure_sizes))
         .route("/api/papers/{name}/figure-block", post(floats::figure_block_route))
+        .route("/api/papers/{name}/figure-replace", post(floats::replace_stand_in_route))
+        .route("/api/papers/{name}/stand-ins", get(floats::stand_ins_route))
         .route("/api/papers/{name}/figures", post(put_figure).layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)))
         .route("/api/papers/{name}/front", put(put_front))
         .route("/api/papers/{name}/meta", put(put_meta))

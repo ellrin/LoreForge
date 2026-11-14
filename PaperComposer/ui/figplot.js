@@ -89,6 +89,26 @@
     return true;
   }
   window.PCPlot = { create, reedit };
+
+  /** 圖表規劃's stand-ins: a figure made by 流程圖 or 繪圖 can take a stand-in's place and label. */
+  window.PCStandIn = {
+    async list() {
+      try { const r = await fetch(`${base()}/stand-ins`); return r.ok ? (await r.json()).filter((x) => x.kind === "figure") : []; } catch { return []; }
+    },
+    /** Which stand-in the new figure replaces (none by default), asked only when there are some. */
+    async choose(anchor) {
+      const all = await this.list();
+      if (!all.length || !window.LoreShell?.ask) return null;
+      const opts = all.map((x) => ({ label: `${x.id}：${x.caption || x.label}`, value: x.label }));
+      return await LoreShell.ask(anchor ?? document.body, ["取代預留的圖？", "選一個：新圖放在它的位置、沿用它的標籤。"], [...opts, { label: "不取代，插在這裡", value: null, primary: true }]);
+    },
+    /** Put `r` ({file, caption}) where the stand-in `label` is. */
+    async replace(label, r) {
+      const res = await fetch(`${base()}/figure-replace`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ label, path: r.file, caption: r.caption ?? "" }) });
+      if (!res.ok) throw new Error((await res.text()) || res.statusText);
+      return res.json();
+    },
+  };
   /** The open paper's column width in mm (null when it cannot be measured: the editors keep their defaults). */
   const pages = {};
   window.PCPage = {

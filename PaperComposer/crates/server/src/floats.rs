@@ -7,6 +7,8 @@
 //! | Method | Path | |
 //! |---|---|---|
 //! | POST | /api/papers/{name}/figure-block | `{path, caption, stem?}` → `{label, block, added}`: the figure environment for a file already in `figures/`; `added` = packages put in main.tex |
+//! | POST | /api/papers/{name}/figure-replace | `{label, path, caption?}` → `{label, file, added}`: the figure put where its planned stand-in is, same label (圖表規劃) |
+//! | GET | /api/papers/{name}/stand-ins | the planned stand-ins in the paper `[{label, id, kind, caption, file}]` |
 
 use super::*;
 
@@ -94,6 +96,39 @@ pub(crate) async fn figure_block_route(State(s): State<Shared>, AxPath(name): Ax
         Ok((label, block, added)) => Json(serde_json::json!({ "label": label, "block": block, "added": added })).into_response(),
         Err(e) => bad(&e),
     }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ReplaceBody {
+    /// The stand-in's label (kept: the drafts' \ref stays valid).
+    label: String,
+    path: String,
+    /// Empty: the stand-in's caption.
+    #[serde(default)]
+    caption: String,
+}
+
+/// The real figure (from 流程圖 or 繪圖) where its planned stand-in is, with the same label.
+pub(crate) async fn replace_stand_in_route(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<ReplaceBody>) -> axum::response::Response {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    if !b.path.starts_with("figures/") || b.path.contains("..") || !figure_name_ok(b.path.trim_start_matches("figures/")) {
+        return bad("圖檔路徑不對");
+    }
+    let Some(si) = pc_core::draft::figures::stand_ins(&dir).into_iter().find(|x| x.label == b.label && x.kind == "figure") else { return bad("論文裡沒有這個預留的圖") };
+    let ws = s.loaded.read().await.workspace.clone();
+    let caption = if b.caption.trim().is_empty() { si.caption.clone() } else { b.caption.trim().to_string() };
+    let block = lore_plot::figure::figure_block(&b.path, &caption, &si.label, caption_above(ws.as_deref(), &dir, "figure"));
+    let added = match paper::ensure_packages(&dir, &["graphicx".to_string()]) { Ok(a) => a, Err(e) => return bad(&e) };
+    match pc_core::draft::figures::replace_stand_in(&dir, &si.label, &block) {
+        Ok(file) => Json(serde_json::json!({ "label": si.label, "file": file, "added": added })).into_response(),
+        Err(e) => bad(&e),
+    }
+}
+
+/// The paper's stand-ins (planned figures and tables not made yet).
+pub(crate) async fn stand_ins_route(State(s): State<Shared>, AxPath(name): AxPath<String>) -> axum::response::Response {
+    let dir = match paper_dir(&s, &name).await { Ok(d) => d, Err(r) => return r };
+    Json(pc_core::draft::figures::stand_ins(&dir)).into_response()
 }
 
 #[cfg(test)]

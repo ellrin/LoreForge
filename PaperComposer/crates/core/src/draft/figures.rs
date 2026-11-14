@@ -329,6 +329,70 @@ pub fn placeholder(it: &PlannedFloat) -> String {
     }
 }
 
+/// A stand-in float in the paper (put there by 放進論文 for a planned figure or table).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct StandIn {
+    pub label: String,
+    /// F1 / T2 (the plan's id).
+    pub id: String,
+    /// `figure` or `table`.
+    pub kind: String,
+    pub caption: String,
+    /// The section file it is in.
+    pub file: String,
+}
+
+fn stand_in_of(p: &str) -> Option<(String, String, String, String)> {
+    let t = p.trim_start();
+    let kind = if t.starts_with("\\begin{figure}") { "figure" } else if t.starts_with("\\begin{table}") { "table" } else { return None };
+    let marker = format!("Planned {kind} ");
+    let at = p.find(&marker)? + marker.len();
+    let id: String = p[at..].chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+    let arg = |cmd: &str| -> Option<String> {
+        let i = p.find(cmd)? + cmd.len();
+        let mut depth = 1usize;
+        for (k, c) in p[i..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(p[i..i + k].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    };
+    Some((arg("\\label{")?, id, kind.to_string(), arg("\\caption{").unwrap_or_default()))
+}
+
+/// The stand-ins in the paper, in reading order.
+pub fn stand_ins(paper: &std::path::Path) -> Vec<StandIn> {
+    let mut out = vec![];
+    for s in crate::open::sections(paper) {
+        for p in &s.paragraphs {
+            if let Some((label, id, kind, caption)) = stand_in_of(p) {
+                out.push(StandIn { label, id, kind, caption, file: s.file.clone() });
+            }
+        }
+    }
+    out
+}
+
+/// Put `block` (the real figure or table, with the same `\label`) where the stand-in for
+/// `label` is: the drafts' `\ref` stays valid. Error when there is no such stand-in.
+pub fn replace_stand_in(paper: &std::path::Path, label: &str, block: &str) -> Result<String, String> {
+    for mut s in crate::open::sections(paper) {
+        let Some(k) = s.paragraphs.iter().position(|p| stand_in_of(p).is_some_and(|(l, ..)| l == label)) else { continue };
+        s.paragraphs[k] = block.trim().to_string();
+        crate::open::write_section(paper, &s)?;
+        return Ok(s.file);
+    }
+    Err(format!("論文裡沒有 {label} 的預留框"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +458,27 @@ mod tests {
         assert_eq!(it.rendering(), "ROC 曲線");
         it.own = "我自己畫".into();
         assert_eq!(it.rendering(), "我自己畫");
+    }
+
+    #[test]
+    fn a_stand_in_is_found_and_replaced_in_place_with_its_label() {
+        let d = std::env::temp_dir().join(format!("pc-standin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sections")).unwrap();
+        std::fs::write(d.join("main.tex"), "\\documentclass{article}\n\\begin{document}\n\\input{sections/results}\n\\end{document}\n").unwrap();
+        let it = PlannedFloat { id: "F2".into(), kind: "figure".into(), label: "fig:auc".into(), title: "t".into(), caption: "AUROC per finding.".into(), ..Default::default() };
+        let tab = PlannedFloat { id: "T1".into(), kind: "table".into(), label: "tab:main".into(), title: "t".into(), caption: "Main.".into(), ..Default::default() };
+        std::fs::write(d.join("sections/results.tex"), format!("\\section{{Results}}\nFig.~\\ref{{fig:auc}} shows it.\n\n{}\n\n{}\n\nAfter.\n", placeholder(&it), placeholder(&tab))).unwrap();
+        let si = stand_ins(&d);
+        assert_eq!(si.iter().map(|x| (x.label.as_str(), x.id.as_str(), x.kind.as_str(), x.caption.as_str())).collect::<Vec<_>>(), [("fig:auc", "F2", "figure", "AUROC per finding."), ("tab:main", "T1", "table", "Main.")]);
+        let block = "\\begin{figure}[t]\n\\centering\n\\includegraphics[width=\\linewidth]{figures/auc.pdf}\n\\caption{AUROC per finding.}\n\\label{fig:auc}\n\\end{figure}";
+        assert_eq!(replace_stand_in(&d, "fig:auc", block).unwrap(), "results.tex");
+        let r = std::fs::read_to_string(d.join("sections/results.tex")).unwrap();
+        assert!(r.contains("figures/auc.pdf") && !r.contains("Planned figure F2") && r.matches("\\label{fig:auc}").count() == 1, "{r}");
+        assert!(r.find("figures/auc.pdf").unwrap() < r.find("Planned table T1").unwrap() && r.contains("After."), "in place, the rest kept: {r}");
+        assert_eq!(stand_ins(&d).len(), 1);
+        assert!(replace_stand_in(&d, "fig:auc", block).is_err(), "no stand-in left for it");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
