@@ -290,69 +290,23 @@ const PCDraft = (() => {
       }
       return v;
     });
-    // a path typed or pasted (LoreShelf's 「拷貝路徑」, Finder's ⌥⌘C): a file, or every file in a folder
-    const path = el("input", "df-path");
-    path.type = "text";
-    path.placeholder = "或貼上路徑（檔案或資料夾）";
-    path.setAttribute("aria-label", "實驗記錄的路徑");
-    const addPath = () => {
-      const v = path.value.trim();
-      if (!v) return;
+    // typed or pasted record text: stored as a record file like an upload
+    const txt = el("textarea", "df-rectext");
+    txt.rows = 6;
+    txt.placeholder = "直接輸入或貼上實驗紀錄";
+    txt.setAttribute("aria-label", "實驗紀錄文字");
+    const addText = () => {
+      const v = txt.value;
+      if (!v.trim()) return;
       run("加入", async () => {
-        const r = await fetch(`${base()}/records/path`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: v }) });
+        const r = await fetch(`${base()}/records/text`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: v }) });
         if (!r.ok) throw new Error(await r.text());
-        const skipped = Number(r.headers.get("x-skipped") || 0);
-        if (skipped) LoreShell.toast(`略過 ${skipped} 個不能用的檔案`);
-        path.value = "";
+        txt.value = "";
         return r.json();
       });
     };
-    path.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); addPath(); } };
-    // 搜尋檔案: LoreShelf's catalog (brought up in the background when needed); a click adds the file
-    const find = el("div", "df-find");
-    find.hidden = true;
-    const fq = el("input", "df-path");
-    fq.type = "search";
-    fq.placeholder = "檔名、內容或一句描述";
-    fq.setAttribute("aria-label", "搜尋檔案");
-    const hits = el("ul", "df-list df-hits");
-    let seq = 0;
-    const search = async () => {
-      const q = fq.value.trim();
-      const my = ++seq;
-      if (!q) { hits.replaceChildren(); return; }
-      hits.replaceChildren(el("li", "df-muted", "搜尋中…"));
-      try {
-        const r = await fetch(`/api/shelf/search?q=${encodeURIComponent(q)}`);
-        if (my !== seq) return;
-        if (!r.ok) { hits.replaceChildren(el("li", "df-muted", await r.text())); return; }
-        const v = await r.json();
-        if (my !== seq) return;
-        if (!v.items.length) { hits.replaceChildren(el("li", "df-muted", "沒有找到")); return; }
-        hits.replaceChildren(...v.items.map((it) => {
-          const li = el("li", "df-hit");
-          const date = (it.modified || "").slice(0, 10);
-          li.append(el("span", "df-hit-name", it.name), el("span", "df-muted", [date, it.size ? `${Math.ceil(it.size / 1024)} KB` : ""].filter(Boolean).join(" · ")));
-          li.tabIndex = 0;
-          const add = () => run("加入", async () => {
-            const x = await fetch(`${base()}/records/shelf`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: it.id }) });
-            if (!x.ok) throw new Error(await x.text());
-            const skipped = Number(x.headers.get("x-skipped") || 0);
-            if (skipped) LoreShell.toast(`略過 ${skipped} 個不能用的檔案`);
-            return x.json();
-          });
-          li.onclick = add;
-          li.onkeydown = (e) => { if (e.key === "Enter") add(); };
-          return li;
-        }));
-      } catch (e) { if (my === seq) hits.replaceChildren(el("li", "df-muted", String(e.message || e))); }
-    };
-    let timer = null;
-    fq.oninput = () => { clearTimeout(timer); timer = setTimeout(search, 300); };
-    fq.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); clearTimeout(timer); search(); } };
-    find.append(fq, hits);
-    const findBtn = btn("搜尋檔案", () => { find.hidden = !find.hidden; if (!find.hidden) fq.focus(); }, "small");
-    main.append(row(file, findBtn, path, btn("加入", addPath, "small")), find);
+    txt.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addText(); } };
+    main.append(file, txt, row(btn("加入", addText, "small")));
     const list = el("ul", "df-list");
     sess().records.forEach((r) => {
       const li = el("li", "", `${r.file}（${Math.ceil(r.bytes / 1024)} KB）`);

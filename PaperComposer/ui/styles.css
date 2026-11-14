@@ -1539,3 +1539,4 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-hits .df-hit:hover, .df-hits .df-hit:focus { background: var(--surface-hover); outline: none; }
 .df-hit-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .df-muted { color: var(--muted); white-space: nowrap; }
+.df-rectext { width: 100%; box-sizing: border-box; margin-top: 8px; font: inherit; }

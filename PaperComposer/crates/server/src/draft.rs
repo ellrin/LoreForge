@@ -34,6 +34,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/topic", put(put_topic))
         .route("/api/papers/{name}/draft/records", post(upload_record))
         .route("/api/papers/{name}/draft/records/path", post(record_from_path))
+        .route("/api/papers/{name}/draft/records/text", post(record_from_text))
         .route("/api/papers/{name}/draft/records/shelf", post(record_from_shelf))
         .route("/api/papers/{name}/draft/records/{file}", axum::routing::delete(delete_record))
         .route("/api/papers/{name}/draft/record", post(run_record))
@@ -488,6 +489,22 @@ async fn store_records(c: &Ctx, files: Vec<(String, Vec<u8>)>) -> Resp {
     }
     tri!(save(&c.dir, &sess));
     tri!(view(&c, &sess))
+}
+
+#[derive(Deserialize)]
+struct RecordText {
+    text: String,
+}
+
+/// A record the author typed or pasted: stored as `手寫紀錄-<time>.md`.
+async fn record_from_text(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RecordText>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    if b.text.trim().is_empty() {
+        return bad("沒有內容");
+    }
+    let stamp: String = lore_polish::log::now().chars().take(19).filter(|c| c.is_ascii_digit() || *c == 'T').collect::<String>().replace('T', "-");
+    let file = format!("手寫紀錄-{stamp}.md");
+    store_records(&c, vec![(file, b.text.into_bytes())]).await
 }
 
 /// Text records are stored as they are; a PDF is stored as its text.
