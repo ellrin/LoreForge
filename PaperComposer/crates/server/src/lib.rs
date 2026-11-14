@@ -29,6 +29,7 @@ mod shell; // the shared Lore shell: its files, 列印, 另存新檔
 pub mod export;
 pub mod import;
 pub mod opened;
+pub mod remove;
 pub mod llm;
 pub mod preview;
 pub mod proc;
@@ -3620,6 +3621,7 @@ pub fn router(paths: Paths) -> Router {
         .merge(book::routes())
         .merge(sections::routes())
         .merge(opened::routes())
+        .merge(remove::routes())
         .merge(notation::routes())
         .merge(notes::routes())
         .merge(shell::routes())

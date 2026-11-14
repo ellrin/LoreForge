@@ -130,6 +130,7 @@ const PCFrame = (() => {
           { icon: "openWord", label: "開啟 Word…", run: () => PCOpen.word(picker()) },
           { icon: "plus", label: "新論文", run: () => PCNew.open() },
           { icon: "save", label: "另存新檔…", run: saveAs, get disabled() { return !state.paper; } },
+          { icon: "trash", get label() { return state.paper?.path ? "從清單移除" : "刪除論文…"; }, run: () => PCHome.removePaper(state.paper.name, picker()), get disabled() { return !state.paper; } },
         ],
       },
       primary: [

@@ -263,6 +263,7 @@ const PCHome = (() => {
       const where = p.path ? baseName(p.path.replace(/[\\/][^\\/]*[\\/]?$/, "")) : "";
       b.append(icon(p.kind === "book" ? "modeBook" : p.path ? "openLatex" : "modePaper"), el("span", "open-name", p.name), el("span", "open-where", where));
       b.onclick = () => openPaper(p.name);
+      if (p.kind !== "book") b.oncontextmenu = (e) => paperContext(e, p);
       li.append(b);
       ul.append(li);
     }
@@ -295,6 +296,7 @@ const PCHome = (() => {
     } else art.append(fauxPage(p));
     const c = card(art, p.name, () => openPaper(p.name));
     c.dataset.paper = p.name;
+    c.oncontextmenu = (e) => paperContext(e, p);
     // opened where it is: a folder mark, the place on hover
     if (p.path) {
       c.title = p.path;
@@ -314,6 +316,43 @@ const PCHome = (() => {
     more.dataset.opensMenu = "";
     item.append(c, more);
     return item;
+  }
+
+  // ── 刪除論文 ──────────────────────────────────────────
+  /** Right-click on a paper: 刪除論文… (workspace) or 從清單移除 (opened where it is). */
+  function paperContext(e, p) {
+    e.preventDefault();
+    const at = { x: e.clientX, y: e.clientY };
+    LoreShell.menu(at, [{ icon: "trash", label: p.path ? "從清單移除" : "刪除論文…", run: () => removePaper(p.name, at) }]);
+  }
+
+  /** Ask, then the server trashes a workspace paper or unlists one opened elsewhere (remove.rs). */
+  async function removePaper(name, anchor) {
+    let p = papers?.find((x) => x.name === name);
+    if (!p) {
+      try { papers = await api("/api/home/papers"); } catch {}
+      p = papers?.find((x) => x.name === name) ?? { name };
+    }
+    if (p.kind === "book") return;
+    const lines = p.path ? [`從清單移除「${name}」？`, "資料夾留在原處。"] : [`刪除「${name}」？`, "移到垃圾桶，可從那裡復原。"];
+    const go = p.path ? "移除" : "刪除";
+    if (!(await LoreShell.ask(anchor, lines, [{ label: "取消", value: null }, { label: go, value: true, danger: true, primary: true }]))) return;
+    const open = state.paper?.name === name;
+    if (open) await PCFrame.settle(); // the paragraph being edited lands before the folder goes
+    let r;
+    try { r = await api(`/api/papers/${encodeURIComponent(name)}/delete`, {}); }
+    catch (err) { LoreShell.toast(err.message, { err: true, ms: 6000 }); return; }
+    papers = (papers ?? []).filter((x) => x.name !== name);
+    if (store.get("pc.paper", null) === name) store.set("pc.paper", null);
+    if (open) {
+      state.paper = null;
+      PCFrame.setName("—", "");
+      render(true);
+      show(2, "paper");
+    } else refresh();
+    state.workspace = await api("/api/workspace").catch(() => state.workspace);
+    if (typeof refreshGit === "function") refreshGit();
+    LoreShell.toast(r.action === "trashed" ? "已移到垃圾桶" : "已從清單移除");
   }
 
   /** A page drawn from the title when the paper has not been compiled yet. */
@@ -361,5 +400,5 @@ const PCHome = (() => {
   /** Redraw level 2 after the papers changed (sync, import). */
   const refresh = () => { if (isOpen()) draw(false); };
 
-  return { show, close, isOpen, refresh, wire, MODES };
+  return { show, close, isOpen, refresh, wire, removePaper, MODES };
 })();

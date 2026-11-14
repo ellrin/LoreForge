@@ -163,7 +163,7 @@ pub fn registry() -> Registry {
     Registry::load(&registry_file())
 }
 
-fn update<T>(f: impl FnOnce(&mut Registry) -> T) -> Result<T, String> {
+pub(crate) fn update<T>(f: impl FnOnce(&mut Registry) -> T) -> Result<T, String> {
     let _g = REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let file = registry_file();
     let mut r = Registry::load(&file);
