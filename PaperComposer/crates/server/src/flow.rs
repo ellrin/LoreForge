@@ -110,27 +110,36 @@ async fn spec_get(State(s): State<Shared>, AxPath(name): AxPath<String>, AxQuery
 /// Title, abstract and the method section(s) of a paper (or a book's chapters on the method):
 /// what the discussion starts from. Bounded; plain text with `$…$` maths.
 pub fn starting_material(dir: &Path) -> String {
-    let from_docsrc = docsrc_material(dir);
-    if !from_docsrc.trim().is_empty() {
-        return from_docsrc;
-    }
-    // the paper's own fields and sections when lore-docsrc cannot read the project (a journal class)
+    // lore-docsrc parses whatever the author wrote: if it fails (or panics), the paper's own fields below
+    let from_docsrc = std::panic::catch_unwind(|| docsrc_material(dir)).unwrap_or_default();
+    // the paper's own title-block fields: a journal class (sn-jnl's \abstract{…}) that lore-docsrc
+    // reads only in part, or not at all
     let main = std::fs::read_to_string(pc_core::open::main_file(dir)).unwrap_or_default();
     let fields = pc_core::front::fields_in(dir, &main);
-    let field = |k: &str| fields.iter().find(|f| f.field == k).map(|f| pc_core::text::strip_latex(&f.value)).unwrap_or_default();
-    let mut out = String::new();
-    if !field("title").trim().is_empty() {
-        out += &format!("Title: {}\n\n", field("title").trim());
+    let field = |k: &str| fields.iter().find(|f| f.field == k).map(|f| pc_core::text::strip_latex(&f.value).trim().to_string()).unwrap_or_default();
+    let mut head = String::new();
+    if !from_docsrc.contains("Title: ") && !field("title").is_empty() {
+        head += &format!("Title: {}\n\n", field("title"));
     }
-    if !field("abstract").trim().is_empty() {
-        out += &format!("Abstract: {}\n\n", field("abstract").trim());
+    if !from_docsrc.contains("Abstract: ") && !field("abstract").is_empty() {
+        head += &format!("Abstract: {}\n\n", field("abstract"));
     }
-    for sec in pc_core::open::sections(dir).iter().filter(|s| {
-        let t = s.title.to_lowercase();
-        ["method", "approach", "model", "framework", "pipeline", "materials", "方法"].iter().any(|w| t.contains(w))
-    }) {
-        out += &format!("{}\n{}\n\n", pc_core::text::strip_latex(&sec.title), sec.paragraphs.join("\n"));
-    }
+    let out = if !from_docsrc.trim().is_empty() {
+        // the abstract after docsrc's title line
+        match from_docsrc.strip_prefix("Title: ").and_then(|r| r.split_once("\n\n")) {
+            Some((title, rest)) if !head.contains("Title: ") => format!("Title: {title}\n\n{head}{rest}"),
+            _ => format!("{head}{from_docsrc}"),
+        }
+    } else {
+        let mut out = head;
+        for sec in pc_core::open::sections(dir).iter().filter(|s| {
+            let t = s.title.to_lowercase();
+            ["method", "approach", "model", "framework", "pipeline", "materials", "方法"].iter().any(|w| t.contains(w))
+        }) {
+            out += &format!("{}\n{}\n\n", pc_core::text::strip_latex(&sec.title), sec.paragraphs.join("\n"));
+        }
+        out
+    };
     out.chars().take(9000).collect::<String>().trim().to_string()
 }
 
@@ -251,6 +260,31 @@ pub struct Saved {
     pub file: String,
     pub stem: String,
     pub registered: Vec<String>,
+    /// A first caption from the panel titles, for the figure block (the author rewrites it).
+    pub caption: String,
+}
+
+/// "(a) Datasets; (b) Label check." from the panels' titles (`a. Datasets`): a first caption the author rewrites.
+pub fn draft_caption(g: &lore_flow::spec::Graph) -> String {
+    let titles: Vec<(String, String)> = g
+        .panels
+        .iter()
+        .filter(|p| !p.title.trim().is_empty())
+        .map(|p| {
+            let t = p.title.trim();
+            // "a. Datasets" / "(a) Datasets" → ("a", "Datasets")
+            let (k, rest) = match t.split_once(". ").or_else(|| t.strip_prefix('(').and_then(|r| r.split_once(") "))) {
+                Some((k, r)) if k.len() <= 2 && k.chars().all(|c| c.is_ascii_alphanumeric()) => (k.to_string(), r.trim().to_string()),
+                _ => (p.id.clone(), t.to_string()),
+            };
+            (k, rest)
+        })
+        .collect();
+    match titles.as_slice() {
+        [] => String::new(),
+        [(_, one)] => format!("{one}."),
+        many => format!("{}.", many.iter().map(|(k, t)| format!("({k}) {t}")).collect::<Vec<_>>().join("; ")),
+    }
 }
 
 /// Write `figures/<stem>.pdf` and `<stem>.flow.json`, register the new variables.
@@ -272,7 +306,7 @@ pub fn save_figure(paper: &Path, stem: &str, replace: Option<&str>, spec: &FlowS
     let json = serde_json::to_string_pretty(&spec.to_value()).map_err(|e| e.to_string())?;
     write_atomic(&figs.join(format!("{stem}.flow.json")), json.as_bytes()).map_err(|e| e.to_string())?;
     let registered = register_vars(paper, spec)?;
-    Ok(Saved { file: format!("figures/{stem}.pdf"), stem, registered })
+    Ok(Saved { file: format!("figures/{stem}.pdf"), stem, registered, caption: draft_caption(&g) })
 }
 
 #[derive(Deserialize)]
@@ -321,6 +355,33 @@ mod tests {
         assert_eq!(free_stem(&d, "seg", true), "seg", "ours: replaced in place");
         assert_eq!(free_stem(&d, "seg", false), "seg-2");
         assert_eq!(sidecar(Path::new("/p/figures/seg.pdf")), PathBuf::from("/p/figures/seg.flow.json"));
+        // the figure block gets a first caption from the panels, never an empty \caption{}
+        let g = lore_flow::dsl::parse("fig t\npanel a \"a. Datasets & labels\"\n  x: box \"X\"\nend\npanel b \"b. Model\"\n  m: box \"M\"\nend\nx -> m\n").unwrap();
+        assert_eq!(draft_caption(&g), "(a) Datasets & labels; (b) Model.");
+        let g = lore_flow::dsl::parse("fig t\npanel a \"Pipeline\"\n  x: box \"X\"\nend\n").unwrap();
+        assert_eq!(draft_caption(&g), "Pipeline.");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_journal_class_paper_with_dashes_still_gives_a_starting_point() {
+        // a journal-class (sn-jnl) paper: \abstract{…} in the title block, sections by \input, "0.15–0.2"
+        // in the text made lore-docsrc panic and the editor opened empty
+        let d = std::env::temp_dir().join(format!("pc-flow-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sections")).unwrap();
+        std::fs::write(
+            d.join("main.tex"),
+            "\\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}\n\\begin{document}\n\\title[Article Title]{Label noise drives the shift}\n\\abstract{We test a classifier on a second site – with care.}\n\\maketitle\n\\input{sections/methods}\n\\input{sections/results}\n\\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("sections/methods.tex"), "\\section{Materials and Methods}\\label{sec:m}\n\nImages were resized to 64 \\ensuremath{\\times} 64 – the score was 0.15–0.2 lower.\n\nA small encoder was trained on site A.\n").unwrap();
+        std::fs::write(d.join("sections/results.tex"), "\\section{Results}\n\nCafé – score 0.81.\n").unwrap();
+        let t = starting_material(&d);
+        assert!(t.contains("Label noise drives the shift"), "{t}");
+        assert!(t.contains("second site"), "abstract: {t}");
+        assert!(t.contains("small encoder"), "method section: {t}");
+        assert!(!t.contains("Café"), "results are not the method: {t}");
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

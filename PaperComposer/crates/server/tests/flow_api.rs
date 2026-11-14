@@ -27,6 +27,8 @@ async fn round_trip(http: &reqwest::Client, url: &dyn Fn(&str) -> String, name: 
     let v: Value = r.json().await.unwrap();
     assert_eq!(v["file"], "figures/seg2-2.pdf");
     assert_eq!(v["registered"], json!(["xr"]));
+    // a first caption for the figure block (never an empty \caption{}), from the panel titles
+    assert_eq!(v["caption"], "(a) Coarse localisation; (b) Fine segmentation.");
     assert_eq!(std::fs::read(figs.join("seg2.pdf")).unwrap(), b"%PDF mine");
     assert!(std::fs::read(figs.join("seg2-2.pdf")).unwrap().starts_with(b"%PDF-"));
     // the new variable is in the document's own registry, not the global one

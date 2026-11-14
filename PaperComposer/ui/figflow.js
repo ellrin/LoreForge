@@ -54,7 +54,7 @@
         try {
           const r = await save(spec, null);
           if (r.registered?.length) LoreShell.toast(`對照表加入 ${r.registered.join("、")}`, { ms: 5000 });
-          out = { file: r.file, caption: "" };
+          out = { file: r.file, caption: r.caption ?? "" };
           return true;
         } catch (e) { return e.message; }
       },
