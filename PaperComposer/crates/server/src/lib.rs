@@ -30,6 +30,7 @@ pub mod export;
 pub mod import;
 pub mod opened;
 pub mod remove;
+pub mod shelf;
 pub mod llm;
 pub mod preview;
 pub mod proc;
@@ -3622,6 +3623,7 @@ pub fn router(paths: Paths) -> Router {
         .merge(sections::routes())
         .merge(opened::routes())
         .merge(remove::routes())
+        .merge(shelf::routes())
         .merge(notation::routes())
         .merge(notes::routes())
         .merge(shell::routes())

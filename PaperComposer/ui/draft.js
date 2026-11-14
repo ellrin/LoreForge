@@ -308,7 +308,51 @@ const PCDraft = (() => {
       });
     };
     path.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); addPath(); } };
-    main.append(row(file, path, btn("加入", addPath, "small")));
+    // 搜尋檔案: LoreShelf's catalog (brought up in the background when needed); a click adds the file
+    const find = el("div", "df-find");
+    find.hidden = true;
+    const fq = el("input", "df-path");
+    fq.type = "search";
+    fq.placeholder = "檔名、內容或一句描述";
+    fq.setAttribute("aria-label", "搜尋檔案");
+    const hits = el("ul", "df-list df-hits");
+    let seq = 0;
+    const search = async () => {
+      const q = fq.value.trim();
+      const my = ++seq;
+      if (!q) { hits.replaceChildren(); return; }
+      hits.replaceChildren(el("li", "df-muted", "搜尋中…"));
+      try {
+        const r = await fetch(`/api/shelf/search?q=${encodeURIComponent(q)}`);
+        if (my !== seq) return;
+        if (!r.ok) { hits.replaceChildren(el("li", "df-muted", await r.text())); return; }
+        const v = await r.json();
+        if (my !== seq) return;
+        if (!v.items.length) { hits.replaceChildren(el("li", "df-muted", "沒有找到")); return; }
+        hits.replaceChildren(...v.items.map((it) => {
+          const li = el("li", "df-hit");
+          const date = (it.modified || "").slice(0, 10);
+          li.append(el("span", "df-hit-name", it.name), el("span", "df-muted", [date, it.size ? `${Math.ceil(it.size / 1024)} KB` : ""].filter(Boolean).join(" · ")));
+          li.tabIndex = 0;
+          const add = () => run("加入", async () => {
+            const x = await fetch(`${base()}/records/shelf`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: it.id }) });
+            if (!x.ok) throw new Error(await x.text());
+            const skipped = Number(x.headers.get("x-skipped") || 0);
+            if (skipped) LoreShell.toast(`略過 ${skipped} 個不能用的檔案`);
+            return x.json();
+          });
+          li.onclick = add;
+          li.onkeydown = (e) => { if (e.key === "Enter") add(); };
+          return li;
+        }));
+      } catch (e) { if (my === seq) hits.replaceChildren(el("li", "df-muted", String(e.message || e))); }
+    };
+    let timer = null;
+    fq.oninput = () => { clearTimeout(timer); timer = setTimeout(search, 300); };
+    fq.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); clearTimeout(timer); search(); } };
+    find.append(fq, hits);
+    const findBtn = btn("搜尋檔案", () => { find.hidden = !find.hidden; if (!find.hidden) fq.focus(); }, "small");
+    main.append(row(file, findBtn, path, btn("加入", addPath, "small")), find);
     const list = el("ul", "df-list");
     sess().records.forEach((r) => {
       const li = el("li", "", `${r.file}（${Math.ceil(r.bytes / 1024)} KB）`);

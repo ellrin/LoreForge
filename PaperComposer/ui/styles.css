@@ -1534,3 +1534,8 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-mic { align-self: flex-start; }
 .df-mic.on { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-text); }
 .df-path { flex: 1; min-width: 16em; }
+.df-find { margin: 6px 0 10px; display: flex; flex-direction: column; gap: 6px; }
+.df-hits .df-hit { display: flex; justify-content: space-between; gap: 12px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.df-hits .df-hit:hover, .df-hits .df-hit:focus { background: var(--surface-hover); outline: none; }
+.df-hit-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.df-muted { color: var(--muted); white-space: nowrap; }

@@ -34,6 +34,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/topic", put(put_topic))
         .route("/api/papers/{name}/draft/records", post(upload_record))
         .route("/api/papers/{name}/draft/records/path", post(record_from_path))
+        .route("/api/papers/{name}/draft/records/shelf", post(record_from_shelf))
         .route("/api/papers/{name}/draft/records/{file}", axum::routing::delete(delete_record))
         .route("/api/papers/{name}/draft/record", post(run_record))
         .route("/api/papers/{name}/draft/experiments", put(put_experiments))
@@ -568,6 +569,20 @@ fn record_files_at(p: &Path) -> Result<(Vec<(String, Vec<u8>)>, Vec<String>), St
         }
     }
     Ok((ok, skipped))
+}
+
+#[derive(Deserialize)]
+struct RecordShelf {
+    id: String,
+}
+
+/// Add a record the author picked in 搜尋檔案 (a LoreShelf item; its path is asked for here).
+async fn record_from_shelf(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RecordShelf>) -> Resp {
+    let path = match crate::shelf::path_of(&b.id).await {
+        Ok(p) => p,
+        Err(e) => return bad(&e),
+    };
+    record_from_path(State(s), AxPath(name), Json(RecordPath { path })).await
 }
 
 /// Add records from a path the author typed or pasted (a file, or every file in a folder).
