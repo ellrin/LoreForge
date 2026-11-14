@@ -175,7 +175,7 @@ const PCReader = (() => {
         go.disabled = true;
         try { finish(await ask({ doi: doi.value.trim() })); } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); go.disabled = false; }
       };
-      doi.onkeydown = (e) => { if (e.key === "Enter") go.click(); };
+      doi.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) go.click(); };
       own.onclick = async () => { try { finish(await ask({ doi: doi.value.trim() || undefined, minimal: true })); } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); } };
       cancel.onclick = () => finish(null);
       row.append(doi, go);

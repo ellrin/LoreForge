@@ -2533,6 +2533,7 @@ name = "lore-shell"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "lore-home",
  "serde",
  "serde_json",
  "tokio",

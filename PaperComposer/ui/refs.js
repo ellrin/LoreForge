@@ -268,7 +268,7 @@ const PCRefs = (() => {
     doi.placeholder = "DOI";
     const add = el("button", "ghost", "加入");
     add.onclick = () => { if (doi.value.trim()) { propose({ doi: doi.value.trim() }); doi.value = ""; } };
-    doi.onkeydown = (e) => { if (e.key === "Enter") add.click(); };
+    doi.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) add.click(); };
     row.append(doi, add);
     if (pdfDir) {
       let files = [];
@@ -313,7 +313,7 @@ const PCRefs = (() => {
       inp.value = q.doi && !q.need_doi ? q.doi : "";
       const go = el("button", "ghost", label);
       go.onclick = () => inp.value.trim() && retry(inp.value.trim());
-      inp.onkeydown = (e) => { if (e.key === "Enter") go.click(); };
+      inp.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) go.click(); };
       row.append(inp, go);
       return row;
     };
@@ -381,7 +381,7 @@ const PCRefs = (() => {
     one.contentEditable = "plaintext-only";
     one.dataset.placeholder = "一句話：這篇在說什麼";
     one.onblur = () => { const v = one.textContent.trim(); if (v !== r.one_liner) saveNote(r, { one_liner: v }); };
-    one.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); one.blur(); } };
+    one.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) { e.preventDefault(); one.blur(); } };
     const tagRow = el("div", "ref-tags");
     const drawTags = () => {
       tagRow.innerHTML = "";
@@ -544,7 +544,7 @@ const PCRefs = (() => {
         });
       };
       search.oninput = () => { f.q = search.value; draw(); };
-      search.onkeydown = (e) => { if (e.key === "Enter" && chosen.size) go.click(); };
+      search.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && chosen.size) go.click(); };
       go.onclick = async () => {
         if (!chosen.size) return;
         const keys = [...chosen];
@@ -606,7 +606,7 @@ const PCRefs = (() => {
         const want = { q: "", tags: new Set() };
         const back = iconButton("back", "回到文獻庫", () => { searchBox.hidden = true; listMode.hidden = false; draw(); });
         const send = iconButton("send", "搜尋 Ctrl+Enter", () => run());
-        req.onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) run(); };
+        req.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.ctrlKey || e.metaKey)) run(); };
         const head = el("div", "row-end");
         head.append(back, req, send);
         const results = el("div", "cite-list");

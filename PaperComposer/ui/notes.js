@@ -225,7 +225,7 @@ window.PCNotes = (() => {
     const draw = () => preview.replaceChildren(rendered(text.value));
     for (const el of [title, tags, text]) el.addEventListener("input", () => { st.edit.dirty = true; if (el === text) { clearTimeout(t); t = setTimeout(draw, 200); } });
     text.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save.click(); }
+      if ((e.key === "Enter" && !e.isComposing) && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save.click(); }
     });
     cancel.onclick = async () => { if (await leaveEdit(cancel)) renderRead(); };
     save.onclick = async () => {

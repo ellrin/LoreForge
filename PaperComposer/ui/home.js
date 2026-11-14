@@ -238,7 +238,7 @@ const PCHome = (() => {
       }
     };
     go.onclick = create;
-    for (const i of [title, folder]) i.onkeydown = (e) => { if (e.key === "Enter") create(); if (e.key === "Escape") m.hidden = true; };
+    for (const i of [title, folder]) i.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) create(); if (e.key === "Escape") m.hidden = true; };
     const foot = el("div", "form-row end");
     foot.append(go);
     m.append(title, row, pageRow, foot);

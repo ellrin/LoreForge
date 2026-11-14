@@ -638,7 +638,7 @@ const PCContext = (() => {
       focusItem(i < 0 ? 0 : i + (e.key === "ArrowRight" ? 1 : -1));
       return;
     }
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); (list[i] ?? list[0])?.click(); return; }
+    if ((e.key === "Enter" && !e.isComposing) || e.key === " ") { e.preventDefault(); e.stopPropagation(); (list[i] ?? list[0])?.click(); return; }
     if (e.key === "Tab") { e.preventDefault(); e.stopPropagation(); return; }
     hide(false); // typing on: the menu goes
   }

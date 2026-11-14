@@ -30,7 +30,6 @@ pub mod export;
 pub mod import;
 pub mod opened;
 pub mod remove;
-pub mod shelf;
 pub mod llm;
 pub mod preview;
 pub mod proc;
@@ -3623,7 +3622,8 @@ pub fn router(paths: Paths) -> Router {
         .merge(sections::routes())
         .merge(opened::routes())
         .merge(remove::routes())
-        .merge(shelf::routes())
+        // 搜尋檔案 through LoreEcho (lore_shell::findfile): a chosen file → a 實驗紀錄 record
+        .merge(lore_shell::findfile::router(finds(&state)))
         .merge(notation::routes())
         .merge(notes::routes())
         .merge(shell::routes())
@@ -3639,6 +3639,26 @@ pub fn router(paths: Paths) -> Router {
         // the UI is read fresh each time: a new server must not meet an old script
         .fallback_service(Router::new().fallback_service(ServeDir::new(paths.ui)).layer(axum::middleware::map_response(no_cache)))
         .with_state(state)
+}
+
+/// 搜尋檔案: LoreEcho finds, the author chooses, the file comes back here (`/api/lore/picked`).
+/// 實驗紀錄 (context `{paper}`) adds it as a record of that paper. `PAPERCOMPOSER_NO_ECHO`
+/// (tests): LoreEcho is never launched or asked.
+fn finds(state: &Shared) -> lore_shell::findfile::Finds {
+    let s = state.clone();
+    let on_pick: lore_shell::findfile::OnPick = Arc::new(move |p: lore_shell::findfile::Pick| {
+        let s = s.clone();
+        Box::pin(async move {
+            let paper = p.context["paper"].as_str().unwrap_or_default().to_string();
+            let home = dirs::home_dir().ok_or("找不到家目錄")?;
+            match p.purpose.as_str() {
+                "實驗紀錄" => draft::record_picked(&s, &paper, &p.path, &home).await,
+                other => Err(format!("PaperComposer 不收「{other}」")),
+            }
+        })
+    });
+    let f = lore_shell::findfile::Finds::new("pc", on_pick);
+    if std::env::var_os("PAPERCOMPOSER_NO_ECHO").is_some() { f.with_ask(Arc::new(|_: &lore_shell::findfile::FindRequest| Ok(()))) } else { f }
 }
 
 /// The shared 模型 settings (lore-engines) over this app's llama-server, Claude Code and tasks.

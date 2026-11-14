@@ -59,7 +59,7 @@ const PCNew = (() => {
       const b = el("button", "primary small", st.busy ? "建立中…" : "建立論文");
       b.disabled = st.busy;
       b.onclick = () => create("blank");
-      name.onkeydown = (e) => { if (e.key === "Enter") create("blank"); };
+      name.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) create("blank"); };
       foot.append(b);
       return;
     }
@@ -74,7 +74,7 @@ const PCNew = (() => {
     ai.prepend(icon("ai"));
     ai.disabled = st.busy;
     ai.onclick = () => (none ? Setup.open("claude") : create("ai"));
-    name.onkeydown = (e) => { if (e.key === "Enter") ai.click(); };
+    name.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) ai.click(); };
     const note = state.engines && !claude ? el("span", "np-engine-note", none ? "沒有 Claude 也沒有本機模型" : "沒有 Claude：改用本機模型，品質較低") : null;
     if (note) foot.insertBefore(note, name);
     foot.append(blank, ai);

@@ -486,7 +486,7 @@ const PCTemplates = (() => {
       } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
     };
     go.onclick = make;
-    n.onkeydown = (e) => { if (e.key === "Enter") make(); };
+    n.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) make(); };
     row.append(n, go);
     main.append(row);
     n.focus();

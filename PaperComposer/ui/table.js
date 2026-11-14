@@ -391,7 +391,7 @@ const PCTable = (() => {
     };
     td.onkeydown = (e) => {
       if (e.key === "Tab") { e.preventDefault(); done(e.shiftKey ? -1 : 1); }
-      else if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); done(0); }
+      else if ((e.key === "Enter" && !e.isComposing) || e.key === "Escape") { e.preventDefault(); done(0); }
       e.stopPropagation();
     };
     td.onblur = () => done(0);
@@ -627,7 +627,7 @@ const PCTable = (() => {
     if (!active || e.target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
     if ((e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); undo(active); }
     else if (e.key === "Escape") deactivate();
-    else if (e.key === "Enter" && active.sel) {
+    else if ((e.key === "Enter" && !e.isComposing) && active.sel) {
       e.preventDefault();
       const { r0, c0 } = rect(active.sel);
       const [r, c] = origin(active.t, r0, c0);

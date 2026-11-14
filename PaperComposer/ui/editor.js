@@ -305,7 +305,7 @@ const PCSections = (() => {
     input.onkeydown = (e) => {
       if (e.isComposing) return;
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(false); }
-      else if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if ((e.key === "Enter" && !e.isComposing)) { e.preventDefault(); finish(true); }
     };
     input.onblur = () => finish(true);
     input.focus();

@@ -131,7 +131,7 @@ const PCWrite = (() => {
         });
       };
       q.oninput = draw;
-      q.onkeydown = (e) => { if (e.key === "Enter") grid.querySelector("button")?.click(); };
+      q.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) grid.querySelector("button")?.click(); };
       draw();
       p.append(q, grid);
       setTimeout(() => q.focus());
@@ -240,7 +240,7 @@ const PCWrite = (() => {
       q.oninput = draw;
       p.addEventListener("keydown", (e) => {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); move(e.key === "ArrowDown" ? 1 : -1); }
-        else if (e.key === "Enter" && e.target === q) list.querySelector("button")?.click();
+        else if ((e.key === "Enter" && !e.isComposing) && e.target === q) list.querySelector("button")?.click();
       });
       draw();
       p.append(q, list);

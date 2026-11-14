@@ -531,7 +531,7 @@ const Setup = (() => {
     $("#ccLogin").onclick = loginCC;
     $("#ccCopy").onclick = () => { navigator.clipboard?.writeText(INSTALL); LoreShell.toast("已複製安裝指令"); };
     $("#wzTest").onclick = testClaude;
-    $("#wzClaudeKey").onkeydown = (e) => { if (e.key === "Enter") $("#wzClaudeSave").click(); };
+    $("#wzClaudeKey").onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) $("#wzClaudeSave").click(); };
   }
 
   /** First run: no workspace yet. The gear opens on the first thing to do. */

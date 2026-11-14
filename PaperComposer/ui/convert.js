@@ -64,7 +64,7 @@ const PCConvert = (() => {
         draw(await api(`/api/convert/${enc()}`));
       } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
     };
-    name.onkeydown = (e) => { if (e.key === "Enter") go.click(); };
+    name.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) go.click(); };
     const form = el("div", "tpl-form");
     const f1 = el("label", "tf"); f1.append(el("span", "lbl", "名稱"), name);
     const f2 = el("div", "tf"); f2.append(el("span", "lbl", "類別"), kind);
@@ -146,7 +146,7 @@ const PCConvert = (() => {
         poll();
       } catch (e) { LoreShell.toast(e.message, { err: true, ms: 8000 }); go.disabled = false; }
     };
-    say.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) go.click(); };
+    say.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.metaKey || e.ctrlKey)) go.click(); };
     stop.onclick = async () => { await api(`/api/convert/${enc()}/stop`, {}); poll(); };
     bar.append(say, go, stop);
     host.append(bar);

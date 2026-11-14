@@ -307,7 +307,7 @@ function renderKeyValue() {
       renderKeyValue();
     };
     input.oninput = recount;
-    input.onkeydown = (e) => { if (e.key === "Enter") save(); if (e.key === "Escape") renderKeyValue(); };
+    input.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) save(); if (e.key === "Escape") renderKeyValue(); };
     input.onblur = save;
     v.replaceWith(input, count);
     recount();
@@ -742,7 +742,7 @@ function edit(p, si, pi) {
   ta.onkeydown = (e) => {
     if (e.isComposing) return;
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelEdit(ta, si, pi, was); }
-    else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ta.blur(); }
+    else if ((e.key === "Enter" && !e.isComposing) && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ta.blur(); }
   };
   ta.onblur = async () => {
     if (ta.dataset.discard) return; // Esc, or 重新載入 chose the other version (open.js)
@@ -789,7 +789,7 @@ function editField(n) {
   ta.onkeydown = (e) => {
     if (e.isComposing) return;
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); ta.dataset.discard = "1"; ta.blur(); }
-    else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ta.blur(); }
+    else if ((e.key === "Enter" && !e.isComposing) && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ta.blur(); }
   };
   ta.onblur = async () => {
     const v = ta.dataset.discard ? cur.trim() : ta.value.trim();
@@ -1289,7 +1289,7 @@ function importForm(anchor) {
   const go = el("button", "primary small", "下載並匯入");
   const run = () => { if (need()) importArxiv(arxiv, name); };
   go.onclick = run;
-  arxiv.onkeydown = (e) => { if (e.key === "Enter") run(); if (e.key === "Escape") m.hidden = true; };
+  arxiv.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) run(); if (e.key === "Escape") m.hidden = true; };
   arow.append(arxiv, go);
   m.append(name, kv, fromPc, row, fromArxiv, arow);
   keepOnScreen(m);
@@ -1738,7 +1738,7 @@ function wire() {
   });
   document.querySelectorAll("#lookPaper button").forEach((b) => b.addEventListener("click", () => { store.set("pc.dim", b.dataset.v === "dim"); applyTheme(); }));
   $("#generate").onclick = compose;
-  $("#points").onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) compose(); };
+  $("#points").onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.ctrlKey || e.metaKey)) compose(); };
 
   $("#dbFilter").oninput = applyFilter;
   $("#dbSection").onchange = applyFilter;

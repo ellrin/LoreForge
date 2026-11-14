@@ -136,13 +136,14 @@ mod tests {
 
     #[test]
     fn the_shell_files_are_served_and_the_page_loads_them_in_order() {
-        assert_eq!(lore_shell::FILES.iter().map(|f| f.0).collect::<Vec<_>>(), ["/icons.js", "/base.css", "/shell.js", "/makedeck.js", "/makebook.js", "/polish.js"]);
+        assert_eq!(lore_shell::FILES.iter().map(|f| f.0).collect::<Vec<_>>(), ["/icons.js", "/base.css", "/shell.js", "/makedeck.js", "/makebook.js", "/polish.js", "/findfile.js"]);
         let ui = Paths::from_repo().ui;
         assert!(!ui.join("icons.js").exists(), "the app's own icons.js is gone (commons/ui/icons.js is served)");
         let index = std::fs::read_to_string(ui.join("index.html")).unwrap();
         let at = |s: &str| index.find(s).unwrap_or_else(|| panic!("{s}"));
         assert!(at("href=\"theme.css\"") < at("href=\"base.css\"") && at("href=\"base.css\"") < at("href=\"styles.css\""));
         assert!(at("src=\"theme.js\"") < at("src=\"icons.js\"") && at("src=\"icons.js\"") < at("src=\"shell.js\"") && at("src=\"shell.js\"") < at("src=\"makedeck.js\"") && at("src=\"makedeck.js\"") < at("src=\"app.js\""));
+        assert!(at("src=\"shell.js\"") < at("src=\"findfile.js\"") && at("src=\"findfile.js\"") < at("src=\"draft.js\""), "搜尋檔案 (LoreFindFile) before the 討論草稿");
         // no native confirm() anywhere: LoreShell.ask
         for f in std::fs::read_dir(&ui).unwrap().flatten() {
             let p = f.path();

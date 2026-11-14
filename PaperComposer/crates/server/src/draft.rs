@@ -33,9 +33,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft", get(get_draft))
         .route("/api/papers/{name}/draft/topic", put(put_topic))
         .route("/api/papers/{name}/draft/records", post(upload_record))
-        .route("/api/papers/{name}/draft/records/path", post(record_from_path))
         .route("/api/papers/{name}/draft/records/text", post(record_from_text))
-        .route("/api/papers/{name}/draft/records/shelf", post(record_from_shelf))
         .route("/api/papers/{name}/draft/records/{file}", axum::routing::delete(delete_record))
         .route("/api/papers/{name}/draft/record", post(run_record))
         .route("/api/papers/{name}/draft/experiments", put(put_experiments))
@@ -516,11 +514,6 @@ async fn upload_record(State(s): State<Shared>, AxPath(name): AxPath<String>, Ax
     }
 }
 
-#[derive(Deserialize)]
-struct RecordPath {
-    path: String,
-}
-
 /// Largest record file read from a path.
 const RECORD_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
@@ -588,43 +581,22 @@ fn record_files_at(p: &Path) -> Result<(Vec<(String, Vec<u8>)>, Vec<String>), St
     Ok((ok, skipped))
 }
 
-#[derive(Deserialize)]
-struct RecordShelf {
-    id: String,
-}
-
-/// Add a record the author picked in 搜尋檔案 (a LoreShelf item; its path is asked for here).
-async fn record_from_shelf(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RecordShelf>) -> Resp {
-    let path = match crate::shelf::path_of(&b.id).await {
-        Ok(p) => p,
-        Err(e) => return bad(&e),
-    };
-    record_from_path(State(s), AxPath(name), Json(RecordPath { path })).await
-}
-
-/// Add records from a path the author typed or pasted (a file, or every file in a folder).
-async fn record_from_path(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RecordPath>) -> Resp {
-    let c = tri!(ctx(&s, &name).await);
-    let Some(home) = dirs::home_dir() else { return bad("找不到家目錄") };
-    let p = match record_path(&b.path, &home) {
-        Ok(p) => p,
-        Err(e) => return bad(&e),
-    };
-    let (files, skipped) = match record_files_at(&p) {
-        Ok(x) => x,
-        Err(e) => return bad(&e),
-    };
+/// 搜尋檔案 (LoreEcho, `lore_shell::findfile`): a file the author chose for 實驗紀錄 becomes a
+/// record of paper `name`. Only inside `home`; a folder gives its files. `Ok` = what LoreEcho says.
+pub(crate) async fn record_picked(s: &Shared, name: &str, path: &Path, home: &Path) -> Result<String, String> {
+    let c = ctx(s, name).await.map_err(|_| "找不到這篇論文".to_string())?;
+    let p = record_path(&path.to_string_lossy(), home)?;
+    let (files, skipped) = record_files_at(&p)?;
     if files.is_empty() {
-        return bad(&if skipped.is_empty() { "這裡沒有檔案".to_string() } else { format!("沒有可用的檔案：{}", skipped.join("；")) });
+        return Err(if skipped.is_empty() { "這裡沒有檔案".to_string() } else { format!("不能用：{}", skipped.join("；")) });
     }
-    let mut r = store_records(&c, files).await;
-    if !skipped.is_empty() {
-        // how many files were left out (the page says so); names stay local to the author's machine
-        if let Ok(v) = axum::http::HeaderValue::from_str(&skipped.len().to_string()) {
-            r.headers_mut().insert("x-skipped", v);
-        }
+    let names: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
+    let r = store_records(&c, files).await;
+    if !r.status().is_success() {
+        let b = axum::body::to_bytes(r.into_body(), 64 * 1024).await.unwrap_or_default();
+        return Err(String::from_utf8_lossy(&b).trim().to_string());
     }
-    r
+    Ok(if skipped.is_empty() { names.join("、") } else { format!("{}（略過 {} 個）", names.join("、"), skipped.len()) })
 }
 
 async fn delete_record(State(s): State<Shared>, AxPath((name, file)): AxPath<(String, String)>) -> Resp {

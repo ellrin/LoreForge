@@ -89,7 +89,7 @@ const PCNewTemplate = (() => {
     pickFile.onclick = (e) => { e.stopPropagation(); chooser(false); };
     pickDir.onclick = (e) => { e.stopPropagation(); chooser(true); };
     drop.onclick = () => chooser(false);
-    drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); chooser(false); } };
+    drop.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) || e.key === " ") { e.preventDefault(); chooser(false); } };
     drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
     drop.ondragleave = () => drop.classList.remove("over");
     drop.ondrop = async (e) => {
@@ -235,7 +235,7 @@ const PCNewTemplate = (() => {
       paint();
     }
     readBtn.onclick = () => readRules();
-    url.onkeydown = (e) => { if (e.key === "Enter") readRules(); };
+    url.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) readRules(); };
     pasteGo.onclick = () => { if (pasteText.value.trim()) readRules(pasteText.value); };
 
     function paint() {
