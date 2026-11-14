@@ -41,6 +41,9 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/turn", post(run_turn))
         .route("/api/papers/{name}/draft/confirm", post(confirm_record))
         .route("/api/papers/{name}/draft/prefetch", post(prefetch))
+        .route("/api/papers/{name}/draft/round/answer", post(round_answer))
+        .route("/api/papers/{name}/draft/round/skip", post(round_skip))
+        .route("/api/papers/{name}/draft/round/check", post(round_check))
         .route("/api/papers/{name}/draft/group/{id}", post(group_action))
         .route("/api/papers/{name}/draft/items/{id}/exclude", post(exclude_item))
         .route("/api/papers/{name}/draft/figures", post(run_figures).put(put_figures))
@@ -1118,6 +1121,232 @@ async fn confirm_record(State(s): State<Shared>, AxPath(name): AxPath<String>, J
     turn_with(&s, &c, body, Some((b.items, b.no))).await
 }
 
+// ── 輪 (rounds): every question of a round is answered before anything is checked ──────────
+//
+// Round 1 asks each group its open points at once (the question is built by code, so answering
+// never waits). Each answer is checked behind the author's next answers (the turn call, in round
+// mode: grade, and one follow-up with everything the group still lacks). When a round is answered
+// and checked, the follow-ups become the next round: at most half as many, at most three rounds.
+
+#[derive(Deserialize, Default)]
+struct RoundBody {
+    group: String,
+    #[serde(default)]
+    answer: Option<String>,
+    /// Chosen candidates, `<item id>:<candidate id>`.
+    #[serde(default)]
+    picked: Vec<String>,
+    /// 記錄寫的: items whose record answer is right / wrong.
+    #[serde(default)]
+    yes: Vec<String>,
+    #[serde(default)]
+    no: Vec<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// Does `group` have a question waiting for an answer (its last turn is the interviewer's)?
+fn waiting(turns: &[ds::Turn], group: &str) -> bool {
+    turns.iter().rev().find(|t| t.group == group).is_some_and(|t| t.who == Who::Ai)
+}
+
+/// Start the next round if this one is answered and checked: its follow-ups become questions.
+fn advance_round(dir: &Path, sess: &mut Session) -> Result<(), String> {
+    let turns = ds::read_turns(dir);
+    let next = sess.advance_round(&|g| waiting(&turns, g));
+    for (group, f) in next {
+        ds::append_turn_with(dir, ds::Turn { n: 0, group, who: Who::Ai, text: f.text, options: f.options, engine: f.engine, about: f.about, picked: vec![], cands: f.cands })?;
+    }
+    if sess.interview_finished() && sess.phase == Phase::Interview {
+        sess.phase = Phase::Claims;
+    }
+    Ok(())
+}
+
+/// An answer of the round: kept at once (no model in the way), checked in the background.
+async fn round_answer(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RoundBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let mref = tri!(model_ref(b.model.as_deref()));
+    {
+        let _g = LOCK.lock().await;
+        let mut sess = tri!(load(&c.dir));
+        if sess.group(&b.group).is_none() {
+            return bad("沒有這個題組");
+        }
+        let turns = ds::read_turns(&c.dir);
+        let mut parts: Vec<String> = vec![];
+        if let Some(a) = apply_confirm(&mut sess, &b.group, &b.yes, &b.no) {
+            parts.push(a);
+        }
+        let mut picked = vec![];
+        for p in &b.picked {
+            let Some((item, k)) = p.split_once(':') else { continue };
+            let Some(it) = sess.items.iter().find(|i| i.id == item && i.group == b.group) else { continue };
+            let Some(cand) = it.candidates.iter().find(|x| x.id == k) else { continue };
+            // its words are in the answer already (the window puts a chosen option into the box)
+            let _ = cand;
+            picked.push(p.clone());
+            let (item, k) = (item.to_string(), k.to_string());
+            ca::note_picked(&mut sess, &item, &[k]);
+        }
+        if let Some(a) = b.answer.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+            parts.push(a.to_string());
+        }
+        if parts.is_empty() {
+            return bad("沒有內容");
+        }
+        if sess.round == 0 {
+            sess.round = 1;
+            sess.round_sizes = vec![sess.groups.iter().filter(|g| !matches!(g.status, ds::GroupStatus::Done | ds::GroupStatus::Skipped)).count().max(1)];
+        }
+        // the question it answers is part of the transcript (round 1: the group's opening)
+        if !waiting(&turns, &b.group) {
+            let q = ds::Turn { n: 0, group: b.group.clone(), who: Who::Ai, text: sess.opening_question(&b.group), options: vec![], engine: String::new(), about: String::new(), picked: vec![], cands: Some(vec![]) };
+            tri!(ds::append_turn_with(&c.dir, q).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()));
+        }
+        let me = ds::Turn { n: 0, group: b.group.clone(), who: Who::Me, text: parts.join("\n"), options: vec![], engine: String::new(), about: String::new(), picked, cands: None };
+        tri!(ds::append_turn_with(&c.dir, me).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()));
+        sess.start_group(&b.group);
+        sess.active = None;
+        for d in sess.discussions.iter_mut().filter(|d| d.group == b.group && d.status == dz::Status::Open) {
+            d.status = dz::Status::Closed;
+        }
+        if let Some(g) = sess.group_mut(&b.group) {
+            g.turns += 1;
+            g.grade = Some(Prep::Running);
+            g.follow = None;
+        }
+        if sess.phase < Phase::Interview {
+            sess.phase = Phase::Interview;
+        }
+        tri!(save(&c.dir, &sess));
+    }
+    spawn_check(&s, &c, b.group.clone(), mref);
+    let sess = tri!(load(&c.dir));
+    tri!(view(&c, &sess))
+}
+
+/// 略過: nothing (more) to say in this group.
+async fn round_skip(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RoundBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let mut sess = tri!(load(&c.dir));
+    let Some(g) = sess.group_mut(&b.group) else { return bad("沒有這個題組") };
+    let said = g.turns > 0;
+    g.follow = None;
+    sess.close_group(&b.group, !said);
+    tri!(advance_round(&c.dir, &mut sess).map_err(|e| bad(&e)));
+    tri!(save(&c.dir, &sess));
+    tri!(view(&c, &sess))
+}
+
+/// 重試 a check that failed.
+async fn round_check(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RoundBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let mref = tri!(model_ref(b.model.as_deref()));
+    {
+        let _g = LOCK.lock().await;
+        let mut sess = tri!(load(&c.dir));
+        let Some(g) = sess.group_mut(&b.group) else { return bad("沒有這個題組") };
+        g.grade = Some(Prep::Running);
+        tri!(save(&c.dir, &sess));
+    }
+    spawn_check(&s, &c, b.group.clone(), mref);
+    let sess = tri!(load(&c.dir));
+    tri!(view(&c, &sess))
+}
+
+/// Check a group's latest answer behind the author's back: grade it into the ledger, and keep the
+/// one follow-up it still needs for the next round (none: the group is done).
+/// At most this many checks at once.
+static CHECK_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
+
+fn spawn_check(s: &Shared, c: &Ctx, group: String, mref: Option<String>) {
+    let (s2, c2) = (s.clone(), own(c));
+    tokio::spawn(async move {
+        let Ok(_slot) = CHECK_SLOTS.acquire().await else { return };
+        let mut done = false;
+        for _ in 0..2 {
+            match check_group(&s2, &c2, &group, mref.as_deref()).await {
+                Ok(()) => {
+                    done = true;
+                    break;
+                }
+                Err(e) => eprintln!("輪: 檢查 {group} 失敗：{e}"),
+            }
+        }
+        if !done {
+            let _g = LOCK.lock().await;
+            if let Ok(mut sess) = Session::load(&c2.dir) {
+                if let Some(g) = sess.group_mut(&group) {
+                    g.grade = Some(Prep::Failed);
+                }
+                let _ = advance_round(&c2.dir, &mut sess);
+                let _ = sess.save(&c2.dir);
+            }
+        }
+    });
+}
+
+async fn check_group(s: &Shared, c: &Ctx, group: &str, mref: Option<&str>) -> Result<(), String> {
+    let (prompt, lens) = {
+        let _g = LOCK.lock().await;
+        let sess = Session::load(&c.dir)?;
+        let lens = lens_for(&c.ws, &sess).map_err(|_| "讀不到視角".to_string())?;
+        let mut turns = ds::read_turns(&c.dir);
+        // the answer to check: the group's last turn
+        let Some(k) = turns.iter().rposition(|t| t.group == group && t.who == Who::Me) else { return Err("沒有回答".into()) };
+        let answer = turns.remove(k).text;
+        let b = TurnBody { group: group.into(), answer: Some(answer), ..Default::default() };
+        let mut p = prepare_turn(c, &sess, &lens, &turns, &b).prompt;
+        p.user += dp::ROUND_RULE;
+        (p, lens)
+    };
+    let t0 = std::time::Instant::now();
+    let (mut r, used) = engine::turn(&engines(s), mref, &prompt).await?;
+    eprintln!("輪: 檢查 {group} {:.1} s", t0.elapsed().as_secs_f32());
+    let (mat, _) = material_of(c);
+    let _g = LOCK.lock().await;
+    let mut sess = Session::load(&c.dir)?;
+    if r.discuss {
+        dp::drop_grading(&mut r);
+    }
+    let known = ref_keys(&mat);
+    sess.apply(&lens, group, &known, std::mem::take(&mut r.updates));
+    dp::add_ref_notes(&c.dir, &r.ref_notes, &known).map_err(|e| e.to_string())?;
+    dp::apply_pending_notes(&mut sess, &r.pending_notes);
+    let guard_on = crate::workspace_guard(s).await.active();
+    pc_core::draft::notes::add(&mut sess, group, std::mem::take(&mut r.writing_notes), guard_on);
+    let say = [r.reply.trim(), r.question.trim()].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join("\n");
+    let asks = !r.question.trim().is_empty();
+    let about = r.item.take().filter(|i| sess.items.iter().any(|x| &x.id == i && x.group == group)).unwrap_or_default();
+    let turns_now = ds::read_turns(&c.dir);
+    let (cands, options) = question_choices(&sess, &turns_now, group, &about, std::mem::take(&mut r.cands), std::mem::take(&mut r.options), || ds::records_text(&c.dir, &sess.records, usize::MAX));
+    let ready = sess.group_state(&lens, group).ready;
+    if let Some(g) = sess.group_mut(group) {
+        let keep = |new: String, old: &str| if new.trim().is_empty() { old.to_string() } else { new };
+        let old = g.summary.clone();
+        g.summary = ds::GroupSummary {
+            explain: keep(r.summary.explain, &old.explain),
+            motive: keep(r.summary.motive, &old.motive),
+            conclusion: keep(r.summary.conclusion, &old.conclusion),
+            reader_accepts: keep(r.summary.reader_accepts, &old.reader_accepts),
+            twist: keep(r.summary.twist, &old.twist),
+        };
+        g.grade = Some(Prep::Done);
+        // one follow-up at most per round, and never past the last round's answer
+        g.follow = (asks && !ready && g.turns < ds::MAX_ROUNDS).then(|| ds::Follow { text: say, options, about, cands, engine: used.label.clone() });
+    }
+    if sess.group(group).is_some_and(|g| g.follow.is_none()) {
+        sess.close_group(group, false);
+    }
+    let prep = mark_prep(&mut sess, &lens, &[group.to_string()]);
+    advance_round(&c.dir, &mut sess)?;
+    sess.save(&c.dir)?;
+    spawn_candidates(s, c, prep);
+    Ok(())
+}
+
 /// 先準備: the window shows a group (its options and the record's answers are prepared for every
 /// group not yet read; the group's next turn is asked ahead).
 #[derive(Deserialize)]
@@ -1589,8 +1818,12 @@ async fn discuss_open(State(s): State<Shared>, AxPath(name): AxPath<String>, Jso
     if sess.group(&b.group).is_none() {
         return bad("沒有這個題組");
     }
-    let Some(q) = ds::read_turns(&c.dir).into_iter().rev().find(|t| t.group == b.group && t.who == Who::Ai) else { return bad("這一組還沒有問題") };
-    let fresh = dz::open(&mut sess, &b.group, &q.about, &q.text).messages.is_empty();
+    // the question on screen: the group's waiting question, or (first round) its opening
+    let (about, text) = match ds::read_turns(&c.dir).into_iter().rev().find(|t| t.group == b.group) {
+        Some(q) if q.who == Who::Ai => (q.about, q.text),
+        _ => (String::new(), format!("{}：{}", sess.group(&b.group).map(|g| g.title.clone()).unwrap_or_default(), sess.opening_question(&b.group))),
+    };
+    let fresh = dz::open(&mut sess, &b.group, &about, &text).messages.is_empty();
     tri!(save(&c.dir, &sess));
     if fresh {
         // while the author types the first question: the record goes into the prompt cache
@@ -1687,7 +1920,8 @@ async fn discuss_close(State(s): State<Shared>, AxPath((name, id)): AxPath<(Stri
         d
     };
     match answer {
-        Some(a) => run_turn(State(s), AxPath(name), Json(TurnBody { group: d.group.clone(), picked: vec![], item: None, answer: Some(dz::as_answer(&d, &a)), model: b.model })).await,
+        // the discussion's answer is the round's answer to that question (checked like any other)
+        Some(a) => round_answer(State(s), AxPath(name), Json(RoundBody { group: d.group.clone(), answer: Some(dz::as_answer(&d, &a)), model: b.model, ..Default::default() })).await,
         None => {
             let sess = tri!(load(&c.dir));
             tri!(view(&c, &sess))

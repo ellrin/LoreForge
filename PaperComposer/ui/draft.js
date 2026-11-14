@@ -115,7 +115,7 @@ const PCDraft = (() => {
   /** 預想選項 are prepared in the background: look again until every group has them. */
   function schedulePrep() {
     clearTimeout(D.prepTimer);
-    if (!D.data || !(sess().groups.some((g) => g.prep === "running") || sess().figures?.running || D.data.planning)) return;
+    if (!D.data || !(sess().groups.some((g) => g.prep === "running" || g.grade === "running") || sess().figures?.running || D.data.planning)) return;
     D.prepTimer = setTimeout(async () => {
       if (!$("#dlgDraft").open || D.busy) { schedulePrep(); return; }
       try { D.data = await api(base()); draw(); nudge(); } catch { /* next time */ }
@@ -550,23 +550,18 @@ const PCDraft = (() => {
   }
   /** After a navigation (never from a redraw alone): ask the shown group's first question once
    * its options are ready, and have the server prepare what comes next. */
-  function nudge() {
-    if (!D?.data || STEPS[D.step]?.[0] !== "interview" || D.busy) return;
-    const g = sess().groups.find((x) => x.id === D.group);
-    if (!g) return;
-    prefetch(g.id);
-    if (!D.wantOpen) return;
-    if (!live(g) || turnsOf(g.id).length || toConfirm(g.id).length) { D.wantOpen = false; return; }
-    if (g.prep === "running") return;
-    D.wantOpen = false;
-    run("準備第一題", () => call("/turn", { group: g.id, model: model() }), true);
-  }
-  /** The server prepares the group's options and asks its likely next turn ahead (once per state). */
-  function prefetch(gid) {
-    const k = `${gid}|${turnsOf(gid).length}|${sess().groups.find((x) => x.id === gid)?.prep ?? ""}|${model()}`;
-    if (D.prefetched === k) return;
-    D.prefetched = k;
-    api(base() + "/prefetch", { group: gid, model: model() }).catch(() => { /* only ahead of time */ });
+  function nudge() { /* 輪: every first question is there already; nothing to ask ahead */ }
+
+  // ── 輪 (rounds): a round is answered through without waiting; checks run behind ──
+  const lastTurn = (gid) => turnsOf(gid).at(-1);
+  const waitingQ = (g) => lastTurn(g.id)?.who === "ai";
+  /** Groups with a question to answer now, in plan order: at first every group, later the follow-ups. */
+  const queue = () => sess().groups.filter((g) => live(g) && g.grade !== "running" && !g.follow && (waitingQ(g) || !turnsOf(g.id).length));
+  function roundState() {
+    const q = queue();
+    const round = sess().round || 1;
+    const size = Math.max(sess().round_sizes?.[round - 1] ?? q.length, q.length);
+    return { round, size, left: q.length, done: Math.max(0, size - q.length), checking: sess().groups.filter((g) => g.grade === "running").length, failed: sess().groups.filter((g) => g.grade === "failed" && live(g)) };
   }
 
   function interview(main, side) {
@@ -576,7 +571,7 @@ const PCDraft = (() => {
       if (!D.data.planning && !D.busy) main.replaceChildren(row(btn("準備問題", () => run("準備問題", () => call("/plan")))));
       return;
     }
-    if (!D.group || !groups.some((g) => g.id === D.group)) D.group = sess().active ?? groups.find(live)?.id ?? groups[0].id;
+    if (!D.group || !groups.some((g) => g.id === D.group)) D.group = queue()[0]?.id ?? groups.find(live)?.id ?? groups[0].id;
     const g = groups.find((x) => x.id === D.group);
     const wrap = el("div", "df-iv");
     wrap.append(planList(groups, g), questionPane(g));
@@ -612,9 +607,9 @@ const PCDraft = (() => {
       b.title = groupName(g);
       b.append(el("span", "t", g.id === "wp" ? "還在等的結果" : shortName(g)));
       const p = itemProgress(g);
-      b.append(el("span", "n", g.status === "done" ? "✓" : g.status === "skipped" ? "—" : p.all ? `${p.done}/${p.all}` : ""));
+      b.append(el("span", "n", g.status === "done" ? "✓" : g.status === "skipped" ? "—" : g.grade === "running" ? "檢查中" : g.follow ? "待補問" : lastTurn(g.id)?.who === "me" ? "已答" : p.all ? `${p.done}/${p.all}` : ""));
       b.setAttribute("aria-current", String(on));
-      b.onclick = () => { D.group = g.id; D.picked = null; D.pickItem = null; D.wantOpen = true; draw(); nudge(); };
+      b.onclick = () => { D.group = g.id; D.rpicked = null; D.pickedOpt = null; draw(); };
       r.append(b);
       if (!/^(wp|v|a)/.test(g.id)) {
         const del = iconButton("trash", "刪除這一組", async (e) => {
@@ -665,102 +660,128 @@ const PCDraft = (() => {
   // ── the question ────────────────────────────────────
   function questionPane(g) {
     const pane = el("section", "df-q");
-    const all = overall();
-    const total = all.asked + all.left;
+    const rs = roundState();
+    const inQueue = queue().includes(g);
     const head = el("div", "df-prog");
     const bar = el("div", "df-bar");
     const fill = el("span");
-    fill.style.width = `${total ? Math.round((100 * all.asked) / total) : 0}%`;
+    fill.style.width = `${rs.size ? Math.round((100 * rs.done) / rs.size) : 100}%`;
     bar.append(fill);
-    head.append(el("span", "df-prog-t", all.left ? `已答 ${all.asked} 題・約剩 ${all.left} 題（約 ${all.mins} 分鐘）` : `已答 ${all.asked} 題`), bar);
+    const pt = el("span", "df-prog-t", `第 ${rs.round} 輪・${rs.done}/${rs.size}${rs.checking ? `　檢查中 ${rs.checking}` : ""}`);
+    pt.title = "最多三輪，每一輪的題數不超過上一輪的一半";
+    head.append(pt, bar);
     head.append(sideToggle("notes", `寫法筆記 ${(sess().writing_notes ?? []).length}`), sideToggle("figs", figCount()));
-    if (sess().groups.some(live)) head.append(btn("夠了，下一步", () => go(stepIdx("claims")), "ghost small"));
+    if (rs.left) head.append(btn("夠了，下一步", () => go(stepIdx("claims")), "ghost small"));
     pane.append(head);
+
+    // nothing left to answer in this round
+    if (!rs.left) {
+      if (rs.checking) pane.append(el("div", "df-busy", "檢查回答，準備補問…"));
+      else {
+        const card = el("div", "df-enough");
+        card.append(el("b", "", "對話完成"), btn("下一步：主張", () => go(stepIdx("claims"))));
+        pane.append(card);
+        if (rs.failed.length) pane.append(row(el("span", "df-note warn", `${rs.failed.length} 組的回答沒檢查成功`), btn("重試", () => run("檢查", async () => { let v = null; for (const x of rs.failed) v = await call("/round/check", { group: x.id, model: model() }); return v; }), "ghost small")));
+      }
+      return pane;
+    }
+
     pane.append(el("h3", "df-qg", groupName(g)));
     const turns = turnsOf(g.id);
-    const st = stateOf(g.id);
-    const conf = toConfirm(g.id);
-    // the record already says it: one click instead of a question each
-    if (!turns.length && conf.length && live(g)) {
-      pane.append(confirmCard(g, conf));
-      if (D.busy) pane.append(el("div", "df-busy", `${D.busy}…`));
-      return pane;
-    }
-    if (!turns.length) {
-      if (live(g) && (g.prep === "running" || D.busy)) pane.append(el("div", "df-busy", g.prep === "running" ? "準備這一組的選項…" : `${D.busy}…`));
-      else if (live(g)) pane.append(row(btn("問第一題", () => run("準備第一題", () => call("/turn", { group: g.id, model: model() })))));
-      else pane.append(groupFoot(g, st));
-      return pane;
-    }
-    // what was said before: one line, opened on demand; the question being asked stands apart
-    const last = turns.at(-1);
-    const enough = (st?.ready || st?.over_budget) && !D.goOn?.[g.id];
-    const asking = last.who === "ai" && live(g) && !enough;
-    const past = last.who === "ai" && live(g) ? turns.slice(0, -1) : turns;
+    const asked = inQueue && waitingQ(g);
+    const past = asked ? turns.slice(0, -1) : turns;
     if (past.length) {
       const fold = el("details", "df-fold df-histfold");
       fold.append(el("summary", "", `前面的對話（${past.length}）`));
       const log = el("div", "df-log df-hist");
       past.forEach((t) => log.append(el("div", `df-msg ${t.who}`, t.text)));
       fold.append(log);
-      fold.ontoggle = () => { if (fold.open) log.scrollTop = log.scrollHeight; };
+      fold.open = !inQueue;
       pane.append(fold);
     }
-    if (live(g) && enough) {
-      // this group has what it needs: the way on is the page's main thing
-      const nx = nextGroup(g);
-      const card = el("div", "df-enough");
-      card.append(el("b", "", "這一組夠了"));
-      if (nx) card.append(btn(`下一組：${shortName(nx)} →`, () => nextFrom(g, nx)));
-      else card.append(btn("對話完成，下一步：主張", async () => { await closeGroup(g); go(stepIdx("claims")); }));
-      if (last.who === "ai") card.append(btn("繼續回答", () => { (D.goOn ??= {})[g.id] = true; draw(); }, "ghost small"));
-      pane.append(card);
-      if (D.busy) pane.append(el("div", "df-busy", `${D.busy}…`));
+    // a group already answered (or closed): what was said, and the way back to the round
+    if (!inQueue) {
+      const nx = queue()[0];
+      pane.append(row(el("span", "df-note", g.grade === "running" ? "檢查中" : g.follow ? "補問在下一輪" : ""), el("span", "df-grow"), btn(`回到這一輪：${shortName(nx)} →`, () => { D.group = nx.id; draw(); })));
       return pane;
     }
-    if (asking) {
-      // the reply to the last answer is quiet; the question is what the eye lands on
+
+    const talking = !!(D.disc && sess().discussions?.some((x) => x.id === D.disc && x.group === g.id && x.status === "open"));
+    const disc = () => { const n = discussionsOf(g.id).length; const db = btn("不懂這題", () => openDiscussion(g.id), "ghost small"); if (n) db.append(el("span", "df-disc-n", String(n))); return db; };
+    let conf = [];
+    let hasChoices = false;
+    if (asked) {
+      // a follow-up (or a question from before): the reply is quiet, the question is what the eye lands on
+      const last = turns.at(-1);
       const q = el("div", "df-msg ai cur");
       const lines = last.text.split("\n").map((x) => x.trim()).filter(Boolean);
       const ask = lines.pop() ?? "";
       if (lines.length) q.append(el("div", "df-reply", lines.join(" ")));
+      // a follow-up asks its points together: （1）（2）（3） read as a list
+      const parts = ask.split(/(?=（\d）)/).map((x) => x.trim()).filter(Boolean);
       const qa = el("div", "df-qrow");
-      qa.append(el("div", "df-ask", ask));
-      const n = discussionsOf(g.id).length;
-      const db = btn("不懂這題", () => openDiscussion(g.id), "ghost small");
-      if (n) db.append(el("span", "df-disc-n", String(n)));
-      qa.append(db);
+      const askBox = el("div", "df-ask");
+      if (parts.length > 1) {
+        const lead = /^（\d）/.test(parts[0]) ? "" : parts.shift();
+        if (lead) askBox.append(el("div", "", lead));
+        const ol = el("ol", "df-asks");
+        parts.forEach((x) => ol.append(el("li", "", x.replace(/^（\d）/, ""))));
+        askBox.append(ol);
+      } else askBox.textContent = ask;
+      qa.append(askBox, disc());
       q.append(qa);
       pane.append(q);
+      const ch = choicesOf(last);
+      hasChoices = ch.length > 0;
+      if (hasChoices) pane.append(choiceCards(ch));
+    } else {
+      // first round: the group's points, all at once; what the record already says is only confirmed
+      conf = toConfirm(g.id);
+      if (conf.length) pane.append(confirmCard(g, conf));
+      const pts = sess().items.filter((i) => i.group === g.id && !i.excluded && !conf.includes(i) && i.from_record?.said !== true);
+      if (pts.length) {
+        const qa = el("div", "df-qrow");
+        qa.append(el("div", "df-ask", pts.length > 1 ? "一次講完這幾點" : "講這一點"), disc());
+        pane.append(qa);
+        const list = el("ol", "df-points");
+        pts.forEach((it) => {
+          // a point is one line; its options open on demand (講不出來時才需要)
+          const li = el("li");
+          const cs = (it.candidates ?? []).map((c) => ({ ...c, item: it.id }));
+          if (cs.length) {
+            const d = el("details", "df-pointd");
+            const s = el("summary", "");
+            s.append(el("span", "df-point", it.label), el("span", "df-point-n", `選項 ${cs.length}`));
+            d.append(s, choiceCards(cs, false));
+            li.append(d);
+            hasChoices = true;
+          } else li.append(el("div", "df-point", it.label));
+          list.append(li);
+        });
+        pane.append(list);
+        if (g.prep === "running") pane.append(el("div", "df-note", "選項準備中，可以先回答"));
+      }
     }
     if (D.busy) pane.append(el("div", "df-busy", `${D.busy}…`));
-    if (asking) {
-      const talking = !!(D.disc && sess().discussions?.some((x) => x.id === D.disc && x.group === g.id && x.status === "open"));
-      const ch = choicesOf(last);
-      if (ch.length) pane.append(choiceCards(ch));
-      const ta = el("textarea", "np-input df-answer");
-      ta.rows = 2;
-      ta.disabled = talking;
-      ta.placeholder = talking ? "深度討論中" : ch.length ? "都不是，我自己說" : "回答";
-      ta.setAttribute("aria-label", `回答 ${g.id}`);
-      ta.value = D.draftAnswer?.[g.id] ?? "";
-      ta.oninput = () => ((D.draftAnswer ??= {})[g.id] = ta.value);
-      ta.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.ctrlKey || e.metaKey)) send(ta.value); };
-      // one row of actions under the answer: the ways around it on the left, speak and send on the right
-      const act = row();
-      act.classList.add("df-actrow");
-      const nx = nextGroup(g);
-      if (nx) act.append(btn("略過，下一組 →", () => nextFrom(g, nx), "ghost small"));
-      if (!ch.length) act.append(btn("給我選項", () => send("不確定，請給我幾個選項"), "ghost small"));
-      act.append(el("span", "df-grow"));
-      const mic = micButton(ta);
-      if (mic) act.append(mic);
-      act.append(btn("送出", () => send(ta.value), "primary small"));
-      if (talking) act.querySelectorAll("button").forEach((x) => (x.disabled = true));
-      pane.append(ta, act);
-      return pane;
-    }
-    pane.append(groupFoot(g, st));
+    const ta = el("textarea", "np-input df-answer");
+    ta.rows = asked ? 2 : 4;
+    ta.disabled = talking;
+    ta.placeholder = talking ? "深度討論中" : asked ? (hasChoices ? "都不是，我自己說" : "回答") : "用說的或打字，一次講完";
+    ta.setAttribute("aria-label", `回答 ${g.id}`);
+    ta.value = D.draftAnswer?.[g.id] ?? "";
+    ta.oninput = () => ((D.draftAnswer ??= {})[g.id] = ta.value);
+    ta.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.ctrlKey || e.metaKey)) send(ta.value); };
+    // one row of actions under the answer: skip on the left, speak and send on the right
+    const act = row();
+    act.classList.add("df-actrow");
+    act.append(btn("略過", () => run("略過", async () => { const v = await call("/round/skip", { group: g.id }); D.group = null; return v; }), "ghost small"));
+    act.append(el("span", "df-grow"));
+    const mic = micButton(ta);
+    if (mic) act.append(mic);
+    const onlyConf = conf.length && !(D.draftAnswer?.[g.id] ?? "").trim();
+    act.append(btn(rs.left > 1 ? (onlyConf ? "都對，下一題" : "送出，下一題") : "送出", () => send(ta.value), "primary small"));
+    if (talking) act.querySelectorAll("button").forEach((x) => (x.disabled = true));
+    pane.append(ta, act);
     return pane;
   }
   /** The end of a group: on to the next (main when it has what it needs), or the interview's end. */
@@ -813,13 +834,6 @@ const PCDraft = (() => {
       r.append(txt, t);
       card.append(r);
     });
-    const yes = conf.filter((it) => !no.includes(it.id)).map((it) => it.id);
-    const go1 = btn(no.length ? (yes.length ? "其餘都對，下一題" : "下一題") : "都對，下一題", () => run("下一題", async () => {
-      const v = await call("/confirm", { group: g.id, items: yes, no: [...no], model: model() });
-      delete D.notRight[g.id];
-      return v;
-    }));
-    card.append(row(el("span", "df-grow"), go1));
     return card;
   }
 
@@ -1022,17 +1036,19 @@ const PCDraft = (() => {
 
   function send(text) {
     text = (text ?? "").trim();
-    if (!text) return;
     const gid = D.group;
-    const picked = [...(D.picked ?? [])];
-    const item = D.pickItem ?? null;
-    run("思考下一個問題", async () => {
-      const v = await call("/turn", { group: gid, answer: text, picked, item, model: model() });
-      // a question back opened 深度討論 (the model saw it was not an answer)
-      const d = v.session.discussions?.find((x) => x.group === gid && x.status === "open");
-      if (d && d.messages.at(-1)?.who === "ai") D.disc = d.id;
+    const g = sess().groups.find((x) => x.id === gid);
+    if (!g) return;
+    const first = !waitingQ(g);
+    const no = first ? [...(D.notRight?.[gid] ?? [])] : [];
+    const yes = first ? toConfirm(gid).map((i) => i.id).filter((id) => !no.includes(id)) : [];
+    if (!text && !yes.length && !no.length) return;
+    run("送出", async () => {
+      const v = await call("/round/answer", { group: gid, answer: text, picked: [...(D.rpicked ?? [])], yes, no, model: model() });
       if (D.draftAnswer) D.draftAnswer[gid] = "";
-      D.picked = null; D.pickItem = null; D.pickedOpt = null;
+      if (D.notRight) delete D.notRight[gid];
+      D.rpicked = null; D.pickedOpt = null;
+      D.group = null; // on to the next question of the round
       return v;
     });
   }
@@ -1101,11 +1117,11 @@ const PCDraft = (() => {
     if (cands.length) return cands;
     return (t.options ?? []).map((o, k) => ({ id: null, key: `o${k}`, text: o, evidence: [] }));
   }
-  function choiceCards(list) {
+  function choiceCards(list, numbered = true) {
     const box = el("div", "df-cands");
     D.picked ??= [];
     list.forEach((c, k) => {
-      const on = c.id ? D.picked.includes(c.id) : D.pickedOpt === c.text;
+      const on = c.id ? (D.rpicked ?? []).includes(`${c.item}:${c.id}`) : D.pickedOpt === c.text;
       const b = el("button", `df-cand${on ? " on" : ""}`);
       b.disabled = !!D.busy;
       // a long choice reads as its point, then the rest quieter
@@ -1113,7 +1129,7 @@ const PCDraft = (() => {
       const tx = el("span", "t");
       if (m && c.text.length > 44) tx.append(el("b", "", m[1].replace(/[；：，]$/, "")), el("span", "more", m[2].trim()));
       else tx.textContent = c.text;
-      b.append(el("span", "n", String(k + 1)), tx);
+      b.append(el("span", "n", numbered ? String(k + 1) : "＋"), tx);
       if (c.evidence?.length) {
         const ev = el("span", "ev");
         c.evidence.forEach((e) => { const x = el("span", "df-ev", e); x.title = evidenceText(e); ev.append(x); });
@@ -1128,17 +1144,15 @@ const PCDraft = (() => {
     const ta = $(".df-answer");
     if (!ta) return;
     if (c.id) {
-      // candidates of one item per answer
-      if (D.pickItem && D.pickItem !== c.item) D.picked = [];
-      D.pickItem = c.item;
-      D.picked ??= [];
-      if (D.picked.includes(c.id)) return;
-      D.picked.push(c.id);
+      const key = `${c.item}:${c.id}`;
+      D.rpicked ??= [];
+      if (D.rpicked.includes(key)) return;
+      D.rpicked.push(key);
     } else {
       if (D.pickedOpt === c.text) return;
       D.pickedOpt = c.text;
     }
-    ta.value = ta.value.trim() ? `${ta.value.trim()}；${c.text}` : c.text;
+    ta.value = ta.value.trim() ? `${ta.value.trim()}\n${c.text}` : c.text;
     ta.dataset.typed = "1";
     ((D.draftAnswer ??= {})[D.group] = ta.value);
     draw();

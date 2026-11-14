@@ -406,6 +406,18 @@ an item whose answer the record already gives is only confirmed, never asked why
 (below): when it is reached, leave `question` empty (what is still open is written from the record).
 Never invent facts about the study. Ask one thing at a time.";
 
+/// 輪: what a check of a round's answer adds to the turn prompt. The author answers a whole round
+/// before any follow-up; the check grades as a turn does and asks, once, everything the group still lacks.
+pub const ROUND_RULE: &str = "\n## Round mode (this overrides the rules for `reply`, `question` and `discuss`)\n\
+The author answers a whole round of questions before any follow-up is asked, and is already on other questions. \
+This is the check of this group's latest answer. Grade it as usual. `reply`: one short clause naming what you took \
+from the answer. `question`: everything this group still needs, in ONE follow-up — restate in a few words what \
+they said, then ask the missing points together (at most three, numbered （1）（2）（3）, the most important first). \
+Ask only what the lens still requires and what the other groups will not cover; leave it empty when the group has \
+what it needs. The group gets at most two follow-ups in all and later rounds are shorter, so hold nothing back \
+for later. `options` or `cands` only when the follow-up is a single choice. If the answer is a question back, set \
+`discuss` false, put your short explanation in `reply` and ask the open points again in `question`.\n";
+
 pub fn turn_prompt(key_value: &str, s: &Session, lens: &Lens, group: &str, turns: &[Turn], answer: Option<&str>, material: &str) -> Prompt {
     // What every turn of an interview shares, word for word (the rules, the study as the record step
     // left it, the lens), is the system prompt: the provider's prompt cache serves it again on the

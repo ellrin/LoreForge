@@ -1627,3 +1627,16 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-actrow .df-mic, .df-dend .df-mic { flex: none; }
 .df-dend { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); flex-wrap: nowrap; align-items: center; }
 .df-busy[data-t]::after { content: "　" attr(data-t); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* 輪: a first-round question is the group's points, each with its options */
+.df-points { margin: 10px 0 14px; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
+.df-points > li::marker { color: var(--muted); font: 600 12px var(--mono); }
+.df-point { font-weight: 600; line-height: 1.5; }
+.df-pointd > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 10px; }
+.df-pointd > summary::-webkit-details-marker { display: none; }
+.df-point-n { flex: none; color: var(--accent-text); font-size: 12px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 0 8px; }
+.df-pointd[open] > summary { margin-bottom: 6px; }
+.df-points .df-cands { margin: 0; }
+.df-points .df-cand { padding: 6px 10px; }
+.df-q .df-conf { margin-bottom: 14px; }
+.df-ask .df-asks { margin: 8px 0 0; padding-left: 22px; font-size: 15px; font-weight: 500; line-height: 1.65; display: flex; flex-direction: column; gap: 4px; }

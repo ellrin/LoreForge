@@ -189,7 +189,31 @@ pub struct Group {
     /// 預想選項 for the group's items: being prepared, ready, or failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prep: Option<super::candidates::Prep>,
+    /// 輪: the check of this group's latest answer (it runs behind the author's next answers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade: Option<super::candidates::Prep>,
+    /// 輪: what the check still wants to ask this group, held until the next round starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow: Option<Follow>,
 }
+
+/// A follow-up question a check prepared for the next round (one per group: everything the group
+/// still lacks, asked at once).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Follow {
+    pub text: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub about: String,
+    #[serde(default)]
+    pub cands: Option<Vec<String>>,
+    #[serde(default)]
+    pub engine: String,
+}
+
+/// 輪: at most this many rounds of questions, each at most half the one before.
+pub const MAX_ROUNDS: usize = 3;
 
 /// One entry in the ledger: a decision, an experiment, a finding, a claim
 /// in the making — graded by the lens.
@@ -421,6 +445,12 @@ pub struct Finding {
 pub struct Session {
     #[serde(default)]
     pub lens: String,
+    /// 輪: the round of the interview being answered (0: not started), and how many questions
+    /// each round had (a later round never has more than half the one before).
+    #[serde(default)]
+    pub round: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub round_sizes: Vec<usize>,
     #[serde(default)]
     pub phase: Phase,
     #[serde(default)]
@@ -730,6 +760,65 @@ impl Session {
         let core = self.items_of(group).any(|i| i.role == "core-contribution" && !i.excluded);
         let later = group == super::pending::GROUP_ID || g.id.starts_with('v') || g.id.starts_with('a');
         lens.stop.budget(&g.section, core || later)
+    }
+
+    /// 輪, first round: what a group is asked before anything was said in it — its open points,
+    /// all at once (built by code: every first question exists the moment the plan does).
+    pub fn opening_question(&self, group: &str) -> String {
+        let pts: Vec<&str> = self.items_of(group).filter(|i| !i.excluded && i.from_record.as_ref().is_none_or(|r| r.said != Some(true))).map(|i| i.label.as_str()).collect();
+        match pts.len() {
+            0 => "這一組還有要補充的嗎？".into(),
+            _ => format!("請一次講完這幾點：{}", pts.iter().enumerate().map(|(k, p)| format!("（{}）{p}", k + 1)).collect::<Vec<_>>().join(" ")),
+        }
+    }
+
+    /// 輪: how much a group's follow-up matters when a round has room for only some (the paper's
+    /// core, motive and reading of results first; method details last).
+    fn follow_weight(&self, g: &Group) -> usize {
+        let core = self.items_of(&g.id).any(|i| i.role == "core-contribution" && !i.excluded) as usize;
+        let sec = match g.section.as_str() {
+            "Introduction" | "Discussion" => 3,
+            "Results" => 2,
+            "Conclusion" => 1,
+            _ => 0,
+        };
+        core * 4 + sec
+    }
+
+    /// 輪: start the next round when the current one is answered and checked. `asked` says which
+    /// groups still have a question waiting (from the transcript). Returns the follow-ups that
+    /// now become questions, in plan order. A round has at most half the questions of the one
+    /// before (the rest are dropped by weight), and there are at most [`MAX_ROUNDS`] rounds.
+    pub fn advance_round(&mut self, asked: &dyn Fn(&str) -> bool) -> Vec<(String, Follow)> {
+        use super::candidates::Prep;
+        if self.groups.iter().any(|g| g.grade == Some(Prep::Running)) {
+            return vec![];
+        }
+        let open = |g: &Group| !matches!(g.status, GroupStatus::Done | GroupStatus::Skipped);
+        if self.groups.iter().any(|g| open(g) && g.follow.is_none() && (asked(&g.id) || g.turns == 0)) {
+            return vec![];
+        }
+        let mut want: Vec<usize> = (0..self.groups.len()).filter(|&k| self.groups[k].follow.is_some()).collect();
+        if want.is_empty() {
+            return vec![];
+        }
+        let last = self.round_sizes.last().copied().unwrap_or(want.len() * 2);
+        let cap = if self.round >= MAX_ROUNDS { 0 } else { last / 2 };
+        want.sort_by_key(|&k| (std::cmp::Reverse(self.follow_weight(&self.groups[k])), k));
+        let (keep, drop) = want.split_at(cap.min(want.len()));
+        let mut keep: Vec<usize> = keep.to_vec();
+        for &k in drop {
+            let id = self.groups[k].id.clone();
+            self.groups[k].follow = None;
+            self.close_group(&id, false);
+        }
+        keep.sort();
+        let out: Vec<(String, Follow)> = keep.iter().filter_map(|&k| self.groups[k].follow.take().map(|f| (self.groups[k].id.clone(), f))).collect();
+        if !out.is_empty() {
+            self.round += 1;
+            self.round_sizes.push(out.len());
+        }
+        out
     }
 
     /// The group to talk about next: the active one, else the first pending.
@@ -1052,6 +1141,34 @@ pub fn records_text(paper: &Path, files: &[RecordFile], max_chars: usize) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_round_is_at_most_half_the_one_before_and_there_are_three() {
+        use crate::draft::candidates::Prep;
+        let g = |id: &str, sec: &str| Group { id: id.into(), section: sec.into(), title: id.into(), turns: 1, grade: Some(Prep::Done), follow: Some(Follow { text: format!("q {id}"), ..Default::default() }), ..Default::default() };
+        let mut s = Session { round: 1, round_sizes: vec![5], ..Default::default() };
+        s.groups = vec![g("g1", "Methods"), g("g2", "Introduction"), g("g3", "Results"), g("g4", "Methods"), g("g5", "Discussion")];
+        // a check still runs: nothing starts
+        s.groups[0].grade = Some(Prep::Running);
+        assert!(s.advance_round(&|_| false).is_empty());
+        s.groups[0].grade = Some(Prep::Done);
+        // five wanted, room for two: the motive and the reading of results, in plan order; the rest are closed
+        let next = s.advance_round(&|_| false);
+        assert_eq!(next.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["g2", "g5"]);
+        assert_eq!((s.round, s.round_sizes.clone()), (2, vec![5, 2]));
+        assert!(s.groups.iter().filter(|g| !["g2", "g5"].contains(&g.id.as_str())).all(|g| g.status == GroupStatus::Done && g.follow.is_none()));
+        // while a question of the round waits, the next round does not start
+        s.groups[1].follow = Some(Follow { text: "again".into(), ..Default::default() });
+        assert!(s.advance_round(&|id| id == "g5").is_empty());
+        // round three: half of two
+        s.groups[4].follow = Some(Follow { text: "again".into(), ..Default::default() });
+        let next = s.advance_round(&|_| false);
+        assert_eq!((next.len(), s.round, s.round_sizes.clone()), (1, 3, vec![5, 2, 1]));
+        // after the third round nothing more is asked
+        s.groups[1].follow = Some(Follow { text: "more".into(), ..Default::default() });
+        assert!(s.advance_round(&|_| false).is_empty());
+        assert!(s.groups.iter().all(|g| g.follow.is_none()) && s.interview_finished());
+    }
 
     fn lens() -> Lens {
         Lens::parse(
