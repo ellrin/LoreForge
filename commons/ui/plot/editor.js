@@ -10,6 +10,7 @@
 //     kind,            // "equation": start from the equation catalogue (docs/plot.md §10) instead of data
 //     latex,           // with kind "equation": a paper's LaTeX to start 「從論文的式子」 with
 //     notation,        // the document's notation entries (lore-notation): variables' colour roles come from them
+//     pageWidth,       // mm: the document's width (a paper's \linewidth); a new figure starts at it, chip 「本文」
 //     save,            // async ({ spec, svg, w, h, frames }) → true | message; 完成 calls it (null: no 完成);
 //                      //   frames(n) → the SVGs of an equation figure's animation (LorePlot.eq.frameSvgs)
 //   });                // → { spec, svg } when saved, null when closed
@@ -254,6 +255,8 @@
     // ── render ──
     let tok = 0, timer = null;
     function refresh(rebuild = true) {
+      // a new figure for a document: the document's own width (opts.pageWidth, mm) until the author picks another
+      if (S.spec && !S.spec.size && opts.pageWidth && !opts.spec && !isEq()) S.spec.size = pageSize();
       undoB.disabled = !S.hist.length;
       redoB.disabled = !S.fut.length;
       if (S.spec) styleSel.value = S.spec.style ?? S.defStyle;
@@ -262,6 +265,12 @@
       timer = setTimeout(draw, 60);
     }
     const style = () => LP.styleFor(S.spec?.style ?? S.defStyle, S.styleList, S.spec?.set);
+    /** The widest a figure gets: the document's width when the host gives it, else the style's widest. */
+    const fullW = (st) => opts.pageWidth ?? st.size.widths?.at(-1) ?? 175;
+    function pageSize() {
+      const st = style();
+      return { w: opts.pageWidth, h: Math.min(st.size.max_h ?? 170, Math.round((st.size.h * opts.pageWidth) / st.size.w)) };
+    }
     let live = null;
     function liveOff() {
       if (!live) return;
@@ -560,7 +569,7 @@
         const cols = Math.min(n, Math.max(sp.grid?.cols ?? 1, n <= 3 ? n : 2));
         sp.grid = { ...(sp.grid ?? {}), cols, rows: Math.ceil(n / cols), labels: sp.grid?.labels && sp.grid.labels !== "none" ? sp.grid.labels : "a" };
         const st = style();
-        sp.size = { w: st.size.widths?.at(-1) ?? 175, h: Math.min(st.size.max_h ?? 170, ((st.size.widths?.at(-1) ?? 175) / cols) * 0.75 * Math.ceil(n / cols)) };
+        sp.size = { w: fullW(st), h: Math.min(st.size.max_h ?? 170, (fullW(st) / cols) * 0.75 * Math.ceil(n / cols)) };
       }, "structure");
     }
     async function pickFigure(anchor) {
@@ -647,10 +656,10 @@
       const bL = block("01", "版面", "layout");
       const widths = st.size.widths ?? [];
       const maxH = st.size.max_h ?? 170;
-      const targets = [["單欄", widths[0], null], ["1.5 欄", widths[1], null], ["雙欄", widths.at(-1), null], ["整頁", widths.at(-1), maxH]].filter((t) => isNum(t[1]));
+      const targets = [...(opts.pageWidth ? [["本文", opts.pageWidth, null]] : []), ["單欄", widths[0], null], ["1.5 欄", widths[1], null], ["雙欄", widths.at(-1), null], ["整頁", fullW(st), maxH]].filter((t) => isNum(t[1]));
       const sizeRow = h("div", { class: "lp-row" }, ...targets.map(([name, w, hh]) => {
         const on = Math.abs((sp.size?.w ?? st.size.w) - w) < 0.05 && (hh == null || Math.abs((sp.size?.h ?? 0) - hh) < 0.05);
-        const b = h("button", { type: "button", class: "ghost lp-chipbtn", "aria-pressed": String(on) }, `${name} ${Math.round(w)}`);
+        const b = h("button", { type: "button", class: "ghost lp-chipbtn", "aria-pressed": String(on) }, `${name} ${Math.round(w * 10) / 10}`);
         b.onclick = () => change((s2) => { s2.size = { w, h: hh ?? s2.size?.h ?? st.size.h }; }, "structure");
         return b;
       }));
@@ -696,7 +705,7 @@
       const growGrid = (s2) => {
         const n = s2.panels.length, cols = s2.grid?.cols ?? 1, rows = s2.grid?.rows ?? 1;
         if (n > cols * rows) s2.grid = { ...(s2.grid ?? {}), cols: cols <= rows ? cols + 1 : cols, rows: cols <= rows ? rows : rows + 1, labels: s2.grid?.labels && s2.grid.labels !== "none" ? s2.grid.labels : "a" };
-        if ((s2.size?.w ?? st.size.w) < (widths.at(-1) ?? 175)) s2.size = { w: widths.at(-1) ?? 175, h: s2.size?.h ?? st.size.h };
+        if ((s2.size?.w ?? st.size.w) < fullW(st)) s2.size = { w: fullW(st), h: s2.size?.h ?? st.size.h };
       };
       const addB = iconBtn("plus", "加一格", () => menu(addB, [
         { label: "複製這一格", run: () => change((s2) => { const cp = clone(s2.panels[S.pi]); cp.title = ""; s2.panels.splice(S.pi + 1, 0, cp); growGrid(s2); S.pi += 1; }, "structure") },

@@ -7,6 +7,7 @@ description = "Notation registry (對照表): notation.json, macro generation, L
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 
 [[example]]
 name = "check"

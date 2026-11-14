@@ -100,6 +100,12 @@ pub trait Host: Send + Sync + 'static {
     }
     /// What the model needs for preset `preset` on this passage (findings of the app's own
     /// checks, the author's style for its section…); empty: nothing more. Bounded by the app.
+    /// The document's punctuation and sentence guard (lore-notation `punct`); off by default.
+    /// A rewrite that breaks it gets one repair call naming the violations, then the safe
+    /// mechanical fixes; what is still wrong is a problem (never applied silently).
+    async fn guard(&self, _doc: &str) -> lore_notation::punct::Guard {
+        lore_notation::punct::Guard::default()
+    }
     async fn preset_block(&self, _doc: &str, _preset: &str, _p: &PresetPassage<'_>) -> String {
         String::new()
     }
@@ -198,30 +204,56 @@ pub async fn propose(host: &dyn Host, b: ProposeBody) -> Result<Proposal, Error>
         }
         None => (b.instruction.trim().to_string(), String::new(), b.instruction.trim().to_string()),
     };
+    let guard = host.guard(&b.doc).await;
+    let instruction = if guard.active() { format!("{instruction}\n{}", guard.rule.prompt_line().trim()) } else { instruction };
     let locked = lock::lock(&b.text, &doc.macros, &b.keep);
     let turns: Vec<prompt::TurnText> = b.turns.iter().map(|t| prompt::TurnText { instruction: t.instruction.clone(), rewrite: locked.encode(&t.after, &doc.macros, &b.keep) }).collect();
     let liked = liked::examples(&liked::read(&host.home()), &b.text, liked::EXAMPLES);
     let language = b.language.clone().filter(|l| !l.trim().is_empty()).unwrap_or(doc.language.clone());
-    let req = prompt::request(&prompt::Input {
-        passage: &locked.text,
-        before: &b.prefix,
-        after: &b.suffix,
-        context: &b.context,
-        language: &language,
-        phrases: &doc.phrases,
-        tone: &doc.tone,
-        style: &doc.style,
-        liked: &liked,
-        turns: &turns,
-        instruction: &instruction,
-        guidance: &guidance,
-        preset: preset.as_ref().map(|p| p.label.as_str()).unwrap_or(""),
-    });
-    let (reply, engine) = host.complete(req, b.engine.as_deref()).await.map_err(Error::Model)?;
+    macro_rules! input {
+        ($instruction:expr) => {
+            prompt::Input {
+            passage: &locked.text,
+            before: &b.prefix,
+            after: &b.suffix,
+            context: &b.context,
+            language: &language,
+            phrases: &doc.phrases,
+            tone: &doc.tone,
+            style: &doc.style,
+            liked: &liked,
+            turns: &turns,
+            instruction: $instruction,
+            guidance: &guidance,
+            preset: preset.as_ref().map(|p| p.label.as_str()).unwrap_or(""),
+            }
+        };
+    }
+    let req = prompt::request(&input!(&instruction));
+    let (reply, mut engine) = host.complete(req, b.engine.as_deref()).await.map_err(Error::Model)?;
     let Some(rewrite) = prompt::rewrite_of(&reply) else { return Err(Error::Model("模型沒有給改寫".into())) };
-    let (after, problems) = locked.restore(&rewrite, &doc.macros, &b.keep);
-    let after = if host.latex() { lore_notation::unicode::prose_to_latex(&after) } else { after };
+    let (mut after, mut problems) = locked.restore(&rewrite, &doc.macros, &b.keep);
+    if host.latex() {
+        after = lore_notation::unicode::prose_to_latex(&after);
+    }
+    // the punctuation guard: one repair call naming what broke it
+    let broken = guard.check(&after);
+    if !broken.is_empty() && problems.is_empty() {
+        let again = format!("{instruction}\nYour previous rewrite was:\n{rewrite}\n{}", lore_notation::punct::repair_note(&broken));
+        if let Ok((reply2, e2)) = host.complete(prompt::request(&input!(&again)), b.engine.as_deref()).await {
+            if let Some(r2) = prompt::rewrite_of(&reply2) {
+                let (a2, p2) = locked.restore(&r2, &doc.macros, &b.keep);
+                if p2.is_empty() {
+                    after = if host.latex() { lore_notation::unicode::prose_to_latex(&a2) } else { a2 };
+                    problems = p2;
+                    engine = e2;
+                }
+            }
+        }
+    }
+    let (after, still) = guard.finish(&after);
     let mut problems: Vec<String> = problems.iter().map(Problem::message).collect();
+    problems.extend(still.iter().map(|v| format!("標點／句長：{}", v.describe())));
     if problems.is_empty() {
         let (old, new) = (format!("{}{}{}", b.prefix, b.text, b.suffix), format!("{}{}{}", b.prefix, after, b.suffix));
         problems.extend(host.check(&b.doc, &old, &new).await);
@@ -287,11 +319,12 @@ pub(crate) mod testhost {
         pub presets: Vec<Preset>,
         /// The preset block, with the scope it was asked for appended.
         pub block: String,
+        pub guard: lore_notation::punct::Guard,
     }
 
     impl TestHost {
         pub fn new(root: &std::path::Path, replies: &[&str]) -> TestHost {
-            TestHost { home: Home::at(root), log: root.join("doc/draft/polish.jsonl"), replies: Mutex::new(replies.iter().rev().map(|s| s.to_string()).collect()), seen: Mutex::new(vec![]), check: vec![], presets: vec![], block: String::new() }
+            TestHost { home: Home::at(root), log: root.join("doc/draft/polish.jsonl"), replies: Mutex::new(replies.iter().rev().map(|s| s.to_string()).collect()), seen: Mutex::new(vec![]), check: vec![], presets: vec![], block: String::new(), guard: Default::default() }
         }
     }
 
@@ -320,6 +353,9 @@ pub(crate) mod testhost {
         fn presets(&self) -> Vec<Preset> {
             self.presets.clone()
         }
+        async fn guard(&self, _doc: &str) -> lore_notation::punct::Guard {
+            self.guard.clone()
+        }
         async fn preset_block(&self, _doc: &str, preset: &str, p: &PresetPassage<'_>) -> String {
             if self.block.is_empty() { String::new() } else { format!("{} [{preset} in {}]", self.block, p.scope) }
         }
@@ -333,6 +369,32 @@ mod tests {
 
     fn body(text: &str, instruction: &str) -> ProposeBody {
         ProposeBody { doc: "P".into(), text: text.into(), instruction: instruction.into(), ..Default::default() }
+    }
+
+    #[tokio::test]
+    async fn the_punctuation_guard_repairs_then_fixes_then_flags() {
+        use lore_notation::punct::{Guard, Rule};
+        let rule = Rule { allowed: vec!['.', ','], max_words: Some(12), ..Default::default() };
+        let dir = tempfile::tempdir().unwrap();
+        let text = "The \\ribmask loss drops.";
+        // the rewrite breaks the rule; the repair call fixes it
+        let mut h = TestHost::new(dir.path(), &["The ⟦1⟧ loss: a data-driven drop — fast; clear.", "The ⟦1⟧ loss drops fast."]);
+        h.guard = Guard { rule: rule.clone(), exempt: vec![] };
+        let p = propose(&h, body(text, "shorter")).await.unwrap();
+        assert!(p.ok && p.after == "The \\ribmask loss drops fast.", "{p:?}");
+        let seen = h.seen.lock().unwrap();
+        assert!(seen[0].flatten().contains("No colons, semicolons, dashes"), "the prompt line");
+        assert!(seen[1].flatten().contains("colon") && seen[1].flatten().contains("hyphenated \"data-driven\""), "the repair names each violation");
+        drop(seen);
+        // still broken after the repair: the mechanical fixes; a long sentence stays flagged
+        let mut h = TestHost::new(dir.path(), &["The ⟦1⟧ loss: data-driven; fast.", "The ⟦1⟧ loss falls in a data-driven way that is quite a lot faster than the other ones before it."]);
+        h.guard = Guard { rule, exempt: vec![] };
+        let p = propose(&h, body(text, "shorter")).await.unwrap();
+        assert_eq!(p.after, "The \\ribmask loss falls in a data driven way that is quite a lot faster than the other ones before it.");
+        assert!(!p.ok && p.problems.iter().any(|x| x.contains("words (at most 12)")), "{:?}", p.problems);
+        // off: nothing changes
+        let h = TestHost::new(dir.path(), &["The ⟦1⟧ loss: fast."]);
+        assert_eq!(propose(&h, body(text, "x")).await.unwrap().after, "The \\ribmask loss: fast.");
     }
 
     #[tokio::test]

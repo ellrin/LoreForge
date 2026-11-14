@@ -6,6 +6,7 @@
 //     title,       // shown in the bar
 //     target,      // "slide" | "paper" | null: the 完成 label and the frame
 //     frame,       // [w, h] pt the figure fits in (default: the spec's, else a 16:9 slide)
+//     pageWidth,   // mm: the document's width (a paper's \linewidth), offered as 「本文」 next to 寬
 //     doc,         // the document whose notation registry is in force (sent to the server)
 //     source,      // starting material for step 1 (a paper's title and method), or ""
 //     sources,     // async () => [{ label, text }]: papers to start from (LoreReader, PaperComposer)
@@ -496,6 +497,20 @@
         post(api, "/layouts", { spec: S.spec, doc: opts.doc ?? "", width: 160 }).then((r) => { if (my !== layTok) return; layCache = { key, list: r.layouts ?? [] }; fill(layCache.list); }).catch(() => {});
       }
       b.body.append(grid);
+      // width (mm; the frame is in pt): the document's own by default, any other by hand
+      const PT = 72 / 25.4;
+      const wNow = Math.round((S.spec.frame[0] / PT) * 10) / 10;
+      const setW = (mm) => { if (!(mm > 20)) return; change((sp) => { const k = (mm * PT) / sp.frame[0]; sp.frame = [Math.round(mm * PT * 10) / 10, Math.round(sp.frame[1] * k)]; }); };
+      const wIn = h("input", { class: "set-input lf-w", type: "number", step: "0.1", min: "20", value: String(wNow), "aria-label": "寬 mm" });
+      wIn.onchange = () => setW(+wIn.value);
+      const wRow = h("div", { class: "lf-f" }, h("span", { class: "k" }, "寬 mm"), wIn);
+      if (opts.pageWidth) {
+        const on = Math.abs(wNow - opts.pageWidth) < 0.6;
+        const pb = h("button", { type: "button", class: "ghost lf-wchip", "aria-pressed": String(on) }, `本文 ${opts.pageWidth}`);
+        pb.onclick = () => setW(opts.pageWidth);
+        wRow.append(pb);
+      }
+      b.body.append(wRow);
       // direction per block
       b.body.append(h("div", { class: "lf-sub" }, "方向"));
       for (const bl of S.info.blocks ?? []) {

@@ -131,7 +131,9 @@ width, meaning), `legend` (`show` auto|on|off, `pos` below|above, `rows` of `lin
 `type:<id>` / `block:<id>` with words), `frame` (pt), `discussion` (the steps' answers). Unknown keys
 are kept. `FlowSpec::prepare` turns it into graph + theme + `LayoutOptions` (template, directions,
 panel fills, node `fill=`/`line=`, edge looks, `LegendChoice`); `figure::render` draws it,
-`preview_svg` crops a plain SVG, `as_picture` wraps the objects as one group (`lock_aspect`, the spec
+`preview_svg` crops a plain SVG, `svg_mm(fig, frame)` is the print-size file (with the frame, as wide
+as the frame, e.g. a paper's column, so `\includegraphics[width=\linewidth]` keeps the designed size;
+only the empty space above and below is cropped), `as_picture` wraps the objects as one group (`lock_aspect`, the spec
 in `data`, connectors retargeted for PowerPoint), `linear` gives one line per block.
 
 Layout templates (`layouts.json`, 20 neutral ones: rows, columns, grids, small/big splits, two small +

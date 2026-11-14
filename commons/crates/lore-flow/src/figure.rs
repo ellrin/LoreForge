@@ -529,11 +529,32 @@ pub fn preview_svg(fig: &Figure, width_px: f64) -> String {
     crate::preview::svg(&objs, b.w, b.h, zoom)
 }
 
-/// The figure as an SVG file of its print size (`width`/`height` in mm, 1 pt = 25.4/72 mm),
-/// cropped to it: a paper figure (lore-plot's PDF export reads the mm size).
-pub fn svg_mm(fig: &Figure) -> String {
-    let b = fig.layout.bounds.inflate(6.0);
-    let svg = preview_svg(fig, b.w);
+/// The figure as an SVG file of its print size (`width`/`height` in mm, 1 pt = 25.4/72 mm): a
+/// paper figure (lore-plot's PDF export reads the mm size). With the `frame` it was drawn in
+/// (a paper's column width), the file is that wide, so `\includegraphics[width=\linewidth]`
+/// prints it at the designed size; only the empty space above and below is cropped (that
+/// changes no scale). Without one, it is cropped to the drawing.
+pub fn svg_mm(fig: &Figure, frame: Option<Rect>) -> String {
+    let c = fig.layout.bounds.inflate(6.0);
+    let b = match frame {
+        // the frame's width (never narrower than the drawing), the drawing's height
+        Some(f) if f.w > 10.0 => {
+            let x0 = f.x.min(c.x);
+            let x1 = (f.x + f.w).max(c.x + c.w);
+            Rect::new(x0, c.y, x1 - x0, c.h)
+        }
+        _ => c,
+    };
+    let svg = {
+        let mut objs = fig.objects().to_vec();
+        let dx = crate::modules::emu(-b.x);
+        let dy = crate::modules::emu(-b.y);
+        for o in &mut objs {
+            o.frame.x += dx;
+            o.frame.y += dy;
+        }
+        crate::preview::svg(&objs, b.w, b.h, 1.0)
+    };
     let mm = |v: f64| format!("{:.2}mm", v * 25.4 / 72.0);
     let Some(start) = svg.find("<svg") else { return svg };
     let end = start + svg[start..].find('>').unwrap_or(0);

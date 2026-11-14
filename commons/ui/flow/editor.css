@@ -122,3 +122,6 @@
   .lf-top { padding: 0 8px; gap: 4px; }
   .lf-name { max-width: 30vw; }
 }
+
+.lf-w { width: 76px; }
+.lf-wchip { margin-left: 6px; font-size: 12px; padding: 2px 8px; }

@@ -262,3 +262,24 @@ UI (`ui/write.js`, `ui/tex.js`):
 - `tests/real_paper.rs` (`#[ignore]`): `NOTATION_SAMPLE=<main.tex>` and optional
   `NOTATION_EXPECT=<expect.json>` (human-review findings) print a recall table.
   Real papers and their expectation files stay outside the repository.
+
+## Punctuation and sentence guard (`punct`)
+
+For apps that generate English prose (PaperComposer's drafts, polish, revisions, captions). Off
+unless the app passes a rule (the author's choice lives in their private style folder:
+`[punctuation] allowed = [".", ","]`, `hyphen_whitelist = [...]`).
+
+```text
+punct::Rule::from_toml(raw) -> Option<Rule>        // [punctuation]; None = off
+punct::check(text, &rule, exempt) -> Vec<Violation> // by sentence: marks, ranges, hyphenated compounds,
+                                                    // long sentences (max_words), too many commas (max_commas)
+punct::repair_note(&v) -> String                    // one repair call that names every violation
+punct::fix(text, &rule, exempt) -> String           // safe mechanical fixes (; → ., 0.70–0.75 → 0.70 to 0.75, …)
+punct::Guard { rule, exempt }.finish(text)          // fix, then what is still wrong (to flag, never hide)
+punct::paragraph_ranges(raw) / ParagraphRange       // [paragraph_words.<Section>] target / bounds / sentences
+punct::hyphenated_terms(text)                       // a document's own terms (exempt)
+```
+
+Never violations: maths, `\cite`/`\ref`/`\label` and the pending marks with their arguments,
+numbers (decimals, thousands, ratios, E notation), `\%`, possessive apostrophes, short
+parentheses (abbreviations, statistics), notes for the author (`[Author to confirm …]`).

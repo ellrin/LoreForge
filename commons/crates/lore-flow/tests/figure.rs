@@ -327,7 +327,7 @@ fn a_paper_figure_keeps_its_latex_for_tex_glyphs_and_has_a_print_size() {
     let cat = Catalogue::builtin();
     let s = FlowSpec { frame: Some([496.0, 300.0]), ..spec() };
     let (fig, _) = render(&s, &cat, None, &TexMath, s.frame_rect(), 2).unwrap();
-    let svg = svg_mm(&fig);
+    let svg = svg_mm(&fig, Some(s.frame_rect()));
     // print size in mm on the root (lore-plot's PDF export reads it)
     let head = &svg[svg.find("<svg").unwrap()..];
     let head = &head[..head.find('>').unwrap()];
@@ -342,7 +342,7 @@ fn a_paper_figure_keeps_its_latex_for_tex_glyphs_and_has_a_print_size() {
     let dsl = "fig t\npanel a \"a. A\"\n  m: box \"Model\"\n  r: label \"@w and text\" role=output\n  o: label \"@w\" role=output\nend\nm -> r\nm -> o\nvar w = \"\\omega\" \"weight\"\n";
     let s = FlowSpec { lore_flow: 1, dsl: dsl.into(), frame: Some([496.0, 300.0]), ..Default::default() };
     let (fig, _) = render(&s, &cat, None, &TexMath, s.frame_rect(), 2).unwrap();
-    let svg = svg_mm(&fig);
+    let svg = svg_mm(&fig, Some(s.frame_rect()));
     let font_of = |tex: &str| { let at = svg.find(&format!("data-tex=\"{tex}\"")).unwrap_or_else(|| panic!("{tex}: {svg}")); svg[at..].split("data-font=\"").nth(1).unwrap().split('"').next().unwrap().to_string() };
     assert_ne!(font_of("$\\omega$ and text"), "KaTeX_Main");
     assert_eq!(font_of("$\\omega$"), "KaTeX_Main");
@@ -357,4 +357,25 @@ fn new_variables_lose_the_maths_delimiters_a_model_adds() {
     assert_eq!(l, vec!["\\mathbf{x}", "y^{\\text{bert}}", "$a$ and $b$"]);
     assert_eq!(lore_flow::spec::bare_latex("$$\\hat{y}$$"), "\\hat{y}");
     assert_eq!(lore_flow::spec::bare_latex("\\hat{y}"), "\\hat{y}");
+}
+
+/// A paper figure prints at its frame's width (the column), never cropped to a narrower drawing
+/// and then scaled up by `\includegraphics[width=\linewidth]` (text came out about 13% larger).
+#[test]
+fn a_paper_figure_prints_at_its_frame_width() {
+    let cat = Catalogue::builtin();
+    let w = 130.7 * 72.0 / 25.4;
+    let s = FlowSpec { frame: Some([w, 224.0]), ..spec() };
+    let (fig, _) = render(&s, &cat, None, &TexMath, s.frame_rect(), 2).unwrap();
+    let attr = |svg: &str, k: &str| -> f64 {
+        let head = &svg[svg.find("<svg").unwrap()..];
+        let head = &head[..head.find('>').unwrap()];
+        head.split(&format!(" {k}=\"")).nth(1).unwrap().split("mm").next().unwrap().parse().unwrap()
+    };
+    let framed = svg_mm(&fig, Some(s.frame_rect()));
+    assert!((attr(&framed, "width") - 130.7).abs() < 0.05, "{}", attr(&framed, "width"));
+    // the drawing keeps its scale: the cropped file is narrower, the framed one is the column
+    let cropped = svg_mm(&fig, None);
+    assert!(attr(&cropped, "width") <= attr(&framed, "width") + 0.01);
+    assert!((attr(&cropped, "height") - attr(&framed, "height")).abs() < 0.01, "only the width changes");
 }

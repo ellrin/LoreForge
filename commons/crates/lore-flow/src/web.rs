@@ -408,7 +408,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(flow: Flow) -> axum::Router<S> {
                     let n = f.notation_of(&b.doc);
                     let math: &dyn crate::MathSource = if b.tex { &crate::TexMath } else { &NoMath };
                     match render(&spec, &cat, n.as_ref(), math, spec.frame_rect(), 2) {
-                        Ok((fig, _)) if b.tex => ([(header::CONTENT_TYPE, "image/svg+xml")], crate::figure::svg_mm(&fig)).into_response(),
+                        Ok((fig, _)) if b.tex => ([(header::CONTENT_TYPE, "image/svg+xml")], crate::figure::svg_mm(&fig, spec.frame.map(|_| spec.frame_rect()))).into_response(),
                         Ok((fig, _)) => {
                             let b = fig.layout.bounds;
                             ([(header::CONTENT_TYPE, "image/svg+xml")], preview_svg(&fig, b.w.max(1.0) * 4.0 / 3.0)).into_response()

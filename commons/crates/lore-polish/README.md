@@ -22,3 +22,7 @@
 
 **LaTeX documents.** `Host::latex()` (default `false`; PaperComposer `true`): the restored rewrite goes through
 `lore_notation::unicode::to_latex`, so ≤ − ⁺ α never reach pdflatex. SlideComposer keeps plain text.
+
+`Host::guard(doc)` (default off) gives the document's punctuation and sentence guard
+(lore-notation `punct`): a rewrite that breaks it gets one repair call naming each violation,
+then the safe mechanical fixes; what is still wrong comes back as problems (never applied silently).
