@@ -740,14 +740,19 @@ const PCDraft = (() => {
       ta.value = D.draftAnswer?.[g.id] ?? "";
       ta.oninput = () => ((D.draftAnswer ??= {})[g.id] = ta.value);
       ta.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.ctrlKey || e.metaKey)) send(ta.value); };
-      const ans = row(ta);
-      ans.classList.add("df-ansrow");
+      // one row of actions under the answer: the ways around it on the left, speak and send on the right
+      const act = row();
+      act.classList.add("df-actrow");
+      const nx = nextGroup(g);
+      if (nx) act.append(btn("略過，下一組 →", () => nextFrom(g, nx), "ghost small"));
+      if (!ch.length) act.append(btn("給我選項", () => send("不確定，請給我幾個選項"), "ghost small"));
+      act.append(el("span", "df-grow"));
       const mic = micButton(ta);
-      if (mic) ans.append(mic);
-      ans.append(btn("送出", () => send(ta.value)));
-      if (talking) ans.querySelectorAll("button").forEach((x) => (x.disabled = true));
-      pane.append(ans);
-      if (!ch.length) { const r = row(btn("給我選項", () => send("不確定，請給我幾個選項"), "ghost small")); pane.append(r); }
+      if (mic) act.append(mic);
+      act.append(btn("送出", () => send(ta.value), "primary small"));
+      if (talking) act.querySelectorAll("button").forEach((x) => (x.disabled = true));
+      pane.append(ta, act);
+      return pane;
     }
     pane.append(groupFoot(g, st));
     return pane;
@@ -983,8 +988,7 @@ const PCDraft = (() => {
       ans.setAttribute("aria-label", "這題的回答");
       ans.oninput = () => (D.discAnswer = ans.value);
       const mic = micButton(ans);
-      const r = row(btn("繼續討論", () => { D.discAnswer = null; draw(); }, "ghost"), el("span", "df-grow"), btn("送出為回答", () => run("送出回答", async () => { const v = await call(`/discuss/${d.id}/close`, { answer: ans.value, model: model() }); D.disc = null; D.discAnswer = null; return v; })));
-      if (mic) r.prepend(mic);
+      const r = row(btn("繼續討論", () => { D.discAnswer = null; draw(); }, "ghost small"), el("span", "df-grow"), ...(mic ? [mic] : []), btn("送出為回答", () => run("送出回答", async () => { const v = await call(`/discuss/${d.id}/close`, { answer: ans.value, model: model() }); D.disc = null; D.discAnswer = null; return v; })));
       side.append(ans, r);
       return;
     }
@@ -996,14 +1000,18 @@ const PCDraft = (() => {
     ta.oninput = () => (D.discDraft = ta.value);
     const say = () => { const t = ta.value.trim(); if (!t) return; run("討論中", async () => { const v = await call(`/discuss/${d.id}`, { text: t }); D.discDraft = ""; return v; }); };
     ta.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.ctrlKey || e.metaKey)) say(); };
-    const sum = btn("整理成這題的回答", () => run("整理回答", async () => { const r = await call(`/discuss/${d.id}/answer`, {}); D.discAnswer = r.answer ?? ""; return null; }), "primary small");
+    const sum = btn("整理成這題的回答", () => run("整理回答", async () => { const r = await call(`/discuss/${d.id}/answer`, {}); D.discAnswer = r.answer ?? ""; return null; }), "ghost small");
     // something to sum up only once the author has said something
     if (!d.messages.some((m) => m.who === "me")) sum.disabled = true;
-    const r = row(btn("送出", say, "ghost small"), el("span", "df-grow"), sum);
+    // speak and send sit under the box, right; the two ways to end the discussion sit on one line below
     const mic = micButton(ta);
-    if (mic) r.prepend(mic);
-    side.append(ta, r);
-    if (d.item) side.append(row(btn("這題不用寫進論文", () => run("略過這題", async () => { const v = await call(`/discuss/${d.id}/close`, { exclude: true }); D.disc = null; return v; }), "ghost small")));
+    const r = row(el("span", "df-grow"), ...(mic ? [mic] : []), btn("送出", say, "primary small"));
+    r.classList.add("df-actrow");
+    const end = row();
+    end.classList.add("df-dend");
+    if (d.item) end.append(btn("這題不用寫進論文", () => run("略過這題", async () => { const v = await call(`/discuss/${d.id}/close`, { exclude: true }); D.disc = null; return v; }), "ghost small"));
+    end.append(el("span", "df-grow"), sum);
+    side.append(ta, r, end);
   }
 
   function send(text) {

@@ -1620,3 +1620,9 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-cand .t b { display: block; font-weight: 600; }
 .df-cand .t .more { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 .df-cand .ev { opacity: .7; }
+
+/* one aligned row of actions under a text box; the mic always sits just left of send */
+.df-q .df-answer { display: block; width: 100%; box-sizing: border-box; }
+.df-actrow { margin-top: 8px; flex-wrap: nowrap; align-items: center; }
+.df-actrow .df-mic, .df-dend .df-mic { flex: none; }
+.df-dend { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); flex-wrap: nowrap; align-items: center; }
