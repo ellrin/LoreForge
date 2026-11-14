@@ -1187,6 +1187,7 @@ function mountEditor() {
   tb.addEventListener("compositionstart", () => (S.composing = true));
   tb.addEventListener("compositionend", () => (S.composing = false));
   tb.addEventListener("keydown", editKey);
+  tb.addEventListener("contextmenu", editMenu);
   tb.addEventListener("paste", (ev) => {
     ev.preventDefault();
     const t = ev.clipboardData.getData("text/plain");
@@ -1435,6 +1436,98 @@ function selectedParas(tb, sel) {
   const out = [];
   for (let p = sel.a.p; p <= sel.b.p; p++) if (tb.paras[p]) out.push(tb.paras[p]);
   return out;
+}
+
+// ── 潤飾 (commons/ui/polish.js): the selected text of one paragraph, its equations as $latex$
+// and its line breaks as \n (both kept locked by the server); 套用 = one transaction ──
+/** A paragraph as the text the model sees: { str, at: unit offset → str offset, keep }. */
+function polishText(para) {
+  let str = "";
+  const keep = [], at = [0];
+  para.runs.forEach((r, k) => {
+    let piece;
+    if (r.kind === "text") piece = r.text;
+    else if (r.kind === "br") piece = "\n";
+    else if (r.kind === "math" && r.latex) piece = `$${r.latex}$`;
+    else { piece = `⟪${k + 1}⟫`; keep.push(piece); } // a field, an equation with no LaTeX: kept as it is
+    // the editor's units: text and field characters, 1 for an equation or a break
+    const units = r.kind === "text" || r.kind === "field" ? r.text.length : 1;
+    for (let u = 0; u < units; u++) at.push(str.length + (r.kind === "text" ? u + 1 : u === units - 1 ? piece.length : 0));
+    str += piece;
+  });
+  return { str, at, keep: [...keep, "\n"] };
+}
+
+/** The runs for `after`: text in the first selected text run's look; each equation, line
+ *  break or kept piece back as its original run. */
+function polishRuns(after, sel, para) {
+  const base = sel.find((r) => r.kind === "text") ?? para.runs.find((r) => r.kind === "text") ?? newRun("");
+  const kept = sel.filter((r) => r.kind !== "text").map((r) => {
+    const k = para.runs.indexOf(r);
+    return { r, s: r.kind === "br" ? "\n" : r.kind === "math" && r.latex ? `$${r.latex}$` : `⟪${k + 1}⟫` };
+  });
+  const out = [];
+  const text = (t) => { if (t) { const r = clone(base); r.kind = "text"; r.text = t; delete r.field; out.push(r); } };
+  let rest = after;
+  for (;;) {
+    let best = null;
+    for (const k of kept) { if (k.used) continue; const i = rest.indexOf(k.s); if (i >= 0 && (!best || i < best.i)) best = { i, k }; }
+    if (!best && rest.includes("\n")) best = { i: rest.indexOf("\n"), k: { r: { kind: "br", text: "", tag: base.tag, look: clone(base.look) }, s: "\n" } };
+    if (!best) break;
+    text(rest.slice(0, best.i));
+    best.k.used = true;
+    out.push(clone(best.k.r));
+    rest = rest.slice(best.i + best.k.s.length);
+  }
+  text(rest);
+  return out;
+}
+
+/** 潤飾 the selection of the text box being edited. */
+async function polishSelection(anchor) {
+  const root = editRoot();
+  const sel = root && getTextSel(root);
+  if (!sel || (sel.a.p === sel.b.p && sel.a.o === sel.b.o)) return toast("先在文字框裡選取要潤飾的文字");
+  if (sel.a.p !== sel.b.p) return toast("一次潤飾一個段落裡的文字");
+  const rect = getSelection().rangeCount ? getSelection().getRangeAt(0).getBoundingClientRect() : null;
+  const id = S.editing, uid = S.cur, pi = sel.a.p, a = sel.a.o, b = sel.b.o;
+  await exitEdit(); // typing so far is its own step
+  const o = findObj(id);
+  const para = o?.text?.paras[pi];
+  if (!para) return;
+  const t = polishText(para);
+  const text = t.str.slice(t.at[a], t.at[b]);
+  LorePolish.open({
+    anchor: rect ?? anchor, text, prefix: t.str.slice(0, t.at[a]), suffix: t.str.slice(t.at[b]), keep: t.keep,
+    context: o.text.paras.filter((_, k) => k !== pi).map((p) => polishText(p).str).join("\n"),
+    apply: async (after) => {
+      const s = S.deck.slides.find((x) => x.uid === uid);
+      const now = s && findObj(id, s.objects);
+      const tb = now?.text && clone(now.text);
+      const p = tb?.paras[pi];
+      if (!p) return "文字框已經不在了";
+      const t2 = polishText(p);
+      if (t2.str.slice(t2.at[a], t2.at[b]) !== text) return "這段文字已經改過，請重新選取";
+      const runs = runsInRange(tb, { p: pi, o: a }, { p: pi, o: b });
+      p.runs.splice(p.runs.indexOf(runs[0]), runs.length, ...polishRuns(after, runs, p));
+      now.text = tb;
+      await commit([{ op: "set_obj", slide: uid, id, path: "/text", value: tb }], "潤飾");
+      renderSide();
+      return true;
+    },
+  });
+}
+
+/** Right-click in a text box being edited, with a selection: 潤飾. */
+function editMenu(ev) {
+  const s = getSelection();
+  if (ev.altKey || ev.shiftKey || !s || s.isCollapsed) return;
+  ev.preventDefault();
+  const pin = document.createElement("div");
+  Object.assign(pin.style, { position: "fixed", left: `${ev.clientX}px`, top: `${ev.clientY}px`, width: "1px", height: "1px" });
+  document.body.append(pin);
+  LoreShell.menu(pin, [{ icon: "polish", label: "潤飾", run: () => polishSelection(pin) }]);
+  setTimeout(() => pin.parentNode?.removeChild(pin), 0);
 }
 
 function editKey(ev) {
@@ -2232,6 +2325,10 @@ function wire() {
   $("#insImage").addEventListener("click", () => delete $("#imgFile").dataset.slot, true);
   $("#insTable").onclick = () => openTableDialog();
   $("#insEq").onclick = () => openEquation(null);
+  // 潤飾: the text selection stays while the button is pressed
+  $("#insPolish").addEventListener("mousedown", (e) => e.preventDefault());
+  $("#insPolish").onclick = (e) => (S.editing ? polishSelection(e.currentTarget) : toast("先在文字框裡選取要潤飾的文字"));
+  LorePolish.mount({ doc: () => S.name });
   $("#insComp").onclick = (e) => openComponentMenu(e.currentTarget);
   $("#actReveal").onclick = () => openReveal();
   // notes belong to the slide that was current when the field got focus

@@ -20,14 +20,28 @@
       document.head.append(s);
     });
     // the order lore_plot::assets::SCRIPTS lists
-    loading = ["mathsvg.js", "plot.js", "charts.js", "charts3d.js", "formats.js", "editor.js"].reduce((p, f) => p.then(() => script(`/plot/${f}`)), Promise.resolve()).then(() => { window.LorePlot.katexBase = "/plot/katex/"; });
+    loading = ["mathsvg.js", "plot.js", "charts.js", "charts3d.js", "eqcore.js", "simcore.js", "equation.js", "eqlive.js", "eqsim.js", "formats.js", "editor.js"].reduce((p, f) => p.then(() => script(`/plot/${f}`)), Promise.resolve()).then(() => { window.LorePlot.katexBase = "/plot/katex/"; });
     loading.catch(() => (loading = null));
     return loading;
   }
   const EMU_MM = 36000;
-  async function render(spec, svg) {
-    const r = await api(deckApi("/plot"), { body: { spec, svg, dpi: 300 } });
-    return r; // { asset, px, mm }
+  /** The deck's notation entries (colour roles of equation figures: the same registry as LoreReader's and PaperComposer's). */
+  async function notation() {
+    try { const r = await fetch(deckApi("/notation")); return r.ok ? (await r.json()).notation?.entries ?? [] : []; } catch { return []; }
+  }
+  /** The picture: a 300 dpi PNG, or for an equation figure an animated GIF (both carry the spec). */
+  async function render(spec, svg, frames, gifFrames) {
+    const eq = spec.panels?.find((p) => p.type === "equation")?.eq;
+    const body = { spec, svg, dpi: 300 };
+    if ((eq?.animate || eq?.sim) && gifFrames) {
+      // paced by visual change, the end held, heatmaps dithered (sweeps and simulations alike)
+      const f = await gifFrames();
+      Object.assign(body, { frames: f.frames, delays: f.delays, dither: f.dither, ms: f.ms, ...(f.maxW ? { max_w: f.maxW } : {}) });
+    } else if (eq?.animate && frames) {
+      body.frames = await frames(eq.animate.frames ?? 24);
+      body.ms = eq.animate.ms ?? 80;
+    }
+    return api(deckApi("/plot"), { body }); // { asset, px, mm, gif? }
   }
   /** Picture frame for a figure of w×h mm: its print size, at most 90 % of the slide. */
   function frameFor(mm, at) {
@@ -41,14 +55,14 @@
     return { x, y, w, h };
   }
 
-  async function create() {
+  async function create(kind) {
     if (!S.deck) return;
     try { await load(); } catch (e) { toast(e.message, true); return; }
     let made = null;
     await LorePlot.edit({
-      target: "slide", title: "新圖表", api: "/plot/api",
-      save: async ({ spec, svg }) => {
-        try { made = { ...(await render(spec, svg)), name: spec.panels?.[0]?.title || "圖表" }; return true; } catch (e) { return e.message; }
+      target: "slide", title: kind === "equation" ? "方程式" : "新圖表", api: "/plot/api", kind, notation: await notation(),
+      save: async ({ spec, svg, frames, gifFrames }) => {
+        try { made = { ...(await render(spec, svg, frames, gifFrames)), name: spec.panels?.[0]?.title || (kind === "equation" ? "方程式" : "圖表") }; return true; } catch (e) { return e.message; }
       },
     });
     if (!made) return;
@@ -66,8 +80,8 @@
     try { await load(); } catch (e) { toast(e.message, true); return true; }
     let made = null;
     await LorePlot.edit({
-      spec, target: "slide", title: o.name || "圖表", api: "/plot/api",
-      save: async ({ spec, svg }) => { try { made = await render(spec, svg); return true; } catch (e) { return e.message; } },
+      spec, target: "slide", title: o.name || "圖表", api: "/plot/api", notation: await notation(),
+      save: async ({ spec, svg, frames, gifFrames }) => { try { made = await render(spec, svg, frames, gifFrames); return true; } catch (e) { return e.message; } },
     });
     if (!made) return true;
     // the same picture, a new image; the height follows the figure's new aspect (width kept)
@@ -79,7 +93,10 @@
     return true;
   }
 
-  document.addEventListener("DOMContentLoaded", () => document.getElementById("insPlot")?.addEventListener("click", create));
+  document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("insPlot")?.addEventListener("click", () => create());
+    document.getElementById("insLiveEq")?.addEventListener("click", () => create("equation"));
+  });
   // the selected figure's 編輯 button (app.js renderOverlay): pictures whose PNG carries a spec
   const known = new Map(); // asset → true | false (null while asking)
   (window.SC_FIGURE_TOOLS ??= []).push({
@@ -94,5 +111,5 @@
     },
     open: (o) => reedit(o),
   });
-  window.SCPlot = { create, reedit };
+  window.SCPlot = { create, reedit, load }; // load: the plot scripts (present.js 互動 uses eqsim.js)
 })();

@@ -36,6 +36,7 @@ mod plot; // web/figplot.js: 繪圖 (lore-plot editor, a PNG picture that carrie
 mod notation;
 mod reader;
 pub mod deckpolish;
+mod rewrite; // polish.js: 語句潤飾 (lore-polish) and the voice (lore-voice)
 pub mod deckvoice;
 pub mod deckstyle;
 pub mod todeck;
@@ -75,6 +76,8 @@ pub struct AppState {
     pub fallback_cache: Mutex<HashMap<String, Vec<u8>>>,
     /// Model engines (論文報告); tests set it before the first request (`llm::Llm::with_factory`).
     pub llm: std::sync::OnceLock<llm::Llm>,
+    /// Draws the 論文報告's equation GIF (default: headless Chrome); tests set a fake.
+    pub liveeq: std::sync::OnceLock<Arc<dyn todeck::liveeq::Render>>,
 }
 
 /// A native file dialog request from the page (`/api/shell/dialog`).
@@ -296,7 +299,7 @@ async fn notation_panel_js() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../../../../commons/ui/notation-panel/notation-panel.js"))
 }
 
-fn global_notation(s: &Shared) -> Option<std::path::PathBuf> {
+pub(crate) fn global_notation(s: &Shared) -> Option<std::path::PathBuf> {
     s.home.shared_dir().map(|d| d.join("notation.json")).filter(|p| p.is_file())
 }
 
@@ -372,6 +375,7 @@ fn engines(shared: &Shared) -> lore_engines::Engines {
     lore_engines::Engines::new(shared.home.clone(), "SlideComposer", llm::TASKS)
         .with_tasks(lore_llm::TaskTable::parse(include_str!("../../../../commons/crates/lore-flow/tasks.toml")).unwrap_or_default())
         .with_tasks(lore_plot::assist::task_table())
+        .with_tasks(lore_polish::task_table())
 }
 
 pub fn router(shared: Shared) -> Router {
@@ -379,17 +383,28 @@ pub fn router(shared: Shared) -> Router {
     if let Some(rt) = lore_llm::shared_runtime::SharedRuntime::process(llm::APP) {
         e = e.shared(rt); // 本機 status, 釋放, and this app's share of the idle checks
     }
-    router_with(shared, e)
+    let voice = lore_voice::Voice::system();
+    let perms = permissions(&voice);
+    router_with(shared, e, voice, perms)
+}
+
+/// What SlideComposer asks for at its first launch (設定 → 一般 → 權限 afterwards): the voice's three
+/// (潤飾's hold-to-talk).
+fn permissions(voice: &lore_voice::Voice) -> lore_shell::permissions::Permissions {
+    use lore_shell::permissions::{Permission, Permissions};
+    Permissions::new(&[Permission::Microphone, Permission::Speech, Permission::PersonalVoice]).with(Arc::new(voice.clone()))
 }
 
 /// Tests: never the keychain, the `claude` CLI, the network, the OS opener or the process routing.
 pub fn router_isolated(shared: Shared) -> Router {
     let mut e = engines(&shared).isolated();
     e.install_routing = false;
-    router_with(shared, e)
+    let voice = lore_voice::Voice::unavailable("這裡沒有語音");
+    let perms = permissions(&voice).isolated();
+    router_with(shared, e, voice, perms)
 }
 
-fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
+fn router_with(shared: Shared, engines: lore_engines::Engines, voice: lore_voice::Voice, perms: lore_shell::permissions::Permissions) -> Router {
     // static files: always revalidate (no build step, edits show up on reload)
     let web = tower::ServiceBuilder::new()
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
@@ -399,7 +414,8 @@ fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
         .service(ServeDir::new(&shared.web).append_index_html_on_directories(true));
     let plots = plot::plot_router(&shared);
     let flows = flow::flow_router(&shared);
-    routes().merge(plot::routes()).merge(flow::routes()).with_state(shared).merge(plots).merge(flows).merge(lore_engines::router(engines)).fallback_service(web)
+    let polish = rewrite::router(&shared, voice);
+    routes().merge(plot::routes()).merge(flow::routes()).with_state(shared).merge(plots).merge(flows).merge(polish).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).fallback_service(web)
 }
 
 pub fn state(ws: Workspace, web: PathBuf) -> Shared {
@@ -419,6 +435,7 @@ pub fn state_at(ws: Workspace, web: PathBuf, home: lore_home::Home) -> Shared {
         dialog: std::sync::OnceLock::new(),
         fallback_cache: Mutex::new(HashMap::new()),
         llm: std::sync::OnceLock::new(),
+        liveeq: std::sync::OnceLock::new(),
     })
 }
 

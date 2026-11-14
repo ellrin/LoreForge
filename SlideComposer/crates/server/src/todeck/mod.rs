@@ -43,6 +43,7 @@ use crate::{AppState, R, Shared, bad};
 
 pub mod build;
 pub mod eqread;
+pub mod liveeq;
 pub mod outline;
 pub mod plan;
 pub mod polish;

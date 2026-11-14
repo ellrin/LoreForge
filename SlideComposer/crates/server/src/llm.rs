@@ -48,12 +48,13 @@ pub struct Llm {
     fake: Option<Arc<dyn ProviderFactory>>,
 }
 
-/// This app's tasks (its own and lore-flow's), as the 模型 tab lists them.
+/// This app's tasks (its own, lore-flow's, lore-plot's and lore-polish's), as the 模型 tab lists them.
 pub fn app_tasks() -> TaskTable {
     TaskTable::parse(TASKS)
         .expect("bundled tasks.toml parses")
         .merge(TaskTable::parse(include_str!("../../../../commons/crates/lore-flow/tasks.toml")).expect("lore-flow tasks parse"))
         .merge(lore_plot::assist::task_table())
+        .merge(lore_polish::task_table())
 }
 
 impl Llm {
@@ -184,6 +185,8 @@ mod tests {
         let review = &t.task[TASK_OUTLINE_REVIEW];
         assert_eq!((review.class, review.default.as_str()), (Some(lore_llm::TaskClass::Create), "claude:selected"));
         assert!(t.task.contains_key("sc-flow-graph") && t.task.contains_key(lore_docsrc::boxer::TASK_ID));
+        let polish = &t.task[lore_polish::TASK];
+        assert_eq!((polish.class, polish.default.as_str()), (Some(lore_llm::TaskClass::Create), "claude:selected"));
     }
 
     #[tokio::test]

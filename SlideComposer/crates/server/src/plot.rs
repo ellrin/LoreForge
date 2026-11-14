@@ -3,7 +3,7 @@
 //! | Method | Path | |
 //! |---|---|---|
 //! | * | /plot/… | `lore_plot::router`: the editor's files, styles, data import, export, 自動, 助手 |
-//! | POST | /api/decks/{name}/plot | `{spec, svg, dpi}` → a PNG (spec inside, `iTXt`) stored as a deck asset → `{asset, px: [w, h], mm: [w, h]}` |
+//! | POST | /api/decks/{name}/plot | `{spec, svg, dpi}` → a PNG (spec inside, `iTXt`) stored as a deck asset → `{asset, px: [w, h], mm: [w, h]}`; an equation figure with `frames` (SVGs) → an animated GIF (spec inside, `LOREPLOT1.0`) |
 //! | GET | /api/decks/{name}/plot?asset=… | the spec a picture carries (404: not a figure made here) |
 //!
 //! The picture is a PNG because the PPTX export has no SVG picture (no `svgBlip` + PNG fallback);
@@ -57,7 +57,7 @@ async fn spec_get(State(s): State<Shared>, Path(name): Path<String>, Query(q): Q
         Err(_) => return err(StatusCode::NOT_FOUND, "找不到簡報"),
     };
     let bytes = sess.lock().unwrap().asset(&q.asset).map(|b| b.0);
-    match bytes.as_deref().and_then(lore_plot::figure::spec_in_png) {
+    match bytes.as_deref().and_then(lore_plot::figure::spec_in_picture) {
         Some(spec) => Json(json!({ "spec": spec })).into_response(),
         None => err(StatusCode::NOT_FOUND, "這張圖不是繪圖工具做的"),
     }
@@ -69,6 +69,18 @@ struct SaveBody {
     svg: String,
     #[serde(default)]
     dpi: Option<u32>,
+    /// An equation figure's animation frames (SVG): the picture becomes a GIF.
+    #[serde(default)]
+    frames: Vec<String>,
+    #[serde(default)]
+    ms: Option<u32>,
+    /// Per-frame delays (paced by change, the end held) and dithered heatmap rectangles (`LorePlot.eq.gifFrames`).
+    #[serde(default)]
+    delays: Vec<u32>,
+    #[serde(default)]
+    dither: Vec<[f64; 4]>,
+    #[serde(default)]
+    max_w: Option<u32>,
 }
 
 async fn save(State(s): State<Shared>, Path(name): Path<String>, Json(b): Json<SaveBody>) -> Response {
@@ -84,6 +96,22 @@ async fn save(State(s): State<Shared>, Path(name): Path<String>, Json(b): Json<S
         return err(StatusCode::BAD_REQUEST, e.to_string());
     }
     let mm = lore_plot::export::size_mm(&b.svg);
+    if spec.is_equation() && !b.frames.is_empty() {
+        if b.frames.len() > 240 {
+            return err(StatusCode::BAD_REQUEST, "格數太多");
+        }
+        let body = lore_plot::GifBody { frames: b.frames, delays: b.delays, dither: b.dither, spec: None, dpi: Some(if spec.is_simulation() { 150 } else { 200 }), ms: b.ms, max_w: b.max_w };
+        let gif = match lore_plot::gif_from_body(std::sync::Arc::new(lore_plot::Tools::find()), body, Some(spec.to_json())).await {
+            Ok(g) => g,
+            Err(e) => return err(StatusCode::UNPROCESSABLE_ENTITY, e),
+        };
+        let px = lore_plot::equation::gif::info(&gif).map(|i| (i.w, i.h)).unwrap_or((0, 0));
+        let asset = match sess.lock().unwrap().add_asset(&gif, "gif") {
+            Ok(a) => a,
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
+        return Json(json!({ "asset": asset, "px": [px.0, px.1], "mm": mm.map(|(w, h)| vec![w, h]), "gif": true })).into_response();
+    }
     let dpi = b.dpi.unwrap_or(300).clamp(96, 600);
     let tools = lore_plot::Tools::find();
     let svg = b.svg;

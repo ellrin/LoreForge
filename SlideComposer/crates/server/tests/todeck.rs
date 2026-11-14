@@ -268,7 +268,8 @@ async fn paper_becomes_a_report_deck() {
     let seen = planner.seen.lock().unwrap()[0].flatten();
     assert!(seen.contains("Two-Stage Grading") && seen.contains("fig1: Overview of the pipeline") && seen.contains("tab1") && seen.contains("eq1"), "{seen}");
     assert!(seen.contains("ellrin2025synthetic"));
-    assert_eq!(vision.seen.lock().unwrap().len(), 1, "one vision call for the main figure");
+    // (the same engine also answered 會動的方程式's equation-plot: not a vision call)
+    assert_eq!(vision.seen.lock().unwrap().iter().filter(|r| !r.system.contains("plottable simulation")).count(), 1, "one vision call for the main figure");
 
     let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
     let slides = d["deck"]["slides"].as_array().unwrap().clone();
@@ -731,4 +732,147 @@ async fn ui_fixture() {
     let id = v["job"].as_str().unwrap().to_string();
     let v = job_until(&app, &id, "done", |v| v["state"] == "done").await;
     println!("deck {} {}", v["deck"], v["result"]["polish"]);
+}
+
+// ── 會動的方程式: the main loss gets its GIF ────────────────────────────
+
+/// Draws synthetic frames instead of running Chrome (the real renderer is not in the offline tests).
+struct FakeRender {
+    specs: std::sync::Mutex<Vec<String>>,
+}
+
+impl sc_server::todeck::liveeq::Render for FakeRender {
+    fn gif(&self, spec_json: &str, _macros: &Value) -> Result<Vec<u8>, String> {
+        self.specs.lock().unwrap().push(spec_json.to_string());
+        let frames: Vec<lore_plot::equation::gif::Rgba> = (0..sc_server::todeck::liveeq::FRAMES)
+            .map(|k| {
+                let (w, h) = (60u32, 38u32);
+                let mut px = vec![255u8; (w * h * 4) as usize];
+                let i = (((k as u32 % h) * w + 5) * 4) as usize;
+                px[i..i + 3].copy_from_slice(&[0, 114, 178]);
+                lore_plot::equation::gif::Rgba { w, h, px }
+            })
+            .collect();
+        lore_plot::equation::gif::encode(&frames, 80, Some(spec_json))
+    }
+}
+
+fn focal_paper(root: &Path) -> std::path::PathBuf {
+    let p = paper(root);
+    let main = MAIN
+        .replace(r"\mathcal{L} = \lVert \vx - \hat{\vx} \rVert^2", r"\mathcal{L} = -\alpha_t (1 - p_t)^{\gamma} \log p_t")
+        .replace("We train for 30 epochs", "We set $\\gamma = 2$ and $\\alpha_t = 0.25$; the ablation varies $\\gamma$ from 0 to 5. We train for 30 epochs");
+    std::fs::write(p.join("main.tex"), main).unwrap();
+    p
+}
+
+async fn run_with_eq_answer(answer: Value) -> (tempfile::TempDir, axum::Router, Value, Arc<FakeRender>, Arc<MockProvider>) {
+    let dir = tempfile::tempdir().unwrap();
+    let p = focal_paper(dir.path());
+    let ws = workspace(dir.path());
+    let home = lore_home::Home::at(dir.path().join("home"));
+    let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
+    let planner = Arc::new(MockProvider::new(vec![plan("is slow").to_string()]));
+    let boxes = json!({ "modules": [{ "label": "encoder", "box": [12, 25, 88, 75] }, { "label": "fusion", "box": [112, 25, 188, 75] }, { "label": "decoder", "box": [212, 25, 288, 75] }] });
+    // claude:sonnet answers the module boxes first, then the equation
+    let sonnet = Arc::new(MockProvider::new(vec![boxes.to_string(), answer.to_string()]).named("mock-sonnet"));
+    let f = MockFactory::default().with("claude:selected", planner).with("claude:sonnet", sonnet.clone());
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
+    let fake = Arc::new(FakeRender { specs: Default::default() });
+    assert!(shared.liveeq.set(fake.clone()).is_ok());
+    let app = sc_server::router_isolated(shared.clone());
+    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "short", "lang": "en", "style": "blank" });
+    let (st, v, _) = call(&app, "POST", "/api/todeck", Some(body), Some("http://127.0.0.1:7878")).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    (dir, app, v, fake, sonnet)
+}
+
+#[tokio::test]
+async fn the_main_loss_gets_an_animated_gif_that_reopens() {
+    let answer = json!({ "match": "template", "template": "focal", "paper_values": [{ "name": "gamma", "value": 2 }, { "name": "alpha", "value": 0.25 }],
+        "reduction": [], "properties": [{ "kind": "nonneg", "text": "≥ 0" }], "animate": "gamma" });
+    let (_d, app, v, fake, sonnet) = run_with_eq_answer(answer).await;
+    assert_eq!(v["live_eq"]["equation"], "eq1", "{v}");
+    // the model read the loss, the paper's symbols and the tuning text
+    let seen = sonnet.seen.lock().unwrap().last().unwrap().flatten();
+    assert!(seen.contains("\\alpha_t (1 - p_t)^{\\gamma}") && seen.contains("ablation varies") && seen.contains("input image"), "{seen}");
+    // one GIF, on the loss slide, sweeping γ with the paper's value marked; slide style
+    let specs = fake.specs.lock().unwrap().clone();
+    assert_eq!(specs.len(), 1);
+    let spec: Value = serde_json::from_str(&specs[0]).unwrap();
+    assert_eq!(spec["kind"], "equation");
+    assert_eq!(spec["panels"][0]["eq"]["animate"]["var"], "gamma");
+    assert_eq!(spec["panels"][0]["eq"]["vars"][0]["paper"], 2.0);
+    // colour roles fixed in the file: the input 1, γ and α distinct (a re-edit keeps them)
+    let roles: Vec<u64> = [&spec["panels"][0]["eq"]["x"]["color"], &spec["panels"][0]["eq"]["vars"][0]["color"], &spec["panels"][0]["eq"]["vars"][1]["color"]].iter().map(|v| v.as_u64().unwrap()).collect();
+    assert_eq!(roles[0], 1);
+    assert!(roles[1] != roles[2] && roles[1] >= 2 && roles[2] >= 2, "{roles:?}");
+    assert!(spec["style"].as_str().unwrap().contains("slide"));
+    let name = v["name"].as_str().unwrap();
+    let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
+    let slides = d["deck"]["slides"].as_array().unwrap();
+    let gifs: Vec<(&Value, &Value)> = slides.iter().flat_map(|s| s["objects"].as_array().unwrap().iter().map(move |o| (s, o))).filter(|(_, o)| o["type"] == "picture" && o["asset"].as_str().unwrap().ends_with(".gif")).collect();
+    assert_eq!(gifs.len(), 1, "one per deck");
+    let (slide, pic) = gifs[0];
+    assert!(all_text(slide).contains("Reconstruction loss"), "beside the equation on the loss slide");
+    // under the text box, inside the slide, the figure's aspect
+    let text = slide["objects"].as_array().unwrap().iter().find(|o| o["name"] == "內文").unwrap();
+    let (tf, pf) = (&text["frame"], &pic["frame"]);
+    assert!(pf["y"].as_i64().unwrap() >= tf["y"].as_i64().unwrap() + tf["h"].as_i64().unwrap(), "{tf} {pf}");
+    assert!(pf["w"].as_f64().unwrap() >= tf["w"].as_f64().unwrap() * 0.6, "the GIF uses most of the slot's width: {tf} {pf}");
+    // the slide's own equation is coloured like the GIF (deck palette): KaTeX in the editor, OMML in the .pptx
+    let maths: Vec<&Value> = text["text"]["paras"].as_array().unwrap().iter().flat_map(|p| p["runs"].as_array().unwrap().iter()).filter(|r| r["kind"] == "math").collect();
+    if let Some(m) = maths.first() {
+        let l = m["latex"].as_str().unwrap();
+        assert!(l.contains("\\textcolor{") && l.contains("{\\gamma}"), "{l}");
+        if let Some(o) = m["omml"].as_str() {
+            assert!(o.contains("a:srgbClr"), "{o}");
+        }
+    }
+    let (_, nt, _) = call(&app, "GET", &format!("/api/decks/{name}/notation"), None, None).await;
+    // lore-notation reads the coloured equation as the same symbols (no symbol named after the colouring)
+    let subjects: Vec<String> = nt["report"]["issues"].as_array().unwrap().iter().filter_map(|i| i["subject"].as_str().map(String::from)).collect();
+    assert!(!subjects.iter().any(|s| s.contains("textcolor") || s.contains('#')), "{subjects:?}");
+    let keys: Vec<&str> = nt["report"]["symbols"].as_array().unwrap().iter().filter_map(|k| k["key"].as_str()).collect();
+    assert!(keys.contains(&"\\gamma") && keys.contains(&"p") && !keys.iter().any(|k| k.contains("textcolor")), "{keys:?}");
+    let ratio = pf["h"].as_f64().unwrap() / pf["w"].as_f64().unwrap();
+    let (sw, sh) = sc_server::todeck::liveeq::DECK_MM;
+    assert!((ratio - sh / sw).abs() < 0.01, "{ratio}");
+    // 編輯 re-opens it: the GIF carries the spec
+    let asset = pic["asset"].as_str().unwrap();
+    let (st, sp, _) = call(&app, "GET", &format!("/api/decks/{name}/plot?asset={}", asset), None, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(sp["spec"]["panels"][0]["type"], "equation");
+    // the .pptx keeps the animated GIF as a picture (PowerPoint plays it), spec still inside
+    let res = app.clone().oneshot(Request::builder().uri(format!("/api/decks/{name}/pptx")).body(Body::empty()).unwrap()).await.unwrap();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    let gif_names: Vec<String> = zip.file_names().filter(|n| n.starts_with("ppt/media/") && n.ends_with(".gif")).map(String::from).collect();
+    assert_eq!(gif_names.len(), 1, "{gif_names:?}");
+    let mut buf = vec![];
+    std::io::Read::read_to_end(&mut zip.by_name(&gif_names[0]).unwrap(), &mut buf).unwrap();
+    let info = lore_plot::equation::gif::info(&buf).unwrap();
+    assert_eq!(info.frames, sc_server::todeck::liveeq::FRAMES);
+    assert_eq!(info.loops, Some(0));
+    assert!(info.spec.is_some());
+    let mut ct = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("[Content_Types].xml").unwrap(), &mut ct).unwrap();
+    assert!(ct.contains("image/gif"));
+}
+
+#[tokio::test]
+async fn an_unsure_equation_is_skipped_not_guessed() {
+    // a custom expression (needs the author's eye) and no parameter the paper tunes: nothing inserted
+    let answer = json!({ "match": "custom", "expr": "x^2", "x": { "name": "x", "min": -1, "max": 1 }, "vars": [], "reduction": [], "properties": [{ "kind": "nonneg", "text": "≥ 0" }] });
+    let (_d, app, v, fake, _) = run_with_eq_answer(answer).await;
+    assert!(v["live_eq"].is_null(), "{v}");
+    assert!(v["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("會動的方程式沒有放")), "{v}");
+    assert!(fake.specs.lock().unwrap().is_empty());
+    let name = v["name"].as_str().unwrap();
+    let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
+    assert!(!d.to_string().contains(".gif"));
+    // a template without the paper's tuned parameter is skipped too
+    let answer = json!({ "match": "template", "template": "focal", "paper_values": [], "reduction": [], "properties": [] });
+    let (_d, _app, v, _, _) = run_with_eq_answer(answer).await;
+    assert!(v["live_eq"].is_null(), "{v}");
 }

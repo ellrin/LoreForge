@@ -21,6 +21,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "files": {
+        "MacOS/lore-voice-helper": "bin/lore-voice-helper"
+      }
+    },
     "resources": {
       "../../web": "web"
     },
@@ -31,6 +36,7 @@
         ],
         "name": "PowerPoint 簡報",
         "role": "Editor",
+        "contentTypes": ["org.openxmlformats.presentationml.presentation"],
         "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
       }
     ]

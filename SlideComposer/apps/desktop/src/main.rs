@@ -192,6 +192,9 @@ fn main() {
                 // the slide show's audience window (window.open from 簡報者檢視)
                 .on_new_window(move |_url, features| audience_window(&handle, features))
                 .build()?;
+            // the first launch asks every permission the app needs, once, in the background
+            // (answered ones are never asked again; later changes: 設定 → 一般 → 權限)
+            lore_shell::permissions::ask_at_launch();
             // files Finder handed over while starting up
             lore_home::ports::register("sc", addr.port());
             *app.state::<Opener>().addr.lock().unwrap() = Some(addr);

@@ -27,6 +27,9 @@ kb-core = { path = "../commons/crates/kb-core" }
 lore-store = { path = "../commons/crates/lore-store" }
 lore-jobs = { path = "../commons/crates/lore-jobs" }
 lore-learn = { path = "../commons/crates/lore-learn" }
+# 語句潤飾 (crates/server/src/rewrite.rs): the shared /api/polish routes; the voice for its hold-to-talk.
+lore-polish = { path = "../commons/crates/lore-polish" }
+lore-voice = { path = "../commons/crates/lore-voice" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

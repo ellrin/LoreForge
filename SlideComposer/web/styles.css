@@ -3,7 +3,8 @@
    PaperComposer. Accent text, line icons and thin borders use --accent-text.
    Slides (.slide and everything render.js draws), thumbnails, the show and
    the presenter view never use theme tokens: object.html and print.html do
-   not even load theme.css. */
+   not even load theme.css. The presenter console is dark in every theme; its
+   選頁 (.pv-pick) takes only the theme's --accent. */
 
 :root {
   --stage: color-mix(in srgb, var(--bg) 82%, #000);
@@ -389,3 +390,37 @@ dialog .actions { flex-wrap: wrap; }
 .pol .st { font-size: 11px; color: var(--muted); }
 /* 編輯 on a figure a tool made (圖表, 流程圖): beside the selection's top-right corner */
 .overlay .fig-edit { position: absolute; pointer-events: auto; background: var(--panel); border: 1px solid var(--line-strong); box-shadow: 0 2px 8px #0003; }
+
+/* 選頁 (presenter, G): every slide at a glance. Dark like the rest of the console (glanced at in dark
+   rooms); only the current slide takes the theme's accent. The thumbnails are documents. */
+.pv-pick { position: fixed; inset: 0; z-index: 30; overflow: auto; overscroll-behavior: contain; background: #101012; color: #e9e9ec;
+  padding: 28px; --pk-accent: var(--accent); --pk-accent-text: color-mix(in srgb, var(--accent) 72%, #fff); }
+.pk-close { position: fixed; top: 10px; right: 12px; z-index: 1; color: #c9c9cf; }
+.pk-close:hover { color: #fff; background: #ffffff14; }
+.pk-typed { position: fixed; top: 12px; left: 14px; z-index: 1; padding: 3px 10px; border-radius: 6px; background: #26262b; color: #fff;
+  font: 600 18px var(--mono); box-shadow: 0 0 0 1px #ffffff2a; }
+.pk-grid { display: grid; grid-template-columns: repeat(var(--pk-cols, 4), var(--pk-w)); justify-content: center; align-content: start; gap: 14px; }
+.pk-cell { position: relative; display: block; width: var(--pk-w); padding: 0; border: 0; background: none; color: inherit; cursor: pointer;
+  text-align: left; border-radius: 6px; outline: none; }
+.pk-frame { position: relative; width: var(--pk-w); height: var(--pk-h); overflow: hidden; border-radius: 4px; background: #000;
+  box-shadow: 0 0 0 1px #ffffff1f; }
+.pk-slide { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
+.pk-no { display: block; height: 26px; padding: 5px 2px 0; font: 600 13px var(--mono); color: #8d8d94; }
+/* focus (keys, hover): a thin light ring; current (where the audience is): a filled accent border */
+.pk-cell.focus .pk-frame { box-shadow: 0 0 0 1px #000, 0 0 0 3px #e9e9ec; }
+.pk-cell.focus .pk-no { color: #e9e9ec; }
+.pk-cell.cur .pk-frame { box-shadow: 0 0 0 5px var(--pk-accent); }
+.pk-cell.cur.focus .pk-frame { box-shadow: 0 0 0 5px var(--pk-accent), 0 0 0 7px #101012, 0 0 0 9px #e9e9ec; }
+.pk-cell.cur .pk-no { color: var(--pk-accent-text); }
+.pk-cell.hid .pk-frame > * { opacity: .35; }
+.pk-hid { position: absolute; right: 2px; bottom: 5px; font: 500 12px var(--sans); color: #8d8d94; }
+
+/* 互動: an equation figure's live view over the slide (Lore theme: it is the app's view, not the deck) */
+.show-live { position: absolute; inset: 0; z-index: 7; cursor: auto; background: var(--bg); }
+.presenter .pv-stage .show-live { border-radius: 6px; overflow: hidden; }
+.pv-bar .pv-live[aria-pressed="true"] { color: var(--accent); }
+/* the presenter in 互動: the controls take the whole console width (next slide and notes come back on leaving) */
+.presenter.live { grid-template: "main main" 1fr "bar bar" auto / 1fr 0; }
+.presenter.live .pv-side { display: none; }
+.presenter.live .pv-main { padding-right: 16px; }
+.presenter.live .pv-stage { aspect-ratio: auto; height: 100%; }

@@ -506,6 +506,21 @@ mod tests {
     }
 
     #[test]
+    fn writing_guide_sentences_never_become_the_voice() {
+        // PaperComposer's guide patterns (style/patterns.toml) sit in the same private folder;
+        // the voice comes from the author's own decks only.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = home_with_decks(tmp.path());
+        let guide = "Although trains and buses differ in speed, both reduce traffic in city centres.";
+        let style = tmp.path().join("private/PaperComposer/style");
+        std::fs::create_dir_all(&style).unwrap();
+        std::fs::write(style.join("patterns.toml"), format!("[[pattern]]\nid = \"g\"\nsituation = \"compare_two\"\nstructure = \"Although {{A}} and {{B}} differ, both {{y}}.\"\nexample = \"{guide}\"\nsource = \"guide\"\n")).unwrap();
+        let v = refresh(&home, &tmp.path().join("ws/cache")).expect("examples");
+        let all = serde_json::to_string(&v).unwrap() + &std::fs::read_to_string(examples_file(&home).unwrap()).unwrap();
+        assert!(!all.contains("trains and buses") && !all.contains("differ, both"), "{all}");
+    }
+
+    #[test]
     fn no_decks_no_file() {
         let tmp = tempfile::tempdir().unwrap();
         let home = lore_home::Home::at(tmp.path());

@@ -329,15 +329,22 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     let boxes = if main_before == main_after { o.boxes } else { vec![] };
     let total = plan.slides.len();
     cx.counts(json!({ "slide": 0, "slides": total }));
+    // 會動的方程式: the main loss as a GIF (微調 → 不要 turns it off); best-effort
+    let live = if review["answers"]["liveEq"] == false {
+        (None, None)
+    } else {
+        let macros = serde_json::to_value(&n.macros).unwrap_or_default();
+        super::liveeq::prepare(s, &plan, &m, &macros, p.engine.as_deref(), &p.lang).await
+    };
     let count = cx.counter();
     let (s, dir, engine) = (s.clone(), cx.dir().to_path_buf(), o.engine);
-    tokio::task::spawn_blocking(move || make_deck(&s, &dir, &p, &m, &n, &plan, &tr, boxes, &engine, &|i, t| count(json!({ "slide": i, "slides": t })))).await.map_err(join_err)?
+    tokio::task::spawn_blocking(move || make_deck(&s, &dir, &p, &m, &n, &plan, &tr, boxes, live, &engine, &|i, t| count(json!({ "slide": i, "slides": t })))).await.map_err(join_err)?
 }
 
 /// The deck from the plan (blocking: pandoc, files). A crash half-way leaves the deck's name
 /// in `slides.pending`; the next try removes that half-made deck first.
 #[allow(clippy::too_many_arguments)]
-fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut, plan: &Plan, tr: &terms::TermsResult, boxes: Vec<ModuleBox>, engine: &str, progress: &dyn Fn(usize, usize)) -> Result<Value, StageError> {
+fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut, plan: &Plan, tr: &terms::TermsResult, boxes: Vec<ModuleBox>, live: (Option<super::liveeq::EqGif>, Option<String>), engine: &str, progress: &dyn Fn(usize, usize)) -> Result<Value, StageError> {
     let pending = dir.join("slides.pending");
     if let Ok(old) = std::fs::read_to_string(&pending) {
         let old = old.trim();
@@ -360,6 +367,23 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
                 .map_err(|e| StageError::new(422, e))?
         };
         let mut slides = built.slides;
+        let mut warnings = built.warnings;
+        warnings.extend(live.1.clone());
+        // 會動的方程式: the GIF beside the main loss (before the big picture splits slides: same index as the plan)
+        let mut live_eq = Value::Null;
+        if let Some(g) = &live.0
+            && let Some(sl) = slides.get_mut(g.slide)
+        {
+            match sc_core::store_asset(&deck_dir, &g.gif, "gif") {
+                Ok(asset) => {
+                    let id = sl.objects.iter().map(|o| o.id).max().unwrap_or(1) + 1;
+                    super::liveeq::colour_slide_equations(sl, &g.inks, &g.out);
+                    super::liveeq::place(sl, &asset, g.mm, (sess.editor.deck.size.w, sess.editor.deck.size.h), id);
+                    live_eq = json!({ "slide": g.slide, "equation": g.eq_id, "asset": asset });
+                }
+                Err(e) => warnings.push(format!("會動的方程式沒有放：{e}")),
+            }
+        }
         // 不熟: learn marks on the unfamiliar terms (whole sentences in background / method
         // narration), before the big picture is split so its steps keep them
         let matcher = tr.matcher();
@@ -403,7 +427,8 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
             "boxes": boxes.len(),
             "notation": added,
             "unknown": tr.unfamiliar,
-            "warnings": built.warnings,
+            "warnings": warnings,
+            "live_eq": live_eq,
         }))
     })();
     if out.is_err() {

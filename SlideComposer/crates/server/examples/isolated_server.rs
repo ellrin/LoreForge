@@ -4,7 +4,8 @@
 //! 論文報告 lists PaperComposer papers from `PAPERCOMPOSER_WORKSPACE` (default `<dir>/PaperComposer`)
 //! and `PAPERCOMPOSER_OPENED` (default `<dir>/home/opened.toml`), never the real ones. It has no
 //! engine, unless `SC_TODECK_PLAN=<plan.json>` (and optionally `SC_TODECK_BOXES=<modules.json>`)
-//! give the replies a mock engine sends (UI checks).
+//! give the replies a mock engine sends (UI checks); `SC_TODECK_EQ=<answer.json>` the equation-plot
+//! answer for 會動的方程式 (the GIF itself is drawn by the real Chrome renderer).
 
 use std::sync::Arc;
 
@@ -30,8 +31,10 @@ async fn serve(dir: std::path::PathBuf, port: u16) {
     let llm = match file("SC_TODECK_PLAN") {
         Some(plan) => {
             let mut f = lore_llm::router::MockFactory::default().with("claude:selected", Arc::new(lore_llm::MockProvider::new(vec![plan])));
-            if let Some(boxes) = file("SC_TODECK_BOXES") {
-                f = f.with("claude:sonnet", Arc::new(lore_llm::MockProvider::new(vec![boxes])));
+            // claude:sonnet: the module boxes, then 會動的方程式's equation-plot answer (SC_TODECK_EQ)
+            let sonnet: Vec<String> = [file("SC_TODECK_BOXES"), file("SC_TODECK_EQ")].into_iter().flatten().collect();
+            if !sonnet.is_empty() {
+                f = f.with("claude:sonnet", Arc::new(lore_llm::MockProvider::new(sonnet)));
             }
             sc_server::llm::Llm::with_factory(home, f)
         }

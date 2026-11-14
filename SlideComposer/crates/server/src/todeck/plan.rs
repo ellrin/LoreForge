@@ -101,6 +101,11 @@ Rules:\n\
 - Write all slide text in {language}."
     );
     let mut u = String::new();
+    // a draft paper (PaperComposer 待補): results still to come are marked, never filled in
+    let pending = m.abstract_text.contains("[pending")
+        || m.sections.iter().any(|(_, t)| t.contains("[pending"))
+        || m.tables.iter().any(|t| t.grid.iter().flatten().flatten().any(|c| c.contains("[pending")));
+    let system = if pending { system + PENDING_RULE } else { system };
     u += &format!("Title: {}\n", m.title);
     if !m.authors.is_empty() {
         u += &format!("Authors: {}\n", m.authors.join(", "));
@@ -151,6 +156,12 @@ Rules:\n\
     u += &format!("\nPlan {lo}–{hi} slides.");
     (system, u)
 }
+
+/// The rule for a draft with results still to come (`[pending: …]` in the material).
+pub const PENDING_RULE: &str = "\n- This is a draft: text marked [pending: …] or [pending] is a result the authors still wait for. \
+Where a slide uses it, write the mark as it is (\"[pending: external Dice]\"); never a number, a trend or a conclusion for it. \
+A sentence ending in [pending] states the result the authors EXPECT, not one they found: on a slide keep the mark at its end \
+(\"Gain holds on a second site [pending]\"), never as a takeaway or a take-home message without it.";
 
 /// Typed cross-references ("Fig. 3", "Table 2", "Eq. (1)") out of slide text: a slide shows
 /// the item itself, and the author's rule is `\ref`, never a typed number (lore-notation's
@@ -203,4 +214,34 @@ pub fn clean_plan(mut p: Plan, m: &Material) -> Plan {
         }
     }
     p
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+
+    /// A PaperComposer draft with 待補 marks: the slides' material shows them as marks, the
+    /// planner is told to keep them, and a table cell on a slide reads `[pending]`.
+    #[test]
+    fn a_draft_with_pending_results_keeps_its_marks() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("main.tex"),
+            "\\documentclass{article}\n\\input{pending}\n\\title{Weighted frames}\n\\begin{document}\n\\maketitle\n\\begin{abstract}\nWeighting holds on a second site\\pendingdep{P1}.\n\\end{abstract}\n\
+\\section{Results}\nExternal Dice is \\pending{P1}{external Dice}, which keeps the ranking\\pendingdep{P1}.\n\n\
+\\begin{table}\n\\caption{Dice per site.}\\label{tab:site}\n\\begin{tabular}{lcc}\nMethod & Internal & External \\\\\nOurs & 0.72 & \\pendingcell{P1}{Ours / External} \\\\\n\\end{tabular}\n\\end{table}\n\\end{document}\n",
+        )
+        .unwrap();
+        let m = super::super::source::from_latex(d.path(), &d.path().join("cache")).unwrap();
+        let text: String = m.sections.iter().map(|(_, t)| t.clone()).collect();
+        assert!(text.contains("[pending: external Dice]") && !text.contains("pendingdep") && !text.contains("P1external"), "{text}");
+        assert!(text.contains("keeps the ranking [pending]."), "a dependent sentence stays marked: {text}");
+        assert!(m.abstract_text.contains("second site [pending]."), "the abstract too: {}", m.abstract_text);
+        let grid = m.tables[0].grid.as_ref().unwrap();
+        assert_eq!(grid[1], ["Ours", "0.72", "[pending]"]);
+        let (system, user) = prompt(&m, "standard", "en");
+        assert!(system.contains(PENDING_RULE) && user.contains("| Ours | 0.72 | [pending] |"));
+        let plain = super::super::source::Material { title: "x".into(), ..Default::default() };
+        assert!(!prompt(&plain, "standard", "en").0.contains(PENDING_RULE), "no marks, no rule");
+    }
 }

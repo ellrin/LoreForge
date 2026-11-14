@@ -324,7 +324,7 @@ const TDJ = (() => {
     const figs = new Map(rv.figures.map((f) => [f.id, f]));
     // answers, 我懂 and 記得 survive a redone outline (語言／長度)
     const keep = J.keep?.id === J.id ? J.keep : null;
-    const ans = { audience: null, mainFig: null, modules: null, opinion: null, ...(keep?.ans ?? {}) };
+    const ans = { audience: null, mainFig: null, modules: null, opinion: null, liveEq: null, ...(keep?.ans ?? {}) };
     const known = new Set(keep?.known ?? []);
     let remember = keep?.remember ?? false;
     const opts = { length: "standard", lang: "zh", style: null, ...(snap.options ?? {}) };
@@ -431,7 +431,7 @@ const TDJ = (() => {
     bOut.body.append(list);
     paintRows();
 
-    // four questions, every one skippable (tap the chosen one again to clear it)
+    // five questions, every one skippable (tap the chosen one again to clear it)
     const q = (label, ctl) => E("div", { class: "tdj-q" }, E("span", { class: "ql" }, label), ctl);
     const seg = (opts, key) => {
       const s = E("div", { class: "seg", role: "radiogroup" });
@@ -446,7 +446,9 @@ const TDJ = (() => {
       q("聽眾", seg([["lab", "實驗室組會"], ["seminar", "研討會"], ["defense", "口試"]], "audience")),
       q("主架構圖", figSel),
       q("方法拆幾個模組", seg([[2, "2"], [3, "3"], [4, "4"], [5, "5"]], "modules")),
-      q("我的看法頁", seg([[true, "要"], [false, "不要"]], "opinion")));
+      q("我的看法頁", seg([[true, "要"], [false, "不要"]], "opinion")),
+      // the main loss as an animated GIF beside it (one per deck; only when the paper says what it tunes)
+      q("會動的方程式", seg([[true, "要"], [false, "不要"]], "liveEq")));
 
     const tl = E("ul", { class: "tdj-terms" });
     for (const t of rv.unknown) {

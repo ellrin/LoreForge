@@ -823,7 +823,7 @@ fn table_obj(cx: &mut Ctx, f: &Frame, grid: &[Vec<String>], kv: bool) -> Object 
     for (ri, r) in grid.iter().enumerate() {
         let mut cells = vec![];
         for ci in 0..ncol {
-            let text = r.get(ci).map(|s| strip_typed_refs(&lore_docsrc::latex::plain::tidy(s))).unwrap_or_default();
+            let text = r.get(ci).map(|s| strip_typed_refs(&lore_docsrc::latex::plain::tidy(&lore_notation::pending::to_plain(s)))).unwrap_or_default();
             let head = (!kv && ri == 0) || (kv && ci == 0);
             let em = head.then_some("strong").filter(|e| cx.st.pack.emphasis.contains_key(*e));
             // `$…$` in a cell is native math, like in the bullets

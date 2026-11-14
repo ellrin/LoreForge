@@ -64,6 +64,8 @@ when working on lore-canvas in parallel with other agents.
   arrangements, text from the style's tags, tables native, equations OMML (registry macros expanded), `Ref:` from
   cited keys, typed "Fig. 3" stripped, the big picture expanded by `reveal`; the paper's notation joins the
   deck's `notation.json` with its ids. `/api/todeck*` and `/api/info` answer 127.0.0.1 / localhost origins (CORS).
+  A draft paper's 待補 marks (lore-notation `pending`) stay marks: `[pending: …]` in text (lore-docsrc), `[pending]` in table cells and after a
+  dependent sentence (`source.rs`, `build.rs`), and `plan::PENDING_RULE` tells the planner to copy them, never a number (`../docs/long-paper.md` §E).
   PaperComposer papers are found like PaperComposer does (`PAPERCOMPOSER_WORKSPACE`, its config, lore-home).
   微調 window: 長度／語言／底版 (`POST …/jobs/{id}/params`: 語言 or 長度 redo only the outline, `Jobs::redo_from`),
   建議 (`todeck/suggest.rs`, task `sc-outline-review`, class `create`, best-effort inside the outline stage: ≤5
@@ -78,11 +80,28 @@ when working on lore-canvas in parallel with other agents.
   PaperComposer's 寫書; `kbterms.rs` re-exports it and keeps the slide marks, 我懂 and the KnowledgeBase write.
 - 繪圖 (toolbar 圖表, `web/figplot.js`, `crates/server/src/plot.rs`, `../docs/plot.md`): the shared lore-plot editor (`/plot/*`); the figure is a
   300 dpi PNG picture that carries its spec (`iTXt`, survives the .pptx); the selected figure's 編輯 button (`SC_FIGURE_TOOLS`, drawn by `renderOverlay`) re-opens it and replaces the image in place (one undo step); a double-click is not special.
+- 會動的方程式 (toolbar `#insLiveEq`, `web/figplot.js` `create("equation")`, `../docs/plot.md` §10): an equation figure is a GIF picture (spec in its `LOREPLOT1.0`
+  extension, `plot.rs` saves `frames` as GIF); 論文報告 adds one for the main loss (`todeck/liveeq.rs`: `main_loss`, `equation-plot`, `fit_for_auto` gate, `Render`
+  = Chrome or a test fake via `AppState::liveeq`; 微調 `answers.liveEq = false` turns it off; skipped with a warning, never a guess).
 - 流程圖 (toolbar 流程圖 and AI → 流程圖, `web/figflow.js`, `crates/server/src/flow.rs`, `../docs/flow-figures.md`): the shared lore-flow editor (`/flow/*`,
   `doc` = the deck → its notation); the figure is one picture — a group of native shapes/connectors/text with `lock_aspect` (resizing = `Op::Scale`:
   text, line widths, arrowheads scale together) and the spec in `GroupObj::data` (kept in the editor-state part, `SlideState::data`, so it survives the
   .pptx); the selected figure's 編輯流程圖 button or 排列 → 編輯流程圖 replaces it in place (one undo step); new variables go to the deck's `notation.json`.
   排列 → 一張圖 (group as one picture / toggle the lock), 另存圖片 PNG/SVG/PDF of any object (`/api/decks/{name}/image`, object.html through Chrome).
+- 語句潤飾 (toolbar 潤飾 `#insPolish` and the right-click menu of a text box being edited, `polishSelection` in `web/app.js`;
+  `crates/server/src/rewrite.rs`, `../docs/long-paper.md` §A): the shared `commons/ui/polish.js` over lore-polish's `/api/polish*`
+  (`doc` = the deck) and lore-voice's `/api/voice*` (unavailable in `router_isolated`). One paragraph's selection is sent with
+  equation runs as `$latex$` and breaks as `\n` (locked, `keep`; fields / LaTeX-less equations as `⟪n⟫`), the deck's registry
+  macros locked too; 套用 = `exitEdit()` first (typing is its own step), then one `set_obj /text` transaction 「潤飾」 with the
+  runs rebuilt (`polishRuns`: original equation/break runs back, new text in the first selected run's look). Log
+  `decks/<name>/polish-log.jsonl` (not 排版用字's `polish.json`); tone = `deckvoice` lines closest to the passage; 👍 →
+  `private/shared/polish/liked.jsonl`. Task `polish` (lore-polish's tasks.toml, merged in `app_tasks()` and the 模型 tab).
+  Desktop: `apps/desktop/build.rs` copies the lore-voice helper to `bin/` → `Contents/MacOS` (`bundle.macOS.files`), Info.plist has the mic/speech usage strings.
+- 互動 in a show (`web/present.js` `live*`, `../docs/plot.md` §11): a slide with an equation figure (a GIF whose spec is a lore-plot equation, looked up per asset) shows 互動 (I) in the presenter bar / single-screen bar. The presenter (or the single screen) mounts `LorePlot.eqSim.mount` (simulation) or `mountCurve` (a curve: one slider per parameter) over the stage in the Lore theme, runs it and sends `{ live }` messages (`open` = the spec and full state, ticks with every new history row and the weights); the audience mounts role `view` and only renders (a tick past its history → `hello` again). `SHOW.live` is put back into the stage by `showRender` (black, step back, re-sync); another slide closes it; Esc / 回到投影片 / leaving full screen closes 互動 only; 對調螢幕 carries the state (`snapshot().live`). Guard: `web/tests/show.test.js` (fake DOM).
+- Show (`web/present.js`): 選頁 = `openPicker` (presenter, G; thumbnails rendered once per show, light-table `pickLayout`, hidden slides join
+  the show through `showIndexOf`). The presenter console is dark in every theme (chrome takes only `--accent`). Logic tests:
+  `web/tests/show.test.js` (run by `crates/server/tests/show.rs`). Camera hand control was tried and dropped on
+  2026-11-13 (`../docs/ideas.md` §5): no camera permission or helper.
 - `crates/core` (`sc-core`): `Workspace` (styles/, decks/), `Session` (open deck: editor,
   source package, layout backdrops, LaTeX cache), export PPTX/PDF, `layout_titles`.
 - `crates/server` (`sc-server`): axum on 127.0.0.1:7880; handlers are plain async fns over

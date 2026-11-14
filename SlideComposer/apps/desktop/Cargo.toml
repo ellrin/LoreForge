@@ -17,3 +17,7 @@ tauri-plugin-dialog = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 url = "2"
 lore-home.workspace = true
+# the first-launch permission prompts (lore_shell::permissions::ask_at_launch)
+lore-shell.workspace = true
+# Only for build.rs: DEP_LORE_VOICE_HELPER (the Swift helper to bundle).
+lore-voice.workspace = true

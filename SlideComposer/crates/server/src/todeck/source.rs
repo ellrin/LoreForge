@@ -335,7 +335,13 @@ pub fn from_latex(dir: &Path, cache: &Path) -> Result<Material, String> {
                 let image = a.files.iter().find_map(|f| figure_file(&dir.join(f), cache));
                 m.figures.push(Fig { id: a.id.clone(), caption: a.caption.clone().unwrap_or_default(), image, grid: None });
             }
-            AssetKind::Table => m.tables.push(Fig { id: a.id.clone(), caption: a.caption.clone().unwrap_or_default(), image: None, grid: a.grid.clone().filter(|g| !g.is_empty()) }),
+            // 待補 cells (`\pendingcell{P1}{…}`) stay marks: `[pending]`, never a number
+            AssetKind::Table => m.tables.push(Fig {
+                id: a.id.clone(),
+                caption: a.caption.clone().unwrap_or_default(),
+                image: None,
+                grid: a.grid.clone().filter(|g| !g.is_empty()).map(|g| g.into_iter().map(|r| r.into_iter().map(|c| lore_notation::pending::to_plain(&c)).collect()).collect()),
+            }),
             AssetKind::Equation => {
                 if let Some(t) = a.text.as_deref().filter(|t| !t.trim().is_empty()) {
                     m.equations.push(Eq { id: a.id.clone(), latex: t.trim().to_string(), label: a.label.clone(), read: "text".into(), ..Default::default() });
