@@ -50,12 +50,13 @@ pub fn schema() -> Value {
 }
 
 /// The request for one batch. `fields` = the reader's fields (the domains of his cards).
-pub fn request(batch: &[&Term], fields: &[String]) -> LlmRequest {
+/// `cloud`: only example sentences from papers and slide decks (`Example::cloud_ok`).
+pub fn request(batch: &[&Term], fields: &[String], cloud: bool) -> LlmRequest {
     let reader = if fields.is_empty() { String::new() } else { format!("讀者的領域：{}\n\n", fields.join("、")) };
     let list = batch
         .iter()
         .map(|t| {
-            let ex = t.examples.iter().take(SHOWN).map(|e| format!("  「{}」", e.text.chars().take(SENTENCE).collect::<String>())).collect::<Vec<_>>().join("\n");
+            let ex = t.examples.iter().filter(|e| !cloud || e.cloud_ok).take(SHOWN).map(|e| format!("  「{}」", e.text.chars().take(SENTENCE).collect::<String>())).collect::<Vec<_>>().join("\n");
             format!("- key: {}（寫作 {}）\n{ex}", t.key, t.label)
         })
         .collect::<Vec<_>>()
@@ -128,10 +129,12 @@ pub struct Run {
 }
 
 /// Sort what is not sorted yet, `max` terms at most (`None` = all), saving after every batch.
-/// `fields` = the reader's fields. `progress(done, total)` after each batch.
-pub async fn run(cache_dir: &Path, p: &dyn LlmProvider, fields: &[String], filters: &Filters, max: Option<usize>, mut progress: impl FnMut(usize, usize)) -> Result<Run, String> {
+/// `fields` = the reader's fields. `cloud`: `p` is a cloud model, so only terms found in a paper
+/// or slide deck (`Term::cloud_ok`) are asked, with only their sentences from those files.
+/// `progress(done, total)` after each batch.
+pub async fn run(cache_dir: &Path, p: &dyn LlmProvider, fields: &[String], filters: &Filters, max: Option<usize>, cloud: bool, mut progress: impl FnMut(usize, usize)) -> Result<Run, String> {
     let mut pool = Pool::load(cache_dir).ok_or("還沒有候選詞；先執行 loreshelf terms")?;
-    let mut order: Vec<usize> = (0..pool.terms.len()).filter(|&i| pool.terms[i].verdict.is_none()).collect();
+    let mut order: Vec<usize> = (0..pool.terms.len()).filter(|&i| pool.terms[i].verdict.is_none() && (!cloud || pool.terms[i].cloud_ok)).collect();
     order.sort_by(|&a, &b| {
         let (x, y) = (&pool.terms[a], &pool.terms[b]);
         // his own seminar material first (it becomes known cards), then terms next to known cards
@@ -154,7 +157,7 @@ pub async fn run(cache_dir: &Path, p: &dyn LlmProvider, fields: &[String], filte
             if attempt == 0 {
                 r.asked += batch.len();
             }
-            let got = match complete_json(p, &request(&batch, fields)).await {
+            let got = match complete_json(p, &request(&batch, fields, cloud)).await {
                 Ok(v) => read_answer(&v, &batch),
                 Err(e) => {
                     r.failed_batches += 1;
@@ -238,8 +241,40 @@ mod tests {
     async fn keys_the_model_skips_are_asked_again_at_once() {
         let t = tempfile::tempdir().unwrap();
         Pool { version: 1, built: "x".into(), files: 1, terms: (0..8).map(|i| term(&format!("t{i}"), 0, 1.0)).collect() }.save(t.path()).unwrap();
-        let r = run(t.path(), &Half, &[], &Filters::default(), None, |_, _| {}).await.unwrap();
+        let r = run(t.path(), &Half, &[], &Filters::default(), None, false, |_, _| {}).await.unwrap();
         assert_eq!((r.asked, r.answered, r.left), (8, 6, 2), "half, then half of the rest");
+    }
+
+    /// Records every request and answers `term` for each key.
+    struct Recording(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl LlmProvider for Recording {
+        fn id(&self) -> String {
+            "mock".into()
+        }
+        fn capabilities(&self) -> Capabilities {
+            Echoing.capabilities()
+        }
+        async fn send(&self, req: &LlmRequest) -> Result<LlmResponse, lore_llm::LlmError> {
+            self.0.lock().unwrap().push(req.messages[0].text());
+            Echoing.send(req).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cloud_model_sees_only_terms_and_sentences_from_papers_and_slides() {
+        let t = tempfile::tempdir().unwrap();
+        let mut both = term("tendon", 0, 1.0);
+        both.cloud_ok = true;
+        both.examples = vec![Example { id: "notes".into(), n: 1, text: "Private note about tendon.".into(), cloud_ok: false }, Example { id: "paper".into(), n: 2, text: "The tendon stiffness rose.".into(), cloud_ok: true }];
+        let private = term("ligament", 0, 1.0);
+        Pool { version: 1, built: "x".into(), files: 2, terms: vec![both, private] }.save(t.path()).unwrap();
+        let m = Recording(Default::default());
+        let r = run(t.path(), &m, &[], &Filters::default(), None, true, |_, _| {}).await.unwrap();
+        assert_eq!((r.asked, r.answered, r.left), (1, 1, 1), "the private-only term waits for the local model");
+        let sent = m.0.lock().unwrap().join("\n");
+        assert!(sent.contains("tendon stiffness") && !sent.contains("Private note") && !sent.contains("ligament"), "{sent}");
     }
 
     fn term(k: &str, near: usize, score: f64) -> Term {
@@ -249,7 +284,7 @@ mod tests {
     #[test]
     fn the_request_lists_keys_with_sentences_and_asks_for_json() {
         let t = term("talocrural joint", 1, 2.0);
-        let r = request(&[&t], &["biomechanics".into()]);
+        let r = request(&[&t], &["biomechanics".into()], false);
         assert!(r.system.contains("term") && r.json_schema.is_some());
         let u = r.messages[0].text();
         assert!(u.contains("讀者的領域：biomechanics") && u.contains("- key: talocrural joint") && u.contains("「The talocrural joint was measured.」"), "{u}");
@@ -297,12 +332,12 @@ mod tests {
         terms[5].verdict = Some("junk".into());
         Pool { version: 1, built: "x".into(), files: 1, terms }.save(t.path()).unwrap();
         let mock = Echoing;
-        let r = run(t.path(), &mock, &[], &Filters::default(), Some(45), |_, _| {}).await.unwrap();
+        let r = run(t.path(), &mock, &[], &Filters::default(), Some(45), false, |_, _| {}).await.unwrap();
         assert_eq!((r.asked, r.answered, r.failed_batches, r.left), (45, 45, 0, 44));
         let pool = Pool::load(t.path()).unwrap();
         assert!((80..90).all(|i| pool.terms[i].verdict.is_some()), "terms next to known cards come first");
         assert_eq!(pool.terms[5].verdict.as_deref(), Some("junk"), "a verdict is never asked again");
-        let r = run(t.path(), &mock, &[], &Filters::default(), None, |_, _| {}).await.unwrap();
+        let r = run(t.path(), &mock, &[], &Filters::default(), None, false, |_, _| {}).await.unwrap();
         assert_eq!((r.asked, r.left), (44, 0));
     }
 }

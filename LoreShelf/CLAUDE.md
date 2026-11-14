@@ -19,7 +19,7 @@ cargo run --release -p loreshelf-cli -- extract           # whole text of PDFs /
 cargo run --release -p loreshelf-cli -- terms             # the term pool from that text and the KnowledgeBase (~20 s; run from inside LoreForge)
 cargo run --release -p loreshelf-cli -- mastered <dir>...  # folders he knows all of (catalog `mastered.json`, local only)
 cargo run --release -p loreshelf-cli -- known-cards [--write]  # their terms (model verdict `term`) → known KB cards (API while KB runs, else kb-core); no file names in cards
-cargo run --release -p loreshelf-cli -- classify [N]      # the local model sorts the pool; per batch, resumable, background priority (hours); then ignore-words --write
+cargo run --release -p loreshelf-cli -- classify [N] [--cloud]  # the local model sorts the pool; per batch, resumable, background priority (hours); then ignore-words --write. --cloud: Claude Haiku (shelf-card-titles) for the terms found in papers / slide decks only (Term::cloud_ok), with only their sentences; the rest wait for the local model
 cargo run --release -p loreshelf-cli -- plan [<source> [page]]  # 歸位 phase A: where each file / folder should go (`<catalog>/filing-plan.json`); nothing moves
 cargo run --release -p loreshelf-cli -- move <source> [--dry]  # 歸位 phase B (CLI): move the rows the rules are sure of (`filing::certain`), rename only, journaled
 cargo run --release -p loreshelf-cli -- undo  # move the last batch back (`<catalog>/filing-journal.jsonl`)

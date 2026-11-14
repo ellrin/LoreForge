@@ -30,7 +30,7 @@ use lore_catalog::{Catalog, Guard, ScanConfig, store};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "用法：\n  loreshelf-cli scan <資料夾>...   只讀掃描，寫入本機目錄與報告\n  loreshelf-cli report            最新報告的位置\n  loreshelf-cli extract           讀取檔案全文到快取（只補還沒讀的）\n  loreshelf-cli terms             整理候選詞（知識庫還沒有的詞）\n  loreshelf-cli mastered <資料夾>...  這些資料夾的檔案我全懂（裡面的術語會做成已懂的卡）\n  loreshelf-cli known-cards [--write]  把上面那些資料夾的術語做成已懂的知識卡（不加 --write 只算數量）\n  loreshelf-cli study-cards [--write]  正在學的領域（private/shared/learning.json）的詞做成不熟的卡（NeonDeck 會跳）\n  loreshelf-cli card-content      用 Claude Haiku 幫已懂的卡寫摘要與說明（基本詞不做卡）\n  loreshelf-cli known-cards --refill [--write]  先前只有原文引句的卡補上摘要與說明，基本詞移到垃圾桶（KnowledgeBase 要開著）\n  loreshelf-cli card-titles       用 Claude Haiku 確認全懂資料夾的術語並給卡片標題（只送論文與簡報裡的詞和句子）\n  loreshelf-cli classify [數量]   本機模型分類候選詞（每批存檔，可中斷續跑；跑完把一般詞寫進忽略清單）\n  loreshelf-cli plan [來源資料夾 [頁]]   歸位計畫：每個檔案／資料夾該去新資料夾樹的哪裡（只產生計畫，不搬）\n  loreshelf-cli move <來源資料夾> [--dry]   把規則確定的列搬過去（只改名搬移，不複製不刪除；記在日誌裡）\n  loreshelf-cli undo              復原上一批搬移\n  loreshelf-cli guess [來源資料夾]   規則放不了的檔案問模型（論文只送內容給 Claude，其他只用本機模型）\n  loreshelf-cli labels [--count]  每個檔案 3–5 個英文標籤（同上兩條路；--count 只算數量）\n  loreshelf-cli move <來源資料夾> --model [--dry]   搬模型放的列（先 --dry 看過）\n  loreshelf-cli ignore-words [--write]  一般詞與名稱寫進共用的「這不是術語」清單（不加 --write 只算數量）";
+const USAGE: &str = "用法：\n  loreshelf-cli scan <資料夾>...   只讀掃描，寫入本機目錄與報告\n  loreshelf-cli report            最新報告的位置\n  loreshelf-cli extract           讀取檔案全文到快取（只補還沒讀的）\n  loreshelf-cli terms             整理候選詞（知識庫還沒有的詞）\n  loreshelf-cli mastered <資料夾>...  這些資料夾的檔案我全懂（裡面的術語會做成已懂的卡）\n  loreshelf-cli known-cards [--write]  把上面那些資料夾的術語做成已懂的知識卡（不加 --write 只算數量）\n  loreshelf-cli study-cards [--write]  正在學的領域（private/shared/learning.json）的詞做成不熟的卡（NeonDeck 會跳）\n  loreshelf-cli card-content      用 Claude Haiku 幫已懂的卡寫摘要與說明（基本詞不做卡）\n  loreshelf-cli known-cards --refill [--write]  先前只有原文引句的卡補上摘要與說明，基本詞移到垃圾桶（KnowledgeBase 要開著）\n  loreshelf-cli card-titles       用 Claude Haiku 確認全懂資料夾的術語並給卡片標題（只送論文與簡報裡的詞和句子）\n  loreshelf-cli classify [數量] [--cloud]   本機模型分類候選詞（每批存檔，可中斷續跑；跑完把一般詞寫進忽略清單；--cloud 用 Claude Haiku，只問論文與簡報裡的詞）\n  loreshelf-cli plan [來源資料夾 [頁]]   歸位計畫：每個檔案／資料夾該去新資料夾樹的哪裡（只產生計畫，不搬）\n  loreshelf-cli move <來源資料夾> [--dry]   把規則確定的列搬過去（只改名搬移，不複製不刪除；記在日誌裡）\n  loreshelf-cli undo              復原上一批搬移\n  loreshelf-cli guess [來源資料夾]   規則放不了的檔案問模型（論文只送內容給 Claude，其他只用本機模型）\n  loreshelf-cli labels [--count]  每個檔案 3–5 個英文標籤（同上兩條路；--count 只算數量）\n  loreshelf-cli move <來源資料夾> --model [--dry]   搬模型放的列（先 --dry 看過）\n  loreshelf-cli ignore-words [--write]  一般詞與名稱寫進共用的「這不是術語」清單（不加 --write 只算數量）";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -91,8 +91,9 @@ fn run(args: &[String]) -> Result<String, String> {
         }
         Some("classify") => {
             let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
-            let max = args.get(1).map(|n| n.parse::<usize>().map_err(|_| USAGE.to_string())).transpose()?;
-            classify(&cache_dir, max)
+            let cloud = args.iter().any(|a| a == "--cloud");
+            let max = args.iter().skip(1).find(|a| *a != "--cloud").map(|n| n.parse::<usize>().map_err(|_| USAGE.to_string())).transpose()?;
+            classify(&cache_dir, max, cloud)
         }
         Some("study-cards") => {
             let cache_dir = store::default_cache_dir().ok_or("找不到快取位置（請設定 LOREFORGE_CACHE）")?;
@@ -266,7 +267,7 @@ fn study_cards(cache_dir: &std::path::Path, write: bool) -> Result<String, Strin
         .collect();
     let llm = shelf_server::llm::Llm::new(home.clone());
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-    rt.block_on(async {
+    let r = rt.block_on(async {
         let cloud = llm.provider(shelf_server::llm::TASK_CARD_TITLES).await?;
         let local = llm.provider(shelf_server::llm::TASK_CARD_LOCAL).await?;
         let tick = |d: usize, t: usize| eprintln!("{d} / {t}");
@@ -274,7 +275,10 @@ fn study_cards(cache_dir: &std::path::Path, write: bool) -> Result<String, Strin
         shelf_server::cards::run_for(cache_dir, &*local, Some(&keys), true, tick).await?;
         shelf_server::cards::write_content_for(cache_dir, &*cloud, Some(&keys), false, tick).await?;
         shelf_server::cards::write_content_for(cache_dir, &*local, Some(&keys), true, tick).await
-    })?;
+    });
+    // the local model this started is not left running
+    shelf_server::llm::quit();
+    r?;
     let titles = shelf_server::cards::Titles::load(cache_dir);
     let have: std::collections::HashSet<String> = known_cards(&home).iter().flat_map(|k| std::iter::once(&k.title).chain(k.aliases.iter())).flat_map(|x| title_keys(x)).collect();
     let picked: Vec<(&lore_catalog::terms::Term, &shelf_server::cards::Titled)> = pool
@@ -493,7 +497,8 @@ fn kb_create(home: &lore_home::Home, card: &serde_json::Value) -> Result<(), Str
 }
 
 /// The local model sorts the pool (background priority: it waits while the author uses the model).
-fn classify(cache_dir: &std::path::Path, max: Option<usize>) -> Result<String, String> {
+/// `cloud`: Claude Haiku instead, for the terms found in papers and slide decks only.
+fn classify(cache_dir: &std::path::Path, max: Option<usize>, cloud: bool) -> Result<String, String> {
     let home = lore_home::Home::discover(&std::env::current_dir().unwrap_or_default());
     let known = known_cards(&home);
     // the reader's fields: the domains of his cards, most frequent first
@@ -510,8 +515,8 @@ fn classify(cache_dir: &std::path::Path, max: Option<usize>) -> Result<String, S
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     let t0 = std::time::Instant::now();
     let r = rt.block_on(async {
-        let p = llm.provider(shelf_server::llm::TASK_CLASSIFY).await?;
-        shelf_server::classify::run(cache_dir, &*p, &fields, &reader_filters(&home), max, |done, total| eprintln!("{done} / {total}")).await
+        let p = llm.provider(if cloud { shelf_server::llm::TASK_CARD_TITLES } else { shelf_server::llm::TASK_CLASSIFY }).await?;
+        shelf_server::classify::run(cache_dir, &*p, &fields, &reader_filters(&home), max, cloud, |done, total| eprintln!("{done} / {total}")).await
     });
     shelf_server::llm::quit();
     let r = r?;
