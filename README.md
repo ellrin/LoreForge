@@ -83,7 +83,7 @@ The point of LoreForge is how tightly the apps share data. Office keeps each doc
 <a id="l-brain"></a>
 <table><tr>
 <td width="120" align="center"><a href="L-Brain/" title="Open the L-Brain folder"><img src="L-Brain/apps/desktop/icons/logo.svg" alt="L-Brain source" width="96"></a></td>
-<td><h3>L-Brain</h3><b>Your own knowledge base: one card, one JSON file, and a record of whether you still remember it.</b><br><code>cd L-Brain && cargo run -p kb-server</code> → <code>http://127.0.0.1:7700</code></td>
+<td><h3>L-Brain</h3><b>Your own knowledge base: one card, one JSON file, and a record of whether you still remember it.</b><br><code>cd L-Brain && cargo run -p kb-server</code> → <code>http://127.0.0.1:7700</code><br><sub><a href="L-Brain/README.md">Full guide</a> · <a href="L-Brain/">Source</a> · <a href="private-example/KnowledgeBase/">Starter data</a> · <a href="commons/crates/kb-core/README.md">Core crate</a></sub></td>
 </tr></table>
 
 L-Brain exists to build a database that is specific to you. It is not a note dump: a card goes in only when you put it there, and each card carries your own learning state.
@@ -104,7 +104,7 @@ L-Brain exists to build a database that is specific to you. It is not a note dum
 <a id="l-reader"></a>
 <table><tr>
 <td width="120" align="center"><a href="L-Reader/" title="Open the L-Reader folder"><img src="L-Reader/apps/desktop/icons/logo.svg" alt="L-Reader source" width="96"></a></td>
-<td><h3>L-Reader</h3><b>A PDF reader for papers that shows you what you do not know yet.</b><br><code>cd L-Reader && cargo run -p lr-server</code> → <code>http://127.0.0.1:7890</code><br><sub><a href="L-Brain/README.md">Full guide</a> · <a href="L-Brain/">Source</a> · <a href="private-example/KnowledgeBase/">Starter data</a> · <a href="commons/crates/kb-core/README.md">Core crate</a></sub></td>
+<td><h3>L-Reader</h3><b>A PDF reader for papers that shows you what you do not know yet.</b><br><code>cd L-Reader && cargo run -p lr-server</code> → <code>http://127.0.0.1:7890</code><br><sub><a href="L-Reader/README.md">Full guide</a> · <a href="L-Reader/">Source</a> · <a href="private-example/LoreReader/">Starter data</a></sub></td>
 </tr></table>
 
 - **Knowledge marks.** Terms with no card in L-Brain are marked red; terms you have a card for show your familiarity.
@@ -142,14 +142,14 @@ L-Brain exists to build a database that is specific to you. It is not a note dum
 
 **Make it yours:** your notation registry, and the whole private workspace: `profile/` (sentence patterns, word choices, rules, example paragraphs), `style/` (your paragraph types and habits to avoid), `lens/` (what the drafting interview asks and when it has asked enough), `publishers/` (templates), `prompts/` (prompt overrides).
 
-**Limits:** early development. The page is a live preview drawn with KaTeX; the PDF you submit is still compiled by a TeX installation (MacTeX, or BasicTeX plus a few packages listed in [`L-Paper/README.md`](L-Paper/README.md)). Without a workspace it opens demo data.
+**Limits:** early development. The page is a live preview drawn with KaTeX; the PDF you submit is still compiled by a TeX installation (MacTeX, or BasicTeX plus a few packages listed in [the L-Paper guide](L-Paper/docs/guide.zh-TW.md)). Without a workspace it opens demo data.
 
 <br>
 
 <a id="l-slide"></a>
 <table><tr>
 <td width="120" align="center"><a href="L-Slide/" title="Open the L-Slide folder"><img src="L-Slide/apps/desktop/icons/logo.svg" alt="L-Slide source" width="96"></a></td>
-<td><h3>L-Slide</h3><b>A task-driven slide editor with lossless PowerPoint files.</b><br><code>cd L-Slide && cargo run -p sc-server</code> → <code>http://127.0.0.1:7880</code><br><sub><a href="L-Paper/README.md">Full guide</a> · <a href="L-Paper/">Source</a> · <a href="private-example/PaperComposer/">Starter data</a> · <a href="docs/long-paper.md">Long papers</a></sub></td>
+<td><h3>L-Slide</h3><b>A task-driven slide editor with lossless PowerPoint files.</b><br><code>cd L-Slide && cargo run -p sc-server</code> → <code>http://127.0.0.1:7880</code><br><sub><a href="L-Slide/README.md">Full guide</a> · <a href="L-Slide/">Source</a> · <a href="private-example/SlideComposer/">Starter data</a> · <a href="docs/paper-deck.md">Paper → deck</a></sub></td>
 </tr></table>
 
 - **Lossless PPTX.** Open a `.pptx` where it lives; edits are written back to the same file. Untouched slides stay byte-identical, untouched objects keep their original XML. The original is backed up once before the first overwrite.
@@ -168,7 +168,7 @@ L-Brain exists to build a database that is specific to you. It is not a note dum
 <a id="l-echo"></a>
 <table><tr>
 <td width="120" align="center"><a href="L-Echo/" title="Open the L-Echo folder"><img src="L-Echo/apps/desktop/icons/logo.svg" alt="L-Echo source" width="96"></a></td>
-<td><h3>L-Echo</h3><b>A study partner that sits in the corner of your desktop and knows what is in your knowledge base.</b><br><code>cd L-Echo && cargo run -p loreecho</code> (desktop bubble) · <code>cargo run -p le-server</code> → <code>http://127.0.0.1:7860</code><br><sub><a href="L-Slide/README.md">Full guide</a> · <a href="L-Slide/">Source</a> · <a href="private-example/SlideComposer/">Starter data</a> · <a href="docs/paper-deck.md">Paper → deck</a></sub></td>
+<td><h3>L-Echo</h3><b>A study partner that sits in the corner of your desktop and knows what is in your knowledge base.</b><br><code>cd L-Echo && cargo run -p loreecho</code> (desktop bubble) · <code>cargo run -p le-server</code> → <code>http://127.0.0.1:7860</code><br><sub><a href="L-Echo/README.md">Full guide</a> · <a href="L-Echo/">Source</a> · <a href="private-example/LoreEcho/">Starter data</a> · <a href="docs/loreecho.md">Design</a></sub></td>
 </tr></table>
 
 - **A bubble that opens into a scene.** A small round bubble; click it and it becomes a visual-novel style window with a full-body character and the conversation.
@@ -187,7 +187,7 @@ L-Brain exists to build a database that is specific to you. It is not a note dum
 <a id="l-shelf"></a>
 <table><tr>
 <td width="120" align="center"><a href="L-Shelf/" title="Open the L-Shelf folder"><img src="L-Shelf/apps/desktop/icons/logo.svg" alt="L-Shelf source" width="96"></a></td>
-<td><h3>L-Shelf</h3><b>A catalog of the files on your Mac that only reads, unless you confirm a move.</b><br><code>cd L-Shelf && cargo run -p shelf-server</code> → <code>http://127.0.0.1:7900</code> · <code>cargo run --release -p loreshelf-cli -- scan ~/Downloads</code><br><sub><a href="L-Echo/README.md">Full guide</a> · <a href="L-Echo/">Source</a> · <a href="private-example/LoreEcho/">Starter data</a> · <a href="docs/loreecho.md">Design</a></sub></td>
+<td><h3>L-Shelf</h3><b>A catalog of the files on your Mac that only reads, unless you confirm a move.</b><br><code>cd L-Shelf && cargo run -p shelf-server</code> → <code>http://127.0.0.1:7900</code> · <code>cargo run --release -p loreshelf-cli -- scan ~/Downloads</code><br><sub><a href="L-Shelf/README.md">Full guide</a> · <a href="L-Shelf/">Source</a> · <a href="docs/loreshelf.md">Design</a></sub></td>
 </tr></table>
 
 - **Identity by content.** Files are recognised by sha256, so the catalog knows every place a file appears, which copies are duplicates, and which files exist only once.
@@ -206,7 +206,7 @@ L-Brain exists to build a database that is specific to you. It is not a note dum
 <a id="l-deck"></a>
 <table><tr>
 <td width="120" align="center"><a href="L-Deck/" title="Open the L-Deck folder"><img src="L-Deck/Resources/logo.svg" alt="L-Deck source" width="96"></a></td>
-<td><h3>L-Deck</h3><b>Your macOS desktop as a canvas of widgets you write yourself.</b><br><code>cd L-Deck && ./build.sh install</code><br><sub><a href="L-Shelf/README.md">Full guide</a> · <a href="L-Shelf/">Source</a> · <a href="docs/loreshelf.md">Design</a></sub></td>
+<td><h3>L-Deck</h3><b>Your macOS desktop as a canvas of widgets you write yourself.</b><br><code>cd L-Deck && ./build.sh install</code><br><sub><a href="L-Deck/README.md">Full guide</a> · <a href="L-Deck/">Source</a> · <a href="L-Deck/desktop/widgets/">Widgets</a></sub></td>
 </tr></table>
 
 - **Widgets are JS files, themes are CSS files.** Save the file and the desktop updates; no rebuild.
@@ -372,7 +372,7 @@ A global `core.hooksPath` with a `commit-msg` hook still runs.
 | [`commons/`](commons/) | Shared crates: model routing (Claude API, Claude Code, local), git sync, private data locations, the knowledge-base core, notation registry, PPTX read and write, the canvas, plots and flow figures |
 | [`docs/`](docs/) | Design notes: the shared shell, local models, plots, flow figures, living equations, paper → deck, long papers, books |
 | [`private-example/`](private-example/) | The starter content each app opens with |
-| Each app's `README.md` | Full usage, data formats and API of that app (in Traditional Chinese) |
+| Each app's `README.md` | A short guide; the full one (繁體中文) is the app's `docs/guide.zh-TW.md` |
 
 The interface language of the apps is Traditional Chinese.
 
