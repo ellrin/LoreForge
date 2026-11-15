@@ -1,6 +1,6 @@
 # 本機模型共用（所有 Lore app 的共同規則）
 
-目的：同一台電腦上，所有 Lore app（PaperComposer、SlideComposer、LoreReader、KnowledgeBase、LoreEcho、之後的 app）
+目的：同一台電腦上，所有 Lore app（L-Paper、L-Slide、L-Reader、L-Brain、L-Echo、之後的 app）
 用本機模型時，**同一時間只載入一個模型、只佔一份記憶體**。
 
 做法：**不是**一個獨立的管家程式，而是 `lore-llm` 裡的一個模組（`shared_runtime`），每個 app 都內建、遵守同一套協定。
@@ -13,7 +13,7 @@
 | 內容 | 位置 | 分層 |
 |---|---|---|
 | 選的模型 id、閒置釋放分鐘數、走向 | `private/shared/engine.toml`（已有：`[engine] model`、`[local] idle_minutes`、`[route]`） | 工具設定（private） |
-| 這台電腦的模型資料夾 | `engine.toml` 的 `[local] home = "<路徑>"`（lore-home `local_home()`／`set_local_home()`）。PaperComposer 每次啟動、知道資料夾時寫入；從 Finder 開的 app 沒有 `LOCAL_LLM_HOME`，靠它找到模型與 llama.cpp，所以任何 app 都能啟動。解析順序：app 自己的設定 → 環境變數 `LOCAL_LLM_HOME` → `[local] home` → 錯誤。路徑只存在這台電腦的 `private/shared`，不進 repo，測試用暫存目錄 | 工具設定（private） |
+| 這台電腦的模型資料夾 | `engine.toml` 的 `[local] home = "<路徑>"`（lore-home `local_home()`／`set_local_home()`）。L-Paper 每次啟動、知道資料夾時寫入；從 Finder 開的 app 沒有 `LOCAL_LLM_HOME`，靠它找到模型與 llama.cpp，所以任何 app 都能啟動。解析順序：app 自己的設定 → 環境變數 `LOCAL_LLM_HOME` → `[local] home` → 錯誤。路徑只存在這台電腦的 `private/shared`，不進 repo，測試用暫存目錄 | 工具設定（private） |
 | 正在跑的 llama-server、誰在用、誰在等 | `<cache>/LoreForge/local-model.json`＋`local-model.lock`（`LOREFORGE_CACHE` 可改；和 `ports.json` 同一個資料夾） | 執行期（可刪的快取） |
 
 `engine.toml` 的 `[engine] url` 不再寫入（網址是執行期資料，不屬於 private）；舊檔裡有的照讀一次後忽略。
@@ -49,7 +49,7 @@
 **acquire(model, priority) → url**
 1. 鎖住、清理。
 2. 載入的就是這個模型而且活著 → 新增或更新自己的 lease，回傳 url。
-3. 沒有在跑 → 自己啟動 llama-server（加 `--alias <模型 id>`，`/v1/models` 回報 catalog id，檔案壞掉時用來補回），登記 `server`（`loading: true`），等 `/health` 回 200 再加 lease、回傳 url；等待期間不持有鎖。連 `[local] home` 都沒有的 app 只能用別人開好的 server，輪到它啟動時回報錯誤。啟動規則：`setsid`（脫離 app 的程序群組，app 結束它不會跟著死）；stdout/stderr 寫到 `<cache>/LoreForge/llama-server.log`（每次啟動清空）；執行檔和模型檔從共用的 `LOCAL_LLM_HOME` 位置（`Layout::shared`）找，所以**任何 app 都能啟動**。下載模型仍只在 PaperComposer。
+3. 沒有在跑 → 自己啟動 llama-server（加 `--alias <模型 id>`，`/v1/models` 回報 catalog id，檔案壞掉時用來補回），登記 `server`（`loading: true`），等 `/health` 回 200 再加 lease、回傳 url；等待期間不持有鎖。連 `[local] home` 都沒有的 app 只能用別人開好的 server，輪到它啟動時回報錯誤。啟動規則：`setsid`（脫離 app 的程序群組，app 結束它不會跟著死）；stdout/stderr 寫到 `<cache>/LoreForge/llama-server.log`（每次啟動清空）；執行檔和模型檔從共用的 `LOCAL_LLM_HOME` 位置（`Layout::shared`）找，所以**任何 app 都能啟動**。下載模型仍只在 L-Paper。
 4. 載入的是別的模型 → 加入 `wanting`，解鎖，等待（下一節）。
 
 **換模型（一次只留一個）**
@@ -79,8 +79,8 @@
 
 ## 5. 各 app 要改的地方
 
-- **PaperComposer**：不再擁有模型。拿掉 `LocalRuntime` 的擁有權、`on_phase` 發布網址、結束時的 `kill_runtime`、`models::start/stop` 的直接啟停；下載模型照舊（在 PaperComposer 的齒輪 → 模型）。「選擇本機模型」只寫 `engine.toml` 的 model id。
-- **SlideComposer、LoreReader、KnowledgeBase、LoreEcho**：本機請求一律經過 `acquire`，不再讀 `engine.toml` 的 url。
+- **L-Paper**：不再擁有模型。拿掉 `LocalRuntime` 的擁有權、`on_phase` 發布網址、結束時的 `kill_runtime`、`models::start/stop` 的直接啟停；下載模型照舊（在 L-Paper 的齒輪 → 模型）。「選擇本機模型」只寫 `engine.toml` 的 model id。
+- **L-Slide、L-Reader、L-Brain、L-Echo**：本機請求一律經過 `acquire`，不再讀 `engine.toml` 的 url。
 - **lore-engines（齒輪 → 模型）**：本機狀態從 `local-model.json` 讀（目前載入的模型、誰在用、誰在等）；「釋放」＝沒有其他 app 在用時才能按，否則顯示「X 正在用」。
 - **lore-modeld**：獨立程式與 `lore-llm` 的 `broker.rs` 退役；`sched.rs` 的優先順序與升級邏輯移進 `shared_runtime`。`docs/loreecho.md` §8、§9.4、§10 第 1 階段改成指向本文件，`commons/CLAUDE.md` 的 crate 清單更新。
 
@@ -90,8 +90,8 @@
 |---|---|
 | `LocalRuntime`（每個程序一個 llama-server） | 只剩「啟動／停止一個 llama-server」的工具函式，由 `shared_runtime` 呼叫 |
 | `LocalRuntime` 的閒置釋放、`watch_idle`、`release`（JR 加的） | 搬進 `shared_runtime`，任何 app 都會檢查 |
-| PaperComposer 的 `on_phase` 發布網址、`Home::engine()/set_engine` 寫 url | 移除；`engine.toml` 只存 model id（舊 url 讀一次後忽略） |
-| PaperComposer 的 `models::start/stop`、結束時 `kill_runtime` | start/stop 改呼叫 `shared_runtime`；結束時只刪自己的 lease（最後一個才停 server） |
+| L-Paper 的 `on_phase` 發布網址、`Home::engine()/set_engine` 寫 url | 移除；`engine.toml` 只存 model id（舊 url 讀一次後忽略） |
+| L-Paper 的 `models::start/stop`、結束時 `kill_runtime` | start/stop 改呼叫 `shared_runtime`；結束時只刪自己的 lease（最後一個才停 server） |
 | lore-engines `can_release`、`[local] idle_minutes` | `can_release` ＝沒有其他活著的 lease；idle 設定不變 |
 | `local:current` | ＝ `engine.toml` 選的共用預設模型 id，用到時 acquire |
 | lore-modeld、`broker.rs` | 退役 |
@@ -102,7 +102,7 @@
 - 清理後，每個 lease／wanting 的 pid 都還活著。
 - 有 `server` ⇒ `/health` 有回應，否則下次清理就刪掉。
 - 沒有任何 app 從 `private/` 讀模型網址。
-- 範圍：只管 llama-server 模型。LoreEcho 的語音是 Apple 內建的（系統聲音、個人聲音），不佔模型資料夾也不佔記憶體預算。
+- 範圍：只管 llama-server 模型。L-Echo 的語音是 Apple 內建的（系統聲音、個人聲音），不佔模型資料夾也不佔記憶體預算。
 
 ## 7a. 圖像工具（畫質提升）
 
@@ -114,7 +114,7 @@
 
 ## 8. 選 (a) 的代價（作者已接受）
 
-- PaperComposer 為某個任務載入另一個大模型時，LoreEcho 的對話會等它用完，或在它用完後才換回來。
+- L-Paper 為某個任務載入另一個大模型時，L-Echo 的對話會等它用完，或在它用完後才換回來。
 - 換模型需要時間（大模型可能幾十秒），所以等待畫面一定要有進度。
 
 ## 9. 測試

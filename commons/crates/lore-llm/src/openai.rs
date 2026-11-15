@@ -9,7 +9,7 @@
 //! - `temperature` / `top_p` from the request are sent when set (Claude
 //!   engines leave them out).
 //! - `zh_tw`: Chinese replies are rewritten in Taiwan usage (local models
-//!   write mainland vocabulary; PaperComposer `zhtw.rs`).
+//!   write mainland vocabulary; L-Paper `zhtw.rs`).
 //!
 //! Tested against mock servers only; real llama-server checks are `#[ignore]`
 //! tests (**not tested on real hardware** from this crate).
@@ -69,7 +69,7 @@ pub struct OpenAiCompat {
     cfg: OpenAiCompatConfig,
 }
 
-/// JELearner / PaperComposer names.
+/// JELearner / L-Paper names.
 pub type LlamaServer = OpenAiCompat;
 pub type LlamaServerConfig = OpenAiCompatConfig;
 

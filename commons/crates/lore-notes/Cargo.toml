@@ -2,7 +2,7 @@
 name = "lore-notes"
 version.workspace = true
 edition.workspace = true
-description = "PaperComposer notes (筆記 and 靈感): the .tex file format with its front matter, unique names, the trash, and the lore-notation check every write runs."
+description = "L-Paper notes (筆記 and 靈感): the .tex file format with its front matter, unique names, the trash, and the lore-notation check every write runs."
 
 [dependencies]
 serde.workspace = true

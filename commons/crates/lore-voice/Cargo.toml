@@ -9,7 +9,7 @@ links = "lore_voice"
 build = "build.rs"
 
 [features]
-# The shared /api/voice routes (axum), mounted by LoreEcho, PaperComposer and SlideComposer.
+# The shared /api/voice routes (axum), mounted by L-Echo, L-Paper and L-Slide.
 default = ["web"]
 web = ["dep:axum", "dep:futures-util", "tokio/rt"]
 

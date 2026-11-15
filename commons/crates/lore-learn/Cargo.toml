@@ -1,6 +1,6 @@
 [package]
 name = "lore-learn"
-description = "What the author knows and has read: a paper's terms against the KnowledgeBase (熟／不熟), card prerequisites, LoreReader's files read-only"
+description = "What the author knows and has read: a paper's terms against the L-Brain (熟／不熟), card prerequisites, L-Reader's files read-only"
 version.workspace = true
 edition.workspace = true
 publish = false

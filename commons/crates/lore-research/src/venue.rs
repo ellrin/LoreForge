@@ -1,5 +1,5 @@
 //! A journal's (or proceedings') own open-access articles, for learning how it writes
-//! (PaperComposer's 期刊寫法): find the venue as an OpenAlex *source*, then list its recent
+//! (L-Paper's 期刊寫法): find the venue as an OpenAlex *source*, then list its recent
 //! open-access articles with every location they are copied at (publisher, PubMed Central,
 //! arXiv, …) and each copy's own licence.
 //!

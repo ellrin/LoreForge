@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="160 110 704 870" width="704" height="870">
-  <!-- LoreEcho example character, thinking: the app icon's outline, no background -->
+  <!-- L-Echo example character, thinking: the app icon's outline, no background -->
   <g fill="none" stroke-linejoin="round" stroke-linecap="round">
     <g stroke="#12AFC0" stroke-width="16">
       <path d="M512 262 C646 262 722 330 724 440 L718 548 C714 616 680 668 628 704 L576 742 L448 742 L396 704 C344 668 310 616 306 548 L300 440 C302 330 378 262 512 262 Z"/>

@@ -28,7 +28,7 @@ pub struct PdfOptions {
     pub save: bool,
     pub poppler: Poppler,
     /// Read unnumbered headings set in a larger size (Springer journals) as sections. Off by
-    /// default: only callers that need the section structure (PaperComposer's 期刊寫法) turn it on.
+    /// default: only callers that need the section structure (L-Paper's 期刊寫法) turn it on.
     pub unnumbered_headings: bool,
 }
 

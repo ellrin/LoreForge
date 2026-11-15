@@ -1,17 +1,17 @@
-// 寫 review: the open paper → a review written for the author (PaperComposer's 寫書,
+// 寫 review: the open paper → a review written for the author (L-Paper's 寫書,
 // docs/book.md). The same kind of button and card as 做成簡報 (makedeck.js). Served as
 // `/makebook.js` by `lore_shell::FILES`; loaded after shell.js. An app mounts it once:
 //
 //   LoreMakeBook.mount({
 //     before: "#actAsk",                         // the top-bar button it sits before
-//     source: async () => ({ kind: "lr", sha }), // PaperComposer's /api/book source; null = no paper open
+//     source: async () => ({ kind: "lr", sha }), // L-Paper's /api/book source; null = no paper open
 //     key: "lr.tobook",                          // localStorage key for book / length / language
 //     extras: () => ({ terms: [{ term, n }], stuck: [paragraph id], questions: [text] }),  // optional
 //   });
 //
-// The card picks the book (新書 or one of PaperComposer's books), the length and the language;
-// 先看大綱 (primary) or 直接產生 asks PaperComposer (POST /api/book), then opens its job view
-// (LoreLinks.open("pc", { bookjob })). PaperComposer not running: it is opened and waited for.
+// The card picks the book (新書 or one of L-Paper's books), the length and the language;
+// 先看大綱 (primary) or 直接產生 asks L-Paper (POST /api/book), then opens its job view
+// (LoreLinks.open("pc", { bookjob })). L-Paper not running: it is opened and waited for.
 "use strict";
 
 window.LoreMakeBook = (() => {
@@ -114,7 +114,7 @@ window.LoreMakeBook = (() => {
     return s;
   }
 
-  /** PaperComposer answers: its port from the desktop apps' file, or the dev server's default. */
+  /** L-Paper answers: its port from the desktop apps' file, or the dev server's default. */
   async function alive() {
     await LoreLinks.refresh();
     try { return (await fetch(`${pc()}/api/info`, { cache: "no-store" })).ok; } catch { return false; }
@@ -130,10 +130,10 @@ window.LoreMakeBook = (() => {
       await new Promise((ok) => setTimeout(ok, 600));
       if (await alive()) return;
     }
-    throw Object.assign(new Error("PaperComposer 沒有開啟"), { open: true });
+    throw Object.assign(new Error("L-Paper 沒有開啟"), { open: true });
   }
 
-  /** PaperComposer's books: GET /api/books (a list or { books }), else /api/info's books. */
+  /** L-Paper's books: GET /api/books (a list or { books }), else /api/info's books. */
   async function books() {
     const list = (v) => (Array.isArray(v) ? v : Array.isArray(v?.books) ? v.books : null);
     try {
@@ -168,15 +168,15 @@ window.LoreMakeBook = (() => {
     place();
     let have;
     try {
-      await reach(() => { list.textContent = ""; list.append(h("span", { class: "tbk-note" }, "正在開啟 PaperComposer…")); place(); });
+      await reach(() => { list.textContent = ""; list.append(h("span", { class: "tbk-note" }, "正在開啟 L-Paper…")); place(); });
       have = await books();
     } catch {
       if (!card) return;
       list.textContent = "";
-      list.append(h("span", { class: "tbk-note" }, "PaperComposer 沒有開啟"));
+      list.append(h("span", { class: "tbk-note" }, "L-Paper 沒有開啟"));
       direct.remove();
       go.replaceWith(
-        h("button", { type: "button", class: "btn small", onclick: () => LoreLinks.open("pc") }, "開啟 PaperComposer"),
+        h("button", { type: "button", class: "btn small", onclick: () => LoreLinks.open("pc") }, "開啟 L-Paper"),
         h("button", { type: "button", class: "btn small primary", onclick: draw }, "重試"),
       );
       place();
@@ -194,7 +194,7 @@ window.LoreMakeBook = (() => {
     go.focus();
   }
 
-  /** What LoreReader knows about the author's reading of this paper; never blocks the request. */
+  /** What L-Reader knows about the author's reading of this paper; never blocks the request. */
   async function extras() {
     try {
       const x = await opts.extras?.();
@@ -216,19 +216,19 @@ window.LoreMakeBook = (() => {
       const source = await opts.source({});
       if (!source) throw new Error("先開一篇論文");
       const body = { source, book: pref.get("book", "new"), length: pref.get("length", "standard"), lang: pref.get("lang", "en-zh"), mode, extras: await extras() };
-      await reach(() => { job.note = "正在開啟 PaperComposer…"; draw(); });
+      await reach(() => { job.note = "正在開啟 L-Paper…"; draw(); });
       let r;
       try {
         r = await fetch(`${pc()}/api/book`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      } catch { throw Object.assign(new Error("PaperComposer 沒有開啟"), { open: true }); }
+      } catch { throw Object.assign(new Error("L-Paper 沒有開啟"), { open: true }); }
       const v = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(v.error ?? `PaperComposer：${r.status}`);
-      if (!v.job) throw new Error("PaperComposer 沒有回傳工作");
+      if (!r.ok) throw new Error(v.error ?? `L-Paper：${r.status}`);
+      if (!v.job) throw new Error("L-Paper 沒有回傳工作");
       close();
       LoreLinks.open("pc", { bookjob: v.job });
-      LoreShell.toast("在 PaperComposer 進行中", { action: { label: "前往", run: () => LoreLinks.open("pc", { bookjob: v.job }) }, ms: 8000 });
+      LoreShell.toast("在 L-Paper 進行中", { action: { label: "前往", run: () => LoreLinks.open("pc", { bookjob: v.job }) }, ms: 8000 });
     } catch (e) {
-      const action = e.open ? { label: "開啟 PaperComposer", run: () => LoreLinks.open("pc") } : null;
+      const action = e.open ? { label: "開啟 L-Paper", run: () => LoreLinks.open("pc") } : null;
       LoreShell.toast(e.message, { err: true, action, ms: 9000 });
     } finally {
       job = null;

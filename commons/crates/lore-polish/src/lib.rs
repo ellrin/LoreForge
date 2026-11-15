@@ -33,7 +33,7 @@ pub fn task_table() -> TaskTable {
     TaskTable::parse(include_str!("../tasks.toml")).expect("lore-polish tasks.toml parses")
 }
 
-/// A named rewrite the app offers next to the free instruction (PaperComposer: 「用字」,
+/// A named rewrite the app offers next to the free instruction (L-Paper: 「用字」,
 /// 「我的風格」). The page shows `label`; the model gets `instruction` and the app's
 /// [`Host::preset_block`] for the passage.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -51,14 +51,14 @@ pub struct PresetPassage<'a> {
     pub text: &'a str,
     pub prefix: &'a str,
     pub suffix: &'a str,
-    /// Where it sits, in the app's words (PaperComposer: the section title).
+    /// Where it sits, in the app's words (L-Paper: the section title).
     pub scope: &'a str,
 }
 
 /// What an app knows about one document.
 #[derive(Debug, Clone, Default)]
 pub struct Doc {
-    /// The proposal log (PaperComposer `draft/polish.jsonl`, SlideComposer `polish-log.jsonl`).
+    /// The proposal log (L-Paper `draft/polish.jsonl`, L-Slide `polish-log.jsonl`).
     pub log: PathBuf,
     /// Registered macro names (locked like citations).
     pub macros: Vec<String>,
@@ -66,7 +66,7 @@ pub struct Doc {
     pub language: String,
     /// The author's phrases most useful for this passage (bounded by the app).
     pub phrases: Vec<String>,
-    /// A ready block about the author's tone (SlideComposer: lines from his own decks).
+    /// A ready block about the author's tone (L-Slide: lines from his own decks).
     pub tone: String,
     /// The author's style rules for the rewrite (free text, bounded by the app; empty: none).
     pub style: String,
@@ -85,12 +85,12 @@ pub trait Host: Send + Sync + 'static {
     /// engine choice, in the app's own words.
     async fn complete(&self, req: LlmRequest, engine: Option<&str>) -> Result<(serde_json::Value, String), String>;
     /// New problems the app's own checks find once the rewrite is in place (`before` /
-    /// `after` = the whole paragraph). PaperComposer: lore-notation's `check_document`.
+    /// `after` = the whole paragraph). L-Paper: lore-notation's `check_document`.
     async fn check(&self, _doc: &str, _before: &str, _after: &str) -> Vec<String> {
         vec![]
     }
     /// Is the document LaTeX? Then Unicode a model writes (≤, −, ⁺, α…) comes back as LaTeX
-    /// (`lore_notation::unicode::to_latex`), so a draft PDF never stops on it. SlideComposer: no.
+    /// (`lore_notation::unicode::to_latex`), so a draft PDF never stops on it. L-Slide: no.
     fn latex(&self) -> bool {
         false
     }
@@ -139,7 +139,7 @@ pub struct ProposeBody {
     /// The conversation's passage id (from an earlier answer); found from `text` when missing.
     pub passage: Option<String>,
     pub engine: Option<String>,
-    /// More literal strings to keep locked (SlideComposer: a line break).
+    /// More literal strings to keep locked (L-Slide: a line break).
     pub keep: Vec<String>,
     /// One of the app's [`Preset`] ids; the free `instruction` may then be empty.
     pub preset: Option<String>,

@@ -9,10 +9,10 @@ private-example/              （公開，在 LoreForge repo 裡）
     fonts.toml                介面字型、簡報字型的代替規則（授權字型寫在 private）
     deny-words.txt            commit 前要擋的私人字詞
     docs/                     私人筆記、設計文件
-  KnowledgeBase/              知識庫的空白 space
-  SlideComposer/              簡報：styles/、decks/
-  LoreEcho/                   學習夥伴：一個範本人物（characters/echo/）
-  PaperComposer/              論文：profile/、papers/、publishers/、prompts/
+  L-Brain/              知識庫的空白 space
+  L-Slide/              簡報：styles/、decks/
+  L-Echo/                   學習夥伴：一個範本人物（characters/echo/）
+  L-Paper/              論文：profile/、papers/、publishers/、prompts/
 ```
 
 ## 怎麼用
@@ -43,4 +43,4 @@ let notes = home.shared_file("my-app.toml"); // 任何共用設定檔：private 
 
 ## 這裡絕對不放
 
-金鑰、密碼、token（在系統鑰匙圈）、地端模型（在 `LOCAL_LLM_HOME`）、真實的論文、簡報、知識卡、個人字詞。詳見根目錄 README 的「金鑰與模型放在哪裡」。
+金鑰、密碼、token（在系統鑰匙圈）、地端模型（在 `LOCAL_LLM_HOME`）、真實的論文、簡報、知識卡、個人字詞。詳見根目錄 README 的「Keys and models」。

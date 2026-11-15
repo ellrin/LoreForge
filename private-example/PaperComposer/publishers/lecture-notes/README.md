@@ -1,6 +1,6 @@
 # Lecture notes
 
-PaperComposer 寫書的模板（`template.toml` 的 `kind = "book"`；不會出現在新論文的版型裡）。
+L-Paper 寫書的模板（`template.toml` 的 `kind = "book"`；不會出現在新論文的版型裡）。
 `lorenotes.sty` 是 LoreForge 自己寫的，用 XeLaTeX 編譯，只用 BasicTeX 就有的套件。
 
 書的版面：雙面（內外邊界對稱）、邊註在外側、左頁頁首書名、右頁頁首章名、頁碼在外側、標題頁單獨在第 1 頁、摘要在它的背面、每章（`\section`）從右頁開始。

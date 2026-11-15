@@ -1,4 +1,4 @@
-//! lore-catalog — a read-only file catalog (LoreShelf wave 1).
+//! lore-catalog — a read-only file catalog (L-Shelf wave 1).
 //!
 //! Walks folders the author names and records every file by its content
 //! (sha256): names and paths it was seen at, time axes with their sources

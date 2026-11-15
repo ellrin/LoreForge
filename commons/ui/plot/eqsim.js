@@ -964,7 +964,7 @@
   }
 
   /**
-   * 動起來 from a LaTeX equation (LoreReader's ✦, KnowledgeBase's card equations): a composite loss or a distribution
+   * 動起來 from a LaTeX equation (L-Reader's ✦, L-Brain's card equations): a composite loss or a distribution
    * objective first offers its simulation scenes next to `anchor` (曲線 = the curve path); the curve path asks the model
    * (`equation-plot`, when `propose`) and opens the editor — on the catalogue with the LaTeX when there is no answer.
    * `notation`: lore-notation entries whose colour roles the figure takes.

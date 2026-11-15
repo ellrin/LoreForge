@@ -1,7 +1,7 @@
 # lore-voice
 
 Listening (speech → text) and speaking (text → speech) for LoreForge apps, behind one small
-interface. First user: LoreEcho (`docs/loreecho.md` §7).
+interface. First user: L-Echo (`docs/loreecho.md` §7).
 
 | | macOS | tests | elsewhere |
 |---|---|---|---|
@@ -43,11 +43,11 @@ interface. First user: LoreEcho (`docs/loreecho.md` §7).
 
 ## Routes (feature `web`, on by default)
 
-`web::router(voice, defaults)` = the `/api/voice*` routes every app mounts (LoreEcho, PaperComposer,
-SlideComposer): `GET /api/voice` (`{available, engine | why, listening, speaking}`), `/voices`, `/events` (SSE:
+`web::router(voice, defaults)` = the `/api/voice*` routes every app mounts (L-Echo, L-Paper,
+L-Slide): `GET /api/voice` (`{available, engine | why, listening, speaking}`), `/voices`, `/events` (SSE:
 `hello`, then one event per `Event`), `POST /listen` (`{continuous?, language?}`), `/listen/stop`, `/speak`
 (`{text, voice?, rate?, pitch?, character?}`), `/stop`, `/open-settings`, `/warm`, `GET/POST /personal`.
-`web::Defaults::template(who)` = how `who` speaks and the language to listen in (LoreEcho: its characters; a
+`web::Defaults::template(who)` = how `who` speaks and the language to listen in (L-Echo: its characters; a
 `SpeakRequest` is a fixed default). `web::settings_url(what)`.
 
 ## The helper
@@ -75,7 +75,7 @@ Accessibility → Personal Voice); `sort_voices` puts them first. `Voice::person
 `PersonalVoice::{NotDetermined, Denied, Unsupported, Authorized}`; `ask` shows the system's prompt
 (`requestPersonalVoiceAuthorization`) only when it was never asked. The system lists Personal
 Voices only to an authorized process; the authorization belongs to the app the helper runs in
-(LoreEcho.app when bundled; a terminal when run from one). The SDK header names no Info.plist key
+(L-Echo.app when bundled; a terminal when run from one). The SDK header names no Info.plist key
 for it. **Not tested on real hardware** (prompt, speaking with it).
 
 Measured on an M6 32 GB Mac (`check_mac`): the best zh-TW voice (Meijia, compact) makes a

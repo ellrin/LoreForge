@@ -1,0 +1,37 @@
+# L-Slide's own LLM tasks, in lore-llm's tasks.toml format, merged with lore-flow's
+# (sc-flow-graph) and lore-llm's shared table (sc-crop-modules) in `engines()` / `llm.rs`.
+#
+#   claude:selected   the Claude model chosen in 設定 → 模型 (subscription first, then the API key)
+#   local:current     the local engine that is connected (private/shared/engine.toml [engine])
+#
+# The class decides the order when the shared route is `auto` (create: Claude, then local).
+
+[task.sc-paper-deck]
+label = "論文做成簡報"
+class = "create"
+needs = { json = true, context = 32000 }
+default = "claude:selected"
+fallback = "local:current"
+offline = true
+max_tokens = 12000
+
+# An equation L-Reader could not read from the PDF's text: a vision engine reads its crop
+# (todeck/eqread.rs); a reading that does not typeset is shown as the crop instead.
+[task.sc-read-equation]
+label = "從截圖讀出方程式"
+class = "tidy"
+needs = { vision = true, json = true }
+default = "claude:selected"
+fallback = "local:current"
+max_tokens = 2000
+
+# 微調's 建議: right after the outline, a few concrete edits with a one-line reason each
+# (todeck/suggest.rs). Best-effort: the review window simply shows none when this cannot run.
+[task.sc-outline-review]
+label = "大綱建議"
+class = "create"
+needs = { json = true, context = 16000 }
+default = "claude:selected"
+fallback = "local:current"
+offline = true
+max_tokens = 2000

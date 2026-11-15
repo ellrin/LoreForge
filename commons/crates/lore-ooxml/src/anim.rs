@@ -1,4 +1,4 @@
-//! The five entrance animations SlideComposer supports (appear, fade, fly in,
+//! The five entrance animations L-Slide supports (appear, fade, fly in,
 //! wipe, zoom), written as `p:timing` the way PowerPoint writes them:
 //! tmRoot → mainSeq → one click group per `OnClick` step → effect `p:par`
 //! (presetClass="entr") → `p:set style.visibility` + effect behaviours, with a

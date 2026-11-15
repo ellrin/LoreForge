@@ -1,16 +1,16 @@
-// 做成簡報: the open paper as a paper-report deck in SlideComposer, in one action — the same
-// button and card in every app that has papers (PaperComposer, LoreReader). Served as
+// 做成簡報: the open paper as a paper-report deck in L-Slide, in one action — the same
+// button and card in every app that has papers (L-Paper, L-Reader). Served as
 // `/makedeck.js` by `lore_shell::FILES`; loaded after shell.js. An app mounts it once:
 //
 //   LoreMakeDeck.mount({
 //     before: "#actAsk",                   // the top-bar button it sits before (the AI button)
-//     source: async () => ({ kind: "lr", sha }),   // SlideComposer's /api/todeck source; null = no paper open
+//     source: async () => ({ kind: "lr", sha }),   // L-Slide's /api/todeck source; null = no paper open
 //     key: "lr.todeck",                    // localStorage key for length / language / base
 //   });
 //
-// The card picks the length, the language and SlideComposer's base; 先看大綱 (primary) or
-// 直接產生 asks SlideComposer (POST /api/todeck) to make the deck — the paper is only read —
-// then opens SlideComposer's job view. SlideComposer not running: it is opened and waited for.
+// The card picks the length, the language and L-Slide's base; 先看大綱 (primary) or
+// 直接產生 asks L-Slide (POST /api/todeck) to make the deck — the paper is only read —
+// then opens L-Slide's job view. L-Slide not running: it is opened and waited for.
 "use strict";
 
 window.LoreMakeDeck = (() => {
@@ -115,7 +115,7 @@ window.LoreMakeDeck = (() => {
     return s;
   }
 
-  /** SlideComposer answers: its port from the desktop apps' file, or the dev server's default. */
+  /** L-Slide answers: its port from the desktop apps' file, or the dev server's default. */
   async function alive() {
     await LoreLinks.refresh();
     try { return (await fetch(`${sc()}/api/info`, { cache: "no-store" })).ok; } catch { return false; }
@@ -131,7 +131,7 @@ window.LoreMakeDeck = (() => {
       await new Promise((ok) => setTimeout(ok, 600));
       if (await alive()) return;
     }
-    throw Object.assign(new Error("SlideComposer 沒有開啟"), { open: true });
+    throw Object.assign(new Error("L-Slide 沒有開啟"), { open: true });
   }
 
   async function bases() {
@@ -163,15 +163,15 @@ window.LoreMakeDeck = (() => {
     place();
     let styles;
     try {
-      await reach(() => { list.textContent = ""; list.append(h("span", { class: "tdk-note" }, "正在開啟 SlideComposer…")); place(); });
+      await reach(() => { list.textContent = ""; list.append(h("span", { class: "tdk-note" }, "正在開啟 L-Slide…")); place(); });
       styles = await bases();
     } catch {
       if (!card) return;
       list.textContent = "";
-      list.append(h("span", { class: "tdk-note" }, "SlideComposer 沒有開啟"));
+      list.append(h("span", { class: "tdk-note" }, "L-Slide 沒有開啟"));
       direct.remove();
       go.replaceWith(
-        h("button", { type: "button", class: "btn small", onclick: () => LoreLinks.open("sc") }, "開啟 SlideComposer"),
+        h("button", { type: "button", class: "btn small", onclick: () => LoreLinks.open("sc") }, "開啟 L-Slide"),
         h("button", { type: "button", class: "btn small primary", onclick: draw }, "重試"),
       );
       place();
@@ -192,7 +192,7 @@ window.LoreMakeDeck = (() => {
     go.focus();
   }
 
-  /** Ask SlideComposer for the deck; `engine` = 改用本機／改用 Claude after a route failed. */
+  /** Ask L-Slide for the deck; `engine` = 改用本機／改用 Claude after a route failed. */
   async function create(engine, mode = "review") {
     if (job) return;
     job = {};
@@ -202,24 +202,24 @@ window.LoreMakeDeck = (() => {
       const source = await opts.source({});
       if (!source) throw new Error("先開一篇論文");
       const body = { source, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), style: pref.get("style"), engine, mode };
-      await reach(() => { job.note = "正在開啟 SlideComposer…"; draw(); });
+      await reach(() => { job.note = "正在開啟 L-Slide…"; draw(); });
       let r;
       try {
         r = await fetch(`${sc()}/api/todeck`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      } catch { throw Object.assign(new Error("SlideComposer 沒有開啟"), { open: true }); }
+      } catch { throw Object.assign(new Error("L-Slide 沒有開啟"), { open: true }); }
       const v = await r.json().catch(() => ({}));
-      if (!r.ok) throw Object.assign(new Error(v.error ?? `SlideComposer：${r.status}`), { alt: v.alternative });
+      if (!r.ok) throw Object.assign(new Error(v.error ?? `L-Slide：${r.status}`), { alt: v.alternative });
       close();
       if (v.job) {
-        // the work runs in SlideComposer as a job; its progress view opens there
+        // the work runs in L-Slide as a job; its progress view opens there
         LoreLinks.open("sc", { job: v.job });
-        LoreShell.toast("在 SlideComposer 進行中", { action: { label: "前往", run: () => LoreLinks.open("sc", { job: v.job }) }, ms: 8000 });
+        LoreShell.toast("在 L-Slide 進行中", { action: { label: "前往", run: () => LoreLinks.open("sc", { job: v.job }) }, ms: 8000 });
         return;
       }
       LoreShell.toast(`簡報已建立（${v.slides} 頁）`, { action: { label: "開啟", run: () => LoreLinks.open("sc", { deck: v.name }) }, ms: 8000 });
       LoreLinks.open("sc", { deck: v.name });
     } catch (e) {
-      const action = e.alt ? { label: e.alt.label, run: () => create(e.alt.engine, mode) } : e.open ? { label: "開啟 SlideComposer", run: () => LoreLinks.open("sc") } : null;
+      const action = e.alt ? { label: e.alt.label, run: () => create(e.alt.engine, mode) } : e.open ? { label: "開啟 L-Slide", run: () => LoreLinks.open("sc") } : null;
       LoreShell.toast(e.message, { err: true, action, ms: 9000 });
     } finally {
       job = null;

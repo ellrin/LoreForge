@@ -301,7 +301,7 @@ pub fn human(b: u64) -> String {
 pub fn markdown(r: &Report) -> String {
     use std::fmt::Write;
     let mut s = String::new();
-    let _ = writeln!(s, "# LoreShelf 掃描報告\n");
+    let _ = writeln!(s, "# L-Shelf 掃描報告\n");
     let _ = writeln!(s, "- 時間：{} → {}", r.started_at, r.finished_at);
     for root in &r.roots {
         let _ = writeln!(s, "- 掃描：`{root}`");

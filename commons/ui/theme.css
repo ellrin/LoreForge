@@ -1,5 +1,5 @@
-/* LoreForge colour themes, shared by every app (PaperComposer, SlideComposer,
-   LoreReader, KnowledgeBase). Each server sends this file as /theme.css and
+/* LoreForge colour themes, shared by every app (L-Paper, L-Slide,
+   L-Reader, L-Brain). Each server sends this file as /theme.css and
    theme.js as /theme.js; the choice itself is one shared setting
    (lore-home: private/shared/ui.toml), so every app shows the same theme.
    The palettes are JELearner's (its web/themes.css).

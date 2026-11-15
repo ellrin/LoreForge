@@ -32,7 +32,7 @@
 #   [override]
 #   kb-summarize-card = "claude:haiku"
 
-# ── KnowledgeBase ──────────────────────────────────────────
+# ── L-Brain ──────────────────────────────────────────
 
 [task.kb-summarize-card]
 label = "整理成知識卡"
@@ -50,7 +50,7 @@ default = "local:qwen3.5-9b-q8"
 fallback = "claude:haiku"
 offline = true
 
-# ── SlideComposer ──────────────────────────────────────────
+# ── L-Slide ──────────────────────────────────────────
 
 [task.sc-slide-content]
 label = "逐頁生成投影片內容"
@@ -76,7 +76,7 @@ needs = { web = true }
 default = "claude:sonnet"
 offline = false
 
-# ── PaperComposer ──────────────────────────────────────────
+# ── L-Paper ──────────────────────────────────────────
 
 [task.pc-compose-paragraph]
 label = "撰寫段落"

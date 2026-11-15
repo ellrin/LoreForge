@@ -295,7 +295,7 @@ impl Slide {
     }
 }
 
-/// Entrance animation (the five SlideComposer supports).
+/// Entrance animation (the five L-Slide supports).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Anim {
     pub obj: u32,

@@ -1,5 +1,5 @@
 //! lore-words — the word-frequency filter for domain terms, shared by the apps that pick
-//! a paper's terms (LoreReader's noun list, SlideComposer's 「不熟」 marks).
+//! a paper's terms (L-Reader's noun list, L-Slide's 「不熟」 marks).
 //!
 //! * [`Filters`]: function words (`function_words.txt`), general academic words
 //!   (`academic_words.txt`), everyday English (`common_words.txt`, except [`TERMLIKE`]
@@ -9,7 +9,7 @@
 //! * Normalisers: [`word_key`] / [`phrase_key`] (case, plurals, British/American
 //!   spelling, ligatures, possessives, acronym plurals), [`is_acronym`].
 //!
-//! The lists and rules are the ones LoreReader's `nouns.rs` uses (copied from it; it can
+//! The lists and rules are the ones L-Reader's `nouns.rs` uses (copied from it; it can
 //! switch to this crate).
 
 use std::collections::HashSet;

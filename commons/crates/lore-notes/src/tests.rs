@@ -137,7 +137,7 @@ fn lore_notation_blocks() {
     assert!(notes.list().is_empty(), "nothing written");
 
     // a \ref to a label the registry knows is fine, a registered macro is used as is;
-    // a label nobody defines blocks (PaperComposer's rule for written text)
+    // a label nobody defines blocks (L-Paper's rule for written text)
     let ok = notes.create_at(new("Fine", "By \\eqref{eq:loss}, \\(\\vw\\) shrinks. A 100\\% \\{ok\\} rate."), &reg, t).unwrap();
     assert!(!ok.findings.iter().any(|f| f.blocking), "{:?}", ok.findings);
     assert!(!ok.findings.iter().any(|f| f.subject.as_deref() == Some("eq:loss")));

@@ -2,7 +2,7 @@
 name = "lore-catalog"
 version.workspace = true
 edition.workspace = true
-description = "Read-only file catalog for LoreShelf: content hashes (sha256, incremental cache), project folders as one unit, time axes with their sources (fs, download xattrs, PDF / OOXML dates), per-content records, duplicate and coverage reports, local-only catalog guard."
+description = "Read-only file catalog for L-Shelf: content hashes (sha256, incremental cache), project folders as one unit, time axes with their sources (fs, download xattrs, PDF / OOXML dates), per-content records, duplicate and coverage reports, local-only catalog guard."
 
 [dependencies]
 serde.workspace = true

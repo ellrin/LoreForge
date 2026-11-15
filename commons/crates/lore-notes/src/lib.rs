@@ -1,7 +1,7 @@
-//! PaperComposer notes (筆記) and ideas (靈感): one LaTeX file per note in
-//! `<PaperComposer workspace>/notes/`, a `% ---` front matter block on top.
-//! PaperComposer serves them (`/api/notes`); LoreEcho writes the same files
-//! through this crate when PaperComposer is closed. Every write runs the
+//! L-Paper notes (筆記) and ideas (靈感): one LaTeX file per note in
+//! `<L-Paper workspace>/notes/`, a `% ---` front matter block on top.
+//! L-Paper serves them (`/api/notes`); L-Echo writes the same files
+//! through this crate when L-Paper is closed. Every write runs the
 //! lore-notation checks first and refuses to save on a blocking finding.
 //! See the README for the format and the blocking rule.
 
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Findings that stop a save: PaperComposer's own blocking pair for written
+/// Findings that stop a save: L-Paper's own blocking pair for written
 /// text (`hardcoded_reference`, `ref_undefined`) plus what breaks a fragment.
 /// A `\ref{…}` is defined when the note or the registry has the label.
 pub const BLOCKING: &[&str] = &["hardcoded_reference", "ref_undefined", "label_duplicate", "registry_invalid", "note_structure"];
@@ -58,7 +58,7 @@ pub struct Note {
     pub created: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated: Option<String>,
-    /// Related KnowledgeBase card ids.
+    /// Related L-Brain card ids.
     #[serde(default)]
     pub kb: Vec<String>,
     #[serde(default)]
@@ -403,7 +403,7 @@ pub fn is_blocked(findings: &[Finding]) -> bool {
 
 // ── the folder ───────────────────────────────────────────
 
-/// The notes folder (`<PaperComposer workspace>/notes`). Created on the first write.
+/// The notes folder (`<L-Paper workspace>/notes`). Created on the first write.
 #[derive(Debug, Clone)]
 pub struct Notes {
     dir: PathBuf,
@@ -521,7 +521,7 @@ impl Notes {
             body,
             modified: 0,
         };
-        // another writer (LoreEcho, PaperComposer) may take the free name first: try the next
+        // another writer (L-Echo, L-Paper) may take the free name first: try the next
         for _ in 0..100 {
             let path = unique_path(&self.dir, &stem);
             let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();

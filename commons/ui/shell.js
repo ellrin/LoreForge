@@ -4,7 +4,7 @@
 //
 //   const shell = LoreShell.mount({
 //     app: "sc",                                  // pc | sc | lr | kb
-//     brand: "SLIDE/COMPOSER",                    // the slash is drawn in the accent
+//     brand: "L/SLIDE",                           // the slash is drawn in the accent
 //     home: () => goHome(),                       // brand click, 首頁 in the picker
 //     picker: { icon: "cards", name: "", recent: async () => [{ label, current, run }],
 //               actions: [{ icon: "folder", label: "開啟…", run }, …] },

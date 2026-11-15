@@ -1,6 +1,6 @@
 # lore-catalog
 
-LoreShelf's read-only file catalog (design draft `docs/loreshelf.md` §1–3, wave 1). Knows
+L-Shelf's read-only file catalog (design draft `docs/loreshelf.md` §1–3, wave 1). Knows
 nothing about any app.
 
 ```toml
@@ -116,7 +116,7 @@ cargo test -p lore-catalog   # temp dirs, synthetic PDFs / pptx / git dirs / xat
   files; capped at `MAX_PARTS` / `MAX_CHARS`, never panics); `fill(catalog, cache, progress)` reads
   every catalogued file not read yet into `<cache>/fulltext/<sha>.json` and writes `.stamp`.
 - `terms`: `build(fulltext_dir, sources, known, ignore, filters)` → `Pool` (`<cache>/terms.json`):
-  Latin words, acronyms and two-word phrases the KnowledgeBase's titles and aliases lack, with
+  Latin words, acronyms and two-word phrases the L-Brain's titles and aliases lack, with
   files, counts, up to three example sentences (`cloud_ok` per sentence), the known cards they sit
   next to (2+ shared parts and `NEAR_LIFT` × more than chance) and those cards' domains. Names
   (capitalised away from a sentence start), ligature-broken words (`Filters::ligature_losses`),

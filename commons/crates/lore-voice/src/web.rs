@@ -1,5 +1,5 @@
 //! The voice routes every app mounts (feature `web`): listening and speaking over HTTP, the
-//! same paths and bodies in LoreEcho, PaperComposer and SlideComposer.
+//! same paths and bodies in L-Echo, L-Paper and L-Slide.
 //!
 //! | method | path | what |
 //! |---|---|---|
@@ -14,7 +14,7 @@
 //! | POST | /api/voice/warm | `{ character? }`: load that voice now, silently |
 //! | GET/POST | /api/voice/personal | Personal Voice: `{ status, voices }`; POST = ask (the system's prompt only when never asked) |
 //!
-//! What the app decides is [`Defaults`]: how someone speaks (`character` in a body; LoreEcho's
+//! What the app decides is [`Defaults`]: how someone speaks (`character` in a body; L-Echo's
 //! characters) and the language to listen in. A [`SpeakRequest`] is itself a fixed default.
 
 use std::convert::Infallible;
@@ -36,7 +36,7 @@ pub trait Defaults: Send + Sync + 'static {
     fn template(&self, who: Option<&str>) -> SpeakRequest;
 }
 
-/// One way of speaking for everyone (PaperComposer, SlideComposer).
+/// One way of speaking for everyone (L-Paper, L-Slide).
 impl Defaults for SpeakRequest {
     fn template(&self, _who: Option<&str>) -> SpeakRequest {
         self.clone()

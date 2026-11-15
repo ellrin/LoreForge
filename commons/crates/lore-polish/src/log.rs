@@ -1,5 +1,5 @@
-//! Every proposal is one JSON line (PaperComposer: the paper's `draft/polish.jsonl`;
-//! SlideComposer: `decks/<name>/polish-log.jsonl`). A line changes only when it is applied or
+//! Every proposal is one JSON line (L-Paper: the paper's `draft/polish.jsonl`;
+//! L-Slide: `decks/<name>/polish-log.jsonl`). A line changes only when it is applied or
 //! liked (the file is rewritten atomically); nothing is ever removed.
 
 use std::path::Path;

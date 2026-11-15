@@ -351,7 +351,7 @@ pub fn pdf(tools: &Tools, svg_doc: &str, w_mm: f64, h_mm: f64) -> Result<Vec<u8>
 /// The figure's SVG without a page open: headless Chrome runs `LorePlot.render` (the same
 /// `plot.js` the editor uses, from [`assets::FILES`]) on `spec_json` with `styles` (what
 /// `GET /plot/api/styles` answers as `styles`) and the DOM is read back. For jobs on the server
-/// (PaperComposer's 寫書) that make figures with no editor open.
+/// (L-Paper's 寫書) that make figures with no editor open.
 pub fn render_spec(tools: &Tools, spec_json: &str, styles: &serde_json::Value) -> Result<String, ExportError> {
     serde_json::from_str::<serde_json::Value>(spec_json).map_err(|e| ExportError::Failed(format!("規格不是 JSON：{e}")))?;
     let out = run_page(tools, &format!("(async()=>{{const r=await LorePlot.render({spec_json},{{styles:__S,macros:__M}});return r.svg;}})()"), styles, &serde_json::json!({}))?;

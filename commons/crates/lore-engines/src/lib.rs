@@ -61,7 +61,7 @@ pub struct Engines {
     pub layout: Option<Layout>,
     /// The app's own `[engine] url` (wins over the shared one, as in the app's routing).
     pub external: Option<(String, Option<String>)>,
-    /// List abliterated models (PaperComposer yes, household apps no).
+    /// List abliterated models (L-Paper yes, household apps no).
     pub include_uncensored: bool,
     pub cli: Cli,
     pub cc: Arc<Cache>,
@@ -119,7 +119,7 @@ impl Engines {
         self
     }
 
-    /// The app's own model folders (PaperComposer before `LOCAL_LLM_HOME`).
+    /// The app's own model folders (L-Paper before `LOCAL_LLM_HOME`).
     pub fn layout(mut self, layout: Layout) -> Self {
         self.layout = Some(layout);
         self
@@ -150,7 +150,7 @@ impl Engines {
         self
     }
 
-    /// More tasks to list (SlideComposer: lore-flow's).
+    /// More tasks to list (L-Slide: lore-flow's).
     pub fn with_tasks(mut self, more: TaskTable) -> Self {
         self.tasks = std::mem::take(&mut self.tasks).merge(more);
         self

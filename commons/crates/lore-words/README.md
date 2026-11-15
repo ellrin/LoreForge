@@ -9,6 +9,6 @@ never count as terms.
 - `word_key`, `phrase_key`: grouping keys (case, plurals, British/American spelling,
   ligatures, possessives, `SBLs` → `sbl`; hyphens count as spaces). `is_acronym`, `is_hyphen`.
 
-The lists and rules are LoreReader's (`lr-core::nouns`), copied here so other apps
-(SlideComposer's 「不熟」 marks) use the same filter; LoreReader can switch to this crate.
+The lists and rules are L-Reader's (`lr-core::nouns`), copied here so other apps
+(L-Slide's 「不熟」 marks) use the same filter; L-Reader can switch to this crate.
 SCOWL licence: `src/english_words.LICENSE`.

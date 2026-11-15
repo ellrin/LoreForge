@@ -1,5 +1,5 @@
 //! Local models in the shared folder and the llama-server lifecycle
-//! (JELearner `local_llm.rs` + PaperComposer `models.rs`).
+//! (JELearner `local_llm.rs` + L-Paper `models.rs`).
 //!
 //! Every app on the machine keeps model weights and llama.cpp in one folder,
 //! `LOCAL_LLM_HOME` (or a configured path, since an app opened from Finder
@@ -10,10 +10,10 @@
 //! <home>/runtimes/llama.cpp/…/llama-server
 //! ```
 //!
-//! An app may keep its own folders instead ([`Layout::new`]; PaperComposer
+//! An app may keep its own folders instead ([`Layout::new`]; L-Paper
 //! without `LOCAL_LLM_HOME` uses `<data>/models` and `<data>/llama.cpp`).
 //!
-//! Nothing here downloads (PaperComposer's setup or `hf download` fill the
+//! Nothing here downloads (L-Paper's setup or `hf download` fill the
 //! folder) and nothing here starts a server: [`crate::shared_runtime`] does, one
 //! llama-server per machine shared by every app, with [`server_args`]. No thinking
 //! (`--reasoning-budget 0`): every task wants a fixed JSON shape quickly.
@@ -69,7 +69,7 @@ fn find_under(dir: &Path, suffix: &str) -> Option<PathBuf> {
 
 /// Where model weights and llama.cpp live. The shared layout is
 /// [`Layout::shared`]; an app with its own folder from before
-/// `LOCAL_LLM_HOME` (PaperComposer: `<data>/models`, `<data>/llama.cpp`)
+/// `LOCAL_LLM_HOME` (L-Paper: `<data>/models`, `<data>/llama.cpp`)
 /// passes its folders with [`Layout::new`]. Weights are always laid out as
 /// `<gguf>/<owner>/<repo>/<file>` (what `hf download --local-dir` writes).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,7 +130,7 @@ impl Layout {
     pub fn missing(&self, m: &Model) -> Option<String> {
         if self.find_runtime().is_none() {
             return Some(format!(
-                "還沒有 llama.cpp：{} 裡找不到 llama-server。請用 PaperComposer 的「AI 與同步」安裝一次，或把 llama.cpp 解壓到這個資料夾",
+                "還沒有 llama.cpp：{} 裡找不到 llama-server。請用 L-Paper 的「AI 與同步」安裝一次，或把 llama.cpp 解壓到這個資料夾",
                 self.runtime.display()
             ));
         }
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn an_app_layout_finds_files_in_its_own_folders() {
-        // PaperComposer before LOCAL_LLM_HOME: <data>/models/<owner>/<repo>, <data>/llama.cpp.
+        // L-Paper before LOCAL_LLM_HOME: <data>/models/<owner>/<repo>, <data>/llama.cpp.
         let dir = tempfile::tempdir().unwrap();
         let data = dir.path();
         let l = Layout::new(data.join("models"), data.join("llama.cpp"));

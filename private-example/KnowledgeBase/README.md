@@ -1,6 +1,6 @@
 # 我的知識庫（personal space）
 
-KnowledgeBase 的個人 space：只有你看得到，放在你自己的 private repo。
+L-Brain 的個人 space：只有你看得到，放在你自己的 private repo。
 
 ```
 space.toml        id、名稱、kind = personal、成員、圖片位置（iCloud Drive）

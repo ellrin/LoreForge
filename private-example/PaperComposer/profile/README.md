@@ -12,7 +12,7 @@ demo data so the app runs out of the box.
    - environment variable `PAPERCOMPOSER_PROFILE=/path/to/your/profile`
    - or `profile_path = "/path/to/your/profile"` in the app config file
      (`~/Library/Application Support/PaperComposer/config.toml` on macOS,
-     `%APPDATA%\PaperComposer\config.toml` on Windows,
+     `%APPDATA%\L-Paper\config.toml` on Windows,
      `~/.config/PaperComposer/config.toml` on Linux).
 
 The config file is outside every repository, so your path is never committed.

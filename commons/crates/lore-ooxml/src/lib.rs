@@ -1,4 +1,4 @@
-//! lore-ooxml — lossless PPTX read/write for SlideComposer.
+//! lore-ooxml — lossless PPTX read/write for L-Slide.
 //!
 //! * [`package`]: the zip, every part kept as raw bytes.
 //! * [`xml`]: small owned DOM + canonical comparison.

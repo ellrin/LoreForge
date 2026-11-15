@@ -8,9 +8,9 @@
 //     doc: () => state.paper?.name,          // the document id the server knows
 //     language: () => "en",                  // listening and the model's language (optional)
 //     engine: () => chosenEngine(),          // the app's engine choice (optional)
-//     onLike: (after, anchor) => {},         // after 👍 (PaperComposer: 收藏句型 on the rewrite)
+//     onLike: (after, anchor) => {},         // after 👍 (L-Paper: 收藏句型 on the rewrite)
 //   });
-// The app's presets (GET /api/polish/presets, e.g. PaperComposer's 用字 and 我的風格) show as
+// The app's presets (GET /api/polish/presets, e.g. L-Paper's 用字 and 我的風格) show as
 // buttons beside the free instruction; one pressed goes with every send, the typed words add to it.
 //   LorePolish.open({
 //     anchor,                                // an element or a DOMRect: where the dialog goes

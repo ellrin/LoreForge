@@ -1,10 +1,10 @@
-# LoreEcho 設計草稿 — 2026-11-11
+# L-Echo 設計草稿 — 2026-11-11
 
-> 狀態：**草稿**。名稱已定（LoreEcho）；§9 其餘待決事項定了之後才做到那一段。
+> 狀態：**草稿**。名稱已定（L-Echo）；§9 其餘待決事項定了之後才做到那一段。
 
 一個個人學習助理：桌面右下角的圓形小圖示，點開後展開成一個有人物、有語音的聊天面板。
-它接 Claude 或本機模型，**知道你知道什麼**（讀 KnowledgeBase），話不多、以中文為主、偏學習討論；
-討論中的想法可以用「特化按鈕」整理後存成 PaperComposer 的筆記或 KnowledgeBase 的知識卡。
+它接 Claude 或本機模型，**知道你知道什麼**（讀 L-Brain），話不多、以中文為主、偏學習討論；
+討論中的想法可以用「特化按鈕」整理後存成 L-Paper 的筆記或 L-Brain 的知識卡。
 
 icon 草圖：`docs/assets/loreecho-logo-draft.svg`（賽博龐克機器人頭的輪廓：後梳的頭髮、圓形護目鏡、
 額頭裂痕、下顎護板、小鬍子、高領；風格同其他 app 的 logo：深紫底、霓虹線條、發光、紅藍錯位）。
@@ -29,7 +29,7 @@ icon 草圖：`docs/assets/loreecho-logo-draft.svg`（賽博龐克機器人頭�
 - 走 `lore-llm`：新任務類別放在「問答」（`ask`，自動＝有本機用本機），任務例如 `le-chat`、`le-note`、`le-cards`。
   - 注意：Claude 走訂閱（`claude -p`）不能串流，一次回整段，語音會比較慢開口；走 API 或本機可以邊生邊念。
 
-## 3. 「知道你知道什麼」— 接 KnowledgeBase
+## 3. 「知道你知道什麼」— 接 L-Brain
 
 每一輪對話前，從你的話裡找出相關的知識卡，連同**你對它的熟悉度**一起放進提示：
 
@@ -38,7 +38,7 @@ icon 草圖：`docs/assets/loreecho-logo-draft.svg`（賽博龐克機器人頭�
 3. 提示裡寫成：「使用者已懂：A、B（不必解釋）；正在學：C（可以考考他）；沒有卡：D（要從頭講）」，附卡片摘要（有字數上限）。
 
 只讀不寫：讀的時候直接用 `kb-core` 開 `private/KnowledgeBase`（檔案是真相，索引可重建）。
-畫面上會顯示這輪參考了哪幾張卡，點了用 `lore-kb://` 在 KnowledgeBase 打開。
+畫面上會顯示這輪參考了哪幾張卡，點了用 `lore-kb://` 在 L-Brain 打開。
 
 ## 4. 特化按鈕
 
@@ -46,18 +46,18 @@ icon 草圖：`docs/assets/loreecho-logo-draft.svg`（賽博龐克機器人頭�
 
 | 按鈕 | 做什麼 | 存到哪 |
 |---|---|---|
-| 整理成筆記 | 把這段討論整理成完整筆記（問題、討論過程、結論、待查） | **PaperComposer 新增的「筆記」功能**（§5） |
-| 做成知識卡 | 抽出 1–N 張卡的候選（標題、內容、標籤、連結到既有卡），逐張勾選 | KnowledgeBase 的**待審區**（作者定案），回 KB 確認後才變成正式卡（`learning`） |
+| 整理成筆記 | 把這段討論整理成完整筆記（問題、討論過程、結論、待查） | **L-Paper 新增的「筆記」功能**（§5） |
+| 做成知識卡 | 抽出 1–N 張卡的候選（標題、內容、標籤、連結到既有卡），逐張勾選 | L-Brain 的**待審區**（作者定案），回 KB 確認後才變成正式卡（`learning`） |
 | 記下靈感 | 一句話的快速記錄，不整理 | 筆記的「靈感」收件匣 |
 
 寫入的路徑：對方 app 開著時走它的 API（`ports.json` 找埠，例如 KB 的 `POST /api/nodes`），
-沒開時直接用 `kb-core`（KB）或寫進 PaperComposer 的筆記資料夾，下次開 app 時索引會補上。
+沒開時直接用 `kb-core`（KB）或寫進 L-Paper 的筆記資料夾，下次開 app 時索引會補上。
 
-## 5. PaperComposer 新增「筆記」
+## 5. L-Paper 新增「筆記」
 
 - 位置：`private/PaperComposer/notes/<日期>-<標題>.tex`（作者定案：**LaTeX**，可以直接用進論文），前面一段 front matter：
   來源（學習夥伴／手寫）、建立時間、相關的 KB 卡 id、標籤。
-- PaperComposer 上方列加「筆記」：清單、閱讀、編輯；可以「插入到論文」（之後再做）。
+- L-Paper 上方列加「筆記」：清單、閱讀、編輯；可以「插入到論文」（之後再做）。
 - 一律照 `lore-notation`：方程式用登記過的巨集、參照用 `\ref{…}`、產生的文字跑它的檢查，存檔前檢查不過就先給作者看。
 
 ## 6. 人物（全部在 private）
@@ -87,9 +87,9 @@ private/<App>/characters/<id>/
 | 自訂聲音 | **不做**（作者 2026-11-12：「Qwen3-TTS 也不要，我不愛廣東腔」）。改用 Apple 的**個人聲音**（Personal Voice，作者自己在系統設定做的聲音）和系統聲音；每個人物可調語速、音調 |
 | 常駐 | 按鈕切換：麥克風一直開，用語音辨識本身的停頓切句；收合時只亮光環。喚醒詞之後再說 |
 
-- 這些都是 Swift／Apple 框架，Rust 這邊透過一個小的 Swift 輔助程式（或 Tauri 外掛）呼叫；共用的介面放在 `commons/crates/lore-voice`（`commons/CLAUDE.md` 早就留了名字），NeonDeck 是現成的 Swift 專案可參考。
+- 這些都是 Swift／Apple 框架，Rust 這邊透過一個小的 Swift 輔助程式（或 Tauri 外掛）呼叫；共用的介面放在 `commons/crates/lore-voice`（`commons/CLAUDE.md` 早就留了名字），L-Deck 是現成的 Swift 專案可參考。
 - 預設是按住說話；常駐要你自己打開。
-- **2026-11-11 已做（作者：「語音為啥是之後的階段？一起補吧」）**：`commons/crates/lore-voice`（Swift 輔助程式 `lore-voice-helper`，由 build.rs 用 swiftc 編；聽 = `SpeechTranscriber`，這台 macOS 27 支援且已安裝中文（台灣），不支援或沒下載時退回 `SFSpeechRecognizer`；說 = `AVSpeechSynthesizer`），LoreEcho 的麥克風（按住說話／常駐、說完就送出）、朗讀回覆（串流一句一句念、Esc 或點人物停止、人物在念完前都是 speaking）、人物的聲音與語速。在這台 Mac 上確認過：列出聲音、合成到檔案、再用 SpeechTranscriber 辨識回文字；麥克風、權限提示與實際音質要作者自己試。
+- **2026-11-11 已做（作者：「語音為啥是之後的階段？一起補吧」）**：`commons/crates/lore-voice`（Swift 輔助程式 `lore-voice-helper`，由 build.rs 用 swiftc 編；聽 = `SpeechTranscriber`，這台 macOS 27 支援且已安裝中文（台灣），不支援或沒下載時退回 `SFSpeechRecognizer`；說 = `AVSpeechSynthesizer`），L-Echo 的麥克風（按住說話／常駐、說完就送出）、朗讀回覆（串流一句一句念、Esc 或點人物停止、人物在念完前都是 speaking）、人物的聲音與語速。在這台 Mac 上確認過：列出聲音、合成到檔案、再用 SpeechTranscriber 辨識回文字；麥克風、權限提示與實際音質要作者自己試。
 - 同一輪也加了人物的**主題曲**（`theme.<ext>`，播放鈕、說話／聆聽時調小聲、收起或換人物淡出、不自動播放）和**角色設定**（身分與背景、說話風格、口頭禪、稱呼、關係、喜歡／不喜歡、範例對話；組進系統提示，範例當成前幾輪對話）。
 - 測試只用假的 STT／TTS；Apple 引擎一律標 **not tested on real hardware**（雲端是 Linux，跑不了）。
 - **2026-11-12 改版（作者試用後：「字出來很快，聲音很慢，而且一堆廣東腔我恨」）**：
@@ -100,15 +100,15 @@ private/<App>/characters/<id>/
   - 人物 → 聲音：個人聲音一組排最上面，系統聲音（人物語言優先、加強版／高品質標出），Eloquence 機械音放最後「其他（機械音）」；一行「更多聲音」提示＋開啟系統設定；
     語速、音調（pitchMultiplier 0.5–2）各自存在 character.toml。
   - 個人聲音：只在按「使用個人聲音」時才請求權限（`requestPersonalVoiceAuthorization`）；拒絕過／還沒做聲音各一行提示＋開啟系統設定。
-    權限算在跑輔助程式的 App 頭上（打包後是 LoreEcho.app；從終端機跑時是終端機，這台上直接回「拒絕」）。真機上的提示與播放**沒有測過**。
+    權限算在跑輔助程式的 App 頭上（打包後是 L-Echo.app；從終端機跑時是終端機，這台上直接回「拒絕」）。真機上的提示與播放**沒有測過**。
 - 之後可以評估：Apple 裝置上的 Foundation Models 當成另一個「本機腦」，不佔 llama-server 的記憶體（要確認中文品質）。
 
 ## 8. 本機模型共用與優先權（對所有 app 都有用）
 
 > **2026-11-11 作者改定，本節被 `docs/local-models.md` 取代**：不做獨立管家程式，改成每個 app 內建同一套共用規則（`lore-llm` 的 `shared_runtime`），一次只留一個模型。以下保留作為歷史。
 
-現況：`LocalRuntime` 在**一個程序內**保證只開一個 llama-server，由 PaperComposer 開；其他 app 讀
-`private/shared/engine.toml` 的 url 連過去。沒有人管「誰先」，PaperComposer 關了模型也跟著停。
+現況：`LocalRuntime` 在**一個程序內**保證只開一個 llama-server，由 L-Paper 開；其他 app 讀
+`private/shared/engine.toml` 的 url 連過去。沒有人管「誰先」，L-Paper 關了模型也跟著停。
 
 提案：**一個共用的模型管家**（小背景程序，暫名 `lore-modeld`，放 commons）
 
@@ -122,11 +122,11 @@ private/<App>/characters/<id>/
 - 換模型的規則：目前載入的模型夠用就不換；前景有請求在等時不為背景工作換模型；需要看圖而目前模型不能看時才換。
 - 記憶體不夠同時放 LLM＋TTS 時：LLM 優先，TTS 退回系統聲音（第一版就是這樣，不用額外管）。
 
-這一塊獨立於學習夥伴，可以先做，PaperComposer／SlideComposer／LoreReader 都會受益。
+這一塊獨立於學習夥伴，可以先做，L-Paper／L-Slide／L-Reader 都會受益。
 
 ## 9. 待作者決定
 
-1. ~~名稱~~ → **LoreEcho**：資料夾 `LoreEcho/`、`private/LoreEcho/`，短名 `le`（`ports.json` 的 `le`；**沒有** `lore-le://`，其他 app 不需要打開它），任務前綴 `le-`。
+1. ~~名稱~~ → **L-Echo**：資料夾 `L-Echo/`、`private/LoreEcho/`，短名 `le`（`ports.json` 的 `le`；**沒有** `lore-le://`，其他 app 不需要打開它），任務前綴 `le-`。
 2. ~~筆記格式~~ → **LaTeX**（`.tex`，過 `lore-notation`）。
 3. ~~新知識卡~~ → **先進待審區**，在 KB 確認後才成為正式卡。KB 需要新增待審區（清單＋確認／修改／丟掉）。
 4. ~~模型管家~~ → ~~先採獨立的小背景程序 `lore-modeld`~~ → **2026-11-11 改定**：每個 app 內建共用規則，見 `docs/local-models.md`。
@@ -137,24 +137,24 @@ private/<App>/characters/<id>/
 | 階段 | 內容 |
 |---|---|
 | 0 | 本稿＋icon 定案（icon 已減線條，表情照作者的參考圖：八字眉、半垂眼皮、下垂嘴角） |
-| 1 | **已完成（改定）**：本機模型共用規則（`lore-llm` 的 `shared_runtime`，見 `docs/local-models.md`）；PaperComposer 不再擁有模型，所有 app 經 `acquire` 用同一個 llama-server |
+| 1 | **已完成（改定）**：本機模型共用規則（`lore-llm` 的 `shared_runtime`，見 `docs/local-models.md`）；L-Paper 不再擁有模型，所有 app 經 `acquire` 用同一個 llama-server |
 | 2 | **進行中**：新 app 骨架：泡泡／展開視窗、拖曳、文字對話、範本人物、齒輪（共用分頁） |
 | 3 | 接 KB：相關卡＋熟悉度放進提示，顯示參考了哪些卡 |
-| 4 | 特化按鈕：知識卡 → KB；PaperComposer 筆記功能 → 整理成筆記、記下靈感 |
+| 4 | 特化按鈕：知識卡 → KB；L-Paper 筆記功能 → 整理成筆記、記下靈感 |
 | 5 | **已完成（2026-11-11，和階段 2 一起）**：語音：`lore-voice`（STT＋系統 TTS）、按住說話、常駐模式 |
 | 6 | 自訂聲音、多人物、avatar 動畫 |
 
 ## 4a. 特化按鈕的介面約定（2026-11-12，三個 app 同時做）
 
-**PaperComposer 筆記**（§5）
+**L-Paper 筆記**（§5）
 - 檔案：`private/PaperComposer/notes/<YYYY-MM-DD>-<slug>.tex`，開頭 `% ---` front matter 區塊（`% source: loreecho`、`% created: <ISO>`、`% kind: note|idea`、`% kb: id1, id2`、`% tags: a, b`、`% title: …`），之後是 LaTeX 內文（過 lore-notation 檢查）。靈感（`kind: idea`）收在同一個資料夾，清單裡分開顯示。
-- API（PaperComposer 開著時）：`GET /api/notes`、`GET /api/notes/{id}`、`POST /api/notes {title, body, kind, tags, kb, source}` → `{id, path, findings}`（lore-notation 檢查結果；有阻擋性問題時回 422 和問題清單，不寫入）、`PUT /api/notes/{id}`、`DELETE`（移到 `notes/.trash/`）。
-- PaperComposer 沒開時：LoreEcho 直接照上面的格式寫檔（同樣先跑 lore-notation 檢查、不覆蓋：撞名加 `-2`），PaperComposer 下次開啟時列出。
+- API（L-Paper 開著時）：`GET /api/notes`、`GET /api/notes/{id}`、`POST /api/notes {title, body, kind, tags, kb, source}` → `{id, path, findings}`（lore-notation 檢查結果；有阻擋性問題時回 422 和問題清單，不寫入）、`PUT /api/notes/{id}`、`DELETE`（移到 `notes/.trash/`）。
+- L-Paper 沒開時：L-Echo 直接照上面的格式寫檔（同樣先跑 lore-notation 檢查、不覆蓋：撞名加 `-2`），L-Paper 下次開啟時列出。
 
-**KnowledgeBase 待審區**（§4 作者定案）
+**L-Brain 待審區**（§4 作者定案）
 - 檔案：每個空間的 `pending/<id>.json`（kb-core 的卡片欄位＋`source`、`created`、`from_conversation`）。待審卡不出現在一般清單、複習、搜尋。
-- API（KnowledgeBase 開著時）：`GET /api/pending`、`POST /api/pending {cards:[{title, summary, body, tags, links, kind, source}]}` → `{ids}`、`POST /api/pending/{id}/accept`（可帶修改）→ 成為正式卡（狀態 learning）、`DELETE /api/pending/{id}`。
-- KnowledgeBase 沒開時：LoreEcho 用 kb-core 直接寫進 `pending/`（只寫這個資料夾），KB 下次開啟時看得到。
+- API（L-Brain 開著時）：`GET /api/pending`、`POST /api/pending {cards:[{title, summary, body, tags, links, kind, source}]}` → `{ids}`、`POST /api/pending/{id}/accept`（可帶修改）→ 成為正式卡（狀態 learning）、`DELETE /api/pending/{id}`。
+- L-Brain 沒開時：L-Echo 用 kb-core 直接寫進 `pending/`（只寫這個資料夾），KB 下次開啟時看得到。
 - KB 介面：左側導覽「待審 N」，清單＋逐張 確認／修改／丟掉。
 
-**LoreEcho 按鈕**：整理成筆記、做成知識卡、記下靈感。都是「先預覽、作者確認才存」；預覽可以直接改；存好後一行提示附「打開」（`LoreLinks.open("pc"|"kb", …)`）。用的模型照任務類別（`le-note`、`le-cards` = 整理與格式；`le-idea` 不用模型）。
+**L-Echo 按鈕**：整理成筆記、做成知識卡、記下靈感。都是「先預覽、作者確認才存」；預覽可以直接改；存好後一行提示附「打開」（`LoreLinks.open("pc"|"kb", …)`）。用的模型照任務類別（`le-note`、`le-cards` = 整理與格式；`le-idea` 不用模型）。

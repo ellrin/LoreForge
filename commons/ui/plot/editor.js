@@ -796,7 +796,7 @@
       }
       // 09 樣式（這張圖自己的）
       right.append(styleBlock(st));
-      // caption (PaperComposer)
+      // caption (L-Paper)
       if (opts.target === "paper") {
         const bC = block("10", "圖說", "caption");
         const ta = h("textarea", { class: "set-input lp-cap", rows: 3, placeholder: "插入論文時的 \\caption" }, sp.caption ?? "");
@@ -1162,7 +1162,7 @@
     const K = {
       S, api, h, ic, block, row, number, text, select, check, seg, change, toast, menu, exportGif, sheet, right, left,
       get macros() { return opts.macros; },
-      /** A paper's LaTeX handed in (LoreReader's 動起來 when the model could not): the left panel starts with it. */
+      /** A paper's LaTeX handed in (L-Reader's 動起來 when the model could not): the left panel starts with it. */
       latex: opts.latex ?? "",
       panel, refresh: (r) => refresh(r), live: () => live,
       /** Start (or replace) the figure with an equation spec; one undo step. */

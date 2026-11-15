@@ -1,6 +1,6 @@
 # 論文（長）與 語句潤飾（規劃）
 
-作者 2026-11-13 的要求。兩件事都是 Lore 的共用功能接到 PaperComposer（和 SlideComposer），不另做一套：
+作者 2026-11-13 的要求。兩件事都是 Lore 的共用功能接到 L-Paper（和 L-Slide），不另做一套：
 編輯器、模板、圖表、繪圖、流程圖、對照表（lore-notation）、文獻、知識庫、模型路由（lore-llm）、背景工作（lore-jobs）、
 找文獻（lore-research）、語音（lore-voice）都用現有的。
 
@@ -10,15 +10,15 @@
 哪些詞保留、連接詞增減替換、結尾太冗……。模型給改寫，作者看差異，「套用」、再說一次繼續改、或放棄。
 
 - **共用元件** `commons/ui/polish.js`（`LorePolish.mount({ source, apply, … })`，像 `makedeck.js`），由 `lore-shell` 提供。
-  PaperComposer：選取文字時寫作工具列與右鍵選單多「潤飾」（和「收藏句型」同一個選取對應，不另寫）。
-  SlideComposer：文字框裡選取時同樣的入口。套用＝一步復原。
-- **語音**：`lore-voice` 的路由從 LoreEcho 抽成 crate 裡的共用 router（`lore_voice::web::router`，像 `lore_flow::web::router`），
-  LoreEcho、PaperComposer、SlideComposer 都掛同一個。按住說話（`continuous: false`），講完的字進輸入框，可以再改再送。
+  L-Paper：選取文字時寫作工具列與右鍵選單多「潤飾」（和「收藏句型」同一個選取對應，不另寫）。
+  L-Slide：文字框裡選取時同樣的入口。套用＝一步復原。
+- **語音**：`lore-voice` 的路由從 L-Echo 抽成 crate 裡的共用 router（`lore_voice::web::router`，像 `lore_flow::web::router`），
+  L-Echo、L-Paper、L-Slide 都掛同一個。按住說話（`continuous: false`），講完的字進輸入框，可以再改再送。
   沒有語音時（非 macOS、權限沒開）只用打字。
 - **模型**：lore-llm 任務 `polish`（類別 create，預設雲端；設定的「模型」可改）。帶：選取的文字、前後文、文件語言、
   作者的句型庫（PC `phrases.csv`／`expressions.csv`；SC `voice/examples.json`）、按過讚的改寫（few-shot）。
 - **LaTeX 不能壞**：`\cite{}`、`\ref{}`、`\label{}`、`$…$`、登記的巨集在送出前換成鎖住的記號，回來後伺服器比對，
-  少了或改了就不給套用並說哪個；套用前再跑 lore-notation 的 `check_document`。SlideComposer 的數學式同樣鎖住。
+  少了或改了就不給套用並說哪個；套用前再跑 lore-notation 的 `check_document`。L-Slide 的數學式同樣鎖住。
 - **暫存與記錄**：每一次提議都記一列（指示、原文、改寫、套用了沒、讚）：
   論文 `draft/polish.jsonl`（同 `draft/` 其他檔，跟著論文走），簡報 `decks/<name>/polish-log.jsonl`。
   小對話視窗可以看這段的前幾次版本，點一下拿回來比。
@@ -32,10 +32,10 @@
   每次提議一行的記錄、語調庫 `private/shared/polish/liked.jsonl`（只讀寫私人 shared；取最像的 4 筆當範例）、`/api/polish*` 路由（app 提供 `Host`）。
 - `commons/ui/polish.js`（`LorePolish.mount({ doc, language, engine, onLike })`＋`LorePolish.open({ anchor, text, prefix, suffix, context, keep, apply })`，lore-shell 提供）：
   差異顯示、套用／再改／👍／關閉、這段之前的版本 1 2 3…、按住說話（沒有語音就不出現）。
-- `lore_voice::web::router`：LoreEcho 改用它（路徑與內容不變），PaperComposer、SlideComposer 也掛；兩個桌面版照 LoreEcho 打包語音小程式、Info.plist 加麥克風／語音辨識說明。
-- PaperComposer：寫作工具列與右鍵「潤飾」；選取對應用右鍵選單同一套（`PCContext.locate`，新增 `sourceRange` 包兩端）；
+- `lore_voice::web::router`：L-Echo 改用它（路徑與內容不變），L-Paper、L-Slide 也掛；兩個桌面版照 L-Echo 打包語音小程式、Info.plist 加麥克風／語音辨識說明。
+- L-Paper：寫作工具列與右鍵「潤飾」；選取對應用右鍵選單同一套（`PCContext.locate`，新增 `sourceRange` 包兩端）；
   套用在段落編輯器裡 `insertText`（⌘Z 一步）；套用前跑對照表檢查（`replace_check` → `check_document`，只擋改寫新增的）；記錄 `draft/polish.jsonl`；👍 開「收藏句型」。
-- SlideComposer：編輯文字框時工具列與右鍵「潤飾」，同一段落；方程式 `$latex$`、換行鎖住；套用 = 一筆「潤飾」交易；記錄 `decks/<name>/polish-log.jsonl`；語氣用 `voice/examples.json`。
+- L-Slide：編輯文字框時工具列與右鍵「潤飾」，同一段落；方程式 `$latex$`、換行鎖住；套用 = 一筆「潤飾」交易；記錄 `decks/<name>/polish-log.jsonl`；語氣用 `voice/examples.json`。
 - 還沒在真的硬體上試：麥克風與權限提示、真模型的改寫品質。
 
 ## B. 論文（長）——畢業論文、review 論文
@@ -76,7 +76,7 @@
 （`source = "guide"`），只當「這種情境適合這種句構」：程式依章節／段落功能／位置挑（Introduction 最後一段或 contribution → 論點句；
 比較 → compare_two；每段第一句 → 主題句；摘要不加），標題寫明「來自寫作指南、不是作者語氣、只借結構」。
 擋住的地方：`style_text` 不送它；「收藏句型」遇到指南句（或標 `guide` 的列）略過；潤飾的句型與生成的句型庫檢索略過標 `guide` 的列；
-讚只記預設名稱；我的風格的摘要與範例只取作者自己的列（排除 `guide` 標記與指南句）；SlideComposer 的 deckvoice 只讀他的簡報。
+讚只記預設名稱；我的風格的摘要與範例只取作者自己的列（排除 `guide` 標記與指南句）；L-Slide 的 deckvoice 只讀他的簡報。
 
 **Key value 檢查**：Key value 當論點句判斷（任務 `pc-thesis-check`，一次小呼叫、JSON schema），固定的問題代碼（中文標籤）＋1–2 個改寫，
 點了才用；標準取 `style/_thesis-statement.md`（有上限），沒有就用公開程式裡的通用標準（不含範例）。研究論文的論點要「能用證據支持」。
@@ -85,7 +85,7 @@
 鍵是三個 CSV＋`patterns.toml` 的內容；內容沒變不重寫。工作區沒有「這篇是作者自己的論文」的標記，所以論文本身不讀（生成的草稿也就不會回流）。
 
 **已做（2026-11-13）**：`pc_core::patterns`、`pc_core::thesis`、`pc_core::styleprofile`；lore-polish 的預設（`Preset`、`/api/polish/presets`、`polish.js` 按鈕）；
-PaperComposer 的「用字」「我的風格」、Key value 檢查（討論草稿第 1 步、論文上方列、匯入）；作者私人的 `style/patterns.toml`。SlideComposer 有預設機制，不提供預設。
+L-Paper 的「用字」「我的風格」、Key value 檢查（討論草稿第 1 步、論文上方列、匯入）；作者私人的 `style/patterns.toml`。L-Slide 有預設機制，不提供預設。
 還沒在真的硬體上試：真模型的判斷與改寫品質。
 
 ## D. 期刊寫法（2026-11-14）
@@ -163,9 +163,9 @@ base = "<基礎格式 id>"
 ```
 
 **跨 app（提案，作者決定）**
-- LoreReader：下載的 5 篇要不要進書庫？現在不進（只在快取）。提案：面板的文章清單每篇一個「加入 LoreReader」，用 lore-research 的 `import_into_reader`（LoreReader 沒開就排隊）。
-- KnowledgeBase：期刊寫法做成一張卡（期刊名、章節、必備論點）？提案：只在作者按「存成知識卡」時寫，避免把期刊資料混進學習卡。
-- SlideComposer：研討會的投影片風格（頁數、版面）不在 OpenAlex 裡；提案之後另做（研討會的開放論文集 CVF、OpenReview 不在 OpenAlex 的開放取用標示裡，這輪不寫爬蟲，面板會說找不到）。
+- L-Reader：下載的 5 篇要不要進書庫？現在不進（只在快取）。提案：面板的文章清單每篇一個「加入 L-Reader」，用 lore-research 的 `import_into_reader`（L-Reader 沒開就排隊）。
+- L-Brain：期刊寫法做成一張卡（期刊名、章節、必備論點）？提案：只在作者按「存成知識卡」時寫，避免把期刊資料混進學習卡。
+- L-Slide：研討會的投影片風格（頁數、版面）不在 OpenAlex 裡；提案之後另做（研討會的開放論文集 CVF、OpenReview 不在 OpenAlex 的開放取用標示裡，這輪不寫爬蟲，面板會說找不到）。
 - 寫書：寫書用的是書的模板，不是期刊；不接。
 - lore-polish：期刊短語當潤飾的建議（「這本期刊常說 …」）？提案：潤飾小對話多一個「期刊用語」預設，只列這段情境（類別）的短語，作者點了才用。
 - 討論草稿的「預想選項」（另一個工作在做）：`emphasis_block` 可以讓候選答案偏向期刊重視的內容；只提案，不改它的檔案。
@@ -214,21 +214,21 @@ Word 草稿是 `[P1: …]` 文字。對照表檢查不會把記號當成縮寫�
 新加的題組（待補項目、修訂、審稿追問）開始前再準備一次；每一項只準備一次，沒準備好時對話照常，可按「重試」。
 
 **已做（2026-11-14）**：上面全部。測試：lore-notation（記號、檢查不誤報、pdflatex 實際編譯有無 xcolor 兩種）、lore-polish（鎖住）、
-lore-docsrc（純文字標記）、PaperComposer（舊 session 載入、提示內容、依賴清單、審稿過濾、回填的程式方案與相反時的標記、投稿版擋下、
-Word 草稿、預想選項的依據與數字檢查、選了哪個有記錄、對話從不叫預想選項的任務）、SlideComposer（論文報告保留記號）。
+lore-docsrc（純文字標記）、L-Paper（舊 session 載入、提示內容、依賴清單、審稿過濾、回填的程式方案與相反時的標記、投稿版擋下、
+Word 草稿、預想選項的依據與數字檢查、選了哪個有記錄、對話從不叫預想選項的任務）、L-Slide（論文報告保留記號）。
 **還沒在真的模型上試**：Opus 的選項品質、Haiku 會不會把問題對到正確的項目（`item`）、模型改寫相反結果的品質。
 
 ### 跨 App
 
-- **已接**：SlideComposer 論文報告——表格的待補格顯示 `[pending]`、文字的數字顯示 `[pending: …]`、依賴句結尾留 `[pending]`，規劃提示要求照抄記號、不寫數字或結論；
+- **已接**：L-Slide 論文報告——表格的待補格顯示 `[pending]`、文字的數字顯示 `[pending: …]`、依賴句結尾留 `[pending]`，規劃提示要求照抄記號、不寫數字或結論；
   lore-polish 鎖住四種記號；lore-docsrc 的純文字轉換保留記號。
 - **提議（等作者決定）**：
-  1. SlideComposer 的待補格／字用簡報底版的強調色或虛線框（現在是純文字 `[pending]`）；回填後一鍵更新已做好的簡報。
+  1. L-Slide 的待補格／字用簡報底版的強調色或虛線框（現在是純文字 `[pending]`）；回填後一鍵更新已做好的簡報。
   2. 論文報告的「Take home messages」遇到依賴待補的主張時整條略過，而不是帶記號。
-  3. KnowledgeBase：待補項目的「預期 vs 實際」在回填後記成一張卡（自己的預測準不準，給寫書或回顧用）。
-  4. LoreReader：讀到別人論文的相同指標時，提示和自己的待補項目比較。
-  5. lore-notation 的對照表面板列出待補記號（目前只有 PaperComposer 的狀態列與審稿清單）。
-  6. LoreEcho：語音記下「P1 的資料到了：0.74」直接回填。
+  3. L-Brain：待補項目的「預期 vs 實際」在回填後記成一張卡（自己的預測準不準，給寫書或回顧用）。
+  4. L-Reader：讀到別人論文的相同指標時，提示和自己的待補項目比較。
+  5. lore-notation 的對照表面板列出待補記號（目前只有 L-Paper 的狀態列與審稿清單）。
+  6. L-Echo：語音記下「P1 的資料到了：0.74」直接回填。
 
 ## F. 實跑（2026-11-14，投稿首稿前）
 
@@ -277,7 +277,7 @@ Word 草稿、預想選項的依據與數字檢查、選了哪個有記錄、對
 
 ## 施工順序
 
-1. A 語句潤飾（PaperComposer 先，SlideComposer 同一個元件接上）。
+1. A 語句潤飾（L-Paper 先，L-Slide 同一個元件接上）。
 2. B 的「新論文（長）」入口＋初始化／發散／收斂。
 3. B 的細部內容＋背景筆記與查文獻。
 4. B 的逐段草稿、雙語同步。

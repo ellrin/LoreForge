@@ -1,6 +1,6 @@
 # Office fixtures
 
-Synthetic files (a fictional study) for testing how PaperComposer and SlideComposer open, convert
+Synthetic files (a fictional study) for testing how L-Paper and L-Slide open, convert
 and edit Office documents. Rebuild with `python3 make.py` (needs pandoc and Pillow).
 
 | File | What it exercises |

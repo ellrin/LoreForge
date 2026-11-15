@@ -712,7 +712,7 @@ pub struct LocalAccess {
     pub vision_model: Option<String>,
     /// Rewrite Chinese replies in Taiwan usage.
     pub zh_tw: bool,
-    /// Allow abliterated models (PaperComposer yes, household apps no).
+    /// Allow abliterated models (L-Paper yes, household apps no).
     pub include_uncensored: bool,
 }
 

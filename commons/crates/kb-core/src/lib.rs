@@ -12,7 +12,7 @@
 //! - [`scan`]: term scanner (Aho-Corasick over titles + aliases).
 //! - [`llm`]: card drafting / term extraction trait with a mock — the lore-llm
 //!   integration point.
-//! - [`pending`]: 待審區 — `pending/<id>.json` candidates (LoreEcho writes, KnowledgeBase confirms); not nodes.
+//! - [`pending`]: 待審區 — `pending/<id>.json` candidates (L-Echo writes, L-Brain confirms); not nodes.
 //! - [`kb`]: [`KnowledgeBase`], the façade apps use (create / edit / trash / recall /
 //!   share / queries).
 

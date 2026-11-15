@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="60 100 900 2820" width="900" height="2820">
-  <!-- LoreEcho example character, full body, waiting: head to feet, no background -->
+  <!-- L-Echo example character, full body, waiting: head to feet, no background -->
   <g transform="translate(-88 130) scale(2)" stroke-linejoin="round" stroke-linecap="round">
     <!-- legs and boots -->
     <g fill="#16131F" stroke="#12AFC0" stroke-width="8">

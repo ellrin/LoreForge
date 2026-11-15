@@ -489,11 +489,11 @@ pub enum LocalStatus {
 /// Display name of a short app name.
 pub fn app_label(app: &str) -> String {
     match app {
-        "pc" => "PaperComposer",
-        "sc" => "SlideComposer",
-        "lr" => "LoreReader",
-        "kb" => "KnowledgeBase",
-        "le" => "LoreEcho",
+        "pc" => "L-Paper",
+        "sc" => "L-Slide",
+        "lr" => "L-Reader",
+        "kb" => "L-Brain",
+        "le" => "L-Echo",
         "" => "另一個 App",
         other => other,
     }
@@ -764,7 +764,7 @@ impl SharedRuntime {
             // use a server another app started, never start one)
             let Some(layout) = layout else {
                 reg.wanting.retain(|w| !(w.pid == self.pid && w.model == m.id));
-                return Err("這個 App 不知道模型資料夾（LOCAL_LLM_HOME），無法啟動本機模型；請先在 PaperComposer 用一次本機模型".to_string());
+                return Err("這個 App 不知道模型資料夾（LOCAL_LLM_HOME），無法啟動本機模型；請先在 L-Paper 用一次本機模型".to_string());
             };
             let from = match reg.server.clone() {
                 None => None,
@@ -1219,7 +1219,7 @@ mod tests {
         assert_eq!(LocalStatus::Off.text(&c), "未載入");
         assert_eq!(LocalStatus::Loading { model: "qwen3.5-4b-q8".into(), secs: 12 }.text(&c), "載入模型中 · 12 秒");
         assert_eq!(LocalStatus::Switching { model: "a".into(), from: "b".into(), secs: 3 }.text(&c), "切換模型中 · 3 秒");
-        assert_eq!(LocalStatus::Waiting { app: "pc".into(), model: "a".into() }.text(&c), "等待 PaperComposer 用完模型");
+        assert_eq!(LocalStatus::Waiting { app: "pc".into(), model: "a".into() }.text(&c), "等待 L-Paper 用完模型");
         assert_eq!(LocalStatus::Loaded { model: "qwen3.5-4b-q8".into() }.text(&c), "已載入 Qwen3.5 4B");
     }
 

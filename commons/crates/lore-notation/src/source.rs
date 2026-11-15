@@ -1,6 +1,6 @@
 //! A document as one comment-free text in reading order, with a map back to
 //! (file, line, column). `\input` / `\include` are followed from the root
-//! file, so a PaperComposer paper (`main.tex` + `sections/*.tex`) and a
+//! file, so an L-Paper paper (`main.tex` + `sections/*.tex`) and a
 //! single-file paper look the same to the scanner.
 
 use serde::Serialize;

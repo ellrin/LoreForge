@@ -4,7 +4,7 @@
 //! made up, and any citation, reference, label, math or registered macro the model typed
 //! itself, is a [`Problem`]: the proposal is shown but cannot be applied.
 //!
-//! The command lists match PaperComposer's `ui/context.js` (CITE, REF, math environments).
+//! The command lists match L-Paper's `ui/context.js` (CITE, REF, math environments).
 
 use serde::Serialize;
 
@@ -39,7 +39,7 @@ pub enum Problem {
     Unknown { what: String },
     /// LaTeX of a locked kind the model wrote itself.
     Added { what: String },
-    /// The app's own check (PaperComposer: lore-notation) found something new.
+    /// The app's own check (L-Paper: lore-notation) found something new.
     Check { what: String },
 }
 
@@ -129,7 +129,7 @@ fn close(s: &[char], i: usize, end: &str) -> usize {
 
 /// The locked spans of `s` (char indices, in order): `macros` are the registry's macro names
 /// (with or without the backslash), `literal` any other strings to keep as they are
-/// (SlideComposer: a line break inside a paragraph).
+/// (L-Slide: a line break inside a paragraph).
 pub fn spans(text: &str, macros: &[String], literal: &[String]) -> Vec<(usize, usize)> {
     let s: Vec<char> = text.chars().collect();
     let macros: Vec<&str> = macros.iter().map(|m| m.trim().trim_start_matches('\\')).filter(|m| !m.is_empty()).collect();

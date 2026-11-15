@@ -1,6 +1,6 @@
 # commons
 
-各個 App（PaperComposer、JELearner、KnowledgeBase、SlideComposer、NeonDeck 小工具，以及之後的新 App）共用的 Rust 模組與網頁元件。每個模組都不知道任何 App 的存在，App 以路徑依賴引用（從 App 的 `public/` 工作區：`../commons/crates/<name>`）。
+各個 App（L-Paper、JELearner、L-Brain、L-Slide、L-Deck 小工具，以及之後的新 App）共用的 Rust 模組與網頁元件。每個模組都不知道任何 App 的存在，App 以路徑依賴引用（從 App 的 `public/` 工作區：`../commons/crates/<name>`）。
 
 整體設計見 `../private/shared/docs/ecosystem-design.md`（作者的私人筆記）。
 

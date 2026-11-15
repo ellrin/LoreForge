@@ -2,8 +2,8 @@
 
 Paper material extraction (design §7.4, §6 learning flow, §13-2). Two sources, one output:
 an **asset catalog** of sections (plain-text paragraphs), figures, sub-figures, tables,
-equations, captions, references and metadata. SlideComposer uses the page regions and PNG
-crops; PaperComposer's book/learning pipeline and the term/notation scanners use the text.
+equations, captions, references and metadata. L-Slide uses the page regions and PNG
+crops; L-Paper's book/learning pipeline and the term/notation scanners use the text.
 
 ```toml
 lore-docsrc = { path = "../commons/crates/lore-docsrc" }
@@ -108,5 +108,5 @@ skipped when poppler is missing).
 
 **Unnumbered headings (opt-in).** `PdfOptions::unnumbered_headings` (default off): in a document without numbered headings, a short
 Title-Case line set larger than the body is a heading (≥ 1.3× → section, ≥ 1.08× → subsection), after the abstract. Springer journals
-set their headings this way; PaperComposer's 期刊寫法 turns it on. `pdf::analyze_with(…, unnumbered)`; real-paper check:
+set their headings this way; L-Paper's 期刊寫法 turns it on. `pdf::analyze_with(…, unnumbered)`; real-paper check:
 `LORE_DOCSRC_UNNUMBERED='a.pdf|b.pdf' cargo test -p lore-docsrc --test real_papers unnumbered -- --ignored`.

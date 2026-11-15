@@ -5,8 +5,8 @@ Everything here is fictional. Run from anywhere:
     python3 make.py            # needs pandoc and Pillow
 
 Outputs next to this script: fixture-paper.docx, fixture-slides.pptx and the
-images they use (fig-*.png). The files exercise what PaperComposer and
-SlideComposer must survive when opening Office documents: native equations
+images they use (fig-*.png). The files exercise what L-Paper and
+L-Slide must survive when opening Office documents: native equations
 (OMML) with fractions, sums, matrices and aligned rows; an equation that is
 only a picture (as MathType leaves it); figures with captions; a table;
 a reviewer comment and tracked changes (Word); speaker notes (slides).

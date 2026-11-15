@@ -2,8 +2,8 @@
 
 Long-running background jobs for any app: a list of stages run in order on a spawned tokio
 task, one checkpoint file per stage, progress for the page, stop and resume, an optional wait
-for the author's review, redo from a stage. First user: SlideComposer's 論文報告
-(`docs/paper-deck.md` §工作與階段, §API); next: PaperComposer's 寫書.
+for the author's review, redo from a stage. First user: L-Slide's 論文報告
+(`docs/paper-deck.md` §工作與階段, §API); next: L-Paper's 寫書.
 
 No HTTP: the app maps its own routes onto `Jobs` and returns `Jobs::view(&job)` (the job object).
 

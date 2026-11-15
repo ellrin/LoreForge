@@ -2,7 +2,7 @@
 
 Find related papers on the web, **open access only** (`docs/book.md` §上網找論文): OpenAlex,
 arXiv and Semantic Scholar → one record shape, de-duplicated; OA PDFs downloaded into a folder
-the caller gives (the cache tier); BibTeX for every record; downloaded files into LoreReader's
+the caller gives (the cache tier); BibTeX for every record; downloaded files into L-Reader's
 library. Knows nothing about any app.
 
 ```toml
@@ -16,7 +16,7 @@ use lore_research::{Client, Config, Source, bibtex, import_into_reader};
 
 let c = Client::new(Config::default());              // reqwest, generic User-Agent, no e-mail
 let found = c.search("sparse attention", 10).await;  // Found { records, errors: [(Source, Error)] }
-if found.offline() { /* 沒有網路: go on with KB cards and LoreReader papers only */ }
+if found.offline() { /* 沒有網路: go on with KB cards and L-Reader papers only */ }
 
 let r = c.resolve("10.5555/demo.2024.001").await?;  // DOI, arXiv id / link, or a title → Option<Record>
 for rec in found.records.iter().filter(|r| r.open_access()) {
@@ -24,7 +24,7 @@ for rec in found.records.iter().filter(|r| r.open_access()) {
 }
 let (keys, bib) = bibtex::bib(&found.records);       // unique keys, one entry per record
 let rep = import_into_reader(&*c.http(), "http://127.0.0.1:7890", &files).await;
-// rep.imported [{path, sha, new}], rep.pending [path] (LoreReader not running), rep.failed [(path, msg)]
+// rep.imported [{path, sha, new}], rep.pending [path] (L-Reader not running), rep.failed [(path, msg)]
 ```
 
 - `Record`: `title, authors, year, venue, doi` (bare, lower-case), `arxiv` (no version),
@@ -54,7 +54,7 @@ let rep = import_into_reader(&*c.http(), "http://127.0.0.1:7890", &files).await;
   letters and digits) → one record: sources joined, first non-empty field, highest citation
   count, an arXiv PDF preferred. Helpers: `norm_doi`, `norm_arxiv`, `arxiv_from_url`,
   `find_doi`, `find_arxiv`.
-- `venue` (a journal's own open-access articles, PaperComposer's 期刊寫法): `sources_url` / `parse_sources` /
+- `venue` (a journal's own open-access articles, L-Paper's 期刊寫法): `sources_url` / `parse_sources` /
   `Client::find_sources(name_or_issn, limit)` → `SourceInfo { id (S…), name, issn_l, issn, publisher, kind, works_count }`;
   `works_url(&VenueQuery { source_id, from_date, kind: article|review, per_page })` (`primary_location.source.id`, `is_oa:true`,
   `type`, `from_publication_date`, newest first — every filter in that one function) / `parse_works` / `Client::venue_works` →
@@ -67,7 +67,7 @@ let rep = import_into_reader(&*c.http(), "http://127.0.0.1:7890", &files).await;
   `@article` with a venue, else `@misc` (+ `eprint`, `archivePrefix = {arXiv}`). No macros are
   written (lore-notation: escaping only).
 - `import_into_reader(http, base, files)`: `POST <base>/api/papers/import {path}` per file
-  (LoreReader copies it into its sha-addressed library). The first "no network" failure makes
+  (L-Reader copies it into its sha-addressed library). The first "no network" failure makes
   that file and the rest `pending`; a refusal (`{error}`) is `failed` and the next file is tried.
   The report is serde, for a job's `pending_imports`.
 - `Http` trait (`send(Request) -> Response`): `ReqwestHttp`, and `MockHttp` for tests (routes

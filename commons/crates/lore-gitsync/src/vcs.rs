@@ -165,7 +165,7 @@ mod tests {
             &[],
         );
         assert_eq!(m, "Update lessons (2026-11-02-ai); vocab (my-words-ja); workspace (workspace)");
-        // PaperComposer: papers/<paper>/… groups by paper.
+        // L-Paper: papers/<paper>/… groups by paper.
         let m = commit_message(
             &[
                 "papers/example-paper/sections/result.tex".into(),

@@ -2,7 +2,7 @@
 
 API keys and passwords in the OS keychain (macOS Keychain / Windows Credential Manager /
 Linux keyutils), with an owner-only file fallback. Keyring only — no HTTP client, no tokio —
-so an app that just stores a secret (KnowledgeBase's SMTP password) stays light.
+so an app that just stores a secret (L-Brain's SMTP password) stays light.
 `lore_llm::secrets` re-exports this crate unchanged.
 
 ```toml

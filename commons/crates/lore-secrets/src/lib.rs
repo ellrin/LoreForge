@@ -1,6 +1,6 @@
 //! lore-secrets — API keys (Anthropic) in the OS keychain, never in a repository or a URL.
 //! Merged from JELearner `secrets.rs` (per-user keys, file fallback) and
-//! PaperComposer `claude.rs` (single key, stale-item repair).
+//! L-Paper `claude.rs` (single key, stale-item repair).
 //!
 //! Lookup order for [`KeyStore::get`]:
 //! 1. an explicit key (settings, tests);
@@ -48,7 +48,7 @@ pub struct Who {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Account {
-    /// One key for the whole app (PaperComposer).
+    /// One key for the whole app (L-Paper).
     Single,
     /// One key per workspace user (JELearner).
     User(Who),

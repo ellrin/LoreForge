@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "L-Slide",
+  "identifier": "io.github.ellrin.slidecomposer",
+  "build": {
+    "frontendDist": "../../web"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "files": {
+        "MacOS/lore-voice-helper": "bin/lore-voice-helper"
+      }
+    },
+    "resources": {
+      "../../web": "web"
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "pptx"
+        ],
+        "name": "PowerPoint 簡報",
+        "role": "Editor",
+        "contentTypes": ["org.openxmlformats.presentationml.presentation"],
+        "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+      }
+    ]
+  }
+}

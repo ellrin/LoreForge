@@ -287,7 +287,7 @@ async fn idle_release_is_shared_and_only_the_owner_releases() {
     let d = tempfile::tempdir().unwrap();
     let home = Home::at(d.path());
     home.set_claude(Some("api"), None).unwrap();
-    // SlideComposer: no runtime of its own
+    // L-Slide: no runtime of its own
     let app: axum::Router = router(engines(d.path()));
     let (_, v) = call(&app, "GET", "/api/engines", None).await;
     assert_eq!((v["local"]["idle_minutes"].as_u64(), v["local"]["can_release"].as_bool()), (Some(10), Some(false)), "{}", v["local"]);
@@ -316,11 +316,11 @@ async fn idle_release_is_shared_and_only_the_owner_releases() {
     let (_, v) = call(&pc, "GET", "/api/engines", None).await;
     let l = &v["local"];
     assert_eq!((l["can_release"].as_bool(), l["status"].as_str()), (Some(false), Some("未載入 · 用到時自動載入")), "{l}");
-    assert_eq!(l["users"], json!(["SlideComposer"]));
-    assert_eq!(l["waiting"][0]["app"], "LoreEcho");
+    assert_eq!(l["users"], json!(["L-Slide"]));
+    assert_eq!(l["waiting"][0]["app"], "L-Echo");
     let (st, v) = call(&pc, "PUT", "/api/engines", Some(json!({ "local": { "release": true } }))).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
-    assert_eq!(v["error"], "SlideComposer 正在用");
+    assert_eq!(v["error"], "L-Slide 正在用");
     let mut other = other;
     let _ = other.kill();
     let _ = other.wait();

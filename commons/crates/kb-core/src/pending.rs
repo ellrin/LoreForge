@@ -1,10 +1,10 @@
-//! 待審區 (pending cards): candidate cards that another app (LoreEcho) proposes and the
-//! author confirms in KnowledgeBase. One `pending/<id>.json` per card in each space
+//! 待審區 (pending cards): candidate cards that another app (L-Echo) proposes and the
+//! author confirms in L-Brain. One `pending/<id>.json` per card in each space
 //! (id = `p` + ULID). Pending cards are **not** nodes: the index, the card list, review
 //! and search never read `pending/`. Accepting creates a normal card (state `learning`)
 //! and moves the file to `trash/pending/`; nothing is ever deleted.
 //!
-//! The free functions take only a [`Space`], so an app that does not run KnowledgeBase can
+//! The free functions take only a [`Space`], so an app that does not run L-Brain can
 //! write candidates directly (`Space::open(root)` + [`add`]); they only ever write inside
 //! `pending/` (and `trash/pending/` when a card is discarded). The same operations are on
 //! [`KnowledgeBase`] (`pending_*`), which also does accept / merge.

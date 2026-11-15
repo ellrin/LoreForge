@@ -1,5 +1,5 @@
 //! lore-gitsync — Git sync for app workspaces through the system `git`
-//! (merged from PaperComposer and JELearner `git.rs` / `vcs.rs`, and
+//! (merged from L-Paper and JELearner `git.rs` / `vcs.rs`, and
 //! JELearner's family-mode sync). A plain library: apps add their own routes.
 //!
 //! Using the installed git means the user's own sign-in (Keychain, Git
@@ -21,7 +21,7 @@
 //!   UI can stay quiet when offline and speak up when it matters; a local
 //!   commit made before a failed push is reported in [`GitError::committed`]
 //!   (the commit stays and goes up next time);
-//! - a repo with a [`LOCAL_ONLY_MARKER`] file at its root (the LoreShelf
+//! - a repo with a [`LOCAL_ONLY_MARKER`] file at its root (the L-Shelf
 //!   catalog) is never synced: `sync`, `pull`, `init_and_push` with a remote
 //!   and any raw `push` / `fetch` / `pull` / `remote add` fail with
 //!   [`ErrorKind::LocalOnly`].
@@ -156,7 +156,7 @@ pub struct SyncOptions {
     pub only: Vec<String>,
     pub author: Option<Author>,
     /// Folders that hold named collections, for the generated message
-    /// (PaperComposer: `papers`).
+    /// (L-Paper: `papers`).
     pub group_roots: Vec<String>,
 }
 

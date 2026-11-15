@@ -1,18 +1,18 @@
-//! 搜尋檔案 through LoreEcho: the one way a Lore app finds one of the author's files.
+//! 搜尋檔案 through L-Echo: the one way a Lore app finds one of the author's files.
 //!
 //! The app never searches itself. Its page's 「搜尋檔案」 button (`commons/ui/findfile.js`,
 //! `/findfile.js`) asks the app's own server (`POST /api/lore/find`), which mints a request id,
-//! brings LoreEcho up (`open -g -a LoreEcho` when it is not in ports.json as `le`) and hands it
-//! the request (`POST /api/find` on LoreEcho). LoreEcho finds candidates through LoreShelf, the
-//! author chooses, and LoreEcho sends each chosen file back to the app's standard receive route
+//! brings L-Echo up (`open -g -an L-Echo` when it is not in ports.json as `le`) and hands it
+//! the request (`POST /api/find` on L-Echo). L-Echo finds candidates through L-Shelf, the
+//! author chooses, and L-Echo sends each chosen file back to the app's standard receive route
 //! (`POST /api/lore/picked {request, path}`; `{request, end: true}` when find mode ends). The
 //! app's callback decides what to do with the file. Names and paths stay on 127.0.0.1.
 //!
 //! | method | path | who | what |
 //! |---|---|---|---|
-//! | POST | /api/lore/find | the app's page | `{purpose, exts, context}` → `{request}` (LoreEcho is asked) |
+//! | POST | /api/lore/find | the app's page | `{purpose, exts, context}` → `{request}` (L-Echo is asked) |
 //! | GET | /api/lore/find/{request} | the app's page | `{open, added: [name], error}` (polled while open) |
-//! | POST | /api/lore/picked | LoreEcho | `{request, path}` → the callback → `{ok, message}`; `{request, end: true}` closes it |
+//! | POST | /api/lore/picked | L-Echo | `{request, path}` → the callback → `{ok, message}`; `{request, end: true}` closes it |
 //!
 //! An app mounts it with one line: `.merge(lore_shell::findfile::router(Finds::new("pc", on_pick)))`.
 
@@ -25,14 +25,14 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-/// LoreEcho's short name in ports.json.
+/// L-Echo's short name in ports.json.
 pub const ECHO: &str = "le";
-/// LoreEcho's application name (`open -a`).
-pub const ECHO_APP: &str = "LoreEcho";
-/// How long to wait for LoreEcho after launching it.
+/// L-Echo's application name (`open -a`).
+pub const ECHO_APP: &str = "L-Echo";
+/// How long to wait for L-Echo after launching it.
 const ECHO_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// What LoreEcho is asked to find (`POST /api/find` on LoreEcho).
+/// What L-Echo is asked to find (`POST /api/find` on L-Echo).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FindRequest {
     pub request: String,
@@ -64,7 +64,7 @@ pub fn accepts(exts: &[String], name: &str) -> bool {
     exts.iter().any(|e| e.trim_start_matches('.').eq_ignore_ascii_case(&ext))
 }
 
-/// What LoreEcho sends back (`POST /api/lore/picked` on the app).
+/// What L-Echo sends back (`POST /api/lore/picked` on the app).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Picked {
     pub request: String,
@@ -78,14 +78,14 @@ pub struct Picked {
 #[derive(Debug, Clone)]
 pub struct Pick {
     pub purpose: String,
-    /// What the page sent with the request (PaperComposer: `{paper}`).
+    /// What the page sent with the request (L-Paper: `{paper}`).
     pub context: Value,
     pub path: PathBuf,
 }
 
-/// The app's callback: `Ok(message)` = taken, `Err(why)` = refused (LoreEcho shows it).
+/// The app's callback: `Ok(message)` = taken, `Err(why)` = refused (L-Echo shows it).
 pub type OnPick = Arc<dyn Fn(Pick) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> + Send + Sync>;
-/// How the app reaches LoreEcho: hands it a request (tests: a fake).
+/// How the app reaches L-Echo: hands it a request (tests: a fake).
 pub type Ask = Arc<dyn Fn(&FindRequest) -> Result<(), String> + Send + Sync>;
 
 struct Open {
@@ -107,12 +107,12 @@ pub struct Finds {
 }
 
 impl Finds {
-    /// `app` = the short name in ports.json; LoreEcho is the real one (launched when needed).
+    /// `app` = the short name in ports.json; L-Echo is the real one (launched when needed).
     pub fn new(app: &str, on_pick: OnPick) -> Finds {
         Finds { app: app.into(), on_pick, ask: Arc::new(|r: &FindRequest| ask_echo(r)), open: Arc::default() }
     }
 
-    /// Reach LoreEcho some other way (tests).
+    /// Reach L-Echo some other way (tests).
     pub fn with_ask(mut self, ask: Ask) -> Finds {
         self.ask = ask;
         self
@@ -229,17 +229,17 @@ pub fn router<S: Clone + Send + Sync + 'static>(finds: Finds) -> axum::Router<S>
         )
 }
 
-// ── LoreEcho, from either side ──────────────────────────────────
+// ── L-Echo, from either side ──────────────────────────────────
 
-/// LoreEcho's port, launching it in the background when it is not running (macOS).
+/// L-Echo's port, launching it in the background when it is not running (macOS).
 pub fn echo_port() -> Result<u16, String> {
     if let Some(p) = crate::findfile::live(ECHO) {
         return Ok(p);
     }
     if !cfg!(target_os = "macos") {
-        return Err("LoreEcho 沒有開".into());
+        return Err("L-Echo 沒有開".into());
     }
-    std::process::Command::new("open").args(["-g", "-a", ECHO_APP]).status().map_err(|e| format!("打不開 LoreEcho：{e}"))?;
+    std::process::Command::new("open").args(["-g", "-a", ECHO_APP]).status().map_err(|e| format!("打不開 L-Echo：{e}"))?;
     let until = std::time::Instant::now() + ECHO_WAIT;
     while std::time::Instant::now() < until {
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -247,20 +247,20 @@ pub fn echo_port() -> Result<u16, String> {
             return Ok(p);
         }
     }
-    Err("LoreEcho 沒有回應（打開 LoreEcho 再試一次）".into())
+    Err("L-Echo 沒有回應（打開 L-Echo 再試一次）".into())
 }
 
 fn live(app: &str) -> Option<u16> {
     lore_home::ports::live().get(app).copied()
 }
 
-/// Hand a request to LoreEcho (launched when needed).
+/// Hand a request to L-Echo (launched when needed).
 pub fn ask_echo(req: &FindRequest) -> Result<(), String> {
     let port = echo_port()?;
     post_json(port, "/api/find", &json!(req)).map(|_| ()).map_err(|(_, e)| e)
 }
 
-/// LoreEcho: send a chosen file (or `end`) back to the asking app. `Ok(message)`, or the app's refusal.
+/// L-Echo: send a chosen file (or `end`) back to the asking app. `Ok(message)`, or the app's refusal.
 pub fn send_back(req: &FindRequest, path: Option<&str>, end: bool) -> Result<String, String> {
     let port = req.port.or_else(|| live(&req.app)).ok_or_else(|| "要求的 App 已經關了".to_string())?;
     let body = Picked { request: req.request.clone(), path: path.map(str::to_string), end };
@@ -369,10 +369,10 @@ mod tests {
 
     #[tokio::test]
     async fn echo_unreachable_drops_the_request() {
-        let f = finds(Arc::default(), Arc::default()).with_ask(Arc::new(|_: &FindRequest| Err("LoreEcho 沒有回應".to_string())));
+        let f = finds(Arc::default(), Arc::default()).with_ask(Arc::new(|_: &FindRequest| Err("L-Echo 沒有回應".to_string())));
         let app: axum::Router = router(f.clone());
         let (c, v) = call(&app, "POST", "/api/lore/find", json!({ "purpose": "實驗紀錄" })).await;
-        assert_eq!((c, v["error"].as_str()), (503, Some("LoreEcho 沒有回應")));
+        assert_eq!((c, v["error"].as_str()), (503, Some("L-Echo 沒有回應")));
         assert!(f.open.lock().unwrap().is_empty());
     }
 

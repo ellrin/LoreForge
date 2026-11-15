@@ -1,7 +1,7 @@
 # lore-gitsync
 
 Git sync for app workspaces through the system `git` (design §2.2, §3.2, §13.1). A plain
-library — no axum; apps add their own routes. Merged from PaperComposer and JELearner
+library — no axum; apps add their own routes. Merged from L-Paper and JELearner
 (`core/src/vcs.rs`, `server/src/git.rs`, JL `family.rs` sync).
 
 ```toml
@@ -23,7 +23,7 @@ lore-gitsync = { path = "../commons/crates/lore-gitsync" }
 - Errors carry `kind` (`offline`, `auth`, `conflict`, `diverged`, `secret`, `notrepo`,
   `nogit`, `identity`, `exists`, `localonly`, `other`), a user message (zh-TW), git's `detail`, and
   `committed` when a local commit was made before the failure (it goes up next time).
-- A repo with `.lore-local-only` at its root (`LOCAL_ONLY_MARKER`, the LoreShelf catalog) is
+- A repo with `.lore-local-only` at its root (`LOCAL_ONLY_MARKER`, the L-Shelf catalog) is
   never synced: `sync`, `pull`, `init_and_push` with a remote and raw `push` / `fetch` /
   `pull` / `remote add` return `ErrorKind::LocalOnly` (`local_only_marker(dir)` tells).
 - No prompts ever (`GIT_TERMINAL_PROMPT=0`), `LC_ALL=C`, timeouts; no console windows on

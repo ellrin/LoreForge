@@ -176,7 +176,7 @@ fn private_templates_and_colours_join_the_public_ones() {
     std::fs::create_dir_all(dir.path().join("layouts")).unwrap();
     std::fs::write(dir.path().join("layouts/mine.json"), r#"[{ "id": "mine-2", "name": "我的兩格", "panels": [{"x":0,"y":0,"w":0.5,"h":1},{"x":0.5,"y":0,"w":0.5,"h":1}] }, { "id": "bad", "panels": [{"x":0,"y":0,"w":2,"h":1}] }]"#).unwrap();
     std::fs::write(dir.path().join("palette.json"), r#"[["mine", "112233", "445566"]]"#).unwrap();
-    // an app's own flow/ folder (SlideComposer's templates/ and themes/) is read after the shared one
+    // an app's own flow/ folder (L-Slide's templates/ and themes/) is read after the shared one
     let app = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(app.path().join("templates")).unwrap();
     std::fs::write(app.path().join("templates/one-over-two.json"), r#"{ "id": "one-over-two", "name": "一上二下", "panels": [{"x":0,"y":0,"w":1,"h":0.48},{"x":0,"y":0.52,"w":0.49,"h":0.48},{"x":0.51,"y":0.52,"w":0.49,"h":0.48}] }"#).unwrap();

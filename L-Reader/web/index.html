@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="giftbox" data-mode="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>L-Reader</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 5h7a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H3Z' fill='%23ff6b35'/%3E%3Cpath d='M21 5h-7a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h7Z' fill='%23ff8a5c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="prefs.css">
+  <link rel="stylesheet" href="notes.css">
+  <script src="theme.js"></script>
+</head>
+<body>
+<div class="app at-home" id="app">
+  <header class="top"></header>
+
+  <aside class="sorter rd-only" id="sorter" aria-label="頁面縮圖">
+    <div class="sorter-head">
+      <span id="thumbCount"></span>
+      <span class="sorter-acts">
+        <button class="ico small" id="pgDup" data-icon="dup" aria-label="複製這一頁"></button>
+        <button class="ico small" id="pgDel" data-icon="trash" aria-label="刪除這一頁"></button>
+        <button class="ico small" id="pgInsert" data-icon="insertPage" aria-label="插入頁面…"></button>
+      </span>
+    </div>
+    <div class="edit-actions" id="editActions" hidden>
+      <button class="btn small" id="editSave"><span data-icon="save"></span>另存…</button>
+      <button class="btn small" id="editDiscard">放棄變更</button>
+    </div>
+    <div id="thumbs"></div>
+  </aside>
+
+  <main class="stage rd-only">
+    <div class="findbar" id="find" role="search" data-keys-group="搜尋" hidden>
+      <span data-icon="search"></span>
+      <input id="searchInput" type="search" placeholder="搜尋全文" aria-label="搜尋全文">
+      <span class="count" id="searchCount"></span>
+      <button class="ico small" id="searchPrev" data-icon="up" aria-label="上一個 ⇧↵"></button>
+      <button class="ico small" id="searchNext" data-icon="chevron" aria-label="下一個 ↵"></button>
+      <button class="ico small" id="searchClose" data-icon="x" aria-label="關閉 Esc"></button>
+    </div>
+    <div class="viewport" id="viewport"><div class="pages" id="pages"></div></div>
+    <footer class="statusbar">
+      <button class="ico" id="actPrev" data-icon="back" aria-label="上一頁"></button>
+      <span class="pagebox"><input id="pageInput" inputmode="numeric" aria-label="頁碼"><span id="pageTotal">/ 0</span></span>
+      <button class="ico" id="actNext" data-icon="next" aria-label="下一頁"></button>
+      <span class="grow"></span>
+      <button class="ico" id="actZoomOut" data-icon="zoomOut" aria-label="縮小"></button>
+      <button id="zoomChip" aria-label="實際大小">100%</button>
+      <button class="ico" id="actZoomIn" data-icon="zoomIn" aria-label="放大"></button>
+      <button class="ico" id="actFit" data-icon="fit" aria-label="符合寬度" aria-pressed="true"></button>
+      <span class="seg view-seg" id="viewSeg" role="group" aria-label="閱讀方式">
+        <button type="button" data-view="scroll" aria-pressed="true" title="捲動"><span data-icon="file"></span><span class="lbl">捲動</span></button><button type="button" data-view="flip" aria-pressed="false" title="翻頁"><span data-icon="book"></span><span class="lbl">翻頁</span></button>
+      </span>
+    </footer>
+  </main>
+
+  <aside class="side rd-only" id="side" aria-label="面板"></aside>
+</div>
+
+<section class="home" id="home">
+  <div class="home-inner">
+    <section class="block" data-open="true">
+      <div class="block-head"><span class="n">01</span><h3>開始</h3></div>
+      <div class="block-body tiles">
+        <label class="tile" id="tileAdd"><span data-icon="upload"></span>加入 PDF…<input type="file" id="openFile" accept="application/pdf,.pdf" multiple hidden></label>
+        <button class="tile" id="actMerge"><span data-icon="layers"></span>合併 PDF…</button>
+        <button class="tile" id="tilePath"><span data-icon="folder"></span>貼上路徑…</button>
+      </div>
+    </section>
+    <div class="warn-box" id="libError" hidden></div>
+    <section class="block" data-open="true" id="recentBlock" hidden>
+      <div class="block-head"><span class="n">02</span><h3>最近</h3></div>
+      <div class="block-body recent" id="recentList"></div>
+    </section>
+    <section class="block" data-open="true">
+      <div class="block-head"><span class="n">03</span><h3>書庫</h3><span class="c" id="libCount"></span></div>
+      <div class="block-body">
+        <div class="lib-bar">
+          <label class="lib-find"><span data-icon="search"></span><input id="libFilter" type="search" placeholder="標題、作者、年份" aria-label="篩選書庫" autocomplete="off"></label>
+          <span class="seg" id="libSort" role="group" aria-label="排序">
+            <button type="button" data-sort="opened">最近開啟</button><button type="button" data-sort="added">加入日期</button><button type="button" data-sort="title">標題</button>
+          </span>
+        </div>
+        <div class="lib-list" id="paperList"></div>
+      </div>
+    </section>
+  </div>
+</section>
+
+<div class="selbar" id="selBar" role="toolbar" aria-label="選取工具" hidden></div>
+<div class="menu" id="ctxMenu" role="menu" hidden></div>
+<div class="pop" id="pop" role="dialog" hidden></div>
+<dialog id="dlg" class="dialog small"></dialog>
+
+<script src="vendor/katex/katex.min.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="makedeck.js"></script>
+<script src="makebook.js"></script>
+<script src="eqplot.js"></script>
+<script type="module" src="app.js"></script>
+<script type="module" src="notes.js"></script>
+</body>
+</html>

@@ -101,8 +101,8 @@
     L.can_release = false;
     switch (q.get("local")) {
       case "loading": Object.assign(L, { state: "starting", status: `載入模型中 · ${secs} 秒`, can_release: true }); break;
-      case "waiting": Object.assign(L, { state: "ready", status: "等待 LoreReader 用完模型" }); break;
-      case "blocked": Object.assign(L, { state: "ready", status: "已載入 Qwen 3.5 9B", release_blocked: "LoreReader 正在用" }); break;
+      case "waiting": Object.assign(L, { state: "ready", status: "等待 L-Reader 用完模型" }); break;
+      case "blocked": Object.assign(L, { state: "ready", status: "已載入 Qwen 3.5 9B", release_blocked: "L-Reader 正在用" }); break;
       default: Object.assign(L, { state: "ready", status: "已載入 Qwen 3.5 9B", can_release: true });
     }
     return ENG;
@@ -212,7 +212,7 @@
     btn("座標選單", (e) => { const r = e.currentTarget.getBoundingClientRect(); LoreShell.menu({ x: r.left, y: r.bottom + 6 }, [{ head: "attention" }, { icon: "search", label: "3 處" }, { icon: "cards", label: "加入知識庫…" }]); }),
     btn("編輯中", () => shell.editing(!shell.el.classList.contains("editing"))),
     btn("設定", () => LoreShell.settings()),
-    btn("開 LoreReader", () => LoreLinks.open("lr", { paper: "abc123", page: 4 })),
+    btn("開 L-Reader", () => LoreLinks.open("lr", { paper: "abc123", page: 4 })),
   );
   b4.body.append(states, more);
   const b5 = LoreShell.block({ n: "05", title: "對照表" });

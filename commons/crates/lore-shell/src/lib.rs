@@ -1,5 +1,5 @@
 //! The shared LoreForge shell (`docs/shell.md`): `commons/ui/icons.js`, `base.css`,
-//! `shell.js`, `makedeck.js`, `makebook.js`, `polish.js` and `findfile.js` (with [`findfile`], 搜尋檔案 through LoreEcho), compiled in like `lore_home::theme`, so an app server only needs
+//! `shell.js`, `makedeck.js`, `makebook.js`, `polish.js` and `findfile.js` (with [`findfile`], 搜尋檔案 through L-Echo), compiled in like `lore_home::theme`, so an app server only needs
 //! these routes:
 //!
 //! ```ignore
@@ -22,11 +22,11 @@ pub const BASE_CSS: &str = include_str!("../../../ui/base.css");
 pub const SHELL_JS: &str = include_str!("../../../ui/shell.js");
 /// `commons/ui/makedeck.js`: `LoreMakeDeck`, the 做成簡報 button and card (apps with papers mount it).
 pub const MAKEDECK_JS: &str = include_str!("../../../ui/makedeck.js");
-/// `commons/ui/makebook.js`: `LoreMakeBook`, the 寫 review button and card (PaperComposer's 寫書; LoreReader mounts it).
+/// `commons/ui/makebook.js`: `LoreMakeBook`, the 寫 review button and card (L-Paper's 寫書; L-Reader mounts it).
 pub const MAKEBOOK_JS: &str = include_str!("../../../ui/makebook.js");
 /// `commons/ui/polish.js`: `LorePolish`, the 潤飾 dialog (lore-polish's `/api/polish*`, lore-voice's `/api/voice*`).
 pub const POLISH_JS: &str = include_str!("../../../ui/polish.js");
-/// `commons/ui/findfile.js`: `LoreFindFile`, the 搜尋檔案 button (a find request to LoreEcho, [`findfile`]).
+/// `commons/ui/findfile.js`: `LoreFindFile`, the 搜尋檔案 button (a find request to L-Echo, [`findfile`]).
 pub const FINDFILE_JS: &str = include_str!("../../../ui/findfile.js");
 
 /// `(route, content type, body)` for each file.
@@ -82,7 +82,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
 
-    const APPS: [(&str, &str); 4] = [("PaperComposer", "ui"), ("SlideComposer", "web"), ("LoreReader", "web"), ("KnowledgeBase", "web")];
+    const APPS: [(&str, &str); 4] = [("L-Paper", "ui"), ("L-Slide", "web"), ("L-Reader", "web"), ("L-Brain", "web")];
 
     fn repo() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")

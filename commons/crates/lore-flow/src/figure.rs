@@ -1,6 +1,6 @@
 //! The figure the flow editor makes (`docs/flow-figures.md`): the L1 text plus the
 //! author's layout, colours, line meanings and legend. This is what rides with the
-//! document (a SlideComposer figure group, PaperComposer's `<stem>.flow.json`) so the
+//! document (an L-Slide figure group, L-Paper's `<stem>.flow.json`) so the
 //! figure re-opens in the editor.
 //!
 //! ```json

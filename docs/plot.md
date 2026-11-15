@@ -1,7 +1,7 @@
 # 繪圖工具（lore-plot）
 
 作者 2026-11-13 的要求：論文與簡報的結果圖（長條、折線、散佈、ROC…）用 GUI 調整到好看，也能從資料＋一句話自動產生，再手動微調。
-不是 Dock 上的 app，是共用套件：PaperComposer 與 SlideComposer 從文件裡打開、插入，選取圖時角落的「編輯」小按鈕重新編輯（雙擊不特別處理，2026-11-13 作者決定，和流程圖一樣）。
+不是 Dock 上的 app，是共用套件：L-Paper 與 L-Slide 從文件裡打開、插入，選取圖時角落的「編輯」小按鈕重新編輯（雙擊不特別處理，2026-11-13 作者決定，和流程圖一樣）。
 
 - 程式：`commons/crates/lore-plot`（圖的規格、資料匯入、樣式、輸出、LLM 任務、axum 路由）
   與 `commons/ui/plot/`（`plot.js` 畫圖、`editor.js` 編輯器、`demo.html`）。
@@ -186,7 +186,7 @@
 
 `grid: { cols, rows, gap, labels, legend: top|right|bottom, sharey, sharex, share_color }`；每格 `span`（欄）與 `rowspan`（列），依序放進第一個放得下的位置。
 編輯器：加一格（選種類，或複製這一格）、拖曳格的標籤排順序、每格自己的種類與資料、共用圖例／軸／色條、格標 a b c 自動、
-頁面大小（單欄／1.5 欄／雙欄／整頁）、「併入其他圖…」（另一張 `.plot.json`；PaperComposer 列出這篇論文的其他圖）。
+頁面大小（單欄／1.5 欄／雙欄／整頁）、「併入其他圖…」（另一張 `.plot.json`；L-Paper 列出這篇論文的其他圖）。
 
 ### 3D
 
@@ -229,7 +229,7 @@ label = "簡潔"
 - KaTeX 輸出是 HTML，不是 SVG。`plot.js` 把排好的 KaTeX 量好位置後**攤平成 SVG**：每段字是一個 `<text>`（字型 KaTeX_Main、KaTeX_Math…），
   分數線是 `<rect>`，根號等延伸符號是 KaTeX 自己的 `<svg>` 路徑。所以 SVG 裡沒有 `foreignObject`，PDF 裡數學式是向量字。
 - `font.math`：預設 `katex`＝`$…$` 裡的變數與方程式全部用 TeX 字型（作者 2026-11-13 決定）；`$…$` 外的文字用樣式的字型。`text`＝數學式裡的字母、數字改用圖的字型。
-- 從 PaperComposer 打開時，論文對照表（lore-notation）的巨集交給 KaTeX，所以 `$\Lrec$` 這種登記過的巨集畫得出來。
+- 從 L-Paper 打開時，論文對照表（lore-notation）的巨集交給 KaTeX，所以 `$\Lrec$` 這種登記過的巨集畫得出來。
 
 ## 6. 輸出
 
@@ -239,8 +239,8 @@ label = "簡潔"
 | SVG | 有 `pdftocairo` 就從 PDF 轉（字變路徑，任何軟體都一樣）；沒有就用編輯器的 SVG＋內嵌用到的 KaTeX 字型 | 論文、網頁 |
 | PNG | 有 `pdftoppm` 就從 PDF 轉（`-r <dpi>`，和 PDF 一模一樣）；沒有就用 Chrome 截圖 | 簡報 |
 
-- 規格永遠跟著圖：PaperComposer 是 `figures/<名稱>.plot.json`（和 PDF 同名）；PNG 把規格寫進自己的 `iTXt` 區塊（`lore-plot`），
-  SVG 寫進 `<metadata>`。所以 SlideComposer 的圖片就算經過 .pptx 存檔再打開，仍能重新編輯。
+- 規格永遠跟著圖：L-Paper 是 `figures/<名稱>.plot.json`（和 PDF 同名）；PNG 把規格寫進自己的 `iTXt` 區塊（`lore-plot`），
+  SVG 寫進 `<metadata>`。所以 L-Slide 的圖片就算經過 .pptx 存檔再打開，仍能重新編輯。
 - 沒有 Chrome：輸出失敗並說明（「需要 Chrome 才能輸出 PDF」），編輯與儲存規格不受影響。**輸出不在離線測試內**（需要瀏覽器）。
 
 ## 7. 自動產生（LLM 任務 `plot-propose`）
@@ -263,7 +263,7 @@ label = "簡潔"
   排序用 `opts.sort`。改到軸上不認得的鍵（例如 `lim`）不套用，帶著原因重問一次。
 
 提示詞在 `commons/crates/lore-plot/prompts/assist.md`（公開、中性，不寫字型名稱），執行時填入 `{catalogue}`（formats.json 一格一行）、`{style_preset}`、`{venue}`，
-以及作者自己的偏好：`private/shared/plot/assist.md`（自由文字）＋他的預設樣式（經 lore-home）。PaperComposer 與 SlideComposer 的任務表都合併了這三個任務
+以及作者自己的偏好：`private/shared/plot/assist.md`（自由文字）＋他的預設樣式（經 lore-home）。L-Paper 與 L-Slide 的任務表都合併了這三個任務
 （`plot-propose`、`plot-assist`、`plot-assist-vision`），所以從論文重新打開圖 → 編輯器 → 助手 → 存回，會更新同一個圖檔。
 
 ## 8. 接到 app
@@ -285,7 +285,7 @@ app 伺服器：`router = router.merge(lore_plot::router(lore_plot::Plot::new(ho
 `LorePlot.edit({ spec, macros, title, target: "paper" | "slide", save: async ({ spec, svg }) => … })` 打開全螢幕編輯器（`<dialog>`），
 按「完成」呼叫 `save`；`save` 由 app 寫檔。
 
-### PaperComposer
+### L-Paper
 
 - 論文右鍵選單「繪圖…」（在「新增圖…」旁）：編輯器 → 完成 → `POST /api/papers/{name}/plot`（`{ stem, spec, svg }`）
   → 伺服器輸出 `figures/<stem>.pdf`＋`figures/<stem>.plot.json` → 和「新增圖…」同一條路插入
@@ -294,7 +294,7 @@ app 伺服器：`router = router.merge(lore_plot::router(lore_plot::Plot::new(ho
 - 點頁面上的圖：圖檔旁有 `.plot.json` 時角落出現「編輯」小按鈕（`ui/figedit.js`，流程圖的 `.flow.json` 同一個按鈕），按了打開編輯器；雙擊照舊；完成後覆寫同一個 PDF 與規格（有規格就代表是這個工具產生的檔），圖片重新載入。
 - lore-notation：插入的區塊用登記的 `\label`／`\ref`，不動 `notation.tex`；`lore-plot` 的測試把產生的區塊放進合成論文跑 `check_document`。
 
-### SlideComposer
+### L-Slide
 
 - 上方「插入」選單「圖表」：編輯器（`target: "slide"`，預設樣式 `slide`）→ 完成 → `POST /api/decks/{name}/plot`（`{ spec, svg, dpi }`）
   → 伺服器輸出 PNG（預設 300 dpi，規格寫在 PNG 裡）存成 deck 的 asset → 插入圖片物件。
@@ -304,22 +304,22 @@ app 伺服器：`router = router.merge(lore_plot::router(lore_plot::Plot::new(ho
 ## 9. 狀態與之後（2026-11-13；方程式見 §10）
 
 已完成：規格、22 種圖、54 個格式（B1–C4）、組合圖、軸（log／symlog／分段拉伸／斷軸）、圖例佔用度、放大小圖、色盤（含 20 個主題的靜態複本）、
-編輯器（格式、組合、助手）、匯入（CSV／TSV／JSON／XLSX／LaTeX 表）、輸出（PDF／SVG／PNG，規格跟著檔案）、PaperComposer 插入與重新編輯、
-SlideComposer 插入與重新編輯、`plot-propose`／`plot-assist`。
+編輯器（格式、組合、助手）、匯入（CSV／TSV／JSON／XLSX／LaTeX 表）、輸出（PDF／SVG／PNG，規格跟著檔案）、L-Paper 插入與重新編輯、
+L-Slide 插入與重新編輯、`plot-propose`／`plot-assist`。
 
 沒有在真的環境測過：模型（自動、助手只用假模型測；`examples/serve.rs` 是假模型）、Windows／沒有 Chrome 的電腦。
 
 之後：
 - 圖說：存入論文時用圖的規格寫圖說草稿（現在是編輯器「圖說」欄或空白）。
-- SlideComposer：簡報上的圖若要跟著投影片的配色，現在只有私人樣式 `mine-slide`；簡報風格包（style pack）的配色還沒接。
+- L-Slide：簡報上的圖若要跟著投影片的配色，現在只有私人樣式 `mine-slide`；簡報風格包（style pack）的配色還沒接。
 - 3D 曲面的軸刻度字在角落會擠在一起（只標最小／最大值）。
 - 組合圖拖曳：現在拖的是格的標籤，不是圖上的格。
-- 從 LoreReader 的論文 PDF 抓表格（lore-docsrc 的 PDF 表格）還沒接；LaTeX 表可以。
+- 從 L-Reader 的論文 PDF 抓表格（lore-docsrc 的 PDF 表格）還沒接；LaTeX 表可以。
 
 
 ## 10. 會動的方程式（`kind: "equation"`，2026-11-13）
 
-計畫與分層：`docs/living-equations.md`（這裡做的是第一層）。同一個編輯器、同一份規格、同一套 TeX 字形；PaperComposer、SlideComposer、LoreReader 都用它。
+計畫與分層：`docs/living-equations.md`（這裡做的是第一層）。同一個編輯器、同一份規格、同一套 TeX 字形；L-Paper、L-Slide、L-Reader 都用它。
 
 ### 規格
 
@@ -361,7 +361,7 @@ label smoothing（ε、K；最小值在 `1−ε+ε/K`）、softmax 溫度（長�
 
 ### 模型任務 `equation-plot`（`tasks.toml`，類別 `create`，雲端優先）
 
-輸入：論文的 LaTeX、符號表列（LoreReader symbols.json／對照表）、周圍的句子。輸出 JSON：模板＋論文的值，或自訂算式＋變數＋化簡假設＋2–5 個性質；`animate` ＝論文自己調的參數（消融、超參數段落），沒有就留空。
+輸入：論文的 LaTeX、符號表列（L-Reader symbols.json／對照表）、周圍的句子。輸出 JSON：模板＋論文的值，或自訂算式＋變數＋化簡假設＋2–5 個性質；`animate` ＝論文自己調的參數（消融、超參數段落），沒有就留空。
 不能用時附理由重問一次，再不行把理由與草稿交回編輯器（手動）。自動放進投影片（`fit_for_auto`）只接受：模板、`animate` 來自論文且有論文的值、那個參數的符號或名稱真的出現在論文的調參／消融／超參數段落、性質全過。
 
 ### 編輯器
@@ -371,7 +371,7 @@ label smoothing（ε、K；最小值在 `1−ε+ε/K`）、softmax 溫度（長�
 輸出 ＝ 檔案的樣子（論文／簡報樣式，從不跟主題）。
 
 **變數顏色（3Blue1Brown 式）**：每個變數一個固定的顏色角色（index，不是顏色）：函數本身 0、橫軸 1、參數 2、3…；lore-notation 的 `Entry.color` 可以指定（模板層 < `private/shared/notation.json` < 文件自己的 notation），
-`/plot/api/equation/roles` 查（LoreReader 傳符號表、PaperComposer 傳論文的 notation、SlideComposer 傳簡報的 notation；同一個方程式裡角色不重複）。角色在 app 裡對到主題色，輸出時對到圖的樣式色盤；同一個符號在 LaTeX（`\textcolor`，mathsvg 照每個字的顏色攤平）、滑桿、曲線、敏感度長條、3D 軸都是同一色。
+`/plot/api/equation/roles` 查（L-Reader 傳符號表、L-Paper 傳論文的 notation、L-Slide 傳簡報的 notation；同一個方程式裡角色不重複）。角色在 app 裡對到主題色，輸出時對到圖的樣式色盤；同一個符號在 LaTeX（`\textcolor`，mathsvg 照每個字的顏色攤平）、滑桿、曲線、敏感度長條、3D 軸都是同一色。
 論文的圖（期刊）：字與軸標籤不上色（§2 的規則），曲線仍用角色色；簡報的圖：標籤也上色。論文曲線的圖例跟著文件語言：英文 "γ = 2 (paper)"、中文「γ = 2（論文）」（`eq.lang`；論文報告取簡報的語言）。
 
 ### GIF
@@ -382,9 +382,9 @@ label smoothing（ε、K；最小值在 `1−ε+ε/K`）、softmax 溫度（長�
 
 ### 接到 app
 
-- LoreReader：`/plot` 掛上（`lr-server` `plot_routes`），符號面板「式」每列的 ✦ 與段落裡式子的選單「動起來」→ `equation-plot` → 編輯器（互動）。模型不能用時編輯器帶著論文的 LaTeX 打開，手動選。
-- PaperComposer：右鍵「會動的方程式…」→ 編輯器 → 存成 `figures/eq-<模板>.pdf`＋`.plot.json`（向量 PDF，和其他圖同一條插入路徑：`\label`、`\ref`、lore-notation 檢查）。要 PNG 用匯出。
-- SlideComposer：工具列「會動的方程式」→ 編輯器 → 圖片是 GIF（帶規格；選取時「編輯圖表」重新打開）。論文報告：方法／損失頁的主要損失（`\mathcal{L}` 在左邊的式子，損失頁優先）走 `equation-plot`，通過 `fit_for_auto` 才在那頁式子下方放一張 GIF（一份簡報一張，220 × 95 mm，佔文字欄的寬），否則跳過並在警告裡說原因；微調視窗「會動的方程式 要／不要」。
+- L-Reader：`/plot` 掛上（`lr-server` `plot_routes`），符號面板「式」每列的 ✦ 與段落裡式子的選單「動起來」→ `equation-plot` → 編輯器（互動）。模型不能用時編輯器帶著論文的 LaTeX 打開，手動選。
+- L-Paper：右鍵「會動的方程式…」→ 編輯器 → 存成 `figures/eq-<模板>.pdf`＋`.plot.json`（向量 PDF，和其他圖同一條插入路徑：`\label`、`\ref`、lore-notation 檢查）。要 PNG 用匯出。
+- L-Slide：工具列「會動的方程式」→ 編輯器 → 圖片是 GIF（帶規格；選取時「編輯圖表」重新打開）。論文報告：方法／損失頁的主要損失（`\mathcal{L}` 在左邊的式子，損失頁優先）走 `equation-plot`，通過 `fit_for_auto` 才在那頁式子下方放一張 GIF（一份簡報一張，220 × 95 mm，佔文字欄的寬），否則跳過並在警告裡說原因；微調視窗「會動的方程式 要／不要」。
   那頁的方程式也照同樣的角色上色（簡報樣式的色盤，和 GIF 一致）：編輯器看的 LaTeX 用 `\textcolor`，`.pptx` 的 OMML 在那些字的 `a:rPr` 加 `a:solidFill`；lore-notation 照樣讀到同樣的符號。
 - `.pptx`：GIF 原樣存進 `ppt/media/*.gif`（`image/gif`），PowerPoint 播動畫；規格仍在 GIF 裡。
 
@@ -429,13 +429,13 @@ label smoothing（ε、K；最小值在 `1−ε+ε/K`）、softmax 溫度（長�
 ### 輸出
 
 檔案用圖的樣式（白底、樣式的色盤，不發光，從不跟主題）：`CHARTS.equation` 遇到 `sim` 改由 `LorePlot.eqSim.chart` 在格子裡畫整頁（960×540 的虛擬頁：標題、動畫、項的列、堆疊圖），所以 PNG／PDF／編輯器的「輸出」都是 `plan` 跑完的最後一格（論文裡的模擬圖是一張靜態圖，作者決定要不要用）。
-**GIF 節奏**（所有方程式 GIF）：`LoreSim.schedule(diffs, F, 0.25)`（Rust `sim::schedule` 同一個函式）：格與格之間的距離 = 75 % 畫面變化（每一步在小畫布上的像素差；曲線掃參數時用曲線的變化）＋ 25 % 時間，最後一格停 1.6 s（掃參數：兩個折返點各停 0.7 s、論文值那格停 4 倍）。`LorePlot.eq.gifFrames` → `{ frames, delays, dither }`，`POST /plot/api/gif`（SlideComposer 的 `/plot` 存檔、論文報告的自動 GIF 都用它）。
+**GIF 節奏**（所有方程式 GIF）：`LoreSim.schedule(diffs, F, 0.25)`（Rust `sim::schedule` 同一個函式）：格與格之間的距離 = 75 % 畫面變化（每一步在小畫布上的像素差；曲線掃參數時用曲線的變化）＋ 25 % 時間，最後一格停 1.6 s（掃參數：兩個折返點各停 0.7 s、論文值那格停 4 倍）。`LorePlot.eq.gifFrames` → `{ frames, delays, dither }`，`POST /plot/api/gif`（L-Slide 的 `/plot` 存檔、論文報告的自動 GIF 都用它）。
 GIF 編碼：每格只存變了的矩形，矩形裡沒變的像素用透明索引（標題、列、軸不再每格重存）；熱圖矩形內加 4×4 Bayer 抖色（線與字照舊精確），熱圖先量化成 64 階，跨格沒變的像素就不用存。熱圖場景預設 60 格、寬 960 px，其他 100 格、寬 1200 px。量到的（簡報樣式，2026-11-14）：組合損失 0.86 MB、softmax 0.28 MB、k-means 65 KB、softmax 分區 1.2 MB、高斯混合 2.9 MB、第一層 focal 掃描 150 KB；做一張 GIF 要 25–40 秒（Chrome 印每一格＋poppler）。
 KaTeX 字面在量字之前先載入（`LoreMathSvg.loadKatex` 等 `document.fonts.load`）：以前 ∑ 第一次用 KaTeX_Size1 時用備用字量寬度，下標會疊進 ∑ 裡。
 
 ### 接到 app
 
 - 編輯器：左邊「模擬」一組（`equations.json` 的 `scenes`）；互動 ＝ 這個畫面（改的權重、項、目標存回規格），輸出 ＝ 檔案的樣子；右邊「模擬」：步數、學習率、GIF 格數與毫秒、GIF。
-- `LorePlot.animateLatex`（LoreReader ✦、KnowledgeBase 卡片的式子）：組合損失或分佈的目標（`/plot/api/equation/scenes`，`sim::suggest`，不用模型）先問要哪個模擬或曲線。
-- SlideComposer 放映「互動」：見 `SlideComposer/CLAUDE.md`（Show）。互動畫面的權重改動是 GIF 的起始權重，`plan` 的步驟照樣蓋過；從論文來的組合損失，場景用的是場景自己的項（論文的 LaTeX 與符號沒有對到項上，見 living-equations.md 提案 3）。目標分佈不能增減成分；寬度只能用滾輪。
+- `LorePlot.animateLatex`（L-Reader ✦、L-Brain 卡片的式子）：組合損失或分佈的目標（`/plot/api/equation/scenes`，`sim::suggest`，不用模型）先問要哪個模擬或曲線。
+- L-Slide 放映「互動」：見 `L-Slide/CLAUDE.md`（Show）。互動畫面的權重改動是 GIF 的起始權重，`plan` 的步驟照樣蓋過；從論文來的組合損失，場景用的是場景自己的項（論文的 LaTeX 與符號沒有對到項上，見 living-equations.md 提案 3）。目標分佈不能增減成分；寬度只能用滾輪。
 

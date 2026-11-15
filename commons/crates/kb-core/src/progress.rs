@@ -45,6 +45,8 @@ pub enum Outcome {
     Forgot,
     /// 被標「不熟」
     Unfamiliar,
+    /// 作者自己標「已熟悉」: known for good, no checks, never stale.
+    Mastered,
 }
 
 impl Outcome {
@@ -53,6 +55,7 @@ impl Outcome {
             Outcome::Remembered => "remembered",
             Outcome::Forgot => "forgot",
             Outcome::Unfamiliar => "unfamiliar",
+            Outcome::Mastered => "mastered",
         }
     }
 }
@@ -121,6 +124,10 @@ pub struct Progress {
     /// Maintenance checks passed since the card became known.
     #[serde(default)]
     pub maintenance_step: u32,
+    /// Set by the author: the term is mastered, so no checks and no `stale`. Cleared by
+    /// `forgot` / `unfamiliar`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mastered: bool,
     #[serde(default)]
     pub log: Vec<LogEntry>,
     #[serde(flatten)]
@@ -145,6 +152,7 @@ impl Progress {
             encounters: 0,
             last_seen_at: Some(now),
             maintenance_step: 0,
+            mastered: false,
             log: vec![LogEntry { at: now, event: "created".into(), via: via.map(str::to_string), early: false }],
             extra: Map::new(),
         }
@@ -176,7 +184,7 @@ impl Progress {
     /// Known cards untouched for `stale_after_days` become stale. Returns true when the
     /// state changed (the caller decides whether to save).
     pub fn refresh(&mut self, now: Time, iv: &Intervals) -> bool {
-        if self.state != State::Known || self.is_due(now) {
+        if self.mastered || self.state != State::Known || self.is_due(now) {
             return false;
         }
         let Some(last) = self.last_activity() else { return false };
@@ -198,8 +206,18 @@ impl Progress {
         self.refresh(now, iv);
         self.last_seen_at = Some(now);
         match outcome {
+            Outcome::Mastered => {
+                self.log(now, "mastered", via, false);
+                self.state = State::Known;
+                self.mastered = true;
+                self.streak = self.streak.max(iv.known_after);
+                self.maintenance_step = 0;
+                self.next_check_at = None;
+                Step { advanced: true, became_known: true }
+            }
             Outcome::Forgot | Outcome::Unfamiliar => {
                 self.log(now, outcome.as_str(), via, false);
+                self.mastered = false;
                 self.state = State::Learning;
                 self.streak = 0;
                 self.maintenance_step = 0;
@@ -266,6 +284,7 @@ impl Progress {
     pub fn score(&self) -> u32 {
         match self.state {
             State::Learning => (10 + 25 * self.streak).min(60),
+            State::Known if self.mastered => 100,
             State::Known => (70 + 10 * self.maintenance_step).min(100),
             State::Stale => 40,
         }
@@ -293,6 +312,19 @@ mod tests {
         assert_eq!(p.log.iter().map(|e| e.event.as_str()).collect::<Vec<_>>(), ["created", "known"]);
         let off = Intervals { maintenance: false, ..Intervals::default() };
         assert_eq!(Progress::new_known(t0(), None, &off).next_check_at, None);
+    }
+
+    #[test]
+    fn mastered_never_asks_or_goes_stale_until_unfamiliar() {
+        let iv = Intervals::default();
+        let mut p = Progress::new(t0(), None, &iv);
+        let s = p.recall(Outcome::Mastered, t0(), Some("kb"), &iv);
+        assert!(s.became_known);
+        assert_eq!((p.state, p.mastered, p.next_check_at, p.score()), (State::Known, true, None, 100));
+        assert!(!p.refresh(d(400), &iv));
+        assert_eq!(p.state, State::Known);
+        p.recall(Outcome::Unfamiliar, d(401), None, &iv);
+        assert_eq!((p.state, p.mastered, p.next_check_at), (State::Learning, false, Some(d(402))));
     }
 
     #[test]

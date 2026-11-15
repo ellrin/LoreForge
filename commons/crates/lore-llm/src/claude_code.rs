@@ -1,7 +1,7 @@
 //! Claude subscription engine: runs the Claude Code CLI (`claude -p`) that the
 //! user installed and signed into with their own Claude account, so usage
 //! counts against their subscription instead of API billing. Merged from
-//! PaperComposer and JELearner.
+//! L-Paper and JELearner.
 //!
 //! - The official, unmodified `claude` binary does the work; sign-in happens
 //!   in Anthropic's own browser flow (`claude auth login --claudeai`). This

@@ -1,4 +1,4 @@
-//! lore-math — equations for SlideComposer / PaperComposer.
+//! lore-math — equations for L-Slide / L-Paper.
 //!
 //! * LaTeX → OMML: pandoc (offline sidecar) converts `$$…$$` to a minimal docx;
 //!   the `m:oMath`/`m:oMathPara` is lifted out of `word/document.xml`.

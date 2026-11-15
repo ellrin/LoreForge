@@ -1,6 +1,6 @@
 # 寫書：給自己的 review（課程筆記）
 
-作者 2026-11-13 決定的下一步。LoreReader 讀論文時，把**作者不懂的部分**寫成一份給自己的課程筆記；在 PaperComposer 的「寫書」打開、改寫、匯出 PDF。論文報告的「知識背景文件」（docs/paper-deck.md「以後」）是同一件事。
+作者 2026-11-13 決定的下一步。L-Reader 讀論文時，把**作者不懂的部分**寫成一份給自己的課程筆記；在 L-Paper 的「寫書」打開、改寫、匯出 PDF。論文報告的「知識背景文件」（docs/paper-deck.md「以後」）是同一件事。
 
 ## 作者的要求（2026-11-13）
 
@@ -9,24 +9,24 @@
 - **語言**：英文為主，中文輔助（關鍵處中文說明、名詞第一次出現附中文）。
 - **語氣**：教科書口吻，由淺入深，先直覺再式子。
 - **有根據**：每個說法要有 reference（`\cite{…}`）；沒有來源的說法不寫。
-- **上網找資料**：搜尋相關論文（OpenAlex / arXiv / Semantic Scholar 等，只取開放取用的全文）；用到的開放取用論文**下載並加進 LoreReader 書庫**。
+- **上網找資料**：搜尋相關論文（OpenAlex / arXiv / Semantic Scholar 等，只取開放取用的全文）；用到的開放取用論文**下載並加進 L-Reader 書庫**。
 - **一本書**：從一篇論文開始；之後讀別篇時可以「加進這本書」，已寫過的主題不重寫、只補新的章節。
 
 ## 流程（一個背景工作，`lore-jobs`）
 
-入口：LoreReader 上方列「寫 review」（和「做成簡報」同一種卡片；PaperComposer 沒開就打開它再等）→ 選「新書」或「加進…」、篇幅、語言比例 → 先看大綱／直接產生。PaperComposer 首頁「寫書」列出書、可以從那裡開始或繼續。
+入口：L-Reader 上方列「寫 review」（和「做成簡報」同一種卡片；L-Paper 沒開就打開它再等）→ 選「新書」或「加進…」、篇幅、語言比例 → 先看大綱／直接產生。L-Paper 首頁「寫書」列出書、可以從那裡開始或繼續。
 
 | 階段 | 做什麼 |
 |---|---|
-| `source` | 論文素材（lore-docsrc 讀 LoreReader 的 PDF，唯讀）；從磁碟唯讀讀 LoreReader 的 `reading.json`（懂了的段落）與 `chat.json`（問過的問題），像 SlideComposer 的 `reader.rs`。LoreReader 開著時送來的紅字名詞只是補充 |
-| `terms` | 工作自己從論文素材算名詞（和 SlideComposer 論文報告的 `terms` 同一套：`kbterms`，抽到 commons 共用），對知識庫；`known` 以外的全部進下一步。所以從 PaperComposer 開始、或結束後繼續的工作也有名詞清單 |
+| `source` | 論文素材（lore-docsrc 讀 L-Reader 的 PDF，唯讀）；從磁碟唯讀讀 L-Reader 的 `reading.json`（懂了的段落）與 `chat.json`（問過的問題），像 L-Slide 的 `reader.rs`。L-Reader 開著時送來的紅字名詞只是補充 |
+| `terms` | 工作自己從論文素材算名詞（和 L-Slide 論文報告的 `terms` 同一套：`kbterms`，抽到 commons 共用），對知識庫；`known` 以外的全部進下一步。所以從 L-Paper 開始、或結束後繼續的工作也有名詞清單 |
 | `plan` | 模型把要講的名詞整理成主題與章節，依先備關係排序（知識庫 `prerequisite` 邊優先），每章：要講的名詞、深度、要找的資料 |
-| `research` | 知識卡、LoreReader 讀過的論文與引用句、上網搜尋開放取用論文 → 下載、加進 LoreReader 書庫、做成 BibTeX |
+| `research` | 知識卡、L-Reader 讀過的論文與引用句、上網搜尋開放取用論文 → 下載、加進 L-Reader 書庫、做成 BibTeX |
 | `review` | 微調視窗（等作者）：章節勾選與順序、每章深度、語言比例、篇幅、建議（和論文報告同一套介面） |
 | `write` | 逐章寫 LaTeX（模板、`\cite`、lore-notation 巨集與 `\ref{}`，`notation.tex` 不動） |
 | `check` | lore-notation 檢查（這本書自己的 `notation.json`：由論文的 `symbols.json` 與全域登記建立，和論文報告一樣；`notation.tex` 不動）＋每個 `\cite` 都有 BibTeX 條目＋編譯 |
 
-工作的檢查點在快取層；書本身（LaTeX 資料夾）是文件，存在作者選的地方（第一次問，之後記住預設位置），`paper.toml` 記 `kind = "book"`。書的清單記在 PaperComposer 的設定資料夾 `books.toml`（`[[book]] path, title, papers = [sha…]`，像 `opened.toml`），首頁「寫書」據此列出。
+工作的檢查點在快取層；書本身（LaTeX 資料夾）是文件，存在作者選的地方（第一次問，之後記住預設位置），`paper.toml` 記 `kind = "book"`。書的清單記在 L-Paper 的設定資料夾 `books.toml`（`[[book]] path, title, papers = [sha…]`，像 `opened.toml`），首頁「寫書」據此列出。
 
 **模板先看樣張**：模板做好後先編譯一頁樣張（標題頁、關鍵詞、定義框、邊註、名詞第一次出現的中英對照、一個 `\cite`）給作者看過，再寫章節。
 
@@ -34,14 +34,14 @@
 
 - 來源：OpenAlex、arXiv、Semantic Scholar；只取開放取用全文（`is_oa` / `openAccessPdf` / arXiv）。
 - 不自動帶作者的 e-mail（OpenAlex 的 `mailto`）：預設用一般的 client 名稱；要不要填由作者在設定裡決定。
-- 下載到快取層的暫存資料夾，再經 LoreReader 的 `POST /api/papers/import {path}` 加進書庫。LoreReader 沒開：工作記下 `pending_imports`，頁面打開時用 `LoreLinks.ensure("lr")` 打開 LoreReader 補做，不會因為沒開而失敗。
-- 沒網路：這一步只用知識卡與 LoreReader 的論文，工作照常完成並註明。
+- 下載到快取層的暫存資料夾，再經 L-Reader 的 `POST /api/papers/import {path}` 加進書庫。L-Reader 沒開：工作記下 `pending_imports`，頁面打開時用 `LoreLinks.ensure("lr")` 打開 L-Reader 補做，不會因為沒開而失敗。
+- 沒網路：這一步只用知識卡與 L-Reader 的論文，工作照常完成並註明。
 - 每筆資料都產生 BibTeX 條目（DOI / arXiv id 為準）。
 - 測試不連網：OpenAlex / arXiv / S2 的回應都用假資料。
 
-## API（PaperComposer 伺服器）
+## API（L-Paper 伺服器）
 
-`/api/book*` 與 `/api/info` 回應 127.0.0.1 / localhost 的跨來源請求（CORS），和 SlideComposer 的 `/api/todeck*` 一樣，LoreReader 的按鈕才叫得到。錯誤：HTTP 狀態碼 + `{ "error": "一行中文" }`。工作物件的形狀與 docs/paper-deck.md §工作物件相同（`lore-jobs`），`review` 換成這條流程的內容。
+`/api/book*` 與 `/api/info` 回應 127.0.0.1 / localhost 的跨來源請求（CORS），和 L-Slide 的 `/api/todeck*` 一樣，L-Reader 的按鈕才叫得到。錯誤：HTTP 狀態碼 + `{ "error": "一行中文" }`。工作物件的形狀與 docs/paper-deck.md §工作物件相同（`lore-jobs`），`review` 換成這條流程的內容。
 
 | Method | Path | Body | 回傳 |
 |---|---|---|---|
@@ -53,25 +53,25 @@
 | POST | `/api/book/jobs/{id}/review` | 作者在微調視窗的決定 | 工作物件 |
 | POST | `/api/book/jobs/{id}/params` | `{length?, lang?, page?}` | 篇幅或語言變了：從 `plan` 重做；頁面大小只影響 `write` |
 | POST | `/api/book/jobs/{id}/stop`、`/resume` | — | 工作物件 |
-| GET | `/api/book/jobs/{id}/imports` | — | `{pending}`（頁面補做 LoreReader 匯入用） |
-| POST | `/api/book/jobs/{id}/imports` | — | 頁面用 `LoreLinks.ensure("lr")` 打開 LoreReader 之後：伺服器再把等著的 PDF 交給它 → `{imported, pending, failed}` |
+| GET | `/api/book/jobs/{id}/imports` | — | `{pending}`（頁面補做 L-Reader 匯入用） |
+| POST | `/api/book/jobs/{id}/imports` | — | 頁面用 `LoreLinks.ensure("lr")` 打開 L-Reader 之後：伺服器再把等著的 PDF 交給它 → `{imported, pending, failed}` |
 | GET | `/api/book/jobs/{id}/open` | — | 寫好的書在 `opened.toml` 的 id → `{id, path}`（頁面據此打開） |
 | GET | `/api/book/jobs` | `?unfinished=1` | `{jobs}`（首頁「寫書」的進行中、「上次做到第 N 步，繼續？」） |
 | DELETE | `/api/book/jobs/{id}` | — | 刪掉工作的快取資料夾 |
 
-頁面：PaperComposer 用 `?book-job=<id>` 打開工作畫面（LoreLinks `lore-pc://bookjob/<id>`）；完成後打開那本書。
+頁面：L-Paper 用 `?book-job=<id>` 打開工作畫面（LoreLinks `lore-pc://bookjob/<id>`）；完成後打開那本書。
 
 ## 第二階段（2026-11-13 完成）：寫書的工作
 
-`PaperComposer/crates/server/src/book/`（`pipeline.rs` 階段、`plan.rs`、`research.rs`、`write.rs`、`source.rs`、`model.rs`、`tools.rs`），頁面 `PaperComposer/ui/bookjob.js`。
+`L-Paper/crates/server/src/book/`（`pipeline.rs` 階段、`plan.rs`、`research.rs`、`write.rs`、`source.rs`、`model.rs`、`tools.rs`），頁面 `L-Paper/ui/bookjob.js`。
 
-- **一樣的文件、一樣的路徑**：書就是 PaperComposer 的文件，工作寫 LaTeX 只走論文本來的路：章節（`paper::add_section`、`render_section`）、圖與表（`floats.rs`：檔名、`\label`、圖說位置、`graphicx`；編輯器的 新增圖…／繪圖… 也改成呼叫同一個 `POST /api/papers/{name}/figure-block`；繪圖的圖是 lore-plot 的 `save_paper_figure`，留著 `.plot.json` 可以再用 繪圖… 修改）、表格（`textable` 的樣式與 `render`，和 新增表… 一樣）、文獻（進工作區的文獻庫 `refs/library.bib`，再由 `write_paper_bib` 產生書的 bib，和「文獻」一樣）、符號（`reader::register_into` 進書自己的 `notation.json`，和 LoreReader 面板的「插入」一樣）。寫好的書在編輯器裡和論文一樣改。
-- **名詞**：`commons/crates/lore-learn`（從 SlideComposer 的 `kbterms.rs` 抽出：找名詞、對知識庫、卡片的 `prerequisite` 連結；SlideComposer 仍用它，行為不變）。`known` 以外都要講；`learning` 標成短一點。LoreReader 卡片送來的紅字名詞補進去。加進既有的書：書裡已經 `\term{…}` 過的名詞不再講。沒排進章節的名詞列在微調視窗。
+- **一樣的文件、一樣的路徑**：書就是 L-Paper 的文件，工作寫 LaTeX 只走論文本來的路：章節（`paper::add_section`、`render_section`）、圖與表（`floats.rs`：檔名、`\label`、圖說位置、`graphicx`；編輯器的 新增圖…／繪圖… 也改成呼叫同一個 `POST /api/papers/{name}/figure-block`；繪圖的圖是 lore-plot 的 `save_paper_figure`，留著 `.plot.json` 可以再用 繪圖… 修改）、表格（`textable` 的樣式與 `render`，和 新增表… 一樣）、文獻（進工作區的文獻庫 `refs/library.bib`，再由 `write_paper_bib` 產生書的 bib，和「文獻」一樣）、符號（`reader::register_into` 進書自己的 `notation.json`，和 L-Reader 面板的「插入」一樣）。寫好的書在編輯器裡和論文一樣改。
+- **名詞**：`commons/crates/lore-learn`（從 L-Slide 的 `kbterms.rs` 抽出：找名詞、對知識庫、卡片的 `prerequisite` 連結；L-Slide 仍用它，行為不變）。`known` 以外都要講；`learning` 標成短一點。L-Reader 卡片送來的紅字名詞補進去。加進既有的書：書裡已經 `\term{…}` 過的名詞不再講。沒排進章節的名詞列在微調視窗。
 - **大綱**：`pc-book-plan`（class create）；章節依知識庫的先備關係重排（`plan::order`）。`pc-book-suggest`：最多 5 個建議（改章名、深度、移動、不寫、合併、加一章），失敗就沒有。
-- **找資料**：先查這篇論文的開放授權（OpenAlex 的 `license`；在 arXiv 上的論文以 arXiv 自己標的授權為準，因為 OpenAlex 把 arXiv 的版本一律標成 cc-by，arXiv 預設的授權不允許轉載）；書是作者自己讀書用的：所有 Creative Commons 授權（CC BY、BY-SA，也包括 BY-NC、BY-NC-SA、BY-NC-ND）、CC0、公眾領域的圖都可以放進書，**每張都引用來源並在圖說寫授權**（「Reproduced from \cite{…}, CC BY-NC 4.0.」，`write::reused_caption`）；授權不明、出版社授權、保留所有權利（含 arXiv 預設授權）的圖從不使用（2026-11-13 作者決定；寫論文仍用嚴格的規則 `figure_reuse_allowed_published`）。其他授權：有數字的圖改用 lore-plot 依論文的數字重畫（引用），示意圖用文字說明。流程圖等 PaperComposer 有流程圖工具（和編輯器同一條路）再加。回答「太多請求」的來源，這個工作就不再問它（只重試一次、最多等 8 秒），不會卡在限流上。知識卡當脈絡（不能引用）。LoreReader 書庫裡標題含章節名詞的論文與作者的引用句。上網：每章最多 2 個查詢、取 2 篇開放取用論文，下載到快取、由伺服器交給 LoreReader；LoreReader 沒開就留在 `pending_imports`，頁面上「開啟 LoreReader」補做。沒網路照常完成並註明。
+- **找資料**：先查這篇論文的開放授權（OpenAlex 的 `license`；在 arXiv 上的論文以 arXiv 自己標的授權為準，因為 OpenAlex 把 arXiv 的版本一律標成 cc-by，arXiv 預設的授權不允許轉載）；書是作者自己讀書用的：所有 Creative Commons 授權（CC BY、BY-SA，也包括 BY-NC、BY-NC-SA、BY-NC-ND）、CC0、公眾領域的圖都可以放進書，**每張都引用來源並在圖說寫授權**（「Reproduced from \cite{…}, CC BY-NC 4.0.」，`write::reused_caption`）；授權不明、出版社授權、保留所有權利（含 arXiv 預設授權）的圖從不使用（2026-11-13 作者決定；寫論文仍用嚴格的規則 `figure_reuse_allowed_published`）。其他授權：有數字的圖改用 lore-plot 依論文的數字重畫（引用），示意圖用文字說明。流程圖等 L-Paper 有流程圖工具（和編輯器同一條路）再加。回答「太多請求」的來源，這個工作就不再問它（只重試一次、最多等 8 秒），不會卡在限流上。知識卡當脈絡（不能引用）。L-Reader 書庫裡標題含章節名詞的論文與作者的引用句。上網：每章最多 2 個查詢、取 2 篇開放取用論文，下載到快取、由伺服器交給 L-Reader；L-Reader 沒開就留在 `pending_imports`，頁面上「開啟 L-Reader」補做。沒網路照常完成並註明。
 - **撰寫**：每章一次 `pc-book-chapter`（JSON：本文、圖、表）。只准引用這章的資料（不存在的 key 拿掉並列出）；圖用 `%%FIGURE:id` 位置與 `\ref{fig:id}`，換成真正的標籤；畫不出來的圖連同參照一起拿掉。每章跑對照表檢查（`notation::check`），手打的「Section 2」、不存在的 `\ref` 會請模型重寫一次，還有的列在結果。新符號登記為待確認。全書寫完後，沒有被引用的方程式標籤拿掉（連同只剩標籤的那一行）。`notation.tex` 只在它還是 lore-notation 產生的檔案時由 lore-notation 重寫。
 - **檢查**：整本書的 lore-notation 檢查（`hardcoded_reference`、`ref_undefined`、`label_*`）、每個 `\cite` 都有條目、每個 `\includegraphics` 檔案都在、XeLaTeX 編譯（`export::build_pdf`，和匯出 PDF 一樣；沒有 TeX 就註明沒編譯）。
-- **頁面**：`?book-job=<id>` 打開工作畫面（進度、微調、完成後「打開書」）；`?book-job=mock&at=run|review|done|interrupted` 不用模型看每個狀態。首頁「寫書」：進行中的工作、「從論文寫…」（LoreReader 的論文）、新書的頁面大小。
+- **頁面**：`?book-job=<id>` 打開工作畫面（進度、微調、完成後「打開書」）；`?book-job=mock&at=run|review|done|interrupted` 不用模型看每個狀態。首頁「寫書」：進行中的工作、「從論文寫…」（L-Reader 的論文）、新書的頁面大小。
 - **檢查點**：`<OS 快取>/PaperComposer/book/jobs/<id>/`（`PAPERCOMPOSER_CACHE` 可改），`write.state.json` 記已建立的章節與寫好的章，中斷後接著寫不重複。
 - **書的版面（作者 2026-11-13 補充）**：`lorenotes.sty` 是書的版面：雙面、內外邊界對稱、邊註在外側（偶數頁在左、奇數頁在右）、左頁頁首書名、右頁頁首章名、頁碼在外側、標題頁單獨在第 1 頁（右頁）、摘要在標題頁背面、每章從右頁開始（前一頁空白不印頁首）。頁面大小 B5（預設）或 A4：`main.tex` 的 `\usepackage[b5]{lorenotes}`（`pc_core::book::page_of`／`set_page`；放在 main.tex 而不是 paper.toml，檔案自己就能在別處編譯）；新書表單、`POST /api/books {page}`、工作的 `page` 與微調視窗都可以選。
 
@@ -80,14 +80,14 @@
 已經有的：
 
 - **文件類型**：`paper.toml` 的 `kind = "book"`（`pc_core::meta::PaperMeta::kind`，沒寫＝論文）。書沒有 Key value 列，也沒有期刊規則；其他（章節編輯、對照表、文獻、匯出）和論文相同。設計文件 §6 的 `kinds/` 沒做：目前只有 `book` 一種，差別只有上面兩項，等真的需要不同的檢查或大綱層級再做。
-- **書的清單**：`books.toml`（PaperComposer 的設定資料夾，`opened.toml` 旁邊；`[[book]] path, title, papers` 與 `last_folder`）。書也登記在 `opened.toml`，用那裡的 id 打開。`GET`／`POST /api/books`（`PaperComposer/crates/server/src/books.rs`）。
+- **書的清單**：`books.toml`（L-Paper 的設定資料夾，`opened.toml` 旁邊；`[[book]] path, title, papers` 與 `last_folder`）。書也登記在 `opened.toml`，用那裡的 id 打開。`GET`／`POST /api/books`（`L-Paper/crates/server/src/books.rs`）。
 - **首頁「寫書」**：書的清單（最近改過的在前）與「＋ 新書」（書名、資料夾：預設上次的；桌面版用系統對話框選）。建立時資料夾以書名命名、不覆蓋既有資料夾。
 - **模板**：`private-example/PaperComposer/publishers/lecture-notes/`（`template.toml` 的 `kind = "book"`；`lorenotes.sty` 是自己寫的），也內建在 App（`pc_core::book`），工作區有自己的書模板時用工作區的。XeLaTeX（main.tex 第一行 `% !TEX program = xelatex`，匯出照這行選引擎），只用 BasicTeX 有的套件：沒有用 xeCJK、tcolorbox、titlesec（BasicTeX 沒有）；中文用 XeTeX 的字元類別自動切換字型，字型依序找這台電腦有的（Songti TC、PingFang TC 等 macOS 內建，Noto CJK、Fandol 為其他系統的備選）。指令：`\course` `\title` `\author` `\date` `\keywords`、`abstract`、`\term{英文}{中文}`、`\sidenote{…}`、`definition`／`keyidea`／`intuition`／`remark`、`natbib`（`\cite` → [1]）。
 - **檢查**：新書通過 lore-notation 的檢查（`pc_core::book` 的測試）；有 XeLaTeX 的電腦上測試會實際編譯一本含名詞、邊註、各種框與中文的書。
 
 ## 依賴
 
-- `commons/crates/lore-jobs`：共用的工作執行器（2026-11-13 已從 SlideComposer 抽出）。
-- PaperComposer 文件類型（設計文件 §6）：先只做 `book`（`paper.toml` `kind`，沒有＝`paper`）。
-- 上網找論文：共用 crate（搜尋、開放取用判斷、下載、BibTeX），LoreReader 書庫匯入走 LoreReader 的 `POST /api/papers/import`。
+- `commons/crates/lore-jobs`：共用的工作執行器（2026-11-13 已從 L-Slide 抽出）。
+- L-Paper 文件類型（設計文件 §6）：先只做 `book`（`paper.toml` `kind`，沒有＝`paper`）。
+- 上網找論文：共用 crate（搜尋、開放取用判斷、下載、BibTeX），L-Reader 書庫匯入走 L-Reader 的 `POST /api/papers/import`。
 - 作者的私人資料（範例、檢索）放在 private，經 lore-home；不放 `.claude`、skill 或公開 repo。

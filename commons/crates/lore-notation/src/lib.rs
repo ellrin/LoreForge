@@ -1,5 +1,5 @@
-//! lore-notation — the notation registry (對照表) shared by PaperComposer and
-//! SlideComposer: `notation.json`, macro generation (`notation.tex`), LaTeX
+//! lore-notation — the notation registry (對照表) shared by L-Paper and
+//! L-Slide: `notation.json`, macro generation (`notation.tex`), LaTeX
 //! scanning, consistency checks and auto-extract. Pure Rust, no network.
 //!
 //! ```no_run

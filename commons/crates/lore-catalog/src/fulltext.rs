@@ -18,7 +18,7 @@ pub const MAX_CHARS: usize = 600_000;
 /// A block of a Word document or a text file: about this many characters.
 pub const BLOCK_CHARS: usize = 1_500;
 /// Bumped when the reading changes: older files are read again.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2; // 2: PDFs through poppler first (fonts lopdf misread, e.g. Type 3 with a custom encoding)
 /// Written into the folder when a run of [`fill`] has finished: the search index rebuilds after it.
 pub const STAMP: &str = ".stamp";
 
@@ -155,7 +155,36 @@ fn fold(s: &str) -> String {
     out
 }
 
+/// poppler's `pdftotext` (on PATH, or where Homebrew puts it: an app opened from Finder has a
+/// short PATH). It reads fonts lopdf turns into garbage — a browser's "save as PDF" writes
+/// Type 3 fonts with a custom encoding and a ToUnicode map, which lopdf ignores — so it comes first.
+fn pdftotext() -> Option<PathBuf> {
+    let on_path = std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join("pdftotext")).find(|p| p.is_file()));
+    on_path.or_else(|| ["/opt/homebrew/bin/pdftotext", "/usr/local/bin/pdftotext"].iter().map(PathBuf::from).find(|p| p.is_file()))
+}
+
+/// pdftotext's output: pages end with a form feed.
+fn split_pages(text: &str) -> Vec<Part> {
+    let mut pages: Vec<&str> = text.split('\u{c}').collect();
+    if pages.last().is_some_and(|p| p.trim().is_empty()) {
+        pages.pop();
+    }
+    pages.into_iter().enumerate().map(|(i, t)| Part { n: i as u32 + 1, text: t.to_string() }).collect()
+}
+
+fn poppler_pages(path: &Path) -> Option<Vec<Part>> {
+    let out = std::process::Command::new(pdftotext()?).args(["-q", "-enc", "UTF-8", "-l", &MAX_PARTS.to_string()]).arg(path).arg("-").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let pages = split_pages(&String::from_utf8_lossy(&out.stdout));
+    (!pages.iter().all(|p| p.text.trim().is_empty())).then_some(pages)
+}
+
 fn pdf_pages(path: &Path) -> Option<Vec<Part>> {
+    if let Some(pages) = poppler_pages(path) {
+        return Some(pages);
+    }
     let doc = lopdf::Document::load(path).ok()?;
     let n = doc.get_pages().len() as u32;
     let mut out = Vec::new();
@@ -318,6 +347,14 @@ pub fn fill(catalog_dir: &Path, cache_dir: &Path, mut progress: impl FnMut(usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pdftotext_pages_split_on_form_feeds_and_keep_their_numbers() {
+        let p = split_pages("內科代理標籤\n第一頁\u{c}\u{c}third page\u{c}");
+        assert_eq!(p.iter().map(|p| (p.n, p.text.as_str())).collect::<Vec<_>>(), vec![(1, "內科代理標籤\n第一頁"), (2, ""), (3, "third page")]);
+        // an empty page is dropped later by cap(), the numbers stay those of the PDF
+        assert_eq!(cap(p).iter().map(|p| p.n).collect::<Vec<_>>(), vec![1, 3]);
+    }
     use std::io::Write;
 
     fn zip_with(path: &Path, files: &[(&str, &str)]) {

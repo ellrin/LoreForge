@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="giftbox" data-mode="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>L-Slide</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='2' y='5' width='20' height='14' rx='2' fill='%23ff6b35'/%3E%3Crect x='5' y='8' width='8' height='2' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="prefs.css">
+  <link rel="stylesheet" href="learn.css">
+  <link rel="stylesheet" href="todeck.css">
+  <script src="theme.js"></script>
+</head>
+<body class="at-home">
+<div class="app" id="app">
+  <header class="top"></header>
+  <div class="fontpop" id="fontPop" role="dialog" aria-label="字型代替" hidden></div>
+
+  <aside class="left sorter" id="sorter" aria-label="投影片">
+    <div class="nav-head">
+      <h2 class="panel-title" id="slideCount"></h2>
+      <button class="ico small" id="slideAdd" data-icon="plus" aria-label="新增投影片"></button>
+      <button class="ico small" id="slideDup" data-icon="dup" aria-label="複製投影片"></button>
+      <button class="ico small" id="slideHide" data-icon="eyeOff" aria-label="隱藏／顯示"></button>
+      <button class="ico small" id="slideDel" data-icon="trash" aria-label="刪除投影片"></button>
+    </div>
+    <div id="thumbs"></div>
+  </aside>
+
+  <main class="stage page-area">
+    <div class="stage-top">
+    <nav class="capsule" id="tools" aria-label="工具">
+      <button class="ico" data-tool="select" data-icon="cursor" aria-label="選取 V" aria-pressed="true"></button>
+      <button class="ico" data-tool="text" data-icon="text" aria-label="文字方塊 T"></button>
+      <span class="vsep"></span>
+      <button class="ico" data-tool="rect" data-icon="square" aria-label="矩形"></button>
+      <button class="ico" data-tool="roundRect" data-icon="rounded" aria-label="圓角矩形"></button>
+      <button class="ico" data-tool="ellipse" data-icon="circle" aria-label="橢圓"></button>
+      <button class="ico" data-tool="triangle" data-icon="triangle" aria-label="三角形"></button>
+      <button class="ico" data-tool="trapezoid" data-icon="trapezoid" aria-label="梯形"></button>
+      <button class="ico" data-tool="polygon" data-icon="polygon" aria-label="多邊形"></button>
+      <span class="vsep"></span>
+      <button class="ico" data-tool="line" data-icon="line" aria-label="直線"></button>
+      <button class="ico" data-tool="arrow" data-icon="arrow" aria-label="箭頭"></button>
+      <button class="ico" data-tool="conn-straight" data-icon="conn" aria-label="連接線"></button>
+      <button class="ico" data-tool="conn-elbow" data-icon="elbow" aria-label="肘形連接線"></button>
+      <button class="ico" data-tool="conn-curved" data-icon="curve" aria-label="曲線連接線"></button>
+      <span class="vsep"></span>
+      <button class="ico" id="insImage" data-icon="image" aria-label="圖片"></button>
+      <button class="ico" id="insPlot" data-icon="chart" aria-label="圖表"></button>
+      <button class="ico" id="insLiveEq" data-icon="sliders" aria-label="會動的方程式"></button>
+      <button class="ico" id="insFlow" data-icon="graph" aria-label="流程圖"></button>
+      <button class="ico" id="insTable" data-icon="table" aria-label="表格"></button>
+      <button class="ico" id="insEq" data-icon="sigma" aria-label="方程式"></button>
+      <button class="ico" id="insPolish" data-icon="polish" aria-label="潤飾：在文字框裡選取一段"></button>
+      <button class="ico" id="insComp" data-icon="puzzle" aria-label="元件"></button>
+      <span class="vsep"></span>
+      <button class="ico" id="actGrid" data-icon="grid" aria-label="格線"></button>
+      <button class="ico" id="actSnap" data-icon="magnet" aria-label="吸附 ⌥" aria-pressed="true"></button>
+      <button class="ico" id="actReveal" data-icon="steps" aria-label="漸進揭露"></button>
+      <input type="file" id="imgFile" accept="image/*" hidden>
+    </nav>
+    <div class="findbar" id="findBar" role="search" hidden>
+      <span data-icon="search"></span>
+      <input id="findInput" type="text" autocomplete="off" aria-label="搜尋">
+      <span class="count" id="findCount"></span>
+      <button class="ico small" id="findPrev" data-icon="up" aria-label="上一個 ⇧↵"></button>
+      <button class="ico small" id="findNext" data-icon="chevron" aria-label="下一個 ↵"></button>
+      <input id="replaceInput" type="text" autocomplete="off" aria-label="取代為" placeholder="取代為" hidden>
+      <button class="btn small" id="replaceOne" hidden>取代</button>
+      <button class="btn small" id="replaceAll" hidden>全部取代</button>
+      <button class="ico small" id="findReplace" data-icon="replace" aria-label="取代" aria-pressed="false"></button>
+      <button class="ico small" id="findClose" data-icon="x" aria-label="關閉 Esc"></button>
+    </div>
+    </div>
+    <div class="viewport" id="viewport">
+      <div class="paper-wrap" id="paperWrap">
+        <div class="paper editor-canvas" id="paper"></div>
+        <div class="overlay" id="overlay"></div>
+      </div>
+    </div>
+    <details class="notes" id="notesBox"><summary>講者備註</summary><textarea id="notes" aria-label="講者備註"></textarea></details>
+    <footer class="statusbar">
+      <span class="accent" id="stPos"></span>
+      <span id="stLayout"></span>
+      <span class="grow"></span>
+      <button class="ico tiny" id="actZoomOut" data-icon="zoomOut" aria-label="縮小"></button>
+      <button class="zoom" id="zoomChip" aria-label="符合視窗">100%</button>
+      <button class="ico tiny" id="actZoomIn" data-icon="zoomIn" aria-label="放大"></button>
+      <button class="ico tiny" id="actFit" data-icon="fit" aria-label="符合視窗"></button>
+    </footer>
+  </main>
+
+  <aside class="right side" id="side">
+    <div id="blocks"></div>
+  </aside>
+</div>
+
+<section class="home" id="home" hidden>
+  <div class="home-inner">
+    <section class="block" data-open="true">
+      <div class="block-head"><span class="n">01</span><h3>開始</h3></div>
+      <div class="block-body tiles">
+        <button class="tile" id="tilePaper"><span data-icon="file"></span>論文報告</button>
+        <label class="tile drop" id="tileImport"><span data-icon="pen"></span>開啟…<input type="file" id="impFile" accept=".pptx" hidden></label>
+        <button class="tile" id="tileNew"><span data-icon="plus"></span>新簡報</button>
+      </div>
+    </section>
+    <section class="block" data-open="true" id="recentBlock" hidden>
+      <div class="block-head"><span class="n">02</span><h3>最近</h3></div>
+      <div class="block-body recent" id="deckList"></div>
+    </section>
+  </div>
+</section>
+
+<dialog class="dialog small" id="dlgNew" aria-label="新簡報">
+  <form class="dlg" id="newForm" method="dialog">
+    <div class="dlg-head">
+      <h2>新簡報</h2>
+      <button type="button" class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
+    </div>
+    <div class="np-body">
+      <div class="bases" id="baseList" role="radiogroup" aria-label="底版"></div>
+      <label class="np-label" for="newName">名稱</label>
+      <input class="np-input" id="newName" autocomplete="off">
+    </div>
+    <div class="np-foot"><span class="grow"></span><button class="primary small" id="newBtn">建立<kbd>↵</kbd></button></div>
+  </form>
+</dialog>
+
+
+<dialog class="dialog small" id="dlgPaper" aria-label="論文報告">
+  <form class="dlg" id="paperForm" method="dialog">
+    <div class="dlg-head">
+      <h2>論文報告</h2>
+      <button type="button" class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
+    </div>
+    <div class="np-body">
+      <div class="np-label">論文</div>
+      <div class="seg pd-src" id="pdSrc" role="radiogroup"><button type="button" data-src="pc" aria-pressed="true">L-Paper</button><button type="button" data-src="lr" aria-pressed="false">L-Reader</button></div>
+      <div class="pd-papers" id="pdPapers" role="radiogroup" aria-label="論文"></div>
+      <div class="pd-two">
+        <div><div class="np-label">長度</div><div class="seg" id="pdLen" role="radiogroup"><button type="button" data-v="short">短 10</button><button type="button" data-v="standard">標準 15–20</button><button type="button" data-v="long">長</button></div></div>
+        <div><div class="np-label">語言</div><div class="seg" id="pdLang" role="radiogroup"><button type="button" data-v="zh">中文</button><button type="button" data-v="en">English</button></div></div>
+      </div>
+      <div class="np-label">底版</div>
+      <div class="bases" id="pdBases" role="radiogroup" aria-label="底版"></div>
+    </div>
+    <div class="np-foot"><div class="pd-bar" id="pdBar" hidden></div><span class="grow"></span><button class="primary small" id="pdGo">先看大綱<kbd>↵</kbd></button></div>
+  </form>
+</dialog>
+
+<dialog class="dialog big" id="dlgNotation" aria-label="對照表">
+  <div class="dlg">
+    <div class="dlg-head">
+      <h2>對照表</h2>
+      <span class="chip" id="ntState" hidden></span>
+      <button type="button" class="ghost" id="ntExtract"><span data-icon="spark"></span>擷取</button>
+      <button type="button" class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
+    </div>
+    <notation-panel id="ntPanel" mode="literal"></notation-panel>
+  </div>
+</dialog>
+
+<dialog id="dlg"></dialog>
+
+<script src="vendor/katex/katex.min.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="polish.js"></script>
+<script src="prefs.js"></script>
+<script src="render.js"></script>
+<script src="arrange.js"></script>
+<script src="panels.js"></script>
+<script src="notation-panel.js"></script>
+<script src="present.js"></script>
+<script src="app.js"></script>
+<script src="find.js"></script>
+<script src="reader.js"></script>
+<script src="todeck.js"></script>
+<script src="figplot.js"></script>
+<script src="figflow.js"></script>
+</body>
+</html>

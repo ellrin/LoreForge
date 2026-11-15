@@ -1,6 +1,6 @@
 # LoreForge 共同介面（定案 2026-11-11）
 
-四個工具：PaperComposer（PC）、SlideComposer（SC）、LoreReader（LR）、KnowledgeBase（KB）。
+四個工具：L-Paper（PC）、L-Slide（SC）、L-Reader（LR）、L-Brain（KB）。
 原則：同一套產品；共同功能放在同一個位置；不常用的收進齒輪；數值以 SC 為準。
 
 ## A. 外框標準（每個位置一列）
@@ -76,7 +76,7 @@ KB 套用：上方列、齒輪、提示與詢問框、跨 app 連結、狀態列
 ## F. 共用外殼的介面（`commons/ui`，2026-11-11）
 
 示範：`cd commons/ui && python3 -m http.server`，開 `/demo/shell.html`（`?theme=<id>`，API 是假的）。
-伺服器透過 `lore-shell` crate 提供五個檔：`lore_shell::FILES` → `/icons.js`、`/base.css`、`/shell.js`、`/makedeck.js`（「做成簡報」按鈕與卡片，`LoreMakeDeck.mount({ before, source, key })`，有論文的 app 掛在 AI 鈕前面：PaperComposer、LoreReader）、`/makebook.js`（「寫 review」按鈕與卡片，`LoreMakeBook.mount({ before, source, key, extras })`，呼叫 PaperComposer 的 `POST /api/book`（docs/book.md），LoreReader 掛在做成簡報後面）。
+伺服器透過 `lore-shell` crate 提供五個檔：`lore_shell::FILES` → `/icons.js`、`/base.css`、`/shell.js`、`/makedeck.js`（「做成簡報」按鈕與卡片，`LoreMakeDeck.mount({ before, source, key })`，有論文的 app 掛在 AI 鈕前面：L-Paper、L-Reader）、`/makebook.js`（「寫 review」按鈕與卡片，`LoreMakeBook.mount({ before, source, key, extras })`，呼叫 L-Paper 的 `POST /api/book`（docs/book.md），L-Reader 掛在做成簡報後面）。
 頁面載入順序：`theme.css → base.css → styles.css`；`theme.js → icons.js → shell.js → app.js`。
 app 自己的 `icons.js` 拿掉（兩份都宣告 `ICONS`）。`cargo test -p lore-shell` 檢查圖示沒有重複、四個 app 用到的名稱都在、base.css 只用 theme.css 的 token。
 
@@ -92,7 +92,7 @@ app 自己的 `icons.js` 拿掉（兩份都宣告 `ICONS`）。`cargo test -p lo
 
 ```js
 const shell = LoreShell.mount({
-  app, brand: "SLIDE/COMPOSER", home,                       // 品牌（按了回首頁）
+  app, brand: "L/SLIDE", home,                              // 品牌（按了回首頁）
   picker: { icon, name, recent: async () => [...], actions: [...] },   // 文件選單；最後自動加「首頁」
   status: { onClick(state) },                               // 狀態標籤可點時做什麼（LR：另存新檔）
   primary: [{ id, icon, label, run | menu }],               // 1–4 個；ai 固定在最後一格
@@ -134,14 +134,14 @@ LoreLinks.open(app, params) · LoreLinks.url(app, params) · LoreLinks.ports
 
 | App | 權限 |
 |---|---|
-| LoreEcho | 麥克風、語音辨識、個人聲音 |
-| PaperComposer | 麥克風、語音辨識、個人聲音 |
-| SlideComposer | 麥克風、語音辨識、個人聲音 |
+| L-Echo | 麥克風、語音辨識、個人聲音 |
+| L-Paper | 麥克風、語音辨識、個人聲音 |
+| L-Slide | 麥克風、語音辨識、個人聲音 |
 
 - 伺服器：`lore_shell::permissions`（`Permissions::new(&[…]).with(Arc::new(voice))`，`router(p)`）；`GET /api/permissions` → `{ permissions: [{ id, label, status }] }`，`POST /api/permissions/request {what?}`（只問 `not_determined` 的，依 麥克風 → 語音辨識 → 個人聲音，一次一個），`POST /api/permissions/open {what}`（系統設定的那一頁；測試／隔離不開）。
 - 啟動：桌面 App 視窗開好後 `lore_shell::permissions::ask_at_launch()`，背景執行，每次啟動一次；已允許／已拒絕的系統會記得，不會再問，所以只有第一次會跳詢問，不另存狀態檔。測試、隔離模式、開發伺服器、沒有輔助程式時都不問。
 - 設定：「一般」最後一塊「權限」（沒有宣告或沒有這個路由＝不顯示）：每列 名稱 · 狀態（已允許／已拒絕／尚未詢問／不支援；restricted 暫時顯示「受限制」）· 「詢問」（只在尚未詢問時）· 「開啟系統設定」。從系統設定回到視窗時重新讀一次。
-- 功能遇到被拒絕（潤飾的麥克風、LoreEcho 的個人聲音列）：提示帶「開啟系統設定」，不再詢問。`LoreShell.permissions.get() / request(what) / open(what)`。
+- 功能遇到被拒絕（潤飾的麥克風、L-Echo 的個人聲音列）：提示帶「開啟系統設定」，不再詢問。`LoreShell.permissions.get() / request(what) / open(what)`。
 - 示範：`/demo/shell.html?settings=general`（`?noperms=1`＝沒有宣告）。
 
 ### 跨 app 連結（`LoreLinks`）

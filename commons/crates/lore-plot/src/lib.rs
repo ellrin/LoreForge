@@ -13,8 +13,8 @@
 //! Equation figures (`kind: "equation"`, [`equation`]): a safe expression language, verified
 //! templates, numeric property checks, the `equation-plot` model task and animated GIFs.
 //!
-//! Documents are the app's business: PaperComposer saves `figures/<stem>.pdf` + `.plot.json`
-//! with [`figure::save_paper_figure`]; SlideComposer stores [`figure::slide_png`] (the spec
+//! Documents are the app's business: L-Paper saves `figures/<stem>.pdf` + `.plot.json`
+//! with [`figure::save_paper_figure`]; L-Slide stores [`figure::slide_png`] (the spec
 //! inside the PNG) as a deck asset.
 
 pub mod assets;

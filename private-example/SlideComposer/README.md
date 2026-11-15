@@ -1,4 +1,4 @@
-# SlideComposer workspace（私人 repo 的起始結構）
+# L-Slide workspace（私人 repo 的起始結構）
 
 ```
 styles/<id>/style.toml     底版的配色與標籤（標籤、色票、強調、元件、箭頭、變淡規則）

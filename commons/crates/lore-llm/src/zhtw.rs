@@ -1,4 +1,4 @@
-//! Taiwan usage for local-model replies (from PaperComposer).
+//! Taiwan usage for local-model replies (from L-Paper).
 //!
 //! Local models (Gemma, Qwen) asked for Traditional Chinese write traditional
 //! characters but mainland vocabulary: 數據, 網絡, 視頻, 信息, 代碼. OpenCC's

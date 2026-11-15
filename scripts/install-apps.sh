@@ -1,15 +1,15 @@
 #!/bin/zsh
 # 編譯 LoreForge 的 Mac App、安裝並放進 Dock。
 #
-#   scripts/install-apps.sh                     全部：PaperComposer SlideComposer KnowledgeBase LoreReader LoreEcho LoreShelf NeonDeck
-#   scripts/install-apps.sh SlideComposer ...   只做指定的 App
+#   scripts/install-apps.sh                     全部：L-Paper L-Slide L-Brain L-Reader L-Echo L-Shelf L-Deck
+#   scripts/install-apps.sh L-Slide ...   只做指定的 App
 #   scripts/install-apps.sh --no-dock ...       不動 Dock
 #
-# Tauri App（PaperComposer、SlideComposer、KnowledgeBase、LoreReader、LoreEcho、LoreShelf）裝到 /Applications，
-# NeonDeck 用它自己的 build.sh 裝到 ~/Applications。安裝前會先結束正在執行的舊版。
+# Tauri App（L-Paper、L-Slide、L-Brain、L-Reader、L-Echo、L-Shelf）裝到 /Applications，
+# L-Deck 用它自己的 build.sh 裝到 ~/Applications。安裝前會先結束正在執行的舊版。
 # Dock：每個 App 一個項目；名稱相同但指向別的位置（例如舊的編譯資料夾）的項目會被換掉，
 # 其他項目不動。
-# 簽章：鑰匙圈裡有「LoreForge Local」簽章憑證（本機自己做的，見 README「開發說明」）就用它簽，
+# 簽章：鑰匙圈裡有「LoreForge Local」簽章憑證（本機自己做的，見 README「Quick start」）就用它簽，
 # App 的身分固定，麥克風、個人聲音、鑰匙圈的允許在重裝後都還在；沒有就用 ad-hoc
 # （每次重裝系統都當成新的 App，會再問一次）。可以用 LOREFORGE_SIGN 換成別的憑證名稱。
 set -euo pipefail
@@ -21,11 +21,11 @@ for a in "$@"; do
   case $a in
     --no-dock) dock=0 ;;
     -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
-    PaperComposer|SlideComposer|KnowledgeBase|LoreReader|LoreEcho|LoreShelf|NeonDeck) apps+=$a ;;
+    L-Paper|L-Slide|L-Brain|L-Reader|L-Echo|L-Shelf|L-Deck) apps+=$a ;;
     *) echo "不認得的 App：$a" >&2; exit 2 ;;
   esac
 done
-(( ${#apps} )) || apps=(PaperComposer SlideComposer KnowledgeBase LoreReader LoreEcho LoreShelf NeonDeck)
+(( ${#apps} )) || apps=(L-Paper L-Slide L-Brain L-Reader L-Echo L-Shelf L-Deck)
 
 sign_id=${LOREFORGE_SIGN:-LoreForge Local}
 security find-identity -p codesigning 2>/dev/null | grep -qF "\"$sign_id\"" || sign_id=""
@@ -45,12 +45,16 @@ sign_app() {
 
 quit() { osascript -e "tell application id \"$1\" to quit" >/dev/null 2>&1 || true; }
 
+# 改名前的 App 名稱：同一個 App（bundle id 沒變），安裝新名稱時把舊的那份移掉，Dock 上的舊圖示原地換成新的。
+typeset -A old_name=(L-Paper PaperComposer L-Slide SlideComposer L-Brain KnowledgeBase L-Reader LoreReader L-Echo LoreEcho L-Shelf LoreShelf L-Deck NeonDeck)
+
 installed=()
 for a in $apps; do
   echo "== $a"
-  if [[ $a == NeonDeck ]]; then
-    (cd "$root/NeonDeck" && ./build.sh install)
-    installed+="$HOME/Applications/NeonDeck.app"
+  if [[ $a == L-Deck ]]; then
+    (cd "$root/L-Deck" && ./build.sh install)
+    rm -rf "$HOME/Applications/${old_name[$a]}.app"
+    installed+="$HOME/Applications/L-Deck.app"
     continue
   fi
   id=$(sed -n 's/.*"identifier": *"\([^"]*\)".*/\1/p' "$root/$a/apps/desktop/tauri.conf.json")
@@ -58,6 +62,7 @@ for a in $apps; do
   quit "$id"
   sleep 1
   rm -rf "/Applications/$a.app"
+  rm -rf "/Applications/${old_name[$a]}.app"
   cp -R "$root/$a/target/release/bundle/macos/$a.app" /Applications/
   sign_app "/Applications/$a.app"
   echo "✔ /Applications/$a.app"
@@ -73,6 +78,8 @@ d = plistlib.loads(sys.stdin.buffer.read())
 items = d.setdefault("persistent-apps", [])
 def url(p): return "file://" + urllib.parse.quote(p.rstrip("/") + "/")
 def name(it): return it.get("tile-data", {}).get("file-label", "")
+old = {"L-Paper": "PaperComposer", "L-Slide": "SlideComposer", "L-Brain": "KnowledgeBase", "L-Reader": "LoreReader",
+    "L-Echo": "LoreEcho", "L-Shelf": "LoreShelf", "L-Deck": "NeonDeck"}
 def tile(label, u): return {"tile-type": "file-tile", "tile-data": {"file-label": label,
     "file-data": {"_CFURLString": u, "_CFURLStringType": 15}}}
 for path in apps:
@@ -83,7 +90,7 @@ for path in apps:
         u = it.get("tile-data", {}).get("file-data", {}).get("_CFURLString", "")
         if u == want and not found:
             found = True
-        elif name(it) == label or u == want:
+        elif name(it) in (label, old.get(label)) or u == want:
             # Same app at another place (an old build folder) or a duplicate:
             # the first one becomes a fresh tile in the same spot, the rest go.
             print(f"  Dock：換掉舊的 {label}（{urllib.parse.unquote(u)}）", file=sys.stderr)

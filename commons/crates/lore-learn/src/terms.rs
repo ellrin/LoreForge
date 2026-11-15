@@ -1,15 +1,15 @@
-//! 「不熟」: a paper's domain terms against the author's KnowledgeBase (docs/paper-deck.md
-//! 「不熟」標示, docs/book.md `terms`). Lifted from SlideComposer's `kbterms.rs`, which keeps
-//! the slide marks and re-exports this module; PaperComposer's 寫書 uses it for its `terms` stage.
+//! 「不熟」: a paper's domain terms against the author's L-Brain (docs/paper-deck.md
+//! 「不熟」標示, docs/book.md `terms`). Lifted from L-Slide's `kbterms.rs`, which keeps
+//! the slide marks and re-exports this module; L-Paper's 寫書 uses it for its `terms` stage.
 //!
 //! * **Terms** ([`find_terms`], pure): acronyms, multi-word phrases (an expansion before its
 //!   acronym in parentheses, "Spectral Boundary Loss (SBL)"; or a 2–4-word phrase used at least
-//!   twice whose first word is not general English) and KnowledgeBase titles /
-//!   aliases (1–4 words). Common words never count: `lore-words`, the filter LoreReader uses.
+//!   twice whose first word is not general English) and L-Brain titles /
+//!   aliases (1–4 words). Common words never count: `lore-words`, the filter L-Reader uses.
 //! * **State** per term: 熟 = card `known`; 學習中 = card `learning` / `stale` / no learning
 //!   state for this member; 不熟 = no card, or a card whose last event is 標為不熟 (要學).
-//! * **KnowledgeBase**, read-only from disk (`nodes/*.json` + `progress/<member>/*.json`; spaces:
-//!   `KB_SPACES` > KnowledgeBase's `config.toml` `spaces` > lore-home `private/KnowledgeBase`;
+//! * **L-Brain**, read-only from disk (`nodes/*.json` + `progress/<member>/*.json`; spaces:
+//!   `KB_SPACES` > L-Brain's `config.toml` `spaces` > lore-home `private/KnowledgeBase`;
 //!   member: `KB_MEMBER` > `config.toml` `member` > `private/shared/profile.toml` `id`).
 //! * [`prerequisites`]: the cards' `prerequisite` links (a card → what it needs first).
 
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 const APP: &str = "KnowledgeBase";
 
-// ── KnowledgeBase (read-only) ────────────────────────────────────────────────
+// ── L-Brain (read-only) ────────────────────────────────────────────────
 
 /// How well the author knows a term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,7 +94,7 @@ fn kb_config() -> Option<toml_lite::Table> {
     toml_lite::parse(&std::fs::read_to_string(f).ok()?)
 }
 
-/// KnowledgeBase's spaces (the ones its server would mount, without seeding any).
+/// L-Brain's spaces (the ones its server would mount, without seeding any).
 pub fn space_dirs(home: &lore_home::Home) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = env("KB_SPACES").map(|s| s.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect()).unwrap_or_default();
     if v.is_empty()
@@ -111,7 +111,7 @@ pub fn space_dirs(home: &lore_home::Home) -> Vec<PathBuf> {
     v
 }
 
-/// Whose learning state counts (what KnowledgeBase itself uses).
+/// Whose learning state counts (what L-Brain itself uses).
 pub fn member(home: &lore_home::Home) -> String {
     env("KB_MEMBER").or_else(|| kb_config().and_then(|t| t.string("member"))).or_else(|| home.prefs().profile.id).unwrap_or_else(|| "me".into())
 }
@@ -139,7 +139,7 @@ pub fn load_names(spaces: &[PathBuf], member: &str) -> Vec<KbName> {
     out
 }
 
-/// A few lines of TOML are all we read from KnowledgeBase's config (`spaces`, `member`).
+/// A few lines of TOML are all we read from L-Brain's config (`spaces`, `member`).
 mod toml_lite {
     pub struct Table(Vec<(String, String)>);
     pub fn parse(text: &str) -> Option<Table> {
@@ -532,8 +532,8 @@ pub fn find_terms(items: &[(String, String)], kb: &[KbName], f: &Filters) -> Ter
     r
 }
 
-/// The `terms` stage in one call: the author's KnowledgeBase (read-only) against `items`
-/// (`(section, text)`), filtered like LoreReader: the built-in lists plus the author's
+/// The `terms` stage in one call: the author's L-Brain (read-only) against `items`
+/// (`(section, text)`), filtered like L-Reader: the built-in lists plus the author's
 /// `private/LoreReader/ignore-words.txt` (read-only).
 pub fn terms_for(home: &lore_home::Home, items: &[(String, String)]) -> TermsResult {
     let kb = load_names(&space_dirs(home), &member(home));

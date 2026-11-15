@@ -286,7 +286,7 @@ async fn imports_into_lorereader_or_keeps_pending() {
     assert!(rep.pending.is_empty());
     let body: serde_json::Value = serde_json::from_slice(m.requests()[0].body.as_ref().unwrap()).unwrap();
     assert_eq!(body["path"].as_str().map(PathBuf::from), Some(files[0].canonicalize().unwrap()));
-    // LoreReader not running: everything pending, nothing lost
+    // L-Reader not running: everything pending, nothing lost
     let rep = import_into_reader(&MockHttp::new(), "http://127.0.0.1:7890", &files).await;
     assert_eq!(rep.pending, files);
     assert!(rep.imported.is_empty() && rep.failed.is_empty());

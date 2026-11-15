@@ -172,7 +172,7 @@ fn two_apps_share_one_server_and_the_last_to_quit_stops_it() {
     assert_eq!(reg.server.as_ref().unwrap().started_by.app, "pc");
     assert!(reg.wanting.is_empty());
     assert!(le.cmd("status").starts_with("ok 已載入 Qwen3.5 4B"));
-    assert_eq!(le.cmd("release"), "err PaperComposer 正在用", "釋放 only when nobody else uses it");
+    assert_eq!(le.cmd("release"), "err L-Paper 正在用", "釋放 only when nobody else uses it");
 
     // the starter quits: the server stays for the other app
     pc.quit();

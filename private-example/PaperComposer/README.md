@@ -23,7 +23,7 @@ Point the app at the repository root, in either way:
 
 - environment variable `PAPERCOMPOSER_WORKSPACE=/path/to/your-private-repo`
 - or `workspace_path = "/path/to/your-private-repo"` in the app config file
-  (`%APPDATA%\PaperComposer\config.toml` on Windows,
+  (`%APPDATA%\L-Paper\config.toml` on Windows,
   `~/Library/Application Support/PaperComposer/config.toml` on macOS,
   `~/.config/PaperComposer/config.toml` on Linux)
 

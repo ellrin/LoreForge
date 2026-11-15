@@ -1,5 +1,5 @@
-/* LoreForge shell components, shared by PaperComposer, SlideComposer,
-   LoreReader and KnowledgeBase (docs/shell.md). Measures are SlideComposer's.
+/* LoreForge shell components, shared by L-Paper, L-Slide,
+   L-Reader and L-Brain (docs/shell.md). Measures are L-Slide's.
    Load after theme.css and before the app's own styles.css:
 
      <link rel="stylesheet" href="theme.css">
@@ -240,5 +240,5 @@ select.set-input { padding: 5px 8px; }
 .kbd-group { margin: 14px 0 6px; }
 .kbd-group:first-child { margin-top: 0; }
 
-/* 搜尋檔案 (findfile.js): on while LoreEcho has the request */
+/* 搜尋檔案 (findfile.js): on while L-Echo has the request */
 .btn.lore-findfile.on { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-text); }

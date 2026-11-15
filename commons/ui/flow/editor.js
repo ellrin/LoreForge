@@ -9,7 +9,7 @@
 //     pageWidth,   // mm: the document's width (a paper's \linewidth), offered as 「本文」 next to 寬
 //     doc,         // the document whose notation registry is in force (sent to the server)
 //     source,      // starting material for step 1 (a paper's title and method), or ""
-//     sources,     // async () => [{ label, text }]: papers to start from (LoreReader, PaperComposer)
+//     sources,     // async () => [{ label, text }]: papers to start from (L-Reader, L-Paper)
 //     api,         // "/flow/api"
 //     save,        // async ({ spec }) → true | message; 完成 calls it (null: no 完成)
 //   });          // → { spec } when saved, null when closed

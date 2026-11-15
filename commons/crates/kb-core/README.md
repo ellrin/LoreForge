@@ -16,7 +16,7 @@
 | `kb` | `KnowledgeBase`：create / `create_as(space, fields, via, State::Known)`（新卡直接「記得」：`Progress::new_known`）/ update（revision+1、updated_at）/ trash / restore（從 `trash/` 復原最近一份）/ recall / encounter / share / scan / 查詢 / 資產 |
 | `pending` | 待審區：每個 space 的 `pending/<id>.json`（`p`+ULID）。**不是卡片**：索引、清單、複習、搜尋都不讀。見下 |
 
-### 待審區 API（LoreEcho 在 KnowledgeBase 沒開時直接呼叫）
+### 待審區 API（L-Echo 在 L-Brain 沒開時直接呼叫）
 
 只需要一個 `Space`（不必開 `KnowledgeBase`）；只寫 `pending/`（丟掉時移到 `trash/pending/`）：
 

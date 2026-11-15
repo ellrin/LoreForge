@@ -1,6 +1,6 @@
-//! Downloaded PDFs into LoreReader's library through LoreReader's own
+//! Downloaded PDFs into L-Reader's library through L-Reader's own
 //! `POST /api/papers/import {path}` (it copies the file into its sha-addressed library; the
-//! cache file can be wiped afterwards). LoreReader not reachable: the rest are `pending` (the
+//! cache file can be wiped afterwards). L-Reader not reachable: the rest are `pending` (the
 //! caller keeps them as `pending_imports` and tries again later); never an error.
 
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ use crate::http::{Http, Request};
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Imported {
     pub path: PathBuf,
-    /// LoreReader's sha256 of the paper.
+    /// L-Reader's sha256 of the paper.
     pub sha: String,
     /// Not in the library before.
     pub new: bool,
@@ -23,13 +23,13 @@ pub struct Imported {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ImportReport {
     pub imported: Vec<Imported>,
-    /// Not sent: LoreReader did not answer. Try again when it runs.
+    /// Not sent: L-Reader did not answer. Try again when it runs.
     pub pending: Vec<PathBuf>,
-    /// LoreReader refused the file (`{error}` of its answer).
+    /// L-Reader refused the file (`{error}` of its answer).
     pub failed: Vec<(PathBuf, String)>,
 }
 
-/// Import `files` (absolute paths) into the LoreReader at `base` (`http://127.0.0.1:7890`).
+/// Import `files` (absolute paths) into the L-Reader at `base` (`http://127.0.0.1:7890`).
 /// The first "no network" failure marks that file and all after it as pending.
 pub async fn import_into_reader(http: &dyn Http, base: &str, files: &[PathBuf]) -> ImportReport {
     let url = format!("{}/api/papers/import", base.trim_end_matches('/'));
@@ -47,7 +47,7 @@ pub async fn import_into_reader(http: &dyn Http, base: &str, files: &[PathBuf]) 
                 let sha = v.pointer("/paper/sha256").and_then(Value::as_str);
                 match (r.status, sha) {
                     (200..=299, Some(sha)) => rep.imported.push(Imported { path: f.clone(), sha: sha.to_string(), new: v["new"].as_bool().unwrap_or(false) }),
-                    (s, _) => rep.failed.push((f.clone(), v["error"].as_str().map(String::from).unwrap_or_else(|| format!("LoreReader：{s}")))),
+                    (s, _) => rep.failed.push((f.clone(), v["error"].as_str().map(String::from).unwrap_or_else(|| format!("L-Reader：{s}")))),
                 }
             }
         }

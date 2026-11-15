@@ -1,0 +1,9 @@
+# L-Paper remembers these between sessions. Safe to edit or delete.
+
+[ui]
+dim = false
+zoom = 1.0
+engine = "claude"
+claudeVia = "subscription"
+paper = "retina-triage"
+tplKind = "journal"

@@ -1,4 +1,4 @@
-//! The term pool: words and short phrases in the author's files that his KnowledgeBase does not
+//! The term pool: words and short phrases in the author's files that his L-Brain does not
 //! have yet, with the files and sentences they come from — candidates, never cards. Built from the
 //! whole text (`fulltext`) without a model; a model later says which are real terms
 //! (`Term::verdict`). Kept in the cache tier (`<cache>/LoreForge/shelf/terms.json`, rebuilt from
@@ -28,7 +28,7 @@ pub const NEAR: usize = 5;
 pub const NEAR_LIFT: f64 = 3.0;
 pub const VERSION: u32 = 1;
 
-/// A KnowledgeBase card, as the pool needs it.
+/// An L-Brain card, as the pool needs it.
 #[derive(Debug, Clone, Default)]
 pub struct Known {
     pub title: String,

@@ -6,7 +6,7 @@
 //! vision_model = "gemma-4-12b-q8"    # optional: loaded instead for a task that reads images
 //!
 //! [local]                            # this machine's model folder (LOCAL_LLM_HOME), written by
-//! home = "/path/to/llm-home"         # PaperComposer so apps opened from Finder find the model
+//! home = "/path/to/llm-home"         # L-Paper so apps opened from Finder find the model
 //!
 //! [claude]                           # the Claude connection (never a key: keys are in the keychain)
 //! via = "subscription"               # subscription | api

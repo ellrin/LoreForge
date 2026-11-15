@@ -1,4 +1,4 @@
-# LoreEcho（私人 repo 的起始結構）
+# L-Echo（私人 repo 的起始結構）
 
 ```
 characters/<id>/character.toml   人物：名稱、個性（系統提示）、聲音（語音階段才用）、語言、

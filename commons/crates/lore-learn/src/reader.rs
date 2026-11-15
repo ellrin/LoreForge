@@ -1,4 +1,4 @@
-//! LoreReader's files, read-only, without LoreReader running (the same places SlideComposer's
+//! L-Reader's files, read-only, without L-Reader running (the same places L-Slide's
 //! `reader.rs` reads; `docs/book.md` `source`):
 //!
 //! - per paper: `private/LoreReader/papers/<sha256>/{paper,symbols,quotes,annotations,reading,chat}.json`
@@ -7,7 +7,7 @@
 //!   `library = "…"` in `<LOREREADER_HOME or OS config dir/LoreReader>/config.toml` →
 //!   `~/Documents/LoreReader/library` (the order of `lr_core::config`).
 //!
-//! Nothing here writes into LoreReader's folders.
+//! Nothing here writes into L-Reader's folders.
 
 use std::path::{Path, PathBuf};
 
@@ -39,7 +39,7 @@ fn config_dir(home: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-/// `library = "…"` at the top level of LoreReader's config.toml (before any `[table]`).
+/// `library = "…"` at the top level of L-Reader's config.toml (before any `[table]`).
 pub fn config_library(toml: &str) -> Option<String> {
     for line in toml.lines() {
         let l = line.trim();
@@ -59,7 +59,7 @@ pub fn config_library(toml: &str) -> Option<String> {
     None
 }
 
-/// LoreReader's PDF library. `getenv` and `home` are parameters so tests can pass their own.
+/// L-Reader's PDF library. `getenv` and `home` are parameters so tests can pass their own.
 pub fn library_dir(getenv: &dyn Fn(&str) -> Option<String>, home: Option<&Path>) -> PathBuf {
     if let Some(l) = getenv("LOREREADER_LIBRARY") {
         return expand_home(&l, home);
@@ -75,7 +75,7 @@ pub fn valid_sha(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// LoreReader's folders (read-only).
+/// L-Reader's folders (read-only).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reader {
     /// `private/LoreReader/papers`
@@ -94,7 +94,7 @@ pub struct Question {
 }
 
 impl Reader {
-    /// `LOREREADER_WORKSPACE`, else lore-home's `private/LoreReader`; the library as LoreReader finds it.
+    /// `LOREREADER_WORKSPACE`, else lore-home's `private/LoreReader`; the library as L-Reader finds it.
     pub fn discover(home: &lore_home::Home) -> Option<Reader> {
         let ws = env("LOREREADER_WORKSPACE").map(PathBuf::from).or_else(|| home.app_dir("LoreReader"))?;
         Some(Reader { papers: ws.join("papers"), library: library_dir(&env, user_home().as_deref()) })

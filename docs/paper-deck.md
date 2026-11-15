@@ -1,6 +1,6 @@
 # 論文變簡報（paper → deck）
 
-從 PaperComposer 的論文或 LoreReader 的論文產生一份可上台的論文報告簡報。工作在 SlideComposer 裡跑；PaperComposer 與 LoreReader 上方列的「做成簡報」（共用的 `commons/ui/makedeck.js`）只是把論文交給 SlideComposer 並打開這個工作；SlideComposer 沒開時先把它打開（`lore-sc://`）、等它回應（最多 30 秒），等不到才顯示「開啟 SlideComposer／重試」。
+從 L-Paper 的論文或 L-Reader 的論文產生一份可上台的論文報告簡報。工作在 L-Slide 裡跑；L-Paper 與 L-Reader 上方列的「做成簡報」（共用的 `commons/ui/makedeck.js`）只是把論文交給 L-Slide 並打開這個工作；L-Slide 沒開時先把它打開（`lore-sc://`）、等它回應（最多 30 秒），等不到才顯示「開啟 L-Slide／重試」。
 
 ## 流程
 
@@ -12,7 +12,7 @@
 
 ## 工作（job）與階段
 
-- 工作在伺服器端跑，id 在 `<SlideComposer workspace>/cache/todeck/<job>/`（可刪的快取層，永不寫進 private）。
+- 工作在伺服器端跑，id 在 `<L-Slide workspace>/cache/todeck/<job>/`（可刪的快取層，永不寫進 private）。
 - 每個階段一個 JSON，原子寫入；完成的階段不重做。
 - 關掉視窗不會停；頁面用 job id 重新接上。結束 app 會停；下次開啟時提示「上次做到第 N 步，繼續？」，從最後完成的階段接著做。
 - 某階段檔案壞掉：只重做那一階段。
@@ -20,7 +20,7 @@
 | 階段 | 產出 | 進度顯示 |
 |---|---|---|
 | `source` | 章節、圖、表、方程式（含 label）、參考文獻 | 圖 n/N、表 n、方程式 n |
-| `notation` | 論文的對照表條目（沿用論文／LoreReader 的 id） | 條目 n |
+| `notation` | 論文的對照表條目（沿用論文／L-Reader 的 id） | 條目 n |
 | `terms` | 名詞與知識庫比對：熟／不熟 | 名詞 n → 不熟 m |
 | `profile` | 作者簡報的風格摘要；更新語氣範例檔（見下） | — |
 | `outline` | 每頁：種類、標題、用到的素材、重點、講者備註；接著「建議」 | 模型串流的字數／最後活動時間 |
@@ -33,22 +33,22 @@
 
 ## 本機模型的記憶體
 
-本機模型是整台電腦共用的一個 llama-server（lore-llm `shared_runtime`，見 `docs/local-models.md`）：任何 app 需要時都能啟動，SlideComposer 和其他 app 一樣經 `acquire` 使用。釋放記憶體：閒置 N 分鐘由任何 app 停掉（預設 10 分，在 齒輪 → 模型 設定）；「釋放」按鈕只在沒有其他 app 在用時能按；最後一個在用的 app 結束時停掉。
+本機模型是整台電腦共用的一個 llama-server（lore-llm `shared_runtime`，見 `docs/local-models.md`）：任何 app 需要時都能啟動，L-Slide 和其他 app 一樣經 `acquire` 使用。釋放記憶體：閒置 N 分鐘由任何 app 停掉（預設 10 分，在 齒輪 → 模型 設定）；「釋放」按鈕只在沒有其他 app 在用時能按；最後一個在用的 app 結束時停掉。
 
 ## 內容順序與風格
 
 - 順序以作者的 seminar 簡報為準（設計文件 §7.1 的論文報告骨架）。
 - `profile`：從作者私人資料夾的簡報（經 lore-home 唯讀讀取）抽出精簡的風格摘要，存在快取層：各種頁的頁數分配、標題長度與句型、條列數、Take home 的語氣、圖說與 `Ref:` 的習慣；頁尾標語、logo 等一律排除。摘要不進 repo。
 - **語氣範例（2026-11-13 作者同意，取代「只送摘要」）**：除了摘要，也把作者自己以前簡報的句子當範例送進模型（Claude 或本機皆可），讓大綱的標題、條列、Take home 的寫法（用字、長度、中英混用、動詞開頭等）像作者。
-  - 來源：只有作者自己的簡報（和摘要讀同一批：從作者自己的檔案匯入的，SlideComposer 產生的不算）。
+  - 來源：只有作者自己的簡報（和摘要讀同一批：從作者自己的檔案匯入的，L-Slide 產生的不算）。
   - 排除：封面頁與致謝頁、頁尾等版面佔位、同一份簡報反覆出現的文字與圖（頁尾標語、機密標記、講者列、logo）、`Ref:` 與引用（et al.）、e-mail 與網址、機密／版權字樣、作者姓名與 id（`shared/profile.toml`）、`shared/deny-words.txt` 的每個字、只有數字的行、方程式與文獻條目、一兩個字的標籤。
   - 存放：作者的私人 repo（工具資料層，git 管）`private/SlideComposer/voice/examples.json`（經 lore-home 找到），每種頁的標題、條列、Take home、圖說各有上限。不放 `.claude`、skill、公開 repo 或程式常數。簡報有變（與摘要同一個 key，加上排除清單與版本）就重建；內容沒變不改寫檔案。key 存在快取層（`cache/deck-style/voice-key.json`）。工作的檢查點裡沒有範例句子。
   - 使用：`outline` 依論文（標題、關鍵字、摘要、章節名）挑每種頁最相近的幾句（同一句的變體只取一次），整段約 2600 字以內，接在系統提示的摘要後面，說明「學語氣、不抄內容」；範例語言與簡報語言不同時照樣參考語氣、仍用所選語言寫。「建議」用較短的一段（約 1200 字）。投影片與排版用字不再呼叫模型寫句子，所以只有這兩處。
-  - 實作：`SlideComposer/crates/server/src/deckvoice.rs`。
+  - 實作：`L-Slide/crates/server/src/deckvoice.rs`。
 
 ## 「不熟」標示（守備範圍）
 
-- 定義：一個詞是「不熟」＝它是領域詞（縮寫、多字詞組、或知識卡的別名），而且知識庫沒有它，或知識卡狀態是「要學」。常用字永遠不算（沿用 LoreReader 的字頻過濾）。
+- 定義：一個詞是「不熟」＝它是領域詞（縮寫、多字詞組、或知識卡的別名），而且知識庫沒有它，或知識卡狀態是「要學」。常用字永遠不算（沿用 L-Reader 的字頻過濾）。
 - 範圍：詞、句（含不熟的詞且是背景／方法敘述）、頁（大部分內容不熟）。
 - 呈現：新的強調標籤 `learn`。編輯時：詞與句是紅字加紅色點底線，頁是縮圖角落的紅色小標。上方一個切換「標示我不熟的／報告模式」。**匯出、列印、放映一律自動去掉**，不和「關鍵結果」的紅色粗體混淆。
 - 微調視窗列出「這 N 個詞不在你的知識庫」，每個詞可勾「我懂」清掉標示；「同時存進知識庫（記得）」是另外的勾選，不自動。
@@ -69,9 +69,9 @@
 - **知識背景文件**：把作者不熟的內容（例如醫學背景、某個新方法所依據的舊方法）抓出來，整理成一份為作者客製的背景介紹，等於「屬於自己的 review paper」，會是寫書功能的起點；投影片上不熟的部分連到這份文件。
 - **圖重畫成原生流程圖**：`source` 階段的主架構圖可以選擇用 lore-flow 重畫成可編輯的流程圖，而不是截圖。
 
-## API（SlideComposer 伺服器）
+## API（L-Slide 伺服器）
 
-實作：`commons/crates/lore-jobs`（通用的工作執行器，SlideComposer 以 `sc_server::jobs` 轉出）與 `src/todeck/`（這條流程的各階段）。所有路徑在 SlideComposer 的伺服器上；`/api/todeck*` 也回應 127.0.0.1 / localhost 的跨來源 GET/POST（`DELETE` 與 `PUT` 只給 SlideComposer 自己的頁面）。時間是 Unix 毫秒。錯誤：HTTP 狀態碼 + `{ "error": "一行中文" }`。
+實作：`commons/crates/lore-jobs`（通用的工作執行器，L-Slide 以 `sc_server::jobs` 轉出）與 `src/todeck/`（這條流程的各階段）。所有路徑在 L-Slide 的伺服器上；`/api/todeck*` 也回應 127.0.0.1 / localhost 的跨來源 GET/POST（`DELETE` 與 `PUT` 只給 L-Slide 自己的頁面）。時間是 Unix 毫秒。錯誤：HTTP 狀態碼 + `{ "error": "一行中文" }`。
 
 ### 工作物件（job）
 
@@ -172,15 +172,15 @@
 
 - `outline`：照頁面的順序；刪掉的列就是不要的頁；`id` 對回模型的頁（新頁可用沒有的 id，配 `kind`）；改了的 `point` 寫回 take-away（或第一個要點）。
 - `answers`：每題可為 `null`。`mainFig` 換掉大架構與方法頁的圖（模組框隨之不用）；`opinion: false` 拿掉「我的看法」頁，`true` 而沒有就加一頁空的。`audience`、`modules` 目前只記錄。
-- `known`：勾了「我懂」的詞：送出時寫進 `terms` 的檢查點（`understood`），投影片就不標它們；`remember: true` 另外經 KnowledgeBase 的 API 存成「記得」（它沒開就略過，訊息記在 `review.json` 的 `notes`）。投影片做好之後的「我懂」是 `PUT /api/decks/{name}/learn`。
+- `known`：勾了「我懂」的詞：送出時寫進 `terms` 的檢查點（`understood`），投影片就不標它們；`remember: true` 另外經 L-Brain 的 API 存成「記得」（它沒開就略過，訊息記在 `review.json` 的 `notes`）。投影片做好之後的「我懂」是 `PUT /api/decks/{name}/learn`。
 
 ### 檢查點
 
-`<SlideComposer workspace>/cache/todeck/<id>/`：`job.json`（參數、狀態、各階段時間與數字）、每個完成的階段一個 `<stage>.json`（`{stage, output, counts, elapsed_ms, finished}`）、`img/`（論文的圖）。全部原子寫入。檔案讀不到的階段重做，其他不動；`slides` 做到一半當掉時，下次先刪掉那份做一半的簡報（`slides.pending`）。
+`<L-Slide workspace>/cache/todeck/<id>/`：`job.json`（參數、狀態、各階段時間與數字）、每個完成的階段一個 `<stage>.json`（`{stage, output, counts, elapsed_ms, finished}`）、`img/`（論文的圖）。全部原子寫入。檔案讀不到的階段重做，其他不動；`slides` 做到一半當掉時，下次先刪掉那份做一半的簡報（`slides.pending`）。
 
 ### 模型設定（`/api/engines`，每個 app 都有）
 
-- `GET` 的 `local` 多了 `idle_minutes`（0 = 不自動釋放，預設 10）與 `can_release`（只有管理本機模型的 app ＝ PaperComposer 是 `true`）。
-- `PUT {local: {idle_minutes: 15}}`：存在 `private/shared/engine.toml` 的 `[local]`，各 app 共用；PaperComposer 的 llama-server 每次檢查時讀它。
+- `GET` 的 `local` 多了 `idle_minutes`（0 = 不自動釋放，預設 10）與 `can_release`（只有管理本機模型的 app ＝ L-Paper 是 `true`）。
+- `PUT {local: {idle_minutes: 15}}`：存在 `private/shared/engine.toml` 的 `[local]`，各 app 共用；L-Paper 的 llama-server 每次檢查時讀它。
 - `PUT {local: {release: true}}`：立刻停掉 llama-server；其他 app 回 400。
-- 「使用中」以 llama-server 的 `/slots` 判斷（有 slot 在處理，或 task id 有變），所以 SlideComposer 等直接打網址的請求也算；app 結束時照舊 `kill_now`。
+- 「使用中」以 llama-server 的 `/slots` 判斷（有 slot 在處理，或 task id 有變），所以 L-Slide 等直接打網址的請求也算；app 結束時照舊 `kill_now`。

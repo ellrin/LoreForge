@@ -1,5 +1,5 @@
 // LoreForge line icons (Lucide-style, 24px grid, stroke 1.75), one set for
-// PaperComposer, SlideComposer, LoreReader and KnowledgeBase: the union of the
+// L-Paper, L-Slide, L-Reader and L-Brain: the union of the
 // four sets the apps used to copy. Buttons declare `data-icon="name"`; the label
 // lives in aria-label and shows as a hover hint.
 //
@@ -9,7 +9,7 @@
 //   iconButton(name, label, onclick)   an icon-only .ico button
 //
 // One name per glyph. Where two apps drew the same thing differently,
-// SlideComposer's (then LoreReader's) drawing won and the name stayed
+// L-Slide's (then L-Reader's) drawing won and the name stayed
 // (file, pdf, save, image, star, moon, fit). Where one name meant two things,
 // the second meaning got its own name: ICON_RENAMES lists those call sites, which
 // the app changes when it adopts this file. ICON_ALIASES are old names of the
@@ -36,7 +36,7 @@ const ICON_RENAMES = [
 ];
 
 const ICONS = {
-  // ── SlideComposer's set (the base)
+  // ── L-Slide's set (the base)
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
   cursor: '<path d="m4 4 7 16 2.5-6.5L20 11Z"/>',
@@ -139,7 +139,7 @@ const ICONS = {
   speaker: '<path d="M11 5 6 9H2v6h4l5 4Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
-  // ── LoreReader
+  // ── L-Reader
   next: '<path d="m9 18 6-6-6-6"/>',
   up: '<path d="m18 15-6-6-6 6"/>',
   printer: '<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/>',
@@ -149,15 +149,15 @@ const ICONS = {
   insertPage: '<rect x="4" y="3" width="16" height="7" rx="1"/><rect x="4" y="14" width="16" height="7" rx="1" stroke-dasharray="2 2"/><path d="M12 15.5v4M10 17.5h4"/>',
   mergeFiles: '<path d="M8 3v6a4 4 0 0 0 4 4 4 4 0 0 1 4 4v4M16 3v6a4 4 0 0 1-4 4"/><path d="m13 18 3 3 3-3"/>',
   file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6"/>',
-  // ── KnowledgeBase
+  // ── L-Brain
   sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   pause: '<path d="M8 5v14M16 5v14"/>',
-  // ── PaperComposer
+  // ── L-Paper
   database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
   layout: '<rect x="3" y="3" width="18" height="7" rx="1"/><rect x="3" y="14" width="9" height="7" rx="1"/><rect x="16" y="14" width="5" height="7" rx="1"/>',
-  // SlideComposer's app icon (three stacked slides) as a line icon: 做成簡報 in PaperComposer
+  // L-Slide's app icon (three stacked slides) as a line icon: 做成簡報 in L-Paper
   deckOutline: '<path class="deck-3" d="M7 6h12.5a1 1 0 0 1 1 1v6.5"/><path class="deck-2" d="M5 8.5h12.5a1 1 0 0 1 1 1v6.5"/><rect class="deck-1" x="2.5" y="11" width="13.5" height="7.5" rx="1"/>',
-  // 寫 review (LoreReader → PaperComposer's 寫書): a book being written
+  // 寫 review (L-Reader → L-Paper's 寫書): a book being written
   bookWrite: '<path class="bk-cover" d="M4 18V5.5A2.5 2.5 0 0 1 6.5 3H17v11.5"/><path d="M4 18a2.5 2.5 0 0 1 2.5-2.5H12M4 18a2.5 2.5 0 0 0 2.5 2.5H11"/><path class="bk-lines" d="M8 7h5M8 10h3"/><path class="bk-pen" d="M13.5 21.5l.8-3 5.2-5.2a1.4 1.4 0 0 1 2 2l-5.2 5.2Z"/>',
   ai: '<text x="12" y="17.2" text-anchor="middle" font-size="15" font-weight="700" font-family="Noto Sans TC, -apple-system, sans-serif" fill="currentColor" stroke="none" letter-spacing=".5">AI</text>',
   palette: '<path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.84-.44-1.13-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.55-2.5 5.55-5.55C21.97 6.01 17.46 2 12 2Z"/><circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/>',

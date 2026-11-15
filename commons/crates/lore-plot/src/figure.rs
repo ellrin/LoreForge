@@ -1,5 +1,5 @@
 //! Figures in documents: a paper's `figures/<stem>.pdf` with `<stem>.plot.json` next to it
-//! (PaperComposer), a slide picture as a PNG that carries its spec (SlideComposer).
+//! (L-Paper), a slide picture as a PNG that carries its spec (L-Slide).
 
 use std::path::{Path, PathBuf};
 
@@ -104,7 +104,7 @@ pub fn spec_in_picture(bytes: &[u8]) -> Option<Spec> {
     spec_in_png(bytes).or_else(|| spec_in_gif(bytes))
 }
 
-/// The `figure` environment PaperComposer inserts (same shape as its 新增圖…):
+/// The `figure` environment L-Paper inserts (same shape as its 新增圖…):
 /// registered `\label`, caption above or below, `\linewidth` wide.
 pub fn figure_block(file: &str, caption: &str, label: &str, caption_above: bool) -> String {
     let cap = [format!("  \\caption{{{}}}", tex_text(caption)), format!("  \\label{{{label}}}")];

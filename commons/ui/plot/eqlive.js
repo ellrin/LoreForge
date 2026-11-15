@@ -1,5 +1,5 @@
 // The interactive view of an equation figure (docs/plot.md §10): what the author plays with inside an app
-// (the editor's 互動 view, LoreReader 動起來). It follows the Lore THEME — dark, glowing curves, each
+// (the editor's 互動 view, L-Reader 動起來). It follows the Lore THEME — dark, glowing curves, each
 // variable in its role colour (LorePlot.eqColors over the theme palette) — while every exported file
 // (GIF, PNG, PDF) keeps the figure's own style (equation.js). Canvas 2D, no dependencies.
 //

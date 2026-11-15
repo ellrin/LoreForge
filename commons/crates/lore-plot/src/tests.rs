@@ -172,7 +172,7 @@ Baseline & 0.812 $\pm$ 0.021 & 12.4 \\
 
 #[test]
 fn latex_minus_signs_stay_numbers() {
-    // PaperComposer writes "−0.039" as \ensuremath{-}0.039 (lore-notation's Unicode → LaTeX): it read as text
+    // L-Paper writes "−0.039" as \ensuremath{-}0.039 (lore-notation's Unicode → LaTeX): it read as text
     let tex = r"\begin{tabular}{lcc}\toprule
 Item & Score & Diff \\ \midrule
 Alpha & 0.762 & \ensuremath{-}0.039 \\
@@ -369,7 +369,7 @@ fn every_katex_font_is_compiled_in() {
         }
     }
     assert!(assets::get("../secret").is_none());
-    // the editor opens inside an app page: the page's own .statusbar (PaperComposer: margin-top 32px,
+    // the editor opens inside an app page: the page's own .statusbar (L-Paper: margin-top 32px,
     // no side padding, sticky) left an empty band above the editor's status line and its text at the edge
     let css = include_str!("../../../ui/plot/editor.css");
     assert!(css.contains(".lp-editor .lp-status { position: static; margin: 0; padding: 6px 16px 8px;"), "editor.css resets the host's statusbar");
@@ -690,7 +690,7 @@ fn render_spec_in_headless_chrome() {
     assert!(pdf.starts_with(b"%PDF"));
 }
 
-/// The auto-GIF path with a real Chrome (論文報告, SlideComposer's 會動的方程式 save): frames paced by change with
+/// The auto-GIF path with a real Chrome (論文報告, L-Slide's 會動的方程式 save): frames paced by change with
 /// per-frame delays, then encoded. Run by hand: `cargo test -p lore-plot gif_frames_in -- --ignored`.
 #[test]
 #[ignore]

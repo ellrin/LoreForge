@@ -1,7 +1,7 @@
-# lore-notes — PaperComposer 筆記與靈感
+# lore-notes — L-Paper 筆記與靈感
 
-The notes PaperComposer lists under 筆記 (`docs/loreecho.md` §5, §4a). PaperComposer serves them
-(`/api/notes`); LoreEcho writes the same files through this crate when PaperComposer is closed.
+The notes L-Paper lists under 筆記 (`docs/loreecho.md` §5, §4a). L-Paper serves them
+(`/api/notes`); L-Echo writes the same files through this crate when L-Paper is closed.
 Pure Rust, no network, no app knowledge (the caller passes the folder and the registry).
 
 ```sh
@@ -10,7 +10,7 @@ cargo test -p lore-notes
 
 ## Where
 
-`<PaperComposer workspace>/notes/` — normally `private/PaperComposer/notes/`:
+`<L-Paper workspace>/notes/` — normally `private/PaperComposer/notes/`:
 
 ```rust
 let home = lore_home::Home::discover(&std::env::current_exe()?);
@@ -49,7 +49,7 @@ By \eqref{eq:loss}, \(\vw\) shrinks …
 ## Check (every write)
 
 `check(body, &notation)` runs `lore_notation::check_document` on the body as a fragment plus a
-structure check. **Blocking** (`BLOCKING`; nothing is written) — PaperComposer's own pair for
+structure check. **Blocking** (`BLOCKING`; nothing is written) — L-Paper's own pair for
 written text, `hardcoded_reference` (a typed "Table 1", "Eq. (3)") and `ref_undefined` (a `\ref`
 to a label neither the note nor the registry defines), plus `label_duplicate`, `registry_invalid`,
 `note_structure` (unbalanced `{}`, `$`, `\begin`/`\end`; `\documentclass` or
@@ -80,7 +80,7 @@ check(body, &Notation) -> Vec<Finding>  ·  is_blocked(&[Finding])
 parse(id, text) -> Note  ·  to_tex(&Note) -> String  ·  slug(title)  ·  valid_id(id)  ·  unique_path(dir, stem)
 ```
 
-## HTTP (PaperComposer, when it runs)
+## HTTP (L-Paper, when it runs)
 
 | Method | Path | |
 |---|---|---|
@@ -91,11 +91,11 @@ parse(id, text) -> Note  ·  to_tex(&Note) -> String  ·  slug(title)  ·  valid
 | DELETE | `/api/notes/{id}` | → `{trash}` (moved to `notes/.trash/`) |
 | GET | `/api/notes/macros` | KaTeX macros of the global registry (for previews) |
 
-LoreEcho finds the port in lore-home's `ports.json` (`pc`); without it, it writes with
-`Notes::create` and PaperComposer lists the file the next time its 筆記 panel polls.
+L-Echo finds the port in lore-home's `ports.json` (`pc`); without it, it writes with
+`Notes::create` and L-Paper lists the file the next time its 筆記 panel polls.
 
 ## Opening a note (「打開」)
 
-PaperComposer's page opens the 筆記 window on a note at `/?note=<id>` (`/?note=` = the list),
+L-Paper's page opens the 筆記 window on a note at `/?note=<id>` (`/?note=` = the list),
 so `LoreLinks.open("pc", { note: id })` (`lore-pc://note/<id>`, which the desktop app maps to
 `/?note=<id>`) lands on the saved note.

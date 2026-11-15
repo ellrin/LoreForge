@@ -170,7 +170,7 @@ say "改用本機模型（Claude：離線）". `claude:` tries the subscription 
 | `[engine] kind = subscription / api / llama-server` (explicit, no fallback) | `provider_for_with(task, &RouteOptions::only("claude-code:selected" / "claude-api:selected" / "local:current"))`; `auto` = `provider_for(task)`. The settings' Claude model → `StandardFactory.selected_claude`; the `[llama] url` → `LocalAccess.external` |
 | `server::secrets::{key, save_key, mask, KeySource, Who}` | `lore_secrets::KeyStore` (= `lore_llm::secrets::KeyStore`) `::anthropic("JELearner", Some(app_dir))` (`use_keychain` from settings) → `.get(explicit, &Account::User(who))` / `.save(k, &Account::User(who))`; `who = None` → `Account::Nobody`; same file layout and legacy rule |
 
-### PaperComposer (`crates/server`)
+### L-Paper (`crates/server`)
 
 | PC today | lore-llm |
 |---|---|

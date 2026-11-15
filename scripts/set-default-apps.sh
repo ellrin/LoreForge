@@ -1,6 +1,6 @@
 #!/bin/sh
 # Finder opens these types in the Lore apps on this Mac (no Word / PowerPoint):
-#   .pdf → LoreReader, .pptx → SlideComposer, .docx and .tex → PaperComposer.
+#   .pdf → L-Reader, .pptx → L-Slide, .docx and .tex → L-Paper.
 # Idempotent: a type already set is left alone. Apps not in /Applications are skipped.
 # macOS may ask to confirm a change. Run after scripts/install-apps.sh, so the
 # installed apps carry their file types (tauri.conf.json fileAssociations).
@@ -11,7 +11,7 @@ command -v swift >/dev/null 2>&1 || { echo "需要 swift（xcode-select --instal
 
 # let Launch Services read each installed app's current Info.plist
 LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-for app in LoreReader SlideComposer PaperComposer; do
+for app in L-Reader L-Slide L-Paper; do
   [ -d "/Applications/$app.app" ] && [ -x "$LSREG" ] && "$LSREG" -f "/Applications/$app.app" || true
 done
 
@@ -21,7 +21,7 @@ cat > "$tmp/set.swift" <<'SWIFT'
 import AppKit
 import UniformTypeIdentifiers
 
-let pairs = [("pdf", "LoreReader"), ("pptx", "SlideComposer"), ("docx", "PaperComposer"), ("tex", "PaperComposer")]
+let pairs = [("pdf", "L-Reader"), ("pptx", "L-Slide"), ("docx", "L-Paper"), ("tex", "L-Paper")]
 let ws = NSWorkspace.shared
 var failed = false
 for (ext, app) in pairs {

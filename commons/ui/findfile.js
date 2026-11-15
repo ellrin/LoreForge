@@ -1,10 +1,10 @@
-// 搜尋檔案 through LoreEcho: the one way a Lore app finds one of the author's files.
+// 搜尋檔案 through L-Echo: the one way a Lore app finds one of the author's files.
 // Served as `/findfile.js` by `lore_shell::FILES`; loaded after shell.js. The server side is
-// `lore_shell::findfile` (POST /api/lore/find, GET /api/lore/find/<request>; LoreEcho sends each
+// `lore_shell::findfile` (POST /api/lore/find, GET /api/lore/find/<request>; L-Echo sends each
 // chosen file to the app's POST /api/lore/picked, and the app's callback takes it).
 //
 //   const b = LoreFindFile.button({
-//     purpose: "實驗紀錄",                  // what the file is for (LoreEcho says it)
+//     purpose: "實驗紀錄",                  // what the file is for (L-Echo says it)
 //     exts: ["md", "csv", "pdf"],           // accepted extensions (optional)
 //     context: { paper: name },             // handed to the app's callback (optional)
 //     onAdded: (names) => reload(),         // files the app took, as they arrive
@@ -23,7 +23,7 @@ window.LoreFindFile = (() => {
       if (b._key !== k) return;
       b.classList.toggle("on", on);
       b.setAttribute("aria-pressed", on ? "true" : "false");
-      b.title = on ? "在 LoreEcho 選檔案" : "用 LoreEcho 找檔案";
+      b.title = on ? "在 L-Echo 選檔案" : "用 L-Echo 找檔案";
     });
   }
 
@@ -51,7 +51,7 @@ window.LoreFindFile = (() => {
   }
 
   async function start(opts, k) {
-    if (open.has(k)) return;   // already looking: LoreEcho has it
+    if (open.has(k)) return;   // already looking: L-Echo has it
     open.set(k, { request: null, seen: 0, onAdded: opts.onAdded, since: Date.now() });
     paint(k);
     try {

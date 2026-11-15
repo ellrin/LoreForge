@@ -8,7 +8,7 @@
 //!   tier) as `<sha256>.pdf`, after checking it is a PDF and not too large. A record that is
 //!   not open access is refused before any request: paywalled full text is never fetched.
 //! - [`bibtex`]: an entry for every record, stable keys, unique within a set.
-//! - [`reader::import_into_reader`]: downloaded files into LoreReader's library.
+//! - [`reader::import_into_reader`]: downloaded files into L-Reader's library.
 //!
 //! No e-mail is sent unless the caller passes [`Config::mailto`]; the User-Agent is a generic
 //! client string. HTTP goes through the [`Http`] trait: tests use [`MockHttp`], never the network.

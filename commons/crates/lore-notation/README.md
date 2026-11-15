@@ -1,7 +1,7 @@
 # lore-notation — 對照表（notation registry）
 
-Pure Rust, no network, no app knowledge. Shared by PaperComposer (PC) and
-SlideComposer (SC); design: `../../../private/shared/docs/ecosystem-design.md` §5.
+Pure Rust, no network, no app knowledge. Shared by L-Paper (PC) and
+L-Slide (SC); design: `../../../private/shared/docs/ecosystem-design.md` §5.
 
 - `notation.json` data model, global profile file + per-document file, import/merge
 - macro mode: `notation.tex` (`\newcommand` per entry), KaTeX macro map, insert text, Nomenclature
@@ -89,7 +89,7 @@ katex_macros(&n) -> BTreeMap<"\\name", body>               // for previews (PCTe
 insert_text(&entry, InsertMode::{Macro,Literal}, in_math) -> String  // in math a trailing \name gets a space (`\speed ` + x ≠ `\speedx`)
 insert_text_with(.., &RefWords) / notation_tex_with(.., &RefWords)  // a journal's reference words; the plain versions use RefWords::default()
 
-// a journal's reference words ([ref_words] in a PaperComposer template)
+// a journal's reference words ([ref_words] in an L-Paper template)
 RefWords { fig, tab, eq, sec: Option<String>, sentence_start: {kind → word}, mode: Option<"words"|"cleveref"> }
 RefWords::default().snippet("fig", "fig:a", false) == "Fig.~\ref{fig:a}"   // also Table~\ref, Section~\ref, bare \eqref
 rw.snippet(kind, key, sentence_start) -> String              // "Figure~\ref{…}", "Eq.~\eqref{…}", \cref / \Cref in cleveref mode
@@ -195,7 +195,7 @@ draft with pdflatex (when installed) with and without `xcolor[table]`.
 `unicode::to_latex(text)` writes ≤ ≥ ± × − ° α…ω, super- and subscripts (`x²`, `CD4⁺`, `H₂O`) and a few text symbols as LaTeX
 pdflatex accepts: outside math `\ensuremath{\leq}`, `\textsuperscript{+}`; inside `$…$` / `\(…\)` / `\[…\]` the bare command.
 Idempotent; ASCII, CJK and the punctuation utf8 input already handles (– — “ ” …) pass through. `unicode::unsupported(text)` lists what
-it would change. PaperComposer runs it on every drafted paragraph, rewrite (lore-polish `Host::latex`) and revision, and on the author's
+it would change. L-Paper runs it on every drafted paragraph, rewrite (lore-polish `Host::latex`) and revision, and on the author's
 click over the paper's files (`/fix-unicode`).
 
 ## Auto-extract and the assistant hook
@@ -212,7 +212,7 @@ fills empty fields and tags them `suggested`. This crate never calls a model.
 
 ## Integration
 
-### PaperComposer (wave 2, B1)
+### L-Paper (wave 2, B1)
 
 Server (`pc-core` / `pc-server`), by path dependency `../commons/crates/lore-notation`:
 
@@ -239,7 +239,7 @@ UI (`ui/write.js`, `ui/tex.js`):
 - The cross-ref picker keeps using `PCTex.labels`; figure/table/equation rows insert `Fig.~\ref{…}` / `\eqref{…}`.
 - Hover: `new NotationTooltip(panel).attach(previewRoot)` and mark KaTeX nodes with `data-notation="<latex>"`.
 
-### SlideComposer
+### L-Slide
 
 - Each deck has its own `notation.json`, usually imported from the paper's (`import`) plus the global file.
 - Equation boxes insert `latex` and optionally `gloss` as the bracket note (design §5 v0.2);
@@ -265,7 +265,7 @@ UI (`ui/write.js`, `ui/tex.js`):
 
 ## Punctuation and sentence guard (`punct`)
 
-For apps that generate English prose (PaperComposer's drafts, polish, revisions, captions). Off
+For apps that generate English prose (L-Paper's drafts, polish, revisions, captions). Off
 unless the app passes a rule (the author's choice lives in their private style folder:
 `[punctuation] allowed = [".", ","]`, `hyphen_whitelist = [...]`).
 

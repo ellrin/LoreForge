@@ -1,6 +1,6 @@
 [package]
 name = "lore-research"
-description = "Find related papers on the web (OpenAlex, arXiv, Semantic Scholar), open access only: common records, dedupe, OA PDF download into a caller-given folder, BibTeX, LoreReader library import."
+description = "Find related papers on the web (OpenAlex, arXiv, Semantic Scholar), open access only: common records, dedupe, OA PDF download into a caller-given folder, BibTeX, L-Reader library import."
 version.workspace = true
 edition.workspace = true
 publish = false

@@ -1,6 +1,6 @@
 //! Long-running background jobs: a list of stages run in order, one checkpoint per stage,
 //! progress for the page, cancel and resume. A [`Pipeline`] says what the stages are and how
-//! each runs; the runner knows nothing about any app (SlideComposer's 論文報告 is one pipeline).
+//! each runs; the runner knows nothing about any app (L-Slide's 論文報告 is one pipeline).
 //! No HTTP here: an app maps its own routes onto [`Jobs`] and serves [`Jobs::view`].
 //!
 //! - A job is a folder `<root>/<id>/`: `job.json` (options, status, per-stage time and
@@ -17,7 +17,7 @@
 //! - Jobs found on disk that were running or waiting when the process ended are
 //!   `interrupted` (the page offers 「上次做到第 N 步，繼續？」).
 //!
-//! The job object ([`Jobs::view`]) and the routes SlideComposer builds on it:
+//! The job object ([`Jobs::view`]) and the routes L-Slide builds on it:
 //! `docs/paper-deck.md` "工作與階段" and "API" in the LoreForge repo.
 
 use std::collections::BTreeMap;
