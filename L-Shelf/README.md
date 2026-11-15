@@ -1,26 +1,44 @@
-# L-Shelf
+<p align="center">
+  <img src="apps/desktop/icons/logo.svg" alt="L-Shelf" width="120">
+</p>
 
-本機的檔案目錄：**不移動任何檔案**，用內容雜湊（sha256）認檔案，記下每個檔案在哪裡出現過、各種時間（建立、修改、下載、最後打開、文件內的日期）與下載網址，找出重複與只有一份的檔案。設計草稿在 `../docs/loreshelf.md`。
+<h1 align="center">L-Shelf</h1>
 
-> 第一波：只讀掃描與報告。之後：內容抽取與標籤、3D 瀏覽、L-Echo 與知識庫串接。
+<p align="center">
+  <b>A catalog of the files on your Mac. It reads; it moves only what you confirm.</b><br>
+  <sub>Part of <a href="../README.md">LoreForge</a> · local-first · interface in Traditional Chinese</sub>
+</p>
 
-## 執行
+<p align="center"><img src="../docs/assets/readme/divider.svg" alt="" width="100%"></p>
+
+## Features
+
+- **Files by content**: sha256 identifies a file, so duplicates and single copies are found wherever they are.
+- **Every date it can find**: created, modified, downloaded, last opened, dates inside the document, the download URL.
+- **Projects as one unit**: a folder with `.git`, `main.tex`, `Cargo.toml`, `package.json` and similar is one entry.
+- **Opens in the right app**: PDF → L-Reader, `.pptx` → L-Slide, `.docx` and `.tex` → L-Paper.
+- **Filing on your say**: it plans where files belong; a move happens only in a batch you confirm, with undo.
+
+## Run
 
 ```sh
-cargo run --release -p loreshelf-cli -- scan ~/Downloads   # 只讀掃描，印出摘要與報告位置
-cargo run --release -p loreshelf-cli -- report             # 最新報告的位置
-cargo run -p shelf-server                              # 介面：http://127.0.0.1:7900
-cargo test                                             # 離線測試（暫存資料夾、合成檔案）
+cargo run --release -p loreshelf-cli -- scan ~/Downloads   # read-only scan and report
+cargo run -p shelf-server                                  # http://127.0.0.1:7900
+../scripts/install-apps.sh L-Shelf                         # the Mac app
 ```
 
-- 目錄（每個內容一份紀錄、專案資料夾、報告）在 `~/Library/Application Support/LoreForge/LoreShelf`（或 `LORESHELF_HOME`），**只存在本機**：放在 iCloud Drive、這個 repo 或有遠端的 git 裡時會拒絕；它自己的 git 沒有遠端，推送一律被擋。
-- 雜湊快取在 `~/Library/Caches/LoreForge/shelf/`，可以隨時刪除；沒變的檔案重掃時不會再讀。
-- 掃描不寫入、不搬移、不改名，不跟隨符號連結，不下載 iCloud 上未下載的檔案，略過 `.DS_Store`。
-- 有 `.git`、`main.tex`（或 `.tex`＋`.bib`）、`Cargo.toml`、`package.json`、`*.xcodeproj`、`pyproject.toml` 的資料夾算一個專案，不往內讀；同一個 git repo 的多個 clone 算同一筆。
-- macOS 套件（`.app` 等）與資料集資料夾（超過 500 個檔、九成同一副檔名）各算一筆，只計檔數與大小。
-- 目錄的本機 git 只記錄作者的修改（`edits/`），掃描結果不進 git。
-- macOS 若拒絕讀取（例如「下載項目」的隱私權限），掃描會停下並說明；到「系統設定 → 隱私權與安全性 → 檔案與資料夾」允許終端機。
+## Your data
 
-## 開發說明
+- Catalog: `~/Library/Application Support/LoreForge/LoreShelf` (or `LORESHELF_HOME`), local only: it refuses iCloud Drive, this repo, or any git repo with a remote.
+- Hash cache: `~/Library/Caches/LoreForge/shelf/`, safe to delete.
 
-本專案與 Claude（Anthropic）協作開發，程式碼在 Claude Code 中撰寫。
+## Limits
+
+- Scans never write, rename or delete, do not follow symlinks and do not download iCloud placeholders.
+- macOS may need a privacy permission for folders such as Downloads.
+
+Command reference: [`CLAUDE.md`](CLAUDE.md) · design: [`../docs/loreshelf.md`](../docs/loreshelf.md)
+
+## Development notes
+
+Developed by ellrin with Claude (Anthropic); the code is written in claude.ai and Claude Code.
