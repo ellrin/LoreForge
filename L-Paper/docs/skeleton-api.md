@@ -76,7 +76,11 @@ Field names are snake_case. Ids are stable for the life of the skeleton and neve
   "state": "proposed|applied|reverted|rejected" }   // edit: applied (revertible); refine: proposed
 ```
 
-A block's state is the lowest state of its paragraphs (the page works it out).
+A block's state is the lowest state of its paragraphs (the page works it out), and so is the number of
+questions still open in it. The planner seeds `points` from the record (`from: null`): a paragraph with at
+least one point starts as `points`. `rev` grows with every change, also a background one, and two GETs with
+nothing changed in between carry the same `rev` (the page redraws only on a new `rev`). A removed
+paragraph's open threads are dropped; its finished ones move to its block.
 
 ## Routes
 
@@ -89,12 +93,12 @@ A block's state is the lowest state of its paragraphs (the page works it out).
 | POST | `/save` | `{}` | 暫存: repair what was touched and its neighbours (background, `job.kind = "save"`); makes `edit` threads |
 | POST | `/answer` | `{ "thread", "text", "picked": ["o1"], "skip": false }` | answers at once with `next` moved on; the fold-in runs in the background (`para.busy = "fill"`) |
 | POST | `/note` | `{ "anchor", "text" }` | the author says something about a paragraph or block unasked: a `note` thread, folded in like an answer |
-| POST | `/write` | `{ "id" }` | write the text of a paragraph, a block, a section or `"all"` (background, `para.busy = "write"`) |
+| POST | `/write` | `{ "id" }` | a paragraph id: (re)write that paragraph. A block, a section or `"all"`: write only the paragraphs whose `text` is empty; text that is there is never replaced (background, `para.busy = "write"`) |
 | POST | `/refine` | `{ "para", "preset": "wording|style|check" }` | a `refine` thread with proposed changes |
 | POST | `/change` | `{ "thread", "change", "accept": true }` | take or drop one change (`edit`: false = revert) |
 | GET | `/style` | | `StyleReport` |
 | POST | `/convert` | `{}` | an old session → a skeleton (archive copy first) |
-| POST | `/place` | `{ "section": "s3" }` or `{}` | 放進論文 (all sections when empty) |
+| POST | `/place` | `{ "section": "s3" }` or `{}` | 放進論文 (all sections when empty); an error when nothing could be placed |
 
 ```jsonc
 // Op

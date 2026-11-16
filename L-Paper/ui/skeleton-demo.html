@@ -144,16 +144,32 @@ async function call(path, body) {
   // the answer the fixture shows as being folded in finishes after a moment
   setTimeout(() => { const t = V.threads.find((x) => x.status === "answered"); if (!t) return; const p = where(t.anchor)?.p; if (p) { p.busy = null; p.points.push({ text: "如實寫反轉，主張限定在內部資料", from: t.id }); } t.status = "done"; t.conclusion = "如實寫反轉，主張限定在內部資料"; V.rev++; }, 2500 * SPEED);
   await PCSkeleton.mount(document.querySelector("#root"), { call });
-  const S = PCSkeleton._state;
+  let S = PCSkeleton.state();
   if (Q.get("tab")) { S.tab = Q.get("tab"); }
   const steps = (Q.get("do") ?? "").split(",");
   if (steps.includes("fold")) S.folded.add("b3");
   if (steps.includes("note")) S.noteAt = "p12";
   if (steps.includes("nohints")) S.hints = false;
-  PCSkeleton._draw();
+  PCSkeleton.redraw();
   if (steps.includes("answer")) document.querySelector(".sk-thread.sk-active .sk-opt")?.click();
   if (steps.includes("write")) document.querySelector('[data-id="b4"] .sk-bhead [aria-label="寫這個框的文字"]')?.click();
-  if (steps.includes("refine")) { await call("/refine", { para: "p6", preset: "wording" }); S.view = null; await PCSkeleton.mount(document.querySelector("#root"), { call }); }
+  if (steps.includes("refine")) { await call("/refine", { para: "p6", preset: "wording" }); await PCSkeleton.mount(document.querySelector("#root"), { call }); }
+  // ?probe=typing: type into the open answer while the pretend server keeps changing; the box must
+  // stay the same node (an IME composition would be cut otherwise). The result is the page title.
+  if (Q.get("probe") === "typing") {
+    const box = () => document.querySelector(".sk-thread.sk-active .sk-answer");
+    const first = box();
+    first.focus();
+    let same = true;
+    for (let i = 0; i < 8; i++) {
+      first.value += "字"; first.dispatchEvent(new Event("input"));
+      const p = where("p8").p; p.points.push({ text: `背景更新 ${i}`, from: null }); V.rev++;
+      PCSkeleton.state().view.threads.find((t) => t.status === "answered") || (V.threads[1].status = "answered");
+      await wait(900);
+      same = same && box() === first && document.activeElement === first;
+    }
+    document.title = `probe typing: ${same ? "ok" : "FAILED"} value=${first.value.length} points=${document.querySelectorAll('[data-id="p8"] .sk-points li').length}`;
+  }
   if (Q.get("at")) { await wait(60); const sc = document.querySelector(".sk-scroll"); const n = document.querySelector(`[data-id="${Q.get("at")}"]`); if (sc && n) sc.scrollTop += n.getBoundingClientRect().top - sc.getBoundingClientRect().top - 12; }
   window.__ready = true;
 })();

@@ -1644,5 +1644,6 @@ const PCDraft = (() => {
     });
   }
 
-  return { open, reload };
+  // micButton and makeFloat are shared with 骨架 (skeleton.js)
+  return { open, reload, micButton, makeFloat: makeFromStandIn };
 })();
