@@ -181,9 +181,12 @@
 .sk-invfoot { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; padding-top: 10px; border-top: 1px solid var(--line); }
 
 /* 風格: the author's range is the band, the draft is the mark */
-.sk-srow { display: grid; grid-template-columns: 96px 1fr 44px 64px; gap: 10px; align-items: center; padding: 5px 0; font-size: 12.5px; }
+.sk-srow { display: grid; grid-template-columns: 138px 1fr 44px 64px; gap: 10px; align-items: center; padding: 5px 0; font-size: 12.5px; }
 .sk-track { position: relative; height: 6px; border-radius: 3px; background: var(--surface); }
 .sk-band { position: absolute; left: 25%; width: 50%; top: 0; bottom: 0; border-radius: 3px; background: var(--line-strong); }
+.sk-band.one { left: calc(50% - 1px); width: 2px; top: -3px; bottom: -3px; }
+.sk-track.none { background: none; }
+.sk-slabel { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sk-mark { position: absolute; top: -3px; width: 4px; height: 12px; margin-left: -2px; border-radius: 2px; background: var(--ok); }
 .sk-srow.off .sk-mark { background: var(--warn); }
 .sk-sval { font: 600 12px var(--mono); text-align: right; }

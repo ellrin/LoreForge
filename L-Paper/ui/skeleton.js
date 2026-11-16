@@ -890,15 +890,17 @@ const PCSkeleton = (() => {
         if (r.ok === false) row.classList.add("off");
         row.append(h("span", "sk-slabel", r.label));
         const track = h("span", "sk-track");
+        const one = r.mine && r.mine[0] === r.mine[1];
         if (r.mine && r.draft != null) {
-          // the author's range is the middle half of the track; the draft's value on the same scale
+          // the author's range is the middle half of the track, the draft's value on the same scale;
+          // a single typical value is a tick in the middle, the draft left or right of it
           const [lo, hi] = r.mine;
-          const pos = Math.max(0, Math.min(100, 25 + ((r.draft - lo) / Math.max(hi - lo, 1e-6)) * 50));
+          const pos = one ? (r.draft === lo ? 50 : r.draft < lo ? 22 : 78) : Math.max(0, Math.min(100, 25 + ((r.draft - lo) / (hi - lo)) * 50));
           const mark = h("i", "sk-mark");
           mark.style.left = `${pos}%`;
-          track.append(h("i", "sk-band"), mark);
-        }
-        row.append(track, h("span", "sk-sval", r.draft == null ? "—" : fmt(r.draft)), h("span", "sk-smine", r.mine ? `${fmt(r.mine[0])}–${fmt(r.mine[1])}` : ""));
+          track.append(h("i", one ? "sk-band one" : "sk-band"), mark);
+        } else track.classList.add("none");
+        row.append(track, h("span", "sk-sval", r.draft == null ? "—" : fmt(r.draft)), h("span", "sk-smine", !r.mine ? "" : one ? fmt(r.mine[0]) : `${fmt(r.mine[0])}–${fmt(r.mine[1])}`));
         sec.append(row);
       }
       for (const p of s.paras) {
