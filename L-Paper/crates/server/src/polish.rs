@@ -140,7 +140,7 @@ pub fn cache_root() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("PaperComposer")
 }
 
-struct PcHost(Shared);
+pub(crate) struct PcHost(pub(crate) Shared);
 
 #[async_trait::async_trait]
 impl lore_polish::Host for PcHost {
@@ -159,6 +159,12 @@ impl lore_polish::Host for PcHost {
         Ok(doc_for(l.workspace.as_deref(), &dir, l.profile.as_ref(), text))
     }
     async fn complete(&self, req: lore_llm::LlmRequest, engine: Option<&str>) -> Result<(serde_json::Value, String), String> {
+        // scripted replies (the isolated example's --mock, the skeleton tests)
+        if let Some(m) = &self.0.llm.mock {
+            let t = m.answer(lore_polish::TASK, &Prompt { system: req.system.clone(), user: req.flatten() }).await?;
+            let v: serde_json::Value = serde_json::from_str(&t).map_err(|e| format!("mock：{e}"))?;
+            return Ok((v, "mock".into()));
+        }
         let choice: Option<EngineChoice> = engine.filter(|e| !e.is_empty() && *e != "auto").and_then(|e| serde_json::from_value(serde_json::json!(e)).ok());
         let route = self.0.llm.route(lore_polish::TASK, choice).await?;
         let req = route.apply(req.temperature(llm::LOCAL_TEMPERATURE));

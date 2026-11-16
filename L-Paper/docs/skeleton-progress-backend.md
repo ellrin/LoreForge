@@ -105,3 +105,27 @@
 - 尚未做：新符號（registry 沒有的）目前只出現在 `problems` 的「對照表：」訊息裡，骨架沒有另存 `new_symbols` 清單（舊流程的「登記符號」按鈕讀 drafts）。
 
 測試：`cargo test -p pc-core skeleton` → 30 passed；`cargo test -p pc-server --test skeleton_api` → 1 passed。
+
+第 5 段 commit：73c5970。
+
+## 第 6 段：細修與風格對照
+
+- `/refine { para, preset }`：`wording` = lore-polish 的「用字」預設、`style` = 「我的風格」預設（同 潤飾 視窗：LaTeX 鎖住、
+  改寫後過 lore-notation 檢查、寫進 polish.jsonl），`check` = 只有程式：作者 profile 的字詞檢查（有建議的才變成修改）與
+  標點守門的機械修正。背景執行（`busy = "refine"`），完成時多一串 `refine`：句子對得上就一句一個 `Change`（`before` 是目前文字裡的一段），
+  對不上就整段一個；沒有建議或沒通過檢查 → 這串直接 done，`conclusion` 說原因。
+- `/change accept=true` 套用前確認 `before` 還在文字裡且只出現一次，否則 400 並說明。
+- `GET /style`：只用程式。每章（有文字的）：每段字數、每段句數、每句字數（中位數）、句長四分位距、相鄰句長變化率、結論句比例、
+  每段連接詞開頭的句數、禁用字、標點（有守門規則才有）。作者那一側只用程式已經有的：`checks.toml` 的段落範圍（字數、句數）、
+  styleprofile（每句字數、每段字數／句數、結論句比例、他的連接詞清單）、寫法筆記與 vocabulary 的禁用字。
+  沒有作者數字的（句長離散、變化率、連接詞）`mine = null`。只有單一典型值（styleprofile 的中位數）時寫成 `[v, v]`，
+  `ok` = 差距在四分之一以內（這個容許值是程式的約定，留給作者決定）。超出範圍的段落列在 `paras`：字數、句數、
+  「句長變化太小」（三句以上、句長全在三個字以內的差距；同樣是程式的約定）、禁用字、標點。
+- 假模型也接上了 lore-polish（`PcHost::complete` 在 mock 時讀 `polish` 任務）。
+
+測試：`cargo test -p pc-core skeleton` → 32 passed；`cargo test -p pc-server --test skeleton_api` → 1 passed；
+`cargo test -p pc-server --lib polish` → 4 passed。
+
+### 合約問題
+- `/refine` 是背景工作：回應時那一段 `busy = "refine"`，`refine` 串在完成後才出現（頁面照常輪詢）。
+- `StyleReport` 的數字是小數（例如 `17.0`），合約範例是整數；JSON 都是 number。

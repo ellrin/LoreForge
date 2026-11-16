@@ -21,6 +21,7 @@
 pub mod convert;
 pub mod inventory;
 pub mod plan;
+pub mod style;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

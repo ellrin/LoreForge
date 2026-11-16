@@ -665,3 +665,53 @@ fn a_jump_is_a_paragraph_sharing_nothing_with_the_one_before() {
     assert_eq!(sk.para("p3").unwrap().jump.as_ref().unwrap().why, "從比較跳到收案");
     assert!(sk.para("p1").unwrap().jump.is_none(), "only those asked");
 }
+
+#[test]
+fn style_report_is_the_programs_numbers_next_to_the_authors() {
+    use lore_notation::punct::{Guard, ParagraphRange};
+    let mut sk = small();
+    sk.para_mut("p1").unwrap().text = "Method A reached 0.91. Method B reached 0.87. The gap held in all folds. However, the test set was small.".into();
+    sk.para_mut("p2").unwrap().text = "This shows that a novel prior helps when data are scarce, and the effect was largest below five hundred images.".into();
+    let range = ParagraphRange { target: (40, 90), bounds: (30, 120), sentences: Some((3, 6)) };
+    let prof = crate::styleprofile::SectionStyle { words_per_sentence: Some(18.0), claim_share: Some(0.3), ..Default::default() };
+    let mine = |s: &Section| if s.role == "results" { style::Mine { range: Some(range), profile: Some(&prof) } } else { style::Mine::default() };
+    let r = style::report(&sk, &mine, &["novel".to_string()], &Guard::default());
+    assert_eq!(r.sections.len(), 1, "only sections with text");
+    let sec = &r.sections[0];
+    let row = |id: &str| sec.rows.iter().find(|x| x.id == id).unwrap().clone();
+    assert_eq!(row("paragraph_words").mine, Some([40.0, 90.0]));
+    assert!(!row("paragraph_words").ok, "{:?}", row("paragraph_words"));
+    assert_eq!(row("sentence_words").mine, Some([18.0, 18.0]));
+    assert_eq!(row("sentence_spread").mine, None, "no author number: null, never invented");
+    assert_eq!(row("length_change").mine, None);
+    assert_eq!(row("banned").draft, 1.0);
+    assert!(sec.rows.iter().all(|x| x.id != "punctuation"), "no guard: no punctuation row");
+    let p1 = sec.paras.iter().find(|p| p.id == "p1").unwrap();
+    assert!(p1.issues.iter().any(|i| i.starts_with("字數")) && p1.issues.contains(&"句長變化太小".to_string()), "{:?}", p1.issues);
+    let p2 = sec.paras.iter().find(|p| p.id == "p2").unwrap();
+    assert!(p2.issues.iter().any(|i| i.contains("novel")) && p2.issues.iter().any(|i| i.starts_with("句數 1")), "{:?}", p2.issues);
+    let json = serde_json::to_value(&r).unwrap();
+    assert!(json["sections"][0]["rows"][0].get("mine").is_some() && json["sections"][0]["paras"][0].get("issues").is_some());
+}
+
+#[test]
+fn refinements_are_proposed_changes_on_passages_of_the_text() {
+    let text = "Method A was better. This shows that the gain is stable. We used five folds.";
+    let c = style::changes_from_rewrite(text, "Method A was better. The gain is stable. We used five folds.", "用字");
+    assert_eq!(c.len(), 1);
+    assert_eq!((c[0].before.as_str(), c[0].after.as_str()), ("This shows that the gain is stable.", "The gain is stable."));
+    let whole = style::changes_from_rewrite(text, "Method A was better, and the gain is stable.", "我的風格");
+    assert_eq!(whole[0].before, text, "sentences do not line up: one change of the whole text");
+    assert!(style::changes_from_rewrite(text, text, "x").is_empty());
+    let words = vec![("in order to".to_string(), "to".to_string(), "wordy".to_string())];
+    let c = style::changes_from_checks("In order to compare, we ran it. It was fast: very fast.", &words, Some("To compare, we ran it. It was fast, very fast."));
+    assert_eq!(c.iter().map(|x| x.after.as_str()).collect::<Vec<_>>(), ["To compare, we ran it.", "It was fast, very fast."]);
+    let mut sk = small();
+    sk.para_mut("p1").unwrap().text = text.into();
+    let t = style::refine_thread("p1", style::changes_from_rewrite(text, "Method A was better. The gain is stable. We used five folds.", "用字"), "");
+    let id = sk.add_thread(t);
+    assert_eq!(sk.thread(&id).unwrap().changes[0].id, "c1");
+    sk.decide(&id, "c1", true).unwrap();
+    assert_eq!(sk.para("p1").unwrap().text, "Method A was better. The gain is stable. We used five folds.");
+    assert_eq!(style::refine_thread("p1", vec![], "沒有建議").status, "done");
+}

@@ -23,6 +23,8 @@ pub(super) fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/skeleton/answer", post(post_answer))
         .route("/api/papers/{name}/draft/skeleton/note", post(post_note))
         .route("/api/papers/{name}/draft/skeleton/write", post(post_write))
+        .route("/api/papers/{name}/draft/skeleton/refine", post(post_refine))
+        .route("/api/papers/{name}/draft/skeleton/style", get(get_style))
 }
 
 // ── what runs ────────────────────────────────────────────
@@ -719,4 +721,109 @@ async fn write_section(s: &Shared, c: &Ctx, _sec: &str, ids: &[String]) -> Vec<S
         }
     }
     errors
+}
+
+// ── 細修 ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct RefineBody {
+    para: String,
+    preset: String,
+}
+
+/// 用字 / 我的風格 (lore-polish's presets, the same as the 潤飾 window: locked LaTeX, the
+/// notation check of the rewrite) or 檢查 (the program's checks only): a `refine` thread of
+/// proposed changes, made in the background (`busy = "refine"`).
+async fn post_refine(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<RefineBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let preset = match b.preset.as_str() {
+        "wording" => crate::polish::DICTION,
+        "style" => crate::polish::VOICE,
+        "check" => "check",
+        _ => return bad("沒有這種細修"),
+    };
+    let Some(held) = hold(&c.dir, &format!("para:{}", b.para)) else { return conflict("這一段正在處理") };
+    let (sess, (text, section)) = tri!(
+        with_sk(&c.dir, |sess| {
+            let k = sess.skeleton.as_mut().ok_or("還沒有骨架")?;
+            clear_failed(k);
+            let section = k.section_of(&b.para).map(|x| sk::old_section(x).to_string()).unwrap_or_default();
+            let p = k.para_mut(&b.para).ok_or("沒有這一段")?;
+            if p.text.trim().is_empty() {
+                return Err("這一段還沒有文字".into());
+            }
+            p.busy = Some("refine".into());
+            Ok((p.text.clone(), section))
+        })
+        .await
+    );
+    let (s2, c2, para, name) = (s.clone(), own(&c), b.para.clone(), name.clone());
+    tokio::spawn(async move {
+        let _held = held;
+        let label = match preset {
+            crate::polish::DICTION => "用字",
+            crate::polish::VOICE => "我的風格",
+            _ => "檢查",
+        };
+        let (changes, note): (Vec<sk::Change>, String) = if preset == "check" {
+            let (words, fixed) = {
+                let l = s2.loaded.read().await;
+                let words: Vec<(String, String, String)> = l
+                    .profile
+                    .as_ref()
+                    .map(|prof| pc_core::check_text(prof, &text, Some(&section)).into_iter().flat_map(|r| r.findings).filter_map(|f| Some((f.found?, f.suggest.unwrap_or_default(), f.message))).collect())
+                    .unwrap_or_default();
+                let rules = l.profile.as_ref().map(|p| p.rules.clone()).unwrap_or_default();
+                let g = crate::guard::load(&c2.ws, Some(&c2.dir), &rules);
+                let fixed = g.active().then(|| g.finish(&text).0).filter(|f| *f != text);
+                (words, fixed)
+            };
+            let ch = sk::style::changes_from_checks(&text, &words, fixed.as_deref());
+            let note = if ch.is_empty() { "檢查沒有找到要改的".to_string() } else { String::new() };
+            (ch, note)
+        } else {
+            let body = lore_polish::ProposeBody { doc: name, text: text.clone(), preset: Some(preset.into()), scope: section.clone(), ..Default::default() };
+            match lore_polish::propose(&crate::polish::PcHost(s2.clone()), body).await {
+                Ok(p) if p.ok => {
+                    let ch = sk::style::changes_from_rewrite(&text, &p.after, label);
+                    let note = if ch.is_empty() { "沒有要改的".to_string() } else { String::new() };
+                    (ch, note)
+                }
+                Ok(p) => (vec![], format!("建議沒有通過檢查：{}", p.problems.join("；"))),
+                Err(e) => (vec![], format!("{label}沒有完成：{}", e.message())),
+            }
+        };
+        let _ = with_sk(&c2.dir, |sess| {
+            let Some(k) = sess.skeleton.as_mut() else { return Ok(()) };
+            let Some(p) = k.para_mut(&para) else { return Ok(()) };
+            p.busy = None;
+            let t = sk::style::refine_thread(&para, changes, &note);
+            k.add_thread(t);
+            Ok(())
+        })
+        .await;
+    });
+    reply(&c, &sess)
+}
+
+/// 風格對照: the program's numbers per section next to the author's (no model).
+async fn get_style(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let sess = tri!(load(&c.dir));
+    let Some(k) = sess.skeleton.as_ref().filter(|k| k.exists()) else { return bad("還沒有骨架") };
+    let ranges = crate::guard::paragraph_ranges(&c.ws);
+    let l = s.loaded.read().await;
+    let rules = l.profile.as_ref().map(|p| p.rules.clone()).unwrap_or_default();
+    let guard = crate::guard::load(&c.ws, Some(&c.dir), &rules);
+    let cache = if cfg!(test) { std::env::temp_dir().join("pc-test-cache") } else { crate::polish::cache_root() };
+    let sp = l.profile.as_ref().map(|prof| pc_core::styleprofile::load_or_build(&prof.phrases, &prof.expressions, &prof.root, &c.ws, &pc_core::styleprofile::cache_file(&cache, &c.ws)));
+    let mut banned: Vec<String> = sess.writing_notes.iter().flat_map(|n| n.banned.clone()).collect();
+    banned.extend(l.profile.as_ref().map(|p| p.vocabulary.iter().map(|v| v.avoid.clone()).collect::<Vec<_>>()).unwrap_or_default());
+    banned.sort();
+    banned.dedup();
+    let mine = |sec: &sk::Section| {
+        let old = sk::old_section(sec);
+        sk::style::Mine { range: ranges.get(old).copied(), profile: sp.as_ref().and_then(|p| p.sections.get(&pc_core::patterns::canonical_section(old))) }
+    };
+    Json(sk::style::report(k, &mine, &banned, &guard)).into_response()
 }

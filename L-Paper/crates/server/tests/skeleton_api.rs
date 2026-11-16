@@ -69,6 +69,7 @@ fn script() -> Value {
             ]
         }],
         "_delay_ms": { "pc-draft-fill": 300 },
+        "polish": [{ "rewrite": "Method A reached an accuracy of 0.91 while Method B reached 0.87 on the internal test set. The difference held in every fold of the cross validation, so the gain does not depend on a single split of the data. This novel pattern appeared in all five folds and remained stable when the training set was reduced, so the advantage of Method A is consistent across the settings that we examined in this study." }],
         "pc-compose-paragraph": [{ "sentences": [
             { "text": "Method A reached an accuracy of 0.91 while Method B reached 0.87 on the internal test set.", "phrase_id": null },
             { "text": "The difference held in every fold of the cross validation, which suggests that the gain does not depend on a single split of the data.", "phrase_id": null },
@@ -292,6 +293,35 @@ async fn skeleton_routes_end_to_end() {
     assert_eq!(code, 200);
     let v = until(&http, url(""), |v| v["job"].is_null()).await;
     assert!(para(&v, "p2")["text"].as_str().unwrap().starts_with("Method A reached"), "one paragraph asked: written again");
+
+    // ── 細修 ──
+    let (code, v) = call(&http, M::POST, url("/refine"), json!({ "para": "p1", "preset": "wording" })).await;
+    assert_eq!(code, 200, "{v}");
+    assert_eq!(para(&v, "p1")["busy"], "refine");
+    let v = until(&http, url(""), |v| v["threads"].as_array().unwrap().iter().any(|t| t["kind"] == "refine")).await;
+    let r = v["threads"].as_array().unwrap().iter().find(|t| t["kind"] == "refine").unwrap().clone();
+    assert_eq!(r["anchor"], "p1");
+    let ch = r["changes"].as_array().unwrap();
+    assert_eq!(ch.len(), 1, "{r}");
+    assert_eq!((ch[0]["state"].as_str(), ch[0]["field"].as_str()), (Some("proposed"), Some("text")));
+    assert!(ch[0]["before"].as_str().unwrap().contains("which suggests that"));
+    assert_eq!(para(&v, "p1")["busy"], Value::Null);
+    let (code, v) = call(&http, M::POST, url("/change"), json!({ "thread": r["id"], "change": "c1", "accept": true })).await;
+    assert_eq!(code, 200, "{v}");
+    assert!(para(&v, "p1")["text"].as_str().unwrap().contains("so the gain does not depend"));
+    let (code, _) = call(&http, M::POST, url("/refine"), json!({ "para": "p1", "preset": "poetry" })).await;
+    assert_eq!(code, 400);
+    let (code, _) = call(&http, M::POST, url("/refine"), json!({ "para": "p1", "preset": "check" })).await;
+    assert_eq!(code, 200);
+    until(&http, url(""), |v| v["threads"].as_array().unwrap().iter().filter(|t| t["kind"] == "refine").count() == 2).await;
+    // 風格對照
+    let (code, st) = call(&http, M::GET, url("/style"), Value::Null).await;
+    assert_eq!(code, 200, "{st}");
+    let secs = st["sections"].as_array().unwrap();
+    assert!(!secs.is_empty());
+    for row in secs[0]["rows"].as_array().unwrap() {
+        assert!(row["id"].is_string() && row["label"].is_string() && row["draft"].is_number() && row["ok"].is_boolean() && (row["mine"].is_null() || row["mine"].is_array()), "{row}");
+    }
 
     // ── 改用骨架 ──
     let old = paper(&ws, "old");
