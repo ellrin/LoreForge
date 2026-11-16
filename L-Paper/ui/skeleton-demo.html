@@ -134,12 +134,14 @@ async function call(path, body) {
   }
   if (path === "/place") return bump();
   if (path === "/style") return { sections: V.sections.filter((s) => s.blocks.some((b) => b.paras.some((p) => p.text))).map((s) => ({ id: s.id, title: s.title, rows: [
-    { id: "para_words", label: "每段字數", mine: [80, 150], draft: 46, ok: false },
-    { id: "sentences", label: "每段句數", mine: [4, 6], draft: 3, ok: false },
-    { id: "sentence_words", label: "每句字數", mine: [17, 25], draft: 15.3, ok: false },
-    { id: "sentence_spread", label: "句長離散", mine: [6, 11], draft: 7.4, ok: true },
-    { id: "rhythm", label: "相鄰句長變化", mine: [0.3, 0.6], draft: 0.42, ok: true },
-    { id: "reasoning", label: "理由佔比", mine: [0.35, 0.5], draft: 0.33, ok: false },
+    { id: "para_words", label: "每段字數", mine: [80, 150], draft: 46.0, ok: false },
+    { id: "sentences", label: "每段句數", mine: [4, 6], draft: 3.0, ok: false },
+    { id: "sentence_words", label: "每句字數", mine: [21, 21], draft: 15.3, ok: false },
+    { id: "sentence_iqr", label: "句長離散（四分位距）", mine: null, draft: 7.4, ok: null },
+    { id: "rhythm", label: "相鄰句長變化率", mine: null, draft: 0.42, ok: null },
+    { id: "conclusion_share", label: "結論句比例", mine: [0.13, 0.17], draft: 0.33, ok: false },
+    { id: "connectives", label: "每段連接詞開頭的句數", mine: null, draft: 1.0, ok: null },
+    { id: "banned", label: "禁用字", mine: [0, 0], draft: 0.0, ok: true },
   ], paras: s.blocks.flatMap((b) => b.paras).filter((p) => p.text).slice(0, 2).map((p) => ({ id: p.id, issues: ["段落太短", "沒有理由句"] })) })) };
   throw new Error(`demo: ${path}`);
 }
@@ -213,7 +215,7 @@ async function real() {
   if (steps.includes("nohints")) S.hints = false;
   PCSkeleton.redraw();
   if (steps.includes("answer")) document.querySelector(".sk-thread.sk-active .sk-opt")?.click();
-  if (steps.includes("write")) document.querySelector('[data-id="b4"] .sk-bhead [aria-label="寫這個框的文字"]')?.click();
+  if (steps.includes("write")) document.querySelector('[data-id="b4"] .sk-bhead [aria-label="寫這個框還沒寫的段落"]')?.click();
   if (steps.includes("refine")) { await call("/refine", { para: "p6", preset: "wording" }); await PCSkeleton.mount(document.querySelector("#root"), { call }); }
   // ?probe=typing: type into the open answer while the pretend server keeps changing; the box must
   // stay the same node (an IME composition would be cut otherwise). The result is the page title.

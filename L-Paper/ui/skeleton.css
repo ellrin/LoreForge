@@ -19,8 +19,8 @@
 .sk-navsec:hover { background: var(--surface); }
 .sk-bar { display: flex; gap: 2px; height: 4px; }
 .sk-bar i { flex: 1; max-width: 14px; border-radius: 2px; background: var(--line-strong); }
-.sk-bar i[data-s="points"] { background: var(--faint); }
-.sk-bar i[data-s="text"] { background: var(--text); }
+.sk-bar i[data-s="points"] { background: linear-gradient(90deg, var(--muted) 45%, var(--line-strong) 45%); }
+.sk-bar i[data-s="text"] { background: var(--muted); }
 .sk-bar i[data-s="done"] { background: var(--ok); }
 .sk-sum { margin-top: auto; padding: 10px 8px 2px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 4px; font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--line); }
 .sk-sum span { display: flex; align-items: baseline; gap: 4px; }
@@ -32,7 +32,7 @@
 .sk-inline .sk-page { grid-template-columns: minmax(0, 1fr); }
 .sk-canvas { min-width: 0; }
 .sk-section { padding-top: 14px; }
-.sk-stitle { margin: 0 0 8px; font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+.sk-stitle { margin: 0 0 8px; font: 600 12px var(--sans); letter-spacing: .08em; color: var(--faint); }
 .sk-blocks { display: flex; flex-direction: column; gap: 14px; min-height: 8px; }
 .sk-addblock { margin-top: 8px; height: 24px; font-size: 12px; color: var(--faint); opacity: .45; transition: opacity .12s; }
 .sk-section:hover .sk-addblock, .sk-addblock:focus-visible { opacity: 1; }
@@ -40,8 +40,10 @@
 /* a frame: its title sits on the line; it firms up as its paragraphs do */
 .sk-block { position: relative; border: 1px dashed var(--line-strong); border-radius: 10px; padding: 0 12px 6px; transition: border-color .25s, background-color .25s; }
 .sk-block[data-s="points"], .sk-block[data-s="text"] { border-style: solid; }
-.sk-block[data-s="text"] { background: color-mix(in srgb, var(--panel) 55%, transparent); }
-.sk-block[data-s="done"] { border-style: solid; border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); background: color-mix(in srgb, var(--ok) 5%, var(--panel)); }
+.sk-block[data-s="text"] { border-color: var(--line-strong); }
+/* done: put away — a quiet line, the title steps back, only the mark says so */
+.sk-block[data-s="done"] { border-style: solid; border-color: var(--line); background: color-mix(in srgb, var(--surface) 45%, transparent); }
+.sk-block[data-s="done"] .sk-btitle { color: var(--muted); }
 .sk-block[data-folded] { padding-bottom: 0; }
 .sk-bhead { display: flex; align-items: center; gap: 8px; min-height: 38px; margin: 0 -4px; }
 .sk-btitles { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
@@ -51,14 +53,16 @@
 .sk-purpose { margin: -2px 0 6px 50px; font-size: 12.5px; color: var(--muted); cursor: text; }
 .sk-level { width: 16px; height: 16px; flex: none; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; }
 .sk-level[data-s="points"] { border-color: var(--faint); background: linear-gradient(90deg, var(--faint) 50%, transparent 50%); }
-.sk-level[data-s="text"] { border-color: var(--text); background: var(--text); }
+.sk-level[data-s="text"] { border-color: var(--muted); background: radial-gradient(circle, var(--muted) 0 4px, transparent 4.5px); }
 .sk-level[data-s="done"] { border-color: var(--ok); background: var(--ok); color: var(--bg); }
 .sk-level svg.i { width: 11px; height: 11px; stroke-width: 3; }
 .sk-dots { display: inline-flex; gap: 4px; align-items: center; }
-.sk-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; border: 1.5px solid var(--line-strong); box-sizing: border-box; }
-.sk-dot[data-s="points"] { border-color: var(--faint); background: linear-gradient(90deg, var(--faint) 50%, transparent 50%); }
-.sk-dot[data-s="text"] { border-color: var(--text); background: var(--text); }
+.sk-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; border: 1.5px solid var(--line-strong); box-sizing: border-box; display: inline-grid; place-items: center; }
+.sk-dot[data-s="points"] { border-color: var(--muted); background: radial-gradient(circle, var(--muted) 0 1.6px, transparent 2px); }
+.sk-dot[data-s="text"] { border-color: var(--muted); background: var(--muted); }
 .sk-dot[data-s="done"] { border-color: var(--ok); background: var(--ok); }
+.sk-dot.sk-tick { width: 13px; height: 13px; border: 0; background: none; color: var(--ok); }
+.sk-dot.sk-tick svg.i { width: 13px; height: 13px; stroke-width: 3; }
 .sk-dot[data-busy] { animation: sk-breathe 1.2s ease-in-out infinite; }
 .sk-fold svg.i { transition: transform .15s; }
 .sk-block[data-folded] .sk-fold svg.i { transform: rotate(-90deg); }
@@ -102,13 +106,17 @@
 .sk-cite { font-style: italic; }
 .sk-pend { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .sk-text .sk-ref, .sk-text .sk-cite, .sk-text .sk-pend { font-size: 11.5px; padding: 1px 5px; }
-.sk-reason { margin: 6px 0 0 42px; padding: 3px 8px; border-left: 2px solid var(--accent-text); font-size: 12px; color: var(--muted); cursor: text; }
+.sk-reason { margin: 6px 0 0 42px; padding: 3px 8px; border-left: 2px solid var(--line-strong); font-size: 12px; color: var(--muted); cursor: text; }
 .sk-edit { display: block; margin-left: 42px; width: calc(100% - 42px); box-sizing: border-box; resize: none; overflow: hidden; padding: 4px 8px; border: 1px solid var(--accent-text); border-radius: var(--r); background: var(--bg); color: var(--text); outline: none; }
 .sk-edit.sk-btitle { margin-left: 0; width: 100%; min-width: 260px; }
 .sk-edit.sk-purpose { margin-left: 50px; width: calc(100% - 50px); }
-.sk-left { flex: none; padding: 0 7px; border-radius: 9px; font: 600 11px/18px var(--sans); color: var(--accent-text); background: var(--accent-soft); white-space: nowrap; }
+.sk-left { flex: none; padding: 0 7px; border-radius: 9px; font: 600 11px/18px var(--sans); color: var(--muted); background: var(--surface); white-space: nowrap; }
+.sk-left.now { color: var(--accent-text); background: var(--accent-soft); }
 .sk-nohints .sk-purposebox, .sk-nohints .sk-of { display: none; }
-.sk-save[data-dirty]::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-text); }
+.sk-save[data-dirty]::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.sk-layer { height: 26px; font-size: 12.5px; }
+.sk-layer[aria-pressed="true"] { color: var(--text); background: var(--surface); }
+.sk-inlinebtn { height: 20px; padding: 0 8px; margin-left: 8px; font-size: 11.5px; vertical-align: baseline; }
 
 /* between paragraphs: a place to add one */
 .sk-gap { display: block; width: 100%; height: 8px; padding: 0; border: 0; background: none; position: relative; cursor: pointer; }
@@ -138,7 +146,7 @@
 .sk-thread[data-s="skipped"] .sk-ltext { color: var(--faint); }
 .sk-tag { flex: none; font: 600 10.5px var(--mono); color: var(--faint); letter-spacing: .04em; }
 .sk-thread[data-kind="conflict"] .sk-tag { color: var(--warn); }
-.sk-thread[data-s="done"]:not([data-kind="edit"]) .sk-tag { color: var(--ok); }
+.sk-thread[data-s="done"] .sk-tag { color: var(--ok); }
 .sk-thead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .sk-q { margin: 0 0 8px; font-size: 13.5px; line-height: 1.6; }
 .sk-opts { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
@@ -191,6 +199,8 @@
 .sk-srow.off .sk-mark { background: var(--warn); }
 .sk-sval { font: 600 12px var(--mono); text-align: right; }
 .sk-srow.off .sk-sval { color: var(--warn); }
+.sk-shead { padding: 0 0 4px; border-bottom: 1px solid var(--line); }
+.sk-shead .sk-sval, .sk-shead .sk-smine { font: 500 11px var(--sans); color: var(--faint); }
 .sk-smine { font: 400 11px var(--mono); color: var(--faint); }
 .sk-sissue { display: flex; gap: 8px; align-items: baseline; padding: 4px 6px; border: 0; border-radius: var(--r); background: none; text-align: left; font-size: 12px; color: var(--muted); }
 .sk-sissue:hover { background: var(--surface); color: var(--text); }

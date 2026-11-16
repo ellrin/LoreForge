@@ -46,6 +46,7 @@ const PCSkeleton = (() => {
   const PRESETS = [["wording", "用字"], ["style", "我的風格"], ["check", "檢查"]];
   const SEC_ZH = { introduction: "前言", related: "相關研究", methods: "方法", results: "結果", discussion: "討論", conclusion: "結論" };
   const ASKED = ["conflict", "choice", "missing"];
+  const STALE = "有新的回答還沒寫進文字"; // the server's mark on a text older than an answer (plan.rs STALE_TEXT)
 
   const fresh = () => ({
     root: null, call: null, view: null, err: null,
@@ -355,7 +356,13 @@ const PCSkeleton = (() => {
   const editingOn = (id) => (S.editing?.id === id ? S.editing.field : "");
 
   // ── the skeleton ─────────────────────────────────────
-  const dot = (state, busy) => { const d = h("i", "sk-dot"); d.dataset.s = state; if (busy) d.dataset.busy = "1"; return d; };
+  const dot = (state, busy, big) => {
+    const d = h("i", "sk-dot");
+    d.dataset.s = state;
+    if (busy) d.dataset.busy = "1";
+    if (big && state === "done" && typeof icon === "function") { d.classList.add("sk-tick"); d.append(icon("check")); }
+    return d;
+  };
 
   function paraNode(p, n) {
     const ts = threadsAt(p.id);
@@ -375,7 +382,7 @@ const PCSkeleton = (() => {
     const head = h("header", "sk-phead");
     const grip = h("span", "sk-grip");
     grip.onpointerdown = (e) => dragStart(e, id, "para");
-    head.append(grip, dot(p.state, p.busy), h("span", "sk-n", `¶${n}`));
+    head.append(grip, dot(p.state, p.busy, true), h("span", "sk-n", `¶${n}`));
     if (p.kind) head.append(h("span", "sk-kind", p.kind));
     if (p.busy) head.append(h("span", "sk-busy", BUSY_ZH[p.busy] ?? p.busy));
     const tools = h("span", "sk-tools");
@@ -431,7 +438,11 @@ const PCSkeleton = (() => {
         t.ondblclick = (e) => { e.stopPropagation(); S.editing = { id, field: "text" }; draw(); };
         li.append(t);
       }
-      for (const x of p.problems) li.append(h("p", "sk-problem", x));
+      for (const x of p.problems) {
+        const pr = h("p", "sk-problem", x);
+        if (x === STALE) pr.append(btn("重寫", () => post("/write", { id }, "寫文字"), "ghost sk-inlinebtn"));
+        li.append(pr);
+      }
     }
     const chips = [...p.floats.map((x) => ["sk-ref", x]), ...p.cites.map((x) => ["sk-cite", x]), ...p.pending.map((x) => ["sk-pend", x])];
     if (chips.length && !hasText) { const c = h("div", "sk-chips"); chips.forEach(([cls, x]) => c.append(h("span", cls, x))); li.append(c); }
@@ -471,7 +482,9 @@ const PCSkeleton = (() => {
 
     const o = b.of && find(b.of);
     const ofName = o?.block?.title || o?.para?.say || "";
-    const head = leaf(h("header", "sk-bhead"), "head", [id, b.title, ofName, level, b.paras.map((p) => [p.state, !!p.busy]), folded, editingOn(id), left]);
+    const now = thread(nextThread())?.anchor;
+    const here = now === id || b.paras.some((p) => p.id === now);
+    const head = leaf(h("header", "sk-bhead"), "head", [id, b.title, ofName, level, b.paras.map((p) => [p.state, !!p.busy]), folded, editingOn(id), left, here]);
     const grip = h("span", "sk-grip");
     grip.onpointerdown = (e) => dragStart(e, id, "block");
     const mark = h("span", "sk-level");
@@ -490,7 +503,7 @@ const PCSkeleton = (() => {
     }
     const fold = ico("chevron", folded ? "展開" : "摺起來", () => { toggle(S.folded, id); const first = rects(); draw(); glide(first); }, "ico small sk-fold");
     head.append(grip, mark, titles);
-    if (left) head.append(h("span", "sk-left", `${left} 題`));
+    if (left) { const l = h("span", "sk-left", `${left} 題`); if (here) l.classList.add("now"); head.append(l); }
     head.append(dots, tools, fold);
     box.append(head);
     if (folded) { count.n += b.paras.length; return box; }
@@ -514,7 +527,7 @@ const PCSkeleton = (() => {
     for (const s of S.view.sections) {
       const sec = group(h("section", "sk-section"), s.id);
       sec.dataset.sec = s.id;
-      sec.append(leaf(h("h3", "sk-stitle", s.title), "title", s.title));
+      sec.append(leaf(h("h3", "sk-stitle", SEC_ZH[s.role] ?? s.title), "title", s.title));
       const list = group(h("div", "sk-blocks"), "blocks");
       list.dataset.section = s.id;
       s.blocks.forEach((b) => list.append(blockNode(b, count)));
@@ -704,7 +717,9 @@ const PCSkeleton = (() => {
    *  draw, never on a later frame: a frame may not come (a hidden or throttled window). */
   function reveal(threadId) {
     if (!threadId) return;
-    const a = S.root.querySelector(`.sk-canvas [data-id="${thread(threadId)?.anchor}"]`);
+    const anchor = thread(threadId)?.anchor;
+    // in a folded frame the paragraph is not drawn: the frame stands for it
+    const a = S.root.querySelector(`.sk-canvas [data-id="${anchor}"]`) ?? S.root.querySelector(`.sk-canvas [data-id="${find(anchor)?.block?.id}"]`);
     const card = S.root.querySelector(`.sk-thread[data-thread="${threadId}"]`);
     const sc = S.root.querySelector(".sk-scroll");
     card?.querySelector(".sk-answer")?.focus({ preventScroll: true });
@@ -839,7 +854,12 @@ const PCSkeleton = (() => {
       const sec = leaf(h("section", "sk-invsec"), kind, [items, range, n]);
       const hd = h("header", "sk-invhead");
       hd.append(h("h3", "", zh), h("span", "sk-count", String(items.filter((x) => x.keep).length)));
-      if (range) { const t = h("span", "sk-target", `期刊 ${range[0]}–${range[1]}`); if (n < range[0] || n > range[1]) t.classList.add("off"); hd.append(t); }
+      if (range) {
+        // figures are counted with the flow charts, as the journal counts them
+        const t = h("span", "sk-target", `${kind === "figure" && n !== items.filter((x) => x.keep).length ? `含流程圖 ${n}・` : ""}期刊 ${range[0]}–${range[1]}`);
+        if (n < range[0] || n > range[1]) t.classList.add("off");
+        hd.append(t);
+      }
       sec.append(hd);
       for (const x of items) {
         const row = h("label", "sk-invrow");
@@ -889,7 +909,9 @@ const PCSkeleton = (() => {
     const fmt = (x) => (Number.isInteger(x) ? String(x) : Math.abs(x) < 1 ? x.toFixed(2) : x.toFixed(1));
     for (const s of S.style.sections) {
       const sec = h("section", "sk-invsec");
-      sec.append(h("h3", "", SEC_ZH[find(s.id)?.section?.role] ?? s.title));
+      const hd = h("div", "sk-srow sk-shead");
+      hd.append(h("h3", "", SEC_ZH[find(s.id)?.section?.role] ?? s.title), h("span"), h("span", "sk-sval", "草稿"), h("span", "sk-smine", "我的"));
+      sec.append(hd);
       for (const r of s.rows) {
         const row = h("div", "sk-srow");
         if (r.ok === false) row.classList.add("off");
@@ -939,9 +961,14 @@ const PCSkeleton = (() => {
     if (v.exists && S.tab === "skeleton") {
       const undo = ico("undo", "復原 ⌘Z", () => op({ op: "undo" }), "ico");
       undo.disabled = !v.can_undo;
-      const lay = ico("layers", "提示", () => { S.hints = !S.hints; draw(); }, "ico");
+      const lay = btn("提示", () => { S.hints = !S.hints; draw(); }, "ghost sk-layer");
       lay.setAttribute("aria-pressed", S.hints);
-      const write = btn("寫文字", (e) => menu(e.currentTarget, [["還沒寫的全部", () => post("/write", { id: "all" }, "寫文字")], ...S.view.sections.map((s) => [SEC_ZH[s.role] ?? s.title, () => post("/write", { id: s.id }, "寫文字")])]), "btn small");
+      const writeIn = async (at, id) => {
+        const left = S.view.threads.filter(isOpenQ).length;
+        if (left && !(await sure(at, [`還有 ${left} 題沒答`, "現在寫，之後的回答要再重寫那幾段。"], "照寫"))) return;
+        post("/write", { id }, "寫文字");
+      };
+      const write = btn("寫文字", (e) => { const at = e.currentTarget; menu(at, [["還沒寫的全部", () => writeIn(at, "all")], ...S.view.sections.map((s) => [SEC_ZH[s.role] ?? s.title, () => writeIn(at, s.id)])]); }, "btn small");
       const save = btn("暫存", () => post("/save", {}, "暫存"), "btn small sk-save");
       save.disabled = !v.dirty || (!!v.job && !v.job.error);
       if (v.dirty) save.dataset.dirty = "1";
