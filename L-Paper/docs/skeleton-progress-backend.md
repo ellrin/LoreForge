@@ -17,3 +17,6 @@
 - 寫法筆記：`notes::add_in`（指定章節）；`for_paragraph` 也認「說在這一段上」的筆記（group = 段落 id）。
 
 測試：`cargo test -p pc-core skeleton` → 19 passed；`cargo test -p pc-core session` → 15 passed。
+
+第 1 段 commit：f6d0637。補充（協調者的合約說明 4）：刪除段落時，掛在上面還開著的問題拿掉，其他的串改掛到框（刪整個框時掛到章）；
+復原時一起回來。測試 `removing_a_paragraph_drops_its_open_questions_and_keeps_the_rest_on_the_block`；`cargo test -p pc-core skeleton` → 20 passed。

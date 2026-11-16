@@ -279,6 +279,12 @@ pub struct Undo {
     pub seams: Vec<String>,
     #[serde(default)]
     pub touched_blocks: Vec<String>,
+    /// Threads a removal dropped (open questions on a removed paragraph), back on undo.
+    #[serde(default)]
+    pub dropped: Vec<Thread>,
+    /// Threads a removal moved to another anchor: (thread, the anchor it had).
+    #[serde(default)]
+    pub reanchored: Vec<(String, String)>,
 }
 
 /// The skeleton as stored in the session.
@@ -555,9 +561,34 @@ impl Skeleton {
     }
 
     fn push_undo(&mut self, structural: bool, fields: Vec<(String, Vec<String>)>) {
-        self.undo.push(Undo { sections: self.sections.clone(), structural, fields, seams: self.seams.clone(), touched_blocks: self.touched_blocks.clone() });
+        self.undo.push(Undo { sections: self.sections.clone(), structural, fields, seams: self.seams.clone(), touched_blocks: self.touched_blocks.clone(), ..Default::default() });
         if self.undo.len() > UNDO_MAX {
             self.undo.remove(0);
+        }
+    }
+
+    /// Paragraphs (or a block) `gone`: their open questions are dropped, the rest of their
+    /// threads hang on `to` (the block, or the section when the block went). Kept on the last
+    /// undo step so undo brings them back.
+    fn unanchor(&mut self, gone: &[String], to: &str) {
+        let mut dropped = vec![];
+        let mut moved = vec![];
+        let mut keep = vec![];
+        for mut t in std::mem::take(&mut self.threads) {
+            if !gone.contains(&t.anchor) {
+                keep.push(t);
+            } else if t.status == "open" {
+                dropped.push(t);
+            } else {
+                moved.push((t.id.clone(), t.anchor.clone()));
+                t.anchor = to.to_string();
+                keep.push(t);
+            }
+        }
+        self.threads = keep;
+        if let Some(u) = self.undo.last_mut() {
+            u.dropped = dropped;
+            u.reanchored = moved;
         }
     }
 
@@ -592,10 +623,16 @@ impl Skeleton {
                 if let Some(a) = self.find(&id) {
                     self.push_undo(true, vec![]);
                     self.mark_seams_around(&id);
+                    let block = self.sections[a.s].blocks[a.b].id.clone();
                     self.sections[a.s].blocks[a.b].paras.remove(a.p);
+                    self.unanchor(&[id.clone()], &block);
                 } else if let Some((si, bi)) = self.find_block(&id) {
                     self.push_undo(true, vec![]);
                     let ids: Vec<String> = self.sections[si].blocks[bi].paras.iter().map(|p| p.id.clone()).collect();
+                    let mut gone = ids.clone();
+                    gone.push(id.clone());
+                    let section = self.sections[si].id.clone();
+                    self.unanchor(&gone, &section);
                     if let (Some(first), Some(last)) = (ids.first(), ids.last()) {
                         let (before, _) = self.neighbours(first);
                         let (_, after) = self.neighbours(last);
@@ -813,6 +850,17 @@ impl Skeleton {
                         }
                     }
                 }
+            }
+        }
+        // threads the op dropped or moved come back where they were
+        for (t, anchor) in &u.reanchored {
+            if let Some(x) = self.thread_mut(t) {
+                x.anchor = anchor.clone();
+            }
+        }
+        for t in u.dropped {
+            if self.thread(&t.id).is_none() {
+                self.threads.push(t);
             }
         }
         self.seams = u.seams;

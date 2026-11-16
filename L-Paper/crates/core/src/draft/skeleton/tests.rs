@@ -323,3 +323,24 @@ fn a_note_said_on_a_paragraph_binds_that_paragraph() {
     assert!(notes::for_paragraph(&s, "Results", &p("p8")).is_empty());
     assert_eq!(s.writing_notes[0].section, "Results");
 }
+
+#[test]
+fn removing_a_paragraph_drops_its_open_questions_and_keeps_the_rest_on_the_block() {
+    let mut sk = small();
+    let open = sk.add_thread(Thread { anchor: "p2".into(), kind: "missing".into(), status: "open".into(), question: "為什麼？".into(), ..Default::default() });
+    let done = sk.add_thread(Thread { anchor: "p2".into(), kind: "choice".into(), status: "done".into(), question: "哪個？".into(), conclusion: "A".into(), ..Default::default() });
+    let other = sk.add_thread(Thread { anchor: "p4".into(), kind: "choice".into(), status: "open".into(), question: "x".into(), ..Default::default() });
+    sk.apply(Op::Remove { id: "p2".into() }).unwrap();
+    assert!(sk.thread(&open).is_none());
+    assert_eq!(sk.thread(&done).unwrap().anchor, "b1");
+    assert_eq!(sk.thread(&other).unwrap().anchor, "p4");
+    sk.apply(Op::Undo).unwrap();
+    assert_eq!(sk.thread(&open).unwrap().anchor, "p2");
+    assert_eq!(sk.thread(&done).unwrap().anchor, "p2");
+    // a whole block: finished threads go to the section
+    sk.apply(Op::Remove { id: "b3".into() }).unwrap();
+    assert!(sk.thread(&other).is_none());
+    sk.thread_mut(&done).unwrap().anchor = "p5".into();
+    sk.apply(Op::Undo).unwrap();
+    assert!(sk.thread(&other).is_some());
+}
