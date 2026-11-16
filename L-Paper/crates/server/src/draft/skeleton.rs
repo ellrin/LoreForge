@@ -25,6 +25,7 @@ pub(super) fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/skeleton/write", post(post_write))
         .route("/api/papers/{name}/draft/skeleton/refine", post(post_refine))
         .route("/api/papers/{name}/draft/skeleton/style", get(get_style))
+        .route("/api/papers/{name}/draft/skeleton/place", post(post_place))
 }
 
 // ── what runs ────────────────────────────────────────────
@@ -826,4 +827,39 @@ async fn get_style(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
         sk::style::Mine { range: ranges.get(old).copied(), profile: sp.as_ref().and_then(|p| p.sections.get(&pc_core::patterns::canonical_section(old))) }
     };
     Json(sk::style::report(k, &mine, &banned, &guard)).into_response()
+}
+
+// ── 放進論文 ─────────────────────────────────────────────
+
+#[derive(Deserialize, Default)]
+struct PlaceBody {
+    #[serde(default)]
+    section: Option<String>,
+}
+
+/// 放進論文 from the skeleton: one section (the paper's section of its role) or every one with
+/// text, the abstract too; what the paper had is archived first (topaper::place). Nothing to
+/// place is an error, never a silent success.
+async fn post_place(State(s): State<Shared>, AxPath(name): AxPath<String>, body: Option<Json<PlaceBody>>) -> Resp {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let c = tri!(ctx(&s, &name).await);
+    let _g = LOCK.lock().await;
+    let sess = tri!(load(&c.dir));
+    let Some(k) = sess.skeleton.as_ref().filter(|k| k.exists()) else { return bad("還沒有骨架") };
+    let only = match b.section.as_deref().filter(|x| !x.is_empty()) {
+        None => None,
+        Some(id) => match k.sections.iter().find(|x| x.id == id) {
+            Some(sec) => Some(sk::old_section(sec).to_string()),
+            None => return bad("沒有這一章"),
+        },
+    };
+    let source = sk::project::reading(sess.clone());
+    if !source.drafts.iter().any(|d| only.as_deref().is_none_or(|o| o == d.section) && d.paras.iter().any(|p| !p.text.trim().is_empty())) {
+        return bad("沒有可以放進論文的文字");
+    }
+    let placed = tri!(topaper::place(&c.dir, &topaper::venue_of(&c), &source, only.as_deref()).map_err(|e| bad(&e)));
+    if placed.sections.is_empty() {
+        return bad("沒有放進任何章節");
+    }
+    reply(&c, &sess)
 }

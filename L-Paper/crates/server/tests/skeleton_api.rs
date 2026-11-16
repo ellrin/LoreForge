@@ -69,6 +69,8 @@ fn script() -> Value {
             ]
         }],
         "_delay_ms": { "pc-draft-fill": 300 },
+        "pc-draft-claims": [{ "claims": [{ "zh": "A 較好", "en": "Method A is better on small data.", "depth": null, "evidence": "E1", "reader_accepts": "", "twist": "", "home": "Results", "items": ["p2"], "refs": [] }] }],
+        "pc-draft-audit": [{ "findings": [{ "kind": "generic", "para": "p1", "quote": "Method A", "why": "太籠統", "ask": "" }] }],
         "polish": [{ "rewrite": "Method A reached an accuracy of 0.91 while Method B reached 0.87 on the internal test set. The difference held in every fold of the cross validation, so the gain does not depend on a single split of the data. This novel pattern appeared in all five folds and remained stable when the training set was reduced, so the advantage of Method A is consistent across the settings that we examined in this study." }],
         "pc-compose-paragraph": [{ "sentences": [
             { "text": "Method A reached an accuracy of 0.91 while Method B reached 0.87 on the internal test set.", "phrase_id": null },
@@ -323,6 +325,30 @@ async fn skeleton_routes_end_to_end() {
         assert!(row["id"].is_string() && row["label"].is_string() && row["draft"].is_number() && row["ok"].is_boolean() && (row["mine"].is_null() || row["mine"].is_array()), "{row}");
     }
 
+    // ── 主張、摘要、審稿、放進論文 read the skeleton ──
+    let durl = |p: &str| format!("http://{addr}/api/papers/demo/draft{p}");
+    let (code, v) = call(&http, M::POST, durl("/claims"), json!({})).await;
+    assert_eq!(code, 200, "{v}");
+    assert_eq!(v["session"]["claims"][0]["en"], "Method A is better on small data.");
+    let (code, v) = call(&http, M::POST, durl("/compose"), json!({ "section": "Abstract" })).await;
+    assert_eq!(code, 200, "the abstract from the skeleton's outline: {v}");
+    let (code, v) = call(&http, M::POST, durl("/audit"), json!({})).await;
+    assert_eq!(code, 200, "the skeleton's text is the draft the reviewer reads: {v}");
+    assert_eq!(v["session"]["audit"][0]["para"], "p1");
+    let (code, _) = call(&http, M::POST, url("/place"), json!({ "section": "s99" })).await;
+    assert_eq!(code, 400);
+    let (code, v) = call(&http, M::POST, url("/place"), json!({ "section": "s2" })).await;
+    assert_eq!(code, 200, "{v}");
+    let results = std::fs::read_to_string(dir.join("sections/results.tex")).unwrap();
+    assert!(results.contains("Method A reached"), "{results}");
+    assert!(!std::fs::read_dir(dir.join("sections")).unwrap().flatten().any(|e| std::fs::read_to_string(e.path()).unwrap().contains("so the gain does not depend")), "only the section asked");
+    let (code, _) = call(&http, M::POST, url("/place"), json!({})).await;
+    assert_eq!(code, 200);
+    let all: String = std::fs::read_dir(dir.join("sections")).unwrap().flatten().map(|e| std::fs::read_to_string(e.path()).unwrap()).collect();
+    assert!(all.contains("so the gain does not depend"), "the refined Introduction paragraph: {all}");
+    let main = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+    assert!(main.contains("Method A reached"), "the abstract went in too: {main}");
+
     // ── 改用骨架 ──
     let old = paper(&ws, "old");
     std::fs::write(
@@ -361,6 +387,8 @@ async fn skeleton_routes_end_to_end() {
     let answered = v["threads"].as_array().unwrap().iter().find(|t| t["status"] == "done").unwrap();
     assert_eq!(answered["anchor"], "p4", "where the planner used g1's answers");
     assert_eq!(answered["messages"][1]["text"], "先驗較強");
+    let (code, msg) = call(&http, M::POST, murl("/place"), json!({})).await;
+    assert_eq!(code, 400, "nothing written yet: never a silent success ({msg})");
 
     let _ = std::fs::remove_dir_all(&root);
 }

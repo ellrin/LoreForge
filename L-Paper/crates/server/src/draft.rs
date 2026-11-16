@@ -21,6 +21,7 @@ use pc_core::draft::material::{self, Material};
 use pc_core::draft::prompts as dp;
 use pc_core::draft::revise::{self as rv, Revision, RevisionStatus};
 use pc_core::draft::session::{self as ds, Phase, Session, Who};
+use pc_core::draft::skeleton::project::reading;
 use pc_core::draft::style_text;
 use pc_core::draft::venue;
 
@@ -1934,7 +1935,8 @@ async fn discuss_close(State(s): State<Shared>, AxPath((name, id)): AxPath<(Stri
 
 async fn run_claims(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
     let c = tri!(ctx(&s, &name).await);
-    let sess = tri!(load(&c.dir));
+    // 骨架: the skeleton read in the shapes this step takes
+    let sess = reading(tri!(load(&c.dir)));
     let lens = tri!(lens_for(&c.ws, &sess));
     let (mat, mtext) = material_of(&c);
     let (mut claims, used) = tri!(engine::claims(&engines(&s), &c.key_value, &sess, &lens, &mtext).await.map_err(|e| bad(&e)));
@@ -1979,7 +1981,8 @@ async fn put_claims(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(
 
 async fn run_review(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
     let c = tri!(ctx(&s, &name).await);
-    let sess = tri!(load(&c.dir));
+    // 骨架: the skeleton read in the shapes this step takes
+    let sess = reading(tri!(load(&c.dir)));
     let lens = tri!(lens_for(&c.ws, &sess));
     let (review, used) = tri!(engine::review(&engines(&s), &c.key_value, &sess, &lens).await.map_err(|e| bad(&e)));
     let _g = LOCK.lock().await;
@@ -2400,7 +2403,8 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
     if !ds::SECTIONS.contains(&b.section.as_str()) && !is_abstract {
         return bad("未知的章節");
     }
-    let sess = tri!(load(&c.dir));
+    // 骨架: the skeleton read in the shapes this step takes
+    let sess = reading(tri!(load(&c.dir)));
     let paras: Vec<ds::OutlinePara> = if is_abstract {
         if sess.claims.is_empty() && sess.outline.is_empty() {
             return bad("先完成主張登記與大綱");
@@ -2463,10 +2467,11 @@ async fn insert_drafts(State(s): State<Shared>, AxPath(name): AxPath<String>, bo
     let c = tri!(ctx(&s, &name).await);
     let _g = LOCK.lock().await;
     let mut sess = tri!(load(&c.dir));
-    if sess.drafts.is_empty() {
+    let source = reading(sess.clone());
+    if source.drafts.is_empty() {
         return bad("還沒有草稿");
     }
-    let placed = tri!(topaper::place(&c.dir, &topaper::venue_of(&c), &sess, b.section.as_deref()).map_err(|e| bad(&e)));
+    let placed = tri!(topaper::place(&c.dir, &topaper::venue_of(&c), &source, b.section.as_deref()).map_err(|e| bad(&e)));
     for d in sess.drafts.iter_mut().filter(|d| placed.sections.iter().any(|(x, _)| *x == d.section)) {
         d.placed = true;
     }
@@ -2478,7 +2483,8 @@ async fn insert_drafts(State(s): State<Shared>, AxPath(name): AxPath<String>, bo
 
 async fn run_audit(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Resp {
     let c = tri!(ctx(&s, &name).await);
-    let sess = tri!(load(&c.dir));
+    // 骨架: the skeleton read in the shapes this step takes
+    let sess = reading(tri!(load(&c.dir)));
     if sess.drafts.is_empty() {
         return bad("還沒有草稿");
     }
@@ -2492,7 +2498,7 @@ async fn run_audit(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
     sess.audit = pd::filter_findings(findings, &sess);
     // the journal's requirements, checked by the code (abstract length, keywords, statements)
     let n = sess.audit.len();
-    for (k, mut f) in topaper::requirement_findings(&c.dir, &venue, &sess).into_iter().enumerate() {
+    for (k, mut f) in topaper::requirement_findings(&c.dir, &venue, &reading(sess.clone())).into_iter().enumerate() {
         f.id = format!("r{}", n + k + 1);
         sess.audit.push(f);
     }

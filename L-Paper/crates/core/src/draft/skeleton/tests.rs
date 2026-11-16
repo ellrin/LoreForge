@@ -715,3 +715,27 @@ fn refinements_are_proposed_changes_on_passages_of_the_text() {
     assert_eq!(sk.para("p1").unwrap().text, "Method A was better. The gain is stable. We used five folds.");
     assert_eq!(style::refine_thread("p1", vec![], "沒有建議").status, "done");
 }
+
+#[test]
+fn the_later_steps_read_the_skeleton() {
+    let mut s = Session::default();
+    assert!(project::project(&s).is_none());
+    assert_eq!(project::reading(s.clone()), s, "no skeleton: the session as it is");
+    let mut sk = small();
+    sk.sections.insert(0, Section { id: "s3".into(), title: "Related work".into(), role: "related".into(), blocks: vec![Block { id: "b9".into(), title: "前人".into(), paras: vec![para("p9", "前人做法")], ..Default::default() }] });
+    sk.para_mut("p1").unwrap().text = "Method A was better.".into();
+    sk.para_mut("p1").unwrap().points.push(Point { text: "0.91".into(), from: None });
+    sk.para_mut("p4").unwrap().text = "The prior helps \\pendingdep{P1}.".into();
+    s.drafts.push(DraftSection { section: "Abstract".into(), paras: vec![DraftPara { para: "abs".into(), text: "We compare.".into(), problems: vec![], pending: vec![] }], ..Default::default() });
+    s.drafts.push(DraftSection { section: "Results".into(), paras: vec![DraftPara { para: "old".into(), text: "Old.".into(), problems: vec![], pending: vec![] }], ..Default::default() });
+    s.skeleton = Some(sk);
+    let p = project::project(&s).unwrap();
+    assert_eq!(p.outline.iter().map(|o| (o.section.as_str(), o.subsection.as_deref())).collect::<Vec<_>>(), [("Introduction", Some("Related work")), ("Results", None), ("Discussion", None)]);
+    assert_eq!(p.drafts.iter().map(|d| d.section.as_str()).collect::<Vec<_>>(), ["Results", "Discussion", "Abstract"], "the old drafts are not read, the abstract is");
+    assert_eq!(p.drafts[0].paras[0].text, "Method A was better.");
+    assert_eq!(p.drafts[1].paras[0].pending, ["P1"]);
+    assert_eq!(p.groups.len(), 4);
+    let it = p.items.iter().find(|i| i.id == "p1").unwrap();
+    assert_eq!((it.group.as_str(), it.label.as_str(), it.stance.as_str()), ("b1", "A 對 B", "0.91"));
+    assert!(p.skeleton.is_some());
+}

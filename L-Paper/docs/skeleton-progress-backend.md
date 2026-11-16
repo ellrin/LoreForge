@@ -129,3 +129,18 @@
 ### 合約問題
 - `/refine` 是背景工作：回應時那一段 `busy = "refine"`，`refine` 串在完成後才出現（頁面照常輪詢）。
 - `StyleReport` 的數字是小數（例如 `17.0`），合約範例是整數；JSON 都是 number。
+
+第 6 段 commit：113d99f。
+
+## 第 7 段：主張、章節校正、摘要、審稿、放進論文改讀骨架
+
+- `skeleton::project`：有骨架時，在呼叫當下把骨架做成舊步驟讀的形狀（不存檔，骨架是唯一來源）：
+  章 → 大綱（role 對到五個舊章名；標題不同的，例如 Related work，成為 Introduction 下的 subsection）、
+  有文字的段落 → drafts（舊 drafts 不讀，只有舊步驟寫的 Abstract 保留）、框 → 題組（purpose = explain）、段落 → 項目
+  （say = label、points = stance、sources = evidence、cites = refs）。沒有骨架的 session 原封不動。
+- `run_claims`、`run_review`、`run_compose`（摘要）、`run_audit`（含期刊要求的檢查）、`insert_drafts` 都改成讀 `reading(session)`。
+- `/place { section }`：骨架的一章（或全部，含摘要）透過 `topaper::place` 放進論文，原有文字照舊先存檔；
+  沒有可放的文字、或沒有放進任何章節 → 400（協調者說明 3），不會回報空的成功。
+
+測試：`cargo test -p pc-core skeleton` → 33 passed；`cargo test -p pc-server --test skeleton_api` → 1 passed
+（主張、摘要、審稿從骨架讀；放一章只動那一章；全部放；沒有文字 → 400）；`cargo test -p pc-server --lib draft` 見下。

@@ -21,6 +21,7 @@
 pub mod convert;
 pub mod inventory;
 pub mod plan;
+pub mod project;
 pub mod style;
 
 use serde::{Deserialize, Serialize};
