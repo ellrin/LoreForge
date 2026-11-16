@@ -507,6 +507,10 @@ pub struct Session {
     /// 寫法筆記: how the author said to write, from the interview ([`super::notes`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub writing_notes: Vec<super::notes::WritingNote>,
+    /// 骨架 ([`super::skeleton`]): the paper planned as sections → blocks → paragraphs before
+    /// any text; sessions from before it have none and keep the old steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skeleton: Option<super::skeleton::Skeleton>,
 }
 
 /// The engine that ran a step: a short label (`Opus`, `Sonnet`, `本機`) and,
@@ -1011,11 +1015,9 @@ pub fn restart(paper: &Path) -> Result<PathBuf, String> {
     Ok(to)
 }
 
-/// 從這步重來 on disk: a copy of the session and transcript goes to a new
-/// archive folder first, then the session is rewound and the transcript
-/// keeps only the conversation that is still there.
-pub fn rewind(paper: &Path, to: Phase) -> Result<Session, String> {
-    let mut sess = Session::load(paper)?;
+/// A copy of the session and the transcript in a new archive folder (before a rewind, a
+/// change to the skeleton's source such as 改用骨架 or 重排骨架). Returns the folder.
+pub fn snapshot(paper: &Path) -> Result<PathBuf, String> {
     let snap = new_archive(paper)?;
     for f in [SESSION_FILE, TRANSCRIPT_FILE] {
         let from = draft_dir(paper).join(f);
@@ -1023,6 +1025,15 @@ pub fn rewind(paper: &Path, to: Phase) -> Result<Session, String> {
             std::fs::copy(&from, snap.join(f)).map_err(|e| e.to_string())?;
         }
     }
+    Ok(snap)
+}
+
+/// 從這步重來 on disk: a copy of the session and transcript goes to a new
+/// archive folder first, then the session is rewound and the transcript
+/// keeps only the conversation that is still there.
+pub fn rewind(paper: &Path, to: Phase) -> Result<Session, String> {
+    let mut sess = Session::load(paper)?;
+    snapshot(paper)?;
     let gone = sess.rewind(to);
     if gone.all_turns || !gone.groups.is_empty() {
         let kept: Vec<Turn> = if gone.all_turns { vec![] } else { read_turns(paper).into_iter().filter(|t| !gone.groups.contains(&t.group)).collect() };

@@ -72,6 +72,12 @@ const PUNCT_WORDS: &[&str] = &["冒號", "分號", "破折號", "引號", "colon
 /// Add a turn's notes (scope checked, the same text not twice).
 pub fn add(sess: &mut Session, group: &str, notes: Vec<NoteUpdate>, guard_on: bool) {
     let section = sess.group(group).map(|g| g.section.clone()).unwrap_or_default();
+    add_in(sess, group, &section, notes, guard_on)
+}
+
+/// [`add`] with the section given: 骨架 notes are said on a paragraph (`group` = its id), not in a group.
+pub fn add_in(sess: &mut Session, group: &str, section: &str, notes: Vec<NoteUpdate>, guard_on: bool) {
+    let section = section.to_string();
     for n in notes {
         let text = n.text.trim().to_string();
         if text.is_empty() || sess.writing_notes.iter().any(|x| x.text == text) {
@@ -99,9 +105,9 @@ pub fn add(sess: &mut Session, group: &str, notes: Vec<NoteUpdate>, guard_on: bo
 }
 
 /// The notes that bind a paragraph of `section`: the paper's, the section's, and the paragraph
-/// notes of the groups its outline sources come from.
+/// notes of the groups its outline sources come from (or said on the paragraph itself, 骨架).
 pub fn for_paragraph<'a>(sess: &'a Session, section: &str, para: &OutlinePara) -> Vec<&'a WritingNote> {
-    let groups: Vec<&str> = para
+    let mut groups: Vec<&str> = para
         .sources
         .iter()
         .map(|s| s.as_str())
@@ -120,6 +126,9 @@ pub fn for_paragraph<'a>(sess: &'a Session, section: &str, para: &OutlinePara) -
             g
         })
         .collect();
+    if !para.id.is_empty() {
+        groups.push(para.id.as_str());
+    }
     sess.writing_notes
         .iter()
         .filter(|n| match n.scope.as_str() {

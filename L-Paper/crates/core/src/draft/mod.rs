@@ -29,6 +29,7 @@ pub mod pending;
 pub mod prompts;
 pub mod revise;
 pub mod session;
+pub mod skeleton;
 pub mod venue;
 
 use std::path::Path;
