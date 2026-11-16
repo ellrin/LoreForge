@@ -325,6 +325,10 @@ impl Llm {
     /// Every call here answers an open request (a generate button, a draft step), so a local
     /// model is asked at interactive priority.
     pub async fn route(&self, task: &str, choice: Option<EngineChoice>) -> Result<Route, String> {
+        // scripted replies only: a feature without a script never reaches a real engine
+        if self.mock.is_some() {
+            return Err(format!("假模型模式：{task} 沒有腳本"));
+        }
         let opts = choice.map(|c| RouteOptions::only(c.model_ref())).unwrap_or_default().with_priority(Priority::Interactive);
         let router = Router::new(self.tasks.clone(), self.factory());
         router.provider_for_with(task, &opts).await.map_err(|e| route_error(&e, choice.is_some()))

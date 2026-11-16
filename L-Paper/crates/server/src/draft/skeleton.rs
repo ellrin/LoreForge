@@ -525,6 +525,9 @@ async fn post_answer(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
             let k = sess.skeleton.as_mut().ok_or("還沒有骨架")?;
             clear_failed(k);
             let t = k.thread(&b.thread).cloned().ok_or("沒有這一題")?;
+            if t.question.is_empty() || !skp::QUESTION_KINDS.contains(&t.kind.as_str()) {
+                return Err("這一串不是問題".into());
+            }
             if t.status != "open" {
                 return Err("這一題已經回答過了".into());
             }
@@ -635,12 +638,14 @@ async fn post_write(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(
             by_section.push((sec.id.clone(), mine));
         }
     }
+    // one paragraph asked: written again; a block, a section or all: only while it has no text
+    let force = k0.para(&b.id).is_some();
     let (s2, c2) = (s.clone(), own(&c));
     tokio::spawn(async move {
         let _held = (held, holds);
         use futures_util::StreamExt;
         let (sr, cr) = (&s2, &c2);
-        let errors: Vec<String> = futures_util::stream::iter(by_section.into_iter().map(|(sec, ids)| async move { write_section(sr, cr, &sec, &ids).await }))
+        let errors: Vec<String> = futures_util::stream::iter(by_section.into_iter().map(|(sec, ids)| async move { write_section(sr, cr, &sec, &ids, force).await }))
             .buffer_unordered(3)
             .collect::<Vec<Vec<String>>>()
             .await
@@ -664,7 +669,7 @@ async fn post_write(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(
 
 /// The paragraphs `ids` of section `sec`, one after the other; then the program's jump check on
 /// the blocks written (the repair task says why and how to fix, one call). Returns the errors.
-async fn write_section(s: &Shared, c: &Ctx, _sec: &str, ids: &[String]) -> Vec<String> {
+async fn write_section(s: &Shared, c: &Ctx, _sec: &str, ids: &[String], force: bool) -> Vec<String> {
     let mut errors = vec![];
     let mut blocks: Vec<String> = vec![];
     for id in ids {
@@ -672,12 +677,35 @@ async fn write_section(s: &Shared, c: &Ctx, _sec: &str, ids: &[String]) -> Vec<S
         let Some(k) = sess.skeleton.clone() else { break };
         // moved or removed meanwhile: written where it is now, or not at all
         let (Some(p), Some(section)) = (k.para(id).cloned(), k.section_of(id).cloned()) else { continue };
+        // text typed meanwhile (a block, a section or all): left as it is
+        if !force && !p.text.trim().is_empty() {
+            let _ = with_sk(&c.dir, |sess| {
+                if let Some(k) = sess.skeleton.as_mut() {
+                    if let Some(x) = k.para_mut(id) {
+                        x.busy = None;
+                    }
+                    if let Some(j) = k.job.as_mut() {
+                        j.done += 1;
+                    }
+                }
+                Ok(())
+            })
+            .await;
+            continue;
+        }
         let section_paras: Vec<&sk::Para> = section.blocks.iter().flat_map(|b| b.paras.iter()).collect();
         let at = section_paras.iter().position(|x| x.id == *id).unwrap_or(0);
         let earlier: Vec<String> = section_paras[..at].iter().map(|x| x.text.clone()).filter(|t| !t.trim().is_empty()).collect();
         let mut env = super::compose_env(s, c, &sess, sk::old_section(&section), None).await;
         // the other sections' text, for the notation checks
         env.other_drafts = k.sections.iter().filter(|x| x.id != section.id).map(|x| x.blocks.iter().flat_map(|b| b.paras.iter()).map(|p| p.text.clone()).collect::<Vec<_>>().join("\n\n")).collect();
+        // the kept inventory's labels the paper and the figure plan lack: stand-ins, so `\ref`s resolve
+        let planned: Vec<String> = sess.figures.iter().flat_map(|f| f.kept()).map(|f| f.label.clone()).collect();
+        let in_paper: Vec<String> = pc_core::draft::material::floats(&c.dir).into_iter().map(|f| f.id).collect();
+        env.other_drafts.extend(k.inventory.iter().filter(|i| i.keep && !i.label.is_empty() && !planned.contains(&i.label) && !in_paper.contains(&i.label)).map(|i| {
+            let kind = if i.kind == "table" { "table" } else { "figure" };
+            pc_core::draft::figures::placeholder(&pc_core::draft::figures::PlannedFloat { id: i.id.clone(), kind: kind.into(), label: i.label.clone(), title: i.title.clone(), ..Default::default() })
+        }));
         let more = skp::write_more(&k, id);
         let r = super::compose_one(s, c, &sess, &env, &skp::outline_para(&p), at, section_paras.len(), &earlier, &more).await;
         if r.is_err() {
@@ -688,7 +716,8 @@ async fn write_section(s: &Shared, c: &Ctx, _sec: &str, ids: &[String]) -> Vec<S
             let block = k.block_of(id).map(|b| b.id.clone());
             if let Some(x) = k.para_mut(id) {
                 x.busy = None;
-                if let Ok((d, _)) = &r {
+                let typed = !force && !x.text.trim().is_empty();
+                if let (Ok((d, _)), false) = (&r, typed) {
                     x.text = d.text.clone();
                     x.problems = d.problems.clone();
                     x.state = sk::State::Text;

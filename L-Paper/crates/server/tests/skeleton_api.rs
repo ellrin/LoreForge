@@ -68,7 +68,7 @@ fn script() -> Value {
                 { "para": "x2", "kind": "conflict", "question": "記錄寫 A 最好，外部卻反轉，你要怎麼說？", "options": ["如實寫反轉", "放到限制"] }
             ]
         }],
-        "_delay_ms": { "pc-draft-fill": 300 },
+        "_delay_ms": { "pc-draft-fill": 300, "pc-compose-paragraph": 150 },
         "pc-draft-claims": [{ "claims": [{ "zh": "A 較好", "en": "Method A is better on small data.", "depth": null, "evidence": "E1", "reader_accepts": "", "twist": "", "home": "Results", "items": ["p2"], "refs": [] }] }],
         "pc-draft-audit": [{ "findings": [{ "kind": "generic", "para": "p1", "quote": "Method A", "why": "太籠統", "ask": "" }] }],
         "polish": [{ "rewrite": "Method A reached an accuracy of 0.91 while Method B reached 0.87 on the internal test set. The difference held in every fold of the cross validation, so the gain does not depend on a single split of the data. This novel pattern appeared in all five folds and remained stable when the training set was reduced, so the advantage of Method A is consistent across the settings that we examined in this study." }],
@@ -279,9 +279,18 @@ async fn skeleton_routes_end_to_end() {
     assert_eq!(v["job"]["kind"], "write");
     assert_eq!(para(&v, "p1")["busy"], "write");
     assert_eq!(para(&v, "p2")["busy"], Value::Null, "a paragraph with text is not written");
+    // the author types into a paragraph still waiting its turn (p4 comes after p3 in its section)
+    let mine = "Typed while the others were written.";
+    let (code, _) = call(&http, M::POST, url("/ops"), json!({ "ops": [{ "op": "edit", "id": "p4", "fields": { "text": mine } }] })).await;
+    assert_eq!(code, 200);
+    let v = until(&http, url(""), |v| v["job"].is_null()).await;
+    assert_eq!(para(&v, "p4")["text"], mine, "typed meanwhile: left as it is");
+    assert_eq!(para(&v, "p4")["busy"], Value::Null);
+    let (code, _) = call(&http, M::POST, url("/write"), json!({ "id": "p4" })).await;
+    assert_eq!(code, 200);
     let v = until(&http, url(""), |v| v["job"].is_null()).await;
     assert_eq!(para(&v, "p2"), &p2_before, "byte-identical");
-    for id in ["p1", "p3", "p4", "p5"] {
+    for id in ["p1", "p3", "p4", "p5"] {  // p4 written once asked for itself
         let p = para(&v, id);
         assert!(p["text"].as_str().unwrap().starts_with("Method A reached"), "{id}: {p}");
         assert_eq!((p["state"].clone(), p["busy"].clone()), (json!("text"), Value::Null));

@@ -162,16 +162,37 @@
 
 測試：`cargo test -p pc-server --test skeleton_flow` → 1 passed。
 
-## 最後一次全部測試（只跑一次）
+第 8 段 commit：9bb9fdc。
+
+## 收尾修正（審查後）
+
+- `/write` 對框、章、`all`：每段輪到時重新讀檔，作者在等待期間打的文字照樣保留（落地時再檢查一次），只算進度。
+  測試：寫 `all` 途中編輯排在後面的段落 → 文字不變；之後單獨 `/write` 那一段才重寫。
+- 寫文字時，勾選的素材裡圖表規劃與論文都沒有的 label（作者新增的圖表、偽代碼、程式產生 label 的結果表）放進對照表檢查的
+  脈絡（佔位圖表），`\ref` 不會被當成未定義。**沒有專門的測試**。放進論文時的佔位圖表仍然只看圖表規劃（見下方未做）。
+- `/answer` 只接受問題（conflict／choice／missing 且有題目），edit／refine／note 串 → 400。
+- 假模型模式下 `Llm::route()` 一律拒絕（「假模型模式：<任務> 沒有腳本」）：沒有腳本的功能絕不會走到真的引擎。
+  有腳本的：`Llm::complete`／`complete_on`（所有討論草稿任務、骨架三個任務、逐段文字）與 lore-polish（用字、我的風格）。
+  **沒有腳本、mock 時會回錯誤的**：流程圖（lore-flow）、繪圖（lore-plot）、期刊寫法、新範本、寫書（它們有自己的模型介面）。
+
+## 最後一次全部測試
 
 - `cargo test -p pc-core` → 261 passed。
-- `cargo test -p pc-server` → lib 185 passed、1 failed；其他測試檔全部通過。
+- `cargo test -p pc-server --no-fail-fast` → lib 185 passed、1 failed；abort、book_api、flow_api、notes_api、open_api、
+  pending_api、picked_api、skeleton_api、skeleton_flow、style_api、todeck_api、venue_api 各 1 passed。
   失敗的是 `shell::tests::the_shell_files_are_served_and_the_page_loads_them_in_order`：`ui/skeleton.js` 用了原生 `confirm()`
-  （規則是改用 `LoreShell.ask`）。這是前端的檔案，不在我的範圍，沒有改；留給前端。
+  （規則是改用 `LoreShell.ask`）。前端的檔案，不在我的範圍，沒有改。
+
+### 合約問題（補）
+- 刪掉整個框時，掛在裡面段落的已完成串改掛到「章」的 id（合約只說段落或框；框已經不在了）。
+- 復原一個 `add_para` 時，掛在那一段上的串（例如作者的 note）會指向不存在的段落 id。頁面請把找不到 anchor 的串放在章末，或告訴我要怎麼處理。
 
 ## 留給作者決定／還沒做
 
 - 風格對照的兩個程式約定：單一典型值的容許範圍（±25%）、「句長變化太小」（三句以上全在 3 個字差距內）。
 - 素材清單不叫模型；`algorithm` 只能作者自己加；作者的想法（H…）預設勾選。
 - 骨架沒有另存「新符號」清單（只在段落 problems 的「對照表：」訊息裡）。
+- 放進論文的佔位圖表只看圖表規劃：作者在素材清單新增、圖表規劃沒有的圖表，放進論文後 `\ref` 會是未定義，要作者自己補上。
+- `session.json` 現在帶著骨架與最多 50 步復原（每步一份章節快照），每次存檔整份重寫，舊的 `/draft` 視圖也會帶著它：
+  長論文時檔案大小與存檔時間**沒有量過**。
 - 規劃品質、回填品質、真模型的速度：都只用假回覆測過，**沒有在真的模型上跑過**。
