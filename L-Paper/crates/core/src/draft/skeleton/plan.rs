@@ -17,6 +17,9 @@ use crate::draft::prompts::{json_in, TW};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
+/// On a paragraph whose text is older than an answer folded into it (gone when it is written again).
+pub const STALE_TEXT: &str = "有新的回答還沒寫進文字";
+
 pub const TASK: &str = "pc-draft-skeleton";
 pub const REPAIR_TASK: &str = "pc-draft-skeleton-repair";
 pub const FILL_TASK: &str = "pc-draft-fill";
@@ -638,7 +641,12 @@ pub fn apply_fill(sk: &mut Skeleton, thread: &str, r: FillReply, ids: &BTreeSet<
     }
     if let Some(p) = target.as_deref().and_then(|id| sk.para_mut(id)) {
         p.points.retain(|x| x.from.as_deref() != Some(thread));
+        let grew = !points.is_empty();
         p.points.extend(points.into_iter().map(|text| Point { text, from: Some(thread.to_string()) }));
+        // the text was written before this answer: say so on the paragraph until it is written again
+        if grew && !p.text.trim().is_empty() && !p.problems.iter().any(|x| x == STALE_TEXT) {
+            p.problems.push(STALE_TEXT.into());
+        }
         if p.busy.as_deref() == Some("fill") {
             p.busy = None;
         }

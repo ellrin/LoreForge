@@ -962,6 +962,8 @@ impl Skeleton {
             }
             if t.kind == "refine" && t.changes.iter().all(|x| x.state != "proposed") {
                 t.status = "done".into();
+                let taken = t.changes.iter().filter(|x| x.state == "applied").count();
+                t.conclusion = format!("採用 {taken}，不採用 {}", t.changes.len() - taken);
             }
         }
         self.rev += 1;

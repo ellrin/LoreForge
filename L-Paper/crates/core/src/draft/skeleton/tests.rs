@@ -558,6 +558,24 @@ fn a_fill_lands_where_the_paragraph_is_now() {
     assert_eq!(sk.para("p3").unwrap().points.len(), 2);
 }
 
+/// An answer that arrives after the text was written is not lost from view: the paragraph says its
+/// text is older than the answer (once), and the text itself is left alone.
+#[test]
+fn an_answer_after_the_text_marks_the_text_as_older() {
+    let mut sk = small();
+    sk.para_mut("p3").unwrap().text = "Method A reached 0.91.".into();
+    let q = answered(&mut sk, "p3", "兩邊資料來源不同");
+    plan::apply_fill(&mut sk, &q, fill(&["來源不同"], "", None), &Default::default());
+    plan::apply_fill(&mut sk, &q, fill(&["來源不同"], "", None), &Default::default());
+    let p = sk.para("p3").unwrap();
+    assert_eq!(p.text, "Method A reached 0.91.");
+    assert_eq!(p.problems, [plan::STALE_TEXT]);
+    // a paragraph without text gets no such mark
+    let q = answered(&mut sk, "p2", "是");
+    plan::apply_fill(&mut sk, &q, fill(&["x"], "", None), &Default::default());
+    assert!(sk.para("p2").unwrap().problems.is_empty());
+}
+
 #[test]
 fn a_fill_for_a_removed_paragraph_is_dropped() {
     let mut sk = small();
