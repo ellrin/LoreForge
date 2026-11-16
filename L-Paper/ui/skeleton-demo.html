@@ -298,7 +298,7 @@ async function real() {
     key(q.querySelector(".sk-answer"), "1");
     await wait(60);
     const nq = document.querySelector(".sk-thread.sk-active");
-    ok("answer: next question at once", !!nq && nq.dataset.thread !== qid && document.activeElement === nq.querySelector(".sk-answer"));
+    ok(`answer: next question at once${!nq ? " (no active card)" : nq.dataset.thread === qid ? " (same card)" : document.activeElement !== nq.querySelector(".sk-answer") ? ` (focus on ${document.activeElement?.className || document.activeElement?.tagName})` : ""}`, !!nq && nq.dataset.thread !== qid && document.activeElement === nq.querySelector(".sk-answer"));
     await wait(2600);
     ok("answer: folded into the paragraph", V.threads.find((t) => t.id === qid).status === "done" && !!document.querySelector(`.sk-points li[data-from="${qid}"]`));
     document.title = `probe ops: ${out.every((x) => x.startsWith("ok")) ? "ok" : "FAILED"} | ${out.join(" | ")}`;

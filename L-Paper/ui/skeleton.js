@@ -252,7 +252,7 @@ const PCSkeleton = (() => {
       if (f.at + d >= 0 && f.at + d < f.section.blocks.length) op({ op: "move", id, to: f.section.id, at: f.at + d });
       else if (secs[si + d]) op({ op: "move", id, to: secs[si + d].id, at: d < 0 ? secs[si + d].blocks.length : 0 });
     }
-    requestAnimationFrame(() => S.root.querySelector(`.sk-canvas [data-id="${id}"]`)?.focus({ preventScroll: true }));
+    S.root.querySelector(`.sk-canvas [data-id="${id}"]`)?.focus({ preventScroll: true });
   }
 
   // ── motion ───────────────────────────────────────────
@@ -345,7 +345,7 @@ const PCSkeleton = (() => {
       };
       t.onblur = () => { if (isEditing(id, name) && !S.redrawing && t.isConnected) commit(id, name, t.value); };
       t.onclick = (e) => e.stopPropagation();
-      requestAnimationFrame(fit);
+      queueMicrotask(fit); // once it is in the page
       return t;
     }
     const d = h("div", `${cls}${value ? "" : " sk-empty"}`, value || placeholder);
@@ -380,7 +380,7 @@ const PCSkeleton = (() => {
     if (p.busy) head.append(h("span", "sk-busy", BUSY_ZH[p.busy] ?? p.busy));
     const tools = h("span", "sk-tools");
     if (!id.startsWith("tmp")) {
-      tools.append(ico("comment", "對這段說一句", () => { S.noteAt = id; draw(); }));
+      tools.append(ico("comment", "對這段說一句", () => openNote(id)));
       tools.append(ico("spark", hasText ? "重寫文字" : "寫文字", async (e) => {
         if (hasText && !(await sure(e.currentTarget, ["重寫這一段？", "現在的文字會被換掉，可以復原。"], "重寫"))) return;
         post("/write", { id }, "寫文字");
@@ -484,7 +484,7 @@ const PCSkeleton = (() => {
     b.paras.forEach((p) => dots.append(dot(p.state, p.busy)));
     const tools = h("span", "sk-tools");
     if (!id.startsWith("tmp")) {
-      tools.append(ico("comment", "對這個框說一句", () => { S.noteAt = id; draw(); }));
+      tools.append(ico("comment", "對這個框說一句", () => openNote(id)));
       if (b.paras.some((p) => !p.text)) tools.append(ico("spark", "寫這個框還沒寫的段落", () => post("/write", { id }, "寫文字")));
       tools.append(ico("trash", "刪除這個框", () => remove(id)));
     }
@@ -626,6 +626,12 @@ const PCSkeleton = (() => {
     return d;
   }
 
+  function openNote(anchor) {
+    S.noteAt = anchor;
+    draw();
+    S.root.querySelector(`[data-k="${CSS.escape(`note:${anchor}`)}"]`)?.focus({ preventScroll: true });
+  }
+
   function noteNode(anchor) {
     const key = `note:${anchor}`;
     const d = leaf(h("div", "sk-thread sk-active"), key, key);
@@ -658,7 +664,6 @@ const PCSkeleton = (() => {
     const top = h("div", "sk-thead");
     top.append(h("span", "sk-tag", THREAD_ZH.note));
     d.append(top, ta, row);
-    requestAnimationFrame(() => { if (ta.isConnected && document.activeElement !== ta) ta.focus({ preventScroll: true }); });
     return d;
   }
 
@@ -695,19 +700,19 @@ const PCSkeleton = (() => {
     m.style.minHeight = `${y}px`;
   }
 
+  /** Bring a thread's paragraph and card into view and put the caret in its answer box. Right after a
+   *  draw, never on a later frame: a frame may not come (a hidden or throttled window). */
   function reveal(threadId) {
     if (!threadId) return;
-    requestAnimationFrame(() => {
-      const a = S.root.querySelector(`.sk-canvas [data-id="${thread(threadId)?.anchor}"]`);
-      const card = S.root.querySelector(`.sk-thread[data-thread="${threadId}"]`);
-      const sc = S.root.querySelector(".sk-scroll");
-      if (!a || !sc) return;
-      const box = sc.getBoundingClientRect();
-      const top = a.getBoundingClientRect().top;
-      const bottom = Math.max(a.getBoundingClientRect().bottom, card?.getBoundingClientRect().bottom ?? 0);
-      if (top < box.top + 40 || bottom > box.bottom - 24) sc.scrollTo({ top: sc.scrollTop + top - box.top - 90, behavior: calm() ? "auto" : "smooth" });
-      card?.querySelector(".sk-answer")?.focus({ preventScroll: true });
-    });
+    const a = S.root.querySelector(`.sk-canvas [data-id="${thread(threadId)?.anchor}"]`);
+    const card = S.root.querySelector(`.sk-thread[data-thread="${threadId}"]`);
+    const sc = S.root.querySelector(".sk-scroll");
+    card?.querySelector(".sk-answer")?.focus({ preventScroll: true });
+    if (!a || !sc) return;
+    const box = sc.getBoundingClientRect();
+    const top = a.getBoundingClientRect().top;
+    const bottom = Math.max(a.getBoundingClientRect().bottom, card?.getBoundingClientRect().bottom ?? 0);
+    if (top < box.top + 40 || bottom > box.bottom - 24) sc.scrollTo({ top: sc.scrollTop + top - box.top - 90, behavior: calm() ? "auto" : "smooth" });
   }
 
   // ── dragging (pointer events: smooth in the desktop web view, where HTML drag is not) ──
@@ -907,7 +912,7 @@ const PCSkeleton = (() => {
         const b = h("button", "sk-sissue");
         b.type = "button";
         b.append(h("span", "sk-n", `¶${paras().findIndex((x) => x.id === p.id) + 1}`), h("span", "", p.issues.join("、")));
-        b.onclick = () => { S.tab = "skeleton"; draw(); requestAnimationFrame(() => { const a = S.root.querySelector(`.sk-canvas [data-id="${p.id}"]`); a?.scrollIntoView({ block: "center" }); a?.focus(); }); };
+        b.onclick = () => { S.tab = "skeleton"; draw(); const a = S.root.querySelector(`.sk-canvas [data-id="${p.id}"]`); a?.scrollIntoView({ block: "center" }); a?.focus(); };
         sec.append(b);
       }
       main.append(sec);
