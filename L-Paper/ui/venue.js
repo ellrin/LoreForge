@@ -18,8 +18,9 @@ const PCVenue = (() => {
   }
   const summary = (id) => sums?.[id] ?? null;
 
-  // the shared theme's accents (never document colours): one hue per family of categories,
-  // lighter shades for the later members; the segment's hint names the category
+  // the shared theme's accents (never document colours): one colour per family of categories and
+  // nothing else, so the bars show exactly the colours the legend names; segments of one family
+  // are told apart by the gap between them and the segment's hint names the category
   const FAMILIES = [
     ["--accent", ["value", "motivation", "prior"], "背景與前人"],
     ["--accent-2", ["contribution", "method", "equations"], "方法"],
@@ -27,14 +28,8 @@ const PCVenue = (() => {
     ["--ok", ["results", "comparison", "ablation"], "結果"],
     ["--warn", ["discussion", "limitations", "future", "conclusion"], "討論與結論"],
   ];
-  const SHADES = [100, 62, 36, 22];
-  function tone(cat) {
-    for (const [hue, ids] of FAMILIES) {
-      const i = ids.indexOf(cat);
-      if (i >= 0) return i ? `color-mix(in srgb, var(${hue}) ${SHADES[i]}%, var(--panel))` : `var(${hue})`;
-    }
-    return "var(--muted)"; // statements and the venue's own categories
-  }
+  const OTHER = "var(--muted)"; // statements and the venue's own categories
+  const tone = (cat) => { const f = FAMILIES.find(([, ids]) => ids.includes(cat)); return f ? `var(${f[0]})` : OTHER; };
   const pct = (x) => `${Math.round(x * 100)}%`;
   const num = (x) => Math.round(x).toLocaleString();
 
@@ -193,6 +188,12 @@ const PCVenue = (() => {
         k.append(d, name);
         leg.append(k);
       });
+      if ([...used].some((c) => tone(c) === OTHER)) {
+        const k = el("span"), d = el("i");
+        d.style.background = OTHER;
+        k.append(d, "其他");
+        leg.append(k);
+      }
       out.push(leg);
       // habits the rows do not already show; pairs merged
       const H = Object.fromEntries((p.habits || []).map((h) => [h.id, h]));
