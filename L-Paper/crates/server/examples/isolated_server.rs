@@ -1,15 +1,33 @@
 //! The server on a throwaway copy of everything it reads and writes, for
 //! trying the UI without touching real papers or settings:
-//! `cargo run -p pc-server --example isolated_server -- <empty folder> [port]`.
+//! `cargo run -p pc-server --example isolated_server -- <empty folder> [port] [--mock <file>]`.
 //! The folder gets a copy of private-example/ (the workspace is its
 //! PaperComposer/), a home/ for config and caches, and opened.toml.
 //! `ISOLATED_KEEP_HOME=1` keeps the real HOME (the `claude` CLI's sign-in, for a real 寫書 run);
 //! books.toml and the job cache still go under the folder.
+//!
+//! `--mock <file>`: every model call is answered from the file's scripted replies, per task id in
+//! order, the last one repeating (`{ "pc-draft-skeleton": [ … ], "pc-draft-fill": [ … ] }`;
+//! `crates/server/tests/fixtures/skeleton_mock.json` drives a whole 骨架 run). Nothing reaches the
+//! network, the `claude` CLI or a local model. A synthetic paper `skeleton-demo` (an organised
+//! record, a figure plan) is added to the workspace to try it on.
 fn main() {
+    let mut root: Option<std::path::PathBuf> = None;
+    let mut port: u16 = 7990;
+    let mut mock: Option<std::path::PathBuf> = None;
     let mut args = std::env::args().skip(1);
-    let root = std::path::PathBuf::from(args.next().expect("a folder"));
-    let port: u16 = args.next().and_then(|p| p.parse().ok()).unwrap_or(7990);
+    while let Some(a) = args.next() {
+        if a == "--mock" {
+            mock = Some(std::path::PathBuf::from(args.next().expect("--mock <file>")));
+        } else if root.is_none() {
+            root = Some(std::path::PathBuf::from(a));
+        } else if let Ok(p) = a.parse() {
+            port = p;
+        }
+    }
+    let root = root.expect("a folder");
     std::fs::create_dir_all(root.join("home")).expect("home");
+    let mock = mock.map(|m| std::fs::canonicalize(&m).unwrap_or_else(|e| panic!("{}: {e}", m.display())));
     // SAFETY: before any thread starts.
     unsafe {
         std::env::set_var("LOREFORGE_PRIVATE", &root);
@@ -20,9 +38,18 @@ fn main() {
         if std::env::var_os("ISOLATED_KEEP_HOME").is_none() {
             std::env::set_var("HOME", root.join("home"));
         }
+        if let Some(m) = &mock {
+            std::env::set_var("PAPERCOMPOSER_LLM_MOCK", m);
+            std::env::set_var("PAPERCOMPOSER_ENGINES_ISOLATED", "1");
+        }
     }
     tokio::runtime::Runtime::new().expect("runtime").block_on(async {
         let (addr, serve) = pc_server::bind(pc_server::Paths::from_repo(), port).await.expect("bind");
+        if let Some(m) = &mock {
+            // after bind: the workspace is seeded from private-example by then
+            let paper = pc_server::seed_skeleton_demo(&root.join("PaperComposer")).expect("seed");
+            println!("mock replies {}; paper {}", m.display(), paper.display());
+        }
         println!("http://{addr}/  workspace {}", root.join("PaperComposer").display());
         serve.await.expect("serve");
     });

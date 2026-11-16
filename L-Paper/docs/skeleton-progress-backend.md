@@ -144,3 +144,34 @@
 
 測試：`cargo test -p pc-core skeleton` → 33 passed；`cargo test -p pc-server --test skeleton_api` → 1 passed
 （主張、摘要、審稿從骨架讀；放一章只動那一章；全部放；沒有文字 → 400）；`cargo test -p pc-server --lib draft` 見下。
+（`cargo test -p pc-server --lib draft` → 25 passed。）
+
+第 7 段 commit：bd48992。
+
+## 第 8 段：隔離伺服器 `--mock` 與整段流程測試
+
+- `cargo run -p pc-server --example isolated_server -- <空資料夾> [port] --mock crates/server/tests/fixtures/skeleton_mock.json`
+  （port 預設 7990）。`--mock` 設 `PAPERCOMPOSER_LLM_MOCK` 與 `PAPERCOMPOSER_ENGINES_ISOLATED`：所有模型呼叫（草稿任務、
+  逐段文字、lore-polish）都從檔案回答，不碰網路、`claude` CLI、本機模型；並在工作區加一篇合成的論文 `skeleton-demo`
+  （`tests/fixtures/skeleton_seed.json`：Method A／B／C、內外部測試集、圖表規劃），頁面用
+  `/api/papers/skeleton-demo/draft/skeleton` 開始。已在暫存資料夾實際啟動過一次（GET、排骨架、4 題、`next = q1`）。
+- `tests/fixtures/skeleton_mock.json`：排骨架（10 段、4 題）、三次回填（第二次開一個追問與一條寫法筆記）、修補、逐段文字、
+  用字潤飾、主張、校正、審稿的回覆。`_` 開頭的鍵（`_comment`、`_delay_ms`）不是任務。
+- `tests/skeleton_flow.rs`：用同一個檔案走完：素材清單 → 排骨架 → 三個回答（各等回填落地）→ 略過 → 全部寫 → 用字 → 套用 → 風格對照。
+- `pc_server::seed_skeleton_demo(workspace)`：範例與測試共用的種子。
+
+測試：`cargo test -p pc-server --test skeleton_flow` → 1 passed。
+
+## 最後一次全部測試（只跑一次）
+
+- `cargo test -p pc-core` → 261 passed。
+- `cargo test -p pc-server` → lib 185 passed、1 failed；其他測試檔全部通過。
+  失敗的是 `shell::tests::the_shell_files_are_served_and_the_page_loads_them_in_order`：`ui/skeleton.js` 用了原生 `confirm()`
+  （規則是改用 `LoreShell.ask`）。這是前端的檔案，不在我的範圍，沒有改；留給前端。
+
+## 留給作者決定／還沒做
+
+- 風格對照的兩個程式約定：單一典型值的容許範圍（±25%）、「句長變化太小」（三句以上全在 3 個字差距內）。
+- 素材清單不叫模型；`algorithm` 只能作者自己加；作者的想法（H…）預設勾選。
+- 骨架沒有另存「新符號」清單（只在段落 problems 的「對照表：」訊息裡）。
+- 規劃品質、回填品質、真模型的速度：都只用假回覆測過，**沒有在真的模型上跑過**。

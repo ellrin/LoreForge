@@ -3689,6 +3689,22 @@ fn engines_isolated() -> bool {
 
 /// Bind on 127.0.0.1 (port 0 = any free port) and return the bound address
 /// plus a future that serves until dropped.
+/// A synthetic paper for trying 骨架 against scripted replies (the isolated example's `--mock`,
+/// the flow test): `papers/skeleton-demo/` with an organised record (Method A vs Method B) and a
+/// figure plan; left as it is when it exists already. Returns the paper folder.
+pub fn seed_skeleton_demo(workspace: &Path) -> std::io::Result<PathBuf> {
+    let dir = workspace.join("papers").join("skeleton-demo");
+    if dir.join("main.tex").exists() {
+        return Ok(dir);
+    }
+    std::fs::create_dir_all(dir.join("sections"))?;
+    std::fs::create_dir_all(dir.join("draft"))?;
+    std::fs::write(dir.join("main.tex"), "\\documentclass{article}\n\\begin{document}\n\\input{sections/results}\n\\end{document}\n")?;
+    std::fs::write(dir.join("sections/results.tex"), "\\section{Results}\n")?;
+    std::fs::write(dir.join("draft/session.json"), include_str!("../tests/fixtures/skeleton_seed.json"))?;
+    Ok(dir)
+}
+
 pub async fn bind(
     paths: Paths,
     port: u16,

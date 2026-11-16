@@ -1,0 +1,29 @@
+{
+  "phase": "plan",
+  "hook": { "reader_accepts": "小資料是常態", "twist": "先驗較強的方法在小資料時反而較好" },
+  "record_summary": "Method A 與 Method B、Method C 在內部與外部測試集上的比較。",
+  "experiments": [
+    { "id": "E1", "title": "Method A vs Method B vs Method C", "change": "method", "metrics": "accuracy", "result": "A 0.91, B 0.87, C 0.86 (internal test set, five folds)", "purpose": "main comparison", "purpose_sure": true },
+    { "id": "E2", "title": "Training size", "change": "number of training images", "metrics": "accuracy", "result": "the gap between A and C is largest below 500 images and 0.02 with the full set", "purpose": "where A helps", "purpose_sure": true },
+    { "id": "E3", "title": "External set", "change": "test set", "metrics": "accuracy", "result": "C 0.84, A 0.82, B 0.80", "purpose": "external validation", "purpose_sure": false }
+  ],
+  "timeline": [
+    { "step": 1, "what": "baseline with Method B", "observed": "0.87", "changed": "added the prior of Method A" }
+  ],
+  "thoughts": [
+    { "id": "H1", "text": "A 的先驗較強，所以小資料時比較穩", "about": ["E2"] },
+    { "id": "H2", "text": "外部資料的影像來源不同", "about": ["E3"] }
+  ],
+  "tables": [
+    { "id": "R1", "caption": "Main comparison on the internal test set", "columns": ["Method", "Accuracy"], "rows": [["A", "0.91"], ["B", "0.87"], ["C", "0.86"]], "note": "主要比較", "from": ["E1"] },
+    { "id": "R2", "caption": "External test set", "columns": ["Method", "Accuracy"], "rows": [["C", "0.84"], ["A", "0.82"], ["B", "0.80"]], "note": "外部驗證", "from": ["E3"] }
+  ],
+  "figures": {
+    "items": [
+      { "id": "T1", "kind": "table", "label": "tab:main", "title": "三種方法在內部測試集的比較", "supports": "A 較好", "evidence": ["R1", "E1"], "tool": "table", "status": "kept" },
+      { "id": "T2", "kind": "table", "label": "tab:external", "title": "外部資料集上的結果", "supports": "外部驗證", "evidence": ["R2", "E3"], "tool": "table", "status": "kept" },
+      { "id": "F1", "kind": "figure", "label": "fig:size", "title": "訓練資料量對準確率的影響", "supports": "A 在小資料的優勢", "evidence": ["E2"], "tool": "plot", "status": "proposed" },
+      { "id": "F2", "kind": "figure", "label": "fig:overview", "title": "整體流程", "supports": "方法總覽", "evidence": ["T1"], "tool": "flow", "status": "proposed" }
+    ]
+  }
+}
