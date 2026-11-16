@@ -69,6 +69,11 @@ fn script() -> Value {
             ]
         }],
         "_delay_ms": { "pc-draft-fill": 300 },
+        "pc-compose-paragraph": [{ "sentences": [
+            { "text": "Method A reached an accuracy of 0.91 while Method B reached 0.87 on the internal test set.", "phrase_id": null },
+            { "text": "The difference held in every fold of the cross validation, which suggests that the gain does not depend on a single split of the data.", "phrase_id": null },
+            { "text": "This novel pattern appeared in all five folds and remained stable when the training set was reduced, so the advantage of Method A is consistent across the settings that we examined in this study.", "phrase_id": null }
+        ] }],
         "pc-draft-fill": [
             { "points": ["B 和 C 用的資料來源不同"], "conclusion": "資料來源不同", "gap": true,
               "follow_up": { "kind": "missing", "question": "哪一個資料來源比較大？", "options": ["內部", "外部"] },
@@ -261,6 +266,33 @@ async fn skeleton_routes_end_to_end() {
     let (_, b2) = call(&http, M::GET, url(""), Value::Null).await;
     assert_eq!(a["rev"], b2["rev"], "nothing running: the same rev");
 
+    // ── 文字 ──
+    let typed = "Typed by the author, kept as it is.";
+    let (code, v) = call(&http, M::POST, url("/ops"), json!({ "ops": [{ "op": "edit", "id": "p2", "fields": { "text": typed } }] })).await;
+    assert_eq!(code, 200, "{v}");
+    let p2_before = para(&v, "p2").clone();
+    let (code, v) = call(&http, M::POST, url("/write"), json!({ "id": "all" })).await;
+    assert_eq!(code, 200, "{v}");
+    assert_eq!(v["job"]["kind"], "write");
+    assert_eq!(para(&v, "p1")["busy"], "write");
+    assert_eq!(para(&v, "p2")["busy"], Value::Null, "a paragraph with text is not written");
+    let v = until(&http, url(""), |v| v["job"].is_null()).await;
+    assert_eq!(para(&v, "p2"), &p2_before, "byte-identical");
+    for id in ["p1", "p3", "p4", "p5"] {
+        let p = para(&v, id);
+        assert!(p["text"].as_str().unwrap().starts_with("Method A reached"), "{id}: {p}");
+        assert_eq!((p["state"].clone(), p["busy"].clone()), (json!("text"), Value::Null));
+    }
+    // the word the author banned in an answer on p3 is flagged there only
+    assert!(para(&v, "p3")["problems"].as_array().unwrap().iter().any(|x| x.as_str().unwrap().contains("「novel」")), "{}", para(&v, "p3"));
+    assert!(!para(&v, "p1")["problems"].as_array().unwrap().iter().any(|x| x.as_str().unwrap().contains("「novel」")));
+    let (code, _) = call(&http, M::POST, url("/write"), json!({ "id": "all" })).await;
+    assert_eq!(code, 400, "nothing without text left");
+    let (code, _) = call(&http, M::POST, url("/write"), json!({ "id": "p2" })).await;
+    assert_eq!(code, 200);
+    let v = until(&http, url(""), |v| v["job"].is_null()).await;
+    assert!(para(&v, "p2")["text"].as_str().unwrap().starts_with("Method A reached"), "one paragraph asked: written again");
+
     // ── 改用骨架 ──
     let old = paper(&ws, "old");
     std::fs::write(
@@ -282,6 +314,10 @@ async fn skeleton_routes_end_to_end() {
     assert!(std::fs::read_dir(old.join("draft/archive")).unwrap().count() == 1, "a copy first");
     let (code, _) = call(&http, M::POST, ourl("/convert"), json!({})).await;
     assert_eq!(code, 400, "converted already");
+    // the old step's section drafting still works (the same per-paragraph code)
+    let (code, v) = call(&http, M::POST, format!("http://{addr}/api/papers/old/draft/compose"), json!({ "section": "Results" })).await;
+    assert_eq!(code, 200, "{v}");
+    assert!(v["session"]["drafts"][0]["paras"][0]["text"].as_str().unwrap().starts_with("Method A reached"), "{v}");
 
     // mid-interview: planned afresh, the answers hang where the planner used them
     let mid = paper(&ws, "mid");

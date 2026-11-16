@@ -624,3 +624,44 @@ fn a_follow_up_only_for_a_real_gap_and_never_after_no() {
     r.gap = false;
     assert!(plan::apply_fill(&mut sk, &g, r, &ids).is_none());
 }
+
+#[test]
+fn write_only_what_has_no_text_unless_one_paragraph_is_asked() {
+    let mut sk = small();
+    sk.para_mut("p2").unwrap().text = "Typed by the author.".into();
+    assert_eq!(plan::to_write(&sk, "b1").unwrap(), ["p1"]);
+    assert_eq!(plan::to_write(&sk, "s1").unwrap(), ["p1", "p3"]);
+    assert_eq!(plan::to_write(&sk, "all").unwrap(), ["p1", "p3", "p4", "p5"]);
+    assert_eq!(plan::to_write(&sk, "p2").unwrap(), ["p2"], "one paragraph: written again");
+    assert!(plan::to_write(&sk, "zz").is_err());
+    let o = plan::outline_para(sk.para("p2").unwrap());
+    assert_eq!((o.id.as_str(), o.zh.as_str()), ("p2", "B 對 C"));
+    sk.para_mut("p2").unwrap().link_prev = "承接 A 對 B".into();
+    let m = plan::write_more(&sk, "p2");
+    assert!(m.contains("A wins") && m.contains("承接 A 對 B"), "{m}");
+    assert!(plan::write_more(&sk, "p1").contains("The next paragraph will say (do not say it here): B 對 C"));
+}
+
+#[test]
+fn a_jump_is_a_paragraph_sharing_nothing_with_the_one_before() {
+    let mut sk = small();
+    let set = |sk: &mut Skeleton, id: &str, text: &str, src: &[&str]| {
+        let p = sk.para_mut(id).unwrap();
+        p.text = text.into();
+        p.sources = src.iter().map(|x| x.to_string()).collect();
+    };
+    set(&mut sk, "p1", "Method A reached higher accuracy than Method B.", &["E1"]);
+    set(&mut sk, "p2", "The accuracy gap between methods held across folds.", &[]);
+    set(&mut sk, "p3", "Patients were recruited at two hospitals.", &["E3"]);
+    // p2 shares "accuracy"; p3 shares nothing with p2 and has no link
+    assert_eq!(plan::jump_candidates(&sk, "b1"), Vec::<String>::new());
+    assert_eq!(plan::jump_candidates(&sk, "b2"), ["p3"]);
+    sk.para_mut("p3").unwrap().link_prev = "換到資料來源".into();
+    assert!(plan::jump_candidates(&sk, "b2").is_empty(), "a link says how it follows");
+    sk.para_mut("p3").unwrap().link_prev.clear();
+    let ids = vec!["p3".to_string()];
+    assert!(plan::jump_prompt(&sk, &ids).user.contains("Patients were recruited"));
+    plan::apply_jumps(&mut sk, plan::parse_repair(r#"{"paras":[],"blocks":[],"jumps":[{"id":"p3","why":"從比較跳到收案","fix":"加一句"},{"id":"p1","why":"x","fix":"y"}]}"#).unwrap(), &ids);
+    assert_eq!(sk.para("p3").unwrap().jump.as_ref().unwrap().why, "從比較跳到收案");
+    assert!(sk.para("p1").unwrap().jump.is_none(), "only those asked");
+}

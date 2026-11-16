@@ -672,3 +672,110 @@ pub fn apply_fill(sk: &mut Skeleton, thread: &str, r: FillReply, ids: &BTreeSet<
 fn f_kind(f: &FollowUp) -> &str {
     f.kind.trim()
 }
+
+// ── 文字: one paragraph at a time ─────────────────────────
+
+/// A skeleton paragraph in the shape the section-draft machinery takes
+/// ([`crate::draft::prompts::compose_extra`] and the phrase bank): `say` as what it says, the
+/// points as its lines.
+pub fn outline_para(p: &Para) -> crate::draft::session::OutlinePara {
+    crate::draft::session::OutlinePara {
+        id: p.id.clone(),
+        kind: p.kind.clone(),
+        plan: String::new(),
+        zh: p.say.clone(),
+        en: p.points.iter().map(|x| x.text.clone()).collect(),
+        sources: p.sources.clone(),
+        cites: p.cites.clone(),
+        pending: p.pending.clone(),
+        floats: p.floats.clone(),
+    }
+}
+
+/// What the paragraph prompt adds for a skeleton paragraph: its block's purpose, its one line,
+/// and the links to the paragraphs around it, so the transitions are written.
+pub fn write_more(sk: &Skeleton, id: &str) -> String {
+    let (Some(p), Some(b)) = (sk.para(id), sk.block_of(id)) else { return String::new() };
+    let (_, next) = sk.neighbours(id);
+    let mut x = format!("\nThis paragraph belongs to a frame of paragraphs \"{}\" whose purpose is: {}\nThis paragraph's one job: {}\n", b.title, b.purpose, p.say);
+    if !p.link_prev.trim().is_empty() {
+        x += &format!("How it follows the paragraph before (make the transition visible in its first sentence, without restating that paragraph): {}\n", p.link_prev);
+    }
+    if !p.link_next.trim().is_empty() {
+        x += &format!("What it hands to the next paragraph (its last sentence prepares this): {}\n", p.link_next);
+    }
+    if let Some(n) = next.and_then(|n| sk.para(&n)) {
+        x += &format!("The next paragraph will say (do not say it here): {}\n", n.say);
+    }
+    x
+}
+
+/// Words of six letters and more in a text (the "terms" two paragraphs may share).
+fn terms(text: &str) -> BTreeSet<String> {
+    crate::text::strip_latex(text).to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 6).map(str::to_string).collect()
+}
+
+/// After a block is written: paragraphs that share nothing with the one before (no source, no
+/// float, no term) and have no link saying how they follow — the program's guess at a jump.
+pub fn jump_candidates(sk: &Skeleton, block: &str) -> Vec<String> {
+    let Some(b) = sk.block(block) else { return vec![] };
+    let mut out = vec![];
+    for p in &b.paras {
+        let (Some(prev), _) = sk.neighbours(&p.id) else { continue };
+        let Some(q) = sk.para(&prev) else { continue };
+        if p.text.trim().is_empty() || q.text.trim().is_empty() || !p.link_prev.trim().is_empty() {
+            continue;
+        }
+        let shared = p.sources.iter().any(|s| q.sources.contains(s)) || p.floats.iter().any(|f| q.floats.contains(f)) || !terms(&p.text).is_disjoint(&terms(&q.text));
+        if !shared {
+            out.push(p.id.clone());
+        }
+    }
+    out
+}
+
+/// The repair task asked only why each candidate jumps and how to fix it.
+pub fn jump_prompt(sk: &Skeleton, ids: &[String]) -> Prompt {
+    let system = format!(
+        "Some paragraphs of a paper seem not to follow from the paragraph before them. For each pair below say in `jumps` \
+why the reader would feel a jump (`why`) and one concrete fix the author could make (`fix`); leave out a pair that does \
+follow. Return `paras` and `blocks` as []. {TW} Reply with JSON only."
+    );
+    let mut user = String::new();
+    for id in ids {
+        let (Some(prev), _) = sk.neighbours(id) else { continue };
+        let (Some(p), Some(q)) = (sk.para(id), sk.para(&prev)) else { continue };
+        user += &format!("\n## {id}\nBefore ({}): {}\nThis ({}): {}\n", q.say, q.text, p.say, p.text);
+    }
+    Prompt { system, user }
+}
+
+/// Jumps from the repair task into the paragraphs asked about (others ignored).
+pub fn apply_jumps(sk: &mut Skeleton, r: RepairReply, asked: &[String]) {
+    for j in r.jumps {
+        if asked.contains(&j.id) && !j.why.trim().is_empty() {
+            if let Some(p) = sk.para_mut(&j.id) {
+                p.jump = Some(Jump { why: j.why.trim().to_string(), fix: j.fix.trim().to_string() });
+            }
+        }
+    }
+}
+
+/// Which paragraphs `/write { id }` writes: a paragraph id = that one (again, even with text);
+/// a block, a section or `all` = only those without text (written or typed text stays as it is).
+pub fn to_write(sk: &Skeleton, id: &str) -> Result<Vec<String>, String> {
+    if sk.para(id).is_some() {
+        return Ok(vec![id.to_string()]);
+    }
+    let empty = |p: &&Para| p.text.trim().is_empty();
+    let ids: Vec<String> = if id == "all" {
+        sk.paras().filter(empty).map(|p| p.id.clone()).collect()
+    } else if let Some(b) = sk.block(id) {
+        b.paras.iter().filter(empty).map(|p| p.id.clone()).collect()
+    } else if let Some(s) = sk.sections.iter().find(|s| s.id == id) {
+        s.blocks.iter().flat_map(|b| b.paras.iter()).filter(empty).map(|p| p.id.clone()).collect()
+    } else {
+        return Err("沒有這一段、框或章".into());
+    };
+    Ok(ids)
+}

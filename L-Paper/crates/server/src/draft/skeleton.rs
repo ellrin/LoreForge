@@ -22,6 +22,7 @@ pub(super) fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/skeleton/convert", post(post_convert))
         .route("/api/papers/{name}/draft/skeleton/answer", post(post_answer))
         .route("/api/papers/{name}/draft/skeleton/note", post(post_note))
+        .route("/api/papers/{name}/draft/skeleton/write", post(post_write))
 }
 
 // ── what runs ────────────────────────────────────────────
@@ -584,4 +585,138 @@ async fn post_note(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b
     );
     spawn_fill(&s, &c, id);
     reply(&c, &sess)
+}
+
+// ── 文字 ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct WriteBody {
+    id: String,
+}
+
+/// Write the text of a paragraph (again), or of every paragraph without text in a block, a
+/// section or the whole paper, in the background: sections side by side, the paragraphs of a
+/// section in order (each sees the ones before it), each landing as soon as it is written.
+async fn post_write(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<WriteBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    if !has_writing_engine(&s, None).await {
+        return bad("沒有可用的寫作引擎");
+    }
+    if s.loaded.read().await.profile.is_none() {
+        return (StatusCode::SERVICE_UNAVAILABLE, "profile not loaded").into_response();
+    }
+    let Some(held) = hold(&c.dir, "job") else { return conflict("還有工作在進行") };
+    let (sess, ids) = tri!(
+        with_sk(&c.dir, |sess| {
+            let k = sess.skeleton.as_mut().filter(|k| k.exists()).ok_or("還沒有骨架")?;
+            clear_failed(k);
+            let ids = skp::to_write(k, &b.id)?;
+            if ids.is_empty() {
+                return Err("沒有要寫的段落（已經有文字的段落請一段一段重寫）".into());
+            }
+            for p in k.paras_mut().filter(|p| ids.contains(&p.id)) {
+                p.busy = Some("write".into());
+            }
+            k.job = Some(job("write", "寫文字", ids.len()));
+            Ok(ids)
+        })
+        .await
+    );
+    let holds: Vec<Held> = ids.iter().filter_map(|p| hold(&c.dir, &format!("para:{p}"))).collect();
+    // by section, in reading order
+    let k0 = sess.skeleton.clone().unwrap_or_default();
+    let mut by_section: Vec<(String, Vec<String>)> = vec![];
+    for sec in &k0.sections {
+        let mine: Vec<String> = sec.blocks.iter().flat_map(|b| b.paras.iter()).filter(|p| ids.contains(&p.id)).map(|p| p.id.clone()).collect();
+        if !mine.is_empty() {
+            by_section.push((sec.id.clone(), mine));
+        }
+    }
+    let (s2, c2) = (s.clone(), own(&c));
+    tokio::spawn(async move {
+        let _held = (held, holds);
+        use futures_util::StreamExt;
+        let (sr, cr) = (&s2, &c2);
+        let errors: Vec<String> = futures_util::stream::iter(by_section.into_iter().map(|(sec, ids)| async move { write_section(sr, cr, &sec, &ids).await }))
+            .buffer_unordered(3)
+            .collect::<Vec<Vec<String>>>()
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+        // whatever did not land is not busy any more
+        let _ = with_sk(&c2.dir, |sess| {
+            if let Some(k) = sess.skeleton.as_mut() {
+                for p in k.paras_mut().filter(|p| p.busy.as_deref() == Some("write")) {
+                    p.busy = None;
+                }
+            }
+            Ok(())
+        })
+        .await;
+        end_job(&c2.dir, if errors.is_empty() { Ok(()) } else { Err(errors.join("；")) }).await;
+    });
+    reply(&c, &sess)
+}
+
+/// The paragraphs `ids` of section `sec`, one after the other; then the program's jump check on
+/// the blocks written (the repair task says why and how to fix, one call). Returns the errors.
+async fn write_section(s: &Shared, c: &Ctx, _sec: &str, ids: &[String]) -> Vec<String> {
+    let mut errors = vec![];
+    let mut blocks: Vec<String> = vec![];
+    for id in ids {
+        let Ok(sess) = load(&c.dir) else { break };
+        let Some(k) = sess.skeleton.clone() else { break };
+        // moved or removed meanwhile: written where it is now, or not at all
+        let (Some(p), Some(section)) = (k.para(id).cloned(), k.section_of(id).cloned()) else { continue };
+        let section_paras: Vec<&sk::Para> = section.blocks.iter().flat_map(|b| b.paras.iter()).collect();
+        let at = section_paras.iter().position(|x| x.id == *id).unwrap_or(0);
+        let earlier: Vec<String> = section_paras[..at].iter().map(|x| x.text.clone()).filter(|t| !t.trim().is_empty()).collect();
+        let mut env = super::compose_env(s, c, &sess, sk::old_section(&section), None).await;
+        // the other sections' text, for the notation checks
+        env.other_drafts = k.sections.iter().filter(|x| x.id != section.id).map(|x| x.blocks.iter().flat_map(|b| b.paras.iter()).map(|p| p.text.clone()).collect::<Vec<_>>().join("\n\n")).collect();
+        let more = skp::write_more(&k, id);
+        let r = super::compose_one(s, c, &sess, &env, &skp::outline_para(&p), at, section_paras.len(), &earlier, &more).await;
+        if r.is_err() {
+            errors.push(format!("{id}：{}", r.as_ref().err().cloned().unwrap_or_default()));
+        }
+        let _ = with_sk(&c.dir, |sess| {
+            let Some(k) = sess.skeleton.as_mut() else { return Ok(()) };
+            let block = k.block_of(id).map(|b| b.id.clone());
+            if let Some(x) = k.para_mut(id) {
+                x.busy = None;
+                if let Ok((d, _)) = &r {
+                    x.text = d.text.clone();
+                    x.problems = d.problems.clone();
+                    x.state = sk::State::Text;
+                    x.jump = None;
+                }
+            }
+            if let Some(j) = k.job.as_mut() {
+                j.done += 1;
+            }
+            if let Some(b) = block.filter(|b| !blocks.contains(b)) {
+                blocks.push(b);
+            }
+            Ok(())
+        })
+        .await;
+    }
+    // too far from the paragraph before: the program finds them, the model only says why
+    let k = load(&c.dir).ok().and_then(|x| x.skeleton);
+    let Some(k) = k else { return errors };
+    let cands: Vec<String> = blocks.iter().flat_map(|b| skp::jump_candidates(&k, b)).collect();
+    if !cands.is_empty() {
+        let prompt = skp::jump_prompt(&k, &cands);
+        if let Ok((r, _)) = engine::structured(&engines(s), skp::REPAIR_TASK, &prompt, skp::repair_schema(), skp::parse_repair).await {
+            let _ = with_sk(&c.dir, |sess| {
+                if let Some(k) = sess.skeleton.as_mut() {
+                    skp::apply_jumps(k, r, &cands);
+                }
+                Ok(())
+            })
+            .await;
+        }
+    }
+    errors
 }

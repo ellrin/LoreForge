@@ -2208,6 +2208,189 @@ fn bank_section(s: &str) -> &str {
 /// The record's text given to each paragraph (a long record is cut).
 const FACTS_CHARS: usize = 12_000;
 
+/// What drafting the paragraphs of one section needs, loaded once: the journal's habits, the
+/// author's rules and guard, the notation registry, the record's facts, the other drafts.
+struct ComposeEnv {
+    /// One of the SECTIONS, or "Abstract".
+    pub section: String,
+    is_abstract: bool,
+    words: (usize, usize),
+    range: Option<lore_notation::punct::ParagraphRange>,
+    guard: lore_notation::punct::Guard,
+    venue_extra: String,
+    notation: lore_notation::Notation,
+    check_opt: lore_notation::CheckOptions,
+    style: String,
+    mat: Material,
+    facts: String,
+    known_values: String,
+    /// The other sections' text: context for the notation checks.
+    pub other_drafts: Vec<String>,
+    guide: Vec<pc_core::patterns::Pattern>,
+    pub engine: Option<EngineChoice>,
+}
+
+/// Load the [`ComposeEnv`] of `section` for `sess`.
+async fn compose_env(s: &Shared, c: &Ctx, sess: &Session, section: &str, engine: Option<EngineChoice>) -> ComposeEnv {
+    let is_abstract = section == "Abstract";
+    let venue = topaper::venue_of(c);
+    let words = if is_abstract { topaper::abstract_words(&venue) } else { (60, 160) };
+    // the author's punctuation, sentence and paragraph rules (style/checks.toml; off by default)
+    let rules = s.loaded.read().await.profile.as_ref().map(|p| p.rules.clone()).unwrap_or_default();
+    let guard = crate::guard::load(&c.ws, Some(&c.dir), &rules);
+    let range = if is_abstract { None } else { crate::guard::paragraph_ranges(&c.ws).get(section).copied() };
+    // the journal's habits for this section (期刊寫法), and the abstract's own rules
+    let venue_extra = venue.section(section) + &if is_abstract { topaper::abstract_rules(&venue) } else { String::new() };
+    let notation = crate::notation::load(&c.ws, &c.dir);
+    let check_opt = crate::notation::options(&c.ws, &c.dir);
+    let style = style_text(&c.ws) + &crate::notation::describe(&notation, check_opt.ref_words.as_ref());
+    let (mat, _) = material_of(c);
+    // the record's facts (counts, datasets, settings) and every results table: what the draft
+    // used to ask the author with [Author to confirm …] although the record had it
+    let facts = dp::record_facts(sess, &ds::records_text(&c.dir, &sess.records, usize::MAX), FACTS_CHARS) + &material::describe(&Material { floats: mat.floats.clone(), refs: vec![] });
+    // the values the record already has: a sentence of only these never waits for a pending result
+    let known_values = ds::records_text(&c.dir, &sess.records, usize::MAX) + &sess.tables.iter().map(|t| t.tsv()).collect::<Vec<_>>().join("\n");
+    // Other sections already drafted count as context for the notation checks.
+    let other_drafts: Vec<String> = sess.drafts.iter().filter(|d| d.section != section).map(|d| d.paras.iter().map(|p| p.text.clone()).collect::<Vec<_>>().join("\n\n")).collect();
+    let (guide, _) = pc_core::patterns::load(&c.ws);
+    ComposeEnv { section: section.to_string(), is_abstract, words, range, guard, venue_extra, notation, check_opt, style, mat, facts, known_values, other_drafts, guide, engine }
+}
+
+/// One paragraph, `k` of `count` in its section, through the phrase bank with every check of the
+/// draft step (the notation registry with one rewrite, pending marks, record ids, banned words,
+/// punctuation and sentence length, the abstract's length) and the guard's safe fixes after.
+/// `earlier` = this section's paragraphs before it; `more` = extra instructions (骨架: the
+/// block's purpose, the links to the paragraphs around it). Returns the paragraph and the
+/// symbols the registry does not have.
+async fn compose_one(s: &Shared, c: &Ctx, sess: &Session, env: &ComposeEnv, p: &ds::OutlinePara, k: usize, count: usize, earlier: &[String], more: &str) -> Result<(ds::DraftPara, Vec<String>), String> {
+    let section = env.section.as_str();
+    let is_abstract = env.is_abstract;
+    let (min_words, max_words) = env.words;
+    // the guide's sentence structures that fit this paragraph (not the author's voice)
+    let guide_block = pc_core::patterns::block(&pc_core::patterns::select(&env.guide, &pc_core::patterns::Situation { section, function: &p.kind, index: k, count }));
+    let points = if p.en.is_empty() { p.zh.clone() } else { p.en.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
+    // within the section's range, a different slice for each paragraph (no three alike)
+    let (min_words, max_words) = env.range.map(|r| r.aim(k)).unwrap_or((min_words, max_words));
+    let req = ComposeRequest {
+        points,
+        section: bank_section(section).into(),
+        function: None,
+        min_words,
+        max_words,
+        language: "en".into(),
+        before: earlier.last().cloned(),
+        after: None,
+        key_value: Some(c.key_value.clone()).filter(|k| !k.is_empty()),
+        index: Some(k),
+        count: Some(count),
+    };
+    let (pts, refs, prompt) = {
+        let l = s.loaded.read().await;
+        let Some(prof) = &l.profile else { return Err("profile not loaded".into()) };
+        let pts = compose::parse_points(&req.points);
+        let refs = compose::reference_phrases(prof, &req, &pts);
+        // the style notes go in through compose_extra below, not twice
+        let prompt = compose::with_patterns(compose::build_prompt(prof, &req, &pts, &refs, ""), &guide_block);
+        (pts, refs, prompt)
+    };
+    let extra = dp::compose_extra(p, sess, section, &env.style, earlier, &env.mat.refs, &env.facts) + more + &env.venue_extra + &env.guard.rule.prompt_line();
+    let mut feedback = extra.clone();
+    let mut done: Option<ds::DraftPara> = None;
+    let mut new_symbols: Vec<String> = vec![];
+    let mut err = String::new();
+    for _ in 0..2 {
+        let reply = writing_complete(s, "pc-compose-paragraph", env.engine, &prompt, Some(&feedback), Some(compose::reply_schema())).await?;
+        match compose::parse_draft(&reply) {
+            Ok(mut d) => {
+                let l = s.loaded.read().await;
+                let Some(prof) = &l.profile else { break };
+                let check = compose::check_draft(prof, &req, &pts, &refs, &mut d);
+                drop(l);
+                // ≤, −, ⁺… as LaTeX before the checks, so pdflatex never stops on them
+                let text = lore_notation::unicode::prose_to_latex(&d.sentences.iter().map(|x| x.text.trim()).collect::<Vec<_>>().join(" "));
+                // dependency marks only for the results this paragraph states or depends on
+                // not in the abstract and conclusion: a conclusion there quoting a known number still rests on the result
+                let known = if matches!(section, "Abstract" | "Conclusion") { "" } else { env.known_values.as_str() };
+                // a pending result the outline names must be marked: checked before the pruning
+                let unmarked_before = pd::missing_marks(sess, &p.pending, &text);
+                let text = pd::prune_deps(sess, &p.pending, &text, known);
+                let over = pd::overmarked(&text);
+                // The registry's checks, in the context of the paper and the drafts so far.
+                let mut ctx_texts = env.other_drafts.clone();
+                // planned figures and tables the paper does not have yet: their labels resolve
+                ctx_texts.extend(sess.figures.iter().flat_map(|f| f.kept()).filter(|f| !env.mat.floats.iter().any(|x| x.id == f.label)).map(pc_core::draft::figures::placeholder));
+                ctx_texts.push(earlier.join("\n\n"));
+                let nc = crate::notation::check(&c.dir, &env.notation, &env.check_opt, &ctx_texts, &text);
+                let mut problems = check.problems.clone();
+                problems.extend(nc.shown.iter().map(|m| format!("對照表：{m}")));
+                // a pending result the outline names must be marked, never written as a number
+                let unmarked = unmarked_before;
+                problems.extend(unmarked.iter().map(|id| format!("待補 {id} 沒有標記")));
+                // the record's ids (E1, T2…) are the discussion's, never the paper's
+                // only ids the record really has (a vertebra "T12" or a slice "P1" in a paper is prose)
+                let known = ca::known_ids(sess);
+                let leaked: Vec<String> = dp::leaked_ids(&text).into_iter().filter(|id| known.contains(id)).collect();
+                problems.extend(leaked.iter().map(|id| format!("草稿寫出了記錄的編號 {id}")));
+                // the abstract's word limit is the journal's, counted, not trusted
+                let n_words = pc_core::text::strip_latex(&text).split_whitespace().count();
+                let too_long = is_abstract && n_words > max_words;
+                if too_long {
+                    problems.push(format!("摘要 {n_words} 字，超過 {max_words}"));
+                }
+                problems.extend(over.iter().map(|(id, n)| format!("待補 {id} 標了 {n} 句依賴句")));
+                // his own words from the interview: a word he banned is a hard failure
+                let banned = pc_core::draft::notes::banned_in(&pc_core::draft::notes::for_paragraph(sess, section, p), &text);
+                problems.extend(banned.iter().map(|w| format!("用了訪談裡說不要的「{w}」")));
+                // the punctuation and sentence rules, and the section's paragraph length
+                let broken = env.guard.check(&text);
+                let length = env.range.and_then(|r| r.problem(&text));
+                if (check.ok() && nc.blocking.is_empty() && unmarked.is_empty() && leaked.is_empty() && !too_long && over.is_empty() && broken.is_empty() && length.is_none() && banned.is_empty()) || done.is_some() {
+                    if let Some(l) = &length {
+                        problems.push(format!("段落長度：{l}"));
+                    }
+                    new_symbols.extend(nc.new_symbols.clone());
+                    done = Some(ds::DraftPara { pending: lore_notation::pending::ids(&text).into_iter().collect(), para: p.id.clone(), text, problems });
+                    break;
+                }
+                let mut why: Vec<String> = check.problems.clone();
+                why.extend(nc.blocking.iter().cloned());
+                why.extend(unmarked.iter().map(|id| format!("pending result {id} is not marked: use \\pending{{{id}}}{{…}} for its number and end every sentence that depends on it with \\pendingdep{{{id}}}")));
+                why.extend(leaked.iter().map(|id| format!("the text names the record's id {id}: the reader never saw the record; describe the experiment or table in words (or \\ref the table)")));
+                why.extend(over.iter().map(|(id, n)| format!("{n} sentences end in \\pendingdep{{{id}}}: keep it only on the sentences that state {id}'s value or conclude from it, at most {}; a sentence with only known numbers is not dependent", pd::MAX_DEPS)));
+                if !broken.is_empty() {
+                    why.push(lore_notation::punct::repair_note(&broken));
+                }
+                if !banned.is_empty() {
+                    why.push(format!("the author said never to use: {}", banned.join(", ")));
+                }
+                if let Some(l) = &length {
+                    why.push(format!("this paragraph has {l}"));
+                }
+                if too_long {
+                    why.push(format!("the abstract has {n_words} words; the journal allows at most {max_words}: cut it to {min_words}–{max_words} words"));
+                }
+                feedback = format!("{extra}\nYour previous answer had problems: {}. Fix them.", why.join("; "));
+                new_symbols.extend(nc.new_symbols.clone());
+                done = Some(ds::DraftPara { pending: lore_notation::pending::ids(&text).into_iter().collect(), para: p.id.clone(), text, problems });
+            }
+            Err(e) => {
+                err = e;
+                feedback = format!("{extra}\nReply with the JSON object only.");
+            }
+        }
+    }
+    match done {
+        Some(mut d) => {
+            // after the repair: the safe mechanical fixes; what is left is flagged, never hidden
+            let (t, still) = env.guard.finish(&d.text);
+            d.text = t;
+            d.problems.extend(crate::guard::flags(&still));
+            Ok((d, new_symbols))
+        }
+        None => Err(format!("{}：{err}", p.id)),
+    }
+}
+
 /// Draft one section paragraph by paragraph through the phrase bank (the
 /// same tone lock as 寫作), with the outline's unit plan, the claim register
 /// and the author's style notes as extra instructions.
@@ -2218,7 +2401,6 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
         return bad("未知的章節");
     }
     let sess = tri!(load(&c.dir));
-    let venue = topaper::venue_of(&c);
     let paras: Vec<ds::OutlinePara> = if is_abstract {
         if sess.claims.is_empty() && sess.outline.is_empty() {
             return bad("先完成主張登記與大綱");
@@ -2230,157 +2412,23 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
     if paras.is_empty() {
         return bad("這個章節還沒有大綱");
     }
-    let (min_words, max_words) = if is_abstract { topaper::abstract_words(&venue) } else { (60, 160) };
-    // the author's punctuation, sentence and paragraph rules (style/checks.toml; off by default)
-    let rules = s.loaded.read().await.profile.as_ref().map(|p| p.rules.clone()).unwrap_or_default();
-    let guard = crate::guard::load(&c.ws, Some(&c.dir), &rules);
-    let range = if is_abstract { None } else { crate::guard::paragraph_ranges(&c.ws).get(&b.section).copied() };
-    // the journal's habits for this section (期刊寫法), and the abstract's own rules
-    let venue_extra = venue.section(&b.section) + &if is_abstract { topaper::abstract_rules(&venue) } else { String::new() };
     if !has_writing_engine(&s, b.engine).await {
         return bad("沒有可用的寫作引擎");
     }
-    let notation = crate::notation::load(&c.ws, &c.dir);
-    let check_opt = crate::notation::options(&c.ws, &c.dir);
-    let style = style_text(&c.ws) + &crate::notation::describe(&notation, check_opt.ref_words.as_ref());
-    let (mat, _) = material_of(&c);
-    // the record's facts (counts, datasets, settings) and every results table: what the draft
-    // used to ask the author with [Author to confirm …] although the record had it
-    let facts = dp::record_facts(&sess, &ds::records_text(&c.dir, &sess.records, usize::MAX), FACTS_CHARS)
-        + &material::describe(&Material { floats: mat.floats.clone(), refs: vec![] });
-    // the values the record already has: a sentence of only these never waits for a pending result
-    let known_values = ds::records_text(&c.dir, &sess.records, usize::MAX) + &sess.tables.iter().map(|t| t.tsv()).collect::<Vec<_>>().join("\n");
-    // Other sections already drafted count as context for the notation checks.
-    let other_drafts: Vec<String> = sess.drafts.iter().filter(|d| d.section != b.section).map(|d| d.paras.iter().map(|p| p.text.clone()).collect::<Vec<_>>().join("\n\n")).collect();
+    if s.loaded.read().await.profile.is_none() {
+        return (StatusCode::SERVICE_UNAVAILABLE, "profile not loaded").into_response();
+    }
+    let env = compose_env(&s, &c, &sess, &b.section, b.engine).await;
     let mut new_symbols: Vec<String> = vec![];
     let mut out: Vec<ds::DraftPara> = vec![];
-    let (guide, _) = pc_core::patterns::load(&c.ws);
     for (k, p) in paras.iter().enumerate() {
-        // the guide's sentence structures that fit this paragraph (not the author's voice)
-        let guide_block = pc_core::patterns::block(&pc_core::patterns::select(&guide, &pc_core::patterns::Situation { section: &b.section, function: &p.kind, index: k, count: paras.len() }));
-        let points = if p.en.is_empty() { p.zh.clone() } else { p.en.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
-        // within the section's range, a different slice for each paragraph (no three alike)
-        let (min_words, max_words) = range.map(|r| r.aim(k)).unwrap_or((min_words, max_words));
-        let req = ComposeRequest {
-            points,
-            section: bank_section(&b.section).into(),
-            function: None,
-            min_words,
-            max_words,
-            language: "en".into(),
-            before: out.last().map(|d| d.text.clone()),
-            after: None,
-            key_value: Some(c.key_value.clone()).filter(|k| !k.is_empty()),
-            index: Some(k),
-            count: Some(paras.len()),
-        };
-        let (pts, refs, prompt) = {
-            let l = s.loaded.read().await;
-            let Some(prof) = &l.profile else { return (StatusCode::SERVICE_UNAVAILABLE, "profile not loaded").into_response() };
-            let pts = compose::parse_points(&req.points);
-            let refs = compose::reference_phrases(prof, &req, &pts);
-            // the style notes go in through compose_extra below, not twice
-            let prompt = compose::with_patterns(compose::build_prompt(prof, &req, &pts, &refs, ""), &guide_block);
-            (pts, refs, prompt)
-        };
         let earlier: Vec<String> = out.iter().map(|d| d.text.clone()).collect();
-        let extra = dp::compose_extra(p, &sess, &b.section, &style, &earlier, &mat.refs, &facts) + &venue_extra + &guard.rule.prompt_line();
-        let mut feedback = extra.clone();
-        let mut done = None;
-        let mut err = String::new();
-        for _ in 0..2 {
-            let reply = match writing_complete(&s, "pc-compose-paragraph", b.engine, &prompt, Some(&feedback), Some(compose::reply_schema())).await {
-                Ok(r) => r,
-                Err(e) => return bad(&e),
-            };
-            match compose::parse_draft(&reply) {
-                Ok(mut d) => {
-                    let l = s.loaded.read().await;
-                    let Some(prof) = &l.profile else { break };
-                    let check = compose::check_draft(prof, &req, &pts, &refs, &mut d);
-                    drop(l);
-                    // ≤, −, ⁺… as LaTeX before the checks, so pdflatex never stops on them
-                    let text = lore_notation::unicode::prose_to_latex(&d.sentences.iter().map(|x| x.text.trim()).collect::<Vec<_>>().join(" "));
-                    // dependency marks only for the results this paragraph states or depends on
-                    // not in the abstract and conclusion: a conclusion there quoting a known number still rests on the result
-                    let known = if matches!(b.section.as_str(), "Abstract" | "Conclusion") { "" } else { known_values.as_str() };
-                    // a pending result the outline names must be marked: checked before the pruning
-                    let unmarked_before = pd::missing_marks(&sess, &p.pending, &text);
-                    let text = pd::prune_deps(&sess, &p.pending, &text, known);
-                    let over = pd::overmarked(&text);
-                    // The registry's checks, in the context of the paper and the drafts so far.
-                    let mut ctx_texts = other_drafts.clone();
-                    // planned figures and tables the paper does not have yet: their labels resolve
-                    ctx_texts.extend(sess.figures.iter().flat_map(|f| f.kept()).filter(|f| !mat.floats.iter().any(|x| x.id == f.label)).map(pc_core::draft::figures::placeholder));
-                    ctx_texts.push(out.iter().map(|x| x.text.clone()).collect::<Vec<_>>().join("\n\n"));
-                    let nc = crate::notation::check(&c.dir, &notation, &check_opt, &ctx_texts, &text);
-                    let mut problems = check.problems.clone();
-                    problems.extend(nc.shown.iter().map(|m| format!("對照表：{m}")));
-                    // a pending result the outline names must be marked, never written as a number
-                    let unmarked = unmarked_before;
-                    problems.extend(unmarked.iter().map(|id| format!("待補 {id} 沒有標記")));
-                    // the record's ids (E1, T2…) are the discussion's, never the paper's
-                    // only ids the record really has (a vertebra "T12" or a slice "P1" in a paper is prose)
-                    let known = ca::known_ids(&sess);
-                    let leaked: Vec<String> = dp::leaked_ids(&text).into_iter().filter(|id| known.contains(id)).collect();
-                    problems.extend(leaked.iter().map(|id| format!("草稿寫出了記錄的編號 {id}")));
-                    // the abstract's word limit is the journal's, counted, not trusted
-                    let n_words = pc_core::text::strip_latex(&text).split_whitespace().count();
-                    let too_long = is_abstract && n_words > max_words;
-                    if too_long {
-                        problems.push(format!("摘要 {n_words} 字，超過 {max_words}"));
-                    }
-                    problems.extend(over.iter().map(|(id, n)| format!("待補 {id} 標了 {n} 句依賴句")));
-                    // his own words from the interview: a word he banned is a hard failure
-                    let banned = pc_core::draft::notes::banned_in(&pc_core::draft::notes::for_paragraph(&sess, &b.section, p), &text);
-                    problems.extend(banned.iter().map(|w| format!("用了訪談裡說不要的「{w}」")));
-                    // the punctuation and sentence rules, and the section's paragraph length
-                    let broken = guard.check(&text);
-                    let length = range.and_then(|r| r.problem(&text));
-                    if (check.ok() && nc.blocking.is_empty() && unmarked.is_empty() && leaked.is_empty() && !too_long && over.is_empty() && broken.is_empty() && length.is_none() && banned.is_empty()) || done.is_some() {
-                        if let Some(l) = &length {
-                            problems.push(format!("段落長度：{l}"));
-                        }
-                        new_symbols.extend(nc.new_symbols.clone());
-                        done = Some(ds::DraftPara { pending: lore_notation::pending::ids(&text).into_iter().collect(), para: p.id.clone(), text, problems });
-                        break;
-                    }
-                    let mut why: Vec<String> = check.problems.clone();
-                    why.extend(nc.blocking.iter().cloned());
-                    why.extend(unmarked.iter().map(|id| format!("pending result {id} is not marked: use \\pending{{{id}}}{{…}} for its number and end every sentence that depends on it with \\pendingdep{{{id}}}")));
-                    why.extend(leaked.iter().map(|id| format!("the text names the record's id {id}: the reader never saw the record; describe the experiment or table in words (or \\ref the table)")));
-                    why.extend(over.iter().map(|(id, n)| format!("{n} sentences end in \\pendingdep{{{id}}}: keep it only on the sentences that state {id}'s value or conclude from it, at most {}; a sentence with only known numbers is not dependent", pd::MAX_DEPS)));
-                    if !broken.is_empty() {
-                        why.push(lore_notation::punct::repair_note(&broken));
-                    }
-                    if !banned.is_empty() {
-                        why.push(format!("the author said never to use: {}", banned.join(", ")));
-                    }
-                    if let Some(l) = &length {
-                        why.push(format!("this paragraph has {l}"));
-                    }
-                    if too_long {
-                        why.push(format!("the abstract has {n_words} words; the journal allows at most {max_words}: cut it to {min_words}–{max_words} words"));
-                    }
-                    feedback = format!("{extra}\nYour previous answer had problems: {}. Fix them.", why.join("; "));
-                    new_symbols.extend(nc.new_symbols.clone());
-                    done = Some(ds::DraftPara { pending: lore_notation::pending::ids(&text).into_iter().collect(), para: p.id.clone(), text, problems });
-                }
-                Err(e) => {
-                    err = e;
-                    feedback = format!("{extra}\nReply with the JSON object only.");
-                }
+        match compose_one(&s, &c, &sess, &env, p, k, paras.len(), &earlier, "").await {
+            Ok((d, syms)) => {
+                new_symbols.extend(syms);
+                out.push(d);
             }
-        }
-        match done {
-            Some(mut d) => {
-                // after the repair: the safe mechanical fixes; what is left is flagged, never hidden
-                let (t, still) = guard.finish(&d.text);
-                d.text = t;
-                d.problems.extend(crate::guard::flags(&still));
-                out.push(d)
-            }
-            None => return bad(&format!("{}：{err}", p.id)),
+            Err(e) => return bad(&e),
         }
     }
     let _g = LOCK.lock().await;

@@ -86,3 +86,22 @@
 
 測試：`cargo test -p pc-core skeleton` → 28 passed；`cargo test -p pc-server --test skeleton_api` → 1 passed
 （回答 → 回填中移動段落 → 要點落在新位置、移動保留；略過；「還沒有」不追問；回填中刪段 → 丟掉；框上的 note；兩次 GET 同 rev）。
+
+第 4 段 commit：cafbc20。
+
+## 第 5 段：逐段文字
+
+- `draft.rs` 的逐章草稿拆成 `compose_env`（一章只讀一次：期刊寫法、作者規則與標點守門、對照表、記錄事實、其他章文字）與
+  `compose_one`（一段：句型庫、風格、`compose_extra`、待補標記、對照表檢查與一次重寫、標點／句長、unicode → LaTeX、
+  記錄編號外洩、禁用字、摘要長度，最後守門的安全修正）。舊的 `run_compose` 改成呼叫它們（HTTP 測試裡照舊跑過一次）。
+- `/write { id }`：段落 id → 重寫那一段（就算已有文字）；框、章、`all` → 只寫沒有文字的段落，已有文字的一個位元組都不動
+  （協調者說明 2，測試比對整段 JSON）。沒有可寫的 → 400。
+- 背景：章與章同時（最多 3），同一章依序（後一段看得到前面寫好的），每段寫完立刻落地（`busy = "write"` 清掉、`state = text`、
+  `job.done` +1）。段落在寫的途中被移動 → 寫到它現在的位置；被刪 → 不寫。
+- 提示多加：框的目的、這段的一行、`link_prev`／`link_next`（要寫出轉折）、下一段要說什麼（不要先說）。`skeleton::plan::outline_para`
+  把段落轉成舊大綱段落的形狀（say → zh、points → en），所以舊的檢查全部沿用。
+- 「跳」：每章寫完，程式先挑（跟上一段沒有共同的依據、圖表、六個字母以上的詞，也沒有 `link_prev`），有才叫一次修補任務只問原因與改法。
+- 寫法筆記：回答裡說的禁用字在那一段的文字裡被抓出來（測試：p3 有、p1 沒有）。
+- 尚未做：新符號（registry 沒有的）目前只出現在 `problems` 的「對照表：」訊息裡，骨架沒有另存 `new_symbols` 清單（舊流程的「登記符號」按鈕讀 drafts）。
+
+測試：`cargo test -p pc-core skeleton` → 30 passed；`cargo test -p pc-server --test skeleton_api` → 1 passed。
