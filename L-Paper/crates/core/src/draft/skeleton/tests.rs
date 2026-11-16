@@ -344,3 +344,80 @@ fn removing_a_paragraph_drops_its_open_questions_and_keeps_the_rest_on_the_block
     sk.apply(Op::Undo).unwrap();
     assert!(sk.thread(&other).is_some());
 }
+
+fn recorded() -> Session {
+    use crate::draft::figures::{FigurePlan, PlannedFloat, Status as FS};
+    use crate::draft::session::{Experiment, ResultTable, Thought};
+    let mut s = Session::default();
+    s.experiments = vec![
+        Experiment { id: "E1".into(), title: "Method A vs Method B".into(), result: "0.91 vs 0.87".into(), ..Default::default() },
+        Experiment { id: "E2".into(), title: "no result yet".into(), ..Default::default() },
+    ];
+    s.thoughts = vec![Thought { id: "H1".into(), text: "A 的先驗較強".into(), about: vec!["E1".into(), "E9".into()] }];
+    s.tables = vec![
+        ResultTable { id: "R1".into(), caption: "Main comparison".into(), from: vec!["E1".into()], ..Default::default() },
+        ResultTable { id: "R2".into(), caption: "External set".into(), from: vec!["E1".into()], ..Default::default() },
+    ];
+    s.figures = Some(FigurePlan {
+        items: vec![
+            PlannedFloat { id: "T1".into(), kind: "table".into(), label: "tab:main".into(), title: "主要比較".into(), supports: "A 較好".into(), evidence: vec!["R1".into(), "X7".into()], tool: "table".into(), status: FS::Kept, ..Default::default() },
+            PlannedFloat { id: "F1".into(), kind: "figure".into(), label: "fig:overview".into(), title: "整體流程".into(), tool: "flow".into(), status: FS::Proposed, ..Default::default() },
+            PlannedFloat { id: "F2".into(), kind: "figure".into(), label: "fig:cut".into(), title: "刪掉的".into(), tool: "plot".into(), status: FS::Removed, ..Default::default() },
+        ],
+        ..Default::default()
+    });
+    s
+}
+
+#[test]
+fn inventory_comes_from_the_record_and_the_figure_plan() {
+    let s = recorded();
+    let fresh = inventory::fresh(&s, &[("eq:loss".into(), "損失函數".into())]);
+    let kinds: Vec<(&str, &str, &str, bool)> = fresh.iter().map(|(src, i)| (src.as_str(), i.kind.as_str(), i.label.as_str(), i.keep)).collect();
+    assert_eq!(
+        kinds,
+        [
+            ("fig:T1", "table", "tab:main", true),
+            ("fig:F1", "flow", "fig:overview", true),
+            ("fig:F2", "figure", "fig:cut", false),
+            ("tab:R2", "table", "tab:external-set", true),
+            ("exp:E1", "finding", "", true),
+            ("thought:H1", "finding", "", true),
+            ("eq:eq:loss", "equation", "eq:loss", true),
+        ]
+    );
+    assert_eq!(fresh[0].1.evidence, ["R1"], "an id the record does not have is dropped");
+    assert_eq!(fresh[5].1.evidence, ["H1", "E1"]);
+    let mut sk = Skeleton::default();
+    inventory::merge(&mut sk, fresh.clone());
+    assert_eq!(sk.inventory.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["v1", "v2", "v3", "v4", "v5", "v6", "v7"]);
+    // the same list again: same ids
+    inventory::merge(&mut sk, fresh.clone());
+    assert_eq!(sk.inventory.len(), 7);
+    assert_eq!(sk.inventory[6].id, "v7");
+    // the author chooses, adds an algorithm; a later record change adds one item and drops one
+    inventory::choose(&mut sk, &["v1".into(), "v5".into()], vec![inventory::Added { kind: "algorithm".into(), title: "Training loop".into(), note: "".into() }, inventory::Added { kind: "figure".into(), title: "失敗案例".into(), note: "作者新增".into() }]).unwrap();
+    let alg = sk.inventory.iter().find(|i| i.kind == "algorithm").unwrap();
+    assert_eq!((alg.id.as_str(), alg.label.as_str(), alg.tool.as_str(), alg.by_author, alg.pending, alg.keep), ("v8", "alg:training-loop", "algorithm", true, true, true));
+    assert_eq!(sk.inventory.iter().find(|i| i.id == "v9").unwrap().label, "fig:v9", "a Chinese title: the id as the label");
+    assert!(inventory::choose(&mut sk, &[], vec![inventory::Added { kind: "poem".into(), title: "x".into(), note: "".into() }]).is_err());
+    let mut s2 = s.clone();
+    s2.thoughts.clear();
+    s2.experiments.push(crate::draft::session::Experiment { id: "E3".into(), title: "Ablation".into(), result: "-0.02".into(), ..Default::default() });
+    let keep_before: Vec<(String, bool)> = sk.inventory.iter().map(|i| (i.id.clone(), i.keep)).collect();
+    inventory::merge(&mut sk, inventory::fresh(&s2, &[("eq:loss".into(), "損失函數".into())]));
+    assert!(sk.inventory.iter().all(|i| i.id != "v6"), "the thought is gone from the record");
+    let new = sk.inventory.iter().find(|i| i.title == "Ablation").unwrap();
+    assert_eq!(new.id, "v10");
+    for (id, keep) in keep_before.iter().filter(|(id, _)| id != "v6") {
+        assert_eq!(sk.inventory.iter().find(|i| &i.id == id).unwrap().keep, *keep, "{id}: the author's choice stays");
+    }
+    let b = inventory::block(&sk);
+    assert!(b.contains("tab:main 主要比較") && !b.contains("tab:external-set"), "{b}");
+}
+
+#[test]
+fn targets_follow_the_journal() {
+    let p = crate::venueprofile::Profile { figure_target: Some([4, 7]), table_target: Some([2, 4]), equations: crate::venueprofile::Stat { mean: 5.2, min: 3.0, max: 10.0 }, ..Default::default() };
+    assert_eq!(inventory::targets(&p), Targets { figure: [4, 7], table: [2, 4], equation: [3, 6] });
+}

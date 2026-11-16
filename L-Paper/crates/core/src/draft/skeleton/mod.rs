@@ -19,6 +19,7 @@
 //! - [`style`]: 風格對照, the program's numbers of the written text next to the author's.
 
 pub mod convert;
+pub mod inventory;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

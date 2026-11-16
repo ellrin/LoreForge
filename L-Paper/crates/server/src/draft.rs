@@ -74,6 +74,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/revisions/{id}/status", post(revision_status))
         .route("/api/papers/{name}/draft/pending", get(pending_list).put(put_pending))
         .route("/api/papers/{name}/draft/pending/{id}/fill", post(fill_pending))
+        .merge(skeleton::routes())
 }
 
 type Resp = axum::response::Response;
@@ -2945,6 +2946,9 @@ fn open_fill(c: &Ctx, sess: &mut Session, k: usize) -> Vec<String> {
     sess.start_group(&gid);
     lens_for(&c.ws, sess).map(|l| mark_prep(sess, &l, std::slice::from_ref(&gid))).unwrap_or_default()
 }
+
+// 骨架 (after `tri!`: the module uses it)
+mod skeleton;
 
 #[cfg(test)]
 mod tests {
