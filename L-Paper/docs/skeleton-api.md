@@ -120,3 +120,15 @@ The page polls GET every 800 ms while `job` is set or any paragraph is `busy` or
     "rows": [ { "id": "sentence_words", "label": "每句字數", "mine": [17, 25], "draft": 31.5, "ok": false } ],
     "paras": [ { "id": "p9", "issues": ["句長變化太小"] } ] } ] }
 ```
+
+## As built (differences worth knowing)
+
+- A `job` that failed stays in the view with `error` set until the next action clears it; the page stops polling on it.
+- `/convert` of a session that has no outline yet is a background job (`job.kind = "convert"`, `exists` still false
+  in the answer). The interview's answers come over as `note` threads with status `done`.
+- `/refine` works in the background: the answer has `busy = "refine"` on the paragraph, the `refine` thread comes later.
+  When its last change is taken or dropped the thread is `done` with a one-line conclusion.
+- Removing a whole block moves its finished threads to the section id.
+- An answer folded into a paragraph that already has text adds the problem `有新的回答還沒寫進文字` to it
+  (gone when the paragraph is written again).
+- Numbers in `StyleReport` are floats; `mine` is null when the author's side is not known, and `[x, x]` for one typical value.

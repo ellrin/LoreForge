@@ -62,7 +62,7 @@ const PCSkeleton = (() => {
     grew: new Set(),            // keys that just appeared (one highlight)
     rose: new Set(),            // frames that just firmed up or had their last question answered
     inflight: 0, chain: Promise.resolve(), seq: 0, tmp: 0, poll: null, drag: null, style: null, inline: false,
-    pendingCommit: null, redrawing: false, ro: null,
+    pendingCommit: null, redrawing: false, ro: null, jobSince: null, clock: null,
   });
   let S = fresh();
 
@@ -110,8 +110,10 @@ const PCSkeleton = (() => {
         const w = was.get(b.id);
         if (w && (STATES.indexOf(levelOf(b)) > w[0] || (w[1] > 0 && openIn(b, v) === 0))) S.rose.add(b.id);
       }
-      if (old.job && !v.job && old.job.kind === "plan") S.tab = "skeleton";
     }
+    // the skeleton has just been made (planned, planned again, or converted): show it
+    if (v.exists && old && (!old.exists || (old.job && !v.job && (old.job.kind === "plan" || old.job.kind === "convert")))) S.tab = "skeleton";
+    if (v.job && !v.job.error) S.jobSince ??= Date.now(); else S.jobSince = null;
     if (v.job?.error && v.job.error !== old?.job?.error) toast(v.job.error, { err: true });
     S.view = v;
     if (!v.exists && S.tab !== "inventory") S.tab = "inventory";
@@ -956,7 +958,11 @@ const PCSkeleton = (() => {
     }
     bar.append(tabs);
     if (v.job?.error) bar.append(h("span", "chip err", `${v.job.label}：${v.job.error}`));
-    else if (v.job) bar.append(h("span", "chip busy sk-job", `${v.job.label}${v.job.total ? ` ${v.job.done}/${v.job.total}` : ""}`));
+    else if (v.job) {
+      // a long job counts its seconds, so waiting never looks like being stuck (tick() keeps it current)
+      const c = h("span", "chip busy sk-job", jobText());
+      bar.append(c);
+    }
     bar.append(h("span", "sk-grow"));
     if (v.exists && S.tab === "skeleton") {
       const undo = ico("undo", "復原 ⌘Z", () => op({ op: "undo" }), "ico");
@@ -981,6 +987,14 @@ const PCSkeleton = (() => {
     }
     return bar;
   }
+
+  const jobText = () => {
+    const j = S.view?.job;
+    if (!j) return "";
+    const sec = S.jobSince ? Math.round((Date.now() - S.jobSince) / 1000) : 0;
+    return `${j.label}${j.total > 1 ? ` ${j.done}/${j.total}` : ""}${sec >= 3 ? `　${sec} 秒` : ""}`;
+  };
+  const tick = () => { const c = S.root?.querySelector(".sk-job"); if (c) c.textContent = jobText(); };
 
   function build() {
     const v = S.view;
@@ -1033,8 +1047,10 @@ const PCSkeleton = (() => {
 
   function mount(root, opt) {
     clearTimeout(S.poll);
+    clearInterval(S.clock);
     S.ro?.disconnect();
     S = fresh();
+    S.clock = setInterval(tick, 1000);
     S.root = root;
     S.call = opt.call;
     root.replaceChildren();
@@ -1062,7 +1078,7 @@ const PCSkeleton = (() => {
       box.append(hd, root);
       dlg.append(box);
       document.body.append(dlg);
-      dlg.addEventListener("close", () => clearTimeout(S.poll));
+      dlg.addEventListener("close", () => { clearTimeout(S.poll); clearInterval(S.clock); });
     }
     const base = `/api/papers/${encodeURIComponent(paper)}/draft/skeleton`;
     dlg.showModal();

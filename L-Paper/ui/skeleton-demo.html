@@ -166,7 +166,23 @@ async function real() {
   let note = "";
   try {
     if (step === "plan") { click(".sk-invfoot .btn.primary, .sk-invfoot .btn"); await until(() => view().exists && !view().job); note = `${paras().length} 段 ${view().threads.length} 題 next=${view().next}`; }
-    else if (step === "answer") {
+    else if (step === "convert") {
+      const b = [...document.querySelectorAll(".sk-invfoot .btn")].find((x) => x.textContent === "改用骨架");
+      if (!b) throw new Error("沒有「改用骨架」");
+      b.click();
+      await until(() => view().exists && !view().job, 30000);
+      await wait(300);
+      note = `分頁 ${S().tab} 段 ${paras().length} 題 ${view().threads.filter((t) => t.status === "open").length} 帶過來的回答 ${view().threads.filter((t) => t.kind === "note").length} 看得到骨架 ${!!document.querySelector(".sk-canvas .sk-para")}`;
+    } else if (step === "late") {
+      // an answer after the text was written: the paragraph says its text is older, with a way to rewrite
+      const q = document.querySelector(".sk-thread.sk-active");
+      const anchor = q.dataset.anchor;
+      q.querySelector(".sk-opt").click();
+      await wait(150);
+      await idle();
+      const p = paras().find((x) => x.id === anchor);
+      note = `段 ${anchor} 有文字 ${!!p.text} 標記 ${p.problems.join("／")} 重寫鈕 ${!!document.querySelector(`[data-id="${anchor}"] .sk-inlinebtn`)}`;
+    } else if (step === "answer") {
       const before = view().threads.filter((t) => t.status === "done").length;
       const q = document.querySelector(".sk-thread.sk-active");
       const qid = q.dataset.thread;

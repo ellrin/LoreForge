@@ -167,7 +167,8 @@ default = "claude:sonnet"
 label = "排骨架"
 needs = { json = true }
 default = "claude:opus"
-max_tokens = 16000
+# the reply is the whole paper's skeleton and its questions: a long paper passes 16000
+max_tokens = 32000
 
 # 暫存: the touched paragraphs and their neighbours (Claude first, `create`).
 [task.pc-draft-skeleton-repair]
