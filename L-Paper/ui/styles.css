@@ -752,6 +752,7 @@ table.plan .src { color: var(--faint); font-size: 11px; }
 #kvAdvice { width: min(680px, 100%); margin: -4px auto 10px; }
 .kv-check { align-self: flex-start; }
 .kv-advice .kv-problem { color: var(--warn); border: 1px solid var(--line); border-radius: var(--r); padding: 1px 6px; }
+.kv-advice .kv-fine { color: var(--ok); }
 .kv-advice .kv-rewrite { text-align: left; white-space: normal; flex-basis: 100%; }
 .np-count { font: 500 11px var(--mono); color: var(--faint); white-space: nowrap; margin-left: auto; }
 .np-count.bad { color: var(--err); }

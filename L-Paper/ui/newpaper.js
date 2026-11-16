@@ -507,18 +507,20 @@ const PCNew = (() => {
 
   // ── Key value check (pc_core::thesis): advice under the field, never a gate ──
   /** Ask about `value` and show the problems and rewrites in `box`; a rewrite clicked → onPick(text).
-   *  `current()` (optional): the field's value now — stale answers are dropped. */
-  async function kvAdvice(value, box, onPick, current) {
+   *  `current()` (optional): the field's value now — stale answers are dropped.
+   *  `asked`: the author pressed 檢查, so "nothing to change" and a failed call are said too. */
+  async function kvAdvice(value, box, onPick, current, asked = false) {
     const v = (value ?? "").trim();
     box.replaceChildren();
     box.hidden = true;
     if (!v) return;
     const seq = (box.seq = (box.seq ?? 0) + 1);
+    const say = (cls, text) => { if (asked) { box.append(el("span", cls, text)); box.hidden = false; } };
     let r;
     try { r = await api("/api/keyvalue/check", { key_value: v, engine: typeof chosenEngine === "function" ? chosenEngine() : null }); }
-    catch { return; }
+    catch (e) { if (box.seq === seq) say("kv-problem", `沒檢查成功：${e.message}`); return; }
     if (box.seq !== seq || (current && current().trim() !== v)) return;
-    if (!r?.problems?.length && !r?.rewrites?.length) return;
+    if (!r?.problems?.length && !r?.rewrites?.length) return say(r?.error ? "kv-problem" : "kv-fine", r?.error ? `沒檢查成功：${r.error}` : "沒有要改的");
     box.append(...(r.problems ?? []).map((p) => el("span", "kv-problem", p.label)));
     (r.rewrites ?? []).forEach((t) => {
       const b = el("button", "ghost small kv-rewrite", t);
@@ -529,18 +531,37 @@ const PCNew = (() => {
     box.hidden = false;
   }
 
-  /** Wire a Key value input: checked on blur (debounced) and by its 檢查 button; returns the box. */
+  /** Wire a Key value input: checked on blur (debounced) and by its 檢查 button; returns the box.
+   *  The button counts its seconds while the model reads (a local model takes several). */
   function kvCheck(input, onPick = () => {}) {
     const box = el("div", "kv-advice");
     box.hidden = true;
     const btn = el("button", "ghost small kv-check", "檢查");
     btn.type = "button";
-    let timer = 0, last = "";
+    let timer = 0, last = "", running = 0, clock = 0;
+    const busy = (on) => {
+      running = Math.max(0, running + (on ? 1 : -1));
+      clearInterval(clock);
+      btn.disabled = running > 0;
+      btn.classList.toggle("waiting", running > 0);
+      if (!running) { btn.textContent = "檢查"; return; }
+      const t0 = Date.now();
+      const show = () => { btn.textContent = `檢查中 ${Math.round((Date.now() - t0) / 1000)} 秒`; };
+      show();
+      clock = setInterval(show, 1000);
+    };
+    const ask = async (v, asked) => {
+      last = v;
+      if (!v) return kvAdvice(v, box, pick);
+      busy(true);
+      try { await kvAdvice(v, box, pick, () => input.value, asked); } finally { busy(false); }
+    };
     const run = (force) => {
       clearTimeout(timer);
       const v = input.value.trim();
       if (!force && v === last) return;
-      timer = setTimeout(() => { last = v; kvAdvice(v, box, pick, () => input.value); }, force ? 0 : 400);
+      if (force) return ask(v, true);
+      timer = setTimeout(() => ask(v, false), 400);
     };
     const pick = (t) => { input.value = t; last = t.trim(); input.dispatchEvent(new Event("input")); onPick(t); };
     input.addEventListener("blur", () => run(false));
