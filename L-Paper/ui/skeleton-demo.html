@@ -1,0 +1,160 @@
+<!doctype html>
+<!-- 骨架 on the synthetic fixture, with a pretend server in the page (no model, no network).
+     From the repo root: python3 -m http.server 8765 → /L-Paper/ui/skeleton-demo.html
+     ?theme=<id>&mode=dark|light   the shared theme
+     ?empty=1                      before a skeleton exists (素材 first)
+     ?tab=inventory|style          start on that tab
+     ?do=answer,write,fold,note,narrow   a scripted state, for screenshots
+     ?at=<id>                      scroll to that frame or paragraph -->
+<html lang="zh-Hant" data-theme="giftbox" data-mode="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>骨架 demo</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+  <link rel="stylesheet" href="../../commons/ui/theme.css">
+  <link rel="stylesheet" href="../../commons/ui/base.css">
+  <link rel="stylesheet" href="skeleton.css">
+  <style>
+    html, body { height: 100%; }
+    body { display: flex; }
+    #stage { flex: 1; min-width: 0; margin: 20px auto; max-width: 1240px; height: calc(100vh - 40px); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+    #stage > .dlg-head { border-bottom: 1px solid var(--line); }
+    #root { flex: 1; min-height: 0; }
+  </style>
+</head>
+<body>
+<div id="stage">
+  <div class="dlg-head"><h2>骨架</h2></div>
+  <div id="root"></div>
+</div>
+<script src="../../commons/ui/icons.js"></script>
+<script src="skeleton.js"></script>
+<script>
+const Q = new URLSearchParams(location.search);
+if (Q.get("theme")) document.documentElement.dataset.theme = Q.get("theme");
+if (Q.get("mode")) document.documentElement.dataset.mode = Q.get("mode");
+if (Q.get("do")?.includes("narrow")) document.querySelector("#stage").style.maxWidth = "760px";
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const SPEED = Q.get("fast") ? 0.05 : 1;
+
+// ── a pretend server: the same routes, on a copy of the fixture ──
+let V, full, undo = [], ids = 100;
+const bump = () => { V.rev++; return structuredClone(V); };
+const all = () => V.sections.flatMap((s) => s.blocks.flatMap((b) => b.paras));
+const where = (id) => { for (const s of V.sections) { if (s.id === id) return { s }; for (const [bi, b] of s.blocks.entries()) { if (b.id === id) return { s, b, at: bi }; for (const [pi, p] of b.paras.entries()) if (p.id === id) return { s, b, p, at: pi }; } } };
+const para = (say = "") => ({ id: `p${++ids}`, kind: "", say, points: [], link_prev: "", link_next: "", jump: null, floats: [], cites: [], sources: [], pending: [], text: "", state: "outline", busy: null, problems: [], reason: "", touched: true });
+const TEXT = "In the external dataset, the ranking changed. Method C reached the highest accuracy, while Method A fell to second. We report this reversal as observed and limit the main claim to the internal data.";
+function apply(o) {
+  if (o.op === "undo") { const last = undo.pop(); if (last) { V.sections = last; } V.can_undo = undo.length > 0; return; }
+  undo.push(structuredClone(V.sections));
+  const f = o.id && where(o.id);
+  if (o.op === "add_para") where(o.block).b.paras.splice(o.at, 0, para(o.say));
+  else if (o.op === "add_block") where(o.section).s.blocks.splice(o.at, 0, { id: `b${++ids}`, title: o.title, purpose: "", of: o.of, paras: [] });
+  else if (o.op === "remove") { if (f.p) f.b.paras.splice(f.at, 1); else f.s.blocks.splice(f.at, 1); }
+  else if (o.op === "move") { const t = where(o.to); if (f.p) { f.b.paras.splice(f.at, 1); t.b.paras.splice(o.at, 0, f.p); f.p.touched = true; if (o.reason) f.p.reason = o.reason; } else { f.s.blocks.splice(f.at, 1); t.s.blocks.splice(o.at, 0, f.b); } }
+  else if (o.op === "edit") { Object.assign(f.p ?? f.b, o.fields); if (f.p) f.p.touched = true; }
+  else if (o.op === "reason") f.p.reason = o.reason;
+  else if (o.op === "done") f.p.state = o.done ? "done" : "text";
+  V.dirty = true; V.can_undo = true;
+}
+async function call(path, body) {
+  await wait(40 * SPEED);
+  if (path === "") return structuredClone(V);
+  if (path === "/ops") { body.ops.forEach(apply); return bump(); }
+  if (path === "/inventory") {
+    V.inventory.forEach((x) => (x.keep = body.keep.includes(x.id)));
+    for (const a of body.add) V.inventory.push({ id: `v${++ids}`, kind: a.kind, title: a.title, note: a.note, evidence: [], label: "", keep: true, by_author: true, pending: false, tool: "" });
+    return bump();
+  }
+  if (path === "/plan" || path === "/convert") {
+    V.job = { kind: "plan", label: "排骨架", done: 0, total: 5, error: "" };
+    (async () => { for (let i = 1; i <= 5; i++) { await wait(700 * SPEED); V.job.done = i; V.rev++; } V = { ...structuredClone(full), inventory: V.inventory, rev: V.rev + 1, dirty: false }; })();
+    return bump();
+  }
+  if (path === "/answer" || path === "/note") {
+    let t;
+    if (path === "/note") { t = { id: `n${++ids}`, anchor: body.anchor, kind: "note", status: "answered", question: "", options: [], messages: [{ who: "me", text: body.text }], conclusion: "", changes: [] }; V.threads.push(t); }
+    else { t = V.threads.find((x) => x.id === body.thread); const said = body.text || t.options.filter((o) => body.picked.includes(o.id)).map((o) => o.text).join("；"); if (body.skip) { t.status = "skipped"; } else { t.status = "answered"; if (t.messages.at(-1)?.who !== "me") t.messages.push({ who: "me", text: said }); } }
+    V.next = V.threads.find((x) => x.status === "open" && ["conflict", "choice", "missing"].includes(x.kind))?.id ?? null;
+    const p = where(t.anchor)?.p;
+    if (!body.skip) {
+      if (p) p.busy = "fill";
+      (async () => {
+        await wait(1500 * SPEED);
+        const said = t.messages.at(-1).text;
+        if (p) { p.points.push({ text: said.length > 26 ? `${said.slice(0, 26)}…` : said, from: t.id }); p.busy = null; if (p.state === "outline") p.state = "points"; }
+        t.status = "done"; t.conclusion = said; V.rev++;
+      })();
+    }
+    return bump();
+  }
+  if (path === "/write") {
+    const f = where(body.id);
+    const list = body.id === "all" ? all() : f.p ? [f.p] : f.b ? f.b.paras : f.s.blocks.flatMap((b) => b.paras);
+    list.forEach((p) => (p.busy = "write"));
+    (async () => { for (const p of list) { await wait(900 * SPEED); p.text = p.text || TEXT; p.state = p.state === "done" ? "done" : "text"; p.busy = null; V.rev++; } })();
+    return bump();
+  }
+  if (path === "/refine") {
+    const p = where(body.para).p;
+    const first = p.text.split(". ")[0];
+    V.threads.push({ id: `r${++ids}`, anchor: p.id, kind: "refine", status: "open", question: "", options: [], messages: [], conclusion: "", changes: [{ id: "c1", target: p.id, field: "text", before: first, after: first.replace("reached", "achieved"), why: body.preset === "wording" ? "用字" : body.preset === "style" ? "我的風格：句首換成對比" : "句長超過上限", state: "proposed" }] });
+    return bump();
+  }
+  if (path === "/change") {
+    const t = V.threads.find((x) => x.id === body.thread);
+    const c = t.changes.find((x) => x.id === body.change);
+    const p = where(c.target)?.p;
+    if (t.kind === "edit") { c.state = body.accept ? "applied" : "reverted"; if (p) p[c.field] = body.accept ? c.after : c.before; }
+    else { c.state = body.accept ? "applied" : "rejected"; if (body.accept && p) p.text = p.text.replace(c.before, c.after); if (t.changes.every((x) => x.state !== "proposed")) { t.status = "done"; t.conclusion = "細修處理完"; } }
+    return bump();
+  }
+  if (path === "/save") {
+    V.job = { kind: "save", label: "暫存", done: 0, total: 1, error: "" };
+    (async () => {
+      await wait(1200 * SPEED);
+      for (const p of all().filter((x) => x.touched)) {
+        const ch = [];
+        if (!p.say) { ch.push({ id: "c1", target: p.id, field: "say", before: "", after: "交代這一類個案為什麼造成排名改變", why: p.reason || "新增的段落", state: "applied" }); p.say = ch[0].after; }
+        if (!p.link_prev) { ch.push({ id: "c2", target: p.id, field: "link_prev", before: "", after: "承接上一段的結論", why: "補上銜接", state: "applied" }); p.link_prev = "承接上一段的結論"; }
+        if (ch.length) V.threads.push({ id: `e${++ids}`, anchor: p.id, kind: "edit", status: "done", question: "", options: [], messages: [], conclusion: "補上說明與銜接", changes: ch });
+        p.touched = false; p.reason = ""; p.jump = null;
+      }
+      V.dirty = false; V.job = null; V.rev++;
+    })();
+    return bump();
+  }
+  if (path === "/place") return bump();
+  if (path === "/style") return { sections: V.sections.filter((s) => s.blocks.some((b) => b.paras.some((p) => p.text))).map((s) => ({ id: s.id, title: s.title, rows: [
+    { id: "para_words", label: "每段字數", mine: [80, 150], draft: 46, ok: false },
+    { id: "sentences", label: "每段句數", mine: [4, 6], draft: 3, ok: false },
+    { id: "sentence_words", label: "每句字數", mine: [17, 25], draft: 15.3, ok: false },
+    { id: "sentence_spread", label: "句長離散", mine: [6, 11], draft: 7.4, ok: true },
+    { id: "rhythm", label: "相鄰句長變化", mine: [0.3, 0.6], draft: 0.42, ok: true },
+    { id: "reasoning", label: "理由佔比", mine: [0.35, 0.5], draft: 0.33, ok: false },
+  ], paras: s.blocks.flatMap((b) => b.paras).filter((p) => p.text).slice(0, 2).map((p) => ({ id: p.id, issues: ["段落太短", "沒有理由句"] })) })) };
+  throw new Error(`demo: ${path}`);
+}
+
+(async () => {
+  full = await (await fetch("../crates/core/tests/fixtures/skeleton_view.json")).json();
+  V = structuredClone(full);
+  if (Q.get("empty")) { V.exists = false; V.sections = []; V.threads = []; V.next = null; V.dirty = false; V.can_undo = false; }
+  await PCSkeleton.mount(document.querySelector("#root"), { call });
+  const S = PCSkeleton._state;
+  if (Q.get("tab")) { S.tab = Q.get("tab"); }
+  const steps = (Q.get("do") ?? "").split(",");
+  if (steps.includes("fold")) S.folded.add("b3");
+  if (steps.includes("note")) S.noteAt = "p12";
+  if (steps.includes("nohints")) S.hints = false;
+  PCSkeleton._draw();
+  if (steps.includes("answer")) document.querySelector(".sk-thread.sk-active .sk-opt")?.click();
+  if (steps.includes("write")) document.querySelector('[data-id="b4"] .sk-bhead [aria-label="寫這個框的文字"]')?.click();
+  if (steps.includes("refine")) { await call("/refine", { para: "p6", preset: "wording" }); S.view = null; await PCSkeleton.mount(document.querySelector("#root"), { call }); }
+  if (Q.get("at")) { await wait(60); const sc = document.querySelector(".sk-scroll"); const n = document.querySelector(`[data-id="${Q.get("at")}"]`); if (sc && n) sc.scrollTop += n.getBoundingClientRect().top - sc.getBoundingClientRect().top - 12; }
+  window.__ready = true;
+})();
+</script>
+</body>
+</html>
