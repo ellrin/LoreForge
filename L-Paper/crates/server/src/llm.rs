@@ -307,6 +307,17 @@ pub fn request(route: &Route, prompt: &Prompt, extra: Option<&str>, schema: Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 深度討論 is cloud only: with the shared settings installed (any class routes), the local
+    /// model is never a candidate (a class on the task let `ask` put it first: 70 s+ replies).
+    #[test]
+    fn discuss_never_routes_to_the_local_model() {
+        let t = Llm::task_table(None).unwrap();
+        let spec = t.task.get("pc-draft-discuss").unwrap();
+        let s = lore_llm::shared::EngineSettings::default();
+        let p = lore_llm::router::plan("pc-draft-discuss", spec, None, &Default::default(), Some(&s));
+        assert_eq!(p.candidates, vec!["claude:sonnet".to_string()]);
+    }
     use std::path::PathBuf;
     use lore_llm::{OpenAiCompat, OpenAiCompatConfig};
     use lore_llm::secrets::KeyStore;

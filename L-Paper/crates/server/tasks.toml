@@ -152,10 +152,11 @@ default = "claude:opus"
 fallback = "claude:sonnet"
 max_tokens = 8000
 
-# 深度討論: a conversation about one interview question (never material for the paper)
+# 深度討論: a conversation about one interview question (never material for the paper).
+# Cloud only, so no class: a class lets the shared routing add the local model, and `ask`
+# puts it first (a 20k-character record on the local model took over 70 s per reply).
 [task.pc-draft-discuss]
 label = "深度討論"
-class = "ask"
 needs = { json = true }
 default = "claude:sonnet"
 
