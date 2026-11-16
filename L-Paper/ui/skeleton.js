@@ -35,7 +35,8 @@ const PCSkeleton = (() => {
     document.body.append(s);
     setTimeout(() => s.remove(), opt.ms ?? 2600);
   }
-  const sure = async (at, lines, label) => (window.LoreShell?.ask ? !!(await LoreShell.ask(at, lines, [{ label: "取消", value: null }, { label, value: true, danger: true, primary: true }])) : confirm(lines.join("\n")));
+  // asked through the shell, next to the button; the demo page has no shell and goes ahead
+  const sure = async (at, lines, label) => (window.LoreShell?.ask ? !!(await LoreShell.ask(at, lines, [{ label: "取消", value: null }, { label, value: true, danger: true, primary: true }])) : true);
 
   const STATES = ["outline", "points", "text", "done"];
   const KINDS = [["table", "表"], ["figure", "圖"], ["flow", "流程圖"], ["equation", "公式"], ["algorithm", "偽代碼"], ["finding", "發現"]];
@@ -87,7 +88,8 @@ const PCSkeleton = (() => {
   };
   /** Questions still open in a frame (on it or on its paragraphs). */
   const openIn = (b, v = S.view) => { const ids = new Set([b.id, ...b.paras.map((p) => p.id)]); return (v?.threads ?? []).filter((t) => isOpenQ(t) && ids.has(t.anchor)).length; };
-  const working = () => !!S.view && (!!S.view.job || paras().some((p) => p.busy) || S.view.threads.some((t) => t.status === "answered"));
+  // a job that failed stays in the view with its error until the next action: nothing to wait for
+  const working = () => !!S.view && ((!!S.view.job && !S.view.job.error) || paras().some((p) => p.busy) || S.view.threads.some((t) => t.status === "answered"));
 
   function setView(v, force) {
     if (!v || typeof v !== "object") return;
@@ -869,7 +871,7 @@ const PCSkeleton = (() => {
       if (S.view.exists && !(await sure(e.currentTarget, ["重排骨架？", "現在的骨架會先存一份。"], "重排"))) return;
       post("/plan", { redo: !!S.view.exists }, "排骨架");
     }, v.exists ? "btn" : "btn primary");
-    go.disabled = !!v.job;
+    go.disabled = !!v.job && !v.job.error;
     foot.append(go);
     main.append(foot);
     return main;
@@ -924,7 +926,8 @@ const PCSkeleton = (() => {
       tabs.append(b);
     }
     bar.append(tabs);
-    if (v.job) bar.append(h("span", "chip busy sk-job", `${v.job.label}${v.job.total ? ` ${v.job.done}/${v.job.total}` : ""}`));
+    if (v.job?.error) bar.append(h("span", "chip err", `${v.job.label}：${v.job.error}`));
+    else if (v.job) bar.append(h("span", "chip busy sk-job", `${v.job.label}${v.job.total ? ` ${v.job.done}/${v.job.total}` : ""}`));
     bar.append(h("span", "sk-grow"));
     if (v.exists && S.tab === "skeleton") {
       const undo = ico("undo", "復原 ⌘Z", () => op({ op: "undo" }), "ico");
@@ -933,7 +936,7 @@ const PCSkeleton = (() => {
       lay.setAttribute("aria-pressed", S.hints);
       const write = btn("寫文字", (e) => menu(e.currentTarget, [["還沒寫的全部", () => post("/write", { id: "all" }, "寫文字")], ...S.view.sections.map((s) => [SEC_ZH[s.role] ?? s.title, () => post("/write", { id: s.id }, "寫文字")])]), "btn small");
       const save = btn("暫存", () => post("/save", {}, "暫存"), "btn small sk-save");
-      save.disabled = !v.dirty || !!v.job;
+      save.disabled = !v.dirty || (!!v.job && !v.job.error);
       if (v.dirty) save.dataset.dirty = "1";
       const place = btn("放進論文", async (e) => {
         if (!(await sure(e.currentTarget, ["放進論文？", "論文裡這些章節原有的文字會先存一份。"], "放進論文"))) return;
