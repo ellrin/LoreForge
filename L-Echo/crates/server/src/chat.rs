@@ -29,8 +29,10 @@ use serde_json::json;
 use crate::characters::Character;
 
 /// Every reply follows this, whatever the persona says.
-pub const BREVITY_RULE: &str = "說話規則：每次只回 1 到 3 句短句，用口語的台灣繁體中文，像面對面聊天；\
-不要列點、標題或 Markdown。使用者說「詳細一點」或明確要求解釋時，才展開成完整的說明。";
+pub const BREVITY_RULE: &str = "說話規則：每次只回 1 到 3 句短句，像面對面聊天；\
+語言：使用者在這段對話裡要求過換語言（例如「說英文」「說中文」「speak English」）就照最近一次的要求，\
+之後一直用那個語言，即使他用另一種語言說話，直到他再要求換；沒要求過就用他最新這句話的語言，\
+英文就用口語英文，其他時候用口語的台灣繁體中文。不要列點、標題或 Markdown。使用者說「詳細一點」或明確要求解釋時，才展開成完整的說明。";
 /// Turns sent to the model (the oldest are left out).
 pub const MAX_TURNS: usize = 40;
 /// Characters per message.
