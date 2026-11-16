@@ -36,3 +36,35 @@
 - 路由：GET ``、POST `/inventory`。
 
 測試：`cargo test -p pc-core skeleton` → 22 passed；`cargo test -p pc-server --test skeleton_api` → 1 passed（HTTP：清單、兩次讀取相同、勾選、新增、錯誤不改東西）。
+
+第 2 段 commit：42bfc29。
+
+## 第 3 段：規劃、修補、任務、假模型
+
+- 任務（`crates/server/tasks.toml`）：`pc-draft-skeleton` 預設 `claude:opus`、沒有 class、沒有備援（本機模型永遠不是候選）；
+  Opus 安全擋下時照舊由 `Attempts::failed` 改 Sonnet（`skeleton_plan_refused_by_opus_goes_to_sonnet`）。
+  `pc-draft-skeleton-repair` = `claude:sonnet` → `local:current`，class `create`。
+  `pc-draft-fill` = `claude:haiku` → `local:current`，class `create`（`ask` 會把本機排第一，測試裡證明了這一點）。
+  每個任務一個「第一個候選」測試（`llm.rs`，用共用設定的 `router::plan`，和 `discuss_never_routes_to_the_local_model` 同法）。
+- 規劃（`skeleton::plan`）：輸入 = 主題、`prompts::context()`（整理過的記錄、論文的圖表與參考文獻、對照表）、勾選的素材、
+  風格段落類型（`style_text`）、期刊寫法（`Venue::outline`）、轉換時的已回答問答。提示要求先排結果 → 討論 → 方法 → 介紹／相關研究／結論，
+  回傳照論文順序（程式也依 role 排序）。每段 `points` = 記錄已經支持的要點（協調者說明 1），有要點的段落是 `points` 狀態。
+  程式核對：label 只留勾選的素材、cites 只留論文的 key、sources 只留記錄有的 id、pending 只留有的、空段空框空章拿掉、
+  `of` 由模型的 key 換成真的 id、問題只留三種且掛在段落上、選項最多 3、最多 15 題（模型的順序 = 重要性）、
+  問題與選項裡的內部編號（turn N、第 N 輪、記錄 id、模型的 key）由程式刪掉。
+- 修補（暫存）：只送被動到的段落、接縫、與前後鄰居；回覆裡範圍外的段落與框一律不套用（測試逐段比對 JSON 位元組相同）；
+  每項修改是一個 applied 的 `Change`，依目標分成 `edit` 串；`/change accept=false` 還原。修補進行中又被改的段落保留標記。
+- 背景工作：`/plan`、`/convert`（沒有大綱時）、`/save` 在背景跑，`job` 存在骨架裡；同一篇只能有一個 job（409）。
+  App 關掉留下的 job → 讀取時標成錯誤；`busy` 的段落沒有在跑 → 清掉。
+- 假模型：`PAPERCOMPOSER_LLM_MOCK=<檔案>` 時 `Llm` 的 `complete`／`complete_on` 都從檔案回答（每個任務照順序，最後一個重複），
+  `ready()` 一律 true；不碰網路、`claude` CLI、本機模型。
+- 路由：`/plan`、`/ops`（全部套用或全部不套用）、`/save`、`/change`、`/convert`。
+
+測試：`cargo test -p pc-core skeleton` → 25 passed；`cargo test -p pc-server --lib -- draft::engine llm::` → 23 passed；
+`cargo test -p pc-server --test skeleton_api` → 1 passed（排骨架 → 編輯 → 暫存 → 還原 → 有大綱的轉換 → 訪談中途的轉換）。
+
+### 合約問題
+- `job.error` 有值時 job 仍然非 null（頁面照合約會一直輪詢）。建議：頁面看到 `error` 非空就停止輪詢並顯示；下一個動作（ops、change、
+  inventory、save、plan）會清掉失敗的 job。
+- `/convert` 沒有大綱時是背景工作（`job.kind = "convert"`），回應時 `exists` 還是 false。
+- 轉換來的訪談串 `kind = "note"`、`status = "done"`（合約沒有專給轉換的種類）。

@@ -160,6 +160,33 @@ label = "深度討論"
 needs = { json = true }
 default = "claude:sonnet"
 
+# 骨架 (docs/long-paper.md §G). The planner lays out the whole paper at once: Claude only, so no
+# class (a class lets the shared routing add the local model); an Opus refusal falls to Sonnet
+# (src/draft/engine.rs `Attempts::failed`).
+[task.pc-draft-skeleton]
+label = "排骨架"
+needs = { json = true }
+default = "claude:opus"
+max_tokens = 16000
+
+# 暫存: the touched paragraphs and their neighbours (Claude first, `create`).
+[task.pc-draft-skeleton-repair]
+label = "骨架修補"
+class = "create"
+needs = { json = true }
+default = "claude:sonnet"
+fallback = "local:current"
+max_tokens = 8000
+
+# 補肉: one answer → the paragraph's points, in the background. `create` keeps Claude first
+# (`ask` would put the local model first).
+[task.pc-draft-fill]
+label = "要點回填"
+class = "create"
+needs = { json = true }
+default = "claude:haiku"
+fallback = "local:current"
+
 [task.pc-draft-claims]
 label = "主張登記"
 class = "create"

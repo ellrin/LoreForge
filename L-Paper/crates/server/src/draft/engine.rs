@@ -388,6 +388,12 @@ pub async fn revise(e: &dyn Engines, key_value: &str, sess: &Session, r: &Revisi
     })
 }
 
+/// One structured call of a 骨架 task (`pc-draft-skeleton`, `-repair`, `pc-draft-fill`): the
+/// task's candidates in order (an Opus refusal moves on to Sonnet), the reply checked by `parse`.
+pub async fn structured<T>(e: &dyn Engines, task: &str, prompt: &Prompt, schema: Value, parse: impl Fn(&str) -> Result<T, String>) -> Result<(T, EngineUsed), String> {
+    first_working!(e, task, None, |c| ask(e, task, &c, prompt, &schema, &parse).await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,6 +475,34 @@ mod tests {
         assert_eq!(v, "sonnet");
         assert!(used.note.contains("safeguards"), "{used:?}");
         assert!(is_refusal("Opus 5.5's safeguards flagged this message") && !is_refusal("沒有網路"));
+    }
+
+    /// 排骨架 runs on Opus only; a refusal still gets an answer from Sonnet, never the local model.
+    #[tokio::test]
+    async fn skeleton_plan_refused_by_opus_goes_to_sonnet() {
+        struct TableRefuses;
+        #[async_trait]
+        impl Engines for TableRefuses {
+            fn candidates(&self, task: &str, _picked: Option<&str>) -> Vec<String> {
+                let t = crate::llm::Llm::task_table(None).unwrap();
+                let t = &t.task[task];
+                [Some(t.default.clone()), t.fallback.clone()].into_iter().flatten().collect()
+            }
+            async fn complete(&self, _task: &str, model_ref: &str, _prompt: &Prompt, _extra: Option<&str>, _schema: Value) -> Result<String, String> {
+                match model_ref {
+                    "claude:opus" => Err("API Error: Opus 5.5's safeguards flagged this message".into()),
+                    "claude:sonnet" => Ok("{\"ok\":true}".into()),
+                    m => Err(format!("{m} must not run")),
+                }
+            }
+            async fn local_context(&self, _task: &str) -> Option<u32> {
+                None
+            }
+        }
+        let p = Prompt { system: String::new(), user: String::new() };
+        let (v, used) = structured(&TableRefuses, pc_core::draft::skeleton::plan::TASK, &p, Value::Null, |x| serde_json::from_str::<Value>(x).map_err(|e| e.to_string())).await.unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(used.label, "Sonnet");
     }
 
     fn fell_back(u: &EngineUsed, from: &str) {

@@ -73,7 +73,7 @@ pub fn json_in<T: for<'de> Deserialize<'de>>(reply: &str) -> Result<T, String> {
     serde_json::from_str(&reply[start..=end]).map_err(|e| format!("看不懂回覆：{e}"))
 }
 
-const TW: &str = "Write every text meant for the author in Traditional Chinese as used in Taiwan (繁體中文, never simplified), \
+pub(crate) const TW: &str = "Write every text meant for the author in Traditional Chinese as used in Taiwan (繁體中文, never simplified), \
 with full-width Chinese punctuation (，。：；？！「」（）), never ASCII commas or colons inside Chinese text.";
 
 /// Shared context: key value, hook, experiments, timeline, the author's

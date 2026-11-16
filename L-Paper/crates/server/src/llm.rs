@@ -115,6 +115,55 @@ pub struct Llm {
     model: RwLock<String>,
     /// PAPERCOMPOSER_CLAUDE_BASE_URL (a local stub in tests).
     base_url: String,
+    /// `PAPERCOMPOSER_LLM_MOCK` (the isolated example's `--mock`, the skeleton tests): every
+    /// call answered from a file of scripted replies; never the network, the CLI or a local model.
+    pub mock: Option<Arc<Scripted>>,
+}
+
+/// Scripted replies per task id, in order; the last one repeats. The file is JSON:
+/// `{ "pc-draft-skeleton": [ {…}, … ], "pc-draft-fill": [ … ] }` (a reply may be a JSON value or a
+/// string). The tasks asked, in order, are kept for tests.
+pub struct Scripted {
+    replies: std::sync::Mutex<std::collections::BTreeMap<String, std::collections::VecDeque<String>>>,
+    pub asked: std::sync::Mutex<Vec<(String, String)>>,
+}
+
+impl Scripted {
+    pub fn parse(json: &str) -> Result<Scripted, String> {
+        let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("mock 檔：{e}"))?;
+        let obj = v.as_object().ok_or("mock 檔要是物件：{ 任務: [回覆…] }")?;
+        let mut replies = std::collections::BTreeMap::new();
+        for (task, list) in obj {
+            let list = match list {
+                serde_json::Value::Array(a) => a.clone(),
+                other => vec![other.clone()],
+            };
+            let q: std::collections::VecDeque<String> = list.into_iter().map(|r| match r {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            }).collect();
+            replies.insert(task.clone(), q);
+        }
+        Ok(Scripted { replies: std::sync::Mutex::new(replies), asked: std::sync::Mutex::new(vec![]) })
+    }
+
+    pub fn load(path: &std::path::Path) -> Result<Scripted, String> {
+        Scripted::parse(&std::fs::read_to_string(path).map_err(|e| format!("{}：{e}", path.display()))?)
+    }
+
+    /// The next reply for `task` (the last one again when only one is left).
+    pub fn reply(&self, task: &str, prompt: &Prompt) -> Result<String, String> {
+        if let Ok(mut a) = self.asked.lock() {
+            a.push((task.to_string(), prompt.user.clone()));
+        }
+        let mut r = self.replies.lock().map_err(|_| "mock".to_string())?;
+        let q = r.get_mut(task).ok_or_else(|| format!("mock 沒有 {task} 的回覆"))?;
+        match q.len() {
+            0 => Err(format!("mock 沒有 {task} 的回覆")),
+            1 => Ok(q[0].clone()),
+            _ => Ok(q.pop_front().unwrap_or_default()),
+        }
+    }
 }
 
 impl Llm {
@@ -132,6 +181,7 @@ impl Llm {
             external: RwLock::new(external),
             model: RwLock::new(model),
             base_url: std::env::var("PAPERCOMPOSER_CLAUDE_BASE_URL").unwrap_or_else(|_| lore_llm::claude_api::DEFAULT_BASE_URL.into()),
+            mock: std::env::var_os("PAPERCOMPOSER_LLM_MOCK").map(|p| Arc::new(Scripted::load(std::path::Path::new(&p)).unwrap_or_else(|e| panic!("{e}")))),
         }
     }
 
@@ -198,6 +248,9 @@ impl Llm {
     }
 
     pub async fn ready(&self, e: EngineChoice) -> bool {
+        if self.mock.is_some() {
+            return true;
+        }
         match e {
             EngineChoice::Local => self.local_configured().await,
             EngineChoice::Subscription => self.cc.get(&self.cli, false).await.ready,
@@ -269,6 +322,9 @@ impl Llm {
     /// Run `task` on one exact model ref ("claude:haiku", "local:current"),
     /// no fallback: the draft window's model picker.
     pub async fn complete_on(&self, task: &str, model_ref: &str, prompt: &Prompt, extra: Option<&str>, schema: Option<serde_json::Value>) -> Result<String, String> {
+        if let Some(m) = &self.mock {
+            return m.reply(task, prompt);
+        }
         let router = Router::new(self.tasks.clone(), self.factory());
         let route = router.provider_for_with(task, &RouteOptions::only(model_ref).with_priority(Priority::Interactive)).await.map_err(|e| route_error(&e, true))?;
         route.provider.complete(&request(&route, prompt, extra, schema)).await.map_err(|e| e.to_string())
@@ -277,6 +333,9 @@ impl Llm {
     /// Run one prompt as `task`. `extra` is appended to the user prompt (the
     /// retry feedback); `schema` asks for JSON of that shape.
     pub async fn complete(&self, task: &str, choice: Option<EngineChoice>, prompt: &Prompt, extra: Option<&str>, schema: Option<serde_json::Value>) -> Result<String, String> {
+        if let Some(m) = &self.mock {
+            return m.reply(task, prompt);
+        }
         let route = self.route(task, choice).await?;
         route.provider.complete(&request(&route, prompt, extra, schema)).await.map_err(|e| e.to_string())
     }
@@ -307,6 +366,49 @@ pub fn request(route: &Route, prompt: &Prompt, extra: Option<&str>, schema: Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The candidates a task gets with the shared settings installed (any class routes).
+    fn first_candidates(task: &str) -> Vec<String> {
+        let t = Llm::task_table(None).unwrap();
+        let spec = t.task.get(task).unwrap();
+        let s = lore_llm::shared::EngineSettings::default();
+        lore_llm::router::plan(task, spec, None, &Default::default(), Some(&s)).candidates
+    }
+
+    /// 排骨架 lays out the whole paper: Claude only (no class: the local model is never a candidate).
+    #[test]
+    fn skeleton_plan_never_routes_to_the_local_model() {
+        assert_eq!(first_candidates("pc-draft-skeleton"), vec!["claude:opus".to_string()]);
+    }
+
+    /// 暫存's repair: Sonnet first, the local model after it.
+    #[test]
+    fn skeleton_repair_routes_claude_first() {
+        assert_eq!(first_candidates("pc-draft-skeleton-repair"), vec!["claude:sonnet".to_string(), "local:current".to_string()]);
+    }
+
+    /// 補肉: Haiku first (class `create`; `ask` would put the local model first), then local.
+    #[test]
+    fn skeleton_fill_routes_claude_first() {
+        assert_eq!(first_candidates("pc-draft-fill"), vec!["claude:haiku".to_string(), "local:current".to_string()]);
+        let t = Llm::task_table(None).unwrap();
+        let mut spec = t.task.get("pc-draft-fill").unwrap().clone();
+        spec.class = Some(lore_llm::shared::TaskClass::Ask);
+        let other = lore_llm::router::plan("pc-draft-fill", &spec, None, &Default::default(), Some(&lore_llm::shared::EngineSettings::default())).candidates;
+        assert_eq!(other.first().map(String::as_str), Some("local:current"), "the proof bites: `ask` would have put local first");
+    }
+
+    #[test]
+    fn scripted_replies_per_task_in_order_the_last_repeats() {
+        let m = Scripted::parse(r#"{ "a": [{"x":1}, "two"], "b": "only" }"#).unwrap();
+        let p = Prompt { system: String::new(), user: "u".into() };
+        assert_eq!(m.reply("a", &p).unwrap(), r#"{"x":1}"#);
+        assert_eq!(m.reply("a", &p).unwrap(), "two");
+        assert_eq!(m.reply("a", &p).unwrap(), "two");
+        assert_eq!(m.reply("b", &p).unwrap(), "only");
+        assert!(m.reply("c", &p).unwrap_err().contains("c"));
+        assert_eq!(m.asked.lock().unwrap().len(), 5);
+    }
 
     /// 深度討論 is cloud only: with the shared settings installed (any class routes), the local
     /// model is never a candidate (a class on the task let `ask` put it first: 70 s+ replies).

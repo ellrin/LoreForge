@@ -421,3 +421,110 @@ fn targets_follow_the_journal() {
     let p = crate::venueprofile::Profile { figure_target: Some([4, 7]), table_target: Some([2, 4]), equations: crate::venueprofile::Stat { mean: 5.2, min: 3.0, max: 10.0 }, ..Default::default() };
     assert_eq!(inventory::targets(&p), Targets { figure: [4, 7], table: [2, 4], equation: [3, 6] });
 }
+
+fn known() -> plan::Known {
+    let set = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<std::collections::BTreeSet<String>>();
+    plan::Known { labels: set(&["tab:main", "fig:size"]), cites: set(&["lee2020"]), sources: set(&["E1", "E2", "R1", "H1"]), pending: set(&["P1"]), groups: set(&["g1"]) }
+}
+
+const PLAN_REPLY: &str = r#"Here it is:
+{"sections":[
+ {"title":"Results","role":"results","blocks":[
+   {"key":"b1","title":"解釋表 1","purpose":"A 最好","of":"","paras":[
+     {"key":"x1","kind":"Results key result","say":"A 對 B","points":["A 0.91，B 0.87"],"link_prev":"","link_next":"接 B 對 C","floats":["tab:main","fig:invented"],"cites":["lee2020","made2099"],"sources":["E1","E77"],"pending":["P1","P9"],"answers":["g1","g7"]},
+     {"key":"x2","kind":"","say":"B 對 C","points":[],"link_prev":"承接","link_next":"","floats":[],"cites":[],"sources":["R1"],"pending":[],"answers":[]}]},
+   {"key":"b2","title":"空的","purpose":"","of":"","paras":[{"key":"x9","say":"  ","points":[]}]}]},
+ {"title":"Introduction","role":"introduction","blocks":[
+   {"key":"b3","title":"缺口","purpose":"讀者接受小資料是常態","of":"x1","paras":[
+     {"key":"x3","kind":"Intro turn","say":"小資料是常態","points":[],"link_prev":"","link_next":"","floats":[],"cites":[],"sources":[],"pending":[],"answers":[]}]}]},
+ {"title":"Nothing","role":"other","blocks":[]}],
+ "questions":[
+  {"para":"x2","kind":"missing","question":"turn 9 你說過 E1 的原因，B 和 C 差在哪？","options":["資料不同","標註不同","還不確定","第四個"]},
+  {"para":"x1","kind":"opinion","question":"喜歡嗎？","options":[]},
+  {"para":"x77","kind":"choice","question":"沒有這一段","options":[]},
+  {"para":"b1","kind":"choice","question":"框不能掛問題","options":[]},
+  {"para":"x1","kind":"conflict","question":"記錄寫 A 最好，但外部反轉，你要怎麼說？","options":["如實寫","放到限制"]}]}"#;
+
+#[test]
+fn a_plan_is_checked_by_code() {
+    let mut sk = Skeleton::default();
+    sk.new_id("v");
+    let p = plan::parse(PLAN_REPLY, &known(), &mut sk).unwrap();
+    // paper order whatever the model returned; empty blocks and sections gone
+    assert_eq!(p.sections.iter().map(|s| (s.id.as_str(), s.title.as_str())).collect::<Vec<_>>(), [("s2", "Introduction"), ("s1", "Results")]);
+    assert_eq!(p.sections[1].blocks.len(), 1);
+    let x1 = &p.sections[1].blocks[0].paras[0];
+    assert_eq!(x1.id, "p1");
+    assert_eq!((x1.floats.clone(), x1.cites.clone(), x1.sources.clone(), x1.pending.clone()), (vec!["tab:main".to_string()], vec!["lee2020".to_string()], vec!["E1".to_string()], vec!["P1".to_string()]));
+    assert_eq!(x1.points, [Point { text: "A 0.91，B 0.87".into(), from: None }]);
+    assert_eq!(x1.state, State::Points, "a paragraph with points starts in points");
+    assert_eq!(p.sections[1].blocks[0].paras[1].state, State::Outline);
+    assert_eq!(p.uses.get("p1").unwrap(), &vec!["g1".to_string()]);
+    assert_eq!(p.sections[0].blocks[0].of.as_deref(), Some("p1"), "`of` by the model's key → the real id");
+    // questions: known kinds on paragraphs only, ids scrubbed, at most three options
+    assert_eq!(p.questions.len(), 2);
+    assert_eq!(p.questions[0].question, "你說過 的原因，B 和 C 差在哪？");
+    assert!(!p.questions[0].question.contains("turn") && !p.questions[0].question.contains("E1"));
+    assert_eq!(p.questions[0].options.len(), 3);
+    assert_eq!((p.questions[0].anchor.as_str(), p.questions[1].anchor.as_str()), ("p2", "p1"));
+    plan::install(&mut sk, p);
+    assert_eq!(sk.threads.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["q1", "q2"]);
+    assert_eq!(sk.next().as_deref(), Some("q1"));
+    assert_eq!(sk.threads[0].messages[0].who, "ai");
+    assert!(plan::parse(r#"{"sections":[],"questions":[]}"#, &known(), &mut sk).is_err());
+    assert_eq!(plan::scrub("第 3 輪你提到（turn 9）的事", &Default::default()), "你提到的事");
+}
+
+#[test]
+fn at_most_fifteen_questions() {
+    let qs: Vec<String> = (0..30).map(|k| format!(r#"{{"para":"x1","kind":"missing","question":"問題 {k}？","options":["a","b"]}}"#)).collect();
+    let reply = format!(r#"{{"sections":[{{"title":"Results","role":"results","blocks":[{{"key":"b1","title":"t","purpose":"","of":"","paras":[{{"key":"x1","say":"s"}}]}}]}}],"questions":[{}]}}"#, qs.join(","));
+    let p = plan::parse(&reply, &known(), &mut Skeleton::default()).unwrap();
+    assert_eq!(p.questions.len(), plan::MAX_QUESTIONS);
+    assert_eq!(p.questions[0].question, "問題 0？", "most important first: the model's order");
+}
+
+#[test]
+fn the_repair_changes_only_its_scope() {
+    let mut sk = small();
+    for (k, p) in sk.paras_mut().enumerate() {
+        p.link_prev = format!("prev{k}");
+        p.link_next = format!("next{k}");
+        p.text = format!("Text {k}.");
+    }
+    let f = |v: serde_json::Value| v.as_object().unwrap().clone();
+    sk.apply(Op::Move { id: "p5".into(), to: "b1".into(), at: Some(0), reason: "限制先講".into() }).unwrap();
+    sk.apply(Op::Edit { id: "p3".into(), fields: f(serde_json::json!({ "say": "外部排名反轉" })) }).unwrap();
+    let before: Vec<Para> = sk.paras().cloned().collect();
+    let (paras, blocks) = sk.repair_scope();
+    assert_eq!(paras, ["p5", "p1", "p2", "p3", "p4"]);
+    let prompt = plan::repair_prompt("kv", &sk, &paras, &blocks);
+    assert!(prompt.user.contains("p5 CHANGED") && prompt.user.contains("the author's reason: 限制先講"));
+    // the model also "fixes" a paragraph outside the scope, and a block it did not see
+    let reply = r#"{"paras":[{"id":"p5","say":"方法的限制","link_prev":"","link_next":"接著看 A 對 B","why":"移到最前面"},{"id":"p1","say":"A 對 B","link_prev":"承接限制","link_next":"next0","why":"前面多了一段"},{"id":"p9","say":"x","link_prev":"","link_next":"","why":""}],
+      "blocks":[{"id":"b1","purpose":"先講限制再比較","why":"多了限制"},{"id":"b3","purpose":"不該改","why":""}],
+      "jumps":[{"id":"p3","why":"從比較跳到外部","fix":"加一句過渡"}]}"#;
+    let mut sk2 = sk.clone();
+    // pretend only p5..p3 were in scope (p4 out) to check byte identity outside it
+    let scope: Vec<String> = paras.iter().filter(|x| *x != "p4").cloned().collect();
+    assert!(blocks.contains(&"b3".to_string()), "p4 is a seam: its block is in the scope");
+    let blocks: Vec<String> = blocks.into_iter().filter(|b| b != "b3").collect();
+    let n = plan::apply_repair(&mut sk2, plan::parse_repair(reply).unwrap(), &scope, &blocks);
+    assert_eq!(n, 5, "p5 say+link_prev+link_next, p1 link_prev, b1 purpose");
+    for p in &before {
+        if !scope.contains(&p.id) {
+            assert_eq!(serde_json::to_string(sk2.para(&p.id).unwrap()).unwrap(), serde_json::to_string(p).unwrap(), "{} outside the scope is byte-identical", p.id);
+        }
+    }
+    assert_eq!(sk2.block("b3").unwrap().purpose, "", "a block outside the scope keeps its purpose");
+    assert_eq!(sk2.block("b1").unwrap().purpose, "先講限制再比較");
+    assert_eq!(sk2.para("p3").unwrap().jump.as_ref().unwrap().fix, "加一句過渡");
+    let edits: Vec<&Thread> = sk2.threads.iter().filter(|t| t.kind == "edit").collect();
+    assert_eq!(edits.iter().map(|t| t.anchor.as_str()).collect::<Vec<_>>(), ["p5", "p1", "b1"]);
+    assert_eq!(edits[0].changes.iter().map(|c| (c.id.as_str(), c.field.as_str(), c.state.as_str())).collect::<Vec<_>>(), [("c1", "say", "applied"), ("c2", "link_prev", "applied"), ("c3", "link_next", "applied")]);
+    assert!(!sk2.para("p5").unwrap().touched && sk2.para("p5").unwrap().reason.is_empty());
+    // 還原 one change
+    let e1 = edits[0].id.clone();
+    sk2.decide(&e1, "c1", false).unwrap();
+    assert_eq!(sk2.para("p5").unwrap().say, "限制");
+}
