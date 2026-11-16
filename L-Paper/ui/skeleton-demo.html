@@ -170,6 +170,78 @@ async function call(path, body) {
     }
     document.title = `probe typing: ${same ? "ok" : "FAILED"} value=${first.value.length} points=${document.querySelectorAll('[data-id="p8"] .sk-points li').length}`;
   }
+  // ?probe=ops: add, name, move by keyboard, drag, remove, undo, 暫存 — each checked on the pretend
+  // server's own data (what the page sent), not on the page. The result is the page title.
+  if (Q.get("probe") === "ops") {
+    const out = [];
+    const ok = (name, cond) => out.push(`${cond ? "ok" : "FAILED"} ${name}`);
+    const ids = (b) => where(b).b.paras.map((p) => p.id).join(",");
+    const node = (id) => document.querySelector(`.sk-canvas [data-id="${id}"]`);
+    const key = (el, k, more = {}) => el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, ...more }));
+    const settle = () => wait(260);
+    // add a paragraph after ¶8 and name it
+    document.querySelectorAll('[data-id="b4"] .sk-gap')[1].click();
+    await wait(30);
+    let ed = document.querySelector('[data-id="b4"] textarea.sk-say');
+    ok("add: editor opens", !!ed && document.activeElement === ed);
+    ed.value = "新增的一段"; ed.dispatchEvent(new Event("input"));
+    await settle();
+    ed = document.querySelector('[data-id="b4"] textarea.sk-say');
+    ok("add: typing survives the server's id", !!ed && ed.value === "新增的一段");
+    key(ed, "Enter");
+    await settle();
+    const added = where("b4").b.paras[1];
+    ok("add: saved on the server", added?.say === "新增的一段" && where("b4").b.paras.length === 4);
+    // move it down with Alt+↓, then up across the frame edge
+    node(added.id).focus();
+    key(node(added.id), "ArrowDown", { altKey: true });
+    await settle();
+    ok("move: Alt+↓", ids("b4") === `p8,p9,${added.id},p10`);
+    key(node("p8"), "ArrowUp", { altKey: true });
+    await settle();
+    ok("move: across frames", ids("b3") === "p5,p6,p7,p8" && ids("b4") === `p9,${added.id},p10`);
+    // drag ¶10 to the top of its frame
+    const grip = node("p10").querySelector(".sk-grip");
+    const g = grip.getBoundingClientRect();
+    const first = node("p9").getBoundingClientRect();
+    const pe = (type, x, y, target = window) => target.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true }));
+    pe("pointerdown", g.left + 3, g.top + 3, grip);
+    pe("pointermove", g.left + 3, g.top - 20);
+    pe("pointermove", first.left + 40, first.top + 4);
+    ok("drag: ghost and drop line show", !!document.querySelector(".sk-ghost") && !!document.querySelector(".sk-dropbar"));
+    pe("pointerup", first.left + 40, first.top + 4);
+    await settle();
+    ok("drag: moved", ids("b4") === `p10,p9,${added.id}` && !document.querySelector(".sk-ghost"));
+    // remove, undo
+    node(added.id).querySelector('[aria-label="刪除"]').click();
+    await settle();
+    ok("remove", ids("b4") === "p10,p9" && !!document.querySelector(".toast-act"));
+    document.querySelector(".toast-act").click();
+    await settle();
+    ok("undo", ids("b4") === `p10,p9,${added.id}`);
+    // edit a title in place
+    document.querySelector('[data-id="b4"] .sk-btitle').click();
+    await wait(30);
+    const te = document.querySelector('[data-id="b4"] textarea.sk-btitle');
+    te.value = "外部驗證"; te.dispatchEvent(new Event("input")); key(te, "Enter");
+    await settle();
+    ok("edit: frame title", where("b4").b.title === "外部驗證");
+    // 暫存 repairs what was touched and lists it in the margin
+    const before = V.threads.length;
+    document.querySelector(".sk-save").click();
+    await wait(2600);
+    ok("save: repaired, in the margin", !V.dirty && V.threads.length > before && document.querySelectorAll('.sk-thread[data-kind="edit"]').length >= 2);
+    // answer by key 1: the next question is there at once, the answer is folded in after
+    const q = document.querySelector(".sk-thread.sk-active");
+    const qid = q.dataset.thread;
+    key(q.querySelector(".sk-answer"), "1");
+    await wait(60);
+    const nq = document.querySelector(".sk-thread.sk-active");
+    ok("answer: next question at once", !!nq && nq.dataset.thread !== qid && document.activeElement === nq.querySelector(".sk-answer"));
+    await wait(2600);
+    ok("answer: folded into the paragraph", V.threads.find((t) => t.id === qid).status === "done" && !!document.querySelector(`.sk-points li[data-from="${qid}"]`));
+    document.title = `probe ops: ${out.every((x) => x.startsWith("ok")) ? "ok" : "FAILED"} | ${out.join(" | ")}`;
+  }
   if (Q.get("at")) { await wait(60); const sc = document.querySelector(".sk-scroll"); const n = document.querySelector(`[data-id="${Q.get("at")}"]`); if (sc && n) sc.scrollTop += n.getBoundingClientRect().top - sc.getBoundingClientRect().top - 12; }
   window.__ready = true;
 })();
