@@ -126,6 +126,8 @@ pub struct Llm {
 pub struct Scripted {
     replies: std::sync::Mutex<std::collections::BTreeMap<String, std::collections::VecDeque<String>>>,
     pub asked: std::sync::Mutex<Vec<(String, String)>>,
+    /// `"_delay_ms": { "pc-draft-fill": 300 }`: a reply that takes time (to test edits made meanwhile).
+    delays: std::collections::BTreeMap<String, u64>,
 }
 
 impl Scripted {
@@ -133,7 +135,8 @@ impl Scripted {
         let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("mock 檔：{e}"))?;
         let obj = v.as_object().ok_or("mock 檔要是物件：{ 任務: [回覆…] }")?;
         let mut replies = std::collections::BTreeMap::new();
-        for (task, list) in obj {
+        let delays = obj.get("_delay_ms").and_then(|d| d.as_object()).map(|d| d.iter().filter_map(|(k, v)| Some((k.clone(), v.as_u64()?))).collect()).unwrap_or_default();
+        for (task, list) in obj.iter().filter(|(k, _)| !k.starts_with('_')) {
             let list = match list {
                 serde_json::Value::Array(a) => a.clone(),
                 other => vec![other.clone()],
@@ -144,11 +147,19 @@ impl Scripted {
             }).collect();
             replies.insert(task.clone(), q);
         }
-        Ok(Scripted { replies: std::sync::Mutex::new(replies), asked: std::sync::Mutex::new(vec![]) })
+        Ok(Scripted { replies: std::sync::Mutex::new(replies), asked: std::sync::Mutex::new(vec![]), delays })
     }
 
     pub fn load(path: &std::path::Path) -> Result<Scripted, String> {
         Scripted::parse(&std::fs::read_to_string(path).map_err(|e| format!("{}：{e}", path.display()))?)
+    }
+
+    /// The reply for `task` after its scripted delay.
+    pub async fn answer(&self, task: &str, prompt: &Prompt) -> Result<String, String> {
+        if let Some(ms) = self.delays.get(task) {
+            tokio::time::sleep(std::time::Duration::from_millis(*ms)).await;
+        }
+        self.reply(task, prompt)
     }
 
     /// The next reply for `task` (the last one again when only one is left).
@@ -323,7 +334,7 @@ impl Llm {
     /// no fallback: the draft window's model picker.
     pub async fn complete_on(&self, task: &str, model_ref: &str, prompt: &Prompt, extra: Option<&str>, schema: Option<serde_json::Value>) -> Result<String, String> {
         if let Some(m) = &self.mock {
-            return m.reply(task, prompt);
+            return m.answer(task, prompt).await;
         }
         let router = Router::new(self.tasks.clone(), self.factory());
         let route = router.provider_for_with(task, &RouteOptions::only(model_ref).with_priority(Priority::Interactive)).await.map_err(|e| route_error(&e, true))?;
@@ -334,7 +345,7 @@ impl Llm {
     /// retry feedback); `schema` asks for JSON of that shape.
     pub async fn complete(&self, task: &str, choice: Option<EngineChoice>, prompt: &Prompt, extra: Option<&str>, schema: Option<serde_json::Value>) -> Result<String, String> {
         if let Some(m) = &self.mock {
-            return m.reply(task, prompt);
+            return m.answer(task, prompt).await;
         }
         let route = self.route(task, choice).await?;
         route.provider.complete(&request(&route, prompt, extra, schema)).await.map_err(|e| e.to_string())

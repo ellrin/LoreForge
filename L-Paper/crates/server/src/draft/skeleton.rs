@@ -20,6 +20,8 @@ pub(super) fn routes() -> Router<Shared> {
         .route("/api/papers/{name}/draft/skeleton/save", post(post_save))
         .route("/api/papers/{name}/draft/skeleton/change", post(post_change))
         .route("/api/papers/{name}/draft/skeleton/convert", post(post_convert))
+        .route("/api/papers/{name}/draft/skeleton/answer", post(post_answer))
+        .route("/api/papers/{name}/draft/skeleton/note", post(post_note))
 }
 
 // ── what runs ────────────────────────────────────────────
@@ -446,5 +448,140 @@ async fn post_save(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
     reply(&c, &sess)
 }
 
-/// The fill-in of an answered thread on a task of its own (stage 4).
-fn spawn_fill(_s: &Shared, _c: &Ctx, _thread: String) {}
+// ── 補肉 ─────────────────────────────────────────────────
+
+/// The paragraph an answer goes into: the anchor, or a block's first paragraph.
+fn fill_target(k: &Skeleton, anchor: &str) -> Option<String> {
+    if k.para(anchor).is_some() {
+        return Some(anchor.to_string());
+    }
+    k.block(anchor).and_then(|b| b.paras.first()).map(|p| p.id.clone())
+}
+
+/// The fill-in of an answered thread on a task of its own: the reply is applied to the session
+/// as it is then (the paragraph found by id). A failed call still closes the thread with the
+/// answer as said (never asked again, never polled forever).
+fn spawn_fill(s: &Shared, c: &Ctx, thread: String) {
+    let Some(held) = hold(&c.dir, &format!("fill:{thread}")) else { return };
+    let (s2, c2) = (s.clone(), own(c));
+    tokio::spawn(async move {
+        let _held = held;
+        let Ok(sess) = load(&c2.dir) else { return };
+        let Some(k) = sess.skeleton.clone() else { return };
+        let Some(t) = k.thread(&thread).cloned() else { return };
+        let target = fill_target(&k, &t.anchor);
+        let _para = target.as_ref().and_then(|p| hold(&c2.dir, &format!("para:{p}")));
+        let record = pc_core::draft::fallback::cut(&ds::records_text(&c2.dir, &sess.records, usize::MAX), 20_000);
+        let prompt = skp::fill_prompt(&c2.key_value, &k, &t, &record);
+        let r = engine::structured(&engines(&s2), skp::FILL_TASK, &prompt, skp::fill_schema(), skp::parse_fill).await;
+        if let Err(e) = &r {
+            eprintln!("要點回填 {thread}: {e}");
+        }
+        let guard_on = crate::workspace_guard(&s2).await.active();
+        let ids = ca::known_ids(&sess);
+        let _ = with_sk(&c2.dir, |sess| {
+            let Some(k) = sess.skeleton.as_mut() else { return Ok(()) };
+            if k.thread(&thread).is_none_or(|t| t.status != "answered") {
+                return Ok(());
+            }
+            let mut reply = r.map(|(x, _)| x).unwrap_or_default();
+            let notes = std::mem::take(&mut reply.writing_notes);
+            let at = k.thread(&thread).filter(|t| !k.orphaned.contains(&t.id)).and_then(|t| fill_target(k, &t.anchor));
+            // the paragraph where it is now (its busy mark cleared); removed meanwhile: dropped
+            skp::apply_fill(k, &thread, reply, &ids);
+            // how to write, said in the answer: 寫法筆記 on that paragraph
+            if let Some(pid) = at {
+                let section = k.section_of(&pid).map(|s| sk::old_section(s).to_string()).unwrap_or_default();
+                if !notes.is_empty() {
+                    pc_core::draft::notes::add_in(sess, &pid, &section, notes, guard_on);
+                }
+            }
+            Ok(())
+        })
+        .await;
+    });
+}
+
+#[derive(Deserialize)]
+struct AnswerBody {
+    thread: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    picked: Vec<String>,
+    #[serde(default)]
+    skip: bool,
+}
+
+/// An answer: at once the thread is answered and `next` moves on; the fill-in runs behind.
+async fn post_answer(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<AnswerBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    let (sess, fill) = tri!(
+        with_sk(&c.dir, |sess| {
+            let k = sess.skeleton.as_mut().ok_or("還沒有骨架")?;
+            clear_failed(k);
+            let t = k.thread(&b.thread).cloned().ok_or("沒有這一題")?;
+            if t.status != "open" {
+                return Err("這一題已經回答過了".into());
+            }
+            if b.skip {
+                k.thread_mut(&b.thread).expect("checked").status = "skipped".into();
+                return Ok(false);
+            }
+            // the options picked, then what was typed or said
+            let mut said: Vec<String> = b.picked.iter().filter_map(|o| t.options.iter().find(|x| &x.id == o).map(|x| x.text.clone())).collect();
+            if !b.text.trim().is_empty() {
+                said.push(b.text.trim().to_string());
+            }
+            if said.is_empty() {
+                return Err("先選一個或說說看".into());
+            }
+            let target = fill_target(k, &t.anchor);
+            let x = k.thread_mut(&b.thread).expect("checked");
+            x.messages.push(sk::Msg { who: "me".into(), text: said.join("。") });
+            x.status = "answered".into();
+            if let Some(p) = target.and_then(|p| k.para_mut(&p)) {
+                p.busy = Some("fill".into());
+            }
+            Ok(true)
+        })
+        .await
+    );
+    if fill {
+        spawn_fill(&s, &c, b.thread.clone());
+    }
+    reply(&c, &sess)
+}
+
+#[derive(Deserialize)]
+struct NoteBody {
+    anchor: String,
+    text: String,
+}
+
+/// Something the author says about a paragraph or a block unasked: a `note` thread, folded in
+/// like an answer.
+async fn post_note(State(s): State<Shared>, AxPath(name): AxPath<String>, Json(b): Json<NoteBody>) -> Resp {
+    let c = tri!(ctx(&s, &name).await);
+    if b.text.trim().is_empty() {
+        return bad("說說看");
+    }
+    let (sess, id) = tri!(
+        with_sk(&c.dir, |sess| {
+            let k = sess.skeleton.as_mut().filter(|k| k.exists()).ok_or("還沒有骨架")?;
+            clear_failed(k);
+            if !k.has(&b.anchor) {
+                return Err("沒有這一段或這個框".into());
+            }
+            let target = fill_target(k, &b.anchor);
+            let id = k.add_thread(sk::Thread { anchor: b.anchor.clone(), kind: "note".into(), status: "answered".into(), messages: vec![sk::Msg { who: "me".into(), text: b.text.trim().to_string() }], ..Default::default() });
+            if let Some(p) = target.and_then(|p| k.para_mut(&p)) {
+                p.busy = Some("fill".into());
+            }
+            Ok(id)
+        })
+        .await
+    );
+    spawn_fill(&s, &c, id);
+    reply(&c, &sess)
+}

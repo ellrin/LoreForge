@@ -68,3 +68,21 @@
   inventory、save、plan）會清掉失敗的 job。
 - `/convert` 沒有大綱時是背景工作（`job.kind = "convert"`），回應時 `exists` 還是 false。
 - 轉換來的訪談串 `kind = "note"`、`status = "done"`（合約沒有專給轉換的種類）。
+
+第 3 段 commit：2bbfa6d。
+
+## 第 4 段：回答與要點回填
+
+- `/answer`：立刻回應（串 → answered、`next` 前進、那一段 `busy = "fill"`），回填在背景跑 `pc-draft-fill`；
+  選項的文字與打的字合成作者的回答。`skip` → skipped。已回答的題再答 → 400。`/note`：作者主動說的話 → `note` 串，同樣回填；
+  掛在框上的 note 回填到框的第一段。
+- 回填落地時重新讀檔、照 id 找段落（移動過沒關係）；`points` 只換掉 `from` = 這一串的，其他要點不動；串 → done、結論一行。
+  段落在回填期間被刪 → 結果丟掉、串照樣結束（掛到框上；復原段落後再落地就照常寫回）。
+- 追問：模型說 `gap` 且答案不是「沒有／還沒／不是…」才加，最多一個、追問不再追問；放在頁面現在顯示的那一題之後（不搶走 `next`）。
+  「沒有／還沒有」照記成要點與結論，不再追問。
+- 回答裡的寫法 → 寫法筆記（`notes::add_in`，group = 段落 id、章節 = 段落所在章對應的舊章名）；第 5 段的禁用字檢查會讀到。
+- 回填失敗（沒有引擎）也會把串結束，結論 = 回答的第一行，不會讓頁面一直輪詢；App 關掉時留下的 answered 串，下次讀取時重新回填。
+- 假模型可以設 `"_delay_ms": { "任務": 毫秒 }`，測試用它讓編輯發生在回填途中。
+
+測試：`cargo test -p pc-core skeleton` → 28 passed；`cargo test -p pc-server --test skeleton_api` → 1 passed
+（回答 → 回填中移動段落 → 要點落在新位置、移動保留；略過；「還沒有」不追問；回填中刪段 → 丟掉；框上的 note；兩次 GET 同 rev）。

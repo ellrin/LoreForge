@@ -528,3 +528,99 @@ fn the_repair_changes_only_its_scope() {
     sk2.decide(&e1, "c1", false).unwrap();
     assert_eq!(sk2.para("p5").unwrap().say, "限制");
 }
+
+fn answered(sk: &mut Skeleton, anchor: &str, answer: &str) -> String {
+    sk.add_thread(Thread { anchor: anchor.into(), kind: "missing".into(), status: "answered".into(), question: "原因是什麼？".into(), messages: vec![Msg { who: "ai".into(), text: "原因是什麼？".into() }, Msg { who: "me".into(), text: answer.into() }], ..Default::default() })
+}
+
+fn fill(points: &[&str], conclusion: &str, follow: Option<&str>) -> plan::FillReply {
+    plan::FillReply { points: points.iter().map(|x| x.to_string()).collect(), conclusion: conclusion.into(), gap: follow.is_some(), follow_up: follow.map(|q| plan::FollowUp { kind: "missing".into(), question: q.into(), options: vec!["a".into(), "b".into()] }), writing_notes: vec![] }
+}
+
+#[test]
+fn a_fill_lands_where_the_paragraph_is_now() {
+    let mut sk = small();
+    sk.para_mut("p3").unwrap().points.push(Point { text: "planner".into(), from: None });
+    let q = answered(&mut sk, "p3", "兩邊資料來源不同");
+    sk.para_mut("p3").unwrap().busy = Some("fill".into());
+    // the author moves the paragraph while the fill runs
+    sk.apply(Op::Move { id: "p3".into(), to: "b3".into(), at: Some(0), reason: "".into() }).unwrap();
+    let ids = Default::default();
+    assert!(plan::apply_fill(&mut sk, &q, fill(&["來源不同"], "資料來源不同", None), &ids).is_none());
+    let p = sk.para("p3").unwrap();
+    assert_eq!(p.points.iter().map(|x| (x.text.as_str(), x.from.as_deref())).collect::<Vec<_>>(), [("planner", None), ("來源不同", Some(q.as_str()))]);
+    assert_eq!((p.busy.clone(), p.state), (None, State::Points));
+    assert_eq!(sk.thread(&q).unwrap().status, "done");
+    assert_eq!(sk.thread(&q).unwrap().conclusion, "資料來源不同");
+    assert_eq!(sk.block_of("p3").unwrap().id, "b3");
+    // again (an answer folded in twice): its own points are replaced, never doubled
+    plan::apply_fill(&mut sk, &q, fill(&["來源不同，標註相同"], "", None), &ids);
+    assert_eq!(sk.para("p3").unwrap().points.len(), 2);
+}
+
+#[test]
+fn a_fill_for_a_removed_paragraph_is_dropped() {
+    let mut sk = small();
+    let q = answered(&mut sk, "p2", "是");
+    sk.apply(Op::Remove { id: "p2".into() }).unwrap();
+    // the answered thread hangs on the block now, but its fill-in is dropped (never into another paragraph)
+    assert_eq!(sk.thread(&q).unwrap().anchor, "b1");
+    plan::apply_fill(&mut sk, &q, fill(&["x"], "y", Some("再問？")), &Default::default());
+    assert_eq!(sk.thread(&q).unwrap().status, "done");
+    assert!(sk.paras().all(|p| p.points.is_empty()));
+    assert_eq!(sk.threads.len(), 1, "no follow-up");
+    // removed, then brought back by undo before the fill landed: it lands there
+    let mut sk = small();
+    let q = answered(&mut sk, "p2", "是");
+    sk.apply(Op::Remove { id: "p2".into() }).unwrap();
+    sk.apply(Op::Undo).unwrap();
+    plan::apply_fill(&mut sk, &q, fill(&["x"], "y", None), &Default::default());
+    assert_eq!(sk.para("p2").unwrap().points[0].text, "x");
+    // a note on a block goes into its first paragraph
+    let mut sk = small();
+    let n = sk.add_thread(Thread { anchor: "b2".into(), kind: "note".into(), status: "answered".into(), messages: vec![Msg { who: "me".into(), text: "外部要先講".into() }], ..Default::default() });
+    plan::apply_fill(&mut sk, &n, fill(&["外部先講"], "", None), &Default::default());
+    assert_eq!(sk.para("p3").unwrap().points[0].from.as_deref(), Some(n.as_str()));
+    // a thread whose paragraph and block are both gone: nothing to write into
+    let mut sk = small();
+    let q = answered(&mut sk, "p9", "是");
+    let before: Vec<Para> = sk.paras().cloned().collect();
+    plan::apply_fill(&mut sk, &q, fill(&["x"], "y", Some("再問？")), &Default::default());
+    assert_eq!(sk.paras().cloned().collect::<Vec<_>>(), before);
+    assert_eq!(sk.threads.len(), 1, "no follow-up on nothing");
+}
+
+#[test]
+fn a_follow_up_only_for_a_real_gap_and_never_after_no() {
+    let mut sk = small();
+    let ids: std::collections::BTreeSet<String> = ["E1".to_string()].into();
+    let other = sk.add_thread(Thread { anchor: "p4".into(), kind: "choice".into(), status: "open".into(), question: "後面的".into(), ..Default::default() });
+    let q = answered(&mut sk, "p1", "A 在小資料比較好，因為先驗");
+    let f = plan::apply_fill(&mut sk, &q, fill(&["A 小資料較好"], "先驗", Some("E1 的先驗是什麼？")), &ids).unwrap();
+    assert_eq!(sk.thread(&f).unwrap().question, "的先驗是什麼？");
+    assert_eq!(sk.threads.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), [other.as_str(), q.as_str(), f.as_str()]);
+    // with an open question after it (the one the page shows now), the follow-up comes after that one
+    let mut sk2 = small();
+    let q2 = answered(&mut sk2, "p1", "因為先驗");
+    let shown = sk2.add_thread(Thread { anchor: "p4".into(), kind: "choice".into(), status: "open".into(), question: "現在這題".into(), ..Default::default() });
+    let later = sk2.add_thread(Thread { anchor: "p5".into(), kind: "choice".into(), status: "open".into(), question: "再後面".into(), ..Default::default() });
+    let f2 = plan::apply_fill(&mut sk2, &q2, fill(&["先驗"], "先驗", Some("哪種先驗？")), &ids).unwrap();
+    assert_eq!(sk2.threads.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), [q2.as_str(), shown.as_str(), f2.as_str(), later.as_str()]);
+    assert_eq!(sk2.next().as_deref(), Some(shown.as_str()), "the question shown stays next");
+    // answering the follow-up never makes another one
+    sk.thread_mut(&f).unwrap().status = "answered".into();
+    sk.thread_mut(&f).unwrap().messages.push(Msg { who: "me".into(), text: "形狀先驗".into() });
+    assert!(plan::apply_fill(&mut sk, &f, fill(&["形狀先驗"], "形狀", Some("還有呢？")), &ids).is_none());
+    // "no / not yet": recorded as said, no follow-up even when the model wants one
+    let n = answered(&mut sk, "p2", "還沒有做外部驗證");
+    assert!(plan::apply_fill(&mut sk, &n, fill(&[], "", Some("什麼時候會做？")), &ids).is_none());
+    let p = sk.para("p2").unwrap();
+    assert_eq!(p.points[0].text, "還沒有做外部驗證");
+    assert_eq!(sk.thread(&n).unwrap().conclusion, "還沒有做外部驗證");
+    assert!(plan::is_negative("沒有") && plan::is_negative("No, not yet") && !plan::is_negative("有，兩次"));
+    // a gap the model did not flag is no follow-up
+    let g = answered(&mut sk, "p3", "有");
+    let mut r = fill(&["有"], "有", Some("x？"));
+    r.gap = false;
+    assert!(plan::apply_fill(&mut sk, &g, r, &ids).is_none());
+}

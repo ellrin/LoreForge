@@ -328,6 +328,10 @@ pub struct Skeleton {
     pub follow_of: BTreeMap<String, String>,
     #[serde(default)]
     pub job: Option<Job>,
+    /// Answered threads whose paragraph was removed while their fill-in ran: the fill-in lands
+    /// nowhere (the thread still closes).
+    #[serde(default)]
+    pub orphaned: Vec<String>,
 }
 
 /// What the page gets (the contract's `View`).
@@ -583,6 +587,9 @@ impl Skeleton {
                 dropped.push(t);
             } else {
                 moved.push((t.id.clone(), t.anchor.clone()));
+                if t.status == "answered" && !self.orphaned.contains(&t.id) {
+                    self.orphaned.push(t.id.clone());
+                }
                 t.anchor = to.to_string();
                 keep.push(t);
             }
@@ -859,6 +866,7 @@ impl Skeleton {
             if let Some(x) = self.thread_mut(t) {
                 x.anchor = anchor.clone();
             }
+            self.orphaned.retain(|o| o != t);
         }
         for t in u.dropped {
             if self.thread(&t.id).is_none() {

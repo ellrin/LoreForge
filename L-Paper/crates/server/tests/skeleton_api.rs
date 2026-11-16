@@ -68,6 +68,14 @@ fn script() -> Value {
                 { "para": "x2", "kind": "conflict", "question": "記錄寫 A 最好，外部卻反轉，你要怎麼說？", "options": ["如實寫反轉", "放到限制"] }
             ]
         }],
+        "_delay_ms": { "pc-draft-fill": 300 },
+        "pc-draft-fill": [
+            { "points": ["B 和 C 用的資料來源不同"], "conclusion": "資料來源不同", "gap": true,
+              "follow_up": { "kind": "missing", "question": "哪一個資料來源比較大？", "options": ["內部", "外部"] },
+              "writing_notes": [{ "text": "這段不要用 novel", "scope": "paragraph", "banned": ["novel"] }] },
+            { "points": [], "conclusion": "", "gap": true, "follow_up": { "kind": "missing", "question": "什麼時候會做？", "options": [] }, "writing_notes": [] },
+            { "points": ["限制要先講"], "conclusion": "先講限制", "gap": false, "follow_up": null, "writing_notes": [] }
+        ],
         "pc-draft-skeleton-repair": [{
             "paras": [
                 { "id": "p5", "say": "過渡", "link_prev": "承接 A 對 B", "link_next": "交給 B 對 C", "why": "新增的段落" },
@@ -200,6 +208,58 @@ async fn skeleton_routes_end_to_end() {
     let (code, v) = call(&http, M::POST, url("/change"), json!({ "thread": edit["id"], "change": "c1", "accept": false })).await;
     assert_eq!(code, 200, "{v}");
     assert_eq!(para(&v, "p5")["say"], "新段", "reverted");
+
+    // ── 補肉 ──
+    let (code, v) = call(&http, M::POST, url("/answer"), json!({ "thread": "q1", "text": "標註也不太一樣", "picked": ["o1"], "skip": false })).await;
+    assert_eq!(code, 200, "{v}");
+    let q1 = v["threads"].as_array().unwrap().iter().find(|t| t["id"] == "q1").unwrap();
+    assert_eq!(q1["status"], "answered");
+    assert_eq!(q1["messages"][1]["text"], "資料不同。標註也不太一樣");
+    assert_eq!(v["next"], "q2", "the next question at once");
+    assert_eq!(para(&v, "p3")["busy"], "fill");
+    // the author moves the paragraph while the fill-in runs
+    let (code, v) = call(&http, M::POST, url("/ops"), json!({ "ops": [{ "op": "move", "id": "p3", "to": "b3", "at": 0, "reason": "放到討論" }] })).await;
+    assert_eq!(code, 200, "{v}");
+    let v = until(&http, url(""), |v| v["threads"].as_array().unwrap().iter().any(|t| t["id"] == "q1" && t["status"] == "done")).await;
+    let p3 = para(&v, "p3");
+    assert_eq!(p3["points"], json!([{ "text": "B 和 C 用的資料來源不同", "from": "q1" }]), "{v}");
+    assert_eq!((p3["busy"].clone(), p3["state"].clone(), p3["reason"].clone()), (Value::Null, json!("points"), json!("放到討論")), "the move made meanwhile stays");
+    assert_eq!(v["sections"][2]["blocks"][0]["paras"][0]["id"], "p3");
+    let ids: Vec<&str> = v["threads"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
+    assert_eq!(&ids[..4], ["q1", "q2", "q4", "q3"], "the follow-up after the question shown now");
+    assert_eq!(v["next"], "q2");
+    let sess: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("draft/session.json")).unwrap()).unwrap();
+    assert_eq!(sess["writing_notes"][0]["group"], "p3", "寫法筆記 on that paragraph");
+    // skip; then "not yet": recorded as said, no follow-up
+    let (_, v) = call(&http, M::POST, url("/answer"), json!({ "thread": "q2", "skip": true })).await;
+    assert_eq!(v["next"], "q4");
+    let (code, _) = call(&http, M::POST, url("/answer"), json!({ "thread": "q2", "text": "x" })).await;
+    assert_eq!(code, 400, "answered already");
+    let (_, v) = call(&http, M::POST, url("/answer"), json!({ "thread": "q3", "text": "還沒有做外部驗證" })).await;
+    assert_eq!(v["next"], "q4");
+    let v = until(&http, url(""), |v| v["threads"].as_array().unwrap().iter().any(|t| t["id"] == "q3" && t["status"] == "done")).await;
+    assert_eq!(para(&v, "p2")["points"][1]["text"], "還沒有做外部驗證");
+    assert_eq!(v["threads"].as_array().unwrap().len(), ids.len(), "no follow-up after no");
+    // an answer whose paragraph is removed before the fill-in lands: dropped, the thread closes
+    let (_, v) = call(&http, M::POST, url("/answer"), json!({ "thread": "q4", "text": "內部" })).await;
+    let before_points: Vec<Value> = v["sections"].as_array().unwrap().iter().flat_map(|s| s["blocks"].as_array().unwrap()).flat_map(|b| b["paras"].as_array().unwrap()).filter(|p| p["id"] != "p3").map(|p| p["points"].clone()).collect();
+    let (code, _) = call(&http, M::POST, url("/ops"), json!({ "ops": [{ "op": "remove", "id": "p3" }] })).await;
+    assert_eq!(code, 200);
+    let v = until(&http, url(""), |v| v["threads"].as_array().unwrap().iter().any(|t| t["id"] == "q4" && t["status"] == "done")).await;
+    let after_points: Vec<Value> = v["sections"].as_array().unwrap().iter().flat_map(|s| s["blocks"].as_array().unwrap()).flat_map(|b| b["paras"].as_array().unwrap()).map(|p| p["points"].clone()).collect();
+    assert_eq!(after_points, before_points, "the fill-in went nowhere");
+    assert_eq!(v["threads"].as_array().unwrap().iter().find(|t| t["id"] == "q4").unwrap()["anchor"], "b3");
+    let (_, v) = call(&http, M::POST, url("/ops"), json!({ "ops": [{ "op": "undo" }] })).await;
+    assert!(order(&v).contains(&"p3".to_string()));
+    // an unasked remark on a block
+    let (code, v) = call(&http, M::POST, url("/note"), json!({ "anchor": "b3", "text": "限制要先講" })).await;
+    assert_eq!(code, 200, "{v}");
+    let n = v["threads"].as_array().unwrap().iter().find(|t| t["kind"] == "note").unwrap()["id"].as_str().unwrap().to_string();
+    let v = until(&http, url(""), |v| v["threads"].as_array().unwrap().iter().any(|t| t["id"] == n.as_str() && t["status"] == "done")).await;
+    assert!(para(&v, "p3")["points"].as_array().unwrap().iter().any(|p| p["from"] == n.as_str()), "{v}");
+    let (_, a) = call(&http, M::GET, url(""), Value::Null).await;
+    let (_, b2) = call(&http, M::GET, url(""), Value::Null).await;
+    assert_eq!(a["rev"], b2["rev"], "nothing running: the same rev");
 
     // ── 改用骨架 ──
     let old = paper(&ws, "old");

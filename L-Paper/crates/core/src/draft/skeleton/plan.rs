@@ -618,12 +618,19 @@ pub fn is_negative(answer: &str) -> bool {
 /// The fill-in lands: the paragraph found by id where it is now (moved meanwhile is fine;
 /// removed = the points are dropped, the thread still closes); its points from this thread are
 /// replaced, others stay. A follow-up only when the answer opened a real gap, never after a "no",
-/// never a follow-up of a follow-up; it is asked next. Returns the follow-up's id.
+/// never a follow-up of a follow-up; it comes after the question shown now. Returns the follow-up's id.
 pub fn apply_fill(sk: &mut Skeleton, thread: &str, r: FillReply, ids: &BTreeSet<String>) -> Option<String> {
     let t = sk.thread(thread)?.clone();
     let answer: String = t.messages.iter().filter(|m| m.who == "me").map(|m| m.text.clone()).collect::<Vec<_>>().join("\n");
     let negative = is_negative(&answer);
-    let target = if sk.para(&t.anchor).is_some() { Some(t.anchor.clone()) } else { sk.block(&t.anchor).and_then(|b| b.paras.first()).map(|p| p.id.clone()) };
+    let target = if sk.orphaned.contains(&t.id) {
+        None
+    } else if sk.para(&t.anchor).is_some() {
+        Some(t.anchor.clone())
+    } else {
+        sk.block(&t.anchor).and_then(|b| b.paras.first()).map(|p| p.id.clone())
+    };
+    sk.orphaned.retain(|o| o != thread);
     let mut points: Vec<String> = r.points.into_iter().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
     let conclusion = if r.conclusion.trim().is_empty() { answer.lines().next().unwrap_or("").trim().to_string() } else { r.conclusion.trim().to_string() };
     if points.is_empty() && negative {
@@ -650,10 +657,13 @@ pub fn apply_fill(sk: &mut Skeleton, thread: &str, r: FillReply, ids: &BTreeSet<
     let opts: Vec<String> = follow.options.iter().map(|o| scrub(o, ids)).filter(|o| !o.is_empty()).take(3).collect();
     let new = Thread { id: String::new(), anchor: target.unwrap_or_default(), kind, status: "open".into(), question: text.clone(), options: options(opts), messages: vec![Msg { who: "ai".into(), text }], conclusion: String::new(), changes: vec![] };
     let id = sk.add_thread(new);
-    // asked next: right after the thread it follows
+    // asked soon: after the question the page shows now (the first open one after the thread it
+    // follows), never in its place
     if let (Some(from), Some(at)) = (sk.threads.iter().position(|x| x.id == thread), sk.threads.iter().position(|x| x.id == id)) {
         let t = sk.threads.remove(at);
-        sk.threads.insert(from + 1, t);
+        let shown = sk.threads.iter().enumerate().skip(from + 1).find(|(_, x)| x.status == "open" && !x.question.is_empty()).map(|(k, _)| k + 1);
+        let to = shown.unwrap_or(sk.threads.len()).min(sk.threads.len());
+        sk.threads.insert(to, t);
     }
     sk.follow_of.insert(id.clone(), thread.to_string());
     Some(id)
