@@ -63,9 +63,10 @@ pub fn schema() -> Value {
 
 /// The request: the key value, its paper's title when known, and the criteria.
 pub fn prompt(key_value: &str, title: &str, criteria: &str) -> Prompt {
-    let (_, max) = crate::meta::key_value_length(key_value);
+    let (n, max) = crate::meta::key_value_length(key_value);
     let lang = if max == crate::meta::KEY_VALUE_MAX_CJK { "the same language as the key value (Traditional Chinese where it is Chinese)" } else { "English" };
     let codes = CODES.iter().map(|(c, _)| *c).collect::<Vec<_>>().join(", ");
+    let unit = if max == crate::meta::KEY_VALUE_MAX_CJK { "characters" } else { "words" };
     let system = format!(
         "You check a research paper's key value: the one sentence the whole paper argues, used as its thesis. \
 Judge it against the criteria below, for a research paper: the claim must be supportable by the paper's evidence, \
@@ -73,11 +74,14 @@ not merely debatable opinion.\n\
 Answer with JSON: {{\"problems\": [codes], \"rewrites\": [text]}}.\n\
 - problems: only codes from this list that clearly apply: {codes}. An empty list when the key value is fine.\n\
 - rewrites: at most {MAX_REWRITES} better versions that keep the author's meaning, field and facts (never invent results, \
-numbers or methods); written in {lang}; each at most {max} {unit}. No rewrites when there are no problems.\n\
+numbers or methods); written in {lang}; each at most {max} {unit}. No rewrites when there are no problems, unless the key value is over the length limit.\n\
 The criteria (the author's notes on thesis statements; their examples illustrate problems, never copy their subjects):\n{criteria}",
-        unit = if max == crate::meta::KEY_VALUE_MAX_CJK { "characters" } else { "words" },
     );
     let mut user = format!("Key value: {}\n", key_value.trim());
+    // length is not one of the codes: a key value that is only too long still gets shorter versions
+    if n > max {
+        user += &format!("It is {n} {unit}, over the limit of {max}: give rewrites within the limit that keep its meaning, even when no other problem applies.\n");
+    }
     if !title.trim().is_empty() {
         user += &format!("Paper title: {}\n", title.trim());
     }
@@ -164,6 +168,14 @@ mod tests {
         let s = schema();
         assert_eq!(s["properties"]["problems"]["items"]["enum"].as_array().unwrap().len(), CODES.len());
         assert_eq!(s["required"], json!(["problems", "rewrites"]));
+    }
+
+    #[test]
+    fn a_key_value_that_is_only_too_long_is_asked_for_shorter_versions() {
+        let long = "方法".repeat(31);
+        let p = prompt(&long, "", FALLBACK);
+        assert!(p.user.contains("It is 62 characters, over the limit of 50"), "{}", p.user);
+        assert!(!prompt("方法 A 提升判讀準確度", "", FALLBACK).user.contains("over the limit"));
     }
 
     #[test]
