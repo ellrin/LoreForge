@@ -1,0 +1,689 @@
+{
+ "rev": 12,
+ "exists": true,
+ "can_convert": false,
+ "job": null,
+ "dirty": true,
+ "can_undo": true,
+ "targets": {
+  "figure": [
+   4,
+   7
+  ],
+  "table": [
+   2,
+   4
+  ],
+  "equation": [
+   3,
+   10
+  ]
+ },
+ "inventory": [
+  {
+   "id": "v1",
+   "kind": "table",
+   "title": "三種方法在內部測試集的比較",
+   "note": "主要比較，支撐「A 較好」",
+   "evidence": [
+    "E1",
+    "R1"
+   ],
+   "label": "tab:main",
+   "keep": true,
+   "by_author": false,
+   "pending": false,
+   "tool": "table"
+  },
+  {
+   "id": "v2",
+   "kind": "table",
+   "title": "外部資料集上的結果",
+   "note": "外部驗證",
+   "evidence": [
+    "E3"
+   ],
+   "label": "tab:external",
+   "keep": true,
+   "by_author": false,
+   "pending": false,
+   "tool": "table"
+  },
+  {
+   "id": "v3",
+   "kind": "figure",
+   "title": "訓練資料量對準確率的影響",
+   "note": "說明 A 在小資料時的優勢",
+   "evidence": [
+    "E2"
+   ],
+   "label": "fig:size",
+   "keep": true,
+   "by_author": false,
+   "pending": false,
+   "tool": "plot"
+  },
+  {
+   "id": "v4",
+   "kind": "flow",
+   "title": "整體流程",
+   "note": "方法總覽，期刊慣例的圖 1",
+   "evidence": [
+    "T1"
+   ],
+   "label": "fig:overview",
+   "keep": true,
+   "by_author": false,
+   "pending": false,
+   "tool": "flow"
+  },
+  {
+   "id": "v5",
+   "kind": "equation",
+   "title": "損失函數",
+   "note": "方法的核心定義",
+   "evidence": [
+    "E1"
+   ],
+   "label": "eq:loss",
+   "keep": true,
+   "by_author": false,
+   "pending": false,
+   "tool": "equation"
+  },
+  {
+   "id": "v6",
+   "kind": "algorithm",
+   "title": "訓練流程的偽代碼",
+   "note": "讓方法可重現",
+   "evidence": [
+    "T1"
+   ],
+   "label": "alg:train",
+   "keep": false,
+   "by_author": false,
+   "pending": false,
+   "tool": "algorithm"
+  },
+  {
+   "id": "v7",
+   "kind": "finding",
+   "title": "A 與 C 的差距隨資料量縮小",
+   "note": "可放討論",
+   "evidence": [
+    "E2",
+    "H2"
+   ],
+   "label": "",
+   "keep": true,
+   "by_author": false,
+   "pending": false,
+   "tool": ""
+  },
+  {
+   "id": "v8",
+   "kind": "figure",
+   "title": "失敗案例",
+   "note": "作者新增",
+   "evidence": [],
+   "label": "fig:failure",
+   "keep": true,
+   "by_author": true,
+   "pending": true,
+   "tool": "image"
+  }
+ ],
+ "sections": [
+  {
+   "id": "s1",
+   "title": "Introduction",
+   "role": "introduction",
+   "blocks": [
+    {
+     "id": "b1",
+     "title": "問題與缺口",
+     "purpose": "讀者先接受小資料是常態，再看到現有做法在這裡不夠",
+     "of": null,
+     "paras": [
+      {
+       "id": "p1",
+       "kind": "Intro turn",
+       "say": "小資料是這個領域的常態，現有方法多半假設資料充足",
+       "points": [],
+       "link_prev": "",
+       "link_next": "引出缺口",
+       "jump": null,
+       "floats": [],
+       "cites": [],
+       "sources": [],
+       "pending": [],
+       "text": "",
+       "state": "outline",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      },
+      {
+       "id": "p2",
+       "kind": "Intro origin",
+       "say": "觸發這個研究的觀察，以及本文的做法一句話",
+       "points": [],
+       "link_prev": "承接缺口",
+       "link_next": "交給貢獻",
+       "jump": null,
+       "floats": [],
+       "cites": [],
+       "sources": [],
+       "pending": [],
+       "text": "",
+       "state": "outline",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s2",
+   "title": "Methods",
+   "role": "methods",
+   "blocks": [
+    {
+     "id": "b2",
+     "title": "方法總覽",
+     "purpose": "用整體流程圖說明三個步驟",
+     "of": null,
+     "paras": [
+      {
+       "id": "p3",
+       "kind": "Exposition",
+       "say": "整體流程與三個步驟",
+       "points": [],
+       "link_prev": "",
+       "link_next": "接損失函數的定義",
+       "jump": null,
+       "floats": [
+        "fig:overview"
+       ],
+       "cites": [],
+       "sources": [
+        "T1"
+       ],
+       "pending": [],
+       "text": "",
+       "state": "outline",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      },
+      {
+       "id": "p4",
+       "kind": "Methods custom decision",
+       "say": "損失函數為什麼這樣設計",
+       "points": [],
+       "link_prev": "承接流程的第二步",
+       "link_next": "",
+       "jump": null,
+       "floats": [
+        "eq:loss"
+       ],
+       "cites": [],
+       "sources": [
+        "E1"
+       ],
+       "pending": [],
+       "text": "",
+       "state": "outline",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s3",
+   "title": "Results",
+   "role": "results",
+   "blocks": [
+    {
+     "id": "b3",
+     "title": "解釋表 1：主要比較",
+     "purpose": "三種方法兩兩比較，讀者看完知道 A 最好、B 與 C 相當",
+     "of": null,
+     "paras": [
+      {
+       "id": "p5",
+       "kind": "Results key result",
+       "say": "A 對 B：A 在主要指標較高",
+       "points": [
+        {
+         "text": "A 0.91，B 0.87，五折一致",
+         "from": null
+        }
+       ],
+       "link_prev": "",
+       "link_next": "接著比較 B 與 C",
+       "jump": null,
+       "floats": [
+        "tab:main"
+       ],
+       "cites": [],
+       "sources": [
+        "E1",
+        "R1"
+       ],
+       "pending": [],
+       "text": "Table~\\ref{tab:main} compares the three methods on the internal test set. Method A reached an accuracy of 0.91, while Method B reached 0.87. The gap held in all five folds, which suggests that it does not depend on one split.",
+       "state": "done",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      },
+      {
+       "id": "p6",
+       "kind": "Results secondary",
+       "say": "B 對 C：差距落在區間內",
+       "points": [
+        {
+         "text": "差 0.01，信賴區間重疊",
+         "from": null
+        }
+       ],
+       "link_prev": "承接 A 對 B",
+       "link_next": "最後看 A 對 C",
+       "jump": null,
+       "floats": [
+        "tab:main"
+       ],
+       "cites": [],
+       "sources": [
+        "E1"
+       ],
+       "pending": [],
+       "text": "Method B and Method C were close. Their accuracies differed by 0.01, and the confidence intervals overlapped. We therefore treat them as equivalent in the remaining analysis.",
+       "state": "done",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      },
+      {
+       "id": "p7",
+       "kind": "Results key result",
+       "say": "A 對 C：為什麼 A 在小資料佔優",
+       "points": [
+        {
+         "text": "少於 500 張時差距最大",
+         "from": null
+        },
+        {
+         "text": "強調先驗較強，不寫成已證實",
+         "from": "q1"
+        }
+       ],
+       "link_prev": "承接 B 對 C",
+       "link_next": "帶到外部驗證",
+       "jump": null,
+       "floats": [
+        "tab:main",
+        "fig:size"
+       ],
+       "cites": [],
+       "sources": [
+        "E2"
+       ],
+       "pending": [],
+       "text": "The advantage of Method A was largest when fewer than 500 training images were available. With the full training set, the gap narrowed to 0.02. This pattern is consistent with the stronger prior that Method A carries.",
+       "state": "done",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      }
+     ]
+    },
+    {
+     "id": "b4",
+     "title": "解釋表 2：外部驗證",
+     "purpose": "外部資料上的排名，以及和表 1 不一致的地方",
+     "of": null,
+     "paras": [
+      {
+       "id": "p8",
+       "kind": "Results key result",
+       "say": "外部資料上的排名",
+       "points": [
+        {
+         "text": "排名和表 1 不同：C 升到第一",
+         "from": null
+        }
+       ],
+       "link_prev": "承接表 1 的結論",
+       "link_next": "解釋不一致",
+       "jump": null,
+       "floats": [
+        "tab:external"
+       ],
+       "cites": [],
+       "sources": [
+        "E3"
+       ],
+       "pending": [],
+       "text": "",
+       "state": "points",
+       "busy": "fill",
+       "problems": [],
+       "reason": "",
+       "touched": false
+      },
+      {
+       "id": "p9",
+       "kind": "Results secondary",
+       "say": "和表 1 不一致的地方",
+       "points": [],
+       "link_prev": "承接外部排名",
+       "link_next": "",
+       "jump": null,
+       "floats": [
+        "tab:external"
+       ],
+       "cites": [],
+       "sources": [
+        "E3"
+       ],
+       "pending": [],
+       "text": "",
+       "state": "outline",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      },
+      {
+       "id": "p10",
+       "kind": "",
+       "say": "失敗案例",
+       "points": [],
+       "link_prev": "",
+       "link_next": "",
+       "jump": {
+        "why": "上一段在談排名，這一段直接談個案",
+        "fix": "加一句說明哪一類影像造成排名改變"
+       },
+       "floats": [
+        "fig:failure"
+       ],
+       "cites": [],
+       "sources": [],
+       "pending": [
+        "P1"
+       ],
+       "text": "",
+       "state": "outline",
+       "busy": null,
+       "problems": [],
+       "reason": "結尾想先交代限制，再進討論",
+       "touched": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s4",
+   "title": "Discussion",
+   "role": "discussion",
+   "blocks": [
+    {
+     "id": "b5",
+     "title": "為什麼外部結果不同",
+     "purpose": "展開表 2 的不一致",
+     "of": "b4",
+     "paras": [
+      {
+       "id": "p11",
+       "kind": "Discussion interpretation",
+       "say": "資料來源的差異能解釋多少",
+       "points": [],
+       "link_prev": "承接結果的不一致",
+       "link_next": "",
+       "jump": null,
+       "floats": [],
+       "cites": [],
+       "sources": [
+        "E3",
+        "H2"
+       ],
+       "pending": [],
+       "text": "",
+       "state": "outline",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      },
+      {
+       "id": "p12",
+       "kind": "Limitation",
+       "say": "方法本身的限制",
+       "points": [],
+       "link_prev": "承接解釋",
+       "link_next": "",
+       "jump": null,
+       "floats": [],
+       "cites": [],
+       "sources": [],
+       "pending": [],
+       "text": "",
+       "state": "outline",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s5",
+   "title": "Conclusion",
+   "role": "conclusion",
+   "blocks": [
+    {
+     "id": "b6",
+     "title": "結論",
+     "purpose": "最強的一個主張、一個限制、下一步",
+     "of": null,
+     "paras": [
+      {
+       "id": "p13",
+       "kind": "Conclusion",
+       "say": "A 在小資料下較好，外部驗證仍待確認",
+       "points": [],
+       "link_prev": "",
+       "link_next": "",
+       "jump": null,
+       "floats": [],
+       "cites": [],
+       "sources": [],
+       "pending": [],
+       "text": "",
+       "state": "outline",
+       "busy": null,
+       "problems": [],
+       "reason": "",
+       "touched": false
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "threads": [
+  {
+   "id": "q1",
+   "anchor": "p7",
+   "kind": "choice",
+   "status": "done",
+   "question": "A 在小資料的優勢，你想怎麼寫原因？",
+   "options": [
+    {
+     "id": "o1",
+     "text": "先驗較強，寫成推測"
+    },
+    {
+     "id": "o2",
+     "text": "只報告現象，不談原因"
+    }
+   ],
+   "messages": [
+    {
+     "who": "ai",
+     "text": "A 在小資料的優勢，你想怎麼寫原因？"
+    },
+    {
+     "who": "me",
+     "text": "先驗較強，但不要寫成已證實"
+    }
+   ],
+   "conclusion": "強調先驗較強，寫成推測",
+   "changes": []
+  },
+  {
+   "id": "q2",
+   "anchor": "p8",
+   "kind": "conflict",
+   "status": "answered",
+   "question": "記錄寫外部資料上排名反轉，但主題寫「A 最好」。這一段要怎麼說？",
+   "options": [
+    {
+     "id": "o1",
+     "text": "如實寫反轉，主張限定在內部資料"
+    },
+    {
+     "id": "o2",
+     "text": "把外部結果放到限制"
+    }
+   ],
+   "messages": [
+    {
+     "who": "ai",
+     "text": "記錄寫外部資料上排名反轉，但主題寫「A 最好」。這一段要怎麼說？"
+    },
+    {
+     "who": "me",
+     "text": "如實寫反轉，主張限定在內部資料"
+    }
+   ],
+   "conclusion": "",
+   "changes": []
+  },
+  {
+   "id": "q3",
+   "anchor": "p9",
+   "kind": "missing",
+   "status": "open",
+   "question": "表 2 和表 1 不一致，記錄沒有寫你的看法。你認為主要原因是什麼？",
+   "options": [
+    {
+     "id": "o1",
+     "text": "兩邊的資料來源不同"
+    },
+    {
+     "id": "o2",
+     "text": "標註方式不同"
+    },
+    {
+     "id": "o3",
+     "text": "還不確定，先寫成觀察"
+    }
+   ],
+   "messages": [
+    {
+     "who": "ai",
+     "text": "表 2 和表 1 不一致，記錄沒有寫你的看法。你認為主要原因是什麼？"
+    }
+   ],
+   "conclusion": "",
+   "changes": []
+  },
+  {
+   "id": "q4",
+   "anchor": "p11",
+   "kind": "choice",
+   "status": "open",
+   "question": "討論要先講資料差異，還是先講方法的限制？",
+   "options": [
+    {
+     "id": "o1",
+     "text": "先資料差異"
+    },
+    {
+     "id": "o2",
+     "text": "先方法限制"
+    }
+   ],
+   "messages": [
+    {
+     "who": "ai",
+     "text": "討論要先講資料差異，還是先講方法的限制？"
+    }
+   ],
+   "conclusion": "",
+   "changes": []
+  },
+  {
+   "id": "e1",
+   "anchor": "p6",
+   "kind": "edit",
+   "status": "done",
+   "question": "",
+   "options": [],
+   "messages": [],
+   "conclusion": "移動後補上銜接",
+   "changes": [
+    {
+     "id": "c1",
+     "target": "p6",
+     "field": "link_prev",
+     "before": "",
+     "after": "承接 A 對 B",
+     "why": "這段移到 A 對 B 之後",
+     "state": "applied"
+    }
+   ]
+  },
+  {
+   "id": "r1",
+   "anchor": "p5",
+   "kind": "refine",
+   "status": "open",
+   "question": "",
+   "options": [],
+   "messages": [],
+   "conclusion": "",
+   "changes": [
+    {
+     "id": "c1",
+     "target": "p5",
+     "field": "text",
+     "before": "which suggests that it does not depend on one split",
+     "after": "so it does not depend on one split",
+     "why": "用字：suggests 在這裡太弱",
+     "state": "proposed"
+    }
+   ]
+  }
+ ],
+ "next": "q3"
+}
