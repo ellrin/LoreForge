@@ -109,6 +109,7 @@ const PCDraft = (() => {
     D.dropConsumed = ok;
     if (!ok) document.querySelectorAll("#dlgDraft [data-consumed]").forEach((x) => delete x.dataset.consumed);
     D.busy = null; draw();
+    if (!ok) $("#dfMain .df-note.bad")?.scrollIntoView({ block: "nearest" });
     schedulePrep();
     nudge();
   }
@@ -389,7 +390,15 @@ const PCDraft = (() => {
     lens().scale.levels.forEach((l) => levels.append(el("li", "", `${l.id} ${l.label}${l.means ? `：${l.means}` : ""}`)));
     main.append(levels);
     refsPanel(main);
-    main.append(row(btn("儲存，下一步", () => run("儲存", async () => {
+    // the button is at the foot of the page: what stops the save is shown where it is
+    const kvFits = () => {
+      const [n, max] = PCNew.kvLength(kv.value);
+      if (n <= max) return true;
+      kv.scrollIntoView({ block: "center" });
+      kv.focus();
+      return false;
+    };
+    main.append(row(btn("儲存，下一步", () => kvFits() && run("儲存", async () => {
       const pick = D.pickJournal ?? "";
       if (pick !== (D.data.journal ?? "")) {
         if (sess().outline.length && !(await LoreShell.ask($("#dfMain"), ["換投稿期刊？", "章節照新期刊排，大綱要重新產生。"], [{ label: "取消", value: null }, { label: "換期刊", value: true, primary: true }]))) return null;

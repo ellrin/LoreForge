@@ -520,7 +520,14 @@ const PCNew = (() => {
     try { r = await api("/api/keyvalue/check", { key_value: v, engine: typeof chosenEngine === "function" ? chosenEngine() : null }); }
     catch (e) { if (box.seq === seq) say("kv-problem", `沒檢查成功：${e.message}`); return; }
     if (box.seq !== seq || (current && current().trim() !== v)) return;
-    if (!r?.problems?.length && !r?.rewrites?.length) return say(r?.error ? "kv-problem" : "kv-fine", r?.error ? `沒檢查成功：${r.error}` : "沒有要改的");
+    // too long is a problem whatever the model says
+    const [n, max, unit] = kvLength(v);
+    if (n > max) { box.append(el("span", "kv-problem", `最多 ${max} ${unit}，目前 ${n}`)); box.hidden = false; }
+    if (!r?.problems?.length && !r?.rewrites?.length) {
+      if (r?.error) say("kv-problem", `沒檢查成功：${r.error}`);
+      else if (n <= max) say("kv-fine", "沒有要改的");
+      return;
+    }
     box.append(...(r.problems ?? []).map((p) => el("span", "kv-problem", p.label)));
     (r.rewrites ?? []).forEach((t) => {
       const b = el("button", "ghost small kv-rewrite", t);
