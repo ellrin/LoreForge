@@ -43,14 +43,35 @@ fn main() {
             std::env::set_var("PAPERCOMPOSER_ENGINES_ISOLATED", "1");
         }
     }
+    if mock.is_some() {
+        // a workspace named by the environment is not seeded by the server: give it the example's
+        // profile, style, lens and templates before the server reads them (writing needs the
+        // phrase bank), never overwriting
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../private-example/PaperComposer");
+        copy_missing(&example, &root.join("PaperComposer")).expect("example workspace");
+    }
     tokio::runtime::Runtime::new().expect("runtime").block_on(async {
         let (addr, serve) = pc_server::bind(pc_server::Paths::from_repo(), port).await.expect("bind");
         if let Some(m) = &mock {
-            // after bind: the workspace is seeded from private-example by then
             let paper = pc_server::seed_skeleton_demo(&root.join("PaperComposer")).expect("seed");
             println!("mock replies {}; paper {}", m.display(), paper.display());
         }
         println!("http://{addr}/  workspace {}", root.join("PaperComposer").display());
         serve.await.expect("serve");
     });
+}
+
+/// Copy `from` into `to`, keeping every file that is already there.
+fn copy_missing(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let dst = to.join(e.file_name());
+        if e.file_type()?.is_dir() {
+            copy_missing(&e.path(), &dst)?;
+        } else if !dst.exists() {
+            std::fs::copy(e.path(), &dst)?;
+        }
+    }
+    Ok(())
 }

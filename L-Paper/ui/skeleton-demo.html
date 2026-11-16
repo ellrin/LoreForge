@@ -5,15 +5,22 @@
      ?empty=1                      before a skeleton exists (素材 first)
      ?tab=inventory|style          start on that tab
      ?do=answer,write,fold,note,narrow   a scripted state, for screenshots
-     ?at=<id>                      scroll to that frame or paragraph -->
+     ?at=<id>                      scroll to that frame or paragraph
+     On the app's own server (isolated_server --mock …): /skeleton-demo.html?paper=<name> talks to the real
+     routes instead of the pretend server. ?step=plan|answer|write|refine|accept|save|style|place does that one
+     thing through the page and waits for it; the page title says how it went (run them in this order,
+     the server keeps the state between runs). -->
 <html lang="zh-Hant" data-theme="giftbox" data-mode="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>骨架 demo</title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
-  <link rel="stylesheet" href="../../commons/ui/theme.css">
-  <link rel="stylesheet" href="../../commons/ui/base.css">
+  <script>
+    // from the repo root the shared files are in commons/ui; from the app's own server they are at the root
+    const SHARED = location.pathname.includes("/L-Paper/ui/") ? "../../commons/ui/" : "";
+    document.write(`<link rel="stylesheet" href="${SHARED}theme.css"><link rel="stylesheet" href="${SHARED}base.css">`);
+  </script>
   <link rel="stylesheet" href="skeleton.css">
   <style>
     html, body { height: 100%; }
@@ -28,7 +35,7 @@
   <div class="dlg-head"><h2>骨架</h2></div>
   <div id="root"></div>
 </div>
-<script src="../../commons/ui/icons.js"></script>
+<script>document.write(`<script src="${SHARED}icons.js"><\/script>`);</script>
 <script src="skeleton.js"></script>
 <script>
 const Q = new URLSearchParams(location.search);
@@ -137,7 +144,61 @@ async function call(path, body) {
   throw new Error(`demo: ${path}`);
 }
 
+// ── the real server (?paper=…) ──
+async function real() {
+  const base = `/api/papers/${encodeURIComponent(Q.get("paper"))}/draft/skeleton`;
+  const call = async (path, body) => {
+    const r = await fetch(base + path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const text = await r.text();
+    if (!r.ok) throw new Error(text || String(r.status));
+    return text ? JSON.parse(text) : null;
+  };
+  await PCSkeleton.mount(document.querySelector("#root"), { call });
+  const S = () => PCSkeleton.state();
+  const view = () => S().view;
+  const paras = () => view().sections.flatMap((s) => s.blocks.flatMap((b) => b.paras));
+  const until = async (cond, ms = 30000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (cond()) return true; await wait(200); } return false; };
+  const idle = () => until(() => (!view().job || view().job.error) && !paras().some((p) => p.busy) && !view().threads.some((t) => t.status === "answered") && !S().inflight);
+  const click = (sel) => { const n = document.querySelector(sel); if (!n) throw new Error(`沒有 ${sel}`); n.click(); };
+  const step = Q.get("step");
+  let note = "";
+  try {
+    if (step === "plan") { click(".sk-invfoot .btn.primary, .sk-invfoot .btn"); await until(() => view().exists && !view().job); note = `${paras().length} 段 ${view().threads.length} 題 next=${view().next}`; }
+    else if (step === "answer") {
+      const before = view().threads.filter((t) => t.status === "done").length;
+      const q = document.querySelector(".sk-thread.sk-active");
+      const qid = q.dataset.thread;
+      q.querySelector(".sk-opt").click();
+      await wait(150);
+      const next = document.querySelector(".sk-thread.sk-active")?.dataset.thread;
+      await idle();
+      note = `答 ${qid} 下一題 ${next ?? "無"} 完成 ${before}→${view().threads.filter((t) => t.status === "done").length} 新要點 ${document.querySelectorAll(`.sk-points li[data-from="${qid}"]`).length}`;
+    } else if (step === "write") { await call("/write", { id: "all" }).then(() => PCSkeleton.mount(document.querySelector("#root"), { call })); await idle(); note = `有文字 ${paras().filter((p) => p.text).length}/${paras().length} 問題 ${paras().reduce((n, p) => n + p.problems.length, 0)}`; }
+    else if (step === "refine") { const p = paras().find((x) => x.text); await call("/refine", { para: p.id, preset: "wording" }); await PCSkeleton.mount(document.querySelector("#root"), { call }); await idle(); note = `細修串 ${view().threads.filter((t) => t.kind === "refine").length} 建議 ${document.querySelectorAll(".sk-change").length}`; }
+    else if (step === "accept") { click('.sk-thread[data-kind="refine"] .sk-change .btn'); await wait(300); await idle(); note = `已採用 ${view().threads.flatMap((t) => t.changes).filter((c) => c.state === "applied").length}`; }
+    else if (step === "save") {
+      const b = view().sections[0].blocks[0];
+      document.querySelector(`[data-id="${b.id}"] .sk-gap`).click();
+      await wait(100);
+      const ed = document.querySelector(`[data-id="${b.id}"] textarea.sk-say`);
+      ed.value = "新增的一段"; ed.dispatchEvent(new Event("input"));
+      await wait(600);
+      document.querySelector(`[data-id="${b.id}"] textarea.sk-say`).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await wait(600);
+      click(".sk-save");
+      await wait(300);
+      await idle();
+      note = `dirty=${view().dirty} 修補串 ${view().threads.filter((t) => t.kind === "edit").length} 段 ${paras().length}`;
+    } else if (step === "style") { click(".sk-head .seg button:nth-child(3)"); await until(() => !!document.querySelector(".sk-srow, .sk-style h3"), 8000); note = `列 ${document.querySelectorAll(".sk-srow").length} 段落提醒 ${document.querySelectorAll(".sk-sissue").length}`; }
+    else if (step === "place") { const r = await call("/place", {}); note = `放進論文 rev=${r.rev}`; }
+    document.title = `step ${step ?? "view"}: ok ${note}`;
+  } catch (e) { document.title = `step ${step}: FAILED ${e.message}`; }
+  if (Q.get("at")) { await wait(60); const sc = document.querySelector(".sk-scroll"); const n = document.querySelector(`[data-id="${Q.get("at")}"]`); if (sc && n) sc.scrollTop += n.getBoundingClientRect().top - sc.getBoundingClientRect().top - 12; }
+  if (Q.get("tab") && view().exists) { S().tab = Q.get("tab"); PCSkeleton.redraw(); }
+}
+
 (async () => {
+  if (Q.get("paper")) return real();
   full = await (await fetch("../crates/core/tests/fixtures/skeleton_view.json")).json();
   V = structuredClone(full);
   if (Q.get("empty")) { V.exists = false; V.sections = []; V.threads = []; V.next = null; V.dirty = false; V.can_undo = false; }
