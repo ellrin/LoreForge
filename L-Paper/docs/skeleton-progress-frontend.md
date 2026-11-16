@@ -11,6 +11,7 @@ Design: `docs/long-paper.md` §G. Contract: `L-Paper/docs/skeleton-api.md`.
 - 入口：討論草稿視窗上方的「骨架」。
 - 畫面只換有變動的節點（`morph`）：背景更新時正在打字的框不會被換掉。
   檢查：`skeleton-demo.html?at=b4&probe=typing`，標題顯示 `probe typing: ok`。
+- 互動檢查：`skeleton-demo.html?at=b4&probe=ops`（新增、命名、Alt+↑↓、跨框、拖曳、刪除、復原、改標題、暫存、回答），13 項，標題顯示 `probe ops: ok`。
 - 共用：麥克風與繪圖工具用討論草稿的（`PCDraft.micButton`, `PCDraft.makeFloat`）；toast 與確認用 `LoreShell`。
 
 ## 還沒在真的環境試
