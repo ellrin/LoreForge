@@ -165,7 +165,7 @@ const PCRefs = (() => {
 
     const finished = (it) => ["saved", "exists", "ambiguous", "missing", "error", "skipped"].includes(it.state);
 
-    function draw() {
+    let draw = function () {
       box.innerHTML = "";
       const ta = el("textarea", "batch-text");
       ta.rows = st.items.length ? 3 : 8;
@@ -232,12 +232,17 @@ const PCRefs = (() => {
         ul.append(li);
       });
       box.append(ul);
-    }
+    };
 
     draw();
+    const paint = draw;
+    // every change of the list is also told to whoever shows the progress elsewhere
+    draw = () => { paint(); opts.onChange?.(); };
     return {
       el: box,
       items: () => st.items,
+      /** { done, total } while papers are being read (total 0: still counting them), else null. */
+      progress: () => (st.phase === "running" ? { done: st.items.filter(finished).length, total: st.items.length } : null),
       running: () => st.phase === "running" || st.items.some((i) => i.state === "checking" || i.state === "filing"),
       keepNotes: async () => { for (const it of st.items) await keepNote(it); },
     };

@@ -151,6 +151,43 @@ const PCDraft = (() => {
     if (r?.doi) { const a = el("button", "df-doi", "DOI"); a.title = `https://doi.org/${r.doi}`; a.onclick = () => openDoi(r.doi); c.append(a); }
     return c;
   }
+  /** This paper's importer. It keeps reading after the author leaves the step: the head shows how far
+   *  it is, and the steps that cite (大綱 onward) wait for it. */
+  function refImporter() {
+    const d = D;
+    return (d.refImporter ??= PCRefs.importer({
+      paper: () => d.name,
+      onChange: () => { if (D === d) refsProgress(); },
+      // a run in flight brings its own view; typed fields survive the redraw
+      onDone: () => { if (D === d && !d.busy) reload(); },
+    }));
+  }
+  const refsLeft = () => D?.refImporter?.progress() ?? null;
+  const CITING = ["outline", "draft", "audit", "revise"];
+  function progressBar(p) {
+    const bar = el("div", "progress");
+    const fill = el("i");
+    fill.style.width = p.total ? `${Math.round((p.done / p.total) * 100)}%` : "0";
+    bar.append(fill);
+    return bar;
+  }
+  const refsCount = (p) => (p.total ? `文獻 ${p.done} / ${p.total}` : "文獻…");
+  /** The head's chip while papers are being read; the waiting step follows along. */
+  function refsChip() {
+    const chip = $("#dfRefs"), p = refsLeft();
+    chip.hidden = !p;
+    if (!p) return;
+    chip.replaceChildren(el("span", "", refsCount(p)), progressBar(p));
+    chip.onclick = () => { D.refsOpen = true; go(0); };
+  }
+  function refsProgress() {
+    refsChip();
+    if (!D.data || D.step == null) return;
+    const p = refsLeft();
+    const gate = $("#dfMain .df-gate");
+    if (gate && p) gate.replaceChildren(el("b", "", refsCount(p)), progressBar(p));
+    else if (!!gate !== (!!p && CITING.includes(STEPS[D.step]?.[0]))) draw();
+  }
   function refsPanel(main) {
     const refs = D.data.material?.refs ?? [];
     main.append(h(`本篇文獻（${refs.length}）`));
@@ -159,8 +196,7 @@ const PCDraft = (() => {
     if (D.refsOpen) {
       // the old new-paper wizard's 文獻 step: each paper checked and filed,
       // the note on it kept as its purpose in this paper
-      D.refImporter ??= PCRefs.importer({ paper: () => D?.name ?? null, onDone: () => reload() });
-      main.append(D.refImporter.el);
+      main.append(refImporter().el);
     }
     if (!refs.length) return;
     const ul = el("ul", "df-reflist");
@@ -258,6 +294,13 @@ const PCDraft = (() => {
     if (D.busy && key0 !== "interview") main.append(el("div", "df-busy", `${D.busy}…`));
     if (D.err) main.append(el("div", "df-note bad", D.err));
     const key = STEPS[D.step][0];
+    refsChip();
+    if (refsLeft() && CITING.includes(key)) {
+      const p = refsLeft(), gate = el("div", "df-gate");
+      gate.append(el("b", "", refsCount(p)), progressBar(p));
+      main.append(gate);
+      return;
+    }
     ({ topic, record, interview, claims, review, template, outline, draft: drafting, audit, revise })[key](main, side);
     $("#dlgDraft").classList.toggle("with-side", side.childElementCount > 0);
   }
@@ -345,6 +388,7 @@ const PCDraft = (() => {
     const levels = el("ul", "df-levels");
     lens().scale.levels.forEach((l) => levels.append(el("li", "", `${l.id} ${l.label}${l.means ? `：${l.means}` : ""}`)));
     main.append(levels);
+    refsPanel(main);
     main.append(row(btn("儲存，下一步", () => run("儲存", async () => {
       const pick = D.pickJournal ?? "";
       if (pick !== (D.data.journal ?? "")) {
@@ -359,7 +403,6 @@ const PCDraft = (() => {
       return v;
     }))));
     setTimeout(() => { if (!kv.value) kv.focus(); });
-    refsPanel(main);
   }
 
   // ── 2 實驗記錄 ───────────────────────────────────────

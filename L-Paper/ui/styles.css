@@ -918,6 +918,11 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-note.bad { color: var(--err); }
 .df-note.warn { color: var(--warn); }
 .df-note.ok { color: var(--ok); }
+.df-refs { display: inline-flex; align-items: center; gap: 8px; font: 500 11.5px var(--mono); }
+.df-refs[hidden] { display: none; }
+.df-refs .progress { width: 72px; }
+.df-gate { display: grid; gap: 8px; max-width: 420px; margin: 18vh auto 0; text-align: center; color: var(--muted); }
+.df-gate b { font: 600 13px var(--mono); color: var(--text); }
 .df-busy { padding: 8px 10px; border: 1px solid var(--accent-text); border-radius: var(--r); background: var(--accent-soft); font-size: 12.5px; animation: ex-pulse 1.6s ease-in-out infinite; }
 .df-kv { margin: 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--panel); font-size: 14px; }
 .df-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
