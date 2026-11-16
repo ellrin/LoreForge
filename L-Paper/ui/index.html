@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="prefs.css">
   <link rel="stylesheet" href="paper-start.css">
   <link rel="stylesheet" href="draft-engine.css">
+  <link rel="stylesheet" href="skeleton.css">
   <link rel="stylesheet" href="review-word.css">
   <link rel="stylesheet" href="bookjob.css">
   <link rel="stylesheet" href="venue.css">
@@ -148,6 +149,7 @@
         <h2>討論草稿</h2>
         <span class="count" id="dfLens"></span>
         <button class="ghost small" id="dfRestart">重新開始</button>
+        <button class="btn small" id="dfSkeleton">骨架</button>
         <label class="df-model" data-tip="對話問答用的模型；其他步驟先用 Claude，沒有時用本機">問答模型
           <select id="dfModel">
             <option value="auto">自動（Haiku）</option>
@@ -306,6 +308,7 @@
 <script src="venue.js"></script>
 <script src="newpaper.js"></script>
 <script src="draft.js"></script>
+<script src="skeleton.js"></script>
 <script src="notation.js"></script>
 <script src="templates.js"></script>
 <script src="newtemplate.js"></script>

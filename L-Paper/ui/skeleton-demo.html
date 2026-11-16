@@ -141,6 +141,8 @@ async function call(path, body) {
   full = await (await fetch("../crates/core/tests/fixtures/skeleton_view.json")).json();
   V = structuredClone(full);
   if (Q.get("empty")) { V.exists = false; V.sections = []; V.threads = []; V.next = null; V.dirty = false; V.can_undo = false; }
+  // the answer the fixture shows as being folded in finishes after a moment
+  setTimeout(() => { const t = V.threads.find((x) => x.status === "answered"); if (!t) return; const p = where(t.anchor)?.p; if (p) { p.busy = null; p.points.push({ text: "如實寫反轉，主張限定在內部資料", from: t.id }); } t.status = "done"; t.conclusion = "如實寫反轉，主張限定在內部資料"; V.rev++; }, 2500 * SPEED);
   await PCSkeleton.mount(document.querySelector("#root"), { call });
   const S = PCSkeleton._state;
   if (Q.get("tab")) { S.tab = Q.get("tab"); }

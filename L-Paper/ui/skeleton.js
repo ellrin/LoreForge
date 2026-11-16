@@ -407,7 +407,7 @@ const PCSkeleton = (() => {
     const fold = ico("chevron", S.folded.has(b.id) ? "展開" : "摺起來", () => { toggle(S.folded, b.id); const first = rects(); draw(); glide(first); }, "ico small sk-fold");
     head.append(grip, mark, titles, dots, tools, fold);
     box.append(head);
-    if (S.folded.has(b.id)) return box;
+    if (S.folded.has(b.id)) { count.n += b.paras.length; return box; }
     if (b.purpose || S.editing?.id === b.id) box.append(field(b.id, "purpose", b.purpose, "sk-purpose", "讀者看完這幾段會知道什麼"));
     const list = h("div", "sk-paras");
     list.dataset.block = b.id;
@@ -430,7 +430,6 @@ const PCSkeleton = (() => {
       const list = h("div", "sk-blocks");
       list.dataset.section = s.id;
       s.blocks.forEach((b) => list.append(blockNode(b, s, count)));
-      if (S.folded.size) for (const b of s.blocks) if (S.folded.has(b.id)) count.n += b.paras.length;
       sec.append(list, btn("＋ 框", () => add("block", { section: s.id, at: s.blocks.length }), "ghost sk-addblock"));
       c.append(sec);
     }
@@ -569,8 +568,8 @@ const PCSkeleton = (() => {
     const base = m.getBoundingClientRect().top;
     const cards = [...m.children].map((n) => {
       let a = S.root.querySelector(`.sk-canvas [data-id="${n.dataset.anchor}"]`);
-      // a folded frame: its paragraphs' threads gather at the frame
-      if (!a) { const b = find(n.dataset.anchor)?.block; a = b && S.root.querySelector(`.sk-canvas [data-id="${b.id}"]`); }
+      // a folded frame is put away with its threads; only one still being answered stays, at the frame
+      if (!a && n.classList.contains("sk-active")) { const b = find(n.dataset.anchor)?.block; a = b && S.root.querySelector(`.sk-canvas [data-id="${b.id}"]`); }
       return { n, want: a ? a.getBoundingClientRect().top - base : 0, hgt: n.offsetHeight, act: n.classList.contains("sk-active"), gone: !a };
     });
     cards.forEach((c) => (c.n.hidden = c.gone));
@@ -778,7 +777,7 @@ const PCSkeleton = (() => {
         if (r.ok === false) row.classList.add("off");
         row.append(h("span", "sk-slabel", r.label));
         const track = h("span", "sk-track");
-        const fmt = (x) => (Number.isInteger(x) ? String(x) : x.toFixed(1));
+        const fmt = (x) => (Number.isInteger(x) ? String(x) : Math.abs(x) < 1 ? x.toFixed(2) : x.toFixed(1));
         if (r.mine && r.draft != null) {
           // the author's range in the middle half of the track; the draft's value on the same scale
           const [lo, hi] = r.mine;

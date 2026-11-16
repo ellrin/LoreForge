@@ -53,6 +53,7 @@ const PCDraft = (() => {
     if (!D.tableStyles) { try { D.tableStyles = await api("/api/textable/styles"); } catch { D.tableStyles = []; } }
     $("#dfModel").value = store.get("pc.draftModel", "auto");
     $("#dfModel").onchange = (e) => store.set("pc.draftModel", e.target.value);
+    $("#dfSkeleton").onclick = () => PCSkeleton.open(D.name);
     $("#dfRestart").onclick = async (e) => {
       if (!D?.data || D.busy) return;
       if (!(await LoreShell.ask(e.currentTarget, ["重新開始？", "目前的討論會移到 draft/archive/。"], [{ label: "取消", value: null }, { label: "重新開始", value: true, danger: true, primary: true }]))) return;
