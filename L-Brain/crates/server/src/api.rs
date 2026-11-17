@@ -381,8 +381,14 @@ async fn draft(State(s): State<Shared>, Json(body): Json<serde_json::Map<String,
         body["category"] = "assistant".into();
         (StatusCode::SERVICE_UNAVAILABLE, Json(body)).into_response()
     })?;
-    let draft = kb_core::parse_draft(&req, &p.quote, &a.value).map_err(|e| ApiError(StatusCode::UNPROCESSABLE_ENTITY, e.to_string(), "assistant").into_response())?;
-    Ok(Json(json!({ "draft": draft, "assistant": crate::llm::engine_label(&a.engine), "engine": a.engine })))
+    let mut draft = kb_core::parse_draft(&req, &p.quote, &a.value).map_err(|e| ApiError(StatusCode::UNPROCESSABLE_ENTITY, e.to_string(), "assistant").into_response())?;
+    // the pages the search read: in the body (the editor shows it) and as the card's web sources
+    let urls: Vec<&str> = a.sources.iter().take(3).map(|w| w.url.as_str()).collect();
+    if !urls.is_empty() {
+        let body = draft.body.take().unwrap_or_default();
+        draft.body = Some(format!("{body}\n\n來源：\n{}", urls.iter().map(|u| format!("- {u}")).collect::<Vec<_>>().join("\n")).trim().to_string());
+    }
+    Ok(Json(json!({ "draft": draft, "sources": urls, "assistant": crate::llm::engine_label(&a.engine), "engine": a.engine })))
 }
 
 async fn reindex(State(s): State<Shared>) -> R {

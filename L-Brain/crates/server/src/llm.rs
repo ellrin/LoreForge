@@ -48,6 +48,8 @@ pub struct Answer {
     pub value: serde_json::Value,
     /// Provider id (`llama-server:…`, `claude-code:…`, `claude-api:…`).
     pub engine: String,
+    /// Pages a web-search task read (a task with `needs.web`; never empty for one).
+    pub sources: Vec<lore_llm::WebSource>,
 }
 
 pub struct Llm {
@@ -133,7 +135,7 @@ impl Llm {
         f.selected_claude = Some(self.model.clone());
         let base = std::env::var("KNOWLEDGEBASE_CLAUDE_BASE_URL").unwrap_or_else(|_| lore_llm::claude_api::DEFAULT_BASE_URL.into());
         f.api = self.keys.get(None, &Account::Single).map(|(k, _)| ApiAccess { base_url: base, api_key: k, fallbacks: true });
-        f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: false, temp_prefix: "knowledgebase-claude".into() });
+        f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: true, temp_prefix: "knowledgebase-claude".into() });
         let e = self.shared.as_ref().and_then(|h| h.engine()).unwrap_or_default();
         f.local = Some(LocalAccess {
             external: self.external.clone(),
@@ -164,11 +166,17 @@ impl Llm {
         }
         .map_err(|e| (unavailable(&e), alt_payload(&e)))?;
         let req = route.apply(req.temperature(LOCAL_TEMPERATURE));
-        let value = lore_llm::complete_json(route.provider.as_ref(), &req).await.map_err(|e| {
+        let fail = |e: lore_llm::LlmError| {
             let m = first_line(&format!("模型沒有回答：{e}"));
             (m.clone(), serde_json::json!({ "error": m }))
-        })?;
-        Ok(Answer { value, engine: route.provider.id().to_string() })
+        };
+        // a web task (the card draft): only an answer from a real search
+        let (value, sources) = if self.tasks.task.get(task).is_some_and(|t| t.needs.web) {
+            lore_llm::complete_json_web(route.provider.as_ref(), &req).await.map_err(fail)?
+        } else {
+            (lore_llm::complete_json(route.provider.as_ref(), &req).await.map_err(fail)?, vec![])
+        };
+        Ok(Answer { value, engine: route.provider.id().to_string(), sources })
     }
 }
 
@@ -210,10 +218,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn task_order_is_local_then_claude() {
+    fn the_card_draft_is_claude_with_web_search() {
         let t = Llm::task_table(None).unwrap();
-        assert_eq!(t.task[TASK_DRAFT].default, "local:current");
-        assert_eq!(t.task[TASK_DRAFT].fallback.as_deref(), Some("claude:selected"));
+        assert!(t.task[TASK_DRAFT].needs.web);
+        assert_eq!(t.task[TASK_DRAFT].default, "claude:selected");
+        assert_eq!(t.task[TASK_DRAFT].fallback.as_deref(), Some("claude:haiku"));
     }
 
     #[tokio::test]

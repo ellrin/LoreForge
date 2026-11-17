@@ -80,8 +80,9 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   word boundaries only for Latin names; spans in UTF-16 offsets for JavaScript.
 - Card draft (`POST /api/draft`): `kb_core::{draft_prompt, parse_draft, clean_source}` build/check the
   request, `crates/server/src/llm.rs` runs it through lore-llm as task `kb-summarize-card`
-  (`crates/server/tasks.toml`: `local:current` then `claude:selected`; engine URL in config.toml
-  `[engine]` or `KB_LLM_URL`; optional body `engine: "local"|"claude"`). Never saved; no engine = 503 with
+  (`crates/server/tasks.toml`: 知識建立一定要上網查 (author, 2026-11-17): `claude:selected` then `claude:haiku` with
+  web search (`needs.web`, `allow_web` on the subscription), `lore_llm::complete_json_web` refuses an answer that did not
+  search, the pages read end the body as 來源 and come back as `sources`; optional body `engine: "local"|"claude"`). Never saved; no engine = 503 with
   one line. Candidate terms still use `CardAssistant`/`MockAssistant` (tests and offline only).
 - 待審區: `<space>/pending/<id>.json` (kb-core `pending`, README there), not nodes (never in list/search/review). `GET/POST /api/pending`, `POST /api/pending/{id}/accept` (edits; `merge_into` folds into an existing card), `DELETE`. UI: left nav 待審 N (hidden at 0), `#/pending`, `#/pending/<id>` = card editor in 待審 mode (確認 · 丟掉; 合併到既有卡 when title/alias matches).
 - iCloud placeholders (`.<name>.icloud`) are fetched with `brctl download` through an injected

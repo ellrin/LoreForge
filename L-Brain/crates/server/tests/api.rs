@@ -266,16 +266,17 @@ async fn theme_is_the_shared_choice() {
 async fn draft_goes_through_the_engine_with_cleaned_source() {
     use lore_llm::mock::MockProvider;
     use lore_llm::router::MockFactory;
-    let mock = Arc::new(MockProvider::new(vec![json!({ "summary": "  延後給標籤。 ", "supported": true }).to_string()]));
-    let f = MockFactory::default().with("local:current", mock.clone());
+    let mock = Arc::new(MockProvider::new(vec![json!({ "summary": "  延後給標籤。 ", "supported": true }).to_string()]).with_sources(&["https://example.org/deferral"]));
+    let f = MockFactory::default().with("claude:selected", mock.clone());
     let (_d, app, _c) = setup_with(kb_server::llm::Llm::with_factory(f));
     let body = json!({ "term": "deferral", "context": "The model de- fers the label.", "page": 7, "source": "A synthetic paper" });
     let (s, v) = call(&app, "POST", "/api/draft", Some(body)).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["draft"]["summary"], "延後給標籤。");
-    assert_eq!(v["draft"]["body"], "> The model defers the label.\n\n（A synthetic paper，p.7）");
+    assert_eq!(v["draft"]["body"], "> The model defers the label.\n\n（A synthetic paper，p.7）\n\n來源：\n- https://example.org/deferral");
     assert_eq!(v["assistant"], "mock");
     let seen = mock.seen.lock().unwrap();
+    assert!(seen[0].web_search, "知識建立一定要上網查");
     assert!(seen[0].flatten().contains("defers") && !seen[0].flatten().contains("de- fers"));
     drop(seen);
     // Nothing was saved.
@@ -287,11 +288,17 @@ async fn draft_goes_through_the_engine_with_cleaned_source() {
 async fn draft_refuses_when_the_source_does_not_say() {
     use lore_llm::mock::MockProvider;
     use lore_llm::router::MockFactory;
-    let mock = Arc::new(MockProvider::new(vec![json!({ "summary": "", "supported": false }).to_string()]));
-    let (_d, app, _c) = setup_with(kb_server::llm::Llm::with_factory(MockFactory::default().with("local:current", mock)));
+    let mock = Arc::new(MockProvider::new(vec![json!({ "summary": "", "supported": false }).to_string()]).with_sources(&["https://example.org/x"]));
+    let (_d, app, _c) = setup_with(kb_server::llm::Llm::with_factory(MockFactory::default().with("claude:selected", mock)));
     let (s, v) = call(&app, "POST", "/api/draft", Some(json!({ "term": "X", "context": "Unrelated sentence." }))).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(v["error"].as_str().unwrap().contains("沒有起草"));
+    // a good answer from a call that did not search is not used
+    let silent = Arc::new(MockProvider::new(vec![json!({ "summary": "記憶裡的說明", "supported": true }).to_string()]));
+    let (_d, app, _c) = setup_with(kb_server::llm::Llm::with_factory(MockFactory::default().with("claude:selected", silent)));
+    let (s, v) = call(&app, "POST", "/api/draft", Some(json!({ "term": "X", "context": "X is a thing." }))).await;
+    assert_ne!(s, StatusCode::OK, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("沒有上網查資料"), "{v}");
 }
 
 /// The shared kit is served from the binary (the page has no icons.js of its own) and the page
