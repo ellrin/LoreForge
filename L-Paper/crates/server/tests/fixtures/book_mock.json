@@ -1,0 +1,85 @@
+{
+ "_comment": "Scripted model replies for 寫書 (synthetic: temperature and a contrastive loss). Per task, in order; the last one repeats. A keyword-only job runs to the review and through write on these (isolated_server --mock).",
+ "pc-book-plan": [
+  {
+   "title": "Temperature and Contrast, Synthetic Notes",
+   "abstract": "Synthetic notes for trying the book flow: how a temperature shapes a softmax, and how a contrastive loss uses it.",
+   "chapters": [
+    {
+     "title": "Scores, softmax and temperature",
+     "terms": [
+      "temperature scaling",
+      "softmax temperature"
+     ],
+     "depth": "brief",
+     "goal": "Read what a temperature does to a softmax.",
+     "queries": [
+      "temperature scaling softmax"
+     ],
+     "figures": []
+    },
+    {
+     "title": "A contrastive loss",
+     "terms": [
+      "contrastive loss",
+      "hard negative"
+     ],
+     "depth": "standard",
+     "goal": "Follow a contrastive loss term by term.",
+     "queries": [
+      "contrastive loss tutorial"
+     ],
+     "figures": []
+    }
+   ]
+  }
+ ],
+ "pc-book-suggest": [
+  {
+   "suggestions": [
+    {
+     "op": "retitle",
+     "id": "c2",
+     "title": "Contrastive losses, step by step",
+     "reason": "章名說清楚這一章是一步一步推導。"
+    }
+   ]
+  }
+ ],
+ "pc-book-chapter": [
+  {
+   "body": "\\subsection{From scores to probabilities}\nA model gives each candidate a score. The softmax turns scores into probabilities that add up to one.\n\n\\begin{definition}[temperature scaling]\nDividing every score by a positive number $T$ before the softmax is called \\term{temperature scaling}{溫度縮放}.\n\\end{definition}\n\n\\begin{intuition}\nA small $T$ makes the largest score win almost everything; a large $T$ spreads the probability out.\n\\end{intuition}\n\nSo the temperature sets how sharp the distribution is.\\sidenote{溫度越小，分布越尖。}\n\nThe number $T$ is the \\term{softmax temperature}{softmax 溫度}. It changes no ranking, only how sure the probabilities look.\n\n\\begin{keyidea}\nTemperature trades sharpness against smoothness.\n\\end{keyidea}\n",
+   "figures": [],
+   "tables": [],
+   "cards": [
+    {
+     "term": "temperature scaling",
+     "summary": "把每個分數除以一個正數再做 softmax。",
+     "body": "溫度縮放是在 softmax 之前把所有分數除以同一個正數。這個數小時分布變尖，大時變平。排序不會改變，只改變機率看起來多確定。"
+    },
+    {
+     "term": "softmax temperature",
+     "summary": "softmax 前用來除分數的那個正數。",
+     "body": "softmax 溫度就是溫度縮放裡的那個正數。它控制輸出分布的尖銳程度。它是可以調整或學習的設定。"
+    }
+   ]
+  },
+  {
+   "body": "\\subsection{Pulling pairs together}\nA \\term{contrastive loss}{對比損失} rewards a model when two views of one example score higher than views of other examples.\n\n\\begin{definition}[hard negative]\nA \\term{hard negative}{困難負樣本} is another example whose score is close to the positive one.\n\\end{definition}\n\nHard negatives carry most of the learning signal, because easy ones already get almost no probability once a small temperature is used.\\sidenote{困難負樣本提供大部分的學習訊號。}\n\n\\begin{remark}\nThese notes are synthetic: they exist to try the flow without a model.\n\\end{remark}\n",
+   "figures": [],
+   "tables": [],
+   "cards": [
+    {
+     "term": "contrastive loss",
+     "summary": "讓同一例子的兩個視角比其他例子更接近的損失。",
+     "body": "對比損失比較正樣本對與負樣本的分數。正樣本分數越高、負樣本越低，損失越小。它不需要標籤。"
+    },
+    {
+     "term": "hard negative",
+     "summary": "分數和正樣本很接近的負樣本。",
+     "body": "困難負樣本是分數接近正樣本的其他例子。它們提供大部分的學習訊號。簡單的負樣本在小溫度下幾乎沒有影響。"
+    }
+   ]
+  }
+ ]
+}

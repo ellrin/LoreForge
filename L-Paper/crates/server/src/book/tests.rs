@@ -676,3 +676,34 @@ fn several_papers_share_one_registry_of_symbols() {
     let again = write::merge_symbols(&mut doc, &lore_notation::Notation::default(), &src);
     assert_eq!((again.conflicts.len(), again.converts.len(), doc.entries.len()), (1, 1, 2));
 }
+
+/// The isolated example's scripted replies (`tests/fixtures/book_mock.json`) carry a keyword-only
+/// job to the review and through write: every chapter gets its own reply (no re-ask) and every
+/// taught term a 不熟 card.
+#[tokio::test]
+async fn the_book_mock_fixture_runs_a_keyword_only_job() {
+    let root = std::env::temp_dir().join(format!("pc-book-fixture-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let fx: Value = serde_json::from_str(include_str!("../../tests/fixtures/book_mock.json")).unwrap();
+    let mut model = MockModel::default();
+    for task in [TASK_PLAN, TASK_SUGGEST, TASK_CHAPTER] {
+        for r in fx[task].as_array().unwrap() {
+            model = model.on(task, r.clone());
+        }
+    }
+    let model = Arc::new(model);
+    let deps = files_deps(&root, Arc::new(FileExtract(Default::default())), Arc::new(MockHttp::new()), model.clone(), &[]);
+    let js = lore_jobs::Jobs::open(deps.cache.join("jobs"), Arc::new(pipeline::BookJob { deps: deps.clone() }));
+    let st = setup::Setup { keywords: vec!["temperature scaling".into()], folder: Some(root.join("Books")), ..Default::default() };
+    let job = js.create(serde_json::to_value(pipeline::Params::from_setup(&st, None, Some(root.join("Books")))).unwrap(), false, "").unwrap();
+    until(&job, "review").await;
+    assert_eq!(js.view(&job)["review"]["cards"], 4);
+    js.submit(&job, "review", json!({ "skipped": true })).unwrap();
+    until(&job, "done").await;
+    assert_eq!(model.asked(TASK_CHAPTER).len(), 2, "no chapter asked twice");
+    let w: write::WriteOut = serde_json::from_value(job.output("write").unwrap()).unwrap();
+    assert!(w.chapters.iter().all(|c| c.problems.iter().all(|p| !p.contains("卡片"))), "{:?}", w.chapters);
+    assert_eq!(w.cards.len(), 4);
+    std::fs::remove_dir_all(&root).unwrap();
+}
