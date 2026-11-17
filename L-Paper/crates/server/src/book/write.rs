@@ -60,6 +60,8 @@ pub struct WriteOut {
     pub chapters: Vec<ChapterOut>,
     pub notation: usize,
     pub notes: Vec<String>,
+    /// One registry per book: a symbol two sources use for different things (the first kept).
+    pub conflicts: Vec<String>,
     /// Knowledge cards made for terms the book taught.
     pub cards: Vec<super::cards::Made>,
 }
@@ -552,6 +554,103 @@ pub(crate) fn set_front(book: &Path, field: &str, value: &str) {
     let _ = pc_core::paper::write_atomic(&path, &new);
 }
 
+// ── one registry of symbols per book ─────────────────────────────────────────
+
+/// A symbol a later source uses for something else than the book's registry (`conflict`), or a
+/// quantity it writes with another letter than the registry's (`convert`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SymbolNote {
+    pub convert: bool,
+    /// The source's LaTeX.
+    pub latex: String,
+    /// What it means in the source.
+    pub meaning: String,
+    /// The registry's LaTeX and meaning.
+    pub book_latex: String,
+    pub book_meaning: String,
+    /// The source's title.
+    pub from: String,
+}
+
+impl SymbolNote {
+    pub fn message(&self) -> String {
+        format!("符號衝突：「{}」用 ${}$ 表示 {}，這本書的 ${}$ 已經是 {}（先登記的留著，寫作時換成別的符號）", self.from, self.latex, self.meaning, self.book_latex, self.book_meaning)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Merged {
+    pub conflicts: Vec<SymbolNote>,
+    pub converts: Vec<SymbolNote>,
+}
+
+impl Merged {
+    /// The chapter prompt's lines: the rule, and every conversion and conflict.
+    pub fn rules(&self) -> String {
+        let mut out = String::from("\nOne registry of symbols for the whole book (the list above): a source that writes a registered quantity with \
+another letter is converted to the registry's symbol; a source that uses a registered symbol for something else writes that other \
+thing with a symbol the registry does not use.\n");
+        for c in &self.converts {
+            out += &format!("- \"{}\" writes ${}$ for {}: write ${}$.\n", c.from, c.latex, c.meaning, c.book_latex);
+        }
+        for c in &self.conflicts {
+            out += &format!("- \"{}\" uses ${}$ for {}, but here ${}$ is {}: write that quantity with another symbol.\n", c.from, c.latex, c.meaning, c.book_latex, c.book_meaning);
+        }
+        out
+    }
+}
+
+/// Meanings compared loosely: lower case, words only, no articles.
+fn meaning_key(s: &str) -> String {
+    s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty() && !["the", "a", "an", "of"].contains(w)).collect::<Vec<_>>().join(" ")
+}
+
+fn meaning_of(e: &lore_notation::Entry) -> String {
+    e.meaning_en.clone().filter(|m| !m.trim().is_empty()).or_else(|| e.meaning.clone()).unwrap_or_default().trim().to_string()
+}
+
+/// Every starting paper's `symbols.json` into the book's own registry, in order, through the
+/// editor's 插入 path (`reader::register_into`). The first registered meaning of a symbol stays: a
+/// later paper's symbol with another meaning is a conflict, its quantity written with the
+/// registry's letter is a conversion; neither is registered (nor an equation using one).
+pub fn merge_symbols(doc: &mut lore_notation::Notation, global: &lore_notation::Notation, src: &Sources) -> Merged {
+    let mut out = Merged::default();
+    for m in &src.materials {
+        let Some(table) = &m.symbols else { continue };
+        let from = if m.title.is_empty() { m.label.clone() } else { m.title.clone() };
+        let mut left_out: Vec<String> = vec![];
+        for v in table["entries"].as_array().into_iter().flatten() {
+            let Ok(e) = serde_json::from_value::<lore_notation::Entry>(v.clone()) else { continue };
+            let (latex, meaning) = (e.latex.clone().unwrap_or_default(), meaning_of(&e));
+            if latex.trim().is_empty() || meaning.is_empty() {
+                continue;
+            }
+            let eff = lore_notation::Notation::effective(global, doc);
+            let note = |have: &lore_notation::Entry, convert: bool| SymbolNote { convert, latex: latex.clone(), meaning: meaning.clone(), book_latex: have.latex.clone().unwrap_or_default(), book_meaning: meaning_of(have), from: from.clone() };
+            if let Some(have) = eff.find_latex(&latex) {
+                if !meaning_of(have).is_empty() && meaning_key(&meaning_of(have)) != meaning_key(&meaning) {
+                    out.conflicts.push(note(have, false));
+                    left_out.push(e.id.clone());
+                }
+            } else if let Some(have) = eff.entries.iter().find(|x| x.latex.as_deref().is_some_and(|l| !l.trim().is_empty()) && x.kind != Some(lore_notation::Kind::Equation) && meaning_key(&meaning_of(x)) == meaning_key(&meaning)) {
+                out.converts.push(note(have, true));
+                left_out.push(e.id.clone());
+            }
+        }
+        let ids: Vec<String> = table["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .chain(table["equations"].as_array().into_iter().flatten())
+            .filter(|e| !e["uses"].as_array().into_iter().flatten().any(|u| u.as_str().is_some_and(|u| left_out.iter().any(|l| l == u))))
+            .filter_map(|e| e["id"].as_str().map(String::from))
+            .filter(|id| !left_out.contains(id))
+            .collect();
+        crate::reader::register_into(doc, global, table, &ids);
+    }
+    out
+}
+
 fn state_file(dir: &Path) -> PathBuf {
     dir.join("write.state.json")
 }
@@ -646,10 +745,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
     let nfile = pc_core::paper::app_dir(&book).join("notation.json");
     let mut doc = lore_notation::Notation::load(&nfile).unwrap_or_default();
     let before = doc.entries.len();
-    for table in src.materials.iter().filter_map(|m| m.symbols.as_ref()) {
-        let ids: Vec<String> = table["entries"].as_array().into_iter().flatten().chain(table["equations"].as_array().into_iter().flatten()).filter_map(|e| e["id"].as_str().map(String::from)).collect();
-        crate::reader::register_into(&mut doc, ctx.global, table, &ids);
-    }
+    let symbols = merge_symbols(&mut doc, ctx.global, src);
     let notation_added = doc.entries.len() - before;
     if notation_added > 0 {
         doc.save(&nfile).map_err(err)?;
@@ -677,7 +773,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
         st.sections.insert(c.id.clone(), (id, label));
         save_state(ctx.job_dir, &st);
     }
-    let notation_rules = crate::notation::describe(&eff, None);
+    let notation_rules = format!("{}{}", crate::notation::describe(&eff, None), symbols.rules());
     let style = ctx.ws.map(pc_core::draft::style_text).unwrap_or_default();
     let opt = lore_notation::CheckOptions::default();
     let total = plan.chapters.len();
@@ -785,7 +881,8 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
     crate::books::remember_in(target.books_file, &book, &title, &src.shas(), if st.new_book { book.parent() } else { None }).map_err(err)?;
     let chapters = plan.chapters.iter().filter_map(|c| st.done.get(&c.id).cloned()).collect();
     let cards = st.cards.values().flatten().cloned().collect();
-    Ok(WriteOut { book: book.to_string_lossy().to_string(), title, new_book: st.new_book, chapters, notation: notation_added, notes, cards })
+    let conflicts = symbols.conflicts.iter().map(|c| c.message()).collect();
+    Ok(WriteOut { book: book.to_string_lossy().to_string(), title, new_book: st.new_book, chapters, notation: notation_added, notes, conflicts, cards })
 }
 
 #[cfg(test)]

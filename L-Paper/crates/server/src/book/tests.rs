@@ -638,3 +638,41 @@ async fn cards_go_through_lbrain_while_it_runs() {
     assert!(reqs[2].url.ends_with("/api/recall/n42") && body(2)["outcome"] == "unfamiliar");
     assert!(sink.create(&cards::CardText { term: "x".into(), ..Default::default() }, "B").await.is_err(), "no words, no card");
 }
+
+/// One registry of symbols per book: the first paper's τ (temperature) stays; a later paper's τ
+/// for something else is a conflict and its β for temperature a conversion, neither registered
+/// (nor an equation using one); what is new is registered; the chapter prompt carries both.
+#[test]
+fn several_papers_share_one_registry_of_symbols() {
+    let paper = |title: &str, entries: Value, equations: Value| source::Material { kind: "lr".into(), title: title.into(), symbols: Some(json!({ "schema": "lorereader.symbols/1", "entries": entries, "equations": equations })), ..Default::default() };
+    let src = source::Sources {
+        materials: vec![
+            paper("Gated Contrast for Synthetic Signals", json!([{ "id": "tau", "kind": "symbol", "latex": "\\tau", "meaning_en": "temperature" }]), json!([])),
+            paper(
+                "A Primer on Synthetic Similarity",
+                json!([
+                    { "id": "tau", "kind": "symbol", "latex": "\\tau", "meaning_en": "decision threshold" },
+                    { "id": "beta", "kind": "symbol", "latex": "\\beta", "meaning_en": "the temperature" },
+                    { "id": "gamma", "kind": "symbol", "latex": "\\gamma", "meaning_en": "margin" }
+                ]),
+                json!([{ "id": "eq1", "kind": "equation", "latex": "p = e^{s/\\beta}", "uses": ["beta"] }]),
+            ),
+        ],
+        ..Default::default()
+    };
+    let mut doc = lore_notation::Notation::default();
+    let m = write::merge_symbols(&mut doc, &lore_notation::Notation::default(), &src);
+    assert_eq!(m.conflicts.len(), 1);
+    assert_eq!((m.conflicts[0].latex.as_str(), m.conflicts[0].book_meaning.as_str(), m.conflicts[0].from.as_str()), ("\\tau", "temperature", "A Primer on Synthetic Similarity"));
+    assert_eq!(m.converts.len(), 1);
+    assert_eq!((m.converts[0].latex.as_str(), m.converts[0].book_latex.as_str()), ("\\beta", "\\tau"));
+    let latex: Vec<String> = doc.entries.iter().filter_map(|e| e.latex.clone()).collect();
+    assert_eq!(latex, ["\\tau", "\\gamma"], "τ once (temperature), γ new, no β, no equation over β");
+    assert_eq!(doc.find_latex("\\tau").and_then(|e| e.meaning_en.clone()).as_deref(), Some("temperature"));
+    let rules = m.rules();
+    assert!(rules.contains("writes $\\beta$ for the temperature: write $\\tau$") && rules.contains("uses $\\tau$ for decision threshold"), "{rules}");
+    assert!(m.conflicts[0].message().starts_with("符號衝突"));
+    // the same merge again (a resumed write): nothing new, the same conflict
+    let again = write::merge_symbols(&mut doc, &lore_notation::Notation::default(), &src);
+    assert_eq!((again.conflicts.len(), again.converts.len(), doc.entries.len()), (1, 1, 2));
+}

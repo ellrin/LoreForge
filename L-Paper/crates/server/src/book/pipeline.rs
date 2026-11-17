@@ -207,7 +207,9 @@ impl Pipeline for BookJob {
         if st == status::DONE
             && let Some(w) = job.output("write").and_then(|v| serde_json::from_value::<WriteOut>(v).ok())
         {
-            let c: CheckOut = job.output("check").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+            let mut c: CheckOut = job.output("check").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+            // 待處理: the symbols two sources use for different things
+            c.problems.extend(w.conflicts.iter().map(|m| Problem { kind: "notation".into(), message: m.clone() }));
             snap.insert("book".into(), w.book.clone().into());
             snap.insert(
                 "result".into(),
