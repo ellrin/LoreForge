@@ -147,7 +147,8 @@ fn lang_name(lang: Option<&str>) -> String {
     }
 }
 
-/// The request for a card summary of `req.term` from `req.context` (the source quote only).
+/// The request for a card summary of `req.term`: a web search on the term plus `req.context` (知識建立一定要上網查;
+/// the caller sends it with web search on and refuses an answer that did not search).
 pub fn draft_prompt(req: &DraftRequest) -> Result<DraftPrompt> {
     let term = req.term.trim();
     if term.is_empty() {
@@ -159,8 +160,8 @@ pub fn draft_prompt(req: &DraftRequest) -> Result<DraftPrompt> {
     }
     let lang = lang_name(req.lang.as_deref());
     let system = format!(
-        "你是知識卡片的摘要助手。只根據使用者附上的【原文】，為指定術語寫一句卡片摘要（一到兩句，不超過 80 字），用{lang}寫，術語保留原文寫法。\
-不得加入原文沒有的事實、數字、人名、年份或定義，也不要用一般知識補充；原文沒有說明這個術語是什麼時，supported 設為 false，summary 留空字串。\
+        "你是知識卡片的摘要助手。先用網路搜尋查這個術語（教科書、論文、官方文件、可靠的百科），再根據查到的資料和使用者附上的【原文】，為指定術語寫一句卡片摘要（一到兩句，不超過 80 字），用{lang}寫，術語保留原文寫法。\
+不得憑記憶補充查不到出處的事實、數字、人名、年份或定義；查不到可靠說明時，supported 設為 false，summary 留空字串。\
 只輸出 JSON：{{\"summary\": 字串, \"supported\": 布林}}。"
     );
     let user = format!("術語：{term}\n\n【原文】\n{quote}");

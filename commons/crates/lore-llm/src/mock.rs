@@ -12,6 +12,8 @@ pub struct MockProvider {
     pub seen: Mutex<Vec<LlmRequest>>,
     pub caps: Capabilities,
     pub name: String,
+    /// Pages "read" by a web-search request (none: the mock never searches).
+    pub sources: Vec<crate::types::WebSource>,
 }
 
 impl MockProvider {
@@ -21,7 +23,14 @@ impl MockProvider {
             seen: Mutex::new(vec![]),
             caps: Capabilities { json: true, vision: true, web: true, streaming: true, context: 1_000_000, needs_network: false },
             name: "mock".into(),
+            sources: vec![],
         }
+    }
+
+    /// Answer web-search requests as if these pages had been read.
+    pub fn with_sources(mut self, urls: &[&str]) -> Self {
+        self.sources = urls.iter().map(|u| crate::types::WebSource { url: u.to_string(), title: String::new() }).collect();
+        self
     }
 
     pub fn with_capabilities(mut self, caps: Capabilities) -> Self {
@@ -57,7 +66,8 @@ impl LlmProvider for MockProvider {
     async fn send(&self, req: &LlmRequest) -> Result<LlmResponse, LlmError> {
         check_request(&self.name, &self.caps, req)?;
         self.seen.lock().unwrap().push(req.clone());
-        Ok(LlmResponse { text: self.next()?, provider: self.id(), sources: vec![], usage: None })
+        let sources = if req.web_search { self.sources.clone() } else { vec![] };
+        Ok(LlmResponse { text: self.next()?, provider: self.id(), sources, usage: None })
     }
 
     /// Streams the reply in pieces of up to 8 characters.

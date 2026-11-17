@@ -301,6 +301,7 @@ impl LlmProvider for ClaudeCode {
         std::fs::create_dir_all(&dir).map_err(|e| LlmError::Network(NAME.into(), e.to_string()))?;
         let mut c = command(&bin, self.cli.config_dir.as_deref());
         c.current_dir(&dir).args(self.args(req, isolation)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let web = req.web_search && self.allow_web;
         let result = async {
             let prompt = with_images(&dir, req)?;
             let mut child = c.spawn().map_err(|e| LlmError::Network(NAME.into(), format!("無法啟動 Claude Code：{e}")))?;
@@ -311,11 +312,14 @@ impl LlmProvider for ClaudeCode {
                 .await
                 .map_err(|_| LlmError::Network(NAME.into(), format!("超過 {} 秒沒有回應", self.timeout.as_secs())))?
                 .map_err(|e| LlmError::Network(NAME.into(), e.to_string()))?;
-            parse_output(&out.stdout, &out.stderr)
+            let text = parse_output(&out.stdout, &out.stderr)?;
+            let sources = if web { web_sources(&out.stdout, &text) } else { vec![] };
+            Ok::<_, LlmError>((text, sources))
         }
         .await;
         let _ = std::fs::remove_dir_all(&dir);
-        Ok(LlmResponse { text: result?, provider: self.id(), sources: vec![], usage: None })
+        let (text, sources) = result?;
+        Ok(LlmResponse { text, provider: self.id(), sources, usage: None })
     }
 }
 
@@ -369,6 +373,37 @@ pub fn parse_output(stdout: &[u8], stderr: &[u8]) -> Result<String, LlmError> {
         return Err(LlmError::Parse(NAME.into(), "沒有文字內容".into()));
     }
     Ok(text)
+}
+
+/// How many web searches the CLI ran in one `-p` call: the result's `modelUsage.<model>.webSearchRequests`
+/// (summed) or `usage.server_tool_use.web_search_requests`, whichever is larger.
+pub fn web_search_count(stdout: &[u8]) -> u64 {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(stdout) else { return 0 };
+    let per_model: u64 = v.get("modelUsage").and_then(|m| m.as_object()).map(|m| m.values().filter_map(|u| u.get("webSearchRequests").and_then(|n| n.as_u64())).sum()).unwrap_or(0);
+    let usage = v.pointer("/usage/server_tool_use/web_search_requests").and_then(|n| n.as_u64()).unwrap_or(0);
+    per_model.max(usage)
+}
+
+/// The pages a web-search call read, for [`LlmResponse::sources`]. The CLI's JSON result does not list them,
+/// so they are the URLs of the answer, and only when the CLI reports a search actually ran: no search,
+/// no sources (a caller that needs grounding can then refuse the answer).
+pub fn web_sources(stdout: &[u8], text: &str) -> Vec<crate::types::WebSource> {
+    if web_search_count(stdout) == 0 {
+        return vec![];
+    }
+    let mut out: Vec<crate::types::WebSource> = Vec::new();
+    for (i, _) in text.match_indices("http") {
+        let rest = &text[i..];
+        if !(rest.starts_with("https://") || rest.starts_with("http://")) {
+            continue;
+        }
+        let end = rest.find(|c: char| c.is_whitespace() || matches!(c, ')' | ']' | '>' | '"' | '\'' | '<' | '`')).unwrap_or(rest.len());
+        let url = rest[..end].trim_end_matches(['.', ',', ';', ':']).to_string();
+        if url.len() > 10 && !out.iter().any(|s| s.url == url) {
+            out.push(crate::types::WebSource { url, title: String::new() });
+        }
+    }
+    out
 }
 
 /// A stand-in `claude` executable for offline tests (Unix shells only).
@@ -560,6 +595,18 @@ mod tests {
         assert_eq!(parse_output(br#"{"is_error":false,"result":"","structured_output":{"a":1}}"#, b"").unwrap(), r#"{"a":1}"#);
         assert!(parse_output(br#"{"is_error":true,"result":"Not logged in"}"#, b"").unwrap_err().to_string().contains("Not logged in"));
         assert!(parse_output(b"", b"error: unknown option").unwrap_err().to_string().contains("unknown option"));
+    }
+
+    #[test]
+    fn web_sources_only_after_a_real_search() {
+        let text = "Dice is an overlap measure ([A](https://example.com/dice)).\n\nSources:\n- [https://example.com/dice](https://example.com/dice)\n- https://example.org/b.";
+        let searched = br#"{"result":"x","usage":{"server_tool_use":{"web_search_requests":0}},"modelUsage":{"m":{"webSearchRequests":2}}}"#;
+        let urls: Vec<String> = web_sources(searched, text).into_iter().map(|s| s.url).collect();
+        assert_eq!(urls, ["https://example.com/dice", "https://example.org/b"]);
+        // URLs the model wrote without searching are not sources
+        let none = br#"{"result":"x","usage":{"server_tool_use":{"web_search_requests":0}},"modelUsage":{"m":{"webSearchRequests":0}}}"#;
+        assert!(web_sources(none, text).is_empty());
+        assert_eq!(web_search_count(br#"{"usage":{"server_tool_use":{"web_search_requests":3}}}"#), 3);
     }
 
     #[test]

@@ -45,7 +45,7 @@ pub use catalog::Catalog;
 pub use claude_api::{ClaudeApi, ClaudeApiConfig};
 pub use claude_code::ClaudeCode;
 pub use error::{LlmError, ProviderError};
-pub use json::{complete_as, complete_json};
+pub use json::{complete_as, complete_json, complete_json_web};
 pub use mock::MockProvider;
 pub use openai::{LlamaServer, LlamaServerConfig, OpenAiCompat, OpenAiCompatConfig};
 pub use provider::{LlmProvider, OnEvent};

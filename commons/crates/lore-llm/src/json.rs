@@ -147,6 +147,44 @@ pub async fn complete_json(p: &dyn LlmProvider, req: &LlmRequest) -> Result<Valu
     Ok(v)
 }
 
+/// [`complete_json`] with web search on, for content that must come from the web (knowledge
+/// cards): the pages the search read come back with the value, and an answer from a call that
+/// did not search (no sources) is refused, however good its JSON.
+pub async fn complete_json_web(p: &dyn LlmProvider, req: &LlmRequest) -> Result<(Value, Vec<crate::types::WebSource>), LlmError> {
+    let schema = req.json_schema.clone().ok_or_else(|| LlmError::NotConfigured("complete_json_web 需要 json_schema".into()))?;
+    let req = req.clone().web(true);
+    let mut sources: Vec<crate::types::WebSource> = Vec::new();
+    let mut keep = |r: &crate::types::LlmResponse| {
+        for s in &r.sources {
+            if !sources.iter().any(|x| x.url == s.url) {
+                sources.push(s.clone());
+            }
+        }
+    };
+    let first = p.send(&req).await?;
+    keep(&first);
+    let v = match extract_json(&first.text).map(|v| validate(&v, &schema).map(|_| v)) {
+        Some(Ok(v)) => v,
+        other => {
+            let why = match other {
+                Some(Err(e)) => e,
+                _ => "不是 JSON".to_string(),
+            };
+            let mut again = req.clone();
+            again.system.push_str("\n\nReply with exactly one JSON value that matches the given schema, and nothing else.");
+            let second = p.send(&again).await?;
+            keep(&second);
+            let v = extract_json(&second.text).ok_or_else(|| LlmError::Parse(p.id(), format!("兩次都不是 JSON（第一次：{why}）")))?;
+            validate(&v, &schema).map_err(|e| LlmError::Parse(p.id(), e))?;
+            v
+        }
+    };
+    if sources.is_empty() {
+        return Err(LlmError::Parse(p.id(), "沒有上網查資料（沒有搜尋紀錄），不採用這個回答".into()));
+    }
+    Ok((v, sources))
+}
+
 /// [`complete_json`] into a Rust type.
 pub async fn complete_as<T: DeserializeOwned>(p: &dyn LlmProvider, req: &LlmRequest) -> Result<T, LlmError> {
     let v = complete_json(p, req).await?;
@@ -230,5 +268,32 @@ mod tests {
         }
         let ok = MockProvider::new(vec!["{\"word\":\"glad\"}".into()]);
         assert_eq!(complete_as::<W>(&ok, &req).await.unwrap().word, "glad");
+    }
+
+    /// Answers with a fixed reply and these search sources.
+    struct Searched(Vec<&'static str>);
+    #[async_trait::async_trait]
+    impl LlmProvider for Searched {
+        fn id(&self) -> String {
+            "searched".into()
+        }
+        fn capabilities(&self) -> crate::types::Capabilities {
+            crate::types::Capabilities { json: true, vision: false, web: true, streaming: false, context: 100_000, needs_network: true }
+        }
+        async fn send(&self, req: &LlmRequest) -> Result<crate::types::LlmResponse, LlmError> {
+            assert!(req.web_search, "web search is on");
+            let sources = self.0.iter().map(|u| crate::types::WebSource { url: u.to_string(), title: String::new() }).collect();
+            Ok(crate::types::LlmResponse { text: "{\"word\":\"glad\"}".into(), provider: self.id(), sources, usage: None })
+        }
+    }
+
+    #[tokio::test]
+    async fn web_json_needs_a_real_search() {
+        let req = LlmRequest::prompt("s", "u").json(schema());
+        let (v, src) = complete_json_web(&Searched(vec!["https://example.org/a"]), &req).await.unwrap();
+        assert_eq!((v, src.len()), (json!({"word":"glad"}), 1));
+        // good JSON but no search: refused
+        let e = complete_json_web(&Searched(vec![]), &req).await.unwrap_err();
+        assert!(e.to_string().contains("沒有上網查資料"), "{e}");
     }
 }
