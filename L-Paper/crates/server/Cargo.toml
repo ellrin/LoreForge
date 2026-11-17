@@ -26,6 +26,8 @@ lore-learn.workspace = true
 lore-polish.workspace = true
 lore-voice.workspace = true
 lore-words = { path = "../../../commons/crates/lore-words" }
+# 寫書: a PDF's sha256 (the per-file checkpoint, L-Shelf's item id)
+sha2 = "0.10"
 async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true

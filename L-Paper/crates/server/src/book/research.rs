@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::plan::Plan;
-use super::source::Material;
+use super::source::{Material, Sources};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -33,6 +33,10 @@ pub struct Src {
     pub bib: String,
     /// The downloaded PDF (cache tier), web sources only.
     pub file: Option<String>,
+    /// `paper`: which starting material it is (`source.json`'s `materials`).
+    pub material: Option<usize>,
+    /// `paper`: its licence lets its figures be reproduced.
+    pub reuse: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -84,7 +88,8 @@ pub struct Env<'a> {
 
 fn record_of(m: &Material) -> Record {
     Record {
-        title: m.title.clone(),
+        title: if m.title.is_empty() { m.label.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string() } else { m.title.clone() },
+        arxiv: Some(m.arxiv.clone()).filter(|a| !a.is_empty()),
         authors: m.authors.clone(),
         year: m.year.parse().ok(),
         venue: Some(m.venue.clone()).filter(|v| !v.is_empty()),
@@ -111,11 +116,37 @@ fn lr_record(v: &Value) -> Record {
 }
 
 fn same(a: &Record, b: &Record) -> bool {
-    (a.doi.is_some() && a.doi == b.doi) || (a.arxiv.is_some() && a.arxiv == b.arxiv) || lore_research::norm_title(&a.title) == lore_research::norm_title(&b.title)
+    let t = lore_research::norm_title(&a.title);
+    (a.doi.is_some() && a.doi == b.doi) || (a.arxiv.is_some() && a.arxiv == b.arxiv) || (!t.is_empty() && t == lore_research::norm_title(&b.title))
+}
+
+/// Which chapters each starting paper serves: one paper serves every chapter (empty); several are
+/// given to the chapters whose terms they use most (at most `per` a chapter), one that uses none to
+/// the first chapter, so every starting paper can be cited somewhere.
+pub fn assign(src: &Sources, plan: &Plan, per: usize) -> Vec<Vec<String>> {
+    let n = src.materials.len();
+    if n <= 1 {
+        return vec![vec![]; n];
+    }
+    let texts: Vec<String> = src.materials.iter().map(|m| format!("{} {} {}", m.title, m.abstract_text, m.sections.iter().map(|(h, t)| format!("{h} {t}")).collect::<Vec<_>>().join(" ")).to_lowercase()).collect();
+    let mut out = vec![vec![]; n];
+    for c in &plan.chapters {
+        let mut scored: Vec<(usize, usize)> = texts.iter().enumerate().map(|(i, t)| (c.terms.iter().filter(|w| w.chars().count() > 2 && t.contains(&w.to_lowercase())).count(), i)).filter(|(k, _)| *k > 0).collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        for (_, i) in scored.into_iter().take(per) {
+            out[i].push(c.id.clone());
+        }
+    }
+    if let Some(first) = plan.chapters.first() {
+        for o in out.iter_mut().filter(|o| o.is_empty()) {
+            o.push(first.id.clone());
+        }
+    }
+    out
 }
 
 /// Run the stage. `progress(cards, read, found, downloaded)`.
-pub async fn research(m: &Material, plan: &Plan, env: Env<'_>, progress: &(dyn Fn(Value) + Send + Sync)) -> Research {
+pub async fn research(src: &Sources, plan: &Plan, env: Env<'_>, progress: &(dyn Fn(Value) + Send + Sync)) -> Research {
     let mut out = Research::default();
     // a source that answers "too many requests" is left out for the rest of this job (one retry,
     // short waits): a book job does not sit for minutes behind a rate limit
@@ -124,36 +155,54 @@ pub async fn research(m: &Material, plan: &Plan, env: Env<'_>, progress: &(dyn F
     cfg.pace.max_wait = cfg.pace.max_wait.min(std::time::Duration::from_secs(8));
     let mut client = Client::with_http(cfg.clone(), env.http.clone());
 
-    // the starting paper: its licence decides whether its figures may be reproduced
-    let mut start = record_of(m);
-    if env.web {
-        let reference = if m.doi.is_empty() { m.title.clone() } else { m.doi.clone() };
-        match client.resolve(&reference).await {
-            Ok(Some(r)) if same(&r, &start) || !m.doi.is_empty() => {
-                start.license = r.license.clone();
-                start.arxiv = start.arxiv.or(r.arxiv);
-                start.abstract_text = r.abstract_text;
-                start.year = start.year.or(r.year);
+    // the starting papers: one reference each among the found ones; the licence is asked only for
+    // a paper whose figures could be reproduced (an L-Reader paper with figure crops)
+    let chapters_of = assign(src, plan, 6);
+    let mut records: Vec<(Src, Record)> = vec![];
+    let mut first_licence: Option<(Option<String>, bool)> = None;
+    for (i, m) in src.materials.iter().enumerate() {
+        let mut start = record_of(m);
+        let has_figures = m.figures.iter().any(|f| f.file.is_some());
+        if env.web && !out.offline && has_figures {
+            let reference = if m.doi.is_empty() { m.title.clone() } else { m.doi.clone() };
+            match client.resolve(&reference).await {
+                Ok(Some(r)) if same(&r, &start) || !m.doi.is_empty() => {
+                    start.license = r.license.clone();
+                    start.arxiv = start.arxiv.or(r.arxiv);
+                    start.abstract_text = r.abstract_text;
+                    start.year = start.year.or(r.year);
+                }
+                Ok(_) => {}
+                Err(e) if e.is_offline() => out.offline = true,
+                Err(e) => out.notes.push(format!("查論文的授權沒有成功：{e}")),
             }
-            Ok(_) => {}
-            Err(e) if e.is_offline() => out.offline = true,
-            Err(e) => out.notes.push(format!("查論文的授權沒有成功：{e}")),
+            // on arXiv the authors' licence is arXiv's to state (OpenAlex says cc-by for every arXiv copy)
+            let arxiv_id = start.arxiv.clone().or_else(|| m.doi.to_lowercase().strip_prefix("10.48550/arxiv.").map(String::from));
+            if let Some(id) = arxiv_id.filter(|_| !out.offline) {
+                start.license = match client.arxiv_license(&id).await {
+                    Ok(Some(l)) => Some(l),
+                    Ok(None) | Err(_) => {
+                        out.notes.push("arXiv 沒有回答這篇的授權：不放論文的圖".into());
+                        None
+                    }
+                };
+            }
         }
+        if start.abstract_text.as_deref().is_none_or(str::is_empty) && !m.abstract_text.is_empty() {
+            start.abstract_text = Some(m.abstract_text.clone());
+        }
+        let reuse = has_figures && lore_research::figure_reuse_allowed(start.license.as_deref());
+        if has_figures && first_licence.is_none() {
+            first_licence = Some((start.license.clone(), reuse));
+        }
+        let quotes = m.quotes.iter().map(|q| q.text.clone()).filter(|t| !t.is_empty()).collect();
+        records.push((Src { kind: "paper".into(), quotes, chapters: chapters_of[i].clone(), material: Some(i), reuse, ..Default::default() }, start));
     }
-    // on arXiv the authors' licence is arXiv's to state (OpenAlex says cc-by for every arXiv copy)
-    let arxiv_id = start.arxiv.clone().or_else(|| m.doi.to_lowercase().strip_prefix("10.48550/arxiv.").map(String::from));
-    if let Some(id) = arxiv_id.filter(|_| env.web && !out.offline) {
-        start.license = match client.arxiv_license(&id).await {
-            Ok(Some(l)) => Some(l),
-            Ok(None) | Err(_) => {
-                out.notes.push("arXiv 沒有回答這篇的授權：不放論文的圖".into());
-                None
-            }
-        };
+    if let Some((l, r)) = first_licence {
+        out.license = l;
+        out.reuse_figures = r;
     }
-    out.license = start.license.clone();
-    out.reuse_figures = lore_research::figure_reuse_allowed(start.license.as_deref());
-    let mut records: Vec<(Src, Record)> = vec![(Src { kind: "paper".into(), quotes: m.quotes.iter().map(|q| q.text.clone()).filter(|t| !t.is_empty()).collect(), ..Default::default() }, start.clone())];
+    let starts: Vec<Record> = records.iter().map(|(_, r)| r.clone()).collect();
 
     // the author's cards (context)
     for c in &plan.chapters {
@@ -174,11 +223,11 @@ pub async fn research(m: &Material, plan: &Plan, env: Env<'_>, progress: &(dyn F
         let ws = r.papers.parent().unwrap_or(Path::new("")).to_path_buf();
         for p in r.list() {
             let sha = p["sha256"].as_str().unwrap_or("").to_string();
-            if sha == m.sha {
+            if src.materials.iter().any(|m| m.sha == sha) {
                 continue;
             }
             let rec = lr_record(&p);
-            if rec.title.is_empty() || same(&rec, &start) {
+            if rec.title.is_empty() || starts.iter().any(|s| same(&rec, s)) {
                 continue;
             }
             let lt = rec.title.to_lowercase();
@@ -190,7 +239,7 @@ pub async fn research(m: &Material, plan: &Plan, env: Env<'_>, progress: &(dyn F
             records.push((Src { kind: "lr".into(), chapters, quotes, ..Default::default() }, rec));
         }
     }
-    progress(serde_json::json!({ "read": records.len() - 1 }));
+    progress(serde_json::json!({ "read": records.iter().filter(|(s, _)| s.kind == "lr").count() }));
 
     // the web: open-access papers only
     if env.web && !out.offline {

@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use super::model::{Ask, BookModel, TASK_CHAPTER};
 use super::plan::{Chapter, Plan, Teach};
 use super::research::Research;
-use super::source::Material;
+use super::source::Sources;
 
 /// `write.state.json` in the job folder: what is made already, so a resumed stage goes on.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -128,7 +128,7 @@ placed right after the sentence it explains and never inside a box.",
 
 /// The chapter prompt. `style` = the author's style notes (`style_text`; empty: none).
 #[allow(clippy::too_many_arguments)]
-pub fn prompt(book_title: &str, c: &Chapter, plan: &Plan, labels: &BTreeMap<String, (String, String)>, teach: &[Teach], m: &Material, r: &Research, keys: &BTreeMap<String, String>, notation: &str, style: &str, length: &str, lang: &str) -> (String, String) {
+pub fn prompt(book_title: &str, c: &Chapter, plan: &Plan, labels: &BTreeMap<String, (String, String)>, teach: &[Teach], src: &Sources, r: &Research, keys: &BTreeMap<String, String>, notation: &str, style: &str, length: &str, lang: &str) -> (String, String) {
     let (lo, hi) = words_for(&c.depth, length);
     let mut system = format!(
         "You write one chapter of a set of course lecture notes for one reader, in the manner of university lecture notes such as \
@@ -157,7 +157,13 @@ Reply with JSON only: {{\"body\": LaTeX of the chapter, \"figures\": [...], \"ta
     );
     system += notation;
     system += &pc_core::draft::style_block(style);
-    let mut user = format!("Notes: {book_title}\nThese notes teach the paper \"{}\".\n\nChapters (label):\n", m.title);
+    let papers = src.papers();
+    let about = match papers.len() {
+        0 => "These notes teach terms the reader chose to learn.".to_string(),
+        1 => format!("These notes teach the terms behind the paper \"{}\".", papers[0].title),
+        n => format!("These notes teach the terms behind {n} papers the reader is reading; each is one source among the others."),
+    };
+    let mut user = format!("Notes: {book_title}\n{about}\n\nChapters (label):\n");
     for x in &plan.chapters {
         let l = labels.get(&x.id).map(|(_, l)| l.as_str()).unwrap_or("");
         user += &format!("- {}{} ({l})\n", x.title, if x.id == c.id { "  ← this chapter" } else { "" });
@@ -183,10 +189,11 @@ Reply with JSON only: {{\"body\": LaTeX of the chapter, \"figures\": [...], \"ta
         for q in s.quotes.iter().take(6) {
             user += &format!("Quote: {q}\n");
         }
-        if s.kind == "paper" {
+        if let Some(m) = s.material.and_then(|i| src.materials.get(i)).or_else(|| (s.kind == "paper").then(|| src.materials.first()).flatten()) {
             let mut words = c.terms.clone();
             words.extend(c.terms.iter().flat_map(|t| t.split_whitespace().map(String::from)).filter(|w| w.len() > 4));
-            let p = m.passages(&words, 6000);
+            let starting = r.for_chapter(&c.id).iter().filter(|x| x.kind == "paper").count().max(1);
+            let p = m.passages(&words, (12000 / starting).min(6000));
             if !p.is_empty() {
                 user += &format!("Passages of this paper about the chapter's terms:\n{p}\n");
             }
@@ -199,7 +206,7 @@ Reply with JSON only: {{\"body\": LaTeX of the chapter, \"figures\": [...], \"ta
             user += &format!("- {}: {}\n", k.title, k.summary.chars().take(400).collect::<String>());
         }
     }
-    let qs: Vec<&str> = m.questions.iter().map(|q| q.text.as_str()).chain(m.extras.questions.iter().map(String::as_str)).filter(|q| c.terms.iter().any(|t| q.to_lowercase().contains(&t.to_lowercase()))).collect();
+    let qs: Vec<String> = src.questions().into_iter().filter(|q| c.terms.iter().any(|t| q.to_lowercase().contains(&t.to_lowercase()))).collect();
     if !qs.is_empty() {
         user += "\nQuestions the reader asked about these terms (answer them in the text):\n";
         for q in qs {
@@ -211,7 +218,7 @@ Reply with JSON only: {{\"body\": LaTeX of the chapter, \"figures\": [...], \"ta
         for (i, f) in c.figures.iter().enumerate() {
             match f.kind.as_str() {
                 "paper" => {
-                    let cap = m.figures.iter().find(|x| x.id == f.paper_fig).map(|x| x.caption.as_str()).unwrap_or("");
+                    let cap = src.figure(&f.paper_fig).map(|(_, x)| x.caption.as_str()).unwrap_or("");
                     user += &format!("- id f{} kind paper, paper_fig {}: {} (the paper's caption: {cap})\n", i + 1, f.paper_fig, f.idea);
                 }
                 k => user += &format!("- id f{} kind {k}: {}\n", i + 1, f.idea),
@@ -346,7 +353,7 @@ pub fn plot_spec(p: &Value, caption: &str) -> Result<lore_plot::Spec, String> {
 
 /// The chapter's text with its floats made (files the attempt wrote are listed for a retry).
 #[allow(clippy::too_many_arguments)]
-fn assemble(ctx: &Ctx<'_>, book: &Path, reply: &Value, c: &Chapter, m: &Material, r: &Research, keys: &BTreeMap<String, String>, made: &mut Vec<PathBuf>, out: &mut ChapterOut) -> String {
+fn assemble(ctx: &Ctx<'_>, book: &Path, reply: &Value, c: &Chapter, src: &Sources, r: &Research, keys: &BTreeMap<String, String>, made: &mut Vec<PathBuf>, out: &mut ChapterOut) -> String {
     let mut body = without_sections(reply["body"].as_str().unwrap_or(""));
     let mut new_labels: Vec<String> = vec![];
     for f in reply["figures"].as_array().into_iter().flatten() {
@@ -361,9 +368,9 @@ fn assemble(ctx: &Ctx<'_>, book: &Path, reply: &Value, c: &Chapter, m: &Material
                 made.push(book.join("figures").join(file.replace(".pdf", ".plot.json")));
                 Ok(format!("figures/{file}"))
             }),
-            Some("paper") if r.reuse_figures => {
+            Some("paper") if paper_src(src, r, f["paper_fig"].as_str().unwrap_or("")).is_some_and(|s| s.reuse) => {
                 let want = f["paper_fig"].as_str().unwrap_or("");
-                match m.figures.iter().find(|x| x.id == want).and_then(|x| x.file.clone()).and_then(|file| std::fs::read(ctx.job_dir.join("img").join(file)).ok()) {
+                match src.figure(want).and_then(|(_, x)| x.file.clone()).and_then(|file| std::fs::read(ctx.job_dir.join("img").join(file)).ok()) {
                     Some(bytes) => {
                         let name = super::super::floats::free_figure_name(book, &format!("paper {want}"), "png");
                         super::super::floats::save_figure_file(book, &name, &bytes).inspect(|_| made.push(book.join("figures").join(&name)))
@@ -376,7 +383,10 @@ fn assemble(ctx: &Ctx<'_>, book: &Path, reply: &Value, c: &Chapter, m: &Material
         let caption = match f["kind"].as_str() {
             // attribution: the paper and its licence
             // «Reproduced from [n], CC BY-NC 4.0.» — always the citation and the licence
-            Some("paper") => reused_caption(&caption, &r.start_key, r.license.as_deref()),
+            Some("paper") => match paper_src(src, r, f["paper_fig"].as_str().unwrap_or("")) {
+                Some(s) => reused_caption(&caption, keys.get(&s.key).unwrap_or(&s.key), s.record.license.as_deref()),
+                None => caption,
+            },
             _ => caption,
         };
         match made_file.and_then(|path| super::super::floats::figure_block(ctx.ws, book, &path, &caption, &caption, &new_labels)) {
@@ -416,6 +426,12 @@ fn assemble(ctx: &Ctx<'_>, book: &Path, reply: &Value, c: &Chapter, m: &Material
         out.problems.push(format!("拿掉了沒有來源的引用：{}", dropped.into_iter().collect::<Vec<_>>().join(", ")));
     }
     text
+}
+
+/// The starting paper a figure id belongs to (its source in research: key, licence, reuse).
+pub fn paper_src<'a>(src: &Sources, r: &'a Research, fig: &str) -> Option<&'a super::research::Src> {
+    let (i, _) = src.figure(fig)?;
+    r.sources.iter().find(|s| s.kind == "paper" && s.material == Some(i)).or_else(|| (i == 0 && r.sources.first().is_some_and(|s| s.kind == "paper" && s.material.is_none())).then(|| r.sources.first()).flatten())
 }
 
 /// `\label{eq:…}` that nothing in `all` (the whole book) refers to is taken out of `text`, with
@@ -533,9 +549,33 @@ pub struct Target<'a> {
     pub template: &'a (dyn Fn() -> Result<PathBuf, String> + Send + Sync),
     pub page: Option<&'a str>,
     pub books_file: &'a Path,
+    /// The title the author gave a new book ("" = the plan's).
+    pub title: &'a str,
 }
 
-pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, m: &Material, plan: &Plan, r: &Research, teach: &[Teach]) -> Result<WriteOut, lore_jobs::StageError> {
+/// A new book's title: the author's, else the plan's, else from the one paper or the first terms.
+pub fn book_title(given: &str, plan: &Plan, src: &Sources, teach: &[Teach]) -> String {
+    if !given.trim().is_empty() {
+        return given.split_whitespace().collect::<Vec<_>>().join(" ");
+    }
+    if !plan.title.trim().is_empty() {
+        return plan.title.trim().to_string();
+    }
+    match src.papers() {
+        [m] if !m.title.is_empty() => format!("Notes on {}", m.title),
+        _ => {
+            let mut terms: Vec<&str> = vec![];
+            for t in plan.chapters.iter().flat_map(|c| c.terms.iter().map(String::as_str)).chain(teach.iter().map(|t| t.term.as_str())) {
+                if terms.len() < 3 && !terms.iter().any(|x| x.eq_ignore_ascii_case(t)) {
+                    terms.push(t);
+                }
+            }
+            if terms.is_empty() { "Notes".into() } else { format!("Notes on {}", terms.join(", ")) }
+        }
+    }
+}
+
+pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan, r: &Research, teach: &[Teach]) -> Result<WriteOut, lore_jobs::StageError> {
     let err = |e: String| lore_jobs::StageError::new(422, e);
     let mut st: State = std::fs::read(state_file(ctx.job_dir)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     let mut notes = vec![];
@@ -551,7 +591,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, m: &Material, plan: &Plan,
         (_, None) => {
             let folder = target.folder.ok_or_else(|| err("沒有存放新書的資料夾".into()))?;
             std::fs::create_dir_all(folder).map_err(|e| err(format!("無法建立資料夾 {}：{e}", folder.display())))?;
-            let title = if plan.title.trim().is_empty() { format!("Notes on {}", m.title) } else { plan.title.trim().to_string() };
+            let title = book_title(target.title, plan, src, teach);
             let tpl = (target.template)().map_err(err)?;
             let dir = crate::books::new_book(folder, &title, &tpl, target.page).map_err(err)?;
             st.new_book = true;
@@ -579,7 +619,8 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, m: &Material, plan: &Plan,
         }
         set_front(&book, "course", "Reading notes");
         // the back of the title page (About these notes) is never left with a heading and nothing under it
-        set_front(&book, "abstract", &about_text(plan, &m.title));
+        let only = if src.papers().len() == 1 { src.papers()[0].title.as_str() } else { "" };
+        set_front(&book, "abstract", &about_text(plan, only));
         let kw: Vec<String> = plan.chapters.iter().flat_map(|c| c.terms.iter().take(2).cloned()).take(8).collect();
         set_front(&book, "keywords", &pc_core::meta::tex_text(&kw.join(", ")));
     }
@@ -587,7 +628,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, m: &Material, plan: &Plan,
     let nfile = pc_core::paper::app_dir(&book).join("notation.json");
     let mut doc = lore_notation::Notation::load(&nfile).unwrap_or_default();
     let before = doc.entries.len();
-    if let Some(table) = &m.symbols {
+    for table in src.materials.iter().filter_map(|m| m.symbols.as_ref()) {
         let ids: Vec<String> = table["entries"].as_array().into_iter().flatten().chain(table["equations"].as_array().into_iter().flatten()).filter_map(|e| e["id"].as_str().map(String::from)).collect();
         crate::reader::register_into(&mut doc, ctx.global, table, &ids);
     }
@@ -628,7 +669,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, m: &Material, plan: &Plan,
             continue;
         }
         let (file, label) = st.sections[&c.id].clone();
-        let (system, user) = prompt(&title, c, plan, &st.sections, teach, m, r, &st.keys, &notation_rules, &style, ctx.length, ctx.lang);
+        let (system, user) = prompt(&title, c, plan, &st.sections, teach, src, r, &st.keys, &notation_rules, &style, ctx.length, ctx.lang);
         let mut extra = String::new();
         let mut co = ChapterOut::default();
         let mut text = String::new();
@@ -640,7 +681,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, m: &Material, plan: &Plan,
             let ask = Ask { task: TASK_CHAPTER, system: system.clone(), user: format!("{user}{extra}"), schema: schema(), max_tokens: 16000, engine: ctx.engine };
             let (reply, engine) = ctx.model.json(ask, ctx.on_chars).await?;
             co = ChapterOut { id: c.id.clone(), title: c.title.clone(), file: file.clone(), label: label.clone(), engine, ..Default::default() };
-            text = assemble(ctx, &book, &reply, c, m, r, &st.keys, &mut made, &mut co);
+            text = assemble(ctx, &book, &reply, c, src, r, &st.keys, &mut made, &mut co);
             let checked = crate::notation::check(&book, &eff, &opt, &[], &text);
             if checked.blocking.is_empty() || attempt == 1 {
                 co.problems.extend(checked.blocking.iter().map(|b| format!("對照表：{b}")));
@@ -685,7 +726,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, m: &Material, plan: &Plan,
         let add: String = pc_core::bib::parse(&bib).0.into_iter().filter(|e| !have.contains(&e.key)).map(|e| pc_core::bib::write_entry(&e)).collect::<Vec<_>>().join("\n");
         pc_core::paper::write_atomic(&path, &format!("{old}\n{add}")).map_err(|e| err(e.to_string()))?;
     }
-    crate::books::remember_in(target.books_file, &book, &title, Some(&m.sha), if st.new_book { book.parent() } else { None }).map_err(err)?;
+    crate::books::remember_in(target.books_file, &book, &title, &src.shas(), if st.new_book { book.parent() } else { None }).map_err(err)?;
     let chapters = plan.chapters.iter().filter_map(|c| st.done.get(&c.id).cloned()).collect();
     Ok(WriteOut { book: book.to_string_lossy().to_string(), title, new_book: st.new_book, chapters, notation: notation_added, notes })
 }

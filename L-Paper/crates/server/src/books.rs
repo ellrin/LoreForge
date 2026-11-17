@@ -94,20 +94,21 @@ pub fn new_book(folder: &Path, title: &str, template: &Path, page: Option<&str>)
     Ok(dir)
 }
 
-/// Record a book (and the paper it was written from) in books.toml.
-pub fn remember(dir: &Path, title: &str, paper: Option<&str>, folder: Option<&Path>) -> Result<(), String> {
-    remember_in(&registry_file(), dir, title, paper, folder)
+/// Record a book (and the L-Reader papers it was written from) in books.toml.
+pub fn remember(dir: &Path, title: &str, papers: &[String], folder: Option<&Path>) -> Result<(), String> {
+    remember_in(&registry_file(), dir, title, papers, folder)
 }
 
 /// [`remember`] in a given books.toml.
-pub fn remember_in(file: &Path, dir: &Path, title: &str, paper: Option<&str>, folder: Option<&Path>) -> Result<(), String> {
+pub fn remember_in(file: &Path, dir: &Path, title: &str, papers: &[String], folder: Option<&Path>) -> Result<(), String> {
     update_in(file, |r| {
         r.add(dir, title);
-        if let Some(sha) = paper
-            && let Some(b) = r.books.iter_mut().find(|b| b.path == dir)
-            && !b.papers.iter().any(|p| p == sha)
-        {
-            b.papers.push(sha.to_string());
+        if let Some(b) = r.books.iter_mut().find(|b| b.path == dir) {
+            for sha in papers {
+                if !b.papers.iter().any(|p| p == sha) {
+                    b.papers.push(sha.clone());
+                }
+            }
         }
         if let Some(f) = folder {
             r.last_folder = Some(f.to_path_buf());
@@ -195,7 +196,7 @@ async fn create(State(s): State<Shared>, Json(b): Json<NewBook>) -> impl IntoRes
     let _ = std::fs::remove_dir_all(&scratch);
     let dir = match made { Ok(d) => d, Err(e) => return bad(&e) };
     let title = b.title.split_whitespace().collect::<Vec<_>>().join(" ");
-    if let Err(e) = remember(&dir, &title, None, Some(&b.folder)) {
+    if let Err(e) = remember(&dir, &title, &[], Some(&b.folder)) {
         return bad(&e);
     }
     match opened::register(&s, &dir).await {

@@ -380,3 +380,152 @@ fn reused_figures_always_cite_and_name_their_licence() {
     // NonCommercial copies may be reused in the author's own notes; unknown ones never
     assert!(lore_research::figure_reuse_allowed(Some("cc-by-nc-sa")) && !lore_research::figure_reuse_allowed(Some("arxiv-nonexclusive")) && !lore_research::figure_reuse_allowed(None));
 }
+
+/// Files: a PDF is a paper when its text says so (title and references); every call counted.
+struct FileExtract(std::sync::atomic::AtomicUsize);
+
+impl source::Extract for FileExtract {
+    fn extract(&self, pdf: &Path, out: &Path) -> Result<lore_docsrc::AssetCatalog, String> {
+        self.text(pdf, out)
+    }
+    fn text(&self, pdf: &Path, _out: &Path) -> Result<lore_docsrc::AssetCatalog, String> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let body = std::fs::read_to_string(pdf).map_err(|e| e.to_string())?;
+        let mut c = lore_docsrc::AssetCatalog::default();
+        if let Some(title) = body.lines().find_map(|l| l.strip_prefix("TITLE ")) {
+            c.meta.title = title.to_string();
+            c.meta.abstract_text = Some(format!("{title}: we study the InfoNCE loss with temperature scaling."));
+            c.references.push(lore_docsrc::Reference::default());
+        }
+        c.sections = vec![lore_docsrc::Section { id: "s1".into(), level: 1, title: "Introduction".into(), paragraphs: vec![body.clone()], ..Default::default() }];
+        Ok(c)
+    }
+}
+
+fn files_deps(root: &Path, extract: Arc<FileExtract>, http: Arc<MockHttp>, model: Arc<MockModel>, apps: &[(&str, &str)]) -> Arc<Deps> {
+    Arc::new(Deps {
+        cache: root.join("cache"),
+        workspace: None,
+        global_file: None,
+        reader: None,
+        reader_url: "http://127.0.0.1:9".into(),
+        kb_spaces: vec![kb(root)],
+        member: "ellrin".into(),
+        filters: lore_words::Filters::default(),
+        model,
+        http,
+        research: lore_research::Config { pace: lore_research::Pace::none(), retries: 0, ..Default::default() },
+        web: false,
+        extract,
+        tools: Arc::new(tools::MockTools { compile: false, made: Default::default() }),
+        plot_styles: json!([]),
+        books_file: root.join("conf/books.toml"),
+        apps: Some(apps.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()),
+    })
+}
+
+/// A folder of PDFs and a typed keyword, no L-Reader paper: each file read once (a stopped job
+/// resumes without reading them again), what is not a paper is never read into a prompt (L-Shelf's
+/// word first, the paper rule without it), no path reaches a prompt, the source checkpoint, the
+/// book or books.toml; several papers and none both plan and write.
+#[tokio::test]
+async fn files_folders_and_keywords_start_a_book() {
+    let root = std::env::temp_dir().join(format!("pc-book-files-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let papers = root.join("Shelf/papers");
+    std::fs::create_dir_all(papers.join("sub")).unwrap();
+    std::fs::create_dir_all(papers.join(".hidden")).unwrap();
+    std::fs::write(papers.join("gated.pdf"), "TITLE Gated Contrast for Synthetic Signals\nThe InfoNCE loss uses cosine similarity and hard negatives.").unwrap();
+    std::fs::write(papers.join("sub/primer.pdf"), "TITLE A Primer on Synthetic Similarity\nHard negatives and cosine similarity again.").unwrap();
+    std::fs::write(papers.join("receipt.pdf"), "Receipt for a synthetic purchase. Contrastive learning gift card.").unwrap();
+    std::fs::write(papers.join("private.pdf"), "TITLE Private Synthetic Notes\nnever to be read").unwrap();
+    std::fs::write(papers.join(".hidden/x.pdf"), "TITLE Hidden").unwrap();
+    std::fs::write(papers.join("notes.txt"), "not a pdf").unwrap();
+    let private_sha = source::file_sha(&papers.join("private.pdf")).unwrap();
+    let extract = Arc::new(FileExtract(Default::default()));
+    // L-Shelf runs and knows private.pdf: not for a model (cloud_ok false)
+    let http = Arc::new(MockHttp::new().on(&format!("shelf.test/api/files/{private_sha}"), Response::ok(json!({ "id": private_sha, "cloud_ok": false, "paths": ["/x"] }).to_string())));
+    let model = Arc::new(MockModel::default().on(TASK_PLAN, plan_reply()).on(TASK_SUGGEST, json!({ "suggestions": [] })).on(TASK_CHAPTER, chapter(1, false)).on(TASK_CHAPTER, chapter(2, false)));
+    let deps = files_deps(&root, extract.clone(), http.clone(), model.clone(), &[("ls", "http://shelf.test")]);
+    let js = lore_jobs::Jobs::open(deps.cache.join("jobs"), Arc::new(pipeline::BookJob { deps: deps.clone() }));
+    let mut st = setup::Setup { sources: vec![setup::Start { kind: "folder".into(), path: Some(papers.clone()), ..Default::default() }], keywords: vec!["temperature scaling".into()], folder: Some(root.join("Books")), ..Default::default() };
+    st.tidy();
+    let p = pipeline::Params::from_setup(&st, None, Some(root.join("Books")));
+    let job = js.create(serde_json::to_value(&p).unwrap(), false, "").unwrap();
+    until(&job, "review").await;
+
+    let src = source::Sources::from_value(job.output("source").unwrap()).unwrap();
+    let titles: Vec<&str> = src.materials.iter().map(|m| m.title.as_str()).collect();
+    assert_eq!(titles, ["Gated Contrast for Synthetic Signals", "A Primer on Synthetic Similarity"], "sorted, subfolders read, hidden ones not");
+    assert_eq!((src.files, src.of, src.skipped), (4, 4, 2));
+    assert!(src.notes.iter().any(|n| n.contains("2 份檔案不是論文")), "{:?}", src.notes);
+    assert_eq!(extract.0.load(std::sync::atomic::Ordering::SeqCst), 3, "the file L-Shelf keeps local is never opened");
+    let raw = std::fs::read_to_string(job.stage_file("source")).unwrap();
+    assert!(!raw.contains(&root.to_string_lossy().to_string()), "no path in the source checkpoint");
+    let v = js.view(&job);
+    assert_eq!(v["stages"][0]["counts"]["files"], 4);
+    assert_eq!(v["options"]["sources"], json!([{ "kind": "folder", "label": "papers" }]));
+    // terms: the papers' and the typed keyword; the plan sees both papers, never a path, never the receipt
+    let tr: pipeline::TermsOut = serde_json::from_value(job.output("terms").unwrap()).unwrap();
+    assert_eq!(tr.teach[0].term, "temperature scaling", "the typed keyword first");
+    assert!(tr.teach.iter().any(|t| t.term == "InfoNCE"), "{:?}", tr.teach);
+    let (sys, user) = s_first(&model, TASK_PLAN);
+    assert!(user.contains("Paper 1: Gated Contrast") && user.contains("Paper 2: A Primer") && sys.contains("not the subject"), "{user}");
+    assert!(!user.contains("Receipt") && !user.contains("never to be read") && !user.contains(&*root.to_string_lossy()), "{user}");
+
+    // stopped and redone from the source: no file is read again
+    js.redo_from(&job, "source").unwrap();
+    until(&job, "review").await;
+    assert_eq!(extract.0.load(std::sync::atomic::Ordering::SeqCst), 3, "the per-file checkpoint");
+    js.submit(&job, "review", json!({ "skipped": true })).unwrap();
+    until(&job, "done").await;
+    let w: write::WriteOut = serde_json::from_value(job.output("write").unwrap()).unwrap();
+    let book = PathBuf::from(&w.book);
+    let r: research::Research = serde_json::from_value(job.output("research").unwrap()).unwrap();
+    let papers_in: Vec<_> = r.sources.iter().filter(|s| s.kind == "paper").collect();
+    assert_eq!(papers_in.len(), 2, "each starting paper is one reference");
+    assert!(papers_in.iter().all(|s| !s.chapters.is_empty()), "several papers go to the chapters that use them");
+    for (_, u) in model.asked(TASK_CHAPTER) {
+        assert!(!u.contains(&*root.to_string_lossy()) && !u.contains("never to be read"), "{u}");
+    }
+    let all: String = pc_core::open::source_files(&book).iter().chain([book.join("refs.bib")].iter()).filter_map(|f| std::fs::read_to_string(f).ok()).collect();
+    assert!(!all.contains(&*papers.to_string_lossy()), "no path in the book");
+    let reg = std::fs::read_to_string(&deps.books_file).unwrap();
+    assert!(!reg.contains(&*papers.to_string_lossy()) && reg.contains("papers = []"), "{reg}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Only keywords: no paper at all, the plan still runs (terms only) and the book gets a title.
+#[tokio::test]
+async fn a_keyword_only_book_plans_without_a_paper() {
+    let root = std::env::temp_dir().join(format!("pc-book-kw-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let model = Arc::new(MockModel::default().on(TASK_PLAN, json!({ "title": "", "abstract": "", "chapters": [{ "title": "Temperature", "terms": ["temperature scaling"], "depth": "brief" }] })).on(TASK_SUGGEST, json!({ "suggestions": [] })).on(TASK_CHAPTER, json!({ "body": "A \\term{temperature scaling}{溫度縮放} divides scores." })));
+    let deps = files_deps(&root, Arc::new(FileExtract(Default::default())), Arc::new(MockHttp::new()), model.clone(), &[]);
+    let js = lore_jobs::Jobs::open(deps.cache.join("jobs"), Arc::new(pipeline::BookJob { deps: deps.clone() }));
+    let st = setup::Setup { keywords: vec!["temperature scaling".into()], folder: Some(root.join("Books")), make_cards: false, ..Default::default() };
+    let job = js.create(serde_json::to_value(pipeline::Params::from_setup(&st, None, Some(root.join("Books")))).unwrap(), true, "").unwrap();
+    until(&job, "done").await;
+    let (sys, user) = s_first(&model, TASK_PLAN);
+    assert!(sys.contains("wants to learn") && !user.contains("Paper"), "{user}");
+    let w: write::WriteOut = serde_json::from_value(job.output("write").unwrap()).unwrap();
+    assert_eq!(w.title, "Notes on temperature scaling");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+fn s_first(m: &MockModel, task: &str) -> (String, String) {
+    m.asked(task).into_iter().next().expect("asked")
+}
+
+/// A job made before several starting points: its `sha` is one L-Reader paper, its source
+/// checkpoint one material.
+#[test]
+fn an_older_job_reads_as_one_paper() {
+    let p: pipeline::Params = serde_json::from_value(json!({ "sha": SHA, "book": "new", "length": "standard", "lang": "en-zh" })).unwrap();
+    assert_eq!(p.starts().len(), 1);
+    assert_eq!((p.starts()[0].kind.as_str(), p.format(), p.make_cards), ("lr", "notes", false));
+    let s = source::Sources::from_value(json!({ "sha": SHA, "title": "Gated Contrast for Synthetic Signals", "figures": [{ "id": "fig1", "file": "fig1.png" }] })).unwrap();
+    assert_eq!((s.materials.len(), s.materials[0].kind.as_str(), s.shas().len()), (1, "lr", 1));
+    assert!(s.figure("fig1").is_some());
+}

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::source::Material;
+use super::source::Sources;
 
 pub const DEPTHS: &[&str] = &["brief", "standard", "deep"];
 
@@ -108,42 +108,60 @@ fn lang_line(lang: &str) -> &'static str {
 /// `existing`: chapter titles the book already has (加進這本書: only new topics); `reusable`: the
 /// paper's figures may be reproduced (licence).
 #[allow(clippy::too_many_arguments)]
-pub fn prompt(m: &Material, teach: &[Teach], prereq: &[(String, String)], existing: &[String], length: &str, lang: &str, reusable: bool) -> (String, String) {
+pub fn prompt(src: &Sources, teach: &[Teach], prereq: &[(String, String)], existing: &[String], length: &str, lang: &str, reusable: bool) -> (String, String) {
     let (lo, hi) = chapter_range(length);
     let system = format!(
         "You plan a set of course lecture notes written for one reader, in the manner of university lecture notes \
 (for example Stanford CS224n's notes): chapters that build from the basics to depth, intuition before equations.\n\
-The reader has just read a research paper and does not yet know some of its terms. Plan {lo}–{hi} chapters that teach those terms \
-so the reader can follow the paper.\n\
+{reader} Plan {lo}–{hi} chapters that teach those terms.\n\
 Rules:\n\
 - Every listed term must be explained in exactly one chapter; put terms with state `learning` in the same chapters but expect them to be short.\n\
 - Order chapters by prerequisites: a chapter never relies on a term that a later chapter explains. Prerequisite pairs from the reader's \
 knowledge base are given and must be respected.\n\
-- Group related terms; a chapter has 2–8 terms. The list was found automatically in the paper's text: leave out entries that are \
+- Group related terms; a chapter has 2–8 terms. The list was found automatically in the papers' text: leave out entries that are \
 plain English words, names, datasets, or fragments of a sentence (\"augmentation involves\", \"representations learned\"), and merge \
 spellings of one term (an acronym and its expansion, a plural) into the term's usual name.\n\
 - depth: `brief` (mostly known ideas), `standard`, `deep` (the paper's core method).\n\
 - queries: 1–2 short web search queries per chapter for background papers (method names, survey topics), in English.\n\
-- figures: 0–2 per chapter, only where a picture helps understanding: `plot` for the shape of a function or numbers the paper \
+- figures: 0–2 per chapter, only where a picture helps understanding: `plot` for the shape of a function or numbers a paper \
 states{paper}. A pipeline or architecture is explained in words (diagrams come later).\n\
 - Do not repeat topics the book already has.\n\
 - {lang}\n\
 Reply with JSON only.",
-        paper = if reusable { ", `paper` with `paper_fig` to reproduce one of the paper's figures (its licence allows it)" } else { "" },
+        reader = match src.papers().len() {
+            0 => "The reader wants to learn the terms listed below and does not know them yet.",
+            1 => "The reader is reading a research paper and does not yet know some of its terms; the notes should let the reader follow it.",
+            _ => "The reader is reading the research papers listed below and does not yet know some of their terms; the notes should let the reader follow them. \
+The papers are sources among others, not the subject of the notes.",
+        },
+        paper = if reusable { ", `paper` with `paper_fig` to reproduce one of the papers' figures (only a figure listed below)" } else { "" },
         lang = lang_line(lang),
     );
-    let mut user = format!("Paper: {}\n", m.title);
-    if !m.abstract_text.is_empty() {
-        user += &format!("Abstract: {}\n", m.abstract_text);
+    let mut user = String::new();
+    let papers = src.papers();
+    // many papers (a folder): titles for all, abstracts for the first ones
+    for (i, m) in papers.iter().enumerate().take(40) {
+        let title = if m.title.is_empty() { &m.label } else { &m.title };
+        user += &format!("Paper{}: {title}\n", if papers.len() > 1 { format!(" {}", i + 1) } else { String::new() });
+        if !m.abstract_text.is_empty() && i < 12 {
+            let cap = if papers.len() > 1 { 700 } else { 3000 };
+            user += &format!("Abstract: {}\n", m.abstract_text.chars().take(cap).collect::<String>());
+        }
+        if papers.len() == 1 {
+            user += &format!("Sections: {}\n", m.sections.iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join(" · "));
+        }
     }
-    user += &format!("Sections: {}\n", m.sections.iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join(" · "));
-    if reusable && !m.figures.is_empty() {
-        user += "Figures of the paper:\n";
-        for f in &m.figures {
+    if papers.len() > 40 {
+        user += &format!("(and {} more papers)\n", papers.len() - 40);
+    }
+    let figs: Vec<&super::source::Fig> = papers.iter().flat_map(|m| m.figures.iter()).filter(|f| f.file.is_some()).collect();
+    if reusable && !figs.is_empty() {
+        user += "Figures of the papers:\n";
+        for f in figs.iter().take(30) {
             user += &format!("- {}: {}\n", f.id, f.caption.chars().take(200).collect::<String>());
         }
     }
-    user += "\nTerms to teach (state, times used in the paper):\n";
+    user += "\nTerms to teach (state, times used in the papers):\n";
     for t in teach {
         user += &format!("- {} ({}, {}×)\n", t.term, t.state, t.n);
     }
@@ -153,7 +171,7 @@ Reply with JSON only.",
             user += &format!("- {a} needs {b}\n");
         }
     }
-    let qs: Vec<&str> = m.questions.iter().map(|q| q.text.as_str()).chain(m.extras.questions.iter().map(String::as_str)).collect();
+    let qs = src.questions();
     if !qs.is_empty() {
         user += "\nQuestions the reader asked while reading (answer them somewhere in the notes):\n";
         for q in qs.iter().take(20) {
@@ -168,7 +186,7 @@ Reply with JSON only.",
 
 /// Keep what the plan can use: known depths, terms trimmed and each once, no empty chapters,
 /// ids `c1…`, `paper` figures only when reusable and of a figure the paper has.
-pub fn clean(v: &Value, m: &Material, reusable: bool) -> Plan {
+pub fn clean(v: &Value, src: &Sources, reusable: bool) -> Plan {
     let s = |v: &Value| v.as_str().unwrap_or("").trim().to_string();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut chapters = vec![];
@@ -186,7 +204,7 @@ pub fn clean(v: &Value, m: &Material, reusable: bool) -> Plan {
             .map(|f| FigureIdea { kind: s(&f["kind"]), idea: s(&f["idea"]), paper_fig: s(&f["paper_fig"]) })
             .filter(|f| match f.kind.as_str() {
                 "plot" => !f.idea.is_empty(),
-                "paper" => reusable && m.figures.iter().any(|x| x.id == f.paper_fig && x.file.is_some()),
+                "paper" => reusable && src.figure(&f.paper_fig).is_some_and(|(_, x)| x.file.is_some()),
                 _ => false,
             })
             .take(2)
@@ -346,7 +364,7 @@ mod tests {
 
     #[test]
     fn the_plan_is_cleaned() {
-        let m = Material { figures: vec![super::super::source::Fig { id: "fig1".into(), file: Some("fig1.png".into()), ..Default::default() }], ..Default::default() };
+        let m = Sources { materials: vec![super::super::source::Material { figures: vec![super::super::source::Fig { id: "fig1".into(), file: Some("fig1.png".into()), ..Default::default() }], ..Default::default() }], ..Default::default() };
         let v = json!({ "title": "T", "chapters": [
             { "title": "A", "terms": ["x", "y", "x"], "depth": "huge", "figures": [{ "kind": "paper", "idea": "i", "paper_fig": "fig1" }, { "kind": "plot", "idea": "" }] },
             { "title": "B", "terms": ["X"], "depth": "deep" },

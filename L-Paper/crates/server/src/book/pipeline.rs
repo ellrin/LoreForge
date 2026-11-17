@@ -15,7 +15,7 @@ use super::Deps;
 use super::model::{Ask, TASK_PLAN, TASK_SUGGEST};
 use super::plan::{self, Plan, Teach};
 use super::research::{self, Research};
-use super::source::{self, Extras, Material};
+use super::source::{self, Extras, Material, Sources};
 use super::write::{self, WriteOut};
 
 pub const STAGES: &[StageSpec] = &[
@@ -106,6 +106,20 @@ fn params(cx: &StageCx) -> Result<Params, StageError> {
 
 fn typed<T: DeserializeOwned>(cx: &StageCx, stage: &str) -> Result<T, StageError> {
     serde_json::from_value(cx.output(stage)?).map_err(|e| StageError::new(500, format!("「{stage}」的結果無法讀取：{e}")))
+}
+
+/// The `source` checkpoint (one material in older jobs).
+fn sources(cx: &StageCx) -> Result<Sources, StageError> {
+    Sources::from_value(cx.output("source")?).map_err(|e| StageError::new(500, format!("「source」的結果無法讀取：{e}")))
+}
+
+/// One file of the source stage, done (`source.files.json`, keyed by the file's sha256).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct FileDone {
+    material: Option<Material>,
+    /// `not-paper` · `unreadable` (no material)
+    why: String,
 }
 
 fn to_value(v: &impl Serialize) -> Result<Value, StageError> {
@@ -235,34 +249,142 @@ impl BookJob {
     async fn source(&self, cx: &StageCx) -> Result<Value, StageError> {
         let p = params(cx)?;
         let d = self.deps.clone();
-        let (img, scratch) = (cx.dir().join("img"), d.cache.join("docsrc").join(&p.sha));
-        let m = tokio::task::spawn_blocking(move || {
-            let r = d.reader.as_ref().ok_or("找不到 L-Reader 的資料夾")?;
-            source::read(r, &p.sha, d.extract.as_ref(), &scratch, &img, p.extras.clone())
-        })
-        .await
-        .map_err(join_err)?
-        .map_err(|e: String| StageError::new(422, e))?;
-        cx.title(&m.title);
-        cx.counts(json!({ "sections": m.sections.len(), "fig": m.figures.len(), "refs": m.refs, "questions": m.questions.len() + m.extras.questions.len(), "read": m.understood.len() }));
-        to_value(&m)
+        let starts = p.starts();
+        let mut out = Sources::default();
+        // L-Reader papers, as before (the first one carries the card's extras)
+        let mut files: Vec<PathBuf> = vec![];
+        let mut capped = false;
+        for st in &starts {
+            match st.kind.as_str() {
+                "lr" => {
+                    let k = out.materials.iter().filter(|m| m.kind == "lr").count();
+                    let (sha, d2) = (st.sha.clone(), d.clone());
+                    let (img, scratch) = (cx.dir().join("img"), d.cache.join("docsrc").join(&sha));
+                    let extras = if k == 0 { p.extras.clone() } else { Extras::default() };
+                    let prefix = if k == 0 { "fig".to_string() } else { format!("p{}fig", k + 1) };
+                    let r = tokio::task::spawn_blocking(move || {
+                        let r = d2.reader.as_ref().ok_or("找不到 L-Reader 的資料夾")?;
+                        source::read_as(r, &sha, d2.extract.as_ref(), &scratch, &img, extras, &prefix)
+                    })
+                    .await
+                    .map_err(join_err)?;
+                    match r {
+                        Ok(m) => out.materials.push(m),
+                        // the only starting point: the job cannot go on
+                        Err(e) if starts.len() == 1 && p.keywords.is_empty() && p.cards.is_empty() => return Err(StageError::new(422, e)),
+                        Err(e) => out.notes.push(format!("{}：{e}", st.label())),
+                    }
+                }
+                "file" => files.extend(st.path.clone()),
+                "folder" => {
+                    let Some(dir) = st.path.clone() else { continue };
+                    let (found, more) = tokio::task::spawn_blocking(move || source::folder_pdfs(&dir, 4, 300)).await.map_err(join_err)?;
+                    capped |= more;
+                    for f in found {
+                        if !files.contains(&f) {
+                            files.push(f);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // files: one at a time off the runtime, a checkpoint after each (a resumed job skips them)
+        out.of = files.len();
+        let progress_file = cx.dir().join("source.files.json");
+        let mut done: BTreeMap<String, FileDone> = std::fs::read(&progress_file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let (mut not_paper, mut unreadable) = (0, 0);
+        cx.counts(json!({ "files": 0, "of": out.of, "skipped": 0 }));
+        for f in &files {
+            let f2 = f.clone();
+            let Ok(Ok(sha)) = tokio::task::spawn_blocking(move || source::file_sha(&f2)).await else {
+                unreadable += 1;
+                out.files += 1;
+                continue;
+            };
+            let entry = match done.get(&sha) {
+                Some(x) => x.clone(),
+                None => {
+                    let shelf = self.shelf_paper(&sha).await;
+                    let x = if shelf == Some(false) {
+                        FileDone { material: None, why: "not-paper".into() }
+                    } else {
+                        let (f2, d2, scratch) = (f.clone(), d.clone(), d.cache.join("docsrc").join(&sha));
+                        let name = super::setup::name_of(f);
+                        match tokio::task::spawn_blocking(move || d2.extract.text(&f2, &scratch)).await.map_err(join_err)? {
+                            Ok(cat) if shelf == Some(true) || source::paper_rule(&cat) => FileDone { material: Some(source::file_material(&cat, &name)), why: String::new() },
+                            Ok(_) => FileDone { material: None, why: "not-paper".into() },
+                            Err(_) => FileDone { material: None, why: "unreadable".into() },
+                        }
+                    };
+                    done.insert(sha.clone(), x.clone());
+                    let _ = lore_jobs::write_json(&progress_file, &done);
+                    x
+                }
+            };
+            out.files += 1;
+            match entry.material {
+                // the same paper twice (a file that is also in L-Reader, or in two folders): once
+                Some(mut m) if !out.materials.iter().any(|x| x.sha == sha) => {
+                    m.sha = sha.clone();
+                    out.materials.push(m);
+                }
+                Some(_) => {}
+                None if entry.why == "unreadable" => unreadable += 1,
+                None => not_paper += 1,
+            }
+            out.skipped = not_paper + unreadable;
+            cx.counts(json!({ "files": out.files, "of": out.of, "skipped": out.skipped }));
+        }
+        if not_paper > 0 {
+            out.notes.push(format!("{not_paper} 份檔案不是論文，沒有讀"));
+        }
+        if unreadable > 0 {
+            out.notes.push(format!("{unreadable} 份檔案讀不出文字"));
+        }
+        if capped {
+            out.notes.push("資料夾裡的 PDF 太多：只讀了前 300 份".into());
+        }
+        if out.materials.is_empty() && p.keywords.is_empty() && p.cards.is_empty() {
+            return Err(StageError::new(422, out.notes.first().cloned().unwrap_or_else(|| "沒有可以讀的論文".into())));
+        }
+        let title = out.materials.first().map(|m| if m.title.is_empty() { m.label.clone() } else { m.title.clone() }).unwrap_or_else(|| p.keywords.join(", "));
+        cx.title(&title);
+        let ms = &out.materials;
+        cx.counts(json!({
+            "papers": ms.len(), "sections": ms.iter().map(|m| m.sections.len()).sum::<usize>(), "fig": ms.iter().map(|m| m.figures.len()).sum::<usize>(),
+            "refs": ms.iter().map(|m| m.refs).sum::<usize>(), "questions": out.questions().len(), "read": ms.iter().map(|m| m.understood.len()).sum::<usize>(),
+            "files": out.files, "of": out.of, "skipped": out.skipped,
+        }));
+        to_value(&out)
+    }
+
+    /// L-Shelf's word on a file (its item id is the file's sha256): `cloud_ok` while it runs and
+    /// knows the file; `None` otherwise (the paper rule decides).
+    async fn shelf_paper(&self, sha: &str) -> Option<bool> {
+        let url = self.deps.app_url("ls")?;
+        let r = self.deps.http.send(lore_research::http::Request::get(format!("{url}/api/files/{sha}"))).await.ok()?;
+        if r.status != 200 {
+            return None;
+        }
+        serde_json::from_slice::<Value>(&r.body).ok()?["cloud_ok"].as_bool()
     }
 
     async fn terms(&self, cx: &StageCx) -> Result<Value, StageError> {
         let p = params(cx)?;
-        let m: Material = typed(cx, "source")?;
+        let src = sources(cx)?;
         let d = self.deps.clone();
-        let out = tokio::task::spawn_blocking(move || terms_of(&d, &m, p.book_path.as_deref())).await.map_err(join_err)?;
+        let out = tokio::task::spawn_blocking(move || terms_of(&d, &src, &p)).await.map_err(join_err)?;
         cx.counts(json!({ "terms": out.terms.total, "teach": out.teach.len(), "known": out.known }));
         to_value(&out)
     }
 
     async fn plan(&self, cx: &StageCx) -> Result<Value, StageError> {
         let p = params(cx)?;
-        let m: Material = typed(cx, "source")?;
+        let m = sources(cx)?;
         let tr: TermsOut = typed(cx, "terms")?;
         if tr.teach.is_empty() {
-            return Err(StageError::new(422, "這篇論文的名詞你都記得了，沒有要寫的"));
+            return Err(StageError::new(422, "這些名詞你都記得了，沒有要寫的"));
         }
         let existing: Vec<String> = p.book_path.as_ref().map(|b| pc_core::open::sections(b).into_iter().map(|s| s.title).collect()).unwrap_or_default();
         // a paper figure is only offered once research knows the licence; the plan may name one, write checks again
@@ -289,7 +411,7 @@ impl BookJob {
     }
 
     async fn research(&self, cx: &StageCx) -> Result<Value, StageError> {
-        let m: Material = typed(cx, "source")?;
+        let m = sources(cx)?;
         let po: PlanOut = typed(cx, "plan")?;
         let d = self.deps.clone();
         let spaces = d.kb_spaces.clone();
@@ -311,18 +433,17 @@ impl BookJob {
 
     async fn write(&self, cx: &StageCx) -> Result<Value, StageError> {
         let p = params(cx)?;
-        let m: Material = typed(cx, "source")?;
+        let m = sources(cx)?;
         let po: PlanOut = typed(cx, "plan")?;
         let tr: TermsOut = typed(cx, "terms")?;
         let r: Research = typed(cx, "research")?;
         let review = cx.output("review").unwrap_or(json!({ "skipped": true }));
         let mut pl = plan::apply_review(&po.plan, &review);
-        // the paper's figures only when its licence allows reuse
-        // the paper's figures only when its licence allows reuse; otherwise a figure of numbers the
+        // a paper's figures only when its licence allows reuse; otherwise a figure of numbers the
         // paper states can still be redrawn as a plot (cited), a diagram is explained in words
-        if !r.reuse_figures {
+        {
             for c in &mut pl.chapters {
-                for f in c.figures.iter_mut().filter(|f| f.kind == "paper") {
+                for f in c.figures.iter_mut().filter(|f| f.kind == "paper" && !write::paper_src(&m, &r, &f.paper_fig).is_some_and(|s| s.reuse)) {
                     f.kind = "plot".into();
                     f.idea = format!("redraw with lore-plot only if the paper's figure shows numbers it states (cite them; skip it if it is a diagram): {}", f.idea);
                     f.paper_fig.clear();
@@ -360,8 +481,9 @@ impl BookJob {
             existing: p.book_path.as_deref(),
             folder: p.folder.as_deref(),
             template: &template,
-            page: Some(p.page.as_str()).filter(|x| !x.is_empty()),
+            page: Some(p.page.as_str()).filter(|x| !x.is_empty() && p.format() == "notes"),
             books_file: &d.books_file,
+            title: &p.title,
         };
         let out = write::write(&ctx, target, &m, &pl, &r, &tr.teach).await?;
         cx.title(&out.title);
@@ -392,37 +514,74 @@ impl BookJob {
     }
 }
 
-/// The terms stage (blocking: reads the L-Brain).
-pub fn terms_of(d: &Deps, m: &Material, book: Option<&std::path::Path>) -> TermsOut {
+/// The terms stage (blocking: reads the L-Brain): every material's terms, the card's red terms,
+/// the typed keywords and the chosen cards, against the knowledge base.
+pub fn terms_of(d: &Deps, src: &Sources, p: &Params) -> TermsOut {
     let kb = lore_learn::load_names(&d.kb_spaces, &d.member);
-    let mut tr = lore_learn::find_terms(&m.term_items(), &kb, &d.filters);
-    // the card's red terms: added when the text did not give them
+    let items: Vec<(String, String)> = src.materials.iter().flat_map(|m| m.term_items()).collect();
+    let mut tr = lore_learn::find_terms(&items, &kb, &d.filters);
     let key = |s: &str| lore_words::phrase_key(s);
-    for x in &m.extras.terms {
-        let k = key(&x.term);
-        if k.is_empty() || tr.terms.iter().any(|t| t.key == k || t.forms.iter().any(|f| key(f) == k)) {
+    // what the author named himself is taught whatever the text counts (kept first below)
+    let mut chosen: Vec<String> = vec![];
+    // the card's red terms, the typed keywords: added when the text did not give them
+    let extra: Vec<(String, usize, &str)> = p.extras.terms.iter().map(|x| (x.term.clone(), x.n.max(1), "reader")).chain(p.keywords.iter().map(|k| (k.clone(), 1, "keyword"))).collect();
+    for (term, n, kind) in extra {
+        let k = key(&term);
+        if k.is_empty() {
+            continue;
+        }
+        if kind == "keyword" {
+            chosen.push(k.clone());
+        }
+        if let Some(t) = tr.terms.iter_mut().find(|t| t.key == k || t.forms.iter().any(|f| key(f) == k)) {
+            if kind == "keyword" {
+                chosen.push(key(&t.text));
+            }
             continue;
         }
         let card = kb.iter().find(|n| key(&n.name) == k);
         let state = card.map(|c| c.state).unwrap_or(lore_learn::Familiar::Unknown);
         tr.terms.push(lore_learn::Term {
             key: card.map(|c| format!("card:{}", c.card)).unwrap_or(k),
-            text: x.term.clone(),
-            kind: "reader".into(),
+            text: term.clone(),
+            kind: kind.into(),
             short: None,
             card: card.map(|c| c.card.clone()),
             state,
             label: state.label().into(),
-            count: x.n.max(1),
+            count: n,
             at: vec![],
-            forms: vec![x.term.clone()],
+            forms: vec![term.clone()],
+            understood: false,
+        });
+    }
+    // the chosen cards: their titles
+    for id in &p.cards {
+        let Some(c) = kb.iter().find(|n| &n.card == id && n.name == n.title) else { continue };
+        chosen.push(key(&c.title));
+        if tr.terms.iter().any(|t| t.card.as_deref() == Some(id.as_str()) || key(&t.text) == key(&c.title)) {
+            continue;
+        }
+        tr.terms.push(lore_learn::Term {
+            key: format!("card:{id}"),
+            text: c.title.clone(),
+            kind: "card".into(),
+            short: None,
+            card: Some(id.clone()),
+            state: c.state,
+            label: c.state.label().into(),
+            count: 1,
+            at: vec![],
+            forms: vec![c.title.clone()],
             understood: false,
         });
     }
     tr.total = tr.terms.len();
     tr.unfamiliar = tr.terms.iter().filter(|t| t.unfamiliar()).count();
     // explained already in this book (加進這本書: only new topics)
-    let written: Vec<String> = book
+    let written: Vec<String> = p
+        .book_path
+        .as_deref()
         .map(|b| pc_core::open::source_files(b).iter().filter_map(|f| std::fs::read_to_string(f).ok()).flat_map(|t| t.match_indices("\\term{").map(|(i, _)| t[i + 6..].split('}').next().unwrap_or("").to_string()).collect::<Vec<_>>()).map(|t| key(&t)).collect())
         .unwrap_or_default();
     let known = tr.terms.iter().filter(|t| t.state == lore_learn::Familiar::Known).count();
@@ -434,7 +593,8 @@ pub fn terms_of(d: &Deps, m: &Material, book: Option<&std::path::Path>) -> Terms
         .filter(|t| { let l = t.text.to_lowercase(); !(l.ends_with(" et") || l.contains(" et al") || l.ends_with(" al")) })
         .map(|t| Teach { term: t.text.clone(), state: if t.state == lore_learn::Familiar::Learning { "learning".into() } else { "unknown".into() }, n: t.count, card: t.card.clone() })
         .collect();
-    teach.sort_by(|a, b| b.n.cmp(&a.n).then(a.term.cmp(&b.term)));
+    let first = |t: &Teach| !chosen.contains(&key(&t.term));
+    teach.sort_by(|a, b| first(a).cmp(&first(b)).then(b.n.cmp(&a.n)).then(a.term.cmp(&b.term)));
     teach.truncate(150);
     // prerequisite links between cards → between the terms they name
     let title_of: BTreeMap<&str, &str> = teach.iter().filter_map(|t| Some((t.card.as_deref()?, t.term.as_str()))).collect();
