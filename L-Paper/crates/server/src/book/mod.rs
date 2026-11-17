@@ -127,7 +127,8 @@ impl Deps {
             tools: Arc::new(tools::RealTools),
             plot_styles: lore_plot::style::list(&home)["styles"].clone(),
             books_file: crate::books::registry_file(),
-            apps: isolated.then(Default::default),
+            // the isolated example never asks the author's running L-Brain or L-Shelf
+            apps: (isolated || std::env::var_os("PAPERCOMPOSER_NO_LIVE_APPS").is_some()).then(Default::default),
         }
     }
 }

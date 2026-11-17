@@ -107,6 +107,10 @@ impl Setup {
             && let Some(src) = v.get("source").filter(|s| s.is_object()).cloned()
         {
             v["sources"] = json!([src]);
+            // an older caller never showed the 知識卡 option: none made unless asked
+            if v.get("make_cards").is_none() {
+                v["make_cards"] = false.into();
+            }
         }
         serde_json::from_value(v).map_err(|e| format!("看不懂的設定：{e}"))
     }
@@ -256,7 +260,7 @@ mod tests {
     fn a_setup_from_old_and_new_bodies() {
         let sha = "ab".repeat(32);
         let old = Setup::from_body(json!({ "source": { "kind": "lr", "sha": sha }, "length": "short" })).unwrap();
-        assert_eq!((old.sources.len(), old.length.as_str(), old.format.as_str(), old.make_cards), (1, "short", "notes", true));
+        assert_eq!((old.sources.len(), old.length.as_str(), old.format.as_str(), old.make_cards), (1, "short", "notes", false), "no cards for a caller that never showed the option");
         let mut s = Setup::from_body(json!({ "keywords": [" contrastive  learning ", "Contrastive learning", ""], "cards": ["k1", "k1"] })).unwrap();
         s.tidy();
         assert_eq!(s.keywords, ["contrastive learning"]);

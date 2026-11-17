@@ -467,7 +467,7 @@ impl BookJob {
         // paper states can still be redrawn as a plot (cited), a diagram is explained in words
         {
             for c in &mut pl.chapters {
-                for f in c.figures.iter_mut().filter(|f| f.kind == "paper" && !write::paper_src(&m, &r, &f.paper_fig).is_some_and(|s| s.reuse)) {
+                for f in c.figures.iter_mut().filter(|f| f.kind == "paper" && !write::paper_src(&m, &r, &f.paper_fig).is_some_and(|s| write::may_reuse(&r, s))) {
                     f.kind = "plot".into();
                     f.idea = format!("redraw with lore-plot only if the paper's figure shows numbers it states (cite them; skip it if it is a diagram): {}", f.idea);
                     f.paper_fig.clear();

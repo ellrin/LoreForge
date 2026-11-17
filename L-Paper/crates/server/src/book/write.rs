@@ -388,7 +388,7 @@ fn assemble(ctx: &Ctx<'_>, book: &Path, reply: &Value, c: &Chapter, src: &Source
                 made.push(book.join("figures").join(file.replace(".pdf", ".plot.json")));
                 Ok(format!("figures/{file}"))
             }),
-            Some("paper") if paper_src(src, r, f["paper_fig"].as_str().unwrap_or("")).is_some_and(|s| s.reuse) => {
+            Some("paper") if paper_src(src, r, f["paper_fig"].as_str().unwrap_or("")).is_some_and(|s| may_reuse(r, s)) => {
                 let want = f["paper_fig"].as_str().unwrap_or("");
                 match src.figure(want).and_then(|(_, x)| x.file.clone()).and_then(|file| std::fs::read(ctx.job_dir.join("img").join(file)).ok()) {
                     Some(bytes) => {
@@ -446,6 +446,12 @@ fn assemble(ctx: &Ctx<'_>, book: &Path, reply: &Value, c: &Chapter, src: &Source
         out.problems.push(format!("拿掉了沒有來源的引用：{}", dropped.into_iter().collect::<Vec<_>>().join(", ")));
     }
     text
+}
+
+/// A starting paper's figures may be reproduced (an older research checkpoint kept that only for
+/// the one starting paper).
+pub fn may_reuse(r: &Research, s: &super::research::Src) -> bool {
+    s.reuse || (s.material.is_none() && r.reuse_figures)
 }
 
 /// The starting paper a figure id belongs to (its source in research: key, licence, reuse).
@@ -552,6 +558,30 @@ pub(crate) fn set_front(book: &Path, field: &str, value: &str) {
         },
     };
     let _ = pc_core::paper::write_atomic(&path, &new);
+}
+
+/// The cards of what chapter `c` taught (each recorded as it is made: a resumed job never makes
+/// one twice; a card that appeared meanwhile is not made).
+async fn make_cards(ctx: &Ctx<'_>, st: &mut State, c: &Chapter, title: &str, notes: &mut Vec<String>) {
+    let Some(sink) = ctx.cards else { return };
+    for t in st.card_texts.get(&c.id).cloned().unwrap_or_default() {
+        let k = lore_words::phrase_key(&t.term);
+        if st.cards.contains_key(&k) {
+            continue;
+        }
+        if sink.without_card(std::slice::from_ref(&t.term)).is_empty() {
+            st.cards.insert(k, None);
+            save_state(ctx.job_dir, st);
+            continue;
+        }
+        match sink.create(&t, title).await {
+            Ok(m) => {
+                st.cards.insert(k, Some(m));
+                save_state(ctx.job_dir, st);
+            }
+            Err(e) => notes.push(format!("知識卡「{}」沒有建立：{e}", t.term)),
+        }
+    }
 }
 
 // ── one registry of symbols per book ─────────────────────────────────────────
@@ -780,6 +810,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
     for (i, c) in plan.chapters.iter().enumerate() {
         (ctx.progress)(json!({ "chapter": i, "chapters": total }));
         if st.done.contains_key(&c.id) {
+            make_cards(ctx, &mut st, c, &title, &mut notes).await;
             continue;
         }
         let (file, label) = st.sections[&c.id].clone();
@@ -825,31 +856,9 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
         st.card_texts.insert(c.id.clone(), texts);
         st.done.insert(c.id.clone(), co);
         save_state(ctx.job_dir, &st);
+        // this chapter's cards, right after it
+        make_cards(ctx, &mut st, c, &title, &mut notes).await;
         (ctx.progress)(json!({ "chapter": i + 1, "chapters": total, "figures": st.done.values().map(|d| d.figures.len()).sum::<usize>() }));
-    }
-    // the cards of what each written chapter taught (each recorded as it is made: a resumed job
-    // never makes one twice)
-    if let Some(sink) = ctx.cards {
-        for c in &plan.chapters {
-            for t in st.card_texts.get(&c.id).cloned().unwrap_or_default() {
-                let k = lore_words::phrase_key(&t.term);
-                if st.cards.contains_key(&k) {
-                    continue;
-                }
-                if sink.without_card(std::slice::from_ref(&t.term)).is_empty() {
-                    st.cards.insert(k, None);
-                    save_state(ctx.job_dir, &st);
-                    continue;
-                }
-                match sink.create(&t, &title).await {
-                    Ok(m) => {
-                        st.cards.insert(k, Some(m));
-                        save_state(ctx.job_dir, &st);
-                    }
-                    Err(e) => notes.push(format!("知識卡「{}」沒有建立：{e}", t.term)),
-                }
-            }
-        }
     }
     // equation labels nothing in the book refers to (the registry flags them): out, across chapters
     let all: String = pc_core::open::source_files(&book).iter().filter_map(|f| std::fs::read_to_string(f).ok()).collect::<Vec<_>>().join("\n");

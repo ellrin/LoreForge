@@ -173,8 +173,9 @@ fn same(a: &Record, b: &Record) -> bool {
 }
 
 /// Which chapters each starting paper serves: one paper serves every chapter (empty); several are
-/// given to the chapters whose terms they use most (at most `per` a chapter), one that uses none to
-/// the first chapter, so every starting paper can be cited somewhere.
+/// given to the chapters whose terms they use most (at most `per` a chapter). One that no chapter
+/// takes stays empty and is not a source (its terms were read; a folder of a hundred PDFs never
+/// fills one prompt or the reference library).
 pub fn assign(src: &Sources, plan: &Plan, per: usize) -> Vec<Vec<String>> {
     let n = src.materials.len();
     if n <= 1 {
@@ -187,11 +188,6 @@ pub fn assign(src: &Sources, plan: &Plan, per: usize) -> Vec<Vec<String>> {
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         for (_, i) in scored.into_iter().take(per) {
             out[i].push(c.id.clone());
-        }
-    }
-    if let Some(first) = plan.chapters.first() {
-        for o in out.iter_mut().filter(|o| o.is_empty()) {
-            o.push(first.id.clone());
         }
     }
     out
@@ -212,7 +208,12 @@ pub async fn research(src: &Sources, plan: &Plan, env: Env<'_>, progress: &(dyn 
     let chapters_of = assign(src, plan, 6);
     let mut records: Vec<(Src, Record)> = vec![];
     let mut first_licence: Option<(Option<String>, bool)> = None;
+    let mut unused = 0;
     for (i, m) in src.materials.iter().enumerate() {
+        if src.materials.len() > 1 && chapters_of[i].is_empty() {
+            unused += 1;
+            continue;
+        }
         let mut start = record_of(m);
         let has_figures = m.figures.iter().any(|f| f.file.is_some());
         if env.web && !out.offline && has_figures {
@@ -253,6 +254,9 @@ pub async fn research(src: &Sources, plan: &Plan, env: Env<'_>, progress: &(dyn 
     if let Some((l, r)) = first_licence {
         out.license = l;
         out.reuse_figures = r;
+    }
+    if unused > 0 {
+        out.notes.push(format!("{unused} 篇起始論文沒有章節用到，不列為文獻（名詞已經讀過）"));
     }
     let starts: Vec<Record> = records.iter().map(|(_, r)| r.clone()).collect();
 

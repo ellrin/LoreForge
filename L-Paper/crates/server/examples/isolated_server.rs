@@ -12,9 +12,9 @@
 //! network, the `claude` CLI or a local model. A synthetic paper `skeleton-demo` (an organised
 //! record, a figure plan) is added to the workspace to try it on.
 //!
-//! 寫書 on `crates/server/tests/fixtures/book_mock.json`: the job asks no web source and no running
-//! app; the L-Brain is a synthetic one in `<folder>/KnowledgeBase` (member `ellrin`: softmax known,
-//! cosine similarity learning), where the cards it makes land. Start a keyword-only book from the
+//! 寫書: the L-Brain is always a synthetic one in `<folder>/KnowledgeBase` (member `ellrin`: softmax
+//! known, cosine similarity learning), where the cards it makes land, and no running L-Brain or
+//! L-Shelf is asked. On `crates/server/tests/fixtures/book_mock.json` the job asks no web source either. Start a keyword-only book from the
 //! start panel (e.g. the keyword `temperature scaling`): plan, review, then two scripted chapters and
 //! four 不熟 cards.
 fn main() {
@@ -44,13 +44,14 @@ fn main() {
         if std::env::var_os("ISOLATED_KEEP_HOME").is_none() {
             std::env::set_var("HOME", root.join("home"));
         }
+        // 寫書: a synthetic L-Brain inside the folder and no running app asked, never the author's
+        std::env::set_var("KB_SPACES", root.join("KnowledgeBase"));
+        std::env::set_var("KB_HOME", root.join("home/kb"));
+        std::env::set_var("KB_MEMBER", "ellrin");
+        std::env::set_var("PAPERCOMPOSER_NO_LIVE_APPS", "1");
         if let Some(m) = &mock {
             std::env::set_var("PAPERCOMPOSER_LLM_MOCK", m);
             std::env::set_var("PAPERCOMPOSER_ENGINES_ISOLATED", "1");
-            // 寫書: a synthetic L-Brain inside the folder, never the author's
-            std::env::set_var("KB_SPACES", root.join("KnowledgeBase"));
-            std::env::set_var("KB_HOME", root.join("home/kb"));
-            std::env::set_var("KB_MEMBER", "ellrin");
         }
     }
     if mock.is_some() {
@@ -59,8 +60,8 @@ fn main() {
         // phrase bank), never overwriting
         let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../private-example/PaperComposer");
         copy_missing(&example, &root.join("PaperComposer")).expect("example workspace");
-        seed_kb(&root.join("KnowledgeBase")).expect("knowledge base");
     }
+    seed_kb(&root.join("KnowledgeBase")).expect("knowledge base");
     tokio::runtime::Runtime::new().expect("runtime").block_on(async {
         let (addr, serve) = pc_server::bind(pc_server::Paths::from_repo(), port).await.expect("bind");
         if let Some(m) = &mock {

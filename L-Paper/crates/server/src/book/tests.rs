@@ -707,3 +707,24 @@ async fn the_book_mock_fixture_runs_a_keyword_only_job() {
     assert_eq!(w.cards.len(), 4);
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// A folder of many papers never fills one chapter: each chapter takes at most `per` of the papers
+/// that use its terms, and a paper no chapter takes is not a source at all.
+#[test]
+fn many_starting_papers_are_shared_out_not_piled_up() {
+    let m = |i: usize, text: &str| source::Material { kind: "file".into(), title: format!("Synthetic paper {i}"), abstract_text: text.into(), ..Default::default() };
+    let mut materials: Vec<source::Material> = (0..20).map(|i| m(i, "the InfoNCE loss and hard negatives")).collect();
+    materials.extend((20..30).map(|i| m(i, "an unrelated synthetic topic")));
+    let src = source::Sources { materials, ..Default::default() };
+    let ch = |id: &str, t: &[&str]| plan::Chapter { id: id.into(), title: id.into(), terms: t.iter().map(|x| x.to_string()).collect(), ..Default::default() };
+    let pl = plan::Plan { chapters: vec![ch("c1", &["InfoNCE"]), ch("c2", &["hard negatives"])], ..Default::default() };
+    let a = research::assign(&src, &pl, 6);
+    for c in ["c1", "c2"] {
+        assert_eq!(a.iter().filter(|x| x.iter().any(|y| y == c)).count(), 6, "{c}");
+    }
+    assert!(a[20..].iter().all(Vec::is_empty), "papers no chapter uses take no chapter");
+    assert_eq!(a.iter().filter(|x| !x.is_empty()).count(), 6, "the same best six serve both chapters");
+    // one paper serves every chapter
+    let one = source::Sources { materials: vec![m(0, "x")], ..Default::default() };
+    assert_eq!(research::assign(&one, &pl, 6), vec![Vec::<String>::new()]);
+}
