@@ -76,6 +76,13 @@ pub fn json_in<T: for<'de> Deserialize<'de>>(reply: &str) -> Result<T, String> {
 pub(crate) const TW: &str = "Write every text meant for the author in Traditional Chinese as used in Taiwan (繁體中文, never simplified), \
 with full-width Chinese punctuation (，。：；？！「」（）), never ASCII commas or colons inside Chinese text.";
 
+/// Wording the author can read cold: planners used to compress a title into a coined term and to
+/// copy the record's shorthand, so a title or a question could not be understood without the record open.
+pub(crate) const PLAIN: &str = "Plain words: every title, label and question must be understood by the author on first \
+reading, without the record open. Never coin a term or an abbreviation. Never use the record's internal shorthand \
+(variable names, arm codes, column names, file names) without saying in plain words what it is. A technical term keeps \
+its usual English name when Chinese has no common word for it. Prefer a longer clear phrase to a short obscure one.";
+
 /// Shared context: key value, hook, experiments, timeline, the author's
 /// recorded thoughts, tables built from the record, and what the paper
 /// already holds (`material`, see [`super::material::describe`]).
@@ -257,7 +264,7 @@ when they fit: {roles}; otherwise design, experiment, result, background) and a 
 `core-contribution` is the paper's central idea: give that role to at most two items in the whole plan (one is \
 usual), however important other items are — every core item will be asked down to its origin.\n\
 6. Follow the author's structure habits below when given. Do not invent results.\n\
-{TW} Titles and purposes are for the author. Reply with JSON only.",
+{TW} Titles and purposes are for the author. {PLAIN} Reply with JSON only.",
         SECTIONS.join(", ")
     );
     let mut user = context(key_value, s, material);

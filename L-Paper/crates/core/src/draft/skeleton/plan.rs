@@ -13,7 +13,7 @@
 
 use super::*;
 use crate::compose::{json_array, json_object, json_string, Prompt};
-use crate::draft::prompts::{json_in, TW};
+use crate::draft::prompts::{json_in, PLAIN, TW};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
@@ -98,9 +98,10 @@ record and what the author said or the key value disagree), `choice` (the author
 something), `missing` (the paragraph needs a fact or a reason the record lacks). Each is anchored to one paragraph \
 (`para` = its key), most important first, at most {MAX_QUESTIONS}. `options` = 2 or 3 likely answers taken from the record. \
 Never ask what the record or the given answers already say. Never name internal ids (turn numbers, E1, g3, x4) in the \
-wording; address the author as 「你」; do not restate their earlier answers.\n\
+wording; address the author as 「你」; do not restate their earlier answers. Each question is one complete sentence that \
+asks one thing and ends with a question mark, never a noun phrase or a heading.\n\
 6. Do not invent results, numbers or citations.\n\
-{TW} `say`, `points`, `link_*`, titles, purposes and questions are for the author. Reply with JSON only."
+{TW} `say`, `points`, `link_*`, titles, purposes and questions are for the author. {PLAIN} Reply with JSON only."
     );
     let mut user = i.context.to_string();
     user += i.inventory;
