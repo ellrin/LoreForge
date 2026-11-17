@@ -30,7 +30,7 @@ const PCBookSetup = (() => {
   const LEN = [["short", "短"], ["standard", "標準"], ["long", "長"]];
   const LANG = [["en-zh", "英中"], ["en", "English"], ["zh", "中文"]];
   const PAGE = [["b5", "B5"], ["a4", "A4"]];
-  const DEFAULTS = { sources: [], keywords: [], cards: [], extras: {}, book: "new", title: "", folder: "", format: "notes", page: "b5", length: "standard", lang: "en-zh", make_cards: true };
+  const DEFAULTS = { sources: [], keywords: [], cards: [], extras: {}, book: "new", title: "", folder: "", format: "notes", page: "b5", length: "standard", lang: "en-zh", make_cards: false };
   const KEEP = ["format", "page", "length", "lang", "make_cards"];   // remembered between books
   const pref = {
     get() { try { return JSON.parse(localStorage.getItem("pc.bookSetup") ?? "{}") ?? {}; } catch { return {}; } },

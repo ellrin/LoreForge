@@ -57,7 +57,7 @@
 .bks-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 
 /* a book being written, wherever the author is */
-.bkj-chip { position: fixed; right: 16px; bottom: 16px; z-index: 35; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--accent-2); border-radius: 999px; background: var(--panel); color: var(--text); font: 500 12px var(--mono); box-shadow: 0 2px 10px color-mix(in srgb, var(--text) 12%, transparent); }
+.bkj-chip { position: fixed; right: 16px; bottom: 48px; z-index: 35; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--accent-2); border-radius: 999px; background: var(--panel); color: var(--text); font: 500 12px var(--mono); box-shadow: 0 2px 10px color-mix(in srgb, var(--text) 12%, transparent); }
 .bkj-chip[hidden] { display: none; }
 .bkj-chip:hover { background: var(--surface-hover); }
 .bkj-chip [data-icon] { display: inline-flex; color: var(--accent-2-text); }
