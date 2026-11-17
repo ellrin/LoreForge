@@ -2,8 +2,8 @@
 //! (`lore_shell::findfile`: `{request, app, purpose, exts, port}`). The window opens in find mode;
 //! the author describes the file by voice or typing, L-Echo lists 3–5 candidates from L-Shelf
 //! (filtered by the accepted extensions, never chosen for him), and each file he chooses is sent
-//! back to the asking app (`POST /api/lore/picked`), which decides what to do with it. Nothing is
-//! opened here. Generic: nothing in this file knows which app asks or why.
+//! back to the asking app (`POST /api/lore/picked`), which decides what to do with it. No file is
+//! opened here; L-Shelf itself is launched in the background when it is not running. Generic: nothing in this file knows which app asks or why.
 //!
 //! | method | path | what |
 //! |---|---|---|
@@ -56,6 +56,19 @@ fn shelf(s: &Shared) -> Option<String> {
     if s.shelf.load(std::sync::atomic::Ordering::Relaxed) { crate::shelfctx::shelf_url() } else { None }
 }
 
+/// L-Shelf for a search the author asked for: launched in the background when it is not running
+/// (the asking app does the same for L-Echo). Only the real app; tests pin an address or have none.
+async fn shelf_or_launch(s: &Shared) -> Result<String, String> {
+    if let Some(b) = shelf(s) {
+        return Ok(b);
+    }
+    if !s.shelf.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("L-Shelf 沒有開".into());
+    }
+    let p = tokio::task::spawn_blocking(|| lore_shell::findfile::app_port(lore_shell::findfile::SHELF, lore_shell::findfile::SHELF_APP)).await.map_err(|e| e.to_string())??;
+    Ok(format!("http://127.0.0.1:{p}"))
+}
+
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/find", get(find_get).post(find_post))
@@ -82,6 +95,13 @@ async fn find_post(State(s): State<Shared>, Json(r): Json<FindRequest>) -> Respo
         tokio::task::spawn_blocking(move || send_back(&old, None, true));
     }
     s.tell(DesktopEvent::Expanded(true));
+    // L-Shelf starts while the author is still describing the file, so the first search finds it running
+    if s.shelf.load(std::sync::atomic::Ordering::Relaxed) && shelf(&s).is_none() {
+        let s2 = s.clone();
+        tokio::spawn(async move {
+            let _ = shelf_or_launch(&s2).await;
+        });
+    }
     let seq = s.find.current.lock().unwrap().0;
     Json(json!({ "ok": true, "seq": seq })).into_response()
 }
@@ -184,7 +204,10 @@ struct SearchQ {
 
 async fn search(State(s): State<Shared>, Query(q): Query<SearchQ>) -> Response {
     let Some(r) = s.find.current() else { return err(StatusCode::GONE, "沒有在找檔案") };
-    let Some(base) = shelf(&s) else { return err(StatusCode::SERVICE_UNAVAILABLE, "L-Shelf 沒有開") };
+    let base = match shelf_or_launch(&s).await {
+        Ok(b) => b,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, &e),
+    };
     let q = q.q.unwrap_or_default();
     if q.trim().is_empty() {
         return Json(json!({ "items": [] })).into_response();
@@ -212,7 +235,10 @@ async fn thumb(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> Respons
 async fn pick(State(s): State<Shared>, Json(b): Json<Value>) -> Response {
     let Some(r) = s.find.current() else { return err(StatusCode::GONE, "沒有在找檔案") };
     let Some(id) = b["id"].as_str() else { return err(StatusCode::BAD_REQUEST, "需要 id") };
-    let Some(base) = shelf(&s) else { return err(StatusCode::SERVICE_UNAVAILABLE, "L-Shelf 沒有開") };
+    let base = match shelf_or_launch(&s).await {
+        Ok(b) => b,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, &e),
+    };
     let Some(path) = path_of(&base, id).await else { return err(StatusCode::GONE, "這個檔案已經不在原處") };
     let name = std::path::Path::new(&path).file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
     if !r.accepts(&name) {
