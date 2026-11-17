@@ -33,7 +33,8 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/papers/{name}/draft", get(get_draft))
         .route("/api/papers/{name}/draft/topic", put(put_topic))
-        .route("/api/papers/{name}/draft/records", post(upload_record))
+        // the framework's 2 MB default turned away a record with figures in it: the same ceiling as a record read from a path
+        .route("/api/papers/{name}/draft/records", post(upload_record).layer(axum::extract::DefaultBodyLimit::max(RECORD_MAX_BYTES as usize)))
         .route("/api/papers/{name}/draft/records/text", post(record_from_text))
         .route("/api/papers/{name}/draft/records/{file}", axum::routing::delete(delete_record))
         .route("/api/papers/{name}/draft/record", post(run_record))
