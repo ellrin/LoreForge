@@ -127,13 +127,10 @@ const PCHome = (() => {
   // ── 寫書 ──────────────────────────────────────────────
   async function drawBooks(box, focus) {
     const head = el("div", "home-head");
+    // one door: the start panel (what the book starts from, which book, how it looks)
     const add = el("button", "primary small", "＋ 新書");
-    add.dataset.opensMenu = "";
-    add.onclick = () => newBookForm(add);
-    const fromPaper = el("button", "ghost small", "從論文寫…");
-    fromPaper.dataset.opensMenu = "";
-    fromPaper.onclick = () => paperMenu(fromPaper);
-    head.append(iconButton("back", "返回", () => show(1)), el("h2", "", "寫書"), el("span", "grow"), fromPaper, add);
+    add.onclick = () => PCBookSetup.open();
+    head.append(iconButton("back", "返回", () => show(1)), el("h2", "", "寫書"), el("span", "grow"), add);
     const jobsBox = el("div", "home-jobs");
     const sub = el("div", "home-sub", "繼續");
     const grid = el("div", "home-grid papers");
@@ -159,16 +156,6 @@ const PCHome = (() => {
     if (grid.isConnected) fill();
   }
 
-  /** 從論文寫…: L-Reader's papers; one starts a new book (the review window first). */
-  async function paperMenu(anchor) {
-    let papers = [];
-    try { papers = (await api("/api/reader/papers")).papers ?? []; } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); return; }
-    if (!papers.length) { LoreShell.toast("L-Reader 沒有論文"); return; }
-    LoreShell.menu(anchor, papers.slice(0, 30).map((p) => ({ label: p.title || p.sha.slice(0, 8), run: async () => {
-      try { await PCBookJob.start(p.sha, { folder: books?.folder ?? undefined }); } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
-    } })));
-  }
-
   function bookCard(b) {
     const art = el("div", "home-art page");
     const faux = () => fauxPage({ title: b.title, name: b.title });
@@ -187,64 +174,6 @@ const PCHome = (() => {
     const item = el("div", "home-item");
     item.append(c);
     return item;
-  }
-
-  /** 新書: title and the folder it goes in (the last one used by default). */
-  function newBookForm(anchor) {
-    const m = menuForm("新書", null, anchor);
-    const title = el("input", "field");
-    title.placeholder = "書名";
-    const row = el("div", "form-row");
-    const folder = el("input", "field");
-    folder.placeholder = "存放的資料夾";
-    folder.value = books?.folder ?? "";
-    row.append(folder);
-    let page = "b5";
-    const pages = el("div", "seg");
-    for (const [v, t] of [["b5", "B5"], ["a4", "A4"]]) {
-      const b = el("button", "", t);
-      b.type = "button";
-      b.setAttribute("aria-pressed", String(v === page));
-      b.onclick = () => { page = v; pages.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); };
-      pages.append(b);
-    }
-    const pageRow = el("div", "form-row");
-    pageRow.append(el("span", "form-label", "頁面"), pages);
-    if (PCOpen.desktop()) {
-      const pick = el("button", "ghost fit", "選擇…");
-      pick.prepend(icon("folder"));
-      pick.onclick = async () => {
-        try {
-          const r = await api("/api/shell/dialog", { kind: "folder", start: folder.value || null });
-          if (r.path) folder.value = r.path;
-        } catch (e) { LoreShell.toast(e.message, { err: true, ms: 6000 }); }
-      };
-      row.append(pick);
-    }
-    const go = el("button", "primary small", "建立");
-    const create = async () => {
-      if (!title.value.trim()) { title.focus(); return; }
-      if (!folder.value.trim()) { folder.focus(); return; }
-      go.disabled = true;
-      try {
-        const r = await api("/api/books", { title: title.value.trim(), folder: folder.value.trim(), page });
-        m.hidden = true;
-        books = null;
-        await openPaper(r.id);
-        LoreShell.toast("已建立");
-      } catch (e) {
-        LoreShell.toast(e.message, { err: true, ms: 6000 });
-        go.disabled = false;
-      }
-    };
-    go.onclick = create;
-    for (const i of [title, folder]) i.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing)) create(); if (e.key === "Escape") m.hidden = true; };
-    const foot = el("div", "form-row end");
-    foot.append(go);
-    m.append(title, row, pageRow, foot);
-    keepOnScreen(m);
-    folder.scrollLeft = folder.scrollWidth; // the folder's own name, not the start of the path
-    title.focus();
   }
 
   const baseName = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
