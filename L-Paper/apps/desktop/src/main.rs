@@ -116,14 +116,16 @@ fn main() {
                 if let Some(start) = req.start.as_ref().filter(|s| s.is_dir()) {
                     d = d.set_directory(start);
                 }
-                let picked = match req.kind.as_str() {
+                let picked: Vec<tauri_plugin_dialog::FilePath> = match req.kind.as_str() {
                     // a folder to put a new folder in
-                    "folder" => d.set_can_create_directories(true).blocking_pick_folder(),
-                    "word" => d.add_filter("Word", &["docx"]).blocking_pick_file(),
+                    "folder" => d.set_can_create_directories(true).blocking_pick_folder().into_iter().collect(),
+                    "word" => d.add_filter("Word", &["docx"]).blocking_pick_file().into_iter().collect(),
+                    // 寫書's start panel: one or more PDFs
+                    "pdf" => d.add_filter("PDF", &["pdf"]).blocking_pick_files().unwrap_or_default(),
                     // a project's .tex (its folder opens) or an archive
-                    _ => d.add_filter("LaTeX", &["tex", "zip", "gz", "tgz", "tar"]).blocking_pick_file(),
+                    _ => d.add_filter("LaTeX", &["tex", "zip", "gz", "tgz", "tar"]).blocking_pick_file().into_iter().collect(),
                 };
-                picked.and_then(|p| p.into_path().ok())
+                picked.into_iter().filter_map(|p| p.into_path().ok()).collect()
             }));
 
             // The server runs on its own runtime thread for the life of the app.

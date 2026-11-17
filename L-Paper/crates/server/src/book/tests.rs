@@ -187,6 +187,7 @@ fn setup(tag: &str, web: bool) -> Setup {
         tools: Arc::new(tools::MockTools { compile: false, made: Default::default() }),
         plot_styles: json!([]),
         books_file: root.join("conf/books.toml"),
+        apps: Some(Default::default()),
     });
     Setup { root, deps, model, http }
 }

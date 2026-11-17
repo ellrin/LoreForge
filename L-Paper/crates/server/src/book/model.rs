@@ -44,6 +44,13 @@ pub struct LlmModel(pub Arc<Llm>);
 #[async_trait::async_trait]
 impl BookModel for LlmModel {
     async fn json(&self, ask: Ask<'_>, on_chars: OnChars<'_>) -> Result<(Value, String), StageError> {
+        // the isolated example's scripted replies (`--mock`): never a real engine
+        if let Some(m) = &self.0.mock {
+            let text = m.answer(ask.task, &Prompt { system: ask.system, user: ask.user }).await.map_err(|e| StageError::new(503, e))?;
+            on_chars(text.chars().count() as u64);
+            let v = lore_llm::json::extract_json(&text).ok_or_else(|| StageError::new(502, "模型的回答無法使用：不是 JSON"))?;
+            return Ok((v, "mock:scripted".into()));
+        }
         let choice: Option<EngineChoice> = ask.engine.and_then(|e| serde_json::from_value(Value::String(e.to_string())).ok());
         let route = self.0.route(ask.task, choice).await.map_err(|e| {
             // route() gives lore-llm's payload as JSON when another engine could run

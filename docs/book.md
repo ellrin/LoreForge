@@ -132,12 +132,15 @@
 
 | Method | Path | Body | 回傳 |
 |---|---|---|---|
-| POST | `/api/book/setup` | `Setup`（可以只有一部分） | `{ setup: "<id>" }`：先放著（記憶體，1 小時），給另一個 app 預填用 |
-| GET | `/api/book/setup/{id}` | — | 那份 `Setup`；`new` = 空的預設值 |
+| POST | `/api/book/setup` | `Setup`（可以只有一部分，也可以沒有 body） | `{ setup: "<id>" }`：先放著（記憶體，1 小時），給另一個 app 預填用；沒有 body＝預設值（面板自己先建一份，搜尋檔案才有地方加） |
+| GET | `/api/book/setup/{id}` | — | 那份 `Setup`；`new` = 空的預設值。`file`／`folder` 起點多一個 `label`（檔名或資料夾名） |
+| PUT | `/api/book/setup/{id}` | `Setup` | 存回面板上改過的設定（搜尋檔案加進來之前） |
 | GET | `/api/book/options` | — | `{ books: [{id, title}], folder, formats: [{id, label, pages: ["b5","a4"]}], papers: [{sha, title, year}] }` |
 | GET | `/api/book/cards?q=` | — | `{ cards: [{id, title, state}] }`：不是「記得」的卡，最多 30 |
 | POST | `/api/book` | `Setup` | `{ job, …工作物件 }`（舊的 `source: {kind:"lr", sha}` 仍接受）。沒有任何起點：400 |
 | POST | `/api/books` | `{ title, folder, page?, format? }` | 多了 `format` |
+| POST | `/api/shell/dialog` | `{ kind: "pdf", start? }` | 系統的檔案對話框，可選多個 PDF → `{ paths: […], path: <第一個> }`；沒有桌面版：501 |
+| POST | `/api/lore/picked` | （L-Echo 送來） | 搜尋檔案 `purpose: "寫書"`、`context: {setup}`：那個 PDF 加進該 setup 的 `sources`（`{kind: "file", path}`，不重複），回答檔名；面板再讀 `GET /api/book/setup/{id}` |
 
 ```jsonc
 // Setup

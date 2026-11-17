@@ -21,6 +21,7 @@ async fn book_routes_answer_lorereader_and_refuse_what_they_should() {
         std::env::set_var("LOREFORGE_PRIVATE", root.join("private"));
         std::env::set_var("PAPERCOMPOSER_ENGINES_ISOLATED", "1");
         std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("PAPERCOMPOSER_NO_ECHO", "1");
     }
     let deps = pc_server::book::Deps {
         cache: root.join("cache"),
@@ -39,6 +40,7 @@ async fn book_routes_answer_lorereader_and_refuse_what_they_should() {
         tools: Arc::new(pc_server::book::tools::MockTools { compile: false, made: Default::default() }),
         plot_styles: json!([]),
         books_file: root.join("home/books.toml"),
+        apps: Some(Default::default()),
     };
     pc_server::book::use_deps(Arc::new(deps));
     let (addr, serve) = pc_server::bind(pc_server::Paths::from_repo(), 0).await.unwrap();
@@ -98,6 +100,53 @@ async fn book_routes_answer_lorereader_and_refuse_what_they_should() {
     assert_eq!(jobs["jobs"].as_array().unwrap().len(), 1);
     assert_eq!(http.get(url(&format!("/api/book/jobs/{id}/open"))).send().await.unwrap().status().as_u16(), 404);
     assert_eq!(http.delete(url(&format!("/api/book/jobs/{id}"))).send().await.unwrap().status().as_u16(), 204);
+    // 開始面板: a setup kept for the panel, saved, filled by 搜尋檔案, read back with labels
+    let v: Value = http.post(url("/api/book/setup")).send().await.unwrap().json().await.unwrap();
+    let sid = v["setup"].as_str().unwrap().to_string();
+    let r = http.post(url("/api/book/setup")).header("content-type", "application/json").body("").send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 200, "an empty JSON body is the defaults too");
+    let d: Value = http.get(url(&format!("/api/book/setup/{sid}"))).header("Origin", "http://127.0.0.1:7890").send().await.unwrap().json().await.unwrap();
+    assert_eq!((d["format"].as_str(), d["make_cards"].as_bool(), d["book"].as_str()), (Some("notes"), Some(true), Some("new")));
+    let d: Value = http.get(url("/api/book/setup/new")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(d["page"], "b5");
+    assert_eq!(http.get(url(&format!("/api/book/setup/{}", "0".repeat(32)))).send().await.unwrap().status().as_u16(), 404);
+    let r = http.put(url(&format!("/api/book/setup/{sid}"))).json(&json!({ "keywords": ["temperature scaling"], "format": "review2" })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    std::fs::create_dir_all(root.join("home/Papers")).unwrap();
+    let pdf = root.join("home/Papers/gated contrast.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4 synthetic").unwrap();
+    let f: Value = http.post(url("/api/lore/find")).json(&json!({ "purpose": "寫書", "exts": ["pdf"], "context": { "setup": sid } })).send().await.unwrap().json().await.unwrap();
+    let req = f["request"].as_str().unwrap().to_string();
+    for _ in 0..2 {
+        let r = http.post(url("/api/lore/picked")).json(&json!({ "request": req, "path": pdf })).send().await.unwrap();
+        assert_eq!(r.status().as_u16(), 200, "{}", r.text().await.unwrap());
+    }
+    let d: Value = http.get(url(&format!("/api/book/setup/{sid}"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(d["sources"].as_array().unwrap().len(), 1, "{d}");
+    assert_eq!((d["sources"][0]["kind"].as_str(), d["sources"][0]["label"].as_str()), (Some("file"), Some("gated contrast.pdf")));
+    assert_eq!(d["keywords"], json!(["temperature scaling"]), "the saved setup kept");
+    let o: Value = http.get(url("/api/book/options")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(o["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect::<Vec<_>>(), ["notes", "review1", "review2"]);
+    assert!(o["books"].is_array() && o["papers"].is_array());
+    let c: Value = http.get(url("/api/book/cards?q=soft")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(c["cards"], json!([]), "no L-Brain here");
+    // nothing to start from: 400; a setup body starts a job, its view names files without paths
+    assert_eq!(bad(json!({ "keywords": [" "], "folder": root.join("Books") })).await.unwrap().status().as_u16(), 400);
+    let r = bad(json!({ "sources": [{ "kind": "file", "path": pdf }], "keywords": ["temperature scaling"], "format": "review1", "make_cards": false, "folder": root.join("Books") })).await.unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    let v: Value = r.json().await.unwrap();
+    assert_eq!(v["options"]["sources"], json!([{ "kind": "file", "label": "gated contrast.pdf" }]));
+    assert_eq!((v["options"]["format"].as_str(), v["options"]["make_cards"].as_bool()), (Some("review1"), Some(false)));
+    assert!(!v.to_string().contains("home/Papers"), "no path in the job object: {v}");
+    let jid = v["job"].as_str().unwrap().to_string();
+    for _ in 0..200 {
+        let v: Value = http.get(url(&format!("/api/book/jobs/{jid}"))).send().await.unwrap().json().await.unwrap();
+        if v["state"] != "running" && v["state"] != "queued" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    let _ = http.post(url(&format!("/api/book/jobs/{jid}/stop"))).send().await;
     // the page loads the job view
     let index = std::fs::read_to_string(pc_server::Paths::from_repo().ui.join("index.html")).unwrap();
     assert!(index.contains("<script src=\"bookjob.js\"></script>") && index.contains("bookjob.css"));

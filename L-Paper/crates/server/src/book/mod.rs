@@ -9,12 +9,16 @@
 //! | Method | Path | |
 //! |---|---|---|
 //! | GET | /api/info | `{app: "pc", books}` |
-//! | POST | /api/book | `{source: {kind: "lr", sha}, book: "new" \| id, length, lang, mode: "review" \| "direct", extras?, folder?, page?, engine?}` → `{job, …job object}` |
+//! | POST | /api/book | a `Setup` (`setup.rs`; the older `{source: {kind: "lr", sha}, …}` too) → `{job, …job object}`; no starting point → 400 |
+//! | POST | /api/book/setup | a `Setup`, or nothing (the defaults) → `{setup: id}`, kept in memory for an hour |
+//! | GET · PUT | /api/book/setup/{id} | the setup (`new` = the defaults), each source with its `label` · save the panel's changes |
+//! | GET | /api/book/options | `{books: [{id, title}], folder, formats: [{id, label, pages}], papers: [{sha, title, year}]}` |
+//! | GET | /api/book/cards | `?q=` → `{cards: [{id, title, state}]}`: cards that are not `known`, at most 30 |
 //! | GET | /api/book/jobs | `?unfinished=1` → `{jobs}` |
 //! | GET | /api/book/jobs/{id} | `?after=<seq>` long poll (25 s) → job object |
 //! | GET | /api/book/jobs/{id}/events | same as `?after=` |
 //! | GET | /api/book/jobs/{id}/stages/{stage} | a checkpoint |
-//! | POST | /api/book/jobs/{id}/review | `{chapters: [{id, title, depth, include, terms?}]}` or `{skip: true}` |
+//! | POST | /api/book/jobs/{id}/review | `{chapters: [{id, title, depth, include, terms?}], make_cards?}` or `{skip: true, make_cards?}` |
 //! | POST | /api/book/jobs/{id}/params | `{length?, lang?, page?, folder?}`: length or language → the plan again; `folder` = where a new book goes (absolute; the last one used is the default) |
 //! | POST | /api/book/jobs/{id}/stop · /resume | `{engine?}` on resume |
 //! | GET · POST | /api/book/jobs/{id}/imports | `{pending}` · hand the waiting PDFs to L-Reader again → `{imported, pending, failed}` |
@@ -29,6 +33,7 @@ pub mod model;
 pub mod pipeline;
 pub mod plan;
 pub mod research;
+pub mod setup;
 pub mod source;
 pub mod tools;
 pub mod write;
@@ -75,9 +80,20 @@ pub struct Deps {
     /// lore-plot's styles (what `/plot/api/styles` lists).
     pub plot_styles: Value,
     pub books_file: PathBuf,
+    /// The other Lore apps' addresses (`kb` L-Brain, `ls` L-Shelf). `None`: the live ports
+    /// (ports.json) when asked; `Some` (tests, the isolated example): only these, never a running app.
+    pub apps: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl Deps {
+    /// Where app `id` (`kb`, `ls`) answers now, if it runs.
+    pub fn app_url(&self, id: &str) -> Option<String> {
+        match &self.apps {
+            Some(m) => m.get(id).cloned(),
+            None => lore_home::ports::live().get(id).map(|p| format!("http://127.0.0.1:{p}")),
+        }
+    }
+
     pub fn global(&self) -> lore_notation::Notation {
         self.global_file.as_ref().and_then(|p| lore_notation::Notation::load(p).ok()).unwrap_or_default()
     }
@@ -89,7 +105,9 @@ impl Deps {
         let reader = lore_learn::reader::Reader::discover(&home);
         let filters = home.app_dir("LoreReader").map(|d| lore_words::Filters::with_file(&d.join("ignore-words.txt"))).unwrap_or_default();
         let lr_port = lore_home::ports::live().get("lr").copied().unwrap_or(7890);
-        let reader_url = std::env::var("LOREREADER_URL").ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| format!("http://127.0.0.1:{lr_port}"));
+        // the isolated example's scripted replies: no web, no running app is ever asked
+        let isolated = std::env::var_os("PAPERCOMPOSER_LLM_MOCK").is_some();
+        let reader_url = if isolated { "http://127.0.0.1:9".to_string() } else { std::env::var("LOREREADER_URL").ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| format!("http://127.0.0.1:{lr_port}")) };
         let cfg = lore_research::Config::default();
         Deps {
             cache,
@@ -103,11 +121,12 @@ impl Deps {
             model: Arc::new(model::LlmModel(s.llm.clone())),
             http: Arc::new(lore_research::http::ReqwestHttp::new(&cfg.user_agent, cfg.timeout)),
             research: cfg,
-            web: true,
+            web: !isolated,
             extract: Arc::new(source::DocsrcExtract),
             tools: Arc::new(tools::RealTools),
             plot_styles: lore_plot::style::list(&home)["styles"].clone(),
             books_file: crate::books::registry_file(),
+            apps: isolated.then(Default::default),
         }
     }
 }
@@ -139,6 +158,10 @@ pub(crate) fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/info", get(info))
         .route("/api/book", post(create))
+        .route("/api/book/setup", post(setup_new))
+        .route("/api/book/setup/{id}", get(setup_get).put(setup_put))
+        .route("/api/book/options", get(options))
+        .route("/api/book/cards", get(cards))
         .route("/api/book/jobs", get(list).post(create))
         .route("/api/book/jobs/{id}", get(one).delete(remove))
         .route("/api/book/jobs/{id}/events", get(one))
@@ -157,7 +180,7 @@ pub fn local_cors() -> tower_http::cors::CorsLayer {
     use tower_http::cors::{AllowOrigin, CorsLayer};
     CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|o, _| local_origin(o.to_str().unwrap_or(""))))
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT])
         .allow_headers([axum::http::header::CONTENT_TYPE])
 }
 
@@ -176,34 +199,6 @@ async fn info(State(s): State<Shared>) -> Response {
     Json(json!({ "app": "pc", "books": b["books"], "folder": b["folder"] })).into_response()
 }
 
-#[derive(Debug, Deserialize)]
-struct SourceRef {
-    kind: String,
-    #[serde(default)]
-    sha: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct MakeBody {
-    source: SourceRef,
-    #[serde(default)]
-    book: Option<String>,
-    #[serde(default)]
-    length: Option<String>,
-    #[serde(default)]
-    lang: Option<String>,
-    #[serde(default)]
-    mode: Option<String>,
-    #[serde(default)]
-    extras: Option<source::Extras>,
-    #[serde(default)]
-    folder: Option<PathBuf>,
-    #[serde(default)]
-    page: Option<String>,
-    #[serde(default)]
-    engine: Option<String>,
-}
-
 const LENGTHS: &[&str] = &["short", "standard", "long"];
 const LANGS: &[&str] = &["en-zh", "en", "zh"];
 
@@ -213,36 +208,156 @@ fn view_with_id(js: &Jobs, job: &Job) -> Value {
     v
 }
 
-async fn create(State(s): State<Shared>, Json(b): Json<MakeBody>) -> Response {
-    if b.source.kind != "lr" || !lore_learn::reader::valid_sha(&b.source.sha) {
-        return err(StatusCode::UNPROCESSABLE_ENTITY, "不認得的來源");
+async fn create(State(s): State<Shared>, body: axum::body::Bytes) -> Response {
+    let v: Value = if body.iter().all(u8::is_ascii_whitespace) { json!({}) } else {
+        match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return err(StatusCode::BAD_REQUEST, format!("看不懂的設定：{e}")),
+        }
+    };
+    let mut b = match setup::Setup::from_body(v) {
+        Ok(b) => b,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    b.tidy();
+    if !b.has_start() {
+        return err(StatusCode::BAD_REQUEST, "沒有起點：選論文、檔案、資料夾，或打關鍵字、選知識卡");
     }
-    let length = b.length.unwrap_or_else(|| "standard".into());
-    let lang = b.lang.unwrap_or_else(|| "en-zh".into());
-    let page = b.page.unwrap_or_else(|| "b5".into());
-    if !LENGTHS.contains(&length.as_str()) || !LANGS.contains(&lang.as_str()) || !pc_core::book::PAGES.contains(&page.as_str()) {
-        return err(StatusCode::BAD_REQUEST, "不認得的篇幅、語言或頁面大小");
+    if let Err(e) = b.check_sources() {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, e);
     }
-    let book = b.book.filter(|x| !x.is_empty()).unwrap_or_else(|| "new".into());
-    let (book_path, folder) = if book == "new" {
-        let folder = b.folder.filter(|f| f.is_absolute()).or_else(crate::books::next_folder);
+    if !LENGTHS.contains(&b.length.as_str()) || !LANGS.contains(&b.lang.as_str()) || !setup::FORMATS.contains(&b.format.as_str()) || (b.format == "notes" && !pc_core::book::PAGES.contains(&b.page.as_str())) {
+        return err(StatusCode::BAD_REQUEST, "不認得的篇幅、語言、格式或頁面大小");
+    }
+    let (book_path, folder) = if b.book == "new" {
+        let folder = b.folder.clone().filter(|f| f.is_absolute()).or_else(crate::books::next_folder);
         if folder.is_none() {
             return err(StatusCode::BAD_REQUEST, "請選擇存放的資料夾");
         }
         (None, folder)
     } else {
-        match crate::opened::registry().get(&book).map(|e| e.path.clone()) {
+        match crate::opened::registry().get(&b.book).map(|e| e.path.clone()) {
             Some(p) if pc_core::open::is_paper(&p) => (Some(p), None),
             _ => return err(StatusCode::NOT_FOUND, "找不到這本書"),
         }
     };
-    let params = pipeline::Params { sha: b.source.sha, book, book_path, folder, length, lang, page, engine: b.engine.filter(|e| matches!(e.as_str(), "local" | "subscription" | "api" | "claude")), extras: b.extras.unwrap_or_default() };
+    let params = pipeline::Params::from_setup(&b, book_path, folder);
+    let title = params.starts().first().map(|x| x.label()).filter(|t| !t.is_empty()).unwrap_or_else(|| b.keywords.join(", "));
     let js = jobs(&s).await;
-    let direct = b.mode.as_deref() == Some("direct");
-    match serde_json::to_value(params).map_err(|e| e.to_string()).and_then(|p| js.create(p, direct, "").map_err(|e| e.to_string())) {
+    let direct = b.mode == "direct";
+    match serde_json::to_value(params).map_err(|e| e.to_string()).and_then(|p| js.create(p, direct, &title).map_err(|e| e.to_string())) {
         Ok(job) => Json(view_with_id(&js, &job)).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, format!("無法建立工作：{e}")),
     }
+}
+
+// ── 開始面板 ─────────────────────────────────────────────────────────────────
+
+/// `POST /api/book/setup`: keep a setup (an empty body = the defaults) → `{setup: id}`.
+async fn setup_new(body: axum::body::Bytes) -> Response {
+    let v: Value = if body.iter().all(u8::is_ascii_whitespace) { json!({}) } else {
+        match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return err(StatusCode::BAD_REQUEST, format!("看不懂的設定：{e}")),
+        }
+    };
+    let mut st = match setup::Setup::from_body(v) {
+        Ok(x) => x,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    st.tidy();
+    if st.folder.is_none() {
+        st.folder = crate::books::next_folder();
+    }
+    Json(json!({ "setup": setup::put_new(st) })).into_response()
+}
+
+/// `GET /api/book/setup/{id}` (`new` = the defaults).
+async fn setup_get(AxPath(id): AxPath<String>) -> Response {
+    if id == "new" {
+        let st = setup::Setup { folder: crate::books::next_folder(), ..Default::default() };
+        return Json(st.view()).into_response();
+    }
+    match setup::get(&id) {
+        Some(st) => Json(st.view()).into_response(),
+        None => err(StatusCode::NOT_FOUND, "開始面板的設定已經過期"),
+    }
+}
+
+/// `PUT /api/book/setup/{id}`: the panel saves what the author changed.
+async fn setup_put(AxPath(id): AxPath<String>, Json(v): Json<Value>) -> Response {
+    let mut st = match setup::Setup::from_body(v) {
+        Ok(x) => x,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    st.tidy();
+    if !setup::replace(&id, st.clone()) {
+        return err(StatusCode::NOT_FOUND, "開始面板的設定已經過期");
+    }
+    Json(st.view()).into_response()
+}
+
+/// `GET /api/book/options`: what the panel offers.
+async fn options(State(s): State<Shared>) -> Response {
+    let b = crate::books::listing(&s).await;
+    let books: Vec<Value> = b["books"].as_array().into_iter().flatten().map(|x| json!({ "id": x["id"], "title": x["title"] })).collect();
+    let deps = jobs_deps(&s).await;
+    let d = deps.clone();
+    let papers = tokio::task::spawn_blocking(move || reader_papers(d.reader.as_ref())).await.unwrap_or_default();
+    Json(json!({ "books": books, "folder": b["folder"], "formats": formats(), "papers": papers })).into_response()
+}
+
+/// The formats a book can have (`pages`: the page sizes it offers; review papers are A4).
+pub fn formats() -> Value {
+    json!([
+        { "id": "notes", "label": "講義", "pages": pc_core::book::PAGES },
+        { "id": "review1", "label": "Review（單欄）", "pages": ["a4"] },
+        { "id": "review2", "label": "Review（雙欄）", "pages": ["a4"] },
+    ])
+}
+
+/// L-Reader's papers, newest first: `{sha, title, year}`.
+pub fn reader_papers(r: Option<&lore_learn::reader::Reader>) -> Vec<Value> {
+    let Some(r) = r else { return vec![] };
+    let mut list = r.list();
+    list.sort_by(|a, b| b["added_at"].as_str().unwrap_or("").cmp(a["added_at"].as_str().unwrap_or("")));
+    list.iter()
+        .filter_map(|p| {
+            let sha = p["sha256"].as_str().filter(|x| lore_learn::reader::valid_sha(x))?;
+            let title = p["title"].as_str().map(str::trim).filter(|t| !t.is_empty())?;
+            let year = p["year"].as_i64().map(|y| y.to_string()).or_else(|| p["year"].as_str().map(String::from)).unwrap_or_default();
+            Some(json!({ "sha": sha, "title": title, "year": year }))
+        })
+        .collect()
+}
+
+/// `GET /api/book/cards?q=`: cards the member does not know yet (`known` left out), at most 30.
+async fn cards(State(s): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let deps = jobs_deps(&s).await;
+    let q = q.get("q").cloned().unwrap_or_default();
+    let out = tokio::task::spawn_blocking(move || unknown_cards(&deps.kb_spaces, &deps.member, &q, 30)).await.unwrap_or_default();
+    Json(json!({ "cards": out })).into_response()
+}
+
+/// Cards whose title or an alias contains `q` (all when empty), not `known` for `member`.
+pub fn unknown_cards(spaces: &[PathBuf], member: &str, q: &str, max: usize) -> Vec<Value> {
+    let q = q.trim().to_lowercase();
+    let names = lore_learn::load_names(spaces, member);
+    let mut seen: Vec<&str> = vec![];
+    let mut out: Vec<(String, Value)> = vec![];
+    for n in &names {
+        if n.state == lore_learn::Familiar::Known || seen.contains(&n.card.as_str()) {
+            continue;
+        }
+        if !q.is_empty() && !names.iter().any(|m| m.card == n.card && m.name.to_lowercase().contains(&q)) {
+            continue;
+        }
+        seen.push(&n.card);
+        let state = if n.state == lore_learn::Familiar::Learning { "learning" } else { "unknown" };
+        out.push((n.title.to_lowercase(), json!({ "id": n.card, "title": n.title, "state": state })));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out.into_iter().take(max).map(|(_, v)| v).collect()
 }
 
 async fn find(s: &Shared, id: &str) -> Result<(Arc<Jobs>, Arc<Job>), Response> {
@@ -331,8 +446,12 @@ async fn review(State(s): State<Shared>, AxPath(id): AxPath<String>, body: Optio
     if !b.is_object() {
         return err(StatusCode::BAD_REQUEST, "要送 JSON 物件");
     }
+    let make_cards = b["make_cards"].as_bool();
     if b["skip"] == true || b["skipped"] == true {
         b = json!({ "skipped": true });
+        if let Some(m) = make_cards {
+            b["make_cards"] = m.into();
+        }
     } else if b.get("chapters").is_some_and(|c| !c.is_array()) {
         return err(StatusCode::BAD_REQUEST, "chapters 要是陣列");
     } else if b["chapters"].as_array().is_some_and(|c| !c.iter().any(|r| r["include"] != false)) {
@@ -340,6 +459,9 @@ async fn review(State(s): State<Shared>, AxPath(id): AxPath<String>, body: Optio
     }
     if job.is_running() || job.status() != status::REVIEW {
         return err(StatusCode::CONFLICT, "這個工作沒有在等微調");
+    }
+    if let Some(m) = make_cards {
+        js.set_params(&job, |p| p["make_cards"] = m.into());
     }
     match js.submit(&job, "review", b) {
         Ok(()) => Json(js.view(&job)).into_response(),

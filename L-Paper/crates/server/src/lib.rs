@@ -3642,7 +3642,8 @@ pub fn router(paths: Paths) -> Router {
 }
 
 /// 搜尋檔案: L-Echo finds, the author chooses, the file comes back here (`/api/lore/picked`).
-/// 實驗紀錄 (context `{paper}`) adds it as a record of that paper. `PAPERCOMPOSER_NO_ECHO`
+/// 實驗紀錄 (context `{paper}`) adds it as a record of that paper; 寫書 (context `{setup}`) adds a
+/// PDF to that start-panel setup's sources. `PAPERCOMPOSER_NO_ECHO`
 /// (tests): L-Echo is never launched or asked.
 fn finds(state: &Shared) -> lore_shell::findfile::Finds {
     let s = state.clone();
@@ -3653,6 +3654,8 @@ fn finds(state: &Shared) -> lore_shell::findfile::Finds {
             let home = dirs::home_dir().ok_or("找不到家目錄")?;
             match p.purpose.as_str() {
                 "實驗紀錄" => draft::record_picked(&s, &paper, &p.path, &home).await,
+                // 寫書's start panel (context `{setup}`): the PDF joins that setup's sources
+                "寫書" => book::setup::picked(p.context["setup"].as_str().unwrap_or_default(), &p.path, &home),
                 other => Err(format!("L-Paper 不收「{other}」")),
             }
         })

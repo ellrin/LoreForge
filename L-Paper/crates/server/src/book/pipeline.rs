@@ -32,7 +32,20 @@ pub const STAGES: &[StageSpec] = &[
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Params {
+    /// Jobs made before the start panel: the one L-Reader paper (see [`Params::starts`]).
     pub sha: String,
+    /// The starting points (docs/book.md §統一入口). Paths stay in the job's cache.
+    pub sources: Vec<super::setup::Start>,
+    /// Terms the author typed.
+    pub keywords: Vec<String>,
+    /// L-Brain card ids the author chose.
+    pub cards: Vec<String>,
+    /// notes · review1 · review2 (empty = notes)
+    pub format: String,
+    /// Make a knowledge card for every term a written chapter taught that has none.
+    pub make_cards: bool,
+    /// A new book's title ("" = the planner names it).
+    pub title: String,
     /// `new` or the opened.toml id of a book.
     pub book: String,
     /// The existing book's folder (resolved when the job was made).
@@ -45,6 +58,42 @@ pub struct Params {
     pub page: String,
     pub engine: Option<String>,
     pub extras: Extras,
+}
+
+impl Params {
+    /// The starting points, an older job's `sha` read as one L-Reader paper.
+    pub fn starts(&self) -> Vec<super::setup::Start> {
+        if self.sources.is_empty() && !self.sha.is_empty() {
+            return vec![super::setup::Start { kind: "lr".into(), sha: self.sha.clone(), ..Default::default() }];
+        }
+        self.sources.clone()
+    }
+
+    pub fn format(&self) -> &str {
+        if self.format.is_empty() { "notes" } else { &self.format }
+    }
+
+    /// The job's params from a checked setup (`book_path` / `folder` resolved by the caller).
+    pub fn from_setup(s: &super::setup::Setup, book_path: Option<PathBuf>, folder: Option<PathBuf>) -> Params {
+        let notes = s.format == "notes";
+        Params {
+            sha: String::new(),
+            sources: s.sources.clone(),
+            keywords: s.keywords.clone(),
+            cards: s.cards.clone(),
+            format: s.format.clone(),
+            make_cards: s.make_cards,
+            title: s.title.split_whitespace().collect::<Vec<_>>().join(" "),
+            book: s.book.clone(),
+            book_path,
+            folder,
+            length: s.length.clone(),
+            lang: s.lang.clone(),
+            page: if notes { s.page.clone() } else { String::new() },
+            engine: s.engine.clone().filter(|e| matches!(e.as_str(), "local" | "subscription" | "api" | "claude")),
+            extras: s.extras.clone(),
+        }
+    }
 }
 
 pub struct BookJob {
@@ -128,7 +177,11 @@ impl Pipeline for BookJob {
 
     fn decorate(&self, job: &Job, snap: &mut Map<String, Value>) {
         let p: Params = serde_json::from_value(job.meta().params).unwrap_or_default();
-        snap.insert("options".into(), json!({ "length": p.length, "lang": p.lang, "page": p.page, "book": p.book, "folder": p.folder }));
+        let sources: Vec<Value> = p.starts().iter().map(|s| json!({ "kind": s.kind, "label": s.label() })).collect();
+        snap.insert(
+            "options".into(),
+            json!({ "length": p.length, "lang": p.lang, "page": p.page, "book": p.book, "folder": p.folder, "format": p.format(), "make_cards": p.make_cards, "sources": sources, "keywords": p.keywords }),
+        );
         let research: Option<Research> = job.output("research").and_then(|v| serde_json::from_value(v).ok());
         if let Some(r) = &research {
             snap.insert("pending_imports".into(), r.pending_imports.len().into());

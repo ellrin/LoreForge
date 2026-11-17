@@ -9,7 +9,7 @@
 //!
 //! | Method | Path | |
 //! |---|---|---|
-//! | POST | /api/shell/dialog | `{kind: latex\|word\|folder, start?}` → `{path}`; 501 without the desktop app |
+//! | POST | /api/shell/dialog | `{kind: latex\|word\|folder\|pdf, start?}` → `{path}` (`pdf`: several may be chosen, also `{paths}`); 501 without the desktop app |
 //! | GET | /api/open/recent | opened folders, newest first, `exists` false when gone |
 //! | POST | /api/open/forget | `{id}`: drop from the list (the folder is not touched) |
 //! | POST | /api/open/inspect | `{path}` → `{kind: paper, id}` / `{kind: latex, plan}` / `{kind: archive, dest}` / `{kind: word, dest, pandoc, earlier?}` (a .docx converted before and unchanged → that paper; changed → `earlier` = its folder, the page asks) |
@@ -193,7 +193,7 @@ fn ensure_app_dir(dir: &Path) -> Result<(), String> {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DialogReq {
     /// `latex` (a folder, or a .zip/.tar.gz/.tgz/.tex), `word` (a .docx),
-    /// `folder` (where to put something).
+    /// `folder` (where to put something), `pdf` (one or more PDFs: 寫書's start panel).
     pub kind: String,
     /// Folder to start in.
     #[serde(default)]
@@ -203,8 +203,9 @@ pub struct DialogReq {
     pub name: Option<String>,
 }
 
-/// Shows the dialog and returns the chosen path (blocking; run off the async runtime).
-pub type DialogHook = Arc<dyn Fn(DialogReq) -> Option<PathBuf> + Send + Sync>;
+/// Shows the dialog and returns the chosen paths (none = cancelled; one, except for `pdf`)
+/// (blocking; run off the async runtime).
+pub type DialogHook = Arc<dyn Fn(DialogReq) -> Vec<PathBuf> + Send + Sync>;
 
 /// Installed by the desktop app before the server starts; none in browser mode.
 pub static DIALOG: std::sync::OnceLock<DialogHook> = std::sync::OnceLock::new();
@@ -214,7 +215,7 @@ async fn shell_dialog(Json(b): Json<DialogReq>) -> impl IntoResponse {
         return (StatusCode::NOT_IMPLEMENTED, "瀏覽器模式沒有檔案對話框").into_response();
     };
     match tokio::task::spawn_blocking(move || hook(b)).await {
-        Ok(path) => Json(serde_json::json!({ "path": path })).into_response(),
+        Ok(paths) => Json(serde_json::json!({ "path": paths.first(), "paths": paths })).into_response(),
         Err(e) => bad(&e.to_string()),
     }
 }

@@ -537,7 +537,7 @@ async fn upload_record(State(s): State<Shared>, AxPath(name): AxPath<String>, Ax
 const RECORD_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
 /// A typed or pasted path (`~/…`, quoted, `file://…`) as a path inside the home folder.
-fn record_path(raw: &str, home: &Path) -> Result<PathBuf, String> {
+pub(crate) fn record_path(raw: &str, home: &Path) -> Result<PathBuf, String> {
     let mut s = raw.trim().trim_matches(|c| c == '"' || c == '\'' ).trim().to_string();
     if let Some(rest) = s.strip_prefix("file://") {
         s = percent_decode(rest);
