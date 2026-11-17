@@ -29,6 +29,10 @@ pub struct State {
     pub done: BTreeMap<String, ChapterOut>,
     /// source key in research → library key
     pub keys: BTreeMap<String, String>,
+    /// chapter id → the card texts its reply gave (saved with the chapter, made after it)
+    pub card_texts: BTreeMap<String, Vec<super::cards::CardText>>,
+    /// term key → the card made for it (`None`: a card had appeared meanwhile, none made)
+    pub cards: BTreeMap<String, Option<super::cards::Made>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -56,6 +60,8 @@ pub struct WriteOut {
     pub chapters: Vec<ChapterOut>,
     pub notation: usize,
     pub notes: Vec<String>,
+    /// Knowledge cards made for terms the book taught.
+    pub cards: Vec<super::cards::Made>,
 }
 
 pub struct Ctx<'a> {
@@ -70,6 +76,8 @@ pub struct Ctx<'a> {
     pub job_dir: &'a Path,
     pub on_chars: &'a (dyn Fn(u64) + Send + Sync),
     pub progress: &'a (dyn Fn(Value) + Send + Sync),
+    /// Make knowledge cards for what each chapter taught (`None`: off).
+    pub cards: Option<&'a super::cards::Sink>,
 }
 
 pub fn words_for(depth: &str, length: &str) -> (usize, usize) {
@@ -110,6 +118,10 @@ pub fn schema() -> Value {
             "tables": { "type": "array", "items": {
                 "type": "object", "required": ["id", "caption", "rows"],
                 "properties": { "id": { "type": "string" }, "caption": { "type": "string" }, "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } } }
+            } },
+            "cards": { "type": "array", "items": {
+                "type": "object", "required": ["term", "summary", "body"],
+                "properties": { "term": { "type": "string" }, "summary": { "type": "string" }, "body": { "type": "string" } }
             } }
         }
     })
@@ -675,17 +687,27 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
             continue;
         }
         let (file, label) = st.sections[&c.id].clone();
+        // the terms this chapter teaches that no card names yet
+        let want_cards: Vec<String> = match ctx.cards {
+            Some(sink) => {
+                let fresh: Vec<String> = c.terms.iter().filter(|t| teach.iter().find(|x| x.term.eq_ignore_ascii_case(t)).is_none_or(|x| x.card.is_none())).cloned().collect();
+                sink.without_card(&fresh).into_iter().filter(|t| !st.cards.contains_key(&lore_words::phrase_key(t))).collect()
+            }
+            None => vec![],
+        };
         let (system, user) = prompt(&title, c, plan, &st.sections, teach, src, r, &st.keys, &notation_rules, &style, ctx.length, ctx.lang, pc_core::book::format_of(&book));
         let mut extra = String::new();
         let mut co = ChapterOut::default();
         let mut text = String::new();
         let mut made: Vec<PathBuf> = vec![];
+        let mut texts: Vec<super::cards::CardText> = vec![];
         for attempt in 0..2 {
             for f in made.drain(..) {
                 let _ = std::fs::remove_file(f);
             }
-            let ask = Ask { task: TASK_CHAPTER, system: system.clone(), user: format!("{user}{extra}"), schema: schema(), max_tokens: 16000, engine: ctx.engine };
+            let ask = Ask { task: TASK_CHAPTER, system: system.clone(), user: format!("{user}{}{extra}", super::cards::ask(&want_cards)), schema: schema(), max_tokens: 16000, engine: ctx.engine };
             let (reply, engine) = ctx.model.json(ask, ctx.on_chars).await?;
+            texts = super::cards::texts(&reply, &want_cards);
             co = ChapterOut { id: c.id.clone(), title: c.title.clone(), file: file.clone(), label: label.clone(), engine, ..Default::default() };
             text = assemble(ctx, &book, &reply, c, src, r, &st.keys, &mut made, &mut co);
             let checked = crate::notation::check(&book, &eff, &opt, &[], &text);
@@ -701,9 +723,37 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
         }
         let sec = pc_core::paper::Section { file: file.clone(), title: c.title.clone(), paragraphs: pc_core::text::paragraphs(&text), tail: format!("\\label{{{label}}}") };
         pc_core::paper::write_atomic(&book.join("sections").join(&file), &pc_core::paper::render_section(&sec)).map_err(|e| err(e.to_string()))?;
+        if texts.len() < want_cards.len() {
+            co.problems.push(format!("模型沒有給這些名詞的卡片內容：{}", want_cards.iter().filter(|t| !texts.iter().any(|x| &x.term == *t)).cloned().collect::<Vec<_>>().join(", ")));
+        }
+        st.card_texts.insert(c.id.clone(), texts);
         st.done.insert(c.id.clone(), co);
         save_state(ctx.job_dir, &st);
         (ctx.progress)(json!({ "chapter": i + 1, "chapters": total, "figures": st.done.values().map(|d| d.figures.len()).sum::<usize>() }));
+    }
+    // the cards of what each written chapter taught (each recorded as it is made: a resumed job
+    // never makes one twice)
+    if let Some(sink) = ctx.cards {
+        for c in &plan.chapters {
+            for t in st.card_texts.get(&c.id).cloned().unwrap_or_default() {
+                let k = lore_words::phrase_key(&t.term);
+                if st.cards.contains_key(&k) {
+                    continue;
+                }
+                if sink.without_card(std::slice::from_ref(&t.term)).is_empty() {
+                    st.cards.insert(k, None);
+                    save_state(ctx.job_dir, &st);
+                    continue;
+                }
+                match sink.create(&t, &title).await {
+                    Ok(m) => {
+                        st.cards.insert(k, Some(m));
+                        save_state(ctx.job_dir, &st);
+                    }
+                    Err(e) => notes.push(format!("知識卡「{}」沒有建立：{e}", t.term)),
+                }
+            }
+        }
     }
     // equation labels nothing in the book refers to (the registry flags them): out, across chapters
     let all: String = pc_core::open::source_files(&book).iter().filter_map(|f| std::fs::read_to_string(f).ok()).collect::<Vec<_>>().join("\n");
@@ -734,7 +784,8 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
     }
     crate::books::remember_in(target.books_file, &book, &title, &src.shas(), if st.new_book { book.parent() } else { None }).map_err(err)?;
     let chapters = plan.chapters.iter().filter_map(|c| st.done.get(&c.id).cloned()).collect();
-    Ok(WriteOut { book: book.to_string_lossy().to_string(), title, new_book: st.new_book, chapters, notation: notation_added, notes })
+    let cards = st.cards.values().flatten().cloned().collect();
+    Ok(WriteOut { book: book.to_string_lossy().to_string(), title, new_book: st.new_book, chapters, notation: notation_added, notes, cards })
 }
 
 #[cfg(test)]

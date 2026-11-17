@@ -29,6 +29,7 @@
 //! L-Slide's `/api/todeck*`, so L-Reader's 寫 review card can call them. Errors: status +
 //! `{error}` in one line of Chinese.
 
+pub mod cards;
 pub mod model;
 pub mod pipeline;
 pub mod plan;

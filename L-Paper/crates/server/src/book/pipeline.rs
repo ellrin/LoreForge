@@ -215,6 +215,7 @@ impl Pipeline for BookJob {
                     "book": w.book, "title": w.title, "new": w.new_book,
                     "chapters": w.chapters.iter().map(|c| json!({ "title": c.title, "figures": c.figures.len(), "tables": c.tables, "cites": c.cites, "problems": c.problems })).collect::<Vec<_>>(),
                     "notation": w.notation, "notes": w.notes.iter().chain(research.iter().flat_map(|r| r.notes.iter())).collect::<Vec<_>>(),
+                    "cards": w.cards,
                     "problems": c.problems, "pdf": c.compiled.pdf, "pages": c.compiled.pages, "compiled": c.compiled.ok, "compileNote": c.compiled.skipped,
                 }),
             );
@@ -237,8 +238,17 @@ fn review_view(job: &Job, research: Option<&Research>) -> Value {
             json!({ "id": c.id, "title": c.title, "depth": c.depth, "terms": c.terms.iter().map(|t| json!({ "term": t, "state": state(t) })).collect::<Vec<_>>(), "figures": c.figures.len(), "sources": sources, "found": found })
         })
         .collect();
+    // 知識卡: how many the written chapters would make (terms with no card)
+    let mut no_card: Vec<String> = vec![];
+    for t in po.plan.chapters.iter().flat_map(|c| c.terms.iter()) {
+        let k = lore_words::phrase_key(t);
+        if tr.teach.iter().find(|x| x.term.eq_ignore_ascii_case(t)).is_none_or(|x| x.card.is_none()) && !no_card.contains(&k) {
+            no_card.push(k);
+        }
+    }
     json!({
         "chapters": chapters,
+        "cards": no_card.len(),
         "suggestions": po.suggestions,
         "leftOut": po.left_out,
         "notes": research.map(|r| r.notes.clone()).unwrap_or_default(),
@@ -473,7 +483,11 @@ impl BookJob {
         let global = d.global();
         let on = |n: u64| cx.chars(n);
         let counter = cx.counter();
+        // 知識卡: the job's choice, which the review window may switch
+        let make_cards = review["make_cards"].as_bool().unwrap_or(p.make_cards);
+        let sink = make_cards.then(|| super::cards::Sink { spaces: d.kb_spaces.clone(), member: d.member.clone(), kb_url: d.app_url("kb"), http: d.http.clone() });
         let ctx = write::Ctx {
+            cards: sink.as_ref(),
             model: d.model.as_ref(),
             tools: d.tools.as_ref(),
             ws: d.workspace.as_deref(),

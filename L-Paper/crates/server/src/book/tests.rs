@@ -566,3 +566,75 @@ fn found_papers_offer_one_more_layer_of_terms() {
     assert!(!f.values().flatten().any(|x| x.term.contains("MoCo")), "a starting paper is not a found one");
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// 知識卡: a written chapter's terms without a card get one (its own zh-TW summary and
+/// explanation, the book as the source, never a path), read back through lore-learn as 不熟
+/// (`Familiar::Unknown`), not 學習中; a term that has a card gets none; a resumed write makes
+/// none twice; the review window says how many it would make.
+#[tokio::test]
+async fn a_book_makes_unfamiliar_cards_for_what_it_taught() {
+    let root = std::env::temp_dir().join(format!("pc-book-cards-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let reply = json!({
+        "body": "A \\term{temperature scaling}{溫度縮放} divides the scores; \\term{InfoNCE}{} uses it.",
+        "cards": [
+            { "term": "temperature scaling", "summary": "把分數除以溫度再做 softmax。", "body": "溫度縮放把每個分數除以溫度。溫度小時 softmax 變尖，溫度大時變平。" },
+            { "term": "InfoNCE", "summary": "不該建立", "body": "已經有卡。" }
+        ]
+    });
+    let model = Arc::new(MockModel::default().on(TASK_PLAN, json!({ "title": "Synthetic Temperature Notes", "abstract": "", "chapters": [{ "title": "Temperature", "terms": ["temperature scaling", "InfoNCE"], "depth": "brief" }] })).on(TASK_SUGGEST, json!({ "suggestions": [] })).on(TASK_CHAPTER, reply));
+    let deps = files_deps(&root, Arc::new(FileExtract(Default::default())), Arc::new(MockHttp::new()), model.clone(), &[]);
+    let js = lore_jobs::Jobs::open(deps.cache.join("jobs"), Arc::new(pipeline::BookJob { deps: deps.clone() }));
+    let st = setup::Setup { keywords: vec!["temperature scaling".into(), "InfoNCE".into()], folder: Some(root.join("Books")), ..Default::default() };
+    assert!(st.make_cards, "on unless switched off");
+    let job = js.create(serde_json::to_value(pipeline::Params::from_setup(&st, None, Some(root.join("Books")))).unwrap(), false, "").unwrap();
+    until(&job, "review").await;
+    assert_eq!(js.view(&job)["review"]["cards"], 1, "InfoNCE has a card already");
+    js.submit(&job, "review", json!({ "skipped": true })).unwrap();
+    until(&job, "done").await;
+    let (_, user) = s_first(&model, TASK_CHAPTER);
+    assert!(user.contains("Also give `cards`") && user.contains("temperature scaling") && !user.contains("terms the chapter teaches: temperature scaling; InfoNCE"), "{user}");
+
+    let names = lore_learn::load_names(&deps.kb_spaces, "ellrin");
+    let made: Vec<&lore_learn::KbName> = names.iter().filter(|n| n.title == "temperature scaling").collect();
+    assert_eq!(made.len(), 1);
+    assert_eq!(made[0].state, lore_learn::Familiar::Unknown, "不熟, not 學習中");
+    assert_eq!(names.iter().filter(|n| n.title == "InfoNCE").count(), 1, "no second InfoNCE card");
+    let node: Value = serde_json::from_slice(&std::fs::read(deps.kb_spaces[0].join("nodes").join(format!("{}.json", made[0].card))).unwrap()).unwrap();
+    assert_eq!(node["summary"], "把分數除以溫度再做 softmax。");
+    assert_eq!(node["sources"], json!([{ "type": "book", "ref": "Synthetic Temperature Notes" }]), "the book by its title, no path");
+    let progress = std::fs::read_to_string(deps.kb_spaces[0].join("progress/ellrin").join(format!("{}.json", made[0].card))).unwrap();
+    assert!(progress.contains("\"unfamiliar\"") && progress.contains("papercomposer-book"), "{progress}");
+    let v = js.view(&job);
+    assert_eq!(v["result"]["cards"], json!([{ "id": made[0].card, "title": "temperature scaling" }]));
+
+    // the write stage again (a resumed job): no card twice
+    js.redo_from(&job, "write").unwrap();
+    until(&job, "done").await;
+    let again = lore_learn::load_names(&deps.kb_spaces, "ellrin");
+    assert_eq!(again.iter().filter(|n| n.title == "temperature scaling").count(), 1);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// While L-Brain runs, the card goes through its API: created in the member's personal space,
+/// then 標為不熟 (`POST /api/recall/{id}` `unfamiliar`).
+#[tokio::test]
+async fn cards_go_through_lbrain_while_it_runs() {
+    let http = Arc::new(
+        MockHttp::new()
+            .on("kb.test/api/spaces", Response::ok(json!({ "member": "ellrin", "spaces": [{ "id": "home", "kind": "household", "is_member": true }, { "id": "me", "kind": "personal", "is_member": true }] }).to_string()))
+            .on("kb.test/api/nodes", Response::status(201, json!({ "space": "me", "node": { "id": "n42", "title": "temperature scaling" } }).to_string()))
+            .on("kb.test/api/recall/n42", Response::ok(json!({}).to_string())),
+    );
+    let sink = cards::Sink { spaces: vec![], member: "ellrin".into(), kb_url: Some("http://kb.test".into()), http: http.clone() };
+    let t = cards::CardText { term: "temperature scaling".into(), summary: "除以溫度。".into(), body: "兩句說明。第二句。".into() };
+    let m = sink.create(&t, "Synthetic Notes").await.unwrap();
+    assert_eq!((m.id.as_str(), m.title.as_str()), ("n42", "temperature scaling"));
+    let reqs = http.requests();
+    let body = |i: usize| -> Value { serde_json::from_slice(reqs[i].body.as_deref().unwrap()).unwrap() };
+    assert_eq!((body(1)["space"].as_str(), body(1)["via"].as_str()), (Some("me"), Some("papercomposer-book")));
+    assert_eq!(body(1)["sources"], json!([{ "type": "book", "ref": "Synthetic Notes" }]));
+    assert!(reqs[2].url.ends_with("/api/recall/n42") && body(2)["outcome"] == "unfamiliar");
+    assert!(sink.create(&cards::CardText { term: "x".into(), ..Default::default() }, "B").await.is_err(), "no words, no card");
+}
