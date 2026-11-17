@@ -910,6 +910,8 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-main { overflow-y: auto; padding: 16px 22px 28px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .df-side { overflow-y: auto; padding: 14px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
 .df-side:empty { display: none; }
+.df-main[hidden], .df-sk[hidden], #dlgDraft .dlg-head [hidden] { display: none; }
+.df-sk { min-width: 0; min-height: 0; overflow: hidden; }
 .df-h { margin: 10px 0 0; font: 600 13px var(--sans); }
 .df-h:first-child { margin-top: 0; }
 .df-side h4, .df-sec h4 { margin: 4px 0; font: 600 12px var(--mono); letter-spacing: .04em; color: var(--muted); }

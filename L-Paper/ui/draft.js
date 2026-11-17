@@ -18,17 +18,16 @@
 // 重新開始 moves draft/ to draft/archive/<time>/; 從這步重來 (on a finished
 // step) clears what the later steps produced, after a copy in the archive.
 const PCDraft = (() => {
+  // The one path: topic and record feed the skeleton, where the paper is laid out, asked about and
+  // written; the abstract comes from the written text, then the audit and later revisions. (The
+  // interview, claim register, order check, outline and section drafts it replaced are not steps.)
   const STEPS = [
     ["topic", "1", "主題"],
     ["record", "2", "實驗記錄"],
-    ["interview", "3", "對話"],
-    ["claims", "4", "主張"],
-    ["review", "5", "校正"],
-    ["template", "★", "版型"],
-    ["outline", "6", "大綱"],
-    ["draft", "7", "草稿"],
-    ["audit", "8", "審稿"],
-    ["revise", "9", "修訂"],
+    ["skeleton", "3", "骨架"],
+    ["abstract", "4", "摘要"],
+    ["audit", "5", "審稿"],
+    ["revise", "6", "修訂"],
   ];
   const SECTIONS = ["Introduction", "Methods", "Results", "Discussion", "Conclusion"];
   const SEC_ZH = { Introduction: "前言", Methods: "方法", Results: "結果", Discussion: "討論", Conclusion: "結論", Abstract: "摘要" };
@@ -38,7 +37,19 @@ const PCDraft = (() => {
   const STATUS_ZH = { pending: "未開始", active: "進行中", done: "完成", skipped: "略過" };
   let D = null;
   /** The step a session phase shows (題組 is part of 對話). */
-  const stepOf = (phase) => Math.max(0, STEPS.findIndex(([k]) => k === (phase === "plan" ? "interview" : phase)));
+  const stepOf = (phase) => Math.max(0, STEPS.findIndex(([k]) => k === phase));
+  const hasSkeleton = () => (sess().skeleton?.sections?.length ?? 0) > 0;
+  const written = () => (sess().skeleton?.sections ?? []).some((s) => s.blocks.some((b) => b.paras.some((p) => (p.text ?? "").trim())));
+  const recordRead = () => sess().experiments.length > 0 || !!sess().record_summary;
+  /** Where a session opens: audit and revision where they were, everything between at the skeleton
+   *  once the record is read (a session from the replaced flow lands there too). */
+  function landing() {
+    const ph = sess().phase;
+    if (ph === "audit" || ph === "revise") return stepIdx(ph);
+    if (hasSkeleton() || recordRead()) return stepIdx("skeleton");
+    return ph === "topic" && !sess().records.length ? 0 : stepIdx("record");
+  }
+  const doneStep = (k) => ({ topic: !!(D.data.key_value ?? "").trim(), record: recordRead(), skeleton: written(), abstract: sess().drafts.some((d) => d.section === "Abstract"), audit: sess().audit.length > 0 })[k] ?? false;
   const stepIdx = (k) => STEPS.findIndex(([x]) => x === k);
 
   const base = () => `/api/papers/${encodeURIComponent(D.name)}/draft`;
@@ -53,7 +64,7 @@ const PCDraft = (() => {
     if (!D.tableStyles) { try { D.tableStyles = await api("/api/textable/styles"); } catch { D.tableStyles = []; } }
     $("#dfModel").value = store.get("pc.draftModel", "auto");
     $("#dfModel").onchange = (e) => store.set("pc.draftModel", e.target.value);
-    $("#dfSkeleton").onclick = () => PCSkeleton.open(D.name);
+    d.onclose = () => { PCSkeleton.stop(); if (D) D.skShown = false; };
     $("#dfRestart").onclick = async (e) => {
       if (!D?.data || D.busy) return;
       if (!(await LoreShell.ask(e.currentTarget, ["重新開始？", "目前的討論會移到 draft/archive/。"], [{ label: "取消", value: null }, { label: "重新開始", value: true, danger: true, primary: true }]))) return;
@@ -66,7 +77,7 @@ const PCDraft = (() => {
     try {
       D.data = await api(base());
       schedulePrep();
-      if (D.step == null) { D.step = stepOf(sess().phase); D.wantOpen = true; }
+      if (D.step == null) D.step = landing();
       D.err = null;
     } catch (e) { D.err = e.message; }
     draw();
@@ -125,7 +136,8 @@ const PCDraft = (() => {
     }, D.data.planning ? 1500 : 3000);
   }
   const call = (path, body, method) => api(base() + path, body ?? {}, method);
-  const go = (i) => { D.step = i; if (STEPS[i]?.[0] === "interview") D.wantOpen = true; draw(); nudge(); };
+  // what was done in the skeleton (text written, placed) is read again when its page is left
+  const go = (i) => { const left = STEPS[D.step]?.[0] === "skeleton" && i !== D.step; D.step = i; if (left) reload(); else draw(); };
 
   // ── names from the lens ──────────────────────────────
   const levelName = (d) => { const l = lens().scale.levels[d]; return l ? `${l.id} ${l.label}` : `${d}`; };
@@ -164,7 +176,7 @@ const PCDraft = (() => {
     }));
   }
   const refsLeft = () => D?.refImporter?.progress() ?? null;
-  const CITING = ["outline", "draft", "audit", "revise"];
+  const CITING = ["skeleton", "abstract", "audit", "revise"];
   function progressBar(p) {
     const bar = el("div", "progress");
     const fill = el("i");
@@ -267,45 +279,48 @@ const PCDraft = (() => {
   function drawInner(main, side, steps) {
     main.innerHTML = ""; side.innerHTML = ""; steps.innerHTML = "";
     if (!D.data) { main.append(el("p", "df-note bad", D.err ?? "載入中…")); return; }
-    $("#dfLens").textContent = `視角：${lens().name}`;
-    const phaseAt = stepOf(sess().phase);
     STEPS.forEach(([k, n, label], i) => {
-      // the journal is chosen in step 1: ★ 版型 only shows for a session that has none yet
-      if (k === "template" && D.data.journal && D.step !== i) return;
       const li = el("li");
       const b = el("button");
       b.append(el("span", "c", n), el("span", "", label));
       b.setAttribute("aria-current", String(i === D.step));
-      if (i < phaseAt) b.classList.add("done");
+      if (doneStep(k)) b.classList.add("done");
       b.onclick = () => go(i);
       li.append(b);
-      if (i < phaseAt) {
-        const r = el("button", "df-rewind", "從這步重來");
-        r.disabled = !!D.busy;
-        r.onclick = async () => {
-          if (!(await LoreShell.ask(r, [`回到「${label}」？`, "之後步驟的結果會清掉（先存一份在 draft/archive/）。"], [{ label: "取消", value: null }, { label: "從這步重來", value: true, danger: true, primary: true }]))) return;
-          run("重來", async () => { const v = await call("/rewind", { phase: k }); D.step = i; return v; });
-        };
-        li.append(r);
-      }
       steps.append(li);
     });
-    const key0 = STEPS[D.step][0];
-    // 對話 shows its wait where the answer goes
-    if (D.busy && key0 !== "interview") main.append(el("div", "df-busy", `${D.busy}…`));
-    if (D.err) main.append(el("div", "df-note bad", D.err));
     const key = STEPS[D.step][0];
+    // the skeleton is the step's page itself: it lives beside #dfMain (which every draw empties) and is
+    // shown in its place, unless something has to happen first (the notice then takes the page)
+    const sk = $("#dfSk");
+    const showSk = (on) => {
+      sk.hidden = !on; main.hidden = on;
+      if (on && !D.skShown) PCSkeleton.mount(sk, { call: (path, body) => api(`${base()}/skeleton${path}`, body) });
+      if (!on && D.skShown) PCSkeleton.stop();
+      D.skShown = on;
+    };
+    const gated = !!refsLeft() && CITING.includes(key);
+    // the skeleton needs the record read (or to exist already); until then its page says what to do
+    const skReady = key === "skeleton" && !gated && !D.busy && !D.err && (hasSkeleton() || recordRead());
     refsChip();
-    if (refsLeft() && CITING.includes(key)) {
+    showSk(skReady);
+    if (skReady) { $("#dlgDraft").classList.remove("with-side"); return; }
+    if (D.busy) main.append(el("div", "df-busy", `${D.busy}…`));
+    if (D.err) main.append(el("div", "df-note bad", D.err));
+    if (gated) {
       const p = refsLeft(), gate = el("div", "df-gate");
       gate.append(el("b", "", refsCount(p)), progressBar(p));
       main.append(gate);
       return;
     }
     // records that were added but never read: every later step would work from nothing, so it says so
-    if (D.step > stepIdx("record") && sess().records.length && !sess().experiments.length && !sess().record_summary && !D.busy)
+    if (D.step > stepIdx("record") && sess().records.length && !recordRead() && !D.busy)
       main.append(row(note(`${sess().records.length} 份實驗記錄還沒整理`, "warn"), btn("整理實驗記錄", () => run("整理實驗記錄", () => call("/record")))));
-    ({ topic, record, interview, claims, review, template, outline, draft: drafting, audit, revise })[key](main, side);
+    if (key === "skeleton") {
+      if (!sess().records.length && !D.busy) main.append(row(note("骨架從實驗記錄排出來"), btn("上傳實驗記錄", () => go(stepIdx("record")))));
+      return;
+    }
+    ({ topic, record, abstract: abstractStep, audit, revise })[key](main, side);
     $("#dlgDraft").classList.toggle("with-side", side.childElementCount > 0);
   }
 
@@ -359,7 +374,7 @@ const PCDraft = (() => {
     main.append(kvHead, kv);
     PCNew.kvCheck(kv);
     // the journal first: plan, 預想選項, outline and 審稿 follow its habits (期刊寫法)
-    const jHead = hq("投稿期刊", "規劃、預想選項、大綱、草稿與審稿都照這本期刊的寫法與投稿要求。按「儲存，下一步」才套用；之後也能換，大綱會照新期刊重新產生。");
+    const jHead = hq("投稿期刊", "骨架、文字與審稿都照這本期刊的寫法與投稿要求。按「儲存，下一步」才套用。");
     main.append(jHead);
     const current = D.data.journal ?? "";
     D.pickJournal ??= current;
@@ -383,15 +398,8 @@ const PCDraft = (() => {
     const acc = input(sess().hook.reader_accepts, "同行已經承認的事實是什麼？例如：標註不確定的影像通常直接排除", "textarea");
     const tw = input(sess().hook.twist, "你加了什麼讓人意外的東西？例如：不排除，而是依品質與面積降權", "textarea");
     main.append(el("label", "np-label", "讀者已經承認"), acc, el("label", "np-label", "你的轉折"), tw);
-    main.append(hq("視角", avail0() ? "視角檔在工作區的 lens/ 資料夾：決定要追問什麼、怎麼判讀回答。" : "工作區沒有 lens/ 資料夾，使用內建的中性視角。可以從 private-example 複製 lens/default.toml 改成你自己的。"));
-    const avail = lens().available;
-    const sel = el("select", "np-input");
-    (avail.length ? avail : ["default"]).forEach((n) => { const o = el("option", "", n === "default" && !avail.length ? "default（內建）" : n); o.value = n; sel.append(o); });
-    sel.value = sess().lens || lens().name;
-    main.append(sel);
-    const levels = el("ul", "df-levels");
-    lens().scale.levels.forEach((l) => levels.append(el("li", "", `${l.id} ${l.label}${l.means ? `：${l.means}` : ""}`)));
-    main.append(levels);
+    // the lens is still what the audit reads; choosing one belonged to the interview this flow replaced
+    const sel = { value: sess().lens || lens().name };
     refsPanel(main);
     // the button is at the foot of the page: what stops the save is shown where it is
     const kvFits = () => {
@@ -547,7 +555,7 @@ const PCDraft = (() => {
     // the step's one main action, at the end: 整理 until it has run, then 下一步
     const done = sess().experiments.length > 0;
     const tidy = btn(done ? "重新整理" : "整理實驗記錄", () => run("整理實驗記錄", () => call("/record")), done ? "ghost small" : "primary small");
-    main.append(row(tidy, stepTag("record"), el("span", "df-grow"), ...(done ? [btn("下一步", () => goInterview(), "primary small")] : [])));
+    main.append(row(tidy, stepTag("record"), el("span", "df-grow"), ...(done ? [btn("下一步", () => go(stepIdx("skeleton")), "primary small")] : [])));
   }
 
   // ── 3 對話 ───────────────────────────────────────────
@@ -1383,6 +1391,25 @@ const PCDraft = (() => {
     main.append(row(nextBtn("下一步：審稿")));
   }
 
+  // ── 4 摘要 ───────────────────────────────────────────
+  /** Written last, from what the skeleton's paragraphs say: one action, the text, into the paper. */
+  function abstractStep(main) {
+    main.append(hq("摘要", "從骨架已寫出的文字整理，字數照投稿期刊。放進論文：寫進標題區，原來的先存在 draft/archive/。"));
+    if (!written()) { main.append(row(note("先在骨架寫出文字"), btn("回到骨架", () => go(stepIdx("skeleton")), "ghost"))); return; }
+    const d = sess().drafts.find((x) => x.section === "Abstract");
+    const r = row(btn(d ? "重新生成" : "生成摘要", () => run("生成摘要", () => call("/compose", { section: "Abstract", engine: chosenEngine() })), d ? "ghost" : "primary small"));
+    if (d?.engine) r.append(engineTag(d.engine));
+    if (d) r.append(el("span", "df-note", `${d.paras.map((p) => p.text).join(" ").split(/\s+/).filter(Boolean).length} 字`), el("span", "df-grow"), d.placed ? el("span", "df-badge flag", "已放進論文") : btn("放進論文", () => putIn("Abstract")));
+    main.append(r);
+    (d?.paras ?? []).forEach((p) => {
+      const card = el("div", "df-card");
+      card.append(el("p", "df-draft", p.text));
+      if (p.problems.length) card.append(note(p.problems.join("；"), "warn"));
+      main.append(card);
+    });
+    if (d) main.append(row(nextBtn("下一步：審稿")));
+  }
+
   /** 放進論文: one drafted section (or all) into the paper; the editor reloads. */
   function putIn(sec) {
     run("放進論文", async () => {
@@ -1397,7 +1424,7 @@ const PCDraft = (() => {
   const KIND_ZH = { venue: "期刊要求", citation: "引用", contradiction: "矛盾", overclaim: "宣稱過度", "missing-number": "缺數字", impossible: "數字不可能", generic: "空泛", repeat: "重複", "buried-origin": "發想埋太晚", "missing-why": "缺理由", punctuation: "標點句長" };
   function audit(main, side) {
     writingNotes(side, true);
-    main.append(hq("審稿檢查", "檢查矛盾、宣稱強度、缺數字、空泛句、重複與埋掉的發想。需要你補充的，可以回到對話追問。沒有 Claude 時由本機模型逐章審。"));
+    main.append(hq("審稿檢查", "檢查矛盾、宣稱強度、缺數字、空泛句、重複與埋掉的發想。要補的在骨架那一段的邊欄補。沒有 Claude 時由本機模型逐章審。"));
     main.append(row(btn(sess().audit.length ? "重新審稿" : "審稿", () => run("審稿中", () => call("/audit"))), stepTag("audit")));
     pendingList(main);
     sess().audit.forEach((f) => {
@@ -1407,7 +1434,7 @@ const PCDraft = (() => {
       card.append(el("p", "df-text", f.why));
       if (f.ask) card.append(note(`要問你：${f.ask}`));
       const r = row(btn(f.resolved ? "標為未處理" : "已處理", () => run("儲存", () => call("/audit", { resolved: { [f.id]: !f.resolved } }, "PUT")), "ghost"));
-      if (!f.resolved) r.append(btn("回到對話追問", () => run("建立追問", async () => { const v = await call(`/audit/${f.id}/ask`); D.group = `a${f.id}`; D.step = stepIdx("interview"); return v; }), "ghost"));
+      if (!f.resolved && f.para) r.append(btn("到骨架補", () => go(stepIdx("skeleton")), "ghost"));
       card.append(r);
       main.append(card);
     });

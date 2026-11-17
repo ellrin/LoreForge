@@ -1085,5 +1085,8 @@ const PCSkeleton = (() => {
     return mount(dlg.querySelector("#skRoot"), { call: (path, body) => api(base + path, body) });
   }
 
-  return { open, mount, state: () => S, redraw: draw };
+  /** Stop looking for changes (the page is put away; mount starts again). */
+  const stop = () => { clearTimeout(S.poll); clearInterval(S.clock); S.ro?.disconnect(); };
+
+  return { open, mount, stop, state: () => S, redraw: draw };
 })();
