@@ -65,6 +65,7 @@ impl std::fmt::Display for LlmFail {
 }
 
 /// What a model answered, and with which engine.
+#[derive(Debug)]
 pub struct Answer {
     pub text: String,
     pub engine: String,
@@ -132,7 +133,8 @@ impl Llm {
         f.prefer_subscription = true;
         f.selected_claude = Some(self.model.clone());
         f.api = self.keys.get(None, &Account::Single).map(|(k, _)| ApiAccess { base_url: self.base_url.clone(), api_key: k, fallbacks: true });
-        f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: false, temp_prefix: "lorereader-claude".into() });
+        // web search only for requests that ask for it (the card draft, `lr-card`)
+        f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: true, temp_prefix: "lorereader-claude".into() });
         let e = self.shared_engine();
         f.local = Some(LocalAccess {
             external: self.external(),
@@ -157,22 +159,61 @@ impl Llm {
     pub async fn complete_on(&self, task: &str, choice: Option<&str>, req: LlmRequest) -> Result<Answer, LlmFail> {
         let router = Router::new(self.tasks.clone(), self.factory());
         let pick = model_ref(choice).map_err(LlmFail::message)?;
-        let strict = pick.is_some();
         // translation and the chat are read on screen as they come: interactive for a local
         // model; term classification and paragraph runs keep their class default (background)
         let prio = |o: RouteOptions| match task {
             "lr-translate" | "lr-chat" => o.with_priority(lore_llm::shared_runtime::Priority::Interactive),
             _ => o,
         };
-        let route = match pick {
-            Some(r) => router.provider_for_with(task, &prio(RouteOptions::only(r))).await,
-            None => router.provider_for_with(task, &prio(RouteOptions::default())).await,
-        }
-        .map_err(|e| LlmFail(e.payload(strict)))?;
-        let req = route.apply(req.temperature(LOCAL_TEMPERATURE));
-        let text = route.provider.complete(&req).await.map_err(|e| LlmFail::message(e.to_string()))?;
-        Ok(Answer { text: text.trim().to_string(), engine: route.provider.id().to_string(), fallback_used: route.fallback_used })
+        // the reading aids run on Claude first (opening or reading a paper never loads the
+        // local model by itself); the engine chip's 地 / 雲 still decides when set
+        let opts = match pick {
+            Some(r) => prio(RouteOptions::only(r)),
+            None => prio(if CLOUD_FIRST.contains(&task) { RouteOptions::prefer(CLOUD_FIRST_REF) } else { RouteOptions::default() }),
+        };
+        let claude = if CLOUD_FIRST.contains(&task) { CLOUD_FIRST_REF } else { "claude:selected" };
+        complete_routed(&router, task, &opts, claude, req.temperature(LOCAL_TEMPERATURE)).await
     }
+
+    /// Run `req` with web search on (`task` needs `web`, so no local model) and keep only an
+    /// answer from a search that really ran: the pages it read come back as `sources`; an
+    /// answer without any is refused (a term explained from memory is not a card).
+    pub async fn complete_web(&self, task: &str, req: LlmRequest) -> Result<(Answer, Vec<lore_llm::WebSource>), LlmFail> {
+        let router = Router::new(self.tasks.clone(), self.factory());
+        let route = router.provider_for_with(task, &RouteOptions::default()).await.map_err(|e| LlmFail(e.payload(false)))?;
+        let r = route.provider.send(&route.apply(req.web(true))).await.map_err(|e| LlmFail::message(e.to_string()))?;
+        if r.sources.is_empty() {
+            return Err(LlmFail::message(format!("{} 沒有上網查資料，沒有建立卡片", route.provider.id())));
+        }
+        Ok((Answer { text: r.text.trim().to_string(), engine: route.provider.id().to_string(), fallback_used: route.fallback_used }, r.sources))
+    }
+}
+
+/// One routed call. When the engine was picked but the call itself fails (the local model
+/// would not load, Claude timed out) and nothing restricts the task to one kind (no strict
+/// per-call choice, no 地 / 雲 route), the other kind is tried once: `claude` for Claude
+/// (the task's own Claude model), `local:current` for the local model.
+pub async fn complete_routed<F: lore_llm::ProviderFactory>(router: &Router<F>, task: &str, opts: &RouteOptions, claude: &str, req: LlmRequest) -> Result<Answer, LlmFail> {
+    let route = router.provider_for_with(task, opts).await.map_err(|e| LlmFail(e.payload(opts.strict)))?;
+    let failed = match route.provider.complete(&route.apply(req.clone())).await {
+        Ok(text) => return Ok(Answer { text: text.trim().to_string(), engine: route.provider.id().to_string(), fallback_used: route.fallback_used }),
+        Err(e) => e,
+    };
+    let one_kind = opts.strict || router.plan(task, opts).is_none_or(|p| p.only.is_some());
+    if one_kind {
+        return Err(LlmFail::message(failed.to_string()));
+    }
+    let other = if route.model.needs_network() { "local:current" } else { claude };
+    let mut again = RouteOptions::prefer(other);
+    again.priority = opts.priority;
+    let Ok(second) = router.provider_for_with(task, &again).await else {
+        return Err(LlmFail::message(failed.to_string()));
+    };
+    if second.provider.id() == route.provider.id() {
+        return Err(LlmFail::message(failed.to_string()));
+    }
+    let text = second.provider.complete(&second.apply(req)).await.map_err(|e| LlmFail::message(format!("{failed}；改用 {} 也失敗：{e}", second.provider.id())))?;
+    Ok(Answer { text: text.trim().to_string(), engine: second.provider.id().to_string(), fallback_used: true })
 }
 
 impl Llm {
@@ -190,6 +231,12 @@ impl Llm {
 pub fn engine_tasks() -> String {
     format!("{TASKS}\n{}", lore_plot::propose::TASKS)
 }
+
+/// Reading aids that ask Claude first in `auto` (the local model only when Claude cannot run,
+/// or when the engine chip says 地).
+pub const CLOUD_FIRST: [&str; 2] = ["lr-classify-terms", "lr-paragraph"];
+/// Their Claude model in `auto`.
+pub const CLOUD_FIRST_REF: &str = "claude:haiku";
 
 /// The tasks the model menu offers, in menu order.
 pub const MENU_TASKS: [&str; 4] = ["lr-classify-terms", "lr-paragraph", "lr-chat", "lr-translate"];
@@ -243,14 +290,75 @@ mod tests {
         assert_eq!(t.task["lr-translate"].fallback.as_deref(), Some("claude:selected"));
         assert_eq!(t.task["lr-chat"].default, "claude:selected");
         assert!(t.task["lr-chat"].fallback.is_none());
-        assert_eq!(t.task["lr-classify-terms"].default, "local:current");
-        assert_eq!(t.task["lr-classify-terms"].fallback.as_deref(), Some("claude:haiku"));
-        assert_eq!(t.task["lr-paragraph"].default, "local:current");
-        assert_eq!(t.task["lr-paragraph"].fallback.as_deref(), Some("claude:haiku"));
+        assert_eq!(t.task["lr-classify-terms"].default, "claude:haiku");
+        assert_eq!(t.task["lr-classify-terms"].fallback.as_deref(), Some("local:current"));
+        assert_eq!(t.task["lr-paragraph"].default, "claude:haiku");
+        assert_eq!(t.task["lr-paragraph"].fallback.as_deref(), Some("local:current"));
+        assert!(t.task["lr-card"].needs.web, "a card is drafted from a web search");
         assert_eq!(model_ref(Some("haiku")).unwrap().as_deref(), Some("claude:haiku"));
         assert_eq!(model_ref(Some("auto")).unwrap(), None);
         assert_eq!(model_ref(Some("cloud")).unwrap().as_deref(), Some("claude:selected"));
         assert!(model_ref(Some("gpt")).is_err());
+    }
+
+    /// With the shared 模型 settings in place (整理 = local first in auto), the reading aids
+    /// still ask Claude first; the engine chip's 地 keeps them local.
+    #[test]
+    fn reading_aids_ask_claude_first_under_the_shared_routes() {
+        use lore_llm::shared::{EngineSettings, RouteMode};
+        let t = Llm::task_table(None).unwrap();
+        for task in CLOUD_FIRST {
+            let spec = &t.task[task];
+            let p = lore_llm::router::plan(task, spec, None, &RouteOptions::prefer(CLOUD_FIRST_REF), Some(&EngineSettings::default()));
+            assert_eq!(p.candidates.first().map(String::as_str), Some(CLOUD_FIRST_REF), "{task}: {:?}", p.candidates);
+            assert!(p.candidates.iter().any(|c| c.starts_with("local:")), "{task}: the local model stays the fallback");
+            let mut local = EngineSettings::default();
+            local.overrides.insert(task.to_string(), RouteMode::Local);
+            let p = lore_llm::router::plan(task, spec, None, &RouteOptions::prefer(CLOUD_FIRST_REF), Some(&local));
+            assert!(p.candidates.iter().all(|c| c.starts_with("local:")), "{task}: 地 means local only: {:?}", p.candidates);
+        }
+        // without the prefer, the 整理 class order would put the local model first
+        let p = lore_llm::router::plan("lr-paragraph", &t.task["lr-paragraph"], None, &RouteOptions::default(), Some(&EngineSettings::default()));
+        assert!(p.candidates[0].starts_with("local:"), "{:?}", p.candidates);
+    }
+
+    /// A factory over two mocks: `local:*` and `claude:*`, each failing (no replies) or answering.
+    struct Two {
+        local: Arc<lore_llm::MockProvider>,
+        claude: Arc<lore_llm::MockProvider>,
+    }
+    #[async_trait::async_trait]
+    impl lore_llm::ProviderFactory for Two {
+        async fn make(&self, m: &lore_llm::ModelRef, _t: &lore_llm::TaskSpec) -> Result<Arc<dyn lore_llm::LlmProvider>, String> {
+            Ok(if m.needs_network() { self.claude.clone() } else { self.local.clone() })
+        }
+    }
+    fn two(local: &[&str], claude: &[&str]) -> Two {
+        let caps = |net| lore_llm::Capabilities { json: true, vision: false, web: false, streaming: false, context: 200_000, needs_network: net };
+        let mk = |r: &[&str], name: &str, net| Arc::new(lore_llm::MockProvider::new(r.iter().map(|x| x.to_string()).collect()).named(name).with_capabilities(caps(net)));
+        Two { local: mk(local, "local-mock", false), claude: mk(claude, "claude-mock", true) }
+    }
+
+    #[tokio::test]
+    async fn a_failed_call_tries_the_other_kind_once_unless_one_was_chosen() {
+        let router = |f: Two| Router::new(Llm::task_table(None).unwrap(), f);
+        // auto, Claude first, Claude fails: the local model answers
+        let r = router(two(&["地端答"], &[]));
+        let a = complete_routed(&r, "lr-paragraph", &RouteOptions::prefer(CLOUD_FIRST_REF), CLOUD_FIRST_REF, LlmRequest::prompt("s", "u")).await.unwrap();
+        assert_eq!((a.text.as_str(), a.engine.as_str(), a.fallback_used), ("地端答", "local-mock", true));
+        // translation: local first, local fails: Claude answers
+        let r = router(two(&[], &["雲端答"]));
+        let a = complete_routed(&r, "lr-translate", &RouteOptions::default(), "claude:selected", LlmRequest::prompt("s", "u")).await.unwrap();
+        assert_eq!(a.engine, "claude-mock");
+        assert_eq!(r.factory.claude.seen.lock().unwrap().len(), 1);
+        // a chosen engine stays that engine: no second call
+        let r = router(two(&["地端答"], &[]));
+        assert!(complete_routed(&r, "lr-paragraph", &RouteOptions::only("claude:haiku"), CLOUD_FIRST_REF, LlmRequest::prompt("s", "u")).await.is_err());
+        assert!(r.factory.local.seen.lock().unwrap().is_empty(), "雲 means Claude only");
+        // both fail: the reasons of both
+        let r = router(two(&[], &[]));
+        let e = complete_routed(&r, "lr-paragraph", &RouteOptions::prefer(CLOUD_FIRST_REF), CLOUD_FIRST_REF, LlmRequest::prompt("s", "u")).await.unwrap_err();
+        assert!(e.to_string().contains("也失敗"), "{e}");
     }
 
     #[tokio::test]

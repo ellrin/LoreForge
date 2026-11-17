@@ -19,7 +19,8 @@
 //! | POST | /api/translate | `{text, context?}` (task `lr-translate`) |
 //! | POST | /api/papers/{sha}/read | the page's pdf.js text (all pages, items with fonts and positions) → noun list |
 //! | GET | /api/papers/{sha}/nouns | the noun list (inventory × KB × ignore list × cached categories) |
-//! | POST | /api/papers/{sha}/nouns/classify | `{again?}` → one batched `lr-classify-terms` call |
+//! | POST | /api/papers/{sha}/nouns/classify | `{again?, limit?}` → one `lr-classify-terms` call (a batch of `limit` terms) |
+//! | POST | /api/papers/{sha}/nouns/card | `{term, page, context?, save?}` → web-searched summary (`lr-card`) → KB `POST /api/nodes`; no search, no card; `save: false` = the draft only (the dialog's 起草摘要) |
 //! | GET/POST | /api/papers/{sha}/symbols | the symbol table / the author adds `{latex, meaning?…}` |
 //! | PUT | /api/papers/{sha}/symbols/{id} | `{latex?, meaning?, meaning_en?, grade?, note?, by?, evidence?, page?}` (author edits win) |
 //! | POST | /api/papers/{sha}/symbols/rebuild | detect again (after a glyph-table change) |
@@ -36,7 +37,7 @@
 //! | GET | /icons.js, /base.css, /shell.js, /makedeck.js, /makebook.js, /polish.js | the shared shell (`lore_shell::FILES`); /notation-panel.js the shared 對照表 component |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
 //! | POST | /api/kb/open | start the L-Brain app (macOS, local KB only; never when isolated) |
-//! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?}` → KB `POST /api/nodes` |
+//! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?, web_sources?}` → KB `POST /api/nodes` |
 //! | POST | /api/kb/draft | `{term, context, sha?, page?}` → KB `POST /api/draft` (with `page` and the paper's title as `source`) |
 //! | GET | /api/kb/nodes/{id} | a card (summary for the term popover) |
 //! | GET | /api/papers/{sha}/export | notes export state: `dirty`, `last` {path, name, at, exists}, default folder/name |
@@ -235,6 +236,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{sha}/read", post(reading::read_paper).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
         .route("/api/papers/{sha}/nouns", get(reading::nouns_get))
         .route("/api/papers/{sha}/nouns/classify", post(reading::classify))
+        .route("/api/papers/{sha}/nouns/card", post(reading::noun_card))
         .route("/api/ignore", post(reading::ignore_add).delete(reading::ignore_remove))
         .route("/api/papers/{sha}/symbols", get(reading::symbols_get).post(reading::symbol_add))
         .route("/api/papers/{sha}/symbols/rebuild", post(reading::symbols_rebuild))
@@ -1033,6 +1035,9 @@ struct CardBody {
     initial_state: String,
     context: Option<String>,
     space: Option<String>,
+    /// Pages a web-searched draft read (`nouns/card` with `save: false`), kept as sources.
+    #[serde(default)]
+    web_sources: Vec<String>,
 }
 
 /// Create a KB card — only on the author's explicit action.
@@ -1060,6 +1065,10 @@ async fn kb_card(State(s): State<Shared>, Json(b): Json<CardBody>) -> Result<(St
         paper_title: &paper_title,
         context: b.context.as_deref(),
     });
+    let mut body = body;
+    if let Some(list) = body["sources"].as_array_mut() {
+        list.extend(b.web_sources.iter().filter(|u| u.starts_with("https://") || u.starts_with("http://")).take(5).map(|u| json!({ "type": "url", "ref": u })));
+    }
     let v = s.kb.post("/api/nodes", &body, Duration::from_secs(10)).await?;
     Ok((StatusCode::CREATED, Json(json!({ "node": v["node"], "summary": v["summary"], "space": space }))))
 }

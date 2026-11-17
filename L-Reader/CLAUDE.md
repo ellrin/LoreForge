@@ -57,13 +57,17 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   the author's action, `initial_state` learning|known; `lexicon()` = `GET /api/nodes` titles +
   aliases), `llm.rs` = lore-llm wired like L-Paper (`tasks.toml`: `lr-translate`
   local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` and `lr-paragraph`
-  local:current → claude:haiku; `complete_on` = a per-call choice or the old models.json one (`auto | local | cloud | haiku | sonnet | opus`), strict, else the shared routes / overrides; errors are `LlmFail` = lore-llm's `payload` (with `alternative`); keys `SharedKeys::for_app("LoreReader")`; the local
+  claude:haiku → local:current (`CLOUD_FIRST`: Haiku is put ahead of the shared 整理 route's local-first order; the chip's 地 still means local only),
+  `lr-card` = web-searched card summary (`needs.web`, Claude only, `complete_web` refuses an answer without search sources);
+  `complete_on` = a per-call choice or the old models.json one (`auto | local | cloud | haiku | sonnet | opus`), strict, else the shared routes / overrides;
+  in auto a call that fails after its engine was picked is tried once on the other kind; errors are `LlmFail` = lore-llm's `payload` (with `alternative`); keys `SharedKeys::for_app("LoreReader")`; the local
   engine is config `[engine]`, else the shared model id of `private/shared/engine.toml` (re-read per
   call) on the machine's one llama-server (lore-llm `shared_runtime`, `../docs/local-models.md`;
   `llm::quit()` on Quit / ⌘Q / Ctrl-C)),
   `reading.rs` = the reading aids over the text the page posts once per open (memory only):
-  nouns, symbols, paragraphs (background run per paper, newest run wins, cached per
-  paragraph id), 懂了 (`reading.json`), and `chat_context` (title, section, paragraph, chip
+  nouns, symbols, paragraphs (background run per paper started by 分析段落, newest run wins, cached per
+  paragraph id), 一鍵加卡 (`POST …/nouns/card`: `lr-card` summary from a web search + the search's pages as
+  sources, then `POST /api/nodes`; `save: false` = the add-card dialog's 起草摘要), 懂了 (`reading.json`), and `chat_context` (title, section, paragraph, chip
   + its definition here, the author's KB states) for Ask Claude.
   `Printer` / `Saver` traits = the desktop print / save-panel bridges.
 - `apps/desktop` (`lorereader`): Tauri shell on 7890 (KB links point there); reuses an
@@ -108,9 +112,11 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   once (`POST /api/papers/{sha}/read`); the server never stores the paper's text. KB names
   come from `GET /api/nodes` (read only; no `/api/scan`, no encounters).
   `ignore-words.txt` replaced `known-words.txt` (migrated once by `reading::ignore_file`).
-- Classification: one `lr-classify-terms` call per paper (local first, then Haiku), cached in
-  `nouns.json` under `key = v<CLASSIFY_VERSION>|<field>`; `asked` keys are never re-sent
-  automatically. Red = SPECIALIST categories only (not 基礎科學詞 / 一般學術詞 / 人名 /
+- Opening a paper calls no model: 分類名詞 and 分析段落 are buttons (the reader who only looks at the PDF
+  never loads the local model).
+- Classification: `lr-classify-terms` (Haiku first, then local) in batches of 15 (`{limit}`), each saved and
+  shown as it lands; cached in `nouns.json` under `key = v<CLASSIFY_VERSION>|<field>`; `asked` keys are never
+  re-sent automatically (再分類 = `again`, which forgets the unclassified ones' `asked` once). Red = SPECIALIST categories only (not 基礎科學詞 / 一般學術詞 / 人名 /
   unclassified), no card, not in my-vocab; while no field is set single words (`source: word`)
   stay quiet (`Noun.quiet`), only phrases / acronyms are red, and the nouns pane asks for the
   field once, inline. The reader's field: `private/shared/profile.toml`

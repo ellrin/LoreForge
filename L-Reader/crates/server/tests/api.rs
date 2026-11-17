@@ -479,6 +479,84 @@ async fn classification_is_one_cached_call_and_the_model_menu_picks_the_engine()
     assert_eq!((s, v["llm_unavailable"].as_bool()), (StatusCode::SERVICE_UNAVAILABLE, Some(true)));
 }
 
+/// Opening a paper (the page posts its text) asks no model: classification and paragraph
+/// analysis wait for their buttons, so a reader who only looks at the PDF never loads one.
+#[tokio::test]
+async fn reading_a_paper_calls_no_model() {
+    let (kb, _) = fake_kb().await;
+    let (engine, got) = task_engine().await;
+    let e = setup(&kb, Some(engine));
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["nouns"]["classification"]["pending"].as_u64().unwrap() > 0, "terms wait for the button");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(got.lock().unwrap().is_empty(), "no model request on opening");
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}/paragraphs"), None, None).await;
+    assert_ne!(v["status"]["running"], true, "{}", v["status"]);
+}
+
+/// Classification in batches: each call classifies at most `limit` terms and saves them,
+/// so the list fills in batch by batch; `again` asks each unclassified term once more and
+/// a run of batches still ends.
+#[tokio::test]
+async fn classification_runs_in_batches_that_land_one_by_one() {
+    let reply = r#"{"方法": ["anisotropic", "diffusion", "Spectral Boundary Loss"], "指標": [], "資料集": [], "統計": [], "臨床／解剖": [], "一般學術詞": ["codebook"], "人名": ["Hausdorff", "Sobel"], "其他術語": []}"#;
+    let (url, hits) = counting_engine(reply).await;
+    let e = setup(&dead_url(), Some(url));
+    call(&e.app, "PUT", "/api/reader", Some(json!({ "field": "retinal imaging researcher" })), None).await;
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
+    let total = v["nouns"]["classification"]["pending"].as_u64().unwrap();
+    assert!(total > 3, "{total}");
+    let mut pending = total;
+    let mut calls: usize = 0;
+    while pending > 0 {
+        let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), Some(json!({ "limit": 3 })), None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert!(v["asked"].as_u64().unwrap() <= 3);
+        let now = v["nouns"]["classification"]["pending"].as_u64().unwrap();
+        assert!(now < pending, "every batch moves on: {now} after {pending}");
+        pending = now;
+        calls += 1;
+        assert!(calls as u64 <= total, "the batches end");
+    }
+    assert_eq!(*hits.lock().unwrap(), calls);
+    assert_eq!(calls as u64, total.div_ceil(3));
+    // 再分類: the unclassified terms once more, in batches, and then it stops
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/papers/{sha}/nouns"), None, None).await;
+    let unclassified = v["classification"]["unclassified"].as_u64().unwrap();
+    assert!(unclassified > 0);
+    let before = *hits.lock().unwrap();
+    let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), Some(json!({ "again": true, "limit": 3 })), None).await;
+    let mut pending = v["nouns"]["classification"]["pending"].as_u64().unwrap();
+    while pending > 0 {
+        let (_, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/classify"), Some(json!({ "limit": 3 })), None).await;
+        pending = v["nouns"]["classification"]["pending"].as_u64().unwrap();
+    }
+    assert_eq!(*hits.lock().unwrap() - before, unclassified.div_ceil(3) as usize);
+}
+
+/// 一鍵加卡 needs a web search: with no engine that can search (here: no Claude at all,
+/// only a local model) it writes no card and says why.
+#[tokio::test]
+async fn a_card_is_never_written_without_a_web_search() {
+    let (kb, created) = fake_kb().await;
+    let e = setup(&kb, Some(fake_engine(r#"{"found": true, "summary": "記憶裡的說明", "sources": ["https://example.com/x"]}"#).await));
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    let (s, v, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/card"), Some(json!({ "term": "anisotropic diffusion", "page": 2, "context": "We use anisotropic diffusion." })), None).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert!(v["error"].as_str().is_some_and(|m| !m.is_empty()), "{v}");
+    assert!(created.lock().unwrap().is_empty(), "no card");
+    let (s, _, _) = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/card"), Some(json!({ "term": "  " })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    // the cited pages: the ones named that the search read, else the first three read
+    let read: Vec<lore_llm::WebSource> = ["https://a.org/1", "https://b.org/2", "https://c.org/3", "https://d.org/4"].iter().map(|u| lore_llm::WebSource { url: u.to_string(), title: String::new() }).collect();
+    let urls = |v: Vec<lore_llm::WebSource>| v.into_iter().map(|w| w.url).collect::<Vec<_>>();
+    assert_eq!(urls(lr_server::reading::card_sources(&json!({ "sources": ["https://c.org/3/", "https://made.up/x"] }), &read)), ["https://c.org/3"]);
+    assert_eq!(urls(lr_server::reading::card_sources(&json!({ "sources": ["https://made.up/x"] }), &read)).len(), 3);
+}
+
 /// A fake OpenAI-compatible engine that counts the classification requests.
 async fn counting_engine(reply: &'static str) -> (String, Arc<Mutex<usize>>) {
     let hits: Arc<Mutex<usize>> = Arc::default();
@@ -595,7 +673,8 @@ async fn paragraphs_run_in_the_background_and_ask_claude_gets_the_context() {
     assert_eq!(s, StatusCode::OK, "{v}");
     let pixel = v["nouns"]["entries"].as_array().unwrap().iter().find(|n| n["key"] == "pixel").cloned().unwrap();
     assert_eq!((pixel["category"].as_str(), pixel["red"].as_bool()), (Some("基礎科學詞"), Some(false)));
-    // the run streams in; wait until it is done
+    // the run starts from its button (never on opening), then streams in; wait until it is done
+    call(&e.app, "POST", &format!("/api/papers/{sha}/paragraphs/run"), None, None).await;
     let mut v = Value::Null;
     for _ in 0..100 {
         v = call(&e.app, "GET", &format!("/api/papers/{sha}/paragraphs"), None, None).await.1;
@@ -655,6 +734,7 @@ async fn paragraphs_run_in_the_background_and_ask_claude_gets_the_context() {
     let e = setup(&dead_url(), None);
     let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
     call(&e.app, "POST", &format!("/api/papers/{sha}/read"), Some(demo_text()), None).await;
+    call(&e.app, "POST", &format!("/api/papers/{sha}/paragraphs/run"), None, None).await;
     let mut v = Value::Null;
     for _ in 0..100 {
         v = call(&e.app, "GET", &format!("/api/papers/{sha}/paragraphs"), None, None).await.1;

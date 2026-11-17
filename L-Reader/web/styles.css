@@ -322,6 +322,14 @@ select { height: 30px; }
 .progress i { display: block; height: 100%; background: var(--ok); }
 .para-count { font: 600 12px var(--mono); white-space: nowrap; }
 .para-status { font-size: 11.5px; line-height: 1.5; }
+.para-run { display: flex; }
+/* a term whose card is being looked up on the web (一鍵加卡) */
+.nn-cat.nn-busy { color: var(--accent-text); animation: lore-pulse 1s ease-in-out infinite alternate; }
+.nn-add.ico.small { flex: none; width: 20px; height: 20px; margin-left: auto; color: var(--accent-text); }
+.nn-add.ico.small:disabled { opacity: .35; }
+.nn-run { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; font-size: 12.5px; }
+.nn-prog { font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .nn-cat.nn-busy { animation: none; } }
 .para-sec { margin: 8px 0 0; font: 600 12px var(--mono); color: var(--muted); }
 .para { background: var(--surface); border: 1px solid transparent; border-radius: var(--r); padding: 7px 8px; display: flex; flex-direction: column; gap: 6px; }
 .para.cur { border-color: var(--accent-text); }
@@ -445,7 +453,7 @@ html, body, .app { overflow: clip; }
 .lr-notation notation-panel .np-btn.primary { width: auto; display: inline-block; padding: 3px 9px; font-weight: 400; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: 6px; }
 .lr-notation notation-panel .np-seg button[aria-pressed=true] { background: var(--accent-soft); color: var(--text); }
 /* the engine chip next to a feature's own button */
-.nn-stats .engine-chip { margin-left: auto; }
+.nn-run .engine-chip { margin-left: auto; }
 .para-top .engine-chip { flex: none; }
 
 /* ── 首頁: one centred panel on the dotted stage (as L-Slide's) ── */

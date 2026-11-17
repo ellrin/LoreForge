@@ -7,9 +7,11 @@
 #                     default); the subscription (Claude Code) first, then the API key
 #
 # Same order as L-Paper's writing tasks: translation runs locally first and falls
-# back to Claude; the chat panel is Claude only. Term classification runs locally first
-# and falls back to Haiku (so it runs on a machine without a local model); so does
-# paragraph analysis.
+# back to Claude; the chat panel is Claude only. Term classification and paragraph
+# analysis ask Haiku first (llm.rs `CLOUD_FIRST`, also ahead of the shared 整理 route's
+# local-first order) and use the local model when Claude cannot run; both run only when
+# the author presses their button, never on opening a paper. A card draft (`lr-card`)
+# needs web search, so it is Claude only and is refused without a search.
 # The model menu (工具列「模型」) picks local / Haiku / Sonnet / Opus per task; that choice is
 # stored in private/LoreReader/models.json and is that engine or an error, never a fallback.
 
@@ -35,14 +37,22 @@ offline = true
 label = "名詞分類"
 class = "tidy"
 needs = { context = 16000 }
-default = "local:current"
-fallback = "claude:haiku"
+default = "claude:haiku"
+fallback = "local:current"
 max_tokens = 8000
 
 [task.lr-paragraph]
 label = "段落分析"
 class = "tidy"
 needs = { context = 8000 }
-default = "local:current"
-fallback = "claude:haiku"
+default = "claude:haiku"
+fallback = "local:current"
 max_tokens = 1500
+
+[task.lr-card]
+label = "知識卡摘要（上網查）"
+needs = { web = true }
+default = "claude:sonnet"
+fallback = "claude:haiku"
+offline = false
+max_tokens = 2000

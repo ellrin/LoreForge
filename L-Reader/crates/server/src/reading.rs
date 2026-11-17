@@ -270,8 +270,8 @@ pub async fn read_paper(State(s): State<Shared>, Path(sha): Path<String>, Json(t
     auto_title(&s, &sha, &t);
     let symbols = rebuild_symbols(&s, &sha, &t)?;
     let nouns = nouns_view(&s, &sha).await?;
+    // no model call here: classification and paragraph analysis wait for their buttons
     build_paragraphs(&s, &sha).await?;
-    spawn_run(s.clone(), sha.clone(), false);
     Ok(Json(json!({ "words": t.words(), "pages": t.pages.len(), "nouns": nouns, "symbols": symbols, "line_numbers": line_numbers })))
 }
 
@@ -338,16 +338,30 @@ pub struct ClassifyBody {
     /// Also ask for terms that were asked before and came back without a category.
     #[serde(default)]
     pub again: bool,
+    /// At most this many terms in this call (the page asks batch after batch and shows
+    /// each one as it lands); `None` = all of them in one call.
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
-/// One batched `lr-classify-terms` call for every no-card term without a category.
+/// One batched `lr-classify-terms` call for the no-card terms without a category (all of
+/// them, or the first `limit`). `again` first forgets which unclassified terms were asked,
+/// once, so a run of batches asks each of them one more time and then stops.
 pub async fn classify(State(s): State<Shared>, Path(sha): Path<String>, body: Option<Json<ClassifyBody>>) -> R {
     sha_ok(&sha)?;
-    let again = body.map(|b| b.again).unwrap_or(false);
-    let text = text_of(&s, &sha)?;
-    let _ = &text;
+    let (again, limit) = body.map(|b| (b.again, b.limit.filter(|n| *n > 0))).unwrap_or((false, None));
+    text_of(&s, &sha)?;
     let (inv, _, mut cache) = inventory_of(&s, &sha).await?;
-    let todo: Vec<&nouns::Noun> = inv.unclassified().into_iter().filter(|n| again || !cache.asked.contains(&n.key)).collect();
+    if again {
+        let _g = s.write.lock().unwrap();
+        let mut fresh = load_cache(&s, &sha)?;
+        for n in inv.unclassified() {
+            fresh.asked.remove(&n.key);
+        }
+        s.papers.save(&sha, "nouns.json", &fresh)?;
+        cache = fresh;
+    }
+    let todo: Vec<&nouns::Noun> = inv.unclassified().into_iter().filter(|n| !cache.asked.contains(&n.key)).take(limit.unwrap_or(usize::MAX)).collect();
     if todo.is_empty() {
         return Ok(Json(json!({ "asked": 0, "nouns": nouns_view(&s, &sha).await? })));
     }
@@ -391,6 +405,74 @@ pub async fn classify(State(s): State<Shared>, Path(sha): Path<String>, body: Op
 #[derive(Deserialize)]
 pub struct TermBody {
     pub term: String,
+}
+
+#[derive(Deserialize)]
+pub struct WebCardBody {
+    pub term: String,
+    #[serde(default)]
+    pub page: u32,
+    #[serde(default)]
+    pub context: Option<String>,
+    /// `false`: return the draft (summary + sources) without writing a card.
+    #[serde(default = "yes")]
+    pub save: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+pub const CARD_SYSTEM: &str = "你替作者把論文裡的術語做成知識卡。一定要先用網路搜尋查這個術語（教科書、論文、官方文件、可靠的百科），\
+只根據查到的內容寫，不要憑記憶補。查不到可靠的說明就回 found 為 false。\
+只輸出一個 JSON 物件：{\"found\": true 或 false, \"summary\": \"台灣繁體中文一到兩句：這個詞是什麼、在這個領域拿來做什麼，術語保留英文\", \"sources\": [\"你實際讀過、支持這段摘要的網址，最多三個\"]}。";
+
+/// 一鍵加卡: a web-searched summary (`lr-card`), then the card in the KB with the paper,
+/// the page, the sentence and the pages the search read as its sources. No search, no card.
+pub async fn noun_card(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Json<WebCardBody>) -> Result<(StatusCode, Json<Value>), ApiError> {
+    sha_ok(&sha)?;
+    let term = b.term.split_whitespace().collect::<Vec<_>>().join(" ");
+    if term.is_empty() || term.chars().count() > 120 {
+        return Err(bad("詞不對"));
+    }
+    // the KB first: a search is not spent on a card that cannot be saved
+    let space = if b.save { s.kb.default_space().await? } else { String::new() };
+    let title = s.papers.meta(&sha)?.map(|m| m.title).unwrap_or_default();
+    let context = b.context.as_deref().map(str::trim).filter(|c| !c.is_empty());
+    let mut user = format!("術語：{term}\n論文：《{title}》\n作者的領域：{}", reader_field(&s));
+    if let Some(c) = context {
+        user += &format!("\n原文句子（p.{}）：{}", b.page, c.chars().take(800).collect::<String>());
+    }
+    let unavailable = |e: crate::llm::LlmFail| {
+        let mut v = e.0.clone();
+        v["llm_unavailable"] = json!(true);
+        ApiError(StatusCode::SERVICE_UNAVAILABLE, v)
+    };
+    let (a, found) = s.llm.complete_web("lr-card", LlmRequest::prompt(CARD_SYSTEM, user).max_tokens(2000)).await.map_err(unavailable)?;
+    let v = lore_llm::json::extract_json(&a.text).ok_or_else(|| ApiError(StatusCode::BAD_GATEWAY, json!({ "error": format!("模型（{}）沒有回 JSON", a.engine) })))?;
+    let summary = v["summary"].as_str().map(str::trim).unwrap_or_default();
+    if v["found"] == false || summary.is_empty() {
+        return Err(ApiError(StatusCode::UNPROCESSABLE_ENTITY, json!({ "error": "網路上查不到可靠的說明，沒有建立卡片" })));
+    }
+    let sources = card_sources(&v, &found);
+    if !b.save {
+        return Ok((StatusCode::OK, Json(json!({ "summary": summary, "sources": sources.iter().map(|w| &w.url).collect::<Vec<_>>(), "engine": a.engine }))));
+    }
+    let mut body = crate::kb::card_body(&crate::kb::CardRequest { space: &space, title: &term, summary, kind: None, initial_state: "learning", sha: &sha, page: b.page.max(1), paper_title: &title, context });
+    if let Some(list) = body["sources"].as_array_mut() {
+        list.extend(sources.iter().map(|w| json!({ "type": "url", "ref": w.url, "title": w.title })));
+    }
+    let r = s.kb.post("/api/nodes", &body, std::time::Duration::from_secs(10)).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "node": r["node"], "summary": summary, "sources": sources.iter().map(|w| &w.url).collect::<Vec<_>>(), "engine": a.engine }))))
+}
+
+/// The pages a card cites: the ones the model named that the search really read, else
+/// the first three the search read.
+pub fn card_sources(answer: &Value, found: &[lore_llm::WebSource]) -> Vec<lore_llm::WebSource> {
+    let named: Vec<&str> = answer["sources"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    let norm = |u: &str| u.trim().trim_end_matches('/').to_string();
+    let picked: Vec<lore_llm::WebSource> = found.iter().filter(|w| named.iter().any(|n| norm(n) == norm(&w.url))).take(3).cloned().collect();
+    if picked.is_empty() { found.iter().take(3).cloned().collect() } else { picked }
 }
 
 /// 「這不是術語」: add a word or phrase to the ignore list.
