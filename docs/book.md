@@ -91,3 +91,70 @@
 - L-Paper 文件類型（設計文件 §6）：先只做 `book`（`paper.toml` `kind`，沒有＝`paper`）。
 - 上網找論文：共用 crate（搜尋、開放取用判斷、下載、BibTeX），L-Reader 書庫匯入走 L-Reader 的 `POST /api/papers/import`。
 - 作者的私人資料（範例、檢索）放在 private，經 lore-home；不放 `.claude`、skill 或公開 repo。
+
+## 統一入口（2026-11-17，作者決定）
+
+寫書只有一條流程，也只有一個開始的地方：**開始面板**（`L-Paper/ui/booksetup.js`）。L-Paper 首頁「寫書」的「＋ 新書」、L-Reader 的「寫 review」都只是打開這個面板；L-Reader 會先把那篇論文和紅字名詞填好，面板上仍可增減。沒有第二個入口（原本的「從論文寫…」選單和 L-Reader 卡片上自己的選項都拿掉）。
+
+作者的話：論文只是**起始關鍵字**的一種來源（論文裡不熟的名詞），用來找文獻；它在書裡和找到的文獻同等地位。建立一本書代表想學，所以不懂的名詞要**建立知識卡、標成不熟**。寫一本書很久，期間要能照常編輯別的論文。一本書裡一個符號只能有一個定義，引用的多篇論文各用各的符號，所以一律經過這本書的對照表（lore-notation）。
+
+### 起點（可以混用，可以都沒有）
+
+| 起點 | 內容 |
+|---|---|
+| `lr` | L-Reader 書庫的論文（sha） |
+| `file` | 電腦裡的檔案（PDF） |
+| `folder` | 一個資料夾：裡面的 PDF **全部**抽名詞，不讓作者勾，在背景一份一份做 |
+| 關鍵字 | 自己打的名詞 |
+| 知識卡 | 從 L-Brain 選的卡（不是「記得」的） |
+
+都沒有：建立空白的書（和原本的「新書」一樣），不開工作。
+
+### 流程的改動
+
+| 階段 | 改動 |
+|---|---|
+| `source` | 每個起點一份素材。檔案與資料夾直接用 lore-docsrc 讀（只取文字，不裁圖），一次一份、每份做完就存檢查點（`counts.files`／`of`）。不是論文的檔案不用，結果裡註明幾份 |
+| `terms` | 所有素材的名詞＋關鍵字＋選的卡，一起對知識庫 |
+| `plan` | 沒有論文也能排（只有名詞）；多篇時給每篇的標題與摘要 |
+| `research` | 一樣；**追一層**：找到的文獻（摘要與取得的文字）再抽一次名詞、對知識庫，不熟的掛在它所屬的章，預設不勾 |
+| `review` | 章節下多一排「文獻裡的新名詞」可以勾；顯示會建立幾張知識卡，可以關掉 |
+| `write` | 每寫完一章，這章教的名詞（沒有卡的）各建一張知識卡 |
+| `check` | 一樣 |
+
+- **格式**：`notes`（現在的講義，B5／A4）、`review1`（review paper 單欄）、`review2`（雙欄）。三種定義同一組指令（`\term`、`\sidenote`、`definition`…），只用 BasicTeX 有的套件；雙欄沒有邊註，`\sidenote` 變成腳註。模板先編譯一頁樣張給作者看。
+- **知識卡**：只替寫出來的章節教過的名詞建；已有同名或同別名的卡不建。每張有自己的中文一句摘要＋2–4 句說明（從那一章的定義整理，不是原文引句）、來源是這本書、`via = "papercomposer-book"`。建好後在 lore-learn 讀回來必須是**不熟**（`Outcome::Unfamiliar`），不是學習中。L-Brain 開著時走它的 API，沒開時用 kb-core 寫進成員的個人空間。建過的記在 `write.state.json`，中斷再繼續不重複。
+- **符號**：這本書的 `notation.json` 是唯一的登記。多篇素材的 `symbols.json` 合併進去時，同一個符號兩種意思＝衝突：先登記的留著，後來的那篇在寫作時換成書裡的符號（提示詞帶著整份登記與「來源用別的字母時要換」），衝突列在結果的「待處理」。
+- **隱私**：檔案與資料夾的路徑不進知識卡、LaTeX、bib、任何會同步的檔案，只留在工作的快取。資料夾裡不是論文的檔案（L-Shelf 開著時以它的 `cloud_ok` 為準；沒開時：lore-docsrc 讀得到標題和參考文獻的才算論文）一律不讀內容、不送給模型。
+- **編輯別的論文**：工作在伺服器背景跑（本來就是）。L-Paper 上方列多一個進度小標（「寫書 3/8 章」），點了回到工作畫面。
+
+### API 的改動
+
+| Method | Path | Body | 回傳 |
+|---|---|---|---|
+| POST | `/api/book/setup` | `Setup`（可以只有一部分） | `{ setup: "<id>" }`：先放著（記憶體，1 小時），給另一個 app 預填用 |
+| GET | `/api/book/setup/{id}` | — | 那份 `Setup`；`new` = 空的預設值 |
+| GET | `/api/book/options` | — | `{ books: [{id, title}], folder, formats: [{id, label, pages: ["b5","a4"]}], papers: [{sha, title, year}] }` |
+| GET | `/api/book/cards?q=` | — | `{ cards: [{id, title, state}] }`：不是「記得」的卡，最多 30 |
+| POST | `/api/book` | `Setup` | `{ job, …工作物件 }`（舊的 `source: {kind:"lr", sha}` 仍接受）。沒有任何起點：400 |
+| POST | `/api/books` | `{ title, folder, page?, format? }` | 多了 `format` |
+
+```jsonc
+// Setup
+{ "sources": [ { "kind": "lr", "sha": "…", "title": "…" }, { "kind": "file", "path": "/…/a.pdf" }, { "kind": "folder", "path": "/…/papers" } ],
+  "keywords": ["contrastive learning"],
+  "cards": ["<card id>"],
+  "extras": { "terms": [{ "term": "…", "n": 3 }], "stuck": [], "questions": [] },   // L-Reader
+  "book": "new",                 // or an opened.toml id (加進這本書)
+  "title": "",                   // a new book's title; "" = the planner names it
+  "folder": "/…/Books",
+  "format": "notes",             // notes | review1 | review2
+  "page": "b5",                  // notes only
+  "length": "standard", "lang": "en-zh",
+  "make_cards": true,
+  "mode": "review" }             // review | direct
+```
+
+工作物件多的欄位：`options` 帶 `format`、`make_cards`、`sources`（每個 `{kind, label}`，`label` 是標題或檔名，不含路徑）、`keywords`；`source` 階段 `counts: {files, of, skipped}`；`review.chapters[].found: [{term, state, from}]`（追一層的新名詞，`from` = 那篇文獻的標題）與 `review.cards: <會建立幾張>`；`POST …/review` 的 body 多 `make_cards`；`result.cards: [{id, title}]`。
+
+連結：`LoreLinks.open("pc", { booksetup: "<id>" })` → `lore-pc://booksetup/<id>` → `/?book-setup=<id>`。`?book-setup=mock` 不用伺服器看面板。
