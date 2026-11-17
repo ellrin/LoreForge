@@ -40,7 +40,7 @@ fn app(replies: &[&str], kb_url: Option<String>) -> App {
     std::fs::create_dir_all(root.join("private")).unwrap();
     let kb = root.join("kb");
     copy_dir(&manifest.join("tests/fixtures/kb"), &kb);
-    let mock = Arc::new(MockProvider::new(replies.iter().map(|s| s.to_string()).collect()).named("mock:claude"));
+    let mock = Arc::new(MockProvider::new(replies.iter().map(|s| s.to_string()).collect()).named("mock:claude").with_sources(&["https://en.wikipedia.org/wiki/Dice-S%C3%B8rensen_coefficient"]));
     let factory = MockFactory::default().with("claude:haiku", mock.clone());
     let shared = AppState::new(lore_home::Home::at(&root), root.join("web"), Llm::with_factory(factory), None);
     shared.kb.pin(Pin { spaces: vec![kb.clone()], member: "ellrin".into(), url: kb_url });

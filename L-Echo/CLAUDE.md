@@ -41,8 +41,8 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   `LOREECHO_LLM_URL` else the shared model id of `private/shared/engine.toml` on the machine's one
   llama-server (lore-llm `shared_runtime`, `../docs/local-models.md`; `llm::quit()` at exit); keys via
   `SharedKeys::for_app("LoreEcho")`), `shelfctx.rs` (the author's files, only in the real app (`AppState.shelf`) and while L-Shelf runs (ports.json `ls`): per turn `GET /api/search?loose=1&q=<the message>` → SSE `files` (the 「檔案：…」 row in `kbcards.js`; a click = `POST /api/shelf/focus` → L-Shelf `POST /api/act`), the globe turned to the first one right away, and a note in the prompt; asked before the engine is chosen (`lookup`): a turn whose files are all `cloud_ok` (papers, slide decks — L-Shelf decides) keeps the chosen engine and the names; any other file → the local model when one can, whatever the chip says, and only it gets the names (`note`) — Claude is then only told that some were found), `actions.rs` (功能列表, design §4/§4a: `/api/actions/note/{draft,check,save}`,
-  `/api/actions/cards/{draft,save}`; drafts = tasks `le-note` / `le-cards` (class `tidy`, one JSON reply via
-  `complete_json`, the conversation as one labelled text, the author's related cards from kbctx offered by id and
+  `/api/actions/cards/{draft,save}`; drafts = tasks `le-note` (class `tidy`, `complete_json`) / `le-cards` (知識建立一定要上網查, author 2026-11-17: Claude with web
+  search, `complete_json_web`, refused without a search, each card's body ends with 來源 = the pages read), one JSON reply, the conversation as one labelled text, the author's related cards from kbctx offered by id and
   only those kept); the note's LaTeX through lore-notation (`check`: an empty registry, error = blocking, 422);
   saves: L-Paper's `POST /api/notes` while it runs (`Pc`: ports.json `pc`, else 7878, `GET /api/notes`
   answers; pinned in tests), else the §4a file in `private/PaperComposer/notes/` (`write_note_file`, ADAPTER until
@@ -53,7 +53,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   `fix.rs` (修正知識卡, author 2026-11-14): 「這張卡寫錯了／幫我修正…那張卡」 (kbctx `Intent::Fix`: the card he names, else
   the last reply's; the model only says it will check) or the 功能列表 row → `POST /api/actions/fix/draft {messages, card}`:
   the card from L-Brain's `GET /api/nodes/{id}` + his own words only → task `le-fix` (Claude Haiku, web search,
-  no local fallback; `allow_web` on the subscription, used only by requests that ask for it) → old and new per field,
+  no local fallback; `complete_json_web`: refused without a search; `allow_web` on the subscription, used only by requests that ask for it) → old and new per field,
   `changes` (what/why/url) and `sources` (http(s) only); 套用 = `POST /api/actions/fix/save` → L-Brain's
   `PUT /api/nodes/{id}` with the draft's `revision` (409 = changed meanwhile, never overwritten), the web sources added
   as `{type: "web", ref, title, via: "loreecho"}`; L-Brain closed → 503 and nothing written (no file fallback);

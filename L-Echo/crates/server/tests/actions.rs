@@ -54,8 +54,8 @@ impl App {
         std::fs::create_dir_all(root.join("private")).unwrap();
         let kb = root.join("kb");
         copy_dir(&manifest.join("tests/fixtures/kb"), &kb);
-        let mock = Arc::new(MockProvider::new(replies.iter().map(|s| s.to_string()).collect()).named("mock:local"));
-        let factory = if replies.is_empty() { MockFactory::default() } else { MockFactory::default().with("local:current", mock.clone()) };
+        let mock = Arc::new(MockProvider::new(replies.iter().map(|s| s.to_string()).collect()).named("mock:local").with_sources(&["https://example.org/aliasing"]));
+        let factory = if replies.is_empty() { MockFactory::default() } else { MockFactory::default().with("local:current", mock.clone()).with("claude:selected", mock.clone()) };
         let shared = AppState::new(lore_home::Home::at(&root), root.join("web"), Llm::with_factory(factory), None);
         shared.kb.pin(Pin { spaces: vec![kb.clone()], member: "ellrin".into(), url: kb_url });
         shared.pc.pin(pc_url);
@@ -229,6 +229,8 @@ async fn cards_draft_keeps_new_named_cards_with_known_links() {
     assert_eq!(cards[0]["links"], json!([{ "to": FOURIER, "rel": "related", "title": "傅立葉轉換" }]));
     assert!(a.mock.seen.lock().unwrap()[0].system.contains(FOURIER));
     assert!(!a.kb.join("pending").exists(), "a draft writes nothing");
+    assert!(a.mock.seen.lock().unwrap()[0].web_search, "every card comes from a web search");
+    assert!(cards[0]["body"].as_str().unwrap().ends_with("來源：\n- https://example.org/aliasing"), "{}", cards[0]["body"]);
 }
 
 #[tokio::test]
@@ -285,12 +287,28 @@ async fn cards_save_online_error_is_not_a_silent_file() {
 }
 
 #[test]
-fn note_and_cards_tasks_are_tidy() {
+fn note_is_tidy_and_cards_need_the_web() {
     let t = Llm::task_table(None).unwrap();
-    for id in [le_server::actions::TASK_NOTE, le_server::actions::TASK_CARDS] {
-        let task = &t.task[id];
-        assert_eq!(task.class, Some(lore_llm::TaskClass::Tidy), "{id}");
-        assert_eq!(task.default, "local:current");
-        assert_eq!(task.fallback.as_deref(), Some("claude:selected"));
-    }
+    let note = &t.task[le_server::actions::TASK_NOTE];
+    assert_eq!(note.class, Some(lore_llm::TaskClass::Tidy));
+    assert_eq!(note.default, "local:current");
+    assert_eq!(note.fallback.as_deref(), Some("claude:selected"));
+    // 知識建立一定要上網查: Claude with web search, never the local model
+    let cards = &t.task[le_server::actions::TASK_CARDS];
+    assert!(cards.needs.web);
+    assert_eq!(cards.default, "claude:selected");
+}
+
+#[tokio::test]
+async fn cards_from_a_call_that_did_not_search_are_refused() {
+    let a = App::new(&[&cards_reply()], None, None);
+    let mut factory = MockFactory::default();
+    let silent = Arc::new(MockProvider::new(vec![cards_reply()]).named("mock:claude"));
+    factory = factory.with("claude:selected", silent.clone());
+    let shared = AppState::new(lore_home::Home::at(&a.root), a.root.join("web"), Llm::with_factory(factory), None);
+    shared.kb.pin(Pin { spaces: vec![a.kb.clone()], member: "ellrin".into(), url: None });
+    let b = App { shared, ..a };
+    let (s, v) = b.post("/api/actions/cards/draft", json!({ "messages": talk() })).await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("沒有上網查資料"), "{v}");
 }

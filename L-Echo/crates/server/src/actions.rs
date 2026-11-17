@@ -6,7 +6,7 @@
 //! | POST | /api/actions/note/draft | `{ messages, character?, engine? }` → `{ title, body, tags, kb, findings, engine, label }` (task `le-note`) |
 //! | POST | /api/actions/note/check | `{ body }` → `{ findings, blocking }` (lore-notation, while the author edits) |
 //! | POST | /api/actions/note/save | `{ title, body, kind: note\|idea, tags, kb }` → `{ via: pc\|file, id, path, findings }`; 422 `{ error, findings }` when a finding blocks |
-//! | POST | /api/actions/cards/draft | `{ messages, character?, engine? }` → `{ cards: [{ title, summary, body, tags, links: [{ to, rel, title }] }], engine, label }` (task `le-cards`) |
+//! | POST | /api/actions/cards/draft | `{ messages, character?, engine? }` → `{ cards: [{ title, summary, body (ends with 來源: the pages the web search read), tags, links: [{ to, rel, title }] }], engine, label }` (task `le-cards`, web search required) |
 //! | POST | /api/actions/cards/save | `{ cards, topic? }` → `{ via: kb\|file, ids, space? }` (L-Brain's 待審 only, never its cards) |
 //!
 //! Where it goes: L-Paper's `POST /api/notes` while it runs (its port in ports.json, else
@@ -185,6 +185,24 @@ async fn ask_json(s: &Shared, task: &str, engine: Option<&str>, system: String, 
     let req = route.apply(LlmRequest::chat(system, vec![Message::user(user)]).json(schema).temperature(0.3));
     match lore_llm::complete_json(route.provider.as_ref(), &req).await {
         Ok(v) => Ok((v, id)),
+        Err(e) => {
+            let msg = format!("模型沒有整理好：{e}");
+            Err(bad(StatusCode::BAD_GATEWAY, msg.lines().next().unwrap_or("").trim()))
+        }
+    }
+}
+
+/// [`ask_json`] with web search on: also the pages the search read; an answer from a call
+/// that did not search is refused (知識建立一定要上網查).
+async fn ask_json_web(s: &Shared, task: &str, engine: Option<&str>, system: String, user: String, schema: Value) -> Result<(Value, String, Vec<lore_llm::WebSource>), Response> {
+    let route = match s.llm.route(task, engine).await {
+        Ok(r) => r,
+        Err(payload) => return Err((StatusCode::SERVICE_UNAVAILABLE, Json(payload)).into_response()),
+    };
+    let id = route.provider.id();
+    let req = route.apply(LlmRequest::chat(system, vec![Message::user(user)]).json(schema).temperature(0.3));
+    match lore_llm::complete_json_web(route.provider.as_ref(), &req).await {
+        Ok((v, found)) => Ok((v, id, found)),
         Err(e) => {
             let msg = format!("模型沒有整理好：{e}");
             Err(bad(StatusCode::BAD_GATEWAY, msg.lines().next().unwrap_or("").trim()))
@@ -449,8 +467,9 @@ async fn note_save(State(s): State<Shared>, body: Option<Json<Note>>) -> Respons
 
 const CARDS_RULES: &str = "你從一段對話裡挑出值得記成知識卡的概念，給使用者審過再收進他的知識庫。
 每張卡一個概念，1 到 5 張，只挑對話裡真的講清楚的；使用者已經有的卡（下面列出）不要重做，可以連過去。
+每個概念都一定要先用網路搜尋查過（教科書、論文、官方文件、可靠的百科），summary 和 body 只根據查到的內容寫，不要憑記憶補；查不到可靠說明的概念就不要做。
 欄位：title（概念名稱，短）、summary（一句話）、body（幾句說明，可以用 $…$ 寫數學，不要 Markdown 標題）、
-tags（幾個標籤）、links（相關的既有卡 id，只能用下面列出的）。用台灣繁體中文（術語可以保留英文）。
+tags（幾個標籤）、links（相關的既有卡 id，只能用下面列出的）、sources（這張卡根據的網址）。用台灣繁體中文（術語可以保留英文）。
 回一個 JSON：{\"cards\": [ … ]}。";
 
 fn cards_schema() -> Value {
@@ -466,7 +485,8 @@ fn cards_schema() -> Value {
                         "summary": { "type": "string" },
                         "body": { "type": "string" },
                         "tags": { "type": "array", "items": { "type": "string" } },
-                        "links": { "type": "array", "items": { "type": "string" } }
+                        "links": { "type": "array", "items": { "type": "string" } },
+                        "sources": { "type": "array", "items": { "type": "string" } }
                     },
                     "required": ["title"]
                 }
@@ -523,7 +543,7 @@ async fn cards_draft(State(s): State<Shared>, body: Option<Json<DraftBody>>) -> 
     let cands = candidates(&s, &b.messages).await;
     let mut system = CARDS_RULES.to_string();
     system.push_str(&if cands.is_empty() { "\n\n使用者的知識庫裡沒有相關的卡（links 留空）。".to_string() } else { format!("\n\n使用者已有的相關卡：\n{}", candidate_lines(&cands)) });
-    let (v, engine) = match ask_json(&s, TASK_CARDS, b.engine.as_deref(), system, format!("對話：\n\n{text}"), cards_schema()).await {
+    let (v, engine, found) = match ask_json_web(&s, TASK_CARDS, b.engine.as_deref(), system, format!("對話：\n\n{text}"), cards_schema()).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -544,10 +564,19 @@ async fn cards_draft(State(s): State<Shared>, body: Option<Json<DraftBody>>) -> 
                     links.push(CardLink { to: id, rel: related(), title: k.title.clone() });
                 }
             }
+            // the pages this card rests on: the ones it names that the search read, else the search's first
+            let named = strings(&c["sources"]);
+            let norm = |u: &str| u.trim().trim_end_matches('/').to_string();
+            let mut urls: Vec<String> = found.iter().filter(|w| named.iter().any(|n| norm(n) == norm(&w.url))).map(|w| w.url.clone()).take(3).collect();
+            if urls.is_empty() {
+                urls = found.iter().take(3).map(|w| w.url.clone()).collect();
+            }
+            let mut body = c["body"].as_str().unwrap_or_default().trim().to_string();
+            body.push_str(&format!("\n\n來源：\n{}", urls.iter().map(|u| format!("- {u}")).collect::<Vec<_>>().join("\n")));
             Some(CardDraft {
                 title,
                 summary: c["summary"].as_str().unwrap_or_default().trim().to_string(),
-                body: c["body"].as_str().unwrap_or_default().trim().to_string(),
+                body: body.trim().to_string(),
                 tags: strings(&c["tags"]),
                 links,
                 kind: concept(),

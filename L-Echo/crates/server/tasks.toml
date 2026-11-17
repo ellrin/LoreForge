@@ -32,14 +32,15 @@ fallback = "claude:selected"
 offline = true
 max_tokens = 3000
 
+# 知識建立一定要上網查 (author, 2026-11-17): every card is written from a web search, so Claude
+# only (the local model cannot search); an answer from a call that did not search is refused.
 [task.le-cards]
-label = "L-Echo 做成知識卡"
-class = "tidy"
-needs = { json = true, context = 16000 }
-default = "local:current"
-fallback = "claude:selected"
-offline = true
-max_tokens = 2500
+label = "L-Echo 做成知識卡（上網查）"
+needs = { json = true, web = true, context = 16000 }
+default = "claude:selected"
+fallback = "claude:haiku"
+offline = false
+max_tokens = 4000
 
 # 修正知識卡 (author, 2026-11-14): one card he says is wrong is checked on the web by Claude Haiku
 # and a corrected version proposed; he sees old and new and applies it himself. Only this card and

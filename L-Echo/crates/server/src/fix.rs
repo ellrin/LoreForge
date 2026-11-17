@@ -179,13 +179,17 @@ async fn draft(State(s): State<Shared>, body: Option<Json<DraftBody>>) -> Respon
     };
     let id = route.provider.id();
     let req = route.apply(request(&card, &said));
-    let v = match lore_llm::complete_json(route.provider.as_ref(), &req).await {
-        Ok(v) => v,
+    let (mut v, found) = match lore_llm::complete_json_web(route.provider.as_ref(), &req).await {
+        Ok(x) => x,
         Err(e) => {
             let msg = format!("沒有查好：{e}");
             return bad(StatusCode::BAD_GATEWAY, msg.lines().next().unwrap_or("").trim());
         }
     };
+    // the model named no page: the ones its search read
+    if v["sources"].as_array().is_none_or(|a| a.is_empty()) {
+        v["sources"] = found.iter().map(|w| json!({ "url": w.url, "title": w.title })).collect();
+    }
     let fix = read(&v, &card);
     Json(json!({
         "card": { "id": b.card, "revision": card["revision"], "title": card["title"], "summary": card["summary"], "body": card["body"] },
