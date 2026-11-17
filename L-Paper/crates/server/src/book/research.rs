@@ -64,6 +64,58 @@ pub struct Research {
     /// Downloaded PDFs L-Reader has not taken yet (it was not running).
     pub pending_imports: Vec<String>,
     pub imported: usize,
+    /// 追一層: terms the found papers use that the author does not know yet and the book does
+    /// not teach, per chapter id (offered in the review window, unticked).
+    pub found: std::collections::BTreeMap<String, Vec<Found>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Found {
+    pub term: String,
+    /// `unknown` · `learning`
+    pub state: String,
+    /// The found paper's title.
+    pub from: String,
+}
+
+/// One more layer of terms (blocking: no network): the term finder over what research kept for
+/// each found paper (its abstract and the author's quotes), against the knowledge base. Terms the
+/// book already teaches (`taught`), known ones and repeats are left out; at most `per` a chapter.
+pub fn found_terms(r: &Research, kb: &[lore_learn::KbName], filters: &lore_words::Filters, taught: &[String], per: usize) -> std::collections::BTreeMap<String, Vec<Found>> {
+    let key = |s: &str| lore_words::phrase_key(s);
+    let taught: Vec<String> = taught.iter().map(|t| key(t)).collect();
+    let mut out: std::collections::BTreeMap<String, Vec<Found>> = Default::default();
+    let mut seen: Vec<String> = vec![];
+    for s in r.sources.iter().filter(|s| matches!(s.kind.as_str(), "web" | "lr")) {
+        let mut items = vec![];
+        if let Some(a) = s.record.abstract_text.as_deref().filter(|a| !a.trim().is_empty()) {
+            items.push(("Abstract".to_string(), a.to_string()));
+        }
+        for q in &s.quotes {
+            items.push(("Quote".to_string(), q.clone()));
+        }
+        if items.is_empty() {
+            continue;
+        }
+        let tr = lore_learn::find_terms(&items, kb, filters);
+        for t in tr.terms.iter().filter(|t| t.state != lore_learn::Familiar::Known) {
+            let k = key(&t.text);
+            let l = t.text.to_lowercase();
+            if k.is_empty() || taught.contains(&k) || seen.contains(&k) || l.ends_with(" et") || l.contains(" et al") || l.ends_with(" al") {
+                continue;
+            }
+            let Some(ch) = s.chapters.first() else { continue };
+            let list = out.entry(ch.clone()).or_default();
+            if list.len() >= per {
+                continue;
+            }
+            seen.push(k);
+            let state = if t.state == lore_learn::Familiar::Learning { "learning" } else { "unknown" };
+            list.push(Found { term: t.text.clone(), state: state.into(), from: s.record.title.clone() });
+        }
+    }
+    out
 }
 
 impl Research {

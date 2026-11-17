@@ -246,6 +246,7 @@ async fn a_book_from_a_paper_end_to_end() {
     assert_eq!(v["state"], "review");
     let rv = &v["review"];
     assert_eq!(rv["chapters"].as_array().unwrap().len(), 2);
+    assert!(rv["chapters"].as_array().unwrap().iter().all(|c| c["found"].is_array()), "追一層 per chapter");
     assert_eq!(rv["suggestions"].as_array().unwrap().len(), 1, "a suggestion on a row that is not there is dropped");
     assert_eq!(rv["license"], "cc-by");
     assert_eq!(v["pending_imports"], 1, "L-Reader not running: the downloaded paper waits");
@@ -528,4 +529,33 @@ fn an_older_job_reads_as_one_paper() {
     let s = source::Sources::from_value(json!({ "sha": SHA, "title": "Gated Contrast for Synthetic Signals", "figures": [{ "id": "fig1", "file": "fig1.png" }] })).unwrap();
     assert_eq!((s.materials.len(), s.materials[0].kind.as_str(), s.shas().len()), (1, "lr", 1));
     assert!(s.figure("fig1").is_some());
+}
+
+/// 追一層: the found papers' own terms, against the knowledge base, under the chapter the paper
+/// was found for, never what the book already teaches or the author knows.
+#[test]
+fn found_papers_offer_one_more_layer_of_terms() {
+    let root = std::env::temp_dir().join(format!("pc-book-found-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let names = lore_learn::load_names(&[kb(&root)], "ellrin");
+    let web = |title: &str, abs: &str, ch: &str| research::Src {
+        kind: "web".into(),
+        chapters: vec![ch.into()],
+        record: lore_research::Record { title: title.into(), abstract_text: Some(abs.into()), ..Default::default() },
+        ..Default::default()
+    };
+    let r = research::Research {
+        sources: vec![
+            research::Src { kind: "paper".into(), record: lore_research::Record { title: "Start".into(), abstract_text: Some("Momentum Contrast (MoCo) and more MoCo.".into()), ..Default::default() }, ..Default::default() },
+            web("Noise-Contrastive Estimation for Synthetic Demos", "Noise Contrastive Estimation (NCE) fits densities. NCE compares data with noise; the softmax and InfoNCE are related to NCE.", "c2"),
+        ],
+        ..Default::default()
+    };
+    let f = research::found_terms(&r, &names, &lore_words::Filters::default(), &["InfoNCE".to_string()], 8);
+    let c2 = f.get("c2").expect("under the chapter it was found for");
+    assert!(c2.iter().any(|x| x.term.contains("NCE") || x.term.contains("Noise Contrastive")), "{c2:?}");
+    assert!(c2.iter().all(|x| x.from == "Noise-Contrastive Estimation for Synthetic Demos"));
+    assert!(!c2.iter().any(|x| x.term == "InfoNCE" || x.term.eq_ignore_ascii_case("softmax")), "taught or known: {c2:?}");
+    assert!(!f.values().flatten().any(|x| x.term.contains("MoCo")), "a starting paper is not a found one");
+    std::fs::remove_dir_all(&root).unwrap();
 }

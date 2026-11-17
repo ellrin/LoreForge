@@ -233,7 +233,8 @@ fn review_view(job: &Job, research: Option<&Research>) -> Value {
         .iter()
         .map(|c| {
             let sources = research.map(|r| r.for_chapter(&c.id).len()).unwrap_or(0);
-            json!({ "id": c.id, "title": c.title, "depth": c.depth, "terms": c.terms.iter().map(|t| json!({ "term": t, "state": state(t) })).collect::<Vec<_>>(), "figures": c.figures.len(), "sources": sources })
+            let found = research.and_then(|r| r.found.get(&c.id)).cloned().unwrap_or_default();
+            json!({ "id": c.id, "title": c.title, "depth": c.depth, "terms": c.terms.iter().map(|t| json!({ "term": t, "state": state(t) })).collect::<Vec<_>>(), "figures": c.figures.len(), "sources": sources, "found": found })
         })
         .collect();
     json!({
@@ -426,8 +427,19 @@ impl BookJob {
             web: d.web,
         };
         let counter = cx.counter();
-        let r = research::research(&m, &po.plan, env, &counter).await;
-        cx.counts(json!({ "cards": r.cards.len(), "sources": r.sources.len(), "imported": r.imported, "pending": r.pending_imports.len(), "offline": r.offline }));
+        let mut r = research::research(&m, &po.plan, env, &counter).await;
+        // 追一層: the found papers' terms, once (no second search)
+        let p = params(cx)?;
+        let tr: TermsOut = typed(cx, "terms")?;
+        let taught: Vec<String> = po.plan.chapters.iter().flat_map(|c| c.terms.iter().cloned()).chain(tr.teach.iter().map(|t| t.term.clone())).chain(p.keywords.iter().cloned()).chain(written_terms(p.book_path.as_deref())).collect();
+        let (d2, r2) = (d.clone(), r.clone());
+        r.found = tokio::task::spawn_blocking(move || {
+            let kb = lore_learn::load_names(&d2.kb_spaces, &d2.member);
+            research::found_terms(&r2, &kb, &d2.filters, &taught, 8)
+        })
+        .await
+        .map_err(join_err)?;
+        cx.counts(json!({ "cards": r.cards.len(), "sources": r.sources.len(), "imported": r.imported, "pending": r.pending_imports.len(), "offline": r.offline, "found": r.found.values().map(Vec::len).sum::<usize>() }));
         to_value(&r)
     }
 
@@ -579,11 +591,7 @@ pub fn terms_of(d: &Deps, src: &Sources, p: &Params) -> TermsOut {
     tr.total = tr.terms.len();
     tr.unfamiliar = tr.terms.iter().filter(|t| t.unfamiliar()).count();
     // explained already in this book (加進這本書: only new topics)
-    let written: Vec<String> = p
-        .book_path
-        .as_deref()
-        .map(|b| pc_core::open::source_files(b).iter().filter_map(|f| std::fs::read_to_string(f).ok()).flat_map(|t| t.match_indices("\\term{").map(|(i, _)| t[i + 6..].split('}').next().unwrap_or("").to_string()).collect::<Vec<_>>()).map(|t| key(&t)).collect())
-        .unwrap_or_default();
+    let written: Vec<String> = written_terms(p.book_path.as_deref()).iter().map(|t| key(t)).collect();
     let known = tr.terms.iter().filter(|t| t.state == lore_learn::Familiar::Known).count();
     let mut teach: Vec<Teach> = tr
         .terms
@@ -603,6 +611,11 @@ pub fn terms_of(d: &Deps, src: &Sources, p: &Params) -> TermsOut {
         .filter_map(|(a, b)| Some((title_of.get(a.as_str())?.to_string(), title_of.get(b.as_str())?.to_string())))
         .collect();
     TermsOut { terms: tr, teach, prereq, known }
+}
+
+/// The terms a book already explains (its `\\term{…}`s).
+pub fn written_terms(book: Option<&std::path::Path>) -> Vec<String> {
+    book.map(|b| pc_core::open::source_files(b).iter().filter_map(|f| std::fs::read_to_string(f).ok()).flat_map(|t| t.match_indices("\\term{").map(|(i, _)| t[i + 6..].split('}').next().unwrap_or("").to_string()).collect::<Vec<_>>()).collect()).unwrap_or_default()
 }
 
 /// The registry's checks over the whole book, every `\cite` has an entry, every figure file is there.
