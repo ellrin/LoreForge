@@ -746,8 +746,10 @@ fn the_later_steps_read_the_skeleton() {
     sk.para_mut("p4").unwrap().text = "The prior helps \\pendingdep{P1}.".into();
     s.drafts.push(DraftSection { section: "Abstract".into(), paras: vec![DraftPara { para: "abs".into(), text: "We compare.".into(), problems: vec![], pending: vec![] }], ..Default::default() });
     s.drafts.push(DraftSection { section: "Results".into(), paras: vec![DraftPara { para: "old".into(), text: "Old.".into(), problems: vec![], pending: vec![] }], ..Default::default() });
+    s.claims.push(crate::draft::session::Claim { zh: "舊流程留下的主張".into(), ..Default::default() });
     s.skeleton = Some(sk);
     let p = project::project(&s).unwrap();
+    assert!(p.claims.is_empty(), "claims built from the replaced interview never reach the abstract or the audit");
     assert_eq!(p.outline.iter().map(|o| (o.section.as_str(), o.subsection.as_deref())).collect::<Vec<_>>(), [("Introduction", Some("Related work")), ("Results", None), ("Discussion", None)]);
     assert_eq!(p.drafts.iter().map(|d| d.section.as_str()).collect::<Vec<_>>(), ["Results", "Discussion", "Abstract"], "the old drafts are not read, the abstract is");
     assert_eq!(p.drafts[0].paras[0].text, "Method A was better.");

@@ -400,7 +400,7 @@ follows the paragraph before and what it hands to the next, a few words, \"\" at
 Blocks: `id`, a new `purpose` when the paragraphs it holds changed what it does, `why`. `jumps`: a paragraph that does \
 not follow from the one before it even with a link (`why`, and a `fix` the author could make). Change as little as \
 possible: the author's own `say` is theirs (only rephrase it when the move made it wrong), list only what you change. \
-Never mention internal ids in the text.\n{TW} Reply with JSON only."
+Never mention internal ids in the text.\n{TW} {PLAIN} Reply with JSON only."
     );
     let mut user = format!("Key value of the paper: {}\n", key_value.trim());
     let order = sk.order();
@@ -557,9 +557,10 @@ nothing the answer does not say (the paragraph's other points stay as they are; 
 answer in one short line for the margin. If the answer means no, not yet, or it did not happen, record exactly that as the \
 point and the conclusion. `gap` = true only when the answer itself opened something the paragraph now needs and does not \
 have (a new claim without its reason or number); then `follow_up` = one question (kind missing or choice, 2–3 options, \
-addressed to 「你」, no ids, not a rewording of this question), else null. Never a follow-up after no / not yet. \
+addressed to 「你」, no ids, not a rewording of this question; one complete sentence that asks one thing and ends with a \
+question mark, never a noun phrase), else null. Never a follow-up after no / not yet. \
 `writing_notes` = only when the answer says how to WRITE something or what to avoid, in the author's words, `scope` = \
-paragraph, section or paper, `banned` = words they forbid; usually [].\n{TW} Reply with JSON only."
+paragraph, section or paper, `banned` = words they forbid; usually [].\n{TW} {PLAIN} Reply with JSON only."
     );
     let anchor = sk.para(&t.anchor).or_else(|| sk.block(&t.anchor).and_then(|b| b.paras.first()));
     let mut user = format!("Key value of the paper: {}\n", key_value.trim());

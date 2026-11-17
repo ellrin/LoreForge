@@ -2408,14 +2408,14 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
     let sess = reading(tri!(load(&c.dir)));
     let paras: Vec<ds::OutlinePara> = if is_abstract {
         if sess.claims.is_empty() && sess.outline.is_empty() {
-            return bad("先完成主張登記與大綱");
+            return bad("先在骨架排出段落");
         }
         vec![topaper::abstract_para(&sess, &c.key_value)]
     } else {
         sess.outline.iter().filter(|o| o.section == b.section).flat_map(|o| o.paras.clone()).collect()
     };
     if paras.is_empty() {
-        return bad("這個章節還沒有大綱");
+        return bad("這個章節在骨架裡還沒有段落");
     }
     if !has_writing_engine(&s, b.engine).await {
         return bad("沒有可用的寫作引擎");
@@ -2487,7 +2487,7 @@ async fn run_audit(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
     // 骨架: the skeleton read in the shapes this step takes
     let sess = reading(tri!(load(&c.dir)));
     if sess.drafts.is_empty() {
-        return bad("還沒有草稿");
+        return bad("先在骨架寫出文字");
     }
     let lens = tri!(lens_for(&c.ws, &sess));
     let (_, mtext) = material_of(&c);

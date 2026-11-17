@@ -78,7 +78,7 @@ with full-width Chinese punctuation (，。：；？！「」（）), never ASCI
 
 /// Wording the author can read cold: planners used to compress a title into a coined term and to
 /// copy the record's shorthand, so a title or a question could not be understood without the record open.
-pub(crate) const PLAIN: &str = "Plain words: every title, label and question must be understood by the author on first \
+pub(crate) const PLAIN: &str = "Plain words: every title, label, question and one-line statement of what a paragraph says (`say`, points) must be understood by the author on first \
 reading, without the record open. Never coin a term or an abbreviation. Never use the record's internal shorthand \
 (variable names, arm codes, column names, file names) without saying in plain words what it is. A technical term keeps \
 its usual English name when Chinese has no common word for it. Prefer a longer clear phrase to a short obscure one.";

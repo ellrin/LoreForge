@@ -49,6 +49,9 @@ pub fn project(sess: &Session) -> Option<Session> {
     // the abstract is drafted by the old step, into the session's own drafts
     drafts.extend(sess.drafts.iter().filter(|d| d.section == "Abstract").cloned());
     s.drafts = drafts;
+    // the old claim register was built from the interview this replaces: with a skeleton its paragraphs
+    // say what the paper claims, and stale claims must not reach the abstract or the audit
+    s.claims.clear();
     // the ledger: a block is a group (its purpose explained), a paragraph an item
     s.groups = k
         .sections
