@@ -21,6 +21,11 @@ const PCDraft = (() => {
   // The one path: topic and record feed the skeleton, where the paper is laid out, asked about and
   // written; the abstract comes from the written text, then the audit and later revisions. (The
   // interview, claim register, order check, outline and section drafts it replaced are not steps.)
+  // IME: WebKit (the desktop app) ends the composition before the Enter that picks a candidate, so that
+  // keydown has isComposing false; keyCode 229 or a composition that ended a moment ago still mark it
+  let imeEnd = 0;
+  document.addEventListener("compositionend", () => (imeEnd = performance.now()), true);
+  const composing = (e) => e.isComposing || e.keyCode === 229 || performance.now() - imeEnd < 80;
   const STEPS = [
     ["topic", "1", "主題"],
     ["record", "2", "實驗記錄"],
@@ -461,7 +466,7 @@ const PCDraft = (() => {
         return r.json();
       });
     };
-    txt.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addText(); } };
+    txt.onkeydown = (e) => { if ((e.key === "Enter" && !composing(e)) && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addText(); } };
     // 搜尋檔案: L-Echo finds it (through L-Shelf), each file chosen there arrives as a record
     const find = LoreFindFile.button({ purpose: "實驗紀錄", exts: ["md", "txt", "csv", "tsv", "json", "log", "pdf"], context: { paper: D.name }, onAdded: () => { if (!D.busy && $("#dlgDraft").open) reload(); } });
     main.append(row(file, find), txt, row(btn("加入", addText, "ghost")));
@@ -720,7 +725,7 @@ const PCDraft = (() => {
       if (!v) return;
       savePlan({ groups: sess().groups.map((x) => ({ ...x })), items: [{ id: "", group: g.id, label: v, role: "design" }] });
     };
-    add.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); go(); } };
+    add.onkeydown = (e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); go(); } };
     const r = row(add);
     const mic = micButton(add);
     if (mic) r.append(mic);
@@ -842,7 +847,7 @@ const PCDraft = (() => {
     ta.setAttribute("aria-label", `回答 ${g.id}`);
     ta.value = D.draftAnswer?.[g.id] ?? "";
     ta.oninput = () => ((D.draftAnswer ??= {})[g.id] = ta.value);
-    ta.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.ctrlKey || e.metaKey)) send(ta.value); };
+    ta.onkeydown = (e) => { if ((e.key === "Enter" && !composing(e)) && (e.ctrlKey || e.metaKey)) send(ta.value); };
     // one row of actions under the answer: skip on the left, speak and send on the right
     const act = row();
     act.classList.add("df-actrow");
@@ -984,7 +989,7 @@ const PCDraft = (() => {
     const add = input("", "加一張圖或表");
     add.setAttribute("aria-label", "加一張圖或表");
     const addIt = () => { const v = add.value.trim(); if (!v) return; items.push({ id: "", kind: /表|table/i.test(v) ? "table" : "figure", label: "", title: v, tool: "" }); save(); };
-    add.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); addIt(); } };
+    add.onkeydown = (e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); addIt(); } };
     const r = row(add);
     const mic = micButton(add);
     if (mic) r.append(mic);
@@ -1035,7 +1040,7 @@ const PCDraft = (() => {
     const add = input("", "加一條寫法");
     add.setAttribute("aria-label", "加一條寫法");
     const addIt = () => { const v = add.value.trim(); if (!v) return; edit.push({ id: "", text: v, scope: "paper", group: D.group ?? "" }); save(); };
-    add.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); addIt(); } };
+    add.onkeydown = (e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); addIt(); } };
     const r = row(add);
     const mic = micButton(add);
     if (mic) r.append(mic);
@@ -1091,7 +1096,7 @@ const PCDraft = (() => {
     ta.value = D.discDraft ?? "";
     ta.oninput = () => (D.discDraft = ta.value);
     const say = () => { const t = ta.value.trim(); if (!t) return; run("討論中", async () => { const v = await call(`/discuss/${d.id}`, { text: t }); D.discDraft = ""; return v; }); };
-    ta.onkeydown = (e) => { if ((e.key === "Enter" && !e.isComposing) && (e.ctrlKey || e.metaKey)) say(); };
+    ta.onkeydown = (e) => { if ((e.key === "Enter" && !composing(e)) && (e.ctrlKey || e.metaKey)) say(); };
     const sum = btn("整理成這題的回答", () => run("整理回答", async () => { const r = await call(`/discuss/${d.id}/answer`, {}); D.discAnswer = r.answer ?? ""; return null; }), "ghost small");
     // something to sum up only once the author has said something
     if (!d.messages.some((m) => m.who === "me")) sum.disabled = true;
@@ -1494,7 +1499,7 @@ const PCDraft = (() => {
       if (!v) return;
       run("新增待補", async () => { const r = await call("/pending", { items: [...items, { id: "", what: v }] }, "PUT"); return r; });
     };
-    add.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); addP(); } };
+    add.onkeydown = (e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); addP(); } };
     main.append(row(add, btn("＋ 待補", addP, "ghost")));
   }
   /** One pending item: its fields (record step) or only its fill-in (修訂). */

@@ -38,6 +38,11 @@ const PCSkeleton = (() => {
   // asked through the shell, next to the button; the demo page has no shell and goes ahead
   const sure = async (at, lines, label) => (window.LoreShell?.ask ? !!(await LoreShell.ask(at, lines, [{ label: "取消", value: null }, { label, value: true, danger: true, primary: true }])) : true);
 
+  // IME: WebKit (the desktop app) ends the composition before the Enter that picks a candidate, so that
+  // keydown has isComposing false; keyCode 229 or a composition that ended a moment ago still mark it
+  let imeEnd = 0;
+  document.addEventListener("compositionend", () => (imeEnd = performance.now()), true);
+  const composing = (e) => e.isComposing || e.keyCode === 229 || performance.now() - imeEnd < 80;
   const STATES = ["outline", "points", "text", "done"];
   const KINDS = [["table", "表"], ["figure", "圖"], ["flow", "流程圖"], ["equation", "公式"], ["algorithm", "偽代碼"], ["finding", "發現"]];
   const TARGET_OF = { table: "table", figure: "figure", flow: "figure", equation: "equation" };
@@ -343,7 +348,7 @@ const PCSkeleton = (() => {
       t.oninput = () => { S.drafts[key] = t.value; fit(); };
       t.onkeydown = (e) => {
         e.stopPropagation();
-        if (e.key === "Enter" && !e.isComposing && !(multiline && !(e.metaKey || e.ctrlKey))) { e.preventDefault(); commit(id, name, t.value); }
+        if (e.key === "Enter" && !composing(e) && !(multiline && !(e.metaKey || e.ctrlKey))) { e.preventDefault(); commit(id, name, t.value); }
         else if (e.key === "Escape") { e.preventDefault(); delete S.drafts[key]; S.editing = null; draw(); }
       };
       t.onblur = () => { if (isEditing(id, name) && !S.redrawing && t.isConnected) commit(id, name, t.value); };
@@ -624,7 +629,7 @@ const PCSkeleton = (() => {
       ta.oninput = () => { S.drafts[key] = ta.value; };
       ta.onkeydown = (e) => {
         e.stopPropagation();
-        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); answer(id, ta.value, []); }
+        if (e.key === "Enter" && !e.shiftKey && !composing(e)) { e.preventDefault(); answer(id, ta.value, []); }
         else if (!ta.value && /^[1-9]$/.test(e.key) && t.options[e.key - 1]) { e.preventDefault(); answer(id, "", [t.options[e.key - 1].id]); }
       };
       const row = h("div", "sk-acts");
@@ -670,7 +675,7 @@ const PCSkeleton = (() => {
       draw();
       post("/note", { anchor, text }, "補充");
     };
-    ta.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } else if (e.key === "Escape") { e.preventDefault(); close(); } };
+    ta.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey && !composing(e)) { e.preventDefault(); go(); } else if (e.key === "Escape") { e.preventDefault(); close(); } };
     const row = h("div", "sk-acts");
     row.append(btn("取消", close, "ghost"), h("span", "sk-grow"));
     const m = mic(ta);
@@ -887,7 +892,7 @@ const PCSkeleton = (() => {
       inp.dataset.k = key;
       inp.value = S.drafts[key] ?? "";
       inp.oninput = () => { S.drafts[key] = inp.value; };
-      inp.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing && inp.value.trim()) { const title = inp.value.trim(); delete S.drafts[key]; inp.value = ""; post("/inventory", { keep: keep(), add: [{ kind, title, note: "" }] }, "素材"); } };
+      inp.onkeydown = (e) => { if (e.key === "Enter" && !composing(e) && inp.value.trim()) { const title = inp.value.trim(); delete S.drafts[key]; inp.value = ""; post("/inventory", { keep: keep(), add: [{ kind, title, note: "" }] }, "素材"); } };
       addRow.append(inp);
       sec.append(addRow);
       main.append(sec);
