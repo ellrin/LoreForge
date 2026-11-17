@@ -302,6 +302,9 @@ const PCDraft = (() => {
       main.append(gate);
       return;
     }
+    // records that were added but never read: every later step would work from nothing, so it says so
+    if (D.step > stepIdx("record") && sess().records.length && !sess().experiments.length && !sess().record_summary && !D.busy)
+      main.append(row(note(`${sess().records.length} 份實驗記錄還沒整理`, "warn"), btn("整理實驗記錄", () => run("整理實驗記錄", () => call("/record")))));
     ({ topic, record, interview, claims, review, template, outline, draft: drafting, audit, revise })[key](main, side);
     $("#dlgDraft").classList.toggle("with-side", side.childElementCount > 0);
   }
