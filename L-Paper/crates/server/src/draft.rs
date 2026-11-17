@@ -688,11 +688,13 @@ async fn run_record(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Re
     if sess.phase < Phase::Plan {
         sess.phase = Phase::Plan;
     }
-    let plan_now = sess.groups.is_empty();
     tri!(save(&c.dir, &sess));
     spawn_candidates(&s, &c, prep);
-    if plan_now {
-        spawn_plan(&s, &c);
+    // the skeleton's 素材 lists the figure plan, so it is made as soon as the record is read. The
+    // interview's question groups (and an Opus call per group for their options) are no longer
+    // planned here: the skeleton replaced that step.
+    if sess_figures_idle(&c) {
+        spawn_figures(&s, &c);
     }
     tri!(view(&c, &sess))
 }
@@ -762,6 +764,8 @@ async fn do_plan(s: &Shared, c: &Ctx) -> Result<Session, Resp> {
 }
 
 /// The plan on a task of its own (after 整理); the window looks again while it runs.
+// kept with the rest of the replaced interview until the skeleton has been used on a real paper
+#[allow(dead_code)]
 fn spawn_plan(s: &Shared, c: &Ctx) {
     if let Ok(mut v) = PLANNING.lock() {
         if v.contains(&c.dir) {

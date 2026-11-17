@@ -137,7 +137,7 @@ const PCDraft = (() => {
   }
   const call = (path, body, method) => api(base() + path, body ?? {}, method);
   // what was done in the skeleton (text written, placed) is read again when its page is left
-  const go = (i) => { const left = STEPS[D.step]?.[0] === "skeleton" && i !== D.step; D.step = i; if (left) reload(); else draw(); };
+  const go = (i) => { const left = STEPS[D.step]?.[0] === "skeleton" && i !== D.step; D.step = i; D.err = null; if (left) reload(); else draw(); };
 
   // ── names from the lens ──────────────────────────────
   const levelName = (d) => { const l = lens().scale.levels[d]; return l ? `${l.id} ${l.label}` : `${d}`; };
@@ -278,7 +278,7 @@ const PCDraft = (() => {
   }
   function drawInner(main, side, steps) {
     main.innerHTML = ""; side.innerHTML = ""; steps.innerHTML = "";
-    if (!D.data) { main.append(el("p", "df-note bad", D.err ?? "載入中…")); return; }
+    if (!D.data) { $("#dfSk").hidden = true; main.hidden = false; main.append(el("p", "df-note bad", D.err ?? "載入中…")); return; }
     STEPS.forEach(([k, n, label], i) => {
       const li = el("li");
       const b = el("button");
@@ -301,7 +301,13 @@ const PCDraft = (() => {
     };
     const gated = !!refsLeft() && CITING.includes(key);
     // the skeleton needs the record read (or to exist already); until then its page says what to do
-    const skReady = key === "skeleton" && !gated && !D.busy && !D.err && (hasSkeleton() || recordRead());
+    // a record read before the figure plan was tied to it: plan the figures once, here
+    if (key === "skeleton" && recordRead() && !hasSkeleton() && !sess().figures && !D.figAsked && !D.busy && !D.err) {
+      D.figAsked = true;
+      queueMicrotask(() => run("規劃圖表", () => call("/figures"), true));
+    }
+    const figuring = !!sess().figures?.running && !hasSkeleton();
+    const skReady = key === "skeleton" && !gated && !D.busy && !D.err && !figuring && (hasSkeleton() || recordRead());
     refsChip();
     showSk(skReady);
     if (skReady) { $("#dlgDraft").classList.remove("with-side"); return; }
@@ -317,6 +323,8 @@ const PCDraft = (() => {
     if (D.step > stepIdx("record") && sess().records.length && !recordRead() && !D.busy)
       main.append(row(note(`${sess().records.length} 份實驗記錄還沒整理`, "warn"), btn("整理實驗記錄", () => run("整理實驗記錄", () => call("/record")))));
     if (key === "skeleton") {
+      // 素材 lists the figure plan: wait for it, so the first list is the whole one
+      if (figuring) { main.append(el("div", "df-busy", "規劃圖表…")); schedulePrep(); return; }
       if (!sess().records.length && !D.busy) main.append(row(note("骨架從實驗記錄排出來"), btn("上傳實驗記錄", () => go(stepIdx("record")))));
       return;
     }
@@ -1543,8 +1551,7 @@ const PCDraft = (() => {
       const result = named.length ? "" : res.value;
       const v = await call(`/pending/${encodeURIComponent(it.id)}/fill`, { result, values: vals, direction });
       const r = v.session.revisions.find((x) => x.pending === it.id);
-      if (direction === "matches") D.step = STEPS.findIndex(([k]) => k === "revise");
-      else if (r) { D.group = r.group; D.step = STEPS.findIndex(([k]) => k === "interview"); }
+      D.step = stepIdx("revise");
       return v;
     });
     return box;
@@ -1648,7 +1655,7 @@ const PCDraft = (() => {
       main.append(h(`回填（${waiting.length}）`));
       waiting.forEach((it) => main.append(pendingCard(it, true)));
     }
-    main.append(hq("新增修訂", "老師或審稿人要你補什麼？補了什麼實驗、數據、圖、文獻？寫下來，先討論放在哪裡、會影響哪些地方，再產生具體修改。新的實驗記錄請在第 2 步上傳並重新整理；新文獻先在文獻視窗加入文獻庫。"));
+    main.append(hq("新增修訂", "老師或審稿人要你補什麼？補了什麼實驗、數據、圖、文獻？寫下來（放在哪裡、想怎麼寫都可以寫進去），再按「產生修改方案」。新的實驗記錄請在第 2 步上傳並重新整理；新文獻先在文獻視窗加入文獻庫。"));
     const req = input(D.revDraft ?? "", "例：審稿人要求外部驗證。我補了另一家醫院 120 張影格，Dice 0.71；想放在 Results 主表之後，並在 Discussion 提一句。", "textarea");
     req.rows = 4;
     req.oninput = () => (D.revDraft = req.value);
@@ -1668,7 +1675,7 @@ const PCDraft = (() => {
       refBox.append(sel, tags);
     });
     main.append(req, row(sec, el("span", "df-note", "新圖檔："), fig), refBox);
-    main.append(row(btn("開始討論", () => run("建立修訂", async () => {
+    main.append(row(btn("加入修訂", () => run("建立修訂", async () => {
       let figure = null;
       const f = fig.files?.[0];
       if (f) {
@@ -1679,8 +1686,6 @@ const PCDraft = (() => {
       }
       const v = await call("/revisions", { request: req.value, section: sec.value, refs: [...chosen], figure });
       D.revDraft = "";
-      const r = v.session.revisions[v.session.revisions.length - 1];
-      D.group = r.group; D.step = STEPS.findIndex(([k]) => k === "interview");
       return v;
     }))));
 
@@ -1696,7 +1701,7 @@ const PCDraft = (() => {
       if (meta.childElementCount) card.append(meta);
       const g = sess().groups.find((x) => x.id === r.group);
       if (g?.summary.conclusion) card.append(note(`討論結論：${g.summary.conclusion}`));
-      const acts = row(btn("到對話討論", () => { D.group = r.group; go(STEPS.findIndex(([k]) => k === "interview")); }, "ghost"));
+      const acts = row();
       if (r.status !== "dropped") acts.append(btn(r.plan ? "重新產生修改方案" : "產生修改方案", () => run("產生修改方案", () => call(`/revisions/${r.id}/plan`)), r.plan ? "ghost" : "primary small"));
       acts.append(btn(r.status === "dropped" ? "恢復" : "放棄", () => run("更新", () => call(`/revisions/${r.id}/status`, { status: r.status === "dropped" ? "open" : "dropped" })), "ghost"));
       card.append(acts);
