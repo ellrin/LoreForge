@@ -6,7 +6,7 @@
 "use strict";
 
 const PCBookJob = (() => {
-  const STAGES = [["source", "讀論文"], ["terms", "名詞"], ["plan", "大綱"], ["research", "找資料"], ["review", "微調"], ["write", "撰寫"], ["check", "檢查"]];
+  const STAGES = [["source", "讀素材"], ["terms", "名詞"], ["plan", "大綱"], ["research", "找資料"], ["review", "微調"], ["write", "撰寫"], ["check", "檢查"]];
   const DEPTH = [["brief", "簡短"], ["standard", "標準"], ["deep", "深入"]];
   const E = (tag, attrs = {}, ...kids) => {
     const e = document.createElement(tag);
@@ -48,14 +48,14 @@ const PCBookJob = (() => {
   const MOCK = (() => {
     const at = new URL(location.href).searchParams.get("at") ?? "run";
     let t0 = Date.now(), reviewed = null, stopped = false, pending = 2;
-    const opts = { length: "standard", lang: "en-zh", page: "b5", book: "new", folder: "/Users/ellrin/Documents/Books" };
+    const opts = { length: "standard", lang: "en-zh", page: "b5", book: "new", folder: "/Users/ellrin/Documents/Books", format: "notes", make_cards: true };
     const t = (term, state = "unknown") => ({ term, state });
     const chapters = [
       { id: "c1", title: "Vectors and similarity", depth: "brief", terms: [t("cosine similarity", "learning"), t("dot product", "learning"), t("embedding")], figures: 1, sources: 3 },
       { id: "c2", title: "Softmax and temperature", depth: "standard", terms: [t("softmax", "learning"), t("temperature scaling"), t("logits")], figures: 1, sources: 2 },
       { id: "c3", title: "Contrastive learning", depth: "standard", terms: [t("positive pair"), t("negative sample"), t("data augmentation")], figures: 1, sources: 4 },
       { id: "c4", title: "The InfoNCE loss", depth: "deep", terms: [t("InfoNCE"), t("mutual information"), t("noise-contrastive estimation")], figures: 2, sources: 5 },
-      { id: "c5", title: "Hard negatives and the gate", depth: "deep", terms: [t("hard negatives"), t("gating")], figures: 1, sources: 3 },
+      { id: "c5", title: "Hard negatives and the gate", depth: "deep", terms: [t("hard negatives"), t("gating")], figures: 1, sources: 3, found: [{ term: "curriculum learning", state: "unknown", from: "A Survey of Method A and Method B" }, { term: "false negatives", state: "unknown", from: "Small-Data Benchmarks Revisited" }] },
     ];
     const suggestions = [
       { op: "depth", id: "c1", depth: "brief", reason: "這兩個詞你已經在學了，短一點就好" },
@@ -81,11 +81,11 @@ const PCBookJob = (() => {
       st[3].counts = { cards: Math.round(6 * st[3].f), sources: Math.round(11 * st[3].f), imported: 0, pending: 2 };
       const out = { ...base, state: cur == null ? "review" : "running" };
       out.stages = STAGES.map(([id], i) => st[i] ?? { id, state: "pending", ms: 0 });
-      if (cur == null) { out.stages[4] = { id: "review", state: "running", ms: 0 }; out.review = { chapters, suggestions, leftOut: ["batch size", "projection head"], notes: [], license: "cc-by" }; }
+      if (cur == null) { out.stages[4] = { id: "review", state: "running", ms: 0 }; out.review = { chapters, suggestions, leftOut: ["batch size", "projection head"], notes: [], license: "cc-by", cards: 9 }; }
       if (reviewed || at === "done") {
         out.state = "done";
         out.stages = STAGES.map(([id]) => ({ id, state: "done", ms: 6000, counts: id === "write" ? { chapter: 5, chapters: 5, figures: 6 } : id === "check" ? { problems: 1, pages: 38 } : undefined }));
-        out.result = { title: "Contrastive Learning from the Ground Up", chapters: chapters.map((c) => ({ title: c.title })), pages: 38, compiled: true, problems: [{ kind: "chapter", message: "The InfoNCE loss：新符號登記為待確認：\\beta" }], notes: ["L-Reader 沒有開啟：2 篇等開啟後加進書庫"] };
+        out.result = { title: "Contrastive Learning from the Ground Up", chapters: chapters.map((c) => ({ title: c.title })), pages: 38, compiled: true, problems: [{ kind: "chapter", message: "The InfoNCE loss：新符號登記為待確認：\\beta" }], notes: ["L-Reader 沒有開啟：2 篇等開啟後加進書庫"], cards: [{ id: "n1", title: "InfoNCE" }, { id: "n2", title: "hard negatives" }, { id: "n3", title: "mutual information" }] };
       }
       if (stopped) out.state = "stopped";
       return out;
@@ -104,6 +104,8 @@ const PCBookJob = (() => {
     const c = st.counts;
     if (!c) return "";
     const p = [];
+    if (c.of > 1) p.push(`檔案 ${c.files ?? 0}/${c.of}`);
+    if (c.skipped) p.push(`不是論文 ${c.skipped}`);
     if (c.sections != null) p.push(`章節 ${c.sections}`);
     if (c.fig != null) p.push(`圖 ${c.fig}`);
     if (c.questions) p.push(`問題 ${c.questions}`);
@@ -197,6 +199,13 @@ const PCBookJob = (() => {
       b.body.append(E("ul", { class: "bkj-list" }, ...probs.map((p) => E("li", {}, p.message))));
       box.append(b);
     }
+    // what the book taught and the knowledge base did not have: made as cards (不熟), opened in L-Brain
+    const cards = r.cards ?? [];
+    if (cards.length) {
+      const b = LoreShell.block({ n: probs.length ? "02" : "01", title: "新的知識卡", count: String(cards.length), key: "bkj.cards" });
+      b.body.append(E("div", { class: "bkj-left" }, ...cards.map((c) => E("button", { type: "button", class: "chip unknown", onclick: () => LoreLinks.open("kb", { node: c.id }) }, c.title))));
+      box.append(b);
+    }
     const notes = r.notes ?? [];
     if (notes.length) box.append(E("ul", { class: "bkj-list muted" }, ...notes.map((n) => E("li", {}, n))));
     return box;
@@ -218,7 +227,9 @@ const PCBookJob = (() => {
     const snap = J.snap, rv = snap.review ?? { chapters: [], suggestions: [] };
     const root = shell();
     const keep = J.keep?.id === J.id ? J.keep : null;
-    const rows = rv.chapters.map((c) => ({ ...c, include: keep?.off?.includes(c.id) ? false : true, terms: [...(c.terms ?? [])] }));
+    const rows = rv.chapters.map((c) => ({ ...c, include: keep?.off?.includes(c.id) ? false : true, terms: [...(c.terms ?? [])], found: (c.found ?? []).map((f) => ({ ...f, on: false })) }));
+    let makeCards = snap.options?.make_cards !== false;
+    const cardsN = E("span", { class: "muted" });
     const opts = { length: "standard", lang: "en-zh", page: "b5", ...(snap.options ?? {}) };
     const sugg = (rv.suggestions ?? []).map((x, i) => ({ ...x, k: i, state: "" }));
     let newId = 0;
@@ -238,7 +249,9 @@ const PCBookJob = (() => {
       list.textContent = "";
       bOut.setCount(String(rows.filter((r) => r.include).length));
       rows.forEach((r, i) => {
-        const terms = E("span", { class: "tm" }, ...r.terms.map((t) => E("span", { class: `chip ${t.state ?? "unknown"}`, title: t.state === "learning" ? "學習中" : "不懂" }, t.term)));
+        // the chapter's terms, then the new ones its literature brought (one layer; off until ticked)
+        const terms = E("span", { class: "tm" }, ...r.terms.map((t) => E("span", { class: `chip ${t.state ?? "unknown"}`, title: t.state === "learning" ? "學習中" : "不懂" }, t.term)),
+          ...(r.found ?? []).map((f) => E("button", { type: "button", class: "chip found", "aria-pressed": String(f.on), title: `文獻裡的新名詞：${f.from ?? ""}`, onclick: () => { f.on = !f.on; paintRows(); } }, f.on ? ic("check") : ic("plus"), f.term)));
         list.append(E("li", { class: "row" + (r.include ? "" : " off") },
           E("input", { type: "checkbox", checked: r.include, "aria-label": "這一章要寫", onchange: (e) => { r.include = e.target.checked; paintRows(); } }),
           E("span", { class: "mv" },
@@ -251,6 +264,7 @@ const PCBookJob = (() => {
       });
       paint(list);
       paintSugg();
+      paintCards();
     }
 
     // 建議: one structured edit each; 套用 changes the rows above, 忽略 drops it
@@ -323,7 +337,15 @@ const PCBookJob = (() => {
     const strip = E("div", { class: "bkj-opts" },
       E("span", { class: "ql" }, "篇幅"), optSeg("length", [["short", "短"], ["standard", "標準"], ["long", "長"]]),
       E("span", { class: "ql" }, "語言"), optSeg("lang", [["en-zh", "英中"], ["en", "English"], ["zh", "中文"]]),
-      ...(opts.book && opts.book !== "new" ? [] : [E("span", { class: "ql" }, "頁面"), optSeg("page", [["b5", "B5"], ["a4", "A4"]])]));
+      ...((opts.book && opts.book !== "new") || (opts.format ?? "notes") !== "notes" ? [] : [E("span", { class: "ql" }, "頁面"), optSeg("page", [["b5", "B5"], ["a4", "A4"]])]));
+    // 知識卡: how many the chapters kept would make, and the switch
+    const cardsBox = E("input", { type: "checkbox", id: "bkjCards", checked: makeCards, onchange: (e) => { makeCards = e.target.checked; paintCards(); } });
+    function paintCards() {
+      const extra = rows.filter((r) => r.include).reduce((n, r) => n + (r.found ?? []).filter((f) => f.on).length, 0);
+      cardsN.textContent = makeCards && rv.cards != null ? `${rv.cards + extra} 張` : "";
+    }
+    strip.append(E("span", { class: "ql" }, "知識卡"), E("label", { class: "bkj-cards", for: "bkjCards" }, cardsBox, "建立（標成不熟）", cardsN));
+    paintCards();
     // a new book: where it goes (the last folder used, changeable here)
     if (!opts.book || opts.book === "new") {
       const path = E("input", { class: "set-input bkj-folder", value: opts.folder ?? "", "aria-label": "存放的資料夾", spellcheck: "false" });
@@ -357,7 +379,7 @@ const PCBookJob = (() => {
       if (!skip && !rows.some((r) => r.include)) { toast("至少要留一章"); return; }
       J.busy = true;
       try {
-        await api().review(J.id, skip ? { skip: true } : { chapters: rows.map((r) => ({ id: r.id, title: r.title, depth: r.depth, include: r.include, terms: r.terms.map((t) => t.term) })) });
+        await api().review(J.id, skip ? { skip: true } : { make_cards: makeCards, chapters: rows.map((r) => ({ id: r.id, title: r.title, depth: r.depth, include: r.include, terms: [...r.terms.map((t) => t.term), ...(r.found ?? []).filter((f) => f.on).map((f) => f.term)] })) });
         J.keep = null; J.mode = ""; J.live = true;
         poll();
       } catch (e) { toast(e.message, true); } finally { J.busy = false; }
@@ -393,6 +415,7 @@ const PCBookJob = (() => {
     J.id = id; J.snap = null; J.mode = ""; J.live = false;
     try { const u = new URL(location.href); u.searchParams.set("book-job", id); history.replaceState(null, "", u); } catch {}
     shell().hidden = false;
+    chip.hidden = true;
     document.addEventListener("keydown", esc, true);
     poll();
   }
@@ -401,14 +424,9 @@ const PCBookJob = (() => {
     clearTimeout(J.timer);
     J.id = null; J.mode = "";
     if (J.root) J.root.hidden = true;
+    setTimeout(watch, 100);
     document.removeEventListener("keydown", esc, true);
     try { const u = new URL(location.href); u.searchParams.delete("book-job"); u.searchParams.delete("at"); history.replaceState(null, "", u); } catch {}
-  }
-
-  /** 從論文寫…: an L-Reader paper → a new book (the default folder) with the review window. */
-  async function start(sha, { book = "new", folder, page } = {}) {
-    const v = await API.post("/api/book", { source: { kind: "lr", sha }, book, folder, page, mode: "review" });
-    open(v.job);
   }
 
   // start-up: ?book-job=<id>, else 「上次做到第 N 步，繼續？」 for a book job a quit left unfinished
@@ -428,7 +446,30 @@ const PCBookJob = (() => {
     if (pick === "go") { try { await API.resume(j.id); } catch (e) { toast(e.message, true); } open(j.id); }
   }
   setTimeout(boot, 500);
+
+  // ── a book being written, wherever the author is: one small chip, back to the job on click ──
+  const chip = E("button", { type: "button", class: "bkj-chip", hidden: true, onclick: () => { if (chip._id) open(chip._id); } });
+  async function watch() {
+    if (document.hidden) return;
+    let jobs = [];
+    try { jobs = (await API.j("/api/book/jobs")).jobs ?? []; } catch { return; }
+    const j = jobs.find((x) => x.state === "review") ?? jobs.find((x) => x.state === "running");
+    const shown = !!j && !(J.id && J.root && !J.root.hidden);
+    chip.hidden = !shown;
+    if (!shown) return;
+    chip._id = j.id;
+    const st = (j.stages ?? []).find((x) => x.state === "running");
+    const c = st?.counts ?? {};
+    const where = j.state === "review" ? "等你微調" : `${STAGES.find(([id]) => id === st?.id)?.[1] ?? ""}${c.chapter != null ? ` ${c.chapter}/${c.chapters}` : c.of > 1 ? ` ${c.files ?? 0}/${c.of}` : ""}`;
+    chip.classList.toggle("wait", j.state === "review");
+    chip.replaceChildren(ic("bookWrite"), E("span", {}, `寫書　${where}`));
+    chip.title = j.title || "寫書";
+    if (!chip.isConnected) document.body.append(chip);
+    paint(chip);
+  }
+  setTimeout(watch, 1500);
+  setInterval(watch, 5000);
   /** Book jobs not finished yet (running ones too), newest first: the home's 寫書 list. */
   const unfinished = () => API.j("/api/book/jobs").then((v) => (v.jobs ?? []).filter((j) => j.state !== "done"));
-  return { open, close, start, list: unfinished, get id() { return J.id; } };
+  return { open, close, list: unfinished, get id() { return J.id; } };
 })();

@@ -1401,9 +1401,10 @@ async function addCardDialog({ title, sha, page, context, hint, summary }) {
   };
   paintSeg();
   const status = kb?.ok ? null : kbNote();
+  let webSources = [];
   const draftBtn = h("button", { type: "button", class: "btn", disabled: !kb?.ok, onclick: async () => {
-    draftBtn.disabled = true; draftBtn.textContent = "起草中…";
-    try { const r = await api("/api/kb/draft", { body: { term: t.value, context, sha, page } }); if (r.draft?.summary) sum.value = r.draft.summary; toast(`草稿：${r.assistant ?? ""}`); }
+    draftBtn.disabled = true; draftBtn.textContent = "上網查資料中…";
+    try { const r = await api(`/api/papers/${sha}/nouns/card`, { body: { term: t.value, context, page, save: false } }); if (r.summary) sum.value = r.summary; webSources = r.sources ?? []; toast(`草稿：${engineName(r.engine)}`); }
     catch (e) { fail(e); }
     draftBtn.disabled = false; draftBtn.replaceChildren(h("span", { "data-icon": "spark" }), "起草摘要"); paintIcons(draftBtn);
   } }, h("span", { "data-icon": "spark" }), "起草摘要");
@@ -1422,7 +1423,7 @@ async function addCardDialog({ title, sha, page, context, hint, summary }) {
   if (r === "retry") return addCardDialog({ title: t.value, sha, page, context, hint, summary: sum.value });
   if (r !== true) return;
   try {
-    const out = await api("/api/kb/cards", { body: { sha, page, title: t.value, summary: sum.value, initial_state: state, context } });
+    const out = await api("/api/kb/cards", { body: { sha, page, title: t.value, summary: sum.value, initial_state: state, context, web_sources: webSources } });
     toast(`已加入知識庫：${out.node.title}`);
     // The new card changes the noun list and the colouring of every page.
     refreshNouns();
@@ -1765,7 +1766,6 @@ async function readPaper(sha) {
     setSymbols(r.symbols);
     setNouns(r.nouns);
     loadParagraphs(sha);
-    if (r.nouns.classification.pending > 0) classifyNouns(false);
   } catch (e) {
     if (S.sha !== sha) return;
     S.readStatus = `讀不到全文：${e.message}`;
@@ -1806,19 +1806,51 @@ function setNouns(n) {
   renderSide("nouns");
 }
 
+const CLASSIFY_BATCH = 15;
+/** Classify in batches of CLASSIFY_BATCH: each batch is saved and shown as it lands
+ *  (`S.classifying` = { done, total }); a failed batch keeps the ones before it. */
 async function classifyNouns(again) {
   if (!S.sha || S.classifying) return;
   const sha = S.sha;
-  S.classifying = true; S.classifyError = null;
+  const cls = S.nouns?.classification ?? {};
+  S.classifying = { done: 0, total: again ? cls.unclassified ?? 0 : cls.pending ?? 0 };
+  S.classifyError = null;
   renderSide("nouns");
   try {
-    const r = await api(`/api/papers/${sha}/nouns/classify`, { body: { again } });
-    if (S.sha === sha) { setNouns(r.nouns); loadParagraphs(sha); }
+    let first = true;
+    for (;;) {
+      const r = await api(`/api/papers/${sha}/nouns/classify`, { body: { again: again && first, limit: CLASSIFY_BATCH } });
+      first = false;
+      if (S.sha !== sha) { S.classifying = false; return; }
+      S.classifying.done += r.asked ?? 0;
+      S.classifying.total = Math.max(S.classifying.total, S.classifying.done + r.nouns.classification.pending);
+      if (r.engine) S.used["lr-classify-terms"] = r.engine;
+      setNouns(r.nouns);
+      if (!r.asked || r.nouns.classification.pending === 0) break;
+    }
+    loadParagraphs(sha);
   } catch (e) {
-    S.classifyError = e.data?.llm_unavailable ? "沒有可用的模型，名詞未分類。" : e.message;
+    S.classifyError = e.data?.llm_unavailable ? `沒有可用的模型：${e.message}` : e.message;
   }
   S.classifying = false;
   if (S.sha === sha) renderSide("nouns");
+}
+
+/** 一鍵加卡: the server searches the web for the term, writes the summary from what it
+ *  read and saves the card (no search, no card). Several can run at once; each row shows its own. */
+async function quickCard(n) {
+  S.carding ??= new Map();
+  if (S.carding.has(n.key)) return;
+  const sha = S.sha;
+  S.carding.set(n.key, true);
+  renderSide("nouns");
+  try {
+    const { page, context } = await nounContext(n, 0);
+    const r = await api(`/api/papers/${sha}/nouns/card`, { body: { term: n.text, page, context } });
+    toast(`已加入知識庫：${r.node?.title ?? n.text}`);
+  } catch (e) { fail(e); }
+  S.carding.delete(n.key);
+  if (S.sha === sha) await refreshNouns();
 }
 
 /** Light every occurrence of noun `i` and go to occurrence `k` (wraps). */
@@ -1879,7 +1911,8 @@ async function nounPopover(n, anchor, p) {
   acts.append(h("button", { type: "button", class: "btn small", onclick: () => translate(n.text, ctx.context, null, { p: { sha: S.sha, page: ctx.page }, context: ctx.context }) }, h("span", { "data-icon": "languages" }), "翻譯"));
   if (!n.kb) {
     acts.append(h("button", { type: "button", class: "btn small", onclick: () => ignoreNoun(n) }, h("span", { "data-icon": "eyeOff" }), "忽略"));
-    acts.append(h("button", { type: "button", class: "btn small", onclick: () => nounCard(n) }, h("span", { "data-icon": "cards" }), "加入知識庫…"));
+    acts.append(h("button", { type: "button", class: "btn small", disabled: !!S.carding?.has(n.key), onclick: () => { hidePop(); quickCard(n); } }, h("span", { "data-icon": "cards" }), "加入知識卡"));
+    acts.append(h("button", { type: "button", class: "ico small", "aria-label": "加入知識庫…（自己寫摘要）", title: "自己寫摘要", "data-icon": "pen", onclick: () => nounCard(n) }));
     showPop(anchor, head, meta, acts);
     return;
   }
@@ -1896,7 +1929,7 @@ function nounMenu(n, x, y) {
   LoreShell.menu({ x, y }, [
     { head: n.text },
     { icon: "search", label: `${n.count} 處`, run: () => { setTab("nouns"); focusNoun(i, 0); } },
-    ...(n.kb ? [] : [{ icon: "eyeOff", label: "忽略", run: () => ignoreNoun(n) }, { icon: "cards", label: "加入知識庫…", run: () => nounCard(n) }]),
+    ...(n.kb ? [] : [{ icon: "eyeOff", label: "忽略", run: () => ignoreNoun(n) }, { icon: "cards", label: "加入知識卡（上網查）", run: () => quickCard(n) }, { icon: "pen", label: "加入知識庫…", run: () => nounCard(n) }]),
   ]);
 }
 
@@ -1918,8 +1951,12 @@ function nounsPane() {
   out.push(h("div", { class: "nn-stats" },
     stat("red", "要學", "kt-new", count((e) => e.red)),
     stat("learning", "學習中", "kt-learn", count((e) => ["learning", "stale", "none"].includes(e.state))),
-    stat("known", "記得", "kt-known", count(isKnown)),
-    S.classifying ? h("span", { class: "muted" }, "分類中…") : cls.unclassified ? h("button", { type: "button", class: "btn ghost small", title: "整篇送一次模型", onclick: () => classifyNouns(true) }, `分類（${cls.unclassified}）`) : null,
+    stat("known", "記得", "kt-known", count(isKnown))));
+  // the model's part, on its own row so starting it does not move the counts
+  out.push(h("div", { class: "nn-run" },
+    S.classifying ? h("span", { class: "muted nn-prog", role: "status" }, `分類中 ${S.classifying.done}/${S.classifying.total}`)
+      : cls.pending ? h("button", { type: "button", class: "btn small", onclick: () => classifyNouns(false) }, h("span", { "data-icon": "spark" }), `分類名詞（${cls.pending}）`)
+      : cls.unclassified ? h("button", { type: "button", class: "btn ghost small", onclick: () => classifyNouns(true) }, `再分類（${cls.unclassified}）`) : h("span"),
     engineChip("lr-classify-terms")));
   if (S.classifyError) out.push(h("div", { class: "note-line" }, S.classifyError));
   if (n.kb && !n.kb.ok) out.push(kbNote());
@@ -1949,15 +1986,18 @@ function nounsPane() {
       onclick: (ev) => { if (!ev.target.closest("button")) (on ? focusNoun(i, S.focusNoun.k + 1) : focusNoun(i, 0)); },
       oncontextmenu: (ev) => { ev.preventDefault(); nounMenu(e, ev.clientX, ev.clientY); },
       onkeydown: (ev) => { if (ev.key === "Enter") focusNoun(i, on ? S.focusNoun.k + 1 : 0); } },
-      h("span", { class: "nn-term", title: e.used ? "記得（我的論文用過）" : nounState(e) }, h("i", { class: `nn-dot ${nounClass(e) || "kt-none"}` }), h("span", { class: "ellipsis" }, e.text), e.used ? h("span", { class: "nn-src" }, "用過") : null),
-      h("span", { class: "nn-cat ellipsis" }, on ? `${S.focusNoun.k + 1}/${e.count}` : e.category ?? (e.kb ? "—" : "未分類")),
+      h("span", { class: "nn-term", title: e.used ? "記得（我的論文用過）" : nounState(e) }, h("i", { class: `nn-dot ${nounClass(e) || "kt-none"}` }), h("span", { class: "ellipsis" }, e.text), e.used ? h("span", { class: "nn-src" }, "用過") : null,
+        // a term to learn: its card is one click away, always in view
+        e.red && !e.kb ? h("button", { type: "button", class: "ico small nn-add", "aria-label": `加入知識卡（上網查）：${e.text}`, title: "加入知識卡（上網查）", "data-icon": "plus", disabled: !!S.carding?.has(e.key), onclick: () => quickCard(e) }) : null),
+      S.carding?.has(e.key) ? h("span", { class: "nn-cat ellipsis nn-busy", role: "status" }, "查資料中…")
+        : h("span", { class: "nn-cat ellipsis" }, on ? `${S.focusNoun.k + 1}/${e.count}` : e.category ?? (e.kb ? "—" : "未分類")),
       h("span", { class: "nn-num" }, e.count),
       h("span", { class: "nn-num" }, e.first_page),
       h("span", { class: "nn-acts" },
         on ? h("button", { class: "ico small", "aria-label": "上一個出現位置", "data-icon": "up", onclick: () => focusNoun(i, S.focusNoun.k - 1) }) : null,
         on ? h("button", { class: "ico small", "aria-label": "下一個出現位置", "data-icon": "chevron", onclick: () => focusNoun(i, S.focusNoun.k + 1) }) : null,
         !on && !e.kb ? h("button", { class: "ico small", "aria-label": "忽略", "data-icon": "eyeOff", onclick: () => ignoreNoun(e) }) : null,
-        !on && !e.kb ? h("button", { class: "ico small", "aria-label": "加入知識庫…", "data-icon": "cards", onclick: () => nounCard(e) }) : null,
+        !on && !e.kb && !e.red ? h("button", { class: "ico small", "aria-label": "加入知識卡（上網查）", title: "加入知識卡（上網查）", "data-icon": "cards", disabled: !!S.carding?.has(e.key), onclick: () => quickCard(e) }) : null,
         on ? h("button", { class: "ico small", "aria-label": "取消標示", "data-icon": "x", onclick: clearNounFocus }) : null));
     return row;
   };
@@ -1980,6 +2020,13 @@ async function loadParagraphs(sha) {
     renderSide("paras");
     if (r.status?.running) S.paraTimer = setTimeout(() => loadParagraphs(sha), 2000);
   } catch (e) { if (S.sha === sha) console.error(e); }
+}
+
+/** 分析段落: the background run (results stream in, polled by loadParagraphs). */
+async function runParagraphs() {
+  const sha = S.sha;
+  if (!sha) return;
+  try { S.paras = await api(`/api/papers/${sha}/paragraphs/run`, { body: {} }); renderSide("paras"); loadParagraphs(sha); } catch (e) { fail(e); }
 }
 
 async function setUnderstood(p, on) {
@@ -2076,8 +2123,10 @@ function parasPane() {
     h("div", { class: "progress", role: "progressbar", "aria-valuenow": pr.understood, "aria-valuemax": pr.total, title: `懂了 ${pr.understood}/${pr.total}` }, h("i", { style: `width:${pr.total ? (pr.understood / pr.total) * 100 : 0}%` })),
     h("button", { type: "button", class: "btn small", onclick: nextNotUnderstood }, h("span", { "data-icon": "next" }), "下一段未懂"),
     engineChip("lr-paragraph")));
-  if (st.running) out.push(h("div", { class: "muted para-status" }, `分析中 ${st.done}/${st.total}`));
-  if (st.error) out.push(h("div", { class: "warn-box" }, st.error, " ", h("button", { type: "button", class: "btn ghost small", onclick: async () => { try { S.paras = await api(`/api/papers/${S.sha}/paragraphs/run`, { body: {} }); renderSide(); loadParagraphs(S.sha); } catch (e) { fail(e); } } }, "重試")));
+  const todo = d.paragraphs.filter((p) => p.section_kind !== "front" && !p.analysis).length;
+  if (st.running) out.push(h("div", { class: "muted para-status", role: "status" }, `分析中 ${st.done}/${st.total}`));
+  else if (todo && !st.error) out.push(h("div", { class: "para-run" }, h("button", { type: "button", class: "btn small", onclick: runParagraphs }, h("span", { "data-icon": "spark" }), `分析段落（${todo}）`)));
+  if (st.error) out.push(h("div", { class: "warn-box" }, st.error, " ", h("button", { type: "button", class: "btn ghost small", onclick: runParagraphs }, "重試")));
   // only what can block understanding: terms to learn, symbols not settled, equations
   const blocking = (kind, id) => {
     if (kind === "term") return S.nouns?.entries.find((e) => e.key === id)?.red !== false;
@@ -2160,7 +2209,6 @@ function fieldAsk() {
     try {
       await api("/api/reader", { method: "PUT", body: { field: f } });
       await refreshNouns();
-      if (S.nouns?.classification.pending > 0) classifyNouns(false);
     } catch (e) { fail(e); }
   };
   return h("form", { class: "nn-field", onsubmit: (e) => { e.preventDefault(); save(); } },
@@ -2659,7 +2707,6 @@ async function generalTab(el) {
       await api("/api/reader", { method: "PUT", body: { field: field.value } });
       toast("已儲存");
       await refreshNouns();
-      if (S.nouns?.classification.pending > 0) classifyNouns(false);
     } catch (e) { fail(e); }
   });
   const path = (p) => h("span", { class: "v mono", title: p ?? "" }, p ?? "—");
@@ -2758,7 +2805,7 @@ function mountShell() {
   LoreMakeDeck.mount({ before: "header.top .slot-primary #actAsk", key: "lr.todeck", source: async () => (S.sha ? { kind: "lr", sha: S.sha } : null) });
   // 寫 review (commons/ui/makebook.js): L-Paper's 寫書 reads this PDF; the red terms, the
   // paragraphs without 懂了 and 問這篇's questions go along (L-Paper also reads them from disk)
-  LoreMakeBook.mount({ before: "header.top .slot-primary #actAsk", key: "lr.tobook", source: async () => (S.sha ? { kind: "lr", sha: S.sha } : null), extras: readingExtras });
+  LoreMakeBook.mount({ before: "header.top .slot-primary #actAsk", source: async () => (S.sha ? { kind: "lr", sha: S.sha, title: S.meta?.title ?? S.paper?.title ?? "" } : null), extras: readingExtras });
   paintIcons(shell.el);
   // the drawer toggles: 段落 chips are measured once the right panel is visible
   shell.el.querySelector(".slot-primary .narrow-only")?.addEventListener("click", () => requestAnimationFrame(foldChips));

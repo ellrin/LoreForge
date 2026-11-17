@@ -25,7 +25,8 @@ fn page(pairs: &[(&str, &str)]) -> String {
 }
 
 /// The page a `lore-pc://` link stands for: `lore-pc://` → `/`, `lore-pc://open?path=<file>` → `/?open=<file>`,
-/// `lore-pc://note/<id>` → `/?note=<id>` (the 筆記 window on that note).
+/// `lore-pc://note/<id>` → `/?note=<id>` (the 筆記 window on that note), `lore-pc://bookjob/<id>` → `/?book-job=<id>`
+/// (a 寫書 job) and `lore-pc://booksetup/<id>` → `/?book-setup=<id>` (the 寫書 start panel another app filled in).
 fn link_page(u: &url::Url) -> Option<String> {
     if u.scheme() != "lore-pc" {
         return None;
@@ -41,6 +42,11 @@ fn link_page(u: &url::Url) -> Option<String> {
             let seg = u.path_segments().and_then(|mut s| s.next()).unwrap_or("");
             let id: String = url::form_urlencoded::parse(format!("n={}", seg.replace('+', "%2B")).as_bytes()).next().map(|(_, v)| v.into_owned()).unwrap_or_default();
             Some(page(&[("note", &id)]))
+        }
+        // 寫書: a running job's view, or the start panel with what another app chose
+        h @ ("bookjob" | "booksetup") => {
+            let id = u.path_segments().and_then(|mut s| s.next()).filter(|s| !s.is_empty())?;
+            Some(page(&[(if h == "bookjob" { "book-job" } else { "book-setup" }, id)]))
         }
         _ => None,
     }
@@ -208,6 +214,9 @@ mod tests {
         let page = p("lore-pc://note/2026-11-12-%E6%A2%AF%E5%BA%A6").unwrap();
         assert_eq!(url::Url::parse(&format!("http://x{page}")).unwrap().query_pairs().next().unwrap().1, "2026-11-12-梯度");
         assert_eq!(p("lore-pc://note"), Some("/?note=".into()));
+        assert_eq!(p("lore-pc://bookjob/j1a2"), Some("/?book-job=j1a2".into()));
+        assert_eq!(p("lore-pc://booksetup/s9"), Some("/?book-setup=s9".into()));
+        assert_eq!(p("lore-pc://booksetup"), None);
         assert_eq!(p("lore-sc://deck/x"), None);
     }
 

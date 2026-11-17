@@ -291,7 +291,7 @@ mod tests {
         assert!(FILES.iter().all(|(p, _, b)| p.starts_with('/') && !b.is_empty()));
         assert!(SHELL_JS.contains("window.LoreShell") && SHELL_JS.contains("window.LoreLinks"));
         assert!(MAKEDECK_JS.contains("window.LoreMakeDeck") && MAKEDECK_JS.contains("/api/todeck"));
-        assert!(MAKEBOOK_JS.contains("window.LoreMakeBook") && MAKEBOOK_JS.contains("/api/book") && MAKEBOOK_JS.contains("bookjob"));
+        assert!(MAKEBOOK_JS.contains("window.LoreMakeBook") && MAKEBOOK_JS.contains("/api/book/setup") && MAKEBOOK_JS.contains("booksetup"));
         assert!(POLISH_JS.contains("window.LorePolish") && POLISH_JS.contains("/api/polish") && POLISH_JS.contains("/api/polish/like") && POLISH_JS.contains("/api/voice/listen"));
         // the icons the cards draw
         let u = union();
@@ -300,5 +300,6 @@ mod tests {
             assert!(u.contains(n), "{n}");
         }
         assert!(SHELL_JS.contains("`bookjob/${enc(p.bookjob)}`, `/?book-job=${enc(p.bookjob)}`"));
+        assert!(SHELL_JS.contains("`booksetup/${enc(p.booksetup)}`, `/?book-setup=${enc(p.booksetup)}`"));
     }
 }

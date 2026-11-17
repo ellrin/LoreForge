@@ -101,3 +101,12 @@
 /* a new book's folder: its own row in the options strip */
 .bkj-opts .bkj-folder { grid-column: 2 / span 4; min-width: 0; font: 12px var(--mono); }
 @media (max-width: 760px) { .bkj-opts .bkj-folder { grid-column: auto; } }
+
+/* new terms from the found literature: offered, off until ticked */
+.bkj-chapters .chip.found { border-style: dashed; color: var(--muted); cursor: pointer; gap: 3px; }
+.bkj-chapters .chip.found svg { width: 10px; height: 10px; }
+.bkj-chapters .chip.found:hover { color: var(--text); }
+.bkj-chapters .chip.found[aria-pressed="true"] { border-style: solid; color: var(--accent-2-text); border-color: var(--accent-2); background: var(--accent-2-soft); }
+.bkj-cards { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; grid-column: span 5; }
+.bkj-left button.chip { cursor: pointer; }
+.bkj-left button.chip:hover { border-color: var(--accent-text); }
