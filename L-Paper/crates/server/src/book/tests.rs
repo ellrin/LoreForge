@@ -505,13 +505,20 @@ async fn a_keyword_only_book_plans_without_a_paper() {
     let model = Arc::new(MockModel::default().on(TASK_PLAN, json!({ "title": "", "abstract": "", "chapters": [{ "title": "Temperature", "terms": ["temperature scaling"], "depth": "brief" }] })).on(TASK_SUGGEST, json!({ "suggestions": [] })).on(TASK_CHAPTER, json!({ "body": "A \\term{temperature scaling}{溫度縮放} divides scores." })));
     let deps = files_deps(&root, Arc::new(FileExtract(Default::default())), Arc::new(MockHttp::new()), model.clone(), &[]);
     let js = lore_jobs::Jobs::open(deps.cache.join("jobs"), Arc::new(pipeline::BookJob { deps: deps.clone() }));
-    let st = setup::Setup { keywords: vec!["temperature scaling".into()], folder: Some(root.join("Books")), make_cards: false, ..Default::default() };
+    let st = setup::Setup { keywords: vec!["temperature scaling".into()], folder: Some(root.join("Books")), make_cards: false, format: "review2".into(), page: "b5".into(), ..Default::default() };
     let job = js.create(serde_json::to_value(pipeline::Params::from_setup(&st, None, Some(root.join("Books")))).unwrap(), true, "").unwrap();
     until(&job, "done").await;
     let (sys, user) = s_first(&model, TASK_PLAN);
     assert!(sys.contains("wants to learn") && !user.contains("Paper"), "{user}");
     let w: write::WriteOut = serde_json::from_value(job.output("write").unwrap()).unwrap();
     assert_eq!(w.title, "Notes on temperature scaling");
+    // the two-column review format: its template, no page size, the chapter is a section there
+    let book = PathBuf::from(&w.book);
+    let main = std::fs::read_to_string(book.join("main.tex")).unwrap();
+    assert!(main.contains("\\usepackage[twocol]{lorereview}") && !main.contains("lorenotes") && book.join("lorereview.sty").is_file(), "{main}");
+    assert_eq!(pc_core::book::format_of(&book), "review2");
+    let (sys, _) = s_first(&model, TASK_CHAPTER);
+    assert!(sys.contains("one section of a review paper") && sys.contains("footnote"), "{sys}");
     std::fs::remove_dir_all(&root).unwrap();
 }
 

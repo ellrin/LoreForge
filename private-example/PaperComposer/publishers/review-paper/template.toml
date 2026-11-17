@@ -1,0 +1,4 @@
+name = "Review paper"
+kind = "book"
+format = "review1"
+notes = "寫書的模板：review paper，單欄（XeLaTeX）。"

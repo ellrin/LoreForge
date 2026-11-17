@@ -24,6 +24,79 @@ pub const TEMPLATE_FILES: &[(&str, &str)] = &[
     ("template.toml", include_str!("../../../../private-example/PaperComposer/publishers/lecture-notes/template.toml")),
 ];
 
+/// The review-paper templates' files (`publishers/review-paper/`, `review-paper-2col/`).
+pub const REVIEW1_FILES: &[(&str, &str)] = &[
+    ("sample.tex", include_str!("../../../../private-example/PaperComposer/publishers/review-paper/sample.tex")),
+    ("lorereview.sty", include_str!("../../../../private-example/PaperComposer/publishers/review-paper/lorereview.sty")),
+    ("refs.bib", include_str!("../../../../private-example/PaperComposer/publishers/review-paper/refs.bib")),
+    ("template.toml", include_str!("../../../../private-example/PaperComposer/publishers/review-paper/template.toml")),
+];
+pub const REVIEW2_FILES: &[(&str, &str)] = &[
+    ("sample.tex", include_str!("../../../../private-example/PaperComposer/publishers/review-paper-2col/sample.tex")),
+    ("lorereview.sty", include_str!("../../../../private-example/PaperComposer/publishers/review-paper-2col/lorereview.sty")),
+    ("refs.bib", include_str!("../../../../private-example/PaperComposer/publishers/review-paper-2col/refs.bib")),
+    ("template.toml", include_str!("../../../../private-example/PaperComposer/publishers/review-paper-2col/template.toml")),
+];
+
+/// A book's formats (docs/book.md §統一入口) and their template folders: `notes` (lecture notes,
+/// B5 / A4), `review1` (a review paper, one column), `review2` (two columns). All three define the
+/// same commands, so a chapter reads the same in each.
+pub const FORMATS: &[(&str, &str)] = &[("notes", TEMPLATE_ID), ("review1", "review-paper"), ("review2", "review-paper-2col")];
+
+/// The template folder name of a format (`notes` for anything unknown).
+pub fn template_id(format: &str) -> &'static str {
+    FORMATS.iter().find(|(f, _)| *f == format).map(|(_, id)| *id).unwrap_or(TEMPLATE_ID)
+}
+
+fn builtin_files(format: &str) -> &'static [(&'static str, &'static str)] {
+    match format {
+        "review1" => REVIEW1_FILES,
+        "review2" => REVIEW2_FILES,
+        _ => TEMPLATE_FILES,
+    }
+}
+
+/// The format a book template is for (`template.toml` `format`; none = `notes`).
+pub fn template_format(dir: &Path) -> String {
+    #[derive(serde::Deserialize)]
+    struct F {
+        #[serde(default)]
+        format: String,
+    }
+    let f = std::fs::read_to_string(dir.join("template.toml")).ok().and_then(|t| toml::from_str::<F>(&t).ok()).map(|f| f.format).unwrap_or_default();
+    if f.is_empty() { "notes".into() } else { f }
+}
+
+/// The workspace's template for `format`: its own folder (`review-paper/` …) when it is a book
+/// template; for `notes` also [`workspace_template`]'s fallback.
+pub fn workspace_template_for(publishers: &Path, format: &str) -> Option<PathBuf> {
+    if format == "notes" || format.is_empty() {
+        return workspace_template(publishers);
+    }
+    let own = publishers.join(template_id(format));
+    (is_book_template(&own) && own.join("sample.tex").is_file() && template_format(&own) == format).then_some(own)
+}
+
+/// The format of a book, read from how main.tex loads its style (`notes` when it is not a review).
+pub fn format_of(dir: &Path) -> &'static str {
+    let main = std::fs::read_to_string(crate::open::main_file(dir)).unwrap_or_default();
+    let code: String = main.lines().map(|l| l.split('%').next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+    match code.find("{lorereview}") {
+        Some(i) if code[..i].rsplit("\\usepackage").next().is_some_and(|o| o.contains("twocol")) => "review2",
+        Some(_) => "review1",
+        None => "notes",
+    }
+}
+
+/// Write the built-in template of `format` into `dir` (a scratch folder).
+pub fn write_builtin_format(dir: &Path, format: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for (name, text) in builtin_files(format) {
+        std::fs::write(dir.join(name), text)?;
+    }
+    Ok(())
+}
+
 /// Is this publisher folder a book template?
 pub fn is_book_template(dir: &Path) -> bool {
     #[derive(serde::Deserialize)]
@@ -43,16 +116,12 @@ pub fn workspace_template(publishers: &Path) -> Option<PathBuf> {
     }
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(publishers).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     dirs.sort();
-    dirs.into_iter().find(|d| is_book_template(d) && d.join("sample.tex").is_file())
+    dirs.into_iter().find(|d| is_book_template(d) && d.join("sample.tex").is_file() && template_format(d) == "notes")
 }
 
 /// Write the built-in template into `dir` (a scratch folder).
 pub fn write_builtin(dir: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    for (name, text) in TEMPLATE_FILES {
-        std::fs::write(dir.join(name), text)?;
-    }
-    Ok(())
+    write_builtin_format(dir, "notes")
 }
 
 /// A folder name from a book title: letters, digits, space, - _ . only.
@@ -185,6 +254,38 @@ mod tests {
         let sample = std::fs::read_to_string(d.join(TEMPLATE_ID).join("sample.tex")).unwrap();
         assert!(sample.starts_with("% !TEX program = xelatex\n"), "export picks XeLaTeX");
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn every_format_has_a_template_with_the_same_commands() {
+        let d = tmp("formats");
+        for (format, id) in FORMATS {
+            write_builtin_format(&d.join(id), format).unwrap();
+            assert!(is_book_template(&d.join(id)), "{format}");
+            assert_eq!(template_format(&d.join(id)), *format);
+            assert_eq!(workspace_template_for(&d, format), Some(d.join(id)));
+            let sty: String = builtin_files(format).iter().filter(|(n, _)| n.ends_with(".sty")).map(|(_, t)| *t).collect();
+            for cmd in ["\\newcommand\\term", "\\newcommand\\sidenote", "{definition}", "{keyidea}", "{intuition}", "{remark}", "\\newcommand\\course", "\\newcommand\\keywords"] {
+                assert!(sty.contains(cmd), "{format}: {cmd}");
+            }
+            for pkg in ["tcolorbox", "titlesec", "xeCJK"] {
+                assert!(!sty.contains(pkg), "{format}: {pkg} is not in BasicTeX");
+            }
+        }
+        assert!(builtin_files("review2").iter().any(|(n, t)| *n == "sample.tex" && t.contains("twocolumn") && t.contains("[twocol]{lorereview}")));
+        assert!(builtin_files("review1").iter().any(|(n, t)| *n == "lorereview.sty" && t.contains("\\newcommand\\sidenote[1]{\\footnote{#1}}")));
+        for (format, id) in FORMATS {
+            let parent = d.join(format!("books-{format}"));
+            std::fs::create_dir_all(&parent).unwrap();
+            let b = create(&parent, "A book", &d.join(id)).unwrap();
+            assert_eq!(format_of(&b), *format, "the format reads back from main.tex");
+        }
+        // the notes fallback never takes a review template
+        let only_review = tmp("formats-review");
+        write_builtin_format(&only_review.join("review-paper"), "review1").unwrap();
+        assert_eq!(workspace_template(&only_review), None);
+        std::fs::remove_dir_all(&d).unwrap();
+        std::fs::remove_dir_all(&only_review).unwrap();
     }
 
     /// Every file of the book, as lore-notation reads a document.

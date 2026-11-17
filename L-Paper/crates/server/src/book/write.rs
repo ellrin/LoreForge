@@ -128,17 +128,23 @@ placed right after the sentence it explains and never inside a box.",
 
 /// The chapter prompt. `style` = the author's style notes (`style_text`; empty: none).
 #[allow(clippy::too_many_arguments)]
-pub fn prompt(book_title: &str, c: &Chapter, plan: &Plan, labels: &BTreeMap<String, (String, String)>, teach: &[Teach], src: &Sources, r: &Research, keys: &BTreeMap<String, String>, notation: &str, style: &str, length: &str, lang: &str) -> (String, String) {
+pub fn prompt(book_title: &str, c: &Chapter, plan: &Plan, labels: &BTreeMap<String, (String, String)>, teach: &[Teach], src: &Sources, r: &Research, keys: &BTreeMap<String, String>, notation: &str, style: &str, length: &str, lang: &str, format: &str) -> (String, String) {
     let (lo, hi) = words_for(&c.depth, length);
-    let mut system = format!(
+    let what = if format.starts_with("review") {
+        "You write one section of a review paper for one reader, in the manner of a tutorial review in a good journal: a clear \
+expository tone, from the basics to depth, intuition before equations, worked reasoning rather than lists. In this format \\sidenote{…} prints as a footnote."
+    } else {
         "You write one chapter of a set of course lecture notes for one reader, in the manner of university lecture notes such as \
-Stanford CS224n's: a textbook tone, from the basics to depth, intuition before equations, worked reasoning rather than lists.\n\
+Stanford CS224n's: a textbook tone, from the basics to depth, intuition before equations, worked reasoning rather than lists."
+    };
+    let mut system = format!(
+        "{what}\n\
 Rules:\n\
 - Explain every listed term. A term with state `unknown` gets a full explanation (what it is, why it is needed, how it works, an example); \
 a term with state `learning` gets a short reminder, never skipped. Start from what the reader already knows.\n\
 - Every factual claim carries a citation \\cite{{key}} with a key from the given sources only. Never invent a key, a number or a result. \
 If no given source supports a statement, leave the statement out.\n\
-- LaTeX for the lecture-notes template: \\subsection{{…}} for the parts of the chapter (no \\section: the chapter heading is written for you); \
+- LaTeX for the book's template: \\subsection{{…}} for the parts of the chapter (no \\section: the chapter heading is written for you); \
 \\begin{{definition}}[name]…\\end{{definition}} for definitions, \\begin{{intuition}}…\\end{{intuition}} before an equation, \
 \\begin{{keyidea}}…\\end{{keyidea}} for the take-away, \\begin{{remark}}…\\end{{remark}} for asides. Boxes hold a few sentences and never a \\sidenote.\n\
 - Variables and equations in TeX math: inline $…$, displayed \\begin{{equation}}…\\label{{eq:…}}\\end{{equation}}.\n\
@@ -617,7 +623,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
                 let _ = pc_core::paper::delete_section(&book, f);
             }
         }
-        set_front(&book, "course", "Reading notes");
+        set_front(&book, "course", if pc_core::book::format_of(&book).starts_with("review") { "Review" } else { "Reading notes" });
         // the back of the title page (About these notes) is never left with a heading and nothing under it
         let only = if src.papers().len() == 1 { src.papers()[0].title.as_str() } else { "" };
         set_front(&book, "abstract", &about_text(plan, only));
@@ -669,7 +675,7 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
             continue;
         }
         let (file, label) = st.sections[&c.id].clone();
-        let (system, user) = prompt(&title, c, plan, &st.sections, teach, src, r, &st.keys, &notation_rules, &style, ctx.length, ctx.lang);
+        let (system, user) = prompt(&title, c, plan, &st.sections, teach, src, r, &st.keys, &notation_rules, &style, ctx.length, ctx.lang, pc_core::book::format_of(&book));
         let mut extra = String::new();
         let mut co = ChapterOut::default();
         let mut text = String::new();

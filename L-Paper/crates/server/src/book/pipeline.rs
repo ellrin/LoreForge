@@ -488,7 +488,8 @@ impl BookJob {
         };
         let scratch = d.cache.join("template");
         let ws = d.workspace.clone();
-        let template = move || crate::books::template(ws.as_deref(), &scratch);
+        let format = p.format().to_string();
+        let template = move || crate::books::template(ws.as_deref(), &scratch, &format);
         let target = write::Target {
             existing: p.book_path.as_deref(),
             folder: p.folder.as_deref(),
