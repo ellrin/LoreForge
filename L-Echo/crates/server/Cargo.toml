@@ -13,6 +13,7 @@ lore-llm.workspace = true
 lore-engines.workspace = true
 lore-shell.workspace = true
 kb-core.workspace = true
+lore-cards.workspace = true
 lore-store.workspace = true
 lore-notation.workspace = true
 lore-notes.workspace = true

@@ -26,6 +26,7 @@ kb-core.workspace = true
 lore-store.workspace = true
 lore-jobs.workspace = true
 lore-learn.workspace = true
+lore-cards.workspace = true
 lore-polish.workspace = true
 lore-voice.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json"] }

@@ -18,6 +18,7 @@ lore-engines = { path = "../commons/crates/lore-engines" }
 lore-shell = { path = "../commons/crates/lore-shell" }
 # The author's L-Brain cards, read from disk (never written); reviews go through its API.
 kb-core = { path = "../commons/crates/kb-core" }
+lore-cards = { path = "../commons/crates/lore-cards" }
 lore-store = { path = "../commons/crates/lore-store" }
 # 整理成筆記 / 記下靈感: the note's LaTeX is checked against the notation registry before it is saved.
 lore-notation = { path = "../commons/crates/lore-notation" }

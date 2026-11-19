@@ -1,5 +1,5 @@
 //! The shared LoreForge shell (`docs/shell.md`): `commons/ui/icons.js`, `base.css`,
-//! `shell.js`, `makedeck.js`, `makebook.js`, `polish.js` and `findfile.js` (with [`findfile`], 搜尋檔案 through L-Echo), compiled in like `lore_home::theme`, so an app server only needs
+//! `shell.js`, `makedeck.js`, `makebook.js`, `polish.js`, `findfile.js` and `addcard.js` (with [`findfile`], 搜尋檔案 through L-Echo), compiled in like `lore_home::theme`, so an app server only needs
 //! these routes:
 //!
 //! ```ignore
@@ -26,6 +26,8 @@ pub const MAKEDECK_JS: &str = include_str!("../../../ui/makedeck.js");
 pub const MAKEBOOK_JS: &str = include_str!("../../../ui/makebook.js");
 /// `commons/ui/polish.js`: `LorePolish`, the 潤飾 dialog (lore-polish's `/api/polish*`, lore-voice's `/api/voice*`).
 pub const POLISH_JS: &str = include_str!("../../../ui/polish.js");
+/// `commons/ui/addcard.js`: `LoreAddCard.add`, 加入知識庫 for selected words = L-Reader's 一鍵加卡 (`lore_cards::router`'s `/api/lore/card`).
+pub const ADDCARD_JS: &str = include_str!("../../../ui/addcard.js");
 /// `commons/ui/findfile.js`: `LoreFindFile`, the 搜尋檔案 button (a find request to L-Echo, [`findfile`]).
 pub const FINDFILE_JS: &str = include_str!("../../../ui/findfile.js");
 
@@ -38,6 +40,7 @@ pub const FILES: &[(&str, &str, &str)] = &[
     ("/makebook.js", "text/javascript; charset=utf-8", MAKEBOOK_JS),
     ("/polish.js", "text/javascript; charset=utf-8", POLISH_JS),
     ("/findfile.js", "text/javascript; charset=utf-8", FINDFILE_JS),
+    ("/addcard.js", "text/javascript; charset=utf-8", ADDCARD_JS),
 ];
 
 /// The names in `const ICONS = { … }` of an icons.js, in order (duplicates kept).
@@ -286,7 +289,7 @@ mod tests {
 
     #[test]
     fn files_are_served() {
-        assert_eq!(FILES.len(), 7);
+        assert_eq!(FILES.len(), 8);
         assert!(FINDFILE_JS.contains("window.LoreFindFile") && FINDFILE_JS.contains("/api/lore/find"));
         assert!(FILES.iter().all(|(p, _, b)| p.starts_with('/') && !b.is_empty()));
         assert!(SHELL_JS.contains("window.LoreShell") && SHELL_JS.contains("window.LoreLinks"));

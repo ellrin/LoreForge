@@ -3624,6 +3624,8 @@ pub fn router(paths: Paths) -> Router {
         .merge(remove::routes())
         // 搜尋檔案 through L-Echo (lore_shell::findfile): a chosen file → a 實驗紀錄 record
         .merge(lore_shell::findfile::router(finds(&state)))
+        // 加入知識庫 for selected words: L-Brain's API while it runs, else its folder
+        .merge(lore_cards::router(std::sync::Arc::new(brain()), std::sync::Arc::new(CardHost(state.clone())), "papercomposer"))
         .merge(notation::routes())
         .merge(notes::routes())
         .merge(shell::routes())
@@ -3682,6 +3684,23 @@ fn engines_settings(state: &Shared) -> lore_engines::Engines {
         e = e.shared(rt); // 本機 status, 釋放, and this app's share of the idle checks
     }
     e
+}
+
+/// 加入知識庫's web-searched summary (lore-cards' task `lore-card`) on this app's engines.
+struct CardHost(Shared);
+
+impl lore_cards::search::Search for CardHost {
+    async fn route(&self) -> Result<lore_llm::Route, String> {
+        self.0.llm.route(lore_cards::search::TASK, None).await
+    }
+    fn home(&self) -> lore_home::Home {
+        loreforge_home()
+    }
+}
+
+/// The author's L-Brain for 加入知識庫; none in tests and the isolated example (never the real KB).
+fn brain() -> lore_cards::Brain {
+    if cfg!(test) || engines_isolated() { lore_cards::Brain::none() } else { lore_cards::Brain::system(&loreforge_home()) }
 }
 
 /// `PAPERCOMPOSER_ENGINES_ISOLATED` (tests, the isolated example): no shared settings

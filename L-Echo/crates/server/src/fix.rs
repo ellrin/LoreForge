@@ -13,7 +13,6 @@
 //! What goes to Claude: this one card (title, aliases, summary, body) and what the author said
 //! about it — he asked for it; the conversation's other turns stay here.
 
-use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
@@ -37,24 +36,24 @@ pub fn routes() -> Router<Shared> {
     Router::new().route("/api/actions/fix/draft", post(draft)).route("/api/actions/fix/source", post(source)).route("/api/actions/fix/save", post(save))
 }
 
-fn client() -> reqwest::Client {
-    reqwest::Client::builder().timeout(Duration::from_secs(10)).no_proxy().build().unwrap_or_default()
-}
-
 fn bad(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({ "error": msg.into() }))).into_response()
 }
 
-const KB_CLOSED: &str = "L-Brain 沒開：打開它再修正這張卡";
+const KB_CLOSED: &str = "找不到 L-Brain，沒有修正這張卡";
 
-/// The card as L-Brain has it now (`GET /api/nodes/{id}` → its `node`).
-async fn node(url: &str, id: &str) -> Result<Value, Response> {
-    let r = client().get(format!("{url}/api/nodes/{id}")).send().await.map_err(|e| bad(StatusCode::BAD_GATEWAY, format!("L-Brain 沒有回應：{e}")))?;
-    let status = r.status();
-    let v: Value = r.json().await.unwrap_or(Value::Null);
-    if !status.is_success() {
-        return Err(bad(if status == StatusCode::NOT_FOUND { StatusCode::NOT_FOUND } else { StatusCode::BAD_GATEWAY }, if status == StatusCode::NOT_FOUND { "找不到這張卡".to_string() } else { format!("L-Brain：{}", v["error"].as_str().unwrap_or(status.as_str())) }));
+fn card_err(e: lore_cards::CardError) -> Response {
+    match e.status {
+        404 => bad(StatusCode::NOT_FOUND, "找不到這張卡"),
+        409 => bad(StatusCode::CONFLICT, "這張卡在預覽之後改過了，沒有套用；請重新查一次"),
+        503 => bad(StatusCode::SERVICE_UNAVAILABLE, KB_CLOSED),
+        _ => bad(StatusCode::BAD_GATEWAY, e.message),
     }
+}
+
+/// The card as L-Brain has it now (its API, else its files) → its `node`.
+async fn node(brain: &lore_cards::Brain, id: &str) -> Result<Value, Response> {
+    let v = brain.view(id).await.map_err(card_err)?;
     Ok(v.get("node").cloned().unwrap_or(v))
 }
 
@@ -168,8 +167,8 @@ async fn draft(State(s): State<Shared>, body: Option<Json<DraftBody>>) -> Respon
     if said.is_empty() {
         return bad(StatusCode::BAD_REQUEST, "說一下哪裡寫錯了");
     }
-    let Some(url) = s.kb.server_waking().await else { return bad(StatusCode::SERVICE_UNAVAILABLE, KB_CLOSED) };
-    let card = match node(&url, &b.card).await {
+    let Some(brain) = s.kb.brain(&s.home).await else { return bad(StatusCode::SERVICE_UNAVAILABLE, KB_CLOSED) };
+    let card = match node(&brain, &b.card).await {
         Ok(n) => n,
         Err(r) => return r,
     };
@@ -256,8 +255,8 @@ async fn save(State(s): State<Shared>, body: Option<Json<SaveBody>>) -> Response
     if !kb_core::id::valid_node_id(&b.id) || title.is_empty() {
         return bad(StatusCode::BAD_REQUEST, "卡片不對或沒有標題");
     }
-    let Some(url) = s.kb.server_waking().await else { return bad(StatusCode::SERVICE_UNAVAILABLE, KB_CLOSED) };
-    let card = match node(&url, &b.id).await {
+    let Some(brain) = s.kb.brain(&s.home).await else { return bad(StatusCode::SERVICE_UNAVAILABLE, KB_CLOSED) };
+    let card = match node(&brain, &b.id).await {
         Ok(n) => n,
         Err(r) => return r,
     };
@@ -268,19 +267,9 @@ async fn save(State(s): State<Shared>, body: Option<Json<SaveBody>>) -> Response
         "body": b.body.trim(),
         "sources": merged_sources(&card, &b.sources),
     });
-    match client().put(format!("{url}/api/nodes/{}", b.id)).json(&put).send().await {
-        Ok(r) => {
-            let status = r.status();
-            let v: Value = r.json().await.unwrap_or(Value::Null);
-            if status.is_success() {
-                Json(json!({ "node": v.get("node").cloned().unwrap_or(v) })).into_response()
-            } else if status == StatusCode::CONFLICT {
-                bad(StatusCode::CONFLICT, "這張卡在預覽之後改過了，沒有套用；請重新查一次")
-            } else {
-                bad(StatusCode::BAD_GATEWAY, format!("L-Brain 沒有改：{}", v["error"].as_str().unwrap_or(status.as_str())))
-            }
-        }
-        Err(e) => bad(StatusCode::BAD_GATEWAY, format!("L-Brain 沒有回應：{e}")),
+    match brain.update(&b.id, put).await {
+        Ok(v) => Json(json!({ "node": v.get("node").cloned().unwrap_or(v) })).into_response(),
+        Err(e) => card_err(e),
     }
 }
 

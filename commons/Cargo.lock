@@ -1167,6 +1167,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-cards"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "kb-core",
+ "lore-home",
+ "lore-learn",
+ "lore-llm",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tower",
+]
+
+[[package]]
 name = "lore-catalog"
 version = "0.1.0"
 dependencies = [

@@ -55,6 +55,7 @@ pub fn app_tasks() -> TaskTable {
         .merge(TaskTable::parse(include_str!("../../../../commons/crates/lore-flow/tasks.toml")).expect("lore-flow tasks parse"))
         .merge(lore_plot::assist::task_table())
         .merge(lore_polish::task_table())
+        .merge(lore_cards::search::task_table())
 }
 
 impl Llm {

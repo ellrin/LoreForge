@@ -11,9 +11,9 @@
 //!   `progress/<member>/*.json`; spaces: `KB_SPACES` > L-Brain's `config.toml` `spaces` >
 //!   lore-home `private/KnowledgeBase`; member: `KB_MEMBER` > `config.toml` `member` >
 //!   `private/shared/profile.toml` `id`). The only write is 「同時存進知識庫（記得）」, through
-//!   L-Brain's own `POST /api/nodes` (`KB_URL` > the shared ports file > 127.0.0.1:7700); when
-//!   it is not running the app is started in the background first ([`kb_url_waking`], never
-//!   under `KB_URL` or in tests); still no answer = nothing written, nothing queued.
+//!   L-Brain's own `POST /api/nodes` while it runs (`KB_URL` > the shared ports file >
+//!   127.0.0.1:7700), else straight into its folder (lore-cards, [`brain`]; never in tests);
+//!   neither = nothing written, nothing queued.
 //! * **Marks** ([`mark_body`], [`mark_slide`], [`unmark_body`], pure): runs get the editor-only
 //!   emphasis `learn` (`lore_canvas::style::LEARN_EM`) on the term, or on the whole sentence
 //!   for background / method text. Only plain generated runs are touched (no other emphasis,
@@ -24,7 +24,6 @@
 //! | PUT | /api/decks/{name}/learn | `{term, forms?, kb?: bool}` 我懂: clears the term's marks (one undoable step); `kb` also creates a card in state 記得 → `{…changed, kb: {saved, message}}` |
 
 use std::path::Path;
-use std::time::Duration;
 
 use axum::Json;
 use axum::extract::{Path as AxPath, State};
@@ -266,54 +265,42 @@ pub struct UnderstoodBody {
     pub kb: bool,
 }
 
-/// Where L-Brain answers: `KB_URL`, the shared ports file, else its default port.
-pub fn kb_url() -> String {
-    if let Some(u) = env("KB_URL") {
-        return u.trim_end_matches('/').to_string();
-    }
-    let port = lore_home::ports::live().get("kb").copied().unwrap_or(7700);
-    format!("http://127.0.0.1:{port}")
-}
-
-/// [`kb_url`], first starting L-Brain when it does not answer (`launch`, and no `KB_URL`).
-pub async fn kb_url_waking(launch: bool) -> String {
-    if !launch || env("KB_URL").is_some() {
-        return kb_url();
-    }
-    match tokio::task::spawn_blocking(|| lore_home::ports::ensure("kb", Some(7700))).await {
-        Ok(Ok(p)) => format!("http://127.0.0.1:{p}"),
-        _ => kb_url(),
+/// The L-Brain cards go to: `KB_URL` (tests) or this machine's, with its folder when the
+/// app is not running; isolated (`real_kb` off) only `KB_URL` and never a folder.
+pub fn brain(s: &crate::AppState) -> lore_cards::Brain {
+    let real = s.real_kb.load(std::sync::atomic::Ordering::Relaxed);
+    match (env("KB_URL"), real) {
+        (Some(u), true) => lore_cards::Brain::at(Some(&u), lore_learn::space_dirs(&s.home), &lore_learn::member(&s.home)),
+        (Some(u), false) => lore_cards::Brain::at(Some(&u), vec![], "me"),
+        (None, true) => lore_cards::Brain::system(&s.home),
+        (None, false) => lore_cards::Brain::none(),
     }
 }
 
-/// 同時存進知識庫（記得）through L-Brain's API: a new minimal card in state 記得, or, for a
-/// term that already has a card (`card`), the answer 記得 on that card (no duplicate).
-/// `Err` = a line for the author; L-Brain not running = nothing written, nothing queued.
-pub async fn save_known(base: &str, term: &str, card: Option<&str>) -> Result<String, String> {
-    let down = || "L-Brain 沒有開啟，沒有存進知識庫".to_string();
-    let http = reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(2)).timeout(Duration::from_secs(8)).build().map_err(|e| e.to_string())?;
-    let (url, body) = match card {
-        Some(id) => (format!("{base}/api/recall/{id}"), json!({ "outcome": "remembered", "via": "slidecomposer" })),
+/// 加入知識庫's web-searched summary (lore-cards' task `lore-card`) on this app's engines.
+pub struct CardHost(pub crate::Shared);
+
+impl lore_cards::search::Search for CardHost {
+    async fn route(&self) -> Result<lore_llm::Route, String> {
+        crate::todeck::llm(&self.0).route(lore_cards::search::TASK, None).await.map_err(|e| e.to_string())
+    }
+    fn home(&self) -> lore_home::Home {
+        self.0.home.clone()
+    }
+}
+
+/// 同時存進知識庫（記得）: a new minimal card in state 記得, or, for a term that already has a
+/// card (`card`), the answer 記得 on that card (no duplicate). L-Brain's API while it runs, else
+/// its folder (lore-cards). `Err` = a line for the author.
+pub async fn save_known(brain: &lore_cards::Brain, term: &str, card: Option<&str>) -> Result<String, String> {
+    let msg = |e: lore_cards::CardError| if e.down { "L-Brain 沒有開啟，也找不到知識庫的資料夾，沒有存進知識庫".to_string() } else { format!("知識庫：{}", e.message) };
+    match card {
+        Some(id) => brain.recall(id, "remembered", "slidecomposer").await.map(|_| id.to_string()).map_err(msg),
         None => {
-            let spaces: Value = http.get(format!("{base}/api/spaces")).send().await.map_err(|_| down())?.json().await.map_err(|_| down())?;
-            let list = spaces["spaces"].as_array().cloned().unwrap_or_default();
-            let space = list
-                .iter()
-                .find(|s| s["kind"] == "personal" && s["is_member"] == true)
-                .or_else(|| list.iter().find(|s| s["is_member"] == true))
-                .and_then(|s| s["id"].as_str())
-                .ok_or("知識庫沒有你能寫入的空間")?
-                .to_string();
-            (format!("{base}/api/nodes"), json!({ "space": space, "via": "slidecomposer", "kind": "concept", "title": term.trim(), "initial_state": "known" }))
+            let v = brain.create(json!({ "via": "slidecomposer", "kind": "concept", "title": term.trim(), "initial_state": "known" })).await.map_err(msg)?;
+            Ok(v["node"]["id"].as_str().unwrap_or_default().to_string())
         }
-    };
-    let res = http.post(url).json(&body).send().await.map_err(|_| down())?;
-    let ok = res.status().is_success();
-    let v: Value = res.json().await.unwrap_or(Value::Null);
-    if !ok {
-        return Err(format!("知識庫：{}", v["error"].as_str().unwrap_or("沒有存進去")));
     }
-    Ok(card.map(str::to_string).or_else(|| v["node"]["id"].as_str().or(v["id"].as_str()).map(str::to_string)).unwrap_or_default())
 }
 
 /// `PUT /api/decks/{name}/learn`: 我懂 — clear the term's marks (one undoable step).
@@ -329,8 +316,7 @@ pub async fn understood(State(s): State<Shared>, AxPath(name): AxPath<String>, J
         t.terms.into_iter().find(|x| x.text == term || x.key == term || x.forms.iter().any(|f| phrase_key(f) == k)).and_then(|x| x.card)
     });
     let kb = if b.kb {
-        let base = kb_url_waking(s.launch_apps.load(std::sync::atomic::Ordering::Relaxed)).await;
-        match save_known(&base, &term, card.as_deref()).await {
+        match save_known(&brain(&s), &term, card.as_deref()).await {
             Ok(id) => json!({ "saved": true, "id": id, "message": if card.is_some() { "知識庫的卡片記為「記得」" } else { "已存進知識庫（記得）" } }),
             Err(m) => json!({ "saved": false, "message": m }),
         }

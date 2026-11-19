@@ -198,7 +198,7 @@ impl Llm {
 
     /// The app's tasks over lore-llm's shared ones, then the user's file.
     pub fn task_table(user_file: Option<&std::path::Path>) -> Result<TaskTable, String> {
-        let base = TaskTable::bundled().merge(TaskTable::parse(TASKS)?).merge(lore_plot::propose::task_table()).merge(lore_flow::llm::task_table()).merge(lore_polish::task_table());
+        let base = TaskTable::bundled().merge(TaskTable::parse(TASKS)?).merge(lore_plot::propose::task_table()).merge(lore_flow::llm::task_table()).merge(lore_polish::task_table()).merge(lore_cards::search::task_table());
         TaskTable::load(base, user_file)
     }
 

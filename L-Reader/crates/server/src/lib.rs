@@ -37,9 +37,9 @@
 //! | GET | /icons.js, /base.css, /shell.js, /makedeck.js, /makebook.js, /polish.js | the shared shell (`lore_shell::FILES`); /notation-panel.js the shared 對照表 component |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
 //! | POST | /api/kb/open | start the L-Brain app (macOS, local KB only; never when isolated) |
-//! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?, web_sources?}` → KB `POST /api/nodes` |
+//! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?, web_sources?}` → the card through lore-cards (L-Brain's API, else its folder) |
 //! | POST | /api/kb/draft | `{term, context, sha?, page?}` → KB `POST /api/draft` (with `page` and the paper's title as `source`) |
-//! | GET | /api/kb/nodes/{id} | a card (summary for the term popover) |
+//! | GET | /api/kb/nodes/{id} | a card (summary for the term popover; L-Brain's API, else its files) |
 //! | GET | /api/papers/{sha}/export | notes export state: `dirty`, `last` {path, name, at, exists}, default folder/name |
 //! | POST | /api/papers/{sha}/export | `{path}` / `{last: true}` (overwrite the last export) / `{choose: true}` (desktop save panel) → PDF with the notes written to that file |
 //! | POST | /api/papers/{sha}/export.pdf | the PDF with the notes as a download (browser) |
@@ -115,6 +115,8 @@ pub struct AppState {
     pub saver: Mutex<Option<Arc<dyn Saver>>>,
     /// Tests and the isolated example: never start other apps.
     pub isolated: bool,
+    /// Where cards are written (lore-cards): L-Brain's API, else its folder.
+    pub brain: lore_cards::Brain,
 }
 
 pub type Shared = Arc<AppState>;
@@ -139,6 +141,12 @@ impl From<lr_core::Error> for ApiError {
 impl From<kb::KbError> for ApiError {
     fn from(e: kb::KbError) -> Self {
         ApiError(if e.down { StatusCode::SERVICE_UNAVAILABLE } else { StatusCode::BAD_GATEWAY }, json!({ "error": e.message, "kb_down": e.down }))
+    }
+}
+
+impl From<lore_cards::CardError> for ApiError {
+    fn from(e: lore_cards::CardError) -> Self {
+        ApiError(StatusCode::from_u16(e.status).unwrap_or(StatusCode::BAD_GATEWAY), json!({ "error": e.message, "kb_down": e.down }))
     }
 }
 fn bad(m: impl Into<String>) -> ApiError {
@@ -189,7 +197,13 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
     let shared = home.shared_dir().unwrap_or_else(|| workspace.join("../shared"));
     llm.share_engine(home.clone());
     Arc::new(AppState {
-        kb: kb::Kb::new(&config.kb_url).launching(!isolated),
+        kb: kb::Kb::new(&config.kb_url),
+        // cards: L-Brain's API while it runs, else its folder; isolated = the given address only
+        brain: if isolated {
+            lore_cards::Brain::at(Some(&config.kb_url), vec![], "me")
+        } else {
+            lore_cards::Brain::at(Some(&config.kb_url), lore_learn::space_dirs(&home), &lore_learn::member(&home)).with_ports(true)
+        },
         llm,
         config,
         library,
@@ -1050,11 +1064,8 @@ async fn kb_card(State(s): State<Shared>, Json(b): Json<CardBody>) -> Result<(St
         return Err(bad("初始狀態只能是「學習中」或「已掌握」"));
     }
     let paper_title = s.papers.meta(&b.sha)?.map(|m| m.title).unwrap_or_default();
-    s.kb.wake().await?;
-    let space = match b.space.filter(|x| !x.is_empty()) {
-        Some(x) => x,
-        None => s.kb.default_space().await?,
-    };
+    // no space named: the member's personal one (lore-cards picks it, API or folder)
+    let space = b.space.filter(|x| !x.is_empty()).unwrap_or_default();
     let body = kb::card_body(&kb::CardRequest {
         space: &space,
         title: &b.title,
@@ -1070,15 +1081,14 @@ async fn kb_card(State(s): State<Shared>, Json(b): Json<CardBody>) -> Result<(St
     if let Some(list) = body["sources"].as_array_mut() {
         list.extend(b.web_sources.iter().filter(|u| u.starts_with("https://") || u.starts_with("http://")).take(5).map(|u| json!({ "type": "url", "ref": u })));
     }
-    let v = s.kb.post("/api/nodes", &body, Duration::from_secs(10)).await?;
-    Ok((StatusCode::CREATED, Json(json!({ "node": v["node"], "summary": v["summary"], "space": space }))))
+    let v = s.brain.create(body).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "node": v["node"], "via": v["via"] }))))
 }
 
 async fn kb_draft(State(s): State<Shared>, Json(b): Json<Value>) -> R {
     // the paper's title and the page go with the quote, so the draft can say where it is from
     let source = b["sha"].as_str().and_then(|sha| s.papers.meta(sha).ok().flatten()).map(|m| m.title);
     let body = json!({ "term": b["term"], "context": b["context"], "lang": "zh-Hant", "page": b["page"], "source": source });
-    s.kb.wake().await?;
     Ok(Json(s.kb.post("/api/draft", &body, Duration::from_secs(120)).await?))
 }
 
@@ -1086,8 +1096,7 @@ async fn kb_node(State(s): State<Shared>, Path(id): Path<String>) -> R {
     if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(bad("id"));
     }
-    s.kb.wake().await?;
-    Ok(Json(s.kb.get(&format!("/api/nodes/{id}")).await?))
+    Ok(Json(s.brain.view(&id).await?))
 }
 
 // ── print ────────────────────────────────────────────────────────────────

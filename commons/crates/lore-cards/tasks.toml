@@ -1,0 +1,11 @@
+# lore-cards' task, merged into every app that mounts `lore_cards::router` (its 模型 tab lists it).
+# A card summary needs a real web search (知識建立一定要上網查): Claude only, refused without
+# search sources, never the local model. Same settings as L-Reader's `lr-card`.
+
+[task.lore-card]
+label = "知識卡摘要（上網查）"
+needs = { web = true }
+default = "claude:sonnet"
+fallback = "claude:haiku"
+offline = false
+max_tokens = 2000

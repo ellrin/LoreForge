@@ -14,6 +14,8 @@ lore-home = { path = "../commons/crates/lore-home" }
 lore-llm = { path = "../commons/crates/lore-llm" }
 lore-notation = { path = "../commons/crates/lore-notation" }
 lore-shell = { path = "../commons/crates/lore-shell" }
+lore-cards = { path = "../commons/crates/lore-cards" }
+lore-learn = { path = "../commons/crates/lore-learn" }
 lore-engines = { path = "../commons/crates/lore-engines" }
 lore-plot = { path = "../commons/crates/lore-plot" }
 regex = "1"

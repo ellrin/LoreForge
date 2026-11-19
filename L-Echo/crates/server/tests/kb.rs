@@ -152,13 +152,13 @@ async fn quiz_then_answer_then_the_author_grades_himself() {
     assert_eq!((c["intent"].as_str(), c["grade"].as_str()), (Some("answer"), Some(NYQUIST)));
     let sys = app.system(1);
     assert!(sys.contains("比較") && sys.contains("大於訊號最高頻率的兩倍"), "{sys}");
-    // L-Brain is not running: one line, nothing written
+    // L-Brain is not running: recorded straight into its space (here the temp copy)
     let before = snapshot(&app.kb);
     let (s, b) = app.post("/api/kb/recall", json!({ "id": NYQUIST, "outcome": "remembered" })).await;
     assert_eq!(s, StatusCode::OK);
     let v: Value = serde_json::from_slice(&b).unwrap();
-    assert_eq!(v["error"], "L-Brain 沒開，沒有記下");
-    assert_eq!(snapshot(&app.kb), before);
+    assert_eq!(v["ok"], true, "{v}");
+    assert_ne!(snapshot(&app.kb), before, "the progress file changed");
     let (s, _) = app.post("/api/kb/recall", json!({ "id": "../x", "outcome": "remembered" })).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
@@ -167,7 +167,7 @@ async fn quiz_then_answer_then_the_author_grades_himself() {
 async fn mock_kb() -> (String, Arc<Mutex<Vec<(String, Value)>>>) {
     let seen = Arc::new(Mutex::new(vec![]));
     let s2 = seen.clone();
-    let app = axum::Router::new().route(
+    let app = axum::Router::new().route("/api/spaces", axum::routing::get(|| async { axum::Json(json!({ "spaces": [] })) })).route(
         "/api/recall/{id}",
         axum::routing::post(move |axum::extract::Path(id): axum::extract::Path<String>, axum::Json(b): axum::Json<Value>| {
             let s2 = s2.clone();
@@ -202,12 +202,14 @@ async fn outcomes_go_through_knowledgebase_s_api_when_it_runs() {
 }
 
 #[tokio::test]
-async fn remember_without_knowledgebase_running_says_so() {
-    let app = App::new(&["L-Brain 沒開。"], None);
+async fn remember_without_knowledgebase_running_writes_its_files() {
+    // L-Brain closed: 記住這個 is recorded straight into its space (here the temp copy)
+    let app = App::new(&["記下了。"], None);
     let ev = app.chat(json!({ "kb": { "cited": [FOURIER] }, "messages": [user("記住這個")] })).await;
     let c = cards_of(&ev);
-    assert_eq!(c["notice"], "L-Brain 沒開，沒有記下");
-    assert!(c.get("recorded").is_none());
+    assert_eq!(c["recorded"], json!([FOURIER]), "{c}");
+    let p = std::fs::read_to_string(app.kb.join("progress/ellrin").join(format!("{FOURIER}.json"))).unwrap();
+    assert!(p.contains("remembered") && p.contains("loreecho"), "{p}");
 }
 
 #[tokio::test]

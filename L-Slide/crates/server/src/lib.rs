@@ -60,8 +60,9 @@ use lore_canvas::reveal::{RevealSpec, reveal};
 use lore_canvas::{Applied, Object, Op, Slide};
 
 pub struct AppState {
-    /// May start another Lore app (L-Brain for 我懂 + 存進知識庫); off in [`router_isolated`].
-    pub launch_apps: std::sync::atomic::AtomicBool,
+    /// Cards go to the author's real L-Brain (its API, else its folder); off in [`router_isolated`]
+    /// (then only `KB_URL`, never a folder).
+    pub real_kb: std::sync::atomic::AtomicBool,
     pub ws: Workspace,
     pub web: PathBuf,
     pub port: Mutex<u16>,
@@ -399,7 +400,7 @@ fn permissions(voice: &lore_voice::Voice) -> lore_shell::permissions::Permission
 
 /// Tests: never the keychain, the `claude` CLI, the network, the OS opener or the process routing.
 pub fn router_isolated(shared: Shared) -> Router {
-    shared.launch_apps.store(false, std::sync::atomic::Ordering::Relaxed);
+    shared.real_kb.store(false, std::sync::atomic::Ordering::Relaxed);
     let mut e = engines(&shared).isolated();
     e.install_routing = false;
     let voice = lore_voice::Voice::unavailable("這裡沒有語音");
@@ -418,7 +419,9 @@ fn router_with(shared: Shared, engines: lore_engines::Engines, voice: lore_voice
     let plots = plot::plot_router(&shared);
     let flows = flow::flow_router(&shared);
     let polish = rewrite::router(&shared, voice);
-    routes().merge(plot::routes()).merge(flow::routes()).with_state(shared).merge(plots).merge(flows).merge(polish).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).fallback_service(web)
+    // 加入知識庫 for selected words (lore-cards: L-Brain's API while it runs, else its folder)
+    let cards = lore_cards::router(Arc::new(kbterms::brain(&shared)), Arc::new(kbterms::CardHost(shared.clone())), "slidecomposer");
+    routes().merge(plot::routes()).merge(flow::routes()).with_state(shared).merge(cards).merge(plots).merge(flows).merge(polish).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).fallback_service(web)
 }
 
 pub fn state(ws: Workspace, web: PathBuf) -> Shared {
@@ -428,7 +431,7 @@ pub fn state(ws: Workspace, web: PathBuf) -> Shared {
 /// With the LoreForge folder named (tests use a temporary one).
 pub fn state_at(ws: Workspace, web: PathBuf, home: lore_home::Home) -> Shared {
     Arc::new(AppState {
-        launch_apps: std::sync::atomic::AtomicBool::new(true),
+        real_kb: std::sync::atomic::AtomicBool::new(true),
         ws,
         web,
         port: Mutex::new(0),

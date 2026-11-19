@@ -1518,7 +1518,7 @@ async function polishSelection(anchor) {
   });
 }
 
-/** Right-click in a text box being edited, with a selection: 潤飾. */
+/** Right-click in a text box being edited, with a selection: 潤飾, 加入知識庫. */
 function editMenu(ev) {
   const s = getSelection();
   if (ev.altKey || ev.shiftKey || !s || s.isCollapsed) return;
@@ -1526,7 +1526,11 @@ function editMenu(ev) {
   const pin = document.createElement("div");
   Object.assign(pin.style, { position: "fixed", left: `${ev.clientX}px`, top: `${ev.clientY}px`, width: "1px", height: "1px" });
   document.body.append(pin);
-  LoreShell.menu(pin, [{ icon: "polish", label: "潤飾", run: () => polishSelection(pin) }]);
+  const words = String(s);
+  LoreShell.menu(pin, [
+    { icon: "polish", label: "潤飾", run: () => polishSelection(pin) },
+    ...(window.LoreAddCard ? [{ icon: "plus", label: "加入知識庫", run: () => LoreAddCard.add({ title: words, source: S.name ?? "" }) }] : []),
+  ]);
   setTimeout(() => pin.parentNode?.removeChild(pin), 0);
 }
 

@@ -328,7 +328,7 @@ async fn review(State(s): State<Shared>, UrlPath(id): UrlPath<String>, body: Opt
     if job.is_running() || job.status() != jobs::status::REVIEW {
         return err(StatusCode::CONFLICT, "這個工作沒有在等微調");
     }
-    let notes = stages::review_terms(&job, &b).await;
+    let notes = stages::review_terms(&job, &b, &crate::kbterms::brain(&s)).await;
     if !notes.is_empty() {
         b["notes"] = json!(notes);
     }

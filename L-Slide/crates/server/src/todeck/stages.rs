@@ -503,7 +503,7 @@ fn review_view(job: &Job) -> Value {
 /// 我懂 from the review window, before the slides are made: the terms checkpoint marks them
 /// `understood`; with `remember` each one is also saved in L-Brain as 記得 (its own card
 /// when it has one). Returns one line per term saving that failed.
-pub async fn review_terms(job: &Job, review: &Value) -> Vec<String> {
+pub async fn review_terms(job: &Job, review: &Value, brain: &lore_cards::Brain) -> Vec<String> {
     let known: Vec<String> = review["known"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
     if known.is_empty() {
         return vec![];
@@ -519,12 +519,11 @@ pub async fn review_terms(job: &Job, review: &Value) -> Vec<String> {
     }
     let mut notes = vec![];
     if review["remember"] == true {
-        let base = crate::kbterms::kb_url();
         for k in &known {
             let card = tr.terms.iter().find(|t| t.understood && (t.text == *k || t.key == *k || t.forms.iter().any(|f| f == k))).and_then(|t| t.card.clone());
-            if let Err(e) = crate::kbterms::save_known(&base, k, card.as_deref()).await {
+            if let Err(e) = crate::kbterms::save_known(brain, k, card.as_deref()).await {
                 notes.push(e);
-                break; // L-Brain not open: once is enough
+                break; // no L-Brain and no folder: once is enough
             }
         }
     }

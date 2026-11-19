@@ -1,0 +1,27 @@
+[package]
+name = "lore-cards"
+version.workspace = true
+edition.workspace = true
+description = "加入知識庫 from any Lore app: L-Brain's API while it runs, else kb-core on its spaces"
+
+[dependencies]
+kb-core = { path = "../kb-core" }
+lore-learn = { path = "../lore-learn" }
+lore-home = { path = "../lore-home" }
+lore-llm = { path = "../lore-llm" }
+toml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tokio = { version = "1", features = ["rt"] }
+axum = { workspace = true, optional = true }
+
+[features]
+default = ["web"]
+web = ["dep:axum"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

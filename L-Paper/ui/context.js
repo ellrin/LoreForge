@@ -1,5 +1,5 @@
 // Right-click menu on the paper: cite, refer to a figure / table / equation,
-// add a figure or a table, polish a passage (潤飾), collect a phrase, cut and copy.
+// add a figure or a table, polish a passage (潤飾), collect a phrase, add words to the KB (加入知識庫), cut and copy.
 //
 // In a paragraph being edited (its textarea) things go in at the caret. On a
 // drawn paragraph the paragraph stays as it is: a thin caret marks the
@@ -682,6 +682,7 @@ const PCContext = (() => {
       sep();
       add("polish", "潤飾", () => { PCWrite.polish(marker, d); keepMarker(); });
       add("star", "收藏句型", () => { PCWrite.collect(marker, d.text); keepMarker(); });
+      if (window.LoreAddCard) add("plus", "加入知識庫", () => { LoreAddCard.add({ title: d.text, source: state.paper?.name ?? "" }); });
       add("comment", "新增註解", () => { window.PCReview?.comment({ si: at.si, pi: at.pi, ta: d.ta, a: d.a, b: d.b, text: d.text, range: d.ta ? null : getSelection()?.rangeCount ? getSelection().getRangeAt(0).cloneRange() : null }); return false; });
       sep();
       const row = el("div", "ctx-clip");

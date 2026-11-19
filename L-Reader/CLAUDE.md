@@ -53,12 +53,12 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   `tests/math/`: synthetic LaTeX papers + their pdf.js items (`dump-items.js`); the PDFs are
   not kept. `examples/symbols_json.rs --tex` = precision / recall against a LaTeX source.
 - `crates/server` (`lr-server`): axum on 127.0.0.1:7890; handlers are plain async fns over
-  `Shared`. `kb.rs` = L-Brain client (read only except `POST /api/nodes`, only from
+  `Shared`. `kb.rs` = L-Brain client (cards are written through lore-cards (`AppState::brain`: L-Brain's API, else its folder), only from
   the author's action, `initial_state` learning|known; `lexicon()` = `GET /api/nodes` titles +
   aliases), `llm.rs` = lore-llm wired like L-Paper (`tasks.toml`: `lr-translate`
   local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` and `lr-paragraph`
   claude:haiku → local:current (`CLOUD_FIRST`: Haiku is put ahead of the shared 整理 route's local-first order; the chip's 地 still means local only),
-  `lr-card` = web-searched card summary (`needs.web`, Claude only, `complete_web` refuses an answer without search sources);
+  `lr-card` = web-searched card summary (`needs.web`, Claude only, `complete_web` refuses an answer without search sources; prompt and source picking are `lore_cards::search`, shared with L-Paper's and L-Slide's 加入知識庫);
   `complete_on` = a per-call choice or the old models.json one (`auto | local | cloud | haiku | sonnet | opus`), strict, else the shared routes / overrides;
   in auto a call that fails after its engine was picked is tried once on the other kind; errors are `LlmFail` = lore-llm's `payload` (with `alternative`); keys `SharedKeys::for_app("LoreReader")`; the local
   engine is config `[engine]`, else the shared model id of `private/shared/engine.toml` (re-read per

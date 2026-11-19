@@ -23,6 +23,7 @@ lore-jobs.workspace = true
 lore-research.workspace = true
 lore-docsrc.workspace = true
 lore-learn.workspace = true
+lore-cards.workspace = true
 lore-polish.workspace = true
 lore-voice.workspace = true
 lore-words = { path = "../../../commons/crates/lore-words" }

@@ -423,9 +423,8 @@ fn yes() -> bool {
     true
 }
 
-pub const CARD_SYSTEM: &str = "你替作者把論文裡的術語做成知識卡。一定要先用網路搜尋查這個術語（教科書、論文、官方文件、可靠的百科），\
-只根據查到的內容寫，不要憑記憶補。查不到可靠的說明就回 found 為 false。\
-只輸出一個 JSON 物件：{\"found\": true 或 false, \"summary\": \"台灣繁體中文一到兩句：這個詞是什麼、在這個領域拿來做什麼，術語保留英文\", \"sources\": [\"你實際讀過、支持這段摘要的網址，最多三個\"]}。";
+/// L-Reader's 一鍵加卡 prompt and source picking, shared with every app (lore-cards).
+pub use lore_cards::search::{CARD_SYSTEM, card_sources};
 
 /// 一鍵加卡: a web-searched summary (`lr-card`), then the card in the KB with the paper,
 /// the page, the sentence and the pages the search read as its sources. No search, no card.
@@ -436,12 +435,10 @@ pub async fn noun_card(State(s): State<Shared>, Path(sha): Path<String>, Json(b)
         return Err(bad("詞不對"));
     }
     // the KB first: a search is not spent on a card that cannot be saved
-    let space = if b.save {
-        s.kb.wake().await?;
-        s.kb.default_space().await?
-    } else {
-        String::new()
-    };
+    if b.save {
+        s.brain.place().await?;
+    }
+    let space = String::new();
     let title = s.papers.meta(&sha)?.map(|m| m.title).unwrap_or_default();
     let context = b.context.as_deref().map(str::trim).filter(|c| !c.is_empty());
     let mut user = format!("術語：{term}\n論文：《{title}》\n作者的領域：{}", reader_field(&s));
@@ -467,17 +464,8 @@ pub async fn noun_card(State(s): State<Shared>, Path(sha): Path<String>, Json(b)
     if let Some(list) = body["sources"].as_array_mut() {
         list.extend(sources.iter().map(|w| json!({ "type": "url", "ref": w.url, "title": w.title })));
     }
-    let r = s.kb.post("/api/nodes", &body, std::time::Duration::from_secs(10)).await?;
+    let r = s.brain.create(body).await?;
     Ok((StatusCode::CREATED, Json(json!({ "node": r["node"], "summary": summary, "sources": sources.iter().map(|w| &w.url).collect::<Vec<_>>(), "engine": a.engine }))))
-}
-
-/// The pages a card cites: the ones the model named that the search really read, else
-/// the first three the search read.
-pub fn card_sources(answer: &Value, found: &[lore_llm::WebSource]) -> Vec<lore_llm::WebSource> {
-    let named: Vec<&str> = answer["sources"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-    let norm = |u: &str| u.trim().trim_end_matches('/').to_string();
-    let picked: Vec<lore_llm::WebSource> = found.iter().filter(|w| named.iter().any(|n| norm(n) == norm(&w.url))).take(3).cloned().collect();
-    if picked.is_empty() { found.iter().take(3).cloned().collect() } else { picked }
 }
 
 /// 「這不是術語」: add a word or phrase to the ignore list.

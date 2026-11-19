@@ -1387,9 +1387,6 @@ async function translate(text, context, box, info) {
 // ── knowledge base ────────────────────────────────────────────────────────
 async function addCardDialog({ title, sha, page, context, hint, summary }) {
   hidePop();
-  let kb = S.kb;
-  try { kb = S.kb = await api("/api/kb/status"); } catch {}
-  updateLegend();
   const t = h("input", { value: title.length > 120 ? title.slice(0, 120) : title });
   const sum = h("textarea", { placeholder: "用自己的話寫一兩句" }, summary ?? "");
   let state = "learning";
@@ -1400,9 +1397,8 @@ async function addCardDialog({ title, sha, page, context, hint, summary }) {
     segHint.textContent = "";
   };
   paintSeg();
-  const status = kb?.ok ? null : kbNote();
   let webSources = [];
-  const draftBtn = h("button", { type: "button", class: "btn", disabled: !kb?.ok, onclick: async () => {
+  const draftBtn = h("button", { type: "button", class: "btn", onclick: async () => {
     draftBtn.disabled = true; draftBtn.textContent = "上網查資料中…";
     try { const r = await api(`/api/papers/${sha}/nouns/card`, { body: { term: t.value, context, page, save: false } }); if (r.summary) sum.value = r.summary; webSources = r.sources ?? []; toast(`草稿：${engineName(r.engine)}`); }
     catch (e) { fail(e); }
@@ -1410,17 +1406,15 @@ async function addCardDialog({ title, sha, page, context, hint, summary }) {
   } }, h("span", { "data-icon": "spark" }), "起草摘要");
   const r = await dialog((d, close) => h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); close(true); } },
     h("h3", {}, "加入知識庫"),
-    status,
     h("label", {}, "標題", t),
     hint ? h("div", { class: "quote-box" }, h("span", { class: "muted" }, "譯文："), hint) : null,
     h("label", {}, "摘要", sum),
     h("div", { style: "display:flex;flex-direction:column;gap:4px" }, h("span", { style: "font-size:12.5px;color:var(--muted)" }, "狀態"), seg),
     h("div", { class: "muted", style: "font-size:12px;overflow-wrap:anywhere" }, `${S.paper?.sha256 === sha ? S.paper.title : "PDF"} · p.${page}`),
     h("div", { class: "actions" },
-      kb?.ok ? draftBtn : h("button", { type: "button", class: "btn", onclick: () => close("retry") }, "重新檢查"),
+      draftBtn,
       h("button", { type: "button", class: "btn", onclick: () => close(null) }, "取消"),
-      h("button", { class: "btn primary", disabled: !kb?.ok }, "儲存"))));
-  if (r === "retry") return addCardDialog({ title: t.value, sha, page, context, hint, summary: sum.value });
+      h("button", { class: "btn primary" }, "儲存"))));
   if (r !== true) return;
   try {
     const out = await api("/api/kb/cards", { body: { sha, page, title: t.value, summary: sum.value, initial_state: state, context, web_sources: webSources } });

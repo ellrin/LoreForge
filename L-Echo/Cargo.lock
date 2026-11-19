@@ -2025,6 +2025,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "kb-core",
+ "lore-cards",
  "lore-engines",
  "lore-home",
  "lore-llm",
@@ -2151,6 +2152,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
+name = "lore-cards"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "kb-core",
+ "lore-home",
+ "lore-learn",
+ "lore-words",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "lore-engines"
 version = "0.1.0"
 dependencies = [
@@ -2170,6 +2186,18 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "lore-learn"
+version = "0.1.0"
+dependencies = [
+ "kb-core",
+ "lore-home",
+ "lore-store",
+ "lore-words",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2254,6 +2282,10 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
+
+[[package]]
+name = "lore-words"
+version = "0.1.0"
 
 [[package]]
 name = "loreecho"

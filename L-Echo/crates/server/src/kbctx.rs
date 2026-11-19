@@ -188,17 +188,19 @@ impl Kb {
 }
 
 impl Kb {
-    /// [`Kb::server`] for something the author asked for: when L-Brain is not running, start
-    /// it in the background and wait for it. Never when pinned (tests, the isolated example).
-    pub async fn server_waking(&self) -> Option<String> {
-        if let Some(url) = self.server().await {
-            return Some(url);
+    /// Where a card write goes (lore-cards): L-Brain's API while it runs, else straight into its
+    /// spaces, so 記住這個, 記得／忘了 and 修正知識卡 never need the app open. Pinned (tests, the
+    /// isolated example): the pinned address and spaces only. `None`: no L-Brain at all.
+    pub async fn brain(&self, home: &lore_home::Home) -> Option<lore_cards::Brain> {
+        if let Some(p) = self.pinned() {
+            return Some(lore_cards::Brain::at(p.url.as_deref(), p.spaces, &p.member));
         }
-        if self.pinned().is_some() || !self.system.load(Ordering::Relaxed) {
+        if !self.system.load(Ordering::Relaxed) {
             return None;
         }
-        tokio::task::spawn_blocking(|| lore_home::ports::ensure("kb", Some(KB_DEFAULT_PORT))).await.ok()?.ok()?;
-        self.server().await
+        let url = self.server().await;
+        let (spaces, member) = self.locate(home);
+        Some(lore_cards::Brain::at(url.as_deref(), spaces, &member))
     }
 }
 
@@ -210,14 +212,6 @@ fn client() -> reqwest::Client {
 async fn is_kb(url: &str) -> bool {
     let Ok(r) = client().get(format!("{url}/api/health")).timeout(Duration::from_millis(600)).send().await else { return false };
     r.json::<Value>().await.is_ok_and(|v| v.get("member").is_some_and(Value::is_string) && v.get("assistant").is_some())
-}
-
-/// A review outcome through L-Brain's API (never its files).
-pub async fn recall(url: &str, id: &str, outcome: &str) -> Result<Value, String> {
-    let r = client().post(format!("{url}/api/recall/{id}")).json(&json!({ "outcome": outcome, "via": "loreecho" })).send().await.map_err(|e| e.to_string())?;
-    let ok = r.status().is_success();
-    let v: Value = r.json().await.unwrap_or(Value::Null);
-    if ok { Ok(v) } else { Err(v.get("error").and_then(Value::as_str).unwrap_or("L-Brain 沒有記下").to_string()) }
 }
 
 // ── reading ──
@@ -788,13 +782,13 @@ async fn remember(shared: &Shared, p: &mut Plan) {
         return;
     }
     let names = p.cards.iter().map(|c| format!("〈{}〉", c.title)).collect::<Vec<_>>().join("、");
-    let Some(url) = shared.kb.server_waking().await else {
-        p.notice = "L-Brain 沒開，沒有記下".into();
-        p.system = format!("使用者要你把{names}記成「記得」，但 L-Brain 沒有開，所以沒有記下。用一句話告訴他，請他打開 L-Brain 再說一次。");
+    let Some(brain) = shared.kb.brain(&shared.home).await else {
+        p.notice = "找不到 L-Brain，沒有記下".into();
+        p.system = format!("使用者要你把{names}記成「記得」，但找不到他的 L-Brain，所以沒有記下。用一句話告訴他。");
         return;
     };
     for c in &p.cards {
-        if recall(&url, &c.id, "remembered").await.is_ok() {
+        if brain.recall(&c.id, "remembered", "loreecho").await.is_ok() {
             p.recorded.push(c.id.clone());
         }
     }
@@ -816,15 +810,15 @@ pub struct RecallBody {
 }
 
 /// `POST /api/kb/recall {id, outcome}` → `{ ok, progress? }` or `{ error }`: through
-/// L-Brain's own API (started first when it is not running).
+/// L-Brain's own API, else its files (lore-cards).
 pub async fn recall_post(State(s): State<Shared>, Json(b): Json<RecallBody>) -> Response {
     if !matches!(b.outcome.as_str(), "remembered" | "forgot" | "unfamiliar") || !kb_core::id::valid_node_id(&b.id) {
         return (axum::http::StatusCode::BAD_REQUEST, Json(json!({ "error": "不認得的卡片或結果" }))).into_response();
     }
-    let Some(url) = s.kb.server_waking().await else { return Json(json!({ "error": "L-Brain 沒開，沒有記下" })).into_response() };
-    match recall(&url, &b.id, &b.outcome).await {
+    let Some(brain) = s.kb.brain(&s.home).await else { return Json(json!({ "error": "找不到 L-Brain，沒有記下" })).into_response() };
+    match brain.recall(&b.id, &b.outcome, "loreecho").await {
         Ok(v) => Json(json!({ "ok": true, "progress": v.get("progress") })).into_response(),
-        Err(e) => Json(json!({ "error": format!("沒有記下：{e}") })).into_response(),
+        Err(e) => Json(json!({ "error": format!("沒有記下：{}", e.message) })).into_response(),
     }
 }
 

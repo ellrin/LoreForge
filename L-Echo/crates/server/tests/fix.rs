@@ -55,12 +55,12 @@ async fn post(a: &App, uri: &str, body: Value) -> (StatusCode, Value) {
     (status, serde_json::from_slice(&b).unwrap_or(Value::Null))
 }
 
-/// A mock L-Brain: `GET /api/nodes/{id}` = the card; `PUT` recorded, answered with `put_status`.
+/// A mock L-Brain: `GET /api/spaces`, `GET /api/nodes/{id}` = the card; `PUT` recorded, answered with `put_status`.
 async fn kb(put_status: StatusCode) -> (String, Arc<Mutex<Vec<Value>>>) {
     let seen = Arc::new(Mutex::new(vec![]));
     let s2 = seen.clone();
     let card = json!({ "space": "personal", "node": { "id": DICE, "revision": 3, "title": "Dice", "aliases": ["F1"], "summary": "重疊指標", "body": "$2|A\\cap B|/(|A|\\cup|B|)$", "sources": [{ "type": "paper", "ref": "x" }] } });
-    let app = axum::Router::new().route(
+    let app = axum::Router::new().route("/api/spaces", axum::routing::get(|| async { axum::Json(json!({ "spaces": [{ "id": "personal", "kind": "personal", "is_member": true }] })) })).route(
         "/api/nodes/{id}",
         axum::routing::get(move || {
             let c = card.clone();
@@ -128,15 +128,20 @@ async fn a_card_changed_meanwhile_is_not_overwritten() {
 }
 
 #[tokio::test]
-async fn nothing_happens_while_knowledgebase_is_closed() {
-    let a = app(&["{}"], None);
-    let before = std::fs::read_dir(a.kb.join("nodes")).map(|d| d.count()).unwrap_or(0);
+async fn a_closed_l_brain_is_fixed_in_its_files() {
+    // L-Brain closed: the card is read from and written to its space (here the temp copy)
+    let reply = json!({ "title": "", "summary": "", "body": "新的說明", "changes": [{ "what": "改說明", "why": "x", "url": "" }], "sources": [] }).to_string();
+    let a = app(&[&reply], None);
     let (s, v) = post(&a, "/api/actions/fix/draft", json!({ "messages": talk(), "card": DICE })).await;
-    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{v}");
-    assert!(a.mock.seen.lock().unwrap().is_empty(), "no model call");
-    let (s, _) = post(&a, "/api/actions/fix/save", json!({ "id": DICE, "revision": 3, "title": "Dice", "body": "新" })).await;
-    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(std::fs::read_dir(a.kb.join("nodes")).map(|d| d.count()).unwrap_or(0), before, "no file written");
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let rev = v["card"]["revision"].as_u64();
+    let (s, v) = post(&a, "/api/actions/fix/save", json!({ "id": DICE, "revision": rev, "title": v["card"]["title"], "body": "新的說明" })).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let file = std::fs::read_to_string(a.kb.join("nodes").join(format!("{DICE}.json"))).unwrap();
+    assert!(file.contains("新的說明"), "{file}");
+    // the same preview again: the card changed meanwhile, not overwritten
+    let (s, _) = post(&a, "/api/actions/fix/save", json!({ "id": DICE, "revision": rev, "title": "x", "body": "舊" })).await;
+    assert_eq!(s, StatusCode::CONFLICT);
 }
 
 #[tokio::test]
