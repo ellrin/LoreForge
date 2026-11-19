@@ -1191,7 +1191,7 @@ max_tokens = 9000
             ..Default::default()
         });
         let r = Router::new(TaskTable::bundled(), f);
-        assert_eq!(r.provider_for("sc-crop-modules").await.unwrap().provider.id(), "claude:claude-sonnet-5-5");
+        assert_eq!(r.provider_for("sc-crop-modules").await.unwrap().provider.id(), "claude:claude-opus-5-5");
         assert_eq!(r.provider_for("kb-summarize-card").await.unwrap().provider.id(), "llama-server:qwen3.5-9b-q8");
         r.set_online(false);
         let route = r.provider_for("sc-slide-content").await.unwrap();

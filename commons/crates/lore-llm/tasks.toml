@@ -60,12 +60,12 @@ default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
 offline = true
 
+# Claude only (no class): a figure's modules need a model that really reads the figure.
 [task.sc-crop-modules]
 label = "從架構圖標出子模組框"
-class = "tidy"
 needs = { vision = true, json = true }
-default = "claude:sonnet"
-fallback = "local:gemma-4-12b-q8"
+default = "claude:opus"
+fallback = "claude:sonnet"
 
 # ── Research ───────────────────────────────────────────────
 

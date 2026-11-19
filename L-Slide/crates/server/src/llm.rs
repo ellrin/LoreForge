@@ -177,15 +177,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn paper_deck_is_a_create_task_claude_first() {
+    fn paper_deck_tasks_are_opus_only_never_the_local_model() {
+        // 論文報告 must be right: Opus, then Sonnet; no class, so the shared routing can never put the
+        // local model first (the two vision tasks once ran on it: no module boxes, misread equations)
         let t = TaskTable::bundled().merge(app_tasks());
-        let spec = &t.task[TASK_PAPER_DECK];
-        assert_eq!(spec.default, "claude:selected");
-        assert_eq!(spec.fallback.as_deref(), Some("local:current"));
-        assert_eq!(spec.class, Some(lore_llm::TaskClass::Create));
-        let review = &t.task[TASK_OUTLINE_REVIEW];
-        assert_eq!((review.class, review.default.as_str()), (Some(lore_llm::TaskClass::Create), "claude:selected"));
-        assert!(t.task.contains_key("sc-flow-graph") && t.task.contains_key(lore_docsrc::boxer::TASK_ID));
+        for id in [TASK_PAPER_DECK, TASK_OUTLINE_REVIEW, crate::todeck::eqread::TASK, lore_docsrc::boxer::TASK_ID] {
+            let spec = &t.task[id];
+            assert_eq!((spec.default.as_str(), spec.fallback.as_deref(), spec.class), ("claude:opus", Some("claude:sonnet"), None), "{id}");
+        }
+        assert!(t.task.contains_key("sc-flow-graph"));
         let polish = &t.task[lore_polish::TASK];
         assert_eq!((polish.class, polish.default.as_str()), (Some(lore_llm::TaskClass::Create), "claude:selected"));
     }
