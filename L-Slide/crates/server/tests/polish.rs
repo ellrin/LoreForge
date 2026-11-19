@@ -281,7 +281,7 @@ fn polish_checks_fix_and_undo_item_by_item() {
     assert_eq!(roles, ["cover", "background", "method", "method", "results", "ablation", "takeaway", "thanks"]);
     let n = notation();
     let p = profile();
-    let rep = deckpolish::run_checks(&mut ed, &Input { profile: Some(&p), notation: &n, roles });
+    let rep = deckpolish::run_checks(&mut ed, &Input { profile: Some(&p), notation: &n, roles, keep_sizes: false });
     let d = &ed.deck;
     let dump = serde_json::to_string_pretty(&rep).unwrap();
 
@@ -381,7 +381,7 @@ async fn polish_over_http_with_a_mock_model() {
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
     let reply = json!({ "groups": [{ "preferred": "segmentation mask", "variants": ["mask map"] }] });
     let model = Arc::new(MockProvider::new(vec![reply.to_string()]));
-    let f = MockFactory::default().with("claude:selected", model.clone());
+    let f = MockFactory::default().with("claude:opus", model.clone()).with("claude:selected", model.clone());
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
 
@@ -475,7 +475,7 @@ fn real_decks_counts() {
             }
         }
         let mut ed = Editor::new(deck, st);
-        let rep = deckpolish::run_checks(&mut ed, &Input { profile: p.as_ref(), notation: &Notation::default(), roles });
+        let rep = deckpolish::run_checks(&mut ed, &Input { profile: p.as_ref(), notation: &Notation::default(), roles, keep_sizes: false });
         let mut c = std::collections::BTreeMap::new();
         for i in &rep.items {
             *c.entry(format!("{}-{}-{}", i.check, i.state, i.message.chars().take(8).collect::<String>())).or_insert(0) += 1;

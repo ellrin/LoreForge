@@ -145,8 +145,12 @@
       <div class="seg pd-src" id="pdSrc" role="radiogroup"><button type="button" data-src="pc" aria-pressed="true">L-Paper</button><button type="button" data-src="lr" aria-pressed="false">L-Reader</button></div>
       <div class="pd-papers" id="pdPapers" role="radiogroup" aria-label="論文"></div>
       <div class="pd-two">
-        <div><div class="np-label">長度</div><div class="seg" id="pdLen" role="radiogroup"><button type="button" data-v="short">短 10</button><button type="button" data-v="standard">標準 15–20</button><button type="button" data-v="long">長</button></div></div>
+        <div><div class="np-label">長度</div><div class="seg" id="pdLen" role="radiogroup"><button type="button" data-v="short">短 5–10</button><button type="button" data-v="standard">標準 10–15</button><button type="button" data-v="long">長 16+</button></div></div>
         <div><div class="np-label">語言</div><div class="seg" id="pdLang" role="radiogroup"><button type="button" data-v="zh">中文</button><button type="button" data-v="en">English</button></div></div>
+      </div>
+      <div class="pd-two" id="pdWho" hidden>
+        <div><div class="np-label">報告者</div><select class="tdj-sel" id="pdPresenter" aria-label="報告者"></select></div>
+        <div><div class="np-label">指導教授</div><select class="tdj-sel" id="pdSupervisor" aria-label="指導教授"></select></div>
       </div>
       <div class="np-label">底版</div>
       <div class="bases" id="pdBases" role="radiogroup" aria-label="底版"></div>

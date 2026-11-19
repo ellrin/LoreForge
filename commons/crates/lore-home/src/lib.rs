@@ -162,6 +162,26 @@ pub struct Fonts {
     /// Slide editor: what a font named in a deck falls back to on this machine,
     /// e.g. `"Brand Sans" = ["Brand Sans", "Calibri", "Arial"]`.
     pub fallback: BTreeMap<String, Vec<String>>,
+    /// Decks an app writes for the author (L-Slide's 論文報告): the fonts of all slide text,
+    /// over the style's own (equations keep their math font). Empty = the style's fonts.
+    pub deck: DeckFonts,
+}
+
+/// `[deck]` of `shared/fonts.toml`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct DeckFonts {
+    pub latin: Option<String>,
+    pub east_asian: Option<String>,
+}
+
+impl DeckFonts {
+    /// `(latin, east asian)` when at least one is named (blank names count as unset).
+    pub fn chosen(&self) -> Option<(String, String)> {
+        let f = |v: &Option<String>| v.as_deref().map(str::trim).filter(|x| !x.is_empty()).map(String::from);
+        let (l, e) = (f(&self.latin), f(&self.east_asian));
+        (l.is_some() || e.is_some()).then(|| (l.unwrap_or_default(), e.unwrap_or_default()))
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -253,11 +273,13 @@ mod tests {
         std::fs::create_dir_all(t.path().join("private/shared")).unwrap();
         std::fs::write(
             t.path().join("private/shared/fonts.toml"),
-            "[ui]\nsans = [\"Brand Sans\", \"sans-serif\"]\n[fallback]\n\"Brand Sans\" = [\"Brand Sans\", \"Calibri\"]\n",
+            "[ui]\nsans = [\"Brand Sans\", \"sans-serif\"]\n[fallback]\n\"Brand Sans\" = [\"Brand Sans\", \"Calibri\"]\n[deck]\nlatin = \"Brand Serif\"\neast_asian = \" \"\n",
         )
         .unwrap();
         let f = h.prefs().fonts;
         assert_eq!(f.fallback["Brand Sans"], vec!["Brand Sans", "Calibri"]);
+        assert_eq!(f.deck.chosen(), Some(("Brand Serif".to_string(), String::new())), "a blank name is unset");
+        assert_eq!(Fonts::default().deck.chosen(), None, "no [deck]: the style's own fonts");
         let css = f.css();
         assert!(css.contains("--sans: \"Brand Sans\", sans-serif;"), "{css}");
         assert!(!css.contains("--mono"));

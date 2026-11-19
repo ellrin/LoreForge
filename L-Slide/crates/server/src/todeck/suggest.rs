@@ -221,7 +221,7 @@ mod tests {
         let (mut p, m) = plan();
         p.slides[2].figure = "fig1".into();
         let (sys, user) = prompt(&p, &m, "short", "en", "STYLE-SUMMARY", "");
-        assert!(sys.contains("at most 5") && sys.contains("STYLE-SUMMARY") && sys.contains("9–11"));
+        assert!(sys.contains("at most 5") && sys.contains("STYLE-SUMMARY") && sys.contains("5–10"));
         assert!(user.contains("- s3 · method · Encoder · [fig1]") && user.contains("- fig1 (used): Overview") && user.contains("- tab1: "), "{user}");
     }
 }

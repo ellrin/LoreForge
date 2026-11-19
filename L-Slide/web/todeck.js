@@ -45,7 +45,22 @@ async function openPaperDeck() {
   }
   $("#dlgPaper").showModal();
   PD.list = null;
+  pdPeople();
   await pdPapers();
+}
+
+/** 報告者／指導教授: L-Paper's people (id + name); the last choice comes back selected. */
+async function pdPeople() {
+  const row = $("#pdWho");
+  let v = null;
+  try { v = await api("/api/todeck/people"); } catch {}
+  const list = v?.people ?? [];
+  row.hidden = !list.length;
+  for (const [sel, cur] of [[$("#pdPresenter"), v?.presenter], [$("#pdSupervisor"), v?.supervisor]]) {
+    sel.textContent = "";
+    sel.append(new Option("—", ""), ...list.map((p) => new Option(p.name, p.id)));
+    sel.value = cur ?? "";
+  }
 }
 
 async function pdPapers() {
@@ -90,7 +105,7 @@ async function pdCreate(engine, mode = "review") {
   $("#pdGo").disabled = true;
   $("#pdBar").hidden = false;
   try {
-    const r = await fetch("/api/todeck", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source, style, length: pdPref.get("length", "standard"), lang: pdPref.get("lang", "zh"), engine, mode }) });
+    const r = await fetch("/api/todeck", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source, style, length: pdPref.get("length", "standard"), lang: pdPref.get("lang", "zh"), engine, mode, ...($("#pdWho").hidden ? {} : { presenter: $("#pdPresenter").value, supervisor: $("#pdSupervisor").value }) }) });
     const v = await r.json().catch(() => ({}));
     if (!r.ok) {
       const alt = v.alternative;
@@ -307,7 +322,10 @@ const TDJ = (() => {
     if (snap.state === "running") foot.append(E("button", { type: "button", class: "btn danger", onclick: stop }, "停止"));
     else if (snap.state === "done") foot.append(E("button", { type: "button", class: "btn primary", onclick: () => openReport(snap.deck) }, "打開簡報"));
     else foot.append(E("button", { type: "button", class: "btn", onclick: discard }, "捨棄"), E("button", { type: "button", class: "btn primary", onclick: resume }, "繼續"));
-    root.replaceChildren(head(snap), E("div", { class: "tdj-body" }, list, msg ? E("p", { class: "tdj-msg" + (snap.state === "failed" ? " err" : "") }, msg) : null), foot);
+    // what the job could not do as asked (never dropped silently): one line each
+    const warns = [...new Set([...(snap.warnings ?? []), ...(snap.result?.warnings ?? [])])];
+    const wl = warns.length ? E("ul", { class: "tdj-warn", "aria-label": "注意" }, ...warns.map((w) => E("li", {}, w))) : null;
+    root.replaceChildren(head(snap), E("div", { class: "tdj-body" }, list, msg ? E("p", { class: "tdj-msg" + (snap.state === "failed" ? " err" : "") }, msg) : null, wl), foot);
     paint(root);
     J.mode = "progress";
   }
@@ -477,7 +495,7 @@ const TDJ = (() => {
     };
     const box = E("div", { class: "tdj-bases", role: "radiogroup", "aria-label": "底版" });
     const strip = E("div", { class: "tdj-opts" },
-      E("span", { class: "ql" }, "長度"), optSeg("length", [["short", "短 10"], ["standard", "標準 15–20"], ["long", "長"]]),
+      E("span", { class: "ql" }, "長度"), optSeg("length", [["short", "短 5–10"], ["standard", "標準 10–15"], ["long", "長 16+"]]),
       E("span", { class: "ql" }, "語言"), optSeg("lang", [["zh", "中文"], ["en", "English"]]),
       E("span", { class: "ql" }, "底版"), box);
     function paintOpts() { strip.querySelectorAll(".seg").forEach((g) => g.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(opts[g.dataset.k] === b.dataset.v)))); }
@@ -494,7 +512,8 @@ const TDJ = (() => {
       }
     })();
 
-    body.append(strip, ...(bS ? [bS] : []), bOut, bQ, bT);
+    const wl = rv.warnings?.length ? E("ul", { class: "tdj-warn", "aria-label": "注意" }, ...rv.warnings.map((w) => E("li", {}, w))) : null;
+    body.append(strip, ...(wl ? [wl] : []), ...(bS ? [bS] : []), bOut, bQ, bT);
     const submit = async (skip) => {
       if (J.busy) return;
       J.busy = true;

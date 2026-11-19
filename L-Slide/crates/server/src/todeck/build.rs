@@ -92,8 +92,6 @@ fn pick<'a>(arrs: &'a [Arrangement], n: Need) -> Option<&'a Arrangement> {
 
 struct Ctx<'a> {
     st: &'a StyleSystem,
-    w: i64,
-    h: i64,
     pandoc: &'a lore_math::Pandoc,
     macros: BTreeMap<String, String>,
     warnings: Vec<String>,
@@ -410,6 +408,58 @@ fn areas(ws: &sc_core::Workspace, st: &StyleSystem, source: &lore_ooxml::Deck, k
     }
 }
 
+/// The frames every content page of one deck shares, so the same role sits at the same place
+/// on every page: the body area (clear of what the layout draws at the bottom: logo, marks,
+/// the page number, a bar) and the `Ref:` line (beside the logo, where the author's own decks
+/// put it; never over it).
+struct PageFrames {
+    content: Frame,
+    refs: Frame,
+    /// A dark takeaway band the base itself has (`None`: the takeaway is a line under the content).
+    band: Option<Frame>,
+    kicker: Option<Frame>,
+    title: Frame,
+}
+
+/// How many lines a `Ref:` box holds.
+const REF_LINES: i64 = 3;
+
+fn page_frames(ws: &sc_core::Workspace, st: &StyleSystem, source: &lore_ooxml::Deck, arrs: &[Arrangement], w: i64, h: i64) -> PageFrames {
+    let ar = areas(ws, st, source, "content", w, h);
+    let layout = st.pack.layouts.get("content").cloned().unwrap_or_default();
+    // what the layout draws in the bottom band
+    let drawn: Vec<Frame> = lore_canvas::pptx_in::backdrops(source).into_iter().filter(|b| b.layout == layout).flat_map(|b| b.objects).filter(|o| !o.hidden).map(|o| o.frame).filter(|f| f.y + f.h / 2 > h * 86 / 100 && f.y < h).collect();
+    let bar_top = drawn.iter().filter(|f| f.w > w * 8 / 10).map(|f| f.y).min().unwrap_or(h * 98 / 100);
+    let small: Vec<&Frame> = drawn.iter().filter(|f| f.w <= w * 8 / 10).collect();
+    let left = small.iter().filter(|f| f.x + f.w / 2 < w * 35 / 100).map(|f| f.x + f.w).max();
+    let right = small.iter().filter(|f| f.x + f.w / 2 > w * 65 / 100).map(|f| f.x).min();
+    let ref_size = st.tag("source").or_else(|| st.tag("reference")).or_else(|| st.tag("caption")).map(|t| t.size).unwrap_or(9.0);
+    let ref_h = (ref_size * 1.2 * REF_LINES as f64 * 12_700.0) as i64 + h / 200;
+    let rx = left.map(|l| l + w / 150).unwrap_or(ar.content.x);
+    let rw = (right.unwrap_or(w - ar.content.x) - w / 150 - rx).min(w * 6 / 10).max(w / 4);
+    let ry = bar_top - h / 200 - ref_h;
+    let refs = Frame::new(rx, ry, rw, ref_h);
+    let band = ar.takeaway.clone().filter(|_| st.color("inverse").is_some());
+    let mut bottom = (ar.content.y + ar.content.h).min(ry - h / 100);
+    if let Some(top) = small.iter().map(|f| f.y).min() {
+        bottom = bottom.min(top - h / 100);
+    }
+    if let Some(b) = &band {
+        bottom = bottom.min(b.y - h / 60);
+    }
+    // the author's arrangements start the body at one line; the base's area when it has one
+    let from_arr = arrs.iter().flat_map(|a| a.blocks.iter()).find(|b| b.role == "text").map(|b| ((b.rect[0] * w as f64) as i64, (b.rect[1] * h as f64) as i64, (b.rect[2] * w as f64) as i64));
+    let (cx, cy, cw) = match (from_arr, ws.base(&st.pack.pack.id).ok().flatten().is_some()) {
+        (Some(a), false) => (a.0, a.1.max(ar.content.y.min(a.1)), a.2),
+        _ => (ar.content.x, ar.content.y, ar.content.w),
+    };
+    let content = Frame::new(cx, cy, cw, (bottom - cy).max(h / 4));
+    let title = ar.title.clone().unwrap_or_else(|| {
+        arrs.iter().flat_map(|a| a.blocks.iter()).find(|b| b.role == "title").map(|b| Frame::new((b.rect[0] * w as f64) as i64, (b.rect[1] * h as f64) as i64, (b.rect[2] * w as f64) as i64, (b.rect[3] * h as f64) as i64)).unwrap_or_else(|| Frame::new(w / 25, h / 12, w * 23 / 25, h / 10))
+    });
+    PageFrames { content, refs, band, kicker: ar.kicker, title }
+}
+
 fn kicker_label(role: &str, lang: &str) -> &'static str {
     let zh = lang != "en";
     match role {
@@ -429,6 +479,8 @@ pub struct Built {
     /// Index of the big-picture slide and the object ids of each numbered step.
     pub reveal: Option<(usize, Vec<Vec<u32>>)>,
     pub warnings: Vec<String>,
+    /// The body area every content page shares.
+    pub content: Frame,
 }
 
 pub struct BuildInput<'a> {
@@ -440,22 +492,32 @@ pub struct BuildInput<'a> {
     pub macros: BTreeMap<String, String>,
     pub lang: &'a str,
     pub boxes: Vec<ModuleBox>,
+    /// The cover's Speaker and Supervisor.
+    pub presenter: Option<String>,
+    pub supervisor: Option<String>,
     pub next_uid: &'a mut dyn FnMut() -> String,
     /// Told after each planned slide: (done, total).
     pub progress: &'a mut dyn FnMut(usize, usize),
 }
 
+/// Estimated height of a body `w` wide (EMU), with a little air.
+fn text_h(b: &TextBody, w: i64) -> i64 {
+    (crate::deckpolish::text_size(b, w).0 * 1.04) as i64 + 12_700
+}
+
 /// The slides of a plan.
 pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String> {
     let (w, h) = inp.source.slide_size;
-    let mut cx = Ctx { st: inp.st, w, h, pandoc: inp.pandoc, macros: inp.macros, warnings: vec![], deck_dir: inp.deck_dir.to_path_buf(), omml: BTreeMap::new() };
+    let mut cx = Ctx { st: inp.st, pandoc: inp.pandoc, macros: inp.macros, warnings: vec![], deck_dir: inp.deck_dir.to_path_buf(), omml: BTreeMap::new() };
     let arrs = academic(inp.ws);
+    let pf = page_frames(inp.ws, inp.st, inp.source, &arrs, w, h);
+    let gap = h / 60;
     let mut assets: BTreeMap<String, String> = BTreeMap::new();
     let mut out = vec![];
     let mut reveal_steps = None;
     let main_fig = plan.slides.iter().find(|s| s.role == "overview").map(|s| s.figure.clone()).unwrap_or_default();
 
-    for ps in &plan.slides {
+    for (page, ps) in plan.slides.iter().enumerate() {
         let kind = match ps.role.as_str() {
             "cover" => "cover",
             "thanks" if inp.st.pack.layouts.contains_key("end") => "end",
@@ -468,8 +530,8 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
             None => vec![],
         };
         slide.notes = ps.notes.clone();
-        let ar = areas(inp.ws, inp.st, inp.source, kind, w, h);
         let mut extra: Vec<Object> = vec![];
+        let warn_at = format!("第 {} 頁「{}」", page + 1, clip(&ps.title, 24));
 
         let fig = m.figures.iter().find(|f| f.id == ps.figure && f.image.is_some()).or_else(|| m.tables.iter().find(|t| t.id == ps.figure && t.image.is_some()));
         let tab = m.tables.iter().find(|t| t.id == ps.table);
@@ -481,94 +543,169 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
 
         match kind {
             "cover" => {
+                let ar = areas(inp.ws, inp.st, inp.source, kind, w, h);
                 let title_tag = cx.tag(&["cover-title", "title"]);
                 let title = if m.title.is_empty() { ps.title.clone() } else { m.title.clone() };
-                fill_title(&mut objs, &cx, &title, &title_tag, ar.title.clone().unwrap_or_else(|| Frame::new(w / 16, h * 3 / 10, w * 7 / 8, h / 6)));
+                let tf = ar.title.clone().unwrap_or_else(|| Frame::new(w / 16, h * 3 / 10, w * 7 / 8, h / 6));
+                fill_title(&mut objs, &cx, &title, &title_tag, tf.clone());
+                // a long title grows upwards from where the layout ends it: the block below stays put
+                if let Some(o) = objs.iter_mut().find(|o| matches!(o.ph.as_deref(), Some("title") | Some("ctrTitle")) || o.slot.as_deref() == Some("title")) {
+                    let need = o.kind.sp().and_then(|s| s.text.as_ref()).map(|t| text_h(t, o.frame.w)).unwrap_or(0);
+                    if need > o.frame.h {
+                        let bottom = o.frame.y + o.frame.h;
+                        o.frame = Frame::new(o.frame.x, (bottom - need).max(h / 12), o.frame.w, need);
+                    }
+                }
                 let venue = [plan.venue.trim(), m.venue.trim()].into_iter().find(|v| !v.is_empty()).unwrap_or("").to_string();
                 let venue = if !m.year.is_empty() && !venue.contains(&m.year) && !venue.is_empty() { format!("{venue}, {}", m.year) } else { venue };
-                let keywords: Vec<String> = if plan.keywords.is_empty() { m.keywords.clone() } else { plan.keywords.clone() };
+                // journal line, then who presents (the base's `subtitle` = the Speaker / Supervisor block)
                 let mut paras = vec![];
                 if !venue.is_empty() {
                     let t = cx.tag(&["venue", "label", "subtitle"]);
-                    paras.push(cx.para(vec![cx.run(&venue, &t, None)], &t));
+                    let mut p = cx.para(vec![cx.run(&venue, &t, None)], &t);
+                    p.after_pt = Some(6.0);
+                    paras.push(p);
                 }
-                if !keywords.is_empty() {
-                    let t = cx.tag(&["subtitle", "body"]);
-                    paras.push(cx.para(vec![cx.run(&format!("Keywords: {}", keywords.join(", ")), &t, None)], &t));
+                let zh = inp.lang != "en";
+                let who = [(inp.presenter.as_deref(), if zh { "報告者：" } else { "Speaker: " }), (inp.supervisor.as_deref(), if zh { "指導教授：" } else { "Supervisor: " })];
+                for (name, label) in who {
+                    if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
+                        let t = cx.tag(&["subtitle", "body"]);
+                        paras.push(cx.para(vec![cx.run(&format!("{label}{n}"), &t, None)], &t));
+                    }
                 }
-                if !m.authors.is_empty() {
-                    let t = cx.tag(&["caption", "subtitle"]);
-                    paras.push(cx.para(vec![cx.run(&m.authors.join(", "), &t, None)], &t));
-                }
-                let f = ar.subtitle.clone().unwrap_or_else(|| {
-                    let t = ar.title.clone().unwrap_or_else(|| Frame::new(w / 16, h * 3 / 10, w * 7 / 8, h / 6));
-                    Frame::new(t.x, t.y + t.h + h / 40, t.w, h / 4)
-                });
                 if !paras.is_empty() {
-                    extra.push(text_obj("期刊與關鍵字", Frame::new(f.x, f.y, f.w, f.h.max(h / 5)), body(paras, "t"), None));
-                }
-                if !m.self_ref.is_empty() {
-                    extra.push(ref_obj(&cx, &m.self_ref, &ar));
+                    let tb = body(paras, "t");
+                    match objs.iter_mut().find(|o| o.ph.as_deref() == Some("subTitle")) {
+                        Some(o) => {
+                            let need = text_h(&tb, o.frame.w);
+                            o.frame.h = o.frame.h.max(need);
+                            if let Some(sp) = o.kind.sp_mut() {
+                                sp.text = Some(tb);
+                            }
+                        }
+                        None => {
+                            let f = ar.subtitle.clone().unwrap_or_else(|| Frame::new(tf.x, tf.y + tf.h + h / 40, tf.w, h / 4));
+                            let need = text_h(&tb, f.w);
+                            extra.push(text_obj("講者", Frame::new(f.x, f.y, f.w, need.max(f.h.min(h / 5))), tb, None));
+                        }
+                    }
                 }
             }
             "end" => {
+                let ar = areas(inp.ws, inp.st, inp.source, kind, w, h);
                 let t = cx.tag(&["cover-title", "title"]);
                 fill_title(&mut objs, &cx, &ps.title, &t, ar.title.clone().unwrap_or_else(|| Frame::new(w / 16, h * 2 / 5, w * 7 / 8, h / 6)));
             }
+            _ if ps.role == "thanks" => {
+                // a closing page on the content layout: the title alone, in the middle
+                let t = cx.tag(&["title"]);
+                fill_title(&mut objs, &cx, &ps.title, &t, pf.title.clone());
+                if let Some(o) = objs.iter_mut().find(|o| matches!(o.ph.as_deref(), Some("title") | Some("ctrTitle")) || o.slot.as_deref() == Some("title")) {
+                    o.frame = Frame::new(o.frame.x, (h - o.frame.h) / 2, o.frame.w, o.frame.h);
+                    if let Some(tb) = o.kind.sp_mut().and_then(|s| s.text.as_mut()) {
+                        tb.anchor = "ctr".into();
+                        tb.paras.iter_mut().for_each(|p| p.align = "ctr".into());
+                    }
+                }
+            }
             _ => {
                 let title_tag = cx.tag(&["title"]);
-                let need = Need { image: image.is_some(), table: table_grid.is_some(), text: !ps.bullets.is_empty() || !ps.equations.is_empty() || !ps.steps.is_empty() };
+                let has_text = !ps.bullets.is_empty() || !ps.equations.is_empty() || !ps.steps.is_empty();
+                let need = Need { image: image.is_some(), table: table_grid.is_some(), text: has_text };
                 let arr = pick(&arrs, need);
                 slide.arrangement = arr.map(|a| a.id.clone());
                 let frac = |b: &Block| Frame::new((b.rect[0] * w as f64) as i64, (b.rect[1] * h as f64) as i64, (b.rect[2] * w as f64) as i64, (b.rect[3] * h as f64) as i64);
                 let block = |role: &str| arr.and_then(|a| a.blocks.iter().find(|b| b.role == role)).map(frac);
-                // title: the arrangement's block, else the base's title area
-                if let Some(tf) = block("title") {
-                    objs.retain(|o| o.slot.as_deref() != Some("title"));
-                    let t = text_obj("Title", tf, body(vec![cx.para(vec![cx.run(&ps.title, &title_tag, None)], &title_tag)], "ctr"), Some("title-1"));
-                    extra.push(t);
-                } else {
-                    fill_title(&mut objs, &cx, &ps.title, &title_tag, ar.title.clone().unwrap_or_else(|| Frame::new(w / 25, h / 12, w * 23 / 25, h / 10)));
-                }
-                if let Some(kf) = &ar.kicker {
+                // the title: always the layout's own title (one frame on every page)
+                fill_title(&mut objs, &cx, &ps.title, &title_tag, pf.title.clone());
+                if let Some(kf) = &pf.kicker {
                     let label = kicker_label(&ps.role, inp.lang);
                     if !label.is_empty() {
                         let t = cx.tag(&["kicker", "label"]);
                         extra.push(text_obj("kicker", kf.clone(), body(vec![cx.para(vec![cx.run(label, &t, None)], &t)], "b"), None));
                     }
                 }
-                // where the visual and the text go
-                let content = ar.content.clone();
-                let (vis_f, text_f) = match (image.is_some() || table_grid.is_some(), need.text) {
-                    (true, true) => {
-                        let v = block("image").or_else(|| block("table")).unwrap_or_else(|| Frame::new(content.x, content.y, content.w * 55 / 100, content.h));
-                        let t = block("text").unwrap_or_else(|| Frame::new(content.x + content.w * 58 / 100, content.y, content.w * 42 / 100, content.h));
-                        (Some(v), Some(t))
-                    }
-                    (true, false) => {
-                        let lone_image = block("image").filter(|_| block("text").is_none());
-                        (Some(block("table").filter(|_| table_grid.is_some()).or(lone_image).unwrap_or(content.clone())), None)
-                    }
-                    (false, _) => (None, Some(block("text").unwrap_or(content.clone()))),
+                let c = pf.content.clone();
+                // the takeaway: the base's dark band when it has one, else a key line right under the content
+                let take = (!ps.takeaway.trim().is_empty()).then(|| takeaway_body(&mut cx, &ps.takeaway, pf.band.is_some()));
+                let take_h = match (&take, &pf.band) {
+                    (Some(tb), None) => text_h(tb, c.w),
+                    _ => 0,
                 };
-                // the takeaway: the base's band, the arrangement's block, else a line under the content
-                let mut take_f = None;
-                if !ps.takeaway.trim().is_empty() {
-                    take_f = Some(ar.takeaway.clone().or_else(|| block("takeaway")).unwrap_or_else(|| Frame::new(content.x, content.y + content.h - h / 12, content.w, h / 12)));
-                }
-                let shrink = |f: Frame| -> Frame {
-                    match &take_f {
-                        Some(t) if f.y + f.h > t.y && t.y > f.y => Frame::new(f.x, f.y, f.w, (t.y - f.y - h / 60).max(h / 8)),
-                        _ => f,
-                    }
-                };
-                let vis_f = vis_f.map(shrink);
-                let text_f = text_f.map(shrink);
+                let bottom = c.y + c.h - if take_h > 0 { take_h + gap } else { 0 };
 
+                // ── the text of the page (one size per role: never a denser tag) ──
+                let t = if ps.role == "takeaway" { cx.tag(&["takeaway", "body"]) } else { cx.tag(&["body"]) };
+                let mut paras = vec![];
+                let num = ps.role == "takeaway";
+                for b in &ps.bullets {
+                    let runs = cx.rich(b, &t, None);
+                    let mut p = cx.para(runs, &t);
+                    p.bullet = if num { Bullet::Num { scheme: "arabicPeriod".into(), start: 1 } } else { Bullet::Char { ch: "•".into() } };
+                    p.mar_l = EMU_IN / 4;
+                    p.indent = -EMU_IN / 4;
+                    p.after_pt = Some(6.0);
+                    paras.push(p);
+                }
+                // equations of the slide: native OMML, one per line; one the paper's text
+                // could not give is its crop (a picture above the text), never LaTeX as text
+                let eq_tag = cx.tag(&["equation", "body"]);
+                let mut eq_pics: Vec<&Img> = vec![];
+                let mut used_keys: BTreeSet<String> = BTreeSet::new();
+                for id in &ps.equations {
+                    let Some(e) = m.equations.iter().find(|e| &e.id == id) else { continue };
+                    let latex = cx.expand(&e.latex);
+                    let size = cx.look(&eq_tag, None).size;
+                    let omml = if e.usable() { cx.omml(&latex, true, size) } else { None };
+                    let mut p = match omml {
+                        Some(omml) => {
+                            let look = cx.look(&eq_tag, None);
+                            let tag = cx.st.tag("equation").map(|_| "equation".to_string());
+                            used_keys.extend(equation_keys(&latex));
+                            cx.para(vec![Run { kind: "math".into(), text: latex.clone(), tag, em: None, look, field: None, omml: Some(omml), latex: Some(latex), src: None, k: 0 }], &eq_tag)
+                        }
+                        None => {
+                            match e.image.as_ref() {
+                                Some(im) => eq_pics.push(im),
+                                None => cx.warnings.push(format!("{warn_at}：{} 無法排版，沒有放", e.label.clone().unwrap_or_else(|| e.id.clone()))),
+                            }
+                            continue;
+                        }
+                    };
+                    p.align = "ctr".into();
+                    p.before_pt = Some(6.0);
+                    p.after_pt = Some(6.0);
+                    paras.push(p);
+                }
+                // the symbols the slide's equations use, once each, from the paper's
+                // registry, as notes under them (§7.1: 符號說明)
+                let note_tag = cx.tag(&["caption", "body"]);
+                let em = cx.st.pack.emphasis.contains_key("note").then_some("note");
+                for line in symbol_notes(&m.symbols, &used_keys, inp.lang) {
+                    let runs = cx.rich(&line, &note_tag, em);
+                    let mut p = cx.para(runs, &note_tag);
+                    p.align = "ctr".into();
+                    paras.push(p);
+                }
+                let text_body = (!paras.is_empty()).then(|| body(paras, "t"));
+
+                // ── the picture or table and where the text goes ──
                 let mut step_ids: Vec<Vec<u32>> = vec![];
-                if let (Some(vf), Some(grid)) = (&vis_f, &table_grid) {
-                    extra.push(table_obj(&mut cx, vf, grid, kv.is_some()));
-                } else if let (Some(vf), Some(img)) = (&vis_f, image) {
+                // top of what is still free in the body area, and the text's frame
+                let mut y = c.y;
+                let mut text_f = Frame::new(c.x, c.y, c.w, (bottom - c.y).max(h / 10));
+                let mut low = c.y; // the lowest edge of what was placed
+                if let Some(grid) = &table_grid {
+                    let o = table_obj(&mut cx, &Frame::new(c.x, c.y, c.w, bottom - c.y), grid, kv.is_some());
+                    y = o.frame.y + o.frame.h + gap;
+                    low = o.frame.y + o.frame.h;
+                    if low > bottom {
+                        cx.warnings.push(format!("{warn_at}：表格有 {} 列，超出版面，請刪列或拆頁", grid.len()));
+                    }
+                    extra.push(o);
+                    text_f = Frame::new(c.x, y, c.w, (bottom - y).max(h / 10));
+                } else if let Some(img) = image {
                     let im = img.image.as_ref().unwrap();
                     let asset = match assets.get(&img.id) {
                         Some(a) => a.clone(),
@@ -578,43 +715,74 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                             a
                         }
                     };
-                    let cap_h = if img.caption.is_empty() { 0 } else { h / 20 };
-                    let area = Frame::new(vf.x, vf.y, vf.w, vf.h - cap_h);
-                    let pf = contain(&area, im.w, im.h);
+                    let cap_tag = cx.tag(&["caption"]);
+                    let cap = strip_typed_refs(&caption_clip(&img.caption, 140));
+                    let aspect = im.w.max(1) as f64 / im.h.max(1) as f64;
+                    let steps = !ps.steps.is_empty();
+                    // a wide picture gets the width (text under it); a tall one sits beside the text
+                    let side = steps || (has_text && aspect < 1.4);
+                    let area = if side {
+                        let b = block("image").unwrap_or_else(|| Frame::new(c.x, c.y, c.w * 48 / 100, c.h));
+                        Frame::new(b.x, c.y, b.w, bottom - c.y)
+                    } else {
+                        Frame::new(c.x, c.y, c.w, bottom - c.y)
+                    };
+                    let cap_body = (!cap.is_empty()).then(|| {
+                        let runs = cx.rich(&cap, &cap_tag, None);
+                        body(vec![cx.para(runs, &cap_tag)], "t")
+                    });
+                    let cap_h = cap_body.as_ref().map(|b| text_h(b, area.w) + h / 120).unwrap_or(0);
+                    let below = if side { 0 } else { text_body.as_ref().map(|b| text_h(b, c.w) + gap).unwrap_or(0) };
+                    // the picture: as wide as the room under it allows, never under 80 % of the width when it is on top
+                    let room = (area.h - cap_h - below).max(h / 10);
+                    let mut pw = area.w.min((room as f64 * aspect) as i64);
+                    if !side && has_text {
+                        pw = pw.max(area.w * 8 / 10);
+                    }
+                    let ph = (pw as f64 / aspect) as i64;
+                    let pframe = Frame::new(area.x + (area.w - pw) / 2, area.y, pw, ph);
                     let is_main = img.id == main_fig && !inp.boxes.is_empty();
                     let module = ps.module as usize;
                     if is_main && ps.role == "method" && module >= 1 && module <= inp.boxes.len() {
                         // the whole figure dimmed, the current module cropped back on top, framed
                         let ghost = inp.st.pack.ghost.picture_alpha.clamp(0.1, 1.0);
-                        extra.push(pic("架構圖", pf.clone(), &asset, Crop::default(), ghost, Some("image-1")));
-                        let (sub, crop) = module_rect(&pf, im, &inp.boxes[module - 1].bbox);
+                        extra.push(pic("架構圖", pframe.clone(), &asset, Crop::default(), ghost, Some("image-1")));
+                        let (sub, crop) = module_rect(&pframe, im, &inp.boxes[module - 1].bbox);
                         extra.push(pic(&format!("模組 {module}"), sub.clone(), &asset, crop, 1.0, None));
                         extra.push(frame_obj(&cx, &sub, &format!("框 {module}")));
                     } else {
-                        extra.push(pic(if fig.is_some() { "圖" } else { "表" }, pf.clone(), &asset, Crop::default(), 1.0, Some("image-1")));
+                        extra.push(pic(if fig.is_some() { "圖" } else { "表" }, pframe.clone(), &asset, Crop::default(), 1.0, Some("image-1")));
                         if is_main && ps.role == "overview" {
                             for (i, b) in inp.boxes.iter().enumerate() {
-                                let (sub, _) = module_rect(&pf, im, &b.bbox);
+                                let (sub, _) = module_rect(&pframe, im, &b.bbox);
                                 let mut o = frame_obj(&cx, &sub, &format!("框 {}", i + 1));
                                 o.name = format!("step-frame-{}", i + 1);
                                 extra.push(o);
                             }
                         }
                     }
-                    if cap_h > 0 {
-                        let t = cx.tag(&["caption"]);
-                        let cap = strip_typed_refs(&caption_clip(&img.caption, 140));
-                        let runs = cx.rich(&cap, &t, None);
-                        extra.push(text_obj("圖說", Frame::new(vf.x, pf.y + pf.h + h / 120, vf.w, cap_h), body(vec![cx.para(runs, &t)], "t"), Some("caption-1")));
+                    low = pframe.y + pframe.h;
+                    if let Some(cb) = cap_body {
+                        // the caption: right under the picture, as wide as the picture's column
+                        let cf = Frame::new(area.x, pframe.y + pframe.h + h / 120, area.w, cap_h - h / 120);
+                        low = cf.y + cf.h;
+                        extra.push(text_obj("圖說", cf, cb, Some("caption-1")));
+                    }
+                    if side {
+                        let b = block("text").unwrap_or_else(|| Frame::new(c.x + c.w * 52 / 100, c.y, c.w * 48 / 100, c.h));
+                        text_f = Frame::new(b.x, c.y, b.w, (bottom - c.y).max(h / 10));
+                    } else {
+                        y = low + gap;
+                        text_f = Frame::new(c.x, y, c.w, (bottom - y).max(h / 10));
                     }
                 }
-                if let Some(tf) = &text_f {
-                    let dense = ps.bullets.iter().map(|b| b.chars().count()).sum::<usize>() > 260;
-                    let t = if dense { cx.tag(&["body-dense", "body"]) } else { cx.tag(&["body"]) };
+                let _ = y;
+                if has_text {
+                    let t = cx.tag(&["body"]);
+                    let mut tf = text_f.clone();
                     if !ps.steps.is_empty() {
                         // one text box per numbered step (the reveal steps)
                         let n = ps.steps.len() as i64;
-                        let gap = h / 60;
                         let sh = ((tf.h - gap * (n - 1)) / n).min(h / 7);
                         for (i, s) in ps.steps.iter().enumerate() {
                             let label = cx.tag(&["label"]);
@@ -622,94 +790,48 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                             runs.extend(cx.rich(s, &t, None));
                             let mut o = text_obj(&format!("步驟 {}", i + 1), Frame::new(tf.x, tf.y + i as i64 * (sh + gap), tf.w, sh), body(vec![cx.para(runs, &t)], "t"), None);
                             o.name = format!("step-{}", i + 1);
+                            low = low.max(o.frame.y + o.frame.h);
                             extra.push(o);
                         }
                         step_ids = (0..ps.steps.len()).map(|_| vec![]).collect();
-                    }
-                    let mut paras = vec![];
-                    let num = ps.role == "takeaway";
-                    for b in &ps.bullets {
-                        let runs = cx.rich(b, &t, None);
-                        let mut p = cx.para(runs, &t);
-                        p.bullet = if num { Bullet::Num { scheme: "arabicPeriod".into(), start: 1 } } else { Bullet::Char { ch: "•".into() } };
-                        p.mar_l = EMU_IN / 4;
-                        p.indent = -EMU_IN / 4;
-                        p.after_pt = Some(6.0);
-                        paras.push(p);
-                    }
-                    // equations of the slide: native OMML, one per line; one the PDF's text
-                    // could not give is its crop (a picture above the text), never LaTeX as text
-                    let eq_tag = cx.tag(&["equation", "body"]);
-                    let mut eq_pics: Vec<&Img> = vec![];
-                    let mut used_keys: BTreeSet<String> = BTreeSet::new();
-                    for id in &ps.equations {
-                        let Some(e) = m.equations.iter().find(|e| &e.id == id) else { continue };
-                        let latex = cx.expand(&e.latex);
-                        let size = cx.look(&eq_tag, None).size;
-                        let omml = if e.usable() { cx.omml(&latex, true, size) } else { None };
-                        let mut p = match omml {
-                            Some(omml) => {
-                                let look = cx.look(&eq_tag, None);
-                                let tag = cx.st.tag("equation").map(|_| "equation".to_string());
-                                used_keys.extend(equation_keys(&latex));
-                                cx.para(vec![Run { kind: "math".into(), text: latex.clone(), tag, em: None, look, field: None, omml: Some(omml), latex: Some(latex), src: None, k: 0 }], &eq_tag)
-                            }
-                            None => {
-                                match e.image.as_ref() {
-                                    Some(im) => eq_pics.push(im),
-                                    None => cx.warnings.push(format!("{}：方程式無法排版，投影片沒有放", e.label.clone().unwrap_or_else(|| e.id.clone()))),
-                                }
-                                continue;
-                            }
-                        };
-                        p.align = "ctr".into();
-                        p.before_pt = Some(6.0);
-                        p.after_pt = Some(6.0);
-                        paras.push(p);
-                    }
-                    // the symbols the slide's equations use, once each, from the paper's
-                    // registry, as notes under them (§7.1: 符號說明)
-                    let note_tag = cx.tag(&["caption", "body"]);
-                    let em = cx.st.pack.emphasis.contains_key("note").then_some("note");
-                    for line in symbol_notes(&m.symbols, &used_keys, inp.lang) {
-                        let runs = cx.rich(&line, &note_tag, em);
-                        let mut p = cx.para(runs, &note_tag);
-                        p.align = "ctr".into();
-                        paras.push(p);
+                        let used = tf.y + n * (sh + gap);
+                        tf = Frame::new(tf.x, used, tf.w, (tf.y + tf.h - used).max(h / 10));
                     }
                     // equation crops: stacked at the top of the text area, the text below
-                    let mut tf = tf.clone();
                     if !eq_pics.is_empty() {
-                        let gap = h / 60;
-                        let share = if paras.is_empty() { tf.h } else { tf.h * 3 / 5 };
+                        let share = if text_body.is_none() { tf.h } else { tf.h * 3 / 5 };
                         let each = ((share - gap * (eq_pics.len() as i64 - 1)) / eq_pics.len() as i64).max(h / 12);
-                        let mut y = tf.y;
+                        let mut ey = tf.y;
                         for (k, im) in eq_pics.iter().enumerate() {
                             let asset = sc_core::store_asset(&cx.deck_dir, &im.bytes, &im.ext).map_err(|e| e.to_string())?;
-                            let pf = contain(&Frame::new(tf.x, y, tf.w, each), im.w, im.h);
-                            extra.push(pic(&format!("方程式 {}", k + 1), Frame::new(pf.x, y, pf.w, pf.h), &asset, Crop::default(), 1.0, None));
-                            y += pf.h + gap;
+                            let ef = contain(&Frame::new(tf.x, ey, tf.w, each), im.w, im.h);
+                            extra.push(pic(&format!("方程式 {}", k + 1), Frame::new(ef.x, ey, ef.w, ef.h), &asset, Crop::default(), 1.0, None));
+                            ey += ef.h + gap;
                         }
-                        tf = Frame::new(tf.x, y, tf.w, (tf.y + tf.h - y).max(h / 8));
+                        low = low.max(ey - gap);
+                        tf = Frame::new(tf.x, ey, tf.w, (tf.y + tf.h - ey).max(h / 10));
                     }
-                    let tf = &tf;
-                    if !paras.is_empty() {
-                        let f = if ps.steps.is_empty() {
-                            tf.clone()
-                        } else {
-                            let used = extra.iter().filter(|o| o.name.starts_with("step-") && !o.name.starts_with("step-frame")).map(|o| o.frame.y + o.frame.h).max().unwrap_or(tf.y);
-                            Frame::new(tf.x, used + h / 60, tf.w, (tf.y + tf.h - used).max(h / 8))
-                        };
-                        extra.push(text_obj("內文", f, body(paras, "t"), Some("text-1")));
+                    if let Some(tb) = text_body {
+                        let need = text_h(&tb, tf.w);
+                        if need > tf.h + h / 100 {
+                            cx.warnings.push(format!("{warn_at}：文字放不下（沒有縮字），請刪短或拆頁"));
+                        }
+                        let f = Frame::new(tf.x, tf.y, tf.w, need.min(tf.h).max(h / 20));
+                        low = low.max(f.y + f.h);
+                        extra.push(text_obj("內文", f, tb, Some("text-1")));
                     }
                 }
-                if let Some(tf) = take_f {
-                    extra.push(takeaway_obj(&cx, &tf, &ps.takeaway, ar.takeaway.is_some() || block("takeaway").is_some()));
+                if let Some(tb) = take {
+                    let f = match &pf.band {
+                        Some(b) => b.clone(),
+                        None => Frame::new(c.x, (low + gap).min(c.y + c.h - take_h).max(c.y), c.w, take_h),
+                    };
+                    extra.push(takeaway_obj(&cx, &f, tb, pf.band.is_some()));
                 }
                 if !ps.cites.is_empty() {
                     let refs: Vec<String> = ps.cites.iter().filter_map(|c| m.refs.get(c)).cloned().collect();
-                    if !refs.is_empty() {
-                        extra.push(ref_obj(&cx, &format!("Ref: {}", refs.join("; ")), &ar));
+                    if let Some(o) = ref_obj(&mut cx, &refs, &pf.refs, &warn_at) {
+                        extra.push(o);
                     }
                 }
                 if !step_ids.is_empty() {
@@ -740,7 +862,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
         out.push(slide);
         (inp.progress)(out.len(), plan.slides.len());
     }
-    Ok(Built { slides: out, reveal: reveal_steps.filter(|(_, s)| s.len() >= 2), warnings: cx.warnings })
+    Ok(Built { slides: out, reveal: reveal_steps.filter(|(_, s)| s.len() >= 2), warnings: cx.warnings, content: pf.content })
 }
 
 /// The module's rectangle on the slide and the crop that shows only it.
@@ -766,6 +888,8 @@ fn frame_obj(cx: &Ctx, f: &Frame, name: &str) -> Object {
     }
 }
 
+/// The page's title into the layout's title placeholder (else a box at `fallback`). The text
+/// keeps its tag's size: nothing shrinks it (`autofit` off).
 fn fill_title(objs: &mut Vec<Object>, cx: &Ctx, text: &str, tag: &str, fallback: Frame) {
     let para = cx.para(vec![cx.run(text, tag, None)], tag);
     let slot = objs.iter_mut().find(|o| o.slot.as_deref() == Some("title") || matches!(o.ph.as_deref(), Some("title") | Some("ctrTitle")));
@@ -773,24 +897,58 @@ fn fill_title(objs: &mut Vec<Object>, cx: &Ctx, text: &str, tag: &str, fallback:
         Some(sp) => {
             let tb = sp.text.get_or_insert_with(TextBody::default);
             tb.paras = vec![para];
+            tb.autofit = "none".into();
         }
         None => objs.push(text_obj("Title", fallback, body(vec![para], "ctr"), Some("title"))),
     }
 }
 
-/// `Ref:` small, bottom left (tag `source`, else `reference`, else `caption`).
-fn ref_obj(cx: &Ctx, text: &str, ar: &Areas) -> Object {
+/// `Ref:` small, beside the logo (tag `source`, else `reference`, else `caption`): whole
+/// entries only, as many as the box's lines hold — an entry that does not fit is left out
+/// and reported, never cut in the middle.
+fn ref_obj(cx: &mut Ctx, refs: &[String], f: &Frame, at: &str) -> Option<Object> {
     let t = cx.tag(&["source", "reference", "caption"]);
-    let x = ar.content.x;
-    text_obj("Ref", Frame::new(x, cx.h * 905 / 1000, cx.w * 7 / 10, cx.h * 4 / 100), body(vec![cx.para(vec![cx.run(&clip(text, 260), &t, None)], &t)], "b"), None)
+    let make = |cx: &Ctx, list: &[&str]| body(vec![cx.para(vec![cx.run(&format!("Ref: {}", list.join("; ")), &t, None)], &t)], "b");
+    let mut kept: Vec<&str> = vec![];
+    for r in refs {
+        let r = r.trim().trim_end_matches(';');
+        if r.is_empty() {
+            continue;
+        }
+        let mut next = kept.clone();
+        next.push(r);
+        if crate::deckpolish::text_size(&make(cx, &next), f.w).1 <= REF_LINES as f64 {
+            kept = next;
+        }
+    }
+    let total = refs.iter().filter(|r| !r.trim().is_empty()).count();
+    if kept.len() < total {
+        cx.warnings.push(format!("{at}：參考文獻放得下 {} 筆（共 {total} 筆），其餘沒有放", kept.len()));
+    }
+    if kept.is_empty() {
+        return None;
+    }
+    Some(text_obj("Ref", f.clone(), make(cx, &kept), None))
 }
 
-fn takeaway_obj(cx: &Ctx, f: &Frame, text: &str, band: bool) -> Object {
+fn takeaway_body(cx: &mut Ctx, text: &str, band: bool) -> TextBody {
     if band {
         let t = cx.tag(&["takeaway", "label"]);
-        let fill = cx.color(&["inverse", "ink"]);
-        let mut tb = body(vec![cx.para(vec![cx.run(text, &t, None)], &t)], "ctr");
+        let runs = cx.rich(text, &t, None);
+        let mut tb = body(vec![cx.para(runs, &t)], "ctr");
         tb.insets = [228_600, 45_720, 228_600, 45_720];
+        return tb;
+    }
+    // no band in the base: one line in the label tag with the key-result emphasis
+    let t = cx.tag(&["label", "body"]);
+    let em = cx.st.pack.emphasis.contains_key("key").then_some("key");
+    let runs = cx.rich(text, &t, em);
+    body(vec![cx.para(runs, &t)], "t")
+}
+
+fn takeaway_obj(cx: &Ctx, f: &Frame, tb: TextBody, band: bool) -> Object {
+    if band {
+        let fill = cx.color(&["inverse"]);
         let mut g = Geom::preset("roundRect");
         g.adj.insert("adj".into(), 12000.0);
         return Object {
@@ -804,26 +962,40 @@ fn takeaway_obj(cx: &Ctx, f: &Frame, text: &str, band: bool) -> Object {
             src: None,
         };
     }
-    // no band in the base: one line in the label tag, key result emphasis
-    let t = cx.tag(&["label", "body"]);
-    let em = cx.st.pack.emphasis.contains_key("key").then_some("key");
-    text_obj("takeaway", f.clone(), body(vec![cx.para(vec![cx.run(text, &t, em)], &t)], "ctr"), Some("takeaway-1"))
+    text_obj("takeaway", f.clone(), tb, Some("takeaway-1"))
 }
 
-/// A native table (無樣式、表格格線): first row bold as header; key-value tables have no header.
+/// A native table (無樣式、表格格線) across the body width: first row bold as header;
+/// key-value tables have no header and stay narrow. Columns share the width by how much
+/// text they hold; every table uses the `table` tag's one size.
 fn table_obj(cx: &mut Ctx, f: &Frame, grid: &[Vec<String>], kv: bool) -> Object {
-    let t = cx.tag(&["table", "body-dense", "body"]);
+    let t = cx.tag(&["table", "body"]);
+    let size = cx.look(&t, None).size;
     let ncol = grid.iter().map(Vec::len).max().unwrap_or(1).max(1);
     let nrow = grid.len().max(1) as i64;
-    let rh = (f.h / nrow).min(EMU_IN * 2 / 5).max(EMU_IN / 5);
-    // narrow tables stay narrow (about 2.6 in a column)
-    let tw = f.w.min(ncol as i64 * EMU_IN * 13 / 5);
-    let cols: Vec<i64> = if kv && ncol == 2 { vec![tw * 2 / 5, tw - tw * 2 / 5] } else { vec![tw / ncol as i64; ncol] };
+    let rh = ((size * 1.2 * 12_700.0) as i64 + 2 * 45_720).max(EMU_IN / 4);
+    let cell_text = |r: &Vec<String>, ci: usize| r.get(ci).map(|s| strip_typed_refs(&lore_docsrc::latex::plain::tidy(&lore_notation::pending::to_plain(s)))).unwrap_or_default();
+    let tw = if kv { f.w.min(ncol as i64 * EMU_IN * 13 / 5) } else { f.w };
+    let cols: Vec<i64> = if kv && ncol == 2 {
+        vec![tw * 2 / 5, tw - tw * 2 / 5]
+    } else {
+        // by the longest cell of each column, within 0.6–2.4 × an even share
+        let longest: Vec<f64> = (0..ncol).map(|ci| grid.iter().map(|r| cell_text(r, ci).chars().count()).max().unwrap_or(1).max(3) as f64).collect();
+        let even = longest.iter().sum::<f64>() / ncol as f64;
+        let wts: Vec<f64> = longest.iter().map(|l| l.clamp(even * 0.6, even * 2.4)).collect();
+        let sum: f64 = wts.iter().sum();
+        let mut v: Vec<i64> = wts.iter().map(|x| (tw as f64 * x / sum) as i64).collect();
+        let used: i64 = v.iter().sum();
+        if let Some(l) = v.last_mut() {
+            *l += tw - used;
+        }
+        v
+    };
     let mut rows: Vec<Row> = vec![];
     for (ri, r) in grid.iter().enumerate() {
         let mut cells = vec![];
         for ci in 0..ncol {
-            let text = r.get(ci).map(|s| strip_typed_refs(&lore_docsrc::latex::plain::tidy(&lore_notation::pending::to_plain(s)))).unwrap_or_default();
+            let text = cell_text(r, ci);
             let head = (!kv && ri == 0) || (kv && ci == 0);
             let em = head.then_some("strong").filter(|e| cx.st.pack.emphasis.contains_key(*e));
             // `$…$` in a cell is native math, like in the bullets

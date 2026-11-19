@@ -75,7 +75,7 @@ pub fn polish(slides: &mut Vec<Slide>, input: &PolishInput) -> PolishReport {
     deck.slides = std::mem::take(slides);
     let mut ed = Editor::new(deck, Some(input.st.clone()));
     let roles = deckpolish::roles_for(&ed.deck, &[]);
-    let rep = deckpolish::run_checks(&mut ed, &Input { profile: input.profile.detail.as_ref(), notation: input.notation, roles });
+    let rep = deckpolish::run_checks(&mut ed, &Input { profile: input.profile.detail.as_ref(), notation: input.notation, roles, keep_sizes: true });
     *slides = std::mem::take(&mut ed.deck.slides);
     let fixes = rep
         .items

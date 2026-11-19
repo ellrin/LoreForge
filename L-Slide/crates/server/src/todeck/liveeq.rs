@@ -354,25 +354,30 @@ impl lore_plot::propose::Llm for EqLlm {
     }
 }
 
-/// Put the GIF on its slide: below the slide's text (the equation), the text box made shorter;
-/// without a text box, the lower right of the slide. The picture keeps the figure's aspect.
-pub fn place(slide: &mut Slide, asset: &str, mm: (f64, f64), size: (i64, i64), id: u32) {
+/// Put the GIF on its slide: right under the slide's text (the equation), in the room left
+/// down to `bottom` (the body area's lower edge; a takeaway line under the text moves below
+/// the picture); without a text box, the lower right of the slide. The picture keeps the
+/// figure's aspect; the text keeps its frame and size.
+pub fn place(slide: &mut Slide, asset: &str, mm: (f64, f64), size: (i64, i64), bottom: i64, id: u32) {
     let (w, h) = size;
     let aspect = mm.1 / mm.0;
     let gap = h / 60;
-    let text = slide.objects.iter_mut().find(|o| o.name == "內文" && matches!(o.kind, Kind::Text(_)));
+    let text = slide.objects.iter().find(|o| o.name == "內文" && matches!(o.kind, Kind::Text(_))).map(|t| t.frame.clone());
+    let take_h = slide.objects.iter().find(|o| o.name == "takeaway" && matches!(o.kind, Kind::Text(_))).map(|t| t.frame.h + gap).unwrap_or(0);
     let frame = match text {
-        Some(t) => {
-            let tf = t.frame.clone();
+        Some(tf) => {
+            let top = tf.y + tf.h + gap;
+            let room = (bottom - take_h - top).max(h / 8);
             let mut gw = tf.w;
             let mut gh = (gw as f64 * aspect) as i64;
-            let max_h = tf.h * 2 / 3;
-            if gh > max_h {
-                gh = max_h;
+            if gh > room {
+                gh = room;
                 gw = (gh as f64 / aspect) as i64;
             }
-            t.frame.h = (tf.h - gh - gap).max(h / 10);
-            Frame::new(tf.x + (tf.w - gw) / 2, tf.y + tf.h - gh, gw, gh)
+            if let Some(t) = slide.objects.iter_mut().find(|o| o.name == "takeaway" && matches!(o.kind, Kind::Text(_))) {
+                t.frame.y = top + gh + gap;
+            }
+            Frame::new(tf.x + (tf.w - gw) / 2, top, gw, gh)
         }
         None => {
             let gw = w * 2 / 5;

@@ -52,7 +52,7 @@ fn toml_top(text: &str, key: &str) -> Option<String> {
 
 /// L-Paper's workspace, found like L-Paper does (read-only here):
 /// `PAPERCOMPOSER_WORKSPACE` → `workspace_path` in its config.toml → LoreForge `private/PaperComposer`.
-fn pc_workspace(home: &lore_home::Home) -> Option<PathBuf> {
+pub(crate) fn pc_workspace(home: &lore_home::Home) -> Option<PathBuf> {
     if let Some(w) = env("PAPERCOMPOSER_WORKSPACE") {
         return Some(PathBuf::from(w));
     }
@@ -223,6 +223,9 @@ pub struct Material {
     pub symbols: Vec<SymbolNote>,
     /// Name for the deck folder.
     pub slug: String,
+    /// What could not be read from the paper as it is (a figure without a picture, an
+    /// equation shown as its crop …): the job's warnings, never dropped silently.
+    pub warnings: Vec<String>,
 }
 
 /// Width and height of a JPEG (SOFn marker).

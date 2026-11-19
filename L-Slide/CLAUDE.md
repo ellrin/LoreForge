@@ -67,6 +67,12 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   A draft paper's 待補 marks (lore-notation `pending`) stay marks: `[pending: …]` in text (lore-docsrc), `[pending]` in table cells and after a
   dependent sentence (`source.rs`, `build.rs`), and `plan::PENDING_RULE` tells the planner to copy them, never a number (`../docs/long-paper.md` §E).
   L-Paper papers are found like L-Paper does (`PAPERCOMPOSER_WORKSPACE`, its config, lore-home).
+  Layout rules (docs/paper-deck.md 「版面」, the author 2026-11-19): one size per text tag across the deck and nothing shrunk to fit (`plan::limit`,
+  `check_plan` → one corrective request → `enforce_limits` splits or reports; polish runs with `keep_sizes`), every content page shares `build::page_frames`
+  (the layout's own title frame, one body line, `Ref:` beside the logo: whole entries only), the deck's fonts are the author's `[deck]` fonts
+  (`private/shared/fonts.toml` → `Deck::fonts` → `StyleSystem::with_fonts` at `Workspace::open`; never a font name in this repo), the cover's Speaker / Supervisor
+  come from L-Paper's people (`todeck/people.rs`, `GET /api/todeck/people`: id + name only; last choice in the workspace's `paper-deck.json`). Everything
+  skipped or degraded is a line of the job's `warnings` (job view, 微調, the deck's 排版用字 notes), never silent. Guard: `tests/todeck.rs` `assert_one_size_per_role`.
   微調 window: 長度／語言／底版 (`POST …/jobs/{id}/params`: 語言 or 長度 redo only the outline, `Jobs::redo_from`),
   建議 (`todeck/suggest.rs`, task `sc-outline-review`, class `create`, best-effort inside the outline stage: ≤5
   structured edits on the review rows, applied by the page). 排版用字: the polish stage also writes the deck's

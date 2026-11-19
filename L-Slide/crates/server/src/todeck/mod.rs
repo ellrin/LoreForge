@@ -45,6 +45,7 @@ pub mod build;
 pub mod eqread;
 pub mod liveeq;
 pub mod outline;
+pub mod people;
 pub mod plan;
 pub mod polish;
 pub mod profile;
@@ -61,6 +62,7 @@ pub use stages::{Params, Source, apply_review};
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/todeck/papers", get(papers))
+        .route("/api/todeck/people", get(people_list))
         .route("/api/todeck", post(make))
         .route("/api/todeck/jobs", get(list).post(create))
         .route("/api/todeck/jobs/{id}", get(one).delete(remove))
@@ -109,6 +111,22 @@ async fn papers(State(s): State<Shared>) -> R {
     Ok(Json(json!({ "pc": pc, "lr": lr })))
 }
 
+/// The people a deck's Speaker / Supervisor are picked from (L-Paper's, id and name only)
+/// and the last choice.
+async fn people_list(State(s): State<Shared>) -> R {
+    let real = s.real_kb.load(std::sync::atomic::Ordering::Relaxed);
+    let (home, root) = (s.home.clone(), s.ws.root.clone());
+    let v = tokio::task::spawn_blocking(move || {
+        let list = people::load(people::file(&home, real).as_deref());
+        let last = people::last(&root);
+        let known = |id: &Option<String>| id.clone().filter(|id| list.iter().any(|p| &p.id == id));
+        json!({ "people": list, "presenter": known(&last.presenter), "supervisor": known(&last.supervisor) })
+    })
+    .await
+    .map_err(|e| bad(e.to_string()))?;
+    Ok(Json(v))
+}
+
 // ── Jobs over HTTP ───────────────────────────────────────────────────────────
 
 fn err(code: StatusCode, msg: impl Into<String>) -> Response {
@@ -126,6 +144,12 @@ pub struct MakeBody {
     pub style: Option<String>,
     #[serde(default)]
     pub engine: Option<String>,
+    /// Ids of `/api/todeck/people` for the cover's Speaker and Supervisor (`""` = nobody;
+    /// absent = the last choice).
+    #[serde(default)]
+    pub presenter: Option<String>,
+    #[serde(default)]
+    pub supervisor: Option<String>,
     /// `review` (先看大綱) or `direct` (直接產生): answers `{job}` at once. Without it the old
     /// one-shot behaviour: a direct job, answered when it is done.
     #[serde(default)]
@@ -144,7 +168,12 @@ fn new_job(s: &Shared, b: &MakeBody, direct: bool) -> Result<Arc<Job>, Response>
     if !matches!(b.source.kind.as_str(), "pc" | "lr") {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "不認得的來源"));
     }
+    let real = s.real_kb.load(std::sync::atomic::Ordering::Relaxed);
+    let list = people::load(people::file(&s.home, real).as_deref());
+    let (presenter, supervisor) = people::resolve(&s.ws.root, &list, (b.presenter.as_deref(), b.supervisor.as_deref()));
     let params = Params {
+        presenter,
+        supervisor,
         source: b.source.clone(),
         length: b.length.clone().unwrap_or_else(|| "standard".into()),
         lang: b.lang.clone().unwrap_or_else(|| "zh".into()),

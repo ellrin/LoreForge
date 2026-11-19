@@ -90,6 +90,9 @@ pub struct EditorState {
     pub style: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub defaults: BTreeMap<String, String>,
+    /// The deck's own fonts (`Deck::fonts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fonts: Option<lore_canvas::DeckFonts>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slides: Vec<SlideState>,
 }
@@ -139,13 +142,14 @@ impl EditorState {
                 (st.arrangement.is_some() || !st.slots.is_empty() || !st.empty.is_empty() || !st.data.is_empty()).then_some(st)
             })
             .collect();
-        EditorState { v: 1, deck_id: deck_id.into(), style: deck.style.clone(), defaults: deck.defaults.clone(), slides }
+        EditorState { v: 1, deck_id: deck_id.into(), style: deck.style.clone(), defaults: deck.defaults.clone(), fonts: deck.fonts.clone(), slides }
     }
 
     /// Put the state back onto a deck imported from the file (`sld` as in [`EditorState::of`]).
     /// Slides are matched by slide id, else by position; slots only land on objects that exist.
     pub fn apply(&self, deck: &mut Deck, sld: &[u32]) {
         deck.defaults = self.defaults.clone();
+        deck.fonts = self.fonts.clone();
         for st in &self.slides {
             let idx = sld.iter().position(|&x| x != 0 && x == st.sld).or_else(|| (st.i < deck.slides.len() && sld.get(st.i).is_none_or(|&x| x == 0 || st.sld == 0)).then_some(st.i));
             let Some(s) = idx.and_then(|i| deck.slides.get_mut(i)) else { continue };
@@ -411,8 +415,13 @@ impl Workspace {
             .filter(|s| known(s))
             .or_else(|| style.map(str::to_string))
             .or_else(|| self.match_style(&od));
+        // the deck's own fonts from the file's state: its runs match the tags again
+        let fonts = state.as_ref().and_then(|s| s.fonts.clone());
         let st = match &style {
-            Some(s) => Some(self.style(s)?),
+            Some(s) => Some(match &fonts {
+                Some(f) => self.style(s)?.with_fonts(f),
+                None => self.style(s)?,
+            }),
             None => None,
         };
         let mut deck = pptx_in::import(&od, st.as_ref(), style.clone());

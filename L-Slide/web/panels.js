@@ -785,7 +785,7 @@ function polishPane() {
   const kids = [];
   if (fixes.length) kids.push(sec(`修正 ${fixes.filter((i) => i.state === "applied").length}`, h("ul", { class: "pol-list" }, fixes.map((i) => line(i, act(i))))));
   if (terms.length) kids.push(sec(`用詞 ${terms.length}`, h("ul", { class: "pol-list" }, terms.map((i) => line(i, act(i))))));
-  if (POLISH.rep?.notes?.length) kids.push(h("div", { class: "info" }, POLISH.rep.notes.join("；")));
+  if (POLISH.rep?.notes?.length) kids.push(h("ul", { class: "info polish-notes" }, ...POLISH.rep.notes.map((n) => h("li", {}, n))));
   if (!kids.length) kids.push(h("div", { class: "empty" }, "沒有要修正的"));
   return kids;
 }

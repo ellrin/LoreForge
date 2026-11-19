@@ -41,13 +41,13 @@ async fn closed_l_brain_cards_go_into_the_files() {
     let sp = space(d.path());
     let b = Brain::at(Some(&dead_url()), vec![sp.clone()], "ellrin");
     assert_eq!(b.place().await, Ok(Place::Disk));
-    let v = b.create(json!({ "via": "papercomposer", "title": "Fuzzy membership", "summary": "隸屬程度", "initial_state": "known", "sources": [{ "type": "document", "ref": "Draft" }] })).await.unwrap();
+    let v = b.create(json!({ "via": "papercomposer", "title": "Momentum queue", "summary": "存放舊特徵的佇列", "initial_state": "known", "sources": [{ "type": "document", "ref": "Draft" }] })).await.unwrap();
     assert_eq!(v["via"], "file");
     let id = v["node"]["id"].as_str().unwrap().to_string();
     assert_eq!(cards_on_disk(&sp), 1);
     // read back as L-Brain would: the member's state and the source
     let view = b.view(&id).await.unwrap();
-    assert_eq!((view["node"]["title"].as_str(), view["space"].as_str()), (Some("Fuzzy membership"), Some("me")));
+    assert_eq!((view["node"]["title"].as_str(), view["space"].as_str()), (Some("Momentum queue"), Some("me")));
     assert_eq!(view["node"]["sources"][0]["ref"], "Draft");
     assert_eq!(view["progress"]["state"], "known");
     // a review answer and an edit, also without L-Brain
@@ -58,7 +58,7 @@ async fn closed_l_brain_cards_go_into_the_files() {
     assert_eq!(b.update(&id, json!({ "revision": rev, "summary": "舊版" })).await.unwrap_err().status, 409, "stale revision refused");
     assert_eq!(b.view("nope").await.unwrap_err().status, 404);
     // one card per term, also in the files: any case or spacing
-    let e = b.create(json!({ "title": "fuzzy  MEMBERSHIP" })).await.unwrap_err();
+    let e = b.create(json!({ "title": "momentum  QUEUE" })).await.unwrap_err();
     assert_eq!((e.status, e.card.as_deref()), (409, Some(id.as_str())));
     assert_eq!(cards_on_disk(&sp), 1);
 }
@@ -73,7 +73,7 @@ async fn a_running_l_brain_writes_and_the_files_are_left_alone() {
         .route("/api/spaces", get(|| async { axum::Json(json!({ "spaces": [{ "id": "home", "kind": "household", "is_member": true }, { "id": "me", "kind": "personal", "is_member": true }] })) }))
         .route(
             "/api/nodes",
-            get(|| async { axum::Json(json!({ "nodes": [{ "id": "n0", "title": "SegNet", "aliases": ["segmentation network"] }] })) }).post(move |axum::Json(b): axum::Json<Value>| {
+            get(|| async { axum::Json(json!({ "nodes": [{ "id": "n0", "title": "Dice coefficient", "aliases": ["Dice score"] }] })) }).post(move |axum::Json(b): axum::Json<Value>| {
                 let s = s.clone();
                 async move {
                     s.lock().unwrap().push(b.clone());
@@ -83,12 +83,12 @@ async fn a_running_l_brain_writes_and_the_files_are_left_alone() {
         );
     let url = serve(app).await;
     let b = Brain::at(Some(&url), vec![sp.clone()], "ellrin");
-    let v = b.create(json!({ "via": "slidecomposer", "title": "QModel" })).await.unwrap();
+    let v = b.create(json!({ "via": "slidecomposer", "title": "Warmup schedule" })).await.unwrap();
     assert_eq!((v["via"].as_str(), v["node"]["id"].as_str()), (Some("kb"), Some("n1")));
     assert_eq!(seen.lock().unwrap()[0]["space"], "me", "the personal space");
     assert_eq!(cards_on_disk(&sp), 0, "one writer: never the files while L-Brain runs");
     // a term L-Brain already has (title or alias): refused, its id given
-    let e = b.create(json!({ "title": "Segmentation  Network" })).await.unwrap_err();
+    let e = b.create(json!({ "title": "Dice  Score" })).await.unwrap_err();
     assert_eq!((e.status, e.card.as_deref()), (409, Some("n0")));
     assert_eq!(seen.lock().unwrap().len(), 1, "nothing posted");
 }
@@ -121,7 +121,7 @@ impl crate::search::Search for Host {
 
 fn host(d: &std::path::Path, reply: &str, sources: &[&str]) -> Arc<Host> {
     std::fs::create_dir_all(d.join("private/shared")).unwrap();
-    std::fs::write(d.join("private/shared/profile.toml"), "field = \"medical imaging\"\n").unwrap();
+    std::fs::write(d.join("private/shared/profile.toml"), "field = \"computer vision\"\n").unwrap();
     Arc::new(Host(Arc::new(lore_llm::MockProvider::new(vec![reply.into()]).with_sources(sources)), lore_home::Home::at(d)))
 }
 
@@ -138,23 +138,23 @@ async fn call(app: &axum::Router, body: Value) -> (u16, Value) {
 async fn the_selection_route_searches_then_adds() {
     let d = tempfile::tempdir().unwrap();
     let sp = space(d.path());
-    let reply = json!({ "found": true, "summary": "把訊號分解成頻率成分的快速演算法", "sources": ["https://a.org/fft"] }).to_string();
-    let h = host(d.path(), &reply, &["https://a.org/fft", "https://b.org/x"]);
+    let reply = json!({ "found": true, "summary": "兩個集合重疊程度的指標", "sources": ["https://a.org/dice"] }).to_string();
+    let h = host(d.path(), &reply, &["https://a.org/dice", "https://b.org/x"]);
     let app: axum::Router = router(Arc::new(Brain::at(Some(&dead_url()), vec![sp.clone()], "ellrin")), h.clone(), "papercomposer");
-    let (st, v) = call(&app, json!({ "title": "  fast Fourier   transform ", "source": "Airway paper" })).await;
-    assert_eq!((st, v["via"].as_str(), v["node"]["title"].as_str()), (201, Some("file"), Some("fast Fourier transform")), "{v}");
+    let (st, v) = call(&app, json!({ "title": "  dice   Coefficient ", "source": "Synthetic draft" })).await;
+    assert_eq!((st, v["via"].as_str(), v["node"]["title"].as_str()), (201, Some("file"), Some("dice Coefficient")), "{v}");
     let id = v["node"]["id"].as_str().unwrap();
     let card: Value = serde_json::from_slice(&std::fs::read(sp.join("nodes").join(format!("{id}.json"))).unwrap()).unwrap();
-    assert_eq!(card["summary"], "把訊號分解成頻率成分的快速演算法");
-    assert_eq!(card["sources"][0], json!({ "type": "document", "ref": "Airway paper" }));
-    assert_eq!(card["sources"][1]["ref"], "https://a.org/fft", "the page the model named among those it read");
+    assert_eq!(card["summary"], "兩個集合重疊程度的指標");
+    assert_eq!(card["sources"][0], json!({ "type": "document", "ref": "Synthetic draft" }));
+    assert_eq!(card["sources"][1]["ref"], "https://a.org/dice", "the page the model named among those it read");
     let req = h.0.seen.lock().unwrap()[0].clone();
     assert!(req.web_search, "searches the web");
     let u = req.messages[0].text();
-    assert!(u.contains("fast Fourier transform") && u.contains("medical imaging") && !u.contains("Airway"), "only the words and the field: {u}");
+    assert!(u.contains("dice Coefficient") && u.contains("computer vision") && !u.contains("Synthetic"), "only the words and the field: {u}");
     assert_eq!(call(&app, json!({ "title": " " })).await.0, 400);
     // the same words again: 409 with the card, before any search
-    let (st, v2) = call(&app, json!({ "title": "Fast Fourier Transform" })).await;
+    let (st, v2) = call(&app, json!({ "title": "Dice Coefficient" })).await;
     assert_eq!((st, v2["id"].as_str()), (409, Some(id)));
     assert_eq!(h.0.seen.lock().unwrap().len(), 1, "no second search");
     assert_eq!(cards_on_disk(&sp), 1);
@@ -167,10 +167,10 @@ async fn no_search_or_nothing_found_makes_no_card() {
     let brain = Arc::new(Brain::at(Some(&dead_url()), vec![sp.clone()], "ellrin"));
     let ok = json!({ "found": true, "summary": "x", "sources": [] }).to_string();
     let app: axum::Router = router(brain.clone(), host(d.path(), &ok, &[]), "slidecomposer");
-    assert_eq!(call(&app, json!({ "title": "QModel" })).await.0, 422, "an answer without a search");
+    assert_eq!(call(&app, json!({ "title": "Warmup schedule" })).await.0, 422, "an answer without a search");
     let none = json!({ "found": false, "summary": "", "sources": [] }).to_string();
     let app: axum::Router = router(brain, host(d.path(), &none, &["https://a.org"]), "slidecomposer");
-    assert_eq!(call(&app, json!({ "title": "QModel" })).await.0, 422);
+    assert_eq!(call(&app, json!({ "title": "Warmup schedule" })).await.0, 422);
     assert_eq!(cards_on_disk(&sp), 0);
     // nowhere to write: refused before any search
     let h = host(d.path(), &ok, &["https://a.org"]);

@@ -4,7 +4,11 @@
 
 ## 流程
 
-按下去 → 長時間的整理（顯示進度）→ 微調視窗（長度／語言／底版、建議、大綱、最多 4 題，全部可略過）→ 產生投影片 → 排版用字微調 → 打開簡報（右側面板列出排版用字報告）。卡片上另有「直接產生」：跳過微調視窗。
+按下去 → 長時間的整理（顯示進度）→ 微調視窗（長度／語言／底版、建議、大綱、最多 5 題，全部可略過）→ 產生投影片 → 排版用字微調 → 打開簡報（右側面板列出排版用字報告）。卡片上另有「直接產生」：跳過微調視窗。
+
+- 開始的卡片（L-Reader／L-Paper 的「做成簡報」與 L-Slide 的「論文報告」都一樣）：長度（短 5–10 頁、標準 10–15、長 16 以上，提示用 16–24）、語言、**報告者／指導教授**、底版。報告者與指導教授從 L-Paper 存的人選（`GET /api/todeck/people`：讀 L-Paper 工作區的 `profile/authors.csv`，不啟動 L-Paper；只回 id 與姓名，e-mail 等不外流）；上次的選擇記在 L-Slide 的私人工作區（`paper-deck.json`），下次（含「直接產生」）預設同一組。
+- 頁數算的是大綱的頁（含封面與致謝）；逐行出現多出來的複製頁不算。
+- 做不到或降級的每一件事（圖沒有圖檔、式子改放截圖、超過字數、文獻放不下……）都列在工作的 `warnings`：進度畫面、微調視窗上方、以及打開簡報後右側「排版用字」最上面，不會默默略過。
 
 - 微調視窗上方可以改長度、語言、底版。改長度或語言：只重做「大綱」這一步（進度畫面），做完回到微調視窗；同一個頁面內問題的答案、「我懂」、「記得」都保留（重跑時關掉視窗或重新載入就不保留），對大綱列的修改不保留（是新的大綱）。改底版不必重做（投影片那一步才用）。
 - 「建議」：大綱寫完後模型再看一次大綱（加上作者的風格摘要與語氣範例），提出最多 5 個具體修改（加頁、刪頁、移動、改標題、改重點、換圖、合併、拆頁），每個附一行理由；逐項「套用」（改上面的大綱列）或「忽略」。沒有值得說的就沒有這一塊。
@@ -45,6 +49,17 @@
   - 存放：作者的私人 repo（工具資料層，git 管）`private/SlideComposer/voice/examples.json`（經 lore-home 找到），每種頁的標題、條列、Take home、圖說各有上限。不放 `.claude`、skill、公開 repo 或程式常數。簡報有變（與摘要同一個 key，加上排除清單與版本）就重建；內容沒變不改寫檔案。key 存在快取層（`cache/deck-style/voice-key.json`）。工作的檢查點裡沒有範例句子。
   - 使用：`outline` 依論文（標題、關鍵字、摘要、章節名）挑每種頁最相近的幾句（同一句的變體只取一次），整段約 2600 字以內，接在系統提示的摘要後面，說明「學語氣、不抄內容」；範例語言與簡報語言不同時照樣參考語氣、仍用所選語言寫。「建議」用較短的一段（約 1200 字）。投影片與排版用字不再呼叫模型寫句子，所以只有這兩處。
   - 實作：`L-Slide/crates/server/src/deckvoice.rs`。
+
+## 版面：一種字一個字級、同樣的位置
+
+作者的規則（2026-11-19）：「字級不一致是大忌，每一頁該對齊要對齊」。
+
+- 字型：`private/shared/fonts.toml` 的 `[deck]`（`latin`、`east_asian`，經 lore-home；公開範本留空 = 用底版自己的字型）。產生簡報時記在這份簡報自己身上（`deck.fonts`，也跟著 .pptx 的編輯狀態走），之後開啟、套標籤、排版用字都用這組字型；方程式維持數學字型。
+- 每個文字標籤（標題、內文、圖說、表格、文獻、重點）整份只有一個字級；不再有「字多就換小一號」。放不下時不縮字：大綱的字數上限寫在提示裡（標題 48 字、每頁 5 行每行 90 字、有圖表的頁 3 行每行 80 字、重點 100 字），規劃後檢查，超過就請模型修正一次；還超過：行數多的拆成兩頁，其餘照寫並列進 `warnings`。排版用字微調對這種簡報也不縮字（`keep_sizes`）。
+- 內容頁共用同一組框（`build.rs` `page_frames`）：標題一律用版面配置自己的標題框；內文從同一條線開始；`Ref:` 在 logo 右邊、頁碼左邊（從版面配置畫在底部的東西算出來，和作者自己的簡報同一個位置），只放整筆文獻、最多三行，放不下的不放並列進 `warnings`。
+- 寬的圖放上面（至少佔內容寬度的八成）、文字在下；高的圖在左、文字在右。表格是原生表格、佔滿內容寬度。重點句（takeaway）：底版沒有深色帶時是一行「關鍵結果」強調字，緊接在內容下面。
+- 封面：標題、期刊行、報告者／指導教授（底版的 `subtitle`）；不放關鍵字與自己的 `Ref:`。致謝頁：只有標題，置中。Take home 的編號由程式加（模型自己寫的「1.」會去掉）。
+- 守門測試：`tests/todeck.rs` `assert_one_size_per_role`（排版用字微調後的簡報：每個標籤一個字級、內容頁標題框相同、內文起始線相同）。
 
 ## 「不熟」標示（守備範圍）
 
@@ -112,7 +127,7 @@
 - `step`：目前（或下一個要做）的階段，從 1 起算 —「上次做到第 N 步，繼續？」的 N。`doneSteps`：已完成（含略過）的階段數。`resumable`：`stopped` / `failed` / `interrupted`。
 - `stages[].state`：`pending` · `running`（`review` 等作者時也是 `running`）· `done` · `failed`。直接產生時 `review` 是 `done` 加 `"skipped": true`。
 - `ms`：該階段已花的時間（取樣當下；進行中的頁面自己往上加）。`chars` / `lastActivity` / `agoMs` 只在 `model: true` 的階段：模型串流到目前的字數、最後收到字的時間、距今毫秒。
-- `counts`：`source` `{fig, figTotal, table, eq, sections, refs}`（圖 n/N：`fig` 有圖檔的，`figTotal` 全部）· `notation` `{entries}` · `terms` `{terms, unknown}` · `profile` `{voice}`（語氣範例的句數）· `outline` `{slides, boxes, suggestions}`（完成後）· `review` `{}` · `slides` `{slide, slides}`（第 n/N 頁）· `polish` `{checks, fixes}`。
+- `counts`：`source` `{fig, figTotal, table, eq, sections, refs}`（圖 n/N：`fig` 有圖檔的，`figTotal` 全部）· `notation` `{entries}` · `terms` `{terms, unknown}` · `profile` `{voice}`（語氣範例的句數）· `outline` `{slides, boxes, suggestions}`（完成後）· `review` `{}` · `slides` `{slide, slides}`；`source` 與 `outline` 另有 `warnings`（幾件）、`outline` 有 `calls`（模型呼叫次數）（第 n/N 頁）· `polish` `{checks, fixes}`。
 - `error`（`failed` 時）：一行中文。`failure`：`{ stage, status, error, alternative? }`，`alternative` 與 lore-llm 的錯誤內容相同（頁面據此提供「改用本機／改用 Claude」= 帶 `engine` 的 `resume`）。
 - `deck` / `result`（`done` 時）：簡報資料夾名稱；`{ name, slides, engine, boxes, notation, unknown, warnings, polish: {checks, fixes} }`（`unknown` = 標示的不熟名詞數）。`…/stages/polish` 是完整的微調報告（`{checks, fixes: [{slide, object, rule, what, before, after, changes}], items}`，`items` 含用詞一致的建議）。
 - `options`：`{length, lang, style}`，目前的參數（微調視窗據此顯示）。
@@ -137,7 +152,8 @@
 | Method | Path | Body | 回傳 |
 |---|---|---|---|
 | GET | `/api/todeck/papers` | | `{pc: [{path, title, name}], lr: [{sha, title, pdf}]}` |
-| POST | `/api/todeck` | `{source: {kind: "pc", path} \| {kind: "lr", sha}, style?, length?, lang?, engine?, mode: "review" \| "direct"}` | `{job: "<id>", …工作物件}`；伺服器在背景開始做 |
+| GET | `/api/todeck/people` | | `{people: [{id, name}], presenter, supervisor}`（L-Paper 的人選；後兩個是上次選的 id 或 `null`） |
+| POST | `/api/todeck` | `{source: {kind: "pc", path} \| {kind: "lr", sha}, style?, length?, lang?, engine?, presenter?, supervisor?, mode: "review" \| "direct"}`（`presenter`／`supervisor` = 人選的 id，`""` = 不放，沒給 = 上次的選擇） | `{job: "<id>", …工作物件}`；伺服器在背景開始做 |
 | POST | `/api/todeck`（沒有 `mode`） | 同上 | 舊的一次完成：直接產生並等做完，回 `result`；失敗回 `failure.status` 與 `{error, alternative?}`（給還沒改版的「做成簡報」） |
 | POST | `/api/todeck/jobs` | 同上（或 `direct: true`） | 201，`{job, …工作物件}` |
 | GET | `/api/todeck/jobs` | `?unfinished=1` 只列 `interrupted` / `stopped` / `failed` / `review` | `{jobs: [工作物件…]}`，新的在前 |
@@ -171,7 +187,7 @@
 ```
 
 - `outline`：照頁面的順序；刪掉的列就是不要的頁；`id` 對回模型的頁（新頁可用沒有的 id，配 `kind`）；改了的 `point` 寫回 take-away（或第一個要點）。
-- `answers`：每題可為 `null`。`mainFig` 換掉大架構與方法頁的圖（模組框隨之不用）；`opinion: false` 拿掉「我的看法」頁，`true` 而沒有就加一頁空的。`audience`、`modules` 目前只記錄。
+- `answers`：每題可為 `null`。`mainFig` 換掉大架構與方法頁的圖（模組框隨之不用）；`opinion: false` 拿掉「我的看法」頁，`true` 而沒有就加一頁空的。`modules`（2–5）伺服器會讀（`slides` 的結果裡有 `modules`）；`audience` 目前只記錄。
 - `known`：勾了「我懂」的詞：送出時寫進 `terms` 的檢查點（`understood`），投影片就不標它們；`remember: true` 另外經 L-Brain 的 API 存成「記得」（它沒開就略過，訊息記在 `review.json` 的 `notes`）。投影片做好之後的「我懂」是 `PUT /api/decks/{name}/learn`。
 
 ### 檢查點

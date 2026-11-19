@@ -150,9 +150,9 @@ mod tests {
             format!("http://{}", l.local_addr().unwrap())
         };
         let brain = lore_cards::Brain::at(Some(&dead), vec![sp], "ellrin");
-        brain.create(json!({ "via": "lorereader", "title": "fast Fourier transform" })).await.unwrap();
+        brain.create(json!({ "via": "lorereader", "title": "Dice coefficient" })).await.unwrap();
         let got = names(&Kb::new(&dead), &brain).await.unwrap();
-        assert!(got.iter().any(|n| n.title == "fast Fourier transform" && n.state.as_deref() == Some("learning")), "{got:?}");
+        assert!(got.iter().any(|n| n.title == "Dice coefficient" && n.state.as_deref() == Some("learning")), "{got:?}");
         // isolated (no folder): still "not running"
         assert!(names(&Kb::new(&dead), &lore_cards::Brain::at(Some(&dead), vec![], "me")).await.is_err_and(|e| e.down));
     }

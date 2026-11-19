@@ -89,6 +89,19 @@ pub struct Deck {
     /// Default arrangement (版型) per page kind (`cover`, `content`, `end`) for new slides.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub defaults: BTreeMap<String, String>,
+    /// This deck's own fonts over the style pack's (`StyleSystem::with_fonts`): set when the
+    /// deck was made with the author's deck fonts, so later edits keep them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fonts: Option<DeckFonts>,
+}
+
+/// Fonts of all slide text of one deck (an empty name keeps the style's).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DeckFonts {
+    #[serde(default)]
+    pub latin: String,
+    #[serde(default)]
+    pub east_asian: String,
 }
 
 impl Deck {
@@ -100,6 +113,7 @@ impl Deck {
             slides: vec![],
             next_uid: 1,
             defaults: BTreeMap::new(),
+            fonts: None,
         }
     }
     pub fn new_uid(&mut self) -> String {

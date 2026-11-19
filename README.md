@@ -296,7 +296,7 @@ LoreForge/
     shared/             settings every app reads
       profile.toml        who you are: id, display name, your field and level
       ui.toml             the colour theme, chosen once for all apps
-      fonts.toml          interface fonts and substitutes for fonts you do not have
+      fonts.toml          interface fonts, substitutes for fonts you do not have, the fonts of generated decks
       engine.toml         the local model every app uses
       deny-words.txt      private words that must never be committed
     KnowledgeBase/      L-Brain: cards and learning state

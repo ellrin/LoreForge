@@ -118,7 +118,7 @@ mod tests {
             json!({ "latex": "\\frac{1}{2", "readable": true }).to_string(),
         ];
         let vision = Arc::new(MockProvider::new(replies));
-        let llm = Llm::with_factory(lore_home::Home::at(dir.path()), MockFactory::default().with("claude:selected", vision.clone()));
+        let llm = Llm::with_factory(lore_home::Home::at(dir.path()), MockFactory::default().with("claude:opus", vision.clone()));
         let mut m = Material {
             equations: vec![
                 eq("eq:1", "1 2\\mathbb{E}_{\\mathcal{x}\u{303}~P}"),

@@ -4,7 +4,7 @@
 
 ```
 profile.toml     你是誰（id、name），以及 field = 你的領域與程度（名詞分類判斷「基礎」用）
-fonts.toml       介面字型
+fonts.toml       介面字型、[deck] 論文報告簡報的字型
 deny-words.txt   commit 前擋下的字
 my-vocab.json    我的詞彙：自己論文裡的詞與詞組（L-Reader 標「我的論文」時建立；
                  每個詞記下來源：論文 sha256，或 import:<名稱> 的匯入清單），之後

@@ -11,3 +11,8 @@
 # 字型檔也可以直接放在 private/shared/fonts/（.ttf .otf .ttc .woff2），App 會讓畫面讀得到，不必安裝。
 [fallback]
 # "Brand Sans" = ["Brand Sans", "Calibri", "Carlito", "Arial"]
+
+# L-Slide「論文報告」產生的簡報：整份文字的字型（方程式維持數學字型）。留空 = 用底版自己的字型。
+[deck]
+# latin = "Brand Serif"
+# east_asian = "Brand Sans TC"

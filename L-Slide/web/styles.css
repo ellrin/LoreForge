@@ -357,6 +357,7 @@ dialog textarea { min-height: 80px; font: 13px var(--mono); }
 .slide .thumb-guides { position: absolute; left: 0; top: 0; opacity: .85; }
 .slide .thumb-guides * { stroke-width: 3; }
 .info.mono { word-break: break-all; }
+ul.info.polish-notes { margin: 0 0 6px; padding-left: 16px; line-height: 1.55; }
 dialog .actions .btn.primary { width: auto; margin: 0; padding: 0 12px; }
 dialog .actions { flex-wrap: wrap; }
 

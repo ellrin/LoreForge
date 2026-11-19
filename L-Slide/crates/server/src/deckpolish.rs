@@ -197,6 +197,12 @@ fn est_height(b: &TextBody, w: i64, size: &dyn Fn(usize, usize) -> f64) -> f64 {
     est_lines(b, w, size).0
 }
 
+/// Estimated height (EMU) and line count of a body `w` wide at its runs' own sizes (the
+/// measure the overflow check uses; 論文報告 sizes its boxes with it).
+pub(crate) fn text_size(b: &TextBody, w: i64) -> (f64, f64) {
+    est_lines(b, w, &|p, r| b.paras[p].runs[r].look.size)
+}
+
 /// Estimated text height (EMU) and number of lines.
 fn est_lines(b: &TextBody, w: i64, size: &dyn Fn(usize, usize) -> f64) -> (f64, f64) {
     let scale = if b.autofit == "norm" { b.font_scale.clamp(0.1, 1.0) } else { 1.0 };
@@ -282,7 +288,7 @@ pub fn fill_ratio(o: &Object) -> Option<f64> {
     Some(est_height(b, o.frame.w, &|p, r| b.paras[p].runs[r].look.size) / avail)
 }
 
-fn check_overflow(deck: &Deck, st: Option<&StyleSystem>, out: &mut Vec<Item>) {
+fn check_overflow(deck: &Deck, st: Option<&StyleSystem>, keep_sizes: bool, out: &mut Vec<Item>) {
     let (sw, sh) = (deck.size.w, deck.size.h);
     for s in &deck.slides {
         let objs = all_objects(s);
@@ -316,7 +322,7 @@ fn check_overflow(deck: &Deck, st: Option<&StyleSystem>, out: &mut Vec<Item>) {
             }
             // (b) smaller type, never below the tag's minimum
             let mut fixed = None;
-            if let Some(st) = st {
+            if let Some(st) = st.filter(|_| !keep_sizes) {
                 let mut factor = 0.95;
                 while factor > 0.4 {
                     let size_of = |p: usize, r: usize| -> f64 {
@@ -827,6 +833,9 @@ pub struct Input<'a> {
     pub notation: &'a Notation,
     /// Roles per slide (`roles_for`).
     pub roles: Vec<String>,
+    /// Text that does not fit is reported, never set smaller (論文報告: one size per text
+    /// role across the deck).
+    pub keep_sizes: bool,
 }
 
 /// Run the deterministic checks on the editor's deck, applying each fix as its own transaction
@@ -848,7 +857,7 @@ pub fn run_checks(editor: &mut Editor, inp: &Input) -> Report {
                 check_min_size(d, st, o)
             }
         }),
-        Box::new(|d, o| check_overflow(d, st.as_ref(), o)),
+        Box::new(|d, o| check_overflow(d, st.as_ref(), inp.keep_sizes, o)),
         Box::new(|d, o| check_bullets(d, &roles(d), inp.profile, o)),
     ];
     for pass in passes {
@@ -1020,7 +1029,7 @@ pub async fn polish(s: &Shared, name: &str, profile: Option<&Profile>, opt: &Opt
         } else {
             let (_, notation) = crate::notation::load(&sess.dir, None);
             let roles = roles_for(&sess.editor.deck, &opt.roles);
-            let rep = run_checks(&mut sess.editor, &Input { profile, notation: &notation, roles });
+            let rep = run_checks(&mut sess.editor, &Input { profile, notation: &notation, roles, keep_sizes: false });
             sess.save().map_err(|e| e.to_string())?;
             rep
         };

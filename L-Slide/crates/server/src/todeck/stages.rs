@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
 use super::build::{BuildInput, ModuleBox, build};
-use super::plan::{Plan, PlanSlide, ROLES, clean_plan, prompt, schema};
+use super::plan::{Plan, PlanSlide, ROLES, check_plan, clean_plan, drop_unusable, enforce_limits, prompt, schema, target_slides};
 use super::profile::{ProfileInput, StyleProfile};
 use super::source::{Material, from_latex, from_lorereader, is_paper};
 use super::suggest::point_of;
@@ -54,6 +54,9 @@ pub struct Params {
     pub lang: String,
     pub style: String,
     pub engine: Option<String>,
+    /// The cover's Speaker and Supervisor (names; picked from L-Paper's people).
+    pub presenter: Option<String>,
+    pub supervisor: Option<String>,
 }
 
 pub struct PaperDeck {
@@ -190,6 +193,10 @@ async fn source(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
         };
         let notes = super::eqread::read_equations(super::llm(s), &mut m, &|e| crops.iter().find(|(id, _)| *id == e.id).and_then(|(_, c)| c.clone())).await;
         cx.counts(json!({ "eqNotes": notes }));
+        m.warnings.extend(notes);
+    }
+    for f in m.figures.iter().filter(|f| f.image.is_none()) {
+        m.warnings.push(format!("{}：論文裡找不到這張圖的範圍，沒有圖檔", f.id));
     }
     let m = tokio::task::spawn_blocking(move || -> Result<Material, StageError> {
         m.save_images(&img).map_err(|e| StageError::new(500, format!("無法寫入快取：{e}")))?;
@@ -207,6 +214,7 @@ async fn source(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
         "eqPicture": m.equations.iter().filter(|e| e.read == "picture").count(),
         "sections": m.sections.len(),
         "refs": m.refs.len(),
+        "warnings": m.warnings.len(),
     }));
     to_value(&m)
 }
@@ -279,6 +287,17 @@ pub struct OutlineOut {
     pub engine: String,
     /// 微調's 建議 (`suggest.rs`): at most 5 edits on the review rows, often none.
     pub suggestions: Vec<suggest::Suggestion>,
+    /// What the plan could not keep (a limit, the length, material without a picture), for
+    /// the job's warnings.
+    pub warnings: Vec<String>,
+    /// Model calls this stage made.
+    pub calls: u32,
+}
+
+/// Lines once each, in order.
+fn uniq(v: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    v.into_iter().filter(|x| seen.insert(x.clone())).collect()
 }
 
 async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
@@ -297,21 +316,49 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     if !examples.is_empty() {
         system += &format!("\n\n{examples}");
     }
-    let req = LlmRequest::prompt(system, user).json(schema()).max_tokens(12000);
+    let req = LlmRequest::prompt(system.clone(), user.clone()).json(schema()).max_tokens(12000);
     let llm = super::llm(s);
     cx.chars(0);
+    let mut calls = 1u32;
     let (v, engine) = outline::ask_json(llm, TASK_PAPER_DECK, req, p.engine.as_deref(), &|n| cx.chars(n)).await?;
     let plan: Plan = serde_json::from_value(v).map_err(|e| StageError::new(502, format!("模型的大綱無法使用：{e}")))?;
-    let plan = clean_plan(plan, &m);
+    let mut plan = clean_plan(plan, &m);
     if plan.slides.len() < 3 {
         return Err(StageError::new(502, "模型的大綱太短"));
+    }
+    // the limits and the length are checked, not trusted: one corrective request, then what
+    // is still over is split or reported (nothing is ever shrunk to fit)
+    let mut warnings = vec![];
+    let problems = check_plan(&plan, &p.length);
+    if !problems.is_empty() {
+        let before = cx.job.meta().stages.get("outline").and_then(|s| s.chars).unwrap_or(0);
+        let again = format!(
+            "{user}\n\n## Your previous plan\n{}\n\n## It breaks these rules\n{}\n\nReturn the complete corrected plan (all slides), keeping everything that was fine.",
+            serde_json::to_string(&plan).unwrap_or_default(),
+            problems.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n")
+        );
+        calls += 1;
+        let req = LlmRequest::prompt(system, again).json(schema()).max_tokens(12000);
+        match outline::ask_json(llm, TASK_PAPER_DECK, req, p.engine.as_deref(), &|n| cx.chars(before + n)).await {
+            Ok((v, _)) => match serde_json::from_value::<Plan>(v).map(|x| clean_plan(x, &m)) {
+                Ok(fixed) if fixed.slides.len() >= 3 && check_plan(&fixed, &p.length).len() < problems.len() => plan = fixed,
+                _ => warnings.push("大綱超出字數或頁數限制，請模型修正後沒有變好，沿用第一版".to_string()),
+            },
+            Err(e) => warnings.push(format!("大綱超出字數或頁數限制，修正的請求沒有完成（{}）", e.message)),
+        }
+    }
+    warnings.extend(enforce_limits(&mut plan));
+    warnings.extend(drop_unusable(&mut plan, &m));
+    let (lo, hi) = target_slides(&p.length);
+    if plan.slides.len() < lo || plan.slides.len() > hi {
+        warnings.push(format!("大綱有 {} 頁，不在所選長度的 {lo}–{hi} 頁內", plan.slides.len()));
     }
     let boxes = outline::module_boxes(llm, &m, &plan).await;
     // 建議: the progress keeps counting characters after the plan's
     let base = cx.job.meta().stages.get("outline").and_then(|s| s.chars).unwrap_or(0);
     let suggestions = suggest::suggest(llm, &plan, &m, &p.length, &p.lang, &prof.summary, &voice_block(1200), p.engine.as_deref(), &|n| cx.chars(base + n)).await;
-    cx.counts(json!({ "slides": plan.slides.len(), "boxes": boxes.len(), "suggestions": suggestions.len() }));
-    to_value(&OutlineOut { plan, questions: vec![], boxes, engine, suggestions })
+    cx.counts(json!({ "slides": plan.slides.len(), "boxes": boxes.len(), "suggestions": suggestions.len(), "calls": calls, "warnings": warnings.len() }));
+    to_value(&OutlineOut { plan, questions: vec![], boxes, engine, suggestions, warnings: uniq(warnings), calls })
 }
 
 async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
@@ -323,7 +370,14 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     let tr: terms::TermsResult = typed(cx, "terms").unwrap_or_default();
     let review = cx.output("review").unwrap_or(json!({ "skipped": true }));
     let main_before = o.plan.slides.iter().find(|s| s.role == "overview").map(|s| s.figure.clone());
-    let plan = apply_review(o.plan, &review, &m);
+    let mut plan = apply_review(o.plan, &review, &m);
+    // the author's edits keep the same rules: over a limit is split or reported, never shrunk
+    let mut warnings = o.warnings.clone();
+    warnings.extend(m.warnings.iter().cloned());
+    warnings.extend(enforce_limits(&mut plan));
+    warnings.extend(drop_unusable(&mut plan, &m));
+    // 微調: 方法拆幾個模組 (2–5)
+    let modules = review["answers"]["modules"].as_u64().filter(|n| (2..=5).contains(n)).map(|n| n as usize);
     let main_after = plan.slides.iter().find(|s| s.role == "overview").map(|s| s.figure.clone());
     // the boxes belong to the figure and steps the model planned
     let boxes = if main_before == main_after { o.boxes } else { vec![] };
@@ -338,13 +392,14 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     };
     let count = cx.counter();
     let (s, dir, engine) = (s.clone(), cx.dir().to_path_buf(), o.engine);
-    tokio::task::spawn_blocking(move || make_deck(&s, &dir, &p, &m, &n, &plan, &tr, boxes, live, &engine, &|i, t| count(json!({ "slide": i, "slides": t })))).await.map_err(join_err)?
+    let warnings = uniq(warnings);
+    tokio::task::spawn_blocking(move || make_deck(&s, &dir, &p, &m, &n, &plan, &tr, boxes, modules, warnings, live, &engine, &|i, t| count(json!({ "slide": i, "slides": t })))).await.map_err(join_err)?
 }
 
 /// The deck from the plan (blocking: pandoc, files). A crash half-way leaves the deck's name
 /// in `slides.pending`; the next try removes that half-made deck first.
 #[allow(clippy::too_many_arguments)]
-fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut, plan: &Plan, tr: &terms::TermsResult, boxes: Vec<ModuleBox>, live: (Option<super::liveeq::EqGif>, Option<String>), engine: &str, progress: &dyn Fn(usize, usize)) -> Result<Value, StageError> {
+fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut, plan: &Plan, tr: &terms::TermsResult, boxes: Vec<ModuleBox>, modules: Option<usize>, before: Vec<String>, live: (Option<super::liveeq::EqGif>, Option<String>), engine: &str, progress: &dyn Fn(usize, usize)) -> Result<Value, StageError> {
     let pending = dir.join("slides.pending");
     if let Ok(old) = std::fs::read_to_string(&pending) {
         let old = old.trim();
@@ -354,20 +409,30 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
     }
     let api = |e: crate::ApiError| StageError::new(e.0.as_u16(), e.1);
     let st = s.ws.style(&p.style).map_err(|e| api(e.into()))?;
+    // the author's deck fonts (private/shared/fonts.toml `[deck]`): this deck's own fonts, over the style's
+    let fonts = s.home.prefs().fonts.deck.chosen().map(|(latin, east_asian)| lore_canvas::DeckFonts { latin, east_asian });
+    let st = match &fonts {
+        Some(f) => st.with_fonts(f),
+        None => st,
+    };
     let name = s.ws.new_deck(&m.slug, &p.style).map_err(|e| api(e.into()))?;
     crate::jobs::write_atomic(&pending, name.as_bytes()).map_err(|e| StageError::new(500, e.to_string()))?;
     let out = (|| -> Result<Value, StageError> {
         let mut sess = s.ws.open(&name).map_err(|e| api(e.into()))?;
+        sess.editor.deck.fonts = fonts.clone();
+        sess.editor.style = Some(st.clone());
         let deck_dir = sess.dir.clone();
         let mut deck = sess.editor.deck.clone();
         let built = {
             let mut uid = || deck.new_uid();
             let mut prog = |i: usize, t: usize| progress(i, t);
-            build(plan, m, BuildInput { ws: &s.ws, st: &st, source: &sess.source, deck_dir: &deck_dir, pandoc: &s.pandoc, macros: n.macros.clone(), lang: &p.lang, boxes: boxes.clone(), next_uid: &mut uid, progress: &mut prog })
+            build(plan, m, BuildInput { ws: &s.ws, st: &st, source: &sess.source, deck_dir: &deck_dir, pandoc: &s.pandoc, macros: n.macros.clone(), lang: &p.lang, boxes: boxes.clone(), presenter: p.presenter.clone(), supervisor: p.supervisor.clone(), next_uid: &mut uid, progress: &mut prog })
                 .map_err(|e| StageError::new(422, e))?
         };
+        let content = built.content.clone();
         let mut slides = built.slides;
-        let mut warnings = built.warnings;
+        let mut warnings = before.clone();
+        warnings.extend(built.warnings);
         warnings.extend(live.1.clone());
         // 會動的方程式: the GIF beside the main loss (before the big picture splits slides: same index as the plan)
         let mut live_eq = Value::Null;
@@ -378,7 +443,7 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
                 Ok(asset) => {
                     let id = sl.objects.iter().map(|o| o.id).max().unwrap_or(1) + 1;
                     super::liveeq::colour_slide_equations(sl, &g.inks, &g.out);
-                    super::liveeq::place(sl, &asset, g.mm, (sess.editor.deck.size.w, sess.editor.deck.size.h), id);
+                    super::liveeq::place(sl, &asset, g.mm, (sess.editor.deck.size.w, sess.editor.deck.size.h), content.y + content.h, id);
                     live_eq = json!({ "slide": g.slide, "equation": g.eq_id, "asset": asset });
                 }
                 Err(e) => warnings.push(format!("會動的方程式沒有放：{e}")),
@@ -425,9 +490,10 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
             "slides": sess.editor.deck.slides.len(),
             "engine": crate::llm::engine_label(engine),
             "boxes": boxes.len(),
+            "modules": modules,
             "notation": added,
             "unknown": tr.unfamiliar,
-            "warnings": warnings,
+            "warnings": uniq(warnings),
             "live_eq": live_eq,
         }))
     })();
@@ -448,9 +514,14 @@ async fn polish_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageErr
     // the deck's shared session: a page that has it open sees the fixes and never saves over them
     let sess = crate::session(s, &name).map_err(api)?;
     let (s2, style, lang) = (s.clone(), p.style.clone(), p.lang.clone());
+    let job_warnings: Vec<String> = made["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
     let (mut report, deck, deck_dir) = tokio::task::spawn_blocking(move || -> Result<(polish::PolishReport, lore_canvas::Deck, PathBuf), StageError> {
-        let st = s2.ws.style(&style).map_err(|e| api(e.into()))?;
         let mut sess = sess.lock().unwrap_or_else(|e| e.into_inner());
+        // the deck's own rules (its fonts over the style's)
+        let st = match sess.editor.style.clone() {
+            Some(st) => st,
+            None => s2.ws.style(&style).map_err(|e| api(e.into()))?,
+        };
         let (_, doc) = crate::notation::load(&sess.dir, None);
         let mut slides = sess.editor.deck.slides.clone();
         let report = polish::polish(&mut slides, &polish::PolishInput { st: &st, profile: &prof, notation: &doc, lang: &lang });
@@ -468,7 +539,8 @@ async fn polish_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageErr
     .map_err(join_err)??;
     // rule 6's model step (one term per concept): suggestions only, never applied here
     cx.counts(json!({ "checks": report.checks, "fixes": report.fixes.len() }));
-    let mut rep = crate::deckpolish::Report { items: std::mem::take(&mut report.items), ..Default::default() };
+    // what the job could not do as asked is part of the deck's report: the editor shows it
+    let mut rep = crate::deckpolish::Report { items: std::mem::take(&mut report.items), notes: job_warnings, ..Default::default() };
     match crate::deckpolish::suggest_terms(super::llm(s), &deck, p.engine.as_deref()).await {
         Ok((groups, terms, engine)) => {
             crate::deckpolish::term_items(&deck, &groups, &terms, &mut rep);
@@ -497,7 +569,9 @@ fn review_view(job: &Job) -> Value {
     figures.extend(m.tables.iter().enumerate().map(|(i, f)| json!({ "id": f.id, "label": format!("表 {}", i + 1), "caption": f.caption, "thumb": thumb(f) })));
     let terms: terms::TermsResult = job.output("terms").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
     let unknown: Vec<Value> = terms.terms.iter().filter(|t| t.unfamiliar()).map(|t| json!({ "term": t.text, "n": t.count })).collect();
-    json!({ "outline": outline, "figures": figures, "unknown": unknown, "suggestions": out.suggestions })
+    // what could not be read or planned as asked so far (shown above the outline)
+    let warnings = uniq(m.warnings.iter().chain(&out.warnings).cloned().collect());
+    json!({ "outline": outline, "figures": figures, "unknown": unknown, "suggestions": out.suggestions, "warnings": warnings })
 }
 
 /// 我懂 from the review window, before the slides are made: the terms checkpoint marks them

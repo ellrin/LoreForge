@@ -368,8 +368,13 @@ impl Workspace {
         }
         let deck: Deck = serde_json::from_slice(&std::fs::read(dir.join("deck.json"))?)?;
         let source = ODeck::open(dir.join("source.pptx"))?;
+        // a deck made with its own fonts (論文報告 with the author's deck fonts) keeps them:
+        // tags, new text and checks all use the deck's fonts, not the pack's
         let style = match &deck.style {
-            Some(s) => self.style(s).ok(),
+            Some(s) => self.style(s).ok().map(|st| match &deck.fonts {
+                Some(f) => st.with_fonts(f),
+                None => st,
+            }),
             None => None,
         };
         let backdrops = pptx_in::backdrops(&source);

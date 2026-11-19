@@ -123,6 +123,60 @@ fn paper(root: &Path) -> std::path::PathBuf {
     p
 }
 
+/// The engines of a test: 論文報告's own tasks run on Opus (`deck`), every other task (the
+/// term suggestions, 會動的方程式) on the shared Claude choice (`other`).
+fn engines(deck: Arc<dyn lore_llm::LlmProvider>, other: Arc<dyn lore_llm::LlmProvider>) -> MockFactory {
+    MockFactory::default().with("claude:opus", deck).with("claude:selected", other)
+}
+
+/// An engine that answers by what it is asked: the first rule whose words the system prompt
+/// contains gives its next reply (its last one again and again), else `rest`. Call order
+/// between different kinds of request does not matter; every request is recorded.
+pub struct Keyed {
+    rules: std::sync::Mutex<Vec<(String, Vec<String>)>>,
+    rest: String,
+    pub seen: std::sync::Mutex<Vec<lore_llm::LlmRequest>>,
+}
+
+impl Keyed {
+    pub fn new(rest: impl Into<String>) -> Keyed {
+        Keyed { rules: Default::default(), rest: rest.into(), seen: Default::default() }
+    }
+    pub fn on(self, words: &str, replies: &[Value]) -> Keyed {
+        self.rules.lock().unwrap().push((words.to_string(), replies.iter().map(|v| v.to_string()).collect()));
+        self
+    }
+    /// The requests whose system prompt contains `words`.
+    pub fn asked(&self, words: &str) -> Vec<lore_llm::LlmRequest> {
+        self.seen.lock().unwrap().iter().filter(|r| r.system.contains(words)).cloned().collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl lore_llm::LlmProvider for Keyed {
+    fn id(&self) -> String {
+        "mock".into()
+    }
+    fn capabilities(&self) -> lore_llm::Capabilities {
+        lore_llm::Capabilities { json: true, vision: true, web: false, streaming: true, context: 1_000_000, needs_network: false }
+    }
+    async fn send(&self, req: &lore_llm::LlmRequest) -> Result<lore_llm::LlmResponse, lore_llm::LlmError> {
+        self.seen.lock().unwrap().push(req.clone());
+        let mut rules = self.rules.lock().unwrap();
+        let text = match rules.iter_mut().find(|(w, _)| req.system.contains(w.as_str())) {
+            Some((_, r)) if r.len() > 1 => r.remove(0),
+            Some((_, r)) => r.first().cloned().unwrap_or_default(),
+            None => self.rest.clone(),
+        };
+        Ok(lore_llm::LlmResponse { text, provider: self.id(), sources: vec![], usage: None })
+    }
+}
+
+/// System-prompt words of the job's requests.
+pub const ASK_PLAN: &str = "You plan a paper-report seminar deck";
+pub const ASK_BOXES: &str = "building blocks";
+pub const ASK_REVIEW: &str = "You review the outline";
+
 fn snapshot(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     fn walk(p: &Path, v: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
         for e in std::fs::read_dir(p).unwrap().flatten() {
@@ -151,7 +205,7 @@ fn plan(lang_text: &str) -> Value {
             { "role": "training", "title": "Training details", "bullets": [], "kv": [["Epochs", "30"], ["Optimiser", "AdamW"], ["Learning rate", "$10^{-4}$"]] },
             { "role": "results", "title": "Main results", "bullets": [], "table": "tab1", "takeaway": "Ours wins on both metrics, see Table 1" },
             { "role": "opinion", "title": "Some opinions", "bullets": ["Test on real data"] },
-            { "role": "takeaway", "title": "Take home messages", "bullets": ["Two stages help", "Fusion matters"] },
+            { "role": "takeaway", "title": "Take home messages", "bullets": ["1. Two stages help", "2) Fusion matters"] },
             { "role": "thanks", "title": "Thanks", "bullets": [] }
         ]
     })
@@ -223,6 +277,49 @@ pub fn author_decks(home: &lore_home::Home) {
     }
 }
 
+/// 字級不一致是大忌: across a finished deck every text tag has one size, and the content
+/// pages (all but the cover and the closing page) keep their title in one frame and start
+/// their body on one line.
+fn assert_one_size_per_role(slides: &[Value]) {
+    fn runs(v: &Value, out: &mut Vec<(String, f64, String, String)>) {
+        match v {
+            Value::Object(m) => {
+                if let (Some(tag), Some(look)) = (m.get("tag").and_then(Value::as_str), m.get("look")) {
+                    if !m.get("text").and_then(Value::as_str).unwrap_or("").is_empty() || m.get("kind").and_then(Value::as_str) == Some("math") {
+                        out.push((tag.to_string(), look["size"].as_f64().unwrap_or(0.0), look["font"].as_str().unwrap_or("").to_string(), look["ea_font"].as_str().unwrap_or("").to_string()));
+                    }
+                }
+                m.values().for_each(|x| runs(x, out));
+            }
+            Value::Array(a) => a.iter().for_each(|x| runs(x, out)),
+            _ => {}
+        }
+    }
+    let mut all = vec![];
+    slides.iter().for_each(|s| runs(s, &mut all));
+    let mut sizes: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> = Default::default();
+    for (tag, size, _, _) in &all {
+        sizes.entry(tag.clone()).or_default().insert(format!("{size}"));
+    }
+    assert!(sizes.len() >= 4, "{sizes:?}");
+    for (tag, s) in &sizes {
+        assert_eq!(s.len(), 1, "tag {tag} has more than one size: {s:?}");
+    }
+    let content = &slides[1..slides.len() - 1];
+    let title = |s: &Value| s["objects"].as_array().unwrap().iter().find(|o| o["ph"] == "title" || o["slot"] == "title").map(|o| o["frame"].clone());
+    let first = title(&content[0]).expect("a title");
+    let mut tops = std::collections::BTreeSet::new();
+    for s in content {
+        assert_eq!(title(s), Some(first.clone()), "one title frame on every content page");
+        let objs = s["objects"].as_array().unwrap();
+        assert_eq!(objs.iter().filter(|o| o["ph"] == "title" || o["slot"] == "title" || o["name"] == "Title").count(), 1, "one title object");
+        // the first thing under the title starts on the same line on every page
+        let body_top = objs.iter().filter(|o| ["內文", "表", "圖", "架構圖", "訓練細節"].contains(&o["name"].as_str().unwrap_or(""))).map(|o| o["frame"]["y"].as_i64().unwrap()).min();
+        tops.extend(body_top);
+    }
+    assert_eq!(tops.len(), 1, "the body starts on one line: {tops:?}");
+}
+
 fn texts(v: &Value, out: &mut Vec<String>) {
     match v {
         Value::Object(m) => {
@@ -244,20 +341,31 @@ async fn paper_becomes_a_report_deck() {
     let ws = workspace(dir.path());
     let home = lore_home::Home::at(dir.path().join("home"));
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
-    let planner = Arc::new(MockProvider::new(vec![plan("is slow").to_string()]));
-    // the vision engine for the module boxes: three boxes in reading order (pixels of the 300×100 figure)
+    // the vision answer for the module boxes: three boxes in reading order (pixels of the 300×100 figure)
     let boxes = json!({ "modules": [
         { "label": "encoder", "box": [12, 25, 88, 75] },
         { "label": "fusion", "box": [112, 25, 188, 75] },
         { "label": "decoder", "box": [212, 25, 288, 75] } ] });
-    let vision = Arc::new(MockProvider::new(vec![boxes.to_string()]).named("mock-vision"));
-    let f = MockFactory::default().with("claude:selected", planner.clone()).with("claude:sonnet", vision.clone());
+    // the author's deck fonts and the people L-Paper keeps (synthetic)
+    std::fs::create_dir_all(dir.path().join("home/private/shared")).unwrap();
+    std::fs::write(dir.path().join("home/private/shared/fonts.toml"), "[deck]\nlatin = \"Brand Serif\"\neast_asian = \"Brand Sans TC\"\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("home/private/PaperComposer/profile")).unwrap();
+    std::fs::write(dir.path().join("home/private/PaperComposer/profile/authors.csv"), "id,given,family,email,orcid,affiliations,role,note\nA001,Ellrin,Example,ellrin@example.org,,F001,,\nA002,Daidai,Example,daidai@example.org,,F001,,\n").unwrap();
+    let planner = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan("is slow")]).on(ASK_BOXES, &[boxes]));
+    let f = engines(planner.clone(), planner.clone());
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
 
-    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "short", "lang": "en", "style": "blank" });
+    // who presents: ids and names only (the file also has e-mail addresses), nobody chosen yet
+    let (st, who, h) = call(&app, "GET", "/api/todeck/people", None, Some("http://127.0.0.1:7878")).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(h.get("access-control-allow-origin").is_some());
+    assert_eq!(who, json!({ "people": [{ "id": "A001", "name": "Ellrin Example" }, { "id": "A002", "name": "Daidai Example" }], "presenter": null, "supervisor": null }));
+    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "standard", "lang": "en", "style": "blank", "presenter": "A001", "supervisor": "A002" });
     let (st, v, h) = call(&app, "POST", "/api/todeck", Some(body.clone()), Some("http://127.0.0.1:7878")).await;
     assert_eq!(st, StatusCode::OK, "{v}");
+    let (_, who, _) = call(&app, "GET", "/api/todeck/people", None, None).await;
+    assert_eq!((who["presenter"].as_str(), who["supervisor"].as_str()), (Some("A001"), Some("A002")), "the choice is remembered for the next deck");
     assert_eq!(h.get("access-control-allow-origin").and_then(|x| x.to_str().ok()), Some("http://127.0.0.1:7878"));
     let name = v["name"].as_str().unwrap().to_string();
     assert_eq!(name, "Two-Stage-Grading-of-Synthetic-Lesions");
@@ -265,11 +373,12 @@ async fn paper_becomes_a_report_deck() {
     assert_eq!(v["notation"], 1, "the paper's symbol joins the deck's notation");
 
     // the model saw the paper's material by id
-    let seen = planner.seen.lock().unwrap()[0].flatten();
+    let seen = planner.asked(ASK_PLAN)[0].flatten();
     assert!(seen.contains("Two-Stage Grading") && seen.contains("fig1: Overview of the pipeline") && seen.contains("tab1") && seen.contains("eq1"), "{seen}");
     assert!(seen.contains("ellrin2025synthetic"));
     // (the same engine also answered 會動的方程式's equation-plot: not a vision call)
-    assert_eq!(vision.seen.lock().unwrap().iter().filter(|r| !r.system.contains("plottable simulation")).count(), 1, "one vision call for the main figure");
+    assert_eq!(planner.asked(ASK_BOXES).len(), 1, "one vision call for the main figure");
+    assert!(planner.asked(ASK_BOXES)[0].has_images());
 
     let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
     let slides = d["deck"]["slides"].as_array().unwrap().clone();
@@ -280,8 +389,51 @@ async fn paper_becomes_a_report_deck() {
     let mut all = vec![];
     texts(&d["deck"], &mut all);
     let joined = all.join("\n");
-    assert!(joined.contains("Two-Stage Grading of Synthetic Lesions") && joined.contains("Keywords: lesion grading"));
+    assert!(joined.contains("Two-Stage Grading of Synthetic Lesions") && !joined.contains("Keywords:"), "the cover: title, journal, who presents");
     assert!(joined.contains("Journal of Synthetic Tests, 2025"));
+    let cover = all_text(&slides[0]);
+    assert!(cover.contains("Speaker: Ellrin Example") && cover.contains("Supervisor: Daidai Example") && !cover.contains("Ref:") && !cover.contains("example.org"), "{cover}");
+    // one size per text role, one title frame, one body line — on the deck as polished
+    assert_one_size_per_role(&slides);
+    // the deck's fonts: all text in the author's deck fonts, equations in their math font
+    assert_eq!(d["deck"]["fonts"], json!({ "latin": "Brand Serif", "east_asian": "Brand Sans TC" }));
+    fn looks(v: &Value, out: &mut Vec<(String, String, String)>) {
+        match v {
+            Value::Object(m) => {
+                if let (Some(k), Some(l)) = (m.get("kind").and_then(Value::as_str), m.get("look")) {
+                    out.push((k.to_string(), l["font"].as_str().unwrap_or("").to_string(), l["ea_font"].as_str().unwrap_or("").to_string()));
+                }
+                m.values().for_each(|x| looks(x, out));
+            }
+            Value::Array(a) => a.iter().for_each(|x| looks(x, out)),
+            _ => {}
+        }
+    }
+    let mut ls = vec![];
+    looks(&d["deck"]["slides"], &mut ls);
+    assert!(ls.iter().filter(|l| l.0 == "text").count() > 20);
+    for (kind, font, ea) in &ls {
+        if kind == "text" {
+            assert_eq!((font.as_str(), ea.as_str()), ("Brand Serif", "Brand Sans TC"));
+        } else if kind == "math" {
+            assert!(font.contains("Math"), "equations keep a math font: {font}");
+        }
+    }
+    assert_eq!(d["style"]["tags"]["body"]["font"], "Brand Serif", "the editor's tags are the deck's");
+    // the closing page: the title alone, centred
+    let last = slides.last().unwrap()["objects"].as_array().unwrap().iter().find(|o| all_text(o).contains("Thanks")).unwrap().clone();
+    assert!(all_text(slides.last().unwrap()).trim() == "Thanks" && last["frame"]["y"].as_i64().unwrap() > 1_000_000, "{last}");
+    // take-home messages are numbered once (the model's own numbers are dropped)
+    let home_msgs = slides.iter().find(|s| all_text(s).contains("Take home messages")).unwrap();
+    assert!(all_text(home_msgs).contains("Two stages help") && !all_text(home_msgs).contains("1. Two stages"), "{}", all_text(home_msgs));
+    // the takeaway: a key line under the table, never a filled box
+    let res = slides.iter().find(|s| all_text(s).contains("Main results")).unwrap();
+    let take = res["objects"].as_array().unwrap().iter().find(|o| o["name"] == "takeaway").unwrap();
+    let table = res["objects"].as_array().unwrap().iter().find(|o| o["type"] == "table").unwrap();
+    assert_eq!(take["type"], "text", "{take}");
+    assert_eq!(take["text"]["paras"][0]["runs"][0]["em"], "key");
+    assert!(take["frame"]["y"].as_i64().unwrap() >= table["frame"]["y"].as_i64().unwrap() + table["frame"]["h"].as_i64().unwrap());
+    assert!(table["frame"]["w"].as_i64().unwrap() > 10_000_000, "the results table takes the body width: {}", table["frame"]);
     assert!(joined.contains("Ref: Ellrin and Daidai, Synthetic Lesions for Testing"), "cited key → Ref: line");
     assert!(!joined.contains("Fig. 3") && !joined.contains("Table 1") && !joined.contains("Eq. (1)"), "typed references are dropped");
 
@@ -452,11 +604,11 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     let decks_before = snapshot(&home.app_dir("SlideComposer").unwrap().join("decks"));
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
     let model = Arc::new(MockProvider::new(vec![plan("is slow").to_string()]));
-    let f = MockFactory::default().with("claude:selected", model.clone());
+    let f = engines(model.clone(), model.clone());
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home.clone(), f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
 
-    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "short", "lang": "en", "style": "blank", "mode": "review" });
+    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "standard", "lang": "en", "style": "blank", "mode": "review" });
     let (st, v, _) = call(&app, "POST", "/api/todeck", Some(body), Some("http://127.0.0.1:7878")).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     let id = v["job"].as_str().unwrap().to_string();
@@ -473,7 +625,7 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     for never in ["CONFIDENTIAL", "Presented by", "Ref: Ellrin", "daidai", "Questions?"] {
         assert!(!sys.contains(never), "{never}");
     }
-    let suggest_sys = model.seen.lock().unwrap()[1].system.clone();
+    let suggest_sys = model.seen.lock().unwrap().iter().find(|r| r.system.starts_with(ASK_REVIEW)).unwrap().system.clone();
     assert!(suggest_sys.contains("Write like the presenter"));
     let prof = std::fs::read_to_string(shared.ws.root.join(format!("cache/todeck/{id}/profile.json"))).unwrap();
     assert!(!prof.contains("Split hard tasks"), "no example text in the job's cache");
@@ -481,7 +633,7 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     assert_eq!(v["title"], "Two-Stage Grading of Synthetic Lesions");
     let stages = v["stages"].as_array().unwrap();
     assert_eq!(stages.iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["source", "notation", "terms", "profile", "outline", "review", "slides", "polish"]);
-    assert_eq!(stages[0]["counts"], json!({ "fig": 1, "figTotal": 1, "table": 1, "eq": 1, "eqVision": 0, "eqPicture": 0, "sections": 4, "refs": 1 }));
+    assert_eq!(stages[0]["counts"], json!({ "fig": 1, "figTotal": 1, "table": 1, "eq": 1, "eqVision": 0, "eqPicture": 0, "sections": 4, "refs": 1, "warnings": 0 }));
     assert_eq!(stages[1]["counts"]["entries"], 1);
     // 不熟: no L-Brain here, so every term is unfamiliar
     let unknown = stages[2]["counts"]["unknown"].as_u64().unwrap();
@@ -552,7 +704,7 @@ async fn direct_skips_the_review() {
     let ws = workspace(dir.path());
     let home = lore_home::Home::at(dir.path().join("home"));
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
-    let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![plan("with the LGN").to_string()])));
+    let f = { let m: Arc<dyn lore_llm::LlmProvider> = Arc::new(MockProvider::new(vec![plan("with the LGN").to_string()])); engines(m.clone(), m) };
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
     let body = json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "lang": "en", "direct": true });
@@ -577,7 +729,7 @@ async fn stop_aborts_the_model_call_and_a_new_process_resumes() {
     let home = lore_home::Home::at(dir.path().join("home"));
     let shared = sc_server::state_at(workspace(dir.path()), sc_server::repo_dir().join("web"), home.clone());
     let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let f = MockFactory::default().with("claude:selected", Arc::new(Hangs { dropped: dropped.clone() }));
+    let f = { let m: Arc<dyn lore_llm::LlmProvider> = Arc::new(Hangs { dropped: dropped.clone() }); engines(m.clone(), m) };
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home.clone(), f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
     let body = json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "lang": "en", "mode": "direct" });
@@ -605,7 +757,7 @@ async fn stop_aborts_the_model_call_and_a_new_process_resumes() {
     let home2 = lore_home::Home::at(dir.path().join("home"));
     let shared2 = sc_server::state_at(sc_core::Workspace::new(dir.path().join("sc"), None), sc_server::repo_dir().join("web"), home2.clone());
     let planner = Arc::new(MockProvider::new(vec![plan("is slow").to_string()]));
-    assert!(shared2.llm.set(sc_server::llm::Llm::with_factory(home2, MockFactory::default().with("claude:selected", planner.clone()))).is_ok());
+    assert!(shared2.llm.set(sc_server::llm::Llm::with_factory(home2, engines(planner.clone(), planner.clone()))).is_ok());
     let app2 = sc_server::router_isolated(shared2.clone());
     let (_, l, _) = call(&app2, "GET", "/api/todeck/jobs?unfinished=1", None, None).await;
     let j = l["jobs"].as_array().unwrap().iter().find(|j| j["id"] == id2.as_str()).cloned().unwrap();
@@ -633,7 +785,7 @@ async fn events_long_poll_answers_on_change() {
     let p = paper(dir.path());
     let home = lore_home::Home::at(dir.path().join("home"));
     let shared = sc_server::state_at(workspace(dir.path()), sc_server::repo_dir().join("web"), home.clone());
-    let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![plan("is slow").to_string()])));
+    let f = { let m: Arc<dyn lore_llm::LlmProvider> = Arc::new(MockProvider::new(vec![plan("is slow").to_string()])); engines(m.clone(), m) };
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
     let (_, v, _) = call(&app, "POST", "/api/todeck/jobs", Some(json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "mode": "review" })), None).await;
@@ -664,22 +816,21 @@ async fn review_suggestions_and_changing_language_redoes_the_outline() {
         { "op": "remove", "id": "s1", "reason": "封面" },
         { "op": "figure", "id": "s2", "fig": "fig1", "reason": "背景頁沒有圖" }
     ] });
-    let replies = vec![plan("is slow").to_string(), sugg.to_string(), plan("zh again").to_string(), json!({ "suggestions": [] }).to_string()];
-    let model = Arc::new(MockProvider::new(replies));
-    let f = MockFactory::default().with("claude:selected", model.clone());
+    let model = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan("is slow"), plan("zh again")]).on(ASK_REVIEW, &[sugg, json!({ "suggestions": [] })]));
+    let f = engines(model.clone(), model.clone());
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
-    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "short", "lang": "en", "style": "blank", "mode": "review" });
+    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "standard", "lang": "en", "style": "blank", "mode": "review" });
     let (_, v, _) = call(&app, "POST", "/api/todeck", Some(body), None).await;
     let id = v["job"].as_str().unwrap().to_string();
     let v = job_until(&app, &id, "review", |v| v["state"] == "review").await;
-    assert_eq!(v["options"], json!({ "length": "short", "lang": "en", "style": "blank" }));
+    assert_eq!(v["options"], json!({ "length": "standard", "lang": "en", "style": "blank" }));
     let s = v["review"]["suggestions"].as_array().unwrap();
     assert_eq!(s.len(), 2, "the cover is never edited: {s:?}");
     assert_eq!((s[0]["op"].as_str(), s[0]["id"].as_str(), s[0]["title"].as_str()), (Some("retitle"), Some("s9"), Some("What the numbers say")));
     assert_eq!(v["stages"][4]["counts"]["suggestions"], 2);
-    let seen = model.seen.lock().unwrap().clone();
-    assert!(seen[1].system.starts_with("You review the outline") && seen[1].flatten().contains("- s9 · results · Main results"), "{}", seen[1].flatten());
+    let seen = model.asked(ASK_REVIEW);
+    assert!(seen[0].flatten().contains("- s9 · results · Main results"), "{}", seen[0].flatten());
     let source_before = std::fs::read(shared.ws.root.join(format!("cache/todeck/{id}/source.json"))).unwrap();
 
     // bad values and a job not waiting are refused
@@ -688,14 +839,13 @@ async fn review_suggestions_and_changing_language_redoes_the_outline() {
     // 底版 alone: no redo
     let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "style": "blank" })), None).await;
     assert_eq!((st, v["state"].as_str()), (StatusCode::OK, Some("review")));
-    assert_eq!(model.seen.lock().unwrap().len(), 2);
+    assert_eq!((model.asked(ASK_PLAN).len(), model.asked(ASK_REVIEW).len()), (1, 1));
     // 語言: the outline again, then back to the review with the new rows
     let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "lang": "zh" })), None).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     let v = job_until(&app, &id, "review again", |v| v["state"] == "review" && v["options"]["lang"] == "zh" && v["stages"][4]["state"] == "done").await;
-    let seen = model.seen.lock().unwrap().clone();
-    assert_eq!(seen.len(), 4, "plan + suggestions again, nothing else");
-    assert!(seen[2].system.contains("Traditional Chinese"));
+    assert_eq!((model.asked(ASK_PLAN).len(), model.asked(ASK_REVIEW).len()), (2, 2), "plan + suggestions again");
+    assert!(model.asked(ASK_PLAN)[1].system.contains("Traditional Chinese"));
     assert_eq!(v["review"]["suggestions"], json!([]));
     assert_eq!(v["review"]["outline"][1]["point"], "Grade by hand zh again", "the review shows the new outline");
     assert_eq!(std::fs::read(shared.ws.root.join(format!("cache/todeck/{id}/source.json"))).unwrap(), source_before, "source not redone");
@@ -724,7 +874,7 @@ async fn ui_fixture() {
     pl["slides"][4]["bullets"] = json!(["Weighs each lesion with a segmentation mask", "The mask map guides the fusion"]);
     pl["slides"][3]["title"] = json!("Encoder.");
     let terms = json!({ "groups": [{ "preferred": "segmentation mask", "variants": ["mask map"] }] });
-    let f = MockFactory::default().with("claude:selected", Arc::new(MockProvider::new(vec![pl.to_string(), json!({ "suggestions": [] }).to_string(), terms.to_string()])));
+    let f = { let m: Arc<dyn lore_llm::LlmProvider> = Arc::new(MockProvider::new(vec![pl.to_string(), json!({ "suggestions": [] }).to_string(), terms.to_string()])); engines(m.clone(), m) };
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
     let body = json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "lang": "en", "mode": "direct" });
@@ -776,12 +926,12 @@ async fn run_with_eq_answer(answer: Value) -> (tempfile::TempDir, axum::Router, 
     let boxes = json!({ "modules": [{ "label": "encoder", "box": [12, 25, 88, 75] }, { "label": "fusion", "box": [112, 25, 188, 75] }, { "label": "decoder", "box": [212, 25, 288, 75] }] });
     // claude:sonnet answers the module boxes first, then the equation
     let sonnet = Arc::new(MockProvider::new(vec![boxes.to_string(), answer.to_string()]).named("mock-sonnet"));
-    let f = MockFactory::default().with("claude:selected", planner).with("claude:sonnet", sonnet.clone());
+    let f = engines(planner.clone(), planner).with("claude:sonnet", sonnet.clone());
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let fake = Arc::new(FakeRender { specs: Default::default() });
     assert!(shared.liveeq.set(fake.clone()).is_ok());
     let app = sc_server::router_isolated(shared.clone());
-    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "short", "lang": "en", "style": "blank" });
+    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "standard", "lang": "en", "style": "blank" });
     let (st, v, _) = call(&app, "POST", "/api/todeck", Some(body), Some("http://127.0.0.1:7878")).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     (dir, app, v, fake, sonnet)

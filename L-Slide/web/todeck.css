@@ -8,6 +8,8 @@
 .tdj-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); flex: none; }
 .tdj-msg { margin: 16px 0 0; color: var(--muted); }
 .tdj-msg.err { color: var(--err); }
+.tdj-warn { margin: 14px 0 0; padding: 0 0 0 18px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.tdj-warn li::marker { color: var(--accent-text); }
 .tdj-stages { list-style: none; margin: 0; padding: 0; display: grid; }
 .tdj-st { display: grid; grid-template-columns: 22px 64px 1fr auto; align-items: baseline; gap: 8px; padding: 9px 10px; border-radius: var(--r); color: var(--muted); }
 .tdj-st .mk { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line-strong); align-self: center; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }

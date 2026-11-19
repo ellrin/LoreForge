@@ -14,7 +14,7 @@
 "use strict";
 
 window.LoreMakeDeck = (() => {
-  const LEN = [["short", "短 10"], ["standard", "標準 15–20"], ["long", "長"]];
+  const LEN = [["short", "短 5–10"], ["standard", "標準 10–15"], ["long", "長 16+"]];
   const LANG = [["zh", "中文"], ["en", "English"]];
   const WAIT_MS = 30000;
   const sc = () => `http://127.0.0.1:${LoreLinks.ports.sc}`;
@@ -65,6 +65,8 @@ window.LoreMakeDeck = (() => {
 .tdk-card .tdk-bases button:hover:not([aria-pressed="true"]) { color: var(--text); background: var(--surface-hover); }
 .tdk-card .tdk-bases button[aria-pressed="true"] { color: var(--text); border-color: var(--accent-text); background: var(--accent-soft); font-weight: 600; }
 .tdk-card .tdk-note { color: var(--muted); font-size: 12px; }
+.tdk-card .tdk-who { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tdk-card .tdk-who select { width: 100%; min-width: 0; height: 26px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); color: var(--text); font: inherit; padding: 0 6px; }
 .tdk-card .tdk-foot { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .tdk-card .tdk-bar { flex: 1; height: 3px; border-radius: 2px; background: var(--accent-2-soft); overflow: hidden; }
 .tdk-card .tdk-bar::before { content: ""; display: block; width: 35%; height: 100%; background: var(--accent-2); animation: tdk-run 1.4s ease-in-out infinite; }
@@ -142,6 +144,15 @@ window.LoreMakeDeck = (() => {
     return info.style_list ?? (info.styles ?? []).map((id) => ({ id, name: id }));
   }
 
+  /** L-Paper's people for 報告者／指導教授 (id + name) and the last choice; none: no row. */
+  async function people() {
+    try {
+      const r = await fetch(`${sc()}/api/todeck/people`, { cache: "no-store" });
+      return r.ok ? await r.json() : null;
+    } catch { return null; }
+  }
+  let who = null;
+
   async function draw() {
     if (!card) return;
     card.textContent = "";
@@ -158,14 +169,16 @@ window.LoreMakeDeck = (() => {
     const row = h("div", { class: "tdk-row" }, h("span", { class: "tdk-label" }, "底版"));
     const list = h("div", { class: "tdk-bases", role: "radiogroup" }, h("span", { class: "tdk-note" }, "…"));
     row.append(list);
+    who = null;
+    const whoRow = h("div", { class: "tdk-who", hidden: true });
     const go = h("button", { type: "button", class: "btn primary small", disabled: true, onclick: () => create(undefined, "review") }, "先看大綱");
     const direct = h("button", { type: "button", class: "btn small", disabled: true, onclick: () => create(undefined, "direct") }, "直接產生");
-    card.append(row, h("div", { class: "tdk-foot" }, direct, go));
+    card.append(whoRow, row, h("div", { class: "tdk-foot" }, direct, go));
     place();
-    let styles;
+    let styles, ppl;
     try {
       await reach(() => { list.textContent = ""; list.append(h("span", { class: "tdk-note" }, "正在開啟 L-Slide…")); place(); });
-      styles = await bases();
+      [styles, ppl] = await Promise.all([bases(), people()]);
     } catch {
       if (!card) return;
       list.textContent = "";
@@ -179,6 +192,16 @@ window.LoreMakeDeck = (() => {
       return;
     }
     if (!card) return;
+    if (ppl?.people?.length) {
+      const pick = (label, cur) => {
+        const s = h("select", { "aria-label": label }, h("option", { value: "" }, "—"), ...ppl.people.map((p) => h("option", { value: p.id, selected: p.id === cur }, p.name)));
+        return [h("div", { class: "tdk-row" }, h("span", { class: "tdk-label" }, label), s), s];
+      };
+      const [a, sa] = pick("報告者", ppl.presenter), [b, sb] = pick("指導教授", ppl.supervisor);
+      whoRow.append(a, b);
+      whoRow.hidden = false;
+      who = { presenter: sa, supervisor: sb };
+    }
     list.textContent = "";
     const want = styles.some((s) => s.id === pref.get("style")) ? pref.get("style") : styles[0]?.id;
     for (const st of styles) {
@@ -196,13 +219,15 @@ window.LoreMakeDeck = (() => {
   /** Ask L-Slide for the deck; `engine` = 改用本機／改用 Claude after a route failed. */
   async function create(engine, mode = "review") {
     if (job) return;
+    // read before the card is redrawn as the progress line
+    const chosen = who ? { presenter: who.presenter.value, supervisor: who.supervisor.value } : {};
     job = {};
     btn.classList.add("busy");
     draw();
     try {
       const source = await opts.source({});
       if (!source) throw new Error("先開一篇論文");
-      const body = { source, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), style: pref.get("style"), engine, mode };
+      const body = { source, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), style: pref.get("style"), engine, mode, ...chosen };
       await reach(() => { job.note = "正在開啟 L-Slide…"; draw(); });
       let r;
       try {

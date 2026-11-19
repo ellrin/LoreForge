@@ -114,6 +114,32 @@ impl StyleSystem {
         StyleSystem { pack }
     }
 
+    /// The same rules with a deck's own fonts: every text tag takes `latin` / `east_asian`
+    /// (an empty name keeps the tag's); a math tag (`equation`, or a font named "… Math")
+    /// keeps its font. The tag's former font stays its `fallback` when it had none, so runs
+    /// written before still match the tag.
+    pub fn with_fonts(&self, f: &crate::model::DeckFonts) -> StyleSystem {
+        let mut pack = self.pack.clone();
+        for (name, t) in pack.tags.iter_mut() {
+            if name == "equation" || t.font.ends_with(" Math") {
+                continue;
+            }
+            let was = t.font.clone();
+            if !f.east_asian.is_empty() {
+                t.ea_font = Some(f.east_asian.clone());
+            } else if !f.latin.is_empty() && t.ea_font.is_none() {
+                t.ea_font = Some(was.clone());
+            }
+            if !f.latin.is_empty() {
+                t.font = f.latin.clone();
+                if t.fallback.is_none() && was != t.font {
+                    t.fallback = Some(was);
+                }
+            }
+        }
+        StyleSystem { pack }
+    }
+
     pub fn tag(&self, name: &str) -> Option<&TagStyle> {
         self.pack.tags.get(name)
     }
