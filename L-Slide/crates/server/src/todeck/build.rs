@@ -356,6 +356,76 @@ fn body(paras: Vec<Para>, anchor: &str) -> TextBody {
     TextBody { insets: [0, 0, 0, 0], anchor: anchor.into(), wrap: true, autofit: "none".into(), paras, ..Default::default() }
 }
 
+/// A chain of boxes joined by arrows, drawn by lore-flow as one picture: a group of native
+/// shapes that keeps its spec, so 編輯流程圖 reopens it in the flow editor.
+fn flow_picture(cx: &Ctx, ws: &sc_core::Workspace, labels: &[String]) -> Result<Object, String> {
+    let esc = |s: &str| s.replace('"', "'").split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut dsl = String::from("fig chain\npanel a \"\" dir=right\n");
+    for (i, l) in labels.iter().enumerate() {
+        dsl += &format!("  n{}: box \"{}\"\n", i + 1, esc(l));
+    }
+    dsl += &format!("  {}\nend\n", (1..=labels.len()).map(|i| format!("n{i}")).collect::<Vec<_>>().join(" -> "));
+    // coloured like a figure of the flow tool: its block colours in turn, the last box (what
+    // the chain arrives at) in the first, strongest one
+    let pal = lore_flow::figure::PALETTE;
+    let n = labels.len();
+    let pick = |i: usize| if i + 1 == n { 0 } else { 1 + i % 6 };
+    let types: Vec<serde_json::Value> = (0..n).map(|i| serde_json::json!({ "id": format!("t{}", i + 1), "label": "", "fill": pal[pick(i)].1, "line": pal[pick(i)].2 })).collect();
+    let nodes: serde_json::Map<String, serde_json::Value> = (0..n).map(|i| (format!("n{}", i + 1), serde_json::Value::String(format!("t{}", i + 1)))).collect();
+    let spec = lore_flow::figure::FlowSpec::from_value(serde_json::json!({ "lore_flow": 1, "dsl": dsl, "types": types, "nodes": nodes, "legend": { "show": "off" } }))?;
+    let dir = ws.root.join("flow");
+    let cat = lore_flow::figure::Catalogue::load_all(&[dir.as_path()]);
+    let math = lore_flow::PandocMath::new(cx.pandoc.clone());
+    let frame = spec.frame_rect();
+    // the children's ids sit far above the slide's own (the group itself is numbered with the rest)
+    let (fig, g) = lore_flow::figure::render(&spec, &cat, None, &math, lore_flow::Rect::new(0.0, 0.0, frame.w, frame.h), 5000)?;
+    let mut picture = lore_flow::figure::as_picture(&fig, &g.fig, &spec, fig.built.next_id);
+    // the labels in the deck's own fonts (one font across the deck), the figure's sizes kept
+    let like = cx.look(&cx.tag(&["body"]), None);
+    deck_fonts(&mut picture, &like);
+    Ok(picture)
+}
+
+/// Every text run of `o` (and of what it groups) in `like`'s fonts; math keeps its own.
+fn deck_fonts(o: &mut Object, like: &Look) {
+    match &mut o.kind {
+        Kind::Group(g) => g.children.iter_mut().for_each(|c| deck_fonts(c, like)),
+        Kind::Text(sp) | Kind::Shape(sp) => {
+            for r in sp.text.iter_mut().flat_map(|t| t.paras.iter_mut()).flat_map(|p| p.runs.iter_mut()).filter(|r| r.kind != "math") {
+                r.look.font = like.font.clone();
+                r.look.ea_font = like.ea_font.clone();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The height of lines set under a figure, with room for inline math (taller than a text
+/// line): what the layout keeps free so the conclusion below never overlaps them.
+fn under_h(b: &TextBody, w: i64) -> i64 {
+    text_h(b, w) * 125 / 100
+}
+
+/// The prefix of an empty picture slot's name that carries a suggestion (the editor shows it).
+pub const SUGGEST_PREFIX: &str = "建議放：";
+
+/// An empty picture slot (`Object::is_empty_slot`: dashed in the editor, left out of shows,
+/// PDF and PPTX) named after the picture the plan suggests for it.
+fn suggest_slot(frame: Frame, suggest: &str, lang: &str) -> Object {
+    let what = suggest.trim();
+    let what = if !what.is_empty() { what } else if lang == "en" { "a picture for this slide" } else { "這一頁的圖" };
+    Object {
+        id: 0,
+        name: format!("{SUGGEST_PREFIX}{what}"),
+        frame,
+        hidden: false,
+        ph: None,
+        slot: Some("image-1".into()),
+        kind: Kind::Shape(SpObj { geom: Geom::preset("rect"), fill: Paint::None, line: None, text: None, equation: false }),
+        src: None,
+    }
+}
+
 fn pic(name: &str, frame: Frame, asset: &str, crop: Crop, alpha: f64, slot: Option<&str>) -> Object {
     Object {
         id: 0,
@@ -485,25 +555,40 @@ pub struct LineReveal {
     pub lines: usize,
 }
 
-/// The slides with every line-by-line slide expanded into its copies (from the last one
-/// backwards, so the indices of the others hold). The first copy keeps the slide's uid.
-pub fn expand_reveals(slides: &mut Vec<Slide>, reveals: &[LineReveal], new_uid: &mut dyn FnMut() -> String) {
-    let mut list: Vec<&LineReveal> = reveals.iter().filter(|r| r.lines >= 2 && r.slide < slides.len()).collect();
-    list.sort_by_key(|r| std::cmp::Reverse(r.slide));
-    for r in list {
-        let src = slides[r.slide].clone();
-        let mut copies = vec![];
-        for k in 1..=r.lines {
-            let mut s = src.clone();
-            if k > 1 {
-                s.uid = new_uid();
+/// Line by line without copies of the slide: each line of a walk-through becomes its own
+/// text box, stacked in the frame the lines had, and appears on a click (entrance animation
+/// `appear`). One page, one title; a PDF or a viewer without animations shows every line.
+pub fn expand_reveals(slides: &mut [Slide], reveals: &[LineReveal], _new_uid: &mut dyn FnMut() -> String) {
+    let n = slides.len();
+    for r in reveals.iter().filter(|r| r.lines >= 2 && r.slide < n) {
+        let sl = &mut slides[r.slide];
+        let Some(at) = sl.objects.iter().position(|o| o.id == r.object) else { continue };
+        let src = sl.objects[at].clone();
+        let Some(tb) = src.kind.sp().and_then(|sp| sp.text.clone()) else { continue };
+        let one = |p: &Para| TextBody { paras: vec![p.clone()], ..tb.clone() };
+        let heights: Vec<i64> = tb.paras.iter().map(|p| text_h(&one(p), src.frame.w)).collect();
+        let total: i64 = heights.iter().sum::<i64>().max(1);
+        let mut next = sl.objects.iter().map(|o| o.id).max().unwrap_or(1) + 1;
+        let mut y = src.frame.y;
+        let mut lines = vec![];
+        for (k, p) in tb.paras.iter().enumerate() {
+            let hk = src.frame.h * heights[k] / total;
+            let mut o = src.clone();
+            if k > 0 {
+                o.id = next;
+                next += 1;
+                o.slot = None;
             }
-            if let Some(tb) = s.find_mut(r.object).and_then(|o| o.kind.sp_mut()).and_then(|sp| sp.text.as_mut()) {
-                tb.paras.truncate(k);
+            o.name = format!("{} {}", src.name, k + 1);
+            o.frame = Frame::new(src.frame.x, y, src.frame.w, hk);
+            if let Some(sp) = o.kind.sp_mut() {
+                sp.text = Some(one(p));
             }
-            copies.push(s);
+            y += hk;
+            sl.anims.push(lore_canvas::Anim { obj: o.id, effect: "appear".into(), trigger: "click".into(), duration_ms: 300, delay_ms: 0 });
+            lines.push(o);
         }
-        slides.splice(r.slide..=r.slide, copies);
+        sl.objects.splice(at..=at, lines);
     }
 }
 
@@ -537,7 +622,26 @@ pub struct BuildInput<'a> {
 
 /// Estimated height of a body `w` wide (EMU), with a little air.
 fn text_h(b: &TextBody, w: i64) -> i64 {
-    (crate::deckpolish::text_size(b, w).0 * 1.04) as i64 + 12_700
+    (crate::deckpolish::text_size(b, w).0 * 1.04) as i64 + 12_700 + display_math_extra(b)
+}
+
+/// What display equations add to a body's height over one text line each: an equation on
+/// its own line is set in display style (stacked fractions, limits above and below a sum),
+/// about 2.6 lines tall when it has such a construct, and one row per `\\\\` of an aligned block.
+fn display_math_extra(b: &TextBody) -> i64 {
+    let mut extra = 0.0;
+    for p in &b.paras {
+        let [r] = p.runs.as_slice() else { continue };
+        if r.kind != "math" {
+            continue;
+        }
+        let tex = r.latex.as_deref().unwrap_or("");
+        let rows = tex.matches("\\\\").count() as f64 + 1.0;
+        let tall = ["\\frac", "\\sum", "\\prod", "\\int", "\\dfrac"].iter().any(|k| tex.contains(k));
+        let per = if tall { 2.6 } else { 1.45 };
+        extra += (rows * per - 1.2) * r.look.size * 12_700.0;
+    }
+    extra as i64
 }
 
 /// The slides of a plan.
@@ -662,8 +766,6 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                 let need = Need { image: image.is_some(), table: table_grid.is_some(), text: has_text };
                 let arr = pick(&arrs, need);
                 slide.arrangement = arr.map(|a| a.id.clone());
-                let frac = |b: &Block| Frame::new((b.rect[0] * w as f64) as i64, (b.rect[1] * h as f64) as i64, (b.rect[2] * w as f64) as i64, (b.rect[3] * h as f64) as i64);
-                let block = |role: &str| arr.and_then(|a| a.blocks.iter().find(|b| b.role == role)).map(frac);
                 // the title: always the layout's own title (one frame on every page)
                 fill_title(&mut objs, &cx, &ps.title, &title_tag, pf.title.clone());
                 if let Some(kf) = &pf.kicker {
@@ -771,15 +873,29 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                         // ── the walk-through: the figure across the body, this part clear and the
                         // rest faint, the lines one by one over the faint side ──
                         let area = Frame::new(c.x, c.y, c.w, bottom - c.y);
-                        let pw = area.w.min((area.h as f64 * aspect) as i64);
+                        let (a, b) = p.span(pi);
+                        // a faint side under 40 % of the figure is too narrow for the lines: they
+                        // go under the figure, across the body (the figure gives them the room,
+                        // never under 80 % of the width)
+                        let under = a.max(1.0 - b) < 0.4;
+                        if under && let Some(tb) = text_body.as_mut() {
+                            tb.paras.iter_mut().for_each(|p| p.after_pt = Some(2.0));
+                        }
+                        // the lines under the figure need their real height (a line with inline math is
+                        // taller than the estimate), so the figure gives way: the lines and the
+                        // conclusion never meet. It stays at least two thirds of the width.
+                        let below = if under { text_body.as_ref().map(|tb| under_h(tb, c.w) + gap).unwrap_or(0) } else { 0 };
+                        let mut pw = area.w.min(((area.h - below) as f64 * aspect) as i64);
+                        if under {
+                            pw = pw.max(area.w * 2 / 3).min((area.h as f64 * aspect) as i64);
+                        }
                         let ph = (pw as f64 / aspect) as i64;
                         let pframe = Frame::new(area.x + (area.w - pw) / 2, area.y, pw, ph);
-                        if pw < area.w * 8 / 10 {
+                        if pw < area.w * 8 / 10 && !under {
                             cx.warnings.push(format!("{warn_at}：架構圖比較高，放滿高度後只有內容寬度的 {} %", pw * 100 / area.w.max(1)));
                         }
                         let ghost = inp.st.pack.ghost.picture_alpha.clamp(0.1, 1.0);
                         extra.push(pic("架構圖", pframe.clone(), &asset, Crop::default(), ghost, Some("image-1")));
-                        let (a, b) = p.span(pi);
                         let along_x = p.axis != "y";
                         let (sub, crop) = if along_x {
                             (Frame::new(pframe.x + (pw as f64 * a) as i64, pframe.y, (pw as f64 * (b - a)) as i64, ph), Crop { l: a, t: 0.0, r: 1.0 - b, b: 0.0 })
@@ -797,7 +913,21 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                             let (th, bh) = ((ph as f64 * a) as i64, (ph as f64 * (1.0 - b)) as i64);
                             if bh >= th { Frame::new(pframe.x + m, pframe.y + ph - bh + m, pw - 2 * m, bh - 2 * m) } else { Frame::new(pframe.x + m, pframe.y + m, pw - 2 * m, th - 2 * m) }
                         };
-                        if let Some(tb) = text_body.take() {
+                        if under {
+                            if let Some(tb) = text_body.take() {
+                                let lines = tb.paras.len();
+                                let ty = pframe.y + ph + gap;
+                                let need = under_h(&tb, c.w);
+                                if ty + need > bottom + h / 100 {
+                                    cx.warnings.push(format!("{warn_at}：講解的字在圖的下面放不下（沒有縮字），請刪短"));
+                                }
+                                low = ty + need;
+                                extra.push(text_obj("講解", Frame::new(c.x, ty, c.w, need), tb, Some("text-1")));
+                                if lines >= 2 {
+                                    reveals.push(LineReveal { slide: out.len(), object: 0, lines });
+                                }
+                            }
+                        } else if let Some(tb) = text_body.take() {
                             let lines = tb.paras.len();
                             if tf.w < w / 6 || text_h(&tb, tf.w) > tf.h + h / 100 {
                                 cx.warnings.push(format!("{warn_at}：講解的字在變淡的那一側放不下（沒有縮字），請刪短"));
@@ -817,44 +947,71 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                             }
                         }
                     } else {
-                    // a wide picture gets the width (text under it); a tall one sits beside the text
-                    let side = has_text && aspect < 1.4;
-                    let area = if side {
-                        let b = block("image").unwrap_or_else(|| Frame::new(c.x, c.y, c.w * 48 / 100, c.h));
-                        Frame::new(b.x, c.y, b.w, bottom - c.y)
-                    } else {
-                        Frame::new(c.x, c.y, c.w, bottom - c.y)
-                    };
+                    // the picture is the subject: the whole body width, or as tall as the body
+                    // allows (then the text sits beside it). Text that does not fit under it is
+                    // cut from the slide (to the notes), never the picture
                     let cap_body = (!cap.is_empty()).then(|| {
                         let runs = cx.rich(&cap, &cap_tag, None);
                         body(vec![cx.para(runs, &cap_tag)], "t")
                     });
-                    let cap_h = cap_body.as_ref().map(|b| text_h(b, area.w) + h / 120).unwrap_or(0);
-                    let below = if side { 0 } else { text_body.as_ref().map(|b| text_h(b, c.w) + gap).unwrap_or(0) };
-                    // the picture: as wide as the room under it allows, never under 80 % of the width when it is on top
-                    let room = (area.h - cap_h - below).max(h / 10);
-                    let mut pw = area.w.min((room as f64 * aspect) as i64);
-                    if !side && has_text {
-                        pw = pw.max(area.w * 8 / 10);
-                    }
+                    let full = Frame::new(c.x, c.y, c.w, bottom - c.y);
+                    let cap_full = cap_body.as_ref().map(|b| text_h(b, full.w) + h / 120).unwrap_or(0);
+                    let side = has_text && ((full.h - cap_full) as f64 * aspect) <= full.w as f64 * 0.6;
+                    let (pw, cap_w) = if side {
+                        let pw = ((full.h - cap_full) as f64 * aspect) as i64;
+                        (pw, pw.max(full.w * 3 / 10))
+                    } else {
+                        (full.w.min(((full.h - cap_full) as f64 * aspect) as i64), full.w)
+                    };
+                    let cap_h = cap_body.as_ref().map(|b| text_h(b, cap_w) + h / 120).unwrap_or(0);
                     let ph = (pw as f64 / aspect) as i64;
-                    let pframe = Frame::new(area.x + (area.w - pw) / 2, area.y, pw, ph);
+                    let px = if side { full.x } else { full.x + (full.w - pw) / 2 };
+                    let pframe = Frame::new(px, full.y, pw, ph);
                     extra.push(pic(if fig.is_some() { "圖" } else { "表" }, pframe.clone(), &asset, Crop::default(), 1.0, Some("image-1")));
                     low = pframe.y + pframe.h;
                     if let Some(cb) = cap_body {
-                        // the caption: right under the picture, as wide as the picture's column
-                        let cf = Frame::new(area.x, pframe.y + pframe.h + h / 120, area.w, cap_h - h / 120);
+                        // the caption: right under the picture
+                        let cf = Frame::new(full.x, pframe.y + pframe.h + h / 120, cap_w, cap_h - h / 120);
                         low = cf.y + cf.h;
                         extra.push(text_obj("圖說", cf, cb, Some("caption-1")));
                     }
                     if side {
-                        let b = block("text").unwrap_or_else(|| Frame::new(c.x + c.w * 52 / 100, c.y, c.w * 48 / 100, c.h));
-                        text_f = Frame::new(b.x, c.y, b.w, (bottom - c.y).max(h / 10));
+                        let tx = full.x + pw.max(cap_w) + 2 * gap;
+                        text_f = Frame::new(tx, c.y, (full.x + full.w - tx).max(w / 6), (bottom - c.y).max(h / 10));
                     } else {
                         y = low + gap;
-                        text_f = Frame::new(c.x, y, c.w, (bottom - y).max(h / 10));
+                        text_f = Frame::new(c.x, y, c.w, (bottom - y).max(0));
                     }
                     }
+                }
+                // the plan's chain (steps, a timeline, issue → solution) drawn with the flow tool:
+                // one picture across the body, the lines under it
+                let mut drawn = false;
+                if table_grid.is_none() && image.is_none() && ps.equations.is_empty() && ps.flow.len() >= 2 {
+                    match flow_picture(&cx, inp.ws, &ps.flow) {
+                        Ok(picture) => {
+                            let aspect = picture.frame.w.max(1) as f64 / picture.frame.h.max(1) as f64;
+                            let room = (bottom - c.y) * 45 / 100;
+                            let pw = c.w.min((room as f64 * aspect) as i64);
+                            let o = lore_canvas::geom::scaled_to(&picture, c.x + (c.w - pw) / 2, c.y, pw);
+                            low = o.frame.y + o.frame.h;
+                            y = low + 2 * gap;
+                            text_f = Frame::new(c.x, y, c.w, (bottom - y).max(h / 10));
+                            extra.push(o);
+                            drawn = true;
+                        }
+                        Err(e) => cx.warnings.push(format!("「{}」的流程圖畫不出來（{e}），留了空的圖框", clip(&ps.title, 30))),
+                    }
+                }
+                // nothing to show on a page that is not the take-home one: an empty picture slot
+                // where the picture would go, saying which picture to put there (editor only,
+                // never exported), the text beside it — never a page of bullets alone
+                if !drawn && table_grid.is_none() && image.is_none() && ps.equations.is_empty() && !super::plan::text_only_ok(&ps.role) {
+                    let sw = c.w * 52 / 100;
+                    let sh = (bottom - c.y).min(sw * 10 / 16);
+                    extra.push(suggest_slot(Frame::new(c.x, c.y, sw, sh), &ps.suggest, inp.lang));
+                    let tx = c.x + sw + 2 * gap;
+                    text_f = Frame::new(tx, c.y, (c.x + c.w - tx).max(w / 6), (bottom - c.y).max(h / 10));
                 }
                 let _ = y;
                 if has_text {
@@ -873,14 +1030,30 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                         low = low.max(ey - gap);
                         tf = Frame::new(tf.x, ey, tf.w, (tf.y + tf.h - ey).max(h / 10));
                     }
-                    if let Some(tb) = text_body {
-                        let need = text_h(&tb, tf.w);
-                        if need > tf.h + h / 100 {
-                            cx.warnings.push(format!("{warn_at}：文字放不下（沒有縮字），請刪短或拆頁"));
+                    if let Some(mut tb) = text_body {
+                        // under a picture or a table only the lines that fit stay on the slide;
+                        // the others go to the speaker notes (said so)
+                        let visual = image.is_some() || table_grid.is_some();
+                        let mut nb = ps.bullets.len().min(tb.paras.len());
+                        let mut moved: Vec<String> = vec![];
+                        while visual && nb > 0 && text_h(&tb, tf.w) > tf.h + h / 100 {
+                            nb -= 1;
+                            tb.paras.remove(nb);
+                            moved.insert(0, ps.bullets[nb].clone());
                         }
-                        let f = Frame::new(tf.x, tf.y, tf.w, need.min(tf.h).max(h / 20));
-                        low = low.max(f.y + f.h);
-                        extra.push(text_obj("內文", f, tb, Some("text-1")));
+                        if !moved.is_empty() {
+                            cx.warnings.push(format!("{warn_at}：圖表下面只放得下 {nb} 行，其餘 {} 行移到講者備註", moved.len()));
+                            slide.notes = [slide.notes.trim().to_string(), moved.join(" ")].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" ");
+                        }
+                        if !tb.paras.is_empty() {
+                            let need = text_h(&tb, tf.w);
+                            if need > tf.h + h / 100 {
+                                cx.warnings.push(format!("{warn_at}：文字放不下（沒有縮字），請刪短或拆頁"));
+                            }
+                            let f = Frame::new(tf.x, tf.y, tf.w, need.min(tf.h.max(h / 20)).max(h / 20));
+                            low = low.max(f.y + f.h);
+                            extra.push(text_obj("內文", f, tb, Some("text-1")));
+                        }
                     }
                 }
                 if let Some(tb) = take {

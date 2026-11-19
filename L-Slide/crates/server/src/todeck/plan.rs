@@ -26,6 +26,12 @@ pub struct PlanSlide {
     pub kv: Vec<Vec<String>>,
     /// The table row to emphasise: the text of its first cell (the proposed method's row).
     pub key_row: String,
+    /// A chain the program draws as a flow diagram (lore-flow): the boxes' labels in order —
+    /// steps, a before → now timeline, issue → solution.
+    pub flow: Vec<String>,
+    /// No picture of the paper fits this slide: which picture the presenter should put there
+    /// (one short line). The build leaves an empty picture slot with it.
+    pub suggest: String,
     pub cites: Vec<String>,
     pub notes: String,
 }
@@ -60,6 +66,10 @@ pub mod limit {
     pub const BULLETS_VISUAL: usize = 3;
     pub const BULLET_VISUAL: usize = 80;
     pub const TAKEAWAY: usize = 100;
+    pub const SUGGEST: usize = 90;
+    /// A drawn chain: its boxes and the characters of one label.
+    pub const FLOW: usize = 6;
+    pub const FLOW_LABEL: usize = 34;
     pub const STEPS: usize = 6;
     pub const STEP: usize = 60;
     pub const KV: usize = 8;
@@ -73,6 +83,17 @@ pub mod limit {
 }
 
 /// A slide that walks through one part of the main figure (`build.rs`).
+/// Does the slide show something besides text: a figure, a table, key-value rows or an equation?
+pub fn has_visual(s: &PlanSlide) -> bool {
+    !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty() || !s.equations.is_empty() || s.flow.len() >= 2
+}
+
+/// Only these may be text alone: every other slide argues from something it shows (the
+/// author, 2026-11-20: a page of bullets reads as undigested).
+pub fn text_only_ok(role: &str) -> bool {
+    matches!(role, "cover" | "thanks" | "takeaway")
+}
+
 pub fn is_walk(s: &PlanSlide) -> bool {
     s.role == "method" && s.module >= 1 && !s.figure.is_empty()
 }
@@ -96,12 +117,30 @@ pub fn check_plan(p: &Plan, length: &str) -> Vec<String> {
     if n < lo || n > hi {
         out.push(format!("The plan has {n} slides; it must have between {lo} and {hi} (cover and thanks included)."));
     }
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     for (i, s) in p.slides.iter().enumerate() {
         let at = format!("Slide {} (\"{}\")", i + 1, clip(&s.title, 40));
+        if !text_only_ok(&s.role) && !seen.insert(s.title.trim().to_lowercase()) {
+            out.push(format!("{at}: another slide already has this title. Each title says what its own slide tells."));
+        }
         if !matches!(s.role.as_str(), "cover") && chars(&s.title) > limit::TITLE {
             out.push(format!("{at}: the title has {} characters, at most {}.", chars(&s.title), limit::TITLE));
         }
-        let visual = !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty();
+        let visual = !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty() || !s.suggest.is_empty() || !s.flow.is_empty();
+        if !text_only_ok(&s.role) {
+            if !has_visual(s) && s.suggest.trim().is_empty() {
+                out.push(format!("{at}: it shows nothing but text. Give it a figure, table or equation id it argues from, or `suggest` = which picture the presenter should put there."));
+            }
+            if s.takeaway.trim().is_empty() && !is_walk(s) && s.role != "overview" {
+                out.push(format!("{at}: it has no takeaway. Every slide ends in the one conclusion its lines lead to."));
+            }
+        }
+        if s.flow.len() == 1 || s.flow.len() > limit::FLOW || s.flow.iter().any(|x| chars(x) > limit::FLOW_LABEL) {
+            out.push(format!("{at}: `flow` is 2 to {} boxes of at most {} characters each.", limit::FLOW, limit::FLOW_LABEL));
+        }
+        if chars(&s.suggest) > limit::SUGGEST {
+            out.push(format!("{at}: `suggest` has {} characters, at most {}.", chars(&s.suggest), limit::SUGGEST));
+        }
         let (nb, nc) = if s.role == "takeaway" { (limit::TAKE_HOME, limit::BULLET) } else if is_walk(s) { (limit::WALK_LINES, limit::WALK_LINE) } else if visual { (limit::BULLETS_VISUAL, limit::BULLET_VISUAL) } else { (limit::BULLETS, limit::BULLET) };
         if s.bullets.len() > nb {
             out.push(format!("{at}: {} bullets, at most {nb}{}; cut or move some to another slide.", s.bullets.len(), if is_walk(s) { " on a walk-through slide" } else if visual { " next to a figure or table" } else { "" }));
@@ -136,7 +175,13 @@ pub fn enforce_limits(p: &mut Plan) -> Vec<String> {
     let mut notes = vec![];
     let mut out: Vec<PlanSlide> = vec![];
     for s in std::mem::take(&mut p.slides) {
-        let visual = !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty();
+        let visual = !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty() || !s.suggest.is_empty() || !text_only_ok(&s.role);
+        if !text_only_ok(&s.role) && !has_visual(&s) && s.suggest.trim().is_empty() {
+            notes.push(format!("「{}」沒有圖表可以對應，留了一個空的圖框，請放一張圖", clip(&s.title, 30)));
+        }
+        if !text_only_ok(&s.role) && s.takeaway.trim().is_empty() && !is_walk(&s) && s.role != "overview" {
+            notes.push(format!("「{}」沒有結論句", clip(&s.title, 30)));
+        }
         let nb = if s.role == "takeaway" { limit::TAKE_HOME } else if is_walk(&s) { limit::WALK_LINES } else if visual || !s.equations.is_empty() { limit::BULLETS_VISUAL.min(limit::BULLETS_EQ) } else { limit::BULLETS };
         let nc = if s.role == "takeaway" { limit::BULLET } else if is_walk(&s) { limit::WALK_LINE } else if visual { limit::BULLET_VISUAL } else { limit::BULLET };
         let long = s.bullets.iter().filter(|b| chars(b) > nc).count();
@@ -153,13 +198,30 @@ pub fn enforce_limits(p: &mut Plan) -> Vec<String> {
             let rest_eq: Vec<String> = first.equations.split_off(limit::EQUATIONS.min(first.equations.len()));
             notes.push(format!("「{}」有 {} 行{}，一頁放不下：拆成兩頁", clip(&s.title, 30), s.bullets.len(), if s.equations.is_empty() { String::new() } else { format!("與 {} 條方程式", s.equations.len()) }));
             // a walk-through slide's second half stays on the same part of the figure
-            let more = PlanSlide { role: s.role.clone(), title: s.title.clone(), bullets: rest, cites: vec![], notes: String::new(), figure: if is_walk(&s) { s.figure.clone() } else { String::new() }, module: if is_walk(&s) { s.module } else { 0 }, ..Default::default() };
             first.takeaway = String::new();
-            let mut more = more;
-            more.equations = rest_eq;
-            more.takeaway = s.takeaway.clone();
             out.push(first);
-            out.push(more);
+            // as many more slides as the lines need; the last one carries the conclusion
+            let mut rest = rest;
+            let mut rest_eq = rest_eq;
+            loop {
+                let later: Vec<String> = rest.split_off(nb.min(rest.len()));
+                let later_eq: Vec<String> = rest_eq.split_off(limit::EQUATIONS.min(rest_eq.len()));
+                let last = later.is_empty() && later_eq.is_empty();
+                out.push(PlanSlide {
+                    role: s.role.clone(),
+                    title: format!("{} ({})", s.title, out.iter().filter(|o: &&PlanSlide| o.title == s.title || o.title.starts_with(&format!("{} (", s.title))).count() + 1),
+                    bullets: std::mem::replace(&mut rest, later),
+                    equations: std::mem::replace(&mut rest_eq, later_eq),
+                    figure: if is_walk(&s) { s.figure.clone() } else { String::new() },
+                    module: if is_walk(&s) { s.module } else { 0 },
+                    suggest: s.suggest.clone(),
+                    takeaway: if last { s.takeaway.clone() } else { String::new() },
+                    ..Default::default()
+                });
+                if last {
+                    break;
+                }
+            }
         } else {
             out.push(s);
         }
@@ -184,7 +246,7 @@ pub fn schema() -> Value {
                     "role": { "type": "string", "enum": ROLES },
                     "title": s, "bullets": list, "figure": s, "table": s, "equations": list,
                     "takeaway": s, "steps": list, "module": { "type": "integer" },
-                    "kv": { "type": "array", "items": list }, "key_row": s, "cites": list, "notes": s
+                    "kv": { "type": "array", "items": list }, "key_row": s, "flow": list, "suggest": s, "cites": list, "notes": s
                 }
             } }
         }
@@ -196,6 +258,12 @@ pub(crate) fn clip(s: &str, n: usize) -> String {
 }
 
 /// What the planner is told when the paper's pictures go along with the request.
+/// The language of the speaker notes (備忘稿), which need not be the slides' language.
+pub fn notes_rule(notes_lang: &str) -> String {
+    let l = if notes_lang == "en" { "English" } else { "Traditional Chinese as used in Taiwan (technical terms, model names and metrics stay in English)" };
+    format!("\n- Write every `notes` in {l}, whatever the language of the slide text.")
+}
+
 pub const PICTURES_RULE: &str = "\n- The paper's figures (and the tables that are shown as pictures) are attached as images, in the order of the list at the end: \
 look at each one before you decide where it goes, and put an analysis or descriptor figure on the slide that talks about what it shows.";
 
@@ -210,7 +278,7 @@ pub fn pictures(m: &Material) -> Vec<(&str, &'static str, &super::source::Img)> 
 pub fn prompt(m: &Material, length: &str, lang: &str, parts: Option<&super::figparts::FigureParts>) -> (String, String) {
     let (lo, hi) = target_slides(length);
     let language = if lang == "en" { "English" } else { "Traditional Chinese as used in Taiwan (keep technical terms, model names and metrics in English)" };
-    let (lt, lb, lbc, lv, lvc, ltk) = (limit::TITLE, limit::BULLETS, limit::BULLET, limit::BULLETS_VISUAL, limit::BULLET_VISUAL, limit::TAKEAWAY);
+    let (lt, lb, lbc, lv, lvc, ltk, ls, lf, lfc) = (limit::TITLE, limit::BULLETS, limit::BULLET, limit::BULLETS_VISUAL, limit::BULLET_VISUAL, limit::TAKEAWAY, limit::SUGGEST, limit::FLOW, limit::FLOW_LABEL);
     // how the method is shown depends on what a model saw in the main figure (`figparts.rs`)
     let (wl, wc) = (limit::WALK_LINES, limit::WALK_LINE);
     let method = match parts.filter(|p| !p.figure.is_empty()) {
@@ -252,16 +320,25 @@ Reply with one JSON object {{venue, keywords, slides}}. Between {lo} and {hi} sl
 - takeaway: title \"Take home messages\"; 3–5 messages in bullets.\n\
 - thanks: title \"Thanks\".\n\n\
 Rules:\n\
-- Titles are short noun phrases (\"Results of ablation study\", \"Sampling method: …\"), at most {lt} characters; no agenda slide.\n\
+- A title says what THIS slide tells — its subject and the angle taken (\"Why frame-level models fail on full recordings\", \"Depth separates obstructed from patent\"), at most {lt} characters. \
+Every title is used once in the deck: two slides never share one, and a walk-through slide's title names its part and what that part does. No agenda slide.\n\
 - Every slide uses the same text size and nothing is shrunk to fit, so the limits are hard: at most {lb} bullets of at most {lbc} characters each; \
 on a slide with a figure, a table or kv rows at most {lv} bullets of at most {lvc} characters; on a slide with equations at most 2 equations and 3 bullets; a takeaway of at most {ltk} characters. \
 When a point needs more room, cut words or make a second slide — never go over.\n\
-- Bullets: short, spoken, start with a verb. Inline math between $ signs as LaTeX. Never start a bullet with a number, a dash or a bullet sign: the program numbers and marks them.\n\
+- Every slide except cover, takeaway and thanks argues from something it SHOWS: a figure, table or equation id. When the paper has nothing that fits the slide (background, challenge, opinion…), draw it: \
+flow = 2 to {lf} short box labels in order (at most {lfc} characters each), which the program draws as a chain of boxes joined by arrows — the steps of a procedure, a timeline \
+(what was done before → what changed → what this paper does; start a label with the year when the text gives one), or issue → cause → solution. Prefer flow whenever the slide's point is a sequence or a contrast in time. \
+Only when a diagram cannot stand for the picture (a photo, a plot) set suggest = one line of at most {ls} characters naming the picture the presenter should put there. \
+For each slide first weigh which of the three serves its point best — something the paper shows, a drawn flow, or a slot for the presenter's own picture; they are three formats, not a ranking of fallbacks, and a deck normally mixes them. \
+With flow or suggest keep to at most {lv} bullets. Never a slide of bullets alone.\n\
+- Every such slide has a takeaway: the ONE conclusion of the slide, a full sentence a listener can repeat. Each bullet is a step toward that conclusion and says what to look at in what the slide shows \
+(a number, a trend, a part of the picture). Never a summary of what a section of the paper says, never a list of what the authors did. A bullet that does not lead to the takeaway is cut.\n\
+- Bullets: short, spoken. Inline math between $ signs as LaTeX. Never start a bullet with a number, a dash or a bullet sign: the program numbers and marks them.\n\
 - Never write figure, table or equation numbers (no \"Fig. 3\", \"Table 2\", \"Eq. (1)\"): the slide shows the item itself.\n\
 - figure / table / equations use ONLY ids from the material lists that are not marked as unavailable; \"\" or [] when none.\n\
 - A figure or table appears on ONE slide, the slide that talks about it (only the main figure repeats, on the overview and its walk-through slides).\n\
 - cites: bibliography keys from the list for background claims from other work, at most 2 per slide.\n\
-- notes: one or two sentences the presenter says (speaker notes).\n\
+- notes: what the presenter says on this slide (speaker notes), two to four sentences: the explanation the slide's few words leave out.\n\
 - Write all slide text in {language}."
     );
     let mut u = String::new();
@@ -486,7 +563,19 @@ mod limit_tests {
     #[test]
     fn lengths_and_limits_are_checked_then_split_never_shrunk() {
         assert_eq!((target_slides("short"), target_slides("standard"), target_slides("long")), ((5, 10), (10, 15), (16, 24)));
-        let ps = |role: &str, n: usize| PlanSlide { role: role.into(), title: format!("{role} slide"), bullets: (0..n).map(|i| format!("Point number {i}")).collect(), ..Default::default() };
+        let ps = |role: &str, n: usize| PlanSlide {
+            role: role.into(),
+            title: format!("{role} slide"),
+            bullets: (0..n).map(|i| format!("Point number {i}")).collect(),
+            suggest: if text_only_ok(role) { String::new() } else { "a picture of it".into() },
+            takeaway: if text_only_ok(role) { String::new() } else { "So this follows".into() },
+            ..Default::default()
+        };
+        // a page of bullets alone, or one without a conclusion, is sent back
+        let bare = Plan { slides: (0..12).map(|_| PlanSlide { role: "background".into(), title: "T".into(), bullets: vec!["One".into()], ..Default::default() }).collect(), ..Default::default() };
+        let why = check_plan(&bare, "standard");
+        assert!(why.iter().any(|x| x.contains("nothing but text")) && why.iter().any(|x| x.contains("no takeaway")), "{why:?}");
+        assert!(check_plan(&Plan { slides: vec![PlanSlide { role: "takeaway".into(), title: "Take home messages".into(), bullets: vec!["One".into()], ..Default::default() }; 12], ..Default::default() }, "standard").is_empty(), "the take-home page may be text alone");
         let mut p = Plan { slides: vec![ps("cover", 0), ps("background", 7), ps("method", 2), ps("thanks", 0)], ..Default::default() };
         p.slides[2].figure = "fig1".into();
         p.slides[2].bullets[0] = "x".repeat(limit::BULLET_VISUAL + 1);
@@ -495,10 +584,14 @@ mod limit_tests {
         assert!(problems[0].contains("4 slides") && problems[0].contains("between 10 and 15"));
         assert!(problems[1].contains("7 bullets") && problems[2].contains("shorten it"));
         let notes = enforce_limits(&mut p);
-        assert_eq!(p.slides.iter().map(|s| s.bullets.len()).collect::<Vec<_>>(), [0, 5, 2, 2, 0], "the bullets over the count go to a second slide");
-        assert_eq!((p.slides[1].title.as_str(), p.slides[2].title.as_str(), p.slides[2].role.as_str()), ("background slide", "background slide", "background"));
+        assert_eq!(p.slides.iter().map(|s| s.bullets.len()).collect::<Vec<_>>(), [0, 3, 3, 1, 2, 0], "the bullets over the count go to more slides of the same kind");
+        assert_eq!((p.slides[1].title.as_str(), p.slides[2].title.as_str(), p.slides[2].role.as_str()), ("background slide", "background slide (2)", "background"), "a continuation is numbered: no two slides share a title");
+        assert_eq!((p.slides[1].takeaway.as_str(), p.slides[3].takeaway.as_str(), p.slides[3].suggest.as_str()), ("", "So this follows", "a picture of it"), "the conclusion closes the last of them; each keeps its picture slot");
         assert_eq!(notes.len(), 2, "the split and the long line are reported: {notes:?}");
-        assert!(check_plan(&Plan { slides: (0..12).map(|_| ps("background", 3)).collect(), ..Default::default() }, "standard").is_empty());
+        let twelve = |role: &str| (0..12).map(|i| PlanSlide { title: format!("{role} {i}"), ..ps(role, 3) }).collect::<Vec<_>>();
+        assert!(check_plan(&Plan { slides: twelve("background"), ..Default::default() }, "standard").is_empty());
+        // the same title twice is sent back: a title says what its own slide tells
+        assert!(check_plan(&Plan { slides: (0..12).map(|_| ps("background", 3)).collect(), ..Default::default() }, "standard").iter().any(|x| x.contains("already has this title")));
         // equations: two a slide with three bullets; the rest goes to a second slide
         let mut q = Plan { slides: vec![PlanSlide { role: "method".into(), title: "Details".into(), bullets: (0..5).map(|i| format!("Line {i}")).collect(), equations: vec!["eq1".into(), "eq2".into(), "eq3".into()], ..Default::default() }], ..Default::default() };
         assert!(check_plan(&q, "short").iter().any(|x| x.contains("3 equations")));

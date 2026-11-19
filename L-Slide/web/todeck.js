@@ -24,6 +24,7 @@ async function openPaperDeck() {
   if (PD.busy) { $("#dlgPaper").showModal(); return; }
   pdSeg($("#pdLen"), "length", "standard");
   pdSeg($("#pdLang"), "lang", "zh");
+  pdSeg($("#pdNotes"), "notes", "zh");
   $$("#pdSrc button").forEach((b) => (b.onclick = () => { PD.src = b.dataset.src; PD.pick = null; pdPapers(); }));
   // bases: the same thumbnails as 新簡報
   const box = $("#pdBases");
@@ -105,7 +106,7 @@ async function pdCreate(engine, mode = "review") {
   $("#pdGo").disabled = true;
   $("#pdBar").hidden = false;
   try {
-    const r = await fetch("/api/todeck", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source, style, length: pdPref.get("length", "standard"), lang: pdPref.get("lang", "zh"), engine, mode, ...($("#pdWho").hidden ? {} : { presenter: $("#pdPresenter").value, supervisor: $("#pdSupervisor").value }) }) });
+    const r = await fetch("/api/todeck", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source, style, length: pdPref.get("length", "standard"), lang: pdPref.get("lang", "zh"), notes: pdPref.get("notes", "zh"), engine, mode, ...($("#pdWho").hidden ? {} : { presenter: $("#pdPresenter").value, supervisor: $("#pdSupervisor").value }) }) });
     const v = await r.json().catch(() => ({}));
     if (!r.ok) {
       const alt = v.alternative;
@@ -270,7 +271,7 @@ const TDJ = (() => {
     if (c.eq != null) p.push(`方程式 ${c.eq}`);
     if (c.entries != null) p.push(`條目 ${c.entries}`);
     if (c.terms != null) p.push(c.unknown != null ? `名詞 ${c.terms} → 不熟 ${c.unknown}` : `名詞 ${c.terms}`);
-    if (c.slides != null) p.push(`第 ${c.slide ?? 0}/${c.slides} 頁`);
+    if (c.slides != null) p.push(c.slide != null ? `第 ${c.slide}/${c.slides} 頁` : `${c.slides} 頁`);
     if (c.checks != null) p.push(`檢查 ${c.checks} 項`);
     return p.join(" · ");
   }

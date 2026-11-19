@@ -165,6 +165,7 @@ window.LoreMakeDeck = (() => {
     card.append(
       h("div", { class: "tdk-row" }, h("span", { class: "tdk-label" }, "長度"), seg(LEN, "length", "standard")),
       h("div", { class: "tdk-row" }, h("span", { class: "tdk-label" }, "語言"), seg(LANG, "lang", "zh")),
+      h("div", { class: "tdk-row" }, h("span", { class: "tdk-label" }, "備忘稿"), seg(LANG, "notes", "zh")),
     );
     const row = h("div", { class: "tdk-row" }, h("span", { class: "tdk-label" }, "底版"));
     const list = h("div", { class: "tdk-bases", role: "radiogroup" }, h("span", { class: "tdk-note" }, "…"));
@@ -227,7 +228,7 @@ window.LoreMakeDeck = (() => {
     try {
       const source = await opts.source({});
       if (!source) throw new Error("先開一篇論文");
-      const body = { source, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), style: pref.get("style"), engine, mode, ...chosen };
+      const body = { source, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), notes: pref.get("notes", "zh"), style: pref.get("style"), engine, mode, ...chosen };
       await reach(() => { job.note = "正在開啟 L-Slide…"; draw(); });
       let r;
       try {

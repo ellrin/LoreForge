@@ -212,7 +212,10 @@ function renderRuns(p, para, pi, ctx, scale, editable) {
       // pandoc sometimes leaves a dangling "\" at the end
       const tex = (r.latex ?? ctx.latex?.(r.omml))?.replace(/\\\s*$/, "");
       if (tex && window.katex) {
-        try { katex.render(tex, span, { throwOnError: false, displayMode: false }); }
+        // an equation on its own line (PowerPoint's m:oMathPara) is display style: stacked
+        // fractions, limits above and below a sum; inline math stays text style
+        const display = (r.omml ?? "").includes("oMathPara") && para.runs.every((x) => x === r || !(x.text ?? "").trim());
+        try { katex.render(display ? `\\displaystyle ${tex}` : tex, span, { throwOnError: false, displayMode: false }); }
         catch { span.textContent = r.text; }
       } else {
         span.textContent = r.text || "∎";
@@ -375,6 +378,8 @@ function renderObject(o, ctx) {
     const blank = (t) => !t || t.paras.every((p) => p.runs.every((r) => r.kind !== "math" && !(r.text ?? "").trim()));
     const empty = o.type === "table" ? o.rows.every((r) => r.cells.every((c) => blank(c.text))) : (o.type === "text" || o.type === "shape") && blank(o.text);
     if (empty) e.classList.add("slot-empty");
+    // an empty picture slot the paper report left with what to put there (「建議放：…」)
+    if (empty && typeof o.name === "string" && o.name.startsWith("建議放：")) e.dataset.hint = o.name;
   }
   if (o.ph) {
     e.dataset.ph = o.ph;

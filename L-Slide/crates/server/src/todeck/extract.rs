@@ -28,7 +28,7 @@ use lore_docsrc::crop::{crop_png_fraction, fit_png};
 use lore_llm::{Image, LlmRequest};
 use serde_json::{Value, json};
 
-use super::source::{Eq, Fig, Material, img_from};
+use super::source::{Eq, Fig, Material, SymbolCandidate, SymbolNote, img_from};
 use crate::llm::Llm;
 
 pub const TASK_LOCATE: &str = "sc-locate-material";
@@ -97,6 +97,9 @@ pub struct Input<'a> {
     /// Where the answers are kept.
     pub cache: PathBuf,
     pub hints: Vec<Hint>,
+    /// Meanings a program found for symbols (L-Reader): shown under an equation only when
+    /// the model that compares the equation confirms them.
+    pub candidates: Vec<SymbolCandidate>,
 }
 
 #[derive(Debug, Default)]
@@ -321,13 +324,19 @@ sum or product with its limits, bracket, set and indicator symbol, and the order
 Differences in spacing, font size or line breaking do not matter; the equation number and trailing punctuation are not part of the equation.\n\
 Answer with JSON {same, latex, whole, difference}: same = true only when the transcription shows exactly the equation of image 1; \
 latex = when not the same, the complete corrected transcription as LaTeX that KaTeX can typeset (\\frac, \\sum_{…}^{…}, \\mathrm{…} for words, \\mathbb{1} for an indicator; no number), else \"\"; \
-whole = false when image 1 does not show the whole equation or is not an equation; difference = one short line, \"\" when the same.";
+whole = false when image 1 does not show the whole equation or is not an equation; difference = one short line, \"\" when the same.\n\
+When candidate meanings of symbols are listed (a program took them from the paper's text, each with the sentence it used; they are often wrong), also answer symbols = [{latex, meaning}]: \
+only the listed symbols that occur in this equation AND whose quoted sentence really defines that symbol; meaning = a short noun phrase that says what the symbol is, corrected from the sentence when the candidate got it wrong. \
+Leave a symbol out when the sentence defines something else, when it is about several symbols and does not say which is which, or when the meaning says nothing specific (\"one of these\", \"the value\"). Never guess a meaning.";
 
 fn compare_schema() -> Value {
     json!({
         "type": "object",
         "required": ["same"],
-        "properties": { "same": { "type": "boolean" }, "latex": { "type": "string" }, "whole": { "type": "boolean" }, "difference": { "type": "string" } }
+        "properties": {
+            "same": { "type": "boolean" }, "latex": { "type": "string" }, "whole": { "type": "boolean" }, "difference": { "type": "string" },
+            "symbols": { "type": "array", "items": { "type": "object", "required": ["latex", "meaning"], "properties": { "latex": { "type": "string" }, "meaning": { "type": "string" } } } }
+        }
     })
 }
 
@@ -342,8 +351,15 @@ fn clean_latex(s: &str) -> String {
     t.trim().trim_end_matches([',', '.', ';']).trim().to_string()
 }
 
-/// The reading of `f` compared with its crop (twice at most). `Ok(latex)`: agreed.
-async fn compare(ask: &Asker<'_>, inp: &Input<'_>, f: &Found, crop: &[u8]) -> Result<String, String> {
+/// The candidates whose symbol occurs in `latex`.
+fn candidates_in<'a>(latex: &str, all: &'a [SymbolCandidate]) -> Vec<&'a SymbolCandidate> {
+    let keys = super::build::equation_keys(latex);
+    all.iter().filter(|c| keys.contains(&lore_notation::math::canonical(&c.latex))).collect()
+}
+
+/// The reading of `f` compared with its crop (twice at most). `Ok((latex, symbols))`: agreed,
+/// with the symbol meanings the model confirmed from the candidates.
+async fn compare(ask: &Asker<'_>, inp: &Input<'_>, f: &Found, crop: &[u8]) -> Result<(String, Vec<SymbolNote>), String> {
     let mut latex = clean_latex(&f.latex);
     let shown = fit_png(crop, SIDE).unwrap_or_else(|_| crop.to_vec());
     let mut why = String::new();
@@ -354,17 +370,36 @@ async fn compare(ask: &Asker<'_>, inp: &Input<'_>, f: &Found, crop: &[u8]) -> Re
         if !typesets {
             user += "\n(This transcription cannot be typeset: write the correct one.)";
         }
-        let mut req = LlmRequest::prompt(COMPARE, user).json(compare_schema()).max_tokens(2000).image(Image::from_bytes("image/png", &shown));
+        let cands = if typesets { candidates_in(&latex, &inp.candidates) } else { vec![] };
+        if !cands.is_empty() {
+            user += "\n\nCandidate meanings of symbols (check each against its sentence):\n";
+            for c in &cands {
+                user += &format!("- ${}$: \"{}\" — sentence: \"{}\"\n", c.latex, c.meaning, super::plan::clip(&c.quote, 400));
+            }
+        }
+        let mut req = LlmRequest::prompt(COMPARE, user.clone()).json(compare_schema()).max_tokens(2000).image(Image::from_bytes("image/png", &shown));
         if let Some(r) = &render {
             req = req.image(Image::from_bytes("image/png", r));
         }
-        let key = format!("compare-{V}-{}", hash(&[crop, latex.as_bytes(), if render.is_some() { b"r" } else { b"t" }]));
+        let key = format!("compare-v2-{}", hash(&[crop, user.as_bytes(), if render.is_some() { b"r" } else { b"t" }]));
         let v = ask.ask(&key, TASK_COMPARE, req).await.map_err(|e| format!("模型沒有比對（{e}）"))?;
         if v["whole"] == false {
             return Err("截圖不是完整的一條式子".into());
         }
         if v["same"] == true && typesets {
-            return Ok(latex);
+            // only meanings of candidates the request listed: the model confirms, it does not invent
+            let symbols = v["symbols"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|x| {
+                    let key = lore_notation::math::canonical(x["latex"].as_str()?.trim().trim_matches('$'));
+                    let c = cands.iter().find(|c| lore_notation::math::canonical(&c.latex) == key)?;
+                    let meaning = x["meaning"].as_str()?.trim().trim_end_matches('.').to_string();
+                    (!meaning.is_empty()).then(|| SymbolNote { latex: c.latex.clone(), meaning: None, meaning_en: Some(meaning) })
+                })
+                .collect();
+            return Ok((latex, symbols));
         }
         why = v["difference"].as_str().unwrap_or("").lines().next().unwrap_or("").to_string();
         let fixed = clean_latex(v["latex"].as_str().unwrap_or(""));
@@ -523,7 +558,7 @@ pub async fn verify(llm: &Llm, m: &mut Material, inp: &Input<'_>) -> Report {
 
     // 4. equations: the reading against the crop
     let eqs: Vec<&Found> = found.iter().filter(|f| f.kind == "equation").collect();
-    let mut reads: Vec<Fut<'_, (Option<Vec<u8>>, Result<String, String>)>> = vec![];
+    let mut reads: Vec<Fut<'_, (Option<Vec<u8>>, Result<(String, Vec<SymbolNote>), String>)>> = vec![];
     for f in &eqs {
         let ask = &ask;
         reads.push(Box::pin(async move {
@@ -538,7 +573,15 @@ pub async fn verify(llm: &Llm, m: &mut Material, inp: &Input<'_>) -> Report {
         let label = if f.number.is_empty() { f.id.clone() } else { format!("式 ({})", f.number) };
         let mut e = Eq { id: f.id.clone(), latex: String::new(), label: (!f.number.is_empty()).then(|| format!("({})", f.number)), page: Some(f.page), bbox: Some(f.bbox), read: "vision".into(), image: None };
         match r {
-            Ok(latex) => e.latex = latex,
+            Ok((latex, symbols)) => {
+                e.latex = latex;
+                for n in symbols {
+                    let key = lore_notation::math::canonical(&n.latex);
+                    if !m.symbols.iter().any(|o| lore_notation::math::canonical(&o.latex) == key) {
+                        m.symbols.push(n);
+                    }
+                }
+            }
             Err(why) => {
                 e.read = "picture".into();
                 e.image = crop.and_then(|c| img_from(c, "png"));
@@ -650,7 +693,8 @@ mod tests {
                 ("check a crop", "Figure 1", vec![json!({ "ok": false, "cut_off": false, "extra": true, "tight": [0.0, 0.0, 1.0, 0.8], "problem": "caption text at the bottom" }), json!({ "ok": true })]),
                 ("check a crop", "Figure 2", vec![json!({ "ok": false, "cut_off": false, "extra": true, "tight": [0.0, 0.0, 1.0, 0.9], "problem": "runs into the table" })]),
                 ("check a crop", "Table I", vec![json!({ "ok": true, "cut_off": false, "extra": false })]),
-                ("LaTeX transcription", "G(m) = \\sum_{t} u_t", vec![json!({ "same": true })]),
+                // of the two candidate meanings for this equation the model confirms one (reworded) and rejects the other
+                ("LaTeX transcription", "G(m) = \\sum_{t} u_t", vec![json!({ "same": true, "symbols": [{ "latex": "u", "meaning": "the opening signal." }, { "latex": "q", "meaning": "not in this equation" }] })]),
                 // equation 2: a wrong limit is corrected, the corrected reading compared again
                 ("LaTeX transcription", "\\sum_{k=1}^{K} z_k", vec![json!({ "same": false, "latex": "S = \\frac{1}{K} \\sum_{k=1}^{K} |z_k|", "difference": "absolute value missing" })]),
                 ("LaTeX transcription", "|z_k|", vec![json!({ "same": true })]),
@@ -663,10 +707,12 @@ mod tests {
         let png = page();
         let grid = vec![vec!["Method".to_string(), "Site A".into(), "Site B".into()], vec!["Ours".into(), "0.91".into(), "0.84".into()], vec!["Baseline".into(), "0.85".into(), "0.79".into()]];
         let ts = FakeTypeset(Mutex::new(vec![]));
+        let cand = |l: &str, m: &str| SymbolCandidate { latex: l.into(), meaning: m.into(), quote: format!("Let ${l}$ denote {m}.") };
+        let candidates = vec![cand("u", "the opening"), cand("G", "one of these descriptors"), cand("z", "a score")];
         let page_png = |_: u32, _: u32| Some(png.clone());
         let table_grid = |_: u32, _: [f64; 4]| Some(grid.clone());
         let hints = vec![Hint { page: 1, kind: "equation", number: "(1)".into(), bbox: None, latex: String::new() }, Hint { page: 2, kind: "table", number: "I".into(), bbox: Some([0.1, 0.1, 0.9, 0.9]), latex: String::new() }];
-        let inp = Input { pages: 2, page_png: &page_png, table_grid: &table_grid, typeset: Some(&ts), cache: dir.path().join("cache"), hints };
+        let inp = Input { pages: 2, page_png: &page_png, table_grid: &table_grid, typeset: Some(&ts), cache: dir.path().join("cache"), hints, candidates: candidates.clone() };
         let mut m = material();
         let rep = verify(&llm, &mut m, &inp).await;
         assert!(!rep.unverified);
@@ -692,6 +738,10 @@ mod tests {
         assert!(rep.notes.iter().any(|n| n.contains("eq:p2-3")), "L-Reader's fragment nobody saw: {:?}", rep.notes);
         assert!(!m.equations.iter().any(|e| has_control(&e.latex)));
         assert_eq!(m.authors, ["Ellrin Example", "Daidai Example"]);
+        // symbol meanings: only what the model confirmed, in its wording; a rejected or unlisted one never
+        assert_eq!(m.symbols, [SymbolNote { latex: "u".into(), meaning: None, meaning_en: Some("the opening signal".into()) }]);
+        let first = model.seen.lock().unwrap().iter().find(|r| r.flatten().contains("G(m) = \\sum_{t} u_t")).unwrap().flatten();
+        assert!(first.contains("- $u$: \"the opening\"") && first.contains("- $G$:") && !first.contains("- $z$:"), "only the equation's own symbols are asked about: {first}");
         // typeset pictures went along with the comparisons (not for the one that cannot be typeset)
         assert_eq!(ts.0.lock().unwrap().len(), 3);
         let seen = model.seen.lock().unwrap();
@@ -711,7 +761,7 @@ mod tests {
 
         // a table whose text does not give the columns the model saw: the picture, said so
         let bad = |_: u32, _: [f64; 4]| Some(vec![vec!["a".to_string(), "b".into()], vec!["c".into(), "d".into()]]);
-        let inp3 = Input { pages: 2, page_png: &page_png, table_grid: &bad, typeset: Some(&ts), cache: dir.path().join("cache"), hints: vec![] };
+        let inp3 = Input { pages: 2, page_png: &page_png, table_grid: &bad, typeset: Some(&ts), cache: dir.path().join("cache"), hints: vec![], candidates: candidates.clone() };
         let mut m3 = material();
         let rep3 = verify(&llm, &mut m3, &inp3).await;
         assert!(m3.tables[0].grid.is_none() && m3.tables[0].image.is_some());
@@ -719,7 +769,7 @@ mod tests {
 
         // no engine: nothing is confirmed, the detector's material stays, said so
         let none = Llm::none(lore_home::Home::at(dir.path()));
-        let inp4 = Input { pages: 2, page_png: &page_png, table_grid: &table_grid, typeset: None, cache: dir.path().join("cache-none"), hints: vec![] };
+        let inp4 = Input { pages: 2, page_png: &page_png, table_grid: &table_grid, typeset: None, cache: dir.path().join("cache-none"), hints: vec![], candidates: vec![] };
         let mut m4 = material();
         let rep4 = verify(&none, &mut m4, &inp4).await;
         assert!(rep4.unverified && m4.figures.len() == 2 && rep4.notes.len() == 1 && rep4.notes[0].contains("沒有經過確認"));

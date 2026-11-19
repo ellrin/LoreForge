@@ -144,6 +144,9 @@ pub struct MakeBody {
     pub length: Option<String>,
     #[serde(default)]
     pub lang: Option<String>,
+    /// The speaker notes' language (`zh` | `en`).
+    #[serde(default)]
+    pub notes: Option<String>,
     #[serde(default)]
     pub style: Option<String>,
     #[serde(default)]
@@ -181,6 +184,7 @@ fn new_job(s: &Shared, b: &MakeBody, direct: bool) -> Result<Arc<Job>, Response>
         source: b.source.clone(),
         length: b.length.clone().unwrap_or_else(|| "standard".into()),
         lang: b.lang.clone().unwrap_or_else(|| "zh".into()),
+        notes: b.notes.clone().filter(|n| n == "en" || n == "zh").unwrap_or_else(|| "zh".into()),
         style,
         engine: b.engine.clone().filter(|e| e == "local" || e == "claude"),
     };
@@ -463,8 +467,9 @@ mod tests {
             { "id": "eq:1-2", "latex": "\\mathcal{L} = \\frac{1}{2}  a", "label": "(1)", "page": 28 },
             { "id": "eq:2", "latex": "x'_{p} = R(x)", "label": "(2)", "page": 29 }
         ], "entries": [
-            { "latex": "r", "meaning_en": "a predefined hyperparameter" },
-            { "latex": "\\mathcal{P}_{\\mathrm{real}}", "meaning": "真實影像的分布", "meaning_en": "the distribution of real images" },
+            { "latex": "r", "meaning_en": "a predefined hyperparameter", "grade": "certain", "resolved_by": "author" },
+            { "latex": "\\mathcal{P}_{\\mathrm{real}}", "meaning": "真實影像的分布", "meaning_en": "the distribution of real images", "grade": "defined", "resolved_by": "claude" },
+            { "latex": "D", "meaning_en": "something a rule found", "grade": "defined", "resolved_by": "program", "evidence": [{ "by": "program", "quote": "Let $Q$ and $D$ denote something." }] },
             { "latex": "N" }
         ] });
         let eqs = lr_equations(&v);
@@ -473,7 +478,8 @@ mod tests {
         assert_eq!(eqs[0].bbox, Some([0.2, 0.7, 0.7, 0.86]));
         assert!(eqs.iter().all(|e| e.read == "text" && e.usable()));
         let notes = lr_symbol_notes(&v);
-        assert_eq!(notes.len(), 2, "a row without a meaning is no note");
+        assert_eq!(notes.len(), 2, "a row without a meaning is no note; a meaning only the program found is a candidate, not a note");
+        assert_eq!(lr_symbol_candidates(&v), [SymbolCandidate { latex: "D".into(), meaning: "something a rule found".into(), quote: "Let $Q$ and $D$ denote something.".into() }]);
         // older saved jobs: [latex, meaning] pairs
         let old: Vec<SymbolNote> = serde_json::from_value(json!([["r", "a radius"], ["x", "輸入影像"]])).unwrap();
         assert_eq!((old[0].meaning_en.as_deref(), old[1].meaning.as_deref()), (Some("a radius"), Some("輸入影像")));

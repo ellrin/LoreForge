@@ -57,6 +57,9 @@ pub struct Params {
     /// The cover's Speaker and Supervisor (names; picked from L-Paper's people).
     pub presenter: Option<String>,
     pub supervisor: Option<String>,
+    /// The language of the speaker notes (`zh` | `en`); empty = `zh`.
+    #[serde(default)]
+    pub notes: String,
 }
 
 pub struct PaperDeck {
@@ -225,7 +228,7 @@ async fn source(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
         }
         let page_png = |n: u32, dpi: u32| renders.get(&(n, dpi)).cloned();
         let table_grid = |n: u32, b: [f64; 4]| text.iter().find(|t| t.number == n).and_then(|t| lore_docsrc::pdf::table::grid_in(t, b));
-        let inp = super::extract::Input { pages, page_png: &page_png, table_grid: &table_grid, typeset: typeset.as_deref(), cache: cache.join(&sha).join("verify"), hints };
+        let inp = super::extract::Input { pages, page_png: &page_png, table_grid: &table_grid, typeset: typeset.as_deref(), cache: cache.join(&sha).join("verify"), hints, candidates: m.lr_symbols.as_ref().map(super::source::lr_symbol_candidates).unwrap_or_default() };
         cx.counts(json!({ "pages": pages, "looking": true }));
         let rep = super::extract::verify(super::llm(s), &mut m, &inp).await;
         calls = (rep.calls, rep.cached);
@@ -345,6 +348,7 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     warnings.extend(seen.notes);
     let parts = seen.parts;
     let (mut system, user) = prompt(&m, &p.length, &p.lang, parts.as_ref());
+    system += &super::plan::notes_rule(&p.notes);
     if !prof.summary.trim().is_empty() {
         system += &format!("\n\nThe presenter's own decks, summarised — follow these habits:\n{}", prof.summary.trim());
     }

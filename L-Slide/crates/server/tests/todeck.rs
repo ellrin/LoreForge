@@ -203,15 +203,15 @@ fn plan(lang_text: &str) -> Value {
         "keywords": ["lesion grading", "synthetic data", "two stages"],
         "slides": [
             { "role": "cover", "title": "Two-Stage Grading of Synthetic Lesions", "bullets": [] },
-            { "role": "background", "title": "Why grading is slow", "bullets": [format!("Grade by hand {lang_text}")], "cites": ["ellrin2025synthetic", "nobody2020"] },
+            { "role": "background", "title": "Why grading is slow", "bullets": [format!("Grade by hand {lang_text}")], "cites": ["ellrin2025synthetic", "nobody2020"], "flow": ["2019: graded by hand", "2022: one-stage models", "Now: two stages"], "takeaway": format!("Hand grading does not scale {lang_text}") },
             { "role": "overview", "title": "Big picture", "bullets": [], "figure": "fig1" },
             { "role": "method", "title": "Encoder", "bullets": ["Finds lesions as in Fig. 3"], "figure": "fig1", "module": 1 },
             { "role": "method", "title": "Fusion", "bullets": ["Weighs each lesion by $\\vx$", "Keeps the largest three", "Passes one vector on"], "figure": "fig1", "module": 2 },
             { "role": "method", "title": "Decoder.", "bullets": ["Grades the image", "Outputs four grades"], "figure": "fig1", "module": 3 },
-            { "role": "loss", "title": "Reconstruction loss", "bullets": ["Penalises the distance (Eq. (1))"], "equations": ["eq1", "eq99"] },
-            { "role": "training", "title": "Training details", "bullets": [], "kv": [["Epochs", "30"], ["Optimiser", "AdamW"], ["Learning rate", "$10^{-4}$"]] },
+            { "role": "loss", "title": "Reconstruction loss", "bullets": ["Penalises the distance (Eq. (1))"], "equations": ["eq1", "eq99"], "takeaway": "One distance term trains both stages" },
+            { "role": "training", "title": "Training details", "bullets": [], "kv": [["Epochs", "30"], ["Optimiser", "AdamW"], ["Learning rate", "$10^{-4}$"]], "takeaway": "A short schedule is enough" },
             { "role": "results", "title": "Main results", "bullets": [], "table": "tab1", "key_row": "ours", "takeaway": "Ours wins on both metrics, see Table 1" },
-            { "role": "opinion", "title": "Some opinions", "bullets": ["Test on real data"] },
+            { "role": "opinion", "title": "Some opinions", "bullets": ["Test on real data"], "suggest": "a real lesion photo beside a synthetic one", "takeaway": "Synthetic results need a real test" },
             { "role": "takeaway", "title": "Take home messages", "bullets": ["1. Two stages help", "2) Fusion matters"] },
             { "role": "thanks", "title": "Thanks", "bullets": [] }
         ]
@@ -284,6 +284,28 @@ pub fn author_decks(home: &lore_home::Home) {
     }
 }
 
+/// A page of bullets alone reads as undigested: every content page except the take-home one
+/// shows a picture, a table, an equation, or an empty picture slot that says which picture to put.
+fn assert_no_text_only_page(slides: &[Value]) {
+    fn has_math(v: &Value) -> bool {
+        match v {
+            Value::Object(m) => m.get("kind").and_then(Value::as_str) == Some("math") || m.values().any(has_math),
+            Value::Array(a) => a.iter().any(has_math),
+            _ => false,
+        }
+    }
+    for (i, sl) in slides.iter().enumerate().skip(1).take(slides.len().saturating_sub(2)) {
+        let objs = sl["objects"].as_array().cloned().unwrap_or_default();
+        if all_text(sl).contains("Take home messages") {
+            continue;
+        }
+        let shows = objs.iter().any(|o| {
+            matches!(o["type"].as_str(), Some("picture") | Some("table") | Some("group")) || o["name"].as_str().is_some_and(|n| n.starts_with("建議放：")) && o["slot"].as_str().is_some_and(|s| s.starts_with("image"))
+        }) || has_math(sl);
+        assert!(shows, "slide {} is text only: {}", i + 1, all_text(sl));
+    }
+}
+
 /// 字級不一致是大忌: across a finished deck every text tag has one size, and the content
 /// pages (all but the cover and the closing page) keep their title in one frame and start
 /// their body on one line.
@@ -321,10 +343,18 @@ fn assert_one_size_per_role(slides: &[Value]) {
         let objs = s["objects"].as_array().unwrap();
         assert_eq!(objs.iter().filter(|o| o["ph"] == "title" || o["slot"] == "title" || o["name"] == "Title").count(), 1, "one title object");
         // the first thing under the title starts on the same line on every page
-        let body_top = objs.iter().filter(|o| ["內文", "表", "圖", "架構圖", "訓練細節"].contains(&o["name"].as_str().unwrap_or(""))).map(|o| o["frame"]["y"].as_i64().unwrap()).min();
+        let body_top = objs.iter().filter(|o| ["內文", "表", "圖", "架構圖", "訓練細節"].contains(&o["name"].as_str().unwrap_or("")) || o["type"] == "group").map(|o| o["frame"]["y"].as_i64().unwrap()).min();
         tops.extend(body_top);
     }
     assert_eq!(tops.len(), 1, "the body starts on one line: {tops:?}");
+    // a figure that is the subject of a slide gets the room: at least 80 % of the body width,
+    // unless its height is what binds (then it fills most of the body's height)
+    let body_w = content.iter().flat_map(|s| s["objects"].as_array().unwrap()).filter(|o| o["name"] == "內文").map(|o| o["frame"]["w"].as_i64().unwrap()).max().unwrap();
+    let slide_h = body_w * 9 / 16;
+    for o in content.iter().flat_map(|s| s["objects"].as_array().unwrap()).filter(|o| o["type"] == "picture" && ["圖", "架構圖", "表"].contains(&o["name"].as_str().unwrap_or(""))) {
+        let (w, h) = (o["frame"]["w"].as_i64().unwrap(), o["frame"]["h"].as_i64().unwrap());
+        assert!(w * 10 >= body_w * 8 || h * 10 >= slide_h * 5, "a small figure: {}", o["frame"]);
+    }
 }
 
 fn texts(v: &Value, out: &mut Vec<String>) {
@@ -390,8 +420,9 @@ async fn paper_becomes_a_report_deck() {
 
     let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
     let slides = d["deck"]["slides"].as_array().unwrap().clone();
-    // 12 planned; the walk-through's lines appear one by one: Fusion 3 copies, Decoder 2
-    assert_eq!(slides.len(), 15);
+    // 12 planned, 12 slides: a walk-through's lines appear one by one on its own slide
+    // (entrance animations), never as copies of the slide
+    assert_eq!(slides.len(), 12);
     assert_eq!(slides[0]["layout"], "封面");
     assert_eq!(slides.last().unwrap()["layout"], "結尾");
     let mut all = vec![];
@@ -403,6 +434,16 @@ async fn paper_becomes_a_report_deck() {
     assert!(cover.contains("Speaker: Ellrin Example") && cover.contains("Supervisor: Daidai Example") && !cover.contains("Ref:") && !cover.contains("example.org"), "{cover}");
     // one size per text role, one title frame, one body line — on the deck as polished
     assert_one_size_per_role(&slides);
+    assert_no_text_only_page(&slides);
+    // a page the paper has no picture for: the plan's chain is drawn as one flow picture
+    // (a group that keeps its spec), or an empty picture slot says which picture to put
+    let named = |title: &str| slides.iter().find(|s| all_text(s).contains(title)).unwrap()["objects"].as_array().unwrap().clone();
+    let chain = named("Why grading is slow").into_iter().find(|o| o["type"] == "group").expect("the timeline is drawn");
+    let mut boxes = vec![];
+    texts(&chain, &mut boxes);
+    assert!(boxes.join("|").contains("2019: graded by hand") && boxes.join("|").contains("Now: two stages"), "{boxes:?}");
+    assert!(chain["data"].to_string().contains("n1 -> n2 -> n3"), "it reopens in the flow editor: {}", chain["data"]);
+    assert!(named("Some opinions").iter().any(|o| o["name"] == "建議放：a real lesion photo beside a synthetic one" && o["slot"] == "image-1"));
     // the deck's fonts: all text in the author's deck fonts, equations in their math font
     assert_eq!(d["deck"]["fonts"], json!({ "latin": "Brand Serif", "east_asian": "Brand Sans TC" }));
     fn looks(v: &Value, out: &mut Vec<(String, String, String)>) {
@@ -450,34 +491,42 @@ async fn paper_becomes_a_report_deck() {
     assert!(!joined.contains("Fig. 3") && !joined.contains("Table 1") && !joined.contains("Eq. (1)"), "typed references are dropped");
 
     // the big picture: the figure whole, across the body width
-    let content_w = slides[1]["objects"].as_array().unwrap().iter().find(|o| o["name"] == "內文").unwrap()["frame"]["w"].as_i64().unwrap();
+    let content_w = slides.iter().flat_map(|s| s["objects"].as_array().unwrap()).filter(|o| o["name"] == "內文").map(|o| o["frame"]["w"].as_i64().unwrap()).max().unwrap();
     let big = slides.iter().find(|s| all_text(s).contains("Big picture")).unwrap();
     let pics: Vec<&Value> = big["objects"].as_array().unwrap().iter().filter(|o| o["type"] == "picture").collect();
     assert_eq!(pics.len(), 1);
     assert!(pics[0]["frame"]["w"].as_i64().unwrap() >= content_w * 8 / 10 && pics[0]["alpha"].as_f64().unwrap_or(1.0) > 0.99, "{}", pics[0]);
     // the walk-through of part 2: the whole figure faint, the part clear on top (cut at the
     // blank gutters, 1/3 and 2/3), never smaller than 80 % of the body width; its three lines
-    // appear one by one over the faint side
-    let fusion: Vec<&Value> = slides.iter().filter(|s| all_text(s).contains("Fusion") && s["objects"].as_array().unwrap().iter().any(|o| o["name"] == "講解")).collect();
-    assert_eq!(fusion.len(), 3, "one copy per line");
-    for (k, sl) in fusion.iter().enumerate() {
+    // appear one by one
+    let line = |o: &Value| o["name"].as_str().is_some_and(|n| n.starts_with("講解"));
+    let fusion: Vec<&Value> = slides.iter().filter(|s| all_text(s).contains("Keeps the largest three")).collect();
+    assert_eq!(fusion.len(), 1, "one slide, one title");
+    {
+        let sl = fusion[0];
         let objs = sl["objects"].as_array().unwrap();
         let pics: Vec<&Value> = objs.iter().filter(|o| o["type"] == "picture").collect();
         assert_eq!(pics.len(), 2, "{sl}");
-        assert!(pics[0]["alpha"].as_f64().unwrap() < 0.5 && pics[0]["frame"]["w"].as_i64().unwrap() >= content_w * 8 / 10);
+        assert!(pics[0]["alpha"].as_f64().unwrap() < 0.5);
         assert!((pics[1]["crop"]["l"].as_f64().unwrap() - 1.0 / 3.0).abs() < 0.02 && (pics[1]["crop"]["r"].as_f64().unwrap() - 1.0 / 3.0).abs() < 0.02, "{}", pics[1]);
         assert_eq!(pics[0]["asset"], pics[1]["asset"], "one image file, two crops");
-        let text = objs.iter().find(|o| o["name"] == "講解").unwrap();
-        assert_eq!(text["text"]["paras"].as_array().unwrap().len(), k + 1, "the lines so far");
-        // on the faint side: beside the clear part, inside the figure
-        let (tx, px, pw) = (text["frame"]["x"].as_i64().unwrap(), pics[1]["frame"]["x"].as_i64().unwrap(), pics[1]["frame"]["w"].as_i64().unwrap());
-        assert!(tx >= px + pw || tx + text["frame"]["w"].as_i64().unwrap() <= px, "{} {}", text["frame"], pics[1]["frame"]);
+        // each line its own box, stacked under the figure across the body, each appearing on a click
+        let lines: Vec<&Value> = objs.iter().filter(|o| line(o)).collect();
+        assert_eq!(lines.len(), 3);
+        let fig = &pics[0]["frame"];
+        let mut y = fig["y"].as_i64().unwrap() + fig["h"].as_i64().unwrap();
+        for l in &lines {
+            assert_eq!(l["text"]["paras"].as_array().unwrap().len(), 1);
+            assert!(l["frame"]["y"].as_i64().unwrap() >= y && l["frame"]["w"].as_i64().unwrap() == content_w, "{} {fig}", l["frame"]);
+            y = l["frame"]["y"].as_i64().unwrap() + l["frame"]["h"].as_i64().unwrap();
+        }
+        let anims = sl["anims"].as_array().unwrap();
+        assert_eq!(anims.iter().map(|a| (a["obj"].clone(), a["effect"].as_str().unwrap(), a["trigger"].as_str().unwrap())).collect::<Vec<_>>(), lines.iter().map(|l| (l["id"].clone(), "appear", "click")).collect::<Vec<_>>());
     }
-    assert_eq!(fusion[0]["objects"].as_array().unwrap().iter().find(|o| o["name"] == "講解").unwrap()["frame"], fusion[2]["objects"].as_array().unwrap().iter().find(|o| o["name"] == "講解").unwrap()["frame"]);
     let uids: std::collections::BTreeSet<&str> = slides.iter().map(|s| s["uid"].as_str().unwrap()).collect();
     assert_eq!(uids.len(), slides.len());
     // the main figure is on the overview and its walk-through only; no other picture twice
-    assert_eq!(slides.iter().filter(|s| s["objects"].as_array().unwrap().iter().any(|o| o["type"] == "picture")).count(), 1 + 1 + 3 + 2);
+    assert_eq!(slides.iter().filter(|s| s["objects"].as_array().unwrap().iter().any(|o| o["type"] == "picture")).count(), 1 + 3);
 
     // native tables: the results grid and the training key-value rows
     let tables: Vec<Value> = slides.iter().flat_map(|s| s["objects"].as_array().unwrap().clone()).filter(|o| o["type"] == "table").collect();
@@ -695,7 +744,7 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     assert_eq!(v["stages"][6]["counts"], json!({ "slide": 11, "slides": 11 }));
     assert_eq!(v["stages"][7]["counts"]["checks"], 6);
     let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
-    assert_eq!(d["deck"]["slides"].as_array().unwrap().len(), 14, "11 planned, the walk-through's lines one by one (+2, +1)");
+    assert_eq!(d["deck"]["slides"].as_array().unwrap().len(), 11, "11 planned, 11 slides: lines appear by animation, not by copies");
     let text = all_text(&d["deck"]);
     assert!(text.contains("What the numbers say") && !text.contains("Some opinions"));
     assert_eq!(v["stages"][2]["counts"]["unknown"].as_u64().unwrap(), unknown - 1, "我懂 updated the terms");
@@ -751,9 +800,20 @@ async fn the_authors_number_of_parts_recuts_the_main_figure() {
     let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
     let slides = d["deck"]["slides"].as_array().unwrap();
     // Encoder and Fusion on part 1 (the left 2/3, cut at the gutter), Decoder on part 2
-    let crop = |title: &str| slides.iter().find(|s| all_text(s).contains(title) && s["objects"].as_array().unwrap().iter().any(|o| o["name"] == "講解")).map(|s| s["objects"].as_array().unwrap().iter().filter(|o| o["type"] == "picture").nth(1).unwrap()["crop"].clone()).unwrap();
+    let crop = |title: &str| slides.iter().find(|s| all_text(s).contains(title) && s["objects"].as_array().unwrap().iter().any(|o| o["name"].as_str().is_some_and(|n| n.starts_with("講解")))).map(|s| s["objects"].as_array().unwrap().iter().filter(|o| o["type"] == "picture").nth(1).unwrap()["crop"].clone()).unwrap();
     assert!(crop("Encoder")["l"].as_f64().unwrap() < 0.01 && (crop("Keeps the largest")["r"].as_f64().unwrap() - 1.0 / 3.0).abs() < 0.02, "{}", crop("Encoder"));
     assert!((crop("Grades the image")["l"].as_f64().unwrap() - 2.0 / 3.0).abs() < 0.02);
+    // part 1 leaves a faint side of one third: too narrow for the lines, so they go under the
+    // figure across the body (the figure gives them the room but stays at least two thirds
+    // wide); part 2's lines sit on its wide faint side
+    let walk = |text: &str| slides.iter().rev().find(|s| all_text(s).contains(text) && s["objects"].as_array().unwrap().iter().any(|o| o["name"].as_str().is_some_and(|n| n.starts_with("講解")))).unwrap();
+    let frame = |s: &Value, name: &str| s["objects"].as_array().unwrap().iter().find(|o| o["name"].as_str().is_some_and(|n| n.starts_with(name))).unwrap()["frame"].clone();
+    let body_w = slides.iter().flat_map(|s| s["objects"].as_array().unwrap()).filter(|o| o["name"] == "內文").map(|o| o["frame"]["w"].as_i64().unwrap()).max().unwrap();
+    let (fig, txt) = (frame(walk("Keeps the largest"), "架構圖"), frame(walk("Keeps the largest"), "講解"));
+    assert!(txt["y"].as_i64().unwrap() >= fig["y"].as_i64().unwrap() + fig["h"].as_i64().unwrap() && txt["w"].as_i64().unwrap() == body_w, "{fig} {txt}");
+    assert!(fig["w"].as_i64().unwrap() * 3 >= body_w * 2);
+    let (fig, txt) = (frame(walk("Grades the image"), "架構圖"), frame(walk("Grades the image"), "講解"));
+    assert!(txt["y"].as_i64().unwrap() < fig["y"].as_i64().unwrap() + fig["h"].as_i64().unwrap() && txt["w"].as_i64().unwrap() < body_w * 7 / 10, "{fig} {txt}");
 }
 
 #[tokio::test]
@@ -906,7 +966,7 @@ async fn review_suggestions_and_changing_language_redoes_the_outline() {
     assert_eq!((model.asked(ASK_PLAN).len(), model.asked(ASK_REVIEW).len()), (2, 2), "plan + suggestions again");
     assert!(model.asked(ASK_PLAN)[1].system.contains("Traditional Chinese"));
     assert_eq!(v["review"]["suggestions"], json!([]));
-    assert_eq!(v["review"]["outline"][1]["point"], "Grade by hand zh again", "the review shows the new outline");
+    assert_eq!(v["review"]["outline"][1]["point"], "Hand grading does not scale zh again", "the review shows the new outline: a page's point is its conclusion");
     assert_eq!(std::fs::read(shared.ws.root.join(format!("cache/todeck/{id}/source.json"))).unwrap(), source_before, "source not redone");
     // not waiting any more: refused
     let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/review"), Some(json!({ "skip": true })), None).await;

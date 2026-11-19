@@ -467,16 +467,45 @@ pub fn lr_equations(v: &Value) -> Vec<Eq> {
     out
 }
 
-/// L-Reader's symbol rows with a meaning (the author's / Claude's `meaning`, or the
-/// definition the program found, `meaning_en`).
+/// L-Reader's symbol rows whose meaning can be trusted as it is: graded `certain`, or
+/// `defined` by somebody other than its rule-based finder (the author, a model). A meaning
+/// only the program found (even with a quote) can be wrong, so it is a candidate that a
+/// model must confirm against the equation ([`lr_symbol_candidates`], `extract.rs`); a
+/// slide never shows an unconfirmed one.
 pub fn lr_symbol_notes(v: &Value) -> Vec<SymbolNote> {
     let s = |e: &Value, k: &str| e[k].as_str().map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
     v["entries"]
         .as_array()
         .into_iter()
         .flatten()
+        .filter(|e| e["grade"] == "certain" || (e["grade"] == "defined" && e["resolved_by"].as_str().is_some_and(|b| b != "program")))
         .filter_map(|e| Some(SymbolNote { latex: s(e, "latex")?, meaning: s(e, "meaning"), meaning_en: s(e, "meaning_en") }))
         .filter(|n| n.meaning.is_some() || n.meaning_en.is_some())
+        .collect()
+}
+
+/// A meaning L-Reader's program found for a symbol, with the sentence it took it from.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SymbolCandidate {
+    pub latex: String,
+    pub meaning: String,
+    pub quote: String,
+}
+
+/// The rows [`lr_symbol_notes`] does not trust but that have a meaning: to be confirmed.
+pub fn lr_symbol_candidates(v: &Value) -> Vec<SymbolCandidate> {
+    let trusted: BTreeSet<String> = lr_symbol_notes(v).into_iter().map(|n| n.latex).collect();
+    let s = |e: &Value, k: &str| e[k].as_str().map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+    v["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let latex = s(e, "latex").filter(|l| !trusted.contains(l))?;
+            let meaning = s(e, "meaning_en").or_else(|| s(e, "meaning"))?;
+            let quote = e["evidence"].as_array().into_iter().flatten().find_map(|x| x["quote"].as_str()).unwrap_or("").trim().to_string();
+            Some(SymbolCandidate { latex, meaning, quote })
+        })
         .collect()
 }
 
