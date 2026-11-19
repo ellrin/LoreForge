@@ -181,7 +181,7 @@ mod tests {
         // 論文報告 must be right: Opus, then Sonnet; no class, so the shared routing can never put the
         // local model first (the two vision tasks once ran on it: no module boxes, misread equations)
         let t = TaskTable::bundled().merge(app_tasks());
-        for id in [TASK_PAPER_DECK, TASK_OUTLINE_REVIEW, crate::todeck::eqread::TASK, crate::todeck::figparts::TASK, lore_docsrc::boxer::TASK_ID] {
+        for id in [TASK_PAPER_DECK, TASK_OUTLINE_REVIEW, crate::todeck::eqread::TASK, crate::todeck::figparts::TASK, crate::todeck::extract::TASK_LOCATE, crate::todeck::extract::TASK_CHECK, lore_docsrc::boxer::TASK_ID] {
             let spec = &t.task[id];
             assert_eq!((spec.default.as_str(), spec.fallback.as_deref(), spec.class), ("claude:opus", Some("claude:sonnet"), None), "{id}");
         }

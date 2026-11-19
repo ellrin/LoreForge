@@ -23,7 +23,7 @@
 
 | 階段 | 產出 | 進度顯示 |
 |---|---|---|
-| `source` | 章節、圖、表、方程式（含 label）、參考文獻 | 圖 n/N、表 n、方程式 n |
+| `source` | 章節、圖、表、方程式（含 label）、參考文獻；L-Reader 的 PDF：模型逐頁看過並確認（見「素材」） | 圖 n/N、表 n、方程式 n |
 | `notation` | 論文的對照表條目（沿用論文／L-Reader 的 id） | 條目 n |
 | `terms` | 名詞與知識庫比對：熟／不熟 | 名詞 n → 不熟 m |
 | `profile` | 作者簡報的風格摘要；更新語氣範例檔（見下） | — |
@@ -60,6 +60,19 @@
 - 寬的圖放上面（至少佔內容寬度的八成）、文字在下；高的圖在左、文字在右。表格是原生表格、佔滿內容寬度。重點句（takeaway）：底版沒有深色帶時是一行「關鍵結果」強調字，緊接在內容下面。
 - 封面：標題、期刊行、報告者／指導教授（底版的 `subtitle`）；不放關鍵字與自己的 `Ref:`。致謝頁：只有標題，置中。Take home 的編號由程式加（模型自己寫的「1.」會去掉）。
 - 守門測試：`tests/todeck.rs` `assert_one_size_per_role`（排版用字微調後的簡報：每個標籤一個字級、內容頁標題框相同、內文起始線相同）。
+
+## 素材：模型看過、確認過（L-Reader 的 PDF）
+
+作者的規則（2026-11-19）：品質優先，不在乎 token；讓模型真的看 PDF 的頁面與截圖並確認，不用規則猜了就默默帶過。全部是 Opus → Sonnet，不走本機模型。實作：`todeck/extract.rs`（`source` 階段）。
+
+1. **找**（`sc-locate-material`，每頁一次）：把每一頁的圖給模型，回答這頁的圖與表（編號、範圍、圖說）、獨立成行的方程式（編號、範圍、LaTeX）、第一頁的作者。原本的規則式偵測（lore-docsrc）與 L-Reader 文字層的 LaTeX 只當「提案」附上，請模型對著圖核對；文字層的 LaTeX 含控制字元（例如 U+0008）就不附。
+2. **確認**（`sc-check-crop`）：每張圖／表的截圖再給模型看一次：是不是正好那一個、完整、沒有多切到別的（圖說、內文、隔壁的表）。有問題就依模型給的範圍重切再確認（最多看三次）；還是不過：照目前的範圍放，並列進 `warnings`。
+3. **表格**：格子用 PDF 自己的文字排（`lore_docsrc::pdf::table`：確認過的範圍裡的字，依行與共同的空白欄分格），數字不是模型讀的；模型看到的列數／欄數只用來核對。排不出來或對不起來：放表格的截圖，並說明。
+4. **方程式**（`sc-read-equation`）：把讀出的 LaTeX 排版成圖（KaTeX＋headless Chrome；沒有 Chrome 時模型直接讀 LaTeX，並說明），和論文的截圖一起給模型逐個符號比對；不一樣就用模型的修正再比一次。「排得出來」不算數。兩次都對不起來：放論文的截圖，並說明。
+5. 模型沒看到的東西不放（偵測多抓的、文字層的碎片），列出哪些；一頁都看不了（沒有引擎）：沿用偵測的結果，並明說「沒有經過確認」。
+6. 每個回答都存在這篇論文的快取（`cache/todeck/<sha>/verify/`，頁碼或截圖雜湊＋提示版本），停止再繼續、或同一篇再做一次都不會重問。`source` 的 `counts` 有 `calls`（這次問了幾次）與 `cached`。
+
+寫大綱時模型也看得到圖：有圖檔的圖與以截圖呈現的表（縮小後）附在大綱的請求裡，素材清單標明每個圖／表／方程式能不能用（沒有圖檔的寫明不可用）；結果頁的表是原生表格、滿版寬，`key_row`（提案方法那一列）用底版的重點列底色（沒有就粗體）；同一張圖不會放在兩頁（主架構圖的分段講解除外），多出來的拿掉並列進 `warnings`。L-Paper 的 LaTeX 論文不經過這一段（圖檔、表格、方程式直接來自原始檔）。
 
 ## 主架構圖：分段講解
 
@@ -156,7 +169,7 @@
 
   `kind` 是頁的角色：`cover background challenge overview method loss training results ablation visual opinion takeaway thanks`。`figs` 是這頁用的圖／表 id（圖與表各最多一個）；`point` 是 take-away，沒有就是第一個要點。`thumb` 是同源的圖（LaTeX 的表沒有圖）。
 
-  `suggestions`（`sc-outline-review`，class `create`，`todeck/suggest.rs`；最多 5 個，可為空；模型不能用或回答不合格式就是空的，工作不會因此失敗）：每個是對大綱列的一個修改加一行 `reason`（繁中）。`op`：`add {to, kind, title, point, fig?}`（插在 `to` 那列後面，`""` = 最前面）· `remove {id}` · `move {id, to}` · `retitle {id, title}` · `point {id, point}` · `figure {id, fig}`（`""` = 不放圖）· `merge {id, with, title?}`（`with` 併入 `id` 並刪掉）· `split {id, title, point}`（同種類的第二頁接在後面）。id 都是這個 `outline` 的列；封面與致謝不會被改。頁面在自己的列上套用，送出的仍是下面的微調內容（新頁用沒有的 id，例如 `n1`）。
+  `suggestions`（`sc-outline-review`，Opus → Sonnet，`todeck/suggest.rs`；最多 5 個，可為空；模型不能用或回答不合格式就是空的，工作不會因此失敗）：每個是對大綱列的一個修改加一行 `reason`（繁中）。`op`：`add {to, kind, title, point, fig?}`（插在 `to` 那列後面，`""` = 最前面）· `remove {id}` · `move {id, to}` · `retitle {id, title}` · `point {id, point}` · `figure {id, fig}`（`""` = 不放圖）· `merge {id, with, title?}`（`with` 併入 `id` 並刪掉）· `split {id, title, point}`（同種類的第二頁接在後面）。id 都是這個 `outline` 的列；封面與致謝不會被改。頁面在自己的列上套用，送出的仍是下面的微調內容（新頁用沒有的 id，例如 `n1`）。
 
 ### 路徑
 

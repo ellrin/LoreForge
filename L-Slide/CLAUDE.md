@@ -59,7 +59,11 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
 - 論文報告 (home tile, `web/todeck.js`; L-Paper's and L-Reader's 做成簡報 = `commons/ui/makedeck.js`, calls the same route): `crates/server/src/todeck/` (stages) + `../commons/crates/lore-jobs` (the runner, re-exported as `sc_server::jobs`; 論文報告 is a job, see docs/paper-deck.md §API)
   turns an L-Paper LaTeX folder or an L-Reader PDF (lore-docsrc, read-only) into a paper-report deck: one
   lore-llm call (`sc-paper-deck`, `crates/server/tasks.toml`; `llm.rs`; every 論文報告 task is Opus → Sonnet, no class) plans the slides in the
-  design §7.1 order by material id. Before the plan a vision call looks at the figures (`sc-figure-parts`, `todeck/figparts.rs`): which one is the
+  design §7.1 order by material id. An L-Reader PDF's material is seen and confirmed by a model in the `source` stage (`todeck/extract.rs`,
+  docs/paper-deck.md 「素材」): one look per page (`sc-locate-material`: figures, tables, display equations with LaTeX, authors; the detector and L-Reader's
+  text-layer LaTeX are proposals only), every crop shown back (`sc-check-crop`, re-cut from the model's tight box), table cells from the PDF's own words
+  (`lore_docsrc::pdf::table::grid_in`), every equation's typeset reading compared with its crop (`sc-read-equation`, `AppState::typeset` = Chrome + KaTeX or a
+  test fake); answers cached per paper (`cache/todeck/<sha>/verify/`); the planner gets the pictures too. Before the plan a vision call looks at the figures (`sc-figure-parts`, `todeck/figparts.rs`): which one is the
   method's big picture, whether to explain it in parts and where to cut (cuts snapped to blank gutters, `lore_docsrc::crop::snap_cut`; 微調's
   方法拆幾個模組 fixes the number; two failed calls = an equal split with a warning). The plan has one walk-through slide per part: the figure across
   the body (never a small copy), that part clear and the rest at the style's ghost alpha, its lines appearing one by one over the faint side

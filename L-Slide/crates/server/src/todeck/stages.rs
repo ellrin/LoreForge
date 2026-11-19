@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 
 use super::build::{BuildInput, ModuleBox, build, expand_reveals};
 use super::figparts::{self, FigureParts};
-use super::plan::{Plan, PlanSlide, ROLES, check_plan, clean_plan, drop_unusable, enforce_limits, prompt, schema, target_slides};
+use super::plan::{Plan, PlanSlide, ROLES, check_plan, clean_plan, drop_unusable, enforce_limits, fit_under_tables, prompt, schema, target_slides};
 use super::profile::{ProfileInput, StyleProfile};
 use super::source::{Material, from_latex, from_lorereader, is_paper};
 use super::suggest::point_of;
@@ -179,21 +179,57 @@ async fn source(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     let src = p.source.clone();
     let (h2, c2) = (home.clone(), cache.clone());
     let mut m = tokio::task::spawn_blocking(move || read_source(&src, &h2, &c2).map_err(|e| StageError::new(422, e))).await.map_err(join_err)??;
-    // equations whose text LaTeX would not typeset: read from the page crop, else the crop
-    if p.source.kind == "lr" && m.equations.iter().any(super::eqread::unreliable) {
+    // an L-Reader PDF: a model looks at every page, confirms every crop and compares every
+    // equation's reading with its crop (`extract.rs`); the detector's result is only its proposal
+    let mut calls = (0u32, 0u32);
+    if p.source.kind == "lr" {
         let sha = p.source.sha.clone().unwrap_or_default();
-        let crops: Vec<(String, Option<super::source::Img>)> = {
-            let (eqs, home, cache, sha) = (m.equations.clone(), home.clone(), cache.clone(), sha.clone());
+        let pages = m.pages;
+        type Prep = (HashMap<(u32, u32), Vec<u8>>, Vec<lore_docsrc::pdf::layout::TextPage>, Option<String>);
+        let (renders, text, why): Prep = {
+            let (home, cache, sha) = (home.clone(), cache.clone(), sha.clone());
             tokio::task::spawn_blocking(move || {
-                let r = Reader::discover(&home);
-                eqs.iter().filter(|e| super::eqread::unreliable(e)).map(|e| (e.id.clone(), r.as_ref().and_then(|r| equation_crop(r, &sha, e, &cache)))).collect()
+                let mut out = HashMap::new();
+                let Some(pdf) = Reader::discover(&home).and_then(|r| r.pdf(&sha)) else { return (out, vec![], Some("找不到 PDF".to_string())) };
+                let Some(tool) = crate::reader::pdftoppm() else { return (out, vec![], Some("需要 poppler 的 pdftoppm（brew install poppler）".to_string())) };
+                let mut why = None;
+                for n in 1..=pages {
+                    for dpi in [150, 200] {
+                        match crate::reader::render_page(&tool, &pdf, &sha, n, dpi, &cache) {
+                            Ok(b) => {
+                                out.insert((n, dpi), b);
+                            }
+                            Err(e) => why = Some(e),
+                        }
+                    }
+                }
+                (out, lore_docsrc::pdf::table::text_pages(&pdf).unwrap_or_default(), why)
             })
             .await
             .map_err(join_err)?
         };
-        let notes = super::eqread::read_equations(super::llm(s), &mut m, &|e| crops.iter().find(|(id, _)| *id == e.id).and_then(|(_, c)| c.clone())).await;
-        cx.counts(json!({ "eqNotes": notes }));
-        m.warnings.extend(notes);
+        if let Some(w) = why.filter(|_| renders.is_empty()) {
+            m.warnings.push(format!("論文的頁面無法轉成圖片（{w}）：圖、表、方程式沒有經過模型確認"));
+        }
+        let mut hints: Vec<super::extract::Hint> = vec![];
+        for (kind, list) in [("figure", &m.figures), ("table", &m.tables)] {
+            hints.extend(list.iter().filter_map(|f| Some(super::extract::Hint { page: f.page?, kind, number: f.number.clone(), bbox: f.bbox, latex: String::new() })));
+        }
+        hints.extend(m.equations.iter().filter_map(|e| {
+            Some(super::extract::Hint { page: e.page?, kind: "equation", number: e.label.clone().unwrap_or_default(), bbox: e.bbox, latex: if super::extract::has_control(&e.latex) { String::new() } else { e.latex.clone() } })
+        }));
+        let real = s.real_kb.load(std::sync::atomic::Ordering::Relaxed);
+        let typeset: Option<Arc<dyn super::extract::Typeset>> = s.typeset.get().cloned().or_else(|| (real && sc_core::find_chrome().is_some()).then(|| Arc::new(super::extract::ChromeTypeset { web: s.web.clone() }) as Arc<dyn super::extract::Typeset>));
+        if typeset.is_none() {
+            m.warnings.push("沒有 Chrome，方程式的比對沒有排版後的圖可以對照（模型直接讀 LaTeX 比對）".to_string());
+        }
+        let page_png = |n: u32, dpi: u32| renders.get(&(n, dpi)).cloned();
+        let table_grid = |n: u32, b: [f64; 4]| text.iter().find(|t| t.number == n).and_then(|t| lore_docsrc::pdf::table::grid_in(t, b));
+        let inp = super::extract::Input { pages, page_png: &page_png, table_grid: &table_grid, typeset: typeset.as_deref(), cache: cache.join(&sha).join("verify"), hints };
+        cx.counts(json!({ "pages": pages, "looking": true }));
+        let rep = super::extract::verify(super::llm(s), &mut m, &inp).await;
+        calls = (rep.calls, rep.cached);
+        m.warnings.extend(rep.notes);
     }
     for f in m.figures.iter().filter(|f| f.image.is_none()) {
         m.warnings.push(format!("{}：論文裡找不到這張圖的範圍，沒有圖檔", f.id));
@@ -215,18 +251,10 @@ async fn source(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
         "sections": m.sections.len(),
         "refs": m.refs.len(),
         "warnings": m.warnings.len(),
+        "calls": calls.0,
+        "cached": calls.1,
     }));
     to_value(&m)
-}
-
-/// The crop of an L-Reader equation (its page at 200 dpi, the box with a margin).
-fn equation_crop(r: &Reader, sha: &str, e: &super::source::Eq, cache: &Path) -> Option<super::source::Img> {
-    let (page, b) = (e.page?, e.bbox?);
-    let tool = crate::reader::pdftoppm()?;
-    let pdf = r.pdf(sha)?;
-    let png = crate::reader::render_page(&tool, &pdf, sha, page, 200, cache).ok()?;
-    let crop = lore_docsrc::crop::crop_png_fraction(&png, b, 14).ok()?;
-    super::source::img_from(crop, "png")
 }
 
 /// `notation.json` of the job: the entries the deck registers (the paper's ids kept) and the
@@ -328,7 +356,35 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     if !examples.is_empty() {
         system += &format!("\n\n{examples}");
     }
-    let req = LlmRequest::prompt(system.clone(), user.clone()).json(schema()).max_tokens(12000);
+    // the planner looks at the paper's pictures (downscaled), when its engine can see
+    let sees = llm.route(TASK_PAPER_DECK, p.engine.as_deref()).await.map(|r| r.provider.capabilities().vision).unwrap_or(false);
+    let shown: Vec<(String, lore_llm::Image)> = if sees {
+        super::plan::pictures(&m)
+            .into_iter()
+            .filter_map(|(id, kind, im)| {
+                let (bytes, media) = if im.ext == "png" { (lore_docsrc::crop::fit_png(&im.bytes, 1100).ok()?, "image/png") } else { (im.bytes.clone(), "image/jpeg") };
+                Some((format!("{kind} {id}"), lore_llm::Image::from_bytes(media, &bytes)))
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+    let (system, user) = if shown.is_empty() {
+        if !super::plan::pictures(&m).is_empty() {
+            warnings.push("寫大綱的模型不能看圖：大綱只依圖說決定每張圖放哪裡".to_string());
+        }
+        (system, user)
+    } else {
+        let list: Vec<String> = shown.iter().enumerate().map(|(i, (what, _))| format!("- image {}: {what}", i + 1)).collect();
+        (system + super::plan::PICTURES_RULE, format!("{user}\n\n## The attached images, in order\n{}", list.join("\n")))
+    };
+    let with_pictures = |mut r: LlmRequest| {
+        for (_, im) in &shown {
+            r = r.image(im.clone());
+        }
+        r
+    };
+    let req = with_pictures(LlmRequest::prompt(system.clone(), user.clone()).json(schema()).max_tokens(12000));
     cx.chars(0);
     calls += 1;
     let (v, engine) = outline::ask_json(llm, TASK_PAPER_DECK, req, p.engine.as_deref(), &|n| cx.chars(n)).await?;
@@ -348,7 +404,7 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
             problems.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n")
         );
         calls += 1;
-        let req = LlmRequest::prompt(system, again).json(schema()).max_tokens(12000);
+        let req = with_pictures(LlmRequest::prompt(system, again).json(schema()).max_tokens(12000));
         match outline::ask_json(llm, TASK_PAPER_DECK, req, p.engine.as_deref(), &|n| cx.chars(before + n)).await {
             Ok((v, _)) => match serde_json::from_value::<Plan>(v).map(|x| clean_plan(x, &m)) {
                 Ok(fixed) if fixed.slides.len() >= 3 && check_plan(&fixed, &p.length).len() < problems.len() => plan = fixed,
@@ -402,7 +458,17 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
         Some(p) if fits(&p) => Some(p),
         _ => {
             let file = cx.dir().join(format!("figparts-{}-{}.json", super::source::safe_name(&main), modules.unwrap_or(0)));
+            // the method slides that explain the figure: the ones that show it; when none does
+            // (the outline showed the figure whole), every method slide without equations
+            if !plan.slides.iter().any(|s| s.role == "method" && s.figure == main) {
+                for sl in plan.slides.iter_mut().filter(|s| s.role == "method" && s.equations.is_empty() && s.figure.is_empty()) {
+                    sl.figure = main.clone();
+                }
+            }
             let listed: Vec<(String, String)> = plan.slides.iter().filter(|s| s.role == "method" && s.figure == main).map(|s| (s.title.clone(), s.bullets.join(" "))).collect();
+            if listed.is_empty() && modules.is_some() {
+                warnings.push("大綱沒有可以分段講解架構圖的方法頁：「方法拆幾個模組」沒有作用".to_string());
+            }
             let saved: Option<FigureParts> = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok());
             let p = match saved.filter(|p: &FigureParts| p.slides.len() == listed.len() || listed.is_empty()) {
                 Some(p) => Some(p),
@@ -419,16 +485,29 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
             // the method slides go to the parts the model put them on
             if let Some(p) = p.as_ref().filter(|p| p.walk()) {
                 let mut k = 0;
+                let mut used = BTreeSet::new();
                 for sl in plan.slides.iter_mut().filter(|s| s.role == "method" && s.figure == main) {
                     sl.module = p.slides.get(k).map_or(sl.module.clamp(1, p.parts.len() as u32), |i| *i as u32 + 1);
+                    used.insert(sl.module as usize);
                     k += 1;
                 }
+                for (i, part) in p.parts.iter().enumerate().filter(|(i, _)| k > 0 && !used.contains(&(i + 1))) {
+                    warnings.push(format!("架構圖的第 {} 段（{}）沒有對應的方法頁，沒有講解頁", i + 1, part.label));
+                }
+            } else if modules.is_some() && p.is_some() {
+                warnings.push("模型看圖後認為這張圖不適合分段：「方法拆幾個模組」沒有作用".to_string());
             }
             p
         }
     };
     warnings.extend(enforce_limits(&mut plan));
     warnings.extend(drop_unusable(&mut plan, &m));
+    warnings.extend(fit_under_tables(&mut plan, &m));
+    let (lo, hi) = target_slides(&p.length);
+    if plan.slides.len() < lo || plan.slides.len() > hi {
+        warnings.retain(|w| !w.starts_with("大綱有 "));
+        warnings.push(format!("大綱有 {} 頁，不在所選長度的 {lo}–{hi} 頁內", plan.slides.len()));
+    }
     let total = plan.slides.len();
     cx.counts(json!({ "slide": 0, "slides": total }));
     // 會動的方程式: the main loss as a GIF (微調 → 不要 turns it off); best-effort

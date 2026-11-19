@@ -81,6 +81,9 @@ pub struct AppState {
     pub llm: std::sync::OnceLock<llm::Llm>,
     /// Draws the 論文報告's equation GIF (default: headless Chrome); tests set a fake.
     pub liveeq: std::sync::OnceLock<Arc<dyn todeck::liveeq::Render>>,
+    /// Typesets an equation's LaTeX for the comparison with its crop (default: headless
+    /// Chrome, never in an isolated server); tests set a fake.
+    pub typeset: std::sync::OnceLock<Arc<dyn todeck::extract::Typeset>>,
 }
 
 /// A native file dialog request from the page (`/api/shell/dialog`).
@@ -443,6 +446,7 @@ pub fn state_at(ws: Workspace, web: PathBuf, home: lore_home::Home) -> Shared {
         fallback_cache: Mutex::new(HashMap::new()),
         llm: std::sync::OnceLock::new(),
         liveeq: std::sync::OnceLock::new(),
+        typeset: std::sync::OnceLock::new(),
     })
 }
 

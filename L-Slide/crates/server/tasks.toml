@@ -14,8 +14,8 @@ fallback = "claude:sonnet"
 offline = true
 max_tokens = 12000
 
-# An equation L-Reader could not read from the PDF's text: a vision engine reads its crop
-# (todeck/eqread.rs); a reading that does not typeset is shown as the crop instead.
+# A display equation's LaTeX compared with its crop (and its typeset rendering) symbol by
+# symbol, corrected when it differs (todeck/extract.rs); no agreement = the crop is shown.
 [task.sc-read-equation]
 label = "從截圖讀出方程式"
 needs = { vision = true, json = true }
@@ -42,3 +42,21 @@ needs = { vision = true, json = true }
 default = "claude:opus"
 fallback = "claude:sonnet"
 max_tokens = 1500
+
+# An L-Reader PDF, page by page: the model looks at each page and lists its figures and
+# tables (boxes, captions), display equations (boxes, LaTeX) and, on the first page, the
+# authors (todeck/extract.rs). The rule-based detector's boxes are only proposals.
+[task.sc-locate-material]
+label = "看論文頁面找圖表與方程式"
+needs = { vision = true, json = true }
+default = "claude:opus"
+fallback = "claude:sonnet"
+max_tokens = 6000
+
+# Each figure / table crop shown back: exactly that item, whole, nothing else?
+[task.sc-check-crop]
+label = "確認截圖的範圍"
+needs = { vision = true, json = true }
+default = "claude:opus"
+fallback = "claude:sonnet"
+max_tokens = 800

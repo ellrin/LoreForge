@@ -18,6 +18,7 @@ lore-shell.workspace = true
 lore-plot.workspace = true
 lore-flow.workspace = true
 async-trait = "0.1"
+futures-util = "0.3"
 lore-engines.workspace = true
 lore-llm.workspace = true
 lore-docsrc.workspace = true

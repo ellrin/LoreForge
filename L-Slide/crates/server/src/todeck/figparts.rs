@@ -289,7 +289,7 @@ mod tests {
     }
 
     fn material() -> Material {
-        Material { figures: vec![Fig { id: "fig1".into(), caption: "Overview of the pipeline.".into(), image: Some(three_blocks()), grid: None }, Fig { id: "fig2".into(), caption: "No picture.".into(), image: None, grid: None }], ..Default::default() }
+        Material { figures: vec![Fig { id: "fig1".into(), caption: "Overview of the pipeline.".into(), image: Some(three_blocks()), ..Default::default() }, Fig { id: "fig2".into(), caption: "No picture.".into(), ..Default::default() }], ..Default::default() }
     }
 
     fn llm(replies: Vec<Value>) -> (tempfile::TempDir, Llm, Arc<MockProvider>) {

@@ -137,8 +137,13 @@ pub struct Fig {
     pub id: String,
     pub caption: String,
     pub image: Option<Img>,
-    /// Table cells (LaTeX tables).
+    /// Table cells (LaTeX tables; a PDF's table from its own text, `extract.rs`).
     pub grid: Option<Vec<Vec<String>>>,
+    /// Where it is in the PDF: page (1-based) and `[x0, y0, x1, y1]` page fractions.
+    pub page: Option<u32>,
+    pub bbox: Option<[f64; 4]>,
+    /// The printed number (`1`, `II`).
+    pub number: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -221,6 +226,8 @@ pub struct Material {
     pub lr_symbols: Option<Value>,
     /// Symbols of the paper's registry, for the notes under an equation.
     pub symbols: Vec<SymbolNote>,
+    /// Pages of the PDF (L-Reader papers).
+    pub pages: u32,
     /// Name for the deck folder.
     pub slug: String,
     /// What could not be read from the paper as it is (a figure without a picture, an
@@ -336,7 +343,7 @@ pub fn from_latex(dir: &Path, cache: &Path) -> Result<Material, String> {
         match a.kind {
             AssetKind::Figure => {
                 let image = a.files.iter().find_map(|f| figure_file(&dir.join(f), cache));
-                m.figures.push(Fig { id: a.id.clone(), caption: a.caption.clone().unwrap_or_default(), image, grid: None });
+                m.figures.push(Fig { id: a.id.clone(), caption: a.caption.clone().unwrap_or_default(), image, ..Default::default() });
             }
             // 待補 cells (`\pendingcell{P1}{…}`) stay marks: `[pending]`, never a number
             AssetKind::Table => m.tables.push(Fig {
@@ -344,6 +351,7 @@ pub fn from_latex(dir: &Path, cache: &Path) -> Result<Material, String> {
                 caption: a.caption.clone().unwrap_or_default(),
                 image: None,
                 grid: a.grid.clone().filter(|g| !g.is_empty()).map(|g| g.into_iter().map(|r| r.into_iter().map(|c| lore_notation::pending::to_plain(&c)).collect()).collect()),
+                ..Default::default()
             }),
             AssetKind::Equation => {
                 if let Some(t) = a.text.as_deref().filter(|t| !t.trim().is_empty()) {
@@ -407,10 +415,18 @@ pub fn from_lorereader(r: &Reader, sha: &str, cache: &Path) -> Result<Material, 
         ..Default::default()
     };
     let crop = |a: &lore_docsrc::Asset| a.crop.as_ref().and_then(|c| std::fs::read(out.join(c)).ok()).and_then(|b| img_from(b, "png"));
+    // where the detector saw it (a proposal for the model that looks at the pages, `extract.rs`)
+    let place = |a: &lore_docsrc::Asset| {
+        let pg = cat.pages.iter().find(|p| Some(p.number) == a.page)?;
+        let b = a.bbox.as_ref()?;
+        (pg.width > 0.0 && pg.height > 0.0).then(|| [b.x0 / pg.width, b.y0 / pg.height, b.x1 / pg.width, b.y1 / pg.height])
+    };
+    m.pages = cat.pages.len() as u32;
     for a in &cat.assets {
+        let fig = || Fig { id: a.id.clone(), caption: a.caption.clone().unwrap_or_default(), image: crop(a), grid: None, page: a.page, bbox: place(a), number: a.number.clone().unwrap_or_default() };
         match a.kind {
-            AssetKind::Figure => m.figures.push(Fig { id: a.id.clone(), caption: a.caption.clone().unwrap_or_default(), image: crop(a), grid: None }),
-            AssetKind::Table => m.tables.push(Fig { id: a.id.clone(), caption: a.caption.clone().unwrap_or_default(), image: crop(a), grid: None }),
+            AssetKind::Figure => m.figures.push(fig()),
+            AssetKind::Table => m.tables.push(fig()),
             _ => {}
         }
     }

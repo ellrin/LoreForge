@@ -7,9 +7,9 @@
 //!   figure files, table grids, equations with labels, bibliography) and the paper's own
 //!   `notation.json`; L-Reader → `pdf::extract` on the library PDF (crops cached in this
 //!   workspace's `cache/todeck/<sha>/`) and L-Reader's `symbols.json`. The pictures are kept
-//!   in the job folder (`img/`). An equation whose text LaTeX would not typeset
-//!   (`lore_math::check::check_reading`) is read from its page crop by a vision engine
-//!   (`sc-read-equation`, `eqread.rs`), else shown as that crop.
+//!   in the job folder (`img/`). For an L-Reader PDF a model then looks at every page and
+//!   confirms every crop, table and equation reading (`extract.rs`); the detector's result
+//!   is only its proposal, and nothing degraded is dropped silently.
 //! - `notation`: the entries the deck registers (the paper's ids) and the registry macros.
 //! - `terms` / `profile` / `polish`: other owners' functions (`terms.rs`, `profile.rs`,
 //!   `polish.rs`; signatures documented there).
@@ -45,6 +45,7 @@ use crate::{AppState, R, Shared, bad};
 
 pub mod build;
 pub mod eqread;
+pub mod extract;
 pub mod figparts;
 pub mod liveeq;
 pub mod outline;

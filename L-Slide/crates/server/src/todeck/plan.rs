@@ -24,6 +24,8 @@ pub struct PlanSlide {
     pub steps: Vec<String>,
     pub module: u32,
     pub kv: Vec<Vec<String>>,
+    /// The table row to emphasise: the text of its first cell (the proposed method's row).
+    pub key_row: String,
     pub cites: Vec<String>,
     pub notes: String,
 }
@@ -62,6 +64,9 @@ pub mod limit {
     pub const STEP: usize = 60;
     pub const KV: usize = 8;
     pub const TAKE_HOME: usize = 5;
+    /// Display equations on one slide, and the bullets beside them.
+    pub const EQUATIONS: usize = 2;
+    pub const BULLETS_EQ: usize = 3;
     /// A walk-through slide of the main figure: its lines appear one by one over the faint side.
     pub const WALK_LINES: usize = 4;
     pub const WALK_LINE: usize = 60;
@@ -101,6 +106,9 @@ pub fn check_plan(p: &Plan, length: &str) -> Vec<String> {
         if s.bullets.len() > nb {
             out.push(format!("{at}: {} bullets, at most {nb}{}; cut or move some to another slide.", s.bullets.len(), if is_walk(s) { " on a walk-through slide" } else if visual { " next to a figure or table" } else { "" }));
         }
+        if s.equations.len() > limit::EQUATIONS || (!s.equations.is_empty() && s.bullets.len() > limit::BULLETS_EQ) {
+            out.push(format!("{at}: {} equations with {} bullets; at most {} equations and {} bullets on one slide — make a second slide.", s.equations.len(), s.bullets.len(), limit::EQUATIONS, limit::BULLETS_EQ));
+        }
         if is_walk(s) && !s.equations.is_empty() {
             out.push(format!("{at}: a walk-through slide carries no equations; move them to a method slide with module 0 or to the loss slide."));
         }
@@ -129,7 +137,7 @@ pub fn enforce_limits(p: &mut Plan) -> Vec<String> {
     let mut out: Vec<PlanSlide> = vec![];
     for s in std::mem::take(&mut p.slides) {
         let visual = !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty();
-        let nb = if s.role == "takeaway" { limit::TAKE_HOME } else if is_walk(&s) { limit::WALK_LINES } else if visual { limit::BULLETS_VISUAL } else { limit::BULLETS };
+        let nb = if s.role == "takeaway" { limit::TAKE_HOME } else if is_walk(&s) { limit::WALK_LINES } else if visual || !s.equations.is_empty() { limit::BULLETS_VISUAL.min(limit::BULLETS_EQ) } else { limit::BULLETS };
         let nc = if s.role == "takeaway" { limit::BULLET } else if is_walk(&s) { limit::WALK_LINE } else if visual { limit::BULLET_VISUAL } else { limit::BULLET };
         let long = s.bullets.iter().filter(|b| chars(b) > nc).count();
         if long > 0 {
@@ -138,14 +146,17 @@ pub fn enforce_limits(p: &mut Plan) -> Vec<String> {
         if chars(&s.title) > limit::TITLE && s.role != "cover" {
             notes.push(format!("標題「{}」超過 {} 字，可能換行", clip(&s.title, 30), limit::TITLE));
         }
-        if s.bullets.len() > nb && !matches!(s.role.as_str(), "cover" | "thanks") {
+        let many_eq = s.equations.len() > limit::EQUATIONS;
+        if (s.bullets.len() > nb || many_eq) && !matches!(s.role.as_str(), "cover" | "thanks") {
             let mut first = s.clone();
-            let rest: Vec<String> = first.bullets.split_off(nb);
-            notes.push(format!("「{}」有 {} 行，一頁放不下：拆成兩頁", clip(&s.title, 30), s.bullets.len()));
+            let rest: Vec<String> = first.bullets.split_off(nb.min(first.bullets.len()));
+            let rest_eq: Vec<String> = first.equations.split_off(limit::EQUATIONS.min(first.equations.len()));
+            notes.push(format!("「{}」有 {} 行{}，一頁放不下：拆成兩頁", clip(&s.title, 30), s.bullets.len(), if s.equations.is_empty() { String::new() } else { format!("與 {} 條方程式", s.equations.len()) }));
             // a walk-through slide's second half stays on the same part of the figure
             let more = PlanSlide { role: s.role.clone(), title: s.title.clone(), bullets: rest, cites: vec![], notes: String::new(), figure: if is_walk(&s) { s.figure.clone() } else { String::new() }, module: if is_walk(&s) { s.module } else { 0 }, ..Default::default() };
             first.takeaway = String::new();
             let mut more = more;
+            more.equations = rest_eq;
             more.takeaway = s.takeaway.clone();
             out.push(first);
             out.push(more);
@@ -173,7 +184,7 @@ pub fn schema() -> Value {
                     "role": { "type": "string", "enum": ROLES },
                     "title": s, "bullets": list, "figure": s, "table": s, "equations": list,
                     "takeaway": s, "steps": list, "module": { "type": "integer" },
-                    "kv": { "type": "array", "items": list }, "cites": list, "notes": s
+                    "kv": { "type": "array", "items": list }, "key_row": s, "cites": list, "notes": s
                 }
             } }
         }
@@ -182,6 +193,18 @@ pub fn schema() -> Value {
 
 pub(crate) fn clip(s: &str, n: usize) -> String {
     if s.chars().count() <= n { s.to_string() } else { s.chars().take(n).collect::<String>() + "…" }
+}
+
+/// What the planner is told when the paper's pictures go along with the request.
+pub const PICTURES_RULE: &str = "\n- The paper's figures (and the tables that are shown as pictures) are attached as images, in the order of the list at the end: \
+look at each one before you decide where it goes, and put an analysis or descriptor figure on the slide that talks about what it shows.";
+
+/// The pictures the planner looks at: every figure with a picture and every table that is
+/// shown as a picture, as (id, kind, picture), at most 10.
+pub fn pictures(m: &Material) -> Vec<(&str, &'static str, &super::source::Img)> {
+    let figs = m.figures.iter().filter_map(|f| Some((f.id.as_str(), "figure", f.image.as_ref()?)));
+    let tabs = m.tables.iter().filter(|t| t.grid.as_ref().is_none_or(|g| g.is_empty())).filter_map(|t| Some((t.id.as_str(), "table", t.image.as_ref()?)));
+    figs.chain(tabs).take(10).collect()
 }
 
 pub fn prompt(m: &Material, length: &str, lang: &str, parts: Option<&super::figparts::FigureParts>) -> (String, String) {
@@ -222,7 +245,7 @@ Reply with one JSON object {{venue, keywords, slides}}. Between {lo} and {hi} sl
 {method}\
 - loss: the training objective; equations = the loss equation ids.\n\
 - training: training details; kv = [[key, value], …] rows (data, model, optimiser, learning rate, epochs, batch size, hardware…), only values the paper states.\n\
-- results: table = the main results table id (or figure); takeaway = one sentence reading the result.\n\
+- results: table = the main results table id (or figure); key_row = the first-column text of the row to emphasise (the proposed method), exactly as in the table; takeaway = one sentence reading the result.\n\
 - ablation: table or figure id; takeaway = one sentence.\n\
 - visual: qualitative figure id; bullets about what it shows, including failure cases if any.\n\
 - opinion: title \"Some opinions\"; the presenter's critical view (strengths, limits, questions).\n\
@@ -231,7 +254,7 @@ Reply with one JSON object {{venue, keywords, slides}}. Between {lo} and {hi} sl
 Rules:\n\
 - Titles are short noun phrases (\"Results of ablation study\", \"Sampling method: …\"), at most {lt} characters; no agenda slide.\n\
 - Every slide uses the same text size and nothing is shrunk to fit, so the limits are hard: at most {lb} bullets of at most {lbc} characters each; \
-on a slide with a figure, a table or kv rows at most {lv} bullets of at most {lvc} characters; a takeaway of at most {ltk} characters. \
+on a slide with a figure, a table or kv rows at most {lv} bullets of at most {lvc} characters; on a slide with equations at most 2 equations and 3 bullets; a takeaway of at most {ltk} characters. \
 When a point needs more room, cut words or make a second slide — never go over.\n\
 - Bullets: short, spoken, start with a verb. Inline math between $ signs as LaTeX. Never start a bullet with a number, a dash or a bullet sign: the program numbers and marks them.\n\
 - Never write figure, table or equation numbers (no \"Fig. 3\", \"Table 2\", \"Eq. (1)\"): the slide shows the item itself.\n\
@@ -362,6 +385,28 @@ pub fn drop_unusable(p: &mut Plan, m: &Material) -> Vec<String> {
     notes
 }
 
+/// A native table takes its rows' height: under a tall one only so many lines fit at the
+/// body size. The lines over that go to the slide's speaker notes (said so) — nothing is
+/// shrunk and nothing overprints the takeaway. Rows are counted at about 5 % of the slide
+/// height each, a line of text at about 6 %, the body area at about 68 %.
+pub fn fit_under_tables(p: &mut Plan, m: &Material) -> Vec<String> {
+    let mut notes = vec![];
+    for s in &mut p.slides {
+        let rows = if !s.kv.is_empty() { s.kv.len() } else { m.tables.iter().find(|t| t.id == s.table).and_then(|t| t.grid.as_ref()).map_or(0, Vec::len) };
+        if rows == 0 || s.bullets.is_empty() {
+            continue;
+        }
+        let take = if s.takeaway.trim().is_empty() { 0.0 } else { 11.0 };
+        let room = ((68.0 - 5.2 * rows as f64 - take - 3.0) / 6.0).floor().max(0.0) as usize;
+        if s.bullets.len() > room {
+            let moved = s.bullets.split_off(room);
+            notes.push(format!("「{}」的表格有 {rows} 列，下面只放得下 {room} 行：其餘 {} 行移到講者備註", clip(&s.title, 30), moved.len()));
+            s.notes = [s.notes.trim().to_string(), moved.join(" ")].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" ");
+        }
+    }
+    notes
+}
+
 /// A line without the list mark a model wrote in front of it (`1.`, `2)`, `(3)`, `•`, `-`):
 /// the builder numbers and marks the lines itself. A number that belongs to the sentence
 /// ("3 rules give a state", "2.5 mm", "10-fold") stays.
@@ -454,6 +499,16 @@ mod limit_tests {
         assert_eq!((p.slides[1].title.as_str(), p.slides[2].title.as_str(), p.slides[2].role.as_str()), ("background slide", "background slide", "background"));
         assert_eq!(notes.len(), 2, "the split and the long line are reported: {notes:?}");
         assert!(check_plan(&Plan { slides: (0..12).map(|_| ps("background", 3)).collect(), ..Default::default() }, "standard").is_empty());
+        // equations: two a slide with three bullets; the rest goes to a second slide
+        let mut q = Plan { slides: vec![PlanSlide { role: "method".into(), title: "Details".into(), bullets: (0..5).map(|i| format!("Line {i}")).collect(), equations: vec!["eq1".into(), "eq2".into(), "eq3".into()], ..Default::default() }], ..Default::default() };
+        assert!(check_plan(&q, "short").iter().any(|x| x.contains("3 equations")));
+        enforce_limits(&mut q);
+        assert_eq!(q.slides.iter().map(|s| (s.bullets.len(), s.equations.len())).collect::<Vec<_>>(), [(3, 2), (2, 1)]);
+        // a tall table leaves room for fewer lines: the others go to the notes, said so
+        let m = Material { tables: vec![crate::todeck::source::Fig { id: "tab1".into(), grid: Some(vec![vec!["a".to_string(), "b".into()]; 8]), ..Default::default() }], ..Default::default() };
+        let mut r = Plan { slides: vec![PlanSlide { role: "results".into(), title: "Results".into(), table: "tab1".into(), bullets: vec!["One".into(), "Two".into(), "Three".into()], takeaway: "Ours wins".into(), notes: "Say this.".into(), ..Default::default() }], ..Default::default() };
+        let notes = fit_under_tables(&mut r, &m);
+        assert_eq!((r.slides[0].bullets.len(), r.slides[0].notes.as_str(), notes.len()), (2, "Say this. Three", 1));
     }
 
     #[test]

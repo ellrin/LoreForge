@@ -729,7 +729,8 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                 // registry, as notes under them (§7.1: 符號說明)
                 let note_tag = cx.tag(&["caption", "body"]);
                 let em = cx.st.pack.emphasis.contains_key("note").then_some("note");
-                for line in symbol_notes(&m.symbols, &used_keys, inp.lang) {
+                // (the first three: the slide is not a glossary)
+                for line in symbol_notes(&m.symbols, &used_keys, inp.lang).into_iter().take(3) {
                     let runs = cx.rich(&line, &note_tag, em);
                     let mut p = cx.para(runs, &note_tag);
                     p.align = "ctr".into();
@@ -744,9 +745,10 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                 let mut text_f = Frame::new(c.x, c.y, c.w, (bottom - c.y).max(h / 10));
                 let mut low = c.y; // the lowest edge of what was placed
                 if let Some(grid) = &table_grid {
-                    let o = table_obj(&mut cx, &Frame::new(c.x, c.y, c.w, bottom - c.y), grid, kv.is_some());
-                    y = o.frame.y + o.frame.h + gap;
-                    low = o.frame.y + o.frame.h;
+                    let o = table_obj(&mut cx, &Frame::new(c.x, c.y, c.w, bottom - c.y), grid, kv.is_some(), Some(ps.key_row.trim()).filter(|k| !k.is_empty() && kv.is_none()));
+                    // (rows draw a little taller than their text: borders)
+                    low = o.frame.y + o.frame.h + h / 80;
+                    y = low + gap;
                     if low > bottom {
                         cx.warnings.push(format!("{warn_at}：表格有 {} 列，超出版面，請刪列或拆頁", grid.len()));
                     }
@@ -994,7 +996,7 @@ fn takeaway_obj(cx: &Ctx, f: &Frame, tb: TextBody, band: bool) -> Object {
 /// A native table (無樣式、表格格線) across the body width: first row bold as header;
 /// key-value tables have no header and stay narrow. Columns share the width by how much
 /// text they hold; every table uses the `table` tag's one size.
-fn table_obj(cx: &mut Ctx, f: &Frame, grid: &[Vec<String>], kv: bool) -> Object {
+fn table_obj(cx: &mut Ctx, f: &Frame, grid: &[Vec<String>], kv: bool, key: Option<&str>) -> Object {
     let t = cx.tag(&["table", "body"]);
     let size = cx.look(&t, None).size;
     let ncol = grid.iter().map(Vec::len).max().unwrap_or(1).max(1);
@@ -1017,12 +1019,20 @@ fn table_obj(cx: &mut Ctx, f: &Frame, grid: &[Vec<String>], kv: bool) -> Object 
         }
         v
     };
+    // the key row (the proposed method): the style's own key-row tint when it has one, else bold
+    let norm = |t: &str| t.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+    let key_ri = key.map(norm).filter(|k| !k.is_empty()).and_then(|k| {
+        let firsts: Vec<String> = grid.iter().map(|r| norm(&cell_text(r, 0))).collect();
+        firsts.iter().position(|c| *c == k).or_else(|| firsts.iter().rposition(|c| c.contains(&k) || (!c.is_empty() && k.contains(c.as_str())))).filter(|i| *i > 0)
+    });
+    let key_fill = cx.st.pack.palette.tints.iter().find(|(_, t)| t.meaning.to_lowercase().contains("table row")).map(|(_, t)| t.hex.to_uppercase());
     let mut rows: Vec<Row> = vec![];
     for (ri, r) in grid.iter().enumerate() {
         let mut cells = vec![];
+        let is_key = key_ri == Some(ri);
         for ci in 0..ncol {
             let text = cell_text(r, ci);
-            let head = (!kv && ri == 0) || (kv && ci == 0);
+            let head = (!kv && ri == 0) || (kv && ci == 0) || (is_key && key_fill.is_none());
             let em = head.then_some("strong").filter(|e| cx.st.pack.emphasis.contains_key(*e));
             // `$…$` in a cell is native math, like in the bullets
             let mut runs = cx.rich(&text, &t, em);
@@ -1034,7 +1044,7 @@ fn table_obj(cx: &mut Ctx, f: &Frame, grid: &[Vec<String>], kv: bool) -> Object 
             }
             let mut tb = body(vec![cx.para(runs, &t)], "ctr");
             tb.insets = [91_440, 45_720, 91_440, 45_720];
-            cells.push(Cell { text: tb, span: 1, rspan: 1, hmerge: false, vmerge: false, fill: None, borders: [None, None, None, None], src: None });
+            cells.push(Cell { text: tb, span: 1, rspan: 1, hmerge: false, vmerge: false, fill: key_fill.clone().filter(|_| is_key), borders: [None, None, None, None], src: None });
         }
         rows.push(Row { h: rh, cells, src: None });
     }

@@ -210,7 +210,7 @@ fn plan(lang_text: &str) -> Value {
             { "role": "method", "title": "Decoder.", "bullets": ["Grades the image", "Outputs four grades"], "figure": "fig1", "module": 3 },
             { "role": "loss", "title": "Reconstruction loss", "bullets": ["Penalises the distance (Eq. (1))"], "equations": ["eq1", "eq99"] },
             { "role": "training", "title": "Training details", "bullets": [], "kv": [["Epochs", "30"], ["Optimiser", "AdamW"], ["Learning rate", "$10^{-4}$"]] },
-            { "role": "results", "title": "Main results", "bullets": [], "table": "tab1", "takeaway": "Ours wins on both metrics, see Table 1" },
+            { "role": "results", "title": "Main results", "bullets": [], "table": "tab1", "key_row": "ours", "takeaway": "Ours wins on both metrics, see Table 1" },
             { "role": "opinion", "title": "Some opinions", "bullets": ["Test on real data"] },
             { "role": "takeaway", "title": "Take home messages", "bullets": ["1. Two stages help", "2) Fusion matters"] },
             { "role": "thanks", "title": "Thanks", "bullets": [] }
@@ -382,6 +382,9 @@ async fn paper_becomes_a_report_deck() {
     // a model looked at the figure before the plan was written, and the plan was told its parts
     assert_eq!(planner.asked(ASK_PARTS).len(), 1, "one vision call for the main figure");
     assert!(planner.asked(ASK_PARTS)[0].has_images());
+    // the planner looks at the paper's pictures too
+    let plan_req = planner.asked(ASK_PLAN)[0].clone();
+    assert!(plan_req.has_images() && plan_req.flatten().contains("- image 1: figure fig1") && plan_req.system.contains("attached as images"));
     let sys = planner.asked(ASK_PLAN)[0].system.clone();
     assert!(sys.contains("exactly 3 slides, one for each part") && sys.contains("1. Encoder (Finds the lesions.); 2. Fusion"), "{sys}");
 
@@ -439,6 +442,10 @@ async fn paper_becomes_a_report_deck() {
     assert_eq!(take["text"]["paras"][0]["runs"][0]["em"], "key");
     assert!(take["frame"]["y"].as_i64().unwrap() >= table["frame"]["y"].as_i64().unwrap() + table["frame"]["h"].as_i64().unwrap());
     assert!(table["frame"]["w"].as_i64().unwrap() > 10_000_000, "the results table takes the body width: {}", table["frame"]);
+    // the key row (the proposed method) stands out: bold here, the base has no key-row tint
+    let rows = table["rows"].as_array().unwrap();
+    let bold = |r: &Value| r["cells"][1]["text"]["paras"][0]["runs"][0]["look"]["bold"] == true;
+    assert!(bold(&rows[1]) && !bold(&rows[2]), "{}", rows[1]);
     assert!(joined.contains("Ref: Ellrin and Daidai, Synthetic Lesions for Testing"), "cited key → Ref: line");
     assert!(!joined.contains("Fig. 3") && !joined.contains("Table 1") && !joined.contains("Eq. (1)"), "typed references are dropped");
 
@@ -651,7 +658,7 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     assert_eq!(v["title"], "Two-Stage Grading of Synthetic Lesions");
     let stages = v["stages"].as_array().unwrap();
     assert_eq!(stages.iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["source", "notation", "terms", "profile", "outline", "review", "slides", "polish"]);
-    assert_eq!(stages[0]["counts"], json!({ "fig": 1, "figTotal": 1, "table": 1, "eq": 1, "eqVision": 0, "eqPicture": 0, "sections": 4, "refs": 1, "warnings": 0 }));
+    assert_eq!(stages[0]["counts"], json!({ "fig": 1, "figTotal": 1, "table": 1, "eq": 1, "eqVision": 0, "eqPicture": 0, "sections": 4, "refs": 1, "warnings": 0, "calls": 0, "cached": 0 }));
     assert_eq!(stages[1]["counts"]["entries"], 1);
     // 不熟: no L-Brain here, so every term is unfamiliar
     let unknown = stages[2]["counts"]["unknown"].as_u64().unwrap();
@@ -713,6 +720,40 @@ async fn a_job_waits_for_the_review_and_applies_it() {
         let (_, again, _) = call(&app, "GET", &format!("/api/decks/{name}/polish"), None, None).await;
         assert_eq!(again["items"].as_array().unwrap().iter().find(|i| i["id"] == fix["id"]).unwrap()["state"], "undone");
     }
+}
+
+/// 微調's 方法拆幾個模組: a model looks at the figure again for that many parts and puts the
+/// method slides on them; the deck walks through 2 parts instead of the 3 it was planned for.
+#[tokio::test]
+async fn the_authors_number_of_parts_recuts_the_main_figure() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = paper(dir.path());
+    let ws = workspace(dir.path());
+    let home = lore_home::Home::at(dir.path().join("home"));
+    let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
+    let two = json!({ "main": "fig1", "split": true, "axis": "x", "cuts": [0.64], "parts": [{ "label": "Encoder and fusion" }, { "label": "Decoder" }], "slides": [1, 1, 2] });
+    let model = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan("is slow")]).on(ASK_PARTS, &[parts(), two]));
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, engines(model.clone(), model.clone()))).is_ok());
+    let app = sc_server::router_isolated(shared.clone());
+    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "standard", "lang": "en", "style": "blank", "mode": "review" });
+    let (_, v, _) = call(&app, "POST", "/api/todeck", Some(body), None).await;
+    let id = v["job"].as_str().unwrap().to_string();
+    let v = job_until(&app, &id, "review", |v| v["state"] == "review").await;
+    let rows = v["review"]["outline"].clone();
+    let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/review"), Some(json!({ "outline": rows, "answers": { "modules": 2 } })), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let v = job_until(&app, &id, "done", |v| v["state"] == "done").await;
+    assert_eq!((v["result"]["parts"].as_u64(), v["result"]["modules"].as_u64(), v["result"]["calls"].as_u64()), (Some(2), Some(2), Some(1)), "{}", v["result"]);
+    let asked = model.asked(ASK_PARTS);
+    assert_eq!(asked.len(), 2);
+    assert!(asked[1].flatten().contains("exactly 2 parts") && asked[1].flatten().contains("2. Fusion"), "{}", asked[1].flatten());
+    let name = v["deck"].as_str().unwrap();
+    let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
+    let slides = d["deck"]["slides"].as_array().unwrap();
+    // Encoder and Fusion on part 1 (the left 2/3, cut at the gutter), Decoder on part 2
+    let crop = |title: &str| slides.iter().find(|s| all_text(s).contains(title) && s["objects"].as_array().unwrap().iter().any(|o| o["name"] == "講解")).map(|s| s["objects"].as_array().unwrap().iter().filter(|o| o["type"] == "picture").nth(1).unwrap()["crop"].clone()).unwrap();
+    assert!(crop("Encoder")["l"].as_f64().unwrap() < 0.01 && (crop("Keeps the largest")["r"].as_f64().unwrap() - 1.0 / 3.0).abs() < 0.02, "{}", crop("Encoder"));
+    assert!((crop("Grades the image")["l"].as_f64().unwrap() - 2.0 / 3.0).abs() < 0.02);
 }
 
 #[tokio::test]
