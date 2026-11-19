@@ -222,15 +222,23 @@ async fn links_go_to_the_opener_only_when_allowed() {
         s.lock().unwrap().push(u.to_string());
         Ok(())
     });
+    let s = seen.clone();
+    e.starter = Arc::new(move |u| {
+        s.lock().unwrap().push(format!("background {u}"));
+        Ok(())
+    });
     let app: axum::Router = router(e);
     let (st, _) = call(&app, "POST", "/api/links/open", Some(json!({ "url": "lore-lr://paper/abc?page=3" }))).await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+    // 做成簡報 only needs L-Slide's server: started behind, never over the page
+    let (st, _) = call(&app, "POST", "/api/links/open", Some(json!({ "url": "lore-sc://", "background": true }))).await;
     assert_eq!(st, StatusCode::NO_CONTENT);
     let (st, v) = call(&app, "POST", "/api/links/open", Some(json!({ "url": "https://example.com" }))).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
     assert!(v["error"].is_string());
     let (st, _) = call(&app, "POST", "/api/links/open", Some(json!({}))).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
-    assert_eq!(*seen.lock().unwrap(), vec!["lore-lr://paper/abc?page=3".to_string()]);
+    assert_eq!(*seen.lock().unwrap(), vec!["lore-lr://paper/abc?page=3".to_string(), "background lore-sc://".to_string()]);
     shared::uninstall();
 }
 

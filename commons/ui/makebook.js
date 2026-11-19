@@ -50,11 +50,12 @@ window.LoreMakeBook = (() => {
     try { return (await fetch(`${pc()}/api/info`, { cache: "no-store" })).ok; } catch { return false; }
   }
 
-  /** Running already, else opened (lore-pc://, which starts the app) and waited for. */
+  /** Running already, else started behind this window (`open -g -a L-Paper`) and waited for;
+   *  the start panel link then brings L-Paper forward once, already on the panel. */
   async function reach(onWait) {
     if (await alive()) return;
     onWait?.();
-    await LoreLinks.open("pc");
+    await LoreLinks.open("pc", {}, { background: true });
     const end = Date.now() + WAIT_MS;
     while (Date.now() < end) {
       await new Promise((ok) => setTimeout(ok, 600));

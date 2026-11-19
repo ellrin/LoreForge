@@ -21,7 +21,7 @@
 //!   (no other app holds a lease); PUT `{ local: { release: true } }` stops the server now, or
 //!   400 「X 正在用」.
 //! - `GET /api/links/ports` → `{ "sc": 51234, … }`: the desktop apps running now (lore-home `ports`).
-//! - `POST /api/links/open { url }` → hands a `lore-(pc|sc|lr|kb)://` or
+//! - `POST /api/links/open { url, background? }` (`background`: `open -g -a <App>` without the link, the app stays behind) → hands a `lore-(pc|sc|lr|kb)://` or
 //!   `http://127.0.0.1…` URL to the OS opener (204); anything else → 400.
 //!
 //! Everything is kept in `private/shared/engine.toml` through lore-home (never a key:
@@ -69,6 +69,9 @@ pub struct Engines {
     /// The Claude model the app picked before the shared one (shown until one is chosen).
     pub app_claude_model: Option<String>,
     pub opener: Opener,
+    /// `POST /api/links/open {url, background: true}`: start the app without bringing it to the
+    /// front (a page that only needs the app's server, e.g. 做成簡報 listing L-Slide's bases).
+    pub starter: Opener,
     /// Ping the local server for its state (off in tests).
     pub probe: bool,
     /// [`router`] installs the shared file as the process routing (off: the settings page
@@ -103,6 +106,7 @@ impl Engines {
             keys: SharedKeys::for_app(app, None),
             app_claude_model: None,
             opener: Arc::new(os_open),
+            starter: Arc::new(os_start),
             probe: true,
             install_routing: true,
             ports_file: lore_home::ports::default_path(),
@@ -166,6 +170,7 @@ impl Engines {
         self.probe = false;
         self.ports_file = None;
         self.opener = Arc::new(|_| Err("isolated".into()));
+        self.starter = Arc::new(|_| Err("isolated".into()));
         self
     }
 
@@ -560,7 +565,8 @@ pub fn router<S: Clone + Send + Sync + 'static>(e: Engines) -> axum::Router<S> {
                     if !link_allowed(&url) {
                         return bad("只能開啟 LoreForge 的連結");
                     }
-                    match (e.opener)(&url) {
+                    let background = body.as_ref().and_then(|Json(b)| b.get("background")).and_then(Value::as_bool).unwrap_or(false);
+                    match if background { (e.starter)(&url) } else { (e.opener)(&url) } {
                         Ok(()) => StatusCode::NO_CONTENT.into_response(),
                         Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": m }))).into_response(),
                     }
@@ -604,6 +610,20 @@ pub fn os_open(url: &str) -> Result<(), String> {
         std::process::Command::new("xdg-open")
     };
     let mut child = c.arg(url).stdin(std::process::Stdio::null()).spawn().map_err(|e| format!("無法開啟連結：{e}"))?;
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
+/// Start the app of a `lore-<id>://` link without bringing it to the front: `open -g -a <App>`
+/// with no URL, because each app focuses its window when a link arrives. The link's page is
+/// not opened (only the app's server is needed). Not macOS: [`os_open`].
+pub fn os_start(url: &str) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return os_open(url);
+    }
+    let id = url.strip_prefix("lore-").and_then(|r| r.split_once("://")).map(|(id, _)| id).ok_or("只能在背景開啟 Lore App")?;
+    let name = lore_home::ports::app_name(id).to_string();
+    let mut child = std::process::Command::new("open").args(["-g", "-a", &name]).stdin(std::process::Stdio::null()).spawn().map_err(|e| format!("無法開啟 {name}：{e}"))?;
     std::thread::spawn(move || child.wait());
     Ok(())
 }

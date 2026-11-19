@@ -796,8 +796,10 @@
 // open(): the desktop shell's hook (window.LoreDesktop.openUrl) when there is
 // one, else POST /api/links/open { url } on this app's server (it hands the URL
 // to the OS: it starts the app when it is not running), else the http address in a new
-// window. The ports are the dev servers' defaults; LoreLinks.ports is overridden by what
-// the running desktop apps recorded (ready / refresh()); ensure(app) opens and waits.
+// window. open(app, params, { background: true }) starts the app behind the current window
+// (`open -g -a`, the link's page is not opened) when only its server is needed. The ports are the dev servers' defaults;
+// LoreLinks.ports is overridden by what the running desktop apps recorded (ready / refresh());
+// ensure(app) starts it in the background and waits.
 (() => {
   const enc = encodeURIComponent;
   const ports = { pc: 7878, sc: 7880, lr: 7890, kb: 7700, ls: 7900 };
@@ -813,14 +815,15 @@
     const [s, path] = f(params);
     return { scheme: `lore-${app}://${s}`, http: `http://127.0.0.1:${ports[app]}${path}` };
   }
-  async function open(app, params) {
+  // background: start the app behind this window (only its server is needed); no new window either.
+  async function open(app, params, { background = false } = {}) {
     const u = url(app, params);
-    if (window.LoreDesktop?.openUrl) return window.LoreDesktop.openUrl(u.scheme);
+    if (!background && window.LoreDesktop?.openUrl) return window.LoreDesktop.openUrl(u.scheme);
     try {
-      const r = await fetch("/api/links/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: u.scheme }) });
+      const r = await fetch("/api/links/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: u.scheme, background }) });
       if (r.ok) return;
     } catch {}
-    window.open(u.http, "_blank", "noopener");
+    if (!background) window.open(u.http, "_blank", "noopener");
   }
   // The desktop apps run on free ports and record them (GET /api/links/ports, from the
   // servers' shared runtime file): fetched once at startup, then on demand.
@@ -837,12 +840,13 @@
     return live;
   }
   // The other app's port: when it is not running, open it (the scheme starts the app) and
-  // wait for its port to appear. onWait() fires once when the wait starts. null = it did not come.
+  // wait for its port to appear, started behind this window (only its server is needed).
+  // onWait() fires once when the wait starts. null = it did not come.
   async function ensure(app, { timeout = 20000, onWait } = {}) {
     await refresh();
     if (live[app]) return live[app];
     onWait?.();
-    await open(app);
+    await open(app, {}, { background: true });
     const end = Date.now() + timeout;
     while (Date.now() < end) {
       await new Promise((ok) => setTimeout(ok, 500));

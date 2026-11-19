@@ -121,11 +121,12 @@ window.LoreMakeDeck = (() => {
     try { return (await fetch(`${sc()}/api/info`, { cache: "no-store" })).ok; } catch { return false; }
   }
 
-  /** Running already, else opened (lore-sc://, which starts the app) and waited for. */
+  /** Running already, else started behind this window (`open -g -a L-Slide`: the panel stays
+   *  in front while the author picks) and waited for. */
   async function reach(onWait) {
     if (await alive()) return;
     onWait?.();
-    await LoreLinks.open("sc");
+    await LoreLinks.open("sc", {}, { background: true });
     const end = Date.now() + WAIT_MS;
     while (Date.now() < end) {
       await new Promise((ok) => setTimeout(ok, 600));
