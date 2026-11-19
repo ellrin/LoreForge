@@ -130,7 +130,7 @@ pub async fn mine(State(s): State<Shared>, Path(sha): Path<String>, Json(b): Jso
             Some(p) if !p.is_empty() => Arc::new(PaperText { pages: p }.normalise()),
             _ => text_of(&s, &sha)?,
         };
-        let kb = s.kb.lexicon().await.unwrap_or_default();
+        let kb = crate::kb::names(&s.kb, &s.brain).await.unwrap_or_default();
         Some(nouns::vocabulary(&text, &kb, &Filters::default()))
     } else {
         None
@@ -278,7 +278,7 @@ pub async fn read_paper(State(s): State<Shared>, Path(sha): Path<String>, Json(t
 /// Inventory × KB × ignore list × cached categories, and the KB's status.
 async fn inventory_of(s: &crate::AppState, sha: &str) -> Result<(nouns::Inventory, Value, NounsCache), ApiError> {
     let text = text_of(s, sha)?;
-    let (kb, kb_status) = match s.kb.lexicon().await {
+    let (kb, kb_status) = match crate::kb::names(&s.kb, &s.brain).await {
         Ok(l) => (l, json!({ "ok": true })),
         Err(e) => (vec![], json!({ "ok": false, "down": e.down, "error": e.message })),
     };
@@ -369,7 +369,7 @@ pub async fn classify(State(s): State<Shared>, Path(sha): Path<String>, body: Op
     let title = s.papers.meta(&sha)?.map(|m| m.title).unwrap_or_default();
     let choice = model_choice(&s.workspace, "lr-classify-terms");
     // the reader's level: their field and up to 40 terms they already know
-    let mut known: Vec<String> = s.kb.lexicon().await.unwrap_or_default().into_iter().filter(|n| n.state.as_deref() == Some("known")).map(|n| n.title).collect();
+    let mut known: Vec<String> = crate::kb::names(&s.kb, &s.brain).await.unwrap_or_default().into_iter().filter(|n| n.state.as_deref() == Some("known")).map(|n| n.title).collect();
     known.sort();
     known.dedup();
     known.truncate(40);

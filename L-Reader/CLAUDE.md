@@ -53,7 +53,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   `tests/math/`: synthetic LaTeX papers + their pdf.js items (`dump-items.js`); the PDFs are
   not kept. `examples/symbols_json.rs --tex` = precision / recall against a LaTeX source.
 - `crates/server` (`lr-server`): axum on 127.0.0.1:7890; handlers are plain async fns over
-  `Shared`. `kb.rs` = L-Brain client (cards are written through lore-cards (`AppState::brain`: L-Brain's API, else its folder), only from
+  `Shared`. `kb.rs` = L-Brain client (`names()` = its `GET /api/nodes`, else its card files while it is closed; cards are written through lore-cards (`AppState::brain`: L-Brain's API, else its folder), only from
   the author's action, `initial_state` learning|known; `lexicon()` = `GET /api/nodes` titles +
   aliases), `llm.rs` = lore-llm wired like L-Paper (`tasks.toml`: `lr-translate`
   local:current → claude:selected, `lr-chat` claude:selected only, `lr-classify-terms` and `lr-paragraph`

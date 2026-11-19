@@ -111,3 +111,49 @@ pub fn card_body(c: &CardRequest) -> Value {
     }
     v
 }
+
+/// The KB's names for the noun list: L-Brain's `GET /api/nodes` while it runs, else its card
+/// files (read-only, lore-learn), so a card added while L-Brain is closed shows at once.
+pub async fn names(kb: &Kb, brain: &lore_cards::Brain) -> Result<Vec<lr_core::nouns::KbName>, KbError> {
+    match kb.lexicon().await {
+        Err(e) if e.down && !brain.spaces().is_empty() => {
+            let (spaces, member) = (brain.spaces().to_vec(), brain.member().to_string());
+            let names = tokio::task::spawn_blocking(move || lore_learn::load_names(&spaces, &member)).await.unwrap_or_default();
+            Ok(names
+                .into_iter()
+                .map(|n| lr_core::nouns::KbName {
+                    name: n.name,
+                    node_id: n.card,
+                    title: n.title,
+                    state: Some(if n.state == lore_learn::Familiar::Known { "known" } else { "learning" }.to_string()),
+                })
+                .collect())
+        }
+        r => r,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// L-Brain closed: a card just written into its folder already counts in the noun list.
+    #[tokio::test]
+    async fn a_card_added_while_l_brain_is_closed_shows_in_the_noun_list() {
+        let d = tempfile::tempdir().unwrap();
+        let sp = d.path().join("personal");
+        std::fs::create_dir_all(sp.join("nodes")).unwrap();
+        std::fs::create_dir_all(sp.join("progress/ellrin")).unwrap();
+        std::fs::write(sp.join("space.toml"), "id = \"me\"\nname = \"我的\"\nkind = \"personal\"\nmembers = [\"ellrin\"]\n").unwrap();
+        let dead = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}", l.local_addr().unwrap())
+        };
+        let brain = lore_cards::Brain::at(Some(&dead), vec![sp], "ellrin");
+        brain.create(json!({ "via": "lorereader", "title": "fast Fourier transform" })).await.unwrap();
+        let got = names(&Kb::new(&dead), &brain).await.unwrap();
+        assert!(got.iter().any(|n| n.title == "fast Fourier transform" && n.state.as_deref() == Some("learning")), "{got:?}");
+        // isolated (no folder): still "not running"
+        assert!(names(&Kb::new(&dead), &lore_cards::Brain::at(Some(&dead), vec![], "me")).await.is_err_and(|e| e.down));
+    }
+}
