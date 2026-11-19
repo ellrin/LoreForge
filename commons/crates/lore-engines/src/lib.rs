@@ -614,8 +614,9 @@ pub fn os_open(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Start the app of a `lore-<id>://` link without bringing it to the front: `open -g -a <App>`
-/// with no URL, because each app focuses its window when a link arrives. The link's page is
+/// Start the app of a `lore-<id>://` link without bringing it to the front: `open -g -a <App>
+/// --args --background` with no URL (each app focuses its window when a link arrives; with
+/// `--background` it starts with its window hidden until a link or the Dock icon shows it). The link's page is
 /// not opened (only the app's server is needed). Not macOS: [`os_open`].
 pub fn os_start(url: &str) -> Result<(), String> {
     if !cfg!(target_os = "macos") {
@@ -623,7 +624,7 @@ pub fn os_start(url: &str) -> Result<(), String> {
     }
     let id = url.strip_prefix("lore-").and_then(|r| r.split_once("://")).map(|(id, _)| id).ok_or("只能在背景開啟 Lore App")?;
     let name = lore_home::ports::app_name(id).to_string();
-    let mut child = std::process::Command::new("open").args(["-g", "-a", &name]).stdin(std::process::Stdio::null()).spawn().map_err(|e| format!("無法開啟 {name}：{e}"))?;
+    let mut child = std::process::Command::new("open").args(["-g", "-a", &name, "--args", "--background"]).stdin(std::process::Stdio::null()).spawn().map_err(|e| format!("無法開啟 {name}：{e}"))?;
     std::thread::spawn(move || child.wait());
     Ok(())
 }

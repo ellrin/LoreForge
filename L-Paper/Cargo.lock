@@ -2318,6 +2318,7 @@ dependencies = [
  "lore-home",
  "lore-learn",
  "lore-llm",
+ "lore-words",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

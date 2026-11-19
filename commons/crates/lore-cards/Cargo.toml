@@ -9,6 +9,7 @@ kb-core = { path = "../kb-core" }
 lore-learn = { path = "../lore-learn" }
 lore-home = { path = "../lore-home" }
 lore-llm = { path = "../lore-llm" }
+lore-words = { path = "../lore-words" }
 toml.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -146,7 +146,7 @@ impl From<kb::KbError> for ApiError {
 
 impl From<lore_cards::CardError> for ApiError {
     fn from(e: lore_cards::CardError) -> Self {
-        ApiError(StatusCode::from_u16(e.status).unwrap_or(StatusCode::BAD_GATEWAY), json!({ "error": e.message, "kb_down": e.down }))
+        ApiError(StatusCode::from_u16(e.status).unwrap_or(StatusCode::BAD_GATEWAY), json!({ "error": e.message, "kb_down": e.down, "id": e.card }))
     }
 }
 fn bad(m: impl Into<String>) -> ApiError {

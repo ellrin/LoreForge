@@ -133,6 +133,21 @@ fn audience_window(app: &AppHandle, features: NewWindowFeatures) -> NewWindowRes
     }
 }
 
+/// Started by another Lore app that only needs this server (`open -g -a … --args --background`,
+/// lore-engines `os_start`): the window stays hidden until a link arrives or the Dock icon is clicked.
+fn started_behind() -> bool {
+    std::env::args().any(|a| a == "--background")
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn show_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -187,6 +202,7 @@ fn main() {
             let handle = app.handle().clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                 .title("L-Slide")
+                .visible(!started_behind())
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(1000.0, 640.0)
                 // the slide show's audience window (window.open from 簡報者檢視)
@@ -220,6 +236,12 @@ fn main() {
                     sc_server::flush_files(&shared);
                 }
                 sc_server::llm::quit();
+                return;
+            }
+            // the Dock icon of an app started behind: its window now
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            if let RunEvent::Reopen { .. } = event {
+                show_main(app);
                 return;
             }
             #[cfg(any(target_os = "macos", target_os = "ios"))]

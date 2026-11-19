@@ -296,10 +296,15 @@ pub async fn save_known(brain: &lore_cards::Brain, term: &str, card: Option<&str
     let msg = |e: lore_cards::CardError| if e.down { "L-Brain 沒有開啟，也找不到知識庫的資料夾，沒有存進知識庫".to_string() } else { format!("知識庫：{}", e.message) };
     match card {
         Some(id) => brain.recall(id, "remembered", "slidecomposer").await.map(|_| id.to_string()).map_err(msg),
-        None => {
-            let v = brain.create(json!({ "via": "slidecomposer", "kind": "concept", "title": term.trim(), "initial_state": "known" })).await.map_err(msg)?;
-            Ok(v["node"]["id"].as_str().unwrap_or_default().to_string())
-        }
+        None => match brain.create(json!({ "via": "slidecomposer", "kind": "concept", "title": term.trim(), "initial_state": "known" })).await {
+            Ok(v) => Ok(v["node"]["id"].as_str().unwrap_or_default().to_string()),
+            // the term has a card already (title or alias): that card gets 記得, no second one
+            Err(e) if e.card.is_some() => {
+                let id = e.card.unwrap_or_default();
+                brain.recall(&id, "remembered", "slidecomposer").await.map(|_| id).map_err(msg)
+            }
+            Err(e) => Err(msg(e)),
+        },
     }
 }
 

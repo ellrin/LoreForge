@@ -192,7 +192,7 @@ async fn fake_kb() -> (String, Arc<Mutex<Vec<Value>>>) {
         .route("/api/spaces", get(|| async { axum::Json(json!({ "spaces": [{ "id": "family", "kind": "household", "is_member": true }, { "id": "me", "kind": "personal", "is_member": true }] })) }))
         .route(
             "/api/nodes",
-            post(move |axum::Json(b): axum::Json<Value>| {
+            get(|| async { axum::Json(json!({ "nodes": [] })) }).post(move |axum::Json(b): axum::Json<Value>| {
                 let g = g.clone();
                 async move {
                     g.lock().unwrap().push(b);

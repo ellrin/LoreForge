@@ -28,6 +28,7 @@ window.LoreAddCard = (() => {
     toast(`上網查「${words}」…`);
     const r = await fetch("/api/lore/card", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: words, source }) }).catch(() => null);
     const v = r ? await r.json().catch(() => ({})) : { error: "沒有回應" };
+    if (r?.status === 409 && v.id) { toast(v.error, { action: { label: "開啟", run: () => LoreLinks.open("kb", { node: v.id }) }, ms: 8000 }); return null; }
     if (!r?.ok) { toast(v.error ?? `加入失敗（${r?.status ?? "—"}）`, { err: true }); return null; }
     toast(`已加入知識庫：${v.node.title}`, { action: { label: "開啟", run: () => LoreLinks.open("kb", { node: v.node.id }) }, ms: 6000 });
     return v.node;

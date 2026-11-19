@@ -298,6 +298,21 @@ impl lr_server::Printer for NativePrinter {
     }
 }
 
+/// Started by another Lore app that only needs this server (`open -g -a … --args --background`,
+/// lore-engines `os_start`): the window stays hidden until a link arrives or the Dock icon is clicked.
+fn started_behind() -> bool {
+    std::env::args().any(|a| a == "--background")
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn show_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -351,6 +366,7 @@ fn main() {
             let url = url::Url::parse(&format!("http://{addr}/"))?;
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                 .title("L-Reader")
+                .visible(!started_behind())
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(900.0, 600.0)
                 .build()?;
@@ -396,6 +412,12 @@ fn main() {
             // quitting: this app's hold on the shared local model goes (the last user stops it)
             if let RunEvent::Exit = event {
                 lr_server::llm::quit();
+                return;
+            }
+            // the Dock icon of an app started behind: its window now
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            if let RunEvent::Reopen { .. } = event {
+                show_main(app);
                 return;
             }
             #[cfg(any(target_os = "macos", target_os = "ios"))]

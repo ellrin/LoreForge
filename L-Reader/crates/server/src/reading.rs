@@ -434,9 +434,11 @@ pub async fn noun_card(State(s): State<Shared>, Path(sha): Path<String>, Json(b)
     if term.is_empty() || term.chars().count() > 120 {
         return Err(bad("詞不對"));
     }
-    // the KB first: a search is not spent on a card that cannot be saved
-    if b.save {
-        s.brain.place().await?;
+    // the KB first: no search is spent on a card that cannot be saved or already exists
+    if b.save
+        && let Some((id, have)) = s.brain.existing(&term).await?
+    {
+        return Err(ApiError(StatusCode::CONFLICT, json!({ "error": format!("知識庫已經有「{have}」"), "id": id })));
     }
     let space = String::new();
     let title = s.papers.meta(&sha)?.map(|m| m.title).unwrap_or_default();

@@ -1,7 +1,8 @@
 //! `POST /api/lore/card` — 加入知識庫 for selected words (`commons/ui/addcard.js`): L-Reader's
 //! 一鍵加卡 for any app. `{ title, source? }` → web-searched summary ([`crate::search`], task
 //! `lore-card`) → a card in state learning with the document's title and the pages read as its
-//! sources → 201 `{ node: {id, title}, summary, engine, via: kb | file }`. No search, no card.
+//! sources → 201 `{ node: {id, title}, summary, engine, via: kb | file }`. No search, no card;
+//! a term some card already has (title or alias) → 409 `{ error, id, title }` before any search.
 //! Only the words and the author's field go to the model; `source` is a title, never a path.
 
 use std::sync::Arc;
@@ -52,9 +53,11 @@ async fn create<H: Search>(State(c): State<Ctx<H>>, body: Option<Json<NewCard>>)
     if title.is_empty() || title.chars().count() > 120 {
         return fail(400, json!({ "error": "詞不對" }));
     }
-    // the KB first: a search is not spent on a card that cannot be saved
-    if let Err(e) = c.brain.place().await {
-        return fail(e.status, json!({ "error": e.message, "kb_down": e.down }));
+    // the KB first: no search is spent on a card that cannot be saved or already exists
+    match c.brain.existing(&title).await {
+        Err(e) => return fail(e.status, json!({ "error": e.message, "kb_down": e.down })),
+        Ok(Some((id, have))) => return fail(409, json!({ "error": format!("知識庫已經有「{have}」"), "id": id, "title": have })),
+        Ok(None) => {}
     }
     let (sum, pages, engine) = match summary(c.host.as_ref(), &title).await {
         Ok(x) => x,
@@ -69,6 +72,6 @@ async fn create<H: Search>(State(c): State<Ctx<H>>, body: Option<Json<NewCard>>)
     let card = json!({ "via": c.via, "kind": "concept", "title": title, "summary": sum, "initial_state": "learning", "sources": sources });
     match c.brain.create(card).await {
         Ok(v) => (StatusCode::CREATED, Json(json!({ "node": { "id": v["node"]["id"], "title": v["node"]["title"] }, "summary": sum, "engine": engine, "via": v["via"] }))).into_response(),
-        Err(e) => fail(e.status, json!({ "error": e.message, "kb_down": e.down })),
+        Err(e) => fail(e.status, json!({ "error": e.message, "kb_down": e.down, "id": e.card })),
     }
 }

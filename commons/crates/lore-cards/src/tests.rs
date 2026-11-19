@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use axum::routing::{get, post};
+use axum::routing::get;
 use http_body_util::BodyExt;
 use kb_core::lore_store::{Space, SpaceConfig, SpaceKind};
 use serde_json::{Value, json};
@@ -57,6 +57,10 @@ async fn closed_l_brain_cards_go_into_the_files() {
     assert_eq!(n["node"]["summary"], "新的摘要");
     assert_eq!(b.update(&id, json!({ "revision": rev, "summary": "舊版" })).await.unwrap_err().status, 409, "stale revision refused");
     assert_eq!(b.view("nope").await.unwrap_err().status, 404);
+    // one card per term, also in the files: any case or spacing
+    let e = b.create(json!({ "title": "fuzzy  MEMBERSHIP" })).await.unwrap_err();
+    assert_eq!((e.status, e.card.as_deref()), (409, Some(id.as_str())));
+    assert_eq!(cards_on_disk(&sp), 1);
 }
 
 #[tokio::test]
@@ -69,7 +73,7 @@ async fn a_running_l_brain_writes_and_the_files_are_left_alone() {
         .route("/api/spaces", get(|| async { axum::Json(json!({ "spaces": [{ "id": "home", "kind": "household", "is_member": true }, { "id": "me", "kind": "personal", "is_member": true }] })) }))
         .route(
             "/api/nodes",
-            post(move |axum::Json(b): axum::Json<Value>| {
+            get(|| async { axum::Json(json!({ "nodes": [{ "id": "n0", "title": "SegNet", "aliases": ["segmentation network"] }] })) }).post(move |axum::Json(b): axum::Json<Value>| {
                 let s = s.clone();
                 async move {
                     s.lock().unwrap().push(b.clone());
@@ -83,6 +87,10 @@ async fn a_running_l_brain_writes_and_the_files_are_left_alone() {
     assert_eq!((v["via"].as_str(), v["node"]["id"].as_str()), (Some("kb"), Some("n1")));
     assert_eq!(seen.lock().unwrap()[0]["space"], "me", "the personal space");
     assert_eq!(cards_on_disk(&sp), 0, "one writer: never the files while L-Brain runs");
+    // a term L-Brain already has (title or alias): refused, its id given
+    let e = b.create(json!({ "title": "Segmentation  Network" })).await.unwrap_err();
+    assert_eq!((e.status, e.card.as_deref()), (409, Some("n0")));
+    assert_eq!(seen.lock().unwrap().len(), 1, "nothing posted");
 }
 
 #[tokio::test]
@@ -145,6 +153,11 @@ async fn the_selection_route_searches_then_adds() {
     let u = req.messages[0].text();
     assert!(u.contains("fast Fourier transform") && u.contains("medical imaging") && !u.contains("Airway"), "only the words and the field: {u}");
     assert_eq!(call(&app, json!({ "title": " " })).await.0, 400);
+    // the same words again: 409 with the card, before any search
+    let (st, v2) = call(&app, json!({ "title": "Fast Fourier Transform" })).await;
+    assert_eq!((st, v2["id"].as_str()), (409, Some(id)));
+    assert_eq!(h.0.seen.lock().unwrap().len(), 1, "no second search");
+    assert_eq!(cards_on_disk(&sp), 1);
 }
 
 #[tokio::test]

@@ -1176,6 +1176,7 @@ dependencies = [
  "lore-home",
  "lore-learn",
  "lore-llm",
+ "lore-words",
  "reqwest",
  "serde",
  "serde_json",

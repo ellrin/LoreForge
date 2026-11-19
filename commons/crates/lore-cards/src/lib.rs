@@ -34,6 +34,8 @@ pub use web::{NewCard, router};
 pub struct CardError {
     /// Neither L-Brain nor its folder is reachable.
     pub down: bool,
+    /// 409 because this card already has the title or alias: its id.
+    pub card: Option<String>,
     /// HTTP status for the page (503 down, 502 L-Brain said no, 400, 404, 409, 500).
     pub status: u16,
     pub message: String,
@@ -41,10 +43,10 @@ pub struct CardError {
 
 impl CardError {
     fn new(status: u16, message: impl Into<String>) -> CardError {
-        CardError { down: false, status, message: message.into() }
+        CardError { down: false, card: None, status, message: message.into() }
     }
     fn down() -> CardError {
-        CardError { down: true, status: 503, message: "L-Brain 沒有開，也找不到知識庫的資料夾".into() }
+        CardError { down: true, card: None, status: 503, message: "L-Brain 沒有開，也找不到知識庫的資料夾".into() }
     }
 }
 
@@ -164,7 +166,13 @@ impl Brain {
     /// A new card from L-Brain's own `POST /api/nodes` body (`space?`, `via`, `initial_state`,
     /// the card's fields). No `space`: the member's personal space. → `{ node, via: kb | file }`.
     pub async fn create(&self, mut body: Value) -> Res<Value> {
-        match self.place().await? {
+        let place = self.place().await?;
+        // one card per term: a title or alias some card already has is refused (409, its id)
+        let title = body["title"].as_str().unwrap_or_default().to_string();
+        if let Some((id, have)) = self.existing_at(&place, &title).await? {
+            return Err(CardError { down: false, card: Some(id), status: 409, message: format!("知識庫已經有「{have}」") });
+        }
+        match place {
             Place::Server(url) => {
                 if body.get("space").and_then(Value::as_str).is_none_or(str::is_empty) {
                     let v = self.api(self.http.get(format!("{url}/api/spaces"))).await?;
@@ -191,6 +199,38 @@ impl Brain {
                     })
                     .await?;
                 Ok(json!({ "node": node, "via": "file" }))
+            }
+        }
+    }
+
+    /// The card whose title or alias is `title` (same normalisation as the noun lists):
+    /// `(id, title)`. L-Brain's list while it runs, else its files.
+    pub async fn existing(&self, title: &str) -> Res<Option<(String, String)>> {
+        let place = self.place().await?;
+        self.existing_at(&place, title).await
+    }
+
+    async fn existing_at(&self, place: &Place, title: &str) -> Res<Option<(String, String)>> {
+        let k = lore_words::phrase_key(title);
+        if k.is_empty() {
+            return Ok(None);
+        }
+        let same = |name: &str| lore_words::phrase_key(name) == k;
+        match place {
+            Place::Server(url) => {
+                let v = self.api(self.http.get(format!("{url}/api/nodes?limit=100000"))).await?;
+                for n in v["nodes"].as_array().into_iter().flatten() {
+                    let (Some(id), Some(t)) = (n["id"].as_str(), n["title"].as_str()) else { continue };
+                    if same(t) || n["aliases"].as_array().into_iter().flatten().filter_map(Value::as_str).any(same) {
+                        return Ok(Some((id.to_string(), t.to_string())));
+                    }
+                }
+                Ok(None)
+            }
+            Place::Disk => {
+                let (spaces, member) = (self.spaces.clone(), self.member.clone());
+                let names = tokio::task::spawn_blocking(move || lore_learn::load_names(&spaces, &member)).await.unwrap_or_default();
+                Ok(names.into_iter().find(|n| same(&n.name)).map(|n| (n.card, n.title)))
             }
         }
     }
