@@ -11,8 +11,9 @@
 //!   `progress/<member>/*.json`; spaces: `KB_SPACES` > L-Brain's `config.toml` `spaces` >
 //!   lore-home `private/KnowledgeBase`; member: `KB_MEMBER` > `config.toml` `member` >
 //!   `private/shared/profile.toml` `id`). The only write is 「同時存進知識庫（記得）」, through
-//!   L-Brain's own `POST /api/nodes` when it is running (`KB_URL` > the shared ports file
-//!   > 127.0.0.1:7700); not running = nothing written, nothing queued.
+//!   L-Brain's own `POST /api/nodes` (`KB_URL` > the shared ports file > 127.0.0.1:7700); when
+//!   it is not running the app is started in the background first ([`kb_url_waking`], never
+//!   under `KB_URL` or in tests); still no answer = nothing written, nothing queued.
 //! * **Marks** ([`mark_body`], [`mark_slide`], [`unmark_body`], pure): runs get the editor-only
 //!   emphasis `learn` (`lore_canvas::style::LEARN_EM`) on the term, or on the whole sentence
 //!   for background / method text. Only plain generated runs are touched (no other emphasis,
@@ -274,6 +275,17 @@ pub fn kb_url() -> String {
     format!("http://127.0.0.1:{port}")
 }
 
+/// [`kb_url`], first starting L-Brain when it does not answer (`launch`, and no `KB_URL`).
+pub async fn kb_url_waking(launch: bool) -> String {
+    if !launch || env("KB_URL").is_some() {
+        return kb_url();
+    }
+    match tokio::task::spawn_blocking(|| lore_home::ports::ensure("kb", Some(7700))).await {
+        Ok(Ok(p)) => format!("http://127.0.0.1:{p}"),
+        _ => kb_url(),
+    }
+}
+
 /// 同時存進知識庫（記得）through L-Brain's API: a new minimal card in state 記得, or, for a
 /// term that already has a card (`card`), the answer 記得 on that card (no duplicate).
 /// `Err` = a line for the author; L-Brain not running = nothing written, nothing queued.
@@ -317,7 +329,8 @@ pub async fn understood(State(s): State<Shared>, AxPath(name): AxPath<String>, J
         t.terms.into_iter().find(|x| x.text == term || x.key == term || x.forms.iter().any(|f| phrase_key(f) == k)).and_then(|x| x.card)
     });
     let kb = if b.kb {
-        match save_known(&kb_url(), &term, card.as_deref()).await {
+        let base = kb_url_waking(s.launch_apps.load(std::sync::atomic::Ordering::Relaxed)).await;
+        match save_known(&base, &term, card.as_deref()).await {
             Ok(id) => json!({ "saved": true, "id": id, "message": if card.is_some() { "知識庫的卡片記為「記得」" } else { "已存進知識庫（記得）" } }),
             Err(m) => json!({ "saved": false, "message": m }),
         }

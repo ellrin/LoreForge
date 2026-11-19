@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 pub struct Kb {
     pub base: String,
     http: reqwest::Client,
+    /// [`Kb::wake`] may start the L-Brain app (a local KB, not isolated).
+    launch: bool,
 }
 
 /// Why a KB call failed, ready for the UI.
@@ -24,7 +26,37 @@ impl Kb {
     pub fn new(base: &str) -> Kb {
         // No proxy: the KB is on this machine.
         let http = reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(2)).build().unwrap_or_default();
-        Kb { base: base.trim_end_matches('/').to_string(), http }
+        Kb { base: base.trim_end_matches('/').to_string(), http, launch: false }
+    }
+
+    /// The real L-Brain of this machine: [`Kb::wake`] starts the app when it is not running.
+    pub fn launching(mut self, on: bool) -> Kb {
+        let local = ["http://127.0.0.1", "http://localhost"].iter().any(|p| self.base.starts_with(p));
+        self.launch = on && local;
+        self
+    }
+
+    /// Before a call the author asked for (a card, a draft, opening a card): start L-Brain in
+    /// the background when it does not answer and wait for it. Polls and the noun scan never
+    /// call this, so quitting L-Brain keeps it closed until the author needs it.
+    pub async fn wake(&self) -> Result<(), KbError> {
+        if self.get_quick("/api/spaces").await {
+            return Ok(());
+        }
+        if !self.launch {
+            return Err(self.down());
+        }
+        let port = self.base.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(7700);
+        match tokio::task::spawn_blocking(move || lore_home::ports::ensure("kb", Some(port))).await {
+            Ok(Ok(p)) if p == port => Ok(()),
+            Ok(Ok(p)) => Err(KbError { down: true, message: format!("L-Brain 開在 {p}，不是設定的 {}", self.base) }),
+            Ok(Err(e)) => Err(KbError { down: true, message: e }),
+            Err(e) => Err(KbError { down: true, message: e.to_string() }),
+        }
+    }
+
+    async fn get_quick(&self, path: &str) -> bool {
+        self.http.get(format!("{}{path}", self.base)).timeout(Duration::from_secs(2)).send().await.is_ok_and(|r| r.status().is_success())
     }
 
     fn down(&self) -> KbError {
@@ -110,4 +142,19 @@ pub fn card_body(c: &CardRequest) -> Value {
         v["body"] = format!("> {}\n\n（{}，p.{}）", ctx.split_whitespace().collect::<Vec<_>>().join(" "), c.paper_title, c.page).into();
     }
     v
+}
+
+#[cfg(test)]
+mod wake_tests {
+    use super::*;
+
+    /// Only this machine's L-Brain is ever started, and never when launching is off (isolated).
+    #[tokio::test]
+    async fn wake_starts_nothing_when_isolated_or_remote() {
+        assert!(!Kb::new("http://kb.example:7700").launching(true).launch);
+        assert!(Kb::new("http://127.0.0.1:7700").launching(true).launch);
+        // isolated and down: the "not running" error at once, no launch
+        let e = Kb::new("http://127.0.0.1:1").launching(false).wake().await.unwrap_err();
+        assert!(e.down);
+    }
 }

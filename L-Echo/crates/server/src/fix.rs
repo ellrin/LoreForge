@@ -168,7 +168,7 @@ async fn draft(State(s): State<Shared>, body: Option<Json<DraftBody>>) -> Respon
     if said.is_empty() {
         return bad(StatusCode::BAD_REQUEST, "說一下哪裡寫錯了");
     }
-    let Some(url) = s.kb.server().await else { return bad(StatusCode::SERVICE_UNAVAILABLE, KB_CLOSED) };
+    let Some(url) = s.kb.server_waking().await else { return bad(StatusCode::SERVICE_UNAVAILABLE, KB_CLOSED) };
     let card = match node(&url, &b.card).await {
         Ok(n) => n,
         Err(r) => return r,
@@ -256,7 +256,7 @@ async fn save(State(s): State<Shared>, body: Option<Json<SaveBody>>) -> Response
     if !kb_core::id::valid_node_id(&b.id) || title.is_empty() {
         return bad(StatusCode::BAD_REQUEST, "卡片不對或沒有標題");
     }
-    let Some(url) = s.kb.server().await else { return bad(StatusCode::SERVICE_UNAVAILABLE, KB_CLOSED) };
+    let Some(url) = s.kb.server_waking().await else { return bad(StatusCode::SERVICE_UNAVAILABLE, KB_CLOSED) };
     let card = match node(&url, &b.id).await {
         Ok(n) => n,
         Err(r) => return r,

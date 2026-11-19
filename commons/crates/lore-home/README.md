@@ -70,3 +70,12 @@ pc-draft-turn = "local"
 ```
 
 不會寫進 `private-example/`。金鑰不在這裡（見 `lore-secrets`）。
+
+## 其他 App 的位置與自動開啟（`lore_home::ports`）
+
+執行中的桌面 App 把 `{port, pid}` 記在 `<快取>/LoreForge/ports.json`（執行期資料）。
+
+| API | 用途 |
+|---|---|
+| `ports::register(id, port)`、`ports::live()` | 記下自己的 port；讀出還活著的 App（`pc` `sc` `lr` `kb` `le` `ls`） |
+| `ports::ensure(id, fallback)` | 作者要用另一個 App 時：沒開就在背景開（macOS `open -g -a`），等它出現（最多 20 秒）；一次只開一個，開不起來 60 秒內不再試。阻塞，async 裡用 `spawn_blocking`。輪詢、掃描、測試、隔離範例不呼叫 |

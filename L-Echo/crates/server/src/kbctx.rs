@@ -187,6 +187,21 @@ impl Kb {
     }
 }
 
+impl Kb {
+    /// [`Kb::server`] for something the author asked for: when L-Brain is not running, start
+    /// it in the background and wait for it. Never when pinned (tests, the isolated example).
+    pub async fn server_waking(&self) -> Option<String> {
+        if let Some(url) = self.server().await {
+            return Some(url);
+        }
+        if self.pinned().is_some() || !self.system.load(Ordering::Relaxed) {
+            return None;
+        }
+        tokio::task::spawn_blocking(|| lore_home::ports::ensure("kb", Some(KB_DEFAULT_PORT))).await.ok()?.ok()?;
+        self.server().await
+    }
+}
+
 fn client() -> reqwest::Client {
     reqwest::Client::builder().timeout(Duration::from_secs(3)).no_proxy().build().unwrap_or_default()
 }
@@ -773,7 +788,7 @@ async fn remember(shared: &Shared, p: &mut Plan) {
         return;
     }
     let names = p.cards.iter().map(|c| format!("〈{}〉", c.title)).collect::<Vec<_>>().join("、");
-    let Some(url) = shared.kb.server().await else {
+    let Some(url) = shared.kb.server_waking().await else {
         p.notice = "L-Brain 沒開，沒有記下".into();
         p.system = format!("使用者要你把{names}記成「記得」，但 L-Brain 沒有開，所以沒有記下。用一句話告訴他，請他打開 L-Brain 再說一次。");
         return;
@@ -801,12 +816,12 @@ pub struct RecallBody {
 }
 
 /// `POST /api/kb/recall {id, outcome}` → `{ ok, progress? }` or `{ error }`: through
-/// L-Brain's own API, only while it runs.
+/// L-Brain's own API (started first when it is not running).
 pub async fn recall_post(State(s): State<Shared>, Json(b): Json<RecallBody>) -> Response {
     if !matches!(b.outcome.as_str(), "remembered" | "forgot" | "unfamiliar") || !kb_core::id::valid_node_id(&b.id) {
         return (axum::http::StatusCode::BAD_REQUEST, Json(json!({ "error": "不認得的卡片或結果" }))).into_response();
     }
-    let Some(url) = s.kb.server().await else { return Json(json!({ "error": "L-Brain 沒開，沒有記下" })).into_response() };
+    let Some(url) = s.kb.server_waking().await else { return Json(json!({ "error": "L-Brain 沒開，沒有記下" })).into_response() };
     match recall(&url, &b.id, &b.outcome).await {
         Ok(v) => Json(json!({ "ok": true, "progress": v.get("progress") })).into_response(),
         Err(e) => Json(json!({ "error": format!("沒有記下：{e}") })).into_response(),

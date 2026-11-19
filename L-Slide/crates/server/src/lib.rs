@@ -60,6 +60,8 @@ use lore_canvas::reveal::{RevealSpec, reveal};
 use lore_canvas::{Applied, Object, Op, Slide};
 
 pub struct AppState {
+    /// May start another Lore app (L-Brain for 我懂 + 存進知識庫); off in [`router_isolated`].
+    pub launch_apps: std::sync::atomic::AtomicBool,
     pub ws: Workspace,
     pub web: PathBuf,
     pub port: Mutex<u16>,
@@ -397,6 +399,7 @@ fn permissions(voice: &lore_voice::Voice) -> lore_shell::permissions::Permission
 
 /// Tests: never the keychain, the `claude` CLI, the network, the OS opener or the process routing.
 pub fn router_isolated(shared: Shared) -> Router {
+    shared.launch_apps.store(false, std::sync::atomic::Ordering::Relaxed);
     let mut e = engines(&shared).isolated();
     e.install_routing = false;
     let voice = lore_voice::Voice::unavailable("這裡沒有語音");
@@ -425,6 +428,7 @@ pub fn state(ws: Workspace, web: PathBuf) -> Shared {
 /// With the LoreForge folder named (tests use a temporary one).
 pub fn state_at(ws: Workspace, web: PathBuf, home: lore_home::Home) -> Shared {
     Arc::new(AppState {
+        launch_apps: std::sync::atomic::AtomicBool::new(true),
         ws,
         web,
         port: Mutex::new(0),

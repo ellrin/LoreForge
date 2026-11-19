@@ -32,8 +32,6 @@ pub const ECHO_APP: &str = "L-Echo";
 /// L-Shelf's short name in ports.json and its application name: L-Echo looks files up in it.
 pub const SHELF: &str = "ls";
 pub const SHELF_APP: &str = "L-Shelf";
-/// How long to wait for an app after launching it.
-const ECHO_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// What L-Echo is asked to find (`POST /api/find` on L-Echo).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -241,22 +239,8 @@ pub fn echo_port() -> Result<u16, String> {
 
 /// A Lore app's port (`id` in ports.json), launching `name` in the background when it is not
 /// running (macOS): a request the author made never stops at "not open". Blocking.
-pub fn app_port(id: &str, name: &str) -> Result<u16, String> {
-    if let Some(p) = live(id) {
-        return Ok(p);
-    }
-    if !cfg!(target_os = "macos") {
-        return Err(format!("{name} 沒有開"));
-    }
-    std::process::Command::new("open").args(["-g", "-a", name]).status().map_err(|e| format!("打不開 {name}：{e}"))?;
-    let until = std::time::Instant::now() + ECHO_WAIT;
-    while std::time::Instant::now() < until {
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        if let Some(p) = live(id) {
-            return Ok(p);
-        }
-    }
-    Err(format!("{name} 沒有回應（打開 {name} 再試一次）"))
+pub fn app_port(id: &str, _name: &str) -> Result<u16, String> {
+    lore_home::ports::ensure(id, None)
 }
 
 fn live(app: &str) -> Option<u16> {

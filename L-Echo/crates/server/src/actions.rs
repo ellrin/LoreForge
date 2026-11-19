@@ -649,7 +649,7 @@ async fn cards_save(State(s): State<Shared>, body: Option<Json<CardsSave>>) -> R
     // what L-Brain shows as where a pending card came from
     let source = if topic.is_empty() { "LoreEcho".to_string() } else { format!("LoreEcho：{topic}") };
     let cards: Vec<CardDraft> = cards.into_iter().map(|c| CardDraft { source: source.clone(), ..c }).collect();
-    if let Some(url) = s.kb.server().await {
+    if let Some(url) = s.kb.server_waking().await {
         let send: Vec<Value> = cards.iter().map(|c| json!({ "title": c.title, "summary": c.summary, "body": c.body, "tags": c.tags, "links": c.links.iter().map(|l| json!({ "to": l.to, "rel": l.rel })).collect::<Vec<_>>(), "kind": c.kind, "source": c.source, "from_conversation": topic })).collect();
         return match client().post(format!("{url}/api/pending")).json(&json!({ "cards": send })).send().await {
             Ok(r) => {

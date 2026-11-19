@@ -436,7 +436,12 @@ pub async fn noun_card(State(s): State<Shared>, Path(sha): Path<String>, Json(b)
         return Err(bad("詞不對"));
     }
     // the KB first: a search is not spent on a card that cannot be saved
-    let space = if b.save { s.kb.default_space().await? } else { String::new() };
+    let space = if b.save {
+        s.kb.wake().await?;
+        s.kb.default_space().await?
+    } else {
+        String::new()
+    };
     let title = s.papers.meta(&sha)?.map(|m| m.title).unwrap_or_default();
     let context = b.context.as_deref().map(str::trim).filter(|c| !c.is_empty());
     let mut user = format!("術語：{term}\n論文：《{title}》\n作者的領域：{}", reader_field(&s));

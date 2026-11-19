@@ -189,7 +189,7 @@ pub fn state(config: Config, workspace: PathBuf, web: PathBuf, isolated: bool) -
     let shared = home.shared_dir().unwrap_or_else(|| workspace.join("../shared"));
     llm.share_engine(home.clone());
     Arc::new(AppState {
-        kb: kb::Kb::new(&config.kb_url),
+        kb: kb::Kb::new(&config.kb_url).launching(!isolated),
         llm,
         config,
         library,
@@ -1050,6 +1050,7 @@ async fn kb_card(State(s): State<Shared>, Json(b): Json<CardBody>) -> Result<(St
         return Err(bad("初始狀態只能是「學習中」或「已掌握」"));
     }
     let paper_title = s.papers.meta(&b.sha)?.map(|m| m.title).unwrap_or_default();
+    s.kb.wake().await?;
     let space = match b.space.filter(|x| !x.is_empty()) {
         Some(x) => x,
         None => s.kb.default_space().await?,
@@ -1077,6 +1078,7 @@ async fn kb_draft(State(s): State<Shared>, Json(b): Json<Value>) -> R {
     // the paper's title and the page go with the quote, so the draft can say where it is from
     let source = b["sha"].as_str().and_then(|sha| s.papers.meta(sha).ok().flatten()).map(|m| m.title);
     let body = json!({ "term": b["term"], "context": b["context"], "lang": "zh-Hant", "page": b["page"], "source": source });
+    s.kb.wake().await?;
     Ok(Json(s.kb.post("/api/draft", &body, Duration::from_secs(120)).await?))
 }
 
@@ -1084,6 +1086,7 @@ async fn kb_node(State(s): State<Shared>, Path(id): Path<String>) -> R {
     if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(bad("id"));
     }
+    s.kb.wake().await?;
     Ok(Json(s.kb.get(&format!("/api/nodes/{id}")).await?))
 }
 
