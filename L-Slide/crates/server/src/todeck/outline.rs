@@ -1,7 +1,6 @@
-//! Model calls of the job: the plan (`sc-paper-deck`, streamed so the page sees characters
-//! arrive) and the module boxes of the main figure (`sc-crop-modules`, vision, optional).
-//! Both run inside a stage future: when the job is stopped the runner drops the future and
-//! the request with it.
+//! The plan's model call (`sc-paper-deck`, streamed so the page sees characters arrive). It
+//! runs inside a stage future: when the job is stopped the runner drops the future and the
+//! request with it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -9,9 +8,6 @@ use lore_llm::router::RouteError;
 use lore_llm::{LlmRequest, StreamEvent};
 use serde_json::Value;
 
-use super::build::ModuleBox;
-use super::plan::Plan;
-use super::source::Material;
 use crate::jobs::StageError;
 use crate::llm::Llm;
 
@@ -70,25 +66,4 @@ pub async fn ask_json(llm: &Llm, task: &str, req: LlmRequest, engine: Option<&st
         }
     }
     Err(StageError::new(502, first_line(&format!("模型的大綱無法使用：{why}"))))
-}
-
-/// Ask a vision engine for the modules of the main figure; nothing when there is none.
-pub async fn module_boxes(llm: &Llm, m: &Material, plan: &Plan) -> Vec<ModuleBox> {
-    let Some(ov) = plan.slides.iter().find(|s| s.role == "overview") else { return vec![] };
-    let n = ov.steps.len();
-    if n < 2 {
-        return vec![];
-    }
-    let Some(f) = m.figures.iter().find(|f| f.id == ov.figure) else { return vec![] };
-    let Some(im) = f.image.as_ref().filter(|i| i.ext == "png") else { return vec![] };
-    let Ok(route) = llm.route(lore_docsrc::boxer::TASK_ID, None).await else { return vec![] };
-    let Ok(img) = lore_docsrc::boxer::FigureImage::from_png_bytes(im.bytes.clone()) else { return vec![] };
-    let caption = format!("{}\nThe steps, in order: {}", f.caption, ov.steps.iter().enumerate().map(|(i, s)| format!("{}. {s}", i + 1)).collect::<Vec<_>>().join(" "));
-    let boxer = lore_docsrc::boxer::LlmModuleBoxer::from_route(route);
-    use lore_docsrc::boxer::ModuleBoxer;
-    match boxer.module_boxes(&img, &caption).await {
-        // one box per step, in reading order; any other count is not trusted
-        Ok(b) if b.len() == n => b.into_iter().map(|b| ModuleBox { label: b.label, bbox: b.bbox }).collect(),
-        _ => vec![],
-    }
 }

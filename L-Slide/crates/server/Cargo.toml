@@ -39,6 +39,7 @@ tower-http.workspace = true
 tower = { version = "0.5", features = ["util"] }
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
 tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

@@ -1,12 +1,12 @@
 //! `slides`: the deck from a plan — page kinds from the base, slot geometry from the
 //! author's academic arrangements, text in the style's tags, native tables and OMML
-//! equations, `Ref:` lines, the module crops of the main figure.
+//! equations, `Ref:` lines, the walk-through of the main figure part by part.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use lore_canvas::StyleSystem;
-use lore_canvas::{Bullet, Cell, Crop, Frame, Geom, Kind, Look, Object, Para, Paint, PicObj, Row, Run, Slide, SpObj, Stroke, TableObj, TextBody};
+use lore_canvas::{Bullet, Cell, Crop, Frame, Geom, Kind, Look, Object, Para, Paint, PicObj, Row, Run, Slide, SpObj, TableObj, TextBody};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -377,7 +377,8 @@ fn contain(f: &Frame, iw: u32, ih: u32) -> Frame {
     Frame::new(f.x + (f.w - w) / 2, f.y, w, h)
 }
 
-/// Module box of the main figure, in pixels of its image.
+/// Module box of the main figure, in pixels of its image (older job checkpoints; the
+/// walk-through uses `figparts::FigureParts`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleBox {
     pub label: String,
@@ -473,11 +474,44 @@ fn kicker_label(role: &str, lang: &str) -> &'static str {
     }
 }
 
+/// A slide whose text appears line by line: one copy of the slide per line, each showing
+/// the lines so far (L-Slide's reveal: duplicate slides).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineReveal {
+    /// Index of the slide in [`Built::slides`].
+    pub slide: usize,
+    /// The text object whose paragraphs appear one by one.
+    pub object: u32,
+    pub lines: usize,
+}
+
+/// The slides with every line-by-line slide expanded into its copies (from the last one
+/// backwards, so the indices of the others hold). The first copy keeps the slide's uid.
+pub fn expand_reveals(slides: &mut Vec<Slide>, reveals: &[LineReveal], new_uid: &mut dyn FnMut() -> String) {
+    let mut list: Vec<&LineReveal> = reveals.iter().filter(|r| r.lines >= 2 && r.slide < slides.len()).collect();
+    list.sort_by_key(|r| std::cmp::Reverse(r.slide));
+    for r in list {
+        let src = slides[r.slide].clone();
+        let mut copies = vec![];
+        for k in 1..=r.lines {
+            let mut s = src.clone();
+            if k > 1 {
+                s.uid = new_uid();
+            }
+            if let Some(tb) = s.find_mut(r.object).and_then(|o| o.kind.sp_mut()).and_then(|sp| sp.text.as_mut()) {
+                tb.paras.truncate(k);
+            }
+            copies.push(s);
+        }
+        slides.splice(r.slide..=r.slide, copies);
+    }
+}
+
 /// What the build produced besides the slides.
 pub struct Built {
     pub slides: Vec<Slide>,
-    /// Index of the big-picture slide and the object ids of each numbered step.
-    pub reveal: Option<(usize, Vec<Vec<u32>>)>,
+    /// The walk-through slides of the main figure, to expand line by line.
+    pub reveals: Vec<LineReveal>,
     pub warnings: Vec<String>,
     /// The body area every content page shares.
     pub content: Frame,
@@ -491,7 +525,8 @@ pub struct BuildInput<'a> {
     pub pandoc: &'a lore_math::Pandoc,
     pub macros: BTreeMap<String, String>,
     pub lang: &'a str,
-    pub boxes: Vec<ModuleBox>,
+    /// The main figure's parts (`figparts.rs`): its walk-through slides.
+    pub parts: Option<super::figparts::FigureParts>,
     /// The cover's Speaker and Supervisor.
     pub presenter: Option<String>,
     pub supervisor: Option<String>,
@@ -514,8 +549,9 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
     let gap = h / 60;
     let mut assets: BTreeMap<String, String> = BTreeMap::new();
     let mut out = vec![];
-    let mut reveal_steps = None;
+    let mut reveals: Vec<LineReveal> = vec![];
     let main_fig = plan.slides.iter().find(|s| s.role == "overview").map(|s| s.figure.clone()).unwrap_or_default();
+    let walk = inp.parts.as_ref().filter(|p| p.walk() && p.figure == main_fig && !main_fig.is_empty());
 
     for (page, ps) in plan.slides.iter().enumerate() {
         let kind = match ps.role.as_str() {
@@ -534,6 +570,17 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
         let warn_at = format!("第 {} 頁「{}」", page + 1, clip(&ps.title, 24));
 
         let fig = m.figures.iter().find(|f| f.id == ps.figure && f.image.is_some()).or_else(|| m.tables.iter().find(|t| t.id == ps.figure && t.image.is_some()));
+        // the main figure is on the overview (whole) and on its walk-through slides (one part
+        // clear); any other method slide does not repeat it small
+        let part = walk.filter(|_| ps.role == "method" && ps.figure == main_fig).and_then(|p| (ps.module as usize).checked_sub(1).filter(|i| *i < p.parts.len()));
+        let fig = if ps.role == "method" && ps.figure == main_fig && part.is_none() {
+            if walk.is_some() && ps.module >= 1 {
+                cx.warnings.push(format!("{warn_at}：對不到架構圖的第 {} 段，這頁沒有放圖", ps.module));
+            }
+            None
+        } else {
+            fig
+        };
         let tab = m.tables.iter().find(|t| t.id == ps.table);
         let tab_native = tab.and_then(|t| t.grid.clone()).filter(|g| !g.is_empty());
         let tab_pic = if tab_native.is_none() { tab.filter(|t| t.image.is_some()) } else { None };
@@ -611,7 +658,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
             }
             _ => {
                 let title_tag = cx.tag(&["title"]);
-                let has_text = !ps.bullets.is_empty() || !ps.equations.is_empty() || !ps.steps.is_empty();
+                let has_text = !ps.bullets.is_empty() || !ps.equations.is_empty();
                 let need = Need { image: image.is_some(), table: table_grid.is_some(), text: has_text };
                 let arr = pick(&arrs, need);
                 slide.arrangement = arr.map(|a| a.id.clone());
@@ -691,7 +738,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                 let text_body = (!paras.is_empty()).then(|| body(paras, "t"));
 
                 // ── the picture or table and where the text goes ──
-                let mut step_ids: Vec<Vec<u32>> = vec![];
+                let mut text_body = text_body;
                 // top of what is still free in the body area, and the text's frame
                 let mut y = c.y;
                 let mut text_f = Frame::new(c.x, c.y, c.w, (bottom - c.y).max(h / 10));
@@ -718,9 +765,58 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                     let cap_tag = cx.tag(&["caption"]);
                     let cap = strip_typed_refs(&caption_clip(&img.caption, 140));
                     let aspect = im.w.max(1) as f64 / im.h.max(1) as f64;
-                    let steps = !ps.steps.is_empty();
+                    if let (Some(pi), Some(p)) = (part, walk) {
+                        // ── the walk-through: the figure across the body, this part clear and the
+                        // rest faint, the lines one by one over the faint side ──
+                        let area = Frame::new(c.x, c.y, c.w, bottom - c.y);
+                        let pw = area.w.min((area.h as f64 * aspect) as i64);
+                        let ph = (pw as f64 / aspect) as i64;
+                        let pframe = Frame::new(area.x + (area.w - pw) / 2, area.y, pw, ph);
+                        if pw < area.w * 8 / 10 {
+                            cx.warnings.push(format!("{warn_at}：架構圖比較高，放滿高度後只有內容寬度的 {} %", pw * 100 / area.w.max(1)));
+                        }
+                        let ghost = inp.st.pack.ghost.picture_alpha.clamp(0.1, 1.0);
+                        extra.push(pic("架構圖", pframe.clone(), &asset, Crop::default(), ghost, Some("image-1")));
+                        let (a, b) = p.span(pi);
+                        let along_x = p.axis != "y";
+                        let (sub, crop) = if along_x {
+                            (Frame::new(pframe.x + (pw as f64 * a) as i64, pframe.y, (pw as f64 * (b - a)) as i64, ph), Crop { l: a, t: 0.0, r: 1.0 - b, b: 0.0 })
+                        } else {
+                            (Frame::new(pframe.x, pframe.y + (ph as f64 * a) as i64, pw, (ph as f64 * (b - a)) as i64), Crop { l: 0.0, t: a, r: 0.0, b: 1.0 - b })
+                        };
+                        extra.push(pic(&format!("第 {} 段", pi + 1), sub, &asset, crop, 1.0, None));
+                        low = pframe.y + pframe.h;
+                        // the text: over the larger faint side
+                        let m = h / 60;
+                        let tf = if along_x {
+                            let (lw, rw) = ((pw as f64 * a) as i64, (pw as f64 * (1.0 - b)) as i64);
+                            if rw >= lw { Frame::new(pframe.x + pw - rw + m, pframe.y + m, rw - 2 * m, ph - 2 * m) } else { Frame::new(pframe.x + m, pframe.y + m, lw - 2 * m, ph - 2 * m) }
+                        } else {
+                            let (th, bh) = ((ph as f64 * a) as i64, (ph as f64 * (1.0 - b)) as i64);
+                            if bh >= th { Frame::new(pframe.x + m, pframe.y + ph - bh + m, pw - 2 * m, bh - 2 * m) } else { Frame::new(pframe.x + m, pframe.y + m, pw - 2 * m, th - 2 * m) }
+                        };
+                        if let Some(tb) = text_body.take() {
+                            let lines = tb.paras.len();
+                            if tf.w < w / 6 || text_h(&tb, tf.w) > tf.h + h / 100 {
+                                cx.warnings.push(format!("{warn_at}：講解的字在變淡的那一側放不下（沒有縮字），請刪短"));
+                            }
+                            // sized to its text, on a veil of the page's own white so the faint
+                            // figure under the words does not fight them
+                            let mut tb = tb;
+                            tb.insets = [91_440, 45_720, 91_440, 45_720];
+                            let need = text_h(&tb, tf.w.max(w / 8)) + 2 * 45_720;
+                            let mut o = text_obj("講解", Frame::new(tf.x, tf.y, tf.w.max(w / 8), need.min(tf.h.max(h / 10))), tb, Some("text-1"));
+                            if let (Some(white), Some(sp)) = (["white", "paper", "background"].iter().find_map(|n| cx.st.color(n)), o.kind.sp_mut()) {
+                                sp.fill = Paint::Solid { color: white, alpha: 0.72 };
+                            }
+                            extra.push(o);
+                            if lines >= 2 {
+                                reveals.push(LineReveal { slide: out.len(), object: 0, lines });
+                            }
+                        }
+                    } else {
                     // a wide picture gets the width (text under it); a tall one sits beside the text
-                    let side = steps || (has_text && aspect < 1.4);
+                    let side = has_text && aspect < 1.4;
                     let area = if side {
                         let b = block("image").unwrap_or_else(|| Frame::new(c.x, c.y, c.w * 48 / 100, c.h));
                         Frame::new(b.x, c.y, b.w, bottom - c.y)
@@ -741,26 +837,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                     }
                     let ph = (pw as f64 / aspect) as i64;
                     let pframe = Frame::new(area.x + (area.w - pw) / 2, area.y, pw, ph);
-                    let is_main = img.id == main_fig && !inp.boxes.is_empty();
-                    let module = ps.module as usize;
-                    if is_main && ps.role == "method" && module >= 1 && module <= inp.boxes.len() {
-                        // the whole figure dimmed, the current module cropped back on top, framed
-                        let ghost = inp.st.pack.ghost.picture_alpha.clamp(0.1, 1.0);
-                        extra.push(pic("架構圖", pframe.clone(), &asset, Crop::default(), ghost, Some("image-1")));
-                        let (sub, crop) = module_rect(&pframe, im, &inp.boxes[module - 1].bbox);
-                        extra.push(pic(&format!("模組 {module}"), sub.clone(), &asset, crop, 1.0, None));
-                        extra.push(frame_obj(&cx, &sub, &format!("框 {module}")));
-                    } else {
-                        extra.push(pic(if fig.is_some() { "圖" } else { "表" }, pframe.clone(), &asset, Crop::default(), 1.0, Some("image-1")));
-                        if is_main && ps.role == "overview" {
-                            for (i, b) in inp.boxes.iter().enumerate() {
-                                let (sub, _) = module_rect(&pframe, im, &b.bbox);
-                                let mut o = frame_obj(&cx, &sub, &format!("框 {}", i + 1));
-                                o.name = format!("step-frame-{}", i + 1);
-                                extra.push(o);
-                            }
-                        }
-                    }
+                    extra.push(pic(if fig.is_some() { "圖" } else { "表" }, pframe.clone(), &asset, Crop::default(), 1.0, Some("image-1")));
                     low = pframe.y + pframe.h;
                     if let Some(cb) = cap_body {
                         // the caption: right under the picture, as wide as the picture's column
@@ -775,28 +852,11 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                         y = low + gap;
                         text_f = Frame::new(c.x, y, c.w, (bottom - y).max(h / 10));
                     }
+                    }
                 }
                 let _ = y;
                 if has_text {
-                    let t = cx.tag(&["body"]);
                     let mut tf = text_f.clone();
-                    if !ps.steps.is_empty() {
-                        // one text box per numbered step (the reveal steps)
-                        let n = ps.steps.len() as i64;
-                        let sh = ((tf.h - gap * (n - 1)) / n).min(h / 7);
-                        for (i, s) in ps.steps.iter().enumerate() {
-                            let label = cx.tag(&["label"]);
-                            let mut runs = vec![cx.run(&format!("{}  ", i + 1), &label, None)];
-                            runs.extend(cx.rich(s, &t, None));
-                            let mut o = text_obj(&format!("步驟 {}", i + 1), Frame::new(tf.x, tf.y + i as i64 * (sh + gap), tf.w, sh), body(vec![cx.para(runs, &t)], "t"), None);
-                            o.name = format!("step-{}", i + 1);
-                            low = low.max(o.frame.y + o.frame.h);
-                            extra.push(o);
-                        }
-                        step_ids = (0..ps.steps.len()).map(|_| vec![]).collect();
-                        let used = tf.y + n * (sh + gap);
-                        tf = Frame::new(tf.x, used, tf.w, (tf.y + tf.h - used).max(h / 10));
-                    }
                     // equation crops: stacked at the top of the text area, the text below
                     if !eq_pics.is_empty() {
                         let share = if text_body.is_none() { tf.h } else { tf.h * 3 / 5 };
@@ -834,9 +894,6 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                         extra.push(o);
                     }
                 }
-                if !step_ids.is_empty() {
-                    reveal_steps = Some((out.len(), step_ids));
-                }
             }
         }
         // ids after the base's objects
@@ -846,46 +903,15 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
             next += 1;
             objs.push(o);
         }
-        // the reveal steps: step text i and its frame on the figure
-        if let Some((idx, steps)) = &mut reveal_steps
-            && *idx == out.len()
-        {
-            for (i, s) in steps.iter_mut().enumerate() {
-                for o in &objs {
-                    if o.name == format!("step-{}", i + 1) || o.name == format!("step-frame-{}", i + 1) {
-                        s.push(o.id);
-                    }
-                }
-            }
+        // the walk-through's text object, now that it has its id
+        if let Some(r) = reveals.last_mut().filter(|r| r.slide == out.len() && r.object == 0) {
+            r.object = objs.iter().find(|o| o.name == "講解").map(|o| o.id).unwrap_or(0);
         }
         slide.objects = objs;
         out.push(slide);
         (inp.progress)(out.len(), plan.slides.len());
     }
-    Ok(Built { slides: out, reveal: reveal_steps.filter(|(_, s)| s.len() >= 2), warnings: cx.warnings, content: pf.content })
-}
-
-/// The module's rectangle on the slide and the crop that shows only it.
-fn module_rect(pf: &Frame, im: &Img, b: &[f64; 4]) -> (Frame, Crop) {
-    let (iw, ih) = (im.w.max(1) as f64, im.h.max(1) as f64);
-    let (x0, y0, x1, y1) = (b[0].clamp(0.0, iw), b[1].clamp(0.0, ih), b[2].clamp(0.0, iw), b[3].clamp(0.0, ih));
-    let sub = Frame::new(pf.x + (pf.w as f64 * x0 / iw) as i64, pf.y + (pf.h as f64 * y0 / ih) as i64, (pf.w as f64 * (x1 - x0) / iw) as i64, (pf.h as f64 * (y1 - y0) / ih) as i64);
-    (sub, Crop { l: x0 / iw, t: y0 / ih, r: 1.0 - x1 / iw, b: 1.0 - y1 / ih })
-}
-
-/// The emphasis frame around the current part (design §7.1: a red 2.2 pt frame).
-fn frame_obj(cx: &Ctx, f: &Frame, name: &str) -> Object {
-    let c = cx.st.pack.emphasis.get("key").and_then(|e| e.color.clone()).map(|c| c.to_uppercase()).unwrap_or_else(|| cx.color(&["emphasis", "accent-1", "red", "ink"]));
-    Object {
-        id: 0,
-        name: name.into(),
-        frame: f.clone(),
-        hidden: false,
-        ph: None,
-        slot: None,
-        kind: Kind::Shape(SpObj { geom: Geom::preset("rect"), fill: Paint::None, line: Some(Stroke::new(&c, 2.25)), text: None, equation: false }),
-        src: None,
-    }
+    Ok(Built { slides: out, reveals, warnings: cx.warnings, content: pf.content })
 }
 
 /// The page's title into the layout's title placeholder (else a box at `fallback`). The text

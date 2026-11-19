@@ -13,13 +13,15 @@
 //! - `notation`: the entries the deck registers (the paper's ids) and the registry macros.
 //! - `terms` / `profile` / `polish`: other owners' functions (`terms.rs`, `profile.rs`,
 //!   `polish.rs`; signatures documented there).
-//! - `outline` (lore-llm task `sc-paper-deck`, class `create`, streamed): the slides in the
-//!   author's paper-report order (design §7.1) referring to the material by id, then the module
-//!   boxes of the main architecture figure (`sc-crop-modules`, vision, optional).
+//! - `outline`: first a vision model looks at the figures (`sc-figure-parts`, `figparts.rs`):
+//!   the main method figure, its parts and where to cut; then the plan (lore-llm task
+//!   `sc-paper-deck`, streamed): the slides in the author's paper-report order (design §7.1)
+//!   referring to the material by id, one walk-through slide per part of the main figure.
 //! - `review`: the author's edits and answers (skipped with 直接產生).
 //! - `slides` (`build.rs`): page kinds from the base, the author's academic arrangements, the
 //!   style's tags, native tables, OMML equations (registry macros expanded), `Ref:` lines, the
-//!   big picture expanded by `reveal`; the paper's notation joins the deck's `notation.json`.
+//!   main figure walked through part by part, line by line (`expand_reveals`); the paper's
+//!   notation joins the deck's `notation.json`.
 //!
 //! Routes: docs/paper-deck.md "API". `/api/todeck*` answer 127.0.0.1 / localhost origins (CORS).
 
@@ -43,6 +45,7 @@ use crate::{AppState, R, Shared, bad};
 
 pub mod build;
 pub mod eqread;
+pub mod figparts;
 pub mod liveeq;
 pub mod outline;
 pub mod people;

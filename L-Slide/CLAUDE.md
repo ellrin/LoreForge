@@ -58,12 +58,14 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   page as one asset, cropped by the picture. Symbols and equations register into the deck's own `notation.json`.
 - 論文報告 (home tile, `web/todeck.js`; L-Paper's and L-Reader's 做成簡報 = `commons/ui/makedeck.js`, calls the same route): `crates/server/src/todeck/` (stages) + `../commons/crates/lore-jobs` (the runner, re-exported as `sc_server::jobs`; 論文報告 is a job, see docs/paper-deck.md §API)
   turns an L-Paper LaTeX folder or an L-Reader PDF (lore-docsrc, read-only) into a paper-report deck: one
-  lore-llm call (`sc-paper-deck`, class `create`, `crates/server/tasks.toml`; `llm.rs`) plans the slides in the
-  design §7.1 order by material id; `sc-crop-modules` (vision, optional) boxes the main figure's modules for the
-  method slides (whole figure ghosted + the module cropped back on top, framed); slots come from the academic
+  lore-llm call (`sc-paper-deck`, `crates/server/tasks.toml`; `llm.rs`; every 論文報告 task is Opus → Sonnet, no class) plans the slides in the
+  design §7.1 order by material id. Before the plan a vision call looks at the figures (`sc-figure-parts`, `todeck/figparts.rs`): which one is the
+  method's big picture, whether to explain it in parts and where to cut (cuts snapped to blank gutters, `lore_docsrc::crop::snap_cut`; 微調's
+  方法拆幾個模組 fixes the number; two failed calls = an equal split with a warning). The plan has one walk-through slide per part: the figure across
+  the body (never a small copy), that part clear and the rest at the style's ghost alpha, its lines appearing one by one over the faint side
+  (`build::LineReveal` → `expand_reveals`: copies of the slide, as many per deck as there are walk-through slides). Slots come from the academic
   arrangements, text from the style's tags, tables native, equations OMML (registry macros expanded), `Ref:` from
-  cited keys, typed "Fig. 3" stripped, the big picture expanded by `reveal`; the paper's notation joins the
-  deck's `notation.json` with its ids. `/api/todeck*` and `/api/info` answer 127.0.0.1 / localhost origins (CORS).
+  cited keys, typed "Fig. 3" stripped; the paper's notation joins the deck's `notation.json` with its ids. `/api/todeck*` and `/api/info` answer 127.0.0.1 / localhost origins (CORS).
   A draft paper's 待補 marks (lore-notation `pending`) stay marks: `[pending: …]` in text (lore-docsrc), `[pending]` in table cells and after a
   dependent sentence (`source.rs`, `build.rs`), and `plan::PENDING_RULE` tells the planner to copy them, never a number (`../docs/long-paper.md` §E).
   L-Paper papers are found like L-Paper does (`PAPERCOMPOSER_WORKSPACE`, its config, lore-home).

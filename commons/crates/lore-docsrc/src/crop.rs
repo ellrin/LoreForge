@@ -94,6 +94,88 @@ pub fn crop_png_fraction(png: &[u8], frac: [f64; 4], pad: u32) -> Result<Vec<u8>
     Ok(buf.into_inner())
 }
 
+/// A PNG no longer than `max_side` pixels on its long side (as it is when already smaller),
+/// e.g. a page or a figure for a vision model.
+pub fn fit_png(png: &[u8], max_side: u32) -> Result<Vec<u8>> {
+    let img = image::load_from_memory(png)?;
+    let (w, h) = img.dimensions();
+    if w.max(h) <= max_side.max(1) {
+        return Ok(png.to_vec());
+    }
+    let s = max_side as f64 / w.max(h) as f64;
+    let out = img.resize_exact(((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1), image::imageops::FilterType::Triangle);
+    let mut buf = std::io::Cursor::new(vec![]);
+    out.to_rgba8().write_to(&mut buf, image::ImageFormat::Png)?;
+    Ok(buf.into_inner())
+}
+
+/// How much of each column (`Axis::Vertical`: cuts are vertical lines) or row (`Axis::Horizontal`) of a picture is drawn on: the
+/// share of its pixels that differ from the background (the colour of the corners), 0–1.
+pub fn ink_profile(png: &[u8], axis: Axis) -> Result<Vec<f64>> {
+    let img = image::load_from_memory(png)?.to_rgba8();
+    let (w, h) = img.dimensions();
+    let bg = *img.get_pixel(0, 0);
+    let inked = |p: &Rgba<u8>| p.0[3] > 40 && (0..3).any(|k| (p.0[k] as i32 - if bg.0[3] > 40 { bg.0[k] as i32 } else { 255 }).abs() > 28);
+    let (n, m) = if axis == Axis::Vertical { (w, h) } else { (h, w) };
+    Ok((0..n)
+        .map(|i| {
+            let c = (0..m).filter(|&j| inked(if axis == Axis::Vertical { img.get_pixel(i, j) } else { img.get_pixel(j, i) })).count();
+            c as f64 / m.max(1) as f64
+        })
+        .collect())
+}
+
+/// A cut proposed at fraction `at` of a picture, moved to the blank gutter nearest to it:
+/// within ±`window` (a fraction), the middle of the emptiest run of the ink profile (a run
+/// crossed only by thin lines counts as empty: at most `max(lowest + 0.02, 0.04)` ink).
+/// Returns the cut and whether a gutter was found there (else `at` unchanged).
+pub fn snap_cut(profile: &[f64], at: f64, window: f64) -> (f64, bool) {
+    let n = profile.len();
+    if n < 8 {
+        return (at, false);
+    }
+    let pos = |f: f64| ((f.clamp(0.0, 1.0) * n as f64) as usize).min(n - 1);
+    let (lo, hi) = (pos(at - window), pos(at + window));
+    if hi <= lo {
+        return (at, false);
+    }
+    let low = profile[lo..=hi].iter().cloned().fold(f64::INFINITY, f64::min);
+    let limit = (low + 0.02).max(0.04);
+    if low > 0.12 {
+        return (at, false);
+    }
+    // runs of columns at or under the limit; the widest one, ties to the one nearest `at`
+    let mut best: Option<(usize, usize)> = None;
+    let mut i = lo;
+    while i <= hi {
+        if profile[i] <= limit {
+            // the whole gutter, also where it runs on past the window
+            let mut a = i;
+            while a > 0 && profile[a - 1] <= limit {
+                a -= 1;
+            }
+            while i < n && profile[i] <= limit {
+                i += 1;
+            }
+            let b = i - 1;
+            let mid = |r: (usize, usize)| (r.0 + r.1) as f64 / 2.0 / n as f64;
+            let better = match best {
+                None => true,
+                Some(r) => (b - a, -((mid((a, b)) - at).abs() * 1e6) as i64) > (r.1 - r.0, -((mid(r) - at).abs() * 1e6) as i64),
+            };
+            if better {
+                best = Some((a, b));
+            }
+        } else {
+            i += 1;
+        }
+    }
+    match best {
+        Some((a, b)) => (((a + b) as f64 / 2.0 + 0.5) / n as f64, true),
+        None => (at, false),
+    }
+}
+
 /// Cut a box (points) out of a page image rendered at `dpi`; masks are painted white.
 pub fn crop_image(page: &RgbaImage, bbox: &BBox, dpi: u32, masks: &[BBox]) -> RgbaImage {
     let s = dpi as f64 / 72.0;
@@ -252,6 +334,41 @@ pub fn add_module_regions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two dark blocks with a blank gutter at 45–55 %, crossed by a one-pixel arrow.
+    fn two_blocks() -> Vec<u8> {
+        let mut img = RgbaImage::from_pixel(200, 60, Rgba([255, 255, 255, 255]));
+        for y in 10..50 {
+            for x in (10..90).chain(110..190) {
+                img.put_pixel(x, y, Rgba([30, 60, 120, 255]));
+            }
+        }
+        for x in 90..110 {
+            img.put_pixel(x, 30, Rgba([0, 0, 0, 255]));
+        }
+        let mut buf = std::io::Cursor::new(vec![]);
+        img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn a_cut_moves_to_the_blank_gutter_and_a_big_picture_is_fitted() {
+        let png = two_blocks();
+        let p = ink_profile(&png, Axis::Vertical).unwrap();
+        assert_eq!(p.len(), 200);
+        assert!(p[50] > 0.5 && p[100] < 0.05);
+        // a cut the model put inside the left block's edge lands in the middle of the gutter
+        let (c, found) = snap_cut(&p, 0.42, 0.08);
+        assert!(found && (c - 0.5).abs() < 0.01, "{c}");
+        // nothing blank near: the cut stays where it was asked
+        assert_eq!(snap_cut(&p, 0.25, 0.05), (0.25, false));
+        let rows = ink_profile(&png, Axis::Horizontal).unwrap();
+        assert!(rows[5] < 0.01 && rows[30] > 0.7);
+        let small = fit_png(&png, 100).unwrap();
+        let d = image::load_from_memory(&small).unwrap();
+        assert_eq!((d.width(), d.height()), (100, 30));
+        assert_eq!(fit_png(&png, 400).unwrap(), png, "already small: untouched");
+    }
 
     #[test]
     fn crop_by_page_fraction() {

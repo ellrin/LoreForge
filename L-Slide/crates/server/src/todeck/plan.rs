@@ -62,6 +62,14 @@ pub mod limit {
     pub const STEP: usize = 60;
     pub const KV: usize = 8;
     pub const TAKE_HOME: usize = 5;
+    /// A walk-through slide of the main figure: its lines appear one by one over the faint side.
+    pub const WALK_LINES: usize = 4;
+    pub const WALK_LINE: usize = 60;
+}
+
+/// A slide that walks through one part of the main figure (`build.rs`).
+pub fn is_walk(s: &PlanSlide) -> bool {
+    s.role == "method" && s.module >= 1 && !s.figure.is_empty()
 }
 
 fn chars(s: &str) -> usize {
@@ -89,9 +97,12 @@ pub fn check_plan(p: &Plan, length: &str) -> Vec<String> {
             out.push(format!("{at}: the title has {} characters, at most {}.", chars(&s.title), limit::TITLE));
         }
         let visual = !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty();
-        let (nb, nc) = if s.role == "takeaway" { (limit::TAKE_HOME, limit::BULLET) } else if visual { (limit::BULLETS_VISUAL, limit::BULLET_VISUAL) } else { (limit::BULLETS, limit::BULLET) };
+        let (nb, nc) = if s.role == "takeaway" { (limit::TAKE_HOME, limit::BULLET) } else if is_walk(s) { (limit::WALK_LINES, limit::WALK_LINE) } else if visual { (limit::BULLETS_VISUAL, limit::BULLET_VISUAL) } else { (limit::BULLETS, limit::BULLET) };
         if s.bullets.len() > nb {
-            out.push(format!("{at}: {} bullets, at most {nb}{}; cut or move some to another slide.", s.bullets.len(), if visual { " next to a figure or table" } else { "" }));
+            out.push(format!("{at}: {} bullets, at most {nb}{}; cut or move some to another slide.", s.bullets.len(), if is_walk(s) { " on a walk-through slide" } else if visual { " next to a figure or table" } else { "" }));
+        }
+        if is_walk(s) && !s.equations.is_empty() {
+            out.push(format!("{at}: a walk-through slide carries no equations; move them to a method slide with module 0 or to the loss slide."));
         }
         for b in s.bullets.iter().filter(|b| chars(b) > nc) {
             out.push(format!("{at}: the bullet \"{}\" has {} characters, at most {nc}; shorten it.", clip(b, 30), chars(b)));
@@ -118,8 +129,8 @@ pub fn enforce_limits(p: &mut Plan) -> Vec<String> {
     let mut out: Vec<PlanSlide> = vec![];
     for s in std::mem::take(&mut p.slides) {
         let visual = !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty();
-        let nb = if s.role == "takeaway" { limit::TAKE_HOME } else if visual { limit::BULLETS_VISUAL } else { limit::BULLETS };
-        let nc = if visual && s.role != "takeaway" { limit::BULLET_VISUAL } else { limit::BULLET };
+        let nb = if s.role == "takeaway" { limit::TAKE_HOME } else if is_walk(&s) { limit::WALK_LINES } else if visual { limit::BULLETS_VISUAL } else { limit::BULLETS };
+        let nc = if s.role == "takeaway" { limit::BULLET } else if is_walk(&s) { limit::WALK_LINE } else if visual { limit::BULLET_VISUAL } else { limit::BULLET };
         let long = s.bullets.iter().filter(|b| chars(b) > nc).count();
         if long > 0 {
             notes.push(format!("「{}」有 {long} 行超過 {nc} 字，沒有縮字，請自行刪短", clip(&s.title, 30)));
@@ -131,7 +142,8 @@ pub fn enforce_limits(p: &mut Plan) -> Vec<String> {
             let mut first = s.clone();
             let rest: Vec<String> = first.bullets.split_off(nb);
             notes.push(format!("「{}」有 {} 行，一頁放不下：拆成兩頁", clip(&s.title, 30), s.bullets.len()));
-            let more = PlanSlide { role: s.role.clone(), title: s.title.clone(), bullets: rest, cites: vec![], notes: String::new(), ..Default::default() };
+            // a walk-through slide's second half stays on the same part of the figure
+            let more = PlanSlide { role: s.role.clone(), title: s.title.clone(), bullets: rest, cites: vec![], notes: String::new(), figure: if is_walk(&s) { s.figure.clone() } else { String::new() }, module: if is_walk(&s) { s.module } else { 0 }, ..Default::default() };
             first.takeaway = String::new();
             let mut more = more;
             more.takeaway = s.takeaway.clone();
@@ -172,10 +184,34 @@ pub(crate) fn clip(s: &str, n: usize) -> String {
     if s.chars().count() <= n { s.to_string() } else { s.chars().take(n).collect::<String>() + "…" }
 }
 
-pub fn prompt(m: &Material, length: &str, lang: &str) -> (String, String) {
+pub fn prompt(m: &Material, length: &str, lang: &str, parts: Option<&super::figparts::FigureParts>) -> (String, String) {
     let (lo, hi) = target_slides(length);
     let language = if lang == "en" { "English" } else { "Traditional Chinese as used in Taiwan (keep technical terms, model names and metrics in English)" };
     let (lt, lb, lbc, lv, lvc, ltk) = (limit::TITLE, limit::BULLETS, limit::BULLET, limit::BULLETS_VISUAL, limit::BULLET_VISUAL, limit::TAKEAWAY);
+    // how the method is shown depends on what a model saw in the main figure (`figparts.rs`)
+    let (wl, wc) = (limit::WALK_LINES, limit::WALK_LINE);
+    let method = match parts.filter(|p| !p.figure.is_empty()) {
+        Some(p) if p.walk() => {
+            let list: Vec<String> = p.parts.iter().enumerate().map(|(i, x)| format!("{}. {}{}", i + 1, x.label, if x.about.is_empty() { String::new() } else { format!(" ({})", x.about) })).collect();
+            format!(
+                "- overview: the big picture — figure = \"{f}\", shown whole across the slide with its caption; bullets = [] (notes carry what the presenter says).\n\
+- method, the walk-through: exactly {n} slides, one for each part of that figure, in this order: {parts}. For each: module = the part's number, figure = \"{f}\", \
+2–{wl} bullets of at most {wc} characters that explain this part only (the part is shown clearly, the rest of the figure faint, and the bullets appear one by one beside it); equations = [].\n\
+- method, details (optional, after the walk-through): module = 0, figure = \"\"; equations = ids of the method's equations, bullets explain them.\n",
+                f = p.figure,
+                n = p.parts.len(),
+                parts = list.join("; ")
+            )
+        }
+        Some(p) => format!(
+            "- overview: the big picture — figure = \"{f}\", shown whole across the slide with its caption; at most 2 short bullets.\n\
+- method (1–3): module = 0 and figure = \"\" (the figure is shown once, on the overview); equations = ids of the method's equations; bullets explain the steps.\n",
+            f = p.figure
+        ),
+        None => "- overview: the big picture — figure = the main architecture figure when the paper has one; at most 2 short bullets.\n\
+- method (1–3): module = 0 and figure = \"\"; equations = ids of the method's equations; bullets explain the steps.\n"
+            .to_string(),
+    };
     let system = format!(
         "You plan a paper-report seminar deck about one research paper, the way the presenter always builds them. \
 A program lays out the slides from your plan: you decide WHAT each slide says and which of the paper's figures, tables and equations it shows, never where things go.\n\n\
@@ -183,8 +219,7 @@ Reply with one JSON object {{venue, keywords, slides}}. Between {lo} and {hi} sl
 - cover: the paper title as title; venue = journal or conference and year if the text says so (else empty); keywords = 3–6.\n\
 - background (1–2): the field or clinical context.\n\
 - challenge: the problem and the intuition.\n\
-- overview: the big picture — figure = the main architecture figure; steps = 3–6 short numbered steps of the method, in order (each later gets its own method slide).\n\
-- method: one per step, module = the step number (1-based); figure = the same architecture figure; equations = ids of the equations of that module; bullets explain it.\n\
+{method}\
 - loss: the training objective; equations = the loss equation ids.\n\
 - training: training details; kv = [[key, value], …] rows (data, model, optimiser, learning rate, epochs, batch size, hardware…), only values the paper states.\n\
 - results: table = the main results table id (or figure); takeaway = one sentence reading the result.\n\
@@ -201,7 +236,7 @@ When a point needs more room, cut words or make a second slide — never go over
 - Bullets: short, spoken, start with a verb. Inline math between $ signs as LaTeX. Never start a bullet with a number, a dash or a bullet sign: the program numbers and marks them.\n\
 - Never write figure, table or equation numbers (no \"Fig. 3\", \"Table 2\", \"Eq. (1)\"): the slide shows the item itself.\n\
 - figure / table / equations use ONLY ids from the material lists that are not marked as unavailable; \"\" or [] when none.\n\
-- A figure or table appears on ONE slide, the slide that talks about it (only the main architecture figure repeats, on the overview and its method slides).\n\
+- A figure or table appears on ONE slide, the slide that talks about it (only the main figure repeats, on the overview and its walk-through slides).\n\
 - cites: bibliography keys from the list for background claims from other work, at most 2 per slide.\n\
 - notes: one or two sentences the presenter says (speaker notes).\n\
 - Write all slide text in {language}."
@@ -377,11 +412,16 @@ pub fn clean_plan(mut p: Plan, m: &Material) -> Plan {
     if p.slides.last().map(|s| s.role.as_str()) != Some("thanks") {
         p.slides.push(PlanSlide { role: "thanks".into(), title: "Thanks".into(), ..Default::default() });
     }
-    // method slides without a figure use the big picture's
+    // a walk-through slide (module ≥ 1) shows the big picture; any other method slide has no
+    // figure of its own unless the plan gave it a different one
     let main = p.slides.iter().find(|s| s.role == "overview" && !s.figure.is_empty()).map(|s| s.figure.clone());
     if let Some(f) = main {
-        for s in p.slides.iter_mut().filter(|s| s.role == "method" && s.figure.is_empty()) {
-            s.figure = f.clone();
+        for s in p.slides.iter_mut().filter(|s| s.role == "method") {
+            if s.module >= 1 {
+                s.figure = f.clone();
+            } else if s.figure == f {
+                s.figure.clear();
+            }
         }
     }
     p
@@ -426,7 +466,7 @@ mod limit_tests {
         let notes = drop_unusable(&mut p, &m);
         assert_eq!(p.slides.iter().map(|s| s.figure.as_str()).collect::<Vec<_>>(), ["fig1", "fig1", "", "fig3", "", ""], "only the main figure repeats, on its walk-through");
         assert_eq!(notes.len(), 3, "{notes:?}");
-        let (_, user) = prompt(&m, "standard", "en");
+        let (_, user) = prompt(&m, "standard", "en", None);
         assert!(user.contains("fig2 [UNAVAILABLE"), "the planner is told what cannot be shown");
     }
 }
@@ -454,9 +494,9 @@ mod pending_tests {
         assert!(m.abstract_text.contains("second site [pending]."), "the abstract too: {}", m.abstract_text);
         let grid = m.tables[0].grid.as_ref().unwrap();
         assert_eq!(grid[1], ["Ours", "0.72", "[pending]"]);
-        let (system, user) = prompt(&m, "standard", "en");
+        let (system, user) = prompt(&m, "standard", "en", None);
         assert!(system.contains(PENDING_RULE) && user.contains("| Ours | 0.72 | [pending] |"));
         let plain = super::super::source::Material { title: "x".into(), ..Default::default() };
-        assert!(!prompt(&plain, "standard", "en").0.contains(PENDING_RULE), "no marks, no rule");
+        assert!(!prompt(&plain, "standard", "en", None).0.contains(PENDING_RULE), "no marks, no rule");
     }
 }

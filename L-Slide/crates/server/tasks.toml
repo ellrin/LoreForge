@@ -32,3 +32,13 @@ default = "claude:opus"
 fallback = "claude:sonnet"
 offline = true
 max_tokens = 2000
+
+# The main figure explained in parts: the model looks at the paper's figures, names the
+# method's big picture, says whether to walk through it in parts and where to cut it
+# (todeck/figparts.rs). Failing twice = an equal split with a warning.
+[task.sc-figure-parts]
+label = "看圖決定架構圖怎麼分段"
+needs = { vision = true, json = true }
+default = "claude:opus"
+fallback = "claude:sonnet"
+max_tokens = 1500

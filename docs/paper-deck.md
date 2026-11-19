@@ -61,6 +61,17 @@
 - 封面：標題、期刊行、報告者／指導教授（底版的 `subtitle`）；不放關鍵字與自己的 `Ref:`。致謝頁：只有標題，置中。Take home 的編號由程式加（模型自己寫的「1.」會去掉）。
 - 守門測試：`tests/todeck.rs` `assert_one_size_per_role`（排版用字微調後的簡報：每個標籤一個字級、內容頁標題框相同、內文起始線相同）。
 
+## 主架構圖：分段講解
+
+作者要的樣子（2026-11-19）：流程圖要大，分成幾段；講其中一段時那一段清楚、其他很淡，講解的字在淡的那一側一行一行出現；再換下一段。不可以每頁都放一張小小的同一張圖。
+
+- **模型真的看圖**（`sc-figure-parts`，`todeck/figparts.rs`，Opus → Sonnet）：大綱之前，把論文所有有圖檔的圖給模型看，回答哪一張是方法的主架構圖、要不要分段、沿哪個方向切、切在哪（切線位置是圖寬或圖高的比例）、每段的名稱與一句說明。切線再移到最近的空白處（`lore_docsrc::crop::ink_profile`／`snap_cut`）；找不到空白就照模型的位置並列進 `warnings`。
+- 大綱照這些段落寫：總覽頁放整張圖（滿內容寬度＋圖說）；每一段一頁「方法」（`module` = 第幾段，最多 4 行、每行 60 字，不放方程式）；方程式放在 `module = 0` 的方法頁或損失頁（那些頁不再放這張圖）。模型判斷不必分段時：圖只在總覽頁出現一次。
+- 投影片（`build.rs`）：整張圖放滿內容區（寬圖 = 滿寬；較高的圖放滿高度，寬度不到八成時列進 `warnings`），整張用底版的 `ghost.picture_alpha` 變淡，再把這一段原樣疊回去；講解的字放在比較大的那一塊淡區上（底下一層半透明的白，字才清楚）。每一行一張複製頁（`LineReveal` → `expand_reveals`：第 k 張有前 k 行），一份簡報可以有很多段這樣的頁。
+- 微調的「方法拆幾個模組」（2–5）或換了主架構圖：`slides` 階段請模型依指定的段數再看一次圖，並把現有的方法頁分配到各段（結果存在工作資料夾 `figparts-<圖>-<段數>.json`，重做投影片不會再問）。
+- 模型兩次都答不出可用的結果：平均切成指定的段數（沒指定就 2 段），並在 `warnings` 說明。沒有引擎而且還不知道主架構圖是哪一張：方法頁不放圖，也會說明。
+- `outline` 的結果多了 `parts`（`{figure, split, axis, cuts, parts: [{label, about}], by, why}`）；`slides` 的結果有 `planned`（大綱頁數）、`parts`（段數）、`partsBy`（`model`／`equal`）、`calls`。
+
 ## 「不熟」標示（守備範圍）
 
 - 定義：一個詞是「不熟」＝它是領域詞（縮寫、多字詞組、或知識卡的別名），而且知識庫沒有它，或知識卡狀態是「要學」。常用字永遠不算（沿用 L-Reader 的字頻過濾）。
@@ -127,9 +138,9 @@
 - `step`：目前（或下一個要做）的階段，從 1 起算 —「上次做到第 N 步，繼續？」的 N。`doneSteps`：已完成（含略過）的階段數。`resumable`：`stopped` / `failed` / `interrupted`。
 - `stages[].state`：`pending` · `running`（`review` 等作者時也是 `running`）· `done` · `failed`。直接產生時 `review` 是 `done` 加 `"skipped": true`。
 - `ms`：該階段已花的時間（取樣當下；進行中的頁面自己往上加）。`chars` / `lastActivity` / `agoMs` 只在 `model: true` 的階段：模型串流到目前的字數、最後收到字的時間、距今毫秒。
-- `counts`：`source` `{fig, figTotal, table, eq, sections, refs}`（圖 n/N：`fig` 有圖檔的，`figTotal` 全部）· `notation` `{entries}` · `terms` `{terms, unknown}` · `profile` `{voice}`（語氣範例的句數）· `outline` `{slides, boxes, suggestions}`（完成後）· `review` `{}` · `slides` `{slide, slides}`；`source` 與 `outline` 另有 `warnings`（幾件）、`outline` 有 `calls`（模型呼叫次數）（第 n/N 頁）· `polish` `{checks, fixes}`。
+- `counts`：`source` `{fig, figTotal, table, eq, sections, refs}`（圖 n/N：`fig` 有圖檔的，`figTotal` 全部）· `notation` `{entries}` · `terms` `{terms, unknown}` · `profile` `{voice}`（語氣範例的句數）· `outline` `{slides, parts, suggestions}`（完成後）· `review` `{}` · `slides` `{slide, slides}`；`source` 與 `outline` 另有 `warnings`（幾件）、`outline` 有 `calls`（模型呼叫次數）（第 n/N 頁）· `polish` `{checks, fixes}`。
 - `error`（`failed` 時）：一行中文。`failure`：`{ stage, status, error, alternative? }`，`alternative` 與 lore-llm 的錯誤內容相同（頁面據此提供「改用本機／改用 Claude」= 帶 `engine` 的 `resume`）。
-- `deck` / `result`（`done` 時）：簡報資料夾名稱；`{ name, slides, engine, boxes, notation, unknown, warnings, polish: {checks, fixes} }`（`unknown` = 標示的不熟名詞數）。`…/stages/polish` 是完整的微調報告（`{checks, fixes: [{slide, object, rule, what, before, after, changes}], items}`，`items` 含用詞一致的建議）。
+- `deck` / `result`（`done` 時）：簡報資料夾名稱；`{ name, slides, planned, engine, parts, partsBy, modules, calls, notation, unknown, warnings, polish: {checks, fixes} }`（`unknown` = 標示的不熟名詞數）。`…/stages/polish` 是完整的微調報告（`{checks, fixes: [{slide, object, rule, what, before, after, changes}], items}`，`items` 含用詞一致的建議）。
 - `options`：`{length, lang, style}`，目前的參數（微調視窗據此顯示）。
 - `review`（只在 `state: "review"` 時）：
 
@@ -164,7 +175,7 @@
 | POST | `/api/todeck/jobs/{id}/review` | 見下（`PUT` 同義） | 工作物件；不在 `review` 時 409 |
 | POST | `/api/todeck/jobs/{id}/params` | `{length?, lang?, style?}` | 工作物件；只在 `review` 時（否則 409），值不認得 400。`length` 或 `lang` 變了：刪掉 `outline` 以後的檢查點，工作從 `outline` 重跑，做完再停在 `review`；只改 `style`：不重跑 |
 | DELETE | `/api/todeck/jobs/{id}` | | 204；刪掉這個工作的快取資料夾（正在跑時 409） |
-| GET | `/api/todeck/jobs/{id}/stages/{stage}` | | 該階段的檢查點內容（`outline`：`{plan: {venue, keywords, slides: [PlanSlide…]}, questions: [], boxes, engine, suggestions}`；`terms`：`{terms: [{term, unknown, n, kind, card}]}`）；沒做完 404 |
+| GET | `/api/todeck/jobs/{id}/stages/{stage}` | | 該階段的檢查點內容（`outline`：`{plan: {venue, keywords, slides: [PlanSlide…]}, questions: [], parts, engine, suggestions, warnings, calls}`；`terms`：`{terms: [{term, unknown, n, kind, card}]}`）；沒做完 404 |
 | GET | `/api/todeck/jobs/{id}/img/{file}` | | 論文的圖（PNG / JPEG） |
 
 桌面版連結：`lore-sc://job/<id>` → `/?job=<id>`（`LoreLinks.open("sc", {job})`）。
@@ -187,7 +198,7 @@
 ```
 
 - `outline`：照頁面的順序；刪掉的列就是不要的頁；`id` 對回模型的頁（新頁可用沒有的 id，配 `kind`）；改了的 `point` 寫回 take-away（或第一個要點）。
-- `answers`：每題可為 `null`。`mainFig` 換掉大架構與方法頁的圖（模組框隨之不用）；`opinion: false` 拿掉「我的看法」頁，`true` 而沒有就加一頁空的。`modules`（2–5）伺服器會讀（`slides` 的結果裡有 `modules`）；`audience` 目前只記錄。
+- `answers`：每題可為 `null`。`mainFig` 換掉總覽與分段講解頁的圖（模型會再看一次新的圖）；`opinion: false` 拿掉「我的看法」頁，`true` 而沒有就加一頁空的。`modules`（2–5）= 主架構圖分幾段講（見「主架構圖：分段講解」）；`audience` 目前只記錄。
 - `known`：勾了「我懂」的詞：送出時寫進 `terms` 的檢查點（`understood`），投影片就不標它們；`remember: true` 另外經 L-Brain 的 API 存成「記得」（它沒開就略過，訊息記在 `review.json` 的 `notes`）。投影片做好之後的「我懂」是 `PUT /api/decks/{name}/learn`。
 
 ### 檢查點

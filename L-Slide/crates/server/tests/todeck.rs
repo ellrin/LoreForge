@@ -174,7 +174,14 @@ impl lore_llm::LlmProvider for Keyed {
 
 /// System-prompt words of the job's requests.
 pub const ASK_PLAN: &str = "You plan a paper-report seminar deck";
-pub const ASK_BOXES: &str = "building blocks";
+pub const ASK_PARTS: &str = "main method figure";
+
+/// What a model "saw" in the synthetic figure (three boxes side by side): three parts, the
+/// cuts a little off the blank gutters at 1/3 and 2/3.
+fn parts() -> Value {
+    json!({ "main": "fig1", "split": true, "axis": "x", "cuts": [0.30, 0.70], "why": "three stages", "parts": [
+        { "label": "Encoder", "about": "Finds the lesions." }, { "label": "Fusion", "about": "Weighs them." }, { "label": "Decoder", "about": "Grades the image." }] })
+}
 pub const ASK_REVIEW: &str = "You review the outline";
 
 fn snapshot(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
@@ -197,11 +204,11 @@ fn plan(lang_text: &str) -> Value {
         "slides": [
             { "role": "cover", "title": "Two-Stage Grading of Synthetic Lesions", "bullets": [] },
             { "role": "background", "title": "Why grading is slow", "bullets": [format!("Grade by hand {lang_text}")], "cites": ["ellrin2025synthetic", "nobody2020"] },
-            { "role": "overview", "title": "Big picture", "bullets": [], "figure": "fig1", "steps": ["Encode the image", "Fuse the lesions", "Decode the grade"] },
+            { "role": "overview", "title": "Big picture", "bullets": [], "figure": "fig1" },
             { "role": "method", "title": "Encoder", "bullets": ["Finds lesions as in Fig. 3"], "figure": "fig1", "module": 1 },
-            { "role": "method", "title": "Fusion", "bullets": ["Weighs each lesion by $\\vx$"], "figure": "fig1", "module": 2 },
-            { "role": "method", "title": "Decoder.", "bullets": ["Grades the image"], "figure": "fig1", "module": 3, "equations": ["eq1", "eq99"] },
-            { "role": "loss", "title": "Reconstruction loss", "bullets": ["Penalises the distance (Eq. (1))"], "equations": ["eq1"] },
+            { "role": "method", "title": "Fusion", "bullets": ["Weighs each lesion by $\\vx$", "Keeps the largest three", "Passes one vector on"], "figure": "fig1", "module": 2 },
+            { "role": "method", "title": "Decoder.", "bullets": ["Grades the image", "Outputs four grades"], "figure": "fig1", "module": 3 },
+            { "role": "loss", "title": "Reconstruction loss", "bullets": ["Penalises the distance (Eq. (1))"], "equations": ["eq1", "eq99"] },
             { "role": "training", "title": "Training details", "bullets": [], "kv": [["Epochs", "30"], ["Optimiser", "AdamW"], ["Learning rate", "$10^{-4}$"]] },
             { "role": "results", "title": "Main results", "bullets": [], "table": "tab1", "takeaway": "Ours wins on both metrics, see Table 1" },
             { "role": "opinion", "title": "Some opinions", "bullets": ["Test on real data"] },
@@ -341,17 +348,12 @@ async fn paper_becomes_a_report_deck() {
     let ws = workspace(dir.path());
     let home = lore_home::Home::at(dir.path().join("home"));
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
-    // the vision answer for the module boxes: three boxes in reading order (pixels of the 300×100 figure)
-    let boxes = json!({ "modules": [
-        { "label": "encoder", "box": [12, 25, 88, 75] },
-        { "label": "fusion", "box": [112, 25, 188, 75] },
-        { "label": "decoder", "box": [212, 25, 288, 75] } ] });
     // the author's deck fonts and the people L-Paper keeps (synthetic)
     std::fs::create_dir_all(dir.path().join("home/private/shared")).unwrap();
     std::fs::write(dir.path().join("home/private/shared/fonts.toml"), "[deck]\nlatin = \"Brand Serif\"\neast_asian = \"Brand Sans TC\"\n").unwrap();
     std::fs::create_dir_all(dir.path().join("home/private/PaperComposer/profile")).unwrap();
     std::fs::write(dir.path().join("home/private/PaperComposer/profile/authors.csv"), "id,given,family,email,orcid,affiliations,role,note\nA001,Ellrin,Example,ellrin@example.org,,F001,,\nA002,Daidai,Example,daidai@example.org,,F001,,\n").unwrap();
-    let planner = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan("is slow")]).on(ASK_BOXES, &[boxes]));
+    let planner = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan("is slow")]).on(ASK_PARTS, &[parts()]));
     let f = engines(planner.clone(), planner.clone());
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
@@ -369,7 +371,7 @@ async fn paper_becomes_a_report_deck() {
     assert_eq!(h.get("access-control-allow-origin").and_then(|x| x.to_str().ok()), Some("http://127.0.0.1:7878"));
     let name = v["name"].as_str().unwrap().to_string();
     assert_eq!(name, "Two-Stage-Grading-of-Synthetic-Lesions");
-    assert_eq!(v["boxes"], 3, "{v}");
+    assert_eq!((v["parts"].as_u64(), v["partsBy"].as_str(), v["planned"].as_u64()), (Some(3), Some("model"), Some(12)), "{v}");
     assert_eq!(v["notation"], 1, "the paper's symbol joins the deck's notation");
 
     // the model saw the paper's material by id
@@ -377,13 +379,16 @@ async fn paper_becomes_a_report_deck() {
     assert!(seen.contains("Two-Stage Grading") && seen.contains("fig1: Overview of the pipeline") && seen.contains("tab1") && seen.contains("eq1"), "{seen}");
     assert!(seen.contains("ellrin2025synthetic"));
     // (the same engine also answered 會動的方程式's equation-plot: not a vision call)
-    assert_eq!(planner.asked(ASK_BOXES).len(), 1, "one vision call for the main figure");
-    assert!(planner.asked(ASK_BOXES)[0].has_images());
+    // a model looked at the figure before the plan was written, and the plan was told its parts
+    assert_eq!(planner.asked(ASK_PARTS).len(), 1, "one vision call for the main figure");
+    assert!(planner.asked(ASK_PARTS)[0].has_images());
+    let sys = planner.asked(ASK_PLAN)[0].system.clone();
+    assert!(sys.contains("exactly 3 slides, one for each part") && sys.contains("1. Encoder (Finds the lesions.); 2. Fusion"), "{sys}");
 
     let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
     let slides = d["deck"]["slides"].as_array().unwrap().clone();
-    // 12 planned, the big picture expanded into one slide per step (3)
-    assert_eq!(slides.len(), 14);
+    // 12 planned; the walk-through's lines appear one by one: Fusion 3 copies, Decoder 2
+    assert_eq!(slides.len(), 15);
     assert_eq!(slides[0]["layout"], "封面");
     assert_eq!(slides.last().unwrap()["layout"], "結尾");
     let mut all = vec![];
@@ -437,22 +442,35 @@ async fn paper_becomes_a_report_deck() {
     assert!(joined.contains("Ref: Ellrin and Daidai, Synthetic Lesions for Testing"), "cited key → Ref: line");
     assert!(!joined.contains("Fig. 3") && !joined.contains("Table 1") && !joined.contains("Eq. (1)"), "typed references are dropped");
 
-    // big picture: three slides, the current step plain, the others ghosted
-    let steps: Vec<&Value> = slides.iter().filter(|s| s["objects"].as_array().unwrap().iter().any(|o| o["name"] == "step-1")).collect();
-    assert_eq!(steps.len(), 3);
-    let grey = |s: &Value, n: &str| s["objects"].as_array().unwrap().iter().find(|o| o["name"] == n).unwrap()["text"]["paras"][0]["runs"][1]["look"]["color"].clone();
-    assert_ne!(grey(steps[0], "step-1"), json!("A6A6A6"));
-    assert_eq!(grey(steps[0], "step-2"), json!("A6A6A6"));
-    assert_eq!(grey(steps[1], "step-1"), json!("A6A6A6"));
-    assert_ne!(grey(steps[1], "step-2"), json!("A6A6A6"));
-
-    // method slides: the whole figure dimmed, the module cropped back on top
-    let fusion = slides.iter().find(|s| all_text(s).contains("Fusion")).unwrap();
-    let pics: Vec<&Value> = fusion["objects"].as_array().unwrap().iter().filter(|o| o["type"] == "picture").collect();
-    assert_eq!(pics.len(), 2, "{fusion}");
-    assert!(pics[0]["alpha"].as_f64().unwrap() < 0.5);
-    assert!((pics[1]["crop"]["l"].as_f64().unwrap() - 112.0 / 300.0).abs() < 1e-6);
-    assert_eq!(pics[0]["asset"], pics[1]["asset"], "one image file, two crops");
+    // the big picture: the figure whole, across the body width
+    let content_w = slides[1]["objects"].as_array().unwrap().iter().find(|o| o["name"] == "內文").unwrap()["frame"]["w"].as_i64().unwrap();
+    let big = slides.iter().find(|s| all_text(s).contains("Big picture")).unwrap();
+    let pics: Vec<&Value> = big["objects"].as_array().unwrap().iter().filter(|o| o["type"] == "picture").collect();
+    assert_eq!(pics.len(), 1);
+    assert!(pics[0]["frame"]["w"].as_i64().unwrap() >= content_w * 8 / 10 && pics[0]["alpha"].as_f64().unwrap_or(1.0) > 0.99, "{}", pics[0]);
+    // the walk-through of part 2: the whole figure faint, the part clear on top (cut at the
+    // blank gutters, 1/3 and 2/3), never smaller than 80 % of the body width; its three lines
+    // appear one by one over the faint side
+    let fusion: Vec<&Value> = slides.iter().filter(|s| all_text(s).contains("Fusion") && s["objects"].as_array().unwrap().iter().any(|o| o["name"] == "講解")).collect();
+    assert_eq!(fusion.len(), 3, "one copy per line");
+    for (k, sl) in fusion.iter().enumerate() {
+        let objs = sl["objects"].as_array().unwrap();
+        let pics: Vec<&Value> = objs.iter().filter(|o| o["type"] == "picture").collect();
+        assert_eq!(pics.len(), 2, "{sl}");
+        assert!(pics[0]["alpha"].as_f64().unwrap() < 0.5 && pics[0]["frame"]["w"].as_i64().unwrap() >= content_w * 8 / 10);
+        assert!((pics[1]["crop"]["l"].as_f64().unwrap() - 1.0 / 3.0).abs() < 0.02 && (pics[1]["crop"]["r"].as_f64().unwrap() - 1.0 / 3.0).abs() < 0.02, "{}", pics[1]);
+        assert_eq!(pics[0]["asset"], pics[1]["asset"], "one image file, two crops");
+        let text = objs.iter().find(|o| o["name"] == "講解").unwrap();
+        assert_eq!(text["text"]["paras"].as_array().unwrap().len(), k + 1, "the lines so far");
+        // on the faint side: beside the clear part, inside the figure
+        let (tx, px, pw) = (text["frame"]["x"].as_i64().unwrap(), pics[1]["frame"]["x"].as_i64().unwrap(), pics[1]["frame"]["w"].as_i64().unwrap());
+        assert!(tx >= px + pw || tx + text["frame"]["w"].as_i64().unwrap() <= px, "{} {}", text["frame"], pics[1]["frame"]);
+    }
+    assert_eq!(fusion[0]["objects"].as_array().unwrap().iter().find(|o| o["name"] == "講解").unwrap()["frame"], fusion[2]["objects"].as_array().unwrap().iter().find(|o| o["name"] == "講解").unwrap()["frame"]);
+    let uids: std::collections::BTreeSet<&str> = slides.iter().map(|s| s["uid"].as_str().unwrap()).collect();
+    assert_eq!(uids.len(), slides.len());
+    // the main figure is on the overview and its walk-through only; no other picture twice
+    assert_eq!(slides.iter().filter(|s| s["objects"].as_array().unwrap().iter().any(|o| o["type"] == "picture")).count(), 1 + 1 + 3 + 2);
 
     // native tables: the results grid and the training key-value rows
     let tables: Vec<Value> = slides.iter().flat_map(|s| s["objects"].as_array().unwrap().clone()).filter(|o| o["type"] == "table").collect();
@@ -603,7 +621,7 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     author_decks(&home);
     let decks_before = snapshot(&home.app_dir("SlideComposer").unwrap().join("decks"));
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
-    let model = Arc::new(MockProvider::new(vec![plan("is slow").to_string()]));
+    let model = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan("is slow")]).on(ASK_PARTS, &[parts()]));
     let f = engines(model.clone(), model.clone());
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home.clone(), f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
@@ -619,7 +637,7 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     let voice_file = home.app_dir("SlideComposer").unwrap().join("voice/examples.json");
     assert!(voice_file.is_file());
     assert!(v["stages"][3]["counts"]["voice"].as_u64().unwrap() > 5, "{}", v["stages"][3]);
-    let sys = model.seen.lock().unwrap()[0].system.clone();
+    let sys = model.seen.lock().unwrap().iter().find(|r| r.system.starts_with(ASK_PLAN)).unwrap().system.clone();
     assert!(sys.starts_with("You plan a paper-report") && sys.contains("Write like the presenter") && sys.contains("take-home lines \"2. Check every stage by hand\" · \"1. Split hard tasks into small steps\""), "the closest to the paper first, no near-copies: {sys}");
     assert!(sys.contains("titles \"Ablation study\"") && sys.contains("臨床上 grading 很花時間"), "{sys}");
     for never in ["CONFIDENTIAL", "Presented by", "Ref: Ellrin", "daidai", "Questions?"] {
@@ -670,7 +688,7 @@ async fn a_job_waits_for_the_review_and_applies_it() {
     assert_eq!(v["stages"][6]["counts"], json!({ "slide": 11, "slides": 11 }));
     assert_eq!(v["stages"][7]["counts"]["checks"], 6);
     let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
-    assert_eq!(d["deck"]["slides"].as_array().unwrap().len(), 13, "11 planned, the big picture as 3");
+    assert_eq!(d["deck"]["slides"].as_array().unwrap().len(), 14, "11 planned, the walk-through's lines one by one (+2, +1)");
     let text = all_text(&d["deck"]);
     assert!(text.contains("What the numbers say") && !text.contains("Some opinions"));
     assert_eq!(v["stages"][2]["counts"]["unknown"].as_u64().unwrap(), unknown - 1, "我懂 updated the terms");
@@ -922,10 +940,9 @@ async fn run_with_eq_answer(answer: Value) -> (tempfile::TempDir, axum::Router, 
     let ws = workspace(dir.path());
     let home = lore_home::Home::at(dir.path().join("home"));
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
-    let planner = Arc::new(MockProvider::new(vec![plan("is slow").to_string()]));
-    let boxes = json!({ "modules": [{ "label": "encoder", "box": [12, 25, 88, 75] }, { "label": "fusion", "box": [112, 25, 188, 75] }, { "label": "decoder", "box": [212, 25, 288, 75] }] });
-    // claude:sonnet answers the module boxes first, then the equation
-    let sonnet = Arc::new(MockProvider::new(vec![boxes.to_string(), answer.to_string()]).named("mock-sonnet"));
+    let planner = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan("is slow")]).on(ASK_PARTS, &[parts()]));
+    // claude:sonnet answers the equation
+    let sonnet = Arc::new(MockProvider::new(vec![answer.to_string()]).named("mock-sonnet"));
     let f = engines(planner.clone(), planner).with("claude:sonnet", sonnet.clone());
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let fake = Arc::new(FakeRender { specs: Default::default() });

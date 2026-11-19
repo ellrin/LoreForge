@@ -7,15 +7,15 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
-use lore_canvas::reveal::{RevealSpec, reveal};
-use lore_canvas::{Look, Op};
+use lore_canvas::Op;
 use lore_llm::LlmRequest;
 use lore_notation::Notation;
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
-use super::build::{BuildInput, ModuleBox, build};
+use super::build::{BuildInput, ModuleBox, build, expand_reveals};
+use super::figparts::{self, FigureParts};
 use super::plan::{Plan, PlanSlide, ROLES, check_plan, clean_plan, drop_unusable, enforce_limits, prompt, schema, target_slides};
 use super::profile::{ProfileInput, StyleProfile};
 use super::source::{Material, from_latex, from_lorereader, is_paper};
@@ -282,7 +282,11 @@ pub struct OutlineOut {
     pub plan: Plan,
     /// Up to 4 questions for the review window (none yet: the page asks its own four).
     pub questions: Vec<Value>,
+    /// Older checkpoints only (module boxes of the main figure).
     pub boxes: Vec<ModuleBox>,
+    /// The main figure and its parts, as a model saw them (`figparts.rs`); `None`: not asked
+    /// (an older checkpoint) or the paper has no figure.
+    pub parts: Option<FigureParts>,
     /// Provider id that wrote the plan.
     pub engine: String,
     /// 微調's 建議 (`suggest.rs`): at most 5 edits on the review rows, often none.
@@ -304,7 +308,15 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     let p = params(cx)?;
     let m = material(cx, true)?;
     let prof: StyleProfile = typed(cx, "profile").unwrap_or_default();
-    let (mut system, user) = prompt(&m, &p.length, &p.lang);
+    let llm = super::llm(s);
+    // first a model looks at the figures: which one is the method's big picture, and in how
+    // many parts (and where cut) the talk walks through it — the plan is written for those parts
+    let mut warnings = vec![];
+    let seen = figparts::figure_parts(llm, &m, &figparts::Ask::default()).await;
+    let mut calls = seen.calls;
+    warnings.extend(seen.notes);
+    let parts = seen.parts;
+    let (mut system, user) = prompt(&m, &p.length, &p.lang, parts.as_ref());
     if !prof.summary.trim().is_empty() {
         system += &format!("\n\nThe presenter's own decks, summarised — follow these habits:\n{}", prof.summary.trim());
     }
@@ -317,9 +329,8 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
         system += &format!("\n\n{examples}");
     }
     let req = LlmRequest::prompt(system.clone(), user.clone()).json(schema()).max_tokens(12000);
-    let llm = super::llm(s);
     cx.chars(0);
-    let mut calls = 1u32;
+    calls += 1;
     let (v, engine) = outline::ask_json(llm, TASK_PAPER_DECK, req, p.engine.as_deref(), &|n| cx.chars(n)).await?;
     let plan: Plan = serde_json::from_value(v).map_err(|e| StageError::new(502, format!("模型的大綱無法使用：{e}")))?;
     let mut plan = clean_plan(plan, &m);
@@ -328,7 +339,6 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     }
     // the limits and the length are checked, not trusted: one corrective request, then what
     // is still over is split or reported (nothing is ever shrunk to fit)
-    let mut warnings = vec![];
     let problems = check_plan(&plan, &p.length);
     if !problems.is_empty() {
         let before = cx.job.meta().stages.get("outline").and_then(|s| s.chars).unwrap_or(0);
@@ -353,12 +363,19 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     if plan.slides.len() < lo || plan.slides.len() > hi {
         warnings.push(format!("大綱有 {} 頁，不在所選長度的 {lo}–{hi} 頁內", plan.slides.len()));
     }
-    let boxes = outline::module_boxes(llm, &m, &plan).await;
+    // the big picture is the figure the model looked at
+    if let Some(f) = parts.as_ref().map(|p| p.figure.clone()).filter(|f| !f.is_empty()) {
+        let old = plan.slides.iter().find(|s| s.role == "overview").map(|s| s.figure.clone()).unwrap_or_default();
+        for s in plan.slides.iter_mut().filter(|s| s.role == "overview" || (s.role == "method" && s.figure == old && !old.is_empty())) {
+            s.figure = f.clone();
+        }
+    }
+    let n_parts = parts.as_ref().filter(|p| p.walk()).map_or(0, |p| p.parts.len());
     // 建議: the progress keeps counting characters after the plan's
     let base = cx.job.meta().stages.get("outline").and_then(|s| s.chars).unwrap_or(0);
     let suggestions = suggest::suggest(llm, &plan, &m, &p.length, &p.lang, &prof.summary, &voice_block(1200), p.engine.as_deref(), &|n| cx.chars(base + n)).await;
-    cx.counts(json!({ "slides": plan.slides.len(), "boxes": boxes.len(), "suggestions": suggestions.len(), "calls": calls, "warnings": warnings.len() }));
-    to_value(&OutlineOut { plan, questions: vec![], boxes, engine, suggestions, warnings: uniq(warnings), calls })
+    cx.counts(json!({ "slides": plan.slides.len(), "parts": n_parts, "suggestions": suggestions.len(), "calls": calls, "warnings": warnings.len() }));
+    to_value(&OutlineOut { plan, questions: vec![], boxes: vec![], parts, engine, suggestions, warnings: uniq(warnings), calls })
 }
 
 async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
@@ -369,18 +386,49 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     // the terms as the review left them (我懂 already applied)
     let tr: terms::TermsResult = typed(cx, "terms").unwrap_or_default();
     let review = cx.output("review").unwrap_or(json!({ "skipped": true }));
-    let main_before = o.plan.slides.iter().find(|s| s.role == "overview").map(|s| s.figure.clone());
     let mut plan = apply_review(o.plan, &review, &m);
     // the author's edits keep the same rules: over a limit is split or reported, never shrunk
     let mut warnings = o.warnings.clone();
     warnings.extend(m.warnings.iter().cloned());
-    warnings.extend(enforce_limits(&mut plan));
-    warnings.extend(drop_unusable(&mut plan, &m));
     // 微調: 方法拆幾個模組 (2–5)
     let modules = review["answers"]["modules"].as_u64().filter(|n| (2..=5).contains(n)).map(|n| n as usize);
-    let main_after = plan.slides.iter().find(|s| s.role == "overview").map(|s| s.figure.clone());
-    // the boxes belong to the figure and steps the model planned
-    let boxes = if main_before == main_after { o.boxes } else { vec![] };
+    // the main figure's parts: the ones the outline was planned for, unless the author changed
+    // the figure or the number of parts (or an older outline has none) — then a model looks again
+    let main = plan.slides.iter().find(|s| s.role == "overview").map(|s| s.figure.clone()).unwrap_or_default();
+    let mut calls = 0u32;
+    let fits = |p: &FigureParts| p.figure == main && modules.is_none_or(|n| p.walk() && p.parts.len() == n);
+    let parts = match o.parts {
+        _ if main.is_empty() => None,
+        Some(p) if fits(&p) => Some(p),
+        _ => {
+            let file = cx.dir().join(format!("figparts-{}-{}.json", super::source::safe_name(&main), modules.unwrap_or(0)));
+            let listed: Vec<(String, String)> = plan.slides.iter().filter(|s| s.role == "method" && s.figure == main).map(|s| (s.title.clone(), s.bullets.join(" "))).collect();
+            let saved: Option<FigureParts> = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok());
+            let p = match saved.filter(|p: &FigureParts| p.slides.len() == listed.len() || listed.is_empty()) {
+                Some(p) => Some(p),
+                None => {
+                    let got = figparts::figure_parts(super::llm(s), &m, &figparts::Ask { figure: Some(&main), parts: modules, slides: &listed }).await;
+                    calls += got.calls;
+                    warnings.extend(got.notes);
+                    if let Some(p) = &got.parts {
+                        let _ = crate::jobs::write_atomic(&file, &serde_json::to_vec(p).unwrap_or_default());
+                    }
+                    got.parts
+                }
+            };
+            // the method slides go to the parts the model put them on
+            if let Some(p) = p.as_ref().filter(|p| p.walk()) {
+                let mut k = 0;
+                for sl in plan.slides.iter_mut().filter(|s| s.role == "method" && s.figure == main) {
+                    sl.module = p.slides.get(k).map_or(sl.module.clamp(1, p.parts.len() as u32), |i| *i as u32 + 1);
+                    k += 1;
+                }
+            }
+            p
+        }
+    };
+    warnings.extend(enforce_limits(&mut plan));
+    warnings.extend(drop_unusable(&mut plan, &m));
     let total = plan.slides.len();
     cx.counts(json!({ "slide": 0, "slides": total }));
     // 會動的方程式: the main loss as a GIF (微調 → 不要 turns it off); best-effort
@@ -393,13 +441,13 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     let count = cx.counter();
     let (s, dir, engine) = (s.clone(), cx.dir().to_path_buf(), o.engine);
     let warnings = uniq(warnings);
-    tokio::task::spawn_blocking(move || make_deck(&s, &dir, &p, &m, &n, &plan, &tr, boxes, modules, warnings, live, &engine, &|i, t| count(json!({ "slide": i, "slides": t })))).await.map_err(join_err)?
+    tokio::task::spawn_blocking(move || make_deck(&s, &dir, &p, &m, &n, &plan, &tr, parts, modules, calls, warnings, live, &engine, &|i, t| count(json!({ "slide": i, "slides": t })))).await.map_err(join_err)?
 }
 
 /// The deck from the plan (blocking: pandoc, files). A crash half-way leaves the deck's name
 /// in `slides.pending`; the next try removes that half-made deck first.
 #[allow(clippy::too_many_arguments)]
-fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut, plan: &Plan, tr: &terms::TermsResult, boxes: Vec<ModuleBox>, modules: Option<usize>, before: Vec<String>, live: (Option<super::liveeq::EqGif>, Option<String>), engine: &str, progress: &dyn Fn(usize, usize)) -> Result<Value, StageError> {
+fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut, plan: &Plan, tr: &terms::TermsResult, parts: Option<FigureParts>, modules: Option<usize>, calls: u32, before: Vec<String>, live: (Option<super::liveeq::EqGif>, Option<String>), engine: &str, progress: &dyn Fn(usize, usize)) -> Result<Value, StageError> {
     let pending = dir.join("slides.pending");
     if let Ok(old) = std::fs::read_to_string(&pending) {
         let old = old.trim();
@@ -426,7 +474,7 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
         let built = {
             let mut uid = || deck.new_uid();
             let mut prog = |i: usize, t: usize| progress(i, t);
-            build(plan, m, BuildInput { ws: &s.ws, st: &st, source: &sess.source, deck_dir: &deck_dir, pandoc: &s.pandoc, macros: n.macros.clone(), lang: &p.lang, boxes: boxes.clone(), presenter: p.presenter.clone(), supervisor: p.supervisor.clone(), next_uid: &mut uid, progress: &mut prog })
+            build(plan, m, BuildInput { ws: &s.ws, st: &st, source: &sess.source, deck_dir: &deck_dir, pandoc: &s.pandoc, macros: n.macros.clone(), lang: &p.lang, parts: parts.clone(), presenter: p.presenter.clone(), supervisor: p.supervisor.clone(), next_uid: &mut uid, progress: &mut prog })
                 .map_err(|e| StageError::new(422, e))?
         };
         let content = built.content.clone();
@@ -457,15 +505,10 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
                 crate::kbterms::mark_slide(sl, &matcher, crate::kbterms::sentence_role(&ps.role));
             }
         }
-        // the big picture, one slide per numbered step
-        if let Some((idx, steps)) = &built.reveal {
-            let rules = st.pack.ghost.clone();
-            let grey = rules.text_color.clone();
-            let ghost = move |l: &Look| Look { color: grey.clone(), ..l.clone() };
-            let src = slides[*idx].clone();
-            let more = reveal(&src, &RevealSpec::Ghost { steps: steps.clone(), future: "ghost".into() }, &rules, &ghost, &mut || deck.new_uid());
-            slides.splice(*idx..=*idx, more);
-        }
+        // the walk-through of the main figure: one copy of a slide per line (after the GIF and
+        // the 不熟 marks, so every copy has them; from the last slide backwards)
+        let planned = slides.len();
+        expand_reveals(&mut slides, &built.reveals, &mut || deck.new_uid());
         let mut ops: Vec<Op> = sess.editor.deck.slides.iter().map(|sl| Op::DeleteSlide { slide: sl.uid.clone() }).collect();
         for (i, sl) in slides.into_iter().enumerate() {
             ops.push(Op::InsertSlide { index: i, slide: sl });
@@ -489,8 +532,11 @@ fn make_deck(s: &AppState, dir: &Path, p: &Params, m: &Material, n: &NotationOut
             "name": name,
             "slides": sess.editor.deck.slides.len(),
             "engine": crate::llm::engine_label(engine),
-            "boxes": boxes.len(),
+            "planned": planned,
+            "parts": parts.as_ref().filter(|p| p.walk()).map_or(0, |p| p.parts.len()),
+            "partsBy": parts.as_ref().map(|p| p.by.clone()),
             "modules": modules,
+            "calls": calls,
             "notation": added,
             "unknown": tr.unfamiliar,
             "warnings": uniq(warnings),

@@ -3,6 +3,7 @@
 pub mod detect;
 pub mod layout;
 pub mod poppler;
+pub mod table;
 
 use crate::crop::Renderer;
 use crate::error::Result;
