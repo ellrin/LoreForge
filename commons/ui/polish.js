@@ -14,6 +14,8 @@
 // buttons beside the free instruction; one pressed goes with every send, the typed words add to it.
 //   LorePolish.open({
 //     anchor,                                // an element or a DOMRect: where the dialog goes
+//     into,                                  // an element: draw the dialog inline in it, not floating (anchor not needed; optional)
+//     api: "",                               // route prefix: "/api/selection" calls /api/selection/polish… (voice stays /api/voice; optional)
 //     text, prefix, suffix, context,         // the passage, the rest of its paragraph, nearby text
 //     keep: [],                              // more literal strings the model must keep (optional)
 //     scope: "",                             // where the passage sits (a section title; optional)
@@ -24,7 +26,10 @@
 
 window.LorePolish = (() => {
   let defaults = {};
-  let card = null, cur = null, voiceOk = null, events = null, presetsP = null;
+  let card = null, cur = null, voiceOk = null, events = null;
+  const presetsByApi = new Map();
+  // the polish route: "" → /api/polish<rest>, a prefix → <prefix>/polish<rest>
+  const route = (api, rest = "") => `${api ? `${api}/polish` : "/api/polish"}${rest}`;
 
   function h(tag, attrs = {}, ...kids) {
     const e = document.createElement(tag);
@@ -99,6 +104,7 @@ window.LorePolish = (() => {
 .lp-ask .lp-mic.on { color: var(--accent-text); background: var(--accent-soft); }
 .lp-foot { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
 .lp-foot .lp-like[aria-pressed="true"] { color: var(--accent-text); background: var(--accent-soft); }
+.lp-card.inline { position: static; width: auto; max-width: none; max-height: none; box-shadow: none; }
 .lp-busy { height: 3px; border-radius: 2px; background: var(--accent-soft); overflow: hidden; }
 .lp-busy::before { content: ""; display: block; width: 35%; height: 100%; background: var(--accent-text); animation: lp-run 1.4s ease-in-out infinite; }
 @keyframes lp-run { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
@@ -167,7 +173,7 @@ window.LorePolish = (() => {
     const asked = preset ? `「${preset.label}」${instruction}` : instruction;
     busy(true);
     try {
-      const p = await call("/api/polish", {
+      const p = await call(route(c.api), {
         doc: c.doc, text: c.text, prefix: c.o.prefix ?? "", suffix: c.o.suffix ?? "", context: c.o.context ?? "",
         language: c.lang, instruction, turns: c.turns, passage: c.passage, engine: defaults.engine?.() ?? undefined, keep: c.o.keep ?? [],
         preset: preset?.id ?? null, scope: c.o.scope ?? "",
@@ -190,7 +196,7 @@ window.LorePolish = (() => {
     if (!p?.ok) return;
     const r = await c.o.apply(p.after);
     if (r !== true) { if (r) LoreShell.toast(String(r), { err: true, ms: 6000 }); return; }
-    call("/api/polish/applied", { doc: c.doc, id: p.id }).catch(() => {});
+    call(route(c.api, "/applied"), { doc: c.doc, id: p.id }).catch(() => {});
     close();
   }
 
@@ -198,7 +204,7 @@ window.LorePolish = (() => {
     const c = cur, p = c?.shown;
     if (!p || p.liked) return;
     try {
-      await call("/api/polish/like", { doc: c.doc, id: p.id });
+      await call(route(c.api, "/like"), { doc: c.doc, id: p.id });
       p.liked = true;
       show();
       defaults.onLike?.(p.after, c.likeBtn);
@@ -246,9 +252,9 @@ window.LorePolish = (() => {
   }
 
   /** The app's presets, asked once per page. */
-  function presets() {
-    presetsP ??= call("/api/polish/presets").then((v) => (Array.isArray(v) ? v : [])).catch(() => []);
-    return presetsP;
+  function presets(api) {
+    if (!presetsByApi.has(api)) presetsByApi.set(api, call(route(api, "/presets")).then((v) => (Array.isArray(v) ? v : [])).catch(() => []));
+    return presetsByApi.get(api);
   }
   function drawPresets(c) {
     c.presetBox.replaceChildren(...c.presets.map((x) => h("button", {
@@ -263,7 +269,8 @@ window.LorePolish = (() => {
     style();
     const doc = o.doc ?? defaults.doc?.();
     if (!doc || !o.text?.trim()) { LoreShell.toast("先選取要潤飾的文字"); return; }
-    const c = cur = { o, doc, text: o.text, lang: o.language ?? defaults.language?.() ?? "", turns: [], items: [], shown: null, passage: null, presets: [], preset: o.preset || null };
+    const into = o.into ?? defaults.into ?? null;
+    const c = cur = { o, doc, into, api: o.api ?? defaults.api ?? "", text: o.text, lang: o.language ?? defaults.language?.() ?? "", turns: [], items: [], shown: null, passage: null, presets: [], preset: o.preset || null };
     c.presetBox = h("div", { class: "lp-presets", hidden: true });
     c.view = h("div");
     c.problems = h("div", { class: "lp-problems" });
@@ -285,34 +292,34 @@ window.LorePolish = (() => {
       c.likeBtn,
       h("button", { type: "button", class: "btn small", onclick: () => c.input.focus() }, "再改"),
       c.applyBtn);
-    card = h("div", { class: "lp-card", role: "dialog", "aria-label": "潤飾" },
+    card = h("div", { class: into ? "lp-card inline" : "lp-card", role: "dialog", "aria-label": "潤飾" },
       h("div", { class: "lp-head" }, icon("polish"), h("span", {}, "潤飾"), h("span", { class: "lp-grow" }), ib("x", "關閉 Esc", close)),
       c.view, c.problems, c.hist, c.presetBox,
       h("div", { class: "lp-ask" }, c.input, c.mic, c.send),
       c.busy, c.foot);
-    document.body.append(card);
-    document.addEventListener("keydown", esc, true);
+    if (into) into.append(card);
+    else { document.body.append(card); document.addEventListener("keydown", esc, true); }
     show();
-    place(o.anchor);
+    if (!into) place(o.anchor);
     c.input.focus();
     // earlier proposals of this passage, and the mic when there is a voice
     voice().then((ok) => { if (cur === c) c.mic.hidden = !ok; });
-    presets().then((list) => {
+    presets(c.api).then((list) => {
       if (cur !== c) return;
       c.presets = list;
       if (c.preset && !list.some((x) => x.id === c.preset)) c.preset = null;
       drawPresets(c);
-      place(o.anchor);
+      if (!into) place(o.anchor);
       // opened from a toolbar preset (用字 / 我的風格): that is the request, run it now
       if (c.preset && o.preset) send();
     });
     try {
-      const r = await call(`/api/polish/history?doc=${encodeURIComponent(doc)}&text=${encodeURIComponent(o.text)}`);
+      const r = await call(route(c.api, `/history?doc=${encodeURIComponent(doc)}&text=${encodeURIComponent(o.text)}`));
       if (cur !== c || c.items.length) return;
       c.passage = r.passage;
       c.items = (r.items ?? []).map((x) => ({ ...x, ok: !(x.problems ?? []).length }));
       show();
-      place(o.anchor);
+      if (!into) place(o.anchor);
     } catch {}
   }
 
