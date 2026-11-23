@@ -267,7 +267,12 @@ UI (`ui/write.js`, `ui/tex.js`):
 
 For apps that generate English prose (L-Paper's drafts, polish, revisions, captions). Off
 unless the app passes a rule (the author's choice lives in their private style folder:
-`[punctuation] allowed = [".", ","]`, `hyphen_whitelist = [...]`).
+`[punctuation] allowed = [".", ","]`, `hyphen_whitelist = [...]`, `spellings = ["softmax", "cross entropy"]`).
+The wording part (spellings, hyphen compounds) lives in the shared `style/wording.toml`
+(`lore_home::Home::shared_file`, public default in `private-example/shared/style/`); a rule without
+`allowed` checks only the wording. `Rule::wording_only()` drops the marks and sentence limits (slide
+text); `Rule::merged(&ws)` adds a workspace's rule to the shared one. A run that spells a preferred form
+otherwise (`soft-max`, `Soft max`) is `Kind::Spelling`, fixed to the preferred form before the hyphen fix.
 
 ```text
 punct::Rule::from_toml(raw) -> Option<Rule>        // [punctuation]; None = off

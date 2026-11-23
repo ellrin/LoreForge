@@ -43,6 +43,10 @@ impl lore_polish::Host for ScHost {
         let tone = if text.is_empty() { String::new() } else { crate::deckvoice::load(&self.0.home).map(|v| v.block(text, if mostly_latin(text) { "en" } else { "zh" }, TONE_CHARS)).unwrap_or_default() };
         Ok(lore_polish::Doc { log: dir.join(LOG), macros, language: String::new(), phrases: vec![], tone, style: String::new() })
     }
+    /// The shared wording rules (preferred spellings, hyphen compounds), not the punctuation marks.
+    async fn guard(&self, _doc: &str) -> lore_notation::punct::Guard {
+        crate::todeck::wording::guard_of(&self.0.home).unwrap_or_default()
+    }
     async fn complete(&self, req: lore_llm::LlmRequest, engine: Option<&str>) -> Result<(serde_json::Value, String), String> {
         let a = llm(&self.0).complete_json(lore_polish::TASK, req, engine.filter(|e| !e.is_empty())).await.map_err(|(m, _)| m)?;
         Ok((a.value, a.engine))

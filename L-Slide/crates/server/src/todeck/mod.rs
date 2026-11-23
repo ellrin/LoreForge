@@ -57,6 +57,7 @@ pub mod source;
 pub mod stages;
 pub mod suggest;
 pub mod terms;
+pub mod wording;
 
 pub use build::*;
 pub use plan::*;

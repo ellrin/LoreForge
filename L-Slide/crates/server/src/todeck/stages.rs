@@ -419,6 +419,10 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     }
     warnings.extend(enforce_limits(&mut plan));
     warnings.extend(drop_unusable(&mut plan, &m));
+    // the author's wording rules (shared style/wording.toml) on the English lines and notes
+    if let Some(g) = super::wording::guard_of(&s.home) {
+        warnings.extend(super::wording::apply(&mut plan, &m, &g));
+    }
     let (lo, hi) = target_slides(&p.length);
     if plan.slides.len() < lo || plan.slides.len() > hi {
         warnings.push(format!("大綱有 {} 頁，不在所選長度的 {lo}–{hi} 頁內", plan.slides.len()));

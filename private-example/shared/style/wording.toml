@@ -1,0 +1,6 @@
+# Wording rules for every app that writes English (lore-notation punct); same keys as [punctuation] in a workspace's style/checks.toml.
+# hyphen_whitelist = hyphenated terms always allowed; spellings = preferred written forms ("softmax" for "soft-max", "cross entropy" for "cross-entropy").
+# No allowed = the punctuation marks are not checked (add allowed = [".", ","] to limit them); a workspace's own values are added to these.
+[punctuation]
+hyphen_whitelist = []
+spellings = []

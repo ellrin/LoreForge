@@ -1,7 +1,8 @@
 //! The punctuation, sentence and paragraph guard for every path that writes English prose
 //! (lore-notation `punct`): drafts, the abstract, the writing panel, 我的風格 / 用字,
-//! revisions and 回填. Off unless the workspace's `style/checks.toml` has `[punctuation]`
-//! (the author's choice; the public default is neutral). With it, the sentence limits come
+//! revisions and 回填. Off unless the shared `style/wording.toml` or the workspace's `style/checks.toml`
+//! has `[punctuation]` (the author's choice; the public default is neutral; the workspace's values
+//! add to the shared ones; without `allowed` only the wording is checked). With it, the sentence limits come
 //! from the profile's rules.csv (`max_words`, `max_commas` rows of scope `sentence`) and the
 //! paragraph ranges from `[paragraph_words.<Section>]` of the same checks.toml. The
 //! document's own hyphenated terms (its references' titles and keys, its notation, its
@@ -17,6 +18,32 @@ fn checks_raw(ws: &Path) -> String {
     std::fs::read_to_string(ws.join(pc_core::draft::STYLE_DIR).join(pc_core::stylecheck::FILE)).unwrap_or_default()
 }
 
+/// The shared wording rule (`style/wording.toml` of the shared folder, else the public default):
+/// the author's spellings and hyphen whitelist for every app. None when it gives nothing.
+#[cfg(not(test))]
+pub fn shared_rule() -> Option<punct::Rule> {
+    let home = lore_home::Home::discover(Path::new(env!("CARGO_MANIFEST_DIR")));
+    punct::Rule::from_toml(&std::fs::read_to_string(home.shared_file("style/wording.toml")?).ok()?)
+}
+
+/// Tests never read the real shared folder: they set the rule they want.
+#[cfg(test)]
+thread_local!(pub static SHARED_TEST: std::cell::RefCell<Option<punct::Rule>> = const { std::cell::RefCell::new(None) });
+#[cfg(test)]
+pub fn shared_rule() -> Option<punct::Rule> {
+    SHARED_TEST.with(|s| s.borrow().clone())
+}
+
+/// The rule of a workspace: the shared wording file, then its own `[punctuation]` added to it
+/// (whitelists and spellings together; `allowed` and the limits from the workspace when it has
+/// them, else the shared ones). Without `allowed` anywhere only the wording is checked.
+fn workspace_rule(ws: &Path) -> Option<punct::Rule> {
+    match (shared_rule(), punct::Rule::from_toml(&checks_raw(ws))) {
+        (Some(a), Some(b)) => Some(a.merged(&b)),
+        (a, b) => a.or(b),
+    }
+}
+
 /// A sentence rule's threshold from rules.csv (`max_words`, `max_commas`).
 pub fn sentence_limit(rules: &[Rule], check: &str) -> Option<usize> {
     rules.iter().find(|r| r.check == check && r.scope == "sentence").and_then(|r| r.threshold.trim().parse().ok())
@@ -24,9 +51,11 @@ pub fn sentence_limit(rules: &[Rule], check: &str) -> Option<usize> {
 
 /// The guard for a paper (or, with `paper` None, for the workspace: the writing panel).
 pub fn load(ws: &Path, paper: Option<&Path>, rules: &[Rule]) -> Guard {
-    let Some(mut rule) = punct::Rule::from_toml(&checks_raw(ws)) else { return Guard::default() };
-    rule.max_words = sentence_limit(rules, "max_words");
-    rule.max_commas = sentence_limit(rules, "max_commas");
+    let Some(mut rule) = workspace_rule(ws) else { return Guard::default() };
+    if rule.marks_on() {
+        rule.max_words = sentence_limit(rules, "max_words");
+        rule.max_commas = sentence_limit(rules, "max_commas");
+    }
     // the paper's own references (titles and keys, not the whole library or a sample .bib),
     // its notation and its experiment record
     let mut own = String::new();
@@ -45,7 +74,7 @@ pub fn load(ws: &Path, paper: Option<&Path>, rules: &[Rule]) -> Guard {
 
 /// The paragraph ranges by section (`Introduction`, `Methods`, …); empty when not set.
 pub fn paragraph_ranges(ws: &Path) -> BTreeMap<String, ParagraphRange> {
-    if punct::Rule::from_toml(&checks_raw(ws)).is_none() {
+    if !workspace_rule(ws).is_some_and(|r| r.marks_on()) {
         return BTreeMap::new();
     }
     punct::paragraph_ranges(&checks_raw(ws))
@@ -139,8 +168,31 @@ mod tests {
     }
 
     fn author_guard() -> Guard {
-        let rule = punct::Rule { allowed: vec!['.', ','], hyphen_whitelist: vec!["X-ray".into()], max_words: Some(35), max_commas: Some(3) };
+        let rule = punct::Rule { allowed: vec!['.', ','], hyphen_whitelist: vec!["X-ray".into()], max_words: Some(35), max_commas: Some(3), ..Default::default() };
         Guard { rule, exempt: punct::hyphenated_terms("Self-Supervised Chest Images") }
+    }
+
+    #[test]
+    fn the_shared_wording_file_joins_the_workspace_rule() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ws.path().join("style")).unwrap();
+        let shared = |t: &str| SHARED_TEST.with(|s| *s.borrow_mut() = punct::Rule::from_toml(t));
+        // shared wording only, no workspace file: wording checked, marks and limits not
+        shared("[punctuation]\nspellings = [\"softmax\"]\nhyphen_whitelist = [\"X-ray\"]\n");
+        let g = load(ws.path(), None, &[]);
+        assert!(g.active() && !g.rule.marks_on());
+        assert_eq!(g.fix("The soft-max: an X-ray model, self-supervised."), "The softmax: an X-ray model, self supervised.");
+        assert!(paragraph_ranges(ws.path()).is_empty());
+        // the workspace adds its own and brings the marks
+        std::fs::write(ws.path().join("style/checks.toml"), "[punctuation]\nallowed = [\".\", \",\"]\nhyphen_whitelist = [\"COVID-19\"]\nspellings = [\"cross entropy\"]\n").unwrap();
+        let g = load(ws.path(), None, &[]);
+        assert!(g.rule.marks_on() && g.rule.hyphen_whitelist.len() == 2 && g.rule.spellings.len() == 2);
+        assert_eq!(g.fix("A soft-max and cross-entropy: COVID-19."), "A softmax and cross entropy, COVID-19.");
+        // the shared file's marks apply to a workspace without its own
+        shared("[punctuation]\nallowed = [\".\"]\n");
+        std::fs::remove_file(ws.path().join("style/checks.toml")).unwrap();
+        assert!(load(ws.path(), None, &[]).rule.marks_on());
+        SHARED_TEST.with(|s| *s.borrow_mut() = None);
     }
 
     /// The model reply every path is tested with: a colon, an em dash, a semicolon, a compound.

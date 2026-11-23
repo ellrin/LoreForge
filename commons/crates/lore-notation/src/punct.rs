@@ -25,6 +25,9 @@ pub struct Rule {
     pub allowed: Vec<char>,
     /// Hyphenated terms always allowed (case-insensitive), e.g. `X-ray`, `COVID-19`.
     pub hyphen_whitelist: Vec<String>,
+    /// Preferred written forms (`softmax`, `cross entropy`, `X-ray`): a run of words that spells
+    /// the same letters otherwise ("soft-max", "Cross-Entropy") is a [`Kind::Spelling`] violation.
+    pub spellings: Vec<String>,
     /// Words per sentence at most.
     pub max_words: Option<usize>,
     /// Commas per sentence at most (numbers, maths, citations and statistics in parentheses
@@ -33,27 +36,73 @@ pub struct Rule {
 }
 
 impl Rule {
-    pub fn enabled(&self) -> bool {
+    /// The punctuation marks are checked (`allowed` given).
+    pub fn marks_on(&self) -> bool {
         !self.allowed.is_empty()
     }
 
+    /// Hyphen compounds and spellings are checked: always with the marks, alone when a
+    /// whitelist or preferred spellings are given.
+    pub fn wording_on(&self) -> bool {
+        self.marks_on() || !self.spellings.is_empty() || !self.hyphen_whitelist.is_empty()
+    }
+
+    /// Anything is checked at all.
+    pub fn enabled(&self) -> bool {
+        self.wording_on()
+    }
+
+    /// Only the wording: hyphen compounds and spellings. No punctuation marks, no sentence
+    /// length or comma limits (slide text is not sentence prose).
+    pub fn wording_only(&self) -> Rule {
+        Rule { allowed: vec![], max_words: None, max_commas: None, ..self.clone() }
+    }
+
+    /// `self` is the shared rule, `ws` a workspace's: whitelists and spellings are the union,
+    /// `allowed` and the limits come from the workspace when it has them.
+    pub fn merged(&self, ws: &Rule) -> Rule {
+        let union = |a: &[String], b: &[String]| {
+            let mut v = a.to_vec();
+            for x in b {
+                if !v.iter().any(|y| y.eq_ignore_ascii_case(x)) {
+                    v.push(x.clone());
+                }
+            }
+            v
+        };
+        Rule {
+            allowed: if ws.allowed.is_empty() { self.allowed.clone() } else { ws.allowed.clone() },
+            hyphen_whitelist: union(&self.hyphen_whitelist, &ws.hyphen_whitelist),
+            spellings: union(&self.spellings, &ws.spellings),
+            max_words: ws.max_words.or(self.max_words),
+            max_commas: ws.max_commas.or(self.max_commas),
+        }
+    }
+
     /// `[punctuation]` of a TOML file: `allowed = [".", ","]`, `hyphen_whitelist = […]`.
-    /// None when the table is missing or empty (the guard stays off).
+    /// `spellings = […]` too. None when the table is missing or has none of the three (the guard
+    /// stays off); without `allowed` the marks stay off but the wording checks run.
     pub fn from_toml(raw: &str) -> Option<Rule> {
         let t: toml::Table = toml::from_str(raw).ok()?;
         let p = t.get("punctuation")?.as_table()?;
         let strings = |k: &str| -> Vec<String> { p.get(k).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default() };
         let allowed: Vec<char> = strings("allowed").iter().filter_map(|s| s.trim().chars().next()).collect();
-        if allowed.is_empty() {
-            return None;
-        }
-        Some(Rule { allowed, hyphen_whitelist: strings("hyphen_whitelist"), max_words: None, max_commas: None })
+        let r = Rule { allowed, hyphen_whitelist: strings("hyphen_whitelist"), spellings: strings("spellings"), max_words: None, max_commas: None };
+        r.enabled().then_some(r)
     }
 
     /// The prompt line (short: the code check is the guarantee).
     pub fn prompt_line(&self) -> String {
         if !self.enabled() {
             return String::new();
+        }
+        let mut wording = " Use few compound nouns, prefer plain words, never coin a compound.".to_string();
+        if !self.spellings.is_empty() {
+            let list: Vec<String> = self.spellings.iter().take(20).map(|x| format!("\"{x}\"")).collect();
+            wording += &format!(" Spellings to use: {}.", list.join(", "));
+        }
+        if !self.marks_on() {
+            return format!("{}\n", wording.trim());
         }
         let marks: String = self.allowed.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(" and ");
         let mut s = format!(
@@ -65,7 +114,7 @@ impl Rule {
         if let Some(c) = self.max_commas {
             s += &format!(" At most {c} commas per sentence.");
         }
-        s + "\n"
+        s + &wording + "\n"
     }
 }
 
@@ -82,6 +131,8 @@ pub enum Kind {
     Question,
     /// A hyphenated compound that is not the document's own term.
     Hyphen,
+    /// A hyphenated or spaced spelling of a preferred form (`soft-max` for `softmax`).
+    Spelling,
     /// A parenthesis that is an aside (more than a few words), not an abbreviation or statistics.
     Aside,
     LongSentence,
@@ -97,6 +148,9 @@ pub struct Violation {
     pub sentence: usize,
     /// The sentence, as plain words, cut.
     pub text: String,
+    /// For [`Kind::Spelling`]: the written form to use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred: Option<String>,
 }
 
 impl Violation {
@@ -110,6 +164,7 @@ impl Violation {
             Kind::Exclamation => "exclamation mark".into(),
             Kind::Question => "question mark".into(),
             Kind::Hyphen => format!("hyphenated \"{}\": write it as open words", self.found),
+            Kind::Spelling => format!("\"{}\": write \"{}\"", self.found, self.preferred.as_deref().unwrap_or("")),
             Kind::Aside => format!("parenthetical aside \"{}\"", self.found),
             Kind::LongSentence => format!("{}: split the sentence", self.found),
             Kind::Commas => format!("{}: split the sentence", self.found),
@@ -280,16 +335,92 @@ fn is_word_char(c: u8) -> bool {
 
 /// Is the hyphenated token one the document or the whitelist names?
 fn hyphen_ok(token: &str, rule: &Rule, exempt: &[String]) -> bool {
+    // a name, not a compound: a digit or a capital inside a part (ResNet-50, U-Net, BERT-base,
+    // t-SNE). Opening it ("ResNet 50") would change the name.
+    if token.split('-').any(|p| p.chars().any(|c| c.is_ascii_digit()) || p.chars().skip(1).any(|c| c.is_ascii_uppercase()) || (p.len() == 1 && p.chars().all(|c| c.is_ascii_uppercase()))) {
+        return true;
+    }
     let t = token.to_lowercase();
-    rule.hyphen_whitelist.iter().chain(exempt.iter()).any(|w| {
+    rule.hyphen_whitelist.iter().chain(rule.spellings.iter().filter(|x| x.contains('-'))).chain(exempt.iter()).any(|w| {
         let w = w.to_lowercase();
         w == t || w.split(|c: char| !(c.is_alphanumeric() || c == '-')).any(|x| x == t)
     })
 }
 
 /// One finding before it is tied to a sentence: byte range, kind, what.
-fn marks_in(text: &str, m: &[u8], rule: &Rule, exempt: &[String]) -> Vec<(usize, usize, Kind, String)> {
+fn marks_in(text: &str, m: &[u8], rule: &Rule, exempt: &[String]) -> Vec<(usize, usize, Kind, String, Option<String>)> {
+    let sp = spellings_in(text, m, rule);
+    let mut out: Vec<_> = marks_only(text, m, rule, exempt).into_iter().filter(|(s, e, ..)| !sp.iter().any(|(a, b, ..)| s < b && a < e)).map(|(s, e, k, f)| (s, e, k, f, None)).collect();
+    out.extend(sp.into_iter().map(|(s, e, found, pref)| (s, e, Kind::Spelling, found, Some(pref))));
+    out.sort_by_key(|x| x.0);
+    out
+}
+
+/// A run of words, hyphens and single spaces that spells a preferred form's letters and
+/// digits (ignoring case) but is written otherwise: byte range, what was found, what to write.
+fn spellings_in(text: &str, m: &[u8], rule: &Rule) -> Vec<(usize, usize, String, String)> {
+    let key = |s: &str| -> String { s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect() };
+    let forms: Vec<(String, &String)> = rule.spellings.iter().filter(|f| !key(f).is_empty()).map(|f| (key(f), f)).collect();
+    if forms.is_empty() {
+        return vec![];
+    }
+    // the words of the masked text: byte ranges of ASCII letter / digit runs
+    let mut ws: Vec<(usize, usize)> = vec![];
+    let mut i = 0;
+    while i < m.len() {
+        if is_word_char(m[i]) {
+            let e = m[i..].iter().position(|x| !is_word_char(*x)).map(|k| i + k).unwrap_or(m.len());
+            ws.push((i, e));
+            i = e;
+        } else {
+            i += 1;
+        }
+    }
     let mut out = vec![];
+    let mut a = 0;
+    while a < ws.len() {
+        let mut best: Option<(usize, &String)> = None;
+        let mut acc = String::new();
+        for b in a..ws.len().min(a + 6) {
+            if b > a {
+                let gap = &m[ws[b - 1].1..ws[b].0];
+                if gap != b"-" && gap != b" " {
+                    break;
+                }
+            }
+            acc += &text[ws[b].0..ws[b].1].to_lowercase();
+            if let Some((_, f)) = forms.iter().find(|(k, _)| *k == acc) {
+                best = Some((b, f));
+            }
+        }
+        let Some((b, form)) = best else {
+            a += 1;
+            continue;
+        };
+        let (s, e) = (ws[a].0, ws[b].1);
+        // never inside a masked span; never part of a longer hyphenated word
+        let joined = |at: Option<usize>, dir: i32| at.is_some_and(|k| m[k] == b'-' && if dir < 0 { k > 0 && is_word_char(m[k - 1]) } else { m.get(k + 1).is_some_and(|x| is_word_char(*x)) });
+        let clean = m[s..e] == text.as_bytes()[s..e] && !joined(s.checked_sub(1), -1) && !joined((e < m.len()).then_some(e), 1);
+        let found = &text[s..e];
+        let upper = found.chars().next().is_some_and(char::is_uppercase);
+        let mut want = (*form).clone();
+        if upper {
+            let mut c = want.chars();
+            want = c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default();
+        }
+        // an all capitals word is an acronym, left alone
+        let acronym = !found.chars().any(char::is_lowercase);
+        if clean && !acronym && found != want {
+            out.push((s, e, found.to_string(), want));
+        }
+        a = b + 1;
+    }
+    out
+}
+
+fn marks_only(text: &str, m: &[u8], rule: &Rule, exempt: &[String]) -> Vec<(usize, usize, Kind, String)> {
+    let mut out = vec![];
+    let marks = rule.marks_on();
     let allowed = |c: char| rule.allowed.contains(&c);
     let mut i = 0;
     while i < m.len() {
@@ -298,7 +429,7 @@ fn marks_in(text: &str, m: &[u8], rule: &Rule, exempt: &[String]) -> Vec<(usize,
         if c >= 0x80 {
             let ch = text[i..].chars().next().unwrap_or(' ');
             let len = ch.len_utf8();
-            if MARKS.contains(&ch) && !allowed(ch) && m[i] != b'X' {
+            if marks && MARKS.contains(&ch) && !allowed(ch) && m[i] != b'X' {
                 let digit_before = i > 0 && m[i - 1].is_ascii_digit();
                 let digit_after = m.get(i + len).is_some_and(|x| x.is_ascii_digit());
                 let kind = match ch {
@@ -320,7 +451,7 @@ fn marks_in(text: &str, m: &[u8], rule: &Rule, exempt: &[String]) -> Vec<(usize,
         match c {
             // a ratio or a time (8:2, 10:30) is a number, not a colon
             b':' if i > 0 && m[i - 1].is_ascii_digit() && m.get(i + 1).is_some_and(|x| x.is_ascii_digit()) => {}
-            b':' | b';' | b'!' | b'?' | b'"' if !allowed(c as char) => {
+            b':' | b';' | b'!' | b'?' | b'"' if marks && !allowed(c as char) => {
                 let kind = match c {
                     b':' => Kind::Colon,
                     b';' => Kind::Semicolon,
@@ -330,7 +461,7 @@ fn marks_in(text: &str, m: &[u8], rule: &Rule, exempt: &[String]) -> Vec<(usize,
                 };
                 out.push((i, i + 1, kind, (c as char).to_string()));
             }
-            b'`' | b'\'' if !allowed('"') => {
+            b'`' | b'\'' if marks && !allowed('"') => {
                 // ``…'' quotes; an apostrophe of possession or a contraction is not a quote
                 let possessive = c == b'\'' && i > 0 && m[i - 1].is_ascii_alphabetic() && (m.get(i + 1).is_some_and(|x| x.is_ascii_alphabetic()) || m[i - 1] == b's');
                 if !possessive {
@@ -348,12 +479,16 @@ fn marks_in(text: &str, m: &[u8], rule: &Rule, exempt: &[String]) -> Vec<(usize,
                 let digit_after = m.get(i + run).is_some_and(|x| x.is_ascii_digit());
                 let spaced = i > 0 && m[i - 1] == b' ' && m.get(i + run) == Some(&b' ');
                 if run >= 2 {
+                    if !marks {
+                        i += run;
+                        continue;
+                    }
                     let kind = if run == 2 && digit_before && digit_after { Kind::Range } else { Kind::Dash };
                     if !allowed('—') {
                         let found = if kind == Kind::Range { range_text(text, m, i, i + run) } else { "-".repeat(run) };
                         out.push((i, i + run, kind, found));
                     }
-                } else if spaced && !allowed('—') {
+                } else if marks && spaced && !allowed('—') {
                     out.push((i, i + 1, Kind::Dash, " - ".into()));
                 } else if before && after {
                     // the whole token: letters, digits and hyphens
@@ -369,7 +504,9 @@ fn marks_in(text: &str, m: &[u8], rule: &Rule, exempt: &[String]) -> Vec<(usize,
                         i = e;
                         continue;
                     }
-                    if numeric && digit_before && digit_after {
+                    if numeric && !marks {
+                        // a number range is not wording
+                    } else if numeric && digit_before && digit_after {
                         out.push((i, i + 1, Kind::Range, range_text(text, m, i, i + 1)));
                     } else if !masked_part && !hyphen_ok(token, rule, exempt) && !allowed('-') {
                         out.push((s, e, Kind::Hyphen, token.to_string()));
@@ -380,7 +517,7 @@ fn marks_in(text: &str, m: &[u8], rule: &Rule, exempt: &[String]) -> Vec<(usize,
                 i += run;
                 continue;
             }
-            b'(' => {
+            b'(' if marks => {
                 // an aside: more than six words with no digit (abbreviations and statistics are short or numeric)
                 if let Some(k) = m[i..].iter().position(|x| *x == b')') {
                     let inner = String::from_utf8_lossy(&m[i + 1..i + k]).to_string();
@@ -450,20 +587,20 @@ pub fn check(text: &str, rule: &Rule, exempt: &[String]) -> Vec<Violation> {
     let sent_of = |pos: usize| sents.iter().position(|(s, e)| pos >= *s && pos < *e).unwrap_or(sents.len().saturating_sub(1));
     let mut out = vec![];
     if rule.enabled() {
-        for (s, _, kind, found) in marks_in(text, &m, rule, exempt) {
+        for (s, _, kind, found, preferred) in marks_in(text, &m, rule, exempt) {
             let k = sent_of(s);
             let (a, b) = sents.get(k).copied().unwrap_or((0, text.len()));
-            out.push(Violation { kind, found, sentence: k + 1, text: plain_cut(text, a, b) });
+            out.push(Violation { kind, found, sentence: k + 1, text: plain_cut(text, a, b), preferred });
         }
     }
     for (k, (a, b)) in sents.iter().enumerate() {
         let w = words(&m[*a..*b]);
         if rule.max_words.is_some_and(|x| w > x) {
-            out.push(Violation { kind: Kind::LongSentence, found: format!("{w} words (at most {})", rule.max_words.unwrap_or(0)), sentence: k + 1, text: plain_cut(text, *a, *b) });
+            out.push(Violation { kind: Kind::LongSentence, found: format!("{w} words (at most {})", rule.max_words.unwrap_or(0)), sentence: k + 1, text: plain_cut(text, *a, *b), preferred: None });
         }
         let c = commas(&m[*a..*b]);
         if rule.max_commas.is_some_and(|x| c > x) {
-            out.push(Violation { kind: Kind::Commas, found: format!("{c} commas (at most {})", rule.max_commas.unwrap_or(0)), sentence: k + 1, text: plain_cut(text, *a, *b) });
+            out.push(Violation { kind: Kind::Commas, found: format!("{c} commas (at most {})", rule.max_commas.unwrap_or(0)), sentence: k + 1, text: plain_cut(text, *a, *b), preferred: None });
         }
     }
     out.sort_by_key(|v| v.sentence);
@@ -490,8 +627,9 @@ pub fn fix(text: &str, rule: &Rule, exempt: &[String]) -> String {
     }
     let m = masked(text);
     let mut edits: Vec<(usize, usize, String)> = vec![];
-    for (s, e, kind, found) in marks_in(text, &m, rule, exempt) {
+    for (s, e, kind, found, preferred) in marks_in(text, &m, rule, exempt) {
         let rep = match kind {
+            Kind::Spelling => preferred.unwrap_or(found),
             Kind::Semicolon | Kind::Exclamation => {
                 // a full stop; the next word starts the new sentence
                 let rest = &text[e..];
@@ -535,6 +673,9 @@ pub fn fix(text: &str, rule: &Rule, exempt: &[String]) -> String {
         }
         out.replace_range(s..e, &r);
         last = s;
+    }
+    if !rule.marks_on() {
+        return out;
     }
     // ", ," and ",." left by a dash at a clause end
     out.replace(", ,", ",").replace(",.", ".").replace(" ,", ",")
@@ -653,7 +794,7 @@ mod tests {
     use super::*;
 
     fn rule() -> Rule {
-        Rule { allowed: vec!['.', ','], hyphen_whitelist: vec!["X-ray".into(), "COVID-19".into(), "Grad-CAM".into()], max_words: Some(35), max_commas: Some(3) }
+        Rule { allowed: vec!['.', ','], hyphen_whitelist: vec!["X-ray".into(), "COVID-19".into(), "Grad-CAM".into()], max_words: Some(35), max_commas: Some(3), ..Default::default() }
     }
 
     fn kinds(t: &str, ex: &[String]) -> Vec<Kind> {
@@ -702,6 +843,16 @@ Chest X-ray, COVID-19 and Grad-CAM maps were used \\pending{P1}{site-B AUC}\\pen
     }
 
     #[test]
+    fn names_with_digits_or_inner_capitals_are_not_compounds() {
+        let r = Rule { hyphen_whitelist: vec![], ..rule() };
+        for t in ["We train ResNet-50 and U-Net.", "BERT-base and t-SNE are used.", "GPT-4 reads it."] {
+            assert!(kinds(t, &[]).is_empty(), "{t}");
+            assert_eq!(fix(t, &r, &[]), t);
+        }
+        assert_eq!(kinds("A data-driven model. Data-driven models work.", &[]), [Kind::Hyphen, Kind::Hyphen]);
+    }
+
+    #[test]
     fn long_sentences_and_commas() {
         let long = format!("{}.", vec!["word"; 41].join(" "));
         let v = check(&long, &rule(), &[]);
@@ -745,5 +896,79 @@ Chest X-ray, COVID-19 and Grad-CAM maps were used \\pending{P1}{site-B AUC}\\pen
         assert_eq!(fix("Gains were large — about 0.2 — overall.", &r, &[]), "Gains were large, about 0.2, overall.");
         assert_eq!(fix("See $a:b$ and \\cite{x-y}; done.", &r, &[]), "See $a:b$ and \\cite{x-y}. Done.");
         assert_eq!(fix("Use X-ray and self-supervised maps.", &r, &["self-supervised".into()]), "Use X-ray and self-supervised maps.");
+    }
+
+    fn spell_rule() -> Rule {
+        Rule { spellings: vec!["softmax".into(), "cross entropy".into(), "X-ray".into()], ..Default::default() }
+    }
+
+    #[test]
+    fn spellings_are_found_and_fixed() {
+        let r = spell_rule();
+        assert!(r.enabled() && !r.marks_on());
+        let t = "The soft-max and soft max and Soft-Max layers use cross-entropy, Cross-Entropy and crossentropy.";
+        let v = check(t, &r, &[]);
+        assert_eq!(v.len(), 6, "{v:?}");
+        assert!(v.iter().all(|x| x.kind == Kind::Spelling));
+        assert!(v[0].describe().contains("\"soft-max\": write \"softmax\""), "{}", v[0].describe());
+        let f = fix(t, &r, &[]);
+        assert_eq!(f, "The softmax and softmax and Softmax layers use cross entropy, Cross entropy and cross entropy.");
+        assert!(check(&f, &r, &[]).is_empty());
+        // capital at a sentence start is kept; the right form and longer words are fine
+        assert_eq!(fix("Soft max is used. Softmaxes differ. softmax is fine.", &r, &[]), "Softmax is used. Softmaxes differ. softmax is fine.");
+        // a hyphenated preferred form is allowed, and a spaced one is corrected
+        assert!(check("A chest X-ray.", &r, &[]).is_empty());
+        assert_eq!(fix("A chest x ray and an x-ray.", &r, &[]), "A chest X-ray and an X-ray.");
+    }
+
+    #[test]
+    fn spellings_skip_masked_spans_and_neighbours() {
+        let r = spell_rule();
+        let t = "See $soft-max$ and \\cite{soft-max} and \\ref{cross-entropy}, \\label{soft max}.\n\\begin{equation}soft-max\\end{equation}";
+        assert!(check(t, &r, &[]).is_empty(), "{:?}", check(t, &r, &[]));
+        assert_eq!(fix(t, &r, &[]), t);
+        // part of a longer hyphenated word: the hyphen rule's business
+        assert_eq!(check("A cross-entropy-based loss.", &r, &[]).iter().map(|v| v.kind).collect::<Vec<_>>(), [Kind::Hyphen]);
+        assert_eq!(fix("A cross-entropy-based loss.", &r, &[]), "A cross entropy based loss.");
+    }
+
+    #[test]
+    fn spelling_beats_the_hyphen_fix() {
+        let r = Rule { allowed: vec!['.', ','], spellings: vec!["softmax".into()], ..Default::default() };
+        let t = "A soft-max head, data-driven: fast.";
+        assert_eq!(fix(t, &r, &[]), "A softmax head, data driven, fast.");
+        let v = check("A soft-max head.", &r, &[]);
+        assert_eq!(v.iter().map(|x| x.kind).collect::<Vec<_>>(), [Kind::Spelling], "no second Hyphen finding");
+    }
+
+    #[test]
+    fn wording_only_ignores_marks_and_length() {
+        let full = Rule { allowed: vec!['.', ','], spellings: vec!["softmax".into()], hyphen_whitelist: vec!["X-ray".into()], max_words: Some(5), max_commas: Some(1), ..Default::default() };
+        let w = full.wording_only();
+        assert!(w.enabled() && !w.marks_on() && w.max_words.is_none());
+        let t = "Note: the soft-max is data-driven — see 0.70–0.75 and 2010-2022, one two three four five six seven eight nine.";
+        let kinds: Vec<Kind> = check(t, &w, &[]).iter().map(|v| v.kind).collect();
+        assert_eq!(kinds, [Kind::Spelling, Kind::Hyphen]);
+        assert_eq!(fix(t, &w, &[]), "Note: the softmax is data driven — see 0.70–0.75 and 2010-2022, one two three four five six seven eight nine.");
+        assert!(check(t, &full, &[]).iter().any(|v| v.kind == Kind::Colon));
+        // nothing given: off
+        assert!(!Rule::default().wording_only().enabled());
+    }
+
+    #[test]
+    fn old_toml_without_spellings() {
+        let r = Rule::from_toml("[punctuation]\nallowed = [\".\", \",\"]\n").unwrap();
+        assert!(r.spellings.is_empty() && r.marks_on());
+        assert_eq!(fix("A soft-max.", &r, &[]), "A soft max.", "behaviour unchanged");
+        assert!(r.prompt_line().contains("only \".\" and \",\"") && !r.prompt_line().contains("Spellings to use"));
+        assert!(r.prompt_line().contains("few compound nouns"));
+        // a shared file with only spellings and a whitelist: wording rule, no marks
+        let s = Rule::from_toml("[punctuation]\nspellings = [\"softmax\"]\nhyphen_whitelist = [\"X-ray\"]\n").unwrap();
+        assert!(!s.marks_on() && s.wording_on());
+        assert!(s.prompt_line().contains("\"softmax\"") && !s.prompt_line().contains("Punctuation in prose"));
+        assert!(Rule::from_toml("[punctuation]\nallowed = []\nspellings = []\n").is_none());
+        // merge: union, workspace marks win
+        let m = s.merged(&Rule::from_toml("[punctuation]\nallowed = [\".\"]\nspellings = [\"Softmax\", \"cross entropy\"]\n").unwrap());
+        assert_eq!((m.allowed.clone(), m.spellings.len(), m.hyphen_whitelist.len()), (vec!['.'], 2, 1));
     }
 }
