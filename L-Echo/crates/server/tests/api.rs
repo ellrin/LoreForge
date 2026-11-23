@@ -340,6 +340,30 @@ async fn chat_streams_through_the_router_with_persona_and_brevity_rule() {
 }
 
 #[tokio::test]
+async fn chat_with_a_selection_puts_one_block_before_the_turn() {
+    let mock = Arc::new(MockProvider::new(vec!["是注意力。".into(), "好。".into()]).named("mock:local"));
+    let app = App::new(Llm::with_factory(MockFactory::default().with("local:current", mock.clone())));
+    let body = json!({ "messages": [{ "role": "user", "text": "解釋一下" }], "selection": { "text": "attention", "scope": "段落", "context": "We use attention here." } });
+    let (s, b, _) = app.call("POST", "/api/chat", Some(body)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(sse(&b).last().unwrap().0, "done");
+    let (s, b, _) = app.call("POST", "/api/chat", Some(json!({ "messages": [{ "role": "user", "text": "解釋一下" }] }))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(sse(&b).last().unwrap().0, "done");
+    let seen = mock.seen.lock().unwrap();
+    let with = &seen[0];
+    assert_eq!(with.messages.len(), 1);
+    assert_eq!(with.messages[0].text(), "他在段落選取的文字：\nattention\n\n附近的內容：\nWe use attention here.\n\n解釋一下");
+    assert!(!with.system.contains("選取的文字"), "the block is in the turn, not the system prompt");
+    let without = &seen[1];
+    assert_eq!(without.messages[0].text(), "解釋一下");
+    assert!(!without.system.contains("選取的文字"));
+    // nothing kept
+    let files: Vec<String> = snapshot(&app.dir()).into_iter().map(|(p, _)| p.display().to_string()).collect();
+    assert!(files.iter().all(|f| f.contains("/characters/") || f.ends_with("README.md")), "{files:?}");
+}
+
+#[tokio::test]
 async fn chat_uses_the_chosen_character_and_reports_problems() {
     let mock = Arc::new(MockProvider::new(vec!["好。".into()]).named("mock:local"));
     let app = App::new(Llm::with_factory(MockFactory::default().with("local:current", mock.clone())));

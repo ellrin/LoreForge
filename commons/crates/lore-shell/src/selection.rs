@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::oneshot;
 
 use crate::findfile::{ECHO, Finds, echo_port, fail, live, port_of, post_json};
@@ -357,6 +357,7 @@ pub fn end_selection(req: &SelectionRequest) -> Result<(), (u16, String)> {
 mod tests {
     use super::*;
     use axum::body::Body;
+    use serde_json::Value;
     use axum::http::Request;
     use tower::ServiceExt;
 

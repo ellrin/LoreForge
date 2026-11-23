@@ -21,6 +21,7 @@
 //! | POST | /api/kb/recall | `{ id, outcome }` → a review outcome through L-Brain's API while it runs ([`kbctx`]) |
 //! | POST | /api/actions/{note,cards}/… | 功能列表: drafts (tasks `le-note`, `le-cards`) and the confirmed saves to L-Paper / L-Brain ([`actions`]) |
 //! | POST/GET | /api/find, /api/find/{search,thumb/{id},pick,end} | 搜尋檔案 for another app: find mode ([`find`], `lore_shell::findfile`) |
+//! | POST/GET | /api/selection, /api/selection/{end,apply,polish…,lore/card} | text selected in another app: kept in memory, results sent back, the app's 語句潤飾 and 加入知識庫 proxied ([`selection`], `lore_shell::selection`) |
 //! | … | /api/voice… | listening and speaking ([`voice`]) |
 //! | GET/POST | /api/permissions, /request, /open | microphone, speech, Personal Voice (lore-shell; asked at the desktop app's first launch) |
 
@@ -33,6 +34,7 @@ pub mod find;
 pub mod fix;
 pub mod kbctx;
 pub mod llm;
+pub mod selection;
 pub mod shelfctx;
 pub mod store;
 pub mod voice;
@@ -76,6 +78,8 @@ pub struct AppState {
     pub shelf: std::sync::atomic::AtomicBool,
     /// 搜尋檔案 for another app ([`find`]).
     pub find: find::Finder,
+    /// Text selected in another app, in memory only ([`selection`]).
+    pub selection: selection::Selector,
     /// L-Paper, for 整理成筆記 / 記下靈感 ([`actions`]).
     pub pc: actions::Pc,
     /// Listening and speaking (lore-voice; unavailable in tests unless a fake is given).
@@ -101,7 +105,7 @@ impl AppState {
                 None
             }
         };
-        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), shelf: std::sync::atomic::AtomicBool::new(false), find: find::Finder::default(), pc: actions::Pc::default(), voice, write: Mutex::new(()) })
+        Arc::new(AppState { home, dir, web, llm, hook, kb: kbctx::Kb::default(), shelf: std::sync::atomic::AtomicBool::new(false), find: find::Finder::default(), selection: selection::Selector::default(), pc: actions::Pc::default(), voice, write: Mutex::new(()) })
     }
 
     /// The real engines (`private/LoreEcho/tasks.toml` may override the task's model) and the
@@ -178,7 +182,7 @@ fn router_with(shared: Shared, engines: lore_engines::Engines, perms: lore_shell
         kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
     }
     let voice = voice::routes(&shared);
-    api::routes().merge(actions::routes()).merge(fix::routes()).merge(find::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).route("/api/shelf/focus", axum::routing::post(shelfctx::focus_post)).with_state(shared).merge(voice).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
+    api::routes().merge(actions::routes()).merge(fix::routes()).merge(find::routes()).merge(selection::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).route("/api/shelf/focus", axum::routing::post(shelfctx::focus_post)).with_state(shared).merge(voice).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`config.port` (0 = any free port); the address, the state and the server.

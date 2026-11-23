@@ -2,7 +2,9 @@
 //! and sends all of it with every turn; the server keeps nothing. The reply streams back
 //! as server-sent events through lore-llm's router (task `le-chat`).
 //!
-//! `POST /api/chat { messages: [{ role: "user" | "assistant", text }], character?, engine?, speak? }`
+//! `POST /api/chat { messages: [{ role: "user" | "assistant", text }], character?, engine?, speak?, selection? }`
+//! (`selection: {text, scope, context}` = text the author selected in another app ([`crate::selection`]):
+//! one labelled block before his new message, never kept; the turn's engine is chosen as without it)
 //! → `text/event-stream` (`speak: true`: the reply is also read aloud sentence by sentence with the
 //! character's voice, lore-voice; the page follows it on `/api/voice/events`):
 //!
@@ -60,6 +62,47 @@ pub struct ChatBody {
     /// Read the reply aloud as it streams (朗讀回覆).
     #[serde(default)]
     pub speak: bool,
+    /// Text selected in another app that this turn is about.
+    #[serde(default)]
+    pub selection: Option<Selection>,
+}
+
+/// The selection a turn is about (翻譯／解釋／問他 on selected text).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Selection {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub context: String,
+}
+
+/// The selected text in the prompt (characters; the rest left out with "…").
+pub const SELECTION_LIMIT: usize = 4000;
+/// Its nearby text in the prompt.
+pub const SELECTION_CONTEXT: usize = 1500;
+
+/// The selection as one labelled block (`None`: no text).
+pub fn selection_block(sel: &Selection) -> Option<String> {
+    if sel.text.trim().is_empty() {
+        return None;
+    }
+    let scope = clip(&sel.scope.replace('\n', " "), 60);
+    let head = if scope.is_empty() { "他選取的文字：".to_string() } else { format!("他在{scope}選取的文字：") };
+    let mut b = format!("{head}\n{}", clip(&sel.text, SELECTION_LIMIT));
+    if !sel.context.trim().is_empty() {
+        b.push_str(&format!("\n\n附近的內容：\n{}", clip(&sel.context, SELECTION_CONTEXT)));
+    }
+    Some(b)
+}
+
+/// The selection's block put before the author's new message (the transcript ends with it).
+pub fn with_selection(mut messages: Vec<Message>, sel: Option<&Selection>) -> Vec<Message> {
+    if let (Some(block), Some(last)) = (sel.and_then(selection_block), messages.last_mut()) {
+        *last = Message::user(format!("{block}\n\n{}", last.text()));
+    }
+    messages
 }
 
 /// How much of 身分與背景 goes into the prompt (characters; the rest is left out with "…").
@@ -286,6 +329,23 @@ mod tests {
         let texts: Vec<String> = req.messages.iter().map(|m| m.text().to_string()).collect();
         assert_eq!(texts, vec!["問1", "答1", "問2", "答2", "問3", "答3", "問4", "答4", "真的問題"]);
         assert_eq!(req.messages[1].role, lore_llm::Role::Assistant);
+    }
+
+    #[test]
+    fn chat_selection_block_goes_before_the_new_message() {
+        let m = transcript(&[t("user", "嗨"), t("assistant", "嗨。"), t("user", "這是什麼意思")]).unwrap();
+        let sel = Selection { text: "注意力機制".into(), scope: "第 3 頁的條列".into(), context: "字".repeat(SELECTION_CONTEXT + 50) };
+        let out = with_selection(m.clone(), Some(&sel));
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].text(), "嗨");
+        let last = out[2].text();
+        assert!(last.starts_with("他在第 3 頁的條列選取的文字：\n注意力機制\n\n附近的內容：\n"), "{last}");
+        assert!(last.ends_with("…\n\n這是什麼意思") && !last.contains(&"字".repeat(SELECTION_CONTEXT + 1)), "context cut");
+        // no selection, or an empty one: the transcript as it was
+        let same = |o: &[Message]| o.iter().map(|x| x.text().to_string()).collect::<Vec<_>>();
+        assert_eq!(same(&with_selection(m.clone(), None)), same(&m));
+        assert_eq!(same(&with_selection(m.clone(), Some(&Selection { text: " ".into(), ..Default::default() }))), same(&m));
+        assert_eq!(selection_block(&Selection { text: "softmax".into(), ..Default::default() }).unwrap(), "他選取的文字：\nsoftmax");
     }
 
     #[test]

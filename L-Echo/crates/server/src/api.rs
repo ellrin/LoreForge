@@ -302,5 +302,6 @@ async fn chat_post(State(s): State<Shared>, body: Option<Json<chat::ChatBody>>) 
     });
     let local = is_local(&route);
     let shelf = found.map(|f| crate::shelfctx::Pre::new(f, local));
+    let messages = chat::with_selection(messages, b.selection.as_ref());
     chat::stream(route, chat::request(&character, messages), Some(kb), shelf, speaker).into_response()
 }
