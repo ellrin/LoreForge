@@ -23,7 +23,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
 
 - `crates/server` (`le-server`): axum on 127.0.0.1 (7860 in browser mode, a free port in the
   desktop app, registered as `le` in `ports.json`). `api.rs` handlers (route table in `lib.rs`),
-  `store.rs` (`state.toml` = bubble place + expanded, `settings.toml` = character + shortcut + `talk` (hold|continuous) + `auto_send` + `read_aloud` + `text_follows` (文字跟著聲音);
+  `store.rs` (`state.toml` = bubble place + expanded, `settings.toml` = character + shortcut + `talk` (hold|continuous) + `auto_send` + `read_aloud` + `text_follows` (文字跟著聲音) + `[models]` (the header's model menu: `chat`, `polish` = model refs, "" = 自動, `agy:` only for `polish`; `unrestricted`; `seen`);
   atomic, unknown keys kept), `characters.rs` (`characters/<id>/character.toml` + `avatar/<state>.*` portraits +
   `full/<state>.*` full bodies; ten states, a missing one follows `chain()` (searching/waiting → thinking → idle, noting → speaking → idle, else idle), no full body → the portrait, no character → built-in; editing (`save_meta`, `save_image` with format sniffing and no scripts in SVG, `remove_image`, `create` = copy of the example, `export`/`import` zip, only known paths read);
   `figure_scale` / `figure_offset_y` clamped, sent as `figure`; `voice`, `voice_rate` (0.5–2), `voice_pitch` (0.5–2, AVSpeechUtterance pitchMultiplier); `Profile` = 角色設定
@@ -37,7 +37,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   `AppState.voice` = `Voice::system()` in `system()`, unavailable in `new()`, `with_voice()` for fakes; a `voice` id in
   `/api/voice/speak` = that system voice (試聽 before saving)). Voices are system voices only (author, 2026-11-12: no Qwen3-TTS);
   a character folder's old `voice/` (an earlier custom voice) is ignored, not exported, and the character speaks with its system voice. `kbctx.rs` (design §3: the author's L-Brain cards read from disk with kb-core; writes (修正 `fix.rs`, 記住這個, review outcomes) go through lore-cards: L-Brain's API while it runs, else kb-core on its spaces (`Kb::brain`); per turn titles/aliases in the message and recent turns + key words → a few cards within `BUDGET_CHARS` into the prompt as his own cards with their state; 抽／複習／考我／有哪些卡／記住這個 (zh/en, counts) chosen in code, the model only phrases; quiz carried by the page (`kb.quiz`, `kb.cited`); review outcomes through lore-cards (`POST /api/kb/recall`: L-Brain's `POST /api/recall/{id}` while it runs, else its files); `AppState::new` reads only its home's `private/KnowledgeBase`, `system()` also KB_SPACES/KB config/its server; tests pin a space, `tests/fixtures/kb`), `llm.rs` (task `le-chat` from
-  `tasks.toml`, class `ask`: `local:current` then `claude:selected`; local engine =
+  `tasks.toml`, class `ask`: `local:current` then `claude:selected`; a turn's `engine` = `local` / `claude` (the one-click alternative) or a named model `claude:<alias>` / `local:<catalog id>` from the model menu (`RouteOptions::only`; never `agy:`, Google answers 語句潤飾 only); local engine =
   `LOREECHO_LLM_URL` else the shared model id of `private/shared/engine.toml` on the machine's one
   llama-server (lore-llm `shared_runtime`, `../docs/local-models.md`; `llm::quit()` at exit); keys via
   `SharedKeys::for_app("LoreEcho")`), `shelfctx.rs` (the author's files, only in the real app (`AppState.shelf`) and while L-Shelf runs (ports.json `ls`): per turn `GET /api/search?loose=1&q=<the message>` → SSE `files` (the 「檔案：…」 row in `kbcards.js`; a click = `POST /api/shelf/focus` → L-Shelf `POST /api/act`), the globe turned to the first one right away, and a note in the prompt; asked before the engine is chosen (`lookup`): a turn whose files are all `cloud_ok` (papers, slide decks — L-Shelf decides) keeps the chosen engine and the names; any other file → the local model when one can, whatever the chip says, and only it gets the names (`note`) — Claude is then only told that some were found), `actions.rs` (功能列表, design §4/§4a: `/api/actions/note/{draft,check,save}`,
@@ -59,7 +59,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   `PUT /api/nodes/{id}` with the draft's `revision` (409 = changed meanwhile, never overwritten), the web sources added
   as `{type: "web", ref, title, via: "loreecho"}`; L-Brain closed → 503 and nothing written (no file fallback);
   `/api/actions/fix/source {url}` opens an http(s) source in the browser.
-  Theme, `/prefs.css`, lore-shell `FILES` and the lore-engines router exactly as in L-Brain.
+  Theme, `/prefs.css`, lore-shell `FILES` and the lore-engines router exactly as in L-Brain, with `include_uncensored` (the model menu's 無限制 picks the abliterated variants, so `/api/engines` lists them).
   `DesktopHook`: `PUT /api/window {expanded}` and `PUT /api/settings {shortcut}` reach the desktop app.
 - `apps/desktop` (`loreecho`): server in-process; one frameless, transparent, always-on-top window
   (64 px bubble ⇄ open window, default 620×620 = `WIN_W`/`WIN_H` = `--win-w`/`--win-h` in `web/styles.css`
@@ -70,7 +70,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   Icon source `icons/logo.svg` (= `docs/assets/loreecho-logo-draft.svg`, approved; do not redesign).
 - `web/`: no build step. Open window = `.figure` (left, only the picture, `--fig-scale`/`--fig-dy`
   from `figure`, may run off the bottom, overlaps the column by ≤ `--overlap`) + `.col` (right): card
-  with the shared shell header (collapse · engine chip · 功能列表 toggle · 新對話 · gear with 一般 外觀
+  with the shared shell header (collapse · model chip = `LoreShell.modelMenu`: 自動 or a named model, its menu = 自動 / Claude row / Google row only while a rewrite is shown / 本機 family rows with size buttons and one 無限制 switch, 新 marks; the chat's and the rewrite's choice kept apart in settings.toml `[models]`, the rewrite's goes to LorePolish as `engine` · 功能列表 toggle · 新對話 · gear with 一般 外觀
   模型 快捷鍵 人物; 人物 = name, persona, per-state drop zones for 縮圖 and 對話人物, switch/new/export/import) and the quiet history, `.choices` (功能列表 as VN choice rows, ↑↓/Enter; a row opens
   its preview from `actions.js` + `actions.css` in place of the history, KaTeX from `web/vendor/katex` loaded on first use,
   Esc closes an untouched preview, 新對話/collapse close it, toast with 打開 = `LoreLinks.open("pc", {note})` / `("kb", {pending})`), `.box` (name tag = character switcher, the current line, input row).

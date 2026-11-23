@@ -204,6 +204,42 @@ async fn settings_check_character_and_shortcut() {
 }
 
 #[tokio::test]
+async fn settings_keep_the_chat_model_and_the_rewrite_model_apart() {
+    let app = App::new(Llm::none());
+    assert!(app.json("GET", "/api/settings", None).await.1.get("models").is_none(), "nothing chosen = 自動, not written");
+    let (s, st) = app.json("PUT", "/api/settings", Some(json!({ "models": { "chat": "claude:sonnet" } }))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(st["models"], json!({ "chat": "claude:sonnet" }));
+    let (_, st) = app.json("PUT", "/api/settings", Some(json!({ "models": { "polish": "agy:m-1", "unrestricted": true, "seen": ["local:qwen3.5-9b-q8", "claude:fable", "claude:fable", "nonsense"] } }))).await;
+    assert_eq!(st["models"], json!({ "chat": "claude:sonnet", "polish": "agy:m-1", "unrestricted": true, "seen": ["claude:fable", "local:qwen3.5-9b-q8"] }));
+    // Google never answers the chat; a broken name is refused; "" = 自動 again
+    assert_eq!(app.json("PUT", "/api/settings", Some(json!({ "models": { "chat": "agy:m-1" } }))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(app.json("PUT", "/api/settings", Some(json!({ "models": { "polish": "claude:son net" } }))).await.0, StatusCode::BAD_REQUEST);
+    let (_, st) = app.json("PUT", "/api/settings", Some(json!({ "models": { "chat": "" }, "read_aloud": false }))).await;
+    assert_eq!(st["models"], json!({ "polish": "agy:m-1", "unrestricted": true, "seen": ["claude:fable", "local:qwen3.5-9b-q8"] }));
+    assert_eq!(app.json("GET", "/api/settings", None).await.1, st);
+}
+
+#[tokio::test]
+async fn chat_answers_with_the_model_the_turn_names() {
+    let local = Arc::new(MockProvider::new(vec!["本機。".into(), "本機。".into()]).named("mock:local"));
+    let haiku = Arc::new(MockProvider::new(vec!["雲。".into()]).named("mock:haiku"));
+    let app = App::new(Llm::with_factory(MockFactory::default().with("local:current", local.clone()).with("claude:haiku", haiku.clone())));
+    let turn = |engine: &str| json!({ "messages": [{ "role": "user", "text": "嗨" }], "engine": engine });
+    let (s, b, _) = app.call("POST", "/api/chat", Some(turn("claude:haiku"))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(sse(&b)[0].1["engine"], "mock:haiku");
+    // a model that cannot answer: 503 with the one-line reason, never another model
+    let (s, b, _) = app.call("POST", "/api/chat", Some(turn("claude:opus"))).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(serde_json::from_slice::<serde_json::Value>(&b).unwrap()["error"].as_str().is_some_and(|m| !m.is_empty()));
+    // Google is for 語句潤飾 only: the name is not a chat model, the task's own order answers
+    let (_, b, _) = app.call("POST", "/api/chat", Some(turn("agy:m-1"))).await;
+    assert_eq!(sse(&b)[0].1["engine"], "mock:local");
+    assert_eq!(haiku.seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn characters_and_avatar_fallback() {
     let app = App::new(Llm::none());
     // a second character with only an idle picture, and a broken one

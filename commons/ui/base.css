@@ -15,7 +15,7 @@
    .dialog.small, .dlg-head, .dlg-body, .dlg-foot, .tabs) · .toast · .ask ·
    .block/.block-head · .help/.tip · .statusbar · top bar (.top + slots, .brand,
    .picker, .fstate) · drawers (.drawer-left/.drawer-right, ≤1100px) · the tool
-   capsule (.capsule) · .engine-chip · settings rows (.set-*) · .kbd-list. */
+   capsule (.capsule) · .engine-chip (+ .model, .menu.model) · settings rows (.set-*) · .kbd-list. */
 
 :root {
   --sans: "Noto Sans TC", -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
@@ -217,6 +217,32 @@ body.panel-resizing iframe { pointer-events: none; }
 .engine-chip .used { color: var(--faint); }
 .engine-chip .wait { color: var(--warn); }
 .engine-chip.set { color: var(--accent-text); border-color: var(--accent-text); }
+/* the model menu (LoreShell.modelMenu): the chip names the model, the menu picks one */
+.engine-chip.model { max-width: 100%; min-width: 0; }
+.engine-chip.model .txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.engine-chip.model .ok { color: var(--ok); }
+.engine-chip.model .caret { display: inline-flex; flex: none; }
+.engine-chip.model .caret svg.i { width: 11px; height: 11px; }
+.menu.model { width: 268px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; }
+.menu.model > * { flex: none; }
+.menu.model .menu-head { display: flex; align-items: center; }
+.menu.model .mrow { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 2px 6px 2px 10px; font-size: 13px; }
+.menu.model .mrow .lbl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu.model .mrow.full { padding: 2px 6px 4px; }
+.menu.model .mrow.full .seg { flex: 1; flex-wrap: wrap; }
+.menu.model .seg button { flex: none; justify-content: center; gap: 0; padding: 3px 7px; border-radius: 0; font-size: 12.5px; color: var(--muted); background: var(--surface); white-space: nowrap; }
+.menu.model .mrow.full .seg button { flex: 1 0 auto; padding: 3px 5px; }
+.menu.model .seg button:hover:not([aria-pressed="true"]) { color: var(--text); background: var(--surface-hover); }
+.menu.model .seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.menu.model .new { font: 600 9.5px/13px var(--mono); color: var(--accent-2-text); border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; margin-left: 5px; flex: none; }
+.menu.model .seg .new { margin-left: 3px; }
+.menu.model .sw { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 0; border-radius: 0; font: 400 12px var(--sans); letter-spacing: 0; color: var(--muted); background: none; }
+.menu.model .sw:hover:not(:disabled), .menu.model .sw:focus-visible { background: none; color: var(--text); }
+.menu.model .sw i { width: 24px; height: 14px; border-radius: 7px; background: var(--line-strong); position: relative; flex: none; }
+.menu.model .sw i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); }
+.menu.model .sw[aria-pressed="true"] { color: var(--text); }
+.menu.model .sw[aria-pressed="true"] i { background: var(--accent-text); }
+.menu.model .sw[aria-pressed="true"] i::after { left: 12px; }
 
 /* ── settings (the gear dialog): one height for every tab ───────── */
 .lore-settings { height: min(680px, calc(100vh - 48px)); }

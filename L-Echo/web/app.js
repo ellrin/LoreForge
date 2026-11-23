@@ -26,6 +26,7 @@ const S = {
   turnSel: null,       // the selection the running turn is about (selected.js), kept for 「改用另一個」
   expanded: false,
   shell: null,
+  models: { chat: "", polish: "", unrestricted: false, seen: [] },   // the model menu's choices
 };
 
 function h(tag, attrs = {}, ...kids) {
@@ -58,6 +59,7 @@ async function boot() {
   try {
     const [health, win] = await Promise.all([api("GET", "/api/health"), api("GET", "/api/window")]);
     S.desktop = !!health.desktop;
+    api("GET", "/api/settings").then((s) => { S.models = modelsOf(s); S.chip.paint(); }).catch(() => {});
     setWinSize(win.w, win.h);
     wireResize();
     await loadCharacters();
@@ -84,10 +86,30 @@ function mountShell() {
   const collapse = h("button", { type: "button", class: "ico", id: "actCollapse", "aria-label": "收起 Esc", title: "收起成泡泡（對話會清掉）" }, h("span", { "data-icon": "chevron" }));
   collapse.addEventListener("click", () => show(false));
   S.shell.el.prepend(collapse);
-  // which model answers: the next reply's (自動 · 本機 Gemma 4 12B), then the one that answered; click = 自動／雲／地
-  S.chip = LoreShell.engineChip({ task: "le-chat", live: true, label: "這次回答用的模型" });
+  // which model answers: 自動 (the next reply's, then the one that answered) or the model he picked in
+  // the chip's menu. The chat and the rewrite of a selection each remember their own (settings.toml
+  // [models]); while a rewrite is shown the chip is the rewrite's, with the Google models.
+  const rewriting = () => !!window.LoreEchoSel?.rewriting();
+  S.chip = LoreShell.modelMenu({
+    task: () => (rewriting() ? null : "le-chat"), label: "回答用的模型",
+    value: () => (rewriting() ? S.models.polish : S.models.chat),
+    onChange: (ref) => saveModels(rewriting() ? { polish: ref } : { chat: ref }),
+    google: rewriting,
+    unrestricted: () => S.models.unrestricted, onUnrestricted: (on) => saveModels({ unrestricted: on }),
+    seen: () => S.models.seen, onSeen: (seen) => saveModels({ seen }),
+  });
   S.chip.id = "engine";
+  window.LorePolish?.mount({ engine: () => S.models.polish || undefined });
   S.shell.slots.lead.append(S.chip);
+}
+
+/** The model menu's choices (settings.toml [models]): { chat, polish, unrestricted, seen }. */
+const modelsOf = (settings) => ({ chat: "", polish: "", unrestricted: false, seen: [], ...(settings?.models ?? {}) });
+async function saveModels(patch) {
+  const before = { ...S.models };
+  Object.assign(S.models, patch);                // at once in the page, then what the server kept
+  try { S.models = modelsOf(await api("PUT", "/api/settings", { models: patch })); }
+  catch (e) { S.models = before; throw e; }
 }
 
 // ── characters ──────────────────────────────────────────────────
@@ -391,7 +413,7 @@ async function send(engine) {
   try {
     const r = await fetch("/api/chat", {
       method: "POST", headers: { "content-type": "application/json" }, signal: ctrl.signal,
-      body: JSON.stringify({ messages: S.msgs, character: S.char?.id, engine, kb: window.LoreEchoKb?.ask(), speak, selection: S.turnSel ?? undefined }),
+      body: JSON.stringify({ messages: S.msgs, character: S.char?.id, engine: engine ?? (S.models.chat || undefined), kb: window.LoreEchoKb?.ask(), speak, selection: S.turnSel ?? undefined }),
     });
     if (!r.ok || !(r.headers.get("content-type") || "").startsWith("text/event-stream")) {
       const data = await r.json().catch(() => ({}));

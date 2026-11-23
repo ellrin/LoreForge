@@ -54,7 +54,8 @@ pub struct ChatBody {
     #[serde(default)]
     pub messages: Vec<Turn>,
     pub character: Option<String>,
-    /// `local` | `claude`: only that engine (the one-click alternative).
+    /// `local` | `claude`: only that engine (the one-click alternative); `claude:<alias>` |
+    /// `local:<catalog id>`: only that model (the header's model menu).
     pub engine: Option<String>,
     /// The page's L-Brain context (quiz in progress, cards of the last reply).
     #[serde(default)]

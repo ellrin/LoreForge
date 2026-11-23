@@ -123,12 +123,15 @@ impl Llm {
     }
 
     /// The engine for `task`. `engine`: `"local"` / `"claude"` pins that engine (the
-    /// one-click alternative after a failure); anything else = the task's order and the
+    /// one-click alternative after a failure), `claude:<alias>` / `local:<catalog id>` that
+    /// model (the header's model menu; no fallback); anything else = the task's order and the
     /// shared routes. `Err` = the JSON body for the page (`{ error, alternative? }`).
     pub async fn route(&self, task: &str, engine: Option<&str>) -> Result<Route, Value> {
         let (opts, strict) = match engine {
             Some("local") => (RouteOptions::only("local:current"), true),
             Some("claude") => (RouteOptions::only("claude:selected"), true),
+            // a named model; never `agy:` (Google answers 語句潤飾 only)
+            Some(m) if m.strip_prefix("claude:").or_else(|| m.strip_prefix("local:")).is_some_and(|id| !id.trim().is_empty()) => (RouteOptions::only(m), true),
             _ => (RouteOptions::default(), false),
         };
         let r = match &self.fake {
@@ -193,6 +196,25 @@ mod tests {
         let e = Llm::none().route(TASK_CHAT, None).await.err().unwrap();
         let m = e["error"].as_str().unwrap();
         assert!(!m.is_empty() && !m.contains('\n'), "{m}");
+    }
+
+    #[tokio::test]
+    async fn a_turn_can_name_its_model_but_never_google() {
+        use lore_llm::MockProvider;
+        use lore_llm::router::MockFactory;
+        let mock = |name: &str| -> Arc<dyn lore_llm::LlmProvider> { Arc::new(MockProvider::new(vec![]).named(name)) };
+        let llm = Llm::with_factory(MockFactory::default().with("local:current", mock("mock:current")).with("local:qwen3.5-9b-q8", mock("mock:qwen")).with("claude:haiku", mock("mock:haiku")).with("agy:m-1", mock("mock:google")));
+        let id = |r: Route| r.provider.id();
+        assert_eq!(id(llm.route(TASK_CHAT, None).await.unwrap()), "mock:current", "自動: the task's order");
+        assert_eq!(id(llm.route(TASK_CHAT, Some("claude:haiku")).await.unwrap()), "mock:haiku");
+        let r = llm.route(TASK_CHAT, Some("local:qwen3.5-9b-q8")).await.unwrap();
+        assert!(!matches!(r.model, lore_llm::ModelRef::Claude { .. }), "a named local model is local for the files rule");
+        assert_eq!(id(r), "mock:qwen");
+        // a model that is not there: an error, never another model
+        assert!(llm.route(TASK_CHAT, Some("claude:opus")).await.is_err());
+        // Google is not a chat engine: the name is ignored, the task's order answers
+        assert_eq!(id(llm.route(TASK_CHAT, Some("agy:m-1")).await.unwrap()), "mock:current");
+        assert_eq!(id(llm.route(TASK_CHAT, Some("claude:")).await.unwrap()), "mock:current");
     }
 
     #[test]

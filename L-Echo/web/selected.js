@@ -63,7 +63,7 @@ window.LoreEchoSel = (() => {
     box().classList.add("sel-on");
     $("text").placeholder = "說點什麼…";
     // the inline rewrite closes itself (套用, its ✕): back to the actions
-    X.watch = new MutationObserver(() => { if (!X.slot?.firstChild) box().classList.remove("sel-polish"); });
+    X.watch = new MutationObserver(() => { if (!X.slot?.firstChild) box().classList.remove("sel-polish"); S.chip?.actual(""); });
     X.watch.observe(X.slot, { childList: true });
   }
 
@@ -165,6 +165,7 @@ window.LoreEchoSel = (() => {
     if (window.LorePolish?.isOpen() && X.slot?.firstChild) window.LorePolish.close();
     X.panel?.remove(); X.panel = null; X.slot = null; X.dirs = null;
     box().classList.remove("sel-on", "sel-polish", "sel-talk");
+    S.chip?.paint();                             // the chip is the chat's model again
     $("text").placeholder = "說點什麼…";
   }
 
@@ -184,5 +185,7 @@ window.LoreEchoSel = (() => {
     start: () => { if (!started) { started = true; poll(); } },
     take, escape, end: () => end(),
     active: () => !!X.req,
+    /** A rewrite is shown: the header's chip is the rewrite's model (app.js). */
+    rewriting: () => !!X.slot?.firstChild,
   };
 })();

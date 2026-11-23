@@ -114,6 +114,7 @@ LoreShell.ask(anchor, lines, buttons) → Promise（值或 null；Esc、點外�
 LoreShell.form({ title, build(body, dlg), actions: [{ label, primary, run }] }) → Promise（小表單對話框）
 LoreShell.menu(anchor, items)（anchor＝元素，或右鍵的 `{ x, y }`；元素被隱藏時，例如首頁的文件鈕，改掛在品牌下；`LoreShell.place(el, anchor)` 給 app 自己的浮層用）· LoreShell.settings(tab) · LoreShell.block({ n, title, count, help, open, key })
 LoreShell.engineChip({ task, value, used, onChange }) · LoreShell.shortcuts()
+LoreShell.modelMenu({ task, value(), onChange(ref), google(), unrestricted(), onUnrestricted(on), seen(), onSeen(refs) })   // 上方列的模型選單（L-Echo）：自動／Claude 一列／Google 一列（google() 為真才出現）／本機「系列＋大小鈕」與一個「無限制」開關；值是 ""（自動）、claude:<別名>、local:<id>、agy:<id>；chip.actual / busy / refresh / paint
 LoreLinks.open(app, params) · LoreLinks.url(app, params) · LoreLinks.ports
 ```
 

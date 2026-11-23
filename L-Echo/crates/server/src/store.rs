@@ -16,6 +16,12 @@
 //! auto_send = true    # a finished sentence is sent at once (false: it waits for ↵)
 //! read_aloud = true   # 朗讀回覆: replies are spoken
 //! text_follows = true # 文字跟著聲音: while a reply is read aloud, its line shows as it is spoken
+//!
+//! [models]            # the header's model menu (missing = 自動 for both)
+//! chat = "claude:sonnet"   # the chat's model: "" = 自動, claude:<alias>, local:<catalog id>
+//! polish = ""             # 改寫／翻譯 of a selection, remembered on its own (also agy:<id>)
+//! unrestricted = false    # 無限制: the size buttons pick the abliterated variant
+//! seen = ["claude:sonnet"]  # the models the menu has shown (the others get the 新 mark)
 //! ```
 //!
 //! Writes are atomic (a temporary file, then a rename); keys this version does not know are
@@ -77,6 +83,55 @@ pub struct Settings {
     pub read_aloud: bool,
     /// 文字跟著聲音: with 朗讀回覆, the line appears as it is spoken (else at once).
     pub text_follows: bool,
+    /// The header's model menu: the chat's and the rewrite's choice, each on its own.
+    #[serde(skip_serializing_if = "Models::is_default")]
+    pub models: Models,
+}
+
+/// What the model menu remembers (`[models]`). A choice is a model ref: "" = 自動,
+/// `claude:<alias>`, `local:<catalog id>`, and for the rewrite also `agy:<id>`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Models {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub chat: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub polish: String,
+    /// 無限制: a size button picks the abliterated variant of a local model.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unrestricted: bool,
+    /// The models the menu has shown once (the others are marked 新).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub seen: Vec<String>,
+}
+
+impl Models {
+    fn is_default(&self) -> bool {
+        *self == Models::default()
+    }
+}
+
+/// `{ models: { chat?, polish?, unrestricted?, seen? } }`: what changes.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ModelsPatch {
+    pub chat: Option<String>,
+    pub polish: Option<String>,
+    pub unrestricted: Option<bool>,
+    pub seen: Option<Vec<String>>,
+}
+
+const MAX_SEEN: usize = 200;
+
+/// A model ref the menu may keep: "" (自動) or `<kind>:<id>` with one of `kinds` (an id as the
+/// engines list gives it: no spaces).
+pub fn check_model(v: &str, kinds: &[&str]) -> Result<String, String> {
+    let v = v.trim();
+    if v.is_empty() || v == "auto" {
+        return Ok(String::new());
+    }
+    let ok = v.split_once(':').is_some_and(|(k, id)| kinds.contains(&k) && (1..=100).contains(&id.len()) && id.chars().all(|c| !c.is_whitespace() && !c.is_control()));
+    if ok { Ok(v.to_string()) } else { Err(format!("不認得的模型「{v}」")) }
 }
 
 pub const TALK_HOLD: &str = "hold";
@@ -84,7 +139,7 @@ pub const TALK_CONTINUOUS: &str = "continuous";
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { character: None, shortcut: DEFAULT_SHORTCUT.into(), talk: TALK_HOLD.into(), auto_send: true, read_aloud: true, text_follows: true }
+        Settings { character: None, shortcut: DEFAULT_SHORTCUT.into(), talk: TALK_HOLD.into(), auto_send: true, read_aloud: true, text_follows: true, models: Models::default() }
     }
 }
 
@@ -97,6 +152,7 @@ pub struct SettingsPatch {
     pub auto_send: Option<bool>,
     pub read_aloud: Option<bool>,
     pub text_follows: Option<bool>,
+    pub models: Option<ModelsPatch>,
 }
 
 fn read_table(path: &Path) -> toml::Table {
@@ -221,9 +277,28 @@ pub fn set_settings(dir: &Path, p: &SettingsPatch) -> Result<Settings, String> {
     if let Some(v) = p.text_follows {
         s.text_follows = v;
     }
+    if let Some(m) = &p.models {
+        // the chat never runs on Google (`agy:` answers 語句潤飾 only, lore-llm refuses it elsewhere)
+        if let Some(v) = &m.chat {
+            s.models.chat = check_model(v, &["claude", "local"])?;
+        }
+        if let Some(v) = &m.polish {
+            s.models.polish = check_model(v, &["claude", "local", "agy"])?;
+        }
+        if let Some(v) = m.unrestricted {
+            s.models.unrestricted = v;
+        }
+        if let Some(v) = &m.seen {
+            let mut seen: Vec<String> = v.iter().filter_map(|x| check_model(x, &["claude", "local", "agy"]).ok()).filter(|x| !x.is_empty()).collect();
+            seen.sort();
+            seen.dedup();
+            seen.truncate(MAX_SEEN);
+            s.models.seen = seen;
+        }
+    }
     let path = dir.join(SETTINGS_FILE);
     let mut t = read_table(&path);
-    merge(&mut t, &s, &["character", "shortcut", "talk", "auto_send", "read_aloud", "text_follows"]);
+    merge(&mut t, &s, &["character", "shortcut", "talk", "auto_send", "read_aloud", "text_follows", "models"]);
     write_table(&path, &t).map_err(|e| format!("無法寫入 {SETTINGS_FILE}：{e}"))?;
     Ok(s)
 }

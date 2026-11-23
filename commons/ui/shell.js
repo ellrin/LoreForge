@@ -34,6 +34,8 @@
 //   LoreShell.settings(tab?)                         the gear dialog: 一般 外觀 模型 同步 快捷鍵 + the app's tabs
 //       一般 ends with 權限 when the server declares permissions (GET /api/permissions, lore-shell)
 //   LoreShell.permissions.get() / .request(what?) / .open(what)   what: microphone | speech | personal_voice
+//   LoreShell.modelMenu({ task, value, onChange, google, unrestricted, onUnrestricted, seen, onSeen })
+//                                                        a header's model choice: 自動 or a named model (L-Echo)
 //   LoreShell.engineChip({ task, value, used, onChange })   a feature's own engine choice;
 //       live: true → shows what the next request will use (自動 · 本機 Gemma 4 12B); chip.actual(name) after it
 //       chip.busy(true|false) around its request shows the shared model's status (載入模型中 · N 秒 / 等待 X 用完模型)
@@ -435,6 +437,166 @@
     return b;
   }
 
+  // ── the model menu (a header's own model choice) ───────────────────
+  /** Local models as family rows with size buttons: 「Gemma 4 12B」 → family 「Gemma 4」, size 「12B」.
+   *  One button holds the model's variants: plain ids and abliterated ones (`…-abl-…`). */
+  function localFamilies(L) {
+    const fams = new Map();
+    for (const m of L?.models ?? []) {
+      const label = String(m.label ?? m.id), cut = label.lastIndexOf(" ");
+      const sized = cut > 0 && /^[A-Za-z]?\d+(\.\d+)?[BbMm]$/.test(label.slice(cut + 1));
+      const fam = sized ? label.slice(0, cut) : label, size = sized ? label.slice(cut + 1) : "選用";
+      if (!fams.has(fam)) fams.set(fam, new Map());
+      const f = fams.get(fam);
+      if (!f.has(size)) f.set(size, { label, plain: [], free: [] });
+      (/-abl-/.test(m.id) ? f.get(size).free : f.get(size).plain).push(m.id);
+    }
+    const num = (x) => parseFloat(x.replace(/^[A-Za-z]/, "")) || 0;
+    for (const [k, f] of fams) fams.set(k, new Map([...f].sort((a, b) => num(a[0]) - num(b[0]))));
+    return fams;
+  }
+  /** The variant a size button picks: the abliterated one with 無限制 (when there is one), else the
+   *  plain one; among several files of it the shared current model, else the last by id. */
+  function variantOf(g, free, current) {
+    const ids = free ? (g.free.length ? g.free : g.plain) : (g.plain.length ? g.plain : g.free);
+    return ids.includes(current) ? current : [...ids].sort().pop();
+  }
+  /** 「Sonnet」 / 「Gemma 4 12B」 for a model ref (claude:<alias>, local:<id>, agy:<id>). */
+  function refLabel(ref, d = engines.data) {
+    const i = ref.indexOf(":"), kind = ref.slice(0, i), id = ref.slice(i + 1);
+    const list = kind === "claude" ? d?.claude?.models : kind === "local" ? d?.local?.models : kind === "agy" ? d?.google?.models : null;
+    return (list ?? []).find((m) => m.id === id)?.label ?? id;
+  }
+  /** A header's model choice: the chip names the model that answers, its menu picks one — 自動
+   *  first, the Claude models, the Google ones only while `google()` says so (`agy:` answers
+   *  語句潤飾 only), 本機 as family rows with size buttons and ONE 無限制 switch for the group (it
+   *  hides nothing: it switches which variant the size buttons pick). A choice is a model ref:
+   *  "" = 自動, `claude:<alias>`, `local:<id>`, `agy:<id>`; the app keeps it:
+   *    { task, label, value(), onChange(ref), google(), unrestricted(), onUnrestricted(on), seen(), onSeen(refs) }
+   *  `task` (an id, or a function: none = 自動 without a prediction) is whose next engine 自動 names.
+   *  新 marks a model the menu did not have the last time it was opened (`seen`).
+   *  As engineChip({ live }): chip.actual(name) after a reply, chip.busy(on) while a request runs
+   *  (the shared local model's status words), chip.refresh(); chip.paint() when value() changed. */
+  function modelMenu(o = {}) {
+    const b = h("button", { type: "button", class: "engine-chip model", "aria-haspopup": "menu", "aria-label": o.label ?? "模型" });
+    const value = () => o.value?.() || "";
+    const task = () => (typeof o.task === "function" ? o.task() : o.task) || null;
+    let actual = "", working = false, waited = false, timer = 0, okTimer = 0;
+    const paint = () => {
+      const d = engines.data, v = value(), L = d?.local;
+      const next = v || !task() ? null : nextEngine(task(), d);
+      const local = v.startsWith("local:") || (!v && (next?.kind === "local" || /本機/.test(actual)));
+      const wait = working && local && localBusy(L) && L.status;
+      const text = h("span", { class: "txt" });
+      const bare = (name) => name.replace(/^(本機|Claude)\s+/, "");   // the chip is narrow: the model's own name
+      if (wait) { waited = true; text.append(h("span", { class: "wait" }, L.status)); }
+      else if (waited && L?.state === "ready") text.append(h("span", { class: "ok" }, `已載入 ${v ? refLabel(v, d) : L.label ?? ""}`.trim()));
+      else if (v) {
+        const name = refLabel(v, d);
+        text.append(name);
+        // another model answered (files that must stay on this machine): say which
+        if (actual && !actual.includes(name)) text.append(h("span", { class: "used" }, ` · ${bare(actual)}`));
+      } else {
+        text.append("自動");
+        const used = actual || (d && task() ? next?.label || "無可用模型" : "");
+        if (used) text.append(h("span", { class: "used" }, ` · ${bare(used)}`));
+      }
+      // while the status shows it takes the whole chip (no caret; the menu still opens)
+      b.replaceChildren(text, ...(wait ? [] : [h("span", { class: "caret" }, icon("chevron"))]));
+      b.title = wait || "";
+    };
+    const onEng = () => { if (b.isConnected) paint(); else if (!working) document.removeEventListener("lore-engines", onEng); };
+    document.addEventListener("lore-engines", onEng);
+    b.paint = paint;
+    b.actual = (name) => { actual = name || ""; paint(); };
+    b.refresh = () => engines.get(true);
+    b.busy = (on) => {
+      working = !!on;
+      clearInterval(timer); clearTimeout(okTimer);
+      if (working) {
+        waited = false;
+        timer = setInterval(() => { if (!b.isConnected) b.busy(false); else engines.get(true); }, 2000);
+        engines.get(true);
+      } else if (waited) okTimer = setTimeout(() => { waited = false; paint(); }, 2500);   // 已載入 stays a moment
+      paint();
+    };
+
+    const pick = async (ref) => {
+      closeMenu();
+      if (ref === value()) return;
+      actual = "";
+      try { await o.onChange?.(ref); } catch (e) { toast(e.message, { err: true }); }
+      paint();
+    };
+    function draw(m, d, fresh) {
+      const v = value(), free = !!o.unrestricted?.();
+      const mark = (ref) => (fresh.has(ref) ? h("span", { class: "new" }, "新") : null);
+      const seg = (label, items) => h("div", { class: "seg", role: "group", "aria-label": label },
+        items.map(([ref, text, on]) => h("button", { type: "button", role: "menuitemradio", "aria-checked": String(on ?? ref === v), "aria-pressed": String(on ?? ref === v), onclick: () => pick(ref) }, text, mark(ref))));
+      const auto = h("button", { type: "button", class: "it", role: "menuitemradio", "aria-checked": String(!v), "aria-current": v ? null : "true", onclick: () => pick("") }, h("span", { class: "lbl" }, "自動"));
+      m.replaceChildren(auto);
+      const C = d.claude?.models ?? [];
+      if (C.length) m.append(h("div", { class: "menu-sep", role: "separator" }), h("div", { class: "menu-head" }, "CLAUDE"), h("div", { class: "mrow full" }, seg("Claude", C.map((x) => [`claude:${x.id}`, x.label ?? x.id]))));
+      const G = o.google?.() && d.google?.available ? d.google.models ?? [] : [];
+      if (G.length) m.append(h("div", { class: "menu-head" }, "GOOGLE"), h("div", { class: "mrow full" }, seg("Google", G.map((x) => [`agy:${x.id}`, x.label ?? x.id]))));
+      const fams = localFamilies(d.local);
+      if (fams.size) {
+        const groups = [...fams.values()].flatMap((f) => [...f.values()]);
+        const sw = groups.some((g) => g.free.length) ? h("button", { type: "button", class: "sw", role: "switch", "aria-checked": String(free), "aria-pressed": String(free) }, "無限制", h("i")) : null;
+        if (sw) sw.onclick = async () => {
+          const on = !free;
+          try {
+            await o.onUnrestricted?.(on);
+            // the chosen local model follows the switch to its other variant
+            const g = groups.find((x) => [...x.plain, ...x.free].some((id) => `local:${id}` === v));
+            const to = g ? `local:${variantOf(g, on, d.local?.model)}` : v;
+            if (to !== v) { actual = ""; await o.onChange?.(to); paint(); }
+          } catch (e) { toast(e.message, { err: true }); }
+          draw(m, d, fresh);
+        };
+        m.append(h("div", { class: "menu-head" }, "本機", sw));
+        for (const [fam, sizes] of fams) {
+          const items = [...sizes].map(([size, g]) => { const ref = `local:${variantOf(g, free, d.local?.model)}`; return [ref, size, [...g.plain, ...g.free].some((id) => `local:${id}` === v)]; });
+          const allNew = items.length > 1 && items.every(([ref]) => fresh.has(ref));
+          const row = h("div", { class: "mrow" }, h("span", { class: "lbl" }, fam, allNew ? h("span", { class: "new" }, "新") : null), seg(fam, items));
+          if (allNew) row.querySelectorAll(".seg .new").forEach((x) => x.remove());
+          m.append(row);
+        }
+      }
+    }
+    b.onclick = async () => {
+      if (openMenu?.anchor === b) { closeMenu(); return; }
+      closeMenu();
+      const d = (await engines.get(true)) ?? {};
+      const m = h("div", { class: "menu model", role: "menu" });
+      // 新: not in the menu the last time it was opened (nothing is new the very first time)
+      const refs = [...(d.claude?.models ?? []).map((x) => `claude:${x.id}`), ...(d.local?.models ?? []).map((x) => `local:${x.id}`), ...(o.google?.() && d.google?.available ? d.google.models ?? [] : []).map((x) => `agy:${x.id}`)];
+      const seen = o.seen?.() ?? [];
+      const fresh = new Set(seen.length ? refs.filter((r) => !seen.includes(r)) : []);
+      draw(m, d, fresh);
+      layer(b).append(m);
+      const r = b.getBoundingClientRect();
+      m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+      m.style.top = `${Math.max(8, Math.min(r.bottom + 4, innerHeight - m.offsetHeight - 8))}px`;
+      b.setAttribute("aria-expanded", "true");
+      const away = (e) => { if (!m.contains(e.target) && !b.contains(e.target)) closeMenu(); };
+      const key = (e) => {
+        const list = [...m.querySelectorAll("button:not(:disabled)")];
+        const i = list.indexOf(document.activeElement);
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeMenu(); b.focus(); }
+        else if (e.key === "ArrowDown" || e.key === "ArrowRight") { e.preventDefault(); list[(i + 1) % list.length]?.focus(); }
+        else if (e.key === "ArrowUp" || e.key === "ArrowLeft") { e.preventDefault(); list[(i - 1 + list.length) % list.length]?.focus(); }
+      };
+      setTimeout(() => document.addEventListener("pointerdown", away, true), 0);
+      document.addEventListener("keydown", key, true);
+      openMenu = { el: m, anchor: b, away, key };
+      if (refs.some((x) => !seen.includes(x))) Promise.resolve(o.onSeen?.([...new Set([...seen, ...refs])])).catch(() => {});
+    };
+    engines.get(true);
+    paint();
+    return b;
+  }
+
   // ── settings (the gear) ────────────────────────────────────────────
   const SHARED_TABS = [
     { id: "general", label: "一般", build: buildGeneral },
@@ -780,7 +942,7 @@
     return shell;
   }
 
-  window.LoreShell = { mount, place, toast, ask, form, menu, closeMenu, settings, engineChip, engines, permissions, block, shortcuts, parseKeys };
+  window.LoreShell = { mount, place, toast, ask, form, menu, closeMenu, settings, engineChip, modelMenu, engines, permissions, block, shortcuts, parseKeys };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wireTips); else wireTips();
 })();
 
