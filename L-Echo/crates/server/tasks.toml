@@ -12,6 +12,8 @@
 
 [task.le-chat]
 label = "L-Echo 對話"
+# the author picks the model in the header, Google (agy:<model>) like any other (2026-11-24)
+agy = true
 class = "ask"
 needs = { context = 8000 }
 default = "local:current"

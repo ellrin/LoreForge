@@ -52,6 +52,12 @@ fn env(k: &str) -> Option<String> {
     std::env::var(k).ok().filter(|v| !v.trim().is_empty())
 }
 
+/// A model that runs off this machine (Claude, or Google through `agy`): it never gets the names
+/// of files a cloud model may not read (`shelfctx`); such a turn goes to the local model.
+pub fn is_cloud(m: &lore_llm::ModelRef) -> bool {
+    matches!(m, lore_llm::ModelRef::Claude { .. } | lore_llm::ModelRef::Agy(_))
+}
+
 impl Llm {
     /// The real engines: the shared local engine of `home`, Claude through the subscription
     /// or the shared key. `user_tasks` = an optional `tasks.toml` with an `[override]`.
@@ -123,15 +129,16 @@ impl Llm {
     }
 
     /// The engine for `task`. `engine`: `"local"` / `"claude"` pins that engine (the
-    /// one-click alternative after a failure), `claude:<alias>` / `local:<catalog id>` that
+    /// one-click alternative after a failure), `claude:<alias>` / `local:<catalog id>` / `agy:<model id>` that
     /// model (the header's model menu; no fallback); anything else = the task's order and the
     /// shared routes. `Err` = the JSON body for the page (`{ error, alternative? }`).
     pub async fn route(&self, task: &str, engine: Option<&str>) -> Result<Route, Value> {
         let (opts, strict) = match engine {
             Some("local") => (RouteOptions::only("local:current"), true),
             Some("claude") => (RouteOptions::only("claude:selected"), true),
-            // a named model; never `agy:` (Google answers 語句潤飾 only)
-            Some(m) if m.strip_prefix("claude:").or_else(|| m.strip_prefix("local:")).is_some_and(|id| !id.trim().is_empty()) => (RouteOptions::only(m), true),
+            // a named model: Claude, a local one, or Google through `agy` (only a task with
+            // `agy = true` in tasks.toml takes that one: the chat does, lore-llm refuses the rest)
+            Some(m) if ["claude:", "local:", "agy:"].iter().any(|p| m.strip_prefix(p).is_some_and(|id| !id.trim().is_empty())) => (RouteOptions::only(m), true),
             _ => (RouteOptions::default(), false),
         };
         let r = match &self.fake {
@@ -198,8 +205,17 @@ mod tests {
         assert!(!m.is_empty() && !m.contains('\n'), "{m}");
     }
 
+    #[test]
+    fn google_is_a_cloud_model_for_the_files_rule() {
+        // regression guard: Google counted as "not Claude, so local" would get the names of
+        // files a cloud model may not read (IDs, contracts…)
+        for (r, cloud) in [("agy:m-1", true), ("claude:sonnet", true), ("claude-code:opus", true), ("local:qwen3.5-9b-q8", false), ("mock:x", false)] {
+            assert_eq!(is_cloud(&lore_llm::ModelRef::parse(r).unwrap()), cloud, "{r}");
+        }
+    }
+
     #[tokio::test]
-    async fn a_turn_can_name_its_model_but_never_google() {
+    async fn a_turn_can_name_its_model_google_too_but_only_the_chat() {
         use lore_llm::MockProvider;
         use lore_llm::router::MockFactory;
         let mock = |name: &str| -> Arc<dyn lore_llm::LlmProvider> { Arc::new(MockProvider::new(vec![]).named(name)) };
@@ -212,8 +228,12 @@ mod tests {
         assert_eq!(id(r), "mock:qwen");
         // a model that is not there: an error, never another model
         assert!(llm.route(TASK_CHAT, Some("claude:opus")).await.is_err());
-        // Google is not a chat engine: the name is ignored, the task's order answers
-        assert_eq!(id(llm.route(TASK_CHAT, Some("agy:m-1")).await.unwrap()), "mock:current");
+        // Google is a model like the others for the chat, and a cloud model for the files rule
+        let g = llm.route(TASK_CHAT, Some("agy:m-1")).await.unwrap();
+        assert!(matches!(g.model, lore_llm::ModelRef::Agy(_)));
+        assert_eq!(id(g), "mock:google");
+        // a task that did not opt in (card drafts need a web search) never runs on it
+        assert!(llm.route("le-cards", Some("agy:m-1")).await.is_err());
         assert_eq!(id(llm.route(TASK_CHAT, Some("claude:")).await.unwrap()), "mock:current");
     }
 

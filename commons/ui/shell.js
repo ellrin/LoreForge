@@ -468,8 +468,8 @@
     return (list ?? []).find((m) => m.id === id)?.label ?? id;
   }
   /** A header's model choice: the chip names the model that answers, its menu picks one — 自動
-   *  first, the Claude models, the Google ones only while `google()` says so (`agy:` answers
-   *  語句潤飾 only), 本機 as family rows with size buttons and ONE 無審查 switch for the group (it
+   *  first, the Claude models, the Google ones while `google()` says so (one row per model, its effort levels as buttons; `agy:`, for the
+   *  tasks that take it), 本機 as family rows with size buttons and ONE 無審查 switch for the group (it
    *  hides nothing: it switches which variant the size buttons pick). A choice is a model ref:
    *  "" = 自動, `claude:<alias>`, `local:<id>`, `agy:<id>`; the app keeps it:
    *    { task, label, value(), onChange(ref), google(), unrestricted(), onUnrestricted(on), seen(), onSeen(refs) }
@@ -538,7 +538,24 @@
       const C = d.claude?.models ?? [];
       if (C.length) m.append(h("div", { class: "menu-sep", role: "separator" }), h("div", { class: "menu-head" }, "CLAUDE"), h("div", { class: "mrow full" }, seg("Claude", C.map((x) => [`claude:${x.id}`, x.label ?? x.id]))));
       const G = o.google?.() && d.google?.available ? d.google.models ?? [] : [];
-      if (G.length) m.append(h("div", { class: "menu-head" }, "GOOGLE"), h("div", { class: "mrow full" }, seg("Google", G.map((x) => [`agy:${x.id}`, x.label ?? x.id]))));
+      if (G.length) {
+        // one row per model, its effort levels as buttons: 「Gemini 4 Neon (High)」 → 「Gemini 4 Neon」 · High.
+        // The Claude models the CLI also lists are left out: they are the row above.
+        const order = ["low", "medium", "high", "xhigh", "max"];
+        const rows = new Map();
+        for (const x of G) {
+          if (/^claude/i.test(x.id)) continue;
+          const mm = /^(.*\S)\s*\(([^()]+)\)$/.exec(String(x.label ?? x.id));
+          const fam = mm ? mm[1] : String(x.label ?? x.id), lvl = mm ? mm[2] : "選用";
+          if (!rows.has(fam)) rows.set(fam, []);
+          rows.get(fam).push([`agy:${x.id}`, lvl]);
+        }
+        if (rows.size) m.append(h("div", { class: "menu-head" }, "GOOGLE"));
+        for (const [fam, items] of rows) {
+          items.sort((a, b) => order.indexOf(a[1].toLowerCase()) - order.indexOf(b[1].toLowerCase()));
+          m.append(h("div", { class: "mrow" }, h("span", { class: "lbl" }, fam), seg(fam, items)));
+        }
+      }
       const fams = localFamilies(d.local);
       if (fams.size) {
         const groups = [...fams.values()].flatMap((f) => [...f.values()]);

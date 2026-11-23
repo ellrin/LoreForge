@@ -88,13 +88,13 @@ function mountShell() {
   S.shell.el.prepend(collapse);
   // which model answers: 自動 (the next reply's, then the one that answered) or the model he picked in
   // the chip's menu. The chat and the rewrite of a selection each remember their own (settings.toml
-  // [models]); while a rewrite is shown the chip is the rewrite's, with the Google models.
+  // [models]); while a rewrite is shown the chip is the rewrite's. Google is a model like the others.
   const rewriting = () => !!window.LoreEchoSel?.rewriting();
   S.chip = LoreShell.modelMenu({
     task: () => (rewriting() ? null : "le-chat"), label: "回答用的模型",
     value: () => (rewriting() ? S.models.polish : S.models.chat),
     onChange: (ref) => saveModels(rewriting() ? { polish: ref } : { chat: ref }),
-    google: rewriting,
+    google: () => true,
     unrestricted: () => S.models.unrestricted, onUnrestricted: (on) => saveModels({ unrestricted: on }),
     seen: () => S.models.seen, onSeen: (seen) => saveModels({ seen }),
   });

@@ -212,8 +212,9 @@ async fn settings_keep_the_chat_model_and_the_rewrite_model_apart() {
     assert_eq!(st["models"], json!({ "chat": "claude:sonnet" }));
     let (_, st) = app.json("PUT", "/api/settings", Some(json!({ "models": { "polish": "agy:m-1", "unrestricted": true, "seen": ["local:qwen3.5-9b-q8", "claude:fable", "claude:fable", "nonsense"] } }))).await;
     assert_eq!(st["models"], json!({ "chat": "claude:sonnet", "polish": "agy:m-1", "unrestricted": true, "seen": ["claude:fable", "local:qwen3.5-9b-q8"] }));
-    // Google never answers the chat; a broken name is refused; "" = 自動 again
-    assert_eq!(app.json("PUT", "/api/settings", Some(json!({ "models": { "chat": "agy:m-1" } }))).await.0, StatusCode::BAD_REQUEST);
+    // Google is a chat model too; a broken name is refused; "" = 自動 again
+    let (s, st2) = app.json("PUT", "/api/settings", Some(json!({ "models": { "chat": "agy:m-1" } }))).await;
+    assert_eq!((s, st2["models"]["chat"].clone()), (StatusCode::OK, json!("agy:m-1")));
     assert_eq!(app.json("PUT", "/api/settings", Some(json!({ "models": { "polish": "claude:son net" } }))).await.0, StatusCode::BAD_REQUEST);
     let (_, st) = app.json("PUT", "/api/settings", Some(json!({ "models": { "chat": "" }, "read_aloud": false }))).await;
     assert_eq!(st["models"], json!({ "polish": "agy:m-1", "unrestricted": true, "seen": ["claude:fable", "local:qwen3.5-9b-q8"] }));
@@ -224,7 +225,8 @@ async fn settings_keep_the_chat_model_and_the_rewrite_model_apart() {
 async fn chat_answers_with_the_model_the_turn_names() {
     let local = Arc::new(MockProvider::new(vec!["本機。".into(), "本機。".into()]).named("mock:local"));
     let haiku = Arc::new(MockProvider::new(vec!["雲。".into()]).named("mock:haiku"));
-    let app = App::new(Llm::with_factory(MockFactory::default().with("local:current", local.clone()).with("claude:haiku", haiku.clone())));
+    let google = Arc::new(MockProvider::new(vec!["谷。".into()]).named("mock:google"));
+    let app = App::new(Llm::with_factory(MockFactory::default().with("local:current", local.clone()).with("claude:haiku", haiku.clone()).with("agy:m-1", google.clone())));
     let turn = |engine: &str| json!({ "messages": [{ "role": "user", "text": "嗨" }], "engine": engine });
     let (s, b, _) = app.call("POST", "/api/chat", Some(turn("claude:haiku"))).await;
     assert_eq!(s, StatusCode::OK);
@@ -233,9 +235,10 @@ async fn chat_answers_with_the_model_the_turn_names() {
     let (s, b, _) = app.call("POST", "/api/chat", Some(turn("claude:opus"))).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
     assert!(serde_json::from_slice::<serde_json::Value>(&b).unwrap()["error"].as_str().is_some_and(|m| !m.is_empty()));
-    // Google is for 語句潤飾 only: the name is not a chat model, the task's own order answers
+    // Google answers the chat when the turn names it, like any other model
     let (_, b, _) = app.call("POST", "/api/chat", Some(turn("agy:m-1"))).await;
-    assert_eq!(sse(&b)[0].1["engine"], "mock:local");
+    assert_eq!(sse(&b)[0].1["engine"], "mock:google");
+    assert_eq!(google.seen.lock().unwrap().len(), 1);
     assert_eq!(haiku.seen.lock().unwrap().len(), 1);
 }
 

@@ -289,7 +289,8 @@ async fn chat_post(State(s): State<Shared>, body: Option<Json<chat::ChatBody>>) 
         Ok(r) => r,
         Err(payload) => return (StatusCode::SERVICE_UNAVAILABLE, Json(payload)).into_response(),
     };
-    let is_local = |r: &lore_llm::Route| !matches!(r.model, lore_llm::ModelRef::Claude { .. });
+    // only a model on this machine may get the names of files a cloud model may not read
+    let is_local = |r: &lore_llm::Route| !llm::is_cloud(&r.model);
     // papers and slide decks may go to a cloud model (author, 2026-11-13); anything else found → local
     if found.as_ref().is_some_and(|f| !f.cloud_ok()) && !is_local(&route) && let Ok(r) = s.llm.route(llm::TASK_CHAT, Some("local")).await {
         route = r;

@@ -18,7 +18,7 @@
 //! text_follows = true # 文字跟著聲音: while a reply is read aloud, its line shows as it is spoken
 //!
 //! [models]            # the header's model menu (missing = 自動 for both)
-//! chat = "claude:sonnet"   # the chat's model: "" = 自動, claude:<alias>, local:<catalog id>
+//! chat = "claude:sonnet"   # the chat's model: "" = 自動, claude:<alias>, local:<catalog id>, agy:<id>
 //! polish = ""             # 改寫／翻譯 of a selection, remembered on its own (also agy:<id>)
 //! unrestricted = false    # 無審查: the size buttons pick the abliterated variant
 //! seen = ["claude:sonnet"]  # the models the menu has shown (the others get the 新 mark)
@@ -278,9 +278,9 @@ pub fn set_settings(dir: &Path, p: &SettingsPatch) -> Result<Settings, String> {
         s.text_follows = v;
     }
     if let Some(m) = &p.models {
-        // the chat never runs on Google (`agy:` answers 語句潤飾 only, lore-llm refuses it elsewhere)
+        // Google (`agy:`) is a model like the others, for the chat and for the rewrite
         if let Some(v) = &m.chat {
-            s.models.chat = check_model(v, &["claude", "local"])?;
+            s.models.chat = check_model(v, &["claude", "local", "agy"])?;
         }
         if let Some(v) = &m.polish {
             s.models.polish = check_model(v, &["claude", "local", "agy"])?;
