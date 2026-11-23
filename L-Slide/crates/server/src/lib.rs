@@ -424,7 +424,7 @@ fn router_with(shared: Shared, engines: lore_engines::Engines, voice: lore_voice
     let polish = rewrite::router(&shared, voice);
     // 加入知識庫 for selected words (lore-cards: L-Brain's API while it runs, else its folder)
     let cards = lore_cards::router(Arc::new(kbterms::brain(&shared)), Arc::new(kbterms::CardHost(shared.clone())), "slidecomposer");
-    routes().merge(plot::routes()).merge(flow::routes()).with_state(shared).merge(cards).merge(plots).merge(flows).merge(polish).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).fallback_service(web)
+    routes().merge(plot::routes()).merge(flow::routes()).with_state(shared).merge(cards).merge(plots).merge(flows).merge(polish).merge(lore_shell::permissions::router(perms)).merge(lore_shell::selection::router(lore_shell::selection::Selections::new("sc"))).merge(lore_engines::router(engines)).fallback_service(web)
 }
 
 pub fn state(ws: Workspace, web: PathBuf) -> Shared {

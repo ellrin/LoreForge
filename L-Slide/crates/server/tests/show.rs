@@ -41,3 +41,16 @@ async fn permissions_declared_for_voice_only() {
     assert_eq!(ids, ["microphone", "speech", "personal_voice"]);
     assert!(rows.iter().all(|r| r["status"] == "unsupported"), "no helpers in tests: nothing to ask");
 }
+
+#[tokio::test]
+async fn selection_routes_are_mounted() {
+    // selected text through L-Echo: the shared script and the route the page posts to (an empty
+    // selection is refused before L-Echo is looked for)
+    let (_d, app) = app();
+    let (st, body) = get(&app, "/selection.js").await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&body).contains("window.LoreSelection"));
+    let req = Request::post("/api/lore/selection").header("content-type", "application/json").body(Body::from(r#"{"text":" ","launch":false}"#)).unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}

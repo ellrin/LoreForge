@@ -1483,6 +1483,46 @@ function polishRuns(after, sel, para) {
   return out;
 }
 
+/** The text selected in the box being edited (one paragraph), as a rewrite needs it:
+ *  { uid, id, pi, a, b, text, prefix, suffix, keep, context, scope }, or null. Read from the
+ *  editor as it is now, without ending the edit. */
+function selectionAnchor() {
+  const root = S.editing && editRoot();
+  const sel = root && getTextSel(root);
+  if (!sel || sel.a.p !== sel.b.p || sel.a.o === sel.b.o) return null;
+  const id = S.editing, uid = S.cur, pi = sel.a.p, a = sel.a.o, b = sel.b.o;
+  const sl = S.deck?.slides.find((x) => x.uid === uid);
+  const o = sl && findObj(id, sl.objects);
+  if (!o?.text) return null;
+  const tb = domToText(root, S.editOrig);
+  const para = tb.paras[pi];
+  if (!para) return null;
+  const t = polishText(para);
+  const n = S.deck.slides.indexOf(sl) + 1;
+  // the box as typed so far: its other paragraphs are context too
+  const { scope, context } = selectionContext({ ...sl, objects: sl.objects.map((x) => (x.id === id ? { ...x, text: tb } : x)) }, n, id, pi, (p) => polishText(p).str);
+  return { uid, id, pi, a, b, text: t.str.slice(t.at[a], t.at[b]), prefix: t.str.slice(0, t.at[a]), suffix: t.str.slice(t.at[b]), keep: t.keep, context, scope };
+}
+
+/** Put `after` in place of the anchored selection: one 「潤飾」 step. true, or why not. */
+async function applyRewrite(anc, after) {
+  if (S.editing) await exitEdit(); // typing so far is its own step
+  const { uid, id, pi, a, b } = anc;
+  const s = S.deck?.slides.find((x) => x.uid === uid);
+  const now = s && findObj(id, s.objects);
+  const tb = now?.text && clone(now.text);
+  const p = tb?.paras[pi];
+  if (!p) return "文字框已經不在了";
+  const t2 = polishText(p);
+  if (t2.str.slice(t2.at[a], t2.at[b]) !== anc.text) return "這段文字已經改過，請重新選取";
+  const runs = runsInRange(tb, { p: pi, o: a }, { p: pi, o: b });
+  p.runs.splice(p.runs.indexOf(runs[0]), runs.length, ...polishRuns(after, runs, p));
+  now.text = tb;
+  await commit([{ op: "set_obj", slide: uid, id, path: "/text", value: tb }], "潤飾");
+  renderSide();
+  return true;
+}
+
 /** 潤飾 the selection of the text box being edited. */
 async function polishSelection(anchor) {
   const root = editRoot();
@@ -1490,32 +1530,23 @@ async function polishSelection(anchor) {
   if (!sel || (sel.a.p === sel.b.p && sel.a.o === sel.b.o)) return toast("先在文字框裡選取要潤飾的文字");
   if (sel.a.p !== sel.b.p) return toast("一次潤飾一個段落裡的文字");
   const rect = getSelection().rangeCount ? getSelection().getRangeAt(0).getBoundingClientRect() : null;
-  const id = S.editing, uid = S.cur, pi = sel.a.p, a = sel.a.o, b = sel.b.o;
+  const anc = selectionAnchor();
   await exitEdit(); // typing so far is its own step
-  const o = findObj(id);
-  const para = o?.text?.paras[pi];
-  if (!para) return;
-  const t = polishText(para);
-  const text = t.str.slice(t.at[a], t.at[b]);
+  if (!anc) return;
   LorePolish.open({
-    anchor: rect ?? anchor, text, prefix: t.str.slice(0, t.at[a]), suffix: t.str.slice(t.at[b]), keep: t.keep,
-    context: o.text.paras.filter((_, k) => k !== pi).map((p) => polishText(p).str).join("\n"),
-    apply: async (after) => {
-      const s = S.deck.slides.find((x) => x.uid === uid);
-      const now = s && findObj(id, s.objects);
-      const tb = now?.text && clone(now.text);
-      const p = tb?.paras[pi];
-      if (!p) return "文字框已經不在了";
-      const t2 = polishText(p);
-      if (t2.str.slice(t2.at[a], t2.at[b]) !== text) return "這段文字已經改過，請重新選取";
-      const runs = runsInRange(tb, { p: pi, o: a }, { p: pi, o: b });
-      p.runs.splice(p.runs.indexOf(runs[0]), runs.length, ...polishRuns(after, runs, p));
-      now.text = tb;
-      await commit([{ op: "set_obj", slide: uid, id, path: "/text", value: tb }], "潤飾");
-      renderSide();
-      return true;
-    },
+    anchor: rect ?? anchor, text: anc.text, prefix: anc.prefix, suffix: anc.suffix, keep: anc.keep, context: anc.context, scope: anc.scope,
+    apply: (after) => applyRewrite(anc, after),
   });
+}
+
+/** The selection handed to L-Echo; its rewrites go to the anchor captured when it was sent. */
+let sentAnchor = null;
+function selectionPayload() {
+  const anc = selectionAnchor();
+  if (!anc?.text.trim()) return null;
+  sentAnchor = anc; // the newest selection with text is the one that is (or was just) sent
+  const { text, prefix, suffix, keep, context, scope } = anc;
+  return { doc: S.name ?? "", source: S.deck?.title || S.name || "", text, prefix, suffix, context, scope, keep };
 }
 
 /** Right-click in a text box being edited, with a selection: 潤飾, 加入知識庫. */
@@ -1529,6 +1560,7 @@ function editMenu(ev) {
   const words = String(s);
   LoreShell.menu(pin, [
     { icon: "polish", label: "潤飾", run: () => polishSelection(pin) },
+    ...(window.LoreSelection ? [{ icon: "send", label: "交給 L-Echo", run: () => LoreSelection.send() }] : []),
     ...(window.LoreAddCard ? [{ icon: "plus", label: "加入知識庫", run: () => LoreAddCard.add({ title: words, source: S.name ?? "" }) }] : []),
   ]);
   setTimeout(() => pin.parentNode?.removeChild(pin), 0);
@@ -2333,6 +2365,7 @@ function wire() {
   $("#insPolish").addEventListener("mousedown", (e) => e.preventDefault());
   $("#insPolish").onclick = (e) => (S.editing ? polishSelection(e.currentTarget) : toast("先在文字框裡選取要潤飾的文字"));
   LorePolish.mount({ doc: () => S.name });
+  window.LoreSelection?.watch({ gather: selectionPayload, apply: (after) => (sentAnchor ? applyRewrite(sentAnchor, after) : "沒有選取的文字") });
   $("#insComp").onclick = (e) => openComponentMenu(e.currentTarget);
   $("#actReveal").onclick = () => openReveal();
   // notes belong to the slide that was current when the field got focus

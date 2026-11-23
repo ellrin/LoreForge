@@ -106,6 +106,34 @@ function recipeObjects(r) {
   return [...out.filter((o) => slotKind(o) === "deco"), ...out.filter((o) => slotKind(o) !== "deco")];
 }
 const slotKind = (o) => (o.slot ?? "").replace(/-\d+$/, "");
+/** A slide's title object: a title placeholder or a recipe's title block. */
+const isTitleObj = (o) => slotKind(o) === "title" || o.ph === "title" || o.ph === "ctrTitle";
+
+/** Where a selection sits, for a rewrite (潤飾, L-Echo): `scope` = 「第 n 頁：title」 and `context` =
+ *  labelled lines, the other paragraphs of the same box, the slide's other text in reading order
+ *  (top, then left; the title left out), then its speaker notes (≤ 600 characters); ≤ 2,500 in all.
+ *  `paraText(para)` gives a paragraph as the model sees it. */
+function selectionContext(sl, n, id, pi, paraText) {
+  const textOf = (o) => (o.text?.paras ?? []).map(paraText).map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean).join(" / ");
+  const flat = (list) => list.flatMap((o) => (o.type === "group" ? flat(o.children ?? []) : [o]));
+  const objs = flat(sl?.objects ?? []).filter((o) => !o.hidden && o.text);
+  const title = objs.find((o) => isTitleObj(o) && textOf(o));
+  const scope = title ? `第 ${n} 頁：${textOf(title)}` : `第 ${n} 頁`;
+  const lines = [];
+  const box = objs.find((o) => o.id === id);
+  (box?.text.paras ?? []).forEach((p, k) => { const t = paraText(p).trim(); if (k !== pi && t) lines.push(`同一個文字框：${t}`); });
+  const y = (o) => o.frame?.y ?? 0, x = (o) => o.frame?.x ?? 0;
+  objs.filter((o) => o !== title && o.id !== id && textOf(o)).sort((p, q) => y(p) - y(q) || x(p) - x(q)).forEach((o) => lines.push(`本頁文字：${textOf(o)}`));
+  const notes = (sl?.notes ?? "").replace(/\s+/g, " ").trim();
+  if (notes) lines.push(`講者備註：${notes.length > 600 ? notes.slice(0, 600) + "…" : notes}`);
+  let context = "";
+  for (const l of lines) {
+    const room = 2500 - context.length - (context ? 1 : 0);
+    if (room <= 1) break;
+    context += (context ? "\n" : "") + (l.length > room ? l.slice(0, room - 1) + "…" : l);
+  }
+  return { scope, context };
+}
 
 /** JS twin of lore-canvas `Object::is_empty_slot` (decorations are never empty). */
 function isEmptySlot(o) {
@@ -152,7 +180,7 @@ async function applyArrangement(id, extra = []) {
   const ops = [];
   let next = maxId() + 1;
   const used = new Set();
-  const isTitle = (o) => slotKind(o) === "title" || o.ph === "title" || o.ph === "ctrTitle";
+  const isTitle = isTitleObj;
   for (const nw of fresh) {
     const k = slotKind(nw);
     const keep = k === "deco" ? null
