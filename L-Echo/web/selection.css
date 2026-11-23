@@ -1,0 +1,45 @@
+/* 選取的文字 (selected.js): in the dialogue box, above the current line. Theme tokens only. */
+.sel { display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 0 1 auto; overflow-y: auto; max-height: calc(100cqh - 160px); padding-right: 2px; }
+.sel-scope { font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
+.sel-quote { margin: 0; padding: 1px 0 1px 10px; border-left: 2px solid var(--accent-text); color: var(--muted); font-size: 13px; line-height: 1.55; flex: none;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
+.sel-quote.term { color: var(--text); font-size: 14px; }
+.sel-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: none; }
+.sel-acts .btn[aria-pressed="true"], .sel-acts .btn[aria-expanded="true"] { color: var(--text); border-color: var(--accent-text); background: var(--accent-soft); }
+.sel-acts .btn .caret svg.i { width: 12px; height: 12px; color: var(--faint); }
+.sel-dirs { display: flex; flex: none; }
+.sel-dirs[hidden] { display: none; }
+.sel-dirs .seg { flex: 1; }
+.sel-dirs .seg button { flex: 1; padding: 3px 4px; white-space: nowrap; }
+.sel-work:empty { display: none; }
+/* the rewrite (LorePolish inline) is part of the box, not a card in it */
+#sel .lp-card.inline { border: 0; padding: 0; background: none; border-radius: 0; overflow: visible; }
+#sel .lp-card.inline .lp-text { max-height: none; }
+/* 套用 stays in sight while a long rewrite scrolls */
+#sel .lp-card.inline .lp-foot { position: sticky; bottom: 0; padding-top: 6px; background: var(--surface); }
+
+/* the line: hidden until a chat turn about the selection (解釋, 問他) has a reply to show */
+.box.sel-on:not(.sel-talk) > .line, .box.sel-on:not(.sel-talk) > .cites { display: none; }
+/* while rewriting: only the rewrite, with its own input */
+.box.sel-polish > :is(.line, .cites, .input), .box.sel-polish .sel > :not(.sel-work) { display: none; }
+.box.sel-polish .sel { max-height: calc(100cqh - 110px); }
+
+/* the tighter column: the three actions stay on one row */
+@container win (max-width: 519.98px) {
+  .sel-acts { gap: 4px; }
+  .sel-acts .btn { padding: 0 6px; gap: 4px; }
+}
+/* a short window: the quotation is two lines, one with a reply under it */
+@container win (max-height: 499.98px) {
+  .sel-quote { -webkit-line-clamp: 2; }
+  .box.sel-talk .sel-quote { -webkit-line-clamp: 1; }
+}
+/* the corner card (narrow and short): the selection takes the room, the bust steps out while
+   rewriting or once a reply shows under the quotation */
+@container win (max-width: 419.98px) and (max-height: 499.98px) {
+  .box.sel-on > .line { flex: 1 1 0; }
+  .box.sel-on .sel { max-height: none; }
+  .box.sel-on:not(.sel-talk) .sel, .box.sel-polish .sel { flex: 1 1 auto; }
+  .col:has(.box:is(.sel-polish, .sel-talk)) { top: 0; }
+  .col:has(.box:is(.sel-polish, .sel-talk)) ~ .figure { display: none; }
+}

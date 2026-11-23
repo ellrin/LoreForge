@@ -23,6 +23,7 @@ const S = {
   msgs: [],            // [{ role, text }] — never saved
   line: null,          // the reply shown in the dialogue box (moves to the history on the next turn)
   busy: null,          // AbortController of the running reply
+  turnSel: null,       // the selection the running turn is about (selected.js), kept for 「改用另一個」
   expanded: false,
   shell: null,
 };
@@ -66,6 +67,7 @@ async function boot() {
     LoreShell.toast(`無法連到 L-Echo 伺服器：${e.message}`, { err: true });
   }
   window.LoreEchoFind?.start();                  // 搜尋檔案 requests (find.js), after the first show
+  window.LoreEchoSel?.start();                   // selected text from another app (selected.js)
 }
 
 function mountShell() {
@@ -306,6 +308,7 @@ function wire() {
     e.preventDefault();
     if (window.LoreVoice?.escape()) return;      // speaking or listening: Esc stops that first
     if (window.LoreEchoFind?.escape()) return;   // 搜尋檔案: Esc ends find mode
+    if (window.LoreEchoSel?.escape()) return;    // a selection: Esc closes its rewrite, then ends it
     if (window.LoreEchoActions?.escape()) return;   // a 功能列表 preview: closed when untouched, kept when edited
     if (!$("choices").hidden) { toggleChoices(false); $("text").focus(); }
     else show(false);
@@ -348,6 +351,7 @@ function newChat() {
   S.line = null;
   window.LoreEchoKb?.clear();
   window.LoreEchoActions?.close();               // a preview of this conversation goes with it
+  window.LoreEchoSel?.end();                     // and the selection another app handed over
   $("hist").replaceChildren();
   setLine(GREETING, "empty");
   S.chip.actual("");
@@ -369,6 +373,7 @@ async function send(engine) {
     if (S.line) { addHist("assistant", S.line); S.line = null; }   // the last reply joins the history
     S.msgs.push({ role: "user", text });
     addHist("user", text);
+    S.turnSel = window.LoreEchoSel?.take() ?? null;   // 解釋／問他: this turn is about the selected text
   }
   const ctrl = new AbortController();
   S.busy = ctrl;
@@ -386,7 +391,7 @@ async function send(engine) {
   try {
     const r = await fetch("/api/chat", {
       method: "POST", headers: { "content-type": "application/json" }, signal: ctrl.signal,
-      body: JSON.stringify({ messages: S.msgs, character: S.char?.id, engine, kb: window.LoreEchoKb?.ask(), speak }),
+      body: JSON.stringify({ messages: S.msgs, character: S.char?.id, engine, kb: window.LoreEchoKb?.ask(), speak, selection: S.turnSel ?? undefined }),
     });
     if (!r.ok || !(r.headers.get("content-type") || "").startsWith("text/event-stream")) {
       const data = await r.json().catch(() => ({}));

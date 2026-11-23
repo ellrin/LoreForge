@@ -20,6 +20,7 @@
 //     keep: [],                              // more literal strings the model must keep (optional)
 //     scope: "",                             // where the passage sits (a section title; optional)
 //     preset: "",                            // a preset id to start pressed (optional)
+//     instruction: "",                       // an instruction that is sent at once (L-Echo's 翻譯; optional)
 //     apply: async (after) => true,          // put it in as one undo step; a string = why not
 //   });
 "use strict";
@@ -313,6 +314,8 @@ window.LorePolish = (() => {
       // opened from a toolbar preset (用字 / 我的風格): that is the request, run it now
       if (c.preset && o.preset) send();
     });
+    // opened with its request (a fixed instruction): run it now
+    if (o.instruction?.trim()) { c.input.value = o.instruction.trim(); send(); }
     try {
       const r = await call(route(c.api, `/history?doc=${encodeURIComponent(doc)}&text=${encodeURIComponent(o.text)}`));
       if (cur !== c || c.items.length) return;
