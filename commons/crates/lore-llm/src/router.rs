@@ -17,6 +17,7 @@
 //! [`RouteOptions`] (`strict`: that engine or an error, never a fallback).
 
 use crate::catalog::{Catalog, CloudModel};
+use crate::agy::Agy;
 use crate::claude_api::{ClaudeApi, ClaudeApiConfig};
 use crate::claude_code::{Cache, ClaudeCode, Cli};
 use crate::local::{self, Layout};
@@ -63,6 +64,8 @@ pub enum ModelRef {
     Claude { model: String, via: ClaudeVia },
     Local(String),
     Mock(String),
+    /// Google through the Antigravity CLI; only for tasks with `agy = true`.
+    Agy(String),
 }
 
 impl ModelRef {
@@ -78,13 +81,14 @@ impl ModelRef {
             "claude-code" | "claude-subscription" => ModelRef::Claude { model: name, via: ClaudeVia::Subscription },
             "local" => ModelRef::Local(name),
             "mock" => ModelRef::Mock(name),
+            "agy" => ModelRef::Agy(name),
             other => return Err(format!("不認得的模型種類「{other}」")),
         })
     }
 
     /// Cloud models need the internet; local ones and mocks do not.
     pub fn needs_network(&self) -> bool {
-        matches!(self, ModelRef::Claude { .. })
+        matches!(self, ModelRef::Claude { .. } | ModelRef::Agy(_))
     }
 }
 
@@ -96,6 +100,7 @@ impl fmt::Display for ModelRef {
             ModelRef::Claude { model, via: ClaudeVia::Subscription } => write!(f, "claude-code:{model}"),
             ModelRef::Local(m) => write!(f, "local:{m}"),
             ModelRef::Mock(m) => write!(f, "mock:{m}"),
+            ModelRef::Agy(m) => write!(f, "agy:{m}"),
         }
     }
 }
@@ -126,6 +131,10 @@ pub struct TaskSpec {
     /// router passes the effective one (a call's [`RouteOptions::priority`] first).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
+    /// Opt-in to `agy:<model>` refs (Google through the Antigravity CLI). Any other task
+    /// refuses them, whoever names them ([`RouteError::AgyNotAllowed`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agy: bool,
 }
 
 /// A tasks.toml file: task definitions and user overrides.
@@ -153,9 +162,12 @@ impl TaskTable {
     /// Every model ref parses and every override names a known task.
     pub fn check(&self) -> Result<(), String> {
         for (id, t) in &self.task {
-            ModelRef::parse(&t.default).map_err(|e| format!("[task.{id}] default：{e}"))?;
-            if let Some(f) = &t.fallback {
-                ModelRef::parse(f).map_err(|e| format!("[task.{id}] fallback：{e}"))?;
+            for (what, r) in [("default", Some(&t.default)), ("fallback", t.fallback.as_ref())] {
+                let Some(r) = r else { continue };
+                let m = ModelRef::parse(r).map_err(|e| format!("[task.{id}] {what}：{e}"))?;
+                if matches!(m, ModelRef::Agy(_)) && !t.agy {
+                    return Err(format!("[task.{id}] {what}：這個任務不能使用 Google 模型"));
+                }
             }
         }
         for (id, r) in &self.overrides {
@@ -337,6 +349,8 @@ impl RouteOptions {
 pub enum RouteError {
     #[error("沒有這個 LLM 任務：{0}")]
     UnknownTask(String),
+    #[error("「{label}」不能使用 Google 模型")]
+    AgyNotAllowed { task: String, label: String },
     #[error("「{label}」需要網路，現在離線，暫時無法使用")]
     NeedsNetwork { task: String, label: String },
     #[error("「{label}」目前沒有可用的模型：{}", list(.skipped))]
@@ -542,7 +556,9 @@ impl<F: ProviderFactory> Router<F> {
         let mut o = self.overrides.write().unwrap_or_else(|e| e.into_inner());
         match model {
             Some(m) => {
-                ModelRef::parse(m)?;
+                if matches!(ModelRef::parse(m)?, ModelRef::Agy(_)) && !self.tasks[task].agy {
+                    return Err("這個任務不能使用 Google 模型".into());
+                }
                 o.insert(task.into(), m.into());
             }
             None => {
@@ -602,6 +618,9 @@ impl<F: ProviderFactory> Router<F> {
         let online = self.is_online();
         let plan = plan(task, spec, self.override_for(task), opts, self.settings().as_ref());
         let refs: Vec<(String, Result<ModelRef, String>)> = plan.candidates.iter().map(|c| (c.clone(), ModelRef::parse(c))).collect();
+        if !spec.agy && refs.iter().any(|(_, r)| matches!(r, Ok(ModelRef::Agy(_)))) {
+            return Err(RouteError::AgyNotAllowed { task: task.into(), label });
+        }
         let any_local = refs.iter().any(|(_, r)| r.as_ref().is_ok_and(|r| !r.needs_network()));
         if !online && (spec.offline == Some(false) || !any_local) {
             // `cloud` while offline: say so, with the local model one click away.
@@ -750,11 +769,13 @@ pub struct StandardFactory {
     /// (an alias or id; `None` = the catalog's `cloud.default`). An id that
     /// is not in the catalog is used as is, with a 200k context.
     pub selected_claude: Option<String>,
+    /// An explicit `agy` binary (tests); `None` = [`crate::agy::binary`].
+    pub agy_bin: Option<std::path::PathBuf>,
 }
 
 impl StandardFactory {
     pub fn new(catalog: Catalog) -> StandardFactory {
-        StandardFactory { catalog, prefer_subscription: true, api: None, subscription: None, local: None, selected_claude: None }
+        StandardFactory { catalog, prefer_subscription: true, api: None, subscription: None, local: None, selected_claude: None, agy_bin: None }
     }
 
     /// The Claude model `claude:<model>` means: `selected` → the settings'
@@ -849,6 +870,22 @@ impl StandardFactory {
         Err(why.join("、"))
     }
 
+    /// Google through `agy`: only for a task that opted in, and only when the CLI is installed.
+    fn agy(&self, model: &str, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
+        if !task.agy {
+            return Err("這個任務不能使用 Google 模型".into());
+        }
+        let mut p = Agy::new(model);
+        p.bin = self.agy_bin.clone();
+        if p.bin.is_none() && crate::agy::binary().is_none() || p.bin.as_ref().is_some_and(|b| !b.is_file()) {
+            return Err("找不到 Antigravity CLI（agy）".into());
+        }
+        if let Some(short) = p.capabilities().shortfall(&task.needs) {
+            return Err(format!("Google 模型{short}"));
+        }
+        Ok(Arc::new(p))
+    }
+
     async fn local(&self, r: &str, task: &TaskSpec) -> Result<Arc<dyn LlmProvider>, String> {
         let la = self.local.as_ref().ok_or("沒有設定本機模型")?;
         if r == LOCAL_CURRENT && (la.external.is_some() || la.shared.is_none()) {
@@ -909,6 +946,7 @@ impl ProviderFactory for StandardFactory {
             ModelRef::Claude { model, via } => self.claude(model, *via, task).await,
             ModelRef::Local(r) => self.local(r, task).await,
             ModelRef::Mock(_) => Err("mock 只在測試裡使用".into()),
+            ModelRef::Agy(m) => self.agy(m, task),
         }
     }
 
@@ -940,6 +978,7 @@ impl ProviderFactory for StandardFactory {
                 }
             }
             ModelRef::Mock(_) => Err("mock 只在測試裡使用".into()),
+            ModelRef::Agy(m) => self.agy(m, task).map(|_| ()),
         }
     }
 }
@@ -1068,7 +1107,7 @@ max_tokens = 9000
 
     #[test]
     fn model_refs_round_trip() {
-        for s in ["claude:sonnet", "claude-api:claude-opus-5-5", "claude-code:haiku", "local:gemma-4-12b", "mock:x"] {
+        for s in ["claude:sonnet", "claude-api:claude-opus-5-5", "claude-code:haiku", "local:gemma-4-12b", "mock:x", "agy:some-model"] {
             assert_eq!(ModelRef::parse(s).unwrap().to_string(), s);
         }
         assert_eq!(ModelRef::parse("claude-subscription:haiku").unwrap().to_string(), "claude-code:haiku");
@@ -1090,7 +1129,7 @@ max_tokens = 9000
                 match ModelRef::parse(r).unwrap() {
                     ModelRef::Local(m) => assert!(cat.resolve_local(&m, |_| false).is_some(), "{id}: {r}"),
                     ModelRef::Claude { model, .. } => assert!(cat.cloud_model(&model).is_some(), "{id}: {r}"),
-                    ModelRef::Mock(_) => panic!("no mocks in the sample"),
+                    ModelRef::Mock(_) | ModelRef::Agy(_) => panic!("no mocks or agy in the sample"),
                 }
             }
         }
@@ -1112,7 +1151,7 @@ max_tokens = 9000
     // ── StandardFactory (no network: fake CLI, mock HTTP, temp folders) ──
 
     fn spec(needs: Needs) -> TaskSpec {
-        TaskSpec { label: None, needs, default: "claude:sonnet".into(), fallback: None, offline: None, effort: None, max_tokens: None, class: None, priority: None }
+        TaskSpec { label: None, needs, default: "claude:sonnet".into(), fallback: None, offline: None, effort: None, max_tokens: None, class: None, priority: None, agy: false }
     }
 
     #[cfg(unix)]
@@ -1200,6 +1239,37 @@ max_tokens = 9000
         assert!(matches!(r.provider_for("research-web").await, Err(RouteError::NeedsNetwork { .. })));
         let jl = r.provider_for("jl-realtime").await.unwrap();
         assert_eq!(jl.effort.as_deref(), Some("low"));
+    }
+
+    #[tokio::test]
+    async fn agy_refs_only_for_a_task_that_opts_in() {
+        let t = TaskTable::parse(
+            "[task.plain]\ndefault = \"claude:sonnet\"\n[task.rewrite]\ndefault = \"claude:sonnet\"\nagy = true\n",
+        )
+        .unwrap();
+        let f = MockFactory::default().with("claude:sonnet", mock("claude", caps(true, true, true, 1_000_000))).with("agy:m-1", mock("agy", caps(false, false, true, 128_000)));
+        let r = Router::new(t, f).with_settings(EngineSettings::default());
+        // by override, strict or not, and by saved override: refused with a one-line message
+        for o in [RouteOptions::only("agy:m-1"), RouteOptions::prefer("agy:m-1")] {
+            let e = r.provider_for_with("plain", &o).await.unwrap_err();
+            assert_eq!(e, RouteError::AgyNotAllowed { task: "plain".into(), label: "plain".into() });
+            assert_eq!(e.to_string(), "「plain」不能使用 Google 模型");
+        }
+        assert!(r.set_override("plain", Some("agy:m-1")).is_err());
+        // the opted-in task takes it, and falls back to its own default otherwise
+        assert_eq!(r.provider_for_with("rewrite", &RouteOptions::only("agy:m-1")).await.unwrap().provider.id(), "agy");
+        assert_eq!(r.provider_for("rewrite").await.unwrap().provider.id(), "claude", "no request, no agy");
+        // a task file that names it without the key does not load
+        assert!(TaskTable::parse("[task.x]\ndefault = \"agy:m-1\"\n").is_err());
+        assert!(TaskTable::parse("[task.x]\ndefault = \"agy:m-1\"\nagy = true\n").is_ok());
+        // the real factory refuses too
+        let f = StandardFactory::new(Catalog::bundled());
+        let mut sp = spec(Needs::default());
+        assert!(f.make(&ModelRef::parse("agy:m-1").unwrap(), &sp).await.err().unwrap().contains("Google"));
+        sp.agy = true;
+        let mut f = f;
+        f.agy_bin = Some("/nonexistent/agy".into());
+        assert!(f.make(&ModelRef::parse("agy:m-1").unwrap(), &sp).await.err().unwrap().contains("agy"));
     }
 
     // ── per-call choices, app-level refs ──

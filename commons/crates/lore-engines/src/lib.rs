@@ -20,6 +20,12 @@
 //!   0 = never; kept in `engine.toml` `[local]`, shared by every app) and `local.can_release`
 //!   (no other app holds a lease); PUT `{ local: { release: true } }` stops the server now, or
 //!   400 「X 正在用」.
+//! - `google` in the GET body = Google models through the Antigravity CLI (`agy`, for 語句潤飾 only):
+//!   `{ available, models: [{id, label}], checked, new }` from the last `agy models` listing kept
+//!   in the cache folder (`lore_llm::agy`); `checked` = unix seconds or null, `new` = ids that were
+//!   not in the listing before. `POST /api/engines/refresh` lists again now and returns the GET body
+//!   (plus `google.error` when the listing failed); a listing older than 24 hours refreshes itself
+//!   in the background, GET never waits for it.
 //! - `GET /api/links/ports` → `{ "sc": 51234, … }`: the desktop apps running now (lore-home `ports`).
 //! - `POST /api/links/open { url, background? }` (`background`: `open -g -a <App>` without the link, the app stays behind) → hands a `lore-(pc|sc|lr|kb)://` or
 //!   `http://127.0.0.1…` URL to the OS opener (204); anything else → 400.
@@ -35,6 +41,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use lore_home::Home;
 use lore_llm::catalog::Catalog;
+use lore_llm::agy::{self, CliLister, ModelLister, Stored};
 use lore_llm::claude_code::{Cache, Cli};
 use lore_llm::local::Layout;
 use lore_llm::secrets::{Account, SharedKeys};
@@ -82,6 +89,30 @@ pub struct Engines {
     /// Whether an API key exists, read once off the async threads (a keychain read can
     /// wait on a password prompt; it must never stall the server). Cleared by PUT.
     api_known: Arc<std::sync::Mutex<Option<bool>>>,
+    /// `agy models` (a fake in tests) and where its last answer is kept (the cache folder).
+    pub agy_lister: Arc<dyn ModelLister>,
+    pub agy_file: Option<std::path::PathBuf>,
+    agy_busy: Arc<std::sync::atomic::AtomicBool>,
+    /// Unix seconds of the last listing attempt, so a failing CLI is not retried at every GET.
+    agy_tried: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// A listing is refreshed by itself when older than this (a day).
+pub const AGY_MAX_AGE: u64 = 24 * 3600;
+/// After a failed automatic listing, wait this long before trying again.
+const AGY_RETRY: u64 = 600;
+
+/// No CLI at all (isolated engines).
+struct NoAgy;
+
+#[async_trait::async_trait]
+impl ModelLister for NoAgy {
+    fn installed(&self) -> bool {
+        false
+    }
+    async fn list(&self) -> Result<Vec<agy::ModelInfo>, String> {
+        Err("找不到 Antigravity CLI（agy）".into())
+    }
 }
 
 impl Engines {
@@ -111,7 +142,63 @@ impl Engines {
             install_routing: true,
             ports_file: lore_home::ports::default_path(),
             api_known: Arc::new(std::sync::Mutex::new(None)),
+            agy_lister: Arc::new(CliLister::default()),
+            agy_file: agy::default_path(),
+            agy_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            agy_tried: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
+    }
+
+    /// The `agy models` lister and the file that keeps its answer (tests).
+    pub fn agy(mut self, lister: Arc<dyn ModelLister>, file: Option<std::path::PathBuf>) -> Self {
+        self.agy_lister = lister;
+        self.agy_file = file;
+        self
+    }
+
+    fn stored(&self) -> Option<Stored> {
+        self.agy_file.as_deref().and_then(Stored::load)
+    }
+
+    /// Run `agy models` now and keep the answer. One listing at a time (a second caller gets
+    /// the stored one back untouched).
+    pub async fn refresh_google(&self) -> Result<(), String> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.agy_busy.compare_exchange(false, true, SeqCst, SeqCst).is_err() {
+            return Ok(());
+        }
+        self.agy_tried.store(agy::now(), SeqCst);
+        let r = async {
+            let fresh = self.agy_lister.list().await?;
+            let file = self.agy_file.as_deref().ok_or("沒有可存放的快取資料夾")?;
+            Stored::after(Stored::load(file).as_ref(), fresh, agy::now()).save(file).map_err(|e| format!("無法儲存模型清單：{e}"))
+        }
+        .await;
+        self.agy_busy.store(false, SeqCst);
+        r
+    }
+
+    /// The `google` part of the GET body; starts a background listing when the stored one is
+    /// missing or older than [`AGY_MAX_AGE`].
+    async fn google(&self) -> Value {
+        use std::sync::atomic::Ordering::SeqCst;
+        let installed = self.agy_lister.installed();
+        let stored = self.stored();
+        let now = agy::now();
+        let due = stored.as_ref().is_none_or(|s| s.stale(now, AGY_MAX_AGE)) && now.saturating_sub(self.agy_tried.load(SeqCst)) >= AGY_RETRY;
+        if installed && due && !self.agy_busy.load(SeqCst) {
+            let me = self.clone();
+            tokio::spawn(async move {
+                let _ = me.refresh_google().await;
+            });
+        }
+        let s = stored.unwrap_or_default();
+        json!({
+            "available": installed && !s.models.is_empty(),
+            "models": s.models,
+            "checked": (s.checked > 0).then_some(s.checked),
+            "new": s.new,
+        })
     }
 
     /// The shared llama-server, as this process sees it. Its idle check (every app, the
@@ -169,6 +256,8 @@ impl Engines {
         self.shared = None;
         self.probe = false;
         self.ports_file = None;
+        self.agy_lister = Arc::new(NoAgy);
+        self.agy_file = None;
         self.opener = Arc::new(|_| Err("isolated".into()));
         self.starter = Arc::new(|_| Err("isolated".into()));
         self
@@ -341,6 +430,7 @@ impl Engines {
         json!({
             "local": self.local().await,
             "claude": self.claude(&s).await,
+            "google": self.google().await,
             "classes": classes,
             "tasks": tasks,
             "overrides": overrides,
@@ -522,7 +612,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(e: Engines) -> axum::Router<S> {
         let _ = e.home.forget_engine_url();
     }
     let e = Arc::new(e);
-    let (g, p, o, q) = (e.clone(), e.clone(), e.clone(), e);
+    let (g, p, o, r, q) = (e.clone(), e.clone(), e.clone(), e.clone(), e);
     axum::Router::new()
         .route(
             "/api/engines",
@@ -540,6 +630,20 @@ pub fn router<S: Clone + Send + Sync + 'static>(e: Engines) -> axum::Router<S> {
                         Ok(()) => Json(e.state().await).into_response(),
                         Err(m) => bad(m),
                     }
+                }
+            }),
+        )
+        .route(
+            "/api/engines/refresh",
+            post(move || {
+                let e = r.clone();
+                async move {
+                    let err = e.refresh_google().await.err();
+                    let mut body = e.state().await;
+                    if let Some(m) = err {
+                        body["google"]["error"] = Value::from(m);
+                    }
+                    Json(body)
                 }
             }),
         )

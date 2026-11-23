@@ -300,6 +300,7 @@ mod tests {
         let c = Catalog::bundled();
         assert_eq!(c.cloud_model("sonnet").unwrap().id, "claude-sonnet-5-5");
         assert_eq!(c.cloud_model("claude-haiku-5-5").unwrap().id, "claude-haiku-5-5");
+        assert_eq!(c.cloud_model("fable").unwrap().id, "claude-fable-5-2");
         assert!(c.cloud_model("gpt").is_none());
         assert_eq!(c.resolve_local("qwen3.5-9b-q8", |_| false).unwrap().id, "qwen3.5-9b-q8");
         assert_eq!(c.resolve_local("qwen3.5-9b", |_| false).unwrap().id, "qwen3.5-9b-q8");

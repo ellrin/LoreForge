@@ -6,6 +6,7 @@
 //!   [`ClaudeCode`] (the user's subscription through the Claude Code CLI),
 //!   [`OpenAiCompat`] / [`LlamaServer`] (llama-server and other
 //!   OpenAI-compatible servers), [`MockProvider`].
+//! - [`agy`]: Google models through the Antigravity CLI, for tasks with `agy = true` only (語句潤飾).
 //! - [`catalog`]: the shared model catalog; [`local`]: the shared
 //!   `LOCAL_LLM_HOME` folder and llama-server's arguments.
 //! - [`shared_runtime`]: one llama-server per machine shared by every app in-process
@@ -23,6 +24,7 @@
 //! task's provider. Tests never call real Claude, the real CLI or a real
 //! llama-server (mock HTTP servers and a fake CLI instead).
 
+pub mod agy;
 pub mod catalog;
 pub mod claude_api;
 pub mod claude_code;

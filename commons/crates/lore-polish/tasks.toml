@@ -8,4 +8,6 @@ needs = { json = true }
 default = "claude:selected"
 fallback = "local:current"
 offline = true
+# the only task that may name `agy:<model>` (Google through the Antigravity CLI), by request or override only
+agy = true
 max_tokens = 4000

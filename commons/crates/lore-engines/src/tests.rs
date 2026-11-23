@@ -52,8 +52,9 @@ async fn get_follows_the_contract() {
     assert_eq!(c["model"], "sonnet", "the catalog default, as its alias");
     assert_eq!(c["vision"], false);
     let ids: Vec<&str> = c["models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["opus", "sonnet", "haiku"]);
+    assert_eq!(ids, ["opus", "sonnet", "haiku", "fable"]);
     assert_eq!(c["models"][0]["label"], "Opus");
+    assert_eq!(v["google"], json!({ "available": false, "models": [], "checked": null, "new": [] }), "no CLI, no list");
     assert_eq!(
         v["classes"],
         json!([
@@ -378,4 +379,81 @@ async fn tasks_report_the_last_model_with_its_time() {
     assert_eq!((t["last"].as_str(), t["last_label"].as_str()), (Some("local:gemma-4-12b-q8"), Some("本機 Gemma 4 12B")));
     assert!(t["last_at"].as_u64().unwrap() > 1_700_000_000);
     shared::uninstall();
+}
+
+/// A lister that answers from a queue (never the real CLI).
+struct FakeAgy {
+    answers: Mutex<Vec<Result<Vec<&'static str>, &'static str>>>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl FakeAgy {
+    fn new(answers: Vec<Result<Vec<&'static str>, &'static str>>) -> Arc<FakeAgy> {
+        Arc::new(FakeAgy { answers: Mutex::new(answers), calls: Default::default() })
+    }
+}
+
+#[async_trait::async_trait]
+impl lore_llm::agy::ModelLister for FakeAgy {
+    fn installed(&self) -> bool {
+        true
+    }
+    async fn list(&self) -> Result<Vec<lore_llm::agy::ModelInfo>, String> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let a = self.answers.lock().unwrap().remove(0);
+        a.map(|v| v.into_iter().map(|id| lore_llm::agy::ModelInfo { id: id.into(), label: format!("Label {id}") }).collect()).map_err(String::from)
+    }
+}
+
+#[tokio::test]
+async fn google_list_refreshes_by_button_and_reports_new_ids() {
+    let _g = SERIAL.lock().await;
+    let d = tempfile::tempdir().unwrap();
+    let file = d.path().join("cache").join("agy-models.json");
+    let fake = FakeAgy::new(vec![Ok(vec!["m-1", "m-2"]), Ok(vec!["m-1", "m-2", "m-3"]), Err("not signed in")]);
+    let app: axum::Router = router(engines(d.path()).agy(fake.clone(), Some(file.clone())));
+
+    let (st, v) = call(&app, "POST", "/api/engines/refresh", None).await;
+    assert_eq!(st, StatusCode::OK);
+    let g = &v["google"];
+    assert_eq!(g["available"], true);
+    assert_eq!(g["models"], json!([{ "id": "m-1", "label": "Label m-1" }, { "id": "m-2", "label": "Label m-2" }]));
+    assert!(g["checked"].as_u64().unwrap() > 1_000_000_000);
+    assert_eq!(g["new"], json!([]), "the first list has no previous one");
+    assert!(v["claude"].is_object() && v["tasks"].is_array(), "the full GET body");
+
+    let (_, v) = call(&app, "POST", "/api/engines/refresh", None).await;
+    assert_eq!(v["google"]["new"], json!(["m-3"]));
+    // GET shows what is stored, and does not list again (fresh)
+    let (_, v) = call(&app, "GET", "/api/engines", None).await;
+    assert_eq!(v["google"]["models"].as_array().unwrap().len(), 3);
+    assert_eq!(v["google"]["new"], json!(["m-3"]));
+    assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    // a failing listing keeps the stored one and says why
+    let (st, v) = call(&app, "POST", "/api/engines/refresh", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["google"]["error"], "not signed in");
+    assert_eq!(v["google"]["models"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn google_list_refreshes_itself_after_a_day_without_blocking_get() {
+    let _g = SERIAL.lock().await;
+    let d = tempfile::tempdir().unwrap();
+    let file = d.path().join("agy-models.json");
+    let old = lore_llm::agy::Stored { checked: lore_llm::agy::now() - 25 * 3600, models: vec![lore_llm::agy::ModelInfo { id: "m-1".into(), label: "One".into() }], new: vec![] };
+    old.save(&file).unwrap();
+    let fake = FakeAgy::new(vec![Ok(vec!["m-1", "m-9"])]);
+    let app: axum::Router = router(engines(d.path()).agy(fake.clone(), Some(file.clone())));
+    let (_, v) = call(&app, "GET", "/api/engines", None).await;
+    assert_eq!(v["google"]["models"].as_array().unwrap().len(), 1, "GET answers with the stored list at once");
+    for _ in 0..100 {
+        if fake.calls.load(std::sync::atomic::Ordering::SeqCst) == 1 && lore_llm::agy::Stored::load(&file).is_some_and(|s| s.models.len() == 2) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let (_, v) = call(&app, "GET", "/api/engines", None).await;
+    assert_eq!(v["google"]["new"], json!(["m-9"]));
+    assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

@@ -127,9 +127,9 @@ impl EngineKind {
         }
     }
 
-    /// The kind of a model ref (`claude…:` = Claude, anything else local).
+    /// The kind of a model ref (`claude…:` and `agy:` = cloud, anything else local).
     pub fn of(model_ref: &str) -> EngineKind {
-        if model_ref.trim_start().starts_with("claude") { EngineKind::Claude } else { EngineKind::Local }
+        if model_ref.trim_start().starts_with("claude") || model_ref.trim_start().starts_with("agy:") { EngineKind::Claude } else { EngineKind::Local }
     }
 }
 

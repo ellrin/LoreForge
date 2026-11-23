@@ -13,11 +13,12 @@
     "effort": "medium",
     "realtime": "claude-haiku-5-5",
     "realtime_effort": "low",
-    "note": "Model ids live here (and in app config), never in code. Task routing (tasks.toml) names models by alias: claude:opus / claude:sonnet / claude:haiku.",
+    "note": "Model ids live here (and in app config), never in code. Task routing (tasks.toml) names models by alias: claude:opus / claude:sonnet / claude:haiku / claude:fable.",
     "aliases": {
       "opus": "claude-opus-5-5",
       "sonnet": "claude-sonnet-5-5",
-      "haiku": "claude-haiku-5-5"
+      "haiku": "claude-haiku-5-5",
+      "fable": "claude-fable-5-2"
     },
     "models": [
       {
@@ -33,6 +34,11 @@
       {
         "id": "claude-haiku-5-5",
         "summary": "Haiku・最快、最省",
+        "context": 1000000
+      },
+      {
+        "id": "claude-fable-5-2",
+        "summary": "Fable・最強，最貴",
         "context": 1000000
       }
     ]
