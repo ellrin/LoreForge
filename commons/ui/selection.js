@@ -65,7 +65,7 @@ window.LoreSelection = (() => {
         last = now ? JSON.stringify(now) : last;   // what the rewrite left selected is the baseline
         wait = 300;   // more may follow soon
       }
-      if (!v.open) { if (cur === c) stop(); return; }
+      if (!v.open) { if (cur === c) { stop(); last = ""; } return; }   // ended in L-Echo: the same text may be handed over again
     } catch { /* the server restarts: try again */ }
     if (cur !== c) return;
     if (Date.now() - c.since > 30 * 60 * 1000) { stop(); return; }
