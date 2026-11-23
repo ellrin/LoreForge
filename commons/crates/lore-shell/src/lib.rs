@@ -1,5 +1,5 @@
 //! The shared LoreForge shell (`docs/shell.md`): `commons/ui/icons.js`, `base.css`,
-//! `shell.js`, `makedeck.js`, `makebook.js`, `polish.js`, `findfile.js` and `addcard.js` (with [`findfile`], 搜尋檔案 through L-Echo), compiled in like `lore_home::theme`, so an app server only needs
+//! `shell.js`, `makedeck.js`, `makebook.js`, `polish.js`, `findfile.js`, `selection.js` and `addcard.js` (with [`findfile`], 搜尋檔案 through L-Echo, and [`selection`], selected text through L-Echo), compiled in like `lore_home::theme`, so an app server only needs
 //! these routes:
 //!
 //! ```ignore
@@ -13,6 +13,8 @@
 #[cfg(feature = "web")]
 pub mod findfile;
 pub mod permissions;
+#[cfg(feature = "web")]
+pub mod selection;
 
 /// `commons/ui/icons.js`: the union icon set (`ICONS`, `icon`, `paintIcons`, `iconButton`).
 pub const ICONS_JS: &str = include_str!("../../../ui/icons.js");
@@ -30,6 +32,8 @@ pub const POLISH_JS: &str = include_str!("../../../ui/polish.js");
 pub const ADDCARD_JS: &str = include_str!("../../../ui/addcard.js");
 /// `commons/ui/findfile.js`: `LoreFindFile`, the 搜尋檔案 button (a find request to L-Echo, [`findfile`]).
 pub const FINDFILE_JS: &str = include_str!("../../../ui/findfile.js");
+/// `commons/ui/selection.js`: `LoreSelection.watch`, the page's selection handed to L-Echo and its rewrites applied ([`selection`]).
+pub const SELECTION_JS: &str = include_str!("../../../ui/selection.js");
 
 /// `(route, content type, body)` for each file.
 pub const FILES: &[(&str, &str, &str)] = &[
@@ -41,6 +45,7 @@ pub const FILES: &[(&str, &str, &str)] = &[
     ("/polish.js", "text/javascript; charset=utf-8", POLISH_JS),
     ("/findfile.js", "text/javascript; charset=utf-8", FINDFILE_JS),
     ("/addcard.js", "text/javascript; charset=utf-8", ADDCARD_JS),
+    ("/selection.js", "text/javascript; charset=utf-8", SELECTION_JS),
 ];
 
 /// The names in `const ICONS = { … }` of an icons.js, in order (duplicates kept).
@@ -289,13 +294,15 @@ mod tests {
 
     #[test]
     fn files_are_served() {
-        assert_eq!(FILES.len(), 8);
+        assert_eq!(FILES.len(), 9);
+        assert!(SELECTION_JS.contains("window.LoreSelection") && SELECTION_JS.contains("/api/lore/selection") && SELECTION_JS.contains("/done"));
+        assert!(FILES.iter().any(|(p, _, b)| *p == "/selection.js" && *b == SELECTION_JS));
         assert!(FINDFILE_JS.contains("window.LoreFindFile") && FINDFILE_JS.contains("/api/lore/find"));
         assert!(FILES.iter().all(|(p, _, b)| p.starts_with('/') && !b.is_empty()));
         assert!(SHELL_JS.contains("window.LoreShell") && SHELL_JS.contains("window.LoreLinks"));
         assert!(MAKEDECK_JS.contains("window.LoreMakeDeck") && MAKEDECK_JS.contains("/api/todeck"));
         assert!(MAKEBOOK_JS.contains("window.LoreMakeBook") && MAKEBOOK_JS.contains("/api/book/setup") && MAKEBOOK_JS.contains("booksetup"));
-        assert!(POLISH_JS.contains("window.LorePolish") && POLISH_JS.contains("/api/polish") && POLISH_JS.contains("/api/polish/like") && POLISH_JS.contains("/api/voice/listen"));
+        assert!(POLISH_JS.contains("window.LorePolish") && POLISH_JS.contains("/api/polish") && POLISH_JS.contains("route(c.api, \"/like\")") && POLISH_JS.contains("/api/voice/listen"));
         // the icons the cards draw
         let u = union();
         assert!(u.contains("deckOutline") && u.contains("bookWrite"));

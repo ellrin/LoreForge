@@ -119,7 +119,7 @@ impl Finds {
         self
     }
 
-    fn mint() -> String {
+    pub(crate) fn mint() -> String {
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         format!("{:x}-{}", t ^ (std::process::id() as u128) << 64, N.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
@@ -163,11 +163,11 @@ struct FindBody {
     context: Value,
 }
 
-fn port_of(headers: &axum::http::HeaderMap) -> Option<u16> {
+pub(crate) fn port_of(headers: &axum::http::HeaderMap) -> Option<u16> {
     headers.get(axum::http::header::HOST)?.to_str().ok()?.rsplit_once(':')?.1.parse().ok()
 }
 
-fn fail(code: u16, msg: &str) -> axum::response::Response {
+pub(crate) fn fail(code: u16, msg: &str) -> axum::response::Response {
     use axum::response::IntoResponse;
     (axum::http::StatusCode::from_u16(code).unwrap_or(axum::http::StatusCode::BAD_REQUEST), axum::Json(json!({ "error": msg }))).into_response()
 }
@@ -243,7 +243,7 @@ pub fn app_port(id: &str, _name: &str) -> Result<u16, String> {
     lore_home::ports::ensure(id, None)
 }
 
-fn live(app: &str) -> Option<u16> {
+pub(crate) fn live(app: &str) -> Option<u16> {
     lore_home::ports::live().get(app).copied()
 }
 

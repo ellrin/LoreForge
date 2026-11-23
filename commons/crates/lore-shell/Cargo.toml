@@ -13,7 +13,7 @@ web = ["dep:axum", "dep:tokio", "dep:lore-home"]
 serde.workspace = true
 serde_json.workspace = true
 axum = { workspace = true, optional = true }
-tokio = { version = "1", features = ["rt"], optional = true }
+tokio = { version = "1", features = ["rt", "sync", "time"], optional = true }
 lore-home = { path = "../lore-home", optional = true }
 
 [dev-dependencies]
