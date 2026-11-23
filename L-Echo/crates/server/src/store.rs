@@ -6,7 +6,7 @@
 //! x = 1600.0          # the bubble's top-left corner, logical pixels; missing = bottom-right
 //! y = 940.0
 //! expanded = false
-//! w = 620.0           # the open window's size (420..1000), missing = 620 × 620
+//! w = 620.0           # the open window's size (300..1000), missing = 620 × 620
 //! h = 620.0
 //!
 //! # settings.toml — the author's choices (the gear's 一般 tab)
@@ -30,8 +30,9 @@ pub const SETTINGS_FILE: &str = "settings.toml";
 pub const DEFAULT_SHORTCUT: &str = "Alt+Space";
 /// Positions further out than this are nonsense (a broken file, a bad request).
 const MAX_COORD: f64 = 100_000.0;
-/// The open window's size limits (logical pixels) and its default.
-pub const MIN_WIN: f64 = 420.0;
+/// The open window's size limits (logical pixels) and its default. The page lays itself out by
+/// the size (`web/styles.css`: under 420 wide the bust stands above the column).
+pub const MIN_WIN: f64 = 300.0;
 pub const MAX_WIN: f64 = 1000.0;
 pub const DEFAULT_WIN: f64 = 620.0;
 

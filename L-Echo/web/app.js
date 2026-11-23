@@ -209,8 +209,8 @@ function wireChoices() {
   });
 }
 
-// ── the open window's size (420–1000 px, remembered with the bubble's place) ──
-const WIN_MIN = 420, WIN_MAX = 1000;
+// ── the open window's size (300–1000 px, remembered with the bubble's place; styles.css lays it out by its size) ──
+const WIN_MIN = 300, WIN_MAX = 1000;
 const clampWin = (v) => Math.min(WIN_MAX, Math.max(WIN_MIN, Math.round(v)));
 function setWinSize(w, h) {
   const root = document.documentElement.style;

@@ -1,7 +1,8 @@
 /* L-Echo: the bubble and the open window. Colours only from theme.css tokens (no palette
    of its own); the character pictures are shown as they are, with nothing behind them.
    The desktop window is transparent and exactly the size of the bubble or of the open
-   window (--win-w × --win-h, the same numbers as WIN_W / WIN_H in apps/desktop/src/main.rs);
+   window (--win-w × --win-h, the same numbers as WIN_W / WIN_H in apps/desktop/src/main.rs;
+   resizable 300–1000 px, the layout follows the size, see the end of the window rules);
    in a browser both sit at the bottom-right of the page.
 
    The open window borrows a visual novel's composition (not its look): the character's full
@@ -108,10 +109,59 @@ html, body { background: transparent; height: 100%; overflow: hidden; }
   .win.opening, .win.closing, .figure[data-state] img, .figure[data-state] .fallback { animation: none; }
 }
 
-/* narrow (a small browser window): no figure, the conversation takes the whole width */
-@media (max-width: 520px), (max-height: 380px) {
-  .figure { display: none; }
-  :root { --col-x: 0px; --overlap: 0px; }
+/* ── the layout follows the window's own size (the author resizes it with the grips) ──
+   ≥ 520 wide: the figure beside the column, as above.
+   420–519 wide: the same, tighter (a narrower figure strip, a thin overlap).
+   < 420 wide: the bust above the column; ≥ 500 tall the history stays, shorter than that only the
+   header and the dialogue box (a corner card: the current line, no history).
+   The variables are set on the window's children (a container cannot restyle itself). */
+.win { container: win / size; }
+@container win (max-width: 519.98px) {
+  .win > * { --col-x: 30.5cqw; --overlap: 14px; --fig-cx: calc((var(--col-x) + var(--overlap)) / 2); }
+  .card .top { gap: 4px; padding: 0 6px 0 4px; }
+  .hist { padding-left: calc(var(--overlap) + 8px); }
+  .box { padding-left: calc(var(--overlap) + 8px); padding-right: 8px; }
+  .choice { gap: 8px; padding: 6px 10px; }
+  .choice .desc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+@container win (max-width: 419.98px) {
+  .win > * { --col-x: 0px; --overlap: 0px; --bust-h: 150px; }
+  .figure { inset: 0 0 auto 0; width: auto; height: var(--bust-h); overflow: hidden; z-index: 0; }
+  .figure img, .figure.portrait img { left: 20px; top: 6px; bottom: auto; transform: none; width: auto; height: 380px; max-width: none; max-height: none; object-fit: contain; object-position: 0 0; }
+  .figure.portrait img { height: calc(100% - 6px); }
+  .figure .fallback { left: 28px; top: 30%; transform: none; }
+  .col { inset: var(--bust-h) 0 0 0; }
+  .choices { margin-left: 0; }
+  .nametag { left: 8px; }
+}
+/* a short window, or the narrow column: the 功能列表 rows scroll and the box gives way (its line and
+   the selection scroll inside it) before the input row would leave the window */
+@container win (max-height: 419.98px) or (max-width: 419.98px) {
+  .choices { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+  .choice { flex: none; }
+  .box { flex: 0 1 auto; min-height: 178px; }   /* the floor: the name tag's strip, three lines, the input row */
+}
+@container win (max-height: 419.98px) {
+  .line { min-height: calc(2 * 1.7em); }
+  .box { min-height: 150px; }
+}
+@container win (max-width: 419.98px) and (max-height: 599.98px) {
+  /* 功能列表 needs the room: the bust steps out */
+  .col:has(.choices:not([hidden])) { top: 0; }
+  .col:has(.choices:not([hidden])) ~ .figure { display: none; }
+}
+@container win (max-width: 419.98px) and (max-height: 499.98px) {
+  .win > * { --bust-h: clamp(48px, 100cqh - 250px, 116px); }
+  .figure img { height: 300px; left: 16px; }
+  .hist { display: none; }
+  .card { flex: none; }
+  .box { flex: 1 1 auto; min-height: 150px; }
+  .line { flex: 1; min-height: calc(2 * 1.7em); max-height: none; }
+  /* 搜尋檔案 and a 功能列表 preview take the history's place: they get the window, the bust steps out */
+  .col:has(.card > :is(.find, .act)) { top: 0; }
+  .col:has(.card > :is(.find, .act)) ~ .figure { display: none; }
+  .col:has(.card > :is(.find, .act)) .card { flex: 1; }
+  .col:has(.card > :is(.find, .act)) :is(.box, .line) { flex: none; }
 }
 
 /* the name tag's small portrait follows the character's state */

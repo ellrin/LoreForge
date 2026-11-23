@@ -494,10 +494,10 @@ mod tests {
         let p = panel_for(b, SCREEN, (900.0, 800.0));
         assert_eq!((p.w, p.h), (900.0, 800.0));
         assert_eq!((p.x + p.w, p.y), (b.0 + BUBBLE, 0.0), "pushed down to the work area, corner x kept");
-        // outside 420..1000 the size is clamped
+        // outside 300..1000 the size is clamped
         assert_eq!(clamp_size((100.0, 5000.0), SCREEN), (MIN_WIN, MAX_WIN.min(SCREEN.h)));
         // a small work area never goes below the minimum
-        let tiny = Rect { x: 0.0, y: 0.0, w: 300.0, h: 300.0 };
+        let tiny = Rect { x: 0.0, y: 0.0, w: 200.0, h: 200.0 };
         assert_eq!(clamp_size((700.0, 700.0), tiny), (MIN_WIN, MIN_WIN));
     }
 
