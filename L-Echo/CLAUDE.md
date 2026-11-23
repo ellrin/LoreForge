@@ -59,7 +59,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   `PUT /api/nodes/{id}` with the draft's `revision` (409 = changed meanwhile, never overwritten), the web sources added
   as `{type: "web", ref, title, via: "loreecho"}`; L-Brain closed → 503 and nothing written (no file fallback);
   `/api/actions/fix/source {url}` opens an http(s) source in the browser.
-  Theme, `/prefs.css`, lore-shell `FILES` and the lore-engines router exactly as in L-Brain, with `include_uncensored` (the model menu's 無限制 picks the abliterated variants, so `/api/engines` lists them).
+  Theme, `/prefs.css`, lore-shell `FILES` and the lore-engines router exactly as in L-Brain, with `include_uncensored` (the model menu's 無審查 picks the abliterated variants, so `/api/engines` lists them).
   `DesktopHook`: `PUT /api/window {expanded}` and `PUT /api/settings {shortcut}` reach the desktop app.
 - `apps/desktop` (`loreecho`): server in-process; one frameless, transparent, always-on-top window
   (64 px bubble ⇄ open window, default 620×620 = `WIN_W`/`WIN_H` = `--win-w`/`--win-h` in `web/styles.css`
@@ -70,7 +70,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   Icon source `icons/logo.svg` (= `docs/assets/loreecho-logo-draft.svg`, approved; do not redesign).
 - `web/`: no build step. Open window = `.figure` (left, only the picture, `--fig-scale`/`--fig-dy`
   from `figure`, may run off the bottom, overlaps the column by ≤ `--overlap`) + `.col` (right): card
-  with the shared shell header (collapse · model chip = `LoreShell.modelMenu`: 自動 or a named model, its menu = 自動 / Claude row / Google row only while a rewrite is shown / 本機 family rows with size buttons and one 無限制 switch, 新 marks; the chat's and the rewrite's choice kept apart in settings.toml `[models]`, the rewrite's goes to LorePolish as `engine` · 功能列表 toggle · 新對話 · gear with 一般 外觀
+  with the shared shell header (collapse · model chip = `LoreShell.modelMenu`: 自動 or a named model, its menu = 自動 / Claude row / Google row only while a rewrite is shown / 本機 family rows with size buttons and one 無審查 switch, 新 marks; the chat's and the rewrite's choice kept apart in settings.toml `[models]`, the rewrite's goes to LorePolish as `engine` · 功能列表 toggle · 新對話 · gear with 一般 外觀
   模型 快捷鍵 人物; 人物 = name, persona, per-state drop zones for 縮圖 and 對話人物, switch/new/export/import) and the quiet history, `.choices` (功能列表 as VN choice rows, ↑↓/Enter; a row opens
   its preview from `actions.js` + `actions.css` in place of the history, KaTeX from `web/vendor/katex` loaded on first use,
   Esc closes an untouched preview, 新對話/collapse close it, toast with 打開 = `LoreLinks.open("pc", {note})` / `("kb", {pending})`), `.box` (name tag = character switcher, the current line, input row).

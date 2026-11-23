@@ -455,7 +455,7 @@
     for (const [k, f] of fams) fams.set(k, new Map([...f].sort((a, b) => num(a[0]) - num(b[0]))));
     return fams;
   }
-  /** The variant a size button picks: the abliterated one with 無限制 (when there is one), else the
+  /** The variant a size button picks: the abliterated one with 無審查 (when there is one), else the
    *  plain one; among several files of it the shared current model, else the last by id. */
   function variantOf(g, free, current) {
     const ids = free ? (g.free.length ? g.free : g.plain) : (g.plain.length ? g.plain : g.free);
@@ -469,7 +469,7 @@
   }
   /** A header's model choice: the chip names the model that answers, its menu picks one — 自動
    *  first, the Claude models, the Google ones only while `google()` says so (`agy:` answers
-   *  語句潤飾 only), 本機 as family rows with size buttons and ONE 無限制 switch for the group (it
+   *  語句潤飾 only), 本機 as family rows with size buttons and ONE 無審查 switch for the group (it
    *  hides nothing: it switches which variant the size buttons pick). A choice is a model ref:
    *  "" = 自動, `claude:<alias>`, `local:<id>`, `agy:<id>`; the app keeps it:
    *    { task, label, value(), onChange(ref), google(), unrestricted(), onUnrestricted(on), seen(), onSeen(refs) }
@@ -542,7 +542,7 @@
       const fams = localFamilies(d.local);
       if (fams.size) {
         const groups = [...fams.values()].flatMap((f) => [...f.values()]);
-        const sw = groups.some((g) => g.free.length) ? h("button", { type: "button", class: "sw", role: "switch", "aria-checked": String(free), "aria-pressed": String(free) }, "無限制", h("i")) : null;
+        const sw = groups.some((g) => g.free.length) ? h("button", { type: "button", class: "sw", role: "switch", "aria-checked": String(free), "aria-pressed": String(free) }, "無審查", h("i")) : null;
         if (sw) sw.onclick = async () => {
           const on = !free;
           try {

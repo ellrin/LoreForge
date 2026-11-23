@@ -20,7 +20,7 @@
 //! [models]            # the header's model menu (missing = 自動 for both)
 //! chat = "claude:sonnet"   # the chat's model: "" = 自動, claude:<alias>, local:<catalog id>
 //! polish = ""             # 改寫／翻譯 of a selection, remembered on its own (also agy:<id>)
-//! unrestricted = false    # 無限制: the size buttons pick the abliterated variant
+//! unrestricted = false    # 無審查: the size buttons pick the abliterated variant
 //! seen = ["claude:sonnet"]  # the models the menu has shown (the others get the 新 mark)
 //! ```
 //!
@@ -97,7 +97,7 @@ pub struct Models {
     pub chat: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub polish: String,
-    /// 無限制: a size button picks the abliterated variant of a local model.
+    /// 無審查: a size button picks the abliterated variant of a local model.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unrestricted: bool,
     /// The models the menu has shown once (the others are marked 新).

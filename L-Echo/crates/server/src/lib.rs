@@ -143,7 +143,7 @@ pub fn allowed_origin(origin: &HeaderValue) -> bool {
 /// The settings behind the 模型 tab: the shared engine file, with this app's tasks.
 fn engines(shared: &Shared) -> lore_engines::Engines {
     let mut e = lore_engines::Engines::new(shared.home.clone(), config::APP, llm::TASKS);
-    // the model menu's 無限制 switch picks the abliterated variant of a local model: list them
+    // the model menu's 無審查 switch picks the abliterated variant of a local model: list them
     e.include_uncensored = true;
     e
 }
