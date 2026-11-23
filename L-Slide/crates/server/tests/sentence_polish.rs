@@ -40,7 +40,9 @@ async fn polish_a_run_with_an_equation_over_http() {
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
     let replies = [r#"{"rewrite":"Weights ⟦3⟧ fall as ⟦1⟧ shrinks.⟦2⟧Fast."}"#, r#"{"rewrite":"Weights fall fast."}"#];
     let model = Arc::new(MockProvider::new(replies.iter().map(|s| s.to_string()).collect()));
-    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, MockFactory::default().with("claude:selected", model))).is_ok());
+    // (a model named by L-Echo's menu: Google answers once, below)
+    let google = Arc::new(MockProvider::new(vec![r#"{"rewrite":"Weights drop."}"#.to_string()]).named("mock:google"));
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, MockFactory::default().with("claude:selected", model).with("agy:m-1", google))).is_ok());
     let app = sc_server::router_isolated(shared.clone());
 
     // the page: equation runs as $…$, a line break inside the paragraph as \n (kept)
@@ -65,6 +67,15 @@ async fn polish_a_run_with_an_equation_over_http() {
     assert!(liked.contains("\"app\":\"SlideComposer\""), "{liked}");
     let (_, h) = call(&app, "GET", &format!("/api/polish/history?doc={name}&text=Weights%20fall"), None).await;
     assert!(h["items"].as_array().unwrap().is_empty());
+    // `engine` names one model: that model answers and the log says so; one that is not there is an error
+    let named = |engine: &str| json!({ "doc": name, "text": "The weights drop quickly.", "instruction": "shorter", "engine": engine });
+    let (st, g) = call(&app, "POST", "/api/polish", Some(named("agy:m-1"))).await;
+    assert_eq!((st, &g["after"], &g["engine"]), (StatusCode::OK, &json!("Weights drop."), &json!("mock:google")), "{g}");
+    let log = std::fs::read_to_string(dir.join("polish-log.jsonl")).unwrap();
+    assert!(log.lines().last().unwrap().contains("\"engine\":\"mock:google\""), "{log}");
+    let (st, e) = call(&app, "POST", "/api/polish", Some(named("claude:haiku"))).await;
+    assert!(!st.is_success() && e["after"].is_null() && e["error"].as_str().is_some_and(|m| !m.is_empty() && !m.contains('\n')), "{st} {e}");
+    assert_eq!(std::fs::read_to_string(dir.join("polish-log.jsonl")).unwrap().lines().count(), 3);
     // no voice in tests: the dialog hides the mic
     assert_eq!(call(&app, "GET", "/api/voice", None).await.1["available"], json!(false));
     assert_eq!(call(&app, "POST", "/api/polish", Some(json!({ "doc": "nope", "text": "x", "instruction": "y" }))).await.0, StatusCode::NOT_FOUND);

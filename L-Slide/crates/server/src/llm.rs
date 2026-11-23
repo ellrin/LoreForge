@@ -107,10 +107,13 @@ impl Llm {
     }
 
     /// The provider for `task`. `engine`: `"local"` / `"claude"` pins that engine (no fallback).
+    /// 語句潤飾 alone may also name its model (`claude:<alias>`, `local:<catalog id>`,
+    /// `agy:<model id>`: L-Echo's model menu): that model or an error, never another one.
     pub async fn route(&self, task: &str, engine: Option<&str>) -> Result<Route, RouteError> {
         let opts = match engine {
             Some("local") => RouteOptions::only("local:current"),
             Some("claude") => RouteOptions::only("claude:selected"),
+            Some(m) if task == lore_polish::TASK && named_model(m) => RouteOptions::only(m),
             _ => RouteOptions::default(),
         }
         // someone watches the result (the 論文報告 progress, a button): interactive for a local model
@@ -139,6 +142,11 @@ impl Llm {
         lore_llm::shared::record_used(task, &id);
         Ok(Answer { value, engine: id })
     }
+}
+
+/// `claude:<alias>`, `local:<catalog id>` or `agy:<model id>`, the id not empty.
+fn named_model(m: &str) -> bool {
+    ["claude:", "local:", "agy:"].iter().any(|p| m.strip_prefix(p).is_some_and(|id| !id.trim().is_empty()))
 }
 
 fn first_line(s: &str) -> String {
@@ -188,6 +196,44 @@ mod tests {
         assert!(t.task.contains_key("sc-flow-graph"));
         let polish = &t.task[lore_polish::TASK];
         assert_eq!((polish.class, polish.default.as_str()), (Some(lore_llm::TaskClass::Create), "claude:selected"));
+    }
+
+    #[tokio::test]
+    async fn only_sentence_polish_can_name_its_model() {
+        use lore_llm::MockProvider;
+        use lore_llm::router::MockFactory;
+        let mock = |name: &str| -> Arc<dyn lore_llm::LlmProvider> { Arc::new(MockProvider::new(vec![]).named(name)) };
+        let dir = tempfile::tempdir().unwrap();
+        let f = MockFactory::default()
+            .with("claude:selected", mock("mock:selected"))
+            .with("local:current", mock("mock:current"))
+            .with("local:qwen3.5-9b-q8", mock("mock:qwen"))
+            .with("claude:haiku", mock("mock:haiku"))
+            .with("claude:opus", mock("mock:opus"))
+            .with("agy:m-1", mock("mock:google"));
+        let llm = Llm::with_factory(lore_home::Home::at(dir.path()), f);
+        let id = |r: Route| r.provider.id();
+        let polish = lore_polish::TASK;
+        // as before: the task's order, and the two engine words
+        let auto = id(llm.route(polish, None).await.unwrap());
+        assert!(auto == "mock:selected" || auto == "mock:current", "{auto}");
+        assert_eq!(id(llm.route(polish, Some("local")).await.unwrap()), "mock:current");
+        assert_eq!(id(llm.route(polish, Some("claude")).await.unwrap()), "mock:selected");
+        // a named model: that one
+        assert_eq!(id(llm.route(polish, Some("agy:m-1")).await.unwrap()), "mock:google");
+        assert_eq!(id(llm.route(polish, Some("claude:haiku")).await.unwrap()), "mock:haiku");
+        assert_eq!(id(llm.route(polish, Some("local:qwen3.5-9b-q8")).await.unwrap()), "mock:qwen");
+        // a model that is not there: an error in one line, never another model
+        let e = llm.route(polish, Some("claude:sonnet")).await.err().unwrap();
+        let m = unavailable(&e);
+        assert!(!m.is_empty() && !m.contains('\n'), "{m}");
+        assert!(llm.route(polish, Some("agy:m-2")).await.is_err());
+        // half a name is no name
+        assert_eq!(id(llm.route(polish, Some("claude:")).await.unwrap()), auto);
+        // every other task ignores a named model, Google included
+        for name in ["agy:m-1", "claude:haiku", "local:qwen3.5-9b-q8"] {
+            assert_eq!(id(llm.route(TASK_PAPER_DECK, Some(name)).await.unwrap()), "mock:opus", "{name}");
+        }
     }
 
     #[tokio::test]
