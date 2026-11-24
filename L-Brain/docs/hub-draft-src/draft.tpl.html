@@ -133,6 +133,45 @@
   .sheet td.gap.ok { color: var(--faint); }
   .sheet svg.sp { width: 150px; height: 30px; display: block; overflow: visible; }
 
+
+  /* ── the chosen cover: B's grid and ring, C's table ── */
+  .cv { display: grid; grid-template-columns: 350px minmax(0, 1fr); gap: 20px; padding: 22px 26px 12px; min-height: calc(100vh - 90px); align-items: start;
+    background-image: linear-gradient(var(--dot) 1px, transparent 1px), linear-gradient(90deg, var(--dot) 1px, transparent 1px); background-size: 28px 28px; }
+  .cv .col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+  .cv .box { border: 1px solid var(--line); border-radius: 4px; padding: 14px 16px; background: color-mix(in srgb, var(--panel) 86%, transparent); position: relative; display: block; }
+  .cv .box::before, .cv .box::after { content: ""; position: absolute; width: 10px; height: 10px; border: 1.5px solid var(--accent-2); }
+  .cv .box::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; }
+  .cv .box::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+  .cv .cap { font: 600 10px/1 "JetBrains Mono", monospace; letter-spacing: .16em; color: var(--faint); margin-bottom: 10px; display: flex; }
+  .cv .cap span { margin-left: auto; }
+  .cv .ring { position: relative; }
+  .cv .ring .mid { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+  .cv .ring .mid b { display: block; font: 600 44px/1 "JetBrains Mono", monospace; }
+  .cv .ring .mid span { font-size: 12px; color: var(--faint); letter-spacing: .1em; }
+  .ym { font: italic 11px "Source Serif 4", Georgia, serif; fill: var(--muted); color: var(--muted); letter-spacing: .02em; }
+  .cv .two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .cv .stat2 b { font: 600 34px/1 "JetBrains Mono", monospace; }
+  .cv .stat2 span { color: var(--muted); font-size: 13px; margin-left: 6px; }
+  .cv .hot { border-color: var(--accent); }
+  .cv .hot b { color: var(--accent-text); }
+  .cv table { width: 100%; border-collapse: collapse; }
+  .cv th { text-align: left; font: 500 11px "JetBrains Mono", monospace; letter-spacing: .1em; color: var(--faint); padding: 2px 10px 10px 0; border-bottom: 1px solid var(--line-strong); white-space: nowrap; }
+  .cv th .ym { margin-left: 8px; letter-spacing: 0; }
+  .cv td { padding: 13px 10px 13px 0; border-bottom: 1px solid var(--line); vertical-align: middle; font-size: 14px; }
+  .cv tr:last-child td { border-bottom: 0; }
+  .cv tr.r { cursor: pointer; }
+  .cv tr.r:hover td { background: var(--surface); }
+  .cv td.nm { font-size: 16px; font-weight: 500; white-space: nowrap; padding-left: 6px; }
+  .cv td.nm i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 10px; }
+  .cv td.n { font: 400 21px "Noto Sans TC", sans-serif; text-align: right; padding-right: 22px; }
+  .cv td .sub { color: var(--faint); font-size: 12px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cv table { table-layout: fixed; }
+  .cv th:nth-child(1) { width: 150px; } .cv th:nth-child(2) { width: 80px; } .cv th:nth-child(4) { width: 190px; } .cv th:nth-child(5) { width: 90px; } .cv th:nth-child(6) { width: 110px; }
+  .cv td .sb { height: 6px; border-radius: 3px; }
+  .cv td.gap { color: var(--accent-text); font-size: 12px; white-space: nowrap; text-align: right; padding-right: 6px; }
+  .cv td.gap.ok { color: var(--faint); }
+  .cv svg.sp { width: 150px; height: 30px; display: block; overflow: visible; }
+
   /* ── overview B: rows ── */
   .rows { padding: 12px 28px; }
   .fam { display: grid; grid-template-columns: 150px 1fr auto; gap: 20px; align-items: center; padding: 16px 6px; border-top: 1px solid var(--line); }
@@ -204,6 +243,7 @@
   <nav class="nav" id="nav"></nav>
   <main>
     <section class="v" id="v-dash"><div class="dash" id="dashEl"></div><div class="fake">草稿：數字是假的</div></section>
+    <section class="v" id="v-dash4"><div class="cv" id="cvEl"></div><div class="fake">草稿：數字是假的</div></section>
     <section class="v" id="v-dash2"><div class="hud" id="hudEl"></div><div class="fake">草稿：數字是假的</div></section>
     <section class="v" id="v-dash3"><div class="sheet" id="sheetEl"></div><div class="fake">草稿：數字是假的</div></section>
     <section class="v" id="v-dashb"><div class="rows" id="rows"></div><div class="fake">草稿：流程圖的圖是流程圖工具實際畫的；其他類別的數字與文字是假的</div></section>
@@ -221,12 +261,12 @@ const by = (id) => ITEMS.find((x) => x.id === id) ?? ITEMS[0];
 const img = (id) => `<img src="${by(id).src}" alt="">`;
 const paper = (id, cls = "") => `<span class="paper ${cls}">${img(id)}</span>`;
 const of = (lv) => ITEMS.filter((x) => x.lv === lv);
-const view = () => (location.hash || "#dash").slice(1);
+const view = () => (location.hash || "#dash4").slice(1);
 
 function nav() {
   const v = view();
   const a = (href, t, n, on) => `<a href="#${href}" ${on ? "aria-current=page" : ""}>${t}<span>${n ?? ""}</span></a>`;
-  document.getElementById("nav").innerHTML = a(v.startsWith("dash") ? v : "dash", "總覽", "", v.startsWith("dash")) + "<hr>" +
+  document.getElementById("nav").innerHTML = a(v.startsWith("dash") ? v : "dash4", "總覽", "", v.startsWith("dash")) + "<hr>" +
     a("list", "流程圖", TOTAL, v === "list" || v === "wall") + a("cards", "知識卡", 520, v === "cards") + a("dash", "寫作準則", 829) + a("dash", "論文模板", 23) + a("dash", "投影片版型", 59) + a("dash", "投影片論述法", 2) + "<hr>" + a("dash", "wordbox", 180);
 }
 
@@ -325,6 +365,33 @@ function cover3() {
   document.getElementById("sheetEl").addEventListener("mousemove", tipMove);
 }
 function tipMove(e) { const tip = document.getElementById("tip"); const t = e.target.closest("[data-tip]"); if (!t) { tip.style.display = "none"; return; } tip.textContent = t.dataset.tip; tip.style.display = "block"; tip.style.left = e.clientX + 12 + "px"; tip.style.top = e.clientY + 12 + "px"; }
+
+// the 12 weeks end this week; a month is named once, where it begins
+const WK0 = new Date(2026, 10, 23);
+const wkDate = (i) => { const d = new Date(WK0); d.setDate(d.getDate() - (11 - i) * 7); return d; };
+const ym = (d) => `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+const wkTip = (i) => { const d = wkDate(i); return `${ym(d)}/${String(d.getDate()).padStart(2, "0")} 那一週`; };
+const monthMarks = () => { const out = []; let last = ""; for (let i = 0; i < 12; i++) { const m = ym(wkDate(i)); if (m !== last) { out.push([i, m]); last = m; } } return out; };
+function cover4() {
+  const total = FAM.reduce((n, f) => n + f[3], 0), R = 138, C = 2 * Math.PI * R, GAP = 5;
+  let acc = 0;
+  const arcs = FAM.map((f) => { const len = f[3] / total * C; const a = `<circle cx="175" cy="175" r="${R}" fill="none" stroke="${f[2]}" stroke-width="20" stroke-dasharray="${Math.max(len - GAP, 1)} ${C}" stroke-dashoffset="${-acc}" transform="rotate(-90 175 175)" data-tip="${f[1]} ${fmt(f[3])}（${Math.round(f[3] / total * 100)}%）"/>`; acc += len; return a; }).join("");
+  const ticks = Array.from({ length: 60 }, (_, i) => { const a = i / 60 * 2 * Math.PI, r1 = 158, r2 = i % 5 ? 162 : 167; return `<line x1="${175 + r1 * Math.cos(a)}" y1="${175 + r1 * Math.sin(a)}" x2="${175 + r2 * Math.cos(a)}" y2="${175 + r2 * Math.sin(a)}" stroke="var(--line-strong)" stroke-width="1"/>`; }).join("");
+  const wk = WEEKS.map((w) => w.slice(0, 6).reduce((a, b) => a + b, 0)), mx = Math.max(...wk), X = (i) => i * (312 / 11);
+  const pts = wk.map((v, i) => `${X(i)},${70 - v / mx * 60}`).join(" ");
+  const marks = monthMarks();
+  const axis = marks.map(([i, m]) => `<line x1="${X(i)}" x2="${X(i)}" y1="70" y2="75" stroke="var(--line-strong)"/><text class="ym" x="${X(i)}" y="89" text-anchor="${i === 0 ? "start" : "middle"}">${m}</text>`).join("");
+  const GAPS = ["", "", "53 個待製作", "", "", "沒有步驟在用", "不與 Lore 共用"], USED = [242, 111, 26, 4, 3, 2, 0];
+  const sp = (k) => { const v = WEEKS.map((w) => w[k]), m2 = Math.max(...v, 1); return `<svg class="sp" viewBox="0 0 150 30">${v.map((x, i) => `<rect x="${i * 12.5}" y="${30 - Math.max(x / m2 * 28, x ? 2 : 1)}" width="9" height="${Math.max(x / m2 * 28, x ? 2 : 1)}" rx="1.5" fill="${x ? FAM[k][2] : "var(--line)"}" data-tip="${wkTip(i)} +${x}"/>`).join("")}</svg>`; };
+  document.getElementById("cvEl").innerHTML = `
+  <div class="col"><div class="box"><div class="cap">組成<span>${FAM.length} 類</span></div>
+      <div class="ring"><svg viewBox="0 0 350 350" style="width:100%;display:block">${ticks}${arcs}</svg><div class="mid"><div><b>${fmt(total)}</b><span>條知識</span></div></div></div></div>
+    <div class="box"><div class="cap">每週新增</div><svg viewBox="-4 0 320 94" style="width:100%;display:block;overflow:visible"><line x1="0" x2="312" y1="70" y2="70" stroke="var(--line)"/><polyline points="0,70 ${pts} 312,70" fill="var(--accent-2-soft)" stroke="none"/><polyline points="${pts}" fill="none" stroke="var(--accent-2)" stroke-width="2" stroke-linejoin="round"/>${axis}${wk.map((v, i) => `<circle cx="${X(i)}" cy="${70 - v / mx * 60}" r="7" fill="transparent" data-tip="${wkTip(i)} +${v}"/>`).join("")}</svg></div>
+    <div class="two"><a class="box hot stat2" href="#dash4"><div class="cap">待你同意</div><b>2</b><span>批</span></a><a class="box stat2" href="#cards"><div class="cap">卡到期</div><b>12</b><span>張</span></a></div></div>
+  <div class="box" style="padding:16px 18px 6px"><table><tr><th>類別</th><th style="text-align:right;padding-right:22px">數量</th><th>佔比與細項</th><th>新增<span class="ym">${marks[0][1]} – ${marks[marks.length - 1][1]}</span></th><th style="text-align:right">30 天用到</th><th style="text-align:right;padding-right:6px">缺口</th></tr>
+  ${FAM.map((f, k) => `<tr class="r" onclick="location.hash='${f[6] === "dash" ? "dash4" : f[6]}'"><td class="nm"><i style="background:${f[2]}"></i>${f[1]}</td><td class="n">${fmt(f[3])}</td><td><div class="sb" style="width:${Math.max(f[3] / 829 * 100, 1.5)}%;background:${f[2]}" data-tip="${Math.round(f[3] / total * 100)}%"></div><div class="sub">${f[4]}</div></td><td>${sp(k)}</td><td style="text-align:right" class="num">${USED[k] || "—"}</td><td class="gap ${GAPS[k] ? "" : "ok"}">${GAPS[k] || "—"}</td></tr>`).join("")}</table></div>`;
+  document.getElementById("cvEl").addEventListener("mousemove", tipMove);
+}
 function rows() {
   const fam = (to, nm, ct, strip, att) => `<a class="fam" href="#${to}"><div><div class="nm">${nm}</div><div class="ct">${ct}</div></div><div class="strip">${strip}</div><div class="att">${att}</div></a>`;
   const lines = (l) => `<div class="lines">${l.map((t) => `<div>${t}</div>`).join("")}</div>`;
@@ -366,8 +433,8 @@ function cards() {
     <aside class="detail"><h3>Mean Reprojection Error (MRE)</h3><div style="color:var(--faint);font-size:12px">概念 · 電腦視覺 · 學習中</div><p style="margin:14px 0;line-height:1.75">平均重投影誤差，衡量重投影點與觀測點在影像上的平均像素距離，用來評估相機校正或三維重建的擬合程度。</p>
       <div class="k">連到</div><div class="chips"><span class="tag">Camera calibration</span><span class="tag">Bundle adjustment</span></div><div class="acts"><button>編輯</button><button>已熟悉，不用學</button><button>交給 Echo</button></div></aside>`;
 }
-function show() { nav(); const pk = document.getElementById("pick"), v0 = view(); pk.style.display = v0.startsWith("dash") && v0 !== "dashb" ? "flex" : "none"; pk.innerHTML = [["dash", "封面 A 面板"], ["dash2", "封面 B 儀表"], ["dash3", "封面 C 一張表"]].map(([h, t]) => `<a href="#${h}" ${h === v0 ? "aria-current=page" : ""}>${t}</a>`).join(""); for (const s of document.querySelectorAll(".v")) s.classList.toggle("on", s.id === "v-" + view()); }
-dashboard(); cover2(); cover3(); rows(); list(); wall(); cards(); show(); addEventListener("hashchange", show);
+function show() { nav(); const pk = document.getElementById("pick"), v0 = view(); pk.style.display = v0.startsWith("dash") && v0 !== "dashb" ? "flex" : "none"; pk.innerHTML = [["dash4", "B＋C"], ["dash", "A"], ["dash2", "B"], ["dash3", "C"]].map(([h, t]) => `<a href="#${h}" ${h === v0 ? "aria-current=page" : ""}>${t}</a>`).join(""); for (const s of document.querySelectorAll(".v")) s.classList.toggle("on", s.id === "v-" + view()); }
+dashboard(); cover2(); cover3(); cover4(); rows(); list(); wall(); cards(); show(); addEventListener("hashchange", show);
 </script>
 </body>
 </html>
