@@ -325,7 +325,7 @@ impl Llm {
         f.prefer_subscription = true;
         f.selected_claude = Some(self.model());
         f.api = self.key().map(|(k, _)| ApiAccess { base_url: self.base_url.clone(), api_key: k, fallbacks: true });
-        f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: false, temp_prefix: "papercomposer-claude".into() });
+        f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: true, temp_prefix: "papercomposer-claude".into() });
         f.local = Some(self.local_access());
         f
     }

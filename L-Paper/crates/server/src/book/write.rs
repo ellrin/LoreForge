@@ -29,7 +29,11 @@ pub struct State {
     pub done: BTreeMap<String, ChapterOut>,
     /// source key in research → library key
     pub keys: BTreeMap<String, String>,
-    /// chapter id → the card texts its reply gave (saved with the chapter, made after it)
+    /// chapter id → the terms it taught that want a card (saved with the chapter; each card is
+    /// searched and made after it)
+    pub card_terms: BTreeMap<String, Vec<String>>,
+    /// Jobs before the card search: the card texts a chapter reply gave (only their terms are
+    /// used now; the words are searched again).
     pub card_texts: BTreeMap<String, Vec<super::cards::CardText>>,
     /// term key → the card made for it (`None`: a card had appeared meanwhile, none made)
     pub cards: BTreeMap<String, Option<super::cards::Made>>,
@@ -120,10 +124,6 @@ pub fn schema() -> Value {
             "tables": { "type": "array", "items": {
                 "type": "object", "required": ["id", "caption", "rows"],
                 "properties": { "id": { "type": "string" }, "caption": { "type": "string" }, "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } } }
-            } },
-            "cards": { "type": "array", "items": {
-                "type": "object", "required": ["term", "summary", "body"],
-                "properties": { "term": { "type": "string" }, "summary": { "type": "string" }, "body": { "type": "string" } }
             } }
         }
     })
@@ -560,26 +560,39 @@ pub(crate) fn set_front(book: &Path, field: &str, value: &str) {
     let _ = pc_core::paper::write_atomic(&path, &new);
 }
 
-/// The cards of what chapter `c` taught (each recorded as it is made: a resumed job never makes
-/// one twice; a card that appeared meanwhile is not made).
-async fn make_cards(ctx: &Ctx<'_>, st: &mut State, c: &Chapter, title: &str, notes: &mut Vec<String>) {
+/// The cards of what chapter `c` taught, each from a web search of its own (each recorded as it
+/// is made: a resumed job never makes one twice; a card that appeared meanwhile is not made; a
+/// term the search could not explain gets no card and a note, and is searched again on resume).
+async fn make_cards(ctx: &Ctx<'_>, st: &mut State, c: &Chapter, title: &str, chapter_text: &str, notes: &mut Vec<String>) {
     let Some(sink) = ctx.cards else { return };
-    for t in st.card_texts.get(&c.id).cloned().unwrap_or_default() {
-        let k = lore_words::phrase_key(&t.term);
+    let terms: Vec<String> = match st.card_terms.get(&c.id) {
+        Some(t) => t.clone(),
+        None => st.card_texts.get(&c.id).into_iter().flatten().map(|t| t.term.clone()).collect(),
+    };
+    for term in terms {
+        let k = lore_words::phrase_key(&term);
         if st.cards.contains_key(&k) {
             continue;
         }
-        if sink.without_card(std::slice::from_ref(&t.term)).is_empty() {
+        if sink.without_card(std::slice::from_ref(&term)).is_empty() {
             st.cards.insert(k, None);
             save_state(ctx.job_dir, st);
             continue;
         }
-        match sink.create(&t, title).await {
-            Ok(m) => {
-                st.cards.insert(k, Some(m));
-                save_state(ctx.job_dir, st);
-            }
-            Err(e) => notes.push(format!("知識卡「{}」沒有建立：{e}", t.term)),
+        let ask = Ask { task: super::model::TASK_CARD, system: super::cards::SYSTEM.to_string(), user: super::cards::ask(&term, title, &c.title, chapter_text), schema: super::cards::schema(), max_tokens: 2000, engine: ctx.engine.filter(|e| *e != "local") };
+        let text = match ctx.model.json_web(ask).await {
+            Ok((v, found)) => super::cards::from_reply(&term, &v, &found),
+            Err(e) => Err(e.message),
+        };
+        match text {
+            Ok(t) => match sink.create(&t, title).await {
+                Ok(m) => {
+                    st.cards.insert(k, Some(m));
+                    save_state(ctx.job_dir, st);
+                }
+                Err(e) => notes.push(format!("知識卡「{term}」沒有建立：{e}")),
+            },
+            Err(e) => notes.push(format!("知識卡「{term}」沒有建立：{e}")),
         }
     }
 }
@@ -810,7 +823,9 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
     for (i, c) in plan.chapters.iter().enumerate() {
         (ctx.progress)(json!({ "chapter": i, "chapters": total }));
         if st.done.contains_key(&c.id) {
-            make_cards(ctx, &mut st, c, &title, &mut notes).await;
+            let file = st.sections.get(&c.id).map(|(f, _)| f.clone()).unwrap_or_default();
+            let written = std::fs::read_to_string(book.join("sections").join(file)).unwrap_or_default();
+            make_cards(ctx, &mut st, c, &title, &written, &mut notes).await;
             continue;
         }
         let (file, label) = st.sections[&c.id].clone();
@@ -827,14 +842,12 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
         let mut co = ChapterOut::default();
         let mut text = String::new();
         let mut made: Vec<PathBuf> = vec![];
-        let mut texts: Vec<super::cards::CardText> = vec![];
         for attempt in 0..2 {
             for f in made.drain(..) {
                 let _ = std::fs::remove_file(f);
             }
-            let ask = Ask { task: TASK_CHAPTER, system: system.clone(), user: format!("{user}{}{extra}", super::cards::ask(&want_cards)), schema: schema(), max_tokens: 16000, engine: ctx.engine };
+            let ask = Ask { task: TASK_CHAPTER, system: system.clone(), user: format!("{user}{extra}"), schema: schema(), max_tokens: 16000, engine: ctx.engine };
             let (reply, engine) = ctx.model.json(ask, ctx.on_chars).await?;
-            texts = super::cards::texts(&reply, &want_cards);
             co = ChapterOut { id: c.id.clone(), title: c.title.clone(), file: file.clone(), label: label.clone(), engine, ..Default::default() };
             text = assemble(ctx, &book, &reply, c, src, r, &st.keys, &mut made, &mut co);
             let checked = crate::notation::check(&book, &eff, &opt, &[], &text);
@@ -850,14 +863,11 @@ pub async fn write(ctx: &Ctx<'_>, target: Target<'_>, src: &Sources, plan: &Plan
         }
         let sec = pc_core::paper::Section { file: file.clone(), title: c.title.clone(), paragraphs: pc_core::text::paragraphs(&text), tail: format!("\\label{{{label}}}") };
         pc_core::paper::write_atomic(&book.join("sections").join(&file), &pc_core::paper::render_section(&sec)).map_err(|e| err(e.to_string()))?;
-        if texts.len() < want_cards.len() {
-            co.problems.push(format!("模型沒有給這些名詞的卡片內容：{}", want_cards.iter().filter(|t| !texts.iter().any(|x| &x.term == *t)).cloned().collect::<Vec<_>>().join(", ")));
-        }
-        st.card_texts.insert(c.id.clone(), texts);
+        st.card_terms.insert(c.id.clone(), want_cards);
         st.done.insert(c.id.clone(), co);
         save_state(ctx.job_dir, &st);
         // this chapter's cards, right after it
-        make_cards(ctx, &mut st, c, &title, &mut notes).await;
+        make_cards(ctx, &mut st, c, &title, &text, &mut notes).await;
         (ctx.progress)(json!({ "chapter": i + 1, "chapters": total, "figures": st.done.values().map(|d| d.figures.len()).sum::<usize>() }));
     }
     // equation labels nothing in the book refers to (the registry flags them): out, across chapters

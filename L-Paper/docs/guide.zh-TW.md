@@ -182,7 +182,7 @@ your-private-repo/
 
 ## 寫書
 
-首頁的「寫書」列出你的書（最近改過的在前），點一下打開；「＋ 新書」打開**開始面板**，寫書只從這裡開始：**起點**（L-Reader 的論文、電腦裡的 PDF、一個資料夾、自己打的關鍵字、知識卡，可以混用；都不給就是一本空白的書）、**書**（新書的書名與資料夾，或加進已有的書）、**樣式**（電子書 B5／A4、Review 單欄、Review 雙欄；篇幅、語言、要不要替不懂的名詞建立知識卡）。「先看大綱」或「直接產生」開始背景的工作。書是一個 LaTeX 資料夾，放在你選的地方，和論文一樣編輯、匯出 PDF；`paper.toml` 寫著 `kind = "book"`（沒寫的是論文，原有的論文不受影響）。書沒有 Key value，也不套期刊規則（字數、頁數上限）。整個流程見 [`../docs/book.md`](../../docs/book.md)。
+首頁的「寫書」列出你的書（最近改過的在前），點一下打開；「＋ 新書」打開**開始面板**，寫書只從這裡開始：**起點**（L-Reader 的論文、電腦裡的 PDF、一個資料夾、自己打的關鍵字、知識卡，可以混用；都不給就是一本空白的書）、**書**（新書的書名與資料夾，或加進已有的書）、**樣式**（電子書 B5／A4、Review 單欄、Review 雙欄；篇幅、語言、要不要替不懂的名詞建立知識卡：預設開；每張卡各自上網查，只照查到的內容寫，查不到就不建、在結果裡列出）。「先看大綱」或「直接產生」開始背景的工作。書是一個 LaTeX 資料夾，放在你選的地方，和論文一樣編輯、匯出 PDF；`paper.toml` 寫著 `kind = "book"`（沒寫的是論文，原有的論文不受影響）。書沒有 Key value，也不套期刊規則（字數、頁數上限）。整個流程見 [`../docs/book.md`](../../docs/book.md)。
 
 - **書的清單**：`books.toml`，和 `opened.toml` 放在同一個設定資料夾（`[[book]] path, title, papers`，加上 `last_folder`）；只記這台電腦的路徑，不同步。
 - **模板**：課程講義筆記的樣式（課程與書名的標題區、Keyphrases、編號章節、定義框與重點框、右側邊註、名詞第一次出現附中文、`\cite` 與 `refs.bib`），由 [`publishers/lecture-notes/`](../../private-example/PaperComposer/publishers/lecture-notes/README.md) 的 `lorenotes.sty` 排版，用 XeLaTeX 編譯，只用 BasicTeX 就有的套件。模板也內建在 App 裡；工作區的 `publishers/` 有 `template.toml` 寫 `kind = "book"` 的模板時，用你的。書的模板不出現在新論文與「模板」頁的期刊清單。

@@ -308,6 +308,18 @@ default = "claude:selected"
 fallback = "local:current"
 offline = false
 
+# 寫書's knowledge cards (知識建立一定要上網查, author 2026-11-24): one web search per term a
+# written chapter taught; the card is written only from what the search read, and a reply from a
+# call that did not search is refused. Claude only (the local and Antigravity models cannot search).
+[task.pc-book-card]
+purpose = "web"
+label = "寫書：知識卡（上網查）"
+needs = { json = true, web = true }
+default = "claude:sonnet"
+fallback = "claude:haiku"
+offline = false
+max_tokens = 2000
+
 # 期刊寫法 (src/venueprof.rs, docs/long-paper.md §D): one call per open-access article of the
 # journal, labelling each paragraph with a content category (the shares are computed in code)
 [task.pc-venue-profile]

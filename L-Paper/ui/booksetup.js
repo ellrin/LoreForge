@@ -30,11 +30,12 @@ const PCBookSetup = (() => {
   const LEN = [["short", "短"], ["standard", "標準"], ["long", "長"]];
   const LANG = [["en-zh", "英中"], ["en", "English"], ["zh", "中文"]];
   const PAGE = [["b5", "B5"], ["a4", "A4"]];
-  const DEFAULTS = { sources: [], keywords: [], cards: [], extras: {}, book: "new", title: "", folder: "", format: "notes", page: "b5", length: "standard", lang: "en-zh", make_cards: false };
+  const DEFAULTS = { sources: [], keywords: [], cards: [], extras: {}, book: "new", title: "", folder: "", format: "notes", page: "b5", length: "standard", lang: "en-zh", make_cards: true };
   const KEEP = ["format", "page", "length", "lang", "make_cards"];   // remembered between books
   const pref = {
-    get() { try { return JSON.parse(localStorage.getItem("pc.bookSetup") ?? "{}") ?? {}; } catch { return {}; } },
-    set(s) { try { localStorage.setItem("pc.bookSetup", JSON.stringify(Object.fromEntries(KEEP.map((k) => [k, s[k]])))); } catch {} },
+    // `web: 1`: saved since cards are searched on the web; an older `make_cards` was the forced-off default, not his choice
+    get() { try { const v = JSON.parse(localStorage.getItem("pc.bookSetup") ?? "{}") ?? {}; if (!v.web) delete v.make_cards; delete v.web; return v; } catch { return {}; } },
+    set(s) { try { localStorage.setItem("pc.bookSetup", JSON.stringify({ ...Object.fromEntries(KEEP.map((k) => [k, s[k]])), web: 1 })); } catch {} },
   };
 
   const S = { root: null, id: null, mock: false, setup: null, opt: null, cardNames: {}, picker: false, busy: false };
@@ -229,7 +230,7 @@ const PCBookSetup = (() => {
     if (hasStart()) {
       grid.append(E("span", { class: "ql" }, "篇幅"), seg("length", LEN, "篇幅"), E("span", { class: "ql" }, "語言"), seg("lang", LANG, "語言"));
       const sw = E("input", { type: "checkbox", checked: st.make_cards, id: "bksCards", onchange: (e) => { st.make_cards = e.target.checked; pref.set(st); } });
-      grid.append(E("span", { class: "ql" }, "知識卡"), E("label", { class: "bks-switch", for: "bksCards" }, sw, "不懂的名詞建立知識卡（標成不熟）"));
+      grid.append(E("span", { class: "ql" }, "知識卡"), E("label", { class: "bks-switch", for: "bksCards" }, sw, "不懂的名詞上網查、建立知識卡（標成不熟）"));
     }
     b.body.append(grid);
     return b;
