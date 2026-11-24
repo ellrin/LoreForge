@@ -5,6 +5,7 @@
 // <section data-view="hub"> and fills <ol id="hubNav">.
 const Hub = (() => {
   const LV = { figure: "流程圖", module: "模塊", component: "元件" };
+  const OP = { add: "新增", update: "修改", remove: "移除" };
   const NEWEST = new Set(["created", "updated", "used", "used_at"]);
   const S = { root: null, stats: null, cards: null, meta: null, fam: null, items: [], total: 0, tags: {}, sel: null, f: null, host: {} };
   const el = (tag, attrs = {}, ...kids) => {
@@ -214,6 +215,7 @@ const Hub = (() => {
       el("input", { type: "search", placeholder: "在這一類裡找", value: f.q, "aria-label": "在這一類裡找", oninput: (e) => { clearTimeout(timer); timer = setTimeout(() => { f.q = e.target.value.trim(); refresh(true); }, 250); } }),
       el("select", { "aria-label": "排序", onchange: (e) => { f.sort = e.target.value; refresh(); } }, sorts.map(([id, label]) => el("option", { value: id, selected: id === f.sort }, label))),
       !S.items.some((it) => it.thumb) && S.f.mode !== "wall" ? null : el("span", { class: "h-sw", role: "group", "aria-label": "顯示方式" }, [["list", "清單"], ["wall", "圖"]].map(([m, t]) => el("button", { type: "button", "aria-pressed": String(f.mode === m), onclick: () => { f.mode = m; try { localStorage.setItem(prefKey(S.fam), m); } catch {} paint(); } }, t))),
+      isFigure(S.fam) ? el("label", { class: "h-plus", title: "給 L-Echo 一張流程圖的圖片，拆成流程圖、模塊、元件" }, "從圖片拆…", el("input", { type: "file", accept: "image/png,image/jpeg", hidden: true, onchange: async (e) => { const f = e.target.files?.[0]; e.target.value = ""; if (!f) return; try { await splitPicture(f, ""); } catch (err) { S.host.fail?.(err); } } })) : null,
       addBtn());
   }
   /** ＋ 新增: straight to the form when one category takes it, else a small choice of which. */
@@ -293,7 +295,8 @@ const Hub = (() => {
         isNew ? null : ` · ${it.source?.kind === "external" ? it.source.name : it.source?.kind === "author" ? "我加的" : "Lore"}`, it.used ? ` · 用過 ${it.used} 次` : null),
       el("div", { class: "h-acts" },
         canMeta ? (saveBtn = el("button", { type: "button", class: "pri", disabled: !isNew, onclick: save }, isNew ? "新增" : "儲存")) : null,
-        !isNew && c?.writable && !builtin ? el("button", { type: "button", class: "quiet", onclick: () => remove(it) }, "移除") : null));
+        !isNew && c?.writable && !builtin ? el("button", { type: "button", class: "quiet", onclick: () => remove(it) }, "移除") : null),
+      !isNew && canMeta ? el("details", { class: "h-more" }, el("summary", {}, "請 L-Echo 改"), askEcho(it)) : null);
   }
   function cardDetail(it) {
     const n = it.node, known = it.state === "known";
@@ -335,8 +338,57 @@ const Hub = (() => {
     } catch (e) { S.host.fail?.(e); }
   }
 
+  // ── L-Echo: it proposes, the author approves in 待同意 (docs/brain-hub.md §7) ──
+  async function echo(path, body) {
+    const port = await LoreLinks.ensure("le", { onWait: () => S.host.toast?.("正在開啟 L-Echo…") });
+    if (!port) throw new Error("L-Echo 沒有開起來");
+    const r = await fetch(`http://127.0.0.1:${port}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error ?? `L-Echo 回答 ${r.status}`);
+    return j;
+  }
+  /** A draft from L-Echo in the right pane: what it would change, and 提出 to put it in 待同意. */
+  function draftPane(title, body, proposal, message) {
+    const send = el("button", { type: "button", class: "pri", onclick: async () => {
+      try { send.disabled = true; await echo("/api/actions/know/propose", { proposal }); S.host.toast?.("已放進待同意"); close(); await loadStats(); }
+      catch (e) { send.disabled = false; S.host.fail?.(e); } } }, "提出到待同意");
+    S.sel = "draft";
+    detailEl = el("aside", { class: "h-detail" },
+      el("div", { class: "hd" }, el("h3", {}, title), el("button", { type: "button", class: "x", "aria-label": "關閉", onclick: close }, "✕")),
+      el("div", { class: "ln" }, "L-Echo 的提議，還沒有寫入"), body, message ? el("p", { class: "h-sum" }, message) : null,
+      el("div", { class: "h-acts" }, proposal ? send : null, el("button", { type: "button", class: "quiet", onclick: close }, "不要")));
+    paint();
+  }
+  const show1 = (v) => (v == null ? "" : typeof v === "string" ? v : Array.isArray(v) ? v.join("、") : JSON.stringify(v));
+  const pick = (o, path) => path.split(".").reduce((x, k) => x?.[k], o);
+  /** 請 Echo 改: one instruction about one item → a draft of what would change. */
+  function askEcho(it) {
+    const input = el("textarea", { rows: 3, placeholder: "要怎麼改？例如：改得更簡短、補上英文、加上觸發關鍵字 timeline" });
+    const go = el("button", { type: "button", class: "pri", onclick: async () => {
+      const instruction = input.value.trim(); if (!instruction) return;
+      go.disabled = true; go.textContent = "L-Echo 正在看…";
+      try {
+        const d = await echo("/api/actions/know/edit", { id: it.id, instruction });
+        draftPane(`改「${it.title}」`, [
+          (d.changed ?? []).map((name) => el("div", { class: "h-diff" }, el("div", { class: "k" }, name.replace(/^fields\./, "").replace(/^tags\./, "標籤 ")), el("del", {}, show1(pick(d.before, name))), el("ins", {}, show1(pick(d.after, name))))),
+          (d.dropped ?? []).length ? [el("div", { class: "k" }, "沒有採用"), d.dropped.map((x) => el("div", { class: "ln" }, x))] : null], d.proposal, d.proposal ? d.note : d.message);
+      } catch (e) { go.disabled = false; go.textContent = "請 Echo 改"; S.host.fail?.(e); }
+    } }, "請 Echo 改");
+    return el("div", { class: "h-echo" }, input, go);
+  }
+  /** 從圖片拆: a figure's picture → figure, modules, components as references to make. */
+  async function splitPicture(file, note) {
+    const data = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(new Error("讀不了這個檔案")); r.readAsDataURL(file); });
+    S.host.toast?.("L-Echo 正在看這張圖…");
+    const d = await echo("/api/actions/know/figure", { image: data, note });
+    const sm = d.summary ?? {};
+    draftPane(d.proposal?.title ?? "這張圖", [
+      d.image?.data_url ? el("span", { class: "h-paper stage" }, el("img", { src: d.image.data_url, alt: "" })) : null,
+      el("div", { class: "h-foot" }, `新的流程圖 ${sm.new_figure ? 1 : 0} · 新的模塊 ${sm.new_modules ?? 0} · 新的元件 ${sm.new_components ?? 0} · 連到已有的 ${sm.linked ?? 0}`),
+      (d.proposal?.changes ?? []).map((c) => el("div", { class: "h-ch", style: "grid-template-columns:44px minmax(0,1fr) auto" }, el("span", { class: `op ${c.op}` }, OP[c.op] ?? c.op), el("span", { class: "t" }, c.item?.title ?? ""), el("span", { class: "d" }, LV[c.item?.level] ?? "")))], d.proposal, d.message);
+  }
+
   // ── 待同意: what an AI or a tool proposes; nothing is written until the author says so ──
-  const OP = { add: "新增", update: "修改", remove: "移除" };
   async function proposals() {
     const [open, done] = await Promise.all([api("GET", "/api/hub/proposals?state=open"), api("GET", "/api/hub/proposals?state=applied")]);
     const one = async (p) => {

@@ -224,3 +224,13 @@ select.h-plus { padding: 5px 8px; font-weight: 500; }
 .h-srow .own { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .h-srcout { font-size: 12px; color: var(--muted); }
 .h-srcout .bad { color: var(--err); }
+
+/* L-Echo's draft */
+.h-echo { display: grid; gap: 8px; padding-top: 8px; }
+.h-echo textarea { width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: 7px 9px; font: inherit; font-size: 13px; resize: vertical; }
+.h-echo .pri { justify-self: start; background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 7px 11px; font-size: 12px; font-weight: 600; }
+.h-echo .pri:disabled { background: var(--surface); color: var(--faint); }
+.h-diff del, .h-diff ins { display: block; text-decoration: none; padding: 5px 8px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
+.h-diff del { color: var(--faint); background: none; border: 1px dashed var(--line); }
+.h-diff ins { background: var(--surface); }
+label.h-plus { cursor: pointer; font-weight: 500; font-size: 12px; padding: 6px 10px; }
