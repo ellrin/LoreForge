@@ -54,3 +54,27 @@ needs = { json = true, web = true, context = 16000 }
 default = "claude:haiku"
 offline = false
 max_tokens = 4000
+
+# 知識中樞 (docs/brain-hub.md §4.2): a picture of a flow figure split into figure / modules / components
+# and proposed to L-Brain's hub (the author approves each proposal there; nothing is written here).
+# The picture goes to the cloud (Claude); the author accepts that only for figures from papers and his
+# own slides. Claude only: the local model is too small to read a diagram and miss the parts (no class,
+# so the shared routing cannot put it in), and never offline.
+[task.le-know-figure]
+label = "L-Echo 把圖拆成大中小（看圖）"
+needs = { vision = true, json = true }
+default = "claude:selected"
+fallback = "claude:sonnet"
+offline = false
+max_tokens = 6000
+
+# 知識中樞: one hub item changed on the author's instruction; the model returns only the fields that
+# change, and the result is proposed to L-Brain, never written. Text only, no web search.
+[task.le-know-edit]
+label = "L-Echo 照指示改一條知識"
+class = "tidy"
+needs = { json = true, context = 16000 }
+default = "local:current"
+fallback = "claude:selected"
+offline = true
+max_tokens = 3000
