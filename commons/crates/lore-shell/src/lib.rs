@@ -12,6 +12,8 @@
 
 #[cfg(feature = "web")]
 pub mod findfile;
+#[cfg(feature = "web")]
+pub mod pageedit;
 pub mod permissions;
 #[cfg(feature = "web")]
 pub mod selection;

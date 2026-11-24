@@ -43,6 +43,13 @@ impl Selector {
     fn current(&self) -> Option<SelectionRequest> {
         self.current.lock().unwrap().clone()
     }
+
+    /// Drop the open selection (a page request from [`crate::page`] replaces it), telling its app.
+    pub(crate) fn end_now(&self) {
+        if let Some(old) = self.current.lock().unwrap().take() {
+            tokio::task::spawn_blocking(move || end_selection(&old));
+        }
+    }
 }
 
 pub fn routes() -> Router<Shared> {
@@ -88,7 +95,7 @@ fn is_cjk(c: char) -> bool {
 }
 
 /// A ports.json short name: a few lowercase letters or digits.
-fn short_name(app: &str) -> bool {
+pub(crate) fn short_name(app: &str) -> bool {
     (1..=8).contains(&app.len()) && app.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
 }
 
@@ -127,6 +134,7 @@ async fn sel_post(State(s): State<Shared>, Json(r): Json<SelectionRequest>) -> R
     if let Some(old) = old.filter(|o| o.request != id) {
         tokio::task::spawn_blocking(move || end_selection(&old));
     }
+    s.page.end_now(); // one thing handed to L-Echo at a time: an open page request ends
     s.tell(DesktopEvent::Expanded(true));
     Json(json!({ "ok": true })).into_response()
 }
