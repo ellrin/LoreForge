@@ -1461,6 +1461,33 @@ fn built_slide(ws: &sc_core::Workspace, st: &lore_canvas::StyleSystem, source: &
 
 /// (code, subject) → message of the deck's notation errors and warnings (`notation::view`, notes
 /// definitions counted), the infos left out.
+/// A refusal in the author's words: 「第 1 個修改（set_text）：…」 is how the model is told (it needs
+/// the index and the edit's name to correct its plan); he reads 「改文字：…」.
+fn for_author(reason: &str) -> String {
+    const NAMES: [(&str, &str); 7] = [
+        ("set_text", "改文字"),
+        ("set_notes", "改備忘稿"),
+        ("split_slide", "拆頁"),
+        ("insert_slide", "插入新頁"),
+        ("split_object", "拆成多格"),
+        ("highlight_crop", "裁圖或標亮"),
+        ("add_equation", "加公式"),
+    ];
+    let mut out = reason.to_string();
+    if let Some(rest) = out.strip_prefix("第 ") {
+        if let Some((_, tail)) = rest.split_once(" 個修改（") {
+            if let Some((kind, msg)) = tail.split_once("）：") {
+                let name = NAMES.iter().find(|(k, _)| *k == kind).map(|(_, n)| *n).unwrap_or("這個修改");
+                out = format!("{name}：{msg}");
+            }
+        }
+    }
+    for (k, n) in NAMES {
+        out = out.replace(k, n);
+    }
+    out
+}
+
 fn notation_keys(deck: &Deck, env: &Env) -> BTreeMap<(String, String), String> {
     let v = crate::notation::view(deck, env.latex, env.glob, env.doc);
     v["report"]["issues"]
@@ -2009,7 +2036,7 @@ async fn run(pe: &Arc<Pe>, name: &str, ask: Ask, turns: Vec<Turn>, id: Option<St
         }
         // what was still refused after the corrective round is said, never applied
         for r in reasons {
-            warnings.push(format!("沒有做：{r}"));
+            warnings.push(format!("沒有做：{}", for_author(&r)));
         }
         for w in r.warnings {
             if !warnings.contains(&w) {
@@ -2220,6 +2247,13 @@ mod tests {
         let ed = editor();
         let p = with(|env| prepare(&ed, &["s2".to_string()], &[e], env));
         (p, ed)
+    }
+
+    #[test]
+    fn a_refusal_is_worded_for_the_author() {
+        assert_eq!(for_author("第 1 個修改（set_text）：這一段有 83 字，最多 80 字（不會縮字）"), "改文字：這一段有 83 字，最多 80 字（不會縮字）");
+        assert_eq!(for_author("第 2 個修改（split_slide）：拆頁的標題和備註寫在 split_slide 裡"), "拆頁：拆頁的標題和備註寫在 拆頁 裡");
+        assert_eq!(for_author("模型沒有回應"), "模型沒有回應");
     }
 
     #[test]
