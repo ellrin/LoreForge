@@ -21,6 +21,7 @@ pub mod inbox;
 pub mod inbox_store;
 pub mod index;
 pub mod intake;
+pub mod process_pattern;
 pub mod proposal;
 pub mod reader;
 pub mod registry;
