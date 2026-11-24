@@ -1157,3 +1157,22 @@ async fn equations_come_alive_through_the_shared_plot_tool() {
         assert!(eqplot.contains(f), "eqplot.js does not load {f}");
     }
 }
+
+#[tokio::test]
+async fn selection_routes_are_mounted() {
+    // selected text through L-Echo: the shared script, the route the page posts to (an empty
+    // selection is refused before L-Echo is looked for; isolated = L-Echo is never reached)
+    let env = setup(&dead_url(), None);
+    let (st, _, body) = call(&env.app, "GET", "/selection.js", None, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&body).contains("window.LoreSelection"));
+    let (st, v, _) = call(&env.app, "POST", "/api/lore/selection", Some(json!({ "text": " ", "readonly": true, "launch": false })), None).await;
+    assert_eq!((st, v["error"].as_str()), (StatusCode::BAD_REQUEST, Some("需要 text")));
+    let (st, v, _) = call(&env.app, "POST", "/api/lore/selection", Some(json!({ "doc": "abc", "source": "A synthetic paper", "text": "attention", "scope": "第 2 頁", "readonly": true, "launch": true })), None).await;
+    assert_eq!((st, v["error"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("L-Echo 沒有開")));
+    let (st, _, _) = call(&env.app, "POST", "/api/lore/selected", Some(json!({ "request": "nope", "after": "x" })), None).await;
+    assert_eq!(st, StatusCode::GONE);
+    let (_, _, html) = call(&env.app, "GET", "/", None, None).await;
+    let html = String::from_utf8_lossy(&html);
+    assert!(html.find("selection.js").is_some_and(|i| html.find("shell.js").is_some_and(|j| j < i)), "selection.js after shell.js");
+}

@@ -1194,6 +1194,48 @@ function surrounding(text, start, end) {
   return norm(t.slice(s, e));
 }
 
+// ── the selection handed to L-Echo (lore-shell's /selection.js; a PDF is read-only) ──
+/** The page text around [start, end) for L-Echo: up to `side` characters on each side with the
+ *  selection, whitespace folded (a long selection leaves itself out: about 2 × side + 100 at
+ *  most); the start of the page when the position is unknown. */
+function pageWindow(text, start, end, side = 1200) {
+  if (!(start >= 0 && end > start)) return norm(text.slice(0, 2 * side));
+  const before = text.slice(Math.max(0, start - side), start), after = text.slice(end, end + side);
+  return end - start <= 100 ? norm(before + text.slice(start, end) + after) : `${norm(before)} … ${norm(after)}`.trim();
+}
+
+/** The section heading the paragraph analysis gave the text at `start` of this page, if known. */
+function sectionAt(p, start) {
+  if (p.sha !== S.sha) return "";
+  for (const q of S.paras?.paragraphs ?? []) {
+    if (q.section_kind !== "front" && q.ranges.some((r) => r.page === p.page && r.s <= start && start < r.e)) return q.section || "";
+  }
+  return "";
+}
+
+/** What L-Echo gets for a selection (`selectionInfo()`); `readonly`: no rewrite comes back. */
+function echoPayload(info) {
+  const { p } = info, sec = sectionAt(p, info.start);
+  return {
+    doc: p.sha, source: S.paper?.sha256 === p.sha ? S.paper.title : "PDF", text: info.text, prefix: "", suffix: "",
+    context: pageWindow(info.pageText, info.start, info.end), scope: `第 ${p.page} 頁${sec ? `：${sec}` : ""}`, keep: [], readonly: true,
+  };
+}
+
+/** LoreSelection's gather is synchronous: the last selection the bar resolved, while it is still
+ *  the page's selection; `echoPinned` = the menu's own (交給 L-Echo). */
+let echoSel = null, echoPinned = null;
+function echoGather() {
+  if (echoPinned) return echoPayload(echoPinned);
+  const sel = getSelection();
+  if (!echoSel || !sel || sel.isCollapsed || norm(sel.toString()) !== echoSel.said) return null;
+  return echoPayload(echoSel.info);
+}
+function sendToEcho(info) {
+  echoPinned = info;
+  try { return window.LoreSelection?.send(); } finally { echoPinned = null; }
+}
+
 // ── selection actions: the toolbar, the shortcuts and the context menu ────
 /** What can be done with a selection; `key` is its shortcut (digits = highlight colours). */
 function selActions(info) {
@@ -1215,6 +1257,7 @@ const hideSelBar = () => { $("#selBar").hidden = true; };
 async function showSelBar() {
   const info = await selectionInfo();
   if (!info) { hideSelBar(); return; }
+  echoSel = { info, said: norm(getSelection().toString()) };
   const bar = $("#selBar");
   const go = (x) => () => { hideSelBar(); x.run(); };
   const acts = selActions(info);
@@ -1275,6 +1318,7 @@ async function onContextMenu(e) {
     item(pick("n")),
     h("hr"),
     item(pick("t")), item(pick("a")), item(pick("q")), item(pick("k")),
+    ...(window.LoreSelection ? [item({ icon: "send", label: "交給 L-Echo", run: () => sendToEcho(info) })] : []),
   );
   paintIcons(m);
   placeAt(m, e.clientX, e.clientY);
@@ -2853,6 +2897,7 @@ function wire() {
   $("#searchClose").onclick = closeFind;
   $("#viewport").addEventListener("scroll", onScroll, { passive: true });
   $("#pages").addEventListener("contextmenu", onContextMenu);
+  window.LoreSelection?.watch({ gather: echoGather, apply: async () => "這份文件不能修改" });
   $("#pages").addEventListener("mouseup", () => setTimeout(showSelBar, 10));
   document.addEventListener("keyup", (e) => { if (e.shiftKey && e.key.startsWith("Arrow") && e.target.closest?.(".viewport")) showSelBar(); });
   document.addEventListener("selectionchange", () => { if (getSelection()?.isCollapsed) hideSelBar(); });

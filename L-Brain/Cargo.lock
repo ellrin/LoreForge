@@ -2211,6 +2211,7 @@ dependencies = [
 name = "lore-engines"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "lore-home",
  "lore-llm",

@@ -35,6 +35,7 @@
 //! | POST | /api/papers/{sha}/symbols/{id}/global | 加入全域: the row into the global 對照表 (`shared/notation.json`) |
 //! | GET | /api/notation/global | the global 對照表 (`shared/notation.json`; empty when missing) |
 //! | GET | /icons.js, /base.css, /shell.js, /makedeck.js, /makebook.js, /polish.js | the shared shell (`lore_shell::FILES`); /notation-panel.js the shared 對照表 component |
+//! | POST/GET | /api/lore/selection…, /api/lore/selected | selected text handed to L-Echo (`lore_shell::selection`, `/selection.js`); the page sends `readonly: true` and refuses every rewrite |
 //! | GET | /api/kb/status | is the KB server up, member, spaces |
 //! | POST | /api/kb/open | start the L-Brain app (macOS, local KB only; never when isolated) |
 //! | POST | /api/kb/cards | `{sha, page, title, summary, initial_state, kind?, context?, space?, web_sources?}` → the card through lore-cards (L-Brain's API, else its folder) |
@@ -311,7 +312,12 @@ pub fn router(shared: Shared) -> Router {
     let web = tower::ServiceBuilder::new()
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-cache")))
         .service(ServeDir::new(&shared.web).append_index_html_on_directories(true));
-    routes().merge(plot_routes(&shared)).merge(lore_engines::router(engines(&shared))).with_state(shared).fallback_service(web)
+    // selected text through L-Echo (read-only: a PDF is never changed); isolated = never reach or start it
+    let mut sel = lore_shell::selection::Selections::new("lr");
+    if shared.isolated {
+        sel = sel.with_echo(Arc::new(|_| Err("L-Echo 沒有開".to_string())));
+    }
+    routes().merge(plot_routes(&shared)).merge(lore_engines::router(engines(&shared))).merge(lore_shell::selection::router(sel)).with_state(shared).fallback_service(web)
 }
 
 /// The shell's 模型 tab (`GET/PUT /api/engines`) and `POST /api/links/open`, shared by every

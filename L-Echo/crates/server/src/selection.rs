@@ -8,7 +8,7 @@
 //! | method | path | what |
 //! |---|---|---|
 //! | POST | /api/selection | a `SelectionRequest` from an app's server → kept, the window opens → `{ok}` |
-//! | GET | /api/selection | `{open, request?, app?, doc?, source?, text?, scope?, language?, kind?}` (the page polls) |
+//! | GET | /api/selection | `{open, request?, app?, doc?, source?, text?, scope?, language?, kind?, readonly?}` (the page polls) |
 //! | POST | /api/selection/end | the app is told, the request is dropped |
 //! | POST | /api/selection/apply `{after, polish?}` | → the app's page; ok → `{ok, message}` (and the app's `/api/polish/applied` when `polish`); the app's 409/410/504 pass through |
 //! | POST/GET | /api/selection/polish, /polish/{applied,like,history,presets}, /lore/card | forwarded unchanged to the app's `/api/polish…`, `/api/lore/card` while a request is open (else 409) |
@@ -135,6 +135,8 @@ async fn sel_get(State(s): State<Shared>) -> Json<Value> {
         Some(r) => json!({
             "open": true, "request": r.request, "app": r.app, "doc": r.doc, "source": r.source,
             "text": r.text, "scope": r.scope, "language": r.language, "kind": kind(&r.text),
+            // a document that cannot be changed (a PDF): no rewrite, nothing sent back
+            "readonly": r.readonly,
             // what a rewrite or a question about it needs: the rest of its paragraph and the page
             "prefix": r.prefix, "suffix": r.suffix, "context": r.context, "keep": r.keep,
         }),
@@ -259,7 +261,7 @@ mod tests {
     #[test]
     fn selection_names_and_limits() {
         assert!(short_name("sc") && short_name("pc") && !short_name("") && !short_name("../x") && !short_name("SC") && !short_name("toolongname"));
-        let ok = SelectionRequest { request: "r1".into(), app: "sc".into(), port: Some(7000), doc: "d".into(), source: String::new(), text: "一句".into(), prefix: String::new(), suffix: String::new(), context: String::new(), scope: String::new(), keep: vec![], language: None };
+        let ok = SelectionRequest { request: "r1".into(), app: "sc".into(), port: Some(7000), doc: "d".into(), source: String::new(), text: "一句".into(), prefix: String::new(), suffix: String::new(), context: String::new(), scope: String::new(), keep: vec![], language: None, readonly: false };
         assert_eq!(invalid(&ok), None);
         assert!(invalid(&SelectionRequest { port: Some(0), ..ok.clone() }).is_some());
         assert!(invalid(&SelectionRequest { text: " ".into(), ..ok.clone() }).is_some());

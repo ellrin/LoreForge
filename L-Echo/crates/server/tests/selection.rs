@@ -116,7 +116,7 @@ async fn selection_request_apply_refuse_proxies_and_end() {
     let (c, v) = call(&s, "POST", "/api/selection", request("r1", port, "注意力機制")).await;
     assert_eq!((c, v), (StatusCode::OK, json!({ "ok": true })));
     let v = call(&s, "GET", "/api/selection", Value::Null).await.1;
-    assert_eq!(v, json!({ "open": true, "request": "r1", "app": "sc", "doc": "deck-a", "source": "slide 3", "text": "注意力機制", "scope": "bullet", "language": "zh", "kind": "term", "prefix": "前", "suffix": "後", "context": "整段", "keep": [] }));
+    assert_eq!(v, json!({ "open": true, "request": "r1", "app": "sc", "doc": "deck-a", "source": "slide 3", "text": "注意力機制", "scope": "bullet", "language": "zh", "kind": "term", "prefix": "前", "suffix": "後", "context": "整段", "keep": [], "readonly": false }));
 
     // apply with a polish id: the app hears the result, then the proposal was used
     let (c, v) = call(&s, "POST", "/api/selection/apply", json!({ "after": "注意力", "polish": "p1" })).await;
@@ -184,7 +184,11 @@ async fn selection_a_new_request_ends_the_old_one() {
     let (first, first_log) = fake_app(Arc::default()).await;
     let (second, second_log) = fake_app(Arc::default()).await;
     assert_eq!(call(&s, "POST", "/api/selection", request("r1", first, "softmax")).await.0, StatusCode::OK);
-    assert_eq!(call(&s, "POST", "/api/selection", request("r2", second, "This method works well on every dataset we tried.")).await.0, StatusCode::OK);
+    // the second from a read-only document (a PDF): readonly is shown to the page
+    let mut r2 = request("r2", second, "This method works well on every dataset we tried.");
+    r2["app"] = json!("lr");
+    r2["readonly"] = json!(true);
+    assert_eq!(call(&s, "POST", "/api/selection", r2).await.0, StatusCode::OK);
     let mut heard = vec![];
     for _ in 0..200 {
         heard = first_log.lock().unwrap().clone();
@@ -196,7 +200,7 @@ async fn selection_a_new_request_ends_the_old_one() {
     assert_eq!(heard, vec![("/api/lore/selected".to_string(), json!({ "request": "r1", "end": true }))]);
     assert!(second_log.lock().unwrap().is_empty());
     let v = call(&s, "GET", "/api/selection", Value::Null).await.1;
-    assert_eq!((v["request"].as_str(), v["kind"].as_str()), (Some("r2"), Some("passage")));
+    assert_eq!((v["request"].as_str(), v["kind"].as_str(), v["readonly"].as_bool()), (Some("r2"), Some("passage"), Some(true)));
 }
 
 #[tokio::test]

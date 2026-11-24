@@ -12,7 +12,7 @@
 //!
 //! | method | path | who | what |
 //! |---|---|---|---|
-//! | POST | /api/lore/selection | the app's page | `{doc, source, text, prefix, suffix, context, scope, keep, language?, launch}` → `{request}`; 503 when L-Echo is not reached |
+//! | POST | /api/lore/selection | the app's page | `{doc, source, text, prefix, suffix, context, scope, keep, language?, readonly?, launch}` → `{request}`; 503 when L-Echo is not reached; `readonly` (a PDF) = L-Echo offers no rewrite |
 //! | GET | /api/lore/selection/{request} | the app's page | `{open, pending: [{seq, after, polish}], error}` (polled while open) |
 //! | POST | /api/lore/selection/{request}/done | the app's page | `{seq, ok, error?}`: the page applied (or refused) item `seq` |
 //! | POST | /api/lore/selected | L-Echo | `{request, after, polish?}` → `{ok, message}`, 409 refused by the page, 410 closed, 504 no answer; `{request, end: true}` closes it |
@@ -66,6 +66,9 @@ pub struct SelectionRequest {
     pub keep: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// The document cannot be changed (a PDF): L-Echo offers no rewrite and sends nothing back.
+    #[serde(default)]
+    pub readonly: bool,
 }
 
 /// What L-Echo sends back (`POST /api/lore/selected` on the app).
@@ -217,6 +220,8 @@ struct SelectionBody {
     #[serde(default)]
     language: Option<String>,
     #[serde(default)]
+    readonly: bool,
+    #[serde(default)]
     launch: bool,
 }
 
@@ -273,6 +278,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(sel: Selections) -> axum::Router
                         scope: b.scope,
                         keep: b.keep,
                         language: b.language.filter(|l| !l.trim().is_empty()),
+                        readonly: b.readonly,
                     };
                     {
                         // one open request per document: the new selection ends the old one
@@ -413,6 +419,15 @@ mod tests {
         let r: SelectionRequest = serde_json::from_value(got.lock().unwrap()[0].clone()).unwrap();
         assert_eq!((r.request.as_str(), r.app.as_str(), r.port, r.doc.as_str(), r.text.as_str(), r.keep.clone(), r.language.as_deref()), (id.as_str(), "sc", Some(7878), "deck-a", "舊的句子", vec!["\\ref{fig:a}".to_string()], Some("zh")));
         assert!(got.lock().unwrap()[0].get("launch").is_none());
+        assert_eq!(got.lock().unwrap()[0]["readonly"], json!(false), "readonly defaults to false");
+
+        // a read-only document (a PDF): readonly reaches L-Echo
+        let mut ro = body("paper-a", "一段", false);
+        ro["readonly"] = json!(true);
+        let (c, v) = call(&app, "POST", "/api/lore/selection", ro).await;
+        assert_eq!(c, 200, "{v}");
+        let r: SelectionRequest = serde_json::from_value(got.lock().unwrap()[1].clone()).unwrap();
+        assert!(r.readonly);
 
         // L-Echo sends a result; the page polls, applies, says done; L-Echo hears ok
         let a2 = app.clone();
@@ -558,7 +573,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         });
-        let req = SelectionRequest { request: id, app: "sc".into(), port: Some(port), doc: "d".into(), source: String::new(), text: "一句".into(), prefix: String::new(), suffix: String::new(), context: String::new(), scope: String::new(), keep: vec![], language: None };
+        let req = SelectionRequest { request: id, app: "sc".into(), port: Some(port), doc: "d".into(), source: String::new(), text: "一句".into(), prefix: String::new(), suffix: String::new(), context: String::new(), scope: String::new(), keep: vec![], language: None, readonly: false };
         let r = tokio::task::spawn_blocking(move || (send_selected(&req, "改好", None), end_selection(&req), send_selected(&req, "再改", None))).await.unwrap();
         assert_eq!(r.0, Ok("已套用".to_string()));
         assert_eq!(r.1, Ok(()));

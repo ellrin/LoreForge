@@ -70,6 +70,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   sources, then `POST /api/nodes`; `save: false` = the add-card dialog's 起草摘要), 懂了 (`reading.json`), and `chat_context` (title, section, paragraph, chip
   + its definition here, the author's KB states) for Ask Claude.
   `Printer` / `Saver` traits = the desktop print / save-panel bridges.
+  Selected text to L-Echo: `lore_shell::selection::router(Selections::new("lr"))` (isolated = L-Echo never reached) and `/selection.js`; the page's `echoGather` sends `{doc: sha, source: title, text, context: pageWindow(…) ±1,200 characters, scope: 第 n 頁[：section], readonly: true}` from the last selection the bar resolved, 右鍵 → 交給 L-Echo = `LoreSelection.send()`, every rewrite is refused (「這份文件不能修改」); `web/tests/selection.test.js` (node) tests `pageWindow`.
 - `apps/desktop` (`lorereader`): Tauri shell on 7890 (KB links point there); reuses an
   lr-server already on 7890, else binds it (free port if taken). Registers `NativePrinter`:
   print.html in a window, `WebviewWindow::print()` when `/api/print/ready` arrives.

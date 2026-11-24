@@ -5,6 +5,8 @@
 // its routes proxied under /api/selection; 翻譯 = a fixed instruction sent at once), the result
 // goes back to the app with 套用 and lands on the selection there. 解釋 and 問他 are chat turns
 // that carry the selection (send() asks take()). 加入知識庫 is the app's own add-card route.
+// A read-only document (`readonly`, a PDF): no 改寫, and 翻譯 is a chat turn; nothing goes back.
+// No 加入知識庫 there either for now: L-Reader adds cards with its own 一鍵加卡, it has no /api/lore/card.
 // Esc closes the rewrite, then the selection; 新對話, collapse or a new selection end it.
 "use strict";
 
@@ -12,12 +14,12 @@ window.LoreEchoSel = (() => {
   const X = { req: null, panel: null, slot: null, dirs: null, watch: null, armed: null, busy: false, ended: null };
   const TERM = [["card", "cards", "加入知識庫"], ["explain", "spark", "解釋"], ["translate", "languages", "翻譯"]];
   const PASSAGE = [["rewrite", "polish", "改寫"], ["translate", "languages", "翻譯"], ["ask", "chat", "問他"]];
-  // 翻譯: the direction, the fixed instruction, the language of the result
+  // 翻譯: the direction, the fixed instruction, the language of the result, the chat turn (read-only)
   const DIRS = [
-    ["中 → 英", "翻譯成英文，保持原意", "en"],
-    ["英 → 中", "翻譯成繁體中文，保持原意", "zh-TW"],
-    ["中 → 日", "翻譯成日文，保持原意", "ja"],
-    ["日 → 中", "翻譯成繁體中文，保持原意", "zh-TW"],
+    ["中 → 英", "翻譯成英文，保持原意", "en", "翻譯成英文"],
+    ["英 → 中", "翻譯成繁體中文，保持原意", "zh-TW", "翻譯成中文"],
+    ["中 → 日", "翻譯成日文，保持原意", "ja", "翻譯成日文"],
+    ["日 → 中", "翻譯成繁體中文，保持原意", "zh-TW", "翻譯成中文"],
   ];
   const box = () => $("box");
 
@@ -45,14 +47,14 @@ window.LoreEchoSel = (() => {
     const r = X.req;
     const where = [r.scope, r.source].find((x) => x && x.trim()) ?? "";
     const acts = h("div", { class: "sel-acts", role: "group", "aria-label": "對選取的文字" },
-      (r.kind === "term" ? TERM : PASSAGE).map(([id, ic, label]) => {
+      (r.kind === "term" ? TERM : PASSAGE).filter(([id]) => !(r.readonly && (id === "rewrite" || id === "card"))).map(([id, ic, label]) => {
         const b = h("button", { type: "button", class: "btn small", "data-act": id, onclick: () => act(id) }, h("span", { "data-icon": ic }), label);
         if (id === "translate") { b.append(h("span", { class: "caret", "data-icon": "chevron" })); b.setAttribute("aria-expanded", "false"); }
         if (id === "ask") b.setAttribute("aria-pressed", "false");
         return b;
       }));
     X.dirs = h("div", { class: "sel-dirs", hidden: true }, h("div", { class: "seg", role: "group", "aria-label": "翻譯方向" },
-      DIRS.map(([label, instruction, language]) => h("button", { type: "button", onclick: () => rewrite({ instruction, language }) }, label))));
+      DIRS.map(([label, instruction, language, turn]) => h("button", { type: "button", onclick: () => (r.readonly ? chatTurn(turn) : rewrite({ instruction, language })) }, label))));
     X.slot = h("div", { class: "sel-work" });
     X.panel = h("div", { class: "sel", id: "sel" },
       where ? h("div", { class: "sel-scope" }, where) : null,
@@ -89,6 +91,12 @@ window.LoreEchoSel = (() => {
     else if (id === "ask") { arm(true); $("text").focus(); }
     else if (id === "explain") { X.armed = "explain"; $("text").value = `解釋「${X.req.text.trim()}」`; send(); }
     else if (id === "card") card();
+  }
+
+  /** 翻譯 of a read-only selection: a chat turn that carries it; the reply is the translation. */
+  function chatTurn(message) {
+    dirs(false); arm(false);
+    X.armed = "translate"; $("text").value = message; send();
   }
 
   /** 改寫 (he says how) or 翻譯 (the instruction runs at once): the app's 語句潤飾, drawn in the box. */
