@@ -21,7 +21,8 @@
 //! | POST | /api/hub/import?own=1 | an outside application's batch (JSON) |
 //! | GET | /api/hub/export?category=&source= | a category as a batch file |
 //! | GET | /api/hub/sources | outside applications and where their items are |
-//! | * | /flow/… | the shared flow editor (`lore_flow::web::router`), no model task wired |
+//! | GET/POST | /api/hub/make/{id}, POST …/draft | making a 待製作 reference in the flow editor (`figmake.rs`) |
+//! | * | /flow/… | the shared flow editor (`lore_flow::web::router`), its model calls through L-Brain's routing |
 //!
 //! Every error is a status and `{ "error": "<one line, Traditional Chinese>" }`; no absolute path
 //! is ever put into a response.
@@ -138,9 +139,8 @@ pub fn routes(shared: &Shared) -> Router<Shared> {
         .route("/api/hub/import", post(import).layer(big()))
         .route("/api/hub/export", get(export))
         .route("/api/hub/sources", get(sources))
-        // the shared flow editor; no model task is wired (the kb-server's lore-llm routing is not
-        // the one lore-flow's `Llm` trait takes, and the hub does not need it)
-        .merge(lore_flow::web::router::<Shared>(shared.flow.clone()))
+        // the shared flow editor, with this app's model routing (`figmake::FlowLlm`)
+        .merge(lore_flow::web::router::<Shared>(shared.flow.clone().with_llm(std::sync::Arc::new(crate::figmake::FlowLlm(shared.llm.clone())))))
 }
 
 // ── errors ───────────────────────────────────────────────────────────────────
@@ -209,9 +209,9 @@ impl IntoResponse for HubError {
     }
 }
 
-type R = Result<Json<Value>, HubError>;
+pub(crate) type R = Result<Json<Value>, HubError>;
 
-fn ok(v: impl serde::Serialize) -> R {
+pub(crate) fn ok(v: impl serde::Serialize) -> R {
     Ok(Json(serde_json::to_value(v).map_err(|_| HubError::new(StatusCode::INTERNAL_SERVER_ERROR, "回覆組不起來。"))?))
 }
 
@@ -226,14 +226,14 @@ pub(crate) fn hub(s: &Shared) -> Result<Guard<'_>, HubError> {
     Ok(m.lock().unwrap_or_else(|p| p.into_inner()))
 }
 
-fn not_found(what: &str) -> HubError {
+pub(crate) fn not_found(what: &str) -> HubError {
     HubError::new(StatusCode::NOT_FOUND, format!("找不到：{what}"))
 }
 
 // ── rows ─────────────────────────────────────────────────────────────────────
 
 /// What a list row carries beyond the item: its one line and its picture.
-fn row(h: &lore_know::hub::Hub, item: &Item) -> Value {
+pub(crate) fn row(h: &lore_know::hub::Hub, item: &Item) -> Value {
     let line = h.formats.get(&item.format).map(|f| f.line(item)).unwrap_or_default();
     let pictured = item.format == format::FIGURE && (item.entity || !item.field("image").is_empty());
     let thumb = if pictured { format!("/api/hub/thumb/{}", item.id) } else { String::new() };
@@ -600,7 +600,7 @@ const PICTURE_TYPES: [(&str, &str); 4] = [("png", "image/png"), ("jpg", "image/j
 
 /// The picture file of a reference item, only if it is a plain file name of a known picture type
 /// inside the item's own folder (a link out of the folder is refused). `(bytes, content type)`.
-fn reference_picture(h: &lore_know::hub::Hub, app_dirs: &BTreeMap<String, PathBuf>, item: &Item) -> Option<(Vec<u8>, &'static str)> {
+pub(crate) fn reference_picture(h: &lore_know::hub::Hub, app_dirs: &BTreeMap<String, PathBuf>, item: &Item) -> Option<(Vec<u8>, &'static str)> {
     let cat = h.store.registry().get(&item.category)?;
     if cat.native.kind != "dir" {
         return None;

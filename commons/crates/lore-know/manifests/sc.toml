@@ -27,6 +27,16 @@ app_dir = "SlideComposer"
 path = "flow/examples"
 
 [[category]]
+id = "sc.flowspecs"
+label = "流程圖（做好的）"
+app = "sc"
+group = "流程圖"
+format = "figure"
+tasks = ["sc-flow-graph", "flow-discuss", "flow-assist"]
+writable = true
+# whole figures (the flow editor's spec) made in the hub: the hub's own records, no app folder
+
+[[category]]
 id = "sc.voice"
 label = "論述法"
 app = "sc"

@@ -288,6 +288,12 @@ impl Hub {
 
     /// The SVG of a drawable figure item, drawn by the flow tool (a reference is not drawn: its
     /// picture is a file the caller serves).
+    /// The flow tool's catalogue as this hub reads it (for drawing a spec before it is stored).
+    pub fn catalogue(&self) -> Catalogue {
+        let dirs: Vec<&Path> = self.flow_dirs.iter().map(PathBuf::as_path).collect();
+        Catalogue::load_all(&dirs)
+    }
+
     pub fn thumbnail(&self, id: &str) -> Result<String> {
         let item = self.store.get(id)?.ok_or_else(|| KnowError::NotFound(id.into()))?;
         if item.format != format::FIGURE {
@@ -304,6 +310,30 @@ mod tests {
     use crate::intake::{Entry, Target};
 
     const DRAWING: &str = include_str!("../../../../private-example/SlideComposer/flow/modules/document/page.json");
+
+
+    /// The figure family with a records category for whole figures (`sc.flowspecs` in the real manifest).
+    const SPEC_MANIFEST: &str = r#"
+[[category]]
+id = "t.refs"
+label = "參考圖"
+app = "t"
+group = "圖"
+format = "figure"
+writable = true
+[category.native]
+kind = "dir"
+app_dir = "App"
+path = "refs"
+
+[[category]]
+id = "t.specs"
+label = "做好的"
+app = "t"
+group = "圖"
+format = "figure"
+writable = true
+"#;
 
     const MANIFEST: &str = r#"
 [[category]]
@@ -613,7 +643,7 @@ writable = true
             ids,
             [
                 "pc.patterns", "pc.expressions", "pc.rules", "pc.wording", "pc.exemplars", "pc.notes", "pc.templates", "pc.venues", "pc.stylerefs",
-                "sc.flow", "sc.flowrefs", "sc.voice", "sc.styles", "sc.arrangements", "shared.plotstyles"
+                "sc.flow", "sc.flowrefs", "sc.flowspecs", "sc.voice", "sc.styles", "sc.arrangements", "shared.plotstyles"
             ]
         );
         let c = |id: &str| reg.get(id).unwrap().clone();
@@ -633,7 +663,7 @@ writable = true
             ["PaperComposer", "SlideComposer", "shared"].iter().map(|n| (n.to_string(), root.path().join(n))).collect();
         let h = Hub::open(hub.path().to_path_buf(), &crate::reader::builtin_manifests(), &dirs, &[]).unwrap();
         let counts = h.counts().unwrap();
-        assert_eq!(counts.len(), 15);
+        assert_eq!(counts.len(), 16);
         // the flow tool's own generators are there without any folder; everything else is empty
         for c in counts.iter().filter(|c| c.category != "sc.flow") {
             assert_eq!(c.total, 0, "{}", c.category);
@@ -713,5 +743,26 @@ writable = true
         assert_eq!(h.store.get(&ids_[0]).unwrap().unwrap().used, 1);
         let log = crate::reader::usage(hub.path(), day("2026-11-01"));
         assert_eq!(log, vec![(day("2026-11-24"), "draft".to_string(), ids_)]);
+    }
+
+    #[test]
+    fn a_figure_spec_is_stored_listed_and_drawn() {
+        let (hub, root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let dirs = BTreeMap::from([("App".to_string(), root.path().to_path_buf())]);
+        let mut h = Hub::open(hub.path().to_path_buf(), &[SPEC_MANIFEST], &dirs, &[]).unwrap();
+        let spec = serde_json::json!({ "lore_flow": 1, "dsl": "fig demo\nx: image \"Input\"\nf: box \"Model\"\ny: label \"Output\"\nx -> f -> y\n" });
+        let mut it = figure::spec_item("t.specs", "Pipeline", &spec, Source::author());
+        it.contains = figure::parts_of(&spec, &[]);
+        let put = h.put(it).unwrap();
+        assert!(put.id.starts_with("t.specs:"), "{}", put.id);
+        let got = h.query(&Query { category: Some("t.specs".into()), ..Default::default() }).unwrap().0;
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].field("what"), got[0].level.as_str(), got[0].entity), ("spec", "figure", true));
+        assert_eq!(got[0].fields["params"]["lore_flow"], 1);
+        assert!(h.thumbnail(&put.id).unwrap().contains("<svg"));
+        // changing it bumps the revision
+        let mut again = put.clone();
+        again.title = "Pipeline 2".into();
+        assert_eq!(h.put(again).unwrap().revision, put.revision + 1);
     }
 }

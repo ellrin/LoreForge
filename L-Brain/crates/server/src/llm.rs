@@ -120,7 +120,7 @@ impl Llm {
     }
 
     pub fn task_table(user_file: Option<&Path>) -> Result<TaskTable, String> {
-        let base = TaskTable::bundled().merge(TaskTable::parse(TASKS)?);
+        let base = TaskTable::bundled().merge(TaskTable::parse(TASKS)?).merge(lore_flow::llm::task_table());
         TaskTable::load(base, user_file.filter(|p| p.is_file()))
     }
 

@@ -134,7 +134,11 @@ impl crate::hub::Hub {
             let (parts, to_make) = if has_figure {
                 let figs: Vec<&Item> = cats.iter().filter(|c| c.format == format::FIGURE).flat_map(|c| items[&c.id].iter()).collect();
                 let at = |lv: &str| figs.iter().filter(|i| i.entity && i.level == lv).count();
-                let to_make = figs.iter().filter(|i| !i.entity).count();
+                // a reference is made once a drawable figure is linked to it: the reference lists it
+                // in `contains`, or the figure names the reference in `made_from`
+                let drawable: BTreeSet<&str> = figs.iter().filter(|i| i.entity).map(|i| i.id.as_str()).collect();
+                let made_from: BTreeSet<&str> = figs.iter().filter(|i| i.entity).map(|i| i.field("made_from")).filter(|m| !m.is_empty()).collect();
+                let to_make = figs.iter().filter(|i| !i.entity && !made_from.contains(i.id.as_str()) && !i.contains.iter().any(|c| drawable.contains(c.as_str()))).count();
                 let part = |label: &str, count: usize| Part { category: first.id.clone(), label: label.into(), count };
                 (
                     vec![part("流程圖", at(level::FIGURE)), part("模塊", at(level::MODULE)), part("元件", at(level::COMPONENT)), part("待製作", to_make)],
@@ -428,5 +432,35 @@ tasks = ["polish"]
         assert_eq!(s.total, 2 + 1 + 2 + 2 + 4);
         assert_eq!(fam(&s, "t/準則").count, 3 + 4);
         let _: PathBuf = hub.path().to_path_buf();
+    }
+
+    #[test]
+    fn the_family_counts_it_as_a_figure() {
+        const M: &str = "[[category]]\nid = \"t.refs\"\nlabel = \"參考圖\"\napp = \"t\"\ngroup = \"圖\"\nformat = \"figure\"\nwritable = true\n[category.native]\nkind = \"dir\"\napp_dir = \"App\"\npath = \"refs\"\n\n[[category]]\nid = \"t.specs\"\nlabel = \"做好的\"\napp = \"t\"\ngroup = \"圖\"\nformat = \"figure\"\nwritable = true\n";
+        let (hub, root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        for f in ["f01", "f02"] {
+            std::fs::create_dir_all(root.path().join("refs").join(f)).unwrap();
+            std::fs::write(root.path().join("refs").join(f).join("desc.md"), format!("# {f} Pipeline\n\nBoxes.\n")).unwrap();
+        }
+        let dirs = BTreeMap::from([("App".to_string(), root.path().to_path_buf())]);
+        let mut h = Hub::open(hub.path().to_path_buf(), &[M], &dirs, &[]).unwrap();
+        let parts = |h: &Hub| -> Vec<(String, usize)> { fam(&h.stats(d("2026-11-24")).unwrap(), "t/圖").parts.iter().map(|p| (p.label.clone(), p.count)).collect() };
+        assert_eq!(parts(&h), [("流程圖".to_string(), 0), ("模塊".to_string(), 0), ("元件".to_string(), 0), ("待製作".to_string(), 2)]);
+        // a whole figure made from f01: it counts under 流程圖, and f01 is no longer to make
+        let spec = serde_json::json!({ "lore_flow": 1, "dsl": "fig demo\nx: box \"A\"\n" });
+        let made = h.put(crate::formats::figure::spec_item("t.specs", "Made", &spec, Source::author())).unwrap();
+        assert_eq!(parts(&h)[3].1, 2, "not linked yet: both still wait");
+        let mut r = h.store.get("t.refs:f01").unwrap().unwrap();
+        r.contains.push(made.id.clone());
+        h.put(r).unwrap();
+        let s = h.stats(d("2026-11-24")).unwrap();
+        let f = fam(&s, "t/圖");
+        assert_eq!(f.parts.iter().map(|p| (p.label.as_str(), p.count)).collect::<Vec<_>>(), [("流程圖", 1), ("模塊", 0), ("元件", 0), ("待製作", 1)]);
+        assert_eq!(f.gap, "1 個待製作");
+        // the figure's own `made_from` is enough as well
+        let mut m = h.store.get(&made.id).unwrap().unwrap();
+        m.set("made_from", "t.refs:f02");
+        h.put(m).unwrap();
+        assert_eq!(parts(&h)[3].1, 0);
     }
 }
