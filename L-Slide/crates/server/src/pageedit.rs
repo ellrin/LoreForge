@@ -11,8 +11,12 @@
 //! - `set_text {slide, obj, paras: [string]}`: an object that holds text, each paragraph within the
 //!   limit of the object's role (`todeck::plan::limit`), `$…$` inline math (registry macros);
 //! - `set_notes {slide, text}`: speaker notes in `plan::NOTES_SHAPE`;
-//! - `split_slide {slide, groups: [[obj]], titles: [string], notes: [string]}`: every groupable
-//!   object of the slide in exactly one group, one title and one notes text per group;
+//! - `split_slide {slide, groups: [[member]], titles: [string], notes: [string]}`: every groupable
+//!   object of the slide in exactly one group, one title and one notes text per group. A member is
+//!   an object id or `{obj, paras: [n]}` (1-based paragraphs of a text box): the box's paragraphs
+//!   are divided between the pages, each page getting the box with its own paragraphs (the
+//!   paragraphs themselves untouched; a display equation goes with the line above it). Each page's
+//!   notes keep the old notes' sentences that define a symbol the page uses (`carry_symbols`);
 //! - `insert_slide {after, kind, title, blocks: [{role, text}], notes?}`: `kind` a 論文報告 page role,
 //!   blocks `bullet` / `takeaway` / `suggest`, built by `todeck::build::build` like that page kind.
 //! - `split_object {slide, obj, parts: [string], arrange: "2x2" | "row" | "column"}`: one text
@@ -43,9 +47,9 @@
 //! | GET | /api/decks/{name}/page-edit/{id}/deck | the preview deck (for `print.html?preview=`) |
 //! | GET | /api/decks/{name}/page-edit/{id}/image/{which} | `before-0`, `after-0`, … PNG |
 //! | POST | /api/decks/{name}/page-edit/{id}/apply | `{request?}` → changed slides; 409 when a slide changed since |
-//! | POST | /api/decks/{name}/page-edit/{id}/undo | undo, only while the editor's next undo is that edit |
+//! | POST | /api/decks/{name}/page-edit/{id}/undo | undo, only while the editor's next undo is that edit: through the page that applied it (`PageQueue::undo`), the server itself when that page is gone; `{undone: "page" | "server" | "already"}` (already: the author undid it in the app) |
 //!
-//! A proposal is `{id, before: [url], after: [url], plan, findings: [{slide, kind, text}], warnings}`.
+//! A proposal is `{id, before: [url], after: [url], plan, findings: [{slide, page?, kind, text}], warnings}`.
 //! Each proposal and apply is a line of `decks/<name>/page-edit-log.jsonl`; previews live in memory
 //! (the last [`KEEP`] per deck) and vanish on restart.
 
@@ -102,6 +106,28 @@ pub struct Block {
     pub text: String,
 }
 
+/// What a group of a `split_slide` holds: a whole object, or some paragraphs (1-based) of a text box.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Member {
+    Obj(u32),
+    Paras { obj: u32, paras: Vec<usize> },
+}
+
+impl Member {
+    fn obj(&self) -> u32 {
+        match self {
+            Member::Obj(id) | Member::Paras { obj: id, .. } => *id,
+        }
+    }
+}
+
+impl From<u32> for Member {
+    fn from(id: u32) -> Member {
+        Member::Obj(id)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "edit", rename_all = "snake_case")]
 pub enum Edit {
@@ -119,7 +145,7 @@ pub enum Edit {
     SplitSlide {
         #[serde(default)]
         slide: String,
-        groups: Vec<Vec<u32>>,
+        groups: Vec<Vec<Member>>,
         titles: Vec<String>,
         #[serde(default)]
         notes: Vec<String>,
@@ -194,10 +220,27 @@ impl Edit {
 pub struct Finding {
     #[serde(default)]
     pub slide: String,
+    /// The slide's page number once the edit is applied (a slide the edit makes has no other name
+    /// for the author); the text never repeats it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<usize>,
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
     pub text: String,
+}
+
+/// What an unknown kind's reason adds for the model after the author's warning.
+const UNKNOWN_TAIL: &str = "（只能用 ";
+
+impl Finding {
+    /// The finding as one line with its page (for the model, and the log's reader).
+    pub fn line(&self) -> String {
+        match self.page {
+            Some(n) if !self.text.starts_with(&format!("第 {n} 頁")) => format!("第 {n} 頁{}", self.text),
+            _ => self.text.clone(),
+        }
+    }
 }
 
 /// The model's plan as edits: (edits, reasons for the model and the author, warnings).
@@ -221,10 +264,18 @@ pub fn parse_plan(v: &Value, targets: &[String]) -> (Vec<Edit>, Vec<String>, Vec
                 edits.push(e)
             }
             Err(_) if kind.is_empty() || !KINDS.contains(&kind) => {
-                warnings.push(format!("不認得的修改「{}」，沒有做", plan::clip(kind, 30)));
-                reasons.push(format!("edit {}: unknown kind \"{}\"", i + 1, plan::clip(kind, 30)));
+                // one line for both readers: the author is told once (`run` does not repeat a
+                // reason that is already a warning), the model reads the kinds it may use
+                let w = format!("不認得的修改「{}」，沒有做", plan::clip(kind, 30));
+                if !warnings.contains(&w) {
+                    warnings.push(w.clone());
+                }
+                let r = format!("{w}{UNKNOWN_TAIL}{}）", KINDS.join(", "));
+                if !reasons.contains(&r) {
+                    reasons.push(r);
+                }
             }
-            Err(e) => reasons.push(format!("edit {} ({kind}): 格式不對（{e}）", i + 1)),
+            Err(e) => reasons.push(format!("第 {} 個修改（{kind}）：格式不對（{e}）", i + 1)),
         }
     }
     (edits, reasons, warnings)
@@ -394,7 +445,7 @@ pub fn prepare(live: &Editor, targets: &[String], edits: &[Edit], env: &Env) -> 
                 continue;
             }
         };
-        let before = notation_keys(&work.deck, env);
+        let (before, was) = (notation_keys(&work.deck, env), work.deck.clone());
         let applied = match work.apply(ops.clone(), LABEL) {
             Ok(a) => a,
             Err(r) => {
@@ -402,8 +453,14 @@ pub fn prepare(live: &Editor, targets: &[String], edits: &[Edit], env: &Env) -> 
                 continue;
             }
         };
-        let after = notation_keys(&work.deck, env);
-        let new: Vec<String> = after.iter().filter(|(k, _)| !before.contains_key(*k)).map(|(_, m)| m.clone()).collect();
+        let (after, mut warn) = (notation_issues(&work.deck, env), warn);
+        let mut new: Vec<String> = vec![];
+        for (k, i) in after.iter().filter(|(k, _)| !before.contains_key(*k)) {
+            match order_was_so(i, &was, &work.deck, &applied.slides, env) {
+                Some(w) => warn.push(w),
+                None => new.push(i["message"].as_str().unwrap_or(&k.1).to_string()),
+            }
+        }
         if !new.is_empty() {
             work.undo();
             out.reasons.push(format!("{at}：沒有通過對照表檢查：{}", new.join("；")));
@@ -477,7 +534,6 @@ pub fn check(ed: &Editor, e: &Edit, env: &Env) -> Result<(), Vec<String>> {
         }
         Edit::SetNotes { text, .. } => r.extend(notes_ok(text)),
         Edit::SplitSlide { groups, titles, notes, .. } => {
-            let all: BTreeSet<u32> = groupable(s, h).into_iter().collect();
             if groups.len() < 2 {
                 r.push("拆頁至少要兩組".into());
             }
@@ -490,22 +546,8 @@ pub fn check(ed: &Editor, e: &Edit, env: &Env) -> Result<(), Vec<String>> {
             if title_object(s, h).is_none() {
                 r.push("這一頁沒有標題物件，沒辦法拆".into());
             }
-            let mut seen: BTreeMap<u32, usize> = BTreeMap::new();
-            for (gi, g) in groups.iter().enumerate() {
-                if g.is_empty() {
-                    r.push(format!("第 {} 組是空的", gi + 1));
-                }
-                for id in g {
-                    if !all.contains(id) {
-                        r.push(format!("物件 {id} 不能分組（不存在，或是標題、頁首、Ref 這類每頁都有的）"));
-                    } else if let Some(prev) = seen.insert(*id, gi) {
-                        r.push(format!("物件 {id} 同時在第 {} 組和第 {} 組", prev + 1, gi + 1));
-                    }
-                }
-            }
-            let missing: Vec<String> = all.iter().filter(|id| !seen.contains_key(id)).map(|id| id.to_string()).collect();
-            if !missing.is_empty() {
-                r.push(format!("物件 {} 沒有放進任何一組", missing.join("、")));
+            if let Err(e) = split_parts(s, h, groups) {
+                r.extend(e);
             }
             for t in titles {
                 if t.trim().is_empty() {
@@ -856,6 +898,184 @@ fn rebuild(old: &TextBody, texts: &[String], env: &Env) -> Result<Vec<Para>, Str
         .collect()
 }
 
+/// What one page of a split holds: object id → the whole object (`None`) or these of its
+/// paragraphs (0-based, in the box's order).
+type Part = BTreeMap<u32, Option<Vec<usize>>>;
+
+/// The groups of a `split_slide` as pages, or why they cannot be: every groupable object in
+/// exactly one group, whole or by paragraphs; a box divided by paragraphs holds text, each of
+/// its lines in exactly one group, a display equation with the line above it (left out, it
+/// follows that line by itself), blank paragraphs with the paragraph before them.
+fn split_parts(s: &Slide, h: i64, groups: &[Vec<Member>]) -> Result<Vec<Part>, Vec<String>> {
+    let all: BTreeSet<u32> = groupable(s, h).into_iter().collect();
+    let mut r = vec![];
+    let mut whole: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut by_para: BTreeMap<u32, BTreeMap<usize, usize>> = BTreeMap::new();
+    let mixed = |id: u32| format!("物件 {id} 有的組給整個、有的組給段落：一個物件只用一種寫法");
+    for (gi, g) in groups.iter().enumerate() {
+        if g.is_empty() {
+            r.push(format!("第 {} 組是空的（只有一個文字框的頁，用 {{\"obj\": id, \"paras\": [n, …]}} 把它的段落分到各組）", gi + 1));
+        }
+        for m in g {
+            let id = m.obj();
+            if !all.contains(&id) {
+                r.push(format!("物件 {id} 不能分組（不存在，或是標題、頁首、Ref 這類每頁都有的）"));
+                continue;
+            }
+            match m {
+                Member::Obj(_) => {
+                    if by_para.contains_key(&id) {
+                        r.push(mixed(id));
+                    } else if let Some(prev) = whole.insert(id, gi) {
+                        r.push(format!("物件 {id} 同時在第 {} 組和第 {} 組", prev + 1, gi + 1));
+                    }
+                }
+                Member::Paras { paras, .. } => {
+                    if whole.contains_key(&id) {
+                        r.push(mixed(id));
+                        continue;
+                    }
+                    let Some(b) = s.find(id).filter(|o| has_text(o)).and_then(body_of) else {
+                        r.push(format!("物件 {id} 沒有文字，不能照段落拆：整個放進一組"));
+                        continue;
+                    };
+                    if paras.is_empty() {
+                        r.push(format!("物件 {id} 在第 {} 組沒有給段落", gi + 1));
+                    }
+                    let at = by_para.entry(id).or_default();
+                    for n in paras {
+                        if *n == 0 || *n > b.paras.len() {
+                            r.push(format!("物件 {id} 沒有第 {n} 段（它有 {} 段，從 1 數起）", b.paras.len()));
+                        } else if let Some(prev) = at.insert(n - 1, gi).filter(|prev| *prev != gi) {
+                            r.push(format!("物件 {id} 的第 {n} 段同時在第 {} 組和第 {} 組", prev + 1, gi + 1));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let missing: Vec<String> = all.iter().filter(|id| !whole.contains_key(id) && !by_para.contains_key(id)).map(|id| id.to_string()).collect();
+    if !missing.is_empty() {
+        r.push(format!("物件 {} 沒有放進任何一組", missing.join("、")));
+    }
+    let mut out: Vec<Part> = vec![Part::new(); groups.len()];
+    for (id, gi) in &whole {
+        out[*gi].insert(*id, None);
+    }
+    for (id, at) in &by_para {
+        let Some(b) = s.find(*id).and_then(body_of) else { continue };
+        // (the group of the line above: an equation and a blank paragraph go with it)
+        let mut above: Option<usize> = None;
+        for (i, p) in b.paras.iter().enumerate() {
+            let blank = p.runs.iter().all(|x| x.kind != "math" && x.text.trim().is_empty());
+            let g = match (at.get(&i).copied(), above) {
+                (_, Some(a)) if blank => Some(a),
+                (_, None) if blank => None,
+                (Some(g), Some(a)) if is_display(p) && g != a => {
+                    r.push(format!("物件 {id} 的第 {} 段是式子，要和它上面那一行放在同一組", i + 1));
+                    Some(a)
+                }
+                (None, Some(a)) if is_display(p) => Some(a),
+                (Some(g), _) => Some(g),
+                (None, _) => {
+                    r.push(format!("物件 {id} 的第 {} 段沒有放進任何一組", i + 1));
+                    None
+                }
+            };
+            let Some(g) = g else { continue };
+            if (!is_display(p) && !blank) || above.is_none() {
+                above = Some(g);
+            }
+            if let Some(v) = out[g].entry(*id).or_insert_with(|| Some(vec![])) {
+                v.push(i);
+            }
+        }
+    }
+    if r.is_empty() { Ok(out) } else { Err(r) }
+}
+
+/// A slide cut down to one page of a split: the groupable objects of `part` (a box divided by
+/// paragraphs with its own paragraphs, cloned as they are), the others as they were (`hidden`: the
+/// hidden ones too, on the page that stays).
+fn keep_part(s: &mut Slide, grp: &BTreeSet<u32>, part: &Part, hidden: bool) {
+    s.objects.retain(|o| if grp.contains(&o.id) { part.contains_key(&o.id) } else { hidden || !o.hidden });
+    for o in s.objects.iter_mut() {
+        let Some(Some(idx)) = part.get(&o.id) else { continue };
+        if let Some(tb) = o.kind.sp_mut().and_then(|sp| sp.text.as_mut()) {
+            tb.paras = idx.iter().filter_map(|i| tb.paras.get(*i).cloned()).collect();
+        }
+    }
+}
+
+/// One slide's text as the notation check reads it, and the symbols it uses / its notes define.
+fn one_slide(s: &Slide) -> Deck {
+    let mut d = Deck::new(1, 1, None);
+    d.slides.push(s.clone());
+    d
+}
+
+fn used_keys(s: &Slide, env: &Env, eff: &Notation) -> BTreeSet<String> {
+    let (files, _) = crate::notation::deck_document(&one_slide(s), env.latex);
+    let Some((name, text)) = files.into_iter().next() else { return BTreeSet::new() };
+    let opt = lore_notation::CheckOptions { caption_defines: true, ..Default::default() };
+    let doc = lore_notation::Document::from_files(&[("main.tex".to_string(), format!("\\input{{{name}}}\n")), (format!("{name}.tex"), text)]);
+    let scan = lore_notation::scan_document(doc, eff, &opt);
+    let syms = lore_notation::symbols::analyze(&scan, &lore_notation::symbols::SymbolOptions { caption_defines: true });
+    syms.table.values().filter(|i| !i.occs.is_empty()).map(|i| i.key.clone()).collect()
+}
+
+fn notes_keys(notes: &str, eff: &Notation) -> BTreeSet<String> {
+    let mut s = Slide::new("s1".into(), None);
+    s.notes = notes.to_string();
+    crate::notation::notes_definitions(&one_slide(&s), eff).into_iter().map(|(_, k)| k).collect()
+}
+
+/// The sentences of speaker notes, the numbering of an item taken off (`$…$` is never cut).
+fn sentences(notes: &str) -> Vec<String> {
+    let num = regex::Regex::new(r"^\(?\d{1,2}[.)、．]\s*").unwrap();
+    let mut out = vec![];
+    for line in notes.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let cs: Vec<char> = num.replace(line, "").chars().collect();
+        let (mut cur, mut math) = (String::new(), false);
+        for (i, c) in cs.iter().enumerate() {
+            cur.push(*c);
+            if *c == '$' {
+                math = !math;
+            }
+            let end = !math && (matches!(c, '。' | '！' | '？') || (matches!(c, '.' | '!' | '?') && cs.get(i + 1).is_none_or(|n| n.is_whitespace())));
+            if end {
+                out.push(cur.trim().to_string());
+                cur.clear();
+            }
+        }
+        if !cur.trim().is_empty() {
+            out.push(cur.trim().to_string());
+        }
+    }
+    out
+}
+
+/// The notes of each page of a split with the symbol definitions of the slide's old notes: a
+/// sentence there that defines a symbol ("$x$ denotes …", the notes' symbol item of 論文報告) goes,
+/// as it is, to every page that uses the symbol and whose own notes do not define it
+/// (`build::notes_with_symbols`: one more numbered item). Without this the split would take the
+/// definition away from the equation it was written for.
+fn carry_symbols(old: &str, pages: &[&Slide], notes: &[String], env: &Env) -> Vec<String> {
+    let eff = Notation::effective(env.glob, env.doc);
+    let defs: Vec<(BTreeSet<String>, String)> = sentences(old).into_iter().filter(|t| t.contains('$')).map(|t| (notes_keys(&t, &eff), t)).filter(|(k, _)| !k.is_empty()).collect();
+    notes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let n = n.trim();
+            let Some(page) = pages.get(i).filter(|_| !defs.is_empty()) else { return n.to_string() };
+            let (used, have) = (used_keys(page, env, &eff), notes_keys(n, &eff));
+            let add: Vec<String> = defs.iter().filter(|(k, _)| k.iter().any(|x| used.contains(x) && !have.contains(x))).map(|(_, t)| t.clone()).collect();
+            crate::todeck::build::notes_with_symbols(n, &add, &env.lang)
+        })
+        .collect()
+}
+
 fn fresh_uid(deck: &Deck, n: &mut u64) -> String {
     loop {
         let u = format!("s{}", (*n).max(1));
@@ -877,48 +1097,75 @@ pub fn compile(ed: &Editor, e: &Edit, env: &Env) -> Result<(Vec<Op>, Vec<String>
     let ops = match e {
         Edit::SetText { slide, obj, paras } => {
             let o = s.find(*obj).ok_or("找不到物件")?;
-            let paras = rebuild(body_of(o).ok_or("物件沒有文字")?, paras, env)?;
-            vec![Op::SetObj { slide: slide.clone(), id: *obj, path: "/text/paras".into(), value: serde_json::to_value(paras).map_err(|e| e.to_string())? }]
+            let old = body_of(o).ok_or("物件沒有文字")?;
+            let paras = rebuild(old, paras, env)?;
+            let mut ops = vec![Op::SetObj { slide: slide.clone(), id: *obj, path: "/text/paras".into(), value: serde_json::to_value(&paras).map_err(|e| e.to_string())? }];
+            // 論文報告 made a 內文 box as high as its text: with more text it grows the same way
+            // (`fit_h`), into free room only, and the conclusion line follows; else the code check
+            // reports the text over its box
+            if let Some(g) = geo(ed, env).filter(|_| obj_role(s, o, h) == "body") {
+                let need = fit_h(&TextBody { paras, ..old.clone() }, o.frame.w);
+                if need > o.frame.h && o.frame.y + need <= free_bottom(s, &g, &o.frame, &[o.id]) {
+                    let f = Frame { h: need, ..o.frame.clone() };
+                    ops.push(Op::SetObj { slide: slide.clone(), id: *obj, path: "/frame".into(), value: serde_json::to_value(&f).map_err(|e| e.to_string())? });
+                    let mut t = s.clone();
+                    if let Some(x) = t.find_mut(*obj) {
+                        x.frame = f;
+                    }
+                    takeaway_follow(&t, &g, slide, &mut ops)?;
+                }
+            }
+            ops
         }
         Edit::SetNotes { slide, text } => vec![Op::SetSlide { slide: slide.clone(), path: "/notes".into(), value: json!(text.trim()) }],
         Edit::SplitSlide { slide, groups, titles, notes } => {
             let grp: BTreeSet<u32> = groupable(s, h).into_iter().collect();
+            let parts = split_parts(s, h, groups).map_err(|e| e.join("；"))?;
             let title_id = title_object(s, h).map(|o| o.id).ok_or("沒有標題物件")?;
             let title_paras = |t: &str| -> Result<Vec<Para>, String> { rebuild(s.find(title_id).and_then(body_of).ok_or("標題沒有文字")?, &[t.to_string()], env) };
-            let anims_for = |keep: &dyn Fn(u32) -> bool| s.anims.iter().filter(|a| keep(a.obj)).cloned().collect::<Vec<_>>();
-            let mut ops = vec![];
-            for o in s.objects.iter().filter(|o| grp.contains(&o.id) && !groups[0].contains(&o.id)) {
-                ops.push(Op::DeleteObj { slide: slide.clone(), id: o.id });
+            let anims_for = |part: &Part, rest: bool| s.anims.iter().filter(|a| if grp.contains(&a.obj) { part.contains_key(&a.obj) } else { rest }).cloned().collect::<Vec<_>>();
+            let val = |v: Result<Value, serde_json::Error>| v.map_err(|e| e.to_string());
+            // the pages as slides: the first is this slide, the others are new
+            let mut n = deck.next_uid;
+            let mut pages: Vec<Slide> = vec![];
+            for (gi, part) in parts.iter().enumerate() {
+                let mut ns = s.clone();
+                if gi > 0 {
+                    ns.uid = fresh_uid(deck, &mut n);
+                    ns.anims = anims_for(part, false);
+                }
+                keep_part(&mut ns, &grp, part, gi == 0);
+                if let Some(tb) = ns.find_mut(title_id).and_then(|o| o.kind.sp_mut()).and_then(|sp| sp.text.as_mut()) {
+                    tb.paras = title_paras(&titles[gi])?;
+                }
+                pages.push(ns);
             }
-            ops.push(Op::SetObj { slide: slide.clone(), id: title_id, path: "/text/paras".into(), value: serde_json::to_value(title_paras(&titles[0])?).map_err(|e| e.to_string())? });
-            ops.push(Op::SetSlide { slide: slide.clone(), path: "/notes".into(), value: json!(notes[0].trim()) });
+            let notes = carry_symbols(&s.notes, &pages.iter().collect::<Vec<_>>(), notes, env);
             // each part laid out again like a freshly built page of its objects
             let pg = geo(ed, env);
             if pg.is_none() {
                 warn.push(format!("第 {} 頁拆開後照原本的位置（這份簡報沒有底版，不能重新排版）", idx + 1));
             }
-            let mut first = s.clone();
-            first.objects.retain(|o| !grp.contains(&o.id) || groups[0].contains(&o.id));
+            let mut ops = vec![];
+            for o in s.objects.iter().filter(|o| grp.contains(&o.id)) {
+                match parts[0].get(&o.id) {
+                    None => ops.push(Op::DeleteObj { slide: slide.clone(), id: o.id }),
+                    Some(None) => {}
+                    Some(Some(_)) => ops.push(Op::SetObj { slide: slide.clone(), id: o.id, path: "/text/paras".into(), value: val(serde_json::to_value(pages[0].find(o.id).and_then(body_of).map(|b| &b.paras)))? }),
+                }
+            }
+            ops.push(Op::SetObj { slide: slide.clone(), id: title_id, path: "/text/paras".into(), value: val(serde_json::to_value(title_paras(&titles[0])?))? });
+            ops.push(Op::SetSlide { slide: slide.clone(), path: "/notes".into(), value: json!(notes[0]) });
             if let Some(g) = &pg {
-                for (id, f) in reflow(&first, g, idx + 1, &mut warn) {
-                    ops.push(Op::SetObj { slide: slide.clone(), id, path: "/frame".into(), value: serde_json::to_value(f).map_err(|e| e.to_string())? });
+                for (id, f) in reflow(&pages[0], g, idx + 1, &mut warn) {
+                    ops.push(Op::SetObj { slide: slide.clone(), id, path: "/frame".into(), value: val(serde_json::to_value(f))? });
                 }
             }
             if !s.anims.is_empty() {
-                let first = anims_for(&|id| !grp.contains(&id) || groups[0].contains(&id));
-                ops.push(Op::SetSlide { slide: slide.clone(), path: "/anims".into(), value: serde_json::to_value(first).map_err(|e| e.to_string())? });
+                ops.push(Op::SetSlide { slide: slide.clone(), path: "/anims".into(), value: val(serde_json::to_value(anims_for(&parts[0], true)))? });
             }
-            let mut n = deck.next_uid;
-            for gi in 1..groups.len() {
-                let g = &groups[gi];
-                let mut ns = s.clone();
-                ns.uid = fresh_uid(deck, &mut n);
-                ns.objects.retain(|o| (!grp.contains(&o.id) && !o.hidden) || g.contains(&o.id));
-                if let Some(tb) = ns.find_mut(title_id).and_then(|o| o.kind.sp_mut()).and_then(|sp| sp.text.as_mut()) {
-                    tb.paras = title_paras(&titles[gi])?;
-                }
-                ns.notes = notes[gi].trim().to_string();
-                ns.anims = anims_for(&|id| g.contains(&id));
+            for (gi, mut ns) in pages.into_iter().enumerate().skip(1) {
+                ns.notes = notes[gi].clone();
                 if let Some(geo) = &pg {
                     for (id, f) in reflow(&ns, geo, idx + gi + 1, &mut warn) {
                         if let Some(o) = ns.find_mut(id) {
@@ -1485,18 +1732,84 @@ fn for_author(reason: &str) -> String {
     for (k, n) in NAMES {
         out = out.replace(k, n);
     }
+    // an object's number means nothing to him: the model pointed at something that is not there
+    if let Some(at) = out.find("沒有可以放字的物件") {
+        let tail = &out[at + "沒有可以放字的物件".len()..];
+        let rest = tail.trim_start().trim_start_matches(|c: char| c.is_ascii_digit());
+        out = format!("{}找不到要改的那段文字{}", &out[..at], rest);
+    }
     out
 }
 
 fn notation_keys(deck: &Deck, env: &Env) -> BTreeMap<(String, String), String> {
+    notation_issues(deck, env).into_iter().map(|(k, i)| (k, i["message"].as_str().unwrap_or("").to_string())).collect()
+}
+
+/// The same, each with the whole issue (its places).
+fn notation_issues(deck: &Deck, env: &Env) -> BTreeMap<(String, String), Value> {
     let v = crate::notation::view(deck, env.latex, env.glob, env.doc);
     v["report"]["issues"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|i| matches!(i["severity"].as_str(), Some("error" | "warning")))
-        .map(|i| ((i["code"].as_str().unwrap_or("").to_string(), i["subject"].as_str().unwrap_or("").to_string()), i["message"].as_str().unwrap_or("").to_string()))
+        .map(|i| ((i["code"].as_str().unwrap_or("").to_string(), i["subject"].as_str().unwrap_or("").to_string()), i.clone()))
         .collect()
+}
+
+/// A new 「先用後定義」 that the edit did not make: before it, every line that uses the symbol
+/// already stood on an earlier slide than every line that defines it (a line of a slide the edit
+/// changed is looked up by its text on the changed slides as they were). The check counts the
+/// distance in sentences across slides (a display equation may use a symbol defined up to three
+/// sentences later, lore-notation's `grace_sentences`), so a split that puts one more page between
+/// the two makes it speak about an order that was the same before. Such an issue does not refuse
+/// the edit; the author is told (the returned line) and the deck's 對照表 shows it. A use and a
+/// definition that shared a slide, or any other new issue, still refuse.
+fn order_was_so(issue: &Value, was: &Deck, now: &Deck, changed: &[String], env: &Env) -> Option<String> {
+    // (the same order read from the equation's side: 「方程式的變數到後面才定義」)
+    if !matches!(issue["code"].as_str(), Some("used_before_definition" | "equation_undefined_variables")) || issue["subjects"].as_array().is_some_and(|a| !a.is_empty()) {
+        return None;
+    }
+    let page = |l: &Value| l["file"].as_str().and_then(|f| f.trim_end_matches(".tex").strip_prefix("slide-")).and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=now.slides.len()).contains(n));
+    let uses = issue["locations"].as_array()?;
+    // where the definitions are: the issue's related places, or (the equation's issue) each
+    // variable's 「（slide-03.tex:4 才定義）」
+    let defs: Vec<Value> = if issue["code"] == "equation_undefined_variables" {
+        let at = regex::Regex::new(r"（(slide-\d+\.tex):(\d+) 才定義）").unwrap();
+        let d: Vec<Option<Value>> = issue["details"].as_array()?.iter().map(|x| at.captures(x.as_str()?).map(|c| json!({ "file": &c[1], "line": c[2].parse::<u64>().unwrap_or(0) }))).collect();
+        d.into_iter().collect::<Option<Vec<Value>>>()?
+    } else {
+        issue["related"].as_array()?.clone()
+    };
+    if uses.is_empty() || defs.is_empty() {
+        return None;
+    }
+    let (new_files, _) = crate::notation::deck_document(now, env.latex);
+    let (old_files, _) = crate::notation::deck_document(was, env.latex);
+    // the slides (0-based, as they were) that held the line at `l`: an untouched slide is itself
+    let held = |l: &Value| -> Option<Vec<usize>> {
+        let n = page(l)?;
+        let uid = &now.slides[n - 1].uid;
+        if !changed.contains(uid) {
+            return was.slide_index(uid).map(|i| vec![i]);
+        }
+        let text = new_files.get(n - 1)?.1.lines().nth((l["line"].as_u64()? as usize).checked_sub(1)?)?;
+        let v: Vec<usize> = was.slides.iter().enumerate().filter(|(i, s)| changed.contains(&s.uid) && old_files.get(*i).is_some_and(|(_, t)| t.lines().any(|x| x == text))).map(|(i, _)| i).collect();
+        (!v.is_empty()).then_some(v)
+    };
+    let (mut last_use, mut first_def, mut def_page) = (0, usize::MAX, 0);
+    for u in uses {
+        last_use = last_use.max(held(u)?.into_iter().max()?);
+    }
+    for d in &defs {
+        first_def = first_def.min(held(d)?.into_iter().min()?);
+        def_page = def_page.max(page(d)?);
+    }
+    if last_use >= first_def {
+        return None;
+    }
+    let what = issue["subject"].as_str().map(|k| format!("符號 ${k}$ 在第 {} 頁先用到", page(&uses[0]).unwrap_or(0))).unwrap_or_else(|| format!("第 {} 頁的式子用到的符號", page(&uses[0]).unwrap_or(0)));
+    Some(format!("{what}，第 {def_page} 頁才定義（修改前也是後面的頁才定義，這次只是又隔了一頁）"))
 }
 
 /// Colliding objects of one slide (`deckpolish::overlaps`): (object, other object or `None` for
@@ -1513,6 +1826,17 @@ fn obj_label(s: &Slide, id: u32) -> String {
     s.find(id).map(|o| body_of(o).map(|b| plan::clip(b.plain_text().trim(), 16)).filter(|t| !t.is_empty()).unwrap_or_else(|| o.name.clone())).unwrap_or_else(|| id.to_string())
 }
 
+/// Whether a text object's text is over its box as 排版用字's overflow check counts it
+/// (`deckpolish::check_overflow`): the estimate over the inner height, and more than one line. A
+/// single line is never over its box: the base's title frame is lower than one title line with its
+/// insets (32 pt × 1.2 in a 42 pt frame with 3.6 pt insets reads 110 %), which is how the base
+/// draws every title, not an overflow.
+fn over_box(o: &Object) -> Option<f64> {
+    let b = body_of(o)?;
+    let (_, lines) = crate::deckpolish::text_size(b, o.frame.w);
+    crate::deckpolish::fill_ratio(o).filter(|r| *r > 1.05 && lines > 1.0)
+}
+
 /// What the edit broke on the slides it touched: text over its box (the overflow estimate) and
 /// objects that now collide or leave the page; what was already so before is not counted.
 pub fn code_findings(before: &Deck, after: &Deck, touched: &[String]) -> Vec<Finding> {
@@ -1520,14 +1844,18 @@ pub fn code_findings(before: &Deck, after: &Deck, touched: &[String]) -> Vec<Fin
     let mut out = vec![];
     for (n, s) in after.slides.iter().enumerate().filter(|(_, s)| touched.contains(&s.uid)) {
         let old = before.slide(&s.uid);
+        // a slide the edit made (a split's part, an inserted page) has no earlier self: a box it
+        // took from a slide handed over (same id) is measured against that box, so what the
+        // estimate already said there is not this edit's finding
+        let peers: Vec<&Slide> = if old.is_some() { vec![] } else { touched.iter().filter_map(|u| before.slide(u)).collect() };
         for o in s.objects.iter().filter(|o| !o.hidden && !o.is_empty_slot() && !chrome_ph(o)) {
-            let Some(r) = crate::deckpolish::fill_ratio(o).filter(|r| *r > 1.02) else { continue };
+            let Some(r) = over_box(o) else { continue };
             if body_of(o).is_none_or(|b| b.plain_text().trim().is_empty()) {
                 continue;
             }
-            let was = old.and_then(|x| x.find(o.id)).and_then(crate::deckpolish::fill_ratio).is_some_and(|r| r > 1.02);
+            let was = old.and_then(|x| x.find(o.id)).and_then(over_box).is_some() || peers.iter().filter_map(|x| x.find(o.id)).filter_map(over_box).any(|b| r <= b + 0.02);
             if !was {
-                out.push(Finding { slide: s.uid.clone(), kind: "overflow".into(), text: format!("第 {} 頁「{}」的字超出框（約 {:.0}%）", n + 1, obj_label(s, o.id), r * 100.0) });
+                out.push(Finding { slide: s.uid.clone(), page: Some(n + 1), kind: "overflow".into(), text: format!("「{}」的字超出框（約 {:.0}%）", obj_label(s, o.id), r * 100.0) });
             }
         }
         let had: BTreeSet<(u32, Option<u32>, &str)> = old.map(|x| overlaps_of(x, page)).unwrap_or_default().into_iter().collect();
@@ -1536,10 +1864,10 @@ pub fn code_findings(before: &Deck, after: &Deck, touched: &[String]) -> Vec<Fin
                 continue;
             }
             let text = match b {
-                Some(b) => format!("第 {} 頁「{}」和「{}」疊在一起", n + 1, obj_label(s, a), obj_label(s, b)),
-                None => format!("第 {} 頁「{}」超出頁面", n + 1, obj_label(s, a)),
+                Some(b) => format!("「{}」和「{}」疊在一起", obj_label(s, a), obj_label(s, b)),
+                None => format!("「{}」超出頁面", obj_label(s, a)),
             };
-            out.push(Finding { slide: s.uid.clone(), kind: if b.is_some() { "overlap".into() } else { "off-page".into() }, text });
+            out.push(Finding { slide: s.uid.clone(), page: Some(n + 1), kind: if b.is_some() { "overlap".into() } else { "off-page".into() }, text });
         }
     }
     out
@@ -1615,7 +1943,7 @@ You never write coordinates, sizes, fonts, colours or transparency: you return a
 Return JSON {\"edits\": [...]}; each edit is one of\n\
 - {\"edit\":\"set_text\",\"slide\":uid,\"obj\":id,\"paras\":[\"…\"]}: the whole text of an object that holds text (its paragraphs, in its own formatting);\n\
 - {\"edit\":\"set_notes\",\"slide\":uid,\"text\":\"…\"}: the slide's speaker notes;\n\
-- {\"edit\":\"split_slide\",\"slide\":uid,\"groups\":[[id,…],…],\"titles\":[\"…\"],\"notes\":[\"…\"]}: the slide becomes as many slides as groups, in order; every object marked groupable in exactly one group, one title and one notes text per group (the other objects, such as the title box, stay on every part);\n\
+- {\"edit\":\"split_slide\",\"slide\":uid,\"groups\":[[member,…],…],\"titles\":[\"…\"],\"notes\":[\"…\"]}: the slide becomes as many slides as groups, in order; every object marked groupable in exactly one group, one title and one notes text per group (the other objects, such as the title box, stay on every part). A member is an object id, or {\"obj\":id,\"paras\":[n,…]} to divide the paragraphs of one text box between the slides: n counts the entries of that object's text from 1, every paragraph of the box goes to exactly one group, an equation paragraph stays with the line above it. A slide that is a title and one text box (several definitions or points in one box) is split this way, never with an empty group. Symbol definitions in the old notes are kept by the program on the slides that use the symbol;\n\
 - {\"edit\":\"insert_slide\",\"after\":uid,\"kind\":page kind,\"title\":\"…\",\"blocks\":[{\"role\":\"bullet\"|\"takeaway\"|\"suggest\",\"text\":\"…\"}],\"notes\":\"…\"}: a new slide after that one, built like the deck's pages of that kind;\n\
 - {\"edit\":\"split_object\",\"slide\":uid,\"obj\":id,\"parts\":[\"…\"],\"arrange\":\"2x2\"|\"row\"|\"column\"}: one box that crams several items (definitions, inputs, steps) becomes 2–6 boxes in its place; the parts together are exactly its text (you only split, never reword: rewording is a set_text); 2x2 takes exactly four parts;\n\
 - {\"edit\":\"highlight_crop\",\"slide\":uid,\"picture\":id,\"mode\":\"crop\"|\"highlight\",\"box\":[x0,y0,x1,y1]}: only one block of a picture matters: crop shows only that block (larger, beside the lines), highlight keeps the whole picture faint with that block clear; box = fractions 0–1 of the picture as shown (image), around the whole block with a little of its blank margin, at least 0.05 each side;\n\
@@ -1629,7 +1957,7 @@ Do what the instruction asks and change nothing else.\n";
 pub const CHECK_SYSTEM: &str = "You look at slides of a talk right after an edit, as rendered pictures, and report only problems you can see: \
 \"wrapped\" (a title or a line broken onto an extra line where it should fit on one), \"overlap\" (text over text or over a picture), \
 \"cut-off\" (text cut by its box or by the page edge), \"empty\" (a large empty area the edit left), \"other\". \
-Empty picture slots are not drawn: a reserved gap beside the text is expected. \
+An empty picture slot is drawn as a dashed frame with its suggestion line: it is where the presenter will put a picture, not a problem. \
 Return JSON {\"findings\":[{\"slide\":uid,\"kind\":…,\"text\":one short line in Traditional Chinese}]}, an empty list when the slides are fine.";
 
 fn edit_schema() -> Value {
@@ -1670,7 +1998,7 @@ pub fn edit_request(ctx: &Value, instruction: &str, material: Option<&str>, hist
     for (k, t) in history.iter().enumerate() {
         user += &format!("\nEarlier request {}: {}\nYour plan then: {}\n", k + 1, t.instruction, t.plan);
         if !t.findings.is_empty() {
-            user += &format!("Problems left then: {}\n", t.findings.iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join("; "));
+            user += &format!("Problems left then: {}\n", t.findings.iter().map(Finding::line).collect::<Vec<_>>().join("; "));
         }
     }
     user += &format!("\nThe presenter's instruction:\n{instruction}\n");
@@ -1746,6 +2074,11 @@ fn findings_of(v: &Value, slides: &[String]) -> Vec<Finding> {
 pub trait PageQueue: Send + Sync {
     fn is_open(&self, request: &str) -> bool;
     async fn apply(&self, request: &str, edit: &str, ops: &[Op]) -> Result<String, (u16, String)>;
+    /// Asks the page of `request` to take the applied edit back with its own undo, so that what it
+    /// shows follows (same answers as `apply`); `None`: this queue cannot, the server undoes.
+    async fn undo(&self, _request: &str, _edit: &str) -> Option<Result<String, (u16, String)>> {
+        None
+    }
 }
 
 /// No page queue: every apply is done by the server.
@@ -1772,6 +2105,10 @@ impl PageQueue for ShellQueue {
     async fn apply(&self, request: &str, edit: &str, ops: &[Op]) -> Result<String, (u16, String)> {
         let ops = serde_json::to_value(ops).map_err(|e| (500, e.to_string()))?;
         self.0.paged(lore_shell::pageedit::Paged { request: request.into(), edit: Some(edit.into()), ops: Some(ops), end: false }).await
+    }
+    async fn undo(&self, request: &str, edit: &str) -> Option<Result<String, (u16, String)>> {
+        // not ops: the page reads `{undo: true}` as "your own undo, if this edit is the next one"
+        Some(self.0.paged(lore_shell::pageedit::Paged { request: request.into(), edit: Some(edit.into()), ops: Some(json!({ "undo": true })), end: false }).await)
     }
 }
 
@@ -1820,6 +2157,8 @@ struct Preview {
     after: Vec<Vec<u8>>,
     /// `editor.rev` right after this edit was applied.
     applied: Option<u64>,
+    /// The L-Echo request whose page applied it (its 復原 goes through that page too).
+    via: Option<String>,
 }
 
 pub struct Pe {
@@ -1984,7 +2323,8 @@ async fn run(pe: &Arc<Pe>, name: &str, ask: Ask, turns: Vec<Turn>, id: Option<St
     let shot = crate::pageshot_of(&s);
     let mut before = vec![];
     for u in &ask.slides {
-        let png = shot.png(name, u, None, SHOT_W).await.map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, e))?;
+        // (the deck's own route as the preview: 前 is drawn like 後, an empty picture slot with its 建議放 line)
+        let png = shot.png(name, u, Some(&format!("/api/decks/{}", uenc(name))), SHOT_W).await.map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, e))?;
         before.push((u.clone(), png));
     }
     let llm = crate::todeck::llm(&s);
@@ -2017,8 +2357,9 @@ async fn run(pe: &Arc<Pe>, name: &str, ask: Ask, turns: Vec<Turn>, id: Option<St
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         };
         reasons.extend(r.reasons);
+        let order: Vec<String> = r.deck["deck"]["slides"].as_array().into_iter().flatten().filter_map(|x| x["uid"].as_str().map(String::from)).collect();
         // the preview is registered before the pictures: the print page reads it back
-        store_preview(pe, name, Preview { id: id.clone(), slides: ask.slides.clone(), hash, turns: turns.clone(), material: ask.material.clone(), engine: ask.engine.clone(), edits: r.kept.clone(), deck: r.deck, before: before.iter().map(|(_, b)| b.clone()).collect(), after: vec![], applied: None });
+        store_preview(pe, name, Preview { id: id.clone(), slides: ask.slides.clone(), hash, turns: turns.clone(), material: ask.material.clone(), engine: ask.engine.clone(), edits: r.kept.clone(), deck: r.deck, before: before.iter().map(|(_, b)| b.clone()).collect(), after: vec![], applied: None, via: None });
         let mut after = vec![];
         for u in &r.touched {
             let png = shot.png(name, u, Some(&preview_path), SHOT_W).await.map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, e))?;
@@ -2027,16 +2368,27 @@ async fn run(pe: &Arc<Pe>, name: &str, ask: Ask, turns: Vec<Turn>, id: Option<St
         let seen = if r.kept.is_empty() || after.is_empty() { vec![] } else { findings_of(&call(check_request(&ask.instruction, &after, &looks_for(&r.kept)), crate::llm::TASK_PAGE_CHECK).await?, &r.touched) };
         let mut found = r.code;
         found.extend(seen);
+        // each finding with its page as the edit leaves it (a new slide has no other name for him)
+        for f in found.iter_mut().filter(|f| f.page.is_none()) {
+            f.page = order.iter().position(|u| *u == f.slide).map(|i| i + 1);
+        }
         if round == 0 && (!reasons.is_empty() || !found.is_empty()) {
             round += 1;
             let mut problems = reasons.clone();
-            problems.extend(found.iter().map(|f| f.text.clone()));
+            problems.extend(found.iter().map(Finding::line));
             plan_v = call(edit_request(&ctx, &ask.instruction, ask.material.as_deref(), &turns, &before, Some(&Correction { plan: &plan_v, problems, after: &after })), crate::llm::TASK_PAGE_EDIT).await?;
             continue;
         }
         // what was still refused after the corrective round is said, never applied
         for r in reasons {
-            warnings.push(format!("沒有做：{}", for_author(&r)));
+            // (an unknown kind is already a warning in his words: said once)
+            if r.split_once(UNKNOWN_TAIL).is_some_and(|(w, _)| warnings.iter().any(|x| x == w)) {
+                continue;
+            }
+            let w = format!("沒有做：{}", for_author(&r));
+            if !warnings.contains(&w) {
+                warnings.push(w);
+            }
         }
         for w in r.warnings {
             if !warnings.contains(&w) {
@@ -2163,6 +2515,7 @@ async fn apply(State(pe): St, UrlPath((name, id)): UrlPath<(String, String)>, bo
     };
     if let Some(p) = pe.store.lock().unwrap().get_mut(&name).and_then(|q| q.iter_mut().find(|p| p.id == id)) {
         p.applied = Some(rev);
+        p.via = (by == "page").then(|| request.clone());
     }
     log(&dir, json!({ "id": id, "applied": true, "by": by }));
     out["applied"] = json!(by);
@@ -2170,27 +2523,87 @@ async fn apply(State(pe): St, UrlPath((name, id)): UrlPath<(String, String)>, bo
     Ok(Json(out))
 }
 
+/// Where an applied edit stands in the editor's history.
+#[derive(PartialEq)]
+enum Step {
+    /// The next undo.
+    Next,
+    /// Already undone there (the author's own ⌘Z): the next redo.
+    Undone,
+    /// Something else was done since.
+    Buried,
+}
+
+fn step_of(ed: &Editor, rev: u64) -> Step {
+    if ed.can_undo() == Some(LABEL) && ed.rev == rev {
+        Step::Next
+    } else if ed.can_redo() == Some(LABEL) && ed.rev == rev + 1 {
+        Step::Undone
+    } else {
+        Step::Buried
+    }
+}
+
+const BURIED: &str = "之後又改過，復原請在 L-Slide";
+
 async fn undo(State(pe): St, UrlPath((name, id)): UrlPath<(String, String)>) -> Result<Json<Value>, ApiError> {
-    let rev = {
+    let (rev, via) = {
         let store = pe.store.lock().unwrap();
         let p = store.get(&name).and_then(|q| q.iter().find(|p| p.id == id)).ok_or_else(|| err(StatusCode::NOT_FOUND, "沒有這個修改"))?;
-        p.applied.ok_or_else(|| err(StatusCode::CONFLICT, "這個修改還沒有套用"))?
+        (p.applied.ok_or_else(|| err(StatusCode::CONFLICT, "這個修改還沒有套用"))?, p.via.clone())
     };
     let sess = crate::session(&pe.s, &name)?;
-    let out = {
+    let forget = || {
+        if let Some(p) = pe.store.lock().unwrap().get_mut(&name).and_then(|q| q.iter_mut().find(|p| p.id == id)) {
+            p.applied = None;
+        }
+    };
+    // already taken back in the app: nothing to do, and said as it is (not an error)
+    let already = |sess: &sc_core::Session| {
+        forget();
+        Ok(Json(json!({ "status": crate::status(sess), "undone": "already" })))
+    };
+    let step = step_of(&sess.lock().unwrap().editor, rev);
+    match step {
+        Step::Next => {}
+        Step::Undone => return already(&sess.lock().unwrap()),
+        Step::Buried => return Err(err(StatusCode::CONFLICT, BURIED)),
+    }
+    // the page that applied it is still there: it undoes (the server alone would leave it showing
+    // the edit). A page that is gone (closed, reloaded: 410, or no answer: 504) leaves it to the server.
+    if let Some(req) = via.filter(|r| pe.deps.queue.is_open(r))
+        && let Some(r) = pe.deps.queue.undo(&req, &id).await
+    {
+        match r {
+            Ok(_) => {
+                let sess = sess.lock().unwrap();
+                if step_of(&sess.editor, rev) == Step::Next {
+                    return Err(err(StatusCode::CONFLICT, "頁面說已復原，但編輯器裡還是這一步"));
+                }
+                log(&sess.dir, json!({ "id": id, "undone": true, "by": "page" }));
+                forget();
+                return Ok(Json(json!({ "status": crate::status(&sess), "undone": "page" })));
+            }
+            Err((410 | 504, _)) => {}
+            Err((code, m)) => return Err(err(StatusCode::from_u16(code).unwrap_or(StatusCode::CONFLICT), m)),
+        }
+    }
+    let mut out = {
         let mut sess = sess.lock().unwrap();
-        if sess.editor.can_undo() != Some(LABEL) || sess.editor.rev != rev {
-            return Err(err(StatusCode::CONFLICT, "套用之後又有別的修改，請用一般的復原"));
+        // (again: the page may have undone it late, after the wait ran out)
+        match step_of(&sess.editor, rev) {
+            Step::Next => {}
+            Step::Undone => return already(&sess),
+            Step::Buried => return Err(err(StatusCode::CONFLICT, BURIED)),
         }
         let a = sess.editor.undo().ok_or_else(|| err(StatusCode::CONFLICT, "沒有可復原的動作"))?;
         let dir = sess.dir.clone();
         let v = crate::changed(&mut sess, a)?.0;
-        log(&dir, json!({ "id": id, "undone": true }));
+        log(&dir, json!({ "id": id, "undone": true, "by": "server" }));
         v
     };
-    if let Some(p) = pe.store.lock().unwrap().get_mut(&name).and_then(|q| q.iter_mut().find(|p| p.id == id)) {
-        p.applied = None;
-    }
+    forget();
+    out["undone"] = json!("server");
     Ok(Json(out))
 }
 
@@ -2254,6 +2667,7 @@ mod tests {
         assert_eq!(for_author("第 1 個修改（set_text）：這一段有 83 字，最多 80 字（不會縮字）"), "改文字：這一段有 83 字，最多 80 字（不會縮字）");
         assert_eq!(for_author("第 2 個修改（split_slide）：拆頁的標題和備註寫在 split_slide 裡"), "拆頁：拆頁的標題和備註寫在 拆頁 裡");
         assert_eq!(for_author("模型沒有回應"), "模型沒有回應");
+        assert_eq!(for_author("第 1 個修改（set_text）：第 8 頁沒有可以放字的物件 99"), "改文字：第 8 頁找不到要改的那段文字");
     }
 
     #[test]
@@ -2320,7 +2734,165 @@ mod tests {
     fn split(groups: Vec<Vec<u32>>, n: usize) -> Edit {
         let titles = (0..n).map(|i| format!("Part {}", i + 1)).collect();
         let notes = (0..n).map(|i| format!("This part covers step {}.\n1. One point.", i + 1)).collect();
-        Edit::SplitSlide { slide: "s2".into(), groups, titles, notes }
+        Edit::SplitSlide { slide: "s2".into(), groups: groups.into_iter().map(|g| g.into_iter().map(Member::Obj).collect()).collect(), titles, notes }
+    }
+
+    fn by_paras(groups: &[&[usize]]) -> Edit {
+        let Edit::SplitSlide { titles, notes, .. } = split(vec![], groups.len()) else { unreachable!() };
+        Edit::SplitSlide { slide: "s2".into(), groups: groups.iter().map(|g| vec![Member::Paras { obj: 2, paras: g.to_vec() }]).collect(), titles, notes }
+    }
+
+    fn math(latex: &str) -> Para {
+        Para::new(vec![Run { kind: "math".into(), latex: Some(latex.into()), ..Run::text("", "body", Look { size: 18.0, ..Default::default() }) }])
+    }
+
+    fn body_mut(ed: &mut Editor, slide: usize, id: u32) -> &mut TextBody {
+        ed.deck.slides[slide].find_mut(id).and_then(|o| o.kind.sp_mut()).and_then(|sp| sp.text.as_mut()).unwrap()
+    }
+
+    /// His case: a title and ONE box of several definitions becomes several pages.
+    #[test]
+    fn a_one_box_page_splits_by_paragraphs() {
+        let mut ed = editor();
+        let lines = ["Recall is found over all lesions", "Precision is found over reported", "It follows this rule", "F1 joins both in one number"];
+        let b = body_mut(&mut ed, 1, 2);
+        b.paras = lines.iter().map(|t| Para::new(vec![Run::text(t, "body", Look { size: 18.0, ..Default::default() })])).collect();
+        b.paras.insert(3, math("F = \\frac{2 P R}{P + R}"));
+        let was = b.paras.clone();
+        // the plan as a model writes it (the equation, paragraph 4, is left out: it follows its line)
+        let v = json!({ "edits": [{ "edit": "split_slide", "groups": [[{ "obj": 2, "paras": [1] }], [{ "obj": 2, "paras": [2, 3] }], [{ "obj": 2, "paras": [5] }]],
+            "titles": ["Recall", "Precision", "F1"], "notes": ["Recall first.\n1. One point.", "Precision next.\n1. One point.", "F1 last.\n1. One point."] }] });
+        let (edits, reasons, _) = parse_plan(&v, &["s2".to_string()]);
+        assert!(reasons.is_empty(), "{reasons:?}");
+        assert_eq!(serde_json::to_value(&edits[0]).unwrap()["groups"], v["edits"][0]["groups"], "the plan goes back as it came");
+        let p = with(|env| prepare(&ed, &["s2".to_string()], &edits, env));
+        assert!(p.reasons.is_empty(), "{:?}", p.reasons);
+        let d = &p.preview.deck;
+        assert_eq!(d.slides.len(), 5);
+        let want: [&[usize]; 3] = [&[0], &[1, 2, 3], &[4]];
+        for (i, idx) in want.iter().enumerate() {
+            let s = &d.slides[1 + i];
+            let got = &body_of(s.find(2).expect("the box is on every page")).unwrap().paras;
+            let exp: Vec<Para> = idx.iter().map(|k| was[*k].clone()).collect();
+            assert_eq!(serde_json::to_value(got).unwrap(), serde_json::to_value(&exp).unwrap(), "page {}: its own paragraphs, untouched", i + 1);
+            assert_eq!(crate::deckstyle::title_text(s, d.size.h), ["Recall", "Precision", "F1"][i]);
+            assert!(s.find(3).is_some() && notes_shape_ok(&s.notes));
+        }
+        assert_eq!(p.touched.len(), 3);
+        // each line in exactly one group; a number that is there; an equation with its line; one way per box
+        for (e, want) in [
+            (by_paras(&[&[1], &[2, 3]]), "第 5 段沒有放進任何一組"),
+            (by_paras(&[&[1, 2], &[2, 3, 5]]), "第 2 段同時在"),
+            (by_paras(&[&[1, 2, 3], &[5, 6]]), "沒有第 6 段"),
+            (by_paras(&[&[1, 2, 3], &[4, 5]]), "是式子，要和它上面那一行放在同一組"),
+            (by_paras(&[&[1, 2, 3, 5], &[]]), "沒有給段落"),
+            (Edit::SplitSlide { slide: "s2".into(), groups: vec![vec![Member::Obj(2)], vec![Member::Paras { obj: 2, paras: vec![5] }]], titles: vec!["A".into(), "B".into()], notes: vec!["One.\n1. P.".into(), "Two.\n1. P.".into()] }, "只用一種寫法"),
+        ] {
+            let p = with(|env| prepare(&ed, &["s2".to_string()], &[e], env));
+            assert!(p.ops.is_empty() && p.reasons.iter().any(|r| r.contains(want)), "{want}: {:?}", p.reasons);
+        }
+        // the old way with an empty group is told how
+        let p = with(|env| prepare(&ed, &["s2".to_string()], &[split(vec![vec![2], vec![]], 2)], env));
+        assert!(p.reasons.iter().any(|r| r.contains("第 2 組是空的") && r.contains("paras")), "{:?}", p.reasons);
+    }
+
+    /// The walk's fixture: two paired equations whose symbol the slide's notes define (論文報告's
+    /// symbol item); a later slide's notes define it too. The split's own notes do not: without the
+    /// carried sentence the page that keeps the equation would use the symbol before its definition.
+    #[test]
+    fn a_split_carries_the_notes_symbol_definitions_to_the_pages_that_use_them() {
+        let mut ed = editor();
+        ed.deck.slides[0].notes = "Slide 1 opens.\n1. One point.".into();
+        ed.deck.slides[1].notes = "Slide 2 covers the loss.\n1. One point.\n2. $\\mathbf{x}$ denotes the input image. $\\hat{\\mathbf{x}}$ denotes its copy.".into();
+        body_mut(&mut ed, 1, 2).paras.push(math("L_{r} = \\lVert \\mathbf{x} - \\hat{\\mathbf{x}} \\rVert^2"));
+        ed.deck.slides[1].objects.push(text_obj(4, "內文 2", Some("text-2"), 3_000_000, "body", &["Grading compares scores"]));
+        let e = split(vec![vec![2], vec![4]], 2);
+        let p = with(|env| prepare(&ed, &["s2".to_string()], &[e.clone()], env));
+        assert!(p.reasons.is_empty(), "{:?}", p.reasons);
+        let (a, b) = (&p.preview.deck.slides[1], &p.preview.deck.slides[2]);
+        assert_eq!(a.notes, "This part covers step 1.\n1. One point.\n2. $\\mathbf{x}$ denotes the input image. $\\hat{\\mathbf{x}}$ denotes its copy.", "the page with the equation keeps both sentences, as they were");
+        assert_eq!(b.notes, "This part covers step 2.\n1. One point.", "the page without the symbols gets none");
+        assert!(notes_shape_ok(&a.notes));
+        // notes that already define the symbol are left alone
+        let Edit::SplitSlide { groups, titles, .. } = e else { unreachable!() };
+        let own = "This part covers step 1.\n1. $\\mathbf{x}$ denotes the picture. $\\hat{\\mathbf{x}}$ denotes what comes back.".to_string();
+        let p = with(|env| prepare(&ed, &["s2".to_string()], &[Edit::SplitSlide { slide: "s2".into(), groups, titles, notes: vec![own.clone(), "Two.\n1. P.".into()] }], env));
+        assert!(p.reasons.is_empty(), "{:?}", p.reasons);
+        assert_eq!(p.preview.deck.slides[1].notes, own);
+        assert_eq!(sentences("Open, it.\n1. $a.b$ is one. Two here\n2. 三。四"), ["Open, it.", "$a.b$ is one.", "Two here", "三。", "四"]);
+    }
+
+    /// The other half of the walk's refusal: an earlier slide's display equation uses a symbol
+    /// that the handed slide's second equation defines; the check lets that pass while the
+    /// definition is within its three sentences, and names it once the split puts a page between.
+    /// The order was the same before, so the split is kept and the author told; a symbol the edit
+    /// itself uses too early is still refused.
+    #[test]
+    fn an_order_that_was_already_so_does_not_refuse_a_split() {
+        let mut ed = editor();
+        for s in ed.deck.slides.iter_mut() {
+            s.notes = "This slide covers one step.\n1. One point.".into();
+        }
+        let b = body_mut(&mut ed, 0, 2);
+        b.paras = vec![b.paras[0].clone(), math("L = L_{r} + L_{c}")];
+        body_mut(&mut ed, 1, 2).paras = vec![Para::new(vec![Run::text("Reconstruction compares the image with its copy", "body", Look::default())]), math("L_{r} = \\lVert u \\rVert^2")];
+        let mut o = text_obj(4, "內文 2", Some("text-2"), 3_000_000, "body", &["Grading compares the scores with the label"]);
+        if let Some(sp) = o.kind.sp_mut() {
+            sp.text.as_mut().unwrap().paras.push(math("L_{c} = \\sum_{k} v_k"));
+        }
+        ed.deck.slides[1].objects.push(o);
+        let key = ("used_before_definition".to_string(), "L_{c}".to_string());
+        with(|env| {
+            assert!(!notation_keys(&ed.deck, env).contains_key(&key), "within the check's three sentences before the split: {:?}", notation_keys(&ed.deck, env).keys());
+            let p = prepare(&ed, &["s2".to_string()], &[split(vec![vec![2], vec![4]], 2)], env);
+            assert!(p.reasons.is_empty(), "{:?}", p.reasons);
+            assert!(notation_keys(&p.preview.deck, env).contains_key(&key), "the check itself is as strict as before");
+            assert!(p.warnings.iter().any(|w| w.contains("$L_{c}$") && w.contains("第 1 頁") && w.contains("第 3 頁")), "{:?}", p.warnings);
+            // the edit's own slide using a symbol too early: refused
+            let mut ed = ed.clone();
+            body_mut(&mut ed, 1, 2).paras.push(math("Q = W + L_{r}"));
+            body_mut(&mut ed, 1, 4).paras.push(math("W = \\sum_{k} v_k"));
+            ed.deck.slides[1].objects.push(text_obj(5, "內文 3", Some("text-3"), 4_000_000, "body", &["A line about something else"]));
+            let w = ("used_before_definition".to_string(), "W".to_string());
+            assert!(!notation_keys(&ed.deck, env).contains_key(&w), "{:?}", notation_keys(&ed.deck, env));
+            let p = prepare(&ed, &["s2".to_string()], &[split(vec![vec![2], vec![5], vec![4]], 3)], env);
+            assert!(p.ops.is_empty() && p.reasons.iter().any(|r| r.contains("沒有通過對照表檢查")), "{:?} {:?} {:?}", p.reasons, p.warnings, notation_keys(&p.preview.deck, env));
+        });
+    }
+
+    /// A title as 論文報告 builds it (32 pt in the base's 42 pt frame with insets): one line reads
+    /// 110 % in the estimate and is no finding on a page the edit makes; two lines are.
+    #[test]
+    fn a_generated_one_line_title_is_not_over_its_box() {
+        let ed = editor();
+        let mut after = ed.deck.clone();
+        let mut s = after.slides[1].clone();
+        s.uid = "s9".into();
+        let t = s.find_mut(1).unwrap();
+        t.frame = Frame::new(487_680, 630_936, 11_216_640, 534_924);
+        let tb = t.kind.sp_mut().unwrap().text.as_mut().unwrap();
+        tb.insets = [91_440, 45_720, 91_440, 45_720];
+        tb.paras = vec![Para::new(vec![Run::text("Why three lesions", "title", Look { size: 32.0, ..Default::default() })])];
+        after.slides.insert(2, s);
+        let r = crate::deckpolish::fill_ratio(after.slides[2].find(1).unwrap()).unwrap();
+        assert!((1.08..1.12).contains(&r), "the estimate itself: {r}");
+        let f = code_findings(&ed.deck, &after, &["s2".to_string(), "s9".to_string()]);
+        assert!(f.iter().all(|f| f.kind != "overflow"), "{f:?}");
+        let tb = after.slides[2].find_mut(1).unwrap().kind.sp_mut().unwrap().text.as_mut().unwrap();
+        tb.paras = vec![Para::new(vec![Run::text(&"A title that is far too long for one line of the page ".repeat(2), "title", Look { size: 32.0, ..Default::default() })])];
+        let f = code_findings(&ed.deck, &after, &["s2".to_string(), "s9".to_string()]);
+        assert!(f.iter().any(|f| f.kind == "overflow" && f.slide == "s9" && f.page == Some(3) && !f.text.contains("第 3 頁") && f.line().starts_with("第 3 頁「")), "{f:?}");
+    }
+
+    #[test]
+    fn an_unknown_kind_is_said_once_in_his_words() {
+        let v = json!({ "edits": [{ "edit": "recolour", "slide": "s2" }, { "edit": "recolour", "slide": "s2" }, { "edit": "set_text", "slide": "s2" }] });
+        let (edits, reasons, warnings) = parse_plan(&v, &["s2".to_string()]);
+        assert!(edits.is_empty());
+        assert_eq!(warnings, ["不認得的修改「recolour」，沒有做"]);
+        assert_eq!(reasons.len(), 2, "{reasons:?}");
+        assert!(reasons[0].starts_with(&warnings[0]) && reasons[0].contains(UNKNOWN_TAIL) && reasons[0].contains("split_slide"), "the model also reads what it may use: {}", reasons[0]);
+        assert!(for_author(&reasons[1]).starts_with("改文字：格式不對"), "{}", for_author(&reasons[1]));
     }
 
     #[test]
@@ -2346,7 +2918,7 @@ mod tests {
             (split(vec![vec![2], vec![2]], 2), "同時在"),
             (split(vec![vec![2], vec![1, 4]], 2), "不能分組"),
             (split(vec![vec![2]], 1), "至少要兩組"),
-            (Edit::SplitSlide { slide: "s2".into(), groups: vec![vec![2], vec![4]], titles: vec!["Only one".into()], notes: vec![] }, "標題"),
+            (Edit::SplitSlide { slide: "s2".into(), groups: vec![vec![Member::Obj(2)], vec![Member::Obj(4)]], titles: vec!["Only one".into()], notes: vec![] }, "標題"),
         ] {
             let p = with(|env| prepare(&ed, &["s2".to_string()], &[e], env));
             assert!(p.ops.is_empty() && p.reasons.iter().any(|r| r.contains(want)), "{want}: {:?}", p.reasons);

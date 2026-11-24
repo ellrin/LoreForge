@@ -6,6 +6,7 @@
 //! engine, unless `SC_TODECK_PLAN=<plan.json>` (and optionally `SC_TODECK_BOXES=<modules.json>`)
 //! give the replies a mock engine sends (UI checks); `SC_TODECK_EQ=<answer.json>` the equation-plot
 //! answer for 會動的方程式 (the GIF itself is drawn by the real Chrome renderer).
+//! `SC_PAGE_MOCK=<dir>` (test-only) scripts 改頁's two tasks: `<dir>/edit.json` and `check.json` are JSON arrays of replies, read at every call and taken in turn (the last one stays); requests go to `<dir>/seen.jsonl`.
 
 use std::sync::Arc;
 
@@ -38,7 +39,16 @@ async fn serve(dir: std::path::PathBuf, port: u16) {
             }
             sc_server::llm::Llm::with_factory(home, f)
         }
-        None => sc_server::llm::Llm::none(home),
+        None => match std::env::var_os("SC_PAGE_MOCK") {
+            Some(d) => {
+                let mut f = lore_llm::router::MockFactory::default();
+                for m in ["selected", "opus", "sonnet", "haiku", "fable"] {
+                    f = f.with(&format!("claude:{m}"), Arc::new(PageMock { dir: d.clone().into(), model: format!("claude:{m}") }));
+                }
+                sc_server::llm::Llm::with_factory(home, f)
+            }
+            None => sc_server::llm::Llm::none(home),
+        },
     };
     let _ = shared.llm.set(llm);
     let l = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.expect("bind");
@@ -46,4 +56,38 @@ async fn serve(dir: std::path::PathBuf, port: u16) {
     *shared.port.lock().unwrap() = l.local_addr().unwrap().port();
     eprintln!("http://{}", l.local_addr().unwrap());
     axum::serve(l, sc_server::router_isolated(shared)).await.unwrap();
+}
+
+/// 改頁's scripted model (`SC_PAGE_MOCK`): replies from files, by the system prompt.
+struct PageMock {
+    dir: std::path::PathBuf,
+    model: String,
+}
+
+#[async_trait::async_trait]
+impl lore_llm::LlmProvider for PageMock {
+    fn id(&self) -> String {
+        self.model.clone()
+    }
+    fn capabilities(&self) -> lore_llm::Capabilities {
+        lore_llm::Capabilities { json: true, vision: true, web: false, streaming: true, context: 1_000_000, needs_network: false }
+    }
+    async fn send(&self, req: &lore_llm::LlmRequest) -> Result<lore_llm::LlmResponse, lore_llm::LlmError> {
+        use std::io::Write;
+        let task = if req.system.contains("You change one or two slides") { "edit" } else { "check" };
+        let parts = || req.messages.iter().flat_map(|m| m.content.iter());
+        let images = parts().filter(|p| !matches!(p, lore_llm::Part::Text { .. })).count();
+        let user: String = parts().filter_map(|p| if let lore_llm::Part::Text { text } = p { Some(text.as_str()) } else { None }).collect();
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("seen.jsonl")) {
+            let _ = writeln!(f, "{}", serde_json::json!({ "model": self.model, "task": task, "images": images, "user": user }));
+        }
+        let path = self.dir.join(format!("{task}.json"));
+        let mut list: Vec<serde_json::Value> = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let text = list.first().map(|v| v.to_string()).unwrap_or_else(|| "{}".into());
+        if list.len() > 1 {
+            list.remove(0);
+            let _ = std::fs::write(&path, serde_json::to_string(&list).unwrap_or_default());
+        }
+        Ok(lore_llm::LlmResponse { text, provider: self.id(), sources: vec![], usage: None })
+    }
 }

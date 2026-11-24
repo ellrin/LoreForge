@@ -62,7 +62,8 @@ impl sc_server::PageShot for Shot {
 }
 
 /// The page of an open L-Echo request: applies the ops through the deck's own /ops route with the label.
-struct Page(axum::Router, Mutex<u32>);
+/// `.2`: what its undo answers instead of undoing (504 = the page is gone), `.3`: undos done.
+struct Page(axum::Router, Mutex<u32>, Mutex<Option<u16>>, Mutex<u32>);
 
 #[async_trait::async_trait]
 impl pageedit::PageQueue for Page {
@@ -76,6 +77,17 @@ impl pageedit::PageQueue for Page {
         *self.1.lock().unwrap() += 1;
         let (st, v) = call(&self.0, "POST", "/api/decks/talk/ops", Some(json!({ "ops": ops, "label": LABEL }))).await;
         if st == StatusCode::OK { Ok("已套用".into()) } else { Err((409, v["error"].as_str().unwrap_or("").into())) }
+    }
+    async fn undo(&self, request: &str, _edit: &str) -> Option<Result<String, (u16, String)>> {
+        if request != "r1" {
+            return Some(Err((410, "closed".into())));
+        }
+        if let Some(code) = *self.2.lock().unwrap() {
+            return Some(Err((code, "頁面沒有回應".into())));
+        }
+        *self.3.lock().unwrap() += 1;
+        let (st, v) = call(&self.0, "POST", "/api/decks/talk/undo", None).await;
+        Some(if st == StatusCode::OK { Ok("已套用".into()) } else { Err((409, v["error"].as_str().unwrap_or("").into())) })
     }
 }
 
@@ -140,7 +152,7 @@ async fn setup(edit: &[Value], check: &[Value], factory: impl FnOnce(Arc<Keyed>)
         assert_eq!(st, StatusCode::OK);
         slides.push(uid);
     }
-    let page = Arc::new(Page(app.clone(), Mutex::new(0)));
+    let page = Arc::new(Page(app.clone(), Mutex::new(0), Mutex::new(None), Mutex::new(0)));
     let deps = Deps {
         queue: page.clone(),
         math: Arc::new(|l: &str, _: bool, _: f64| if l.contains("\\bad") { Err("unknown command".into()) } else { Ok("<m:oMath/>".into()) }),
@@ -281,6 +293,95 @@ async fn an_open_request_gets_the_ops_through_the_page() {
     assert_eq!(st, StatusCode::OK);
 }
 
+/// 復原 from L-Echo: through the page that applied it (so what it shows follows); the server itself
+/// when that page is gone; and a step the author already took back in the app is said as it is.
+#[tokio::test]
+async fn undo_goes_through_the_page_then_the_server_and_knows_a_step_already_undone() {
+    let t = with_plans(|u, id| vec![set_text(u, id, &["Encoder finds lesions"])], &[json!({ "findings": [] })]).await;
+    let uid = t.slides[1].clone();
+    let (_, v) = call(&t.pe, "POST", "/api/decks/talk/page-edit", Some(json!({ "slides": [uid], "instruction": "one line" }))).await;
+    let id = v["id"].as_str().unwrap();
+    let apply = || async { call(&t.pe, "POST", &format!("/api/decks/talk/page-edit/{id}/apply"), Some(json!({ "request": "r1" }))).await };
+    let undo = || async { call(&t.pe, "POST", &format!("/api/decks/talk/page-edit/{id}/undo"), None).await };
+    let edited = || async { texts(&deck(&t).await["deck"], &uid).contains("Encoder finds lesions") };
+    // the page is there: it undoes
+    assert_eq!(apply().await.0, StatusCode::OK);
+    let (st, u) = undo().await;
+    assert_eq!((st, u["undone"].as_str(), *t.page.3.lock().unwrap()), (StatusCode::OK, Some("page"), 1), "{u}");
+    assert!(!edited().await);
+    assert_eq!(deck(&t).await["status"]["redo"], LABEL);
+    // the page is gone (no answer, or its request closed meanwhile): the server undoes that step
+    for code in [504, 410] {
+        assert_eq!(apply().await.0, StatusCode::OK);
+        *t.page.2.lock().unwrap() = Some(code);
+        let (st, u) = undo().await;
+        assert_eq!((st, u["undone"].as_str()), (StatusCode::OK, Some("server")), "{code}: {u}");
+        assert!(!edited().await);
+        *t.page.2.lock().unwrap() = None;
+    }
+    assert_eq!(*t.page.3.lock().unwrap(), 1);
+    // the page refuses (its own reason): passed on, nothing undone
+    assert_eq!(apply().await.0, StatusCode::OK);
+    *t.page.2.lock().unwrap() = Some(409);
+    let (st, u) = undo().await;
+    assert_eq!(st, StatusCode::CONFLICT, "{u}");
+    assert!(edited().await);
+    *t.page.2.lock().unwrap() = None;
+    // ⌘Z in the app, then 復原 in L-Echo: already undone, not an error, and not undone twice
+    let (st, _) = call(&t.app, "POST", "/api/decks/talk/undo", None).await;
+    assert_eq!(st, StatusCode::OK);
+    let rev = deck(&t).await["status"]["rev"].clone();
+    let (st, u) = undo().await;
+    assert_eq!((st, u["undone"].as_str()), (StatusCode::OK, Some("already")), "{u}");
+    assert_eq!(deck(&t).await["status"]["rev"], rev);
+    assert_eq!(apply().await.0, StatusCode::OK, "it can be applied again");
+}
+
+/// His case through the route, on the real base: a title and one box of four lines becomes three
+/// pages, each with its own lines at the top of the body, the box as high as its lines, and
+/// nothing reported (no corrective round).
+#[tokio::test]
+async fn a_one_box_page_becomes_three_pages() {
+    let notes = ["Recall first.\n1. One point.", "Precision next.\n1. One point.", "F1 last.\n1. One point."];
+    let t = with_plans(
+        |u, id| vec![json!({ "edits": [{ "edit": "split_slide", "slide": u, "groups": [[{ "obj": id, "paras": [1] }], [{ "obj": id, "paras": [2, 3] }], [{ "obj": id, "paras": [4] }]], "titles": ["Recall", "Precision", "F1"], "notes": notes }] })],
+        &[json!({ "findings": [] })],
+    )
+    .await;
+    let uid = t.slides[1].clone();
+    let id = body_id(&deck(&t).await["deck"], &uid);
+    let lines = ["Recall is found over all lesions", "Precision is found over reported lesions", "It drops when noise is graded", "F1 joins both in one number"];
+    let paras: Vec<Value> = lines.iter().map(|l| deck_para(l)).collect();
+    let (st, e) = call(&t.app, "POST", "/api/decks/talk/ops", Some(json!({ "ops": [{ "op": "set_obj", "slide": uid, "id": id, "path": "/text/paras", "value": paras }], "label": "four lines" }))).await;
+    assert_eq!(st, StatusCode::OK, "{e}");
+    let v = propose(&t, &uid).await;
+    assert_eq!(v["warnings"], json!([]), "{v}");
+    assert_eq!(v["findings"], json!([]), "{v}");
+    assert_eq!(t.llm.asked(ASK_EDIT).len(), 1, "no corrective round");
+    assert_eq!(v["after"].as_array().unwrap().len(), 3);
+    apply(&t, &v).await;
+    let d = deck(&t).await;
+    let slides = d["deck"]["slides"].as_array().unwrap();
+    let i = slides.iter().position(|s| s["uid"] == uid).unwrap();
+    let top = fr(&obj(&slides[i], |o| o["id"] == id), "y");
+    for (k, want) in [&lines[..1], &lines[1..3], &lines[3..]].iter().enumerate() {
+        let s = &slides[i + k];
+        let b = obj(s, |o| o["id"] == id);
+        let got: Vec<&str> = b["text"]["paras"].as_array().unwrap().iter().map(|p| p["runs"][0]["text"].as_str().unwrap()).collect();
+        assert_eq!(&got, want, "page {}", k + 1);
+        assert!(s.to_string().contains(["Recall", "Precision", "F1"][k]) && s["notes"] == notes[k]);
+        assert_eq!(fr(&b, "y"), top, "every page's lines start where a page's text starts");
+        let run = &b["text"]["paras"][0]["runs"][0];
+        assert_eq!((run["tag"].as_str(), run["look"]["size"].as_f64()), (Some("body"), Some(18.0)), "the role's own formatting");
+    }
+    let (one, two) = (fr(&obj(&slides[i], |o| o["id"] == id), "h"), fr(&obj(&slides[i + 1], |o| o["id"] == id), "h"));
+    assert!(one < two && two < 1_800_000, "each box as high as its own lines: {one} {two}");
+    assert_eq!(d["status"]["undo"], LABEL);
+    let (st, _) = call(&t.pe, "POST", &format!("/api/decks/talk/page-edit/{}/undo", v["id"].as_str().unwrap()), None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(deck(&t).await["deck"]["slides"].as_array().unwrap().len(), slides.len() - 2, "one step back");
+}
+
 #[tokio::test]
 async fn a_slide_changed_since_the_proposal_is_409() {
     let t = with_plans(|u, id| vec![set_text(u, id, &["Encoder finds lesions"])], &[json!({ "findings": [] })]).await;
@@ -357,6 +458,7 @@ async fn insert_each_allowed_kind_and_split() {
         assert_eq!(slot, !sc_server::todeck::plan::text_only_ok(k), "{k}: an empty picture slot unless text-only is allowed");
     }
     assert_eq!(v["after"].as_array().unwrap().len(), 1 + pageedit::insert_kinds().len(), "the new pages were looked at");
+    assert_eq!(v["findings"], json!([]), "a generated one-line title is not text over its box");
     let (st, a) = call(&t.pe, "POST", &format!("/api/decks/talk/page-edit/{id}/apply"), None).await;
     assert_eq!(st, StatusCode::OK, "{a}");
     assert_eq!(deck(&t).await["deck"]["slides"].as_array().unwrap().len(), n0 + pageedit::insert_kinds().len());
@@ -372,8 +474,7 @@ async fn split_through_the_route() {
     let plan = json!({ "edits": [{ "edit": "split_slide", "slide": uid, "groups": [[body], [90, 91]], "titles": ["First half", "Second half"], "notes": notes }] });
     // then an inserted page of the same base: where a freshly built page starts its text
     let insert = json!({ "edits": [{ "edit": "insert_slide", "after": uid, "kind": "takeaway", "title": "Fresh page", "blocks": [{ "role": "bullet", "text": "A fresh line" }], "notes": notes[0] }] });
-    // (the synthetic title runs over its box on the new page: the corrective round gets the same plan)
-    let t = setup(&[plan.clone(), plan, insert], &[json!({ "findings": [] })], opus).await;
+    let t = setup(&[plan, insert], &[json!({ "findings": [] })], opus).await;
     // a second body box (id 90) under the first, and a shape the author drew (id 91) beside it
     let mut extra = text_obj("內文 2", "text-2", 3_600_000, "body", &["A third synthetic line"]);
     extra["id"] = json!(90);
@@ -385,6 +486,7 @@ async fn split_through_the_route() {
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(v["plan"]["edits"].as_array().unwrap().len(), 1, "{v}");
     assert_eq!(v["after"].as_array().unwrap().len(), 2, "both parts looked at");
+    assert_eq!((&v["findings"], t.llm.asked(ASK_EDIT).len()), (&json!([]), 1), "a one-line title on the new page is no overflow: no corrective round");
     let (st, _) = call(&t.pe, "POST", &format!("/api/decks/talk/page-edit/{}/apply", v["id"].as_str().unwrap()), None).await;
     assert_eq!(st, StatusCode::OK);
     let d = deck(&t).await;

@@ -1620,6 +1620,12 @@ async function pagePoll(c) {
 /** L-Echo's ops as one 「L-Echo 改頁」 step, then the changed slide in view. true, or why not. */
 async function pageApply(c, ops) {
   if (c.deck !== S.name) return "這份簡報已經關閉";
+  // L-Echo's 復原: this page's own undo, so what it shows follows (only while that edit is the next undo)
+  if (ops && !Array.isArray(ops) && ops.undo) {
+    if (S.status?.undo !== "L-Echo 改頁") return "之後又改過，復原請在 L-Slide";
+    await undo();
+    return S.status?.undo === "L-Echo 改頁" ? "沒有復原" : true;
+  }
   if (!Array.isArray(ops) || !ops.length) return "沒有要套用的修改";
   return quietly(async () => {
     if (S.editing || S.editingCell) await exitEdit(); // typing so far is its own step
