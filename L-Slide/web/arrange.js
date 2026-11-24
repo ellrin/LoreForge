@@ -109,15 +109,40 @@ const slotKind = (o) => (o.slot ?? "").replace(/-\d+$/, "");
 /** A slide's title object: a title placeholder or a recipe's title block. */
 const isTitleObj = (o) => slotKind(o) === "title" || o.ph === "title" || o.ph === "ctrTitle";
 
+/** A slide's text objects (groups flattened, hidden ones left out), how one reads, and its title
+ *  object (the first title with text). */
+function slideTexts(sl, paraText) {
+  const textOf = (o) => (o.text?.paras ?? []).map(paraText).map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean).join(" / ");
+  const flat = (list) => list.flatMap((o) => (o.type === "group" ? flat(o.children ?? []) : [o]));
+  const objs = flat(sl?.objects ?? []).filter((o) => !o.hidden && o.text);
+  return { objs, textOf, title: objs.find((o) => isTitleObj(o) && textOf(o)) };
+}
+
+/** The slides handed to L-Echo (改頁), in deck order: `{id: uid, n: page number, title}`. */
+function pageSlides(slides, uids, paraText) {
+  return slides.flatMap((sl, i) => {
+    if (!uids.includes(sl.uid)) return [];
+    const { title, textOf } = slideTexts(sl, paraText);
+    return [{ id: sl.uid, n: i + 1, title: title ? textOf(title) : "" }];
+  });
+}
+
+/** The slide to show after ops were applied: the first one an op names (changed or inserted) that
+ *  is in the deck now, or null. */
+function pagedSlide(ops, slides) {
+  for (const op of ops) {
+    const uid = op?.slide?.uid ?? op?.slide;
+    if (typeof uid === "string" && slides.some((s) => s.uid === uid)) return uid;
+  }
+  return null;
+}
+
 /** Where a selection sits, for a rewrite (潤飾, L-Echo): `scope` = 「第 n 頁：title」 and `context` =
  *  labelled lines, the other paragraphs of the same box, the slide's other text in reading order
  *  (top, then left; the title left out), then its speaker notes (≤ 600 characters); ≤ 2,500 in all.
  *  `paraText(para)` gives a paragraph as the model sees it. */
 function selectionContext(sl, n, id, pi, paraText) {
-  const textOf = (o) => (o.text?.paras ?? []).map(paraText).map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean).join(" / ");
-  const flat = (list) => list.flatMap((o) => (o.type === "group" ? flat(o.children ?? []) : [o]));
-  const objs = flat(sl?.objects ?? []).filter((o) => !o.hidden && o.text);
-  const title = objs.find((o) => isTitleObj(o) && textOf(o));
+  const { objs, textOf, title } = slideTexts(sl, paraText);
   const scope = title ? `第 ${n} 頁：${textOf(title)}` : `第 ${n} 頁`;
   const lines = [];
   const box = objs.find((o) => o.id === id);

@@ -65,16 +65,19 @@ function serial(fn) {
   return p;
 }
 
-/** Apply ops on the server (validated, undoable); refresh the slides it returns. */
+/** Apply ops on the server (validated, undoable: one step); refresh the slides it returns.
+ *  true, or why the server refused (already shown). */
 async function commit(ops, label) {
   flushNudge();
   if (!ops.length) return;
   return serial(async () => {
     try {
       absorb(await api(deckApi("/ops"), { body: { ops, label } }));
+      return true;
     } catch (e) {
       toast(e.message, true);
       renderAll();
+      return e.message;
     }
   });
 }
@@ -1568,6 +1571,65 @@ function editMenu(ev) {
   setTimeout(() => pin.parentNode?.removeChild(pin), 0);
 }
 
+// ── 改頁: one or two slides through L-Echo (lore_shell::pageedit); what it sends back is one step ──
+let paged = null; // the open request: { deck, request, handled, since, timer }
+const handItem = (uids) => ({ icon: "send", label: "交給 L-Echo", disabled: uids.length < 1 || uids.length > 2, run: () => handPages(uids) });
+
+/** Hand the slides to L-Echo (bringing it up) and wait for what it sends back; a new hand-off replaces the old. */
+async function handPages(uids) {
+  if (S.editing || S.editingCell) await exitEdit(); // the server reads the deck as saved
+  if (paged) clearTimeout(paged.timer);
+  const c = (paged = { deck: S.name, handled: new Set(), since: Date.now(), timer: null });
+  try {
+    const slides = pageSlides(S.deck.slides, uids, (p) => polishText(p).str);
+    c.request = (await api("/api/lore/page", { body: { deck: S.name, source: S.deck.title || S.name, slides, launch: true } })).request;
+  } catch (e) {
+    if (paged === c) paged = null;
+    toast(e.message, true);
+    return;
+  }
+  pagePoll(c);
+}
+
+async function pagePoll(c) {
+  if (paged !== c) return;
+  let wait = 1000;
+  const url = `/api/lore/page/${encodeURIComponent(c.request)}`;
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) { if (paged === c) paged = null; return; }
+    const v = await r.json();
+    for (const item of v.pending || []) {
+      if (paged !== c) return; // replaced: its other items are not applied
+      if (c.handled.has(item.seq)) continue;
+      c.handled.add(item.seq);
+      let res;
+      try { res = await pageApply(c, item.ops); } catch (e) { res = String(e?.message || e); }
+      const body = res === true ? { ok: true } : { ok: false, error: typeof res === "string" && res ? res : "沒有套用" };
+      await fetch(`${url}/done`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ seq: item.seq, ...body }) }).catch(() => {}); // L-Echo hears a timeout
+      wait = 300; // more may follow soon
+    }
+    if (!v.open) { if (paged === c) paged = null; return; }
+  } catch { /* the server restarts: try again */ }
+  if (paged !== c) return;
+  if (Date.now() - c.since > 30 * 60 * 1000) { paged = null; return; }
+  c.timer = setTimeout(() => pagePoll(c), wait);
+}
+
+/** L-Echo's ops as one 「L-Echo 改頁」 step, then the changed slide in view. true, or why not. */
+async function pageApply(c, ops) {
+  if (c.deck !== S.name) return "這份簡報已經關閉";
+  if (!Array.isArray(ops) || !ops.length) return "沒有要套用的修改";
+  return quietly(async () => {
+    if (S.editing || S.editingCell) await exitEdit(); // typing so far is its own step
+    const res = await commit(ops, "L-Echo 改頁");
+    if (res !== true) return res;
+    const uid = pagedSlide(ops, S.deck.slides);
+    if (uid && uid !== S.cur) gotoSlide(uid);
+    return true;
+  });
+}
+
 function editKey(ev) {
   if (S.composing) return;
   if (ev.key === "Escape") { ev.preventDefault(); exitEdit(); return; }
@@ -1911,6 +1973,12 @@ async function hideSlide() {
 function wireSorter() {
   const box = $("#thumbs");
   box.addEventListener("click", (e) => { const t = e.target.closest(".thumb"); setFocus("slides"); if (t) gotoSlide(t.dataset.uid); });
+  box.addEventListener("contextmenu", (e) => {
+    const t = e.target.closest(".thumb");
+    if (!t) return;
+    e.preventDefault();
+    LoreShell.menu({ x: e.clientX, y: e.clientY }, [handItem([t.dataset.uid])]);
+  });
   let dragUid = null;
   box.addEventListener("dragstart", (e) => { dragUid = e.target.closest(".thumb")?.dataset.uid; e.dataTransfer.effectAllowed = "move"; });
   box.addEventListener("dragover", (e) => {
@@ -2331,6 +2399,12 @@ function wire() {
   vp.addEventListener("pointerup", onPointerUp);
   vp.addEventListener("pointercancel", onPointerUp);
   vp.addEventListener("dblclick", onDblClick);
+  // right-click with no object selected: this slide to L-Echo
+  vp.addEventListener("contextmenu", (e) => {
+    if (S.sel.length || S.editing || S.editingCell || !slide() || e.altKey || e.shiftKey) return;
+    e.preventDefault();
+    LoreShell.menu({ x: e.clientX, y: e.clientY }, [handItem([S.cur])]);
+  });
   document.addEventListener("keydown", onKey);
   addEventListener("resize", () => { if (S.deck) { renderCanvas(); } });
   $$("[data-tool]").forEach((b) => (b.onclick = () => setTool(b.dataset.tool)));
