@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 
-use crate::registry::{Registry, write_atomic};
+use crate::registry::Registry;
+use crate::util::write_atomic;
 use crate::types::*;
 
 /// What the hub keeps beside an item of an adapter category.
@@ -25,6 +26,9 @@ struct Meta {
     revision: u64,
     created_at: String,
     updated_at: String,
+    /// Who supplied the item, when the app's own data cannot say (a CSV row has no source column).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<Source>,
 }
 
 fn ms_now() -> u64 {
@@ -141,6 +145,9 @@ impl Store {
         item.tidy();
         item.triggers = union(&item.triggers, &meta.overlay.triggers);
         item.contains = union(&item.contains, &meta.overlay.contains);
+        if let Some(src) = meta.source {
+            item.source = src;
+        }
         item.used = meta.overlay.used;
         item.used_at = meta.overlay.used_at;
         item.revision = meta.revision.max(1);
@@ -241,6 +248,8 @@ impl Store {
             Some(a) => a.load()?.0.into_iter().find(|i| i.id == item.id),
             None => None,
         };
+        // the app's data keeps no source: the hub keeps it when it differs from what the adapter reports
+        let source = own.as_ref().filter(|o| o.source != item.source).map(|_| item.source.clone());
         let (otags, otrig, ocont) = own.map(|o| (o.tags, o.triggers, o.contains)).unwrap_or_default();
         let m = Meta {
             overlay: Overlay {
@@ -253,6 +262,7 @@ impl Store {
             revision: item.revision,
             created_at: item.created_at.clone(),
             updated_at: item.updated_at.clone(),
+            source,
         };
         self.write_meta(&item.id, &m)
     }
@@ -367,7 +377,28 @@ impl Sink for Store {
             item = merged;
         } else {
             let a = self.adapter(&cat).ok_or_else(|| KnowError::Other(format!("{} 還沒有接上讀取程式", cat.id)))?;
+            let before: Vec<String> = a.load()?.0.into_iter().map(|i| i.id).collect();
             a.save(&item)?;
+            // The app's data may name the item differently from the id given (a note's id comes
+            // from its file name, a wording row's from its `avoid`): the id it reports now is the
+            // stable one.
+            let (after, _) = a.load()?;
+            if !after.iter().any(|i| i.id == item.id) {
+                let fresh: Vec<&Item> = after.iter().filter(|i| !before.contains(&i.id)).collect();
+                let found = match fresh.len() {
+                    1 => Some(fresh[0]),
+                    _ => fresh.iter().copied().find(|i| i.title == item.title),
+                };
+                let found = found.ok_or_else(|| KnowError::Other(format!("「{}」存進去了，但是在 {} 裡找不到它", item.title, cat.label)))?;
+                let old = item.id.clone();
+                item.id = found.id.clone();
+                // bookkeeping written under the old id would be orphaned
+                if let Ok(p) = self.file("meta", &old)
+                    && p.exists()
+                {
+                    let _ = fs::remove_file(p);
+                }
+            }
         }
         self.write_meta_for(&cat, &item)?;
         Ok(self.get(&item.id)?.unwrap_or(item))
@@ -677,5 +708,99 @@ path = "layouts"
         // an adapter category with no adapter reads as empty with a problem
         assert!(s.list("pc.layouts").unwrap().is_empty());
         assert_eq!(s.problems("pc.layouts").len(), 1);
+    }
+
+    const REAL: &str = r#"
+[[category]]
+id = "pc.notes"
+label = "筆記"
+format = "note"
+writable = true
+[category.native]
+kind = "files"
+app_dir = "PaperComposer"
+path = "notes"
+
+[[category]]
+id = "pc.wording"
+label = "用詞"
+format = "wording"
+writable = true
+[category.native]
+kind = "csv"
+app_dir = "PaperComposer"
+path = "wording.csv"
+"#;
+
+    #[test]
+    fn a_new_note_and_a_new_wording_row_come_back_with_their_stable_ids() {
+        use crate::formats::table::CsvAdapter;
+        use crate::formats::text::NoteFiles;
+        let hub = tempfile::tempdir().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let open_real = || {
+            let mut s = Store::open(hub.path().to_path_buf(), Registry::load(&[REAL], hub.path()).unwrap()).unwrap();
+            s.add_adapter("pc.notes", Box::new(NoteFiles::new(app.path().join("notes"), "pc.notes", Source::lore("pc"))));
+            s.add_adapter("pc.wording", Box::new(CsvAdapter::new(app.path().join("wording.csv"), "pc.wording", format::WORDING, Source::lore("pc"))));
+            s
+        };
+        let mut s = open_real();
+
+        let mut n = Item::new("pc.notes", format::NOTE, "Plan A", Source::author());
+        n.set("body", "hello");
+        n.tag(facet::USE, "paper");
+        let n = s.put(n).unwrap();
+        assert_eq!(n.id, "pc.notes:Plan-A", "the id the file name gives, not the temporary one");
+        assert_eq!((n.revision, n.source.clone(), n.tags[facet::USE].clone()), (1, Source::author(), vec!["paper".to_string()]));
+        assert_eq!(s.get(&n.id).unwrap().unwrap(), n);
+        // a fresh store over the same folders finds the same item with the same id
+        let s2 = open_real();
+        assert_eq!(s2.list("pc.notes").unwrap(), vec![n.clone()]);
+        // no bookkeeping is left under a temporary id
+        let metas: Vec<_> = fs::read_dir(hub.path().join("meta/pc.notes")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(metas, ["Plan-A.json"]);
+        // the id it came back with can be written again
+        let mut again = n.clone();
+        again.set("body", "# Plan A\n\nhello again");
+        assert_eq!(s.put(again).unwrap().revision, 2);
+        // a second note with the same title is a second note
+        let mut m = Item::new("pc.notes", format::NOTE, "Plan A", Source::author());
+        m.set("body", "other");
+        assert_eq!(s.put(m).unwrap().id, "pc.notes:Plan-A-2");
+
+        let mut w = Item::new("pc.wording", format::WORDING, "utilize", Source::lore("pc"));
+        w.set("avoid", "utilize").set("prefer", "use");
+        w.tag(facet::KIND, "verb");
+        let w = s.put(w).unwrap();
+        assert_eq!(w.id, "pc.wording:utilize");
+        assert_eq!((w.revision, w.field("prefer")), (1, "use"));
+        assert_eq!(open_real().get(&w.id).unwrap().unwrap().id, w.id);
+        // the same word twice is refused and the file stays as it was
+        let csv = fs::read_to_string(app.path().join("wording.csv")).unwrap();
+        let mut dup = Item::new("pc.wording", format::WORDING, "utilize", Source::lore("pc"));
+        dup.set("avoid", "utilize").set("prefer", "employ");
+        assert!(matches!(s.put(dup), Err(KnowError::Invalid(_))));
+        assert_eq!(fs::read_to_string(app.path().join("wording.csv")).unwrap(), csv);
+        // renaming `avoid` gives the row its new id, and the old bookkeeping goes
+        let mut renamed = w.clone();
+        renamed.set("avoid", "utilise");
+        let renamed = s.put(renamed).unwrap();
+        assert_eq!(renamed.id, "pc.wording:utilise");
+        assert!(s.get("pc.wording:utilize").unwrap().is_none());
+        assert!(!hub.path().join("meta/pc.wording/utilize.json").exists());
+    }
+
+    #[test]
+    fn the_source_of_an_item_in_an_apps_data_is_kept() {
+        use crate::formats::table::CsvAdapter;
+        let hub = tempfile::tempdir().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let mut s = Store::open(hub.path().to_path_buf(), Registry::load(&[REAL], hub.path()).unwrap()).unwrap();
+        s.add_adapter("pc.wording", Box::new(CsvAdapter::new(app.path().join("wording.csv"), "pc.wording", format::WORDING, Source::lore("pc"))));
+        let mut w = Item::new("pc.wording", format::WORDING, "utilize", Source::external("acme"));
+        w.set("avoid", "utilize").set("prefer", "use");
+        let w = s.put(w).unwrap();
+        assert_eq!(w.source, Source::external("acme"));
+        assert_eq!(s.list("pc.wording").unwrap()[0].source, Source::external("acme"));
     }
 }

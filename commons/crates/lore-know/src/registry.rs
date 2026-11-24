@@ -5,9 +5,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::types::*;
+use crate::util::write_atomic;
 
 /// Every format id a category may use.
 const FORMATS: &[&str] = &[
@@ -22,21 +22,6 @@ const FORMATS: &[&str] = &[
     format::LAYOUT,
     format::FIGURE,
 ];
-
-/// Write `bytes` to `path` atomically (temp file in the same folder, then rename).
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    static N: AtomicU64 = AtomicU64::new(0);
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(dir)?;
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-    fs::write(&tmp, bytes)?;
-    if let Err(e) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(e.into());
-    }
-    Ok(())
-}
 
 fn rank(origin: &str) -> u8 {
     match origin {
@@ -182,13 +167,17 @@ impl Registry {
         let (Some(s), Some(n)) = (lower_local(source_name), lower_local(set_name)) else {
             return Err(KnowError::Invalid("來源與這一組都要有英文或數字的名字".into()));
         };
-        let id = format!("x.{s}.{n}");
+        // a dot in a name would make `x.a.b` + `c` and `x.a` + `b.c` the same id
+        let id = format!("x.{}.{}", s.replace('.', "-"), n.replace('.', "-"));
         check_id(&id)?;
         if let Some(have) = self.get(&id) {
             return if have.format == format {
                 Ok(have.clone())
             } else {
-                Err(KnowError::Invalid(format!("「{id}」已經存在，格式是 {}，不能改成 {format}", have.format)))
+                Err(KnowError::Invalid(format!(
+                    "來源「{}」的「{}」已經是 {} 格式的一組，不能再用 {format} 格式加入；要用另一個格式，請換一個名字",
+                    have.group, have.label, have.format
+                )))
             };
         }
         let c = Category {
@@ -258,6 +247,16 @@ impl Registry {
         let gone = cats.remove(at);
         self.commit(cats)?;
         Ok(gone)
+    }
+}
+
+/// The registry is what intake files outside batches into.
+impl crate::intake::Categories for Registry {
+    fn get(&self, id: &str) -> Option<Category> {
+        Registry::get(self, id).cloned()
+    }
+    fn add_external(&mut self, source: &str, name: &str, format: &str) -> Result<Category> {
+        Registry::add_external(self, source, name, format)
     }
 }
 
@@ -422,5 +421,48 @@ format = "layout"
         let r3 = Registry::load(&[PC], d.path()).unwrap();
         assert!(r3.get(&m.id).is_none() && r3.get(&e.id).is_some());
         assert!(std::fs::read_dir(d.path()).unwrap().all(|f| !f.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+    }
+
+    #[test]
+    fn the_registry_is_the_intakes_categories() {
+        use crate::intake::{import, Batch, Categories, Entry, Target};
+        let d = tempfile::tempdir().unwrap();
+        let mut r = Registry::load(&[PC], d.path()).unwrap();
+        let formats = crate::formats::all();
+        let mut sink = MemSink::default();
+        let entry = |t: &str| {
+            let mut e = Entry { title: t.into(), ..Default::default() };
+            e.fields.insert("text".into(), t.into());
+            e
+        };
+        let batch = Batch {
+            lore_know: 1,
+            source: "Acme".into(),
+            target: Target::Independent { name: "Words".into(), format: format::EXPRESSION.into() },
+            items: vec![entry("in contrast")],
+        };
+        let rep = import(&mut sink, &mut r, &formats, &batch).unwrap();
+        assert_eq!((rep.category.as_str(), rep.added), ("x.acme.words", 1));
+        // the registry made the independent set, and kept it on disk
+        let c = Categories::get(&r, "x.acme.words").unwrap();
+        assert!(c.independent() && c.tasks.is_empty());
+        assert!(Registry::load(&[PC], d.path()).unwrap().get("x.acme.words").is_some());
+        // the same source and name in another format is refused, in Traditional Chinese, and nothing changes
+        let other = Batch { target: Target::Independent { name: "words".into(), format: format::NOTE.into() }, ..batch.clone() };
+        match import(&mut sink, &mut r, &formats, &other) {
+            Err(KnowError::Invalid(m)) => assert!(m.contains("已經是") && m.contains("expression"), "{m}"),
+            x => panic!("{x:?}"),
+        }
+        assert_eq!(r.get("x.acme.words").unwrap().format, format::EXPRESSION);
+        // aligning goes to an existing category the registry knows; an unknown one is refused
+        let mine = r.add_manual("Mine", format::EXPRESSION, "", "").unwrap();
+        let align = Batch { target: Target::Align { category: mine.id.clone() }, items: vec![entry("however")], ..batch.clone() };
+        assert_eq!(import(&mut sink, &mut r, &formats, &align).unwrap().added, 1);
+        let nowhere = Batch { target: Target::Align { category: "my.none".into() }, ..align };
+        assert!(matches!(import(&mut sink, &mut r, &formats, &nowhere), Err(KnowError::NotFound(_))));
+        // dots in names cannot make two sources share a set
+        let a = Registry::add_external(&mut r, "a.b", "c", format::RULE).unwrap();
+        let b = Registry::add_external(&mut r, "a", "b.c", format::RULE).unwrap();
+        assert_ne!(a.id, b.id);
     }
 }

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use crate::types::*;
+use crate::util::write_atomic;
 
 // ── the five formats ─────────────────────────────────────────────────────────
 
@@ -244,7 +245,7 @@ impl CsvAdapter {
         Ok(Some(Table { header, rows: recs }))
     }
 
-    /// Atomic: temp file in the same folder, then rename.
+    /// Atomic (the shared helper).
     fn write(&self, t: &Table) -> Result<()> {
         let mut w = csv::WriterBuilder::new().flexible(true).from_writer(vec![]);
         w.write_record(&t.header).map_err(|e| KnowError::Other(e.to_string()))?;
@@ -252,16 +253,7 @@ impl CsvAdapter {
             w.write_record(r).map_err(|e| KnowError::Other(e.to_string()))?;
         }
         let bytes = w.into_inner().map_err(|e| KnowError::Other(e.to_string()))?;
-        if let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            fs::create_dir_all(dir)?;
-        }
-        let name = self.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "table.csv".into());
-        let tmp = self.path.with_file_name(format!(".{name}.tmp"));
-        fs::write(&tmp, bytes)?;
-        fs::rename(&tmp, &self.path).map_err(|e| {
-            let _ = fs::remove_file(&tmp);
-            KnowError::from(e)
-        })
+        write_atomic(&self.path, &bytes)
     }
 
     fn item_of(&self, sp: &Spec, header: &[String], row: &[String], local: &str) -> Item {
@@ -387,6 +379,16 @@ impl Adapter for CsvAdapter {
                 set(&mut row, j, as_text(v));
             } else if is_new && sp.title_writes_back && name == sp.title_col {
                 set(&mut row, j, item.title.clone());
+            }
+        }
+        // A row without an id column is known by its `avoid` text: it must be there, and be new.
+        if !sp.id_col {
+            let now_local = local_of(sp, &header, &row);
+            if now_local.is_empty() {
+                return Err(KnowError::Invalid("「避免」不能空白".into()));
+            }
+            if let Some(other) = t.rows.iter().enumerate().find(|(i, r)| Some(*i) != at && local_of(sp, &header, r) == now_local) {
+                return Err(KnowError::Invalid(format!("已經有一列「避免」是「{}」了", cell(&header, other.1, "avoid").trim())));
             }
         }
         match at {

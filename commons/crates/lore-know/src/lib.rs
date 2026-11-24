@@ -10,11 +10,13 @@
 //! * [`intake`]: outside applications — align or independent, whole-set replace, export (K6).
 //! * [`select`]: what applies to a step and its content, written into a prompt (K7).
 //! * [`decompose`]: a figure's picture into figure / modules / components (K8).
+//! * [`hub`]: everything above opened together for an app (`Hub::open`).
 //!
 //! Every write goes through [`Sink`]. Nothing here reads the real `private/` in tests.
 
 pub mod decompose;
 pub mod formats;
+pub mod hub;
 pub mod index;
 pub mod intake;
 pub mod proposal;
@@ -22,5 +24,6 @@ pub mod registry;
 pub mod select;
 pub mod store;
 pub mod types;
+pub(crate) mod util;
 
 pub use types::*;

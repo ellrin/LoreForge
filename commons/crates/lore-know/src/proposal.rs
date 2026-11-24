@@ -9,28 +9,17 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::types::*;
+use crate::util::write_atomic;
 
 const TEMP_PREFIX: &str = "new:";
 
 fn is_temp(id: &str) -> bool {
     id.strip_prefix(TEMP_PREFIX).is_some_and(|n| !n.is_empty())
-}
-
-/// Write `bytes` to `path` through a temp file and a rename.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-    let tmp = path.with_file_name(format!(".{name}.tmp"));
-    fs::write(&tmp, bytes)?;
-    if let Err(e) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(e.into());
-    }
-    Ok(())
 }
 
 fn other<E: std::fmt::Display>(e: E) -> KnowError {

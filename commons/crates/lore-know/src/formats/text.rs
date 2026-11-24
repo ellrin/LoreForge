@@ -5,11 +5,11 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::util::write_atomic;
 use crate::types::{
     format, item_id, safe_local, split_id, Adapter, FieldDef, Format, FormatDef, Item, KnowError, Problem, Result, Source,
 };
@@ -29,22 +29,6 @@ fn clip(s: &str, n: usize) -> String {
 
 fn is_hidden(name: &str) -> bool {
     name.starts_with('.')
-}
-
-/// Write beside the target and rename, so a reader never sees half a file.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-    let tmp = path.with_file_name(format!(".{name}.tmp{}", std::process::id()));
-    let r = (|| {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        fs::rename(&tmp, path)
-    })();
-    if r.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    Ok(r?)
 }
 
 /// Directory entries sorted by name; a missing directory is an empty one (the app has not made it yet).

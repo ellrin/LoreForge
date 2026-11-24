@@ -66,9 +66,11 @@ pub fn parse(text: &str) -> Result<Batch> {
         Some(n) => return Err(KnowError::Invalid(format!("不認得的版本 lore_know = {n}，這裡讀的是 {VERSION}"))),
         None => return Err(KnowError::Invalid(format!("缺 lore_know（版本，要寫 {VERSION}）"))),
     }
-    if obj.get("source").and_then(Value::as_str).is_none_or(|s| s.trim().is_empty()) {
-        return Err(KnowError::Invalid("缺 source（應用程式的名字）".into()));
-    }
+    // `source` must be written. Empty is the author's own file (an export of a Lore or hand-made
+    // category) and is only valid for aligning; an application always names itself.
+    let Some(source) = obj.get("source").and_then(Value::as_str) else {
+        return Err(KnowError::Invalid("缺 source（應用程式的名字；作者自己的檔案寫成空字串）".into()));
+    };
     let Some(t) = obj.get("target").filter(|t| t.is_object()) else {
         return Err(KnowError::Invalid("缺 target（要對齊哪一類，或獨立一組）".into()));
     };
@@ -82,6 +84,9 @@ pub fn parse(text: &str) -> Result<Batch> {
         }
         _ => {}
     }
+    if source.trim().is_empty() && matches!(target, Target::Independent { .. }) {
+        return Err(KnowError::Invalid("缺 source（獨立的一組一定要寫應用程式的名字）".into()));
+    }
     serde_json::from_value(v).map_err(|e| KnowError::Invalid(format!("內容的寫法不對：{e}")))
 }
 
@@ -94,8 +99,7 @@ pub trait Categories {
     fn add_external(&mut self, source: &str, name: &str, format: &str) -> Result<Category>;
 }
 
-/// Format id → format.
-pub type Formats = BTreeMap<String, Box<dyn Format>>;
+pub use crate::formats::Formats;
 
 // ── step 3: importing ───────────────────────────────────────────────────────
 
@@ -152,13 +156,15 @@ fn prefix(source: &str) -> String {
 
 fn local_id(source: &str, e: &Entry) -> String {
     let key = if e.id.trim().is_empty() { content_hash(e) } else { safe_local(&e.id) };
-    format!("{}{}", prefix(source), key)
+    if source.is_empty() { key } else { format!("{}{}", prefix(source), key) }
 }
 
 /// Add or replace what `batch.source` gives to its target; remove what it gave before and no longer gives.
 pub fn import(sink: &mut dyn Sink, cats: &mut dyn Categories, formats: &Formats, batch: &Batch) -> Result<Report> {
     let source = batch.source.trim();
-    if source.is_empty() {
+    // An empty source is the author's own file: his items, added and never replacing anything.
+    let author = source.is_empty();
+    if author && !matches!(batch.target, Target::Align { .. }) {
         return Err(KnowError::Invalid("缺 source（應用程式的名字）".into()));
     }
     let cat = match &batch.target {
@@ -187,20 +193,35 @@ pub fn import(sink: &mut dyn Sink, cats: &mut dyn Categories, formats: &Formats,
         }
     };
     let fmt = formats.get(&cat.format).ok_or_else(|| KnowError::Invalid(format!("這一類的格式「{}」不認得", cat.format)))?;
-    let src = Source::external(source);
+    let src = if author { Source::author() } else { Source::external(source) };
 
     let all = sink.list(&cat.id)?;
-    let mine: BTreeMap<String, Item> = all.iter().filter(|i| i.source == src).map(|i| (i.id.clone(), i.clone())).collect();
-    let others: BTreeSet<&str> = all.iter().filter(|i| i.source != src).map(|i| i.id.as_str()).collect();
+    // the author's file never replaces: everything that is there already is "somebody else's"
+    let mine: BTreeMap<String, Item> =
+        if author { BTreeMap::new() } else { all.iter().filter(|i| i.source == src).map(|i| (i.id.clone(), i.clone())).collect() };
+    let others: BTreeSet<&str> = all.iter().filter(|i| author || i.source != src).map(|i| i.id.as_str()).collect();
 
     let mut rep = Report { category: cat.id.clone(), ..Default::default() };
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut ready: Vec<Item> = vec![];
     // Ids of this source that stay: written now, or whose new entry did not fit (the old one is kept).
     let mut keep: BTreeSet<String> = BTreeSet::new();
+    // Where an app's data names an item by its own words (a wording row by its `avoid`), the id
+    // given here does not come back. An entry that has no item under its id but says exactly what
+    // an item of this source already says is that item, so adding the same file again changes nothing.
+    let wanted: BTreeSet<String> = batch.items.iter().map(|e| item_id(&cat.id, &local_id(source, e))).collect();
+    let mut paired: BTreeSet<String> = BTreeSet::new();
     for (n, e) in batch.items.iter().enumerate() {
         let at = format!("#{} {}", n + 1, e.title.trim());
-        let id = item_id(&cat.id, &local_id(source, e));
+        let mut id = item_id(&cat.id, &local_id(source, e));
+        if !mine.contains_key(&id)
+            && let Some(m) = mine.values().find(|m| {
+                !wanted.contains(&m.id) && !paired.contains(&m.id) && m.title.trim() == e.title.trim() && e.fields.iter().all(|(k, v)| m.fields.get(k) == Some(v))
+            })
+        {
+            paired.insert(m.id.clone());
+            id = m.id.clone();
+        }
         let mut item = Item::new(&cat.id, &cat.format, &e.title, src.clone());
         item.id = id.clone();
         item.fields = e.fields.clone();
@@ -219,7 +240,8 @@ pub fn import(sink: &mut dyn Sink, cats: &mut dyn Categories, formats: &Formats,
             ps.push(problem(&at, "id", "同一個檔案裡有重複的項目（id 或內容相同）"));
         }
         if ps.is_empty() && others.contains(id.as_str()) {
-            ps.push(problem(&at, "id", "和別的來源的項目撞到同一個 id"));
+            let why = if author { "這一類已經有同一個 id 的一條，沒有蓋掉它" } else { "和別的來源的項目撞到同一個 id" };
+            ps.push(problem(&at, "id", why));
         }
         if ps.is_empty() {
             keep.insert(id);
@@ -230,24 +252,30 @@ pub fn import(sink: &mut dyn Sink, cats: &mut dyn Categories, formats: &Formats,
         }
     }
 
+    // What this source gave before and no longer gives goes first: a row changed in the words that
+    // name it (a wording) is then written as a new one without meeting its old self.
+    for id in mine.keys().filter(|id| !keep.contains(*id)) {
+        sink.remove(id)?;
+        rep.removed += 1;
+    }
     for item in ready {
-        if let Some(have) = mine.get(&item.id) {
+        let at = item.title.clone();
+        // a write the category refuses (a read-only place, a row the app's data cannot hold) is
+        // listed with the entry; it does not stop the others
+        let written = if let Some(have) = mine.get(&item.id) {
             let mut next = have.clone();
             next.title = item.title;
             next.fields = item.fields;
             next.tags = item.tags;
             next.triggers = item.triggers;
             next.format = item.format;
-            sink.put(next)?;
-            rep.replaced += 1;
+            sink.put(next).map(|_| rep.replaced += 1)
         } else {
-            sink.put(item)?;
-            rep.added += 1;
+            sink.put(item).map(|_| rep.added += 1)
+        };
+        if let Err(e) = written {
+            rep.problems.push(problem(&at, "", &format!("沒有寫入：{e}")));
         }
-    }
-    for id in mine.keys().filter(|id| !keep.contains(*id)) {
-        sink.remove(id)?;
-        rep.removed += 1;
     }
     Ok(rep)
 }
@@ -273,7 +301,23 @@ pub fn export(sink: &dyn Sink, category: &Category, source: Option<&Source>) -> 
     } else {
         Target::Align { category: category.id.clone() }
     };
-    let name = source.map(|s| s.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "export".into());
+    // The file says who gave it. The author's and Lore's own items have no outside source: "" (it
+    // imports back as his own). An independent set is always an outside application's.
+    let name = match source {
+        Some(s) if s.is_external() => s.name.clone(),
+        Some(_) => String::new(),
+        None if category.independent() => {
+            let mut names: Vec<&str> = items.iter().filter(|i| i.source.is_external()).map(|i| i.source.name.as_str()).collect();
+            names.sort_unstable();
+            names.dedup();
+            match names.as_slice() {
+                [one] => (*one).to_string(),
+                // several (or none left): the application the set was made for, from its id `x.<source>.<name>`
+                _ => category.id.split('.').nth(1).unwrap_or("export").to_string(),
+            }
+        }
+        None => String::new(),
+    };
     Ok(Batch { lore_know: VERSION, source: name, target, items: entries })
 }
 
@@ -411,7 +455,8 @@ mod tests {
         assert!(msg("[1]").contains("物件"));
         assert!(msg(r#"{"source":"a","target":{"kind":"align","category":"c"}}"#).contains("lore_know"));
         assert!(msg(r#"{"lore_know":2,"source":"a","target":{"kind":"align","category":"c"}}"#).contains("版本"));
-        assert!(msg(r#"{"lore_know":1,"source":" ","target":{"kind":"align","category":"c"}}"#).contains("source"));
+        assert!(msg(r#"{"lore_know":1,"target":{"kind":"align","category":"c"}}"#).contains("source"));
+        assert!(msg(r#"{"lore_know":1,"source":" ","target":{"kind":"independent","name":"x","format":"note"}}"#).contains("source"));
         assert!(msg(r#"{"lore_know":1,"source":"a"}"#).contains("target"));
         assert!(msg(r#"{"lore_know":1,"source":"a","target":{"kind":"merge"}}"#).contains("target"));
         assert!(msg(r#"{"lore_know":1,"source":"a","target":{"kind":"independent","name":"x","format":""}}"#).contains("format"));
@@ -594,5 +639,51 @@ mod tests {
                 SourceInfo { name: "wordbox".into(), sets: vec![("my.mine".into(), 1, true), ("pc.words".into(), 2, true)] },
             ]
         );
+    }
+
+    #[test]
+    fn the_authors_own_export_imports_as_his_not_as_an_application() {
+        let f = formats();
+        let mut s = MemSink::default();
+        let mut c = cats();
+        let mut mine = Item::new("pc.words", "card", "by hand", Source::author());
+        mine.id = "pc.words:h1".into();
+        mine.set("body", "x");
+        let mut lore = Item::new("pc.words", "card", "by lore", Source::lore("pc"));
+        lore.id = "pc.words:l1".into();
+        lore.set("body", "y");
+        s.put(mine).unwrap();
+        s.put(lore).unwrap();
+        // no source asked for: the file does not name an application
+        let out = export(&s, &c.get("pc.words").unwrap(), None).unwrap();
+        assert_eq!(out.source, "");
+        let text = to_text(&out);
+        let back = parse(&text).unwrap();
+        assert_eq!(back.source, "");
+        // into another category: his own items, no source prefix, not external
+        let into = Batch { target: Target::Align { category: "my.mine".into() }, ..back.clone() };
+        let r = import(&mut s, &mut c, &f, &into).unwrap();
+        assert_eq!((r.added, r.replaced, r.removed, r.problems.len()), (2, 0, 0, 0));
+        let got = s.list("my.mine").unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().all(|i| i.source == Source::author() && !i.id.contains("export")), "{got:?}");
+        assert!(crate::intake::sources(&s, &c.0.values().cloned().collect::<Vec<_>>()).unwrap().is_empty(), "no outside application appears");
+        // adding it again replaces nothing and removes nothing: each item is listed as already there
+        let again = import(&mut s, &mut c, &f, &into).unwrap();
+        assert_eq!((again.added, again.replaced, again.removed, again.problems.len()), (0, 0, 0, 2));
+        assert_eq!(s.list("my.mine").unwrap().len(), 2);
+        // an empty batch of his own removes nothing, and an outside source's items beside his stay
+        import(&mut s, &mut c, &f, &align("wordbox", "my.mine", vec![entry("1", "a", "A")])).unwrap();
+        let none = Batch { items: vec![], ..into.clone() };
+        assert_eq!(import(&mut s, &mut c, &f, &none).unwrap().removed, 0);
+        assert_eq!(s.list("my.mine").unwrap().len(), 3);
+        // an independent set always names its application; with several, the id says which
+        let r = import(&mut s, &mut c, &f, &indep("notesapp", "Ideas", vec![entry("1", "x", "y")])).unwrap();
+        let ind = c.get(&r.category).unwrap();
+        assert_eq!(export(&s, &ind, None).unwrap().source, "notesapp");
+        // an independent set cannot be the author's
+        let no_source = Batch { source: "".into(), ..indep("a", "Ideas", vec![]) };
+        assert!(import(&mut s, &mut c, &f, &no_source).is_err());
+        assert!(parse(&to_text(&no_source)).is_err());
     }
 }

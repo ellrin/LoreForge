@@ -38,6 +38,7 @@ use lore_flow::spec::{Graph, MODULES, Node, valid_id};
 use lore_flow::text::NoMath;
 use serde_json::{Map, Value};
 
+use crate::util::write_atomic;
 use crate::types::{
     Adapter, FieldDef, Format, FormatDef, Item, KnowError, Problem, Result, Source, facet, format, item_id, level, safe_local, split_id,
 };
@@ -259,7 +260,7 @@ pub fn thumbnail(item: &Item, cat: &Catalogue) -> Result<String> {
     let svg = if w == what::SPEC {
         let spec = FlowSpec::from_value(json_value(item.fields.get("params"))).map_err(|e| KnowError::Invalid(format!("流程圖的規格讀不了：{e}")))?;
         let (fig, _) = lore_flow::figure::render(&spec, cat, None, &NoMath, spec.frame_rect(), 2).map_err(|e| KnowError::Invalid(format!("畫不出來：{e}")))?;
-        lore_flow::figure::preview_svg(&fig, 320.0)
+        fitted_svg(&fig, 320.0)
     } else {
         let kind = item.field("kind");
         let style = item.field("style");
@@ -285,12 +286,65 @@ pub fn thumbnail(item: &Item, cat: &Catalogue) -> Result<String> {
         let g = Graph { fig: "thumb".into(), nodes: vec![node], ..Default::default() };
         let d = lore_flow::Drawing { theme: cat.theme(""), library: lib, ..Default::default() };
         let fig = lore_flow::draw(&g, &d).map_err(|e| KnowError::Invalid(format!("畫不出來：{e}")))?;
-        lore_flow::figure::preview_svg(&fig, 160.0)
+        fitted_svg(&fig, 160.0)
     };
     if !has_shape(&svg) {
         return Err(KnowError::Invalid("畫出來是空白的".into()));
     }
     Ok(svg)
+}
+
+/// The figure as an SVG whose viewBox holds every object, plus a small margin.
+///
+/// `lore_flow::figure::preview_svg` frames the drawing by the layout's own bounds, which leave out
+/// what the module draws around itself: a legend above a wide module is centred on it and sticks
+/// out at both sides, and a module can be taller than its frame. The frame here is the layout's
+/// bounds united with the box of every visible object (a rotated one by its rotated box).
+fn fitted_svg(fig: &lore_flow::Figure, width_px: f64) -> String {
+    use lore_flow::layout::Rect;
+    use lore_flow::modules::{emu, EMU_PT};
+    /// Grow the box by an object and, in a group, by its children (they may stick out of the
+    /// group's own frame: the `N×` of a decoder sits beside it). `(sx, sy, ox, oy)` maps the
+    /// object's own coordinates (EMU) to the figure's (pt).
+    fn grow(o: &lore_canvas::Object, xf: (f64, f64, f64, f64), bb: &mut [f64; 4]) {
+        if o.hidden {
+            return;
+        }
+        let f = &o.frame;
+        let (x, y) = (xf.2 + f.x as f64 / EMU_PT * xf.0, xf.3 + f.y as f64 / EMU_PT * xf.1);
+        let (w, h) = (f.w as f64 / EMU_PT * xf.0, f.h as f64 / EMU_PT * xf.1);
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        let (s, c) = f.rot.to_radians().sin_cos();
+        let (hw, hh) = ((w * c.abs() + h * s.abs()) / 2.0, (w * s.abs() + h * c.abs()) / 2.0);
+        bb[0] = bb[0].min(cx - hw);
+        bb[1] = bb[1].min(cy - hh);
+        bb[2] = bb[2].max(cx + hw);
+        bb[3] = bb[3].max(cy + hh);
+        if let lore_canvas::Kind::Group(g) = &o.kind {
+            let sx = if g.ch.w == 0 { 1.0 } else { f.w as f64 / g.ch.w as f64 };
+            let sy = if g.ch.h == 0 { 1.0 } else { f.h as f64 / g.ch.h as f64 };
+            // the same mapping the SVG drawing uses for a group's children
+            let inner = (xf.0 * sx, xf.1 * sy, x - g.ch.x as f64 / EMU_PT * xf.0 * sx, y - g.ch.y as f64 / EMU_PT * xf.1 * sy);
+            for ch in &g.children {
+                grow(ch, inner, bb);
+            }
+        }
+    }
+    let mut b = fig.layout.bounds;
+    let mut bb = [b.x, b.y, b.x + b.w, b.y + b.h];
+    for o in fig.objects() {
+        grow(o, (1.0, 1.0, 0.0, 0.0), &mut bb);
+    }
+    let [x0, y0, x1, y1] = bb;
+    b = Rect::new(x0, y0, x1 - x0, y1 - y0).inflate(6.0);
+    let mut objs = fig.objects().to_vec();
+    let (dx, dy) = (emu(-b.x), emu(-b.y));
+    for o in &mut objs {
+        o.frame.x += dx;
+        o.frame.y += dy;
+    }
+    let zoom = if b.w > 0.0 { width_px / b.w } else { 1.0 };
+    lore_flow::preview::svg(&objs, b.w, b.h, zoom)
 }
 
 /// Whether the SVG draws anything besides its white page.
@@ -361,19 +415,6 @@ fn picture_in(folder: &Path) -> Option<String> {
     PICTURES.iter().find(|p| folder.join(p).is_file()).map(|p| p.to_string())
 }
 
-/// Write `text` to `path` through a temporary file in the same folder.
-fn write_atomic(path: &Path, text: &str) -> Result<()> {
-    let dir = path.parent().ok_or_else(|| KnowError::Invalid("沒有資料夾".into()))?;
-    std::fs::create_dir_all(dir)?;
-    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let tmp = dir.join(format!(".{name}.tmp"));
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })?;
-    Ok(())
-}
-
 impl ReferenceDirs {
     fn read(&self, folder: &Path, local: &str) -> Result<Item> {
         let text = std::fs::read_to_string(folder.join("desc.md"))?;
@@ -439,7 +480,7 @@ impl Adapter for ReferenceDirs {
         if !d.is_empty() {
             s.push_str(&format!("\n{d}\n"));
         }
-        write_atomic(&folder.join("desc.md"), &s)
+        write_atomic(&folder.join("desc.md"), s.as_bytes())
     }
 
     /// Deletes the folder's `desc.md` and picture (and the folder when nothing else is left),
@@ -506,7 +547,7 @@ pub fn save_drawing(flow_dir: &Path, kind: &str, style: &str, template_json: &Va
         m.insert("level".into(), level_.into());
     }
     let text = serde_json::to_string_pretty(&v).map_err(|e| KnowError::Other(e.to_string()))? + "\n";
-    write_atomic(&path, &text)?;
+    write_atomic(&path, text.as_bytes())?;
     Ok(rel)
 }
 
@@ -811,6 +852,204 @@ mod tests {
             let n: Vec<f64> = vb.split(' ').filter_map(|x| x.parse().ok()).collect();
             assert!(n.len() == 4 && n[2] > 1.0 && n[3] > 1.0 && n[2] < 5000.0 && n[3] < 5000.0, "{}: viewBox {vb:?}", i.id);
         }
+    }
+
+    /// The viewBox of an SVG as `[x, y, w, h]`.
+    fn view_box(svg: &str) -> [f64; 4] {
+        let vb = svg.split("viewBox=\"").nth(1).and_then(|s| s.split('"').next()).unwrap_or("");
+        let n: Vec<f64> = vb.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+        [n[0], n[1], n[2], n[3]]
+    }
+
+    fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+        let pat = format!(" {name}=\"");
+        let at = tag.find(&pat)? + pat.len();
+        tag[at..].split('"').next()
+    }
+
+    fn num(tag: &str, name: &str) -> Option<f64> {
+        attr(tag, name)?.trim().parse().ok()
+    }
+
+    /// Every coordinate pair of a path (absolute and relative M L H V Q C T S A Z).
+    fn path_points(d: &str) -> Vec<(f64, f64)> {
+        let mut toks: Vec<String> = vec![];
+        let mut cur = String::new();
+        for c in d.chars() {
+            if c.is_ascii_alphabetic() {
+                if !cur.is_empty() {
+                    toks.push(std::mem::take(&mut cur));
+                }
+                toks.push(c.to_string());
+            } else if c == ',' || c.is_whitespace() {
+                if !cur.is_empty() {
+                    toks.push(std::mem::take(&mut cur));
+                }
+            } else if c == '-' && !cur.is_empty() && !cur.ends_with('e') {
+                toks.push(std::mem::take(&mut cur));
+                cur.push(c);
+            } else {
+                cur.push(c);
+            }
+        }
+        if !cur.is_empty() {
+            toks.push(cur);
+        }
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut out = vec![];
+        let mut i = 0;
+        let mut cmd = 'M';
+        let n = |t: &String| t.parse::<f64>().unwrap_or(0.0);
+        while i < toks.len() {
+            if toks[i].chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+                cmd = toks[i].chars().next().unwrap();
+                i += 1;
+                if cmd == 'Z' || cmd == 'z' {
+                    continue;
+                }
+            }
+            let rel = cmd.is_ascii_lowercase();
+            let take = match cmd.to_ascii_uppercase() {
+                'H' | 'V' => 1,
+                'M' | 'L' | 'T' => 2,
+                'Q' | 'S' => 4,
+                'C' => 6,
+                'A' => 7,
+                _ => 2,
+            };
+            if i + take > toks.len() {
+                break;
+            }
+            let v: Vec<f64> = toks[i..i + take].iter().map(n).collect();
+            i += take;
+            match cmd.to_ascii_uppercase() {
+                'H' => x = if rel { x + v[0] } else { v[0] },
+                'V' => y = if rel { y + v[0] } else { v[0] },
+                'A' => {
+                    x = if rel { x + v[5] } else { v[5] };
+                    y = if rel { y + v[6] } else { v[6] };
+                }
+                _ => {
+                    let (ox, oy) = if rel { (x, y) } else { (0.0, 0.0) };
+                    for p in v.chunks(2) {
+                        out.push((ox + p[0], oy + p[1]));
+                    }
+                    x = ox + v[take - 2];
+                    y = oy + v[take - 1];
+                }
+            }
+            if matches!(cmd.to_ascii_uppercase(), 'H' | 'V' | 'A') {
+                out.push((x, y));
+            }
+        }
+        out
+    }
+
+    /// What of an SVG's shapes lies outside its viewBox (rect, circle, ellipse, line, polyline,
+    /// polygon, path; text is checked by its anchor point). Shapes inside a transformed group are
+    /// not followed. Returns the descriptions of the offenders and how many shapes were checked.
+    fn outside_view_box(svg: &str) -> (Vec<String>, usize) {
+        let [vx, vy, vw, vh] = view_box(svg);
+        let eps = 0.01;
+        let mut bad = vec![];
+        let mut checked = 0;
+        let mut groups: Vec<bool> = vec![]; // per open <g>: transformed?
+        let mut rest = svg;
+        while let Some(at) = rest.find('<') {
+            rest = &rest[at..];
+            let end = rest.find('>').unwrap_or(rest.len() - 1);
+            let tag = &rest[..=end];
+            rest = &rest[end + 1..];
+            let name: String = tag[1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '/').collect();
+            if name == "g" {
+                if !tag.ends_with("/>") {
+                    groups.push(tag.contains(" transform=\""));
+                }
+                continue;
+            }
+            if name == "/g" {
+                groups.pop();
+                continue;
+            }
+            if groups.iter().any(|t| *t) || tag.contains(" transform=\"") {
+                continue;
+            }
+            let mut pts: Vec<(f64, f64)> = vec![];
+            match name.as_str() {
+                "rect" => {
+                    if let (Some(x), Some(y), Some(w), Some(h)) = (num(tag, "x"), num(tag, "y"), num(tag, "width"), num(tag, "height")) {
+                        // the page background is `width="100%"`, which does not parse
+                        pts = vec![(x, y), (x + w, y + h)];
+                    }
+                }
+                "circle" | "ellipse" => {
+                    let (rx, ry) = (num(tag, "rx").or(num(tag, "r")), num(tag, "ry").or(num(tag, "r")));
+                    if let (Some(cx), Some(cy), Some(rx), Some(ry)) = (num(tag, "cx"), num(tag, "cy"), rx, ry) {
+                        pts = vec![(cx - rx, cy - ry), (cx + rx, cy + ry)];
+                    }
+                }
+                "line" => {
+                    if let (Some(a), Some(b), Some(c), Some(d)) = (num(tag, "x1"), num(tag, "y1"), num(tag, "x2"), num(tag, "y2")) {
+                        pts = vec![(a, b), (c, d)];
+                    }
+                }
+                "polyline" | "polygon" => {
+                    let v: Vec<f64> = attr(tag, "points").unwrap_or("").split(|c: char| c == ',' || c.is_whitespace()).filter_map(|x| x.parse().ok()).collect();
+                    pts = v.chunks(2).filter(|p| p.len() == 2).map(|p| (p[0], p[1])).collect();
+                }
+                "path" => pts = path_points(attr(tag, "d").unwrap_or("")),
+                "text" => {
+                    if let (Some(x), Some(y)) = (num(tag, "x"), num(tag, "y")) {
+                        pts = vec![(x, y)];
+                    }
+                }
+                _ => {}
+            }
+            if pts.is_empty() {
+                continue;
+            }
+            checked += 1;
+            for (x, y) in pts {
+                if x < vx - eps || y < vy - eps || x > vx + vw + eps || y > vy + vh + eps {
+                    bad.push(format!("<{name}> at ({x:.1}, {y:.1}) outside {vx} {vy} {vw} {vh}"));
+                    break;
+                }
+            }
+        }
+        (bad, checked)
+    }
+
+    #[test]
+    fn the_cropping_check_sees_a_shape_outside_the_frame() {
+        let svg = "<svg viewBox=\"0 0 100 50\"><rect width=\"100%\" height=\"100%\" fill=\"#FFFFFF\"/><g><rect x=\"10\" y=\"10\" width=\"20\" height=\"20\"/><path d=\"M10 10 Q50 -20 90 10\"/><circle cx=\"95\" cy=\"25\" r=\"10\"/></g></svg>";
+        let (bad, checked) = outside_view_box(svg);
+        assert_eq!(checked, 3);
+        assert_eq!(bad.len(), 2, "{bad:?}");
+        assert!(bad[0].starts_with("<path") && bad[1].starts_with("<circle"));
+    }
+
+    #[test]
+    fn no_builtin_thumbnail_is_cropped() {
+        let cat = Catalogue::builtin();
+        let mut cropped = vec![];
+        let mut shapes = 0;
+        for i in from_catalogue(&cat, "c", Source::lore("sc")) {
+            let svg = thumbnail(&i, &cat).unwrap_or_else(|e| panic!("{}: {e}", i.id));
+            let (bad, n) = outside_view_box(&svg);
+            assert!(n > 0, "{}: nothing was checked", i.id);
+            shapes += n;
+            if !bad.is_empty() {
+                cropped.push(format!("{}: {}", i.id, bad[0]));
+            }
+        }
+        // a whole figure with wide modules (their legends stick out) is framed the same way
+        let spec = json!({ "lore_flow": 1, "dsl": "fig wide\nx: image \"x\"\ne: encoder \"Encoder\" style=slabs\nd: decoder \"Decoder\" style=transformer\nx -> e -> d\n" });
+        let whole = spec_item("c", "Wide", &spec, Source::author());
+        let svg = thumbnail(&whole, &cat).unwrap();
+        let (bad, n) = outside_view_box(&svg);
+        assert!(n > 5 && bad.is_empty(), "{bad:?}");
+        assert!(shapes > 500, "only {shapes} shapes were checked");
+        assert!(cropped.is_empty(), "cropped thumbnails:\n{}", cropped.join("\n"));
     }
 
     #[test]

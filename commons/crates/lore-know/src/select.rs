@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::types::{Category, Format, Item};
+use crate::types::{Category, Item};
 
 // ── step 1: matching ─────────────────────────────────────────────────────────
 
@@ -167,8 +167,7 @@ pub fn select<'a>(cats: &[Category], items: &'a [Item], ask: &Ask) -> Vec<(Categ
 
 // ── step 3: into the prompt ──────────────────────────────────────────────────
 
-/// The formats by id.
-pub type Formats = BTreeMap<String, Box<dyn Format>>;
+pub use crate::formats::Formats;
 
 fn heading(cat: &Category) -> &str {
     if cat.label.trim().is_empty() { &cat.id } else { cat.label.trim() }
@@ -272,7 +271,7 @@ pub fn tasks_of(cats: &[Category]) -> BTreeMap<String, Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{format, FormatDef, Source};
+    use crate::types::{format, Format, FormatDef, Source};
 
     // ── step 1 ──
     #[test]
