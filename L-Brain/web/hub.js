@@ -6,6 +6,7 @@
 const Hub = (() => {
   const LV = { figure: "流程圖", module: "模塊", component: "元件" };
   const OP = { add: "新增", update: "修改", remove: "移除" };
+  const TREE_FORMATS = new Set(["pattern", "expression", "exemplar"]);
   const NEWEST = new Set(["created", "updated", "used", "used_at"]);
   const S = { root: null, stats: null, cards: null, meta: null, fam: null, items: [], total: 0, tags: {}, sel: null, f: null, host: {} };
   const el = (tag, attrs = {}, ...kids) => {
@@ -152,7 +153,8 @@ const Hub = (() => {
     S.items = r.items ?? []; S.total = r.total ?? S.items.length;
     if (f.section) S.items = S.items.filter((it) => it.fields?.section === f.section);
     // a place on the family's tree: everything at or under that path; "?" = not placed yet
-    if (f.place === "?") S.items = S.items.filter((it) => !(it.tags?.place ?? []).length);
+    if (f.place === "?") S.items = S.items.filter((it) => TREE_FORMATS.has(it.format) && !(it.tags?.place ?? []).length);
+    else if (f.place?.startsWith("=")) S.items = S.items.filter((it) => it.category === f.place.slice(1));
     else if (f.place) S.items = S.items.filter((it) => (it.tags?.place ?? []).some((p) => p === f.place || p.startsWith(`${f.place}/`)));
     if (f.place || f.section) S.total = S.items.length;
     // the left column lists the whole family's tags, whatever is filtered: a tag never disappears
@@ -179,7 +181,7 @@ const Hub = (() => {
       (out.get(k) ?? out.set(k, []).get(k)).push(it);
     }
     const name = (k) => (fig ? (k === "todo" ? "待製作" : LV[k] ?? "其他") : catLabel(k));
-    if (S.tree?.tree?.length && S.f.place && S.f.place !== "?" && !isCards()) {
+    if (S.tree?.tree?.length && S.f.place && S.f.place !== "?" && !S.f.place.startsWith("=") && !isCards()) {
       // inside a place: one group per next level down, in the tree's order
       const depth = S.f.place.split("/").length, by = new Map();
       for (const it of S.items) { const p = (it.tags?.place ?? []).find((x) => x === S.f.place || x.startsWith(`${S.f.place}/`)) ?? ""; const k = p.split("/").slice(0, depth + 1).join("/"); (by.get(k) ?? by.set(k, []).get(k)).push(it); }
@@ -209,10 +211,14 @@ const Hub = (() => {
         refresh(); } }, kids ? el("i", {}, open ? "▾" : "▸") : el("i", {}), label, el("span", {}, n || ""));
       return [b, kids && open ? kids() : null];
     };
-    const unplaced = all.filter((it) => !(it.tags?.place ?? []).length).length;
+    // only sentences sit on the tree; rules, wording and notes are listed by their own kind below it
+    const onTree = (it) => TREE_FORMATS.has(it.format);
+    const unplaced = all.filter((it) => onTree(it) && !(it.tags?.place ?? []).length).length;
+    const others = new Map(); for (const it of all) if (!onTree(it)) others.set(it.category, (others.get(it.category) ?? 0) + 1);
     return [el("h4", {}, (S.tree.levels ?? []).join(" › ") || "位置"),
       S.tree.tree.map((sec) => node(sec.label, sec.label, 0, () => (sec.children ?? []).map((sub) => node(sub.label, `${sec.label}/${sub.label}`, 1, () => (sub.children ?? []).map((leaf) => node(leaf.label ?? leaf, `${sec.label}/${sub.label}/${leaf.label ?? leaf}`, 2, null)))))),
-      unplaced ? el("button", { type: "button", class: "tr d0", "aria-pressed": String(f.place === "?"), onclick: () => { f.place = f.place === "?" ? "" : "?"; refresh(); } }, el("i", {}), "還沒歸位", el("span", {}, unplaced)) : null];
+      unplaced ? el("button", { type: "button", class: "tr d0", "aria-pressed": String(f.place === "?"), onclick: () => { f.place = f.place === "?" ? "" : "?"; refresh(); } }, el("i", {}), "還沒歸位", el("span", {}, unplaced)) : null,
+      others.size ? [el("h4", {}, "其他"), [...others.entries()].map(([c, n]) => el("button", { type: "button", class: "tr d0", "aria-pressed": String(f.place === `=${c}`), onclick: () => { f.place = f.place === `=${c}` ? "" : `=${c}`; refresh(); } }, el("i", {}), catLabel(c), el("span", {}, n)))] : null];
   }
   function tagsPane() {
     const f = S.f, out = [];
