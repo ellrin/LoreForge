@@ -268,6 +268,11 @@ body.panel-resizing iframe { pointer-events: none; }
 .set-sec { display: flex; flex-direction: column; gap: 8px; }
 .set-sec + .set-sec { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
 .set-label { font: 600 11px var(--mono); color: var(--faint); letter-spacing: .04em; }
+details.set-steps > summary.set-label { cursor: pointer; list-style: none; user-select: none; }
+details.set-steps > summary.set-label::-webkit-details-marker { display: none; }
+details.set-steps > summary.set-label::after { content: " ›"; }
+details.set-steps[open] > summary.set-label::after { content: " ⌄"; }
+details.set-steps[open] > summary.set-label { margin-bottom: 6px; }
 .set-row { display: flex; align-items: center; gap: 10px; min-height: 32px; flex-wrap: wrap; }
 .set-row > .k { width: 96px; flex: none; font-size: 13px; color: var(--muted); }
 .set-row > .v { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

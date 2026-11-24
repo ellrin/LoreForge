@@ -401,10 +401,14 @@
       const rf = refreshButton(() => { if (el.isConnected && el.dataset.tab === "model") buildModels(el).then(() => paintIcons(el)); }, "ico small");
       conn.append(row("Antigravity", h("span", { class: "v" }, n ? `${n} 個模型` : "—"), G.checked ? h("span", { class: "chip" }, ago(G.checked)) : null, rf));
     }
-    const route = h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "走向"));
-    for (const c of d.classes ?? []) {
-      route.append(row(c.label, seg([["auto", "自動"], ["cloud", "雲"], ["local", "地"]], c.route ?? "auto", (v) => engines.put({ routes: { [c.id]: v } }), c.label),
-        h("span", { class: "v no", title: "自動：" + (c.auto ?? []).map((x) => ENGINE_LABEL[x] ?? x).join(" → ") }, lastOfClass(d, c.id) || (c.auto ?? []).map((x) => ENGINE_LABEL[x] ?? x).join(" → "))));
+    // 用途: what a step is for, the same six in every Lore app. One model per purpose covers every
+    // step of it everywhere (規劃設計 = … writes L-Paper's skeleton and L-Slide's outline alike);
+    // 自動 = each step's own order. No cloud / local switch any more: a purpose just names its model.
+    const route = h("div", { class: "set-sec set-purposes" }, h("div", { class: "set-label" }, "用途"));
+    for (const p of d.purposes ?? []) {
+      const chip = modelMenu({ label: p.label, value: () => (engines.data?.purposes ?? []).find((x) => x.id === p.id)?.model || "", google: () => !!p.agy, kinds: () => (p.agy ? ["claude", "agy", "local"] : ["claude", "local"]),
+        onChange: async (ref) => { await engines.put({ purposes: { [p.id]: ref || "auto" } }); chip.paint?.(); } });
+      route.append(row(p.label, chip));
     }
     el.append(conn, route);
     // 各步驟: each task of this app with its own model. 自動 = the task's own order (shown beside it);
@@ -412,13 +416,16 @@
     // searches the web is not offered the text-only Antigravity models.
     const T = (d.tasks ?? []).filter((t) => t.default);
     if (T.length && typeof modelMenu === "function") {
-      const steps = h("div", { class: "set-sec set-steps" }, h("div", { class: "set-label" }, "各步驟"));
+      // folded: the purposes above are the normal way; a single step is the exception
+      const steps = h("details", { class: "set-sec set-steps" }, h("summary", { class: "set-label" }, "各步驟"));
       const short = (r) => { const m = /^(claude(?:-api|-code)?|local|agy):(.+)$/.exec(r ?? ""); if (!m) return ""; const id = m[2]; const hit = m[1].startsWith("claude") ? (d.claude?.models ?? []).find((x) => x.id === id || x.alias === id) : m[1] === "local" ? (d.local?.models ?? []).find((x) => x.id === id) : (d.google?.models ?? []).find((x) => x.id === id); return hit?.label ?? (id === "selected" ? "Claude" : id === "current" ? "本機" : id); };
       for (const t of T) {
         const cur = () => { const v = engines.data?.overrides?.[t.id]; return v && /:/.test(v) ? v : ""; };
         const chip = modelMenu({ label: t.label, value: cur, google: () => !!t.agy, kinds: () => (t.agy ? ["claude", "agy", "local"] : ["claude", "local"]),
           onChange: async (ref) => { await engines.put({ overrides: { [t.id]: ref || "auto" } }); chip.paint?.(); } });
-        steps.append(row(t.label, chip, h("span", { class: "v no", title: "自動時的順序" }, [t.default, t.fallback].filter(Boolean).map(short).filter(Boolean).join(" → "))));
+        const pm = (d.purposes ?? []).find((x) => x.id === t.purpose);
+        const follows = pm?.model && (t.agy || !pm.model.startsWith("agy:")) ? `${pm.label}：${short(pm.model)}` : [t.default, t.fallback].filter(Boolean).map(short).filter(Boolean).join(" → ");
+        steps.append(row(t.label, chip, h("span", { class: "v no", title: "自動時用的模型" }, follows)));
       }
       el.append(steps);
     }

@@ -47,6 +47,7 @@ fallback = "claude:selected"
 offline = true
 
 [task.pc-outline]
+purpose = "plan"
 agy = true
 label = "大綱與標題"
 class = "create"
@@ -105,6 +106,7 @@ fallback = "local:current"
 offline = false
 
 [task.pc-engine-test]
+purpose = "tidy"
 label = "測試引擎"
 default = "local:current"
 fallback = "claude:selected"
@@ -119,6 +121,7 @@ offline = true
 # fits prompts to its context, reads long material in pieces, repairs replies).
 
 [task.pc-draft-record]
+purpose = "plan"
 agy = true
 label = "整理實驗記錄"
 class = "create"
@@ -128,6 +131,7 @@ fallback = "local:current"
 max_tokens = 16000
 
 [task.pc-draft-plan]
+purpose = "plan"
 agy = true
 label = "規劃題組"
 class = "create"
@@ -139,6 +143,7 @@ max_tokens = 8000
 # 預想選項: 2–3 possible answers per item, from the record, before the interview
 # (one batched call per plan / new group, in the background; never inside a turn)
 [task.pc-draft-candidates]
+purpose = "plan"
 agy = true
 label = "預想選項"
 class = "create"
@@ -158,6 +163,7 @@ fallback = "local:current"
 # 圖表規劃: the paper's figures and tables from the record and the journal's habit (one call,
 # in parallel with 規劃題組)
 [task.pc-draft-figures]
+purpose = "plan"
 agy = true
 label = "圖表規劃"
 class = "create"
@@ -170,6 +176,7 @@ max_tokens = 8000
 # Cloud only, so no class: a class lets the shared routing add the local model, and `ask`
 # puts it first (a 20k-character record on the local model took over 70 s per reply).
 [task.pc-draft-discuss]
+purpose = "chat"
 agy = true
 label = "深度討論"
 needs = { json = true }
@@ -179,6 +186,7 @@ default = "claude:sonnet"
 # class (a class lets the shared routing add the local model); an Opus refusal falls to Sonnet
 # (src/draft/engine.rs `Attempts::failed`).
 [task.pc-draft-skeleton]
+purpose = "plan"
 agy = true
 label = "排骨架"
 needs = { json = true }
@@ -234,6 +242,7 @@ fallback = "local:current"
 max_tokens = 16000
 
 [task.pc-draft-audit]
+purpose = "plan"
 agy = true
 label = "審稿檢查"
 class = "create"
@@ -243,6 +252,7 @@ fallback = "local:current"
 max_tokens = 16000
 
 [task.pc-draft-revise]
+purpose = "plan"
 agy = true
 label = "修訂方案"
 class = "create"
@@ -270,6 +280,7 @@ offline = true
 
 # 寫書 (src/book, docs/book.md): the plan of the chapters, 建議 on it, and each chapter.
 [task.pc-book-plan]
+purpose = "plan"
 agy = true
 label = "寫書：大綱"
 class = "create"
@@ -279,6 +290,7 @@ fallback = "local:current"
 offline = false
 
 [task.pc-book-suggest]
+purpose = "plan"
 agy = true
 label = "寫書：建議"
 class = "create"

@@ -7,6 +7,7 @@
 # model: no module boxes, misread equations).
 
 [task.sc-paper-deck]
+purpose = "plan"
 label = "論文做成簡報"
 # text and JSON only: the start panel may name an Antigravity model for it
 agy = true
@@ -28,6 +29,7 @@ max_tokens = 2000
 # 微調's 建議: right after the outline, a few concrete edits with a one-line reason each
 # (todeck/suggest.rs). Best-effort: the review window simply shows none when this cannot run.
 [task.sc-outline-review]
+purpose = "plan"
 label = "大綱建議"
 # text and JSON only: the start panel may name an Antigravity model for it
 agy = true
@@ -42,6 +44,7 @@ max_tokens = 2000
 # the author's own L-Paper papers and decks, matched L-Brain cards); checked in code
 # (todeck/interview.rs). Best-effort: without it the window takes free answers.
 [task.sc-deck-interview]
+purpose = "plan"
 label = "大綱預想選項"
 # text and JSON only: the start panel may name an Antigravity model for it
 agy = true

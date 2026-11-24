@@ -23,6 +23,7 @@ max_tokens = 8000
 # The discussion before a figure: one short exchange per step (outline, blocks, focus, detail,
 # variables, inputs/outputs); the author decides each step (docs/flow-figures.md §3).
 [task.flow-discuss]
+purpose = "chat"
 label = "流程圖討論"
 class = "create"
 needs = { json = true, context = 32000 }
