@@ -166,3 +166,54 @@ mod tests {
         assert_eq!(got[1].2, ["a:4"]);
     }
 }
+
+/// The tree a family's items are placed on (levels and nodes, JSON), as this crate ships it:
+/// the starting point the author then changes in L-Brain (his version is kept in the hub,
+/// see [`tree`]). `None`: the family has no tree.
+pub fn builtin_tree(family: &str) -> Option<&'static str> {
+    match family {
+        "pc/寫作準則" => Some(include_str!("../trees/pc-writing.json")),
+        _ => None,
+    }
+}
+
+fn tree_file(hub: &Path, family: &str) -> PathBuf {
+    hub.join("trees").join(format!("{}.json", crate::safe_local(&family.replace('/', "-"))))
+}
+
+/// The family's tree: the author's own in `<hub>/trees/` when he changed it, else the built-in one.
+pub fn tree(hub: &Path, family: &str) -> Option<serde_json::Value> {
+    let own = std::fs::read_to_string(tree_file(hub, family)).ok().and_then(|t| serde_json::from_str(&t).ok());
+    own.or_else(|| builtin_tree(family).and_then(|t| serde_json::from_str(t).ok()))
+}
+
+/// Keep the author's version of a family's tree (`{ levels, tree }`; a node is `{label, children}`
+/// or, at the last level, a plain string).
+pub fn save_tree(hub: &Path, family: &str, tree: &serde_json::Value) -> crate::Result<()> {
+    if !tree["tree"].is_array() {
+        return Err(crate::KnowError::Invalid("樹要有 tree 這一層".into()));
+    }
+    let f = tree_file(hub, family);
+    if let Some(d) = f.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    crate::util::write_atomic(&f, serde_json::to_string_pretty(tree).unwrap_or_default().as_bytes())
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    #[test]
+    fn a_familys_tree_is_the_builtin_one_until_the_author_saves_his() {
+        let d = tempfile::tempdir().unwrap();
+        let t = tree(d.path(), "pc/寫作準則").unwrap();
+        assert_eq!(t["tree"].as_array().unwrap().len(), 7);
+        assert!(t["tree"].as_array().unwrap().iter().any(|n| n["label"] == "Related Work"));
+        assert!(tree(d.path(), "sc/流程圖").is_none());
+        let mine = serde_json::json!({ "levels": ["段落"], "tree": [{ "label": "Method", "children": [] }] });
+        save_tree(d.path(), "pc/寫作準則", &mine).unwrap();
+        assert_eq!(tree(d.path(), "pc/寫作準則").unwrap(), mine);
+        assert!(save_tree(d.path(), "pc/寫作準則", &serde_json::json!({})).is_err());
+    }
+}

@@ -34,6 +34,8 @@ pub mod facet {
     pub const KIND: &str = "kind";
     /// What it is for (paper, slide, book …).
     pub const USE: &str = "use";
+    /// Where the item sits on its family's tree (`段落/小節/使用時機` paths; the first is the main one, order kept).
+    pub const PLACE: &str = "place";
 }
 
 /// Sizes of a figure item (`Item::level`).
@@ -194,10 +196,21 @@ impl Item {
 
     /// Trimmed, sorted, no duplicates, no empty facet; triggers and `contains` likewise (order kept).
     pub fn tidy(&mut self) {
-        for v in self.tags.values_mut() {
+        for (facet, v) in self.tags.iter_mut() {
             let mut t: Vec<String> = v.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-            t.sort();
-            t.dedup();
+            if facet == facet::PLACE {
+                // where the item sits on its family's tree: the order is the author's (the first is the main place)
+                let mut seen: Vec<String> = vec![];
+                for x in t {
+                    if !seen.contains(&x) {
+                        seen.push(x);
+                    }
+                }
+                t = seen;
+            } else {
+                t.sort();
+                t.dedup();
+            }
             *v = t;
         }
         self.tags.retain(|_, v| !v.is_empty());
@@ -518,6 +531,16 @@ mod tests {
         assert_eq!(safe_local("///"), "item");
         let (a, b) = (new_local(1), new_local(2));
         assert!(a.len() == 27 && a < b, "{a} {b}");
+    }
+
+    #[test]
+    fn places_keep_the_authors_order_other_tags_are_sorted() {
+        let mut i = Item::new("pc.patterns", format::PATTERN, "x", Source::author());
+        i.tags.insert(facet::PLACE.into(), vec!["Method/訓練/超參數設定".into(), "Method/訓練/訓練環境與硬體".into(), "Method/訓練/超參數設定".into(), "Abstract/摘要/目標".into()]);
+        i.tags.insert(facet::KIND.into(), vec!["b".into(), "a".into()]);
+        i.tidy();
+        assert_eq!(i.tags[facet::PLACE], ["Method/訓練/超參數設定", "Method/訓練/訓練環境與硬體", "Abstract/摘要/目標"]);
+        assert_eq!(i.tags[facet::KIND], ["a", "b"]);
     }
 
     #[test]

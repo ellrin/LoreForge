@@ -119,7 +119,7 @@ const Hub = (() => {
   const prefKey = (f) => `kb.hub.mode.${f.id}`;
   function defaults(f) {
     let mode = null; try { mode = localStorage.getItem(prefKey(f)); } catch {}
-    return { q: "", sort: "updated", level: "", entity: "", section: "", more: new Set(), tags: new Set(), source: "", mode: mode ?? (isFigure(f) ? "wall" : "list") };
+    return { q: "", sort: "updated", level: "", entity: "", section: "", place: "", openPlaces: new Set(), more: new Set(), tags: new Set(), source: "", mode: mode ?? (isFigure(f) ? "wall" : "list") };
   }
   // ── 知識卡: the same page over L-Brain's own cards (/api/nodes), which carry a learning state ──
   const STATE = { known: "記得", learning: "學習中", stale: "久未複習", none: "尚無紀錄" };
@@ -151,10 +151,15 @@ const Hub = (() => {
     const r = await api("GET", `/api/hub/items?${p}`);
     S.items = r.items ?? []; S.total = r.total ?? S.items.length;
     if (f.section) S.items = S.items.filter((it) => it.fields?.section === f.section);
+    // a place on the family's tree: everything at or under that path; "?" = not placed yet
+    if (f.place === "?") S.items = S.items.filter((it) => !(it.tags?.place ?? []).length);
+    else if (f.place) S.items = S.items.filter((it) => (it.tags?.place ?? []).some((p) => p === f.place || p.startsWith(`${f.place}/`)));
+    if (f.place || f.section) S.total = S.items.length;
     // the left column lists the whole family's tags, whatever is filtered: a tag never disappears
     if (S.allFor !== S.fam.id || S.allDirty) {
       const all = (await api("GET", `/api/hub/items?${new URLSearchParams({ family: S.fam.id, limit: "1000" })}`)).items ?? [];
-      S.tags = {}; S.sections = {};
+      S.tags = {}; S.sections = {}; S.allItems = all;
+      S.tree = (await api("GET", `/api/hub/tree?family=${enc(S.fam.id)}`).catch(() => ({}))).tree ?? null;
       for (const it of all) {
         for (const [facet, ts] of Object.entries(it.tags ?? {})) for (const t of ts) { S.tags[facet] ??= {}; S.tags[facet][t] = (S.tags[facet][t] ?? 0) + 1; }
         const sec = it.fields?.section; if (typeof sec === "string" && sec) S.sections[sec] = (S.sections[sec] ?? 0) + 1;
@@ -174,6 +179,12 @@ const Hub = (() => {
       (out.get(k) ?? out.set(k, []).get(k)).push(it);
     }
     const name = (k) => (fig ? (k === "todo" ? "待製作" : LV[k] ?? "其他") : catLabel(k));
+    if (S.tree?.tree?.length && S.f.place && S.f.place !== "?" && !isCards()) {
+      // inside a place: one group per next level down, in the tree's order
+      const depth = S.f.place.split("/").length, by = new Map();
+      for (const it of S.items) { const p = (it.tags?.place ?? []).find((x) => x === S.f.place || x.startsWith(`${S.f.place}/`)) ?? ""; const k = p.split("/").slice(0, depth + 1).join("/"); (by.get(k) ?? by.set(k, []).get(k)).push(it); }
+      return [...by.entries()].map(([k, v]) => ({ key: k, label: k.split("/").slice(depth).join(" › ") || k.split("/").at(-1), items: v }));
+    }
     if (isCards()) return [...out.entries()].sort((a, b) => (a[0] === "未分類") - (b[0] === "未分類") || b[1].length - a[1].length).map(([k, v]) => ({ key: k, label: k, items: v }));
     const order = fig ? ["figure", "module", "component", "other", "todo"] : S.fam.categories;
     return [...out.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([k, v]) => ({ key: k, label: name(k), items: v }));
@@ -187,6 +198,22 @@ const Hub = (() => {
       el("summary", {}, x.label, el("small", {}, x.items.length)),
       x.items.map((it) => { const th = thumb(it); return el("button", { type: "button", class: `h-row ${th ? "" : "text"}`, "aria-selected": String(S.sel === it.id), onclick: () => open(it.id) }, th, el("span", { class: "t" }, it.title), el("span", { class: "d" }, it.line ?? ""), el("span", { class: "g" }, chips(it))); }))));
   }
+  /** The family's tree (段落 → 小節 → 使用時機) with how many items sit at or under each node. */
+  function treePane() {
+    const f = S.f, all = S.allItems ?? [];
+    const count = (path) => all.filter((it) => (it.tags?.place ?? []).some((p) => p === path || p.startsWith(`${path}/`))).length;
+    const node = (label, path, depth, kids) => {
+      const n = count(path), open = f.openPlaces.has(path) || (f.place && f.place.startsWith(`${path}/`));
+      const b = el("button", { type: "button", class: `tr d${depth} ${n ? "" : "zero"}`, "aria-pressed": String(f.place === path), onclick: () => {
+        if (f.place === path) { f.place = ""; f.openPlaces.delete(path); } else { f.place = path; if (kids) f.openPlaces.add(path); }
+        refresh(); } }, kids ? el("i", {}, open ? "▾" : "▸") : el("i", {}), label, el("span", {}, n || ""));
+      return [b, kids && open ? kids() : null];
+    };
+    const unplaced = all.filter((it) => !(it.tags?.place ?? []).length).length;
+    return [el("h4", {}, (S.tree.levels ?? []).join(" › ") || "位置"),
+      S.tree.tree.map((sec) => node(sec.label, sec.label, 0, () => (sec.children ?? []).map((sub) => node(sub.label, `${sec.label}/${sub.label}`, 1, () => (sub.children ?? []).map((leaf) => node(leaf.label ?? leaf, `${sec.label}/${sub.label}/${leaf.label ?? leaf}`, 2, null)))))),
+      unplaced ? el("button", { type: "button", class: "tr d0", "aria-pressed": String(f.place === "?"), onclick: () => { f.place = f.place === "?" ? "" : "?"; refresh(); } }, el("i", {}), "還沒歸位", el("span", {}, unplaced)) : null];
+  }
   function tagsPane() {
     const f = S.f, out = [];
     const btn = (label, n, on, click) => el("button", { type: "button", "aria-pressed": String(!!on), onclick: click }, label, el("span", {}, n ?? ""));
@@ -195,9 +222,11 @@ const Hub = (() => {
       out.push(el("h4", {}, "階層"), ...Object.entries(LV).map(([k, l]) => btn(l, parts[l], f.level === k, () => { f.level = f.level === k ? "" : k; f.entity = ""; refresh(); })),
         btn("待製作", parts["待製作"], f.entity === "false", () => { f.entity = f.entity === "false" ? "" : "false"; f.level = ""; refresh(); }));
     }
-    const secs = Object.entries(S.sections ?? {}).sort((x, y) => y[1] - x[1]);
+    if (S.tree?.tree?.length && !isCards()) out.push(...treePane());
+    const secs = S.tree?.tree?.length ? [] : Object.entries(S.sections ?? {}).sort((x, y) => y[1] - x[1]);
     if (secs.length > 1) out.push(el("h4", {}, "段落"), ...secs.map(([t, n]) => btn(t, n, f.section === t, () => { f.section = f.section === t ? "" : t; refresh(); })));
     for (const [facet, tags] of Object.entries(S.tags)) {
+      if (facet === "place" || (S.tree?.tree?.length && facet === "kind" && !isFigure(S.fam))) continue; // the tree shows places; the rows' old free tags are not a structure
       const list = Object.entries(tags).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
       if (!list.length) continue;
       const open = f.more.has(facet), on = (t) => f.tags.has(`${facet}:${t}`);
@@ -237,7 +266,7 @@ const Hub = (() => {
   async function refresh(keepFocus) { try { await loadItems(); paint(keepFocus); } catch (e) { S.host.fail?.(e); } }
 
   // ── the detail to the right ──
-  const FACET = { domain: "領域", kind: "結構", use: "用途", state: "熟悉度", ckind: "種類" };
+  const FACET = { domain: "領域", kind: "結構", use: "用途", state: "熟悉度", ckind: "種類", paper: "來源論文", tone: "語氣", place: "使用時機" };
   const META = ["domain", "kind", "use"];
   const cat = (id) => S.meta?.categories.find((c) => c.id === id);
   const fdef = (id) => S.meta?.formats.find((x) => x.id === id);
@@ -247,7 +276,9 @@ const Hub = (() => {
   function detail(it, d, isNew) {
     const c = cat(it.category), def = fdef(it.format), form = !!(c?.writable && def?.form), meta = !!c && !c.independent;
     // what the form holds until 儲存
-    const draft = { title: it.title ?? "", fields: { ...(it.fields ?? {}) }, tags: Object.fromEntries(META.map((k) => [k, (it.tags?.[k] ?? []).join("、")])), triggers: (it.triggers ?? []).join("、") };
+    // which tag facets this family's form offers: on a tree, where the item sits, its paper and its tone
+    const metaKeys = S.tree?.tree?.length && !isFigure(S.fam) ? ["place", "paper", "tone"] : META;
+    const draft = { title: it.title ?? "", fields: { ...(it.fields ?? {}) }, tags: Object.fromEntries(metaKeys.map((k) => [k, (it.tags?.[k] ?? []).join("、")])), triggers: (it.triggers ?? []).join("、") };
     let saveBtn = null;
     const dirty = () => { if (saveBtn) saveBtn.disabled = false; };
     const input = (fd) => {
@@ -267,7 +298,8 @@ const Hub = (() => {
       const first = (def?.fields ?? []).find((fd) => fd.required);
       const title = def?.shape === "row" ? String(draft.fields[first?.name] ?? draft.title).split("\n")[0].slice(0, 80) : draft.title.trim();
       const body = { ...it, line: undefined, thumb: undefined, title, fields: form ? draft.fields : it.fields, triggers: split(draft.triggers),
-        tags: Object.fromEntries(Object.entries(draft.tags).map(([k, v]) => [k, split(v)]).filter(([, v]) => v.length)) };
+        // the facets the form does not show are kept as they are
+        tags: Object.fromEntries(Object.entries({ ...(it.tags ?? {}), ...Object.fromEntries(Object.entries(draft.tags).map(([k, v]) => [k, split(v)])) }).filter(([, v]) => v.length)) };
       try {
         saveBtn.disabled = true;
         const r = isNew ? await api("POST", "/api/hub/items", body) : await api("PUT", `/api/hub/items/${enc(it.id)}`, body);
@@ -287,8 +319,9 @@ const Hub = (() => {
       it.thumb ? el("span", { class: "h-paper stage" }, el("img", { src: it.thumb, alt: "" })) : null,
       form && def?.shape !== "row" ? el("label", { class: "h-f" }, el("span", {}, "名稱", el("i", {}, "＊")), el("input", { value: draft.title, oninput: (e) => { draft.title = e.target.value; dirty(); } })) : null,
       fields.map(row),
-      canMeta ? el("details", { class: "h-more", open: isNew ? null : (Object.values(it.tags ?? {}).flat().length || it.triggers?.length ? true : null) }, el("summary", {}, "標籤與關鍵字"), META.map((k) => metaIn(FACET[k], k, "用、分開")), metaIn("觸發關鍵字", "triggers", "內容出現這些字就適用")) : [
+      canMeta ? el("details", { class: "h-more", open: isNew ? null : (Object.values(it.tags ?? {}).flat().length || it.triggers?.length ? true : null) }, el("summary", {}, "標籤與關鍵字"), metaKeys.map((k) => metaIn(FACET[k], k, k === "place" ? "段落/小節/使用時機，可多個，用、分開" : "用、分開")), metaIn("觸發關鍵字", "triggers", "內容出現這些字就適用")) : [
         Object.entries(it.tags ?? {}).map(([facet, ts]) => [el("div", { class: "k" }, FACET[facet] ?? facet), el("div", { class: "chips" }, ts.map((t) => el("span", { class: "h-tag" }, t)))])],
+      (it.tags?.place ?? []).length ? [el("div", { class: "k" }, "使用時機"), el("div", { class: "h-places" }, it.tags.place.map((p, i) => el("button", { type: "button", class: i ? "" : "main", onclick: () => { S.f.place = p; refresh(); } }, p.split("/").join(" › "))))] : null,
       d?.contains?.length ? [el("div", { class: "k" }, "由這些組成"), d.contains.map(link)] : null,
       d?.used_by?.length ? [el("div", { class: "k" }, "用在"), d.used_by.map(link)] : null,
       el("div", { class: "h-foot" }, c?.independent ? "不與 Lore 共用" : c?.tasks?.length ? `用在 ${c.tasks.length} 個步驟` : "還沒有步驟在用",

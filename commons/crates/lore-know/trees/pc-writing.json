@@ -1,0 +1,36 @@
+{
+  "family": "pc/寫作準則",
+  "levels": ["段落", "小節", "使用時機"],
+  "tree": [
+    { "label": "Abstract", "children": [
+      { "label": "摘要", "children": ["背景與缺口", "目標", "方法概述", "主要結果", "結論與意義"] } ] },
+    { "label": "Introduction", "children": [
+      { "label": "背景", "children": ["領域重要性", "盛行率與臨床負擔"] },
+      { "label": "問題", "children": ["現有做法的不足", "為什麼重要"] },
+      { "label": "本文", "children": ["目標", "貢獻", "章節安排"] } ] },
+    { "label": "Related Work", "children": [
+      { "label": "前人做法", "children": ["分類介紹", "個別方法說明"] },
+      { "label": "前人的限制", "children": ["技術限制", "資料或評估的限制"] },
+      { "label": "和本文的關係", "children": ["差異", "延伸自誰"] } ] },
+    { "label": "Method", "children": [
+      { "label": "資料", "children": ["來源與收集期間", "資料數量", "IRB 與同意書", "納入排除條件", "資料切分"] },
+      { "label": "標註", "children": ["誰標、怎麼標", "標籤的定義", "一致性檢查"] },
+      { "label": "前處理", "children": ["尺寸與正規化", "資料增強"] },
+      { "label": "問題定義", "children": ["定義變數與符號", "任務的輸入輸出"] },
+      { "label": "模型", "children": ["整體架構概述", "各模組說明", "引出方程式", "解釋方程式各項"] },
+      { "label": "訓練", "children": ["損失函數", "超參數設定", "訓練環境與硬體", "訓練策略"] },
+      { "label": "評估", "children": ["評估指標", "比較對象", "統計檢定", "視覺化方法"] } ] },
+    { "label": "Result", "children": [
+      { "label": "主要結果", "children": ["數字陳述", "和基準比較"] },
+      { "label": "消融", "children": ["消融設定", "消融結果"] },
+      { "label": "視覺化", "children": ["圖的說明", "個案"] },
+      { "label": "驗證", "children": ["外部驗證", "統計顯著性"] },
+      { "label": "解讀結果", "children": ["說明數字的意思"] } ] },
+    { "label": "Discussion", "children": [
+      { "label": "發現", "children": ["重述發現", "解讀與機轉"] },
+      { "label": "定位", "children": ["臨床意義", "和前人比較"] },
+      { "label": "界線", "children": ["限制", "未來工作"] } ] },
+    { "label": "Conclusion", "children": [
+      { "label": "結論", "children": ["總結貢獻", "意義", "限制與展望"] } ] }
+  ]
+}

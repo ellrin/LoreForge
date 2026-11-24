@@ -234,3 +234,16 @@ select.h-plus { padding: 5px 8px; font-weight: 500; }
 .h-diff del { color: var(--faint); background: none; border: 1px dashed var(--line); }
 .h-diff ins { background: var(--surface); }
 label.h-plus { cursor: pointer; font-weight: 500; font-size: 12px; padding: 6px 10px; }
+
+/* a family's tree in the left column */
+.h-tags .tr { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 4px; align-items: baseline; }
+.h-tags .tr i { font-style: normal; font-size: 10px; color: var(--faint); }
+.h-tags .tr.d0 { color: var(--text); font-weight: 500; }
+.h-tags .tr.d1 { padding-left: 16px; }
+.h-tags .tr.d2 { padding-left: 34px; font-size: 12px; grid-template-columns: 0 minmax(0, 1fr) auto; }
+.h-tags .tr.zero { color: var(--faint); font-weight: 400; }
+.h-cat { grid-template-columns: 216px minmax(320px, 1fr); }
+.h-cat.open { grid-template-columns: 204px minmax(300px, 1fr) minmax(360px, 38%); }
+.h-places { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.h-places button { background: none; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); padding: 3px 9px; font-size: 12px; }
+.h-places button.main { color: var(--text); border-color: var(--line-strong); }

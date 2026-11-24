@@ -130,6 +130,7 @@ pub fn routes(shared: &Shared) -> Router<Shared> {
         .route("/api/hub/thumb/{id}", get(thumb))
         .route("/api/hub/proposals", get(proposals).post(proposal_add))
         .route("/api/hub/proposals/{id}", get(proposal_view))
+        .route("/api/hub/tree", get(tree_get).put(tree_put))
         .route("/api/hub/proposals/{id}/apply", post(proposal_apply))
         .route("/api/hub/proposals/{id}/picture", post(proposal_picture).layer(big()))
         .route("/api/hub/proposals/{id}/undo", post(proposal_undo))
@@ -698,6 +699,22 @@ async fn proposal_apply(State(s): State<Shared>, Path(id): Path<String>, body: a
     let p = h.apply_proposal(&id, chosen.as_deref())?;
     place_picture(&mut h, &s.hub_dirs, &p);
     ok(json!({ "proposal": p }))
+}
+
+// A family's tree (段落 → 小節 → 使用時機 for the writing rows): the built-in one until the
+// author changes it; items are placed on it by their `place` tags (paths, the first the main one).
+
+async fn tree_get(State(s): State<Shared>, Query(q): Query<HashMap<String, String>>) -> R {
+    let h = hub(&s)?;
+    let family = q.get("family").map(String::as_str).unwrap_or("");
+    ok(json!({ "family": family, "tree": reader::tree(h.store.hub(), family) }))
+}
+
+async fn tree_put(State(s): State<Shared>, Query(q): Query<HashMap<String, String>>, Json(body): Json<Value>) -> R {
+    let h = hub(&s)?;
+    let family = q.get("family").filter(|f| !f.trim().is_empty()).ok_or_else(|| HubError::new(StatusCode::BAD_REQUEST, "要說是哪一類的樹"))?;
+    reader::save_tree(h.store.hub(), family, &body)?;
+    ok(json!({ "family": family, "tree": reader::tree(h.store.hub(), family) }))
 }
 
 // A proposal may come with one picture (L-Echo's split of a figure): it waits beside the
