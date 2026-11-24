@@ -91,3 +91,18 @@
 做好的（2026-11-13）：`L-Paper/crates/server/src/flow.rs`、`ui/figflow.js`、`ui/figedit.js`；出發點＝題目、摘要、方法一節（lore-docsrc 讀 main.tex；書讀 `\chapter`）；
 數學式：`/flow/api/svg` 帶 `tex: true` 時每行數學標 `data-tex`，`LoreFlow.paperSvg` 用共用的 `commons/ui/mathsvg.js`（從 `plot.js` 抽出來，繪圖工具也用它）換成 TeX 字形；
 PDF 由伺服器用 lore-plot 的 Chrome 輸出。繪圖工具也不會覆寫流程圖的 PDF（`.flow.json` 算已占用）。測試：`tests/flow_api.rs`（論文與書各跑一次，假的 PDF，不開瀏覽器）。
+
+## 7. 時間軸與線性前進圖的版型（2026-11-24，作者的要求，待做）
+
+作者的話：時間相關的歷史線性前進圖都是單調的版型（一串方框＋箭頭），希望不要那麼單調；我給過很多範例，應該在私人資料庫存一組我的，而且要可以擴增；流程圖也一樣。
+
+現況（2026-11-24 查）：
+
+- 作者的範例在 `private/SlideComposer/flow/examples/fNN/`（`ref.png`＋`desc.md`；時間軸 f22–f34），分析在 `research/analysis.md` §7（缺的七件事：軸線、點掛在軸上、上下側與交替、軸到文字的豎線、時間標籤／標題／內文的分層、依日期比例的位置與避讓、圖示位置）。這些範例**沒有接上任何提示詞或版面**：lore-flow 只讀 `private/shared/flow/examples/*.json`（`description`＋`dsl`），那個資料夾不存在。
+- L-Slide 論文報告的「時間軸」、「問題→原因→解法」是 lore-flow 的一列方框＋箭頭。
+
+要做：
+
+- lore-flow 新增**時間軸**這一類圖（不是 `layouts.json` 多幾列）：一條軸（細線、色帶、chevron 帶、彎折路徑）、點掛在軸上（記號：圓環、方塊、圖示圓、大圓＋水滴）、時間標籤／標題／內文三層、豎線、同側或上下交替、每點一色或單色、等距或依日期。
+- **每個版型一個檔案**放在作者的私人資料夾，程式不用改就會讀到新的（可以擴增）；畫不出來的版型列出來，不默默略過。L-Slide、L-Paper（書）讀同一組。
+- 先用同一份內容畫三種作者的版型給作者看，再修細節。

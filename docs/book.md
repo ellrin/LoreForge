@@ -161,3 +161,21 @@
 工作物件多的欄位：`options` 帶 `format`、`make_cards`、`sources`（每個 `{kind, label}`，`label` 是標題或檔名，不含路徑）、`keywords`；`source` 階段 `counts: {files, of, skipped}`；`review.chapters[].found: [{term, state, from}]`（追一層的新名詞，`from` = 那篇文獻的標題）與 `review.cards: <會建立幾張>`；`POST …/review` 的 body 多 `make_cards`；`result.cards: [{id, title}]`。
 
 連結：`LoreLinks.open("pc", { booksetup: "<id>" })` → `lore-pc://booksetup/<id>` → `/?book-setup=<id>`。`?book-setup=mock` 不用伺服器看面板。
+
+## 圖文書與先確認大綱（2026-11-24，作者的要求，待做）
+
+作者的話（摘要）：建書時要先有大綱目錄讓我確定；先跟我做簡單的章節確認、互動式建立大綱，然後才生成。一開始要幫我「多」增加一些可能的關鍵字（例如論文裡有 XGBoost、random forest，我不熟），也要讓我自己新增。我要的書是**圖文書**：多一些算法解釋與圖示；找不到適合的圖、或流程直接說明就好的，用流程圖工具。語言可選，專有名詞有英文的要多標英文。找到的文獻裡的新名詞：找完資料後再停一次讓我勾（作者選 A）。
+
+查到的現況：
+
+- 名詞抽取漏掉單字的大小寫混合名詞與第一個字是一般英文的片語：合成句子「…compare with XGBoost and a random forest… XGBoost reached… the random forest…」只抽到 `support vector machine` 與 `AUC`，`XGBoost`、`random forest`、`gradient boosting`、`decision trees` 都沒有（lore-learn `find_terms`：片語要出現兩次且第一個字不是一般英文；單字只認縮寫）。
+- 大綱的確認（`review`）在「找資料」之後；直接產生（`mode: direct`）不停。
+- 書裡的圖只有：開放授權的論文圖（引用＋授權）、lore-plot 依數字重畫；示意與流程用文字。
+
+要做（依序）：
+
+1. **第一站：大綱與關鍵字**（`plan` 之後就停）。模型多提一些可能的關鍵字（論文裡出現但抽取漏掉的方法名、先備概念），每個都要指得出論文裡的句子或知識庫的先備連結，程式檢查；作者勾選、自己新增；大綱可以採用建議或打一句話重排。確定後才找資料與撰寫。面板的「直接產生」拿掉。
+2. **第二站：文獻裡的新名詞**（`research` 之後再停一次，勾要不要加進書）。
+3. **語言**：「中文」模式印成 **中文**（English）（`.sty` 的選項，不交換 `\term` 的參數：第一個參數是「已經講過」比對用的英文）；每章第一次出現都標英文、章名與大綱附英文；沒有通用中文譯名的直接用英文。
+4. **圖文書**：大綱裡每章說明要放的圖：開放授權的論文圖、重畫的數據圖、流程圖（lore-flow，和 流程圖… 同一條路：`.flow.json`、`\ref`、符號進書的 `notation.json`），或空的圖位加建議。授權規則不放寬。
+5. **時間軸與線性流程的版型**：見 docs/flow-figures.md §7。
