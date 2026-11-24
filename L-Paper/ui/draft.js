@@ -727,7 +727,7 @@ const PCDraft = (() => {
     };
     add.onkeydown = (e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); go(); } };
     const r = row(add);
-    const mic = micButton(add);
+    const mic = LoreChoices.mic(add);
     if (mic) r.append(mic);
     r.classList.add("df-gi-add");
     box.append(r);
@@ -853,7 +853,7 @@ const PCDraft = (() => {
     act.classList.add("df-actrow");
     act.append(btn("略過", () => run("略過", async () => { const v = await call("/round/skip", { group: g.id }); D.group = null; return v; }), "ghost small"));
     act.append(el("span", "df-grow"));
-    const mic = micButton(ta);
+    const mic = LoreChoices.mic(ta);
     if (mic) act.append(mic);
     const onlyConf = conf.length && !(D.draftAnswer?.[g.id] ?? "").trim();
     act.append(btn(rs.left > 1 ? (onlyConf ? "都對，下一題" : "送出，下一題") : "送出", () => send(ta.value), "primary small"));
@@ -979,7 +979,7 @@ const PCDraft = (() => {
         const keepOwn = () => { if (own.value === (it.own ?? "")) return; it.own = own.value; it.status = "kept"; save(); };
         own.onchange = keepOwn;
         const r = row(own);
-        const mic = micButton(own, keepOwn);
+        const mic = LoreChoices.mic(own, keepOwn);
         if (mic) r.append(mic);
         card.append(opts, r);
       }
@@ -991,7 +991,7 @@ const PCDraft = (() => {
     const addIt = () => { const v = add.value.trim(); if (!v) return; items.push({ id: "", kind: /表|table/i.test(v) ? "table" : "figure", label: "", title: v, tool: "" }); save(); };
     add.onkeydown = (e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); addIt(); } };
     const r = row(add);
-    const mic = micButton(add);
+    const mic = LoreChoices.mic(add);
     if (mic) r.append(mic);
     r.append(btn("加入", addIt, "ghost small"));
     main.append(r);
@@ -1029,7 +1029,7 @@ const PCDraft = (() => {
       cb.onchange = () => { n.keep = cb.checked; save(); };
       keep.append(cb, document.createTextNode(n.kept ? "已存進我的寫法" : "以後也用"));
       const r = row(sc, keep);
-      const mic = micButton(t, keepT);
+      const mic = LoreChoices.mic(t, keepT);
       if (mic) r.append(mic);
       r.append(iconButton("trash", "刪除", () => { edit.splice(k, 1); save(); }));
       li.append(t, r);
@@ -1042,7 +1042,7 @@ const PCDraft = (() => {
     const addIt = () => { const v = add.value.trim(); if (!v) return; edit.push({ id: "", text: v, scope: "paper", group: D.group ?? "" }); save(); };
     add.onkeydown = (e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); addIt(); } };
     const r = row(add);
-    const mic = micButton(add);
+    const mic = LoreChoices.mic(add);
     if (mic) r.append(mic);
     r.append(btn("加入", addIt, "ghost small"));
     box.append(r);
@@ -1084,7 +1084,7 @@ const PCDraft = (() => {
       ans.rows = 5;
       ans.setAttribute("aria-label", "這題的回答");
       ans.oninput = () => (D.discAnswer = ans.value);
-      const mic = micButton(ans);
+      const mic = LoreChoices.mic(ans);
       const r = row(btn("繼續討論", () => { D.discAnswer = null; draw(); }, "ghost small"), el("span", "df-grow"), ...(mic ? [mic] : []), btn("送出為回答", () => run("送出回答", async () => { const v = await call(`/discuss/${d.id}/close`, { answer: ans.value, model: model() }); D.disc = null; D.discAnswer = null; return v; })));
       side.append(ans, r);
       return;
@@ -1101,7 +1101,7 @@ const PCDraft = (() => {
     // something to sum up only once the author has said something
     if (!d.messages.some((m) => m.who === "me")) sum.disabled = true;
     // speak and send sit under the box, right; the two ways to end the discussion sit on one line below
-    const mic = micButton(ta);
+    const mic = LoreChoices.mic(ta);
     const r = row(el("span", "df-grow"), ...(mic ? [mic] : []), btn("送出", say, "primary small"));
     r.classList.add("df-actrow");
     const end = row();
@@ -1130,45 +1130,7 @@ const PCDraft = (() => {
     });
   }
 
-  // ── 按住說話 (lore-voice, when the machine has it), on every field of 對話 ─────────
-  // The words go into the field as said; `onFinal` runs when the phrase ends (a field that
-  // saves on change saves then). Voice is not a trusted input event, so the field is marked
-  // typed here: a poll's redraw keeps it like typed text.
-  let voiceOk = null, vEvents = null, vCur = null;
-  function micButton(field, onFinal) {
-    const b = iconButton("mic", "按住說話", () => {});
-    b.classList.add("df-mic");
-    b.hidden = true;
-    (async () => {
-      if (voiceOk == null) { try { voiceOk = !!(await api("/api/voice")).available; } catch { voiceOk = false; } }
-      b.hidden = !voiceOk;
-    })();
-    const text = (e) => { try { return JSON.parse(e.data).text ?? ""; } catch { return ""; } };
-    const put = (t) => {
-      if (!vCur) return;
-      const f = vCur.field;
-      f.value = (vCur.base + t).trimStart();
-      f.dataset.typed = "1";
-      f.dispatchEvent(new Event("input"));
-    };
-    const start = async (e) => {
-      e.preventDefault();
-      if (!vEvents) {
-        vEvents = new EventSource("/api/voice/events");
-        vEvents.addEventListener("partial", (x) => put(text(x)));
-        vEvents.addEventListener("final", (x) => { put(text(x)); const c = vCur; c?.field.focus(); c?.onFinal?.(); });
-        vEvents.addEventListener("error", (x) => { let v = {}; try { v = JSON.parse(x.data ?? "{}"); } catch {} if (v.kind) { voiceOk = false; LoreShell.toast(v.message ?? "語音無法使用", { err: true }); } });
-      }
-      vCur = { field, onFinal, base: field.value ? `${field.value.trimEnd()} ` : "" };
-      b.classList.add("on");
-      try { await api("/api/voice/listen", { continuous: false, language: "zh-TW" }); } catch (err) { b.classList.remove("on"); LoreShell.toast(err.message, { err: true }); }
-    };
-    const stop = () => { if (!b.classList.contains("on")) return; b.classList.remove("on"); api("/api/voice/listen/stop", {}).catch(() => {}); };
-    b.onpointerdown = start;
-    b.onpointerup = stop;
-    b.onpointerleave = stop;
-    return b;
-  }
+  // 按住說話 (the mic on every field of 對話) is LoreChoices.mic (commons/ui/choices.js)
 
   // ── 預想選項 ──────────────────────────────────────────
   // Possible answers prepared from the record: per question (the turn names which of the item's
@@ -1194,29 +1156,13 @@ const PCDraft = (() => {
     if (cands.length) return cands;
     return (t.options ?? []).map((o, k) => ({ id: null, key: `o${k}`, text: o, evidence: [] }));
   }
-  function choiceCards(list, numbered = true) {
-    const box = el("div", "df-cands");
-    D.picked ??= [];
-    list.forEach((c, k) => {
-      const on = c.id ? (D.rpicked ?? []).includes(`${c.item}:${c.id}`) : D.pickedOpt === c.text;
-      const b = el("button", `df-cand${on ? " on" : ""}`);
-      b.disabled = !!D.busy;
-      // a long choice reads as its point, then the rest quieter
-      const m = c.text.match(/^(.{8,}?[。；：]|.{8,60}?，)(.+)$/s);
-      const tx = el("span", "t");
-      if (m && c.text.length > 44) tx.append(el("b", "", m[1].replace(/[；：，]$/, "")), el("span", "more", m[2].trim()));
-      else tx.textContent = c.text;
-      b.append(el("span", "n", numbered ? String(k + 1) : "＋"), tx);
-      if (c.evidence?.length) {
-        const ev = el("span", "ev");
-        c.evidence.forEach((e) => { const x = el("span", "df-ev", e); x.title = evidenceText(e); ev.append(x); });
-        b.append(ev);
-      }
-      b.onclick = () => pickChoice(c);
-      box.append(b);
-    });
-    return box;
-  }
+  const choiceCards = (list, numbered = true) => LoreChoices.cards(list, {
+    onPick: pickChoice,
+    numbered,
+    picked: (c) => (c.id ? (D.rpicked ?? []).includes(`${c.item}:${c.id}`) : D.pickedOpt === c.text),
+    disabled: !!D.busy,
+    evidenceTitle: evidenceText,
+  });
   function pickChoice(c) {
     const ta = $(".df-answer");
     if (!ta) return;
@@ -1736,6 +1682,6 @@ const PCDraft = (() => {
     });
   }
 
-  // micButton and makeFloat are shared with 骨架 (skeleton.js)
-  return { open, reload, micButton, makeFloat: makeFromStandIn };
+  // makeFloat is shared with 骨架 (skeleton.js)
+  return { open, reload, makeFloat: makeFromStandIn };
 })();

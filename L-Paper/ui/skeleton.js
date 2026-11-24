@@ -547,7 +547,7 @@ const PCSkeleton = (() => {
 
   // ── the margin ───────────────────────────────────────
   const toggle = (set, k) => (set.has(k) ? set.delete(k) : set.add(k));
-  const mic = (ta) => (typeof PCDraft !== "undefined" && PCDraft.micButton ? PCDraft.micButton(ta) : null);
+  const mic = (ta) => LoreChoices.mic(ta);
 
   function changeNode(t, c) {
     const d = h("div", "sk-change");

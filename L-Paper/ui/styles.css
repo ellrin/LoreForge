@@ -1519,13 +1519,6 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-table.picking th, .df-table.picking td { cursor: pointer; }
 .df-table.picking td:hover, .df-table.picking th:hover { background: var(--surface); }
 .df-change.rewrite { border-left-color: var(--warn); }
-.df-cands { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
-.df-cand { display: grid; grid-template-columns: 18px 1fr; gap: 2px 8px; align-items: baseline; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--panel); color: var(--text); text-align: left; font: 13px/1.5 var(--sans); white-space: normal; cursor: pointer; }
-.df-cand:hover { border-color: var(--accent-text); }
-.df-cand.on { border-color: var(--accent-text); background: var(--accent-soft); }
-.df-cand .n { font: 600 11px var(--mono); color: var(--faint); }
-.df-cand .ev { grid-column: 2; display: flex; flex-wrap: wrap; gap: 4px; }
-.df-ev { padding: 0 5px; border: 1px solid var(--line); border-radius: 6px; font: 10.5px var(--mono); color: var(--muted); cursor: help; }
 .df-none { align-self: flex-start; font-size: 12.5px; }
 .df-pfields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 10px; }
 .df-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -1539,8 +1532,6 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-seg button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-text); color: var(--accent-text); position: relative; }
 .df-lcands > summary { cursor: pointer; font-size: 11.5px; color: var(--accent-text); }
 .df-ledger .df-sum { grid-template-columns: 64px 1fr; }
-.df-mic { align-self: flex-start; }
-.df-mic.on { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-text); }
 .df-rectext { width: 100%; box-sizing: border-box; margin-top: 8px; font: inherit; }
 .df-fold { margin: 0; border-top: 1px solid var(--line); padding: 8px 0; }
 .df-fold[open] { padding-bottom: 12px; }
@@ -1623,11 +1614,6 @@ textarea.np-input { resize: vertical; line-height: 1.55; }
 .df-q .df-qrow { display: flex; align-items: flex-start; gap: 12px; }
 .df-q .df-ask { flex: 1; font-size: 17px; font-weight: 600; line-height: 1.6; color: var(--text); }
 .df-q .df-qrow .btn { flex: none; margin-top: 3px; }
-.df-cand { padding: 9px 12px; }
-.df-cand .t { line-height: 1.55; }
-.df-cand .t b { display: block; font-weight: 600; }
-.df-cand .t .more { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
-.df-cand .ev { opacity: .7; }
 
 /* one aligned row of actions under a text box; the mic always sits just left of send */
 .df-q .df-answer { display: block; width: 100%; box-sizing: border-box; }
