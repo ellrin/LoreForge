@@ -211,21 +211,23 @@ function setView(v) {
 }
 function showView(v) {
   S.view = v;
-  document.querySelectorAll(".view").forEach((s) => (s.hidden = s.dataset.view !== v));
+  // 知識卡 is a family like the others: it is drawn by the hub's page
+  const shown = v === "cards" ? "hub" : v;
+  document.querySelectorAll(".view").forEach((s) => (s.hidden = s.dataset.view !== shown));
   const navFor = v === "editor" ? (S.ed?.pending ? "pending" : "cards") : v;
   document.querySelectorAll("#left button[data-view]").forEach((b) => b.toggleAttribute("aria-current", b.dataset.view === navFor));
   document.querySelectorAll("#left button[data-view][aria-current]").forEach((b) => b.setAttribute("aria-current", "page"));
   // 知識卡 unfolds while one of its functions is the page
   if (["review", "pending", "timeline", "graph"].includes(navFor)) foldCards(true);
-  $("filters").hidden = !(v === "cards");
+  $("filters").hidden = true;
   shell.drawer("left", false);
   paintStatus();
   if (v !== "graph") Graph.hide();
   if (v === "hub") Hub.show($("hubView"), S.hubArg);
-  else Hub.refreshNav();
+  else if (v === "cards") Hub.show($("hubView"), "kb/cards");
+  else { Hub.leave(); Hub.refreshNav(); }
   document.querySelectorAll("#views button[data-view='hub']").forEach((b) => b.toggleAttribute("aria-current", v === "hub" && !S.hubArg));
   document.querySelectorAll("#views button[data-view='hub'][aria-current]").forEach((b) => b.setAttribute("aria-current", "page"));
-  if (v === "cards") loadCards();
   if (v === "review") loadReview();
   if (v === "pending") loadPending();
   if (v === "timeline") loadTimeline();
@@ -251,7 +253,7 @@ function wire() {
     saveFilters(); loadCards();
   });
   let qt;
-  $("q").addEventListener("input", () => { clearTimeout(qt); qt = setTimeout(() => { if (S.view !== "cards") setView("cards"); else loadCards(); }, 200); });
+  $("q").addEventListener("input", () => { clearTimeout(qt); qt = setTimeout(() => { Hub.query($("q").value.trim()); if (S.view !== "cards") setView("cards"); }, 200); });
   // 外觀 is the shell's (the theme all LoreForge apps share)
   document.addEventListener("lore-theme", () => { if (S.view === "graph") Graph.draw(); });
   wireEditor();
@@ -717,7 +719,7 @@ async function restoreCard(id, title) {
     await api("POST", `/api/nodes/${id}/restore`);
     toast(`已復原「${title}」`);
     await refreshMeta();
-    if (S.view === "cards") loadCards();
+    if (S.view === "cards") Hub.show($("hubView"), "kb/cards");
   } catch (e) { fail(e); }
 }
 

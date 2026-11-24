@@ -120,7 +120,27 @@ const Hub = (() => {
     let mode = null; try { mode = localStorage.getItem(prefKey(f)); } catch {}
     return { q: "", sort: "updated", level: "", entity: "", section: "", more: new Set(), tags: new Set(), source: "", mode: mode ?? (isFigure(f) ? "wall" : "list") };
   }
+  // ── 知識卡: the same page over L-Brain's own cards (/api/nodes), which carry a learning state ──
+  const STATE = { known: "記得", learning: "學習中", stale: "久未複習", none: "尚無紀錄" };
+  const isCards = () => S.fam?.app === "kb";
+  async function loadCards() {
+    const f = S.f;
+    S.reg ??= await api("GET", "/api/registry");
+    const sort = { updated: "updated", created: "created", title: "title", todo: "score" }[f.sort] ?? "updated";
+    const p = new URLSearchParams({ limit: "5000", sort });
+    if (f.q) p.set("q", f.q);
+    const nodes = (await api("GET", `/api/nodes?${p}`)).nodes ?? [];
+    const dl = (d) => S.reg.domains?.[d]?.label ?? d, kl = (k) => S.reg.kinds?.find((x) => x.id === k)?.label ?? k;
+    const all = nodes.map((n) => ({ id: n.id, card: true, title: n.title, line: n.summary ?? "", category: n.domains?.[0] ? dl(n.domains[0]) : "未分類", format: "card", entity: true, state: n.state ?? "none", node: n,
+      tags: { domain: (n.domains ?? []).map(dl), state: [STATE[n.state ?? "none"] ?? n.state], ckind: [kl(n.kind)] } }));
+    S.tags = {};
+    for (const it of all) for (const [facet, ts] of Object.entries(it.tags)) for (const t of ts) { S.tags[facet] ??= {}; S.tags[facet][t] = (S.tags[facet][t] ?? 0) + 1; }
+    S.sections = {};
+    S.items = all.filter((it) => { const by = {}; for (const k of f.tags) { const [facet, ...r] = k.split(":"); (by[facet] ??= []).push(r.join(":")); } return Object.entries(by).every(([facet, ts]) => ts.some((t) => it.tags[facet]?.includes(t))); });
+    S.total = S.items.length;
+  }
   async function loadItems() {
+    if (isCards()) return loadCards();
     const f = S.f, p = new URLSearchParams({ family: S.fam.id, sort: f.sort, limit: "1000" });
     if (f.q) p.set("q", f.q);
     if (f.level) p.set("level", f.level);
@@ -143,7 +163,8 @@ const Hub = (() => {
   }
   const thumb = (it, cls = "") => (it.thumb ? el("span", { class: `h-paper ${cls}` }, el("img", { src: it.thumb, alt: "", loading: "lazy" })) : it.format === "figure" || it.format === "layout" ? el("span", { class: `h-paper none ${cls}` }, it.entity === false ? "待製作" : "") : null);
   const catLabel = (id) => S.meta?.categories.find((c) => c.id === id)?.label ?? id;
-  const chips = (it) => [it.entity === false ? el("span", { class: "h-tag todo" }, "待製作") : null,
+  const chips = (it) => [it.card && it.state !== "known" ? el("span", { class: `h-tag st-${it.state}` }, STATE[it.state] ?? "") : null,
+    it.entity === false ? el("span", { class: "h-tag todo" }, "待製作") : null,
     it.source?.kind === "external" ? el("span", { class: "h-tag src" }, it.source.name) : null];
   function groups() {
     const fig = isFigure(S.fam), out = new Map();
@@ -152,6 +173,7 @@ const Hub = (() => {
       (out.get(k) ?? out.set(k, []).get(k)).push(it);
     }
     const name = (k) => (fig ? (k === "todo" ? "待製作" : LV[k] ?? "其他") : catLabel(k));
+    if (isCards()) return [...out.entries()].sort((a, b) => (a[0] === "未分類") - (b[0] === "未分類") || b[1].length - a[1].length).map(([k, v]) => ({ key: k, label: k, items: v }));
     const order = fig ? ["figure", "module", "component", "other", "todo"] : S.fam.categories;
     return [...out.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([k, v]) => ({ key: k, label: name(k), items: v }));
   }
@@ -186,7 +208,7 @@ const Hub = (() => {
     return out.length ? el("aside", { class: "h-tags" }, out) : null;
   }
   function head() {
-    const f = S.f, sorts = S.meta?.sorts ?? [["updated", "最近修改"], ["title", "名稱"]];
+    const f = S.f, sorts = isCards() ? [["updated", "最近修改"], ["created", "最近新增"], ["title", "名稱"], ["todo", "最不熟的先"]] : S.meta?.sorts ?? [["updated", "最近修改"], ["title", "名稱"]];
     let timer = 0;
     return el("div", { class: "h-head" }, el("h2", {}, S.fam.label), el("span", { class: "cnt" }, fmt(S.total)), el("span", { class: "sp" }),
       el("input", { type: "search", placeholder: "在這一類裡找", value: f.q, "aria-label": "在這一類裡找", oninput: (e) => { clearTimeout(timer); timer = setTimeout(() => { f.q = e.target.value.trim(); refresh(true); }, 250); } }),
@@ -196,6 +218,7 @@ const Hub = (() => {
   }
   /** ＋ 新增: straight to the form when one category takes it, else a small choice of which. */
   function addBtn() {
+    if (isCards()) return el("button", { type: "button", class: "h-plus", "aria-label": "新增知識卡", onclick: () => { location.hash = "#/new"; } }, "＋");
     const cs = addable();
     if (!cs.length) return null;
     if (cs.length === 1) return el("button", { type: "button", class: "h-plus", "aria-label": `新增${cs[0].label}`, onclick: () => add(cs[0].id) }, "＋");
@@ -212,7 +235,8 @@ const Hub = (() => {
   async function refresh(keepFocus) { try { await loadItems(); paint(keepFocus); } catch (e) { S.host.fail?.(e); } }
 
   // ── the detail to the right ──
-  const FACET = { domain: "領域", kind: "結構", use: "用途" };
+  const FACET = { domain: "領域", kind: "結構", use: "用途", state: "熟悉度", ckind: "種類" };
+  const META = ["domain", "kind", "use"];
   const cat = (id) => S.meta?.categories.find((c) => c.id === id);
   const fdef = (id) => S.meta?.formats.find((x) => x.id === id);
   const split = (v) => v.split(/[,，、\n]/).map((x) => x.trim()).filter(Boolean);
@@ -221,7 +245,7 @@ const Hub = (() => {
   function detail(it, d, isNew) {
     const c = cat(it.category), def = fdef(it.format), form = !!(c?.writable && def?.form), meta = !!c && !c.independent;
     // what the form holds until 儲存
-    const draft = { title: it.title ?? "", fields: { ...(it.fields ?? {}) }, tags: Object.fromEntries(Object.keys(FACET).map((k) => [k, (it.tags?.[k] ?? []).join("、")])), triggers: (it.triggers ?? []).join("、") };
+    const draft = { title: it.title ?? "", fields: { ...(it.fields ?? {}) }, tags: Object.fromEntries(META.map((k) => [k, (it.tags?.[k] ?? []).join("、")])), triggers: (it.triggers ?? []).join("、") };
     let saveBtn = null;
     const dirty = () => { if (saveBtn) saveBtn.disabled = false; };
     const input = (fd) => {
@@ -230,7 +254,9 @@ const Hub = (() => {
       const long = fd.kind === "markdown" || fd.kind === "latex" || String(v).length > 60 || /template|example|text|message|body|note|usage/.test(fd.name);
       return long ? el("textarea", { rows: fd.name === "body" ? 14 : 2, oninput: set, spellcheck: "false" }, String(v)) : el("input", { value: String(v), type: fd.kind === "number" ? "number" : "text", oninput: set });
     };
-    const fields = (def?.fields ?? []).filter((fd) => typeof (it.fields?.[fd.name] ?? "") !== "object");
+    // `what` (generator / drawing / spec / reference) is the program's word, not the author's
+    const fields = (def?.fields ?? []).filter((fd) => fd.name !== "what" && typeof (it.fields?.[fd.name] ?? "") !== "object");
+    const builtin = it.fields?.what === "generator";
     const link = (r) => el("button", { type: "button", class: "h-lk", onclick: () => open(r.id) }, thumb(r), r.title);
     const row = (fd) => form ? el("label", { class: "h-f" }, el("span", {}, fd.label, fd.required ? el("i", {}, "＊") : null), input(fd))
       : (it.fields?.[fd.name] ? el("label", { class: "h-f" }, el("span", {}, fd.label), el("div", { class: "ro" }, String(it.fields[fd.name]))) : null);
@@ -259,7 +285,7 @@ const Hub = (() => {
       it.thumb ? el("span", { class: "h-paper stage" }, el("img", { src: it.thumb, alt: "" })) : null,
       form && def?.shape !== "row" ? el("label", { class: "h-f" }, el("span", {}, "名稱", el("i", {}, "＊")), el("input", { value: draft.title, oninput: (e) => { draft.title = e.target.value; dirty(); } })) : null,
       fields.map(row),
-      canMeta ? el("details", { class: "h-more", open: isNew ? null : (Object.values(it.tags ?? {}).flat().length || it.triggers?.length ? true : null) }, el("summary", {}, "標籤與關鍵字"), Object.entries(FACET).map(([k, l]) => metaIn(l, k, "用、分開")), metaIn("觸發關鍵字", "triggers", "內容出現這些字就適用")) : [
+      canMeta ? el("details", { class: "h-more", open: isNew ? null : (Object.values(it.tags ?? {}).flat().length || it.triggers?.length ? true : null) }, el("summary", {}, "標籤與關鍵字"), META.map((k) => metaIn(FACET[k], k, "用、分開")), metaIn("觸發關鍵字", "triggers", "內容出現這些字就適用")) : [
         Object.entries(it.tags ?? {}).map(([facet, ts]) => [el("div", { class: "k" }, FACET[facet] ?? facet), el("div", { class: "chips" }, ts.map((t) => el("span", { class: "h-tag" }, t)))])],
       d?.contains?.length ? [el("div", { class: "k" }, "由這些組成"), d.contains.map(link)] : null,
       d?.used_by?.length ? [el("div", { class: "k" }, "用在"), d.used_by.map(link)] : null,
@@ -267,10 +293,24 @@ const Hub = (() => {
         isNew ? null : ` · ${it.source?.kind === "external" ? it.source.name : it.source?.kind === "author" ? "我加的" : "Lore"}`, it.used ? ` · 用過 ${it.used} 次` : null),
       el("div", { class: "h-acts" },
         canMeta ? (saveBtn = el("button", { type: "button", class: "pri", disabled: !isNew, onclick: save }, isNew ? "新增" : "儲存")) : null,
-        !isNew && c?.writable ? el("button", { type: "button", class: "quiet", onclick: () => remove(it) }, "移除") : null));
+        !isNew && c?.writable && !builtin ? el("button", { type: "button", class: "quiet", onclick: () => remove(it) }, "移除") : null));
+  }
+  function cardDetail(it) {
+    const n = it.node, known = it.state === "known";
+    const recall = async (outcome) => { try { await api("POST", `/api/recall/${enc(n.id)}`, { outcome, via: "kb-list" }); await loadStats(); await loadItems(); await open(n.id); } catch (e) { S.host.fail?.(e); } };
+    return el("aside", { class: "h-detail" },
+      el("div", { class: "hd" }, el("h3", {}, n.title), el("button", { type: "button", class: "x", "aria-label": "關閉", onclick: close }, "✕")),
+      el("div", { class: "ln" }, [it.tags.ckind[0], ...it.tags.domain, STATE[it.state]].filter(Boolean).join(" · ")),
+      n.aliases?.length ? el("div", { class: "ln" }, n.aliases.join(" · ")) : null,
+      n.summary ? el("p", { class: "h-sum" }, n.summary) : null,
+      n.tags?.length ? [el("div", { class: "k" }, "標籤"), el("div", { class: "chips" }, n.tags.map((t) => el("span", { class: "h-tag" }, t)))] : null,
+      el("div", { class: "h-foot" }, n.next_check_at ? `下次確認 ${n.next_check_at.slice(0, 10).replaceAll("-", "/")}` : known ? "不需再確認" : "還沒排複習", n.streak ? ` · 連續記得 ${n.streak} 次` : null),
+      el("div", { class: "h-acts" }, el("button", { type: "button", class: "pri", onclick: () => { location.hash = `#/node/${n.id}`; } }, "打開"),
+        el("button", { type: "button", onclick: () => recall(known ? "unfamiliar" : "mastered") }, known ? "改回學習" : "已熟悉，不用學")));
   }
   async function open(id) {
     S.sel = id;
+    if (isCards()) { const it = S.items.find((x) => x.id === id); if (it) { detailEl = cardDetail(it); paint(); } else close(); return; }
     try {
       const d = await api("GET", `/api/hub/items/${enc(id)}`);
       detailEl = detail(d.item, d, false);
@@ -301,13 +341,19 @@ const Hub = (() => {
     try {
       await Promise.all([loadStats(), loadMeta()]);
       const fam = arg ? S.stats.families.find((f) => f.id === arg) : null;
+      if (fam?.app === "kb") S.reg = null; // labels may have changed
       if (!fam) { S.fam = null; S.sel = null; detailEl = null; nav(); root.replaceChildren(el("div", { class: "hubv" }, cover())); return; }
       if (S.fam?.id !== fam.id) { S.f = defaults(fam); S.sel = null; detailEl = null; }
+      if (fam.app === "kb" && S.pendingQ != null) { S.f.q = S.pendingQ; }
       S.fam = fam; nav();
       await loadItems(); paint();
     } catch (e) {
       root.replaceChildren(el("div", { class: "hubv" }, el("div", { class: "h-empty" }, e.message || "知識中樞現在打不開")));
     }
   }
-  return { show, init: (host) => { S.host = host ?? {}; }, refreshNav: () => loadStats().catch(() => {}) };
+  /** Another view took the page: no family is the current one. */
+  const leave = () => { S.fam = null; S.sel = null; detailEl = null; S.allFor = null; nav(); };
+  /** The top search box looks through the cards. */
+  const query = (q) => { S.pendingQ = q; if (isCards() && S.f && S.f.q !== q) { S.f.q = q; refresh(); } };
+  return { show, leave, query, init: (host) => { S.host = host ?? {}; }, refreshNav: () => loadStats().catch(() => {}) };
 })();

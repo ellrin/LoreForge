@@ -195,3 +195,10 @@ select.h-plus { padding: 5px 8px; font-weight: 500; }
 .fam .fold::before { content: "▸"; font-size: 11px; }
 .fam .fold[aria-expanded="true"]::before { content: "▾"; }
 .fam .fold:hover { background: var(--surface); color: var(--text); }
+
+/* the whole 知識卡 row is one thing; the fold sits inside it */
+.fam-row { border-radius: var(--r); }
+.fam-row:has(button[aria-current="page"]) { background: var(--accent-soft); }
+.fam-row button[data-view][aria-current="page"] { background: none; }
+.h-sum { margin: 16px 0 4px; line-height: 1.75; font-size: 14px; }
+.h-tag.st-learning, .h-tag.st-none, .h-tag.st-stale { background: none; border: 1px solid var(--line-strong); color: var(--muted); }
