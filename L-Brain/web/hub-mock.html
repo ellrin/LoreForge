@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="synthwave">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>L-Brain 知識中樞（畫面草稿，假資料）</title>
+<!-- A design draft with synthetic data (docs/brain-hub.md §8): open the file, switch views with #dash / #list / #wall / #cards. Not wired to the server. -->
+<link rel="stylesheet" href="../../commons/ui/theme.css">
+<link rel="stylesheet" href="../../commons/ui/base.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans, "Noto Sans TC", system-ui, sans-serif); }
+  .hub { display: grid; grid-template-columns: 208px 1fr; grid-template-rows: 48px 1fr; height: 100vh; }
+  .hub-top { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .hub-top b { white-space: nowrap; font: 700 14px/1 var(--sans, inherit); letter-spacing: .04em; }
+  .hub-top input { flex: 0 1 360px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 7px 10px; font: inherit; }
+  .hub-top .sp { flex: 1; }
+  .hpill { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px 10px; font-size: 12px; color: var(--muted); background: none; }
+  .hpill.hot { color: var(--accent-text); border-color: var(--accent); }
+  .hprimary { flex: none; white-space: nowrap; cursor: pointer; background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 7px 12px; font: 600 13px/1 inherit; }
+
+  /* left: where am I */
+  .nav { border-right: 1px solid var(--line); background: var(--panel); padding: 10px 8px; overflow: auto; }
+  .nav h4 { font: 600 11px/1 var(--mono, monospace); color: var(--faint); letter-spacing: .08em; margin: 14px 8px 6px; }
+  .nav a { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 13px; }
+  .nav a span { margin-left: auto; font: 12px var(--mono, monospace); color: var(--faint); }
+  .nav a[aria-current] { background: var(--accent-soft); color: var(--text); }
+  .nav a[aria-current] span { color: var(--accent-text); }
+  .nav a.sub { padding-left: 22px; }
+
+  main { overflow: auto; }
+  .hview { display: none; padding: 20px 24px 40px; }
+  .hview.on { display: block; }
+  h2 { font-size: 18px; margin: 0 0 2px; white-space: nowrap; }
+  .sub-h { color: var(--faint); font-size: 12px; margin-bottom: 16px; }
+
+  /* dashboard */
+  .sect { margin-top: 22px; }
+  .sect > h3 { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 8px; }
+  .sect > h3 small { color: var(--faint); font-weight: 400; font-family: var(--mono, monospace); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; min-height: 84px; cursor: pointer; }
+  .tile:hover { border-color: var(--line-strong); background: var(--surface); }
+  .tile .n { font: 600 26px/1.1 var(--mono, monospace); }
+  .tile .l { font-size: 13px; color: var(--muted); }
+  .tile .m { margin-top: auto; font-size: 11px; color: var(--faint); display: flex; gap: 8px; }
+  .tile .m .warn { color: var(--warn); }
+  .tile.big { grid-column: span 2; }
+  .tile.add { border-style: dashed; align-items: center; justify-content: center; color: var(--faint); font-size: 13px; }
+  .bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: var(--surface); margin-top: 6px; }
+  .bar i { display: block; }
+
+  /* category page: tags | list | detail */
+  .cat { display: grid; grid-template-columns: 190px minmax(320px, 1fr) 0; gap: 0; height: calc(100vh - 48px); margin: -20px -24px -40px; }
+  .cat.open { grid-template-columns: 190px minmax(320px, 1fr) minmax(360px, 44%); }
+  .tags { border-right: 1px solid var(--line); padding: 14px 10px; overflow: auto; }
+  .tags h4 { font: 600 11px/1 var(--mono, monospace); color: var(--faint); letter-spacing: .08em; margin: 14px 6px 6px; }
+  .tags h4:first-child { margin-top: 2px; }
+  .tags button { display: flex; width: 100%; gap: 8px; align-items: center; background: none; border: 0; color: var(--muted); padding: 4px 6px; border-radius: 6px; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+  .tags button span { margin-left: auto; font: 11px var(--mono, monospace); color: var(--faint); }
+  .tags button[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); }
+  .tags button.child { padding-left: 20px; }
+  .mid { overflow: auto; padding: 14px 16px 30px; }
+  .mid-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .mid-head h2 { margin: 0; }
+  .mid-head .cnt { color: var(--faint); font: 12px var(--mono, monospace); }
+  .mid-head select { flex: none; width: auto; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 12px; }
+  .seg2 { display: inline-flex; flex: none; white-space: nowrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg2 a { padding: 5px 10px; font-size: 12px; color: var(--muted); text-decoration: none; }
+  .seg2 a[aria-current] { background: var(--accent-soft); color: var(--text); }
+  details.grp { border-top: 1px solid var(--line); }
+  details.grp > summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 9px 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
+  details.grp > summary::before { content: "▸"; color: var(--faint); font-size: 11px; width: 10px; }
+  details.grp[open] > summary::before { content: "▾"; }
+  details.grp > summary small { color: var(--faint); font: 400 12px var(--mono, monospace); }
+  details.grp > summary .todo { margin-left: auto; color: var(--warn); font-weight: 400; font-size: 11px; }
+  .row { display: grid; grid-template-columns: 44px minmax(120px, 1.1fr) minmax(0, 1.4fr) auto; gap: 12px; align-items: center; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+  .row:hover { background: var(--surface); }
+  .row[aria-selected="true"] { background: var(--accent-soft); }
+  .row .th { width: 44px; height: 32px; background: #fff; border-radius: 4px; display: grid; place-items: center; overflow: hidden; }
+  .row .th svg { width: 40px; height: 28px; }
+  .row .t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .d { color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .g { display: flex; gap: 4px; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--surface); color: var(--muted); white-space: nowrap; }
+  .tag.todo { background: none; border: 1px dashed var(--warn); color: var(--warn); }
+  .row.text { grid-template-columns: minmax(160px, 1.6fr) minmax(0, 1fr) auto; }
+
+  .detail { border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 16px 18px 30px; display: none; }
+  .cat.open .detail { display: block; }
+  .detail .stage { background: #fff; border-radius: 8px; height: 190px; display: grid; place-items: center; margin: 10px 0 14px; }
+  .detail .stage svg { width: 86%; height: 150px; }
+  .detail h3 { margin: 0; font-size: 16px; }
+  .detail .k { font: 600 11px/1 var(--mono, monospace); color: var(--faint); letter-spacing: .08em; margin: 16px 0 6px; }
+  .detail .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .detail .acts { display: flex; gap: 8px; margin-top: 18px; }
+  .detail .acts button { background: var(--surface); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 12px; }
+  .link { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; color: var(--muted); }
+  .link i { width: 30px; height: 22px; background: #fff; border-radius: 3px; display: grid; place-items: center; }
+  .link i svg { width: 26px; height: 18px; }
+
+  /* wall of thumbnails */
+  .wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; cursor: pointer; }
+  .card:hover { border-color: var(--line-strong); }
+  .card .pic { background: #fff; border-radius: 6px; height: 112px; display: grid; place-items: center; }
+  .card .pic svg { width: 82%; height: 88px; }
+  .card .cap { font-size: 12px; padding: 7px 4px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .cap b { color: var(--faint); font-weight: 400; }
+  .card.ref .pic { background: repeating-linear-gradient(135deg, var(--surface) 0 8px, var(--panel) 8px 16px); color: var(--faint); font-size: 12px; }
+  .wall-h { font-size: 13px; font-weight: 600; margin: 20px 0 8px; display: flex; gap: 8px; align-items: baseline; }
+  .wall-h small { color: var(--faint); font: 400 12px var(--mono, monospace); }
+</style>
+</head>
+<body>
+<div class="hub">
+  <header class="hub-top">
+    <b>L-Brain</b>
+    <input placeholder="搜尋全部知識">
+    <span class="sp"></span>
+    <button class="hpill hot">待同意 2</button>
+    <button class="hprimary">＋ 新增</button>
+  </header>
+
+  <nav class="nav" id="nav"></nav>
+
+  <main>
+    <section class="hview" id="v-dash">
+      <h2>知識</h2>
+      <div class="sub-h" id="dashSum"></div>
+      <div id="dashBody"></div>
+    </section>
+
+    <section class="hview" id="v-list"><div class="cat open" id="catList"></div></section>
+    <section class="hview" id="v-wall"><div class="cat" id="catWall"></div></section>
+    <section class="hview" id="v-cards"><div class="cat open" id="catCards"></div></section>
+  </main>
+</div>
+
+<script>
+// ── synthetic data ──
+const SV = {
+  box: '<rect x="14" y="14" width="72" height="32" rx="3" fill="#dbe7fb" stroke="#3b6cc7" stroke-width="1.5"/>',
+  op: '<circle cx="50" cy="30" r="15" fill="#fff" stroke="#222" stroke-width="1.5"/><path d="M41 30h18M50 21v18" stroke="#222" stroke-width="1.5"/>',
+  loss: '<rect x="18" y="17" width="64" height="26" rx="13" fill="#fde9c9" stroke="#c9822a" stroke-width="1.5"/><path d="M38 36l6-12 6 12 6-12" stroke="#c9822a" fill="none" stroke-width="1.5"/>',
+  stack: [0,1,2,3].map(i=>`<rect x="${26+i*8}" y="${10+i*5}" width="34" height="30" fill="#bfe0f3" stroke="#3b88b8" stroke-width="1.2" opacity=".9"/>`).join(""),
+  bars: [0,1,2,3,4,5].map(i=>`<rect x="${14+i*13}" y="12" width="9" height="36" rx="2" fill="${["#e2f0d9","#dae3f3","#f7d9f0","#fff2cc","#dae3f3","#e2f0d9"][i]}" stroke="#555" stroke-width="1"/>`).join(""),
+  enc: '<path d="M18 10l64 12v16l-64 12z" fill="#f7d9f0" stroke="#a04a8c" stroke-width="1.5"/>',
+  dec: '<path d="M18 22l64-12v40l-64-12z" fill="#dfe1f7" stroke="#5a5fb0" stroke-width="1.5"/>',
+  unet: [0,1,2,3,4,5,6].map(i=>{const h=[38,28,18,10,18,28,38][i];return `<rect x="${12+i*11.5}" y="${30-h/2}" width="8" height="${h}" fill="#c8c1ff" stroke="#1d3b63" stroke-width="1"/>`}).join("")+'<path d="M20 12h60M31.5 17h37" stroke="#1d3b63" stroke-width=".8" stroke-dasharray="2 2" fill="none"/>',
+  cub: [0,1,2].map(i=>`<path d="M${18+i*24} ${20+i*4}h${16-i*3}v${24-i*8}h-${16-i*3}z M${18+i*24} ${20+i*4}l6-6h${16-i*3}l-6 6 M${34+i*21} ${20+i*4}l6-6v${24-i*8}l-6 6" fill="#f5ecd0" stroke="#8a7a45" stroke-width="1"/>`).join(""),
+  vec: [0,1,2,3,4,5,6].map(i=>`<rect x="${15+i*10}" y="22" width="10" height="16" fill="${i%2?"#fff":"#bdd7ee"}" stroke="#2c5f93" stroke-width="1"/>`).join(""),
+  mat: [0,1,2,3].flatMap(r=>[0,1,2,3,4].map(c=>`<rect x="${25+c*10}" y="${10+r*10}" width="10" height="10" fill="${(r+c)%3?"#fff":"#ffd9a8"}" stroke="#777" stroke-width=".8"/>`)).join(""),
+  flowA: '<rect x="6" y="20" width="18" height="20" fill="#dbe7fb" stroke="#3b6cc7"/><path d="M32 16l18 5v18l-18 5z" fill="#f7d9f0" stroke="#a04a8c"/><path d="M58 21l18-5v28l-18-5z" fill="#dfe1f7" stroke="#5a5fb0"/><rect x="82" y="22" width="13" height="16" rx="8" fill="#fde9c9" stroke="#c9822a"/><path d="M24 30h8M50 30h8M76 30h6" stroke="#222"/>',
+  flowB: '<rect x="4" y="6" width="92" height="22" fill="#fef8f5" stroke="#222"/><rect x="4" y="32" width="92" height="22" fill="#fafcfe" stroke="#222"/><rect x="10" y="11" width="14" height="12" fill="#bfe0f3" stroke="#3b88b8"/><rect x="34" y="11" width="24" height="12" fill="#c8c1ff" stroke="#1d3b63"/><rect x="68" y="11" width="18" height="12" rx="6" fill="#fde9c9" stroke="#c9822a"/><rect x="10" y="37" width="14" height="12" fill="#bfe0f3" stroke="#3b88b8"/><rect x="34" y="37" width="24" height="12" fill="#c8c1ff" stroke="#1d3b63"/><rect x="68" y="37" width="18" height="12" fill="#e2f0d9" stroke="#4c8a3a"/><path d="M24 17h10M58 17h10M24 43h10M58 43h10" stroke="#222"/>',
+  lan: '<rect x="20" y="14" width="60" height="14" rx="2" fill="#e2f0d9" stroke="#4c8a3a" stroke-width="1.3"/><path d="M30 28v10M50 28v10M70 28v10" stroke="#4c8a3a"/><circle cx="30" cy="42" r="4" fill="#fff" stroke="#4c8a3a"/><circle cx="50" cy="42" r="4" fill="#fff" stroke="#4c8a3a"/><circle cx="70" cy="42" r="4" fill="#fff" stroke="#4c8a3a"/>',
+};
+const svg = (k) => `<svg viewBox="0 0 100 60">${SV[k] ?? ""}</svg>`;
+
+const FLOW = [
+  // level, title, line, tags, pic, entity
+  ["component", "Conv layer", "box · rect", ["deep learning", "架構圖"], "box", 1],
+  ["component", "運算節點 ⊕", "op · circle", ["架構圖"], "op", 1],
+  ["component", "Loss", "loss · capsule", ["deep learning"], "loss", 1],
+  ["component", "LAN switch", "box · rect", ["web", "網路圖"], "lan", 1],
+  ["component", "Activation glyph", "只有描述", ["deep learning"], "", 0],
+  ["module", "Encoder", "encoder · plain", ["deep learning", "架構圖"], "enc", 1],
+  ["module", "Decoder", "decoder · plain", ["deep learning", "架構圖"], "dec", 1],
+  ["module", "UNet", "unet · bars", ["segmentation", "架構圖"], "unet", 1],
+  ["module", "Feature stack", "feature-stack", ["deep learning"], "stack", 1],
+  ["module", "Layer bars", "layer-bars", ["deep learning"], "bars", 1],
+  ["module", "Cuboid sequence", "cuboid-seq", ["deep learning", "立體"], "cub", 1],
+  ["module", "Vector bar", "vector-bar", ["embedding"], "vec", 1],
+  ["module", "Matrix", "matrix", ["graph"], "mat", 1],
+  ["module", "Attention gate", "只有描述", ["attention"], "", 0],
+  ["figure", "Encoder–decoder with a reconstruction loss", "4 個模塊", ["machine learning", "資料流"], "flowA", 1],
+  ["figure", "Training row and inference row", "5 個模塊", ["machine learning", "架構圖"], "flowB", 1],
+  ["figure", "Semi-supervised segmentation with pseudo labels", "參考圖", ["semi-supervised", "資料流"], "", 0],
+  ["figure", "時間軸：圓環節點", "參考圖", ["時間軸"], "", 0],
+  ["figure", "時間軸：色帶＋圖示", "參考圖", ["時間軸"], "", 0],
+];
+const LV = { component: "元件", module: "模塊", figure: "流程圖" };
+
+const DASH = [
+  ["L-Brain", "kb", [["知識卡", 520, "學習中 86", "cards", 1]]],
+  ["流程圖", "flow", [["元件", 24, "待製作 9", "list"], ["模塊", 31, "待製作 25", "list"], ["流程圖", 6, "待製作 16", "wall"], ["版面", 20, "", "wall"], ["配色", 2, "", "wall"]]],
+  ["論文 · L-Paper", "pc", [["句型", 440, "", "list"], ["常用詞", 300, "", "list"], ["規則", 32, "", "list"], ["用詞對照", 5, "", "list"], ["範例段落", 43, "", "list"], ["寫作筆記", 9, "", "list"], ["論文模板", 23, "", "wall"], ["風格參考", 5, "未接上", "list"]]],
+  ["投影片 · L-Slide", "sc", [["論述法", 2, "", "list"], ["風格包", 3, "", "wall"], ["版型", 7, "", "wall"], ["構圖", 49, "", "wall"]]],
+  ["獨立", "x", [["wordbox · 單字", 180, "不與 Lore 共用", "list"]]],
+];
+
+// ── nav ──
+const view = () => (location.hash || "#dash").slice(1);
+function nav() {
+  const v = view();
+  const a = (href, t, n, sub, on) => `<a href="#${href}" class="${sub ? "sub" : ""}" ${on ? "aria-current=page" : ""}>${t}<span>${n ?? ""}</span></a>`;
+  document.getElementById("nav").innerHTML =
+    a("dash", "總覽", "", 0, v === "dash") +
+    "<h4>L-BRAIN</h4>" + a("cards", "知識卡", 520, 0, v === "cards") + a("dash", "複習", 12) + a("dash", "圖譜", "") +
+    "<h4>流程圖</h4>" + a("list", "元件", 24, 0) + a("list", "模塊", 31, 0, v === "list") + a("wall", "流程圖", 6, 0, v === "wall") + a("wall", "版面", 20) +
+    "<h4>論文</h4>" + a("dash", "寫作準則", 829) + a("dash", "模板", 23) +
+    "<h4>投影片</h4>" + a("dash", "論述法", 2) + a("dash", "版型與構圖", 59) +
+    "<h4>獨立</h4>" + a("dash", "wordbox", 180);
+}
+
+// ── dashboard ──
+function dash() {
+  const total = DASH.flatMap((s) => s[2]).reduce((n, t) => n + t[1], 0);
+  document.getElementById("dashSum").textContent = `${total} 條 · ${DASH.flatMap((s) => s[2]).length} 類`;
+  document.getElementById("dashBody").innerHTML = DASH.map(([name, id, tiles]) => {
+    const sum = tiles.reduce((n, t) => n + t[1], 0);
+    return `<div class="sect"><h3>${name}<small>${sum}</small></h3><div class="tiles">` +
+      tiles.map(([l, n, m, to, big]) => `<a class="tile${big ? " big" : ""}" href="#${to}" style="text-decoration:none;color:inherit"><span class="n">${n}</span><span class="l">${l}</span><span class="m">${m ? `<span class="${/待製作|未接上/.test(m) ? "warn" : ""}">${m}</span>` : ""}</span></a>`).join("") +
+      (id === "x" ? `<div class="tile add">＋ 來源</div>` : id === "kb" ? "" : `<div class="tile add">＋ 類別</div>`) + `</div></div>`;
+  }).join("");
+}
+
+// ── category page ──
+const TAGS = `<h4>階層</h4><button aria-pressed="false">元件<span>24</span></button><button aria-pressed="true">模塊<span>31</span></button><button aria-pressed="false">流程圖<span>6</span></button>
+  <h4>領域</h4><button>deep learning<span>18</span></button><button class="child">segmentation<span>4</span></button><button class="child">attention<span>3</span></button><button>machine learning<span>9</span></button><button>web<span>2</span></button>
+  <h4>結構</h4><button>架構圖<span>14</span></button><button>資料流<span>7</span></button><button>時間軸<span>13</span></button><button>網路圖<span>2</span></button>
+  <h4>來源</h4><button>我<span>12</span></button><button>L-Slide<span>21</span></button>`;
+const head = (title, n, cur) => `<div class="mid-head"><h2>${title}</h2><span class="cnt">${n}</span><span style="flex:1"></span>
+  <select><option>最近修改</option><option>名稱</option><option>最近新增</option><option>使用次數</option><option>標籤少的在前</option><option>待製作在前</option></select>
+  <span class="seg2"><a href="#list" ${cur === "list" ? "aria-current=page" : ""}>清單</a><a href="#wall" ${cur === "wall" ? "aria-current=page" : ""}>圖</a></span>
+  <button class="hprimary">＋</button></div>`;
+const row = (f, sel) => `<div class="row" ${sel ? 'aria-selected="true"' : ""}><span class="th">${f[5] ? svg(f[4]) : ""}</span><span class="t">${f[1]}</span><span class="d">${f[2]}</span><span class="g">${f[5] ? "" : '<span class="tag todo">待製作</span>'}${f[3].map((t) => `<span class="tag">${t}</span>`).join("")}</span></div>`;
+function list() {
+  const grp = (lv, open) => { const it = FLOW.filter((f) => f[0] === lv); const todo = it.filter((f) => !f[5]).length;
+    return `<details class="grp" ${open ? "open" : ""}><summary>${LV[lv]} <small>${it.length}</small>${todo ? `<span class="todo">待製作 ${todo}</span>` : ""}</summary>${it.map((f) => row(f, f[1] === "UNet")).join("")}</details>`; };
+  document.getElementById("catList").innerHTML = `<aside class="tags">${TAGS}</aside>
+    <div class="mid">${head("流程圖", "61", "list")}${grp("component", false)}${grp("module", true)}${grp("figure", false)}</div>
+    <aside class="detail"><h3>UNet</h3><div class="d" style="color:var(--faint);font-size:12px">模塊 · unet · bars</div>
+      <div class="stage">${svg("unet")}</div>
+      <div class="k">標籤</div><div class="chips"><span class="tag">segmentation</span><span class="tag">deep learning</span><span class="tag">架構圖</span><span class="tag">論文</span><span class="tag" style="border:1px dashed var(--line-strong);background:none">＋</span></div>
+      <div class="k">觸發關鍵字</div><div class="chips"><span class="tag">U-Net</span><span class="tag">encoder-decoder</span><span class="tag">skip connection</span></div>
+      <div class="k">由這些組成</div><div class="link"><i>${svg("bars")}</i>Layer bars</div><div class="link"><i>${svg("box")}</i>Conv layer</div>
+      <div class="k">用在</div><div class="link"><i>${svg("flowB")}</i>Training row and inference row</div>
+      <div class="k">用在哪些步驟</div><div class="chips"><span class="tag">流程圖：產生列表</span><span class="tag">論文報告：大綱</span></div>
+      <div class="acts"><button>編輯圖形</button><button>交給 Echo</button><button>複製成新的</button><button>移除</button></div></aside>`;
+}
+function wall() {
+  const cards = (lv, ent) => FLOW.filter((f) => f[0] === lv && !!f[5] === ent).map((f) => `<div class="card ${ent ? "" : "ref"}"><div class="pic">${ent ? svg(f[4]) : "參考圖"}</div><div class="cap"><b>${f[3][f[3].length - 1]}｜</b>${f[1]}</div></div>`).join("");
+  const add = `<div class="card ref"><div class="pic">＋</div><div class="cap"><b>新增</b></div></div>`;
+  document.getElementById("catWall").innerHTML = `<aside class="tags">${TAGS.replace('aria-pressed="true">模塊', 'aria-pressed="false">模塊').replace('aria-pressed="false">流程圖', 'aria-pressed="true">流程圖')}</aside>
+    <div class="mid">${head("流程圖", "61", "wall")}
+      <div class="wall-h">模塊 <small>8</small></div><div class="wall">${cards("module", true)}</div>
+      <div class="wall-h">流程圖 <small>2</small></div><div class="wall">${cards("figure", true)}</div>
+      <div class="wall-h" style="color:var(--warn)">待製作 <small>5</small></div><div class="wall">${cards("module", false)}${cards("figure", false)}${cards("component", false)}${add}</div></div><aside class="detail"></aside>`;
+}
+// knowledge cards in the same one-row list
+const CARDS = [["電腦視覺", [["Mean Reprojection Error (MRE)", "平均重投影誤差，衡量重投影點與觀測點的平均像素距離。", "概念", "學習中"], ["Kinematic Features", "由關節位置隨時間變化算出的速度、加速度等特徵。", "概念", "學習中"], ["Anisotropic", "各方向性質不同；影像中指各軸解析度不一致。", "概念", "記得"], ["Threshold Segmentation", "依像素值高於或低於門檻分割前景與背景。", "方法", "記得"]]],
+  ["深度學習", [["Temperature scaling", "把每個分數除以一個正數再做 softmax。", "方法", "學習中"], ["Contrastive loss", "讓同一例子的兩個視角比其他例子更接近的損失。", "概念", "不熟"]]],
+  ["統計與數學", [["Bland–Altman plot", "兩種量測方法差值對平均值的散點圖，用來看一致性。", "方法", "記得"]]]];
+function cards() {
+  document.getElementById("catCards").innerHTML = `<aside class="tags"><h4>領域</h4><button aria-pressed="true">電腦視覺<span>212</span></button><button>深度學習<span>148</span></button><button>醫學影像分析<span>96</span></button><button>統計與數學<span>41</span></button>
+    <h4>熟悉度</h4><button>到期待複習<span>12</span></button><button>學習中<span>86</span></button><button>記得<span>402</span></button><h4>種類</h4><button>概念<span>430</span></button><button>方法<span>38</span></button><button>方程式<span>9</span></button></aside>
+    <div class="mid"><div class="mid-head"><h2>知識卡</h2><span class="cnt">520</span><span style="flex:1"></span><select><option>最近修改</option><option>名稱</option><option>最不熟的先</option></select><button class="hprimary">＋</button></div>
+    ${CARDS.map(([d, it], i) => `<details class="grp" ${i < 2 ? "open" : ""}><summary>${d} <small>${it.length}</small></summary>${it.map((c, j) => `<div class="row text" ${i === 0 && j === 0 ? 'aria-selected="true"' : ""}><span class="t">${c[0]}</span><span class="d">${c[1]}</span><span class="g"><span class="tag">${c[2]}</span><span class="tag" style="${c[3] === "記得" ? "" : "color:var(--accent-text)"}">${c[3]}</span></span></div>`).join("")}</details>`).join("")}</div>
+    <aside class="detail"><h3>Mean Reprojection Error (MRE)</h3><div style="color:var(--faint);font-size:12px">概念 · 電腦視覺 · 學習中</div>
+      <p style="margin:14px 0;line-height:1.75">平均重投影誤差，衡量重投影點與觀測點在影像上的平均像素距離，用來評估相機校正或三維重建的擬合程度。</p>
+      <div class="k">連到</div><div class="chips"><span class="tag">Camera calibration</span><span class="tag">Bundle adjustment</span></div>
+      <div class="k">來源</div><div class="link">論文 · p.4</div>
+      <div class="acts"><button>編輯</button><button>已熟悉，不用學</button><button>交給 Echo</button></div></aside>`;
+}
+function show() { nav(); for (const s of document.querySelectorAll(".hview")) s.classList.toggle("on", s.id === "v-" + view()); }
+dash(); list(); wall(); cards(); show(); addEventListener("hashchange", show);
+</script>
+</body>
+</html>
