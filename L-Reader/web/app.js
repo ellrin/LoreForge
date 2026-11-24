@@ -1213,7 +1213,8 @@ function sectionAt(p, start) {
   return "";
 }
 
-/** What L-Echo gets for a selection (`selectionInfo()`); `readonly`: no rewrite comes back. */
+/** What L-Echo gets for a selection (`selectionInfo()`); `readonly`: no rewrite comes back.
+ *  Its 加入知識庫 comes back with `doc` and `scope`: the server reads the page from 「第 n 頁」 (`reading::scope_page`). */
 function echoPayload(info) {
   const { p } = info, sec = sectionAt(p, info.start);
   return {

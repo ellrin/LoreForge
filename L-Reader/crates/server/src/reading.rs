@@ -470,6 +470,50 @@ pub async fn noun_card(State(s): State<Shared>, Path(sha): Path<String>, Json(b)
     Ok((StatusCode::CREATED, Json(json!({ "node": r["node"], "summary": summary, "sources": sources.iter().map(|w| &w.url).collect::<Vec<_>>(), "engine": a.engine }))))
 }
 
+/// `POST /api/lore/card` from L-Echo (its 加入知識庫 for a selection in a PDF, proxied): the
+/// selection's `doc` (the paper's sha), its `scope` 「第 n 頁…」 (or `page`) and its page text.
+#[derive(Deserialize)]
+pub struct EchoCardBody {
+    pub title: String,
+    #[serde(default)]
+    pub doc: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub page: Option<u32>,
+    #[serde(default)]
+    pub context: Option<String>,
+}
+
+/// The page number in L-Reader's own selection scope 「第 n 頁[：section]」.
+pub fn scope_page(scope: &str) -> Option<u32> {
+    let rest = scope.trim_start().strip_prefix('第')?;
+    let n: String = rest.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+    n.parse().ok().filter(|n| *n >= 1)
+}
+
+/// About `side` characters on each side of the first `term` in `text` (the selection's page
+/// window is ~2,500 characters; the card keeps 800); the start when the term is not in it.
+pub fn around(text: &str, term: &str, side: usize) -> String {
+    let at = text.find(term).map(|b| text[..b].chars().count()).unwrap_or(0);
+    let from = at.saturating_sub(side);
+    text.chars().skip(from).take(at - from + term.chars().count() + side).collect::<String>().trim().to_string()
+}
+
+/// 加入知識庫 from L-Echo = 一鍵加卡 ([`noun_card`], the same card): the paper must be here and
+/// the page known.
+pub async fn echo_card(State(s): State<Shared>, Json(b): Json<EchoCardBody>) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let sha = b.doc.trim().to_string();
+    sha_ok(&sha)?;
+    if s.papers.meta(&sha)?.is_none() {
+        return Err(ApiError(StatusCode::NOT_FOUND, json!({ "error": "沒有這份論文的資料" })));
+    }
+    let page = b.page.filter(|p| *p >= 1).or_else(|| scope_page(&b.scope)).ok_or_else(|| bad("不知道是第幾頁"))?;
+    let term = b.title.split_whitespace().collect::<Vec<_>>().join(" ");
+    let context = b.context.as_deref().map(|c| around(c, &term, 350));
+    noun_card(State(s), Path(sha), Json(WebCardBody { term, page, context, save: true })).await
+}
+
 /// 「這不是術語」: add a word or phrase to the ignore list.
 pub async fn ignore_add(State(s): State<Shared>, Json(b): Json<TermBody>) -> R {
     let t = b.term.split_whitespace().collect::<Vec<_>>().join(" ");

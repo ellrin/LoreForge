@@ -6,7 +6,8 @@
 // goes back to the app with 套用 and lands on the selection there. 解釋 and 問他 are chat turns
 // that carry the selection (send() asks take()). 加入知識庫 is the app's own add-card route.
 // A read-only document (`readonly`, a PDF): no 改寫, and 翻譯 is a chat turn; nothing goes back.
-// No 加入知識庫 there either for now: L-Reader adds cards with its own 一鍵加卡, it has no /api/lore/card.
+// Its 加入知識庫 sends the paper's id (`doc`), title (`source`), page (`scope`) and page text: L-Reader's
+// /api/lore/card is its own 一鍵加卡.
 // Esc closes the rewrite, then the selection; 新對話, collapse or a new selection end it.
 "use strict";
 
@@ -47,7 +48,7 @@ window.LoreEchoSel = (() => {
     const r = X.req;
     const where = [r.scope, r.source].find((x) => x && x.trim()) ?? "";
     const acts = h("div", { class: "sel-acts", role: "group", "aria-label": "對選取的文字" },
-      (r.kind === "term" ? TERM : PASSAGE).filter(([id]) => !(r.readonly && (id === "rewrite" || id === "card"))).map(([id, ic, label]) => {
+      (r.kind === "term" ? TERM : PASSAGE).filter(([id]) => !(r.readonly && id === "rewrite")).map(([id, ic, label]) => {
         const b = h("button", { type: "button", class: "btn small", "data-act": id, onclick: () => act(id) }, h("span", { "data-icon": ic }), label);
         if (id === "translate") { b.append(h("span", { class: "caret", "data-icon": "chevron" })); b.setAttribute("aria-expanded", "false"); }
         if (id === "ask") b.setAttribute("aria-pressed", "false");
@@ -135,7 +136,9 @@ window.LoreEchoSel = (() => {
     try {
       // the same answers as LoreAddCard.add (commons/ui/addcard.js), through the asking app
       await whileState("noting", async () => {
-        const res = await fetch("/api/selection/lore/card", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title, source: r.doc || r.source || "" }) }).catch(() => null);
+        // a read-only document (L-Reader): the title as the source, and what its 一鍵加卡 needs
+        const body = r.readonly ? { title, source: r.source || r.doc || "", doc: r.doc, scope: r.scope ?? "", context: r.context ?? "" } : { title, source: r.doc || r.source || "" };
+        const res = await fetch("/api/selection/lore/card", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
         const v = res ? await res.json().catch(() => ({})) : { error: "沒有回應" };
         const open = (id) => ({ label: "開啟", run: () => LoreLinks.open("kb", { node: id }) });
         if (res?.status === 409 && v.id) LoreShell.toast(v.error, { action: open(v.id), ms: 8000 });

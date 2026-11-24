@@ -557,6 +557,41 @@ async fn a_card_is_never_written_without_a_web_search() {
     assert_eq!(urls(lr_server::reading::card_sources(&json!({ "sources": ["https://made.up/x"] }), &read)).len(), 3);
 }
 
+/// 加入知識庫 from L-Echo (`POST /api/lore/card`, a selection's doc / scope / page text) is the
+/// same 一鍵加卡: the same refusals as `nouns/card`, the KB reached with the term; an unknown
+/// paper or no page is refused before anything else.
+#[tokio::test]
+async fn echo_card_is_the_one_click_card() {
+    let (kb, created) = fake_kb().await;
+    let e = setup(&kb, Some(fake_engine(r#"{"found": true, "summary": "記憶裡的說明", "sources": ["https://example.com/x"]}"#).await));
+    let sha = import(&e.app, lr_core::synth::demo_paper(), "demo.pdf").await;
+    let ctx = format!("{} We use anisotropic diffusion here. {}", "a ".repeat(900), "b ".repeat(900));
+    // no web search: the same 503 as the paper's own route, no card
+    let own = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/card"), Some(json!({ "term": "anisotropic diffusion", "page": 2, "context": "We use anisotropic diffusion here." })), None).await;
+    let echo = call(&e.app, "POST", "/api/lore/card", Some(json!({ "title": "anisotropic diffusion", "source": "A synthetic paper", "doc": sha, "scope": "第 2 頁：Methods", "context": ctx })), None).await;
+    assert_eq!((own.0, &own.1), (echo.0, &echo.1));
+    assert_eq!(echo.0, StatusCode::SERVICE_UNAVAILABLE, "{}", echo.1);
+    // a term the KB has: its 409 with the card's id, as the page's 一鍵加卡 gets it
+    let own = call(&e.app, "POST", &format!("/api/papers/{sha}/nouns/card"), Some(json!({ "term": "Dice coefficient", "page": 3 })), None).await;
+    let echo = call(&e.app, "POST", "/api/lore/card", Some(json!({ "title": " Dice  coefficient ", "doc": sha, "page": 3 })), None).await;
+    assert_eq!((own.0, &own.1), (echo.0, &echo.1));
+    assert_eq!((echo.0, echo.1["id"].as_str()), (StatusCode::CONFLICT, Some("n1")));
+    // an unknown paper, a bad id, no page
+    let (s, v, _) = call(&e.app, "POST", "/api/lore/card", Some(json!({ "title": "U-Net", "doc": "0".repeat(64), "scope": "第 1 頁" })), None).await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::NOT_FOUND, Some("沒有這份論文的資料")));
+    let (s, _, _) = call(&e.app, "POST", "/api/lore/card", Some(json!({ "title": "U-Net", "doc": "../x", "scope": "第 1 頁" })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _, _) = call(&e.app, "POST", "/api/lore/card", Some(json!({ "title": "U-Net", "doc": sha, "scope": "Methods" })), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(created.lock().unwrap().is_empty(), "no card");
+    // the page from the scope, the sentence around the term from the page window
+    assert_eq!(lr_server::reading::scope_page("第 12 頁：Results"), Some(12));
+    assert_eq!(lr_server::reading::scope_page("第 0 頁"), None);
+    let near = lr_server::reading::around(&ctx, "anisotropic diffusion", 350);
+    assert!(near.contains("We use anisotropic diffusion here.") && near.chars().count() <= 800, "{}", near.chars().count());
+    assert_eq!(lr_server::reading::around("前文注意力機制後文", "注意力", 2), "前文注意力機制");
+}
+
 /// A fake OpenAI-compatible engine that counts the classification requests.
 async fn counting_engine(reply: &'static str) -> (String, Arc<Mutex<usize>>) {
     let hits: Arc<Mutex<usize>> = Arc::default();

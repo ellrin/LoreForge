@@ -21,6 +21,7 @@
 //! | GET | /api/papers/{sha}/nouns | the noun list (inventory × KB × ignore list × cached categories) |
 //! | POST | /api/papers/{sha}/nouns/classify | `{again?, limit?}` → one `lr-classify-terms` call (a batch of `limit` terms) |
 //! | POST | /api/papers/{sha}/nouns/card | `{term, page, context?, save?}` → web-searched summary (`lr-card`) → KB `POST /api/nodes`; no search, no card; `save: false` = the draft only (the dialog's 起草摘要) |
+//! | POST | /api/lore/card | L-Echo's 加入知識庫 for a selection (proxied): `{title, doc: sha, scope: 第 n 頁… \| page, context?}` → the same 一鍵加卡 (`nouns/card`); unknown paper 404, no page 400 |
 //! | GET/POST | /api/papers/{sha}/symbols | the symbol table / the author adds `{latex, meaning?…}` |
 //! | PUT | /api/papers/{sha}/symbols/{id} | `{latex?, meaning?, meaning_en?, grade?, note?, by?, evidence?, page?}` (author edits win) |
 //! | POST | /api/papers/{sha}/symbols/rebuild | detect again (after a glyph-table change) |
@@ -252,6 +253,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/papers/{sha}/nouns", get(reading::nouns_get))
         .route("/api/papers/{sha}/nouns/classify", post(reading::classify))
         .route("/api/papers/{sha}/nouns/card", post(reading::noun_card))
+        .route("/api/lore/card", post(reading::echo_card))
         .route("/api/ignore", post(reading::ignore_add).delete(reading::ignore_remove))
         .route("/api/papers/{sha}/symbols", get(reading::symbols_get).post(reading::symbol_add))
         .route("/api/papers/{sha}/symbols/rebuild", post(reading::symbols_rebuild))

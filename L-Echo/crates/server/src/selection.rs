@@ -12,6 +12,7 @@
 //! | POST | /api/selection/end | the app is told, the request is dropped |
 //! | POST | /api/selection/apply `{after, polish?}` | → the app's page; ok → `{ok, message}` (and the app's `/api/polish/applied` when `polish`); the app's 409/410/504 pass through |
 //! | POST/GET | /api/selection/polish, /polish/{applied,like,history,presets}, /lore/card | forwarded unchanged to the app's `/api/polish…`, `/api/lore/card` while a request is open (else 409) |
+//! (`/lore/card` from a read-only selection carries `{title, source, doc, scope, context}`: L-Reader's `/api/lore/card` is its 一鍵加卡.)
 
 use std::sync::Mutex;
 use std::time::Duration;

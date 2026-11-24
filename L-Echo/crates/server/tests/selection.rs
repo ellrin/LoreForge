@@ -201,6 +201,19 @@ async fn selection_a_new_request_ends_the_old_one() {
     assert!(second_log.lock().unwrap().is_empty());
     let v = call(&s, "GET", "/api/selection", Value::Null).await.1;
     assert_eq!((v["request"].as_str(), v["kind"].as_str(), v["readonly"].as_bool()), (Some("r2"), Some("passage"), Some(true)));
+
+    // a read-only term (a PDF in L-Reader): 加入知識庫 reaches the app with the paper id and title
+    let mut r3 = request("r3", second, "anisotropic diffusion");
+    r3["app"] = json!("lr");
+    r3["readonly"] = json!(true);
+    r3["doc"] = json!("ab12");
+    r3["source"] = json!("A synthetic paper");
+    r3["scope"] = json!("第 2 頁");
+    assert_eq!(call(&s, "POST", "/api/selection", r3).await.0, StatusCode::OK);
+    let card = json!({ "title": "anisotropic diffusion", "source": "A synthetic paper", "doc": "ab12", "scope": "第 2 頁", "context": "整段" });
+    let (c, v) = call(&s, "POST", "/api/selection/lore/card", card.clone()).await;
+    assert_eq!((c, v["id"].as_str()), (StatusCode::CONFLICT, Some("n1")));
+    assert!(second_log.lock().unwrap().contains(&("/api/lore/card".to_string(), card)), "{:?}", second_log.lock().unwrap());
 }
 
 #[tokio::test]
