@@ -33,6 +33,18 @@ fallback = "claude:sonnet"
 offline = true
 max_tokens = 2000
 
+# 微調's 預想選項: right after the outline (and its 建議), 2–3 alternative points per content
+# slide and 2–3 lines only the presenter can add, each tied to records the job sent (the paper,
+# the author's own L-Paper papers and decks, matched L-Brain cards); checked in code
+# (todeck/interview.rs). Best-effort: without it the window takes free answers.
+[task.sc-deck-interview]
+label = "大綱預想選項"
+needs = { json = true, context = 32000 }
+default = "claude:opus"
+fallback = "claude:sonnet"
+offline = true
+max_tokens = 16000
+
 # The main figure explained in parts: the model looks at the paper's figures, names the
 # method's big picture, says whether to walk through it in parts and where to cut it
 # (todeck/figparts.rs). Failing twice = an equal split with a warning.

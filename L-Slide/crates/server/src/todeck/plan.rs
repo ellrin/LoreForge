@@ -474,6 +474,52 @@ A bullet that does not lead to the slide's point is cut.\n\
     (system, u)
 }
 
+/// The presenter's brief (微調's 補充: what only the presenter can say, one line each) as a block
+/// at the end of the planner's user text. An empty brief gives `""`: the request is unchanged.
+pub fn brief_block(brief: &[String]) -> String {
+    let lines: Vec<String> = brief.iter().map(|b| b.trim()).filter(|b| !b.is_empty()).map(|b| format!("- {b}")).collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\n## What only the presenter can say\nThe presenter adds these points, which the paper does not contain. Put each one on the slide where it belongs \
+(earlier work of the presenter on a background or opinion slide), in the bullets, the takeaway or the notes, keeping what it says; never drop one:\n{}",
+        lines.join("\n")
+    )
+}
+
+/// Words of a line for the brief check: latin words of 3+ letters and CJK character pairs.
+fn brief_tokens(s: &str) -> BTreeSet<String> {
+    crate::deckvoice::tokens(&s.replace('$', " "))
+}
+
+/// The brief lines no slide carries. A line is carried when one slide's bullets, takeaway and
+/// notes together hold at least half of the line's words (latin words of 3+ letters, CJK
+/// character pairs, `deckvoice::tokens`); a line without such words counts as carried.
+pub fn brief_missing(p: &Plan, brief: &[String]) -> Vec<String> {
+    let slides: Vec<BTreeSet<String>> = p.slides.iter().map(|s| brief_tokens(&format!("{} {} {}", s.bullets.join(" "), s.takeaway, s.notes))).collect();
+    brief
+        .iter()
+        .map(|b| b.trim())
+        .filter(|b| !b.is_empty())
+        .filter(|b| {
+            let want = brief_tokens(b);
+            !want.is_empty() && !slides.iter().any(|have| want.intersection(have).count() * 2 >= want.len())
+        })
+        .map(String::from)
+        .collect()
+}
+
+/// [`brief_missing`] as lines of the corrective request (English, like [`check_plan`]'s).
+pub fn brief_problems(p: &Plan, brief: &[String]) -> Vec<String> {
+    brief_missing(p, brief).iter().map(|b| format!("The presenter's point \"{}\" is on no slide: put it in the bullets, takeaway or notes of the slide where it belongs.", clip(b, 80))).collect()
+}
+
+/// The job's warning for a brief line the final plan does not carry.
+pub fn brief_warning(line: &str) -> String {
+    format!("補充的「{}」沒有放進大綱", clip(line, 40))
+}
+
 /// The rule for a draft with results still to come (`[pending: …]` in the material).
 pub const PENDING_RULE: &str = "\n- This is a draft: text marked [pending: …] or [pending] is a result the authors still wait for. \
 Where a slide uses it, write the mark as it is (\"[pending: external Dice]\"); never a number, a trend or a conclusion for it. \
@@ -741,6 +787,32 @@ mod limit_tests {
         assert_eq!(notes.len(), 3, "{notes:?}");
         let (_, user) = prompt(&m, "standard", "en", None);
         assert!(user.contains("fig2 [UNAVAILABLE"), "the planner is told what cannot be shown");
+    }
+}
+
+#[cfg(test)]
+mod brief_tests {
+    use super::*;
+
+    #[test]
+    fn the_brief_is_a_block_of_the_prompt_and_an_empty_one_changes_nothing() {
+        let m = Material { title: "Synthetic grading".into(), abstract_text: "We grade synthetic lesions.".into(), ..Default::default() };
+        let (_, user) = prompt(&m, "standard", "en", None);
+        assert_eq!(brief_block(&[]), "");
+        assert_eq!(brief_block(&["  ".into(), String::new()]), "", "blank lines are no brief");
+        assert_eq!(format!("{user}{}", brief_block(&[])), user, "an empty brief leaves the request byte-identical");
+        let b = brief_block(&["Our earlier two-stage grader is the predecessor".into(), "Mention the lab's open dataset".into()]);
+        assert!(b.contains("## What only the presenter can say") && b.contains("- Our earlier two-stage grader is the predecessor\n- Mention the lab's open dataset"), "{b}");
+    }
+
+    #[test]
+    fn a_brief_line_no_slide_carries_is_reported() {
+        let s = |bullets: &[&str], notes: &str| PlanSlide { role: "background".into(), title: "T".into(), bullets: bullets.iter().map(|x| x.to_string()).collect(), notes: notes.into(), ..Default::default() };
+        let p = Plan { slides: vec![s(&["Our earlier grader used one stage"], ""), s(&["Results"], "This page shows results.\n1. 我們先前的分級器只有一個階段")], ..Default::default() };
+        let brief = vec!["Our earlier one-stage grader is the predecessor".to_string(), "先前的分級器".to_string(), "Mention the public synthetic dataset".to_string(), "  ".to_string()];
+        assert_eq!(brief_missing(&p, &brief), ["Mention the public synthetic dataset"], "half of a line's words on one slide carry it; notes count");
+        assert_eq!(brief_problems(&p, &brief).len(), 1);
+        assert_eq!(brief_warning("Mention the public synthetic dataset"), "補充的「Mention the public synthetic dataset」沒有放進大綱");
     }
 }
 

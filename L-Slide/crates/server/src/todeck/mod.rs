@@ -47,6 +47,7 @@ pub mod build;
 pub mod eqread;
 pub mod extract;
 pub mod figparts;
+pub mod interview;
 pub mod liveeq;
 pub mod outline;
 pub mod people;
@@ -188,6 +189,7 @@ fn new_job(s: &Shared, b: &MakeBody, direct: bool) -> Result<Arc<Job>, Response>
         notes: b.notes.clone().filter(|n| n == "en" || n == "zh").unwrap_or_else(|| "zh".into()),
         style,
         engine: b.engine.clone().filter(|e| e == "local" || e == "claude"),
+        brief: vec![],
     };
     let title = match (&b.source.kind[..], &b.source.path) {
         ("pc", Some(p)) => std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
@@ -384,10 +386,18 @@ struct ParamsBody {
     lang: Option<String>,
     #[serde(default)]
     style: Option<String>,
+    /// 補充: what only the presenter can say, one line each (`stages::norm_brief`).
+    #[serde(default)]
+    brief: Option<Vec<String>>,
+    /// The review rows as the page holds them (`review.outline`'s shape): points the author
+    /// edited are carried onto the redone outline where the slide is still there.
+    #[serde(default)]
+    outline: Option<Vec<Value>>,
 }
 
-/// 微調's 語言／長度／底版 while the job waits for the author: 語言 or 長度 redo the outline (the
-/// job runs again and comes back to the review); 底版 only changes what the slides are made with.
+/// 微調's 語言／長度／底版／補充 while the job waits for the author: 語言, 長度 or a changed 補充
+/// redo the outline (the job runs again and comes back to the review); 底版 only changes what
+/// the slides are made with.
 async fn change_params(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(b): Json<ParamsBody>) -> Response {
     let job = match find(&s, &id) {
         Ok(j) => j,
@@ -405,18 +415,31 @@ async fn change_params(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Js
     {
         return crate::ApiError::from(e).into_response();
     }
+    let brief = match b.brief.as_deref().map(stages::norm_brief).transpose() {
+        Ok(x) => x,
+        Err(m) => return err(StatusCode::BAD_REQUEST, m),
+    };
     let p = job.meta().params;
     let changed = |k: &str, v: &Option<String>| v.as_deref().is_some_and(|v| p[k].as_str() != Some(v));
-    let redo = changed("length", &b.length) || changed("lang", &b.lang);
+    let old_brief: Vec<String> = serde_json::from_value(p["brief"].clone()).unwrap_or_default();
+    let redo = changed("length", &b.length) || changed("lang", &b.lang) || brief.as_ref().is_some_and(|x| *x != old_brief);
     js.set_params(&job, |p| {
         for (k, v) in [("length", &b.length), ("lang", &b.lang), ("style", &b.style)] {
             if let Some(v) = v {
                 p[k] = v.clone().into();
             }
         }
+        if let Some(x) = &brief {
+            p["brief"] = json!(x);
+        }
     });
-    if redo && let Err(m) = js.redo_from(&job, "outline") {
-        return err(StatusCode::CONFLICT, m);
+    if redo {
+        if let Err(e) = stages::keep_points(&job, b.outline.as_deref()) {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, format!("無法保留改過的重點：{e}"));
+        }
+        if let Err(m) = js.redo_from(&job, "outline") {
+            return err(StatusCode::CONFLICT, m);
+        }
     }
     Json(js.view(&job)).into_response()
 }

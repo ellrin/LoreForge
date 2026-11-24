@@ -572,10 +572,19 @@ async fn paper_becomes_a_report_deck() {
     assert!(n["notation"]["entries"].as_array().unwrap().iter().any(|e| e["id"] == "x" && e["origin"] == "document"));
     let codes: Vec<String> = n["report"]["issues"].as_array().map(|a| a.iter().filter_map(|i| i["code"].as_str().map(String::from)).collect()).unwrap_or_default();
     assert!(!codes.iter().any(|c| c == "hardcoded_reference"), "{codes:?}");
-    // the paper's registered symbol is explained under the equation that uses it
+    // the paper's registered symbol is explained in the speaker notes of the slide whose
+    // equation uses it (the last numbered item), never on the slide; the check reads it there
     let undefined_x = n["report"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "undefined_symbol" && i["entry"] == "x");
     assert!(!undefined_x, "{}", n["report"]["issues"]);
-    assert!(all_text(&d["deck"]).contains("denotes input image"));
+    assert!(!all_text(&d["deck"]["slides"]).contains("denotes input image"), "the symbol line is not on a slide");
+    let with_sym: Vec<&Value> = slides.iter().filter(|s| s["notes"].as_str().unwrap_or("").contains("denotes input image")).collect();
+    assert!(!with_sym.is_empty(), "the symbol line is in the notes");
+    for s in &with_sym {
+        let notes = s["notes"].as_str().unwrap();
+        assert!(notes.lines().last().unwrap().contains("denotes input image"), "{notes}");
+        assert!(sc_server::todeck::plan::notes_shape_ok(notes), "{notes}");
+        assert!(s["objects"].to_string().contains("\\\\mathbf{x}") || !pandoc, "the notes' slide has the equation: {}", s["objects"]);
+    }
 
     // the paper is untouched; the deck exports
     assert_eq!(snapshot(&p), before);
@@ -828,7 +837,8 @@ async fn direct_skips_the_review() {
     let ws = workspace(dir.path());
     let home = lore_home::Home::at(dir.path().join("home"));
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
-    let f = { let m: Arc<dyn lore_llm::LlmProvider> = Arc::new(MockProvider::new(vec![plan("with the LGN").to_string()])); engines(m.clone(), m) };
+    let mock = Arc::new(MockProvider::new(vec![plan("with the LGN").to_string()]));
+    let f = { let m: Arc<dyn lore_llm::LlmProvider> = mock.clone(); engines(m.clone(), m) };
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
     let app = sc_server::router_isolated(shared.clone());
     let body = json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "lang": "en", "direct": true });
@@ -844,6 +854,137 @@ async fn direct_skips_the_review() {
     assert!(shared.ws.deck_names().iter().any(|d| d.name == v["deck"].as_str().unwrap()));
     let (st, r, _) = call(&app, "GET", &format!("/api/todeck/jobs/{id}/stages/review"), None, None).await;
     assert_eq!((st, r), (StatusCode::OK, json!({ "skipped": true })));
+    // 直接產生 asks for no 預想選項
+    assert!(!mock.seen.lock().unwrap().iter().any(|r| r.system.contains(ASK_INTERVIEW)));
+    let (_, o, _) = call(&app, "GET", &format!("/api/todeck/jobs/{id}/stages/outline"), None, None).await;
+    assert!(o.get("interview").is_none(), "{}", o["interview"]);
+}
+
+pub const ASK_INTERVIEW: &str = "You prepare answer options for the presenter";
+
+/// 微調's 預想選項 and 補充: the options stand on the records sent (the paper, the author's own
+/// L-Paper paper and decks; a deny word, an e-mail or a path never goes); a changed 補充 redoes
+/// the outline with the lines in the prompt (the same one does nothing), a line no slide carries
+/// is a warning; points the author edited survive the redo on the slides still there; a failed
+/// call is a warning and no options, and the job goes on; outside the review 409.
+#[tokio::test]
+async fn interview_options_and_the_brief() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = paper(dir.path());
+    let ws = workspace(dir.path());
+    let home = lore_home::Home::at(dir.path().join("home"));
+    author_decks(&home);
+    std::fs::create_dir_all(dir.path().join("home/private/shared")).unwrap();
+    std::fs::write(dir.path().join("home/private/shared/deny-words.txt"), "# synthetic\nexample-company\n").unwrap();
+    // the author's own L-Paper papers (synthetic): one to cite, one a deny word keeps out
+    let own = |name: &str, title: &str, abs: &str| {
+        let d = dir.path().join("home/private/PaperComposer/papers").join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("main.tex"), format!("\\documentclass{{article}}\n\\title{{{title}}}\n\\begin{{document}}\n\\begin{{abstract}}\n{abs}\n\\end{{abstract}}\n\\section{{Intro}}\nText.\n\\end{{document}}\n")).unwrap();
+    };
+    own("early-grader", "A one-stage grader for synthetic lesions", "It reached 0.80 on the synthetic set. Write to ellrin@example.org for the data.");
+    own("other", "Grading at Example-Company", "Nothing to say.");
+    let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
+    // the redone outline: the background retitled (same place), the loss slide gone, the
+    // results slide one place earlier (same title), the brief's first line on the background
+    let mut second = plan("is slow");
+    second["slides"][1]["title"] = json!("Where grading started");
+    second["slides"][1]["bullets"] = json!(["Our earlier one-stage grader came first"]);
+    second["slides"][4]["title"] = json!("Weighting the lesions");
+    second["slides"].as_array_mut().unwrap().remove(6);
+    let options = json!({
+        "points": [{ "id": "s9", "cands": [
+            { "text": "Ours reaches 0.91 against 0.85", "from": ["paper:tab1"] },
+            { "text": "Ours reaches 0.97", "from": ["paper:tab1"] },
+            { "text": "Both metrics move together", "from": ["paper:tab1", "paper:sec3"] }
+        ] }],
+        "brief": [
+            { "text": "Our earlier one-stage grader is the predecessor", "from": ["pc:early-grader"] },
+            { "text": "Recall the talk from last year", "from": ["deck:never-sent"] }
+        ]
+    });
+    let model = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan("is slow"), second]).on(ASK_PARTS, &[parts()]).on(ASK_INTERVIEW, &[options, json!("not an object")]));
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, engines(model.clone(), model.clone()))).is_ok());
+    let app = sc_server::router_isolated(shared.clone());
+    let body = json!({ "source": { "kind": "pc", "path": p }, "length": "standard", "lang": "en", "style": "blank", "mode": "review" });
+    let (_, v, _) = call(&app, "POST", "/api/todeck", Some(body), None).await;
+    let id = v["job"].as_str().unwrap().to_string();
+    let v = job_until(&app, &id, "review", |v| v["state"] == "review").await;
+
+    // the options as kept: an invented number and an id never sent are dropped, said once
+    let iv = &v["review"]["interview"];
+    assert_eq!(iv["points"], json!([{ "id": "s9", "cands": [{ "text": "Ours reaches 0.91 against 0.85", "from": ["paper:tab1"] }, { "text": "Both metrics move together", "from": ["paper:tab1", "paper:sec3"] }] }]), "{iv}");
+    assert_eq!(iv["brief"], json!([{ "text": "Our earlier one-stage grader is the predecessor", "from": ["pc:early-grader"] }]));
+    let rec_ids: Vec<&str> = iv["records"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(rec_ids, ["paper:sec3", "paper:tab1", "pc:early-grader"]);
+    assert_eq!(iv["records"][2]["label"], "A one-stage grader for synthetic lesions");
+    let warns: Vec<&str> = v["review"]["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert_eq!(warns.iter().filter(|w| w.starts_with("預想選項")).collect::<Vec<_>>(), [&"預想選項有 2 個沒有根據（引用了沒有送出的資料，或數字在資料裡找不到），已拿掉"]);
+    // what was sent: only record kinds the flow allows, nothing a deny word, an e-mail or a path names
+    let asked = model.asked(ASK_INTERVIEW);
+    let user = asked[0].flatten();
+    let recs = user.split("## Records").nth(1).unwrap();
+    for line in recs.lines().filter(|l| l.starts_with("- ")) {
+        assert!(["- paper:", "- pc:", "- deck:", "- card:"].iter().any(|k| line.starts_with(k)), "{line}");
+    }
+    assert!(recs.contains("- pc:early-grader (A one-stage grader for synthetic lesions): A one-stage grader for synthetic lesions. It reached 0.80 on the synthetic set.") && recs.contains("- deck:talk-a"), "{recs}");
+    let all = format!("{}\n{user}", asked[0].system);
+    for never in ["Example-Company", "example.org", "pc:two-stage", "pc:other", &dir.path().to_string_lossy().to_string()] {
+        assert!(!all.contains(never), "{never} was sent");
+    }
+    // an empty brief: the plan's request has no brief block
+    assert!(!model.asked(ASK_PLAN)[0].flatten().contains("What only the presenter can say"));
+
+    // the author edits three points, then adds 補充 (with the rows the page holds)
+    let mut rows = v["review"]["outline"].as_array().unwrap().clone();
+    rows[1]["point"] = json!("Graders disagree on borderline cases");
+    rows[6]["point"] = json!("One distance, no weights to tune");
+    rows[8]["point"] = json!("Ours reaches 0.91 against 0.85");
+    rows[4]["point"] = json!("Fusion keeps three lesions");
+    let brief = json!(["  Our earlier one-stage grader is the predecessor ", "", "Mention the open synthetic dataset"]);
+    let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "brief": (0..9).map(|i| format!("line {i}")).collect::<Vec<_>>() })), None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "at most 8 lines");
+    let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "brief": brief, "outline": rows })), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let v = job_until(&app, &id, "review again", |v| v["state"] == "review" && v["stages"][4]["state"] == "done" && v["options"]["brief"].as_array().is_some_and(|b| !b.is_empty())).await;
+    assert_eq!(v["options"]["brief"], json!(["Our earlier one-stage grader is the predecessor", "Mention the open synthetic dataset"]));
+    let plans = model.asked(ASK_PLAN);
+    assert!(plans.len() >= 2 && plans[1].flatten().contains("## What only the presenter can say") && plans[1].flatten().contains("- Our earlier one-stage grader is the predecessor\n- Mention the open synthetic dataset"), "{}", plans[1].flatten());
+    let n_plans = plans.len();
+    // the line no slide carries is said; the carried one is not
+    let warns: Vec<&str> = v["review"]["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(warns.contains(&"補充的「Mention the open synthetic dataset」沒有放進大綱") && !warns.iter().any(|w| w.contains("predecessor」沒有")), "{warns:?}");
+    // the edited points on the slides still there (by title, else by place and kind); the loss
+    // slide is gone: said, not dropped silently
+    let out = v["review"]["outline"].as_array().unwrap();
+    assert_eq!((out[1]["title"].as_str(), out[1]["point"].as_str()), (Some("Where grading started"), Some("Graders disagree on borderline cases")));
+    let res = out.iter().find(|r| r["kind"] == "results").unwrap();
+    assert_eq!((res["id"].as_str(), res["point"].as_str()), (Some("s8"), Some("Ours reaches 0.91 against 0.85")));
+    assert!(warns.iter().any(|w| w.starts_with("「Reconstruction loss」改過的重點") && w.contains("One distance, no weights to tune")), "{warns:?}");
+    // a retitled walk-through slide (its kind repeats) never takes a point by place
+    assert!(warns.iter().any(|w| w.starts_with("「Fusion」改過的重點")) && !out.iter().any(|r| r["point"] == "Fusion keeps three lesions"), "{warns:?}");
+    // the second call failed: a warning, no options, the window still works
+    assert!(v["review"].get("interview").is_none(), "{}", v["review"]);
+    assert!(warns.iter().any(|w| w.starts_with("預想選項沒有做")), "{warns:?}");
+    // the brief is in the options request too, not to be repeated
+    assert!(model.asked(ASK_INTERVIEW)[1].flatten().contains("## Lines the presenter already added"));
+
+    // the same brief again: nothing is redone
+    let (st, v, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "brief": ["Our earlier one-stage grader is the predecessor", "Mention the open synthetic dataset"] })), None).await;
+    assert_eq!((st, v["state"].as_str()), (StatusCode::OK, Some("review")));
+    assert_eq!(model.asked(ASK_PLAN).len(), n_plans);
+
+    // the page submits its rows (the carried points among them): they reach the deck
+    let rows = v["review"]["outline"].clone();
+    let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/review"), Some(json!({ "outline": rows })), None).await;
+    assert_eq!(st, StatusCode::OK);
+    let v = job_until(&app, &id, "done", |v| v["state"] == "done").await;
+    let (_, d, _) = call(&app, "GET", &format!("/api/decks/{}", v["deck"].as_str().unwrap()), None, None).await;
+    let text = all_text(&d["deck"]);
+    assert!(text.contains("Ours reaches 0.91 against 0.85") && text.contains("Graders disagree on borderline cases"), "{text}");
+    // not waiting any more: 補充 is refused
+    let (st, _, _) = call(&app, "POST", &format!("/api/todeck/jobs/{id}/params"), Some(json!({ "brief": ["Another line"] })), None).await;
+    assert_eq!(st, StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -948,7 +1089,7 @@ async fn review_suggestions_and_changing_language_redoes_the_outline() {
     let (_, v, _) = call(&app, "POST", "/api/todeck", Some(body), None).await;
     let id = v["job"].as_str().unwrap().to_string();
     let v = job_until(&app, &id, "review", |v| v["state"] == "review").await;
-    assert_eq!(v["options"], json!({ "length": "standard", "lang": "en", "style": "blank" }));
+    assert_eq!(v["options"], json!({ "length": "standard", "lang": "en", "style": "blank", "brief": [] }));
     let s = v["review"]["suggestions"].as_array().unwrap();
     assert_eq!(s.len(), 2, "the cover is never edited: {s:?}");
     assert_eq!((s[0]["op"].as_str(), s[0]["id"].as_str(), s[0]["title"].as_str()), (Some("retitle"), Some("s9"), Some("What the numbers say")));

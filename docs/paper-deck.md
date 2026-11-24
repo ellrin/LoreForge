@@ -10,7 +10,11 @@
 - 頁數算的是大綱的頁（含封面與致謝）；逐行出現多出來的複製頁不算。
 - 做不到或降級的每一件事（圖沒有圖檔、式子改放截圖、超過字數、文獻放不下……）都列在工作的 `warnings`：進度畫面、微調視窗上方、以及打開簡報後右側「排版用字」最上面，不會默默略過。
 
-- 微調視窗上方可以改長度、語言、底版。改長度或語言：只重做「大綱」這一步（進度畫面），做完回到微調視窗；同一個頁面內問題的答案、「我懂」、「記得」都保留（重跑時關掉視窗或重新載入就不保留），對大綱列的修改不保留（是新的大綱）。改底版不必重做（投影片那一步才用）。
+- 微調視窗上方可以改長度、語言、底版。改長度或語言：只重做「大綱」這一步（進度畫面），做完回到微調視窗；同一個頁面內問題的答案、「我懂」、「記得」都保留（重跑時關掉視窗或重新載入就不保留），對大綱列的修改不保留（是新的大綱），除非頁面在 `params` 一併送出大綱列（見下面「補充」）。改底版不必重做（投影片那一步才用）。
+- 「補充」與「預想選項」（作者的訪談規則：模型先想好 2–3 個有根據的選項，作者挑一個或自己說，不給空白表單）：
+  - 補充（`brief`）：只有報告者能說的事（例如提到自己以前的研究），一行一件，最多 8 行、每行 300 字。改了補充就像改長度／語言：只重做「大綱」，大綱的提示多一段「What only the presenter can say」（沒有補充時提示一字不變）；大綱寫完後檢查每一行是否有某一頁帶到（同一頁的條列、重點句、備忘稿合起來含那一行一半以上的字詞：英文 3 個字母以上的字、中文每兩個字一組），沒有帶到的先併進原本那一次修正請求，還是沒有就列進 `warnings`：「補充的「…」沒有放進大綱」。補充一樣不變就不重做。
+  - 預想選項（`sc-deck-interview`，`todeck/interview.rs`，Opus → Sonnet，沒有 class）：大綱與「建議」之後一次呼叫，「直接產生」不做。每個內容頁（封面、Take home、致謝以外）2–3 個角度不同的重點，各對到論文的圖、表、方程式或章節；另外 2–3 句補充的候選（例如作者自己以前的論文是這篇的前身）。可以引用的資料（每筆有 id，有上限）：這篇論文（`paper:<圖表方程式 id>`、`paper:sec<n>`、`paper:abstract`）、作者 L-Paper 的論文（`pc:<資料夾名>`：標題與摘要開頭，正在報告的這篇不算）、作者自己匯入的簡報（`deck:<資料夾名>`：封面標題）、`terms` 對到的知識卡（`card:<id>`）；語氣範例只給用字參考，不能引用。標題與摘要句子套用語氣範例的排除（作者姓名與 id、deny words、e-mail、網址、機密字樣）；不用 L-Shelf 的任何東西。程式檢查：`from` 一定要有、而且每個 id 都是送出的資料；文字裡的每個數字（有小數點、百分比或兩位數以上）要在送出的資料裡一字不差地出現；不合的拿掉，拿掉幾個是一行警告。呼叫失敗或沒有可用的選項：一行警告、沒有 `interview`，視窗照樣可以自己寫。
+  - 改補充時頁面可一併送出手上的大綱列（`outline`）：改過的重點在重做後的大綱找同一頁（同種類同標題；標題變了，只有那種頁在新舊大綱都只有一頁時才帶，例如背景頁；分段講解這種重複的頁不按位置帶）帶過去；找不到的列進 `warnings`，不默默丟掉。
 - 「建議」：大綱寫完後模型再看一次大綱（加上作者的風格摘要與語氣範例），提出最多 5 個具體修改（加頁、刪頁、移動、改標題、改重點、換圖、合併、拆頁），每個附一行理由；逐項「套用」（改上面的大綱列）或「忽略」。沒有值得說的就沒有這一塊。
 - 打開產生的簡報時，右側面板最上面是「排版用字」：每一項修正（第幾頁、改了什麼）可單獨「復原」，用詞一致的建議可逐項「套用」；都走編輯器的復原紀錄。之後從 AI 選單 →「排版用字」再打開。
 
@@ -84,7 +88,7 @@
 
 每一行都要通向這一頁的重點、說出要看圖上的什麼。結論句（`takeaway`，紅字）結果頁與 ablation 頁一定有；其他頁有值得重複的結論才寫，細節頁（一個輸入、一個定義、一個步驟）可以沒有，標題就是它的重點（作者排練後：不是每頁都要紅字）。標題寫這一頁要說的事，整份不重複。大綱不符合就退回重排一次（`plan::check_plan`），仍不符合的列在警告。
 
-排練後的規則（作者，寫在大綱的提示裡）：一頁只講一件事（幾個輸入、一個函數、幾條規則分開放），頁與頁的份量平均；每個輸入量一行，先用白話定義再給符號；縮寫的狀態／類別一項一行：全名、式子、為什麼對到這條規則；方程式和它的說明在同一欄（一頁一條式子，除非同一組說明講兩條）；結果表有一行說每一列是什麼設定；圖表有一行說怎麼看（每個 panel、軸、線、顏色、色帶），再每個 panel 一個結論；訓練頁說訓練哪一段、哪些固定、用什麼 loss；圖要佔得起它的空間，只要一部分時畫那一部分（`flow`）或建議裁切（`suggest`），不放縮小的整張圖。程式檢查並退回一次、仍不符合列進警告的：投影片上的「where $x$ denotes …」行、格式不對的備忘稿、有表格或圖表（結果／ablation 頁的圖）卻沒有備忘稿的頁。程式自己在方程式下面加的符號說明（`build::symbol_notes`）不變：對照表的檢查只讀投影片，搬到備忘稿會被當成沒定義的符號。
+排練後的規則（作者，寫在大綱的提示裡）：一頁只講一件事（幾個輸入、一個函數、幾條規則分開放），頁與頁的份量平均；每個輸入量一行，先用白話定義再給符號；縮寫的狀態／類別一項一行：全名、式子、為什麼對到這條規則；方程式和它的說明在同一欄（一頁一條式子，除非同一組說明講兩條）；結果表有一行說每一列是什麼設定；圖表有一行說怎麼看（每個 panel、軸、線、顏色、色帶），再每個 panel 一個結論；訓練頁說訓練哪一段、哪些固定、用什麼 loss；圖要佔得起它的空間，只要一部分時畫那一部分（`flow`）或建議裁切（`suggest`），不放縮小的整張圖。程式檢查並退回一次、仍不符合列進警告的：投影片上的「where $x$ denotes …」行、格式不對的備忘稿、有表格或圖表（結果／ablation 頁的圖）卻沒有備忘稿的頁。程式自己的符號說明（`build::symbol_notes`，模型確認過的符號，最多三個）也不放在投影片上，是那一頁備忘稿最後一個編號項目（一個符號一句，英文去掉 where；備忘稿是空的就先加一句開場，格式照樣通過 `notes_shape_ok`；`build::notes_with_symbols`）。對照表的檢查（`notation::view`）把備忘稿裡的定義當成那一頁的定義：那一頁與之後的頁算有定義，之前的頁是「先用後定義」；其餘規則不變。已經做好的簡報不會改。
 
 備忘稿（`notes`）補上投影片沒寫的解釋，不重念投影片：一句開場（最多一個逗號）說這頁講什麼，接著編號條列，一項一行、每項約四句以內。定義的順序：從哪些觀察到的值來 → 白話怎麼拆 → 最後才說名稱；沒解釋過的詞不用，不用術語解釋術語。總覽頁不放數字，細節頁可以；表格頁說每一列是什麼（不是每個數字），圖表頁先說怎麼看再每個 panel 一個結論；問「為什麼這樣定義」時給理由。符號的意思寫在這裡。語言由開始畫面的「備忘稿」決定（`zh`｜`en`，預設 `zh`），與內文語言無關；中文備忘稿的技術與醫學名詞保留英文。作者自己的備忘稿句型與核可的範例：`private/SlideComposer/voice/notes.md`（經 lore-home，手寫，程式不寫；沒有就不加；最多 1500 字送進大綱的提示，`deckvoice::notes_guide`）。程式把放不下的行移到備忘稿時，一行一行接在後面。
 
@@ -172,7 +176,7 @@
 - `counts`：`source` `{fig, figTotal, table, eq, sections, refs}`（圖 n/N：`fig` 有圖檔的，`figTotal` 全部）· `notation` `{entries}` · `terms` `{terms, unknown}` · `profile` `{voice}`（語氣範例的句數）· `outline` `{slides, parts, suggestions}`（完成後）· `review` `{}` · `slides` `{slide, slides}`；`source` 與 `outline` 另有 `warnings`（幾件）、`outline` 有 `calls`（模型呼叫次數）（第 n/N 頁）· `polish` `{checks, fixes}`。
 - `error`（`failed` 時）：一行中文。`failure`：`{ stage, status, error, alternative? }`，`alternative` 與 lore-llm 的錯誤內容相同（頁面據此提供「改用本機／改用 Claude」= 帶 `engine` 的 `resume`）。
 - `deck` / `result`（`done` 時）：簡報資料夾名稱；`{ name, slides, planned, engine, parts, partsBy, modules, calls, notation, unknown, warnings, polish: {checks, fixes} }`（`unknown` = 標示的不熟名詞數）。`…/stages/polish` 是完整的微調報告（`{checks, fixes: [{slide, object, rule, what, before, after, changes}], items}`，`items` 含用詞一致的建議）。
-- `options`：`{length, lang, style}`，目前的參數（微調視窗據此顯示）。
+- `options`：`{length, lang, style, brief}`，目前的參數（微調視窗據此顯示；`brief` 是補充的各行，沒有就是 `[]`）。
 - `review`（只在 `state: "review"` 時）：
 
 ```json
@@ -181,9 +185,17 @@
   "figures": [ { "id": "fig1", "label": "圖 1", "caption": "…", "thumb": "/api/todeck/jobs/<id>/img/fig1.png" },
                { "id": "tab1", "label": "表 1", "caption": "…", "thumb": null } ],
   "unknown": [ { "term": "InfoNCE", "n": 4 } ],
-  "suggestions": [ { "op": "retitle", "id": "s9", "title": "Main results", "reason": "結果頁標題太籠統" } ]
+  "suggestions": [ { "op": "retitle", "id": "s9", "title": "Main results", "reason": "結果頁標題太籠統" } ],
+  "warnings": [ "補充的「Mention the open dataset」沒有放進大綱" ],
+  "interview": {
+    "points": [ { "id": "s9", "cands": [ { "text": "Ours reaches 0.91 against 0.85", "from": ["paper:tab1"] } ] } ],
+    "brief":  [ { "text": "Our earlier one-stage grader is the predecessor", "from": ["pc:early-grader"] } ],
+    "records": [ { "id": "paper:tab1", "label": "表 1" }, { "id": "pc:early-grader", "label": "A one-stage grader" } ]
+  }
 }
 ```
+
+  `interview`（預想選項，見「流程」）：只在有可用的選項時才有這個欄位（直接產生、呼叫失敗、全部被拿掉時沒有；原因在 `warnings`）。`points[].id` 是 `outline` 的列 id；`cands` 每頁最多 3 個；`brief` 最多 3 個；`records` 只列選項引用到的資料（`label`：論文的圖表是「圖 n／表 n」、章節是標題、摘要是「摘要」、式子是「式 (n)」、L-Paper 論文與簡報是標題、知識卡是詞）。挑了的重點照舊放進送出的 `outline[].point`（`apply_review` 寫回）；挑了的補充用 `params` 的 `brief` 送出（會重做大綱）。改補充時一併送出的重點已經帶到新的列上（`point` 就是作者改過的字）。
 
   `kind` 是頁的角色：`cover background challenge overview method loss training results ablation visual opinion takeaway thanks`。`figs` 是這頁用的圖／表 id（圖與表各最多一個）；`point` 是 take-away，沒有就是第一個要點。`thumb` 是同源的圖（LaTeX 的表沒有圖）。
 
@@ -204,9 +216,9 @@
 | POST | `/api/todeck/jobs/{id}/stop` | | 工作物件（`stopped`）；進行中的模型請求被中止，工作的執行緒被釋放（`…/cancel` 同義） |
 | POST | `/api/todeck/jobs/{id}/resume` | `{engine?: "local" \| "claude"}` | 工作物件；從第一個沒有檢查點的階段接著做；正在跑時 409 |
 | POST | `/api/todeck/jobs/{id}/review` | 見下（`PUT` 同義） | 工作物件；不在 `review` 時 409 |
-| POST | `/api/todeck/jobs/{id}/params` | `{length?, lang?, style?}` | 工作物件；只在 `review` 時（否則 409），值不認得 400。`length` 或 `lang` 變了：刪掉 `outline` 以後的檢查點，工作從 `outline` 重跑，做完再停在 `review`；只改 `style`：不重跑 |
+| POST | `/api/todeck/jobs/{id}/params` | `{length?, lang?, style?, brief?: [string], outline?: [列]}` | 工作物件；只在 `review` 時（否則 409），值不認得 400，`brief` 超過 8 行或一行超過 300 字 400。`brief` 去頭尾空白、空行不算。`length`、`lang` 或 `brief` 變了：刪掉 `outline` 以後的檢查點，工作從 `outline` 重跑，做完再停在 `review`；只改 `style` 或送一樣的 `brief`：不重跑。重跑時有 `outline`（頁面手上的列，同 `review` 的形狀）：改過的重點存在工作資料夾 `review-keep.json`，帶到新大綱的同一頁 |
 | DELETE | `/api/todeck/jobs/{id}` | | 204；刪掉這個工作的快取資料夾（正在跑時 409） |
-| GET | `/api/todeck/jobs/{id}/stages/{stage}` | | 該階段的檢查點內容（`outline`：`{plan: {venue, keywords, slides: [PlanSlide…]}, questions: [], parts, engine, suggestions, warnings, calls}`；`terms`：`{terms: [{term, unknown, n, kind, card}]}`）；沒做完 404 |
+| GET | `/api/todeck/jobs/{id}/stages/{stage}` | | 該階段的檢查點內容（`outline`：`{plan: {venue, keywords, slides: [PlanSlide…]}, questions: [], parts, engine, suggestions, interview?, warnings, calls}`；`terms`：`{terms: [{term, unknown, n, kind, card}]}`）；沒做完 404 |
 | GET | `/api/todeck/jobs/{id}/img/{file}` | | 論文的圖（PNG / JPEG） |
 
 桌面版連結：`lore-sc://job/<id>` → `/?job=<id>`（`LoreLinks.open("sc", {job})`）。

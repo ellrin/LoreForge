@@ -81,13 +81,18 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   skipped or degraded is a line of the job's `warnings` (job view, 微調, the deck's 排版用字 notes), never silent. Guard: `tests/todeck.rs` `assert_one_size_per_role`.
   微調 window: 長度／語言／底版 (`POST …/jobs/{id}/params`: 語言 or 長度 redo only the outline, `Jobs::redo_from`),
   建議 (`todeck/suggest.rs`, task `sc-outline-review`, class `create`, best-effort inside the outline stage: ≤5
-  structured edits on the review rows, applied by the page). 排版用字: the polish stage also writes the deck's
+  structured edits on the review rows, applied by the page). 補充 (`Params.brief`, `params` → redo the outline; `plan::brief_block`
+  in the prompt, empty = unchanged; `plan::brief_missing` → warning) and 預想選項 (`todeck/interview.rs`, task `sc-deck-interview`, not in direct mode:
+  2–3 options per point and for the brief, each citing records sent — `paper:` `pc:` `deck:` `card:` — numbers and ids checked in code; `review.interview`).
+  排版用字: the polish stage also writes the deck's
   `polish.json`; the editor shows it as the right-panel block 排版用字 (`?polish=1` after a job, AI → 排版用字),
   復原／套用 through `POST /api/decks/{name}/polish/{item}`. 語氣 (`deckvoice.rs`, author-approved 2026-11-13):
   example lines from the author's own imported decks (cover, chrome, repeated text, refs, names, deny words left
   out) live in `private/SlideComposer/voice/examples.json` (through lore-home; rewritten only when they change);
   the outline and 建議 prompts get the lines closest to the paper, bounded. Speaker notes follow `plan::NOTES_SHAPE` (opening line + numbered list,
-  checked by `check_plan`); the author's own note patterns are the hand-written `private/SlideComposer/voice/notes.md` (`deckvoice::notes_guide`,
+  checked by `check_plan`); the program's symbol lines (`build::symbol_notes`, model-confirmed symbols) are never on the slide but the notes' last
+  numbered item (`build::notes_with_symbols`; empty notes get an opening line), and `notation::view` counts a definition in a slide's notes as one on
+  that slide (`notes_definitions`). The author's own note patterns are the hand-written `private/SlideComposer/voice/notes.md` (`deckvoice::notes_guide`,
   optional, ≤ 1500 chars, never written by the program). Never put example text in code,
   tests (synthetic decks only), the job cache or this repo. The terms stage's finder
   (`kbterms.rs`: terms, L-Brain states, `Matcher`) lives in `../commons/crates/lore-learn`, shared with

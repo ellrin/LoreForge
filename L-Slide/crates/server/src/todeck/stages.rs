@@ -16,11 +16,11 @@ use serde_json::{Map, Value, json};
 
 use super::build::{BuildInput, ModuleBox, build, expand_reveals};
 use super::figparts::{self, FigureParts};
-use super::plan::{Plan, PlanSlide, ROLES, check_plan, clean_plan, drop_unusable, enforce_limits, fit_under_tables, prompt, schema, target_slides};
+use super::plan::{Plan, PlanSlide, ROLES, brief_block, brief_missing, brief_problems, brief_warning, check_plan, clean_plan, drop_unusable, enforce_limits, fit_under_tables, prompt, schema, target_slides};
 use super::profile::{ProfileInput, StyleProfile};
 use super::source::{Material, from_latex, from_lorereader, is_paper};
 use super::suggest::point_of;
-use super::{outline, polish, profile, suggest, terms};
+use super::{interview, outline, polish, profile, suggest, terms};
 use crate::AppState;
 use crate::jobs::{Job, Pipeline, StageCx, StageError, StageFuture, StageSpec, status};
 use crate::llm::TASK_PAPER_DECK;
@@ -60,6 +60,24 @@ pub struct Params {
     /// The language of the speaker notes (`zh` | `en`); empty = `zh`.
     #[serde(default)]
     pub notes: String,
+    /// 微調's 補充: what only the presenter can say, one line each ([`norm_brief`]); the
+    /// outline prompt carries them and `plan::brief_missing` reports a line no slide carries.
+    #[serde(default)]
+    pub brief: Vec<String>,
+}
+
+/// At most this many brief lines, of at most [`BRIEF_CHARS`] characters each.
+pub const BRIEF_LINES: usize = 8;
+pub const BRIEF_CHARS: usize = 300;
+
+/// The brief as kept: lines trimmed, empty ones dropped. `Err` (one line, 繁中) when there are
+/// more than [`BRIEF_LINES`] or one is longer than [`BRIEF_CHARS`].
+pub fn norm_brief(lines: &[String]) -> Result<Vec<String>, String> {
+    let v: Vec<String> = lines.iter().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+    if v.len() > BRIEF_LINES || v.iter().any(|l| l.chars().count() > BRIEF_CHARS) {
+        return Err(format!("補充最多 {BRIEF_LINES} 行、每行 {BRIEF_CHARS} 字"));
+    }
+    Ok(v)
 }
 
 pub struct PaperDeck {
@@ -146,7 +164,7 @@ impl Pipeline for PaperDeck {
     fn decorate(&self, job: &Job, snap: &mut Map<String, Value>) {
         let st = job.status();
         let p = job.meta().params;
-        snap.insert("options".into(), json!({ "length": p["length"], "lang": p["lang"], "style": p["style"] }));
+        snap.insert("options".into(), json!({ "length": p["length"], "lang": p["lang"], "style": p["style"], "brief": p.get("brief").cloned().unwrap_or(json!([])) }));
         if st == status::DONE
             && let Some(out) = job.output("slides")
         {
@@ -322,6 +340,10 @@ pub struct OutlineOut {
     pub engine: String,
     /// 微調's 建議 (`suggest.rs`): at most 5 edits on the review rows, often none.
     pub suggestions: Vec<suggest::Suggestion>,
+    /// 微調's 預想選項 (`interview.rs`): options for each slide's point and for the brief, each
+    /// tied to records; `None` when not asked (直接產生), failed or nothing stood on the records.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interview: Option<interview::Interview>,
     /// What the plan could not keep (a limit, the length, material without a picture), for
     /// the job's warnings.
     pub warnings: Vec<String>,
@@ -351,6 +373,8 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     warnings.extend(seen.notes);
     let parts = seen.parts;
     let (mut system, user) = prompt(&m, &p.length, &p.lang, parts.as_ref());
+    // 微調's 補充: what only the presenter can say (empty: the request is unchanged)
+    let user = user + &brief_block(&p.brief);
     system += &super::plan::notes_rule(&p.notes);
     // the presenter's own note patterns (private, optional, bounded)
     system += &crate::deckvoice::notes_guide(&s.home);
@@ -404,7 +428,9 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     }
     // the limits and the length are checked, not trusted: one corrective request, then what
     // is still over is split or reported (nothing is ever shrunk to fit)
-    let problems = check_plan(&plan, &p.length);
+    // a brief line no slide carries is one more problem of the same single corrective request
+    let problems_of = |x: &Plan| [check_plan(x, &p.length), brief_problems(x, &p.brief)].concat();
+    let problems = problems_of(&plan);
     if !problems.is_empty() {
         let before = cx.job.meta().stages.get("outline").and_then(|s| s.chars).unwrap_or(0);
         let again = format!(
@@ -416,7 +442,7 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
         let req = with_pictures(LlmRequest::prompt(system, again).json(schema()).max_tokens(OUTLINE_TOKENS));
         match outline::ask_json(llm, TASK_PAPER_DECK, req, p.engine.as_deref(), &|n| cx.chars(before + n)).await {
             Ok((v, _)) => match serde_json::from_value::<Plan>(v).map(|x| clean_plan(x, &m)) {
-                Ok(fixed) if fixed.slides.len() >= 3 && check_plan(&fixed, &p.length).len() < problems.len() => plan = fixed,
+                Ok(fixed) if fixed.slides.len() >= 3 && problems_of(&fixed).len() < problems.len() => plan = fixed,
                 _ => warnings.push("大綱不符合規則（字數、頁數、備忘稿格式等），請模型修正後沒有變好，沿用第一版".to_string()),
             },
             Err(e) => warnings.push(format!("大綱不符合規則（字數、頁數、備忘稿格式等），修正的請求沒有完成（{}）", e.message)),
@@ -439,12 +465,34 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
             s.figure = f.clone();
         }
     }
+    // 補充: a line the final plan does not carry is said, never dropped silently
+    warnings.extend(brief_missing(&plan, &p.brief).iter().map(|b| brief_warning(b)));
     let n_parts = parts.as_ref().filter(|p| p.walk()).map_or(0, |p| p.parts.len());
     // 建議: the progress keeps counting characters after the plan's
     let base = cx.job.meta().stages.get("outline").and_then(|s| s.chars).unwrap_or(0);
     let suggestions = suggest::suggest(llm, &plan, &m, &p.length, &p.lang, &prof.summary, &voice_block(1200), p.engine.as_deref(), &|n| cx.chars(base + n)).await;
+    // 預想選項 for the review window (not with 直接產生): on the final plan, so the row ids match
+    let interview = if cx.job.meta().direct {
+        None
+    } else {
+        let tr: terms::TermsResult = typed(cx, "terms").unwrap_or_default();
+        let presented = (p.source.kind == "pc").then(|| p.source.path.clone().map(PathBuf::from)).flatten();
+        let (home, real) = (s.home.clone(), s.real_kb.load(std::sync::atomic::Ordering::Relaxed));
+        let own = tokio::task::spawn_blocking(move || {
+            let pc = if real { super::source::pc_papers(&home) } else { interview::papers_in_home(&home) };
+            interview::own_records(&home, &pc, presented.as_deref(), &tr)
+        })
+        .await
+        .map_err(join_err)?;
+        let recs: Vec<interview::Rec> = interview::paper_records(&m).into_iter().chain(own).collect();
+        let base = cx.job.meta().stages.get("outline").and_then(|s| s.chars).unwrap_or(0);
+        calls += 1;
+        let (got, notes) = interview::interview(llm, &plan, &m, &recs, &p.brief, &p.lang, &voice_block(1200), p.engine.as_deref(), &|n| cx.chars(base + n)).await;
+        warnings.extend(notes);
+        got
+    };
     cx.counts(json!({ "slides": plan.slides.len(), "parts": n_parts, "suggestions": suggestions.len(), "calls": calls, "warnings": warnings.len() }));
-    to_value(&OutlineOut { plan, questions: vec![], boxes: vec![], parts, engine, suggestions, warnings: uniq(warnings), calls })
+    to_value(&OutlineOut { plan, questions: vec![], boxes: vec![], parts, engine, suggestions, interview, warnings: uniq(warnings), calls })
 }
 
 async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
@@ -701,15 +749,89 @@ fn review_view(job: &Job) -> Value {
     let out: OutlineOut = job.output("outline").and_then(|o| serde_json::from_value(o).ok()).unwrap_or_default();
     let plan = out.plan;
     let m: Material = job.output("source").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
-    let outline = suggest::rows(&plan);
-    let thumb = |f: &super::source::Fig| f.image.as_ref().filter(|im| !im.file.is_empty()).map(|im| format!("/api/todeck/jobs/{}/img/{}", job.id, im.file));
+    let mut outline = suggest::rows(&plan);
+    // points the author edited before the outline was redone, on the slides that are still there
+    let lost = carry_points(&mut outline, &read_kept(job));
+    let thumb =|f: &super::source::Fig| f.image.as_ref().filter(|im| !im.file.is_empty()).map(|im| format!("/api/todeck/jobs/{}/img/{}", job.id, im.file));
     let mut figures: Vec<Value> = m.figures.iter().enumerate().map(|(i, f)| json!({ "id": f.id, "label": format!("圖 {}", i + 1), "caption": f.caption, "thumb": thumb(f) })).collect();
     figures.extend(m.tables.iter().enumerate().map(|(i, f)| json!({ "id": f.id, "label": format!("表 {}", i + 1), "caption": f.caption, "thumb": thumb(f) })));
     let terms: terms::TermsResult = job.output("terms").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
     let unknown: Vec<Value> = terms.terms.iter().filter(|t| t.unfamiliar()).map(|t| json!({ "term": t.text, "n": t.count })).collect();
     // what could not be read or planned as asked so far (shown above the outline)
-    let warnings = uniq(m.warnings.iter().chain(&out.warnings).cloned().collect());
-    json!({ "outline": outline, "figures": figures, "unknown": unknown, "suggestions": out.suggestions, "warnings": warnings })
+    let warnings = uniq(m.warnings.iter().chain(&out.warnings).cloned().chain(lost).collect());
+    let mut v = json!({ "outline": outline, "figures": figures, "unknown": unknown, "suggestions": out.suggestions, "warnings": warnings });
+    if let Some(i) = out.interview {
+        v["interview"] = json!(i);
+    }
+    v
+}
+
+/// A point the author had edited when the outline was redone (`review-keep.json` in the job
+/// folder, written by `POST …/params` from the rows the page sent): the slide's kind and title
+/// in the outline it was edited on, its row id there, and the point.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeptPoint {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub point: String,
+    /// The only slide of its kind in that outline.
+    pub alone: bool,
+}
+
+fn kept_file(job: &Job) -> PathBuf {
+    job.dir.join("review-keep.json")
+}
+
+fn read_kept(job: &Job) -> Vec<KeptPoint> {
+    std::fs::read(kept_file(job)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Before an outline redo: the rows the page holds (`review.outline`'s shape) whose point
+/// differs from the current outline's are kept for the next review view; without rows nothing
+/// is kept (an earlier file is removed).
+pub fn keep_points(job: &Job, rows: Option<&[Value]>) -> std::io::Result<()> {
+    let plan = job.output("outline").and_then(|o| serde_json::from_value::<OutlineOut>(o).ok()).unwrap_or_default().plan;
+    let mut kept = vec![];
+    for r in rows.unwrap_or(&[]) {
+        let Some(i) = r["id"].as_str().and_then(|x| x.strip_prefix('s')).and_then(|n| n.parse::<usize>().ok()).and_then(|n| n.checked_sub(1)) else { continue };
+        let (Some(orig), Some(pt)) = (plan.slides.get(i), r["point"].as_str().map(str::trim)) else { continue };
+        if pt != point_of(orig).trim() {
+            let alone = plan.slides.iter().filter(|s| s.role == orig.role).count() == 1;
+            kept.push(KeptPoint { id: format!("s{}", i + 1), kind: orig.role.clone(), title: orig.title.clone(), point: pt.to_string(), alone });
+        }
+    }
+    if kept.is_empty() {
+        return match std::fs::remove_file(kept_file(job)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+    }
+    crate::jobs::write_atomic(&kept_file(job), &serde_json::to_vec(&kept).unwrap_or_default())
+}
+
+/// Kept points onto the new outline's rows: the row of the same kind and title (case and
+/// spaces aside), else — only when the kind has one slide in both outlines — the slide of that
+/// kind (row ids are places, so a repeated kind such as the walk-through slides never takes a
+/// point by place). One line per point that found no row (for the review's warnings): nothing
+/// goes silently.
+pub fn carry_points(rows: &mut [Value], kept: &[KeptPoint]) -> Vec<String> {
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    let mut taken = BTreeSet::new();
+    let mut lost = vec![];
+    for k in kept {
+        let same_title = rows.iter().position(|r| r["kind"] == k.kind.as_str() && norm(r["title"].as_str().unwrap_or("")) == norm(&k.title));
+        let only = || {
+            let of_kind: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| r["kind"] == k.kind.as_str()).map(|(i, _)| i).collect();
+            (k.alone && of_kind.len() == 1).then(|| of_kind[0])
+        };
+        match same_title.or_else(only).filter(|i| taken.insert(*i)) {
+            Some(i) => rows[i]["point"] = k.point.clone().into(),
+            None => lost.push(format!("「{}」改過的重點在新的大綱找不到同一頁，沒有帶過來：{}", super::plan::clip(&k.title, 30), super::plan::clip(&k.point, 60))),
+        }
+    }
+    lost
 }
 
 /// 我懂 from the review window, before the slides are made: the terms checkpoint marks them
