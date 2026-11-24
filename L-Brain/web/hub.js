@@ -273,6 +273,34 @@ const Hub = (() => {
   async function refresh(keepFocus) { try { await loadItems(); paint(keepFocus); } catch (e) { S.host.fail?.(e); } }
 
   // ── the detail to the right ──
+  // ── 製作: a reference to make opens in the flow editor (the same one L-Slide uses); saving
+  //    stores a drawable figure linked to it (server: figmake.rs) ──
+  let flowLoading = null;
+  function loadFlow() {
+    if (window.LoreFlow?.edit) return Promise.resolve();
+    flowLoading ??= new Promise((ok, no) => {
+      document.head.append(el("link", { rel: "stylesheet", href: "/flow/editor.css" }));
+      document.head.append(el("script", { src: "/flow/editor.js", onload: ok, onerror: () => { flowLoading = null; no(new Error("讀不到流程圖編輯器")); } }));
+    });
+    return flowLoading;
+  }
+  async function make(it) {
+    try {
+      await loadFlow();
+      const r = await api("GET", `/api/hub/make/${enc(it.id)}`);
+      let spec = r.spec ?? null;
+      if (!spec) {
+        // a first figure from the description (and the picture), so the editor does not open empty
+        S.host.toast?.("正在從描述起草…");
+        try { spec = (await api("POST", `/api/hub/make/${enc(it.id)}/draft`)).spec; }
+        catch (e) { if (e.status === 422 && /時間軸/.test(e.message)) { S.host.fail?.(e); return; } S.host.toast?.(`沒有起草成功，從空白開始：${e.message}`); }
+      }
+      await LoreFlow.edit({ target: "brain", title: r.title, api: "/flow/api", doc: "", source: r.source, spec: spec ?? undefined,
+        save: async ({ spec: made }) => { try { await api("POST", `/api/hub/make/${enc(it.id)}`, { spec: made, title: r.title }); return true; } catch (e) { return e.message; } } });
+      S.allDirty = true; await loadStats(); await loadItems(); paint();
+    } catch (e) { S.host.fail?.(e); }
+  }
+
   const FACET = { domain: "領域", kind: "結構", use: "用途", state: "熟悉度", ckind: "種類", paper: "來源論文", tone: "語氣", place: "使用時機" };
   const META = ["domain", "kind", "use"];
   const cat = (id) => S.meta?.categories.find((c) => c.id === id);
@@ -334,6 +362,7 @@ const Hub = (() => {
       el("div", { class: "h-foot" }, c?.independent ? "不與 Lore 共用" : c?.tasks?.length ? `用在 ${c.tasks.length} 個步驟` : "還沒有步驟在用",
         isNew ? null : ` · ${it.source?.kind === "external" ? it.source.name : it.source?.kind === "author" ? "我加的" : "Lore"}`, it.used ? ` · 用過 ${it.used} 次` : null),
       el("div", { class: "h-acts" },
+        !isNew && it.format === "figure" && it.entity === false ? el("button", { type: "button", class: "pri", onclick: () => make(it) }, "製作") : null,
         canMeta ? (saveBtn = el("button", { type: "button", class: "pri", disabled: !isNew, onclick: save }, isNew ? "新增" : "儲存")) : null,
         !isNew && c?.writable && !builtin ? el("button", { type: "button", class: "quiet", onclick: () => remove(it) }, "移除") : null),
       !isNew && canMeta ? el("details", { class: "h-more" }, el("summary", {}, "請 L-Echo 改"), askEcho(it)) : null);
