@@ -361,7 +361,11 @@ pub async fn work_once(s: &Shared) -> bool {
             };
             match p.read(&e, &cx, &again.value) {
                 Ok(made) => (made, again.engine),
-                Err(why) => return fail(&why),
+                Err(why) => {
+                    // the refused replies, for whoever reads the log (never shown, never stored)
+                    eprintln!("kb-server inbox: refused twice ({why}); first reply {} second reply {}", answer.value, again.value);
+                    return fail(&why);
+                }
             }
         }
     };

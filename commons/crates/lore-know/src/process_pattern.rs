@@ -17,7 +17,9 @@ const POSITIONS: [&str; 4] = ["opening", "body", "closing", "transition"];
 /// The tones a pattern may carry.
 const TONES: [&str; 6] = ["保留說法", "量化陳述", "對比", "定義", "引用", "承接"];
 /// More holes than this is a pattern that fits one paper only.
-const MAX_HOLES: usize = 6;
+/// A sentence that names several symbols needs a hole for each; beyond this the pattern is the
+/// original sentence with its words taken out, not something to reuse.
+const MAX_HOLES: usize = 8;
 /// At most this many places per pattern.
 const MAX_PLACES: usize = 3;
 /// How many existing patterns the request shows.
@@ -30,19 +32,20 @@ const SYSTEM: &str = r#"You turn ONE English sentence from a research paper into
 The tree has three levels: section, subsection, occasion. A place is the path "section/subsection/occasion" and must be copied exactly from the tree you are given. Say what the sentence is doing in the paper (its move), not what the study is about.
 
 Make the "template" from the sentence:
-- Replace only what belongs to that one study (the data, the method or model names, the task, the disease, the numbers, the names) with short snake_case {placeholders}, for example {method}, {dataset}, {value}. Aim for 2 to 4 placeholders and never use more than 6.
+- Replace only what belongs to that one study (the data, the method or model names, the task, the disease, the numbers, the names) with short snake_case {placeholders}, for example {method}, {dataset}, {value}. Aim for 2 to 4 placeholders and never use more than 8.
 - Keep the skeleton words verbatim: the verbs, connectives and framing words that make the move. Never rewrite, reorder, shorten or improve the sentence. Every stretch of text outside the placeholders must be copied from the sentence as it is.
 - LaTeX and citations become placeholders such as {reference} or {expression}; numbers become {value}.
 - A good pattern fits many papers. A sentence that is already general may have no placeholder at all.
 
 Reply with JSON only:
-- "usable": true, or false when the words are not a usable sentence (speech-recognition noise, a fragment). When false, add "why": one short reason, and nothing else is needed.
+- Give every field below, always.
+- "usable": true, or false when the words are not a usable sentence (speech-recognition noise, a fragment). "why": one short reason when false, "" when true. When false, the other fields are "" and [].
 - "template": the sentence with its holes.
 - "section": the first level of the main place.
 - "function": one short snake_case word for the move (for example gap, aim, contrast). Reuse a function seen in the existing patterns when one fits.
 - "position": one of opening, body, closing, transition (where the sentence sits in its paragraph).
 - "places": 1 to 3 paths that exist in the tree, the main one first.
-- "tone": exactly one of 保留說法, 量化陳述, 對比, 定義, 引用, 承接.
+- "tone": exactly one of 保留說法, 量化陳述, 對比, 定義, 引用, 承接, or "" when none fits.
 - "similar": ids of the given existing patterns that make the same move with nearly the same skeleton; often none, never invent an id."#;
 
 /// The sentence-pattern processor (format `pattern`).
@@ -139,10 +142,15 @@ impl Processor for PatternProcessor {
 
         let mut similar: Vec<String> = vec![];
         for id in strings(reply.get("similar")) {
+            // the model may give the short id it was shown (`P167`) or the whole one
             let id = id.trim().to_string();
-            if cx.existing.iter().any(|e| e.id == id) && !similar.contains(&id) {
-                similar.push(id);
+            let full = cx.existing.iter().find(|e| e.id == id || e.id.rsplit(':').next() == Some(id.as_str())).map(|e| e.id.clone());
+            if let Some(full) = full
+                && !similar.contains(&full)
+            {
+                similar.push(full);
             }
+        }
         }
         let mine = skeleton(&template);
         for e in &cx.existing {
@@ -174,20 +182,25 @@ pub fn examples_for(sentence: &str, all: &[Item], n: usize) -> Vec<Item> {
 // ── the request ──────────────────────────────────────────────────────────────
 
 fn schema() -> Value {
+    // Every field is required: a model answering under a schema leaves out whatever is optional
+    // (seen with the local model: only the template came back). An unusable sentence fills them
+    // with "" and [] and says why.
+    let mut tones: Vec<&str> = TONES.to_vec();
+    tones.push("");
     json!({
         "type": "object",
         "properties": {
             "usable": {"type": "boolean"},
             "why": {"type": "string"},
             "template": {"type": "string"},
+            "places": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_PLACES},
             "section": {"type": "string"},
             "function": {"type": "string"},
             "position": {"type": "string", "enum": POSITIONS},
-            "places": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_PLACES},
-            "tone": {"type": "string", "enum": TONES},
+            "tone": {"type": "string", "enum": tones},
             "similar": {"type": "array", "items": {"type": "string"}}
         },
-        "required": ["usable"]
+        "required": ["usable", "why", "template", "places", "section", "function", "position", "tone", "similar"]
     })
 }
 
@@ -235,6 +248,13 @@ fn find_place(given: &str, valid: &[String]) -> Option<String> {
     let tail: Vec<&String> = valid.iter().filter(|p| fold(p).ends_with(&format!("/{gf}"))).collect();
     if tail.len() == 1 {
         return Some(tail[0].clone());
+    }
+    // a slip of a character or two (a model writing 超引數 for 超參數): the one path that close
+    let gc: Vec<char> = gf.chars().collect();
+    let mut near: Vec<(usize, &String)> = valid.iter().map(|p| (levenshtein(&gc, &fold(p).chars().collect::<Vec<_>>()), p)).filter(|(d, _)| *d <= 2).collect();
+    near.sort();
+    if near.len() == 1 || (near.len() > 1 && near[0].0 < near[1].0) {
+        return Some(near[0].1.clone());
     }
     None
 }
@@ -412,6 +432,7 @@ mod tests {
         assert_eq!(f("資料數量").as_deref(), Some("Method/資料/資料數量"), "only the last level");
         assert_eq!(f("限制"), None, "two paths could be meant: neither is guessed");
         assert_eq!(f("Method/訓練/不存在"), None);
+        assert_eq!(f("Method/訓練/超引數設定").as_deref(), Some("Method/訓練/超參數設定"), "one character off");
         assert_eq!(f(""), None);
     }
 
@@ -506,12 +527,13 @@ mod tests {
 
     #[test]
     fn too_many_holes_are_refused() {
-        let s = "We trained alpha on beta with gamma using delta and epsilon over zeta for eta.";
+        let s = "We trained alpha on beta with gamma using delta and epsilon over zeta for eta in theta at iota.";
         let mut r = good();
-        r["template"] = json!("We trained {a} on {b} with {c} using {d} and {e} over {f} for {g}.");
+        r["template"] = json!("We trained {a} on {b} with {c} using {d} and {e} over {f} for {g} in {h} at {i}.");
         let e = PatternProcessor.read(&entry(s), &cx(vec![]), &r).unwrap_err();
-        assert!(e.contains('7') && e.contains("不具體"));
-        r["template"] = json!("We trained {a} on {b} with {c} using {d} and {e} over {f} for eta.");
+        assert!(e.contains('9') && e.contains("不具體"));
+        // eight is the most: a sentence naming several symbols needs a hole for each
+        r["template"] = json!("We trained {a} on {b} with {c} using {d} and {e} over {f} for {g} in {h} at iota.");
         assert!(PatternProcessor.read(&entry(s), &cx(vec![]), &r).is_ok());
     }
 
