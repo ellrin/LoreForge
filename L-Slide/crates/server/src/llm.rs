@@ -124,6 +124,12 @@ impl Llm {
                 _ => RouteOptions::default(),
             },
             Some(m) if task == lore_polish::TASK && named_model(m) => RouteOptions::only(m),
+            // 論文報告: the start panel's model. A Claude model answers every step; an Antigravity
+            // model (text only) answers the steps whose task takes it (`agy = true`: the outline,
+            // its 建議 and 預想選項), the steps that look at pictures keep their own order
+            Some(m) if deck_model(m) => {
+                if m.starts_with("claude:") || self.tasks.task.get(task).is_some_and(|t| t.agy) { RouteOptions::only(m) } else { RouteOptions::default() }
+            }
             _ => RouteOptions::default(),
         }
         // someone watches the result (the 論文報告 progress, a button): interactive for a local model
@@ -172,6 +178,17 @@ pub fn page_edit_engine(engine: Option<&str>) -> Result<Option<&str>, String> {
     } else {
         Err(format!("不認得的模型「{m}」：請選 Claude"))
     }
+}
+
+/// The model a 論文報告 job may name: `claude:<alias>` or `agy:<model id>` (never a local one).
+pub fn deck_model(m: &str) -> bool {
+    ["claude:", "agy:"].iter().any(|p| m.strip_prefix(p).is_some_and(|id| !id.trim().is_empty()))
+}
+
+/// What a job keeps of a request's `engine`: `local` / `claude` (the one-click alternative) or
+/// a model the start panel named.
+pub fn deck_engine(e: Option<String>) -> Option<String> {
+    e.map(|e| e.trim().to_string()).filter(|e| e == "local" || e == "claude" || deck_model(e))
 }
 
 /// `claude:<alias>`, `local:<catalog id>` or `agy:<model id>`, the id not empty.
@@ -260,10 +277,16 @@ mod tests {
         assert!(llm.route(polish, Some("agy:m-2")).await.is_err());
         // half a name is no name
         assert_eq!(id(llm.route(polish, Some("claude:")).await.unwrap()), auto);
-        // every other task ignores a named model, Google included
-        for name in ["agy:m-1", "claude:haiku", "local:qwen3.5-9b-q8"] {
-            assert_eq!(id(llm.route(TASK_PAPER_DECK, Some(name)).await.unwrap()), "mock:opus", "{name}");
-        }
+        // 論文報告 takes the start panel's model: a Claude model on every step, an Antigravity
+        // model on the text steps only (a step that looks at pictures keeps its own order), never local
+        assert_eq!(id(llm.route(TASK_PAPER_DECK, Some("claude:haiku")).await.unwrap()), "mock:haiku");
+        assert_eq!(id(llm.route(TASK_PAPER_DECK, Some("agy:m-1")).await.unwrap()), "mock:google");
+        assert_eq!(id(llm.route(TASK_PAPER_DECK, Some("local:qwen3.5-9b-q8")).await.unwrap()), "mock:opus");
+        assert_eq!(id(llm.route("sc-read-equation", Some("agy:m-1")).await.unwrap()), "mock:opus", "a vision step never goes to a text-only model");
+        assert_eq!(id(llm.route("sc-read-equation", Some("claude:haiku")).await.unwrap()), "mock:haiku");
+        assert!(llm.route(TASK_PAPER_DECK, Some("agy:m-2")).await.is_err(), "a named model that is not there is an error, never another model");
+        assert_eq!(deck_engine(Some("agy:m-1".into())).as_deref(), Some("agy:m-1"));
+        assert_eq!(deck_engine(Some("local:x".into())), None);
     }
 
     #[tokio::test]

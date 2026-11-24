@@ -188,7 +188,7 @@ fn new_job(s: &Shared, b: &MakeBody, direct: bool) -> Result<Arc<Job>, Response>
         lang: b.lang.clone().unwrap_or_else(|| "zh".into()),
         notes: b.notes.clone().filter(|n| n == "en" || n == "zh").unwrap_or_else(|| "zh".into()),
         style,
-        engine: b.engine.clone().filter(|e| e == "local" || e == "claude"),
+        engine: crate::llm::deck_engine(b.engine.clone()),
         brief: vec![],
     };
     let title = match (&b.source.kind[..], &b.source.path) {
@@ -342,7 +342,7 @@ async fn resume(State(s): State<Shared>, UrlPath(id): UrlPath<String>, body: Opt
     if job.is_running() {
         return err(StatusCode::CONFLICT, "工作正在進行");
     }
-    if let Some(e) = body.and_then(|Json(b)| b.engine).filter(|e| e == "local" || e == "claude") {
+    if let Some(e) = crate::llm::deck_engine(body.and_then(|Json(b)| b.engine)) {
         js.set_params(&job, |p| p["engine"] = e.into());
     }
     js.start(&job);

@@ -406,6 +406,9 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
         if !super::plan::pictures(&m).is_empty() {
             warnings.push("寫大綱的模型不能看圖：大綱只依圖說決定每張圖放哪裡".to_string());
         }
+        if p.engine.as_deref().is_some_and(|e| e.starts_with("agy:")) {
+            warnings.push("Antigravity 的模型只寫大綱和文字；看圖的步驟（找圖表、讀方程式、分段）仍由 Claude 做".to_string());
+        }
         (system, user)
     } else {
         let list: Vec<String> = shown.iter().enumerate().map(|(i, (what, _))| format!("- image {}: {what}", i + 1)).collect();

@@ -58,6 +58,7 @@ window.LoreMakeDeck = (() => {
 .tdk-card .tdk-head svg.i { color: var(--accent-2-text); }
 .tdk-card .tdk-row { display: grid; gap: 5px; }
 .tdk-card .tdk-label { font: 500 11px var(--mono); color: var(--muted); letter-spacing: .04em; }
+.tdk-card .tdk-model .engine-chip { justify-self: start; }
 .tdk-card .seg { width: 100%; }
 .tdk-card .seg button { flex: 1; padding: 5px 6px; }
 .tdk-card .tdk-bases { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -90,8 +91,10 @@ window.LoreMakeDeck = (() => {
     document.removeEventListener("keydown", esc, true);
     removeEventListener("resize", place);
   }
-  const away = (e) => { if (card && !card.contains(e.target) && !btn.contains(e.target)) close(); };
-  const esc = (e) => { if (e.key === "Escape" && card) { e.stopPropagation(); close(); btn.focus(); } };
+  // the model chip's menu is drawn on the page, outside the card: a click or Esc in it is not "away"
+  const inMenu = (t) => !!t?.closest?.(".menu");
+  const away = (e) => { if (card && !card.contains(e.target) && !btn.contains(e.target) && !inMenu(e.target)) close(); };
+  const esc = (e) => { if (e.key === "Escape" && card && !document.querySelector(".menu.model")) { e.stopPropagation(); close(); btn.focus(); } };
 
   async function toggle() {
     if (card) return close();
@@ -167,6 +170,13 @@ window.LoreMakeDeck = (() => {
       h("div", { class: "tdk-row" }, h("span", { class: "tdk-label" }, "語言"), seg(LANG, "lang", "zh")),
       h("div", { class: "tdk-row" }, h("span", { class: "tdk-label" }, "備忘稿"), seg(LANG, "notes", "zh")),
     );
+    // which model writes the deck: 自動 (Opus, then Sonnet), a Claude model, or an Antigravity one
+    // (it writes the outline and the text; the steps that look at pictures stay with Claude)
+    if (LoreShell.modelMenu) {
+      const chip = LoreShell.modelMenu({ label: "寫簡報的模型", value: () => pref.get("model", ""), onChange: (ref) => { pref.set("model", ref || ""); chip.paint?.(); }, google: () => true, kinds: () => ["claude", "agy"] });
+      card.append(h("div", { class: "tdk-row tdk-model" }, h("span", { class: "tdk-label" }, "模型"), chip));
+      chip.refresh?.();
+    }
     const row = h("div", { class: "tdk-row" }, h("span", { class: "tdk-label" }, "底版"));
     const list = h("div", { class: "tdk-bases", role: "radiogroup" }, h("span", { class: "tdk-note" }, "…"));
     row.append(list);
@@ -228,7 +238,7 @@ window.LoreMakeDeck = (() => {
     try {
       const source = await opts.source({});
       if (!source) throw new Error("先開一篇論文");
-      const body = { source, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), notes: pref.get("notes", "zh"), style: pref.get("style"), engine, mode, ...chosen };
+      const body = { source, length: pref.get("length", "standard"), lang: pref.get("lang", "zh"), notes: pref.get("notes", "zh"), style: pref.get("style"), engine: engine ?? (pref.get("model", "") || undefined), mode, ...chosen };
       await reach(() => { job.note = "正在開啟 L-Slide…"; draw(); });
       let r;
       try {

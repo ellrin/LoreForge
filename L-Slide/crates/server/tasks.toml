@@ -8,6 +8,8 @@
 
 [task.sc-paper-deck]
 label = "論文做成簡報"
+# text and JSON only: the start panel may name an Antigravity model for it
+agy = true
 needs = { json = true, context = 32000 }
 default = "claude:opus"
 fallback = "claude:sonnet"
@@ -27,6 +29,8 @@ max_tokens = 2000
 # (todeck/suggest.rs). Best-effort: the review window simply shows none when this cannot run.
 [task.sc-outline-review]
 label = "大綱建議"
+# text and JSON only: the start panel may name an Antigravity model for it
+agy = true
 needs = { json = true, context = 16000 }
 default = "claude:opus"
 fallback = "claude:sonnet"
@@ -39,6 +43,8 @@ max_tokens = 2000
 # (todeck/interview.rs). Best-effort: without it the window takes free answers.
 [task.sc-deck-interview]
 label = "大綱預想選項"
+# text and JSON only: the start panel may name an Antigravity model for it
+agy = true
 needs = { json = true, context = 32000 }
 default = "claude:opus"
 fallback = "claude:sonnet"
