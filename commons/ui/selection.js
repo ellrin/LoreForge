@@ -12,8 +12,11 @@
 //     apply: async (after, item) => true,   // replace the selection (one undo step): true, or why not (string)
 //   });
 //   LoreSelection.send();                   // an explicit menu item: brings L-Echo up (promise)
+//   LoreSelection.quiet(fn);                // the app's own undo / redo: what it leaves selected is not sent
 // A settled selection (about 400 ms, non-empty, changed) goes to an L-Echo that is already open;
 // when L-Echo is not open nothing is said. One open request per page: a new selection ends the old one.
+// The same text again goes only when the author made it again (a press or key that changed the
+// selection, then its release); a selection that stays on screen, an undo or a redo is never sent.
 "use strict";
 
 window.LoreSelection = (() => {
@@ -22,6 +25,11 @@ window.LoreSelection = (() => {
   let last = "";            // the last payload sent, as JSON
   let debounce = null;
   let token = 0;            // the newest post wins
+  let down = false;         // a press or a key is held
+  let moved = false;        // the selection changed while it was held
+  let fresh = false;        // the author's own gesture ended on this selection: the same text may go again
+  let holds = 0;            // quiet() calls running
+  let hushUntil = 0;        // an undo / redo just ran: what it selects is the new baseline, not a selection
   const toast = (msg, err) => (window.LoreShell?.toast ? LoreShell.toast(msg, { err }) : console.warn(msg));
 
   function stop() {
@@ -61,8 +69,7 @@ window.LoreSelection = (() => {
         try { res = await opts.apply(item.after, item); } catch (e) { res = String(e?.message || e); }
         await done(c, item.seq, res === true ? { ok: true } : { ok: false, error: typeof res === "string" && res ? res : "沒有套用" });
         c.busy = false;
-        const now = gather();
-        last = now ? JSON.stringify(now) : last;   // what the rewrite left selected is the baseline
+        adopt();   // what the rewrite left selected is the baseline
         wait = 300;   // more may follow soon
       }
       if (!v.open) { if (cur === c) { stop(); last = ""; } return; }   // ended in L-Echo: the same text may be handed over again
@@ -96,14 +103,56 @@ window.LoreSelection = (() => {
     return v.request;
   }
 
+  /** What is selected now is where things stand: nothing to send. */
+  function adopt() {
+    const p = gather();
+    if (p) last = JSON.stringify(p);
+    fresh = false;
+  }
+  const hushed = () => holds > 0 || Date.now() < hushUntil;
+
   function settled() {
     clearTimeout(debounce);
     debounce = setTimeout(() => {
       if (cur?.busy) return;   // a rewrite is being applied
+      if (hushed()) { adopt(); return; }
+      const again = fresh;
+      fresh = false;
       const p = gather();
-      if (!p || JSON.stringify(p) === last) return;
+      if (!p || (JSON.stringify(p) === last && !again)) return;
       post(p, false).catch((e) => { if (e.status !== 503) console.warn(e.message); });   // 503: L-Echo is not open
     }, 400);
+  }
+
+  // A gesture: pressed (mouse or key), the selection changed while held, released. Only that makes
+  // the same text a new selection; a click or key that leaves the selection alone does not.
+  const press = () => { if (!down) { down = true; moved = false; } };   // a held key repeats: one gesture
+  const release = () => {
+    if (down && moved) fresh = true;
+    down = false; moved = false;
+    settled();
+  };
+  const changed = () => { if (down) moved = true; settled(); };
+  // the browser's own undo / redo in a text field (⌘Z, ⇧⌘Z): not a selection of his
+  const history = (e) => {
+    if (e.inputType !== "historyUndo" && e.inputType !== "historyRedo") return;
+    hushUntil = Date.now() + 1000;
+    moved = false; fresh = false;
+  };
+
+  /** The app's own undo / redo (or any change it makes itself): run `fn`; what it leaves selected
+   *  is not handed to L-Echo. Returns what `fn` returns. */
+  async function quiet(fn) {
+    holds++;
+    clearTimeout(debounce);
+    try {
+      return await fn?.();
+    } finally {
+      holds--;
+      hushUntil = Date.now() + 1000;   // its selectionchange events arrive after it
+      fresh = false;
+      adopt();
+    }
   }
 
   /** Follow the page's selection; `gather` and `apply` come from the app. */
@@ -111,9 +160,12 @@ window.LoreSelection = (() => {
     const first = !opts;
     opts = o;
     if (first) {
-      document.addEventListener("selectionchange", settled);
-      document.addEventListener("mouseup", settled);
-      document.addEventListener("keyup", settled);
+      document.addEventListener("selectionchange", changed);
+      document.addEventListener("mousedown", press, true);
+      document.addEventListener("keydown", press, true);
+      document.addEventListener("mouseup", release, true);
+      document.addEventListener("keyup", release, true);
+      document.addEventListener("beforeinput", history, true);
     }
     return api;
   }
@@ -131,6 +183,6 @@ window.LoreSelection = (() => {
     }
   }
 
-  const api = { watch, send, active: () => !!cur };
+  const api = { watch, send, quiet, active: () => !!cur };
   return api;
 })();

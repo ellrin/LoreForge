@@ -8,7 +8,8 @@
 // A read-only document (`readonly`, a PDF): no 改寫, and 翻譯 is a chat turn; nothing goes back.
 // Its 加入知識庫 sends the paper's id (`doc`), title (`source`), page (`scope`) and page text: L-Reader's
 // /api/lore/card is its own 一鍵加卡.
-// Esc closes the rewrite, then the selection; 新對話, collapse or a new selection end it.
+// Esc closes the rewrite, then the selection; 新對話, collapse or a new selection end it. A 套用 the
+// app refuses (409) or a selection already over (410) ends it too; 502 / 504 keep the rewrite.
 "use strict";
 
 window.LoreEchoSel = (() => {
@@ -109,11 +110,19 @@ window.LoreEchoSel = (() => {
       into: X.slot, api: "/api/selection", doc: r.doc, text: r.text, prefix: r.prefix, suffix: r.suffix, context: r.context,
       keep: r.keep ?? [], scope: r.scope, language: language ?? r.language ?? undefined, instruction,
       apply: async (after) => {
+        let res;
         try {
-          const v = await api("POST", "/api/selection/apply", { after });   // no `polish` id: LorePolish marks it applied itself
-          done(v.message);
-          return true;
-        } catch (e) { return e.message; }   // the app's refusal, as it is
+          // no `polish` id: LorePolish marks it applied itself
+          res = await fetch("/api/selection/apply", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ after }), cache: "no-store" });
+        } catch { return "L-Echo 沒有回應"; }
+        const v = await res.json().catch(() => ({}));
+        if (res.ok) { done(v.message); return true; }
+        const why = v.error || `${res.status}`;
+        // 409 the app refused (the text changed meanwhile), 410 the selection is over: it is stale,
+        // said once, and the selection ends. Anything else (502 / 504: the app not reached) keeps
+        // the rewrite so 套用 can be tried again.
+        if (res.status === 409 || res.status === 410) { LoreShell.toast(why, { err: true, ms: 6000 }); end(); return ""; }
+        return why;
       },
     });
     if (!X.slot.firstChild) box().classList.remove("sel-polish");   // nothing was opened (no document)

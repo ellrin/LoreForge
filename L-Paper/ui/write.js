@@ -428,6 +428,44 @@ const PCWrite = (() => {
     return { doc: state.paper.name, source: state.paper.title || state.paper.name, text, prefix, suffix, context: context.slice(0, 2500), scope, keep: [] };
   }
 
+  /** A rewrite from L-Echo: put in like 潤飾's 套用, then saved and the editor closed the way a
+   *  click elsewhere does (app.js edit()'s onblur), so nothing is left 未儲存 while he is in L-Echo.
+   *  The rewrite stays one step: ⌘Z (undoEcho) puts the paragraph back as it was, also saved. */
+  let echoUndo = null;   // { paper, si, pi, before, after }: the last rewrite L-Echo applied
+  async function applyFromEcho(after) {
+    if (!sentAnchor) return "沒有選取的文字";
+    const res = applyRewrite(sentAnchor, after);
+    if (res !== true) return res;
+    const ta = active(), p = ta?.closest(".para");
+    if (!ta || !p) return true;
+    const si = +p.dataset.s, pi = +p.dataset.p;
+    // applyPolish leaves the rewrite selected: around it, the paragraph as it was (his typing kept)
+    const before = (ta.value.slice(0, ta.selectionStart) + sentAnchor.text + ta.value.slice(ta.selectionEnd)).trim();
+    const saving = ta.onblur?.();   // L-Paper is not focused: no blur would come (frame.js settle)
+    ta.dataset.discard = "1";       // a later real blur writes nothing more
+    await saving;
+    const now = sections()[si]?.paragraphs[pi];
+    echoUndo = now != null && now !== before ? { paper: state.paper?.name, si, pi, before, after: now } : null;
+    return true;
+  }
+
+  /** ⌘Z outside a text field: the last L-Echo rewrite back, while the paragraph is still as it left it. */
+  function undoEcho(e) {
+    const u = echoUndo;
+    if (!u || e.defaultPrevented || e.shiftKey || e.altKey || !(e.metaKey || e.ctrlKey) || (e.code !== "KeyZ" && e.key.toLowerCase() !== "z")) return;
+    if (e.target.matches?.("textarea, input, select, [contenteditable], [contenteditable] *") || document.querySelector("dialog[open]")) return;
+    echoUndo = null;
+    if (state.paper?.name !== u.paper || sections()[u.si]?.paragraphs[u.pi] !== u.after) return;   // changed since
+    e.preventDefault();
+    const back = async () => {
+      sections()[u.si].paragraphs[u.pi] = u.before;
+      try { await saveSection(u.si); } catch (err) { LoreShell.toast(`儲存失敗：${err.message}`, { err: true }); }
+      refreshSection(u.si);
+      refreshGit();
+    };
+    window.LoreSelection ? LoreSelection.quiet(back) : back();   // an undo is not a selection to hand over
+  }
+
   /** 交給 L-Echo (the right-click menu): the selection that 潤飾 would take, L-Echo brought up. */
   function sendSelection(d) {
     menuCapture = d ?? null;
@@ -490,7 +528,8 @@ const PCWrite = (() => {
       if (e.key === "b") { e.preventDefault(); wrap("\\textbf{", "}"); }
       if (e.key === "i") { e.preventDefault(); wrap("\\emph{", "}"); }
     });
-    window.LoreSelection?.watch({ gather: selectionPayload, apply: (after) => (sentAnchor ? applyRewrite(sentAnchor, after) : "沒有選取的文字") });
+    window.LoreSelection?.watch({ gather: selectionPayload, apply: applyFromEcho });
+    document.addEventListener("keydown", undoEcho);   // after find.js / table.js / 骨架: theirs go first
   }
 
   return { build, wrap, put, block, references, collect, polish, sendSelection, popover, refSnippet, sentenceStart };

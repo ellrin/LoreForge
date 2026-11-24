@@ -106,8 +106,10 @@ function undoButtons() {
   shell.setUndo({ undo: S.status.undo, redo: S.status.redo });
 }
 
-async function undo() { await exitEdit(); flushNudge(); return serial(async () => { try { absorb(await api(deckApi("/undo"), { body: {} })); } catch (e) { toast(e.message, true); } }); }
-async function redo() { await exitEdit(); flushNudge(); return serial(async () => { try { absorb(await api(deckApi("/redo"), { body: {} })); } catch (e) { toast(e.message, true); } }); }
+// an undo / redo is not a selection to hand to L-Echo (commons/ui/selection.js)
+const quietly = (fn) => (window.LoreSelection?.quiet ? LoreSelection.quiet(fn) : fn());
+async function undo() { return quietly(async () => { await exitEdit(); flushNudge(); return serial(async () => { try { absorb(await api(deckApi("/undo"), { body: {} })); } catch (e) { toast(e.message, true); } }); }); }
+async function redo() { return quietly(async () => { await exitEdit(); flushNudge(); return serial(async () => { try { absorb(await api(deckApi("/redo"), { body: {} })); } catch (e) { toast(e.message, true); } }); }); }
 
 // ── The .pptx the deck is bound to: autosave back into it ─────────────────
 // The server writes deck.json on every edit; the file itself is written
