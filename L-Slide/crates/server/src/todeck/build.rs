@@ -13,7 +13,7 @@ use serde_json::Value;
 use super::plan::{Plan, clip, strip_typed_refs};
 use super::source::{Img, Material};
 
-const EMU_IN: i64 = 914_400;
+pub(crate) const EMU_IN: i64 = 914_400;
 /// "No Style, Table Grid" — the author's table look (design §7.1).
 const TABLE_GRID: &str = "{5940675A-B579-460E-94D1-54222C63F5DA}";
 
@@ -368,7 +368,7 @@ pub fn expand_macros(latex: &str, macros: &BTreeMap<String, String>) -> String {
     s
 }
 
-fn text_obj(name: &str, frame: Frame, body: TextBody, slot: Option<&str>) -> Object {
+pub(crate) fn text_obj(name: &str, frame: Frame, body: TextBody, slot: Option<&str>) -> Object {
     Object {
         id: 0,
         name: name.into(),
@@ -489,17 +489,24 @@ fn asset_of(assets: &mut BTreeMap<String, String>, cx: &Ctx, img: &super::source
 /// whole picture at the style's ghost alpha, each span laid back over it as it is. The
 /// walk-through of the main figure and the training slide draw with it.
 fn ghosted(asset: &str, pframe: &Frame, along_x: bool, spans: &[(f64, f64)], ghost: f64, names: &[String]) -> Vec<Object> {
-    let (pw, ph) = (pframe.w, pframe.h);
     let mut out = vec![pic("架構圖", pframe.clone(), asset, Crop::default(), ghost, Some("image-1"))];
     for (k, (a, b)) in spans.iter().copied().enumerate() {
-        let (sub, crop) = if along_x {
-            (Frame::new(pframe.x + (pw as f64 * a) as i64, pframe.y, (pw as f64 * (b - a)) as i64, ph), Crop { l: a, t: 0.0, r: 1.0 - b, b: 0.0 })
-        } else {
-            (Frame::new(pframe.x, pframe.y + (ph as f64 * a) as i64, pw, (ph as f64 * (b - a)) as i64), Crop { l: 0.0, t: a, r: 0.0, b: 1.0 - b })
-        };
-        out.push(pic(names.get(k).map(String::as_str).unwrap_or("段"), sub, asset, crop, 1.0, None));
+        let vis = if along_x { [a, 0.0, b, 1.0] } else { [0.0, a, 1.0, b] };
+        out.push(clear_piece(asset, pframe, vis, Crop::default(), names.get(k).map(String::as_str).unwrap_or("段")));
     }
     out
+}
+
+/// The clear piece laid over a faint picture at `pframe` (shown with crop `base`): the region
+/// `vis` = `[x0, y0, x1, y1]` (fractions of the picture as shown) at full alpha, cropped from the
+/// same asset. [`ghosted`] draws its spans with it; 改頁's `highlight_crop` its box.
+pub(crate) fn clear_piece(asset: &str, pframe: &Frame, vis: [f64; 4], base: Crop, name: &str) -> Object {
+    let (pw, ph) = (pframe.w, pframe.h);
+    let [x0, y0, x1, y1] = vis;
+    let sub = Frame::new(pframe.x + (pw as f64 * x0) as i64, pframe.y + (ph as f64 * y0) as i64, (pw as f64 * (x1 - x0)) as i64, (ph as f64 * (y1 - y0)) as i64);
+    let (sw, sh) = (1.0 - base.l - base.r, 1.0 - base.t - base.b);
+    let crop = Crop { l: base.l + x0 * sw, t: base.t + y0 * sh, r: 1.0 - (base.l + x1 * sw), b: 1.0 - (base.t + y1 * sh) };
+    pic(name, sub, asset, crop, 1.0, None)
 }
 
 /// A rough width (EMU) of a display equation at `size` pt, to decide whether two fit side
@@ -602,7 +609,7 @@ fn seq_w(cs: &[char], i: &mut usize, group: bool) -> f64 {
 }
 
 /// Fit `iw × ih` inside `f` (contain, centred across, at the top).
-fn contain(f: &Frame, iw: u32, ih: u32) -> Frame {
+pub(crate) fn contain(f: &Frame, iw: u32, ih: u32) -> Frame {
     let (iw, ih) = (iw.max(1) as f64, ih.max(1) as f64);
     let s = (f.w as f64 / iw).min(f.h as f64 / ih);
     let (w, h) = ((iw * s) as i64, (ih * s) as i64);
@@ -645,13 +652,68 @@ fn areas(ws: &sc_core::Workspace, st: &StyleSystem, source: &lore_ooxml::Deck, k
 /// on every page: the body area (clear of what the layout draws at the bottom: logo, marks,
 /// the page number, a bar) and the `Ref:` line (beside the logo, where the author's own decks
 /// put it; never over it).
-struct PageFrames {
-    content: Frame,
-    refs: Frame,
+pub(crate) struct PageFrames {
+    pub(crate) content: Frame,
+    pub(crate) refs: Frame,
     /// A dark takeaway band the base itself has (`None`: the takeaway is a line under the content).
-    band: Option<Frame>,
-    kicker: Option<Frame>,
-    title: Frame,
+    pub(crate) band: Option<Frame>,
+    pub(crate) kicker: Option<Frame>,
+    pub(crate) title: Frame,
+}
+
+/// The frames a content page of this base gets from [`build`] (改頁 lays edited pages out in them).
+pub(crate) fn content_frames(ws: &sc_core::Workspace, st: &StyleSystem, source: &lore_ooxml::Deck) -> PageFrames {
+    let (w, h) = source.slide_size;
+    page_frames(ws, st, source, &academic(ws), w, h)
+}
+
+/// A part of the main figure (aspect `aspect`) in the body area `full`: beside the lines (left,
+/// 48 % of the width) when it is tall enough and the widest equation fits the column left, else on
+/// top, centred. Returns the picture's frame and whether the text goes beside it.
+pub(crate) fn part_frame(full: &Frame, aspect: f64, has_text: bool, eq_widest: i64, gap: i64) -> (Frame, bool) {
+    let col = full.w * 48 / 100;
+    let (sw, sh) = if (col as f64 / aspect) as i64 <= full.h { (col, (col as f64 / aspect) as i64) } else { ((full.h as f64 * aspect) as i64, full.h) };
+    let text_w = full.w - sw - 2 * gap;
+    let side = has_text && sh >= full.h * 35 / 100 && eq_widest <= text_w - EMU_IN / 4;
+    let pframe = if side || !has_text {
+        Frame::new(if side { full.x } else { full.x + (full.w - sw) / 2 }, full.y, sw, sh)
+    } else {
+        let ph = (full.h * 45 / 100).min((full.w as f64 / aspect) as i64);
+        let pw = (ph as f64 * aspect) as i64;
+        Frame::new(full.x + (full.w - pw) / 2, full.y, pw, ph)
+    };
+    (pframe, side)
+}
+
+/// A whole picture (aspect `aspect`) in the body area `full` with a caption `cap_full` tall at
+/// full width: beside the lines when the picture is tall, else across the body. Returns the
+/// picture's width, the caption's width and whether the text goes beside it.
+pub(crate) fn picture_frame(full: &Frame, aspect: f64, has_text: bool, cap_full: i64) -> (i64, i64, bool) {
+    let side = has_text && ((full.h - cap_full) as f64 * aspect) <= full.w as f64 * 0.6;
+    let (pw, cap_w) = if side {
+        let pw = ((full.h - cap_full) as f64 * aspect) as i64;
+        (pw, pw.max(full.w * 3 / 10))
+    } else {
+        (full.w.min(((full.h - cap_full) as f64 * aspect) as i64), full.w)
+    };
+    (pw, cap_w, side)
+}
+
+/// Two lines and their equations as two columns in `tf`: the two lines in one row (as tall as the
+/// taller one, measured a little narrow so a line that wraps on screen still has its room), the
+/// two equations in the row right under it. Returns the four objects and the height they take.
+pub(crate) fn paired_columns(tf: &Frame, gap: i64, cols: Vec<(TextBody, TextBody)>) -> (Vec<Object>, i64) {
+    let col_w = (tf.w - 2 * gap) / 2;
+    // (a box's own insets on top: the build's boxes have none)
+    let lh = cols.iter().map(|(l, _)| text_h(l, col_w * 88 / 100) + l.insets[1] + l.insets[3]).max().unwrap_or(0);
+    let eh = cols.iter().map(|(_, e)| text_h(e, col_w) + e.insets[1] + e.insets[3]).max().unwrap_or(0);
+    let mut out = vec![];
+    for (k, (l, e)) in cols.into_iter().enumerate() {
+        let x = tf.x + k as i64 * (col_w + 2 * gap);
+        out.push(text_obj(&format!("{PAIR_TEXT} {}", k + 1), Frame::new(x, tf.y, col_w, lh), l, Some(&format!("text-{}", k + 1))));
+        out.push(text_obj(&format!("{PAIR_EQUATION} {}", k + 1), Frame::new(x, tf.y + lh, col_w, eh), e, None));
+    }
+    (out, lh + eh)
 }
 
 /// How many lines a `Ref:` box holds.
@@ -783,7 +845,7 @@ pub struct BuildInput<'a> {
 }
 
 /// Estimated height of a body `w` wide (EMU), with a little air.
-fn text_h(b: &TextBody, w: i64) -> i64 {
+pub(crate) fn text_h(b: &TextBody, w: i64) -> i64 {
     (crate::deckpolish::text_size(b, w).0 * 1.04) as i64 + 12_700 + display_math_extra(b)
 }
 
@@ -1091,17 +1153,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                     let along_x = p.axis != "y";
                     let (crop, iw, ih) = if along_x { (Crop { l: a, t: 0.0, r: 1.0 - b, b: 0.0 }, im.w as f64 * (b - a), im.h as f64) } else { (Crop { l: 0.0, t: a, r: 0.0, b: 1.0 - b }, im.w as f64, im.h as f64 * (b - a)) };
                     let aspect = iw.max(1.0) / ih.max(1.0);
-                    let col = full.w * 48 / 100;
-                    let (sw, sh) = if (col as f64 / aspect) as i64 <= full.h { (col, (col as f64 / aspect) as i64) } else { ((full.h as f64 * aspect) as i64, full.h) };
-                    let text_w = full.w - sw - 2 * gap;
-                    let side = has_text && sh >= full.h * 35 / 100 && eq_widest <= text_w - EMU_IN / 4;
-                    let pframe = if side || !has_text {
-                        Frame::new(if side { full.x } else { full.x + (full.w - sw) / 2 }, full.y, sw, sh)
-                    } else {
-                        let ph = (full.h * 45 / 100).min((full.w as f64 / aspect) as i64);
-                        let pw = (ph as f64 * aspect) as i64;
-                        Frame::new(full.x + (full.w - pw) / 2, full.y, pw, ph)
-                    };
+                    let (pframe, side) = part_frame(&full, aspect, has_text, eq_widest, gap);
                     low = pframe.y + pframe.h;
                     if side {
                         let tx = pframe.x + pframe.w + 2 * gap;
@@ -1231,13 +1283,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                     });
                     let full = Frame::new(c.x, c.y, c.w, bottom - c.y);
                     let cap_full = cap_body.as_ref().map(|b| text_h(b, full.w) + h / 120).unwrap_or(0);
-                    let side = has_text && ((full.h - cap_full) as f64 * aspect) <= full.w as f64 * 0.6;
-                    let (pw, cap_w) = if side {
-                        let pw = ((full.h - cap_full) as f64 * aspect) as i64;
-                        (pw, pw.max(full.w * 3 / 10))
-                    } else {
-                        (full.w.min(((full.h - cap_full) as f64 * aspect) as i64), full.w)
-                    };
+                    let (pw, cap_w, side) = picture_frame(&full, aspect, has_text, cap_full);
                     let cap_h = cap_body.as_ref().map(|b| text_h(b, cap_w) + h / 120).unwrap_or(0);
                     let ph = (pw as f64 / aspect) as i64;
                     let px = if side { full.x } else { full.x + (full.w - pw) / 2 };
@@ -1310,17 +1356,10 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                     let col_w = (tf.w - 2 * gap) / 2;
                     let mut text_body = text_body;
                     if let Some((cols, rest)) = columns.filter(|(cols, _)| text_body.is_some() && cols.iter().all(|(_, _, ew)| *ew <= col_w - EMU_IN / 4)) {
-                        // the two lines in one row (as tall as the taller one, measured a little
-                        // narrow so a line that wraps on screen still has its room), the two
-                        // equations in the row right under it: they sit on one line
-                        let lh = cols.iter().map(|(l, _, _)| text_h(l, col_w * 88 / 100)).max().unwrap_or(0);
-                        let eh = cols.iter().map(|(_, e, _)| text_h(e, col_w)).max().unwrap_or(0);
-                        for (k, (l, e, _)) in cols.into_iter().enumerate() {
-                            let x = tf.x + k as i64 * (col_w + 2 * gap);
-                            extra.push(text_obj(&format!("{PAIR_TEXT} {}", k + 1), Frame::new(x, tf.y, col_w, lh), l, Some(&format!("text-{}", k + 1))));
-                            extra.push(text_obj(&format!("{PAIR_EQUATION} {}", k + 1), Frame::new(x, tf.y + lh, col_w, eh), e, None));
-                        }
-                        let ch = lh + eh;
+                        // the two lines in one row, the two equations in the row right under
+                        // it: they sit on one line
+                        let (objs, ch) = paired_columns(&tf, gap, cols.into_iter().map(|(l, e, _)| (l, e)).collect());
+                        extra.extend(objs);
                         low = low.max(tf.y + ch);
                         if ch > tf.h + h / 100 {
                             cx.warnings.push(format!("{warn_at}：文字放不下（沒有縮字），請刪短或拆頁"));
