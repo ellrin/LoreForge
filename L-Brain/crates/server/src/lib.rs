@@ -7,6 +7,7 @@
 pub mod api;
 pub mod config;
 pub mod digest;
+pub mod hub;
 pub mod llm;
 pub mod notation;
 pub mod reminders;
@@ -33,6 +34,12 @@ pub struct AppState {
     pub home: lore_home::Home,
     /// Model calls (card drafts).
     pub llm: llm::Llm,
+    /// The know-how hub (`None`: no personal space, `/api/hub/*` answers 503).
+    pub hub: Option<Mutex<lore_know::hub::Hub>>,
+    /// Private folder name -> folder, for a reference's picture.
+    pub hub_dirs: std::collections::BTreeMap<String, PathBuf>,
+    /// The shared flow editor mounted at `/flow`.
+    pub flow: lore_flow::web::Flow,
 }
 
 impl AppState {
@@ -44,13 +51,29 @@ impl AppState {
     pub fn with_home(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders, home: lore_home::Home) -> Shared {
         let mut llm = llm::Llm::new(reminders::app_dir().as_deref());
         llm.share_engine(home.clone());
-        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home, llm })
+        let h = hub::HubState::none();
+        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home, llm, hub: None, hub_dirs: h.app_dirs, flow: h.flow })
+    }
+
+    /// The hub of the author's own personal space, for the running app (tests never use this).
+    pub fn with_home_hub(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders, home: lore_home::Home) -> Shared {
+        let mut llm = llm::Llm::new(reminders::app_dir().as_deref());
+        llm.share_engine(home.clone());
+        let h = hub::HubState::from_home(&home);
+        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home, llm, hub: h.hub.map(Mutex::new), hub_dirs: h.app_dirs, flow: h.flow })
+    }
+
+    /// Tests and demos: the given model access and an isolated hub (see [`hub::HubState::isolated`]).
+    pub fn with_hub(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders, llm: llm::Llm, h: hub::HubState) -> Shared {
+        let home = lore_home::Home::discover(&config::repo_dir());
+        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home, llm, hub: h.hub.map(Mutex::new), hub_dirs: h.app_dirs, flow: h.flow })
     }
 
     /// Like [`AppState::new`] with the given model access (tests use mock engines).
     pub fn with_llm(kb: KnowledgeBase, web: PathBuf, rem: reminders::Reminders, llm: llm::Llm) -> Shared {
         let home = lore_home::Home::discover(&config::repo_dir());
-        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home, llm })
+        let h = hub::HubState::none();
+        Arc::new(AppState { kb: Mutex::new(kb), web, rem, home, llm, hub: None, hub_dirs: h.app_dirs, flow: h.flow })
     }
 }
 
@@ -118,7 +141,7 @@ fn router_with(shared: Shared, engines: lore_engines::Engines) -> Router {
     }
     // the shared equation tool (/plot/: a card's 動起來, the live view and simulation scenes); no model task here
     let plot = lore_plot::router(lore_plot::Plot::new(shared.home.clone()));
-    api::routes().merge(notation::routes()).with_state(shared).merge(lore_engines::router(engines)).merge(kit).merge(plot).fallback_service(web).layer(cors)
+    api::routes().merge(notation::routes()).merge(hub::routes(&shared)).with_state(shared).merge(lore_engines::router(engines)).merge(kit).merge(plot).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`port` (0 = any free port), start the reminder scheduler and return the
@@ -127,7 +150,7 @@ pub async fn bind(config: Config, kb: KnowledgeBase) -> std::io::Result<(SocketA
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", config.port)).await?;
     let addr = listener.local_addr()?;
     let rem = reminders::Reminders::system(config.app_dir.clone(), format!("http://127.0.0.1:{}", addr.port()));
-    let shared = AppState::new(kb, config.web.clone(), rem);
+    let shared = AppState::with_home_hub(kb, config.web.clone(), rem, lore_home::Home::discover(&config::repo_dir()));
     reminders::spawn_scheduler(shared.clone());
     let app = router(shared);
     Ok((addr, async move { axum::serve(listener, app).await }))
