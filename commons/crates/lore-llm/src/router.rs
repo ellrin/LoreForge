@@ -462,6 +462,15 @@ pub fn plan(task: &str, spec: &TaskSpec, saved: Option<String>, opts: &RouteOpti
         let k = EngineKind::of(&r);
         return Plan { candidates: vec![r], only: Some(k), by_route: false, others: of_kind(&pool, k.other()), mode: RouteMode::Auto };
     }
+    // the author named a model for this task in the shared settings: that model only (a per-call
+    // choice above still wins for its one call)
+    if opts.override_ref.is_none()
+        && let Some(r) = settings.and_then(|s| s.models.get(task))
+    {
+        let r = rw(r);
+        let k = EngineKind::of(&r);
+        return Plan { candidates: vec![r], only: Some(k), by_route: true, others: vec![], mode: RouteMode::Auto };
+    }
     let mut head = Vec::new();
     for r in [opts.override_ref.clone(), saved].into_iter().flatten() {
         push(&mut head, rw(&r));
@@ -1247,6 +1256,23 @@ max_tokens = 9000
         assert!(matches!(r.provider_for("research-web").await, Err(RouteError::NeedsNetwork { .. })));
         let jl = r.provider_for("jl-realtime").await.unwrap();
         assert_eq!(jl.effort.as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn a_model_named_in_the_settings_is_the_only_candidate() {
+        let t = TaskTable::parse("[task.w]\ndefault = \"claude:opus\"\nfallback = \"local:current\"\nclass = \"create\"\nagy = true\n").unwrap();
+        let spec = &t.task["w"];
+        let mut s = EngineSettings::default();
+        // nothing named: the task's own order
+        assert_eq!(plan("w", spec, None, &RouteOptions::default(), Some(&s)).candidates.first().map(String::as_str), Some("claude:opus"));
+        s.models.insert("w".into(), "agy:m-1".into());
+        let p = plan("w", spec, None, &RouteOptions::default(), Some(&s));
+        assert_eq!(p.candidates, vec!["agy:m-1".to_string()], "that model only: no fallback to another one");
+        assert!(p.others.is_empty());
+        // one call may still name its own
+        assert_eq!(plan("w", spec, None, &RouteOptions::only("claude:haiku"), Some(&s)).candidates, vec!["claude:haiku".to_string()]);
+        // another task is untouched
+        assert_eq!(plan("other", spec, None, &RouteOptions::default(), Some(&s)).candidates.first().map(String::as_str), Some("claude:opus"));
     }
 
     #[tokio::test]

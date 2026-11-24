@@ -160,6 +160,14 @@ pub struct EngineSettings {
     pub routes: BTreeMap<TaskClass, RouteMode>,
     /// Task id → mode; wins over the task's class.
     pub overrides: BTreeMap<String, RouteMode>,
+    /// Task id → a named model (`claude:<alias>`, `local:<id>`, `agy:<id>`): that model answers
+    /// the task, or the error is shown; never another model. Wins over `overrides` and the class.
+    pub models: BTreeMap<String, String>,
+}
+
+/// `claude:<alias|id>`, `local:<catalog id>` or `agy:<model id>` with a name: a model, not a route.
+pub fn is_model_ref(s: &str) -> bool {
+    ["claude:", "claude-api:", "claude-code:", "local:", "agy:"].iter().any(|p| s.trim().strip_prefix(p).is_some_and(|id| !id.trim().is_empty()))
 }
 
 impl EngineSettings {
@@ -170,6 +178,7 @@ impl EngineSettings {
         routes: impl IntoIterator<Item = (&'a String, &'a String)>,
         overrides: impl IntoIterator<Item = (&'a String, &'a String)>,
     ) -> EngineSettings {
+        let ov: Vec<(String, String)> = overrides.into_iter().map(|(t, m)| (t.clone(), m.clone())).collect();
         EngineSettings {
             claude_via: match via.map(str::trim) {
                 Some("subscription") => Some(ClaudeVia::Subscription),
@@ -178,7 +187,8 @@ impl EngineSettings {
             },
             claude_model: model.map(str::trim).filter(|m| !m.is_empty()).map(String::from),
             routes: routes.into_iter().filter_map(|(c, m)| Some((TaskClass::parse(c)?, RouteMode::parse(m)?))).collect(),
-            overrides: overrides.into_iter().filter_map(|(t, m)| Some((t.clone(), RouteMode::parse(m)?))).collect(),
+            overrides: ov.iter().filter(|(_, m)| !is_model_ref(m)).filter_map(|(t, m)| Some((t.clone(), RouteMode::parse(m)?))).collect(),
+            models: ov.iter().filter(|(_, m)| is_model_ref(m)).map(|(t, m)| (t.clone(), m.trim().to_string())).collect(),
         }
     }
 
@@ -448,6 +458,16 @@ class = "create"
         assert_eq!(last_used("only-in-this-test").as_deref(), Some("local"));
         uninstall();
         assert_eq!(t.candidates_for("only-in-this-test", &RouteOptions::default()), vec!["claude:sonnet", "local:qwen"]);
+    }
+
+    #[test]
+    fn a_task_may_name_its_model_in_the_shared_settings() {
+        let ov = [("draft".to_string(), "agy:m-1".to_string()), ("tidy".to_string(), "local".to_string()), ("x".to_string(), "claude:".to_string())];
+        let s = EngineSettings::from_strings(None, None, std::iter::empty::<(&String, &String)>(), ov.iter().map(|(a, b)| (a, b)));
+        assert_eq!(s.models.get("draft").map(String::as_str), Some("agy:m-1"));
+        assert_eq!(s.overrides.get("tidy"), Some(&RouteMode::Local));
+        assert!(!s.models.contains_key("x") && !s.overrides.contains_key("x"), "half a name is nothing");
+        assert!(is_model_ref("claude:opus") && is_model_ref("local:qwen3.5-9b-q8") && !is_model_ref("cloud") && !is_model_ref("agy:"));
     }
 
     #[test]

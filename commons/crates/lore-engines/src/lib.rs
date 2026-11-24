@@ -491,6 +491,8 @@ impl Engines {
                 let last = shared::last_used_at(id);
                 json!({
                     "id": id, "label": t.label.clone().unwrap_or_else(|| id.clone()), "class": t.class.map(TaskClass::id),
+                    // what the 模型 tab needs to offer a model per step: its own order, and whether a text-only model may answer
+                    "default": t.default, "fallback": t.fallback, "agy": t.agy && !t.needs.vision && !t.needs.web, "vision": t.needs.vision,
                     "last": last.as_ref().map(|l| l.0.clone()),
                     "last_label": last.as_ref().and_then(|l| self.catalog.engine_name(&l.0)),
                     "last_at": last.as_ref().map(|l| l.1),
@@ -498,7 +500,7 @@ impl Engines {
             })
             .collect();
         let overrides: serde_json::Map<String, Value> =
-            self.tasks.task.keys().map(|id| (id.clone(), Value::from(s.overrides.get(id).map_or("auto", |m| m.id())))).collect();
+            self.tasks.task.keys().map(|id| (id.clone(), Value::from(s.models.get(id).cloned().unwrap_or_else(|| s.overrides.get(id).map_or("auto", |m| m.id()).to_string())))).collect();
         json!({
             "local": self.local().await,
             "claude": self.claude(&s).await,
@@ -587,7 +589,13 @@ impl Engines {
                     return Err(format!("沒有這個任務「{task}」"));
                 }
                 let mode = if mode.is_null() { "auto".to_string() } else { str_of(mode, "走向")? };
-                if lore_llm::RouteMode::parse(&mode).is_none() {
+                if shared::is_model_ref(&mode) {
+                    // a named model for this task: Antigravity's are text only and need the task's leave
+                    let spec = &self.tasks.task[task];
+                    if mode.starts_with("agy:") && (!spec.agy || spec.needs.vision || spec.needs.web) {
+                        return Err(format!("「{}」不能用 Antigravity 的模型（要看圖、要上網，或沒有開放）", spec.label.clone().unwrap_or_else(|| task.clone())));
+                    }
+                } else if lore_llm::RouteMode::parse(&mode).is_none() {
                     return Err(format!("不認得的走向「{mode}」"));
                 }
                 overrides.push((task.clone(), mode));

@@ -238,7 +238,9 @@ impl Home {
     /// `[overrides] <task> = <route>`; `auto` or `None` removes the task's line (back to its class).
     pub fn set_override(&self, task: &str, route: Option<&str>) -> std::io::Result<()> {
         let task = task.trim();
-        if task.is_empty() || route.is_some_and(|r| !ROUTES.contains(&r)) {
+        // a route word, or a named model (`kind:name`: lore-llm checks which kinds exist)
+        let named = |r: &str| r.split_once(':').is_some_and(|(k, n)| !k.trim().is_empty() && !n.trim().is_empty());
+        if task.is_empty() || route.is_some_and(|r| !ROUTES.contains(&r) && !named(r)) {
             return Err(std::io::Error::other(format!("unknown task or route: {task} = {route:?}")));
         }
         self.edit_engine_file(|t| set_in(t, "overrides", task, route.filter(|r| *r != "auto")))

@@ -407,6 +407,21 @@
         h("span", { class: "v no", title: "自動：" + (c.auto ?? []).map((x) => ENGINE_LABEL[x] ?? x).join(" → ") }, lastOfClass(d, c.id) || (c.auto ?? []).map((x) => ENGINE_LABEL[x] ?? x).join(" → "))));
     }
     el.append(conn, route);
+    // 各步驟: each task of this app with its own model. 自動 = the task's own order (shown beside it);
+    // a named model answers that step or the error is shown. A step that looks at pictures or
+    // searches the web is not offered the text-only Antigravity models.
+    const T = (d.tasks ?? []).filter((t) => t.default);
+    if (T.length && typeof modelMenu === "function") {
+      const steps = h("div", { class: "set-sec set-steps" }, h("div", { class: "set-label" }, "各步驟"));
+      const short = (r) => { const m = /^(claude(?:-api|-code)?|local|agy):(.+)$/.exec(r ?? ""); if (!m) return ""; const id = m[2]; const hit = m[1].startsWith("claude") ? (d.claude?.models ?? []).find((x) => x.id === id || x.alias === id) : m[1] === "local" ? (d.local?.models ?? []).find((x) => x.id === id) : (d.google?.models ?? []).find((x) => x.id === id); return hit?.label ?? (id === "selected" ? "Claude" : id === "current" ? "本機" : id); };
+      for (const t of T) {
+        const cur = () => { const v = engines.data?.overrides?.[t.id]; return v && /:/.test(v) ? v : ""; };
+        const chip = modelMenu({ label: t.label, value: cur, google: () => !!t.agy, kinds: () => (t.agy ? ["claude", "agy", "local"] : ["claude", "local"]),
+          onChange: async (ref) => { await engines.put({ overrides: { [t.id]: ref || "auto" } }); chip.paint?.(); } });
+        steps.append(row(t.label, chip, h("span", { class: "v no", title: "自動時的順序" }, [t.default, t.fallback].filter(Boolean).map(short).filter(Boolean).join(" → "))));
+      }
+      el.append(steps);
+    }
     // while the model is loading / switching / waited for: refresh the state every 2 s, only while this tab is open
     if (localBusy(L)) {
       setTimeout(() => {

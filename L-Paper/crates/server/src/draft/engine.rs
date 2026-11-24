@@ -87,6 +87,8 @@ pub struct Attempts {
     task: String,
     models: std::collections::VecDeque<String>,
     why: Vec<String>,
+    /// The author named the model (the picker, or 設定 → 模型 → 各步驟): no other model is tried.
+    named: bool,
 }
 
 /// A safety classifier said no to a normal request (Opus' "safeguards flagged this
@@ -101,7 +103,8 @@ const AFTER_REFUSAL: &str = "claude:sonnet";
 
 impl Attempts {
     pub fn new(e: &dyn Engines, task: &str, picked: Option<&str>) -> Attempts {
-        Attempts { task: task.into(), models: e.candidates(task, picked).into_iter().collect(), why: vec![] }
+        let named = picked.is_some() || lore_llm::shared::installed().is_some_and(|s| s.models.contains_key(task));
+        Attempts { task: task.into(), models: e.candidates(task, picked).into_iter().collect(), why: vec![], named }
     }
 
     /// The next engine to try (with its prompt budget when it is small).
@@ -118,7 +121,8 @@ impl Attempts {
 
     pub fn failed(&mut self, c: &Cand, f: Fail) {
         // Opus refused a normal request: Sonnet next, before any local model
-        if is_refusal(f.text()) && c.model.starts_with("claude") && c.model != AFTER_REFUSAL && !self.models.iter().any(|m| m == AFTER_REFUSAL) {
+        // (not when he named the model: then that model answers or the error is shown)
+        if !self.named && is_refusal(f.text()) && c.model.starts_with("claude") && c.model != AFTER_REFUSAL && !self.models.iter().any(|m| m == AFTER_REFUSAL) {
             self.models.push_front(AFTER_REFUSAL.into());
         }
         let text: String = f.text().chars().take(160).collect();
