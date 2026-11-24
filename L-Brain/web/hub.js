@@ -439,13 +439,17 @@ const Hub = (() => {
           el("input", { type: "checkbox", checked: !x.problem, disabled: !!x.problem, onchange: (e) => { e.target.checked ? chosen.add(x.index) : chosen.delete(x.index); } }),
           el("span", { class: `op ${x.op}` }, OP[x.op] ?? x.op),
           el("span", { class: "t" }, it.title ?? x.note ?? "", it.level && LV[it.level] ? el("small", {}, LV[it.level]) : null, fig && it.entity === false ? el("small", {}, "待製作") : null),
-          el("span", { class: "d" }, x.problem || (x.op === "update" && x.changed?.length ? `改：${[...new Set(x.changed.map(partName))].join("、")}` : x.note ?? "")));
+          // what the change says it does (where a row is placed) comes first; else which parts change
+          el("span", { class: "d", title: x.note || null }, x.problem || x.note || (x.op === "update" && x.changed?.length ? `改：${[...new Set(x.changed.map(partName))].join("、")}` : "")));
       };
       if (!d.shown.some((x) => !x.problem)) chosen.clear();
       const act = async (fn, msg) => { try { await fn(); S.host.toast?.(msg); S.allDirty = true; await show(S.root, "proposals"); } catch (e) { S.host.fail?.(e); } };
+      // a long batch stays folded: the first few rows, the rest on demand
+      const FEW = 6, rows = d.shown.map(line), rest = rows.slice(FEW);
+      const more = rest.length ? el("details", { class: "h-rest" }, el("summary", {}, `其餘 ${rest.length} 條`), rest) : null;
       return el("section", { class: "h-box h-prop" },
         el("div", { class: "h-cap" }, p.by === "le" ? "L-Echo" : p.by, el("span", {}, (p.created_at ?? "").slice(0, 10).replaceAll("-", "/"))),
-        el("h3", {}, p.title), d.shown.map(line),
+        el("h3", {}, p.title), rows.slice(0, FEW), more,
         el("div", { class: "h-acts" },
           el("button", { type: "button", class: "pri", onclick: () => act(() => api("POST", `/api/hub/proposals/${enc(p.id)}/apply`, { chosen: [...chosen].sort((a, b) => a - b) }), "已套用勾選的") }, "同意勾選的"),
           el("button", { type: "button", class: "quiet", onclick: () => act(() => api("POST", `/api/hub/proposals/${enc(p.id)}/dismiss`), "已略過") }, "都不要")));

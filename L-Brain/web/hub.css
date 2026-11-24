@@ -247,3 +247,9 @@ label.h-plus { cursor: pointer; font-weight: 500; font-size: 12px; padding: 6px 
 .h-places { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .h-places button { background: none; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); padding: 3px 9px; font-size: 12px; }
 .h-places button.main { color: var(--text); border-color: var(--line-strong); }
+
+.h-rest > summary { list-style: none; cursor: pointer; padding: 8px 4px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.h-rest > summary::-webkit-details-marker { display: none; }
+.h-rest > summary::before { content: "▸ "; }
+.h-rest[open] > summary::before { content: "▾ "; }
+.h-ch { grid-template-columns: 18px 44px minmax(0, 1.3fr) minmax(0, 1fr); }
