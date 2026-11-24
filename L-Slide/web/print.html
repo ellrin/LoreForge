@@ -64,7 +64,9 @@
   if (only && !pages.children.length) { document.body.dataset.error = "slide"; return; }
   const fit = Number(q.get("w"));
   if (only && fit > 0) document.body.style.zoom = String(fit / W);
-  await Promise.all([...document.images].map((im) => im.decode().catch(() => {})));
+  // (not im.decode(): headless Chrome's virtual time runs out during an off-thread decode and the
+  // page then never says ready; a load is a network wait, which virtual time does wait for)
+  await Promise.all([...document.images].map((im) => im.complete || new Promise((ok) => { im.addEventListener("load", ok, { once: true }); im.addEventListener("error", ok, { once: true }); })));
   await document.fonts.ready;
   document.body.dataset.ready = "1";
   // 列印 from the editor: this page sits in a hidden frame; tell the editor to open the print dialog
