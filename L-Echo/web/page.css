@@ -12,8 +12,7 @@
 /* before / after: one picture per slide; the narrow layouts show one side (the 前／後 switch) */
 .pg-pics { display: flex; gap: 8px; flex: none; }
 .pg-stack { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.pg-set { display: grid; gap: 6px; grid-template-columns: 1fr; }
-.pg-set:has(.pg-pic + .pg-pic) { grid-template-columns: 1fr 1fr; }   /* several pages on one side: two to a row */
+.pg-set { display: grid; gap: 6px; grid-template-columns: 1fr; }   /* several pages on one side: one under the other, each at full width (the body scrolls) */
 .pg-cap { display: none; font-size: 11.5px; color: var(--faint); line-height: 1; }
 .pg[data-side="after"] .pg-stack[data-side="before"], .pg[data-side="before"] .pg-stack[data-side="after"] { display: none; }
 .pg-pic { display: block; width: 100%; padding: 0; border: 1px solid var(--line-strong); border-radius: 6px; overflow: hidden; background: var(--surface); cursor: zoom-in; line-height: 0; }
@@ -46,6 +45,9 @@
 .box.pg-on:not(.pg-say) > .input { border-top: 0; padding-top: 0; }
 .box.pg-on > .input { margin-top: auto; }
 #text:disabled { color: var(--faint); }
+/* his instruction while the edit runs: quiet, above the progress line, two lines at most */
+.pg-said { flex: none; font-size: 12.5px; line-height: 1.5; color: var(--faint); max-height: 3em; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 
 /* very wide: before and after side by side, each under its word. At the default 620 the column is
    too narrow for two readable pictures, so the 前／後 switch shows one at full width instead. */
@@ -53,7 +55,6 @@
   .pg.full .pg-flip { display: none; }
   .pg[data-side] .pg-stack[data-side][data-side] { display: flex; }
   .pg-cap { display: block; }
-  .pg-set:has(.pg-pic + .pg-pic) { grid-template-columns: 1fr; }
 }
 /* the corner card (narrow and short): a proposal takes the window, the bust steps out; before it
    the card is only its header and the scope line */

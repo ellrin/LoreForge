@@ -2,7 +2,7 @@
 // GET /api/page polled). The panel takes the history's place: which page(s), then the result as
 // before / after pictures with what the check found, and 套用 · 再改 · 復原. He says what to change
 // in the dialogue box's own field (typed or dictated; send() hands the sentence here, never to the
-// chat). The edit is the asking app's (a model that also looks at the rendered page), proxied under
+// chat); his words stay above the progress line while the edit runs. The edit is the asking app's (a model that also looks at the rendered page), proxied under
 // /api/page/edit; the model is the header menu's own choice for this job (S.models.page, Claude only).
 // A sentence sent while a proposal is shown and not applied revises that proposal; after 套用 the
 // next sentence is a new edit of the same page(s).
@@ -21,6 +21,7 @@ window.LoreEchoPage = (() => {
     armed: false,        // 再改 was pressed
     wait: null,          // { ctrl, t0, tick } while an edit runs
     busy: false,         // 套用 / 復原 running
+    saying: null,        // his instruction, shown above the progress line while the edit runs
     seq: 0, prev: null, mic: null,
   };
   const box = () => $("box");
@@ -45,6 +46,9 @@ window.LoreEchoPage = (() => {
   }
 
   function begin(r) {
+    // another page came while his instruction for the last one was on its way: the answer is
+    // dropped with that request, his words are not (back in the field, unless he typed since)
+    const lost = P.wait ? P.said : "";
     finish();
     window.LoreEchoActions?.close();
     if (window.LoreEchoSel?.active()) window.LoreEchoSel.end();   // the server already dropped it
@@ -54,6 +58,7 @@ window.LoreEchoPage = (() => {
     if (!S.expanded) show(true);
     mount();
     S.chip?.actual("");                            // the chip is this job's model now
+    if (lost && !$("text").value.trim()) { $("text").value = lost; grow(); }
     $("text").focus();
   }
 
@@ -87,12 +92,14 @@ window.LoreEchoPage = (() => {
   /** A picture of the proposal, through L-Echo: the last segment of the app's URL. */
   const src = (url) => `/api/page/edit/${encodeURIComponent(P.res.id)}/image/${encodeURIComponent(String(url).split("?")[0].split("/").pop())}?v=${P.ver}`;
 
-  /** Which page a finding is about, as the author counts them. */
+  /** Which page a finding is about, as the author counts them: the app's `page` (the page once
+   *  the edit is applied; a new slide has no other name for him), else the page handed over.
+   *  Nothing when the finding's own words already start with it, or for an id only the app knows. */
   function pageOf(f) {
     const s = P.req.slides.find((x) => x.id === f.slide);
-    if (s) return `第 ${s.n} 頁`;
-    if (typeof f.slide === "number") return `第 ${f.slide} 頁`;
-    return f.slide ? String(f.slide) : "";
+    const n = Number.isInteger(f.page) && f.page > 0 ? f.page : s ? s.n : typeof f.slide === "number" ? f.slide : null;
+    const t = n == null ? "" : `第 ${n} 頁`;
+    return t && !String(f.text).trim().startsWith(t) ? t : "";
   }
 
   function render() {
@@ -132,7 +139,8 @@ window.LoreEchoPage = (() => {
   /** Nothing is pressed while an edit, 套用 or 復原 runs. */
   function lock() {
     const on = !!P.wait || P.busy;
-    for (const b of P.foot?.querySelectorAll(".btn") ?? []) b.disabled = on || (b.dataset.act === "apply" && P.phase === "applied");
+    // (套用 stays off once applied, and when no edit of the proposal survived the checks)
+    for (const b of P.foot?.querySelectorAll(".btn") ?? []) b.disabled = on || (b.dataset.act === "apply" && (P.phase === "applied" || !(P.res?.plan?.edits ?? []).length));
   }
 
   // ── the dialogue line: only progress and problems ──
@@ -151,11 +159,19 @@ window.LoreEchoPage = (() => {
     return true;
   }
 
+  /** His instruction above the progress line while the edit runs (quiet; gone with the answer). */
+  function saying(text) {
+    P.saying?.remove();
+    P.saying = text ? h("div", { class: "pg-said", title: text }, text) : null;
+    if (P.saying) $("line").before(P.saying);
+  }
+
   async function run(instruction) {
     const my = ++P.seq, req = P.req;
     const revise = P.phase === "result" && P.res?.id;   // a proposal he has not applied: the same one, changed
     P.said = instruction;
     $("text").value = ""; grow();
+    saying(instruction);
     arm(false);
     const ctrl = new AbortController();
     const t0 = Date.now();
@@ -165,6 +181,13 @@ window.LoreEchoPage = (() => {
     lock();
     setState("thinking");
     tell();
+    // he may have handed over another page a moment ago (the poll comes round every 1.2 s): the
+    // server already holds that request, so the sentence is for it. The panel follows first.
+    try {
+      const v = await api("GET", "/api/page");
+      if (my !== P.seq || P.req !== req) return;
+      if (v.open && v.request !== req.request && v.request !== P.ended) { begin(v); run(instruction); return; }
+    } catch { /* the edit call says what is wrong */ }
     let out = null;
     try {
       out = revise
@@ -189,6 +212,7 @@ window.LoreEchoPage = (() => {
     if (!P.wait) return;
     clearInterval(P.wait.tick);
     P.wait = null;
+    saying("");
     fields(true);
     lock();
     if (S.state === "thinking" || S.state === "waiting") setState("idle");
@@ -258,17 +282,18 @@ window.LoreEchoPage = (() => {
     try { out = await call(`/api/page/edit/${encodeURIComponent(id)}/undo`); } catch (e) { out = { ok: false, status: 0, error: e.message }; }
     if (P.req !== req) return;
     P.busy = false;
-    if (out.ok) {                                  // the pages are as before: his words are his to say again
+    if (out.ok) {                                  // the pages are as before (also when he already undid it in the app): his words are his to say again
       P.res = null; P.phase = "idle";
       say("");
       render();
       if (!$("text").value.trim() && P.said) { $("text").value = P.said; grow(); }
       $("text").focus();
-    } else {
-      if (out.status === 409) P.res.undo = false;  // something else was edited since: no undo from here
+    } else if (out.status === 409) {               // something else was edited since: no undo from here.
+      P.res.undo = false;                          // The state as it is, in the app's words beside 已套用 (not an error)
+      P.res.message = out.error;
+      say("");
       render();
-      say(out.error, "err");
-    }
+    } else { render(); say(out.error, "err"); }
   }
 
   // ── a picture, larger, inside the window ──
@@ -291,6 +316,7 @@ window.LoreEchoPage = (() => {
     P.seq++;
     if (P.wait) { P.wait.ctrl.abort(); settle(); }
     unzoom();
+    saying("");
     P.req = null; P.res = null; P.phase = "idle"; P.armed = false; P.busy = false; P.said = ""; P.side = "after";
     P.panel?.remove(); P.panel = null; P.body = null; P.notes = null; P.foot = null; P.scope = null;
     $("hist").hidden = false;
