@@ -286,7 +286,31 @@
       document.dispatchEvent(new CustomEvent("lore-engines", { detail: this.data }));
       return this.data;
     },
+    /** 更新模型清單: lists the models again now (POST /api/engines/refresh → the GET body); a list
+     *  that could not be read throws its one line, the other lists are kept as they came. */
+    async refresh() {
+      const r = await fetch("/api/engines/refresh", { method: "POST" });
+      const v = await r.json().catch(() => null);
+      if (!r.ok || !v) throw new Error(v?.error ?? `${r.status}`);
+      this.data = v;
+      document.dispatchEvent(new CustomEvent("lore-engines", { detail: v }));
+      const err = [v.google?.error, v.claude?.error].filter(Boolean).join("；");
+      if (err) throw new Error(err);
+      return v;
+    },
   };
+  /** The 更新模型清單 icon button (the model menu, 設定 → 模型): turns while the lists are read,
+   *  a failure is the toast; `then(data)` after either. */
+  function refreshButton(then, cls = "ico tiny") {
+    const b = ico("refresh", "更新模型清單", async () => {
+      if (b.classList.contains("busy")) return;
+      b.classList.add("busy"); b.setAttribute("aria-busy", "true");
+      try { await engines.refresh(); } catch (e) { toast(e.message, { err: true }); }
+      b.classList.remove("busy"); b.removeAttribute("aria-busy");
+      then?.(engines.data);
+    }, { class: `${cls} lore-refresh`, title: "更新模型清單" });
+    return b;
+  }
   function seg(options, value, onPick, label) {
     const s = h("div", { class: "seg", role: "group", "aria-label": label });
     for (const [v, text] of options) {
@@ -369,6 +393,13 @@
     const vias = Object.entries(C.vias ?? {}).filter(([, ok]) => ok).map(([v]) => [v, v === "subscription" ? "訂閱" : "金鑰"]);
     conn.append(row("Claude", csel, vias.length > 1 ? seg(vias, C.via, (v) => engines.put({ claude: { via: v } }), "連線方式") : h("span", { class: "chip" + (C.state === "ready" ? " ok" : "") }, C.state === "ready" ? (C.via === "api" ? "金鑰" : "訂閱") : STATE[C.state] ?? "—"), vision(!!C.vision, C.via === "subscription" ? "訂閱不能傳圖" : "需要金鑰"),
       S.opts?.modelSetup ? h("button", { type: "button", class: "btn small", onclick: () => S.opts.modelSetup("claude") }, C.state === "ready" ? "更換…" : "登入…") : null));
+    // the lists that are read from outside (the Antigravity CLI's models, Claude's with a key): when, and again now
+    const G = d.google ?? {};
+    if (G.available || G.checked) {
+      const n = googleRows(G.models).size;
+      const rf = refreshButton(() => { if (el.isConnected && el.dataset.tab === "model") buildModels(el).then(() => paintIcons(el)); }, "ico small");
+      conn.append(row("Antigravity", h("span", { class: "v" }, n ? `${n} 個模型` : "—"), G.checked ? h("span", { class: "chip" }, ago(G.checked)) : null, rf));
+    }
     const route = h("div", { class: "set-sec" }, h("div", { class: "set-label" }, "走向"));
     for (const c of d.classes ?? []) {
       route.append(row(c.label, seg([["auto", "自動"], ["cloud", "雲"], ["local", "地"]], c.route ?? "auto", (v) => engines.put({ routes: { [c.id]: v } }), c.label),
@@ -461,20 +492,43 @@
     const ids = free ? (g.free.length ? g.free : g.plain) : (g.plain.length ? g.plain : g.free);
     return ids.includes(current) ? current : [...ids].sort().pop();
   }
-  /** 「Sonnet」 / 「Gemma 4 12B」 for a model ref (claude:<alias>, local:<id>, agy:<id>). */
+  /** The Antigravity CLI's models as rows with buttons: 「Gemini 4 Neon (High)」 → row 「Gemini 4 Neon」,
+   *  button 「高」; 「Orchestrator (Neon)」 → row 「Orchestrator」, button 「Neon」 (a word that is no
+   *  effort level stays as it is, in the list's order). The Claude models the CLI repeats are left
+   *  out: they are the Claude row. → Map(row name → [{ ref, id, text, label }]) */
+  const LEVELS = { minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "極高", max: "最高" };
+  function googleRows(models) {
+    const rows = new Map(), order = Object.keys(LEVELS);
+    for (const x of models ?? []) {
+      if (/^claude/i.test(x.id)) continue;
+      const label = String(x.label ?? x.id), mm = /^(.*\S)\s*\(([^()]+)\)$/.exec(label);
+      const fam = mm ? mm[1] : label, word = mm ? mm[2] : "", lv = order.indexOf(word.toLowerCase());
+      if (!rows.has(fam)) rows.set(fam, []);
+      rows.get(fam).push({ ref: `agy:${x.id}`, id: x.id, text: lv >= 0 ? LEVELS[order[lv]] : word || "選用", label, lv });
+    }
+    for (const items of rows.values()) if (items.every((x) => x.lv >= 0)) items.sort((a, b) => a.lv - b.lv);
+    return rows;
+  }
+  /** 「Sonnet」 / 「Gemma 4 12B」 / 「Gemini 4 Neon (High)」 for a model ref (claude:<alias>, local:<id>, agy:<id>). */
   function refLabel(ref, d = engines.data) {
     const i = ref.indexOf(":"), kind = ref.slice(0, i), id = ref.slice(i + 1);
     const list = kind === "claude" ? d?.claude?.models : kind === "local" ? d?.local?.models : kind === "agy" ? d?.google?.models : null;
     return (list ?? []).find((m) => m.id === id)?.label ?? id;
   }
+  /** The chip's words for a model ref: the label, an Antigravity one as its row and button (「Gemini 4 Neon · 高」). */
+  function refShort(ref, d = engines.data) {
+    if (ref.startsWith("agy:")) for (const [fam, items] of googleRows(d?.google?.models)) { const x = items.find((y) => y.ref === ref); if (x) return `${fam} · ${x.text}`; }
+    return refLabel(ref, d);
+  }
   /** A header's model choice: the chip names the model that answers, its menu picks one — 自動
-   *  first, the Claude models, the Google ones while `google()` says so (one row per model, its effort levels as buttons; `agy:`, for the
+   *  first, the Claude models, what the Antigravity CLI offers while `google()` says so (one row per model, its effort levels as buttons; `agy:`, for the
    *  tasks that take it), 本機 as family rows with size buttons and ONE 無審查 switch for the group (it
    *  hides nothing: it switches which variant the size buttons pick). A choice is a model ref:
    *  "" = 自動, `claude:<alias>`, `local:<id>`, `agy:<id>`; the app keeps it:
    *    { task, label, value(), onChange(ref), google(), unrestricted(), onUnrestricted(on), seen(), onSeen(refs) }
    *  `task` (an id, or a function: none = 自動 without a prediction) is whose next engine 自動 names.
-   *  新 marks a model the menu did not have the last time it was opened (`seen`).
+   *  新 marks a model the menu did not have the last time it was opened (`seen`), or that the latest
+   *  refresh newly brought; a row of only new models has one mark. The first row ends with 更新模型清單.
    *  As engineChip({ live }): chip.actual(name) after a reply, chip.busy(on) while a request runs
    *  (the shared local model's status words), chip.refresh(); chip.paint() when value() changed. */
   function modelMenu(o = {}) {
@@ -493,7 +547,10 @@
       else if (waited && L?.state === "ready") text.append(h("span", { class: "ok" }, `已載入 ${v ? refLabel(v, d) : L.label ?? ""}`.trim()));
       else if (v) {
         const name = refLabel(v, d);
-        text.append(name);
+        // a model with a level: the name gives way first, the level always shows (「Gemini 4 Hyd… · 極高」)
+        const short = refShort(v, d), cut = v.startsWith("agy:") ? short.lastIndexOf(" · ") : -1;
+        if (cut > 0) { text.classList.add("split"); text.append(h("span", { class: "nm" }, short.slice(0, cut)), h("span", { class: "lv" }, short.slice(cut))); }
+        else text.append(short);
         // another model answered (files that must stay on this machine): say which
         if (actual && !actual.includes(name)) text.append(h("span", { class: "used" }, ` · ${bare(actual)}`));
       } else {
@@ -503,7 +560,7 @@
       }
       // while the status shows it takes the whole chip (no caret; the menu still opens)
       b.replaceChildren(text, ...(wait ? [] : [h("span", { class: "caret" }, icon("chevron"))]));
-      b.title = wait || "";
+      b.title = wait || (v ? refLabel(v, d) : "");
     };
     const onEng = () => { if (b.isConnected) paint(); else if (!working) document.removeEventListener("lore-engines", onEng); };
     document.addEventListener("lore-engines", onEng);
@@ -528,34 +585,51 @@
       try { await o.onChange?.(ref); } catch (e) { toast(e.message, { err: true }); }
       paint();
     };
+    // 新: a model the menu did not have the last time it was opened. Each kind has its own baseline
+    // (nothing is new the very first time, nor a whole kind the menu shows for the first time);
+    // without one, a model the latest refresh newly brought (`new`) still counts.
+    const refsOf = (d) => [...(d.claude?.models ?? []).map((x) => `claude:${x.id}`), ...(d.local?.models ?? []).map((x) => `local:${x.id}`), ...(o.google?.() && d.google?.available ? d.google.models ?? [] : []).filter((x) => !/^claude/i.test(x.id)).map((x) => `agy:${x.id}`)];
+    function freshOf(d, seen) {
+      if (!seen.length) return [];
+      const brought = new Set([...(d.google?.new ?? []).map((id) => `agy:${id}`), ...(d.claude?.models ?? []).filter((x) => x.new).map((x) => `claude:${x.id}`)]);
+      const known = new Set(seen.map((r) => r.slice(0, r.indexOf(":"))));
+      return refsOf(d).filter((r) => !seen.includes(r) && (known.has(r.slice(0, r.indexOf(":"))) || brought.has(r)));
+    }
+    const put = (m) => {
+      const r = b.getBoundingClientRect();
+      m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+      m.style.top = `${Math.max(8, Math.min(r.bottom + 4, innerHeight - m.offsetHeight - 8))}px`;
+    };
     function draw(m, d, fresh) {
       const v = value(), free = !!o.unrestricted?.();
-      const mark = (ref) => (fresh.has(ref) ? h("span", { class: "new" }, "新") : null);
-      const seg = (label, items) => h("div", { class: "seg", role: "group", "aria-label": label },
-        items.map(([ref, text, on]) => h("button", { type: "button", role: "menuitemradio", "aria-checked": String(on ?? ref === v), "aria-pressed": String(on ?? ref === v), onclick: () => pick(ref) }, text, mark(ref))));
+      const mark = () => h("span", { class: "new" }, "新");
+      const seg = (label, items, inside = true) => h("div", { class: "seg", role: "group", "aria-label": label },
+        items.map(([ref, text, on, title]) => h("button", { type: "button", role: "menuitemradio", class: fresh.has(ref) ? "fresh" : null, "aria-checked": String(on ?? ref === v), "aria-pressed": String(on ?? ref === v), title: title ?? null, "aria-label": title ?? null, onclick: () => pick(ref) }, text, inside && fresh.has(ref) ? mark() : null)));
+      // a named row carries ONE mark, on its name (never one per button); when only some of its
+      // models are new, those buttons are in the mark's colour
+      const mrow = (cls, fam, items) => {
+        const n = items.filter(([ref]) => fresh.has(ref)).length;
+        return h("div", { class: cls + (n && n < items.length ? " some-new" : "") }, h("span", { class: "lbl" }, h("span", { class: "nm", title: fam }, fam), n ? mark() : null), seg(fam, items, false));
+      };
       const auto = h("button", { type: "button", class: "it", role: "menuitemradio", "aria-checked": String(!v), "aria-current": v ? null : "true", onclick: () => pick("") }, h("span", { class: "lbl" }, "自動"));
-      m.replaceChildren(auto);
+      // 更新模型清單: the lists again now, the menu redrawn where it is; what it brought is 新
+      const again = refreshButton((nd) => {
+        if (!m.isConnected || !nd) return;
+        const seen = o.seen?.() ?? [];
+        for (const r of freshOf(nd, seen)) fresh.add(r);
+        draw(m, nd, fresh);
+        paintIcons(m); put(m);
+        m.querySelector(".lore-refresh")?.focus();
+        if (refsOf(nd).some((x) => !seen.includes(x))) Promise.resolve(o.onSeen?.([...new Set([...seen, ...refsOf(nd)])])).catch(() => {});
+        paint();
+      });
+      m.replaceChildren(h("div", { class: "mtop" }, auto, again));
       const C = d.claude?.models ?? [];
       if (C.length) m.append(h("div", { class: "menu-sep", role: "separator" }), h("div", { class: "menu-head" }, "CLAUDE"), h("div", { class: "mrow full" }, seg("Claude", C.map((x) => [`claude:${x.id}`, x.label ?? x.id]))));
-      const G = o.google?.() && d.google?.available ? d.google.models ?? [] : [];
-      if (G.length) {
-        // one row per model, its effort levels as buttons: 「Gemini 4 Neon (High)」 → 「Gemini 4 Neon」 · High.
-        // The Claude models the CLI also lists are left out: they are the row above.
-        const order = ["low", "medium", "high", "xhigh", "max"];
-        const rows = new Map();
-        for (const x of G) {
-          if (/^claude/i.test(x.id)) continue;
-          const mm = /^(.*\S)\s*\(([^()]+)\)$/.exec(String(x.label ?? x.id));
-          const fam = mm ? mm[1] : String(x.label ?? x.id), lvl = mm ? mm[2] : "選用";
-          if (!rows.has(fam)) rows.set(fam, []);
-          rows.get(fam).push([`agy:${x.id}`, lvl]);
-        }
-        if (rows.size) m.append(h("div", { class: "menu-head" }, "GOOGLE"));
-        for (const [fam, items] of rows) {
-          items.sort((a, b) => order.indexOf(a[1].toLowerCase()) - order.indexOf(b[1].toLowerCase()));
-          m.append(h("div", { class: "mrow" }, h("span", { class: "lbl" }, fam), seg(fam, items)));
-        }
-      }
+      // what the Antigravity CLI offers (Google's models and the others it lists): a row per model
+      const rows = o.google?.() && d.google?.available ? googleRows(d.google.models) : new Map();
+      if (rows.size) m.append(h("div", { class: "menu-head" }, "ANTIGRAVITY"));
+      for (const [fam, items] of rows) m.append(mrow("mrow lv", fam, items.map((x) => [x.ref, x.text, undefined, x.label])));
       const fams = localFamilies(d.local);
       if (fams.size) {
         const groups = [...fams.values()].flatMap((f) => [...f.values()]);
@@ -570,15 +644,10 @@
             if (to !== v) { actual = ""; await o.onChange?.(to); paint(); }
           } catch (e) { toast(e.message, { err: true }); }
           draw(m, d, fresh);
+          paintIcons(m);
         };
         m.append(h("div", { class: "menu-head" }, "本機", sw));
-        for (const [fam, sizes] of fams) {
-          const items = [...sizes].map(([size, g]) => { const ref = `local:${variantOf(g, free, d.local?.model)}`; return [ref, size, [...g.plain, ...g.free].some((id) => `local:${id}` === v)]; });
-          const allNew = items.length > 1 && items.every(([ref]) => fresh.has(ref));
-          const row = h("div", { class: "mrow" }, h("span", { class: "lbl" }, fam, allNew ? h("span", { class: "new" }, "新") : null), seg(fam, items));
-          if (allNew) row.querySelectorAll(".seg .new").forEach((x) => x.remove());
-          m.append(row);
-        }
+        for (const [fam, sizes] of fams) m.append(mrow("mrow", fam, [...sizes].map(([size, g]) => [`local:${variantOf(g, free, d.local?.model)}`, size, [...g.plain, ...g.free].some((id) => `local:${id}` === v)])));
       }
     }
     b.onclick = async () => {
@@ -586,15 +655,12 @@
       closeMenu();
       const d = (await engines.get(true)) ?? {};
       const m = h("div", { class: "menu model", role: "menu" });
-      // 新: not in the menu the last time it was opened (nothing is new the very first time)
-      const refs = [...(d.claude?.models ?? []).map((x) => `claude:${x.id}`), ...(d.local?.models ?? []).map((x) => `local:${x.id}`), ...(o.google?.() && d.google?.available ? d.google.models ?? [] : []).map((x) => `agy:${x.id}`)];
-      const seen = o.seen?.() ?? [];
-      const fresh = new Set(seen.length ? refs.filter((r) => !seen.includes(r)) : []);
+      const refs = refsOf(d), seen = o.seen?.() ?? [];
+      const fresh = new Set(freshOf(d, seen));
       draw(m, d, fresh);
       layer(b).append(m);
-      const r = b.getBoundingClientRect();
-      m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
-      m.style.top = `${Math.max(8, Math.min(r.bottom + 4, innerHeight - m.offsetHeight - 8))}px`;
+      paintIcons(m);
+      put(m);
       b.setAttribute("aria-expanded", "true");
       const away = (e) => { if (!m.contains(e.target) && !b.contains(e.target)) closeMenu(); };
       const key = (e) => {

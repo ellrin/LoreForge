@@ -114,7 +114,7 @@ LoreShell.ask(anchor, lines, buttons) → Promise（值或 null；Esc、點外�
 LoreShell.form({ title, build(body, dlg), actions: [{ label, primary, run }] }) → Promise（小表單對話框）
 LoreShell.menu(anchor, items)（anchor＝元素，或右鍵的 `{ x, y }`；元素被隱藏時，例如首頁的文件鈕，改掛在品牌下；`LoreShell.place(el, anchor)` 給 app 自己的浮層用）· LoreShell.settings(tab) · LoreShell.block({ n, title, count, help, open, key })
 LoreShell.engineChip({ task, value, used, onChange }) · LoreShell.shortcuts()
-LoreShell.modelMenu({ task, value(), onChange(ref), google(), unrestricted(), onUnrestricted(on), seen(), onSeen(refs) })   // 上方列的模型選單（L-Echo）：自動／Claude 一列／Google 一列（google() 為真才出現）／本機「系列＋大小鈕」與一個「無審查」開關；值是 ""（自動）、claude:<別名>、local:<id>、agy:<id>；chip.actual / busy / refresh / paint
+LoreShell.modelMenu({ task, value(), onChange(ref), google(), unrestricted(), onUnrestricted(on), seen(), onSeen(refs) })   // 上方列的模型選單（L-Echo）：自動（同列右端「更新模型清單」鈕 = POST /api/engines/refresh，失敗是 toast；設定 → 模型 的 Antigravity 列也有）／Claude 一列／ANTIGRAVITY（google() 為真才出現；agy CLI 列出的模型，一個模型一列，等級是按鈕 低 中 高 極高，不是等級的字照原樣，如 Orchestrator 的 Neon／Argon）／本機「系列＋大小鈕」與一個「無審查」開關；「新」每列一個、標在名稱後（seen 沒有的，各類自己的基準；沒有基準時只算 google.new／claude 的 new）；chip 是「Gemini 4 Neon · 高」，窄時名稱先縮；值是 ""（自動）、claude:<別名>、local:<id>、agy:<id>；chip.actual / busy / refresh / paint
 LoreLinks.open(app, params) · LoreLinks.url(app, params) · LoreLinks.ports
 ```
 
