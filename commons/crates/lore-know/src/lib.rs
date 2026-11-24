@@ -17,6 +17,7 @@
 pub mod decompose;
 pub mod formats;
 pub mod hub;
+pub mod inbox;
 pub mod index;
 pub mod intake;
 pub mod proposal;
