@@ -449,7 +449,7 @@ function renderObject(o, ctx) {
     }
     case "locked": {
       e.classList.add("locked");
-      e.append(el("span", "locked-label")).textContent = `🔒 ${o.kind}`;
+      e.appendChild(el("span", "locked-label")).textContent = `🔒 ${o.kind}`; // (append() returns nothing)
       break;
     }
   }
