@@ -104,6 +104,8 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   tests (synthetic decks only), the job cache or this repo. The terms stage's finder
   (`kbterms.rs`: terms, L-Brain states, `Matcher`) lives in `../commons/crates/lore-learn`, shared with
   L-Paper's 寫書; `kbterms.rs` re-exports it and keeps the slide marks, 我懂 and the L-Brain write.
+- 改頁 through L-Echo (`crates/server/src/pageedit.rs`, `../docs/paper-deck.md` 「改頁」): one or two slides + an instruction → task `sc-page-edit` returns a constrained plan (`set_text`, `set_notes`, `split_slide`, `insert_slide`; inserts built by `todeck::build::build`), checked (role limits, notes shape, LaTeX → OMML, a new notation error/warning refuses the edit) and compiled to ops on a preview copy, rendered (`pageshot_of`), checked by code (`fill_ratio`, `deckpolish::overlaps`) and by `sc-page-check`, one corrective round; 套用 = one transaction 「L-Echo 改頁」 through the open L-Echo request's page (`lore_shell::pageedit`, `request` in the body) or the server.
+  Guards: `pageedit::tests`, `tests/pageedit.rs` (Keyed mock, fake shot and queue).
 - 繪圖 (toolbar 圖表, `web/figplot.js`, `crates/server/src/plot.rs`, `../docs/plot.md`): the shared lore-plot editor (`/plot/*`); the figure is a
   300 dpi PNG picture that carries its spec (`iTXt`, survives the .pptx); the selected figure's 編輯 button (`SC_FIGURE_TOOLS`, drawn by `renderOverlay`) re-opens it and replaces the image in place (one undo step); a double-click is not special.
 - 會動的方程式 (toolbar `#insLiveEq`, `web/figplot.js` `create("equation")`, `../docs/plot.md` §10): an equation figure is a GIF picture (spec in its `LOREPLOT1.0`

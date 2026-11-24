@@ -40,6 +40,7 @@ mod rewrite; // polish.js: 語句潤飾 (lore-polish) and the voice (lore-voice)
 pub mod deckvoice;
 pub mod deckstyle;
 pub mod todeck;
+pub mod pageedit; // 改頁 through L-Echo: constrained edit plans, previews, one undo step
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -426,9 +427,11 @@ fn router_with(shared: Shared, engines: lore_engines::Engines, voice: lore_voice
     let plots = plot::plot_router(&shared);
     let flows = flow::flow_router(&shared);
     let polish = rewrite::router(&shared, voice);
+    let page_requests = lore_shell::pageedit::PageEdits::new("sc"); // L-Echo 改頁 requests; their applies go through the page
+    let pageedits = pageedit::router(&shared, Some(page_requests.clone())).merge(lore_shell::pageedit::router(page_requests)); // 改頁 (pageedit.rs)
     // 加入知識庫 for selected words (lore-cards: L-Brain's API while it runs, else its folder)
     let cards = lore_cards::router(Arc::new(kbterms::brain(&shared)), Arc::new(kbterms::CardHost(shared.clone())), "slidecomposer");
-    routes().merge(plot::routes()).merge(flow::routes()).with_state(shared).merge(cards).merge(plots).merge(flows).merge(polish).merge(lore_shell::permissions::router(perms)).merge(lore_shell::selection::router(lore_shell::selection::Selections::new("sc"))).merge(lore_engines::router(engines)).fallback_service(web)
+    routes().merge(plot::routes()).merge(flow::routes()).with_state(shared).merge(cards).merge(plots).merge(flows).merge(polish).merge(pageedits).merge(lore_shell::permissions::router(perms)).merge(lore_shell::selection::router(lore_shell::selection::Selections::new("sc"))).merge(lore_engines::router(engines)).fallback_service(web)
 }
 
 pub fn state(ws: Workspace, web: PathBuf) -> Shared {

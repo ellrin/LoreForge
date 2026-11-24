@@ -72,3 +72,22 @@ needs = { vision = true, json = true }
 default = "claude:opus"
 fallback = "claude:sonnet"
 max_tokens = 800
+
+# 改頁 through L-Echo (pageedit.rs): one or two slides as data and pictures plus the presenter's
+# instruction → a constrained plan of edits (set_text, set_notes, split_slide, insert_slide) that
+# the program checks and compiles; never ops, sizes or coordinates. A request may name a Claude
+# model (`claude:<alias>`); the local and Antigravity models cannot see the page and are refused.
+[task.sc-page-edit]
+label = "改頁（L-Echo）"
+needs = { vision = true, json = true }
+default = "claude:opus"
+fallback = "claude:sonnet"
+max_tokens = 4000
+
+# The edited page, rendered, looked at: wrapped lines, overlaps, cut-off text (findings).
+[task.sc-page-check]
+label = "看改過的頁面"
+needs = { vision = true, json = true }
+default = "claude:opus"
+fallback = "claude:sonnet"
+max_tokens = 1500

@@ -26,6 +26,9 @@ pub fn quit() {
 pub const TASK_PAPER_DECK: &str = "sc-paper-deck";
 /// 微調's 建議 (todeck/suggest.rs).
 pub const TASK_OUTLINE_REVIEW: &str = "sc-outline-review";
+/// 改頁 through L-Echo (pageedit.rs): the edit plan, and the look at the edited page.
+pub const TASK_PAGE_EDIT: &str = "sc-page-edit";
+pub const TASK_PAGE_CHECK: &str = "sc-page-check";
 const TEMPERATURE: f32 = 0.3;
 
 /// What a model answered, and with which engine.
@@ -111,8 +114,15 @@ impl Llm {
     /// `agy:<model id>`: L-Echo's model menu): that model or an error, never another one.
     pub async fn route(&self, task: &str, engine: Option<&str>) -> Result<Route, RouteError> {
         let opts = match engine {
+            Some(m) if is_page_task(task) && page_edit_engine(Some(m)).is_err() => RouteOptions::default(),
             Some("local") => RouteOptions::only("local:current"),
             Some("claude") => RouteOptions::only("claude:selected"),
+            // 改頁 sees the page: a Claude model only, never the local one (see `page_edit_engine`)
+            Some(m) if is_page_task(task) => match page_edit_engine(Some(m)) {
+                Ok(Some("claude")) => RouteOptions::only("claude:selected"),
+                Ok(Some(m)) => RouteOptions::only(m),
+                _ => RouteOptions::default(),
+            },
             Some(m) if task == lore_polish::TASK && named_model(m) => RouteOptions::only(m),
             _ => RouteOptions::default(),
         }
@@ -141,6 +151,26 @@ impl Llm {
         let id = route.provider.id();
         lore_llm::shared::record_used(task, &id);
         Ok(Answer { value, engine: id })
+    }
+}
+
+fn is_page_task(task: &str) -> bool {
+    task == TASK_PAGE_EDIT || task == TASK_PAGE_CHECK
+}
+
+/// The engine a 改頁 request may name: none, `claude` (the shared Claude choice) or
+/// `claude:<alias>`. The local model and the Antigravity models are refused with a one-line
+/// reason (they cannot see the page here); anything else is not a model name.
+pub fn page_edit_engine(engine: Option<&str>) -> Result<Option<&str>, String> {
+    let Some(m) = engine.map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
+    if m == "claude" || m.strip_prefix("claude:").is_some_and(|id| !id.trim().is_empty()) {
+        Ok(Some(m))
+    } else if m == "local" || m.starts_with("local:") {
+        Err("改頁不用本機模型：要看得懂頁面的圖，請選 Claude".into())
+    } else if m.starts_with("agy:") {
+        Err("Antigravity 的模型在這裡只收文字，看不到頁面：請選 Claude".into())
+    } else {
+        Err(format!("不認得的模型「{m}」：請選 Claude"))
     }
 }
 
@@ -189,7 +219,7 @@ mod tests {
         // 論文報告 must be right: Opus, then Sonnet; no class, so the shared routing can never put the
         // local model first (the two vision tasks once ran on it: no module boxes, misread equations)
         let t = TaskTable::bundled().merge(app_tasks());
-        for id in [TASK_PAPER_DECK, TASK_OUTLINE_REVIEW, crate::todeck::interview::TASK, crate::todeck::eqread::TASK, crate::todeck::figparts::TASK, crate::todeck::extract::TASK_LOCATE, crate::todeck::extract::TASK_CHECK, lore_docsrc::boxer::TASK_ID] {
+        for id in [TASK_PAPER_DECK, TASK_OUTLINE_REVIEW, crate::todeck::interview::TASK, crate::todeck::eqread::TASK, crate::todeck::figparts::TASK, crate::todeck::extract::TASK_LOCATE, crate::todeck::extract::TASK_CHECK, lore_docsrc::boxer::TASK_ID, TASK_PAGE_EDIT, TASK_PAGE_CHECK] {
             let spec = &t.task[id];
             assert_eq!((spec.default.as_str(), spec.fallback.as_deref(), spec.class), ("claude:opus", Some("claude:sonnet"), None), "{id}");
         }
@@ -234,6 +264,38 @@ mod tests {
         for name in ["agy:m-1", "claude:haiku", "local:qwen3.5-9b-q8"] {
             assert_eq!(id(llm.route(TASK_PAPER_DECK, Some(name)).await.unwrap()), "mock:opus", "{name}");
         }
+    }
+
+    #[tokio::test]
+    async fn page_edit_names_only_a_claude_model() {
+        use lore_llm::MockProvider;
+        use lore_llm::router::MockFactory;
+        let mock = |name: &str| -> Arc<dyn lore_llm::LlmProvider> { Arc::new(MockProvider::new(vec![]).named(name)) };
+        let dir = tempfile::tempdir().unwrap();
+        let f = MockFactory::default().with("claude:opus", mock("mock:opus")).with("claude:sonnet", mock("mock:sonnet")).with("claude:selected", mock("mock:selected")).with("local:current", mock("mock:current")).with("agy:m-1", mock("mock:google"));
+        let llm = Llm::with_factory(lore_home::Home::at(dir.path()), f);
+        let id = |r: Route| r.provider.id();
+        for task in [TASK_PAGE_EDIT, TASK_PAGE_CHECK] {
+            for t in [lore_llm::TaskClass::Create] {
+                assert_ne!(app_tasks().task[task].class, Some(t), "no class: the local model is never first");
+            }
+            let spec = &app_tasks().task[task];
+            assert!(spec.needs.vision && spec.needs.json, "{task}");
+            assert_eq!(id(llm.route(task, None).await.unwrap()), "mock:opus");
+            assert_eq!(id(llm.route(task, Some("claude:opus")).await.unwrap()), "mock:opus");
+            assert_eq!(id(llm.route(task, Some("claude:sonnet")).await.unwrap()), "mock:sonnet");
+            // a refused name never reaches the local model or Google
+            for m in ["local", "local:qwen", "agy:m-1"] {
+                assert_eq!(id(llm.route(task, Some(m)).await.unwrap()), "mock:opus", "{m}");
+            }
+        }
+        assert_eq!(page_edit_engine(Some("claude:opus")), Ok(Some("claude:opus")));
+        assert_eq!(page_edit_engine(None), Ok(None));
+        for m in ["agy:m-1", "local:qwen", "local", "gpt"] {
+            let e = page_edit_engine(Some(m)).unwrap_err();
+            assert!(!e.is_empty() && !e.contains('\n'), "{m}: {e}");
+        }
+        assert!(page_edit_engine(Some("agy:m-1")).unwrap_err().contains("看不到頁面"));
     }
 
     #[tokio::test]
