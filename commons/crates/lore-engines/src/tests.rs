@@ -282,12 +282,21 @@ async fn links_ports_lists_the_live_apps() {
 }
 
 #[test]
-fn every_shared_task_has_a_class() {
+fn every_shared_task_has_a_class_unless_it_runs_on_claude_only() {
+    // A class lets the shared routing put the local model first, so a task without one must have
+    // no local candidate: both its default and its fallback name Claude models. Any task with a
+    // local candidate needs a class. (A Claude-only task may carry a class too: it changes nothing.)
+    let claude_only = |r: &str| r.starts_with("claude:") || r.starts_with("claude-api:") || r.starts_with("claude-subscription:");
     for (name, toml) in [("lore-llm", include_str!("../../lore-llm/tasks.toml")), ("lore-flow", include_str!("../../lore-flow/tasks.toml"))] {
         for (id, t) in TaskTable::parse(toml).unwrap().task {
-            assert!(t.class.is_some(), "{name}: {id} has no class");
+            let only = claude_only(&t.default) && t.fallback.as_deref().is_none_or(claude_only);
+            assert!(t.class.is_some() || only, "{name}: {id} has no class but has a local candidate (default {}, fallback {:?})", t.default, t.fallback);
         }
     }
+    // the guard itself: the one deliberately classless task is Claude-only
+    let t = TaskTable::parse(include_str!("../../lore-llm/tasks.toml")).unwrap();
+    let crop = &t.task["sc-crop-modules"];
+    assert!(crop.class.is_none() && claude_only(&crop.default) && crop.fallback.as_deref().is_some_and(claude_only));
 }
 
 #[tokio::test]
@@ -456,4 +465,104 @@ async fn google_list_refreshes_itself_after_a_day_without_blocking_get() {
     let (_, v) = call(&app, "GET", "/api/engines", None).await;
     assert_eq!(v["google"]["new"], json!(["m-9"]));
     assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+struct FakeClaude {
+    answers: Mutex<Vec<Result<Vec<&'static str>, &'static str>>>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl lore_llm::claude_models::ClaudeLister for FakeClaude {
+    async fn list(&self, api_key: &str) -> Result<Vec<lore_llm::agy::ModelInfo>, String> {
+        assert_eq!(api_key, "sk-ant-test-0000000000");
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let a = self.answers.lock().unwrap().remove(0);
+        a.map(|v| v.into_iter().map(|id| lore_llm::agy::ModelInfo { id: id.into(), label: format!("Label {id}") }).collect()).map_err(String::from)
+    }
+}
+
+fn with_key(mut e: Engines, dir: &std::path::Path) -> Engines {
+    e.keys.main.app_dir = Some(dir.join("keys"));
+    e.keys.main.save("sk-ant-test-0000000000", &Account::Single).unwrap();
+    e
+}
+
+fn claude_ids(v: &Value) -> Vec<(String, bool)> {
+    v["claude"]["models"].as_array().unwrap().iter().map(|m| (m["id"].as_str().unwrap().to_string(), m["new"].as_bool().unwrap())).collect()
+}
+
+#[tokio::test]
+async fn claude_list_without_a_key_is_the_catalog_only() {
+    let _g = SERIAL.lock().await;
+    let d = tempfile::tempdir().unwrap();
+    let file = d.path().join("cache").join("claude-models.json");
+    let fake = Arc::new(FakeClaude { answers: Mutex::new(vec![]), calls: Default::default() });
+    let app: axum::Router = router(engines(d.path()).claude_list(fake.clone(), Some(file.clone())));
+    let (_, v) = call(&app, "POST", "/api/engines/refresh", None).await;
+    let ids: Vec<String> = claude_ids(&v).into_iter().map(|(i, _)| i).collect();
+    assert_eq!(ids, ["opus", "sonnet", "haiku", "fable"]);
+    assert_eq!((v["claude"]["listed"].as_bool(), v["claude"]["can_list"].as_bool()), (Some(false), Some(false)), "{}", v["claude"]);
+    assert!(v["claude"]["error"].is_null() && v["claude"]["checked"].is_null());
+    assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(!file.exists());
+}
+
+#[tokio::test]
+async fn claude_list_appends_unknown_models_as_new_once() {
+    let _g = SERIAL.lock().await;
+    let d = tempfile::tempdir().unwrap();
+    let file = d.path().join("cache").join("claude-models.json");
+    let known = Catalog::bundled().cloud.models[0].id.clone();
+    let fake = Arc::new(FakeClaude {
+        answers: Mutex::new(vec![Ok(vec!["claude-listed-test", "claude-zz"]), Ok(vec!["claude-listed-test", "claude-zz"])]),
+        calls: Default::default(),
+    });
+    // the catalog's id is listed as well: it is not added twice
+    fake.answers.lock().unwrap()[0].as_mut().unwrap().push(Box::leak(known.into_boxed_str()));
+    let app: axum::Router = router(with_key(engines(d.path()), d.path()).claude_list(fake.clone(), Some(file.clone())));
+    let (_, v) = call(&app, "POST", "/api/engines/refresh", None).await;
+    let ids = claude_ids(&v);
+    assert_eq!(ids.len(), 6, "{ids:?}");
+    assert_eq!(ids[..4].iter().map(|(i, n)| (i.as_str(), *n)).collect::<Vec<_>>(), [("opus", false), ("sonnet", false), ("haiku", false), ("fable", false)]);
+    assert_eq!(ids[4..], [("claude-listed-test".to_string(), true), ("claude-zz".to_string(), true)]);
+    assert_eq!(v["claude"]["models"][4]["label"], "Label claude-listed-test");
+    assert_eq!((v["claude"]["listed"].as_bool(), v["claude"]["can_list"].as_bool()), (Some(true), Some(true)));
+    assert!(v["claude"]["checked"].as_u64().unwrap() > 1_000_000_000);
+    // a listed id can be picked as the model
+    let (st, v) = call(&app, "PUT", "/api/engines", Some(json!({ "claude": { "model": "claude-zz" } }))).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let (st, _) = call(&app, "PUT", "/api/engines", Some(json!({ "claude": { "model": "claude-nope" } }))).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    // a second listing: no longer new
+    let (_, v) = call(&app, "POST", "/api/engines/refresh", None).await;
+    assert_eq!(claude_ids(&v)[4..], [("claude-listed-test".to_string(), false), ("claude-zz".to_string(), false)]);
+    assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    // GET shows the stored list and does not list again (fresh)
+    let (_, v) = call(&app, "GET", "/api/engines", None).await;
+    assert_eq!(claude_ids(&v).len(), 6);
+    assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_failing_claude_listing_keeps_the_catalog_and_google() {
+    let _g = SERIAL.lock().await;
+    let d = tempfile::tempdir().unwrap();
+    let cfile = d.path().join("cache").join("claude-models.json");
+    let gfile = d.path().join("cache").join("agy-models.json");
+    let fake = Arc::new(FakeClaude { answers: Mutex::new(vec![Err("Claude 模型清單失敗（401）"), Ok(vec!["claude-listed-test"]), Err("down")]), calls: Default::default() });
+    let g = FakeAgy::new(vec![Ok(vec!["m-1"]), Ok(vec!["m-1"]), Err("agy down")]);
+    let app: axum::Router = router(with_key(engines(d.path()), d.path()).agy(g, Some(gfile)).claude_list(fake, Some(cfile)));
+    let (_, v) = call(&app, "POST", "/api/engines/refresh", None).await;
+    assert_eq!(v["claude"]["error"], "Claude 模型清單失敗（401）");
+    assert_eq!(claude_ids(&v).len(), 4, "the catalog is intact");
+    assert_eq!(v["claude"]["listed"], false);
+    assert!(v["google"]["error"].is_null() && v["google"]["models"].as_array().unwrap().len() == 1, "Google is unaffected: {}", v["google"]);
+    let (_, v) = call(&app, "POST", "/api/engines/refresh", None).await;
+    assert_eq!(claude_ids(&v).len(), 5);
+    // both fail: each says so, the stored lists stay
+    let (_, v) = call(&app, "POST", "/api/engines/refresh", None).await;
+    assert_eq!((v["claude"]["error"].as_str(), v["google"]["error"].as_str()), (Some("down"), Some("agy down")));
+    assert_eq!(claude_ids(&v).len(), 5);
+    assert_eq!(v["google"]["models"].as_array().unwrap().len(), 1);
 }

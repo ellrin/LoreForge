@@ -280,7 +280,8 @@ impl Stored {
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let dir = path.parent().ok_or_else(|| std::io::Error::other("no cache folder"))?;
         std::fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!(".{FILE}.{}.tmp", std::process::id()));
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or(FILE);
+        let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
         std::fs::write(&tmp, serde_json::to_vec(self).map_err(std::io::Error::other)?)?;
         std::fs::rename(&tmp, path)
     }

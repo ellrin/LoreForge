@@ -789,7 +789,15 @@ impl StandardFactory {
                 context: UNKNOWN_CLOUD_CONTEXT,
             }));
         }
-        self.catalog.cloud_model(model).cloned().ok_or_else(|| format!("模型目錄裡沒有 Claude 模型「{model}」"))
+        // A full id the catalog does not have yet (from the API's own listing, `claude_models`)
+        // is used as is; any other unknown name is still refused (a typo of an alias).
+        match self.catalog.cloud_model(model) {
+            Some(m) => Ok(m.clone()),
+            None if model.starts_with("claude-") && !model.contains(char::is_whitespace) => {
+                Ok(CloudModel { id: model.to_string(), summary: String::new(), context: UNKNOWN_CLOUD_CONTEXT })
+            }
+            None => Err(format!("模型目錄裡沒有 Claude 模型「{model}」")),
+        }
     }
 
     /// Where local models live: `LocalAccess.layout`, else the shared layout
@@ -1333,8 +1341,12 @@ max_tokens = 9000
         let p = f.make(&sel, &spec(Needs::default())).await.unwrap();
         assert_eq!(p.id(), "claude:claude-next-test");
         assert_eq!(p.capabilities().context, 200_000);
-        // Other names still have to be in the catalog.
-        assert!(f.make(&ModelRef::parse("claude:claude-next-test").unwrap(), &spec(Needs::default())).await.is_err());
+        // A full id the catalog lacks (a model from the API listing) routes as is, aliases still resolve.
+        let p = f.make(&ModelRef::parse("claude:claude-next-test").unwrap(), &spec(Needs::default())).await.unwrap();
+        assert_eq!((p.id().as_str(), p.capabilities().context), ("claude:claude-next-test", 200_000));
+        assert_eq!(f.make(&ModelRef::parse("claude:haiku").unwrap(), &spec(Needs::default())).await.unwrap().id(), "claude:claude-haiku-5-5");
+        // Other names (a typo of an alias) still have to be in the catalog.
+        assert!(f.make(&ModelRef::parse("claude:sonet").unwrap(), &spec(Needs::default())).await.is_err());
     }
 
     #[tokio::test]

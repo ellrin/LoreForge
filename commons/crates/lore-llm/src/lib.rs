@@ -28,6 +28,7 @@ pub mod agy;
 pub mod catalog;
 pub mod claude_api;
 pub mod claude_code;
+pub mod claude_models;
 pub mod error;
 pub mod json;
 pub mod local;

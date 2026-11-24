@@ -26,6 +26,13 @@
 //!   not in the listing before. `POST /api/engines/refresh` lists again now and returns the GET body
 //!   (plus `google.error` when the listing failed); a listing older than 24 hours refreshes itself
 //!   in the background, GET never waits for it.
+//! - `claude.models` = the catalog's models first (order, labels, aliases unchanged), then every model
+//!   the API lists that the catalog lacks (`GET /v1/models`, `lore_llm::claude_models`, only with an
+//!   API key; the subscription cannot list), each `{ id (full), label, vision, new }`; `new` = not in
+//!   the previous listing. Also `claude.listed` (a listing is kept), `claude.checked` (unix seconds or
+//!   null), `claude.can_list` (an API key exists). The refresh button and the daily refresh cover both
+//!   lists; `claude.error` beside `google.error`; one failing never hides the other. A listed id is
+//!   a valid `PUT` model and routes as `claude:<id>`.
 //! - `GET /api/links/ports` → `{ "sc": 51234, … }`: the desktop apps running now (lore-home `ports`).
 //! - `POST /api/links/open { url, background? }` (`background`: `open -g -a <App>` without the link, the app stays behind) → hands a `lore-(pc|sc|lr|kb)://` or
 //!   `http://127.0.0.1…` URL to the OS opener (204); anything else → 400.
@@ -43,6 +50,7 @@ use lore_home::Home;
 use lore_llm::catalog::Catalog;
 use lore_llm::agy::{self, CliLister, ModelLister, Stored};
 use lore_llm::claude_code::{Cache, Cli};
+use lore_llm::claude_models::{self, ClaudeLister, HttpLister};
 use lore_llm::local::Layout;
 use lore_llm::secrets::{Account, SharedKeys};
 use lore_llm::shared::{self, EngineSettings, TaskClass};
@@ -95,6 +103,11 @@ pub struct Engines {
     agy_busy: Arc<std::sync::atomic::AtomicBool>,
     /// Unix seconds of the last listing attempt, so a failing CLI is not retried at every GET.
     agy_tried: Arc<std::sync::atomic::AtomicU64>,
+    /// `GET /v1/models` (a fake in tests), where its last answer is kept, like the Google list.
+    pub claude_lister: Arc<dyn ClaudeLister>,
+    pub claude_file: Option<std::path::PathBuf>,
+    claude_busy: Arc<std::sync::atomic::AtomicBool>,
+    claude_tried: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// A listing is refreshed by itself when older than this (a day).
@@ -146,7 +159,47 @@ impl Engines {
             agy_file: agy::default_path(),
             agy_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             agy_tried: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            claude_lister: Arc::new(HttpLister::default()),
+            claude_file: claude_models::default_path(),
+            claude_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            claude_tried: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
+    }
+
+    /// The Claude model lister and the file that keeps its answer (tests).
+    pub fn claude_list(mut self, lister: Arc<dyn ClaudeLister>, file: Option<std::path::PathBuf>) -> Self {
+        self.claude_lister = lister;
+        self.claude_file = file;
+        self
+    }
+
+    fn claude_stored(&self) -> Option<Stored> {
+        self.claude_file.as_deref().and_then(Stored::load)
+    }
+
+    /// The API key, read off the async threads (a keychain read can wait on a prompt).
+    async fn api_key(&self) -> Option<String> {
+        let keys = self.keys.clone();
+        tokio::task::spawn_blocking(move || keys.get(None, &Account::Single).map(|(k, _)| k)).await.ok().flatten()
+    }
+
+    /// List the Claude models now and keep the answer. Without an API key there is nothing to
+    /// do (`Ok`, the catalog stays the list). One listing at a time.
+    pub async fn refresh_claude(&self) -> Result<(), String> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.claude_busy.compare_exchange(false, true, SeqCst, SeqCst).is_err() {
+            return Ok(());
+        }
+        self.claude_tried.store(agy::now(), SeqCst);
+        let r = async {
+            let Some(key) = self.api_key().await else { return Ok(()) };
+            let fresh = self.claude_lister.list(&key).await?;
+            let file = self.claude_file.as_deref().ok_or("沒有可存放的快取資料夾")?;
+            claude_models::after(Stored::load(file).as_ref(), fresh, agy::now()).save(file).map_err(|e| format!("無法儲存模型清單：{e}"))
+        }
+        .await;
+        self.claude_busy.store(false, SeqCst);
+        r
     }
 
     /// The `agy models` lister and the file that keeps its answer (tests).
@@ -258,6 +311,7 @@ impl Engines {
         self.ports_file = None;
         self.agy_lister = Arc::new(NoAgy);
         self.agy_file = None;
+        self.claude_file = None;
         self.opener = Arc::new(|_| Err("isolated".into()));
         self.starter = Arc::new(|_| Err("isolated".into()));
         self
@@ -381,7 +435,7 @@ impl Engines {
         };
         let pick = s.claude_model.clone().or_else(|| self.app_claude_model.clone()).unwrap_or_else(|| self.catalog.cloud.default.clone());
         let model = self.catalog.cloud_model(&pick).map(|m| self.alias(&m.id)).unwrap_or(pick);
-        let models: Vec<Value> = self
+        let mut models: Vec<Value> = self
             .catalog
             .cloud
             .models
@@ -389,9 +443,24 @@ impl Engines {
             .map(|m| {
                 let id = self.alias(&m.id);
                 let label = m.summary.split('・').next().filter(|l| !l.is_empty()).map(String::from).unwrap_or_else(|| id.clone());
-                json!({ "id": id, "label": label, "vision": true })
+                json!({ "id": id, "label": label, "vision": true, "new": false })
             })
             .collect();
+        // what the API lists beyond the catalog (nothing is ever removed)
+        let stored = self.claude_stored();
+        let now = agy::now();
+        if let Some(st) = &stored {
+            for m in st.models.iter().filter(|m| !self.catalog.cloud.models.iter().any(|c| c.id == m.id) && !self.catalog.cloud.aliases.contains_key(&m.id)) {
+                models.push(json!({ "id": m.id, "label": m.label, "vision": true, "new": st.new.contains(&m.id) }));
+            }
+        }
+        let due = api && stored.as_ref().is_none_or(|s| s.stale(now, AGY_MAX_AGE)) && now.saturating_sub(self.claude_tried.load(std::sync::atomic::Ordering::SeqCst)) >= AGY_RETRY;
+        if due && self.claude_file.is_some() && !self.claude_busy.load(std::sync::atomic::Ordering::SeqCst) {
+            let me = self.clone();
+            tokio::spawn(async move {
+                let _ = me.refresh_claude().await;
+            });
+        }
         json!({
             "state": state,
             "via": via,
@@ -400,6 +469,9 @@ impl Engines {
             // the subscription (Claude Code) cannot send images here; only the API route with a key can
             "vision": via == "api" && api,
             "models": models,
+            "listed": stored.is_some(),
+            "checked": stored.as_ref().filter(|s| s.checked > 0).map(|s| s.checked),
+            "can_list": api,
         })
     }
 
@@ -484,7 +556,7 @@ impl Engines {
             let model = match c.get("model").filter(|v| !v.is_null()) {
                 Some(v) => {
                     let m = str_of(v, "Claude 模型")?;
-                    if self.catalog.cloud_model(&m).is_none() {
+                    if self.catalog.cloud_model(&m).is_none() && !self.claude_stored().is_some_and(|s| s.models.iter().any(|x| x.id == m)) {
                         return Err(format!("模型目錄裡沒有 Claude 模型「{m}」"));
                     }
                     Some(m)
@@ -638,10 +710,13 @@ pub fn router<S: Clone + Send + Sync + 'static>(e: Engines) -> axum::Router<S> {
             post(move || {
                 let e = r.clone();
                 async move {
-                    let err = e.refresh_google().await.err();
+                    let (g, c) = tokio::join!(e.refresh_google(), e.refresh_claude());
                     let mut body = e.state().await;
-                    if let Some(m) = err {
+                    if let Err(m) = g {
                         body["google"]["error"] = Value::from(m);
+                    }
+                    if let Err(m) = c {
+                        body["claude"]["error"] = Value::from(m);
                     }
                     Json(body)
                 }
