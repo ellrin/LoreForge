@@ -40,9 +40,16 @@ Monorepo of the author's local-first apps. Each top-level folder is its own Carg
   registry of symbols, equations, abbreviations and labels): use the registered macros,
   refer with `\ref{…}` (never a typed "Table 1"), keep `notation.tex` intact, run its
   checks on the generated text, and say in the hand-off how the change was checked.
-- Long-running work (large test runs, real-file comparisons, several build/test rounds) goes to a
-  background subagent on the same model, so the main conversation stays free for discussion; the
-  subagent gets a complete brief, never edits files the main thread is editing, and anything that
-  needs the author's decision comes back to the author instead of being decided by the subagent.
+- Large work (several modules, more than about an hour, or more than one app or crate): ask the author at planning
+  time whether to run it as "the main model plans and checks, small agents build": the main model checks the code,
+  writes the plan, cuts it into packages that own their files, freezes the shared types and signatures as committed
+  stubs, then launches one subagent per package together (Sonnet by default, each in its own git worktree, a complete
+  brief: goal, files owned, frozen inputs, numbered steps each ending in named unit tests, what not to touch, report
+  instead of deciding). Subagents run only their own unit tests, use synthetic data and do not commit; the main model
+  collects, tests and commits each package, has a reviewer subagent read and wire them, and does the whole-workspace
+  tests, the walk through the real feature and any real-model run once at the end. Screens are the main model's own
+  work, discussed with the author directly from pictures. Anything that needs the author's decision comes back to
+  the author. Other long-running work (large test runs, real-file comparisons) still goes to a background subagent so
+  the main conversation stays free.
 - Example/test users: `ellrin`, then `daidai`.
 - Replies to the author in Traditional Chinese (繁體中文).
