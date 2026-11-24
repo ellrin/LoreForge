@@ -300,6 +300,35 @@ pub fn symbol_notes(symbols: &[super::source::SymbolNote], used: &BTreeSet<Strin
     out
 }
 
+/// The speaker notes with the slide's symbol lines ([`symbol_notes`]) as one more numbered
+/// item at the end, one sentence a symbol (`where` dropped). Empty notes get an opening
+/// sentence first, so the notes keep their shape (`plan::notes_shape_ok`).
+pub fn notes_with_symbols(notes: &str, lines: &[String], lang: &str) -> String {
+    if lines.is_empty() {
+        return notes.to_string();
+    }
+    let en = lang == "en";
+    let item: Vec<String> = lines
+        .iter()
+        .map(|l| {
+            let l = l.trim();
+            let l = if en { l.strip_prefix("where ").unwrap_or(l) } else { l };
+            let ends = l.ends_with(['.', '。', '!', '?', '！', '？']);
+            if ends { l.to_string() } else if en { format!("{l}.") } else { format!("{l}。") }
+        })
+        .collect();
+    let item = item.join(if en { " " } else { "" });
+    let num = regex::Regex::new(r"^\(?(\d{1,2})[.)、．]").unwrap();
+    let last = notes.lines().filter_map(|l| num.captures(l.trim()).and_then(|c| c[1].parse::<u32>().ok())).max().unwrap_or(0);
+    let notes = notes.trim_end();
+    if notes.trim().is_empty() {
+        let open = if en { "The symbols of the equation on this slide." } else { "這頁式子用到的符號。" };
+        format!("{open}\n1. {item}")
+    } else {
+        format!("{notes}\n{}. {item}", last + 1)
+    }
+}
+
 /// Registry macros (`\vx` → `\mathbf{x}`) expanded so pandoc and KaTeX read the equation;
 /// the registry still recognises the expanded form (lore-notation matches LaTeX and macros).
 pub fn expand_macros(latex: &str, macros: &BTreeMap<String, String>) -> String {
@@ -828,16 +857,10 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                     paras.push(p);
                 }
                 // the symbols the slide's equations use, once each, from the paper's
-                // registry, as notes under them (§7.1: 符號說明)
-                let note_tag = cx.tag(&["caption", "body"]);
-                let em = cx.st.pack.emphasis.contains_key("note").then_some("note");
-                // (the first three: the slide is not a glossary)
-                for line in symbol_notes(&m.symbols, &used_keys, inp.lang).into_iter().take(3) {
-                    let runs = cx.rich(&line, &note_tag, em);
-                    let mut p = cx.para(runs, &note_tag);
-                    p.align = "ctr".into();
-                    paras.push(p);
-                }
+                // registry (§7.1: 符號說明): never on the slide (a line that only reads the
+                // symbols again, the author after a rehearsal), the last item of the notes
+                // (the first three: the notes are no glossary either)
+                let sym_lines: Vec<String> = symbol_notes(&m.symbols, &used_keys, inp.lang).into_iter().take(3).collect();
                 let text_body = (!paras.is_empty()).then(|| body(paras, "t"));
 
                 // ── the picture or table and where the text goes ──
@@ -1069,6 +1092,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                         extra.push(o);
                     }
                 }
+                slide.notes = notes_with_symbols(&slide.notes, &sym_lines, inp.lang);
             }
         }
         // ids after the base's objects
@@ -1231,5 +1255,28 @@ fn table_obj(cx: &mut Ctx, f: &Frame, grid: &[Vec<String>], kv: bool, key: Optio
         slot: Some("table-1".into()),
         kind: Kind::Table(TableObj { cols, rows, style_id: Some(TABLE_GRID.into()), first_row: !kv, band_row: false }),
         src: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::todeck::plan::notes_shape_ok;
+
+    #[test]
+    fn the_symbol_lines_are_the_last_item_of_the_notes() {
+        let en = vec!["where $x$ denotes input image".to_string(), "$k$: a constant".to_string()];
+        let notes = "This slide gives the loss.\n1. The first term compares images.\n2. The second term keeps the mask small.";
+        let out = notes_with_symbols(notes, &en, "en");
+        assert_eq!(out, format!("{notes}\n3. $x$ denotes input image. $k$: a constant."));
+        assert!(notes_shape_ok(&out));
+        // empty notes: an opening sentence, then the item, still the notes' shape
+        let out = notes_with_symbols("", &en, "en");
+        assert!(out.ends_with("\n1. $x$ denotes input image. $k$: a constant.") && notes_shape_ok(&out), "{out}");
+        let zh = vec!["$x$ 為輸入影像".to_string()];
+        let out = notes_with_symbols("", &zh, "zh");
+        assert!(out.ends_with("\n1. $x$ 為輸入影像。") && notes_shape_ok(&out), "{out}");
+        // no confirmed symbol: the notes as they were
+        assert_eq!(notes_with_symbols(notes, &[], "en"), notes);
     }
 }

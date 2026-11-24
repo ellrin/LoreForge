@@ -7,7 +7,7 @@
 //! (a paragraph that is only math as `\[…\]`). `lines` maps every line back to
 //! its slide and object so a finding can jump there.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use lore_canvas::{Deck, Kind, Object, Para};
 use lore_notation::{CheckOptions, Document, Notation, Origin, check_document, extract_document};
@@ -103,6 +103,93 @@ fn document(files: &[(String, String)]) -> Document {
     Document::from_files(&all)
 }
 
+/// (slide file, symbol key) for every symbol a slide's speaker notes define ("$x$ denotes …"),
+/// read as the same slide files with the notes as text, one paragraph a line.
+pub fn notes_definitions(deck: &Deck, notation: &Notation) -> BTreeSet<(String, String)> {
+    let files: Vec<(String, String)> = deck
+        .slides
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            // a % would hide the rest of the line from the LaTeX reader
+            let text: Vec<String> = s.notes.lines().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.replace('%', "\\%")).collect();
+            (slide_file(i + 1), text.join("\n\n"))
+        })
+        .collect();
+    let mut out = BTreeSet::new();
+    if files.iter().all(|(_, t)| t.is_empty()) {
+        return out;
+    }
+    let opt = CheckOptions { caption_defines: true, ..Default::default() };
+    let scan = lore_notation::scan_document(document(&files), notation, &opt);
+    let syms = lore_notation::symbols::analyze(&scan, &lore_notation::symbols::SymbolOptions { caption_defines: true });
+    for info in syms.table.values() {
+        for d in &info.defs {
+            let file = scan.loc(d.off, "body").file;
+            out.insert((file.trim_end_matches(".tex").to_string(), info.key.clone()));
+        }
+    }
+    out
+}
+
+/// Slide number of a slide file (`slide-07.tex` → 7).
+fn slide_no(file: &str) -> Option<usize> {
+    file.trim_end_matches(".tex").strip_prefix("slide-")?.parse().ok()
+}
+
+/// A definition in a slide's speaker notes counts as one on that slide, the way a definition
+/// on a slide counts today: a use on that slide or a later one is defined, a use on an earlier
+/// slide is used before its definition. So in `undefined_symbol` / `used_before_definition`
+/// issues the uses from the first such slide on are no locations; an issue left with none is
+/// dropped (only when its list was not cut at `max_locations`); an `undefined_symbol` left with
+/// earlier uses becomes `used_before_definition`; the symbol reads defined.
+fn apply_notes_definitions(report: &mut lore_notation::Report, defined: &BTreeSet<(String, String)>, max_locations: usize) {
+    // key → (first slide whose notes define it, that slide's file)
+    let mut first: BTreeMap<String, (usize, String)> = BTreeMap::new();
+    for (file, key) in defined {
+        if let Some(n) = slide_no(file) {
+            let e = first.entry(key.clone()).or_insert((n, file.clone()));
+            if n < e.0 {
+                *e = (n, file.clone());
+            }
+        }
+    }
+    if first.is_empty() {
+        return;
+    }
+    let mut now_defined: BTreeSet<String> = BTreeSet::new();
+    report.issues.retain_mut(|i| {
+        if !matches!(i.code.as_str(), "undefined_symbol" | "used_before_definition") || !i.subjects.is_empty() {
+            return true;
+        }
+        let Some(key) = i.subject.clone() else { return true };
+        let Some((at, at_file)) = first.get(&key).cloned() else { return true };
+        let full = i.locations.len() < max_locations;
+        let before = i.locations.len();
+        i.locations.retain(|l| slide_no(&l.file).is_none_or(|n| n < at));
+        if i.locations.len() == before {
+            return true;
+        }
+        now_defined.insert(key.clone());
+        if i.locations.is_empty() && full {
+            return false;
+        }
+        if i.code == "undefined_symbol" && !i.locations.is_empty() {
+            let l = &i.locations[0];
+            i.code = "used_before_definition".into();
+            i.message = format!("符號 ${key}$ 先用後定義：第一次用在 {}:{}，到 {at_file}.tex 的講者備註才定義 — 把定義移到第一次使用的地方", l.file, l.line);
+        }
+        true
+    });
+    for s in report.symbols.iter_mut().filter(|s| now_defined.contains(&s.key)) {
+        s.defined = true;
+    }
+    report.summary.clear();
+    for i in &report.issues {
+        *report.summary.entry(i.code.clone()).or_insert(0) += 1;
+    }
+}
+
 pub fn load(dir: &std::path::Path, global: Option<&std::path::Path>) -> (Notation, Notation) {
     let doc = Notation::load(&dir.join("notation.json")).unwrap_or_default();
     let glob = global.and_then(|g| Notation::load(g).ok()).unwrap_or_default();
@@ -114,7 +201,9 @@ pub fn load(dir: &std::path::Path, global: Option<&std::path::Path>) -> (Notatio
 pub fn view(deck: &Deck, latex: &BTreeMap<String, String>, global: &Notation, doc: &Notation) -> Value {
     let (files, lines) = deck_document(deck, latex);
     let eff = Notation::effective(global, doc);
-    let report = check_document(document(&files), &eff, &CheckOptions { caption_defines: true, ..Default::default() });
+    let opt = CheckOptions { caption_defines: true, ..Default::default() };
+    let mut report = check_document(document(&files), &eff, &opt);
+    apply_notes_definitions(&mut report, &notes_definitions(deck, &eff), opt.max_locations);
     let mut n = serde_json::to_value(&eff).unwrap_or(json!({}));
     let merged = Notation::merged(global, doc);
     n["entries"] = Value::Array(
@@ -191,6 +280,48 @@ mod tests {
         assert_eq!(files[0].1, "The loss $\\mathcal{L}$ is the mean squared error (MSE).\n\\[\\mathcal{L} = \\frac{1}{n}\\sum_i (y_i - \\hat{y}_i)^2\\]\n");
         assert_eq!(lines["slide-01"], [("s1".to_string(), 2), ("s1".to_string(), 2)]);
         assert!(files[1].1.is_empty());
+    }
+
+    fn line_deck(slides: &[(&str, &str)]) -> Deck {
+        let slides: Vec<Value> = slides
+            .iter()
+            .enumerate()
+            .map(|(i, (math, notes))| json!({ "uid": format!("s{}", i + 1), "layout": null, "notes": notes, "objects": [
+                { "id": 2, "name": "body", "frame": { "x": 0, "y": 0, "w": 100, "h": 100 }, "type": "text", "geom": { "prst": "rect" }, "fill": { "kind": "none" },
+                  "text": { "paras": [ { "runs": [ { "kind": "math", "text": "", "latex": math, "look": { "font": "Cambria Math", "size": 14.0, "color": "000000" } } ] } ] } } ] }))
+            .collect();
+        serde_json::from_value(json!({ "format": 1, "size": { "w": 9144000, "h": 5143500 }, "style": null, "next_uid": 9, "slides": slides })).unwrap()
+    }
+
+    fn undefined(deck: &Deck, key: &str) -> Vec<String> {
+        let v = view(deck, &BTreeMap::new(), &Notation::default(), &Notation::default());
+        let issues = v["report"]["issues"].as_array().cloned().unwrap_or_default();
+        issues.iter().filter(|i| i["code"] == "undefined_symbol" && i["subject"] == key).flat_map(|i| i["locations"].as_array().cloned().unwrap_or_default()).map(|l| l["file"].as_str().unwrap_or("").to_string()).collect()
+    }
+
+    #[test]
+    fn a_symbol_the_notes_define_counts_like_one_on_the_slide() {
+        // defined nowhere: undefined
+        assert_eq!(undefined(&line_deck(&[("\\boldsymbol{u} + \\boldsymbol{q}", "")]), "\\boldsymbol{u}"), ["slide-01.tex"]);
+        // defined in the slide's notes: defined, the issue is gone and the symbol reads defined
+        let notes = "The input of the model.\n1. $\\boldsymbol{u}$ denotes the input image.";
+        let one = line_deck(&[("\\boldsymbol{u} + \\boldsymbol{q}", notes)]);
+        assert!(undefined(&one, "\\boldsymbol{u}").is_empty());
+        let v = view(&one, &BTreeMap::new(), &Notation::default(), &Notation::default());
+        assert!(v["report"]["symbols"].as_array().unwrap().iter().any(|s| s["key"] == "\\boldsymbol{u}" && s["defined"] == true), "{}", v["report"]["symbols"]);
+        assert_eq!(v["report"]["summary"]["undefined_symbol"].as_u64(), v["report"]["issues"].as_array().map(|a| a.iter().filter(|i| i["code"] == "undefined_symbol").count() as u64).filter(|n| *n > 0));
+        // a symbol the notes do not define stays undefined
+        assert_eq!(undefined(&one, "\\boldsymbol{q}"), ["slide-01.tex"]);
+        // like a definition on a slide: a later slide's use is defined, an earlier one is used
+        // before the definition (not undefined)
+        let later = line_deck(&[("\\boldsymbol{u} + \\boldsymbol{q}", notes), ("\\boldsymbol{u} - 1", "")]);
+        assert!(undefined(&later, "\\boldsymbol{u}").is_empty());
+        let earlier = line_deck(&[("\\boldsymbol{u} - 1", ""), ("\\boldsymbol{u} + \\boldsymbol{q}", notes)]);
+        assert!(undefined(&earlier, "\\boldsymbol{u}").is_empty());
+        let v = view(&earlier, &BTreeMap::new(), &Notation::default(), &Notation::default());
+        let early: Vec<&Value> = v["report"]["issues"].as_array().unwrap().iter().filter(|i| i["code"] == "used_before_definition" && i["subject"] == "\\boldsymbol{u}").collect();
+        assert_eq!(early.len(), 1, "{}", v["report"]["issues"]);
+        assert_eq!(early[0]["locations"].as_array().unwrap().iter().map(|l| l["file"].as_str().unwrap()).collect::<Vec<_>>(), ["slide-01.tex"]);
     }
 
     #[test]
