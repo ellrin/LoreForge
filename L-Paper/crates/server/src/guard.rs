@@ -181,7 +181,7 @@ mod tests {
         shared("[punctuation]\nspellings = [\"softmax\"]\nhyphen_whitelist = [\"X-ray\"]\n");
         let g = load(ws.path(), None, &[]);
         assert!(g.active() && !g.rule.marks_on());
-        assert_eq!(g.fix("The soft-max: an X-ray model, self-supervised."), "The softmax: an X-ray model, self supervised.");
+        assert_eq!(g.fix("The soft-max: an X-ray model, data-driven and self-supervised."), "The softmax: an X-ray model, data driven and self-supervised.", "a prefix compound is never opened by code");
         assert!(paragraph_ranges(ws.path()).is_empty());
         // the workspace adds its own and brings the marks
         std::fs::write(ws.path().join("style/checks.toml"), "[punctuation]\nallowed = [\".\", \",\"]\nhyphen_whitelist = [\"COVID-19\"]\nspellings = [\"cross entropy\"]\n").unwrap();

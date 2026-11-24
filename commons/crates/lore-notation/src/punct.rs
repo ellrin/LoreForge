@@ -333,6 +333,14 @@ fn is_word_char(c: u8) -> bool {
     c.is_ascii_alphanumeric()
 }
 
+/// Prefixes that cannot stand alone: a compound that starts with one is still a finding (the
+/// author wants few compounds, a model rewrites it), but it is never opened mechanically:
+/// "pre trained" and "non linear" are not English.
+const PREFIXES: &[&str] = &[
+    "anti", "auto", "bi", "co", "counter", "de", "hyper", "hypo", "inter", "intra", "macro", "meta", "micro", "mid", "mini", "multi", "non",
+    "over", "post", "pre", "pseudo", "quasi", "re", "self", "semi", "sub", "super", "trans", "tri", "ultra", "un", "under", "uni",
+];
+
 /// Is the hyphenated token one the document or the whitelist names?
 fn hyphen_ok(token: &str, rule: &Rule, exempt: &[String]) -> bool {
     // a name, not a compound: a digit or a capital inside a part (ResNet-50, U-Net, BERT-base,
@@ -659,6 +667,7 @@ pub fn fix(text: &str, rule: &Rule, exempt: &[String]) -> String {
             }
             Kind::Range => " to ".into(),
             Kind::Quote => String::new(),
+            Kind::Hyphen if found.split_once('-').is_some_and(|(first, rest)| !rest.contains('-') && PREFIXES.contains(&first.to_lowercase().as_str())) => continue,
             Kind::Hyphen => found.replace('-', " "),
             _ => continue,
         };
@@ -840,6 +849,19 @@ Chest X-ray, COVID-19 and Grad-CAM maps were used \\pending{P1}{site-B AUC}\\pen
         let note = format!("We trained it [Author to confirm: {}].", vec!["word"; 40].join(" "));
         assert!(kinds(&note, &[]).is_empty(), "its words do not count");
         assert_eq!(kinds("The encoder (which we trained for a long time on many images) works.", &[]), [Kind::Aside]);
+    }
+
+    #[test]
+    fn a_bound_prefix_is_never_opened_by_the_mechanical_fix() {
+        let r = Rule { hyphen_whitelist: vec![], ..rule() };
+        let t = "A pre-trained, non-linear, semi-supervised, multi-scale model with self-attention and co-occurrence counts.";
+        // found (few compounds: a model rewrites them, or they are a warning), never opened by code
+        assert_eq!(kinds(t, &[]).iter().filter(|k| **k == Kind::Hyphen).count(), 6);
+        assert_eq!(fix(t, &r, &[]), t);
+        // an ordinary compound is still opened, and a preferred spelling still wins over the prefix rule
+        assert_eq!(fix("An end-to-end, data-driven model.", &r, &[]), "An end to end, data driven model.");
+        let sp = Rule { spellings: vec!["cross entropy".into()], ..r.clone() };
+        assert_eq!(fix("The cross-entropy loss.", &sp, &[]), "The cross entropy loss.");
     }
 
     #[test]
