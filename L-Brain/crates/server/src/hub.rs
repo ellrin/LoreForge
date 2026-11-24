@@ -131,6 +131,7 @@ pub fn routes(shared: &Shared) -> Router<Shared> {
         .route("/api/hub/proposals", get(proposals).post(proposal_add))
         .route("/api/hub/proposals/{id}", get(proposal_view))
         .route("/api/hub/proposals/{id}/apply", post(proposal_apply))
+        .route("/api/hub/proposals/{id}/picture", post(proposal_picture).layer(big()))
         .route("/api/hub/proposals/{id}/undo", post(proposal_undo))
         .route("/api/hub/proposals/{id}/dismiss", post(proposal_dismiss))
         .route("/api/hub/import", post(import).layer(big()))
@@ -695,7 +696,83 @@ async fn proposal_apply(State(s): State<Shared>, Path(id): Path<String>, body: a
     let mut h = hub(&s)?;
     let chosen = given.chosen;
     let p = h.apply_proposal(&id, chosen.as_deref())?;
+    place_picture(&mut h, &s.hub_dirs, &p);
     ok(json!({ "proposal": p }))
+}
+
+// A proposal may come with one picture (L-Echo's split of a figure): it waits beside the
+// proposal and, when the figure's reference is approved, becomes that reference's picture.
+
+#[derive(Deserialize)]
+struct PictureBody {
+    /// The file name the proposal's figure item carries in `fields.image`.
+    name: String,
+    /// `data:image/png;base64,…` (PNG or JPEG, at most 10 MB).
+    data_url: String,
+}
+
+fn picture_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else {
+        None
+    }
+}
+
+fn waiting_picture(hub_dir: &FsPath, id: &str) -> Option<(PathBuf, String, &'static str)> {
+    let plain = !id.is_empty() && !id.contains(['/', '\\', ':']) && !id.starts_with('.');
+    if !plain {
+        return None;
+    }
+    let dir = hub_dir.join("proposals");
+    let name = std::fs::read_to_string(dir.join(format!("{id}.pic.txt"))).ok()?;
+    ["png", "jpg"].into_iter().find_map(|ext| {
+        let f = dir.join(format!("{id}.pic.{ext}"));
+        f.is_file().then(|| (f, name.trim().to_string(), ext))
+    })
+}
+
+async fn proposal_picture(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<PictureBody>) -> R {
+    use base64::Engine;
+    let h = hub(&s)?;
+    h.proposals.get(&id)?;
+    let data = b.data_url.split_once("base64,").map(|x| x.1).unwrap_or(&b.data_url);
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| HubError::new(StatusCode::BAD_REQUEST, "這張圖讀不了"))?;
+    let ext = picture_ext(&bytes).ok_or_else(|| HubError::new(StatusCode::BAD_REQUEST, "只收 PNG 或 JPEG"))?;
+    if bytes.len() > 10 * 1024 * 1024 {
+        return Err(HubError::new(StatusCode::PAYLOAD_TOO_LARGE, "圖片超過 10 MB"));
+    }
+    let dir = h.store.hub().join("proposals");
+    std::fs::create_dir_all(&dir).map_err(KnowError::from)?;
+    std::fs::write(dir.join(format!("{id}.pic.{ext}")), bytes).map_err(KnowError::from)?;
+    std::fs::write(dir.join(format!("{id}.pic.txt")), b.name.trim()).map_err(KnowError::from)?;
+    ok(json!({ "kept": true }))
+}
+
+/// After an apply: the waiting picture goes into the folder of the approved reference that names
+/// it (`ref.<ext>`, what the references' reader shows), and the index is rebuilt. Silent when
+/// there is none, or when the reference was not approved (the picture then keeps waiting).
+fn place_picture(h: &mut lore_know::hub::Hub, app_dirs: &BTreeMap<String, PathBuf>, p: &lore_know::Proposal) {
+    let Some((file, name, ext)) = waiting_picture(h.store.hub(), &p.id) else { return };
+    for c in p.changes.iter().filter(|c| c.op == "add" && c.result == "applied") {
+        let Some(it) = c.item.as_ref().filter(|i| i.format == format::FIGURE && i.field("image") == name) else { continue };
+        // the change keeps the temporary id: the stored item is found by its title in its category
+        let Ok(items) = h.store.list(&it.category) else { continue };
+        let Some(stored) = items.iter().find(|x| x.title == it.title && !x.entity) else { continue };
+        let (Some(cat), Some((_, local))) = (h.store.registry().get(&stored.category).cloned(), split_id(&stored.id)) else { continue };
+        if cat.native.kind != "dir" || local.contains("..") {
+            continue;
+        }
+        let Some(folder) = app_dirs.get(&cat.native.app_dir).map(|d| d.join(&cat.native.path).join(local)) else { continue };
+        if std::fs::create_dir_all(&folder).is_ok() && std::fs::copy(&file, folder.join(format!("ref.{ext}"))).is_ok() {
+            let _ = std::fs::remove_file(&file);
+            let _ = std::fs::remove_file(file.with_file_name(format!("{}.pic.txt", p.id)));
+            let _ = h.reindex();
+        }
+        return;
+    }
 }
 
 async fn proposal_undo(State(s): State<Shared>, Path(id): Path<String>) -> R {

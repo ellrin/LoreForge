@@ -348,9 +348,15 @@ const Hub = (() => {
     return j;
   }
   /** A draft from L-Echo in the right pane: what it would change, and 提出 to put it in 待同意. */
-  function draftPane(title, body, proposal, message) {
+  function draftPane(title, body, proposal, message, picture) {
     const send = el("button", { type: "button", class: "pri", onclick: async () => {
-      try { send.disabled = true; await echo("/api/actions/know/propose", { proposal }); S.host.toast?.("已放進待同意"); close(); await loadStats(); }
+      try {
+        send.disabled = true;
+        const r = await echo("/api/actions/know/propose", { proposal });
+        // the picture waits beside the proposal and becomes the reference's picture once approved
+        if (picture?.data_url && r.id) await api("POST", `/api/hub/proposals/${enc(r.id)}/picture`, { name: picture.name, data_url: picture.data_url });
+        S.host.toast?.("已放進待同意"); close(); await loadStats();
+      }
       catch (e) { send.disabled = false; S.host.fail?.(e); } } }, "提出到待同意");
     S.sel = "draft";
     detailEl = el("aside", { class: "h-detail" },
@@ -385,7 +391,7 @@ const Hub = (() => {
     draftPane(d.proposal?.title ?? "這張圖", [
       d.image?.data_url ? el("span", { class: "h-paper stage" }, el("img", { src: d.image.data_url, alt: "" })) : null,
       el("div", { class: "h-foot" }, `新的流程圖 ${sm.new_figure ? 1 : 0} · 新的模塊 ${sm.new_modules ?? 0} · 新的元件 ${sm.new_components ?? 0} · 連到已有的 ${sm.linked ?? 0}`),
-      (d.proposal?.changes ?? []).map((c) => el("div", { class: "h-ch", style: "grid-template-columns:44px minmax(0,1fr) auto" }, el("span", { class: `op ${c.op}` }, OP[c.op] ?? c.op), el("span", { class: "t" }, c.item?.title ?? ""), el("span", { class: "d" }, LV[c.item?.level] ?? "")))], d.proposal, d.message);
+      (d.proposal?.changes ?? []).map((c) => el("div", { class: "h-ch", style: "grid-template-columns:44px minmax(0,1fr) auto" }, el("span", { class: `op ${c.op}` }, OP[c.op] ?? c.op), el("span", { class: "t" }, c.item?.title ?? ""), el("span", { class: "d" }, LV[c.item?.level] ?? "")))], d.proposal, d.message, d.image);
   }
 
   // ── 待同意: what an AI or a tool proposes; nothing is written until the author says so ──

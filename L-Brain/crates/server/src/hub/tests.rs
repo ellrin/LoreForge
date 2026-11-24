@@ -553,3 +553,31 @@ fn errors_are_one_line_without_paths() {
     assert_eq!(one_line("讀不了 /Users/x/private/a.csv\n再試"), "讀不了 a.csv 再試");
     assert_eq!(one_line("找不到：t.own:k1"), "找不到：t.own:k1");
 }
+
+/// L-Echo's split of a figure: the picture waits beside the proposal and becomes the picture of
+/// the reference once that reference is approved; a proposal applied without it leaves it waiting.
+#[tokio::test]
+async fn a_proposals_picture_becomes_the_approved_references_picture() {
+    use base64::Engine;
+    let e = setup();
+    let png: Vec<u8> = [&[0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A][..], b"synthetic"].concat();
+    let data_url = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&png));
+    let fig = json!({ "id": "new:1", "category": "t.refs", "format": "figure", "title": "Gated net", "level": "figure", "entity": false, "fields": { "what": "reference", "description": "A net with a gate.", "image": "le-u1.png" } });
+    let (s, v) = call(&e.app, "POST", "/api/hub/proposals", Some(json!({ "by": "le", "title": "one figure", "changes": [{ "op": "add", "note": "new", "item": fig }] }))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let id = v["proposal"]["id"].as_str().unwrap().to_string();
+    // not a picture: refused
+    let (s, _) = call(&e.app, "POST", &format!("/api/hub/proposals/{id}/picture"), Some(json!({ "name": "le-u1.png", "data_url": "data:image/png;base64,QUJD" }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, v) = call(&e.app, "POST", &format!("/api/hub/proposals/{id}/picture"), Some(json!({ "name": "le-u1.png", "data_url": data_url }))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, v) = call(&e.app, "POST", &format!("/api/hub/proposals/{id}/apply"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (_, v) = call(&e.app, "GET", "/api/hub/items?category=t.refs&q=Gated", None).await;
+    let row = &v["items"][0];
+    assert_eq!(row["title"], "Gated net", "{v}");
+    assert_eq!(row["fields"]["image"], "ref.png", "the reference's reader names the placed picture: {row}");
+    let (s, h, b) = raw(&e.app, "GET", row["thumb"].as_str().unwrap(), None).await;
+    assert_eq!((s, h[header::CONTENT_TYPE].to_str().unwrap()), (StatusCode::OK, "image/png"));
+    assert_eq!(b, png);
+}
