@@ -16,6 +16,7 @@ lore-shell.workspace = true
 lore-engines.workspace = true
 lore-fonts.workspace = true
 kb-core.workspace = true
+lore-know.workspace = true
 lore-store.workspace = true
 lore-plot.workspace = true
 lore-flow.workspace = true

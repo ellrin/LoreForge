@@ -64,10 +64,12 @@ pub struct Sources<'a> {
 
 pub fn own<'a>(phrases: &'a [Phrase], expressions: &'a [Expression], exemplars: &'a [Exemplar], guide: &[Pattern]) -> Sources<'a> {
     let guided = |texts: &[&str], marks: &[&str]| marks.iter().any(|m| is_guide_mark(m)) || texts.iter().any(|t| is_guide_text(guide, t));
+    // outside rows (aligned in by the hub) are never the author's own voice
+    let (phrases, expressions): (Vec<&Phrase>, Vec<&Expression>) = (phrases.iter().filter(|p| !crate::aligned::is_outside_id(&p.id)).collect(), expressions.iter().filter(|e| !crate::aligned::is_outside_id(&e.id)).collect());
     Sources {
-        phrases: phrases.iter().filter(|p| !guided(&[&p.template, &p.example], &p.tags.iter().map(String::as_str).collect::<Vec<_>>())).collect(),
-        expressions: expressions.iter().filter(|e| !guided(&[&e.text, &e.example], &e.tags.iter().map(String::as_str).collect::<Vec<_>>())).collect(),
-        exemplars: exemplars.iter().filter(|e| !guided(&[&e.text], &[&e.source])).collect(),
+        phrases: phrases.iter().copied().filter(|p| !guided(&[&p.template, &p.example], &p.tags.iter().map(String::as_str).collect::<Vec<_>>())).collect(),
+        expressions: expressions.iter().copied().filter(|e| !guided(&[&e.text, &e.example], &e.tags.iter().map(String::as_str).collect::<Vec<_>>())).collect(),
+        exemplars: exemplars.iter().filter(|e| !crate::aligned::is_outside_id(&e.id) && !guided(&[&e.text], &[&e.source])).collect(),
     }
 }
 

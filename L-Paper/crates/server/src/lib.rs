@@ -33,6 +33,7 @@ pub mod remove;
 pub mod llm;
 pub mod preview;
 pub mod proc;
+mod know; // 知識中樞: what outside applications aligned to the writing categories, merged at load
 mod kb; // kbcards.js: 知識卡 (L-Brain cards, read-only)
 mod reader;
 pub mod models;
@@ -293,11 +294,23 @@ fn locate(paths: &Paths) -> (PathBuf, Option<PathBuf>, bool) {
 
 fn load(paths: &Paths) -> Loaded {
     let (path, workspace, demo) = locate(paths);
+    let hub = lore_know::reader::hub_dir(&loreforge_home());
+    load_from(path, workspace, demo, hub.as_deref(), lore_know::reader::aligned)
+}
+
+/// Load the profile folder `path` for use. THE merge point of the knowledge hub: what outside
+/// applications aligned to the writing categories is appended after the author's own rows (know.rs);
+/// no hub, an empty hub or the demo workspace leave the profile exactly as `Profile::load` made it.
+/// Every load and reload (startup, after a table save, after 加入句型) comes through here.
+fn load_from(path: PathBuf, workspace: Option<PathBuf>, demo: bool, hub: Option<&Path>, aligned: know::AlignedReader) -> Loaded {
     match Profile::load(&path) {
         Ok((mut profile, mut issues)) => {
             // the style checks' word lists (style/checks.toml)
             if let Some(ws) = &workspace {
                 issues.extend(profile.load_style_checks(ws));
+            }
+            if !demo {
+                know::merge_hub(&mut profile, hub, aligned);
             }
             Loaded { profile: Some(profile), issues, error: None, path, workspace, demo }
         }

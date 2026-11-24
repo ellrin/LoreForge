@@ -135,6 +135,7 @@ mod tests {
             authors: vec![],
             affiliations: vec![],
             style_checks: Default::default(),
+            outside_exemplars: vec![],
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },
             phrases: vec![Phrase {
                 id: "P017".into(),

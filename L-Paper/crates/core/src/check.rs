@@ -148,7 +148,8 @@ fn check_paragraph(profile: &Profile, index: usize, para: &str, section: Option<
             "banned_words" => {
                 for (i, s) in sents.iter().enumerate() {
                     let plain = format!(" {} ", strip_latex(s).to_lowercase());
-                    for v in &profile.vocabulary {
+                    // the author's words only: what the checks enforce is his, not an outside application's
+                    for v in profile.vocabulary.iter().filter(|v| v.source.is_empty()) {
                         let term = v.avoid.to_lowercase();
                         if contains_word(&plain, &term) {
                             let hint = if v.prefer.is_empty() {
@@ -234,10 +235,11 @@ mod tests {
             authors: vec![],
             affiliations: vec![],
             style_checks: Default::default(),
+            outside_exemplars: vec![],
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },
             phrases: vec![],
             expressions: vec![],
-            vocabulary: vec![VocabEntry { avoid: "utilize".into(), prefer: "use".into(), note: String::new() }],
+            vocabulary: vec![VocabEntry { avoid: "utilize".into(), prefer: "use".into(), note: String::new(), source: String::new() }],
             rules: vec![
                 rule("R1", "sentence_count", "2-4", "warning"),
                 rule("R2", "max_words", "8", "warning"),

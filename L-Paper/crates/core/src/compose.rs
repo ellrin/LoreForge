@@ -290,7 +290,8 @@ pub fn check_draft(profile: &Profile, req: &ComposeRequest, points: &[Point], re
     }
     for s in &draft.sentences {
         let plain = format!(" {} ", strip_latex(&s.text).to_lowercase());
-        for v in &profile.vocabulary {
+        // the author's words only: an outside word is offered to the model, never enforced
+        for v in profile.vocabulary.iter().filter(|v| v.source.is_empty()) {
             if crate::check::contains_word(&plain, &v.avoid.to_lowercase()) {
                 problems.push(format!("avoided word used: {}", v.avoid));
             }
@@ -320,6 +321,7 @@ mod tests {
             authors: vec![],
             affiliations: vec![],
             style_checks: Default::default(),
+            outside_exemplars: vec![],
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },
             phrases: vec![
                 ph("P1", "Result", "finding", "Compared with {baseline}, {method} improves {metric} by {value}."),
@@ -327,7 +329,7 @@ mod tests {
                 ph("T1", "Any", "transition", "In contrast, {x}."),
             ],
             expressions: vec![],
-            vocabulary: vec![VocabEntry { avoid: "utilize".into(), prefer: "use".into(), note: String::new() }],
+            vocabulary: vec![VocabEntry { avoid: "utilize".into(), prefer: "use".into(), note: String::new(), source: String::new() }],
             rules: vec![],
         }
     }

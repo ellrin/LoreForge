@@ -52,6 +52,12 @@ pub fn write_table(dir: &Path, name: &str, t: &Table) -> Result<(), String> {
     if t.headers.is_empty() {
         return Err("table has no columns".into());
     }
+    // an outside row (aligned in by the hub) lives in the hub, never in the author's CSV files
+    if let Some(i) = t.headers.iter().position(|h| h == "id") {
+        if t.rows.iter().any(|r| r.get(i).is_some_and(|c| crate::aligned::is_outside_id(c))) {
+            return Err("這一列來自外部應用程式，在知識中樞裡修改，不能寫進 L-Paper 的表格".into());
+        }
+    }
     let mut w = csv::WriterBuilder::new().from_writer(Vec::new());
     w.write_record(&t.headers).map_err(|e| e.to_string())?;
     for row in &t.rows {

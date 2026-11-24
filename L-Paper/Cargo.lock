@@ -2415,6 +2415,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-know"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "csv",
+ "getrandom 0.2.17",
+ "lore-canvas",
+ "lore-flow",
+ "lore-home",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "lore-learn"
 version = "0.1.0"
 dependencies = [
@@ -3152,6 +3169,7 @@ dependencies = [
  "lore-gitsync",
  "lore-home",
  "lore-jobs",
+ "lore-know",
  "lore-learn",
  "lore-llm",
  "lore-notation",

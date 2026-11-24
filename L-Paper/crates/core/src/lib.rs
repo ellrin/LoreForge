@@ -5,6 +5,7 @@
 //! A profile is a folder of plain files that lives in the user's own private
 //! repository. Nothing in this crate writes to it except through explicit calls.
 
+pub mod aligned; // rows outside applications aligned to the writing categories (the hub), merged after the author's own
 pub mod authors;
 pub mod bib;
 pub mod book; // 寫書

@@ -848,7 +848,7 @@ async fn get_style(State(s): State<Shared>, AxPath(name): AxPath<String>) -> Res
     let cache = if cfg!(test) { std::env::temp_dir().join("pc-test-cache") } else { crate::polish::cache_root() };
     let sp = l.profile.as_ref().map(|prof| pc_core::styleprofile::load_or_build(&prof.phrases, &prof.expressions, &prof.root, &c.ws, &pc_core::styleprofile::cache_file(&cache, &c.ws)));
     let mut banned: Vec<String> = sess.writing_notes.iter().flat_map(|n| n.banned.clone()).collect();
-    banned.extend(l.profile.as_ref().map(|p| p.vocabulary.iter().map(|v| v.avoid.clone()).collect::<Vec<_>>()).unwrap_or_default());
+    banned.extend(l.profile.as_ref().map(|p| p.vocabulary.iter().filter(|v| v.source.is_empty()).map(|v| v.avoid.clone()).collect::<Vec<_>>()).unwrap_or_default());
     banned.sort();
     banned.dedup();
     let mine = |sec: &sk::Section| {

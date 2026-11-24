@@ -129,6 +129,16 @@ pub fn preset_block_for(workspace: Option<&Path>, profile: Option<&Profile>, pre
                     out += &format!("- [{}] {}\n", e.function, pc_core::styleprofile::cut(&e.text));
                 }
             }
+            // exemplars outside applications aligned in (the hub): used with his own, named apart
+            // because they are not his voice; nothing is added when there are none
+            let outside: Vec<&pc_core::styleprofile::Exemplar> = prof.outside_exemplars.iter().collect();
+            let picked = pc_core::styleprofile::exemplars_for(&outside, &section, "", p.text);
+            if !picked.is_empty() {
+                out += "\nParagraphs from outside sources in this section (follow their moves; never copy their content or sentences):\n";
+                for e in picked {
+                    out += &format!("- [{}] {}\n", e.function, pc_core::styleprofile::cut(&e.text));
+                }
+            }
             out
         }
         _ => String::new(),
@@ -361,6 +371,7 @@ E2,Result,comparison,\"Although trains and buses differ in speed, both reduce tr
             authors: vec![],
             affiliations: vec![],
             style_checks: checks,
+            outside_exemplars: vec![],
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },
             phrases: vec![
                 ph("P1", "opening", "Compared with {baseline}, {method} improved {metric}.", &["paper1"]),

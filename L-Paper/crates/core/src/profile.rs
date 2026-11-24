@@ -58,7 +58,7 @@ pub(crate) fn split_tags<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<S
         .collect())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VocabEntry {
     /// The word or phrase to avoid.
     pub avoid: String,
@@ -67,6 +67,11 @@ pub struct VocabEntry {
     pub prefer: String,
     #[serde(default)]
     pub note: String,
+    /// "" for the author's own row; the name of the outside application for a row aligned in by
+    /// the hub (`aligned.rs`). Never read from or written to `vocabulary.csv`. Checks that enforce
+    /// the author's words skip rows that have one.
+    #[serde(skip)]
+    pub source: String,
 }
 
 /// A reusable piece smaller than a sentence: an opening connective, a
@@ -138,6 +143,10 @@ pub struct Profile {
     pub expressions: Vec<Expression>,
     pub vocabulary: Vec<VocabEntry>,
     pub rules: Vec<Rule>,
+    /// Exemplars outside applications aligned to `pc.exemplars` (`aligned.rs`); never read from
+    /// `exemplars.csv`, which stays the author's own (`styleprofile::read_exemplars`).
+    #[serde(skip)]
+    pub outside_exemplars: Vec<crate::styleprofile::Exemplar>,
     /// People the user writes with, and their institutions (optional files).
     #[serde(default)]
     pub authors: Vec<Author>,
@@ -265,7 +274,7 @@ impl Profile {
         };
 
         Ok((
-            Profile { root: root.to_path_buf(), manifest, phrases, expressions, vocabulary, rules, authors, affiliations, style_checks: Default::default() },
+            Profile { root: root.to_path_buf(), manifest, phrases, expressions, vocabulary, rules, outside_exemplars: Vec::new(), authors, affiliations, style_checks: Default::default() },
             issues,
         ))
     }
