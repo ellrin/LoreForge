@@ -212,7 +212,12 @@ impl NoteFiles {
     fn free_name(&self, wanted: &str) -> Result<String> {
         let taken: HashSet<String> = entries(&self.dir)?.iter().map(|e| e.file_name().to_string_lossy().to_lowercase()).collect();
         let ext = self.ext.first().map(String::as_str).unwrap_or("md");
-        let stem = safe_local(wanted);
+        // a title with nothing ASCII to name a file by (Chinese ...) gets a generated name
+        let stem = if wanted.chars().any(|c| c.is_ascii_alphanumeric()) {
+            safe_local(wanted)
+        } else {
+            crate::new_local(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0))
+        };
         let mut n = 1;
         loop {
             let s = if n == 1 { stem.clone() } else { format!("{stem}-{n}") };
@@ -222,6 +227,33 @@ impl NoteFiles {
             }
             n += 1;
         }
+    }
+}
+
+/// `body` with its first `# heading` (code fences skipped) replaced by `title`; a body without
+/// one gets the heading on top.
+pub(crate) fn retitle(body: &str, title: &str) -> String {
+    let title = title.trim();
+    let mut fence = false;
+    let mut lines: Vec<&str> = body.split('\n').collect();
+    let mut at = None;
+    for (n, l) in lines.iter().enumerate() {
+        let t = l.trim();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fence = !fence;
+        } else if !fence && t.strip_prefix("# ").is_some_and(|h| !h.trim().is_empty()) {
+            at = Some(n);
+            break;
+        }
+    }
+    let line = format!("# {title}");
+    match at {
+        Some(n) => {
+            lines[n] = &line;
+            lines.join("\n")
+        }
+        None if body.trim().is_empty() => format!("{line}\n"),
+        None => format!("{line}\n\n{body}"),
     }
 }
 

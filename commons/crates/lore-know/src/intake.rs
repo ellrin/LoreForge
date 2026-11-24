@@ -313,6 +313,7 @@ pub fn export(sink: &dyn Sink, category: &Category, source: Option<&Source>) -> 
             match names.as_slice() {
                 [one] => (*one).to_string(),
                 // several (or none left): the application the set was made for, from its id `x.<source>.<name>`
+                _ if !category.group.trim().is_empty() => category.group.trim().to_string(),
                 _ => category.id.split('.').nth(1).unwrap_or("export").to_string(),
             }
         }

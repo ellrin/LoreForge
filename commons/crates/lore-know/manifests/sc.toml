@@ -1,0 +1,66 @@
+# L-Slide (docs/brain-hub.md §10). `tasks` is filled where a step is known to read the category.
+
+[[category]]
+id = "sc.flow"
+label = "流程圖"
+app = "sc"
+group = "流程圖"
+format = "figure"
+tasks = ["sc-flow-graph", "flow-discuss", "flow-assist"]
+writable = true
+[category.native]
+kind = "flow"
+app_dir = "SlideComposer"
+path = "flow"
+
+[[category]]
+id = "sc.flowrefs"
+label = "參考圖"
+app = "sc"
+group = "流程圖"
+format = "figure"
+tasks = []
+writable = true
+[category.native]
+kind = "dir"
+app_dir = "SlideComposer"
+path = "flow/examples"
+
+[[category]]
+id = "sc.voice"
+label = "論述法"
+app = "sc"
+group = "投影片論述法"
+format = "note"
+tasks = []
+writable = true
+[category.native]
+kind = "files"
+app_dir = "SlideComposer"
+path = "voice"
+
+[[category]]
+id = "sc.styles"
+label = "風格包"
+app = "sc"
+group = "投影片版型"
+format = "bundle"
+tasks = []
+writable = false
+[category.native]
+kind = "dir"
+app_dir = "SlideComposer"
+path = "styles"
+
+[[category]]
+id = "sc.arrangements"
+label = "版型"
+app = "sc"
+group = "投影片版型"
+format = "layout"
+tasks = []
+writable = false
+[category.native]
+kind = "files"
+app_dir = "SlideComposer"
+path = "arrangements"

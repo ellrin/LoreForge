@@ -1,0 +1,118 @@
+# L-Paper (docs/brain-hub.md §10). `tasks` is filled where a step is known to read the category.
+
+[[category]]
+id = "pc.patterns"
+label = "句型"
+app = "pc"
+group = "寫作準則"
+format = "pattern"
+tasks = ["pc-compose-paragraph", "polish"]
+writable = true
+[category.native]
+kind = "csv"
+app_dir = "PaperComposer"
+path = "profile/phrases.csv"
+
+[[category]]
+id = "pc.expressions"
+label = "常用詞"
+app = "pc"
+group = "寫作準則"
+format = "expression"
+tasks = ["polish"]
+writable = true
+[category.native]
+kind = "csv"
+app_dir = "PaperComposer"
+path = "profile/expressions.csv"
+
+[[category]]
+id = "pc.rules"
+label = "規則"
+app = "pc"
+group = "寫作準則"
+format = "rule"
+tasks = ["pc-soft-check"]
+writable = true
+[category.native]
+kind = "csv"
+app_dir = "PaperComposer"
+path = "profile/rules.csv"
+
+[[category]]
+id = "pc.wording"
+label = "用詞對照"
+app = "pc"
+group = "寫作準則"
+format = "wording"
+tasks = ["pc-compose-paragraph"]
+writable = true
+[category.native]
+kind = "csv"
+app_dir = "PaperComposer"
+path = "profile/vocabulary.csv"
+
+[[category]]
+id = "pc.exemplars"
+label = "範例段落"
+app = "pc"
+group = "寫作準則"
+format = "exemplar"
+tasks = ["polish"]
+writable = true
+[category.native]
+kind = "csv"
+app_dir = "PaperComposer"
+path = "profile/exemplars.csv"
+
+[[category]]
+id = "pc.notes"
+label = "寫作筆記"
+app = "pc"
+group = "寫作準則"
+format = "note"
+tasks = ["pc-compose-paragraph", "pc-outline", "pc-caption", "pc-draft-plan", "pc-draft-outline", "pc-draft-revise", "pc-book-chapter", "polish"]
+writable = true
+[category.native]
+kind = "files"
+app_dir = "PaperComposer"
+path = "style"
+
+[[category]]
+id = "pc.templates"
+label = "論文模板"
+app = "pc"
+group = "論文模板"
+format = "bundle"
+tasks = []
+writable = false
+[category.native]
+kind = "dir"
+app_dir = "PaperComposer"
+path = "publishers"
+
+[[category]]
+id = "pc.venues"
+label = "期刊要求"
+app = "pc"
+group = "論文模板"
+format = "bundle"
+tasks = []
+writable = false
+[category.native]
+kind = "dir"
+app_dir = "PaperComposer"
+path = "venues"
+
+[[category]]
+id = "pc.stylerefs"
+label = "風格參考"
+app = "pc"
+group = "寫作準則"
+format = "bundle"
+tasks = []
+writable = false
+[category.native]
+kind = "dir"
+app_dir = "PaperComposer"
+path = "style-refs"

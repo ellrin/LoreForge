@@ -1,0 +1,14 @@
+# Shared (docs/brain-hub.md §10). `tasks` is filled where a step is known to read the category.
+
+[[category]]
+id = "shared.plotstyles"
+label = "繪圖樣式"
+app = "shared"
+group = "繪圖"
+format = "bundle"
+tasks = []
+writable = false
+[category.native]
+kind = "dir"
+app_dir = "shared"
+path = "plot/styles"

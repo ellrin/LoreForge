@@ -55,10 +55,28 @@ pub fn split_id(id: &str) -> Option<(&str, &str)> {
 }
 
 /// A local id safe as a file name: ASCII letters, digits, `-`, `_`, `.`; anything else `-`.
+/// A text with nothing ASCII to keep, but with letters of its own (Chinese …), gets `u` + 12 hex
+/// characters of a stable hash of the text, so two such names never meet; any other empty text is `item`.
 pub fn safe_local(s: &str) -> String {
     let t: String = s.trim().chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' }).collect();
     let t = t.trim_matches(|c| c == '-' || c == '.').to_string();
-    if t.is_empty() { "item".into() } else { t }
+    if !t.is_empty() {
+        t
+    } else if s.chars().any(|c| !c.is_ascii() && c.is_alphanumeric()) {
+        stable_key(s.trim())
+    } else {
+        "item".into()
+    }
+}
+
+/// `u` + 12 hex characters (FNV-1a, 64 bit) of `s`: the same text gives the same key on every run.
+pub fn stable_key(s: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("u{h:016x}")[..13].to_string()
 }
 
 /// A new local id: `k` + 26 characters that sort by creation time (48-bit ms + 80 random bits).
@@ -367,6 +385,15 @@ pub trait Adapter: Send + Sync {
     fn save(&self, item: &Item) -> Result<()>;
     /// Take the item out of the data and return it (the store keeps it in the trash).
     fn remove(&self, id: &str) -> Result<Item>;
+    /// The picture file of the item now in the data, if it has one (the store keeps a copy of it
+    /// in the trash when the item is removed). Default: none.
+    fn picture_of(&self, _id: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+    /// Put the picture the trash kept (`from`) back as `name` beside the restored item. Default: nothing.
+    fn restore_picture(&self, _id: &str, _name: &str, _from: &std::path::Path) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// The one way to read and write items (the store implements it; [`MemSink`] in tests).

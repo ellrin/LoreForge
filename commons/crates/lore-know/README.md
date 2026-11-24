@@ -62,6 +62,10 @@ entries are matched by `id` (or, without one, by their content), what it no long
 to the trash. A category whose app data names rows by their own words (wording: `avoid`) matches an
 entry that says exactly what a row already says; a changed one is written as a new row.
 
+`Hub::import(batch, own)`: an empty `source` is the author's own file only when `own` is true,
+otherwise refused. Names may be Chinese: a source or set named without ASCII letters gets a stable
+id (`u` + 12 hex of a hash of the name, `safe_local`) and keeps the Chinese label.
+
 ## An app declares its categories
 
 `know.toml`, included in the app's code and passed to `Hub::open`:
@@ -103,12 +107,14 @@ hub.counts()?;                    // dashboard: one Count per category
 hub.query(&Query { .. })?;        // (items, total) — sort, filter, search, paging
 hub.store.get(id)? / hub.store.list(cat)? / hub.store.problems(cat)
 hub.put(item)? / hub.remove(id)? / hub.restore(id)?   // keep the index in step; put returns the stable id
-hub.import(&batch)? / hub.export(cat, source)?        // intake; intake::parse / to_text for the file
+hub.import(&batch, own)? / hub.export(cat, source)?        // intake; intake::parse / to_text for the file
 hub.proposals.create(by, title, changes)? / .list(Some("open")) / .dismiss(id)
 proposal::show(&hub.store, &p)?   // before / after for the author
 hub.apply_proposal(id, chosen)? / hub.undo_proposal(id)?
 hub.thumbnail(id)?                // SVG drawn by the flow tool
 hub.record_use(&ids)?             // what a step took into its prompt
+hub.record_use_by(task, &ids, day)?   // the same, and one line in <hub>/usage.jsonl
+hub.stats(today)?                 // the dashboard: families, weeks, 30-day use, gaps (stats.rs)
 hub.reindex()?                    // after files changed outside the hub
 ```
 
@@ -120,3 +126,22 @@ For the hub's own category list: `hub.store.registry()` / `registry_mut()` (`add
 
 `cargo run -p lore-know --example thumbs -- <out dir> [flow dir]` draws every entity of the flow
 catalogue to SVG files, to look at.
+
+## Outside items never enter an app's own data
+
+A category with an adapter (a CSV, a notes folder) is the union of the app's own data and the hub
+records under `<hub>/items/<category>/`. An item whose source is external is always a hub record,
+never passed to `adapter.save` (the app's file stays byte-identical); an id lives on one side
+only (a put whose id is on the other side is refused). `reader::aligned(hub, category)` reads
+those records straight from the folder for an app that has no `Hub` open.
+
+## Declarations, usage log, dashboard
+
+* `reader::builtin_manifests()` returns `manifests/{pc,sc,lr,shared}.toml` (`lr` has none yet).
+* `<hub>/usage.jsonl`: `{"day","task","ids"}` per call, written by `Hub::record_use_by` or, with no
+  hub open, `reader::record_use(hub, task, ids, day)`; read by `reader::usage(hub, since)` (bad
+  lines skipped). `Hub::stats(today)` builds its 30-day figures from it.
+* Notes: a new title rewrites the body's first `# heading` (added when missing); a note titled in
+  Chinese gets a generated file name. A removed reference keeps its picture in the trash
+  (`trash/<category>/<local>.<ms>.<ext>`) and restore puts it back (`Adapter::picture_of`,
+  `restore_picture`). A proposal whose every chosen change was refused stays `open`.

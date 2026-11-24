@@ -1,9 +1,12 @@
 //! The hub folder: records, overlays and trash behind [`Sink`].
 //!
 //! ```text
-//! <hub>/items/<category>/<local>.json          one Item per file (categories with native.kind "")
+//! <hub>/items/<category>/<local>.json          one Item per file (categories with native.kind "", and the
+//!                                              items an outside application gave to an app's category:
+//!                                              those are never written into the app's own data)
 //! <hub>/meta/<category>/<local>.json           bookkeeping beside an app's own data (adapter categories)
 //! <hub>/trash/<category>/<local>.<unix ms>.json  removed items
+//! <hub>/trash/<category>/<local>.<unix ms>.<ext> the picture of a removed reference, beside its JSON
 //! ```
 
 use std::collections::BTreeMap;
@@ -124,6 +127,11 @@ impl Store {
         self.registry.get(id).cloned().ok_or_else(|| KnowError::NotFound(format!("類別 {id}")))
     }
 
+    /// Is `id` a hub record (an item file under `items/`)?
+    fn is_record(&self, id: &str) -> bool {
+        self.file("items", id).map(|p| p.exists()).unwrap_or(false)
+    }
+
     fn read_meta(&self, id: &str) -> Meta {
         self.file("meta", id).ok().filter(|p| p.exists()).and_then(|p| read_json(&p).ok()).unwrap_or_default()
     }
@@ -188,18 +196,31 @@ impl Store {
         if cat.native.kind.is_empty() {
             return Ok(self.read_records(cat));
         }
-        let Some(a) = self.adapter(cat) else {
-            return Ok((vec![], vec![Problem { at: cat.id.clone(), field: String::new(), message: "這一類還沒有接上讀取程式".into() }]));
+        // the app's own data, then the hub records of outside sources
+        let (mut items, mut problems) = match self.adapter(cat) {
+            Some(a) => {
+                let (items, problems) = a.load()?;
+                let merged = items
+                    .into_iter()
+                    .map(|i| {
+                        let meta = self.read_meta(&i.id);
+                        Self::merge(cat, i, meta)
+                    })
+                    .collect();
+                (merged, problems)
+            }
+            None => (vec![], vec![Problem { at: cat.id.clone(), field: String::new(), message: "這一類還沒有接上讀取程式".into() }]),
         };
-        let (items, problems) = a.load()?;
-        let merged = items
-            .into_iter()
-            .map(|i| {
-                let meta = self.read_meta(&i.id);
-                Self::merge(cat, i, meta)
-            })
-            .collect();
-        Ok((merged, problems))
+        let (records, rp) = self.read_records(cat);
+        problems.extend(rp);
+        for r in records {
+            if items.iter().any(|i| i.id == r.id) {
+                problems.push(Problem { at: r.id.clone(), field: "id".into(), message: "中樞裡的一條和這一類自己資料裡的一條同編號，略過中樞的".into() });
+            } else {
+                items.push(r);
+            }
+        }
+        Ok((items, problems))
     }
 
     /// What `adapter.load` skipped (adapter categories) or what could not be read (records).
@@ -225,7 +246,7 @@ impl Store {
         for id in ids {
             let Some((c, _)) = split_id(id) else { continue };
             let Some(cat) = self.registry.get(c).cloned() else { continue };
-            if cat.native.kind.is_empty() {
+            if cat.native.kind.is_empty() || self.is_record(id) {
                 let path = self.file("items", id)?;
                 if let Ok(mut i) = read_json::<Item>(&path) {
                     i.used += 1;
@@ -280,6 +301,20 @@ impl Store {
         }
     }
 
+    /// The picture the trash kept beside the JSON copy `json` (`<local>.<ms>.<ext>`), if any.
+    fn trash_picture(json: &Path) -> Option<PathBuf> {
+        let stem = json.file_stem()?.to_string_lossy().into_owned();
+        let prefix = format!("{stem}.");
+        fs::read_dir(json.parent()?)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .find(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                n.starts_with(&prefix) && !n.ends_with(".json") && !n[prefix.len()..].contains('.')
+            })
+            .map(|e| e.path())
+    }
+
     fn trash_latest(&self, id: &str) -> Result<(PathBuf, Item)> {
         let (c, l) = split_id(id).ok_or_else(|| KnowError::Invalid(id.into()))?;
         let mut best: Option<(u64, PathBuf)> = None;
@@ -307,15 +342,16 @@ impl Sink for Store {
         if check_local(l).is_err() {
             return Ok(None);
         }
-        if cat.native.kind.is_empty() {
-            let p = self.file("items", id)?;
-            if !p.exists() {
-                return Ok(None);
-            }
+        // a hub record: the category's own, or an outside source's in an app's category
+        let p = self.file("items", id)?;
+        if p.exists() {
             let mut i: Item = read_json(&p)?;
             i.id = id.into();
             i.category = cat.id;
             return Ok(Some(i));
+        }
+        if cat.native.kind.is_empty() {
+            return Ok(None);
         }
         let Some(a) = self.adapter(&cat) else { return Ok(None) };
         let found = a.load()?.0.into_iter().find(|i| i.id == id);
@@ -346,8 +382,35 @@ impl Sink for Store {
             }
             self.get(&item.id)?
         };
+        // Where it goes: an outside source's item is a hub record, never a row of the app's own
+        // data; an id lives on one side only.
+        let external = item.source.is_external();
+        let to_record = if !adapter_cat {
+            true
+        } else {
+            match &cur {
+                Some(_) if self.is_record(&item.id) => {
+                    if !external {
+                        return Err(KnowError::Invalid(format!("{} 是外部來源放在中樞裡的一條，不能改成別的來源", item.id)));
+                    }
+                    true
+                }
+                Some(c) => {
+                    if external && !c.source.is_external() {
+                        return Err(KnowError::Invalid(format!("{} 已經是「{}」自己資料裡的一條，外部來源不能用同一個編號", item.id, cat.label)));
+                    }
+                    false
+                }
+                None => external,
+            }
+        };
+        // A new title is the note's first heading too.
+        if item.format == format::NOTE && cur.as_ref().is_some_and(|c| c.title != item.title) && !item.title.is_empty() {
+            let body = crate::formats::text::retitle(item.field("body"), &item.title);
+            item.set("body", body);
+        }
         // A read-only native category still takes tags, triggers and `contains` (overlay only).
-        let overlay_only = !cat.writable && adapter_cat && cur.as_ref().is_some_and(|c| c.title == item.title && c.fields == item.fields);
+        let overlay_only = !cat.writable && adapter_cat && !to_record && cur.as_ref().is_some_and(|c| c.title == item.title && c.fields == item.fields);
         if !cat.writable && !overlay_only {
             return Err(KnowError::ReadOnly(cat.label.clone()));
         }
@@ -363,7 +426,7 @@ impl Sink for Store {
             item.used = c.used;
             item.used_at = c.used_at.clone();
         }
-        if !adapter_cat {
+        if to_record {
             write_json(&self.file("items", &item.id)?, &item)?;
             return Ok(item);
         }
@@ -411,15 +474,31 @@ impl Sink for Store {
             return Err(KnowError::ReadOnly(cat.label));
         }
         let trashed = self.trash_put(&item)?;
-        if cat.native.kind.is_empty() {
+        if cat.native.kind.is_empty() || self.is_record(id) {
             if let Err(e) = fs::remove_file(self.file("items", id)?) {
                 let _ = fs::remove_file(&trashed);
                 return Err(e.into());
             }
         } else {
             let a = self.adapter(&cat).ok_or_else(|| KnowError::Other(format!("{} 還沒有接上讀取程式", cat.id)))?;
+            // the picture of a reference goes to the trash with it
+            let mut kept: Option<PathBuf> = None;
+            if let Some(pic) = a.picture_of(id) {
+                let ext = pic.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "img".into());
+                let dest = trashed.with_extension(ext);
+                match fs::copy(&pic, &dest) {
+                    Ok(_) => kept = Some(dest),
+                    Err(e) => {
+                        let _ = fs::remove_file(&trashed);
+                        return Err(e.into());
+                    }
+                }
+            }
             if let Err(e) = a.remove(id) {
                 let _ = fs::remove_file(&trashed);
+                if let Some(k) = kept {
+                    let _ = fs::remove_file(k);
+                }
                 return Err(e);
             }
             let mp = self.file("meta", id)?;
@@ -440,14 +519,22 @@ impl Sink for Store {
             return Err(KnowError::Invalid(format!("{id} 現在已經有一條了，不能再復原一條")));
         }
         let (path, item) = self.trash_latest(id)?;
-        if cat.native.kind.is_empty() {
+        let picture = Self::trash_picture(&path);
+        // an outside source's item goes back as a hub record, never into the app's data
+        if cat.native.kind.is_empty() || item.source.is_external() {
             write_json(&self.file("items", id)?, &item)?;
         } else {
             let a = self.adapter(&cat).ok_or_else(|| KnowError::Other(format!("{} 還沒有接上讀取程式", cat.id)))?;
             a.save(&item)?;
+            if let Some(pic) = &picture {
+                a.restore_picture(id, item.field("image"), pic)?;
+            }
             self.write_meta_for(&cat, &item)?;
         }
         fs::remove_file(path)?;
+        if let Some(pic) = picture {
+            let _ = fs::remove_file(pic);
+        }
         Ok(self.get(id)?.unwrap_or(item))
     }
 }
@@ -802,5 +889,168 @@ path = "wording.csv"
         let w = s.put(w).unwrap();
         assert_eq!(w.source, Source::external("acme"));
         assert_eq!(s.list("pc.wording").unwrap()[0].source, Source::external("acme"));
+    }
+
+    const PATTERNS: &str = r#"
+[[category]]
+id = "pc.patterns"
+label = "句型"
+format = "pattern"
+writable = true
+[category.native]
+kind = "csv"
+app_dir = "PaperComposer"
+path = "phrases.csv"
+"#;
+
+    fn pattern(template: &str, source: Source) -> Item {
+        let mut p = Item::new("pc.patterns", format::PATTERN, template, source);
+        p.set("template", template);
+        p
+    }
+
+    fn patterns_store(hub: &Path, csv: &Path) -> Store {
+        use crate::formats::table::CsvAdapter;
+        let mut s = Store::open(hub.to_path_buf(), Registry::load(&[PATTERNS], hub).unwrap()).unwrap();
+        s.add_adapter("pc.patterns", Box::new(CsvAdapter::new(csv, "pc.patterns", format::PATTERN, Source::lore("pc"))));
+        s
+    }
+
+    #[test]
+    fn an_outside_item_in_an_apps_category_is_a_hub_record_not_a_row() {
+        let (hub, app) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let csv = app.path().join("phrases.csv");
+        let mut s = patterns_store(hub.path(), &csv);
+        s.put(pattern("Little is known about X.", Source::lore("pc"))).unwrap();
+        let before = fs::read(&csv).unwrap();
+        let mut o = pattern("We propose X.", Source::external("acme"));
+        o.id = "pc.patterns:acme.1".into();
+        let o = s.put(o).unwrap();
+        assert_eq!(o.id, "pc.patterns:acme.1");
+        assert_eq!(fs::read(&csv).unwrap(), before, "the app's own file is byte-identical");
+        assert!(hub.path().join("items/pc.patterns/acme.1.json").is_file());
+        assert!(!hub.path().join("meta/pc.patterns/acme.1.json").exists());
+        // a new outside item without an id is a record too
+        let n = s.put(pattern("Other.", Source::external("acme"))).unwrap();
+        assert!(hub.path().join("items/pc.patterns").join(format!("{}.json", split_id(&n.id).unwrap().1)).is_file());
+        assert_eq!(fs::read(&csv).unwrap(), before);
+        // it reads back, changes, is used, goes to the trash and comes back: all as a record
+        let mut c = s.get(&o.id).unwrap().unwrap();
+        c.set("example", "x");
+        let c = s.put(c).unwrap();
+        assert_eq!(c.revision, 2);
+        s.record_use(std::slice::from_ref(&o.id)).unwrap();
+        assert_eq!(s.get(&o.id).unwrap().unwrap().used, 1);
+        s.remove(&o.id).unwrap();
+        assert!(s.get(&o.id).unwrap().is_none());
+        assert!(!hub.path().join("items/pc.patterns/acme.1.json").exists());
+        s.restore(&o.id).unwrap();
+        assert!(hub.path().join("items/pc.patterns/acme.1.json").is_file());
+        assert_eq!(fs::read(&csv).unwrap(), before, "still untouched");
+        // an id the app's own data has is refused, and the other way round
+        let own = s.list("pc.patterns").unwrap().into_iter().find(|i| i.source == Source::lore("pc")).unwrap();
+        let mut clash = pattern("Clash", Source::external("acme"));
+        clash.id = own.id.clone();
+        assert!(matches!(s.put(clash), Err(KnowError::Invalid(_))));
+        let mut back = s.get(&o.id).unwrap().unwrap();
+        back.source = Source::author();
+        assert!(matches!(s.put(back), Err(KnowError::Invalid(_))));
+        assert_eq!(fs::read(&csv).unwrap(), before);
+    }
+
+    #[test]
+    fn the_category_lists_both() {
+        let (hub, app) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut s = patterns_store(hub.path(), &app.path().join("phrases.csv"));
+        s.put(pattern("Own one.", Source::lore("pc"))).unwrap();
+        s.put(pattern("Outside one.", Source::external("acme"))).unwrap();
+        let all = s.list("pc.patterns").unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all.iter().filter(|i| i.source.is_external()).count(), 1);
+        assert_eq!(s.all().unwrap().len(), 2);
+        let outside = all.iter().find(|i| i.source.is_external()).unwrap();
+        assert_eq!(s.get(&outside.id).unwrap().unwrap().title, "Outside one.");
+        // an unreadable record is a problem, not an error
+        fs::write(hub.path().join("items/pc.patterns/broken.json"), "{ no").unwrap();
+        assert_eq!(s.list("pc.patterns").unwrap().len(), 2);
+        assert_eq!(s.problems("pc.patterns").len(), 1);
+    }
+
+    #[test]
+    fn adding_again_replaces_only_the_outside_sources_records() {
+        use crate::intake::{self, Batch, Entry, Target};
+        let (hub, app) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let csv = app.path().join("phrases.csv");
+        let mut s = patterns_store(hub.path(), &csv);
+        s.put(pattern("Own one.", Source::lore("pc"))).unwrap();
+        let before = fs::read(&csv).unwrap();
+        let e = |id: &str, t: &str| {
+            let mut e = Entry { id: id.into(), title: t.into(), ..Default::default() };
+            e.fields.insert("template".into(), t.into());
+            e
+        };
+        let batch = |source: &str, items: Vec<Entry>| Batch { lore_know: 1, source: source.into(), target: Target::Align { category: "pc.patterns".into() }, items };
+        let mut cats = s.registry().clone();
+        let f = crate::formats::all();
+        intake::import(&mut s, &mut cats, &f, &batch("acme", vec![e("1", "A one."), e("2", "A two.")])).unwrap();
+        intake::import(&mut s, &mut cats, &f, &batch("beta", vec![e("1", "B one.")])).unwrap();
+        let r = intake::import(&mut s, &mut cats, &f, &batch("acme", vec![e("1", "A one changed.")])).unwrap();
+        assert_eq!((r.added, r.replaced, r.removed), (0, 1, 1), "{r:?}");
+        let titles = |s: &Store| {
+            let mut t: Vec<String> = s.list("pc.patterns").unwrap().into_iter().map(|i| i.title).collect();
+            t.sort();
+            t
+        };
+        assert_eq!(titles(&s), ["A one changed.", "B one.", "Own one."]);
+        assert_eq!(fs::read(&csv).unwrap(), before);
+    }
+
+    #[test]
+    fn a_new_title_rewrites_the_heading() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = open(d.path());
+        let mut n = Item::new("my.notes", format::NOTE, "Old", Source::author());
+        n.set("body", "# Old\n\ntext\n\n## Sub\n");
+        let n = s.put(n).unwrap();
+        let mut c = n.clone();
+        c.title = "新的名稱".into();
+        let c = s.put(c).unwrap();
+        assert_eq!(c.field("body"), "# 新的名稱\n\ntext\n\n## Sub\n");
+        assert_eq!(s.get(&c.id).unwrap().unwrap().field("body"), c.field("body"));
+        // no heading: one is added on top; a heading inside a code fence is not the one
+        let mut m = Item::new("my.notes", format::NOTE, "Plain", Source::author());
+        m.set("body", "```\n# not me\n```\nline");
+        let m = s.put(m).unwrap();
+        let mut c = m.clone();
+        c.title = "Named".into();
+        let c = s.put(c).unwrap();
+        assert_eq!(c.field("body"), "# Named\n\n```\n# not me\n```\nline");
+        // a write that keeps the title leaves the body alone
+        let mut same = c.clone();
+        same.set("body", "# Named\n\nedited");
+        assert_eq!(s.put(same).unwrap().field("body"), "# Named\n\nedited");
+    }
+
+    #[test]
+    fn a_removed_reference_comes_back_with_its_picture() {
+        use crate::formats::figure::ReferenceDirs;
+        let (hub, app) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        const M: &str = "[[category]]\nid = \"sc.flowrefs\"\nlabel = \"參考圖\"\nformat = \"figure\"\nwritable = true\n[category.native]\nkind = \"dir\"\napp_dir = \"SlideComposer\"\npath = \"refs\"\n";
+        let folder = app.path().join("refs/f01");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("desc.md"), "# f01 Overview\n\nTwo rows.\n").unwrap();
+        fs::write(folder.join("ref.png"), b"\x89PNG-bytes").unwrap();
+        let mut s = Store::open(hub.path().to_path_buf(), Registry::load(&[M], hub.path()).unwrap()).unwrap();
+        s.add_adapter("sc.flowrefs", Box::new(ReferenceDirs { dir: app.path().join("refs"), category: "sc.flowrefs".into(), source: Source::lore("sc") }));
+        s.remove("sc.flowrefs:f01").unwrap();
+        assert!(!folder.exists());
+        let kept: Vec<String> = fs::read_dir(hub.path().join("trash/sc.flowrefs")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(kept.len(), 2, "{kept:?}");
+        assert!(kept.iter().any(|n| n.starts_with("f01.") && n.ends_with(".png")) && kept.iter().any(|n| n.ends_with(".json")));
+        let back = s.restore("sc.flowrefs:f01").unwrap();
+        assert_eq!(back.title, "Overview");
+        assert_eq!(fs::read(folder.join("ref.png")).unwrap(), b"\x89PNG-bytes");
+        assert_eq!(s.get("sc.flowrefs:f01").unwrap().unwrap().field("image"), "ref.png");
+        assert_eq!(fs::read_dir(hub.path().join("trash/sc.flowrefs")).unwrap().count(), 0, "nothing left in the trash");
     }
 }

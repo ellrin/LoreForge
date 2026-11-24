@@ -209,9 +209,20 @@ impl Hub {
         Ok(())
     }
 
+    /// Count one use as [`Hub::record_use`] and log it: one line in `<hub>/usage.jsonl` with the
+    /// step (`task`) and the day, which is what the dashboard's step figures are made from.
+    pub fn record_use_by(&mut self, task: &str, ids: &[String], day: chrono::NaiveDate) -> Result<()> {
+        self.record_use(ids)?;
+        crate::reader::record_use(self.store.hub(), task, ids, day)
+    }
+
     /// An outside application's batch ([`intake::import`]). An independent set is made first, so
-    /// the store knows it.
-    pub fn import(&mut self, batch: &Batch) -> Result<Report> {
+    /// the store knows it. An empty `source` is the author's own file only when the caller says
+    /// so (`own`); otherwise it is refused.
+    pub fn import(&mut self, batch: &Batch, own: bool) -> Result<Report> {
+        if batch.source.trim().is_empty() && !own {
+            return Err(KnowError::Invalid("缺 source（應用程式的名字）；沒有名字的檔案只有作者自己的才收".into()));
+        }
         if let intake::Target::Independent { name, format } = &batch.target {
             let source = batch.source.trim();
             if !self.formats.contains_key(format) {
@@ -508,9 +519,9 @@ writable = true
         };
         let batch = |items: Vec<Entry>| Batch { lore_know: 1, source: "wordbox".into(), target: Target::Align { category: "t.exprs".into() }, items };
         // aligned into a CSV-backed category: it keeps its outside source, and a second batch replaces only that source's rows
-        assert_eq!(h.import(&batch(vec![entry("1", "however"), entry("2", "thus")])).unwrap().added, 2);
+        assert_eq!(h.import(&batch(vec![entry("1", "however"), entry("2", "thus")]), false).unwrap().added, 2);
         assert_eq!(ids(&h, in_cat("t.exprs")).len(), 3);
-        let r = h.import(&batch(vec![entry("1", "nevertheless")])).unwrap();
+        let r = h.import(&batch(vec![entry("1", "nevertheless")]), false).unwrap();
         assert_eq!((r.added, r.replaced, r.removed), (0, 1, 1));
         let rows = h.query(&in_cat("t.exprs")).unwrap().0;
         assert_eq!(rows.len(), 2, "{rows:?}");
@@ -524,14 +535,14 @@ writable = true
             e
         };
         let wb = |items: Vec<Entry>| Batch { target: Target::Align { category: "t.words".into() }, ..batch(items) };
-        assert_eq!(h.import(&wb(vec![word("commence", "start")])).unwrap().added, 1);
+        assert_eq!(h.import(&wb(vec![word("commence", "start")]), false).unwrap().added, 1);
         // the same file again changes nothing
-        let again = h.import(&wb(vec![word("commence", "start")])).unwrap();
+        let again = h.import(&wb(vec![word("commence", "start")]), false).unwrap();
         assert_eq!((again.added, again.replaced, again.removed, again.problems.len()), (0, 1, 0, 0), "{again:?}");
         assert_eq!(ids(&h, in_cat("t.words")).len(), 2);
         // a changed answer replaces the row, and his own row stays
-        let changed = h.import(&wb(vec![word("commence", "begin")])).unwrap();
-        assert_eq!((changed.added, changed.removed, changed.problems.len()), (1, 1, 0), "{changed:?}");
+        let changed = h.import(&wb(vec![word("commence", "begin")]), false).unwrap();
+        assert_eq!((changed.added, changed.replaced, changed.removed, changed.problems.len()), (0, 1, 0, 0), "{changed:?}");
         let words = h.query(&in_cat("t.words")).unwrap().0;
         assert_eq!(words.len(), 2);
         assert!(words.iter().any(|i| i.field("avoid") == "commence" && i.field("prefer") == "begin" && i.source == Source::external("wordbox")));
@@ -543,7 +554,7 @@ writable = true
             target: Target::Independent { name: "Ideas".into(), format: format::NOTE.into() },
             items: vec![Entry { id: "1".into(), title: "x".into(), fields: serde_json::from_value(serde_json::json!({"body": "y"})).unwrap(), ..Default::default() }],
         };
-        let rep = h.import(&ind).unwrap();
+        let rep = h.import(&ind, false).unwrap();
         assert_eq!(h.counts().unwrap().into_iter().find(|c| c.category == rep.category).unwrap().total, 1);
         // a proposal applied is in the index, and undone is out
         let mut add = Item::new("t.own", format::RULE, "Short", Source::lore("le"));
@@ -587,5 +598,120 @@ writable = true
         let bad = "[[category]]\nid = \"t.bad\"\nformat = \"figure\"\n[category.native]\nkind = \"csv\"\napp_dir = \"App\"\npath = \"x.csv\"\n";
         let dirs = BTreeMap::from([("App".to_string(), root.path().to_path_buf())]);
         assert!(matches!(Hub::open(hub.path().join("three"), &[bad], &dirs, &[]), Err(KnowError::Invalid(_))));
+    }
+
+    fn day(s: &str) -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn the_builtin_manifests_load_into_one_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = Registry::load(&crate::reader::builtin_manifests(), dir.path()).unwrap();
+        let ids: Vec<&str> = reg.all().iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "pc.patterns", "pc.expressions", "pc.rules", "pc.wording", "pc.exemplars", "pc.notes", "pc.templates", "pc.venues", "pc.stylerefs",
+                "sc.flow", "sc.flowrefs", "sc.voice", "sc.styles", "sc.arrangements", "shared.plotstyles"
+            ]
+        );
+        let c = |id: &str| reg.get(id).unwrap().clone();
+        assert_eq!((c("pc.patterns").format.as_str(), c("pc.patterns").native.path.as_str(), c("pc.patterns").writable), ("pattern", "profile/phrases.csv", true));
+        assert_eq!((c("pc.templates").group.as_str(), c("pc.templates").writable, c("pc.templates").native.kind.as_str()), ("論文模板", false, "dir"));
+        assert_eq!((c("sc.flowrefs").native.path.as_str(), c("sc.flowrefs").native.app_dir.as_str()), ("flow/examples", "SlideComposer"));
+        assert_eq!((c("shared.plotstyles").app.as_str(), c("shared.plotstyles").native.app_dir.as_str()), ("shared", "shared"));
+        assert!(reg.all().iter().all(|x| x.origin == "lore"));
+        // the steps known to read a category are declared (L-Paper's were read from its prompts)
+        assert!(reg.get("pc.patterns").unwrap().tasks.contains(&"pc-compose-paragraph".to_string()));
+    }
+
+    #[test]
+    fn a_hub_opens_on_the_builtin_manifests_with_empty_folders() {
+        let (hub, root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let dirs: BTreeMap<String, PathBuf> =
+            ["PaperComposer", "SlideComposer", "shared"].iter().map(|n| (n.to_string(), root.path().join(n))).collect();
+        let h = Hub::open(hub.path().to_path_buf(), &crate::reader::builtin_manifests(), &dirs, &[]).unwrap();
+        let counts = h.counts().unwrap();
+        assert_eq!(counts.len(), 15);
+        // the flow tool's own generators are there without any folder; everything else is empty
+        for c in counts.iter().filter(|c| c.category != "sc.flow") {
+            assert_eq!(c.total, 0, "{}", c.category);
+        }
+        for c in h.store.registry().all() {
+            if c.id != "sc.flow" {
+                assert!(h.store.problems(&c.id).is_empty(), "{}", c.id);
+            }
+        }
+    }
+
+    #[test]
+    fn a_chinese_note_and_a_chinese_set_name_work() {
+        let (hub, root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        app(root.path());
+        let mut h = open(hub.path(), root.path());
+        let mut n = Item::new("t.notes", format::NOTE, "中文筆記", Source::author());
+        n.set("body", "內容一");
+        let n = h.put(n).unwrap();
+        assert!(n.id.starts_with("t.notes:k"), "{}", n.id);
+        assert_eq!(n.title, "中文筆記");
+        let mut m = Item::new("t.notes", format::NOTE, "中文筆記", Source::author());
+        m.set("body", "內容二");
+        let m = h.put(m).unwrap();
+        assert_ne!(m.id, n.id);
+        let fresh = open(hub.path(), root.path());
+        assert_eq!(fresh.store.get(&n.id).unwrap().unwrap().title, "中文筆記");
+        // an outside application and its set, named in Chinese
+        let entry = |id: &str, t: &str| {
+            let mut e = Entry { id: id.into(), title: t.into(), ..Default::default() };
+            e.fields.insert("body".into(), t.into());
+            e
+        };
+        let ind = |source: &str, name: &str, items: Vec<Entry>| Batch {
+            lore_know: 1,
+            source: source.into(),
+            target: Target::Independent { name: name.into(), format: format::NOTE.into() },
+            items,
+        };
+        let a = h.import(&ind("某應用", "想法", vec![entry("甲", "第一"), entry("乙", "第二")]), false).unwrap();
+        assert_eq!((a.added, a.problems.len()), (2, 0), "{a:?}");
+        let b = h.import(&ind("另一個應用", "想法", vec![entry("甲", "第三")]), false).unwrap();
+        assert_ne!(a.category, b.category, "two Chinese sources do not meet");
+        let cat = h.store.registry().get(&a.category).unwrap().clone();
+        assert_eq!((cat.label.as_str(), cat.group.as_str()), ("想法", "某應用"));
+        let items = h.store.list(&a.category).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_ne!(items[0].id, items[1].id, "two Chinese ids stay two");
+        // the same source again replaces only its own
+        let again = h.import(&ind("某應用", "想法", vec![entry("甲", "第一改")]), false).unwrap();
+        assert_eq!((again.category.as_str(), again.replaced, again.removed), (a.category.as_str(), 1, 1));
+        assert_eq!(h.store.list(&b.category).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_empty_source_needs_the_authors_own_flag() {
+        let (hub, root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        app(root.path());
+        let mut h = open(hub.path(), root.path());
+        let mut e = Entry { id: "1".into(), title: "Short".into(), ..Default::default() };
+        e.fields.insert("message".into(), "Keep it short.".into());
+        let batch = Batch { lore_know: 1, source: String::new(), target: Target::Align { category: "t.own".into() }, items: vec![e] };
+        assert!(matches!(h.import(&batch, false), Err(KnowError::Invalid(_))));
+        assert!(ids(&h, in_cat("t.own")).is_empty());
+        let r = h.import(&batch, true).unwrap();
+        assert_eq!((r.added, r.problems.len()), (1, 0), "{r:?}");
+        assert_eq!(h.query(&in_cat("t.own")).unwrap().0[0].source, Source::author());
+    }
+
+    #[test]
+    fn the_hub_logs_use_by_step() {
+        let (hub, root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        app(root.path());
+        let mut h = open(hub.path(), root.path());
+        let ids_ = vec!["t.words:utilize".to_string()];
+        h.record_use_by("draft", &ids_, day("2026-11-24")).unwrap();
+        assert_eq!(h.store.get(&ids_[0]).unwrap().unwrap().used, 1);
+        let log = crate::reader::usage(hub.path(), day("2026-11-01"));
+        assert_eq!(log, vec![(day("2026-11-24"), "draft".to_string(), ids_)]);
     }
 }

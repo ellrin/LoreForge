@@ -286,7 +286,8 @@ fn write_undo(box_: &Proposals, id: &str, rec: &UndoRecord) -> Result<()> {
 /// Write the chosen changes (`None` = all) of the open proposal `id`. Order: adds, then the
 /// links between new items (`contains`, temporary ids to stored ids), then updates, then removes.
 /// A change that cannot be written is `refused` with its error and the rest go on. The proposal
-/// becomes `applied` and an undo record is kept beside it.
+/// becomes `applied` and an undo record is kept beside it; when every chosen change was refused
+/// nothing was written and it stays `open` (with the refusals shown).
 pub fn apply(sink: &mut dyn Sink, box_: &Proposals, id: &str, chosen: Option<&[usize]>) -> Result<Proposal> {
     let mut p = box_.get(id)?;
     if p.state != "open" {
@@ -400,6 +401,16 @@ pub fn apply(sink: &mut dyn Sink, box_: &Proposals, id: &str, chosen: Option<&[u
         }
     }
 
+    // every chosen change refused: nothing was written, the proposal is still the author's to decide
+    if !p.changes.iter().any(|c| c.result == "applied") {
+        for c in &mut p.changes {
+            if c.result == "skipped" {
+                c.result.clear();
+            }
+        }
+        box_.save(&p)?;
+        return Ok(p);
+    }
     p.state = "applied".into();
     // the undo record first: a proposal that says `applied` always has what reverses it
     write_undo(box_, id, &UndoRecord { steps })?;
@@ -776,5 +787,26 @@ mod tests {
         assert_eq!(b.get(&p.id).unwrap().state, "applied");
         // only the step that could not be undone is kept
         assert_eq!(read_undo(&b, &p.id).unwrap().steps.len(), 1);
+    }
+
+    #[test]
+    fn an_all_refused_proposal_stays_open() {
+        let (_d, b) = boxed();
+        let mut s = MemSink::default();
+        let a = stored(&mut s, "A");
+        let mut ua = a.clone();
+        ua.title = "A2".into();
+        let p = b.create("le", "t", vec![update(ua)]).unwrap();
+        s.put(a.clone()).unwrap(); // A moves on, so the update is stale
+        let r = apply(&mut s, &b, &p.id, None).unwrap();
+        assert_eq!(r.state, "open");
+        assert_eq!(r.changes[0].result, "refused");
+        assert!(r.changes[0].error.contains("改過"), "{}", r.changes[0].error);
+        assert_eq!(b.count_open(), 1);
+        assert!(!b.undo_path(&p.id).unwrap().exists(), "nothing was written, nothing to undo");
+        assert_eq!(s.items[&a.id].title, "A");
+        // it can be decided again, and a partly refused one is applied as before
+        let q = b.create("le", "t", vec![add("N", "")]).unwrap();
+        assert_eq!(apply(&mut s, &b, &q.id, None).unwrap().state, "applied");
     }
 }

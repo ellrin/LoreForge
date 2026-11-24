@@ -484,9 +484,8 @@ impl Adapter for ReferenceDirs {
     }
 
     /// Deletes the folder's `desc.md` and picture (and the folder when nothing else is left),
-    /// and returns the item. Limitation: the store's trash copy is the item only, so the
-    /// **picture's bytes are not in it**; a restored reference has its description back but its
-    /// picture must be put there again.
+    /// and returns the item. The store copies the picture into the trash first
+    /// ([`Adapter::picture_of`]) and puts it back on restore ([`Adapter::restore_picture`]).
     fn remove(&self, id: &str) -> Result<Item> {
         let (folder, local) = self.folder_of(id)?;
         if !folder.join("desc.md").is_file() {
@@ -499,6 +498,24 @@ impl Adapter for ReferenceDirs {
         }
         let _ = std::fs::remove_dir(&folder);
         Ok(item)
+    }
+
+    fn picture_of(&self, id: &str) -> Option<PathBuf> {
+        let (folder, _) = self.folder_of(id).ok()?;
+        picture_in(&folder).map(|p| folder.join(p))
+    }
+
+    fn restore_picture(&self, id: &str, name: &str, from: &Path) -> Result<()> {
+        let (folder, _) = self.folder_of(id)?;
+        let name = if PICTURES.contains(&name) {
+            name.to_string()
+        } else {
+            let ext = from.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+            PICTURES.iter().find(|p| p.ends_with(&format!(".{ext}"))).unwrap_or(&PICTURES[0]).to_string()
+        };
+        std::fs::create_dir_all(&folder)?;
+        std::fs::copy(from, folder.join(name))?;
+        Ok(())
     }
 }
 
