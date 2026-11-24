@@ -153,13 +153,24 @@ impl Llm {
     /// (no fallback); anything else = the task's order. Errors are one line for the UI;
     /// the second part is the JSON body (with the one-click `alternative` when there is one).
     pub async fn complete_json(&self, task: &str, req: LlmRequest, engine: Option<&str>) -> Result<Answer, (String, serde_json::Value)> {
+        self.complete_with(task, req, engine, lore_llm::shared_runtime::Priority::Interactive).await
+    }
+
+    /// A background job (the inbox worker): `task` with a system and a user text and the JSON
+    /// schema of the reply; the reply and the engine's id, or one line why not.
+    pub async fn complete_task(&self, task: &str, system: &str, user: &str, schema: serde_json::Value) -> Result<Answer, String> {
+        let req = LlmRequest::prompt(system, user).json(schema);
+        self.complete_with(task, req, None, lore_llm::shared_runtime::Priority::Background).await.map_err(|e| e.0)
+    }
+
+    async fn complete_with(&self, task: &str, req: LlmRequest, engine: Option<&str>, priority: lore_llm::shared_runtime::Priority) -> Result<Answer, (String, serde_json::Value)> {
         let opts = match engine {
             Some("local") => RouteOptions::only("local:current"),
             Some("claude") => RouteOptions::only("claude:selected"),
             _ => RouteOptions::default(),
         }
         // the 起草摘要 button waits for it: interactive for a local model
-        .with_priority(lore_llm::shared_runtime::Priority::Interactive);
+        .with_priority(priority);
         let route = match &self.fake {
             Some(f) => Router::new(self.tasks.clone(), f.clone()).provider_for_with(task, &opts).await,
             None => Router::new(self.tasks.clone(), self.factory()).provider_for_with(task, &opts).await,

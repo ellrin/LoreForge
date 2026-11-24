@@ -29,7 +29,9 @@ a.h-box:hover { border-color: var(--line-strong); }
 .h-ring .mid b { display: block; font: 600 44px/1 var(--mono); }
 .h-ring .mid span { font-size: 12px; color: var(--faint); letter-spacing: .1em; }
 .h-ym { font: italic 11px "Source Serif 4", Georgia, serif; fill: var(--muted); color: var(--muted); letter-spacing: .02em; }
-.h-two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.h-two { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.h-two .h-box { padding: 12px 12px; }
+.h-two .h-stat b { font-size: 28px; }
 .h-stat b { font: 600 34px/1 var(--mono); }
 .h-stat span { color: var(--muted); font-size: 13px; margin-left: 6px; }
 .h-stat.hot { border-color: var(--accent); }
@@ -253,3 +255,13 @@ label.h-plus { cursor: pointer; font-weight: 500; font-size: 12px; padding: 6px 
 .h-rest > summary::before { content: "▸ "; }
 .h-rest[open] > summary::before { content: "▾ "; }
 .h-ch { grid-template-columns: 18px 44px minmax(0, 1.3fr) minmax(0, 1fr); }
+
+/* 收件 */
+.h-in { border-top: 1px solid var(--line); padding: 14px 4px 12px; display: grid; gap: 8px; }
+.h-in .src { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.h-in textarea { width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: 8px 10px; font: 15px/1.55 "Source Serif 4", Georgia, serif; resize: vertical; }
+.h-in textarea:focus { outline: none; border-color: var(--accent); }
+.h-in .meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.h-in .sim { color: var(--warn); font-size: 12px; margin-left: 6px; }
+.h-in .h-acts { margin-top: 2px; }
+.h-in.bad .err { color: var(--err); font-size: 12px; }

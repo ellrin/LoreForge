@@ -17,3 +17,14 @@ needs = { json = true, web = true }
 default = "claude:selected"
 fallback = "claude:haiku"
 offline = false
+
+# 收件 (docs/brain-hub.md §16): a sentence handed over becomes a pattern with its holes cut. The
+# worker runs one at a time in the background; sentences read aloud go to the local model first,
+# Claude only when the local one is not connected.
+[task.kb-inbox-pattern]
+label = "收件：句子變句型"
+class = "tidy"
+needs = { json = true }
+default = "local:current"
+fallback = "claude:selected"
+offline = true

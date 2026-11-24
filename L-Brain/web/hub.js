@@ -48,7 +48,7 @@ const Hub = (() => {
 
   async function loadStats() {
     const r = await api("GET", "/api/hub/stats");
-    S.stats = r.stats; S.cards = r.cards ?? {};
+    S.stats = r.stats; S.cards = r.cards ?? {}; S.inbox = r.inbox ?? {};
     nav();
     return r;
   }
@@ -104,6 +104,7 @@ const Hub = (() => {
         el("div", { class: "h-box" }, el("div", { class: "h-cap" }, "每週新增"), line),
         el("div", { class: "h-two" },
           el("a", { class: `h-box h-stat ${st.proposals ? "hot" : ""}`, href: "#/hub/proposals" }, el("div", { class: "h-cap" }, "待你同意"), el("b", {}, st.proposals ?? 0), el("span", {}, "批")),
+          el("a", { class: `h-box h-stat ${S.inbox?.ready ? "hot" : ""}`, href: "#/hub/inbox" }, el("div", { class: "h-cap" }, "收件", (S.inbox?.waiting ?? 0) + (S.inbox?.working ?? 0) ? el("span", {}, `處理中 ${(S.inbox.waiting ?? 0) + (S.inbox.working ?? 0)}`) : null), el("b", {}, S.inbox?.ready ?? 0), el("span", {}, "句")),
           el("a", { class: "h-box h-stat", href: "#/review" }, el("div", { class: "h-cap" }, "卡到期"), el("b", {}, S.cards.due ?? 0), el("span", {}, "張")))),
       el("div", { class: "h-col" }, el("div", { class: "h-box", style: "padding:16px 18px 6px" },
         el("table", { class: "h-table" },
@@ -467,6 +468,41 @@ const Hub = (() => {
       (done.proposals ?? []).length ? [el("div", { class: "h-wh" }, "已套用", el("small", {}, done.proposals.length)), done.proposals.slice(0, 10).map(undo)] : null);
   }
 
+  // ── 收件: sentences handed over (read aloud to L-Echo, or selected) wait here, worked out;
+  //    加入 writes one into the knowledge, 略過 drops it (docs/brain-hub.md §16) ──
+  let inboxTimer = 0;
+  async function inbox() {
+    clearTimeout(inboxTimer);
+    const r = await api("GET", "/api/hub/inbox?state=ready,failed,waiting,working"), c = r.counts ?? {};
+    const again = () => show(S.root, "inbox").catch(() => {});
+    const act = async (fn) => { try { await fn(); S.allDirty = true; await again(); } catch (e) { S.host.fail?.(e); } };
+    const places = (it) => (it?.tags?.place ?? []).map((p, i) => el("span", { class: `h-tag ${i ? "" : "src"}` }, p.split("/").join(" › ")));
+    const ready = (e) => {
+      const it = e.result ?? {}, tpl = el("textarea", { rows: 2, spellcheck: "false" }, it.fields?.template ?? it.title ?? "");
+      const edited = () => ({ ...it, title: tpl.value.trim().slice(0, 80), fields: { ...(it.fields ?? {}), template: tpl.value.trim() } });
+      return el("section", { class: "h-in" },
+        el("div", { class: "src" }, e.text),
+        tpl,
+        el("div", { class: "meta" }, places(it), (it.tags?.tone ?? []).map((t) => el("span", { class: "h-tag" }, t)),
+          (e.similar_items ?? []).length ? el("span", { class: "sim", title: e.similar_items.map((x) => x.title).join("\n") }, `和 ${e.similar_items.length} 條已有的很像`) : null),
+        el("div", { class: "h-acts" }, el("button", { type: "button", class: "pri", onclick: () => act(() => api("POST", `/api/hub/inbox/${enc(e.id)}/accept`, { item: edited() })) }, "加入"),
+          el("button", { type: "button", class: "quiet", onclick: () => act(() => api("POST", `/api/hub/inbox/${enc(e.id)}/skip`)) }, "略過")));
+    };
+    const failed = (e) => el("section", { class: "h-in bad" }, el("div", { class: "src" }, e.text), el("div", { class: "err" }, e.error),
+      el("div", { class: "h-acts" }, el("button", { type: "button", onclick: () => act(() => api("POST", `/api/hub/inbox/${enc(e.id)}/retry`)) }, "再試一次"),
+        el("button", { type: "button", class: "quiet", onclick: () => act(() => api("POST", `/api/hub/inbox/${enc(e.id)}/skip`)) }, "略過")));
+    const es = r.entries ?? [], rd = es.filter((e) => e.state === "ready"), fl = es.filter((e) => e.state === "failed"), wt = es.filter((e) => e.state === "waiting" || e.state === "working");
+    // while something is being worked on, look again by itself
+    if (wt.length && S.root?.isConnected) inboxTimer = setTimeout(() => { if (S.view === "inbox") again(); }, 3000);
+    return el("div", { class: "h-props" },
+      el("div", { class: "h-head" }, el("h2", {}, "收件"), el("span", { class: "cnt" }, rd.length || ""), el("span", { class: "sp" }),
+        wt.length ? el("span", { class: "cnt" }, `處理中 ${wt.length}`) : null,
+        rd.length > 1 ? el("button", { type: "button", class: "h-plus", onclick: () => act(() => api("POST", "/api/hub/inbox/accept", { ids: rd.map((e) => e.id) })) }, `全部加入（${rd.length}）`) : null),
+      rd.length || fl.length || wt.length ? null : el("div", { class: "h-empty" }, "沒有等你確認的句子"),
+      rd.map(ready), fl.map(failed),
+      wt.length ? [el("div", { class: "h-wh" }, "排隊中", el("small", {}, wt.length)), wt.slice(0, 20).map((e) => el("div", { class: "h-done" }, el("span", {}, e.text)))] : null);
+  }
+
   // ── ＋ 來源: an outside application's knowledge, by a file in the fixed format ──
   function sourcesBox(sources) {
     const out = el("div", { class: "h-srcout" });
@@ -492,6 +528,8 @@ const Hub = (() => {
     S.root = root;
     try {
       await Promise.all([loadStats(), loadMeta()]);
+      S.view = arg === "inbox" ? "inbox" : arg === "proposals" ? "proposals" : "page";
+      if (arg === "inbox") { S.fam = null; S.sel = null; detailEl = null; nav(); root.replaceChildren(el("div", { class: "hubv" }, await inbox())); return; }
       if (arg === "proposals") { S.fam = null; S.sel = null; detailEl = null; nav(); root.replaceChildren(el("div", { class: "hubv" }, await proposals())); return; }
       const fam = arg ? S.stats.families.find((f) => f.id === arg) : null;
       if (fam?.app === "kb") S.reg = null; // labels may have changed
@@ -505,7 +543,7 @@ const Hub = (() => {
     }
   }
   /** Another view took the page: no family is the current one. */
-  const leave = () => { S.fam = null; S.sel = null; detailEl = null; S.allFor = null; nav(); };
+  const leave = () => { S.fam = null; S.sel = null; detailEl = null; S.allFor = null; S.view = ""; clearTimeout(inboxTimer); nav(); };
   /** The top search box looks through the cards. */
   const query = (q) => { S.pendingQ = q; if (isCards() && S.f && S.f.q !== q) { S.f.q = q; refresh(); } };
   return { show, leave, query, init: (host) => { S.host = host ?? {}; }, refreshNav: () => loadStats().catch(() => {}) };

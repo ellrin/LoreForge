@@ -154,7 +154,11 @@ pub struct HubError {
 }
 
 impl HubError {
-    fn new(status: StatusCode, message: impl AsRef<str>) -> HubError {
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub(crate) fn new(status: StatusCode, message: impl AsRef<str>) -> HubError {
         HubError { status, message: one_line(message.as_ref()), revision: None, problems: vec![] }
     }
 }
@@ -215,9 +219,9 @@ fn no_hub() -> HubError {
     HubError::new(StatusCode::SERVICE_UNAVAILABLE, "個人空間還沒有設定，知識庫整合暫時不能用。")
 }
 
-type Guard<'a> = MutexGuard<'a, lore_know::hub::Hub>;
+pub(crate) type Guard<'a> = MutexGuard<'a, lore_know::hub::Hub>;
 
-fn hub(s: &Shared) -> Result<Guard<'_>, HubError> {
+pub(crate) fn hub(s: &Shared) -> Result<Guard<'_>, HubError> {
     let m: &Mutex<_> = s.hub.as_ref().ok_or_else(no_hub)?;
     Ok(m.lock().unwrap_or_else(|p| p.into_inner()))
 }
@@ -320,7 +324,8 @@ async fn stats(State(s): State<Shared>) -> R {
     let (family, cards) = cards_family(&s, &mondays, today)?;
     st.total += family.count;
     st.families.insert(0, family);
-    ok(json!({ "stats": st, "cards": cards }))
+    let inbox = crate::inbox::counts(&s);
+    ok(json!({ "stats": st, "cards": cards, "inbox": inbox }))
 }
 
 // ── categories ───────────────────────────────────────────────────────────────
@@ -398,7 +403,7 @@ async fn category_remove(State(s): State<Shared>, Path(id): Path<String>) -> R {
 // ── items ────────────────────────────────────────────────────────────────────
 
 /// The `family` of a category: `<app>/<group>`, or the category id when it has no group.
-fn family_of(c: &Category) -> String {
+pub(crate) fn family_of(c: &Category) -> String {
     if c.group.is_empty() { c.id.clone() } else { format!("{}/{}", c.app, c.group) }
 }
 
@@ -495,7 +500,7 @@ fn writable_category(h: &lore_know::hub::Hub, id_or_category: &str) -> Result<Ca
     Ok(c)
 }
 
-fn invalid(h: &lore_know::hub::Hub, item: &Item) -> Result<(), HubError> {
+pub(crate) fn invalid(h: &lore_know::hub::Hub, item: &Item) -> Result<(), HubError> {
     let f = h.formats.get(&item.format).ok_or_else(|| HubError::new(StatusCode::BAD_REQUEST, format!("沒有「{}」這個格式", item.format)))?;
     let problems = f.validate(item);
     if let Some(p) = problems.first() {
