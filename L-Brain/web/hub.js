@@ -153,6 +153,8 @@ const Hub = (() => {
     const r = await api("GET", `/api/hub/items?${p}`);
     S.items = r.items ?? []; S.total = r.total ?? S.items.length;
     if (f.section) S.items = S.items.filter((it) => it.fields?.section === f.section);
+    // what was made from a reference stands for it: the reference itself leaves the lists
+    if (S.made?.size) { S.items = S.items.filter((it) => !S.made.has(it.id)); S.total = S.items.length; }
     // a place on the family's tree: everything at or under that path; "?" = not placed yet
     if (f.place === "?") S.items = S.items.filter((it) => TREE_FORMATS.has(it.format) && !(it.tags?.place ?? []).length);
     else if (f.place?.startsWith("=")) S.items = S.items.filter((it) => it.category === f.place.slice(1));
@@ -162,6 +164,8 @@ const Hub = (() => {
     if (S.allFor !== S.fam.id || S.allDirty) {
       const all = (await api("GET", `/api/hub/items?${new URLSearchParams({ family: S.fam.id, limit: "1000" })}`)).items ?? [];
       S.tags = {}; S.sections = {}; S.allItems = all;
+      // a reference a figure was made from (reference id → the figure): no longer something to make
+      S.made = new Map(all.filter((it) => it.fields?.made_from).map((it) => [it.fields.made_from, it]));
       S.tree = (await api("GET", `/api/hub/tree?family=${enc(S.fam.id)}`).catch(() => ({}))).tree ?? null;
       for (const it of all) {
         for (const [facet, ts] of Object.entries(it.tags ?? {})) for (const t of ts) { S.tags[facet] ??= {}; S.tags[facet][t] = (S.tags[facet][t] ?? 0) + 1; }
@@ -297,6 +301,7 @@ const Hub = (() => {
       }
       await LoreFlow.edit({ target: "brain", title: r.title, api: "/flow/api", doc: "", source: r.source, spec: spec ?? undefined,
         save: async ({ spec: made }) => { try { await api("POST", `/api/hub/make/${enc(it.id)}`, { spec: made, title: r.title }); return true; } catch (e) { return e.message; } } });
+      S.sel = null; detailEl = null;   // the reference gave way to its figure
       S.allDirty = true; await loadStats(); await loadItems(); paint();
     } catch (e) { S.host.fail?.(e); }
   }
@@ -363,6 +368,7 @@ const Hub = (() => {
         isNew ? null : ` · ${it.source?.kind === "external" ? it.source.name : it.source?.kind === "author" ? "我加的" : "Lore"}`, it.used ? ` · 用過 ${it.used} 次` : null),
       el("div", { class: "h-acts" },
         !isNew && it.format === "figure" && it.entity === false ? el("button", { type: "button", class: "pri", onclick: () => make(it) }, "製作") : null,
+        !isNew && it.fields?.made_from ? el("button", { type: "button", onclick: () => make({ id: it.fields.made_from }) }, "編輯圖形") : null,
         canMeta ? (saveBtn = el("button", { type: "button", class: "pri", disabled: !isNew, onclick: save }, isNew ? "新增" : "儲存")) : null,
         !isNew && c?.writable && !builtin ? el("button", { type: "button", class: "quiet", onclick: () => remove(it) }, "移除") : null),
       !isNew && canMeta ? el("details", { class: "h-more" }, el("summary", {}, "請 L-Echo 改"), askEcho(it)) : null);

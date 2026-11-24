@@ -134,11 +134,13 @@ impl crate::hub::Hub {
             let (parts, to_make) = if has_figure {
                 let figs: Vec<&Item> = cats.iter().filter(|c| c.format == format::FIGURE).flat_map(|c| items[&c.id].iter()).collect();
                 let at = |lv: &str| figs.iter().filter(|i| i.entity && i.level == lv).count();
-                // a reference is made once a drawable figure is linked to it: the reference lists it
-                // in `contains`, or the figure names the reference in `made_from`
+                // a reference is made once a drawable figure names it in `made_from`
                 let drawable: BTreeSet<&str> = figs.iter().filter(|i| i.entity).map(|i| i.id.as_str()).collect();
                 let made_from: BTreeSet<&str> = figs.iter().filter(|i| i.entity).map(|i| i.field("made_from")).filter(|m| !m.is_empty()).collect();
-                let to_make = figs.iter().filter(|i| !i.entity && !made_from.contains(i.id.as_str()) && !i.contains.iter().any(|c| drawable.contains(c.as_str()))).count();
+                // (`contains` alone says nothing: a reference lists the drawable parts it is made of
+                // long before anyone has made it)
+                let _ = &drawable;
+                let to_make = figs.iter().filter(|i| !i.entity && !made_from.contains(i.id.as_str())).count();
                 let part = |label: &str, count: usize| Part { category: first.id.clone(), label: label.into(), count };
                 (
                     vec![part("流程圖", at(level::FIGURE)), part("模塊", at(level::MODULE)), part("元件", at(level::COMPONENT)), part("待製作", to_make)],
@@ -450,17 +452,18 @@ tasks = ["polish"]
         let spec = serde_json::json!({ "lore_flow": 1, "dsl": "fig demo\nx: box \"A\"\n" });
         let made = h.put(crate::formats::figure::spec_item("t.specs", "Made", &spec, Source::author())).unwrap();
         assert_eq!(parts(&h)[3].1, 2, "not linked yet: both still wait");
-        let mut r = h.store.get("t.refs:f01").unwrap().unwrap();
+        // a reference that lists a drawable part is not made by that: it only says what it is built of
+        let mut r = h.store.get("t.refs:f02").unwrap().unwrap();
         r.contains.push(made.id.clone());
         h.put(r).unwrap();
+        assert_eq!(parts(&h)[3].1, 2, "listing a part makes nothing");
+        // the figure names the reference it was made from: that one is no longer to make
+        let mut m = h.store.get(&made.id).unwrap().unwrap();
+        m.set("made_from", "t.refs:f01");
+        h.put(m).unwrap();
         let s = h.stats(d("2026-11-24")).unwrap();
         let f = fam(&s, "t/圖");
         assert_eq!(f.parts.iter().map(|p| (p.label.as_str(), p.count)).collect::<Vec<_>>(), [("流程圖", 1), ("模塊", 0), ("元件", 0), ("待製作", 1)]);
         assert_eq!(f.gap, "1 個待製作");
-        // the figure's own `made_from` is enough as well
-        let mut m = h.store.get(&made.id).unwrap().unwrap();
-        m.set("made_from", "t.refs:f02");
-        h.put(m).unwrap();
-        assert_eq!(parts(&h)[3].1, 0);
     }
 }
