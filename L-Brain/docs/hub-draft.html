@@ -34,21 +34,36 @@
   h2 { font-size: 18px; margin: 0 0 2px; white-space: nowrap; }
   .sub-h { color: var(--faint); font-size: 12px; margin-bottom: 16px; }
 
-  /* dashboard */
-  .sect { margin-top: 22px; }
-  .sect > h3 { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 8px; }
-  .sect > h3 small { color: var(--faint); font-weight: 400; font-family: var(--mono, monospace); }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
-  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; min-height: 84px; cursor: pointer; }
-  .tile:hover { border-color: var(--line-strong); background: var(--surface); }
-  .tile .n { font: 600 26px/1.1 var(--mono, monospace); }
-  .tile .l { font-size: 13px; color: var(--muted); }
-  .tile .m { margin-top: auto; font-size: 11px; color: var(--faint); display: flex; gap: 8px; }
-  .tile .m .warn { color: var(--warn); }
-  .tile.big { grid-column: span 2; }
-  .tile.add { border-style: dashed; align-items: center; justify-content: center; color: var(--faint); font-size: 13px; }
-  .bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: var(--surface); margin-top: 6px; }
-  .bar i { display: block; }
+  /* overview A: one row per family, its own content in the row */
+  .fam { display: grid; grid-template-columns: 150px 1fr auto; gap: 20px; align-items: center; padding: 16px 6px; border-top: 1px solid var(--line); text-decoration: none; color: inherit; }
+  .fam:first-of-type { border-top: 0; }
+  .fam:hover { background: var(--panel); }
+  .fam .nm { font-size: 15px; font-weight: 600; }
+  .fam .ct { font: 12px var(--mono, monospace); color: var(--faint); margin-top: 2px; }
+  .fam .strip { display: flex; gap: 10px; overflow: hidden; align-items: center; min-width: 0; }
+  .fam .pic { flex: none; width: 104px; height: 64px; background: #fff; border-radius: 6px; display: grid; place-items: center; }
+  .fam .pic svg { width: 90px; height: 52px; }
+  .fam .pic.pg { width: 50px; }
+  .fam .pic.pg svg { width: 42px; height: 56px; }
+  .fam .more { flex: none; color: var(--faint); font: 12px var(--mono, monospace); padding-left: 4px; }
+  .fam .lines { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .fam .lines div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 13px; }
+  .fam .lines div b { color: var(--faint); font: 400 11px var(--mono, monospace); margin-right: 8px; }
+  .fam .att { font-size: 12px; color: var(--accent-text); white-space: nowrap; }
+  .fam .att.none { color: var(--faint); }
+  .famadd { display: block; padding: 14px 6px; border-top: 1px solid var(--line); color: var(--faint); font-size: 13px; }
+
+  /* overview B: the drawings first, counts in a thin rail */
+  .ovb { display: grid; grid-template-columns: 1fr 220px; gap: 28px; }
+  .ovb h3 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 10px; }
+  .hero { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 26px; }
+  .hero .card .pic { height: 150px; }
+  .hero .card .pic svg { height: 120px; }
+  .rail a { display: flex; align-items: baseline; gap: 8px; padding: 9px 0; border-top: 1px solid var(--line); text-decoration: none; color: var(--text); font-size: 14px; }
+  .rail a span { margin-left: auto; font: 13px var(--mono, monospace); color: var(--muted); }
+  .rail a small { color: var(--accent-text); font-size: 11px; }
+  .rail a.add { color: var(--faint); font-size: 13px; }
+  .fake { color: var(--faint); font-size: 11px; margin-top: 26px; }
 
   /* category page: tags | list | detail */
   .cat { display: grid; grid-template-columns: 190px minmax(320px, 1fr) 0; gap: 0; height: calc(100vh - 48px); margin: -20px -24px -40px; }
@@ -125,11 +140,8 @@
   <nav class="nav" id="nav"></nav>
 
   <main>
-    <section class="hview" id="v-dash">
-      <h2>知識</h2>
-      <div class="sub-h" id="dashSum"></div>
-      <div id="dashBody"></div>
-    </section>
+    <section class="hview" id="v-dash"><div id="ovA"></div><div class="fake">畫面草稿：數字與內容都是假的</div></section>
+    <section class="hview" id="v-dashb"><div id="ovB"></div><div class="fake">畫面草稿：數字與內容都是假的</div></section>
 
     <section class="hview" id="v-list"><div class="cat open" id="catList"></div></section>
     <section class="hview" id="v-wall"><div class="cat" id="catWall"></div></section>
@@ -181,13 +193,40 @@ const FLOW = [
 ];
 const LV = { component: "元件", module: "模塊", figure: "流程圖" };
 
-const DASH = [
-  ["L-Brain", "kb", [["知識卡", 520, "學習中 86", "cards", 1]]],
-  ["流程圖", "flow", [["元件", 24, "待製作 9", "list"], ["模塊", 31, "待製作 25", "list"], ["流程圖", 6, "待製作 16", "wall"], ["版面", 20, "", "wall"], ["配色", 2, "", "wall"]]],
-  ["論文 · L-Paper", "pc", [["句型", 440, "", "list"], ["常用詞", 300, "", "list"], ["規則", 32, "", "list"], ["用詞對照", 5, "", "list"], ["範例段落", 43, "", "list"], ["寫作筆記", 9, "", "list"], ["論文模板", 23, "", "wall"], ["風格參考", 5, "未接上", "list"]]],
-  ["投影片 · L-Slide", "sc", [["論述法", 2, "", "list"], ["風格包", 3, "", "wall"], ["版型", 7, "", "wall"], ["構圖", 49, "", "wall"]]],
-  ["獨立", "x", [["wordbox · 單字", 180, "不與 Lore 共用", "list"]]],
-];
+const PG = {
+  one: '<rect x="8" y="6" width="84" height="10" fill="#333"/>' + [0,1,2,3,4,5].map(i=>`<rect x="8" y="${24+i*8}" width="84" height="3" fill="#bbb"/>`).join(""),
+  two: '<rect x="8" y="6" width="84" height="8" fill="#333"/>' + [0,1,2,3,4,5,6].flatMap(i=>[`<rect x="8" y="${22+i*7}" width="39" height="3" fill="#bbb"/>`,`<rect x="53" y="${22+i*7}" width="39" height="3" fill="#bbb"/>`]).join(""),
+  note: '<rect x="8" y="6" width="50" height="8" fill="#333"/><rect x="70" y="24" width="22" height="26" fill="#e8eefb"/>' + [0,1,2,3,4,5].map(i=>`<rect x="8" y="${24+i*8}" width="56" height="3" fill="#bbb"/>`).join(""),
+};
+const pg = (k) => `<svg viewBox="0 0 100 78">${PG[k]}</svg>`;
+const SL = {
+  a: '<circle cx="50" cy="20" r="14" fill="#c9ccd3"/><rect x="24" y="38" width="52" height="7" fill="#f9d9e0"/><rect x="24" y="47" width="52" height="7" fill="#d9eeee"/>',
+  b: '<path d="M0 0h100v26q-50 14-100 0z" fill="#7c3aed"/><rect x="26" y="36" width="48" height="16" fill="#d9eeee"/>',
+  c: '<rect width="100" height="60" fill="#c9ccd3"/><path d="M0 28q50-6 100 0v32H0z" fill="#7c3aed"/>',
+  d: '<path d="M0 0h62L44 60H0z" fill="#2a2140"/><rect x="60" y="0" width="40" height="60" fill="#c9ccd3"/>',
+};
+const sl = (k) => `<svg viewBox="0 0 100 60">${SL[k]}</svg>`;
+function overviewA() {
+  const pics = (ks, f = svg, cls = "") => ks.map((k) => `<span class="pic ${cls}">${f(k)}</span>`).join("");
+  const lines = (ls) => `<div class="lines">${ls.map(([k, t]) => `<div><b>${k}</b>${t}</div>`).join("")}</div>`;
+  const fam = (to, nm, ct, strip, more, att) => `<a class="fam" href="#${to}"><div><div class="nm">${nm}</div><div class="ct">${ct}</div></div><div class="strip">${strip}${more ? `<span class="more">${more}</span>` : ""}</div><div class="att ${att ? "" : "none"}">${att || ""}</div></a>`;
+  document.getElementById("ovA").innerHTML =
+    fam("cards", "知識卡", "520", lines([["最近", "Mean Reprojection Error (MRE) · Kinematic Features · Temperature scaling"], ["不熟", "Contrastive loss · Anisotropic diffusion · Bundle adjustment"]]), "", "12 張到期") +
+    fam("wall", "流程圖", "61", pics(["flowB", "flowA", "unet", "enc", "cub", "stack", "op"]), "+54", "50 個待製作") +
+    fam("list", "寫作準則", "829", lines([["句型", "To address this limitation, we propose …"], ["規則", "Each paragraph opens with its claim."], ["用詞", "utilize → use"]]), "", "") +
+    fam("wall", "論文模板", "23", pics(["two", "one", "two", "note", "one", "two", "one", "two"], pg, "pg"), "+15", "") +
+    fam("list", "投影片論述法", "2", lines([["筆記", "每一頁一個結論，放在圖的旁邊。"], ["範例", "先說觀察到什麼，再說為什麼。"]]), "", "") +
+    fam("wall", "投影片版型", "59", pics(["a", "b", "c", "d", "a", "c"], sl), "+53", "") +
+    fam("list", "wordbox", "180 · 外部，不與 Lore 共用", lines([["單字", "ubiquitous · 遍在する · 至る所にある"]]), "", "") +
+    `<a class="famadd" href="#dash">＋ 類別或外部來源</a>`;
+}
+function overviewB() {
+  const card = (k, cap) => `<div class="card"><div class="pic">${svg(k)}</div><div class="cap">${cap}</div></div>`;
+  document.getElementById("ovB").innerHTML = `<div class="ovb"><div>
+    <h3>最近用過</h3><div class="hero">${card("flowB", "<b>架構圖｜</b>Training row and inference row")}${card("flowA", "<b>資料流｜</b>Encoder–decoder with a loss")}${card("unet", "<b>架構圖｜</b>UNet")}</div>
+    <h3>最近新增</h3><div class="wall">${card("enc", "<b>模塊｜</b>Encoder")}${card("dec", "<b>模塊｜</b>Decoder")}${card("cub", "<b>模塊｜</b>Cuboid sequence")}${card("lan", "<b>元件｜</b>LAN switch")}${card("mat", "<b>模塊｜</b>Matrix")}${card("vec", "<b>模塊｜</b>Vector bar")}${card("stack", "<b>模塊｜</b>Feature stack")}${card("loss", "<b>元件｜</b>Loss")}</div></div>
+    <aside class="rail"><a href="#cards" style="border-top:0">知識卡<small>12 到期</small><span>520</span></a><a href="#wall">流程圖<small>50 待製作</small><span>61</span></a><a href="#list">寫作準則<span>829</span></a><a href="#wall">論文模板<span>23</span></a><a href="#list">投影片論述法<span>2</span></a><a href="#wall">投影片版型<span>59</span></a><a href="#list">wordbox<span>180</span></a><a class="add" href="#dashb">＋ 類別或外部來源</a></aside></div>`;
+}
 
 // ── nav ──
 const view = () => (location.hash || "#dash").slice(1);
@@ -195,24 +234,9 @@ function nav() {
   const v = view();
   const a = (href, t, n, sub, on) => `<a href="#${href}" class="${sub ? "sub" : ""}" ${on ? "aria-current=page" : ""}>${t}<span>${n ?? ""}</span></a>`;
   document.getElementById("nav").innerHTML =
-    a("dash", "總覽", "", 0, v === "dash") +
-    "<h4>L-BRAIN</h4>" + a("cards", "知識卡", 520, 0, v === "cards") + a("dash", "複習", 12) + a("dash", "圖譜", "") +
-    "<h4>流程圖</h4>" + a("list", "元件", 24, 0) + a("list", "模塊", 31, 0, v === "list") + a("wall", "流程圖", 6, 0, v === "wall") + a("wall", "版面", 20) +
-    "<h4>論文</h4>" + a("dash", "寫作準則", 829) + a("dash", "模板", 23) +
-    "<h4>投影片</h4>" + a("dash", "論述法", 2) + a("dash", "版型與構圖", 59) +
-    "<h4>獨立</h4>" + a("dash", "wordbox", 180);
-}
-
-// ── dashboard ──
-function dash() {
-  const total = DASH.flatMap((s) => s[2]).reduce((n, t) => n + t[1], 0);
-  document.getElementById("dashSum").textContent = `${total} 條 · ${DASH.flatMap((s) => s[2]).length} 類`;
-  document.getElementById("dashBody").innerHTML = DASH.map(([name, id, tiles]) => {
-    const sum = tiles.reduce((n, t) => n + t[1], 0);
-    return `<div class="sect"><h3>${name}<small>${sum}</small></h3><div class="tiles">` +
-      tiles.map(([l, n, m, to, big]) => `<a class="tile${big ? " big" : ""}" href="#${to}" style="text-decoration:none;color:inherit"><span class="n">${n}</span><span class="l">${l}</span><span class="m">${m ? `<span class="${/待製作|未接上/.test(m) ? "warn" : ""}">${m}</span>` : ""}</span></a>`).join("") +
-      (id === "x" ? `<div class="tile add">＋ 來源</div>` : id === "kb" ? "" : `<div class="tile add">＋ 類別</div>`) + `</div></div>`;
-  }).join("");
+    a("dash", "總覽", "", 0, v === "dash" || v === "dashb") +
+    "<h4>知識</h4>" + a("cards", "知識卡", 520, 0, v === "cards") + a("list", "流程圖", 61, 0, v === "list" || v === "wall") + a("dash", "寫作準則", 829) + a("dash", "論文模板", 23) + a("dash", "投影片論述法", 2) + a("dash", "投影片版型", 59) +
+    "<h4>外部</h4>" + a("dash", "wordbox", 180);
 }
 
 // ── category page ──
@@ -264,7 +288,7 @@ function cards() {
       <div class="acts"><button>編輯</button><button>已熟悉，不用學</button><button>交給 Echo</button></div></aside>`;
 }
 function show() { nav(); for (const s of document.querySelectorAll(".hview")) s.classList.toggle("on", s.id === "v-" + view()); }
-dash(); list(); wall(); cards(); show(); addEventListener("hashchange", show);
+overviewA(); overviewB(); list(); wall(); cards(); show(); addEventListener("hashchange", show);
 </script>
 </body>
 </html>
