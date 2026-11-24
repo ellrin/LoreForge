@@ -73,8 +73,9 @@
 .fix-swap .link-chip { cursor: pointer; }
 
 /* 收句子: the running line above the input */
-.collect-bar { display: flex; align-items: center; gap: 12px; padding: 6px 10px; margin: 0 0 6px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; color: var(--muted); }
+.collect-bar { display: flex; align-items: center; gap: 10px; white-space: nowrap; overflow: hidden; padding: 6px 10px; margin: 0 0 6px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; color: var(--muted); }
 .collect-bar .cl-what { color: var(--text); font-weight: 600; }
-.collect-bar .cl-n { font-family: var(--mono); }
+.collect-bar .cl-n { font-size: 11px; }
+.collect-bar .cl-x { flex: none; }
 .collect-bar .cl-n.hot { color: var(--accent-text); }
 .collect-bar .cl-x { margin-left: auto; width: 22px; height: 22px; font-size: 12px; }

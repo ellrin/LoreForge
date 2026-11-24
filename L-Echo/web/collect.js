@@ -9,15 +9,17 @@
 window.LoreEchoCollect = (() => {
   const C = { on: false, bar: null, sent: 0, counts: {}, label: "句型", timer: 0 };
   const el = (tag, attrs = {}, ...kids) => h(tag, attrs, ...kids);
+  /** A line of L-Echo's own in the dialogue box (as find.js does). */
+  const say = (text) => { S.line = null; setLine(text); };
 
   function paint() {
     if (!C.bar) return;
     const c = C.counts ?? {}, working = (c.waiting ?? 0) + (c.working ?? 0);
     C.bar.replaceChildren(
-      el("span", { class: "cl-what" }, `收句子 → ${C.label}`),
-      el("span", { class: "cl-n" }, `已送 ${C.sent}`),
-      working ? el("span", { class: "cl-n" }, `處理中 ${working}`) : null,
-      c.ready ? el("span", { class: "cl-n hot" }, `待確認 ${c.ready}`) : null,
+      el("span", { class: "cl-what" }, `收${C.label}`),
+      el("span", { class: "cl-n", title: "這次送了幾句" }, `送 ${C.sent}`),
+      working ? el("span", { class: "cl-n", title: "L-Brain 還在處理" }, `處理 ${working}`) : null,
+      c.ready ? el("span", { class: "cl-n hot", title: "到 L-Brain 的收件確認" }, `待確認 ${c.ready}`) : null,
       el("button", { type: "button", class: "ico cl-x", "aria-label": "結束收句子", onclick: stop }, "✕"));
   }
   async function refresh() {
