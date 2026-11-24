@@ -7,6 +7,8 @@
 //!   prompt is one argv element (no shell). The system prompt is written in front of it.
 //! - Every call runs in an empty temporary folder, with slash commands off, and the child
 //!   starts from the same environment allowlist as the Claude engine.
+//! - Every call is `--mode plan`: the CLI is an agent with tools, and this is what denies them
+//!   (see [`Agy::args`]); a reply that tried a tool is an error, never a half answer.
 //! - No streaming, no images, no web (capabilities say so).
 //! - [`ModelLister`] / [`CliLister`]: `agy models`; [`Stored`]: the last list in the cache
 //!   folder (`agy-models.json`, wipeable runtime data). Model ids are never hard-coded.
@@ -87,9 +89,16 @@ impl Agy {
     }
 
     /// Command-line arguments for one call. The prompt is the value of `-p=`.
+    ///
+    /// `--mode plan` is what makes this a model and not an agent: `agy -p` has tools (read and
+    /// write files, shell commands, the web) and without it uses them unasked, on any path, also
+    /// with `--sandbox`. In plan mode a print-mode call cannot ask for permission, so every tool
+    /// is denied (`denied_actions` in the output, read by [`parse_output`]). Checked on the real
+    /// CLI: reading a file outside the folder, writing one, listing a folder, a shell command and
+    /// a web fetch were each denied, a plain answer and a `--json-schema` answer were not affected.
     pub fn args(&self, req: &LlmRequest) -> Vec<String> {
         let prompt = if req.system.trim().is_empty() { req.flatten() } else { format!("{}\n\n{}", req.system.trim(), req.flatten()) };
-        let mut a = vec![format!("-p={prompt}"), "--output-format".into(), "json".into(), "--disable-slash-commands".into(), "--model".into(), self.model.clone()];
+        let mut a = vec![format!("-p={prompt}"), "--output-format".into(), "json".into(), "--disable-slash-commands".into(), "--mode".into(), "plan".into(), "--model".into(), self.model.clone()];
         if let Some(e) = req.effort.as_ref().or(self.effort.as_ref()) {
             a.extend(["--effort".into(), e.clone()]);
         }
@@ -156,6 +165,11 @@ pub fn parse_output(stdout: &[u8], stderr: &[u8], ok: bool) -> Result<(String, O
     if !ok || !status.eq_ignore_ascii_case("SUCCESS") {
         let msg = if response.is_empty() { v.get("error").and_then(|e| e.as_str()).map(String::from).unwrap_or_else(|| status.to_string()) } else { response };
         return Err(LlmError::Api(NAME.into(), 0, msg));
+    }
+    // the model tried a tool (a file, a command, the web) and was refused: no answer of its own
+    if let Some(denied) = v.get("denied_actions").and_then(|d| d.as_array()).filter(|d| !d.is_empty()) {
+        let what: Vec<&str> = denied.iter().filter_map(|a| a.get("action").and_then(|x| x.as_str())).collect();
+        return Err(LlmError::Api(NAME.into(), 0, format!("模型想使用工具（{}），已拒絕；Google 模型在這裡只能回答文字", what.join("、"))));
     }
     let usage = v.get("usage").map(|u| Usage {
         input_tokens: u.get("input_tokens").and_then(|n| n.as_u64()).unwrap_or(0),
@@ -326,6 +340,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn a_reply_that_tried_a_tool_is_an_error() {
+        let out = br#"{"status":"SUCCESS","response":"","denied_actions":[{"action":"read_file","display_name":"ReadFile"}]}"#;
+        let e = parse_output(out, b"", true).unwrap_err().to_string();
+        assert!(e.contains("read_file") && e.contains("已拒絕"), "{e}");
+        let ok = br#"{"status":"SUCCESS","response":"fine","denied_actions":[]}"#;
+        assert_eq!(parse_output(ok, b"", true).unwrap().0, "fine");
+    }
+
+    #[test]
     fn args_pass_the_prompt_as_one_argument_and_the_schema() {
         let mut p = Agy::new("some-model");
         p.effort = Some("low".into());
@@ -335,6 +358,9 @@ mod tests {
         let has = |k: &str, v: &str| a.windows(2).any(|w| w[0] == k && w[1] == v);
         assert!(has("--output-format", "json") && has("--model", "some-model") && has("--effort", "low"));
         assert!(a.contains(&"--disable-slash-commands".to_string()));
+        // regression guard: without plan mode the CLI reads files and runs commands unasked
+        assert!(has("--mode", "plan"), "every call denies the CLI's tools");
+        assert!(!a.iter().any(|x| x == "--dangerously-skip-permissions" || x == "--add-dir" || x.starts_with("--add-dir=")));
         assert!(a.contains(&r#"--json-schema={"type":"object"}"#.to_string()));
         assert!(!p.args(&LlmRequest::prompt("", "u")).iter().any(|x| x.starts_with("--json-schema")));
     }
