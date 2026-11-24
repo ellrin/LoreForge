@@ -143,7 +143,8 @@ async function pdCreate(engine, mode = "review") {
 
 // ───────────────────────── the job view ─────────────────────────
 // Wire shapes (docs/paper-deck.md §API) are kept in `TDAPI` only; `TDMOCK` stands in with the same
-// methods for ?job=mock (&at=run|model|review|done|interrupted) so every state can be looked at.
+// methods for ?job=mock (&at=run|model|review|rewrite|done|interrupted) so every state can be looked at;
+// with at=review: &iv=0 = no candidates (the interview call failed), &brief=1 = 我想補充 lines already in the job.
 const TD_STAGES = [
   ["source", "讀論文"], ["notation", "對照表"], ["terms", "名詞"], ["profile", "風格"],
   ["outline", "大綱"], ["review", "微調"], ["slides", "投影片"], ["polish", "排版"],
@@ -169,9 +170,10 @@ const TDAPI = {
 
 // A synthetic job on a client clock: stages advance by time, the review stage waits for the author.
 const TDMOCK = (() => {
-  const at = new URL(location.href).searchParams.get("at") ?? "run";
+  const q = new URL(location.href).searchParams;
+  const at = q.get("at") ?? "run";
   let t0 = Date.now(), reviewed = null, stopped = false, redoAt = 0;
-  const options = { length: "standard", lang: "zh", style: null };
+  const options = { length: "standard", lang: "zh", style: null, brief: q.get("brief") === "1" ? ["提到我之前做的稀疏訊號去噪", "這個方法在小資料集上我試過，結果不穩"] : [] };
   const svg = (c, n) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='64' height='40'><rect width='64' height='40' fill='${c}'/><text x='32' y='25' font-size='14' text-anchor='middle' fill='#fff' font-family='sans-serif'>${n}</text></svg>`)}`;
   const figures = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ id: `fig${n}`, label: `圖 ${n}`, thumb: svg(["#4a7", "#58b", "#a65", "#86a"][n % 4], n) }));
   const outline = [
@@ -189,10 +191,22 @@ const TDMOCK = (() => {
     { op: "move", id: "s9", to: "s10", reason: "你的簡報習慣把討論放在 Take home 後" },
     { op: "retitle", id: "s7", title: "主要結果：比基線高 4.2 點", reason: "你的結果頁標題常用「：」句型" },
   ];
+  // 預想選項: candidates for some pages' points and for 我想補充, each with the records it came from
+  const interview = q.get("iv") === "0" ? null : {
+    points: [
+      ["s2", [["稀疏訊號的標註很貴，所以要靠沒有標註的資料", ["paper:sec1"]], ["現有方法在稀疏訊號上掉得最多", ["paper:fig1", "paper:tab1"]], ["這是我去噪研究遇到的同一個瓶頸", ["pc:sparse-denoising"]]]],
+      ["s4", [["四個模組，只有對齊是新的", ["paper:fig2"]], ["編碼器沿用舊的，改的是怎麼配對", ["paper:fig2", "paper:sec3"]]]],
+      ["s6", [["溫度 τ 決定難的負樣本有多重", ["paper:eq4", "card:infonce"]], ["對齊損失就是 InfoNCE 換了配對方式", ["card:infonce"]], ["τ 太小會不穩，這頁要講原因", ["paper:fig5"]]]],
+      ["s7", [["比基線高 4.2 個百分點，稀疏的子集差最多", ["paper:tab2"]], ["贏在稀疏資料，密集資料打平", ["paper:tab2", "paper:fig6"]]]],
+      ["s9", [["只測一個領域，我的資料上還要再驗證", ["paper:sec6", "pc:sparse-denoising"]]]],
+    ].map(([id, cands]) => ({ id, cands: cands.map(([text, from]) => ({ text, from })) })),
+    brief: [["提到我之前做的稀疏訊號去噪，這篇補上了對齊這一步", ["pc:sparse-denoising"]], ["上次組會講過 InfoNCE，這次只講它改了哪裡", ["deck:infonce-talk", "card:infonce"]], ["我的資料比論文的更稀疏，結果頁要提這個差別", ["pc:sparse-denoising", "paper:tab1"]]].map(([text, from]) => ({ text, from })),
+    records: [["paper:sec1", "Introduction"], ["paper:sec3", "Method"], ["paper:sec6", "Limitations"], ["paper:fig1", "圖 1"], ["paper:fig2", "圖 2"], ["paper:fig5", "圖 5"], ["paper:fig6", "圖 6"], ["paper:tab1", "表 1"], ["paper:tab2", "表 2"], ["paper:eq4", "式 (4)"], ["pc:sparse-denoising", "Denoising Sparse Signals without Labels: A Contrastive View of Alignment across Scales"], ["deck:infonce-talk", "InfoNCE in one hour"], ["card:infonce", "InfoNCE"]].map(([id, label]) => ({ id, label })),
+  };
   function snapshot() {
     if (at === "interrupted") return { id: "mock", title, state: "interrupted", step: 4, stages: TD_STAGES.map(([id], i) => ({ id, state: i < 3 ? "done" : "pending", ms: i < 3 ? 4000 : 0 })) };
     const dur = [6, 3, 5, 2, 14];
-    const el = at === "review" || at === "done" ? 1e6 : at === "model" ? 17 + (Date.now() - t0) / 1000 : (Date.now() - t0) / 1000;
+    const el = at === "review" || at === "rewrite" || at === "done" ? 1e6 : at === "model" ? 17 + (Date.now() - t0) / 1000 : (Date.now() - t0) / 1000;
     let acc = 0, cur = null;
     const st = dur.map((d, i) => {
       const s = { id: TD_STAGES[i][0], state: "pending", ms: 0, f: Math.min(1, Math.max(0, (el - acc) / d)) };
@@ -208,10 +222,11 @@ const TDMOCK = (() => {
     const reviewing = cur == null;
     const out = { id: "mock", title, state: reviewing ? "review" : "running", stage: reviewing ? "review" : TD_STAGES[cur][0] };
     out.stages = TD_STAGES.map(([id], i) => st[i] ?? { id, state: "pending", ms: 0 });
-    if (reviewing) { out.stages[5] = { id: "review", state: "running", ms: 0 }; out.review = { outline, figures, unknown, suggestions }; }
-    out.options = { ...options, style: options.style ?? S.info?.style_list?.[0]?.id ?? S.info?.styles?.[0] ?? null };
-    // 語言／長度 changed: the outline is written again for a few seconds
-    if (redoAt && Date.now() - redoAt < 3500 && !reviewed) {
+    if (reviewing) { out.stages[5] = { id: "review", state: "running", ms: 0 }; out.review = { outline, figures, unknown, suggestions, ...(interview ? { interview } : {}) }; }
+    out.options = { ...options, brief: [...options.brief], style: options.style ?? S.info?.style_list?.[0]?.id ?? S.info?.styles?.[0] ?? null };
+    // 語言／長度／補充 changed: the outline is written again for a few seconds (at=rewrite: stays there)
+    if (at === "rewrite" && !redoAt) redoAt = Date.now();
+    if (redoAt && (at === "rewrite" || Date.now() - redoAt < 3500) && !reviewed) {
       out.state = "running";
       out.stages = TD_STAGES.map(([id], i) => ({ id, state: i < 4 ? "done" : i === 4 ? "running" : "pending", ms: i === 4 ? Date.now() - redoAt : 4000 }));
       out.stages[4].chars = Math.round((Date.now() - redoAt) / 2); out.stages[4].agoMs = 300;
@@ -233,8 +248,10 @@ const TDMOCK = (() => {
     discard: async () => {},
     review: async (_id, body) => { reviewed = body; window.__tdReview = body; },
     params: async (_id, body) => {
-      if ((body.lang && body.lang !== options.lang) || (body.length && body.length !== options.length)) { redoAt = Date.now(); suggestions = []; }
-      Object.assign(options, body);
+      if ((body.lang && body.lang !== options.lang) || (body.length && body.length !== options.length) || (body.brief && JSON.stringify(body.brief) !== JSON.stringify(options.brief))) { redoAt = Date.now(); suggestions = []; }
+      window.__tdParams = body;
+      const { outline: _rows, ...rest } = body;
+      Object.assign(options, rest);
     },
   };
 })();
@@ -283,10 +300,11 @@ const TDJ = (() => {
     return J.root;
   }
 
-  function head(snap) {
+  function head(snap, extra) {
     const h = E("header", { class: "tdj-head" },
       E("h2", {}, snap?.title ?? "論文報告"),
       E("span", { class: "grow", style: "flex:1" }),
+      extra,
       E("button", { type: "button", class: "ico close", "aria-label": "關閉 Esc", onclick: close }, ic("x")));
     paint(h);
     return h;
@@ -349,11 +367,27 @@ const TDJ = (() => {
     const opts = { length: "standard", lang: "zh", style: null, ...(snap.options ?? {}) };
     let sugg = (rv.suggestions ?? []).map((x, i) => ({ ...x, k: i, state: "" }));
     let newId = 0;
+    // 預想選項 (`review.interview`, may be absent): 2–3 candidates per page point and for 我想補充
+    const iv = rv.interview ?? null;
+    const recs = new Map((iv?.records ?? []).map((x) => [x.id, x.label]));
+    // an evidence chip reads as its record's label (never a raw id; no label = no chip)
+    const evTitle = (x) => x;
+    const asCards = (l) => (l ?? []).filter((c) => c?.text).map((c) => ({ text: c.text, evidence: (c.from ?? []).map((id) => recs.get(id)).filter(Boolean) }));
+    const ptCands = new Map((iv?.points ?? []).map((p) => [p.id, asCards(p.cands)]));
+    const briefCands = asCards(iv?.brief);
+    const anyCands = briefCands.length > 0 || [...ptCands.values()].some((l) => l.length);
+    // 我想補充: the job's lines, or the unsent ones a 長度／語言 redo carried over
+    const BRIEF_MAX = 8, BRIEF_LEN = 300;
+    const briefBase = (snap.options?.brief ?? snap.params?.brief ?? []).map(String);
+    let lines = keep?.brief ? [...keep.brief] : [...briefBase];
+    const cleanBrief = () => lines.map((x) => x.trim()).filter(Boolean);
+    const briefDirty = () => JSON.stringify(cleanBrief()) !== JSON.stringify(briefBase);
 
     const body = E("div", { class: "tdj-body wide" });
     const hasS = sugg.length > 0;
-    const nb = (i) => String(i + (hasS ? 1 : 0)).padStart(2, "0");
-    const bS = hasS ? LoreShell.block({ n: "01", title: "建議", count: String(sugg.length), key: "tdj.sugg" }) : null;
+    const nb = (i) => String(i + (hasS ? 2 : 1)).padStart(2, "0");
+    const bB = LoreShell.block({ n: "01", title: "我想補充", count: String(lines.length), key: "tdj.brief" });
+    const bS = hasS ? LoreShell.block({ n: "02", title: "建議", count: String(sugg.length), key: "tdj.sugg" }) : null;
     const bOut = LoreShell.block({ n: nb(1), title: "大綱", count: String(rows.length), key: "tdj.outline" });
     const bQ = LoreShell.block({ n: nb(2), title: "問題", key: "tdj.q" });
     const bT = LoreShell.block({ n: nb(3), title: `這 ${rv.unknown.length} 個詞不在你的知識庫`, key: "tdj.terms" });
@@ -369,6 +403,20 @@ const TDJ = (() => {
           th.append(E("button", { type: "button", class: "fig", title: `${f?.label ?? id}`, "aria-label": `換圖 ${f?.label ?? id}`, onclick: (e) => swap(e.currentTarget, r, id) }, f?.thumb ? E("img", { src: f.thumb, alt: f.label ?? id }) : f?.label ?? id));
         }
         if (!r.figs.length && rv.figures.length) th.append(E("button", { type: "button", class: "fig add", "aria-label": "加圖", onclick: (e) => swap(e.currentTarget, r, null) }, ic("plus")));
+        // 重點: its candidates open under it while it is focused; picking one is the same as typing it
+        const pt = E("input", { class: "pt", value: r.point ?? "", "aria-label": "重點", oninput: () => { r.point = pt.value; mark(); }, onchange: () => { r.point = pt.value; mark(); } });
+        const cs = ptCands.get(r.id) ?? [];
+        const pc = cs.length ? LoreChoices.cards(cs, { numbered: false, evidenceTitle: evTitle, picked: (c) => c.text === r.point, onPick: (c) => { pt.value = c.text; r.point = c.text; mark(); } }) : null;
+        const mark = () => pc?.querySelectorAll(".df-cand").forEach((b, k) => b.classList.toggle("on", cs[k].text === r.point));
+        const pm = LoreChoices.mic(pt, () => { r.point = pt.value; mark(); }, { language: opts.lang === "en" ? "en-US" : "zh-TW" });
+        pm.classList.add("tiny");
+        if (pc) {
+          pc.classList.add("pc");
+          // a click on a card must not take the focus from the input (the cards would close before the click)
+          for (const ev of ["pointerdown", "mousedown"]) pc.addEventListener(ev, (e) => e.preventDefault());
+          pt.addEventListener("focus", () => pc.classList.add("open"));
+          pt.addEventListener("blur", () => pc.classList.remove("open"));
+        }
         list.append(E("li", { class: "row" },
           E("span", { class: "mv" },
             E("button", { type: "button", class: "ico tiny", "aria-label": "上移", disabled: i === 0, onclick: () => { [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; paintRows(); } }, ic("up")),
@@ -376,8 +424,9 @@ const TDJ = (() => {
           E("span", { class: "kd" }, TD_KINDS[r.kind] ?? r.kind),
           E("input", { class: "ti", value: r.title, "aria-label": "標題", onchange: (e) => (r.title = e.target.value) }),
           th,
-          E("input", { class: "pt", value: r.point ?? "", "aria-label": "重點", onchange: (e) => (r.point = e.target.value) }),
-          E("button", { type: "button", class: "ico tiny", "aria-label": "刪除", onclick: () => { rows.splice(i, 1); paintRows(); } }, ic("trash"))));
+          E("span", { class: "pw" }, pt, pm),
+          E("button", { type: "button", class: "ico tiny", "aria-label": "刪除", onclick: () => { rows.splice(i, 1); paintRows(); } }, ic("trash")),
+          pc));
       });
       paint(list);
       paintSugg();
@@ -477,13 +526,14 @@ const TDJ = (() => {
     if (!rv.unknown.length) bT.style.display = "none";
 
     // 語言／長度 redo the outline (the job runs again and comes back here); 底版 is kept for the slides
-    const stash = () => { J.keep = { id: J.id, ans: { ...ans }, known: [...known], remember }; };
+    const stash = () => { J.keep = { id: J.id, ans: { ...ans }, known: [...known], remember, brief: briefDirty() ? cleanBrief() : null }; };
     const setOpt = async (key, v) => {
       if (J.busy || opts[key] === v) return;
       J.busy = true;
       try {
         stash();
-        await tdApi().params(J.id, { [key]: v });
+        // a new 長度／語言 rewrites the outline: the rows go along so the points he edited are carried over
+        await tdApi().params(J.id, key === "style" ? { [key]: v } : { [key]: v, outline: rowsOut() });
         opts[key] = v;
         if (key !== "style") { J.mode = ""; J.live = true; poll(); }
         else box.querySelectorAll("input").forEach((r) => (r.checked = r.value === v));
@@ -514,19 +564,85 @@ const TDJ = (() => {
     })();
 
     const wl = rv.warnings?.length ? E("ul", { class: "tdj-warn", "aria-label": "注意" }, ...rv.warnings.map((w) => E("li", {}, w))) : null;
-    body.append(strip, ...(wl ? [wl] : []), ...(bS ? [bS] : []), bOut, bQ, bT);
+    // 我想補充: what only the presenter can say. Candidates to pick, a field to type or dictate, the lines so far;
+    // 重寫大綱 (only when the lines differ from the job's) sends them and the outline is written again.
+    const okBtn = E("button", { type: "button", class: "btn primary", onclick: () => (briefDirty() ? rewrite() : submit(false)) }, "確定");
+    const bCards = E("div", { class: "tdj-bc" });
+    const bl = E("ul", { class: "tdj-brief" });
+    const bIn = E("input", { class: "bi", placeholder: "補充一句", maxlength: String(BRIEF_LEN), "aria-label": "補充一句", onkeydown: (e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); addLine(bIn.value); } } });
+    const bAdd = E("button", { type: "button", class: "ico tiny", "aria-label": "加入", onclick: () => addLine(bIn.value) }, ic("plus"));
+    const bGo = E("button", { type: "button", class: "btn small", onclick: () => rewrite() }, "重寫大綱");
+    const bMic = LoreChoices.mic(bIn, null);
+    bMic.classList.add("tiny");
+    function syncBrief() {
+      const d = briefDirty(), full = lines.length >= BRIEF_MAX;
+      bGo.hidden = !d;
+      // unsent lines would not reach the deck: the outline is written again first, so the primary button says so
+      okBtn.textContent = d ? "重寫大綱" : "確定";
+      bIn.disabled = bAdd.disabled = full;
+      bB.setCount(String(cleanBrief().length));
+      bCards.querySelectorAll(".df-cand").forEach((b, k) => { const on = lines.includes(briefCands[k].text); b.classList.toggle("on", on); b.disabled = full && !on; });
+    }
+    function addLine(text) {
+      const t = String(text ?? "").trim().slice(0, BRIEF_LEN);
+      if (!t || lines.length >= BRIEF_MAX || lines.includes(t)) return;
+      lines.push(t);
+      if (text === bIn.value) bIn.value = "";
+      paintBrief();
+    }
+    function paintBrief() {
+      bl.textContent = "";
+      lines.forEach((t, i) => {
+        bl.append(E("li", {},
+          E("input", { value: t, maxlength: String(BRIEF_LEN), "aria-label": "補充", oninput: (e) => { lines[i] = e.target.value; syncBrief(); }, onchange: (e) => { if (!e.target.value.trim()) { lines.splice(i, 1); paintBrief(); } } }),
+          E("button", { type: "button", class: "ico tiny", "aria-label": "刪除", onclick: () => { lines.splice(i, 1); paintBrief(); } }, ic("trash"))));
+      });
+      bl.hidden = !lines.length;
+      paint(bl);
+      syncBrief();
+    }
+    // a candidate adds its text as a line; the same card again takes it back
+    if (briefCands.length) bCards.append(LoreChoices.cards(briefCands, { numbered: false, evidenceTitle: evTitle, onPick: (c) => { const i = lines.indexOf(c.text); if (i >= 0) { lines.splice(i, 1); paintBrief(); } else addLine(c.text); } }));
+    const rewrite = async () => {
+      if (J.busy || !briefDirty()) return;
+      J.busy = true;
+      try {
+        const brief = cleanBrief();
+        stash();
+        J.keep.brief = null; // the lines come back from the job
+        // the rows go with it, so the points already edited are carried onto the new outline
+        await tdApi().params(J.id, { brief, outline: rowsOut() });
+        J.mode = ""; J.live = true; poll();
+      } catch (e) { toast(e.message, true); } finally { J.busy = false; }
+    };
+    bB.body.append(bCards, bl, E("div", { class: "tdj-badd" }, bIn, bMic, bAdd, bGo));
+    paint(bB);
+    paintBrief();
+
+    // 候選: the candidate cards as a layer that can be switched off (remembered)
+    const candSw = anyCands ? E("button", { type: "button", class: "tdj-sw", role: "switch", onclick: () => setCands(candSw.getAttribute("aria-checked") !== "true") }, "候選", E("i")) : null;
+    function setCands(on) {
+      pdPref.set("cands", on);
+      candSw?.setAttribute("aria-checked", String(on));
+      body.classList.toggle("no-cands", !on);
+    }
+    body.classList.toggle("no-cands", !pdPref.get("cands", true));
+    candSw?.setAttribute("aria-checked", String(pdPref.get("cands", true)));
+
+    body.append(strip, ...(wl ? [wl] : []), bB, ...(bS ? [bS] : []), bOut, bQ, bT);
+    const rowsOut = () => rows.map((r) => ({ id: r.id, kind: r.kind, title: r.title, figs: r.figs, point: r.point }));
     const submit = async (skip) => {
       if (J.busy) return;
       J.busy = true;
       try {
-        await tdApi().review(J.id, skip ? { skip: true } : { outline: rows.map((r) => ({ id: r.id, kind: r.kind, title: r.title, figs: r.figs, point: r.point })), answers: ans, known: [...known], remember });
+        await tdApi().review(J.id, skip ? { skip: true } : { outline: rowsOut(), answers: ans, known: [...known], remember });
         J.keep = null;
         J.mode = "";
         J.live = true;
         poll();
       } catch (e) { toast(e.message, true); } finally { J.busy = false; }
     };
-    root.replaceChildren(head(snap), body, E("footer", { class: "tdj-foot" }, spacer(), E("button", { type: "button", class: "btn", onclick: () => submit(true) }, "略過"), E("button", { type: "button", class: "btn primary", onclick: () => submit(false) }, "確定")));
+    root.replaceChildren(head(snap, candSw), body, E("footer", { class: "tdj-foot" }, spacer(), E("button", { type: "button", class: "btn", onclick: () => submit(true) }, "略過"), okBtn));
     paint(root);
     J.mode = "review";
   }

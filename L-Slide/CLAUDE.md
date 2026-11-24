@@ -84,6 +84,7 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   structured edits on the review rows, applied by the page). 補充 (`Params.brief`, `params` → redo the outline; `plan::brief_block`
   in the prompt, empty = unchanged; `plan::brief_missing` → warning) and 預想選項 (`todeck/interview.rs`, task `sc-deck-interview`, not in direct mode:
   2–3 options per point and for the brief, each citing records sent — `paper:` `pc:` `deck:` `card:` — numbers and ids checked in code; `review.interview`).
+  The page (`web/todeck.js`): block 我想補充 (cards, field + mic, lines, 重寫大綱 = `params {brief, outline}`; 確定 reads 重寫大綱 while lines are unsent), a row's cards under its focused 重點, header switch 候選 (`sc.todeck` `cands`), `LoreChoices` from `/choices.js`; look at it with `?job=mock&at=review` (`&iv=0`, `&brief=1`) or `at=rewrite`.
   排版用字: the polish stage also writes the deck's
   `polish.json`; the editor shows it as the right-panel block 排版用字 (`?polish=1` after a job, AI → 排版用字),
   復原／套用 through `POST /api/decks/{name}/polish/{item}`. 語氣 (`deckvoice.rs`, author-approved 2026-11-13):

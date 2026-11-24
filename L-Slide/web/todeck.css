@@ -56,7 +56,7 @@
 .tdj-rem { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 @media (max-width: 900px) {
   .tdj-outline .row { grid-template-columns: 22px 46px 1fr 26px; }
-  .tdj-outline .th, .tdj-outline .pt { grid-column: 3; }
+  .tdj-outline .th, .tdj-outline .pw, .tdj-outline .pc { grid-column: 3; }
   .tdj-q { grid-template-columns: 1fr; gap: 4px; }
   .tdj-st { grid-template-columns: 22px 54px 1fr; }
   .tdj-st .tm { grid-column: 3; text-align: left; }
@@ -84,3 +84,32 @@
   .tdj-sugg .what { grid-column: 1; grid-row: 2; white-space: normal; }
   .tdj-sugg .acts, .tdj-sugg .st { grid-column: 2; grid-row: 1 / span 2; }
 }
+
+/* 微調: 我想補充, the candidate cards (commons/ui/choices.js) and the 候選 switch */
+.tdj-sw { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px; border: 0; background: none; font: 400 12px var(--sans); color: var(--muted); flex: none; }
+.tdj-sw:hover, .tdj-sw[aria-checked="true"] { color: var(--text); }
+.tdj-sw i { width: 24px; height: 14px; border-radius: 7px; background: var(--line-strong); position: relative; flex: none; }
+.tdj-sw i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); }
+.tdj-sw[aria-checked="true"] i { background: var(--accent-text); }
+.tdj-sw[aria-checked="true"] i::after { left: 12px; }
+.tdj-body.no-cands .df-cands, .tdj-body.no-cands .tdj-outline .pc.open { display: none; }
+.tdj .df-mic { align-self: center; }
+.tdj .df-cand .ev { min-width: 0; }
+.tdj .df-ev { max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tdj-bc .df-cands { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin: 0 0 8px; }
+.tdj-bc .df-cand { align-content: start; }
+.tdj-brief { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; }
+.tdj-brief li { display: grid; grid-template-columns: 1fr 26px; gap: 8px; align-items: center; padding: 5px 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.tdj-brief input { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid transparent; background: transparent; color: var(--text); font: inherit; padding: 4px 6px; border-radius: var(--r); }
+.tdj-brief input:hover { border-color: var(--line); }
+.tdj-brief input:focus { border-color: var(--accent); outline: none; background: var(--bg); }
+.tdj-badd { display: flex; align-items: center; gap: 8px; }
+.tdj-badd .bi { flex: 1; min-width: 0; height: 28px; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); color: var(--text); font: inherit; padding: 0 8px; }
+.tdj-badd .bi:focus { border-color: var(--accent); outline: none; }
+.tdj-badd .bi::placeholder { color: var(--faint); }
+.tdj-outline .pw { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.tdj-outline .pw .df-mic { opacity: 0; }
+.tdj-outline .row:hover .df-mic, .tdj-outline .row:focus-within .df-mic, .tdj-outline .df-mic.on { opacity: 1; }
+.tdj-outline .pc { grid-column: 5; display: none; margin: 0 0 3px; }
+.tdj-outline .pc.open { display: flex; }
+@media (max-width: 900px) { .tdj-outline .pc { grid-column: 3; } }
