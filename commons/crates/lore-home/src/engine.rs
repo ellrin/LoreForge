@@ -41,6 +41,14 @@ pub const VIAS: [&str; 2] = ["subscription", "api"];
 pub const CLASSES: [&str; 3] = ["create", "tidy", "ask"];
 /// Routes of a class or a task: `auto` (the class order), `cloud` (Claude only), `local` (local only).
 pub const ROUTES: [&str; 3] = ["auto", "cloud", "local"];
+/// What a step is for (`[purpose]` keys), the same in every Lore app: 規劃設計, 寫作, 對話理解, 整理,
+/// 看圖, 上網查. A purpose may name one model for all its steps.
+pub const PURPOSES: [&str; 6] = ["plan", "write", "chat", "tidy", "see", "web"];
+
+/// A named model, `kind:name` (lore-llm knows which kinds exist).
+pub fn named_model(v: &str) -> bool {
+    v.split_once(':').is_some_and(|(k, n)| !k.trim().is_empty() && !n.trim().is_empty())
+}
 
 /// `[engine]` of [`FILE`]: catalog ids only.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -69,8 +77,10 @@ pub struct EngineSettings {
     pub claude: ClaudeChoice,
     /// Class → route; a missing class is `auto`.
     pub route: BTreeMap<String, String>,
-    /// Task id → route (`auto` is never kept: it means "follow the class").
+    /// Task id → route, or a named model (`auto` is never kept: it means "follow the class").
     pub overrides: BTreeMap<String, String>,
+    /// Purpose → the model all its steps use (absent = each step's own order).
+    pub purpose: BTreeMap<String, String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -80,6 +90,7 @@ struct EngineFile {
     claude: ClaudeChoice,
     route: BTreeMap<String, String>,
     overrides: BTreeMap<String, String>,
+    purpose: BTreeMap<String, String>,
 }
 
 fn clean(v: Option<String>) -> Option<String> {
@@ -90,7 +101,8 @@ fn routes(m: BTreeMap<String, String>, table: &str, keys: Option<&[&str]>) -> BT
     m.into_iter()
         .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
         .filter(|(k, v)| {
-            let ok = ROUTES.contains(&v.as_str()) && keys.is_none_or(|ks| ks.contains(&k.as_str()));
+            // a task's line may also name a model; a class's line is a route word only
+            let ok = (ROUTES.contains(&v.as_str()) || (keys.is_none() && named_model(v))) && keys.is_none_or(|ks| ks.contains(&k.as_str()));
             if !ok {
                 eprintln!("lore-home: {FILE}: [{table}] {k} = \"{v}\" ignored");
             }
@@ -136,6 +148,7 @@ impl Home {
             claude: ClaudeChoice { via, model: clean(f.claude.model) },
             route: routes(f.route, "route", Some(&CLASSES)),
             overrides,
+            purpose: f.purpose.into_iter().map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).filter(|(k, v)| PURPOSES.contains(&k.as_str()) && named_model(v)).collect(),
         }
     }
 
@@ -235,12 +248,19 @@ impl Home {
         self.edit_engine_file(|t| set_in(t, "route", class, Some(route)))
     }
 
+    /// `[purpose] <purpose> = <model>`; `None` removes the line (each step's own order again).
+    pub fn set_purpose(&self, purpose: &str, model: Option<&str>) -> std::io::Result<()> {
+        if !PURPOSES.contains(&purpose) || model.is_some_and(|m| !named_model(m)) {
+            return Err(std::io::Error::other(format!("unknown purpose or model: {purpose} = {model:?}")));
+        }
+        self.edit_engine_file(|t| set_in(t, "purpose", purpose, model))
+    }
+
     /// `[overrides] <task> = <route>`; `auto` or `None` removes the task's line (back to its class).
     pub fn set_override(&self, task: &str, route: Option<&str>) -> std::io::Result<()> {
         let task = task.trim();
         // a route word, or a named model (`kind:name`: lore-llm checks which kinds exist)
-        let named = |r: &str| r.split_once(':').is_some_and(|(k, n)| !k.trim().is_empty() && !n.trim().is_empty());
-        if task.is_empty() || route.is_some_and(|r| !ROUTES.contains(&r) && !named(r)) {
+        if task.is_empty() || route.is_some_and(|r| !ROUTES.contains(&r) && !named_model(r)) {
             return Err(std::io::Error::other(format!("unknown task or route: {task} = {route:?}")));
         }
         self.edit_engine_file(|t| set_in(t, "overrides", task, route.filter(|r| *r != "auto")))
@@ -267,6 +287,24 @@ fn set_in(t: &mut toml::Table, table: &str, key: &str, value: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_model_for_a_task_or_a_purpose_is_kept() {
+        // regression guard: the reader dropped every override that was not auto / cloud / local,
+        // so a model named for a step was saved and then never applied
+        let d = tempfile::tempdir().unwrap();
+        let h = Home::at(d.path());
+        h.set_override("pc-draft-skeleton", Some("claude:fable")).unwrap();
+        h.set_override("le-chat", Some("local")).unwrap();
+        h.set_purpose("plan", Some("agy:m-1")).unwrap();
+        let s = h.engine_settings();
+        assert_eq!(s.overrides.get("pc-draft-skeleton").map(String::as_str), Some("claude:fable"));
+        assert_eq!(s.overrides.get("le-chat").map(String::as_str), Some("local"));
+        assert_eq!(s.purpose.get("plan").map(String::as_str), Some("agy:m-1"));
+        assert!(h.set_purpose("nonsense", Some("claude:opus")).is_err() && h.set_purpose("plan", Some("cloud")).is_err());
+        h.set_purpose("plan", None).unwrap();
+        assert!(h.engine_settings().purpose.is_empty());
+    }
 
     #[test]
     fn local_home_round_trip() {

@@ -163,7 +163,13 @@ pub struct EngineSettings {
     /// Task id → a named model (`claude:<alias>`, `local:<id>`, `agy:<id>`): that model answers
     /// the task, or the error is shown; never another model. Wins over `overrides` and the class.
     pub models: BTreeMap<String, String>,
+    /// Purpose (`plan`, `write`, `chat`, `tidy`, `see`, `web`) → the model every step of that
+    /// purpose uses, in every app; a task's own named model wins. Absent = each step's own order.
+    pub purposes: BTreeMap<String, String>,
 }
+
+/// The purposes a step can have, with the words the settings show: the same in every Lore app.
+pub const PURPOSES: [(&str, &str); 6] = [("plan", "規劃設計"), ("write", "寫作"), ("chat", "對話理解"), ("tidy", "整理"), ("see", "看圖"), ("web", "上網查")];
 
 /// `claude:<alias|id>`, `local:<catalog id>` or `agy:<model id>` with a name: a model, not a route.
 pub fn is_model_ref(s: &str) -> bool {
@@ -189,7 +195,14 @@ impl EngineSettings {
             routes: routes.into_iter().filter_map(|(c, m)| Some((TaskClass::parse(c)?, RouteMode::parse(m)?))).collect(),
             overrides: ov.iter().filter(|(_, m)| !is_model_ref(m)).filter_map(|(t, m)| Some((t.clone(), RouteMode::parse(m)?))).collect(),
             models: ov.iter().filter(|(_, m)| is_model_ref(m)).map(|(t, m)| (t.clone(), m.trim().to_string())).collect(),
+            purposes: BTreeMap::new(),
         }
+    }
+
+    /// With the models named per purpose (unknown purposes and values that are no model are left out).
+    pub fn with_purposes<'a>(mut self, purposes: impl IntoIterator<Item = (&'a String, &'a String)>) -> EngineSettings {
+        self.purposes = purposes.into_iter().filter(|(p, m)| PURPOSES.iter().any(|(id, _)| id == p) && is_model_ref(m)).map(|(p, m)| (p.clone(), m.trim().to_string())).collect();
+        self
     }
 
     pub fn route(&self, class: TaskClass) -> RouteMode {

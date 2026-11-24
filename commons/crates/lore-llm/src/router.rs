@@ -131,6 +131,10 @@ pub struct TaskSpec {
     /// router passes the effective one (a call's [`RouteOptions::priority`] first).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
+    /// What the step is for, when its class does not say: `plan` (規劃設計) or `chat` (對話理解).
+    /// See [`TaskSpec::purpose_id`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
     /// Opt-in to `agy:<model>` refs (Google through the Antigravity CLI). Any other task
     /// refuses them, whoever names them ([`RouteError::AgyNotAllowed`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -145,6 +149,35 @@ pub struct TaskTable {
     /// Task id → model ref chosen by the user (the per-task model picker).
     #[serde(default, rename = "override")]
     pub overrides: BTreeMap<String, String>,
+}
+
+impl TaskSpec {
+    /// The step's purpose, shared by every Lore app so one choice of model covers them all:
+    /// a step that searches the web is `web`, one that looks at pictures `see` (those two follow
+    /// from what it needs); else what the task says (`purpose`), else its class (`create` →
+    /// `write`, `ask` → `chat`, `tidy` → `tidy`), else `write`.
+    pub fn purpose_id(&self) -> &str {
+        if self.needs.web {
+            return "web";
+        }
+        if self.needs.vision {
+            return "see";
+        }
+        if let Some(p) = self.purpose.as_deref().filter(|p| crate::shared::PURPOSES.iter().any(|(id, _)| id == p)) {
+            return p;
+        }
+        match self.class {
+            Some(TaskClass::Ask) => "chat",
+            Some(TaskClass::Tidy) => "tidy",
+            _ => "write",
+        }
+    }
+
+    /// May this named model answer the step at all? An Antigravity model is text only and needs
+    /// the task's leave.
+    pub fn takes(&self, model_ref: &str) -> bool {
+        !model_ref.trim_start().starts_with("agy:") || (self.agy && !self.needs.vision && !self.needs.web)
+    }
 }
 
 impl TaskTable {
@@ -466,6 +499,16 @@ pub fn plan(task: &str, spec: &TaskSpec, saved: Option<String>, opts: &RouteOpti
     // choice above still wins for its one call)
     if opts.override_ref.is_none()
         && let Some(r) = settings.and_then(|s| s.models.get(task))
+    {
+        let r = rw(r);
+        let k = EngineKind::of(&r);
+        return Plan { candidates: vec![r], only: Some(k), by_route: true, others: vec![], mode: RouteMode::Auto };
+    }
+    // the model named for the step's purpose (規劃設計 = …, in every app), when it can answer this
+    // step; a step it cannot answer (an Antigravity model for one that was not opened to it)
+    // keeps its own order
+    if opts.override_ref.is_none()
+        && let Some(r) = settings.and_then(|s| s.purposes.get(spec.purpose_id())).filter(|r| spec.takes(r))
     {
         let r = rw(r);
         let k = EngineKind::of(&r);
@@ -1168,7 +1211,7 @@ max_tokens = 9000
     // ── StandardFactory (no network: fake CLI, mock HTTP, temp folders) ──
 
     fn spec(needs: Needs) -> TaskSpec {
-        TaskSpec { label: None, needs, default: "claude:sonnet".into(), fallback: None, offline: None, effort: None, max_tokens: None, class: None, priority: None, agy: false }
+        TaskSpec { label: None, needs, default: "claude:sonnet".into(), fallback: None, offline: None, effort: None, max_tokens: None, class: None, priority: None, agy: false, purpose: None }
     }
 
     #[cfg(unix)]
@@ -1272,7 +1315,22 @@ max_tokens = 9000
         // one call may still name its own
         assert_eq!(plan("w", spec, None, &RouteOptions::only("claude:haiku"), Some(&s)).candidates, vec!["claude:haiku".to_string()]);
         // another task is untouched
-        assert_eq!(plan("other", spec, None, &RouteOptions::default(), Some(&s)).candidates.first().map(String::as_str), Some("claude:opus"));
+        assert_eq!(plan("other", spec, None, &RouteOptions::default(), Some(&s)).candidates.first().map(String::as_str), Some("claude:opus"));        // a purpose's model covers every step of that purpose, the task's own named model wins,
+        // and an Antigravity model is skipped for a step that was not opened to it
+        let t2 = TaskTable::parse("[task.a]\ndefault = \"claude:opus\"\npurpose = \"plan\"\nagy = true\n[task.b]\ndefault = \"claude:sonnet\"\npurpose = \"plan\"\n[task.c]\ndefault = \"claude:haiku\"\nclass = \"ask\"\n[task.v]\ndefault = \"claude:opus\"\npurpose = \"plan\"\nneeds = { vision = true }\n").unwrap();
+        assert_eq!((t2.task["a"].purpose_id(), t2.task["c"].purpose_id(), t2.task["v"].purpose_id()), ("plan", "chat", "see"));
+        let mut s2 = EngineSettings::default();
+        s2.purposes.insert("plan".into(), "claude:fable".into());
+        for id in ["a", "b"] {
+            assert_eq!(plan(id, &t2.task[id], None, &RouteOptions::default(), Some(&s2)).candidates, vec!["claude:fable".to_string()], "{id}");
+        }
+        assert!(!plan("c", &t2.task["c"], None, &RouteOptions::default(), Some(&s2)).candidates.contains(&"claude:fable".to_string()), "another purpose is untouched");
+        assert_eq!(plan("v", &t2.task["v"], None, &RouteOptions::default(), Some(&s2)).candidates.first().map(String::as_str), Some("claude:opus"), "a step that sees is its own purpose");
+        s2.purposes.insert("plan".into(), "agy:m-1".into());
+        assert_eq!(plan("a", &t2.task["a"], None, &RouteOptions::default(), Some(&s2)).candidates, vec!["agy:m-1".to_string()]);
+        assert_eq!(plan("b", &t2.task["b"], None, &RouteOptions::default(), Some(&s2)).candidates.first().map(String::as_str), Some("claude:sonnet"), "not opened to Antigravity: its own order");
+        s2.models.insert("a".into(), "claude:haiku".into());
+        assert_eq!(plan("a", &t2.task["a"], None, &RouteOptions::default(), Some(&s2)).candidates, vec!["claude:haiku".to_string()], "the step's own model wins");
     }
 
     #[tokio::test]

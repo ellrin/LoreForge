@@ -493,6 +493,7 @@ impl Engines {
                     "id": id, "label": t.label.clone().unwrap_or_else(|| id.clone()), "class": t.class.map(TaskClass::id),
                     // what the 模型 tab needs to offer a model per step: its own order, and whether a text-only model may answer
                     "default": t.default, "fallback": t.fallback, "agy": t.agy && !t.needs.vision && !t.needs.web, "vision": t.needs.vision,
+                    "purpose": t.purpose_id(),
                     "last": last.as_ref().map(|l| l.0.clone()),
                     "last_label": last.as_ref().and_then(|l| self.catalog.engine_name(&l.0)),
                     "last_at": last.as_ref().map(|l| l.1),
@@ -508,6 +509,12 @@ impl Engines {
             "classes": classes,
             "tasks": tasks,
             "overrides": overrides,
+            // 用途: the same six in every Lore app; `model` = the one model its steps use ("" = each
+            // step's own order), `agy` = whether a text-only Antigravity model may be named for it
+            "purposes": shared::PURPOSES.iter().map(|(id, label)| json!({
+                "id": id, "label": label, "model": s.purposes.get(*id).cloned().unwrap_or_default(), "agy": !matches!(*id, "see" | "web"),
+                "steps": self.tasks.task.values().filter(|t| t.purpose_id() == *id).count(),
+            })).collect::<Vec<_>>(),
         })
     }
 
@@ -581,6 +588,24 @@ impl Engines {
                 routes.push((class.clone(), mode));
             }
         }
+        // purposes: a model for every step of that purpose, or "auto" / "" to clear it
+        let mut purposes = Vec::new();
+        if let Some(o) = obj.get("purposes").filter(|v| !v.is_null()) {
+            for (id, model) in o.as_object().ok_or("purposes 要是物件")? {
+                let Some((_, label)) = shared::PURPOSES.iter().find(|(p, _)| p == id) else { return Err(format!("沒有這個用途「{id}」")) };
+                let model = if model.is_null() { String::new() } else { str_of(model, "模型")? };
+                let model = model.trim().to_string();
+                if model.is_empty() || model == "auto" {
+                    purposes.push((id.clone(), None));
+                } else if !shared::is_model_ref(&model) {
+                    return Err(format!("不認得的模型「{model}」"));
+                } else if model.starts_with("agy:") && matches!(id.as_str(), "see" | "web") {
+                    return Err(format!("「{label}」不能用 Antigravity 的模型（它們只收文字，不能看圖也不能上網）"));
+                } else {
+                    purposes.push((id.clone(), Some(model)));
+                }
+            }
+        }
         // overrides
         let mut overrides = Vec::new();
         if let Some(o) = obj.get("overrides").filter(|v| !v.is_null()) {
@@ -620,6 +645,9 @@ impl Engines {
         }
         for (t, m) in overrides {
             self.home.set_override(&t, Some(&m)).map_err(io)?;
+        }
+        for (p, m) in purposes {
+            self.home.set_purpose(&p, m.as_deref()).map_err(io)?;
         }
         Ok(())
     }
@@ -669,7 +697,7 @@ pub fn set_idle_minutes(home: &Home, minutes: u64) -> std::io::Result<()> {
 /// `private/shared/engine.toml` as lore-llm's routing settings.
 pub fn settings_of(home: &Home) -> EngineSettings {
     let s = home.engine_settings();
-    EngineSettings::from_strings(s.claude.via.as_deref(), s.claude.model.as_deref(), &s.route, &s.overrides)
+    EngineSettings::from_strings(s.claude.via.as_deref(), s.claude.model.as_deref(), &s.route, &s.overrides).with_purposes(&s.purpose)
 }
 
 /// Make every lore-llm router of this process follow `home`'s shared file.
