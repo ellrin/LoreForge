@@ -123,7 +123,8 @@ async function boot() {
   loadFilters();
   try { await refreshNames(); } catch (e) { fail(e); }
   wire();
-  if (!route()) setView("cards");
+  Hub.init({ fail, toast: (msg, action) => toast(msg, false, action) });
+  if (!route()) setView("hub");
   window.addEventListener("hashchange", route);
   refreshDue();
   refreshPending();
@@ -132,7 +133,7 @@ async function boot() {
 }
 
 // ── Routes ─────────────────────────────────────────────
-const VIEWS = ["cards", "review", "pending", "timeline", "graph"];
+const VIEWS = ["hub", "cards", "review", "pending", "timeline", "graph"];
 /** Show what the URL hash names; false when it names nothing. */
 function route() {
   const m = location.hash.match(/^#\/(\w+)(?:\/([\w-]+))?/);
@@ -146,6 +147,8 @@ function route() {
     askLeave().then((ok) => { if (ok) location.hash = wanted; });
     return true;
   }
+  // the hub: #/hub (the cover) or #/hub/<family id> (ids may hold any character)
+  if (m[1] === "hub") { S.hubArg = location.hash.length > 6 ? decodeURIComponent(location.hash.slice(6)) : null; setView("hub"); return true; }
   if (m[1] === "settings") { LoreShell.settings(); setHash(S.view === "editor" ? edHash() : `#/${S.view}`); return true; }
   if (m[1] === "node" && m[2]) { if (target !== edHash() || S.view !== "editor") openEditor(m[2]); return true; }
   if (m[1] === "new") { if (S.view !== "editor" || S.ed?.id || S.ed?.pending) openEditor(null); return true; }
@@ -209,12 +212,16 @@ function showView(v) {
   shell.drawer("left", false);
   paintStatus();
   if (v !== "graph") Graph.hide();
+  if (v === "hub") Hub.show($("hubView"), S.hubArg);
+  else Hub.refreshNav();
+  document.querySelectorAll("#views button[data-view='hub']").forEach((b) => b.toggleAttribute("aria-current", v === "hub" && !S.hubArg));
+  document.querySelectorAll("#views button[data-view='hub'][aria-current]").forEach((b) => b.setAttribute("aria-current", "page"));
   if (v === "cards") loadCards();
   if (v === "review") loadReview();
   if (v === "pending") loadPending();
   if (v === "timeline") loadTimeline();
   if (v === "graph") loadGraph();
-  if (VIEWS.includes(v)) setHash(v === "graph" && S.graphCenter ? `#/graph/${S.graphCenter}` : `#/${v}`);
+  if (VIEWS.includes(v)) setHash(v === "graph" && S.graphCenter ? `#/graph/${S.graphCenter}` : v === "hub" && S.hubArg ? `#/hub/${encodeURIComponent(S.hubArg)}` : `#/${v}`);
   return true;
 }
 
@@ -222,6 +229,7 @@ function wire() {
   $("views").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-view]");
     if (!b) return;
+    if (b.dataset.view === "hub") S.hubArg = null;
     if (b.dataset.view === "graph" && S.view === "editor" && S.ed?.id) S.graphCenter = S.ed.id;
     setView(b.dataset.view);
   });

@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="base.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="hub.css">
   <link rel="stylesheet" href="prefs.css">
   <script src="theme.js"></script>
 </head>
@@ -20,12 +21,14 @@
 
   <aside class="left" id="left" aria-label="導覽">
     <ol class="views" id="views">
+      <li><button data-view="hub"><span data-icon="layers"></span><span class="t">總覽</span></button></li>
       <li><button data-view="cards"><span data-icon="cards"></span><span class="t">知識卡</span><span class="count" id="cCards"></span></button></li>
       <li><button data-view="review"><span data-icon="target"></span><span class="t">複習</span><span class="count hot" id="cDue"></span></button></li>
       <li id="navPending" hidden><button data-view="pending"><span data-icon="layers"></span><span class="t">待審</span><span class="count hot" id="cPending"></span></button></li>
       <li><button data-view="timeline"><span data-icon="calendar"></span><span class="t">時間軸</span></button></li>
       <li><button data-view="graph"><span data-icon="graph"></span><span class="t">圖譜</span></button></li>
     </ol>
+    <ol id="hubNav" aria-label="知識的類別"></ol>
 
     <section class="filters" id="filters">
       <h4>篩選</h4>
@@ -68,6 +71,8 @@
   </aside>
 
   <main class="page" id="page">
+    <section class="view" data-view="hub" id="hubView" hidden></section>
+
     <section class="view" data-view="cards">
       <div class="view-head"><h2>知識卡</h2><span class="muted" id="cardsInfo"></span></div>
       <div class="cards" id="cardList"></div>
@@ -265,6 +270,7 @@
 <script src="md.js"></script>
 <script src="eqlive.js"></script>
 <script src="graph.js"></script>
+<script src="hub.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
