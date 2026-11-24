@@ -5,7 +5,8 @@
 //! being an iCloud placeholder (`.<name>.icloud`) or dataless (`SF_DATALESS`):
 //! opening those would download them. Projects (marker files), macOS packages
 //! (`.app`, …) and datasets (> 500 files, ≥ 90 % one extension) become one
-//! record each and are not walked file by file (see [`crate::project`]);
+//! record each and are not walked file by file (see [`crate::project`]); the
+//! documents (PDF, Word, slides) in a project or a dataset are still recorded one by one;
 //! everything else is walked, `build` / `target` / `node_modules` included. A scan root that cannot be read stops the scan; anything below it
 //! that cannot be read is skipped and listed.
 
@@ -184,6 +185,7 @@ fn walk_dir(dir: &Path, root: &Path, top: Option<&str>, cache: &mut HashCache, w
                 let p = project::inspect(dir, markers, &names, &md, &w.now);
                 w.units.push(p);
             }
+            walk_documents(dir, root, top, cache, w);
             return;
         }
         let tally = Tally::of(dir);
@@ -192,6 +194,7 @@ fn walk_dir(dir: &Path, root: &Path, top: Option<&str>, cache: &mut HashCache, w
                 let d = project::inspect_dataset(dir, &tally, &names, &md, &w.now);
                 w.units.push(d);
             }
+            walk_documents(dir, root, top, cache, w);
             return;
         }
     }
@@ -233,6 +236,39 @@ fn walk_dir(dir: &Path, root: &Path, top: Option<&str>, cache: &mut HashCache, w
             w.files.push(Seen { root: root.to_string_lossy().into(), top: child_top, ..s });
         } else {
             w.skipped.push(Skipped { path: p, reason: SkipReason::Unreadable });
+        }
+    }
+}
+
+/// A document is a file of its own wherever it lies (author, 2026-11-21): a working folder that
+/// counts as a dataset because of its image folders, or a project, still has its papers and
+/// decks found.
+pub fn is_document(name: &str) -> bool {
+    matches!(kind_from_ext(name), Some("pdf" | "document" | "slides"))
+}
+
+/// Inside a project or a dataset: only its documents are recorded. Packages, hidden folders
+/// (`.git`, `.venv`), `node_modules` and `target` stay closed; symlinks, placeholders and
+/// dataless files are passed by as everywhere.
+fn walk_documents(dir: &Path, root: &Path, top: Option<&str>, cache: &mut HashCache, w: &mut Walk) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut entries: Vec<(String, PathBuf, std::fs::Metadata)> =
+        rd.filter_map(|e| e.ok()).filter_map(|e| Some((e.file_name().to_string_lossy().to_string(), e.path(), std::fs::symlink_metadata(e.path()).ok()?))).collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, path, md) in entries {
+        let ft = md.file_type();
+        if ft.is_symlink() || is_placeholder_name(&name) || is_dataless(&md) {
+            continue;
+        }
+        if ft.is_dir() {
+            if !project::is_package(&name) && !name.starts_with('.') && name != "node_modules" && name != "target" {
+                walk_documents(&path, root, top, cache, w);
+            }
+        } else if ft.is_file() && is_document(&name) {
+            match file(&path, &name, &md, cache, w) {
+                Some(s) => w.files.push(Seen { root: root.to_string_lossy().into(), top: top.map(str::to_string), ..s }),
+                None => w.skipped.push(Skipped { path: path.to_string_lossy().into(), reason: SkipReason::Unreadable }),
+            }
         }
     }
 }

@@ -574,3 +574,50 @@ fn scan_fills_the_extract_cache() {
     assert_eq!((card.width, card.height), (Some(1011), Some(638)));
     assert!(extract::Extract::load(&dir, &sha(b"hello")).is_none(), "text files are not extracted");
 }
+
+/// A working folder full of images is one dataset and a paper folder one project, and the papers
+/// and decks in them are still files.
+#[test]
+fn documents_inside_a_dataset_or_a_project_are_recorded() {
+    let t = tempfile::tempdir().unwrap();
+    let base = t.path().canonicalize().unwrap();
+    let root = base.join("Documents");
+    for i in 0..600 {
+        write(&root.join(format!("work/frames/{i}.jpg")), format!("frame{i}").as_bytes());
+    }
+    write(&root.join("work/talk/talk_presentation.pdf"), &tiny_pdf("<< /Title (talk) >>"));
+    write(&root.join("work/talk/talk.pptx"), &tiny_pptx("2020-01-02T03:04:05Z", "2020-02-03T00:00:00Z"));
+    write(&root.join("work/notes.docx"), b"docx in a dataset");
+    write(&root.join("work/old.doc"), b"doc in a dataset");
+    write(&root.join("work/labels.txt"), b"not a document");
+    write(&root.join("work/code/.git/config"), b"[core]\n");
+    write(&root.join("work/code/manual.pdf"), b"%PDF-1.4 inside a project");
+    write(&root.join("work/code/.git/hook.pdf"), b"%PDF-1.4 inside .git");
+    // a project of its own, outside any dataset
+    write(&root.join("paper/main.tex"), b"\\documentclass{article}");
+    write(&root.join("paper/main.pdf"), b"%PDF-1.4 the compiled paper");
+    write(&root.join("paper/slides/defence.ppt"), b"ppt in a project");
+    write(&root.join("paper/sections/intro.tex"), b"tex in a project");
+    write(&root.join("paper/node_modules/x/readme.pdf"), b"%PDF-1.4 vendored");
+    let cfg = ScanConfig { roots: vec![root.clone()], catalog_dir: base.join("catalog"), cache_dir: base.join("cache/shelf"), guard: guard(&base) };
+    let out = scan(&cfg).unwrap();
+    let files = out.catalog.join("files");
+
+    assert_eq!(out.report.datasets.len(), 1);
+    assert_eq!((out.report.datasets[0].name.as_str(), out.report.datasets[0].main_ext.as_deref()), ("work", Some("jpg")));
+    let pdf = FileRecord::load(&files, &sha(&tiny_pdf("<< /Title (talk) >>"))).expect("a PDF inside a dataset is a file");
+    assert_eq!((pdf.kind.as_str(), pdf.names.clone()), ("pdf", vec!["talk_presentation.pdf".to_string()]));
+    assert!(pdf.seen_at[0].path.ends_with("work/talk/talk_presentation.pdf"));
+    assert_eq!(FileRecord::load(&files, &sha(&tiny_pptx("2020-01-02T03:04:05Z", "2020-02-03T00:00:00Z"))).unwrap().kind, "slides");
+    assert!(FileRecord::load(&files, &sha(b"docx in a dataset")).is_some() && FileRecord::load(&files, &sha(b"doc in a dataset")).is_some());
+    assert!(FileRecord::load(&files, &sha(b"frame7")).is_none(), "the images stay one record");
+    assert!(FileRecord::load(&files, &sha(b"not a document")).is_none());
+    assert!(FileRecord::load(&files, &sha(b"%PDF-1.4 inside a project")).is_some(), "a project inside a dataset gives its documents too");
+    assert!(FileRecord::load(&files, &sha(b"%PDF-1.4 inside .git")).is_none());
+
+    assert!(out.report.projects.iter().any(|p| p.name == "paper"), "the project is still one record");
+    assert!(FileRecord::load(&files, &sha(b"%PDF-1.4 the compiled paper")).is_some(), "a PDF inside a project is a file");
+    assert_eq!(FileRecord::load(&files, &sha(b"ppt in a project")).unwrap().kind, "slides");
+    assert!(FileRecord::load(&files, &sha(b"tex in a project")).is_none(), "the rest of a project stays one record");
+    assert!(FileRecord::load(&files, &sha(b"%PDF-1.4 vendored")).is_none());
+}

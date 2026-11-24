@@ -20,6 +20,7 @@ pub mod hub;
 pub mod index;
 pub mod intake;
 pub mod proposal;
+pub mod reader;
 pub mod registry;
 pub mod select;
 pub mod stats;

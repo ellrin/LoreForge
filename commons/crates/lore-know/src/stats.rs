@@ -69,3 +69,11 @@ pub struct Stats {
     /// Outside applications and how many items each gave.
     pub sources: Vec<Part>,
 }
+
+impl crate::hub::Hub {
+    /// The dashboard's figures as of `today` (stub: filled by package K10).
+    pub fn stats(&self, today: chrono::NaiveDate) -> crate::Result<Stats> {
+        let _ = today;
+        Ok(Stats::default())
+    }
+}
