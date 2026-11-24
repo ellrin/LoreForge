@@ -1851,6 +1851,23 @@ async function saveObjectImage(format) {
     exportCard(r.path, r.warning, format.toUpperCase());
   } catch (e) { toast(e.message, true); }
 }
+/** 存進 L-Brain: the selection as a reusable drawing (模塊 or 元件) in the flow library (`know.rs`). */
+async function saveToBrain() {
+  const objs = selObjs();
+  if (!objs.length) return;
+  let name = "", level = "";
+  const save = (lv) => ({ id: lv, label: lv === "module" ? "存成模塊" : "存成元件", primary: lv === "module", run: (_d, body) => { name = body.querySelector("input").value.trim(); level = lv; if (!name) return false; } });
+  const pick = await LoreShell.form({
+    title: "存進 L-Brain",
+    build: (body) => body.append(h("label", {}, "名稱", h("input", { type: "text", placeholder: "例如 編碼器" }))),
+    actions: [save("component"), save("module")],
+  });
+  if (!pick) return;
+  try {
+    const r = await api(deckApi("/know/drawing"), { body: { slide: S.cur, ids: objs.map((o) => o.id), title: name, level } });
+    toast(r.via === "kb" ? "已存進 L-Brain" : "已存進 L-Brain（尚未開啟，已寫入流程圖資料夾）");
+  } catch (e) { toast(e.message, true); }
+}
 async function ungroup() {
   const o = selObjs()[0];
   if (!o || o.type !== "group") return;

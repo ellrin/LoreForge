@@ -17,6 +17,7 @@ lore-notation.workspace = true
 lore-shell.workspace = true
 lore-plot.workspace = true
 lore-flow.workspace = true
+lore-know.workspace = true
 async-trait = "0.1"
 futures-util = "0.3"
 lore-engines.workspace = true

@@ -31,6 +31,7 @@ mod export_open;
 pub mod jobs;
 pub mod kbterms;
 pub mod llm;
+mod know; // 存進 L-Brain: a selection as a reusable drawing (know.rs)
 mod flow; // web/figflow.js: 流程圖 (lore-flow editor, one picture that carries its spec)
 mod plot; // web/figplot.js: 繪圖 (lore-plot editor, a PNG picture that carries its spec)
 mod notation;
@@ -142,6 +143,7 @@ fn deck_font_names(deck: &serde_json::Value) -> Vec<String> {
 
 pub type Shared = Arc<AppState>;
 
+#[derive(Debug)]
 pub struct ApiError(StatusCode, String);
 
 impl IntoResponse for ApiError {
@@ -431,7 +433,7 @@ fn router_with(shared: Shared, engines: lore_engines::Engines, voice: lore_voice
     let pageedits = pageedit::router(&shared, Some(page_requests.clone())).merge(lore_shell::pageedit::router(page_requests)); // 改頁 (pageedit.rs)
     // 加入知識庫 for selected words (lore-cards: L-Brain's API while it runs, else its folder)
     let cards = lore_cards::router(Arc::new(kbterms::brain(&shared)), Arc::new(kbterms::CardHost(shared.clone())), "slidecomposer");
-    routes().merge(plot::routes()).merge(flow::routes()).with_state(shared).merge(cards).merge(plots).merge(flows).merge(polish).merge(pageedits).merge(lore_shell::permissions::router(perms)).merge(lore_shell::selection::router(lore_shell::selection::Selections::new("sc"))).merge(lore_engines::router(engines)).fallback_service(web)
+    routes().merge(plot::routes()).merge(flow::routes()).merge(know::routes()).with_state(shared).merge(cards).merge(plots).merge(flows).merge(polish).merge(pageedits).merge(lore_shell::permissions::router(perms)).merge(lore_shell::selection::router(lore_shell::selection::Selections::new("sc"))).merge(lore_engines::router(engines)).fallback_service(web)
 }
 
 pub fn state(ws: Workspace, web: PathBuf) -> Shared {

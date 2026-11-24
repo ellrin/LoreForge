@@ -210,6 +210,7 @@ function arrangeSection(objs) {
       one ? h("label", { class: "row" }, h("input", { type: "checkbox", checked: !!one.hidden, onchange: (e) => commit([setObj(one.id, "/hidden", e.target.checked)], "隱藏物件") }), "隱藏") : null),
     row(!one || one.type === "group" ? h("button", { class: `btn small${one?.lock_aspect ? " on" : ""}`, "aria-pressed": String(!!one?.lock_aspect), title: "鎖定比例，字和線一起縮放", onclick: groupAsPicture }, h("span", { "data-icon": "image" }), "一張圖") : null,
       one ? h("button", { class: "btn small", onclick: (e) => LoreShell.menu(e.currentTarget, [["png", "PNG"], ["svg", "SVG"], ["pdf", "PDF"]].map(([f, l]) => ({ label: l, run: () => saveObjectImage(f) }))) }, h("span", { "data-icon": "download" }), "另存圖片") : null,
+      objs.length ? h("button", { class: "btn small", onclick: saveToBrain }, h("span", { "data-icon": "download" }), "存進 L-Brain…") : null,
       one?.type === "group" && one.data?.lore_flow ? h("button", { class: "btn small", onclick: () => window.SCFlow?.reedit(one) }, h("span", { "data-icon": "graph" }), "編輯流程圖") : null));
 }
 

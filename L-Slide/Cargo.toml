@@ -19,6 +19,7 @@ lore-notation = { path = "../commons/crates/lore-notation" }
 lore-shell = { path = "../commons/crates/lore-shell" }
 lore-plot = { path = "../commons/crates/lore-plot" }
 lore-flow = { path = "../commons/crates/lore-flow" }
+lore-know = { path = "../commons/crates/lore-know" }
 lore-engines = { path = "../commons/crates/lore-engines" }
 lore-llm = { path = "../commons/crates/lore-llm" }
 lore-docsrc = { path = "../commons/crates/lore-docsrc" }
