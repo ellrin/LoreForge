@@ -183,6 +183,10 @@
   .fam .lines div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 13px; }
   .fam .att { font-size: 12px; color: var(--accent-text); white-space: nowrap; }
 
+  /* a drawing always sits on white paper, inside its frame */
+  .paper { background: #fff; border-radius: 8px; display: grid; place-items: center; overflow: hidden; min-width: 0; min-height: 0; }
+  .paper img { width: 92%; height: 86%; object-fit: contain; display: block; min-width: 0; min-height: 0; }
+
   /* ── category page ── */
   .cat { display: grid; grid-template-columns: 180px minmax(320px, 1fr) minmax(380px, 44%); height: calc(100vh - 48px); }
   .cat.nodetail { grid-template-columns: 180px 1fr; }
@@ -221,7 +225,7 @@
   .detail .k { font: 600 11px/1 "JetBrains Mono", monospace; color: var(--faint); letter-spacing: .08em; margin: 18px 0 7px; }
   .chips { display: flex; flex-wrap: wrap; gap: 5px; }
   .lk { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; color: var(--muted); }
-  .lk .paper { width: 48px; height: 32px; border-radius: 4px; }
+  .lk .paper { width: 48px; height: 32px; border-radius: 4px; flex: none; }
   .acts { display: flex; gap: 8px; margin-top: 20px; }
   .acts button { background: var(--surface); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 12px; }
   .wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
@@ -410,7 +414,7 @@ function list() {
   const grp = (lv, open, n) => `<details class="grp" ${open ? "open" : ""}><summary>${LV[lv]} <small>${LVN[lv] ?? 0}</small></summary>${of(lv).slice(0, n).map((f) => `<div class="row" ${f.id === "unet.bars" ? 'aria-selected="true"' : ""}>${paper(f.id)}<span class="t">${f.t}</span><span class="d">${f.ln}</span><span class="g"><span class="tag">deep learning</span></span></div>`).join("")}</details>`;
   document.getElementById("catList").innerHTML = `<aside class="tags">${TAGS}</aside><div class="mid">${mh("list")}${grp("figure", false, 2)}${grp("module", true, 11)}${grp("component", false, 6)}</div>
     <aside class="detail"><h3>${by("unet.bars").t}</h3><div style="color:var(--faint);font-size:12px">${by("unet.bars").ln}</div>
-      <span class="paper stage" style="display:grid">${img("unet.bars")}</span>
+      <span class="paper stage" style="width:100%">${img("unet.bars")}</span>
       <div class="k">標籤</div><div class="chips"><span class="tag">segmentation</span><span class="tag">deep learning</span><span class="tag">架構圖</span><span class="tag">論文</span></div>
       <div class="k">觸發關鍵字</div><div class="chips"><span class="tag">U-Net</span><span class="tag">encoder-decoder</span><span class="tag">skip connection</span></div>
       <div class="k">由這些組成</div><div class="lk">${paper("layer-bars.default")}${by("layer-bars.default").t}</div><div class="lk">${paper("box.rect")}${by("box.rect").t}</div>
