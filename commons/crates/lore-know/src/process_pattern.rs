@@ -151,7 +151,6 @@ impl Processor for PatternProcessor {
                 similar.push(full);
             }
         }
-        }
         let mine = skeleton(&template);
         for e in &cx.existing {
             let t = e.field("template");
