@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="synthwave">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>L-Brain 知識中樞（畫面草稿）</title>
+<!-- Design draft (docs/brain-hub.md §8). The figures are really drawn by the flow tool (lore-know example `thumbs`);
+     counts of other families and all text content are synthetic. Views: #dash #dashb #list #wall #cards. Not wired. -->
+<link rel="stylesheet" href="../../commons/ui/theme.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 "Noto Sans TC", system-ui, sans-serif; }
+  a { color: inherit; text-decoration: none; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+  .hub { display: grid; grid-template-columns: 188px 1fr; grid-template-rows: 48px 1fr; height: 100vh; }
+  .top { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .top b { font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
+  .top input { flex: 0 1 380px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 7px 10px; font: inherit; }
+  .top .sp { flex: 1; }
+  .ghostb { border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px 11px; font-size: 12px; color: var(--muted); background: none; white-space: nowrap; }
+  .plus { background: none; color: var(--text); border: 1px solid var(--line-strong); border-radius: 8px; padding: 6px 12px; font: 600 13px/1 inherit; white-space: nowrap; }
+
+  .nav { border-right: 1px solid var(--line); background: var(--panel); padding: 12px 8px; overflow: auto; }
+  .nav a { display: flex; align-items: center; padding: 7px 10px; border-radius: 6px; color: var(--muted); font-size: 13px; }
+  .nav a span { margin-left: auto; font: 12px "JetBrains Mono", monospace; color: var(--faint); }
+  .nav a[aria-current] { background: var(--accent-soft); color: var(--text); }
+  .nav hr { border: 0; border-top: 1px solid var(--line); margin: 10px 6px; }
+
+  main { overflow: auto; }
+  .v { display: none; }
+  .v.on { display: block; }
+  .fake { color: var(--faint); font-size: 11px; padding: 0 28px 24px; }
+
+  /* ── dashboard: the state of the whole database at a glance; every panel opens what it measures ── */
+  .dash { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; padding: 20px 26px 12px; }
+  .pn { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 16px; min-width: 0; display: block; }
+  a.pn:hover, .pn a.r:hover { border-color: var(--line-strong); }
+  .pn h3 { margin: 0 0 12px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; display: flex; }
+  .pn h3 span { margin-left: auto; color: var(--faint); font-weight: 400; }
+  .num { font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .hero-n { font: 600 52px/1 "Noto Sans TC", system-ui, sans-serif; letter-spacing: -.01em; }
+  .hero-s { color: var(--muted); font-size: 13px; margin-left: 10px; }
+  .seg { display: flex; gap: 2px; height: 34px; margin: 16px 0 14px; }
+  .seg i { display: flex; align-items: center; padding: 0 8px; border-radius: 4px; font: 500 12px "Noto Sans TC", sans-serif; color: #fff; overflow: hidden; white-space: nowrap; min-width: 4px; }
+  .seg.thin { height: 10px; margin: 10px 0 10px; }
+  .seg.thin i { padding: 0; border-radius: 3px; }
+  .fr { display: grid; grid-template-columns: 12px 108px 56px 1fr 60px; gap: 10px; align-items: center; padding: 6px 6px; border-radius: 6px; font-size: 13px; border: 1px solid transparent; }
+  .fr:hover { background: var(--surface); }
+  .fr .sw { width: 10px; height: 10px; border-radius: 3px; }
+  .fr .n { text-align: right; }
+  .fr .sub { color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fr .d { text-align: right; font-size: 12px; color: var(--muted); }
+  .fr .d.z { color: var(--faint); }
+  .chart { width: 100%; display: block; overflow: visible; }
+  .chart text { fill: var(--faint); font: 10px "JetBrains Mono", monospace; }
+  .chart .grid { stroke: var(--line); stroke-width: 1; }
+  .stat { display: flex; align-items: baseline; gap: 8px; }
+  .stat b { font: 600 30px/1 "Noto Sans TC", sans-serif; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  .lg { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+  .lg i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .mt { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: baseline; padding: 7px 6px; border-radius: 6px; font-size: 13px; }
+  .mt:hover { background: var(--surface); }
+  .mt .v { color: var(--muted); font-size: 12px; }
+  .mt .tr { grid-column: 1 / -1; height: 8px; border-radius: 4px; background: var(--surface); overflow: hidden; }
+  .mt .tr i { display: block; height: 100%; border-radius: 4px; background: var(--muted); }
+  .mt .miss { color: var(--accent-text); }
+  .todo { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .todo h3 { color: inherit; opacity: .8; }
+  .todo .stat span { color: inherit; opacity: .8; }
+  .ub { display: grid; grid-template-columns: 150px 1fr 40px; gap: 10px; align-items: center; padding: 5px 6px; border-radius: 6px; font-size: 13px; }
+  .ub:hover { background: var(--surface); }
+  .ub .bar { height: 12px; display: flex; gap: 2px; }
+  .ub .bar i { border-radius: 0 4px 4px 0; height: 100%; }
+  .ub .n { text-align: right; font-size: 12px; color: var(--muted); }
+  .pick { position: fixed; right: 18px; bottom: 16px; z-index: 8; display: none; gap: 2px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px; font-size: 12px; }
+  .pick a { padding: 5px 13px; border-radius: 999px; color: var(--muted); }
+  .pick a[aria-current] { background: var(--accent); color: var(--accent-ink); }
+  .tip { position: fixed; z-index: 9; pointer-events: none; background: var(--surface-hover); border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 9px; font-size: 12px; white-space: nowrap; display: none; }
+
+
+  /* ── cover style 2: instruments ── */
+  .hud { display: grid; grid-template-columns: 360px minmax(0, 1fr) 270px; gap: 18px; padding: 22px 26px 12px; min-height: calc(100vh - 90px);
+    background-image: linear-gradient(var(--dot) 1px, transparent 1px), linear-gradient(90deg, var(--dot) 1px, transparent 1px); background-size: 28px 28px; }
+  .hud .cap { font: 600 10px/1 "JetBrains Mono", monospace; letter-spacing: .16em; color: var(--faint); text-transform: uppercase; margin-bottom: 10px; display: flex; }
+  .hud .cap span { margin-left: auto; }
+  .hud .box { border: 1px solid var(--line); border-radius: 4px; padding: 14px 16px; background: color-mix(in srgb, var(--panel) 82%, transparent); position: relative; display: block; }
+  .hud .box::before, .hud .box::after { content: ""; position: absolute; width: 10px; height: 10px; border: 1.5px solid var(--accent-2); }
+  .hud .box::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; }
+  .hud .box::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+  .hud .ring { position: relative; }
+  .hud .ring .mid { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+  .hud .ring .mid b { display: block; font: 600 46px/1 "JetBrains Mono", monospace; }
+  .hud .ring .mid span { font: 11px "JetBrains Mono", monospace; color: var(--faint); letter-spacing: .14em; }
+  .hud .hr { display: grid; grid-template-columns: 10px 96px minmax(0, 1fr) 48px 40px; gap: 10px; align-items: center; padding: 8px 4px; border-top: 1px solid var(--line); font-size: 13px; }
+  .hud .hr:first-of-type { border-top: 0; }
+  .hud .hr:hover { background: var(--surface); }
+  .hud .hr .tk { height: 4px; background: var(--surface); }
+  .hud .hr .tk i { display: block; height: 100%; }
+  .hud .hr .n { text-align: right; font: 13px "JetBrains Mono", monospace; }
+  .hud .hr .d { text-align: right; font: 11px "JetBrains Mono", monospace; color: var(--faint); }
+  .hud .gs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hud .gg { text-align: center; font-size: 12px; color: var(--muted); display: block; padding: 6px 0; }
+  .hud .gg:hover { background: var(--surface); }
+  .hud .gg svg { width: 76px; height: 76px; display: block; margin: 0 auto 4px; }
+  .hud .gg svg text { fill: var(--text); font: 600 15px "JetBrains Mono", monospace; }
+  .hud .alert { border-color: var(--accent); }
+  .hud .alert b { font: 600 34px/1 "JetBrains Mono", monospace; color: var(--accent-text); }
+  .hud .col { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+
+  /* ── cover style 3: one sheet ── */
+  .sheet { padding: 44px 56px 20px; max-width: 1180px; }
+  .sheet .lead { display: flex; align-items: flex-end; gap: 28px; margin-bottom: 34px; }
+  .sheet .lead b { font: 300 112px/.85 "Noto Sans TC", system-ui, sans-serif; letter-spacing: -.03em; }
+  .sheet .lead p { margin: 0 0 8px; font-size: 15px; line-height: 1.7; color: var(--muted); max-width: 440px; }
+  .sheet .lead p em { font-style: normal; color: var(--text); }
+  .sheet .lead .acts3 { margin-left: auto; display: flex; gap: 26px; margin-bottom: 8px; }
+  .sheet .lead .acts3 a { display: block; text-align: right; }
+  .sheet .lead .acts3 a b { font: 500 34px/1 "Noto Sans TC", sans-serif; display: block; letter-spacing: 0; }
+  .sheet .lead .acts3 a span { font-size: 12px; color: var(--muted); }
+  .sheet .lead .acts3 a.hot b { color: var(--accent-text); }
+  .sheet table { width: 100%; border-collapse: collapse; }
+  .sheet th { text-align: left; font: 500 11px "JetBrains Mono", monospace; letter-spacing: .1em; color: var(--faint); padding: 0 10px 10px 0; border-bottom: 1px solid var(--line-strong); }
+  .sheet td { padding: 15px 10px 15px 0; border-bottom: 1px solid var(--line); vertical-align: middle; font-size: 14px; }
+  .sheet tr.r { cursor: pointer; }
+  .sheet tr.r:hover td { background: var(--panel); }
+  .sheet td.nm { font-size: 17px; font-weight: 500; white-space: nowrap; }
+  .sheet td.n { font: 400 22px "Noto Sans TC", sans-serif; text-align: right; padding-right: 22px; }
+  .sheet td .sub { color: var(--faint); font-size: 12px; }
+  .sheet td .sb { height: 6px; border-radius: 3px; }
+  .sheet td.gap { color: var(--accent-text); font-size: 12px; white-space: nowrap; }
+  .sheet td.gap.ok { color: var(--faint); }
+  .sheet svg.sp { width: 150px; height: 30px; display: block; overflow: visible; }
+
+  /* ── overview B: rows ── */
+  .rows { padding: 12px 28px; }
+  .fam { display: grid; grid-template-columns: 150px 1fr auto; gap: 20px; align-items: center; padding: 16px 6px; border-top: 1px solid var(--line); }
+  .fam:first-child { border-top: 0; }
+  .fam .nm { font-size: 15px; font-weight: 600; }
+  .fam .ct { font: 12px "JetBrains Mono", monospace; color: var(--faint); }
+  .fam .strip { display: flex; gap: 10px; overflow: hidden; }
+  .fam .strip .paper { flex: none; width: 108px; height: 66px; }
+  .fam .lines div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 13px; }
+  .fam .att { font-size: 12px; color: var(--accent-text); white-space: nowrap; }
+
+  /* ── category page ── */
+  .cat { display: grid; grid-template-columns: 180px minmax(320px, 1fr) minmax(380px, 44%); height: calc(100vh - 48px); }
+  .cat.nodetail { grid-template-columns: 180px 1fr; }
+  .tags { border-right: 1px solid var(--line); padding: 14px 10px; overflow: auto; }
+  .tags h4 { font: 600 11px/1 "JetBrains Mono", monospace; color: var(--faint); letter-spacing: .08em; margin: 16px 6px 6px; }
+  .tags h4:first-child { margin-top: 2px; }
+  .tags button { display: flex; width: 100%; background: none; border: 0; color: var(--muted); padding: 4px 6px; border-radius: 6px; font: inherit; font-size: 13px; text-align: left; }
+  .tags button span { margin-left: auto; font: 11px "JetBrains Mono", monospace; color: var(--faint); }
+  .tags button[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); }
+  .tags button.child { padding-left: 20px; }
+  .mid { overflow: auto; padding: 16px 20px 30px; }
+  .mh { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .mh h2 { margin: 0; font-size: 18px; white-space: nowrap; }
+  .mh .cnt { color: var(--faint); font: 12px "JetBrains Mono", monospace; }
+  .mh select { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 12px; }
+  .sw { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; white-space: nowrap; }
+  .sw a { padding: 5px 10px; font-size: 12px; color: var(--muted); }
+  .sw a[aria-current] { background: var(--accent-soft); color: var(--text); }
+  details.grp { border-top: 1px solid var(--line); }
+  details.grp > summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 10px 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
+  details.grp > summary::before { content: "▸"; color: var(--faint); font-size: 11px; width: 10px; }
+  details.grp[open] > summary::before { content: "▾"; }
+  details.grp > summary small { color: var(--faint); font: 400 12px "JetBrains Mono", monospace; }
+  .row { display: grid; grid-template-columns: 60px minmax(120px, 1fr) minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 6px 8px; border-radius: 8px; }
+  .row:hover { background: var(--surface); }
+  .row[aria-selected="true"] { background: var(--accent-soft); }
+  .row .paper { width: 60px; height: 40px; border-radius: 5px; }
+  .row .t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .d { color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row.text { grid-template-columns: minmax(160px, 1.5fr) minmax(0, 1fr) auto; }
+  .tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--surface); color: var(--muted); white-space: nowrap; }
+  .g { display: flex; gap: 4px; }
+  .detail { border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 18px 20px 30px; }
+  .detail h3 { margin: 0; font-size: 16px; }
+  .detail .stage { height: 230px; margin: 12px 0 6px; }
+  .detail .k { font: 600 11px/1 "JetBrains Mono", monospace; color: var(--faint); letter-spacing: .08em; margin: 18px 0 7px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .lk { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; color: var(--muted); }
+  .lk .paper { width: 48px; height: 32px; border-radius: 4px; }
+  .acts { display: flex; gap: 8px; margin-top: 20px; }
+  .acts button { background: var(--surface); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 12px; }
+  .wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+  .wall.lg { grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
+  .pc .paper { height: 124px; }
+  .wall.lg .pc .paper { height: 220px; }
+  .pc .cap { font-size: 12px; padding: 7px 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pc .cap b { color: var(--faint); font-weight: 400; }
+  .wh { font-size: 13px; font-weight: 600; margin: 22px 0 10px; display: flex; gap: 8px; align-items: baseline; }
+  .wh:first-of-type { margin-top: 4px; }
+  .wh small { color: var(--faint); font: 400 12px "JetBrains Mono", monospace; }
+</style>
+</head>
+<body>
+<div class="tip" id="tip"></div>
+<div class="pick" id="pick"></div>
+<div class="hub">
+  <header class="top"><b>L-Brain</b><input placeholder="搜尋全部知識"><span class="sp"></span><button class="ghostb">待同意 2</button><button class="plus">＋ 新增</button></header>
+  <nav class="nav" id="nav"></nav>
+  <main>
+    <section class="v" id="v-dash"><div class="dash" id="dashEl"></div><div class="fake">草稿：數字是假的</div></section>
+    <section class="v" id="v-dash2"><div class="hud" id="hudEl"></div><div class="fake">草稿：數字是假的</div></section>
+    <section class="v" id="v-dash3"><div class="sheet" id="sheetEl"></div><div class="fake">草稿：數字是假的</div></section>
+    <section class="v" id="v-dashb"><div class="rows" id="rows"></div><div class="fake">草稿：流程圖的圖是流程圖工具實際畫的；其他類別的數字與文字是假的</div></section>
+    <section class="v" id="v-list"><div class="cat" id="catList"></div></section>
+    <section class="v" id="v-wall"><div class="cat nodetail" id="catWall"></div></section>
+    <section class="v" id="v-cards"><div class="cat" id="catCards"></div></section>
+  </main>
+</div>
+<script>
+const ITEMS = /*ITEMS*/[];
+const LVN = /*LV*/{};
+const TOTAL = __N__;
+const LV = { component: "元件", module: "模塊", figure: "流程圖" };
+const by = (id) => ITEMS.find((x) => x.id === id) ?? ITEMS[0];
+const img = (id) => `<img src="${by(id).src}" alt="">`;
+const paper = (id, cls = "") => `<span class="paper ${cls}">${img(id)}</span>`;
+const of = (lv) => ITEMS.filter((x) => x.lv === lv);
+const view = () => (location.hash || "#dash").slice(1);
+
+function nav() {
+  const v = view();
+  const a = (href, t, n, on) => `<a href="#${href}" ${on ? "aria-current=page" : ""}>${t}<span>${n ?? ""}</span></a>`;
+  document.getElementById("nav").innerHTML = a(v.startsWith("dash") ? v : "dash", "總覽", "", v.startsWith("dash")) + "<hr>" +
+    a("list", "流程圖", TOTAL, v === "list" || v === "wall") + a("cards", "知識卡", 520, v === "cards") + a("dash", "寫作準則", 829) + a("dash", "論文模板", 23) + a("dash", "投影片版型", 59) + a("dash", "投影片論述法", 2) + "<hr>" + a("dash", "wordbox", 180);
+}
+
+const SL = ['<rect width="100" height="60" fill="#fff"/><circle cx="50" cy="20" r="13" fill="#c9ccd3"/><rect x="24" y="38" width="52" height="6" fill="#f3c9d3"/><rect x="24" y="46" width="52" height="6" fill="#cfe7e7"/>',
+  '<rect width="100" height="60" fill="#fff"/><path d="M0 0h100v24q-50 14-100 0z" fill="#7c3aed"/><rect x="26" y="36" width="48" height="15" fill="#cfe7e7"/>',
+  '<rect width="100" height="60" fill="#c9ccd3"/><path d="M0 28q50-6 100 0v32H0z" fill="#7c3aed"/>',
+  '<rect width="100" height="60" fill="#c9ccd3"/><path d="M0 0h62L44 60H0z" fill="#4b3a7a"/>',
+  '<rect width="100" height="60" fill="#fff"/><rect x="8" y="10" width="40" height="40" fill="#c9ccd3"/><rect x="56" y="14" width="34" height="6" fill="#333"/><rect x="56" y="26" width="34" height="3" fill="#bbb"/><rect x="56" y="33" width="34" height="3" fill="#bbb"/><rect x="56" y="40" width="24" height="3" fill="#bbb"/>',
+  '<rect width="100" height="60" fill="#fff"/><path d="M60 60q0-40 40-40v40z" fill="#f0e85a"/><rect x="10" y="10" width="46" height="12" fill="#f3c9d3"/><rect x="10" y="30" width="36" height="10" fill="#cfe7e7"/>',
+  '<rect width="100" height="60" fill="#fff"/><rect x="8" y="8" width="84" height="8" fill="#333"/><rect x="8" y="22" width="26" height="30" fill="#c9ccd3"/><rect x="37" y="22" width="26" height="30" fill="#c9ccd3"/><rect x="66" y="22" width="26" height="30" fill="#c9ccd3"/>',
+  '<rect width="100" height="60" fill="#3a2d63"/><circle cx="50" cy="22" r="13" fill="#c9ccd3"/><rect x="26" y="40" width="48" height="6" fill="#7c3aed"/>'];
+const slide = (i) => `<svg viewBox="0 0 100 60">${SL[i % SL.length]}</svg>`;
+const page = (two, x, r) => `<span class="pg ${two ? "two" : ""}" style="left:${x}px;transform:rotate(${r}deg)">${"<u></u>".repeat(two ? 15 : 9)}</span>`;
+
+const FAM = [ // id, name, colour (validated order), count, sub-items, added in 30 days, link
+  ["cards", "知識卡", "#3987e5", 520, "概念 430 · 方法 38 · 術語 21 · 方程式 9", 34, "cards"],
+  ["write", "寫作準則", "#d95926", 829, "句型 440 · 常用詞 300 · 範例 43 · 規則 32 · 筆記 9 · 用詞 5", 12, "dash"],
+  ["flow", "流程圖", "#199e70", 156, "模塊 82 · 元件 19 · 流程圖 2 · 待製作 53", 13, "list"],
+  ["slide", "投影片版型", "#c98500", 59, "構圖 49 · 版型 7 · 風格包 3", 0, "dash"],
+  ["tpl", "論文模板", "#d55181", 34, "模板 23 · 期刊要求 11", 2, "dash"],
+  ["talk", "投影片論述法", "#0ca30c", 2, "筆記 1 · 範例 1", 0, "dash"],
+  ["x", "wordbox", "#9085e9", 180, "單字 180 · 外部，不與 Lore 共用", 180, "dash"]];
+const WEEKS = [[4,0,0,0,0,0,0],[6,2,0,0,1,0,0],[3,0,0,7,0,0,0],[8,40,0,0,0,0,0],[5,0,4,0,0,1,0],[2,3,0,0,0,0,0],[9,0,21,0,0,0,0],[4,6,0,0,2,0,0],[7,0,0,0,0,0,0],[11,2,6,0,0,0,0],[6,4,3,0,1,0,0],[10,6,4,0,1,0,180]];
+const USE = [["論文：撰寫段落", [[1, 64]]], ["論文：語句潤飾", [[1, 41]]], ["論文報告：大綱", [[2, 9], [5, 2]]], ["流程圖：產生列表", [[2, 17]]], ["名詞比對", [[0, 212]]], ["寫書：章節", [[1, 6], [0, 30]]]];
+const fmt = (n) => n.toLocaleString("en-US");
+function dashboard() {
+  const total = FAM.reduce((n, f) => n + f[3], 0);
+  const seg = FAM.map((f) => `<i style="flex:${f[3]};background:${f[2]}" data-tip="${f[1]} ${fmt(f[3])}（${Math.round(f[3] / total * 100)}%）">${f[3] / total > .07 ? f[1] : ""}</i>`).join("");
+  const rowsF = FAM.map((f) => `<a class="fr" href="#${f[6]}"><span class="sw" style="background:${f[2]}"></span><span>${f[1]}</span><span class="n num">${fmt(f[3])}</span><span class="sub">${f[4]}</span><span class="d num ${f[5] ? "" : "z"}">${f[5] ? "+" + f[5] : "—"}</span></a>`).join("");
+  // growth: stacked columns, 12 weeks, one shared axis
+  const W = 460, H = 150, max = 60, bw = 24, gap = (W - 30 - 12 * bw) / 11;
+  let cols = "";
+  WEEKS.forEach((w, i) => { let y = H - 18; const x = 30 + i * (bw + gap); const tot = w.reduce((a, b) => a + b, 0);
+    w.forEach((v, k) => { if (!v) return; const h = Math.min(v, max) / max * (H - 30); y -= h; cols += `<rect x="${x}" y="${y + 1}" width="${bw}" height="${Math.max(h - 2, 1.5)}" rx="2" fill="${FAM[k][2]}" data-tip="${i === 11 ? "本週" : 11 - i + " 週前"} · ${FAM[k][1]} +${v}"/>`; });
+    if (tot > max) cols += `<text x="${x + bw / 2}" y="10" text-anchor="middle">${tot}</text>`; });
+  const grid = [0, 20, 40, 60].map((v) => { const y = H - 18 - v / max * (H - 30); return `<line class="grid" x1="26" x2="${W}" y1="${y}" y2="${y}"/><text x="20" y="${y + 3}" text-anchor="end">${v}</text>`; }).join("");
+  const growth = `<svg class="chart" viewBox="0 0 ${W} ${H}">${grid}${cols}<text x="30" y="${H - 4}">12 週前</text><text x="${W}" y="${H - 4}" text-anchor="end">本週</text></svg>`;
+  const umax = 212;
+  const use = USE.map(([nm, parts]) => { const n = parts.reduce((a, p) => a + p[1], 0); return `<a class="ub" href="#dash"><span>${nm}</span><span class="bar">${parts.map(([k, v]) => `<i style="width:${v / umax * 100}%;background:${FAM[k][2]}" data-tip="${nm} · ${FAM[k][1]} ${v} 條"></i>`).join("")}</span><span class="n num">${n}</span></a>`; }).join("");
+  const meter = (nm, have, of, miss, to) => `<a class="mt" href="#${to}"><span>${nm}</span><span class="v num">${fmt(have)} / ${fmt(of)}</span><span class="tr"><i style="width:${have / of * 100}%"></i></span><span class="miss" style="grid-column:1/-1;font-size:12px">${miss}</span></a>`;
+  document.getElementById("dashEl").innerHTML = `
+  <section class="pn" style="grid-column:span 7;grid-row:span 2"><h3>全部知識<span>30 天新增</span></h3>
+    <div><span class="hero-n">${fmt(total)}</span><span class="hero-s">條 · ${FAM.length} 類</span></div>
+    <div class="seg">${seg}</div>${rowsF}</section>
+  <section class="pn" style="grid-column:span 5"><h3>每週新增</h3>${growth}</section>
+  <a class="pn todo" href="#dash" style="grid-column:span 2"><h3>待你同意</h3><div class="stat"><b>2</b><span>批修改</span></div></a>
+  <a class="pn" href="#cards" style="grid-column:span 3"><h3>知識卡<span>今天到期 12</span></h3>
+    <div class="seg thin"><i style="flex:402;background:#9085e9" data-tip="記得 402"></i><i style="flex:86;background:#6a5fc4" data-tip="學習中 86"></i><i style="flex:32;background:#473f8f" data-tip="不熟 32"></i></div>
+    <div class="lg"><span><i style="background:#9085e9"></i>記得 402</span><span><i style="background:#6a5fc4"></i>學習中 86</span><span><i style="background:#473f8f"></i>不熟 32</span></div></a>
+  <section class="pn" style="grid-column:span 5"><h3>這 30 天用到的知識<span>條</span></h3>${use}<div class="lg" style="margin-top:10px">${[0, 1, 2, 5].map((k) => `<span><i style="background:${FAM[k][2]}"></i>${FAM[k][1]}</span>`).join("")}</div></section>
+  <section class="pn" style="grid-column:span 4"><h3>缺口</h3>
+    ${meter("接上步驟的類別", 5, 7, "投影片論述法、風格參考還沒有步驟在用", "dash")}
+    ${meter("流程圖已做成實體", 103, 156, "53 個只有參考圖", "wall")}
+    ${meter("有標籤", 1104, total, fmt(total - 1104) + " 條沒有標籤", "list")}
+    ${meter("這 30 天用過", 381, total - 180, fmt(total - 180 - 381) + " 條沒被用到", "dash")}</section>
+  <section class="pn" style="grid-column:span 3"><h3>來源</h3>
+    <div class="seg thin"><i style="flex:1012;background:var(--muted)" data-tip="Lore 的程式 1,012"></i><i style="flex:588;background:var(--faint)" data-tip="我 588"></i><i style="flex:180;background:#9085e9" data-tip="wordbox 180"></i></div>
+    <a class="fr" style="grid-template-columns:12px 1fr 56px" href="#dash"><span class="sw" style="background:var(--muted)"></span><span>Lore 的程式</span><span class="n num">1,012</span></a>
+    <a class="fr" style="grid-template-columns:12px 1fr 56px" href="#dash"><span class="sw" style="background:var(--faint)"></span><span>我自己加的</span><span class="n num">588</span></a>
+    <a class="fr" style="grid-template-columns:12px 1fr 56px" href="#dash"><span class="sw" style="background:#9085e9"></span><span>wordbox（外部）</span><span class="n num">180</span></a>
+    <a class="fr" style="grid-template-columns:12px 1fr;color:var(--faint)" href="#dash"><span>＋</span><span>來源</span></a></section>`;
+  const tip = document.getElementById("tip");
+  document.getElementById("dashEl").addEventListener("mousemove", (e) => { const t = e.target.closest("[data-tip]"); if (!t) { tip.style.display = "none"; return; } tip.textContent = t.dataset.tip; tip.style.display = "block"; tip.style.left = e.clientX + 12 + "px"; tip.style.top = e.clientY + 12 + "px"; });
+}
+
+function cover2() {
+  const total = FAM.reduce((n, f) => n + f[3], 0), R = 150, C = 2 * Math.PI * R, GAP = 5;
+  let acc = 0;
+  const arcs = FAM.map((f) => { const len = f[3] / total * C; const a = `<circle cx="190" cy="190" r="${R}" fill="none" stroke="${f[2]}" stroke-width="22" stroke-dasharray="${Math.max(len - GAP, 1)} ${C}" stroke-dashoffset="${-acc}" transform="rotate(-90 190 190)" data-tip="${f[1]} ${fmt(f[3])}"/>`; acc += len; return a; }).join("");
+  const ticks = Array.from({ length: 60 }, (_, i) => { const a = i / 60 * 2 * Math.PI, r1 = 172, r2 = i % 5 ? 176 : 181; return `<line x1="${190 + r1 * Math.cos(a)}" y1="${190 + r1 * Math.sin(a)}" x2="${190 + r2 * Math.cos(a)}" y2="${190 + r2 * Math.sin(a)}" stroke="var(--line-strong)" stroke-width="1"/>`; }).join("");
+  const wk = WEEKS.map((w) => w.slice(0, 6).reduce((a, b) => a + b, 0)), mx = Math.max(...wk);
+  const pts = wk.map((v, i) => `${i * (360 / 11)},${70 - v / mx * 60}`).join(" ");
+  const gauge = (nm, have, of, to) => { const r = 34, c = 2 * Math.PI * r, p = have / of; return `<a class="gg" href="#${to}"><svg viewBox="0 0 84 84"><circle cx="42" cy="42" r="${r}" fill="none" stroke="var(--surface)" stroke-width="7"/><circle cx="42" cy="42" r="${r}" fill="none" stroke="var(--accent-2)" stroke-width="7" stroke-linecap="round" stroke-dasharray="${p * c} ${c}" transform="rotate(-90 42 42)"/><text x="42" y="47" text-anchor="middle">${Math.round(p * 100)}%</text></svg>${nm}</a>`; };
+  document.getElementById("hudEl").innerHTML = `
+  <div class="col"><div class="box"><div class="cap">組成<span>${FAM.length} 類</span></div>
+      <div class="ring"><svg viewBox="0 0 380 380" style="width:100%;display:block">${ticks}${arcs}</svg><div class="mid"><div><b>${fmt(total)}</b><span>條知識</span></div></div></div></div>
+    <div class="box"><div class="cap">每週新增<span>12 週</span></div><svg viewBox="-4 0 368 78" style="width:100%;display:block;overflow:visible"><polyline points="0,70 ${pts} 360,70" fill="var(--accent-2-soft)" stroke="none"/><polyline points="${pts}" fill="none" stroke="var(--accent-2)" stroke-width="2" stroke-linejoin="round"/>${wk.map((v, i) => `<circle cx="${i * (360 / 11)}" cy="${70 - v / mx * 60}" r="6" fill="transparent" data-tip="${i === 11 ? "本週" : 11 - i + " 週前"} +${v}"/>`).join("")}</svg></div></div>
+  <div class="col"><div class="box" style="flex:1"><div class="cap">各類<span>數量 · 30 天</span></div>
+      ${FAM.map((f) => `<a class="hr" href="#${f[6]}"><i style="width:8px;height:8px;background:${f[2]}"></i><span>${f[1]}</span><span><span class="tk"><i style="width:${f[3] / 829 * 100}%;background:${f[2]}"></i></span><span style="display:block;font-size:11px;color:var(--faint);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${f[4]}</span></span><span class="n">${fmt(f[3])}</span><span class="d">${f[5] ? "+" + f[5] : "—"}</span></a>`).join("")}</div>
+    <div class="box"><div class="cap">這 30 天用到<span>條</span></div>${USE.slice(0, 4).map(([nm, parts]) => { const n = parts.reduce((a, q) => a + q[1], 0); return `<a class="hr" href="#dash2" style="grid-template-columns:150px 1fr 40px"><span>${nm}</span><span class="tk"><i style="width:${n / 212 * 100}%;background:var(--accent-2)"></i></span><span class="n">${n}</span></a>`; }).join("")}</div></div>
+  <div class="col"><a class="box alert" href="#dash2"><div class="cap">待你同意</div><b>2</b> <span style="color:var(--muted);font-size:13px">批修改</span></a>
+    <a class="box" href="#cards"><div class="cap">知識卡<span>到期</span></div><b style="font:600 34px/1 'JetBrains Mono',monospace">12</b> <span style="color:var(--muted);font-size:13px">張 · 學習中 86</span></a>
+    <div class="box" style="flex:1"><div class="cap">完整度</div><div class="gs">${gauge("接上步驟", 5, 7, "dash2")}${gauge("流程圖實體", 103, 156, "wall")}${gauge("有標籤", 1104, total, "list")}${gauge("30 天用過", 381, 1600, "dash2")}</div></div></div>`;
+  document.getElementById("hudEl").addEventListener("mousemove", tipMove);
+}
+function cover3() {
+  const total = FAM.reduce((n, f) => n + f[3], 0);
+  const GAPS = ["", "", "53 個待製作", "", "", "沒有步驟在用", "不與 Lore 共用"];
+  const USED = [242, 111, 26, 4, 3, 2, 0];
+  const sp = (k) => { const v = WEEKS.map((w) => w[k]), mx = Math.max(...v, 1); return `<svg class="sp" viewBox="0 0 150 30">${v.map((x, i) => `<rect x="${i * 12.5}" y="${30 - Math.max(x / mx * 28, x ? 2 : 1)}" width="9" height="${Math.max(x / mx * 28, x ? 2 : 1)}" rx="1.5" fill="${x ? FAM[k][2] : "var(--line)"}" data-tip="${i === 11 ? "本週" : 11 - i + " 週前"} +${x}"/>`).join("")}</svg>`; };
+  document.getElementById("sheetEl").innerHTML = `
+  <div class="lead"><b>${fmt(total)}</b><p>條知識，分成 <em>${FAM.length} 類</em>。這 30 天新增 <em>241</em> 條，寫論文與做簡報用到了 <em>388</em> 條。</p>
+    <div class="acts3"><a class="hot" href="#dash3"><b>2</b><span>批待你同意</span></a><a href="#cards"><b>12</b><span>張卡到期</span></a></div></div>
+  <table><tr><th>類別</th><th style="text-align:right;padding-right:22px">數量</th><th style="width:26%">佔比與細項</th><th>12 週新增</th><th style="text-align:right">30 天用到</th><th style="text-align:right">缺口</th></tr>
+  ${FAM.map((f, k) => `<tr class="r" onclick="location.hash='${f[6]}'"><td class="nm">${f[1]}</td><td class="n">${fmt(f[3])}</td><td><div class="sb" style="width:${Math.max(f[3] / 829 * 100, 1.5)}%;background:${f[2]}" data-tip="${Math.round(f[3] / total * 100)}%"></div><div class="sub" style="margin-top:6px">${f[4]}</div></td><td>${sp(k)}</td><td style="text-align:right" class="num">${USED[k] || "—"}</td><td class="gap ${GAPS[k] ? "" : "ok"}" style="text-align:right">${GAPS[k] || "—"}</td></tr>`).join("")}</table>`;
+  document.getElementById("sheetEl").addEventListener("mousemove", tipMove);
+}
+function tipMove(e) { const tip = document.getElementById("tip"); const t = e.target.closest("[data-tip]"); if (!t) { tip.style.display = "none"; return; } tip.textContent = t.dataset.tip; tip.style.display = "block"; tip.style.left = e.clientX + 12 + "px"; tip.style.top = e.clientY + 12 + "px"; }
+function rows() {
+  const fam = (to, nm, ct, strip, att) => `<a class="fam" href="#${to}"><div><div class="nm">${nm}</div><div class="ct">${ct}</div></div><div class="strip">${strip}</div><div class="att">${att}</div></a>`;
+  const lines = (l) => `<div class="lines">${l.map((t) => `<div>${t}</div>`).join("")}</div>`;
+  document.getElementById("rows").innerHTML =
+    fam("wall", "流程圖", TOTAL, ["fig101", "fig102", "unet.bars", "encoder.slabs", "decoder.cubes", "autoencoder.vae", "nn.lstm", "feature-stack.cube", "matrix.default"].map((i) => paper(i)).join(""), "") +
+    fam("cards", "知識卡", 520, lines(["Mean Reprojection Error (MRE) · Kinematic Features · Temperature scaling", "Contrastive loss · Bland–Altman plot"]), "12 張到期") +
+    fam("dash", "寫作準則", 829, lines(["To address this limitation, we propose …", "Each paragraph opens with its claim.", "utilize → use"]), "") +
+    fam("dash", "投影片版型", 59, [0, 1, 2, 3, 4, 5, 6, 7].map((i) => `<span class="paper" style="background:none">${slide(i)}</span>`).join(""), "");
+}
+const TAGS = `<h4>階層</h4><button aria-pressed="false">流程圖<span>${LVN.figure ?? 0}</span></button><button aria-pressed="true">模塊<span>${LVN.module ?? 0}</span></button><button aria-pressed="false">元件<span>${LVN.component ?? 0}</span></button>
+  <h4>領域</h4><button>deep learning<span>61</span></button><button class="child">segmentation<span>9</span></button><button class="child">sequence<span>7</span></button><button>machine learning<span>14</span></button><button>web<span>0</span></button>
+  <h4>結構</h4><button>架構圖<span>48</span></button><button>資料流<span>12</span></button><button>時間軸<span>0</span></button><button>網路圖<span>0</span></button>
+  <h4>狀態</h4><button>待製作<span>53</span></button>`;
+const mh = (cur) => `<div class="mh"><h2>流程圖</h2><span class="cnt">${TOTAL}</span><span style="flex:1"></span><select><option>最近修改</option><option>名稱</option><option>最近新增</option><option>使用次數</option><option>標籤少的在前</option><option>待製作在前</option></select><span class="sw"><a href="#list" ${cur === "list" ? "aria-current=page" : ""}>清單</a><a href="#wall" ${cur === "wall" ? "aria-current=page" : ""}>圖</a></span><button class="plus">＋</button></div>`;
+function list() {
+  const grp = (lv, open, n) => `<details class="grp" ${open ? "open" : ""}><summary>${LV[lv]} <small>${LVN[lv] ?? 0}</small></summary>${of(lv).slice(0, n).map((f) => `<div class="row" ${f.id === "unet.bars" ? 'aria-selected="true"' : ""}>${paper(f.id)}<span class="t">${f.t}</span><span class="d">${f.ln}</span><span class="g"><span class="tag">deep learning</span></span></div>`).join("")}</details>`;
+  document.getElementById("catList").innerHTML = `<aside class="tags">${TAGS}</aside><div class="mid">${mh("list")}${grp("figure", false, 2)}${grp("module", true, 11)}${grp("component", false, 6)}</div>
+    <aside class="detail"><h3>${by("unet.bars").t}</h3><div style="color:var(--faint);font-size:12px">${by("unet.bars").ln}</div>
+      <span class="paper stage" style="display:grid">${img("unet.bars")}</span>
+      <div class="k">標籤</div><div class="chips"><span class="tag">segmentation</span><span class="tag">deep learning</span><span class="tag">架構圖</span><span class="tag">論文</span></div>
+      <div class="k">觸發關鍵字</div><div class="chips"><span class="tag">U-Net</span><span class="tag">encoder-decoder</span><span class="tag">skip connection</span></div>
+      <div class="k">由這些組成</div><div class="lk">${paper("layer-bars.default")}${by("layer-bars.default").t}</div><div class="lk">${paper("box.rect")}${by("box.rect").t}</div>
+      <div class="k">用在</div><div class="lk">${paper("fig101")}${by("fig101").t}</div>
+      <div class="acts"><button>編輯圖形</button><button>交給 Echo</button><button>複製成新的</button><button>移除</button></div></aside>`;
+}
+function wall() {
+  const pc = (f) => `<div class="pc">${paper(f.id)}<div class="cap"><b>${LV[f.lv]}｜</b>${f.t}</div></div>`;
+  document.getElementById("catWall").innerHTML = `<aside class="tags">${TAGS}</aside><div class="mid">${mh("wall")}
+    <div class="wh">流程圖 <small>${LVN.figure ?? 0}</small></div><div class="wall lg">${of("figure").map(pc).join("")}</div>
+    <div class="wh">模塊 <small>${LVN.module ?? 0}</small></div><div class="wall">${of("module").map(pc).join("")}</div>
+    <div class="wh">元件 <small>${LVN.component ?? 0}</small></div><div class="wall">${of("component").map(pc).join("")}</div></div>`;
+}
+const CARDS = [["電腦視覺", [["Mean Reprojection Error (MRE)", "平均重投影誤差，衡量重投影點與觀測點的平均像素距離。", "概念", "學習中"], ["Kinematic Features", "由關節位置隨時間變化算出的速度、加速度等特徵。", "概念", "學習中"], ["Anisotropic", "各方向性質不同；影像中指各軸解析度不一致。", "概念", "記得"], ["Threshold Segmentation", "依像素值高於或低於門檻分割前景與背景。", "方法", "記得"]]],
+  ["深度學習", [["Temperature scaling", "把每個分數除以一個正數再做 softmax。", "方法", "學習中"], ["Contrastive loss", "讓同一例子的兩個視角比其他例子更接近的損失。", "概念", "不熟"]]], ["統計與數學", [["Bland–Altman plot", "兩種量測方法差值對平均值的散點圖。", "方法", "記得"]]]];
+function cards() {
+  document.getElementById("catCards").innerHTML = `<aside class="tags"><h4>領域</h4><button aria-pressed="true">電腦視覺<span>212</span></button><button>深度學習<span>148</span></button><button>醫學影像分析<span>96</span></button><button>統計與數學<span>41</span></button><h4>熟悉度</h4><button>到期待複習<span>12</span></button><button>學習中<span>86</span></button><button>記得<span>402</span></button><h4>種類</h4><button>概念<span>430</span></button><button>方法<span>38</span></button></aside>
+    <div class="mid"><div class="mh"><h2>知識卡</h2><span class="cnt">520</span><span style="flex:1"></span><select><option>最近修改</option><option>名稱</option><option>最不熟的先</option></select><button class="plus">＋</button></div>
+    ${CARDS.map(([d, it], i) => `<details class="grp" ${i < 2 ? "open" : ""}><summary>${d} <small>${it.length}</small></summary>${it.map((c, j) => `<div class="row text" ${i === 0 && j === 0 ? 'aria-selected="true"' : ""}><span class="t">${c[0]}</span><span class="d">${c[1]}</span><span class="g"><span class="tag">${c[2]}</span><span class="tag">${c[3]}</span></span></div>`).join("")}</details>`).join("")}</div>
+    <aside class="detail"><h3>Mean Reprojection Error (MRE)</h3><div style="color:var(--faint);font-size:12px">概念 · 電腦視覺 · 學習中</div><p style="margin:14px 0;line-height:1.75">平均重投影誤差，衡量重投影點與觀測點在影像上的平均像素距離，用來評估相機校正或三維重建的擬合程度。</p>
+      <div class="k">連到</div><div class="chips"><span class="tag">Camera calibration</span><span class="tag">Bundle adjustment</span></div><div class="acts"><button>編輯</button><button>已熟悉，不用學</button><button>交給 Echo</button></div></aside>`;
+}
+function show() { nav(); const pk = document.getElementById("pick"), v0 = view(); pk.style.display = v0.startsWith("dash") && v0 !== "dashb" ? "flex" : "none"; pk.innerHTML = [["dash", "封面 A 面板"], ["dash2", "封面 B 儀表"], ["dash3", "封面 C 一張表"]].map(([h, t]) => `<a href="#${h}" ${h === v0 ? "aria-current=page" : ""}>${t}</a>`).join(""); for (const s of document.querySelectorAll(".v")) s.classList.toggle("on", s.id === "v-" + view()); }
+dashboard(); cover2(); cover3(); rows(); list(); wall(); cards(); show(); addEventListener("hashchange", show);
+</script>
+</body>
+</html>
