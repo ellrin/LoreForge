@@ -20,6 +20,7 @@
 //! [models]            # the header's model menu (missing = 自動 for both)
 //! chat = "claude:sonnet"   # the chat's model: "" = 自動, claude:<alias>, local:<catalog id>, agy:<id>
 //! polish = ""             # 改寫／翻譯 of a selection, remembered on its own (also agy:<id>)
+//! page = ""               # 頁面修改 (a deck's page from L-Slide): "" or claude:<alias> only (the model must see the page)
 //! unrestricted = false    # 無審查: the size buttons pick the abliterated variant
 //! seen = ["claude:sonnet"]  # the models the menu has shown (the others get the 新 mark)
 //! ```
@@ -97,6 +98,9 @@ pub struct Models {
     pub chat: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub polish: String,
+    /// 頁面修改 (page mode): "" or `claude:<alias>`, nothing else edits a deck's page.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub page: String,
     /// 無審查: a size button picks the abliterated variant of a local model.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unrestricted: bool,
@@ -111,12 +115,13 @@ impl Models {
     }
 }
 
-/// `{ models: { chat?, polish?, unrestricted?, seen? } }`: what changes.
+/// `{ models: { chat?, polish?, page?, unrestricted?, seen? } }`: what changes.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ModelsPatch {
     pub chat: Option<String>,
     pub polish: Option<String>,
+    pub page: Option<String>,
     pub unrestricted: Option<bool>,
     pub seen: Option<Vec<String>>,
 }
@@ -284,6 +289,10 @@ pub fn set_settings(dir: &Path, p: &SettingsPatch) -> Result<Settings, String> {
         }
         if let Some(v) = &m.polish {
             s.models.polish = check_model(v, &["claude", "local", "agy"])?;
+        }
+        // a page of a deck is edited by a model that looks at the rendered page: Claude only
+        if let Some(v) = &m.page {
+            s.models.page = check_model(v, &["claude"])?;
         }
         if let Some(v) = m.unrestricted {
             s.models.unrestricted = v;

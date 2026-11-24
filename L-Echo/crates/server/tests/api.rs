@@ -222,6 +222,22 @@ async fn settings_keep_the_chat_model_and_the_rewrite_model_apart() {
 }
 
 #[tokio::test]
+async fn settings_keep_the_page_model_on_its_own_and_only_claude() {
+    let app = App::new(Llm::none());
+    let (s, st) = app.json("PUT", "/api/settings", Some(json!({ "models": { "chat": "local:qwen3.5-9b-q8", "page": "claude:opus" } }))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(st["models"], json!({ "chat": "local:qwen3.5-9b-q8", "page": "claude:opus" }));
+    // a model that cannot see the page is refused, and nothing changes
+    for bad in ["agy:m-1", "local:qwen3.5-9b-q8", "claude:op us"] {
+        assert_eq!(app.json("PUT", "/api/settings", Some(json!({ "models": { "page": bad } }))).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    assert_eq!(app.json("GET", "/api/settings", None).await.1["models"], st["models"]);
+    // "" = 自動 again, the chat's choice untouched
+    let (_, st) = app.json("PUT", "/api/settings", Some(json!({ "models": { "page": "" } }))).await;
+    assert_eq!(st["models"], json!({ "chat": "local:qwen3.5-9b-q8" }));
+}
+
+#[tokio::test]
 async fn chat_answers_with_the_model_the_turn_names() {
     let local = Arc::new(MockProvider::new(vec!["本機。".into(), "本機。".into()]).named("mock:local"));
     let haiku = Arc::new(MockProvider::new(vec!["雲。".into()]).named("mock:haiku"));

@@ -34,7 +34,7 @@
 //   LoreShell.settings(tab?)                         the gear dialog: 一般 外觀 模型 同步 快捷鍵 + the app's tabs
 //       一般 ends with 權限 when the server declares permissions (GET /api/permissions, lore-shell)
 //   LoreShell.permissions.get() / .request(what?) / .open(what)   what: microphone | speech | personal_voice
-//   LoreShell.modelMenu({ task, value, onChange, google, unrestricted, onUnrestricted, seen, onSeen })
+//   LoreShell.modelMenu({ task, value, onChange, google, kinds, unrestricted, onUnrestricted, seen, onSeen })
 //                                                        a header's model choice: 自動 or a named model (L-Echo)
 //   LoreShell.engineChip({ task, value, used, onChange })   a feature's own engine choice;
 //       live: true → shows what the next request will use (自動 · 本機 Gemma 4 12B); chip.actual(name) after it
@@ -525,7 +525,9 @@
    *  tasks that take it), 本機 as family rows with size buttons and ONE 無審查 switch for the group (it
    *  hides nothing: it switches which variant the size buttons pick). A choice is a model ref:
    *  "" = 自動, `claude:<alias>`, `local:<id>`, `agy:<id>`; the app keeps it:
-   *    { task, label, value(), onChange(ref), google(), unrestricted(), onUnrestricted(on), seen(), onSeen(refs) }
+   *    { task, label, value(), onChange(ref), google(), kinds(), unrestricted(), onUnrestricted(on), seen(), onSeen(refs) }
+   *  `kinds()` (optional): the kinds offered right now, e.g. ["claude"] while the job needs a model that
+   *  sees a page; the other rows are left out and keep their 新 marks. None = every kind, as before.
    *  `task` (an id, or a function: none = 自動 without a prediction) is whose next engine 自動 names.
    *  新 marks a model the menu did not have the last time it was opened (`seen`), or that the latest
    *  refresh newly brought; a row of only new models has one mark. The first row ends with 更新模型清單.
@@ -588,7 +590,8 @@
     // 新: a model the menu did not have the last time it was opened. Each kind has its own baseline
     // (nothing is new the very first time, nor a whole kind the menu shows for the first time);
     // without one, a model the latest refresh newly brought (`new`) still counts.
-    const refsOf = (d) => [...(d.claude?.models ?? []).map((x) => `claude:${x.id}`), ...(d.local?.models ?? []).map((x) => `local:${x.id}`), ...(o.google?.() && d.google?.available ? d.google.models ?? [] : []).filter((x) => !/^claude/i.test(x.id)).map((x) => `agy:${x.id}`)];
+    const kind = (k) => { const ks = o.kinds?.(); return !ks || ks.includes(k); };
+    const refsOf = (d) => [...(kind("claude") ? d.claude?.models ?? [] : []).map((x) => `claude:${x.id}`), ...(kind("local") ? d.local?.models ?? [] : []).map((x) => `local:${x.id}`), ...(kind("agy") && o.google?.() && d.google?.available ? d.google.models ?? [] : []).filter((x) => !/^claude/i.test(x.id)).map((x) => `agy:${x.id}`)];
     function freshOf(d, seen) {
       if (!seen.length) return [];
       const brought = new Set([...(d.google?.new ?? []).map((id) => `agy:${id}`), ...(d.claude?.models ?? []).filter((x) => x.new).map((x) => `claude:${x.id}`)]);
@@ -624,13 +627,13 @@
         paint();
       });
       m.replaceChildren(h("div", { class: "mtop" }, auto, again));
-      const C = d.claude?.models ?? [];
+      const C = kind("claude") ? d.claude?.models ?? [] : [];
       if (C.length) m.append(h("div", { class: "menu-sep", role: "separator" }), h("div", { class: "menu-head" }, "CLAUDE"), h("div", { class: "mrow full" }, seg("Claude", C.map((x) => [`claude:${x.id}`, x.label ?? x.id]))));
       // what the Antigravity CLI offers (Google's models and the others it lists): a row per model
-      const rows = o.google?.() && d.google?.available ? googleRows(d.google.models) : new Map();
+      const rows = kind("agy") && o.google?.() && d.google?.available ? googleRows(d.google.models) : new Map();
       if (rows.size) m.append(h("div", { class: "menu-head" }, "ANTIGRAVITY"));
       for (const [fam, items] of rows) m.append(mrow("mrow lv", fam, items.map((x) => [x.ref, x.text, undefined, x.label])));
-      const fams = localFamilies(d.local);
+      const fams = kind("local") ? localFamilies(d.local) : new Map();
       if (fams.size) {
         const groups = [...fams.values()].flatMap((f) => [...f.values()]);
         const sw = groups.some((g) => g.free.length) ? h("button", { type: "button", class: "sw", role: "switch", "aria-checked": String(free), "aria-pressed": String(free) }, "無審查", h("i")) : null;

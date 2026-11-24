@@ -26,7 +26,7 @@ const S = {
   turnSel: null,       // the selection the running turn is about (selected.js), kept for 「改用另一個」
   expanded: false,
   shell: null,
-  models: { chat: "", polish: "", unrestricted: false, seen: [] },   // the model menu's choices
+  models: { chat: "", polish: "", page: "", unrestricted: false, seen: [] },   // the model menu's choices
 };
 
 function h(tag, attrs = {}, ...kids) {
@@ -70,6 +70,7 @@ async function boot() {
   }
   window.LoreEchoFind?.start();                  // 搜尋檔案 requests (find.js), after the first show
   window.LoreEchoSel?.start();                   // selected text from another app (selected.js)
+  window.LoreEchoPage?.start();                  // a deck's page(s) from another app (page.js)
 }
 
 function mountShell() {
@@ -89,12 +90,16 @@ function mountShell() {
   // which model answers: 自動 (the next reply's, then the one that answered) or the model he picked in
   // the chip's menu. The chat and the rewrite of a selection each remember their own (settings.toml
   // [models]); while a rewrite is shown the chip is the rewrite's. Google is a model like the others.
+  // Page mode (page.js) has a third choice of its own, and its menu lists only what can do that job:
+  // 自動 and the Claude models (the model must see the rendered page).
   const rewriting = () => !!window.LoreEchoSel?.rewriting();
+  const paging = () => !!window.LoreEchoPage?.active();
+  const slot = () => (paging() ? "page" : rewriting() ? "polish" : "chat");
   S.chip = LoreShell.modelMenu({
-    task: () => (rewriting() ? null : "le-chat"), label: "回答用的模型",
-    value: () => (rewriting() ? S.models.polish : S.models.chat),
-    onChange: (ref) => saveModels(rewriting() ? { polish: ref } : { chat: ref }),
-    google: () => true,
+    task: () => (slot() === "chat" ? "le-chat" : null), label: "回答用的模型",
+    value: () => S.models[slot()],
+    onChange: (ref) => saveModels({ [slot()]: ref }),
+    google: () => true, kinds: () => (paging() ? ["claude"] : null),
     unrestricted: () => S.models.unrestricted, onUnrestricted: (on) => saveModels({ unrestricted: on }),
     seen: () => S.models.seen, onSeen: (seen) => saveModels({ seen }),
   });
@@ -103,8 +108,8 @@ function mountShell() {
   S.shell.slots.lead.append(S.chip);
 }
 
-/** The model menu's choices (settings.toml [models]): { chat, polish, unrestricted, seen }. */
-const modelsOf = (settings) => ({ chat: "", polish: "", unrestricted: false, seen: [], ...(settings?.models ?? {}) });
+/** The model menu's choices (settings.toml [models]): { chat, polish, page, unrestricted, seen }. */
+const modelsOf = (settings) => ({ chat: "", polish: "", page: "", unrestricted: false, seen: [], ...(settings?.models ?? {}) });
 async function saveModels(patch) {
   const before = { ...S.models };
   Object.assign(S.models, patch);                // at once in the page, then what the server kept
@@ -329,6 +334,7 @@ function wire() {
     if (e.key !== "Escape" || !S.expanded || document.querySelector("dialog[open]") || document.querySelector(".menu, .ask")) return;
     e.preventDefault();
     if (window.LoreVoice?.escape()) return;      // speaking or listening: Esc stops that first
+    if (window.LoreEchoPage?.escape()) return;   // 頁面修改: the larger picture, the wait, 再改, then page mode
     if (window.LoreEchoFind?.escape()) return;   // 搜尋檔案: Esc ends find mode
     if (window.LoreEchoSel?.escape()) return;    // a selection: Esc closes its rewrite, then ends it
     if (window.LoreEchoActions?.escape()) return;   // a 功能列表 preview: closed when untouched, kept when edited
@@ -374,6 +380,7 @@ function newChat() {
   window.LoreEchoKb?.clear();
   window.LoreEchoActions?.close();               // a preview of this conversation goes with it
   window.LoreEchoSel?.end();                     // and the selection another app handed over
+  window.LoreEchoPage?.end();                    // and the page(s) of a deck
   $("hist").replaceChildren();
   setLine(GREETING, "empty");
   S.chip.actual("");
@@ -387,6 +394,8 @@ async function send(engine) {
   window.LoreVoice?.beforeSend();
   // 搜尋檔案: the sentence describes a file for another app (find.js), never a chat turn
   if (!engine && window.LoreEchoFind?.take($("text").value.trim())) { $("text").value = ""; grow(); return; }
+  // 頁面修改: the sentence says what to change on the page(s) (page.js), never a chat turn
+  if (!engine && window.LoreEchoPage?.take()) return;
   const speak = !!window.LoreVoice?.wantsSpeech();   // 朗讀回覆: the server speaks it sentence by sentence
   if (!engine) {
     const text = $("text").value.trim();
