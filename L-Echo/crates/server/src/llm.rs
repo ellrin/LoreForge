@@ -173,6 +173,10 @@ pub fn engine_label(id: &str) -> String {
     if id.starts_with("mock") {
         return "mock".into();
     }
+    // Google through `agy` answers under its own id: not a local model, the menu names it
+    if id.starts_with("agy:") {
+        return String::new();
+    }
     Catalog::bundled().engine_name(id).unwrap_or_else(|| "本機".into())
 }
 
@@ -235,6 +239,12 @@ mod tests {
         // a task that did not opt in (card drafts need a web search) never runs on it
         assert!(llm.route("le-cards", Some("agy:m-1")).await.is_err());
         assert_eq!(id(llm.route(TASK_CHAT, Some("claude:")).await.unwrap()), "mock:current");
+    }
+
+    #[test]
+    fn a_google_answer_is_never_labelled_local() {
+        assert_eq!(engine_label("agy:some-model"), "");
+        assert_ne!(engine_label("agy:some-model"), "本機");
     }
 
     #[test]
