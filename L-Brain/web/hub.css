@@ -178,3 +178,20 @@ select.h-plus { padding: 5px 8px; font-weight: 500; }
 .h-acts .pri:disabled { display: none; }
 .h-acts .quiet { background: none; border-color: transparent; color: var(--faint); margin-left: auto; }
 .h-acts .quiet:hover { color: var(--err); border-color: transparent; }
+
+/* the families in the left column: one level; 知識卡 unfolds to its functions */
+.fam, .fam-sub { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.fam { padding-top: 8px; border-top: 1px solid var(--line); }
+.fam + #hubNav { border-top: 0; padding-top: 0; margin-top: -10px; }
+.fam-row { display: grid; grid-template-columns: 1fr 26px; align-items: center; }
+.fam button[data-view] { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; background: none; border: 0; padding: 6px 8px; border-radius: var(--r); text-align: left; color: var(--muted); font-size: 13px; }
+.fam-sub button[data-view] { grid-template-columns: 16px 1fr auto; padding-left: 18px; font-size: 13px; }
+.fam-sub button svg { width: 14px; height: 14px; }
+.fam button[data-view]:hover { background: var(--surface); color: var(--text); }
+.fam button[data-view][aria-current="page"] { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.fam .count { font: 500 12px var(--mono); color: var(--faint); }
+.fam .count.hot:not(:empty) { color: var(--accent-text); }
+.fam .fold { width: 26px; height: 26px; background: none; border: 0; color: var(--faint); border-radius: var(--r); }
+.fam .fold::before { content: "▸"; font-size: 11px; }
+.fam .fold[aria-expanded="true"]::before { content: "▾"; }
+.fam .fold:hover { background: var(--surface); color: var(--text); }

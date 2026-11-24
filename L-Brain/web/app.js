@@ -193,6 +193,13 @@ async function refreshMeta() {
   } catch (e) { fail(e); }
 }
 
+/** Unfold or fold what 知識卡 brings (複習, 時間軸, 圖譜); `keep`: remember it. */
+function foldCards(open, keep) {
+  $("cardSub").hidden = !open;
+  $("cardFold").setAttribute("aria-expanded", String(open));
+  if (keep) { try { localStorage.setItem("kb.cardNav", open ? "1" : "0"); } catch {} }
+}
+
 // ── Views ──────────────────────────────────────────────
 function setView(v) {
   if (S.view === "editor" && v !== "editor" && isDirty()) {
@@ -206,8 +213,10 @@ function showView(v) {
   S.view = v;
   document.querySelectorAll(".view").forEach((s) => (s.hidden = s.dataset.view !== v));
   const navFor = v === "editor" ? (S.ed?.pending ? "pending" : "cards") : v;
-  document.querySelectorAll("#views button").forEach((b) => b.toggleAttribute("aria-current", b.dataset.view === navFor));
-  document.querySelectorAll("#views button[aria-current]").forEach((b) => b.setAttribute("aria-current", "page"));
+  document.querySelectorAll("#left button[data-view]").forEach((b) => b.toggleAttribute("aria-current", b.dataset.view === navFor));
+  document.querySelectorAll("#left button[data-view][aria-current]").forEach((b) => b.setAttribute("aria-current", "page"));
+  // 知識卡 unfolds while one of its functions is the page
+  if (["review", "pending", "timeline", "graph"].includes(navFor)) foldCards(true);
   $("filters").hidden = !(v === "cards");
   shell.drawer("left", false);
   paintStatus();
@@ -226,7 +235,9 @@ function showView(v) {
 }
 
 function wire() {
-  $("views").addEventListener("click", (e) => {
+  $("cardFold").addEventListener("click", () => foldCards($("cardSub").hidden, true));
+  foldCards(localStorage.getItem("kb.cardNav") === "1");
+  $("left").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-view]");
     if (!b) return;
     if (b.dataset.view === "hub") S.hubArg = null;
