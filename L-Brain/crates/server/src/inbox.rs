@@ -340,9 +340,13 @@ pub async fn work_once(s: &Shared) -> bool {
         Err(why) => return fail(&why),
     };
     let req = p.request(&e, &cx);
-    let answer = match s.llm.complete_task(TASK, &req.system, &req.user, req.schema.clone()).await {
-        Ok(a) => a,
-        Err(why) => return fail(&why),
+    // nothing may hold the queue for ever: a model that says nothing for five minutes is a
+    // failure the author can retry, and the next sentence gets its turn
+    let call = s.llm.complete_task(TASK, &req.system, &req.user, req.schema.clone());
+    let answer = match tokio::time::timeout(std::time::Duration::from_secs(300), call).await {
+        Ok(Ok(a)) => a,
+        Ok(Err(why)) => return fail(&why),
+        Err(_) => return fail("模型五分鐘沒有回答，先跳過這一句；可以再試一次"),
     };
     match p.read(&e, &cx, &answer.value) {
         Ok(made) => {

@@ -129,12 +129,16 @@ impl Llm {
         self.shared = Some(home);
     }
 
-    fn factory(&self) -> StandardFactory {
+    /// The engines; `key = false` leaves the API key alone. Work nobody is waiting for (the
+    /// inbox's worker) must never read the keychain: macOS answers a first read with a dialog,
+    /// and an unattended task would sit behind it for ever. It runs on the local model or the
+    /// subscription; the key is read only for something the author asked for just now.
+    fn factory_with(&self, key: bool) -> StandardFactory {
         let mut f = StandardFactory::new(self.catalog.clone());
         f.prefer_subscription = true;
         f.selected_claude = Some(self.model.clone());
         let base = std::env::var("KNOWLEDGEBASE_CLAUDE_BASE_URL").unwrap_or_else(|_| lore_llm::claude_api::DEFAULT_BASE_URL.into());
-        f.api = self.keys.get(None, &Account::Single).map(|(k, _)| ApiAccess { base_url: base, api_key: k, fallbacks: true });
+        f.api = if key { self.keys.get(None, &Account::Single).map(|(k, _)| ApiAccess { base_url: base, api_key: k, fallbacks: true }) } else { None };
         f.subscription = Some(SubscriptionAccess { cli: self.cli.clone(), cache: self.cc.clone(), allow_web: true, temp_prefix: "knowledgebase-claude".into() });
         let e = self.shared.as_ref().and_then(|h| h.engine()).unwrap_or_default();
         f.local = Some(LocalAccess {
@@ -173,7 +177,7 @@ impl Llm {
         .with_priority(priority);
         let route = match &self.fake {
             Some(f) => Router::new(self.tasks.clone(), f.clone()).provider_for_with(task, &opts).await,
-            None => Router::new(self.tasks.clone(), self.factory()).provider_for_with(task, &opts).await,
+            None => Router::new(self.tasks.clone(), self.factory_with(!matches!(priority, lore_llm::shared_runtime::Priority::Background))).provider_for_with(task, &opts).await,
         }
         .map_err(|e| (unavailable(&e), alt_payload(&e)))?;
         let req = route.apply(req.temperature(LOCAL_TEMPERATURE));
