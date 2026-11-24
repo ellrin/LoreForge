@@ -283,7 +283,7 @@ const Hub = (() => {
     const canMeta = meta && !isNew || form;
     return el("aside", { class: "h-detail" },
       el("div", { class: "hd" }, el("h3", {}, isNew ? `新增${c?.label ?? ""}` : it.title), el("button", { type: "button", class: "x", "aria-label": "關閉", onclick: close }, "✕")),
-      isNew ? null : el("div", { class: "ln" }, [c?.label, it.line].filter(Boolean).join(" · ")),
+      isNew ? null : el("div", { class: "ln" }, [c?.label, it.entity === false ? "待製作" : (it.line ?? "").length > 70 ? null : it.line].filter(Boolean).join(" · ")),
       it.thumb ? el("span", { class: "h-paper stage" }, el("img", { src: it.thumb, alt: "" })) : null,
       form && def?.shape !== "row" ? el("label", { class: "h-f" }, el("span", {}, "名稱", el("i", {}, "＊")), el("input", { value: draft.title, oninput: (e) => { draft.title = e.target.value; dirty(); } })) : null,
       fields.map(row),
