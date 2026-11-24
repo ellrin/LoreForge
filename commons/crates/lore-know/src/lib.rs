@@ -22,6 +22,7 @@ pub mod intake;
 pub mod proposal;
 pub mod registry;
 pub mod select;
+pub mod stats;
 pub mod store;
 pub mod types;
 pub(crate) mod util;
