@@ -350,13 +350,14 @@ function peek(n, anchor) {
   }
   const d = domainOf(n), st = n.state ?? "none";
   peekEl.setAttribute("style", dcStyle(d) ?? "");
-  peekEl.replaceChildren(
+  // replaceChildren writes a null argument as the text "null" (h() skips it, this does not)
+  peekEl.replaceChildren(...[
     h("b", {}, n.title),
     n.aliases.length ? h("div", { class: "al" }, n.aliases.join(" · ")) : null,
     n.summary ? h("p", {}, n.summary) : null,
     h("div", { class: "m" }, d ? h("span", { class: "dm" }, domainLabel(d)) : null, h("span", {}, kindLabel(n.kind)), h("span", {}, STATE_LABEL[st]),
       S.spaces.length > 1 ? h("span", {}, spaceName(n.space)) : null),
-    h("button", { type: "button", class: "btn", onclick: () => setFamiliar(n, st === "known" ? "unfamiliar" : "mastered") }, st === "known" ? "改回學習" : "已熟悉，不用學"));
+    h("button", { type: "button", class: "btn", onclick: () => setFamiliar(n, st === "known" ? "unfamiliar" : "mastered") }, st === "known" ? "改回學習" : "已熟悉，不用學")].filter(Boolean));
   peekEl.hidden = false;
   const r = anchor.getBoundingClientRect(), w = peekEl.offsetWidth, ph = peekEl.offsetHeight;
   const x = r.right + 12 + w < innerWidth ? r.right + 12 : Math.max(8, r.left - 12 - w);
