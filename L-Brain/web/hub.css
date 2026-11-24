@@ -127,3 +127,54 @@ details.h-grp > summary small { color: var(--faint); font: 400 12px var(--mono);
 #hubNav button[aria-current="page"] { background: var(--accent-soft); color: var(--text); font-weight: 600; }
 #hubNav .count { font: 500 12px var(--mono); color: var(--faint); }
 @media (max-width: 1100px) { .h-cover { grid-template-columns: 1fr; } .h-cat.open { grid-template-columns: 0 0 1fr; } .h-cat.open .h-tags, .h-cat.open .h-mid { display: none; } }
+
+/* with the detail open the list keeps the title readable: the second column goes */
+.h-cat.open .h-row .d { display: none; }
+.h-cat.open .h-row { grid-template-columns: 60px minmax(0, 1fr) auto; }
+.h-cat.open .h-row.text { grid-template-columns: minmax(0, 1fr) auto; }
+.h-cat.open .h-row .t { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.h-cat.open .h-row .g .h-tag:nth-child(n+2) { display: none; }
+.h-f { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 4px 12px; align-items: start; margin-top: 10px; font-size: 13px; }
+.h-f > span { color: var(--faint); font-size: 12px; padding-top: 7px; }
+.h-f > span i { font-style: normal; color: var(--accent-text); margin-left: 2px; }
+.h-f input, .h-f textarea, .h-f select { width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: 6px 8px; font: inherit; font-size: 13px; line-height: 1.5; }
+.h-f textarea { resize: vertical; font-family: var(--sans); }
+.h-f input:focus, .h-f textarea:focus, .h-f select:focus { outline: none; border-color: var(--accent); }
+.h-f .ro { padding: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.h-acts .pri { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+.h-acts .pri:disabled { background: var(--surface); color: var(--faint); border-color: var(--line); }
+select.h-plus { padding: 5px 8px; font-weight: 500; }
+
+/* calmer: one thing per column carries weight */
+.h-cat.notags { grid-template-columns: minmax(320px, 1fr); }
+.h-cat.notags.open { grid-template-columns: minmax(320px, 1fr) minmax(360px, 38%); }
+.h-cat.open { grid-template-columns: 168px minmax(300px, 1fr) minmax(360px, 38%); }
+.h-tags { background: none; }
+.h-tags .more { color: var(--faint); font-size: 12px; }
+.h-row { padding: 9px 10px; }
+.h-row .t { font-weight: 400; }
+.h-row .d { text-align: right; }
+.h-row.text { grid-template-columns: minmax(0, 1fr) minmax(0, 220px) auto; }
+.h-head { margin-bottom: 16px; }
+.h-head input { background: none; border-color: transparent; border-bottom-color: var(--line); border-radius: 0; flex-basis: 180px; }
+.h-head input:focus { outline: none; border-bottom-color: var(--accent); }
+.h-head select { background: none; border-color: transparent; color: var(--muted); }
+.h-plus { border-color: var(--line); }
+.h-detail { padding: 22px 24px 30px; }
+.h-detail h3 { font-size: 17px; line-height: 1.45; font-weight: 600; }
+.h-f { grid-template-columns: 64px minmax(0, 1fr); margin-top: 6px; }
+.h-f input, .h-f textarea, .h-f select { background: none; border-color: transparent; padding: 6px 8px; margin-left: -8px; }
+.h-f input:hover, .h-f textarea:hover, .h-f select:hover { border-color: var(--line); }
+.h-f input:focus, .h-f textarea:focus, .h-f select:focus { background: var(--surface); border-color: var(--accent); }
+.h-f input::placeholder { color: var(--faint); opacity: .6; }
+.h-detail .ln + .h-f, .h-detail .h-paper + .h-f { margin-top: 18px; }
+.h-more { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 4px; }
+.h-more > summary { list-style: none; cursor: pointer; font-size: 12px; color: var(--faint); padding: 8px 0 2px; }
+.h-more > summary::-webkit-details-marker { display: none; }
+.h-more > summary::before { content: "▸ "; }
+.h-more[open] > summary::before { content: "▾ "; }
+.h-foot { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; }
+.h-acts { margin-top: 16px; align-items: center; }
+.h-acts .pri:disabled { display: none; }
+.h-acts .quiet { background: none; border-color: transparent; color: var(--faint); margin-left: auto; }
+.h-acts .quiet:hover { color: var(--err); border-color: transparent; }

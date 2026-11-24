@@ -118,7 +118,7 @@ const Hub = (() => {
   const prefKey = (f) => `kb.hub.mode.${f.id}`;
   function defaults(f) {
     let mode = null; try { mode = localStorage.getItem(prefKey(f)); } catch {}
-    return { q: "", sort: "updated", level: "", entity: "", tags: new Set(), source: "", mode: mode ?? (isFigure(f) ? "wall" : "list") };
+    return { q: "", sort: "updated", level: "", entity: "", section: "", more: new Set(), tags: new Set(), source: "", mode: mode ?? (isFigure(f) ? "wall" : "list") };
   }
   async function loadItems() {
     const f = S.f, p = new URLSearchParams({ family: S.fam.id, sort: f.sort, limit: "1000" });
@@ -129,16 +129,22 @@ const Hub = (() => {
     for (const t of f.tags) p.append("tag", t);
     const r = await api("GET", `/api/hub/items?${p}`);
     S.items = r.items ?? []; S.total = r.total ?? S.items.length;
-    // the tags of what is listed (this family, these filters), so a tag always leads somewhere
-    S.tags = {};
-    for (const it of S.items) for (const [facet, ts] of Object.entries(it.tags ?? {})) for (const t of ts) { S.tags[facet] ??= {}; S.tags[facet][t] = (S.tags[facet][t] ?? 0) + 1; }
-    for (const k of S.f.tags) { const [facet, ...rest] = k.split(":"); S.tags[facet] ??= {}; S.tags[facet][rest.join(":")] ??= 0; }
+    if (f.section) S.items = S.items.filter((it) => it.fields?.section === f.section);
+    // the left column lists the whole family's tags, whatever is filtered: a tag never disappears
+    if (S.allFor !== S.fam.id || S.allDirty) {
+      const all = (await api("GET", `/api/hub/items?${new URLSearchParams({ family: S.fam.id, limit: "1000" })}`)).items ?? [];
+      S.tags = {}; S.sections = {};
+      for (const it of all) {
+        for (const [facet, ts] of Object.entries(it.tags ?? {})) for (const t of ts) { S.tags[facet] ??= {}; S.tags[facet][t] = (S.tags[facet][t] ?? 0) + 1; }
+        const sec = it.fields?.section; if (typeof sec === "string" && sec) S.sections[sec] = (S.sections[sec] ?? 0) + 1;
+      }
+      S.allFor = S.fam.id; S.allDirty = false;
+    }
   }
   const thumb = (it, cls = "") => (it.thumb ? el("span", { class: `h-paper ${cls}` }, el("img", { src: it.thumb, alt: "", loading: "lazy" })) : it.format === "figure" || it.format === "layout" ? el("span", { class: `h-paper none ${cls}` }, it.entity === false ? "待製作" : "") : null);
   const catLabel = (id) => S.meta?.categories.find((c) => c.id === id)?.label ?? id;
   const chips = (it) => [it.entity === false ? el("span", { class: "h-tag todo" }, "待製作") : null,
-    it.source?.kind === "external" ? el("span", { class: "h-tag src" }, it.source.name) : null,
-    ...Object.values(it.tags ?? {}).flat().slice(0, 3).map((t) => el("span", { class: "h-tag" }, t))];
+    it.source?.kind === "external" ? el("span", { class: "h-tag src" }, it.source.name) : null];
   function groups() {
     const fig = isFigure(S.fam), out = new Map();
     for (const it of S.items) {
@@ -166,13 +172,18 @@ const Hub = (() => {
       out.push(el("h4", {}, "階層"), ...Object.entries(LV).map(([k, l]) => btn(l, parts[l], f.level === k, () => { f.level = f.level === k ? "" : k; f.entity = ""; refresh(); })),
         btn("待製作", parts["待製作"], f.entity === "false", () => { f.entity = f.entity === "false" ? "" : "false"; f.level = ""; refresh(); }));
     }
-    const FACET = { domain: "領域", kind: "結構", use: "用途" };
+    const secs = Object.entries(S.sections ?? {}).sort((x, y) => y[1] - x[1]);
+    if (secs.length > 1) out.push(el("h4", {}, "段落"), ...secs.map(([t, n]) => btn(t, n, f.section === t, () => { f.section = f.section === t ? "" : t; refresh(); })));
     for (const [facet, tags] of Object.entries(S.tags)) {
-      const list = Object.entries(tags).sort((a, b) => b[1] - a[1]);
+      const list = Object.entries(tags).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
       if (!list.length) continue;
-      out.push(el("h4", {}, FACET[facet] ?? facet), ...list.map(([t, n]) => { const k = `${facet}:${t}`; return btn(t, n, f.tags.has(k), () => { f.tags.has(k) ? f.tags.delete(k) : f.tags.add(k); refresh(); }); }));
+      const open = f.more.has(facet), on = (t) => f.tags.has(`${facet}:${t}`);
+      // the tags that group something (two or more), at most eight; chosen ones always stay
+      const main = list.filter(([t, n], i) => on(t) || (n > 1 && i < 8)), rest = list.length - main.length;
+      out.push(el("h4", {}, FACET[facet] ?? facet), ...(open ? list : main).map(([t, n]) => { const k = `${facet}:${t}`; return btn(t, n, f.tags.has(k), () => { f.tags.has(k) ? f.tags.delete(k) : f.tags.add(k); refresh(); }); }),
+        rest > 0 ? el("button", { type: "button", class: "more", onclick: () => { open ? f.more.delete(facet) : f.more.add(facet); paint(); } }, open ? "收起" : `其他 ${rest}`) : null);
     }
-    return el("aside", { class: "h-tags" }, out.length ? out : el("h4", {}, "還沒有標籤"));
+    return out.length ? el("aside", { class: "h-tags" }, out) : null;
   }
   function head() {
     const f = S.f, sorts = S.meta?.sorts ?? [["updated", "最近修改"], ["title", "名稱"]];
@@ -180,44 +191,105 @@ const Hub = (() => {
     return el("div", { class: "h-head" }, el("h2", {}, S.fam.label), el("span", { class: "cnt" }, fmt(S.total)), el("span", { class: "sp" }),
       el("input", { type: "search", placeholder: "在這一類裡找", value: f.q, "aria-label": "在這一類裡找", oninput: (e) => { clearTimeout(timer); timer = setTimeout(() => { f.q = e.target.value.trim(); refresh(true); }, 250); } }),
       el("select", { "aria-label": "排序", onchange: (e) => { f.sort = e.target.value; refresh(); } }, sorts.map(([id, label]) => el("option", { value: id, selected: id === f.sort }, label))),
-      el("span", { class: "h-sw", role: "group", "aria-label": "顯示方式" }, [["list", "清單"], ["wall", "圖"]].map(([m, t]) => el("button", { type: "button", "aria-pressed": String(f.mode === m), onclick: () => { f.mode = m; try { localStorage.setItem(prefKey(S.fam), m); } catch {} paint(); } }, t))));
+      !S.items.some((it) => it.thumb) && S.f.mode !== "wall" ? null : el("span", { class: "h-sw", role: "group", "aria-label": "顯示方式" }, [["list", "清單"], ["wall", "圖"]].map(([m, t]) => el("button", { type: "button", "aria-pressed": String(f.mode === m), onclick: () => { f.mode = m; try { localStorage.setItem(prefKey(S.fam), m); } catch {} paint(); } }, t))),
+      addBtn());
+  }
+  /** ＋ 新增: straight to the form when one category takes it, else a small choice of which. */
+  function addBtn() {
+    const cs = addable();
+    if (!cs.length) return null;
+    if (cs.length === 1) return el("button", { type: "button", class: "h-plus", "aria-label": `新增${cs[0].label}`, onclick: () => add(cs[0].id) }, "＋");
+    return el("select", { class: "h-plus", "aria-label": "新增", onchange: (e) => { const v = e.target.value; e.target.value = ""; if (v) add(v); } }, el("option", { value: "" }, "＋ 新增"), cs.map((c) => el("option", { value: c.id }, c.label)));
   }
   let detailEl = null;
   function paint(keepFocus) {
     const q = keepFocus ? S.root.querySelector(".h-head input") : null, pos = q?.selectionStart;
-    const cat = el("div", { class: `h-cat ${S.sel ? "open" : ""}` }, tagsPane(), el("div", { class: "h-mid" }, head(), listBody()), S.sel ? (detailEl ?? el("aside", { class: "h-detail" })) : null);
+    const tp = tagsPane();
+    const cat = el("div", { class: `h-cat ${S.sel ? "open" : ""} ${tp ? "" : "notags"}` }, tp, el("div", { class: "h-mid" }, head(), listBody()), S.sel ? (detailEl ?? el("aside", { class: "h-detail" })) : null);
     S.root.replaceChildren(el("div", { class: "hubv" }, cat));
     if (q) { const n = S.root.querySelector(".h-head input"); n.focus(); n.setSelectionRange(pos, pos); }
   }
   async function refresh(keepFocus) { try { await loadItems(); paint(keepFocus); } catch (e) { S.host.fail?.(e); } }
 
   // ── the detail to the right ──
+  const FACET = { domain: "領域", kind: "結構", use: "用途" };
+  const cat = (id) => S.meta?.categories.find((c) => c.id === id);
+  const fdef = (id) => S.meta?.formats.find((x) => x.id === id);
+  const split = (v) => v.split(/[,，、\n]/).map((x) => x.trim()).filter(Boolean);
+  const close = () => { S.sel = null; detailEl = null; paint(); };
+  /** The detail: a form where the category can be written, the same things to read where it cannot. */
+  function detail(it, d, isNew) {
+    const c = cat(it.category), def = fdef(it.format), form = !!(c?.writable && def?.form), meta = !!c && !c.independent;
+    // what the form holds until 儲存
+    const draft = { title: it.title ?? "", fields: { ...(it.fields ?? {}) }, tags: Object.fromEntries(Object.keys(FACET).map((k) => [k, (it.tags?.[k] ?? []).join("、")])), triggers: (it.triggers ?? []).join("、") };
+    let saveBtn = null;
+    const dirty = () => { if (saveBtn) saveBtn.disabled = false; };
+    const input = (fd) => {
+      const v = draft.fields[fd.name] ?? "", set = (e) => { draft.fields[fd.name] = fd.kind === "number" && e.target.value !== "" ? e.target.value : e.target.value; dirty(); };
+      if (fd.kind === "choice" && fd.choices?.length) return el("select", { onchange: set }, el("option", { value: "" }, ""), fd.choices.map((x) => el("option", { value: x, selected: x === v }, x)));
+      const long = fd.kind === "markdown" || fd.kind === "latex" || String(v).length > 60 || /template|example|text|message|body|note|usage/.test(fd.name);
+      return long ? el("textarea", { rows: fd.name === "body" ? 14 : 2, oninput: set, spellcheck: "false" }, String(v)) : el("input", { value: String(v), type: fd.kind === "number" ? "number" : "text", oninput: set });
+    };
+    const fields = (def?.fields ?? []).filter((fd) => typeof (it.fields?.[fd.name] ?? "") !== "object");
+    const link = (r) => el("button", { type: "button", class: "h-lk", onclick: () => open(r.id) }, thumb(r), r.title);
+    const row = (fd) => form ? el("label", { class: "h-f" }, el("span", {}, fd.label, fd.required ? el("i", {}, "＊") : null), input(fd))
+      : (it.fields?.[fd.name] ? el("label", { class: "h-f" }, el("span", {}, fd.label), el("div", { class: "ro" }, String(it.fields[fd.name]))) : null);
+    const metaIn = (label, key, hint) => el("label", { class: "h-f" }, el("span", {}, label), el("input", { value: key === "triggers" ? draft.triggers : draft.tags[key], placeholder: hint, oninput: (e) => { key === "triggers" ? (draft.triggers = e.target.value) : (draft.tags[key] = e.target.value); dirty(); } }));
+    async function save() {
+      const first = (def?.fields ?? []).find((fd) => fd.required);
+      const title = def?.shape === "row" ? String(draft.fields[first?.name] ?? draft.title).split("\n")[0].slice(0, 80) : draft.title.trim();
+      const body = { ...it, line: undefined, thumb: undefined, title, fields: form ? draft.fields : it.fields, triggers: split(draft.triggers),
+        tags: Object.fromEntries(Object.entries(draft.tags).map(([k, v]) => [k, split(v)]).filter(([, v]) => v.length)) };
+      try {
+        saveBtn.disabled = true;
+        const r = isNew ? await api("POST", "/api/hub/items", body) : await api("PUT", `/api/hub/items/${enc(it.id)}`, body);
+        const saved = r.item ?? r;
+        S.host.toast?.(isNew ? "已新增" : "已儲存");
+        S.allDirty = true; await loadStats(); await loadItems(); await open(saved.id);
+      } catch (e) {
+        saveBtn.disabled = false;
+        const probs = e.body?.problems?.map((x) => x.message).join("；");
+        S.host.fail?.(probs ? new Error(probs) : e);
+      }
+    }
+    const canMeta = meta && !isNew || form;
+    return el("aside", { class: "h-detail" },
+      el("div", { class: "hd" }, el("h3", {}, isNew ? `新增${c?.label ?? ""}` : it.title), el("button", { type: "button", class: "x", "aria-label": "關閉", onclick: close }, "✕")),
+      isNew ? null : el("div", { class: "ln" }, [c?.label, it.line].filter(Boolean).join(" · ")),
+      it.thumb ? el("span", { class: "h-paper stage" }, el("img", { src: it.thumb, alt: "" })) : null,
+      form && def?.shape !== "row" ? el("label", { class: "h-f" }, el("span", {}, "名稱", el("i", {}, "＊")), el("input", { value: draft.title, oninput: (e) => { draft.title = e.target.value; dirty(); } })) : null,
+      fields.map(row),
+      canMeta ? el("details", { class: "h-more", open: isNew ? null : (Object.values(it.tags ?? {}).flat().length || it.triggers?.length ? true : null) }, el("summary", {}, "標籤與關鍵字"), Object.entries(FACET).map(([k, l]) => metaIn(l, k, "用、分開")), metaIn("觸發關鍵字", "triggers", "內容出現這些字就適用")) : [
+        Object.entries(it.tags ?? {}).map(([facet, ts]) => [el("div", { class: "k" }, FACET[facet] ?? facet), el("div", { class: "chips" }, ts.map((t) => el("span", { class: "h-tag" }, t)))])],
+      d?.contains?.length ? [el("div", { class: "k" }, "由這些組成"), d.contains.map(link)] : null,
+      d?.used_by?.length ? [el("div", { class: "k" }, "用在"), d.used_by.map(link)] : null,
+      el("div", { class: "h-foot" }, c?.independent ? "不與 Lore 共用" : c?.tasks?.length ? `用在 ${c.tasks.length} 個步驟` : "還沒有步驟在用",
+        isNew ? null : ` · ${it.source?.kind === "external" ? it.source.name : it.source?.kind === "author" ? "我加的" : "Lore"}`, it.used ? ` · 用過 ${it.used} 次` : null),
+      el("div", { class: "h-acts" },
+        canMeta ? (saveBtn = el("button", { type: "button", class: "pri", disabled: !isNew, onclick: save }, isNew ? "新增" : "儲存")) : null,
+        !isNew && c?.writable ? el("button", { type: "button", class: "quiet", onclick: () => remove(it) }, "移除") : null));
+  }
   async function open(id) {
     S.sel = id;
     try {
-      const d = await api("GET", `/api/hub/items/${enc(id)}`), it = d.item;
-      const def = S.meta?.formats.find((x) => x.id === it.format);
-      const FACET = { domain: "領域", kind: "結構", use: "用途" };
-      const link = (r) => el("button", { type: "button", class: "h-lk", onclick: () => open(r.id) }, thumb(r), r.title);
-      const fields = (def?.fields ?? []).filter((fd) => { const v = it.fields?.[fd.name]; return v != null && v !== "" && typeof v !== "object"; });
-      detailEl = el("aside", { class: "h-detail" },
-        el("div", { class: "hd" }, el("h3", {}, it.title), el("button", { type: "button", class: "x", "aria-label": "關閉", onclick: () => { S.sel = null; detailEl = null; paint(); } }, "✕")),
-        el("div", { class: "ln" }, [catLabel(it.category), it.line].filter(Boolean).join(" · ")),
-        it.thumb ? el("span", { class: "h-paper stage" }, el("img", { src: it.thumb, alt: "" })) : null,
-        fields.length ? el("dl", {}, fields.map((fd) => [el("dt", {}, fd.label), el("dd", {}, String(it.fields[fd.name]))])) : null,
-        Object.entries(it.tags ?? {}).map(([facet, ts]) => [el("div", { class: "k" }, FACET[facet] ?? facet), el("div", { class: "chips" }, ts.map((t) => el("span", { class: "h-tag" }, t)))]),
-        it.triggers?.length ? [el("div", { class: "k" }, "觸發關鍵字"), el("div", { class: "chips" }, it.triggers.map((t) => el("span", { class: "h-tag" }, t)))] : null,
-        d.contains?.length ? [el("div", { class: "k" }, "由這些組成"), d.contains.map(link)] : null,
-        d.used_by?.length ? [el("div", { class: "k" }, "用在"), d.used_by.map(link)] : null,
-        el("div", { class: "k" }, "來源"), el("div", { class: "chips" }, el("span", { class: "h-tag" }, it.source?.kind === "external" ? it.source.name : it.source?.kind === "author" ? "我" : "Lore"), it.used ? el("span", { class: "h-tag" }, `用過 ${it.used} 次`) : null),
-        el("div", { class: "h-acts" }, el("button", { type: "button", onclick: () => remove(it) }, "移除")));
+      const d = await api("GET", `/api/hub/items/${enc(id)}`);
+      detailEl = detail(d.item, d, false);
       paint();
     } catch (e) { S.sel = null; detailEl = null; S.host.fail?.(e); }
   }
+  /** ＋: a blank form for one of the family's categories that can be written by hand. */
+  function add(catId) {
+    const c = cat(catId);
+    S.sel = "new";
+    detailEl = detail({ id: "", category: c.id, format: c.format, title: "", fields: {}, tags: {}, triggers: [], entity: true, source: { kind: "author", name: "" } }, null, true);
+    paint();
+    detailEl.querySelector("input, textarea, select")?.focus();
+  }
+  const addable = () => (S.fam.categories ?? []).map(cat).filter((c) => c?.writable && fdef(c.format)?.form);
   async function remove(it) {
     try {
       await api("DELETE", `/api/hub/items/${enc(it.id)}`);
-      S.sel = null; detailEl = null;
+      S.sel = null; detailEl = null; S.allDirty = true;
       S.host.toast?.(`「${it.title}」已移除`, { label: "復原", run: async () => { try { await api("POST", `/api/hub/items/${enc(it.id)}/restore`); await loadStats(); await refresh(); } catch (e) { S.host.fail?.(e); } } });
       await loadStats(); await refresh();
     } catch (e) { S.host.fail?.(e); }
