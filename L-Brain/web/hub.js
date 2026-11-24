@@ -365,6 +365,8 @@ const Hub = (() => {
       el("div", { class: "h-acts" }, proposal ? send : null, el("button", { type: "button", class: "quiet", onclick: close }, "不要")));
     paint();
   }
+  /** A changed part in the author's words (`tags.kind` → 標籤, `fields.template` → the field's label). */
+  const partName = (n) => (n === "title" ? "名稱" : n === "triggers" ? "觸發關鍵字" : n === "contains" ? "組成" : n.startsWith("tags.") ? "標籤" : (S.meta?.formats.flatMap((f) => f.fields).find((fd) => `fields.${fd.name}` === n)?.label ?? n.replace(/^fields\./, "")));
   const show1 = (v) => (v == null ? "" : typeof v === "string" ? v : Array.isArray(v) ? v.join("、") : JSON.stringify(v));
   const pick = (o, path) => path.split(".").reduce((x, k) => x?.[k], o);
   /** 請 Echo 改: one instruction about one item → a draft of what would change. */
@@ -376,7 +378,7 @@ const Hub = (() => {
       try {
         const d = await echo("/api/actions/know/edit", { id: it.id, instruction });
         draftPane(`改「${it.title}」`, [
-          (d.changed ?? []).map((name) => el("div", { class: "h-diff" }, el("div", { class: "k" }, name.replace(/^fields\./, "").replace(/^tags\./, "標籤 ")), el("del", {}, show1(pick(d.before, name))), el("ins", {}, show1(pick(d.after, name))))),
+          (d.changed ?? []).map((name) => el("div", { class: "h-diff" }, el("div", { class: "k" }, partName(name)), el("del", {}, show1(pick(d.before, name))), el("ins", {}, show1(pick(d.after, name))))),
           (d.dropped ?? []).length ? [el("div", { class: "k" }, "沒有採用"), d.dropped.map((x) => el("div", { class: "ln" }, x))] : null], d.proposal, d.proposal ? d.note : d.message);
       } catch (e) { go.disabled = false; go.textContent = "請 Echo 改"; S.host.fail?.(e); }
     } }, "請 Echo 改");
@@ -404,7 +406,7 @@ const Hub = (() => {
           el("input", { type: "checkbox", checked: !x.problem, disabled: !!x.problem, onchange: (e) => { e.target.checked ? chosen.add(x.index) : chosen.delete(x.index); } }),
           el("span", { class: `op ${x.op}` }, OP[x.op] ?? x.op),
           el("span", { class: "t" }, it.title ?? x.note ?? "", it.level && LV[it.level] ? el("small", {}, LV[it.level]) : null, fig && it.entity === false ? el("small", {}, "待製作") : null),
-          el("span", { class: "d" }, x.problem || (x.op === "update" && x.changed?.length ? `改：${x.changed.join("、")}` : x.note ?? "")));
+          el("span", { class: "d" }, x.problem || (x.op === "update" && x.changed?.length ? `改：${[...new Set(x.changed.map(partName))].join("、")}` : x.note ?? "")));
       };
       if (!d.shown.some((x) => !x.problem)) chosen.clear();
       const act = async (fn, msg) => { try { await fn(); S.host.toast?.(msg); S.allDirty = true; await show(S.root, "proposals"); } catch (e) { S.host.fail?.(e); } };
