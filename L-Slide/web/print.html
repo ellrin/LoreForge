@@ -23,10 +23,20 @@
 // Print route for PDF export: every visible slide on its own page, at the
 // deck's size. Waits for images and equations (OMML → LaTeX via the server).
 (async () => {
+  addEventListener("unhandledrejection", (e) => { document.body.dataset.error = String(e.reason); });
   const q = new URL(location.href).searchParams;
   const name = q.get("deck");
   const all = q.get("hidden") === "1";
-  const r = await (await fetch(`/api/decks/${encodeURIComponent(name)}`)).json();
+  // slide=<uid>: only that slide (one page, same size and layout). preview=<path>: load the deck
+  // JSON from that same-origin path instead of the deck's own route. w=<px>: with slide, scale to that width.
+  const only = q.get("slide");
+  let src = `/api/decks/${encodeURIComponent(name)}`;
+  const pv = q.get("preview");
+  if (pv) {
+    if (!pv.startsWith("/") || pv.startsWith("//") || pv.includes("://") || pv.includes("\\") || pv.includes("..")) { document.body.dataset.error = "preview"; return; }
+    src = pv;
+  }
+  const r = await (await fetch(src)).json();
   SC.addFontStacks(r.font_stacks);
   const W = SC.px(r.deck.size.w), H = SC.px(r.deck.size.h);
   document.documentElement.style.setProperty("--w", `${W}px`);
@@ -44,13 +54,16 @@
   }
   const pages = document.getElementById("pages");
   r.deck.slides.forEach((s, i) => {
-    if (s.hidden && !all) return;
+    if (only ? s.uid !== only : s.hidden && !all) return;
     const ctx = { size: r.deck.size, backdrops: r.backdrops, slideNo: i + 1, assetUrl: (a) => `/api/decks/${encodeURIComponent(name)}/asset?id=${encodeURIComponent(a)}`, latex: (m) => latex.get(m) };
     const pg = document.createElement("div");
     pg.className = "page";
     pg.append(SC.renderSlide(s, ctx));
     pages.append(pg);
   });
+  if (only && !pages.children.length) { document.body.dataset.error = "slide"; return; }
+  const fit = Number(q.get("w"));
+  if (only && fit > 0) document.body.style.zoom = String(fit / W);
   await Promise.all([...document.images].map((im) => im.decode().catch(() => {})));
   await document.fonts.ready;
   document.body.dataset.ready = "1";

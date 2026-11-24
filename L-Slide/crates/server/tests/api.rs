@@ -419,3 +419,73 @@ async fn plot_pictures_carry_their_spec() {
     let (st, _, _) = call(&app, "POST", "/api/decks/demo/plot", Some(json!({ "spec": bad, "svg": "<svg/>" })), None).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
 }
+
+// ── one slide as PNG (fake page-shot service, no Chrome) ─────────────────────
+
+type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, String, Option<String>, u32)>>>;
+
+struct FakeShot(Seen, Result<Vec<u8>, String>);
+
+#[async_trait::async_trait]
+impl sc_server::PageShot for FakeShot {
+    async fn png(&self, deck: &str, slide: &str, preview: Option<&str>, width: u32) -> Result<Vec<u8>, String> {
+        self.0.lock().unwrap().push((deck.into(), slide.into(), preview.map(String::from), width));
+        self.1.clone()
+    }
+}
+
+const TINY_PNG: &[u8] = b"\x89PNG\r\n\x1a\ntiny";
+
+fn setup_shot(result: Result<Vec<u8>, String>) -> (tempfile::TempDir, axum::Router, Seen) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("styles/test")).unwrap();
+    std::fs::write(dir.path().join("styles/test/style.toml"), STYLE).unwrap();
+    let ws = sc_core::Workspace::new(dir.path(), None);
+    let st = sc_server::state(ws, sc_server::repo_dir().join("web"));
+    let seen: Seen = Default::default();
+    assert!(st.pageshot.set(std::sync::Arc::new(FakeShot(seen.clone(), result))).is_ok());
+    (dir, sc_server::router_isolated(st), seen)
+}
+
+#[tokio::test]
+async fn slide_png_route_returns_the_services_picture() {
+    let (_dir, app, seen) = setup_shot(Ok(TINY_PNG.to_vec()));
+    call(&app, "POST", "/api/decks/import?name=demo&style=test", None, Some(common::synthetic_deck())).await;
+    let (_, d, _) = call(&app, "GET", "/api/decks/demo", None, None).await;
+    let uid = d["deck"]["slides"][1]["uid"].as_str().unwrap().to_string();
+
+    let (st, _, b) = call(&app, "GET", &format!("/api/decks/demo/slides/{uid}/png?w=900&preview=/api/decks/demo/page-edit/p1/deck"), None, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(b, TINY_PNG);
+    let (st, _, b) = call(&app, "GET", &format!("/api/decks/demo/slides/{uid}/png"), None, None).await;
+    assert_eq!((st, b), (StatusCode::OK, TINY_PNG.to_vec()));
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[0], ("demo".into(), uid.clone(), Some("/api/decks/demo/page-edit/p1/deck".into()), 900));
+    assert_eq!(seen[1], ("demo".into(), uid, None, 1280));
+}
+
+#[tokio::test]
+async fn slide_png_route_checks_its_inputs() {
+    let (_dir, app, seen) = setup_shot(Ok(TINY_PNG.to_vec()));
+    call(&app, "POST", "/api/decks/import?name=demo&style=test", None, Some(common::synthetic_deck())).await;
+    let (_, d, _) = call(&app, "GET", "/api/decks/demo", None, None).await;
+    let uid = d["deck"]["slides"][0]["uid"].as_str().unwrap().to_string();
+    for p in ["http://evil.example/x", "//evil.example/x", "relative/path", "/a/../b", "/a%0Ab", "javascript:alert(1)"] {
+        let (st, _, _) = call(&app, "GET", &format!("/api/decks/demo/slides/{uid}/png?preview={p}"), None, None).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{p}");
+    }
+    let (st, _, _) = call(&app, "GET", "/api/decks/demo/slides/nope/png", None, None).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    assert!(seen.lock().unwrap().is_empty(), "the service is never asked for a bad request");
+}
+
+#[tokio::test]
+async fn slide_png_without_chrome_is_503_with_the_reason() {
+    let (_dir, app, _) = setup_shot(Err("找不到 Chrome，無法產生頁面圖片".into()));
+    call(&app, "POST", "/api/decks/import?name=demo&style=test", None, Some(common::synthetic_deck())).await;
+    let (_, d, _) = call(&app, "GET", "/api/decks/demo", None, None).await;
+    let uid = d["deck"]["slides"][0]["uid"].as_str().unwrap().to_string();
+    let (st, v, _) = call(&app, "GET", &format!("/api/decks/demo/slides/{uid}/png"), None, None).await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(v["error"].as_str().unwrap().contains("Chrome"));
+}

@@ -84,6 +84,9 @@ pub struct AppState {
     /// Typesets an equation's LaTeX for the comparison with its crop (default: headless
     /// Chrome, never in an isolated server); tests set a fake.
     pub typeset: std::sync::OnceLock<Arc<dyn todeck::extract::Typeset>>,
+    /// One slide of a deck or of a preview as PNG (default: headless Chrome on /print.html, see
+    /// [`pageshot_of`]); tests set a fake.
+    pub pageshot: std::sync::OnceLock<Arc<dyn PageShot>>,
 }
 
 /// A native file dialog request from the page (`/api/shell/dialog`).
@@ -227,6 +230,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/decks/{name}/export", post(export))
         .route("/api/decks/{name}/pptx", get(pptx))
         .route("/api/decks/{name}/pdf", post(pdf))
+        .route("/api/decks/{name}/slides/{uid}/png", get(slide_png))
         .route("/api/decks/{name}/asset", get(asset))
         .route("/api/decks/{name}/assets", post(add_asset).layer(DefaultBodyLimit::max(60 * 1024 * 1024)))
         .route("/api/decks/{name}/latex", post(latex))
@@ -447,6 +451,7 @@ pub fn state_at(ws: Workspace, web: PathBuf, home: lore_home::Home) -> Shared {
         llm: std::sync::OnceLock::new(),
         liveeq: std::sync::OnceLock::new(),
         typeset: std::sync::OnceLock::new(),
+        pageshot: std::sync::OnceLock::new(),
     })
 }
 
@@ -1057,4 +1062,123 @@ async fn shell_dialog(State(s): State<Shared>, Json(b): Json<DialogReq>) -> R {
     };
     let path = tokio::task::spawn_blocking(move || hook(b)).await.map_err(|e| bad(e.to_string()))?;
     Ok(Json(json!({ "path": path })))
+}
+
+// ── One slide as PNG (print.html?slide=…[&preview=…]) ─────────────────────────
+
+/// Renders one slide of a deck, or of a preview of it, to a PNG. `preview` is a same-origin
+/// path the print page loads the deck JSON from instead of the deck's own route. `width` is in
+/// CSS pixels (the PNG is twice as wide: Chrome runs at device scale 2). Err = a one-line reason.
+#[async_trait::async_trait]
+pub trait PageShot: Send + Sync {
+    async fn png(&self, deck: &str, slide: &str, preview: Option<&str>, width: u32) -> Result<Vec<u8>, String>;
+}
+
+/// The real one: headless Chrome on this server's own `/print.html`.
+/// **Not part of the offline tests** (needs a browser).
+pub struct ChromePageShot(std::sync::Weak<AppState>);
+
+#[async_trait::async_trait]
+impl PageShot for ChromePageShot {
+    async fn png(&self, deck: &str, slide: &str, preview: Option<&str>, width: u32) -> Result<Vec<u8>, String> {
+        let chrome = sc_core::find_chrome().ok_or("找不到 Chrome，無法產生頁面圖片")?;
+        let chrome2 = chrome.clone();
+        let s = self.0.upgrade().ok_or("伺服器已關閉")?;
+        let port = *s.port.lock().unwrap();
+        let (cw, ch) = {
+            let sess = session(&s, deck).map_err(|e| e.1)?;
+            let sess = sess.lock().unwrap();
+            let z = &sess.editor.deck.size;
+            (z.w.max(1) as f64, z.h.max(1) as f64)
+        };
+        let h = ((width as f64) * ch / cw).round().max(1.0) as u32;
+        let mut url = format!("http://127.0.0.1:{port}/print.html?deck={}&slide={}&w={width}", urlenc(deck), urlenc(slide));
+        if let Some(p) = preview {
+            url.push_str(&format!("&preview={}", urlenc(p)));
+        }
+        // the picture is only taken of a page that finished: print.html sets data-ready when the
+        // deck, images and fonts are in, data-error when it could not draw (never a blank success)
+        let probe = url.clone();
+        let dom = tokio::task::spawn_blocking(move || dump_dom(&chrome, &probe)).await.map_err(|e| e.to_string())??;
+        if !dom.contains("data-ready=\"1\"") || !dom.contains("class=\"page\"") {
+            let why = dom.split("data-error=\"").nth(1).and_then(|t| t.split('"').next()).unwrap_or("逾時");
+            return Err(format!("頁面沒有畫完（{why}），沒有產生圖片"));
+        }
+        let png = std::env::temp_dir().join(format!("sc-pageshot-{}-{}.png", std::process::id(), PAGESHOT_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        let p2 = png.clone();
+        let r = tokio::task::spawn_blocking(move || {
+            let _ = std::fs::remove_file(&p2);
+            let r = sc_core::screenshot_png(&chrome2, &url, width, h, &p2).and_then(|_| Ok(std::fs::read(&p2)?));
+            let _ = std::fs::remove_file(&p2);
+            r
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        r.map_err(|e| format!("頁面圖片沒有產生：{e}"))
+    }
+}
+
+static PAGESHOT_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The page-shot service: the test fake if one was set, else Chrome.
+pub fn pageshot_of(s: &Shared) -> Arc<dyn PageShot> {
+    s.pageshot.get_or_init(|| Arc::new(ChromePageShot(Arc::downgrade(s)))).clone()
+}
+
+/// A preview path is same-origin and relative: `/…`, no scheme, no `//`, no `..`.
+pub fn preview_path_ok(p: &str) -> bool {
+    p.starts_with('/') && !p.starts_with("//") && !p.contains("://") && !p.contains("..") && !p.contains('\\') && !p.chars().any(|c| c.is_control())
+}
+
+#[derive(Deserialize)]
+struct SlidePngQ {
+    w: Option<u32>,
+    preview: Option<String>,
+}
+
+async fn slide_png(State(s): State<Shared>, Path((name, uid)): Path<(String, String)>, Query(q): Query<SlidePngQ>) -> Result<Response, ApiError> {
+    if let Some(p) = &q.preview
+        && !preview_path_ok(p)
+    {
+        return Err(bad("preview 必須是同一個伺服器上的相對路徑"));
+    }
+    {
+        let sess = session(&s, &name).map_err(|_| ApiError(StatusCode::NOT_FOUND, "no deck".into()))?;
+        let sess = sess.lock().unwrap();
+        // a preview may hold slides the saved deck does not have yet: only the deck must exist then
+        if q.preview.is_none() && sess.editor.deck.slide_index(&uid).is_none() {
+            return Err(ApiError(StatusCode::NOT_FOUND, "no slide".into()));
+        }
+    }
+    let w = q.w.unwrap_or(1280).clamp(200, 4000);
+    let png = pageshot_of(&s).png(&name, &uid, q.preview.as_deref(), w).await.map_err(|e| ApiError(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    Ok(([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "no-store")], png).into_response())
+}
+
+/// The page's DOM after its scripts ran (headless Chrome `--dump-dom`), at most 40 s.
+fn dump_dom(chrome: &std::path::Path, url: &str) -> Result<String, String> {
+    use std::process::Stdio;
+    let extra: Vec<String> = std::env::var("SLIDECOMPOSER_CHROME_ARGS").map(|v| v.split_whitespace().map(str::to_string).collect()).unwrap_or_default();
+    let child = std::process::Command::new(chrome)
+        .args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--use-mock-keychain", "--password-store=basic", "--virtual-time-budget=10000", "--dump-dom"])
+        .args(extra)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Chrome 啟動失敗：{e}"))?;
+    let pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(40)) {
+        Ok(Ok(o)) => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
+        Ok(Err(e)) => Err(format!("Chrome 執行失敗：{e}")),
+        Err(_) => {
+            let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status();
+            Err("Chrome 超過 40 秒沒有回應".into())
+        }
+    }
 }

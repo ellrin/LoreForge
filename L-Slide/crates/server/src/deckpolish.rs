@@ -1109,3 +1109,281 @@ pub async fn changes(State(s): State<Shared>, UrlPath(name): UrlPath<String>, Js
     let a = commit(&mut sess.editor, &mut it, forward).map_err(bad)?;
     crate::changed(&mut sess, a)
 }
+
+// ── Overlapping objects (code check, not part of the 排版用字 checks) ──────────
+
+/// What an [`Overlap`] collides with: another object, or the page edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Peer {
+    Obj(u32),
+    Page,
+}
+
+impl Serialize for Peer {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Peer::Obj(id) => s.serialize_u32(*id),
+            Peer::Page => s.serialize_str("page"),
+        }
+    }
+}
+
+/// Two objects a reader would see colliding (`kind`: `text-text`, `text-picture`, `off-page`).
+/// `area` is the shared (or, for `off-page`, the outside) area as a fraction of the page.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Overlap {
+    pub a: u32,
+    pub b: Peer,
+    pub kind: &'static str,
+    pub area: f64,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    Text,
+    Picture,
+}
+
+struct Leaf<'a> {
+    o: &'a Object,
+    top: usize,
+    role: Role,
+    /// Bounding box in page coordinates: x0, y0, x1, y1.
+    r: (f64, f64, f64, f64),
+}
+
+fn bbox(f: &lore_canvas::Frame, map: &dyn Fn(f64, f64) -> (f64, f64)) -> (f64, f64, f64, f64) {
+    let (x0, y0) = map(f.x as f64, f.y as f64);
+    let (x1, y1) = map((f.x + f.w) as f64, (f.y + f.h) as f64);
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let (mut hw, mut hh) = ((x1 - x0).abs() / 2.0, (y1 - y0).abs() / 2.0);
+    if f.rot != 0.0 {
+        let (s, c) = f.rot.to_radians().sin_cos();
+        (hw, hh) = (hw * c.abs() + hh * s.abs(), hw * s.abs() + hh * c.abs());
+    }
+    (cx - hw, cy - hh, cx + hw, cy + hh)
+}
+
+/// A ghost, background or chrome layer: never part of the layout a reader reads.
+fn is_backdrop(o: &Object, page: (f64, f64), r: (f64, f64, f64, f64)) -> bool {
+    let name = o.name.to_lowercase();
+    let slot = o.slot.as_deref().unwrap_or("").to_lowercase();
+    if chrome_ph(o) || ["ghost", "background", "backdrop", "logo", "footer", "pageno", "page-number", "deco"].iter().any(|k| name.contains(k) || slot.starts_with(k)) {
+        return true;
+    }
+    match &o.kind {
+        // a faint picture is the style's ghost; a picture over 90 % of the page is a backdrop
+        Kind::Picture(p) => p.alpha < 0.5 || (r.2 - r.0) * (r.3 - r.1) > page.0 * page.1 * 0.9,
+        Kind::Text(sp) | Kind::Shape(sp) => sp.text.as_ref().is_some_and(|b| {
+            let runs: Vec<_> = b.paras.iter().flat_map(|p| p.runs.iter()).filter(|r| !r.text.trim().is_empty()).collect();
+            !runs.is_empty() && runs.iter().all(|r| r.em.as_deref() == Some("ghost"))
+        }),
+        _ => false,
+    }
+}
+
+fn leaves<'a>(objs: &'a [Object], top: Option<usize>, map: &dyn Fn(f64, f64) -> (f64, f64), page: (f64, f64), out: &mut Vec<Leaf<'a>>) {
+    for (i, o) in objs.iter().enumerate() {
+        let top = top.unwrap_or(i);
+        if o.hidden || o.is_empty_slot() {
+            continue;
+        }
+        let r = bbox(&o.frame, map);
+        if is_backdrop(o, page, r) {
+            continue;
+        }
+        match &o.kind {
+            Kind::Group(g) => {
+                // children live in the group's own space (chOff / chExt): map them to the page
+                let (gx0, gy0, gx1, gy1) = r;
+                let (sx, sy) = (if g.ch.w > 0 { (gx1 - gx0) / g.ch.w as f64 } else { 1.0 }, if g.ch.h > 0 { (gy1 - gy0) / g.ch.h as f64 } else { 1.0 });
+                let inner = move |x: f64, y: f64| (gx0 + (x - g.ch.x as f64) * sx, gy0 + (y - g.ch.y as f64) * sy);
+                if g.children.is_empty() {
+                    continue;
+                }
+                leaves(&g.children, Some(top), &inner, page, out);
+            }
+            Kind::Picture(_) => out.push(Leaf { o, top, role: Role::Picture, r }),
+            Kind::Text(_) | Kind::Shape(_) | Kind::Table(_) => {
+                let has_text = match &o.kind {
+                    Kind::Table(_) => true,
+                    _ => bodies(o).iter().any(|(_, b)| !b.plain_text().trim().is_empty() || b.paras.iter().any(|p| p.runs.iter().any(|r| r.kind == "math"))),
+                };
+                if has_text {
+                    out.push(Leaf { o, top, role: Role::Text, r });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Pairs of objects on one slide whose frames collide the way a reader would see.
+///
+/// An estimate from frames only (no font metrics: a text box is taken to fill its frame, so
+/// a box that is taller than its text can be reported although the text itself is clear).
+/// `objects` are the slide's top-level objects and `page` the deck's size, both in EMU.
+///
+/// Reported: two text objects (text boxes, text shapes, tables) whose frames intersect by more
+/// than the tolerance in both directions (1/200 of the page height); a text object over a
+/// picture, unless its slot or name says it is a `caption`/`label` meant to sit on it; any
+/// object extending beyond the page by more than the tolerance (`b` is `page`).
+/// Ignored: hidden objects, empty arrangement slots, footer/number/date placeholders, objects
+/// named or slotted as logo/footer/ghost/background/deco, ghost-tagged text, faint pictures
+/// (alpha under 0.5) and pictures over 90 % of the page, shapes without text, and the layout
+/// inside a group (its children are mapped to the page and compared with objects outside the
+/// group only). `area` is a fraction of the page. Rotated frames use their bounding box.
+pub fn overlaps(objects: &[Object], page: (i64, i64)) -> Vec<Overlap> {
+    let pg = (page.0 as f64, page.1 as f64);
+    let tol = pg.1 / 200.0;
+    let mut ls = vec![];
+    leaves(objects, None, &|x, y| (x, y), pg, &mut ls);
+    let mut out = vec![];
+    for l in &ls {
+        let (x0, y0, x1, y1) = l.r;
+        let out_w = (-x0).max(0.0).max((x1 - pg.0).max(0.0));
+        let out_h = (-y0).max(0.0).max((y1 - pg.1).max(0.0));
+        if out_w > tol || out_h > tol {
+            let inside = ((x1.min(pg.0) - x0.max(0.0)).max(0.0)) * ((y1.min(pg.1) - y0.max(0.0)).max(0.0));
+            let area = ((x1 - x0) * (y1 - y0) - inside).max(0.0) / (pg.0 * pg.1);
+            out.push(Overlap { a: l.o.id, b: Peer::Page, kind: "off-page", area });
+        }
+    }
+    let sits_on_picture = |o: &Object| {
+        let s = format!("{} {}", o.slot.as_deref().unwrap_or(""), o.name).to_lowercase();
+        s.contains("caption") || s.contains("label")
+    };
+    for (i, p) in ls.iter().enumerate() {
+        for q in &ls[i + 1..] {
+            if p.top == q.top {
+                continue;
+            }
+            let (w, h) = (p.r.2.min(q.r.2) - p.r.0.max(q.r.0), p.r.3.min(q.r.3) - p.r.1.max(q.r.1));
+            if w <= tol || h <= tol {
+                continue;
+            }
+            let (kind, a, b) = match (p.role, q.role) {
+                (Role::Text, Role::Text) => ("text-text", p, q),
+                (Role::Text, Role::Picture) => ("text-picture", p, q),
+                (Role::Picture, Role::Text) => ("text-picture", q, p),
+                (Role::Picture, Role::Picture) => continue,
+            };
+            if kind == "text-picture" && sits_on_picture(a.o) {
+                continue;
+            }
+            out.push(Overlap { a: a.o.id, b: Peer::Obj(b.o.id), kind, area: w * h / (pg.0 * pg.1) });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod overlap_tests {
+    use super::*;
+    use lore_canvas::{Crop, Frame, Geom, GroupObj, Look, Paint, Para, PicObj, Run, SpObj, TextBody};
+
+    const W: i64 = 12_192_000;
+    const H: i64 = 6_858_000;
+
+    fn obj(id: u32, f: Frame, kind: Kind) -> Object {
+        Object { id, name: String::new(), frame: f, hidden: false, ph: None, slot: None, kind, src: None }
+    }
+    fn text(id: u32, x: i64, y: i64, w: i64, h: i64) -> Object {
+        let run = Run::text("Some text", "body", Look { size: 18.0, ..Look::default() });
+        let body = TextBody { paras: vec![Para::new(vec![run])], ..Default::default() };
+        obj(id, Frame::new(x, y, w, h), Kind::Text(SpObj { geom: Geom::preset("rect"), fill: Paint::None, line: None, text: Some(body), equation: false }))
+    }
+    fn pic(id: u32, x: i64, y: i64, w: i64, h: i64) -> Object {
+        let p = PicObj { asset: "file:a.png".into(), crop: Crop::default(), alpha: 1.0, line: None, clip: "rect".into(), masks: vec![], effects: vec![] };
+        obj(id, Frame::new(x, y, w, h), Kind::Picture(p))
+    }
+    fn kinds(v: &[Overlap]) -> Vec<&str> {
+        v.iter().map(|o| o.kind).collect()
+    }
+
+    #[test]
+    fn clean_slide_has_none() {
+        let v = vec![text(1, 500_000, 300_000, 11_000_000, 900_000), text(2, 500_000, 1_400_000, 5_000_000, 4_000_000), pic(3, 6_000_000, 1_400_000, 5_500_000, 4_000_000)];
+        assert!(overlaps(&v, (W, H)).is_empty());
+    }
+
+    #[test]
+    fn two_text_boxes_overlap() {
+        let v = vec![text(1, 500_000, 1_000_000, 5_000_000, 2_000_000), text(2, 2_000_000, 2_000_000, 5_000_000, 2_000_000)];
+        let o = overlaps(&v, (W, H));
+        assert_eq!(kinds(&o), ["text-text"]);
+        assert_eq!((o[0].a, o[0].b), (1, Peer::Obj(2)));
+        assert!(o[0].area > 0.0);
+        assert_eq!(serde_json::to_value(&o[0]).unwrap()["b"], json!(2));
+    }
+
+    #[test]
+    fn text_over_picture_reported_either_order() {
+        let v = vec![pic(1, 1_000_000, 1_000_000, 5_000_000, 4_000_000), text(2, 2_000_000, 2_000_000, 3_000_000, 1_000_000)];
+        let o = overlaps(&v, (W, H));
+        assert_eq!(kinds(&o), ["text-picture"]);
+        assert_eq!((o[0].a, o[0].b), (2, Peer::Obj(1)));
+    }
+
+    #[test]
+    fn caption_slot_on_its_picture_is_not_reported() {
+        let mut c = text(2, 2_000_000, 4_000_000, 3_000_000, 800_000);
+        c.slot = Some("caption".into());
+        let v = vec![pic(1, 1_000_000, 1_000_000, 5_000_000, 4_000_000), c];
+        assert!(overlaps(&v, (W, H)).is_empty());
+        // an ordinary text slot on the same picture is
+        let mut t = text(3, 2_000_000, 1_500_000, 3_000_000, 800_000);
+        t.slot = Some("text".into());
+        assert_eq!(kinds(&overlaps(&[pic(1, 1_000_000, 1_000_000, 5_000_000, 4_000_000), t], (W, H))), ["text-picture"]);
+    }
+
+    #[test]
+    fn off_page_is_reported_against_the_page() {
+        let v = vec![text(1, 500_000, 300_000, 3_000_000, 900_000), text(2, W - 1_000_000, 1_500_000, 3_000_000, 900_000)];
+        let o = overlaps(&v, (W, H));
+        assert_eq!(kinds(&o), ["off-page"]);
+        assert_eq!((o[0].a, o[0].b), (2, Peer::Page));
+        assert_eq!(serde_json::to_value(&o[0]).unwrap()["b"], json!("page"));
+        assert!(o[0].area > 0.0 && o[0].area < 1.0);
+    }
+
+    #[test]
+    fn chrome_ghost_hidden_and_backdrops_are_ignored() {
+        let mut ftr = text(1, 500_000, 1_000_000, 5_000_000, 2_000_000);
+        ftr.ph = Some("ftr".into());
+        let mut logo = pic(2, 600_000, 1_100_000, 1_000_000, 1_000_000);
+        logo.name = "Logo".into();
+        let mut hid = text(3, 600_000, 1_100_000, 5_000_000, 2_000_000);
+        hid.hidden = true;
+        let mut faint = pic(4, 0, 0, 4_000_000, 4_000_000);
+        if let Kind::Picture(p) = &mut faint.kind {
+            p.alpha = 0.2;
+        }
+        let full = pic(5, 0, 0, W, H);
+        let v = vec![ftr, logo, hid, faint, full, text(6, 700_000, 1_200_000, 3_000_000, 800_000)];
+        assert!(overlaps(&v, (W, H)).is_empty());
+    }
+
+    #[test]
+    fn tolerance_edge() {
+        let tol = H / 200;
+        let a = text(1, 500_000, 1_000_000, 4_000_000, 2_000_000);
+        // overlap exactly the tolerance deep: not reported; one EMU more: reported
+        let touching = text(2, 500_000, 3_000_000 - tol, 4_000_000, 2_000_000);
+        assert!(overlaps(&[a.clone(), touching], (W, H)).is_empty());
+        let over = text(2, 500_000, 3_000_000 - tol - 1, 4_000_000, 2_000_000);
+        assert_eq!(kinds(&overlaps(&[a, over], (W, H))), ["text-text"]);
+    }
+
+    #[test]
+    fn group_children_are_mapped_and_not_compared_with_each_other() {
+        // two children overlapping inside the group: its own layout, ignored
+        let g = GroupObj { ch: Frame::new(0, 0, 1_000, 1_000), children: vec![text(11, 0, 0, 800, 800), text(12, 200, 200, 800, 800)], lock_aspect: false, data: None };
+        let grp = obj(10, Frame::new(1_000_000, 1_000_000, 4_000_000, 3_000_000), Kind::Group(g.clone()));
+        assert!(overlaps(std::slice::from_ref(&grp), (W, H)).is_empty());
+        // a text box over the child's mapped frame is reported against the child
+        let t = text(20, 1_500_000, 1_500_000, 1_000_000, 500_000);
+        let o = overlaps(&[grp, t], (W, H));
+        assert!(o.iter().all(|x| x.kind == "text-text") && o.iter().any(|x| x.b == Peer::Obj(20) || x.a == 20));
+    }
+}

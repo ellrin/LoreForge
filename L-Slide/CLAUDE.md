@@ -23,6 +23,8 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
 
 ## Layout
 
+- One slide as PNG: `GET /api/decks/{name}/slides/{uid}/png?w=&preview=` (`AppState::pageshot`, trait `PageShot`, fake in tests; Chrome on `web/print.html?slide=&preview=` after a `--dump-dom` check that the page set `data-ready`, else 503); `deckpolish::overlaps` finds colliding objects from frames (an estimate, not yet used by the 排版用字 checks).
+
 - `../commons/crates/lore-canvas`: app-agnostic scene model, style rules, ops/undo,
   geometry, reveal generator, components, PPTX ↔ canvas (`pptx_in`, `pptx_out`).
 - Bases (底版, design §7.2 v2): a style folder with `base.json` is a canvas base — `Workspace::template_bytes`
