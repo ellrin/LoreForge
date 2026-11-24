@@ -252,6 +252,55 @@ pub fn set_window(dir: &Path, p: &WindowPatch) -> Result<WindowState, String> {
     Ok(w)
 }
 
+/// 收件 (`[collect]` in settings.toml): where handed-over sentences go and whether they are his own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Collect {
+    pub category: String,
+    pub own: bool,
+}
+
+pub const COLLECT_CATEGORY: &str = "pc.patterns";
+
+impl Default for Collect {
+    fn default() -> Collect {
+        Collect { category: COLLECT_CATEGORY.into(), own: false }
+    }
+}
+
+pub fn collect(dir: &Path) -> Collect {
+    let t = read_table(&dir.join(SETTINGS_FILE));
+    let mut c: Collect = t.get("collect").and_then(|v| v.clone().try_into().ok()).unwrap_or_default();
+    if c.category.trim().is_empty() {
+        c.category = COLLECT_CATEGORY.into();
+    }
+    c
+}
+
+/// Save the 收件 choices into `[collect]`; every other key of the file (and of the table) is kept.
+pub fn set_collect(dir: &Path, category: Option<&str>, own: Option<bool>) -> Result<Collect, String> {
+    let mut c = collect(dir);
+    if let Some(v) = category {
+        let v = v.trim();
+        let ok = (1..=60).contains(&v.len()) && v.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'));
+        if !ok {
+            return Err(format!("不認得的類別「{v}」"));
+        }
+        c.category = v.to_string();
+    }
+    if let Some(v) = own {
+        c.own = v;
+    }
+    let path = dir.join(SETTINGS_FILE);
+    let mut t = read_table(&path);
+    let mut ct = t.get("collect").and_then(|v| v.as_table()).cloned().unwrap_or_default();
+    ct.insert("category".into(), toml::Value::String(c.category.clone()));
+    ct.insert("own".into(), toml::Value::Boolean(c.own));
+    t.insert("collect".into(), toml::Value::Table(ct));
+    write_table(&path, &t).map_err(|e| format!("無法寫入 {SETTINGS_FILE}：{e}"))?;
+    Ok(c)
+}
+
 pub fn settings(dir: &Path) -> Settings {
     let t = read_table(&dir.join(SETTINGS_FILE));
     toml::Value::Table(t).try_into::<Settings>().unwrap_or_default()

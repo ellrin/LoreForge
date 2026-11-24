@@ -141,6 +141,8 @@
     put(said);
     const all = $("text").value.trim();
     if (!all) { V.prefix = ""; return; }
+    // 收句子: every finished utterance goes at once, whatever 自動送出 says
+    if (window.LoreEchoCollect?.on) { V.prefix = ""; V.spoken = true; app().send?.(); V.spoken = false; return; }
     if (!V.autoSend) { V.prefix = all; $("text").focus(); return; }   // the next sentence goes after it
     V.prefix = "";
     // still answering: send it as soon as the reply is done
@@ -569,6 +571,8 @@
   }
 
   window.LoreVoice = {
+    /** The text being sent right now was said, not typed (collect.js marks where a sentence came from). */
+    lastWasSpoken: () => !!V.spoken,
     init, beforeSend, afterReply, escape, reset, characterChanged, buildGeneral, characterRows, opened,
     /** 文字跟著聲音 for a reply: a controller (text, say, final, all) or null (show text at once). */
     follow,

@@ -21,6 +21,7 @@
 //! | POST | /api/kb/recall | `{ id, outcome }` → a review outcome through L-Brain's API while it runs ([`kbctx`]) |
 //! | POST | /api/actions/{note,cards}/… | 功能列表: drafts (tasks `le-note`, `le-cards`) and the confirmed saves to L-Paper / L-Brain ([`actions`]) |
 //! | POST | /api/actions/know/{figure,edit,propose} | 知識中樞: a figure picture or an instruction drafted as a proposal for L-Brain's hub, and the confirmed post ([`know`]) |
+//! | GET/PUT/POST | /api/collect, /api/collect/selection | 收件: spoken or selected English sentences handed to L-Brain's inbox at once; the remembered category and own flag, the targets and the waiting count ([`collect`]) |
 //! | POST/GET | /api/find, /api/find/{search,thumb/{id},pick,end} | 搜尋檔案 for another app: find mode ([`find`], `lore_shell::findfile`) |
 //! | POST/GET | /api/selection, /api/selection/{end,apply,polish…,lore/card} | text selected in another app: kept in memory, results sent back, the app's 語句潤飾 and 加入知識庫 proxied ([`selection`], `lore_shell::selection`) |
 //! | POST/GET | /api/page, /api/page/{end,edit,edit/{id}/{revise,apply,undo,image/{which}}} | one or two pages of a deck from another app: kept in memory, the app's page-edit routes proxied ([`page`], `lore_shell::pageedit`) |
@@ -31,6 +32,7 @@ pub mod actions;
 pub mod api;
 pub mod characters;
 pub mod chat;
+pub mod collect;
 pub mod config;
 pub mod find;
 pub mod fix;
@@ -191,7 +193,7 @@ fn router_with(shared: Shared, engines: lore_engines::Engines, perms: lore_shell
         kit = kit.route(path, axum::routing::get(move || async move { ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *body) }));
     }
     let voice = voice::routes(&shared);
-    api::routes().merge(actions::routes()).merge(fix::routes()).merge(know::routes()).merge(find::routes()).merge(selection::routes()).merge(page::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).route("/api/shelf/focus", axum::routing::post(shelfctx::focus_post)).with_state(shared).merge(voice).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
+    api::routes().merge(actions::routes()).merge(fix::routes()).merge(know::routes()).merge(collect::routes()).merge(find::routes()).merge(selection::routes()).merge(page::routes()).route("/api/kb/recall", axum::routing::post(kbctx::recall_post)).route("/api/shelf/focus", axum::routing::post(shelfctx::focus_post)).with_state(shared).merge(voice).merge(lore_shell::permissions::router(perms)).merge(lore_engines::router(engines)).merge(kit).fallback_service(web).layer(cors)
 }
 
 /// Bind 127.0.0.1:`config.port` (0 = any free port); the address, the state and the server.

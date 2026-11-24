@@ -15,7 +15,7 @@
 window.LoreEchoSel = (() => {
   const X = { req: null, panel: null, slot: null, dirs: null, watch: null, armed: null, busy: false, ended: null };
   const TERM = [["card", "cards", "加入知識庫"], ["explain", "spark", "解釋"], ["translate", "languages", "翻譯"]];
-  const PASSAGE = [["rewrite", "polish", "改寫"], ["translate", "languages", "翻譯"], ["ask", "chat", "問他"]];
+  const PASSAGE = [["rewrite", "polish", "改寫"], ["translate", "languages", "翻譯"], ["ask", "chat", "問他"], ["collect", "layers", "收進句型"]];
   // 翻譯: the direction, the fixed instruction, the language of the result, the chat turn (read-only)
   const DIRS = [
     ["中 → 英", "翻譯成英文，保持原意", "en", "翻譯成英文"],
@@ -93,6 +93,7 @@ window.LoreEchoSel = (() => {
     else if (id === "ask") { arm(true); $("text").focus(); }
     else if (id === "explain") { X.armed = "explain"; $("text").value = `解釋「${X.req.text.trim()}」`; send(); }
     else if (id === "card") card();
+    else if (id === "collect") window.LoreEchoCollect?.selection();
   }
 
   /** 翻譯 of a read-only selection: a chat turn that carries it; the reply is the translation. */

@@ -226,7 +226,7 @@ function toggleChoices(on = $("choices").hidden) {
 
 function wireChoices() {
   for (const b of choiceRows()) {
-    b.addEventListener("click", () => { toggleChoices(false); window.LoreEchoActions?.run(b.dataset.tool); });
+    b.addEventListener("click", () => { toggleChoices(false); if (b.dataset.tool === "collect") window.LoreEchoCollect?.toggle(); else window.LoreEchoActions?.run(b.dataset.tool); });
     b.addEventListener("mouseenter", () => b.focus({ preventScroll: true }));
   }
   $("choices").addEventListener("keydown", (e) => {
@@ -394,6 +394,8 @@ async function send(engine) {
   window.LoreVoice?.beforeSend();
   // 搜尋檔案: the sentence describes a file for another app (find.js), never a chat turn
   if (!engine && window.LoreEchoFind?.take($("text").value.trim())) { $("text").value = ""; grow(); return; }
+  // 收句子: the sentence goes to L-Brain's inbox (collect.js), never a chat turn
+  if (!engine && window.LoreEchoCollect?.take($("text").value.trim())) { $("text").value = ""; grow(); return; }
   // 頁面修改: the sentence says what to change on the page(s) (page.js), never a chat turn
   if (!engine && window.LoreEchoPage?.take()) return;
   const speak = !!window.LoreVoice?.wantsSpeech();   // 朗讀回覆: the server speaks it sentence by sentence

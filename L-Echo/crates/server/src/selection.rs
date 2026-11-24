@@ -40,7 +40,7 @@ pub struct Selector {
 }
 
 impl Selector {
-    fn current(&self) -> Option<SelectionRequest> {
+    pub(crate) fn current(&self) -> Option<SelectionRequest> {
         self.current.lock().unwrap().clone()
     }
 
