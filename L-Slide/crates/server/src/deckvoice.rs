@@ -232,6 +232,32 @@ pub fn examples_file(home: &lore_home::Home) -> Option<PathBuf> {
     home.app_dir(APP).map(|d| d.join("voice").join("examples.json"))
 }
 
+/// The most of the notes guide that reaches the prompt, in characters.
+pub const NOTES_GUIDE_MAX: usize = 1500;
+
+/// `private/SlideComposer/voice/notes.md` (through lore-home): how the presenter writes speaker
+/// notes — sentence patterns and an approved example, written by hand, never by this program
+/// (unlike `examples.json`, which [`refresh`] rewrites).
+pub fn notes_guide_file(home: &lore_home::Home) -> Option<PathBuf> {
+    home.app_dir(APP).map(|d| d.join("voice").join("notes.md"))
+}
+
+/// The notes guide as a block for the outline prompt, at most [`NOTES_GUIDE_MAX`] characters of
+/// the file. Optional: no file or an empty one = "" (nothing added).
+pub fn notes_guide(home: &lore_home::Home) -> String {
+    let Some(text) = notes_guide_file(home).and_then(|f| std::fs::read_to_string(f).ok()) else {
+        return String::new();
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\nHow the presenter writes speaker notes: follow these sentence patterns in every `notes`. Any example is about ANOTHER paper: copy its shape, never its content.\n{}",
+        crate::todeck::plan::clip(text, NOTES_GUIDE_MAX)
+    )
+}
+
 fn key_file(cache_root: &Path) -> PathBuf {
     cache_root.join("deck-style").join("voice-key.json")
 }
@@ -518,6 +544,24 @@ mod tests {
         let v = refresh(&home, &tmp.path().join("ws/cache")).expect("examples");
         let all = serde_json::to_string(&v).unwrap() + &std::fs::read_to_string(examples_file(&home).unwrap()).unwrap();
         assert!(!all.contains("trains and buses") && !all.contains("differ, both"), "{all}");
+    }
+
+    #[test]
+    fn the_notes_guide_is_optional_and_bounded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = lore_home::Home::at(tmp.path());
+        assert_eq!(notes_guide(&home), "", "no file, nothing added");
+        let file = notes_guide_file(&home).unwrap();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "  \n").unwrap();
+        assert_eq!(notes_guide(&home), "", "an empty file adds nothing");
+        std::fs::write(&file, format!("Open with what the page covers.\n1. Start from what is measured.\n{}", "x".repeat(3000))).unwrap();
+        let g = notes_guide(&home);
+        assert!(g.contains("sentence patterns") && g.contains("1. Start from what is measured.") && g.contains("never its content"), "{g}");
+        assert!(g.chars().count() < NOTES_GUIDE_MAX + 300, "bounded: {}", g.chars().count());
+        // refresh never touches it
+        assert!(refresh(&home, &tmp.path().join("cache")).is_none());
+        assert!(std::fs::read_to_string(&file).unwrap().starts_with("Open with"));
     }
 
     #[test]

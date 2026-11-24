@@ -86,7 +86,9 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   復原／套用 through `POST /api/decks/{name}/polish/{item}`. 語氣 (`deckvoice.rs`, author-approved 2026-11-13):
   example lines from the author's own imported decks (cover, chrome, repeated text, refs, names, deny words left
   out) live in `private/SlideComposer/voice/examples.json` (through lore-home; rewritten only when they change);
-  the outline and 建議 prompts get the lines closest to the paper, bounded. Never put example text in code,
+  the outline and 建議 prompts get the lines closest to the paper, bounded. Speaker notes follow `plan::NOTES_SHAPE` (opening line + numbered list,
+  checked by `check_plan`); the author's own note patterns are the hand-written `private/SlideComposer/voice/notes.md` (`deckvoice::notes_guide`,
+  optional, ≤ 1500 chars, never written by the program). Never put example text in code,
   tests (synthetic decks only), the job cache or this repo. The terms stage's finder
   (`kbterms.rs`: terms, L-Brain states, `Matcher`) lives in `../commons/crates/lore-learn`, shared with
   L-Paper's 寫書; `kbterms.rs` re-exports it and keeps the slide marks, 我懂 and the L-Brain write.

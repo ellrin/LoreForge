@@ -210,7 +210,7 @@ fn plan(lang_text: &str) -> Value {
             { "role": "method", "title": "Decoder.", "bullets": ["Grades the image", "Outputs four grades"], "figure": "fig1", "module": 3 },
             { "role": "loss", "title": "Reconstruction loss", "bullets": ["Penalises the distance (Eq. (1))"], "equations": ["eq1", "eq99"], "takeaway": "One distance term trains both stages" },
             { "role": "training", "title": "Training details", "bullets": [], "kv": [["Epochs", "30"], ["Optimiser", "AdamW"], ["Learning rate", "$10^{-4}$"]], "takeaway": "A short schedule is enough" },
-            { "role": "results", "title": "Main results", "bullets": [], "table": "tab1", "key_row": "ours", "takeaway": "Ours wins on both metrics, see Table 1" },
+            { "role": "results", "title": "Main results", "bullets": [], "table": "tab1", "key_row": "ours", "takeaway": "Ours wins on both metrics, see Table 1", "notes": "This page compares the methods.\n1. Each row is one method trained on the same split." },
             { "role": "opinion", "title": "Some opinions", "bullets": ["Test on real data"], "suggest": "a real lesion photo beside a synthetic one", "takeaway": "Synthetic results need a real test" },
             { "role": "takeaway", "title": "Take home messages", "bullets": ["1. Two stages help", "2) Fusion matters"] },
             { "role": "thanks", "title": "Thanks", "bullets": [] }
@@ -383,6 +383,9 @@ async fn paper_becomes_a_report_deck() {
     std::fs::write(dir.path().join("home/private/shared/fonts.toml"), "[deck]\nlatin = \"Brand Serif\"\neast_asian = \"Brand Sans TC\"\n").unwrap();
     std::fs::create_dir_all(dir.path().join("home/private/PaperComposer/profile")).unwrap();
     std::fs::write(dir.path().join("home/private/PaperComposer/profile/authors.csv"), "id,given,family,email,orcid,affiliations,role,note\nA001,Ellrin,Example,ellrin@example.org,,F001,,\nA002,Daidai,Example,daidai@example.org,,F001,,\n").unwrap();
+    // the presenter's note patterns (private, hand-written; synthetic here)
+    std::fs::create_dir_all(dir.path().join("home/private/SlideComposer/voice")).unwrap();
+    std::fs::write(dir.path().join("home/private/SlideComposer/voice/notes.md"), "Open with what the page covers.\n1. Start from what is measured.").unwrap();
     let planner = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan("is slow")]).on(ASK_PARTS, &[parts()]));
     let f = engines(planner.clone(), planner.clone());
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, f)).is_ok());
@@ -417,6 +420,8 @@ async fn paper_becomes_a_report_deck() {
     assert!(plan_req.has_images() && plan_req.flatten().contains("- image 1: figure fig1") && plan_req.system.contains("attached as images"));
     let sys = planner.asked(ASK_PLAN)[0].system.clone();
     assert!(sys.contains("exactly 3 slides, one for each part") && sys.contains("1. Encoder (Finds the lesions.); 2. Fusion"), "{sys}");
+    assert!(sys.contains("How the presenter writes speaker notes") && sys.contains("1. Start from what is measured.") && sys.contains("numbered list"), "the notes rules and the private note patterns reach the planner");
+    assert_eq!(planner.asked(ASK_PLAN).len(), 1, "a plan within the rules is not sent back");
 
     let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
     let slides = d["deck"]["slides"].as_array().unwrap().clone();

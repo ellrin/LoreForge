@@ -1043,7 +1043,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                         }
                         if !moved.is_empty() {
                             cx.warnings.push(format!("{warn_at}：圖表下面只放得下 {nb} 行，其餘 {} 行移到講者備註", moved.len()));
-                            slide.notes = [slide.notes.trim().to_string(), moved.join(" ")].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" ");
+                            slide.notes = [slide.notes.trim().to_string(), moved.join("\n")].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("\n");
                         }
                         if !tb.paras.is_empty() {
                             let need = text_h(&tb, tf.w);

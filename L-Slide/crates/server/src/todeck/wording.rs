@@ -85,4 +85,12 @@ mod tests {
         assert!(w.is_empty(), "{w:?}");
         assert!(apply(&mut plan, &m, &Guard::default()).is_empty());
     }
+
+    #[test]
+    fn numbered_notes_keep_their_lines() {
+        let mut plan = Plan { slides: vec![PlanSlide { notes: "This page covers the head.\n1. A soft-max turns scores into shares.\n2. The cross-entropy compares them.".into(), ..Default::default() }], ..Default::default() };
+        apply(&mut plan, &Material::default(), &guard());
+        assert_eq!(plan.slides[0].notes, "This page covers the head.\n1. A softmax turns scores into shares.\n2. The cross entropy compares them.");
+        assert!(crate::todeck::plan::notes_shape_ok(&plan.slides[0].notes));
+    }
 }

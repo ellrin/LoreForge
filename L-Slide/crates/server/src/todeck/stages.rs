@@ -335,6 +335,9 @@ fn uniq(v: Vec<String>) -> Vec<String> {
     v.into_iter().filter(|x| seen.insert(x.clone())).collect()
 }
 
+/// The plan's reply: every slide carries numbered speaker notes, so a long deck needs room.
+const OUTLINE_TOKENS: u32 = 20_000;
+
 async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     let p = params(cx)?;
     let m = material(cx, true)?;
@@ -349,6 +352,8 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     let parts = seen.parts;
     let (mut system, user) = prompt(&m, &p.length, &p.lang, parts.as_ref());
     system += &super::plan::notes_rule(&p.notes);
+    // the presenter's own note patterns (private, optional, bounded)
+    system += &crate::deckvoice::notes_guide(&s.home);
     if !prof.summary.trim().is_empty() {
         system += &format!("\n\nThe presenter's own decks, summarised — follow these habits:\n{}", prof.summary.trim());
     }
@@ -388,7 +393,7 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
         }
         r
     };
-    let req = with_pictures(LlmRequest::prompt(system.clone(), user.clone()).json(schema()).max_tokens(12000));
+    let req = with_pictures(LlmRequest::prompt(system.clone(), user.clone()).json(schema()).max_tokens(OUTLINE_TOKENS));
     cx.chars(0);
     calls += 1;
     let (v, engine) = outline::ask_json(llm, TASK_PAPER_DECK, req, p.engine.as_deref(), &|n| cx.chars(n)).await?;
@@ -408,13 +413,13 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
             problems.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n")
         );
         calls += 1;
-        let req = with_pictures(LlmRequest::prompt(system, again).json(schema()).max_tokens(12000));
+        let req = with_pictures(LlmRequest::prompt(system, again).json(schema()).max_tokens(OUTLINE_TOKENS));
         match outline::ask_json(llm, TASK_PAPER_DECK, req, p.engine.as_deref(), &|n| cx.chars(before + n)).await {
             Ok((v, _)) => match serde_json::from_value::<Plan>(v).map(|x| clean_plan(x, &m)) {
                 Ok(fixed) if fixed.slides.len() >= 3 && check_plan(&fixed, &p.length).len() < problems.len() => plan = fixed,
-                _ => warnings.push("大綱超出字數或頁數限制，請模型修正後沒有變好，沿用第一版".to_string()),
+                _ => warnings.push("大綱不符合規則（字數、頁數、備忘稿格式等），請模型修正後沒有變好，沿用第一版".to_string()),
             },
-            Err(e) => warnings.push(format!("大綱超出字數或頁數限制，修正的請求沒有完成（{}）", e.message)),
+            Err(e) => warnings.push(format!("大綱不符合規則（字數、頁數、備忘稿格式等），修正的請求沒有完成（{}）", e.message)),
         }
     }
     warnings.extend(enforce_limits(&mut plan));
