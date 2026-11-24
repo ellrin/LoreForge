@@ -137,6 +137,7 @@
     if (!stack) { stack = h("div", { class: "toast-stack" }); host.append(stack); }
     const kind = opt.action ? "act" : "plain";
     stack.querySelectorAll(`.toast[data-kind="${kind}"]`).forEach((x) => x.close?.());
+    if (!stack.isConnected) host.append(stack);   // closing the only toast took the stack away
     const t = h("div", { class: "toast" + (opt.err ? " err" : ""), role: opt.err ? "alert" : "status", "data-kind": kind }, h("span", {}, msg));
     let timer = 0;
     t.close = () => { clearTimeout(timer); t.remove(); if (!stack.children.length) stack.remove(); };
