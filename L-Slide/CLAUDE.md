@@ -69,7 +69,11 @@ Before a commit, the tests of the code you changed must pass (affected scope onl
   method's big picture, whether to explain it in parts and where to cut (cuts snapped to blank gutters, `lore_docsrc::crop::snap_cut`; 微調's
   方法拆幾個模組 fixes the number; two failed calls = an equal split with a warning). The plan has one walk-through slide per part: the figure across
   the body (never a small copy), that part clear and the rest at the style's ghost alpha, its lines appearing one by one over the faint side
-  (`build::LineReveal` → `expand_reveals`: copies of the slide, as many per deck as there are walk-through slides). Slots come from the academic
+  (`build::LineReveal` → `expand_reveals`: copies of the slide, as many per deck as there are walk-through slides). Three plan fields are layout (docs/paper-deck.md
+  「每一頁都對著東西講」): `part` = the confirmed part of the main figure a non-walk slide is about, cropped beside its lines (`Crop` on the same asset, never an equal split);
+  `trained` = the parts clear on the training slide, the rest ghost (`build::ghosted`, shared with the walk-through; no `kv` there); `explains` = the bullet each equation goes with
+  (one: under its line in 內文; two that fit: columns `內文 n` + `配對方程式 n`, `build::math_w`). Checked in `plan::check_plan` / `part_problems`, settled with warnings in
+  `plan::settle_parts` (both stages; a re-cut figure voids the numbers); whatever removes bullets or equations keeps the pairing (`PlanSlide::retain_*`, `fix_explains`). Slots come from the academic
   arrangements, text from the style's tags, tables native, equations OMML (registry macros expanded), `Ref:` from
   cited keys, typed "Fig. 3" stripped; the paper's notation joins the deck's `notation.json` with its ids. `/api/todeck*` and `/api/info` answer 127.0.0.1 / localhost origins (CORS).
   A draft paper's 待補 marks (lore-notation `pending`) stay marks: `[pending: …]` in text (lore-docsrc), `[pending]` in table cells and after a

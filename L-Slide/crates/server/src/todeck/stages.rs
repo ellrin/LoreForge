@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 
 use super::build::{BuildInput, ModuleBox, build, expand_reveals};
 use super::figparts::{self, FigureParts};
-use super::plan::{Plan, PlanSlide, ROLES, brief_block, brief_missing, brief_problems, brief_warning, check_plan, clean_plan, drop_unusable, enforce_limits, fit_under_tables, prompt, schema, target_slides};
+use super::plan::{Plan, PlanSlide, ROLES, brief_block, brief_missing, brief_problems, brief_warning, check_plan, clean_plan, drop_unusable, enforce_limits, fit_under_tables, part_problems, prompt, schema, settle_parts, target_slides};
 use super::profile::{ProfileInput, StyleProfile};
 use super::source::{Material, from_latex, from_lorereader, is_paper};
 use super::suggest::point_of;
@@ -429,7 +429,7 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
     // the limits and the length are checked, not trusted: one corrective request, then what
     // is still over is split or reported (nothing is ever shrunk to fit)
     // a brief line no slide carries is one more problem of the same single corrective request
-    let problems_of = |x: &Plan| [check_plan(x, &p.length), brief_problems(x, &p.brief)].concat();
+    let problems_of = |x: &Plan| [check_plan(x, &p.length), part_problems(x, parts.as_ref()), brief_problems(x, &p.brief)].concat();
     let problems = problems_of(&plan);
     if !problems.is_empty() {
         let before = cx.job.meta().stages.get("outline").and_then(|s| s.chars).unwrap_or(0);
@@ -448,6 +448,8 @@ async fn outline_stage(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageEr
             Err(e) => warnings.push(format!("大綱不符合規則（字數、頁數、備忘稿格式等），修正的請求沒有完成（{}）", e.message)),
         }
     }
+    // a part or trained parts the figure's confirmed parts do not have: off the slide, said so
+    warnings.extend(settle_parts(&mut plan, parts.as_ref(), false));
     warnings.extend(enforce_limits(&mut plan));
     warnings.extend(drop_unusable(&mut plan, &m));
     // the author's wording rules (shared style/wording.toml) on the English lines and notes
@@ -514,6 +516,8 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
     let main = plan.slides.iter().find(|s| s.role == "overview").map(|s| s.figure.clone()).unwrap_or_default();
     let mut calls = 0u32;
     let fits = |p: &FigureParts| p.figure == main && modules.is_none_or(|n| p.walk() && p.parts.len() == n);
+    // cut again (another figure, another number of parts): the plan's part numbers name the old parts
+    let recut = !main.is_empty() && !o.parts.as_ref().is_some_and(&fits);
     let parts = match o.parts {
         _ if main.is_empty() => None,
         Some(p) if fits(&p) => Some(p),
@@ -561,6 +565,7 @@ async fn slides(s: &Arc<AppState>, cx: &StageCx) -> Result<Value, StageError> {
             p
         }
     };
+    warnings.extend(settle_parts(&mut plan, parts.as_ref(), recut));
     warnings.extend(enforce_limits(&mut plan));
     warnings.extend(drop_unusable(&mut plan, &m));
     warnings.extend(fit_under_tables(&mut plan, &m));

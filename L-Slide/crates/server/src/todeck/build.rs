@@ -468,6 +468,139 @@ fn pic(name: &str, frame: Frame, asset: &str, crop: Crop, alpha: f64, slot: Opti
     }
 }
 
+/// The names of what the paired layouts add (the tests and `liveeq` find them by name).
+pub const PART_PICTURE: &str = "圖的一段";
+pub const TRAINED_PICTURE: &str = "訓練的段落";
+pub const PAIR_TEXT: &str = "內文";
+pub const PAIR_EQUATION: &str = "配對方程式";
+
+/// The asset of a figure's picture, stored once per deck.
+fn asset_of(assets: &mut BTreeMap<String, String>, cx: &Ctx, img: &super::source::Fig) -> Result<String, String> {
+    if let Some(a) = assets.get(&img.id) {
+        return Ok(a.clone());
+    }
+    let im = img.image.as_ref().ok_or("no picture")?;
+    let a = sc_core::store_asset(&cx.deck_dir, &im.bytes, &im.ext).map_err(|e| e.to_string())?;
+    assets.insert(img.id.clone(), a.clone());
+    Ok(a)
+}
+
+/// A figure at `pframe` with only `spans` of it clear (fractions along the cut axis): the
+/// whole picture at the style's ghost alpha, each span laid back over it as it is. The
+/// walk-through of the main figure and the training slide draw with it.
+fn ghosted(asset: &str, pframe: &Frame, along_x: bool, spans: &[(f64, f64)], ghost: f64, names: &[String]) -> Vec<Object> {
+    let (pw, ph) = (pframe.w, pframe.h);
+    let mut out = vec![pic("架構圖", pframe.clone(), asset, Crop::default(), ghost, Some("image-1"))];
+    for (k, (a, b)) in spans.iter().copied().enumerate() {
+        let (sub, crop) = if along_x {
+            (Frame::new(pframe.x + (pw as f64 * a) as i64, pframe.y, (pw as f64 * (b - a)) as i64, ph), Crop { l: a, t: 0.0, r: 1.0 - b, b: 0.0 })
+        } else {
+            (Frame::new(pframe.x, pframe.y + (ph as f64 * a) as i64, pw, (ph as f64 * (b - a)) as i64), Crop { l: 0.0, t: a, r: 0.0, b: 1.0 - b })
+        };
+        out.push(pic(names.get(k).map(String::as_str).unwrap_or("段"), sub, asset, crop, 1.0, None));
+    }
+    out
+}
+
+/// A rough width (EMU) of a display equation at `size` pt, to decide whether two fit side
+/// by side: its glyphs counted (a command is one glyph, font and layout commands none, an
+/// operator name its letters), scripts smaller, a fraction as wide as the wider of its
+/// parts, the limits of a sum above and below it (no width).
+pub fn math_w(latex: &str, size: f64) -> i64 {
+    let cs: Vec<char> = latex.chars().collect();
+    let mut i = 0;
+    (seq_w(&cs, &mut i, false) * 0.62 * size * 12_700.0) as i64
+}
+
+/// One `{…}` group or one token at `i`, in glyphs.
+fn atom_w(cs: &[char], i: &mut usize) -> f64 {
+    while *i < cs.len() && cs[*i].is_whitespace() {
+        *i += 1;
+    }
+    if *i >= cs.len() {
+        return 0.0;
+    }
+    if cs[*i] == '{' {
+        *i += 1;
+        return seq_w(cs, i, true);
+    }
+    if cs[*i] == '\\' {
+        return command_w(cs, i).0;
+    }
+    *i += 1;
+    1.0
+}
+
+/// The command at `i` (a backslash): its glyphs, and whether its scripts are limits.
+fn command_w(cs: &[char], i: &mut usize) -> (f64, bool) {
+    const NONE: &[&str] = &["mathbf", "mathcal", "mathrm", "mathbb", "mathit", "boldsymbol", "bm", "hat", "bar", "tilde", "vec", "left", "right", "text", "operatorname", "limits", "displaystyle", "begin", "end"];
+    const WORDS: &[&str] = &["exp", "log", "max", "min", "sin", "cos", "tan", "arg", "lim", "det", "softmax", "argmax", "argmin"];
+    *i += 1;
+    let start = *i;
+    while *i < cs.len() && cs[*i].is_ascii_alphabetic() {
+        *i += 1;
+    }
+    if *i == start {
+        *i = (*i + 1).min(cs.len());
+        return (0.3, false);
+    }
+    let name: String = cs[start..*i].iter().collect();
+    match name.as_str() {
+        "frac" | "dfrac" | "tfrac" => {
+            let (a, b) = (atom_w(cs, i), atom_w(cs, i));
+            (a.max(b) + 0.4, false)
+        }
+        "sum" | "prod" => (1.8, true),
+        "int" => (1.2, false),
+        "quad" | "qquad" => (2.0, false),
+        n if WORDS.contains(&n) => (n.len() as f64 * 0.9, matches!(n, "max" | "min" | "lim" | "argmax" | "argmin")),
+        n if NONE.contains(&n) => (0.0, false),
+        _ => (1.0, false),
+    }
+}
+
+/// A run of tokens up to the closing brace (`group`) or the end, in glyphs.
+fn seq_w(cs: &[char], i: &mut usize, group: bool) -> f64 {
+    let mut n = 0.0;
+    let mut limits = false;
+    while *i < cs.len() {
+        match cs[*i] {
+            '}' => {
+                *i += 1;
+                if group {
+                    break;
+                }
+            }
+            '{' => {
+                *i += 1;
+                n += seq_w(cs, i, true);
+                limits = false;
+            }
+            '_' | '^' => {
+                *i += 1;
+                let w = atom_w(cs, i) * 0.7;
+                if !limits {
+                    n += w;
+                }
+            }
+            '\\' => {
+                let (w, l) = command_w(cs, i);
+                n += w;
+                limits = l;
+            }
+            c => {
+                *i += 1;
+                if c.is_whitespace() || c == '&' {
+                    continue;
+                }
+                n += if matches!(c, '=' | '+' | '-') { 2.0 } else { 1.0 };
+                limits = false;
+            }
+        }
+    }
+    n
+}
+
 /// Fit `iw × ih` inside `f` (contain, centred across, at the top).
 fn contain(f: &Frame, iw: u32, ih: u32) -> Frame {
     let (iw, ih) = (iw.max(1) as f64, ih.max(1) as f64);
@@ -714,6 +847,34 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
         } else {
             fig
         };
+        // a part of the main figure cropped beside the lines, or the figure with the trained
+        // parts clear: only parts a model cut (never an equal split), on a slide with no
+        // picture or table of its own
+        let main_img = m.figures.iter().find(|f| f.id == main_fig && f.image.is_some());
+        let cut = walk.filter(|p| p.by == "model").zip(main_img);
+        let free = ps.figure.is_empty() && ps.table.is_empty() && ps.kv.is_empty();
+        let part_crop = if ps.part >= 1 && !super::plan::is_walk(ps) && kind == "content" {
+            let got = cut.filter(|(p, _)| free && ps.part as usize <= p.parts.len()).map(|(p, f)| (ps.part as usize - 1, p, f));
+            if got.is_none() {
+                cx.warnings.push(format!("{warn_at}：對不到架構圖確認過的第 {} 段，這頁沒有放裁切的圖，照原本的版面", ps.part));
+            }
+            got
+        } else {
+            None
+        };
+        let trained_fig = if ps.role == "training" && !ps.trained.is_empty() && part_crop.is_none() {
+            let got = cut.filter(|(p, _)| free && ps.trained.len() < p.parts.len() && ps.trained.iter().all(|t| *t >= 1 && *t as usize <= p.parts.len()));
+            if got.is_none() {
+                cx.warnings.push(format!("{warn_at}：訓練的段落對不到架構圖確認過的分段，沒有標出來，照原本的版面"));
+            }
+            got
+        } else {
+            None
+        };
+        let own_pic = part_crop.is_some() || trained_fig.is_some();
+        if own_pic && ps.flow.len() >= 2 {
+            cx.warnings.push(format!("{warn_at}：這頁放了架構圖，大綱的流程圖沒有畫"));
+        }
         let tab = m.tables.iter().find(|t| t.id == ps.table);
         let tab_native = tab.and_then(|t| t.grid.clone()).filter(|g| !g.is_empty());
         let tab_pic = if tab_native.is_none() { tab.filter(|t| t.image.is_some()) } else { None };
@@ -792,7 +953,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
             _ => {
                 let title_tag = cx.tag(&["title"]);
                 let has_text = !ps.bullets.is_empty() || !ps.equations.is_empty();
-                let need = Need { image: image.is_some(), table: table_grid.is_some(), text: has_text };
+                let need = Need { image: image.is_some() || own_pic, table: table_grid.is_some(), text: has_text };
                 let arr = pick(&arrs, need);
                 slide.arrangement = arr.map(|a| a.id.clone());
                 // the title: always the layout's own title (one frame on every page)
@@ -815,7 +976,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
 
                 // ── the text of the page (one size per role: never a denser tag) ──
                 let t = if ps.role == "takeaway" { cx.tag(&["takeaway", "body"]) } else { cx.tag(&["body"]) };
-                let mut paras = vec![];
+                let mut lines: Vec<Para> = vec![];
                 let num = ps.role == "takeaway";
                 for b in &ps.bullets {
                     let runs = cx.rich(b, &t, None);
@@ -824,15 +985,19 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                     p.mar_l = EMU_IN / 4;
                     p.indent = -EMU_IN / 4;
                     p.after_pt = Some(6.0);
-                    paras.push(p);
+                    lines.push(p);
                 }
                 // equations of the slide: native OMML, one per line; one the paper's text
                 // could not give is its crop (a picture above the text), never LaTeX as text
                 let eq_tag = cx.tag(&["equation", "body"]);
                 let mut eq_pics: Vec<&Img> = vec![];
                 let mut used_keys: BTreeSet<String> = BTreeSet::new();
-                for id in &ps.equations {
+                // (the bullet that explains it, the equation's paragraph, its width)
+                let mut eqs: Vec<(Option<usize>, Para, i64)> = vec![];
+                for (ei, id) in ps.equations.iter().enumerate() {
                     let Some(e) = m.equations.iter().find(|e| &e.id == id) else { continue };
+                    let name = e.label.clone().unwrap_or_else(|| e.id.clone());
+                    let pair = ps.explained_by(ei);
                     let latex = cx.expand(&e.latex);
                     let size = cx.look(&eq_tag, None).size;
                     let omml = if e.usable() { cx.omml(&latex, true, size) } else { None };
@@ -841,21 +1006,56 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                             let look = cx.look(&eq_tag, None);
                             let tag = cx.st.tag("equation").map(|_| "equation".to_string());
                             used_keys.extend(equation_keys(&latex));
-                            cx.para(vec![Run { kind: "math".into(), text: latex.clone(), tag, em: None, look, field: None, omml: Some(omml), latex: Some(latex), src: None, k: 0 }], &eq_tag)
+                            cx.para(vec![Run { kind: "math".into(), text: latex.clone(), tag, em: None, look, field: None, omml: Some(omml), latex: Some(latex.clone()), src: None, k: 0 }], &eq_tag)
                         }
                         None => {
                             match e.image.as_ref() {
-                                Some(im) => eq_pics.push(im),
-                                None => cx.warnings.push(format!("{warn_at}：{} 無法排版，沒有放", e.label.clone().unwrap_or_else(|| e.id.clone()))),
+                                Some(im) => {
+                                    eq_pics.push(im);
+                                    if pair.is_some() {
+                                        cx.warnings.push(format!("{warn_at}：{name} 是論文的截圖，沒有和說明它的那一行排在一起"));
+                                    }
+                                }
+                                None => cx.warnings.push(format!("{warn_at}：{name} 無法排版，沒有放")),
                             }
                             continue;
                         }
                     };
+                    if pair.is_none() && !ps.bullets.is_empty() {
+                        cx.warnings.push(format!("{warn_at}：{name} 沒有配到說明它的那一行，照原本的排法放在條列下面"));
+                    }
                     p.align = "ctr".into();
                     p.before_pt = Some(6.0);
                     p.after_pt = Some(6.0);
-                    paras.push(p);
+                    eqs.push((pair, p, math_w(&latex, size)));
                 }
+                // each equation right under the line that explains it (the author, after a
+                // rehearsal); an unpaired one after the lines, as before. `kinds`: which
+                // bullet a paragraph is (`None`: an equation)
+                let mut paras: Vec<Para> = vec![];
+                let mut kinds: Vec<Option<usize>> = vec![];
+                for (bi, l) in lines.iter().enumerate() {
+                    paras.push(l.clone());
+                    kinds.push(Some(bi));
+                    for (_, p, _) in eqs.iter().filter(|(pair, _, _)| *pair == Some(bi)) {
+                        paras.push(p.clone());
+                        kinds.push(None);
+                    }
+                }
+                for (_, p, _) in eqs.iter().filter(|(pair, _, _)| pair.is_none()) {
+                    paras.push(p.clone());
+                    kinds.push(None);
+                }
+                // two paired equations: two columns, each a line and its equation, the other
+                // lines below (when both equations fit a column; else they stay stacked, each
+                // under its line)
+                let paired: Vec<&(Option<usize>, Para, i64)> = eqs.iter().filter(|(pair, _, _)| pair.is_some()).collect();
+                let columns: Option<(Vec<(TextBody, TextBody, i64)>, Option<TextBody>)> = (paired.len() == 2 && eqs.len() == 2 && eq_pics.is_empty()).then(|| {
+                    let cols = paired.iter().map(|(pair, p, w)| (body(vec![lines[pair.unwrap()].clone()], "t"), body(vec![p.clone()], "t"), *w)).collect();
+                    let rest: Vec<Para> = lines.iter().enumerate().filter(|(bi, _)| !paired.iter().any(|(pair, _, _)| *pair == Some(*bi))).map(|(_, l)| l.clone()).collect();
+                    (cols, (!rest.is_empty()).then(|| body(rest, "t")))
+                });
+                let eq_widest = eqs.iter().map(|(_, _, w)| *w).max().unwrap_or(0);
                 // the symbols the slide's equations use, once each, from the paper's
                 // registry (§7.1: 符號說明): never on the slide (a line that only reads the
                 // symbols again, the author after a rehearsal), the last item of the notes
@@ -879,16 +1079,74 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                     }
                     extra.push(o);
                     text_f = Frame::new(c.x, y, c.w, (bottom - y).max(h / 10));
+                } else if let Some((pi, p, img)) = part_crop {
+                    // ── one part of the main figure, cropped at its confirmed cuts, beside the
+                    // lines (never the whole figure small): the picture left, the text right; a
+                    // part too flat for a column, or lines whose equation needs the width, has
+                    // the part on top and the text across the body ──
+                    let im = img.image.as_ref().unwrap();
+                    let asset = asset_of(&mut assets, &cx, img)?;
+                    let full = Frame::new(c.x, c.y, c.w, bottom - c.y);
+                    let (a, b) = p.span(pi);
+                    let along_x = p.axis != "y";
+                    let (crop, iw, ih) = if along_x { (Crop { l: a, t: 0.0, r: 1.0 - b, b: 0.0 }, im.w as f64 * (b - a), im.h as f64) } else { (Crop { l: 0.0, t: a, r: 0.0, b: 1.0 - b }, im.w as f64, im.h as f64 * (b - a)) };
+                    let aspect = iw.max(1.0) / ih.max(1.0);
+                    let col = full.w * 48 / 100;
+                    let (sw, sh) = if (col as f64 / aspect) as i64 <= full.h { (col, (col as f64 / aspect) as i64) } else { ((full.h as f64 * aspect) as i64, full.h) };
+                    let text_w = full.w - sw - 2 * gap;
+                    let side = has_text && sh >= full.h * 35 / 100 && eq_widest <= text_w - EMU_IN / 4;
+                    let pframe = if side || !has_text {
+                        Frame::new(if side { full.x } else { full.x + (full.w - sw) / 2 }, full.y, sw, sh)
+                    } else {
+                        let ph = (full.h * 45 / 100).min((full.w as f64 / aspect) as i64);
+                        let pw = (ph as f64 * aspect) as i64;
+                        Frame::new(full.x + (full.w - pw) / 2, full.y, pw, ph)
+                    };
+                    low = pframe.y + pframe.h;
+                    if side {
+                        let tx = pframe.x + pframe.w + 2 * gap;
+                        text_f = Frame::new(tx, c.y, full.x + full.w - tx, (bottom - c.y).max(h / 10));
+                    } else {
+                        y = low + gap;
+                        text_f = Frame::new(c.x, y, c.w, (bottom - y).max(0));
+                    }
+                    extra.push(pic(PART_PICTURE, pframe, &asset, crop, 1.0, Some("image-1")));
+                } else if let Some((p, img)) = trained_fig {
+                    // ── the training slide: the whole figure, the trained parts clear and the
+                    // rest at the style's ghost alpha (the walk-through's drawing), the lines
+                    // under it (beside it when the figure is tall) ──
+                    let im = img.image.as_ref().unwrap();
+                    let asset = asset_of(&mut assets, &cx, img)?;
+                    let aspect = im.w.max(1) as f64 / im.h.max(1) as f64;
+                    let area = Frame::new(c.x, c.y, c.w, bottom - c.y);
+                    let side = has_text && area.h as f64 * aspect <= area.w as f64 * 0.6;
+                    let below = if side { 0 } else { text_body.as_ref().map(|tb| under_h(tb, c.w) + gap).unwrap_or(0) };
+                    let pw = if side { (area.h as f64 * aspect) as i64 } else { area.w.min(((area.h - below) as f64 * aspect) as i64).max(area.w * 2 / 3).min((area.h as f64 * aspect) as i64) };
+                    let ph = (pw as f64 / aspect) as i64;
+                    let pframe = Frame::new(if side { area.x } else { area.x + (area.w - pw) / 2 }, area.y, pw, ph);
+                    // neighbouring trained parts are one clear span (no seam between them)
+                    let mut spans: Vec<(f64, f64)> = vec![];
+                    for t in &ps.trained {
+                        let (a, b) = p.span(*t as usize - 1);
+                        match spans.last_mut() {
+                            Some(last) if (last.1 - a).abs() < 1e-9 => last.1 = b,
+                            _ => spans.push((a, b)),
+                        }
+                    }
+                    let ghost = inp.st.pack.ghost.picture_alpha.clamp(0.1, 1.0);
+                    let names: Vec<String> = (1..=spans.len()).map(|k| format!("{TRAINED_PICTURE} {k}")).collect();
+                    extra.extend(ghosted(&asset, &pframe, p.axis != "y", &spans, ghost, &names));
+                    low = pframe.y + pframe.h;
+                    if side {
+                        let tx = pframe.x + pframe.w + 2 * gap;
+                        text_f = Frame::new(tx, c.y, area.x + area.w - tx, (bottom - c.y).max(h / 10));
+                    } else {
+                        y = low + gap;
+                        text_f = Frame::new(c.x, y, c.w, (bottom - y).max(0));
+                    }
                 } else if let Some(img) = image {
                     let im = img.image.as_ref().unwrap();
-                    let asset = match assets.get(&img.id) {
-                        Some(a) => a.clone(),
-                        None => {
-                            let a = sc_core::store_asset(&cx.deck_dir, &im.bytes, &im.ext).map_err(|e| e.to_string())?;
-                            assets.insert(img.id.clone(), a.clone());
-                            a
-                        }
-                    };
+                    let asset = asset_of(&mut assets, &cx, img)?;
                     let cap_tag = cx.tag(&["caption"]);
                     let cap = strip_typed_refs(&caption_clip(&img.caption, 140));
                     let aspect = im.w.max(1) as f64 / im.h.max(1) as f64;
@@ -918,14 +1176,8 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                             cx.warnings.push(format!("{warn_at}：架構圖比較高，放滿高度後只有內容寬度的 {} %", pw * 100 / area.w.max(1)));
                         }
                         let ghost = inp.st.pack.ghost.picture_alpha.clamp(0.1, 1.0);
-                        extra.push(pic("架構圖", pframe.clone(), &asset, Crop::default(), ghost, Some("image-1")));
                         let along_x = p.axis != "y";
-                        let (sub, crop) = if along_x {
-                            (Frame::new(pframe.x + (pw as f64 * a) as i64, pframe.y, (pw as f64 * (b - a)) as i64, ph), Crop { l: a, t: 0.0, r: 1.0 - b, b: 0.0 })
-                        } else {
-                            (Frame::new(pframe.x, pframe.y + (ph as f64 * a) as i64, pw, (ph as f64 * (b - a)) as i64), Crop { l: 0.0, t: a, r: 0.0, b: 1.0 - b })
-                        };
-                        extra.push(pic(&format!("第 {} 段", pi + 1), sub, &asset, crop, 1.0, None));
+                        extra.extend(ghosted(&asset, &pframe, along_x, &[(a, b)], ghost, &[format!("第 {} 段", pi + 1)]));
                         low = pframe.y + pframe.h;
                         // the text: over the larger faint side
                         let m = h / 60;
@@ -1010,7 +1262,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                 // the plan's chain (steps, a timeline, issue → solution) drawn with the flow tool:
                 // one picture across the body, the lines under it
                 let mut drawn = false;
-                if table_grid.is_none() && image.is_none() && ps.equations.is_empty() && ps.flow.len() >= 2 {
+                if table_grid.is_none() && image.is_none() && !own_pic && ps.equations.is_empty() && ps.flow.len() >= 2 {
                     match flow_picture(&cx, inp.ws, &ps.flow) {
                         Ok(picture) => {
                             let aspect = picture.frame.w.max(1) as f64 / picture.frame.h.max(1) as f64;
@@ -1029,7 +1281,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                 // nothing to show on a page that is not the take-home one: an empty picture slot
                 // where the picture would go, saying which picture to put there (editor only,
                 // never exported), the text beside it — never a page of bullets alone
-                if !drawn && table_grid.is_none() && image.is_none() && ps.equations.is_empty() && !super::plan::text_only_ok(&ps.role) {
+                if !drawn && table_grid.is_none() && image.is_none() && !own_pic && ps.equations.is_empty() && !super::plan::text_only_ok(&ps.role) {
                     let sw = c.w * 52 / 100;
                     let sh = (bottom - c.y).min(sw * 10 / 16);
                     extra.push(suggest_slot(Frame::new(c.x, c.y, sw, sh), &ps.suggest, inp.lang));
@@ -1053,16 +1305,50 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                         low = low.max(ey - gap);
                         tf = Frame::new(tf.x, ey, tf.w, (tf.y + tf.h - ey).max(h / 10));
                     }
+                    // two paired equations side by side: each column a line and its equation,
+                    // the equations on one line across the columns, the other lines below
+                    let col_w = (tf.w - 2 * gap) / 2;
+                    let mut text_body = text_body;
+                    if let Some((cols, rest)) = columns.filter(|(cols, _)| text_body.is_some() && cols.iter().all(|(_, _, ew)| *ew <= col_w - EMU_IN / 4)) {
+                        // the two lines in one row (as tall as the taller one, measured a little
+                        // narrow so a line that wraps on screen still has its room), the two
+                        // equations in the row right under it: they sit on one line
+                        let lh = cols.iter().map(|(l, _, _)| text_h(l, col_w * 88 / 100)).max().unwrap_or(0);
+                        let eh = cols.iter().map(|(_, e, _)| text_h(e, col_w)).max().unwrap_or(0);
+                        for (k, (l, e, _)) in cols.into_iter().enumerate() {
+                            let x = tf.x + k as i64 * (col_w + 2 * gap);
+                            extra.push(text_obj(&format!("{PAIR_TEXT} {}", k + 1), Frame::new(x, tf.y, col_w, lh), l, Some(&format!("text-{}", k + 1))));
+                            extra.push(text_obj(&format!("{PAIR_EQUATION} {}", k + 1), Frame::new(x, tf.y + lh, col_w, eh), e, None));
+                        }
+                        let ch = lh + eh;
+                        low = low.max(tf.y + ch);
+                        if ch > tf.h + h / 100 {
+                            cx.warnings.push(format!("{warn_at}：文字放不下（沒有縮字），請刪短或拆頁"));
+                        }
+                        text_body = None;
+                        if let Some(rb) = rest {
+                            let ry = tf.y + ch + gap;
+                            let need = text_h(&rb, tf.w);
+                            if ry + need > tf.y + tf.h + h / 100 {
+                                cx.warnings.push(format!("{warn_at}：文字放不下（沒有縮字），請刪短或拆頁"));
+                            }
+                            low = low.max(ry + need);
+                            extra.push(text_obj("內文", Frame::new(tf.x, ry, tf.w, need.max(h / 20)), rb, Some("text-3")));
+                        }
+                    }
                     if let Some(mut tb) = text_body {
                         // under a picture or a table only the lines that fit stay on the slide;
                         // the others go to the speaker notes (said so)
-                        let visual = image.is_some() || table_grid.is_some();
+                        let visual = image.is_some() || table_grid.is_some() || own_pic;
+                        let mut kinds = kinds.clone();
                         let mut nb = ps.bullets.len().min(tb.paras.len());
                         let mut moved: Vec<String> = vec![];
-                        while visual && nb > 0 && text_h(&tb, tf.w) > tf.h + h / 100 {
+                        while visual && text_h(&tb, tf.w) > tf.h + h / 100 {
+                            // the last line still on the slide (an equation whose line goes stays)
+                            let Some(at) = kinds.iter().rposition(|k| k.is_some()).filter(|_| kinds.len() == tb.paras.len()) else { break };
                             nb -= 1;
-                            tb.paras.remove(nb);
-                            moved.insert(0, ps.bullets[nb].clone());
+                            tb.paras.remove(at);
+                            moved.insert(0, ps.bullets[kinds.remove(at).unwrap()].clone());
                         }
                         if !moved.is_empty() {
                             cx.warnings.push(format!("{warn_at}：圖表下面只放得下 {nb} 行，其餘 {} 行移到講者備註", moved.len()));
@@ -1278,5 +1564,15 @@ mod tests {
         assert!(out.ends_with("\n1. $x$ 為輸入影像。") && notes_shape_ok(&out), "{out}");
         // no confirmed symbol: the notes as they were
         assert_eq!(notes_with_symbols(notes, &[], "en"), notes);
+    }
+
+    #[test]
+    fn an_equations_width_decides_whether_two_fit_side_by_side() {
+        let short = math_w(r"\mathcal{L}_{rec} = \lVert \mathbf{x} - \hat{\mathbf{x}} \rVert^2", 18.0);
+        let long = math_w(r"w_i = \frac{\exp(s_i / \tau)}{\sum_{j=1}^{N} \exp(s_j / \tau)} \cdot \frac{a_i}{\max_{j} a_j} + \beta \, \frac{1}{N} \sum_{j=1}^{N} s_j", 18.0);
+        let inch = 914_400;
+        assert!(short > inch && short < 3 * inch, "{short}");
+        assert!(long > 4 * inch && long < 6 * inch, "a fraction is as wide as its wider part, limits take no width: {long}");
+        assert_eq!(math_w("", 18.0), 0);
     }
 }

@@ -198,7 +198,7 @@ pub fn colour_omml(omml: &str, inks: &[(Vec<String>, String)]) -> String {
 pub fn colour_slide_equations(slide: &mut Slide, inks: &[(String, String)], out: &str) {
     let mut g: Vec<(Vec<String>, String)> = inks.iter().map(|(t, c)| (glyphs(t), c.clone())).filter(|(g, _)| !g.is_empty()).collect();
     g.push((vec!["ℒ".into(), "𝓛".into()], out.to_string()));
-    for o in slide.objects.iter_mut().filter(|o| o.name == "內文") {
+    for o in slide.objects.iter_mut().filter(|o| o.name.starts_with("內文") || o.name.starts_with(super::build::PAIR_EQUATION)) {
         let Kind::Text(sp) = &mut o.kind else { continue };
         let Some(body) = sp.text.as_mut() else { continue };
         for p in &mut body.paras {
@@ -362,7 +362,12 @@ pub fn place(slide: &mut Slide, asset: &str, mm: (f64, f64), size: (i64, i64), b
     let (w, h) = size;
     let aspect = mm.1 / mm.0;
     let gap = h / 60;
-    let text = slide.objects.iter().find(|o| o.name == "內文" && matches!(o.kind, Kind::Text(_))).map(|t| t.frame.clone());
+    // the slide's text: one box, or the columns of paired equations with the other lines below
+    let boxes: Vec<&Frame> = slide.objects.iter().filter(|o| (o.name.starts_with("內文") || o.name.starts_with(super::build::PAIR_EQUATION)) && matches!(o.kind, Kind::Text(_))).map(|t| &t.frame).collect();
+    let text = (!boxes.is_empty()).then(|| {
+        let (x, y) = (boxes.iter().map(|f| f.x).min().unwrap(), boxes.iter().map(|f| f.y).min().unwrap());
+        Frame::new(x, y, boxes.iter().map(|f| f.x + f.w).max().unwrap() - x, boxes.iter().map(|f| f.y + f.h).max().unwrap() - y)
+    });
     let take_h = slide.objects.iter().find(|o| o.name == "takeaway" && matches!(o.kind, Kind::Text(_))).map(|t| t.frame.h + gap).unwrap_or(0);
     let frame = match text {
         Some(tf) => {
@@ -415,6 +420,27 @@ mod tests {
         assert!(c.contains("<a:rPr lang=\"en-US\" i=\"1\"><a:solidFill><a:srgbClr val=\"009E73\"/></a:solidFill><a:latin"), "{c}");
         assert!(c.contains("<a:rPr sz=\"1800\"><a:solidFill><a:srgbClr val=\"E69F00\"/></a:solidFill></a:rPr><m:t>𝑝"), "{c}");
         assert!(c.contains("<a:rPr sz=\"1800\"/><m:t>𝑥"), "other runs untouched");
+    }
+
+    /// Two paired equations in columns (`build.rs`): the GIF goes under all of the slide's
+    /// text boxes, never over a column.
+    #[test]
+    fn the_gif_goes_under_the_columns_of_paired_equations() {
+        use lore_canvas::{Geom, Paint, SpObj, TextBody};
+        let (w, h) = (12_192_000i64, 6_858_000i64);
+        let tb = |id: u32, name: &str, f: Frame| Object { id, name: name.into(), frame: f, hidden: false, ph: None, slot: None, kind: Kind::Text(SpObj { geom: Geom::preset("rect"), fill: Paint::None, line: None, text: Some(TextBody::default()), equation: false }), src: None };
+        let mut sl = Slide::new("s1".into(), None);
+        let (x, y, cw) = (w / 25, h / 5, w * 44 / 100);
+        sl.objects = vec![
+            tb(2, "內文 1", Frame::new(x, y, cw, h / 12)),
+            tb(3, &format!("{} 1", super::super::build::PAIR_EQUATION), Frame::new(x, y + h / 12, cw, h / 8)),
+            tb(4, "內文 2", Frame::new(x + cw + w / 30, y, cw, h / 12)),
+            tb(5, &format!("{} 2", super::super::build::PAIR_EQUATION), Frame::new(x + cw + w / 30, y + h / 12, cw, h / 8)),
+        ];
+        place(&mut sl, "gif1", (80.0, 40.0), (w, h), h * 9 / 10, 9);
+        let g = &sl.objects.last().unwrap().frame;
+        let low = y + h / 12 + h / 8;
+        assert!(g.y >= low && g.y + g.h <= h * 9 / 10 + 1 && g.x >= x && g.x + g.w <= x + 2 * cw + w / 30, "{g:?}");
     }
 
     #[test]

@@ -208,7 +208,7 @@ fn plan(lang_text: &str) -> Value {
             { "role": "method", "title": "Encoder", "bullets": ["Finds lesions as in Fig. 3"], "figure": "fig1", "module": 1 },
             { "role": "method", "title": "Fusion", "bullets": ["Weighs each lesion by $\\vx$", "Keeps the largest three", "Passes one vector on"], "figure": "fig1", "module": 2 },
             { "role": "method", "title": "Decoder.", "bullets": ["Grades the image", "Outputs four grades"], "figure": "fig1", "module": 3 },
-            { "role": "loss", "title": "Reconstruction loss", "bullets": ["Penalises the distance (Eq. (1))"], "equations": ["eq1", "eq99"], "takeaway": "One distance term trains both stages" },
+            { "role": "loss", "title": "Reconstruction loss", "bullets": ["Penalises the distance (Eq. (1))"], "equations": ["eq1", "eq99"], "explains": [1, 1], "takeaway": "One distance term trains both stages" },
             { "role": "training", "title": "Training details", "bullets": [], "kv": [["Epochs", "30"], ["Optimiser", "AdamW"], ["Learning rate", "$10^{-4}$"]], "takeaway": "A short schedule is enough" },
             { "role": "results", "title": "Main results", "bullets": [], "table": "tab1", "key_row": "ours", "takeaway": "Ours wins on both metrics, see Table 1", "notes": "This page compares the methods.\n1. Each row is one method trained on the same split." },
             { "role": "opinion", "title": "Some opinions", "bullets": ["Test on real data"], "suggest": "a real lesion photo beside a synthetic one", "takeaway": "Synthetic results need a real test" },
@@ -343,7 +343,7 @@ fn assert_one_size_per_role(slides: &[Value]) {
         let objs = s["objects"].as_array().unwrap();
         assert_eq!(objs.iter().filter(|o| o["ph"] == "title" || o["slot"] == "title" || o["name"] == "Title").count(), 1, "one title object");
         // the first thing under the title starts on the same line on every page
-        let body_top = objs.iter().filter(|o| ["內文", "表", "圖", "架構圖", "訓練細節"].contains(&o["name"].as_str().unwrap_or("")) || o["type"] == "group").map(|o| o["frame"]["y"].as_i64().unwrap()).min();
+        let body_top = objs.iter().filter(|o| ["內文", "內文 1", "表", "圖", "圖的一段", "架構圖", "訓練細節"].contains(&o["name"].as_str().unwrap_or("")) || o["type"] == "group").map(|o| o["frame"]["y"].as_i64().unwrap()).min();
         tops.extend(body_top);
     }
     assert_eq!(tops.len(), 1, "the body starts on one line: {tops:?}");
@@ -795,7 +795,13 @@ async fn the_authors_number_of_parts_recuts_the_main_figure() {
     let home = lore_home::Home::at(dir.path().join("home"));
     let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
     let two = json!({ "main": "fig1", "split": true, "axis": "x", "cuts": [0.64], "parts": [{ "label": "Encoder and fusion" }, { "label": "Decoder" }], "slides": [1, 1, 2] });
-    let model = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan("is slow")]).on(ASK_PARTS, &[parts(), two]));
+    // a detail slide on part 2 of the three parts the plan was written for, and the trained parts
+    let mut pl = plan("is slow");
+    pl["slides"].as_array_mut().unwrap().insert(6, json!({ "role": "method", "title": "Fusion in detail", "part": 2, "bullets": ["Scores come from size"] }));
+    pl["slides"][8]["trained"] = json!([1, 2]);
+    pl["slides"][8]["kv"] = json!([]);
+    pl["slides"][8]["bullets"] = json!(["Encoder and fusion are trained"]);
+    let model = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[pl]).on(ASK_PARTS, &[parts(), two]));
     assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, engines(model.clone(), model.clone()))).is_ok());
     let app = sc_server::router_isolated(shared.clone());
     let body = json!({ "source": { "kind": "pc", "path": p }, "length": "standard", "lang": "en", "style": "blank", "mode": "review" });
@@ -813,6 +819,14 @@ async fn the_authors_number_of_parts_recuts_the_main_figure() {
     let name = v["deck"].as_str().unwrap();
     let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
     let slides = d["deck"]["slides"].as_array().unwrap();
+    // the figure was cut again into 2 parts: the plan's "part 2" and "parts 1 and 2" named the
+    // old three, so neither page crops or marks anything, and both say so
+    let warns: Vec<&str> = v["result"]["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(warns.iter().any(|w| w.contains("Fusion in detail") && w.contains("重新分段")) && warns.iter().any(|w| w.contains("Training details") && w.contains("重新分段")), "{warns:?}");
+    for title in ["Fusion in detail", "Training details"] {
+        let sl = slides.iter().find(|s| all_text(s).contains(title)).unwrap();
+        assert!(!sl["objects"].as_array().unwrap().iter().any(|o| o["type"] == "picture"), "{title}");
+    }
     // Encoder and Fusion on part 1 (the left 2/3, cut at the gutter), Decoder on part 2
     let crop = |title: &str| slides.iter().find(|s| all_text(s).contains(title) && s["objects"].as_array().unwrap().iter().any(|o| o["name"].as_str().is_some_and(|n| n.starts_with("講解")))).map(|s| s["objects"].as_array().unwrap().iter().filter(|o| o["type"] == "picture").nth(1).unwrap()["crop"].clone()).unwrap();
     assert!(crop("Encoder")["l"].as_f64().unwrap() < 0.01 && (crop("Keeps the largest")["r"].as_f64().unwrap() - 1.0 / 3.0).abs() < 0.02, "{}", crop("Encoder"));
@@ -1289,4 +1303,258 @@ async fn an_unsure_equation_is_skipped_not_guessed() {
     let answer = json!({ "match": "template", "template": "focal", "paper_values": [], "reduction": [], "properties": [] });
     let (_d, _app, v, _, _) = run_with_eq_answer(answer).await;
     assert!(v["live_eq"].is_null(), "{v}");
+}
+
+// ── layout: a cropped part beside the text, the trained parts, paired equations ──
+
+/// A synthetic pipeline figure, 900 × 300: three blocks that look different (blue with
+/// rows, orange with a disc, green with bars), blank gutters at 1/3 and 2/3 crossed by a thin arrow line.
+fn pipeline_png() -> Vec<u8> {
+    let mut img = image::RgbaImage::from_pixel(900, 300, image::Rgba([255, 255, 255, 255]));
+    let blocks = [(30u32, [52u8, 101, 164]), (330, [230, 145, 30]), (630, [60, 150, 90])];
+    for (k, (x0, c)) in blocks.iter().enumerate() {
+        for y in 40..260u32 {
+            for x in *x0..*x0 + 240 {
+                let (dx, dy) = (x as i32 - (*x0 as i32 + 120), y as i32 - 150);
+                let light = match k {
+                    0 => (y / 22) % 2 == 0,
+                    1 => dx * dx + dy * dy < 70 * 70,
+                    _ => (x / 30) % 2 == 0,
+                };
+                let edge = x < x0 + 6 || x >= x0 + 234 || !(46..254).contains(&y);
+                let p = if edge { [c[0] / 2, c[1] / 2, c[2] / 2] } else if light { [c[0] / 2 + 127, c[1] / 2 + 127, c[2] / 2 + 127] } else { *c };
+                img.put_pixel(x, y, image::Rgba([p[0], p[1], p[2], 255]));
+            }
+        }
+    }
+    for x in (270..330u32).chain(570..630) {
+        for y in 149..152 {
+            img.put_pixel(x, y, image::Rgba([60, 60, 60, 255]));
+        }
+    }
+    let mut buf = std::io::Cursor::new(vec![]);
+    img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+    buf.into_inner()
+}
+
+/// The synthetic paper with the pipeline figure and five display equations (two of them long).
+fn layout_paper(root: &Path) -> std::path::PathBuf {
+    let p = paper(root);
+    let eqs = r"The total loss is
+\begin{equation}
+\mathcal{L} = \mathcal{L}_{rec} + \lambda \mathcal{L}_{cls}
+\end{equation}
+with the reconstruction term
+\begin{equation}
+\mathcal{L}_{rec} = \lVert \vx - \hat{\vx} \rVert^2
+\end{equation}
+and the grading term
+\begin{equation}
+\mathcal{L}_{cls} = -\sum_{k=1}^{4} y_k \log p_k
+\end{equation}
+The fusion weight of a lesion is
+\begin{equation}
+w_i = \frac{\exp(s_i / \tau)}{\sum_{j=1}^{N} \exp(s_j / \tau)} \cdot \frac{a_i}{\max_{j} a_j} + \beta \, \frac{1}{N} \sum_{j=1}^{N} s_j
+\end{equation}
+and the fused vector is
+\begin{equation}
+\mathbf{z} = \sum_{i=1}^{N} w_i \, \mathbf{h}_i + \gamma \, \frac{1}{N} \sum_{i=1}^{N} \mathbf{h}_i + \delta \, \max_{i} \mathbf{h}_i - \epsilon \, \min_{i} \mathbf{h}_i + \eta \, \frac{1}{N} \sum_{i=1}^{N} \lVert \mathbf{h}_i - \mathbf{z} \rVert^2
+\end{equation}";
+    let main = MAIN.replace("The reconstruction loss is\n\\begin{equation}\n\\mathcal{L} = \\lVert \\vx - \\hat{\\vx} \\rVert^2\n\\label{eq:loss}\n\\end{equation}", eqs);
+    assert!(main.contains("mathcal{L}_{cls}"));
+    std::fs::write(p.join("main.tex"), main).unwrap();
+    std::fs::write(p.join("figures/arch.png"), pipeline_png()).unwrap();
+    p
+}
+
+/// A scripted plan with every new arrangement and each fallback, one per slide.
+fn layout_plan() -> Value {
+    let notes = "This page gives the detail.\n1. The first point comes from what is measured.";
+    json!({
+        "venue": "Journal of Synthetic Tests, 2025",
+        "keywords": ["lesion grading", "synthetic data"],
+        "slides": [
+            { "role": "cover", "title": "Two-Stage Grading of Synthetic Lesions", "bullets": [] },
+            { "role": "background", "title": "Why grading is slow", "bullets": ["Experts grade every image by hand"], "flow": ["2019: graded by hand", "2022: one-stage models", "Now: two stages"] },
+            { "role": "overview", "title": "Big picture", "bullets": [], "figure": "fig1" },
+            { "role": "method", "title": "Encoder finds the lesions", "bullets": ["Finds lesion candidates", "Keeps full resolution"], "figure": "fig1", "module": 1 },
+            { "role": "method", "title": "Fusion weighs the lesions", "bullets": ["Weighs each lesion", "Keeps the largest three"], "figure": "fig1", "module": 2 },
+            { "role": "method", "title": "Decoder grades the image", "bullets": ["Grades the image", "Outputs four grades"], "figure": "fig1", "module": 3 },
+            { "role": "method", "title": "How fusion picks three lesions", "part": 2, "bullets": ["Each lesion gets a score from its size and contrast", "The three highest scores are kept, the rest dropped", "One vector leaves the block, whatever the lesion count"], "notes": notes },
+            { "role": "method", "title": "Fusion turns scores into weights", "part": 2, "bullets": ["A sharper temperature favours the largest lesion", "The mean score keeps small lesions from vanishing"], "equations": ["eq4"], "explains": [1], "notes": notes },
+            { "role": "loss", "title": "One loss trains both stages", "bullets": ["Both stages share one objective", "The weight $\\lambda$ balances grading against reconstruction", "A larger weight favours the grade"], "equations": ["eq1"], "explains": [2], "notes": notes },
+            { "role": "loss", "title": "What each loss term compares", "bullets": ["Reconstruction compares the image with its copy", "Grading compares the four grade scores with the label", "Both are averaged over the batch"], "equations": ["eq2", "eq3"], "explains": [1, 2], "notes": notes },
+            { "role": "training", "title": "Only encoder and fusion are trained", "trained": [1, 2], "bullets": ["Encoder and fusion are trained, the decoder stays frozen", "The total loss with $\\lambda = 0.5$ trains them"], "notes": notes },
+            { "role": "training", "title": "Training settings", "bullets": [], "kv": [["Epochs", "30"], ["Optimiser", "AdamW"], ["Learning rate", "$10^{-4}$"]], "notes": notes },
+            { "role": "method", "title": "A part the figure does not have", "part": 7, "bullets": ["This slide names a part that was never confirmed", "It falls back to the usual page"], "notes": notes },
+            { "role": "loss", "title": "An equation nobody explains", "bullets": ["This line is about something else", "So is this one"], "equations": ["eq2"], "notes": notes },
+            { "role": "method", "title": "Two long equations stay paired", "bullets": ["The weight mixes a softmax over scores with the mean score", "The fused vector adds mean, maximum and minimum terms"], "equations": ["eq4", "eq5"], "explains": [1, 2], "notes": notes },
+            { "role": "results", "title": "Main results", "bullets": ["Each row is one method on the same split"], "table": "tab1", "key_row": "ours", "takeaway": "Ours wins on both metrics", "notes": "This page compares the methods.\n1. Each row is one method trained on the same split." },
+            { "role": "takeaway", "title": "Take home messages", "bullets": ["Two stages help", "Fusion matters"] },
+            { "role": "thanks", "title": "Thanks", "bullets": [] }
+        ]
+    })
+}
+
+/// The deck of [`layout_plan`] in `dir` (direct mode, mock engines): the router, the deck's
+/// name and the finished job.
+async fn layout_deck(dir: &Path, plan: Value, parts: Value) -> (axum::Router, String, Value) {
+    let p = layout_paper(dir);
+    let ws = workspace(dir);
+    let home = lore_home::Home::at(dir.join("home"));
+    let shared = sc_server::state_at(ws, sc_server::repo_dir().join("web"), home.clone());
+    let planner = Arc::new(Keyed::new("{}").on(ASK_PLAN, &[plan]).on(ASK_PARTS, &[parts]).on(ASK_REVIEW, &[json!({ "suggestions": [] })]));
+    assert!(shared.llm.set(sc_server::llm::Llm::with_factory(home, engines(planner.clone(), planner))).is_ok());
+    let app = sc_server::router_isolated(shared.clone());
+    let body = json!({ "source": { "kind": "pc", "path": p }, "style": "blank", "lang": "en", "length": "long", "mode": "direct" });
+    let (_, v, _) = call(&app, "POST", "/api/todeck", Some(body), None).await;
+    let id = v["job"].as_str().unwrap().to_string();
+    let v = job_until(&app, &id, "done", |v| v["state"] == "done" || v["state"] == "failed").await;
+    assert_eq!(v["state"], "done", "{v}");
+    (app, v["deck"].as_str().unwrap().to_string(), v)
+}
+
+/// Visual check only (never in CI): the layout deck in `SC_UI_DIR`, to print with the isolated
+/// server (`SLIDECOMPOSER_WORKSPACE=<dir>/sc … isolated_server -- <dir> <port>`, then
+/// `POST /api/decks/<name>/pdf`); its warnings go to `<dir>/warnings.json`.
+#[tokio::test]
+#[ignore]
+async fn layout_fixture() {
+    let Ok(d) = std::env::var("SC_UI_DIR") else { return };
+    let dir = std::path::PathBuf::from(d);
+    let mut plan = layout_plan();
+    // `SC_LAYOUT_OLD=1`: the same plan without the pairing and part fields (the pages as they were)
+    if std::env::var_os("SC_LAYOUT_OLD").is_some() {
+        for s in plan["slides"].as_array_mut().unwrap() {
+            for k in ["part", "trained", "explains"] {
+                s.as_object_mut().unwrap().remove(k);
+            }
+        }
+    }
+    let (_, name, v) = layout_deck(&dir, plan, parts()).await;
+    std::fs::write(dir.join("warnings.json"), serde_json::to_vec_pretty(&json!({ "deck": name, "warnings": v["result"]["warnings"] })).unwrap()).unwrap();
+    println!("deck {name}");
+}
+
+/// The author's pages after a rehearsal, from a plan: the part a slide is about cropped from
+/// the main figure beside its lines, the trained parts clear on the training slide, each
+/// equation with the line that explains it; and each fallback with its warning.
+#[tokio::test]
+async fn a_part_beside_its_lines_the_trained_parts_and_paired_equations() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, name, v) = layout_deck(dir.path(), layout_plan(), parts()).await;
+    let warns: Vec<&str> = v["result"]["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    let (_, d, _) = call(&app, "GET", &format!("/api/decks/{name}"), None, None).await;
+    let slides = d["deck"]["slides"].as_array().unwrap().clone();
+    assert_eq!(slides.len(), 18, "{warns:?}");
+    assert_one_size_per_role(&slides);
+    assert_no_text_only_page(&slides);
+    let objs = |title: &str| slides.iter().find(|s| all_text(s).contains(title)).unwrap_or_else(|| panic!("no slide {title}"))["objects"].as_array().unwrap().clone();
+    let named = |o: &[Value], n: &str| o.iter().find(|x| x["name"] == n).cloned().unwrap_or_else(|| panic!("no {n}"));
+    let fr = |o: &Value, k: &str| o["frame"][k].as_i64().unwrap();
+    let pics = |o: &[Value]| o.iter().filter(|x| x["type"] == "picture").cloned().collect::<Vec<_>>();
+    let kinds = |o: &Value| o["text"]["paras"].as_array().unwrap().iter().map(|p| p["runs"][0]["kind"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let pandoc = lore_math::Pandoc::default().available();
+    let whole = named(&objs("Big picture"), "圖");
+    let (content_x, content_w) = (fr(&whole, "x"), fr(&whole, "w"));
+    let third = |x: &Value| (x.as_f64().unwrap() - 1.0 / 3.0).abs() < 0.01;
+
+    // 1. the part: cropped at the confirmed cuts (the gutters at 1/3 and 2/3), not the whole
+    // figure, readable, the lines beside it
+    let o = objs("How fusion picks three lesions");
+    assert_eq!(pics(&o).len(), 1, "the part alone, never the whole figure beside it");
+    let part = named(&o, "圖的一段");
+    assert!(third(&part["crop"]["l"]) && third(&part["crop"]["r"]) && part["crop"]["t"] == 0.0 && part["crop"]["b"] == 0.0, "the crop is the confirmed part 2: {}", part["crop"]);
+    assert_eq!((part["asset"].clone(), part["alpha"].as_f64()), (whole["asset"].clone(), Some(1.0)), "the figure's own file, cropped");
+    let text = named(&o, "內文");
+    assert!(fr(&part, "w") * 10 >= content_w * 3 && fr(&part, "x") == content_x, "a readable size: {}", part["frame"]);
+    assert!(fr(&text, "x") >= fr(&part, "x") + fr(&part, "w") && fr(&text, "y") == fr(&part, "y"), "the lines beside the part: {} {}", text["frame"], part["frame"]);
+    assert_eq!(text["text"]["paras"].as_array().unwrap().len(), 3);
+    // the same part with an equation: still beside, the equation under its line
+    let o = objs("Fusion turns scores into weights");
+    let (part, text) = (named(&o, "圖的一段"), named(&o, "內文"));
+    assert!(fr(&text, "x") >= fr(&part, "x") + fr(&part, "w"));
+    if pandoc {
+        assert_eq!(kinds(&text), ["text", "math", "text"]);
+    }
+
+    // 2. the training slide: the whole figure faint, parts 1 and 2 clear as one span, the lines under it
+    let o = objs("Only encoder and fusion are trained");
+    let p = pics(&o);
+    assert_eq!(p.len(), 2, "{p:?}");
+    // (the walk-through's faint figure is drawn at the style's ghost alpha)
+    let ghost = named(&objs("Fusion weighs the lesions"), "架構圖")["alpha"].as_f64().unwrap();
+    assert!((p[0]["alpha"].as_f64().unwrap() - ghost).abs() < 1e-6 && ghost < 0.5 && p[0]["name"] == "架構圖", "the untrained rest at the style's ghost alpha: {}", p[0]);
+    assert!(p[1]["crop"]["l"] == 0.0 && third(&p[1]["crop"]["r"]) && p[1]["alpha"] == 1.0, "{}", p[1]);
+    assert_eq!((fr(&p[1], "x"), fr(&p[1], "y"), fr(&p[1], "h")), (fr(&p[0], "x"), fr(&p[0], "y"), fr(&p[0], "h")));
+    assert!((fr(&p[1], "w") * 3 - fr(&p[0], "w") * 2).abs() < 100 && fr(&p[0], "w") * 10 >= content_w * 8, "{} {}", p[1]["frame"], p[0]["frame"]);
+    let text = named(&o, "內文");
+    assert!(fr(&text, "y") >= fr(&p[0], "y") + fr(&p[0], "h") && fr(&text, "w") == content_w);
+    assert!(!o.iter().any(|x| x["type"] == "table") && objs("Training settings").iter().any(|x| x["type"] == "table"));
+
+    if pandoc {
+        // 3. one equation: right under the line that explains it (the second), in the page's one text box
+        let o = objs("One loss trains both stages");
+        let text = named(&o, "內文");
+        assert_eq!(kinds(&text), ["text", "text", "math", "text"]);
+        assert!(text["text"]["paras"][2]["runs"][0]["latex"].as_str().unwrap().contains("lambda"));
+        // two equations: two columns, each line with its equation right under it, the two
+        // equations on one line, the line that explains neither below
+        let o = objs("What each loss term compares");
+        let (l1, e1, l2, e2, rest) = (named(&o, "內文 1"), named(&o, "配對方程式 1"), named(&o, "內文 2"), named(&o, "配對方程式 2"), named(&o, "內文"));
+        for (l, e) in [(&l1, &e1), (&l2, &e2)] {
+            assert_eq!((fr(e, "x"), fr(e, "w"), fr(e, "y")), (fr(l, "x"), fr(l, "w"), fr(l, "y") + fr(l, "h")), "an equation's frame joins its line's: {} {}", l["frame"], e["frame"]);
+            assert_eq!(kinds(e), ["math"]);
+        }
+        assert!(all_text(&l1).contains("Reconstruction") && e1["text"]["paras"][0]["runs"][0]["latex"].as_str().unwrap().contains("rec"));
+        assert!(all_text(&l2).contains("Grading") && e2["text"]["paras"][0]["runs"][0]["latex"].as_str().unwrap().contains("cls"));
+        assert!(fr(&l1, "y") == fr(&l2, "y") && fr(&e1, "y") == fr(&e2, "y") && fr(&l2, "x") >= fr(&l1, "x") + fr(&l1, "w") && fr(&l2, "x") + fr(&l2, "w") <= content_x + content_w);
+        assert!(fr(&rest, "y") >= fr(&e1, "y") + fr(&e1, "h") && all_text(&rest).contains("Both are averaged") && kinds(&rest) == ["text"]);
+        // two equations too wide for columns: stacked, each still under its own line
+        let o = objs("Two long equations stay paired");
+        assert!(!o.iter().any(|x| x["name"] == "內文 1"));
+        assert_eq!(kinds(&named(&o, "內文")), ["text", "math", "text", "math"]);
+        // fallback: an equation no line explains goes after the lines, as before, and is reported
+        assert_eq!(kinds(&named(&objs("An equation nobody explains"), "內文")), ["text", "text", "math"]);
+        assert!(warns.iter().any(|w| w.contains("An equation nobody") && w.contains("沒有配到說明它的那一行")), "{warns:?}");
+        assert_eq!(warns.iter().filter(|w| w.contains("沒有配到說明")).count(), 1, "{warns:?}");
+    }
+    // fallback: a part the figure does not have: no crop, the usual page (an empty picture slot), reported
+    let o = objs("A part the figure does not have");
+    assert!(pics(&o).is_empty() && o.iter().any(|x| x["name"].as_str().unwrap().starts_with("建議放：")));
+    assert!(warns.iter().any(|w| w.contains("A part the figure") && w.contains("架構圖沒有第 7 段")), "{warns:?}");
+    assert!(!warns.iter().any(|w| w.contains("訓練的") || w.contains("How fusion")), "what worked is not reported: {warns:?}");
+
+    // the export keeps the crop and the faint figure
+    let res = app.clone().oneshot(Request::builder().uri(format!("/api/decks/{name}/pptx")).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    assert!(lore_ooxml::Deck::from_bytes(&bytes).is_ok());
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    let xml = |zip: &mut zip::ZipArchive<std::io::Cursor<Vec<u8>>>, n: usize| {
+        let mut x = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name(&format!("ppt/slides/slide{n}.xml")).unwrap(), &mut x).unwrap();
+        x
+    };
+    let at = |title: &str| slides.iter().position(|s| all_text(s).contains(title)).unwrap() + 1;
+    let x = xml(&mut zip, at("How fusion picks three lesions"));
+    assert!(x.contains(r#"<a:srcRect l="33333" r="33333"/>"#), "{x}");
+    let x = xml(&mut zip, at("Only encoder and fusion are trained"));
+    assert!(x.contains("<a:alphaModFix amt=") && x.contains(r#"<a:srcRect r="33333"/>"#), "{x}");
+    if pandoc {
+        let x = xml(&mut zip, at("What each loss term compares"));
+        assert_eq!(x.matches("<m:oMath>").count(), 2, "{x}");
+    }
+
+    // lore-notation on the generated slides: the equations went the registered way (macros
+    // expanded, no typed reference), wherever the layout put them
+    let (_, n, _) = call(&app, "GET", &format!("/api/decks/{name}/notation"), None, None).await;
+    let codes: Vec<String> = n["report"]["issues"].as_array().map(|a| a.iter().filter_map(|i| i["code"].as_str().map(String::from)).collect()).unwrap_or_default();
+    assert!(!codes.iter().any(|c| c == "hardcoded_reference") && !d["deck"].to_string().contains("\\\\vx"), "{codes:?}");
+    assert!(n["notation"]["entries"].as_array().unwrap().iter().any(|e| e["id"] == "x"));
+
+    // 排版用字 has nothing to say about the new arrangements (no overflow, no missing caption)
+    let (_, rep, _) = call(&app, "GET", &format!("/api/decks/{name}/polish"), None, None).await;
+    let msgs = rep.to_string();
+    assert!(!msgs.contains("文字超出框") && !msgs.contains("圖沒有圖說"), "{msgs}");
 }

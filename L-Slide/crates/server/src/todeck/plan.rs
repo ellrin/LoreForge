@@ -32,8 +32,76 @@ pub struct PlanSlide {
     /// No picture of the paper fits this slide: which picture the presenter should put there
     /// (one short line). The build leaves an empty picture slot with it.
     pub suggest: String,
+    /// The part of the main figure this slide is about (1-based, one of the parts a model
+    /// confirmed, `figparts.rs`; 0 = none): the build shows that part cropped from the figure
+    /// beside the lines. Not on a walk-through slide, which shows the whole figure.
+    pub part: u32,
+    /// On the training slide: the parts of the main figure that are trained (1-based, confirmed
+    /// parts): the whole figure with those clear and the rest faint.
+    pub trained: Vec<u32>,
+    /// For each of `equations`, in order: the bullet (1-based) that explains it, 0 = none.
+    /// The build sets each equation with its line.
+    pub explains: Vec<u32>,
     pub cites: Vec<String>,
     pub notes: String,
+}
+
+impl PlanSlide {
+    /// The bullet (0-based) that explains equation `i`, when the pairing is usable: a bullet
+    /// of this slide, explaining this equation only.
+    pub fn explained_by(&self, i: usize) -> Option<usize> {
+        let b = *self.explains.get(i)? as usize;
+        let once = self.explains.iter().take(self.equations.len()).filter(|x| **x as usize == b).count() == 1;
+        (b >= 1 && b <= self.bullets.len() && i < self.equations.len() && once).then(|| b - 1)
+    }
+
+    /// Keep the equations `keep` accepts, each with its pairing.
+    pub fn retain_equations(&mut self, keep: impl Fn(&str) -> bool) {
+        let kept: Vec<bool> = self.equations.iter().map(|e| keep(e)).collect();
+        let mut i = 0;
+        self.explains.retain(|_| {
+            i += 1;
+            kept.get(i - 1).copied().unwrap_or(false)
+        });
+        let mut i = 0;
+        self.equations.retain(|_| {
+            i += 1;
+            kept[i - 1]
+        });
+    }
+
+    /// Keep the bullets `keep` accepts; the pairings follow their bullets (one whose bullet
+    /// goes is unpaired).
+    pub fn retain_bullets(&mut self, keep: impl Fn(&str) -> bool) {
+        let kept: Vec<bool> = self.bullets.iter().map(|b| keep(b)).collect();
+        if kept.iter().all(|k| *k) {
+            return;
+        }
+        for x in &mut self.explains {
+            let b = *x as usize;
+            *x = if b >= 1 && b <= kept.len() && kept[b - 1] { kept[..b].iter().filter(|k| **k).count() as u32 } else { 0 };
+        }
+        let mut i = 0;
+        self.bullets.retain(|_| {
+            i += 1;
+            kept[i - 1]
+        });
+    }
+
+    /// After bullets or equations were cut from the end: no pairing past what is left.
+    pub fn fix_explains(&mut self) {
+        self.explains.truncate(self.equations.len());
+        let n = self.bullets.len() as u32;
+        self.explains.iter_mut().filter(|x| **x > n).for_each(|x| *x = 0);
+    }
+
+    /// The equations (0-based) that have bullets on the slide but no usable pairing.
+    pub fn unpaired(&self) -> Vec<usize> {
+        if self.bullets.is_empty() {
+            return vec![];
+        }
+        (0..self.equations.len()).filter(|i| self.explained_by(*i).is_none()).collect()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -85,7 +153,7 @@ pub mod limit {
 /// A slide that walks through one part of the main figure (`build.rs`).
 /// Does the slide show something besides text: a figure, a table, key-value rows or an equation?
 pub fn has_visual(s: &PlanSlide) -> bool {
-    !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty() || !s.equations.is_empty() || s.flow.len() >= 2
+    !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty() || !s.equations.is_empty() || s.flow.len() >= 2 || s.part >= 1 || !s.trained.is_empty()
 }
 
 /// Only these may be text alone: every other slide argues from something it shows (the
@@ -126,7 +194,7 @@ pub fn check_plan(p: &Plan, length: &str) -> Vec<String> {
         if !matches!(s.role.as_str(), "cover") && chars(&s.title) > limit::TITLE {
             out.push(format!("{at}: the title has {} characters, at most {}.", chars(&s.title), limit::TITLE));
         }
-        let visual = !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty() || !s.suggest.is_empty() || !s.flow.is_empty();
+        let visual = !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty() || !s.suggest.is_empty() || !s.flow.is_empty() || s.part >= 1 || !s.trained.is_empty();
         if !text_only_ok(&s.role) {
             if !has_visual(s) && s.suggest.trim().is_empty() {
                 out.push(format!("{at}: it shows nothing but text. Give it a figure, table or equation id it argues from, or `suggest` = which picture the presenter should put there."));
@@ -157,6 +225,12 @@ pub fn check_plan(p: &Plan, length: &str) -> Vec<String> {
         if s.equations.len() > limit::EQUATIONS || (!s.equations.is_empty() && s.bullets.len() > limit::BULLETS_EQ) {
             out.push(format!("{at}: {} equations with {} bullets; at most {} equations and {} bullets on one slide — make a second slide.", s.equations.len(), s.bullets.len(), limit::EQUATIONS, limit::BULLETS_EQ));
         }
+        if !s.unpaired().is_empty() {
+            out.push(format!("{at}: `explains` must name, for each equation in order, the number (1-based) of the bullet that explains it, each bullet for one equation only; it has {:?} for {} equations and {} bullets.", s.explains, s.equations.len(), s.bullets.len()));
+        }
+        if !s.trained.is_empty() && !s.kv.is_empty() {
+            out.push(format!("{at}: a training slide with `trained` shows the figure, so it carries no kv rows; put the settings on a second training slide."));
+        }
         if is_walk(s) && !s.equations.is_empty() {
             out.push(format!("{at}: a walk-through slide carries no equations; move them to a method slide with module 0 or to the loss slide."));
         }
@@ -185,6 +259,13 @@ pub fn enforce_limits(p: &mut Plan) -> Vec<String> {
     let mut out: Vec<PlanSlide> = vec![];
     for s in std::mem::take(&mut p.slides) {
         let visual = !s.figure.is_empty() || !s.table.is_empty() || !s.kv.is_empty() || !s.suggest.is_empty() || !text_only_ok(&s.role);
+        // the trained parts take the figure's room: the settings table goes to a slide of its own
+        let mut s = s;
+        let mut settings = None;
+        if !s.trained.is_empty() && !s.kv.is_empty() {
+            notes.push(format!("「{}」同時有訓練的段落與設定表，一頁放不下：設定表拆到下一頁", clip(&s.title, 30)));
+            settings = Some(PlanSlide { role: s.role.clone(), title: format!("{} (2)", s.title), kv: std::mem::take(&mut s.kv), ..Default::default() });
+        }
         if !text_only_ok(&s.role) && !has_visual(&s) && s.suggest.trim().is_empty() {
             notes.push(format!("「{}」沒有圖表可以對應，留了一個空的圖框，請放一張圖", clip(&s.title, 30)));
         }
@@ -214,6 +295,8 @@ pub fn enforce_limits(p: &mut Plan) -> Vec<String> {
             let mut first = s.clone();
             let rest: Vec<String> = first.bullets.split_off(nb.min(first.bullets.len()));
             let rest_eq: Vec<String> = first.equations.split_off(limit::EQUATIONS.min(first.equations.len()));
+            // the pairings of what stays (a continuation slide's equations are unpaired: said at the build)
+            first.fix_explains();
             notes.push(format!("「{}」有 {} 行{}，一頁放不下：拆成兩頁", clip(&s.title, 30), s.bullets.len(), if s.equations.is_empty() { String::new() } else { format!("與 {} 條方程式", s.equations.len()) }));
             // a walk-through slide's second half stays on the same part of the figure
             first.takeaway = String::new();
@@ -232,6 +315,7 @@ pub fn enforce_limits(p: &mut Plan) -> Vec<String> {
                     equations: std::mem::replace(&mut rest_eq, later_eq),
                     figure: if is_walk(&s) { s.figure.clone() } else { String::new() },
                     module: if is_walk(&s) { s.module } else { 0 },
+                    part: s.part,
                     suggest: s.suggest.clone(),
                     takeaway: if last { s.takeaway.clone() } else { String::new() },
                     ..Default::default()
@@ -243,8 +327,90 @@ pub fn enforce_limits(p: &mut Plan) -> Vec<String> {
         } else {
             out.push(s);
         }
+        out.extend(settings);
     }
     p.slides = out;
+    notes
+}
+
+/// The parts a slide may crop or mark: the main figure's, when a model looked at the figure
+/// and cut it (an equal split is a guessed box, never cropped).
+fn confirmed(parts: Option<&super::figparts::FigureParts>) -> usize {
+    parts.filter(|p| p.walk() && p.by == "model").map_or(0, |p| p.parts.len())
+}
+
+/// What `part` and `trained` name that the main figure's confirmed parts do not have, one
+/// English line each (for the corrective request, like [`check_plan`]).
+pub fn part_problems(p: &Plan, parts: Option<&super::figparts::FigureParts>) -> Vec<String> {
+    let n = confirmed(parts);
+    let mut out = vec![];
+    for (i, s) in p.slides.iter().enumerate() {
+        let at = format!("Slide {} (\"{}\")", i + 1, clip(&s.title, 40));
+        if s.part as usize > n {
+            out.push(format!("{at}: part = {} but the main figure has {n} parts; use one of them or part = 0.", s.part));
+        }
+        if s.part >= 1 && !s.figure.is_empty() {
+            out.push(format!("{at}: a slide with `part` shows that part of the main figure; leave figure = \"\"."));
+        }
+        if s.trained.iter().any(|t| *t as usize > n) {
+            out.push(format!("{at}: trained = {:?} but the main figure has {n} parts.", s.trained));
+        }
+    }
+    out
+}
+
+/// `part` and `trained` against the parts the build will get: what names no confirmed part
+/// is taken off (the slide keeps its usual layout) with one report line each (繁中), never
+/// silently. `recut`: the figure was cut again after the plan was written (方法拆幾個模組 or
+/// another main figure), so the plan's numbers no longer name the parts it meant.
+pub fn settle_parts(p: &mut Plan, parts: Option<&super::figparts::FigureParts>, recut: bool) -> Vec<String> {
+    let n = confirmed(parts);
+    let guessed = parts.is_some_and(|x| x.walk() && x.by != "model");
+    let mut notes = vec![];
+    let any_trained = p.slides.iter().any(|x| x.role == "training" && !x.trained.is_empty());
+    let mut asked = false;
+    for s in &mut p.slides {
+        let title = clip(&s.title, 30);
+        let why = |k: u32| {
+            if recut {
+                "架構圖重新分段了，原本指定的段落不再對得上".to_string()
+            } else if guessed {
+                "架構圖是平均切的，不是模型確認的範圍".to_string()
+            } else if n == 0 {
+                "架構圖沒有分段".to_string()
+            } else {
+                format!("架構圖沒有第 {k} 段（共 {n} 段）")
+            }
+        };
+        if s.part >= 1 {
+            if !s.figure.is_empty() {
+                notes.push(format!("「{title}」已經有自己的圖，沒有改放架構圖的第 {} 段", s.part));
+                s.part = 0;
+            } else if recut || s.part as usize > n {
+                notes.push(format!("「{title}」：{}，這頁沒有放裁切的圖，照原本的版面", why(s.part)));
+                s.part = 0;
+            }
+        }
+        if s.role != "training" {
+            continue;
+        }
+        if !s.trained.is_empty() {
+            let bad = s.trained.iter().copied().find(|t| *t as usize > n);
+            if recut || bad.is_some() {
+                notes.push(format!("「{title}」：{}，沒有標出訓練的段落，照原本的版面", why(bad.unwrap_or(0))));
+                s.trained.clear();
+            } else if s.trained.len() >= n {
+                notes.push(format!("「{title}」：架構圖的每一段都訓練，沒有可以標示的差別，照原本的版面"));
+                s.trained.clear();
+            } else if !s.figure.is_empty() || !s.table.is_empty() {
+                notes.push(format!("「{title}」已經有自己的圖表，沒有標出訓練的段落"));
+                s.trained.clear();
+            }
+        } else if n >= 2 && !any_trained && !asked {
+            asked = true;
+            notes.push(format!("「{title}」沒有指出訓練的是架構圖的哪一段，照原本的版面"));
+        }
+    }
     notes
 }
 
@@ -264,7 +430,9 @@ pub fn schema() -> Value {
                     "role": { "type": "string", "enum": ROLES },
                     "title": s, "bullets": list, "figure": s, "table": s, "equations": list,
                     "takeaway": s, "steps": list, "module": { "type": "integer" },
-                    "kv": { "type": "array", "items": list }, "key_row": s, "flow": list, "suggest": s, "cites": list, "notes": s
+                    "kv": { "type": "array", "items": list }, "key_row": s, "flow": list, "suggest": s,
+                    "part": { "type": "integer" }, "trained": { "type": "array", "items": { "type": "integer" } }, "explains": { "type": "array", "items": { "type": "integer" } },
+                    "cites": list, "notes": s
                 }
             } }
         }
@@ -345,7 +513,11 @@ pub fn prompt(m: &Material, length: &str, lang: &str, parts: Option<&super::figp
                 "- overview: the big picture — figure = \"{f}\", shown whole across the slide with its caption; bullets = [] (notes carry what the presenter says).\n\
 - method, the walk-through: exactly {n} slides, one for each part of that figure, in this order: {parts}. For each: module = the part's number, figure = \"{f}\", \
 2–{wl} bullets of at most {wc} characters that explain this part only (the part is shown clearly, the rest of the figure faint, and the bullets appear one by one beside it); equations = [].\n\
-- method, details (optional, after the walk-through): module = 0, figure = \"\"; equations = ids of the method's equations, bullets explain them.\n",
+- method, details (optional, after the walk-through): module = 0, figure = \"\"; equations = ids of the method's equations, bullets explain them. \
+When such a slide is about one part of that figure, part = the part's number: the program crops that part from the figure and sets it beside the bullets (never the whole figure small). \
+Only these {n} parts exist; part = 0 when the slide is about no single part.\n\
+- training, with this figure: trained = the numbers of the parts whose weights are trained (the program shows the figure with those parts clear and the rest faint, the bullets under it); \
+[] only when the paper does not say. A training slide with trained has kv = []: put the settings on a second training slide.\n",
                 f = p.figure,
                 n = p.parts.len(),
                 parts = list.join("; ")
@@ -360,6 +532,8 @@ pub fn prompt(m: &Material, length: &str, lang: &str, parts: Option<&super::figp
 - method (1–3): module = 0 and figure = \"\"; equations = ids of the method's equations; bullets explain the steps.\n"
             .to_string(),
     };
+    // with confirmed parts of the main figure, a slide about one of them takes `part`
+    let part_hint = if parts.is_some_and(|p| p.walk() && !p.figure.is_empty()) { " For a part of the main figure set part instead (see the method lines above): the program crops it." } else { "" };
     let system = format!(
         "You plan a paper-report seminar deck about one research paper, the way the presenter always builds them. \
 A program lays out the slides from your plan: you decide WHAT each slide says and which of the paper's figures, tables and equations it shows, never where things go.\n\n\
@@ -389,14 +563,15 @@ Only when a diagram cannot stand for the picture (a photo, a plot) set suggest =
 For each slide first weigh which of the three serves its point best — something the paper shows, a drawn flow, or a slot for the presenter's own picture; they are three formats, not a ranking of fallbacks, and a deck normally mixes them. \
 With flow or suggest keep to at most {lv} bullets. Never a slide of bullets alone.\n\
 - A picture earns its space: put a figure on a slide only when the bullets explain what it shows, beside it. When only one part of a large figure matters to the slide, \
-do not show the whole figure small: draw that part as a flow, or suggest = the part to crop.\n\
+do not show the whole figure small: draw that part as a flow, or suggest = the part to crop.{part_hint}\n\
 - One thing per slide: a slide explains one idea (one input, one function, one rule, one group of results). When the paper defines several inputs, a function and several rules, \
 give them their own slides instead of packing them together. Spread the content evenly: no slide crammed while the next is nearly empty.\n\
 - Each input quantity or variable is its own bullet: its plain name and a definition in everyday words (what it is measured or computed from), the symbol only after that. \
 Never a bullet of symbols or jargon alone.\n\
 - Abbreviated states, classes or categories: one bullet (or kv row) per item, with its full name, its formula or rule, and the reason that item maps to that rule.\n\
 - No \"where $x$ denotes …\" line on a slide: the meaning of the symbols goes in the notes.\n\
-- Each equation stays with its own explanation: one equation per slide, unless the same bullets explain two; then the bullets follow the equations' order.\n\
+- Each equation stays with its own explanation: one equation per slide, unless the same bullets explain two; then the bullets follow the equations' order. \
+On a slide with equations and bullets, explains = for each equation in order the number (1-based) of the bullet that explains it, each bullet for one equation: the program sets every equation with its line.\n\
 - A table: one bullet names what the rows are (each compared setting). A chart (a plot of results): one bullet says how to read it (what each panel shows, \
 what the axes, lines, colours and bands mean), then one conclusion per panel.\n\
 - takeaway: the ONE conclusion of a slide, a full sentence a listener can repeat. Results and ablation slides always have one; any other slide has one only when it reaches \
@@ -406,7 +581,7 @@ A bullet that does not lead to the slide's point is cut.\n\
 - Bullets: short, spoken. Inline math between $ signs as LaTeX. Never start a bullet with a number, a dash or a bullet sign: the program numbers and marks them.\n\
 - Never write figure, table or equation numbers (no \"Fig. 3\", \"Table 2\", \"Eq. (1)\"): the slide shows the item itself.\n\
 - figure / table / equations use ONLY ids from the material lists that are not marked as unavailable; \"\" or [] when none.\n\
-- A figure or table appears on ONE slide, the slide that talks about it (only the main figure repeats, on the overview and its walk-through slides).\n\
+- A figure or table appears on ONE slide, the slide that talks about it (only the main figure repeats, on the overview and its walk-through slides, and as a part or with the trained parts).\n\
 - cites: bibliography keys from the list for background claims from other work, at most 2 per slide.\n\
 {NOTES_SHAPE}\n\
 - Write all slide text in {language}."
@@ -570,7 +745,7 @@ pub fn drop_unusable(p: &mut Plan, m: &Material) -> Vec<String> {
             }
         }
         let before = s.equations.len();
-        s.equations.retain(|id| m.equations.iter().find(|e| &e.id == id).is_some_and(|e| e.usable() || e.image.is_some()));
+        s.retain_equations(|id| m.equations.iter().find(|e| e.id == id).is_some_and(|e| e.usable() || e.image.is_some()));
         if s.equations.len() < before {
             notes.push(format!("「{title}」有 {} 條方程式讀不出來，沒有放", before - s.equations.len()));
         }
@@ -593,6 +768,7 @@ pub fn fit_under_tables(p: &mut Plan, m: &Material) -> Vec<String> {
         let room = ((68.0 - 5.2 * rows as f64 - take - 3.0) / 6.0).floor().max(0.0) as usize;
         if s.bullets.len() > room {
             let moved = s.bullets.split_off(room);
+            s.fix_explains();
             notes.push(format!("「{}」的表格有 {rows} 列，下面只放得下 {room} 行：其餘 {} 行移到講者備註", clip(&s.title, 30), moved.len()));
             s.notes = [s.notes.trim().to_string(), moved.join("\n")].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("\n");
         }
@@ -633,7 +809,8 @@ pub fn clean_plan(mut p: Plan, m: &Material) -> Plan {
         if !tabs.contains(s.table.as_str()) {
             s.table.clear();
         }
-        s.equations.retain(|e| eqs.contains(e.as_str()));
+        s.explains.truncate(s.equations.len());
+        s.retain_equations(|e| eqs.contains(e));
         s.cites.retain(|c| m.refs.contains_key(c));
         s.title = strip_typed_refs(&s.title);
         s.takeaway = strip_typed_refs(&s.takeaway);
@@ -641,7 +818,19 @@ pub fn clean_plan(mut p: Plan, m: &Material) -> Plan {
             *b = strip_lead(&strip_typed_refs(b));
         }
         s.takeaway = strip_lead(&s.takeaway);
-        s.bullets.retain(|b| !b.is_empty());
+        s.retain_bullets(|b| !b.is_empty());
+        s.fix_explains();
+        // the trained parts belong to the training slide; a part to a slide that is not itself
+        // the overview or a walk-through of the figure
+        if s.role != "training" {
+            s.trained.clear();
+        }
+        s.trained.retain(|t| *t >= 1);
+        s.trained.sort_unstable();
+        s.trained.dedup();
+        if matches!(s.role.as_str(), "cover" | "thanks" | "takeaway" | "overview") || (s.role == "method" && s.module >= 1) {
+            s.part = 0;
+        }
         s.kv.retain(|r| r.len() >= 2 && !r[0].trim().is_empty());
     }
     if p.slides.first().map(|s| s.role.as_str()) != Some("cover") {
@@ -660,6 +849,10 @@ pub fn clean_plan(mut p: Plan, m: &Material) -> Plan {
             } else if s.figure == f {
                 s.figure.clear();
             }
+        }
+        // a part of the main figure, or its trained parts: the field names the figure already
+        for s in p.slides.iter_mut().filter(|s| (s.part >= 1 || !s.trained.is_empty()) && s.figure == f) {
+            s.figure.clear();
         }
     }
     p
@@ -843,5 +1036,117 @@ mod pending_tests {
         assert!(system.contains(PENDING_RULE) && user.contains("| Ours | 0.72 | [pending] |"));
         let plain = super::super::source::Material { title: "x".into(), ..Default::default() };
         assert!(!prompt(&plain, "standard", "en", None).0.contains(PENDING_RULE), "no marks, no rule");
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    use crate::todeck::figparts::{FigureParts, Part};
+
+    fn three(by: &str) -> FigureParts {
+        FigureParts { figure: "fig1".into(), split: true, axis: "x".into(), cuts: vec![1.0 / 3.0, 2.0 / 3.0], parts: (0..3).map(|i| Part { label: format!("P{i}"), about: String::new() }).collect(), slides: vec![], by: by.into(), why: String::new() }
+    }
+
+    #[test]
+    fn the_pairing_follows_its_equations_and_lines_through_every_cut() {
+        let mut s = PlanSlide { role: "loss".into(), bullets: vec!["a".into(), "".into(), "c".into()], equations: vec!["eq1".into(), "eq99".into(), "eq2".into()], explains: vec![3, 1, 1], ..Default::default() };
+        assert_eq!((s.explained_by(0), s.explained_by(1)), (Some(2), None), "a bullet named for two equations pairs neither");
+        // an equation the paper does not have goes with its pairing; an empty bullet shifts the numbers
+        s.retain_equations(|e| e != "eq99");
+        assert_eq!((s.equations.clone(), s.explains.clone()), (vec!["eq1".to_string(), "eq2".into()], vec![3, 1]));
+        s.retain_bullets(|b| !b.is_empty());
+        assert_eq!((s.bullets.len(), s.explains.clone(), s.explained_by(0), s.explained_by(1)), (2, vec![2, 1], Some(1), Some(0)));
+        assert!(s.unpaired().is_empty());
+        // the bullet goes: its equation is unpaired, the other keeps its line
+        s.retain_bullets(|b| b != "a");
+        assert_eq!((s.explains.clone(), s.unpaired()), (vec![1, 0], vec![1]));
+        // lines cut from the end
+        let mut t = PlanSlide { bullets: vec!["a".into()], equations: vec!["eq1".into()], explains: vec![4, 2], ..Default::default() };
+        t.fix_explains();
+        assert_eq!(t.explains, [0]);
+        // the plan as the model wrote it: cleaned with the material, split over the limits
+        let m = Material { equations: vec![crate::todeck::source::Eq { id: "eq1".into(), latex: "a=b".into(), ..Default::default() }], ..Default::default() };
+        let p = Plan { slides: vec![PlanSlide { role: "loss".into(), title: "Loss".into(), bullets: vec!["Fig. 2".into(), "Why".into()], equations: vec!["eq99".into(), "eq1".into()], explains: vec![1, 2], ..Default::default() }], ..Default::default() };
+        let p = clean_plan(p, &m);
+        assert_eq!((p.slides[1].bullets.clone(), p.slides[1].equations.clone(), p.slides[1].explains.clone()), (vec!["Why".to_string()], vec!["eq1".to_string()], vec![1]));
+        // no pairing, or a wrong one, is sent back; a slide of equations without lines has nothing to pair
+        let ok = |i: usize| PlanSlide { role: "loss".into(), title: format!("Loss {i}"), bullets: vec!["Line".into()], equations: vec!["eq1".into()], explains: vec![1], ..Default::default() };
+        let mut q = Plan { slides: (0..12).map(ok).collect(), ..Default::default() };
+        assert!(check_plan(&q, "standard").is_empty(), "{:?}", check_plan(&q, "standard"));
+        q.slides[1].explains = vec![];
+        q.slides[2].explains = vec![5];
+        q.slides[3].bullets.clear();
+        q.slides[3].explains.clear();
+        let why = check_plan(&q, "standard");
+        assert!(why.len() == 2 && why[0].contains("Slide 2") && why[0].contains("`explains`") && why[1].contains("Slide 3"), "{why:?}");
+    }
+
+    #[test]
+    fn a_part_or_trained_parts_the_figure_does_not_have_leave_the_slide_with_a_note() {
+        let s = |role: &str, title: &str| PlanSlide { role: role.into(), title: title.into(), bullets: vec!["Line".into()], ..Default::default() };
+        let plan = || Plan {
+            slides: vec![
+                PlanSlide { part: 2, ..s("method", "Good part") },
+                PlanSlide { part: 4, ..s("method", "No such part") },
+                PlanSlide { part: 1, figure: "fig2".into(), ..s("visual", "Own figure") },
+                PlanSlide { trained: vec![1, 2], ..s("training", "Trained") },
+            ],
+            ..Default::default()
+        };
+        let model = three("model");
+        let mut p = plan();
+        assert_eq!(part_problems(&p, Some(&model)).len(), 2, "{:?}", part_problems(&p, Some(&model)));
+        let notes = settle_parts(&mut p, Some(&model), false);
+        assert_eq!((p.slides[0].part, p.slides[1].part, p.slides[2].part, p.slides[3].trained.clone()), (2, 0, 0, vec![1, 2]));
+        assert!(notes.len() == 2 && notes[0].contains("No such part") && notes[0].contains("架構圖沒有第 4 段（共 3 段）") && notes[1].contains("Own figure"), "{notes:?}");
+        // an unknown trained part, every part trained, none named: the usual layout, each said
+        for (trained, word) in [(vec![2, 5], "架構圖沒有第 5 段"), (vec![1, 2, 3], "每一段都訓練"), (vec![], "沒有指出訓練的是架構圖的哪一段")] {
+            let mut p = plan();
+            p.slides[3].trained = trained;
+            let notes = settle_parts(&mut p, Some(&model), false);
+            assert!(p.slides[3].trained.is_empty() && notes.iter().any(|n| n.contains("Trained") && n.contains(word)), "{word}: {notes:?}");
+        }
+        // an equal split is a guessed box, a figure cut again no longer has the parts the plan named, no parts at all
+        for (parts, recut, word) in [(Some(three("equal")), false, "平均切的"), (Some(three("model")), true, "重新分段"), (None, false, "沒有分段")] {
+            let mut p = plan();
+            let notes = settle_parts(&mut p, parts.as_ref(), recut);
+            assert!(p.slides.iter().all(|s| s.part == 0 && s.trained.is_empty()), "{word}");
+            assert!(notes.iter().filter(|n| n.contains(word)).count() >= 2, "{word}: {notes:?}");
+        }
+        // the trained parts take the figure's room: the settings table gets its own slide, said so
+        let mut p = plan();
+        p.slides[3].kv = vec![vec!["Epochs".into(), "30".into()]];
+        assert!(check_plan(&p, "standard").iter().any(|x| x.contains("carries no kv")));
+        let notes = enforce_limits(&mut p);
+        assert_eq!((p.slides[3].kv.len(), p.slides[4].kv.len(), p.slides[4].title.as_str(), p.slides[4].role.as_str()), (0, 1, "Trained (2)", "training"));
+        assert!(notes.iter().any(|n| n.contains("設定表拆到下一頁")), "{notes:?}");
+        // cleaning: trained only on the training slide, no part on a walk-through or the overview
+        let m = Material::default();
+        let c = clean_plan(Plan { slides: vec![PlanSlide { part: 1, trained: vec![2, 2, 0, 1], ..s("training", "T") }, PlanSlide { part: 1, trained: vec![1], module: 2, ..s("method", "W") }, PlanSlide { part: 2, ..s("overview", "O") }], ..Default::default() }, &m);
+        assert_eq!((c.slides[1].part, c.slides[1].trained.clone(), c.slides[2].part, c.slides[2].trained.len(), c.slides[3].part), (1, vec![1, 2], 0, 0, 0));
+        assert!(has_visual(&PlanSlide { part: 1, ..Default::default() }) && has_visual(&PlanSlide { trained: vec![1], ..Default::default() }));
+        // a plan that names the main figure AND a part of it: the part stands, the figure is implied
+        let m = Material { figures: vec![crate::todeck::source::Fig { id: "fig1".into(), ..Default::default() }], ..Default::default() };
+        let mut c = clean_plan(Plan { slides: vec![PlanSlide { figure: "fig1".into(), ..s("overview", "O") }, PlanSlide { figure: "fig1".into(), part: 2, ..s("loss", "L") }, PlanSlide { figure: "fig1".into(), trained: vec![1], ..s("training", "T") }], ..Default::default() }, &m);
+        assert_eq!((c.slides[2].figure.as_str(), c.slides[2].part, c.slides[3].figure.as_str()), ("", 2, ""));
+        assert!(settle_parts(&mut c, Some(&model), false).is_empty() && c.slides[2].part == 2 && c.slides[3].trained == [1]);
+        // a part slide over the line limit: its second half keeps the part
+        let mut long = Plan { slides: vec![PlanSlide { part: 2, bullets: (0..5).map(|i| format!("Line {i}")).collect(), ..s("method", "Long") }], ..Default::default() };
+        enforce_limits(&mut long);
+        assert_eq!(long.slides.iter().map(|s| (s.part, s.bullets.len())).collect::<Vec<_>>(), [(2, 3), (2, 2)]);
+    }
+
+    #[test]
+    fn the_planner_is_told_the_three_fields() {
+        let m = Material { title: "x".into(), ..Default::default() };
+        let (with, _) = prompt(&m, "standard", "en", Some(&three("model")));
+        for rule in ["part = the part's number", "Only these 3 parts exist", "trained = the numbers of the parts whose weights are trained", "A training slide with trained has kv = []", "explains = for each equation in order the number (1-based) of the bullet that explains it", "For a part of the main figure set part instead"] {
+            assert!(with.contains(rule), "{rule}");
+        }
+        let (without, _) = prompt(&m, "standard", "en", None);
+        assert!(without.contains("explains = for each equation") && !without.contains("trained =") && !without.contains("part = the part"), "no parts, no part fields");
+        let props = &schema()["properties"]["slides"]["items"]["properties"];
+        assert!(props["part"]["type"] == "integer" && props["trained"]["type"] == "array" && props["explains"]["type"] == "array");
     }
 }
