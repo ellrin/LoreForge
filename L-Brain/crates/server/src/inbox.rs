@@ -348,15 +348,27 @@ pub async fn work_once(s: &Shared) -> bool {
         Ok(Err(why)) => return fail(&why),
         Err(_) => return fail("模型五分鐘沒有回答，先跳過這一句；可以再試一次"),
     };
-    match p.read(&e, &cx, &answer.value) {
-        Ok(made) => {
-            if let Err(err) = i.store.ready(&e.id, made, &answer.engine) {
-                eprintln!("kb-server inbox: {err}");
+    let (made, engine) = match p.read(&e, &cx, &answer.value) {
+        Ok(made) => (made, answer.engine),
+        Err(first) => {
+            // one more round with what was wrong (too many holes, a place the tree lacks, a
+            // rewritten sentence): a model usually fixes it when told; a second refusal is the failure
+            let user = format!("{}\n\nYour previous reply was refused by the checker: {first}\nPrevious reply: {}\nReply again, fixing exactly that and keeping every other rule.", req.user, answer.value);
+            let call = s.llm.complete_task(TASK, &req.system, &user, req.schema.clone());
+            let again = match tokio::time::timeout(std::time::Duration::from_secs(300), call).await {
+                Ok(Ok(a)) => a,
+                _ => return fail(&first),
+            };
+            match p.read(&e, &cx, &again.value) {
+                Ok(made) => (made, again.engine),
+                Err(why) => return fail(&why),
             }
-            true
         }
-        Err(why) => fail(&why),
+    };
+    if let Err(err) = i.store.ready(&e.id, made, &engine) {
+        eprintln!("kb-server inbox: {err}");
     }
+    true
 }
 
 /// At start: entries left `working` by a stop go back to waiting; then entries are worked on one

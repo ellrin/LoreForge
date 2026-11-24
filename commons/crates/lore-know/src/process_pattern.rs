@@ -93,15 +93,20 @@ impl Processor for PatternProcessor {
         }
 
         let valid = leaf_paths(&cx.tree);
+        let given = strings(reply.get("places"));
         let mut places: Vec<String> = vec![];
-        for p in strings(reply.get("places")) {
-            let p = p.trim().to_string();
-            if valid.contains(&p) && !places.contains(&p) && places.len() < MAX_PLACES {
+        for p in &given {
+            if let Some(p) = find_place(p, &valid)
+                && !places.contains(&p)
+                && places.len() < MAX_PLACES
+            {
                 places.push(p);
             }
         }
         if places.is_empty() {
-            return Err("樹上沒有對應的位置".into());
+            // say what was given, so a wrong tree or a model that writes places its own way shows
+            let shown = given.iter().take(3).cloned().collect::<Vec<_>>().join("、");
+            return Err(if valid.is_empty() { "這一類沒有樹，沒有位置可以放".to_string() } else if shown.is_empty() { "沒有給位置".to_string() } else { format!("樹上沒有這個位置：{shown}") });
         }
         let section = places[0].split('/').next().unwrap_or("").to_string();
 
@@ -207,6 +212,31 @@ fn tree_lines(tree: &Value) -> Vec<String> {
         }
     }
     out
+}
+
+/// The tree's path a model meant by `given`: the path itself, or the same with another
+/// separator (`›`, `>`, `／`, spaces around `/`), or, when the model left levels out, the one
+/// path that ends with what it gave (the last level alone, or the last two). `None` when
+/// nothing or more than one path fits.
+fn find_place(given: &str, valid: &[String]) -> Option<String> {
+    let norm = |s: &str| s.replace(['›', '>', '／', '→', '\\'], "/").split('/').map(str::trim).filter(|x| !x.is_empty()).collect::<Vec<_>>().join("/");
+    let g = norm(given);
+    if g.is_empty() {
+        return None;
+    }
+    if let Some(p) = valid.iter().find(|p| **p == g) {
+        return Some(p.clone());
+    }
+    let fold = |s: &str| s.to_lowercase().replace(' ', "");
+    let gf = fold(&g);
+    if let Some(p) = valid.iter().find(|p| fold(p) == gf) {
+        return Some(p.clone());
+    }
+    let tail: Vec<&String> = valid.iter().filter(|p| fold(p).ends_with(&format!("/{gf}"))).collect();
+    if tail.len() == 1 {
+        return Some(tail[0].clone());
+    }
+    None
 }
 
 /// Every three-level path of the tree.
@@ -371,6 +401,20 @@ fn content_words(s: &str) -> std::collections::BTreeSet<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_place_written_another_way_is_still_found() {
+        let valid: Vec<String> = ["Method/訓練/超參數設定", "Method/訓練/訓練環境與硬體", "Method/資料/資料數量", "Result/主要結果/數字陳述", "Discussion/界線/限制", "Method/評估/限制"].iter().map(|s| s.to_string()).collect();
+        let f = |g: &str| super::find_place(g, &valid);
+        assert_eq!(f("Method/訓練/超參數設定").as_deref(), Some("Method/訓練/超參數設定"));
+        assert_eq!(f("Method › 訓練 › 超參數設定").as_deref(), Some("Method/訓練/超參數設定"));
+        assert_eq!(f("method / 訓練 / 訓練環境與硬體").as_deref(), Some("Method/訓練/訓練環境與硬體"));
+        assert_eq!(f("訓練/超參數設定").as_deref(), Some("Method/訓練/超參數設定"), "the section left out");
+        assert_eq!(f("資料數量").as_deref(), Some("Method/資料/資料數量"), "only the last level");
+        assert_eq!(f("限制"), None, "two paths could be meant: neither is guessed");
+        assert_eq!(f("Method/訓練/不存在"), None);
+        assert_eq!(f(""), None);
+    }
+
     use super::*;
 
     fn tree() -> Value {
@@ -478,7 +522,7 @@ mod tests {
         let m = PatternProcessor.read(&entry(S), &cx(vec![]), &r).unwrap();
         assert_eq!(m.item.tags[facet::PLACE], ["Result/主要結果/數值比較", "Introduction/本文/貢獻", "Introduction/本文/目標"]);
         r["places"] = json!(["Nope/x/y", "Introduction"]);
-        assert_eq!(PatternProcessor.read(&entry(S), &cx(vec![]), &r).unwrap_err(), "樹上沒有對應的位置");
+        assert_eq!(PatternProcessor.read(&entry(S), &cx(vec![]), &r).unwrap_err(), "樹上沒有這個位置：Nope/x/y、Introduction", "it says what was given");
         r["places"] = json!(null);
         assert!(PatternProcessor.read(&entry(S), &cx(vec![]), &r).is_err());
     }
