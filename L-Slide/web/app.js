@@ -13,7 +13,7 @@ const S = {
   info: null, name: null, deck: null, style: null, backdrops: [], status: {},
   cur: null, sel: [], zoom: 1, fit: true, snap: true, grid: false, tool: "select",
   editing: null, editingCell: null, crop: null, latex: new Map(), latexWant: new Set(),
-  thumbs: new WeakMap(), clip: null, composing: false, textSel: null,
+  thumbs: new WeakMap(), picks: [], clip: null, composing: false, textSel: null,
 };
 
 // ── Server ────────────────────────────────────────────────────────────────
@@ -428,6 +428,7 @@ function renderThumbs(force = false) {
     }
     t.querySelector(".no").textContent = i + 1;
     t.classList.toggle("hidden-slide", !!sl.hidden);
+    t.classList.toggle("picked", S.picks.includes(sl.uid)); // also selected for a hand-off (⌘ / Shift click)
     learnBadge(t, sl); // 不熟
     t.setAttribute("aria-current", sl.uid === S.cur ? "true" : "false");
     box.append(t);
@@ -1875,7 +1876,7 @@ function onKey(ev) {
   if (mod && k.toLowerCase() === "s" && ev.shiftKey) { ev.preventDefault(); saveAs(); return; }
   if (mod && k.toLowerCase() === "o") { ev.preventDefault(); openFile(); return; }
   if (k === "Delete" || k === "Backspace") { if (S.sel.length) { ev.preventDefault(); deleteSel(); } return; }
-  if (k === "Escape") { if (poly) { poly = null; setTool("select"); renderOverlay(); return; } S.crop = null; S.sel = []; setTool("select"); renderOverlay(); renderSide(); return; }
+  if (k === "Escape") { if (poly) { poly = null; setTool("select"); renderOverlay(); return; } S.crop = null; S.sel = []; if (S.picks.length) { S.picks = []; renderThumbs(); } setTool("select"); renderOverlay(); renderSide(); return; }
   if (k === "Enter" && S.crop) { S.crop = null; renderOverlay(); return; }
   if (k === "Enter" && poly) { finishPolygon(); return; }
   if (k === "Enter" && S.sel.length === 1) { const o = selObjs()[0]; if (o.text) { ev.preventDefault(); enterEdit(o.id); } return; }
@@ -1933,6 +1934,7 @@ function gotoSlide(uid) {
   if (S.editing || S.editingCell) exitEdit();
   S.cur = uid;
   S.sel = [];
+  S.picks = [];
   S.crop = null;
   const u = new URL(location.href);
   u.searchParams.set("s", uid);
@@ -1972,12 +1974,20 @@ async function hideSlide() {
 
 function wireSorter() {
   const box = $("#thumbs");
-  box.addEventListener("click", (e) => { const t = e.target.closest(".thumb"); setFocus("slides"); if (t) gotoSlide(t.dataset.uid); });
+  box.addEventListener("click", (e) => {
+    const t = e.target.closest(".thumb");
+    setFocus("slides");
+    if (!t) return;
+    // ⌘ / Shift click: also selected for a hand-off; the open slide stays (the buttons, keys and drag act on it alone)
+    if (e.metaKey || e.ctrlKey || e.shiftKey) { S.picks = pickSlides(S.deck.slides.map((s) => s.uid), S.cur, S.picks, t.dataset.uid, e.shiftKey); renderThumbs(); }
+    else gotoSlide(t.dataset.uid);
+  });
   box.addEventListener("contextmenu", (e) => {
     const t = e.target.closest(".thumb");
     if (!t) return;
     e.preventDefault();
-    LoreShell.menu({ x: e.clientX, y: e.clientY }, [handItem([t.dataset.uid])]);
+    const set = [S.cur, ...S.picks].filter((u) => S.deck.slides.some((s) => s.uid === u));
+    LoreShell.menu({ x: e.clientX, y: e.clientY }, [handItem(set.includes(t.dataset.uid) ? set : [t.dataset.uid])]);
   });
   let dragUid = null;
   box.addEventListener("dragstart", (e) => { dragUid = e.target.closest(".thumb")?.dataset.uid; e.dataTransfer.effectAllowed = "move"; });

@@ -127,6 +127,17 @@ function pageSlides(slides, uids, paraText) {
   });
 }
 
+/** The sorter's extra selection (for a hand-off) after a ⌘-click on `uid` (in or out) or a Shift-click
+ *  (`range`: the open slide through `uid`); the open slide `cur` is always selected, never an extra. */
+function pickSlides(order, cur, picks, uid, range) {
+  if (range) {
+    const a = order.indexOf(cur), b = order.indexOf(uid);
+    return a < 0 || b < 0 ? picks : order.slice(Math.min(a, b), Math.max(a, b) + 1).filter((u) => u !== cur);
+  }
+  if (uid === cur) return picks;
+  return picks.includes(uid) ? picks.filter((u) => u !== uid) : [...picks, uid];
+}
+
 /** The slide to show after ops were applied: the first one an op names (changed or inserted) that
  *  is in the deck now, or null. */
 function pagedSlide(ops, slides) {

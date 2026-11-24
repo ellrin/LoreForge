@@ -57,6 +57,7 @@ button.chip { cursor: pointer; }
 .editor-canvas .obj.ph-empty[data-ph="subTitle"]:not(.editing)::after { content: "副標"; }
 .editor-canvas .obj.ph-covered::after { content: none !important; }
 .thumb[aria-current="true"] { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent-text); }
+.thumb.picked { background: var(--accent-soft); }
 .thumb.hidden-slide .frame { opacity: .45; }
 .thumb.hidden-slide .no::after { content: "隱"; display: block; color: var(--warn); font-size: 10px; }
 .thumb.drop-before { box-shadow: 0 -3px 0 var(--accent); }
