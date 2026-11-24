@@ -124,6 +124,33 @@ async fn note_draft_runs_le_note_with_the_conversation_and_checks_the_latex() {
 }
 
 #[tokio::test]
+async fn note_draft_applies_the_shared_wording_rule_to_english_lines_only() {
+    let body = "\\section*{問題}\nThe soft-max with cross-entropy is data-driven, not pre-trained.\n中文的 soft-max 不改。\nSee \\cite{soft-max} and $soft-max$.\n\\[\nsoft-max\n\\]";
+    let reply = json!({ "title": "A soft-max note", "body": body }).to_string();
+    let wording = "[punctuation]\nallowed = [\".\", \",\"]\nspellings = [\"softmax\", \"cross entropy\"]\nhyphen_whitelist = []\n";
+    let a = App::new(&[&reply], None, None);
+    let shared = a.root.join("private/shared/style");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("wording.toml"), wording).unwrap();
+    let (s, v) = a.post("/api/actions/note/draft", json!({ "messages": talk() })).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let got = v["body"].as_str().unwrap();
+    assert!(got.contains("The softmax with cross entropy is data driven, not pre-trained."), "{got}");
+    assert!(got.contains("中文的 soft-max 不改。") && got.contains("\\cite{soft-max} and $soft-max$.") && got.contains("\\[\nsoft-max\n\\]"), "{got}");
+    assert_eq!(v["title"], "A soft-max note");
+    let f = v["findings"].as_array().unwrap();
+    assert!(f.iter().any(|x| x["code"] == "wording" && x["severity"] == "warning" && x["message"].as_str().unwrap().contains("pre-trained")), "{v}");
+    assert_eq!(v["blocking"], false);
+    assert!(a.mock.seen.lock().unwrap()[0].system.contains("softmax"), "the rule is in the prompt");
+
+    // no shared file: the draft is exactly what the model wrote
+    let a = App::new(&[&reply], None, None);
+    let (_, v) = a.post("/api/actions/note/draft", json!({ "messages": talk() })).await;
+    assert_eq!(v["body"].as_str().unwrap(), body);
+    assert!(!a.mock.seen.lock().unwrap()[0].system.contains("softmax"));
+}
+
+#[tokio::test]
 async fn note_draft_without_a_model_offers_the_other_engine() {
     let a = App::new(&[], None, None);
     let (s, v) = a.post("/api/actions/note/draft", json!({ "messages": talk() })).await;

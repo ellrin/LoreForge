@@ -269,6 +269,36 @@ fn note_schema() -> Value {
     })
 }
 
+/// The shared wording rule as a wording-only guard (None: no rule, nothing changes).
+fn wording_guard(home: &lore_home::Home) -> Option<lore_notation::punct::Guard> {
+    let raw = std::fs::read_to_string(home.shared_file("style/wording.toml")?).ok()?;
+    let rule = lore_notation::punct::Rule::from_toml(&raw)?.wording_only();
+    rule.enabled().then(|| lore_notation::punct::Guard { rule, exempt: vec![] })
+}
+
+/// The note's English lines through the wording guard, line by line: a line with Chinese and
+/// the lines of a display formula or verbatim block are left alone (the guard masks inline
+/// maths, `\cite`, `\ref`, `\label` and macros itself). Returns what it could not fix.
+fn fix_wording(body: &str, guard: &lore_notation::punct::Guard) -> (String, Vec<Finding>) {
+    let has_han = |s: &str| s.chars().any(|c| ('\u{3400}'..='\u{9fff}').contains(&c));
+    let (mut out, mut left, mut raw) = (Vec::new(), Vec::new(), false);
+    for line in body.split('\n') {
+        let t = line.trim();
+        let opens = t.starts_with("\\[") || t.starts_with("$$") || t.starts_with("\\begin{equation") || t.starts_with("\\begin{align") || t.starts_with("\\begin{verbatim") || t.starts_with("\\begin{eqnarray");
+        let closes = t.ends_with("\\]") || t.ends_with("$$") || t.starts_with("\\end{equation") || t.starts_with("\\end{align") || t.starts_with("\\end{verbatim") || t.starts_with("\\end{eqnarray");
+        let single = opens && closes && t.len() > 2;
+        if raw || opens || t.is_empty() || has_han(line) {
+            if (opens && !single) || (opens && !closes) { raw = true } else if closes { raw = false }
+            out.push(line.to_string());
+            continue;
+        }
+        let (fixed, v) = guard.finish(line);
+        left.extend(v.iter().map(|v| Finding { code: "wording".into(), severity: "warning".into(), message: format!("用字規則還有一處沒有改掉（{}）", v.describe()) }));
+        out.push(fixed);
+    }
+    (out.join("\n"), left)
+}
+
 async fn note_draft(State(s): State<Shared>, body: Option<Json<DraftBody>>) -> Response {
     let Some(Json(b)) = body else { return bad(StatusCode::BAD_REQUEST, "要送 { messages }") };
     let ch = s.character(b.character.as_deref());
@@ -278,6 +308,10 @@ async fn note_draft(State(s): State<Shared>, body: Option<Json<DraftBody>>) -> R
     };
     let cands = candidates(&s, &b.messages).await;
     let mut system = NOTE_RULES.to_string();
+    let guard = wording_guard(&s.home);
+    if let Some(g) = &guard {
+        system.push_str(&format!("\n\n英文的部分（術語、英文句子）請遵守：{}", g.rule.prompt_line().trim()));
+    }
     if !cands.is_empty() {
         system.push_str(&format!("\n\n使用者自己的知識卡裡和這段對話有關的（kb 只能填這些 id）：\n{}", candidate_lines(&cands)));
     }
@@ -287,7 +321,12 @@ async fn note_draft(State(s): State<Shared>, body: Option<Json<DraftBody>>) -> R
     };
     let body = v["body"].as_str().unwrap_or_default().trim().to_string();
     let kb: Vec<String> = strings(&v["kb"]).into_iter().filter(|id| cands.iter().any(|c| &c.id == id)).collect();
-    let findings = check(&body);
+    let (body, left) = match &guard {
+        Some(g) => fix_wording(&body, g),
+        None => (body, vec![]),
+    };
+    let mut findings = check(&body);
+    findings.extend(left);
     Json(json!({
         "title": clip(v["title"].as_str().unwrap_or_default(), TITLE_CHARS),
         "body": body,
