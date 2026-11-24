@@ -150,6 +150,17 @@ async fn edit(State(s): State<Shared>, RawQuery(q): RawQuery, body: Bytes) -> Re
 async fn step(State(s): State<Shared>, id: String, what: &str, timeout: Duration, RawQuery(q): RawQuery, body: Bytes) -> Response {
     let Some(r) = s.page.current() else { return err(StatusCode::CONFLICT, NONE) };
     let path = format!("{}/{}/{what}", base(&r), seg(&id));
+    // the app hands an apply to its page through this request: it needs to know which one
+    let body = if what == "apply" {
+        let mut b = match serde_json::from_slice::<Value>(&body) {
+            Ok(Value::Object(b)) => b,
+            _ => Default::default(),
+        };
+        b.insert("request".into(), json!(r.request));
+        Bytes::from(Value::Object(b).to_string())
+    } else {
+        body
+    };
     let res = proxy(&r, Method::POST, &path, timeout, q, body).await;
     if what == "apply" && res.status() == StatusCode::GONE {
         // the app ended it: so does L-Echo

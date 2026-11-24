@@ -128,7 +128,7 @@ async fn page_request_proxies_and_end() {
     assert_eq!(v, json!({ "id": "e1", "got": { "instruction": "把這頁拆成兩頁", "engine": "claude", "slides": ["s0", "s1"] } }));
     // slides the page sent are kept as they are
     call(&s, "POST", "/api/page/edit", json!({ "instruction": "改備忘稿", "slides": ["s1"] })).await;
-    // revise, apply, undo: body unchanged
+    // revise and undo: body unchanged; apply: the request id added
     assert_eq!(call(&s, "POST", "/api/page/edit/e1/revise", json!({ "instruction": "短一點" })).await, (StatusCode::OK, json!({ "ok": true, "got": { "instruction": "短一點" } })));
     assert_eq!(call(&s, "POST", "/api/page/edit/e1/apply", json!({})).await, (StatusCode::OK, json!({ "ok": true, "message": "已套用" })));
     assert_eq!(call(&s, "POST", "/api/page/edit/e1/undo", json!({})).await.0, StatusCode::OK);
@@ -147,6 +147,8 @@ async fn page_request_proxies_and_end() {
             ("GET", "/api/decks/deck%20a/page-edit/e1/image/after-1"),
         ]);
         assert_eq!(l[1].2, json!({ "instruction": "改備忘稿", "slides": ["s1"] }));
+        // the apply carries this request's id: the app hands the ops to its page through it
+        assert_eq!(l[3].2, json!({ "request": "r1" }));
     }
     // an edit body that is not a JSON object: 400, nothing sent
     log.lock().unwrap().clear();
