@@ -202,3 +202,25 @@ select.h-plus { padding: 5px 8px; font-weight: 500; }
 .fam-row button[data-view][aria-current="page"] { background: none; }
 .h-sum { margin: 16px 0 4px; line-height: 1.75; font-size: 14px; }
 .h-tag.st-learning, .h-tag.st-none, .h-tag.st-stale { background: none; border: 1px solid var(--line-strong); color: var(--muted); }
+
+/* 待同意 */
+.h-props { padding: 16px 24px 40px; height: 100%; overflow: auto; max-width: 980px; }
+.h-prop { margin-bottom: 18px; }
+.h-prop h3 { margin: 0 0 10px; font-size: 15px; }
+.h-ch { display: grid; grid-template-columns: 18px 44px minmax(0, 1.2fr) minmax(0, 1fr); gap: 10px; align-items: center; padding: 7px 4px; border-top: 1px solid var(--line); font-size: 13px; }
+.h-ch .op { font-size: 11px; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 4px; text-align: center; padding: 1px 0; }
+.h-ch .op.remove { color: var(--err); border-color: var(--err); }
+.h-ch .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.h-ch .t small { color: var(--faint); margin-left: 8px; }
+.h-ch .d { color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.h-ch.bad .d { color: var(--err); }
+.h-done { display: flex; align-items: center; gap: 12px; padding: 8px 4px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.h-done button { margin-left: auto; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 3px 10px; font-size: 12px; }
+/* 外部來源 */
+.h-srow { display: flex; align-items: center; gap: 14px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.h-srow:first-of-type { border-top: 0; }
+.h-srow .d { color: var(--faint); font-size: 12px; margin-left: auto; }
+.h-srow.add { border-top: 0; padding-top: 4px; }
+.h-srow .own { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.h-srcout { font-size: 12px; color: var(--muted); }
+.h-srcout .bad { color: var(--err); }

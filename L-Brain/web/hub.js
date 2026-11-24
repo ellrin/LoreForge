@@ -65,7 +65,7 @@ const Hub = (() => {
   // ── the cover ──
   const ym = (iso) => iso.slice(0, 7).replace("-", "/");
   const weekTip = (iso) => `${iso.replaceAll("-", "/")} 那一週`;
-  function cover() {
+  function cover(sources) {
     const st = S.stats, fams = st.families, total = st.total || fams.reduce((n, f) => n + f.count, 0);
     const ws = st.week_starts ?? [], nW = ws.length || 12;
     // a month is named once, where it begins
@@ -103,12 +103,12 @@ const Hub = (() => {
         el("div", { class: "h-two" },
           el("a", { class: `h-box h-stat ${st.proposals ? "hot" : ""}`, href: "#/hub/proposals" }, el("div", { class: "h-cap" }, "待你同意"), el("b", {}, st.proposals ?? 0), el("span", {}, "批")),
           el("a", { class: "h-box h-stat", href: "#/review" }, el("div", { class: "h-cap" }, "卡到期"), el("b", {}, S.cards.due ?? 0), el("span", {}, "張")))),
-      el("div", { class: "h-box", style: "padding:16px 18px 6px" },
+      el("div", { class: "h-col" }, el("div", { class: "h-box", style: "padding:16px 18px 6px" },
         el("table", { class: "h-table" },
           el("tr", {}, el("th", {}, "類別"), el("th", { style: "text-align:right;padding-right:22px" }, "數量"), el("th", {}, "佔比與細項"),
             el("th", {}, "新增", marks.length ? el("span", { class: "h-ym" }, marks.length > 1 ? `${marks[0][1]} – ${marks.at(-1)[1]}` : marks[0][1]) : null),
             el("th", { style: "text-align:right" }, "30 天用到"), el("th", { style: "text-align:right;padding-right:6px" }, "缺口")),
-          fams.map(row))));
+          fams.map(row))), sourcesBox(sources)));
     tips(node);
     return node;
   }
@@ -335,14 +335,64 @@ const Hub = (() => {
     } catch (e) { S.host.fail?.(e); }
   }
 
+  // ── 待同意: what an AI or a tool proposes; nothing is written until the author says so ──
+  const OP = { add: "新增", update: "修改", remove: "移除" };
+  async function proposals() {
+    const [open, done] = await Promise.all([api("GET", "/api/hub/proposals?state=open"), api("GET", "/api/hub/proposals?state=applied")]);
+    const one = async (p) => {
+      const d = await api("GET", `/api/hub/proposals/${enc(p.id)}`), chosen = new Set(d.shown.map((x) => x.index));
+      const line = (x) => { const it = x.after ?? x.before ?? {}; const fig = it.thumb || it.format === "figure";
+        return el("label", { class: `h-ch ${x.problem ? "bad" : ""}` },
+          el("input", { type: "checkbox", checked: !x.problem, disabled: !!x.problem, onchange: (e) => { e.target.checked ? chosen.add(x.index) : chosen.delete(x.index); } }),
+          el("span", { class: `op ${x.op}` }, OP[x.op] ?? x.op),
+          el("span", { class: "t" }, it.title ?? x.note ?? "", it.level && LV[it.level] ? el("small", {}, LV[it.level]) : null, fig && it.entity === false ? el("small", {}, "待製作") : null),
+          el("span", { class: "d" }, x.problem || (x.op === "update" && x.changed?.length ? `改：${x.changed.join("、")}` : x.note ?? "")));
+      };
+      if (!d.shown.some((x) => !x.problem)) chosen.clear();
+      const act = async (fn, msg) => { try { await fn(); S.host.toast?.(msg); S.allDirty = true; await show(S.root, "proposals"); } catch (e) { S.host.fail?.(e); } };
+      return el("section", { class: "h-box h-prop" },
+        el("div", { class: "h-cap" }, p.by === "le" ? "L-Echo" : p.by, el("span", {}, (p.created_at ?? "").slice(0, 10).replaceAll("-", "/"))),
+        el("h3", {}, p.title), d.shown.map(line),
+        el("div", { class: "h-acts" },
+          el("button", { type: "button", class: "pri", onclick: () => act(() => api("POST", `/api/hub/proposals/${enc(p.id)}/apply`, { chosen: [...chosen].sort((a, b) => a - b) }), "已套用勾選的") }, "同意勾選的"),
+          el("button", { type: "button", class: "quiet", onclick: () => act(() => api("POST", `/api/hub/proposals/${enc(p.id)}/dismiss`), "已略過") }, "都不要")));
+    };
+    const undo = (p) => el("div", { class: "h-done" }, el("span", {}, p.title), el("button", { type: "button", onclick: async () => { try { const r = await api("POST", `/api/hub/proposals/${enc(p.id)}/undo`); S.host.toast?.(r.not_undone?.length ? r.not_undone[0] : "已復原"); S.allDirty = true; await show(S.root, "proposals"); } catch (e) { S.host.fail?.(e); } } }, "復原"));
+    const boxes = await Promise.all((open.proposals ?? []).map(one));
+    return el("div", { class: "h-props" }, el("div", { class: "h-head" }, el("h2", {}, "待同意"), el("span", { class: "cnt" }, boxes.length || "")),
+      boxes.length ? boxes : el("div", { class: "h-empty" }, "沒有等你同意的修改"),
+      (done.proposals ?? []).length ? [el("div", { class: "h-wh" }, "已套用", el("small", {}, done.proposals.length)), done.proposals.slice(0, 10).map(undo)] : null);
+  }
+
+  // ── ＋ 來源: an outside application's knowledge, by a file in the fixed format ──
+  function sourcesBox(sources) {
+    const out = el("div", { class: "h-srcout" });
+    const own = el("input", { type: "checkbox" });
+    const file = el("input", { type: "file", accept: ".json,application/json", hidden: true, onchange: async (e) => {
+      const f = e.target.files?.[0]; e.target.value = ""; if (!f) return;
+      try {
+        const r = await fetch(`/api/hub/import${own.checked ? "?own=1" : ""}`, { method: "POST", headers: { "content-type": "application/json" }, body: await f.text() });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error ?? `${r.status}`);
+        out.replaceChildren(el("div", {}, `新增 ${j.added} · 取代 ${j.replaced} · 移除 ${j.removed}`), (j.problems ?? []).slice(0, 8).map((p) => el("div", { class: "bad" }, `${p.at}：${p.message}`)), (j.problems ?? []).length > 8 ? el("div", { class: "bad" }, `還有 ${j.problems.length - 8} 筆不符合`) : null);
+        S.meta = null; S.allDirty = true; await Promise.all([loadStats(), loadMeta()]);
+        S.root.querySelector(".h-cover")?.replaceWith(cover(await api("GET", "/api/hub/sources").catch(() => [])));
+      } catch (err) { out.replaceChildren(el("div", { class: "bad" }, err.message)); }
+    } });
+    return el("div", { class: "h-box h-src" }, el("div", { class: "h-cap" }, "外部來源"),
+      (sources ?? []).map((s) => el("div", { class: "h-srow" }, el("span", {}, s.name), el("span", { class: "d" }, s.sets.map((x) => `${catLabel(x.category)} ${x.count}${x.aligned ? "" : "（獨立）"}`).join(" · ")))),
+      el("div", { class: "h-srow add" }, el("button", { type: "button", class: "h-plus", onclick: () => file.click() }, "＋ 來源"), el("label", { class: "own" }, own, "這是我自己的檔案"), file), out);
+  }
+
   /** Draw the hub for `arg` (undefined: the cover; a family id: its page). */
   async function show(root, arg) {
     S.root = root;
     try {
       await Promise.all([loadStats(), loadMeta()]);
+      if (arg === "proposals") { S.fam = null; S.sel = null; detailEl = null; nav(); root.replaceChildren(el("div", { class: "hubv" }, await proposals())); return; }
       const fam = arg ? S.stats.families.find((f) => f.id === arg) : null;
       if (fam?.app === "kb") S.reg = null; // labels may have changed
-      if (!fam) { S.fam = null; S.sel = null; detailEl = null; nav(); root.replaceChildren(el("div", { class: "hubv" }, cover())); return; }
+      if (!fam) { S.fam = null; S.sel = null; detailEl = null; nav(); root.replaceChildren(el("div", { class: "hubv" }, cover(await api("GET", "/api/hub/sources").catch(() => [])))); return; }
       if (S.fam?.id !== fam.id) { S.f = defaults(fam); S.sel = null; detailEl = null; }
       if (fam.app === "kb" && S.pendingQ != null) { S.f.q = S.pendingQ; }
       S.fam = fam; nav();
