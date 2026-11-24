@@ -117,7 +117,8 @@ window.LoreEchoPage = (() => {
       applied && r.undo !== false ? h("button", { type: "button", class: "btn small", "data-act": "undo", onclick: undo }, h("span", { "data-icon": "undo" }), "復原") : null,
       h("span", { class: "pg-gap", title: (applied && r.message) || null }, applied ? r.message : null),   // the app's own words, beside 已套用 (no toast: it would cover the field)
       applied ? null : h("button", { type: "button", class: "btn small", "data-act": "again", "aria-pressed": String(P.armed), onclick: again }, "再改"),
-      h("button", { type: "button", class: "btn small primary", "data-act": "apply", disabled: applied, onclick: apply }, applied ? "已套用" : "套用"),
+      // nothing of the plan survived the checks: there is nothing to apply, only 再改
+      h("button", { type: "button", class: "btn small primary", "data-act": "apply", disabled: applied || !(r.plan?.edits ?? []).length, onclick: apply }, applied ? "已套用" : "套用"),
     ].filter(Boolean));
     paintIcons(P.panel);
     paintSide();
