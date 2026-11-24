@@ -384,20 +384,56 @@ const PCWrite = (() => {
     return true;
   }
 
+  /** The selection as a rewrite needs it: { paper, s, text, prefix, suffix, context, scope },
+   *  `{ cross }` across paragraphs, or null (`d`: the right-click menu's capture). */
+  function selectionAnchor(d) {
+    const s = selectionSource(d);
+    if (!s || s.cross) return s;
+    const paras = sections()[s.si]?.paragraphs ?? [];
+    return {
+      paper: state.paper?.name, s, text: s.src.slice(s.a, s.b), prefix: s.src.slice(0, s.a), suffix: s.src.slice(s.b),
+      context: [paras[s.pi - 1], paras[s.pi + 1]].filter(Boolean).join("\n\n"),
+      scope: sections()[s.si]?.title ?? "",
+    };
+  }
+
+  /** Put `after` in place of the anchored selection: one ⌘Z. true, or why not. */
+  function applyRewrite(anc, after) {
+    if (anc.paper !== state.paper?.name) return "段落已變更，請重新選取";
+    return applyPolish(anc.s, anc.text, after);
+  }
+
   /** 潤飾 the selection (`d`: the right-click menu's capture); `preset`: 用字 / 我的風格 pressed. */
   function polish(anchor, d, preset) {
     if (!state.paper) return LoreShell.toast("先開啟一篇論文");
-    const s = selectionSource(d);
-    if (s?.cross) return LoreShell.toast("一次潤飾一個段落裡的文字");
-    if (!s) return LoreShell.toast("先選取要潤飾的文字");
-    const text = s.src.slice(s.a, s.b);
-    const paras = sections()[s.si]?.paragraphs ?? [];
+    const anc = selectionAnchor(d);
+    if (anc?.cross) return LoreShell.toast("一次潤飾一個段落裡的文字");
+    if (!anc) return LoreShell.toast("先選取要潤飾的文字");
+    const { text, prefix, suffix, context, scope } = anc;
     LorePolish.open({
-      anchor, text, prefix: s.src.slice(0, s.a), suffix: s.src.slice(s.b),
-      context: [paras[s.pi - 1], paras[s.pi + 1]].filter(Boolean).join("\n\n"),
-      scope: sections()[s.si]?.title ?? "", preset,
-      apply: async (after) => applyPolish(s, text, after),
+      anchor, text, prefix, suffix, context, scope, preset,
+      apply: async (after) => applyRewrite(anc, after),
     });
+  }
+
+  // ── the selection through L-Echo (commons/ui/selection.js): its rewrites land on the anchor sent ──
+  let sentAnchor = null;
+  let menuCapture = null;   // the right-click menu's capture while 交給 L-Echo gathers
+  function selectionPayload() {
+    if (!state.paper) return null;
+    const anc = selectionAnchor(menuCapture);
+    if (!anc || anc.cross || !anc.text.trim()) return null;
+    sentAnchor = anc;   // the newest selection with text is the one that is (or was just) sent
+    const { text, prefix, suffix, context, scope } = anc;
+    return { doc: state.paper.name, source: state.paper.title || state.paper.name, text, prefix, suffix, context: context.slice(0, 2500), scope, keep: [] };
+  }
+
+  /** 交給 L-Echo (the right-click menu): the selection that 潤飾 would take, L-Echo brought up. */
+  function sendSelection(d) {
+    menuCapture = d ?? null;
+    const sent = LoreSelection.send();   // gathers synchronously
+    menuCapture = null;
+    return sent;
   }
 
   /** 用字 / 我的風格 on the whole paragraph being edited (writing stages 2 and 3). */
@@ -454,7 +490,8 @@ const PCWrite = (() => {
       if (e.key === "b") { e.preventDefault(); wrap("\\textbf{", "}"); }
       if (e.key === "i") { e.preventDefault(); wrap("\\emph{", "}"); }
     });
+    window.LoreSelection?.watch({ gather: selectionPayload, apply: (after) => (sentAnchor ? applyRewrite(sentAnchor, after) : "沒有選取的文字") });
   }
 
-  return { build, wrap, put, block, references, collect, polish, popover, refSnippet, sentenceStart };
+  return { build, wrap, put, block, references, collect, polish, sendSelection, popover, refSnippet, sentenceStart };
 })();

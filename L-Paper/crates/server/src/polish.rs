@@ -165,8 +165,8 @@ impl lore_polish::Host for PcHost {
             let v: serde_json::Value = serde_json::from_str(&t).map_err(|e| format!("mock：{e}"))?;
             return Ok((v, "mock".into()));
         }
-        let choice: Option<EngineChoice> = engine.filter(|e| !e.is_empty() && *e != "auto").and_then(|e| serde_json::from_value(serde_json::json!(e)).ok());
-        let route = self.0.llm.route(lore_polish::TASK, choice).await?;
+        // the engine switch's word, or one model named by L-Echo's menu (this task only)
+        let route = self.0.llm.route_engine(lore_polish::TASK, engine).await?;
         let req = route.apply(req.temperature(llm::LOCAL_TEMPERATURE));
         let v = lore_llm::complete_json(route.provider.as_ref(), &req).await.map_err(|e| format!("模型沒有回答：{e}"))?;
         let id = route.provider.id();

@@ -681,6 +681,7 @@ const PCContext = (() => {
     if (d.text.trim()) {
       sep();
       add("polish", "潤飾", () => { PCWrite.polish(marker, d); keepMarker(); });
+      if (window.LoreSelection) add("send", "交給 L-Echo", () => { PCWrite.sendSelection(d); });
       add("star", "收藏句型", () => { PCWrite.collect(marker, d.text); keepMarker(); });
       if (window.LoreAddCard) add("plus", "加入知識庫", () => { LoreAddCard.add({ title: d.text, source: state.paper?.name ?? "" }); });
       add("comment", "新增註解", () => { window.PCReview?.comment({ si: at.si, pi: at.pi, ta: d.ta, a: d.a, b: d.b, text: d.text, range: d.ta ? null : getSelection()?.rangeCount ? getSelection().getRangeAt(0).cloneRange() : null }); return false; });

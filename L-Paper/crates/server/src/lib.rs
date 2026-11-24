@@ -3624,6 +3624,8 @@ pub fn router(paths: Paths) -> Router {
         .merge(remove::routes())
         // 搜尋檔案 through L-Echo (lore_shell::findfile): a chosen file → a 實驗紀錄 record
         .merge(lore_shell::findfile::router(finds(&state)))
+        // selected text through L-Echo (lore_shell::selection): its rewrites come back to the page
+        .merge(lore_shell::selection::router(lore_shell::selection::Selections::new("pc")))
         // 加入知識庫 for selected words: L-Brain's API while it runs, else its folder
         .merge(lore_cards::router(std::sync::Arc::new(brain()), std::sync::Arc::new(CardHost(state.clone())), "papercomposer"))
         .merge(notation::routes())

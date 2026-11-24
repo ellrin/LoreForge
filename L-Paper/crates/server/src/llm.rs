@@ -26,7 +26,7 @@ use lore_llm::catalog::Catalog;
 use lore_llm::claude_code::{Cache, Cli};
 use lore_llm::local::Layout;
 use lore_llm::shared_runtime::{LocalStatus, Priority, SharedRuntime};
-use lore_llm::router::{ApiAccess, CLAUDE_SELECTED, ExternalServer, LOCAL_CURRENT, LocalAccess, StandardFactory, SubscriptionAccess};
+use lore_llm::router::{ApiAccess, CLAUDE_SELECTED, ExternalServer, LOCAL_CURRENT, LocalAccess, ProviderFactory, StandardFactory, SubscriptionAccess};
 use lore_llm::secrets::{Account, KeySource, SharedKeys};
 use lore_llm::{LlmRequest, Route, RouteOptions, Router, TaskTable};
 
@@ -58,6 +58,16 @@ impl EngineChoice {
             EngineChoice::Api => format!("claude-api:{CLAUDE_SELECTED}"),
         }
     }
+
+    /// A request's `engine` word; empty, `auto` or anything else = automatic.
+    pub(crate) fn parse(engine: Option<&str>) -> Option<EngineChoice> {
+        engine.filter(|e| !e.is_empty() && *e != "auto").and_then(|e| serde_json::from_value(serde_json::json!(e)).ok())
+    }
+}
+
+/// `claude:<alias>`, `local:<catalog id>` or `agy:<model id>`, the id not empty.
+fn named_model(m: &str) -> bool {
+    ["claude:", "local:", "agy:"].iter().any(|p| m.strip_prefix(p).is_some_and(|id| !id.trim().is_empty()))
 }
 
 /// `[engine]` in config.toml: an OpenAI-compatible server someone else runs
@@ -334,6 +344,29 @@ impl Llm {
         router.provider_for_with(task, &opts).await.map_err(|e| route_error(&e, choice.is_some()))
     }
 
+    /// The engine for a task from a request's `engine` word (`local`, `subscription`, `api` /
+    /// `claude`; empty or `auto` = the task's order). 語句潤飾 alone may also name its model
+    /// (`claude:<alias>`, `local:<catalog id>`, `agy:<model id>`: L-Echo's model menu): that
+    /// model or an error, never another one; every other task ignores a name.
+    pub async fn route_engine(&self, task: &str, engine: Option<&str>) -> Result<Route, String> {
+        if self.mock.is_some() {
+            return Err(format!("假模型模式：{task} 沒有腳本"));
+        }
+        self.route_engine_with(self.factory(), task, engine).await
+    }
+
+    async fn route_engine_with<F: ProviderFactory>(&self, factory: F, task: &str, engine: Option<&str>) -> Result<Route, String> {
+        let named = engine.filter(|m| task == lore_polish::TASK && named_model(m));
+        let choice = if named.is_some() { None } else { EngineChoice::parse(engine) };
+        let opts = match (named, choice) {
+            (Some(m), _) => RouteOptions::only(m),
+            (None, Some(c)) => RouteOptions::only(c.model_ref()),
+            (None, None) => RouteOptions::default(),
+        }
+        .with_priority(Priority::Interactive);
+        Router::new(self.tasks.clone(), factory).provider_for_with(task, &opts).await.map_err(|e| route_error(&e, named.is_some() || choice.is_some()))
+    }
+
     /// Run `task` on one exact model ref ("claude:haiku", "local:current"),
     /// no fallback: the draft window's model picker.
     pub async fn complete_on(&self, task: &str, model_ref: &str, prompt: &Prompt, extra: Option<&str>, schema: Option<serde_json::Value>) -> Result<String, String> {
@@ -482,6 +515,45 @@ mod tests {
         assert!(e.contains("API key"), "{e}");
         // Claude first: with no Claude set up, the task order's local fallback runs.
         assert_eq!(l.route("pc-outline", None).await.unwrap().provider.id(), "llama-server:local");
+    }
+
+    #[tokio::test]
+    async fn only_sentence_polish_can_name_its_model() {
+        use lore_llm::MockProvider;
+        use lore_llm::router::MockFactory;
+        let mock = |name: &str| -> Arc<dyn lore_llm::LlmProvider> { Arc::new(MockProvider::new(vec![]).named(name)) };
+        let f = MockFactory::default()
+            .with("claude:selected", mock("mock:selected"))
+            .with("claude-code:selected", mock("mock:subscription"))
+            .with("local:current", mock("mock:current"))
+            .with("local:qwen3.5-9b-q8", mock("mock:qwen"))
+            .with("claude:haiku", mock("mock:haiku"))
+            .with("agy:m-1", mock("mock:google"));
+        let l = llm(None);
+        let polish = lore_polish::TASK;
+        assert!(Llm::task_table(None).unwrap().task[polish].agy, "the polish task may name agy: models");
+        let id = |r: Result<Route, String>| r.unwrap().provider.id();
+        // as before: the task's order, and the engine switch's words
+        let auto = id(l.route_engine_with(&f, polish, None).await);
+        assert_eq!(auto, "mock:selected");
+        assert_eq!(id(l.route_engine_with(&f, polish, Some("auto")).await), auto);
+        assert_eq!(id(l.route_engine_with(&f, polish, Some("local")).await), "mock:current");
+        assert_eq!(id(l.route_engine_with(&f, polish, Some("subscription")).await), "mock:subscription");
+        // a named model: that one
+        assert_eq!(id(l.route_engine_with(&f, polish, Some("agy:m-1")).await), "mock:google");
+        assert_eq!(id(l.route_engine_with(&f, polish, Some("claude:haiku")).await), "mock:haiku");
+        assert_eq!(id(l.route_engine_with(&f, polish, Some("local:qwen3.5-9b-q8")).await), "mock:qwen");
+        // a model that is not there: an error in one line, never another model
+        let e = l.route_engine_with(&f, polish, Some("claude:sonnet")).await.err().unwrap();
+        assert!(!e.is_empty() && !e.contains('\n'), "{e}");
+        assert!(l.route_engine_with(&f, polish, Some("agy:m-2")).await.is_err());
+        // half a name is no name
+        assert_eq!(id(l.route_engine_with(&f, polish, Some("claude:")).await), auto);
+        // every other task ignores a named model, Google included
+        let outline = id(l.route_engine_with(&f, "pc-outline", None).await);
+        for name in ["agy:m-1", "claude:haiku", "local:qwen3.5-9b-q8"] {
+            assert_eq!(id(l.route_engine_with(&f, "pc-outline", Some(name)).await), outline, "{name}");
+        }
     }
 
     #[tokio::test]
