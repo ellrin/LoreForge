@@ -276,8 +276,10 @@ impl Profile {
             Vec::new()
         };
 
+        let variants = crate::variants::load(root, &phrases, &mut issues);
+
         Ok((
-            Profile { root: root.to_path_buf(), manifest, phrases, expressions, vocabulary, rules, outside_exemplars: Vec::new(), authors, affiliations, variants: Vec::new(), style_checks: Default::default() },
+            Profile { root: root.to_path_buf(), manifest, phrases, expressions, vocabulary, rules, outside_exemplars: Vec::new(), authors, affiliations, variants, style_checks: Default::default() },
             issues,
         ))
     }

@@ -36,6 +36,9 @@ pub struct ComposeRequest {
     pub index: Option<usize>,
     #[serde(default)]
     pub count: Option<usize>,
+    /// Which wording of each pattern to use ([`crate::variants::pick`]); 0 = the author's own template.
+    #[serde(default)]
+    pub turn: u64,
 }
 
 impl ComposeRequest {
@@ -124,10 +127,12 @@ pub fn build_prompt(profile: &Profile, req: &ComposeRequest, points: &[Point], r
         "You write one paragraph of an academic paper in the author's own voice.\n\
 Rules:\n\
 1. The points are the only source of content: they are what the author wants to convey (his motivation, the facts, his own view), and every claim, number and finding comes from them.\n\
-2. Write in the author's voice: phrase as many points as you can with the author's patterns below, filling the {{slots}} from the point and keeping the pattern wording. \
+2. Write in the author's voice: phrase as many points as you can with the author's patterns below. \
+A pattern gives the sentence frame and its fixed words, and you fill the {{slots}} from the point. \
+Where a pattern lists other words for a word of its frame, you may use one of them when its note fits. \
 You may join related points in one sentence and add the transitions the patterns use. \
-A pattern is a sentence frame, never a source of content: its example shows the wording only, \
-and the example's subject, methods, numbers and findings belong to another paper and must never appear. \
+A pattern is a sentence frame, never a source of content. \
+Do not reproduce any sentence from the author's earlier papers. \
 A pattern that fits no point is not used.\n\
 3. Do not polish, embellish, or add rhetoric. Do not add claims, numbers, methods, experiments or citations that are not in the points.\n\
 4. Cover every point: keep the author's motivation and his own view recognisable, not only the facts. Points marked EMPHASIS must appear in the first or the last sentence.\n\
@@ -154,13 +159,18 @@ Use \"phrase_id\": null for a sentence that uses no pattern.",
         user += &format!("Paragraph function: {f}\n");
     }
     user += "\nAuthor's patterns:\n";
-    for h in refs {
+    for (i, h) in refs.iter().enumerate() {
         let p = &h.phrase;
-        user += &format!("- {} [{} / {}] {}", p.id, p.function, p.position, p.template);
-        if !p.example.is_empty() {
-            user += &format!("  (wording example from another paper: {})", p.example);
+        let wording = crate::variants::pick(p, &profile.variants, req.turn.wrapping_add(i as u64));
+        user += &format!("- {} [{} / {}] {}\n", p.id, p.function, p.position, wording);
+        for s in crate::variants::swaps(p, &profile.variants, wording) {
+            let opts: Vec<String> = s
+                .options
+                .iter()
+                .map(|(w, n)| if n.is_empty() { format!("\"{w}\"") } else { format!("\"{w}\" ({n})") })
+                .collect();
+            user += &format!("    \"{}\" may also be: {}\n", s.slot, opts.join("; "));
         }
-        user += "\n";
     }
     user += "\nPoints:\n";
     for p in points {
@@ -348,6 +358,7 @@ mod tests {
             key_value: None,
             index: None,
             count: None,
+            turn: 0,
         }
     }
 
@@ -362,17 +373,67 @@ mod tests {
     }
 
     #[test]
-    fn examples_are_marked_as_wording_only() {
+    fn a_pattern_is_a_frame_not_content() {
         // Gemma copied example content (other experiments, other numbers)
-        // into drafts while padding to length; the prompt must say not to.
+        // into drafts while padding to length; the prompt must say a pattern is a frame only.
         let pr = profile();
         let r = req();
         let pts = parse_points(&r.points);
         let s = build_prompt(&pr, &r, &pts, &[], "").system;
         assert!(s.contains("A pattern that fits no point is not used"));
         assert!(s.contains("phrase as many points as you can with the author's patterns"));
-        assert!(s.contains("must never appear"));
+        assert!(s.contains("never a source of content"));
+        assert!(s.contains("Do not reproduce any sentence from the author's earlier papers"));
+        assert!(!s.contains("example") && !s.contains("keeping the pattern wording"));
         assert!(s.contains("never pad"));
+    }
+
+    fn with_variants() -> (Profile, Vec<Hit>) {
+        use crate::variants::Variant;
+        let v = |id: &str, kind: &str, text: &str, slot: &str, note: &str| Variant { id: id.into(), pattern: "P2".into(), kind: kind.into(), text: text.into(), slot: slot.into(), note: note.into() };
+        let mut pr = profile();
+        pr.phrases[1].template = "The {sample} was approved by {board}.".into();
+        pr.phrases[1].example = "Zebra quokka marmot published sentence about nothing real.".into();
+        pr.variants = vec![
+            v("V1", "variant", "{board} approved the {sample}.", "", ""),
+            v("V2", "swap", "granted", "approved", "more formal"),
+            v("V3", "swap", "cleared", "approved", ""),
+        ];
+        let refs = vec![Hit { phrase: pr.phrases[1].clone(), score: 1.0 }];
+        (pr, refs)
+    }
+
+    #[test]
+    fn the_published_example_is_never_in_the_prompt() {
+        let (pr, refs) = with_variants();
+        let r = req();
+        let pts = parse_points(&r.points);
+        let p = build_prompt(&pr, &r, &pts, &refs, "");
+        assert!(p.user.contains("P2"));
+        assert!(!p.system.contains("Zebra quokka") && !p.user.contains("Zebra quokka"));
+        assert!(!p.user.contains("example"));
+    }
+
+    #[test]
+    fn the_wording_rotates_with_the_turn() {
+        let (pr, refs) = with_variants();
+        let mut r = req();
+        let pts = parse_points(&r.points);
+        assert!(build_prompt(&pr, &r, &pts, &refs, "").user.contains("- P2 [evidence / opening] The {sample} was approved by {board}.\n"));
+        r.turn = 1;
+        let u = build_prompt(&pr, &r, &pts, &refs, "").user;
+        assert!(u.contains("- P2 [evidence / opening] {board} approved the {sample}.\n"), "{u}");
+        r.turn = 2;
+        assert!(build_prompt(&pr, &r, &pts, &refs, "").user.contains("The {sample} was approved by {board}."));
+    }
+
+    #[test]
+    fn swap_words_are_listed_with_their_notes() {
+        let (pr, refs) = with_variants();
+        let r = req();
+        let pts = parse_points(&r.points);
+        let u = build_prompt(&pr, &r, &pts, &refs, "").user;
+        assert!(u.contains("    \"approved\" may also be: \"granted\" (more formal); \"cleared\"\n"), "{u}");
     }
 
     #[test]

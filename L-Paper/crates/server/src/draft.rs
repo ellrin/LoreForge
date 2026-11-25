@@ -2291,6 +2291,8 @@ async fn compose_one(s: &Shared, c: &Ctx, sess: &Session, env: &ComposeEnv, p: &
         key_value: Some(c.key_value.clone()).filter(|k| !k.is_empty()),
         index: Some(k),
         count: Some(count),
+        // a routine sentence is not worded the same way in every paragraph (confirmed 說法 only)
+        turn: k as u64,
     };
     let (pts, refs, prompt) = {
         let l = s.loaded.read().await;

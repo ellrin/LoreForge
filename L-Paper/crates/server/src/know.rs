@@ -212,7 +212,7 @@ mod tests {
     }
 
     fn request() -> ComposeRequest {
-        ComposeRequest { points: "- recall improves by 12%".into(), section: "Result".into(), function: None, min_words: 10, max_words: 60, language: "en".into(), before: None, after: None, key_value: None, index: None, count: None }
+        ComposeRequest { points: "- recall improves by 12%".into(), section: "Result".into(), function: None, min_words: 10, max_words: 60, language: "en".into(), before: None, after: None, key_value: None, index: None, count: None, turn: 0 }
     }
 
     #[test]
