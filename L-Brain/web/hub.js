@@ -264,7 +264,7 @@ const Hub = (() => {
       const open = f.more.has(facet), on = (t) => f.tags.has(`${facet}:${t}`);
       // the tags that group something (two or more), at most eight; chosen ones always stay
       const main = list.filter(([t, n], i) => on(t) || (n > 1 && i < 8)), rest = list.length - main.length;
-      const rows = [...(open ? list : main).map(([t, n]) => { const k = `${facet}:${t}`; return btn(t, n, f.tags.has(k), () => { f.tags.has(k) ? f.tags.delete(k) : f.tags.add(k); refresh(); }); }),
+      const rows = [...(open ? list : main).map(([t, n]) => { const k = `${facet}:${t}`; return el("button", { type: "button", class: "multi", role: "checkbox", "aria-checked": String(f.tags.has(k)), onclick: () => { f.tags.has(k) ? f.tags.delete(k) : f.tags.add(k); refresh(); } }, el("b", {}), t, el("span", {}, n)); }),
         rest > 0 ? el("button", { type: "button", class: "more", onclick: () => { open ? f.more.delete(facet) : f.more.add(facet); paint(); } }, open ? "收起" : `其他 ${rest}`) : null];
       // beside a tree the facets are secondary: one line each until opened (or in use)
       if (S.tree?.tree?.length && !isFigure(S.fam) && !isCards()) out.push(fold(FACET[facet] ?? facet, list.some(([t]) => on(t)), rows));

@@ -275,3 +275,9 @@ label.h-plus { cursor: pointer; font-weight: 500; font-size: 12px; padding: 6px 
 .h-fold > summary:hover { color: var(--text); }
 .h-row.text { grid-template-columns: minmax(0, 1fr) auto auto; }
 .h-row .d { max-width: 240px; }
+/* several may be chosen at once: a box that takes a tick, never the filled row of a single choice */
+.h-tags .multi { align-items: center; gap: 8px; }
+.h-tags .multi b { flex: none; width: 12px; height: 12px; border: 1px solid var(--faint); border-radius: 3px; position: relative; }
+.h-tags .multi[aria-checked="true"] { color: var(--text); }
+.h-tags .multi[aria-checked="true"] b { background: var(--accent); border-color: var(--accent); }
+.h-tags .multi[aria-checked="true"] b::after { content: ""; position: absolute; left: 3px; top: 0; width: 3px; height: 7px; border: solid var(--bg); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
