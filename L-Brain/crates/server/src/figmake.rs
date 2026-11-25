@@ -184,10 +184,17 @@ async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
         // `sc-flow-graph-vision`, Claude only): the author accepts that for figures from papers
         // and his own slides. A vector picture is not sent, a model cannot read it.
         let image = crate::hub::reference_picture(&h, &s.hub_dirs, &r).filter(|(_, mime)| *mime != "image/svg+xml").map(|(bytes, mime)| lore_llm::Image::from_bytes(mime, &bytes));
-        (format!("{}\n\n{}", r.title, r.field("description")), image, is_timeline(&r))
+        // the author's knowledge of figures, read from the hub: every component and module
+        // (with his 用法 and their variables) and every figure he made (as a worked example)
+        let mut items: Vec<Item> = vec![];
+        for c in h.store.registry().all().iter().filter(|c| c.format == format::FIGURE) {
+            items.extend(h.store.list(&c.id)?);
+        }
+        // the hub's own catalogue: the drawings saved under every app's flow folder are offered,
+        // not only the shared ones
+        (format!("{}\n\n{}", r.title, r.field("description")), image, is_timeline(&r), lore_know::flowknow::knowledge(&items), h.catalogue())
     };
-    let (description, image, timeline) = (description.0, description.1, description.2);
-    let cat = s.flow.catalogue();
+    let (description, image, timeline, know, cat) = (description.0, description.1, description.2, description.3, description.4);
     let llm = FlowLlm(s.llm.clone());
     if timeline {
         // only the styles that draw as written are offered
@@ -199,9 +206,14 @@ async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
     }
     let examples = s.flow.examples(&cat.library);
     let prompt = lore_flow::llm::FlowPrompt { description: &description, image, notation: None, library: &cat.library, examples: &examples };
-    let p = lore_flow::llm::propose_via(&llm, &prompt).await.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
+    let (p, shown) = lore_flow::llm::propose_with(&llm, &prompt, &know).await.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
     let spec = lore_flow::figure::FlowSpec { lore_flow: lore_flow::figure::VERSION, dsl: p.dsl, ..Default::default() };
-    ok(json!({ "spec": spec.to_value(), "engine": p.provider }))
+    // what the model was told from his knowledge, each with the one line on why it was picked
+    let told = json!({
+        "modules": shown.modules.iter().map(|m| json!({ "kind": m.item.kind, "style": m.item.style, "title": m.item.title, "why": m.why })).collect::<Vec<_>>(),
+        "examples": shown.examples.iter().map(|x| json!({ "id": x.item.id, "title": x.item.title, "why": x.why })).collect::<Vec<_>>(),
+    });
+    ok(json!({ "spec": spec.to_value(), "engine": p.provider, "told": told }))
 }
 
 #[cfg(test)]
@@ -529,6 +541,32 @@ writable = true
         // (and the picture-less reference goes to the text task, `sc-flow-timeline`)
         let schema = serde_json::to_string(&seen[0].json_schema).unwrap();
         assert!(schema.contains("points") && !schema.contains("nodes"), "{schema}");
+    }
+
+    #[tokio::test]
+    async fn a_figure_he_made_is_what_the_next_draft_is_shown() {
+        let e = setup(vec![graph_reply()]);
+        // he makes one figure and writes when a box is the thing to use
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(SPEC), "title": "Training loop" }))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let fid = v["figure"]["id"].as_str().unwrap().to_string();
+        let (_, l) = call(&e.app, "GET", "/api/hub/items?q=box&limit=200", None).await;
+        let mut boxed = l["items"].as_array().unwrap().iter().find(|i| i["fields"]["kind"] == "box" && i["fields"]["what"] == "generator").cloned().expect("a built-in box");
+        boxed["fields"]["prompt"] = json!("Use a plain box for a model whose inside does not matter to the output.");
+        let bid = boxed["id"].as_str().unwrap().to_string();
+        let (s, v) = call(&e.app, "PUT", &format!("/api/hub/items/{}", bid.replace(':', "%3A").replace('/', "%2F")), Some(boxed)).await;
+        assert_eq!(s, StatusCode::OK, "a built-in module takes his 用法: {v}");
+        // the next draft of a figure about the same things is told both, and says so
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/draft", None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let told = &v["told"];
+        assert_eq!(told["examples"][0]["id"], json!(fid), "{told}");
+        assert!(!told["examples"][0]["why"].as_str().unwrap().is_empty());
+        assert!(told["modules"].as_array().unwrap().iter().any(|m| m["kind"] == "box"), "{told}");
+        let seen = e.mock.seen.lock().unwrap();
+        let text = seen[0].system.clone();
+        assert!(text.contains("the author's own figure: Training loop"), "{text}");
+        assert!(text.contains("whose inside does not matter"), "{text}");
     }
 
     #[tokio::test]

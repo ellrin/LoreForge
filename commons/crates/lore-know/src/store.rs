@@ -466,7 +466,10 @@ impl Sink for Store {
             item.set("body", body);
         }
         // A read-only native category still takes tags, triggers and `contains` (overlay only).
-        let overlay_only = !cat.writable && adapter_cat && !to_record && cur.as_ref().is_some_and(|c| c.title == item.title && without_know(&c.fields) == without_know(&item.fields) && (item.format == format::FIGURE || c.fields == item.fields));
+        // …and so does a built-in module of the flow tool, which sits in a writable category (its
+        // saved drawings can be changed) but has no file of its own to write to.
+        let built_in = cur.as_ref().is_some_and(|c| c.format == format::FIGURE && c.field("what") == "generator");
+        let overlay_only = (!cat.writable || built_in) && adapter_cat && !to_record && cur.as_ref().is_some_and(|c| c.title == item.title && without_know(&c.fields) == without_know(&item.fields) && (item.format == format::FIGURE || c.fields == item.fields));
         if !cat.writable && !overlay_only {
             return Err(KnowError::ReadOnly(cat.label.clone()));
         }
