@@ -2,6 +2,7 @@
 //! connector routing, alignment and distribution.
 
 use crate::model::*;
+use std::collections::BTreeMap;
 
 /// Axis-aligned union of frames (rotation ignored).
 pub fn bounds<'a>(frames: impl Iterator<Item = &'a Frame>) -> Frame {
@@ -64,61 +65,260 @@ pub fn rotate(p: (f64, f64), c: (f64, f64), deg: f64) -> (f64, f64) {
 /// 5 top ¼, 6 top ¾, 7 top-right, 8 right ¼, 9 right ¾, 10 bottom-right,
 /// 11 bottom ¾, 12 bottom ¼, 13 bottom-left, 14 left ¾, 15 left ¼ (¼ and ¾
 /// measured left to right on top and bottom, top to bottom on the sides).
-/// Ellipses have 8 sites counter-clockwise from the top; custom paths one per
-/// vertex; other presets (triangle, diamond …) keep four (0–3 as above).
+/// Ellipses have sixteen: 0–7 counter-clockwise from the top in 45° steps (0 top,
+/// 1 upper left, 2 left …), 8–15 the points half way between, in the same order
+/// (8 = 22.5° left of the top, 9 = 67.5° …). Every other known preset (see
+/// [`preset_sites_unit`]) has sixteen too: the point where the ray from the centre to
+/// the rectangle's site of the same number leaves the outline. Custom paths have one
+/// per vertex; a preset not known here keeps four (0–3 as above).
 pub fn sites(o: &Object) -> Vec<(f64, f64)> {
     let f = &o.frame;
     let (x, y, w, h) = (f.x as f64, f.y as f64, f.w as f64, f.h as f64);
     let prst = o.kind.sp().map(|s| s.geom.prst.as_str()).unwrap_or("rect");
     let sixteen = o.kind.sp().is_none() || matches!(prst, "rect" | "roundRect");
     let custom = o.kind.sp().filter(|s| s.geom.prst == "custom").and_then(|s| s.geom.path.as_deref()).map(path_vertices).unwrap_or_default();
+    let preset = if sixteen || !custom.is_empty() {
+        None
+    } else {
+        o.kind.sp().and_then(|s| preset_sites_unit(prst, &s.geom.adj, w, h, f.flip_h, f.flip_v))
+    };
     let local: Vec<(f64, f64)> = if !custom.is_empty() {
         // custom shapes (polygons): one site per vertex, in path order
         custom
             .iter()
             .map(|&(u, v)| (x + if f.flip_h { 1.0 - u } else { u } * w, y + if f.flip_v { 1.0 - v } else { v } * h))
             .collect()
-    } else if prst == "ellipse" {
-        let (cx, cy, rx, ry) = (x + w / 2.0, y + h / 2.0, w / 2.0, h / 2.0);
-        (0..8)
-            .map(|i| {
-                // 0 = top, then counter-clockwise in 45° steps
-                let a = (-90.0 - 45.0 * i as f64).to_radians();
-                (cx + rx * a.cos(), cy + ry * a.sin())
-            })
-            .collect()
+    } else if let Some(u) = preset {
+        u.into_iter().map(|(a, b)| (x + a * w, y + b * h)).collect()
+    } else if sixteen {
+        RECT_UNIT.iter().map(|&(a, b)| (x + a * w, y + b * h)).collect()
     } else {
-        let mut v = vec![
-            (x + w / 2.0, y),
-            (x, y + h / 2.0),
-            (x + w / 2.0, y + h),
-            (x + w, y + h / 2.0),
-        ];
-        if sixteen {
-            let (r, b) = (x + w, y + h);
-            let (x1, x3, y1, y3) = (x + w / 4.0, x + w * 0.75, y + h / 4.0, y + h * 0.75);
-            v.extend([
-                (x, y),   // 4 top-left
-                (x1, y),  // 5 top ¼
-                (x3, y),  // 6 top ¾
-                (r, y),   // 7 top-right
-                (r, y1),  // 8 right ¼
-                (r, y3),  // 9 right ¾
-                (r, b),   // 10 bottom-right
-                (x3, b),  // 11 bottom ¾
-                (x1, b),  // 12 bottom ¼
-                (x, b),   // 13 bottom-left
-                (x, y3),  // 14 left ¾
-                (x, y1),  // 15 left ¼
-            ]);
-        }
-        v
+        RECT_UNIT[..4].iter().map(|&(a, b)| (x + a * w, y + b * h)).collect()
     };
     if f.rot == 0.0 {
         return local;
     }
     let c = f.center();
     local.into_iter().map(|p| rotate(p, c, f.rot)).collect()
+}
+
+/// The rectangle's sixteen sites in the unit box, in the frozen order.
+pub const RECT_UNIT: [(f64, f64); 16] = [
+    (0.5, 0.0), (0.0, 0.5), (0.5, 1.0), (1.0, 0.5),
+    (0.0, 0.0), (0.25, 0.0), (0.75, 0.0), (1.0, 0.0),
+    (1.0, 0.25), (1.0, 0.75), (1.0, 1.0),
+    (0.75, 1.0), (0.25, 1.0), (0.0, 1.0),
+    (0.0, 0.75), (0.0, 0.25),
+];
+
+type Poly = Vec<(f64, f64)>;
+
+/// Presets whose outline [`exact_outline`] knows exactly (so they can be written as a
+/// custom geometry with the same outline).
+pub const EXACT_PRESETS: &[&str] = &[
+    "triangle", "rtTriangle", "diamond", "parallelogram", "trapezoid", "pentagon", "hexagon", "octagon",
+    "chevron", "homePlate", "rightArrow", "leftArrow", "upArrow", "downArrow", "leftRightArrow", "star5", "plus",
+];
+
+/// Outline of a preset in the unit box (`w`, `h`: the frame's size, which the adjust values
+/// relative to the short side need). `exact` is false where the outline is a polygon
+/// approximation (can, cloud) or a silhouette (cube).
+fn outline(prst: &str, adj: &BTreeMap<String, f64>, w: f64, h: f64) -> Option<(Poly, bool)> {
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let a = |k: &str, d: f64| adj.get(k).copied().unwrap_or(d);
+    let ss = w.min(h);
+    let (uw, uh) = (ss / w, ss / h); // one `ss` as a part of the width / the height
+    let k = 1.0 / 100000.0;
+    let star = |inner: f64| -> Poly {
+        let (cx, cy, rx, ry) = (0.5, 0.5 * 1.10557, 0.5 * 1.05146, 0.5 * 1.10557);
+        let n = if inner < 0.0 { 5 } else { 10 };
+        (0..n)
+            .map(|i| {
+                let (ang, r) = if inner < 0.0 { (-90.0 + 72.0 * i as f64, 1.0) } else { (-90.0 + 36.0 * i as f64, if i % 2 == 0 { 1.0 } else { inner }) };
+                let t = f64::to_radians(ang);
+                (cx + rx * r * t.cos(), cy + ry * r * t.sin())
+            })
+            .collect()
+    };
+    let (poly, exact): (Poly, bool) = match prst {
+        "triangle" => {
+            let x = a("adj", 50000.0).clamp(0.0, 100000.0) * k;
+            (vec![(0.0, 1.0), (x, 0.0), (1.0, 1.0)], true)
+        }
+        "rtTriangle" => (vec![(0.0, 0.0), (0.0, 1.0), (1.0, 1.0)], true),
+        "diamond" => (vec![(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)], true),
+        "parallelogram" => {
+            let x2 = (a("adj", 25000.0).clamp(0.0, 100000.0 * w / ss) * k * uw).min(1.0);
+            (vec![(0.0, 1.0), (x2, 0.0), (1.0, 0.0), (1.0 - x2, 1.0)], true)
+        }
+        "trapezoid" => {
+            let x2 = (a("adj", 25000.0).clamp(0.0, 50000.0 * w / ss) * k * uw).min(0.5);
+            (vec![(0.0, 1.0), (x2, 0.0), (1.0 - x2, 0.0), (1.0, 1.0)], true)
+        }
+        "pentagon" => (star(-1.0), true),
+        "star5" => (star(a("adj", 19098.0).clamp(0.0, 50000.0) / 50000.0), true),
+        "hexagon" => {
+            let x1 = (a("adj", 25000.0).clamp(0.0, 50000.0 * w / ss) * k * uw).min(0.5);
+            (vec![(0.0, 0.5), (x1, 0.0), (1.0 - x1, 0.0), (1.0, 0.5), (1.0 - x1, 1.0), (x1, 1.0)], true)
+        }
+        "octagon" => {
+            let v = a("adj", 29289.0).clamp(0.0, 50000.0) * k;
+            let (x, y) = (v * uw, v * uh);
+            (vec![(0.0, y), (x, 0.0), (1.0 - x, 0.0), (1.0, y), (1.0, 1.0 - y), (1.0 - x, 1.0), (x, 1.0), (0.0, 1.0 - y)], true)
+        }
+        "chevron" => {
+            let x1 = (a("adj", 50000.0).clamp(0.0, 100000.0 * w / ss) * k * uw).min(1.0);
+            (vec![(0.0, 0.0), (1.0 - x1, 0.0), (1.0, 0.5), (1.0 - x1, 1.0), (0.0, 1.0), (x1, 0.5)], true)
+        }
+        "homePlate" => {
+            let d = (a("adj", 50000.0).clamp(0.0, 100000.0 * w / ss) * k * uw).min(1.0);
+            (vec![(0.0, 0.0), (1.0 - d, 0.0), (1.0, 0.5), (1.0 - d, 1.0), (0.0, 1.0)], true)
+        }
+        "rightArrow" | "leftArrow" => {
+            let half = a("adj1", 50000.0).clamp(0.0, 100000.0) * k / 2.0;
+            let d = (a("adj2", 50000.0).clamp(0.0, 100000.0 * w / ss) * k * uw).min(1.0);
+            let (y1, y2) = (0.5 - half, 0.5 + half);
+            let p = vec![(0.0, y1), (1.0 - d, y1), (1.0 - d, 0.0), (1.0, 0.5), (1.0 - d, 1.0), (1.0 - d, y2), (0.0, y2)];
+            (if prst == "leftArrow" { p.into_iter().map(|(x, y)| (1.0 - x, y)).collect() } else { p }, true)
+        }
+        "upArrow" | "downArrow" => {
+            let half = a("adj1", 50000.0).clamp(0.0, 100000.0) * k / 2.0;
+            let d = (a("adj2", 50000.0).clamp(0.0, 100000.0 * h / ss) * k * uh).min(1.0);
+            let (x1, x2) = (0.5 - half, 0.5 + half);
+            let p = vec![(0.0, d), (x1, d), (x1, 1.0), (x2, 1.0), (x2, d), (1.0, d), (0.5, 0.0)];
+            (if prst == "downArrow" { p.into_iter().map(|(x, y)| (x, 1.0 - y)).collect() } else { p }, true)
+        }
+        "leftRightArrow" => {
+            let half = a("adj1", 50000.0).clamp(0.0, 100000.0) * k / 2.0;
+            let d = (a("adj2", 50000.0).clamp(0.0, 50000.0 * w / ss) * k * uw).min(0.5);
+            let (y1, y2) = (0.5 - half, 0.5 + half);
+            (vec![(0.0, 0.5), (d, 0.0), (d, y1), (1.0 - d, y1), (1.0 - d, 0.0), (1.0, 0.5), (1.0 - d, 1.0), (1.0 - d, y2), (d, y2), (d, 1.0)], true)
+        }
+        "plus" => {
+            let v = a("adj", 25000.0).clamp(0.0, 50000.0) * k;
+            let (x, y) = (v * uw, v * uh);
+            (
+                vec![(0.0, y), (x, y), (x, 0.0), (1.0 - x, 0.0), (1.0 - x, y), (1.0, y), (1.0, 1.0 - y), (1.0 - x, 1.0 - y), (1.0 - x, 1.0), (x, 1.0), (x, 1.0 - y), (0.0, 1.0 - y)],
+                true,
+            )
+        }
+        "can" => {
+            let ry = (a("adj", 25000.0).clamp(0.0, 50000.0 * h / ss) * k * uh / 2.0).min(0.5);
+            let n = 24;
+            let mut p = Vec::new();
+            for i in 0..=n {
+                let t = std::f64::consts::PI * (1.0 + i as f64 / n as f64);
+                p.push((0.5 + 0.5 * t.cos(), ry + ry * t.sin()));
+            }
+            for i in 0..=n {
+                let t = std::f64::consts::PI * i as f64 / n as f64;
+                p.push((0.5 + 0.5 * t.cos(), 1.0 - ry + ry * t.sin()));
+            }
+            (p, false)
+        }
+        "cube" => {
+            let v = a("adj", 25000.0).clamp(0.0, 100000.0) * k;
+            let (x, y) = (v * uw, v * uh);
+            (vec![(0.0, y), (x, 0.0), (1.0, 0.0), (1.0, 1.0 - y), (1.0 - x, 1.0), (0.0, 1.0)], false)
+        }
+        // a cloud is taken as its bounding ellipse
+        "cloud" => (
+            (0..360)
+                .map(|i| {
+                    let t = f64::to_radians(i as f64);
+                    (0.5 + 0.5 * t.cos(), 0.5 + 0.5 * t.sin())
+                })
+                .collect(),
+            false,
+        ),
+        _ => return None,
+    };
+    Some((poly, exact))
+}
+
+/// The outline of a preset in the unit box, only when it is exactly the preset's own (so a
+/// custom geometry with it looks the same). `adj` are the values of `Geom.adj`.
+pub fn exact_outline(prst: &str, adj: &BTreeMap<String, f64>, w: f64, h: f64) -> Option<Vec<(f64, f64)>> {
+    outline(prst, adj, w, h).filter(|(_, e)| *e).map(|(p, _)| p)
+}
+
+/// Where the ray from the box centre through `target` leaves the polygon.
+/// `c` is the box centre, or for a shape whose centre lies on its outline (a right triangle) its
+/// vertex centroid. A ray that leaves nowhere (it starts in a notch, as a chevron's) ends at the
+/// centre when that is on the outline, else at the outline point nearest to `target`.
+fn leave_polygon(poly: &[(f64, f64)], c: (f64, f64), target: (f64, f64)) -> (f64, f64) {
+    let d = (target.0 - c.0, target.1 - c.1);
+    let cross = |a: (f64, f64), b: (f64, f64)| a.0 * b.1 - a.1 * b.0;
+    let mut best: Option<f64> = None;
+    for i in 0..poly.len() {
+        let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+        let e = (q.0 - p.0, q.1 - p.1);
+        let den = cross(d, e);
+        if den.abs() < 1e-14 {
+            continue;
+        }
+        let pc = (p.0 - c.0, p.1 - c.1);
+        let t = cross(pc, e) / den;
+        let s = cross(pc, d) / den;
+        if (-1e-9..=1.0 + 1e-9).contains(&s) && t > 1e-9 && best.is_none_or(|b| t > b) {
+            best = Some(t);
+        }
+    }
+    if let Some(t) = best {
+        return (c.0 + t * d.0, c.1 + t * d.1);
+    }
+    let mut nearest = (f64::MAX, c);
+    for i in 0..poly.len() {
+        let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+        let (ex, ey) = (q.0 - p.0, q.1 - p.1);
+        let l2 = ex * ex + ey * ey;
+        for &r in &[c, target] {
+            let t = if l2 == 0.0 { 0.0 } else { (((r.0 - p.0) * ex + (r.1 - p.1) * ey) / l2).clamp(0.0, 1.0) };
+            let n = (p.0 + t * ex, p.1 + t * ey);
+            let dist = (n.0 - r.0).hypot(n.1 - r.1);
+            if r == c && dist < 1e-9 {
+                return c;
+            }
+            if r == target && dist < nearest.0 {
+                nearest = (dist, n);
+            }
+        }
+    }
+    nearest.1
+}
+
+/// The sixteen connection sites of a preset in the unit box of its frame, in the numbering of
+/// [`sites`]; `None` for a preset not known (it keeps four). `w`, `h` are the frame's size.
+/// Flips mirror the outline (the numbering stays that of the rectangle, as for rectangles);
+/// an ellipse's points do not turn with a flip, as before.
+pub fn preset_sites_unit(prst: &str, adj: &BTreeMap<String, f64>, w: f64, h: f64, flip_h: bool, flip_v: bool) -> Option<Vec<(f64, f64)>> {
+    if prst == "ellipse" {
+        let at = |deg: f64| {
+            let t = deg.to_radians();
+            (0.5 + 0.5 * t.cos(), 0.5 + 0.5 * t.sin())
+        };
+        let mut v: Vec<(f64, f64)> = (0..8).map(|i| at(-90.0 - 45.0 * i as f64)).collect();
+        v.extend((0..8).map(|i| at(-90.0 - 22.5 - 45.0 * i as f64)));
+        return Some(v);
+    }
+    let (mut poly, _) = outline(prst, adj, w, h)?;
+    for p in &mut poly {
+        if flip_h {
+            p.0 = 1.0 - p.0;
+        }
+        if flip_v {
+            p.1 = 1.0 - p.1;
+        }
+    }
+    let c = if prst == "rtTriangle" {
+        let n = poly.len() as f64;
+        (poly.iter().map(|p| p.0).sum::<f64>() / n, poly.iter().map(|p| p.1).sum::<f64>() / n)
+    } else {
+        (0.5, 0.5)
+    };
+    Some(RECT_UNIT.iter().map(|&t| leave_polygon(&poly, c, t)).collect())
 }
 
 /// Start and end point of a connector (slide space, before rotation is applied
@@ -474,7 +674,6 @@ mod tests {
 
     #[test]
     fn ellipses_and_custom_paths_keep_their_points() {
-        assert_eq!(sites(&shape("ellipse", Frame::new(0, 0, 400, 400))).len(), 8);
         let mut o = shape("custom", Frame::new(0, 0, 400, 400));
         if let Kind::Shape(sp) = &mut o.kind {
             sp.geom.path = Some("M0 0 L1 0 L0.5 1 Z".into());
@@ -498,10 +697,8 @@ mod tests {
     }
 
     #[test]
-    fn other_presets_keep_four() {
-        for p in ["triangle", "diamond", "trapezoid"] {
-            assert_eq!(sites(&shape(p, Frame::new(0, 0, 400, 400))).len(), 4, "{p}");
-        }
+    fn an_unknown_preset_keeps_four() {
+        assert_eq!(sites(&shape("wave", Frame::new(0, 0, 400, 400))).len(), 4);
     }
 
     fn slide_with(block: Object, conn: Object) -> Slide {
@@ -545,5 +742,204 @@ mod tests {
         let a = snap_site(&s, (3., 395.), 20.0, None).unwrap();
         assert_eq!(a.site, 13);
         assert!(snap_site(&s, (150., 150.), 20.0, None).is_none());
+    }
+
+    // ---- sixteen sites for every preset ----
+
+    const KNOWN: &[&str] = &[
+        "triangle", "rtTriangle", "diamond", "parallelogram", "trapezoid", "pentagon", "hexagon", "octagon", "chevron", "homePlate",
+        "rightArrow", "leftArrow", "upArrow", "downArrow", "leftRightArrow", "can", "cube", "star5", "plus", "cloud",
+    ];
+
+    fn with(prst: &str, f: Frame, adj: &[(&str, f64)]) -> Object {
+        let mut o = shape(prst, f);
+        if let Kind::Shape(sp) = &mut o.kind {
+            for (k, v) in adj {
+                sp.geom.adj.insert((*k).into(), *v);
+            }
+        }
+        o
+    }
+
+    fn dist_to_polygon(poly: &[(f64, f64)], p: (f64, f64)) -> f64 {
+        let mut best = f64::MAX;
+        for i in 0..poly.len() {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            let (ex, ey) = (b.0 - a.0, b.1 - a.1);
+            let l2 = ex * ex + ey * ey;
+            let t = if l2 == 0.0 { 0.0 } else { (((p.0 - a.0) * ex + (p.1 - a.1) * ey) / l2).clamp(0.0, 1.0) };
+            best = best.min(((a.0 + t * ex - p.0).powi(2) + (a.1 + t * ey - p.1).powi(2)).sqrt());
+        }
+        best
+    }
+
+    #[test]
+    fn an_ellipse_has_sixteen_and_its_first_eight_are_where_they_were() {
+        let v = sites(&shape("ellipse", Frame::new(0, 0, 400, 200)));
+        assert_eq!(v.len(), 16);
+        // the old eight: 0 top, then counter-clockwise in 45° steps
+        for i in 0..8 {
+            let a = (-90.0 - 45.0 * i as f64).to_radians();
+            assert!(near(v[i], (200.0 + 200.0 * a.cos(), 100.0 + 100.0 * a.sin())), "{i}");
+        }
+        assert!(near(v[0], (200., 0.)) && near(v[2], (0., 100.)) && near(v[4], (200., 200.)) && near(v[6], (400., 100.)));
+        // 8..15: in between, in the same counter-clockwise order, all on the ellipse
+        for i in 0..8 {
+            let a = (-90.0 - 22.5 - 45.0 * i as f64).to_radians();
+            assert!(near(v[8 + i], (200.0 + 200.0 * a.cos(), 100.0 + 100.0 * a.sin())), "{}", 8 + i);
+            let (dx, dy) = ((v[8 + i].0 - 200.0) / 200.0, (v[8 + i].1 - 100.0) / 100.0);
+            assert!((dx * dx + dy * dy - 1.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_rectangle_is_unchanged() {
+        let v = sites(&shape("rect", Frame::new(10, 20, 400, 200)));
+        assert_eq!(v.len(), 16);
+        for (i, &(u, w)) in RECT_UNIT.iter().enumerate() {
+            assert!(near(v[i], (10.0 + u * 400.0, 20.0 + w * 200.0)), "{i}");
+        }
+    }
+
+    #[test]
+    fn every_known_preset_has_sixteen_on_its_outline() {
+        for p in KNOWN {
+            for f in [Frame::new(0, 0, 400, 400), Frame::new(100, 50, 900, 300), Frame::new(0, 0, 200, 700)] {
+                let o = shape(p, f.clone());
+                let v = sites(&o);
+                assert_eq!(v.len(), 16, "{p}");
+                let (poly, _) = outline(p, &BTreeMap::new(), f.w as f64, f.h as f64).unwrap();
+                for (i, q) in v.iter().enumerate() {
+                    let u = ((q.0 - f.x as f64) / f.w as f64, (q.1 - f.y as f64) / f.h as f64);
+                    assert!(dist_to_polygon(&poly, u) < 1e-6, "{p} site {i} at {u:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sites_zero_to_three_are_the_extremes_for_every_preset() {
+        for p in KNOWN {
+            let f = Frame::new(0, 0, 400, 400);
+            let v = sites(&shape(p, f.clone()));
+            if *p == "rtTriangle" {
+                continue; // its rays start at the centroid (the box centre is on its hypotenuse)
+            }
+            // on the axes through the centre, on the right side of it
+            assert!((v[0].0 - 200.0).abs() < 1e-6 && v[0].1 < 200.0, "{p} top {:?}", v[0]);
+            assert!((v[2].0 - 200.0).abs() < 1e-6 && v[2].1 > 200.0, "{p} bottom {:?}", v[2]);
+            assert!((v[1].1 - 200.0).abs() < 1e-6 && v[1].0 <= 200.0, "{p} left {:?}", v[1]);
+            assert!((v[3].1 - 200.0).abs() < 1e-6 && v[3].0 > 200.0, "{p} right {:?}", v[3]);
+        }
+        // where the outline touches the middle of the frame's side, the site is that point
+        let v = sites(&shape("diamond", Frame::new(0, 0, 400, 400)));
+        assert!(near(v[0], (200., 0.)) && near(v[2], (200., 400.)) && near(v[1], (0., 200.)) && near(v[3], (400., 200.)));
+        let v = sites(&shape("hexagon", Frame::new(0, 0, 400, 400)));
+        assert!(near(v[1], (0., 200.)) && near(v[3], (400., 200.)) && near(v[0], (200., 0.)) && near(v[2], (200., 400.)));
+        // a triangle's left site is the middle of its left edge, as in PowerPoint
+        let v = sites(&shape("triangle", Frame::new(0, 0, 400, 400)));
+        assert!(near(v[1], (100., 200.)) && near(v[3], (300., 200.)) && near(v[0], (200., 0.)));
+    }
+
+    #[test]
+    fn adjust_values_move_the_sites() {
+        let f = Frame::new(0, 0, 400, 400);
+        let a = sites(&with("trapezoid", f.clone(), &[("adj", 25000.0)]));
+        let b = sites(&with("trapezoid", f.clone(), &[("adj", 40000.0)]));
+        // site 4 is where the diagonal from the centre meets the slanted left edge: x = y with
+        // x = (ss * adj / 100000) * (1 - y / h)
+        assert!(near(a[4], (80., 80.)) && near(b[4], (400. * 0.4 / 1.4, 400. * 0.4 / 1.4)), "{:?} {:?}", a[4], b[4]);
+        assert!(a[4] != b[4]);
+        // the left middle follows the slanted edge
+        assert!(near(a[1], (50., 200.)) && near(b[1], (80., 200.)));
+        let h1 = sites(&with("hexagon", f.clone(), &[("adj", 25000.0)]));
+        let h2 = sites(&with("hexagon", f.clone(), &[("adj", 10000.0)]));
+        assert!(h1[4] != h2[4]);
+    }
+
+    #[test]
+    fn flips_and_rotation_apply() {
+        let f = Frame::new(0, 0, 400, 400);
+        let a = sites(&shape("rtTriangle", f.clone()));
+        let mut ff = f.clone();
+        ff.flip_h = true;
+        let b = sites(&shape("rtTriangle", ff));
+        // the right angle is at the left; flipped it is at the right: the left middle moves
+        assert!(near(a[1], (0., 200.)), "{:?}", a[1]);
+        assert!(b[1].0 > 100.0, "{:?}", b[1]);
+        let mut fr = Frame::new(0, 0, 400, 200);
+        fr.rot = 90.0;
+        let d = sites(&shape("diamond", fr.clone()));
+        // centre (200,100); the top (200,0) turned 90° clockwise lands at (300,100)
+        assert!(near(d[0], (300., 100.)), "{:?}", d[0]);
+        assert_eq!(sites(&shape("hexagon", fr)).len(), 16);
+    }
+
+    #[test]
+    fn a_line_attached_to_site_ten_of_a_hexagon_follows_it() {
+        let b = shape("hexagon", Frame::new(0, 0, 400, 400));
+        let start = sites(&b)[10];
+        let s0 = slide_with(b.clone(), connector(1, 10));
+        let mut s = s0.clone();
+        s.objects[0].frame.x += 700;
+        s.objects[0].frame.y += 300;
+        let moved: BTreeSet<u32> = [1].into();
+        let r = reroute(&s, &moved);
+        assert_eq!(r.len(), 1);
+        let (_, end) = connector_points(&r[0].1);
+        let tol = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() <= 1.0 && (a.1 - b.1).abs() <= 1.0;
+        assert!(tol(end, (start.0 + 700.0, start.1 + 300.0)), "{end:?} vs {start:?}");
+        assert!(tol(end, sites(&s.objects[0])[10]));
+    }
+
+    fn vectors() -> serde_json::Value {
+        let mut cases = Vec::new();
+        let mut names: Vec<&str> = KNOWN.to_vec();
+        names.extend(["ellipse", "rect", "roundRect"]);
+        let adjs: [&[(&str, f64)]; 3] = [&[], &[("adj", 40000.0)], &[("adj1", 30000.0), ("adj2", 60000.0)]];
+        for p in names {
+            for (fi, f) in [Frame::new(1_000_000, 500_000, 3_000_000, 1_500_000), Frame::new(0, 0, 914_400, 2_000_000)].into_iter().enumerate() {
+                for adj in adjs {
+                    for (fh, fv) in [(false, false), (true, false), (false, true)] {
+                        if fi == 1 && (fh || fv) {
+                            continue;
+                        }
+                        let mut fr = f.clone();
+                        fr.flip_h = fh;
+                        fr.flip_v = fv;
+                        if adj.len() == 2 && fi == 1 {
+                            fr.rot = 30.0;
+                        }
+                        let o = with(p, fr.clone(), adj);
+                        let pts: Vec<serde_json::Value> = sites(&o).iter().map(|q| serde_json::json!([q.0.round() as i64, q.1.round() as i64])).collect();
+                        let adjm: serde_json::Map<String, serde_json::Value> = adj.iter().map(|(k, v)| ((*k).to_string(), serde_json::json!(v))).collect();
+                        cases.push(serde_json::json!({
+                            "prst": p, "frame": {"x": fr.x, "y": fr.y, "w": fr.w, "h": fr.h, "rot": fr.rot, "flip_h": fh, "flip_v": fv},
+                            "adj": adjm, "sites": pts
+                        }));
+                    }
+                }
+            }
+        }
+        serde_json::Value::Array(cases)
+    }
+
+    fn vectors_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/sites.json")
+    }
+
+    /// `cargo test -p lore-canvas --lib write_sites_vectors -- --ignored` rewrites the shared vector.
+    #[test]
+    #[ignore]
+    fn write_sites_vectors() {
+        let p = vectors_path();
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, serde_json::to_string_pretty(&vectors()).unwrap() + "\n").unwrap();
+    }
+
+    #[test]
+    fn the_shared_sites_vector_is_current() {
+        let on_disk: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(vectors_path()).expect("run write_sites_vectors")).unwrap();
+        assert_eq!(on_disk, vectors(), "tests/data/sites.json is out of date: run write_sites_vectors --ignored");
     }
 }

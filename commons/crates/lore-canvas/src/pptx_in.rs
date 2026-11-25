@@ -79,21 +79,22 @@ pub(crate) fn geom_of(g: Option<&om::Geometry>) -> Geom {
             adj: adj_of(adj),
             path: None,
         },
-        // a rectangle written with sixteen connection points (see `pptx_out::sixteen_geom`)
+        // a preset written with sixteen connection points (see `pptx_out::sixteen_for`)
         Some(om::Geometry::Custom(e)) if crate::pptx_out::sixteen_of(e).is_some() => {
-            let prst = crate::pptx_out::sixteen_of(e).unwrap_or("rect");
-            let mut adj = BTreeMap::new();
+            let prst = crate::pptx_out::sixteen_of(e).unwrap_or_else(|| "rect".into());
+            let list: Vec<(String, String)> = e
+                .child("a:avLst")
+                .map(|l| {
+                    l.elements()
+                        .filter_map(|g| Some((g.attrs.get("name")?.to_string(), g.attrs.get("fmla")?.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut adj = adj_of(&Some(list));
             if prst == "roundRect" {
-                let v = e
-                    .child("a:avLst")
-                    .and_then(|l| l.elements().find(|g| g.attrs.get("name") == Some("adj")))
-                    .and_then(|g| g.attrs.get("fmla"))
-                    .and_then(|f| f.strip_prefix("val "))
-                    .and_then(|v| v.trim().parse::<f64>().ok())
-                    .unwrap_or(16667.0);
-                adj.insert("adj".to_string(), v);
+                adj.entry("adj".to_string()).or_insert(16667.0);
             }
-            Geom { prst: prst.into(), adj, path: None }
+            Geom { prst, adj, path: None }
         }
         Some(om::Geometry::Custom(e)) => Geom {
             prst: "custom".into(),

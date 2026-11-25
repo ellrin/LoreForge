@@ -636,6 +636,7 @@ function connMid(o) {
 function connFrame(a, b) {
   return { x: Math.round(Math.min(a[0], b[0])), y: Math.round(Math.min(a[1], b[1])), w: Math.round(Math.abs(b[0] - a[0])), h: Math.round(Math.abs(b[1] - a[1])), flip_h: b[0] < a[0], flip_v: b[1] < a[1] };
 }
+// sites:path-begin
 /** Vertices of a custom path (0..1 box): one connection site each, same order as lore-canvas geom::path_vertices. */
 function pathVertices(path) {
   const toks = path.replace(/,/g, " ").match(/[A-Za-z]|-?[\d.]+(?:e-?\d+)?/g) ?? [];
@@ -654,37 +655,143 @@ function pathVertices(path) {
   }
   return out;
 }
+// sites:path-end
+// sites:begin
+// (web/tests/sites.test.js loads this block and checks it against the Rust numbers)
+/** The rectangle's sixteen sites in the unit box, in the frozen order of lore_flow::figure::SITES:
+ *  0 top middle, 1 left middle, 2 bottom middle, 3 right middle (PowerPoint's order),
+ *  then clockwise from the top-left corner: 4 top-left, 5 top 1/4, 6 top 3/4, 7 top-right,
+ *  8 right 1/4, 9 right 3/4, 10 bottom-right, 11 bottom 3/4, 12 bottom 1/4, 13 bottom-left,
+ *  14 left 3/4, 15 left 1/4 (1/4 and 3/4 left to right on top and bottom, top to bottom on the sides). */
+const RECT_UNIT = [
+  [0.5, 0], [0, 0.5], [0.5, 1], [1, 0.5],
+  [0, 0], [0.25, 0], [0.75, 0], [1, 0],
+  [1, 0.25], [1, 0.75], [1, 1],
+  [0.75, 1], [0.25, 1], [0, 1],
+  [0, 0.75], [0, 0.25],
+];
+/** Outline of a preset in the unit box (same table as lore-canvas geom::outline), or null for a
+ *  preset not known. w, h = the frame's size (adjust values relative to the short side need it). */
+function presetOutline(prst, adj, w, h) {
+  if (!(w > 0 && h > 0)) return null;
+  const a = (k, d) => (adj && typeof adj[k] === "number" ? adj[k] : d);
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const ss = Math.min(w, h), uw = ss / w, uh = ss / h, k = 1 / 100000;
+  const star = (inner) => {
+    const cx = 0.5, cy = 0.5 * 1.10557, rx = 0.5 * 1.05146, ry = 0.5 * 1.10557;
+    const n = inner < 0 ? 5 : 10;
+    return [...Array(n)].map((_, i) => {
+      const ang = inner < 0 ? -90 + 72 * i : -90 + 36 * i, r = inner < 0 ? 1 : i % 2 === 0 ? 1 : inner;
+      const t = (ang * Math.PI) / 180;
+      return [cx + rx * r * Math.cos(t), cy + ry * r * Math.sin(t)];
+    });
+  };
+  switch (prst) {
+    case "triangle": { const x = clamp(a("adj", 50000), 0, 100000) * k; return [[0, 1], [x, 0], [1, 1]]; }
+    case "rtTriangle": return [[0, 0], [0, 1], [1, 1]];
+    case "diamond": return [[0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]];
+    case "parallelogram": { const x2 = Math.min(1, clamp(a("adj", 25000), 0, (100000 * w) / ss) * k * uw); return [[0, 1], [x2, 0], [1, 0], [1 - x2, 1]]; }
+    case "trapezoid": { const x2 = Math.min(0.5, clamp(a("adj", 25000), 0, (50000 * w) / ss) * k * uw); return [[0, 1], [x2, 0], [1 - x2, 0], [1, 1]]; }
+    case "pentagon": return star(-1);
+    case "star5": return star(clamp(a("adj", 19098), 0, 50000) / 50000);
+    case "hexagon": { const x1 = Math.min(0.5, clamp(a("adj", 25000), 0, (50000 * w) / ss) * k * uw); return [[0, 0.5], [x1, 0], [1 - x1, 0], [1, 0.5], [1 - x1, 1], [x1, 1]]; }
+    case "octagon": { const v = clamp(a("adj", 29289), 0, 50000) * k, x = v * uw, y = v * uh; return [[0, y], [x, 0], [1 - x, 0], [1, y], [1, 1 - y], [1 - x, 1], [x, 1], [0, 1 - y]]; }
+    case "chevron": { const x1 = Math.min(1, clamp(a("adj", 50000), 0, (100000 * w) / ss) * k * uw); return [[0, 0], [1 - x1, 0], [1, 0.5], [1 - x1, 1], [0, 1], [x1, 0.5]]; }
+    case "homePlate": { const d = Math.min(1, clamp(a("adj", 50000), 0, (100000 * w) / ss) * k * uw); return [[0, 0], [1 - d, 0], [1, 0.5], [1 - d, 1], [0, 1]]; }
+    case "rightArrow": case "leftArrow": {
+      const half = (clamp(a("adj1", 50000), 0, 100000) * k) / 2, d = Math.min(1, clamp(a("adj2", 50000), 0, (100000 * w) / ss) * k * uw);
+      const y1 = 0.5 - half, y2 = 0.5 + half;
+      const p = [[0, y1], [1 - d, y1], [1 - d, 0], [1, 0.5], [1 - d, 1], [1 - d, y2], [0, y2]];
+      return prst === "leftArrow" ? p.map(([x, y]) => [1 - x, y]) : p;
+    }
+    case "upArrow": case "downArrow": {
+      const half = (clamp(a("adj1", 50000), 0, 100000) * k) / 2, d = Math.min(1, clamp(a("adj2", 50000), 0, (100000 * h) / ss) * k * uh);
+      const x1 = 0.5 - half, x2 = 0.5 + half;
+      const p = [[0, d], [x1, d], [x1, 1], [x2, 1], [x2, d], [1, d], [0.5, 0]];
+      return prst === "downArrow" ? p.map(([x, y]) => [x, 1 - y]) : p;
+    }
+    case "leftRightArrow": {
+      const half = (clamp(a("adj1", 50000), 0, 100000) * k) / 2, d = Math.min(0.5, clamp(a("adj2", 50000), 0, (50000 * w) / ss) * k * uw);
+      const y1 = 0.5 - half, y2 = 0.5 + half;
+      return [[0, 0.5], [d, 0], [d, y1], [1 - d, y1], [1 - d, 0], [1, 0.5], [1 - d, 1], [1 - d, y2], [d, y2], [d, 1]];
+    }
+    case "plus": { const v = clamp(a("adj", 25000), 0, 50000) * k, x = v * uw, y = v * uh; return [[0, y], [x, y], [x, 0], [1 - x, 0], [1 - x, y], [1, y], [1, 1 - y], [1 - x, 1 - y], [1 - x, 1], [x, 1], [x, 1 - y], [0, 1 - y]]; }
+    case "can": {
+      const ry = Math.min(0.5, (clamp(a("adj", 25000), 0, (50000 * h) / ss) * k * uh) / 2), n = 24, p = [];
+      for (let i = 0; i <= n; i++) { const t = Math.PI * (1 + i / n); p.push([0.5 + 0.5 * Math.cos(t), ry + ry * Math.sin(t)]); }
+      for (let i = 0; i <= n; i++) { const t = (Math.PI * i) / n; p.push([0.5 + 0.5 * Math.cos(t), 1 - ry + ry * Math.sin(t)]); }
+      return p;
+    }
+    case "cube": { const v = clamp(a("adj", 25000), 0, 100000) * k, x = v * uw, y = v * uh; return [[0, y], [x, 0], [1, 0], [1, 1 - y], [1 - x, 1], [0, 1]]; }
+    case "cloud": return [...Array(360)].map((_, i) => { const t = (i * Math.PI) / 180; return [0.5 + 0.5 * Math.cos(t), 0.5 + 0.5 * Math.sin(t)]; });
+    default: return null;
+  }
+}
+/** Where the ray from `c` through `target` leaves the polygon (the farthest crossing); a ray that
+ *  leaves nowhere ends at `c` when that is on the outline, else at the outline point nearest `target`. */
+function leavePolygon(poly, c, target) {
+  const d = [target[0] - c[0], target[1] - c[1]];
+  const cross = (p, q) => p[0] * q[1] - p[1] * q[0];
+  let best = null;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length], e = [q[0] - p[0], q[1] - p[1]];
+    const den = cross(d, e);
+    if (Math.abs(den) < 1e-14) continue;
+    const pc = [p[0] - c[0], p[1] - c[1]], t = cross(pc, e) / den, s = cross(pc, d) / den;
+    if (s >= -1e-9 && s <= 1 + 1e-9 && t > 1e-9 && (best === null || t > best)) best = t;
+  }
+  if (best !== null) return [c[0] + best * d[0], c[1] + best * d[1]];
+  let nearest = [Infinity, c];
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length], ex = q[0] - p[0], ey = q[1] - p[1], l2 = ex * ex + ey * ey;
+    for (const r of [c, target]) {
+      const t = l2 === 0 ? 0 : clampUnit(((r[0] - p[0]) * ex + (r[1] - p[1]) * ey) / l2);
+      const n = [p[0] + t * ex, p[1] + t * ey], dist = Math.hypot(n[0] - r[0], n[1] - r[1]);
+      if (r === c && dist < 1e-9) return c;
+      if (r === target && dist < nearest[0]) nearest = [dist, n];
+    }
+  }
+  return nearest[1];
+}
+function clampUnit(t) { return Math.min(1, Math.max(0, t)); }
+/** The sixteen sites of a preset in the unit box (same numbering as lore-canvas geom::preset_sites_unit):
+ *  an ellipse 0-7 counter-clockwise from the top in 45 degree steps, 8-15 half way between in the same
+ *  order; any other known preset where the ray from the centre to the rectangle's site of that number
+ *  leaves the outline (flips mirror the outline). null for a preset not known. */
+function presetSitesUnit(prst, adj, w, h, flipH, flipV) {
+  if (prst === "ellipse") {
+    const at = (deg) => { const t = (deg * Math.PI) / 180; return [0.5 + 0.5 * Math.cos(t), 0.5 + 0.5 * Math.sin(t)]; };
+    return [...[...Array(8)].map((_, i) => at(-90 - 45 * i)), ...[...Array(8)].map((_, i) => at(-90 - 22.5 - 45 * i))];
+  }
+  let poly = presetOutline(prst, adj, w, h);
+  if (!poly) return null;
+  poly = poly.map(([x, y]) => [flipH ? 1 - x : x, flipV ? 1 - y : y]);
+  const c = prst === "rtTriangle" ? [poly.reduce((s, p) => s + p[0], 0) / poly.length, poly.reduce((s, p) => s + p[1], 0) / poly.length] : [0.5, 0.5];
+  return RECT_UNIT.map((t) => leavePolygon(poly, c, t));
+}
 /** Connection sites of an object (same order and count as lore-canvas geom::sites).
  *  Rectangles (rect, roundRect, text boxes) and objects without a shape of their own (pictures,
- *  groups, tables): sixteen, in the frozen order of lore_flow::figure::SITES:
- *    0 top middle, 1 left middle, 2 bottom middle, 3 right middle (PowerPoint's order),
- *    then clockwise from the top-left corner: 4 top-left, 5 top 1/4, 6 top 3/4, 7 top-right,
- *    8 right 1/4, 9 right 3/4, 10 bottom-right, 11 bottom 3/4, 12 bottom 1/4, 13 bottom-left,
- *    14 left 3/4, 15 left 1/4 (1/4 and 3/4 left to right on top and bottom, top to bottom on the sides).
- *  Ellipses: 8 counter-clockwise from the top. Custom paths: one per vertex. Other presets: 4 (0-3). */
+ *  groups, tables): sixteen in RECT_UNIT's order. Ellipses and every other known preset (triangle,
+ *  diamond, trapezoid, parallelogram, pentagon, hexagon, octagon, chevron, homePlate, the arrows,
+ *  can, cube, star5, plus, cloud): sixteen, see presetSitesUnit. Custom paths: one per vertex.
+ *  A preset not known: 4 (0-3). */
 function sites(o) {
   const f = o.frame;
   let pts;
   const verts = o.type !== "connector" && o.geom?.prst === "custom" && o.geom.path ? pathVertices(o.geom.path) : [];
+  const prst = o.type === "connector" ? null : o.geom?.prst;
+  const rectLike = !o.geom || prst === "rect" || prst === "roundRect" || prst == null;
+  const unit = verts.length || rectLike ? null : presetSitesUnit(prst, o.geom.adj, f.w, f.h, !!f.flip_h, !!f.flip_v);
   if (verts.length) {
     pts = verts.map(([u, v]) => [f.x + (f.flip_h ? 1 - u : u) * f.w, f.y + (f.flip_v ? 1 - v : v) * f.h]);
-  } else if (o.type !== "connector" && o.geom?.prst === "ellipse") {
-    pts = [...Array(8)].map((_, i) => { const a = ((-90 - 45 * i) * Math.PI) / 180; return [f.x + f.w / 2 + (f.w / 2) * Math.cos(a), f.y + f.h / 2 + (f.h / 2) * Math.sin(a)]; });
+  } else if (unit) {
+    pts = unit.map(([u, v]) => [f.x + u * f.w, f.y + v * f.h]);
   } else {
-    const { x, y, w, h } = f;
-    pts = [[x + w / 2, y], [x, y + h / 2], [x + w / 2, y + h], [x + w, y + h / 2]];
-    const prst = o.type === "connector" ? null : o.geom?.prst;
-    if (!o.geom || prst === "rect" || prst === "roundRect" || prst == null) {
-      pts.push(
-        [x, y], [x + w / 4, y], [x + (3 * w) / 4, y], [x + w, y],
-        [x + w, y + h / 4], [x + w, y + (3 * h) / 4], [x + w, y + h],
-        [x + (3 * w) / 4, y + h], [x + w / 4, y + h], [x, y + h],
-        [x, y + (3 * h) / 4], [x, y + h / 4],
-      );
-    }
+    pts = (rectLike ? RECT_UNIT : RECT_UNIT.slice(0, 4)).map(([u, v]) => [f.x + u * f.w, f.y + v * f.h]);
   }
   return pts.map(([x, y]) => rotPt(f, x, y));
 }
+// sites:end
 /** The connection site of `o` closest to `toward`. */
 function closestSite(o, toward) {
   let best = null;

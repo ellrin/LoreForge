@@ -176,27 +176,41 @@ pub const MARK_RECT: &str = "lore16rect";
 /// The same for a rounded rectangle.
 pub const MARK_ROUND: &str = "lore16round";
 
-/// The preset (`rect` / `roundRect`) a sixteen-point custom geometry stands for.
-pub fn sixteen_of(e: &Element) -> Option<&'static str> {
+/// Prefix of the marker guide of any other preset written with sixteen connection points
+/// (`lore16_diamond`, `lore16_hexagon`, `lore16_ellipse` …).
+pub const MARK_PREFIX: &str = "lore16_";
+
+/// The preset a sixteen-point custom geometry stands for.
+pub fn sixteen_of(e: &Element) -> Option<String> {
     let l = e.child("a:gdLst")?;
     l.elements().find_map(|g| match g.attrs.get("name") {
-        Some(MARK_RECT) => Some("rect"),
-        Some(MARK_ROUND) => Some("roundRect"),
+        Some(MARK_RECT) => Some("rect".to_string()),
+        Some(MARK_ROUND) => Some("roundRect".to_string()),
+        Some(n) => n.strip_prefix(MARK_PREFIX).filter(|p| !p.is_empty()).map(|p| p.to_string()),
         _ => None,
     })
 }
 
-fn is_rect_like(o: &Object) -> bool {
-    matches!(&o.kind, Kind::Text(sp) | Kind::Shape(sp) if matches!(sp.geom.prst.as_str(), "rect" | "roundRect"))
+/// The preset of a shape that can be written with sixteen connection points, with the first
+/// site number PowerPoint's own list for it cannot hold (an ellipse has eight, the rest four).
+fn sixteen_form(o: &Object) -> Option<(&str, u32)> {
+    let (Kind::Text(sp) | Kind::Shape(sp)) = &o.kind else { return None };
+    let p = sp.geom.prst.as_str();
+    match p {
+        "rect" | "roundRect" => Some((p, 4)),
+        "ellipse" => Some((p, 8)),
+        _ if crate::geom::EXACT_PRESETS.contains(&p) => Some((p, 4)),
+        _ => None,
+    }
 }
 
-/// Does this object have to be written with sixteen connection points: a rectangle or rounded
-/// rectangle (or text box) that a connector end holds at a site of 4 or more.
+/// Does this object have to be written with sixteen connection points: a shape (see
+/// [`sixteen_form`]) that a connector end holds at a site PowerPoint's own list lacks.
 fn needs_sixteen(o: &Object) -> bool {
-    is_rect_like(o) && SIXTEEN.with(|s| s.borrow().contains(&o.id))
+    sixteen_form(o).is_some() && SIXTEEN.with(|s| s.borrow().contains(&o.id))
 }
 
-/// Ids of the rectangles of `objs` that connector ends hold at a site of 4 or more.
+/// Ids of the shapes of `objs` that connector ends hold at a site beyond PowerPoint's own.
 fn sixteen_targets(objs: &[Object]) -> BTreeSet<u32> {
     fn walk<'a>(objs: &'a [Object], all: &mut Vec<&'a Object>) {
         for o in objs {
@@ -212,12 +226,70 @@ fn sixteen_targets(objs: &[Object]) -> BTreeSet<u32> {
     for o in &all {
         let Kind::Connector(c) = &o.kind else { continue };
         for a in [&c.start, &c.end].into_iter().flatten() {
-            if a.site >= 4 && all.iter().any(|t| t.id == a.id && is_rect_like(t)) {
+            if all.iter().any(|t| t.id == a.id && sixteen_form(t).is_some_and(|(_, first)| a.site >= first)) {
                 out.insert(a.id);
             }
         }
     }
     out
+}
+
+/// The custom geometry of `o`'s preset with sixteen connection sites, marked so import reads the
+/// preset (and its adjust values) back. The sites are those of `geom::sites`; PowerPoint mirrors
+/// them with the shape's flips, so they are written mirrored back.
+fn sixteen_for(o: &Object) -> Option<Element> {
+    let (prst, _) = sixteen_form(o)?;
+    let (Kind::Text(sp) | Kind::Shape(sp)) = &o.kind else { return None };
+    if matches!(prst, "rect" | "roundRect") {
+        return Some(sixteen_geom(prst, sp.geom.adj.get("adj").copied().unwrap_or(16667.0)));
+    }
+    let f = &o.frame;
+    let (w, h) = (f.w as f64, f.h as f64);
+    let sites = crate::geom::preset_sites_unit(prst, &sp.geom.adj, w, h, f.flip_h, f.flip_v)?;
+    let outline: Option<Vec<(f64, f64)>> = if prst == "ellipse" { None } else { Some(crate::geom::exact_outline(prst, &sp.geom.adj, w, h)?) };
+    const N: f64 = 1_000_000.0;
+    let gd = |n: &str, f: &str| Element::new("a:gd").with_attr("name", n).with_attr("fmla", f);
+    let mut av = Element::new("a:avLst");
+    for (k, v) in &sp.geom.adj {
+        av.push(gd(k, &format!("val {}", v.round() as i64)));
+    }
+    let mut gl = Element::new("a:gdLst");
+    gl.push(gd(&format!("{MARK_PREFIX}{prst}"), "val 0"));
+    let mut cxn = Element::new("a:cxnLst");
+    for (i, (u, v)) in sites.iter().enumerate() {
+        let u = if f.flip_h { 1.0 - u } else { *u };
+        let v = if f.flip_v { 1.0 - v } else { *v };
+        gl.push(gd(&format!("sx{i}"), &format!("*/ w {} 1000000", (u * N).round() as i64)));
+        gl.push(gd(&format!("sy{i}"), &format!("*/ h {} 1000000", (v * N).round() as i64)));
+        let mut c = Element::new("a:cxn").with_attr("ang", "0");
+        c.push(Element::new("a:pos").with_attr("x", &format!("sx{i}")).with_attr("y", &format!("sy{i}")));
+        cxn.push(c);
+    }
+    let pt = |x: &str, y: &str| Element::new("a:pt").with_attr("x", x).with_attr("y", y);
+    let to = |n: &str, x: &str, y: &str| Element::new(n).with_child(pt(x, y));
+    let mut p = Element::new("a:path");
+    match outline {
+        None => {
+            p.push(to("a:moveTo", "l", "vc"));
+            p.push(Element::new("a:arcTo").with_attr("wR", "wd2").with_attr("hR", "hd2").with_attr("stAng", "cd2").with_attr("swAng", "21600000"));
+        }
+        Some(poly) => {
+            p = p.with_attr("w", "1000000").with_attr("h", "1000000");
+            for (i, (u, v)) in poly.iter().enumerate() {
+                let (x, y) = (((u * N).round() as i64).to_string(), ((v * N).round() as i64).to_string());
+                p.push(to(if i == 0 { "a:moveTo" } else { "a:lnTo" }, &x, &y));
+            }
+        }
+    }
+    p.push(Element::new("a:close"));
+    let mut g = Element::new("a:custGeom");
+    g.push(av);
+    g.push(gl);
+    g.push(Element::new("a:ahLst"));
+    g.push(cxn);
+    g.push(Element::new("a:rect").with_attr("l", "l").with_attr("t", "t").with_attr("r", "r").with_attr("b", "b"));
+    g.push(Element::new("a:pathLst").with_child(p));
+    Some(g)
 }
 
 /// A rectangle (`rect`) or rounded rectangle (`roundRect`, `adj` = corner size in 1/100000 of
@@ -896,7 +968,10 @@ pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
             // a custom path is in the frame's size: rewritten when the frame changes too
             if has(&changed, "geom") || force16 || (has(&changed, "frame") && sp.geom.path.is_some()) {
                 let own = (o.frame.w, o.frame.h, !matches!(sp.fill, Paint::None));
-                s.props.geom = Some(geom_to(&sp.geom, s.props.geom.as_ref(), needs_sixteen(o), Some(own)));
+                s.props.geom = Some(match needs_sixteen(o).then(|| sixteen_for(o)).flatten() {
+                    Some(e) => om::Geometry::Custom(e),
+                    None => geom_to(&sp.geom, s.props.geom.as_ref(), false, Some(own)),
+                });
             }
             if has(&changed, "fill") {
                 if let Some(f) = fill_of(&sp.fill, s.props.fill.as_ref()) {
@@ -1808,5 +1883,94 @@ mod tests {
         for (x, y) in a.iter().zip(&b) {
             assert!((x - y).abs() < 1e-4, "{src} vs {got}");
         }
+    }
+
+    // ---- sixteen sites for presets other than the rectangle ----
+
+    fn shape_of(objs: &[Object], id: u32) -> &Object {
+        objs.iter().find(|o| o.id == id).unwrap()
+    }
+
+    fn assert_same_sites(a: &Object, b: &Object) {
+        let (p, q) = (crate::geom::sites(a), crate::geom::sites(b));
+        assert_eq!(p.len(), 16);
+        assert_eq!(p.len(), q.len());
+        for (x, y) in p.iter().zip(&q) {
+            assert!((x.0 - y.0).abs() < 1.0 && (x.1 - y.1).abs() < 1.0, "{x:?} {y:?}");
+        }
+    }
+
+    #[test]
+    fn a_diamond_attached_at_a_new_site_round_trips_as_a_diamond() {
+        let d = block(10, "diamond", None);
+        let (objs, xml) = round_trip(vec![d.clone(), conn(11, 10, 5)]);
+        assert!(xml.contains("lore16_diamond") && xml.contains("custGeom"), "{xml}");
+        let b = shape_of(&objs, 10);
+        let Kind::Shape(sp) = &b.kind else { panic!() };
+        assert_eq!((sp.geom.prst.as_str(), sp.geom.path.is_none()), ("diamond", true));
+        assert_same_sites(&d, b);
+        let Kind::Connector(cc) = &shape_of(&objs, 11).kind else { panic!() };
+        assert_eq!(cc.end, Some(Attach { id: 10, site: 5 }));
+        // the written list has sixteen connection points
+        assert_eq!(xml.matches("<a:cxn ").count(), 16, "{xml}");
+        // a second write of the read-back slide is stable
+        let (again, _) = round_trip(objs.clone());
+        let Kind::Shape(sp2) = &shape_of(&again, 10).kind else { panic!() };
+        assert_eq!(sp2.geom, sp.geom);
+    }
+
+    #[test]
+    fn a_hexagon_keeps_its_adjust_value_and_flip() {
+        let mut h = block(10, "hexagon", Some(40000.0));
+        h.frame.flip_h = true;
+        let (objs, xml) = round_trip(vec![h.clone(), conn(11, 10, 10)]);
+        assert!(xml.contains("lore16_hexagon"));
+        let b = shape_of(&objs, 10);
+        let Kind::Shape(sp) = &b.kind else { panic!() };
+        assert_eq!(sp.geom.prst, "hexagon");
+        assert_eq!(sp.geom.adj.get("adj"), Some(&40000.0));
+        assert_same_sites(&h, b);
+    }
+
+    #[test]
+    fn an_ellipse_attached_at_site_nine_round_trips() {
+        let e = block(10, "ellipse", None);
+        let (objs, xml) = round_trip(vec![e.clone(), conn(11, 10, 9)]);
+        assert!(xml.contains("lore16_ellipse") && xml.contains("arcTo"), "{xml}");
+        let b = shape_of(&objs, 10);
+        let Kind::Shape(sp) = &b.kind else { panic!() };
+        assert_eq!(sp.geom.prst, "ellipse");
+        assert_same_sites(&e, b);
+        let Kind::Connector(cc) = &shape_of(&objs, 11).kind else { panic!() };
+        assert_eq!(cc.end, Some(Attach { id: 10, site: 9 }));
+    }
+
+    #[test]
+    fn a_shape_no_line_uses_is_written_as_before() {
+        // PowerPoint's own sites are enough: a diamond at a middle, an ellipse at one of its eight
+        for (prst, site) in [("diamond", 3), ("ellipse", 7), ("hexagon", 1)] {
+            let (objs, xml) = round_trip(vec![block(10, prst, None), conn(11, 10, site)]);
+            assert!(!xml.contains("custGeom") && !xml.contains(MARK_PREFIX), "{prst}: {xml}");
+            assert!(xml.contains(&format!("prst=\"{prst}\"")));
+            assert_eq!(objs.len(), 2);
+        }
+        // and a shape no connector holds at all
+        let (_, xml) = round_trip(vec![block(10, "hexagon", None)]);
+        assert!(!xml.contains("custGeom"));
+        // a can, cloud and cube are not rewritten: their outline is not exactly known
+        let (_, xml) = round_trip(vec![block(10, "can", None), conn(11, 10, 9)]);
+        assert!(!xml.contains("custGeom") && xml.contains("prst=\"can\""), "{xml}");
+    }
+
+    #[test]
+    fn the_rectangle_marking_still_works() {
+        let (objs, xml) = round_trip(vec![block(10, "rect", None), conn(11, 10, 12)]);
+        assert!(xml.contains(MARK_RECT));
+        let Kind::Shape(sp) = &shape_of(&objs, 10).kind else { panic!() };
+        assert_eq!(sp.geom.prst, "rect");
+        let (objs, xml) = round_trip(vec![block(10, "roundRect", Some(20000.0)), conn(11, 10, 12)]);
+        assert!(xml.contains(MARK_ROUND));
+        let Kind::Shape(sp) = &shape_of(&objs, 10).kind else { panic!() };
+        assert_eq!((sp.geom.prst.as_str(), sp.geom.adj.get("adj")), ("roundRect", Some(&20000.0)));
     }
 }
