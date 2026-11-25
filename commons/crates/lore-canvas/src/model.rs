@@ -485,6 +485,10 @@ pub struct Stroke {
     pub head: String,
     #[serde(default = "none_str")]
     pub tail: String,
+    /// How an end is closed: `""` (the file's default, flat) or `round`. An icon drawn with
+    /// round ends shows its dots (a line of almost no length) only when this is `round`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cap: String,
 }
 fn solid() -> String {
     "solid".into()
@@ -502,6 +506,7 @@ impl Stroke {
             dash: solid(),
             head: none_str(),
             tail: none_str(),
+            cap: String::new(),
         }
     }
 }

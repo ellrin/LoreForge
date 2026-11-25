@@ -1315,6 +1315,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-icons"
+version = "0.1.0"
+dependencies = [
+ "lore-canvas",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lore-jobs"
 version = "0.1.0"
 dependencies = [

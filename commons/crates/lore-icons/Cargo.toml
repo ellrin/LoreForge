@@ -1,0 +1,10 @@
+[package]
+name = "lore-icons"
+description = "Open icon sets for figures (Tabler, Health Icons), read from commons/icons: search by word, an icon as lore-canvas shapes"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lore-canvas = { path = "../lore-canvas" }
+serde = { workspace = true }
+serde_json = { workspace = true }
