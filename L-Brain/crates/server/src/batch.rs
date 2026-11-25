@@ -89,16 +89,22 @@ fn io_err(e: impl std::fmt::Display) -> std::io::Error {
 pub async fn run(app: axum::Router, out: &Path, only: &[String], progress: &mut (dyn FnMut(usize, usize, &Made) + Send)) -> std::io::Result<Vec<Made>> {
     std::fs::create_dir_all(out)?;
     // the list has no format filter: every non-entity row is read and the references kept
-    let list = json_call(&app, "GET", "/api/hub/items?entity=false&limit=1000", None).await.map_err(io_err)?;
-    let refs: Vec<(String, String)> = list["items"]
-        .as_array()
-        .map(|a| {
-            a.iter()
+    // read page by page: the list answers at most 1000 rows at a time
+    let mut refs: Vec<(String, String)> = Vec::new();
+    let mut offset = 0usize;
+    loop {
+        let list = json_call(&app, "GET", &format!("/api/hub/items?entity=false&limit=1000&offset={offset}"), None).await.map_err(io_err)?;
+        let rows = list["items"].as_array().cloned().unwrap_or_default();
+        refs.extend(
+            rows.iter()
                 .filter(|i| i["format"] == "figure" && i["fields"]["what"] == "reference" && i["entity"] != json!(true))
-                .filter_map(|i| Some((i["id"].as_str()?.to_string(), i["title"].as_str().unwrap_or("").to_string())))
-                .collect()
-        })
-        .unwrap_or_default();
+                .filter_map(|i| Some((i["id"].as_str()?.to_string(), i["title"].as_str().unwrap_or("").to_string()))),
+        );
+        offset += rows.len();
+        if rows.is_empty() || offset as u64 >= list["total"].as_u64().unwrap_or(0) {
+            break;
+        }
+    }
     let refs: Vec<_> = refs.into_iter().filter(|(id, _)| only.is_empty() || only.contains(id)).collect();
     let total = refs.len();
     let (mut made, mut rows, mut used) = (Vec::new(), Vec::new(), std::collections::BTreeSet::new());
