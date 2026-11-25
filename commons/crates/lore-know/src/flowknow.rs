@@ -109,9 +109,18 @@ pub fn derive(spec: &FlowSpec, lib: &Library) -> Derived {
     let (mut inputs, mut outputs): (Vec<Var>, Vec<Var>) = (vec![], vec![]);
     for n in &g.nodes {
         let role = n.role_or_default();
+        // what a figure takes and gives is read from its flow, since few figures name their
+        // roles: a piece of data nothing flows into is an input, one nothing flows on from is
+        // an output. A named role (input, gt, output, loss) decides by itself; models and
+        // operations are never variables.
+        let fed = g.edges.iter().any(|e| e.to == n.id);
+        let feeds = g.edges.iter().any(|e| e.from == n.id);
         let list = match role {
             "input" | "gt" => &mut inputs,
             "output" | "loss" => &mut outputs,
+            "model" | "op" | "merge" => continue,
+            _ if !fed && feeds => &mut inputs,
+            _ if fed && !feeds => &mut outputs,
             _ => continue,
         };
         let v = Var {
@@ -242,6 +251,14 @@ mod tests {
         let ids = |v: &[Var]| v.iter().map(|v| (v.id.clone(), v.kind.clone(), v.meaning.clone())).collect::<Vec<_>>();
         assert_eq!(ids(&d.inputs), [("x".into(), "image".into(), "Scan".into()), ("y".into(), "mask".into(), "Mask".into())]);
         assert_eq!(ids(&d.outputs), [("p".into(), "image".into(), "Pred".into()), ("loss".into(), "loss".into(), "$L$".into())]);
+    }
+
+    #[test]
+    fn without_named_roles_the_flow_says_what_goes_in_and_out() {
+        let spec = FlowSpec { dsl: "fig t\nx: image \"Input\"\nf: box \"Model\"\ny: label \"Output\"\nx -> f -> y\n".into(), ..Default::default() };
+        let d = derive(&spec, &Library::default());
+        assert_eq!(d.inputs.iter().map(|v| (v.id.as_str(), v.kind.as_str())).collect::<Vec<_>>(), [("x", "image")]);
+        assert_eq!(d.outputs.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(), ["y"]);
     }
 
     #[test]

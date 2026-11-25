@@ -146,6 +146,13 @@ async fn save(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<Mak
     fig.title = title;
     fig.set("params", spec.clone()).set("made_from", reference_item.id.clone());
     fig.contains = figure::parts_of(&spec, &entities);
+    // the figure as knowledge: what it shows (the reference's words when the figure brought
+    // none), the variables it takes and gives and its connections, read from the figure itself.
+    // Only what is still empty is filled: what the author wrote stays, and 用法 is his alone.
+    lore_know::flowknow::fill_item(&mut fig, &h.catalogue().library);
+    if fig.field("description").trim().is_empty() {
+        fig.set("description", reference_item.field("description").to_string());
+    }
     for f in [facet::DOMAIN, facet::KIND] {
         for t in reference_item.tags.get(f).cloned().unwrap_or_default() {
             fig.tag(f, &t);
@@ -522,6 +529,28 @@ writable = true
         // (and the picture-less reference goes to the text task, `sc-flow-timeline`)
         let schema = serde_json::to_string(&seen[0].json_schema).unwrap();
         assert!(schema.contains("points") && !schema.contains("nodes"), "{schema}");
+    }
+
+    #[tokio::test]
+    async fn a_made_figure_carries_its_variables_and_connections() {
+        let e = setup(vec![]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(SPEC) }))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let f = &v["figure"]["fields"];
+        assert!(f["inputs"].as_str().unwrap().contains("image"), "{f}");
+        assert!(f["connects"].as_str().unwrap().lines().count() == 2, "{f}");
+        assert!(!f["description"].as_str().unwrap().is_empty(), "what it shows comes from the reference: {f}");
+        assert!(f["prompt"].as_str().unwrap_or("").is_empty(), "用法 is the author's alone");
+        // saved again after the author wrote his own lines: they stay
+        let fid = v["figure"]["id"].as_str().unwrap().to_string();
+        let mut item = v["figure"].clone();
+        item["fields"]["connects"] = json!("Input -> Model");
+        item["fields"]["prompt"] = json!("Use for a plain pipeline.");
+        let (s, v2) = call(&e.app, "PUT", &format!("/api/hub/items/{fid}"), Some(item)).await;
+        assert_eq!(s, StatusCode::OK, "{v2}");
+        let (_, v3) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(SPEC) }))).await;
+        assert_eq!(v3["figure"]["fields"]["connects"], "Input -> Model");
+        assert_eq!(v3["figure"]["fields"]["prompt"], "Use for a plain pipeline.");
     }
 
     #[tokio::test]
