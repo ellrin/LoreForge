@@ -98,7 +98,7 @@ pub mod can {
     pub const TEXT: [&str; 2] = ["plain", "card"];
     pub const SIDE: [&str; 3] = ["above", "below", "alternate"];
     pub const ALIGN: [&str; 2] = ["left", "center"];
-    pub const RULE: [&str; 3] = ["none", "under", "over"];
+    pub const RULE: [&str; 4] = ["none", "under", "over", "far"];
     pub const STEM: [&str; 3] = ["none", "line", "drop"];
     pub const STEM_END: [&str; 2] = ["none", "dot"];
     pub const ICON_AT: [&str; 4] = ["none", "in-marker", "opposite", "with-text"];
@@ -209,7 +209,8 @@ pub struct TextBlock {
     pub body_color: String,
     /// `left` (from the stem) · `center` (on the point).
     pub align: String,
-    /// A short rule in the point's colour: `none` · `under` · `over` the text.
+    /// A short rule in the point's colour: `none` · `under` · `over` the text · `far` (beyond
+    /// the text on the side away from the axis: under it below the axis, over it above).
     pub rule: String,
     /// Widest text column (pt); 0 = what the spacing allows.
     pub width: f64,
