@@ -1,0 +1,33 @@
+# A thin line, ringed dots, texts alternately above and below so many points do not crowd.
+id = "ring-alternate"
+name = "圓環，上下交替"
+note = "點多、要省寬度"
+
+[axis]
+kind = "line"
+weight = 1.0
+color = "9AA0A6"
+bleed = true
+
+[marker]
+kind = "ring"
+size = 12
+rings = 2
+
+[time]
+at = "opposite"
+size = 16
+
+[text]
+side = "alternate"
+first = "below"
+align = "left"
+rule = "under"
+
+[stem]
+kind = "line"
+end = "dot"
+length = 22
+
+[title]
+legend_dots = true

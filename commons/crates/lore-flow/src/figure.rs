@@ -76,6 +76,10 @@ pub struct FlowSpec {
     /// The discussion that led here (kept so the editor re-opens on it).
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub discussion: Value,
+    /// A timeline instead of a data flow ([`crate::timeline`]): when set, `dsl` and the fields
+    /// of the flow layout are not read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<crate::timeline::TimelineSpec>,
     /// Keys a newer editor wrote: kept.
     #[serde(flatten)]
     pub other: BTreeMap<String, Value>,
@@ -200,6 +204,10 @@ pub struct Catalogue {
     pub themes: Vec<(String, String, Theme)>,
     pub layouts: Vec<FlowLayout>,
     pub library: Library,
+    /// The timeline styles: the neutral ones, then the author's (a private id replaces a neutral one).
+    pub timelines: Vec<crate::timeline::Style>,
+    /// Style files that could not be read (`<file>: <why>`): listed, never silently dropped.
+    pub timeline_errors: Vec<String>,
 }
 
 impl Default for Catalogue {
@@ -213,7 +221,7 @@ impl Catalogue {
     pub fn builtin() -> Catalogue {
         let t = Theme::classic_bw();
         let layouts: Vec<FlowLayout> = serde_json::from_str(LAYOUTS).expect("bundled layouts.json parses");
-        Catalogue { themes: vec![(t.id.clone(), t.name.clone(), t)], layouts, library: Library::default() }
+        Catalogue { themes: vec![(t.id.clone(), t.name.clone(), t)], layouts, library: Library::default(), timelines: crate::timeline::style::builtin(), timeline_errors: vec![] }
     }
 
     /// The public ones plus the author's (`dir` = `private/shared/flow`):
@@ -247,6 +255,12 @@ impl Catalogue {
                 c.layouts.push(l);
             }
         }
+        let (styles, errors) = crate::timeline::style::load_dir(dir);
+        for st in styles {
+            c.timelines.retain(|x| x.id != st.id);
+            c.timelines.push(st);
+        }
+        c.timeline_errors.extend(errors);
         for f in files(&dir.join("themes"), "toml") {
             let Ok(text) = std::fs::read_to_string(&f) else { continue };
             if let Ok(t) = Theme::from_toml(&text) {
@@ -509,6 +523,13 @@ pub fn linear(g: &Graph) -> Vec<String> {
 
 /// Draw a spec into `frame` (pt).
 pub fn render(spec: &FlowSpec, cat: &Catalogue, notation: Option<&lore_notation::Notation>, math: &dyn MathSource, frame: Rect, first_id: u32) -> Result<(Figure, Graph), String> {
+    if let Some(t) = &spec.timeline {
+        // a timeline is placed and drawn by its own style; it comes back as the same Figure
+        let style = crate::timeline::style::pick(&cat.timelines, &t.style);
+        let (plan, built) = crate::timeline::render(t, &style, &cat.theme(&spec.theme).font, frame, first_id)?;
+        let layout = crate::layout::Layout { nodes: vec![], panels: vec![], legend: vec![], swatches: vec![], bounds: plan.bounds, scale: plan.scale };
+        return Ok((Figure { layout, routes: vec![], built }, Graph { fig: t.fig_id().to_string(), ..Default::default() }));
+    }
     let (g, theme, options) = spec.prepare(cat, frame)?;
     let d = Drawing { theme, library: cat.library.clone(), notation, math, options, first_id, pictures: None };
     let fig = crate::draw(&g, &d).map_err(|e| e.to_string())?;

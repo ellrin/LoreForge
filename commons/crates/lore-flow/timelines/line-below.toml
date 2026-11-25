@@ -1,0 +1,25 @@
+# A thin line, a dot for each point, the time over the line and the text under it.
+id = "line-below"
+name = "細線，文字在下"
+note = "點不多、每點只有一兩行字"
+
+[axis]
+kind = "line"
+weight = 1.0
+color = "9AA0A6"
+
+[marker]
+kind = "dot"
+size = 10
+
+[time]
+at = "opposite"
+size = 16
+
+[text]
+side = "below"
+align = "center"
+
+[stem]
+kind = "line"
+length = 14

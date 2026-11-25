@@ -42,6 +42,7 @@ pub mod sheet;
 pub mod spec;
 pub mod text;
 pub mod theme;
+pub mod timeline;
 #[cfg(feature = "web")]
 pub mod web;
 

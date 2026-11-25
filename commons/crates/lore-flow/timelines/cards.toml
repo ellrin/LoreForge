@@ -1,0 +1,37 @@
+# Square markers on a thin line, the time above, a card with a header strip below.
+id = "cards"
+name = "卡片"
+note = "每點有標題和幾行說明"
+
+[axis]
+kind = "line"
+weight = 1.0
+color = "5F6368"
+
+[marker]
+kind = "square"
+size = 12
+fill = "point"
+line = "paper"
+radius = 2
+
+[time]
+at = "opposite"
+size = 20
+
+[text]
+kind = "card"
+side = "below"
+align = "center"
+title_color = "FFFFFF"
+body_color = "FFFFFF"
+
+[card]
+fill = "point"
+text = "FFFFFF"
+header = true
+radius = 4
+
+[stem]
+kind = "line"
+length = 16
