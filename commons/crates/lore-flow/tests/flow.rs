@@ -1272,3 +1272,16 @@ fn a_label_that_is_the_variable_is_drawn_once() {
     // a label with other words keeps its variable line
     assert!(tall("\"image\" var=h") > label_only + 1.0);
 }
+
+/// An icon's shape may be several straight strokes in one path (a chip's pins). The preview
+/// joined all their corners into one polygon; each stroke is drawn on its own.
+#[test]
+fn several_straight_strokes_in_one_shape_are_not_joined() {
+    let ic = lore_icons::icon("tabler:cpu").expect("the icon");
+    let objs = lore_icons::objects(&ic, lore_canvas::model::Frame::new(0, 0, 914400, 914400), "112233", 1, "cpu");
+    let svg = preview::svg(&objs, 72.0, 72.0, 1.0);
+    assert!(!svg.contains("<polygon") && !svg.contains("<polyline"), "{svg}");
+    let moves = objs.iter().filter_map(|o| o.kind.sp()).map(|sp| sp.geom.path.as_deref().unwrap_or("").matches('M').count()).sum::<usize>();
+    assert_eq!(svg.matches(" M").count() + svg.matches("\"M").count(), moves, "every stroke starts on its own");
+    assert!(svg.contains("stroke-linecap=\"round\""));
+}

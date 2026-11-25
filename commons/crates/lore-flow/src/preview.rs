@@ -357,8 +357,8 @@ fn draw(out: &mut String, o: &Object, xf: &Xf, st: &mut State) {
                         let closed = path.trim_end().ends_with(['Z', 'z']);
                         let pts = lore_canvas::geom::path_vertices(&path);
                         let abs: Vec<(f64, f64)> = pts.iter().map(|(u, v)| (x + if f.flip_h { 1.0 - u } else { *u } * w, y + if f.flip_v { 1.0 - v } else { *v } * h)).collect();
-                        if path.contains(['C', 'Q']) {
-                            // curves: the path itself, mapped into the frame
+                        if path.contains(['C', 'Q']) || path.matches('M').count() > 1 {
+                            // curves, or several strokes in one shape (an icon): the path itself, mapped into the frame
                             let d = svg_path(&path, |u, v| (x + if f.flip_h { 1.0 - u } else { u } * w, y + if f.flip_v { 1.0 - v } else { v } * h));
                             match (&sp.line, closed) {
                                 (Some(s), false) => {
@@ -371,6 +371,7 @@ fn draw(out: &mut String, o: &Object, xf: &Xf, st: &mut State) {
                                         arrow(out, m(a0), m(a1), &s.head, s);
                                     }
                                 }
+                                (Some(s), true) if s.cap == "round" => out.push_str(&format!("<path d=\"{d}\" {paint} stroke-linejoin=\"round\" stroke-linecap=\"round\"/>")),
                                 _ => out.push_str(&format!("<path d=\"{d}\" {paint} stroke-linejoin=\"round\"/>")),
                             }
                         } else if closed {
