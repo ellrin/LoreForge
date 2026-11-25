@@ -7,7 +7,11 @@
 //! |---|---|---|
 //! | GET | /api/hub/make/{id} | `{id, title, source, image, spec, made}`: what the editor starts from (409: not a reference) |
 //! | POST | /api/hub/make/{id} | `{spec, title?}` → `{figure, reference}`; the spec is drawn once first (422 when it cannot be) |
-//! | POST | /api/hub/make/{id}/draft | `{spec}`: a first draft from the description (and the picture); stored nowhere |
+//! | POST | /api/hub/make/{id}/draft | `{spec, engine}`: a first draft from the description (and the picture); stored nowhere |
+//!
+//! A reference that describes a time axis is made as a timeline: its draft comes from the
+//! timeline task (`sc-flow-timeline`, with a picture `sc-flow-timeline-vision`) and is a spec with
+//! `timeline` set and no `dsl`; saving draws it once like any other spec and stores it the same way.
 //!
 //! The made figure is an item of the category whose id ends in `.flowspecs` (`what = spec`,
 //! `level = figure`, `entity`, `fields.params` = the spec, `fields.made_from` = the reference id,
@@ -158,7 +162,7 @@ async fn save(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<Mak
     ok(json!({ "figure": row(&h, &figure_item), "reference": row(&h, &reference_item) }))
 }
 
-/// Does the reference describe a time axis (the flow tool draws boxes and arrows, not that)?
+/// Does the reference describe a time axis (drafted by the timeline task, not the box-and-arrow one)?
 fn is_timeline(r: &Item) -> bool {
     let t = format!("{}\n{}", r.title, r.field("description")).to_lowercase();
     t.contains("時間軸") || t.contains("timeline")
@@ -166,22 +170,28 @@ fn is_timeline(r: &Item) -> bool {
 
 async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
     // everything from the hub first: the lock is not held over the model call
-    let (description, image) = {
+    let description = {
         let h = hub(&s)?;
         let r = reference(&h, &id)?;
-        if is_timeline(&r) {
-            return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "流程圖工具還不會畫時間軸，這張先留在待製作"));
-        }
         // The reference's picture goes to the model with the description (task
         // `sc-flow-graph-vision`, Claude only): the author accepts that for figures from papers
         // and his own slides. A vector picture is not sent, a model cannot read it.
         let image = crate::hub::reference_picture(&h, &s.hub_dirs, &r).filter(|(_, mime)| *mime != "image/svg+xml").map(|(bytes, mime)| lore_llm::Image::from_bytes(mime, &bytes));
-        (format!("{}\n\n{}", r.title, r.field("description")), image)
+        (format!("{}\n\n{}", r.title, r.field("description")), image, is_timeline(&r))
     };
+    let (description, image, timeline) = (description.0, description.1, description.2);
     let cat = s.flow.catalogue();
+    let llm = FlowLlm(s.llm.clone());
+    if timeline {
+        // only the styles that draw as written are offered
+        let styles: Vec<lore_flow::timeline::Style> = cat.timelines.iter().filter(|st| st.cannot.is_empty()).cloned().collect();
+        let prompt = lore_flow::timeline::llm::TimelinePrompt { description: &description, image, styles: &styles, language: "" };
+        let (t, engine) = lore_flow::timeline::llm::propose_via(&llm, &prompt).await.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
+        let spec = lore_flow::figure::FlowSpec { lore_flow: lore_flow::figure::VERSION, timeline: Some(t), ..Default::default() };
+        return ok(json!({ "spec": spec.to_value(), "engine": engine }));
+    }
     let examples = s.flow.examples(&cat.library);
     let prompt = lore_flow::llm::FlowPrompt { description: &description, image, notation: None, library: &cat.library, examples: &examples };
-    let llm = FlowLlm(s.llm.clone());
     let p = lore_flow::llm::propose_via(&llm, &prompt).await.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
     let spec = lore_flow::figure::FlowSpec { lore_flow: lore_flow::figure::VERSION, dsl: p.dsl, ..Default::default() };
     ok(json!({ "spec": spec.to_value(), "engine": p.provider }))
@@ -303,7 +313,7 @@ writable = true
     #[test]
     fn the_flow_tasks_are_in_lbrains_task_table() {
         let t = Llm::task_table(None).unwrap();
-        for k in ["sc-flow-graph", "sc-flow-graph-vision", "flow-discuss", "flow-assist"] {
+        for k in ["sc-flow-graph", "sc-flow-graph-vision", "sc-flow-timeline", "sc-flow-timeline-vision", "flow-discuss", "flow-assist"] {
             assert!(t.task.contains_key(k), "{k}");
         }
         assert!(t.task.contains_key(crate::llm::TASK_DRAFT), "L-Brain's own task stays");
@@ -466,12 +476,95 @@ writable = true
         assert!(!serde_json::to_string(&e.mock.seen.lock().unwrap()[0].messages).unwrap().contains("image/png"));
     }
 
+    fn timeline_reply() -> String {
+        json!({
+            "title": "Release history", "style": "line-below",
+            "points": [
+                { "time": "2021", "title": "Pilot", "body": "Two sites.", "icon": "clipboard" },
+                { "time": "2022", "title": "Cohort", "body": "Two hundred cases.", "icon": "people" }
+            ]
+        })
+        .to_string()
+    }
+
+    fn timeline_spec(points: Value) -> Value {
+        json!({ "lore_flow": 1, "timeline": { "title": "Release history", "style": "line-below", "points": points } })
+    }
+
+    fn two_points() -> Value {
+        json!([
+            { "time": "2021", "title": "Pilot", "body": "Two sites.", "icon": "clipboard" },
+            { "time": "2022", "title": "Cohort", "body": "Two hundred cases.", "icon": "people" }
+        ])
+    }
+
     #[tokio::test]
-    async fn a_timeline_reference_is_not_faked() {
-        let e = setup(vec![graph_reply()]);
+    async fn a_timeline_reference_is_drafted_as_a_timeline() {
+        let e = setup(vec![timeline_reply()]);
         let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f02/draft", None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["spec"]["lore_flow"], 1);
+        assert_eq!(v["spec"]["timeline"]["points"].as_array().unwrap().len(), 2, "{v}");
+        assert_eq!(v["engine"], "mock");
+        // nothing was stored
+        let (_, l) = call(&e.app, "GET", "/api/hub/items?category=t.flowspecs", None).await;
+        assert!(l["items"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_timeline_draft_uses_the_timeline_task() {
+        let e = setup(vec![timeline_reply()]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f02/draft", None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let seen = e.mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        // the mock does not record the task id; the timeline task is the one whose reply schema has `points`
+        // (and the picture-less reference goes to the text task, `sc-flow-timeline`)
+        let schema = serde_json::to_string(&seen[0].json_schema).unwrap();
+        assert!(schema.contains("points") && !schema.contains("nodes"), "{schema}");
+    }
+
+    #[tokio::test]
+    async fn a_timeline_spec_is_saved_as_a_figure() {
+        let e = setup(vec![]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f02", Some(json!({ "spec": timeline_spec(two_points()) }))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let fig = &v["figure"];
+        let fid = fig["id"].as_str().unwrap().to_string();
+        assert!(fid.starts_with("t.flowspecs:"), "{fid}");
+        assert_eq!((fig["entity"].clone(), fig["level"].as_str(), fig["fields"]["what"].as_str()), (json!(true), Some("figure"), Some("spec")));
+        assert_eq!(fig["fields"]["made_from"], "t.flowrefs:f02");
+        assert_eq!(fig["fields"]["params"]["timeline"]["points"].as_array().unwrap().len(), 2);
+        assert!(v["reference"]["contains"].as_array().unwrap().contains(&json!(fid)));
+        // drawn
+        let req = Request::builder().uri(format!("/api/hub/thumb/{fid}")).body(Body::empty()).unwrap();
+        assert_eq!(e.app.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
+        // the editor re-opens on it
+        let (_, g) = call(&e.app, "GET", "/api/hub/make/t.flowrefs:f02", None).await;
+        assert_eq!(g["made"], json!(fid));
+        assert_eq!(g["spec"]["timeline"]["title"], "Release history");
+    }
+
+    #[tokio::test]
+    async fn an_empty_timeline_is_refused_with_one_line() {
+        let e = setup(vec![]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f02", Some(json!({ "spec": timeline_spec(json!([])) }))).await;
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
-        assert_eq!(v["error"], "流程圖工具還不會畫時間軸，這張先留在待製作");
-        assert!(e.mock.seen.lock().unwrap().is_empty(), "the model was never asked");
+        let line = v["error"].as_str().unwrap();
+        assert!(!line.is_empty() && !line.contains('\n'), "{line}");
+        let (_, l) = call(&e.app, "GET", "/api/hub/items?category=t.flowspecs", None).await;
+        assert!(l["items"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_flow_reference_is_still_drafted_as_before() {
+        let e = setup(vec![graph_reply()]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/draft", None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert!(v["spec"]["dsl"].as_str().unwrap().contains("Model"));
+        assert!(v["spec"].get("timeline").is_none_or(|t| t.is_null()), "{v}");
+        let seen = e.mock.seen.lock().unwrap();
+        let schema = serde_json::to_string(&seen[0].json_schema).unwrap();
+        assert!(schema.contains("nodes") && !schema.contains("points"), "{schema}");
     }
 }
