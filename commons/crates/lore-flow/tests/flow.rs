@@ -1260,3 +1260,15 @@ fn the_figures_bounds_hold_every_line_after_a_block_is_moved() {
         assert!(p.0 >= b.x && p.0 <= b.right() && p.1 >= b.y && p.1 <= b.bottom(), "{p:?} outside {b:?}");
     }
 }
+
+/// A model wrote `"@h" var=h` on a node and the variable was drawn twice under it (the first
+/// real draft of a reference, 2026-11-25). The variable is said once, however it is written.
+#[test]
+fn a_label_that_is_the_variable_is_drawn_once() {
+    let draw = |node: &str| fig(&dsl::parse(&format!("fig v\na: image {node}\nb: box \"B\"\na -> b\nvar h = \"\\hat{{h}}_c\" \"predicted map\"\n")).unwrap());
+    let tall = |node: &str| { let f = draw(node); f.layout.nodes[0].reserve.h.max(f.layout.nodes[0].rect.h) };
+    let (both, label_only, var_only) = (tall("\"@h\" var=h"), tall("\"@h\""), tall("\"\" var=h"));
+    assert!((both - label_only).abs() < 1e-6 && (both - var_only).abs() < 1e-6, "one line of text: {both} {label_only} {var_only}");
+    // a label with other words keeps its variable line
+    assert!(tall("\"image\" var=h") > label_only + 1.0);
+}

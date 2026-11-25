@@ -1437,6 +1437,10 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     if n.label.is_empty() && !n.var.is_empty() {
         n.label = format!("@{}", std::mem::take(&mut n.var));
     }
+    // a label that is the variable itself says it once (a model wrote both, and it was drawn twice)
+    if !n.var.is_empty() && n.label.trim() == format!("@{}", n.var) {
+        n.var.clear();
+    }
     let n = &n;
     // a saved drawing of this kind and style wins over the built-in drawing
     let which = style_name(n, cx.theme);
