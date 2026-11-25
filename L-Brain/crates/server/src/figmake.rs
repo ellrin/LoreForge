@@ -118,6 +118,10 @@ struct MakeBody {
     commands: Option<String>,
     #[serde(default)]
     spoken: Option<String>,
+    /// Write 指揮文字 and 口語說明 again from the spec even when the figure has them (unless
+    /// they come with this save).
+    #[serde(default)]
+    rederive: bool,
 }
 
 async fn save(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<MakeBody>) -> R {
@@ -148,6 +152,9 @@ async fn save(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<Mak
 
     let existing = made_figure(&h, &cat, &reference_item.id)?;
     let mut fig = existing.unwrap_or(probe);
+    // what was derived from the spec it had goes with that spec: a changed figure gets its
+    // variables, connections, commands and spoken text afresh; what the author wrote stays
+    lore_know::flowknow::forget_derived(&mut fig, &h.catalogue().library, if b.rederive { &["commands", "spoken"] } else { &[] });
     fig.title = title;
     fig.set("params", spec.clone()).set("made_from", reference_item.id.clone());
     fig.contains = figure::parts_of(&spec, &entities);
@@ -713,5 +720,20 @@ writable = true
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
         // the question may be asked again once; no draft request (the one whose schema has `nodes`) was sent on a guess
         assert!(e.mock.seen.lock().unwrap().iter().all(|r| !serde_json::to_string(&r.json_schema).unwrap().contains("nodes")));
+    }
+    /// Found by a review: a second save with a changed figure kept the first figure's commands,
+    /// and the next draft was shown them as its example.
+    #[tokio::test]
+    async fn a_changed_figure_gets_its_commands_afresh() {
+        let e = setup(vec![]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(SPEC) }))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert!(v["figure"]["fields"]["commands"].as_str().unwrap().contains("Model"));
+        let other = "fig demo\nx: image \"Input\"\ng: box \"Other\"\nx -> g\n";
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(other) }))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let c = v["figure"]["fields"]["commands"].as_str().unwrap();
+        assert!(c.contains("Other") && !c.contains("Model"), "{c}");
+        assert!(v["figure"]["fields"]["spoken"].as_str().unwrap().contains("Other"));
     }
 }

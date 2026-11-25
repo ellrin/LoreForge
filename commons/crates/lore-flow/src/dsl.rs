@@ -111,6 +111,10 @@ fn value(s: &str) -> Value {
     if s == "true" || s == "false" {
         return Value::Bool(s == "true");
     }
+    // six hex digits are a colour even when they read as a number (123456, 000000, 12E345)
+    if s.len() == 6 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Value::String(s.to_string());
+    }
     if let Ok(n) = s.parse::<i64>() {
         return Value::from(n);
     }

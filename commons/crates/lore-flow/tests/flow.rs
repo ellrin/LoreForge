@@ -1951,3 +1951,17 @@ fn validation_refuses_a_silly_width() {
     assert!(g.validate(&[]).is_ok());
     assert!(dsl::parse("fig f\na: box \"A\"\nb: box \"B\"\na -> b width=thick\n").is_err());
 }
+
+/// Found by a review: `fill=123456` was read as a number and the colour was dropped without a
+/// word; a curved line was offered runs to slide that its curve never reads.
+#[test]
+fn a_six_digit_colour_is_a_colour_and_a_curve_has_no_runs() {
+    let g = dsl::parse("fig t\na: box \"A\" fill=123456 line=000000\nb: box \"B\"\na -> b : data curve\n").unwrap();
+    assert_eq!(g.nodes[0].str("fill"), Some("123456"));
+    assert_eq!(g.nodes[0].str("line"), Some("000000"));
+    let f = fig(&g);
+    for r in &f.routes {
+        let a = g.node_index(&g.edges[r.edge].from).unwrap();
+        assert!(lore_flow::route::runs(&f.layout, a, r).is_empty());
+    }
+}

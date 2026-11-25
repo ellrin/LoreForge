@@ -174,7 +174,10 @@ pub fn commands_of_dsl(dsl: &str) -> String {
             continue;
         }
         let first = t.split_whitespace().next().unwrap_or("");
-        if t.contains("->") {
+        // an arrow counts only outside quotes (a label may say "A -> B")
+        let arrow = t.split('"').step_by(2).any(|part| part.contains("->"));
+        let node = first.len() > 1 && first.ends_with(':');
+        if arrow && !node && !matches!(first, "panel" | "region") {
             edges.push(t.to_string());
         } else if matches!(first, "panel" | "region") {
             open.push((t.to_string(), vec![]));
@@ -190,6 +193,11 @@ pub fn commands_of_dsl(dsl: &str) -> String {
             nodes.push(t.to_string());
             if let Some((_, m)) = open.last_mut() {
                 m.push(first.trim_end_matches(':').to_string());
+            }
+        } else if !open.is_empty() && !t.contains(':') && !t.starts_with('#') {
+            // inside a region: a line of ids names its members
+            if let Some((_, m)) = open.last_mut() {
+                m.extend(t.split_whitespace().map(str::to_string));
             }
         } else {
             head.push(t.to_string());
@@ -307,6 +315,21 @@ pub fn fill(item: &mut Item, d: &Derived) {
     put("connects", d.connects.join("\n"));
     put("commands", d.commands.clone());
     put("spoken", d.spoken.clone());
+}
+
+/// Empty the fields of `item` that still hold exactly what its present spec derives (nobody
+/// edited them), so a save with a changed spec fills them afresh; `also` names fields to empty
+/// whatever they hold. Call it BEFORE the new spec is put into `params`. What the author wrote
+/// differs from the derived text and stays. `prompt` is never touched.
+pub fn forget_derived(item: &mut Item, lib: &Library, also: &[&str]) {
+    let Some(spec) = spec_of(item) else { return };
+    let d = derive(&spec, lib);
+    let was = [("inputs", vars_text(&d.inputs)), ("outputs", vars_text(&d.outputs)), ("connects", d.connects.join("\n")), ("commands", d.commands.clone()), ("spoken", d.spoken.clone())];
+    for (name, text) in was {
+        if also.contains(&name) || (!text.trim().is_empty() && item.field(name).trim() == text.trim()) {
+            item.set(name, String::new());
+        }
+    }
 }
 
 /// [`derive`] and [`fill`] for a made figure item whose `params` is its flow spec (an object or
@@ -550,5 +573,17 @@ mod tests {
         fill_item(&mut f, &Library::default());
         let e = example(&f).unwrap();
         assert!(e.dsl.starts_with("# 0 開頭\nfig t") && e.dsl.contains("# 3 串起來"), "{}", e.dsl);
+    }
+    /// Found by a review of the joined pieces: a region written with a line of ids lost its
+    /// members to the heading, and a label with an arrow in it was filed as a line.
+    #[test]
+    fn a_regions_id_line_is_its_members_and_an_arrow_in_a_label_is_no_line() {
+        let c = commands_of_dsl("fig t\na: box \"A -> B\"\nb: box \"B\"\nregion r \"R\" dashed\n  a b\nend\na -> b\n");
+        let part = |h: &str| c.split("\n# ").find(|p| p.starts_with(h) || p.starts_with(&format!("# {h}"))).unwrap_or("").to_string();
+        assert!(part("1 積木").contains("a: box \"A -> B\""), "{c}");
+        assert!(!part("3 串起來").contains("box"), "{c}");
+        assert!(part("3 串起來").contains("a -> b"), "{c}");
+        assert!(part("4 區域").contains("region r \"R\" dashed\n  a b\nend"), "{c}");
+        assert!(!part("0 開頭").contains("a b"), "{c}");
     }
 }

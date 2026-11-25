@@ -705,7 +705,7 @@ pub struct Run {
 pub fn runs(lay: &Layout, a: usize, r: &Route) -> Vec<Run> {
     let (Some(node), pts) = (lay.nodes.get(a), &r.points) else { return Vec::new() };
     // first and last point plus at least one interior run: 3 runs, 4 points
-    if r.forced || r.branch || pts.len() < 4 || lay.scale <= 0.0 {
+    if r.forced || r.branch || r.curve || pts.len() < 4 || lay.scale <= 0.0 {
         return Vec::new();
     }
     let horizontal = |s: Side| matches!(s, Side::Left | Side::Right);
