@@ -40,6 +40,8 @@ pub struct Hub {
     pub store: Store,
     pub index: Index,
     pub proposals: Proposals,
+    /// 確認: candidates the author decides one by one ([`crate::review`]).
+    pub reviews: crate::review::Reviews,
     pub formats: Formats,
     flow_dirs: Vec<PathBuf>,
 }
@@ -128,7 +130,7 @@ fn adapter_for(cat: &Category, app_dirs: &BTreeMap<String, PathBuf>, flow_dirs: 
     let place = if n.path.is_empty() { root.clone() } else { root.join(&n.path) };
     let wrong = || KnowError::Invalid(format!("類別 {} 的宣告不對：資料放在 {}，格式卻是 {}", cat.id, n.kind, cat.format));
     let a: Box<dyn Adapter> = match (n.kind.as_str(), cat.format.as_str()) {
-        ("csv", format::PATTERN | format::EXPRESSION | format::WORDING | format::RULE | format::EXEMPLAR) => {
+        ("csv", format::PATTERN | format::EXPRESSION | format::WORDING | format::RULE | format::EXEMPLAR | format::VARIANT) => {
             Box::new(CsvAdapter::new(place, &cat.id, &cat.format, source))
         }
         ("files", format::NOTE) => Box::new(NoteFiles::new(place, &cat.id, source)),
@@ -161,7 +163,8 @@ impl Hub {
         let items = store.all()?;
         let index = Index::build(&items, store.registry().all())?;
         let proposals = Proposals::open(hub_dir.join("proposals"))?;
-        Ok(Hub { store, index, proposals, formats: formats::all(), flow_dirs: flow_dirs.to_vec() })
+        let reviews = crate::review::Reviews::open(hub_dir.join("review"))?;
+        Ok(Hub { store, index, proposals, reviews, formats: formats::all(), flow_dirs: flow_dirs.to_vec() })
     }
 
     /// Read everything again into the index (after the files changed outside the hub).
@@ -256,6 +259,20 @@ impl Hub {
     /// Reverse an applied proposal ([`proposal::undo`]); the lines say what could not be undone.
     pub fn undo_proposal(&mut self, id: &str) -> Result<Vec<String>> {
         let r = proposal::undo(&mut self.store, &self.proposals, id);
+        self.reindex()?;
+        r
+    }
+
+    /// Accept one candidate of a review set ([`crate::review::accept`]).
+    pub fn accept_review(&mut self, set: &str, candidate: &str) -> Result<crate::review::Candidate> {
+        let r = crate::review::accept(&mut self.store, &self.reviews, set, candidate);
+        self.reindex()?;
+        r
+    }
+
+    /// Take one decision of a review set back ([`crate::review::undo`]).
+    pub fn undo_review(&mut self, set: &str, candidate: &str) -> Result<crate::review::Candidate> {
+        let r = crate::review::undo(&mut self.store, &self.reviews, set, candidate);
         self.reindex()?;
         r
     }
@@ -642,7 +659,7 @@ writable = true
         assert_eq!(
             ids,
             [
-                "pc.patterns", "pc.expressions", "pc.rules", "pc.wording", "pc.exemplars", "pc.notes", "pc.templates", "pc.venues", "pc.stylerefs",
+                "pc.patterns", "pc.expressions", "pc.variants", "pc.rules", "pc.wording", "pc.exemplars", "pc.notes", "pc.templates", "pc.venues", "pc.stylerefs",
                 "sc.flow", "sc.flowrefs", "sc.flowspecs", "sc.voice", "sc.styles", "sc.arrangements", "shared.plotstyles"
             ]
         );
@@ -663,7 +680,7 @@ writable = true
             ["PaperComposer", "SlideComposer", "shared"].iter().map(|n| (n.to_string(), root.path().join(n))).collect();
         let h = Hub::open(hub.path().to_path_buf(), &crate::reader::builtin_manifests(), &dirs, &[]).unwrap();
         let counts = h.counts().unwrap();
-        assert_eq!(counts.len(), 16);
+        assert_eq!(counts.len(), 17);
         // the flow tool's own generators are there without any folder; everything else is empty
         for c in counts.iter().filter(|c| c.category != "sc.flow") {
             assert_eq!(c.total, 0, "{}", c.category);

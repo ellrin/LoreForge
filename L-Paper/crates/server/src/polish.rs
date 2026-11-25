@@ -370,6 +370,7 @@ E2,Result,comparison,\"Although trains and buses differ in speed, both reduce tr
             root: dir,
             authors: vec![],
             affiliations: vec![],
+            variants: Vec::new(),
             style_checks: checks,
             outside_exemplars: vec![],
             manifest: Manifest { name: "t".into(), schema_version: 1, language: "en".into() },

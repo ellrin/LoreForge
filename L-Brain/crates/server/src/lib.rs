@@ -13,6 +13,7 @@ pub mod inbox;
 pub mod llm;
 pub mod notation;
 pub mod reminders;
+pub mod review;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

@@ -34,7 +34,7 @@ mod tests {
     #[test]
     fn every_format_id_has_one_format() {
         let all = all();
-        let ids = [format::PATTERN, format::EXPRESSION, format::WORDING, format::RULE, format::EXEMPLAR, format::NOTE, format::BUNDLE, format::LAYOUT, format::FIGURE];
+        let ids = [format::PATTERN, format::EXPRESSION, format::WORDING, format::RULE, format::EXEMPLAR, format::VARIANT, format::NOTE, format::BUNDLE, format::LAYOUT, format::FIGURE];
         assert_eq!(all.len(), ids.len(), "one entry per format id");
         for id in ids {
             let f = all.get(id).unwrap_or_else(|| panic!("no format for {id}"));

@@ -17,6 +17,7 @@ const FORMATS: &[&str] = &[
     format::WORDING,
     format::RULE,
     format::EXEMPLAR,
+    format::VARIANT,
     format::NOTE,
     format::BUNDLE,
     format::LAYOUT,

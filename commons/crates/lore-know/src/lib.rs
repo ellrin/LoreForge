@@ -25,6 +25,7 @@ pub mod process_pattern;
 pub mod proposal;
 pub mod reader;
 pub mod registry;
+pub mod review;
 pub mod select;
 pub mod stats;
 pub mod store;

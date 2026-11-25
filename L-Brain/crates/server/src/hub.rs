@@ -139,6 +139,7 @@ pub fn routes(shared: &Shared) -> Router<Shared> {
         .route("/api/hub/import", post(import).layer(big()))
         .route("/api/hub/export", get(export))
         .route("/api/hub/sources", get(sources))
+        .merge(crate::review::routes())
         // the shared flow editor, with this app's model routing (`figmake::FlowLlm`)
         .merge(lore_flow::web::router::<Shared>(shared.flow.clone().with_llm(std::sync::Arc::new(crate::figmake::FlowLlm(shared.llm.clone())))))
 }

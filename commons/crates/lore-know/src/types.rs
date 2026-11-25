@@ -20,6 +20,9 @@ pub mod format {
     pub const WORDING: &str = "wording";
     pub const RULE: &str = "rule";
     pub const EXEMPLAR: &str = "exemplar";
+    /// Another way to say one of the author's own sentence patterns, or a word that may be swapped
+    /// in it. Never the author's own writing: it enters only through [`crate::review`].
+    pub const VARIANT: &str = "variant";
     pub const NOTE: &str = "note";
     pub const BUNDLE: &str = "bundle";
     pub const LAYOUT: &str = "layout";

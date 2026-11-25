@@ -163,9 +163,39 @@ impl Format for Wording {
     }
 }
 
-/// The five row formats.
+/// 說法: another wording of a pattern (`kind = variant`) or a word that may replace `slot` in it
+/// (`kind = swap`), each with one line on when it fits. `pattern` is the local id of the pattern.
+pub struct Variant;
+
+impl Format for Variant {
+    fn def(&self) -> FormatDef {
+        row_def(format::VARIANT, "說法", vec![
+            FieldDef::new("pattern", "句型", "text", false),
+            choice("kind", "種類", &["variant", "swap"]),
+            FieldDef::new("text", "說法", "text", true),
+            FieldDef::new("slot", "換掉的詞", "text", false),
+            FieldDef::new("note", "什麼時候用", "text", false),
+        ])
+    }
+    fn line(&self, item: &Item) -> String {
+        join(&[item.field("pattern"), item.field("note")], " · ")
+    }
+    fn prompt(&self, item: &Item) -> String {
+        let mut s = match item.field("slot").trim() {
+            "" => field_or_title(item, "text").to_string(),
+            slot => format!("\"{slot}\" may be \"{}\"", field_or_title(item, "text")),
+        };
+        let n = item.field("note").trim();
+        if !n.is_empty() {
+            s.push_str(&format!(" ({n})"));
+        }
+        s
+    }
+}
+
+/// The six row formats.
 pub fn all() -> Vec<Box<dyn Format>> {
-    vec![Box::new(Pattern), Box::new(Expression), Box::new(Rule), Box::new(Exemplar), Box::new(Wording)]
+    vec![Box::new(Pattern), Box::new(Expression), Box::new(Rule), Box::new(Exemplar), Box::new(Wording), Box::new(Variant)]
 }
 
 /// The items of one category as a prompt block: one `prompt()` per item, in the order given.
@@ -193,7 +223,9 @@ fn spec(fmt: &str) -> Result<&'static Spec> {
     static RULE: Spec = Spec { header: &["id", "type", "scope", "check", "threshold", "severity", "message"], id_col: true, tags_col: false, title_col: "message", title_writes_back: true };
     static EXEMPLAR: Spec = Spec { header: &["id", "section", "function", "text", "source"], id_col: true, tags_col: false, title_col: "text", title_writes_back: false };
     static WORDING: Spec = Spec { header: &["avoid", "prefer", "note"], id_col: false, tags_col: false, title_col: "avoid", title_writes_back: true };
+    static VARIANT: Spec = Spec { header: &["id", "pattern", "kind", "text", "slot", "note"], id_col: true, tags_col: false, title_col: "text", title_writes_back: true };
     match fmt {
+        format::VARIANT => Ok(&VARIANT),
         format::PATTERN => Ok(&PATTERN),
         format::EXPRESSION => Ok(&EXPRESSION),
         format::RULE => Ok(&RULE),
@@ -428,15 +460,16 @@ mod tests {
 
     #[test]
     fn each_format_declares_its_columns() {
-        let want: [(&str, &[&str], &str); 5] = [
+        let want: [(&str, &[&str], &str); 6] = [
             (format::PATTERN, &["section", "function", "position", "template", "example", "priority"], "句型"),
             (format::EXPRESSION, &["kind", "text", "usage", "section", "example"], "常用詞"),
             (format::RULE, &["type", "scope", "check", "threshold", "severity", "message"], "規則"),
             (format::EXEMPLAR, &["section", "function", "text", "source"], "範例"),
             (format::WORDING, &["avoid", "prefer", "note"], "用詞對照"),
+            (format::VARIANT, &["pattern", "kind", "text", "slot", "note"], "說法"),
         ];
         let all = all();
-        assert_eq!(all.len(), 5);
+        assert_eq!(all.len(), 6);
         for (f, (id, cols, label)) in all.iter().zip(want) {
             let d = f.def();
             assert_eq!((d.id.as_str(), d.label.as_str(), d.shape.as_str(), d.form), (id, label, "row", true));

@@ -143,6 +143,9 @@ pub struct Profile {
     pub expressions: Vec<Expression>,
     pub vocabulary: Vec<VocabEntry>,
     pub rules: Vec<Rule>,
+    /// 說法 the author confirmed (`variants.csv`, optional; [`crate::variants`]).
+    #[serde(default)]
+    pub variants: Vec<crate::variants::Variant>,
     /// Exemplars outside applications aligned to `pc.exemplars` (`aligned.rs`); never read from
     /// `exemplars.csv`, which stays the author's own (`styleprofile::read_exemplars`).
     #[serde(skip)]
@@ -274,7 +277,7 @@ impl Profile {
         };
 
         Ok((
-            Profile { root: root.to_path_buf(), manifest, phrases, expressions, vocabulary, rules, outside_exemplars: Vec::new(), authors, affiliations, style_checks: Default::default() },
+            Profile { root: root.to_path_buf(), manifest, phrases, expressions, vocabulary, rules, outside_exemplars: Vec::new(), authors, affiliations, variants: Vec::new(), style_checks: Default::default() },
             issues,
         ))
     }

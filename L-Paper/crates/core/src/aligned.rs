@@ -268,6 +268,7 @@ mod tests {
             outside_exemplars: vec![],
             authors: vec![],
             affiliations: vec![],
+            variants: Vec::new(),
             style_checks: Default::default(),
         }
     }
