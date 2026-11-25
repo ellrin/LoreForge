@@ -391,6 +391,8 @@ pub struct Body {
     pub ellipse: bool,
     /// Layer types it coloured, for the figure's colour legend.
     pub legend: Vec<crate::art::Swatch>,
+    /// Problems of this node (an icon that does not exist); `build` should pass them on.
+    pub warn: Vec<String>,
 }
 
 #[derive(Default)]
@@ -769,6 +771,36 @@ fn gen_image(n: &Node, cx: &Ctx) -> Core {
     let (w, h) = pic_size(n, cx, 44.0);
     let objs = picture("", n.str("look").unwrap_or("photo"), 0.0, 0.0, w, h, &outline, lw, cx, true);
     Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Below, ..Default::default() }
+}
+
+/// The problem of an `icon` node that cannot draw its picture.
+fn icon_problem(n: &Node) -> Vec<String> {
+    if n.module != "icon" || n.str("icon").is_some_and(|id| lore_icons::icon(id.trim()).is_some()) {
+        return vec![];
+    }
+    let id = n.str("icon").unwrap_or("").trim();
+    vec![if id.is_empty() { format!("{}: icon 方塊沒有 icon=", n.id) } else { format!("{}: 找不到圖示 {id}", n.id) }]
+}
+
+/// A small picture from the icon sets in the line colour; without a usable `icon=` a dashed
+/// rounded square of the same size (and a warning).
+fn gen_icon(n: &Node, cx: &Ctx) -> Core {
+    let ink = hex_param(n, "line").unwrap_or_else(|| cx.theme.colors.ink.clone());
+    let (w, h) = pic_size(n, cx, 44.0);
+    let id = n.str("icon").unwrap_or("").trim();
+    if let Some(ic) = lore_icons::icon(id) {
+        let fr = frame(0.0, 0.0, w, h);
+        let mut objs = lore_icons::objects(&ic, fr, &ink, 0, "");
+        for (j, o) in objs.iter_mut().enumerate() {
+            o.name = if j == 0 { "icon".into() } else { format!("icon-{}", j + 1) };
+        }
+        return Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Below, ..Default::default() };
+    }
+    let mut st = Stroke::new(&ink, 0.75 * cx.k);
+    st.dash = "sysDash".into();
+    let mut o = shape("icon", "roundRect", 0.0, 0.0, w, h, Paint::None, Some(st));
+    round_adj(&mut o, 0.15);
+    Core { w, h, objs: vec![o], single: false, ellipse: false, label: LabelPos::Below, ..Default::default() }
 }
 
 fn gen_image_stack(n: &Node, cx: &Ctx) -> Core {
@@ -1456,6 +1488,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         (None, "loss") => gen_loss(n, cx),
         (None, "label") => gen_label(n, cx),
         (None, "image") => gen_image(n, cx),
+        (None, "icon") => gen_icon(n, cx),
         (None, "image-stack") => gen_image_stack(n, cx),
         (None, "feature-stack") => gen_feature_stack(n, cx),
         (None, "vector-bar") => gen_vector_bar(n, cx),
@@ -1493,9 +1526,10 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     }
     if above.is_empty() && below.is_empty() && core.single {
         let (w, h) = (core.w, core.h);
-        return Body { w, h, cy: h / 2.0, reserve_w: w, objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend };
+        return Body { w, h, cy: h / 2.0, reserve_w: w, objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: icon_problem(n) };
     }
     let legend = core.legend;
+    let warn = icon_problem(n);
     let pad = cx.s(2.0);
     let measure = |v: &[(String, &str, Type)]| -> f64 { v.iter().map(|(s, _, t)| text::block(&cx.vars.resolve(s), t.size).1 as f64 * t.size * 1.25).sum::<f64>() + if v.is_empty() { 0.0 } else { pad } };
     let (top, bottom) = (measure(&above), measure(&below));
@@ -1526,7 +1560,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         reserve_w = reserve_w.max(tw);
         objs.push(o);
     }
-    Body { w, h, cy: h / 2.0, reserve_w, objs, single: false, ellipse: false, legend }
+    Body { w, h, cy: h / 2.0, reserve_w, objs, single: false, ellipse: false, legend, warn }
 }
 
 /// Wrap a body's objects into what goes on the slide: the single shape, or a

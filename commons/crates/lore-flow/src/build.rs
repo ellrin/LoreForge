@@ -249,6 +249,8 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
     let mut node_ids = BTreeMap::new();
     for (n, pl) in g.nodes.iter().zip(&lay.nodes) {
         let body = modules::make(n, &Ctx { theme, vars, math, lib, k, symmetric: !lay.panels[pl.panel].down, image_size });
+        // what a block could not draw (an icon the sets do not have)
+        warnings.extend(body.warn.iter().cloned());
         let (o, next) = modules::place(body, &node_name(fig, &n.id), pl.rect.x, pl.rect.y, id);
         node_ids.insert(n.id.clone(), o.id);
         id = next;

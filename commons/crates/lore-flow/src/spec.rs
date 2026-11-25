@@ -9,12 +9,13 @@ use serde_json::Value;
 
 /// Module kinds the program can draw (the closed list an LLM picks from).
 /// Module templates loaded from a library extend it at run time.
-pub const MODULES: [(&str, &str); 17] = [
+pub const MODULES: [(&str, &str); 18] = [
     ("box", "a named step or model: rectangle with the label inside (params: shape=rect|round|trapezoid, vertical=true for an upright bar)"),
     ("op", "operator circle; label is one of + x . C (add, multiply, element-wise, concatenate) or a short word such as Or"),
     ("loss", "a loss or metric; label is its math, e.g. $\\mathcal L_{seg}$"),
     ("label", "free text without a frame (an output class, a note)"),
     ("image", "one picture / mask / heat map (params: look=photo|mask|heatmap|plot)"),
+    ("icon", "a small picture from the icon sets (params: icon=<set:name>, e.g. tabler:server, healthicons:doctor-outline)"),
     ("image-stack", "several pictures stacked with an offset (params: n)"),
     ("feature-stack", "feature maps / tensor channels stacked (params: n, look=flat|3d)"),
     ("vector-bar", "a vector or embedding as a row/column of cells (params: n, dir=v|h)"),
@@ -242,7 +243,7 @@ impl Node {
             "brace" => "note",
             "loss" => "loss",
             "label" => "note",
-            "image" | "image-stack" | "feature-stack" | "vector-bar" | "matrix" => "data",
+            "image" | "icon" | "image-stack" | "feature-stack" | "vector-bar" | "matrix" => "data",
             _ => "model",
         }
     }

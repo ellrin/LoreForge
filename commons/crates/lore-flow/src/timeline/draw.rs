@@ -61,6 +61,11 @@ fn solid(c: &Option<String>) -> Paint {
     }
 }
 
+/// `tabler:…` / `healthicons:…`: written as an icon id (it may still not exist).
+fn looks_like_id(s: &str) -> bool {
+    s.split_once(':').is_some_and(|(a, _)| a == "tabler" || a == "healthicons")
+}
+
 // ── the drawer ───────────────────────────────────────────────────────────────
 
 struct Drawer<'a> {
@@ -332,11 +337,34 @@ impl Drawer<'_> {
         // icon slot
         if let Some(r) = &pg.icon {
             let c = self.icon_color(&fill);
+            let word = self.spec.points.get(n - 1).map(|sp| sp.icon.trim().to_string()).unwrap_or_default();
+            if lore_icons::exists(&word) {
+                if let Some(ic) = lore_icons::icon(&word) {
+                    // inset 15 % of the slot's side, drawn in the slot's colour
+                    let (dx, dy) = (r.w * 0.15, r.h * 0.15);
+                    let fr = frame(r.x + dx, r.y + dy, (r.w - 2.0 * dx).max(0.0), (r.h - 2.0 * dy).max(0.0));
+                    let objs = lore_icons::objects(&ic, fr, &c, 0, "");
+                    for (j, o) in objs.into_iter().enumerate() {
+                        let part = if j == 0 { format!("{p}-icon") } else { format!("{p}-icon-{}", j + 1) };
+                        self.push(&part, o);
+                    }
+                    return;
+                }
+                self.out.warnings.push(format!("圖示 {word} 無法畫出"));
+            } else if looks_like_id(&word) {
+                self.out.warnings.push(format!("找不到圖示 {word}"));
+            }
             let mut s = Stroke::new(&c, 0.75 * k);
             s.dash = "sysDash".into();
             let o = shape("", "ellipse", r.x, r.y, r.w, r.h, Paint::None, Some(s));
             self.push(&format!("{p}-icon"), o);
         }
+    }
+
+    /// What the icon slot of point `i` (0-based) says: the words, or an unknown id's name.
+    fn slot_words(&self, i: usize) -> String {
+        let w = self.spec.points.get(i).map(|sp| sp.icon.trim()).unwrap_or("");
+        if looks_like_id(w) { w.split_once(':').map(|x| x.1).unwrap_or(w).to_string() } else { w.to_string() }
     }
 
     fn icon_color(&self, marker_fill: &Option<String>) -> String {
@@ -374,11 +402,13 @@ impl Drawer<'_> {
             let text_align = if in_card || st.text.align != "left" { "ctr" } else { "l" };
 
             // what picture to put in the empty icon slot
-            if let (Some(r), Some(sp)) = (&pg.icon, spec.points.get(i))
-                && !sp.icon.trim().is_empty()
+            let words = self.slot_words(i);
+            if let Some(r) = &pg.icon
+                && !words.is_empty()
+                && !lore_icons::exists(spec.points[i].icon.trim())
             {
                 let c = self.icon_color(&self.marker_fill(pg));
-                let slot = Slot { rect: *r, text: sp.icon.clone(), size: 7.0 * k };
+                let slot = Slot { rect: *r, text: words, size: 7.0 * k };
                 let ty = self.ty(slot.size, false, &c);
                 self.text(&format!("{p}-icon-text"), &slot, &ty, "ctr", "ctr");
             }
@@ -779,6 +809,73 @@ mod tests {
         assert_eq!(text_color(find(&b, "p1-icon-text")), "FFFFFF");
         st.marker.fill = "EEEEEE".into();
         assert_eq!(sp(find(&draw(&st, &pl), "p1-icon")).line.as_ref().unwrap().color, "5F6368");
+    }
+
+    fn draw_icon(word: &str, st: &Style) -> Built {
+        let mut sp = spec();
+        sp.points[0].icon = word.into();
+        let mut pl = plan();
+        pl.points[0].icon = Some(r(60.0, 40.0, 28.0, 28.0));
+        objects(&sp, st, &pl, &fonts(), 5)
+    }
+
+    fn icon_parts(b: &Built) -> Vec<&Object> {
+        b.objects.iter().filter(|o| o.name.rsplit('/').next().unwrap_or("").starts_with("p1-icon")).collect()
+    }
+
+    #[test]
+    fn an_icon_id_is_drawn_as_the_icon_not_a_slot() {
+        let (id, n) = lore_icons::search("server", None, 50)
+            .into_iter()
+            .chain(lore_icons::search("doctor", None, 50))
+            .filter_map(|h| lore_icons::icon(&h.id).map(|i| (h.id, i.shapes.len())))
+            .find(|(_, n)| *n > 1)
+            .expect("a multi-shape icon");
+        let b = draw_icon(&id, &Style::default());
+        assert_eq!(icon_parts(&b).len(), n);
+        assert!(has(&b, "p1-icon") && has(&b, "p1-icon-2") && !has(&b, &format!("p1-icon-{}", n + 1)));
+        for o in icon_parts(&b) {
+            let s = sp(o);
+            assert_eq!(s.geom.prst, "custom");
+            assert!(s.line.as_ref().is_none_or(|l| l.dash != "sysDash"));
+        }
+        assert!(!has(&b, "p1-icon-text"));
+        assert!(b.warnings.is_empty());
+    }
+
+    #[test]
+    fn the_icon_takes_the_slots_colour_and_sits_inside_it() {
+        let slot = frame(60.0, 40.0, 28.0, 28.0);
+        let mut st = Style::default();
+        st.icon.at = "in-marker".into();
+        st.marker.fill = "112233".into();
+        let b = draw_icon("tabler:server", &st);
+        for o in icon_parts(&b) {
+            assert!(o.frame.x >= slot.x && o.frame.y >= slot.y);
+            assert!(o.frame.x + o.frame.w <= slot.x + slot.w && o.frame.y + o.frame.h <= slot.y + slot.h);
+            let c = sp(o).line.as_ref().map(|l| l.color.clone()).unwrap_or_else(|| fill_hex(o));
+            assert_eq!(c, "FFFFFF");
+        }
+        st.marker.fill = "EEEEEE".into();
+        let b = draw_icon("tabler:server", &st);
+        let c = icon_parts(&b).iter().map(|o| sp(o).line.as_ref().map(|l| l.color.clone()).unwrap_or_else(|| fill_hex(o))).collect::<Vec<_>>();
+        assert!(c.iter().all(|c| c == "5F6368"));
+    }
+
+    #[test]
+    fn plain_words_still_draw_the_dashed_slot() {
+        let b = draw_icon("map", &Style::default());
+        assert_eq!(sp(find(&b, "p1-icon")).line.as_ref().unwrap().dash, "sysDash");
+        assert!(has(&b, "p1-icon-text") && !has(&b, "p1-icon-2") && b.warnings.is_empty());
+    }
+
+    #[test]
+    fn an_id_the_sets_do_not_have_is_a_slot_and_a_warning() {
+        let b = draw_icon("tabler:no-such-thing-xyz", &Style::default());
+        assert_eq!(sp(find(&b, "p1-icon")).line.as_ref().unwrap().dash, "sysDash");
+        let t = find(&b, "p1-icon-text");
+        assert_eq!(sp(t).text.as_ref().unwrap().paras[0].runs[0].text, "no-such-thing-xyz");
+        assert_eq!(b.warnings, vec!["找不到圖示 tabler:no-such-thing-xyz".to_string()]);
     }
 
     #[test]

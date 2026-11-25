@@ -1285,3 +1285,85 @@ fn several_straight_strokes_in_one_shape_are_not_joined() {
     assert_eq!(svg.matches(" M").count() + svg.matches("\"M").count(), moves, "every stroke starts on its own");
     assert!(svg.contains("stroke-linecap=\"round\""));
 }
+
+// ── icon blocks ──
+
+fn custom_shapes(objs: &[Object]) -> usize {
+    let mut n = 0;
+    walk(objs, &mut |o| {
+        if o.kind.sp().is_some_and(|s| s.geom.prst == "custom") {
+            n += 1;
+        }
+    });
+    n
+}
+
+fn icon_node(src: &str) -> lore_flow::spec::Node {
+    dsl::parse(src).unwrap().nodes.into_iter().find(|n| n.module == "icon").unwrap()
+}
+
+fn make_icon(n: &lore_flow::spec::Node) -> lore_flow::modules::Body {
+    let theme = Theme::classic_bw();
+    let vars = Vars::default();
+    let lib = Library::default();
+    let cx = lore_flow::modules::Ctx { theme: &theme, vars: &vars, math: &NoMath, lib: &lib, k: 1.0, symmetric: true, image_size: &lore_flow::modules::no_images };
+    lore_flow::modules::make(n, &cx)
+}
+
+#[test]
+fn an_icon_block_is_drawn_from_the_set() {
+    let g = dsl::parse("fig f\nd: icon \"Physician\" icon=tabler:server\n").unwrap();
+    let f = fig(&g);
+    assert!(custom_shapes(f.objects()) >= 1);
+    let mut texts = Vec::new();
+    walk(f.objects(), &mut |o| {
+        if let Some(t) = o.kind.sp().and_then(|s| s.text.as_ref()) {
+            texts.extend(t.paras.iter().flat_map(|p| p.runs.iter().map(|r| r.text.clone())));
+        }
+    });
+    assert!(texts.iter().any(|t| t.contains("Physician")), "{texts:?}");
+    assert!(f.built.warnings.is_empty(), "{:?}", f.built.warnings);
+}
+
+#[test]
+fn an_icon_block_takes_lines_like_any_block() {
+    let g = dsl::parse("fig f\na: box \"A\"\nd: icon \"Doc\" icon=healthicons:doctor-outline\nb: box \"B\"\na -> d -> b\n").unwrap();
+    let f = fig(&g);
+    assert!(f.built.warnings.is_empty(), "{:?}", f.built.warnings);
+    assert_eq!(f.routes.len(), 2);
+    assert!(f.routes.iter().all(|r| !r.forced));
+}
+
+#[test]
+fn an_icon_block_without_an_icon_is_a_dashed_square_and_says_so() {
+    for src in ["fig f\nd: icon \"Doc\"\n", "fig f\nd: icon \"Doc\" icon=tabler:no-such-thing-xyz\n"] {
+        let n = icon_node(src);
+        let body = make_icon(&n);
+        assert_eq!(custom_shapes(&body.objs), 0);
+        let sq = body.objs.iter().find(|o| o.name == "icon").expect("dashed square");
+        assert_eq!(sq.kind.sp().unwrap().line.as_ref().unwrap().dash, "sysDash");
+        assert_eq!(sq.frame.w, sq.frame.h);
+        assert_eq!(body.warn.len(), 1, "{:?}", body.warn);
+        // the figure still draws, with the label, and says what it could not draw
+        let f = fig(&dsl::parse(src).unwrap());
+        assert!(!f.objects().is_empty());
+        assert_eq!(f.built.warnings, body.warn, "the block's line reaches the figure");
+    }
+    assert!(make_icon(&icon_node("fig f\nd: icon \"Doc\" icon=tabler:server\n")).warn.is_empty());
+}
+
+#[test]
+fn the_icon_kind_is_in_the_kinds_the_model_is_told() {
+    assert!(lore_flow::spec::MODULES.iter().any(|(k, d)| *k == "icon" && d.contains("icon=<set:name>")));
+    assert_eq!(dsl::parse("fig f\nd: icon \"x\"\n").unwrap().nodes[0].role_or_default(), "data");
+}
+
+#[test]
+fn an_icon_block_survives_text_and_back() {
+    let g = dsl::parse("fig f\nd: icon \"Physician\" icon=healthicons:doctor-outline\n").unwrap();
+    let text = dsl::to_dsl(&g);
+    let back = dsl::parse(&text).unwrap();
+    assert_eq!(back.nodes[0].module, "icon");
+    assert_eq!(back.nodes[0].str("icon"), Some("healthicons:doctor-outline"));
+    assert_eq!(back.nodes[0].label, "Physician");
+}
