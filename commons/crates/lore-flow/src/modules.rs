@@ -1050,7 +1050,7 @@ pub(crate) fn layer_class(name: &str) -> String {
     if s.is_empty() { p } else { s.to_string() }
 }
 
-fn gen_layer_bars(n: &Node, cx: &Ctx) -> Core {
+fn gen_layer_bars(n: &Node, cx: &Ctx, warn: &mut Vec<String>) -> Core {
     let mut layers = n.list("layers");
     if layers.is_empty() {
         layers = vec!["Conv".into(), "Conv".into(), "Conv".into()];
@@ -1069,7 +1069,40 @@ fn gen_layer_bars(n: &Node, cx: &Ctx) -> Core {
     let typed = crate::finish::Finish::of(n, cx.theme).typed && cx.theme.colors.cycle.len() > 1;
     let mut objs = Vec::new();
     let count = layers.len();
+    // the bars' own colours, in order; a shorter list repeats its last
+    let own: Vec<String> = n.list("colors");
+    let filled = n.flag("filled");
+    let through = match n.params.get("through") {
+        Some(Value::Bool(true)) => Some(cx.theme.colors.ink.clone()),
+        Some(Value::Bool(false)) | None => None,
+        Some(v) => {
+            let s = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
+            if matches!(s.as_str(), "true" | "yes" | "on") {
+                Some(cx.theme.colors.ink.clone())
+            } else {
+                match crate::theme::named(&s) {
+                    Some((_, line)) => Some(line),
+                    None => {
+                        warn.push(format!("{}: 不認得的顏色 {}", n.id, s));
+                        None
+                    }
+                }
+            }
+        }
+    };
+    let mut bad: Vec<String> = Vec::new();
+    let mut texts: Vec<Object> = Vec::new();
     for (i, name) in layers.iter().enumerate() {
+        let mine: Option<(String, String)> = own.get(i).or(own.last()).map(String::as_str).filter(|c| c.trim() != "_").and_then(|c| match crate::theme::named(c) {
+            Some(p) => Some(p),
+            None => {
+                if !bad.iter().any(|b| b == c) {
+                    bad.push(c.to_string());
+                    warn.push(format!("{}: 不認得的顏色 {}", n.id, c));
+                }
+                None
+            }
+        });
         let cls = layer_class(name);
         let ci = classes.iter().position(|c| *c == cls).unwrap_or_else(|| {
             classes.push(cls.clone());
@@ -1079,18 +1112,39 @@ fn gen_layer_bars(n: &Node, cx: &Ctx) -> Core {
         let len = cx.theme.colors.cycle.len().max(1);
         let named = cls.chars().any(char::is_alphanumeric);
         let colour = if !named { cx.theme.colors.muted.clone() } else if ci < len || len == 1 { cx.theme.cycle(ci).to_string() } else { shade(cx.theme.cycle(ci), 0.45 * (ci / len) as f64) };
-        if typed && named && !legend.iter().any(|s: &crate::art::Swatch| s.key == format!("bars:{cls}")) {
+        if mine.is_none() && typed && named && !legend.iter().any(|s: &crate::art::Swatch| s.key == format!("bars:{cls}")) {
             legend.push(crate::art::Swatch { key: format!("bars:{cls}"), label: cls.clone(), color: colour.clone() });
         }
         // tapering keeps room for the name
         let h = if taper { (full * (1.0 - 0.4 * i as f64 / (count.max(2) - 1) as f64)).max(text::width(&cx.vars.resolve(name), ty.size) + cx.s(6.0)) } else { full };
         let x = i as f64 * (bw + gap);
-        let fill = if solid { paint(&shade(&colour, 0.7), 1.0) } else { paint(&cx.theme.colors.paper, 1.0) };
-        let mut o = shape(&format!("bar{i}"), "rect", x, (full - h) / 2.0, bw, h, fill, stroke(&colour, (cx.theme.node.line_w * 1.5) * cx.k));
-        cx.put_text(&mut o, name, &ty, true);
+        let mut fill = if solid { paint(&shade(&colour, 0.7), 1.0) } else { paint(&cx.theme.colors.paper, 1.0) };
+        let mut edge = colour.clone();
+        if let Some((pale, strong)) = &mine {
+            edge = strong.clone();
+            if filled {
+                fill = paint(pale, 1.0);
+            }
+        }
+        let mut o = shape(&format!("bar{i}"), "rect", x, (full - h) / 2.0, bw, h, fill, stroke(&edge, (cx.theme.node.line_w * 1.5) * cx.k));
+        if through.is_some() {
+            // the text goes over the line, in a shape of its own
+            let mut t = shape(&format!("bartext{i}"), "rect", x, (full - h) / 2.0, bw, h, Paint::None, None);
+            cx.put_text(&mut t, name, &ty, true);
+            texts.push(t);
+        } else {
+            cx.put_text(&mut o, name, &ty, true);
+        }
         objs.push(o);
     }
-    Core { w: count as f64 * (bw + gap) - gap, h: full, objs, single: false, ellipse: false, label: LabelPos::Above, legend, ..Default::default() }
+    let width = count as f64 * (bw + gap) - gap;
+    if let Some(c) = through {
+        let mut st = Stroke::new(&c, (cx.theme.node.line_w * cx.k).max(0.5));
+        st.dash = "dash".into();
+        objs.push(seg("through", (0.0, full / 2.0), (width, full / 2.0), st));
+        objs.extend(texts);
+    }
+    Core { w: width, h: full, objs, single: false, ellipse: false, label: LabelPos::Above, legend, ..Default::default() }
 }
 
 /// Block sizes (thickness, height, depth) of a cuboid sequence.
@@ -1422,7 +1476,7 @@ pub fn scale_obj(o: &mut Object, k: f64) {
     }
 }
 
-fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx) -> Core {
+fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx, warn: &mut Vec<String>) -> Core {
     let st = style(n, cx);
     // the layer types a saved drawing names go into the colour legend, as when it was drawn
     fn layer_keys(v: &Value, out: &mut Vec<String>) {
@@ -1469,6 +1523,18 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx) -> Core {
             _ => {}
         }
     }
+    // the block's own words in place of the drawing's fixed ones
+    let texts: Vec<String> = n.list("texts");
+    let named: Vec<(String, String)> = n.params.iter().filter_map(|(k, v)| k.strip_prefix("text.").map(|name| (name.to_string(), v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())))).collect();
+    if !texts.is_empty() || !named.is_empty() {
+        let mut seen = 0usize;
+        for o in objs.iter_mut() {
+            replace_fixed(o, &texts, &named, &mut seen, &[], cx);
+        }
+        if texts.len() > seen {
+            warn.push(format!("{}: 這個積木只有 {} 處文字", n.id, seen));
+        }
+    }
     for (i, o) in objs.iter_mut().enumerate() {
         o.id = 0;
         o.src = None;
@@ -1483,6 +1549,73 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx) -> Core {
         fill_label(o, &label, cx, &mut drawn);
     }
     Core { w: cx.s(t.w), h: cx.s(t.h), objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below }, legend, ..Default::default() }
+}
+
+/// The words a block gives for one fixed text of its drawing: `_` keeps the drawing's word.
+fn own_words(w: &str) -> Option<&str> {
+    let w = w.trim();
+    if w == "_" {
+        None
+    } else if w == "\"\"" || w == "\"" {
+        Some("")
+    } else {
+        Some(w)
+    }
+}
+
+/// Walk an object (groups depth-first, paragraphs and runs in order): the `seen`-th fixed text
+/// (a run that is not `{{label}}` and not blank) takes `texts[seen]`, and the first fixed text
+/// of an object (or group) named in `named` takes that name's words.
+fn replace_fixed(o: &mut Object, texts: &[String], named: &[(String, String)], seen: &mut usize, above: &[String], cx: &Ctx) {
+    let mut path: Vec<String> = above.to_vec();
+    path.push(o.name.clone());
+    match &mut o.kind {
+        Kind::Text(sp) | Kind::Shape(sp) => {
+            let mut first_here = true;
+            let mut math = false;
+            if let Some(tb) = &mut sp.text {
+                for p in &mut tb.paras {
+                    let mut i = 0;
+                    while i < p.runs.len() {
+                        let r = &p.runs[i];
+                        if r.kind != "text" || r.text.trim().is_empty() || r.text.trim() == "{{label}}" {
+                            i += 1;
+                            continue;
+                        }
+                        let mut word = texts.get(*seen).and_then(|w| own_words(w)).map(str::to_string);
+                        if first_here && let Some((_, w)) = named.iter().find(|(k, _)| path.iter().any(|nm| nm == k)) {
+                            word = own_words(w).map(str::to_string);
+                        }
+                        first_here = false;
+                        *seen += 1;
+                        let l = r.look.clone();
+                        match word {
+                            None => i += 1,
+                            Some(w) if w.is_empty() => {
+                                p.runs[i].text = String::new();
+                                i += 1;
+                            }
+                            Some(w) => {
+                                let ty = Type { font: l.font.clone(), ea_font: l.ea_font.clone(), math_font: cx.theme.font.math.clone(), size: l.size, bold: l.bold, italic: l.italic, color: l.color.clone() };
+                                let (rs, m) = text::runs(&cx.vars.resolve(&w), &ty, cx.vars, cx.math);
+                                math |= m;
+                                let k = rs.len();
+                                p.runs.splice(i..=i, rs);
+                                i += k.max(1);
+                            }
+                        }
+                    }
+                }
+            }
+            sp.equation |= math;
+        }
+        Kind::Group(g) => {
+            for c in &mut g.children {
+                replace_fixed(c, texts, named, seen, &path, cx);
+            }
+        }
+        _ => {}
+    }
 }
 
 struct Own {
@@ -1553,8 +1686,9 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         Some(_) if !crate::spec::MODULES.iter().any(|(m, _)| *m == n.module) => cx.lib.get(&n.module, ""),
         _ => None,
     };
+    let mut warn: Vec<String> = Vec::new();
     let core = match (saved, n.module.as_str()) {
-        (Some(t), _) => gen_template(n, t, cx),
+        (Some(t), _) => gen_template(n, t, cx, &mut warn),
         (None, "box") => gen_box(n, cx),
         (None, "op") => gen_op(n, cx),
         (None, "loss") => gen_loss(n, cx),
@@ -1566,7 +1700,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         (None, "feature-stack") => gen_feature_stack(n, cx),
         (None, "vector-bar") => gen_vector_bar(n, cx),
         (None, "matrix") => gen_matrix(n, cx),
-        (None, "layer-bars") => gen_layer_bars(n, cx),
+        (None, "layer-bars") => gen_layer_bars(n, cx, &mut warn),
         (None, "cuboid-seq") => gen_cuboid_seq(n, cx),
         (None, "unet") => gen_unet(n, cx),
         (None, "encoder") => crate::art::coder(n, cx, false),
@@ -1576,7 +1710,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         (None, "brace") => gen_brace(n, cx),
         // a library kind whose named style is missing falls back to its default drawing
         (None, other) => match cx.lib.get(other, "") {
-            Some(t) => gen_template(n, t, cx),
+            Some(t) => gen_template(n, t, cx, &mut warn),
             None => gen_box(n, cx),
         },
     };
@@ -1599,10 +1733,10 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     }
     if above.is_empty() && below.is_empty() && core.single {
         let (w, h) = (core.w, core.h);
-        return Body { w, h, cy: h / 2.0, reserve_w: w, objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: icon_problem(n) };
+        return Body { w, h, cy: h / 2.0, reserve_w: w, objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
     }
     let legend = core.legend;
-    let warn = icon_problem(n);
+    warn.extend(icon_problem(n));
     let pad = cx.s(2.0);
     let measure = |v: &[(String, &str, Type)]| -> f64 { v.iter().map(|(s, _, t)| text::block(&cx.vars.resolve(s), t.size).1 as f64 * t.size * 1.25).sum::<f64>() + if v.is_empty() { 0.0 } else { pad } };
     let (top, bottom) = (measure(&above), measure(&below));

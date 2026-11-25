@@ -1614,3 +1614,190 @@ fn a_chart_block_without_a_chart_is_a_dashed_slot() {
     assert_eq!(charts.len(), 1);
     assert_eq!(charts[0].kind.sp().unwrap().line.as_ref().unwrap().dash, "sysDash");
 }
+
+// ── a block's own words, bars in their own colours ─────────────────────
+
+fn text_rect(name: &str, y: i64, words: &[&str]) -> Object {
+    let mut o = rect_obj(name, y, "role:fill", "role:line");
+    let ty = lore_flow::text::Type { font: "Arial".into(), ea_font: String::new(), math_font: "Cambria Math".into(), size: 10.0, bold: false, italic: false, color: "000000".into() };
+    let (mut tb, _) = lore_flow::text::body(words[0], &ty, &Vars::default(), &NoMath, "ctr", "ctr");
+    for w in &words[1..] {
+        let (rs, _) = lore_flow::text::runs(w, &ty, &Vars::default(), &NoMath);
+        tb.paras[0].runs.extend(rs);
+    }
+    o.kind.sp_mut().unwrap().text = Some(tb);
+    o
+}
+
+/// Two fixed words ("Alpha" in `top`, "Beta" in `low`, in one paragraph with the label).
+fn worded_library() -> Library {
+    let objs = vec![text_rect("top", 0, &["Alpha"]), text_rect("low", 254_000, &["Beta", "{{label}}"])];
+    let t = lore_flow::modules::ModuleTemplate { kind: "worded".into(), style: "x".into(), w: 40.0, h: 40.0, objects: serde_json::to_value(&objs).unwrap(), ..Default::default() };
+    let mut lib = Library::default();
+    lib.add(t).unwrap();
+    lib
+}
+
+fn all_text(objs: &[Object]) -> Vec<String> {
+    objs.iter().filter_map(|o| o.kind.sp().and_then(|s| s.text.as_ref())).map(|tb| tb.paras.iter().map(|p| p.runs.iter().map(|r| r.text.clone()).collect::<String>()).collect::<Vec<_>>().join("")).collect()
+}
+
+fn make_body(src: &str, lib: &Library) -> lore_flow::modules::Body {
+    let g = dsl::parse_with(src, &lib.kinds()).unwrap();
+    let theme = Theme::classic_bw();
+    let vars = Vars::default();
+    let cx = lore_flow::modules::Ctx { theme: &theme, vars: &vars, math: &NoMath, lib, k: 1.0, symmetric: false, image_size: &lore_flow::modules::no_images };
+    lore_flow::modules::make(&g.nodes[0], &cx)
+}
+
+fn texts_of(src: &str, lib: &Library) -> Vec<String> {
+    all_text(&make_body(src, lib).objs)
+}
+
+#[test]
+fn texts_replace_a_drawings_fixed_words_in_order() {
+    let lib = worded_library();
+    let t = texts_of("fig f\nn: worded \"L\" style=x texts=[One,Two]\n", &lib);
+    assert!(t.contains(&"One".to_string()) && t.contains(&"TwoL".to_string()), "{t:?}");
+    assert!(!t.iter().any(|s| s.contains("Alpha") || s.contains("Beta")));
+}
+
+#[test]
+fn an_underscore_keeps_the_word_and_an_empty_text_blanks_it() {
+    let lib = worded_library();
+    let t = texts_of("fig f\nn: worded \"L\" style=x texts=[_,Two]\n", &lib);
+    assert!(t.contains(&"Alpha".to_string()) && t.contains(&"TwoL".to_string()), "{t:?}");
+    let t = texts_of("fig f\nn: worded \"L\" style=x texts=[\"\",_]\n", &lib);
+    assert!(t.contains(&String::new()) && t.contains(&"BetaL".to_string()), "{t:?}");
+}
+
+#[test]
+fn a_named_object_takes_its_text() {
+    let lib = worded_library();
+    let t = texts_of("fig f\nn: worded \"L\" style=x text.low=Gamma\n", &lib);
+    assert!(t.contains(&"Alpha".to_string()) && t.contains(&"GammaL".to_string()), "{t:?}");
+    // named comes after the list
+    let t = texts_of("fig f\nn: worded \"L\" style=x texts=[One,Two] text.top=Gamma\n", &lib);
+    assert!(t.contains(&"Gamma".to_string()) && t.contains(&"TwoL".to_string()), "{t:?}");
+}
+
+#[test]
+fn too_many_texts_is_a_warning() {
+    let lib = worded_library();
+    let b = make_body("fig f\nn: worded \"L\" style=x texts=[a,b,c]\n", &lib);
+    assert!(b.warn.iter().any(|w| w == "n: 這個積木只有 2 處文字"), "{:?}", b.warn);
+    let b = make_body("fig f\nn: worded \"L\" style=x texts=[a,b]\n", &lib);
+    assert!(b.warn.is_empty());
+}
+
+#[test]
+fn a_block_without_texts_is_drawn_as_before() {
+    let lib = worded_library();
+    let t = texts_of("fig f\nn: worded \"L\" style=x\n", &lib);
+    assert!(t.contains(&"Alpha".to_string()) && t.contains(&"BetaL".to_string()), "{t:?}");
+}
+
+fn flat(objs: &[Object]) -> Vec<Object> {
+    let mut out = Vec::new();
+    for o in objs {
+        out.push(o.clone());
+        if let Kind::Group(g) = &o.kind {
+            out.extend(flat(&g.children));
+        }
+    }
+    out
+}
+
+fn bar_objs(src: &str) -> lore_flow::modules::Body {
+    make_body(src, &Library::default())
+}
+
+fn bar<'a>(b: &'a lore_flow::modules::Body, i: usize) -> &'a lore_canvas::SpObj {
+    b.objs.iter().find(|o| o.name == format!("bar{i}")).unwrap().kind.sp().unwrap()
+}
+
+#[test]
+fn bars_take_their_colours_in_order() {
+    let b = bar_objs("fig f\nq: layer-bars \"L\" layers=[Conv,MBConv1,Pool] colors=[pink,purple,blue]\n");
+    for (i, c) in ["pink", "purple", "blue"].iter().enumerate() {
+        let (_, strong) = lore_flow::theme::named(c).unwrap();
+        assert!(bar(&b, i).line.as_ref().unwrap().color.eq_ignore_ascii_case(&strong), "bar {i}");
+    }
+    // the fill stays the default
+    assert_eq!(bar(&b, 0).fill, lore_canvas::Paint::solid(&Theme::classic_bw().colors.paper));
+}
+
+#[test]
+fn the_last_colour_repeats() {
+    let b = bar_objs("fig f\nq: layer-bars \"L\" layers=[Conv,Conv,Conv,Conv] colors=[pink,_,blue]\n");
+    let line = |i| bar(&b, i).line.as_ref().unwrap().color.to_uppercase();
+    let (_, pink) = lore_flow::theme::named("pink").unwrap();
+    let (_, blue) = lore_flow::theme::named("blue").unwrap();
+    assert_eq!(line(0), pink.to_uppercase());
+    assert_ne!(line(1), pink.to_uppercase());
+    assert_eq!(line(2), blue.to_uppercase());
+    assert_eq!(line(3), blue.to_uppercase());
+}
+
+#[test]
+fn filled_bars_take_the_pale_fill() {
+    let b = bar_objs("fig f\nq: layer-bars \"L\" layers=[Conv,Conv] colors=[pink] filled=true\n");
+    let (pale, _) = lore_flow::theme::named("pink").unwrap();
+    assert_eq!(bar(&b, 1).fill, lore_canvas::Paint::solid(&pale));
+}
+
+#[test]
+fn an_unknown_bar_colour_is_a_warning() {
+    let b = bar_objs("fig f\nq: layer-bars \"L\" layers=[Conv,Conv,Conv] colors=[mauve]\n");
+    assert_eq!(b.warn.iter().filter(|w| w.as_str() == "q: 不認得的顏色 mauve").count(), 1, "{:?}", b.warn);
+    let plain = bar_objs("fig f\nq: layer-bars \"L\" layers=[Conv,Conv,Conv]\n");
+    assert_eq!(bar(&b, 0).line.as_ref().unwrap().color, bar(&plain, 0).line.as_ref().unwrap().color);
+}
+
+#[test]
+fn a_line_runs_through_the_bars() {
+    let b = bar_objs("fig f\nq: layer-bars \"L\" layers=[Conv,Conv,Conv] through=blue\n");
+    let pos = |name: &str| b.objs.iter().position(|o| o.name == name).unwrap();
+    let line = &b.objs[pos("through")];
+    match &line.kind {
+        Kind::Connector(c) => {
+            let (_, strong) = lore_flow::theme::named("blue").unwrap();
+            assert!(c.line.as_ref().unwrap().color.eq_ignore_ascii_case(&strong));
+            assert_eq!(c.line.as_ref().unwrap().dash, "dash");
+        }
+        _ => panic!("not a line"),
+    }
+    assert!(pos("bar2") < pos("through") && pos("through") < pos("bartext0"));
+    assert!(bar(&b, 0).text.is_none());
+    assert!(line.frame.w > 0 && line.frame.h == 0);
+    let plain = bar_objs("fig f\nq: layer-bars \"L\" layers=[Conv,Conv,Conv]\n");
+    assert!(plain.objs.iter().all(|o| o.name != "through"));
+    let ink = bar_objs("fig f\nq: layer-bars \"L\" layers=[Conv] through=true\n");
+    assert!(ink.objs.iter().any(|o| o.name == "through"));
+}
+
+#[test]
+fn bars_without_colours_are_drawn_as_before() {
+    let b = bar_objs("fig f\nq: layer-bars \"L\" layers=[Conv,FC]\n");
+    assert!(b.warn.is_empty());
+    assert!(b.objs.iter().all(|o| o.name != "through" && !o.name.starts_with("bartext")));
+    assert!(bar(&b, 0).text.is_some());
+}
+
+#[test]
+fn a_library_block_shows_the_figures_own_words() {
+    let lib = worded_library();
+    let g = dsl::parse_with("fig f\nn: worded \"L\" style=x texts=[Enc,Dec]\n", &lib.kinds()).unwrap();
+    let f = draw(&g, &Drawing { library: lib, ..Default::default() }).unwrap();
+    let words = all_text(&flat(f.objects()));
+    assert!(words.iter().any(|s| s == "Enc") && !words.iter().any(|s| s.contains("Alpha")), "{words:?}");
+}
+
+#[test]
+fn coloured_bars_through_the_figure_text() {
+    let g = dsl::parse("fig f\nq: layer-bars \"L\" layers=[Conv,MBConv1] colors=[pink,purple] through=true\n").unwrap();
+    let f = fig(&g);
+    let (_, pink) = lore_flow::theme::named("pink").unwrap();
+    assert!(flat(f.objects()).iter().any(|o| o.name.ends_with("bar0") && o.kind.sp().is_some_and(|s| s.line.as_ref().is_some_and(|l| l.color.eq_ignore_ascii_case(&pink)))));
+    assert!(flat(f.objects()).iter().any(|o| o.name.ends_with("through")));
+}
