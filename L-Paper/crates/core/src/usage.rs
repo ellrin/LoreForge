@@ -1,10 +1,13 @@
-//! Which wordings of the author's patterns his drafts have already used (`usage.json` in the
-//! workspace): a wording that was used is offered far less the next time, a pattern used in this
-//! paper is pushed down the list, and one with no unused wording left goes out marked "reword".
+//! Which of the author's sentences his draft has already used (`usage.json` in the workspace).
+//! His sentences are filed by section (Introduction, Method …), so the question is only whether
+//! the section being written has said this sentence already: a wording used there is not
+//! offered again while another is left, and a sentence whose every wording is used there falls
+//! down the list and goes out marked "reword". The pattern itself is not held against him, only
+//! the sentence: the same frame in another wording is a different sentence.
 //!
 //! A wording is named by its key: the pattern id for the author's own template (`P012`), the
 //! pattern id and the 說法 id for a confirmed variant (`P012#V001`). The record is kept per paper
-//! and paragraph and replaced when the paragraph is drafted again, so a redraft never counts twice.
+//! and paragraph (`Methods/p3`) and replaced when the paragraph is drafted again.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -14,34 +17,29 @@ use crate::profile::Phrase;
 use crate::variants::Variant;
 
 pub const FILE: &str = "usage.json";
-/// One use in this paper weighs as much as this many uses in the author's other papers.
-pub const HERE: u32 = 4;
-/// What one use in this paper takes off a pattern's retrieval score (a full word overlap is 10).
-pub const HERE_PENALTY: f32 = 4.0;
-/// The same for one use in another paper, and the most that other papers can take off.
-pub const ELSEWHERE_PENALTY: f32 = 0.5;
-pub const ELSEWHERE_CAP: f32 = 3.0;
+/// What each time a sentence was already said in this section, in every wording it has, takes
+/// off its retrieval score (a full word overlap is 10).
+pub const WORN_PENALTY: f32 = 3.0;
 
-/// paper → paragraph → the wording keys its sentences used (one entry per sentence).
+/// paper → paragraph (`section/id`) → the wording keys its sentences used (one per sentence).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Usage {
     pub papers: BTreeMap<String, BTreeMap<String, Vec<String>>>,
 }
 
-/// What is already used, seen from one paper: counts per wording key.
+/// What one paragraph sees as already used: counts per wording key.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Seen {
+    /// In the other paragraphs of its section.
     pub here: BTreeMap<String, u32>,
-    pub elsewhere: BTreeMap<String, u32>,
-    /// What the paragraph being drafted had the last time: its patterns are not pushed down
-    /// (they fit it), but it does not get the same wording again.
+    /// What the paragraph itself had the last time it was drafted: its sentences are not pushed
+    /// down the list (they fit it), but it does not get the same wording again.
     pub again: BTreeMap<String, u32>,
 }
 
-/// The pattern id of a wording key.
-pub fn pattern_of(key: &str) -> &str {
-    key.split('#').next().unwrap_or(key)
+fn section_of(para: &str) -> &str {
+    para.split('/').next().unwrap_or(para)
 }
 
 impl Usage {
@@ -70,21 +68,13 @@ impl Usage {
         }
     }
 
-    /// The counts as paragraph `para` of `paper` sees them.
+    /// The counts as paragraph `para` (`section/id`) of `paper` sees them: its own section only.
     pub fn seen(&self, paper: &str, para: &str) -> Seen {
         let mut s = Seen::default();
-        for (name, paras) in &self.papers {
-            for (id, keys) in paras {
-                let into = if name != paper {
-                    &mut s.elsewhere
-                } else if id == para {
-                    &mut s.again
-                } else {
-                    &mut s.here
-                };
-                for k in keys {
-                    *into.entry(k.clone()).or_default() += 1;
-                }
+        for (id, keys) in self.papers.get(paper).into_iter().flatten().filter(|(id, _)| section_of(id) == section_of(para)) {
+            let into = if id == para { &mut s.again } else { &mut s.here };
+            for k in keys {
+                *into.entry(k.clone()).or_default() += 1;
             }
         }
         s
@@ -92,22 +82,16 @@ impl Usage {
 }
 
 impl Seen {
-    /// How used one wording is: uses in this paper count [`HERE`] times.
+    /// How often one wording was already used.
     pub fn weight(&self, key: &str) -> u32 {
-        let n = |m: &BTreeMap<String, u32>| m.get(key).copied().unwrap_or(0);
-        (n(&self.here) + n(&self.again)) * HERE + n(&self.elsewhere)
+        self.here.get(key).copied().unwrap_or(0) + self.again.get(key).copied().unwrap_or(0)
     }
 
-    /// Uses of any wording of `pattern`: (in this paper, in the other papers).
-    pub fn pattern(&self, pattern: &str) -> (u32, u32) {
-        let sum = |m: &BTreeMap<String, u32>| m.iter().filter(|(k, _)| pattern_of(k) == pattern).map(|(_, n)| *n).sum();
-        (sum(&self.here), sum(&self.elsewhere))
-    }
-
-    /// What the uses of `pattern` take off its retrieval score.
-    pub fn penalty(&self, pattern: &str) -> f32 {
-        let (here, elsewhere) = self.pattern(pattern);
-        here as f32 * HERE_PENALTY + (elsewhere as f32 * ELSEWHERE_PENALTY).min(ELSEWHERE_CAP)
+    /// What is taken off the retrieval score of `phrase`: nothing while one of its wordings is
+    /// unused in the section, [`WORN_PENALTY`] for each time all of them have been said there.
+    pub fn penalty(&self, phrase: &Phrase, variants: &[Variant]) -> f32 {
+        let said = keyed(phrase, variants).iter().map(|(k, _)| self.here.get(k).copied().unwrap_or(0)).min().unwrap_or(0);
+        said as f32 * WORN_PENALTY
     }
 }
 
@@ -116,7 +100,7 @@ impl Seen {
 pub struct Choice<'a> {
     pub key: String,
     pub wording: &'a str,
-    /// Every wording of the pattern has been used: the frame goes out to be reworded.
+    /// Every wording of it has been said in this section: the frame goes out to be reworded.
     pub worn: bool,
 }
 
@@ -172,19 +156,30 @@ mod tests {
     }
 
     #[test]
-    fn a_used_wording_is_not_chosen_while_an_unused_one_is_left() {
+    fn a_sentence_said_in_the_section_is_not_chosen_while_another_wording_is_left() {
         let (p, vs) = bank();
         let mut u = Usage::default();
-        u.record("paper-a", "Methods/p1", vec!["P1".into()]);
+        u.record("paper", "Methods/p1", vec!["P1".into()]);
         for seed in 0..20 {
-            let c = choose(&p, &vs, &u.seen("paper-b", "x"), seed);
+            let c = choose(&p, &vs, &u.seen("paper", "Methods/p2"), seed);
             assert_ne!(c.key, "P1", "seed {seed}");
             assert!(!c.worn);
         }
-        u.record("paper-a", "Methods/p2", vec!["P1#V1".into()]);
+        u.record("paper", "Methods/p2", vec!["P1#V1".into()]);
         for seed in 0..20 {
-            assert_eq!(choose(&p, &vs, &u.seen("paper-b", "x"), seed).key, "P1#V2");
+            assert_eq!(choose(&p, &vs, &u.seen("paper", "Methods/p3"), seed).key, "P1#V2");
         }
+    }
+
+    #[test]
+    fn only_the_section_being_written_counts() {
+        let (p, vs) = bank();
+        let mut u = Usage::default();
+        u.record("paper", "Methods/p1", vec!["P1".into(), "P1#V1".into(), "P1#V2".into()]);
+        u.record("other paper", "Results/p1", vec!["P1".into()]);
+        assert_eq!(u.seen("paper", "Results/p1"), Seen::default(), "another section of the paper");
+        assert_eq!(u.seen("third paper", "Methods/p1"), Seen::default(), "another paper");
+        assert_eq!(u.seen("paper", "Results/p1").penalty(&p, &vs), 0.0);
     }
 
     #[test]
@@ -205,37 +200,30 @@ mod tests {
         let again = u.seen("paper", "Methods/p1");
         let second = choose(&p, &vs, &again, s).key;
         assert_ne!(first, second);
-        // its own pattern still fits it: not pushed down for the redraft
-        assert_eq!(again.penalty("P1"), 0.0);
+        // its own sentence still fits it: not pushed down for the redraft
+        assert_eq!(again.penalty(&p, &vs), 0.0);
         // and the redraft replaces the record: one use, not two
         u.record("paper", "Methods/p1", vec![second.clone()]);
-        assert_eq!(u.seen("paper", "Methods/p2").pattern("P1"), (1, 0));
+        assert_eq!(u.seen("paper", "Methods/p2").here.values().sum::<u32>(), 1);
     }
 
     #[test]
-    fn a_pattern_with_every_wording_used_is_worn_and_the_least_used_goes_out() {
+    fn a_sentence_said_in_every_wording_is_worn_and_falls_down_the_list() {
         let (p, vs) = bank();
         let mut u = Usage::default();
-        u.record("old", "a", vec!["P1".into(), "P1#V1".into(), "P1#V2".into()]);
-        u.record("this", "b", vec!["P1".into()]);
-        let c = choose(&p, &vs, &u.seen("this", "x"), 0);
+        u.record("paper", "Methods/a", vec!["P1".into(), "P1#V1".into()]);
+        let s = u.seen("paper", "Methods/c");
+        assert_eq!(s.penalty(&p, &vs), 0.0, "one wording is still unused: the frame is not held against him");
+        u.record("paper", "Methods/b", vec!["P1#V2".into(), "P1".into()]);
+        let s = u.seen("paper", "Methods/c");
+        let c = choose(&p, &vs, &s, 0);
         assert!(c.worn);
-        assert_ne!(c.key, "P1", "the one used in this paper is the most used");
-    }
-
-    #[test]
-    fn this_paper_weighs_more_than_the_others() {
-        let mut u = Usage::default();
-        u.record("this", "a", vec!["P1".into()]);
-        u.record("old", "a", vec!["P2".into(), "P2#V9".into()]);
-        let s = u.seen("this", "x");
-        assert_eq!(s.pattern("P1"), (1, 0));
-        assert_eq!(s.pattern("P2"), (0, 2));
-        assert!(s.penalty("P1") > s.penalty("P2"));
-        assert_eq!(s.penalty("P3"), 0.0);
-        // many old uses never outweigh the cap
-        u.record("old", "b", vec!["P2".into(); 40]);
-        assert_eq!(u.seen("this", "x").penalty("P2"), ELSEWHERE_CAP);
+        assert_ne!(c.key, "P1", "the one said twice is the last to come back");
+        assert_eq!(s.penalty(&p, &vs), WORN_PENALTY);
+        // a pattern with one wording is worn after one use
+        let single = phrase("P5", "{a} is set to {b}.");
+        u.record("paper", "Methods/b", vec!["P5".into()]);
+        assert_eq!(u.seen("paper", "Methods/c").penalty(&single, &vs), WORN_PENALTY);
     }
 
     #[test]

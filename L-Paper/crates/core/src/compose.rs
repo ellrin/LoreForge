@@ -93,13 +93,13 @@ pub fn reference_phrases(profile: &Profile, req: &ComposeRequest, points: &[Poin
     reference_phrases_seen(profile, req, points, &Seen::default())
 }
 
-/// [`reference_phrases`] with what the author's drafts already used: a pattern used in this
-/// paper drops far down the list (one use costs as much as 40% of the word overlap), one used
-/// in his other papers a little, so the same few patterns are not offered every time.
+/// [`reference_phrases`] with what the section being written has already said: a sentence said
+/// there in every wording it has drops down the list, so the same one is not used over and over.
+/// One that still has an unused wording keeps its place.
 pub fn reference_phrases_seen(profile: &Profile, req: &ComposeRequest, points: &[Point], seen: &Seen) -> Vec<Hit> {
     let rank = |mut hits: Vec<Hit>, keep: usize| {
         for h in &mut hits {
-            h.score -= seen.penalty(&h.phrase.id);
+            h.score -= seen.penalty(&h.phrase, &profile.variants);
         }
         hits.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.phrase.id.cmp(&b.phrase.id)));
         hits.truncate(keep);
@@ -174,8 +174,7 @@ Where a pattern lists other words for a word of its frame, you may use one of th
 You may join related points in one sentence and add the transitions the patterns use. \
 A pattern is a sentence frame, never a source of content. \
 Do not reproduce any sentence from the author's earlier papers. \
-A pattern marked \"used in this paper\" is a last choice: take another pattern when one fits, and if you do use it, the sentence must not read like the earlier one. \
-A pattern marked \"reword\" has been written this way before: keep its order of parts, change its fixed words. \
+A pattern marked \"reword\" has already been written this way in this section: take another pattern when one fits, and if you do use it, keep its order of parts and change its fixed words. \
 A pattern that fits no point is not used.\n\
 3. Do not polish, embellish, or add rhetoric. Do not add claims, numbers, methods, experiments or citations that are not in the points.\n\
 4. Cover every point: keep the author's motivation and his own view recognisable, not only the facts. Points marked EMPHASIS must appear in the first or the last sentence.\n\
@@ -206,13 +205,7 @@ Use \"phrase_id\": null for a sentence that uses no pattern.",
     for (h, c) in refs.iter().zip(&chosen) {
         let p = &h.phrase;
         let wording = c.wording;
-        let mut marks = String::new();
-        if seen.pattern(&p.id).0 > 0 {
-            marks += " (used in this paper)";
-        }
-        if c.worn {
-            marks += " (reword)";
-        }
+        let marks = if c.worn { " (reword)" } else { "" };
         user += &format!("- {} [{} / {}] {}{}\n", p.id, p.function, p.position, wording, marks);
         for s in crate::variants::swaps(p, &profile.variants, wording) {
             let opts: Vec<String> = s
@@ -479,25 +472,27 @@ mod tests {
     }
 
     #[test]
-    fn a_wording_the_author_already_used_is_not_offered_again() {
+    fn a_sentence_already_said_in_the_section_is_not_offered_again() {
         let (pr, refs) = with_variants();
         let r = req();
         let pts = parse_points(&r.points);
         let mut u = crate::usage::Usage::default();
-        u.record("old paper", "Methods/p1", vec!["P2".into()]);
-        let p = build_prompt_seen(&pr, &r, &pts, &refs, "", &u.seen("new paper", "x"));
+        u.record("paper", "Methods/p1", vec!["P2".into()]);
+        let p = build_prompt_seen(&pr, &r, &pts, &refs, "", &u.seen("paper", "Methods/p2"));
         assert!(p.user.contains("- P2 [evidence / opening] {board} approved the {sample}.\n"), "{}", p.user);
-        // every wording used: the least used one goes out, marked for rewording
-        u.record("old paper", "Methods/p2", vec!["P2#V1".into()]);
-        u.record("new paper", "Methods/p1", vec!["P2#V1".into()]);
-        let seen = u.seen("new paper", "x");
+        // another section, or another paper, starts fresh
+        let fresh = build_prompt(&pr, &r, &pts, &refs, "").user;
+        assert_eq!(build_prompt_seen(&pr, &r, &pts, &refs, "", &u.seen("paper", "Results/p1")).user, fresh);
+        // every wording said in the section: the least used one goes out, marked for rewording
+        u.record("paper", "Methods/p2", vec!["P2#V1".into(), "P2#V1".into()]);
+        let seen = u.seen("paper", "Methods/p3");
         let p = build_prompt_seen(&pr, &r, &pts, &refs, "", &seen);
-        assert!(p.user.contains("- P2 [evidence / opening] The {sample} was approved by {board}. (used in this paper) (reword)\n"), "{}", p.user);
+        assert!(p.user.contains("- P2 [evidence / opening] The {sample} was approved by {board}. (reword)\n"), "{}", p.user);
         assert_eq!(offered(&pr, &r, &refs, &seen)[0].key, "P2");
     }
 
     #[test]
-    fn a_pattern_used_in_this_paper_falls_behind_the_others() {
+    fn a_sentence_said_in_every_wording_falls_behind_the_others() {
         let pr = profile();
         let r = req();
         let pts = parse_points(&r.points);
@@ -505,10 +500,11 @@ mod tests {
         assert!(plain.len() >= 2, "the test needs two patterns to order");
         let first = plain[0].phrase.id.clone();
         let mut u = crate::usage::Usage::default();
-        u.record("this", "p1", vec![first.clone(), first.clone(), first.clone()]);
-        let after = reference_phrases_seen(&pr, &r, &pts, &u.seen("this", "x"));
+        u.record("paper", "Methods/p1", vec![first.clone(), first.clone(), first.clone()]);
+        let after = reference_phrases_seen(&pr, &r, &pts, &u.seen("paper", "Methods/p2"));
         assert_ne!(after[0].phrase.id, first);
         assert!(after.iter().any(|h| h.phrase.id == first), "still offered, as a last choice");
+        assert_eq!(reference_phrases_seen(&pr, &r, &pts, &u.seen("paper", "Results/p1"))[0].phrase.id, first, "another section is not affected");
     }
 
     #[test]

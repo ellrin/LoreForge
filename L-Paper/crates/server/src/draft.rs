@@ -2308,7 +2308,7 @@ async fn compose_one(s: &Shared, c: &Ctx, sess: &Session, env: &ComposeEnv, p: &
     let points = if p.en.is_empty() { p.zh.clone() } else { p.en.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
     // within the section's range, a different slice for each paragraph (no three alike)
     let (min_words, max_words) = env.range.map(|r| r.aim(k)).unwrap_or((min_words, max_words));
-    // what his drafts already used: this paper's other paragraphs count heavily, his other papers lightly
+    // the sentences this section has already said (its other paragraphs, and this one's last draft)
     let paper = c.dir.to_string_lossy().to_string();
     let para_key = format!("{section}/{}", p.id);
     let seen = pc_core::usage::Usage::load(&c.ws).seen(&paper, &para_key);
