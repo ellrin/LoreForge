@@ -145,22 +145,7 @@ const Hub = (() => {
   }
   async function loadItems() {
     if (isCards()) return loadCards();
-    const f = S.f, p = new URLSearchParams({ family: S.fam.id, sort: f.sort, limit: "1000" });
-    if (f.q) p.set("q", f.q);
-    if (f.level) p.set("level", f.level);
-    if (f.entity) p.set("entity", f.entity);
-    if (f.source) p.set("source", f.source);
-    for (const t of f.tags) p.append("tag", t);
-    const r = await api("GET", `/api/hub/items?${p}`);
-    S.items = r.items ?? []; S.total = r.total ?? S.items.length;
-    if (f.section) S.items = S.items.filter((it) => it.fields?.section === f.section);
-    // what was made from a reference stands for it: the reference itself leaves the lists
-    if (S.made?.size) { S.items = S.items.filter((it) => !S.made.has(it.id)); S.total = S.items.length; }
-    // a place on the family's tree: everything at or under that path; "?" = not placed yet
-    if (f.place === "?") S.items = S.items.filter((it) => TREE_FORMATS.has(it.format) && !(it.tags?.place ?? []).length);
-    else if (f.place?.startsWith("=")) S.items = S.items.filter((it) => it.category === f.place.slice(1));
-    else if (f.place) S.items = S.items.filter((it) => (it.tags?.place ?? []).some((p) => p === f.place || p.startsWith(`${f.place}/`)));
-    if (f.place || f.section) S.total = S.items.length;
+    const f = S.f;
     // the left column lists the whole family's tags, whatever is filtered: a tag never disappears
     if (S.allFor !== S.fam.id || S.allDirty) {
       const all = (await api("GET", `/api/hub/items?${new URLSearchParams({ family: S.fam.id, limit: "1000" })}`)).items ?? [];
@@ -174,12 +159,32 @@ const Hub = (() => {
       }
       S.allFor = S.fam.id; S.allDirty = false;
     }
+    // on a tree the middle shows one place, never the list of sections again: the first one to begin with
+    if (onTree() && !f.place && !f.q) { f.place = S.tree.tree[0].label; f.openPlaces.add(f.place); }
+    const p = new URLSearchParams({ family: S.fam.id, sort: f.sort, limit: "1000" });
+    if (f.q) p.set("q", f.q);
+    if (f.level) p.set("level", f.level);
+    if (f.entity) p.set("entity", f.entity);
+    if (f.source) p.set("source", f.source);
+    for (const t of f.tags) p.append("tag", t);
+    const r = await api("GET", `/api/hub/items?${p}`);
+    S.items = r.items ?? []; S.total = r.total ?? S.items.length;
+    if (f.section) S.items = S.items.filter((it) => it.fields?.section === f.section);
+    // what was made from a reference stands for it: the reference itself leaves the lists
+    if (S.made?.size) { S.items = S.items.filter((it) => !S.made.has(it.id)); S.total = S.items.length; }
+    // a place on the family's tree: everything at or under that path; "?" = not placed yet
+    if (f.q && onTree()) ; else if (f.place === "?") S.items = S.items.filter((it) => TREE_FORMATS.has(it.format) && !(it.tags?.place ?? []).length);
+    else if (f.place?.startsWith("=")) S.items = S.items.filter((it) => it.category === f.place.slice(1));
+    else if (f.place) S.items = S.items.filter((it) => (it.tags?.place ?? []).some((p) => p === f.place || p.startsWith(`${f.place}/`)));
+    if ((f.place && !(f.q && onTree())) || f.section) S.total = S.items.length;
   }
   const thumb = (it, cls = "") => (it.thumb ? el("span", { class: `h-paper ${cls}` }, el("img", { src: it.thumb, alt: "", loading: "lazy" })) : it.format === "figure" || it.format === "layout" ? el("span", { class: `h-paper none ${cls}` }, it.entity === false ? "待製作" : "") : null);
   const catLabel = (id) => S.meta?.categories.find((c) => c.id === id)?.label ?? id;
   const chips = (it) => [it.card && it.state !== "known" ? el("span", { class: `h-tag st-${it.state}` }, STATE[it.state] ?? "") : null,
     it.entity === false ? el("span", { class: "h-tag todo" }, "待製作") : null,
     it.source?.kind === "external" ? el("span", { class: "h-tag src" }, it.source.name) : null];
+  const onTree = () => !!S.tree?.tree?.length && !isFigure(S.fam) && !isCards();
+  const treePlace = () => (onTree() && !S.f.q && S.f.place && !"?=".includes(S.f.place[0]) ? S.f.place : "");
   function groups() {
     const fig = isFigure(S.fam), out = new Map();
     for (const it of S.items) {
@@ -187,19 +192,14 @@ const Hub = (() => {
       (out.get(k) ?? out.set(k, []).get(k)).push(it);
     }
     const name = (k) => (fig ? (k === "todo" ? "待製作" : LV[k] ?? "其他") : catLabel(k));
-    if (S.tree?.tree?.length && S.f.place && S.f.place !== "?" && !S.f.place.startsWith("=") && !isCards()) {
-      // inside a place: one group per next level down, in the tree's order
-      const depth = S.f.place.split("/").length, by = new Map();
-      for (const it of S.items) { const p = (it.tags?.place ?? []).find((x) => x === S.f.place || x.startsWith(`${S.f.place}/`)) ?? ""; const k = p.split("/").slice(0, depth + 1).join("/"); (by.get(k) ?? by.set(k, []).get(k)).push(it); }
-      return [...by.entries()].map(([k, v]) => ({ key: k, label: k.split("/").slice(depth).join(" › ") || k.split("/").at(-1), items: v }));
-    }
-    if (S.tree?.tree?.length && !S.f.place && !fig && !isCards()) {
-      // nothing chosen yet: the tree's sections, one line each, then the kinds that are not sentences
+    if (treePlace()) return [{ key: S.f.place, label: S.f.place.split("/").join(" › "), items: S.items, base: S.f.place, plain: true }];
+    if (onTree() && S.f.q) {
+      // a search: what was found, under the section it sits in
       const by = new Map();
       for (const it of S.items) { const p = it.tags?.place?.[0]; const k = p ? p.split("/")[0] : TREE_FORMATS.has(it.format) ? "?" : `=${it.category}`; (by.get(k) ?? by.set(k, []).get(k)).push(it); }
       const order = [...S.tree.tree.map((n) => n.label), "?"];
       return [...by.entries()].sort((a, b) => (order.indexOf(a[0]) < 0 ? 99 : order.indexOf(a[0])) - (order.indexOf(b[0]) < 0 ? 99 : order.indexOf(b[0])))
-        .map(([k, v]) => ({ key: k, label: k === "?" ? "還沒歸位" : k.startsWith("=") ? catLabel(k.slice(1)) : k, items: v, folded: true }));
+        .map(([k, v]) => ({ key: k, label: k === "?" ? "還沒歸位" : k.startsWith("=") ? catLabel(k.slice(1)) : k, items: v, base: k.startsWith("=") || k === "?" ? null : k }));
     }
     if (isCards()) return [...out.entries()].sort((a, b) => (a[0] === "未分類") - (b[0] === "未分類") || b[1].length - a[1].length).map(([k, v]) => ({ key: k, label: k, items: v }));
     const order = fig ? ["figure", "module", "component", "other", "todo"] : S.fam.categories;
@@ -210,24 +210,40 @@ const Hub = (() => {
     if (!S.items.length) return el("div", { class: "h-empty" }, S.f.q || S.f.tags.size || S.f.level || S.f.entity ? "沒有符合條件的知識" : "這一類還沒有知識");
     if (S.f.mode === "wall") return el("div", {}, g.map((x) => [el("div", { class: "h-wh" }, x.label, el("small", {}, x.items.length)),
       el("div", { class: `h-wall ${x.key === "figure" ? "lg" : ""}` }, x.items.map((it) => el("button", { type: "button", class: "h-pc", "aria-selected": String(S.sel === it.id), onclick: () => open(it.id) }, thumb(it) ?? el("span", { class: "h-paper none" }), el("div", { class: "cap" }, el("b", {}, `${x.label}｜`), it.title))))]));
-    // the quiet word beside a row: on the tree, where the sentence sits below what is chosen (its
-    // old section · function · position say less than that); elsewhere the format's own line
-    const side = (it) => {
-      const p = it.tags?.place?.[0];
-      if (!S.tree?.tree?.length || !TREE_FORMATS.has(it.format) || !p) return S.tree?.tree?.length && TREE_FORMATS.has(it.format) ? "" : it.line ?? "";
-      const chosen = S.f.place && !"?=".includes(S.f.place[0]) ? (it.tags.place.find((x) => x === S.f.place || x.startsWith(`${S.f.place}/`)) ?? p) : p;
-      return chosen.split("/").slice(Math.max(S.f.place && !"?=".includes(S.f.place[0]) ? S.f.place.split("/").length + 1 : 2, 0)).join(" › ");
+    // on the tree a group is cut by where its sentences sit below it (小節 › 使用時機), in the tree's
+    // order: the headings say what each run of sentences is for, so a row needs no word beside it
+    const paths = []; for (const a of S.tree?.tree ?? []) { paths.push(a.label); for (const b of a.children ?? []) { paths.push(`${a.label}/${b.label}`); for (const c of b.children ?? []) paths.push(`${a.label}/${b.label}/${c.label ?? c}`); } }
+    const order = S.fam.categories ?? [];
+    const cut = (x) => {
+      if (x.base == null || !onTree()) return null;
+      const depth = x.base.split("/").length;
+      const rows = x.items.map((it) => { const p = (it.tags?.place ?? []).find((q) => q === x.base || q.startsWith(`${x.base}/`)) ?? x.base; return { it, p, rem: p.split("/").slice(depth) }; });
+      const lone = rows.every((r) => !r.rem.length || r.rem[0] === rows.find((q) => q.rem.length)?.rem[0]) && rows.some((r) => r.rem.length > 1);
+      const idx = (p) => { const i = p === x.base ? -1 : paths.indexOf(p); return i < 0 ? 9999 : i; };
+      rows.sort((a, b) => idx(a.p) - idx(b.p) || order.indexOf(a.it.category) - order.indexOf(b.it.category));
+      const mixed = new Set(x.items.map((it) => it.category)).size > 1, out = [];
+      let last = null;
+      for (const r of rows) {
+        const h = (lone ? r.rem.slice(1) : r.rem).join(" › ") || (rows.some((q) => q.rem.length) ? "不分時機" : "");
+        if (h !== last) { if (h) out.push({ kindHead: h, n: rows.filter((q) => ((lone ? q.rem.slice(1) : q.rem).join(" › ") || "不分時機") === h).length }); last = h; }
+        out.push({ ...r.it, side: mixed ? catLabel(r.it.category) : "" });
+      }
+      return out;
     };
-    // a place holds sentences, short phrases and whole paragraphs: never one undivided run of them
-    const byKind = (items) => {
-      const order = S.fam.categories ?? [], kinds = [...new Set(items.map((it) => it.category))];
-      if (!S.tree?.tree?.length || isFigure(S.fam) || isCards() || kinds.length < 2) return items;
-      kinds.sort((a, b) => order.indexOf(a) - order.indexOf(b));
-      return kinds.flatMap((k) => { const v = items.filter((it) => it.category === k); return [{ kindHead: catLabel(k), n: v.length }, ...v]; });
+    const side = (it) => it.side ?? (onTree() && TREE_FORMATS.has(it.format) ? "" : it.line ?? "");
+    const row = (it) => { if (it.kindHead) return el("div", { class: "h-kind" }, it.kindHead, el("small", {}, it.n)); const th = thumb(it); return el("button", { type: "button", class: `h-row ${th ? "" : "text"}`, "data-id": it.id, "aria-selected": String(S.sel === it.id), onclick: () => open(it.id) }, th, el("span", { class: "t" }, it.title), el("span", { class: "d" }, side(it)), el("span", { class: "g" }, chips(it))); };
+    // each run under its heading is one line until opened (remembered while the family is the page)
+    const runs = (x, list) => {
+      const out = []; let cur = null;
+      for (const it of list) { if (it.kindHead) { cur = { head: it, rows: [] }; out.push(cur); } else if (cur) cur.rows.push(it); else out.push(it); }
+      const many = out.filter((r) => r.head).length > 1;
+      return out.map((r) => { if (!r.head) return row(r); const key = `${x.base}|${r.head.kindHead}`;
+        return el("details", { class: "h-run", open: !many || S.f.more.has(key) || r.rows.some((it) => it.id === S.sel) || null, ontoggle: (e) => { e.target.open ? S.f.more.add(key) : S.f.more.delete(key); } },
+          el("summary", {}, r.head.kindHead, el("small", {}, r.head.n)), r.rows.map(row)); });
     };
-    return el("div", {}, g.map((x, i) => el("details", { class: "h-grp", open: x.items.some((it) => it.id === S.sel) || (!x.folded && (g.length === 1 || i === 0)) },
-      el("summary", {}, x.label, el("small", {}, x.items.length)),
-      byKind(x.items).map((it) => { if (it.kindHead) return el("div", { class: "h-kind" }, it.kindHead, el("small", {}, it.n)); const th = thumb(it); return el("button", { type: "button", class: `h-row ${th ? "" : "text"}`, "aria-selected": String(S.sel === it.id), onclick: () => open(it.id) }, th, el("span", { class: "t" }, it.title), el("span", { class: "d" }, side(it)), el("span", { class: "g" }, chips(it))); }))));
+    return el("div", {}, g.map((x, i) => { const c = cut(x), rows = c ? runs(x, c) : x.items.map(row);
+      return x.plain ? el("div", { class: "h-grp plain" }, rows)
+        : el("details", { class: "h-grp", open: !!x.base || x.items.some((it) => it.id === S.sel) || g.length === 1 || i === 0 }, el("summary", {}, x.label, el("small", {}, x.items.length)), rows); }));
   }
   /** The family's tree (段落 → 小節 → 使用時機) with how many items sit at or under each node. */
   function treePane() {
@@ -236,7 +252,7 @@ const Hub = (() => {
     const node = (label, path, depth, kids) => {
       const n = count(path), open = f.openPlaces.has(path) || (f.place && f.place.startsWith(`${path}/`));
       const b = el("button", { type: "button", class: `tr d${depth} ${n ? "" : "zero"}`, "aria-pressed": String(f.place === path), onclick: () => {
-        if (f.place === path) { f.place = ""; f.openPlaces.delete(path); } else { f.place = path; if (kids) f.openPlaces.add(path); }
+        if (f.place !== path) { f.place = path; if (kids) f.openPlaces.add(path); } else if (kids) { open ? f.openPlaces.delete(path) : f.openPlaces.add(path); return paint(false, true); } else return;
         refresh(); } }, kids ? el("i", {}, open ? "▾" : "▸") : el("i", {}), label, el("span", {}, n || ""));
       return [b, kids && open ? kids() : null];
     };
@@ -299,12 +315,15 @@ const Hub = (() => {
     return el("select", { class: "h-plus", "aria-label": "新增", onchange: (e) => { const v = e.target.value; e.target.value = ""; if (v) add(v); } }, el("option", { value: "" }, "＋ 新增"), cs.map((c) => el("option", { value: c.id }, c.label)));
   }
   let detailEl = null;
-  function paint(keepFocus) {
+  function paint(keepFocus, keepScroll) {
     const q = keepFocus ? S.root.querySelector(".h-head input") : null, pos = q?.selectionStart;
+    const top = keepScroll ? S.root.querySelector(".h-mid")?.scrollTop : null, at = keepScroll ? S.sel ?? S.was : null;
     const tp = tagsPane();
     const cat = el("div", { class: `h-cat ${S.sel ? "open" : ""} ${tp ? "" : "notags"}` }, tp, el("div", { class: "h-mid" }, head(), listBody()), S.sel ? (detailEl ?? el("aside", { class: "h-detail" })) : null);
     S.root.replaceChildren(el("div", { class: "hubv" }, cat));
     if (q) { const n = S.root.querySelector(".h-head input"); n.focus(); n.setSelectionRange(pos, pos); }
+    // opening or closing the detail changes the width of the rows: stay where the reader was, the row in sight
+    if (top != null) { const m = S.root.querySelector(".h-mid"); if (m) { m.scrollTop = top; if (at) [...m.querySelectorAll(".h-row")].find((r) => r.dataset.id === at)?.scrollIntoView({ block: "nearest" }); } }
   }
   async function refresh(keepFocus) { try { await loadItems(); paint(keepFocus); } catch (e) { S.host.fail?.(e); } }
 
@@ -343,7 +362,7 @@ const Hub = (() => {
   const cat = (id) => S.meta?.categories.find((c) => c.id === id);
   const fdef = (id) => S.meta?.formats.find((x) => x.id === id);
   const split = (v) => v.split(/[,，、\n]/).map((x) => x.trim()).filter(Boolean);
-  const close = () => { S.sel = null; detailEl = null; paint(); };
+  const close = () => { S.was = S.sel; S.sel = null; detailEl = null; paint(false, true); };
   /** The detail: a form where the category can be written, the same things to read where it cannot. */
   function detail(it, d, isNew) {
     const c = cat(it.category), def = fdef(it.format), form = !!(c?.writable && def?.form), meta = !!c && !c.independent;
@@ -448,7 +467,7 @@ const Hub = (() => {
     try {
       const d = await api("GET", `/api/hub/items/${enc(id)}`);
       detailEl = detail(d.item, d, false);
-      paint();
+      paint(false, true);
     } catch (e) { S.sel = null; detailEl = null; S.host.fail?.(e); }
   }
   /** ＋: a blank form for one of the family's categories that can be written by hand. */

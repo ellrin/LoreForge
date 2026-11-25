@@ -337,3 +337,12 @@ label.h-plus { cursor: pointer; font-weight: 500; font-size: 12px; padding: 6px 
   .h-rv-r { grid-template-columns: 19px minmax(0, 1fr); }
   .h-rv-r .act { grid-row: auto; grid-column: 2; padding: 6px 0 0; }
 }
+/* on a tree the middle is one place: its name, then its sentences under what each run is for */
+details.h-run { border-bottom: 1px solid var(--line); }
+details.h-run > summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 11px 8px; cursor: pointer; font-size: 13px; font-weight: 600; }
+details.h-run > summary::-webkit-details-marker { display: none; }
+details.h-run > summary::before { content: "▸"; color: var(--faint); font-size: 11px; width: 10px; }
+details.h-run[open] > summary::before { content: "▾"; }
+details.h-run > summary small { color: var(--faint); font: 400 12px var(--mono); }
+details.h-run[open] { padding-bottom: 8px; }
+details.h-run .h-row { padding-left: 26px; }
