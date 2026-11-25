@@ -2264,6 +2264,7 @@ dependencies = [
  "base64 0.22.1",
  "lore-canvas",
  "lore-home",
+ "lore-icons",
  "lore-llm",
  "lore-math",
  "lore-notation",
@@ -2282,6 +2283,15 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "lore-icons"
+version = "0.1.0"
+dependencies = [
+ "lore-canvas",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
