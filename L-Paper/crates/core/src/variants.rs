@@ -20,6 +20,9 @@ use crate::profile::{Issue, Phrase};
 pub const FILE: &str = "variants.csv";
 /// A run of this many words or more copied from one of the author's published sentences is flagged.
 pub const COPIED_WORDS: usize = 7;
+/// The same for a sentence of this paper's own earlier paragraphs (a long term of the paper is
+/// repeated on purpose, so the run must be longer before it counts as the same sentence again).
+pub const REPEATED_WORDS: usize = 10;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -171,13 +174,19 @@ pub fn swaps(phrase: &Phrase, variants: &[Variant], wording: &str) -> Vec<Swap> 
 /// `example` of a phrase (words compared lower-case, punctuation ignored; `{slots}` do not
 /// exist in examples). The longest run per (sentence, phrase), sentences in order.
 pub fn copied(sentences: &[String], phrases: &[Phrase], min_words: usize) -> Vec<Copied> {
+    let sources: Vec<(&str, &str)> = phrases.iter().map(|p| (p.id.as_str(), p.example.as_str())).collect();
+    copied_from(sentences, &sources, min_words)
+}
+
+/// [`copied`] against any texts: `sources` = (name, text), `from` of a finding is the name.
+pub fn copied_from(sentences: &[String], sources: &[(&str, &str)], min_words: usize) -> Vec<Copied> {
     let min_words = min_words.max(1);
+    let sources: Vec<(&str, Vec<String>)> = sources.iter().map(|(n, t)| (*n, words_of(t))).filter(|(_, w)| w.len() >= min_words).collect();
     let mut out = Vec::new();
     for (si, sentence) in sentences.iter().enumerate() {
         let shown: Vec<&str> = sentence.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
         let low: Vec<String> = shown.iter().map(|w| w.to_lowercase()).collect();
-        for p in phrases.iter().filter(|p| !p.example.trim().is_empty()) {
-            let ex = words_of(&p.example);
+        for (name, ex) in &sources {
             // longest common run of words
             let (mut best, mut end) = (0usize, 0usize);
             let mut prev = vec![0usize; ex.len() + 1];
@@ -195,7 +204,7 @@ pub fn copied(sentences: &[String], phrases: &[Phrase], min_words: usize) -> Vec
                 prev = cur;
             }
             if best >= min_words {
-                out.push(Copied { sentence: si, words: shown[end - best..end].join(" "), from: p.id.clone() });
+                out.push(Copied { sentence: si, words: shown[end - best..end].join(" "), from: name.to_string() });
             }
         }
     }

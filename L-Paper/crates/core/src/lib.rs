@@ -28,6 +28,7 @@ pub mod softcheck;
 pub mod stylecheck;
 pub mod styleprofile; // 我的風格: derived from the author's own rows only
 pub mod thesis; // Key value check
+pub mod usage; // which wordings the drafts already used
 pub mod variants; // 說法: confirmed other wordings and swap words of the patterns
 pub mod venueprofile; // 期刊寫法: a journal template's habits from its own open-access articles
 pub mod text;

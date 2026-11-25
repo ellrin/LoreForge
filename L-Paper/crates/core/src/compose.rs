@@ -8,6 +8,7 @@
 use crate::profile::Profile;
 use crate::retrieve::{search, Hit, Query};
 use crate::text::{strip_latex, tokens, word_count};
+use crate::usage::{Choice, Seen};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,7 +37,8 @@ pub struct ComposeRequest {
     pub index: Option<usize>,
     #[serde(default)]
     pub count: Option<usize>,
-    /// Which wording of each pattern to use ([`crate::variants::pick`]); 0 = the author's own template.
+    /// Decides among equally used wordings of a pattern ([`crate::usage::choose`]): drafting passes a
+    /// seed of the paper and the paragraph, so the author's own template is not always the first.
     #[serde(default)]
     pub turn: u64,
 }
@@ -88,21 +90,37 @@ pub fn parse_points(raw: &str) -> Vec<Point> {
 
 /// Phrases offered to the engine as the allowed patterns.
 pub fn reference_phrases(profile: &Profile, req: &ComposeRequest, points: &[Point]) -> Vec<Hit> {
+    reference_phrases_seen(profile, req, points, &Seen::default())
+}
+
+/// [`reference_phrases`] with what the author's drafts already used: a pattern used in this
+/// paper drops far down the list (one use costs as much as 40% of the word overlap), one used
+/// in his other papers a little, so the same few patterns are not offered every time.
+pub fn reference_phrases_seen(profile: &Profile, req: &ComposeRequest, points: &[Point], seen: &Seen) -> Vec<Hit> {
+    let rank = |mut hits: Vec<Hit>, keep: usize| {
+        for h in &mut hits {
+            h.score -= seen.penalty(&h.phrase.id);
+        }
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.phrase.id.cmp(&b.phrase.id)));
+        hits.truncate(keep);
+        hits
+    };
     let text = points.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join(" ");
-    let mut hits = search(
-        &profile.phrases,
-        &Query {
-            section: Some(req.section.clone()),
-            function: req.function.clone(),
-            position: None,
-            text: Some(text.clone()),
-            limit: Some(8),
-        },
+    // a wider net than is offered, so a used pattern has others to fall behind
+    let mut hits = rank(
+        search(
+            &profile.phrases,
+            &Query { section: Some(req.section.clone()), function: req.function.clone(), position: None, text: Some(text.clone()), limit: Some(24) },
+        ),
+        8,
     );
     // Always offer some transitions so sentences can be linked in the user's voice.
-    let transitions = search(
-        &profile.phrases,
-        &Query { section: Some("Any".into()), function: Some("transition".into()), text: Some(text), limit: Some(3), ..Default::default() },
+    let transitions = rank(
+        search(
+            &profile.phrases,
+            &Query { section: Some("Any".into()), function: Some("transition".into()), text: Some(text), limit: Some(9), ..Default::default() },
+        ),
+        3,
     );
     for t in transitions {
         if !hits.iter().any(|h| h.phrase.id == t.phrase.id) {
@@ -120,8 +138,31 @@ pub struct Prompt {
     pub user: String,
 }
 
+/// The wording of each offered pattern, in the order of `refs`: the least used one, and among
+/// equally used ones `req.turn` (and the place in the list) decides.
+pub fn offered<'a>(profile: &'a Profile, req: &ComposeRequest, refs: &'a [Hit], seen: &Seen) -> Vec<Choice<'a>> {
+    refs.iter().enumerate().map(|(i, h)| crate::usage::choose(&h.phrase, &profile.variants, seen, req.turn.wrapping_add(i as u64))).collect()
+}
+
+/// The wording keys the sentences of `draft` used (one per sentence that names an offered
+/// pattern); `offered` = the keys of [`offered`], in the order of `refs`.
+pub fn used_keys(refs: &[Hit], offered: &[String], draft: &Draft) -> Vec<String> {
+    draft
+        .sentences
+        .iter()
+        .filter_map(|s| s.phrase_id.as_deref())
+        .filter_map(|id| refs.iter().position(|h| h.phrase.id == id))
+        .filter_map(|i| offered.get(i).cloned())
+        .collect()
+}
+
 /// `style` = the author's style notes (`draft::style_text`; empty: none), as rules to follow.
 pub fn build_prompt(profile: &Profile, req: &ComposeRequest, points: &[Point], refs: &[Hit], style: &str) -> Prompt {
+    build_prompt_seen(profile, req, points, refs, style, &Seen::default())
+}
+
+/// [`build_prompt`] with what the author's drafts already used ([`crate::usage`]).
+pub fn build_prompt_seen(profile: &Profile, req: &ComposeRequest, points: &[Point], refs: &[Hit], style: &str, seen: &Seen) -> Prompt {
     let lang = if req.language.starts_with("zh") { "Traditional Chinese" } else { "English" };
     let system = format!(
         "You write one paragraph of an academic paper in the author's own voice.\n\
@@ -133,6 +174,8 @@ Where a pattern lists other words for a word of its frame, you may use one of th
 You may join related points in one sentence and add the transitions the patterns use. \
 A pattern is a sentence frame, never a source of content. \
 Do not reproduce any sentence from the author's earlier papers. \
+A pattern marked \"used in this paper\" is a last choice: take another pattern when one fits, and if you do use it, the sentence must not read like the earlier one. \
+A pattern marked \"reword\" has been written this way before: keep its order of parts, change its fixed words. \
 A pattern that fits no point is not used.\n\
 3. Do not polish, embellish, or add rhetoric. Do not add claims, numbers, methods, experiments or citations that are not in the points.\n\
 4. Cover every point: keep the author's motivation and his own view recognisable, not only the facts. Points marked EMPHASIS must appear in the first or the last sentence.\n\
@@ -159,10 +202,18 @@ Use \"phrase_id\": null for a sentence that uses no pattern.",
         user += &format!("Paragraph function: {f}\n");
     }
     user += "\nAuthor's patterns:\n";
-    for (i, h) in refs.iter().enumerate() {
+    let chosen = offered(profile, req, refs, seen);
+    for (h, c) in refs.iter().zip(&chosen) {
         let p = &h.phrase;
-        let wording = crate::variants::pick(p, &profile.variants, req.turn.wrapping_add(i as u64));
-        user += &format!("- {} [{} / {}] {}\n", p.id, p.function, p.position, wording);
+        let wording = c.wording;
+        let mut marks = String::new();
+        if seen.pattern(&p.id).0 > 0 {
+            marks += " (used in this paper)";
+        }
+        if c.worn {
+            marks += " (reword)";
+        }
+        user += &format!("- {} [{} / {}] {}{}\n", p.id, p.function, p.position, wording, marks);
         for s in crate::variants::swaps(p, &profile.variants, wording) {
             let opts: Vec<String> = s
                 .options
@@ -425,6 +476,49 @@ mod tests {
         assert!(u.contains("- P2 [evidence / opening] {board} approved the {sample}.\n"), "{u}");
         r.turn = 2;
         assert!(build_prompt(&pr, &r, &pts, &refs, "").user.contains("The {sample} was approved by {board}."));
+    }
+
+    #[test]
+    fn a_wording_the_author_already_used_is_not_offered_again() {
+        let (pr, refs) = with_variants();
+        let r = req();
+        let pts = parse_points(&r.points);
+        let mut u = crate::usage::Usage::default();
+        u.record("old paper", "Methods/p1", vec!["P2".into()]);
+        let p = build_prompt_seen(&pr, &r, &pts, &refs, "", &u.seen("new paper", "x"));
+        assert!(p.user.contains("- P2 [evidence / opening] {board} approved the {sample}.\n"), "{}", p.user);
+        // every wording used: the least used one goes out, marked for rewording
+        u.record("old paper", "Methods/p2", vec!["P2#V1".into()]);
+        u.record("new paper", "Methods/p1", vec!["P2#V1".into()]);
+        let seen = u.seen("new paper", "x");
+        let p = build_prompt_seen(&pr, &r, &pts, &refs, "", &seen);
+        assert!(p.user.contains("- P2 [evidence / opening] The {sample} was approved by {board}. (used in this paper) (reword)\n"), "{}", p.user);
+        assert_eq!(offered(&pr, &r, &refs, &seen)[0].key, "P2");
+    }
+
+    #[test]
+    fn a_pattern_used_in_this_paper_falls_behind_the_others() {
+        let pr = profile();
+        let r = req();
+        let pts = parse_points(&r.points);
+        let plain = reference_phrases(&pr, &r, &pts);
+        assert!(plain.len() >= 2, "the test needs two patterns to order");
+        let first = plain[0].phrase.id.clone();
+        let mut u = crate::usage::Usage::default();
+        u.record("this", "p1", vec![first.clone(), first.clone(), first.clone()]);
+        let after = reference_phrases_seen(&pr, &r, &pts, &u.seen("this", "x"));
+        assert_ne!(after[0].phrase.id, first);
+        assert!(after.iter().any(|h| h.phrase.id == first), "still offered, as a last choice");
+    }
+
+    #[test]
+    fn the_sentences_of_a_draft_name_the_wordings_they_used() {
+        let (pr, refs) = with_variants();
+        let mut r = req();
+        r.turn = 1;
+        let off: Vec<String> = offered(&pr, &r, &refs, &Seen::default()).into_iter().map(|c| c.key).collect();
+        let d = Draft { sentences: vec![Sentence { text: "a".into(), phrase_id: Some("P2".into()) }, Sentence { text: "b".into(), phrase_id: None }, Sentence { text: "c".into(), phrase_id: Some("P9".into()) }] };
+        assert_eq!(used_keys(&refs, &off, &d), vec!["P2#V1".to_string()]);
     }
 
     #[test]

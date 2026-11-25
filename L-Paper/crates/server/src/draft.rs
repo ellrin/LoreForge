@@ -2264,6 +2264,35 @@ async fn compose_env(s: &Shared, c: &Ctx, sess: &Session, section: &str, engine:
     ComposeEnv { section: section.to_string(), is_abstract, words, range, guard, venue_extra, notation, check_opt, style, mat, facts, known_values, other_drafts, guide, engine }
 }
 
+/// Runs of words a draft repeats: (the words, true = from a sentence the author published,
+/// false = from this paper's earlier paragraphs). One finding per sentence, the published first.
+fn said_before(d: &compose::Draft, published: &[(String, String)], other_drafts: &[String], earlier: &[String]) -> Vec<(String, bool)> {
+    use pc_core::variants as v;
+    let sentences: Vec<String> = d.sentences.iter().map(|x| x.text.clone()).collect();
+    let pubs: Vec<(&str, &str)> = published.iter().map(|(id, t)| (id.as_str(), t.as_str())).collect();
+    let own: Vec<(&str, &str)> = other_drafts.iter().chain(earlier).map(|t| ("", t.as_str())).collect();
+    let mut out: Vec<(usize, String, bool)> = vec![];
+    for (found, is_pub) in [(v::copied_from(&sentences, &pubs, v::COPIED_WORDS), true), (v::copied_from(&sentences, &own, v::REPEATED_WORDS), false)] {
+        for f in found {
+            if !out.iter().any(|(s, ..)| *s == f.sentence) {
+                out.push((f.sentence, f.words, is_pub));
+            }
+        }
+    }
+    out.sort_by_key(|(s, ..)| *s);
+    out.into_iter().map(|(_, w, p)| (w, p)).collect()
+}
+
+/// The wordings a drafted paragraph used go into the workspace's record ([`pc_core::usage`]),
+/// replacing what the paragraph had. A record that cannot be written is not worth failing a draft.
+fn remember_used(ws: &Path, paper: &str, para: &str, used: Vec<String>) {
+    static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _g = WRITING.lock().unwrap_or_else(|e| e.into_inner());
+    let mut u = pc_core::usage::Usage::load(ws);
+    u.record(paper, para, used);
+    let _ = u.save(ws);
+}
+
 /// One paragraph, `k` of `count` in its section, through the phrase bank with every check of the
 /// draft step (the notation registry with one rewrite, pending marks, record ids, banned words,
 /// punctuation and sentence length, the abstract's length) and the guard's safe fixes after.
@@ -2279,6 +2308,10 @@ async fn compose_one(s: &Shared, c: &Ctx, sess: &Session, env: &ComposeEnv, p: &
     let points = if p.en.is_empty() { p.zh.clone() } else { p.en.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
     // within the section's range, a different slice for each paragraph (no three alike)
     let (min_words, max_words) = env.range.map(|r| r.aim(k)).unwrap_or((min_words, max_words));
+    // what his drafts already used: this paper's other paragraphs count heavily, his other papers lightly
+    let paper = c.dir.to_string_lossy().to_string();
+    let para_key = format!("{section}/{}", p.id);
+    let seen = pc_core::usage::Usage::load(&c.ws).seen(&paper, &para_key);
     let req = ComposeRequest {
         points,
         section: bank_section(section).into(),
@@ -2291,21 +2324,25 @@ async fn compose_one(s: &Shared, c: &Ctx, sess: &Session, env: &ComposeEnv, p: &
         key_value: Some(c.key_value.clone()).filter(|k| !k.is_empty()),
         index: Some(k),
         count: Some(count),
-        // a routine sentence is not worded the same way in every paragraph (confirmed 說法 only)
-        turn: k as u64,
+        // among equally used wordings the paper and the paragraph decide, not "the first one"
+        turn: pc_core::usage::seed(&[&paper, &para_key]),
     };
-    let (pts, refs, prompt) = {
+    let (pts, refs, prompt, offered, published) = {
         let l = s.loaded.read().await;
         let Some(prof) = &l.profile else { return Err("profile not loaded".into()) };
         let pts = compose::parse_points(&req.points);
-        let refs = compose::reference_phrases(prof, &req, &pts);
+        let refs = compose::reference_phrases_seen(prof, &req, &pts, &seen);
         // the style notes go in through compose_extra below, not twice
-        let prompt = compose::with_patterns(compose::build_prompt(prof, &req, &pts, &refs, ""), &guide_block);
-        (pts, refs, prompt)
+        let prompt = compose::with_patterns(compose::build_prompt_seen(prof, &req, &pts, &refs, "", &seen), &guide_block);
+        let offered: Vec<String> = compose::offered(prof, &req, &refs, &seen).into_iter().map(|c| c.key).collect();
+        // his published sentences: never sent to the model, only compared with what comes back
+        let published: Vec<(String, String)> = prof.phrases.iter().filter(|x| !x.example.trim().is_empty()).map(|x| (x.id.clone(), x.example.clone())).collect();
+        (pts, refs, prompt, offered, published)
     };
     let extra = dp::compose_extra(p, sess, section, &env.style, earlier, &env.mat.refs, &env.facts) + more + &env.venue_extra + &env.guard.rule.prompt_line();
     let mut feedback = extra.clone();
     let mut done: Option<ds::DraftPara> = None;
+    let mut used: Vec<String> = vec![];
     let mut new_symbols: Vec<String> = vec![];
     let mut err = String::new();
     for _ in 0..2 {
@@ -2316,6 +2353,9 @@ async fn compose_one(s: &Shared, c: &Ctx, sess: &Session, env: &ComposeEnv, p: &
                 let Some(prof) = &l.profile else { break };
                 let check = compose::check_draft(prof, &req, &pts, &refs, &mut d);
                 drop(l);
+                used = compose::used_keys(&refs, &offered, &d);
+                // a sentence that repeats one he published, or one of this paper's earlier paragraphs
+                let again = said_before(&d, &published, &env.other_drafts, earlier);
                 // ≤, −, ⁺… as LaTeX before the checks, so pdflatex never stops on them
                 let text = lore_notation::unicode::prose_to_latex(&d.sentences.iter().map(|x| x.text.trim()).collect::<Vec<_>>().join(" "));
                 // dependency marks only for the results this paragraph states or depends on
@@ -2333,6 +2373,7 @@ async fn compose_one(s: &Shared, c: &Ctx, sess: &Session, env: &ComposeEnv, p: &
                 let nc = crate::notation::check(&c.dir, &env.notation, &env.check_opt, &ctx_texts, &text);
                 let mut problems = check.problems.clone();
                 problems.extend(nc.shown.iter().map(|m| format!("對照表：{m}")));
+                problems.extend(again.iter().map(|(w, published)| if *published { format!("和你發表過的句子重複：「{w}」") } else { format!("和這篇前面的句子重複：「{w}」") }));
                 // a pending result the outline names must be marked, never written as a number
                 let unmarked = unmarked_before;
                 problems.extend(unmarked.iter().map(|id| format!("待補 {id} 沒有標記")));
@@ -2354,7 +2395,7 @@ async fn compose_one(s: &Shared, c: &Ctx, sess: &Session, env: &ComposeEnv, p: &
                 // the punctuation and sentence rules, and the section's paragraph length
                 let broken = env.guard.check(&text);
                 let length = env.range.and_then(|r| r.problem(&text));
-                if (check.ok() && nc.blocking.is_empty() && unmarked.is_empty() && leaked.is_empty() && !too_long && over.is_empty() && broken.is_empty() && length.is_none() && banned.is_empty()) || done.is_some() {
+                if (check.ok() && nc.blocking.is_empty() && unmarked.is_empty() && leaked.is_empty() && !too_long && over.is_empty() && broken.is_empty() && length.is_none() && banned.is_empty() && again.is_empty()) || done.is_some() {
                     if let Some(l) = &length {
                         problems.push(format!("段落長度：{l}"));
                     }
@@ -2367,6 +2408,10 @@ async fn compose_one(s: &Shared, c: &Ctx, sess: &Session, env: &ComposeEnv, p: &
                 why.extend(unmarked.iter().map(|id| format!("pending result {id} is not marked: use \\pending{{{id}}}{{…}} for its number and end every sentence that depends on it with \\pendingdep{{{id}}}")));
                 why.extend(leaked.iter().map(|id| format!("the text names the record's id {id}: the reader never saw the record; describe the experiment or table in words (or \\ref the table)")));
                 why.extend(over.iter().map(|(id, n)| format!("{n} sentences end in \\pendingdep{{{id}}}: keep it only on the sentences that state {id}'s value or conclude from it, at most {}; a sentence with only known numbers is not dependent", pd::MAX_DEPS)));
+                why.extend(again.iter().map(|(w, published)| {
+                    let whose = if *published { "a sentence the author already published" } else { "an earlier sentence of this paper" };
+                    format!("the words \"{w}\" repeat {whose}: say it another way, with another verb and another order of parts")
+                }));
                 if !broken.is_empty() {
                     why.push(lore_notation::punct::repair_note(&broken));
                 }
@@ -2395,6 +2440,7 @@ async fn compose_one(s: &Shared, c: &Ctx, sess: &Session, env: &ComposeEnv, p: &
             let (t, still) = env.guard.finish(&d.text);
             d.text = t;
             d.problems.extend(crate::guard::flags(&still));
+            remember_used(&c.ws, &paper, &para_key, used);
             Ok((d, new_symbols))
         }
         None => Err(format!("{}：{err}", p.id)),
