@@ -419,7 +419,7 @@ impl FlowSpec {
     pub fn prepare(&self, cat: &Catalogue, frame: Rect) -> Result<(Graph, Theme, LayoutOptions), String> {
         let mut g = self.graph(&cat.library)?;
         let mut theme = cat.theme(&self.theme);
-        let mut opt = LayoutOptions { frame, ..Default::default() };
+        let mut opt = LayoutOptions { frame, place: self.place.clone(), ends: self.ends.clone(), ..Default::default() };
         // layout template, then the per-block directions
         if let Some(l) = cat.layout(&self.layout).filter(|l| l.fits(g.panels.len())) {
             opt.template = l.apply(&mut g);

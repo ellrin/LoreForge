@@ -120,8 +120,20 @@ pub fn draw(g: &Graph, d: &Drawing) -> Result<Figure, SpecError> {
     let mut vars = d.notation.map(Vars::from_notation).unwrap_or_default();
     vars.add_new(&g.vars_new);
     let size = |src: &str| d.pictures.and_then(|f| f(src)).and_then(|b| pptx::image_size(&b));
-    let layout = layout::layout_with(g, &d.theme, &vars, &d.library, &d.options, &size);
+    let mut layout = layout::layout_with(g, &d.theme, &vars, &d.library, &d.options, &size);
     let routes = route::route(g, &layout);
+    // a line may run outside the blocks' box (round a block that was moved to the edge): the
+    // figure's bounds hold every line, so no preview or picture cuts one off
+    let pad = 4.0 * layout.scale;
+    let b = layout.bounds;
+    let (mut x0, mut y0, mut x1, mut y1) = (b.x, b.y, b.right(), b.bottom());
+    for p in routes.iter().flat_map(|r| r.points.iter()) {
+        x0 = x0.min(p.0 - pad);
+        y0 = y0.min(p.1 - pad);
+        x1 = x1.max(p.0 + pad);
+        y1 = y1.max(p.1 + pad);
+    }
+    layout.bounds = Rect::new(x0, y0, x1 - x0, y1 - y0);
     let built = build::build_with(g, &d.theme, &vars, &d.library, d.math, &layout, &routes, d.first_id, &size);
     Ok(Figure { layout, routes, built })
 }

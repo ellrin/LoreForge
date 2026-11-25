@@ -119,12 +119,19 @@ pub struct LayoutOptions {
     /// The author's legend; `None` = automatic (line kinds under, layer
     /// colours over the figure). `Some` with no rows = no legend.
     pub legend: Option<LegendChoice>,
+    /// Blocks moved by hand: node id → offset (pt, at the figure's natural size, so it is
+    /// multiplied by the layout's scale). Applied after the layout; ids the graph does not
+    /// have are ignored.
+    pub place: BTreeMap<String, [f64; 2]>,
+    /// The author's choices for single lines, by `figure::edge_key`. The router reads them
+    /// from the layout (see [`Placed::ends`]).
+    pub ends: BTreeMap<String, crate::figure::EdgeEnds>,
 }
 
 impl Default for LayoutOptions {
     fn default() -> Self {
         // a 16:9 slide of 10 in with a margin
-        LayoutOptions { frame: Rect::new(24.0, 24.0, 672.0, 357.0), max_scale: 1.5, template: None, legend: None }
+        LayoutOptions { frame: Rect::new(24.0, 24.0, 672.0, 357.0), max_scale: 1.5, template: None, legend: None, place: BTreeMap::new(), ends: BTreeMap::new() }
     }
 }
 
@@ -142,6 +149,13 @@ pub struct Placed {
     pub lane: usize,
     pub single: bool,
     pub ellipse: bool,
+    /// The author's choices for the lines that leave this node (`figure::edge_key` → ends),
+    /// as given: the router reads them from here, because the layout is the only thing
+    /// `draw` hands it. Turns are still in natural size, see [`Placed::origin`].
+    pub ends: BTreeMap<String, crate::figure::EdgeEnds>,
+    /// Where the natural-size origin lies in the figure: a natural coordinate `t` is at
+    /// `origin + t * Layout::scale`.
+    pub origin: (f64, f64),
 }
 
 impl Placed {
@@ -527,6 +541,62 @@ pub fn layout(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layout
 /// left-to-right and top-down; the combination that fits the frame at the
 /// largest scale is kept, left-to-right winning unless top-down is clearly better.
 pub fn layout_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &LayoutOptions, image_size: &dyn Fn(&str) -> Option<(u32, u32)>) -> Layout {
+    let mut lay = layout_auto(g, theme, vars, lib, opt, image_size);
+    apply_place(&mut lay, g, opt);
+    lay
+}
+
+/// Move the blocks the author moved: each named node's rectangle is shifted by its offset
+/// (times the scale), kept inside the figure's frame and clear of the legends; the panel of
+/// a moved node grows to hold it (its title keeps its corner) and the bounds grow with it.
+fn apply_place(lay: &mut Layout, g: &Graph, opt: &LayoutOptions) {
+    if opt.place.is_empty() {
+        return;
+    }
+    let k = lay.scale;
+    let frame = opt.frame;
+    // the room a block may take: the frame, less the legends above and below the panels
+    let content = lay.panels.iter().skip(1).fold(lay.panels[0].rect, |a, p| a.union(&p.rect));
+    let (mut top, mut bottom) = (frame.y, frame.bottom());
+    for r in lay.legend.iter().map(|l| l.text).chain(lay.swatches.iter().map(|s| s.text)) {
+        if r.cy() >= content.bottom() {
+            bottom = bottom.min(r.y);
+        } else if r.cy() <= content.y {
+            top = top.max(r.bottom());
+        }
+    }
+    let margin = 3.0 * k;
+    for (id, off) in &opt.place {
+        let Some(i) = g.node_index(id) else { continue };
+        let n = &mut lay.nodes[i];
+        let u = n.rect.union(&n.reserve);
+        let (mut dx, mut dy) = (off[0] * k, off[1] * k);
+        let (lo, hi) = (frame.x - u.x, frame.right() - u.right());
+        if lo <= hi {
+            dx = dx.clamp(lo, hi);
+        }
+        let (lo, hi) = (top - u.y, bottom - u.bottom());
+        if lo <= hi {
+            dy = dy.clamp(lo, hi);
+        }
+        n.rect.x += dx;
+        n.rect.y += dy;
+        n.reserve.x += dx;
+        n.reserve.y += dy;
+        n.port_y += dy;
+        let u = n.rect.union(&n.reserve).inflate(margin);
+        let p = &mut lay.panels[n.panel];
+        let grown = p.rect.union(&u);
+        let (gx, gy) = (grown.x - p.rect.x, grown.y - p.rect.y);
+        if gx != 0.0 || gy != 0.0 {
+            p.title_rect = p.title_rect.map(|t| Rect::new(t.x + gx, t.y + gy, t.w, t.h));
+        }
+        p.rect = grown;
+        lay.bounds = lay.bounds.union(&grown);
+    }
+}
+
+fn layout_auto(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &LayoutOptions, image_size: &dyn Fn(&str) -> Option<(u32, u32)>) -> Layout {
     let pinned = |p: &Panel| g.nodes.iter().any(|n| n.panel == p.id && (n.params.contains_key("col") || n.params.contains_key("lane")));
     let auto: Vec<usize> = (0..g.panels.len()).filter(|i| g.panels[*i].dir.is_empty() && !g.panels[*i].bare && !pinned(&g.panels[*i])).collect();
     if auto.is_empty() || auto.len() > 5 {
@@ -681,7 +751,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
             let rect = Rect::new(ox + p.x, oy + p.y, p.w, p.h);
             let s = &sizes[ni];
             let reserve = Rect::new(rect.cx() - s.reserve_w / 2.0, rect.y, s.reserve_w, rect.h);
-            nodes[ni] = Some(Placed { rect, reserve, port_y: rect.y + s.cy, panel: i, layer: need.plan.layer[&ni], lane: need.plan.lane[&ni], single: s.single, ellipse: s.ellipse });
+            nodes[ni] = Some(Placed { rect, reserve, port_y: rect.y + s.cy, panel: i, layer: need.plan.layer[&ni], lane: need.plan.lane[&ni], single: s.single, ellipse: s.ellipse, ends: BTreeMap::new(), origin: (0.0, 0.0) });
         }
         let title_rect = (!need.title.is_empty() && !need.bare).then(|| {
             let tw = text::width(&need.title, title_size) * 1.06;
@@ -829,9 +899,13 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         .into_iter()
         .map(|p| {
             let p = p.expect("every node is in a panel");
-            Placed { rect: p.rect.map(ox, oy, k), reserve: p.reserve.map(ox, oy, k), port_y: oy + p.port_y * k, ..p }
+            Placed { rect: p.rect.map(ox, oy, k), reserve: p.reserve.map(ox, oy, k), port_y: oy + p.port_y * k, origin: (ox, oy), ..p }
         })
         .collect();
+    let mut nodes: Vec<Placed> = nodes;
+    for (n, pl) in g.nodes.iter().zip(&mut nodes) {
+        pl.ends = opt.ends.iter().filter(|(key, _)| key.split(['>', '#']).next() == Some(n.id.as_str())).map(|(key, v)| (key.clone(), v.clone())).collect();
+    }
     for p in &mut panels {
         p.rect = p.rect.map(ox, oy, k);
         p.title_rect = p.title_rect.map(|t| t.map(ox, oy, k));

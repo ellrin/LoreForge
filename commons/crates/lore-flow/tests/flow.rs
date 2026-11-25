@@ -293,8 +293,16 @@ fn routes_are_clean(g: &Graph, f: &Figure) {
         assert!(!r.forced, "{} -> {} found no path", e.from, e.to);
         let (a, b) = (g.node_index(&e.from).unwrap(), g.node_index(&e.to).unwrap());
         // starts and ends on the modules' sides
-        assert_eq!(r.points[0], f.layout.nodes[a].port(r.from_side));
-        assert_eq!(*r.points.last().unwrap(), f.layout.nodes[b].port(r.to_side));
+        // (on one of the side's connection points: lines that share a side are spread over them)
+        let on_side = |p: (f64, f64), n: &lore_flow::layout::Placed, side: lore_flow::route::Side| {
+            let mid = n.port(side);
+            let r = n.rect;
+            let along_x = (p.1 - mid.1).abs() < 1e-6 && p.0 >= r.x - 1e-6 && p.0 <= r.right() + 1e-6;
+            let along_y = (p.0 - mid.0).abs() < 1e-6 && p.1 >= r.y - 1e-6 && p.1 <= r.bottom() + 1e-6;
+            along_x || along_y
+        };
+        assert!(on_side(r.points[0], &f.layout.nodes[a], r.from_side), "{} -> {}: does not start on its block", e.from, e.to);
+        assert!(on_side(*r.points.last().unwrap(), &f.layout.nodes[b], r.to_side), "{} -> {}: does not end on its block", e.from, e.to);
         for (si, w) in r.points.windows(2).enumerate() {
             assert!((w[0].0 - w[1].0).abs() < 1e-6 || (w[0].1 - w[1].1).abs() < 1e-6, "{} -> {}: slanted segment", e.from, e.to);
             for (ni, n) in f.layout.nodes.iter().enumerate() {
@@ -1239,4 +1247,16 @@ fn a_mistyped_finish_is_reported() {
     assert_eq!(rep.by_code("finish_word").len(), 1);
     // and the drawing still comes out, in the theme's finish
     assert!(fig(&g).objects().iter().any(|o| o.name == "flow:t/e"));
+}
+
+#[test]
+fn the_figures_bounds_hold_every_line_after_a_block_is_moved() {
+    let g = dsl::parse("fig t\nx: image \"X\"\ne: box \"Encoder\"\nd: box \"Decoder\"\nl: loss \"Loss\"\nx -> e -> d -> l\nl -> e : feedback\n").unwrap();
+    let mut d = Drawing::default();
+    d.options.place.insert("e".into(), [0.0, 60.0]);
+    let f = draw(&g, &d).unwrap();
+    let b = f.layout.bounds;
+    for p in f.routes.iter().flat_map(|r| r.points.iter()) {
+        assert!(p.0 >= b.x && p.0 <= b.right() && p.1 >= b.y && p.1 <= b.bottom(), "{p:?} outside {b:?}");
+    }
 }

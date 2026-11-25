@@ -41,6 +41,12 @@ pub fn is_flow_object(o: &Object, fig: &str) -> bool {
     if fig.is_empty() { o.name.starts_with("flow:") } else { o.name.starts_with(&format!("flow:{fig}/")) }
 }
 
+/// The connection site a line end is attached to: the point it really uses (0..16, as
+/// `figure::SITES`) on a rectangle, the side's own site on an ellipse (which has eight).
+fn end_site(side: Side, used: u8, ellipse: bool) -> u32 {
+    if ellipse { site(side, true) } else { used as u32 }
+}
+
 fn site(side: Side, ellipse: bool) -> u32 {
     // PowerPoint's site order: rectangles top, left, bottom, right;
     // ellipses eight sites counter-clockwise from the top
@@ -262,6 +268,7 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         if r.forced {
             warnings.push(format!("{} -> {}: no clear path, drawn straight", e.from, e.to));
         }
+        warnings.extend(r.warnings.iter().cloned());
         let o = match fit_connector(&pts) {
             Some((geom, fr, adj)) => top_level(
                 &name,
@@ -270,13 +277,14 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
                     geom,
                     adj,
                     line: Some(st),
-                    start: Some(Attach { id: node_ids[&e.from], site: site(r.from_side, lay.nodes[a].ellipse) }),
-                    end: Some(Attach { id: node_ids[&e.to], site: site(r.to_side, lay.nodes[b].ellipse) }),
+                    start: Some(Attach { id: node_ids[&e.from], site: end_site(r.from_side, r.from_site, lay.nodes[a].ellipse) }),
+                    end: Some(Attach { id: node_ids[&e.to], site: end_site(r.to_side, r.to_site, lay.nodes[b].ellipse) }),
                     text: None,
                 }),
                 id,
             ),
             None => {
+                warnings.push(if r.bends() > 3 { format!("{} → {}: 轉太多彎，沒有接在方塊上", e.from, e.to) } else { format!("{} → {}: 線的形狀接不到方塊上，沒有接在方塊上", e.from, e.to) });
                 let mut o = modules::poly(&name, &r.points, false, Paint::None, Some(st));
                 o.id = id;
                 o

@@ -5,9 +5,10 @@
 //! neither end do not run on top of each other.
 
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BTreeMap, BinaryHeap};
 
-use crate::layout::{Layout, Rect};
+use crate::figure::{EdgeEnds, SITES, edge_key};
+use crate::layout::{Layout, Placed, Rect};
 use crate::spec::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -65,8 +66,16 @@ pub struct Route {
     pub points: Vec<(f64, f64)>,
     pub from_side: Side,
     pub to_side: Side,
+    /// The connection point (0..16, numbered as `figure::SITES`) each end uses. For a module
+    /// that is an ellipse these are the middle of the side (the ellipse's own sites are chosen
+    /// in `build`).
+    pub from_site: u8,
+    pub to_site: u8,
     /// No clear path was found; the line is drawn straight.
     pub forced: bool,
+    /// What went wrong with the author's choices for this line (a point or a turn that could
+    /// not be honoured); `build` passes them on as warnings.
+    pub warnings: Vec<String>,
 }
 
 impl Route {
@@ -237,8 +246,248 @@ fn side_cost(kind: EdgeKind, is_source: bool, side: Side, me: &Rect, other: &Rec
     }
 }
 
-/// Route every edge of the graph over a finished layout.
+// ── connection points ────────────────────────────────────────────────────
+
+/// How a line's end is tied to its block while routing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum End {
+    /// The router picks the side; the point is the middle.
+    Free,
+    /// The author named a connection point; the side follows from it (a corner lies on two
+    /// sides and the router takes the one it leaves more cheaply).
+    Site(u8),
+    /// Side and slot already decided (slot 0 corner, 1 quarter, 2 middle, 3 three quarters,
+    /// 4 corner, counted left to right on top and bottom and top to bottom on left and right).
+    At(Side, usize),
+}
+
+/// Site numbers (`figure::SITES`) along each side, in the order of [`Side::ALL`]
+/// (top, left, bottom, right) and by slot.
+const SIDE_SITES: [[u8; 5]; 4] = [[4, 5, 0, 6, 7], [4, 15, 1, 14, 13], [13, 12, 2, 11, 10], [7, 8, 3, 9, 10]];
+
+fn side_ix(s: Side) -> usize {
+    match s {
+        Side::Top => 0,
+        Side::Left => 1,
+        Side::Bottom => 2,
+        Side::Right => 3,
+    }
+}
+
+/// The connection point (0..16) at `slot` (0..5) of a side.
+pub fn site_of(side: Side, slot: usize) -> u8 {
+    SIDE_SITES[side_ix(side)][slot.min(4)]
+}
+
+/// The sides and slots a connection point lies on: one for a side point, two for a corner.
+pub fn sides_of(site: u8) -> Vec<(Side, usize)> {
+    let mut v = Vec::new();
+    for s in Side::ALL {
+        for (slot, x) in SIDE_SITES[side_ix(s)].iter().enumerate() {
+            if *x == site {
+                v.push((s, slot));
+            }
+        }
+    }
+    v
+}
+
+/// Where a connection point of a block is (the body's centre line on the left and right).
+pub fn site_point(n: &Placed, side: Side, slot: usize) -> (f64, f64) {
+    let f = slot.min(4) as f64 * 0.25;
+    let r = &n.rect;
+    match side {
+        Side::Top => (r.x + r.w * f, r.y),
+        Side::Bottom => (r.x + r.w * f, r.bottom()),
+        Side::Left => (r.x, if slot == 2 { n.port_y } else { r.y + r.h * f }),
+        Side::Right => (r.right(), if slot == 2 { n.port_y } else { r.y + r.h * f }),
+    }
+}
+
+/// The key of every edge (`figure::edge_key`: the nth edge between the same two nodes).
+pub fn edge_keys(g: &Graph) -> Vec<String> {
+    let mut seen: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    g.edges
+        .iter()
+        .map(|e| {
+            let n = seen.entry((e.from.as_str(), e.to.as_str())).or_insert(0);
+            *n += 1;
+            edge_key(&e.from, &e.to, *n)
+        })
+        .collect()
+}
+
+/// Slots (1 quarter, 2 middle, 3 three quarters) for `n` lines that share one side, in the
+/// order of their other ends; `taken` are the slots the author fixed. One line takes the
+/// middle, two take the quarters, three or more use all three, the extra ones sharing a
+/// point with their neighbours (earlier points get the extra line).
+fn spread(n: usize, taken: &[usize]) -> Vec<usize> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut free: Vec<usize> = (1..=3).filter(|s| !taken.contains(s)).collect();
+    if free.is_empty() {
+        free = vec![1, 2, 3];
+    }
+    let pattern: &[usize] = match n {
+        1 => &[2],
+        2 => &[1, 3],
+        _ => &[1, 2, 3],
+    };
+    let base: Vec<usize> = if pattern.iter().all(|s| free.contains(s)) { pattern.to_vec() } else { free };
+    let l = n.min(base.len());
+    let mut out = Vec::new();
+    for (i, slot) in base.iter().take(l).enumerate() {
+        let size = n / l + usize::from(i < n % l);
+        out.extend(std::iter::repeat_n(*slot, size));
+    }
+    out
+}
+
+/// Route every edge of the graph over a finished layout. The author's choices (see
+/// [`route_with`]) are the ones the layout carries on its nodes.
 pub fn route(g: &Graph, lay: &Layout) -> Vec<Route> {
+    let mut ends = BTreeMap::new();
+    for n in &lay.nodes {
+        for (k, v) in &n.ends {
+            ends.insert(k.clone(), v.clone());
+        }
+    }
+    route_with(g, lay, &ends)
+}
+
+/// As [`route`] with the author's choices given: by [`edge_keys`], the connection point of
+/// each end and where the line turns (`turns` in the figure's natural size, mapped through
+/// the layout's origin and scale). The sides are chosen as without choices; the point on a
+/// side is then assigned so lines that share a side of a block use different points, and the
+/// lines are routed again from those points.
+pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) -> Vec<Route> {
+    let keys = edge_keys(g);
+    let ne = g.edges.len();
+    let mut notes: Vec<Vec<String>> = vec![Vec::new(); ne];
+    let mut fixed1 = vec![[End::Free; 2]; ne];
+    let name = |ei: usize| format!("{} → {}", g.edges[ei].from, g.edges[ei].to);
+    for (ei, key) in keys.iter().enumerate() {
+        let Some(c) = ends.get(key) else { continue };
+        for (i, v) in [c.from, c.to].into_iter().enumerate() {
+            match v {
+                Some(s) if (s as usize) < SITES => fixed1[ei][i] = End::Site(s),
+                Some(s) => notes[ei].push(format!("{}: 連接點 {s} 不存在，已忽略", name(ei))),
+                None => {}
+            }
+        }
+    }
+    let first = run(g, lay, &fixed1, None);
+
+    // the point on each side: lines sharing a side of a block, in the order of their other ends
+    struct Use {
+        edge: usize,
+        end: usize,
+        key: f64,
+        slot: Option<usize>,
+    }
+    let mut groups: BTreeMap<(usize, Side), Vec<Use>> = BTreeMap::new();
+    let mut fixed2 = vec![[End::Free; 2]; ne];
+    for (ei, r) in first.iter().enumerate() {
+        if r.forced {
+            continue;
+        }
+        let e = &g.edges[ei];
+        let (a, b) = (g.node_index(&e.from).unwrap(), g.node_index(&e.to).unwrap());
+        for (end, node, other, side, site) in [(0, a, b, r.from_side, r.from_site), (1, b, a, r.to_side, r.to_site)] {
+            let n = &lay.nodes[node];
+            if n.ellipse {
+                fixed2[ei][end] = End::At(side, 2);
+                continue;
+            }
+            let o = &lay.nodes[other].rect;
+            let key = if matches!(side, Side::Top | Side::Bottom) { o.cx() } else { o.cy() };
+            let slot = match fixed1[ei][end] {
+                End::Site(_) => sides_of(site).into_iter().find(|(s, _)| *s == side).map(|(_, sl)| sl),
+                _ => None,
+            };
+            groups.entry((node, side)).or_default().push(Use { edge: ei, end, key, slot });
+        }
+    }
+    let mut moved = false;
+    for ((_, side), mut uses) in groups {
+        let taken: Vec<usize> = uses.iter().filter_map(|u| u.slot).collect();
+        for u in uses.iter().filter(|u| u.slot.is_some()) {
+            fixed2[u.edge][u.end] = End::At(side, u.slot.unwrap());
+        }
+        uses.retain(|u| u.slot.is_none());
+        uses.sort_by(|x, y| x.key.partial_cmp(&y.key).unwrap_or(Ordering::Equal).then((x.edge, x.end).cmp(&(y.edge, y.end))));
+        for (u, slot) in uses.iter().zip(spread(uses.len(), &taken)) {
+            fixed2[u.edge][u.end] = End::At(side, slot);
+            moved |= slot != 2;
+        }
+    }
+    let mut out = if moved { run(g, lay, &fixed2, Some(&first)) } else { first };
+
+    // where the author wants the line to turn
+    for (ei, key) in keys.iter().enumerate() {
+        let Some(c) = ends.get(key).filter(|c| !c.turns.is_empty()) else { continue };
+        let e = &g.edges[ei];
+        let (a, b) = (g.node_index(&e.from).unwrap(), g.node_index(&e.to).unwrap());
+        match (!out[ei].forced).then(|| turned(lay, a, b, &out[ei], &c.turns)).flatten() {
+            Some(pts) => out[ei].points = pts,
+            None => notes[ei].push(format!("{}: 轉彎的位置無法照辦，已忽略", name(ei))),
+        }
+    }
+    for (r, n) in out.iter_mut().zip(notes) {
+        r.warnings.extend(n);
+    }
+    out
+}
+
+/// The route with its interior runs moved to the author's coordinates (`turns`: the x of a
+/// vertical run or the y of a horizontal run, in order, natural size). The first run leaves
+/// the first block's side and the last arrives at the second block's side; so the number of
+/// runs must fit the two sides (a line that leaves and arrives horizontally has an odd number
+/// of runs). `None` when it does not, when a run would go back into a block, or when the path
+/// would cut through another block.
+fn turned(lay: &Layout, a: usize, b: usize, r: &Route, turns: &[f64]) -> Option<Vec<(f64, f64)>> {
+    let k = lay.scale;
+    let (ox, oy) = lay.nodes[a].origin;
+    let (p, q) = (r.points[0], *r.points.last().unwrap());
+    let n = turns.len();
+    let horizontal = |s: Side| matches!(s, Side::Left | Side::Right);
+    let orient: Vec<bool> = (0..n + 2).map(|j| horizontal(r.from_side) ^ (j % 2 == 1)).collect();
+    if orient[n + 1] != horizontal(r.to_side) {
+        return None;
+    }
+    let mut coord = vec![if orient[0] { p.1 } else { p.0 }];
+    for (i, t) in turns.iter().enumerate() {
+        coord.push(if orient[i + 1] { oy + t * k } else { ox + t * k });
+    }
+    coord.push(if orient[n + 1] { q.1 } else { q.0 });
+    let mut pts = vec![p];
+    for j in 1..=n + 1 {
+        pts.push(if orient[j - 1] { (coord[j], coord[j - 1]) } else { (coord[j - 1], coord[j]) });
+    }
+    pts.push(q);
+    let (fnrm, tnrm) = (r.from_side.normal(), r.to_side.normal());
+    let (d0, d1) = ((pts[1].0 - p.0, pts[1].1 - p.1), (q.0 - pts[pts.len() - 2].0, q.1 - pts[pts.len() - 2].1));
+    if d0.0 * fnrm.0 + d0.1 * fnrm.1 <= 1e-6 || d1.0 * tnrm.0 + d1.1 * tnrm.1 >= -1e-6 {
+        return None;
+    }
+    let last = pts.len() - 2;
+    for (si, w) in pts.windows(2).enumerate() {
+        for (ni, nd) in lay.nodes.iter().enumerate() {
+            if (ni == a && si == 0) || (ni == b && si == last) {
+                continue;
+            }
+            if segment_hits(w[0], w[1], &nd.reserve) {
+                return None;
+            }
+        }
+    }
+    Some(simplify(pts))
+}
+
+/// One routing pass. `fixed` says, per edge, how each end is tied to its block; `fallback` is an
+/// earlier pass whose route is kept for an edge this pass cannot route.
+fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>) -> Vec<Route> {
     let k = lay.scale;
     let m = 7.0 * k; // distance of a line from a module
     let c = 3.0 * k; // clearance that counts as "through"
@@ -289,6 +538,27 @@ pub fn route(g: &Graph, lay: &Layout) -> Vec<Route> {
     ly.push((lay.bounds.y - 2.0 * m, 1.0, true));
     if lay.legend.is_empty() {
         ly.push((lay.bounds.bottom() + 2.0 * m, 1.0, true));
+    }
+    // the points the lines really use on the sides
+    for (ei, e) in g.edges.iter().enumerate() {
+        for (end, id) in [(0, &e.from), (1, &e.to)] {
+            let n = &lay.nodes[g.node_index(id).unwrap()];
+            if n.ellipse {
+                continue;
+            }
+            let at: Vec<(Side, usize)> = match fixed[ei][end] {
+                End::Free => vec![],
+                End::Site(s) => sides_of(s),
+                End::At(sd, sl) => vec![(sd, sl)],
+            };
+            for (sd, sl) in at {
+                let p = site_point(n, sd, sl);
+                match sd {
+                    Side::Top | Side::Bottom => lx.push((p.0, 1.0, true)),
+                    _ => ly.push((p.1, 1.0, true)),
+                }
+            }
+        }
     }
     let (xs, xw) = axis(lx, 2.5 * k);
     let (ys, yw) = axis(ly, 2.5 * k);
@@ -385,11 +655,17 @@ pub fn route(g: &Graph, lay: &Layout) -> Vec<Route> {
         let (na, nb) = (&lay.nodes[a], &lay.nodes[b]);
         let same_panel = na.panel == nb.panel;
         let down = lay.panels[na.panel].down;
-        // candidate ports: (side, port point, escape point, grid index, cost)
-        let ports = |n: &crate::layout::Placed, other: &Rect, is_source: bool, idx: usize| -> Vec<(Side, (f64, f64), (usize, usize), f64)> {
+        // candidate ports: (side, port point, escape point, grid index, cost) and the slot used
+        let ports = |n: &crate::layout::Placed, other: &Rect, is_source: bool, idx: usize, end: End| -> (Vec<Port>, Vec<usize>) {
             let mut v = Vec::new();
-            for s in Side::ALL {
-                let p = n.port(s);
+            let mut slots = Vec::new();
+            let opts: Vec<(Side, usize)> = match end {
+                End::Free => Side::ALL.iter().map(|s| (*s, 2)).collect(),
+                End::Site(s) => sides_of(s).into_iter().map(|(sd, sl)| (sd, if n.ellipse { 2 } else { sl })).collect(),
+                End::At(sd, sl) => vec![(sd, if n.ellipse { 2 } else { sl })],
+            };
+            for (s, slot) in opts {
+                let p = site_point(n, s, slot);
                 let esc = match s {
                     Side::Left => (n.reserve.x - m, p.1),
                     Side::Right => (n.reserve.right() + m, p.1),
@@ -404,11 +680,12 @@ pub fn route(g: &Graph, lay: &Layout) -> Vec<Route> {
                 let is_op = g.nodes[idx].module == "op";
                 let cost = side_cost(e.kind, is_source, s, &n.rect, other, down, same_panel, is_op, k) + (esc.0 - p.0).abs() + (esc.1 - p.1).abs();
                 v.push((s, p, (i, j), cost));
+                slots.push(slot);
             }
-            v
+            (v, slots)
         };
-        let starts = ports(na, &nb.rect, true, a);
-        let goals = ports(nb, &na.rect, false, b);
+        let (starts, s_slots) = ports(na, &nb.rect, true, a, fixed[ei][0]);
+        let (goals, g_slots) = ports(nb, &na.rect, false, b, fixed[ei][1]);
         let found = astar(&grid, &starts, &goals, (a, b), bend, k);
         let r = match found {
             Some((path, si, gi)) => {
@@ -436,8 +713,9 @@ pub fn route(g: &Graph, lay: &Layout) -> Vec<Route> {
                 let mut pts = vec![s_port];
                 pts.extend(path.iter().map(|(i, j)| (grid.xs[*i], grid.ys[*j])));
                 pts.push(g_port);
-                Route { edge: ei, points: simplify(pts), from_side: s_side, to_side: g_side, forced: false }
+                Route { edge: ei, points: simplify(pts), from_side: s_side, to_side: g_side, from_site: site_of(s_side, s_slots[si]), to_site: site_of(g_side, g_slots[gi]), forced: false, warnings: Vec::new() }
             }
+            None if fallback.is_some_and(|f| !f[ei].forced) => fallback.unwrap()[ei].clone(),
             None => {
                 // nearest pair of ports, straight
                 let mut best = (f64::MAX, Side::Right, Side::Left);
@@ -450,7 +728,7 @@ pub fn route(g: &Graph, lay: &Layout) -> Vec<Route> {
                         }
                     }
                 }
-                Route { edge: ei, points: vec![na.port(best.1), nb.port(best.2)], from_side: best.1, to_side: best.2, forced: true }
+                Route { edge: ei, points: vec![na.port(best.1), nb.port(best.2)], from_side: best.1, to_side: best.2, from_site: site_of(best.1, 2), to_site: site_of(best.2, 2), forced: true, warnings: Vec::new() }
             }
         };
         out[ei] = Some(r);
@@ -582,4 +860,314 @@ fn astar(grid: &Grid, starts: &[Port], goals: &[Port], who: (usize, usize), bend
     }
     path.reverse();
     Some((path, si, gi))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Drawing, Figure, LayoutOptions, dsl};
+    use lore_canvas::Kind;
+
+    fn draw_with(src: &str, place: &[(&str, [f64; 2])], ends: &[(&str, EdgeEnds)]) -> (Graph, Figure) {
+        let g = dsl::parse(src).unwrap();
+        let options = LayoutOptions { place: place.iter().map(|(k, v)| (k.to_string(), *v)).collect(), ends: ends.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(), ..Default::default() };
+        let f = crate::draw(&g, &Drawing { options, ..Default::default() }).unwrap();
+        (g, f)
+    }
+
+    fn draw_plain(src: &str) -> (Graph, Figure) {
+        draw_with(src, &[], &[])
+    }
+
+    fn ends(from: Option<u8>, to: Option<u8>, turns: &[f64]) -> EdgeEnds {
+        EdgeEnds { from, to, turns: turns.to_vec() }
+    }
+
+    const CHAIN: &str = "fig m\na: box \"A\"\nb: box \"B\"\nc: box \"C\"\na -> b -> c\n";
+    const TWO_IN: &str = "fig t\na: box \"A\"\nb: box \"B\"\nc: box \"C\"\na -> c\nb -> c\n";
+    const THREE_IN: &str = "fig t\na: box \"A\"\nb: box \"B\"\nd: box \"D\"\nc: box \"C\"\na -> c\nb -> c\nd -> c\n";
+
+    fn near(a: (f64, f64), b: (f64, f64)) -> bool {
+        (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6
+    }
+
+    fn on_boundary(p: (f64, f64), r: &Rect) -> bool {
+        let inside = p.0 >= r.x - 1e-6 && p.0 <= r.right() + 1e-6 && p.1 >= r.y - 1e-6 && p.1 <= r.bottom() + 1e-6;
+        inside && ((p.0 - r.x).abs() < 1e-6 || (p.0 - r.right()).abs() < 1e-6 || (p.1 - r.y).abs() < 1e-6 || (p.1 - r.bottom()).abs() < 1e-6)
+    }
+
+    fn edge(g: &Graph, f: &Figure, from: &str, to: &str) -> Route {
+        f.routes.iter().find(|r| g.edges[r.edge].from == from && g.edges[r.edge].to == to).unwrap().clone()
+    }
+
+    #[test]
+    fn a_moved_block_is_shifted_and_its_lines_end_on_it() {
+        let (g, base) = draw_plain(CHAIN);
+        let (_, moved) = draw_with(CHAIN, &[("b", [10.0, 20.0])], &[]);
+        let k = base.layout.scale;
+        let (b0, b1) = (&base.layout.nodes[1].rect, &moved.layout.nodes[1].rect);
+        assert!((b1.x - b0.x - 10.0 * k).abs() < 1e-6 && (b1.y - b0.y - 20.0 * k).abs() < 1e-6);
+        assert_eq!(moved.layout.nodes[0].rect, base.layout.nodes[0].rect);
+        let mut ended = 0;
+        for r in &moved.routes {
+            let e = &g.edges[r.edge];
+            if e.to == "b" {
+                assert!(on_boundary(*r.points.last().unwrap(), b1), "{:?}", r.points);
+                ended += 1;
+            }
+            if e.from == "b" {
+                assert!(on_boundary(r.points[0], b1), "{:?}", r.points);
+                ended += 1;
+            }
+            assert!(!r.forced);
+            assert!(r.points.windows(2).all(|w| (w[0].0 - w[1].0).abs() < 1e-6 || (w[0].1 - w[1].1).abs() < 1e-6));
+        }
+        assert_eq!(ended, 2);
+        // the panel and the bounds hold the moved block
+        let p = &moved.layout.panels[0].rect;
+        assert!(p.contains(b1) && moved.layout.bounds.contains(p));
+    }
+
+    #[test]
+    fn a_block_cannot_be_moved_out_of_the_figure() {
+        let (_, f) = draw_with(CHAIN, &[("b", [10_000.0, 10_000.0]), ("a", [-10_000.0, -10_000.0])], &[]);
+        let frame = LayoutOptions::default().frame.inflate(0.01);
+        for n in &f.layout.nodes[..2] {
+            assert!(frame.contains(&n.rect), "{:?}", n.rect);
+        }
+        assert!(f.layout.panels[0].rect.contains(&f.layout.nodes[0].rect) && f.layout.panels[0].rect.contains(&f.layout.nodes[1].rect));
+    }
+
+    #[test]
+    fn an_unknown_id_in_place_is_ignored() {
+        let (_, base) = draw_plain(CHAIN);
+        let (_, f) = draw_with(CHAIN, &[("nope", [50.0, 50.0])], &[]);
+        assert_eq!(f.layout, base.layout);
+        assert_eq!(f.routes, base.routes);
+    }
+
+    #[test]
+    fn moving_nothing_changes_nothing() {
+        let (_, a) = draw_plain(TWO_IN);
+        let (_, b) = draw_with(TWO_IN, &[], &[]);
+        assert_eq!(a.layout, b.layout);
+        assert_eq!(a.routes, b.routes);
+        assert!(a.layout.nodes.iter().all(|n| n.ends.is_empty()));
+    }
+
+    #[test]
+    fn one_arrow_into_a_side_uses_the_middle() {
+        let (g, f) = draw_plain(CHAIN);
+        let r = edge(&g, &f, "a", "b");
+        let b = &f.layout.nodes[1];
+        assert_eq!((r.from_side, r.to_side, r.from_site, r.to_site), (Side::Right, Side::Left, 3, 1));
+        assert!(near(*r.points.last().unwrap(), (b.rect.x, b.rect.cy())));
+    }
+
+    #[test]
+    fn two_arrows_into_a_side_use_the_quarter_points() {
+        let (g, f) = draw_plain(TWO_IN);
+        let c = &f.layout.nodes[2];
+        let (ra, rb) = (edge(&g, &f, "a", "c"), edge(&g, &f, "b", "c"));
+        assert_eq!((ra.to_side, rb.to_side), (Side::Left, Side::Left));
+        let (upper, lower) = if f.layout.nodes[0].rect.cy() < f.layout.nodes[1].rect.cy() { (&ra, &rb) } else { (&rb, &ra) };
+        assert!(near(*upper.points.last().unwrap(), (c.rect.x, c.rect.y + c.rect.h / 4.0)));
+        assert!(near(*lower.points.last().unwrap(), (c.rect.x, c.rect.y + c.rect.h * 0.75)));
+        assert_eq!((upper.to_site, lower.to_site), (15, 14));
+        assert!(!ra.forced && !rb.forced);
+    }
+
+    #[test]
+    fn three_arrows_into_a_side_use_three_points_without_crossing() {
+        let (g, f) = draw_plain(THREE_IN);
+        let c = &f.layout.nodes[3];
+        let mut ends: Vec<(f64, f64, u8)> = Vec::new();
+        for from in ["a", "b", "d"] {
+            let r = edge(&g, &f, from, "c");
+            assert_eq!(r.to_side, Side::Left);
+            let i = g.node_index(from).unwrap();
+            ends.push((f.layout.nodes[i].rect.cy(), r.points.last().unwrap().1, r.to_site));
+        }
+        ends.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+        // the order of the sources along the side is the order of the points: no crossing
+        assert!(ends[0].1 < ends[1].1 && ends[1].1 < ends[2].1, "{ends:?}");
+        assert!((ends[0].1 - (c.rect.y + c.rect.h / 4.0)).abs() < 1e-6 && (ends[1].1 - c.rect.cy()).abs() < 1e-6 && (ends[2].1 - (c.rect.y + c.rect.h * 0.75)).abs() < 1e-6);
+        assert_eq!(ends.iter().map(|e| e.2).collect::<Vec<_>>(), [15, 1, 14]);
+    }
+
+    #[test]
+    fn an_ellipse_keeps_one_point_a_side() {
+        let src = "fig t\na: box \"A\"\nb: box \"B\"\nc: op \"+\"\na -> c\nb -> c\n";
+        let (g, f) = draw_plain(src);
+        let c = &f.layout.nodes[2];
+        assert!(c.ellipse);
+        for from in ["a", "b"] {
+            let r = edge(&g, &f, from, "c");
+            assert!(near(*r.points.last().unwrap(), c.port(r.to_side)), "{:?}", r.points);
+            assert_eq!(r.to_site, site_of(r.to_side, 2));
+        }
+        // and it is attached to the ellipse's own site
+        for o in f.objects() {
+            if let Kind::Connector(cn) = &o.kind {
+                assert!(cn.end.as_ref().unwrap().site < 8);
+            }
+        }
+    }
+
+    #[test]
+    fn an_end_uses_the_point_the_author_chose() {
+        let (g, f) = draw_with(CHAIN, &[], &[("a>b", ends(Some(8), Some(15), &[]))]);
+        let (a, b) = (&f.layout.nodes[0], &f.layout.nodes[1]);
+        let r = edge(&g, &f, "a", "b");
+        assert!(near(r.points[0], (a.rect.right(), a.rect.y + a.rect.h / 4.0)), "{:?}", r.points);
+        assert!(near(*r.points.last().unwrap(), (b.rect.x, b.rect.y + b.rect.h / 4.0)), "{:?}", r.points);
+        assert_eq!((r.from_site, r.to_site), (8, 15));
+        assert!(!r.forced && r.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_corner_point_can_be_chosen() {
+        let (g, f) = draw_with(CHAIN, &[], &[("a>b", ends(None, Some(4), &[]))]);
+        let b = &f.layout.nodes[1];
+        let r = edge(&g, &f, "a", "b");
+        assert!(near(*r.points.last().unwrap(), (b.rect.x, b.rect.y)), "{:?}", r.points);
+        assert_eq!(r.to_site, 4);
+        assert!(matches!(r.to_side, Side::Top | Side::Left));
+        assert!(!r.forced);
+        // the attached site is the corner
+        let o = f.objects().iter().find(|o| o.name == "flow:m/edge:a-b").unwrap();
+        let Kind::Connector(c) = &o.kind else { panic!("a connector") };
+        assert_eq!(c.end.as_ref().unwrap().site, 4);
+    }
+
+    #[test]
+    fn the_second_edge_between_two_blocks_has_its_own_key() {
+        let src = "fig t\na: box \"A\"\nb: box \"B\"\na -> b\na -> b : optional\n";
+        let g = dsl::parse(src).unwrap();
+        assert_eq!(edge_keys(&g), ["a>b", "a>b#2"]);
+        let (_, f) = draw_with(src, &[], &[("a>b#2", ends(None, Some(15), &[]))]);
+        assert_eq!(f.routes[1].to_site, 15);
+        assert_ne!(f.routes[0].to_site, 15);
+        assert!(f.routes.iter().all(|r| r.warnings.is_empty()));
+    }
+
+    /// The natural-size coordinate that lands on the figure's `v`.
+    fn natural(f: &Figure, v: f64, horizontal_run: bool) -> f64 {
+        let o = f.layout.nodes[0].origin;
+        (v - if horizontal_run { o.1 } else { o.0 }) / f.layout.scale
+    }
+
+    #[test]
+    fn a_turn_is_placed_where_the_author_put_it() {
+        let (g, base) = draw_plain(TWO_IN);
+        let (a, c) = (&base.layout.nodes[0].rect, &base.layout.nodes[2].rect);
+        let x = a.right() + 0.7 * (c.x - a.right());
+        let (_, f) = draw_with(TWO_IN, &[], &[("a>c", ends(None, None, &[natural(&base, x, false)]))]);
+        let r = edge(&g, &f, "a", "c");
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert!(r.points.windows(2).any(|w| (w[0].0 - x).abs() < 1e-6 && (w[1].0 - x).abs() < 1e-6 && (w[0].1 - w[1].1).abs() > 1e-6), "{:?} should turn at x = {x}", r.points);
+        assert!(f.built.warnings.is_empty(), "{:?}", f.built.warnings);
+    }
+
+    #[test]
+    fn a_turn_that_cannot_be_honoured_is_ignored_with_a_warning() {
+        let (g, base) = draw_plain(TWO_IN);
+        // two runs cannot join a right side to a left side
+        let (_, f) = draw_with(TWO_IN, &[], &[("a>c", ends(None, None, &[10.0, 20.0])), ("nope>x", ends(None, None, &[5.0]))]);
+        assert_eq!(edge(&g, &f, "a", "c").points, edge(&g, &base, "a", "c").points);
+        assert!(f.built.warnings.iter().any(|w| w.contains("a → c") && w.contains("轉彎")), "{:?}", f.built.warnings);
+        assert!(!f.built.warnings.iter().any(|w| w.contains("nope")));
+    }
+
+    #[test]
+    fn connectors_are_attached_to_the_point_they_use() {
+        let (g, f) = draw_plain(TWO_IN);
+        let mut seen = Vec::new();
+        for r in &f.routes {
+            let e = &g.edges[r.edge];
+            let o = f.objects().iter().find(|o| o.name == format!("flow:t/edge:{}-{}", e.from, e.to)).unwrap();
+            let Kind::Connector(c) = &o.kind else { panic!("a connector") };
+            assert_eq!(c.end.as_ref().unwrap().site as u8, r.to_site);
+            assert_eq!(c.start.as_ref().unwrap().site as u8, r.from_site);
+            seen.push(c.end.as_ref().unwrap().site);
+        }
+        seen.sort();
+        assert_eq!(seen, [14, 15]);
+    }
+
+    #[test]
+    fn a_line_with_too_many_turns_says_so() {
+        let (g, base) = draw_plain(TWO_IN);
+        let (a, c) = (&base.layout.nodes[0].rect, &base.layout.nodes[2].rect);
+        let p = edge(&g, &base, "a", "c").points[0];
+        let (x1, x3) = (a.right() + 0.25 * (c.x - a.right()), a.right() + 0.75 * (c.x - a.right()));
+        let y2 = p.1 - 8.0;
+        let turns = [natural(&base, x1, false), natural(&base, y2, true), natural(&base, x3, false)];
+        let (_, f) = draw_with(TWO_IN, &[], &[("a>c", ends(None, None, &turns))]);
+        let r = edge(&g, &f, "a", "c");
+        assert_eq!(r.bends(), 4, "{:?} {:?}", r.points, r.warnings);
+        assert!(f.built.warnings.iter().any(|w| w == "a → c: 轉太多彎，沒有接在方塊上"), "{:?}", f.built.warnings);
+        let o = f.objects().iter().find(|o| o.name == "flow:t/edge:a-c").unwrap();
+        assert!(matches!(o.kind, Kind::Shape(_)));
+    }
+
+    #[test]
+    fn no_route_cuts_through_a_block_after_a_move() {
+        let src = "fig w\npanel p \"P\"\n a: box \"A\"\n b: box \"B\"\n c: box \"C\"\npanel q \"Q\"\n d: box \"D\"\n e: box \"E\"\n f: box \"F\"\nend\na -> b -> c\nd -> e -> f\nc -> d : cross\nb -> e : cross\n";
+        for id in ["a", "b", "c", "d", "e", "f"] {
+            let (g, f) = draw_with(src, &[(id, [30.0, 20.0])], &[]);
+            for r in &f.routes {
+                let e = &g.edges[r.edge];
+                for w in r.points.windows(2) {
+                    for (ni, n) in f.layout.nodes.iter().enumerate() {
+                        let nid = &g.nodes[ni].id;
+                        if *nid == e.from || *nid == e.to {
+                            continue;
+                        }
+                        assert!(!segment_hits(w[0], w[1], &n.rect), "moving {id}: {} → {} cuts through {nid}: {:?}", e.from, e.to, r.points);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lines_stay_clean_when_they_spread_over_the_points() {
+        let mut srcs: Vec<String> = vec![
+            "fig s\na: box \"A\"\nb: box \"Wide middle step\"\nc: box \"C\"\nd: box \"D\"\na -> b -> c -> d\na -> d : skip\nd -> a : feedback\na -> c : optional\n".into(),
+            "fig f\na: image \"in\"\nb: box \"B\"\nc: box \"C\"\nd: op \"+\"\ne: box \"E\"\nf: loss \"L\"\ng: image \"gt\" role=gt\na -> b -> d -> e -> f\na -> c -> d\ng -> f : supervision\nf -> b : feedback\nf -> c : feedback\nb -> e : skip\n".into(),
+            "fig g\npanel p \"P\"\n a: box \"A\"\n b: box \"B\"\npanel q \"Q\"\n c: box \"C\"\n d: box \"D\"\npanel r \"R\"\n e: box \"E\"\nend\na -> b\nc -> d\nb -> c : cross\nd -> a : cross\nb -> e : cross\ne -> c : cross\n".into(),
+        ];
+        let mut big = String::from("fig big\n");
+        for r in 0..4 {
+            for c in 0..6 {
+                big.push_str(&format!("n{r}_{c}: box \"N{r}{c}\"\n"));
+            }
+            big.push_str(&(0..6).map(|c| format!("n{r}_{c}")).collect::<Vec<_>>().join(" -> "));
+            big.push('\n');
+        }
+        big.push_str("n0_5 -> n1_0 : feedback\nn1_2 -> n2_4 : skip\nn3_5 -> n0_0 : feedback\nn2_1 -> n3_3\nn0_2 -> n3_4 : optional\n");
+        srcs.push(big);
+        for src in srcs {
+            let (g, f) = draw_plain(&src);
+            for r in &f.routes {
+                let e = &g.edges[r.edge];
+                let (a, b) = (g.node_index(&e.from).unwrap(), g.node_index(&e.to).unwrap());
+                assert!(!r.forced, "{} -> {} found no path", e.from, e.to);
+                let slot = |site: u8, side: Side| sides_of(site).into_iter().find(|(s, _)| *s == side).unwrap().1;
+                assert!(near(r.points[0], site_point(&f.layout.nodes[a], r.from_side, slot(r.from_site, r.from_side))));
+                assert!(near(*r.points.last().unwrap(), site_point(&f.layout.nodes[b], r.to_side, slot(r.to_site, r.to_side))));
+                for (si, w) in r.points.windows(2).enumerate() {
+                    assert!((w[0].0 - w[1].0).abs() < 1e-6 || (w[0].1 - w[1].1).abs() < 1e-6);
+                    for (ni, n) in f.layout.nodes.iter().enumerate() {
+                        let own = (ni == a && si == 0) || (ni == b && si == r.points.len() - 2);
+                        if own {
+                            continue;
+                        }
+                        assert!(!segment_hits(w[0], w[1], &n.reserve), "{} -> {} runs through {}", e.from, e.to, g.nodes[ni].id);
+                    }
+                }
+            }
+        }
+    }
 }
