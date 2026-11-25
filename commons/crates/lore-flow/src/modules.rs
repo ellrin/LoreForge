@@ -48,7 +48,7 @@ pub struct PortRect {
 
 /// A saved drawing: one art style of a module kind
 /// (`modules/<kind>/<style>.json`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ModuleTemplate {
     pub kind: String,
     /// Style name; a file `modules/<kind>/<style>.json` is named after it.
@@ -1485,6 +1485,42 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx) -> Core {
     Core { w: cx.s(t.w), h: cx.s(t.h), objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below }, legend, ..Default::default() }
 }
 
+struct Own {
+    /// The text colour the block names, as a hex.
+    text: Option<String>,
+}
+
+/// A colour param as written (name or hex) -> (fill, line) of its name, or itself.
+fn own_pair(n: &Node, k: &str) -> Option<(String, String)> {
+    let v = n.str(k)?.trim();
+    if v == "none" { Some(("none".into(), "none".into())) } else { crate::theme::named(v) }
+}
+
+/// Turn the `fill=` / `line=` / `text=` params of a block into hex colours, once, where the
+/// role's colours are resolved: `fill=blue` alone is the pale blue fill and the strong blue
+/// line, `line=blue` only the line, a hex only what it names. The generators and the saved
+/// drawings (`role:fill` …) then read the block's own colour first. A multi-colour kind
+/// (a layer legend, `classes=`) keeps its own per-class colours.
+fn own_colours(n: &mut Node) -> Own {
+    let by_name = |v: Option<&str>| v.is_some_and(|v| {
+        let h = v.trim().trim_start_matches('#');
+        !(h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit())) && h != "none"
+    });
+    let fill_named = by_name(n.str("fill"));
+    let line_given = n.str("line").is_some();
+    if let Some((fill, line)) = own_pair(n, "fill") {
+        n.params.insert("fill".into(), fill.into());
+        if fill_named && !line_given {
+            n.params.insert("line".into(), line.into());
+        }
+    }
+    if let Some((_, line)) = own_pair(n, "line") {
+        n.params.insert("line".into(), line.into());
+    }
+    let text = own_pair(n, "text").map(|(_, c)| c).filter(|c| c != "none");
+    Own { text }
+}
+
 /// Draw a node at scale `cx.k`.
 pub fn make(node: &Node, cx: &Ctx) -> Body {
     // a node that only names its variable shows the variable as its label
@@ -1496,6 +1532,19 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     if !n.var.is_empty() && n.label.trim() == format!("@{}", n.var) {
         n.var.clear();
     }
+    // the block's own colours (a name or a hex) replace the theme's, for every kind
+    let own = own_colours(&mut n);
+    let themed;
+    let own_cx;
+    let cx = if let Some(text) = own.text {
+        let mut t = cx.theme.clone();
+        t.modules.entry(n.module.clone()).or_default().text = Some(text);
+        themed = t;
+        own_cx = Ctx { theme: &themed, vars: cx.vars, math: cx.math, lib: cx.lib, k: cx.k, symmetric: cx.symmetric, image_size: cx.image_size };
+        &own_cx
+    } else {
+        cx
+    };
     let n = &n;
     // a saved drawing of this kind and style wins over the built-in drawing
     let which = style_name(n, cx.theme);

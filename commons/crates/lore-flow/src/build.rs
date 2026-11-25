@@ -171,9 +171,24 @@ pub fn fit_connector(pts: &[(f64, f64)]) -> Option<(String, Frame, BTreeMap<Stri
     None
 }
 
+/// The colour a line names (`Edge.color`): a name's strong line colour, or the hex itself.
+fn own_line_colour(name: &str) -> Option<String> {
+    crate::theme::named(name).map(|(_, line)| line)
+}
+
+fn is_hex(s: &str) -> bool {
+    let h = s.trim().trim_start_matches('#');
+    h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 fn stroke_of(theme: &Theme, kind: EdgeKind, k: f64) -> Stroke {
+    stroke_coloured(theme, kind, k, None)
+}
+
+/// As [`stroke_of`], in the line's own colour when it has one; dash, width and heads stay the kind's.
+fn stroke_coloured(theme: &Theme, kind: EdgeKind, k: f64, own: Option<&str>) -> Stroke {
     let e = theme.edge(kind);
-    let mut s = Stroke::new(&e.color, (e.width * k).max(0.5));
+    let mut s = Stroke::new(own.unwrap_or(&e.color), (e.width * k).max(0.5));
     s.dash = e.dash.clone();
     s.head = e.head.clone();
     s.tail = e.tail.clone();
@@ -245,6 +260,60 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         }
     }
 
+    // regions: outer first, so an inner tint lies over an outer one; plain shapes under the nodes
+    for rb in &lay.regions {
+        let r = &rb.rect;
+        let own = crate::theme::named(&rb.tint);
+        let fill = match &own {
+            Some((f, _)) => Paint::solid(f),
+            None => Paint::None,
+        };
+        let prst = if rb.round { "roundRect" } else { "rect" };
+        let mut o = modules::shape("", prst, r.x, r.y, r.w, r.h, fill, None);
+        let colour = match &own {
+            Some((_, l)) if !is_hex(&rb.tint) => l.clone(),
+            _ => theme.colors.muted.clone(),
+        };
+        let (dash, on) = match rb.line.as_str() {
+            "none" => ("solid", false),
+            "dashed" => ("dash", true),
+            "dotted" => ("sysDot", true),
+            _ => ("solid", true),
+        };
+        if let Some(sp) = o.kind.sp_mut() {
+            if on {
+                let mut st = Stroke::new(&colour, (1.0 * k).max(0.5));
+                st.dash = dash.into();
+                sp.line = Some(st);
+            }
+            if rb.round {
+                sp.geom.adj.insert("adj".into(), ((8.0 * k / r.w.min(r.h).max(1.0)).min(0.5) * 100_000.0).round());
+            }
+        }
+        o.id = id;
+        o.name = format!("flow:{fig}/region:{}", rb.id);
+        id += 1;
+        objects.push(o);
+        if let Some(t) = &rb.title_rect
+            && !rb.title.is_empty()
+        {
+            let ty = cx.ty(1.0, true, &theme.colors.ink);
+            let (mut o, _, _) = cx.text("", &rb.title, &ty, t.cx(), t.y);
+            o.frame = modules::frame(t.x, t.y, t.w, t.h);
+            let align = if rb.title_at == "top-left" || rb.title_at.is_empty() { "l" } else { "ctr" };
+            if let Some(tb) = o.kind.sp_mut().and_then(|sp| sp.text.as_mut()) {
+                tb.paras.iter_mut().for_each(|p| p.align = align.into());
+                if rb.title_at == "left" {
+                    tb.vert = Some("vert270".into());
+                }
+            }
+            o.id = id;
+            o.name = format!("flow:{fig}/region:{}/title", rb.id);
+            id += 1;
+            objects.push(o);
+        }
+    }
+
     // modules
     let mut node_ids = BTreeMap::new();
     for (n, pl) in g.nodes.iter().zip(&lay.nodes) {
@@ -265,7 +334,14 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         let e = &g.edges[r.edge];
         let (a, b) = (g.node_index(&e.from).unwrap(), g.node_index(&e.to).unwrap());
         let name = format!("flow:{fig}/edge:{}-{}", e.from, e.to);
-        let st = stroke_of(theme, e.kind, k);
+        let mut own: Option<String> = None;
+        if !e.color.trim().is_empty() {
+            own = own_line_colour(&e.color);
+            if own.is_none() {
+                warnings.push(format!("{} → {}: 不認得的顏色 {}", e.from, e.to, e.color));
+            }
+        }
+        let st = stroke_coloured(theme, e.kind, k, own.as_deref());
         let pts: Vec<(f64, f64)> = r.points.iter().map(|p| (p.0 * EMU_PT, p.1 * EMU_PT)).collect();
         if r.forced {
             warnings.push(format!("{} -> {}: no clear path, drawn straight", e.from, e.to));
@@ -295,7 +371,8 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         id += 1;
         objects.push(o);
         if !e.label.is_empty() {
-            let (mut o, w, h) = cx.text("", &e.label, &small, 0.0, 0.0);
+            let own_small = own.as_ref().map(|c| cx.small(c));
+            let (mut o, w, h) = cx.text("", &e.label, own_small.as_ref().unwrap_or(&small), 0.0, 0.0);
             let gap = 1.5 * k;
             // along the longest segments first, on the side that is free of modules and other labels
             let mut segs: Vec<((f64, f64), (f64, f64))> = r.points.windows(2).map(|s| (s[0], s[1])).collect();

@@ -294,6 +294,65 @@ pub fn shade(hex: &str, t: f64) -> String {
 /// line strong. Names: red, orange, yellow, green, teal, blue, purple, pink, brown, grey,
 /// black. An `RRGGBB` is given back as both. `None` = not a colour.
 pub fn named(name: &str) -> Option<(String, String)> {
-    let _ = name;
-    None
+    let n = name.trim();
+    let hex = n.trim_start_matches('#');
+    if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        let h = hex.to_uppercase();
+        return Some((h.clone(), h));
+    }
+    let (fill, line) = match n.to_ascii_lowercase().as_str() {
+        "red" => ("FDE3E3", "C62828"),
+        "orange" => ("FFE9D0", "D84315"),
+        "yellow" => ("FFF5C2", "9A7400"),
+        "green" => ("DDF3DF", "2E7D32"),
+        "teal" => ("D3F1ED", "00796B"),
+        "blue" => ("DCEBFB", "1565C0"),
+        "purple" => ("EADCF6", "7B1FA2"),
+        "pink" => ("FCE0EC", "C2185B"),
+        "brown" => ("EBE0D7", "6D4C41"),
+        "grey" | "gray" => ("E6E6E6", "616161"),
+        "black" => ("D9D9D9", "000000"),
+        _ => return None,
+    };
+    Some((fill.to_string(), line.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::named;
+
+    fn lum(hex: &str) -> f64 {
+        let c = |i: usize| {
+            let v = u8::from_str_radix(&hex[i..i + 2], 16).unwrap() as f64 / 255.0;
+            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * c(0) + 0.7152 * c(2) + 0.0722 * c(4)
+    }
+    fn contrast(a: &str, b: &str) -> f64 {
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn named_colours_are_pale_and_strong() {
+        for n in ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink", "brown", "grey", "gray", "black"] {
+            let (fill, line) = named(n).unwrap_or_else(|| panic!("{n}"));
+            assert!(contrast(&fill, "000000") >= 7.0, "{n} fill {fill} under black text: {}", contrast(&fill, "000000"));
+            assert!(contrast(&line, "FFFFFF") >= 3.0, "{n} line {line} on white: {}", contrast(&line, "FFFFFF"));
+        }
+        assert_eq!(named("Grey"), named("gray"));
+    }
+
+    #[test]
+    fn a_hex_is_taken_as_it_is() {
+        assert_eq!(named("#ff8800"), Some(("FF8800".into(), "FF8800".into())));
+        assert_eq!(named("12aB34"), Some(("12AB34".into(), "12AB34".into())));
+    }
+
+    #[test]
+    fn an_unknown_name_is_no_colour() {
+        for n in ["", "bluish", "12345", "GGGGGG", "none"] {
+            assert_eq!(named(n), None, "{n}");
+        }
+    }
 }
