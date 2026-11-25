@@ -460,8 +460,38 @@ pub struct Run {
 /// the editor then changes one of them. Empty when the line has no interior run (straight, or
 /// one corner), when it is `forced`, or when its runs do not fit what [`turned`] accepts.
 pub fn runs(lay: &Layout, a: usize, r: &Route) -> Vec<Run> {
-    let _ = (lay, a, r);
-    Vec::new()
+    let (Some(node), pts) = (lay.nodes.get(a), &r.points) else { return Vec::new() };
+    // first and last point plus at least one interior run: 3 runs, 4 points
+    if r.forced || pts.len() < 4 || lay.scale <= 0.0 {
+        return Vec::new();
+    }
+    let horizontal = |s: Side| matches!(s, Side::Left | Side::Right);
+    let first = horizontal(r.from_side);
+    // every run axis-aligned, longer than nothing, and alternating from the first block's side
+    // (a zero-length or collinear run would be dropped by `turned`'s simplify: refuse the line)
+    let ok = pts.windows(2).enumerate().all(|(j, w)| {
+        let (dx, dy) = ((w[1].0 - w[0].0).abs(), (w[1].1 - w[0].1).abs());
+        let hor = first ^ (j % 2 == 1);
+        dx.max(dy) > 1e-6 && if hor { dy <= 1e-6 } else { dx <= 1e-6 }
+    });
+    let n = pts.len() - 1;
+    if !ok || (first ^ ((n - 1) % 2 == 1)) != horizontal(r.to_side) {
+        return Vec::new();
+    }
+    // `turned` wants the line to leave and arrive straight out of / into its sides
+    let (fnrm, tnrm) = (r.from_side.normal(), r.to_side.normal());
+    let (d0, d1) = ((pts[1].0 - pts[0].0, pts[1].1 - pts[0].1), (pts[n].0 - pts[n - 1].0, pts[n].1 - pts[n - 1].1));
+    if d0.0 * fnrm.0 + d0.1 * fnrm.1 <= 1e-6 || d1.0 * tnrm.0 + d1.1 * tnrm.1 >= -1e-6 {
+        return Vec::new();
+    }
+    let (ox, oy) = node.origin;
+    (1..n - 1)
+        .map(|j| {
+            let vertical = !(first ^ (j % 2 == 1));
+            let value = if vertical { (pts[j].0 - ox) / lay.scale } else { (pts[j].1 - oy) / lay.scale };
+            Run { index: j - 1, vertical, value, a: pts[j], b: pts[j + 1] }
+        })
+        .collect()
 }
 
 /// The route with its interior runs moved to the author's coordinates (`turns`: the x of a
@@ -1193,5 +1223,141 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn synthetic(points: &[(f64, f64)], from: Side, to: Side, forced: bool) -> Route {
+        Route { edge: 0, points: points.to_vec(), from_side: from, to_side: to, from_site: 3, to_site: 1, forced, warnings: vec![] }
+    }
+
+    const Z: [(f64, f64); 4] = [(10.0, 10.0), (30.0, 10.0), (30.0, 40.0), (60.0, 40.0)];
+
+    const RUN_SRCS: [&str; 3] = [
+        "fig s\na: box \"A\"\nb: box \"Wide middle step\"\nc: box \"C\"\nd: box \"D\"\na -> b -> c -> d\na -> d : skip\nd -> a : feedback\na -> c : optional\n",
+        "fig f\na: image \"in\"\nb: box \"B\"\nc: box \"C\"\nd: op \"+\"\ne: box \"E\"\nf: loss \"L\"\ng: image \"gt\" role=gt\na -> b -> d -> e -> f\na -> c -> d\ng -> f : supervision\nf -> b : feedback\nf -> c : feedback\nb -> e : skip\n",
+        "fig t\na: box \"A\"\nb: box \"B\"\nd: box \"D\"\nc: box \"C\"\na -> c\nb -> c\nd -> c\n",
+    ];
+
+    fn ends_of(g: &Graph, r: &Route) -> (usize, usize) {
+        let e = &g.edges[r.edge];
+        (g.node_index(&e.from).unwrap(), g.node_index(&e.to).unwrap())
+    }
+
+    #[test]
+    fn runs_of_a_z_line_is_its_middle_run() {
+        let (_, f) = draw_plain(CHAIN);
+        let lay = &f.layout;
+        let v = runs(lay, 0, &synthetic(&Z, Side::Right, Side::Left, false));
+        assert_eq!(v.len(), 1);
+        assert_eq!((v[0].index, v[0].vertical, v[0].a, v[0].b), (0, true, (30.0, 10.0), (30.0, 40.0)));
+        assert!((v[0].value - (30.0 - lay.nodes[0].origin.0) / lay.scale).abs() < 1e-9);
+    }
+
+    #[test]
+    fn runs_of_a_straight_line_and_of_one_corner_are_empty() {
+        let (_, f) = draw_plain(CHAIN);
+        let lay = &f.layout;
+        let none = |pts: &[(f64, f64)], a: usize, from: Side, to: Side| runs(lay, a, &synthetic(pts, from, to, false)).is_empty();
+        assert!(none(&[(10.0, 10.0), (60.0, 10.0)], 0, Side::Right, Side::Left));
+        assert!(none(&[(10.0, 10.0), (60.0, 10.0), (60.0, 40.0)], 0, Side::Right, Side::Top));
+        // no panic on odd input
+        assert!(none(&[], 0, Side::Right, Side::Left));
+        assert!(none(&[(1.0, 1.0)], 0, Side::Right, Side::Left));
+        assert!(none(&Z, 99, Side::Right, Side::Left));
+        // a diagonal, a zero-length run, a wrong first orientation
+        assert!(none(&[(10.0, 10.0), (30.0, 12.0), (30.0, 40.0), (60.0, 40.0)], 0, Side::Right, Side::Left));
+        assert!(none(&[(10.0, 10.0), (30.0, 10.0), (30.0, 10.0), (30.0, 40.0), (60.0, 40.0)], 0, Side::Right, Side::Left));
+        assert!(none(&Z, 0, Side::Bottom, Side::Left));
+        // leaves backwards
+        assert!(none(&Z, 0, Side::Left, Side::Left));
+    }
+
+    #[test]
+    fn runs_of_a_forced_line_are_empty() {
+        let (_, f) = draw_plain(CHAIN);
+        assert!(runs(&f.layout, 0, &synthetic(&Z, Side::Right, Side::Left, true)).is_empty());
+    }
+
+    #[test]
+    fn runs_written_back_as_turns_give_the_same_points() {
+        let mut seen = 0;
+        for src in RUN_SRCS {
+            let (g, f) = draw_plain(src);
+            for r in &f.routes {
+                let (a, b) = ends_of(&g, r);
+                let v = runs(&f.layout, a, r);
+                if v.is_empty() {
+                    continue;
+                }
+                seen += 1;
+                assert!(v.iter().enumerate().all(|(i, u)| u.index == i));
+                let turns: Vec<f64> = v.iter().map(|u| u.value).collect();
+                let back = turned(&f.layout, a, b, r, &turns).unwrap_or_else(|| panic!("{:?}", r.points));
+                assert_eq!(back.len(), r.points.len(), "{back:?} vs {:?}", r.points);
+                assert!(back.iter().zip(&r.points).all(|(x, y)| near(*x, *y)), "{back:?} vs {:?}", r.points);
+                assert!(v.iter().all(|u| r.points.windows(2).any(|w| near(w[0], u.a) && near(w[1], u.b))));
+            }
+        }
+        assert!(seen >= 3, "only {seen} lines with runs");
+    }
+
+    #[test]
+    fn sliding_one_run_moves_only_that_run() {
+        let mut checked = 0;
+        for src in RUN_SRCS {
+            let (g, f) = draw_plain(src);
+            for r in &f.routes {
+                let (a, b) = ends_of(&g, r);
+                let v = runs(&f.layout, a, r);
+                for i in 0..v.len() {
+                    let mut t: Vec<f64> = v.iter().map(|u| u.value).collect();
+                    t[i] += 0.5;
+                    let Some(p) = turned(&f.layout, a, b, r, &t) else { continue };
+                    let w = runs(&f.layout, a, &Route { points: p, ..r.clone() });
+                    if w.len() != v.len() {
+                        continue;
+                    }
+                    checked += 1;
+                    for (j, (x, y)) in w.iter().zip(&v).enumerate() {
+                        let want = if j == i { y.value + 0.5 } else { y.value };
+                        assert!((x.value - want).abs() < 1e-6, "run {j} of {:?}", r.points);
+                    }
+                }
+            }
+        }
+        assert!(checked >= 1);
+    }
+
+    #[test]
+    fn runs_respect_a_scale_other_than_one() {
+        let g = dsl::parse(TWO_IN).unwrap();
+        let small = LayoutOptions { frame: Rect::new(0.0, 0.0, 120.0, 80.0), ..Default::default() };
+        let f = crate::draw(&g, &Drawing { options: small, ..Default::default() }).unwrap();
+        assert!((f.layout.scale - 1.0).abs() > 1e-3, "scale {}", f.layout.scale);
+        let r = edge(&g, &f, "a", "c");
+        let (a, b) = ends_of(&g, &r);
+        let v = runs(&f.layout, a, &r);
+        assert!(!v.is_empty(), "{:?}", r.points);
+        let turns: Vec<f64> = v.iter().map(|u| u.value).collect();
+        let back = turned(&f.layout, a, b, &r, &turns).unwrap();
+        assert!(back.iter().zip(&r.points).all(|(x, y)| near(*x, *y)));
+        let (ox, oy) = f.layout.nodes[a].origin;
+        let u = &v[0];
+        let want = if u.vertical { (u.a.0 - ox) / f.layout.scale } else { (u.a.1 - oy) / f.layout.scale };
+        assert!((u.value - want).abs() < 1e-9);
+    }
+
+    #[test]
+    fn runs_follow_turns_the_author_set() {
+        let (g, base) = draw_plain(TWO_IN);
+        let (a, c) = (&base.layout.nodes[0].rect, &base.layout.nodes[2].rect);
+        let x = a.right() + 0.7 * (c.x - a.right());
+        let t = natural(&base, x, false);
+        let (_, f) = draw_with(TWO_IN, &[], &[("a>c", ends(None, None, &[t]))]);
+        let r = edge(&g, &f, "a", "c");
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        let (a, _) = ends_of(&g, &r);
+        let v = runs(&f.layout, a, &r);
+        assert_eq!(v.len(), 1);
+        assert!(v[0].vertical && (v[0].value - t).abs() < 1e-6, "{v:?} vs {t}");
     }
 }
