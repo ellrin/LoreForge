@@ -136,3 +136,7 @@
 .lf-hands .lf-site { fill: #fff; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; cursor: pointer; }
 .lf-hands .lf-site.on, .lf-hands .lf-site:hover { fill: var(--accent); }
 .lf-hint { color: var(--muted); font-size: 12px; margin-left: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lf-hands .lf-turn { fill: var(--accent); stroke: #fff; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.lf-hands .lf-turn.x { cursor: ew-resize; }
+.lf-hands .lf-turn.y { cursor: ns-resize; }
+.lf-hands .lf-turn-ghost { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }

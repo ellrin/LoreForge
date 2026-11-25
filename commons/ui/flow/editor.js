@@ -330,8 +330,45 @@
           });
         }
       }
+      // the picked line's runs that may be slid: a short bar on each, dragged across its run;
+      // every run's place is written (`turns`), the dragged one changed
+      if (e) {
+        const k0 = Math.max(1, unit()), sc = geom.scale || 1;
+        for (const r of e.runs ?? []) {
+          const vert = r.axis === "x", mid = [(r.a[0] + r.b[0]) / 2, (r.a[1] + r.b[1]) / 2];
+          const len = Math.min(22 * k0, Math.max(8 * k0, Math.hypot(r.b[0] - r.a[0], r.b[1] - r.a[1]) * 0.6)), th = 7 * k0;
+          const [w, hh] = vert ? [th, len] : [len, th];
+          const bar = sv("rect", { x: mid[0] - w / 2, y: mid[1] - hh / 2, width: w, height: hh, rx: th / 2, class: `lf-turn ${vert ? "x" : "y"}` });
+          bar.addEventListener("click", (ev) => ev.stopPropagation());
+          bar.addEventListener("pointerdown", (ev) => {
+            if (ev.button !== 0) return;
+            ev.preventDefault(); ev.stopPropagation();
+            try { bar.setPointerCapture(ev.pointerId); } catch { /* as for a block */ }
+            const start = vert ? ev.clientX : ev.clientY, k = unit();
+            const ghost = sv("path", { class: "lf-turn-ghost" });
+            let d = 0;
+            const move = (m) => {
+              d = ((vert ? m.clientX : m.clientY) - start) * k;
+              if (!ghost.isConnected && Math.abs(d) > 2 * k) layer.append(ghost);
+              const pts = e.points.map((q) => [...q]), i = r.index + 1;   // the run joins points i and i+1
+              for (const j of [i, i + 1]) if (pts[j]) pts[j][vert ? 0 : 1] += d;
+              ghost.setAttribute("d", pts.map((q, n) => `${n ? "L" : "M"}${q[0]} ${q[1]}`).join(" "));
+              bar.setAttribute(vert ? "x" : "y", (vert ? mid[0] - w / 2 : mid[1] - hh / 2) + d);
+            };
+            const up = () => {
+              bar.removeEventListener("pointermove", move); bar.removeEventListener("pointerup", up); bar.removeEventListener("pointercancel", up);
+              ghost.remove();
+              if (Math.abs(d) <= 2 * k) { draw(); return; }
+              const turns = e.runs.map((u) => Math.round((u.value + (u.index === r.index ? d / sc : 0)) * 10) / 10);
+              change((sp) => { sp.ends = { ...(sp.ends ?? {}), [e.key]: { ...(sp.ends?.[e.key] ?? {}), turns } }; });
+            };
+            bar.addEventListener("pointermove", move); bar.addEventListener("pointerup", up); bar.addEventListener("pointercancel", up);
+          });
+          layer.append(bar);
+        }
+      }
       svg.addEventListener("click", () => { if (picked) { picked = null; draw(); } });
-      hint.textContent = picked ? "點一個點：這條線改接那裡。連按兩下線：交回自動" : "拖方塊：箭頭跟著走。點一條線：選接點。連按兩下：放回原位";
+      hint.textContent = picked ? (e?.runs?.length ? "點一個點：改接那裡。拖短桿：移動轉彎。連按兩下線：交回自動" : "點一個點：這條線改接那裡。連按兩下線：交回自動") : "拖方塊：箭頭跟著走。點一條線：選接點。連按兩下：放回原位";
     }
     new ResizeObserver(() => { clearTimeout(timer); timer = setTimeout(draw, 120); }).observe(stage);
 
