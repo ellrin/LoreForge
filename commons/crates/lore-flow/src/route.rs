@@ -76,6 +76,12 @@ pub struct Route {
     /// What went wrong with the author's choices for this line (a point or a turn that could
     /// not be honoured); `build` passes them on as warnings.
     pub warnings: Vec<String>,
+    /// The edge asked to be drawn as one smooth curve ([`curve_path`]); the points stay the
+    /// orthogonal route.
+    pub curve: bool,
+    /// The line leaves the middle of another line (`Edge.off`), not a block: `points[0]` is on
+    /// that line, `from_site` is 0 and it has no slidable runs.
+    pub branch: bool,
 }
 
 impl Route {
@@ -377,7 +383,14 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
             }
         }
     }
-    let first = run(g, lay, &fixed1, None);
+    let parent = branch_parents(g, &keys);
+    let skip: Vec<bool> = parent.iter().map(Option::is_some).collect();
+    for (ei, e) in g.edges.iter().enumerate() {
+        if !e.off.is_empty() && parent[ei].is_none() {
+            notes[ei].push(format!("{}: 找不到要岔出的線", name(ei)));
+        }
+    }
+    let first = run(g, lay, &fixed1, None, &skip);
 
     // the point on each side: lines sharing a side of a block, in the order of their other ends
     struct Use {
@@ -389,7 +402,7 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
     let mut groups: BTreeMap<(usize, Side), Vec<Use>> = BTreeMap::new();
     let mut fixed2 = vec![[End::Free; 2]; ne];
     for (ei, r) in first.iter().enumerate() {
-        if r.forced {
+        if r.forced || skip[ei] {
             continue;
         }
         let e = &g.edges[ei];
@@ -422,11 +435,11 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
             moved |= slot != 2;
         }
     }
-    let mut out = if moved { run(g, lay, &fixed2, Some(&first)) } else { first };
+    let mut out = if moved { run(g, lay, &fixed2, Some(&first), &skip) } else { first };
 
     // where the author wants the line to turn
     for (ei, key) in keys.iter().enumerate() {
-        let Some(c) = ends.get(key).filter(|c| !c.turns.is_empty()) else { continue };
+        let Some(c) = ends.get(key).filter(|c| !c.turns.is_empty() && !skip[ei]) else { continue };
         let e = &g.edges[ei];
         let (a, b) = (g.node_index(&e.from).unwrap(), g.node_index(&e.to).unwrap());
         match (!out[ei].forced).then(|| turned(lay, a, b, &out[ei], &c.turns)).flatten() {
@@ -434,10 +447,240 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
             None => notes[ei].push(format!("{}: 轉彎的位置無法照辦，已忽略", name(ei))),
         }
     }
-    for (r, n) in out.iter_mut().zip(notes) {
+    // the lines that leave the middle of another line, after the final paths of their parents
+    route_branches(g, lay, ends, &keys, &parent, &mut out, &mut notes);
+    for ((r, n), e) in out.iter_mut().zip(notes).zip(&g.edges) {
         r.warnings.extend(n);
+        r.curve = e.curve;
     }
     out
+}
+
+/// For every edge that leaves the middle of another line (`off`): the index of that line.
+/// `None` for an ordinary edge, and for an `off` edge whose key is unknown or that is part of a
+/// cycle of `off` edges (it is then routed from its block).
+fn branch_parents(g: &Graph, keys: &[String]) -> Vec<Option<usize>> {
+    let up = |ei: usize| -> Option<usize> {
+        let o = &g.edges[ei].off;
+        if o.is_empty() { None } else { keys.iter().position(|k| k == o) }
+    };
+    (0..g.edges.len())
+        .map(|ei| {
+            let p = up(ei)?;
+            let mut at = p;
+            for _ in 0..=g.edges.len() {
+                if at == ei {
+                    return None;
+                }
+                match up(at) {
+                    Some(n) => at = n,
+                    None => return Some(p),
+                }
+            }
+            // a cycle that does not contain this edge: its parent is still a line
+            Some(p)
+        })
+        .collect()
+}
+
+/// The first point of every line that leaves the middle of another line: where the drawer may
+/// put a dot.
+pub fn junctions(g: &Graph, routes: &[Route]) -> Vec<(f64, f64)> {
+    let _ = g;
+    routes.iter().filter(|r| r.branch).filter_map(|r| r.points.first().copied()).collect()
+}
+
+/// The control points `[p0, c1, c2, p3]` of the one cubic Bézier a curved line is drawn as:
+/// `c1` leaves the first point along its side's normal and `c2` reaches the last one against its
+/// side's normal, each 40 % of the straight distance between the ends away (at least 12 pt;
+/// the route does not know the figure's scale, so the minimum is in natural units). `None` for
+/// a line that is not curved, is `forced`, or has fewer than two points.
+pub fn curve_path(r: &Route) -> Option<Vec<(f64, f64)>> {
+    if !r.curve || r.forced || r.points.len() < 2 {
+        return None;
+    }
+    let (p0, p3) = (r.points[0], *r.points.last().unwrap());
+    let d = ((p3.0 - p0.0).powi(2) + (p3.1 - p0.1).powi(2)).sqrt();
+    let len = (0.4 * d).max(12.0);
+    let (n0, n3) = (r.from_side.normal(), r.to_side.normal());
+    Some(vec![p0, (p0.0 + n0.0 * len, p0.1 + n0.1 * len), (p3.0 + n3.0 * len, p3.1 + n3.1 * len), p3])
+}
+
+/// Mark the grid edges that the polyline `pts` runs along, by `f` (h: grid edge index of a
+/// horizontal one, v: of a vertical one).
+fn along_grid(grid: &Grid, pts: &[(f64, f64)], mut h: impl FnMut(usize), mut v: impl FnMut(usize)) {
+    for w in pts.windows(2) {
+        if (w[0].1 - w[1].1).abs() < 1e-6 {
+            if let Some(j) = Grid::find(&grid.ys, w[0].1) {
+                for i in 0..grid.nx() - 1 {
+                    if grid.xs[i] >= w[0].0.min(w[1].0) - 1e-6 && grid.xs[i + 1] <= w[0].0.max(w[1].0) + 1e-6 {
+                        h(grid.hi(i, j));
+                    }
+                }
+            }
+        } else if (w[0].0 - w[1].0).abs() < 1e-6
+            && let Some(i) = Grid::find(&grid.xs, w[0].0)
+        {
+            for j in 0..grid.ny() - 1 {
+                if grid.ys[j] >= w[0].1.min(w[1].1) - 1e-6 && grid.ys[j + 1] <= w[0].1.max(w[1].1) + 1e-6 {
+                    v(grid.vi(i, j));
+                }
+            }
+        }
+    }
+}
+
+/// Route the branches, parents first. A branch starts on its parent's final path, at a point
+/// from which the rest of the way to its block is cheapest; it leaves at a right angle to the
+/// run it starts on (never along it), at least 6 pt (scaled) from that run's ends when the run
+/// is long enough, and never inside a block.
+fn route_branches(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>, keys: &[String], parent: &[Option<usize>], out: &mut [Route], notes: &mut [Vec<String>]) {
+    let k = lay.scale;
+    let m = 7.0 * k;
+    let bend = 18.0 * k;
+    let margin = 6.0 * k;
+    let mut done: Vec<bool> = parent.iter().map(Option::is_none).collect();
+    while let Some(ei) = (0..parent.len()).find(|i| !done[*i] && done[parent[*i].unwrap()]) {
+        done[ei] = true;
+        let e = &g.edges[ei];
+        let pp: Vec<(f64, f64)> = out[parent[ei].unwrap()].points.clone();
+        let b = g.node_index(&e.to).unwrap();
+        let a = g.node_index(&e.from).unwrap();
+        let nb = &lay.nodes[b];
+        // the author's point on the target, if any
+        let mut fixed = vec![[End::Free; 2]; g.edges.len()];
+        if let Some(Some(s)) = ends.get(&keys[ei]).map(|c| c.to)
+            && (s as usize) < SITES
+        {
+            fixed[ei][1] = End::Site(s);
+        }
+        // the axis-aligned segments of the parent, and tracks through them
+        let mut segs: Vec<((f64, f64), (f64, f64))> = Vec::new();
+        let (mut ex, mut ey) = (Vec::new(), Vec::new());
+        for w in pp.windows(2) {
+            let horiz = (w[0].1 - w[1].1).abs() < 1e-6;
+            let vert = (w[0].0 - w[1].0).abs() < 1e-6;
+            if horiz == vert {
+                continue;
+            }
+            let (lo, hi) = if horiz { (w[0].0.min(w[1].0), w[0].0.max(w[1].0)) } else { (w[0].1.min(w[1].1), w[0].1.max(w[1].1)) };
+            let (lo, hi) = if hi - lo >= 2.0 * margin { (lo + margin, hi - margin) } else { ((lo + hi) / 2.0, (lo + hi) / 2.0) };
+            for t in [lo, (lo + hi) / 2.0, hi] {
+                if horiz {
+                    ex.push(t);
+                } else {
+                    ey.push(t);
+                }
+            }
+            if horiz {
+                ey.push(w[0].1);
+            } else {
+                ex.push(w[0].0);
+            }
+            segs.push((w[0], w[1]));
+        }
+        let (mut grid, walls) = make_grid(g, lay, &fixed, &ex, &ey);
+        // the lines already drawn count as used (a branch may cross them but not run on them)
+        for (ej, r) in out.iter().enumerate() {
+            if ej == ei || !done[ej] || r.forced {
+                continue;
+            }
+            let who = (g.node_index(&g.edges[ej].from).unwrap(), g.node_index(&g.edges[ej].to).unwrap());
+            let (mut hs, mut vs) = (Vec::new(), Vec::new());
+            along_grid(&grid, &r.points, |i| hs.push(i), |i| vs.push(i));
+            for i in hs {
+                grid.h_use[i].push(who);
+            }
+            for i in vs {
+                grid.v_use[i].push(who);
+            }
+        }
+        // the parent's own tracks are not a way for the branch
+        for (p, q) in &segs {
+            let (mut hs, mut vs) = (Vec::new(), Vec::new());
+            along_grid(&grid, &[*p, *q], |i| hs.push(i), |i| vs.push(i));
+            for i in hs {
+                grid.h_block[i] = true;
+            }
+            for i in vs {
+                grid.v_block[i] = true;
+            }
+        }
+        // starts: a grid point on a parent segment, leaving at a right angle
+        let mut starts: Vec<Port> = Vec::new();
+        for (p, q) in &segs {
+            let horiz = (p.1 - q.1).abs() < 1e-6;
+            let (lo, hi) = if horiz { (p.0.min(q.0), p.0.max(q.0)) } else { (p.1.min(q.1), p.1.max(q.1)) };
+            let (lo, hi) = if hi - lo >= 2.0 * margin { (lo + margin - 1e-6, hi - margin + 1e-6) } else { ((lo + hi) / 2.0 - 1e-6, (lo + hi) / 2.0 + 1e-6) };
+            let along: &[f64] = if horiz { &grid.xs } else { &grid.ys };
+            for &t in along {
+                if t < lo || t > hi {
+                    continue;
+                }
+                let pt = if horiz { (t, p.1) } else { (p.0, t) };
+                if lay.nodes.iter().any(|n| n.reserve.x < pt.0 && pt.0 < n.reserve.right() && n.reserve.y < pt.1 && pt.1 < n.reserve.bottom()) {
+                    continue;
+                }
+                let (Some(i), Some(j)) = (Grid::find(&grid.xs, pt.0), Grid::find(&grid.ys, pt.1)) else { continue };
+                let sides = if horiz { [Side::Top, Side::Bottom] } else { [Side::Left, Side::Right] };
+                for s in sides {
+                    starts.push((s, pt, (i, j), 0.0));
+                }
+            }
+        }
+        // goals: the sides of the target block
+        let mut goals: Vec<Port> = Vec::new();
+        let mut g_slots: Vec<usize> = Vec::new();
+        let opts: Vec<(Side, usize)> = match fixed[ei][1] {
+            End::Free => Side::ALL.iter().map(|s| (*s, 2)).collect(),
+            End::Site(s) => sides_of(s).into_iter().map(|(sd, sl)| (sd, if nb.ellipse { 2 } else { sl })).collect(),
+            End::At(sd, sl) => vec![(sd, sl)],
+        };
+        let from_rect = &lay.nodes[a].rect;
+        let down = lay.panels[nb.panel].down;
+        for (s, slot) in opts {
+            let p = site_point(nb, s, slot);
+            let esc = match s {
+                Side::Left => (nb.reserve.x - m, p.1),
+                Side::Right => (nb.reserve.right() + m, p.1),
+                Side::Top => (p.0, nb.reserve.y - m),
+                Side::Bottom => (p.0, nb.reserve.bottom() + m),
+            };
+            let (Some(i), Some(j)) = (Grid::find(&grid.xs, esc.0), Grid::find(&grid.ys, esc.1)) else { continue };
+            if walls.iter().enumerate().any(|(wi, w)| wi != b && segment_hits(p, esc, w)) {
+                continue;
+            }
+            let is_op = g.nodes[b].module == "op";
+            let cost = side_cost(e.kind, false, s, &nb.rect, from_rect, down, false, is_op, k) + (esc.0 - p.0).abs() + (esc.1 - p.1).abs();
+            goals.push((s, p, (i, j), cost));
+            g_slots.push(slot);
+        }
+        match astar(&grid, &starts, &goals, (a, b), bend, k) {
+            Some((path, si, gi)) => {
+                let (s_side, s_pt, _, _) = starts[si];
+                let (g_side, g_port, _, _) = goals[gi];
+                let mut pts = vec![s_pt];
+                pts.extend(path.iter().map(|(i, j)| (grid.xs[*i], grid.ys[*j])));
+                pts.push(g_port);
+                out[ei] = Route { edge: ei, points: simplify(pts), from_side: s_side, to_side: g_side, from_site: 0, to_site: site_of(g_side, g_slots[gi]), forced: false, warnings: Vec::new(), curve: false, branch: true };
+            }
+            None => {
+                // nothing clear: straight from the middle of the parent's line to the nearest side
+                let from = match pp.len() {
+                    0 => (0.0, 0.0),
+                    1 => pp[0],
+                    n => ((pp[n / 2 - 1].0 + pp[n / 2].0) / 2.0, (pp[n / 2 - 1].1 + pp[n / 2].1) / 2.0),
+                };
+                let dist = |x: &Side| {
+                    let q = nb.port(*x);
+                    (from.0 - q.0).abs() + (from.1 - q.1).abs()
+                };
+                let t = Side::ALL.iter().copied().min_by(|s, t| dist(s).partial_cmp(&dist(t)).unwrap_or(Ordering::Equal)).unwrap_or(Side::Left);
+                notes[ei].push(format!("{} → {}: 找不到乾淨的路線，岔出的線畫成直線", e.from, e.to));
+                out[ei] = Route { edge: ei, points: vec![from, nb.port(t)], from_side: t.opposite(), to_side: t, from_site: 0, to_site: site_of(t, 2), forced: true, warnings: Vec::new(), curve: false, branch: true };
+            }
+        }
+    }
 }
 
 /// One run of a routed line the author may slide: an interior run, between the run that leaves
@@ -462,7 +705,7 @@ pub struct Run {
 pub fn runs(lay: &Layout, a: usize, r: &Route) -> Vec<Run> {
     let (Some(node), pts) = (lay.nodes.get(a), &r.points) else { return Vec::new() };
     // first and last point plus at least one interior run: 3 runs, 4 points
-    if r.forced || pts.len() < 4 || lay.scale <= 0.0 {
+    if r.forced || r.branch || pts.len() < 4 || lay.scale <= 0.0 {
         return Vec::new();
     }
     let horizontal = |s: Side| matches!(s, Side::Left | Side::Right);
@@ -539,13 +782,12 @@ fn turned(lay: &Layout, a: usize, b: usize, r: &Route, turns: &[f64]) -> Option<
     Some(simplify(pts))
 }
 
-/// One routing pass. `fixed` says, per edge, how each end is tied to its block; `fallback` is an
-/// earlier pass whose route is kept for an edge this pass cannot route.
-fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>) -> Vec<Route> {
+/// The routing grid of a layout: its tracks, the walls no line may pass through and the cost of
+/// crossing a panel border. `extra_x` / `extra_y` are tracks to add (always kept).
+fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra_y: &[f64]) -> (Grid, Vec<Rect>) {
     let k = lay.scale;
     let m = 7.0 * k; // distance of a line from a module
     let c = 3.0 * k; // clearance that counts as "through"
-    let bend = 18.0 * k;
     let obstacles: Vec<Rect> = lay.nodes.iter().map(|n| n.reserve.inflate(c)).collect();
     let mut walls: Vec<Rect> = obstacles.clone();
     walls.extend(lay.panels.iter().filter_map(|p| p.title_rect));
@@ -613,6 +855,12 @@ fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>) 
                 }
             }
         }
+    }
+    for x in extra_x {
+        lx.push((*x, 1.0, true));
+    }
+    for y in extra_y {
+        ly.push((*y, 1.0, true));
     }
     let (xs, xw) = axis(lx, 2.5 * k);
     let (ys, yw) = axis(ly, 2.5 * k);
@@ -684,6 +932,16 @@ fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>) 
             }
         }
     }
+    (grid, walls)
+}
+
+/// One routing pass. `fixed` says, per edge, how each end is tied to its block; `fallback` is an
+/// earlier pass whose route is kept for an edge this pass cannot route.
+fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>, skip: &[bool]) -> Vec<Route> {
+    let k = lay.scale;
+    let m = 7.0 * k; // distance of a line from a module
+    let bend = 18.0 * k;
+    let (mut grid, walls) = make_grid(g, lay, fixed, &[], &[]);
 
     // short flow lines first, then the lines that go around
     let centre_dist = |e: &Edge| {
@@ -704,6 +962,10 @@ fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>) 
 
     let mut out: Vec<Option<Route>> = vec![None; g.edges.len()];
     for ei in order {
+        if skip[ei] {
+            out[ei] = Some(Route { edge: ei, points: Vec::new(), from_side: Side::Right, to_side: Side::Left, from_site: 0, to_site: 0, forced: false, warnings: Vec::new(), curve: false, branch: true });
+            continue;
+        }
         let e = &g.edges[ei];
         let (a, b) = (g.node_index(&e.from).unwrap(), g.node_index(&e.to).unwrap());
         let (na, nb) = (&lay.nodes[a], &lay.nodes[b]);
@@ -767,7 +1029,7 @@ fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>) 
                 let mut pts = vec![s_port];
                 pts.extend(path.iter().map(|(i, j)| (grid.xs[*i], grid.ys[*j])));
                 pts.push(g_port);
-                Route { edge: ei, points: simplify(pts), from_side: s_side, to_side: g_side, from_site: site_of(s_side, s_slots[si]), to_site: site_of(g_side, g_slots[gi]), forced: false, warnings: Vec::new() }
+                Route { edge: ei, points: simplify(pts), from_side: s_side, to_side: g_side, from_site: site_of(s_side, s_slots[si]), to_site: site_of(g_side, g_slots[gi]), forced: false, warnings: Vec::new(), curve: false, branch: false }
             }
             None if fallback.is_some_and(|f| !f[ei].forced) => fallback.unwrap()[ei].clone(),
             None => {
@@ -782,7 +1044,7 @@ fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>) 
                         }
                     }
                 }
-                Route { edge: ei, points: vec![na.port(best.1), nb.port(best.2)], from_side: best.1, to_side: best.2, from_site: site_of(best.1, 2), to_site: site_of(best.2, 2), forced: true, warnings: Vec::new() }
+                Route { edge: ei, points: vec![na.port(best.1), nb.port(best.2)], from_side: best.1, to_side: best.2, from_site: site_of(best.1, 2), to_site: site_of(best.2, 2), forced: true, warnings: Vec::new(), curve: false, branch: false }
             }
         };
         out[ei] = Some(r);
@@ -1226,7 +1488,7 @@ mod tests {
     }
 
     fn synthetic(points: &[(f64, f64)], from: Side, to: Side, forced: bool) -> Route {
-        Route { edge: 0, points: points.to_vec(), from_side: from, to_side: to, from_site: 3, to_site: 1, forced, warnings: vec![] }
+        Route { edge: 0, points: points.to_vec(), from_side: from, to_side: to, from_site: 3, to_site: 1, forced, warnings: vec![], curve: false, branch: false }
     }
 
     const Z: [(f64, f64); 4] = [(10.0, 10.0), (30.0, 10.0), (30.0, 40.0), (60.0, 40.0)];
@@ -1359,5 +1621,222 @@ mod tests {
         let v = runs(&f.layout, a, &r);
         assert_eq!(v.len(), 1);
         assert!(v[0].vertical && (v[0].value - t).abs() < 1e-6, "{v:?} vs {t}");
+    }
+
+    // ---- lines that leave the middle of another line, and curved lines ----
+
+    fn draw_graph(g: &Graph, place: &[(&str, [f64; 2])]) -> Figure {
+        let options = LayoutOptions { place: place.iter().map(|(k, v)| (k.to_string(), *v)).collect(), ..Default::default() };
+        crate::draw(g, &Drawing { options, ..Default::default() }).unwrap()
+    }
+
+    /// a -> b -> c in a row and d; `d` is fed from the line a>b (when `off` says so).
+    const BRANCH_SRC: &str = "fig m\na: box \"A\"\nb: box \"B\"\nc: box \"C\"\nd: box \"D\"\na -> b -> c\na -> d\n";
+
+    fn branch_graph(off: &str) -> Graph {
+        let mut g = dsl::parse(BRANCH_SRC).unwrap();
+        let i = g.edges.iter().position(|e| e.to == "d").unwrap();
+        g.edges[i].off = off.to_string();
+        g
+    }
+
+    fn branch_of(g: &Graph, f: &Figure) -> Route {
+        f.routes.iter().find(|r| g.edges[r.edge].to == "d").unwrap().clone()
+    }
+
+    fn on_path(p: (f64, f64), path: &[(f64, f64)]) -> bool {
+        path.windows(2).any(|w| p.0 >= w[0].0.min(w[1].0) - 1e-6 && p.0 <= w[0].0.max(w[1].0) + 1e-6 && p.1 >= w[0].1.min(w[1].1) - 1e-6 && p.1 <= w[0].1.max(w[1].1) + 1e-6)
+    }
+
+    const PLACE_D: [(&str, [f64; 2]); 1] = [("d", [40.0, 80.0])];
+
+    #[test]
+    fn a_branch_starts_on_its_parent_line() {
+        let g = branch_graph("a>b");
+        let f = draw_graph(&g, &PLACE_D);
+        let r = branch_of(&g, &f);
+        assert!(r.branch && !r.forced, "{r:?}");
+        assert_eq!(r.from_site, 0);
+        let parent = edge(&g, &f, "a", "b");
+        assert!(on_path(r.points[0], &parent.points), "{:?} not on {:?}", r.points[0], parent.points);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    }
+
+    #[test]
+    fn a_branch_ends_at_its_block() {
+        let g = branch_graph("a>b");
+        let f = draw_graph(&g, &PLACE_D);
+        let r = branch_of(&g, &f);
+        let d = g.node_index("d").unwrap();
+        assert!(on_boundary(*r.points.last().unwrap(), &f.layout.nodes[d].rect), "{:?}", r.points);
+    }
+
+    #[test]
+    fn a_branch_leaves_at_a_right_angle() {
+        let g = branch_graph("a>b");
+        let f = draw_graph(&g, &PLACE_D);
+        let r = branch_of(&g, &f);
+        let parent = edge(&g, &f, "a", "b");
+        let seg = parent.points.windows(2).find(|w| on_path(r.points[0], &[w[0], w[1]])).unwrap();
+        let along = if (seg[0].1 - seg[1].1).abs() < 1e-6 { (1.0, 0.0) } else { (0.0, 1.0) };
+        let first = (r.points[1].0 - r.points[0].0, r.points[1].1 - r.points[0].1);
+        assert!(first.0 * along.0 + first.1 * along.1 < 1e-6 && first.0.abs() + first.1.abs() > 1e-6, "{:?}", r.points);
+        let n = r.from_side.normal();
+        assert!(first.0 * n.0 + first.1 * n.1 > 0.0, "side {:?} vs {first:?}", r.from_side);
+    }
+
+    #[test]
+    fn a_branch_does_not_start_inside_a_block() {
+        let g = branch_graph("a>b");
+        let f = draw_graph(&g, &PLACE_D);
+        let r = branch_of(&g, &f);
+        let p = r.points[0];
+        for n in &f.layout.nodes {
+            assert!(!(p.0 > n.rect.x + 1e-6 && p.0 < n.rect.right() - 1e-6 && p.1 > n.rect.y + 1e-6 && p.1 < n.rect.bottom() - 1e-6), "{p:?} in {:?}", n.rect);
+        }
+        let d = g.node_index("d").unwrap();
+        for (ni, n) in f.layout.nodes.iter().enumerate().filter(|(i, _)| *i != d) {
+            assert!(!r.points.windows(2).any(|w| segment_hits(w[0], w[1], &n.rect)), "cuts block {ni}: {:?}", r.points);
+        }
+    }
+
+    #[test]
+    fn a_branch_follows_when_its_parent_is_moved() {
+        let g = branch_graph("a>b");
+        let f = draw_graph(&g, &[("d", [40.0, 80.0]), ("b", [60.0, 30.0])]);
+        let r = branch_of(&g, &f);
+        let parent = edge(&g, &f, "a", "b");
+        assert!(on_path(r.points[0], &parent.points), "{:?} not on the moved parent {:?}", r.points[0], parent.points);
+        let plain = draw_graph(&g, &PLACE_D);
+        assert_ne!(edge(&g, &plain, "a", "b").points, parent.points);
+    }
+
+    #[test]
+    fn a_branch_off_a_branch() {
+        let mut g = dsl::parse("fig m\na: box \"A\"\nb: box \"B\"\nc: box \"C\"\nd: box \"D\"\ne: box \"E\"\na -> b -> c\na -> d\nd -> e\n").unwrap();
+        let ia = g.edges.iter().position(|e| e.to == "d").unwrap();
+        let ib = g.edges.iter().position(|e| e.from == "d").unwrap();
+        g.edges[ia].off = "a>b".into();
+        g.edges[ib].off = "a>d".into();
+        let f = draw_graph(&g, &[("d", [40.0, 80.0]), ("e", [90.0, 80.0])]);
+        let (r1, r2) = (&f.routes[ia], &f.routes[ib]);
+        assert!(r1.branch && r2.branch && !r1.forced && !r2.forced, "{r1:?} {r2:?}");
+        assert!(on_path(r2.points[0], &r1.points), "{:?} not on {:?}", r2.points[0], r1.points);
+        let e = g.node_index("e").unwrap();
+        assert!(on_boundary(*r2.points.last().unwrap(), &f.layout.nodes[e].rect));
+        assert_eq!(junctions(&g, &f.routes).len(), 2);
+    }
+
+    #[test]
+    fn an_unknown_parent_is_an_ordinary_line_and_a_warning() {
+        // a figure whose line names a line it does not have is refused when it is checked, so
+        // the router is asked directly here: it draws an ordinary line and says so
+        let g = branch_graph("x>y");
+        assert!(crate::draw(&g, &Drawing::default()).is_err(), "validation names the line");
+        let mut plain = g.clone();
+        plain.edges.iter_mut().for_each(|e| e.off.clear());
+        let lay = draw_graph(&plain, &PLACE_D).layout;
+        let routes = route_with(&g, &lay, &BTreeMap::new());
+        let r = routes.iter().find(|r| g.edges[r.edge].to == "d").unwrap();
+        let (a, d) = (g.node_index("a").unwrap(), g.node_index("d").unwrap());
+        assert!(!r.branch);
+        assert!(on_boundary(r.points[0], &lay.nodes[a].rect));
+        assert!(on_boundary(*r.points.last().unwrap(), &lay.nodes[d].rect));
+        assert!(r.warnings.iter().any(|w| w.contains("找不到要岔出的線")), "{:?}", r.warnings);
+        // a cycle passes the check and is the same
+        let mut g = dsl::parse("fig m\na: box \"A\"\nb: box \"B\"\nc: box \"C\"\na -> b\nb -> c\n").unwrap();
+        g.edges[0].off = "b>c".into();
+        g.edges[1].off = "a>b".into();
+        let f = draw_graph(&g, &[]);
+        assert!(f.routes.iter().all(|r| !r.branch && r.warnings.iter().any(|w| w.contains("找不到要岔出的線"))));
+        assert!(junctions(&g, &f.routes).is_empty());
+    }
+
+    #[test]
+    fn a_branch_has_no_slidable_runs() {
+        let g = branch_graph("a>b");
+        let f = draw_graph(&g, &PLACE_D);
+        let r = branch_of(&g, &f);
+        let a = g.node_index("a").unwrap();
+        assert!(runs(&f.layout, a, &r).is_empty());
+        let mut z = synthetic(&Z, Side::Right, Side::Left, false);
+        assert!(!runs(&f.layout, 0, &z).is_empty());
+        z.branch = true;
+        assert!(runs(&f.layout, 0, &z).is_empty());
+    }
+
+    #[test]
+    fn junctions_are_the_branch_points() {
+        let g = branch_graph("a>b");
+        let f = draw_graph(&g, &PLACE_D);
+        let r = branch_of(&g, &f);
+        assert_eq!(junctions(&g, &f.routes), vec![r.points[0]]);
+        let plain = dsl::parse(BRANCH_SRC).unwrap();
+        let f = draw_graph(&plain, &[]);
+        assert!(junctions(&plain, &f.routes).is_empty());
+    }
+
+    fn curved_graph() -> Graph {
+        let mut g = dsl::parse(CHAIN).unwrap();
+        g.edges[0].curve = true;
+        g
+    }
+
+    #[test]
+    fn a_curved_line_keeps_its_ends_and_says_curve() {
+        let f = draw_graph(&curved_graph(), &[]);
+        let plain = draw_plain(CHAIN).1;
+        let (r, p) = (&f.routes[0], &plain.routes[0]);
+        assert!(r.curve && !f.routes[1].curve);
+        assert_eq!((&r.points, r.from_side, r.to_side, r.from_site, r.to_site), (&p.points, p.from_side, p.to_side, p.from_site, p.to_site));
+    }
+
+    #[test]
+    fn the_curve_leaves_and_arrives_along_the_sides() {
+        let f = draw_graph(&curved_graph(), &[]);
+        let r = &f.routes[0];
+        let c = curve_path(r).unwrap();
+        assert_eq!(c.len(), 4);
+        assert!(near(c[0], r.points[0]) && near(c[3], *r.points.last().unwrap()));
+        let (n0, n3) = (r.from_side.normal(), r.to_side.normal());
+        let (d0, d3) = ((c[1].0 - c[0].0, c[1].1 - c[0].1), (c[3].0 - c[2].0, c[3].1 - c[2].1));
+        assert!(d0.0 * n0.1 - d0.1 * n0.0 < 1e-9 && d0.0 * n0.0 + d0.1 * n0.1 > 0.0);
+        assert!(d3.0 * n3.1 - d3.1 * n3.0 < 1e-9 && d3.0 * n3.0 + d3.1 * n3.1 < 0.0);
+        let dist = ((c[3].0 - c[0].0).powi(2) + (c[3].1 - c[0].1).powi(2)).sqrt();
+        let len = (d0.0 * d0.0 + d0.1 * d0.1).sqrt();
+        assert!((len - (0.4 * dist).max(12.0)).abs() < 1e-6);
+        let mut s = synthetic(&[(0.0, 0.0), (10.0, 0.0)], Side::Right, Side::Left, false);
+        s.curve = true;
+        let c = curve_path(&s).unwrap();
+        assert!((c[1].0 - 12.0).abs() < 1e-9 && (c[2].0 + 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_plain_line_has_no_curve_path() {
+        let f = draw_plain(CHAIN).1;
+        assert!(f.routes.iter().all(|r| curve_path(r).is_none()));
+        let mut forced = synthetic(&Z, Side::Right, Side::Left, true);
+        forced.curve = true;
+        assert!(curve_path(&forced).is_none());
+    }
+
+    #[test]
+    fn routes_without_the_new_fields_are_what_they_were() {
+        // captured from the router before this change
+        let pts = |s: &str, i: usize| -> Vec<(f64, f64)> { draw_plain(s).1.routes[i].points.clone() };
+        assert_eq!(pts(CHAIN, 0), vec![(291.0, 202.5), (330.0, 202.5)]);
+        assert_eq!(pts(CHAIN, 1), vec![(390.0, 202.5), (429.0, 202.5)]);
+        assert_eq!(pts(TWO_IN, 0), vec![(340.5, 234.0), (360.0, 234.0), (360.0, 243.75), (379.5, 243.75)]);
+        assert_eq!(pts(TWO_IN, 1), vec![(340.5, 171.0), (360.0, 171.0), (360.0, 224.25), (379.5, 224.25)]);
+        let f = draw_plain(RUN_SRCS[0]).1;
+        let want: [(usize, &[(f64, f64)]); 3] = [
+            (0, &[(197.115, 192.75), (216.615, 192.75), (216.615, 202.5), (236.115, 202.5)]),
+            (3, &[(167.115, 183.0), (167.115, 172.5), (552.885, 172.5), (552.885, 183.0)]),
+            (4, &[(552.885, 222.0), (552.885, 246.0), (167.115, 246.0), (167.115, 222.0)]),
+        ];
+        for (i, p) in want {
+            assert!(f.routes[i].points.len() == p.len() && f.routes[i].points.iter().zip(p).all(|(a, b)| near(*a, *b)), "{i}: {:?}", f.routes[i].points);
+        }
+        assert!(f.routes.iter().all(|r| !r.branch && !r.curve));
     }
 }
