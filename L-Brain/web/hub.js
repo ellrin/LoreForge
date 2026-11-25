@@ -258,7 +258,7 @@ const Hub = (() => {
     const secs = S.tree?.tree?.length ? [] : Object.entries(S.sections ?? {}).sort((x, y) => y[1] - x[1]);
     if (secs.length > 1) out.push(el("h4", {}, "段落"), ...secs.map(([t, n]) => btn(t, n, f.section === t, () => { f.section = f.section === t ? "" : t; refresh(); })));
     for (const [facet, tags] of Object.entries(S.tags)) {
-      if (facet === "place" || (S.tree?.tree?.length && facet === "kind" && !isFigure(S.fam))) continue; // the tree shows places; the rows' old free tags are not a structure
+      if (facet === "place" || facet === "paper" || (S.tree?.tree?.length && facet === "kind" && !isFigure(S.fam))) continue; // the tree shows places; the rows' old free tags are not a structure
       const list = Object.entries(tags).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
       if (!list.length) continue;
       const open = f.more.has(facet), on = (t) => f.tags.has(`${facet}:${t}`);
@@ -340,8 +340,8 @@ const Hub = (() => {
   function detail(it, d, isNew) {
     const c = cat(it.category), def = fdef(it.format), form = !!(c?.writable && def?.form), meta = !!c && !c.independent;
     // what the form holds until 儲存
-    // which tag facets this family's form offers: on a tree, where the item sits, its paper and its tone
-    const metaKeys = S.tree?.tree?.length && !isFigure(S.fam) ? ["place", "paper", "tone"] : META;
+    // which tag facets this family's form offers: on a tree, where the item sits and its tone (which paper a sentence came from is not something the author sorts by)
+    const metaKeys = S.tree?.tree?.length && !isFigure(S.fam) ? ["place", "tone"] : META;
     const draft = { title: it.title ?? "", fields: { ...(it.fields ?? {}) }, tags: Object.fromEntries(metaKeys.map((k) => [k, (it.tags?.[k] ?? []).join("、")])), triggers: (it.triggers ?? []).join("、") };
     let saveBtn = null;
     const dirty = () => { if (saveBtn) saveBtn.disabled = false; };
