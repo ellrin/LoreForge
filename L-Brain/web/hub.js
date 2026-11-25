@@ -217,9 +217,16 @@ const Hub = (() => {
       const chosen = S.f.place && !"?=".includes(S.f.place[0]) ? (it.tags.place.find((x) => x === S.f.place || x.startsWith(`${S.f.place}/`)) ?? p) : p;
       return chosen.split("/").slice(Math.max(S.f.place && !"?=".includes(S.f.place[0]) ? S.f.place.split("/").length + 1 : 2, 0)).join(" › ");
     };
+    // a place holds sentences, short phrases and whole paragraphs: never one undivided run of them
+    const byKind = (items) => {
+      const order = S.fam.categories ?? [], kinds = [...new Set(items.map((it) => it.category))];
+      if (!S.tree?.tree?.length || isFigure(S.fam) || isCards() || kinds.length < 2) return items;
+      kinds.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      return kinds.flatMap((k) => { const v = items.filter((it) => it.category === k); return [{ kindHead: catLabel(k), n: v.length }, ...v]; });
+    };
     return el("div", {}, g.map((x, i) => el("details", { class: "h-grp", open: x.items.some((it) => it.id === S.sel) || (!x.folded && (g.length === 1 || i === 0)) },
       el("summary", {}, x.label, el("small", {}, x.items.length)),
-      x.items.map((it) => { const th = thumb(it); return el("button", { type: "button", class: `h-row ${th ? "" : "text"}`, "aria-selected": String(S.sel === it.id), onclick: () => open(it.id) }, th, el("span", { class: "t" }, it.title), el("span", { class: "d" }, side(it)), el("span", { class: "g" }, chips(it))); }))));
+      byKind(x.items).map((it) => { if (it.kindHead) return el("div", { class: "h-kind" }, it.kindHead, el("small", {}, it.n)); const th = thumb(it); return el("button", { type: "button", class: `h-row ${th ? "" : "text"}`, "aria-selected": String(S.sel === it.id), onclick: () => open(it.id) }, th, el("span", { class: "t" }, it.title), el("span", { class: "d" }, side(it)), el("span", { class: "g" }, chips(it))); }))));
   }
   /** The family's tree (段落 → 小節 → 使用時機) with how many items sit at or under each node. */
   function treePane() {
@@ -352,7 +359,24 @@ const Hub = (() => {
       return long ? el("textarea", { rows: fd.name === "body" ? 14 : 2, oninput: set, spellcheck: "false" }, String(v)) : el("input", { value: String(v), type: fd.kind === "number" ? "number" : "text", oninput: set });
     };
     // `what` (generator / drawing / spec / reference) is the program's word, not the author's
-    const fields = (def?.fields ?? []).filter((fd) => fd.name !== "what" && typeof (it.fields?.[fd.name] ?? "") !== "object");
+    const onTree = metaKeys.includes("place") && metaKeys.length === 2;
+    // beside a tree the place says where a sentence goes: the older section / function / position columns stay in the record, unseen
+    const fields = (def?.fields ?? []).filter((fd) => fd.name !== "what" && typeof (it.fields?.[fd.name] ?? "") !== "object" && !(onTree && ["section", "function", "position"].includes(fd.name)));
+    const allPlaces = () => (S.tree?.tree ?? []).flatMap((sec) => (sec.children ?? []).flatMap((sub) => (sub.children ?? []).map((leaf) => `${sec.label}/${sub.label}/${leaf.label ?? leaf}`)));
+    /** The places of an item as chips: ✕ takes one away, the menu adds one (the first is the main one). */
+    const placeEd = () => {
+      const box = el("div", { class: "h-places" });
+      const draw = () => {
+        const ps = split(draft.tags.place ?? "");
+        box.replaceChildren(...ps.map((p, i) => el("span", { class: i ? "pl" : "pl main" },
+          el("button", { type: "button", onclick: () => { S.f.place = p; refresh(); } }, p.split("/").join(" › ")),
+          el("button", { type: "button", class: "rm", "aria-label": "拿掉這個使用時機", onclick: () => { draft.tags.place = ps.filter((x) => x !== p).join("、"); dirty(); draw(); } }, "✕"))),
+          el("select", { "aria-label": "加一個使用時機", onchange: (e) => { const v = e.target.value; if (v && !ps.includes(v)) { draft.tags.place = [...ps, v].join("、"); dirty(); } draw(); } },
+            el("option", { value: "" }, "＋"), allPlaces().map((p) => el("option", { value: p }, p.split("/").join(" › ")))));
+      };
+      draw();
+      return box;
+    };
     const builtin = it.fields?.what === "generator";
     const link = (r) => el("button", { type: "button", class: "h-lk", onclick: () => open(r.id) }, thumb(r), r.title);
     const row = (fd) => form ? el("label", { class: "h-f" }, el("span", {}, fd.label, fd.required ? el("i", {}, "＊") : null), input(fd))
@@ -361,6 +385,7 @@ const Hub = (() => {
     async function save() {
       const first = (def?.fields ?? []).find((fd) => fd.required);
       const title = def?.shape === "row" ? String(draft.fields[first?.name] ?? draft.title).split("\n")[0].slice(0, 80) : draft.title.trim();
+      if (onTree && form && "section" in Object.fromEntries((def?.fields ?? []).map((fd) => [fd.name, 1])) && !draft.fields.section) { const sec = split(draft.tags.place ?? "")[0]?.split("/")[0]; if (sec) draft.fields.section = sec; }
       const body = { ...it, line: undefined, thumb: undefined, title, fields: form ? draft.fields : it.fields, triggers: split(draft.triggers),
         // the facets the form does not show are kept as they are
         tags: Object.fromEntries(Object.entries({ ...(it.tags ?? {}), ...Object.fromEntries(Object.entries(draft.tags).map(([k, v]) => [k, split(v)])) }).filter(([, v]) => v.length)) };
@@ -379,13 +404,13 @@ const Hub = (() => {
     const canMeta = meta && !isNew || form;
     return el("aside", { class: "h-detail" },
       el("div", { class: "hd" }, el("h3", {}, isNew ? `新增${c?.label ?? ""}` : it.title), el("button", { type: "button", class: "x", "aria-label": "關閉", onclick: close }, "✕")),
-      isNew ? null : el("div", { class: "ln" }, [c?.label, it.entity === false ? "待製作" : (it.line ?? "").length > 70 ? null : it.line].filter(Boolean).join(" · ")),
+      isNew ? null : el("div", { class: "ln" }, [c?.label, it.entity === false ? "待製作" : onTree || (it.line ?? "").length > 70 ? null : it.line].filter(Boolean).join(" · ")),
       it.thumb ? el("span", { class: "h-paper stage" }, el("img", { src: it.thumb, alt: "" })) : null,
       form && def?.shape !== "row" ? el("label", { class: "h-f" }, el("span", {}, "名稱", el("i", {}, "＊")), el("input", { value: draft.title, oninput: (e) => { draft.title = e.target.value; dirty(); } })) : null,
       fields.map(row),
-      canMeta ? el("details", { class: "h-more", open: isNew ? null : (Object.values(it.tags ?? {}).flat().length || it.triggers?.length ? true : null) }, el("summary", {}, "標籤與關鍵字"), metaKeys.map((k) => metaIn(FACET[k], k, k === "place" ? "段落/小節/使用時機，可多個，用、分開" : "用、分開")), metaIn("觸發關鍵字", "triggers", "內容出現這些字就適用")) : [
+      canMeta ? el("details", { class: "h-more", open: isNew ? null : (Object.values(it.tags ?? {}).flat().length || it.triggers?.length ? true : null) }, el("summary", {}, "標籤與關鍵字"), metaKeys.map((k) => k === "place" && onTree ? [el("div", { class: "k" }, "使用時機"), placeEd()] : metaIn(FACET[k], k, k === "place" ? "段落/小節/使用時機，可多個，用、分開" : "用、分開")), metaIn("觸發關鍵字", "triggers", "內容出現這些字就適用")) : [
         Object.entries(it.tags ?? {}).map(([facet, ts]) => [el("div", { class: "k" }, FACET[facet] ?? facet), el("div", { class: "chips" }, ts.map((t) => el("span", { class: "h-tag" }, t)))])],
-      (it.tags?.place ?? []).length ? [el("div", { class: "k" }, "使用時機"), el("div", { class: "h-places" }, it.tags.place.map((p, i) => el("button", { type: "button", class: i ? "" : "main", onclick: () => { S.f.place = p; refresh(); } }, p.split("/").join(" › "))))] : null,
+      (it.tags?.place ?? []).length && !(onTree && canMeta) ? [el("div", { class: "k" }, "使用時機"), el("div", { class: "h-places" }, it.tags.place.map((p, i) => el("button", { type: "button", class: i ? "" : "main", onclick: () => { S.f.place = p; refresh(); } }, p.split("/").join(" › "))))] : null,
       d?.contains?.length ? [el("div", { class: "k" }, "由這些組成"), d.contains.map(link)] : null,
       d?.used_by?.length ? [el("div", { class: "k" }, "用在"), d.used_by.map(link)] : null,
       el("div", { class: "h-foot" }, c?.independent ? "不與 Lore 共用" : c?.tasks?.length ? `用在 ${c.tasks.length} 個步驟` : "還沒有步驟在用",

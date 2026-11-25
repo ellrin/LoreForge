@@ -281,3 +281,12 @@ label.h-plus { cursor: pointer; font-weight: 500; font-size: 12px; padding: 6px 
 .h-tags .multi[aria-checked="true"] { color: var(--text); }
 .h-tags .multi[aria-checked="true"] b { background: var(--accent); border-color: var(--accent); }
 .h-tags .multi[aria-checked="true"] b::after { content: ""; position: absolute; left: 3px; top: 0; width: 3px; height: 7px; border: solid var(--bg); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.h-places .pl { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; }
+.h-places .pl.main { border-color: var(--line-strong); }
+.h-places .pl button { border: 0; }
+.h-places .pl.main button:first-child { color: var(--text); }
+.h-places .pl .rm { padding: 3px 7px 3px 2px; color: var(--faint); font-size: 10px; }
+.h-places .pl .rm:hover { color: var(--text); }
+.h-places select { background: none; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); padding: 3px 6px; font-size: 12px; max-width: 100%; }
+.h-kind { font: 600 11px/1 var(--mono); color: var(--faint); letter-spacing: .08em; padding: 14px 8px 6px; }
+.h-kind small { margin-left: 8px; font-weight: 400; }
