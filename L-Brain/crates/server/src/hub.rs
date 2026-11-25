@@ -474,12 +474,16 @@ async fn items(State(s): State<Shared>, Query(pairs): Query<Vec<(String, String)
             let (ids, _) = h.index.query(&q)?;
             let ids: Vec<String> = ids.into_iter().filter(|id| split_id(id).is_some_and(|(c, _)| many.iter().any(|m| m == c))).collect();
             let total = ids.len();
-            let mut page = vec![];
-            for id in ids.iter().skip(offset).take(limit) {
-                if let Some(i) = h.store.get(id)? {
-                    page.push(i);
+            // each category is read once: reading an item by id reads its whole category again
+            // when the category lives in files (398 blocks took 94 s, one full read per row)
+            let wanted: Vec<&String> = ids.iter().skip(offset).take(limit).collect();
+            let mut by_id: std::collections::HashMap<String, Item> = std::collections::HashMap::new();
+            for c in many.iter().filter(|c| wanted.iter().any(|id| split_id(id).is_some_and(|(cat, _)| cat == c.as_str()))) {
+                for i in h.store.list(c)? {
+                    by_id.insert(i.id.clone(), i);
                 }
             }
+            let page: Vec<Item> = wanted.iter().filter_map(|id| by_id.remove(*id)).collect();
             (page, total)
         }
         None => {
