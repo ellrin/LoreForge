@@ -281,6 +281,11 @@ writable = true
         .to_string()
     }
 
+    /// The model's answer to "a timeline or a data flow?", asked before every draft.
+    fn kind(k: &str) -> String {
+        json!({ "kind": k, "why": "scripted" }).to_string()
+    }
+
     fn timeline_reply() -> String {
         json!({
             "title": "Release history", "style": "line-below",
@@ -361,7 +366,7 @@ writable = true
 
     #[tokio::test]
     async fn a_drafted_reference_leaves_its_spec_its_drawing_and_what_was_told() {
-        let e = setup(scripted(vec![graph_reply()]));
+        let e = setup(scripted(vec![kind("flow"), graph_reply()]));
         let out = e.dir.path().join("out");
         let made = go(&e, &out, &["t.flowrefs:f03".to_string()]).await;
         assert_eq!(made.len(), 1);
@@ -379,7 +384,7 @@ writable = true
 
     #[tokio::test]
     async fn the_references_picture_is_copied_beside_it() {
-        let e = setup(scripted(vec![graph_reply()]));
+        let e = setup(scripted(vec![kind("flow"), graph_reply()]));
         let out = e.dir.path().join("out");
         go(&e, &out, &["t.flowrefs:f01".to_string(), "t.flowrefs:f03".to_string()]).await;
         assert_eq!(std::fs::read(out.join("t_flowrefs_f01.ref.png")).unwrap(), PNG);
@@ -388,7 +393,7 @@ writable = true
 
     #[tokio::test]
     async fn a_timeline_reference_is_marked_and_drawn() {
-        let e = setup(scripted(vec![timeline_reply()]));
+        let e = setup(scripted(vec![kind("timeline"), timeline_reply()]));
         let out = e.dir.path().join("out");
         let made = go(&e, &out, &["t.flowrefs:f02".to_string()]).await;
         assert!(made[0].timeline, "{made:?}");
@@ -403,7 +408,7 @@ writable = true
         // the first reference gets an answer that is no figure twice (the draft asks again once),
         // the next a good one
         let bad = json!({ "nodes": [{ "id": "a", "module": "box", "label": "A" }], "edges": [{ "from": "a", "to": "zz" }] }).to_string();
-        let e = setup(scripted(vec![bad.clone(), bad, graph_reply()]));
+        let e = setup(scripted(vec![kind("flow"), bad.clone(), bad, kind("flow"), graph_reply()]));
         let out = e.dir.path().join("out");
         let mut seen = vec![];
         let made = run(e.app.clone(), &out, &["t.flowrefs:f01".to_string(), "t.flowrefs:f03".to_string()], &mut |n, t, m| seen.push((n, t, m.error.is_empty()))).await.unwrap();
@@ -448,7 +453,7 @@ writable = true
 
     #[tokio::test]
     async fn the_hub_is_unchanged_after_a_run() {
-        let e = setup(scripted(vec![graph_reply(), timeline_reply()]));
+        let e = setup(scripted(vec![kind("flow"), graph_reply(), kind("timeline"), timeline_reply()]));
         // one look first, so any lazily made file of the hub is there before the comparison
         let (_, _, _) = call(&e.app, "GET", "/api/hub/items?limit=5", None).await;
         let before = snapshot(&e.hubdir);
@@ -463,7 +468,7 @@ writable = true
 
     #[tokio::test]
     async fn the_index_lists_every_row_and_escapes_titles() {
-        let e = setup(scripted(vec![graph_reply()]));
+        let e = setup(scripted(vec![kind("flow"), graph_reply()]));
         let out = e.dir.path().join("out");
         let made = go(&e, &out, &[]).await;
         let html = std::fs::read_to_string(out.join("index.html")).unwrap();

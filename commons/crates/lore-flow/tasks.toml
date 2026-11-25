@@ -61,3 +61,23 @@ default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
 offline = true
 max_tokens = 3000
+
+# Before a draft from a reference: is it a timeline or a data flow? The model looks at the
+# picture; no rule on the title's words decides.
+[task.sc-flow-kind]
+label = "判斷圖的種類"
+class = "create"
+needs = { json = true, context = 8000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 300
+
+[task.sc-flow-kind-vision]
+label = "判斷圖的種類（含圖片）"
+class = "create"
+needs = { json = true, vision = true, context = 8000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 300

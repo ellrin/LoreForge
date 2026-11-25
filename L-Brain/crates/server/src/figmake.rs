@@ -169,12 +169,6 @@ async fn save(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<Mak
     ok(json!({ "figure": row(&h, &figure_item), "reference": row(&h, &reference_item) }))
 }
 
-/// Does the reference describe a time axis (drafted by the timeline task, not the box-and-arrow one)?
-fn is_timeline(r: &Item) -> bool {
-    let t = format!("{}\n{}", r.title, r.field("description")).to_lowercase();
-    t.contains("時間軸") || t.contains("timeline")
-}
-
 async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
     // everything from the hub first: the lock is not held over the model call
     let description = {
@@ -192,17 +186,20 @@ async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
         }
         // the hub's own catalogue: the drawings saved under every app's flow folder are offered,
         // not only the shared ones
-        (format!("{}\n\n{}", r.title, r.field("description")), image, is_timeline(&r), lore_know::flowknow::knowledge(&items), h.catalogue())
+        (format!("{}\n\n{}", r.title, r.field("description")), image, lore_know::flowknow::knowledge(&items), h.catalogue())
     };
-    let (description, image, timeline, know, cat) = (description.0, description.1, description.2, description.3, description.4);
+    let (description, image, know, cat) = (description.0, description.1, description.2, description.3);
     let llm = FlowLlm(s.llm.clone());
+    // a time axis or a data flow: the model looks at the picture and says (the words of the
+    // title decided before, and seven of twelve timelines were drawn as boxes and arrows)
+    let (timeline, why) = lore_flow::timeline::llm::is_timeline_via(&llm, &description, image.as_ref()).await.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
     if timeline {
         // only the styles that draw as written are offered
         let styles: Vec<lore_flow::timeline::Style> = cat.timelines.iter().filter(|st| st.cannot.is_empty()).cloned().collect();
         let prompt = lore_flow::timeline::llm::TimelinePrompt { description: &description, image, styles: &styles, language: "" };
         let (t, engine) = lore_flow::timeline::llm::propose_via(&llm, &prompt).await.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
         let spec = lore_flow::figure::FlowSpec { lore_flow: lore_flow::figure::VERSION, timeline: Some(t), ..Default::default() };
-        return ok(json!({ "spec": spec.to_value(), "engine": engine }));
+        return ok(json!({ "spec": spec.to_value(), "engine": engine, "kind": "timeline", "why": why }));
     }
     let examples = s.flow.examples(&cat.library);
     let prompt = lore_flow::llm::FlowPrompt { description: &description, image, notation: None, library: &cat.library, examples: &examples };
@@ -213,7 +210,7 @@ async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
         "modules": shown.modules.iter().map(|m| json!({ "kind": m.item.kind, "style": m.item.style, "title": m.item.title, "why": m.why })).collect::<Vec<_>>(),
         "examples": shown.examples.iter().map(|x| json!({ "id": x.item.id, "title": x.item.title, "why": x.why })).collect::<Vec<_>>(),
     });
-    ok(json!({ "spec": spec.to_value(), "engine": p.provider, "told": told }))
+    ok(json!({ "spec": spec.to_value(), "engine": p.provider, "told": told, "kind": "flow", "why": why }))
 }
 
 #[cfg(test)]
@@ -470,9 +467,14 @@ writable = true
         }
     }
 
+    /// The model's answer to "a timeline or a data flow?", asked before every draft.
+    fn kind(k: &str) -> String {
+        json!({ "kind": k, "why": "scripted" }).to_string()
+    }
+
     #[tokio::test]
     async fn a_draft_comes_from_the_description_and_the_picture() {
-        let e = setup(vec![graph_reply()]);
+        let e = setup(vec![kind("flow"), graph_reply()]);
         let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/draft", None).await;
         assert_eq!(s, StatusCode::OK, "{v}");
         println!("POST /api/hub/make/t.flowrefs:f01/draft -> {v}");
@@ -481,18 +483,18 @@ writable = true
         assert_eq!(v["spec"]["lore_flow"], 1);
         {
             let seen = e.mock.seen.lock().unwrap();
-            let text = seen[0].flatten();
+            let text = seen[1].flatten();
             assert!(text.contains("Training loop") && text.contains("Input goes through a model"), "{text}");
-            assert!(serde_json::to_string(&seen[0].messages).unwrap().contains("image/png"), "the picture is attached");
+            assert!(serde_json::to_string(&seen[1].messages).unwrap().contains("image/png"), "the picture is attached");
         }
         // nothing was stored
         let (_, l) = call(&e.app, "GET", "/api/hub/items?category=t.flowspecs", None).await;
         assert!(l["items"].as_array().unwrap().is_empty());
         // a reference without a picture is drafted from the description alone
-        let e = setup(vec![graph_reply()]);
+        let e = setup(vec![kind("flow"), graph_reply()]);
         let (s, _) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f03/draft", None).await;
         assert_eq!(s, StatusCode::OK);
-        assert!(!serde_json::to_string(&e.mock.seen.lock().unwrap()[0].messages).unwrap().contains("image/png"));
+        assert!(!serde_json::to_string(&e.mock.seen.lock().unwrap()[1].messages).unwrap().contains("image/png"));
     }
 
     fn timeline_reply() -> String {
@@ -519,7 +521,7 @@ writable = true
 
     #[tokio::test]
     async fn a_timeline_reference_is_drafted_as_a_timeline() {
-        let e = setup(vec![timeline_reply()]);
+        let e = setup(vec![kind("timeline"), timeline_reply()]);
         let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f02/draft", None).await;
         assert_eq!(s, StatusCode::OK, "{v}");
         assert_eq!(v["spec"]["lore_flow"], 1);
@@ -532,20 +534,20 @@ writable = true
 
     #[tokio::test]
     async fn a_timeline_draft_uses_the_timeline_task() {
-        let e = setup(vec![timeline_reply()]);
+        let e = setup(vec![kind("timeline"), timeline_reply()]);
         let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f02/draft", None).await;
         assert_eq!(s, StatusCode::OK, "{v}");
         let seen = e.mock.seen.lock().unwrap();
-        assert_eq!(seen.len(), 1);
+        assert_eq!(seen.len(), 2);
         // the mock does not record the task id; the timeline task is the one whose reply schema has `points`
         // (and the picture-less reference goes to the text task, `sc-flow-timeline`)
-        let schema = serde_json::to_string(&seen[0].json_schema).unwrap();
+        let schema = serde_json::to_string(&seen[1].json_schema).unwrap();
         assert!(schema.contains("points") && !schema.contains("nodes"), "{schema}");
     }
 
     #[tokio::test]
     async fn a_figure_he_made_is_what_the_next_draft_is_shown() {
-        let e = setup(vec![graph_reply()]);
+        let e = setup(vec![kind("flow"), graph_reply()]);
         // he makes one figure and writes when a box is the thing to use
         let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(SPEC), "title": "Training loop" }))).await;
         assert_eq!(s, StatusCode::OK, "{v}");
@@ -564,7 +566,7 @@ writable = true
         assert!(!told["examples"][0]["why"].as_str().unwrap().is_empty());
         assert!(told["modules"].as_array().unwrap().iter().any(|m| m["kind"] == "box"), "{told}");
         let seen = e.mock.seen.lock().unwrap();
-        let text = seen[0].system.clone();
+        let text = seen[1].system.clone();
         assert!(text.contains("the author's own figure: Training loop"), "{text}");
         assert!(text.contains("whose inside does not matter"), "{text}");
     }
@@ -625,13 +627,43 @@ writable = true
 
     #[tokio::test]
     async fn a_flow_reference_is_still_drafted_as_before() {
-        let e = setup(vec![graph_reply()]);
+        let e = setup(vec![kind("flow"), graph_reply()]);
         let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/draft", None).await;
         assert_eq!(s, StatusCode::OK, "{v}");
         assert!(v["spec"]["dsl"].as_str().unwrap().contains("Model"));
         assert!(v["spec"].get("timeline").is_none_or(|t| t.is_null()), "{v}");
         let seen = e.mock.seen.lock().unwrap();
-        let schema = serde_json::to_string(&seen[0].json_schema).unwrap();
+        let schema = serde_json::to_string(&seen[1].json_schema).unwrap();
         assert!(schema.contains("nodes") && !schema.contains("points"), "{schema}");
+    }
+    /// The regression this guards: seven of the author's twelve timeline references had no
+    /// "時間軸" / "timeline" in their words and were drawn as boxes and arrows.
+    #[tokio::test]
+    async fn the_model_not_the_title_says_what_is_a_timeline() {
+        // f01's words say nothing of time; the model looked at its picture and says timeline
+        let e = setup(vec![kind("timeline"), timeline_reply()]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/draft", None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["kind"], "timeline");
+        assert_eq!(v["spec"]["timeline"]["points"].as_array().unwrap().len(), 2, "{v}");
+        {
+            let seen = e.mock.seen.lock().unwrap();
+            assert!(serde_json::to_string(&seen[0].messages).unwrap().contains("image/png"), "the question carries the picture");
+        }
+        // f02's words say "timeline"; the model says it is a flow, and a flow it is
+        let e = setup(vec![kind("flow"), graph_reply()]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f02/draft", None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["kind"], "flow");
+        assert!(v["spec"]["dsl"].as_str().unwrap().contains("Model"), "{v}");
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_is_neither_kind_is_one_line_and_no_draft() {
+        let e = setup(vec![json!({ "kind": "poster", "why": "" }).to_string(), graph_reply()]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/draft", None).await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+        // the question may be asked again once; no draft request (the one whose schema has `nodes`) was sent on a guess
+        assert!(e.mock.seen.lock().unwrap().iter().all(|r| !serde_json::to_string(&r.json_schema).unwrap().contains("nodes")));
     }
 }

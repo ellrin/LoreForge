@@ -154,6 +154,39 @@ pub async fn propose_via(llm: &dyn Llm, p: &TimelinePrompt<'_>) -> Result<(Timel
     }
 }
 
+/// Task ids of the question asked before a draft: is this picture a timeline or a data flow?
+pub const KIND_TASK: &str = "sc-flow-kind";
+pub const KIND_TASK_VISION: &str = "sc-flow-kind-vision";
+
+/// The request that asks which of the two a description (and its picture) shows.
+pub fn kind_request(description: &str, image: Option<&Image>) -> LlmRequest {
+    let system = "You are shown a figure the author wants redrawn (its description, and its picture when there is one). Say which of two kinds it is. \
+\"timeline\": points placed in order along a time axis or a sequence of dated or numbered stages (years, months, phases, milestones), each with a short text; the order is the content. \
+\"flow\": blocks joined by arrows that show how data or steps pass through a method (networks, modules, losses, inputs and outputs). \
+A slide template whose items are years, months or numbered stages along a line, a band or a path is a timeline, whatever its title says. \
+Judge by what the picture shows, not by single words in the description. Return JSON only: {kind, why}; why is one short sentence.";
+    let user = format!("Description:\n{description}");
+    let msg = match image {
+        Some(img) => Message::user_with_images(format!("{user}\n\nThe attached picture is the figure."), vec![img.clone()]),
+        None => Message::user(user),
+    };
+    let schema = json!({ "type": "object", "required": ["kind", "why"], "properties": { "kind": { "type": "string", "enum": ["timeline", "flow"] }, "why": { "type": "string" } } });
+    LlmRequest::chat(system.to_string(), vec![msg]).json(schema).max_tokens(300)
+}
+
+/// Is it a timeline? The model looks and says; an answer that is neither kind is an error
+/// (no rule on the words stands in for it). Returns the answer and its one line on why.
+pub async fn is_timeline_via(llm: &dyn Llm, description: &str, image: Option<&Image>) -> Result<(bool, String), String> {
+    let task = if image.is_some() { KIND_TASK_VISION } else { KIND_TASK };
+    let (v, _) = llm.complete_json(task, kind_request(description, image)).await?;
+    let why = v["why"].as_str().unwrap_or("").trim().to_string();
+    match v["kind"].as_str() {
+        Some("timeline") => Ok((true, why)),
+        Some("flow") => Ok((false, why)),
+        _ => Err("模型沒有說這張是時間軸還是流程圖。".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
