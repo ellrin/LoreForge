@@ -1367,3 +1367,250 @@ fn an_icon_block_survives_text_and_back() {
     assert_eq!(back.nodes[0].str("icon"), Some("healthicons:doctor-outline"));
     assert_eq!(back.nodes[0].label, "Physician");
 }
+
+// ── PC: colours and regions ────────────────────────────────────────────
+
+fn make_with(src: &str, lib: &Library) -> Vec<Object> {
+    let g = dsl::parse_with(src, &lib.kinds()).unwrap();
+    let theme = Theme::classic_bw();
+    let vars = Vars::default();
+    let cx = lore_flow::modules::Ctx { theme: &theme, vars: &vars, math: &NoMath, lib, k: 1.0, symmetric: false, image_size: &lore_flow::modules::no_images };
+    lore_flow::modules::make(&g.nodes[0], &cx).objs
+}
+
+fn body_of(objs: &[Object]) -> &Object {
+    objs.iter().find(|o| o.kind.sp().is_some_and(|s| s.fill != lore_canvas::Paint::None)).unwrap()
+}
+
+#[test]
+fn a_blocks_own_fill_wins_over_its_role() {
+    let objs = make_with("fig f\nn: box \"A\" fill=FFE5E5\n", &Library::default());
+    assert_eq!(body_of(&objs).kind.sp().unwrap().fill, lore_canvas::Paint::solid("FFE5E5"));
+    let plain = make_with("fig f\nn: box \"A\"\n", &Library::default());
+    assert_ne!(body_of(&plain).kind.sp().unwrap().fill, lore_canvas::Paint::solid("FFE5E5"));
+    // text colour too
+    let t = make_with("fig f\nn: box \"A\" text=C62828\n", &Library::default());
+    let red = t.iter().any(|o| o.kind.sp().and_then(|s| s.text.as_ref()).is_some_and(|tb| tb.paras.iter().any(|p| p.runs.iter().any(|r| r.look.color.eq_ignore_ascii_case("C62828")))));
+    assert!(red);
+}
+
+#[test]
+fn a_name_alone_gives_fill_and_line() {
+    let (pale, strong) = lore_flow::theme::named("blue").unwrap();
+    let objs = make_with("fig f\nn: box \"A\" fill=blue\n", &Library::default());
+    let sp = body_of(&objs).kind.sp().unwrap();
+    assert_eq!(sp.fill, lore_canvas::Paint::solid(&pale));
+    assert!(sp.line.as_ref().unwrap().color.eq_ignore_ascii_case(&strong));
+    // a line alone changes only the line
+    let objs = make_with("fig f\nn: box \"A\" line=blue\n", &Library::default());
+    let o = objs.iter().find(|o| o.kind.sp().is_some_and(|s| s.line.is_some())).unwrap();
+    assert!(o.kind.sp().unwrap().line.as_ref().unwrap().color.eq_ignore_ascii_case(&strong));
+    assert_ne!(body_of(&objs).kind.sp().unwrap().fill, lore_canvas::Paint::solid(&pale));
+    // a hex fill leaves the line alone
+    let objs = make_with("fig f\nn: box \"A\" fill=FFE5E5\n", &Library::default());
+    assert!(!body_of(&objs).kind.sp().unwrap().line.as_ref().unwrap().color.eq_ignore_ascii_case(&strong));
+}
+
+fn rect_obj(name: &str, y: i64, fill: &str, line: &str) -> Object {
+    use lore_canvas::{Frame, Geom, Paint, SpObj, Stroke};
+    Object { id: 0, name: name.into(), frame: Frame::new(0, y, 508_000, 254_000), hidden: false, ph: None, slot: None, kind: Kind::Shape(SpObj { geom: Geom::preset("rect"), fill: Paint::solid(fill), line: Some(Stroke::new(line, 1.0)), text: None, equation: false }), src: None }
+}
+
+fn tiny_library() -> Library {
+    let objs = vec![rect_obj("one", 0, "role:fill", "role:line"), rect_obj("two", 254_000, "ABCDEF", "ABCDEF")];
+    let t = lore_flow::modules::ModuleTemplate { kind: "tiny".into(), style: "x".into(), w: 40.0, h: 40.0, objects: serde_json::from_str(&serde_json::to_string(&objs).unwrap().replace("ROLE:FILL", "role:fill").replace("ROLE:LINE", "role:line")).unwrap(), ..Default::default() };
+    let mut lib = Library::default();
+    lib.add(t).unwrap();
+    lib
+}
+
+#[test]
+fn a_saved_drawing_takes_the_blocks_colour_where_it_says_role() {
+    let lib = tiny_library();
+    let objs = make_with("fig f\nn: tiny \"A\" style=x fill=blue\n", &lib);
+    let (pale, strong) = lore_flow::theme::named("blue").unwrap();
+    let one = objs.iter().find(|o| o.name.ends_with("one")).unwrap().kind.sp().unwrap();
+    assert_eq!(one.fill, lore_canvas::Paint::solid(&pale));
+    assert!(one.line.as_ref().unwrap().color.eq_ignore_ascii_case(&strong));
+}
+
+#[test]
+fn a_fixed_colour_in_a_drawing_stays() {
+    let lib = tiny_library();
+    let objs = make_with("fig f\nn: tiny \"A\" style=x fill=blue\n", &lib);
+    let two = objs.iter().find(|o| o.name.ends_with("two")).unwrap().kind.sp().unwrap();
+    assert_eq!(two.fill, lore_canvas::Paint::solid("ABCDEF"));
+}
+
+fn laid(src: &str) -> (Graph, layout::Layout, Vec<route::Route>) {
+    let g = dsl::parse(src).unwrap();
+    let theme = Theme::classic_bw();
+    let vars = Vars::default();
+    let lib = Library::default();
+    let opt = layout::LayoutOptions { frame: Rect::new(0.0, 0.0, 600.0, 300.0), ..Default::default() };
+    let lay = layout::layout(&g, &theme, &vars, &lib, &opt);
+    let routes = route::route(&g, &lay);
+    (g, lay, routes)
+}
+
+fn built(g: &Graph, lay: &layout::Layout, routes: &[route::Route]) -> build::Built {
+    let theme = Theme::classic_bw();
+    build::build(g, &theme, &Vars::default(), &Library::default(), &NoMath, lay, routes, 2)
+}
+
+fn named_obj<'a>(b: &'a build::Built, name: &str) -> &'a Object {
+    b.objects.iter().find(|o| o.name == name).unwrap_or_else(|| panic!("{name}"))
+}
+
+#[test]
+fn a_lines_own_colour_replaces_its_kinds() {
+    let (mut g, lay, routes) = laid("fig f\na: box \"A\"\nb: box \"B\"\na -> b : data \"go\"\n");
+    let plain = built(&g, &lay, &routes);
+    g.edges[0].color = "orange".into();
+    let b = built(&g, &lay, &routes);
+    let strong = lore_flow::theme::named("orange").unwrap().1;
+    assert!(stroke(named_obj(&b, "flow:f/edge:a-b")).color.eq_ignore_ascii_case(&strong));
+    assert!(!stroke(named_obj(&plain, "flow:f/edge:a-b")).color.eq_ignore_ascii_case(&strong));
+    let l = named_obj(&b, "flow:f/edge:a-b/label");
+    assert!(l.kind.sp().unwrap().text.as_ref().unwrap().paras[0].runs[0].look.color.eq_ignore_ascii_case(&strong));
+    assert!(b.warnings.iter().all(|w| !w.contains("不認得")));
+}
+
+#[test]
+fn dash_and_heads_stay_the_kinds() {
+    let (mut g, lay, routes) = laid("fig f\na: box \"A\"\nb: box \"B\"\na -> b : optional\n");
+    let before = stroke(named_obj(&built(&g, &lay, &routes), "flow:f/edge:a-b")).clone();
+    g.edges[0].color = "3366CC".into();
+    let b = built(&g, &lay, &routes);
+    let after = stroke(named_obj(&b, "flow:f/edge:a-b"));
+    assert_eq!(after.color.to_uppercase(), "3366CC");
+    assert_eq!((&after.dash, &after.head, &after.tail, after.width_pt), (&before.dash, &before.head, &before.tail, before.width_pt));
+}
+
+#[test]
+fn an_unknown_line_colour_is_a_warning() {
+    let (mut g, lay, routes) = laid("fig f\na: box \"A\"\nb: box \"B\"\na -> b : data\n");
+    let plain = built(&g, &lay, &routes);
+    g.edges[0].color = "chartreuse".into();
+    let b = built(&g, &lay, &routes);
+    assert!(b.warnings.contains(&"a → b: 不認得的顏色 chartreuse".to_string()), "{:?}", b.warnings);
+    assert_eq!(stroke(named_obj(&b, "flow:f/edge:a-b")).color, stroke(named_obj(&plain, "flow:f/edge:a-b")).color);
+}
+
+fn rbox(id: &str, rect: Rect, depth: usize) -> layout::RegionBox {
+    layout::RegionBox { id: id.into(), title: id.to_uppercase(), rect, title_rect: Some(Rect::new(rect.x, rect.y - 14.0, rect.w, 12.0)), depth, line: "solid".into(), title_at: "above".into(), ..Default::default() }
+}
+
+fn index(b: &build::Built, name: &str) -> usize {
+    b.objects.iter().position(|o| o.name == name).unwrap_or_else(|| panic!("{name}"))
+}
+
+#[test]
+fn a_region_is_drawn_under_its_blocks() {
+    let (g, mut lay, routes) = laid("fig f\na: box \"A\"\nb: box \"B\"\na -> b\n");
+    let r = lay.nodes[0].rect;
+    lay.regions.push(rbox("grp", r.inflate(8.0), 0));
+    let b = built(&g, &lay, &routes);
+    let ri = index(&b, "flow:f/region:grp");
+    assert!(ri < index(&b, "flow:f/a") && ri < index(&b, "flow:f/b") && ri < index(&b, "flow:f/edge:a-b"));
+    let sp = b.objects[ri].kind.sp().unwrap();
+    assert_eq!(sp.fill, lore_canvas::Paint::None);
+    assert_eq!(sp.line.as_ref().unwrap().dash, "solid");
+}
+
+#[test]
+fn a_tinted_dashed_round_region() {
+    let (g, mut lay, routes) = laid("fig f\na: box \"A\"\n");
+    let mut rb = rbox("grp", lay.nodes[0].rect.inflate(8.0), 0);
+    rb.tint = "green".into();
+    rb.line = "dashed".into();
+    rb.round = true;
+    lay.regions.push(rb);
+    let b = built(&g, &lay, &routes);
+    let sp = b.objects[index(&b, "flow:f/region:grp")].kind.sp().unwrap();
+    let (pale, strong) = lore_flow::theme::named("green").unwrap();
+    assert_eq!(sp.geom.prst, "roundRect");
+    assert_eq!(sp.fill, lore_canvas::Paint::solid(&pale));
+    let l = sp.line.as_ref().unwrap();
+    assert_eq!(l.dash, "dash");
+    assert!(l.color.eq_ignore_ascii_case(&strong));
+    lay.regions[0].line = "dotted".into();
+    let b = built(&g, &lay, &routes);
+    assert_eq!(b.objects[index(&b, "flow:f/region:grp")].kind.sp().unwrap().line.as_ref().unwrap().dash, "sysDot");
+    lay.regions[0].line = "none".into();
+    let b = built(&g, &lay, &routes);
+    assert!(b.objects[index(&b, "flow:f/region:grp")].kind.sp().unwrap().line.is_none());
+}
+
+#[test]
+fn a_region_title_sits_in_its_rect() {
+    let (g, mut lay, routes) = laid("fig f\na: box \"A\"\n");
+    let mut rb = rbox("grp", lay.nodes[0].rect.inflate(20.0), 0);
+    rb.title = "Backbone".into();
+    let t = rb.title_rect.unwrap();
+    lay.regions.push(rb);
+    let b = built(&g, &lay, &routes);
+    let o = &b.objects[index(&b, "flow:f/region:grp/title")];
+    let emu = lore_flow::modules::emu;
+    assert_eq!((o.frame.x, o.frame.y, o.frame.w, o.frame.h), (emu(t.x), emu(t.y), emu(t.w), emu(t.h)));
+    let tb = o.kind.sp().unwrap().text.as_ref().unwrap();
+    assert_eq!(tb.plain_text(), "Backbone");
+    assert_eq!(tb.paras[0].align, "ctr");
+    assert!(tb.paras[0].runs[0].look.bold);
+    lay.regions[0].title_at = "top-left".into();
+    let b = built(&g, &lay, &routes);
+    assert_eq!(b.objects[index(&b, "flow:f/region:grp/title")].kind.sp().unwrap().text.as_ref().unwrap().paras[0].align, "l");
+    lay.regions[0].title_at = "left".into();
+    let b = built(&g, &lay, &routes);
+    assert_eq!(b.objects[index(&b, "flow:f/region:grp/title")].kind.sp().unwrap().text.as_ref().unwrap().vert.as_deref(), Some("vert270"));
+    lay.regions[0].title_rect = None;
+    let b = built(&g, &lay, &routes);
+    assert!(!b.objects.iter().any(|o| o.name.ends_with("region:grp/title")));
+}
+
+#[test]
+fn inner_regions_are_drawn_over_outer() {
+    let (g, mut lay, routes) = laid("fig f\na: box \"A\"\n");
+    let r = lay.nodes[0].rect;
+    lay.regions.push(rbox("outer", r.inflate(20.0), 0));
+    lay.regions.push(rbox("inner", r.inflate(8.0), 1));
+    let b = built(&g, &lay, &routes);
+    assert!(index(&b, "flow:f/region:outer") < index(&b, "flow:f/region:inner"));
+    assert!(index(&b, "flow:f/region:inner") < index(&b, "flow:f/a"));
+}
+
+#[test]
+fn no_regions_draws_exactly_what_it_drew() {
+    let g = dsl::parse(TRAIN).unwrap();
+    let f = fig(&g);
+    assert!(f.layout.regions.is_empty());
+    assert!(f.objects().iter().all(|o| o.name.starts_with("flow:") && !o.name.contains("/region:")));
+}
+
+fn chart_parts(f: &Figure) -> Vec<Object> {
+    let mut v = Vec::new();
+    walk(f.objects(), &mut |o| {
+        let part = o.name.rsplit('/').next().unwrap_or("");
+        if o.name.contains("/m/") && (part == "chart" || part.starts_with("chart-")) {
+            v.push(o.clone());
+        }
+    });
+    v
+}
+
+#[test]
+fn a_chart_block_is_drawn_in_a_figure() {
+    let f = fig(&dsl::parse("fig c\nm: chart \"Membership\" chart=membership n=3\nb: box \"B\"\nm -> b\n").unwrap());
+    let charts = chart_parts(&f);
+    assert!(charts.len() >= 3, "{}", charts.len());
+    assert!(charts.iter().all(|o| matches!(&o.kind, Kind::Shape(s) if s.geom.prst == "custom")));
+    assert!(charts.iter().all(|o| o.kind.sp().unwrap().line.as_ref().is_none_or(|l| l.dash != "sysDash")));
+}
+
+#[test]
+fn a_chart_block_without_a_chart_is_a_dashed_slot() {
+    let f = fig(&dsl::parse("fig c\nm: chart \"Nothing\"\nb: box \"B\"\nm -> b\n").unwrap());
+    let charts = chart_parts(&f);
+    assert_eq!(charts.len(), 1);
+    assert_eq!(charts[0].kind.sp().unwrap().line.as_ref().unwrap().dash, "sysDash");
+}
