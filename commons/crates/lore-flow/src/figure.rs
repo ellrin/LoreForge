@@ -578,7 +578,7 @@ pub fn render(spec: &FlowSpec, cat: &Catalogue, notation: Option<&lore_notation:
         let mut style = crate::timeline::style::pick(&cat.timelines, &t.style);
         style.to_mut().colors.palette = crate::timeline::palette_for(t, &style, &cat.timeline_colors);
         let (plan, built) = crate::timeline::render(t, &style, &cat.theme(&spec.theme).font, frame, first_id)?;
-        let layout = crate::layout::Layout { nodes: vec![], panels: vec![], legend: vec![], swatches: vec![], bounds: plan.bounds, scale: plan.scale };
+        let layout = crate::layout::Layout { nodes: vec![], panels: vec![], regions: vec![], legend: vec![], swatches: vec![], bounds: plan.bounds, scale: plan.scale };
         return Ok((Figure { layout, routes: vec![], built }, Graph { fig: t.fig_id().to_string(), ..Default::default() }));
     }
     let (g, theme, options) = spec.prepare(cat, frame)?;

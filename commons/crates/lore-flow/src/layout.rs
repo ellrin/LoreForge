@@ -182,6 +182,25 @@ pub struct PanelBox {
     pub down: bool,
 }
 
+/// A region placed: its frame round its members (and its sub-regions), in the layout's
+/// coordinates. Outer regions come before the regions inside them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RegionBox {
+    pub id: String,
+    pub title: String,
+    pub rect: Rect,
+    /// Where the title is written; `None` = no title.
+    pub title_rect: Option<Rect>,
+    /// 0 = directly in a panel, 1 = inside a region, …
+    pub depth: usize,
+    /// As [`crate::spec::Region`]: `solid` | `dashed` | `dotted` | `none`, the tint, round
+    /// corners, where the title is.
+    pub line: String,
+    pub tint: String,
+    pub round: bool,
+    pub title_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LegendItem {
     pub kind: EdgeKind,
@@ -208,6 +227,8 @@ pub struct Layout {
     /// One per graph node, same order.
     pub nodes: Vec<Placed>,
     pub panels: Vec<PanelBox>,
+    /// The graph's regions, placed (empty until the layout frames them).
+    pub regions: Vec<RegionBox>,
     pub legend: Vec<LegendItem>,
     /// The colour legend over the figure: every layer type a module coloured,
     /// when there are two or more.
@@ -918,5 +939,5 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         s.at = s.at.map(ox, oy, k);
         s.text = s.text.map(ox, oy, k);
     }
-    Layout { nodes, panels, legend, swatches, bounds: bounds.map(ox, oy, k), scale: k }
+    Layout { nodes, panels, regions: Vec::new(), legend, swatches, bounds: bounds.map(ox, oy, k), scale: k }
 }

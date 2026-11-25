@@ -288,3 +288,12 @@ pub fn shade(hex: &str, t: f64) -> String {
     };
     format!("{:02X}{:02X}{:02X}", f(p(0)), f(p(2)), f(p(4)))
 }
+
+/// A colour by name for a block, a line or a region's background, from the document's own
+/// palette (never the app's screen theme): `(fill, line)` as `RRGGBB`, the fill pale and the
+/// line strong. Names: red, orange, yellow, green, teal, blue, purple, pink, brown, grey,
+/// black. An `RRGGBB` is given back as both. `None` = not a colour.
+pub fn named(name: &str) -> Option<(String, String)> {
+    let _ = name;
+    None
+}

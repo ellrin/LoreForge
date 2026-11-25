@@ -102,6 +102,43 @@ P1–P4 都動 `lore-flow` 的版面與連線，檔案有重疊的風險：**先
 - 在真實資料量的副本上看 L-Brain 的流程圖頁與明細。
 - 審查 subagent 讀第 1 段各套件的接合處。
 
+### 凍結的介面（2026-11-26，已提交為能編譯的空殼）
+
+文字格式新增的句子（`lore-flow` 的 `dsl.rs` 讀寫；型別在 `spec.rs`）：
+
+```text
+region backbone "Encoder-decoder Backbone" dashed tint=grey round title=above in=a parent=outer
+  e1 e2 e3 d1 d2 d3            # 成員：節點的 id，空白分開，可以多行
+end
+align row x e1 d1              # 同一列（中線等高）
+align col e1 e2 e3             # 同一欄（中心同一個 x）
+x -> e1 : data color=orange    # 這一條線自己的顏色
+mu -> pref : data curve        # 畫成一條平滑曲線
+x>e1 -> crop : optional        # 從 x→e1 這條線的中間岔出去
+n: box "Conv" fill=blue line=blue   # 這個方塊自己的顏色
+c: chart "Membership" chart=membership n=3 labels=[Low,Medium,High]
+```
+
+- `Region { id, title, parent, members, line (solid|dashed|dotted|none), tint, round, title_at (top-left|top|above|below|left) }`，在 `Graph.regions`；`in=` 是它所在的面板（寫進成員節點的 `panel`，不另存）。
+- `Align { axis (row|col), ids }`，在 `Graph.align`。
+- `Edge` 多 `color`、`curve`、`off`（另一條線的鍵 `a>b`）。
+- 節點的顏色是參數 `fill`、`line`、`text`（已經是參數，不改型別）。
+- 顏色名稱：`theme::named(name) -> Option<(淡的填色, 深的線色)>`：red orange yellow green teal blue purple pink brown grey black，或直接 `RRGGBB`。走文件配色，不是畫面主題。
+- 版面的結果多 `Layout.regions: Vec<RegionBox>`（外層在前）：`{ id, title, rect, title_rect, depth, line, tint, round, title_at }`。
+- 圖表方塊：種類 `chart`，`chart::objects(params, w, h, ink) -> Vec<Object>`（`chart.rs`），`chart=` 是 bell／bells／membership／bars／scatter／surface。
+
+第 1 段的套件照檔案切（`lore-flow` 是一個緊密的程式，同一個檔案只給一個人）：
+
+| 套件 | 擁有的檔案 |
+|---|---|
+| PA 語言 | `dsl.rs`、`spec.rs`（讀、寫回、檢查：區域、對齊、線的顏色／曲線／岔出） |
+| PB 版面 | `layout.rs`（區域框住成員、可套疊、留邊與標題的位置；對齊） |
+| PC 畫出來 | `build.rs`、`modules.rs`、`theme.rs`（畫區域的框與底色與標題；方塊與線的顏色；顏色名稱） |
+| PD 線 | `route.rs`（從線的中間岔出、平滑曲線；線可以穿過區域的框） |
+| PE 圖表 | `chart.rs` |
+| PF 接點 | `lore-canvas` 的 `geom.rs`、`pptx_out.rs`、`pptx_in.rs`；L-Slide `web/app.js` 的 `sites` |
+| PG prompt | `lore-know` 的 `flowknow.rs`、`formats/figure.rs`；L-Brain 的 `figmake.rs`、`web/hub.js` |
+
 ## 5. 順序與明早的實際預期
 
 ```

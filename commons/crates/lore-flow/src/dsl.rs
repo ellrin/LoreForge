@@ -193,7 +193,7 @@ pub fn parse_with(text: &str, extra_modules: &[String]) -> Result<Graph, DslErro
                 return Err(err("an arrow needs a node on both sides".into()));
             }
             for w in chain.windows(2) {
-                g.edges.push(Edge { from: w[0].clone(), to: w[1].clone(), kind, label: label.clone() });
+                g.edges.push(Edge { from: w[0].clone(), to: w[1].clone(), kind, label: label.clone(), ..Default::default() });
             }
             continue;
         }

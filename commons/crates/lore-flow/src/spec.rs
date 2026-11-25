@@ -9,12 +9,13 @@ use serde_json::Value;
 
 /// Module kinds the program can draw (the closed list an LLM picks from).
 /// Module templates loaded from a library extend it at run time.
-pub const MODULES: [(&str, &str); 18] = [
+pub const MODULES: [(&str, &str); 19] = [
     ("box", "a named step or model: rectangle with the label inside (params: shape=rect|round|trapezoid, vertical=true for an upright bar)"),
     ("op", "operator circle; label is one of + x . C (add, multiply, element-wise, concatenate) or a short word such as Or"),
     ("loss", "a loss or metric; label is its math, e.g. $\\mathcal L_{seg}$"),
     ("label", "free text without a frame (an output class, a note)"),
     ("image", "one picture / mask / heat map (params: look=photo|mask|heatmap|plot)"),
+    ("chart", "a small chart drawn by the plotting tool (params: chart=bell|bells|membership|bars|scatter|surface, n, labels=[..]): a distribution, a set of curves, a bar chart, clusters"),
     ("icon", "a small picture from the icon sets (params: icon=<set:name>, e.g. tabler:server, healthicons:doctor-outline)"),
     ("image-stack", "several pictures stacked with an offset (params: n)"),
     ("feature-stack", "feature maps / tensor channels stacked (params: n, look=flat|3d)"),
@@ -154,6 +155,12 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     #[serde(default)]
     pub edges: Vec<Edge>,
+    /// Frames round groups of blocks, nestable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<Region>,
+    /// Blocks the author wants on one line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub align: Vec<Align>,
     /// Variables the figure introduces that the notation registry does not have yet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vars_new: Vec<VarNew>,
@@ -257,6 +264,57 @@ pub struct Edge {
     pub kind: EdgeKind,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label: String,
+    /// The line's own colour: a name of [`crate::theme::named`] (`orange`, `blue` …) or
+    /// `RRGGBB`. Empty = the colour of its kind. One path of a figure, one colour.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
+    /// Drawn as one smooth curve between its ends instead of right-angled runs.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub curve: bool,
+    /// The line leaves the middle of another line, not a block: that line's
+    /// [`crate::figure::edge_key`] (`a>b`). `from` is then that line's `from` (for the graph's
+    /// order) and the router starts at a point on that line.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub off: String,
+}
+
+/// A region: the blocks of one kind of thing, framed together (the author's "依照標籤給區域").
+/// Regions nest (`parent`); a region lies inside one panel, or loose when the figure has none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Region {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// The region this one lies in; empty = directly in its panel.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent: String,
+    /// Node ids framed by this region (the nodes of its sub-regions are framed too, without
+    /// being listed here).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<String>,
+    /// The frame's line: `solid` (default), `dashed`, `dotted`, `none`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub line: String,
+    /// Background: a name of [`crate::theme::named`] (its pale fill is used) or `RRGGBB`;
+    /// empty = no background.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tint: String,
+    /// Round corners.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub round: bool,
+    /// Where the title goes: `top-left` (default, inside), `top` (centred inside), `above`
+    /// (centred over the frame), `below`, `left` (upright beside it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title_at: String,
+}
+
+/// Blocks put on one line: `row` = the same height on the page (their middles), `col` = one
+/// above the other (their centres share an x). Across panels and regions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Align {
+    /// `row` | `col`.
+    pub axis: String,
+    pub ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

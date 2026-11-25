@@ -25,6 +25,7 @@ pub mod art;
 #[cfg(feature = "web")]
 pub mod assist;
 pub mod build;
+pub mod chart;
 #[cfg(feature = "web")]
 pub mod discuss;
 pub mod dsl;

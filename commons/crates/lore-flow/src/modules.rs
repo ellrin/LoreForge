@@ -813,6 +813,19 @@ fn gen_icon(n: &Node, cx: &Ctx) -> Core {
     Core { w, h, objs: vec![o], single: false, ellipse: false, label: LabelPos::Below, ..Default::default() }
 }
 
+/// A chart from the plotting tool ([`crate::chart`]); a dashed slot when it has none to draw.
+fn gen_chart(n: &Node, cx: &Ctx) -> Core {
+    let ink = hex_param(n, "line").unwrap_or_else(|| cx.theme.colors.ink.clone());
+    let (w, h) = (cx.s(n.num("w").unwrap_or(84.0)), cx.s(n.num("h").unwrap_or(56.0)));
+    let mut objs = crate::chart::objects(&n.params, w, h, &ink);
+    if objs.is_empty() {
+        let mut st = Stroke::new(&ink, 0.75 * cx.k);
+        st.dash = "sysDash".into();
+        objs.push(shape("chart", "rect", 0.0, 0.0, w, h, Paint::None, Some(st)));
+    }
+    Core { w, h, objs, single: false, ellipse: false, label: LabelPos::Below, ..Default::default() }
+}
+
 fn gen_image_stack(n: &Node, cx: &Ctx) -> Core {
     // real pictures: `srcs=[a.png,b.png]` back to front, or one `src` repeated
     let mut srcs = n.list("srcs");
@@ -1498,6 +1511,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         (None, "loss") => gen_loss(n, cx),
         (None, "label") => gen_label(n, cx),
         (None, "image") => gen_image(n, cx),
+        (None, "chart") => gen_chart(n, cx),
         (None, "icon") => gen_icon(n, cx),
         (None, "image-stack") => gen_image_stack(n, cx),
         (None, "feature-stack") => gen_feature_stack(n, cx),
