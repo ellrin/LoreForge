@@ -365,6 +365,34 @@ pub enum SpecError {
     ArrangeUnknown(String),
     #[error("arrange leaves out panel {0:?}")]
     ArrangeMissing(String),
+    #[error("region id {0:?} is used twice")]
+    DuplicateRegion(String),
+    #[error("region id {0:?} is also the id of a node or a panel")]
+    RegionIdClash(String),
+    #[error("region {region:?} lists {member:?}, which is not a node")]
+    RegionMemberUnknown { region: String, member: String },
+    #[error("region {region:?} lies in {parent:?}, which is not a region")]
+    RegionParentUnknown { region: String, parent: String },
+    #[error("region {0:?} is inside itself")]
+    RegionCycle(String),
+    #[error("node {node:?} is listed in regions {a:?} and {b:?}, and neither lies inside the other")]
+    RegionOverlap { node: String, a: String, b: String },
+    #[error("region {0:?} has blocks of two different panels")]
+    RegionTwoPanels(String),
+    #[error("region {region:?} has line {value:?} (allowed: solid, dashed, dotted, none)")]
+    RegionLine { region: String, value: String },
+    #[error("region {region:?} has title position {value:?} (allowed: top-left, top, above, below, left)")]
+    RegionTitleAt { region: String, value: String },
+    #[error("align {0:?} is not row or col")]
+    AlignAxis(String),
+    #[error("align names {0:?}, which is not a node")]
+    AlignUnknown(String),
+    #[error("align needs at least two blocks")]
+    AlignTooFew,
+    #[error("line {edge} leaves {off:?}, which is not another line of the figure")]
+    EdgeOffUnknown { edge: String, off: String },
+    #[error("line {0} cannot leave itself")]
+    EdgeOffSelf(String),
 }
 
 pub fn valid_id(s: &str) -> bool {
@@ -442,6 +470,121 @@ impl Graph {
                 return Err(SpecError::ArrangeMissing(p.id.clone()));
             }
         }
+        self.validate_regions(&ids, &panels)?;
+        self.validate_edge_off()?;
+        Ok(())
+    }
+
+    fn validate_regions(&self, ids: &BTreeSet<&str>, panels: &BTreeSet<&str>) -> Result<(), SpecError> {
+        let mut regions: BTreeSet<&str> = BTreeSet::new();
+        for r in &self.regions {
+            if !valid_id(&r.id) {
+                return Err(SpecError::BadId(r.id.clone()));
+            }
+            if !regions.insert(r.id.as_str()) {
+                return Err(SpecError::DuplicateRegion(r.id.clone()));
+            }
+            if ids.contains(r.id.as_str()) || panels.contains(r.id.as_str()) {
+                return Err(SpecError::RegionIdClash(r.id.clone()));
+            }
+        }
+        for r in &self.regions {
+            for m in &r.members {
+                if !ids.contains(m.as_str()) {
+                    return Err(SpecError::RegionMemberUnknown { region: r.id.clone(), member: m.clone() });
+                }
+            }
+            if !r.parent.is_empty() && !regions.contains(r.parent.as_str()) {
+                return Err(SpecError::RegionParentUnknown { region: r.id.clone(), parent: r.parent.clone() });
+            }
+            if !r.line.is_empty() && !matches!(r.line.as_str(), "solid" | "dashed" | "dotted" | "none") {
+                return Err(SpecError::RegionLine { region: r.id.clone(), value: r.line.clone() });
+            }
+            if !r.title_at.is_empty() && !matches!(r.title_at.as_str(), "top-left" | "top" | "above" | "below" | "left") {
+                return Err(SpecError::RegionTitleAt { region: r.id.clone(), value: r.title_at.clone() });
+            }
+        }
+        let parent_of = |id: &str| self.regions.iter().find(|r| r.id == id).map(|r| r.parent.as_str()).unwrap_or("");
+        for r in &self.regions {
+            let mut cur = r.parent.as_str();
+            let mut steps = 0;
+            while !cur.is_empty() {
+                if cur == r.id || steps > self.regions.len() {
+                    return Err(SpecError::RegionCycle(r.id.clone()));
+                }
+                cur = parent_of(cur);
+                steps += 1;
+            }
+        }
+        // is `a` inside `b` (or the same)?
+        let inside = |a: &str, b: &str| {
+            let mut cur = a;
+            while !cur.is_empty() {
+                if cur == b {
+                    return true;
+                }
+                cur = parent_of(cur);
+            }
+            false
+        };
+        let mut owner: BTreeMap<&str, &str> = BTreeMap::new();
+        for r in &self.regions {
+            for m in &r.members {
+                match owner.get(m.as_str()) {
+                    Some(&other) if other != r.id && !inside(other, &r.id) && !inside(&r.id, other) => {
+                        return Err(SpecError::RegionOverlap { node: m.clone(), a: other.to_string(), b: r.id.clone() });
+                    }
+                    Some(&other) if inside(other, &r.id) => {} // keep the inner one
+                    _ => {
+                        owner.insert(m.as_str(), r.id.as_str());
+                    }
+                }
+            }
+            let mut seen: Option<&str> = None;
+            for m in &r.members {
+                if let Some(n) = self.node(m)
+                    && !n.panel.is_empty()
+                {
+                    match seen {
+                        Some(p) if p != n.panel => return Err(SpecError::RegionTwoPanels(r.id.clone())),
+                        _ => seen = Some(n.panel.as_str()),
+                    }
+                }
+            }
+        }
+        for a in &self.align {
+            if a.axis != "row" && a.axis != "col" {
+                return Err(SpecError::AlignAxis(a.axis.clone()));
+            }
+            if let Some(x) = a.ids.iter().find(|i| !ids.contains(i.as_str())) {
+                return Err(SpecError::AlignUnknown(x.clone()));
+            }
+            if a.ids.len() < 2 {
+                return Err(SpecError::AlignTooFew);
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_edge_off(&self) -> Result<(), SpecError> {
+        let mut count: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+        let mut keys: Vec<String> = Vec::new();
+        for e in &self.edges {
+            let n = count.entry((e.from.as_str(), e.to.as_str())).or_insert(0);
+            *n += 1;
+            keys.push(crate::figure::edge_key(&e.from, &e.to, *n));
+        }
+        for (e, key) in self.edges.iter().zip(&keys) {
+            if e.off.is_empty() {
+                continue;
+            }
+            if &e.off == key {
+                return Err(SpecError::EdgeOffSelf(key.clone()));
+            }
+            if !keys.contains(&e.off) {
+                return Err(SpecError::EdgeOffUnknown { edge: key.clone(), off: e.off.clone() });
+            }
+        }
         Ok(())
     }
 
@@ -455,5 +598,125 @@ impl Graph {
             Some(b) => b,
             None => self.line_kinds().iter().filter(|k| **k != EdgeKind::Data).count() >= 4,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> Graph {
+        let n = |id: &str, panel: &str| Node { id: id.into(), module: "box".into(), panel: panel.into(), ..Default::default() };
+        Graph {
+            fig: "t".into(),
+            panels: vec![Panel { id: "p".into(), ..Default::default() }, Panel { id: "q".into(), ..Default::default() }],
+            nodes: vec![n("a", "p"), n("b", "p"), n("c", "q"), n("d", "")],
+            edges: vec![Edge { from: "a".into(), to: "b".into(), ..Default::default() }, Edge { from: "b".into(), to: "c".into(), ..Default::default() }],
+            ..Default::default()
+        }
+    }
+    fn region(id: &str, parent: &str, members: &[&str]) -> Region {
+        Region { id: id.into(), parent: parent.into(), members: members.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+    }
+    fn refuses(g: Graph) -> SpecError {
+        g.validate(&[]).unwrap_err()
+    }
+
+    #[test]
+    fn a_valid_figure_with_regions_passes() {
+        let mut g = base();
+        g.regions = vec![region("o", "", &["a"]), region("i", "o", &["a", "b"])];
+        g.align = vec![Align { axis: "row".into(), ids: vec!["a".into(), "c".into()] }];
+        g.edges.push(Edge { from: "a".into(), to: "d".into(), off: "a>b".into(), ..Default::default() });
+        assert_eq!(g.validate(&[]), Ok(()));
+    }
+    #[test]
+    fn validation_refuses_a_bad_region_id() {
+        let mut g = base();
+        g.regions = vec![region("bad id", "", &["a"])];
+        assert!(matches!(refuses(g), SpecError::BadId(_)));
+    }
+    #[test]
+    fn validation_refuses_a_duplicate_region() {
+        let mut g = base();
+        g.regions = vec![region("r", "", &["a"]), region("r", "", &["b"])];
+        assert!(matches!(refuses(g), SpecError::DuplicateRegion(_)));
+    }
+    #[test]
+    fn validation_refuses_a_region_named_like_a_node_or_panel() {
+        for id in ["a", "p"] {
+            let mut g = base();
+            g.regions = vec![region(id, "", &["a"])];
+            assert!(matches!(refuses(g), SpecError::RegionIdClash(_)));
+        }
+    }
+    #[test]
+    fn validation_refuses_a_member_that_is_not_a_node() {
+        let mut g = base();
+        g.regions = vec![region("r", "", &["zz"])];
+        assert!(matches!(refuses(g), SpecError::RegionMemberUnknown { .. }));
+    }
+    #[test]
+    fn validation_refuses_a_parent_that_is_not_a_region() {
+        let mut g = base();
+        g.regions = vec![region("r", "nope", &["a"])];
+        assert!(matches!(refuses(g), SpecError::RegionParentUnknown { .. }));
+    }
+    #[test]
+    fn validation_refuses_a_region_inside_itself() {
+        let mut g = base();
+        g.regions = vec![region("r", "s", &["a"]), region("s", "r", &["b"])];
+        assert!(matches!(refuses(g), SpecError::RegionCycle(_)));
+        let mut g = base();
+        g.regions = vec![region("r", "r", &["a"])];
+        assert!(matches!(refuses(g), SpecError::RegionCycle(_)));
+    }
+    #[test]
+    fn validation_refuses_a_node_in_two_unrelated_regions() {
+        let mut g = base();
+        g.regions = vec![region("r", "", &["a"]), region("s", "", &["a"])];
+        assert!(matches!(refuses(g), SpecError::RegionOverlap { .. }));
+    }
+    #[test]
+    fn validation_refuses_a_region_across_two_panels() {
+        let mut g = base();
+        g.regions = vec![region("r", "", &["a", "c"])];
+        assert!(matches!(refuses(g), SpecError::RegionTwoPanels(_)));
+    }
+    #[test]
+    fn validation_refuses_an_unknown_region_line_and_title_position() {
+        let mut g = base();
+        g.regions = vec![Region { line: "wavy".into(), ..region("r", "", &["a"]) }];
+        assert!(matches!(refuses(g), SpecError::RegionLine { .. }));
+        let mut g = base();
+        g.regions = vec![Region { title_at: "middle".into(), ..region("r", "", &["a"]) }];
+        assert!(matches!(refuses(g), SpecError::RegionTitleAt { .. }));
+    }
+    #[test]
+    fn validation_refuses_a_bad_align() {
+        let mut g = base();
+        g.align = vec![Align { axis: "diag".into(), ids: vec!["a".into(), "b".into()] }];
+        assert!(matches!(refuses(g), SpecError::AlignAxis(_)));
+        let mut g = base();
+        g.align = vec![Align { axis: "row".into(), ids: vec!["a".into(), "zz".into()] }];
+        assert!(matches!(refuses(g), SpecError::AlignUnknown(_)));
+        let mut g = base();
+        g.align = vec![Align { axis: "col".into(), ids: vec!["a".into()] }];
+        assert_eq!(refuses(g), SpecError::AlignTooFew);
+    }
+    #[test]
+    fn validation_refuses_an_off_that_is_no_line() {
+        let mut g = base();
+        g.edges.push(Edge { from: "a".into(), to: "d".into(), off: "a>c".into(), ..Default::default() });
+        assert!(matches!(refuses(g), SpecError::EdgeOffUnknown { .. }));
+        let mut g = base();
+        g.edges.push(Edge { from: "a".into(), to: "d".into(), off: "a>b#2".into(), ..Default::default() });
+        assert!(matches!(refuses(g), SpecError::EdgeOffUnknown { .. }));
+    }
+    #[test]
+    fn validation_refuses_a_line_leaving_itself() {
+        let mut g = base();
+        g.edges.push(Edge { from: "a".into(), to: "d".into(), off: "a>d".into(), ..Default::default() });
+        assert!(matches!(refuses(g), SpecError::EdgeOffSelf(_)));
     }
 }
