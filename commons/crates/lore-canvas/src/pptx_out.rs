@@ -149,6 +149,16 @@ fn line_of(s: &Option<Stroke>, orig: Option<&om::Line>) -> Option<om::Line> {
         e.attrs.set("type", k);
         Some(e)
     };
+    // round line ends: cap="rnd" and a round join; a stroke without a cap writes what it did before
+    if s.cap == "round" {
+        l.attrs.set("cap", "rnd");
+        l.join = Some(Element::new("a:round"));
+    } else if l.attrs.get("cap") == Some("rnd") {
+        l.attrs.remove("cap");
+        if l.join.as_ref().is_some_and(|j| j.local() == "round") {
+            l.join = None;
+        }
+    }
     l.head = end(&s.head, l.head.as_ref());
     l.tail = end(&s.tail, l.tail.as_ref());
     Some(l)
@@ -286,7 +296,8 @@ pub fn sixteen_geom(prst: &str, adj: f64) -> Element {
     g
 }
 
-fn geom_to(g: &Geom, orig: Option<&om::Geometry>, sixteen: bool) -> om::Geometry {
+/// `own` = (frame w, frame h, filled) of a shape: a custom path is then written in the shape's own EMU size.
+fn geom_to(g: &Geom, orig: Option<&om::Geometry>, sixteen: bool, own: Option<(i64, i64, bool)>) -> om::Geometry {
     if sixteen && matches!(g.prst.as_str(), "rect" | "roundRect") {
         return om::Geometry::Custom(sixteen_geom(&g.prst, g.adj.get("adj").copied().unwrap_or(16667.0)));
     }
@@ -294,7 +305,11 @@ fn geom_to(g: &Geom, orig: Option<&om::Geometry>, sixteen: bool) -> om::Geometry
         if let (Some(om::Geometry::Custom(e)), None) = (orig, &g.path) {
             return om::Geometry::Custom(e.clone());
         }
-        return om::Geometry::Custom(cust_geom(g.path.as_deref().unwrap_or("")));
+        let path = g.path.as_deref().unwrap_or("");
+        return om::Geometry::Custom(match own {
+            Some((w, h, filled)) => cust_geom_sized(path, w, h, filled),
+            None => cust_geom(path),
+        });
     }
     let extras = match orig {
         Some(om::Geometry::Preset { extras, prst, .. }) if *prst == g.prst => extras.clone(),
@@ -314,8 +329,19 @@ fn geom_to(g: &Geom, orig: Option<&om::Geometry>, sixteen: bool) -> om::Geometry
 
 /// SVG path (0..1 box, M/L/C/Q/Z) → `a:custGeom` with a 100000 × 100000 path space.
 pub fn cust_geom(path: &str) -> Element {
+    cust_geom_sized(path, 100_000, 100_000, true)
+}
+
+/// The same with the path space of `w` × `h` EMU (the shape's own size: Quick Look does not scale
+/// the path); `filled == false` marks the path `fill="none"` (Quick Look ignores `a:noFill`).
+pub fn cust_geom_sized(path: &str, w: i64, h: i64, filled: bool) -> Element {
     const S: f64 = 100_000.0;
-    let mut p = Element::new("a:path").with_attr("w", "100000").with_attr("h", "100000");
+    let (w, h) = (w.max(1), h.max(1));
+    let (sx, sy) = (w as f64, h as f64);
+    let mut p = Element::new("a:path").with_attr("w", w.to_string()).with_attr("h", h.to_string());
+    if !filled {
+        p = p.with_attr("fill", "none");
+    }
     let toks: Vec<String> = path
         .replace(',', " ")
         .split_whitespace()
@@ -347,8 +373,8 @@ pub fn cust_geom(path: &str) -> Element {
     };
     let pt = |x: f64, y: f64| {
         Element::new("a:pt")
-            .with_attr("x", ((x * S).round() as i64).to_string())
-            .with_attr("y", ((y * S).round() as i64).to_string())
+            .with_attr("x", ((x * sx).round() as i64).to_string())
+            .with_attr("y", ((y * sy).round() as i64).to_string())
     };
     while i < toks.len() {
         let cmd = toks[i].clone();
@@ -867,8 +893,10 @@ pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
             if has(&changed, "frame") {
                 set_xfrm(&mut s.props.xfrm, &o.frame, "a:xfrm");
             }
-            if has(&changed, "geom") || force16 {
-                s.props.geom = Some(geom_to(&sp.geom, s.props.geom.as_ref(), needs_sixteen(o)));
+            // a custom path is in the frame's size: rewritten when the frame changes too
+            if has(&changed, "geom") || force16 || (has(&changed, "frame") && sp.geom.path.is_some()) {
+                let own = (o.frame.w, o.frame.h, !matches!(sp.fill, Paint::None));
+                s.props.geom = Some(geom_to(&sp.geom, s.props.geom.as_ref(), needs_sixteen(o), Some(own)));
             }
             if has(&changed, "fill") {
                 if let Some(f) = fill_of(&sp.fill, s.props.fill.as_ref()) {
@@ -941,6 +969,7 @@ pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
                     },
                     x.props.geom.as_ref(),
                     false,
+                    None,
                 ));
             }
             if has(&changed, "line") {
@@ -998,7 +1027,7 @@ pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
                 };
             }
             if has(&changed, "clip") {
-                pic.props.geom = Some(geom_to(&Geom::preset(&p.clip), pic.props.geom.as_ref(), false));
+                pic.props.geom = Some(geom_to(&Geom::preset(&p.clip), pic.props.geom.as_ref(), false, None));
             }
             for (i, m) in p.masks.iter().enumerate() {
                 let f = &o.frame;
@@ -1671,6 +1700,113 @@ mod tests {
         assert_eq!(got.len(), 16);
         for (i, (x, y)) in want.iter().enumerate() {
             assert_eq!((got[i].0.as_str(), got[i].1.as_str()), (*x, *y), "idx {i}");
+        }
+    }
+
+    fn custom(id: u32, path: &str, fill: Paint, line: Option<Stroke>) -> Object {
+        let mut o = block(id, "rect", None);
+        o.frame = Frame::new(1_000_000, 1_000_000, 914_400, 457_200);
+        o.kind = Kind::Shape(SpObj {
+            geom: Geom { prst: "custom".into(), adj: Default::default(), path: Some(path.into()) },
+            fill,
+            line,
+            text: None,
+            equation: false,
+        });
+        o
+    }
+
+    fn solid() -> Paint {
+        Paint::Solid { color: "336699".into(), alpha: 1.0 }
+    }
+
+    fn path_of(objs: &[Object], id: u32) -> String {
+        let Kind::Shape(sp) = &objs.iter().find(|o| o.id == id).unwrap().kind else { panic!() };
+        sp.geom.path.clone().unwrap()
+    }
+
+    #[test]
+    fn a_round_cap_is_written_on_the_line_and_read_back() {
+        let mut st = Stroke::new("112233", 2.0);
+        st.cap = "round".into();
+        let (objs, xml) = round_trip(vec![custom(10, "M0 0 L1 1", Paint::None, Some(st))]);
+        assert!(xml.contains("cap=\"rnd\"") && xml.contains("a:round"), "{xml}");
+        let Kind::Shape(sp) = &objs.iter().find(|o| o.id == 10).unwrap().kind else { panic!() };
+        assert_eq!(sp.line.as_ref().unwrap().cap, "round");
+    }
+
+    #[test]
+    fn a_line_without_a_cap_is_written_as_before() {
+        let (objs, xml) = round_trip(vec![custom(10, "M0 0 L1 1", Paint::None, Some(Stroke::new("112233", 2.0)))]);
+        assert!(!xml.contains("cap=") && !xml.contains("a:round"), "{xml}");
+        let Kind::Shape(sp) = &objs.iter().find(|o| o.id == 10).unwrap().kind else { panic!() };
+        assert_eq!(sp.line.as_ref().unwrap().cap, "");
+    }
+
+    fn first_path(e: &Element) -> &Element {
+        e.child("a:pathLst").unwrap().elements().next().unwrap()
+    }
+
+    #[test]
+    fn a_custom_shapes_path_is_written_in_the_shapes_own_size() {
+        let (_, xml) = round_trip(vec![custom(10, "M0.5 0.5 L1 1", solid(), None)]);
+        assert!(xml.contains("<a:path w=\"914400\" h=\"457200\""), "{xml}");
+        assert!(xml.contains("x=\"457200\" y=\"228600\""), "{xml}");
+        let e = cust_geom_sized("M0.5 0.5 L1 1", 914_400, 457_200, true);
+        let p = first_path(&e);
+        assert_eq!(p.attrs.get("w"), Some("914400"));
+        assert_eq!(p.attrs.get("h"), Some("457200"));
+    }
+
+    #[test]
+    fn a_custom_path_reads_back_the_same_whatever_its_path_space() {
+        let mk = |w: i64, h: i64, a: i64, b: i64| {
+            let xml = format!(
+                "<a:custGeom xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:pathLst><a:path w=\"{w}\" h=\"{h}\"><a:moveTo><a:pt x=\"{a}\" y=\"{b}\"/></a:moveTo><a:lnTo><a:pt x=\"{w}\" y=\"{h}\"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>"
+            );
+            crate::pptx_in::cust_path(&parse_element(xml.as_bytes()).unwrap())
+        };
+        let a = mk(100_000, 100_000, 25_000, 50_000);
+        let b = mk(914_400, 457_200, 228_600, 228_600);
+        assert_eq!(a, b);
+        assert!(a.starts_with("M0.25000 0.50000"), "{a}");
+    }
+
+    #[test]
+    fn the_sixteen_point_rectangle_still_round_trips() {
+        let (objs, xml) = round_trip(vec![block(10, "rect", None), conn(11, 10, 4)]);
+        assert!(xml.contains(MARK_RECT) && !xml.contains("<a:path w="), "{xml}");
+        let Kind::Shape(sp) = &objs.iter().find(|o| o.id == 10).unwrap().kind else { panic!() };
+        assert_eq!(sp.geom.prst, "rect");
+        assert_eq!(crate::geom::sites(objs.iter().find(|o| o.id == 10).unwrap()).len(), 16);
+    }
+
+    #[test]
+    fn an_unfilled_custom_shape_marks_its_path_unfilled() {
+        let (_, xml) = round_trip(vec![custom(10, "M0 0 L1 1", Paint::None, Some(Stroke::new("112233", 1.0)))]);
+        assert!(xml.contains("fill=\"none\""), "{xml}");
+    }
+
+    #[test]
+    fn a_filled_custom_shape_has_no_fill_attribute_on_its_path() {
+        let (_, xml) = round_trip(vec![custom(10, "M0 0 L1 0 L1 1 Z", solid(), None)]);
+        assert!(xml.contains("<a:path w=") && !xml.contains("fill=\"none\""), "{xml}");
+    }
+
+    #[test]
+    fn a_shape_with_a_hole_round_trips_both_subpaths_and_their_directions() {
+        let src = "M0.1 0.1 L0.9 0.1 L0.9 0.9 L0.1 0.9 Z M0.3 0.3 L0.3 0.7 L0.7 0.7 L0.7 0.3 Z";
+        let (objs, _) = round_trip(vec![custom(10, src, solid(), None)]);
+        let got = path_of(&objs, 10);
+        assert_eq!(got.matches('M').count(), 2, "{got}");
+        assert_eq!(got.matches('Z').count(), 2, "{got}");
+        let nums = |p: &str| -> Vec<f64> {
+            p.split(|c: char| c.is_ascii_alphabetic() || c.is_whitespace()).filter_map(|t| t.parse().ok()).collect()
+        };
+        let (a, b) = (nums(src), nums(&got));
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(&b) {
+            assert!((x - y).abs() < 1e-4, "{src} vs {got}");
         }
     }
 }

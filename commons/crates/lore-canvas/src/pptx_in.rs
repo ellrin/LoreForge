@@ -230,7 +230,7 @@ fn stroke_of(ctx: &Ctx, l: Option<&om::Line>, style: Option<&Element>) -> Option
             .and_then(|l| l.tail.as_ref())
             .map(|h| h.kind().to_string())
             .unwrap_or_else(|| "none".into()),
-            cap: String::new(),
+        cap: if l.and_then(|l| l.attrs.get("cap")) == Some("rnd") { "round".into() } else { String::new() },
     })
 }
 
