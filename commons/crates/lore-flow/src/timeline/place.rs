@@ -192,6 +192,19 @@ fn build(spec: &TimelineSpec, st: &Style, frame: Rect, u: f64, k: f64) -> (Plan,
 
     let mut pts: Vec<PointGeom> = spec.points.iter().enumerate().map(|(i, p)| point(&env, p, i, region.x + col * (i as f64 + 0.5))).collect();
 
+    // cards of one side are equally tall: each grows away from the axis to the tallest
+    for side in [Side::Above, Side::Below] {
+        let tallest = pts.iter().filter(|p| p.side == side).filter_map(|p| p.card.map(|c| c.h)).fold(0.0, f64::max);
+        for p in pts.iter_mut().filter(|p| p.side == side) {
+            if let Some(c) = p.card.as_mut() {
+                if side == Side::Above {
+                    c.y -= tallest - c.h;
+                }
+                c.h = tallest;
+            }
+        }
+    }
+
     // what the points need on each side of the axis
     let (mut na, mut nb) = (thick / 2.0, thick / 2.0);
     for p in &pts {
@@ -382,10 +395,15 @@ fn point(e: &Env, p: &super::Point, i: usize, x: f64) -> PointGeom {
 
     // text column width
     let card = st.text.kind == "card";
-    let base = if alt { 2.0 * col - 3.0 * gap } else { col - 2.0 * gap };
+    // cards keep a clear gap between neighbours
+    let base = if alt { 2.0 * col - 3.0 * gap } else if card { col - 6.0 * gap } else { col - 2.0 * gap };
     let base = if st.text.width > 0.0 { base.min(st.text.width * s) } else { base };
     let centred = card || st.text.align == "center";
-    let col_w = if centred { base.min(2.0 * (x - rl).min(rr - x)) } else { base.min(rr - x - gap) }.max(1.0);
+    // left-aligned text: every block starts the same distance left of its stem, far enough that
+    // the last one ends inside the region (never one squeezed column at the right edge)
+    let left_w = base.min(if alt { 1.5 * col } else { col - 2.0 * gap });
+    let left_back = (gap + left_w - col / 2.0).max(0.0);
+    let col_w = if centred { base.min(2.0 * (x - rl).min(rr - x)) } else { left_w }.max(1.0);
     let padc = if card { st.card.pad * s } else { 0.0 };
     let tw = if card { (col_w - 2.0 * padc).max(1.0) } else { col_w };
 
@@ -433,7 +451,7 @@ fn point(e: &Env, p: &super::Point, i: usize, x: f64) -> PointGeom {
     } else {
         stack + ex_top + ex_bot
     };
-    let (left0, span) = if card { (x - col_w / 2.0, col_w) } else if centred { (x - tw / 2.0, tw) } else { (x + gap, tw) };
+    let (left0, span) = if card { (x - col_w / 2.0, col_w) } else if centred { (x - tw / 2.0, tw) } else { (x + gap - left_back, tw) };
     let dx = clamp_dx(left0, span, rl, rr);
     let card_left = left0 + dx;
     let text_left = if card { card_left + padc } else { card_left };
@@ -716,14 +734,39 @@ mod tests {
     }
 
     #[test]
-    fn left_aligned_text_starts_beside_the_stem() {
+    fn left_aligned_text_starts_the_same_distance_left_of_every_stem() {
+        for (alt, n) in [(false, 4), (true, 5), (true, 10)] {
+            let mut st = Style::default();
+            st.text.align = "left".into();
+            if alt {
+                st.text.side = "alternate".into();
+            }
+            let p = plan(&long_spec(n), &st, frame());
+            let back: Vec<f64> = p.points.iter().map(|q| q.x - q.title.as_ref().unwrap().rect.x).collect();
+            let widths: Vec<f64> = p.points.iter().map(|q| q.title.as_ref().unwrap().rect.w).collect();
+            // never one squeezed column at the right edge: every block is as wide as the first
+            assert!(widths.iter().all(|w| (w - widths[0]).abs() < 1e-6), "{widths:?}");
+            // the inner points keep one distance; only an end point may be pushed into the region
+            assert!(back[1..n - 1].iter().all(|b| (b - back[1]).abs() < 1e-6), "{back:?}");
+            for q in &p.points {
+                let t = q.title.as_ref().unwrap();
+                assert!(t.rect.x >= 12.0 - 1e-6 && t.rect.right() <= 672.0 - 12.0 + 1e-6, "{:?}", t.rect);
+            }
+        }
+    }
+
+    #[test]
+    fn cards_of_one_side_are_equally_tall_and_apart() {
         let mut st = Style::default();
-        st.text.align = "left".into();
-        let p = plan(&spec(4), &st, frame());
+        st.text.kind = "card".into();
+        let p = plan(&long_spec(5), &st, frame());
+        let cards: Vec<Rect> = p.points.iter().map(|q| q.card.unwrap()).collect();
+        assert!(cards.iter().all(|c| (c.h - cards[0].h).abs() < 1e-6 && (c.y - cards[0].y).abs() < 1e-6), "{cards:?}");
+        assert!(cards.windows(2).all(|w| w[1].x - w[0].right() >= 4.0 * p.scale), "a clear gap between neighbours: {cards:?}");
         for q in &p.points {
-            let t = q.title.as_ref().unwrap();
-            assert!((t.rect.x - (q.x + 4.0 * p.scale)).abs() < 1e-6);
-            assert!(t.rect.right() <= 672.0 - 12.0 + 1e-6);
+            let c = q.card.unwrap();
+            let b = q.body.as_ref().unwrap().rect;
+            assert!(b.y >= c.y && b.bottom() <= c.bottom() + 1e-6);
         }
     }
 
