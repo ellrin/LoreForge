@@ -97,7 +97,7 @@ impl TimelineSpec {
 
 /// The values each field takes today. [`style::check`] lists anything else in [`Style::cannot`].
 pub mod can {
-    pub const AXIS: [&str; 4] = ["line", "band", "joins", "none"];
+    pub const AXIS: [&str; 6] = ["line", "band", "chevrons", "path", "joins", "none"];
     pub const AXIS_AT: [&str; 3] = ["middle", "top", "bottom"];
     pub const MARKER: [&str; 5] = ["dot", "ring", "square", "circle", "block"];
     pub const INSIDE: [&str; 4] = ["none", "time", "icon", "number"];
@@ -150,8 +150,10 @@ pub struct Style {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Axis {
-    /// `line` (thin) · `band` (thick, may hold the times) · `joins` (no axis: dashed joins
-    /// between the markers) · `none`. Later: `chevrons`, `path`.
+    /// `line` (thin) · `band` (thick, may hold the times) · `chevrons` (a band cut into arrow
+    /// pieces, one per point) · `path` (a thick line that steps up and down through the
+    /// markers when the texts alternate) · `joins` (no axis: dashed joins between the markers)
+    /// · `none`.
     pub kind: String,
     /// Line weight, or the band's height (pt).
     pub weight: f64,

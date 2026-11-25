@@ -14,6 +14,9 @@ const EPS: f64 = 1e-6;
 /// Rule places this file knows: `can::RULE` plus `far` (beyond the block, away from the axis).
 const RULES: [&str; 4] = ["none", "under", "over", "far"];
 
+/// Axis kinds this file knows: `can::AXIS` plus `chevrons` and `path`.
+const AXES: [&str; 6] = ["line", "band", "joins", "none", "chevrons", "path"];
+
 /// Place `spec` in `style` inside `frame` (pt). Pure geometry: no objects, no colours but the
 /// resolved colour of each point. Values the program cannot draw ([`Style::cannot`]) fall back
 /// to the field's default, so a plan always comes back.
@@ -47,7 +50,7 @@ fn pos(v: f64, d: f64) -> f64 {
 fn norm(s: &Style) -> Style {
     let d = Style::default();
     let mut o = s.clone();
-    o.axis.kind = pick(&s.axis.kind, &can::AXIS, &d.axis.kind);
+    o.axis.kind = pick(&s.axis.kind, &AXES, &d.axis.kind);
     o.axis.at = pick(&s.axis.at, &can::AXIS_AT, &d.axis.at);
     o.axis.weight = pos(s.axis.weight, d.axis.weight);
     o.marker.kind = pick(&s.marker.kind, &can::MARKER, &d.marker.kind);
@@ -153,6 +156,8 @@ struct Env<'a> {
     region: Rect,
     col: f64,
     thick: f64,
+    /// `path` with alternating sides: how far a marker swings off the centre line (else 0).
+    swing: f64,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -191,8 +196,9 @@ fn build(spec: &TimelineSpec, st: &Style, frame: Rect, u: f64, k: f64) -> (Plan,
     }
     let region = Rect::new(frame.x + pad, top + pad, (frame.w - 2.0 * pad).max(0.0), (frame.bottom() - pad - (top + pad)).max(0.0));
     let col = region.w / n as f64;
-    let thick = if st.axis.kind == "line" || st.axis.kind == "band" { st.axis.weight * s } else { 0.0 };
-    let env = Env { st, s, gap, region, col, thick };
+    let thick = if matches!(st.axis.kind.as_str(), "line" | "band" | "chevrons" | "path") { st.axis.weight * s } else { 0.0 };
+    let swing = if st.axis.kind == "path" && st.text.side == "alternate" { 14.0 * s } else { 0.0 };
+    let env = Env { st, s, gap, region, col, thick, swing };
 
     let mut pts: Vec<PointGeom> = spec.points.iter().enumerate().map(|(i, p)| point(&env, p, i, region.x + col * (i as f64 + 0.5))).collect();
 
@@ -210,7 +216,7 @@ fn build(spec: &TimelineSpec, st: &Style, frame: Rect, u: f64, k: f64) -> (Plan,
     }
 
     // what the points need on each side of the axis
-    let (mut na, mut nb) = (thick / 2.0, thick / 2.0);
+    let (mut na, mut nb) = (thick / 2.0 + swing, thick / 2.0 + swing);
     for p in &pts {
         let (lo, hi) = extent_y(p);
         na = na.max(-lo);
@@ -238,7 +244,7 @@ fn build(spec: &TimelineSpec, st: &Style, frame: Rect, u: f64, k: f64) -> (Plan,
     for &(cx, cy) in &legend {
         bb.rect(Rect::new(cx - 5.0 * s, cy - 5.0 * s, 10.0 * s, 10.0 * s));
     }
-    bb.rect(Rect::new(x0, y - thick / 2.0, x1 - x0, thick));
+    bb.rect(Rect::new(x0, y - thick / 2.0 - swing, x1 - x0, thick + 2.0 * swing));
     for p in &pts {
         for r in rects(p) {
             bb.rect(r);
@@ -341,7 +347,8 @@ fn point(e: &Env, p: &super::Point, i: usize, x: f64) -> PointGeom {
     let time_txt = p.time.trim();
     let mh = st.marker.size * s;
     let mw = if st.marker.kind == "block" { mh.max(text::width(time_txt, ts) + 12.0 * s) } else { mh };
-    let mc = if in_axis { -d * e.thick / 2.0 } else { 0.0 };
+    // in a band the marker bites its edge; on a swinging path it sits away from its text
+    let mc = if in_axis { -d * e.thick / 2.0 } else { -d * e.swing };
     let marker = Rect::new(x - mw / 2.0, mc - mh / 2.0, mw, mh);
     // where the stem (or the text) leaves: the marker's edge, or with times in the band the
     // band's edge on the text side
@@ -354,8 +361,13 @@ fn point(e: &Env, p: &super::Point, i: usize, x: f64) -> PointGeom {
         "drop" => 0.4 * mh,
         _ => 0.0,
     };
+    // on a path the marker swings away from its text, so the way to the text crosses the other
+    // level of the line, where the neighbours' markers sit: the text starts beyond that level
+    let cross = if in_axis { 0.0 } else { 2.0 * e.swing };
+    let stem_len = if st.stem.kind == "line" { stem_len + cross } else { stem_len };
+    let clear = if st.stem.kind == "line" { 0.0 } else { cross };
     let stem: Option<Line> = if st.stem.kind == "none" { None } else { Some([(x, edge_t), (x, edge_t + d * stem_len)]) };
-    let start = edge_t + d * (stem_len + gap);
+    let start = edge_t + d * (stem_len + clear + gap);
 
     // the other side of the axis: icon, then the time label beyond it
     let si = st.icon.size * s;
@@ -1033,6 +1045,109 @@ mod tests {
                     assert!(l[0].1 >= b.y && l[0].1 <= b.bottom() && l[1].1 >= b.y && l[1].1 <= b.bottom());
                     assert!(l[0].0 >= b.x && l[1].0 <= b.right());
                 }
+            }
+        }
+    }
+
+    // ── package T-axes ──
+    fn axis_style(kind: &str) -> Style {
+        let mut st = Style::default();
+        st.axis.kind = kind.into();
+        st.axis.weight = 24.0;
+        st
+    }
+
+    #[test]
+    fn chevrons_are_as_thick_as_a_band_and_times_sit_inside() {
+        for kind in ["band", "chevrons"] {
+            let mut st = axis_style(kind);
+            st.time.at = "in-axis".into();
+            st.time.stagger = true;
+            let p = plan(&spec(4), &st, frame());
+            assert!((p.axis.thickness - 24.0 * p.scale).abs() < 1e-6, "{kind}");
+            let half = p.axis.thickness / 2.0;
+            let (a, b) = (p.points[0].time.as_ref().unwrap().rect, p.points[1].time.as_ref().unwrap().rect);
+            assert!((a.y - (p.axis.y - half)).abs() < 1e-6 && (b.y - p.axis.y).abs() < 1e-6, "{kind}");
+            assert!((p.points[0].marker.cy() - (p.axis.y - half)).abs() < 1e-6, "{kind}");
+        }
+        let c = plan(&spec(4), &axis_style("chevrons"), frame());
+        let b = plan(&spec(4), &axis_style("band"), frame());
+        assert_eq!(c, b);
+    }
+
+    #[test]
+    fn with_chevrons_the_stem_leaves_the_band_edge() {
+        let mut st = axis_style("chevrons");
+        st.time.at = "in-axis".into();
+        st.text.side = "alternate".into();
+        st.text.first = "below".into();
+        let p = plan(&spec(2), &st, frame());
+        let half = p.axis.thickness / 2.0;
+        let (below, above) = (&p.points[0], &p.points[1]);
+        assert!((below.stem.unwrap()[0].1 - (p.axis.y + half)).abs() < 1e-6);
+        assert!((above.stem.unwrap()[0].1 - (p.axis.y - half)).abs() < 1e-6);
+        assert!((below.marker.cy() - (p.axis.y - half)).abs() < 1e-6);
+        assert!((above.marker.cy() - (p.axis.y + half)).abs() < 1e-6);
+    }
+
+    fn path_style(side: &str) -> Style {
+        let mut st = Style::default();
+        st.axis.kind = "path".into();
+        st.axis.weight = 4.0;
+        st.text.side = side.into();
+        st.text.first = "below".into();
+        st
+    }
+
+    #[test]
+    fn on_a_path_markers_swing_away_from_their_text() {
+        let p = plan(&spec(4), &path_style("alternate"), frame());
+        let a = 14.0 * p.scale;
+        assert!((p.axis.thickness - 4.0 * p.scale).abs() < 1e-9);
+        for q in &p.points {
+            let want = if q.side == Side::Below { p.axis.y - a } else { p.axis.y + a };
+            assert!((q.marker.cy() - want).abs() < 1e-6, "{:?}", q.side);
+            // the stem leaves the marker's edge on the text side
+            let st = q.stem.unwrap();
+            let edge = if q.side == Side::Below { q.marker.bottom() } else { q.marker.y };
+            assert!((st[0].1 - edge).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn on_a_path_no_text_lies_on_the_level_of_the_neighbours_markers() {
+        let mut st = Style::default();
+        st.axis.kind = "path".into();
+        st.axis.weight = 5.0;
+        st.marker.size = 30.0;
+        st.text.side = "alternate".into();
+        let p = plan(&long_spec(5), &st, frame());
+        let (top, bottom) = p.points.iter().fold((f64::MAX, f64::MIN), |(t, b), q| (t.min(q.marker.y), b.max(q.marker.bottom())));
+        for q in &p.points {
+            for r in [q.title.as_ref().map(|s| s.rect), q.body.as_ref().map(|s| s.rect)].into_iter().flatten() {
+                assert!(r.bottom() <= top + 1e-6 || r.y >= bottom - 1e-6, "text between the two levels: {r:?} ({top}..{bottom})");
+            }
+        }
+    }
+
+    #[test]
+    fn a_path_with_text_on_one_side_is_straight() {
+        for side in ["below", "above"] {
+            let p = plan(&spec(4), &path_style(side), frame());
+            assert!(p.points.iter().all(|q| (q.marker.cy() - p.axis.y).abs() < 1e-6), "{side}");
+        }
+    }
+
+    #[test]
+    fn a_path_still_fits_the_frame() {
+        for n in [5, 10] {
+            let f = frame();
+            let p = plan(&long_spec(n), &path_style("alternate"), f);
+            assert!(inside(p.bounds, f), "n={n} {:?}", p.bounds);
+            let a = 14.0 * p.scale;
+            assert!(p.bounds.y <= p.axis.y - a + 1e-6 && p.bounds.bottom() >= p.axis.y + a - 1e-6);
+            for q in &p.points {
+                assert!(inside(q.marker, f));
             }
         }
     }

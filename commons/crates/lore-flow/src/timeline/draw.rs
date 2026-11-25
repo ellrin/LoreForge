@@ -164,7 +164,69 @@ impl Drawer<'_> {
                     self.push("axis", o);
                 }
             }
+            "chevrons" => self.chevrons(),
+            "path" => self.path(),
             _ => {}
+        }
+    }
+
+    /// One arrow-shaped piece per point, pointing right, a small gap between neighbours.
+    fn chevrons(&mut self) {
+        let (ax, st, k) = (self.plan.axis.clone(), self.style, self.k());
+        let muted = st.colors.muted.to_uppercase();
+        let pts = &self.plan.points;
+        let n = pts.len();
+        let (t, gap) = (0.35 * ax.thickness, 2.0 * k);
+        let (top, bot, mid) = (ax.y - ax.thickness / 2.0, ax.y + ax.thickness / 2.0, ax.y);
+        let per_point = st.axis.color.trim() == "point";
+        let base = pick(&st.axis.color, &muted, &muted).unwrap_or_else(|| muted.clone());
+        let mut made = vec![];
+        for (i, p) in pts.iter().enumerate() {
+            let l = if i == 0 { ax.x0 } else { (pts[i - 1].x + p.x) / 2.0 };
+            let r = if i + 1 == n { ax.x1 } else { (p.x + pts[i + 1].x) / 2.0 };
+            let rb = if i + 1 == n { r - t } else { r - gap };
+            let mut v = vec![(l, top), (rb, top), (rb + t, mid), (rb, bot), (l, bot)];
+            if i > 0 {
+                v.push((l + t, mid));
+            }
+            let c = if per_point {
+                p.color.to_uppercase()
+            } else if i % 2 == 1 {
+                shade(&base, 0.3)
+            } else {
+                base.clone()
+            };
+            made.push((i, poly("", &v, true, Paint::solid(&c), None)));
+        }
+        for (i, o) in made {
+            self.push(&format!("axis-{}", i + 1), o);
+        }
+    }
+
+    /// A thick line through the markers as a square wave; each piece steps to the next height.
+    fn path(&mut self) {
+        let (ax, st) = (self.plan.axis.clone(), self.style);
+        let muted = st.colors.muted.to_uppercase();
+        let pts = &self.plan.points;
+        let n = pts.len();
+        let hy = |p: &PointGeom| p.marker.y + p.marker.h / 2.0;
+        let mut made = vec![];
+        for (i, p) in pts.iter().enumerate() {
+            let l = if i == 0 { ax.x0 } else { (pts[i - 1].x + p.x) / 2.0 };
+            let r = if i + 1 == n { ax.x1 } else { (p.x + pts[i + 1].x) / 2.0 };
+            let h = hy(p);
+            let mut v = vec![(l, h), (r, h)];
+            if i + 1 < n {
+                let h2 = hy(&pts[i + 1]);
+                if (h2 - h).abs() > 1e-9 {
+                    v.push((r, h2));
+                }
+            }
+            let Some(c) = pick(&st.axis.color, &p.color, &muted) else { return };
+            made.push((i, poly("", &v, false, Paint::None, Some(Stroke::new(&c, ax.thickness)))));
+        }
+        for (i, o) in made {
+            self.push(&format!("axis-{}", i + 1), o);
         }
     }
 
@@ -245,7 +307,18 @@ impl Drawer<'_> {
             for r in 1..=rings {
                 let dia = d * (0.5 + 0.5 * r as f64 / rings as f64);
                 let c = Some(if r == 1 { pc.clone() } else { st.colors.muted.to_uppercase() });
-                let o = self.circle(cx, cy, dia, Paint::None, self.line_of(&c, lw));
+                let o = if rings >= 3 && r == rings {
+                    // the outermost ring is a half ring, on the side away from the text
+                    let sign = if pg.side == Side::Below { -1.0 } else { 1.0 };
+                    let rad = dia / 2.0;
+                    let arc: Vec<(f64, f64)> = (0..=24).map(|j| {
+                        let a = std::f64::consts::PI * j as f64 / 24.0;
+                        (cx + rad * a.cos(), cy + sign * rad * a.sin())
+                    }).collect();
+                    poly("", &arc, false, Paint::None, self.line_of(&c, lw))
+                } else {
+                    self.circle(cx, cy, dia, Paint::None, self.line_of(&c, lw))
+                };
                 self.push(&format!("{p}-ring-{r}"), o);
             }
         }
@@ -315,7 +388,7 @@ impl Drawer<'_> {
                 let (color, anchor) = if at == "in-marker" || at == "in-axis" {
                     let behind = if at == "in-marker" {
                         self.marker_fill(pg)
-                    } else if st.axis.kind == "band" {
+                    } else if st.axis.kind == "band" || st.axis.kind == "chevrons" {
                         pick(&st.axis.color, &pc, &pc)
                     } else {
                         None
@@ -915,6 +988,214 @@ mod tests {
             assert!(used.len() > 10);
             for c in used {
                 assert!(ok.iter().any(|k| k.eq_ignore_ascii_case(&c)), "stray colour {c}");
+            }
+        }
+    }
+
+    // ── package T-axes ──
+    /// (left, top, right, bottom) of an object in pt.
+    fn bbox(o: &Object) -> (f64, f64, f64, f64) {
+        (emu_pt(o.frame.x), emu_pt(o.frame.y), emu_pt(o.frame.x + o.frame.w), emu_pt(o.frame.y + o.frame.h))
+    }
+    fn vertices(o: &Object) -> usize {
+        sp(o).geom.path.as_deref().unwrap_or("").matches(['M', 'L']).count()
+    }
+    fn chevron_style(color: &str) -> Style {
+        let mut st = Style::default();
+        st.axis.kind = "chevrons".into();
+        st.axis.color = color.into();
+        st
+    }
+    fn chevron_plan() -> Plan {
+        let mut pl = plan();
+        pl.axis.thickness = 20.0;
+        pl
+    }
+
+    #[test]
+    fn chevrons_are_one_arrow_piece_per_point() {
+        let b = draw(&chevron_style("point"), &chevron_plan());
+        assert!(!has(&b, "axis"));
+        for i in 1..=3 {
+            let o = find(&b, &format!("axis-{i}"));
+            assert_eq!(sp(o).geom.prst, "custom");
+            assert!(sp(o).geom.path.as_deref().unwrap().ends_with('Z'));
+            assert!(sp(o).line.is_none());
+            let (_, t, _, bt) = bbox(o);
+            assert!((t - 90.0).abs() < 0.01 && (bt - 110.0).abs() < 0.01);
+            // the first piece has a straight left edge, the others a notch
+            assert_eq!(vertices(o), if i == 1 { 5 } else { 6 });
+        }
+        // spans: the first starts at the axis, the point of an arrow reaches 0.35 x 20 = 7 past its body
+        let (l, _, r, _) = bbox(find(&b, "axis-1"));
+        assert!((l - 20.0).abs() < 0.01 && (r - (150.0 - 2.0 + 7.0)).abs() < 0.01, "{l} {r}");
+    }
+
+    #[test]
+    fn chevron_pieces_do_not_overlap_and_end_at_the_axis_end() {
+        let b = draw(&chevron_style("point"), &chevron_plan());
+        for i in 1..3 {
+            let (_, _, tip, _) = bbox(find(&b, &format!("axis-{i}")));
+            let (notch, _, _, _) = bbox(find(&b, &format!("axis-{}", i + 1)));
+            // the next piece's notch is 7 in from its left edge; the gap between is 2
+            assert!((notch + 7.0 - tip - 2.0).abs() < 0.01, "{i}: tip {tip} notch {notch}");
+        }
+        let (_, _, r, _) = bbox(find(&b, "axis-3"));
+        assert!((r - 380.0).abs() < 0.01);
+        // the gap scales with the figure
+        let mut pl = chevron_plan();
+        pl.scale = 2.0;
+        pl.axis.thickness = 20.0;
+        let b = draw(&chevron_style("point"), &pl);
+        let (_, _, tip, _) = bbox(find(&b, "axis-1"));
+        let (notch, _, _, _) = bbox(find(&b, "axis-2"));
+        assert!((notch + 7.0 - tip - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn chevrons_take_the_points_colour_or_alternate_a_tint() {
+        let b = draw(&chevron_style("point"), &chevron_plan());
+        assert_eq!(fill_hex(find(&b, "axis-1")), "112233");
+        assert_eq!(fill_hex(find(&b, "axis-2")), "445566");
+        assert_eq!(fill_hex(find(&b, "axis-3")), "AABBCC");
+        let b = draw(&chevron_style("ABCDEF"), &chevron_plan());
+        assert_eq!(fill_hex(find(&b, "axis-1")), "ABCDEF");
+        assert_eq!(fill_hex(find(&b, "axis-2")), shade("ABCDEF", 0.3));
+        assert_eq!(fill_hex(find(&b, "axis-3")), "ABCDEF");
+    }
+
+    fn path_style(color: &str) -> Style {
+        let mut st = Style::default();
+        st.axis.kind = "path".into();
+        st.axis.color = color.into();
+        st
+    }
+    /// Markers at heights 90, 110, 90 (centres), the line 6 pt thick.
+    fn path_plan() -> Plan {
+        let mut pl = plan();
+        pl.axis.thickness = 6.0;
+        for (p, cy) in pl.points.iter_mut().zip([90.0, 110.0, 90.0]) {
+            p.marker = r(p.x - 5.0, cy - 5.0, 10.0, 10.0);
+        }
+        pl
+    }
+
+    #[test]
+    fn a_path_runs_through_every_marker_centre() {
+        let b = draw(&path_style("point"), &path_plan());
+        assert!(!has(&b, "axis"));
+        let (a1, a2, a3) = (bbox(find(&b, "axis-1")), bbox(find(&b, "axis-2")), bbox(find(&b, "axis-3")));
+        // each piece runs from the midpoint before to the midpoint after (the ends: the axis)
+        assert!((a1.0 - 20.0).abs() < 0.01 && (a1.2 - 150.0).abs() < 0.01);
+        assert!((a2.0 - 150.0).abs() < 0.01 && (a2.2 - 250.0).abs() < 0.01);
+        assert!((a3.0 - 250.0).abs() < 0.01 && (a3.2 - 380.0).abs() < 0.01);
+        // level at the marker's centre height
+        assert!((a1.1 - 90.0).abs() < 0.01);
+        assert!((a3.1 - 90.0).abs() < 0.01 && (a3.3 - 90.0).abs() < 0.01);
+        assert!((a2.3 - 110.0).abs() < 0.01);
+        assert!(sp(find(&b, "axis-1")).fill == Paint::None);
+    }
+
+    #[test]
+    fn the_step_between_two_heights_is_drawn_once() {
+        let b = draw(&path_style("point"), &path_plan());
+        // 90 -> 110 is drawn by piece 1 (level, then down); 110 -> 90 by piece 2; piece 3 is level
+        assert_eq!(vertices(find(&b, "axis-1")), 3);
+        assert_eq!(vertices(find(&b, "axis-2")), 3);
+        assert_eq!(vertices(find(&b, "axis-3")), 2);
+        assert!(!sp(find(&b, "axis-1")).geom.path.as_deref().unwrap().ends_with('Z'));
+        // the step of piece 1 is at the midpoint 150: its box spans 90 .. 110
+        let a1 = bbox(find(&b, "axis-1"));
+        assert!((a1.1 - 90.0).abs() < 0.01 && (a1.3 - 110.0).abs() < 0.01);
+        // a straight path is one level piece each
+        let mut pl = path_plan();
+        for p in pl.points.iter_mut() {
+            p.marker = r(p.x - 5.0, 95.0, 10.0, 10.0);
+        }
+        let b = draw(&path_style("point"), &pl);
+        assert!((1..=3).all(|i| vertices(find(&b, &format!("axis-{i}"))) == 2));
+    }
+
+    #[test]
+    fn a_path_takes_each_points_colour() {
+        let b = draw(&path_style("point"), &path_plan());
+        for (i, c) in ["112233", "445566", "AABBCC"].iter().enumerate() {
+            let l = sp(find(&b, &format!("axis-{}", i + 1))).line.as_ref().unwrap();
+            assert_eq!((l.color.as_str(), l.width_pt), (*c, 6.0));
+        }
+        let b = draw(&path_style("ABCDEF"), &path_plan());
+        assert_eq!(sp(find(&b, "axis-2")).line.as_ref().unwrap().color, "ABCDEF");
+    }
+
+    fn ring_style(rings: u32) -> Style {
+        let mut st = Style::default();
+        st.marker.kind = "ring".into();
+        st.marker.rings = rings;
+        st
+    }
+    fn ring_plan() -> Plan {
+        // point 1 has its text above, point 2 below
+        let mut pl = plan();
+        pl.points[0].marker = r(90.0, 90.0, 20.0, 20.0);
+        pl.points[1].marker = r(190.0, 90.0, 20.0, 20.0);
+        pl
+    }
+
+    #[test]
+    fn a_third_ring_is_a_half_ring_on_the_side_away_from_the_text() {
+        let b = draw(&ring_style(3), &ring_plan());
+        for i in [1, 2] {
+            assert_eq!(sp(find(&b, &format!("p{i}-ring-1"))).geom.prst, "ellipse");
+            assert_eq!(sp(find(&b, &format!("p{i}-ring-2"))).geom.prst, "ellipse");
+        }
+        // text above: the arc is the bottom half, 100 .. 110
+        let up = find(&b, "p1-ring-3");
+        assert_eq!(sp(up).geom.prst, "custom");
+        let (l, t, rr, bt) = bbox(up);
+        assert!((t - 100.0).abs() < 0.01 && (bt - 110.0).abs() < 0.01 && (l - 90.0).abs() < 0.01 && (rr - 110.0).abs() < 0.01, "{l} {t} {rr} {bt}");
+        assert!(vertices(up) >= 24 && !sp(up).geom.path.as_deref().unwrap().ends_with('Z'));
+        assert!(matches!(sp(up).fill, Paint::None));
+        assert_eq!(sp(up).line.as_ref().unwrap().color, "5F6368");
+        // text below: the top half, 90 .. 100
+        let (_, t, _, bt) = bbox(find(&b, "p2-ring-3"));
+        assert!((t - 90.0).abs() < 0.01 && (bt - 100.0).abs() < 0.01);
+        assert!(!has(&b, "p1-ring-4"));
+    }
+
+    #[test]
+    fn two_rings_stay_whole() {
+        for rings in [1, 2] {
+            let b = draw(&ring_style(rings), &ring_plan());
+            for r in 1..=rings {
+                assert_eq!(sp(find(&b, &format!("p1-ring-{r}"))).geom.prst, "ellipse");
+            }
+        }
+    }
+
+    #[test]
+    fn the_preview_svg_of_chevrons_and_a_path_has_no_nan() {
+        use crate::timeline::place;
+        let f = r(0.0, 0.0, 672.0, 357.0);
+        let mut sp3 = spec();
+        sp3.points.push(Point { time: "2024".into(), title: "Grow".into(), body: "Four sites.".into(), ..Default::default() });
+        for (kind, color) in [("chevrons", "point"), ("chevrons", "2F6DB0"), ("path", "point"), ("path", "2F6DB0")] {
+            for side in ["alternate", "below"] {
+                let mut st = Style::default();
+                st.axis.kind = kind.into();
+                st.axis.color = color.into();
+                st.axis.weight = if kind == "chevrons" { 26.0 } else { 4.0 };
+                st.text.side = side.into();
+                st.marker.kind = "ring".into();
+                st.marker.rings = 3;
+                if kind == "chevrons" {
+                    st.time.at = "in-axis".into();
+                }
+                let pl = place::plan(&sp3, &st, f);
+                let b = objects(&sp3, &st, &pl, &fonts(), 1);
+                let svg = crate::preview::svg(&b.objects, 672.0, 357.0, 1.0);
+                assert!(!svg.contains("NaN") && !svg.contains("inf"), "{kind} {color} {side}");
+                assert!(svg.contains("Pilot") && svg.contains("Grow"));
+                assert!(has(&b, "axis-4"));
             }
         }
     }

@@ -204,9 +204,9 @@ mod tests {
 
     #[test]
     fn unknown_values_are_listed_not_fixed() {
-        let s = parse("[axis]\nkind = \"path\"\ndash = \"wavy\"\n[text]\nfirst = \"left\"\n", "x").unwrap();
-        assert_eq!(s.axis.kind, "path");
-        assert_eq!(s.cannot, vec!["axis.kind = \"path\"", "axis.dash = \"wavy\"", "text.first = \"left\""]);
+        let s = parse("[axis]\nkind = \"spiral\"\ndash = \"wavy\"\n[text]\nfirst = \"left\"\n", "x").unwrap();
+        assert_eq!(s.axis.kind, "spiral");
+        assert_eq!(s.cannot, vec!["axis.kind = \"spiral\"", "axis.dash = \"wavy\"", "text.first = \"left\""]);
         let s = parse("spacing = \"date\"", "x").unwrap();
         assert_eq!(s.cannot, vec!["spacing = \"date\""]);
     }
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn checking_twice_gives_the_same_list() {
-        let mut s = parse("[axis]\nkind = \"path\"\n[today]\n", "x").unwrap();
+        let mut s = parse("[axis]\nkind = \"spiral\"\n[today]\n", "x").unwrap();
         let a = check(&mut s);
         let b = check(&mut s);
         assert_eq!(a, b);
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn a_style_that_cannot_be_drawn_is_still_loaded() {
         let d = temp("cannot");
-        std::fs::write(d.join("timelines").join("odd.toml"), "[axis]\nkind = \"path\"\n").unwrap();
+        std::fs::write(d.join("timelines").join("odd.toml"), "[axis]\nkind = \"spiral\"\n").unwrap();
         let (styles, broken) = load_dir(&d);
         let _ = std::fs::remove_dir_all(&d);
         assert!(broken.is_empty());
