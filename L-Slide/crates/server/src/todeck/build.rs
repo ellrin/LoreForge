@@ -385,9 +385,115 @@ fn body(paras: Vec<Para>, anchor: &str) -> TextBody {
     TextBody { insets: [0, 0, 0, 0], anchor: anchor.into(), wrap: true, autofit: "none".into(), paras, ..Default::default() }
 }
 
-/// A chain of boxes joined by arrows, drawn by lore-flow as one picture: a group of native
-/// shapes that keeps its spec, so 編輯流程圖 reopens it in the flow editor.
-fn flow_picture(cx: &Ctx, ws: &sc_core::Workspace, labels: &[String]) -> Result<Object, String> {
+/// The neutral timeline style a chain of years is drawn in. The author's own styles in
+/// `<workspace>/flow/timelines/` or the shared private folder replace it when one has this id.
+const TIMELINE_STYLE: &str = "line-below";
+
+const MONTHS: [(&str, &str); 12] = [("jan", "january"), ("feb", "february"), ("mar", "march"), ("apr", "april"), ("may", "may"), ("jun", "june"), ("jul", "july"), ("aug", "august"), ("sep", "september"), ("oct", "october"), ("nov", "november"), ("dec", "december")];
+
+/// `s` starts with a year of four digits 1900..=2100 that no digit follows.
+fn year_at(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    if b.len() < 4 || !b[..4].iter().all(u8::is_ascii_digit) || b.get(4).is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    let y: u32 = s[..4].parse().ok()?;
+    (1900..=2100).contains(&y).then_some(4)
+}
+
+/// `/NN` or `-NN` (a number 1..=max) at the start of `t`, no digit after it.
+fn two_digits_after_slash(t: &str, max: u32) -> bool {
+    let tb = t.as_bytes();
+    tb.len() >= 3
+        && (tb[0] == b'/' || tb[0] == b'-')
+        && tb[1].is_ascii_digit()
+        && tb[2].is_ascii_digit()
+        && !tb.get(3).is_some_and(u8::is_ascii_digit)
+        && (1..=max).contains(&t[1..3].parse::<u32>().unwrap_or(0))
+}
+
+/// The length of the time at the start of `s`, or None. Grammar: `[Mon[.] ]YYYY[s][ ?[-–] ?YYYY[s]]`
+/// or `YYYY[/-]MM[[/-]DD]`, YYYY in 1900..=2100; the time ends at the end, a space or a separator.
+fn time_len(s: &str) -> Option<usize> {
+    let mut at = 0;
+    // a month name before the year: "Mar 2021", "Sept. 2021"
+    let word: String = s.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    if !word.is_empty() {
+        let w = word.to_ascii_lowercase();
+        if !MONTHS.iter().any(|(a, full)| w == *a || w == *full) && w != "sept" {
+            return None;
+        }
+        let rest = &s[word.len()..];
+        let rest2 = rest.strip_prefix('.').unwrap_or(rest);
+        let sp = rest2.len() - rest2.trim_start().len();
+        if sp == 0 {
+            return None;
+        }
+        at = word.len() + (rest.len() - rest2.len()) + sp;
+    }
+    let mut end = at + year_at(&s[at..])?;
+    if word.is_empty() && two_digits_after_slash(&s[end..], 12) {
+        end += 3;
+        if two_digits_after_slash(&s[end..], 31) {
+            end += 3;
+        }
+        return boundary(s, end);
+    }
+    if s[end..].starts_with('s') {
+        end += 1;
+    }
+    // a range 2019–2021 (spaces around the dash allowed when a year follows)
+    let t = s[end..].trim_start();
+    if let Some(r) = t.strip_prefix(['-', '–']) {
+        let r2 = r.trim_start();
+        if let Some(n) = year_at(r2) {
+            let mut stop = s.len() - r2.len() + n;
+            if s[stop..].starts_with('s') {
+                stop += 1;
+            }
+            return boundary(s, stop);
+        }
+    }
+    boundary(s, end)
+}
+
+fn boundary(s: &str, end: usize) -> Option<usize> {
+    match s[end..].chars().next() {
+        None => Some(end),
+        Some(c) if c.is_whitespace() || ":：-–—,，".contains(c) => Some(end),
+        _ => None,
+    }
+}
+
+/// The chain as a timeline: every label starts with a time and at least two do. (time, title)
+/// per label in order; the separators after the time are dropped. Anything else is None.
+fn as_timeline(labels: &[String]) -> Option<Vec<(String, String)>> {
+    if labels.len() < 2 {
+        return None;
+    }
+    labels
+        .iter()
+        .map(|l| {
+            let l = l.trim();
+            let n = time_len(l)?;
+            let title = l[n..].trim_start_matches(|c: char| c.is_whitespace() || ":：-–—,，".contains(c)).trim();
+            Some((l[..n].to_string(), title.to_string()))
+        })
+        .collect()
+}
+
+/// A chain drawn by lore-flow as one picture: a timeline when every label starts with a time,
+/// else boxes joined by arrows. A group of native shapes that keeps its spec, so 編輯流程圖
+/// reopens it in the flow editor.
+fn flow_picture(cx: &mut Ctx, ws: &sc_core::Workspace, labels: &[String]) -> Result<Object, String> {
+    if let Some(points) = as_timeline(labels) {
+        let points = points.into_iter().map(|(time, title)| lore_flow::timeline::Point { time, title, ..Default::default() }).collect();
+        let spec = lore_flow::figure::FlowSpec { timeline: Some(lore_flow::timeline::TimelineSpec { style: TIMELINE_STYLE.into(), points, ..Default::default() }), ..Default::default() };
+        match render_spec(cx, ws, &spec) {
+            Ok(p) => return Ok(p),
+            Err(e) => cx.warnings.push(format!("時間軸畫不出來（{e}），改畫方框與箭頭")),
+        }
+    }
     let esc = |s: &str| s.replace('"', "'").split_whitespace().collect::<Vec<_>>().join(" ");
     let mut dsl = String::from("fig chain\npanel a \"\" dir=right\n");
     for (i, l) in labels.iter().enumerate() {
@@ -402,13 +508,18 @@ fn flow_picture(cx: &Ctx, ws: &sc_core::Workspace, labels: &[String]) -> Result<
     let types: Vec<serde_json::Value> = (0..n).map(|i| serde_json::json!({ "id": format!("t{}", i + 1), "label": "", "fill": pal[pick(i)].1, "line": pal[pick(i)].2 })).collect();
     let nodes: serde_json::Map<String, serde_json::Value> = (0..n).map(|i| (format!("n{}", i + 1), serde_json::Value::String(format!("t{}", i + 1)))).collect();
     let spec = lore_flow::figure::FlowSpec::from_value(serde_json::json!({ "lore_flow": 1, "dsl": dsl, "types": types, "nodes": nodes, "legend": { "show": "off" } }))?;
+    render_spec(cx, ws, &spec)
+}
+
+/// Draw `spec` with the workspace's flow folder as the catalogue, in the deck's fonts.
+fn render_spec(cx: &Ctx, ws: &sc_core::Workspace, spec: &lore_flow::figure::FlowSpec) -> Result<Object, String> {
     let dir = ws.root.join("flow");
     let cat = lore_flow::figure::Catalogue::load_all(&[dir.as_path()]);
     let math = lore_flow::PandocMath::new(cx.pandoc.clone());
     let frame = spec.frame_rect();
     // the children's ids sit far above the slide's own (the group itself is numbered with the rest)
-    let (fig, g) = lore_flow::figure::render(&spec, &cat, None, &math, lore_flow::Rect::new(0.0, 0.0, frame.w, frame.h), 5000)?;
-    let mut picture = lore_flow::figure::as_picture(&fig, &g.fig, &spec, fig.built.next_id);
+    let (fig, g) = lore_flow::figure::render(spec, &cat, None, &math, lore_flow::Rect::new(0.0, 0.0, frame.w, frame.h), 5000)?;
+    let mut picture = lore_flow::figure::as_picture(&fig, &g.fig, spec, fig.built.next_id);
     // the labels in the deck's own fonts (one font across the deck), the figure's sizes kept
     let like = cx.look(&cx.tag(&["body"]), None);
     deck_fonts(&mut picture, &like);
@@ -1309,7 +1420,7 @@ pub fn build(plan: &Plan, m: &Material, inp: BuildInput) -> Result<Built, String
                 // one picture across the body, the lines under it
                 let mut drawn = false;
                 if table_grid.is_none() && image.is_none() && !own_pic && ps.equations.is_empty() && ps.flow.len() >= 2 {
-                    match flow_picture(&cx, inp.ws, &ps.flow) {
+                    match flow_picture(&mut cx, inp.ws, &ps.flow) {
                         Ok(picture) => {
                             let aspect = picture.frame.w.max(1) as f64 / picture.frame.h.max(1) as f64;
                             let room = (bottom - c.y) * 45 / 100;
@@ -1613,5 +1724,81 @@ mod tests {
         assert!(short > inch && short < 3 * inch, "{short}");
         assert!(long > 4 * inch && long < 6 * inch, "a fraction is as wide as its wider part, limits take no width: {long}");
         assert_eq!(math_w("", 18.0), 0);
+    }
+
+    fn labels(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn labels_that_all_start_with_a_year_are_a_timeline() {
+        let t = as_timeline(&labels(&["2015 first model", "2018 larger data", "2021 cohort"])).unwrap();
+        assert_eq!(t, vec![("2015".into(), "first model".into()), ("2018".into(), "larger data".into()), ("2021".into(), "cohort".into())]);
+        assert_eq!(as_timeline(&labels(&["2015", "2018"])).unwrap()[1], ("2018".into(), String::new()));
+    }
+
+    #[test]
+    fn one_label_without_a_time_keeps_the_chain() {
+        assert!(as_timeline(&labels(&["2015 a", "later", "2021 c"])).is_none());
+        assert!(as_timeline(&labels(&["2015 a"])).is_none());
+        assert!(as_timeline(&[]).is_none());
+    }
+
+    #[test]
+    fn a_number_that_is_not_a_year_is_not_a_time() {
+        for l in ["3D U-Net", "2 stages", "1024 px", "1850 old", "2150 far", "20211 x", "2021x", "12345", "Marching 2021"] {
+            assert!(as_timeline(&labels(&[l, "2020 a"])).is_none(), "{l}");
+        }
+    }
+
+    #[test]
+    fn ranges_months_and_decades_are_times() {
+        let t = as_timeline(&labels(&["2010s: early", "2019–2021 growth", "2019-2021 again", "Mar 2021 launch", "2021/03 x", "2021-03 y", "Sept. 2022 z", "2022-03-15 d"])).unwrap();
+        let times: Vec<&str> = t.iter().map(|p| p.0.as_str()).collect();
+        assert_eq!(times, ["2010s", "2019–2021", "2019-2021", "Mar 2021", "2021/03", "2021-03", "Sept. 2022", "2022-03-15"]);
+        assert_eq!(t[0].1, "early");
+        assert_eq!(t[3].1, "launch");
+    }
+
+    #[test]
+    fn the_separator_after_the_time_is_dropped() {
+        for l in ["2021: pilot", "2021：pilot", "2021 - pilot", "2021 – pilot", "2021—pilot", "2021, pilot", "2021，pilot", "2021   pilot"] {
+            let t = as_timeline(&labels(&[l, "2022 b"])).unwrap();
+            assert_eq!(t[0], ("2021".into(), "pilot".into()), "{l}");
+        }
+    }
+
+    fn with_ctx<R>(f: impl FnOnce(&mut Ctx, &sc_core::Workspace) -> R) -> R {
+        let dir = tempfile::tempdir().unwrap();
+        let st = StyleSystem::default();
+        let pandoc = lore_math::Pandoc::default();
+        let mut cx = Ctx { st: &st, pandoc: &pandoc, macros: BTreeMap::new(), warnings: vec![], deck_dir: dir.path().to_path_buf(), omml: BTreeMap::new() };
+        let ws = sc_core::Workspace::new(dir.path(), None);
+        f(&mut cx, &ws)
+    }
+
+    fn names(o: &Object, out: &mut Vec<String>) {
+        out.push(o.name.clone());
+        if let Kind::Group(g) = &o.kind {
+            g.children.iter().for_each(|c| names(c, out));
+        }
+    }
+
+    #[test]
+    fn a_chain_of_years_is_drawn_as_a_timeline() {
+        let p = with_ctx(|cx, ws| flow_picture(cx, ws, &labels(&["2015 first model", "2018 larger data", "2021 cohort"])).unwrap());
+        let mut n = vec![];
+        names(&p, &mut n);
+        assert!(n.iter().any(|s| s.starts_with("flow:timeline/")), "{n:?}");
+        assert!(!n.iter().any(|s| s.ends_with("/n1")), "{n:?}");
+    }
+
+    #[test]
+    fn a_chain_of_steps_is_still_boxes_and_arrows() {
+        let p = with_ctx(|cx, ws| flow_picture(cx, ws, &labels(&["Collect", "Train", "Test"])).unwrap());
+        let mut n = vec![];
+        names(&p, &mut n);
+        assert!(n.iter().any(|s| s.starts_with("flow:chain/n1")), "{n:?}");
+        assert!(!n.iter().any(|s| s.starts_with("flow:timeline/")), "{n:?}");
     }
 }

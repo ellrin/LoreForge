@@ -31,8 +31,10 @@ fn main() {
         ("2029", "Audit", "An outside group repeats the test.", "shield"),
         ("2030", "Report", "The five year report is written.", "book"),
     ];
-    let points = rows.iter().take(n).map(|(t, h, b, i)| Point { time: (*t).into(), title: (*h).into(), body: (*b).into(), icon: (*i).into(), ..Default::default() }).collect();
-    let spec = FlowSpec { timeline: Some(TimelineSpec { title: "Study timeline".into(), style, points, ..Default::default() }), ..Default::default() };
+    // `TITLES_ONLY=1`: a time and a title per point, as a deck's chain of steps gives them
+    let bare = std::env::var_os("TITLES_ONLY").is_some();
+    let points = rows.iter().take(n).map(|(t, h, b, i)| Point { time: (*t).into(), title: (*h).into(), body: if bare { String::new() } else { (*b).into() }, icon: if bare { String::new() } else { (*i).into() }, ..Default::default() }).collect();
+    let spec = FlowSpec { timeline: Some(TimelineSpec { title: if bare { String::new() } else { "Study timeline".into() }, style, points, ..Default::default() }), ..Default::default() };
     let frame = Rect::new(0.0, 0.0, 672.0, 357.0);
     match render(&spec, &cat, None, &NoMath, frame, 2) {
         Ok((fig, _)) => {
