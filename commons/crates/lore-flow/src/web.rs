@@ -247,7 +247,15 @@ fn geometry(fig: &crate::Figure, g: &Graph) -> Value {
         .iter()
         .map(|r| {
             let e = &g.edges[r.edge];
-            json!({ "key": keys.get(r.edge), "from": e.from, "to": e.to, "from_site": r.from_site, "to_site": r.to_site, "points": r.points.iter().map(|p| at(*p)).collect::<Vec<_>>() })
+            // the runs the author may slide: `value` is what `ends[key].turns[index]` holds
+            let runs: Vec<Value> = g
+                .node_index(&e.from)
+                .map(|a| crate::route::runs(&fig.layout, a, r))
+                .unwrap_or_default()
+                .iter()
+                .map(|u| json!({ "index": u.index, "axis": if u.vertical { "x" } else { "y" }, "value": u.value, "a": at(u.a), "b": at(u.b) }))
+                .collect();
+            json!({ "key": keys.get(r.edge), "from": e.from, "to": e.to, "from_site": r.from_site, "to_site": r.to_site, "points": r.points.iter().map(|p| at(*p)).collect::<Vec<_>>(), "runs": runs })
         })
         .collect();
     json!({ "scale": fig.layout.scale, "nodes": nodes, "edges": edges })

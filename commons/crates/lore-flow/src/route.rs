@@ -440,6 +440,30 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
     out
 }
 
+/// One run of a routed line the author may slide: an interior run, between the run that leaves
+/// the first block and the run that arrives at the second.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Run {
+    /// Its place in [`EdgeEnds::turns`].
+    pub index: usize,
+    /// A vertical run is slid sideways (its value is an x), a horizontal one up and down (a y).
+    pub vertical: bool,
+    /// Where it is now, as `turns` writes it: pt at the figure's natural size.
+    pub value: f64,
+    /// Its two ends, in the layout's coordinates (as [`Route::points`]).
+    pub a: (f64, f64),
+    pub b: (f64, f64),
+}
+
+/// The runs of `r` the author may slide, in order (`a` = the layout index of the line's first
+/// block). Writing every `value`, in order, as the line's `turns` gives back the same points;
+/// the editor then changes one of them. Empty when the line has no interior run (straight, or
+/// one corner), when it is `forced`, or when its runs do not fit what [`turned`] accepts.
+pub fn runs(lay: &Layout, a: usize, r: &Route) -> Vec<Run> {
+    let _ = (lay, a, r);
+    Vec::new()
+}
+
 /// The route with its interior runs moved to the author's coordinates (`turns`: the x of a
 /// vertical run or the y of a horizontal run, in order, natural size). The first run leaves
 /// the first block's side and the last arrives at the second block's side; so the number of

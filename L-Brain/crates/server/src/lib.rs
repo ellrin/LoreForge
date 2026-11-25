@@ -5,6 +5,7 @@
 //! allowed too. `reminders` + `digest`: recall notifications and the daily e-mail (§4.5).
 
 pub mod api;
+pub mod batch;
 pub mod config;
 pub mod digest;
 pub mod figmake;
