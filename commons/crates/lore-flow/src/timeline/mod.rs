@@ -258,7 +258,9 @@ pub struct Colors {
     /// `per-point` (the palette in order, round again when it runs out) · `single` (the first)
     /// · `cycle` (the same as per-point; kept as its own word for files that say it).
     pub mode: String,
-    /// `RRGGBB`, at least one.
+    /// `RRGGBB`. Empty (the default) = Lore's own figure colours: the flow tool's palette
+    /// ([`lore_colors`]), or the author's `palette.json`. A style states a palette only when
+    /// it must differ.
     pub palette: Vec<String>,
     /// Text that is not coloured.
     pub ink: String,
@@ -338,7 +340,7 @@ impl Default for Icon {
 }
 impl Default for Colors {
     fn default() -> Self {
-        Colors { mode: "per-point".into(), palette: vec!["4C6EF5".into(), "12B886".into(), "F59F00".into(), "E64980".into(), "7950F2".into()], ink: "202124".into(), muted: "5F6368".into(), gradient: false }
+        Colors { mode: "per-point".into(), palette: vec![], ink: "202124".into(), muted: "5F6368".into(), gradient: false }
     }
 }
 impl Default for Title {
@@ -414,6 +416,12 @@ pub struct Plan {
     pub points: Vec<PointGeom>,
     /// Sizes were multiplied by this to fit the frame (1 = as the style says).
     pub scale: f64,
+}
+
+/// Lore's figure colours as point colours: the strong colour of each entry of the flow tool's
+/// palette ([`crate::figure::PALETTE`], never an app theme), without the grey.
+pub fn lore_colors() -> Vec<String> {
+    crate::figure::PALETTE.iter().filter(|(_, fill, _)| *fill != "EDEDED").map(|(_, _, line)| line.to_string()).collect()
 }
 
 // ── the one entry ────────────────────────────────────────────────────────────

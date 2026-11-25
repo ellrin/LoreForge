@@ -145,7 +145,12 @@ impl Drawer<'_> {
             "band" => {
                 let y = ax.y - ax.thickness / 2.0;
                 let pts = &self.plan.points;
-                if st.axis.color.trim() == "point" && !pts.is_empty() {
+                let one = pts.first().map(|p| p.color.to_uppercase()).filter(|c| pts.iter().all(|p| p.color.eq_ignore_ascii_case(c)));
+                if let (true, Some(c)) = (st.axis.color.trim() == "point", &one) {
+                    // every point has the same colour: one band, no seams
+                    let o = shape("", "rect", ax.x0, y, ax.x1 - ax.x0, ax.thickness, Paint::solid(c), None);
+                    self.push("axis", o);
+                } else if st.axis.color.trim() == "point" && !pts.is_empty() {
                     for (i, p) in pts.iter().enumerate() {
                         let l = if i == 0 { ax.x0 } else { (pts[i - 1].x + p.x) / 2.0 };
                         let r = if i + 1 == pts.len() { ax.x1 } else { (p.x + pts[i + 1].x) / 2.0 };
@@ -508,6 +513,21 @@ mod tests {
         st.axis.color = "ABCDEF".into();
         let b = draw(&st, &pl);
         assert_eq!(fill_hex(find(&b, "axis")), "ABCDEF");
+    }
+
+    #[test]
+    fn a_band_in_the_points_one_colour_is_one_piece() {
+        let mut st = Style::default();
+        st.axis.kind = "band".into();
+        st.axis.color = "point".into();
+        let mut pl = plan();
+        pl.axis.thickness = 40.0;
+        for p in pl.points.iter_mut() {
+            p.color = "2F6DB0".into();
+        }
+        let b = objects(&spec(), &st, &pl, &fonts(), 2);
+        let bands: Vec<&str> = b.objects.iter().map(|o| o.name.as_str()).filter(|n| n.contains("/axis")).collect();
+        assert_eq!(bands.len(), 1, "{bands:?}");
     }
 
     #[test]

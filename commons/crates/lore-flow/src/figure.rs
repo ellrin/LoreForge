@@ -208,6 +208,9 @@ pub struct Catalogue {
     pub timelines: Vec<crate::timeline::Style>,
     /// Style files that could not be read (`<file>: <why>`): listed, never silently dropped.
     pub timeline_errors: Vec<String>,
+    /// The point colours of a timeline whose style states none: Lore's figure palette, or the
+    /// strong colours of the author's `palette.json` (`[[name, fill, line], …]`).
+    pub timeline_colors: Vec<String>,
 }
 
 impl Default for Catalogue {
@@ -221,7 +224,7 @@ impl Catalogue {
     pub fn builtin() -> Catalogue {
         let t = Theme::classic_bw();
         let layouts: Vec<FlowLayout> = serde_json::from_str(LAYOUTS).expect("bundled layouts.json parses");
-        Catalogue { themes: vec![(t.id.clone(), t.name.clone(), t)], layouts, library: Library::default(), timelines: crate::timeline::style::builtin(), timeline_errors: vec![] }
+        Catalogue { themes: vec![(t.id.clone(), t.name.clone(), t)], layouts, library: Library::default(), timelines: crate::timeline::style::builtin(), timeline_errors: vec![], timeline_colors: crate::timeline::lore_colors() }
     }
 
     /// The public ones plus the author's (`dir` = `private/shared/flow`):
@@ -261,6 +264,13 @@ impl Catalogue {
             c.timelines.push(st);
         }
         c.timeline_errors.extend(errors);
+        if let Some(rows) = std::fs::read_to_string(dir.join("palette.json")).ok().and_then(|t| serde_json::from_str::<Vec<Vec<String>>>(&t).ok()) {
+            let hex = |s: &String| s.len() == 6 && s.chars().all(|ch| ch.is_ascii_hexdigit());
+            let own: Vec<String> = rows.iter().filter_map(|r| r.get(2)).filter(|s| hex(s)).cloned().collect();
+            if !own.is_empty() {
+                c.timeline_colors = own;
+            }
+        }
         for f in files(&dir.join("themes"), "toml") {
             let Ok(text) = std::fs::read_to_string(&f) else { continue };
             if let Ok(t) = Theme::from_toml(&text) {
@@ -525,7 +535,10 @@ pub fn linear(g: &Graph) -> Vec<String> {
 pub fn render(spec: &FlowSpec, cat: &Catalogue, notation: Option<&lore_notation::Notation>, math: &dyn MathSource, frame: Rect, first_id: u32) -> Result<(Figure, Graph), String> {
     if let Some(t) = &spec.timeline {
         // a timeline is placed and drawn by its own style; it comes back as the same Figure
-        let style = crate::timeline::style::pick(&cat.timelines, &t.style);
+        let mut style = crate::timeline::style::pick(&cat.timelines, &t.style);
+        if style.colors.palette.is_empty() {
+            style.to_mut().colors.palette = cat.timeline_colors.clone();
+        }
         let (plan, built) = crate::timeline::render(t, &style, &cat.theme(&spec.theme).font, frame, first_id)?;
         let layout = crate::layout::Layout { nodes: vec![], panels: vec![], legend: vec![], swatches: vec![], bounds: plan.bounds, scale: plan.scale };
         return Ok((Figure { layout, routes: vec![], built }, Graph { fig: t.fig_id().to_string(), ..Default::default() }));

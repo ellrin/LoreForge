@@ -132,10 +132,14 @@ fn color_of(own: &str, st: &Style, i: usize) -> String {
     if c.len() == 6 && c.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return c.to_uppercase();
     }
-    let p = &st.colors.palette;
-    if p.is_empty() {
-        return "5F6368".into();
-    }
+    // a style that states no palette takes Lore's own figure colours
+    let lore;
+    let p = if st.colors.palette.is_empty() {
+        lore = super::lore_colors();
+        &lore
+    } else {
+        &st.colors.palette
+    };
     let idx = if st.colors.mode == "single" { 0 } else { i % p.len() };
     p[idx].clone()
 }
@@ -580,7 +584,10 @@ mod tests {
         st.colors.mode = "single".into();
         assert!(plan(&spec(3), &st, frame()).points.iter().all(|q| q.color == "111111"));
         st.colors.palette.clear();
-        assert_eq!(plan(&spec(1), &st, frame()).points[0].color, "5F6368");
+        st.colors.mode = "per-point".into();
+        let lore = crate::timeline::lore_colors();
+        let c: Vec<String> = plan(&spec(2), &st, frame()).points.iter().map(|q| q.color.clone()).collect();
+        assert_eq!(c, lore[..2], "no palette stated: Lore's own figure colours");
     }
 
     #[test]

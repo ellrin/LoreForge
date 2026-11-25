@@ -86,9 +86,6 @@ pub fn check(style: &mut Style) -> Vec<String> {
     colour("colors.ink", &style.colors.ink, &[]);
     colour("colors.muted", &style.colors.muted, &[]);
     colour("title.color", &style.title.color, &[]);
-    if style.colors.palette.is_empty() {
-        out.push("colors.palette = []".into());
-    }
     for c in &style.colors.palette {
         if !is_hex(c) {
             out.push(format!("colors.palette = \"{c}\""));
@@ -223,9 +220,10 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_palette_is_reported() {
+    fn an_empty_palette_means_lores_own_colours() {
         let s = parse("[colors]\npalette = []\n", "x").unwrap();
-        assert_eq!(s.cannot, vec!["colors.palette = []"]);
+        assert!(s.cannot.is_empty());
+        assert!(Style::default().colors.palette.is_empty(), "a style states a palette only when it must differ");
     }
 
     #[test]
