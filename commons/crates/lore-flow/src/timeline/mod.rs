@@ -426,9 +426,39 @@ pub struct Plan {
 }
 
 /// Lore's figure colours as point colours: the strong colour of each entry of the flow tool's
-/// palette ([`crate::figure::PALETTE`], never an app theme), without the grey.
+/// palette ([`crate::figure::PALETTE`], never an app theme), without the grey and the white
+/// (a point in black or grey reads as "no colour", not as one of the points).
 pub fn lore_colors() -> Vec<String> {
-    crate::figure::PALETTE.iter().filter(|(_, fill, _)| *fill != "EDEDED").map(|(_, _, line)| line.to_string()).collect()
+    crate::figure::PALETTE.iter().filter(|(_, fill, _)| !matches!(*fill, "EDEDED" | "FFFFFF")).map(|(_, _, line)| line.to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lores_point_colours_are_hues_only() {
+        let c = lore_colors();
+        assert!(c.len() >= 5);
+        for x in &c {
+            let v: Vec<i32> = (0..3).map(|i| i32::from_str_radix(&x[i * 2..i * 2 + 2], 16).unwrap()).collect();
+            assert!(v.iter().max().unwrap() - v.iter().min().unwrap() > 40, "{x} is a grey");
+        }
+    }
+
+    #[test]
+    fn a_figures_own_colours_win_then_the_styles_then_lores() {
+        let lore = lore_colors();
+        let mut spec = TimelineSpec::default();
+        let mut st = Style::default();
+        assert_eq!(palette_for(&spec, &st, &lore), lore);
+        st.colors.mode = "single".into();
+        assert_eq!(palette_for(&spec, &st, &lore), vec![SINGLE.to_string()]);
+        st.colors.palette = vec!["111111".into()];
+        assert_eq!(palette_for(&spec, &st, &lore), vec!["111111".to_string()]);
+        spec.colors = vec!["222222".into(), "not a colour".into()];
+        assert_eq!(palette_for(&spec, &st, &lore), vec!["222222".to_string()]);
+    }
 }
 
 /// The colour of a style that uses one colour and states none: Lore's blue.
