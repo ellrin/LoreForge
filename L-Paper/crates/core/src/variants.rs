@@ -137,7 +137,21 @@ fn words_of(s: &str) -> Vec<String> {
 /// The swaps of `phrase` that apply to `wording` (the slot word occurs in it as a whole word,
 /// case-insensitive), grouped by slot in file order.
 pub fn swaps(phrase: &Phrase, variants: &[Variant], wording: &str) -> Vec<Swap> {
-    let have = words_of(wording);
+    // the fixed words only: a `{slot}` name is not a word of the sentence
+    let mut fixed = String::new();
+    let mut depth = 0usize;
+    for c in wording.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                fixed.push(' ');
+            }
+            _ if depth == 0 => fixed.push(c),
+            _ => {}
+        }
+    }
+    let have = words_of(&fixed);
     let mut out: Vec<Swap> = Vec::new();
     for v in variants.iter().filter(|v| v.kind == "swap" && v.pattern == phrase.id) {
         let want = words_of(&v.slot);
@@ -296,11 +310,12 @@ mod tests {
             var("V6", "P2", "swap", "x", "approved", ""),
         ];
         let got = swaps(&p, &vs, "The {sample} was approved by {board}.");
-        assert_eq!(got.len(), 2);
+        // "board" is only the name of a {slot} here, not a word of the sentence
+        assert_eq!(got.len(), 1);
         assert_eq!(got[0].slot, "approved");
         assert_eq!(got[0].options, vec![("granted".to_string(), "formal".to_string()), ("cleared".to_string(), String::new())]);
-        assert_eq!(got[1].slot, "board");
-        assert!(swaps(&p, &vs, "{board} gave consent.").iter().all(|s| s.slot == "board"));
+        assert!(swaps(&p, &vs, "{board} gave consent.").is_empty());
+        assert_eq!(swaps(&p, &vs, "The board approved it.").len(), 2);
         assert!(swaps(&p, &vs, "Nothing here.").is_empty());
     }
 

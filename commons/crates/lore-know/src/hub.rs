@@ -265,7 +265,9 @@ impl Hub {
 
     /// Accept one candidate of a review set ([`crate::review::accept`]).
     pub fn accept_review(&mut self, set: &str, candidate: &str) -> Result<crate::review::Candidate> {
+        self.store.confirming(true);
         let r = crate::review::accept(&mut self.store, &self.reviews, set, candidate);
+        self.store.confirming(false);
         self.reindex()?;
         r
     }

@@ -259,8 +259,10 @@ pub fn accept(sink: &mut dyn Sink, box_: &Reviews, set: &str, candidate: &str) -
     if c.state != OPEN {
         return Err(KnowError::Invalid("這一條已經決定過了".into()));
     }
-    if sink.get(&c.of)?.is_none() {
-        return Err(KnowError::Invalid("原來的那一句已經不在了，這一條不能收".into()));
+    match sink.get(&c.of)? {
+        None => return Err(KnowError::Invalid("原來的那一句已經不在了，這一條不能收".into())),
+        Some(own) if own.format != format::PATTERN => return Err(KnowError::Invalid("說法只能掛在句型上".into())),
+        Some(_) => {}
     }
     let local = split_id(&c.of).map(|(_, l)| l).unwrap_or(&c.of).to_string();
     let mut item = Item::new(&s.category, format::VARIANT, &c.text, Source::lore(&s.by));

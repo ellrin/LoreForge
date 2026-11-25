@@ -284,6 +284,35 @@ path = "variants.csv"
         assert_eq!(csv(&e).lines().count(), 1, "{}", csv(&e));
     }
 
+    // The guard against regressions of the one rule: what a model wrote enters only through accept.
+    #[tokio::test]
+    async fn no_other_way_puts_a_model_written_variant_into_the_data() {
+        let e = setup();
+        let id = make(&e.app, &["one"]).await;
+        let before = csv(&e);
+        let row = |kind: &str| json!({"category": "t.variants", "title": "x", "fields": {"pattern": "P001", "kind": "variant", "text": "x"}, "source": {"kind": kind, "name": "tool"}});
+        // posted as an item by a tool
+        let (s, v) = call(&e.app, "POST", "/api/hub/items", Some(row("lore"))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        // proposed as a batch and applied
+        let (s, v) = call(&e.app, "POST", "/api/hub/proposals", Some(json!({"by": "tool", "title": "t", "changes": [{"op": "add", "item": row("lore")}]}))).await;
+        assert_eq!(s, StatusCode::CREATED, "{v}");
+        let pid = v["proposal"]["id"].as_str().unwrap().to_string();
+        let (_, v) = call(&e.app, "POST", &format!("/api/hub/proposals/{pid}/apply"), None).await;
+        assert_eq!(v["proposal"]["changes"][0]["result"], "refused", "{v}");
+        assert_eq!(csv(&e), before);
+        // taken back, then restored from the trash
+        let (_, v) = call(&e.app, "POST", &format!("/api/hub/review/{id}/c1/accept"), None).await;
+        let item = v["candidate"]["item"].as_str().unwrap().to_string();
+        call(&e.app, "POST", &format!("/api/hub/review/{id}/c1/undo"), None).await;
+        let (s, v) = call(&e.app, "POST", &format!("/api/hub/items/{}/restore", item.replace(':', "%3A")), None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        assert_eq!(csv(&e), before);
+        // what the author types himself is his
+        let (s, v) = call(&e.app, "POST", "/api/hub/items", Some(row("author"))).await;
+        assert_eq!(s, StatusCode::CREATED, "{v}");
+    }
+
     #[tokio::test]
     async fn unknown_ids_are_404() {
         let e = setup();

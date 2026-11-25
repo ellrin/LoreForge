@@ -558,10 +558,10 @@ const Hub = (() => {
   // 確認: what a model wrote for his own sentences. Three of his sentences a page, each with the
   // other ways to say it; every one is decided on its own (加入 / 不要) and can be taken back.
   const RV = { set: null, groups: [], page: 0, counts: {} }, RV_PER = 3;
-  async function review(mode = "open") {
-    const sets = (await api("GET", "/api/hub/review")).sets ?? [];
-    const pick = (mode === "open" && sets.find((s) => s.counts?.open)) || sets.at(-1);
-    RV.set = null; RV.groups = []; RV.page = 0; RV.counts = {};
+  async function review(mode = "open", same = null) {
+    const all = await api("GET", "/api/hub/review"), sets = all.sets ?? [];
+    const pick = (same && sets.find((s) => s.id === same)) || sets.find((s) => s.counts?.open) || sets.at(-1);
+    RV.set = null; RV.groups = []; RV.page = 0; RV.counts = {}; RV.open = all.open ?? 0;
     if (pick) {
       const d = await api("GET", `/api/hub/review/${enc(pick.id)}`);
       RV.set = d.set; RV.counts = d.counts ?? {};
@@ -573,24 +573,29 @@ const Hub = (() => {
   }
   function reviewPaint(box) {
     const pages = Math.ceil(RV.groups.length / RV_PER), c = RV.counts;
-    const again = async (mode) => { try { box.replaceWith(await review(mode)); } catch (e) { S.host.fail?.(e); } };
+    const again = async (mode) => { try { box.replaceWith(await review(mode, mode === "rejected" ? RV.set?.id : null)); } catch (e) { S.host.fail?.(e); } };
     if (RV.page >= pages) {
       box.replaceChildren(el("div", { class: "h-rv-done" },
-        el("h2", {}, !RV.set ? "沒有要你決定的" : c.open ? `還有 ${fmt(c.open)} 個沒看` : "看完了"),
+        el("h2", {}, !RV.set ? "沒有要你決定的" : RV.open ? `還有 ${fmt(RV.open)} 個沒看` : "看完了"),
         RV.set ? el("p", {}, `加入 ${fmt(c.accepted)} 個說法，不要 ${fmt(c.rejected)} 個。`) : null,
         el("div", { class: "h-rv-nav" },
-          c.open ? el("button", { type: "button", class: "pri", onclick: () => again("open") }, "繼續看") : null,
-          el("a", { class: c.open ? "btn" : "pri", href: "#/hub" }, "回總覽"),
+          RV.open ? el("button", { type: "button", class: "pri", onclick: () => again("open") }, "繼續看") : null,
+          el("a", { class: RV.open ? "btn" : "pri", href: "#/hub" }, "回總覽"),
           c.rejected ? el("button", { type: "button", class: "q", onclick: () => again("rejected") }, "再看一次不要的") : null)));
       return;
     }
     const row = (cand, own) => {
       const r = el("div", {});
+      let busy = false;
       const act = async (what) => {
+        if (busy) return;
+        busy = true;
         try {
           const j = await api("POST", `/api/hub/review/${enc(RV.set.id)}/${enc(cand.id)}/${what}`);
-          Object.assign(cand, j.candidate); RV.counts = j.counts ?? RV.counts; S.allDirty = true; draw(); loadStats().catch(() => {});
+          Object.assign(cand, j.candidate); RV.counts = j.counts ?? RV.counts; S.allDirty = true; draw();
+          loadStats().then(() => { RV.open = S.review?.open ?? RV.open; }).catch(() => {});
         } catch (e) { S.host.fail?.(e); }
+        busy = false;
       };
       const draw = () => {
         r.className = `h-rv-r ${cand.state}`;

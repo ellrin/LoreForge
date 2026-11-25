@@ -88,12 +88,26 @@ pub struct Store {
     hub: PathBuf,
     registry: Registry,
     adapters: BTreeMap<String, Box<dyn Adapter>>,
+    /// Set only while the author's own decision is being written ([`Store::confirming`]).
+    confirming: bool,
+}
+
+/// A 說法 that the author did not write himself: it may enter only through his decision.
+fn unconfirmed(item: &Item) -> bool {
+    item.format == format::VARIANT && item.source.kind != "author"
 }
 
 impl Store {
     pub fn open(hub: PathBuf, registry: Registry) -> Result<Store> {
         fs::create_dir_all(&hub)?;
-        Ok(Store { hub, registry, adapters: BTreeMap::new() })
+        Ok(Store { hub, registry, adapters: BTreeMap::new(), confirming: false })
+    }
+
+    /// While on, a 說法 a model wrote may be added or restored: only [`crate::hub::Hub::accept_review`]
+    /// turns it on, for the one candidate the author accepted. Every other way in (a posted item,
+    /// an import, a proposal, a restore from the trash) is refused.
+    pub fn confirming(&mut self, on: bool) {
+        self.confirming = on;
     }
 
     /// The adapter that reads and writes the app's own data of `category`.
@@ -382,6 +396,9 @@ impl Sink for Store {
             }
             self.get(&item.id)?
         };
+        if cur.is_none() && unconfirmed(&item) && !self.confirming {
+            return Err(KnowError::Invalid("模型寫的說法要你在「等你決定」裡加入才會收".into()));
+        }
         // Where it goes: an outside source's item is a hub record, never a row of the app's own
         // data; an id lives on one side only.
         let external = item.source.is_external();
@@ -519,6 +536,9 @@ impl Sink for Store {
             return Err(KnowError::Invalid(format!("{id} 現在已經有一條了，不能再復原一條")));
         }
         let (path, item) = self.trash_latest(id)?;
+        if unconfirmed(&item) && !self.confirming {
+            return Err(KnowError::Invalid("模型寫的說法要你在「等你決定」裡加入才會收".into()));
+        }
         let picture = Self::trash_picture(&path);
         // an outside source's item goes back as a hub record, never into the app's data
         if cat.native.kind.is_empty() || item.source.is_external() {
