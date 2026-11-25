@@ -385,7 +385,7 @@ const Hub = (() => {
     // `what` (generator / drawing / spec / reference) is the program's word, not the author's
     const onTree = metaKeys.includes("place") && metaKeys.length === 2;
     // beside a tree the place says where a sentence goes: the older section / function / position columns stay in the record, unseen
-    const fields = (def?.fields ?? []).filter((fd) => fd.name !== "what" && typeof (it.fields?.[fd.name] ?? "") !== "object" && !(onTree && ["section", "function", "position"].includes(fd.name)));
+    const fields = (def?.fields ?? []).filter((fd) => fd.name !== "what" && !(fd.name === "image" && it.format === "figure") && typeof (it.fields?.[fd.name] ?? "") !== "object" && !(onTree && ["section", "function", "position"].includes(fd.name)));
     const allPlaces = () => (S.tree?.tree ?? []).flatMap((sec) => (sec.children ?? []).flatMap((sub) => (sub.children ?? []).map((leaf) => `${sec.label}/${sub.label}/${leaf.label ?? leaf}`)));
     /** The places of an item as chips: ✕ takes one away, the menu adds one (the first is the main one). */
     const placeEd = () => {
@@ -409,8 +409,11 @@ const Hub = (() => {
     const knowRow = (fd) => el("label", { class: "h-f" }, el("span", {}, fd.label),
       el("textarea", { rows: Math.min(8, Math.max(fd.name === "prompt" ? 3 : 2, String(draft.fields[fd.name] ?? "").split("\n").length)), spellcheck: "false", placeholder: KNOW[fd.name],
         oninput: (e) => { draft.fields[fd.name] = e.target.value; dirty(); } }, String(draft.fields[fd.name] ?? "")));
+    // text that is only read: its maths is typeset (a description written with $…$ was shown raw)
+    const ro = (v) => { const d = el("div", { class: "ro" }, v); if (v.includes("$") && typeof MD !== "undefined" && window.katex) { d.classList.add("md"); d.innerHTML = MD.render(v); } return d; };
+    const todo = !isNew && it.format === "figure" && it.entity === false;
     const row = (fd) => it.format === "figure" && fd.name in KNOW && !isNew && it.fields?.what !== "reference" ? knowRow(fd) : form ? el("label", { class: "h-f" }, el("span", {}, fd.label, fd.required ? el("i", {}, "＊") : null), input(fd))
-      : (it.fields?.[fd.name] ? el("label", { class: "h-f" }, el("span", {}, fd.label), el("div", { class: "ro" }, String(it.fields[fd.name]))) : null);
+      : (it.fields?.[fd.name] ? el("label", { class: "h-f" }, el("span", {}, fd.label), ro(String(it.fields[fd.name]))) : null);
     const metaIn = (label, key, hint) => el("label", { class: "h-f" }, el("span", {}, label), el("input", { value: key === "triggers" ? draft.triggers : draft.tags[key], placeholder: hint, oninput: (e) => { key === "triggers" ? (draft.triggers = e.target.value) : (draft.tags[key] = e.target.value); dirty(); } }));
     async function save() {
       const first = (def?.fields ?? []).find((fd) => fd.required);
@@ -436,6 +439,8 @@ const Hub = (() => {
       el("div", { class: "hd" }, el("h3", {}, isNew ? `新增${c?.label ?? ""}` : it.title), el("button", { type: "button", class: "x", "aria-label": "關閉", onclick: close }, "✕")),
       isNew ? null : el("div", { class: "ln" }, [c?.label, it.entity === false ? "待製作" : onTree || (it.line ?? "").length > 70 ? null : it.line].filter(Boolean).join(" · ")),
       it.thumb ? el("span", { class: "h-paper stage" }, el("img", { src: it.thumb, alt: "" })) : null,
+      // a reference waits for one thing: it is offered under the picture, not below the description
+      todo ? el("div", { class: "h-acts first" }, el("button", { type: "button", class: "pri", onclick: () => make(it) }, "製作")) : null,
       form && def?.shape !== "row" ? el("label", { class: "h-f" }, el("span", {}, "名稱", el("i", {}, "＊")), el("input", { value: draft.title, oninput: (e) => { draft.title = e.target.value; dirty(); } })) : null,
       fields.map(row),
       canMeta ? el("details", { class: "h-more", open: isNew ? null : (Object.values(it.tags ?? {}).flat().length || it.triggers?.length ? true : null) }, el("summary", {}, "標籤與關鍵字"), metaKeys.map((k) => k === "place" && onTree ? [el("div", { class: "k" }, "使用時機"), placeEd()] : metaIn(FACET[k], k, k === "place" ? "段落/小節/使用時機，可多個，用、分開" : "用、分開")), metaIn("觸發關鍵字", "triggers", "內容出現這些字就適用")) : [
@@ -446,7 +451,6 @@ const Hub = (() => {
       el("div", { class: "h-foot" }, c?.independent ? "不與 Lore 共用" : c?.tasks?.length ? `用在 ${c.tasks.length} 個步驟` : "還沒有步驟在用",
         isNew ? null : ` · ${it.source?.kind === "external" ? it.source.name : it.source?.kind === "author" ? "我加的" : "Lore"}`, it.used ? ` · 用過 ${it.used} 次` : null),
       el("div", { class: "h-acts" },
-        !isNew && it.format === "figure" && it.entity === false ? el("button", { type: "button", class: "pri", onclick: () => make(it) }, "製作") : null,
         !isNew && it.fields?.made_from ? el("button", { type: "button", onclick: () => make({ id: it.fields.made_from }) }, "編輯圖形") : null,
         canMeta ? (saveBtn = el("button", { type: "button", class: "pri", disabled: !isNew, onclick: save }, isNew ? "新增" : "儲存")) : null,
         !isNew && c?.writable && !builtin ? el("button", { type: "button", class: "quiet", onclick: () => remove(it) }, "移除") : null),
