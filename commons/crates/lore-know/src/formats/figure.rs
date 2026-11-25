@@ -241,7 +241,10 @@ fn entity_item(category: &str, what_: &str, kind: &str, style: &str, level_: &st
 fn drawing_item(category: &str, t: &ModuleTemplate, level_: &str, source: &Source) -> Item {
     let style = if t.style.is_empty() { lore_flow::modules::DEFAULT_STYLE } else { &t.style };
     let params = serde_json::to_value(t).unwrap_or(Value::Null);
-    entity_item(category, what::DRAWING, &t.kind, style, level_, &t.description, params, source)
+    let mut it = entity_item(category, what::DRAWING, &t.kind, style, level_, &t.description, params, source);
+    // what the block says it is made of: the hub's 包含 (a block of the same category)
+    it.contains = t.made_of.iter().filter_map(|m| m.split_once('/')).map(|(k, st)| item_id(category, &format!("{k}.{st}"))).collect();
+    it
 }
 
 /// One entity per generator kind × style, then one per saved drawing of the catalogue's
@@ -266,9 +269,7 @@ pub fn from_catalogue(cat: &Catalogue, category: &str, source: Source) -> Vec<It
             // a drawing says what size of block it is and what it is made of; one that says
             // nothing is a module, as before
             let l = if LEVELS.contains(&t.level.as_str()) && t.level != level::FIGURE { t.level.as_str() } else { level::MODULE };
-            let mut it = drawing_item(category, t, l, &source);
-            it.contains = t.made_of.iter().filter_map(|m| m.split_once('/')).map(|(k, st)| item_id(category, &format!("{k}.{st}"))).collect();
-            put_replacing(&mut out, it);
+            put_replacing(&mut out, drawing_item(category, t, l, &source));
         }
     }
     out
@@ -1229,6 +1230,30 @@ mod tests {
 
     fn template() -> Value {
         serde_json::from_str(ENCODER_PLAIN).unwrap()
+    }
+
+    /// A block says what it is and what it is made of, and the hub keeps both (the author's
+    /// rule, 2026-11-26: component is the smallest block, a module is components put together;
+    /// before, every saved drawing was a module and none contained anything).
+    #[test]
+    fn a_module_file_names_its_components_and_the_hub_links_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = dir.path().join("modules");
+        let file = |kind: &str, extra: &str| {
+            std::fs::create_dir_all(m.join(kind)).unwrap();
+            let body = format!(r#"{{ "kind": "{kind}", "description": "d", "w": 10, "h": 10, {extra} "objects": [ {{ "id": 0, "name": "b", "type": "shape", "frame": {{ "x": 0, "y": 0, "w": 127000, "h": 127000 }}, "geom": {{ "prst": "rect" }}, "fill": {{ "kind": "none" }} }} ] }}"#);
+            std::fs::write(m.join(kind).join("plain.json"), body).unwrap();
+        };
+        file("slab", r#""level": "component","#);
+        file("ladder", r#""level": "module", "made_of": ["slab/plain", "box/default"],"#);
+        let d = Drawings { flow_dir: dir.path().into(), category: "sc.figs".into(), source: Source::lore("sc") };
+        let (items, problems) = d.load().unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        let of = |id: &str| items.iter().find(|i| i.id == id).unwrap();
+        assert_eq!(of("sc.figs:slab.plain").level, level::COMPONENT);
+        assert!(of("sc.figs:slab.plain").contains.is_empty());
+        assert_eq!(of("sc.figs:ladder.plain").level, level::MODULE);
+        assert_eq!(of("sc.figs:ladder.plain").contains, ["sc.figs:slab.plain", "sc.figs:box.default"]);
     }
 
     #[test]
