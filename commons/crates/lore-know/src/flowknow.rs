@@ -7,6 +7,8 @@
 //! * `inputs`, `outputs`: one variable per line, `id | kind | meaning`; `kind` is one of
 //!   [`VAR_KINDS`] or empty (= `other`); empty lines and lines starting with `#` are skipped.
 //! * `connects`: one line per connection, `from -> to` or `from -> to : kind`.
+//! * `commands` (指揮文字), `spoken` (口語說明): how the figure was commanded, in the five steps,
+//!   and how one would say it; both derived by code and kept once the author has edited them.
 //!
 //! The parsers here are this crate's own (`lore_flow::knowledge::vars_from_text` is written
 //! elsewhere and not called).
@@ -83,6 +85,10 @@ pub struct Derived {
     pub inputs: Vec<Var>,
     pub outputs: Vec<Var>,
     pub connects: Vec<String>,
+    /// 指揮文字: the text that makes the figure, under the author's five steps.
+    pub commands: String,
+    /// 口語說明: how one would say it.
+    pub spoken: String,
 }
 
 fn guess_kind(module: &str, role: &str) -> &'static str {
@@ -104,6 +110,9 @@ fn plain_label(label: &str) -> bool {
 /// Work out description, variables and connections of a made figure. A spec whose text does not
 /// parse derives nothing.
 pub fn derive(spec: &FlowSpec, lib: &Library) -> Derived {
+    if let Some(t) = &spec.timeline {
+        return Derived { commands: timeline_commands(t), spoken: timeline_spoken(t), ..Default::default() };
+    }
     let Ok(g) = spec.graph(lib) else { return Derived::default() };
     let description = spec.discussion.get("source").and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
     let (mut inputs, mut outputs): (Vec<Var>, Vec<Var>) = (vec![], vec![]);
@@ -147,10 +156,144 @@ pub fn derive(spec: &FlowSpec, lib: &Library) -> Derived {
             if e.kind == lore_flow::spec::EdgeKind::Data { base } else { format!("{base} : {}", e.kind.as_str()) }
         })
         .collect();
-    Derived { description, inputs, outputs, connects }
+    Derived { description, inputs, outputs, connects, commands: commands_of_dsl(&spec.dsl), spoken: spoken_of_graph(&g) }
 }
 
-/// Put `d` into the item's empty fields (`description`, `inputs`, `outputs`, `connects`); what the
+// ── how the figure is commanded ──────────────────────────────────────────────
+
+/// The DSL text regrouped under the five steps (積木, 標籤, 串起來, 區域, 對齊); a line that fits
+/// nowhere goes first under `# 0 開頭`. Lines are classified by their first token or by `->`.
+pub fn commands_of_dsl(dsl: &str) -> String {
+    let (mut head, mut nodes, mut edges, mut tail, mut align) = (vec![], vec![], vec![], vec![], vec![]);
+    // blocks: (opening line, member node ids), nested ones open on a stack
+    let mut done: Vec<(String, Vec<String>)> = vec![];
+    let mut open: Vec<(String, Vec<String>)> = vec![];
+    for raw in dsl.lines() {
+        let t = raw.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let first = t.split_whitespace().next().unwrap_or("");
+        if t.contains("->") {
+            edges.push(t.to_string());
+        } else if matches!(first, "panel" | "region") {
+            open.push((t.to_string(), vec![]));
+        } else if first == "end" {
+            if let Some((l, m)) = open.pop() {
+                done.push((l, m));
+            }
+        } else if first == "arrange" {
+            tail.push(t.to_string());
+        } else if first == "align" {
+            align.push(t.to_string());
+        } else if first.len() > 1 && first.ends_with(':') {
+            nodes.push(t.to_string());
+            if let Some((_, m)) = open.last_mut() {
+                m.push(first.trim_end_matches(':').to_string());
+            }
+        } else {
+            head.push(t.to_string());
+        }
+    }
+    // a block never closed is still a block
+    while let Some(b) = open.pop() {
+        done.push(b);
+    }
+    // blocks come in the order they were opened
+    let mut regions: Vec<String> = vec![];
+    for (l, m) in &done {
+        regions.push(l.clone());
+        if !m.is_empty() {
+            regions.push(format!("  {}", m.join(" ")));
+        }
+        regions.push("end".to_string());
+    }
+    regions.extend(tail);
+    let mut out = String::new();
+    let mut section = |title: &str, lines: &[String]| {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(title);
+        for l in lines {
+            out.push('\n');
+            out.push_str(l);
+        }
+    };
+    if !head.is_empty() {
+        section("# 0 開頭", &head);
+    }
+    section("# 1 積木", &nodes);
+    section("# 2 標籤", &["（每個積木的名字與標籤寫在上面那一行）".to_string()]);
+    section("# 3 串起來", &edges);
+    section("# 4 區域", &regions);
+    section("# 5 對齊", &align);
+    out
+}
+
+fn timeline_commands(t: &lore_flow::timeline::TimelineSpec) -> String {
+    let one = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").replace('|', "/");
+    let mut out = String::from("# 1 點");
+    for p in &t.points {
+        out.push_str(&format!("\n{} | {} | {} | {}", one(&p.time), one(&p.title), one(&p.body), one(&p.icon)));
+    }
+    out.push_str(&format!("\n# 2 樣式\n{}", t.style.trim()));
+    out
+}
+
+const MAX_SPOKEN: usize = 60;
+
+fn capped(mut sentences: Vec<String>) -> String {
+    if sentences.len() > MAX_SPOKEN {
+        let k = sentences.len() - MAX_SPOKEN;
+        sentences.truncate(MAX_SPOKEN);
+        sentences.push(format!("…（其餘 {k} 句省略）"));
+    }
+    sentences.join("\n")
+}
+
+fn timeline_spoken(t: &lore_flow::timeline::TimelineSpec) -> String {
+    let one = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let pts: Vec<String> = t.points.iter().map(|p| format!("{} {}", one(&p.time), one(&p.title)).trim().to_string()).collect();
+    let mut s = vec![format!("一條時間軸，共 {} 個點：{}。", pts.len(), pts.join("、"))];
+    if pts.len() > MAX_SPOKEN {
+        s = vec![format!("一條時間軸，共 {} 個點。", pts.len())];
+    }
+    capped(s)
+}
+
+fn spoken_of_graph(g: &lore_flow::spec::Graph) -> String {
+    let name = |id: &str| -> String {
+        let l = g.nodes.iter().find(|n| n.id == id).map(|n| n.label.split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default();
+        if l.is_empty() { id.to_string() } else { l }
+    };
+    let list = |ids: Vec<&str>| ids.into_iter().map(name).collect::<Vec<_>>().join("、");
+    let mut out: Vec<String> = vec![];
+    let titled = |title: &str, id: &str| if title.trim().is_empty() { id.to_string() } else { title.split_whitespace().collect::<Vec<_>>().join(" ") };
+    for p in g.panels.iter().filter(|p| !p.bare) {
+        let inside = list(g.nodes.iter().filter(|n| n.panel == p.id).map(|n| n.id.as_str()).collect());
+        let t = titled(&p.title, &p.id);
+        out.push(if inside.is_empty() { format!("先放〈{t}〉這一區。") } else { format!("先放〈{t}〉這一區，裡面是 {inside}。") });
+    }
+    for r in &g.regions {
+        let inside = list(r.members.iter().map(String::as_str).collect());
+        let t = titled(&r.title, &r.id);
+        out.push(if inside.is_empty() { format!("先放〈{t}〉這一區。") } else { format!("先放〈{t}〉這一區，裡面是 {inside}。") });
+    }
+    for e in &g.edges {
+        let kind = if e.kind == lore_flow::spec::EdgeKind::Data { String::new() } else { format!("（{}）", e.kind.as_str()) };
+        let label = e.label.split_whitespace().collect::<Vec<_>>().join(" ");
+        let label = if label.is_empty() { String::new() } else { format!("，標〈{label}〉") };
+        out.push(format!("{} 接到 {}{kind}{label}。", name(&e.from), name(&e.to)));
+    }
+    for a in &g.align {
+        let how = if a.axis == "col" { "排成一欄" } else { "排成一列" };
+        out.push(format!("{} {how}。", list(a.ids.iter().map(String::as_str).collect())));
+    }
+    capped(out)
+}
+
+/// Put `d` into the item's empty fields (`description`, `inputs`, `outputs`, `connects`, `commands`, `spoken`); what the
 /// author wrote stays. `prompt` is never set here.
 pub fn fill(item: &mut Item, d: &Derived) {
     let mut put = |name: &str, text: String| {
@@ -162,6 +305,8 @@ pub fn fill(item: &mut Item, d: &Derived) {
     put("inputs", vars_text(&d.inputs));
     put("outputs", vars_text(&d.outputs));
     put("connects", d.connects.join("\n"));
+    put("commands", d.commands.clone());
+    put("spoken", d.spoken.clone());
 }
 
 /// [`derive`] and [`fill`] for a made figure item whose `params` is its flow spec (an object or
@@ -211,11 +356,14 @@ pub fn example(item: &Item) -> Option<Example> {
         return None;
     }
     let author = item.field("prompt").trim();
+    let commands = item.field("commands").trim();
     let dsl = match item.fields.get("params") {
         Some(Value::Object(o)) => o.get("dsl").and_then(Value::as_str).unwrap_or("").to_string(),
         Some(Value::String(s)) => serde_json::from_str::<Value>(s).ok().and_then(|v| v.get("dsl").and_then(Value::as_str).map(str::to_string)).unwrap_or_default(),
         _ => String::new(),
     };
+    // how the figure was commanded, when it is known, is what the draft reads in place of the raw text
+    let dsl = if commands.is_empty() { dsl } else { commands.to_string() };
     Some(Example {
         id: item.id.clone(),
         title: item.title.clone(),
@@ -309,5 +457,98 @@ mod tests {
         assert_eq!((e.id.as_str(), e.description.as_str(), e.dsl.as_str()), ("c:k1", "Derived.", DSL));
         f.set("prompt", "Author's words.");
         assert_eq!(example(&f).unwrap().description, "Author's words.");
+    }
+
+    const PANEL_DSL: &str = "fig t\nlegend on\narrange a / b\npanel a \"Train\" dir=right\n  x: image \"Scan\" role=input\n  seg: unet \"Seg\"\n  x -> seg\nend\ny: image \"Mask\" role=gt\ny -> seg : supervision \"mask\"\nalign row x y\n";
+
+    #[test]
+    fn commands_regroup_the_text_under_the_five_steps() {
+        let c = commands_of_dsl(DSL);
+        let heads: Vec<&str> = c.lines().filter(|l| l.starts_with("# ")).collect();
+        assert_eq!(heads, ["# 0 開頭", "# 1 積木", "# 2 標籤", "# 3 串起來", "# 4 區域", "# 5 對齊"]);
+        let at = |h: &str| c.lines().position(|l| l == h).unwrap();
+        assert_eq!(c.lines().nth(at("# 0 開頭") + 1), Some("fig t"));
+        let nodes: Vec<&str> = c.lines().skip(at("# 1 積木") + 1).take_while(|l| !l.starts_with('#')).collect();
+        assert_eq!(nodes.len(), 6);
+        assert!(nodes[0].starts_with("x: image \"Scan\""));
+        assert!(c.contains("# 2 標籤\n（每個積木的名字與標籤寫在上面那一行）\n# 3 串起來\nx -> aug -> seg -> p\ny -> loss : supervision\np -> loss\n# 4 區域"));
+    }
+
+    #[test]
+    fn a_node_inside_a_panel_is_a_block_and_a_member() {
+        let c = commands_of_dsl(PANEL_DSL);
+        assert!(c.contains("# 1 積木\nx: image \"Scan\" role=input\nseg: unet \"Seg\"\ny: image \"Mask\" role=gt\n# 2"), "{c}");
+        assert!(c.contains("# 4 區域\npanel a \"Train\" dir=right\n  x seg\nend\narrange a / b\n# 5 對齊\nalign row x y"), "{c}");
+        assert!(c.contains("# 3 串起來\nx -> seg\ny -> seg : supervision \"mask\"\n"), "{c}");
+    }
+
+    #[test]
+    fn a_timelines_commands_list_its_points() {
+        use lore_flow::timeline::{Point, TimelineSpec};
+        let t = TimelineSpec {
+            style: "chevrons".into(),
+            points: vec![
+                Point { time: "2020".into(), title: "Start".into(), body: "a\nb".into(), icon: "flag".into(), ..Default::default() },
+                Point { time: "2021".into(), title: "End".into(), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let spec = FlowSpec { timeline: Some(t), ..Default::default() };
+        let d = derive(&spec, &Library::default());
+        assert_eq!(d.commands, "# 1 點\n2020 | Start | a b | flag\n2021 | End |  | \n# 2 樣式\nchevrons");
+        assert_eq!(d.spoken, "一條時間軸，共 2 個點：2020 Start、2021 End。");
+    }
+
+    #[test]
+    fn spoken_says_regions_then_lines_then_alignment() {
+        let mut g = lore_flow::dsl::parse(&PANEL_DSL.replace("align row x y\n", "").replace("arrange a / b", "arrange a")).unwrap();
+        g.align.push(lore_flow::spec::Align { axis: "row".into(), ids: vec!["x".into(), "y".into()] });
+        let s = spoken_of_graph(&g);
+        assert_eq!(s, "先放〈Train〉這一區，裡面是 Scan、Seg。\nScan 接到 Seg。\nMask 接到 Seg（supervision），標〈mask〉。\nScan、Mask 排成一列。");
+    }
+
+    #[test]
+    fn spoken_is_capped() {
+        let mut dsl = String::from("fig t\n");
+        for i in 0..70 {
+            dsl.push_str(&format!("a{i}: box \"A{i}\"\n"));
+        }
+        for i in 0..69 {
+            dsl.push_str(&format!("a{i} -> a{}\n", i + 1));
+        }
+        let d = derive(&spec(&dsl, json!(null)), &Library::default());
+        let lines: Vec<&str> = d.spoken.lines().collect();
+        assert_eq!(lines.len(), 61);
+        assert_eq!(lines[60], "…（其餘 9 句省略）");
+    }
+
+    #[test]
+    fn commands_and_spoken_are_filled_only_when_empty() {
+        let d = derive(&spec(DSL, json!(null)), &Library::default());
+        assert!(d.commands.starts_with("# 0 開頭") && d.spoken.starts_with("Scan 接到 Aug。"), "{d:?}");
+        let mut it = Item::new("c", format::FIGURE, "F", Source::author());
+        it.set("commands", "my own words");
+        fill(&mut it, &d);
+        assert_eq!(it.field("commands"), "my own words");
+        assert_eq!(it.field("spoken"), d.spoken);
+    }
+
+    #[test]
+    fn the_authors_own_usage_is_never_written() {
+        let mut it = Item::new("c", format::FIGURE, "F", Source::author());
+        it.set("what", "spec").set("params", json!({"dsl": DSL}));
+        fill_item(&mut it, &Library::default());
+        assert!(!it.field("commands").is_empty() && !it.field("spoken").is_empty());
+        assert_eq!(it.field("prompt"), "");
+    }
+
+    #[test]
+    fn a_made_figures_commands_reach_the_next_draft() {
+        let mut f = Item::new("c", format::FIGURE, "Whole", Source::author());
+        f.set("what", "spec").set("params", json!({"dsl": DSL}));
+        assert_eq!(example(&f).unwrap().dsl, DSL);
+        fill_item(&mut f, &Library::default());
+        let e = example(&f).unwrap();
+        assert!(e.dsl.starts_with("# 0 開頭\nfig t") && e.dsl.contains("# 3 串起來"), "{}", e.dsl);
     }
 }

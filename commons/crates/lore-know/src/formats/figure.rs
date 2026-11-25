@@ -86,6 +86,8 @@ impl Format for Figure {
                 FieldDef::new("inputs", "輸入變數", "text", false),
                 FieldDef::new("outputs", "輸出變數", "text", false),
                 FieldDef::new("connects", "連線", "text", false),
+                FieldDef::new("commands", "指揮文字", "text", false),
+                FieldDef::new("spoken", "口語說明", "text", false),
                 FieldDef::new("params", "參數", "text", false),
                 FieldDef::new("image", "參考圖", "text", false),
             ],

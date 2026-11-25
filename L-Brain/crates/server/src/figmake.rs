@@ -113,6 +113,11 @@ struct MakeBody {
     spec: Value,
     #[serde(default)]
     title: Option<String>,
+    /// 指揮文字 / 口語說明 as the editor wrote them; absent = derived from the spec
+    #[serde(default)]
+    commands: Option<String>,
+    #[serde(default)]
+    spoken: Option<String>,
 }
 
 async fn save(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<MakeBody>) -> R {
@@ -149,6 +154,12 @@ async fn save(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<Mak
     // the figure as knowledge: what it shows (the reference's words when the figure brought
     // none), the variables it takes and gives and its connections, read from the figure itself.
     // Only what is still empty is filled: what the author wrote stays, and 用法 is his alone.
+    // what came with the save is kept as given; the rest is derived below
+    for (k, v) in [("commands", &b.commands), ("spoken", &b.spoken)] {
+        if let Some(t) = v.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            fig.set(k, t.to_string());
+        }
+    }
     lore_know::flowknow::fill_item(&mut fig, &h.catalogue().library);
     if fig.field("description").trim().is_empty() {
         fig.set("description", reference_item.field("description").to_string());
@@ -591,6 +602,43 @@ writable = true
         let (_, v3) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(SPEC) }))).await;
         assert_eq!(v3["figure"]["fields"]["connects"], "Input -> Model");
         assert_eq!(v3["figure"]["fields"]["prompt"], "Use for a plain pipeline.");
+    }
+
+    #[tokio::test]
+    async fn a_made_figure_carries_how_it_was_commanded() {
+        let e = setup(vec![]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(SPEC) }))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let f = &v["figure"]["fields"];
+        let c = f["commands"].as_str().unwrap();
+        assert!(c.contains("# 1 積木") && c.contains("# 3 串起來\nx -> f -> y"), "{c}");
+        assert!(f["spoken"].as_str().unwrap().contains("Input 接到 Model。"), "{f}");
+        assert!(f["prompt"].as_str().unwrap_or("").is_empty());
+    }
+
+    #[tokio::test]
+    async fn commands_given_with_the_save_are_kept() {
+        let e = setup(vec![]);
+        let body = json!({ "spec": spec(SPEC), "commands": "  first x -> f  ", "spoken": "先接起來。" });
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(body)).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["figure"]["fields"]["commands"], "first x -> f");
+        assert_eq!(v["figure"]["fields"]["spoken"], "先接起來。");
+    }
+
+    #[tokio::test]
+    async fn a_resave_keeps_what_the_author_edited() {
+        let e = setup(vec![]);
+        let (_, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(SPEC) }))).await;
+        let fid = v["figure"]["id"].as_str().unwrap().to_string();
+        let mut item = v["figure"].clone();
+        item["fields"]["commands"] = json!("# 1 積木\nmine");
+        item["fields"]["spoken"] = json!("我的說法。");
+        let (s, _) = call(&e.app, "PUT", &format!("/api/hub/items/{fid}"), Some(item)).await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, v2) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(SPEC) }))).await;
+        assert_eq!(v2["figure"]["fields"]["commands"], "# 1 積木\nmine");
+        assert_eq!(v2["figure"]["fields"]["spoken"], "我的說法。");
     }
 
     #[tokio::test]

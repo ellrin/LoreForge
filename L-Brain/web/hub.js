@@ -405,14 +405,16 @@ const Hub = (() => {
     const link = (r) => el("button", { type: "button", class: "h-lk", onclick: () => open(r.id) }, thumb(r), r.title);
     // a figure is knowledge: its 用法 (his words), the variables it takes and gives and its
     // connections are his to write on every component, module and figure, built-in ones too
-    const KNOW = { prompt: "這是什麼、什麼時候用", inputs: "代號 | 種類 | 意思，一行一個", outputs: "代號 | 種類 | 意思，一行一個", connects: "A -> B，一行一條" };
+    const KNOW = { prompt: "這是什麼、什麼時候用", inputs: "代號 | 種類 | 意思，一行一個", outputs: "代號 | 種類 | 意思，一行一個", connects: "A -> B，一行一條", commands: "這張圖是怎麼指揮出來的", spoken: "用說的怎麼講" };
+    // 指揮文字 and 口語說明 belong to a made figure (what = spec) only
+    const MADE_ONLY = ["commands", "spoken"];
     const knowRow = (fd) => el("label", { class: "h-f" }, el("span", {}, fd.label),
-      el("textarea", { rows: Math.min(8, Math.max(fd.name === "prompt" ? 3 : 2, String(draft.fields[fd.name] ?? "").split("\n").length)), spellcheck: "false", placeholder: KNOW[fd.name],
+      el("textarea", { rows: Math.min(fd.name === "commands" ? 16 : 8, Math.max(fd.name === "prompt" ? 3 : 2, String(draft.fields[fd.name] ?? "").split("\n").length)), spellcheck: "false", placeholder: KNOW[fd.name], style: fd.name === "commands" ? "font-family:ui-monospace,Menlo,monospace" : "",
         oninput: (e) => { draft.fields[fd.name] = e.target.value; dirty(); } }, String(draft.fields[fd.name] ?? "")));
     // text that is only read: its maths is typeset (a description written with $…$ was shown raw)
     const ro = (v) => { const d = el("div", { class: "ro" }, v); if (v.includes("$") && typeof MD !== "undefined" && window.katex) { d.classList.add("md"); d.innerHTML = MD.render(v); } return d; };
     const todo = !isNew && it.format === "figure" && it.entity === false;
-    const row = (fd) => it.format === "figure" && fd.name in KNOW && !isNew && it.fields?.what !== "reference" ? knowRow(fd) : form ? el("label", { class: "h-f" }, el("span", {}, fd.label, fd.required ? el("i", {}, "＊") : null), input(fd))
+    const row = (fd) => it.format === "figure" && fd.name in KNOW && !isNew && it.fields?.what !== "reference" && (!MADE_ONLY.includes(fd.name) || it.fields?.what === "spec") ? knowRow(fd) : form ? el("label", { class: "h-f" }, el("span", {}, fd.label, fd.required ? el("i", {}, "＊") : null), input(fd))
       : (it.fields?.[fd.name] ? el("label", { class: "h-f" }, el("span", {}, fd.label), ro(String(it.fields[fd.name]))) : null);
     const metaIn = (label, key, hint) => el("label", { class: "h-f" }, el("span", {}, label), el("input", { value: key === "triggers" ? draft.triggers : draft.tags[key], placeholder: hint, oninput: (e) => { key === "triggers" ? (draft.triggers = e.target.value) : (draft.tags[key] = e.target.value); dirty(); } }));
     async function save() {
