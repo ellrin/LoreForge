@@ -41,15 +41,6 @@ fn field_or_title<'a>(item: &'a Item, name: &str) -> &'a str {
     if v.is_empty() { item.title.as_str() } else { v }
 }
 
-fn with_example(mut s: String, item: &Item) -> String {
-    let e = item.field("example").trim();
-    if !e.is_empty() {
-        s.push_str("\ne.g. ");
-        s.push_str(e);
-    }
-    s
-}
-
 /// 句型.
 pub struct Pattern;
 /// 常用詞.
@@ -77,7 +68,8 @@ impl Format for Pattern {
     }
     fn prompt(&self, item: &Item) -> String {
         let s = format!("{}{}", bracket(&[item.field("section"), item.field("function"), item.field("position")]), field_or_title(item, "template"));
-        with_example(s, item)
+        // never the example: it is a sentence the author published, and a model that sees it repeats it
+        s
     }
 }
 
@@ -100,7 +92,7 @@ impl Format for Expression {
         if !u.is_empty() {
             s.push_str(&format!(" ({u})"));
         }
-        with_example(s, item)
+        s
     }
 }
 
@@ -506,7 +498,7 @@ mod tests {
     fn lines_and_prompts_read_well() {
         let p = it(format::PATTERN, &[("section", "intro"), ("function", "gap"), ("position", "opening"), ("template", "Little is known about X."), ("example", "Little is known about tea.")]);
         assert_eq!(Pattern.line(&p), "intro · gap · opening");
-        assert_eq!(Pattern.prompt(&p), "[intro/gap/opening] Little is known about X.\ne.g. Little is known about tea.");
+        assert_eq!(Pattern.prompt(&p), "[intro/gap/opening] Little is known about X.", "the published example never goes into a prompt");
         let p2 = it(format::PATTERN, &[("template", "We propose X.")]);
         assert_eq!(Pattern.prompt(&p2), "We propose X.");
 
