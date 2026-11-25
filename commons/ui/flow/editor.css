@@ -125,3 +125,14 @@
 
 .lf-w { width: 76px; }
 .lf-wchip { margin-left: 6px; font-size: 12px; padding: 2px 8px; }
+
+/* hands on the figure (editor chrome over the white sheet: theme tokens, never part of the figure) */
+.lf-hands .lf-block { fill: transparent; stroke: transparent; stroke-width: 1.5; vector-effect: non-scaling-stroke; cursor: grab; }
+.lf-hands .lf-block:hover { stroke: var(--accent); }
+.lf-hands .lf-block.moved { stroke: var(--accent); stroke-dasharray: 4 3; }
+.lf-hands .lf-ghost { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.lf-hands .lf-line { fill: none; stroke: transparent; stroke-width: 12; vector-effect: non-scaling-stroke; cursor: pointer; }
+.lf-hands .lf-line:hover, .lf-hands .lf-line.on { stroke: var(--accent-soft); }
+.lf-hands .lf-site { fill: #fff; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; cursor: pointer; }
+.lf-hands .lf-site.on, .lf-hands .lf-site:hover { fill: var(--accent); }
+.lf-hint { color: var(--muted); font-size: 12px; margin-left: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

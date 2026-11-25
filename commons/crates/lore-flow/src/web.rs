@@ -215,7 +215,42 @@ pub fn preview(flow: &Flow, spec: &FlowSpec, doc: &str, width: f64) -> Value {
         "problems": spec.problems(&g),
         "warnings": fig.built.warnings,
         "size": [fig.layout.bounds.w, fig.layout.bounds.h],
+        "geom": geometry(&fig, &g2),
     })
+}
+
+/// Where the blocks, their sixteen connection points and the lines are, in the coordinates of
+/// the preview's `viewBox`, so the editor can let the author drag a block and pick a point
+/// without reading the SVG. `scale` turns a distance on screen (in viewBox units) into the
+/// natural size that `FlowSpec::place` is written in.
+fn geometry(fig: &crate::Figure, g: &Graph) -> Value {
+    use crate::route::{Side, edge_keys, site_point, sides_of};
+    let b = fig.layout.bounds.inflate(6.0);
+    let at = |p: (f64, f64)| json!([p.0 - b.x, p.1 - b.y]);
+    let nodes: Vec<Value> = g
+        .nodes
+        .iter()
+        .zip(&fig.layout.nodes)
+        .map(|(n, pl)| {
+            let sites: Vec<Value> = (0..crate::figure::SITES as u8)
+                .map(|i| {
+                    let (side, slot): (Side, usize) = sides_of(i).first().copied().unwrap_or((Side::Top, 2));
+                    at(site_point(pl, side, slot))
+                })
+                .collect();
+            json!({ "id": n.id, "rect": [pl.rect.x - b.x, pl.rect.y - b.y, pl.rect.w, pl.rect.h], "sites": if pl.ellipse { json!([]) } else { json!(sites) } })
+        })
+        .collect();
+    let keys = edge_keys(g);
+    let edges: Vec<Value> = fig
+        .routes
+        .iter()
+        .map(|r| {
+            let e = &g.edges[r.edge];
+            json!({ "key": keys.get(r.edge), "from": e.from, "to": e.to, "from_site": r.from_site, "to_site": r.to_site, "points": r.points.iter().map(|p| at(*p)).collect::<Vec<_>>() })
+        })
+        .collect();
+    json!({ "scale": fig.layout.scale, "nodes": nodes, "edges": edges })
 }
 
 /// The figure drawn in every layout template that fits its block count; a timeline, in every

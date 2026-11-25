@@ -380,14 +380,20 @@ const Hub = (() => {
     };
     const builtin = it.fields?.what === "generator";
     const link = (r) => el("button", { type: "button", class: "h-lk", onclick: () => open(r.id) }, thumb(r), r.title);
-    const row = (fd) => form ? el("label", { class: "h-f" }, el("span", {}, fd.label, fd.required ? el("i", {}, "＊") : null), input(fd))
+    // a figure is knowledge: its 用法 (his words), the variables it takes and gives and its
+    // connections are his to write on every component, module and figure, built-in ones too
+    const KNOW = { prompt: "這是什麼、什麼時候用", inputs: "代號 | 種類 | 意思，一行一個", outputs: "代號 | 種類 | 意思，一行一個", connects: "A -> B，一行一條" };
+    const knowRow = (fd) => el("label", { class: "h-f" }, el("span", {}, fd.label),
+      el("textarea", { rows: Math.min(8, Math.max(fd.name === "prompt" ? 3 : 2, String(draft.fields[fd.name] ?? "").split("\n").length)), spellcheck: "false", placeholder: KNOW[fd.name],
+        oninput: (e) => { draft.fields[fd.name] = e.target.value; dirty(); } }, String(draft.fields[fd.name] ?? "")));
+    const row = (fd) => it.format === "figure" && fd.name in KNOW && !isNew && it.fields?.what !== "reference" ? knowRow(fd) : form ? el("label", { class: "h-f" }, el("span", {}, fd.label, fd.required ? el("i", {}, "＊") : null), input(fd))
       : (it.fields?.[fd.name] ? el("label", { class: "h-f" }, el("span", {}, fd.label), el("div", { class: "ro" }, String(it.fields[fd.name]))) : null);
     const metaIn = (label, key, hint) => el("label", { class: "h-f" }, el("span", {}, label), el("input", { value: key === "triggers" ? draft.triggers : draft.tags[key], placeholder: hint, oninput: (e) => { key === "triggers" ? (draft.triggers = e.target.value) : (draft.tags[key] = e.target.value); dirty(); } }));
     async function save() {
       const first = (def?.fields ?? []).find((fd) => fd.required);
       const title = def?.shape === "row" ? String(draft.fields[first?.name] ?? draft.title).split("\n")[0].slice(0, 80) : draft.title.trim();
       if (onTree && form && "section" in Object.fromEntries((def?.fields ?? []).map((fd) => [fd.name, 1])) && !draft.fields.section) { const sec = split(draft.tags.place ?? "")[0]?.split("/")[0]; if (sec) draft.fields.section = sec; }
-      const body = { ...it, line: undefined, thumb: undefined, title, fields: form ? draft.fields : it.fields, triggers: split(draft.triggers),
+      const body = { ...it, line: undefined, thumb: undefined, title, fields: form ? draft.fields : it.format === "figure" ? { ...(it.fields ?? {}), ...Object.fromEntries(Object.keys(KNOW).map((k) => [k, draft.fields[k] ?? ""])) } : it.fields, triggers: split(draft.triggers),
         // the facets the form does not show are kept as they are
         tags: Object.fromEntries(Object.entries({ ...(it.tags ?? {}), ...Object.fromEntries(Object.entries(draft.tags).map(([k, v]) => [k, split(v)])) }).filter(([, v]) => v.length)) };
       try {

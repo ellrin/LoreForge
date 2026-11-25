@@ -150,7 +150,8 @@
     stage.append(sheet);
     const info = h("span", { class: "lf-info" });
     const warn = h("span", { class: "lf-warn" });
-    const status = h("footer", { class: "statusbar lf-status" }, info, warn, h("span", { class: "grow" }));
+    const hint = h("span", { class: "lf-hint" });
+    const status = h("footer", { class: "statusbar lf-status" }, info, hint, warn, h("span", { class: "grow" }));
     const assist = h("aside", { class: "lf-assist", "aria-label": "助手", hidden: true });
     const right = h("aside", { class: "lf-right", "aria-label": "版面與顏色" });
     const body = h("div", { class: "lf-body" }, left, h("div", { class: "lf-mid" }, stage, status), assist, right);
@@ -268,9 +269,69 @@
         svg.style.height = `${Math.max(40, vb.height * z)}px`;
         svg.removeAttribute("width"); svg.removeAttribute("height");
         info.textContent = r.size ? `${Math.round(r.size[0] * 0.3528)} × ${Math.round(r.size[1] * 0.3528)} mm · ${(r.blocks ?? []).length} 個 block` : "";
+        if (r.geom) hands(svg, r.geom);
       }
       buildRight();
       buildList();
+    }
+    // ── hands on the figure: drag a block (its arrows are routed again), pick the point a line
+    //    uses on a block. Everything is written into the spec (`place`, `ends`), never drawn here. ──
+    const SVGNS = "http://www.w3.org/2000/svg";
+    const sv = (tag, attrs = {}) => { const e = document.createElementNS(SVGNS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+    let picked = null;   // the key of the line whose ends are being chosen
+    function hands(svg, geom) {
+      const vb = svg.viewBox.baseVal;
+      const unit = () => vb.width / Math.max(1, svg.getBoundingClientRect().width);   // viewBox units per screen pixel
+      const layer = sv("g", { class: "lf-hands" });
+      svg.append(layer);
+      const nodeOf = (id) => geom.nodes.find((n) => n.id === id);
+      // lines: a wide invisible stroke to click on
+      for (const e of geom.edges) {
+        if (!e.key || !e.points?.length) continue;
+        const d = e.points.map((p, i) => `${i ? "L" : "M"}${p[0]} ${p[1]}`).join(" ");
+        const hit = sv("path", { d, class: `lf-line${picked === e.key ? " on" : ""}` });
+        hit.addEventListener("click", (ev) => { ev.stopPropagation(); picked = picked === e.key ? null : e.key; draw(); });
+        hit.addEventListener("dblclick", (ev) => { ev.stopPropagation(); picked = null; change((sp) => { if (sp.ends) { delete sp.ends[e.key]; if (!Object.keys(sp.ends).length) delete sp.ends; } }); });
+        layer.append(hit);
+      }
+      // blocks: drag to move, twice to put back
+      for (const n of geom.nodes) {
+        const [x, y, w, hh] = n.rect;
+        const moved = !!S.spec.place?.[n.id];
+        const box = sv("rect", { x, y, width: w, height: hh, class: `lf-block${moved ? " moved" : ""}` });
+        box.addEventListener("pointerdown", (ev) => {
+          if (ev.button !== 0) return;
+          ev.preventDefault();
+          try { box.setPointerCapture(ev.pointerId); } catch { /* a pointer that cannot be captured still drags while it stays over the block */ }
+          const start = [ev.clientX, ev.clientY], k = unit();
+          const ghost = sv("rect", { x, y, width: w, height: hh, class: "lf-ghost" });
+          let d = [0, 0];
+          const move = (m) => { d = [(m.clientX - start[0]) * k, (m.clientY - start[1]) * k]; if (!ghost.isConnected && Math.hypot(...d) > 2 * k) layer.append(ghost); ghost.setAttribute("x", x + d[0]); ghost.setAttribute("y", y + d[1]); };
+          const up = () => {
+            box.removeEventListener("pointermove", move); box.removeEventListener("pointerup", up); box.removeEventListener("pointercancel", up);
+            ghost.remove();
+            if (Math.hypot(...d) <= 2 * k) return;
+            const sc = geom.scale || 1;
+            change((sp) => { const was = sp.place?.[n.id] ?? [0, 0]; sp.place = { ...(sp.place ?? {}), [n.id]: [Math.round((was[0] + d[0] / sc) * 10) / 10, Math.round((was[1] + d[1] / sc) * 10) / 10] }; });
+          };
+          box.addEventListener("pointermove", move); box.addEventListener("pointerup", up); box.addEventListener("pointercancel", up);
+        });
+        box.addEventListener("dblclick", () => change((sp) => { if (sp.place) { delete sp.place[n.id]; if (!Object.keys(sp.place).length) delete sp.place; } }));
+        layer.append(box);
+      }
+      // the picked line: the sixteen points of its two blocks; the one in use is filled
+      const e = geom.edges.find((x) => x.key === picked);
+      if (e && e.from !== e.to) {
+        for (const [end, id, used] of [["from", e.from, e.from_site], ["to", e.to, e.to_site]]) {
+          (nodeOf(id)?.sites ?? []).forEach((p, i) => {
+            const dot = sv("circle", { cx: p[0], cy: p[1], r: 3.2 * Math.max(1, unit()), class: `lf-site${i === used ? " on" : ""}` });
+            dot.addEventListener("click", (ev) => { ev.stopPropagation(); change((sp) => { sp.ends = { ...(sp.ends ?? {}), [e.key]: { ...(sp.ends?.[e.key] ?? {}), [end]: i } }; }); });
+            layer.append(dot);
+          });
+        }
+      }
+      svg.addEventListener("click", () => { if (picked) { picked = null; draw(); } });
+      hint.textContent = picked ? "點一個點：這條線改接那裡。連按兩下線：交回自動" : "拖方塊：箭頭跟著走。點一條線：選接點。連按兩下：放回原位";
     }
     new ResizeObserver(() => { clearTimeout(timer); timer = setTimeout(draw, 120); }).observe(stage);
 
