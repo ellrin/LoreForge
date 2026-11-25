@@ -79,6 +79,22 @@ pub(crate) fn geom_of(g: Option<&om::Geometry>) -> Geom {
             adj: adj_of(adj),
             path: None,
         },
+        // a rectangle written with sixteen connection points (see `pptx_out::sixteen_geom`)
+        Some(om::Geometry::Custom(e)) if crate::pptx_out::sixteen_of(e).is_some() => {
+            let prst = crate::pptx_out::sixteen_of(e).unwrap_or("rect");
+            let mut adj = BTreeMap::new();
+            if prst == "roundRect" {
+                let v = e
+                    .child("a:avLst")
+                    .and_then(|l| l.elements().find(|g| g.attrs.get("name") == Some("adj")))
+                    .and_then(|g| g.attrs.get("fmla"))
+                    .and_then(|f| f.strip_prefix("val "))
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .unwrap_or(16667.0);
+                adj.insert("adj".to_string(), v);
+            }
+            Geom { prst: prst.into(), adj, path: None }
+        }
         Some(om::Geometry::Custom(e)) => Geom {
             prst: "custom".into(),
             adj: BTreeMap::new(),

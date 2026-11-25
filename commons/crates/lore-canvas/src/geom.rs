@@ -56,13 +56,21 @@ pub fn rotate(p: (f64, f64), c: (f64, f64), deg: f64) -> (f64, f64) {
     (c.0 + dx * co - dy * s, c.1 + dx * s + dy * co)
 }
 
-/// Connection sites of an object in slide space (top-level objects only),
-/// following PowerPoint's site order: rectangles 0 top, 1 left, 2 bottom,
-/// 3 right; ellipses 8 sites counter-clockwise from the top.
+/// Connection sites of an object in slide space (top-level objects only).
+/// Rectangles (`rect`, `roundRect`, text boxes) and every object without a
+/// shape of its own (pictures, groups, tables) have sixteen, in the frozen order
+/// of `lore_flow::figure::SITES`: 0 top, 1 left, 2 bottom, 3 right (PowerPoint's
+/// order for a rectangle), then clockwise from the top-left corner 4 top-left,
+/// 5 top ¼, 6 top ¾, 7 top-right, 8 right ¼, 9 right ¾, 10 bottom-right,
+/// 11 bottom ¾, 12 bottom ¼, 13 bottom-left, 14 left ¾, 15 left ¼ (¼ and ¾
+/// measured left to right on top and bottom, top to bottom on the sides).
+/// Ellipses have 8 sites counter-clockwise from the top; custom paths one per
+/// vertex; other presets (triangle, diamond …) keep four (0–3 as above).
 pub fn sites(o: &Object) -> Vec<(f64, f64)> {
     let f = &o.frame;
     let (x, y, w, h) = (f.x as f64, f.y as f64, f.w as f64, f.h as f64);
     let prst = o.kind.sp().map(|s| s.geom.prst.as_str()).unwrap_or("rect");
+    let sixteen = o.kind.sp().is_none() || matches!(prst, "rect" | "roundRect");
     let custom = o.kind.sp().filter(|s| s.geom.prst == "custom").and_then(|s| s.geom.path.as_deref()).map(path_vertices).unwrap_or_default();
     let local: Vec<(f64, f64)> = if !custom.is_empty() {
         // custom shapes (polygons): one site per vertex, in path order
@@ -80,12 +88,31 @@ pub fn sites(o: &Object) -> Vec<(f64, f64)> {
             })
             .collect()
     } else {
-        vec![
+        let mut v = vec![
             (x + w / 2.0, y),
             (x, y + h / 2.0),
             (x + w / 2.0, y + h),
             (x + w, y + h / 2.0),
-        ]
+        ];
+        if sixteen {
+            let (r, b) = (x + w, y + h);
+            let (x1, x3, y1, y3) = (x + w / 4.0, x + w * 0.75, y + h / 4.0, y + h * 0.75);
+            v.extend([
+                (x, y),   // 4 top-left
+                (x1, y),  // 5 top ¼
+                (x3, y),  // 6 top ¾
+                (r, y),   // 7 top-right
+                (r, y1),  // 8 right ¼
+                (r, y3),  // 9 right ¾
+                (r, b),   // 10 bottom-right
+                (x3, b),  // 11 bottom ¾
+                (x1, b),  // 12 bottom ¼
+                (x, b),   // 13 bottom-left
+                (x, y3),  // 14 left ¾
+                (x, y1),  // 15 left ¼
+            ]);
+        }
+        v
     };
     if f.rot == 0.0 {
         return local;
@@ -382,4 +409,141 @@ pub fn scaled_to(o: &Object, x: Emu, y: Emu, w: Emu) -> Object {
     scale_object(&mut n, k);
     n.frame = Frame { x, y, w: (o.frame.w as f64 * k).round() as Emu, h: (o.frame.h as f64 * k).round() as Emu, ..o.frame.clone() };
     n
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn shape(prst: &str, f: Frame) -> Object {
+        Object {
+            id: 1,
+            name: "s".into(),
+            frame: f,
+            hidden: false,
+            ph: None,
+            slot: None,
+            kind: Kind::Shape(SpObj { geom: Geom::preset(prst), fill: Paint::None, line: None, text: None, equation: false }),
+            src: None,
+        }
+    }
+
+    fn near(a: (f64, f64), b: (f64, f64)) -> bool {
+        (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6
+    }
+
+    #[test]
+    fn a_rectangle_has_sixteen_points_five_a_side() {
+        let v = sites(&shape("rect", Frame::new(0, 0, 400, 800)));
+        assert_eq!(v.len(), 16);
+        let want = [
+            (200., 0.), (0., 400.), (200., 800.), (400., 400.),
+            (0., 0.), (100., 0.), (300., 0.), (400., 0.),
+            (400., 200.), (400., 600.), (400., 800.),
+            (300., 800.), (100., 800.), (0., 800.),
+            (0., 600.), (0., 200.),
+        ];
+        for (i, w) in want.iter().enumerate() {
+            assert!(near(v[i], *w), "{i}: {:?} vs {:?}", v[i], w);
+        }
+        // five per side: corners, quarters and middles lie on the frame
+        let top = v.iter().filter(|p| p.1 == 0.0).count();
+        let bottom = v.iter().filter(|p| p.1 == 800.0).count();
+        let left = v.iter().filter(|p| p.0 == 0.0).count();
+        let right = v.iter().filter(|p| p.0 == 400.0).count();
+        assert_eq!((top, bottom, left, right), (5, 5, 5, 5));
+        assert_eq!(sites(&shape("roundRect", Frame::new(0, 0, 400, 800))), v);
+    }
+
+    #[test]
+    fn the_first_four_points_are_where_they_always_were() {
+        let v = sites(&shape("rect", Frame::new(100, 200, 600, 400)));
+        assert!(near(v[0], (400., 200.)) && near(v[1], (100., 400.)) && near(v[2], (400., 600.)) && near(v[3], (700., 400.)));
+    }
+
+    #[test]
+    fn the_points_turn_with_the_shape() {
+        let mut f = Frame::new(0, 0, 400, 200);
+        f.rot = 90.0;
+        let v = sites(&shape("rect", f));
+        // centre (200,100); top-left corner (0,0) turned 90° clockwise lands at (300,-100)
+        assert!(near(v[4], (300., -100.)), "{:?}", v[4]);
+        assert!(near(v[0], (300., 100.)), "{:?}", v[0]);
+    }
+
+    #[test]
+    fn ellipses_and_custom_paths_keep_their_points() {
+        assert_eq!(sites(&shape("ellipse", Frame::new(0, 0, 400, 400))).len(), 8);
+        let mut o = shape("custom", Frame::new(0, 0, 400, 400));
+        if let Kind::Shape(sp) = &mut o.kind {
+            sp.geom.path = Some("M0 0 L1 0 L0.5 1 Z".into());
+        }
+        assert_eq!(sites(&o).len(), 3);
+    }
+
+    #[test]
+    fn a_group_and_a_picture_have_sixteen_too() {
+        let g = Object {
+            id: 2,
+            name: "g".into(),
+            frame: Frame::new(0, 0, 100, 100),
+            hidden: false,
+            ph: None,
+            slot: None,
+            kind: Kind::Group(GroupObj { ch: Frame::new(0, 0, 100, 100), children: vec![], lock_aspect: false, data: Default::default() }),
+            src: None,
+        };
+        assert_eq!(sites(&g).len(), 16);
+    }
+
+    #[test]
+    fn other_presets_keep_four() {
+        for p in ["triangle", "diamond", "trapezoid"] {
+            assert_eq!(sites(&shape(p, Frame::new(0, 0, 400, 400))).len(), 4, "{p}");
+        }
+    }
+
+    fn slide_with(block: Object, conn: Object) -> Slide {
+        let mut s = Slide::new("s1".into(), None);
+        s.objects = vec![block, conn];
+        s
+    }
+
+    fn connector(to: u32, site: u32) -> Object {
+        Object {
+            id: 9,
+            name: "c".into(),
+            frame: Frame::new(0, 0, 0, 0),
+            hidden: false,
+            ph: None,
+            slot: None,
+            kind: Kind::Connector(ConnObj { geom: "line".into(), adj: Default::default(), line: None, start: None, end: Some(Attach { id: to, site }), text: None }),
+            src: None,
+        }
+    }
+
+    #[test]
+    fn a_connector_on_a_quarter_point_follows_its_block() {
+        let mut b = shape("rect", Frame::new(0, 0, 400, 400));
+        let s0 = slide_with(b.clone(), connector(1, 5));
+        b.frame.y += 1000;
+        let mut s = s0.clone();
+        s.objects[0] = b;
+        let moved: BTreeSet<u32> = [1].into();
+        let r = reroute(&s, &moved);
+        assert_eq!(r.len(), 1);
+        let (_, end) = connector_points(&r[0].1);
+        assert!(near(end, (100., 1000.)), "{end:?}");
+    }
+
+    #[test]
+    fn snapping_finds_the_nearest_of_sixteen() {
+        let s = slide_with(shape("rect", Frame::new(0, 0, 400, 400)), connector(1, 0));
+        let a = snap_site(&s, (305., 3.), 20.0, Some(9)).unwrap();
+        assert_eq!((a.id, a.site), (1, 6));
+        let a = snap_site(&s, (3., 395.), 20.0, None).unwrap();
+        assert_eq!(a.site, 13);
+        assert!(snap_site(&s, (150., 150.), 20.0, None).is_none());
+    }
 }

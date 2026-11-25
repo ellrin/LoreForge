@@ -154,7 +154,142 @@ fn line_of(s: &Option<Stroke>, orig: Option<&om::Line>) -> Option<om::Line> {
     Some(l)
 }
 
-fn geom_to(g: &Geom, orig: Option<&om::Geometry>) -> om::Geometry {
+thread_local! {
+    /// Ids of the objects of the slide being written that a connector end holds at a site
+    /// 4..15 (see [`needs_sixteen`]); set by `export_parts` around each slide.
+    static SIXTEEN: std::cell::RefCell<BTreeSet<u32>> = const { std::cell::RefCell::new(BTreeSet::new()) };
+}
+
+/// Marker (a guide named so in the custom geometry's `a:gdLst`) of a rectangle written with
+/// sixteen connection points; PowerPoint keeps guide names when it saves a file again.
+pub const MARK_RECT: &str = "lore16rect";
+/// The same for a rounded rectangle.
+pub const MARK_ROUND: &str = "lore16round";
+
+/// The preset (`rect` / `roundRect`) a sixteen-point custom geometry stands for.
+pub fn sixteen_of(e: &Element) -> Option<&'static str> {
+    let l = e.child("a:gdLst")?;
+    l.elements().find_map(|g| match g.attrs.get("name") {
+        Some(MARK_RECT) => Some("rect"),
+        Some(MARK_ROUND) => Some("roundRect"),
+        _ => None,
+    })
+}
+
+fn is_rect_like(o: &Object) -> bool {
+    matches!(&o.kind, Kind::Text(sp) | Kind::Shape(sp) if matches!(sp.geom.prst.as_str(), "rect" | "roundRect"))
+}
+
+/// Does this object have to be written with sixteen connection points: a rectangle or rounded
+/// rectangle (or text box) that a connector end holds at a site of 4 or more.
+fn needs_sixteen(o: &Object) -> bool {
+    is_rect_like(o) && SIXTEEN.with(|s| s.borrow().contains(&o.id))
+}
+
+/// Ids of the rectangles of `objs` that connector ends hold at a site of 4 or more.
+fn sixteen_targets(objs: &[Object]) -> BTreeSet<u32> {
+    fn walk<'a>(objs: &'a [Object], all: &mut Vec<&'a Object>) {
+        for o in objs {
+            all.push(o);
+            if let Kind::Group(g) = &o.kind {
+                walk(&g.children, all);
+            }
+        }
+    }
+    let mut all = Vec::new();
+    walk(objs, &mut all);
+    let mut out = BTreeSet::new();
+    for o in &all {
+        let Kind::Connector(c) = &o.kind else { continue };
+        for a in [&c.start, &c.end].into_iter().flatten() {
+            if a.site >= 4 && all.iter().any(|t| t.id == a.id && is_rect_like(t)) {
+                out.insert(a.id);
+            }
+        }
+    }
+    out
+}
+
+/// A rectangle (`rect`) or rounded rectangle (`roundRect`, `adj` = corner size in 1/100000 of
+/// the short side) as a custom geometry with sixteen connection points in the frozen order
+/// (see `lore_flow::figure::SITES`). The outline is the preset's own: straight lines, and for
+/// the rounded one the preset's exact corner arcs (`a:arcTo`). The guide `lore16rect` /
+/// `lore16round` marks it so import reads it back as the preset.
+pub fn sixteen_geom(prst: &str, adj: f64) -> Element {
+    let round = prst == "roundRect";
+    let gd = |n: &str, f: &str| Element::new("a:gd").with_attr("name", n).with_attr("fmla", f);
+    let mut av = Element::new("a:avLst");
+    let mut gl = Element::new("a:gdLst");
+    if round {
+        av.push(gd("adj", &format!("val {}", adj.round() as i64)));
+        gl.push(gd(MARK_ROUND, "val 0"));
+        gl.push(gd("a", "pin 0 adj 50000"));
+        gl.push(gd("x1", "*/ ss a 100000"));
+        gl.push(gd("x2", "+- r 0 x1"));
+        gl.push(gd("y2", "+- b 0 x1"));
+        gl.push(gd("il", "*/ x1 29289 100000"));
+        gl.push(gd("ir", "+- r 0 il"));
+        gl.push(gd("ib", "+- b 0 il"));
+    } else {
+        gl.push(gd(MARK_RECT, "val 0"));
+    }
+    gl.push(gd("xq1", "*/ w 1 4"));
+    gl.push(gd("xq3", "*/ w 3 4"));
+    gl.push(gd("yq1", "*/ h 1 4"));
+    gl.push(gd("yq3", "*/ h 3 4"));
+    // 0 top, 1 left, 2 bottom, 3 right; 4.. clockwise from the top-left corner
+    let pts = [
+        ("hc", "t"), ("l", "vc"), ("hc", "b"), ("r", "vc"),
+        ("l", "t"), ("xq1", "t"), ("xq3", "t"), ("r", "t"),
+        ("r", "yq1"), ("r", "yq3"), ("r", "b"),
+        ("xq3", "b"), ("xq1", "b"), ("l", "b"),
+        ("l", "yq3"), ("l", "yq1"),
+    ];
+    let mut cxn = Element::new("a:cxnLst");
+    for (x, y) in pts {
+        let mut c = Element::new("a:cxn").with_attr("ang", "0");
+        c.push(Element::new("a:pos").with_attr("x", x).with_attr("y", y));
+        cxn.push(c);
+    }
+    let pt = |x: &str, y: &str| Element::new("a:pt").with_attr("x", x).with_attr("y", y);
+    let to = |n: &str, x: &str, y: &str| Element::new(n).with_child(pt(x, y));
+    let arc = |st: &str| Element::new("a:arcTo").with_attr("wR", "x1").with_attr("hR", "x1").with_attr("stAng", st).with_attr("swAng", "cd4");
+    let mut p = Element::new("a:path");
+    if round {
+        p.push(to("a:moveTo", "l", "x1"));
+        p.push(arc("cd2"));
+        p.push(to("a:lnTo", "x2", "t"));
+        p.push(arc("3cd4"));
+        p.push(to("a:lnTo", "r", "y2"));
+        p.push(arc("0"));
+        p.push(to("a:lnTo", "x1", "b"));
+        p.push(arc("cd4"));
+    } else {
+        p.push(to("a:moveTo", "l", "t"));
+        p.push(to("a:lnTo", "r", "t"));
+        p.push(to("a:lnTo", "r", "b"));
+        p.push(to("a:lnTo", "l", "b"));
+    }
+    p.push(Element::new("a:close"));
+    let rect = if round {
+        Element::new("a:rect").with_attr("l", "il").with_attr("t", "il").with_attr("r", "ir").with_attr("b", "ib")
+    } else {
+        Element::new("a:rect").with_attr("l", "l").with_attr("t", "t").with_attr("r", "r").with_attr("b", "b")
+    };
+    let mut g = Element::new("a:custGeom");
+    g.push(av);
+    g.push(gl);
+    g.push(Element::new("a:ahLst"));
+    g.push(cxn);
+    g.push(rect);
+    g.push(Element::new("a:pathLst").with_child(p));
+    g
+}
+
+fn geom_to(g: &Geom, orig: Option<&om::Geometry>, sixteen: bool) -> om::Geometry {
+    if sixteen && matches!(g.prst.as_str(), "rect" | "roundRect") {
+        return om::Geometry::Custom(sixteen_geom(&g.prst, g.adj.get("adj").copied().unwrap_or(16667.0)));
+    }
     if g.prst == "custom" {
         if let (Some(om::Geometry::Custom(e)), None) = (orig, &g.path) {
             return om::Geometry::Custom(e.clone());
@@ -684,7 +819,12 @@ fn has(changed: &[String], k: &str) -> bool {
 /// Export one object (plus mask shapes for pictures).
 pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
     let orig = o.src.as_ref().and_then(|s| parse_shape(&s.xml));
+    // a rectangle a connector holds at a site 4..15 must carry sixteen sites; one that already
+    // does (read back from a file written so) stays as it is
+    let force16 = needs_sixteen(o)
+        && !matches!(&orig, Some(Shape::Sp(s)) if matches!(&s.props.geom, Some(om::Geometry::Custom(e)) if sixteen_of(e).is_some()));
     if untouched(o)
+        && !force16
         && let Some(s) = &orig
     {
         return vec![s.clone()];
@@ -727,8 +867,8 @@ pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
             if has(&changed, "frame") {
                 set_xfrm(&mut s.props.xfrm, &o.frame, "a:xfrm");
             }
-            if has(&changed, "geom") {
-                s.props.geom = Some(geom_to(&sp.geom, s.props.geom.as_ref()));
+            if has(&changed, "geom") || force16 {
+                s.props.geom = Some(geom_to(&sp.geom, s.props.geom.as_ref(), needs_sixteen(o)));
             }
             if has(&changed, "fill") {
                 if let Some(f) = fill_of(&sp.fill, s.props.fill.as_ref()) {
@@ -800,6 +940,7 @@ pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
                         path: None,
                     },
                     x.props.geom.as_ref(),
+                    false,
                 ));
             }
             if has(&changed, "line") {
@@ -857,7 +998,7 @@ pub(crate) fn object_out(out: &mut Out, o: &Object) -> Vec<Shape> {
                 };
             }
             if has(&changed, "clip") {
-                pic.props.geom = Some(geom_to(&Geom::preset(&p.clip), pic.props.geom.as_ref()));
+                pic.props.geom = Some(geom_to(&Geom::preset(&p.clip), pic.props.geom.as_ref(), false));
             }
             for (i, m) in p.masks.iter().enumerate() {
                 let f = &o.frame;
@@ -1263,7 +1404,9 @@ pub fn export_parts(cd: &Deck, src: &ODeck, style: Option<&StyleSystem>, assets:
                 next_id: cs.max_id() + 1000,
                 slide: cs.uid.clone(),
             };
+            SIXTEEN.with(|s| *s.borrow_mut() = sixteen_targets(&cs.objects));
             let shapes: Vec<Shape> = cs.objects.iter().filter(|x| !x.is_empty_slot()).flat_map(|x| object_out(&mut o, x)).collect();
+            SIXTEEN.with(|s| s.borrow_mut().clear());
             entry.rels = o.rels;
             entry.doc.tree.children = shapes;
             entry.doc.set_hidden(cs.hidden);
@@ -1413,4 +1556,121 @@ pub fn export_bytes(cd: &Deck, src: &ODeck, style: Option<&StyleSystem>, assets:
         }
     }
     Ok(pkg.to_bytes()?)
+}
+
+#[cfg(test)]
+#[path = "../../lore-ooxml/tests/common/mod.rs"]
+mod common_for_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use super::common_for_tests as common;
+
+    fn block(id: u32, prst: &str, adj: Option<f64>) -> Object {
+        let mut g = Geom::preset(prst);
+        if let Some(a) = adj {
+            g.adj.insert("adj".into(), a);
+        }
+        Object {
+            id,
+            name: format!("b{id}"),
+            frame: Frame::new(1_000_000, 1_000_000, 2_000_000, 1_000_000),
+            hidden: false,
+            ph: None,
+            slot: None,
+            kind: Kind::Shape(SpObj { geom: g, fill: Paint::None, line: None, text: None, equation: false }),
+            src: None,
+        }
+    }
+
+    fn conn(id: u32, to: u32, site: u32) -> Object {
+        Object {
+            id,
+            name: format!("c{id}"),
+            frame: Frame::new(0, 0, 100, 100),
+            hidden: false,
+            ph: None,
+            slot: None,
+            kind: Kind::Connector(ConnObj { geom: "straightConnector1".into(), adj: Default::default(), line: None, start: None, end: Some(Attach { id: to, site }), text: None }),
+            src: None,
+        }
+    }
+
+    /// Write a slide with the given new objects and read it back.
+    fn round_trip(objs: Vec<Object>) -> (Vec<Object>, String) {
+        let od = ODeck::from_bytes(&common::synthetic_deck()).unwrap();
+        let mut cd = crate::pptx_in::import(&od, None, None);
+        cd.slides[0].objects = objs;
+        let bytes = export_bytes(&cd, &od, None, &|_: &str| None).unwrap();
+        let back = ODeck::from_bytes(&bytes).unwrap();
+        let part = back.slides[0].part.clone();
+        let xml = String::from_utf8(back.pkg.get(&part).unwrap().to_vec()).unwrap();
+        let cd2 = crate::pptx_in::import(&back, None, None);
+        (cd2.slides[0].objects.clone(), xml)
+    }
+
+    #[test]
+    fn a_rect_with_only_middle_connectors_is_written_as_before() {
+        let (objs, xml) = round_trip(vec![block(10, "rect", None), conn(11, 10, 3)]);
+        assert!(!xml.contains("custGeom") && !xml.contains(MARK_RECT), "{xml}");
+        assert!(xml.contains("prst=\"rect\""));
+        assert_eq!(objs.len(), 2);
+    }
+
+    #[test]
+    fn a_rect_with_a_corner_connector_keeps_its_sixteen_points_through_pptx() {
+        let (objs, xml) = round_trip(vec![block(10, "rect", None), conn(11, 10, 4)]);
+        assert!(xml.contains(MARK_RECT));
+        let b = objs.iter().find(|o| o.id == 10).unwrap();
+        let Kind::Shape(sp) = &b.kind else { panic!("{:?}", b.kind.name()) };
+        assert_eq!(sp.geom.prst, "rect");
+        assert!(sp.geom.path.is_none());
+        assert_eq!(crate::geom::sites(b).len(), 16);
+        let c = objs.iter().find(|o| o.id == 11).unwrap();
+        let Kind::Connector(cc) = &c.kind else { panic!() };
+        assert_eq!(cc.end, Some(Attach { id: 10, site: 4 }));
+        // the end is at the same point: the top-left corner
+        let p = crate::geom::sites(b)[4];
+        assert!((p.0 - 1_000_000.0).abs() < 1.0 && (p.1 - 1_000_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_round_rect_keeps_its_radius_through_the_round_trip() {
+        let (objs, xml) = round_trip(vec![block(10, "roundRect", Some(25000.0)), conn(11, 10, 9)]);
+        assert!(xml.contains(MARK_ROUND) && xml.contains("arcTo"));
+        let b = objs.iter().find(|o| o.id == 10).unwrap();
+        let Kind::Shape(sp) = &b.kind else { panic!() };
+        assert_eq!(sp.geom.prst, "roundRect");
+        assert_eq!(sp.geom.adj.get("adj"), Some(&25000.0));
+        // a second export of the read-back slide is stable
+        let (again, _) = round_trip(objs.clone());
+        let Kind::Shape(sp2) = &again.iter().find(|o| o.id == 10).unwrap().kind else { panic!() };
+        assert_eq!(sp2.geom, sp.geom);
+    }
+
+    #[test]
+    fn the_written_cxn_list_is_in_the_frozen_order() {
+        let e = sixteen_geom("rect", 0.0);
+        let l = e.child("a:cxnLst").unwrap();
+        let got: Vec<(String, String)> = l
+            .elements()
+            .map(|c| {
+                let p = c.child("a:pos").unwrap();
+                (p.attrs.get("x").unwrap().to_string(), p.attrs.get("y").unwrap().to_string())
+            })
+            .collect();
+        let want = [
+            ("hc", "t"), ("l", "vc"), ("hc", "b"), ("r", "vc"),
+            ("l", "t"), ("xq1", "t"), ("xq3", "t"), ("r", "t"),
+            ("r", "yq1"), ("r", "yq3"), ("r", "b"),
+            ("xq3", "b"), ("xq1", "b"), ("l", "b"),
+            ("l", "yq3"), ("l", "yq1"),
+        ];
+        assert_eq!(got.len(), 16);
+        for (i, (x, y)) in want.iter().enumerate() {
+            assert_eq!((got[i].0.as_str(), got[i].1.as_str()), (*x, *y), "idx {i}");
+        }
+    }
 }

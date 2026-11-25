@@ -636,7 +636,6 @@ function connMid(o) {
 function connFrame(a, b) {
   return { x: Math.round(Math.min(a[0], b[0])), y: Math.round(Math.min(a[1], b[1])), w: Math.round(Math.abs(b[0] - a[0])), h: Math.round(Math.abs(b[1] - a[1])), flip_h: b[0] < a[0], flip_v: b[1] < a[1] };
 }
-/** Connection sites (same order as lore-canvas geom::sites). */
 /** Vertices of a custom path (0..1 box): one connection site each, same order as lore-canvas geom::path_vertices. */
 function pathVertices(path) {
   const toks = path.replace(/,/g, " ").match(/[A-Za-z]|-?[\d.]+(?:e-?\d+)?/g) ?? [];
@@ -655,6 +654,14 @@ function pathVertices(path) {
   }
   return out;
 }
+/** Connection sites of an object (same order and count as lore-canvas geom::sites).
+ *  Rectangles (rect, roundRect, text boxes) and objects without a shape of their own (pictures,
+ *  groups, tables): sixteen, in the frozen order of lore_flow::figure::SITES:
+ *    0 top middle, 1 left middle, 2 bottom middle, 3 right middle (PowerPoint's order),
+ *    then clockwise from the top-left corner: 4 top-left, 5 top 1/4, 6 top 3/4, 7 top-right,
+ *    8 right 1/4, 9 right 3/4, 10 bottom-right, 11 bottom 3/4, 12 bottom 1/4, 13 bottom-left,
+ *    14 left 3/4, 15 left 1/4 (1/4 and 3/4 left to right on top and bottom, top to bottom on the sides).
+ *  Ellipses: 8 counter-clockwise from the top. Custom paths: one per vertex. Other presets: 4 (0-3). */
 function sites(o) {
   const f = o.frame;
   let pts;
@@ -664,7 +671,17 @@ function sites(o) {
   } else if (o.type !== "connector" && o.geom?.prst === "ellipse") {
     pts = [...Array(8)].map((_, i) => { const a = ((-90 - 45 * i) * Math.PI) / 180; return [f.x + f.w / 2 + (f.w / 2) * Math.cos(a), f.y + f.h / 2 + (f.h / 2) * Math.sin(a)]; });
   } else {
-    pts = [[f.x + f.w / 2, f.y], [f.x, f.y + f.h / 2], [f.x + f.w / 2, f.y + f.h], [f.x + f.w, f.y + f.h / 2]];
+    const { x, y, w, h } = f;
+    pts = [[x + w / 2, y], [x, y + h / 2], [x + w / 2, y + h], [x + w, y + h / 2]];
+    const prst = o.type === "connector" ? null : o.geom?.prst;
+    if (!o.geom || prst === "rect" || prst === "roundRect" || prst == null) {
+      pts.push(
+        [x, y], [x + w / 4, y], [x + (3 * w) / 4, y], [x + w, y],
+        [x + w, y + h / 4], [x + w, y + (3 * h) / 4], [x + w, y + h],
+        [x + (3 * w) / 4, y + h], [x + w / 4, y + h], [x, y + h],
+        [x, y + (3 * h) / 4], [x, y + h / 4],
+      );
+    }
   }
   return pts.map(([x, y]) => rotPt(f, x, y));
 }
