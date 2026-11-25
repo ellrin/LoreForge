@@ -262,6 +262,8 @@ label.h-plus { cursor: pointer; font-weight: 500; font-size: 12px; padding: 6px 
 .h-in textarea { width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: 8px 10px; font: 15px/1.55 "Source Serif 4", Georgia, serif; resize: vertical; }
 .h-in textarea:focus { outline: none; border-color: var(--accent); }
 .h-in .meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.h-in-place { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text); padding: 4px 8px; font-size: 12px; max-width: min(100%, 420px); }
+.h-in-place:focus { outline: none; border-color: var(--accent); }
 .h-in .sim { color: var(--warn); font-size: 12px; margin-left: 6px; }
 .h-in .h-acts { margin-top: 2px; }
 .h-in.bad .err { color: var(--err); font-size: 12px; }

@@ -624,19 +624,50 @@ const Hub = (() => {
   }
 
   let inboxTimer = 0;
+  /** What he changed on an entry that still waits (its words, where it goes): kept while the page redraws itself. */
+  const inboxDraft = new Map();
   async function inbox() {
     clearTimeout(inboxTimer);
     const r = await api("GET", "/api/hub/inbox?state=ready,failed,waiting,working"), c = r.counts ?? {};
     const again = () => show(S.root, "inbox").catch(() => {});
     const act = async (fn) => { try { await fn(); S.allDirty = true; await again(); } catch (e) { S.host.fail?.(e); } };
-    const places = (it) => (it?.tags?.place ?? []).map((p, i) => el("span", { class: `h-tag ${i ? "" : "src"}` }, p.split("/").join(" › ")));
+    // the writing tree of each family that has something waiting: where a sentence may be filed
+    const trees = new Map();
+    for (const cat of new Set((r.entries ?? []).filter((e) => e.state === "ready").map((e) => e.category))) {
+      const fam = S.stats?.families?.find((f) => (f.categories ?? []).includes(cat));
+      const t = fam ? (await api("GET", `/api/hub/tree?family=${enc(fam.id)}`).catch(() => ({}))).tree : null;
+      trees.set(cat, t?.tree ?? []);
+    }
+    /** Where it is filed, as a menu of the tree (one group a section): the first place is the one that changes. */
+    const placeMenu = (cat, now, set) => {
+      const tree = trees.get(cat) ?? [];
+      if (!tree.length) return now ? el("span", { class: "h-tag src" }, now.split("/").join(" › ")) : null;
+      const groups = tree.map((sec) => el("optgroup", { label: sec.label }, (sec.children ?? []).flatMap((sub) => (sub.children ?? []).map((leaf) => {
+        const path = `${sec.label}/${sub.label}/${leaf.label ?? leaf}`;
+        return el("option", { value: path, selected: path === now ? "" : null }, path.split("/").join(" › "));
+      }))));
+      const known = tree.some((sec) => (sec.children ?? []).some((sub) => (sub.children ?? []).some((leaf) => `${sec.label}/${sub.label}/${leaf.label ?? leaf}` === now)));
+      return el("select", { class: "h-in-place", "aria-label": "放在哪裡", onchange: (ev) => set(ev.target.value) },
+        known ? null : el("option", { value: "", selected: "" }, now ? now.split("/").join(" › ") : "還沒歸位"), groups);
+    };
+    const editedOf = new Map();
     const ready = (e) => {
-      const it = e.result ?? {}, tpl = el("textarea", { rows: 2, spellcheck: "false" }, it.fields?.template ?? it.title ?? "");
-      const edited = () => ({ ...it, title: tpl.value.trim().slice(0, 80), fields: { ...(it.fields ?? {}), template: tpl.value.trim() } });
+      const it = e.result ?? {}, d = inboxDraft.get(e.id) ?? {};
+      const keep = (k, v) => inboxDraft.set(e.id, { ...(inboxDraft.get(e.id) ?? {}), [k]: v });
+      const tpl = el("textarea", { rows: 2, spellcheck: "false", oninput: (ev) => keep("template", ev.target.value) }, d.template ?? it.fields?.template ?? it.title ?? "");
+      let place = d.place ?? it.tags?.place ?? [];
+      const edited = () => {
+        const fields = { ...(it.fields ?? {}), template: tpl.value.trim() };
+        if (place[0] && "section" in fields) fields.section = place[0].split("/")[0];
+        return { ...it, title: tpl.value.trim().slice(0, 80), fields, tags: { ...(it.tags ?? {}), ...(place.length ? { place } : {}) } };
+      };
+      editedOf.set(e.id, edited);
+      const places = () => [placeMenu(e.category, place[0] ?? "", (v) => { if (v) { place = [v, ...place.slice(1).filter((x) => x !== v)]; keep("place", place); } }),
+        place.slice(1).map((p) => el("span", { class: "h-tag" }, p.split("/").join(" › ")))];
       return el("section", { class: "h-in" },
         el("div", { class: "src" }, e.text),
         tpl,
-        el("div", { class: "meta" }, places(it), (it.tags?.tone ?? []).map((t) => el("span", { class: "h-tag" }, t)),
+        el("div", { class: "meta" }, places(), (it.tags?.tone ?? []).map((t) => el("span", { class: "h-tag" }, t)),
           (e.similar_items ?? []).length ? el("span", { class: "sim", title: e.similar_items.map((x) => x.title).join("\n") }, `和 ${e.similar_items.length} 條已有的很像`) : null),
         el("div", { class: "h-acts" }, el("button", { type: "button", class: "pri", onclick: () => act(() => api("POST", `/api/hub/inbox/${enc(e.id)}/accept`, { item: edited() })) }, "加入"),
           el("button", { type: "button", class: "quiet", onclick: () => act(() => api("POST", `/api/hub/inbox/${enc(e.id)}/skip`)) }, "略過")));
@@ -650,7 +681,7 @@ const Hub = (() => {
     return el("div", { class: "h-props" },
       el("div", { class: "h-head" }, el("h2", {}, "收件"), el("span", { class: "cnt" }, rd.length || ""), el("span", { class: "sp" }),
         wt.length ? el("span", { class: "cnt" }, `處理中 ${wt.length}`) : null,
-        rd.length > 1 ? el("button", { type: "button", class: "h-plus", onclick: () => act(() => api("POST", "/api/hub/inbox/accept", { ids: rd.map((e) => e.id) })) }, `全部加入（${rd.length}）`) : null),
+        rd.length > 1 ? el("button", { type: "button", class: "h-plus", onclick: () => act(async () => { for (const e of rd) await api("POST", `/api/hub/inbox/${enc(e.id)}/accept`, { item: editedOf.get(e.id)?.() }); }) }, `全部加入（${rd.length}）`) : null),
       rd.length || fl.length || wt.length ? null : el("div", { class: "h-empty" }, "沒有等你確認的句子"),
       rd.map(ready), fl.map(failed),
       wt.length ? [el("div", { class: "h-wh" }, "排隊中", el("small", {}, wt.length)), wt.slice(0, 20).map((e) => el("div", { class: "h-done" }, el("span", {}, e.text)))] : null);
