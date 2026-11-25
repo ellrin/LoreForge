@@ -192,6 +192,14 @@ const Hub = (() => {
       for (const it of S.items) { const p = (it.tags?.place ?? []).find((x) => x === S.f.place || x.startsWith(`${S.f.place}/`)) ?? ""; const k = p.split("/").slice(0, depth + 1).join("/"); (by.get(k) ?? by.set(k, []).get(k)).push(it); }
       return [...by.entries()].map(([k, v]) => ({ key: k, label: k.split("/").slice(depth).join(" › ") || k.split("/").at(-1), items: v }));
     }
+    if (S.tree?.tree?.length && !S.f.place && !fig && !isCards()) {
+      // nothing chosen yet: the tree's sections, one line each, then the kinds that are not sentences
+      const by = new Map();
+      for (const it of S.items) { const p = it.tags?.place?.[0]; const k = p ? p.split("/")[0] : TREE_FORMATS.has(it.format) ? "?" : `=${it.category}`; (by.get(k) ?? by.set(k, []).get(k)).push(it); }
+      const order = [...S.tree.tree.map((n) => n.label), "?"];
+      return [...by.entries()].sort((a, b) => (order.indexOf(a[0]) < 0 ? 99 : order.indexOf(a[0])) - (order.indexOf(b[0]) < 0 ? 99 : order.indexOf(b[0])))
+        .map(([k, v]) => ({ key: k, label: k === "?" ? "還沒歸位" : k.startsWith("=") ? catLabel(k.slice(1)) : k, items: v, folded: true }));
+    }
     if (isCards()) return [...out.entries()].sort((a, b) => (a[0] === "未分類") - (b[0] === "未分類") || b[1].length - a[1].length).map(([k, v]) => ({ key: k, label: k, items: v }));
     const order = fig ? ["figure", "module", "component", "other", "todo"] : S.fam.categories;
     return [...out.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([k, v]) => ({ key: k, label: name(k), items: v }));
@@ -201,9 +209,17 @@ const Hub = (() => {
     if (!S.items.length) return el("div", { class: "h-empty" }, S.f.q || S.f.tags.size || S.f.level || S.f.entity ? "沒有符合條件的知識" : "這一類還沒有知識");
     if (S.f.mode === "wall") return el("div", {}, g.map((x) => [el("div", { class: "h-wh" }, x.label, el("small", {}, x.items.length)),
       el("div", { class: `h-wall ${x.key === "figure" ? "lg" : ""}` }, x.items.map((it) => el("button", { type: "button", class: "h-pc", "aria-selected": String(S.sel === it.id), onclick: () => open(it.id) }, thumb(it) ?? el("span", { class: "h-paper none" }), el("div", { class: "cap" }, el("b", {}, `${x.label}｜`), it.title))))]));
-    return el("div", {}, g.map((x, i) => el("details", { class: "h-grp", open: g.length === 1 || i === 0 || x.items.some((it) => it.id === S.sel) },
+    // the quiet word beside a row: on the tree, where the sentence sits below what is chosen (its
+    // old section · function · position say less than that); elsewhere the format's own line
+    const side = (it) => {
+      const p = it.tags?.place?.[0];
+      if (!S.tree?.tree?.length || !TREE_FORMATS.has(it.format) || !p) return S.tree?.tree?.length && TREE_FORMATS.has(it.format) ? "" : it.line ?? "";
+      const chosen = S.f.place && !"?=".includes(S.f.place[0]) ? (it.tags.place.find((x) => x === S.f.place || x.startsWith(`${S.f.place}/`)) ?? p) : p;
+      return chosen.split("/").slice(Math.max(S.f.place && !"?=".includes(S.f.place[0]) ? S.f.place.split("/").length + 1 : 2, 0)).join(" › ");
+    };
+    return el("div", {}, g.map((x, i) => el("details", { class: "h-grp", open: x.items.some((it) => it.id === S.sel) || (!x.folded && (g.length === 1 || i === 0)) },
       el("summary", {}, x.label, el("small", {}, x.items.length)),
-      x.items.map((it) => { const th = thumb(it); return el("button", { type: "button", class: `h-row ${th ? "" : "text"}`, "aria-selected": String(S.sel === it.id), onclick: () => open(it.id) }, th, el("span", { class: "t" }, it.title), el("span", { class: "d" }, it.line ?? ""), el("span", { class: "g" }, chips(it))); }))));
+      x.items.map((it) => { const th = thumb(it); return el("button", { type: "button", class: `h-row ${th ? "" : "text"}`, "aria-selected": String(S.sel === it.id), onclick: () => open(it.id) }, th, el("span", { class: "t" }, it.title), el("span", { class: "d" }, side(it)), el("span", { class: "g" }, chips(it))); }))));
   }
   /** The family's tree (段落 → 小節 → 使用時機) with how many items sit at or under each node. */
   function treePane() {
@@ -223,7 +239,12 @@ const Hub = (() => {
     return [el("h4", {}, (S.tree.levels ?? []).join(" › ") || "位置"),
       S.tree.tree.map((sec) => node(sec.label, sec.label, 0, () => (sec.children ?? []).map((sub) => node(sub.label, `${sec.label}/${sub.label}`, 1, () => (sub.children ?? []).map((leaf) => node(leaf.label ?? leaf, `${sec.label}/${sub.label}/${leaf.label ?? leaf}`, 2, null)))))),
       unplaced ? el("button", { type: "button", class: "tr d0", "aria-pressed": String(f.place === "?"), onclick: () => { f.place = f.place === "?" ? "" : "?"; refresh(); } }, el("i", {}), "還沒歸位", el("span", {}, unplaced)) : null,
-      others.size ? [el("h4", {}, "其他"), [...others.entries()].map(([c, n]) => el("button", { type: "button", class: "tr d0", "aria-pressed": String(f.place === `=${c}`), onclick: () => { f.place = f.place === `=${c}` ? "" : `=${c}`; refresh(); } }, el("i", {}), catLabel(c), el("span", {}, n)))] : null];
+      others.size ? fold("其他", f.place?.startsWith("="), [...others.entries()].map(([c, n]) => el("button", { type: "button", class: "tr d0", "aria-pressed": String(f.place === `=${c}`), onclick: () => { f.place = f.place === `=${c}` ? "" : `=${c}`; refresh(); } }, el("i", {}), catLabel(c), el("span", {}, n)))) : null];
+  }
+  /** A part of the left column that stays one line until opened (it remembers) or in use. */
+  function fold(label, inUse, rows) {
+    const key = `${S.fam.id}/${label}`;
+    return el("details", { class: "h-fold", open: inUse || S.f.more.has(key) ? true : null, ontoggle: (e) => { e.target.open ? S.f.more.add(key) : S.f.more.delete(key); } }, el("summary", {}, label), rows);
   }
   function tagsPane() {
     const f = S.f, out = [];
@@ -243,8 +264,11 @@ const Hub = (() => {
       const open = f.more.has(facet), on = (t) => f.tags.has(`${facet}:${t}`);
       // the tags that group something (two or more), at most eight; chosen ones always stay
       const main = list.filter(([t, n], i) => on(t) || (n > 1 && i < 8)), rest = list.length - main.length;
-      out.push(el("h4", {}, FACET[facet] ?? facet), ...(open ? list : main).map(([t, n]) => { const k = `${facet}:${t}`; return btn(t, n, f.tags.has(k), () => { f.tags.has(k) ? f.tags.delete(k) : f.tags.add(k); refresh(); }); }),
-        rest > 0 ? el("button", { type: "button", class: "more", onclick: () => { open ? f.more.delete(facet) : f.more.add(facet); paint(); } }, open ? "收起" : `其他 ${rest}`) : null);
+      const rows = [...(open ? list : main).map(([t, n]) => { const k = `${facet}:${t}`; return btn(t, n, f.tags.has(k), () => { f.tags.has(k) ? f.tags.delete(k) : f.tags.add(k); refresh(); }); }),
+        rest > 0 ? el("button", { type: "button", class: "more", onclick: () => { open ? f.more.delete(facet) : f.more.add(facet); paint(); } }, open ? "收起" : `其他 ${rest}`) : null];
+      // beside a tree the facets are secondary: one line each until opened (or in use)
+      if (S.tree?.tree?.length && !isFigure(S.fam) && !isCards()) out.push(fold(FACET[facet] ?? facet, list.some(([t]) => on(t)), rows));
+      else out.push(el("h4", {}, FACET[facet] ?? facet), ...rows);
     }
     return out.length ? el("aside", { class: "h-tags" }, out) : null;
   }

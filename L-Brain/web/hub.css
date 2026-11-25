@@ -265,3 +265,13 @@ label.h-plus { cursor: pointer; font-weight: 500; font-size: 12px; padding: 6px 
 .h-in .sim { color: var(--warn); font-size: 12px; margin-left: 6px; }
 .h-in .h-acts { margin-top: 2px; }
 .h-in.bad .err { color: var(--err); font-size: 12px; }
+
+/* the left column's secondary parts: one line each until opened */
+.h-fold { margin-top: 10px; }
+.h-fold > summary { list-style: none; cursor: pointer; font: 600 11px/1 var(--mono); color: var(--faint); letter-spacing: .08em; padding: 6px; border-radius: 6px; }
+.h-fold > summary::-webkit-details-marker { display: none; }
+.h-fold > summary::before { content: "▸ "; }
+.h-fold[open] > summary::before { content: "▾ "; }
+.h-fold > summary:hover { color: var(--text); }
+.h-row.text { grid-template-columns: minmax(0, 1fr) auto auto; }
+.h-row .d { max-width: 240px; }
