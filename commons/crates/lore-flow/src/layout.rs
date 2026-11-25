@@ -1020,6 +1020,11 @@ struct PanelNeed {
     top: f64,
     bottom: f64,
     outside_title: f64,
+    /// Room under the frame for a `below` title, and the upright strip of a `left` one.
+    below_title: f64,
+    left_strip: f64,
+    /// Where the title is drawn: `""` (the theme's way), `top-left`, `top`, `above`, `below`, `left`.
+    at: String,
 }
 
 fn arrangement_size(rows: &[Vec<usize>], needs: &[PanelNeed], gap: f64) -> (f64, f64) {
@@ -1176,15 +1181,22 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
             let nodes: Vec<usize> = (0..g.nodes.len()).filter(|i| if p.id == "_" { g.nodes[*i].panel.is_empty() } else { g.nodes[*i].panel == p.id }).collect();
             let bare = p.bare || (p.id == "_");
             let plan = plan_panel(g, &nodes, &sizes, p.dir == "down", theme, &rt, if bare { 2.0 } else { theme.space.pad });
-            let has_title = !p.title.is_empty() && !bare;
+            let at = p.title_at.as_str();
+            let has_title = !p.title.is_empty() && !bare && at != "none";
             let title_h = if has_title { title_size * 1.3 + 2.0 } else { 0.0 };
             let title_w = if has_title { text::width(&p.title, title_size) * 1.06 + 2.0 * pad } else { 0.0 };
+            // where the title's room is taken
+            let out_top = has_title && (at == "above" || (at.is_empty() && outside));
+            let out_bottom = has_title && at == "below";
+            let strip = if has_title && at == "left" { title_h } else { 0.0 };
+            let in_top = has_title && !out_top && !out_bottom && strip == 0.0;
             // lines that go around the row need a channel under it
             let around = g.edges.iter().any(|e| matches!(e.kind, EdgeKind::Feedback | EdgeKind::Skip) && nodes.iter().any(|n| g.nodes[*n].id == e.from || g.nodes[*n].id == e.to));
-            let (p_in, top, bottom) = if bare { (2.0, 2.0, 2.0) } else { (pad, pad + if outside { 0.0 } else { title_h }, pad + if around { 10.0 } else { 0.0 }) };
-            let w = (plan.content.0 + 2.0 * p_in).max(title_w);
-            let h = plan.content.1 + top + bottom + if outside { title_h } else { 0.0 };
-            PanelNeed { id: p.id.clone(), title: p.title.clone(), bare, plan, w, h, top, bottom, outside_title: if outside { title_h } else { 0.0 } }
+            let (p_in, top, bottom) = if bare { (2.0, 2.0, 2.0) } else { (pad, pad + if in_top { title_h } else { 0.0 }, pad + if around { 10.0 } else { 0.0 }) };
+            let w = (plan.content.0 + 2.0 * p_in + strip).max(title_w);
+            let upright = if strip > 0.0 { text::width(&p.title, title_size) * 1.06 + 2.0 * pad } else { 0.0 };
+            let h = (plan.content.1 + top + bottom).max(upright) + if out_top { title_h } else { 0.0 } + if out_bottom { title_h } else { 0.0 };
+            PanelNeed { id: p.id.clone(), title: p.title.clone(), bare, plan, w, h, top, bottom, outside_title: if out_top { title_h } else { 0.0 }, below_title: if out_bottom { title_h } else { 0.0 }, left_strip: strip, at: at.to_string() }
         })
         .collect();
 
@@ -1265,9 +1277,9 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
     let mut panels = Vec::new();
     for (i, need) in needs.iter().enumerate() {
         let r = rects[i];
-        let frame = Rect::new(r.x, r.y + need.outside_title, r.w, r.h - need.outside_title);
+        let frame = Rect::new(r.x, r.y + need.outside_title, r.w, r.h - need.outside_title - need.below_title);
         let inner_h = frame.h - need.top - need.bottom;
-        let ox = frame.x + (frame.w - need.plan.content.0) / 2.0;
+        let ox = frame.x + need.left_strip + (frame.w - need.left_strip - need.plan.content.0) / 2.0;
         let oy = frame.y + need.top + (inner_h - need.plan.content.1) / 2.0;
         for &ni in &need.plan.nodes {
             let p = need.plan.pos[&ni];
@@ -1276,13 +1288,22 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
             let reserve = Rect::new(rect.cx() - s.reserve_w / 2.0, rect.y, s.reserve_w, rect.h);
             nodes[ni] = Some(Placed { rect, reserve, port_y: rect.y + s.cy, panel: i, layer: need.plan.layer[&ni], lane: need.plan.lane[&ni], single: s.single, ellipse: s.ellipse, ends: BTreeMap::new(), origin: (0.0, 0.0) });
         }
-        let title_rect = (!need.title.is_empty() && !need.bare).then(|| {
+        let title_rect = (!need.title.is_empty() && !need.bare && need.at != "none").then(|| {
             let tw = text::width(&need.title, title_size) * 1.06;
             let th = title_size * 1.3;
-            let centre = theme.panel.title.ends_with("center");
-            let x = if centre { frame.cx() - tw / 2.0 } else if outside { frame.x } else { frame.x + pad * 0.6 };
-            let y = if outside { r.y } else { frame.y + pad * 0.4 };
-            Rect::new(x, y, tw, th)
+            match need.at.as_str() {
+                "above" => Rect::new(frame.cx() - tw / 2.0, r.y, tw, th),
+                "below" => Rect::new(frame.cx() - tw / 2.0, frame.bottom() + 1.0, tw, th),
+                "left" => Rect::new(frame.x + 1.0, frame.cy() - tw / 2.0, th, tw),
+                "top" => Rect::new(frame.cx() - tw / 2.0, frame.y + pad * 0.4, tw, th),
+                "top-left" => Rect::new(frame.x + pad * 0.6, frame.y + pad * 0.4, tw, th),
+                _ => {
+                    let centre = theme.panel.title.ends_with("center");
+                    let x = if centre { frame.cx() - tw / 2.0 } else if outside { frame.x } else { frame.x + pad * 0.6 };
+                    let y = if outside { r.y } else { frame.y + pad * 0.4 };
+                    Rect::new(x, y, tw, th)
+                }
+            }
         });
         panels.push(PanelBox { id: need.id.clone(), title: need.title.clone(), rect: frame, title_rect, bare: need.bare, down: need.plan.down });
     }

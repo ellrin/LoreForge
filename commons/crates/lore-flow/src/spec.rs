@@ -138,6 +138,10 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn is_zero(w: &f64) -> bool {
+    *w == 0.0
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Graph {
     /// Short id of the figure; object names are `flow:<fig>/<node>`.
@@ -184,6 +188,19 @@ pub struct Panel {
     /// No frame and no title (loose nodes that sit beside the panels).
     #[serde(default, skip_serializing_if = "is_false")]
     pub bare: bool,
+    /// Frame line: empty = solid as the theme draws it, `dashed`, `dotted`, `solid`, `none`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub line: String,
+    /// Fill: a name of [`crate::theme::named`] or `RRGGBB`; empty = as the theme.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tint: String,
+    /// Round corners.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub round: bool,
+    /// Where the title goes: empty = inside, top-left; `top-left`, `top` (inside, centred),
+    /// `above`, `below` (outside the frame), `left` (upright strip), `none` (no title, no room).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -276,6 +293,9 @@ pub struct Edge {
     /// order) and the router starts at a point on that line.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub off: String,
+    /// The line's own width in pt at natural size; 0 = the width of its kind.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub width: f64,
 }
 
 /// A region: the blocks of one kind of thing, framed together (the author's "依照標籤給區域").
@@ -383,6 +403,12 @@ pub enum SpecError {
     RegionLine { region: String, value: String },
     #[error("region {region:?} has title position {value:?} (allowed: top-left, top, above, below, left)")]
     RegionTitleAt { region: String, value: String },
+    #[error("panel {panel:?} has line {value:?} (allowed: solid, dashed, dotted, none)")]
+    PanelLine { panel: String, value: String },
+    #[error("panel {panel:?} has title position {value:?} (allowed: top-left, top, above, below, left, none)")]
+    PanelTitleAt { panel: String, value: String },
+    #[error("line {from} -> {to} has width {width} (allowed: 0 to 12)")]
+    EdgeWidth { from: String, to: String, width: f64 },
     #[error("align {0:?} is not row or col")]
     AlignAxis(String),
     #[error("align names {0:?}, which is not a node")]
@@ -477,6 +503,19 @@ impl Graph {
 
     fn validate_regions(&self, ids: &BTreeSet<&str>, panels: &BTreeSet<&str>) -> Result<(), SpecError> {
         let mut regions: BTreeSet<&str> = BTreeSet::new();
+        for p in &self.panels {
+            if !p.line.is_empty() && !matches!(p.line.as_str(), "solid" | "dashed" | "dotted" | "none") {
+                return Err(SpecError::PanelLine { panel: p.id.clone(), value: p.line.clone() });
+            }
+            if !p.title_at.is_empty() && !matches!(p.title_at.as_str(), "top-left" | "top" | "above" | "below" | "left" | "none") {
+                return Err(SpecError::PanelTitleAt { panel: p.id.clone(), value: p.title_at.clone() });
+            }
+        }
+        for e in &self.edges {
+            if !(0.0..=12.0).contains(&e.width) {
+                return Err(SpecError::EdgeWidth { from: e.from.clone(), to: e.to.clone(), width: e.width });
+            }
+        }
         for r in &self.regions {
             if !valid_id(&r.id) {
                 return Err(SpecError::BadId(r.id.clone()));

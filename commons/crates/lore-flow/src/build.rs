@@ -182,13 +182,15 @@ fn is_hex(s: &str) -> bool {
 }
 
 fn stroke_of(theme: &Theme, kind: EdgeKind, k: f64) -> Stroke {
-    stroke_coloured(theme, kind, k, None)
+    stroke_coloured(theme, kind, k, None, 0.0)
 }
 
 /// As [`stroke_of`], in the line's own colour when it has one; dash, width and heads stay the kind's.
-fn stroke_coloured(theme: &Theme, kind: EdgeKind, k: f64, own: Option<&str>) -> Stroke {
+/// A positive `width` (pt at natural size) replaces the kind's width.
+fn stroke_coloured(theme: &Theme, kind: EdgeKind, k: f64, own: Option<&str>, width: f64) -> Stroke {
     let e = theme.edge(kind);
-    let mut s = Stroke::new(own.unwrap_or(&e.color), (e.width * k).max(0.5));
+    let w = if width > 0.0 { width } else { e.width };
+    let mut s = Stroke::new(own.unwrap_or(&e.color), (w * k).max(0.5));
     s.dash = e.dash.clone();
     s.head = e.head.clone();
     s.tail = e.tail.clone();
@@ -225,20 +227,52 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         let fill = theme.panel_fill(framed);
         let line = theme.panel_line(framed);
         framed += 1;
-        let mut o = modules::shape("", if theme.panel.radius > 0.0 { "roundRect" } else { "rect" }, r.x, r.y, r.w, r.h, if fill == "none" { Paint::None } else { Paint::solid(fill) }, None);
-        if line != "none" && theme.panel.line_w > 0.0 {
-            let mut s = Stroke::new(line, (theme.panel.line_w * k).max(0.5));
-            s.dash = theme.panel.dash.clone();
+        let own = g.panels.iter().find(|q| q.id == p.id);
+        let styled = own.is_some_and(|q| !q.line.is_empty() || !q.tint.is_empty() || q.round);
+        let mut o = if let Some(q) = own.filter(|_| styled) {
+            // the panel's own options: drawn like a region's frame
+            let named = crate::theme::named(&q.tint);
+            let fill = named.as_ref().map(|(f, _)| Paint::solid(f)).unwrap_or(Paint::None);
+            let mut o = modules::shape("", if q.round { "roundRect" } else { "rect" }, r.x, r.y, r.w, r.h, fill, None);
+            let colour = match &named {
+                Some((_, l)) if !is_hex(&q.tint) => l.clone(),
+                _ if line != "none" => line.to_string(),
+                _ => theme.colors.muted.clone(),
+            };
+            let dash = match q.line.as_str() {
+                "dashed" => "dash".to_string(),
+                "dotted" => "sysDot".to_string(),
+                "solid" => "solid".to_string(),
+                _ => theme.panel.dash.clone(),
+            };
             if let Some(sp) = o.kind.sp_mut() {
-                sp.line = Some(s);
+                if q.line != "none" {
+                    let mut s = Stroke::new(&colour, (theme.panel.line_w.max(1.0) * k).max(0.5));
+                    s.dash = dash;
+                    sp.line = Some(s);
+                }
+                if q.round {
+                    sp.geom.adj.insert("adj".into(), ((8.0 * k / r.w.min(r.h).max(1.0)).min(0.5) * 100_000.0).round());
+                }
             }
-        }
-        if theme.panel.radius > 0.0
-            && let Some(sp) = o.kind.sp_mut()
-        {
-            // radius is a fraction of the short side; panels are large, so keep it modest
-            sp.geom.adj.insert("adj".into(), (theme.panel.radius * 100_000.0 * (60.0 * k / r.w.min(r.h)).min(1.0)).round());
-        }
+            o
+        } else {
+            let mut o = modules::shape("", if theme.panel.radius > 0.0 { "roundRect" } else { "rect" }, r.x, r.y, r.w, r.h, if fill == "none" { Paint::None } else { Paint::solid(fill) }, None);
+            if line != "none" && theme.panel.line_w > 0.0 {
+                let mut s = Stroke::new(line, (theme.panel.line_w * k).max(0.5));
+                s.dash = theme.panel.dash.clone();
+                if let Some(sp) = o.kind.sp_mut() {
+                    sp.line = Some(s);
+                }
+            }
+            if theme.panel.radius > 0.0
+                && let Some(sp) = o.kind.sp_mut()
+            {
+                // radius is a fraction of the short side; panels are large, so keep it modest
+                sp.geom.adj.insert("adj".into(), (theme.panel.radius * 100_000.0 * (60.0 * k / r.w.min(r.h)).min(1.0)).round());
+            }
+            o
+        };
         o.id = id;
         o.name = format!("flow:{fig}/panel:{}", p.id);
         id += 1;
@@ -246,7 +280,14 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         if let Some(t) = &p.title_rect {
             let ty = cx.title();
             let (mut o, _, _) = cx.text("", &p.title, &ty, t.cx(), t.y);
-            if !theme.panel.title.ends_with("center") {
+            let at = own.map(|q| q.title_at.as_str()).unwrap_or("");
+            if at == "left" {
+                o.frame = modules::frame(t.x, t.y, t.w, t.h);
+                if let Some(tb) = o.kind.sp_mut().and_then(|sp| sp.text.as_mut()) {
+                    tb.paras.iter_mut().for_each(|p| p.align = "ctr".into());
+                    tb.vert = Some("vert270".into());
+                }
+            } else if at == "top-left" || (at.is_empty() && !theme.panel.title.ends_with("center")) {
                 // left-aligned from the title's corner, however wide the font turns out
                 o.frame.x = emu(t.x);
                 if let Some(tb) = o.kind.sp_mut().and_then(|sp| sp.text.as_mut()) {
@@ -341,7 +382,7 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
                 warnings.push(format!("{} → {}: 不認得的顏色 {}", e.from, e.to, e.color));
             }
         }
-        let st = stroke_coloured(theme, e.kind, k, own.as_deref());
+        let st = stroke_coloured(theme, e.kind, k, own.as_deref(), e.width);
         let pts: Vec<(f64, f64)> = r.points.iter().map(|p| (p.0 * EMU_PT, p.1 * EMU_PT)).collect();
         if r.forced {
             warnings.push(format!("{} -> {}: no clear path, drawn straight", e.from, e.to));

@@ -158,6 +158,7 @@ pub fn parse_with(text: &str, extra_modules: &[String]) -> Result<Graph, DslErro
             let mut label = String::new();
             let mut color = String::new();
             let mut curve = false;
+            let mut width = 0.0f64;
             let mut i = 0;
             let mut expect_node = true;
             while i < toks.len() {
@@ -192,6 +193,9 @@ pub fn parse_with(text: &str, extra_modules: &[String]) -> Result<Graph, DslErro
                     }
                     Tok::Word(w) if !expect_node && w == "curve" => curve = true,
                     Tok::Word(w) if !expect_node && w.starts_with("color=") => color = w["color=".len()..].trim_start_matches('"').to_string(),
+                    Tok::Word(w) if !expect_node && w.starts_with("width=") => {
+                        width = w["width=".len()..].trim_matches('"').parse().map_err(|_| err(format!("a line's width is a number of points (got {w:?})")))?;
+                    }
                     Tok::Quoted(q) if !expect_node => label = q.clone(),
                     t => return Err(err(format!("did not expect {:?} here", t.s()))),
                 }
@@ -206,7 +210,7 @@ pub fn parse_with(text: &str, extra_modules: &[String]) -> Result<Graph, DslErro
                     Some((f, _)) => (f.to_string(), w[0].clone()),
                     None => (w[0].clone(), String::new()),
                 };
-                g.edges.push(Edge { from, to: w[1].clone(), kind, label: label.clone(), color: color.clone(), curve, off });
+                g.edges.push(Edge { from, to: w[1].clone(), kind, label: label.clone(), color: color.clone(), curve, off, width });
             }
             continue;
         }
@@ -329,10 +333,15 @@ pub fn parse_with(text: &str, extra_modules: &[String]) -> Result<Graph, DslErro
                     match t {
                         Tok::Quoted(q) => p.title = q.clone(),
                         Tok::Word(w) if w == "bare" => p.bare = true,
+                        Tok::Word(w) if matches!(w.as_str(), "solid" | "dashed" | "dotted" | "none") => p.line = w.clone(),
+                        Tok::Word(w) if w == "round" => p.round = true,
                         Tok::Word(w) => match w.split_once('=') {
                             Some(("dir", v)) if v == "right" || v == "down" => p.dir = v.to_string(),
+                            Some(("title", v)) if matches!(v, "top-left" | "top" | "above" | "below" | "left" | "none") => p.title_at = v.to_string(),
                             Some(("title", v)) => p.title = v.trim_start_matches('"').to_string(),
-                            _ => return Err(err(format!("panel takes a title, dir=right|down and bare (got {w:?})"))),
+                            Some(("tint", v)) => p.tint = v.trim_start_matches('"').to_string(),
+                            Some(("line", v)) => p.line = v.trim_start_matches('"').to_string(),
+                            _ => return Err(err(format!("panel takes a title, dir=right|down, bare, dashed|dotted|solid|none, tint=, round and title= (got {w:?})"))),
                         },
                     }
                 }
@@ -468,6 +477,9 @@ pub fn to_dsl(g: &Graph) -> String {
         if e.curve {
             s.push_str(" curve");
         }
+        if e.width != 0.0 {
+            s.push_str(&format!(" width={}", e.width));
+        }
         s
     };
     let free: Vec<&Node> = g.nodes.iter().filter(|n| n.panel.is_empty()).collect();
@@ -486,6 +498,22 @@ pub fn to_dsl(g: &Graph) -> String {
         }
         if p.bare {
             out.push_str(" bare");
+        }
+        if !p.line.is_empty() {
+            if matches!(p.line.as_str(), "solid" | "dashed" | "dotted" | "none") {
+                out.push_str(&format!(" {}", p.line));
+            } else {
+                out.push_str(&format!(" line={}", param(&Value::String(p.line.clone()))));
+            }
+        }
+        if !p.tint.is_empty() {
+            out.push_str(&format!(" tint={}", p.tint));
+        }
+        if p.round {
+            out.push_str(" round");
+        }
+        if !p.title_at.is_empty() {
+            out.push_str(&format!(" title={}", p.title_at));
         }
         out.push('\n');
         for n in g.nodes.iter().filter(|n| n.panel == p.id) {

@@ -1801,3 +1801,153 @@ fn coloured_bars_through_the_figure_text() {
     assert!(flat(f.objects()).iter().any(|o| o.name.ends_with("bar0") && o.kind.sp().is_some_and(|s| s.line.as_ref().is_some_and(|l| l.color.eq_ignore_ascii_case(&pink)))));
     assert!(flat(f.objects()).iter().any(|o| o.name.ends_with("through")));
 }
+
+// ── panel options and a line's own width ───────────────────────────────
+
+const PANELED: &str = "fig f\npanel p \"P. Title\"\n  a: box \"A\"\n  b: box \"B\"\nend\na -> b\n";
+
+fn panel_with(opts: &str) -> String {
+    PANELED.replace("panel p \"P. Title\"", &format!("panel p \"P. Title\" {opts}"))
+}
+
+fn rect_nums(r: &Rect) -> [f64; 4] {
+    [r.x, r.y, r.w, r.h].map(|v| (v * 100.0).round() / 100.0)
+}
+
+#[test]
+fn a_panel_takes_a_tint_a_dashed_frame_and_round_corners() {
+    let g = dsl::parse(&panel_with("dashed tint=green round")).unwrap();
+    let p = &g.panels[0];
+    assert_eq!((p.line.as_str(), p.tint.as_str(), p.round), ("dashed", "green", true));
+    let (g, lay, routes) = laid(&panel_with("dashed tint=green round"));
+    let b = built(&g, &lay, &routes);
+    let sp = named_obj(&b, "flow:f/panel:p").kind.sp().unwrap();
+    let (pale, strong) = lore_flow::theme::named("green").unwrap();
+    assert_eq!(sp.geom.prst, "roundRect");
+    assert_eq!(sp.fill, lore_canvas::Paint::solid(&pale));
+    let line = sp.line.as_ref().unwrap();
+    assert_eq!(line.dash, "dash");
+    assert!(line.color.eq_ignore_ascii_case(&strong));
+    // a hex tint is its own fill
+    let (g, lay, routes) = laid(&panel_with("dotted tint=1F4E79"));
+    let b = built(&g, &lay, &routes);
+    let sp = named_obj(&b, "flow:f/panel:p").kind.sp().unwrap();
+    assert_eq!(sp.fill, lore_canvas::Paint::solid("1F4E79"));
+    assert_eq!(sp.line.as_ref().unwrap().dash, "sysDot");
+    assert_eq!(sp.geom.prst, "rect");
+}
+
+#[test]
+fn a_panel_without_a_frame_keeps_its_tint() {
+    let (g, lay, routes) = laid(&panel_with("none tint=blue"));
+    let b = built(&g, &lay, &routes);
+    let sp = named_obj(&b, "flow:f/panel:p").kind.sp().unwrap();
+    assert_eq!(sp.fill, lore_canvas::Paint::solid(&lore_flow::theme::named("blue").unwrap().0));
+    assert!(sp.line.is_none());
+    // bare wins over everything
+    let (g, lay, routes) = laid(&panel_with("bare dashed tint=blue"));
+    let b = built(&g, &lay, &routes);
+    assert!(!b.objects.iter().any(|o| o.name.starts_with("flow:f/panel:p")));
+}
+
+#[test]
+fn a_panel_title_goes_above_or_is_left_out() {
+    let (_, lay_in, _) = laid(PANELED);
+    let (g, lay, routes) = laid(&panel_with("title=above"));
+    let b = built(&g, &lay, &routes);
+    let frame = named_obj(&b, "flow:f/panel:p");
+    let title = named_obj(&b, "flow:f/panel:p/title");
+    assert!(title.frame.y + title.frame.h <= frame.frame.y + 1, "title not above the frame");
+    // the frame does not grow for an outside title
+    assert!(lay.panels[0].rect.h <= lay_in.panels[0].rect.h + 0.01, "frame grew: {} vs {}", lay.panels[0].rect.h, lay_in.panels[0].rect.h);
+    // below
+    let (g, lay, routes) = laid(&panel_with("title=below"));
+    let b = built(&g, &lay, &routes);
+    let frame = named_obj(&b, "flow:f/panel:p");
+    let title = named_obj(&b, "flow:f/panel:p/title");
+    assert!(title.frame.y >= frame.frame.y + frame.frame.h - 1);
+    // none: no title object, and the panel is shorter than with an inside title
+    let (g, lay_none, routes) = laid(&panel_with("title=none"));
+    let b = built(&g, &lay_none, &routes);
+    assert!(!b.objects.iter().any(|o| o.name == "flow:f/panel:p/title"));
+    assert!(lay_none.panels[0].title_rect.is_none());
+    assert!(lay_none.panels[0].rect.h < lay_in.panels[0].rect.h, "{} vs {}", lay_none.panels[0].rect.h, lay_in.panels[0].rect.h);
+    // left: an upright title inside the frame
+    let (g, lay, routes) = laid(&panel_with("title=left"));
+    let b = built(&g, &lay, &routes);
+    let t = named_obj(&b, "flow:f/panel:p/title");
+    assert_eq!(t.kind.sp().unwrap().text.as_ref().unwrap().vert.as_deref(), Some("vert270"));
+    assert!(lay.panels[0].rect.contains(&lay.panels[0].title_rect.unwrap()));
+    assert!(lay.nodes.iter().all(|n| n.rect.x >= lay.panels[0].title_rect.unwrap().right() - 0.01));
+}
+
+#[test]
+fn panel_options_survive_text_and_back() {
+    let g = dsl::parse(&panel_with("dir=down dashed tint=green round title=above")).unwrap();
+    let text = dsl::to_dsl(&g);
+    assert!(text.contains("panel p \"P. Title\" dir=down dashed tint=green round title=above\n"), "{text}");
+    assert_eq!(dsl::parse(&text).unwrap(), g);
+    let plain = serde_json::to_string(&dsl::parse(PANELED).unwrap().panels[0]).unwrap();
+    assert_eq!(plain, r#"{"id":"p","title":"P. Title"}"#);
+}
+
+#[test]
+fn a_panel_without_options_prints_and_lays_out_as_before() {
+    let g = dsl::parse(PANELED).unwrap();
+    assert_eq!(dsl::to_dsl(&g), "fig f\npanel p \"P. Title\"\n  a: box \"A\"\n  b: box \"B\"\nend\na -> b\n");
+    let (_, lay, _) = laid(PANELED);
+    assert_eq!(rect_nums(&lay.panels[0].rect), [202.5, 98.13, 195.0, 103.74]);
+    assert_eq!(lay.panels[0].title_rect.map(|r| rect_nums(&r)), Some([213.3, 105.33, 67.79, 25.74]));
+    assert_eq!(lay.nodes.iter().map(|n| rect_nums(&n.rect)).collect::<Vec<_>>(), vec![[220.5, 144.87, 60.0, 39.0], [319.5, 144.87, 60.0, 39.0]]);
+}
+
+#[test]
+fn validation_refuses_an_unknown_panel_line() {
+    let mut g = dsl::parse(PANELED).unwrap();
+    g.panels[0].line = "wavy".into();
+    assert!(matches!(g.validate(&[]), Err(SpecError::PanelLine { .. })));
+    g.panels[0].line = "dashed".into();
+    g.panels[0].title_at = "middle".into();
+    assert!(matches!(g.validate(&[]), Err(SpecError::PanelTitleAt { .. })));
+    assert!(dsl::parse(&panel_with("line=wavy")).is_err());
+}
+
+#[test]
+fn a_line_takes_its_own_width() {
+    let (mut g, lay, routes) = laid("fig f\na: box \"A\"\nb: box \"B\"\na -> b : data\n");
+    let plain = built(&g, &lay, &routes);
+    g.edges[0].width = 4.0;
+    let b = built(&g, &lay, &routes);
+    let (w0, w1) = (stroke(named_obj(&plain, "flow:f/edge:a-b")).width_pt, stroke(named_obj(&b, "flow:f/edge:a-b")).width_pt);
+    assert!(w1 > w0, "{w1} vs {w0}");
+    assert_eq!(dsl::parse("fig f\na: box \"A\"\nb: box \"B\"\na -> b : data width=2.5\n").unwrap().edges[0].width, 2.5);
+}
+
+#[test]
+fn the_width_of_a_chain_applies_to_each_line() {
+    let g = dsl::parse("fig f\na: box \"A\"\nb: box \"B\"\nc: box \"C\"\na -> b -> c : data width=3\n").unwrap();
+    assert_eq!(g.edges.len(), 2);
+    assert!(g.edges.iter().all(|e| e.width == 3.0));
+}
+
+#[test]
+fn a_line_width_survives_text_and_back() {
+    let g = dsl::parse("fig f\na: box \"A\"\nb: box \"B\"\na -> b color=blue width=2.5\n").unwrap();
+    let t = dsl::to_dsl(&g);
+    assert!(t.contains("a -> b color=blue width=2.5\n"), "{t}");
+    assert_eq!(dsl::parse(&t).unwrap(), g);
+    let plain = dsl::parse("fig f\na: box \"A\"\nb: box \"B\"\na -> b\n").unwrap();
+    assert!(!serde_json::to_string(&plain.edges[0]).unwrap().contains("width"));
+}
+
+#[test]
+fn validation_refuses_a_silly_width() {
+    let mut g = dsl::parse("fig f\na: box \"A\"\nb: box \"B\"\na -> b\n").unwrap();
+    for w in [-1.0, 13.0, f64::NAN] {
+        g.edges[0].width = w;
+        assert!(matches!(g.validate(&[]), Err(SpecError::EdgeWidth { .. })), "{w}");
+    }
+    g.edges[0].width = 12.0;
+    assert!(g.validate(&[]).is_ok());
+    assert!(dsl::parse("fig f\na: box \"A\"\nb: box \"B\"\na -> b width=thick\n").is_err());
+}
