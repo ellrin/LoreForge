@@ -249,8 +249,8 @@ fn drawing_item(category: &str, t: &ModuleTemplate, level_: &str, source: &Sourc
 /// kind and style replaces the generator (the flow tool does the same: a saved drawing wins).
 /// Order: the flow tool's kind list, then drawings by kind and style.
 ///
-/// The catalogue keeps drawings as [`ModuleTemplate`], which has no `level`, so drawings are
-/// modules here; [`Drawings`] reads the files and honours `"level"`.
+/// A drawing is the size of block it says it is (`level`: component or module; none said = a
+/// module) and contains what it says it is made of (`made_of`).
 pub fn from_catalogue(cat: &Catalogue, category: &str, source: Source) -> Vec<Item> {
     let mut out: Vec<Item> = vec![];
     for (kind, desc) in MODULES.iter() {
@@ -263,7 +263,12 @@ pub fn from_catalogue(cat: &Catalogue, category: &str, source: Source) -> Vec<It
     }
     for styles in cat.library.templates.values() {
         for t in styles.values() {
-            put_replacing(&mut out, drawing_item(category, t, level::MODULE, &source));
+            // a drawing says what size of block it is and what it is made of; one that says
+            // nothing is a module, as before
+            let l = if LEVELS.contains(&t.level.as_str()) && t.level != level::FIGURE { t.level.as_str() } else { level::MODULE };
+            let mut it = drawing_item(category, t, l, &source);
+            it.contains = t.made_of.iter().filter_map(|m| m.split_once('/')).map(|(k, st)| item_id(category, &format!("{k}.{st}"))).collect();
+            put_replacing(&mut out, it);
         }
     }
     out

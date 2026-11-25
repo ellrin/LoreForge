@@ -57,6 +57,16 @@ pub struct ModuleTemplate {
     /// One line for the LLM's module list.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// What size of building block this is: `component` (the smallest: one thing that is not
+    /// made of other blocks) or `module` (components and plain objects put together). Empty =
+    /// a module, as every saved drawing was before there was a level.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub level: String,
+    /// The blocks a module is made of, each `<kind>/<style>` (a saved drawing or a built-in
+    /// kind and its style). The drawing itself is whole in `objects`; this is what it says
+    /// about itself, for the hub's 包含.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub made_of: Vec<String>,
     /// Natural size in pt (of the port rect when there is one).
     pub w: f64,
     pub h: f64,
@@ -346,7 +356,7 @@ pub fn template_from_objects(objects: &[Object], opt: &SaveOptions) -> Result<Mo
         }
         swap(&mut v, None, false, &picks);
     }
-    let t = ModuleTemplate { kind: opt.kind.clone(), style: opt.style.clone(), description: opt.description.clone(), w: b.w as f64 / EMU_PT, h: b.h as f64 / EMU_PT, port: None, objects: v };
+    let t = ModuleTemplate { kind: opt.kind.clone(), style: opt.style.clone(), description: opt.description.clone(), w: b.w as f64 / EMU_PT, h: b.h as f64 / EMU_PT, level: String::new(), made_of: Vec::new(), port: None, objects: v };
     // must load back
     Library::default().add(t.clone())?;
     Ok(t)
