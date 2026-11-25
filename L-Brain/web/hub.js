@@ -217,7 +217,8 @@ const Hub = (() => {
     const cut = (x) => {
       if (x.base == null || !onTree()) return null;
       const depth = x.base.split("/").length;
-      const rows = x.items.map((it) => { const p = (it.tags?.place ?? []).find((q) => q === x.base || q.startsWith(`${x.base}/`)) ?? x.base; return { it, p, rem: p.split("/").slice(depth) }; });
+      // a sentence filed at two occasions is listed under both, as the tree counts it
+      const rows = x.items.flatMap((it) => { const ps = (it.tags?.place ?? []).filter((q) => q === x.base || q.startsWith(`${x.base}/`)); return (ps.length ? ps : [x.base]).map((p) => ({ it, p, rem: p.split("/").slice(depth) })); });
       const lone = rows.every((r) => !r.rem.length || r.rem[0] === rows.find((q) => q.rem.length)?.rem[0]) && rows.some((r) => r.rem.length > 1);
       const idx = (p) => { const i = p === x.base ? -1 : paths.indexOf(p); return i < 0 ? 9999 : i; };
       rows.sort((a, b) => idx(a.p) - idx(b.p) || order.indexOf(a.it.category) - order.indexOf(b.it.category));
@@ -237,9 +238,11 @@ const Hub = (() => {
       const out = []; let cur = null;
       for (const it of list) { if (it.kindHead) { cur = { head: it, rows: [] }; out.push(cur); } else if (cur) cur.rows.push(it); else out.push(it); }
       const many = out.filter((r) => r.head).length > 1;
-      return out.map((r) => { if (!r.head) return row(r); const key = `${x.base}|${r.head.kindHead}`;
-        return el("details", { class: "h-run", open: !many || S.f.more.has(key) || r.rows.some((it) => it.id === S.sel) || null, ontoggle: (e) => { e.target.open ? S.f.more.add(key) : S.f.more.delete(key); } },
-          el("summary", {}, r.head.kindHead, el("small", {}, r.head.n)), r.rows.map(row)); });
+      let cap = null;
+      return out.flatMap((r) => { if (!r.head) return [row(r)]; const key = `${x.base}|${r.head.kindHead}`, parts = r.head.kindHead.split(" › "), sub = parts.length > 1 ? parts[0] : "";
+        const lead = sub !== cap && (sub || cap != null) ? el("div", { class: "h-sub" }, sub) : null; cap = sub; r.head.kindHead = parts.at(-1);
+        return [lead, el("details", { class: "h-run", open: !many || S.f.more.has(key) || r.rows.some((it) => it.id === S.sel) || null, ontoggle: (e) => { e.target.open ? S.f.more.add(key) : S.f.more.delete(key); } },
+          el("summary", {}, r.head.kindHead, el("small", {}, r.head.n)), r.rows.map(row))]; });
     };
     return el("div", {}, g.map((x, i) => { const c = cut(x), rows = c ? runs(x, c) : x.items.map(row);
       return x.plain ? el("div", { class: "h-grp plain" }, rows)
@@ -260,8 +263,9 @@ const Hub = (() => {
     const onTree = (it) => TREE_FORMATS.has(it.format);
     const unplaced = all.filter((it) => onTree(it) && !(it.tags?.place ?? []).length).length;
     const others = new Map(); for (const it of all) if (!onTree(it)) others.set(it.category, (others.get(it.category) ?? 0) + 1);
-    return [el("h4", {}, (S.tree.levels ?? []).join(" › ") || "位置"),
-      S.tree.tree.map((sec) => node(sec.label, sec.label, 0, () => (sec.children ?? []).map((sub) => node(sub.label, `${sec.label}/${sub.label}`, 1, () => (sub.children ?? []).map((leaf) => node(leaf.label ?? leaf, `${sec.label}/${sub.label}/${leaf.label ?? leaf}`, 2, null)))))),
+    return [el("h4", {}, (S.tree.levels ?? [])[0] ?? "位置"),
+      // the left column names the sections only: what a section holds (小節, 使用時機) is the middle's to show, once
+      S.tree.tree.map((sec) => node(sec.label, sec.label, 0, null)),
       unplaced ? el("button", { type: "button", class: "tr d0", "aria-pressed": String(f.place === "?"), onclick: () => { f.place = f.place === "?" ? "" : "?"; refresh(); } }, el("i", {}), "還沒歸位", el("span", {}, unplaced)) : null,
       others.size ? fold("其他", f.place?.startsWith("="), [...others.entries()].map(([c, n]) => el("button", { type: "button", class: "tr d0", "aria-pressed": String(f.place === `=${c}`), onclick: () => { f.place = f.place === `=${c}` ? "" : `=${c}`; refresh(); } }, el("i", {}), catLabel(c), el("span", {}, n)))) : null];
   }

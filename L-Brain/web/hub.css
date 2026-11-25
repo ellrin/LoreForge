@@ -346,3 +346,5 @@ details.h-run[open] > summary::before { content: "▾"; }
 details.h-run > summary small { color: var(--faint); font: 400 12px var(--mono); }
 details.h-run[open] { padding-bottom: 8px; }
 details.h-run .h-row { padding-left: 26px; }
+.h-sub { font-size: 12px; color: var(--faint); padding: 20px 8px 4px; min-height: 12px; }
+.h-sub:first-child { padding-top: 4px; }
