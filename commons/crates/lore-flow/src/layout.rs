@@ -259,6 +259,444 @@ struct PanelPlan {
     down: bool,
 }
 
+// ── regions ────────────────────────────────────────────────────────────
+
+/// Padding between a region's members and its frame (pt, natural size).
+const REG_PAD: f64 = 8.0;
+/// Least clear space between a frame and what lies beside it (pt, natural size).
+const REG_GAP: f64 = 6.0;
+
+/// The graph's regions as a forest.
+struct RTree {
+    kids: Vec<Vec<usize>>,
+    roots: Vec<usize>,
+    /// Every node of a region, those of its sub-regions included.
+    all: Vec<BTreeSet<usize>>,
+    /// Outer regions before the regions inside them.
+    order: Vec<usize>,
+    depth: Vec<usize>,
+}
+
+impl RTree {
+    fn new(g: &Graph) -> RTree {
+        let n = g.regions.len();
+        let find = |id: &str| g.regions.iter().position(|r| r.id == id);
+        let mut parent: Vec<Option<usize>> = (0..n).map(|i| find(&g.regions[i].parent).filter(|p| *p != i)).collect();
+        // a parent that leads back to the region itself is ignored
+        for i in 0..n {
+            let mut at = parent[i];
+            let mut steps = 0;
+            while let Some(p) = at {
+                if p == i || steps > n {
+                    parent[i] = None;
+                    break;
+                }
+                at = parent[p];
+                steps += 1;
+            }
+        }
+        let mut kids = vec![Vec::new(); n];
+        let mut roots = Vec::new();
+        for i in 0..n {
+            match parent[i] {
+                Some(p) => kids[p].push(i),
+                None => roots.push(i),
+            }
+        }
+        let mut order = Vec::new();
+        let mut depth = vec![0; n];
+        fn walk(i: usize, d: usize, kids: &[Vec<usize>], order: &mut Vec<usize>, depth: &mut [usize]) {
+            order.push(i);
+            depth[i] = d;
+            for &c in &kids[i] {
+                walk(c, d + 1, kids, order, depth);
+            }
+        }
+        for &r in &roots {
+            walk(r, 0, &kids, &mut order, &mut depth);
+        }
+        let mut all: Vec<BTreeSet<usize>> = g.regions.iter().map(|r| r.members.iter().filter_map(|id| g.node_index(id)).collect()).collect();
+        for &i in order.iter().rev() {
+            if let Some(p) = parent[i] {
+                let own = all[i].clone();
+                all[p].extend(own);
+            }
+        }
+        RTree { kids, roots, all, order, depth }
+    }
+}
+
+fn title_at(r: &Region) -> &str {
+    match r.title_at.as_str() {
+        "top" | "above" | "below" | "left" => r.title_at.as_str(),
+        _ => "top-left",
+    }
+}
+
+fn title_w(r: &Region, theme: &Theme) -> f64 {
+    if r.title.is_empty() { 0.0 } else { text::width(&r.title, theme.small_size()) * 1.06 }
+}
+
+fn title_line(theme: &Theme) -> f64 {
+    theme.small_size() * 1.3
+}
+
+/// The band a title takes (its line and a little air).
+fn title_band(r: &Region, theme: &Theme) -> f64 {
+    if r.title.is_empty() { 0.0 } else { title_line(theme) + 2.0 }
+}
+
+type Cells = ((usize, usize), (usize, usize));
+
+/// What the plan of one panel knows about its regions: where each lies in the grid and
+/// how much room its frame, title and nesting take on each side (0 left, 1 top, 2 right, 3 bottom).
+struct RCtx<'a> {
+    g: &'a Graph,
+    rt: &'a RTree,
+    theme: &'a Theme,
+    /// Live regions: (x range, y range) in grid cells.
+    range: BTreeMap<usize, Cells>,
+    /// Widest and tallest room among the members.
+    lb: BTreeMap<usize, (f64, f64)>,
+}
+
+impl RCtx<'_> {
+    /// Growth of the frame itself on one side.
+    fn inner(&self, i: usize, side: usize) -> f64 {
+        let r = &self.g.regions[i];
+        let at = title_at(r);
+        let (lbw, lbh) = self.lb[&i];
+        let tw = title_w(r, self.theme);
+        let band = title_band(r, self.theme);
+        let over = |lb: f64| ((tw - lb) / 2.0).max(0.0);
+        let mut e = REG_PAD;
+        match side {
+            0 => e += if at == "left" { band } else { over(lbw) },
+            2 => e += if at == "left" { 0.0 } else { over(lbw) },
+            1 => e += if at == "left" { over(lbh) } else if at == "top" || at == "top-left" { band } else { 0.0 },
+            _ => e += if at == "left" { over(lbh) } else { 0.0 },
+        }
+        e
+    }
+    /// Room of the title that lies outside the frame.
+    fn outside(&self, i: usize, side: usize) -> f64 {
+        let r = &self.g.regions[i];
+        match (title_at(r), side) {
+            ("above", 1) | ("below", 3) => title_band(r, self.theme),
+            _ => 0.0,
+        }
+    }
+    fn edge(&self, i: usize, side: usize) -> usize {
+        let (x, y) = self.range[&i];
+        match side {
+            0 => x.0,
+            1 => y.0,
+            2 => x.1,
+            _ => y.1,
+        }
+    }
+    /// How far the region reaches beyond its outermost members on one side, the frames of the
+    /// regions inside it that end at the same line included.
+    fn total(&self, i: usize, side: usize) -> f64 {
+        let at = self.edge(i, side);
+        let kid = self.rt.kids[i].iter().filter(|c| self.range.contains_key(c) && self.edge(**c, side) == at).map(|c| self.total(*c, side)).fold(0.0, f64::max);
+        self.inner(i, side) + kid + self.outside(i, side)
+    }
+    /// Least gaps between the columns (x) and rows (y) so the frames clear what is beside them,
+    /// and how far the frames reach beyond the grid.
+    fn spacing(&self, nx: usize, ny: usize, avail: f64) -> (Vec<f64>, Vec<f64>, [f64; 4]) {
+        let mut start = [vec![0.0f64; nx.max(1)], vec![0.0f64; ny.max(1)]];
+        let mut end = [vec![0.0f64; nx.max(1)], vec![0.0f64; ny.max(1)]];
+        for &i in self.range.keys() {
+            let (x, y) = self.range[&i];
+            start[0][x.0] = start[0][x.0].max(self.total(i, 0));
+            end[0][x.1] = end[0][x.1].max(self.total(i, 2));
+            start[1][y.0] = start[1][y.0].max(self.total(i, 1));
+            end[1][y.1] = end[1][y.1].max(self.total(i, 3));
+        }
+        let need = |axis: usize, n: usize| -> Vec<f64> {
+            (0..n.saturating_sub(1)).map(|b| if end[axis][b] > 0.0 || start[axis][b + 1] > 0.0 { end[axis][b] + start[axis][b + 1] + REG_GAP } else { 0.0 }).collect()
+        };
+        let m = |v: f64| if v > 0.0 { (v + REG_GAP - avail).max(0.0) } else { 0.0 };
+        let margin = [m(start[0][0]), m(start[1][0]), m(end[0][nx.max(1) - 1]), m(end[1][ny.max(1) - 1])];
+        (need(0, nx), need(1, ny), margin)
+    }
+}
+
+fn cell_box(set: &BTreeSet<usize>, layer: &BTreeMap<usize, usize>, lane: &BTreeMap<usize, usize>) -> (usize, usize, usize, usize) {
+    let mut b = (usize::MAX, 0, usize::MAX, 0);
+    for n in set {
+        b = (b.0.min(layer[n]), b.1.max(layer[n]), b.2.min(lane[n]), b.3.max(lane[n]));
+    }
+    b
+}
+
+fn boxes_meet(a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)) -> bool {
+    a.0 <= b.1 && b.0 <= a.1 && a.2 <= b.3 && b.2 <= a.3
+}
+
+/// Does a region's block of cells hold a block that is not its own, or meet a sibling's block?
+fn region_conflict(rt: &RTree, scope: &BTreeSet<usize>, kids: &[usize], layer: &BTreeMap<usize, usize>, lane: &BTreeMap<usize, usize>) -> bool {
+    let live: Vec<(usize, BTreeSet<usize>)> = kids
+        .iter()
+        .filter_map(|&k| {
+            let s: BTreeSet<usize> = rt.all[k].iter().copied().filter(|n| scope.contains(n)).collect();
+            (!s.is_empty()).then_some((k, s))
+        })
+        .collect();
+    let boxes: Vec<_> = live.iter().map(|(_, s)| cell_box(s, layer, lane)).collect();
+    for a in 0..live.len() {
+        for b in a + 1..live.len() {
+            if boxes_meet(boxes[a], boxes[b]) {
+                return true;
+            }
+        }
+    }
+    let claimed: BTreeSet<usize> = live.iter().flat_map(|(_, s)| s.iter().copied()).collect();
+    for n in scope.difference(&claimed) {
+        let c = (layer[n], layer[n], lane[n], lane[n]);
+        if boxes.iter().any(|b| boxes_meet(*b, c)) {
+            return true;
+        }
+    }
+    live.iter().any(|(k, s)| region_conflict(rt, s, &rt.kids[*k], layer, lane))
+}
+
+/// Give every region a block of cells of its own (regions inside it get blocks inside that).
+/// Units (a region, or a single block that is in no region) are taken in the order of their
+/// mean lane and each is put at the first lane that is free over the layers it spans, so two
+/// regions that follow one another along the flow share a row; only units that share layers
+/// are put one under the other. (A lane block per region, whatever its layers, turned a row
+/// of three framed networks into a staircase.) Returns how many lanes the scope took.
+fn stack_lanes(rt: &RTree, scope: &BTreeSet<usize>, kids: &[usize], layer: &BTreeMap<usize, usize>, old: &BTreeMap<usize, usize>, out: &mut BTreeMap<usize, usize>, base: usize) -> usize {
+    struct Unit {
+        key: f64,
+        first: usize,
+        nodes: BTreeSet<usize>,
+        region: Option<usize>,
+    }
+    let mut units: Vec<Unit> = Vec::new();
+    let mut claimed: BTreeSet<usize> = BTreeSet::new();
+    for &k in kids {
+        let s: BTreeSet<usize> = rt.all[k].iter().copied().filter(|n| scope.contains(n) && !claimed.contains(n)).collect();
+        if s.is_empty() {
+            continue;
+        }
+        claimed.extend(s.iter().copied());
+        let key = s.iter().map(|n| old[n] as f64).sum::<f64>() / s.len() as f64;
+        units.push(Unit { key, first: *s.iter().next().unwrap(), nodes: s, region: Some(k) });
+    }
+    for n in scope.difference(&claimed) {
+        units.push(Unit { key: old[n] as f64, first: *n, nodes: BTreeSet::from([*n]), region: None });
+    }
+    units.sort_by(|a, b| a.key.partial_cmp(&b.key).unwrap().then(a.first.cmp(&b.first)));
+    // the first free lane over each layer, counted from `base`
+    let mut sky: BTreeMap<usize, usize> = BTreeMap::new();
+    for u in units {
+        let layers: BTreeSet<usize> = u.nodes.iter().map(|n| layer[n]).collect();
+        let (l0, l1) = (*layers.iter().next().unwrap(), *layers.iter().next_back().unwrap());
+        let at = (l0..=l1).map(|l| sky.get(&l).copied().unwrap_or(0)).max().unwrap_or(0);
+        let h = match u.region {
+            Some(k) => stack_lanes(rt, &u.nodes, &rt.kids[k], layer, old, out, base + at).max(1),
+            None => {
+                for n in &u.nodes {
+                    out.insert(*n, base + at);
+                }
+                1
+            }
+        };
+        for l in l0..=l1 {
+            sky.insert(l, at + h);
+        }
+    }
+    sky.values().copied().max().unwrap_or(0)
+}
+
+/// The frames of the regions, outer before inner, with the room each frame (title included)
+/// takes: `(index in the graph, box, frame plus the title that lies outside it)`.
+/// `rooms` = the room of every node; `k` scales the padding and the title.
+fn frame_regions(g: &Graph, rt: &RTree, rooms: &[Rect], theme: &Theme, k: f64) -> Vec<(usize, RegionBox, Rect)> {
+    let n = g.regions.len();
+    let mut got: Vec<Option<(RegionBox, Rect)>> = vec![None; n];
+    for &i in rt.order.iter().rev() {
+        let r = &g.regions[i];
+        let mut base: Option<Rect> = None;
+        let mut add = |x: Rect| base = Some(base.map_or(x, |b| b.union(&x)));
+        for id in &r.members {
+            if let Some(ni) = g.node_index(id) {
+                add(rooms[ni]);
+            }
+        }
+        for &c in &rt.kids[i] {
+            if let Some((_, ext)) = &got[c] {
+                add(*ext);
+            }
+        }
+        let Some(b) = base else { continue };
+        let at = title_at(r);
+        let (p, band, th, tw) = (REG_PAD * k, title_band(r, theme) * k, title_line(theme) * k, title_w(r, theme) * k);
+        let left = p + if at == "left" { band } else { 0.0 };
+        let top = p + if at == "top" || at == "top-left" { band } else { 0.0 };
+        let mut f = Rect::new(b.x - left, b.y - top, b.w + left + p, b.h + top + p);
+        if !r.title.is_empty() {
+            if at == "left" {
+                if f.h < tw + 2.0 * p {
+                    let d = tw + 2.0 * p - f.h;
+                    f.y -= d / 2.0;
+                    f.h += d;
+                }
+            } else if f.w < tw + 2.0 * p {
+                let d = tw + 2.0 * p - f.w;
+                f.x -= d / 2.0;
+                f.w += d;
+            }
+        }
+        let (title_rect, ext) = if r.title.is_empty() {
+            (None, f)
+        } else {
+            match at {
+                "top" => (Some(Rect::new(f.cx() - tw / 2.0, f.y + k, tw, th)), f),
+                "above" => (Some(Rect::new(f.cx() - tw / 2.0, f.y - band + k, tw, th)), f.union(&Rect::new(f.cx() - tw / 2.0, f.y - band, tw, band))),
+                "below" => (Some(Rect::new(f.cx() - tw / 2.0, f.bottom() + k, tw, th)), f.union(&Rect::new(f.cx() - tw / 2.0, f.bottom(), tw, band))),
+                "left" => (Some(Rect::new(f.x + k, f.cy() - tw / 2.0, th, tw)), f),
+                _ => (Some(Rect::new(f.x + p, f.y + k, tw, th)), f),
+            }
+        };
+        let line = if r.line.is_empty() { "solid".to_string() } else { r.line.clone() };
+        let at_out = if r.title_at.is_empty() { "top-left".to_string() } else { r.title_at.clone() };
+        got[i] = Some((RegionBox { id: r.id.clone(), title: r.title.clone(), rect: f, title_rect, depth: rt.depth[i], line, tint: r.tint.clone(), round: r.round, title_at: at_out }, ext));
+    }
+    rt.order.iter().filter_map(|&i| got[i].take().map(|(b, e)| (i, b, e))).collect()
+}
+
+// ── alignment ──────────────────────────────────────────────────────────
+
+fn align_values(g: &Graph, a: &Align, node: &dyn Fn(usize) -> (f64, f64)) -> Option<Vec<f64>> {
+    if a.axis != "row" && a.axis != "col" {
+        return None;
+    }
+    let v: Vec<f64> = a.ids.iter().filter_map(|id| g.node_index(id)).map(|i| {
+        let (port, cx) = node(i);
+        if a.axis == "row" { port } else { cx }
+    }).collect();
+    (v.len() >= 2).then_some(v)
+}
+
+fn spread(v: &[f64]) -> f64 {
+    v.iter().copied().fold(f64::MIN, f64::max) - v.iter().copied().fold(f64::MAX, f64::min)
+}
+
+/// Shift everything of panel `pi` at or below `cut` (a y, or an x) by `d`, let the panel grow
+/// by `d` and push the panels that lie beyond it along. Nothing moves towards anything else,
+/// so blocks never come to overlap.
+fn shift_from(nodes: &mut [Option<Placed>], panels: &mut [PanelBox], rects: &mut [Rect], pi: usize, vertical: bool, cut: f64, d: f64) {
+    for n in nodes.iter_mut().flatten().filter(|n| n.panel == pi) {
+        let room = n.rect.union(&n.reserve);
+        if (if vertical { room.y } else { room.x }) >= cut - 1e-6 {
+            if vertical {
+                n.rect.y += d;
+                n.reserve.y += d;
+                n.port_y += d;
+            } else {
+                n.rect.x += d;
+                n.reserve.x += d;
+            }
+        }
+    }
+    let beyond = if vertical { rects[pi].bottom() } else { rects[pi].right() };
+    if vertical {
+        panels[pi].rect.h += d;
+        rects[pi].h += d;
+    } else {
+        panels[pi].rect.w += d;
+        rects[pi].w += d;
+    }
+    for q in 0..panels.len() {
+        if q == pi || (if vertical { rects[q].y } else { rects[q].x }) < beyond - 1e-6 {
+            continue;
+        }
+        let (dx, dy) = if vertical { (0.0, d) } else { (d, 0.0) };
+        for r in [&mut panels[q].rect, &mut rects[q]] {
+            r.x += dx;
+            r.y += dy;
+        }
+        if let Some(t) = panels[q].title_rect.as_mut() {
+            t.x += dx;
+            t.y += dy;
+        }
+        for n in nodes.iter_mut().flatten().filter(|n| n.panel == q) {
+            n.rect.x += dx;
+            n.reserve.x += dx;
+            n.rect.y += dy;
+            n.reserve.y += dy;
+            n.port_y += dy;
+        }
+    }
+}
+
+/// Make the author's alignments true, as far as moving whole rows / columns of a panel (and the
+/// panels beyond it) can do it. A constraint that cannot be met leaves everything as it was.
+fn align_pass(g: &Graph, nodes: &mut [Option<Placed>], panels: &mut [PanelBox], rects: &mut [Rect]) {
+    if g.align.is_empty() {
+        return;
+    }
+    let values = |a: &Align, nodes: &[Option<Placed>]| align_values(g, a, &|i| nodes[i].as_ref().map(|n| (n.port_y, n.rect.cx())).unwrap_or((0.0, 0.0)));
+    for _pass in 0..4 {
+        let mut changed = false;
+        for a in &g.align {
+            let Some(v) = values(a, nodes) else { continue };
+            if spread(&v) <= 0.25 {
+                continue;
+            }
+            let snap = (nodes.to_vec(), panels.to_vec(), rects.to_vec());
+            let ids: Vec<usize> = a.ids.iter().filter_map(|id| g.node_index(id)).collect();
+            let vertical = a.axis == "row";
+            for _ in 0..ids.len() * 2 + 2 {
+                let v = values(a, nodes).unwrap();
+                let target = v.iter().copied().fold(f64::MIN, f64::max);
+                let Some((k, _)) = v.iter().enumerate().filter(|(_, x)| **x < target - 0.25).min_by(|x, y| x.1.partial_cmp(y.1).unwrap()) else { break };
+                let me = nodes[ids[k]].clone().unwrap();
+                let down = panels[me.panel].down;
+                // the row (or column) of the block moves as one: its start is the cut
+                let same = |n: &Placed| if vertical { if down { n.layer } else { n.lane } } else if down { n.lane } else { n.layer };
+                let cut = nodes
+                    .iter()
+                    .flatten()
+                    .filter(|n| n.panel == me.panel && same(n) == same(&me))
+                    .map(|n| {
+                        let r = n.rect.union(&n.reserve);
+                        if vertical { r.y } else { r.x }
+                    })
+                    .fold(f64::MAX, f64::min);
+                shift_from(nodes, panels, rects, me.panel, vertical, cut, target - v[k]);
+            }
+            if values(a, nodes).is_some_and(|v| spread(&v) <= 0.25) {
+                changed = true;
+            } else {
+                nodes.clone_from_slice(&snap.0);
+                panels.clone_from_slice(&snap.1);
+                rects.clone_from_slice(&snap.2);
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// The alignments of the graph that the layout does not meet (tolerance 0.5 pt), each as a
+/// line of words naming the axis and the blocks.
+pub fn unmet_alignments(g: &Graph, lay: &Layout) -> Vec<String> {
+    let mut out = Vec::new();
+    for a in &g.align {
+        let v = align_values(g, a, &|i| lay.nodes.get(i).map(|n| (n.port_y, n.rect.cx())).unwrap_or((0.0, 0.0)));
+        if v.is_some_and(|v| spread(&v) > 0.5) {
+            out.push(format!("align {}: {}", a.axis, a.ids.join(" ")));
+        }
+    }
+    out
+}
+
 /// Would adding u → v close a cycle? (is u reachable from v)
 fn reaches(succ: &BTreeMap<usize, Vec<usize>>, from: usize, to: usize) -> bool {
     let mut stack = vec![from];
@@ -274,7 +712,7 @@ fn reaches(succ: &BTreeMap<usize, Vec<usize>>, from: usize, to: usize) -> bool {
     false
 }
 
-fn plan_panel(g: &Graph, nodes: &[usize], sizes: &[Size], down: bool, theme: &Theme) -> PanelPlan {
+fn plan_panel(g: &Graph, nodes: &[usize], sizes: &[Size], down: bool, theme: &Theme, rt: &RTree, avail: f64) -> PanelPlan {
     let inside: BTreeSet<usize> = nodes.iter().copied().collect();
     let idx = |id: &str| g.node_index(id).filter(|i| inside.contains(i));
     // flow edges inside the panel, acyclic
@@ -463,10 +901,40 @@ fn plan_panel(g: &Graph, nodes: &[usize], sizes: &[Size], down: bool, theme: &Th
     let layers: Vec<usize> = layer.values().copied().collect::<BTreeSet<_>>().into_iter().collect();
     let lanes: Vec<i32> = lane.values().copied().collect::<BTreeSet<_>>().into_iter().collect();
     let layer: BTreeMap<usize, usize> = layer.into_iter().map(|(n, l)| (n, layers.iter().position(|x| *x == l).unwrap())).collect();
-    let lane: BTreeMap<usize, usize> = lane.into_iter().map(|(n, l)| (n, lanes.iter().position(|x| *x == l).unwrap())).collect();
+    let mut lane: BTreeMap<usize, usize> = lane.into_iter().map(|(n, l)| (n, lanes.iter().position(|x| *x == l).unwrap())).collect();
+
+    // regions: the blocks of one region lie together. When a region's block of cells holds a
+    // block that is not its own (or meets a sibling's), every region gets lanes of its own.
+    let mut rctx: Option<RCtx> = None;
+    if !rt.order.is_empty() {
+        let scope: BTreeSet<usize> = inside.clone();
+        if region_conflict(rt, &scope, &rt.roots, &layer, &lane) {
+            let mut out = BTreeMap::new();
+            stack_lanes(rt, &scope, &rt.roots, &layer, &lane, &mut out, 0);
+            for &n in nodes {
+                out.entry(n).or_insert(0);
+            }
+            lane = out;
+        }
+        let mut range = BTreeMap::new();
+        let mut lb = BTreeMap::new();
+        for &i in &rt.order {
+            let set: Vec<usize> = rt.all[i].iter().copied().filter(|n| scope.contains(n)).collect();
+            if set.is_empty() {
+                continue;
+            }
+            let (l, c) = (set.iter().map(|n| layer[n]), set.iter().map(|n| lane[n]));
+            let (lr, cr) = ((l.clone().min().unwrap(), l.max().unwrap()), (c.clone().min().unwrap(), c.max().unwrap()));
+            range.insert(i, if down { (cr, lr) } else { (lr, cr) });
+            lb.insert(i, (set.iter().map(|n| sizes[*n].reserve_w).fold(0.0, f64::max), set.iter().map(|n| sizes[*n].h).fold(0.0, f64::max)));
+        }
+        if !range.is_empty() {
+            rctx = Some(RCtx { g, rt, theme, range, lb });
+        }
+    }
 
     // cells: along = the flow axis, across = the lane axis
-    let (n_along, n_across) = (layers.len(), lanes.len());
+    let (n_along, n_across) = (layers.len(), lane.values().max().map_or(0, |m| m + 1));
     let mut along = vec![0.0f64; n_along];
     // a row is as tall as the tallest part above plus the tallest part below the centre line
     let mut up = vec![0.0f64; n_across];
@@ -499,13 +967,27 @@ fn plan_panel(g: &Graph, nodes: &[usize], sizes: &[Size], down: bool, theme: &Th
             gaps[la] = gaps[la].max(need);
         }
     }
+    let mut across_gaps = vec![gap_across; n_across.saturating_sub(1)];
+    let mut margin = [0.0f64; 4];
+    if let Some(cx) = &rctx {
+        let (nx, ny) = if down { (n_across, n_along) } else { (n_along, n_across) };
+        let (xn, yn, m) = cx.spacing(nx, ny, avail);
+        let (xg, yg) = if down { (&mut across_gaps, &mut gaps) } else { (&mut gaps, &mut across_gaps) };
+        for (g_, n) in xg.iter_mut().zip(xn) {
+            *g_ = g_.max(n);
+        }
+        for (g_, n) in yg.iter_mut().zip(yn) {
+            *g_ = g_.max(n);
+        }
+        margin = m;
+    }
     let mut along_pos = vec![0.0; n_along];
     for i in 1..n_along {
         along_pos[i] = along_pos[i - 1] + along[i - 1] + gaps[i - 1];
     }
     let mut across_pos = vec![0.0; n_across];
     for i in 1..n_across {
-        across_pos[i] = across_pos[i - 1] + across[i - 1] + gap_across;
+        across_pos[i] = across_pos[i - 1] + across[i - 1] + across_gaps[i - 1];
     }
     let mut pos = BTreeMap::new();
     for &n in nodes {
@@ -517,11 +999,12 @@ fn plan_panel(g: &Graph, nodes: &[usize], sizes: &[Size], down: bool, theme: &Th
             let cx = along_pos[layer[&n]] + along[layer[&n]] / 2.0;
             Rect::new(cx - s.w / 2.0, across_pos[lane[&n]] + up[lane[&n]] - s.cy, s.w, s.h)
         };
-        pos.insert(n, r);
+        pos.insert(n, Rect::new(r.x + margin[0], r.y + margin[1], r.w, r.h));
     }
     let total_along = along_pos.last().copied().unwrap_or(0.0) + along.last().copied().unwrap_or(0.0);
     let total_across = across_pos.last().copied().unwrap_or(0.0) + across.last().copied().unwrap_or(0.0);
     let content = if down { (total_across, total_along) } else { (total_along, total_across) };
+    let content = (content.0 + margin[0] + margin[2], content.1 + margin[1] + margin[3]);
     PanelPlan { nodes: nodes.to_vec(), layer, lane, pos, content, down }
 }
 
@@ -563,14 +1046,14 @@ pub fn layout(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layout
 /// largest scale is kept, left-to-right winning unless top-down is clearly better.
 pub fn layout_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &LayoutOptions, image_size: &dyn Fn(&str) -> Option<(u32, u32)>) -> Layout {
     let mut lay = layout_auto(g, theme, vars, lib, opt, image_size);
-    apply_place(&mut lay, g, opt);
+    apply_place(&mut lay, g, opt, theme);
     lay
 }
 
 /// Move the blocks the author moved: each named node's rectangle is shifted by its offset
 /// (times the scale), kept inside the figure's frame and clear of the legends; the panel of
 /// a moved node grows to hold it (its title keeps its corner) and the bounds grow with it.
-fn apply_place(lay: &mut Layout, g: &Graph, opt: &LayoutOptions) {
+fn apply_place(lay: &mut Layout, g: &Graph, opt: &LayoutOptions, theme: &Theme) {
     if opt.place.is_empty() {
         return;
     }
@@ -614,6 +1097,24 @@ fn apply_place(lay: &mut Layout, g: &Graph, opt: &LayoutOptions) {
         }
         p.rect = grown;
         lay.bounds = lay.bounds.union(&grown);
+    }
+    // the frames of the regions follow their members
+    if !lay.regions.is_empty() {
+        let rt = RTree::new(g);
+        let rooms: Vec<Rect> = lay.nodes.iter().map(|n| n.rect.union(&n.reserve)).collect();
+        let framed = frame_regions(g, &rt, &rooms, theme, k);
+        for (i, _, ext) in &framed {
+            let Some(&ni) = rt.all[*i].iter().next() else { continue };
+            let p = &mut lay.panels[lay.nodes[ni].panel];
+            let grown = p.rect.union(&ext.inflate(margin));
+            let (gx, gy) = (grown.x - p.rect.x, grown.y - p.rect.y);
+            if gx != 0.0 || gy != 0.0 {
+                p.title_rect = p.title_rect.map(|t| Rect::new(t.x + gx, t.y + gy, t.w, t.h));
+            }
+            p.rect = grown;
+            lay.bounds = lay.bounds.union(&grown);
+        }
+        lay.regions = framed.into_iter().map(|(_, b, _)| b).collect();
     }
 }
 
@@ -665,6 +1166,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
             defs.push(p);
         }
     }
+    let rt = RTree::new(g);
     let pad = theme.space.pad;
     let title_size = theme.title_size();
     let outside = theme.panel.title.starts_with("outside");
@@ -672,8 +1174,8 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         .iter()
         .map(|p| {
             let nodes: Vec<usize> = (0..g.nodes.len()).filter(|i| if p.id == "_" { g.nodes[*i].panel.is_empty() } else { g.nodes[*i].panel == p.id }).collect();
-            let plan = plan_panel(g, &nodes, &sizes, p.dir == "down", theme);
             let bare = p.bare || (p.id == "_");
+            let plan = plan_panel(g, &nodes, &sizes, p.dir == "down", theme, &rt, if bare { 2.0 } else { theme.space.pad });
             let has_title = !p.title.is_empty() && !bare;
             let title_h = if has_title { title_size * 1.3 + 2.0 } else { 0.0 };
             let title_w = if has_title { text::width(&p.title, title_size) * 1.06 + 2.0 * pad } else { 0.0 };
@@ -784,7 +1286,14 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         });
         panels.push(PanelBox { id: need.id.clone(), title: need.title.clone(), rect: frame, title_rect, bare: need.bare, down: need.plan.down });
     }
+    align_pass(g, &mut nodes, &mut panels, &mut rects);
     let mut bounds = rects.iter().skip(1).fold(rects[0], |a, b| a.union(b));
+    let regions: Vec<RegionBox> = if rt.order.is_empty() {
+        Vec::new()
+    } else {
+        let rooms: Vec<Rect> = nodes.iter().map(|n| n.as_ref().map(|n| n.rect.union(&n.reserve)).unwrap_or_default()).collect();
+        frame_regions(g, &rt, &rooms, theme, 1.0).into_iter().map(|(_, b, _)| b).collect()
+    };
 
     // legend: one centred row (wrapping) under the figure
     let mut legend = Vec::new();
@@ -924,6 +1433,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         })
         .collect();
     let mut nodes: Vec<Placed> = nodes;
+    let regions: Vec<RegionBox> = regions.into_iter().map(|b| RegionBox { rect: b.rect.map(ox, oy, k), title_rect: b.title_rect.map(|t| t.map(ox, oy, k)), ..b }).collect();
     for (n, pl) in g.nodes.iter().zip(&mut nodes) {
         pl.ends = opt.ends.iter().filter(|(key, _)| key.split(['>', '#']).next() == Some(n.id.as_str())).map(|(key, v)| (key.clone(), v.clone())).collect();
     }
@@ -939,5 +1449,357 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         s.at = s.at.map(ox, oy, k);
         s.text = s.text.map(ox, oy, k);
     }
-    Layout { nodes, panels, regions: Vec::new(), legend, swatches, bounds: bounds.map(ox, oy, k), scale: k }
+    Layout { nodes, panels, regions, legend, swatches, bounds: bounds.map(ox, oy, k), scale: k }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TRAIN: &str = r#"
+fig demo
+panel a "a. Training"
+  x:    image "$\boldsymbol x$"
+  aug:  box "Aug($x$)"
+  net:  unet "$\theta$" depth=3
+  pred: image "$\hat y$" look=mask
+  loss: loss "$\mathcal L_{seg}$"
+  y:    image "$y$" role=gt look=mask
+panel b "b. Weights" dir=right
+  q:    layer-bars "$\theta_q$" layers=[Conv,Conv,FC] taper
+  v:    vector-bar "$\hat q$" n=5
+  sys:  box "Fuzzy \\ system"
+  w:    label "$\omega$"
+end
+x -> aug -> net -> pred -> loss
+y -> loss : supervision
+loss -> net : feedback "update"
+q -> v -> sys -> w
+w -> loss : cross
+"#;
+    const CHAIN: &str = "fig chain\nn0: box \"A\"\nn1: box \"B\"\nn2: box \"C\"\nn3: box \"D\"\nn0 -> n1 -> n2 -> n3\nn1 -> n3 : skip\n";
+
+    fn lay_of(g: &Graph, opt: &LayoutOptions) -> Layout {
+        layout(g, &Theme::classic_bw(), &Vars::default(), &Library::default(), opt)
+    }
+
+    fn room(l: &Layout, g: &Graph, id: &str) -> Rect {
+        let n = &l.nodes[g.node_index(id).unwrap()];
+        n.rect.union(&n.reserve)
+    }
+
+    fn region(id: &str, title: &str, parent: &str, members: &[&str]) -> Region {
+        Region { id: id.into(), title: title.into(), parent: parent.into(), members: members.iter().map(|m| m.to_string()).collect(), ..Default::default() }
+    }
+
+    /// Two chains in one panel.
+    fn two_chains() -> Graph {
+        crate::dsl::parse("fig t\npanel p \"P\"\n a: box \"A\"\n b: box \"B\"\n c: box \"C\"\n d: box \"D\"\n e: box \"E\"\n f: box \"F\"\nend\na -> b -> c\nd -> e -> f\n").unwrap()
+    }
+
+    fn area(a: &Rect, b: &Rect) -> f64 {
+        (a.right().min(b.right()) - a.x.max(b.x)).max(0.0) * (a.bottom().min(b.bottom()) - a.y.max(b.y)).max(0.0)
+    }
+
+    fn rbox<'a>(l: &'a Layout, id: &str) -> &'a RegionBox {
+        l.regions.iter().find(|r| r.id == id).unwrap()
+    }
+
+    fn no_outsiders(g: &Graph, l: &Layout, rid: &str, members: &[&str]) {
+        let f = rbox(l, rid).rect;
+        for n in &g.nodes {
+            if !members.contains(&n.id.as_str()) {
+                assert!(area(&f, &room(l, g, &n.id)) < 1e-6, "{} lies inside {rid}", n.id);
+            }
+        }
+    }
+
+    #[test]
+    fn a_region_frames_its_members_with_padding() {
+        let mut g = two_chains();
+        g.regions.push(region("r", "", "", &["a", "b"]));
+        let l = lay_of(&g, &LayoutOptions::default());
+        let f = rbox(&l, "r");
+        let u = room(&l, &g, "a").union(&room(&l, &g, "b"));
+        let p = REG_PAD * l.scale;
+        assert!(f.rect.contains(&u));
+        assert!(u.x - f.rect.x >= p - 1e-6 && f.rect.right() - u.right() >= p - 1e-6);
+        assert!(u.y - f.rect.y >= p - 1e-6 && f.rect.bottom() - u.bottom() >= p - 1e-6);
+        assert_eq!((f.line.as_str(), f.title_at.as_str(), f.depth), ("solid", "top-left", 0));
+        assert!(f.title_rect.is_none());
+    }
+
+    #[test]
+    fn a_region_with_a_title_has_room_for_it() {
+        for at in ["top-left", "top", "above", "below", "left"] {
+            let mut g = two_chains();
+            let mut r = region("r", "Encoder", "", &["a", "b"]);
+            r.title_at = at.into();
+            g.regions.push(r);
+            let l = lay_of(&g, &LayoutOptions::default());
+            let f = rbox(&l, "r");
+            let t = f.title_rect.unwrap_or_else(|| panic!("{at}: no title"));
+            for n in &g.nodes {
+                assert!(area(&t, &room(&l, &g, &n.id)) < 1e-6, "{at}: title over {}", n.id);
+            }
+            match at {
+                "above" => assert!(t.bottom() <= f.rect.y + 1e-6),
+                "below" => assert!(t.y >= f.rect.bottom() - 1e-6),
+                _ => assert!(f.rect.contains(&t), "{at}: title outside the frame"),
+            }
+            assert!(l.panels[0].rect.contains(&t), "{at}: title outside the panel");
+            assert!(f.rect.contains(&room(&l, &g, "a").union(&room(&l, &g, "b"))));
+            no_outsiders(&g, &l, "r", &["a", "b"]);
+        }
+        // a title inside the top makes the frame taller
+        let mut g = two_chains();
+        g.regions.push(region("r", "T", "", &["a", "b"]));
+        let with = lay_of(&g, &LayoutOptions::default());
+        g.regions[0].title.clear();
+        let without = lay_of(&g, &LayoutOptions::default());
+        assert!(with.regions[0].rect.h / with.scale > without.regions[0].rect.h / without.scale + 5.0);
+    }
+
+    #[test]
+    fn no_outsider_lies_inside_a_region_frame() {
+        // a and c share a lane with b between them: the members are not contiguous in the flow
+        let mut g = two_chains();
+        g.regions.push(region("r", "", "", &["a", "c"]));
+        let l = lay_of(&g, &LayoutOptions::default());
+        no_outsiders(&g, &l, "r", &["a", "c"]);
+        // members of two chains
+        let mut g = two_chains();
+        g.regions.push(region("r", "", "", &["b", "d"]));
+        let l = lay_of(&g, &LayoutOptions::default());
+        no_outsiders(&g, &l, "r", &["b", "d"]);
+    }
+
+    #[test]
+    fn sibling_regions_do_not_overlap() {
+        for (x, y) in [(["a", "b"], ["d", "e"]), (["a", "e"], ["b", "d"]), (["a", "c"], ["d", "f"])] {
+            let mut g = two_chains();
+            g.regions.push(region("r1", "One", "", &x));
+            g.regions.push(region("r2", "Two", "", &y));
+            let l = lay_of(&g, &LayoutOptions::default());
+            let (a, b) = (rbox(&l, "r1").rect, rbox(&l, "r2").rect);
+            assert!(!a.overlaps(&b), "{x:?} / {y:?}");
+            let gap = (a.x - b.right()).max(b.x - a.right()).max(a.y - b.bottom()).max(b.y - a.bottom());
+            assert!(gap >= REG_GAP * l.scale - 1e-6, "gap {gap}");
+            no_outsiders(&g, &l, "r1", &x);
+            no_outsiders(&g, &l, "r2", &y);
+        }
+    }
+
+    #[test]
+    fn regions_nest_and_outer_comes_first() {
+        let mut g = two_chains();
+        // declared inside first on purpose
+        g.regions.push(region("inner", "In", "outer", &["a", "b"]));
+        g.regions.push(region("outer", "Out", "", &["c"]));
+        g.regions.push(region("deep", "", "inner", &["a"]));
+        let l = lay_of(&g, &LayoutOptions::default());
+        let ids: Vec<&str> = l.regions.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["outer", "inner", "deep"]);
+        assert_eq!(l.regions.iter().map(|r| r.depth).collect::<Vec<_>>(), [0, 1, 2]);
+        for w in l.regions.windows(2) {
+            assert!(w[0].rect.contains(&w[1].rect));
+        }
+        // the outer one holds c, which it lists itself, and a, b through the inner one
+        for id in ["a", "b", "c"] {
+            assert!(rbox(&l, "outer").rect.contains(&room(&l, &g, id)));
+        }
+        no_outsiders(&g, &l, "outer", &["a", "b", "c"]);
+    }
+
+    #[test]
+    fn a_panel_contains_its_regions() {
+        let mut g = crate::dsl::parse("fig t\npanel p \"First\"\n a: box \"A\"\n b: box \"B\"\n c: box \"C\"\n d: box \"D\"\nend\npanel q \"Other\"\n e: box \"E\"\n f: box \"F\"\nend\na -> b\nc -> d\ne -> f\n").unwrap();
+        for (i, at) in ["above", "top", "left"].iter().enumerate() {
+            let mut r = region(&format!("r{i}"), "Sub network", "", [["a", "b"], ["c", "d"], ["e", "f"]][i].as_ref());
+            r.title_at = at.to_string();
+            g.regions.push(r);
+        }
+        let l = lay_of(&g, &LayoutOptions::default());
+        for (r, panel) in l.regions.iter().zip([0, 0, 1]) {
+            let pr = l.panels[panel].rect;
+            assert!(pr.contains(&r.rect), "{} outside its panel", r.id);
+            if let Some(t) = r.title_rect {
+                assert!(pr.contains(&t), "{} title outside its panel", r.id);
+            }
+        }
+        assert!(!l.regions[0].rect.overlaps(&l.regions[1].rect));
+        // the panel's own title is clear of the frames
+        let t = l.panels[0].title_rect.unwrap();
+        assert!(l.regions.iter().all(|r| !r.rect.overlaps(&t)));
+    }
+
+    #[test]
+    fn a_region_without_panels_works() {
+        let mut g = crate::dsl::parse("fig t\na: box \"A\"\nb: box \"B\"\nc: box \"C\"\nd: box \"D\"\na -> b -> c\n").unwrap();
+        assert!(g.panels.is_empty());
+        g.regions.push(region("r", "Group", "", &["a", "b"]));
+        g.regions.push(region("s", "", "", &["d"]));
+        let l = lay_of(&g, &LayoutOptions::default());
+        assert_eq!(l.regions.len(), 2);
+        assert!(l.panels[0].rect.contains(&l.regions[0].rect));
+        assert!(l.panels[0].rect.contains(&l.regions[1].rect));
+        assert!(!l.regions[0].rect.overlaps(&l.regions[1].rect));
+        no_outsiders(&g, &l, "r", &["a", "b"]);
+        no_outsiders(&g, &l, "s", &["d"]);
+    }
+
+    #[test]
+    fn a_moved_member_moves_its_region_frame() {
+        let mut g = two_chains();
+        g.regions.push(region("r", "Group", "", &["a", "b"]));
+        let l0 = lay_of(&g, &LayoutOptions::default());
+        let mut opt = LayoutOptions::default();
+        opt.place.insert("a".into(), [0.0, 20.0]);
+        let l1 = lay_of(&g, &opt);
+        let (f0, f1) = (rbox(&l0, "r").rect, rbox(&l1, "r").rect);
+        assert!(f1.contains(&room(&l1, &g, "a")) && f1.contains(&room(&l1, &g, "b")));
+        assert!(f1.bottom() > f0.bottom() + 1.0, "the frame reaches down to the moved block");
+        assert!(l1.panels[0].rect.contains(&f1));
+        assert!(l1.bounds.contains(&f1));
+    }
+
+    #[test]
+    fn a_graph_without_regions_lays_out_as_before() {
+        let train: [[f64; 4]; 10] = [
+            [71.26279832560063, 66.41918120414952, 57.85078286973353, 99.26668424238368],
+            [163.29813470926763, 98.96024656837464, 64.37871780037506, 34.18455351393345],
+            [261.86140602357614, 64.96887259592947, 136.7382140557338, 102.16730145882379],
+            [432.7841735932434, 66.41918120414952, 57.85078286973353, 99.26668424238368],
+            [524.8195099769105, 104.38375746241216, 31.88235531382201, 23.337531725858412],
+            [590.8864188046659, 66.41918120414952, 57.85078286973353, 99.26668424238368],
+            [221.36322843372315, 255.43750536228288, 74.71297128574108, 109.78500840051704],
+            [331.09893218974895, 256.75229588204957, 13.147905197666711, 107.1554273609837],
+            [379.26956985770033, 284.36289679714963, 68.78983999419222, 51.93422553078351],
+            [482.24396336582606, 299.97603421937885, 16.392808200450855, 20.70795068632507],
+        ];
+        let chain: [[f64; 4]; 4] = [[181.5, 183.0, 60.0, 39.0], [280.5, 183.0, 60.0, 39.0], [379.5, 183.0, 60.0, 39.0], [478.5, 183.0, 60.0, 39.0]];
+        let check = |src: &str, want: &[[f64; 4]], bounds: Rect| {
+            let l = lay_of(&crate::dsl::parse(src).unwrap(), &LayoutOptions::default());
+            assert!(l.regions.is_empty());
+            for (n, w) in l.nodes.iter().zip(want) {
+                let got = [n.rect.x, n.rect.y, n.rect.w, n.rect.h];
+                assert!(got.iter().zip(w).all(|(a, b)| (a - b).abs() < 1e-6), "{got:?} vs {w:?}");
+            }
+            assert!((l.bounds.x - bounds.x).abs() < 1e-6 && (l.bounds.w - bounds.w).abs() < 1e-6 && (l.bounds.h - bounds.h).abs() < 1e-6);
+        };
+        check(TRAIN, &train, Rect::new(55.485312088400576, 24.0, 609.0293758231988, 357.0));
+        check(CHAIN, &chain, Rect::new(178.5, 180.0, 363.0, 45.0));
+    }
+
+    fn side_by_side() -> Graph {
+        let mut g = crate::dsl::parse("fig t\npanel a \"A\" dir=right\n a1: box \"A\"\nend\npanel b \"B\" dir=right\n b1: box \"B\"\n b2: box \"Tall\"\nend\n").unwrap();
+        g.arrange = vec![vec!["a".into(), "b".into()]];
+        g
+    }
+
+    fn stacked() -> Graph {
+        let mut g = crate::dsl::parse("fig t\npanel a \"A\" dir=right\n x1: box \"A\"\n x2: box \"B\"\n x3: box \"C\"\nend\npanel b \"B\" dir=right\n y1: box \"D\"\nend\nx1 -> x2 -> x3\n").unwrap();
+        g.arrange = vec![vec!["a".into()], vec!["b".into()]];
+        g
+    }
+
+    fn clear(g: &Graph, l: &Layout) {
+        for (i, a) in g.nodes.iter().enumerate() {
+            for b in &g.nodes[i + 1..] {
+                assert!(area(&room(l, g, &a.id), &room(l, g, &b.id)) < 1e-6, "{} / {}", a.id, b.id);
+            }
+        }
+        for (i, a) in l.panels.iter().enumerate() {
+            for b in &l.panels[i + 1..] {
+                assert!(!a.rect.overlaps(&b.rect), "panels {} / {}", a.id, b.id);
+            }
+        }
+        for (n, p) in g.nodes.iter().zip(&l.nodes) {
+            assert!(l.panels[p.panel].rect.contains(&p.reserve), "{} left its panel", n.id);
+        }
+    }
+
+    #[test]
+    fn align_row_puts_port_lines_level() {
+        let mut g = side_by_side();
+        let base = lay_of(&g, &LayoutOptions::default());
+        assert!((base.nodes[0].port_y - base.nodes[2].port_y).abs() > 1.0, "the example needs rows that differ");
+        g.align.push(Align { axis: "row".into(), ids: vec!["a1".into(), "b2".into()] });
+        let l = lay_of(&g, &LayoutOptions::default());
+        assert!((l.nodes[0].port_y - l.nodes[2].port_y).abs() < 0.5, "{} vs {}", l.nodes[0].port_y, l.nodes[2].port_y);
+        assert!(unmet_alignments(&g, &l).is_empty());
+        clear(&g, &l);
+    }
+
+    #[test]
+    fn align_col_shares_a_centre() {
+        let mut g = stacked();
+        let base = lay_of(&g, &LayoutOptions::default());
+        assert!((base.nodes[2].rect.cx() - base.nodes[3].rect.cx()).abs() > 1.0, "the example needs columns that differ");
+        g.align.push(Align { axis: "col".into(), ids: vec!["x3".into(), "y1".into()] });
+        let l = lay_of(&g, &LayoutOptions::default());
+        assert!((l.nodes[2].rect.cx() - l.nodes[3].rect.cx()).abs() < 0.5);
+        assert!(unmet_alignments(&g, &l).is_empty());
+        clear(&g, &l);
+    }
+
+    #[test]
+    fn alignment_never_overlaps_blocks() {
+        let mut g = side_by_side();
+        g.align.push(Align { axis: "row".into(), ids: vec!["a1".into(), "b1".into()] });
+        let l = lay_of(&g, &LayoutOptions::default());
+        assert!(unmet_alignments(&g, &l).is_empty());
+        clear(&g, &l);
+        let mut g = stacked();
+        g.align.push(Align { axis: "col".into(), ids: vec!["x2".into(), "y1".into()] });
+        g.align.push(Align { axis: "row".into(), ids: vec!["x1".into(), "y1".into()] });
+        let l = lay_of(&g, &LayoutOptions::default());
+        clear(&g, &l);
+        // with regions in the way
+        let mut g = side_by_side();
+        g.regions.push(region("r", "Bs", "", &["b1", "b2"]));
+        g.align.push(Align { axis: "row".into(), ids: vec!["a1".into(), "b2".into()] });
+        let l = lay_of(&g, &LayoutOptions::default());
+        clear(&g, &l);
+        assert!(l.panels[1].rect.contains(&l.regions[0].rect));
+    }
+
+    #[test]
+    fn an_impossible_alignment_is_reported_unmet() {
+        // two blocks of one panel, one row above the other: no spacing can level them
+        let mut g = crate::dsl::parse("fig t\npanel p \"P\" dir=right\n a: box \"A\"\n b: box \"B\"\nend\n").unwrap();
+        let plain = lay_of(&g, &LayoutOptions::default());
+        assert!((plain.nodes[0].port_y - plain.nodes[1].port_y).abs() > 1.0);
+        g.align.push(Align { axis: "row".into(), ids: vec!["a".into(), "b".into()] });
+        let l = lay_of(&g, &LayoutOptions::default());
+        assert_eq!(unmet_alignments(&g, &l), vec!["align row: a b".to_string()]);
+        // nothing was moved for it
+        for (x, y) in plain.nodes.iter().zip(&l.nodes) {
+            assert!((x.rect.x - y.rect.x).abs() < 1e-6 && (x.rect.y - y.rect.y).abs() < 1e-6);
+        }
+        clear(&g, &l);
+    }
+
+    #[test]
+    fn everything_fits_the_frame_with_regions() {
+        let mut g = two_chains();
+        let mut r1 = region("r1", "Encoder stage", "all", &["a", "b"]);
+        r1.title_at = "above".into();
+        let mut r2 = region("r2", "Second", "all", &["d", "e"]);
+        r2.title_at = "below".into();
+        g.regions.push(region("all", "Everything", "", &["a", "b", "c", "d", "e", "f"]));
+        g.regions.push(r1);
+        g.regions.push(r2);
+        let opt = LayoutOptions::default();
+        let l = lay_of(&g, &opt);
+        assert!(opt.frame.inflate(0.01).contains(&l.bounds));
+        for r in &l.regions {
+            assert!(l.bounds.contains(&r.rect), "{}", r.id);
+            if let Some(t) = r.title_rect {
+                assert!(l.bounds.contains(&t), "{} title", r.id);
+            }
+        }
+        assert!(l.scale > 0.0 && l.scale <= opt.max_scale);
+        clear(&g, &l);
+    }
 }
