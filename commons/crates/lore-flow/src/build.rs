@@ -347,15 +347,32 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             warnings.push(format!("{} -> {}: no clear path, drawn straight", e.from, e.to));
         }
         warnings.extend(r.warnings.iter().cloned());
-        let o = match fit_connector(&pts) {
+        // one smooth curve: a free shape from end to end (it keeps its arrowheads; a curve
+        // cannot be a connector, so it is not glued to its blocks)
+        let curved = crate::route::curve_path(r).filter(|c| c.len() == 4).map(|c| {
+            let (x0, x1) = c.iter().fold((f64::MAX, f64::MIN), |m, p| (m.0.min(p.0), m.1.max(p.0)));
+            let (y0, y1) = c.iter().fold((f64::MAX, f64::MIN), |m, p| (m.0.min(p.1), m.1.max(p.1)));
+            let (w, h) = ((x1 - x0).max(0.01), (y1 - y0).max(0.01));
+            let u = |p: (f64, f64)| format!("{:.5} {:.5}", (p.0 - x0) / w, (p.1 - y0) / h);
+            let mut o = modules::shape(&name, "rect", x0, y0, w, h, Paint::None, Some(st.clone()));
+            if let Some(sp) = o.kind.sp_mut() {
+                sp.geom = lore_canvas::Geom { prst: "custom".into(), adj: BTreeMap::new(), path: Some(format!("M {} C {} {} {}", u(c[0]), u(c[1]), u(c[2]), u(c[3]))) };
+            }
+            o.id = id;
+            o
+        });
+        let o = match curved {
+            Some(o) => o,
+            None => match fit_connector(&pts) {
             Some((geom, fr, adj)) => top_level(
                 &name,
                 fr,
                 Kind::Connector(ConnObj {
                     geom,
                     adj,
-                    line: Some(st),
-                    start: Some(Attach { id: node_ids[&e.from], site: end_site(r.from_side, r.from_site, lay.nodes[a].ellipse) }),
+                    line: Some(st.clone()),
+                    // a line that leaves another line starts at no block
+                    start: (!r.branch).then(|| Attach { id: node_ids[&e.from], site: end_site(r.from_side, r.from_site, lay.nodes[a].ellipse) }),
                     end: Some(Attach { id: node_ids[&e.to], site: end_site(r.to_side, r.to_site, lay.nodes[b].ellipse) }),
                     text: None,
                 }),
@@ -363,13 +380,22 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             ),
             None => {
                 warnings.push(if r.bends() > 3 { format!("{} → {}: 轉太多彎，沒有接在方塊上", e.from, e.to) } else { format!("{} → {}: 線的形狀接不到方塊上，沒有接在方塊上", e.from, e.to) });
-                let mut o = modules::poly(&name, &r.points, false, Paint::None, Some(st));
+                let mut o = modules::poly(&name, &r.points, false, Paint::None, Some(st.clone()));
                 o.id = id;
                 o
             }
+            },
         };
         id += 1;
         objects.push(o);
+        // where a line leaves another line: a dot in its colour
+        if r.branch && let Some(p) = r.points.first() {
+            let d = 3.2 * k;
+            let mut o = modules::shape(&format!("{name}/junction"), "ellipse", p.0 - d / 2.0, p.1 - d / 2.0, d, d, Paint::solid(&st.color), None);
+            o.id = id;
+            id += 1;
+            objects.push(o);
+        }
         if !e.label.is_empty() {
             let own_small = own.as_ref().map(|c| cx.small(c));
             let (mut o, w, h) = cx.text("", &e.label, own_small.as_ref().unwrap_or(&small), 0.0, 0.0);
