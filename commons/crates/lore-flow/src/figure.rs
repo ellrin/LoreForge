@@ -536,9 +536,7 @@ pub fn render(spec: &FlowSpec, cat: &Catalogue, notation: Option<&lore_notation:
     if let Some(t) = &spec.timeline {
         // a timeline is placed and drawn by its own style; it comes back as the same Figure
         let mut style = crate::timeline::style::pick(&cat.timelines, &t.style);
-        if style.colors.palette.is_empty() {
-            style.to_mut().colors.palette = cat.timeline_colors.clone();
-        }
+        style.to_mut().colors.palette = crate::timeline::palette_for(t, &style, &cat.timeline_colors);
         let (plan, built) = crate::timeline::render(t, &style, &cat.theme(&spec.theme).font, frame, first_id)?;
         let layout = crate::layout::Layout { nodes: vec![], panels: vec![], legend: vec![], swatches: vec![], bounds: plan.bounds, scale: plan.scale };
         return Ok((Figure { layout, routes: vec![], built }, Graph { fig: t.fig_id().to_string(), ..Default::default() }));

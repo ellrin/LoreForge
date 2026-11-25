@@ -41,3 +41,23 @@ default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
 offline = true
 max_tokens = 6000
+
+# A timeline from a description: the points (time, title, a few lines) and one of the styles
+# on offer. Words only; the program places and colours them.
+[task.sc-flow-timeline]
+label = "整理時間軸"
+class = "create"
+needs = { json = true, context = 16000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 3000
+
+[task.sc-flow-timeline-vision]
+label = "整理時間軸（含圖片）"
+class = "create"
+needs = { json = true, vision = true, context = 16000 }
+default = "claude:sonnet"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 3000

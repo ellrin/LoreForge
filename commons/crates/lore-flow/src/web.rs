@@ -177,6 +177,16 @@ pub fn bad(code: StatusCode, msg: impl Into<String>) -> Response {
 /// blocks / nodes / lines it has (for the colour and legend blocks), what is wrong.
 pub fn preview(flow: &Flow, spec: &FlowSpec, doc: &str, width: f64) -> Value {
     let cat = flow.catalogue();
+    if let Some(t) = &spec.timeline {
+        // a timeline has no blocks, lines or legend: the drawing, and what its style cannot draw yet
+        return match render(spec, &cat, None, &NoMath, spec.frame_rect(), 2) {
+            Ok((fig, _)) => {
+                let style = crate::timeline::style::pick(&cat.timelines, &t.style);
+                json!({ "svg": preview_svg(&fig, width), "timeline": true, "style": style.id, "cannot": style.cannot, "warnings": fig.built.warnings, "size": [fig.layout.bounds.w, fig.layout.bounds.h] })
+            }
+            Err(e) => json!({ "error": e, "timeline": true }),
+        };
+    }
     let g = match spec.graph(&cat.library) {
         Ok(g) => g,
         Err(e) => return json!({ "error": e }),
@@ -208,9 +218,23 @@ pub fn preview(flow: &Flow, spec: &FlowSpec, doc: &str, width: f64) -> Value {
     })
 }
 
-/// The figure drawn in every layout template that fits its block count.
+/// The figure drawn in every layout template that fits its block count; a timeline, in every
+/// style (the same shape: `id`, `name`, `private`, `svg`, and `cannot` for a style).
 pub fn layouts(flow: &Flow, spec: &FlowSpec, doc: &str, width: f64) -> Value {
     let cat = flow.catalogue();
+    if let Some(t) = &spec.timeline {
+        let out: Vec<Value> = cat
+            .timelines
+            .iter()
+            .filter_map(|st| {
+                let mut s = spec.clone();
+                s.timeline = Some(crate::timeline::TimelineSpec { style: st.id.clone(), ..t.clone() });
+                let (fig, _) = render(&s, &cat, None, &NoMath, s.frame_rect(), 2).ok()?;
+                Some(json!({ "id": st.id, "name": st.name, "note": st.note, "private": st.private, "cannot": st.cannot, "svg": preview_svg(&fig, width) }))
+            })
+            .collect();
+        return json!({ "layouts": out, "timeline": true });
+    }
     let Ok(g) = spec.graph(&cat.library) else { return json!({ "layouts": [] }) };
     let notation = flow.notation_of(doc);
     let out: Vec<Value> = cat
@@ -283,6 +307,10 @@ fn catalogue_json(flow: &Flow) -> Value {
         "themes": cat.themes.iter().map(|t| json!({ "id": t.0, "name": t.1 })).collect::<Vec<_>>(),
         "lines": EdgeKind::ALL.iter().map(|k| { let e = th.edge(*k); json!({ "id": k.as_str(), "label": k.label(), "color": e.color, "dash": e.dash, "width": e.width }) }).collect::<Vec<_>>(),
         "palette": flow.palette(),
+        // the timeline styles (the neutral ones, then the author's), with what each cannot draw yet
+        "timelines": cat.timelines.iter().map(|s| json!({ "id": s.id, "name": s.name, "note": s.note, "private": s.private, "cannot": s.cannot })).collect::<Vec<_>>(),
+        "timeline_errors": cat.timeline_errors,
+        "timeline_colors": cat.timeline_colors,
         "llm": flow.llm.is_some(),
     })
 }

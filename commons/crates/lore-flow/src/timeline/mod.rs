@@ -34,6 +34,8 @@ use crate::build::Built;
 use crate::layout::Rect;
 
 pub mod draw;
+#[cfg(feature = "llm")]
+pub mod llm;
 pub mod place;
 pub mod style;
 
@@ -52,6 +54,11 @@ pub struct TimelineSpec {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub style: String,
     pub points: Vec<Point>,
+    /// The colours of this figure where it is used (a slide, a paper), `RRGGBB` in point
+    /// order, over the style's and Lore's own. Empty = not changed. The style gives the
+    /// structure; the colours are the author's to set in each use.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<String>,
     /// Keys a newer editor wrote: kept.
     #[serde(flatten)]
     pub other: BTreeMap<String, Value>,
@@ -422,6 +429,25 @@ pub struct Plan {
 /// palette ([`crate::figure::PALETTE`], never an app theme), without the grey.
 pub fn lore_colors() -> Vec<String> {
     crate::figure::PALETTE.iter().filter(|(_, fill, _)| *fill != "EDEDED").map(|(_, _, line)| line.to_string()).collect()
+}
+
+/// The colour of a style that uses one colour and states none: Lore's blue.
+pub const SINGLE: &str = "2F6DB0";
+
+/// The palette a figure is drawn with: the figure's own colours ([`TimelineSpec::colors`]),
+/// else the style's, else `lore` (Lore's figure colours; a one-colour style takes [`SINGLE`]).
+pub fn palette_for(spec: &TimelineSpec, style: &Style, lore: &[String]) -> Vec<String> {
+    let hex = |s: &&String| s.len() == 6 && s.chars().all(|c| c.is_ascii_hexdigit());
+    let own: Vec<String> = spec.colors.iter().filter(hex).cloned().collect();
+    if !own.is_empty() {
+        own
+    } else if !style.colors.palette.is_empty() {
+        style.colors.palette.clone()
+    } else if style.colors.mode == "single" {
+        vec![SINGLE.to_string()]
+    } else {
+        lore.to_vec()
+    }
 }
 
 // ── the one entry ────────────────────────────────────────────────────────────
