@@ -10,6 +10,7 @@ use lore_llm::{Image, LlmError, LlmProvider, LlmRequest, Message, TaskTable, com
 use lore_notation::Notation;
 use serde_json::{Value, json};
 
+use crate::knowledge::{Example, Knowledge, ModuleNote, Picked, pick_examples, pick_modules};
 use crate::modules::Library;
 use crate::notation::{NotationReport, check_graph};
 use crate::spec::*;
@@ -52,6 +53,15 @@ pub struct Proposal {
     pub provider: String,
     /// The first reply was structurally wrong and had to be corrected.
     pub retried: Option<String>,
+    /// Ids of nodes whose `style` was not one of their kind's styles: the style was cleared.
+    pub cleared_styles: Vec<String>,
+}
+
+/// What knowledge was put into a prompt, in order (owned copies, for the author to see).
+#[derive(Debug, Clone, Default)]
+pub struct Shown {
+    pub modules: Vec<Picked<ModuleNote>>,
+    pub examples: Vec<Picked<Example>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -74,6 +84,11 @@ pub fn module_list(lib: &Library) -> Vec<(String, String)> {
 
 /// JSON schema of the reply. Every list is closed.
 pub fn schema(lib: &Library) -> Value {
+    schema_with(lib)
+}
+
+/// The schema, with an optional `style` on every node (a string, not an enum: styles differ per kind).
+pub fn schema_with(lib: &Library) -> Value {
     let modules: Vec<String> = module_list(lib).into_iter().map(|m| m.0).collect();
     let kinds: Vec<&str> = EdgeKind::ALL.iter().map(|k| k.as_str()).collect();
     let mut roles: Vec<&str> = ROLES.to_vec();
@@ -96,6 +111,7 @@ pub fn schema(lib: &Library) -> Value {
                     "module": { "type": "string", "enum": modules },
                     "role": { "type": "string", "enum": roles },
                     "label": { "type": "string" },
+                    "style": { "type": "string" },
                     "var": { "type": "string" },
                     "caption": { "type": "string" },
                     "panel": { "type": "string" },
@@ -124,7 +140,8 @@ pub fn schema(lib: &Library) -> Value {
     })
 }
 
-fn system(p: &FlowPrompt) -> String {
+fn system_with(p: &FlowPrompt, k: &Knowledge, shown: &Shown) -> String {
+    let with_styles = !k.modules.is_empty() || !k.examples.is_empty();
     let mut s = String::from(
         "You turn the description of a figure from a machine-learning paper into a data-flow graph. \
 A program draws the figure from your graph: you decide WHAT is in it and how it connects, never where it sits or what colour it has.\n\n\
@@ -135,7 +152,16 @@ Every thing the description names is one node: {id, module, role?, label, var?, 
 - module: one of the kinds below, nothing else.\n",
     );
     for (k, d) in module_list(p.library) {
-        s.push_str(&format!("  - {k}: {d}\n"));
+        let st = kind_styles(p.library, &k);
+        if with_styles && st.len() > 1 {
+            let mut names: Vec<&str> = st.iter().take(8).map(|x| x.as_str()).collect();
+            if st.len() > 8 {
+                names.push("…");
+            }
+            s.push_str(&format!("  - {k}: {d} (styles: {})\n", names.join(", ")));
+        } else {
+            s.push_str(&format!("  - {k}: {d}\n"));
+        }
     }
     s.push_str(
         "- role: input | model | op | data | output | gt | loss | merge | note (gt = ground truth / annotation).\n\
@@ -143,8 +169,11 @@ Every thing the description names is one node: {id, module, role?, label, var?, 
 - var: the notation id of the variable this node IS (an image x, a prediction). Use it instead of typing the symbol again.\n\
 - caption: a size or remark under the module (e.g. $512\\times512$).\n\
 - panel: the id of the panel the node is in, when the figure has stages or sub-figures.\n\
-- Whole networks are ONE node (unet, layer-bars, cuboid-seq or box), not one node per layer; list the layers in params.layers.\n\n\
-## Edges\n\
+- Whole networks are ONE node (unet, layer-bars, cuboid-seq or box), not one node per layer; list the layers in params.layers.\n",
+    );
+    s.push_str(&notes_section(shown));
+    s.push_str(
+        "\n## Edges\n\
 {from, to, kind, label?}. kind is one of:\n\
   data (main flow) | supervision (ground truth into a loss) | feedback (a loss or weight going back to update a model) | \
 loss-out (a model's output that is a loss) | compare (prediction against target, double-headed) | optional (weak or optional path) | \
@@ -171,20 +200,145 @@ Never invent an id without listing it. `latex` is the bare symbol (`\\hat{y}`): 
         }
         None => s.push_str("\n## Notation table\n(empty: every variable goes into vars_new)\n"),
     }
-    for (i, (desc, g)) in p.examples.iter().enumerate() {
-        s.push_str(&format!("\n## Example {}\nDescription:\n{}\n\nGraph:\n{}\n", i + 1, desc.trim(), serde_json::to_string(g).unwrap_or_default()));
+    let mut n = 0;
+    for ex in &shown.examples {
+        n += 1;
+        s.push_str(&format!(
+            "\n## Example {n} (the author's own figure: {})\nDescription:\n{}\n\nGraph:\nThe same figure in the short text form (for you to read; you still reply with JSON):\n```\n{}\n```\n",
+            ex.item.title.trim(),
+            ex.item.description.trim(),
+            cut(&plain_dsl(&ex.item.dsl), MAX_DSL).trim_end()
+        ));
+    }
+    for (desc, g) in p.examples.iter().take(MAX_EXAMPLES.saturating_sub(shown.examples.len())) {
+        n += 1;
+        s.push_str(&format!("\n## Example {n}\nDescription:\n{}\n\nGraph:\n{}\n", desc.trim(), serde_json::to_string(g).unwrap_or_default()));
     }
     s
 }
 
+const MAX_NOTE: usize = 600;
+const MAX_DSL: usize = 2500;
+const MAX_EXAMPLES: usize = 4;
+const MAX_NOTES: usize = 12;
+const MAX_MADE: usize = 3;
+
+/// Styles a node of `kind` may name: the built-in ones and the library's.
+fn kind_styles(lib: &Library, kind: &str) -> Vec<String> {
+    let mut v: Vec<String> = crate::modules::generator_styles(kind).iter().map(|s| s.to_string()).collect();
+    for s in lib.styles(kind) {
+        if !v.contains(&s) {
+            v.push(s);
+        }
+    }
+    v
+}
+
+/// At most `max` characters, cut at a line end when there is one, with `…` after a cut.
+fn cut(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(max).collect();
+    let head = match head.rfind('\n') {
+        Some(i) if i > 0 => &head[..i],
+        _ => &head[..],
+    };
+    format!("{}…", head.trim_end())
+}
+
+/// A made figure's text without what only the drawing decides (colours, positions, sizes).
+fn plain_dsl(dsl: &str) -> String {
+    const DROP: [&str; 20] = [
+        "color", "colour", "fill", "stroke", "frame", "outline", "gradient", "radius", "x", "y", "w", "h", "width", "height", "size", "pos", "place", "ends", "opacity", "font",
+    ];
+    let mut out = Vec::new();
+    for line in dsl.lines() {
+        let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+        let mut chunks: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        let mut quoted = false;
+        let mut prev = ' ';
+        for c in line.trim().chars() {
+            if c == '"' && prev != '\\' {
+                quoted = !quoted;
+            }
+            if c.is_whitespace() && !quoted {
+                if !cur.is_empty() {
+                    chunks.push(std::mem::take(&mut cur));
+                }
+            } else {
+                cur.push(c);
+            }
+            prev = c;
+        }
+        if !cur.is_empty() {
+            chunks.push(cur);
+        }
+        let kept: Vec<String> = chunks.into_iter().filter(|c| !c.split_once('=').is_some_and(|(k, _)| !k.starts_with('"') && DROP.contains(&k.to_lowercase().as_str()))).collect();
+        out.push(format!("{indent}{}", kept.join(" ")));
+    }
+    out.join("\n")
+}
+
+fn notes_section(shown: &Shown) -> String {
+    if shown.modules.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("\n## The author's notes on modules\n");
+    for m in &shown.modules {
+        let m = &m.item;
+        let style = if m.style.is_empty() { String::new() } else { format!(" / {}", m.style) };
+        s.push_str(&format!("- {}{style}: {}", m.kind, cut(m.prompt.trim(), MAX_NOTE)));
+        let vars = |v: &[crate::knowledge::Var]| v.iter().map(|x| format!("{} ({})", x.id, x.kind)).collect::<Vec<_>>().join(", ");
+        match (m.inputs.is_empty(), m.outputs.is_empty()) {
+            (false, false) => s.push_str(&format!(" in: {}; out: {}", vars(&m.inputs), vars(&m.outputs))),
+            (false, true) => s.push_str(&format!(" in: {}", vars(&m.inputs))),
+            (true, false) => s.push_str(&format!(" out: {}", vars(&m.outputs))),
+            _ => {}
+        }
+        s.push('\n');
+    }
+    s.push_str("A module's `style` may be set to one of the styles listed for its kind above when its note fits; otherwise leave `style` out.\n");
+    s
+}
+
+/// The picks for a description, as owned copies.
+fn shown_for(description: &str, k: &Knowledge) -> Shown {
+    let own = |p: Picked<&ModuleNote>| Picked { item: p.item.clone(), score: p.score, why: p.why };
+    let own_e = |p: Picked<&Example>| Picked { item: p.item.clone(), score: p.score, why: p.why };
+    Shown {
+        modules: pick_modules(description, k, MAX_NOTES).into_iter().map(own).collect(),
+        examples: pick_examples(description, k, MAX_MADE).into_iter().map(own_e).collect(),
+    }
+}
+
 /// The request for a description (image attached when there is one).
 pub fn request(p: &FlowPrompt) -> LlmRequest {
+    request_with(p, &Knowledge::default()).0
+}
+
+/// As [`request`], with the author's knowledge: what was put into the prompt comes back too.
+pub fn request_with(p: &FlowPrompt, k: &Knowledge) -> (LlmRequest, Shown) {
+    let shown = shown_for(p.description, k);
     let user = format!("Description of the figure:\n\n{}\n\nReturn the graph as JSON.", p.description.trim());
     let msg = match &p.image {
         Some(img) => Message::user_with_images(format!("{user}\n\nThe attached picture shows the figure; use it for what the text leaves open."), vec![img.clone()]),
         None => Message::user(user),
     };
-    LlmRequest::chat(system(p), vec![msg]).json(schema(p.library)).max_tokens(8000)
+    (LlmRequest::chat(system_with(p, k, &shown), vec![msg]).json(schema_with(p.library)).max_tokens(8000), shown)
+}
+
+/// A node whose style is not one of its kind's loses it; their ids.
+fn clear_styles(g: &mut Graph, lib: &Library) -> Vec<String> {
+    let mut cleared = Vec::new();
+    for n in &mut g.nodes {
+        if !n.style.is_empty() && !kind_styles(lib, &n.module).contains(&n.style) {
+            n.style.clear();
+            cleared.push(n.id.clone());
+        }
+    }
+    cleared
 }
 
 /// Make a model's ids usable: lower-case, `-`/spaces to `_`, same change in
@@ -285,8 +439,13 @@ pub trait Llm: Send + Sync {
 
 /// As [`propose`], through an app's [`Llm`] (task [`task_for`]).
 pub async fn propose_via(llm: &dyn Llm, p: &FlowPrompt<'_>) -> Result<Proposal, String> {
+    propose_with(llm, p, &Knowledge::default()).await.map(|x| x.0)
+}
+
+/// As [`propose_via`], with the author's knowledge; also returns what the model was shown.
+pub async fn propose_with(llm: &dyn Llm, p: &FlowPrompt<'_>, k: &Knowledge) -> Result<(Proposal, Shown), String> {
     let task = task_for(p.image.is_some());
-    let req = request(p);
+    let (req, shown) = request_with(p, k);
     let (v, engine) = llm.complete_json(task, req.clone()).await?;
     let (mut graph, retried) = match parse_graph(v.clone(), p.library) {
         Ok(g) => (g, None),
@@ -298,10 +457,11 @@ pub async fn propose_via(llm: &dyn Llm, p: &FlowPrompt<'_>) -> Result<Proposal, 
             (parse_graph(v2, p.library).map_err(|e| format!("模型給的圖畫不出來：{e}"))?, Some(why))
         }
     };
+    let cleared_styles = clear_styles(&mut graph, p.library);
     let empty = Notation { version: 1, entries: vec![], conventional: vec![], ignored: vec![] };
     let notation = check_graph(&mut graph, p.notation.unwrap_or(&empty));
     let dsl = crate::dsl::to_dsl(&graph);
-    Ok(Proposal { graph, dsl, notation, provider: engine, retried })
+    Ok((Proposal { graph, dsl, notation, provider: engine, retried, cleared_styles }, shown))
 }
 
 /// Ask `provider` for the graph of a description. A reply that does not hold
@@ -320,8 +480,202 @@ pub async fn propose(provider: &dyn LlmProvider, p: &FlowPrompt<'_>) -> Result<P
             (parse_graph(v2, p.library).map_err(FlowError::Invalid)?, Some(why))
         }
     };
+    let cleared_styles = clear_styles(&mut graph, p.library);
     let empty = Notation { version: 1, entries: vec![], conventional: vec![], ignored: vec![] };
     let notation = check_graph(&mut graph, p.notation.unwrap_or(&empty));
     let dsl = crate::dsl::to_dsl(&graph);
-    Ok(Proposal { graph, dsl, notation, provider: provider.id(), retried })
+    Ok(Proposal { graph, dsl, notation, provider: provider.id(), retried, cleared_styles })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::knowledge::Var;
+    use std::sync::Mutex;
+
+    struct Script {
+        replies: Mutex<Vec<Value>>,
+        seen: Mutex<Vec<LlmRequest>>,
+    }
+    #[async_trait::async_trait]
+    impl Llm for Script {
+        async fn complete_json(&self, _task: &str, req: LlmRequest) -> Result<(Value, String), String> {
+            self.seen.lock().unwrap().push(req);
+            let mut r = self.replies.lock().unwrap();
+            if r.is_empty() { Err("no more replies".into()) } else { Ok((r.remove(0), "script".into())) }
+        }
+    }
+    fn script(replies: Vec<Value>) -> Script {
+        Script { replies: Mutex::new(replies), seen: Mutex::new(vec![]) }
+    }
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread().build().unwrap()
+    }
+    fn lib() -> Library {
+        let mut lib = Library::default();
+        for st in ["plain", "fancy"] {
+            lib.add_json(&format!(r#"{{ "kind": "gadget", "style": "{st}", "description": "a block", "w": 60, "h": 40, "objects": [] }}"#)).unwrap();
+        }
+        lib
+    }
+    fn prompt<'a>(lib: &'a Library, desc: &'a str, ex: &'a [(String, Graph)]) -> FlowPrompt<'a> {
+        FlowPrompt { description: desc, image: None, notation: None, library: lib, examples: ex }
+    }
+    fn note(kind: &str, prompt: &str) -> ModuleNote {
+        ModuleNote {
+            kind: kind.into(),
+            prompt: prompt.into(),
+            inputs: vec![Var { id: "x".into(), kind: "volume".into(), meaning: String::new() }],
+            outputs: vec![Var { id: "y".into(), kind: "mask".into(), meaning: String::new() }],
+            ..Default::default()
+        }
+    }
+    fn made(id: &str, title: &str, dsl: &str) -> Example {
+        Example {
+            id: id.into(),
+            title: title.into(),
+            description: "a CT volume to a mask".into(),
+            dsl: dsl.into(),
+            inputs: vec![Var { id: "x".into(), kind: "volume".into(), meaning: String::new() }],
+            ..Default::default()
+        }
+    }
+    const DESC: &str = "A CT volume goes into a unet and gives a segmentation mask";
+
+    #[test]
+    fn with_no_knowledge_the_request_is_what_it_was() {
+        let lib = lib();
+        let p = prompt(&lib, DESC, &[]);
+        let old = request(&p);
+        let (new, shown) = request_with(&p, &Knowledge::default());
+        // the whole text is equal: no style list is added until there is knowledge
+        assert_eq!(old.system, new.system);
+        assert_eq!(old.messages[0].text(), new.messages[0].text());
+        assert!(shown.modules.is_empty() && shown.examples.is_empty());
+        for gone in ["(styles:", "notes on modules", "the author's own figure"] {
+            assert!(!new.system.contains(gone), "{gone}");
+        }
+    }
+
+    #[test]
+    fn the_authors_note_on_a_module_reaches_the_prompt() {
+        let lib = lib();
+        let k = Knowledge { modules: vec![note("unet", "Use it for 3D segmentation.")], examples: vec![] };
+        let (req, shown) = request_with(&prompt(&lib, DESC, &[]), &k);
+        assert_eq!(shown.modules.len(), 1);
+        assert!(req.system.contains("## The author's notes on modules\n- unet: Use it for 3D segmentation. in: x (volume); out: y (mask)\n"), "{}", req.system);
+        assert!(req.system.contains("may be set to one of the styles listed"));
+        // the section sits after the module list and before the edges
+        assert!(req.system.find("gadget: a block").unwrap() < req.system.find("notes on modules").unwrap());
+        assert!(req.system.find("notes on modules").unwrap() < req.system.find("## Edges").unwrap());
+        // styles of a kind are listed once there is knowledge
+        assert!(req.system.contains("gadget: a block (styles: plain, fancy)") || req.system.contains("gadget: a block (styles: fancy, plain)"), "{}", req.system);
+        assert!(req.system.contains("(styles: bars, lineart)"));
+    }
+
+    #[test]
+    fn a_made_figure_is_shown_as_a_worked_example_before_the_folders_examples() {
+        let lib = lib();
+        let folder = vec![("A folder example.".to_string(), crate::dsl::parse("fig e\nx: image \"$x$\"\n").unwrap())];
+        let dsl = "fig m\nx: image \"$x$\" fill=ff0000 w=40\nf: unet \"U\" depth=3 color=\"red\"\nx -> f\n";
+        let k = Knowledge { modules: vec![], examples: vec![made("a", "My seg", dsl)] };
+        let (req, shown) = request_with(&prompt(&lib, DESC, &folder), &k);
+        assert_eq!(shown.examples.len(), 1);
+        let s = &req.system;
+        let a = s.find("## Example 1 (the author's own figure: My seg)").unwrap();
+        let b = s.find("## Example 2\n").unwrap();
+        assert!(a < b);
+        assert!(s.contains("The same figure in the short text form (for you to read; you still reply with JSON):\n```\nfig m"));
+        // nothing about colours or sizes comes with it
+        assert!(!s.contains("fill=ff0000") && !s.contains("w=40") && !s.contains("color=\"red\""), "{s}");
+        assert!(s.contains("depth=3") && s.contains("A folder example."));
+    }
+
+    #[test]
+    fn at_most_four_examples_in_all() {
+        let lib = lib();
+        let folder: Vec<(String, Graph)> = (0..5).map(|i| (format!("folder {i}"), crate::dsl::parse("fig e\nx: image \"$x$\"\n").unwrap())).collect();
+        let k = Knowledge { modules: vec![], examples: (0..5).map(|i| made(&format!("m{i}"), &format!("T{i}"), "fig m\n")).collect() };
+        let (req, shown) = request_with(&prompt(&lib, DESC, &folder), &k);
+        assert_eq!(shown.examples.len(), 3);
+        assert_eq!(req.system.matches("\n## Example ").count(), 4);
+        assert!(req.system.contains("folder 0") && !req.system.contains("folder 1"));
+        // without made figures the folder's four still show
+        let (req, _) = request_with(&prompt(&lib, DESC, &folder), &Knowledge::default());
+        assert_eq!(req.system.matches("\n## Example ").count(), 4);
+    }
+
+    #[test]
+    fn long_notes_are_cut() {
+        let lib = lib();
+        let long = format!("{}\n{}", "a".repeat(400), "b".repeat(400));
+        let dsl = (0..400).map(|i| format!("n{i}: box \"label number {i}\"")).collect::<Vec<_>>().join("\n");
+        let k = Knowledge { modules: vec![note("unet", &long)], examples: vec![made("a", "T", &dsl)] };
+        let (req, _) = request_with(&prompt(&lib, DESC, &[]), &k);
+        assert!(!req.system.contains(&"b".repeat(400)));
+        assert!(req.system.contains(&format!("- unet: {}…", "a".repeat(400))));
+        assert!(req.system.contains("n0:"));
+        assert!(!req.system.contains("n399:"));
+        assert!(req.system.contains("…\n```"));
+    }
+
+    #[test]
+    fn what_was_shown_is_returned_in_order() {
+        let lib = lib();
+        let mut weak = note("encoder", "An encoder.");
+        weak.inputs.clear();
+        weak.outputs.clear();
+        weak.tags = vec!["segmentation".into()];
+        let k = Knowledge { modules: vec![weak, note("unet", "U."), note("decoder", "")], examples: vec![made("m1", "One", "fig m\n")] };
+        let (_, shown) = request_with(&prompt(&lib, DESC, &[]), &k);
+        assert_eq!(shown.modules.iter().map(|m| m.item.kind.as_str()).collect::<Vec<_>>(), ["unet", "encoder"]);
+        assert_eq!(shown.modules[0].why, "takes volume, gives mask");
+        assert_eq!(shown.examples[0].item.id, "m1");
+    }
+
+    fn reply(style: &str) -> Value {
+        json!({ "fig": "f", "panels": [], "nodes": [
+            { "id": "x", "module": "image", "label": "" },
+            { "id": "g", "module": "gadget", "label": "G", "style": style },
+            { "id": "u", "module": "unet", "label": "U", "style": "bars" } ],
+          "edges": [ { "from": "x", "to": "g", "kind": "data" }, { "from": "g", "to": "u", "kind": "data" } ], "vars_new": [] })
+    }
+
+    #[test]
+    fn a_node_may_name_a_style() {
+        let lib = lib();
+        let s = schema_with(&lib);
+        assert_eq!(s["properties"]["nodes"]["items"]["properties"]["style"], json!({ "type": "string" }));
+        assert_eq!(schema(&lib), s);
+        let llm = script(vec![reply("fancy")]);
+        let (prop, _) = rt().block_on(propose_with(&llm, &prompt(&lib, "…", &[]), &Knowledge::default())).unwrap();
+        assert_eq!(prop.graph.node("g").unwrap().style, "fancy");
+        assert_eq!(prop.graph.node("u").unwrap().style, "bars");
+        assert!(prop.cleared_styles.is_empty());
+        assert!(prop.dsl.contains("style=fancy"));
+    }
+
+    #[test]
+    fn a_style_the_kind_does_not_have_is_cleared_not_refused() {
+        let lib = lib();
+        let llm = script(vec![reply("sparkly")]);
+        let prop = rt().block_on(propose_via(&llm, &prompt(&lib, "…", &[]))).unwrap();
+        assert_eq!(prop.graph.node("g").unwrap().style, "");
+        assert_eq!(prop.cleared_styles, ["g"]);
+        assert!(prop.retried.is_none());
+        assert_eq!(llm.seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn propose_with_returns_what_the_model_was_shown() {
+        let lib = lib();
+        let k = Knowledge { modules: vec![note("unet", "U.")], examples: vec![made("m1", "One", "fig m\n")] };
+        let llm = script(vec![reply("plain")]);
+        let (_, shown) = rt().block_on(propose_with(&llm, &prompt(&lib, DESC, &[]), &k)).unwrap();
+        assert_eq!(shown.modules.len(), 1);
+        assert_eq!(shown.examples[0].item.title, "One");
+        let sent = llm.seen.lock().unwrap();
+        assert!(sent[0].system.contains("- unet: U."));
+        assert!(sent[0].system.contains("the author's own figure: One"));
+    }
 }
