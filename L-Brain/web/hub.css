@@ -290,3 +290,48 @@ label.h-plus { cursor: pointer; font-weight: 500; font-size: 12px; padding: 6px 
 .h-places select { background: none; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); padding: 3px 6px; font-size: 12px; max-width: 100%; }
 .h-kind { font: 600 11px/1 var(--mono); color: var(--faint); letter-spacing: .08em; padding: 14px 8px 6px; }
 .h-kind small { margin-left: 8px; font-weight: 400; }
+
+/* 確認：模型寫的說法，一頁三句 */
+.h-cta { display: flex; align-items: center; gap: 20px; border-color: var(--accent); }
+.h-cta > div { flex: 1; }
+.h-cta b { font: 600 30px var(--mono); margin-right: 6px; }
+.h-cta span { color: var(--muted); font-size: 13px; }
+.h-cta .go { background: var(--accent); color: var(--accent-ink); font-weight: 600; border-radius: 8px; padding: 8px 18px; font-size: 14px; }
+.h-rv { height: 100%; overflow: auto; }
+.h-rv-bar { height: 2px; background: var(--line); position: sticky; top: 0; }
+.h-rv-bar i { display: block; height: 2px; background: var(--accent); }
+.h-rv-in { max-width: 760px; margin: 0 auto; padding: 48px 24px 56px; }
+.h-rv-top { display: flex; align-items: baseline; gap: 16px; }
+.h-rv-top h2 { font-size: 22px; font-weight: 600; margin: 0; }
+.h-rv-top .pg { margin-left: auto; color: var(--faint); font: 12px var(--mono); }
+.h-rv-lg { display: flex; gap: 18px; color: var(--faint); font: 600 11px var(--mono); letter-spacing: .1em; margin: 14px 0 28px; }
+.h-rv-lg span { display: flex; gap: 7px; align-items: center; }
+.h-rv-lg i, .h-rv-blk .mine i, .h-rv-r > i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.h-rv-lg .m i, .h-rv-r > i { background: none; border: 1px solid var(--faint); }
+.h-rv-blk { padding: 26px 0; border-top: 1px solid var(--line); }
+.h-rv-blk .mine { font-size: 17px; line-height: 1.55; margin-bottom: 14px; display: flex; gap: 12px; align-items: baseline; }
+.h-rv-blk .mine i { transform: translateY(-2px); }
+.h-rv-blk .mine.gone { color: var(--faint); }
+.h-rv-r { display: grid; grid-template-columns: 19px minmax(0, 1fr) auto; gap: 2px 0; align-items: center; padding: 9px 0; }
+.h-rv-r .s { font-size: 15px; line-height: 1.55; }
+.h-rv-r .s .was { color: var(--muted); }
+.h-rv-r .n { grid-column: 2; color: var(--muted); font-size: 12.5px; }
+.h-rv-r .act { grid-row: 1 / 3; grid-column: 3; display: flex; gap: 6px; padding-left: 16px; }
+.h-rv-r.accepted .s { color: var(--accent-text, var(--accent)); }
+.h-rv-r.accepted > i { background: var(--accent); border-color: var(--accent); }
+.h-rv-r.rejected .s, .h-rv-r.rejected .n { opacity: .4; text-decoration: line-through; }
+.h-rv button, .h-rv a.pri, .h-rv a.btn { font: inherit; font-size: 13px; border-radius: 8px; padding: 5px 14px; border: 1px solid var(--line-strong); background: none; color: var(--text); cursor: pointer; }
+.h-rv button.pri, .h-rv a.pri { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.h-rv .q { border-color: transparent; color: var(--muted); }
+.h-rv .q:hover { color: var(--text); }
+.h-rv-nav { display: flex; gap: 10px; justify-content: flex-end; align-items: center; margin-top: 24px; }
+.h-rv-nav button, .h-rv-nav a.pri, .h-rv-nav a.btn { padding: 8px 18px; font-size: 14px; }
+.h-rv-done { text-align: center; padding: 110px 24px 0; }
+.h-rv-done h2 { font-size: 22px; font-weight: 600; margin: 0 0 10px; }
+.h-rv-done p { color: var(--muted); margin: 0 0 30px; }
+.h-rv-done .h-rv-nav { justify-content: center; }
+@media (max-width: 700px) {
+  .h-rv-in { padding: 28px 16px 40px; }
+  .h-rv-r { grid-template-columns: 19px minmax(0, 1fr); }
+  .h-rv-r .act { grid-row: auto; grid-column: 2; padding: 6px 0 0; }
+}

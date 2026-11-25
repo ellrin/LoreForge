@@ -326,7 +326,9 @@ async fn stats(State(s): State<Shared>) -> R {
     st.total += family.count;
     st.families.insert(0, family);
     let inbox = crate::inbox::counts(&s);
-    ok(json!({ "stats": st, "cards": cards, "inbox": inbox }))
+    // 確認: how many things a model wrote still wait for the author's own decision
+    let review = hub(&s)?.reviews.count_open();
+    ok(json!({ "stats": st, "cards": cards, "inbox": inbox, "review": { "open": review } }))
 }
 
 // ── categories ───────────────────────────────────────────────────────────────

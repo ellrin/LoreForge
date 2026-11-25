@@ -48,7 +48,7 @@ const Hub = (() => {
 
   async function loadStats() {
     const r = await api("GET", "/api/hub/stats");
-    S.stats = r.stats; S.cards = r.cards ?? {}; S.inbox = r.inbox ?? {};
+    S.stats = r.stats; S.cards = r.cards ?? {}; S.inbox = r.inbox ?? {}; S.review = r.review ?? {};
     nav();
     return r;
   }
@@ -99,6 +99,7 @@ const Hub = (() => {
       el("td", { class: `gap ${f.gap ? "" : "ok"}`, title: f.gap || null }, f.gap || "—"));
     const node = el("div", { class: "h-cover" },
       el("div", { class: "h-col" },
+        S.review?.open ? el("a", { class: "h-box h-cta", href: "#/hub/review" }, el("div", {}, el("div", { class: "h-cap" }, "等你決定"), el("b", {}, fmt(S.review.open)), el("span", {}, "個說法")), el("span", { class: "go" }, "開始看")) : null,
         el("div", { class: "h-box" }, el("div", { class: "h-cap" }, "組成", el("span", {}, `${fams.length} 類`)),
           el("div", { class: "h-ring" }, ring, el("div", { class: "mid" }, el("div", {}, el("b", {}, fmt(total)), el("span", {}, "條知識"))))),
         el("div", { class: "h-box" }, el("div", { class: "h-cap" }, "每週新增"), line),
@@ -554,6 +555,69 @@ const Hub = (() => {
 
   // ── 收件: sentences handed over (read aloud to L-Echo, or selected) wait here, worked out;
   //    加入 writes one into the knowledge, 略過 drops it (docs/brain-hub.md §16) ──
+  // 確認: what a model wrote for his own sentences. Three of his sentences a page, each with the
+  // other ways to say it; every one is decided on its own (加入 / 不要) and can be taken back.
+  const RV = { set: null, groups: [], page: 0, counts: {} }, RV_PER = 3;
+  async function review(mode = "open") {
+    const sets = (await api("GET", "/api/hub/review")).sets ?? [];
+    const pick = (mode === "open" && sets.find((s) => s.counts?.open)) || sets.at(-1);
+    RV.set = null; RV.groups = []; RV.page = 0; RV.counts = {};
+    if (pick) {
+      const d = await api("GET", `/api/hub/review/${enc(pick.id)}`);
+      RV.set = d.set; RV.counts = d.counts ?? {};
+      RV.groups = (d.groups ?? []).filter((g) => g.candidates.some((c) => c.state === mode));
+    }
+    const box = el("div", { class: "h-rv" });
+    reviewPaint(box);
+    return box;
+  }
+  function reviewPaint(box) {
+    const pages = Math.ceil(RV.groups.length / RV_PER), c = RV.counts;
+    const again = async (mode) => { try { box.replaceWith(await review(mode)); } catch (e) { S.host.fail?.(e); } };
+    if (RV.page >= pages) {
+      box.replaceChildren(el("div", { class: "h-rv-done" },
+        el("h2", {}, !RV.set ? "沒有要你決定的" : c.open ? `還有 ${fmt(c.open)} 個沒看` : "看完了"),
+        RV.set ? el("p", {}, `加入 ${fmt(c.accepted)} 個說法，不要 ${fmt(c.rejected)} 個。`) : null,
+        el("div", { class: "h-rv-nav" },
+          c.open ? el("button", { type: "button", class: "pri", onclick: () => again("open") }, "繼續看") : null,
+          el("a", { class: c.open ? "btn" : "pri", href: "#/hub" }, "回總覽"),
+          c.rejected ? el("button", { type: "button", class: "q", onclick: () => again("rejected") }, "再看一次不要的") : null)));
+      return;
+    }
+    const row = (cand, own) => {
+      const r = el("div", {});
+      const act = async (what) => {
+        try {
+          const j = await api("POST", `/api/hub/review/${enc(RV.set.id)}/${enc(cand.id)}/${what}`);
+          Object.assign(cand, j.candidate); RV.counts = j.counts ?? RV.counts; S.allDirty = true; draw(); loadStats().catch(() => {});
+        } catch (e) { S.host.fail?.(e); }
+      };
+      const draw = () => {
+        r.className = `h-rv-r ${cand.state}`;
+        r.replaceChildren(el("i", {}),
+          el("div", { class: "s" }, cand.kind === "swap" ? [el("span", { class: "was" }, cand.slot), " → ", cand.text] : cand.text),
+          cand.note ? el("div", { class: "n" }, cand.note) : null,
+          el("div", { class: "act" }, cand.state === "open"
+            ? [el("button", { type: "button", class: "q", onclick: () => act("reject") }, "不要"), own ? el("button", { type: "button", class: "pri", onclick: () => act("accept") }, "加入") : null]
+            : el("button", { type: "button", class: "q", onclick: () => act("undo") }, `${cand.state === "accepted" ? "已加入" : "不要了"} · 復原`)));
+      };
+      draw();
+      return r;
+    };
+    const turn = (d) => { RV.page += d; reviewPaint(box); box.scrollTop = 0; };
+    box.replaceChildren(
+      el("div", { class: "h-rv-bar" }, el("i", { style: `width:${Math.round(((RV.page + 1) / pages) * 100)}%` })),
+      el("div", { class: "h-rv-in" },
+        el("div", { class: "h-rv-top" }, el("h2", {}, "你會這樣寫嗎？"), el("span", { class: "pg" }, `第 ${RV.page + 1} 頁，共 ${pages} 頁`)),
+        el("div", { class: "h-rv-lg" }, el("span", {}, el("i", {}), "你寫的"), el("span", { class: "m" }, el("i", {}), "模型寫的")),
+        RV.groups.slice(RV.page * RV_PER, (RV.page + 1) * RV_PER).map((g) => el("div", { class: "h-rv-blk" },
+          el("div", { class: `mine ${g.own ? "" : "gone"}` }, el("i", {}), el("span", {}, g.own ? g.own.fields?.template || g.own.title : "這一句已經不在了")),
+          g.candidates.map((cand) => row(cand, g.own)))),
+        el("div", { class: "h-rv-nav" },
+          RV.page ? el("button", { type: "button", class: "q", onclick: () => turn(-1) }, "← 上一頁") : null,
+          el("button", { type: "button", class: "next", onclick: () => turn(1) }, RV.page + 1 < pages ? "下一頁 →" : "看完了 →"))));
+  }
+
   let inboxTimer = 0;
   async function inbox() {
     clearTimeout(inboxTimer);
@@ -612,7 +676,8 @@ const Hub = (() => {
     S.root = root;
     try {
       await Promise.all([loadStats(), loadMeta()]);
-      S.view = arg === "inbox" ? "inbox" : arg === "proposals" ? "proposals" : "page";
+      S.view = arg === "inbox" ? "inbox" : arg === "proposals" ? "proposals" : arg === "review" ? "review" : "page";
+      if (arg === "review") { S.fam = null; S.sel = null; detailEl = null; nav(); root.replaceChildren(el("div", { class: "hubv" }, await review())); return; }
       if (arg === "inbox") { S.fam = null; S.sel = null; detailEl = null; nav(); root.replaceChildren(el("div", { class: "hubv" }, await inbox())); return; }
       if (arg === "proposals") { S.fam = null; S.sel = null; detailEl = null; nav(); root.replaceChildren(el("div", { class: "hubv" }, await proposals())); return; }
       const fam = arg ? S.stats.families.find((f) => f.id === arg) : null;
