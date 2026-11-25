@@ -32,6 +32,27 @@ struct Meta {
     /// Who supplied the item, when the app's own data cannot say (a CSV row has no source column).
     #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<Source>,
+    /// Figure items only: the knowledge fields ([`KNOW_FIELDS`]) the author gave to an item whose
+    /// own data (a generator, a saved drawing) has no place for them. A non-empty value wins over
+    /// the native one.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    know: BTreeMap<String, String>,
+}
+
+/// The fields of a figure item that a read-only native item may still take (the overlay's `know`).
+const KNOW_FIELDS: [&str; 4] = ["prompt", "inputs", "outputs", "connects"];
+
+fn field_text(f: &serde_json::Map<String, serde_json::Value>, k: &str) -> String {
+    f.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string()
+}
+
+/// The fields without the knowledge fields (for "did anything else change").
+fn without_know(f: &serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value> {
+    let mut f = f.clone();
+    for k in KNOW_FIELDS {
+        f.remove(k);
+    }
+    f
 }
 
 fn ms_now() -> u64 {
@@ -170,6 +191,13 @@ impl Store {
         if let Some(src) = meta.source {
             item.source = src;
         }
+        if item.format == format::FIGURE {
+            for (k, v) in &meta.know {
+                if KNOW_FIELDS.contains(&k.as_str()) && !v.trim().is_empty() {
+                    item.fields.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
+            }
+        }
         item.used = meta.overlay.used;
         item.used_at = meta.overlay.used_at;
         item.revision = meta.revision.max(1);
@@ -285,6 +313,16 @@ impl Store {
         };
         // the app's data keeps no source: the hub keeps it when it differs from what the adapter reports
         let source = own.as_ref().filter(|o| o.source != item.source).map(|_| item.source.clone());
+        let mut know = BTreeMap::new();
+        if item.format == format::FIGURE {
+            for k in KNOW_FIELDS {
+                let mine = field_text(&item.fields, k);
+                let native = own.as_ref().map(|o| field_text(&o.fields, k)).unwrap_or_default();
+                if !mine.trim().is_empty() && mine != native {
+                    know.insert(k.to_string(), mine);
+                }
+            }
+        }
         let (otags, otrig, ocont) = own.map(|o| (o.tags, o.triggers, o.contains)).unwrap_or_default();
         let m = Meta {
             overlay: Overlay {
@@ -298,6 +336,7 @@ impl Store {
             created_at: item.created_at.clone(),
             updated_at: item.updated_at.clone(),
             source,
+            know,
         };
         self.write_meta(&item.id, &m)
     }
@@ -427,7 +466,7 @@ impl Sink for Store {
             item.set("body", body);
         }
         // A read-only native category still takes tags, triggers and `contains` (overlay only).
-        let overlay_only = !cat.writable && adapter_cat && !to_record && cur.as_ref().is_some_and(|c| c.title == item.title && c.fields == item.fields);
+        let overlay_only = !cat.writable && adapter_cat && !to_record && cur.as_ref().is_some_and(|c| c.title == item.title && without_know(&c.fields) == without_know(&item.fields) && (item.format == format::FIGURE || c.fields == item.fields));
         if !cat.writable && !overlay_only {
             return Err(KnowError::ReadOnly(cat.label.clone()));
         }
@@ -452,6 +491,16 @@ impl Sink for Store {
             merged.tags = item.tags;
             merged.triggers = item.triggers;
             merged.contains = item.contains;
+            if merged.format == format::FIGURE {
+                for k in KNOW_FIELDS {
+                    let v = field_text(&item.fields, k);
+                    if v.trim().is_empty() {
+                        merged.fields.remove(k);
+                    } else {
+                        merged.fields.insert(k.into(), serde_json::Value::String(v));
+                    }
+                }
+            }
             merged.revision = item.revision;
             merged.updated_at = item.updated_at;
             item = merged;
@@ -1072,5 +1121,87 @@ path = "phrases.csv"
         assert_eq!(fs::read(folder.join("ref.png")).unwrap(), b"\x89PNG-bytes");
         assert_eq!(s.get("sc.flowrefs:f01").unwrap().unwrap().field("image"), "ref.png");
         assert_eq!(fs::read_dir(hub.path().join("trash/sc.flowrefs")).unwrap().count(), 0, "nothing left in the trash");
+    }
+
+    // ── knowledge fields of figure items ──
+
+    const FLOW_M: &str = "[[category]]\nid = \"t.flow\"\nlabel = \"流程圖\"\nformat = \"figure\"\nwritable = false\n[category.native]\nkind = \"flow\"\napp_dir = \"x\"\npath = \"flow\"\n";
+
+    fn flow_store(hub: &Path, save: &Path) -> Store {
+        use crate::hub::FlowItems;
+        let mut s = Store::open(hub.to_path_buf(), Registry::load(&[FLOW_M], hub).unwrap()).unwrap();
+        s.add_adapter("t.flow", Box::new(FlowItems::new("t.flow", Source::lore("sc"), vec![], save.to_path_buf())));
+        s
+    }
+
+    fn a_generator(s: &Store) -> Item {
+        s.list("t.flow").unwrap().into_iter().find(|i| i.field("kind") == "unet").unwrap()
+    }
+
+    #[test]
+    fn a_built_in_module_keeps_the_authors_prompt() {
+        let (hub, save) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut s = flow_store(hub.path(), save.path());
+        let mut it = a_generator(&s);
+        let native_description = it.field("description").to_string();
+        it.set("prompt", "Use for segmentation.").set("inputs", "x | image | the scan");
+        let saved = s.put(it.clone()).unwrap();
+        assert_eq!((saved.field("prompt"), saved.field("inputs")), ("Use for segmentation.", "x | image | the scan"));
+        let again = s.get(&it.id).unwrap().unwrap();
+        assert_eq!((again.field("prompt"), again.field("inputs"), again.revision), ("Use for segmentation.", "x | image | the scan", 2));
+        assert_eq!(again.field("description"), native_description);
+        let listed = a_generator(&s);
+        assert_eq!(listed.field("prompt"), "Use for segmentation.");
+        let meta: Meta = read_json(&hub.path().join("meta/t.flow").join(format!("{}.json", split_id(&it.id).unwrap().1))).unwrap();
+        assert_eq!(meta.know.keys().map(String::as_str).collect::<Vec<_>>(), ["inputs", "prompt"]);
+    }
+
+    #[test]
+    fn emptying_the_prompt_removes_the_override() {
+        let (hub, save) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut s = flow_store(hub.path(), save.path());
+        let mut it = a_generator(&s);
+        it.set("prompt", "Words.");
+        let saved = s.put(it).unwrap();
+        let mut e = saved.clone();
+        e.set("prompt", "");
+        let saved = s.put(e).unwrap();
+        assert_eq!(saved.field("prompt"), "");
+        let again = a_generator(&s);
+        assert_eq!(again.field("prompt"), "");
+        let meta: Meta = read_json(&hub.path().join("meta/t.flow").join(format!("{}.json", split_id(&again.id).unwrap().1))).unwrap();
+        assert!(meta.know.is_empty());
+    }
+
+    #[test]
+    fn any_other_field_of_a_built_in_is_still_refused() {
+        let (hub, save) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut s = flow_store(hub.path(), save.path());
+        let mut it = a_generator(&s);
+        it.set("prompt", "ok").set("description", "changed");
+        assert!(matches!(s.put(it.clone()), Err(KnowError::ReadOnly(_))));
+        let mut t = a_generator(&s);
+        t.title = "Other".into();
+        t.set("prompt", "ok");
+        assert!(matches!(s.put(t), Err(KnowError::ReadOnly(_))));
+        let mut k = a_generator(&s);
+        k.set("kind", "box");
+        assert!(matches!(s.put(k), Err(KnowError::ReadOnly(_))));
+    }
+
+    #[test]
+    fn a_made_figure_stores_them_as_its_own_fields() {
+        let d = tempfile::tempdir().unwrap();
+        let mut r = Registry::load(&[], d.path()).unwrap();
+        let c = r.add_manual("Figs", format::FIGURE, "", "").unwrap();
+        let mut s = Store::open(d.path().to_path_buf(), r).unwrap();
+        let mut it = Item::new(&c.id, format::FIGURE, "Mine", Source::author());
+        it.level = level::FIGURE.into();
+        it.set("what", "spec").set("prompt", "When two rows.").set("connects", "a -> b");
+        let saved = s.put(it).unwrap();
+        let back = s.get(&saved.id).unwrap().unwrap();
+        assert_eq!((back.field("prompt"), back.field("connects")), ("When two rows.", "a -> b"));
+        let raw: Item = read_json(&d.path().join("items").join(&c.id).join(format!("{}.json", split_id(&saved.id).unwrap().1))).unwrap();
+        assert_eq!(raw.field("prompt"), "When two rows.");
     }
 }

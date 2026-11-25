@@ -15,6 +15,7 @@
 //! Every write goes through [`Sink`]. Nothing here reads the real `private/` in tests.
 
 pub mod decompose;
+pub mod flowknow;
 pub mod formats;
 pub mod hub;
 pub mod inbox;

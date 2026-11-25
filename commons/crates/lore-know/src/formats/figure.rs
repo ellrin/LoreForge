@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use lore_flow::figure::{Catalogue, FlowSpec};
+use lore_flow::knowledge::VAR_KINDS;
 use lore_flow::modules::{Library, ModuleTemplate, generator_styles};
 use lore_flow::spec::{Graph, MODULES, Node, valid_id};
 use lore_flow::text::NoMath;
@@ -81,6 +82,10 @@ impl Format for Figure {
                 FieldDef::new("kind", "節點種類", "text", false),
                 FieldDef::new("style", "畫法", "text", false),
                 FieldDef::new("description", "說明", "markdown", false),
+                FieldDef::new("prompt", "用法", "markdown", false),
+                FieldDef::new("inputs", "輸入變數", "text", false),
+                FieldDef::new("outputs", "輸出變數", "text", false),
+                FieldDef::new("connects", "連線", "text", false),
                 FieldDef::new("params", "參數", "text", false),
                 FieldDef::new("image", "參考圖", "text", false),
             ],
@@ -111,6 +116,19 @@ impl Format for Figure {
         if matches!(w, what::GENERATOR | what::DRAWING) && item.field("kind").trim().is_empty() {
             bad("kind", "缺「節點種類」".into());
         }
+        for (field, label) in [("inputs", "輸入變數"), ("outputs", "輸出變數")] {
+            for line in crate::flowknow::var_lines(item.field(field)) {
+                let kind = line.kind.trim();
+                if !kind.is_empty() && !VAR_KINDS.contains(&kind) {
+                    bad(field, format!("「{label}」的這一行種類不對：{}", line.raw));
+                }
+            }
+        }
+        for line in item.field("connects").lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            if crate::flowknow::parse_connect(line).is_none() {
+                bad("connects", format!("「連線」要寫成「甲 -> 乙」或「甲 -> 乙 : 種類」：{line}"));
+            }
+        }
         out
     }
 
@@ -130,10 +148,29 @@ impl Format for Figure {
 
     fn prompt(&self, item: &Item) -> String {
         let mut s = format!("{} [{}]", item.title, item.level);
-        let d = item.field("description").trim();
+        let d = first_line(item.field("description"));
         if !d.is_empty() {
             s.push_str(": ");
-            s.push_str(d);
+            s.push_str(&d);
+        }
+        let u = item.field("prompt").trim();
+        if !u.is_empty() {
+            s.push_str("\nuse: ");
+            s.push_str(u);
+        }
+        for (label, field) in [("in", "inputs"), ("out", "outputs")] {
+            let vars: Vec<String> = crate::flowknow::vars_of(item.field(field)).iter().map(|v| format!("{} ({})", v.id, v.kind)).collect();
+            if !vars.is_empty() {
+                s.push_str(&format!("\n{label}: {}", vars.join(", ")));
+            }
+        }
+        let flow: Vec<&str> = item.field("connects").lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
+        if !flow.is_empty() {
+            s.push_str("\nflow: ");
+            s.push_str(&flow.iter().take(12).copied().collect::<Vec<_>>().join(" ; "));
+            if flow.len() > 12 {
+                s.push_str(" ; …");
+            }
         }
         if item.entity && !item.field("kind").is_empty() {
             s.push_str(&format!("\nkind={} style={}", item.field("kind"), item.field("style")));
@@ -786,7 +823,7 @@ mod tests {
         r.title = "Timeline".into();
         r.set("description", "\nTwo rows of dated boxes.\nMore.");
         assert_eq!(f.line(&r), "Two rows of dated boxes.");
-        assert_eq!(f.prompt(&r), "Timeline [figure]: \nTwo rows of dated boxes.\nMore.".replace(": \n", ": "));
+        assert_eq!(f.prompt(&r), "Timeline [figure]: Two rows of dated boxes.");
     }
 
     // ── step 2 ──
@@ -1307,5 +1344,84 @@ mod tests {
         // and the other way: what an item contains is in its own list
         let fig1 = &all[0];
         assert!(fig1.contains.iter().all(|id| all.iter().any(|i| &i.id == id)));
+    }
+
+    // ── knowledge fields ──
+
+    #[test]
+    fn a_figure_has_the_four_knowledge_fields() {
+        let d = Figure.def();
+        let names: Vec<&str> = d.fields.iter().map(|f| f.name.as_str()).collect();
+        let at = names.iter().position(|n| *n == "description").unwrap();
+        assert_eq!(&names[at + 1..at + 5], ["prompt", "inputs", "outputs", "connects"]);
+        let labels: Vec<&str> = d.fields[at + 1..at + 5].iter().map(|f| f.label.as_str()).collect();
+        assert_eq!(labels, ["用法", "輸入變數", "輸出變數", "連線"]);
+        assert!(d.fields[at + 1..at + 5].iter().all(|f| !f.required));
+        let mut e = fig_item(what::GENERATOR, level::MODULE, true);
+        e.set("inputs", "x | image | scan\n# note\n\nz | | free").set("connects", "a -> b\nb -> c : feedback");
+        assert!(Figure.validate(&e).is_empty());
+    }
+
+    #[test]
+    fn a_variable_line_with_an_unknown_kind_is_a_problem() {
+        let mut e = fig_item(what::GENERATOR, level::MODULE, true);
+        e.set("inputs", "x | image | ok\ny | pixels | bad");
+        e.set("outputs", "m | mask | ok");
+        let p = Figure.validate(&e);
+        assert_eq!(fields_of(&p), ["inputs"]);
+        assert!(p[0].message.contains("y | pixels | bad"));
+        e.set("outputs", "m | blob | bad");
+        assert_eq!(fields_of(&Figure.validate(&e)), ["inputs", "outputs"]);
+    }
+
+    #[test]
+    fn a_connection_line_must_say_from_and_to() {
+        let mut e = fig_item(what::GENERATOR, level::MODULE, true);
+        for bad in ["a", "a ->", "-> b", "a -> b -> c", "a - b"] {
+            e.set("connects", bad);
+            assert_eq!(fields_of(&Figure.validate(&e)), ["connects"], "{bad}");
+        }
+        e.set("connects", "a -> b\nb -> c : skip");
+        assert!(Figure.validate(&e).is_empty());
+    }
+
+    #[test]
+    fn a_figures_prompt_says_use_variables_and_flow() {
+        let mut e = fig_item(what::GENERATOR, level::MODULE, true);
+        e.title = "U-Net".into();
+        e.set("description", "A flat U-shaped net\nsecond line");
+        e.set("prompt", "Use it for segmentation.");
+        e.set("inputs", "x | image | scan\nz | | free");
+        e.set("outputs", "m | mask | result");
+        e.set("connects", "x -> m\nm -> loss : supervision");
+        assert_eq!(
+            Figure.prompt(&e),
+            "U-Net [module]: A flat U-shaped net\nuse: Use it for segmentation.\nin: x (image), z (other)\nout: m (mask)\nflow: x -> m ; m -> loss : supervision\nkind=unet style=bars"
+        );
+    }
+
+    #[test]
+    fn empty_parts_are_left_out() {
+        let mut s = fig_item(what::SPEC, level::FIGURE, true);
+        s.title = "Whole".into();
+        s.set("inputs", "  \n").set("connects", "").set("prompt", "  ");
+        assert_eq!(Figure.prompt(&s), "Whole [figure]");
+        s.set("outputs", "y | loss | l");
+        assert_eq!(Figure.prompt(&s), "Whole [figure]\nout: y (loss)");
+        let many: Vec<String> = (0..14).map(|i| format!("n{i} -> n{}", i + 1)).collect();
+        s.set("connects", many.join("\n"));
+        let p = Figure.prompt(&s);
+        assert!(p.contains("n11 -> n12 ; …") && !p.contains("n12 -> n13"), "{p}");
+    }
+
+    #[test]
+    fn params_never_reach_the_prompt() {
+        let mut s = fig_item(what::SPEC, level::FIGURE, true);
+        s.title = "Whole".into();
+        s.set("params", json!({"dsl": "SECRET-DSL-TEXT"}));
+        assert!(!Figure.prompt(&s).contains("SECRET"));
+        let mut g = fig_item(what::DRAWING, level::MODULE, true);
+        g.set("params", json!({"kind": "unet", "extra": "PARAM-TEXT"}));
+        assert!(!Figure.prompt(&g).contains("PARAM"));
     }
 }
