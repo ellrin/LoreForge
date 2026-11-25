@@ -2293,6 +2293,17 @@ fn remember_used(ws: &Path, paper: &str, para: &str, used: Vec<String>) {
     let _ = u.save(ws);
 }
 
+/// Before a section is drafted: the record forgets the paragraphs the section no longer has.
+pub(crate) fn forget_removed(ws: &Path, dir: &Path, section: &str, ids: &[&str]) {
+    let paper = dir.to_string_lossy();
+    let mut u = pc_core::usage::Usage::load(ws);
+    let before = u.clone();
+    u.keep(&paper, section, ids);
+    if u != before {
+        let _ = u.save(ws);
+    }
+}
+
 /// One paragraph, `k` of `count` in its section, through the phrase bank with every check of the
 /// draft step (the notation registry with one rewrite, pending marks, record ids, banned words,
 /// punctuation and sentence length, the abstract's length) and the guard's safe fixes after.
@@ -2478,6 +2489,7 @@ async fn run_compose(State(s): State<Shared>, AxPath(name): AxPath<String>, Json
     let env = compose_env(&s, &c, &sess, &b.section, b.engine).await;
     let mut new_symbols: Vec<String> = vec![];
     let mut out: Vec<ds::DraftPara> = vec![];
+    forget_removed(&c.ws, &c.dir, &b.section, &paras.iter().map(|p| p.id.as_str()).collect::<Vec<_>>());
     for (k, p) in paras.iter().enumerate() {
         let earlier: Vec<String> = out.iter().map(|d| d.text.clone()).collect();
         match compose_one(&s, &c, &sess, &env, p, k, paras.len(), &earlier, "").await {

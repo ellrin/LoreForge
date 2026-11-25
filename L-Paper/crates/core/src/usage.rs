@@ -68,6 +68,17 @@ impl Usage {
         }
     }
 
+    /// Drop the records of `section` whose paragraph is not in `ids` (removed from the outline:
+    /// what it said no longer stands in the section).
+    pub fn keep(&mut self, paper: &str, section: &str, ids: &[&str]) {
+        if let Some(p) = self.papers.get_mut(paper) {
+            p.retain(|para, _| section_of(para) != section || para.split_once('/').is_some_and(|(_, id)| ids.contains(&id)));
+            if p.is_empty() {
+                self.papers.remove(paper);
+            }
+        }
+    }
+
     /// The counts as paragraph `para` (`section/id`) of `paper` sees them: its own section only.
     pub fn seen(&self, paper: &str, para: &str) -> Seen {
         let mut s = Seen::default();
@@ -224,6 +235,16 @@ mod tests {
         let single = phrase("P5", "{a} is set to {b}.");
         u.record("paper", "Methods/b", vec!["P5".into()]);
         assert_eq!(u.seen("paper", "Methods/c").penalty(&single, &vs), WORN_PENALTY);
+    }
+
+    #[test]
+    fn a_paragraph_taken_out_of_the_section_no_longer_counts() {
+        let mut u = Usage::default();
+        u.record("paper", "Methods/p1", vec!["P1".into()]);
+        u.record("paper", "Methods/p2", vec!["P1#V1".into()]);
+        u.record("paper", "Results/p2", vec!["P1".into()]);
+        u.keep("paper", "Methods", &["p2", "p3"]);
+        assert_eq!(u.papers["paper"].keys().collect::<Vec<_>>(), ["Methods/p2", "Results/p2"]);
     }
 
     #[test]

@@ -708,7 +708,13 @@ struct ComposeReply {
 }
 
 async fn compose_paragraph(State(s): State<Shared>, Json(body): Json<ComposeBody>) -> impl IntoResponse {
-    let (req, choice) = (body.req, body.engine);
+    let (mut req, choice) = (body.req, body.engine);
+    // no paper behind this page: the points and a count of the asks decide which wording of a
+    // sentence goes out, so his own template is not the first every time and asking again turns it
+    if req.turn == 0 {
+        static ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        req.turn = pc_core::usage::seed(&[&req.points]).wrapping_add(ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    }
     let (points, refs, prompt, guard) = {
         let l = s.loaded.read().await;
         let Some(p) = &l.profile else {

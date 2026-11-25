@@ -706,6 +706,7 @@ async fn write_section(s: &Shared, c: &Ctx, _sec: &str, ids: &[String], force: b
             let kind = if i.kind == "table" { "table" } else { "figure" };
             pc_core::draft::figures::placeholder(&pc_core::draft::figures::PlannedFloat { id: i.id.clone(), kind: kind.into(), label: i.label.clone(), title: i.title.clone(), ..Default::default() })
         }));
+        super::forget_removed(&c.ws, &c.dir, &env.section, &section_paras.iter().map(|x| x.id.as_str()).collect::<Vec<_>>());
         let more = skp::write_more(&k, id);
         let r = super::compose_one(s, c, &sess, &env, &skp::outline_para(&p), at, section_paras.len(), &earlier, &more).await;
         if r.is_err() {
