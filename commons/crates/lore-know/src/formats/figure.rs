@@ -574,7 +574,7 @@ fn read_template(v: &Value) -> Result<ModuleTemplate> {
 /// Write `<flow_dir>/modules/<kind>/<style>.json`, the file [`Library::load_dir`] reads, and
 /// return its path relative to `flow_dir`. `template_json` is a [`ModuleTemplate`] (its `kind`
 /// and `style` must be absent, empty or equal to the arguments); `level` (`""` = module) is
-/// kept in the file as an extra `"level"` key the flow tool ignores. An existing file is kept
+/// kept in the file as its `"level"`. An existing file is kept
 /// unless `replace`.
 pub fn save_drawing(flow_dir: &Path, kind: &str, style: &str, template_json: &Value, level_: &str, replace: bool) -> Result<PathBuf> {
     if !valid_id(kind) || !valid_id(style) {
@@ -592,6 +592,8 @@ pub fn save_drawing(flow_dir: &Path, kind: &str, style: &str, template_json: &Va
     }
     t.kind = kind.into();
     t.style = style.into();
+    // the level given here is the one kept (the template now carries its own; a module says none)
+    t.level = String::new();
     // exactly what the flow tool checks when it loads a drawing
     Library::default().add(t.clone()).map_err(KnowError::Invalid)?;
     let rel = PathBuf::from("modules").join(kind).join(format!("{style}.json"));
