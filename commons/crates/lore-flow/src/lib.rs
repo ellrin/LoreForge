@@ -29,6 +29,7 @@ pub mod build;
 pub mod discuss;
 pub mod dsl;
 pub mod figure;
+pub mod knowledge;
 pub mod finish;
 pub mod layout;
 #[cfg(feature = "llm")]

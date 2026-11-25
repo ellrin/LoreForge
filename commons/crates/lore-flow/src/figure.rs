@@ -76,6 +76,16 @@ pub struct FlowSpec {
     /// The discussion that led here (kept so the editor re-opens on it).
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub discussion: Value,
+    /// Blocks the author moved by hand: node id → how far from where the layout put it
+    /// (x, y in pt at the figure's natural size). The layout still places everything; a moved
+    /// block is shifted afterwards and every line is routed again, so its arrows follow. An id
+    /// the text no longer has is ignored and dropped on the next save.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub place: BTreeMap<String, [f64; 2]>,
+    /// The author's choices for single lines, by [`edge_key`]: which connection point each end
+    /// uses and where the line turns. A key the text no longer has is ignored.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ends: BTreeMap<String, EdgeEnds>,
     /// A timeline instead of a data flow ([`crate::timeline`]): when set, `dsl` and the fields
     /// of the flow layout are not read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,6 +93,36 @@ pub struct FlowSpec {
     /// Keys a newer editor wrote: kept.
     #[serde(flatten)]
     pub other: BTreeMap<String, Value>,
+}
+
+/// A block's connection points: five on each side (corner, quarter, middle, three quarters,
+/// corner), sixteen in all. 0–3 are the middles in PowerPoint's order (top, left, bottom,
+/// right), so a line drawn before there were sixteen still ends where it did; 4–15 go
+/// clockwise from the top-left corner: 4 top-left, 5 top ¼, 6 top ¾, 7 top-right, 8 right ¼,
+/// 9 right ¾, 10 bottom-right, 11 bottom ¾, 12 bottom ¼, 13 bottom-left, 14 left ¾, 15 left ¼.
+/// The same numbering as `lore_canvas::geom::sites` of a rectangle.
+pub const SITES: usize = 16;
+
+/// The key of an edge in [`FlowSpec::ends`]: `from>to` for the first edge between two nodes in
+/// the text's order, `from>to#2` for the second, and so on (edges have no id of their own).
+pub fn edge_key(from: &str, to: &str, nth: usize) -> String {
+    if nth <= 1 { format!("{from}>{to}") } else { format!("{from}>{to}#{nth}") }
+}
+
+/// The author's choices for one line. `None` / empty = the router decides.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct EdgeEnds {
+    /// The connection point (0..[`SITES`]) the line leaves its first block from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<u8>,
+    /// The connection point it arrives at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<u8>,
+    /// Where the line turns, in order: the x of a vertical run or the y of a horizontal run
+    /// (pt at the figure's natural size). Empty = the router's own corners.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
