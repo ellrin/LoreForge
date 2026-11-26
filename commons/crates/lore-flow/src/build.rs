@@ -172,8 +172,8 @@ pub fn fit_connector(pts: &[(f64, f64)]) -> Option<(String, Frame, BTreeMap<Stri
 }
 
 /// The colour a line names (`Edge.color`): a name's strong line colour, or the hex itself.
-fn own_line_colour(name: &str) -> Option<String> {
-    crate::theme::named(name).map(|(_, line)| line)
+fn own_line_colour(name: &str, theme: &Theme) -> Option<String> {
+    theme.tint(name).map(|(_, line)| line)
 }
 
 fn is_hex(s: &str) -> bool {
@@ -231,7 +231,7 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         let styled = own.is_some_and(|q| !q.line.is_empty() || !q.tint.is_empty() || q.round);
         let mut o = if let Some(q) = own.filter(|_| styled) {
             // the panel's own options: drawn like a region's frame
-            let named = crate::theme::named(&q.tint);
+            let named = theme.tint(&q.tint);
             let fill = named.as_ref().map(|(f, _)| Paint::solid(f)).unwrap_or(Paint::None);
             let round = theme.corners.map(|c| c.panel != 0.0).unwrap_or(q.round);
             let mut o = modules::shape("", if round { "roundRect" } else { "rect" }, r.x, r.y, r.w, r.h, fill, None);
@@ -319,10 +319,13 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
     // regions: outer first, so an inner tint lies over an outer one; plain shapes under the nodes
     for rb in &lay.regions {
         let r = &rb.rect;
-        let own = crate::theme::named(&rb.tint);
-        let fill = match &own {
-            Some((f, _)) => Paint::solid(f),
-            None => Paint::None,
+        let own = theme.tint(&rb.tint);
+        let mid = theme.tint_mid(&rb.tint).filter(|_| theme.region.soft);
+        let inner = rb.depth > 0;
+        let fill = match (&own, &mid) {
+            (Some(_), Some(m)) if inner => Paint::solid(m),
+            (Some((f, _)), _) => Paint::solid(f),
+            _ => Paint::None,
         };
         // a corner scheme decides over the region's own `round`
         let radius = match theme.corners {
@@ -331,19 +334,22 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         };
         let prst = if radius != 0.0 { "roundRect" } else { "rect" };
         let mut o = modules::shape("", prst, r.x, r.y, r.w, r.h, fill, None);
-        let colour = match &own {
-            Some((_, l)) if !is_hex(&rb.tint) => l.clone(),
+        let colour = match (&own, &mid) {
+            (Some(_), Some(m)) if !inner && !is_hex(&rb.tint) => m.clone(),
+            (Some((_, l)), _) if !is_hex(&rb.tint) => l.clone(),
             _ => theme.colors.muted.clone(),
         };
         let (dash, on) = match rb.line.as_str() {
             "none" => ("solid", false),
             "dashed" => ("dash", true),
             "dotted" => ("sysDot", true),
+            _ if inner && !theme.region.inner_dash.is_empty() => (theme.region.inner_dash.as_str(), true),
             _ => ("solid", true),
         };
+        let weight = if inner { theme.region.inner_w } else { theme.region.line_w };
         if let Some(sp) = o.kind.sp_mut() {
             if on {
-                let mut st = Stroke::new(&colour, (1.0 * k).max(0.5));
+                let mut st = Stroke::new(&colour, (weight * k).max(0.5));
                 st.dash = dash.into();
                 sp.line = Some(st);
             }
@@ -358,7 +364,11 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         if let Some(t) = &rb.title_rect
             && !rb.title.is_empty()
         {
-            let ty = cx.ty(1.0, true, &theme.colors.ink);
+            let title_colour = match &own {
+                Some((_, l)) if theme.region.title_tint && !is_hex(&rb.tint) => l.clone(),
+                _ => theme.colors.ink.clone(),
+            };
+            let ty = cx.ty(1.0, true, &title_colour);
             let (mut o, _, _) = cx.text("", &rb.title, &ty, t.cx(), t.y);
             o.frame = modules::frame(t.x, t.y, t.w, t.h);
             let align = if rb.title_at == "top-left" || rb.title_at.is_empty() { "l" } else { "ctr" };
@@ -401,7 +411,7 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         let name = format!("flow:{fig}/edge:{}-{}", e.from, e.to);
         let mut own: Option<String> = None;
         if !e.color.trim().is_empty() {
-            own = own_line_colour(&e.color);
+            own = own_line_colour(&e.color, theme);
             if own.is_none() {
                 warnings.push(format!("{} → {}: 不認得的顏色 {}", e.from, e.to, e.color));
             }

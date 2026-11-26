@@ -115,8 +115,14 @@ gives the built-in theme.
 region in a region, `data` = blocks of role input/data/output/gt, `step` = other rectangles,
 `loss`; `0` = square, negative = pill). With one, the theme decides the corners of panel
 frames, region frames, boxes and losses, over the figure's own `round` words; a block's own
-`radius=` still wins. Without one nothing changes. Saved library blocks keep the corners
-they were drawn with.
+`radius=` still wins. Without one nothing changes. A saved library block follows the style when drawn: its rounded
+rectangles take the `step` radius (a pill stays a pill), and with `[node] levels = [0.6, 1.1, 1.6]`
+each of its strokes is drawn at the nearest listed weight. The saved file is not changed.
+
+`[tints.<name>] fill / mid / line` are the palette's named colours: what `tint=blue`, `fill=blue`
+or a line's `color=blue` means in this theme (a name not listed keeps the built-in pair).
+`[region] line_w / inner_w / inner_dash / soft / title_tint` draws region frames: `soft` outlines
+a region in its tint's `mid` and fills a region inside a region with it.
 
 ## Variables
 

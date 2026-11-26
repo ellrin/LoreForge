@@ -2243,3 +2243,38 @@ fn a_saved_block_takes_the_styles_weights_and_corners() {
     assert_eq!(adj(&part(&styled, "thin")), 0.0, "what the block rounded follows the scheme");
     assert_eq!(adj(&part(&styled, "pill")), 50_000.0, "a pill stays a pill");
 }
+
+#[test]
+fn a_palette_names_the_tints_and_a_style_the_region_frames() {
+    let soft = "[region]\nline_w = 2.2\ninner_w = 1.4\ninner_dash = \"dash\"\nsoft = true\ntitle_tint = true\n[tints.blue]\nfill = \"E6F0FB\"\nmid = \"BFD8F3\"\nline = \"6C8FD6\"\n";
+    let t = Theme::from_toml(soft).unwrap();
+    assert_eq!(t.tint("Blue"), Some(("E6F0FB".into(), "6C8FD6".into())));
+    assert_eq!(t.tint("green"), lore_flow::theme::named("green"), "a name the palette does not list keeps its colours");
+    assert_eq!(Theme::classic_bw().tint("blue"), lore_flow::theme::named("blue"));
+    let (g, mut lay, routes) = laid("fig f\na: box \"A\"\n");
+    let rect = lay.nodes[0].rect.inflate(20.0);
+    for (id, depth) in [("outer", 0), ("inner", 1)] {
+        let mut rb = rbox(id, rect, depth);
+        rb.tint = "blue".into();
+        lay.regions.push(rb);
+    }
+    let b = built_with(&t, &g, &lay, &routes);
+    let sp = |name: &str| b.objects[index(&b, name)].kind.sp().unwrap().clone();
+    let (o, i) = (sp("flow:f/region:outer"), sp("flow:f/region:inner"));
+    // outer: pale fill, outlined a step deeper, thick; inner: the deeper fill, strong dashed outline
+    assert_eq!(o.fill, lore_canvas::Paint::solid("E6F0FB"));
+    assert_eq!(o.line.as_ref().unwrap().color, "BFD8F3");
+    assert_eq!(i.fill, lore_canvas::Paint::solid("BFD8F3"));
+    let il = i.line.as_ref().unwrap();
+    assert_eq!((il.color.as_str(), il.dash.as_str()), ("6C8FD6", "dash"));
+    assert!((o.line.as_ref().unwrap().width_pt / il.width_pt - 2.2 / 1.4).abs() < 0.01);
+    // a block and a line that say blue take the palette's blue
+    let body = body_with(&t, "a: box \"A\" fill=blue");
+    assert_eq!(body.kind.sp().unwrap().fill, lore_canvas::Paint::solid("E6F0FB"));
+    // the built-in theme draws a tinted region as it did
+    let b = built(&g, &lay, &routes);
+    let o = b.objects[index(&b, "flow:f/region:outer")].kind.sp().unwrap();
+    let (pale, strong) = lore_flow::theme::named("blue").unwrap();
+    assert_eq!(o.fill, lore_canvas::Paint::solid(&pale));
+    assert!(o.line.as_ref().unwrap().color.eq_ignore_ascii_case(&strong));
+}

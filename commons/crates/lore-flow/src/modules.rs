@@ -1083,7 +1083,7 @@ fn gen_layer_bars(n: &Node, cx: &Ctx, warn: &mut Vec<String>) -> Core {
             if matches!(s.as_str(), "true" | "yes" | "on") {
                 Some(cx.theme.colors.ink.clone())
             } else {
-                match crate::theme::named(&s) {
+                match cx.theme.tint(&s) {
                     Some((_, line)) => Some(line),
                     None => {
                         warn.push(format!("{}: 不認得的顏色 {}", n.id, s));
@@ -1096,7 +1096,7 @@ fn gen_layer_bars(n: &Node, cx: &Ctx, warn: &mut Vec<String>) -> Core {
     let mut bad: Vec<String> = Vec::new();
     let mut texts: Vec<Object> = Vec::new();
     for (i, name) in layers.iter().enumerate() {
-        let mine: Option<(String, String)> = own.get(i).or(own.last()).map(String::as_str).filter(|c| c.trim() != "_").and_then(|c| match crate::theme::named(c) {
+        let mine: Option<(String, String)> = own.get(i).or(own.last()).map(String::as_str).filter(|c| c.trim() != "_").and_then(|c| match cx.theme.tint(c) {
             Some(p) => Some(p),
             None => {
                 if !bad.iter().any(|b| b == c) {
@@ -1665,9 +1665,9 @@ struct Own {
 }
 
 /// A colour param as written (name or hex) -> (fill, line) of its name, or itself.
-fn own_pair(n: &Node, k: &str) -> Option<(String, String)> {
+fn own_pair(n: &Node, k: &str, theme: &Theme) -> Option<(String, String)> {
     let v = n.str(k)?.trim();
-    if v == "none" { Some(("none".into(), "none".into())) } else { crate::theme::named(v) }
+    if v == "none" { Some(("none".into(), "none".into())) } else { theme.tint(v) }
 }
 
 /// Turn the `fill=` / `line=` / `text=` params of a block into hex colours, once, where the
@@ -1675,23 +1675,23 @@ fn own_pair(n: &Node, k: &str) -> Option<(String, String)> {
 /// line, `line=blue` only the line, a hex only what it names. The generators and the saved
 /// drawings (`role:fill` …) then read the block's own colour first. A multi-colour kind
 /// (a layer legend, `classes=`) keeps its own per-class colours.
-fn own_colours(n: &mut Node) -> Own {
+fn own_colours(n: &mut Node, theme: &Theme) -> Own {
     let by_name = |v: Option<&str>| v.is_some_and(|v| {
         let h = v.trim().trim_start_matches('#');
         !(h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit())) && h != "none"
     });
     let fill_named = by_name(n.str("fill"));
     let line_given = n.str("line").is_some();
-    if let Some((fill, line)) = own_pair(n, "fill") {
+    if let Some((fill, line)) = own_pair(n, "fill", theme) {
         n.params.insert("fill".into(), fill.into());
         if fill_named && !line_given {
             n.params.insert("line".into(), line.into());
         }
     }
-    if let Some((_, line)) = own_pair(n, "line") {
+    if let Some((_, line)) = own_pair(n, "line", theme) {
         n.params.insert("line".into(), line.into());
     }
-    let text = own_pair(n, "text").map(|(_, c)| c).filter(|c| c != "none");
+    let text = own_pair(n, "text", theme).map(|(_, c)| c).filter(|c| c != "none");
     Own { text }
 }
 
@@ -1707,7 +1707,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         n.var.clear();
     }
     // the block's own colours (a name or a hex) replace the theme's, for every kind
-    let own = own_colours(&mut n);
+    let own = own_colours(&mut n, cx.theme);
     let themed;
     let own_cx;
     let cx = if let Some(text) = own.text {

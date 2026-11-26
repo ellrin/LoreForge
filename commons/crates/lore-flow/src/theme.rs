@@ -29,6 +29,13 @@ pub struct Theme {
     pub layers: BTreeMap<String, LayerStyle>,
     pub shade: Shade,
     pub space: Space,
+    /// The palette's named colours (`blue`, `green` …): what a figure's `tint=blue` or
+    /// `fill=blue` means in this theme. A name not listed keeps [`named`]'s colours.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tints: BTreeMap<String, Tint>,
+    /// How region frames are drawn.
+    #[serde(default)]
+    pub region: RegionStyle,
     /// Corner radii by level, in points. Absent = every part keeps its own radius
     /// (`panel.radius`, `node.radius`, a region's `round`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,6 +112,38 @@ pub struct Colors {
     pub image: String,
     pub tensor: String,
     pub cycle: Vec<String>,
+}
+
+/// One named colour of a palette: the pale fill, a step deeper (the fill of a region inside
+/// a region, the outline of a soft frame), and the strong colour (lines, titles).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Tint {
+    pub fill: String,
+    #[serde(default)]
+    pub mid: String,
+    pub line: String,
+}
+
+/// Region frames. The defaults draw what was always drawn (1 pt, the tint's strong colour).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RegionStyle {
+    /// Line weight of a region directly in a panel, in points.
+    pub line_w: f64,
+    /// Line weight of a region inside a region.
+    pub inner_w: f64,
+    /// Dash of a region inside a region when it names none (`""` = solid).
+    pub inner_dash: String,
+    /// A pale frame: a region in a panel is outlined in its tint's `mid`, and a region inside
+    /// a region is filled with `mid` and outlined in the strong colour.
+    pub soft: bool,
+    /// The title takes the tint's strong colour instead of the ink.
+    pub title_tint: bool,
+}
+impl Default for RegionStyle {
+    fn default() -> Self {
+        RegionStyle { line_w: 1.0, inner_w: 1.0, inner_dash: String::new(), soft: false, title_tint: false }
+    }
 }
 
 /// A corner scheme: one radius per level, in points at natural size. `0` = square,
@@ -291,6 +330,12 @@ impl Theme {
         for l in self.layers.values() {
             cols.push(("layers.*.color", &l.color));
         }
+        for t in self.tints.values() {
+            cols.extend([("tints.*.fill", t.fill.as_str()), ("tints.*.line", t.line.as_str())]);
+            if !t.mid.is_empty() {
+                cols.push(("tints.*.mid", t.mid.as_str()));
+            }
+        }
         if let Some((k, v)) = cols.into_iter().find(|(_, v)| !hex_ok(v)) {
             return Err(format!("theme: {k} = {v:?} is not a 6-digit hex colour"));
         }
@@ -303,6 +348,17 @@ impl Theme {
         Ok(())
     }
 
+    /// (pale fill, strong line) of a colour name or hex in this theme's palette.
+    pub fn tint(&self, name: &str) -> Option<(String, String)> {
+        match self.tints.get(name.trim().to_ascii_lowercase().as_str()) {
+            Some(t) => Some((t.fill.clone(), t.line.clone())),
+            None => named(name),
+        }
+    }
+    /// The step between a tint's fill and its line; `None` when the palette gives none.
+    pub fn tint_mid(&self, name: &str) -> Option<String> {
+        self.tints.get(name.trim().to_ascii_lowercase().as_str()).map(|t| t.mid.clone()).filter(|m| !m.is_empty())
+    }
     pub fn role(&self, role: &str) -> &RoleStyle {
         self.roles.get(role).or_else(|| self.roles.get("default")).expect("checked")
     }
