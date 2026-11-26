@@ -32,4 +32,11 @@ const f = { x: 0, y: 0, w: 400, h: 400 };
 assert.equal(ctx.sites({ type: "shape", frame: f, geom: { prst: "wave" } }).length, 4);
 assert.equal(ctx.sites({ type: "text", frame: f, geom: { prst: "rect" } }).length, 16);
 assert.equal(ctx.sites({ type: "shape", frame: f, geom: { prst: "custom", path: "M0 0 L1 0 L0.5 1 Z" } }).length, 3);
+// a group with a child named `port` (a flow block) connects at the port's rectangle, mapped from
+// the group's child space: same numbers as lore-canvas's group_with_a_port_connects_at_the_port
+const g = { type: "group", frame: { x: 1000, y: 2000, w: 400, h: 600 }, ch: { x: 0, y: 0, w: 200, h: 300 },
+  children: [{ name: "flow:f/n/port", type: "shape", frame: { x: 0, y: 50, w: 200, h: 100 }, geom: { prst: "rect" } }] };
+const gs = ctx.sites(g);
+assert.deepEqual(Array.from(gs[0], Math.round), [1200, 2100], "top middle of the port");
+assert.deepEqual(Array.from(gs[2], Math.round), [1200, 2300], "bottom middle of the port");
 console.log(`sites.test.js: ${cases.length} shapes ok`);

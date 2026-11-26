@@ -210,7 +210,7 @@ impl<'c, 'a> Pen<'c, 'a> {
     }
     pub fn core(&mut self, w: f64, h: f64, label: LabelPos) -> Core {
         let k = self.k();
-        Core { w: w * k, h: h * k, objs: std::mem::take(&mut self.objs), single: false, ellipse: false, label, legend: std::mem::take(&mut self.legend), anchors: std::mem::take(&mut self.anchors) }
+        Core { w: w * k, h: h * k, objs: std::mem::take(&mut self.objs), single: false, ellipse: false, label, legend: std::mem::take(&mut self.legend), anchors: std::mem::take(&mut self.anchors), art: None }
     }
 }
 

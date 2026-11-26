@@ -143,6 +143,8 @@ pub struct Placed {
     pub reserve: Rect,
     /// Centre line of the drawn body: where lines enter the left and right sides.
     pub port_y: f64,
+    /// The drawn picture without its words: where lines connect (the block's `port`).
+    pub art: Rect,
     /// Index into [`Layout::panels`].
     pub panel: usize,
     pub layer: usize,
@@ -159,15 +161,24 @@ pub struct Placed {
 }
 
 impl Placed {
+    /// Move the block, its room, its middle line and its picture together.
+    pub fn shift(&mut self, dx: f64, dy: f64) {
+        for r in [&mut self.rect, &mut self.reserve, &mut self.art] {
+            r.x += dx;
+            r.y += dy;
+        }
+        self.port_y += dy;
+    }
+
     /// Where a line meets this side: the middle of the top and bottom, the
     /// body's centre line on the left and right.
     pub fn port(&self, side: crate::route::Side) -> (f64, f64) {
         use crate::route::Side;
         match side {
-            Side::Top => (self.rect.cx(), self.rect.y),
-            Side::Bottom => (self.rect.cx(), self.rect.bottom()),
-            Side::Left => (self.rect.x, self.port_y),
-            Side::Right => (self.rect.right(), self.port_y),
+            Side::Top => (self.art.cx(), self.art.y),
+            Side::Bottom => (self.art.cx(), self.art.bottom()),
+            Side::Left => (self.art.x, self.port_y),
+            Side::Right => (self.art.right(), self.port_y),
         }
     }
 }
@@ -244,6 +255,7 @@ struct Size {
     h: f64,
     reserve_w: f64,
     cy: f64,
+    art: (f64, f64, f64, f64),
     single: bool,
     ellipse: bool,
     legend: Vec<crate::art::Swatch>,
@@ -594,12 +606,9 @@ fn shift_from(nodes: &mut [Option<Placed>], panels: &mut [PanelBox], rects: &mut
         let room = n.rect.union(&n.reserve);
         if (if vertical { room.y } else { room.x }) >= cut - 1e-6 {
             if vertical {
-                n.rect.y += d;
-                n.reserve.y += d;
-                n.port_y += d;
+                n.shift(0.0, d);
             } else {
-                n.rect.x += d;
-                n.reserve.x += d;
+                n.shift(d, 0.0);
             }
         }
     }
@@ -625,11 +634,7 @@ fn shift_from(nodes: &mut [Option<Placed>], panels: &mut [PanelBox], rects: &mut
             t.y += dy;
         }
         for n in nodes.iter_mut().flatten().filter(|n| n.panel == q) {
-            n.rect.x += dx;
-            n.reserve.x += dx;
-            n.rect.y += dy;
-            n.reserve.y += dy;
-            n.port_y += dy;
+            n.shift(dx, dy);
         }
     }
 }
@@ -729,9 +734,7 @@ fn level_panels(g: &Graph, needs: &[PanelNeed], nodes: &mut [Option<Placed>], pa
                 continue;
             }
             for n in nodes.iter_mut().flatten().filter(|n| n.panel == p) {
-                n.rect.y += dy;
-                n.reserve.y += dy;
-                n.port_y += dy;
+                n.shift(0.0, dy);
             }
             moved.insert(pa.panel);
             moved.insert(pb.panel);
@@ -1144,11 +1147,7 @@ fn apply_place(lay: &mut Layout, g: &Graph, opt: &LayoutOptions, theme: &Theme) 
         if lo <= hi {
             dy = dy.clamp(lo, hi);
         }
-        n.rect.x += dx;
-        n.rect.y += dy;
-        n.reserve.x += dx;
-        n.reserve.y += dy;
-        n.port_y += dy;
+        n.shift(dx, dy);
         let u = n.rect.union(&n.reserve).inflate(margin);
         let p = &mut lay.panels[n.panel];
         let grown = p.rect.union(&u);
@@ -1209,7 +1208,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         .map(|n| {
             let cx = Ctx { theme, vars, math: &NoMath, lib, k: 1.0, symmetric: !down_panels.contains(n.panel.as_str()), image_size };
             let b = modules::make(n, &cx);
-            Size { w: b.w, h: b.h, reserve_w: b.reserve_w, cy: b.cy, single: b.single, ellipse: b.ellipse, legend: b.legend }
+            Size { w: b.w, h: b.h, reserve_w: b.reserve_w, cy: b.cy, art: b.art, single: b.single, ellipse: b.ellipse, legend: b.legend }
         })
         .collect();
 
@@ -1342,7 +1341,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
             let rect = Rect::new(ox + p.x, oy + p.y, p.w, p.h);
             let s = &sizes[ni];
             let reserve = Rect::new(rect.cx() - s.reserve_w / 2.0, rect.y, s.reserve_w, rect.h);
-            nodes[ni] = Some(Placed { rect, reserve, port_y: rect.y + s.cy, panel: i, layer: need.plan.layer[&ni], lane: need.plan.lane[&ni], single: s.single, ellipse: s.ellipse, ends: BTreeMap::new(), origin: (0.0, 0.0) });
+            nodes[ni] = Some(Placed { rect, reserve, port_y: rect.y + s.cy, art: Rect::new(rect.x + s.art.0, rect.y + s.art.1, s.art.2, s.art.3), panel: i, layer: need.plan.layer[&ni], lane: need.plan.lane[&ni], single: s.single, ellipse: s.ellipse, ends: BTreeMap::new(), origin: (0.0, 0.0) });
         }
         let title_rect = (!need.title.is_empty() && !need.bare && need.at != "none").then(|| {
             let tw = text::width(&need.title, title_size) * 1.06;
@@ -1507,7 +1506,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         .into_iter()
         .map(|p| {
             let p = p.expect("every node is in a panel");
-            Placed { rect: p.rect.map(ox, oy, k), reserve: p.reserve.map(ox, oy, k), port_y: oy + p.port_y * k, origin: (ox, oy), ..p }
+            Placed { rect: p.rect.map(ox, oy, k), reserve: p.reserve.map(ox, oy, k), port_y: oy + p.port_y * k, art: p.art.map(ox, oy, k), origin: (ox, oy), ..p }
         })
         .collect();
     let mut nodes: Vec<Placed> = nodes;

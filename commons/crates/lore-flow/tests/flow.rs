@@ -2442,3 +2442,19 @@ fn the_look_check_finds_words_cut_by_their_shape() {
     let fits = vec![text_rect("cap", 0, &["Ok"])];
     assert!(lore_flow::look::check(&fits).words_cut.is_empty());
 }
+
+#[test]
+fn a_line_from_above_meets_the_picture_not_the_room_for_its_words() {
+    // an image whose words sit below it, fed from a block above
+    let src = "fig f\npanel p \"P\"\n  a: box \"A\" col=0 lane=0\n  x: image \"A long label under the picture\" caption=\"512 x 512\" col=0 lane=1\n  a -> x : data\n";
+    let (g, lay, routes) = laid(src);
+    let x = &lay.nodes[g.node_index("x").unwrap()];
+    assert!(x.art.y > x.rect.y + 1.0, "the picture sits below the room the frame keeps for symmetry: {:?} {:?}", x.art, x.rect);
+    let end = *routes[0].points.last().unwrap();
+    assert!((end.1 - x.art.y).abs() < 1e-6, "the line ends on the picture's top: {end:?} {:?}", x.art);
+    // and the block's port child is that picture, so the line stays glued to it in a slide
+    let b = built(&g, &lay, &routes);
+    let grp = b.objects.iter().find(|o| o.name == "flow:f/x").unwrap();
+    let s = lore_canvas::geom::sites(grp);
+    assert!((s[0].1 / lore_flow::modules::EMU_PT - x.art.y).abs() < 0.05, "top site {:?} vs art {:?}", s[0], x.art);
+}

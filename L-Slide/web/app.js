@@ -776,7 +776,14 @@ function presetSitesUnit(prst, adj, w, h, flipH, flipV) {
  *  can, cube, star5, plus, cloud): sixteen, see presetSitesUnit. Custom paths: one per vertex.
  *  A preset not known: 4 (0-3). */
 function sites(o) {
-  const f = o.frame;
+  let f = o.frame;
+  // a group that names one child `port` (a flow block: the drawn picture without its words)
+  // connects at that child's rectangle
+  const port = o.type === "group" && o.ch && o.ch.w > 0 && o.ch.h > 0 ? (o.children || []).find((c) => c.name === "port" || (c.name || "").endsWith("/port")) : null;
+  if (port) {
+    const sx = f.w / o.ch.w, sy = f.h / o.ch.h, p = port.frame;
+    f = { ...f, x: f.x + (p.x - o.ch.x) * sx, y: f.y + (p.y - o.ch.y) * sy, w: p.w * sx, h: p.h * sy };
+  }
   let pts;
   const verts = o.type !== "connector" && o.geom?.prst === "custom" && o.geom.path ? pathVertices(o.geom.path) : [];
   const prst = o.type === "connector" ? null : o.geom?.prst;

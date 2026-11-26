@@ -73,7 +73,18 @@ pub fn rotate(p: (f64, f64), c: (f64, f64), deg: f64) -> (f64, f64) {
 /// per vertex; a preset not known here keeps four (0–3 as above).
 pub fn sites(o: &Object) -> Vec<(f64, f64)> {
     let f = &o.frame;
-    let (x, y, w, h) = (f.x as f64, f.y as f64, f.w as f64, f.h as f64);
+    let (mut x, mut y, mut w, mut h) = (f.x as f64, f.y as f64, f.w as f64, f.h as f64);
+    // a group that names one child `port` (a flow block: the drawn picture without its words)
+    // connects at that child's rectangle
+    if let crate::model::Kind::Group(g) = &o.kind
+        && let Some(p) = g.children.iter().find(|c| c.name == "port" || c.name.ends_with("/port"))
+        && g.ch.w > 0
+        && g.ch.h > 0
+    {
+        let (sx, sy) = (w / g.ch.w as f64, h / g.ch.h as f64);
+        let pf = &p.frame;
+        (x, y, w, h) = (x + (pf.x - g.ch.x) as f64 * sx, y + (pf.y - g.ch.y) as f64 * sy, pf.w as f64 * sx, pf.h as f64 * sy);
+    }
     let prst = o.kind.sp().map(|s| s.geom.prst.as_str()).unwrap_or("rect");
     let sixteen = o.kind.sp().is_none() || matches!(prst, "rect" | "roundRect");
     let custom = o.kind.sp().filter(|s| s.geom.prst == "custom").and_then(|s| s.geom.path.as_deref()).map(path_vertices).unwrap_or_default();
@@ -750,6 +761,24 @@ mod tests {
         "triangle", "rtTriangle", "diamond", "parallelogram", "trapezoid", "pentagon", "hexagon", "octagon", "chevron", "homePlate",
         "rightArrow", "leftArrow", "upArrow", "downArrow", "leftRightArrow", "can", "cube", "star5", "plus", "cloud",
     ];
+
+    #[test]
+    fn group_with_a_port_connects_at_the_port() {
+        use crate::model::{GroupObj, Kind};
+        let mut port = with("rect", Frame::new(0, 50, 200, 100), &[]);
+        port.name = "flow:f/n/port".into();
+        let g = Object { id: 1, name: "flow:f/n".into(), frame: Frame::new(1000, 2000, 400, 600), hidden: false, ph: None, slot: None, kind: Kind::Group(GroupObj { ch: Frame::new(0, 0, 200, 300), children: vec![port], lock_aspect: false, data: None }), src: None };
+        let s = sites(&g);
+        assert_eq!(s.len(), 16);
+        assert_eq!((s[0].0.round(), s[0].1.round()), (1200.0, 2100.0), "top middle of the port");
+        assert_eq!((s[2].0.round(), s[2].1.round()), (1200.0, 2300.0), "bottom middle of the port");
+        // a group without a port connects at its own frame
+        let mut plain = g.clone();
+        if let Kind::Group(gr) = &mut plain.kind {
+            gr.children[0].name = "body".into();
+        }
+        assert_eq!((sites(&plain)[0].1).round(), 2000.0);
+    }
 
     fn with(prst: &str, f: Frame, adj: &[(&str, f64)]) -> Object {
         let mut o = shape(prst, f);

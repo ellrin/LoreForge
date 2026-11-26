@@ -393,6 +393,9 @@ pub struct Body {
     pub cy: f64,
     /// Width the module needs including text that overflows the frame.
     pub reserve_w: f64,
+    /// The drawn picture without its words, in the body's frame (x, y, w, h): where lines
+    /// connect (the `port` child). The whole body for a block that is one shape.
+    pub art: (f64, f64, f64, f64),
     /// Objects with ids 0 and part names (`""` = the body itself).
     pub objs: Vec<Object>,
     /// One shape, inserted without a group.
@@ -418,6 +421,9 @@ pub(crate) struct Core {
     pub legend: Vec<crate::art::Swatch>,
     /// Named points (scaled, in the core's frame) a matched pair joins up.
     pub anchors: Vec<(String, (f64, f64))>,
+    /// The part of the core's box the drawing really fills (x, y, w, h in the core's frame),
+    /// when it is smaller than the box; `None` = the whole box.
+    pub art: Option<(f64, f64, f64, f64)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -1876,7 +1882,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     let spill = words_width(&core.objs, core.w);
     if above.is_empty() && below.is_empty() && core.single {
         let (w, h) = (core.w, core.h);
-        return Body { w, h, cy: h / 2.0, reserve_w: w.max(spill), objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
+        return Body { w, h, cy: h / 2.0, reserve_w: w.max(spill), art: (0.0, 0.0, w, h), objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
     }
     let legend = core.legend;
     warn.extend(icon_problem(n));
@@ -1886,7 +1892,11 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     let strip = if cx.symmetric { top.max(bottom) } else { top };
     let mut objs = Vec::new();
     let (w, h) = (core.w, core.h + strip + if cx.symmetric { strip } else { bottom });
-    objs.push(shape("port", "rect", 0.0, 0.0, w, h, Paint::None, None));
+    // the port: the drawn picture, without the words above and below it, centred on the body's
+    // middle line so lines on the left and right meet the picture's middle
+    let (ax, ay, aw, ah) = core.art.unwrap_or((0.0, 0.0, core.w, core.h));
+    let art = (ax, strip + ay, aw, ah);
+    objs.push(shape("port", "rect", art.0, art.1, art.2, art.3, Paint::None, None));
     for mut o in core.objs {
         o.frame.y += emu(strip);
         if o.name.is_empty() {
@@ -1910,7 +1920,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         reserve_w = reserve_w.max(tw);
         objs.push(o);
     }
-    Body { w, h, cy: h / 2.0, reserve_w, objs, single: false, ellipse: false, legend, warn }
+    Body { w, h, cy: art.1 + art.3 / 2.0, reserve_w, art, objs, single: false, ellipse: false, legend, warn }
 }
 
 /// Wrap a body's objects into what goes on the slide: the single shape, or a

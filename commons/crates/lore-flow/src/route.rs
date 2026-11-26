@@ -301,7 +301,8 @@ pub fn sides_of(site: u8) -> Vec<(Side, usize)> {
 /// Where a connection point of a block is (the body's centre line on the left and right).
 pub fn site_point(n: &Placed, side: Side, slot: usize) -> (f64, f64) {
     let f = slot.min(4) as f64 * 0.25;
-    let r = &n.rect;
+    // the block's port: its drawn picture, without its words
+    let r = &n.art;
     match side {
         Side::Top => (r.x + r.w * f, r.y),
         Side::Bottom => (r.x + r.w * f, r.bottom()),
@@ -1371,7 +1372,7 @@ mod tests {
         for r in &moved.routes {
             let e = &g.edges[r.edge];
             if e.to == "b" {
-                assert!(on_boundary(*r.points.last().unwrap(), b1), "{:?}", r.points);
+                assert!(on_boundary(*r.points.last().unwrap(), &moved.layout.nodes[1].art), "{:?}", r.points);
                 ended += 1;
             }
             if e.from == "b" {
@@ -1815,7 +1816,7 @@ mod tests {
         let f = draw_graph(&g, &PLACE_D);
         let r = branch_of(&g, &f);
         let d = g.node_index("d").unwrap();
-        assert!(on_boundary(*r.points.last().unwrap(), &f.layout.nodes[d].rect), "{:?}", r.points);
+        assert!(on_boundary(*r.points.last().unwrap(), &f.layout.nodes[d].art), "{:?} art {:?} rect {:?}", r.points, f.layout.nodes[d].art, f.layout.nodes[d].rect);
     }
 
     #[test]
@@ -1870,7 +1871,7 @@ mod tests {
         assert!(r1.branch && r2.branch && !r1.forced && !r2.forced, "{r1:?} {r2:?}");
         assert!(on_path(r2.points[0], &r1.points), "{:?} not on {:?}", r2.points[0], r1.points);
         let e = g.node_index("e").unwrap();
-        assert!(on_boundary(*r2.points.last().unwrap(), &f.layout.nodes[e].rect));
+        assert!(on_boundary(*r2.points.last().unwrap(), &f.layout.nodes[e].art));
         assert_eq!(junctions(&g, &f.routes).len(), 2);
     }
 
@@ -1887,8 +1888,8 @@ mod tests {
         let r = routes.iter().find(|r| g.edges[r.edge].to == "d").unwrap();
         let (a, d) = (g.node_index("a").unwrap(), g.node_index("d").unwrap());
         assert!(!r.branch);
-        assert!(on_boundary(r.points[0], &lay.nodes[a].rect));
-        assert!(on_boundary(*r.points.last().unwrap(), &lay.nodes[d].rect));
+        assert!(on_boundary(r.points[0], &lay.nodes[a].art));
+        assert!(on_boundary(*r.points.last().unwrap(), &lay.nodes[d].art));
         assert!(r.warnings.iter().any(|w| w.contains("找不到要岔出的線")), "{:?}", r.warnings);
         // a cycle passes the check and is the same
         let mut g = dsl::parse("fig m\na: box \"A\"\nb: box \"B\"\nc: box \"C\"\na -> b\nb -> c\n").unwrap();
