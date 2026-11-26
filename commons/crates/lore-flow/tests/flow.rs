@@ -2488,3 +2488,38 @@ fn a_tinted_panel_keeps_a_pale_frame_under_soft_frames() {
     let (_, strong) = lore_flow::theme::named("blue").unwrap();
     assert!(b.objects[index(&b, "flow:f/panel:p")].kind.sp().unwrap().line.as_ref().unwrap().color.eq_ignore_ascii_case(&strong));
 }
+
+#[test]
+fn the_look_check_finds_loose_ends_lines_behind_blocks_and_lines_on_lines() {
+    let src = "fig f\npanel p \"P\"\n  a: box \"A\" col=0 lane=0\n  m: box \"M\" col=1 lane=0\n  b: box \"B\" col=2 lane=0\n  c: box \"C\" col=0 lane=1\n  d: box \"D\" col=2 lane=1\n  a -> b : data\n  c -> d : side\n";
+    let (g, lay, mut routes) = laid(src);
+    let clean = lore_flow::look::check(&built(&g, &lay, &routes).objects);
+    assert!(clean.loose_ends.is_empty() && clean.on_line.is_empty(), "{:?} {:?}", clean.loose_ends, clean.on_line);
+    let (ra, rb, rc, rd) = (lay.nodes[0].rect, lay.nodes[2].rect, lay.nodes[3].rect, lay.nodes[4].rect);
+    // a -> b straight through M: behind a block
+    routes[0].points = vec![(ra.right(), ra.cy()), (rb.x, ra.cy())];
+    let rep = lore_flow::look::check(&built(&g, &lay, &routes).objects);
+    assert_eq!(rep.behind_block.len(), 1, "{:?}", rep.behind_block);
+    // c -> d stops 30 pt short of D: a loose end
+    routes[1].points = vec![(rc.right(), rc.cy()), (rd.x - 30.0, rc.cy())];
+    let rep = lore_flow::look::check(&built(&g, &lay, &routes).objects);
+    assert_eq!(rep.loose_ends.len(), 1, "{:?}", rep.loose_ends);
+    assert_eq!(rep.loose_ends[0].other, "end");
+    // c -> d drawn along a -> b's track between the rows: a line on a line
+    let y = (ra.bottom() + rc.y) / 2.0;
+    routes[0].points = vec![(ra.cx(), ra.bottom()), (ra.cx(), y), (rb.cx(), y), (rb.cx(), rb.bottom())];
+    routes[1].points = vec![(rc.cx(), rc.y), (rc.cx(), y), (rd.cx(), y), (rd.cx(), rd.y)];
+    let rep = lore_flow::look::check(&built(&g, &lay, &routes).objects);
+    assert_eq!(rep.on_line.len(), 1, "{:?}", rep.on_line);
+}
+
+#[test]
+fn uneven_frames_and_small_text_are_measured() {
+    let (_, mut lay, _) = laid("fig f\narrange a b\npanel a \"A\"\n  x: box \"X\"\nend\npanel b \"B\"\n  y: box \"Y\"\nend\n");
+    assert_eq!(lore_flow::look::frames(&lay).0, 0);
+    lay.panels[1].rect.h += 12.0;
+    assert_eq!(lore_flow::look::frames(&lay).0, 1, "side by side, different bottoms");
+    let objs = vec![text_rect("t", 0, &["Words"])];
+    // 10 pt words in a figure 1000 pt wide are 5 pt when the figure is printed 500 pt wide
+    assert!((lore_flow::look::smallest_text(&objs, 1000.0, 500.0) - 5.0).abs() < 1e-6);
+}

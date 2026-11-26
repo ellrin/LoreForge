@@ -26,6 +26,56 @@ pub struct Report {
     /// Words that run past the shape they are written in (the shape's edge cuts them), or a
     /// frame's border that runs through words.
     pub words_cut: Vec<Hit>,
+    /// A figure line whose start or end touches nothing: no block's drawing, no words of a
+    /// block, no other line.
+    pub loose_ends: Vec<Hit>,
+    /// Two figure lines that share no block and run on top of each other for a stretch.
+    pub on_line: Vec<Hit>,
+    /// A figure line that passes behind a block that is not one of its ends.
+    pub behind_block: Vec<Hit>,
+}
+
+/// `flow:<fig>/edge:<from>-<to>` → (from, to); `None` for a label, a junction dot or anything else.
+fn edge_of(name: &str) -> Option<(&str, &str)> {
+    let rest = name.split_once('/')?.1;
+    let e = rest.strip_prefix("edge:")?;
+    if e.contains('/') {
+        return None;
+    }
+    e.split_once('-')
+}
+
+/// The block an object belongs to (`flow:<fig>/<id>/…`), not a frame, a line or a legend.
+fn block_of(name: &str) -> Option<&str> {
+    let rest = name.split_once('/')?.1;
+    let id = rest.split('/').next()?;
+    (!id.contains(':')).then_some(id)
+}
+
+fn near(r: &Rect, p: (f64, f64), tol: f64) -> bool {
+    let g = r.inflate(tol);
+    p.0 >= g.x && p.0 <= g.right() && p.1 >= g.y && p.1 <= g.bottom()
+}
+
+/// Distance from a point to a segment.
+fn seg_dist(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 < 1e-9 { 0.0 } else { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0) };
+    ((p.0 - a.0 - t * dx).powi(2) + (p.1 - a.1 - t * dy).powi(2)).sqrt()
+}
+
+/// The length two axis-aligned segments run on top of each other (within 0.8 pt).
+fn overlap(a: ((f64, f64), (f64, f64)), b: ((f64, f64), (f64, f64))) -> f64 {
+    let horiz = |s: ((f64, f64), (f64, f64))| (s.0.1 - s.1.1).abs() < 0.3;
+    let vert = |s: ((f64, f64), (f64, f64))| (s.0.0 - s.1.0).abs() < 0.3;
+    if horiz(a) && horiz(b) && (a.0.1 - b.0.1).abs() < 0.8 {
+        (a.0.0.max(a.1.0).min(b.0.0.max(b.1.0)) - a.0.0.min(a.1.0).max(b.0.0.min(b.1.0))).max(0.0)
+    } else if vert(a) && vert(b) && (a.0.0 - b.0.0).abs() < 0.8 {
+        (a.0.1.max(a.1.1).min(b.0.1.max(b.1.1)) - a.0.1.min(a.1.1).max(b.0.1.min(b.1.1))).max(0.0)
+    } else {
+        0.0
+    }
 }
 
 enum Item {
@@ -219,6 +269,58 @@ pub fn check(objects: &[Object]) -> Report {
             }
         }
     }
+    // the figure's own lines: loose ends, lines on lines, lines behind blocks
+    let edges: Vec<(usize, &str, &str, &Vec<(f64, f64)>)> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (n, it))| match (edge_of(n), it) {
+            (Some((a, b)), Item::Line(pts)) if pts.len() >= 2 => Some((i, a, b, pts)),
+            _ => None,
+        })
+        .collect();
+    for &(li, from, to, pts) in &edges {
+        let lname = &items[li].0;
+        for (which, p) in [("start", pts[0]), ("end", pts[pts.len() - 1])] {
+            let touches = items.iter().enumerate().any(|(oi, (oname, o))| {
+                if oi == li || oname.starts_with(lname.as_str()) {
+                    return false;
+                }
+                match o {
+                    Item::Shape { rect, .. } => !(oname.contains("/panel:") || oname.contains("/region:")) && near(rect, p, 3.0),
+                    Item::Text(t) => block_of(oname).is_some() && near(t, p, 4.5),
+                    Item::Line(q) => q.windows(2).any(|s| seg_dist(p, s[0], s[1]) < 2.0),
+                    Item::Spill(_) => false,
+                }
+            });
+            if !touches {
+                rep.loose_ends.push(Hit { line: lname.clone(), other: which.to_string(), at: p });
+            }
+        }
+        // behind a block that is not one of its ends
+        let mut seen: Vec<&str> = Vec::new();
+        for (oname, o) in &items {
+            let (Item::Shape { rect, opaque: true, .. }, Some(b)) = (o, block_of(oname)) else { continue };
+            if b == from || b == to || seen.contains(&b) {
+                continue;
+            }
+            if let Some(at) = pts.windows(2).find_map(|sg| crossing(sg[0], sg[1], &rect.inflate(-1.5))) {
+                seen.push(b);
+                rep.behind_block.push(Hit { line: lname.clone(), other: oname.clone(), at });
+            }
+        }
+    }
+    for (x, &(li, fa, ta, pa)) in edges.iter().enumerate() {
+        for &(lj, fb, tb, pb) in &edges[x + 1..] {
+            // lines that share a block may share a trunk on purpose
+            if fa == fb || ta == tb || fa == tb || ta == fb {
+                continue;
+            }
+            let hit = pa.windows(2).find_map(|u| pb.windows(2).find(|v| overlap((u[0], u[1]), (v[0], v[1])) > 6.0).map(|_| u[0]));
+            if let Some(at) = hit {
+                rep.on_line.push(Hit { line: items[li].0.clone(), other: items[lj].0.clone(), at });
+            }
+        }
+    }
     for (li, (lname, it)) in items.iter().enumerate() {
         let Item::Line(pts) = it else { continue };
         for (oi, (oname, other)) in items.iter().enumerate() {
@@ -251,4 +353,62 @@ pub fn check(objects: &[Object]) -> Report {
         }
     }
     rep
+}
+
+/// What a layout's frames get wrong: `(uneven, sparse)`. Uneven = pairs of framed panels side by
+/// side (they overlap for more than half their height) whose tops or bottoms differ by more than
+/// 1 pt, or stacked (more than half their width) whose left or right edges differ. Sparse =
+/// framed panels whose blocks' box fills less than 45% of the panel.
+pub fn frames(lay: &crate::layout::Layout) -> (usize, usize) {
+    let ps: Vec<&crate::layout::PanelBox> = lay.panels.iter().filter(|p| !p.bare).collect();
+    let mut uneven = 0;
+    for (i, a) in ps.iter().enumerate() {
+        for b in &ps[i + 1..] {
+            let (ra, rb) = (&a.rect, &b.rect);
+            let vshare = ra.bottom().min(rb.bottom()) - ra.y.max(rb.y);
+            let hshare = ra.right().min(rb.right()) - ra.x.max(rb.x);
+            if vshare > 0.5 * ra.h.min(rb.h) && hshare <= 0.0 && ((ra.y - rb.y).abs() > 1.0 || (ra.bottom() - rb.bottom()).abs() > 1.0) {
+                uneven += 1;
+            } else if hshare > 0.5 * ra.w.min(rb.w) && vshare <= 0.0 && ((ra.x - rb.x).abs() > 1.0 || (ra.right() - rb.right()).abs() > 1.0) {
+                uneven += 1;
+            }
+        }
+    }
+    let mut sparse = 0;
+    for (pi, p) in lay.panels.iter().enumerate().filter(|(_, p)| !p.bare) {
+        let rs: Vec<Rect> = lay.nodes.iter().filter(|n| n.panel == pi).map(|n| n.rect.union(&n.reserve)).collect();
+        if rs.is_empty() {
+            continue;
+        }
+        let (x0, y0) = rs.iter().fold((f64::MAX, f64::MAX), |m, r| (m.0.min(r.x), m.1.min(r.y)));
+        let (x1, y1) = rs.iter().fold((f64::MIN, f64::MIN), |m, r| (m.0.max(r.right()), m.1.max(r.bottom())));
+        if (x1 - x0) * (y1 - y0) < 0.45 * p.rect.w * p.rect.h {
+            sparse += 1;
+        }
+    }
+    (uneven, sparse)
+}
+
+/// The smallest text size in the drawing, in points when the figure is `width_pt` wide (a
+/// column of a paper is about 250 pt, a full page width about 500 pt).
+pub fn smallest_text(objects: &[Object], figure_w: f64, width_pt: f64) -> f64 {
+    fn walk(o: &Object, k: f64, min: &mut f64) {
+        match &o.kind {
+            Kind::Text(sp) | Kind::Shape(sp) => {
+                if let Some(t) = &sp.text {
+                    for r in t.paras.iter().flat_map(|p| p.runs.iter()).filter(|r| !r.text.trim().is_empty() && r.look.size > 0.0) {
+                        *min = min.min(r.look.size * k);
+                    }
+                }
+            }
+            Kind::Group(g) => {
+                let s = if g.ch.w == 0 { 1.0 } else { o.frame.w as f64 / g.ch.w as f64 };
+                g.children.iter().for_each(|c| walk(c, k * s, min));
+            }
+            _ => {}
+        }
+    }
+    let mut min = f64::MAX;
+    objects.iter().for_each(|o| walk(o, 1.0, &mut min));
+    if min == f64::MAX { 0.0 } else { min * width_pt / figure_w.max(1.0) }
 }
