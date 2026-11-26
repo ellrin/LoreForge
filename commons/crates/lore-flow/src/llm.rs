@@ -596,7 +596,9 @@ end
 - color= only when the description says paths have different colours: one colour name per path, the same along the whole path. Never write width=: the line's kind sets its weight. curve only for a line that arcs over other blocks (a skip) or between parallel rows; an ordinary join is never curved.
 - from=top|bottom|left|right and to=… choose the side a line leaves or enters a block; leave them out unless the description says where the line goes in.
 - An `op` block (label + for add, x for multiply, . element-wise, C concatenation) only where the description names that operation. Two lines that simply arrive at one block each go to that block; a line that splits off another is the branch form `a>b -> c`.
-- A line the description calls dashed (虛線) is a dashed kind by its meaning: supervision, feedback, optional, shared or cross. Things joined by a brace with no arrow (several outputs gathered into one) are a `brace` block beside them, with no lines.
+- A line the description calls dashed (虛線) is a dashed kind by its meaning, along its whole length: supervision, feedback, optional, shared or cross.
+- Two lines the description says meet midway and then go on as one (兩條線匯合後進 X) are ONE line leaving the middle of the first: `a>b -> X : <kind> "label"`, where a -> b is a line the first block already has; the second source gets no line of its own.
+- Outputs gathered by a brace with no arrow: prefer a saved block that draws the outputs with their brace; otherwise a `brace` block in the column right after the outputs, the next line starting at the brace, and no line from the outputs to the gathered value.
 
 ### Alignment
   align row x enc bb              same height (centres on one row)
@@ -607,15 +609,15 @@ Use pins inside a panel; use align across panels.
 Names: red orange yellow green teal blue purple pink brown grey black, or RRGGBB (six hex digits; digits only are read as a number, so use a name or a hex with a letter). They go on blocks (fill= line= text=), lines (color=), regions and panels (tint=). A name gives a pale fill and a strong outline. There is no beige: write F5E6C8.
 
 ### Looks and picture blocks
-- A photo, mask or heat map from a paper is never drawn: `image "" look=photo|mask|heatmap|plot`; `image-stack n=3`. Anything else the description names that a saved block draws uses that block.
+- A photo or heat map from a paper is never drawn: `image "" look=photo|heatmap|plot`; `image-stack n=3`. A mask, a stack of video frames, a video and anything else the description names that a saved block draws uses that block. Two named pictures under one title are a `region r "Title" none title=above` holding two picture blocks.
 - A small chart: `c: chart "Name" chart=bell|bells|membership|bars|scatter|surface n=3 labels=[A,B,C] values=[1,2,3]`.
 - An icon: `d: icon "Doctor" icon=healthicons:doctor-outline` (icon=<set:name>; only ids you are sure of).
-- A network as bars: `lb: layer-bars "" layers=[Conv,MBConv1,FC] colors=[pink,purple] through=orange` (colors= one outline colour per bar, the last repeats; filled=true also fills them pale; through=<colour>|true draws the dashed line "data flows through these layers"). Other forms: `unet depth=3`, `cuboid-seq shape=down n=4`, `vector-bar n=4 dir=v`, `matrix rows=3 cols=3`.
+- A network as bars: `lb: layer-bars "" layers=[Conv,MBConv1,FC] colors=[pink,purple] through=orange` (colors= one outline colour per bar, the last repeats; filled=true also fills them pale; through=<colour>|true draws the dashed line "data flows through these layers"). Built-in forms (`unet depth=3`, `nn`, `encoder` / `decoder`, `chart=membership|surface`, `cuboid-seq shape=down n=4`, `vector-bar n=4 dir=v`, `matrix rows=3 cols=3`) only when no saved block below says it is used instead of them.
 
 ### Saved blocks of the library, with their own words
 A saved block (listed below) is a kind like any other. It carries fixed words; texts=[...] replaces them in order, `_` keeps one, "" blanks one:
     m: encoder-decoder-ladder "Backbone" style=five texts=[Enc,_,"",Dec] col=1 lane=0
-The program warns when you give more words than the block has. Maths $...$ works inside them.
+The program warns when you give more words than the block has. Maths $...$ works inside them. The list below shows each block's own words in [its words: …]: replace every one that is a placeholder (Num, Den, Model, Item …) with the description's words through texts=[…]. The label is the block's NAME as the description writes it; never repeat in the label a word the block already prints (× N, a title).
 
 ### Symbols
 `@id` in a label is a symbol of the notation table. A symbol that is not in the table is listed in vars_new as {id, latex, meaning} (or as a line `var id = "latex" "meaning"`) and then used as @id. `latex` is the bare symbol (\\hat{y}): no $, no definition. Never type a reference such as "Table 1" or "Fig. 2".
@@ -665,7 +667,8 @@ fn library_section(lib: &Library, description: &str) -> String {
         .filter(|w| w.len() >= 3)
         .map(|w| w.to_ascii_lowercase())
         .collect();
-    let hits = |kind: &str, style: &str, d: &str| -> usize {
+    let lower = description.to_lowercase();
+    let hits = |kind: &str, style: &str, d: &str, names: &[String]| -> usize {
         let hay = format!("{kind} {style} {d}").to_ascii_lowercase();
         let mut seen: Vec<&str> = Vec::new();
         for w in &words {
@@ -673,16 +676,27 @@ fn library_section(lib: &Library, description: &str) -> String {
                 seen.push(w);
             }
         }
-        seen.len()
+        // a name of the block found in the description (any language) counts for much more
+        let named = names.iter().filter(|n| !n.trim().is_empty() && lower.contains(&n.trim().to_lowercase())).count();
+        seen.len() + 10 * named
     };
-    // (is a module, shared words, kind, style, description)
+    // (is a module, shared words, kind, style, description and what follows it)
     let mut rows: Vec<(bool, usize, String, String, String)> = Vec::new();
     for (kind, styles) in &lib.templates {
         if MODULES.iter().any(|(m, _)| m == kind) {
             continue;
         }
         for (style, t) in styles {
-            rows.push((t.level != "component", hits(kind, style, &t.description), kind.clone(), style.clone(), t.description.clone()));
+            let mut d = if t.description.trim().is_empty() { "a saved drawing".to_string() } else { cut(t.description.trim(), 110) };
+            if !t.replaces.is_empty() {
+                d.push_str(&format!(" (use instead of the built-in `{}`)", t.replaces.join("`, `")));
+            }
+            let fixed = t.fixed_texts();
+            if !fixed.is_empty() {
+                let shown: Vec<String> = fixed.iter().take(6).map(|w| cut(w, 18)).collect();
+                d.push_str(&format!(" [its words: {}{}]", shown.join(" | "), if fixed.len() > 6 { " …" } else { "" }));
+            }
+            rows.push((t.level != "component", hits(kind, style, &t.description, &t.names), kind.clone(), style.clone(), d));
         }
     }
     if rows.is_empty() {
@@ -697,7 +711,6 @@ fn library_section(lib: &Library, description: &str) -> String {
     for (module, _, kind, style, d) in rows {
         let st = if style == crate::modules::DEFAULT_STYLE { String::new() } else { format!(" style={style}") };
         let level = if module { "" } else { " (component)" };
-        let d = if d.trim().is_empty() { "a saved drawing".to_string() } else { cut(d.trim(), 110) };
         let line = format!("  - {kind}{st}{level}: {d}\n");
         if line.len() > budget {
             left += 1;
@@ -780,7 +793,39 @@ fn check_text(text: &str, p: &FlowPrompt) -> Result<(Graph, Vec<String>, Vec<Str
     g.validate(&kinds).map_err(|e| e.to_string())?;
     let d = crate::Drawing { library: p.library.clone(), notation: p.notation, ..Default::default() };
     let fig = crate::draw(&g, &d).map_err(|e| e.to_string())?;
-    Ok((g, fig.built.warnings.clone(), looks(&fig)))
+    let mut found = looks(&fig);
+    found.extend(block_advice(&g, p.library));
+    Ok((g, fig.built.warnings.clone(), found))
+}
+
+/// What a draft gets wrong in its choice of blocks, in words the drafting model can act on: a
+/// built-in kind where a saved block of the library is to be used instead, and a label that
+/// repeats words the block already prints.
+pub fn block_advice(g: &Graph, lib: &Library) -> Vec<String> {
+    let mut out = Vec::new();
+    for n in &g.nodes {
+        let saved = lib.templates.get(&n.module).is_some_and(|_| !MODULES.iter().any(|(m, _)| *m == n.module));
+        if !saved {
+            // a built-in kind a saved block replaces
+            let hit = lib.templates.iter().flat_map(|(k, styles)| styles.iter().map(move |(st, t)| (k, st, t))).find(|(_, _, t)| t.stands_in_for(n));
+            if let Some((k, st, t)) = hit {
+                let style = if st.as_str() == crate::modules::DEFAULT_STYLE { String::new() } else { format!(" style={st}") };
+                out.push(format!("block {} uses the built-in {}; the library's `{k}{style}` draws it ({}): use that block", n.id, n.module, cut(t.description.trim(), 90)));
+            }
+            continue;
+        }
+        // a label that repeats the block's own words
+        let style = crate::modules::style_name(n, &crate::Theme::classic_bw());
+        if let Some(t) = lib.get(&n.module, &style) {
+            let label = n.label.trim();
+            if !label.is_empty()
+                && let Some(w) = t.fixed_texts().into_iter().find(|w| w.chars().count() >= 2 && label.contains(w.as_str()))
+            {
+                out.push(format!("block {} already prints '{w}': do not repeat it in the label", n.id));
+            }
+        }
+    }
+    out
 }
 
 /// What the program sees wrong in how a drawn figure looks, in words the drafting model can act

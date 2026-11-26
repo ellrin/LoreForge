@@ -67,6 +67,14 @@ pub struct ModuleTemplate {
     /// about itself, for the hub's 包含.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub made_of: Vec<String>,
+    /// Other names the thing is called by, in any language (`U-Net`, `U 形`, `跳接`): a
+    /// description that uses one of them is about this block.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+    /// The built-in kinds or looks this block stands in for (`unet`, `chart=membership`,
+    /// `image look=mask`): a draft that uses one of those is told about this block.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<String>,
     /// Natural size in pt (of the port rect when there is one).
     pub w: f64,
     pub h: f64,
@@ -79,6 +87,47 @@ pub struct ModuleTemplate {
     /// `layer:<type>` (the theme's colour of a layer type); a run whose
     /// text is `{{label}}` receives the node's label.
     pub objects: Value,
+}
+
+impl ModuleTemplate {
+    /// The words the drawing prints by itself (not the `{{label}}` slot), in drawing order.
+    pub fn fixed_texts(&self) -> Vec<String> {
+        fn walk(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::Object(m) => {
+                    if let Some(Value::Array(runs)) = m.get("runs") {
+                        let t: String = runs.iter().filter_map(|r| r.get("text").and_then(Value::as_str)).collect();
+                        let t = t.trim();
+                        if !t.is_empty() && !t.contains("{{label}}") {
+                            out.push(t.to_string());
+                        }
+                    }
+                    m.values().for_each(|x| walk(x, out));
+                }
+                Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.objects, &mut out);
+        out
+    }
+    /// Does a node use what this block replaces? An entry is a kind (`unet`), a kind with
+    /// parameters (`image look=mask`) or parameters alone (`chart=membership`).
+    pub fn stands_in_for(&self, n: &Node) -> bool {
+        self.replaces.iter().any(|e| {
+            let mut ok = true;
+            let mut any = false;
+            for tok in e.split_whitespace() {
+                any = true;
+                match tok.split_once('=') {
+                    Some((k, v)) => ok &= n.str(k) == Some(v),
+                    None => ok &= n.module == tok,
+                }
+            }
+            any && ok
+        })
+    }
 }
 
 /// The module library: kind → style → drawing.
@@ -356,7 +405,7 @@ pub fn template_from_objects(objects: &[Object], opt: &SaveOptions) -> Result<Mo
         }
         swap(&mut v, None, false, &picks);
     }
-    let t = ModuleTemplate { kind: opt.kind.clone(), style: opt.style.clone(), description: opt.description.clone(), w: b.w as f64 / EMU_PT, h: b.h as f64 / EMU_PT, level: String::new(), made_of: Vec::new(), port: None, objects: v };
+    let t = ModuleTemplate { kind: opt.kind.clone(), style: opt.style.clone(), description: opt.description.clone(), w: b.w as f64 / EMU_PT, h: b.h as f64 / EMU_PT, level: String::new(), made_of: Vec::new(), names: Vec::new(), replaces: Vec::new(), port: None, objects: v };
     // must load back
     Library::default().add(t.clone())?;
     Ok(t)

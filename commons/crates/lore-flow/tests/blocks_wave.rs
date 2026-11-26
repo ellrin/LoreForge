@@ -255,3 +255,21 @@ fn an_unknown_parameter_is_a_warning() {
     h.nodes[0].params.insert("grow".into(), serde_json::json!(1.2));
     assert!(lore_flow::notation::check_graph(&mut h, &lore_notation::Notation::default()).by_code("unknown_param").is_empty());
 }
+
+#[test]
+fn a_block_says_what_it_replaces_and_what_it_prints() {
+    use lore_flow::modules::{Library, ModuleTemplate};
+    let mut lib = Library::default();
+    lib.add_json(r#"{ "kind": "u-ladder", "style": "bars", "description": "an encoder-decoder as upright bars", "names": ["U-Net", "U 形"], "replaces": ["unet", "chart=membership"], "w": 60, "h": 40,
+        "objects": [ { "id": 0, "name": "t", "type": "shape", "frame": { "x": 0, "y": 0, "w": 508000, "h": 254000 }, "geom": { "prst": "rect" }, "fill": { "kind": "none" },
+          "text": { "insets": [0,0,0,0], "anchor": "ctr", "wrap": true, "paras": [ { "align": "ctr", "runs": [ { "kind": "text", "text": "× N", "look": { "font": "Arial", "size": 10, "color": "role:text" } } ] } ] } } ] }"#)
+        .unwrap();
+    let t: &ModuleTemplate = lib.get("u-ladder", "bars").unwrap();
+    assert_eq!(t.fixed_texts(), vec!["× N".to_string()]);
+    let g = lore_flow::dsl::parse_with("fig f\na: unet \"Seg\"\nb: chart \"M\" chart=membership\nc: chart \"S\" chart=bars\nd: u-ladder \"Encoder × N\" style=bars\n", &lib.kinds()).unwrap();
+    assert!(t.stands_in_for(&g.nodes[0]) && t.stands_in_for(&g.nodes[1]) && !t.stands_in_for(&g.nodes[2]));
+    let advice = lore_flow::llm::block_advice(&g, &lib);
+    assert_eq!(advice.len(), 3, "{advice:?}");
+    assert!(advice[0].contains("block a uses the built-in unet") && advice[0].contains("u-ladder style=bars"));
+    assert!(advice[2].contains("already prints '× N'"));
+}
