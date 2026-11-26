@@ -16,3 +16,7 @@
 [deck]
 # latin = "Brand Serif"
 # east_asian = "Brand Sans TC"
+
+# 流程圖（lore-flow）裡的文字：積木名稱、標籤、標題、線上的字。留空 = 用樣式自己的字型。方程式維持數學字型。
+[figure]
+# latin = "Brand Serif"

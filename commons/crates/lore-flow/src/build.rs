@@ -553,7 +553,11 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             let mut cands: Vec<Rect> = Vec::new();
             for (p, q) in &segs {
                 let horizontal = (p.1 - q.1).abs() < 1e-6;
-                for t in [0.5, 0.3, 0.7, 0.15, 0.85] {
+                // the middle first, then every twentieth of the run: a line that passes beneath
+                // blocks has its words on a stretch that shows
+                let mut places = vec![0.5, 0.3, 0.7, 0.15, 0.85];
+                places.extend((1..20).map(|i| i as f64 * 0.05));
+                for t in places {
                     let (mx, my) = (p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t);
                     if horizontal {
                         cands.push(Rect::new(mx - w / 2.0, my - h - gap, w, h));

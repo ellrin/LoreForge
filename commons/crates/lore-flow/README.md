@@ -105,6 +105,11 @@ the room for lines is given back first, and a page still under it is marked `Pac
 Not yet: the words of a line that passes beneath a block still lie over that block; the lines of
 notes; free areas get no line room; packing a figure of fifty blocks takes over a minute.
 
+The font of a figure's words is the author's choice: `[figure] latin` in the `fonts.toml` beside a
+flow folder (`private/shared/fonts.toml`; `Catalogue.figure_font`) replaces every theme's font for
+names, labels, titles and captions; equations keep the math font. The drafting prompt asks for
+every symbol as LaTeX between dollar signs.
+
 ## Modules, styles, the library
 
 A module of one shape is that shape; anything else is a group whose first child `port` is an

@@ -622,6 +622,9 @@ Use pins inside a panel; use align across panels.
 ### Colours
 Names: red orange yellow green teal blue purple pink brown grey black, or RRGGBB (six hex digits; digits only are read as a number, so use a name or a hex with a letter). They go on blocks (fill= line= text=), lines (color=), regions and panels (tint=). A name gives a pale fill and a strong outline. There is no beige: write F5E6C8.
 
+### Symbols are LaTeX
+Every symbol, variable and formula is LaTeX between dollar signs, in a name, a label, a title and on a line alike: `$x_b$`, `$\\omega$ (fuzzy weights)`, `$\\mathcal L_{seg}$`. Never a Unicode Greek letter, a bare letter standing for a variable, or a subscript typed as plain text; ordinary words stay plain.
+
 ### Looks and picture blocks
 - A photo or heat map from a paper is never drawn: `image "" look=photo|heatmap|plot`; `image-stack n=3`. A mask, a stack of video frames, a video and anything else the description names that a saved block draws uses that block. Two named pictures under one title are a `region r "Title" none title=above` holding two picture blocks.
 - A small chart: `c: chart "Name" chart=bell|bells|membership|bars|scatter|surface n=3 labels=[A,B,C] values=[1,2,3]`.

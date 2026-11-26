@@ -122,7 +122,18 @@ fn value(s: &str) -> Value {
         return Value::from(n);
     }
     if s.starts_with('[') && s.ends_with(']') {
-        if let Ok(v) = serde_json::from_str::<Value>(s) {
+        // quoted items are read as the language reads a label: a backslash is itself (two
+        // of them a line break, one before a name LaTeX), only a backslash before a quote is a
+        // quote. JSON alone would make one backslash of two and a tab of a backslash and t
+        let mut raw = String::new();
+        let cs: Vec<char> = s.chars().collect();
+        for (i, c) in cs.iter().enumerate() {
+            raw.push(*c);
+            if *c == '\\' && cs.get(i + 1) != Some(&'"') {
+                raw.push('\\');
+            }
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(&raw) {
             return v;
         }
         let inner = &s[1..s.len() - 1];

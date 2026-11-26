@@ -2114,6 +2114,23 @@ pub fn grow_obj_xy(o: &mut Object, gx: f64, gy: f64) {
     }
 }
 
+/// Every plain run of `o` still in the canvas's default font (`unset`) set in `family`.
+fn own_font(o: &mut Object, unset: &str, family: &str) {
+    match &mut o.kind {
+        Kind::Group(g) => g.children.iter_mut().for_each(|c| own_font(c, unset, family)),
+        Kind::Text(sp) | Kind::Shape(sp) => {
+            if let Some(tb) = &mut sp.text {
+                for r in tb.paras.iter_mut().flat_map(|p| p.runs.iter_mut()) {
+                    if r.kind != "math" && r.look.font == unset {
+                        r.look.font = family.to_string();
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// A label of one line that is much wider than its picture, on as few lines as keep it within
 /// the wider of the picture and [`LABEL_WIDE`] text sizes, the lines about equally long. A label
 /// the author broke (`\\\\`) is kept.
@@ -2285,6 +2302,11 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         if let Some((x, y, w, h)) = core.art {
             core.art = Some((x * gr, y * gr, w * gr, h * gr));
         }
+    }
+    // words a drawing carries itself (a saved drawing's own texts, a legend's rows) were written
+    // without a font: they take the theme's, like every other word of the figure
+    for o in &mut core.objs {
+        own_font(o, &lore_canvas::Look::default().font, &cx.theme.font.family);
     }
     // text around the body: the label (above or below) and, below, the variable and caption
     let ink = cx.theme.colors.ink.clone();

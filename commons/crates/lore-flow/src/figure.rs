@@ -254,6 +254,10 @@ impl FlowLayout {
 /// Themes, layout templates and drawings on offer.
 #[derive(Debug, Clone)]
 pub struct Catalogue {
+    /// The author's font for a figure's words (names, labels, titles, captions): `[figure]
+    /// latin` of the `fonts.toml` beside a flow folder (`private/shared/fonts.toml`). Empty =
+    /// each theme's own. Equations keep the theme's math font.
+    pub figure_font: String,
     /// (id, name, theme).
     pub themes: Vec<(String, String, Theme)>,
     /// The text of each theme file read from a folder, by id (the layers of a `a+b+c` theme).
@@ -280,7 +284,7 @@ impl Catalogue {
     pub fn builtin() -> Catalogue {
         let t = Theme::classic_bw();
         let layouts: Vec<FlowLayout> = serde_json::from_str(LAYOUTS).expect("bundled layouts.json parses");
-        Catalogue { themes: vec![(t.id.clone(), t.name.clone(), t)], theme_texts: vec![], layouts, library: Library::default(), timelines: crate::timeline::style::builtin(), timeline_errors: vec![], timeline_colors: crate::timeline::lore_colors() }
+        Catalogue { figure_font: String::new(), themes: vec![(t.id.clone(), t.name.clone(), t)], theme_texts: vec![], layouts, library: Library::default(), timelines: crate::timeline::style::builtin(), timeline_errors: vec![], timeline_colors: crate::timeline::lore_colors() }
     }
 
     /// The public ones plus the author's (`dir` = `private/shared/flow`):
@@ -302,6 +306,10 @@ impl Catalogue {
 
     fn add_dir(&mut self, dir: &Path) {
         let c = self;
+        // the shared folder's font choice for figures
+        if let Some(name) = dir.parent().and_then(|d| std::fs::read_to_string(d.join("fonts.toml")).ok()).and_then(|t| t.parse::<toml::Table>().ok()).and_then(|t| t.get("figure")?.get("latin")?.as_str().map(str::to_string)).filter(|n| !n.trim().is_empty()) {
+            c.figure_font = name;
+        }
         for f in files(&dir.join("layouts"), "json").into_iter().chain(files(&dir.join("templates"), "json")) {
             let Ok(text) = std::fs::read_to_string(&f) else { continue };
             let list: Vec<FlowLayout> = serde_json::from_str::<Vec<FlowLayout>>(&text).or_else(|_| serde_json::from_str::<FlowLayout>(&text).map(|l| vec![l])).unwrap_or_default();
@@ -364,7 +372,18 @@ impl Catalogue {
         }
     }
 
+    /// The theme `id` with the author's figure font, when one is set.
     pub fn theme(&self, id: &str) -> Theme {
+        let mut t = self.theme_as_written(id);
+        if !self.figure_font.is_empty() {
+            t.font.family = self.figure_font.clone();
+            t.font.title = self.figure_font.clone();
+            t.font.caption = self.figure_font.clone();
+        }
+        t
+    }
+
+    fn theme_as_written(&self, id: &str) -> Theme {
         if let Some(t) = self.themes.iter().find(|t| t.0 == id) {
             return t.2.clone();
         }

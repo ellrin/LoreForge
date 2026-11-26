@@ -391,3 +391,29 @@ fn two_blocks_that_face_each_other_are_joined_straight_even_when_their_middles_d
         assert!(x > a.x && x < a.right(), "the line meets {id}'s picture");
     }
 }
+
+#[test]
+fn the_shared_folders_font_choice_sets_a_figures_words() {
+    use lore_flow::figure::Catalogue;
+    let root = std::env::temp_dir().join(format!("lore-flow-font-{}", std::process::id()));
+    let flow = root.join("shared").join("flow");
+    std::fs::create_dir_all(&flow).unwrap();
+    // no choice: the theme's own font
+    let own = Catalogue::load(Some(&flow)).theme("").font.clone();
+    assert!(Catalogue::load(Some(&flow)).figure_font.is_empty());
+    std::fs::write(root.join("shared").join("fonts.toml"), "[figure]\nlatin = \"Example Serif\"\n").unwrap();
+    let cat = Catalogue::load(Some(&flow));
+    let f = cat.theme("").font.clone();
+    assert_eq!((f.family.as_str(), f.title.as_str(), f.caption.as_str()), ("Example Serif", "Example Serif", "Example Serif"));
+    assert_eq!(f.math, own.math, "equations keep the math font");
+    assert_eq!(f.size, own.size);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn quoted_words_in_a_list_keep_their_line_break_and_their_latex() {
+    let g = graph("fig t\na: box \"A\" texts=[\"One:\\\\Two\",\"$\\tilde q$\"]\n");
+    let v = g.nodes[0].list("texts");
+    assert_eq!(v, ["One:\\\\Two", "$\\tilde q$"]);
+    assert_eq!(text::lines(&v[0]), ["One:", "Two"]);
+}

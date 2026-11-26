@@ -278,6 +278,9 @@ fn columns(b: &[Box3], ends: &[usize], gap: f64) -> (Vec<f64>, Vec<Option<usize>
     (w, first, need)
 }
 
+/// The most row widths tried when a frame's rows are broken freely.
+const WIDTHS: usize = 40;
+
 /// How much wider than a column an item of a shorter row may be and still stand in it.
 const JOIN: f64 = 1.3;
 
@@ -501,6 +504,12 @@ impl Ctx2<'_> {
             }
             widths.sort_by(|x, y| x.partial_cmp(y).unwrap());
             widths.dedup_by(|x, y| (*x - *y).abs() < 0.01);
+            // many blocks give thousands of widths that differ by little: an even sample of
+            // them finds the same shapes to within one block's width
+            if widths.len() > WIDTHS {
+                let n = widths.len();
+                widths = (0..WIDTHS).map(|i| widths[i * (n - 1) / (WIDTHS - 1)]).collect();
+            }
             let widest_one = b.iter().map(|x| x.w).fold(0.0, f64::max);
             for &wl in widths.iter().filter(|w| **w >= widest_one - 0.01) {
                 // least total height with every row at most `wl` wide
