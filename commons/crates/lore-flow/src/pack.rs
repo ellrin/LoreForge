@@ -38,16 +38,20 @@ pub struct Air {
     /// The largest the text is drawn on the page, in points (0 = as large as it goes). With a
     /// limit the page that is left goes to the pictures.
     pub text_max_pt: f64,
-    /// How much of the text size an area's paths are worth: an area whose text states a grid
-    /// (`col=`, `lane=`: its rows are the paths of the flow, so its lines are straight) stands
-    /// on it as long as the page's text keeps this share of what rows broken freely give.
-    /// 0 = never on the grid, 1 = only when it costs nothing.
+    /// How much of the text size paths are worth. An area whose text states a grid (`col=`,
+    /// `lane=`: its rows are the paths of the flow) stands on it when that makes its lines
+    /// simpler than rows broken freely do, as long as the page's text keeps this share of what
+    /// rows broken freely give. 0 = never on the grid, 1 = only when it costs nothing.
     pub paths: f64,
+    /// The least room between two blocks a line runs between, in text sizes: a shaft that is
+    /// seen and its arrowhead. Words on the line widen it further (their width across, their
+    /// height down). Only where a line runs; on a stated grid.
+    pub line: f64,
 }
 
 impl Default for Air {
     fn default() -> Air {
-        Air { gap: 1.5, pad: 0.8, between: 0.6, grow_max: 4.0, text_max_pt: 0.0, paths: 0.75 }
+        Air { gap: 1.5, pad: 0.8, between: 0.6, grow_max: 4.0, text_max_pt: 0.0, paths: 0.6, line: 2.5 }
     }
 }
 
@@ -159,6 +163,10 @@ struct GridGeom {
     top: Vec<f64>,
     bottom: Vec<f64>,
     inset: Vec<(f64, f64, f64, f64)>,
+    /// The air after each column but the last and under each row but the last: the gap, wider
+    /// where a line runs and wider again for its words.
+    gx: Vec<f64>,
+    gy: Vec<f64>,
     w: f64,
     h: f64,
 }
@@ -352,6 +360,29 @@ impl Ctx2<'_> {
             by_row[r].push(b);
         }
         let parts: Vec<(f64, f64, f64)> = by_row.iter().map(|b| row_parts(b)).collect();
+        // the air between columns and between rows: the gap; where a line runs, room for its
+        // shaft and arrowhead; where the line carries words, room for them
+        let (mut gx, mut gy) = (vec![gap; gr.cols.saturating_sub(1)], vec![gap; gr.rows.saturating_sub(1)]);
+        let line = self.air.line * self.fs;
+        let cell = |id: &str| self.g.node_index(id).and_then(|n| gr.cell.iter().find(|c| c.0 == n)).map(|c| (c.1, c.2));
+        for e in &self.g.edges {
+            let (Some((c1, r1)), Some((c2, r2))) = (cell(&e.from), cell(&e.to)) else { continue };
+            let small = self.fs * 0.85;
+            let (lw, lh) = if e.label.is_empty() { (0.0, 0.0) } else { (text::block(&e.label, small).0 + self.fs, text::block(&e.label, small).1 as f64 * small * 1.25) };
+            let (ca, cb, ra, rb) = (c1.min(c2), c1.max(c2), r1.min(r2), r1.max(r2));
+            for g in &mut gx[ca..cb] {
+                *g = g.max(line);
+            }
+            for g in &mut gy[ra..rb] {
+                *g = g.max(line);
+            }
+            // the words stand on the first run: across a row, or down a column
+            if cb > ca && (rb == ra || cb - ca == 1) {
+                gx[ca] = gx[ca].max(lw);
+            } else if rb > ra {
+                gy[ra] = gy[ra].max(line + lh);
+            }
+        }
         // each region's own insets: its padding and title band, with those of the regions inside
         // it that start (or end) at the same column or row
         let inset: Vec<(f64, f64, f64, f64)> = gr
@@ -380,7 +411,7 @@ impl Ctx2<'_> {
         order.sort_by_key(|i| gr.regs[*i].inside.len());
         for i in order {
             let a = &gr.regs[i];
-            let span: f64 = (a.c0..=a.c1).map(|c| cw[c]).sum::<f64>() + (a.c0..a.c1).map(|c| gap + right[c] + left[c + 1]).sum::<f64>() + inset[i].0 + inset[i].1;
+            let span: f64 = (a.c0..=a.c1).map(|c| cw[c]).sum::<f64>() + (a.c0..a.c1).map(|c| gx[c] + right[c] + left[c + 1]).sum::<f64>() + inset[i].0 + inset[i].1;
             let need = self.region_title(a.r).1 + 2.0 * pad;
             if need > span {
                 let add = (need - span) / (a.c1 - a.c0 + 1) as f64;
@@ -389,9 +420,9 @@ impl Ctx2<'_> {
                 }
             }
         }
-        let w = cw.iter().sum::<f64>() + gap * (gr.cols - 1) as f64 + left.iter().sum::<f64>() + right.iter().sum::<f64>();
-        let h = parts.iter().map(|p| p.0 + p.1).sum::<f64>() + gap * (gr.rows - 1) as f64 + top.iter().sum::<f64>() + bottom.iter().sum::<f64>();
-        GridGeom { cw, parts, left, right, top, bottom, inset, w, h }
+        let w = cw.iter().sum::<f64>() + gx.iter().sum::<f64>() + left.iter().sum::<f64>() + right.iter().sum::<f64>();
+        let h = parts.iter().map(|p| p.0 + p.1).sum::<f64>() + gy.iter().sum::<f64>() + top.iter().sum::<f64>() + bottom.iter().sum::<f64>();
+        GridGeom { cw, parts, left, right, top, bottom, inset, gx, gy, w, h }
     }
 
     /// The one shape of an area on a grid: the grid, the area's title and its padding.
@@ -643,13 +674,47 @@ pub fn pack(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) ->
     if !has.iter().any(|h| *h) || air.paths <= 0.0 {
         return Some(free);
     }
-    // every area that states its paths on its grid; while that costs more of the text than
-    // `Air.paths` allows, the area whose rows broken freely give the most back goes free
-    let mut on = has.clone();
+    // an area stands on the grid its text states when that makes its own lines simpler than
+    // rows broken freely do (fewer bends, fewer blocks passed beneath); where it does not, the
+    // freely broken rows are larger and no worse
+    let all = pack_choice(g, f, m, arrangement, air, &has)?;
+    let trouble = |p: &Packed, area: usize| -> usize {
+        crate::lines::lines(&p.graph, &p.layout)
+            .iter()
+            .filter(|r| {
+                let e = &p.graph.edges[r.edge];
+                [&e.from, &e.to].iter().all(|id| p.graph.node_index(id).is_some_and(|n| p.layout.nodes[n].panel == area))
+            })
+            .map(|r| {
+                // a block of words hides nothing: a line through it counts as eight blocks passed
+                let e = &p.graph.edges[r.edge];
+                let own = [p.graph.node_index(&e.from), p.graph.node_index(&e.to)];
+                let words = p.layout.nodes.iter().enumerate().filter(|(i, nd)| !own.contains(&Some(*i)) && p.graph.nodes[*i].module == "label" && r.points.windows(2).any(|w| crate::route::segment_hits(w[0], w[1], &nd.art.inflate(-0.5)))).count();
+                r.bends() + 2 * crate::lines::beneath(&p.graph, &p.layout, r) + 14 * words
+            })
+            .sum()
+    };
+    let mut on: Vec<bool> = (0..n).map(|i| has[i] && trouble(&all, i) < trouble(&free, i)).collect();
+    if !on.iter().any(|x| *x) {
+        return Some(free);
+    }
+    // an area whose freely broken rows would send a line through a block of words (which hides
+    // nothing, so line and words lie over each other) keeps its grid whatever it costs
+    let through_words = |p: &Packed, area: usize| -> bool {
+        crate::lines::lines(&p.graph, &p.layout).iter().any(|r| {
+            let e = &p.graph.edges[r.edge];
+            let own = [p.graph.node_index(&e.from), p.graph.node_index(&e.to)];
+            own.iter().all(|n| n.is_some_and(|n| p.layout.nodes[n].panel == area))
+                && p.layout.nodes.iter().enumerate().any(|(i, nd)| !own.contains(&Some(i)) && p.graph.nodes[i].module == "label" && r.points.windows(2).any(|w| crate::route::segment_hits(w[0], w[1], &nd.art.inflate(-0.5))))
+        })
+    };
+    let must: Vec<bool> = (0..n).map(|i| on[i] && through_words(&free, i) && !through_words(&all, i)).collect();
+    // while the grids cost more of the text than `Air.paths` allows, the area whose rows broken
+    // freely give the most back goes free
     let mut cur = pack_choice(g, f, m, arrangement, air, &on)?;
-    while cur.text_pt < air.paths * free.text_pt - 1e-6 && on.iter().any(|x| *x) {
+    while cur.text_pt < air.paths * free.text_pt - 1e-6 && (0..n).any(|i| on[i] && !must[i]) {
         let mut best: Option<(usize, Packed)> = None;
-        for i in (0..n).filter(|i| on[*i]) {
+        for i in (0..n).filter(|i| on[*i] && !must[*i]) {
             let mut v = on.clone();
             v[i] = false;
             if let Some(p) = pack_choice(g, f, m, arrangement, air, &v) {
@@ -1050,7 +1115,6 @@ fn grid_place(cx: &Ctx2, a: &Area, gr: &Grid, grow: u32, rect: Rect, band: f64, 
     let geo = cx.grid_geom(gr, grow);
     let (title, _) = cx.area_title(a);
     let pad = if a.bare { 0.0 } else { cx.pad() };
-    let gap = cx.gap();
     let inner_w = rect.w - 2.0 * pad;
     let inner_h = rect.h - title - 2.0 * band - if title > 0.0 { pad } else { 2.0 * pad };
     let spare_w = (inner_w - geo.w).max(0.0) / (gr.cols + 1) as f64;
@@ -1060,14 +1124,14 @@ fn grid_place(cx: &Ctx2, a: &Area, gr: &Grid, grow: u32, rect: Rect, band: f64, 
     for c in 0..gr.cols {
         x += spare_w + geo.left[c];
         xs.push(x);
-        x += geo.cw[c] + geo.right[c] + gap;
+        x += geo.cw[c] + geo.right[c] + geo.gx.get(c).copied().unwrap_or(0.0);
     }
     let mut ys = Vec::new();
     let mut y = rect.y + title + band + if title > 0.0 { 0.0 } else { pad };
     for r in 0..gr.rows {
         y += spare_h + geo.top[r];
         ys.push(y);
-        y += geo.parts[r].0 + geo.parts[r].1 + geo.bottom[r] + gap;
+        y += geo.parts[r].0 + geo.parts[r].1 + geo.bottom[r] + geo.gy.get(r).copied().unwrap_or(0.0);
     }
     let mut names: Vec<Vec<(usize, String)>> = vec![Vec::new(); gr.rows];
     for &(n, c, r) in &gr.cell {

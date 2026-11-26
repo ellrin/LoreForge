@@ -264,20 +264,37 @@ fn a_stated_grid_keeps_each_path_in_a_row_and_its_steps_in_columns() {
 }
 
 #[test]
-fn a_grid_that_costs_too_much_text_is_left_for_free_rows() {
-    // six pictures on a diagonal: the grid is six columns by six rows, mostly empty
+fn a_grid_is_taken_only_where_it_makes_the_lines_simpler_and_the_text_allows() {
+    // six pictures on a diagonal and no line: the grid helps nothing, the rows are broken freely
     let src: String = format!("fig t\npanel a \"Stairs\"\n{}end\n", (0..6).map(|i| format!("  x{i}: image \"P{i}\" look=photo col={i} lane={i}\n")).collect::<String>());
-    let (_, free) = packed(&src, (2, 1), "", &Air { paths: 0.0, ..Air::default() });
-    let (_, grid) = packed(&src, (2, 1), "", &Air { paths: 0.01, ..Air::default() });
-    let (_, chosen) = packed(&src, (2, 1), "", &Air::default());
-    assert!(!free.areas[0].grid && grid.areas[0].grid);
-    assert!(grid.text_pt < Air::default().paths * free.text_pt, "{} vs {}", grid.text_pt, free.text_pt);
-    assert!(!chosen.areas[0].grid, "the default leaves a grid this costly");
-    assert!((chosen.text_pt - free.text_pt).abs() < 0.01);
-    // a grid that costs little is kept
+    let (_, stairs) = packed(&src, (2, 1), "", &Air { paths: 0.01, ..Air::default() });
+    assert!(!stairs.areas[0].grid);
+    // two paths: freely broken rows bend their lines, the grid draws them straight
     let (_, p) = packed(PATHS, (2, 1), "", &Air::default());
-    let (_, q) = packed(PATHS, (2, 1), "", &Air { paths: 0.0, ..Air::default() });
-    assert!(p.areas[0].grid && p.text_pt >= Air::default().paths * q.text_pt);
+    let (_, free) = packed(PATHS, (2, 1), "", &Air { paths: 0.0, ..Air::default() });
+    assert!(p.areas[0].grid && !free.areas[0].grid);
+    assert!(p.text_pt >= Air::default().paths * free.text_pt, "{} vs {}", p.text_pt, free.text_pt);
+    // asked to cost nothing, a grid that makes the text smaller is left
+    let (_, strict) = packed(PATHS, (2, 1), "", &Air { paths: 1.0, ..Air::default() });
+    assert!(p.text_pt < free.text_pt && !strict.areas[0].grid);
+    assert!((strict.text_pt - free.text_pt).abs() < 0.01);
+}
+
+#[test]
+fn the_air_is_wider_where_a_line_runs_and_wider_again_for_its_words() {
+    let fig = |edges: &str| format!("fig t\npanel a \"Row\"\n  x: image \"A\" look=photo col=0 lane=0\n  y: image \"B\" look=photo col=1 lane=0\n  z: image \"C\" look=photo col=2 lane=0\n  u: image \"D\" look=photo col=0 lane=1\n{edges}end\n");
+    // one line x -> y, none between y and z; the page is wide so nothing is stretched much
+    let gaps = |edges: &str| {
+        let (g, p) = packed(&fig(edges), (3, 2), "", &Air { paths: 0.01, text_max_pt: 6.0, ..Air::default() });
+        assert!(p.areas[0].grid);
+        let at = |id: &str| p.layout.nodes[g.node_index(id).unwrap()].art;
+        let fs = Theme::classic_bw().font.size;
+        ((at("y").x - at("x").right()) / fs, (at("z").x - at("y").right()) / fs)
+    };
+    let (with, without) = gaps("  x -> y\n  x -> u\n");
+    assert!(with > without + 0.5, "{with} vs {without}");
+    let (worded, _) = gaps("  x -> y : data \"a long name on the line\"\n  x -> u\n");
+    assert!(worded > with + 1.0, "{worded} vs {with}");
 }
 
 // ---- lines: straight, one bend, or a two-bend step; nothing else ----
@@ -332,4 +349,25 @@ fn a_line_along_a_row_passes_beneath_the_block_between_and_stays_straight() {
     let rs = lines::lines(&p.graph, &p.layout);
     assert_eq!(rs[0].bends(), 0);
     assert_eq!(lines::beneath(&p.graph, &p.layout, &rs[0]), 1, "it passes the block between, beneath it");
+}
+
+#[test]
+fn a_block_a_line_passes_beneath_gets_a_ground_and_no_other_block_does() {
+    let src = "fig t\npanel a \"Row\"\n  x: image \"A\" look=photo col=0 lane=0\n  y: image \"B\" look=photo col=1 lane=0\n  z: image \"C\" look=photo col=2 lane=0\n  x -> z\nend\n";
+    let (_, p) = packed(src, (4, 1), "", &Air::default());
+    let rs = lines::lines(&p.graph, &p.layout);
+    let (theme, vars, lib) = (Theme::classic_bw(), Vars::default(), Library::default());
+    let built = build::build_with(&p.graph, &theme, &vars, &lib, &NoMath, &p.layout, &rs, 2, &modules::no_images);
+    let grounded = |id: &str| {
+        let o = built.objects.iter().find(|o| o.name == build::node_name("t", id)).unwrap();
+        match &o.kind {
+            lore_canvas::Kind::Group(g) => g.children.iter().any(|c| c.name.ends_with("ground")),
+            _ => false,
+        }
+    };
+    assert!(grounded("y"), "the block between has a ground under its picture");
+    assert!(!grounded("x") && !grounded("z"));
+    // the line lies before the block in the drawing order: beneath it
+    let pos = |name: &str| built.objects.iter().position(|o| o.name.contains(name)).unwrap();
+    assert!(pos("edge:x-z") < pos(&build::node_name("t", "y")));
 }

@@ -92,8 +92,14 @@ between: the line passes beneath it (`lines::beneath`). The cheapest shape is ta
 blocks passed beneath (a block of words only counts eight times), along another line, through a
 block's words, length. A bent line that would end in the middle of a side where a line ends the
 other way ends a quarter of the side further along. `LINES=1` draws these, `LINES=old` the earlier
-router. Not yet: room for lines and their words in the air, an opaque ground under a block a line
-passes beneath, the lines of notes.
+router. On a grid the air between two columns or rows is wider where a line runs (`Air.line`, 2.5
+text sizes: a shaft and its arrowhead) and wider again for the words on the line. A block a line
+passes beneath gets a `ground` of the paper's colour under its picture (`build`), so the line
+does not show through an open drawing. An area takes its grid when that makes its own lines
+simpler than freely broken rows do (bends, blocks passed beneath, a line through a block of words
+counted heavily), within the text share `Air.paths` (0.6) unless free rows would send a line
+through a block of words. Not yet: the words of a line that passes beneath a block still lie over
+that block; the lines of notes; free areas get no line room.
 
 ## Modules, styles, the library
 

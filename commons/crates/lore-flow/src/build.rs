@@ -420,6 +420,27 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         let body = modules::make(n, &Ctx { theme, vars, math, lib, k, symmetric: !lay.panels[pl.panel].down, image_size });
         // what a block could not draw (an icon the sets do not have)
         warnings.extend(body.warn.iter().cloned());
+        // a line that passes this block runs beneath it: the block gets a ground of the paper's
+        // colour under its picture, so the line does not show through an open drawing
+        let mut body = body;
+        let passed = routes.iter().any(|r| {
+            let e = &g.edges[r.edge];
+            e.from != n.id && e.to != n.id && r.points.windows(2).any(|w| crate::route::segment_hits(w[0], w[1], &pl.art.inflate(-0.5)))
+        });
+        if passed {
+            let ground = modules::paint(&theme.colors.paper, 1.0);
+            if body.single {
+                if let Some(sp) = body.objs.first_mut().and_then(|o| o.kind.sp_mut()) {
+                    if matches!(sp.fill, lore_canvas::Paint::None) && sp.text.is_none() {
+                        sp.fill = ground;
+                    }
+                }
+            } else {
+                let (x, y, w, h) = body.art;
+                let at = body.objs.iter().position(|o| o.name == "port").map(|i| i + 1).unwrap_or(0);
+                body.objs.insert(at, modules::shape("ground", "rect", x, y, w, h, ground, None));
+            }
+        }
         let (o, next) = modules::place(body, &node_name(fig, &n.id), pl.rect.x, pl.rect.y, id);
         node_ids.insert(n.id.clone(), o.id);
         id = next;
