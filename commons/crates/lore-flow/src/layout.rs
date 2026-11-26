@@ -325,20 +325,20 @@ pub(crate) struct PanelPlan {
 // ── regions ────────────────────────────────────────────────────────────
 
 /// Padding between a region's members and its frame (pt, natural size).
-const REG_PAD: f64 = 8.0;
+pub(crate) const REG_PAD: f64 = 8.0;
 /// Room between two neighbouring regions' frames: a channel a line can run in clear of both
 /// frames (the router's lanes lie 7 pt off each frame, so two lines fit).
-const REG_GAP: f64 = 20.0;
+pub(crate) const REG_GAP: f64 = 20.0;
 
 /// The graph's regions as a forest.
 pub(crate) struct RTree {
-    kids: Vec<Vec<usize>>,
-    roots: Vec<usize>,
+    pub(crate) kids: Vec<Vec<usize>>,
+    pub(crate) roots: Vec<usize>,
     /// Every node of a region, those of its sub-regions included.
-    all: Vec<BTreeSet<usize>>,
+    pub(crate) all: Vec<BTreeSet<usize>>,
     /// Outer regions before the regions inside them.
-    order: Vec<usize>,
-    depth: Vec<usize>,
+    pub(crate) order: Vec<usize>,
+    pub(crate) depth: Vec<usize>,
 }
 
 impl RTree {
@@ -390,23 +390,23 @@ impl RTree {
     }
 }
 
-fn title_at(r: &Region) -> &str {
+pub(crate) fn title_at(r: &Region) -> &str {
     match r.title_at.as_str() {
         "top" | "above" | "below" | "left" => r.title_at.as_str(),
         _ => "top-left",
     }
 }
 
-fn title_w(r: &Region, theme: &Theme) -> f64 {
+pub(crate) fn title_w(r: &Region, theme: &Theme) -> f64 {
     if r.title.is_empty() { 0.0 } else { text::width(&r.title, theme.small_size()) * 1.06 }
 }
 
-fn title_line(theme: &Theme) -> f64 {
+pub(crate) fn title_line(theme: &Theme) -> f64 {
     theme.small_size() * 1.3
 }
 
 /// The band a title takes (its line and a little air).
-fn title_band(r: &Region, theme: &Theme) -> f64 {
+pub(crate) fn title_band(r: &Region, theme: &Theme) -> f64 {
     if r.title.is_empty() { 0.0 } else { title_line(theme) + 2.0 }
 }
 
@@ -500,7 +500,7 @@ fn boxes_meet(a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)) 
 }
 
 /// Does a region's block of cells hold a block that is not its own, or meet a sibling's block?
-fn region_conflict(rt: &RTree, scope: &BTreeSet<usize>, kids: &[usize], layer: &BTreeMap<usize, usize>, lane: &BTreeMap<usize, usize>) -> bool {
+pub(crate) fn region_conflict(rt: &RTree, scope: &BTreeSet<usize>, kids: &[usize], layer: &BTreeMap<usize, usize>, lane: &BTreeMap<usize, usize>) -> bool {
     let live: Vec<(usize, BTreeSet<usize>)> = kids
         .iter()
         .filter_map(|&k| {

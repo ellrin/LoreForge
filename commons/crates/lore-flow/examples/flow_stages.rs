@@ -8,15 +8,21 @@
 //! `… --example flow_stages -- --score <spec.json> <width_pt> <w:h> <out.svg> <flow dir>` draws the
 //! finished figure only and prints one line of scores in `flow_hug`'s words (the loop's runner).
 //!
+//! `… --example flow_stages -- --options <spec.json> <width_pt> <w:h> <out dir> <flow dir> <name>` draws
+//! every option `place` offers: `<name>-option<i>.svg` (the plate's outline in thin grey),
+//! `<name>-options.html` (the sheet) and `<name>-options.tsv` (one row of numbers per option).
+//!
 //! A block's hand-given `w=` / `h=` / `size=` is stripped: the plate decides sizes.
 
 use lore_canvas::{Kind, Object};
 use lore_flow::figure::{Catalogue, FlowSpec};
 use lore_flow::plate::{self, CELL, Format, Measure, Placement};
-use lore_flow::{Figure, NoMath, Vars, build, look, modules, route};
+use lore_flow::{Figure, Graph, Layout, NoMath, Rect, Vars, build, look, modules, route};
 
 struct Drawn {
     p: Placement,
+    binding: plate::Binding,
+    g: Graph,
     all: Vec<Placement>,
     fig: Figure,
     stripped: Vec<String>,
@@ -65,9 +71,10 @@ fn draw(spec: &FlowSpec, cat: &Catalogue, f: Format, pick: Option<&str>) -> Vec<
             let lay = plate::to_layout(&g, &f, &p, &m);
             let g2 = plate::grown(&g, &f, &p, &m);
             let fills = plate::fills(&g, &f, &p, &m);
+            let binding = plate::binding(&g, &f, &p, &m);
             let routes = route::route(&g2, &lay);
             let built = build::build_with(&g2, &theme, &vars, &cat.library, &NoMath, &lay, &routes, 2, &modules::no_images);
-            Drawn { p, all: all.clone(), fig: Figure { layout: lay, routes, built }, stripped: stripped.clone(), f: f.clone(), fills }
+            Drawn { p, binding, g: g2.clone(), all: all.clone(), fig: Figure { layout: lay, routes, built }, stripped: stripped.clone(), f: f.clone(), fills }
         })
         .collect()
 }
@@ -81,17 +88,20 @@ fn options_html(ds: &[Drawn], out: &str, name: &str) -> (String, u32, u32) {
         let (w, h) = (d.p.plate.0 as f64 * CELL, d.p.plate.1 as f64 * CELL);
         tallest = tallest.max(h / w);
         let file = format!("{name}-option{}.svg", i + 1);
-        std::fs::write(format!("{out}/{file}"), page(d.fig.objects(), w, h, "", "")).expect("write option");
+        std::fs::write(format!("{out}/{file}"), page(d.fig.objects(), w, h, "", &outline(w, h))).expect("write option");
         let fills: Vec<String> = d.fills.iter().filter(|x| x.kind == "panel").map(|x| format!("{} {:.0}%", x.id, 100.0 * x.fill_after())).collect();
         let bends: usize = d.fig.routes.iter().map(|r| r.bends()).sum();
         let look = look::check(d.fig.objects());
         cells.push_str(&format!(
-            "<div class=c><div class=l>{}. {}</div><div class=n>plate {} x {} cells · smallest text {:.1} pt · fill {} · bends {bends} · loose ends {}</div><img src=\"{file}\"></div>",
+            "<div class=c><div class=l>{}. {}{}</div><div class=n>plate {} x {} cells · smallest text {:.1} pt · cover {:.0}% · frame faults {} · fill {} · bends {bends} · loose ends {}</div><img src=\"{file}\"></div>",
             i + 1,
             esc(&d.p.arrangement),
+            if d.p.stated { " (stated)" } else { "" },
             d.p.plate.0,
             d.p.plate.1,
-            d.p.text_pt,
+            look::smallest_text(d.fig.objects(), d.fig.layout.bounds.w, d.f.width_pt),
+            100.0 * d.p.cover,
+            own_faults(&d.g, &d.fig.layout).count(),
             esc(&fills.join(", ")),
             look.loose_ends.len()
         ));
@@ -174,6 +184,85 @@ fn page(objs: &[Object], w: f64, h: f64, under: &str, over: &str) -> String {
         Some(i) => format!("{}{over}{}", &svg[..i], &svg[i..]),
         None => svg,
     }
+}
+
+/// The plate's outline: a thin grey rectangle, so the page is visible round the figure.
+fn outline(w: f64, h: f64) -> String {
+    format!("<rect x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" fill=\"none\" stroke=\"#B8C0CC\" stroke-width=\"0.6\"/>")
+}
+
+/// Frame faults counted here, on the layout (the same three kinds as `look::frame_faults`, kept
+/// while that is not merged): frames that overlap with neither inside the other, a title touching
+/// another title or crossed by a frame not its own, a block outside its panel or a region it is a
+/// member of, or inside a region it is not a member of.
+#[derive(Default, Debug)]
+struct Faults {
+    overlaps: Vec<(String, String)>,
+    titles: Vec<(String, String)>,
+    strays: Vec<(String, String)>,
+}
+
+impl Faults {
+    fn count(&self) -> usize {
+        self.overlaps.len() + self.titles.len() + self.strays.len()
+    }
+}
+
+fn own_faults(g: &Graph, lay: &Layout) -> Faults {
+    let mut out = Faults::default();
+    let meet = |a: &Rect, b: &Rect| a.x < b.right() - 0.5 && b.x < a.right() - 0.5 && a.y < b.bottom() - 0.5 && b.y < a.bottom() - 0.5;
+    let holds = |a: &Rect, b: &Rect| a.x <= b.x + 0.5 && a.y <= b.y + 0.5 && a.right() >= b.right() - 0.5 && a.bottom() >= b.bottom() - 0.5;
+    let mut frames: Vec<(String, Rect, Option<Rect>)> = lay.panels.iter().filter(|p| !p.bare).map(|p| (format!("panel {}", p.id), p.rect, p.title_rect)).collect();
+    frames.extend(lay.regions.iter().map(|r| (format!("region {}", r.id), r.rect, r.title_rect)));
+    for i in 0..frames.len() {
+        for j in i + 1..frames.len() {
+            let (a, b) = (&frames[i], &frames[j]);
+            if meet(&a.1, &b.1) && !holds(&a.1, &b.1) && !holds(&b.1, &a.1) {
+                out.overlaps.push((a.0.clone(), b.0.clone()));
+            }
+            if let (Some(x), Some(y)) = (a.2, b.2)
+                && meet(&x, &y)
+            {
+                out.titles.push((a.0.clone(), b.0.clone()));
+            }
+        }
+    }
+    for (a, _, t) in &frames {
+        let Some(t) = t else { continue };
+        for (b, r, _) in &frames {
+            if a != b && meet(t, r) && !holds(r, t) {
+                out.titles.push((a.clone(), b.clone()));
+            }
+        }
+    }
+    // every node a region frames, its sub-regions' included
+    let members = |id: &str| -> Vec<String> {
+        let mut ids = vec![id.to_string()];
+        let mut i = 0;
+        while i < ids.len() {
+            let kids: Vec<String> = g.regions.iter().filter(|r| r.parent == ids[i] && !ids.contains(&r.id)).map(|r| r.id.clone()).collect();
+            ids.extend(kids);
+            i += 1;
+        }
+        g.regions.iter().filter(|r| ids.contains(&r.id)).flat_map(|r| r.members.clone()).collect()
+    };
+    for (ni, n) in lay.nodes.iter().enumerate() {
+        let id = &g.nodes[ni].id;
+        let room = n.rect.union(&n.reserve);
+        if let Some(p) = lay.panels.get(n.panel)
+            && !p.bare
+            && !holds(&p.rect, &room)
+        {
+            out.strays.push((id.clone(), format!("panel {}", p.id)));
+        }
+        for r in &lay.regions {
+            let own = members(&r.id).contains(id);
+            if (own && !holds(&r.rect, &room)) || (!own && meet(&r.rect, &room)) {
+                out.strays.push((id.clone(), format!("region {}", r.id)));
+            }
+        }
+    }
+    out
 }
 
 fn grid_lines(pw: u32, ph: u32, strong: bool) -> String {
@@ -325,7 +414,45 @@ fn main() {
             eprintln!("warning: {w}");
         }
         let fills: Vec<String> = d.fills.iter().map(|x| format!("{} {:.0}%", x.id, 100.0 * x.fill_after())).collect();
-        println!("{}; arrangement {}; plate {}x{}; fill {}", scores(d, spec), d.p.arrangement, d.p.plate.0, d.p.plate.1, fills.join(" "));
+        let faults = look::frame_faults(&d.g, &d.fig.layout).count();
+        println!("{}; arrangement {}; plate {}x{}; fill {}; page cover {:.0}%; frame faults {faults}", scores(d, spec), d.p.arrangement, d.p.plate.0, d.p.plate.1, fills.join(" "), 100.0 * d.p.cover);
+        return;
+    }
+    if a.first().map(String::as_str) == Some("--options") {
+        let [_, spec, width, r, out, dir, name, ..] = &a[..] else { panic!("--options <spec.json> <width_pt> <w:h> <out dir> <flow dir> <name>") };
+        let cat = Catalogue::load(Some(std::path::Path::new(dir)));
+        let f = Format::new(width.parse().expect("width"), ratio(r));
+        let ds = draw(&load_spec(spec), &cat, f, None);
+        std::fs::create_dir_all(out).expect("out dir");
+        let (opt, ow, oh) = options_html(&ds, out, name);
+        std::fs::write(format!("{out}/{name}-options.html"), opt).expect("write options");
+        let mut tsv = String::from("option\tarrangement\tinner\tstated\tplate\ttext_pt\tcover_pct\tbends\tover_words\twords_cut\tloose_ends\tuneven_frames\tsparse_panels\tframe_faults\n");
+        for (i, d) in ds.iter().enumerate() {
+            let lk = look::check(d.fig.objects());
+            let (uneven, sparse) = look::frames(&d.fig.layout);
+            let bends: usize = d.fig.routes.iter().map(|r| r.bends()).sum();
+            let text = look::smallest_text(d.fig.objects(), d.fig.layout.bounds.w, d.f.width_pt);
+            let faults = look::frame_faults(&d.g, &d.fig.layout).count();
+            let own = own_faults(&d.g, &d.fig.layout);
+            tsv.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}x{}\t{text:.1}\t{:.0}\t{bends}\t{}\t{}\t{}\t{uneven}\t{sparse}\t{faults}\n",
+                i + 1,
+                d.p.arrangement,
+                d.p.inner.join(" "),
+                d.p.stated,
+                d.p.plate.0,
+                d.p.plate.1,
+                100.0 * d.p.cover,
+                lk.over_text.len(),
+                lk.words_cut.len(),
+                lk.loose_ends.len()
+            ));
+            let b = &d.binding;
+            println!("  binding: {} binds, need {}x{}, plate {}x{}, spare {}, text {:.1} pt, if shaped {:.1} pt; areas {}", if b.tall { "height" } else { "width" }, b.need.0, b.need.1, b.plate.0, b.plate.1, b.spare, b.text_pt, b.text_if_shaped_pt, b.areas.iter().map(|x| format!("{} {}x{} blocks, {}x{} cells{}", x.id, x.cols, x.rows, x.w, x.h, if x.binds { " (binds)" } else { "" })).collect::<Vec<_>>().join("; "));
+            println!("option {}: {}{}; plate {}x{}; text {text:.1} pt (plate {:.1} pt); cover {:.0}%; bends {bends}; loose ends {}; frame faults {faults} (own {}: {:?})", i + 1, d.p.arrangement, if d.p.stated { " (stated)" } else { "" }, d.p.plate.0, d.p.plate.1, d.p.text_pt, 100.0 * d.p.cover, lk.loose_ends.len(), own.count(), own);
+        }
+        std::fs::write(format!("{out}/{name}-options.tsv"), tsv).expect("write tsv");
+        println!("options-window: {ow},{oh}");
         return;
     }
     let [spec, width, r, out, dir, rest @ ..] = &a[..] else { panic!("<spec.json | figure.dsl> <width_pt> <w:h> <out dir> <flow dir> [name] [arrangement]") };

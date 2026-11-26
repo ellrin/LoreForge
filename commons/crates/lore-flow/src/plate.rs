@@ -135,6 +135,13 @@ pub struct Placement {
     /// planner put it), `two-rows` (a long chain folded) …
     #[serde(default)]
     pub inner: Vec<String>,
+    /// Each region's frame (module frame), in the graph's regions' order, on cell borders: the
+    /// cells reserved for it (its padding and a title written inside it; a title written above
+    /// or below lies outside these cells, in room reserved beside them). Zero cells for a region
+    /// without blocks. Empty for a placement made before regions were budgeted: `to_layout` then
+    /// frames them round their blocks.
+    #[serde(default)]
+    pub regions: Vec<Cells>,
 }
 
 /// What one base area needs, and what one row or one column fewer in it would give.
@@ -169,10 +176,36 @@ pub struct Binding {
     pub text_if_shaped_pt: f64,
 }
 
-/// What binds `p` on `f` (see [`Binding`]).
+/// What binds `p` on `f` (see [`Binding`]). The direction that binds is the one whose need sets
+/// the plate's multiplier (the height when both do). Going down, every row of areas adds its
+/// height, so in each row the tallest areas bind; going across, the widest row of areas binds,
+/// every area in it. A placement whose arrangement `place` does not know gives no areas.
 pub fn binding(g: &Graph, f: &Format, p: &Placement, m: &Measure) -> Binding {
-    let _ = (g, f, m);
-    Binding { need: p.budget.least, plate: p.plate, text_pt: p.text_pt, text_if_shaped_pt: p.text_pt, ..Default::default() }
+    let me = Meas::new(g, m);
+    let (base, cands) = candidates(&me);
+    let need = p.budget.least;
+    let r = reduce(f.ratio);
+    let tall = need.1.div_ceil(r.1) >= need.0.div_ceil(r.0);
+    let spare = if tall { p.plate.0.saturating_sub(need.0) } else { p.plate.1.saturating_sub(need.1) };
+    let mut areas = Vec::new();
+    if let Some(c) = cands.iter().find(|c| arrangement_name(&me, c) == p.arrangement) {
+        let grid = |a: usize| base[a][c.folds[a] as usize].as_ref().or(base[a][0].as_ref()).unwrap();
+        let row_w: Vec<u32> = c.rows.iter().enumerate().map(|(ri, row)| row.iter().map(|a| grid(*a).w()).sum::<u32>() + c.hgap[ri].iter().sum::<u32>()).collect();
+        let widest = row_w.iter().copied().max().unwrap_or(0);
+        for (ri, row) in c.rows.iter().enumerate() {
+            let tallest = row.iter().map(|a| grid(*a).h()).max().unwrap_or(0);
+            for &a in row {
+                let gr = grid(a);
+                let binds = if tall { gr.h() == tallest } else { row_w[ri] == widest };
+                areas.push((a, AreaNeed { id: me.defs[a].id.clone(), cols: gr.lf.len(), rows: gr.up.len(), w: gr.w(), h: gr.h(), binds }));
+            }
+        }
+        areas.sort_by_key(|x| x.0);
+    }
+    // were the same cells exactly the plate's shape: cols x rows = need.0 x need.1, cols : rows = r
+    let cols = ((need.0 as f64 * need.1 as f64) * r.0 as f64 / r.1 as f64).sqrt().max(1.0);
+    let text_if_shaped_pt = me.text_nat * f.width_pt / cols / CELL;
+    Binding { tall, need, plate: p.plate, spare, areas: areas.into_iter().map(|x| x.1).collect(), text_pt: p.text_pt, text_if_shaped_pt }
 }
 
 /// Everything `place` needs to measure blocks (the same things `layout::layout_with` takes).
@@ -323,6 +356,9 @@ impl<'a> Meas<'a> {
         if defs.iter().any(|d| !d.title.is_empty() && !d.bare && d.at != "none") {
             text_nat = text_nat.min(m.theme.title_size());
         }
+        if g.regions.iter().any(|r| !r.title.is_empty()) {
+            text_nat = text_nat.min(m.theme.font.size);
+        }
         if text_nat == f64::MAX {
             text_nat = m.theme.font.size;
         }
@@ -377,6 +413,19 @@ struct Grid {
     out_top: u32,
     out_bottom: u32,
     folded: bool,
+    /// The regions with blocks in this area, inner before outer.
+    regs: Vec<Reg>,
+}
+
+/// A region in an area's grid: the columns and rows of its blocks, and how many cells its frame
+/// lies beyond them on each side (left, top, right, bottom): `off` to the frame's line, `outer`
+/// with a title written outside the frame (that room is in the gaps and the padding).
+#[derive(Debug, Clone)]
+struct Reg {
+    i: usize,
+    c: (usize, usize),
+    r: (usize, usize),
+    off: [u32; 4],
 }
 
 impl Grid {
@@ -413,6 +462,16 @@ fn grid(me: &Meas, sizes: &[layout::Size], rt: &layout::RTree, pi: usize, fold: 
     let mut lane: BTreeMap<usize, i64> = plan.lane.iter().map(|(k, v)| (*k, *v as i64)).collect();
     let inside: BTreeSet<usize> = d.nodes.iter().copied().collect();
     let idx = |id: &str| g.node_index(id).filter(|i| inside.contains(i));
+    // does a region's block of cells hold a block that is not its own, or meet a sibling's?
+    let conflict = |layer: &BTreeMap<usize, i64>, lane: &BTreeMap<usize, i64>| {
+        if g.regions.is_empty() {
+            return false;
+        }
+        let (mn_l, mn_r) = (layer.values().min().copied().unwrap_or(0), lane.values().min().copied().unwrap_or(0));
+        let l: BTreeMap<usize, usize> = layer.iter().map(|(k, v)| (*k, (v - mn_l) as usize)).collect();
+        let r: BTreeMap<usize, usize> = lane.iter().map(|(k, v)| (*k, (v - mn_r) as usize)).collect();
+        layout::region_conflict(rt, &inside, &rt.roots, &l, &r)
+    };
     // a block tied only by side lines to one block: in that block's column, a row below or above
     for &n in &d.nodes {
         if pinned(&g.nodes[n]) {
@@ -432,8 +491,15 @@ fn grid(me: &Meas, sizes: &[layout::Size], rt: &layout::RTree, pi: usize, fold: 
         let (pl, pr) = (layer[&p], lane[&p]);
         let taken = |l: i64, r: i64, layer: &BTreeMap<usize, i64>, lane: &BTreeMap<usize, i64>| d.nodes.iter().any(|o| *o != n && layer[o] == l && lane[o] == r);
         if let Some(r) = [pr + 1, pr - 1, pr + 2, pr - 2].into_iter().find(|r| !taken(pl, *r, &layer, &lane)) {
+            let before = conflict(&layer, &lane);
+            let (l0, r0) = (layer[&n], lane[&n]);
             layer.insert(n, pl);
             lane.insert(n, r);
+            // a move that puts a block into a frame not its own is not made
+            if !before && conflict(&layer, &lane) {
+                layer.insert(n, l0);
+                lane.insert(n, r0);
+            }
         }
     }
     let compact = |m: &mut BTreeMap<usize, i64>| {
@@ -459,6 +525,10 @@ fn grid(me: &Meas, sizes: &[layout::Size], rt: &layout::RTree, pi: usize, fold: 
         }
         compact(&mut layer);
         compact(&mut lane);
+        // a fold that splits a region does not apply
+        if conflict(&layer, &lane) {
+            return None;
+        }
     }
     let (col, row): (BTreeMap<usize, usize>, BTreeMap<usize, usize>) = if d.down {
         (lane.iter().map(|(k, v)| (*k, *v as usize)).collect(), layer.iter().map(|(k, v)| (*k, *v as usize)).collect())
@@ -487,27 +557,31 @@ fn grid(me: &Meas, sizes: &[layout::Size], rt: &layout::RTree, pi: usize, fold: 
         .collect();
     let margins = 2.0 * CELL;
     let small = m.theme.small_size();
-    let cgap: Vec<u32> = (0..nc.saturating_sub(1))
+    // the room the lines between two columns (rows) need, in cells: between two frames it is all
+    // channel; between two blocks their footprints' margins count (`margins`)
+    let cneed: Vec<u32> = (0..nc.saturating_sub(1))
         .map(|i| {
             let cross: Vec<_> = lines.iter().filter(|(a, b, _)| a.0.min(b.0) <= i && i < a.0.max(b.0)).collect();
             let runs = cross.iter().filter(|(a, b, _)| a.1 != b.1).count();
             let along = if cross.iter().any(|(a, b, _)| a.1 == b.1) { m.theme.space.gap_x } else { 0.0 };
             let label = cross.iter().filter(|(a, b, e)| !e.label.is_empty() && a.0.abs_diff(b.0) == 1).map(|(_, _, e)| text::width(&e.label, small) + 14.0).fold(0.0, f64::max);
-            cells(along.max(label).max(LINE_ROOM * (runs as f64 + 1.0)) - margins).max(1)
+            cells(along.max(label).max(LINE_ROOM * (runs as f64 + 1.0)))
         })
         .collect();
+    let cgap: Vec<u32> = cneed.iter().map(|v| v.saturating_sub(cells(margins)).max(1)).collect();
     // lines that go round a row (feedback, skips, or past a block between their ends) run in
     // the gap under it, or under the panel's last row
     let around = |r: usize| lines.iter().filter(|(a, b, e)| a.1 == r && b.1 == r && (a.0.abs_diff(b.0) > 1 || matches!(e.kind, EdgeKind::Feedback | EdgeKind::Skip))).count();
-    let rgap: Vec<u32> = (0..nr.saturating_sub(1))
+    let rneed: Vec<u32> = (0..nr.saturating_sub(1))
         .map(|i| {
             let cross: Vec<_> = lines.iter().filter(|(a, b, _)| a.1.min(b.1) <= i && i < a.1.max(b.1)).collect();
             let runs = cross.iter().filter(|(a, b, _)| a.0 != b.0).count() + around(i);
             let along = if cross.iter().any(|(a, b, _)| a.0 == b.0) { m.theme.space.gap_y } else { 0.0 };
             let label = if cross.iter().any(|(a, b, e)| !e.label.is_empty() && a.1.abs_diff(b.1) == 1) { small * 1.4 + 10.0 } else { 0.0 };
-            cells(along.max(label).max(LINE_ROOM * (runs as f64 + 1.0)) - margins).max(1)
+            cells(along.max(label).max(LINE_ROOM * (runs as f64 + 1.0)))
         })
         .collect();
+    let rgap: Vec<u32> = rneed.iter().map(|v| v.saturating_sub(cells(margins)).max(1)).collect();
     // padding and the title
     let ts = m.theme.title_size();
     let has_title = !d.title.is_empty() && !d.bare && d.at != "none";
@@ -526,7 +600,12 @@ fn grid(me: &Meas, sizes: &[layout::Size], rt: &layout::RTree, pi: usize, fold: 
     let p = if d.bare { 0 } else { FRAME_PAD };
     let last_around = if nr > 0 { around(nr - 1) } else { 0 };
     let bottom = p + if last_around > 0 { cells(LINE_ROOM * (last_around as f64 + 1.0)) } else { 0 };
-    let mut gr = Grid { col, row, lf, rt: rtv, up, dn, cgap, rgap, pad: [p, if in_top > 0 { in_top } else { p } + out_top, p, bottom + out_bottom], out_top, out_bottom, folded: fold };
+    let mut gr = Grid { col, row, lf, rt: rtv, up, dn, cgap, rgap, pad: [p, if in_top > 0 { in_top } else { p } + out_top, p, bottom + out_bottom], out_top, out_bottom, folded: fold, regs: Vec::new() };
+    // the regions' frames, titles and the channels beside them take cells of their own
+    let edge = region_room(me, rt, &d.nodes, &mut gr, &cneed, &rneed);
+    for (side, e) in edge.iter().enumerate() {
+        gr.pad[side] += e;
+    }
     // a title wider than the blocks widens the panel
     if has_title {
         let tw = cells(text::width(&d.title, ts) * 1.06) + 2 * (FRAME_PAD + 1);
@@ -537,6 +616,159 @@ fn grid(me: &Meas, sizes: &[layout::Size], rt: &layout::RTree, pi: usize, fold: 
         }
     }
     Some(gr)
+}
+
+/// A region's title as `build` draws it (the drawing's font size, bold; `layout` measures it at
+/// the small size, narrower than drawn): its width, its line and the band it takes.
+fn reg_title(r: &crate::spec::Region, theme: &crate::theme::Theme) -> (f64, f64, f64) {
+    if r.title.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    let size = theme.font.size;
+    (text::width(&r.title, size) * 1.12, size * 1.3, size * 1.3 + 2.0)
+}
+
+/// Room for the regions of one area, in cells (the frames are worked out from the grid, not
+/// drawn round the blocks afterwards). Every region with blocks here gets its columns and rows
+/// (`plan_panel` already put a region's blocks together); its frame lies a padding beyond them
+/// (`REG_PAD`, of which the footprints' own margin is one cell), more on the side its title is
+/// written inside, and round the frames of the regions inside it that end at the same line. A
+/// title is never wider than its frame: a frame too narrow for it grows on both sides. Between a
+/// frame and whatever is beside it (another frame, a block) there is a channel clear of both:
+/// `REG_GAP`, or what the lines that pass there need when that is more. Widens `gr`'s gaps and
+/// fills `gr.regs`; returns how far the frames reach beyond the grid on each side.
+fn region_room(me: &Meas, rt: &layout::RTree, nodes: &[usize], gr: &mut Grid, cneed: &[u32], rneed: &[u32]) -> [u32; 4] {
+    let (g, theme) = (me.g, me.m.theme);
+    let inside: BTreeSet<usize> = nodes.iter().copied().collect();
+    let mut live: BTreeMap<usize, (usize, usize, usize, usize)> = BTreeMap::new();
+    for &i in &rt.order {
+        let set: Vec<usize> = rt.all[i].iter().copied().filter(|n| inside.contains(n)).collect();
+        if set.is_empty() {
+            continue;
+        }
+        let (cs, rs) = (set.iter().map(|n| gr.col[n]), set.iter().map(|n| gr.row[n]));
+        live.insert(i, (cs.clone().min().unwrap(), cs.max().unwrap(), rs.clone().min().unwrap(), rs.max().unwrap()));
+    }
+    if live.is_empty() {
+        return [0; 4];
+    }
+    let base = cells(layout::REG_PAD).saturating_sub(1).max(1);
+    let channel = cells(layout::REG_GAP);
+    let mut more: BTreeMap<usize, [u32; 2]> = BTreeMap::new();
+    let mut offs: BTreeMap<usize, ([u32; 4], [u32; 4])> = BTreeMap::new();
+    for _ in 0..12 {
+        offs.clear();
+        for &i in rt.order.iter().rev() {
+            let Some(&(c0, c1, r0, r1)) = live.get(&i) else { continue };
+            let r = &g.regions[i];
+            let at = layout::title_at(r);
+            let band = cells(reg_title(r, theme).2);
+            let mut off = [base; 4];
+            if at == "left" {
+                off[0] += band;
+            } else if at == "top" || at == "top-left" {
+                off[1] += band;
+            }
+            for (side, o) in off.iter_mut().enumerate() {
+                *o += rt.kids[i]
+                    .iter()
+                    .filter_map(|k| {
+                        let (a, b, c, d) = live.get(k)?;
+                        let same = match side {
+                            0 => *a == c0,
+                            1 => *c == r0,
+                            2 => *b == c1,
+                            _ => *d == r1,
+                        };
+                        same.then(|| offs[k].1[side])
+                    })
+                    .max()
+                    .unwrap_or(0);
+            }
+            let tm = more.get(&i).copied().unwrap_or([0, 0]);
+            if at == "left" {
+                off[1] += tm[0];
+                off[3] += tm[1];
+            } else {
+                off[0] += tm[0];
+                off[2] += tm[1];
+            }
+            let mut outer = off;
+            if at == "above" {
+                outer[1] += band;
+            } else if at == "below" {
+                outer[3] += band;
+            }
+            offs.insert(i, (off, outer));
+        }
+        // the channels beside the frames
+        for b in 0..gr.cgap.len() {
+            let e = live.iter().filter(|(_, v)| v.1 == b).map(|(k, _)| offs[k].1[2]).max();
+            let s = live.iter().filter(|(_, v)| v.0 == b + 1).map(|(k, _)| offs[k].1[0]).max();
+            if e.is_some() || s.is_some() {
+                gr.cgap[b] = gr.cgap[b].max(e.unwrap_or(0) + s.unwrap_or(0) + channel.max(cneed[b]));
+            }
+        }
+        for b in 0..gr.rgap.len() {
+            let e = live.iter().filter(|(_, v)| v.3 == b).map(|(k, _)| offs[k].1[3]).max();
+            let s = live.iter().filter(|(_, v)| v.2 == b + 1).map(|(k, _)| offs[k].1[1]).max();
+            if e.is_some() || s.is_some() {
+                gr.rgap[b] = gr.rgap[b].max(e.unwrap_or(0) + s.unwrap_or(0) + channel.max(rneed[b]));
+            }
+        }
+        // a title no wider than its frame
+        let mut changed = false;
+        for (&i, &(c0, c1, r0, r1)) in &live {
+            let r = &g.regions[i];
+            if r.title.is_empty() {
+                continue;
+            }
+            let at = layout::title_at(r);
+            let tw = cells(reg_title(r, theme).0 + 2.0 * layout::REG_PAD);
+            let off = offs[&i].0;
+            let have = if at == "left" {
+                (r0..=r1).map(|x| gr.up[x] + gr.dn[x]).sum::<u32>() + gr.rgap[r0..r1].iter().sum::<u32>() + off[1] + off[3]
+            } else {
+                (c0..=c1).map(|x| gr.lf[x] + gr.rt[x]).sum::<u32>() + gr.cgap[c0..c1].iter().sum::<u32>() + off[0] + off[2]
+            };
+            if have < tw {
+                let d = tw - have;
+                let t = more.entry(i).or_insert([0, 0]);
+                t[0] += d / 2;
+                t[1] += d - d / 2;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let (nc, nr) = (gr.lf.len(), gr.up.len());
+    // between a frame and its panel's frame: a padding's width more, so the two lines never touch
+    let clear_of = |i: usize| {
+        let r = &g.regions[i];
+        // a frame not drawn (no line, no tint) has no line to keep apart
+        if r.line == "none" && r.tint.is_empty() { 0 } else { cells(layout::REG_PAD) }
+    };
+    let mut edge = [0u32; 4];
+    for (&i, &(c0, c1, r0, r1)) in &live {
+        let (off, outer) = offs[&i];
+        let clear = clear_of(i);
+        if c0 == 0 {
+            edge[0] = edge[0].max(outer[0] + clear);
+        }
+        if r0 == 0 {
+            edge[1] = edge[1].max(outer[1] + clear);
+        }
+        if c1 + 1 == nc {
+            edge[2] = edge[2].max(outer[2] + clear);
+        }
+        if r1 + 1 == nr {
+            edge[3] = edge[3].max(outer[3] + clear);
+        }
+        gr.regs.push(Reg { i, c: (c0, c1), r: (r0, r1), off });
+    }
+    edge
 }
 
 /// The footprint of every block of the graph on a format's grid.
@@ -662,8 +894,8 @@ fn by_weight(extra: u32, weights: &[u32]) -> Option<Vec<u32>> {
 
 /// A grid `ew` cells wider: the columns of growable blocks first (each column's share of `cwant`
 /// taken by enlarging its blocks as far as the share and their rows, `h_more` cells taller, allow),
-/// then the gaps between the columns evenly (each by at most an average column), the rest as
-/// margin, equal on both sides.
+/// then the gaps between the columns, evened out (the narrowest first), and only when there is
+/// no gap, as padding inside the frame, equal on both sides.
 fn spread_w(me: &Meas, gr: &mut Grid, nodes: &[usize], cwant: &[u32], ew: u32, h_more: u32) {
     let nc = gr.lf.len();
     let (budget, _) = share(ew, cwant, 1);
@@ -681,22 +913,26 @@ fn spread_w(me: &Meas, gr: &mut Grid, nodes: &[usize], cwant: &[u32], ew: u32, h
         }
         used += (gr.lf[c] - l0) + (gr.rt[c] - r0);
     }
-    let mut rest = ew - used;
-    if nc >= 2 {
-        // a gap grows by at most an average column: beyond that the blocks drift apart
-        let cap = (gr.lf.iter().sum::<u32>() + gr.rt.iter().sum::<u32>()) / nc as u32;
-        let (_, e) = share(rest.min(cap * (nc as u32 - 1)), &[], nc - 1);
-        for (gp, x) in gr.cgap.iter_mut().zip(e) {
-            *gp += x;
-            rest -= x;
-        }
-    }
+    let rest = level(&mut gr.cgap, ew - used);
     gr.pad[0] += rest / 2;
     gr.pad[2] += rest - rest / 2;
 }
 
+/// Even out `gaps` with `extra` cells: each cell to the narrowest gap. Returns what is left (all of
+/// it when there is no gap).
+fn level(gaps: &mut [u32], extra: u32) -> u32 {
+    if gaps.is_empty() {
+        return extra;
+    }
+    for _ in 0..extra {
+        let i = (0..gaps.len()).min_by_key(|i| gaps[*i]).unwrap();
+        gaps[i] += 1;
+    }
+    0
+}
+
 /// As [`spread_w`], down: rows of growable blocks (in the columns as they are), the gaps between
-/// rows, then equal margins.
+/// rows evened out, then equal padding.
 fn spread_h(me: &Meas, gr: &mut Grid, nodes: &[usize], rwant: &[u32], eh: u32) {
     let nr = gr.up.len();
     let (budget, _) = share(eh, rwant, 1);
@@ -714,15 +950,7 @@ fn spread_h(me: &Meas, gr: &mut Grid, nodes: &[usize], rwant: &[u32], eh: u32) {
         }
         used += (gr.up[r] - u0) + (gr.dn[r] - d0);
     }
-    let mut rest = eh - used;
-    if nr >= 2 {
-        let cap = (gr.up.iter().sum::<u32>() + gr.dn.iter().sum::<u32>()) / nr as u32;
-        let (_, e) = share(rest.min(cap * (nr as u32 - 1)), &[], nr - 1);
-        for (gp, x) in gr.rgap.iter_mut().zip(e) {
-            *gp += x;
-            rest -= x;
-        }
-    }
+    let rest = level(&mut gr.rgap, eh - used);
     gr.pad[1] += rest / 2;
     gr.pad[3] += rest - rest / 2;
 }
@@ -791,23 +1019,17 @@ fn realise(me: &Meas, f: &Format, base: &[Vec<Option<Grid>>], c: &Cand, spare: b
     let mut grids: Vec<Grid> = (0..me.defs.len()).map(|p| base[p][c.folds[p] as usize].clone().unwrap_or_else(|| base[p][0].clone().unwrap())).collect();
     let (hgap, vgap) = (&c.hgap, &c.vgap);
     let eh_all = ph - c.need.1;
-    // How far an area can widen (or grow taller) without margin of its own: its growable blocks
-    // and its gaps (each by at most an average column or row).
-    let spread_cap = |sizes: Vec<u32>| -> u32 {
-        let n = sizes.len() as u32;
-        if n < 2 { 0 } else { sizes.iter().sum::<u32>() / n * (n - 1) }
-    };
-    // across: the figure is as wide as every row of areas can take without margin inside a frame
-    // (but at least its least width); the rest of the plate is margin round the figure
+    // The figure is the plate: every row of areas is as wide as the plate and the rows of areas
+    // as tall as it together. Spare cells go to growable blocks first (as far as they want), then
+    // to the gaps between columns (rows), evened out, and only then to padding inside the frames.
     let cw: Vec<Vec<u32>> = (0..me.defs.len()).map(|p| wants(me, &grids[p], &me.defs[p].nodes, eh_all).0).collect();
-    let absorb_w: Vec<u32> = (0..me.defs.len()).map(|p| cw[p].iter().sum::<u32>() + spread_cap((0..grids[p].lf.len()).map(|i| grids[p].lf[i] + grids[p].rt[i]).collect())).collect();
     let row_w: Vec<u32> = c.rows.iter().enumerate().map(|(ri, r)| r.iter().map(|p| grids[*p].w()).sum::<u32>() + hgap[ri].iter().sum::<u32>()).collect();
-    let fw = c.rows.iter().enumerate().map(|(ri, r)| row_w[ri] + r.iter().map(|p| absorb_w[*p]).sum::<u32>()).min().unwrap_or(0).min(pw).max(c.need.0);
     for (ri, r) in c.rows.iter().enumerate() {
         let want: Vec<u32> = r.iter().map(|p| cw[*p].iter().sum()).collect();
-        let (to_blocks, rest) = share(fw - row_w[ri], &want, 1);
-        let caps: Vec<u32> = r.iter().zip(&to_blocks).map(|(p, b)| absorb_w[*p].saturating_sub(*b)).collect();
-        let to_areas = by_weight(rest[0], &caps).unwrap_or_else(|| share(rest[0], &[], r.len()).1);
+        let (to_blocks, rest) = share(pw - row_w[ri], &want, 1);
+        // what the blocks do not take: as many shares to an area as it has gaps between columns
+        let slots: Vec<u32> = r.iter().map(|p| grids[*p].cgap.len() as u32).collect();
+        let to_areas = by_weight(rest[0], &slots).unwrap_or_else(|| share(rest[0], &[], r.len()).1);
         for (j, &p) in r.iter().enumerate() {
             let nodes = me.defs[p].nodes.clone();
             spread_w(me, &mut grids[p], &nodes, &cw[p], to_blocks[j] + to_areas[j], eh_all);
@@ -816,16 +1038,12 @@ fn realise(me: &Meas, f: &Format, base: &[Vec<Option<Grid>>], c: &Cand, spare: b
     // down: the same, rows of areas instead of areas; a row of areas shares one height
     let row_h: Vec<u32> = c.rows.iter().map(|r| r.iter().map(|p| grids[*p].h()).max().unwrap_or(0)).collect();
     let rws: Vec<Vec<u32>> = (0..me.defs.len()).map(|p| wants(me, &grids[p], &me.defs[p].nodes, 0).1).collect();
-    let reach: Vec<u32> = (0..me.defs.len()).map(|p| grids[p].h() + rws[p].iter().sum::<u32>() + spread_cap((0..grids[p].up.len()).map(|i| grids[p].up[i] + grids[p].dn[i]).collect())).collect();
-    let grow_r: Vec<u32> = c.rows.iter().zip(&row_h).map(|(r, h)| r.iter().map(|p| reach[*p]).min().unwrap_or(0).saturating_sub(*h)).collect();
-    let fh = (c.need.1 + grow_r.iter().sum::<u32>()).min(ph);
     let want: Vec<u32> = c.rows.iter().zip(&row_h).map(|(r, h)| r.iter().map(|p| (grids[*p].h() + rws[*p].iter().sum::<u32>()).saturating_sub(*h)).max().unwrap_or(0)).collect();
-    let (to_blocks, rest) = share(fh - c.need.1, &want, 1);
-    let caps: Vec<u32> = grow_r.iter().zip(&to_blocks).map(|(g_, b)| g_.saturating_sub(*b)).collect();
-    let to_rows = by_weight(rest[0], &caps).unwrap_or_else(|| share(rest[0], &[], c.rows.len()).1);
+    let (to_blocks, rest) = share(ph - c.need.1, &want, 1);
+    let slots: Vec<u32> = c.rows.iter().map(|r| r.iter().map(|p| grids[*p].rgap.len() as u32).max().unwrap_or(0)).collect();
+    let to_rows = by_weight(rest[0], &slots).unwrap_or_else(|| share(rest[0], &[], c.rows.len()).1);
     let row_h: Vec<u32> = row_h.iter().enumerate().map(|(i, h)| h + to_blocks[i] + to_rows[i]).collect();
-    // the figure in the middle of the plate
-    let (ox, oy) = ((pw - fw) / 2, (ph - fh) / 2);
+    let (ox, oy) = (0u32, 0u32);
     let mut areas = vec![Cells::default(); me.defs.len()];
     let mut y = oy;
     for (ri, r) in c.rows.iter().enumerate() {
@@ -843,6 +1061,7 @@ fn realise(me: &Meas, f: &Format, base: &[Vec<Option<Grid>>], c: &Cand, spare: b
     let mut blocks = vec![Cells::default(); g.nodes.len()];
     let mut axis = vec![(0u32, 0u32); g.nodes.len()];
     let mut steps = vec![0usize; g.nodes.len()];
+    let mut regions = vec![Cells::default(); g.regions.len()];
     for (p, gr) in grids.iter().enumerate() {
         let a = areas[p];
         let mut cx = vec![0u32; gr.lf.len()];
@@ -862,6 +1081,16 @@ fn realise(me: &Meas, f: &Format, base: &[Vec<Option<Grid>>], c: &Cand, spare: b
             let room = Ext { lf: gr.lf[c_], rt: gr.rt[c_], up: gr.up[r], dn: gr.dn[r] };
             steps[n] = me.grow_step(n, |e| e.within(&room));
             axis[n] = (cx[c_], ry[r]);
+        }
+        // the regions' frames: their columns and rows, and the cells reserved beyond them
+        for rg in &gr.regs {
+            let x0 = cx[rg.c.0] - gr.lf[rg.c.0] - rg.off[0];
+            let x1 = cx[rg.c.1] + gr.rt[rg.c.1] + rg.off[2];
+            let y0 = ry[rg.r.0] - gr.up[rg.r.0] - rg.off[1];
+            let y1 = ry[rg.r.1] + gr.dn[rg.r.1] + rg.off[3];
+            if regions[rg.i].w == 0 {
+                regions[rg.i] = Cells { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+            }
         }
     }
     // like with like, then every block in its cells
@@ -919,7 +1148,8 @@ fn realise(me: &Meas, f: &Format, base: &[Vec<Option<Grid>>], c: &Cand, spare: b
             ways,
             stated: false,
             cover: 0.0,
-            inner: Vec::new(),
+            inner: (0..me.defs.len()).map(|p| if c.folds[p] { "two-rows".to_string() } else { "stated".to_string() }).collect(),
+            regions,
         },
         bends,
     )
@@ -959,7 +1189,7 @@ fn candidates(me: &Meas) -> (Base, Vec<Cand>) {
     // panels without blocks get an empty grid
     let base: Vec<Vec<Option<Grid>>> = base
         .into_iter()
-        .map(|v| if v[0].is_none() { vec![Some(Grid { col: BTreeMap::new(), row: BTreeMap::new(), lf: vec![], rt: vec![], up: vec![], dn: vec![], cgap: vec![], rgap: vec![], pad: [2, 2, 2, 2], out_top: 0, out_bottom: 0, folded: false }), None] } else { v })
+        .map(|v| if v[0].is_none() { vec![Some(Grid { col: BTreeMap::new(), row: BTreeMap::new(), lf: vec![], rt: vec![], up: vec![], dn: vec![], cgap: vec![], rgap: vec![], pad: [2, 2, 2, 2], out_top: 0, out_bottom: 0, folded: false, regs: Vec::new() }), None] } else { v })
         .collect();
     let n = me.defs.len();
     let foldable: Vec<usize> = (0..n).filter(|p| base[*p][1].is_some()).collect();
@@ -987,47 +1217,79 @@ fn candidates(me: &Meas) -> (Base, Vec<Cand>) {
 ///
 /// These are OPTIONS for the user to pick from (at most [`OPTIONS`], one per way of cutting the
 /// areas, in their order, into rows: all stacked, all in one row, two rows …; each with the best
-/// folding of its long chains). The arrangement the graph's `arrange` line states comes first, as
-/// given; the others follow best first: fewest empty cells (the plate less what the areas need
-/// at their own size and the channels between them), then fewest expected bends. A pick by name
-/// is [`arrangement`].
+/// folding of its long chains). Best first: the largest text on the page (the fewest plate
+/// columns), then the larger share of the plate the blocks cover, then the fewest expected bends.
+/// The arrangement the figure's text states (its `arrange` line, every area as its pins say, none
+/// folded; a figure of one area states itself) is always among them, marked `stated`, wherever it
+/// ranks: it takes the last place when it would fall out. A pick by name is [`arrangement`].
 pub fn place(g: &Graph, f: &Format, m: &Measure) -> Option<Vec<Placement>> {
     if g.nodes.is_empty() {
         return None;
     }
     let me = Meas::new(g, m);
-    let (base, mut cands) = candidates(&me);
+    let (base, cands) = candidates(&me);
     let empty_cells = |c: &Cand| {
         let (pw, ph) = f.plate(f.multiplier(c.need));
         (pw as u64 * ph as u64).saturating_sub(c.used)
     };
-    cands.sort_by_key(|c| (empty_cells(c), c.folds.iter().filter(|x| **x).count()));
-    // one option per way of cutting the areas into rows (its best folding): options differ
-    let mut seen: Vec<Vec<Vec<usize>>> = Vec::new();
-    cands.retain(|c| {
-        if seen.contains(&c.rows) {
-            false
-        } else {
-            seen.push(c.rows.clone());
-            true
+    let key = |i: usize| {
+        let c = &cands[i];
+        (f.plate(f.multiplier(c.need)).0, empty_cells(c), c.folds.iter().filter(|x| **x).count(), i)
+    };
+    let stated = stated_cand(&me, &cands);
+    let mut order: Vec<usize> = (0..cands.len()).collect();
+    order.sort_by_key(|i| key(*i));
+    // one option per way of cutting the areas into rows (its best folding): options differ. The
+    // stated rows are offered folded besides only when that is better than as stated.
+    let mut seen: Vec<&Vec<Vec<usize>>> = Vec::new();
+    let mut picked: Vec<usize> = Vec::new();
+    if let Some(s) = stated {
+        if let Some(b) = order.iter().copied().find(|i| cands[*i].rows == cands[s].rows)
+            && b != s
+            && key(b) < key(s)
+        {
+            picked.push(b);
         }
-    });
-    // the arrangement the author wrote comes first, as given
-    let stated = stated_rows(&me);
-    let first = stated.as_ref().and_then(|rows| cands.iter().position(|c| &c.rows == rows));
-    let mut out: Vec<(bool, u64, usize, usize, Placement)> = cands
+        seen.push(&cands[s].rows);
+    }
+    for &i in &order {
+        if !seen.contains(&&cands[i].rows) {
+            seen.push(&cands[i].rows);
+            picked.push(i);
+        }
+    }
+    picked.truncate(KEEP);
+    picked.extend(stated);
+    let mut out: Vec<(Placement, usize, usize)> = picked
         .iter()
-        .enumerate()
-        .take(KEEP)
-        .chain(first.filter(|i| *i >= KEEP).map(|i| (i, &cands[i])))
-        .map(|(i, c)| {
-            let (p, bends) = realise(&me, f, &base, c, true);
-            (Some(i) != first, empty_cells(c), bends, i, p)
+        .map(|&i| {
+            let (mut p, bends) = realise(&me, f, &base, &cands[i], true);
+            p.stated = Some(i) == stated;
+            p.cover = cover_of(&me, &p, f);
+            (p, bends, i)
         })
         .collect();
-    out.sort_by_key(|o| (o.0, o.1, o.2, o.3));
-    out.truncate(OPTIONS);
-    Some(out.into_iter().map(|o| o.4).collect())
+    out.sort_by(|a, b| a.0.plate.0.cmp(&b.0.plate.0).then(b.0.cover.total_cmp(&a.0.cover)).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let mut keep: Vec<Placement> = out.iter().take(OPTIONS).map(|o| o.0.clone()).collect();
+    if !keep.iter().any(|p| p.stated)
+        && let Some(s) = out.iter().find(|o| o.0.stated)
+    {
+        keep.pop();
+        keep.push(s.0.clone());
+    }
+    Some(keep)
+}
+
+/// The candidate the figure's text states: the rows of its `arrange` line (a figure of one area:
+/// that area), no area folded.
+fn stated_cand(me: &Meas, cands: &[Cand]) -> Option<usize> {
+    let rows = stated_rows(me).or_else(|| (me.defs.len() == 1).then(|| vec![vec![0]]))?;
+    cands.iter().position(|c| c.rows == rows && c.folds.iter().all(|x| !x))
+}
+
+/// Share of the plate the blocks cover, measured on the layout the placement draws.
+fn cover_of(me: &Meas, p: &Placement, f: &Format) -> f64 {
+    crate::look::page_cover(&layout_of(me, p), f.ratio)
 }
 
 /// The rows of areas the graph's `arrange` line states, as area indices (`None` when it states
@@ -1065,7 +1327,10 @@ pub fn arrangement(g: &Graph, f: &Format, m: &Measure, name: &str) -> Option<Pla
         // without `(folded)` marks: the best folding of those rows
         exact.or_else(|| cands.iter().filter(|c| rows_of(&arrangement_name(&me, c)).replace("(folded)", "") == w).min_by_key(|c| empty_cells(c)))
     })?;
-    Some(realise(&me, f, &base, hit, true).0)
+    let mut p = realise(&me, f, &base, hit, true).0;
+    p.stated = stated_cand(&me, &cands).is_some_and(|s| std::ptr::eq(&cands[s], hit));
+    p.cover = cover_of(&me, &p, f);
+    Some(p)
 }
 
 /// How full one frame is: its content (the box of its blocks with their words, in cells) against
@@ -1181,8 +1446,12 @@ pub fn grown(g: &Graph, _f: &Format, p: &Placement, m: &Measure) -> Graph {
 /// line on its row's line, both cell borders. Draw with [`grown`]'s graph.
 pub fn to_layout(g: &Graph, f: &Format, p: &Placement, m: &Measure) -> Layout {
     let _ = f;
-    let me = Meas::new(g, m);
-    let st = steps(&me, p);
+    layout_of(&Meas::new(g, m), p)
+}
+
+fn layout_of(me: &Meas, p: &Placement) -> Layout {
+    let (g, m) = (me.g, me.m);
+    let st = steps(me, p);
     let ts = m.theme.title_size();
     let pad = (FRAME_PAD + 1) as f64 * CELL;
     let outside = m.theme.panel.title.starts_with("outside");
@@ -1243,7 +1512,33 @@ pub fn to_layout(g: &Graph, f: &Format, p: &Placement, m: &Measure) -> Layout {
     } else {
         let rt = layout::RTree::new(g);
         let rooms: Vec<Rect> = nodes.iter().map(|n| n.rect.union(&n.reserve)).collect();
-        layout::frame_regions(g, &rt, &rooms, m.theme, 1.0).into_iter().map(|(_, b, _)| b).collect()
+        let framed = layout::frame_regions(g, &rt, &rooms, m.theme, 1.0);
+        if p.regions.len() != g.regions.len() {
+            framed.into_iter().map(|(_, b, _)| b).collect()
+        } else {
+            // the frames on the cells reserved for them, the titles where `frame_regions` puts them
+            framed
+                .into_iter()
+                .map(|(i, mut b, _)| {
+                    let c = p.regions[i];
+                    if c.w == 0 || c.h == 0 {
+                        return b;
+                    }
+                    let r = &g.regions[i];
+                    let f = rect_of(c, CELL);
+                    let (tw, th, band) = reg_title(r, m.theme);
+                    b.rect = f;
+                    b.title_rect = (!r.title.is_empty()).then(|| match layout::title_at(r) {
+                        "top" => Rect::new(f.cx() - tw / 2.0, f.y + 1.0, tw, th),
+                        "above" => Rect::new(f.cx() - tw / 2.0, f.y - band + 1.0, tw, th),
+                        "below" => Rect::new(f.cx() - tw / 2.0, f.bottom() + 1.0, tw, th),
+                        "left" => Rect::new(f.x + 1.0, f.cy() - tw / 2.0, th, tw),
+                        _ => Rect::new(f.x + layout::REG_PAD, f.y + 1.0, tw, th),
+                    });
+                    b
+                })
+                .collect()
+        }
     };
     let bounds = Rect::new(0.0, 0.0, p.plate.0 as f64 * CELL, p.plate.1 as f64 * CELL);
     Layout { nodes, panels, regions, legend: Vec::new(), swatches: Vec::new(), bounds, scale: 1.0 }

@@ -208,7 +208,7 @@ fn three_with(arrange: &str) -> Graph {
 }
 
 #[test]
-fn the_options_differ_and_the_stated_one_comes_first() {
+fn the_options_differ_and_the_stated_one_is_among_them() {
     let f = Format::new(500.0, (16, 9));
     let offered = |g: &Graph| with_measure(|m| plate::place(g, &f, m).unwrap());
     // nothing stated: up to four different ways of cutting the areas into rows
@@ -222,9 +222,11 @@ fn the_options_differ_and_the_stated_one_comes_first() {
         // each option is complete
         assert!(a.text_pt > 0.0 && a.plate.0 > 0 && a.blocks.iter().all(|c| c.w > 0));
     }
-    // the author's line wins the first place, the others are still offered
+    // three areas and no `arrange` line: nothing is stated
+    assert!(free.iter().all(|p| !p.stated));
+    // the author's line is offered, the others too
     let stated = offered(&three_with("arrange a b / c\n"));
-    assert_eq!(rows(&stated[0]), "a b / c", "{}", stated[0].arrangement);
+    assert!(stated.iter().any(|p| p.stated && rows(p) == "a b / c"), "{:?}", stated.iter().map(|p| &p.arrangement).collect::<Vec<_>>());
     assert!(stated.len() > 1);
     // the user's pick, by name, is what gets placed
     let g = three();
@@ -232,6 +234,78 @@ fn the_options_differ_and_the_stated_one_comes_first() {
     assert_eq!(rows(&pick), "a / b c");
     assert!(pick.areas[1].y == pick.areas[2].y && pick.areas[0].y < pick.areas[1].y);
     assert!(with_measure(|m| plate::arrangement(&g, &f, m, "a c / b")).is_none(), "areas keep their order");
+}
+
+#[test]
+fn options_come_largest_on_the_page_first() {
+    for (r, arrange) in [((16, 9), ""), ((5, 6), ""), ((32, 9), "arrange a / b / c\n"), ((1, 1), "arrange a b c\n")] {
+        let g = three_with(arrange);
+        let f = Format::new(500.0, r);
+        let all = with_measure(|m| plate::place(&g, &f, m).unwrap());
+        // the stated one may take the last place out of turn; the rest are in order
+        let ranked: Vec<&Placement> = all.iter().enumerate().filter(|(i, p)| !(p.stated && *i + 1 == all.len() && *i > 0)).map(|(_, p)| p).collect();
+        for w in ranked.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            // the fewest plate columns = the largest text on the page
+            assert!(a.plate.0 <= b.plate.0, "{r:?}: {} before {}", a.arrangement, b.arrangement);
+            assert!(a.text_pt >= b.text_pt - 1e-9);
+            if a.plate.0 == b.plate.0 {
+                assert!(a.cover >= b.cover - 1e-9, "{r:?}: same text, the fuller first");
+            }
+        }
+        // the first is the best any arrangement gets
+        let best_cols = all.iter().map(|p| p.plate.0).min().unwrap();
+        assert_eq!(all[0].plate.0, best_cols);
+    }
+}
+
+#[test]
+fn the_stated_arrangement_is_always_offered_and_marked() {
+    // stacked on a very wide page is the worst way: still offered, marked, exactly once
+    let g = three_with("arrange a / b / c\n");
+    for r in [(32, 9), (16, 9), (5, 6)] {
+        let f = Format::new(500.0, r);
+        let all = with_measure(|m| plate::place(&g, &f, m).unwrap());
+        assert!(all.len() <= plate::OPTIONS);
+        let stated: Vec<&Placement> = all.iter().filter(|p| p.stated).collect();
+        assert_eq!(stated.len(), 1, "{r:?}");
+        let s = stated[0];
+        // as written: those rows, nothing folded, every area as its pins say
+        assert_eq!(s.arrangement, "top-to-bottom: a / b / c", "{r:?}");
+        assert_eq!(s.inner, vec!["stated"; 3]);
+        // the others say how they arrange their areas inside
+        for p in &all {
+            assert_eq!(p.inner.len(), 3);
+            for (k, v) in p.inner.iter().enumerate() {
+                let folded = p.arrangement.contains(&format!("{}(folded)", ["a", "b", "c"][k]));
+                assert_eq!(v, if folded { "two-rows" } else { "stated" }, "{}", p.arrangement);
+            }
+        }
+    }
+    // a figure of one area states itself
+    let one = with_measure(|m| plate::place(&graph(CHAIN), &Format::new(500.0, (16, 9)), m).unwrap());
+    assert!(one.iter().any(|p| p.stated && !p.arrangement.contains("folded")));
+    // a pick by name knows whether it is the stated one
+    let f = Format::new(500.0, (16, 9));
+    assert!(with_measure(|m| plate::arrangement(&g, &f, m, "a / b / c")).unwrap().stated);
+    assert!(!with_measure(|m| plate::arrangement(&g, &f, m, "a b c")).unwrap().stated);
+}
+
+#[test]
+fn cover_is_the_blocks_over_the_plate() {
+    let g = three();
+    for r in [(16, 9), (1, 1)] {
+        let f = Format::new(500.0, r);
+        for p in with_measure(|m| plate::place(&g, &f, m).unwrap()) {
+            let grown = with_measure(|m| plate::grown(&g, &f, &p, m));
+            let lay = layout_of(&grown, &f, &p);
+            let blocks: f64 = lay.nodes.iter().map(|n| n.rect.w * n.rect.h).sum();
+            let plate_area = p.plate.0 as f64 * p.plate.1 as f64 * CELL * CELL;
+            assert!(near(p.cover, blocks / plate_area), "{} {} vs {}", p.arrangement, p.cover, blocks / plate_area);
+            assert!(near(p.cover, look::page_cover(&lay, r)));
+            assert!(p.cover > 0.0 && p.cover < 1.0);
+        }
+    }
 }
 
 #[test]
@@ -418,4 +492,268 @@ fn blocks_of_one_kind_in_a_row_grow_alike() {
         }
     }
     assert!(grew, "some arrangement had room to grow them");
+}
+
+// ── regions in the budget ─────────────────────────────────────────────────────
+
+/// A chain through two module frames side by side, the second holding a frame of its own; titles
+/// above, inside and below; one long title over two short blocks.
+const FRAMED: &str = "fig r\npanel p \"P\"\n  x: box \"Input\"\n  region r1 \"A rather long module title over two blocks\" title=above\n    a: box \"Alpha\"\n    b: box \"Bravo\"\n  end\n  region r2 \"Second\" title=below\n    c: box \"Delta\"\n    region r3 \"Inner\"\n      d: box \"Gamma\"\n      e: box \"Echo\"\n    end\n  end\n  y: box \"Out\"\nend\nx -> a -> b -> c -> d -> e -> y\n";
+
+/// As a model writes them: every block pinned, two frames stacked in the same columns, a block
+/// outside them in the first column and one under them, a frame with its title at the left.
+const PINNED: &str = "fig q\npanel p \"P\"\n  x: box \"Input\" col=0 lane=0\n  region top \"Upper module\" title=above\n    a: box \"Alpha\" col=1 lane=0\n    b: box \"Bravo\" col=2 lane=0\n  end\n  region low \"Lower module with a title\"\n    c: box \"Delta\" col=1 lane=1\n    d: box \"Gamma\" col=2 lane=1\n  end\n  region side \"Side\" title=left\n    e: box \"Echo\" col=3 lane=0\n  end\n  z: box \"Under\" col=2 lane=2\nend\nx -> a -> b -> e\nx -> c -> d -> e\nd -> z\n";
+
+fn framed_layouts() -> Vec<(String, Graph, Layout)> {
+    let mut out = Vec::new();
+    for src in [FRAMED, PINNED] {
+        let g = graph(src);
+        for r in [(16, 9), (5, 2), (1, 1), (5, 6)] {
+            let f = Format::new(500.0, r);
+            for p in with_measure(|m| plate::place(&g, &f, m).unwrap()) {
+                assert_eq!(p.regions.len(), g.regions.len());
+                let grown = with_measure(|m| plate::grown(&g, &f, &p, m));
+                let lay = layout_of(&grown, &f, &p);
+                // the frames are the cells reserved for them, on cell borders
+                for rb in &lay.regions {
+                    let i = g.regions.iter().position(|x| x.id == rb.id).unwrap();
+                    assert_eq!(rb.rect, plate::rect_of(p.regions[i], CELL), "{}", rb.id);
+                    for v in [rb.rect.x, rb.rect.y, rb.rect.right(), rb.rect.bottom()] {
+                        assert!(on_border(v), "{} off the cells", rb.id);
+                    }
+                }
+                out.push((format!("{} {r:?} {}", g.nodes[0].id, p.arrangement), g.clone(), lay));
+            }
+        }
+    }
+    out
+}
+
+fn meets(a: &Rect, b: &Rect) -> bool {
+    a.x < b.right() - 1e-6 && b.x < a.right() - 1e-6 && a.y < b.bottom() - 1e-6 && b.y < a.bottom() - 1e-6
+}
+
+fn holds(a: &Rect, b: &Rect, by: f64) -> bool {
+    a.x + by <= b.x + 1e-6 && a.y + by <= b.y + 1e-6 && a.right() - by >= b.right() - 1e-6 && a.bottom() - by >= b.bottom() - 1e-6
+}
+
+/// Every node a region frames, its sub-regions' included.
+fn framed(g: &Graph, id: &str) -> Vec<String> {
+    let mut ids = vec![id.to_string()];
+    let mut i = 0;
+    while i < ids.len() {
+        let kids: Vec<String> = g.regions.iter().filter(|r| r.parent == ids[i]).map(|r| r.id.clone()).collect();
+        ids.extend(kids);
+        i += 1;
+    }
+    g.regions.iter().filter(|r| ids.contains(&r.id)).flat_map(|r| r.members.clone()).collect()
+}
+
+fn nested(g: &Graph, inner: &str, outer: &str) -> bool {
+    let mut at = inner.to_string();
+    while let Some(r) = g.regions.iter().find(|r| r.id == at) {
+        if r.parent == outer {
+            return true;
+        }
+        at = r.parent.clone();
+    }
+    false
+}
+
+#[test]
+fn region_frames_never_overlap() {
+    for (what, g, lay) in framed_layouts() {
+        for (i, a) in lay.regions.iter().enumerate() {
+            // inside its panel, a padding clear of the panel's frame
+            let panel = &lay.panels[0].rect;
+            assert!(holds(panel, &a.rect, CELL), "{what}: {} touches its panel", a.id);
+            for b in &lay.regions[i + 1..] {
+                if nested(&g, &a.id, &b.id) || nested(&g, &b.id, &a.id) {
+                    continue;
+                }
+                // siblings: apart, with a channel between them a line can run in clear of both
+                let (ga, gb) = (a.rect.inflate(10.0 - 1e-6), b.rect.inflate(10.0 - 1e-6));
+                assert!(!meets(&ga, &gb), "{what}: {} and {} closer than a channel: {:?} {:?}", a.id, b.id, a.rect, b.rect);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_region_title_has_its_own_room() {
+    for (what, g, lay) in framed_layouts() {
+        let rooms: Vec<Rect> = lay.nodes.iter().map(|n| n.rect.union(&n.reserve)).collect();
+        for a in &lay.regions {
+            let t = a.title_rect.expect("every test frame has a title");
+            // never wider than its frame (upright at the left: never taller)
+            if a.title_at == "left" {
+                assert!(holds(&a.rect, &t, 0.0), "{what}: {}", a.id);
+            } else {
+                assert!(t.x >= a.rect.x - 1e-6 && t.right() <= a.rect.right() + 1e-6, "{what}: {} title {t:?} frame {:?}", a.id, a.rect);
+            }
+            match a.title_at.as_str() {
+                "above" => assert!(t.bottom() <= a.rect.y + 1e-6 && t.y >= lay.panels[0].rect.y, "{what}: {}", a.id),
+                "below" => assert!(t.y >= a.rect.bottom() - 1e-6 && t.bottom() <= lay.panels[0].rect.bottom(), "{what}: {}", a.id),
+                _ => assert!(holds(&a.rect, &t, 0.0), "{what}: {}", a.id),
+            }
+            // clear of every block, every other title, and of the frames it is not inside
+            for (ni, r) in rooms.iter().enumerate() {
+                assert!(!meets(&t, r), "{what}: the title of {} lies on {}", a.id, g.nodes[ni].id);
+            }
+            for b in lay.regions.iter().filter(|b| b.id != a.id) {
+                if let Some(u) = b.title_rect {
+                    assert!(!meets(&t, &u), "{what}: titles of {} and {} touch", a.id, b.id);
+                }
+                assert!(!meets(&t, &b.rect) || holds(&b.rect, &t, 0.0), "{what}: the frame of {} crosses the title of {}", b.id, a.id);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_block_stays_inside_its_region_and_out_of_the_others() {
+    for (what, g, lay) in framed_layouts() {
+        for a in &lay.regions {
+            let own = framed(&g, &a.id);
+            for (ni, n) in lay.nodes.iter().enumerate() {
+                let room = n.rect.union(&n.reserve);
+                if own.contains(&g.nodes[ni].id) {
+                    // inside, a padding from the frame
+                    assert!(holds(&a.rect, &room, 4.0), "{what}: {} leaves {}", g.nodes[ni].id, a.id);
+                } else {
+                    assert!(!meets(&a.rect, &room), "{what}: {} lies in {}", g.nodes[ni].id, a.id);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_nested_region_lies_inside_its_parent() {
+    let mut seen = false;
+    for (what, g, lay) in framed_layouts() {
+        for a in &lay.regions {
+            let Some(parent) = g.regions.iter().find(|r| r.id == a.id).map(|r| r.parent.clone()).filter(|p| !p.is_empty()) else { continue };
+            let p = lay.regions.iter().find(|r| r.id == parent).unwrap();
+            // wholly inside, a padding from the parent's frame, under the parent's title
+            assert!(holds(&p.rect, &a.rect, CELL), "{what}: {} out of {}: {:?} {:?}", a.id, p.id, a.rect, p.rect);
+            if let (Some(t), Some(pt)) = (a.title_rect, p.title_rect) {
+                assert!(!meets(&t, &pt), "{what}");
+            }
+            seen = true;
+        }
+    }
+    assert!(seen);
+}
+
+// ── the figure is the plate ───────────────────────────────────────────────────
+
+#[test]
+fn the_frames_reach_the_edges_of_the_plate() {
+    for (g, rs) in [(three(), vec![(16, 9), (5, 6), (32, 9), (1, 1)]), (graph(FRAMED), vec![(16, 9), (5, 2)]), (graph(CHAIN), vec![(1, 1), (16, 9)])] {
+        for r in rs {
+            let f = Format::new(500.0, r);
+            for p in with_measure(|m| plate::place(&g, &f, m).unwrap()) {
+                let a = &p.areas;
+                // no band of the plate outside the areas: the left of every row of areas is the
+                // plate's left, its right the plate's right; the first row at the top, the last
+                // at the bottom
+                let rows: std::collections::BTreeSet<u32> = a.iter().map(|x| x.y).collect();
+                for y in &rows {
+                    let row: Vec<_> = a.iter().filter(|x| x.y == *y).collect();
+                    assert_eq!(row.iter().map(|x| x.x).min(), Some(0), "{r:?} {}", p.arrangement);
+                    assert_eq!(row.iter().map(|x| x.x + x.w).max(), Some(p.plate.0), "{r:?} {}", p.arrangement);
+                }
+                assert_eq!(a.iter().map(|x| x.y).min(), Some(0), "{r:?} {}", p.arrangement);
+                assert_eq!(a.iter().map(|x| x.y + x.h).max(), Some(p.plate.1), "{r:?} {}", p.arrangement);
+                // the rows of areas stack without a band between them other than the gap
+                let lay = layout_of(&g, &f, &p);
+                for pb in &lay.panels {
+                    // the frame is its area (a title written outside takes its band from the area)
+                    let ar = plate::rect_of(a[lay.panels.iter().position(|x| x.id == pb.id).unwrap()], CELL);
+                    assert!(near(pb.rect.x, ar.x) && near(pb.rect.right(), ar.right()), "{r:?} {}", p.arrangement);
+                    assert!(near(pb.rect.bottom(), ar.bottom()) || pb.title_rect.is_some_and(|t| t.y >= pb.rect.bottom()));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn areas_of_one_row_are_equally_tall() {
+    let g = three();
+    for r in [(16, 9), (5, 6), (32, 9), (1, 1), (3, 1)] {
+        let f = Format::new(500.0, r);
+        let mut all = with_measure(|m| plate::place(&g, &f, m).unwrap());
+        all.push(with_measure(|m| plate::arrangement(&g, &f, m, "a b / c")).unwrap());
+        all.push(with_measure(|m| plate::arrangement(&g, &f, m, "a / b c")).unwrap());
+        for p in &all {
+            let a = &p.areas;
+            for x in a {
+                for y in a {
+                    let side = x.y < y.y + y.h && y.y < x.y + x.h;
+                    let stacked = x.x < y.x + y.w && y.x < x.x + x.w;
+                    if side {
+                        assert_eq!((x.y, x.h), (y.y, y.h), "{r:?} {}: one row, one height", p.arrangement);
+                    }
+                    // stacked alone in their rows: one width, the plate's
+                    if stacked && !side && a.iter().filter(|z| z.y == x.y).count() == 1 && a.iter().filter(|z| z.y == y.y).count() == 1 {
+                        assert_eq!((x.x, x.w), (y.x, y.w), "{r:?} {}", p.arrangement);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn spare_room_evens_the_gaps_and_keeps_the_lines() {
+    // a wide page for a stacked figure: the spare room across goes between the columns, evenly,
+    // and blocks of one row stay on one port line, blocks of one column on one middle line
+    let g = graph(CHAIN);
+    let f = Format::new(500.0, (5, 1));
+    let p = with_measure(|m| plate::arrangement(&g, &f, m, "p")).unwrap();
+    let gaps: Vec<u32> = p.columns.iter().skip(1).step_by(2).copied().collect();
+    assert_eq!(gaps.len(), 3);
+    assert!(gaps.iter().max().unwrap() - gaps.iter().min().unwrap() <= 1, "{gaps:?}");
+    let lay = layout_of(&g, &f, &p);
+    for n in &lay.nodes[1..] {
+        assert!(near(n.port_y, lay.nodes[0].port_y));
+    }
+}
+
+// ── what binds ────────────────────────────────────────────────────────────────
+
+#[test]
+fn binding_names_the_direction_and_the_areas_that_set_it() {
+    let g = three();
+    // stacked on a very wide page: the height binds, every area sets it, room is left across
+    let f = Format::new(500.0, (32, 9));
+    let p = with_measure(|m| plate::arrangement(&g, &f, m, "a / b / c")).unwrap();
+    let b = with_measure(|m| plate::binding(&g, &f, &p, m));
+    assert!(b.tall);
+    assert_eq!((b.need, b.plate), (p.budget.least, p.plate));
+    assert_eq!(b.spare, p.plate.0 - b.need.0);
+    assert_eq!(b.areas.len(), 3);
+    assert!(b.areas.iter().all(|x| x.binds && x.cols >= 2 && x.rows >= 1 && x.w > 0 && x.h > 0));
+    assert!(b.areas.iter().map(|x| x.h).sum::<u32>() <= b.need.1);
+    // the same cells in the plate's shape would give larger text
+    assert!(b.text_if_shaped_pt > b.text_pt, "{} vs {}", b.text_if_shaped_pt, b.text_pt);
+    assert!(near(b.text_pt, p.text_pt));
+    // side by side on a tall page: the width binds, room is left down
+    let f = Format::new(500.0, (5, 6));
+    let p = with_measure(|m| plate::arrangement(&g, &f, m, "a b c")).unwrap();
+    let b = with_measure(|m| plate::binding(&g, &f, &p, m));
+    assert!(!b.tall);
+    assert_eq!(b.spare, p.plate.1 - b.need.1);
+    assert!(b.areas.iter().all(|x| x.binds));
+    // two rows, the wider on top: across, only the areas of the widest row set the width
+    let p = with_measure(|m| plate::arrangement(&g, &f, m, "a b / c")).unwrap();
+    let b = with_measure(|m| plate::binding(&g, &f, &p, m));
+    assert!(!b.tall, "a b / c on 5:6 is held by its width");
+    let ids: Vec<(&str, bool)> = b.areas.iter().map(|x| (x.id.as_str(), x.binds)).collect();
+    assert_eq!(ids, vec![("a", true), ("b", true), ("c", false)]);
+    // exactly the plate's shape: no more to win
+    let shaped = (b.need.0 as f64 * b.need.1 as f64 * 5.0 / 6.0).sqrt();
+    assert!(near(b.text_if_shaped_pt / b.text_pt, p.plate.0 as f64 / shaped));
 }
