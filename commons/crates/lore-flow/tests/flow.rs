@@ -2302,7 +2302,16 @@ fn a_palette_names_the_tints_and_a_style_the_region_frames() {
 }
 
 #[test]
-fn a_line_is_always_exposed_and_keeps_out_of_a_module_it_does_not_end_in() {
+fn a_line_passes_beneath_a_module_and_its_arrowhead_shows() {
+    use lore_flow::build::{Layer, frame_order};
+    // frame_order: over the frame that holds an end, under the frame only crossed
+    let frames = [Rect::new(10.0, 10.0, 80.0, 80.0), Rect::new(120.0, 10.0, 80.0, 80.0)];
+    let ends = [[(50.0, 50.0), (250.0, 50.0)]];
+    let lines = vec![vec![(50.0, 50.0), (250.0, 50.0)]];
+    let (order, forced) = frame_order(&frames, &ends, &lines);
+    let at = |x: Layer| order.iter().position(|o| *o == x).unwrap();
+    assert!(forced.is_empty() && at(Layer::Frame(0)) < at(Layer::Line(0)) && at(Layer::Line(0)) < at(Layer::Frame(1)));
+
     // a module frame (a region) round M, between two blocks it does not hold
     let src = "fig f\npanel p \"P\"\n  a: box \"A\" col=0 lane=0\n  m: box \"M\" col=1 lane=0\n  b: box \"B\" col=2 lane=0\n  region grp \"\" in=p\n    m\n  end\n  a -> b : data\n  a -> m : side\n";
     let g = dsl::parse(src).unwrap();
@@ -2310,20 +2319,25 @@ fn a_line_is_always_exposed_and_keeps_out_of_a_module_it_does_not_end_in() {
     let opt = layout::LayoutOptions { frame: Rect::new(0.0, 0.0, 600.0, 300.0), ..Default::default() };
     let lay = layout::layout(&g, &t, &Vars::default(), &Library::default(), &opt);
     let mut routes = route::route(&g, &lay);
-    let b = built_with(&t, &g, &lay, &routes);
-    let pos = |b: &build::Built, name: &str| b.objects.iter().position(|o| o.name == name).unwrap_or_else(|| panic!("{name}"));
-    // every line is drawn after every frame: nothing hides it
-    for line in ["flow:f/edge:a-b", "flow:f/edge:a-m"] {
-        assert!(pos(&b, "flow:f/region:grp") < pos(&b, line) && pos(&b, "flow:f/panel:p") < pos(&b, line));
-    }
-    // the router keeps a -> b out of the module (it goes round), a -> m may enter (it ends inside)
-    let rep = lore_flow::look::check(&b.objects);
-    assert!(rep.through_module.is_empty(), "{:?}", rep.through_module);
-    // a line forced straight through the module is counted
+    // a -> b forced straight through the module
     let (pa, pb) = (&lay.nodes[0].rect, &lay.nodes[2].rect);
     routes[0].points = vec![(pa.right(), pa.cy()), (pb.x, pa.cy())];
-    let rep = lore_flow::look::check(&built_with(&t, &g, &lay, &routes).objects);
-    assert_eq!(rep.through_module.len(), 1);
+    let b = built_with(&t, &g, &lay, &routes);
+    let pos = |name: &str| b.objects.iter().position(|o| o.name == name).unwrap_or_else(|| panic!("{name}"));
+    // base area under every line; the passing line under the module's opaque frame; the line
+    // that ends in the module over its frame
+    assert!(pos("flow:f/panel:p") < pos("flow:f/edge:a-b") && pos("flow:f/panel:p") < pos("flow:f/edge:a-m"));
+    assert!(pos("flow:f/edge:a-b") < pos("flow:f/region:grp"), "the passing line is beneath the module");
+    assert!(pos("flow:f/region:grp") < pos("flow:f/edge:a-m"), "a line ending inside lies over the frame");
+    assert!(matches!(b.objects[pos("flow:f/region:grp")].kind.sp().unwrap().fill, lore_canvas::Paint::Solid { .. }));
+    let rep = lore_flow::look::check(&b.objects);
+    assert!(rep.over_module.is_empty() && rep.hidden_heads.is_empty(), "{:?} {:?}", rep.over_module, rep.hidden_heads);
+    // a line into M drawn beneath the module's frame would hide its arrowhead: counted
+    let mut objs = b.objects.clone();
+    let (li, ri) = (pos("flow:f/edge:a-m"), pos("flow:f/region:grp"));
+    let line = objs.remove(li);
+    objs.insert(ri, line);
+    assert_eq!(lore_flow::look::check(&objs).hidden_heads.len(), 1);
 }
 
 #[test]

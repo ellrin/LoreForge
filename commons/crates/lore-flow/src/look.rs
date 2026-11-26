@@ -33,8 +33,11 @@ pub struct Report {
     pub on_line: Vec<Hit>,
     /// A figure line that passes behind a block that is not one of its ends.
     pub behind_block: Vec<Hit>,
-    /// A figure line that runs through a module's frame (a region) with neither end inside it.
-    pub through_module: Vec<Hit>,
+    /// A figure line drawn OVER a module's frame (a region) that holds neither of its ends: it
+    /// should pass beneath the module, hidden.
+    pub over_module: Vec<Hit>,
+    /// An arrowhead covered by something drawn over it: the head must always show.
+    pub hidden_heads: Vec<Hit>,
 }
 
 /// `flow:<fig>/edge:<from>-<to>` → (from, to); `None` for a label, a junction dot or anything else.
@@ -142,7 +145,10 @@ fn words_box(t: &lore_canvas::TextBody, r: Rect, scale: f64) -> Rect {
     Rect::new(x, y, w, h).inflate(-0.5)
 }
 
-fn walk(o: &Object, xf: &Xf, path: &str, out: &mut Vec<(String, Item)>) {
+/// (name of a line, it has a head at its start, at its end)
+type Heads = Vec<(String, bool, bool)>;
+
+fn walk(o: &Object, xf: &Xf, path: &str, out: &mut Vec<(String, Item)>, heads: &mut Heads) {
     if o.hidden {
         return;
     }
@@ -175,6 +181,9 @@ fn walk(o: &Object, xf: &Xf, path: &str, out: &mut Vec<(String, Item)>) {
                         })
                         .collect();
                 }
+                if let Some(l) = &sp.line {
+                    heads.push((name.clone(), l.head != "none" && !l.head.is_empty(), l.tail != "none" && !l.tail.is_empty()));
+                }
                 out.push((name.clone(), Item::Line(pts)));
             } else if sp.line.is_some() || !matches!(sp.fill, Paint::None) {
                 let opaque = matches!(&sp.fill, Paint::Solid { .. }) && !matches!(&sp.fill, Paint::Solid { alpha, .. } if *alpha < 0.95);
@@ -190,7 +199,8 @@ fn walk(o: &Object, xf: &Xf, path: &str, out: &mut Vec<(String, Item)>) {
             }
         }
         Kind::Connector(c) => {
-            if c.line.is_some() {
+            if let Some(l) = &c.line {
+                heads.push((name.clone(), l.head != "none" && !l.head.is_empty(), l.tail != "none" && !l.tail.is_empty()));
                 out.push((name, Item::Line(connector_path(&c.geom, &c.adj, &o.frame).into_iter().map(|p| xf.pt(p)).collect())));
             }
         }
@@ -200,7 +210,7 @@ fn walk(o: &Object, xf: &Xf, path: &str, out: &mut Vec<(String, Item)>) {
             let sy = if g.ch.h == 0 { 1.0 } else { f.h as f64 / g.ch.h as f64 };
             let inner = Xf { sx: xf.sx * sx, sy: xf.sy * sy, ox: r.x - g.ch.x as f64 / EMU_PT * xf.sx * sx, oy: r.y - g.ch.y as f64 / EMU_PT * xf.sy * sy };
             for ch in &g.children {
-                walk(ch, &inner, &name, out);
+                walk(ch, &inner, &name, out, heads);
             }
         }
         Kind::Picture(_) => out.push((name, Item::Shape { rect: r, opaque: true, outlined: false })),
@@ -245,8 +255,9 @@ fn inside(r: &Rect, p: (f64, f64)) -> bool {
 pub fn check(objects: &[Object]) -> Report {
     let root = Xf { sx: 1.0, sy: 1.0, ox: 0.0, oy: 0.0 };
     let mut items = Vec::new();
+    let mut heads: Heads = Vec::new();
     for o in objects {
-        walk(o, &root, "", &mut items);
+        walk(o, &root, "", &mut items, &mut heads);
     }
     let mut rep = Report::default();
     for (name, it) in &items {
@@ -300,19 +311,34 @@ pub fn check(objects: &[Object]) -> Report {
                 rep.loose_ends.push(Hit { line: lname.clone(), other: which.to_string(), at: p });
             }
         }
-        // through a module's frame with neither end inside
-        for (oname, o) in &items {
-            let Item::Shape { rect, .. } = o else { continue };
+        // drawn over a module's frame that holds neither end (it should pass beneath it)
+        for (oi, (oname, o)) in items.iter().enumerate() {
+            let Item::Shape { rect, opaque, .. } = o else { continue };
             if !oname.contains("/region:") || oname.ends_with("/title") {
                 continue;
             }
             let inner = rect.inflate(-1.0);
             let holds = |p: (f64, f64)| p.0 > rect.x - 1.0 && p.0 < rect.right() + 1.0 && p.1 > rect.y - 1.0 && p.1 < rect.bottom() + 1.0;
-            if holds(pts[0]) || holds(pts[pts.len() - 1]) {
+            if holds(pts[0]) || holds(pts[pts.len() - 1]) || (oi > li && *opaque) {
                 continue;
             }
             if let Some(at) = pts.windows(2).find_map(|sg| crossing(sg[0], sg[1], &inner)) {
-                rep.through_module.push(Hit { line: lname.clone(), other: oname.clone(), at });
+                rep.over_module.push(Hit { line: lname.clone(), other: oname.clone(), at });
+            }
+        }
+        // an arrowhead under something opaque drawn after the line
+        if let Some((_, at_start, at_end)) = heads.iter().find(|h| &h.0 == lname) {
+            let n = pts.len();
+            for (has, tip, from) in [(*at_start, pts[0], pts[1]), (*at_end, pts[n - 1], pts[n - 2])] {
+                if !has {
+                    continue;
+                }
+                let d = ((tip.0 - from.0).powi(2) + (tip.1 - from.1).powi(2)).sqrt().max(1e-6);
+                let back = (tip.0 + (from.0 - tip.0) / d * 3.0, tip.1 + (from.1 - tip.1) / d * 3.0);
+                let cover = items.iter().enumerate().find(|(oi, (_, o))| *oi > li && matches!(o, Item::Shape { rect, opaque: true, .. } if { let g = rect.inflate(-0.5); back.0 > g.x && back.0 < g.right() && back.1 > g.y && back.1 < g.bottom() }));
+                if let Some((_, (oname, _))) = cover {
+                    rep.hidden_heads.push(Hit { line: lname.clone(), other: oname.clone(), at: tip });
+                }
             }
         }
         // behind a block that is not one of its ends

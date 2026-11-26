@@ -769,8 +769,11 @@ pub fn looks(fig: &crate::Figure) -> Vec<String> {
     for h in &rep.through_open {
         push(format!("{} shows through {}", who(&h.line), who(&h.other)));
     }
-    for h in &rep.through_module {
-        push(format!("{} runs through {} without ending in it", who(&h.line), who(&h.other)));
+    for h in &rep.over_module {
+        push(format!("{} is drawn over {} without ending in it", who(&h.line), who(&h.other)));
+    }
+    for h in &rep.hidden_heads {
+        push(format!("the arrowhead of {} is covered by {}", who(&h.line), who(&h.other)));
     }
     for h in &rep.behind_block {
         push(format!("{} passes behind {}", who(&h.line), who(&h.other)));

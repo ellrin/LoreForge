@@ -28,7 +28,7 @@ fn main() {
         println!("  line over words {}, line through an open shape {}, words cut by a shape or frame {}", look.over_text.len(), look.through_open.len(), look.words_cut.len());
         let (uneven, sparse) = lore_flow::look::frames(&fig.layout);
         let small_text = lore_flow::look::smallest_text(fig.objects(), fig.layout.bounds.w, 500.0);
-        println!("  loose ends {}, line on line {}, line behind a block {}, line through a module {}, uneven frames {}, sparse panels {}, smallest text at page width {:.1} pt", look.loose_ends.len(), look.on_line.len(), look.behind_block.len(), look.through_module.len(), uneven, sparse, small_text);
+        println!("  loose ends {}, line on line {}, line behind a block {}, line over a module {}, hidden arrowheads {}, uneven frames {}, sparse panels {}, smallest text at page width {:.1} pt", look.loose_ends.len(), look.on_line.len(), look.behind_block.len(), look.over_module.len(), look.hidden_heads.len(), uneven, sparse, small_text);
         for h in look.loose_ends.iter().take(4) {
             println!("    loose: {} ({})", short(&h.line), h.other);
         }

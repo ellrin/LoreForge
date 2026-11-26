@@ -320,8 +320,13 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
     }
 
     // regions: outer first, so an inner tint lies over an outer one; plain shapes under the nodes
+    // modules' frames (regions) as units: the frame and its title, with the frame's rect; their
+    // order against the lines is decided below. Panels are base areas and stay under every line.
+    let regions_from = objects.len();
+    let mut units: Vec<(Rect, std::ops::Range<usize>)> = Vec::new();
     let mut region_fills: Vec<(Rect, Option<String>)> = Vec::new();
     for rb in &lay.regions {
+        let start = objects.len() - regions_from;
         let r = &rb.rect;
         let own = theme.tint(&rb.tint);
         let mid = theme.tint_mid(&rb.tint).filter(|_| theme.region.soft);
@@ -405,6 +410,7 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             id += 1;
             objects.push(o);
         }
+        units.push((rb.rect, start..objects.len() - regions_from));
     }
 
     // modules
@@ -556,10 +562,36 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             labels.push(o);
         }
     }
-    // layers, bottom to top: frames (base areas, then modules' frames), lines, blocks, dots
-    // and line labels. A line is always exposed: it is never hidden beneath a frame (the router
-    // keeps it out of modules it does not end in; `look::check` counts the ones it could not)
-    objects.extend(line_objs);
+    // layers, bottom to top: base areas (panels), then modules' frames and lines in one order, then
+    // blocks, dots and line labels. A line lies over every module frame that holds one of its ends
+    // (so its arrowhead is always exposed) and under every module frame it only passes through
+    // (an opaque frame hides that stretch); it is never under a panel.
+    let frames: Vec<Vec<Object>> = {
+        let mut all: Vec<Option<Object>> = objects.split_off(regions_from).into_iter().map(Some).collect();
+        units.iter().map(|(_, r)| r.clone().filter_map(|i| all[i].take()).collect()).collect()
+    };
+    let rects: Vec<Rect> = units.iter().map(|u| u.0).collect();
+    let ends: Vec<[(f64, f64); 2]> = routes
+        .iter()
+        .map(|r| {
+            let e = &g.edges[r.edge];
+            let at = |id: &str| g.node_index(id).map(|i| (lay.nodes[i].rect.cx(), lay.nodes[i].rect.cy())).unwrap_or((0.0, 0.0));
+            [if r.branch { r.points.first().copied().unwrap_or(at(&e.from)) } else { at(&e.from) }, at(&e.to)]
+        })
+        .collect();
+    let (order, over) = frame_order(&rects, &ends, &routes.iter().map(|r| r.points.clone()).collect::<Vec<_>>());
+    for i in over {
+        let e = &g.edges[routes[i].edge];
+        warnings.push(format!("{} → {}: 線穿過的框也有線穿進來，沒辦法全部壓在框下", e.from, e.to));
+    }
+    let mut frames: Vec<Option<Vec<Object>>> = frames.into_iter().map(Some).collect();
+    let mut lines: Vec<Option<Object>> = line_objs.into_iter().map(Some).collect();
+    for item in order {
+        match item {
+            Layer::Frame(i) => objects.extend(frames[i].take().unwrap_or_default()),
+            Layer::Line(i) => objects.extend(lines[i].take()),
+        }
+    }
     objects.extend(node_objs);
     objects.extend(dots);
     objects.extend(labels);
@@ -702,3 +734,66 @@ pub fn retarget_for_pptx(objects: &mut [Object]) {
     }
 }
 
+
+/// One item of the drawing order of frames and lines.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Layer {
+    Frame(usize),
+    Line(usize),
+}
+
+/// The drawing order of frames (rects; an outer frame before the frames inside it) and lines
+/// (their two ends and their points): a line over every frame that holds one of its ends and
+/// under every frame it only passes through. Where two lines ask for opposite orders of the
+/// same frames, the later is drawn over them; those lines are returned second.
+pub fn frame_order(frames: &[Rect], ends: &[[(f64, f64); 2]], lines: &[Vec<(f64, f64)>]) -> (Vec<Layer>, Vec<usize>) {
+    let (nf, nl) = (frames.len(), lines.len());
+    let n = nf + nl;
+    let inside = |r: &Rect, p: (f64, f64)| p.0 > r.x && p.0 < r.right() && p.1 > r.y && p.1 < r.bottom();
+    let mut after: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut before = vec![0usize; n];
+    let edge = |a: usize, b: usize, after: &mut Vec<Vec<usize>>, before: &mut Vec<usize>| {
+        after[a].push(b);
+        before[b] += 1;
+    };
+    for i in 0..nf {
+        for j in 0..nf {
+            if i != j && frames[i].contains(&frames[j]) && !(frames[j].contains(&frames[i]) && j < i) {
+                edge(i, j, &mut after, &mut before);
+            }
+        }
+    }
+    for (l, pts) in lines.iter().enumerate() {
+        for (f, r) in frames.iter().enumerate() {
+            if ends[l].iter().any(|p| inside(r, *p)) {
+                edge(f, nf + l, &mut after, &mut before);
+            } else if pts.windows(2).any(|s| crate::route::segment_hits(s[0], s[1], r)) {
+                edge(nf + l, f, &mut after, &mut before);
+            }
+        }
+    }
+    let mut done = vec![false; n];
+    let mut out = Vec::with_capacity(n);
+    let mut forced = Vec::new();
+    for _ in 0..n {
+        // the first item (frames first, then lines, each in their own order) that waits for nothing
+        let pick = (0..n).find(|&i| !done[i] && before[i] == 0).unwrap_or_else(|| {
+            // a cycle: draw a frame that waits only for lines passing through it; those lines
+            // then lie over it (its parents are drawn first, so a line's own frames stay under it)
+            let waits = |i: usize| (0..n).filter(|&a| !done[a] && after[a].contains(&i)).collect::<Vec<_>>();
+            let f = (0..nf).find(|&f| !done[f] && waits(f).iter().all(|&a| a >= nf)).or_else(|| (0..n).find(|&i| !done[i])).expect("one left");
+            for a in waits(f) {
+                if a >= nf && !forced.contains(&(a - nf)) {
+                    forced.push(a - nf);
+                }
+            }
+            f
+        });
+        done[pick] = true;
+        for &b in &after[pick] {
+            before[b] = before[b].saturating_sub(1);
+        }
+        out.push(if pick < nf { Layer::Frame(pick) } else { Layer::Line(pick - nf) });
+    }
+    (out, forced)
+}

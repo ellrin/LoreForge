@@ -1240,10 +1240,11 @@ fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra
         }
     }
     // a panel is a base area: lines run over it, and crossing its border only costs a little.
-    // A region is a module: a line enters one only to reach an end inside it, so crossing a
-    // region's border costs as much as a long detour (a line that ends inside pays it once on
-    // every possible path; a line passing through would pay it twice and goes round instead)
-    let module = 90.0 * k;
+    // A region is a module: a line that only passes one runs beneath it (hidden), which is
+    // allowed but reads worse than going round, so crossing a region's border costs a fair detour
+    // (a line that ends inside pays it once on every possible path; a line passing through pays
+    // it twice and goes round when the way round is short)
+    let module = 40.0 * k;
     let regions: Vec<(Rect, f64)> = lay.regions.iter().map(|r| (r.rect, module)).collect();
     for (r, cost) in lay.panels.iter().filter(|p| !p.bare).map(|p| (p.rect, border)).chain(regions) {
         for j in 0..ny {
