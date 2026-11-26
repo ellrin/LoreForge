@@ -163,6 +163,7 @@ pub fn parse_with(text: &str, extra_modules: &[String]) -> Result<Graph, DslErro
             let mut color = String::new();
             let mut curve = false;
             let mut width = 0.0f64;
+            let (mut from_side, mut to_side) = (String::new(), String::new());
             let mut i = 0;
             let mut expect_node = true;
             while i < toks.len() {
@@ -200,6 +201,18 @@ pub fn parse_with(text: &str, extra_modules: &[String]) -> Result<Graph, DslErro
                     Tok::Word(w) if !expect_node && w.starts_with("width=") => {
                         width = w["width=".len()..].trim_matches('"').parse().map_err(|_| err(format!("a line's width is a number of points (got {w:?})")))?;
                     }
+                    Tok::Word(w) if !expect_node && (w.starts_with("from=") || w.starts_with("to=")) => {
+                        let (key, v) = w.split_once('=').unwrap();
+                        let v = v.trim_matches('"').to_string();
+                        if !EDGE_SIDES.contains(&v.as_str()) {
+                            return Err(err(format!("a line's {key}= is a side: {} (got {v:?})", EDGE_SIDES.join(", "))));
+                        }
+                        if key == "from" {
+                            from_side = v;
+                        } else {
+                            to_side = v;
+                        }
+                    }
                     Tok::Quoted(q) if !expect_node => label = q.clone(),
                     t => return Err(err(format!("did not expect {:?} here", t.s()))),
                 }
@@ -214,7 +227,7 @@ pub fn parse_with(text: &str, extra_modules: &[String]) -> Result<Graph, DslErro
                     Some((f, _)) => (f.to_string(), w[0].clone()),
                     None => (w[0].clone(), String::new()),
                 };
-                g.edges.push(Edge { from, to: w[1].clone(), kind, label: label.clone(), color: color.clone(), curve, off, width });
+                g.edges.push(Edge { from, to: w[1].clone(), kind, label: label.clone(), color: color.clone(), curve, off, width, from_side: from_side.clone(), to_side: to_side.clone() });
             }
             continue;
         }
@@ -483,6 +496,12 @@ pub fn to_dsl(g: &Graph) -> String {
         }
         if e.width != 0.0 {
             s.push_str(&format!(" width={}", e.width));
+        }
+        if !e.from_side.is_empty() {
+            s.push_str(&format!(" from={}", e.from_side));
+        }
+        if !e.to_side.is_empty() {
+            s.push_str(&format!(" to={}", e.to_side));
         }
         s
     };

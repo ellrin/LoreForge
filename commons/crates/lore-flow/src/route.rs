@@ -265,6 +265,43 @@ enum End {
     /// Side and slot already decided (slot 0 corner, 1 quarter, 2 middle, 3 three quarters,
     /// 4 corner, counted left to right on top and bottom and top to bottom on left and right).
     At(Side, usize),
+    /// The author named the side (`from=` / `to=`); the point on it is the router's.
+    OnSide(Side),
+}
+
+/// The side a line's `from=` / `to=` names.
+pub fn side_named(w: &str) -> Option<Side> {
+    match w {
+        "top" => Some(Side::Top),
+        "bottom" => Some(Side::Bottom),
+        "left" => Some(Side::Left),
+        "right" => Some(Side::Right),
+        _ => None,
+    }
+}
+
+/// Does this side of the block hold words (its label, variable or caption above or below the
+/// picture)? Lines leave and enter there only when no other side has a way.
+pub fn words_side(n: &Placed, side: Side) -> bool {
+    match side {
+        Side::Top => n.words.0,
+        Side::Bottom => n.words.1,
+        _ => false,
+    }
+}
+
+/// Where a line's end meets a block: the connection point ([`site_point`]), except on a side
+/// that holds words, where it stops outside the words, 2 pt (scaled) from them.
+pub fn end_point(n: &Placed, side: Side, slot: usize, k: f64) -> (f64, f64) {
+    let p = site_point(n, side, slot);
+    if !words_side(n, side) {
+        return p;
+    }
+    match side {
+        Side::Top => (p.0, n.rect.y.min(n.art.y) - 2.0 * k),
+        Side::Bottom => (p.0, n.rect.bottom().max(n.art.bottom()) + 2.0 * k),
+        _ => p,
+    }
 }
 
 /// Site numbers (`figure::SITES`) along each side, in the order of [`Side::ALL`]
@@ -384,6 +421,17 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
             }
         }
     }
+    for (ei, e) in g.edges.iter().enumerate() {
+        for (i, w) in [&e.from_side, &e.to_side].into_iter().enumerate() {
+            if w.is_empty() || fixed1[ei][i] != End::Free {
+                continue;
+            }
+            match side_named(w) {
+                Some(s) => fixed1[ei][i] = End::OnSide(s),
+                None => notes[ei].push(format!("{}: 不認得的邊 {w}，已忽略", name(ei))),
+            }
+        }
+    }
     let parent = branch_parents(g, &keys);
     let skip: Vec<bool> = parent.iter().map(Option::is_some).collect();
     for (ei, e) in g.edges.iter().enumerate() {
@@ -439,6 +487,15 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
             let u = uses.remove(p);
             fixed2[u.edge][u.end] = End::At(side, 2);
             taken.push(2);
+            // two or more lines that leave beside a straight main line leave from its point and
+            // turn off it, a T off the main line (a lone one keeps its quarter point, below)
+            if u.end == 0 && uses.len() >= 2 &&uses.iter().all(|v| v.end == 0 && off_middle(lay, node, side, v.key).is_some()) {
+                for v in &uses {
+                    fixed2[v.edge][v.end] = End::At(side, 2);
+                }
+                moved = true;
+                continue;
+            }
             // a lone neighbour goes to the quarter on the side it lies on
             if uses.len() == 1 {
                 let o = &lay.nodes[node];
@@ -464,6 +521,18 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
                 continue;
             }
         }
+        // a fork the same way: lines leaving one side that all turn the same way (all up or all
+        // down) leave as one trunk from the middle and split where the nearer target needs
+        if uses.len() >= 2 && taken.is_empty() && uses.iter().all(|u| u.end == 0) {
+            let ways: Vec<Option<bool>> = uses.iter().map(|u| off_middle(lay, node, side, u.key)).collect();
+            if ways.iter().all(|w| w.is_some() && *w == ways[0]) {
+                for u in &uses {
+                    fixed2[u.edge][u.end] = End::At(side, 2);
+                }
+                moved = true;
+                continue;
+            }
+        }
         uses.sort_by(|x, y| x.key.partial_cmp(&y.key).unwrap_or(Ordering::Equal).then((x.edge, x.end).cmp(&(y.edge, y.end))));
         for (u, slot) in uses.iter().zip(spread(uses.len(), &taken)) {
             fixed2[u.edge][u.end] = End::At(side, slot);
@@ -471,6 +540,7 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
         }
     }
     let mut out = if moved { run(g, lay, &fixed2, Some(&first), &skip) } else { first };
+    one_trunk(g, lay, &mut out);
 
     // where the author wants the line to turn
     for (ei, key) in keys.iter().enumerate() {
@@ -484,11 +554,92 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
     }
     // the lines that leave the middle of another line, after the final paths of their parents
     route_branches(g, lay, ends, &keys, &parent, &mut out, &mut notes);
+    // a line that had to leave or enter through a block's words and bend says so (straight
+    // through the words' side is fine: it stops short of them)
+    for (ei, r) in out.iter().enumerate() {
+        if r.forced || r.bends() == 0 {
+            continue;
+        }
+        let e = &g.edges[ei];
+        let (Some(a), Some(b)) = (g.node_index(&e.from), g.node_index(&e.to)) else { continue };
+        if (!r.branch && words_side(&lay.nodes[a], r.from_side)) || words_side(&lay.nodes[b], r.to_side) {
+            notes[ei].push(format!("{}: 線從文字那一邊進出", name(ei)));
+        }
+    }
     for ((r, n), e) in out.iter_mut().zip(notes).zip(&g.edges) {
         r.warnings.extend(n);
         r.curve = e.curve;
     }
     out
+}
+
+/// Lines that leave one point of a block and turn the same way share one trunk: each turns
+/// where the nearest of them turns (when its path stays clear of the blocks there), so they
+/// split off one line instead of running side by side.
+fn one_trunk(g: &Graph, lay: &Layout, out: &mut [Route]) {
+    let n = out.len();
+    for i in 0..n {
+        let r = &out[i];
+        if r.forced || r.branch || r.points.len() < 3 {
+            continue;
+        }
+        let horizontal = matches!(r.from_side, Side::Left | Side::Right);
+        let first = |r: &Route| if horizontal { (r.points[1].0 - r.points[0].0).abs() } else { (r.points[1].1 - r.points[0].1).abs() };
+        let way = |r: &Route| if horizontal { (r.points[2].1 - r.points[1].1).signum() } else { (r.points[2].0 - r.points[1].0).signum() };
+        let from = &g.edges[r.edge].from;
+        // the line of this fork that turns first
+        let mates: Vec<usize> = (0..n)
+            .filter(|j| {
+                let s = &out[*j];
+                !s.forced && !s.branch && s.points.len() >= 3 && g.edges[s.edge].from == *from && s.from_side == r.from_side && (s.points[0].0 - r.points[0].0).abs() < 1e-6 && (s.points[0].1 - r.points[0].1).abs() < 1e-6 && way(s) == way(r)
+            })
+            .collect();
+        let Some(&near) = mates.iter().min_by(|a, b| first(&out[**a]).partial_cmp(&first(&out[**b])).unwrap_or(Ordering::Equal)) else { continue };
+        if near == i || r.points.len() < 4 || (first(&out[near]) - first(r)).abs() < 1e-6 {
+            continue;
+        }
+        let t = out[near].points[1];
+        let mut pts = r.points.clone();
+        if horizontal {
+            pts[1].0 = t.0;
+            pts[2].0 = t.0;
+        } else {
+            pts[1].1 = t.1;
+            pts[2].1 = t.1;
+        }
+        // the third run must still go the way it went
+        let (d_old, d_new) = if horizontal { (r.points[3].0 - r.points[2].0, pts[3].0 - pts[2].0) } else { (r.points[3].1 - r.points[2].1, pts[3].1 - pts[2].1) };
+        if d_old * d_new <= 1e-9 {
+            continue;
+        }
+        let e = &g.edges[r.edge];
+        let (a, b) = (g.node_index(&e.from).unwrap(), g.node_index(&e.to).unwrap());
+        let last = pts.len() - 2;
+        // clear of the blocks and of the titles (words), as the router keeps its lines
+        let titles: Vec<Rect> = lay.panels.iter().filter_map(|p| p.title_rect).chain(lay.regions.iter().filter(|r| !r.title.is_empty()).filter_map(|r| r.title_rect)).collect();
+        let clear = pts.windows(2).enumerate().all(|(si, w)| {
+            lay.nodes.iter().enumerate().all(|(ni, nd)| (ni == a && si == 0) || (ni == b && si == last) || !segment_hits(w[0], w[1], &nd.reserve.inflate(3.0 * lay.scale))) && titles.iter().all(|t| !segment_hits(w[0], w[1], t))
+        }) && lay.legend.iter().all(|l| pts.windows(2).all(|w| !segment_hits(w[0], w[1], &l.text)));
+        if clear {
+            out[i].points = simplify(pts);
+        }
+    }
+}
+
+/// Which way a line on `side` of block `node` turns to reach the other end's middle `key`:
+/// `Some(true)` past the block's middle (down / right), `Some(false)` before it, `None` when it
+/// is within 2 pt (scaled) of the middle.
+fn off_middle(lay: &Layout, node: usize, side: Side, key: f64) -> Option<bool> {
+    let o = &lay.nodes[node];
+    let mid = if matches!(side, Side::Top | Side::Bottom) { o.rect.cx() } else { o.port_y };
+    let gap = 2.0 * lay.scale;
+    if key > mid + gap {
+        Some(true)
+    } else if key < mid - gap {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Is this line level: its two ends face each other and their middle points lie on one line
@@ -599,15 +750,17 @@ fn along_grid(grid: &Grid, pts: &[(f64, f64)], mut h: impl FnMut(usize), mut v: 
     }
 }
 
-/// Route the branches, parents first. A branch starts on its parent's final path, at a point
-/// from which the rest of the way to its block is cheapest; it leaves at a right angle to the
-/// run it starts on (never along it), at least 6 pt (scaled) from that run's ends when the run
-/// is long enough, and never inside a block.
+/// Route the branches, parents first. A branch starts on its parent's final path: at the middle
+/// of the parent's longest run (at least 8 pt, scaled, long on each side) from which there is a
+/// way to its block, else at the point from which the rest of the way is cheapest; it leaves at
+/// a right angle to the run it starts on (never along it), at least 8 pt (scaled) from that
+/// run's ends when the run is long enough, and never inside a block.
 fn route_branches(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>, keys: &[String], parent: &[Option<usize>], out: &mut [Route], notes: &mut [Vec<String>]) {
     let k = lay.scale;
     let m = 7.0 * k;
     let bend = 18.0 * k;
-    let margin = 6.0 * k;
+    // a branch leaves at least this far from the ends of the run it starts on
+    let margin = 8.0 * k;
     let mut done: Vec<bool> = parent.iter().map(Option::is_none).collect();
     while let Some(ei) = (0..parent.len()).find(|i| !done[*i] && done[parent[*i].unwrap()]) {
         done[ei] = true;
@@ -622,6 +775,8 @@ fn route_branches(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>, ke
             && (s as usize) < SITES
         {
             fixed[ei][1] = End::Site(s);
+        } else if let Some(s) = side_named(&e.to_side) {
+            fixed[ei][1] = End::OnSide(s);
         }
         // the axis-aligned segments of the parent, and tracks through them
         let mut segs: Vec<((f64, f64), (f64, f64))> = Vec::new();
@@ -648,7 +803,11 @@ fn route_branches(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>, ke
             }
             segs.push((w[0], w[1]));
         }
-        let (mut grid, walls) = make_grid(g, lay, &fixed, &ex, &ey);
+        // a branch inside one panel keeps to that panel's own tracks, as its parent does
+        let pe = &g.edges[parent[ei].unwrap()];
+        let inside = [&pe.from, &pe.to, &e.to].iter().all(|id| g.node_index(id).is_some_and(|i| lay.nodes[i].panel == nb.panel));
+        let only = (lay.panels.len() > 1 && inside).then_some(nb.panel);
+        let (mut grid, walls) = make_grid(g, lay, &fixed, &ex, &ey, only);
         // the lines already drawn count as used (a branch may cross them but not run on them)
         for (ej, r) in out.iter().enumerate() {
             if ej == ei || !done[ej] || r.forced {
@@ -677,9 +836,13 @@ fn route_branches(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>, ke
         }
         // starts: a grid point on a parent segment, leaving at a right angle
         let mut starts: Vec<Port> = Vec::new();
+        // the starts at the middle of each run long enough to leave mid-way, by run
+        let mut mids: Vec<(f64, Vec<usize>)> = Vec::new();
         for (p, q) in &segs {
             let horiz = (p.1 - q.1).abs() < 1e-6;
             let (lo, hi) = if horiz { (p.0.min(q.0), p.0.max(q.0)) } else { (p.1.min(q.1), p.1.max(q.1)) };
+            let (len, middle) = (hi - lo, (lo + hi) / 2.0);
+            mids.push((len, Vec::new()));
             let (lo, hi) = if hi - lo >= 2.0 * margin { (lo + margin - 1e-6, hi - margin + 1e-6) } else { ((lo + hi) / 2.0 - 1e-6, (lo + hi) / 2.0 + 1e-6) };
             let along: &[f64] = if horiz { &grid.xs } else { &grid.ys };
             for &t in along {
@@ -693,10 +856,16 @@ fn route_branches(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>, ke
                 let (Some(i), Some(j)) = (Grid::find(&grid.xs, pt.0), Grid::find(&grid.ys, pt.1)) else { continue };
                 let sides = if horiz { [Side::Top, Side::Bottom] } else { [Side::Left, Side::Right] };
                 for s in sides {
+                    if len >= 2.0 * margin && (t - middle).abs() < 1e-6 {
+                        mids.last_mut().unwrap().1.push(starts.len());
+                    }
                     starts.push((s, pt, (i, j), 0.0));
                 }
             }
         }
+        // the longest run first
+        mids.retain(|m| !m.1.is_empty());
+        mids.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap_or(Ordering::Equal));
         // goals: the sides of the target block
         let mut goals: Vec<Port> = Vec::new();
         let mut g_slots: Vec<usize> = Vec::new();
@@ -704,11 +873,12 @@ fn route_branches(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>, ke
             End::Free => Side::ALL.iter().map(|s| (*s, 2)).collect(),
             End::Site(s) => sides_of(s).into_iter().map(|(sd, sl)| (sd, if nb.ellipse { 2 } else { sl })).collect(),
             End::At(sd, sl) => vec![(sd, sl)],
+            End::OnSide(sd) => vec![(sd, 2)],
         };
         let from_rect = &lay.nodes[a].rect;
         let down = lay.panels[nb.panel].down;
         for (s, slot) in opts {
-            let p = site_point(nb, s, slot);
+            let p = end_point(nb, s, slot, k);
             let esc = match s {
                 Side::Left => (nb.reserve.x - m, p.1),
                 Side::Right => (nb.reserve.right() + m, p.1),
@@ -724,7 +894,17 @@ fn route_branches(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>, ke
             goals.push((s, p, (i, j), cost));
             g_slots.push(slot);
         }
-        match astar(&grid, &starts, &goals, (a, b), bend, k) {
+        let free_goals: Vec<usize> = (0..goals.len()).filter(|i| fixed[ei][1] != End::Free || !words_side(nb, goals[*i].0)).collect();
+        // the middle of the longest run that has a way, then any point; a free side before the
+        // words' side
+        let all_goals: Vec<usize> = (0..goals.len()).collect();
+        let all_starts: Vec<usize> = (0..starts.len()).collect();
+        let mut stages: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
+        for gs in [&free_goals, &all_goals] {
+            stages.extend(mids.iter().map(|m| (m.1.clone(), gs.clone())));
+            stages.push((all_starts.clone(), gs.clone()));
+        }
+        match search_preferring(&grid, &starts, &goals, (a, b), bend, k, &stages) {
             Some((path, si, gi)) => {
                 let (s_side, s_pt, _, _) = starts[si];
                 let (g_side, g_port, _, _) = goals[gi];
@@ -892,8 +1072,11 @@ pub fn hugging(lay: &Layout, routes: &[Route]) -> usize {
 }
 
 /// The routing grid of a layout: its tracks, the walls no line may pass through and the cost of
-/// crossing a panel border. `extra_x` / `extra_y` are tracks to add (always kept).
-fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra_y: &[f64]) -> (Grid, Vec<Rect>) {
+/// crossing a panel border. `extra_x` / `extra_y` are tracks to add (always kept). With `only`
+/// a panel, the tracks are that panel's own (its blocks, frame, regions and titles, and a way
+/// round it), so the lines inside it do not move when something changes in another panel; the
+/// walls are still every block's.
+fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra_y: &[f64], only: Option<usize>) -> (Grid, Vec<Rect>) {
     let k = lay.scale;
     let m = 7.0 * k; // distance of a line from a module
     let c = 3.0 * k; // clearance that counts as "through"
@@ -911,19 +1094,24 @@ fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra
     const HUG: f64 = 1.06; // right beside a module
     const GAP: f64 = 0.9; // the middle of a gap between panels
     let (mut lx, mut ly): (Vec<(f64, f64, bool)>, Vec<(f64, f64, bool)>) = (Vec::new(), Vec::new());
-    for n in &lay.nodes {
+    let home = only.map(|p| lay.panels[p].rect);
+    let mine = |r: &Rect| home.is_none_or(|h| h.inflate(m).overlaps(r));
+    for n in lay.nodes.iter().filter(|n| only.is_none_or(|p| n.panel == p)) {
         lx.push((n.rect.cx(), 1.0, true));
         ly.push((n.port_y, 1.0, true));
         lx.extend([(n.reserve.x - m, HUG, true), (n.reserve.right() + m, HUG, true)]);
         ly.extend([(n.reserve.y - m, HUG, true), (n.reserve.bottom() + m, HUG, true)]);
     }
-    for w in &walls[obstacles.len()..] {
+    for w in walls[obstacles.len()..].iter().filter(|w| mine(w)) {
         lx.extend([(w.x - m + c, HUG, false), (w.right() + m - c, HUG, false)]);
         ly.extend([(w.y - m + c, HUG, false), (w.bottom() + m - c, HUG, false)]);
     }
     for (pi, p) in lay.panels.iter().enumerate() {
+        if only.is_some_and(|o| o != pi) {
+            continue;
+        }
         // gaps between this panel and its neighbours, and a channel inside each border
-        for q in &lay.panels[pi + 1..] {
+        for q in lay.panels[pi + 1..].iter().filter(|_| only.is_none()) {
             if q.rect.x >= p.rect.right() - 1e-6 {
                 lx.push(((p.rect.right() + q.rect.x) / 2.0, GAP, true));
             } else if p.rect.x >= q.rect.right() - 1e-6 {
@@ -941,28 +1129,30 @@ fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra
         }
     }
     // a lane on each side of a region's frame, clear of it
-    for rb in &lay.regions {
+    for rb in lay.regions.iter().filter(|r| mine(&r.rect)) {
         let r = &rb.rect;
         lx.extend([(r.x - m, HUG, false), (r.right() + m, HUG, false)]);
         ly.extend([(r.y - m, HUG, false), (r.bottom() + m, HUG, false)]);
     }
-    // room to go around the whole figure
-    lx.extend([(lay.bounds.x - 2.0 * m, 1.0, true), (lay.bounds.right() + 2.0 * m, 1.0, true)]);
-    ly.push((lay.bounds.y - 2.0 * m, 1.0, true));
-    if lay.legend.is_empty() {
-        ly.push((lay.bounds.bottom() + 2.0 * m, 1.0, true));
+    // room to go around the whole figure (round the panel, for a panel's own grid)
+    let round = home.unwrap_or(lay.bounds);
+    lx.extend([(round.x - 2.0 * m, 1.0, true), (round.right() + 2.0 * m, 1.0, true)]);
+    ly.push((round.y - 2.0 * m, 1.0, true));
+    if lay.legend.is_empty() || home.is_some() {
+        ly.push((round.bottom() + 2.0 * m, 1.0, true));
     }
     // the points the lines really use on the sides
     for (ei, e) in g.edges.iter().enumerate() {
         for (end, id) in [(0, &e.from), (1, &e.to)] {
             let n = &lay.nodes[g.node_index(id).unwrap()];
-            if n.ellipse {
+            if n.ellipse || only.is_some_and(|p| n.panel != p) {
                 continue;
             }
             let at: Vec<(Side, usize)> = match fixed[ei][end] {
                 End::Free => vec![],
                 End::Site(s) => sides_of(s),
                 End::At(sd, sl) => vec![(sd, sl)],
+                End::OnSide(sd) => vec![(sd, 2)],
             };
             for (sd, sl) in at {
                 let p = site_point(n, sd, sl);
@@ -1085,7 +1275,13 @@ fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>, 
     let k = lay.scale;
     let m = 7.0 * k; // distance of a line from a module
     let bend = 18.0 * k;
-    let (mut grid, walls) = make_grid(g, lay, fixed, &[], &[]);
+    let (global, walls) = make_grid(g, lay, fixed, &[], &[], None);
+    // grids[0] is the whole figure's; with two or more panels, grids[1 + p] is panel p's own,
+    // for the lines that stay inside it
+    let mut grids = vec![global];
+    if lay.panels.len() > 1 {
+        grids.extend((0..lay.panels.len()).map(|p| make_grid(g, lay, fixed, &[], &[], Some(p)).0));
+    }
 
     // short flow lines first, then the lines that go around
     let centre_dist = |e: &Edge| {
@@ -1115,17 +1311,20 @@ fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>, 
         let (na, nb) = (&lay.nodes[a], &lay.nodes[b]);
         let same_panel = na.panel == nb.panel;
         let down = lay.panels[na.panel].down;
+        let gix = if grids.len() > 1 && same_panel { 1 + na.panel } else { 0 };
+        let grid = &grids[gix];
         // candidate ports: (side, port point, escape point, grid index, cost) and the slot used
-        let ports = |n: &crate::layout::Placed, other: &Rect, is_source: bool, idx: usize, end: End| -> (Vec<Port>, Vec<usize>) {
+        let ports =|n: &crate::layout::Placed, other: &Rect, is_source: bool, idx: usize, end: End| -> (Vec<Port>, Vec<usize>) {
             let mut v = Vec::new();
             let mut slots = Vec::new();
             let opts: Vec<(Side, usize)> = match end {
                 End::Free => Side::ALL.iter().map(|s| (*s, 2)).collect(),
                 End::Site(s) => sides_of(s).into_iter().map(|(sd, sl)| (sd, if n.ellipse { 2 } else { sl })).collect(),
                 End::At(sd, sl) => vec![(sd, if n.ellipse { 2 } else { sl })],
+                End::OnSide(sd) => vec![(sd, 2)],
             };
             for (s, slot) in opts {
-                let p = site_point(n, s, slot);
+                let p = end_point(n, s, slot, k);
                 let esc = match s {
                     Side::Left => (n.reserve.x - m, p.1),
                     Side::Right => (n.reserve.right() + m, p.1),
@@ -1146,12 +1345,57 @@ fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>, 
         };
         let (starts, s_slots) = ports(na, &nb.rect, true, a, fixed[ei][0]);
         let (goals, g_slots) = ports(nb, &na.rect, false, b, fixed[ei][1]);
-        let found = astar(&grid, &starts, &goals, (a, b), bend, k);
+        // the sides tried first: never a side that holds words while another side has a way
+        // (a free end only; the author's choice stands), and a skip over the top of its row
+        let skip_up = e.kind == EdgeKind::Skip && !down && same_panel;
+        let pick = |ports: &[Port], n: &Placed, end: End, no_words: bool, top: bool| -> Vec<usize> {
+            (0..ports.len()).filter(|i| end != End::Free || ((!no_words || !words_side(n, ports[*i].0)) && (!top || ports[*i].0 == Side::Top))).collect()
+        };
+        let mut stages = Vec::new();
+        if skip_up {
+            stages.push((pick(&starts, na, fixed[ei][0], true, true), pick(&goals, nb, fixed[ei][1], true, true)));
+        }
+        stages.push((pick(&starts, na, fixed[ei][0], true, false), pick(&goals, nb, fixed[ei][1], true, false)));
+        stages.push(((0..starts.len()).collect(), (0..goals.len()).collect()));
+        // a words side costs nothing when the line through it runs straight to a side facing
+        // it: the end stops short outside the words and the line keeps straight
+        if let Some((si, gi)) = straight_through(&walls,&starts, &goals, na, nb, (a, b)) {
+            let pts = vec![starts[si].1, goals[gi].1];
+            for gr in grids.iter_mut() {
+                let (mut hs, mut vs) = (Vec::new(), Vec::new());
+                along_grid(gr, &pts, |i| hs.push(i), |i| vs.push(i));
+                for i in hs {
+                    gr.h_use[i].push((a, b));
+                }
+                for i in vs {
+                    gr.v_use[i].push((a, b));
+                }
+            }
+            let (s_side, g_side) = (starts[si].0, goals[gi].0);
+            out[ei] = Some(Route { edge: ei, points: pts, from_side: s_side, to_side: g_side, from_site: site_of(s_side, s_slots[si]), to_site: site_of(g_side, g_slots[gi]), forced: false, warnings: Vec::new(), curve: false, branch: false });
+            continue;
+        }
+        let found = search_preferring(grid, &starts, &goals, (a, b), bend, k, &stages);
         let r = match found {
             Some((path, si, gi)) => {
                 let (s_side, s_port, _, _) = starts[si];
                 let (g_side, g_port, _, _) = goals[gi];
-                // register usage
+                let mut pts = vec![s_port];
+                pts.extend(path.iter().map(|(i, j)| (grid.xs[*i], grid.ys[*j])));
+                pts.push(g_port);
+                let pts = simplify(pts);
+                // register usage, on the other grids by the tracks they share
+                for other in grids.iter_mut().enumerate().filter(|(oi, _)| *oi != gix).map(|(_, o)| o) {
+                    let (mut hs, mut vs) = (Vec::new(), Vec::new());
+                    along_grid(other, &pts, |i| hs.push(i), |i| vs.push(i));
+                    for i in hs {
+                        other.h_use[i].push((a, b));
+                    }
+                    for i in vs {
+                        other.v_use[i].push((a, b));
+                    }
+                }
+                let grid = &mut grids[gix];
                 for w in path.windows(2) {
                     let ((i0, j0), (i1, j1)) = (w[0], w[1]);
                     if j0 == j1 {
@@ -1170,10 +1414,7 @@ fn run(g: &Graph, lay: &Layout, fixed: &[[End; 2]], fallback: Option<&[Route]>, 
                         grid.v_through[idx] += 1;
                     }
                 }
-                let mut pts = vec![s_port];
-                pts.extend(path.iter().map(|(i, j)| (grid.xs[*i], grid.ys[*j])));
-                pts.push(g_port);
-                Route { edge: ei, points: simplify(pts), from_side: s_side, to_side: g_side, from_site: site_of(s_side, s_slots[si]), to_site: site_of(g_side, g_slots[gi]), forced: false, warnings: Vec::new(), curve: false, branch: false }
+                Route { edge: ei, points: pts, from_side: s_side, to_side: g_side, from_site: site_of(s_side, s_slots[si]), to_site: site_of(g_side, g_slots[gi]), forced: false, warnings: Vec::new(), curve: false, branch: false }
             }
             None if fallback.is_some_and(|f| !f[ei].forced) => fallback.unwrap()[ei].clone(),
             None => {
@@ -1218,6 +1459,56 @@ fn simplify(pts: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
 }
 
 type Port = (Side, (f64, f64), (usize, usize), f64);
+
+/// A straight line (no bend) between a start and a goal on facing sides, at least one of which
+/// holds words, clear of every other block and of the titles: the indices of the pair, the
+/// shortest when there are several. `None` when no words side is involved (the search finds a
+/// straight line by itself there) or none is straight and clear.
+fn straight_through(walls:&[Rect], starts: &[Port], goals: &[Port], na: &Placed, nb: &Placed, who: (usize, usize)) -> Option<(usize, usize)> {
+    let mut best: Option<(f64, usize, usize)> = None;
+    for (si, s) in starts.iter().enumerate() {
+        for (gi, t) in goals.iter().enumerate() {
+            if t.0 != s.0.opposite() || !(words_side(na, s.0) || words_side(nb, t.0)) {
+                continue;
+            }
+            let (p, q) = (s.1, t.1);
+            let n = s.0.normal();
+            let along = if n.0 == 0.0 { (p.0 - q.0).abs() } else { (p.1 - q.1).abs() };
+            let ahead = (q.0 - p.0) * n.0 + (q.1 - p.1) * n.1;
+            if along > 1e-6 || ahead <= 1e-6 {
+                continue;
+            }
+            // every wall but the two blocks' own (walls start with the blocks, by node index),
+            // and not through either block's own picture
+            if walls.iter().enumerate().any(|(wi, w)| wi != who.0 && wi != who.1 && segment_hits(p, q, w)) || segment_hits(p, q, &na.art) || segment_hits(p, q, &nb.art) {
+                continue;
+            }
+            if best.is_none_or(|b| ahead < b.0) {
+                best = Some((ahead, si, gi));
+            }
+        }
+    }
+    best.map(|b| (b.1, b.2))
+}
+
+/// [`astar`] over the stages in order (each a subset of the starts and of the goals, by index):
+/// the first stage with a path wins. The indices returned are into the full lists.
+#[allow(clippy::too_many_arguments)]
+fn search_preferring(grid: &Grid, starts: &[Port], goals: &[Port], who: (usize, usize), bend: f64, k: f64, stages: &[(Vec<usize>, Vec<usize>)]) -> Option<(Vec<(usize, usize)>, usize, usize)> {
+    let mut tried: Vec<&(Vec<usize>, Vec<usize>)> = Vec::new();
+    for st in stages {
+        if st.0.is_empty() || st.1.is_empty() || tried.contains(&st) {
+            continue;
+        }
+        tried.push(st);
+        let s: Vec<Port> = st.0.iter().map(|i| starts[*i]).collect();
+        let g: Vec<Port> = st.1.iter().map(|i| goals[*i]).collect();
+        if let Some((path, si, gi)) = astar(grid, &s, &g, who, bend, k) {
+            return Some((path, st.0[si], st.1[gi]));
+        }
+    }
+    None
+}
 
 /// Cheapest path from any start port to any goal port. Returns the grid points
 /// and the indices of the chosen start and goal.

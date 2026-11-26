@@ -442,8 +442,13 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
                 warnings.push(format!("{} → {}: 不認得的顏色 {}", e.from, e.to, e.color));
             }
         }
-        let st = stroke_coloured(theme, e.kind, k, own.as_deref(), e.width);
+        let mut st = stroke_coloured(theme, e.kind, k, own.as_deref(), e.width);
+        // a line into a junction (a dot where lines meet) ends on the dot, without a head
+        if g.nodes[b].module == "junction" {
+            st.tail = "none".into();
+        }
         let pts: Vec<(f64, f64)> = r.points.iter().map(|p| (p.0 * EMU_PT, p.1 * EMU_PT)).collect();
+        let short = |ni: usize, side: Side| !r.forced && crate::route::words_side(&lay.nodes[ni], side);
         if r.forced {
             warnings.push(format!("{} -> {}: no clear path, drawn straight", e.from, e.to));
         }
@@ -485,8 +490,11 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
                     adj,
                     line: Some(st.clone()),
                     // a line that leaves another line starts at no block
-                    start: (!r.branch).then(|| Attach { id: node_ids[&e.from], site: end_site(r.from_side, r.from_site, lay.nodes[a].ellipse) }),
-                    end: Some(Attach { id: node_ids[&e.to], site: end_site(r.to_side, r.to_site, lay.nodes[b].ellipse) }),
+                    // a line that leaves another line starts at no block; an end that stops
+                    // short of a block's words is not glued either (glued, the canvas would pull
+                    // it onto the picture, through the words)
+                    start: (!r.branch && !short(a, r.from_side)).then(|| Attach { id: node_ids[&e.from], site: end_site(r.from_side, r.from_site, lay.nodes[a].ellipse) }),
+                    end: (!short(b, r.to_side)).then(|| Attach { id: node_ids[&e.to], site: end_site(r.to_side, r.to_site, lay.nodes[b].ellipse) }),
                     text: None,
                 }),
                 id,

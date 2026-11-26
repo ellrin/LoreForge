@@ -301,7 +301,17 @@ pub struct Edge {
     /// The line's own width in pt at natural size; 0 = the width of its kind.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub width: f64,
+    /// The side of its first block the line leaves: `top`, `bottom`, `left`, `right` (the
+    /// language's `from=`); empty = the router picks. A fixed end, like an author's site.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub from_side: String,
+    /// The side of its second block the line enters (`to=`); empty = the router picks.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub to_side: String,
 }
+
+/// The words a line's `from=` / `to=` may name.
+pub const EDGE_SIDES: [&str; 4] = ["top", "bottom", "left", "right"];
 
 /// A region: the blocks of one kind of thing, framed together (the author's "依照標籤給區域").
 /// Regions nest (`parent`); a region lies inside one panel, or loose when the figure has none.
