@@ -728,7 +728,7 @@ pub fn frame_order(frames: &[Rect], ends: &[[(f64, f64); 2]], lines: &[Vec<(f64,
     let inside = |r: &Rect, p: (f64, f64)| p.0 > r.x && p.0 < r.right() && p.1 > r.y && p.1 < r.bottom();
     let mut after: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut before = vec![0usize; n];
-    let mut edge = |a: usize, b: usize, after: &mut Vec<Vec<usize>>, before: &mut Vec<usize>| {
+    let edge = |a: usize, b: usize, after: &mut Vec<Vec<usize>>, before: &mut Vec<usize>| {
         after[a].push(b);
         before[b] += 1;
     };
