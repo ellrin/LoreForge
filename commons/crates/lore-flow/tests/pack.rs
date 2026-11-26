@@ -279,3 +279,57 @@ fn a_grid_that_costs_too_much_text_is_left_for_free_rows() {
     let (_, q) = packed(PATHS, (2, 1), "", &Air { paths: 0.0, ..Air::default() });
     assert!(p.areas[0].grid && p.text_pt >= Air::default().paths * q.text_pt);
 }
+
+// ---- lines: straight, one bend, or a two-bend step; nothing else ----
+
+fn route(points: &[(f64, f64)]) -> route::Route {
+    route::Route { edge: 0, points: points.to_vec(), from_side: route::Side::Right, to_side: route::Side::Left, from_site: 0, to_site: 0, forced: false, warnings: Vec::new(), curve: false, branch: false }
+}
+
+#[test]
+fn the_rule_for_a_line_is_two_bends_at_most_and_never_back() {
+    use lore_flow::lines::keeps_the_rule;
+    assert!(keeps_the_rule(&route(&[(0.0, 0.0), (50.0, 0.0)])), "straight");
+    assert!(keeps_the_rule(&route(&[(0.0, 0.0), (50.0, 0.0), (50.0, 30.0)])), "one bend");
+    assert!(keeps_the_rule(&route(&[(0.0, 0.0), (20.0, 0.0), (20.0, 30.0), (50.0, 30.0)])), "a step");
+    // right, down, back left, down: the line that is not drawn
+    assert!(!keeps_the_rule(&route(&[(0.0, 0.0), (50.0, 0.0), (50.0, 20.0), (10.0, 20.0), (10.0, 40.0)])));
+    // two bends that come back (a U)
+    assert!(!keeps_the_rule(&route(&[(0.0, 0.0), (0.0, 30.0), (50.0, 30.0), (50.0, 0.0)])));
+    // three bends, even going on
+    assert!(!keeps_the_rule(&route(&[(0.0, 0.0), (20.0, 0.0), (20.0, 30.0), (40.0, 30.0), (40.0, 60.0)])));
+}
+
+#[test]
+fn every_line_drawn_keeps_the_rule_and_flow_lines_on_a_grid_are_straight() {
+    let (_, p) = packed(PATHS, (2, 1), "", &Air::default());
+    let rs = lines::lines(&p.graph, &p.layout);
+    assert_eq!(rs.len(), p.graph.edges.len());
+    for r in &rs {
+        assert!(lines::keeps_the_rule(r) && !r.forced, "{:?}", r.points);
+        let e = &p.graph.edges[r.edge];
+        if e.kind == EdgeKind::Data {
+            assert_eq!(r.bends(), 0, "{} -> {}", e.from, e.to);
+        }
+    }
+    // the two encoders stand under each other: their line is straight down
+    let shared = rs.iter().find(|r| p.graph.edges[r.edge].kind != EdgeKind::Data).unwrap();
+    assert_eq!(shared.bends(), 0);
+    // blocks not on a grid, anywhere on the page: still only the three shapes
+    for ratio in [(1, 1), (3, 1), (1, 2)] {
+        let src = format!("fig t\npanel a \"Any\"\n{}  x0 -> x3\n  x1 -> x4\n  x5 -> x0\n  x2 -> x4 : side\n  x4 -> x1 : feedback\nend\n", pictures(6, "x"));
+        let (_, q) = packed(&src, ratio, "", &Air::default());
+        for r in lines::lines(&q.graph, &q.layout) {
+            assert!(lines::keeps_the_rule(&r), "{ratio:?}: {:?}", r.points);
+        }
+    }
+}
+
+#[test]
+fn a_line_along_a_row_passes_beneath_the_block_between_and_stays_straight() {
+    let src = "fig t\npanel a \"Row\"\n  x: image \"A\" look=photo col=0 lane=0\n  y: image \"B\" look=photo col=1 lane=0\n  z: image \"C\" look=photo col=2 lane=0\n  x -> z\nend\n";
+    let (_, p) = packed(src, (4, 1), "", &Air::default());
+    let rs = lines::lines(&p.graph, &p.layout);
+    assert_eq!(rs[0].bends(), 0);
+    assert_eq!(lines::beneath(&p.graph, &p.layout, &rs[0]), 1, "it passes the block between, beneath it");
+}

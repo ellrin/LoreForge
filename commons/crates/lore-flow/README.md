@@ -82,8 +82,18 @@ broken freely give; past that the area that gives most back goes free (`AreaPack
 enter on a block's middle line (`Body.cy` = `Body.axis`, the `port` child evenly about it).
 `LINES=1` on the example draws the router's lines and counts bends, lines over pictures, lines off
 the page and where each flow line's ends lie; `PATHS=<share>` sets `Air.paths`. Tests in
-`tests/pack.rs` and `modules::align_tests`. Not yet: room for lines in the air, lines beneath
-blocks, the lines of notes.
+`tests/pack.rs` and `modules::align_tests`.
+
+`lines::lines(graph, layout)` draws the lines of a packed page from three shapes only: straight,
+one bend, or two bends going on in the same direction (a step whose middle run may lie at three
+places in the gap). No line has more than two bends or a run back the way an earlier run came
+(`lines::keeps_the_rule`). Blocks in one row or column are joined straight even with a block
+between: the line passes beneath it (`lines::beneath`). The cheapest shape is taken: fewest bends,
+blocks passed beneath (a block of words only counts eight times), along another line, through a
+block's words, length. A bent line that would end in the middle of a side where a line ends the
+other way ends a quarter of the side further along. `LINES=1` draws these, `LINES=old` the earlier
+router. Not yet: room for lines and their words in the air, an opaque ground under a block a line
+passes beneath, the lines of notes.
 
 ## Modules, styles, the library
 

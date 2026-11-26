@@ -47,7 +47,11 @@ fn main() {
     if !lines {
         p.graph.edges.clear();
     }
-    let routes = if lines { lore_flow::route::route(&p.graph, &p.layout) } else { Vec::new() };
+    let routes = match std::env::var("LINES").as_deref() {
+        Ok("old") => lore_flow::route::route(&p.graph, &p.layout),
+        Ok(_) => lore_flow::lines::lines(&p.graph, &p.layout),
+        Err(_) => Vec::new(),
+    };
     let built = build::build_with(&p.graph, &theme, &vars, &cat.library, &NoMath, &p.layout, &routes, 2, &modules::no_images);
     if lines {
         let bends: usize = routes.iter().map(|r| r.bends()).sum();
@@ -80,6 +84,9 @@ fn main() {
                 neither += 1
             }
         }
+        let broken = routes.iter().filter(|r| !lore_flow::lines::keeps_the_rule(r)).count();
+        let under: usize = routes.iter().map(|r| lore_flow::lines::beneath(&p.graph, &p.layout, r)).sum();
+        println!("lines against the rule (over two bends or doubling back) {broken}; blocks passed beneath {under}");
         println!("lines {}; bends {bends}; forced {forced}; hugging {}; over a picture {over}; off the page {off}; flow lines in a row {row}, in a column {col}, neither {neither}", routes.len(), lore_flow::route::hugging(&p.layout, &routes));
     }
     let fig = Figure { layout: p.layout.clone(), routes, built };
