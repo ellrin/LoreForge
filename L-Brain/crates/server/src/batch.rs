@@ -83,6 +83,19 @@ fn io_err(e: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::other(e.to_string())
 }
 
+/// Save figures as the made figures of their references, the way the page's 儲存 does (the
+/// figure is drawn once, its variables, connections, 指揮文字 and 口語說明 are derived afresh).
+/// `figures` = (reference id, the figure's spec). Returns one line per figure: empty = saved,
+/// else why not.
+pub async fn seed(app: axum::Router, figures: &[(String, Value)]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (id, spec) in figures {
+        let r = json_call(&app, "POST", &format!("/api/hub/make/{}", enc(id)), Some(json!({ "spec": spec, "rederive": true }))).await;
+        out.push((id.clone(), r.err().unwrap_or_default()));
+    }
+    out
+}
+
 /// Draft and draw the references of `app` (a router as [`crate::router_isolated`] gives) into
 /// `out`. `only` empty = all of them, else just these ids. One at a time, in the list's order;
 /// a failure is recorded and the run goes on. `progress` is called after each one.
