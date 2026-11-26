@@ -2458,3 +2458,19 @@ fn a_line_from_above_meets_the_picture_not_the_room_for_its_words() {
     let s = lore_canvas::geom::sites(grp);
     assert!((s[0].1 / lore_flow::modules::EMU_PT - x.art.y).abs() < 0.05, "top site {:?} vs art {:?}", s[0], x.art);
 }
+
+#[test]
+fn blocks_line_up_on_their_pictures_not_their_boxes() {
+    // a saved block whose drawing fills only the right half of its box, above and beside a box
+    let objs = vec![rect_obj("pic", 0, "role:fill", "role:line")];
+    let mut v = serde_json::to_value(&objs).unwrap();
+    v[0]["frame"] = serde_json::json!({ "x": 254_000, "y": 0, "w": 254_000, "h": 254_000 });
+    let t = lore_flow::modules::ModuleTemplate { kind: "offset".into(), style: "x".into(), w: 40.0, h: 20.0, objects: v, ..Default::default() };
+    let mut lib = Library::default();
+    lib.add(t).unwrap();
+    for src in ["fig f\npanel p \"P\" dir=down\n  o: offset \"\" style=x col=0 lane=0\n  b: box \"B\" col=1 lane=0\n  o -> b\n", "fig f\npanel p \"P\"\n  o: offset \"\" style=x col=0 lane=0\n  b: box \"B\" col=0 lane=1\n  o -> b\n"] {
+        let g = dsl::parse_with(src, &lib.kinds()).unwrap();
+        let f = draw(&g, &Drawing { library: lib.clone(), ..Default::default() }).unwrap();
+        assert_eq!(f.routes[0].bends(), 0, "{src}: {:?}", f.routes[0].points);
+    }
+}

@@ -998,25 +998,32 @@ fn plan_panel(g: &Graph, nodes: &[usize], sizes: &[Size], down: bool, theme: &Th
     // cells: along = the flow axis, across = the lane axis
     let (n_along, n_across) = (layers.len(), lane.values().max().map_or(0, |m| m + 1));
     let mut along = vec![0.0f64; n_along];
-    // a row is as tall as the tallest part above plus the tallest part below the centre line
-    let mut up = vec![0.0f64; n_across];
-    let mut dn = vec![0.0f64; n_across];
+    // blocks line up on their pictures, not their boxes: a row is as tall as the tallest part
+    // above plus the tallest part below the pictures' middle line, a column as wide as the widest
+    // part left plus right of the pictures' middle (a picture may sit off its box's centre)
+    let (n_rows, n_cols) = if down { (n_along, n_across) } else { (n_across, n_along) };
+    let mut up = vec![0.0f64; n_rows];
+    let mut dn = vec![0.0f64; n_rows];
+    let mut lf = vec![0.0f64; n_cols];
+    let mut rt = vec![0.0f64; n_cols];
     let mut across = vec![0.0f64; n_across];
     for &n in nodes {
         let s = &sizes[n];
-        if down {
-            along[layer[&n]] = along[layer[&n]].max(s.h);
-            across[lane[&n]] = across[lane[&n]].max(s.reserve_w);
-        } else {
-            along[layer[&n]] = along[layer[&n]].max(s.reserve_w);
-            up[lane[&n]] = up[lane[&n]].max(s.cy);
-            dn[lane[&n]] = dn[lane[&n]].max(s.h - s.cy);
-        }
+        let (row, col) = if down { (layer[&n], lane[&n]) } else { (lane[&n], layer[&n]) };
+        let ax = s.art.0 + s.art.2 / 2.0;
+        // the words may be wider than the box, centred on it
+        let half = s.reserve_w / 2.0;
+        let (l, r) = ((ax).max(s.w / 2.0 - s.w / 2.0 + ax).max(half - (s.w / 2.0 - ax)), (s.w - ax).max(half + (s.w / 2.0 - ax)));
+        up[row] = up[row].max(s.cy);
+        dn[row] = dn[row].max(s.h - s.cy);
+        lf[col] = lf[col].max(l);
+        rt[col] = rt[col].max(r);
     }
-    if !down {
-        for i in 0..n_across {
-            across[i] = up[i] + dn[i];
-        }
+    for i in 0..n_along {
+        along[i] = if down { up[i] + dn[i] } else { lf[i] + rt[i] };
+    }
+    for i in 0..n_across {
+        across[i] = if down { lf[i] + rt[i] } else { up[i] + dn[i] };
     }
     // room for labels on the arrows between neighbouring layers
     let (gap_along, gap_across) = if down { (theme.space.gap_y, theme.space.gap_x) } else { (theme.space.gap_x, theme.space.gap_y) };
@@ -1054,12 +1061,11 @@ fn plan_panel(g: &Graph, nodes: &[usize], sizes: &[Size], down: bool, theme: &Th
     let mut pos = BTreeMap::new();
     for &n in nodes {
         let s = &sizes[n];
+        let ax = s.art.0 + s.art.2 / 2.0;
         let r = if down {
-            let (cx, cy) = (across_pos[lane[&n]] + across[lane[&n]] / 2.0, along_pos[layer[&n]] + along[layer[&n]] / 2.0);
-            Rect::new(cx - s.w / 2.0, cy - s.h / 2.0, s.w, s.h)
+            Rect::new(across_pos[lane[&n]] + lf[lane[&n]] - ax, along_pos[layer[&n]] + up[layer[&n]] - s.cy, s.w, s.h)
         } else {
-            let cx = along_pos[layer[&n]] + along[layer[&n]] / 2.0;
-            Rect::new(cx - s.w / 2.0, across_pos[lane[&n]] + up[lane[&n]] - s.cy, s.w, s.h)
+            Rect::new(along_pos[layer[&n]] + lf[layer[&n]] - ax, across_pos[lane[&n]] + up[lane[&n]] - s.cy, s.w, s.h)
         };
         pos.insert(n, Rect::new(r.x + margin[0], r.y + margin[1], r.w, r.h));
     }
