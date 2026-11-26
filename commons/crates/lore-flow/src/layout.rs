@@ -145,6 +145,8 @@ pub struct Placed {
     pub port_y: f64,
     /// The drawn picture without its words: where lines connect (the block's `port`).
     pub art: Rect,
+    /// Words lie above the picture, and below it: a line should not leave or enter there.
+    pub words: (bool, bool),
     /// Index into [`Layout::panels`].
     pub panel: usize,
     pub layer: usize,
@@ -256,6 +258,7 @@ struct Size {
     reserve_w: f64,
     cy: f64,
     art: (f64, f64, f64, f64),
+    words: (bool, bool),
     single: bool,
     ellipse: bool,
     legend: Vec<crate::art::Swatch>,
@@ -1208,7 +1211,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         .map(|n| {
             let cx = Ctx { theme, vars, math: &NoMath, lib, k: 1.0, symmetric: !down_panels.contains(n.panel.as_str()), image_size };
             let b = modules::make(n, &cx);
-            Size { w: b.w, h: b.h, reserve_w: b.reserve_w, cy: b.cy, art: b.art, single: b.single, ellipse: b.ellipse, legend: b.legend }
+            Size { w: b.w, h: b.h, reserve_w: b.reserve_w, cy: b.cy, art: b.art, words: b.words, single: b.single, ellipse: b.ellipse, legend: b.legend }
         })
         .collect();
 
@@ -1341,7 +1344,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
             let rect = Rect::new(ox + p.x, oy + p.y, p.w, p.h);
             let s = &sizes[ni];
             let reserve = Rect::new(rect.cx() - s.reserve_w / 2.0, rect.y, s.reserve_w, rect.h);
-            nodes[ni] = Some(Placed { rect, reserve, port_y: rect.y + s.cy, art: Rect::new(rect.x + s.art.0, rect.y + s.art.1, s.art.2, s.art.3), panel: i, layer: need.plan.layer[&ni], lane: need.plan.lane[&ni], single: s.single, ellipse: s.ellipse, ends: BTreeMap::new(), origin: (0.0, 0.0) });
+            nodes[ni] = Some(Placed { rect, reserve, port_y: rect.y + s.cy, art: Rect::new(rect.x + s.art.0, rect.y + s.art.1, s.art.2, s.art.3), words: s.words, panel: i, layer: need.plan.layer[&ni], lane: need.plan.lane[&ni], single: s.single, ellipse: s.ellipse, ends: BTreeMap::new(), origin: (0.0, 0.0) });
         }
         let title_rect = (!need.title.is_empty() && !need.bare && need.at != "none").then(|| {
             let tw = text::width(&need.title, title_size) * 1.06;

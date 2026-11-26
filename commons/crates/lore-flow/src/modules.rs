@@ -396,6 +396,8 @@ pub struct Body {
     /// The drawn picture without its words, in the body's frame (x, y, w, h): where lines
     /// connect (the `port` child). The whole body for a block that is one shape.
     pub art: (f64, f64, f64, f64),
+    /// Words lie above the picture, and below it (a label, a variable, a caption).
+    pub words: (bool, bool),
     /// Objects with ids 0 and part names (`""` = the body itself).
     pub objs: Vec<Object>,
     /// One shape, inserted without a group.
@@ -1882,7 +1884,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     let spill = words_width(&core.objs, core.w);
     if above.is_empty() && below.is_empty() && core.single {
         let (w, h) = (core.w, core.h);
-        return Body { w, h, cy: h / 2.0, reserve_w: w.max(spill), art: (0.0, 0.0, w, h), objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
+        return Body { w, h, cy: h / 2.0, reserve_w: w.max(spill), art: (0.0, 0.0, w, h), words: (false, false), objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
     }
     let legend = core.legend;
     warn.extend(icon_problem(n));
@@ -1920,7 +1922,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         reserve_w = reserve_w.max(tw);
         objs.push(o);
     }
-    Body { w, h, cy: art.1 + art.3 / 2.0, reserve_w, art, objs, single: false, ellipse: false, legend, warn }
+    Body { w, h, cy: art.1 + art.3 / 2.0, reserve_w, art, words: (!above.is_empty(), !below.is_empty()), objs, single: false, ellipse: false, legend, warn }
 }
 
 /// Wrap a body's objects into what goes on the slide: the single shape, or a
