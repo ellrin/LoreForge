@@ -1965,3 +1965,163 @@ fn a_six_digit_colour_is_a_colour_and_a_curve_has_no_runs() {
         assert!(lore_flow::route::runs(&f.layout, a, r).is_empty());
     }
 }
+
+// ── Q: lines beneath the blocks, straight before jogged ───────────────────
+
+fn route_of<'a>(g: &Graph, f: &'a Figure, from: &str, to: &str) -> &'a lore_flow::route::Route {
+    f.routes.iter().find(|r| g.edges[r.edge].from == from && g.edges[r.edge].to == to).unwrap()
+}
+
+/// 0 = frame (panel / region), 1 = line, 2 = block, 3 = dot or label over the blocks, 4 = legend.
+fn layer_of(name: &str, g: &Graph) -> u8 {
+    let rest = name.split_once('/').map(|x| x.1).unwrap_or("");
+    if rest.starts_with("panel:") || rest.starts_with("region:") {
+        0
+    } else if rest.starts_with("edge:") {
+        if rest.ends_with("/label") || rest.ends_with("/junction") { 3 } else { 1 }
+    } else if g.nodes.iter().any(|n| n.id == rest) {
+        2
+    } else {
+        4
+    }
+}
+
+#[test]
+fn lines_are_drawn_beneath_the_blocks() {
+    let g = dsl::parse(TRAIN).unwrap();
+    let f = fig(&g);
+    let layers: Vec<u8> = f.objects().iter().map(|o| layer_of(&o.name, &g)).collect();
+    assert!(layers.contains(&1) && layers.contains(&2) && layers.contains(&3), "{layers:?}");
+    let last = |l: u8| layers.iter().rposition(|x| *x == l);
+    let first = |l: u8| layers.iter().position(|x| *x == l);
+    assert!(last(0).unwrap() < first(1).unwrap(), "frames, then lines: {layers:?}");
+    assert!(last(1).unwrap() < first(2).unwrap(), "every line before every block: {layers:?}");
+    assert!(last(2).unwrap() < first(3).unwrap(), "labels over the blocks: {layers:?}");
+}
+
+#[test]
+fn connectors_still_attach_to_their_blocks() {
+    let g = dsl::parse(TRAIN).unwrap();
+    let f = fig(&g);
+    let ids: BTreeSet<u32> = f.built.node_ids.values().copied().collect();
+    assert_eq!(f.built.node_ids.len(), g.nodes.len());
+    let mut attached = 0;
+    for o in f.objects() {
+        if let Kind::Connector(c) = &o.kind {
+            for a in c.start.iter().chain(c.end.iter()) {
+                assert!(ids.contains(&a.id), "{} attaches to {}", o.name, a.id);
+                attached += 1;
+            }
+        }
+    }
+    assert!(attached > 10);
+    for (id, oid) in &f.built.node_ids {
+        let o = f.objects().iter().find(|o| o.id == *oid).unwrap();
+        assert_eq!(o.name, format!("flow:demo/{id}"));
+    }
+}
+
+#[test]
+fn object_ids_are_unique_with_lines_first() {
+    let g = dsl::parse(TRAIN).unwrap();
+    let f = fig(&g);
+    let mut seen = BTreeSet::new();
+    let mut top = 0;
+    walk(f.objects(), &mut |o| {
+        assert!(seen.insert(o.id), "id {} used twice ({})", o.id, o.name);
+        top = top.max(o.id);
+    });
+    assert!(f.built.next_id > top, "next_id {} must be free (largest {top})", f.built.next_id);
+}
+
+/// a, b, c in a row and a curved line a → c that has to cross b.
+fn curved_across() -> Graph {
+    let mut g = dsl::parse("fig cv\na: box \"A\"\nb: box \"B\"\nc: box \"C\"\na -> b -> c\na -> c\n").unwrap();
+    g.edges[2].curve = true;
+    g
+}
+
+#[test]
+fn a_curve_through_a_block_becomes_a_routed_line_and_says_so() {
+    let g = curved_across();
+    let f = fig(&g);
+    assert!(f.built.warnings.iter().any(|w| w == "a → c: 曲線會穿過 b，改走直角"), "{:?}", f.built.warnings);
+    let o = f.objects().iter().find(|o| o.name == "flow:cv/edge:a-c").unwrap();
+    // a routed line (a connector, or a polyline when it has many corners), not the smooth curve
+    assert!(!matches!(&o.kind, Kind::Shape(sp) if sp.geom.prst == "custom" && sp.geom.path.as_deref().is_some_and(|p| p.contains(" C "))), "not drawn as a curve");
+}
+
+#[test]
+fn a_clear_curve_stays_a_curve() {
+    let mut g = dsl::parse("fig cv\na: box \"A\"\nb: box \"B\"\na -> b\n").unwrap();
+    g.edges[0].curve = true;
+    let f = fig(&g);
+    assert!(f.built.warnings.is_empty(), "{:?}", f.built.warnings);
+    let o = f.objects().iter().find(|o| o.name == "flow:cv/edge:a-b").unwrap();
+    assert!(matches!(&o.kind, Kind::Shape(sp) if sp.geom.prst == "custom"));
+}
+
+#[test]
+fn a_level_line_keeps_the_middle_when_it_shares_a_side() {
+    let g = dsl::parse("fig m\na: box \"A\"\nb: box \"B\"\nc: box \"C\"\nd: box \"D\"\na -> b -> c\nb -> d\n").unwrap();
+    let f = fig(&g);
+    for (x, y) in [("a", "b"), ("b", "c")] {
+        let r = route_of(&g, &f, x, y);
+        assert_eq!(r.bends(), 0, "{x} -> {y}: {:?}", r.points);
+    }
+    // b -> c leaves the middle; the other line leaves a quarter point
+    assert_eq!(route_of(&g, &f, "b", "c").from_site, 3);
+    assert_ne!(route_of(&g, &f, "b", "d").from_site, 3);
+}
+
+#[test]
+fn blocks_in_one_lane_share_a_port_line() {
+    let g = dsl::parse("fig l\na: box \"A\"\nb: image \"$x$\" caption=\"a long caption below\"\nc: box \"C\"\na -> b -> c\n").unwrap();
+    let f = fig(&g);
+    let n = &f.layout.nodes;
+    assert!((n[0].port_y - n[1].port_y).abs() < 0.5 && (n[1].port_y - n[2].port_y).abs() < 0.5, "{} {} {}", n[0].port_y, n[1].port_y, n[2].port_y);
+    for (x, y) in [("a", "b"), ("b", "c")] {
+        assert_eq!(route_of(&g, &f, x, y).bends(), 0);
+    }
+}
+
+#[test]
+fn a_smaller_block_is_levelled_with_its_neighbour() {
+    // a small block in one panel, a lane of tall ones in the next: the small one is moved
+    // inside its frame until the line between them is straight
+    let g = dsl::parse("fig v\narrange p q\npanel p \"P\" dir=right\n a: box \"A\"\nend\npanel q \"Q\" dir=right\n b: box \"B\"\n e: box \"E\" lane=1 col=0\n f: box \"F\" lane=2 col=0\nend\na -> b\n").unwrap();
+    let f = fig(&g);
+    let r = route_of(&g, &f, "a", "b");
+    assert_eq!(r.bends(), 0, "{:?}", r.points);
+    let (pa, panel) = (&f.layout.nodes[0], &f.layout.panels[f.layout.nodes[0].panel]);
+    assert!(pa.reserve.y >= panel.rect.y - 1e-6 && pa.reserve.bottom() <= panel.rect.bottom() + 1e-6, "inside its frame");
+    no_overlaps(&f);
+}
+
+#[test]
+fn a_pinned_block_stays_in_its_cell() {
+    let g = dsl::parse("fig p\na: box \"A\"\nb: box \"B\"\nc: box \"C\" col=0 lane=1\na -> b\nc -> b\n").unwrap();
+    let f = fig(&g);
+    let n = &f.layout.nodes;
+    assert_eq!((n[2].layer, n[2].lane), (0, 1));
+    assert!((n[2].rect.cx() - n[0].rect.cx()).abs() < 1e-6, "still in a's column");
+    assert!(n[2].rect.y > n[0].rect.bottom());
+    no_overlaps(&f);
+}
+
+#[test]
+fn figures_without_these_cases_route_as_before() {
+    // captured from the router before the change: no shared sides, no size mismatch
+    let pts = |src: &str| -> Vec<Vec<(f64, f64)>> {
+        let f = fig(&dsl::parse(src).unwrap());
+        f.routes.iter().map(|r| r.points.iter().map(|p| (p.0.round(), p.1.round())).collect()).collect()
+    };
+    assert_eq!(
+        pts("fig a\npanel p \"P\" dir=right\n x: box \"X\"\n y: box \"Y\"\n z: box \"Z\"\nend\npanel q \"Q\" dir=down\n u: box \"U\"\n v: box \"V\"\nend\nx -> y -> z\nu -> v\nz -> u\n"),
+        vec![vec![(233.0, 217.0), (272.0, 217.0)], vec![(332.0, 217.0), (371.0, 217.0)], vec![(518.0, 205.0), (518.0, 229.0)], vec![(401.0, 197.0), (401.0, 185.0), (488.0, 185.0)]]
+    );
+    assert_eq!(
+        pts("fig b\nx: image \"$x$\"\nn: box \"Net\"\nl: loss \"L\"\nt: image \"$y$\"\nx -> n -> l\nt -> l : supervision\nl -> n : feedback\n"),
+        vec![vec![(262.0, 203.0), (301.0, 203.0)], vec![(361.0, 203.0), (400.0, 203.0)], vec![(458.0, 203.0), (419.0, 203.0)], vec![(410.0, 216.0), (410.0, 233.0), (331.0, 233.0), (331.0, 222.0)]]
+    );
+}

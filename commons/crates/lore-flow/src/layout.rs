@@ -684,6 +684,62 @@ fn align_pass(g: &Graph, nodes: &mut [Option<Placed>], panels: &mut [PanelBox], 
     }
 }
 
+/// Level what can be level between two panels that stand side by side: a line from the right of
+/// a block of one panel to the left of a block of the next, each the only line on that side, is
+/// made straight by moving the content of one of the two panels up or down inside its frame
+/// (the panel with room for it; never out of the frame, a panel is moved once).
+fn level_panels(g: &Graph, needs: &[PanelNeed], nodes: &mut [Option<Placed>], panels: &[PanelBox]) {
+    let side_count = |ni: usize, right: bool, nodes: &[Option<Placed>]| -> usize {
+        let me = nodes[ni].as_ref().unwrap();
+        let id = &g.nodes[ni].id;
+        g.edges
+            .iter()
+            .filter(|e| e.off.is_empty() && (e.from == *id || e.to == *id))
+            .filter_map(|e| g.node_index(if e.from == *id { &e.to } else { &e.from }))
+            .filter(|o| {
+                let o = nodes[*o].as_ref().unwrap();
+                if right { o.rect.cx() > me.rect.cx() } else { o.rect.cx() < me.rect.cx() }
+            })
+            .count()
+    };
+    let mut moved: BTreeSet<usize> = BTreeSet::new();
+    for e in g.edges.iter().filter(|e| e.kind.is_flow() && e.off.is_empty()) {
+        let (Some(a), Some(b)) = (g.node_index(&e.from), g.node_index(&e.to)) else { continue };
+        let (pa, pb) = (nodes[a].clone().unwrap(), nodes[b].clone().unwrap());
+        if pa.panel == pb.panel || panels[pa.panel].down || panels[pb.panel].down || pa.rect.right() > pb.rect.x - 1e-6 {
+            continue;
+        }
+        let d = pa.port_y - pb.port_y;
+        if d.abs() < 0.5 || side_count(a, true, nodes) != 1 || side_count(b, false, nodes) != 1 {
+            continue;
+        }
+        // (panel, shift): b's panel moves by d, or a's by -d
+        for (p, dy) in [(pb.panel, d), (pa.panel, -d)] {
+            if moved.contains(&p) {
+                continue;
+            }
+            let room = nodes.iter().flatten().filter(|n| n.panel == p).fold(None::<Rect>, |acc, n| {
+                let r = n.rect.union(&n.reserve);
+                Some(acc.map_or(r, |a| a.union(&r)))
+            });
+            let Some(room) = room else { continue };
+            let f = panels[p].rect;
+            let (lo, hi) = (f.y + needs[p].top, f.bottom() - needs[p].bottom);
+            if room.y + dy < lo - 1e-6 || room.bottom() + dy > hi + 1e-6 {
+                continue;
+            }
+            for n in nodes.iter_mut().flatten().filter(|n| n.panel == p) {
+                n.rect.y += dy;
+                n.reserve.y += dy;
+                n.port_y += dy;
+            }
+            moved.insert(pa.panel);
+            moved.insert(pb.panel);
+            break;
+        }
+    }
+}
+
 /// The alignments of the graph that the layout does not meet (tolerance 0.5 pt), each as a
 /// line of words naming the axis and the blocks.
 pub fn unmet_alignments(g: &Graph, lay: &Layout) -> Vec<String> {
@@ -1307,6 +1363,7 @@ fn layout_fixed(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &Layo
         });
         panels.push(PanelBox { id: need.id.clone(), title: need.title.clone(), rect: frame, title_rect, bare: need.bare, down: need.plan.down });
     }
+    level_panels(g, &needs, &mut nodes, &panels);
     align_pass(g, &mut nodes, &mut panels, &mut rects);
     let mut bounds = rects.iter().skip(1).fold(rects[0], |a, b| a.union(b));
     let regions: Vec<RegionBox> = if rt.order.is_empty() {

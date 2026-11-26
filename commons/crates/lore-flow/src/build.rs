@@ -357,6 +357,7 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
 
     // modules
     let mut node_ids = BTreeMap::new();
+    let mut node_objs: Vec<Object> = Vec::new();
     for (n, pl) in g.nodes.iter().zip(&lay.nodes) {
         let body = modules::make(n, &Ctx { theme, vars, math, lib, k, symmetric: !lay.panels[pl.panel].down, image_size });
         // what a block could not draw (an icon the sets do not have)
@@ -364,10 +365,13 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         let (o, next) = modules::place(body, &node_name(fig, &n.id), pl.rect.x, pl.rect.y, id);
         node_ids.insert(n.id.clone(), o.id);
         id = next;
-        objects.push(o);
+        node_objs.push(o);
     }
 
-    // lines
+    // lines: drawn under the blocks, so a line that has to cross a block runs beneath it; the
+    // dots where lines branch and the labels lie over the blocks
+    let mut line_objs: Vec<Object> = Vec::new();
+    let mut dots: Vec<Object> = Vec::new();
     let small = cx.small(&theme.colors.ink);
     let mut labels = Vec::new();
     let mut label_rects: Vec<Rect> = Vec::new();
@@ -390,7 +394,15 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         warnings.extend(r.warnings.iter().cloned());
         // one smooth curve: a free shape from end to end (it keeps its arrowheads; a curve
         // cannot be a connector, so it is not glued to its blocks)
-        let curved = crate::route::curve_path(r).filter(|c| c.len() == 4).map(|c| {
+        let mut curve_pts = crate::route::curve_path(r).filter(|c| c.len() == 4);
+        if let Some(c) = &curve_pts {
+            let rooms: Vec<Rect> = lay.nodes.iter().map(|n| n.rect.union(&n.reserve)).collect();
+            if let Some(hit) = crate::route::curve_clear(c, &rooms, &[a, b]) {
+                warnings.push(format!("{} → {}: 曲線會穿過 {}，改走直角", e.from, e.to, g.nodes[hit].id));
+                curve_pts = None;
+            }
+        }
+        let curved = curve_pts.map(|c| {
             let (x0, x1) = c.iter().fold((f64::MAX, f64::MIN), |m, p| (m.0.min(p.0), m.1.max(p.0)));
             let (y0, y1) = c.iter().fold((f64::MAX, f64::MIN), |m, p| (m.0.min(p.1), m.1.max(p.1)));
             let (w, h) = ((x1 - x0).max(0.01), (y1 - y0).max(0.01));
@@ -428,14 +440,14 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             },
         };
         id += 1;
-        objects.push(o);
+        line_objs.push(o);
         // where a line leaves another line: a dot in its colour
         if r.branch && let Some(p) = r.points.first() {
             let d = 3.2 * k;
             let mut o = modules::shape(&format!("{name}/junction"), "ellipse", p.0 - d / 2.0, p.1 - d / 2.0, d, d, Paint::solid(&st.color), None);
             o.id = id;
             id += 1;
-            objects.push(o);
+            dots.push(o);
         }
         if !e.label.is_empty() {
             let own_small = own.as_ref().map(|c| cx.small(c));
@@ -472,6 +484,9 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             labels.push(o);
         }
     }
+    objects.extend(line_objs);
+    objects.extend(node_objs);
+    objects.extend(dots);
     objects.extend(labels);
 
     // legend

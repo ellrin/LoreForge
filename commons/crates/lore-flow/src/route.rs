@@ -423,12 +423,31 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
         }
     }
     let mut moved = false;
-    for ((_, side), mut uses) in groups {
-        let taken: Vec<usize> = uses.iter().filter_map(|u| u.slot).collect();
+    let level: Vec<bool> = first.iter().enumerate().map(|(ei, r)| !skip[ei] && is_level(g, lay, r)).collect();
+    for ((node, side), mut uses) in groups {
+        let mut taken: Vec<usize> = uses.iter().filter_map(|u| u.slot).collect();
         for u in uses.iter().filter(|u| u.slot.is_some()) {
             fixed2[u.edge][u.end] = End::At(side, u.slot.unwrap());
         }
         uses.retain(|u| u.slot.is_none());
+        // the main line: one whose other end is level with this block keeps the middle and
+        // stays straight; the others are spread round it
+        if !taken.contains(&2)
+            && let Some(p) = uses.iter().position(|u| level[u.edge])
+        {
+            let u = uses.remove(p);
+            fixed2[u.edge][u.end] = End::At(side, 2);
+            taken.push(2);
+            // a lone neighbour goes to the quarter on the side it lies on
+            if uses.len() == 1 {
+                let o = &lay.nodes[node];
+                let mid = if matches!(side, Side::Top | Side::Bottom) { o.rect.cx() } else { o.port_y };
+                let slot = if uses[0].key < mid { 1 } else { 3 };
+                fixed2[uses[0].edge][uses[0].end] = End::At(side, slot);
+                moved = true;
+                continue;
+            }
+        }
         uses.sort_by(|x, y| x.key.partial_cmp(&y.key).unwrap_or(Ordering::Equal).then((x.edge, x.end).cmp(&(y.edge, y.end))));
         for (u, slot) in uses.iter().zip(spread(uses.len(), &taken)) {
             fixed2[u.edge][u.end] = End::At(side, slot);
@@ -454,6 +473,19 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
         r.curve = e.curve;
     }
     out
+}
+
+/// Is this line level: its two ends face each other and their middle points lie on one line
+/// (within 0.5 pt)? Such a line is drawn straight from the middle of both sides.
+fn is_level(g: &Graph, lay: &Layout, r: &Route) -> bool {
+    if r.forced || r.branch || r.from_side.opposite() != r.to_side {
+        return false;
+    }
+    let e = &g.edges[r.edge];
+    let (Some(a), Some(b)) = (g.node_index(&e.from), g.node_index(&e.to)) else { return false };
+    let (pa, pb) = (lay.nodes[a].port(r.from_side), lay.nodes[b].port(r.to_side));
+    let along = if matches!(r.from_side, Side::Top | Side::Bottom) { (pa.0 - pb.0).abs() } else { (pa.1 - pb.1).abs() };
+    along <= 0.5
 }
 
 /// For every edge that leaves the middle of another line (`off`): the index of that line.
@@ -504,6 +536,26 @@ pub fn curve_path(r: &Route) -> Option<Vec<(f64, f64)>> {
     let len = (0.4 * d).max(12.0);
     let (n0, n3) = (r.from_side.normal(), r.to_side.normal());
     Some(vec![p0, (p0.0 + n0.0 * len, p0.1 + n0.1 * len), (p3.0 + n3.0 * len, p3.1 + n3.1 * len), p3])
+}
+
+/// Does the curve with control points `c` (a cubic Bezier, sampled at 24 points) stay out of the
+/// rooms of the blocks? Returns the index of the first room (not one of `skip`) it passes through.
+pub fn curve_clear(c: &[(f64, f64)], rooms: &[Rect], skip: &[usize]) -> Option<usize> {
+    if c.len() != 4 {
+        return None;
+    }
+    for i in 1..24 {
+        let t = i as f64 / 24.0;
+        let u = 1.0 - t;
+        let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+        let p = (b0 * c[0].0 + b1 * c[1].0 + b2 * c[2].0 + b3 * c[3].0, b0 * c[0].1 + b1 * c[1].1 + b2 * c[2].1 + b3 * c[3].1);
+        for (ri, r) in rooms.iter().enumerate() {
+            if !skip.contains(&ri) && p.0 > r.x + 1e-6 && p.0 < r.right() - 1e-6 && p.1 > r.y + 1e-6 && p.1 < r.bottom() - 1e-6 {
+                return Some(ri);
+            }
+        }
+    }
+    None
 }
 
 /// Mark the grid edges that the polyline `pts` runs along, by `f` (h: grid edge index of a
@@ -1282,7 +1334,9 @@ mod tests {
 
     #[test]
     fn two_arrows_into_a_side_use_the_quarter_points() {
-        let (g, f) = draw_plain(TWO_IN);
+        // neither source is level with c (c stands in a lane of its own)
+        const UNLEVEL: &str = "fig t\na: box \"A\"\nb: box \"B\"\nc: box \"C\" lane=1\na -> c\nb -> c\n";
+        let (g, f) = draw_plain(UNLEVEL);
         let c = &f.layout.nodes[2];
         let (ra, rb) = (edge(&g, &f, "a", "c"), edge(&g, &f, "b", "c"));
         assert_eq!((ra.to_side, rb.to_side), (Side::Left, Side::Left));
@@ -1375,11 +1429,12 @@ mod tests {
 
     #[test]
     fn a_turn_is_placed_where_the_author_put_it() {
+        // b is not level with c (a is, and keeps the straight line), so b's line has a run to move
         let (g, base) = draw_plain(TWO_IN);
-        let (a, c) = (&base.layout.nodes[0].rect, &base.layout.nodes[2].rect);
+        let (a, c) = (&base.layout.nodes[1].rect, &base.layout.nodes[2].rect);
         let x = a.right() + 0.7 * (c.x - a.right());
-        let (_, f) = draw_with(TWO_IN, &[], &[("a>c", ends(None, None, &[natural(&base, x, false)]))]);
-        let r = edge(&g, &f, "a", "c");
+        let (_, f) = draw_with(TWO_IN, &[], &[("b>c", ends(None, None, &[natural(&base, x, false)]))]);
+        let r = edge(&g, &f, "b", "c");
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
         assert!(r.points.windows(2).any(|w| (w[0].0 - x).abs() < 1e-6 && (w[1].0 - x).abs() < 1e-6 && (w[0].1 - w[1].1).abs() > 1e-6), "{:?} should turn at x = {x}", r.points);
         assert!(f.built.warnings.is_empty(), "{:?}", f.built.warnings);
@@ -1408,7 +1463,8 @@ mod tests {
             seen.push(c.end.as_ref().unwrap().site);
         }
         seen.sort();
-        assert_eq!(seen, [14, 15]);
+        // a is level with c and keeps the middle (1); b takes the upper quarter (15)
+        assert_eq!(seen, [1, 15]);
     }
 
     #[test]
@@ -1595,7 +1651,7 @@ mod tests {
         let small = LayoutOptions { frame: Rect::new(0.0, 0.0, 120.0, 80.0), ..Default::default() };
         let f = crate::draw(&g, &Drawing { options: small, ..Default::default() }).unwrap();
         assert!((f.layout.scale - 1.0).abs() > 1e-3, "scale {}", f.layout.scale);
-        let r = edge(&g, &f, "a", "c");
+        let r = edge(&g, &f, "b", "c");
         let (a, b) = ends_of(&g, &r);
         let v = runs(&f.layout, a, &r);
         assert!(!v.is_empty(), "{:?}", r.points);
@@ -1611,11 +1667,11 @@ mod tests {
     #[test]
     fn runs_follow_turns_the_author_set() {
         let (g, base) = draw_plain(TWO_IN);
-        let (a, c) = (&base.layout.nodes[0].rect, &base.layout.nodes[2].rect);
+        let (a, c) = (&base.layout.nodes[1].rect, &base.layout.nodes[2].rect);
         let x = a.right() + 0.7 * (c.x - a.right());
         let t = natural(&base, x, false);
-        let (_, f) = draw_with(TWO_IN, &[], &[("a>c", ends(None, None, &[t]))]);
-        let r = edge(&g, &f, "a", "c");
+        let (_, f) = draw_with(TWO_IN, &[], &[("b>c", ends(None, None, &[t]))]);
+        let r = edge(&g, &f, "b", "c");
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
         let (a, _) = ends_of(&g, &r);
         let v = runs(&f.layout, a, &r);
@@ -1821,16 +1877,44 @@ mod tests {
     }
 
     #[test]
+    fn equal_routes_prefer_fewer_bends() {
+        // an empty 3 x 3 grid: from the right of (0,0) to the top of (2,2) the L (one corner)
+        // and every staircase are equally long; the search must take the L
+        let (nx, ny) = (3, 3);
+        let grid = Grid {
+            xs: vec![0.0, 10.0, 20.0],
+            ys: vec![0.0, 10.0, 20.0],
+            xw: vec![1.0; nx],
+            yw: vec![1.0; ny],
+            h_block: vec![false; (nx - 1) * ny],
+            v_block: vec![false; nx * (ny - 1)],
+            h_cost: vec![0.0; (nx - 1) * ny],
+            v_cost: vec![0.0; nx * (ny - 1)],
+            h_use: vec![Vec::new(); (nx - 1) * ny],
+            v_use: vec![Vec::new(); nx * (ny - 1)],
+            h_through: vec![0; nx * ny],
+            v_through: vec![0; nx * ny],
+        };
+        let start: Port = (Side::Right, (-5.0, 0.0), (0, 0), 0.0);
+        let goal: Port = (Side::Top, (20.0, 25.0), (2, 2), 0.0);
+        let (path, _, _) = astar(&grid, &[start], &[goal], (0, 1), 18.0, 1.0).unwrap();
+        let pts = simplify(path.iter().map(|(i, j)| (grid.xs[*i], grid.ys[*j])).collect());
+        assert_eq!(pts, vec![(0.0, 0.0), (20.0, 0.0), (20.0, 20.0)], "{pts:?}");
+    }
+
+    #[test]
     fn routes_without_the_new_fields_are_what_they_were() {
         // captured from the router before this change
         let pts = |s: &str, i: usize| -> Vec<(f64, f64)> { draw_plain(s).1.routes[i].points.clone() };
         assert_eq!(pts(CHAIN, 0), vec![(291.0, 202.5), (330.0, 202.5)]);
         assert_eq!(pts(CHAIN, 1), vec![(390.0, 202.5), (429.0, 202.5)]);
-        assert_eq!(pts(TWO_IN, 0), vec![(340.5, 234.0), (360.0, 234.0), (360.0, 243.75), (379.5, 243.75)]);
+        // changed on purpose: a is level with c, so its line is straight from the middle
+        assert_eq!(pts(TWO_IN, 0), vec![(340.5, 234.0), (379.5, 234.0)]);
         assert_eq!(pts(TWO_IN, 1), vec![(340.5, 171.0), (360.0, 171.0), (360.0, 224.25), (379.5, 224.25)]);
         let f = draw_plain(RUN_SRCS[0]).1;
         let want: [(usize, &[(f64, f64)]); 3] = [
-            (0, &[(197.115, 192.75), (216.615, 192.75), (216.615, 202.5), (236.115, 202.5)]),
+            // level now: straight from the middle
+            (0, &[(197.115, 202.5), (236.115, 202.5)]),
             (3, &[(167.115, 183.0), (167.115, 172.5), (552.885, 172.5), (552.885, 183.0)]),
             (4, &[(552.885, 222.0), (552.885, 246.0), (167.115, 246.0), (167.115, 222.0)]),
         ];
