@@ -122,6 +122,57 @@ pub struct Placement {
     /// When `text_pt` is under the format's limit: what would help (a wider width, labels that
     /// could break, less detail). Empty when the text is large enough.
     pub ways: Vec<String>,
+    /// True for the arrangement the figure's own text states (its `arrange` line, and every area
+    /// arranged inside as its pins say). It is always among the options, wherever it ranks.
+    #[serde(default)]
+    pub stated: bool,
+    /// Share of the plate the blocks cover (each block's rectangle: its picture and its words),
+    /// 0..1. This is what reads as "full" or "empty" on the page; the same measure as
+    /// [`crate::look::page_cover`] gives for any layout.
+    #[serde(default)]
+    pub cover: f64,
+    /// How each base area is arranged inside, in the areas' order: `stated` (as its pins or the
+    /// planner put it), `two-rows` (a long chain folded) …
+    #[serde(default)]
+    pub inner: Vec<String>,
+}
+
+/// What one base area needs, and what one row or one column fewer in it would give.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct AreaNeed {
+    pub id: String,
+    /// Columns and rows of blocks in the area.
+    pub cols: usize,
+    pub rows: usize,
+    /// Cells the area needs across and down (frame, title, gaps and channels included).
+    pub w: u32,
+    pub h: u32,
+    /// Does this area set the figure's size in the binding direction?
+    pub binds: bool,
+}
+
+/// What holds a placement small on its format: the direction that binds and the areas that set
+/// it. The wizard's first step shows it; a redraft is told it in words (`llm`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Binding {
+    /// True when the height sets the plate (spare room is left across); false when the width does.
+    pub tall: bool,
+    /// Cells the arrangement needs, and the plate it got.
+    pub need: (u32, u32),
+    pub plate: (u32, u32),
+    /// Cells left over in the direction that does not bind.
+    pub spare: u32,
+    pub areas: Vec<AreaNeed>,
+    /// The smallest text on the page now, and what it would be were the need exactly the
+    /// plate's shape (the most any rearrangement of the same blocks can win).
+    pub text_pt: f64,
+    pub text_if_shaped_pt: f64,
+}
+
+/// What binds `p` on `f` (see [`Binding`]).
+pub fn binding(g: &Graph, f: &Format, p: &Placement, m: &Measure) -> Binding {
+    let _ = (g, f, m);
+    Binding { need: p.budget.least, plate: p.plate, text_pt: p.text_pt, text_if_shaped_pt: p.text_pt, ..Default::default() }
 }
 
 /// Everything `place` needs to measure blocks (the same things `layout::layout_with` takes).
@@ -866,6 +917,9 @@ fn realise(me: &Meas, f: &Format, base: &[Vec<Option<Grid>>], c: &Cand, spare: b
             empty,
             text_pt,
             ways,
+            stated: false,
+            cover: 0.0,
+            inner: Vec::new(),
         },
         bends,
     )

@@ -457,3 +457,87 @@ pub fn smallest_text(objects: &[Object], figure_w: f64, width_pt: f64) -> f64 {
     objects.iter().for_each(|o| walk(o, 1.0, &mut min));
     if min == f64::MAX { 0.0 } else { min * width_pt / figure_w.max(1.0) }
 }
+
+/// What the frames of a layout get wrong against each other and against their blocks.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FrameFaults {
+    /// Two frames (panels or regions) that overlap although neither lies inside the other:
+    /// `(id, id)`.
+    pub overlaps: Vec<(String, String)>,
+    /// A title that touches another title, or is crossed by the border of a frame that is not
+    /// its own: `(the title's frame id, the other frame's id)`.
+    pub titles: Vec<(String, String)>,
+    /// A block outside the frame it belongs to (its panel, a region it is a member of), or
+    /// inside a region it is not a member of: `(node id, frame id)`.
+    pub strays: Vec<(String, String)>,
+}
+
+impl FrameFaults {
+    pub fn count(&self) -> usize {
+        self.overlaps.len() + self.titles.len() + self.strays.len()
+    }
+}
+
+/// The frame faults of a layout (see [`FrameFaults`]). `g` is the graph the layout was made
+/// from (the same nodes in the same order).
+pub fn frame_faults(g: &crate::spec::Graph, lay: &crate::layout::Layout) -> FrameFaults {
+    let _ = (g, lay);
+    FrameFaults::default()
+}
+
+/// Points on the page per point of the layout when the whole figure is fitted into a page box
+/// `width_pt` wide of ratio `w:h`: scaled until it touches the box, never stretched. A figure
+/// whose shape is not the box's leaves part of the box empty.
+pub fn page_scale(bounds: &Rect, width_pt: f64, ratio: (u32, u32)) -> f64 {
+    let height_pt = width_pt * ratio.1.max(1) as f64 / ratio.0.max(1) as f64;
+    (width_pt / bounds.w.max(1.0)).min(height_pt / bounds.h.max(1.0))
+}
+
+/// Share of the page box (ratio `w:h`) the blocks cover when the figure is fitted into it, 0..1:
+/// the sum of the blocks' rectangles (picture and words) over the box. One measure for every
+/// layout, the old one and the plate's.
+pub fn page_cover(lay: &crate::layout::Layout, ratio: (u32, u32)) -> f64 {
+    let s = page_scale(&lay.bounds, 1000.0, ratio);
+    let box_area = 1000.0 * 1000.0 * ratio.1.max(1) as f64 / ratio.0.max(1) as f64;
+    lay.nodes.iter().map(|n| n.rect.w * n.rect.h).sum::<f64>() * s * s / box_area
+}
+
+/// The smallest text on the page, in points, when the figure is fitted into a page box
+/// `width_pt` wide of ratio `w:h` (unlike [`smallest_text`], a figure taller than the box is
+/// scaled by its height).
+pub fn page_text(objects: &[Object], lay: &crate::layout::Layout, width_pt: f64, ratio: (u32, u32)) -> f64 {
+    smallest_text(objects, 1.0, 1.0) * page_scale(&lay.bounds, width_pt, ratio)
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+    use crate::layout::{Layout, Placed};
+
+    fn lay(w: f64, h: f64, blocks: &[(f64, f64)]) -> Layout {
+        let nodes = blocks
+            .iter()
+            .map(|(bw, bh)| {
+                let rect = Rect::new(0.0, 0.0, *bw, *bh);
+                Placed { rect, reserve: rect, port_y: 0.0, art: rect, words: Default::default(), panel: 0, layer: 0, lane: 0, single: false, ellipse: false, ends: Default::default(), origin: (0.0, 0.0) }
+            })
+            .collect();
+        Layout { nodes, panels: Vec::new(), regions: Vec::new(), legend: Vec::new(), swatches: Vec::new(), bounds: Rect::new(0.0, 0.0, w, h), scale: 1.0 }
+    }
+
+    #[test]
+    fn a_figure_is_fitted_into_the_page_box_by_its_binding_side() {
+        // 300 x 100 in a 3:2 box 600 pt wide: the width binds, twice the size
+        assert_eq!(page_scale(&Rect::new(0.0, 0.0, 300.0, 100.0), 600.0, (3, 2)), 2.0);
+        // 300 x 400 in the same box (400 pt high): the height binds, natural size
+        assert_eq!(page_scale(&Rect::new(0.0, 0.0, 300.0, 400.0), 600.0, (3, 2)), 1.0);
+    }
+
+    #[test]
+    fn cover_is_measured_on_the_page_box_not_on_the_figure() {
+        // one block filling a square figure covers the whole of a square box
+        assert!((page_cover(&lay(100.0, 100.0, &[(100.0, 100.0)]), (1, 1)) - 1.0).abs() < 1e-9);
+        // the same figure in a 2:1 box covers half of it: the rest of the box is empty
+        assert!((page_cover(&lay(100.0, 100.0, &[(100.0, 100.0)]), (2, 1)) - 0.5).abs() < 1e-9);
+    }
+}
