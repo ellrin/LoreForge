@@ -23,10 +23,15 @@ pub struct Report {
     pub over_text: Vec<Hit>,
     /// A line passing under a shape that has an outline but no fill: it shows through.
     pub through_open: Vec<Hit>,
+    /// Words that run past the shape they are written in (the shape's edge cuts them), or a
+    /// frame's border that runs through words.
+    pub words_cut: Vec<Hit>,
 }
 
 enum Item {
     Line(Vec<(f64, f64)>),
+    /// Words that run past their own drawn shape.
+    Spill(Rect),
     Text(Rect),
     Shape { rect: Rect, opaque: bool, outlined: bool },
 }
@@ -59,14 +64,15 @@ fn words_box(t: &lore_canvas::TextBody, r: Rect, scale: f64) -> Rect {
     let mut align = "l".to_string();
     for p in &t.paras {
         let size = p.runs.iter().map(|x| x.look.size).fold(0.0, f64::max).max(1.0) * scale;
-        let chars: usize = p.runs.iter().map(|x| x.text.chars().count()).sum();
+        // the crate's own measure of the words, a little wider when bold; words may run past
+        // their frame, so the box is not clamped to it
+        let pw: f64 = p.runs.iter().map(|x| crate::text::width(&x.text, x.look.size * scale) * if x.look.bold { 1.08 } else { 1.0 }).sum();
         h += size * 1.2;
-        w = w.max(chars as f64 * size * 0.5);
+        w = w.max(pw);
         align = p.align.clone();
     }
     let vertical = t.vert.as_deref().is_some_and(|v| v.starts_with("vert") || v.starts_with("eaVert"));
     let (w, h) = if vertical { (h, w) } else { (w, h) };
-    let (w, h) = (w.min(r.w), h.min(r.h));
     let x = if vertical { r.cx() - w / 2.0 } else {
         match align.as_str() {
             "ctr" => r.cx() - w / 2.0,
@@ -123,7 +129,12 @@ fn walk(o: &Object, xf: &Xf, path: &str, out: &mut Vec<(String, Item)>) {
                 out.push((name.clone(), Item::Shape { rect: r, opaque, outlined: sp.line.is_some() }));
             }
             if let Some(t) = sp.text.as_ref().filter(|_| has_words(o)) {
-                out.push((name, Item::Text(words_box(t, r, xf.sx.min(xf.sy)))));
+                let wb = words_box(t, r, xf.sx.min(xf.sy));
+                // words in a drawn shape (outline or fill) that run past its edge
+                if (sp.line.is_some() || !matches!(sp.fill, Paint::None)) && (wb.x < r.x - 1.0 || wb.right() > r.right() + 1.0 || wb.y < r.y - 1.0 || wb.bottom() > r.bottom() + 1.0) {
+                    out.push((name.clone(), Item::Spill(wb)));
+                }
+                out.push((name, Item::Text(wb)));
             }
         }
         Kind::Connector(c) => {
@@ -186,6 +197,28 @@ pub fn check(objects: &[Object]) -> Report {
         walk(o, &root, "", &mut items);
     }
     let mut rep = Report::default();
+    for (name, it) in &items {
+        if let Item::Spill(r) = it {
+            rep.words_cut.push(Hit { line: name.clone(), other: name.clone(), at: (r.cx(), r.cy()) });
+        }
+    }
+    // frame borders (panels, regions) through words that are not the frame's own title
+    for (fname, it) in &items {
+        let Item::Shape { rect, .. } = it else { continue };
+        if !(fname.contains("/panel:") || fname.contains("/region:")) || fname.ends_with("/title") {
+            continue;
+        }
+        let edges = [((rect.x, rect.y), (rect.right(), rect.y)), ((rect.right(), rect.y), (rect.right(), rect.bottom())), ((rect.x, rect.bottom()), (rect.right(), rect.bottom())), ((rect.x, rect.y), (rect.x, rect.bottom()))];
+        for (tname, t) in &items {
+            let Item::Text(tb) = t else { continue };
+            if tname.starts_with(fname.as_str()) {
+                continue;
+            }
+            if let Some(p) = edges.iter().find_map(|(a, b)| crossing(*a, *b, tb)) {
+                rep.words_cut.push(Hit { line: fname.clone(), other: tname.clone(), at: p });
+            }
+        }
+    }
     for (li, (lname, it)) in items.iter().enumerate() {
         let Item::Line(pts) = it else { continue };
         for (oi, (oname, other)) in items.iter().enumerate() {

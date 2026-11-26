@@ -25,7 +25,10 @@ fn main() {
             }
         }
         let short = |s: &str| s.split('/').skip(1).collect::<Vec<_>>().join("/");
-        println!("  line over words {}, line through an open shape {}", look.over_text.len(), look.through_open.len());
+        println!("  line over words {}, line through an open shape {}, words cut by a shape or frame {}", look.over_text.len(), look.through_open.len(), look.words_cut.len());
+        for h in look.words_cut.iter().take(6) {
+            println!("    cut:   {}  ×  {}", short(&h.line), short(&h.other));
+        }
         for h in look.over_text.iter().take(6) {
             println!("    words: {}  ×  {}  at {:.0},{:.0}", short(&h.line), short(&h.other), h.at.0, h.at.1);
         }

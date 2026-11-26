@@ -2433,3 +2433,12 @@ fn a_fork_up_and_down_turns_in_one_column() {
     // and they leave the block at one point (a T), not at two points side by side
     assert!((pu[0].1 - pd[0].1).abs() < 0.5 && (pu[0].0 - pd[0].0).abs() < 0.5, "one point: {pu:?} {pd:?}");
 }
+
+#[test]
+fn the_look_check_finds_words_cut_by_their_shape() {
+    let objs = vec![text_rect("cap", 0, &["A caption much wider than the drawing itself"])];
+    let rep = lore_flow::look::check(&objs);
+    assert_eq!(rep.words_cut.len(), 1, "{:?}", rep.words_cut);
+    let fits = vec![text_rect("cap", 0, &["Ok"])];
+    assert!(lore_flow::look::check(&fits).words_cut.is_empty());
+}
