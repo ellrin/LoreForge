@@ -2268,6 +2268,13 @@ fn a_palette_names_the_tints_and_a_style_the_region_frames() {
     let il = i.line.as_ref().unwrap();
     assert_eq!((il.color.as_str(), il.dash.as_str()), ("6C8FD6", "dash"));
     assert!((o.line.as_ref().unwrap().width_pt / il.width_pt - 2.2 / 1.4).abs() < 0.01);
+    // a region without a tint is a module's frame: the block weight, in ink
+    let mut lay2 = lay.clone();
+    lay2.regions[0].tint.clear();
+    let b2 = built_with(&t, &g, &lay2, &routes);
+    let m = b2.objects[index(&b2, "flow:f/region:outer")].kind.sp().unwrap().line.clone().unwrap();
+    assert_eq!(m.color, t.colors.ink);
+    assert!((m.width_pt / il.width_pt - t.node.line_w / 1.4).abs() < 0.01);
     // a block and a line that say blue take the palette's blue
     let body = body_with(&t, "a: box \"A\" fill=blue");
     assert_eq!(body.kind.sp().unwrap().fill, lore_canvas::Paint::solid("E6F0FB"));

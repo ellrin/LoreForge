@@ -337,6 +337,8 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         let colour = match (&own, &mid) {
             (Some(_), Some(m)) if !inner && !is_hex(&rb.tint) => m.clone(),
             (Some((_, l)), _) if !is_hex(&rb.tint) => l.clone(),
+            // soft frames: a region without a tint is a module's frame, drawn like a block
+            _ if theme.region.soft && own.is_none() => theme.colors.ink.clone(),
             _ => theme.colors.muted.clone(),
         };
         let (dash, on) = match rb.line.as_str() {
@@ -346,7 +348,13 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             _ if inner && !theme.region.inner_dash.is_empty() => (theme.region.inner_dash.as_str(), true),
             _ => ("solid", true),
         };
-        let weight = if inner { theme.region.inner_w } else { theme.region.line_w };
+        let weight = if theme.region.soft && own.is_none() {
+            theme.node.line_w
+        } else if inner {
+            theme.region.inner_w
+        } else {
+            theme.region.line_w
+        };
         if let Some(sp) = o.kind.sp_mut() {
             if on {
                 let mut st = Stroke::new(&colour, (weight * k).max(0.5));
