@@ -38,11 +38,16 @@ pub struct Air {
     /// The largest the text is drawn on the page, in points (0 = as large as it goes). With a
     /// limit the page that is left goes to the pictures.
     pub text_max_pt: f64,
+    /// How much of the text size an area's paths are worth: an area whose text states a grid
+    /// (`col=`, `lane=`: its rows are the paths of the flow, so its lines are straight) stands
+    /// on it as long as the page's text keeps this share of what rows broken freely give.
+    /// 0 = never on the grid, 1 = only when it costs nothing.
+    pub paths: f64,
 }
 
 impl Default for Air {
     fn default() -> Air {
-        Air { gap: 1.5, pad: 0.8, between: 0.6, grow_max: 4.0, text_max_pt: 0.0 }
+        Air { gap: 1.5, pad: 0.8, between: 0.6, grow_max: 4.0, text_max_pt: 0.0, paths: 0.75 }
     }
 }
 
@@ -54,6 +59,9 @@ pub struct AreaPack {
     pub grow: f64,
     /// Its blocks row by row (a region is written `[id]`).
     pub rows: Vec<Vec<String>>,
+    /// The area stands on the grid its text states (its rows are the paths of the flow), not in
+    /// rows broken freely.
+    pub grid: bool,
     /// The share of the area's frame its blocks cover.
     pub cover: f64,
 }
@@ -112,6 +120,84 @@ struct Area {
     down: bool,
     items: Vec<Item>,
     notes: Vec<usize>,
+    /// The area's blocks on the grid the figure's text states, when it states one.
+    grid: Option<Grid>,
+}
+
+/// The grid the text states for an area: every object names its column and its row (`col=`,
+/// `lane=`: where it stands along the flow and which of the parallel paths it is on), no two the
+/// same cell. A row is then a path, kept whole, and the blocks of different paths stand under
+/// each other, so the lines between them are straight. A region frames the cells of its blocks.
+#[derive(Debug, Clone)]
+struct Grid {
+    cols: usize,
+    rows: usize,
+    /// (block, column, row)
+    cell: Vec<(usize, usize, usize)>,
+    regs: Vec<GReg>,
+}
+
+#[derive(Debug, Clone)]
+struct GReg {
+    r: usize,
+    c0: usize,
+    c1: usize,
+    r0: usize,
+    r1: usize,
+    /// The regions of the grid inside this one, itself included (indexes into `Grid.regs`).
+    inside: Vec<usize>,
+}
+
+/// A grid measured at one enlargement: column widths, each row's parts, the room region frames
+/// take before and after each column and row, each region's own insets (left, right, top,
+/// bottom), and the size of it all without the area's title and padding.
+struct GridGeom {
+    cw: Vec<f64>,
+    parts: Vec<(f64, f64, f64)>,
+    left: Vec<f64>,
+    right: Vec<f64>,
+    top: Vec<f64>,
+    bottom: Vec<f64>,
+    inset: Vec<(f64, f64, f64, f64)>,
+    w: f64,
+    h: f64,
+}
+
+fn grid_of(g: &Graph, rt: &RTree, objects: &[usize], down: bool) -> Option<Grid> {
+    if objects.is_empty() {
+        return None;
+    }
+    let mut at: Vec<(usize, f64, f64)> = Vec::new();
+    for &n in objects {
+        let (c, l) = (g.nodes[n].num("col")?, g.nodes[n].num("lane")?);
+        at.push(if down { (n, l, c) } else { (n, c, l) });
+    }
+    let index = |vals: Vec<f64>| -> Vec<f64> {
+        let mut v = vals;
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        v
+    };
+    let (xs, ys) = (index(at.iter().map(|a| a.1).collect()), index(at.iter().map(|a| a.2).collect()));
+    let pos = |v: &[f64], x: f64| v.iter().position(|y| (*y - x).abs() < 1e-6).unwrap();
+    let cell: Vec<(usize, usize, usize)> = at.iter().map(|(n, c, l)| (*n, pos(&xs, *c), pos(&ys, *l))).collect();
+    for (i, a) in cell.iter().enumerate() {
+        if cell[..i].iter().any(|b| (b.1, b.2) == (a.1, a.2)) {
+            return None;
+        }
+    }
+    let mut regs: Vec<GReg> = Vec::new();
+    for r in 0..g.regions.len() {
+        let mine: Vec<&(usize, usize, usize)> = cell.iter().filter(|c| rt.all[r].contains(&c.0)).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        regs.push(GReg { r, c0: mine.iter().map(|c| c.1).min().unwrap(), c1: mine.iter().map(|c| c.1).max().unwrap(), r0: mine.iter().map(|c| c.2).min().unwrap(), r1: mine.iter().map(|c| c.2).max().unwrap(), inside: Vec::new() });
+    }
+    for i in 0..regs.len() {
+        regs[i].inside = (0..regs.len()).filter(|j| *j == i || (rt.all[regs[*j].r].is_subset(&rt.all[regs[i].r]) && rt.all[regs[*j].r] != rt.all[regs[i].r])).collect();
+    }
+    Some(Grid { cols: xs.len(), rows: ys.len(), cell, regs })
 }
 
 /// A block's tight box at one enlargement: its width, how far its middle line lies under its
@@ -253,6 +339,67 @@ impl Ctx2<'_> {
             s.h += 2.0 * self.band_reg[r];
         }
         if all.len() > 3 { vec![all[0].clone(), all[all.len() / 2].clone(), all[all.len() - 1].clone()] } else { all }
+    }
+
+    /// A grid measured (see [`GridGeom`]).
+    fn grid_geom(&self, gr: &Grid, grow: u32) -> GridGeom {
+        let (pad, gap) = (self.pad(), self.gap());
+        let mut cw = vec![0.0f64; gr.cols];
+        let mut by_row: Vec<Vec<Box3>> = vec![Vec::new(); gr.rows];
+        for &(n, c, r) in &gr.cell {
+            let b = self.leaf(n, grow);
+            cw[c] = cw[c].max(b.w);
+            by_row[r].push(b);
+        }
+        let parts: Vec<(f64, f64, f64)> = by_row.iter().map(|b| row_parts(b)).collect();
+        // each region's own insets: its padding and title band, with those of the regions inside
+        // it that start (or end) at the same column or row
+        let inset: Vec<(f64, f64, f64, f64)> = gr
+            .regs
+            .iter()
+            .map(|a| {
+                let ins: Vec<&GReg> = a.inside.iter().map(|j| &gr.regs[*j]).collect();
+                let band = self.band_reg[a.r];
+                (
+                    pad * ins.iter().filter(|q| q.c0 == a.c0).count() as f64,
+                    pad * ins.iter().filter(|q| q.c1 == a.c1).count() as f64,
+                    ins.iter().filter(|q| q.r0 == a.r0).map(|q| self.region_title(q.r).0.max(pad)).sum::<f64>() + band,
+                    pad * ins.iter().filter(|q| q.r1 == a.r1).count() as f64 + band,
+                )
+            })
+            .collect();
+        let (mut left, mut right, mut top, mut bottom) = (vec![0.0f64; gr.cols], vec![0.0f64; gr.cols], vec![0.0f64; gr.rows], vec![0.0f64; gr.rows]);
+        for (a, i) in gr.regs.iter().zip(&inset) {
+            left[a.c0] = left[a.c0].max(i.0);
+            right[a.c1] = right[a.c1].max(i.1);
+            top[a.r0] = top[a.r0].max(i.2);
+            bottom[a.r1] = bottom[a.r1].max(i.3);
+        }
+        // a frame is at least as wide as its title: the innermost first
+        let mut order: Vec<usize> = (0..gr.regs.len()).collect();
+        order.sort_by_key(|i| gr.regs[*i].inside.len());
+        for i in order {
+            let a = &gr.regs[i];
+            let span: f64 = (a.c0..=a.c1).map(|c| cw[c]).sum::<f64>() + (a.c0..a.c1).map(|c| gap + right[c] + left[c + 1]).sum::<f64>() + inset[i].0 + inset[i].1;
+            let need = self.region_title(a.r).1 + 2.0 * pad;
+            if need > span {
+                let add = (need - span) / (a.c1 - a.c0 + 1) as f64;
+                for w in &mut cw[a.c0..=a.c1] {
+                    *w += add;
+                }
+            }
+        }
+        let w = cw.iter().sum::<f64>() + gap * (gr.cols - 1) as f64 + left.iter().sum::<f64>() + right.iter().sum::<f64>();
+        let h = parts.iter().map(|p| p.0 + p.1).sum::<f64>() + gap * (gr.rows - 1) as f64 + top.iter().sum::<f64>() + bottom.iter().sum::<f64>();
+        GridGeom { cw, parts, left, right, top, bottom, inset, w, h }
+    }
+
+    /// The one shape of an area on a grid: the grid, the area's title and its padding.
+    fn grid_shape(&self, a: &Area, gr: &Grid, grow: u32) -> Shape {
+        let geo = self.grid_geom(gr, grow);
+        let (band, tw) = self.area_title(a);
+        let pad = if a.bare { 0.0 } else { self.pad() };
+        Shape { w: geo.w.max(tw + pad) + 2.0 * pad, h: geo.h + band + if band > 0.0 { pad } else { 2.0 * pad }, ends: vec![], kids: vec![] }
     }
 
     fn area_title(&self, a: &Area) -> (f64, f64) {
@@ -414,7 +561,8 @@ fn areas(g: &Graph) -> Vec<Area> {
             }
             let nodes: Vec<usize> = all.iter().copied().filter(|n| !notes.contains(n)).collect();
             let items = build(&nodes, 0, &chain);
-            Area { bare: bare || id == "_", id, title, down, items, notes }
+            let grid = grid_of(g, &rt, &nodes, down);
+            Area { bare: bare || id == "_", id, title, down, items, notes, grid }
         })
         .collect()
 }
@@ -488,12 +636,43 @@ pub fn pack(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) ->
     if g.nodes.is_empty() {
         return None;
     }
-    // notes go in the air the objects leave; a frame whose notes found none gets a band for
-    // them above and below its rows, and the page is packed again
-    let (mut ba, mut br) = (vec![0.0; areas(g).len()], vec![0.0; g.regions.len()]);
+    let n = areas(g).len();
+    let has: Vec<bool> = areas(g).iter().map(|a| a.grid.is_some()).collect();
+    // every area in rows broken freely: the largest the text gets
+    let free = pack_choice(g, f, m, arrangement, air, &vec![false; n])?;
+    if !has.iter().any(|h| *h) || air.paths <= 0.0 {
+        return Some(free);
+    }
+    // every area that states its paths on its grid; while that costs more of the text than
+    // `Air.paths` allows, the area whose rows broken freely give the most back goes free
+    let mut on = has.clone();
+    let mut cur = pack_choice(g, f, m, arrangement, air, &on)?;
+    while cur.text_pt < air.paths * free.text_pt - 1e-6 && on.iter().any(|x| *x) {
+        let mut best: Option<(usize, Packed)> = None;
+        for i in (0..n).filter(|i| on[*i]) {
+            let mut v = on.clone();
+            v[i] = false;
+            if let Some(p) = pack_choice(g, f, m, arrangement, air, &v) {
+                if best.as_ref().is_none_or(|b| p.text_pt > b.1.text_pt + 1e-6) {
+                    best = Some((i, p));
+                }
+            }
+        }
+        let Some((i, p)) = best else { break };
+        on[i] = false;
+        cur = p;
+    }
+    Some(cur)
+}
+
+/// One packing with the areas named in `on_grid` on the grid their text states: notes go in the
+/// air the objects leave; a frame whose notes found none gets a band for them above and below
+/// its rows, and the page is packed again.
+fn pack_choice(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, on_grid: &[bool]) -> Option<Packed> {
+    let (mut ba, mut br) = (vec![0.0; on_grid.len()], vec![0.0; g.regions.len()]);
     let mut out = None;
     for _ in 0..3 {
-        let (p, want) = pack_with(g, f, m, arrangement, air, &ba, &br)?;
+        let (p, want) = pack_with(g, f, m, arrangement, air, &ba, &br, on_grid)?;
         let done = p.crowded.is_empty();
         out = Some(p);
         if done {
@@ -517,8 +696,14 @@ enum Frame2 {
 
 /// One packing with the given bands; with it, for every note without free room, its frame and
 /// the band that would hold it.
-fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, band_area: &[f64], band_reg: &[f64]) -> Option<(Packed, Vec<(Frame2, f64)>)> {
-    let ar = areas(g);
+#[allow(clippy::too_many_arguments)]
+fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, band_area: &[f64], band_reg: &[f64], on_grid: &[bool]) -> Option<(Packed, Vec<(Frame2, f64)>)> {
+    let mut ar = areas(g);
+    for (a, on) in ar.iter_mut().zip(on_grid) {
+        if !on {
+            a.grid = None;
+        }
+    }
     let rows = rows_of(g, &ar, arrangement);
     let cx = Ctx2 { g, m, air, fs: m.theme.font.size, cache: RefCell::new(BTreeMap::new()), band_area: band_area.to_vec(), band_reg: band_reg.to_vec() };
     let mut want: Vec<(Frame2, f64)> = Vec::new();
@@ -529,7 +714,10 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
             .enumerate()
             .map(|(i, a)| {
                 let (band, tw) = cx.area_title(a);
-                let mut v = cx.shapes(&a.items, grow[i], band, tw + if a.bare { 0.0 } else { cx.pad() }, !a.bare);
+                let mut v = match &a.grid {
+                    Some(gr) => vec![cx.grid_shape(a, gr, grow[i])],
+                    None => cx.shapes(&a.items, grow[i], band, tw + if a.bare { 0.0 } else { cx.pad() }, !a.bare),
+                };
                 for s in &mut v {
                     s.h += 2.0 * cx.band_area[i];
                 }
@@ -617,11 +805,16 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
     let mut reg_rect: Vec<Option<Rect>> = vec![None; g.regions.len()];
     let mut out_areas = Vec::new();
     let (mut notes, mut crowded) = (Vec::new(), Vec::new());
+    // for an area on a grid: the middle of each column and the line of each row
+    let mut axes: Vec<Option<(Vec<f64>, Vec<f64>)>> = vec![None; ar.len()];
     for (i, a) in ar.iter().enumerate() {
         let (band, tw) = cx.area_title(a);
         let s = &sh[i][ft.pick[i]];
         let mut rows_txt = Vec::new();
-        place(&cx, &a.items, grow[i], s, rects[i], band, cx.band_area[i], !a.bare, &mut tight, &mut drop, &mut reg_rect, Some(&mut rows_txt));
+        match &a.grid {
+            Some(gr) => axes[i] = Some(grid_place(&cx, a, gr, grow[i], rects[i], cx.band_area[i], &mut tight, &mut drop, &mut reg_rect, &mut rows_txt)),
+            None => place(&cx, &a.items, grow[i], s, rects[i], band, cx.band_area[i], !a.bare, &mut tight, &mut drop, &mut reg_rect, Some(&mut rows_txt)),
+        }
         let _ = tw;
         // the notes, in the air the objects left: each inside the innermost frame it belongs to
         let pad = if a.bare { 0.0 } else { cx.pad() };
@@ -663,7 +856,7 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
             }
         }
         let covered: f64 = leaves(&a.items).iter().map(|n| tight[*n].w * tight[*n].h).sum();
-        out_areas.push(AreaPack { id: a.id.clone(), grow: grow[i] as f64 / 100.0, rows: rows_txt, cover: covered / (rects[i].w * rects[i].h).max(1.0) });
+        out_areas.push(AreaPack { grid: a.grid.is_some(), id: a.id.clone(), grow: grow[i] as f64 / 100.0, rows: rows_txt, cover: covered / (rects[i].w * rects[i].h).max(1.0) });
     }
     // the layout: each block drawn as `build` draws it (its frame mirrored about the picture's
     // middle line in a left-to-right area), laid so that its picture lies where the tight box has it
@@ -692,8 +885,17 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
         let art = Rect::new(rect.x + b.art.0, rect.y + b.art.1, b.art.2, b.art.3);
         nodes.push(Placed { rect, reserve, port_y: rect.y + b.cy, art, words: b.words, panel: pi, layer: 0, lane: 0, single: b.single, ellipse: b.ellipse, ends: BTreeMap::new(), origin: (0.0, 0.0) });
     }
-    for a in &ar {
+    for (ai, a) in ar.iter().enumerate() {
         let ns: Vec<usize> = leaves(&a.items).into_iter().chain(a.notes.iter().copied()).collect();
+        if let Some((xs, ys)) = &axes[ai] {
+            // on a grid: the column and the row the block stands in (a note: the nearest)
+            let near = |v: &[f64], x: f64| (0..v.len()).min_by(|a, b| (v[*a] - x).abs().partial_cmp(&(v[*b] - x).abs()).unwrap()).unwrap_or(0);
+            for &n in &ns {
+                let (c, r) = (near(xs, nodes[n].art.cx()), near(ys, nodes[n].art.cy()));
+                (nodes[n].layer, nodes[n].lane) = if a.down { (r, c) } else { (c, r) };
+            }
+            continue;
+        }
         let key = |v: f64| (v * 10.0).round() as i64;
         let mut xs: Vec<i64> = ns.iter().map(|n| key(nodes[*n].art.cx())).collect();
         let mut ys: Vec<i64> = ns.iter().map(|n| key(nodes[*n].port_y)).collect();
@@ -838,6 +1040,54 @@ fn place(cx: &Ctx2, items: &[Item], grow: u32, s: &Shape, rect: Rect, top: f64, 
         }
         y += up + below + gap + spare_h;
     }
+}
+
+/// Lay an area's grid out in `rect`: the columns and the rows spread evenly (so the grid is
+/// centred), every block in the middle of its column and on its row's line, every region around
+/// the cells of its blocks. Returns each column's middle and each row's line.
+#[allow(clippy::too_many_arguments)]
+fn grid_place(cx: &Ctx2, a: &Area, gr: &Grid, grow: u32, rect: Rect, band: f64, tight: &mut [Rect], drop: &mut [f64], reg: &mut [Option<Rect>], rows_txt: &mut Vec<Vec<String>>) -> (Vec<f64>, Vec<f64>) {
+    let geo = cx.grid_geom(gr, grow);
+    let (title, _) = cx.area_title(a);
+    let pad = if a.bare { 0.0 } else { cx.pad() };
+    let gap = cx.gap();
+    let inner_w = rect.w - 2.0 * pad;
+    let inner_h = rect.h - title - 2.0 * band - if title > 0.0 { pad } else { 2.0 * pad };
+    let spare_w = (inner_w - geo.w).max(0.0) / (gr.cols + 1) as f64;
+    let spare_h = (inner_h - geo.h).max(0.0) / (gr.rows + 1) as f64;
+    let mut xs = Vec::new();
+    let mut x = rect.x + pad;
+    for c in 0..gr.cols {
+        x += spare_w + geo.left[c];
+        xs.push(x);
+        x += geo.cw[c] + geo.right[c] + gap;
+    }
+    let mut ys = Vec::new();
+    let mut y = rect.y + title + band + if title > 0.0 { 0.0 } else { pad };
+    for r in 0..gr.rows {
+        y += spare_h + geo.top[r];
+        ys.push(y);
+        y += geo.parts[r].0 + geo.parts[r].1 + geo.bottom[r] + gap;
+    }
+    let mut names: Vec<Vec<(usize, String)>> = vec![Vec::new(); gr.rows];
+    for &(n, c, r) in &gr.cell {
+        let b = cx.leaf(n, grow);
+        let (up, _, dn) = geo.parts[r];
+        let d = if b.words > 0.0 { dn - b.dn } else { 0.0 };
+        tight[n] = Rect::new(xs[c] + (geo.cw[c] - b.w) / 2.0, ys[r] + up - b.up, b.w, b.up + b.dn + d + b.words);
+        drop[n] = d;
+        names[r].push((c, cx.g.nodes[n].id.clone()));
+    }
+    for mut row in names {
+        row.sort();
+        rows_txt.push(row.into_iter().map(|x| x.1).collect());
+    }
+    for (q, i) in gr.regs.iter().zip(&geo.inset) {
+        let (x0, x1) = (xs[q.c0] - i.0, xs[q.c1] + geo.cw[q.c1] + i.1);
+        let (y0, y1) = (ys[q.r0] - i.2, ys[q.r1] + geo.parts[q.r1].0 + geo.parts[q.r1].1 + i.3);
+        reg[q.r] = Some(Rect::new(x0, y0, x1 - x0, y1 - y0));
+    }
+    ((0..gr.cols).map(|c| xs[c] + geo.cw[c] / 2.0).collect(), (0..gr.rows).map(|r| ys[r] + geo.parts[r].0).collect())
 }
 
 /// Where a note is written: in free room of its area, as near as it gets to the side of the

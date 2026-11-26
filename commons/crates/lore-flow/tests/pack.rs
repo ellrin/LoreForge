@@ -231,3 +231,51 @@ fn a_note_takes_no_room_and_does_not_move_the_objects() {
     let (_, q) = packed("fig t\npanel a \"Row\"\n  x: image \"P\" look=photo\n  r: label \"result\"\n  k: label \"legend row\"\n  x -> r\nend\n", (4, 1), "", &Air::default());
     assert!(q.notes.is_empty());
 }
+
+// ---- the grid the text states: rows are the paths of the flow ----
+
+/// Two parallel paths through two steps, as the text of a figure states them.
+const PATHS: &str = "fig t\npanel a \"Two paths\"\n  x: image \"Input\" look=photo col=0 lane=0\n  y: image \"Other input\" look=photo col=0 lane=1\n  region s \"Step one\" title=above\n    e: box \"Encoder\" col=1 lane=0\n    f: box \"Encoder\" col=1 lane=1\n  end\n  u: vector-bar \"u\" n=4 dir=h col=2 lane=0\n  v: vector-bar \"v\" n=4 dir=h col=2 lane=1\n  x -> e -> u\n  y -> f -> v\n  e -> f : shared\nend\n";
+
+#[test]
+fn a_stated_grid_keeps_each_path_in_a_row_and_its_steps_in_columns() {
+    let (g, p) = packed(PATHS, (2, 1), "", &Air::default());
+    assert!(p.areas[0].grid);
+    assert_eq!(p.areas[0].rows, [["x", "e", "u"], ["y", "f", "v"]]);
+    let l = &p.layout;
+    let at = |id: &str| &l.nodes[g.node_index(id).unwrap()];
+    // every flow line joins two blocks on one line: it can be drawn straight
+    for (a, b) in [("x", "e"), ("e", "u"), ("y", "f"), ("f", "v")] {
+        assert!((at(a).port_y - at(b).port_y).abs() < 0.01, "{a} -> {b} is not level");
+    }
+    // the steps of the two paths stand under each other
+    for (a, b) in [("x", "y"), ("e", "f"), ("u", "v")] {
+        assert!((at(a).art.cx() - at(b).art.cx()).abs() < 0.01, "{a} is not over {b}");
+        assert_eq!(at(a).layer, at(b).layer);
+    }
+    assert_eq!((at("x").lane, at("y").lane), (0, 1));
+    // the region frames its two blocks and nothing else
+    let f = l.regions.iter().find(|r| r.id == "s").unwrap().rect;
+    assert!(f.contains(&at("e").art) && f.contains(&at("f").art));
+    for id in ["x", "y", "u", "v"] {
+        assert!(!f.overlaps(&at(id).art), "{id} lies in the step's frame");
+    }
+    assert!(l.panels[0].rect.inflate(0.5).contains(&f));
+}
+
+#[test]
+fn a_grid_that_costs_too_much_text_is_left_for_free_rows() {
+    // six pictures on a diagonal: the grid is six columns by six rows, mostly empty
+    let src: String = format!("fig t\npanel a \"Stairs\"\n{}end\n", (0..6).map(|i| format!("  x{i}: image \"P{i}\" look=photo col={i} lane={i}\n")).collect::<String>());
+    let (_, free) = packed(&src, (2, 1), "", &Air { paths: 0.0, ..Air::default() });
+    let (_, grid) = packed(&src, (2, 1), "", &Air { paths: 0.01, ..Air::default() });
+    let (_, chosen) = packed(&src, (2, 1), "", &Air::default());
+    assert!(!free.areas[0].grid && grid.areas[0].grid);
+    assert!(grid.text_pt < Air::default().paths * free.text_pt, "{} vs {}", grid.text_pt, free.text_pt);
+    assert!(!chosen.areas[0].grid, "the default leaves a grid this costly");
+    assert!((chosen.text_pt - free.text_pt).abs() < 0.01);
+    // a grid that costs little is kept
+    let (_, p) = packed(PATHS, (2, 1), "", &Air::default());
+    let (_, q) = packed(PATHS, (2, 1), "", &Air { paths: 0.0, ..Air::default() });
+    assert!(p.areas[0].grid && p.text_pt >= Air::default().paths * q.text_pt);
+}

@@ -37,6 +37,9 @@ fn main() {
     if let Some(v) = a.get(8).and_then(|v| v.parse().ok()) {
         air.text_max_pt = v;
     }
+    if let Some(v) = std::env::var("PATHS").ok().and_then(|v| v.parse().ok()) {
+        air.paths = v;
+    }
     let p = pack::pack(&g, &f, &m, a.get(5).map(String::as_str).unwrap_or(""), &air).expect("a figure with blocks");
     // the base draft has no lines; `LINES=1` draws them with the router as it is
     let mut p = p;
@@ -101,6 +104,6 @@ fn main() {
         println!("  notes (no room taken): {}; without free room: {}", p.notes.join(" "), if p.crowded.is_empty() { "none".to_string() } else { p.crowded.join(" ") });
     }
     for ar in &p.areas {
-        println!("  {}: pictures x{:.2}, cover {:.0}%, rows {}", ar.id, ar.grow, 100.0 * ar.cover, ar.rows.iter().map(|r| r.join(" ")).collect::<Vec<_>>().join(" | "));
+        println!("  {}{}: pictures x{:.2}, cover {:.0}%, rows {}", ar.id, if ar.grid { " (paths)" } else { "" }, ar.grow, 100.0 * ar.cover, ar.rows.iter().map(|r| r.join(" ")).collect::<Vec<_>>().join(" | "));
     }
 }

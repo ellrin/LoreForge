@@ -457,7 +457,8 @@ pub struct Body {
     pub below: f64,
     /// The height of the line its neighbours in a row are aligned on: the middle of the
     /// picture's large pieces (see `main_middle`), which an attachment on one side (a loop
-    /// arrow) does not move. `cy` where there is none. Lines still enter at `cy`.
+    /// arrow) does not move. Lines enter on it too (`cy` is the same height; the `port` child
+    /// lies evenly about it).
     pub axis: f64,
     /// Objects with ids 0 and part names (`""` = the body itself).
     pub objs: Vec<Object>,
@@ -2325,7 +2326,12 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     // middle line so lines on the left and right meet the picture's middle
     let (ax, ay, aw, ah) = core.art.unwrap_or((0.0, 0.0, core.w, core.h));
     let art = (ax, strip + ay, aw, ah);
-    objs.push(shape("port", "rect", art.0, art.1, art.2, art.3, Paint::None, None));
+    // an attachment on one side (a loop arrow) moves the picture's middle off its body's: the
+    // port is then the part of the picture that lies evenly about the body's middle line, so
+    // lines enter on that line and the connection sites are where they end
+    let half = (mid - core.art.map(|a| a.1).unwrap_or(0.0)).min(core.art.map(|a| a.1 + a.3).unwrap_or(core.h) - mid);
+    let port = if ((strip + mid) - (art.1 + art.3 / 2.0)).abs() > 0.01 && half > 0.0 { (art.0, strip + mid - half, art.2, 2.0 * half) } else { art };
+    objs.push(shape("port", "rect", port.0, port.1, port.2, port.3, Paint::None, None));
     for mut o in core.objs {
         o.frame.y += emu(strip);
         if o.name.is_empty() {
@@ -2349,7 +2355,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         reserve_w = reserve_w.max(tw);
         objs.push(o);
     }
-    Body { w, h, cy: art.1 + art.3 / 2.0, reserve_w, art, words: (!above.is_empty(), !below.is_empty()), below: bottom, axis: strip + mid, objs, single: false, ellipse: false, legend, warn }
+    Body { w, h, cy: strip + mid, reserve_w, art, words: (!above.is_empty(), !below.is_empty()), below: bottom, axis: strip + mid, objs, single: false, ellipse: false, legend, warn }
 }
 
 /// Wrap a body's objects into what goes on the slide: the single shape, or a

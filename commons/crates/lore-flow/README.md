@@ -73,8 +73,17 @@ under the block it is tied to; when there is none its frame gets a band above an
 (`Packed.notes`, `Packed.crowded`). A label of one line wider than its picture and ten text sizes
 is written on lines of about one length (`modules::label_lines`); a saved drawing's arrow made of
 a line and a separate small triangle becomes one line with its own arrowhead.
-Lines are not placed yet (they still enter at `Body.cy`); tests in `tests/pack.rs` and
-`modules::align_tests`.
+Paths: when every object of an area states its column and row (`col=`, `lane=`: where it stands
+along the flow and which of the parallel paths it is on), the area stands on that grid: a row is a
+path, kept whole, the steps of different paths stand under each other, a region frames the cells
+of its blocks, so flow lines are straight. The fill is the same computation on the grid's one
+shape. An area keeps its grid as long as the page's text keeps `Air.paths` (0.75) of what rows
+broken freely give; past that the area that gives most back goes free (`AreaPack.grid`). Lines
+enter on a block's middle line (`Body.cy` = `Body.axis`, the `port` child evenly about it).
+`LINES=1` on the example draws the router's lines and counts bends, lines over pictures, lines off
+the page and where each flow line's ends lie; `PATHS=<share>` sets `Air.paths`. Tests in
+`tests/pack.rs` and `modules::align_tests`. Not yet: room for lines in the air, lines beneath
+blocks, the lines of notes.
 
 ## Modules, styles, the library
 
