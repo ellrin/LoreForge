@@ -452,6 +452,13 @@ pub struct Body {
     pub art: (f64, f64, f64, f64),
     /// Words lie above the picture, and below it (a label, a variable, a caption).
     pub words: (bool, bool),
+    /// The height of the words below the picture with their gap to it (0 without them), not
+    /// counting `label_drop`.
+    pub below: f64,
+    /// The height of the line its neighbours in a row are aligned on: the middle of the
+    /// picture's large pieces (see `main_middle`), which an attachment on one side (a loop
+    /// arrow) does not move. `cy` where there is none. Lines still enter at `cy`.
+    pub axis: f64,
     /// Objects with ids 0 and part names (`""` = the body itself).
     pub objs: Vec<Object>,
     /// One shape, inserted without a group.
@@ -1672,6 +1679,7 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx, warn: &mut Vec<String>) 
         w *= gx;
         h *= gy;
     }
+    join_arrowheads(&mut objs);
     // the block's own words in place of the drawing's fixed ones
     let texts: Vec<String> = n.list("texts");
     let named: Vec<(String, String)> = n.params.iter().filter_map(|(k, v)| k.strip_prefix("text.").map(|name| (name.to_string(), v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())))).collect();
@@ -1700,6 +1708,70 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx, warn: &mut Vec<String>) 
     };
     Core { w, h, objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below }, legend, art, ..Default::default() }
 }
+
+/// An arrow drawn as two parts, a line and a small triangle at one of its ends, becomes one
+/// object: the line with an arrowhead of its own, the triangle gone. Two parts drift apart (a
+/// triangle a point beside the line's end, more when the drawing is enlarged) and are two things
+/// to move in an editor. Only open straight-run lines and triangles no larger than
+/// [`HEAD_MAX`] pt that hold the line's end count.
+fn join_arrowheads(objs: &mut Vec<Object>) {
+    let pt = |v: Emu| v as f64 / EMU_PT;
+    // the triangles: (index, its box)
+    let is_head = |o: &Object| -> bool {
+        let Kind::Shape(sp) = &o.kind else { return false };
+        if sp.text.is_some() || pt(o.frame.w).max(pt(o.frame.h)) > HEAD_MAX {
+            return false;
+        }
+        match sp.geom.prst.as_str() {
+            "triangle" => true,
+            "custom" => {
+                let path = sp.geom.path.clone().unwrap_or_default();
+                path.trim_end().ends_with(['Z', 'z']) && !path.contains(['C', 'Q']) && path.matches('M').count() == 1 && lore_canvas::geom::path_vertices(&path).len() == 3
+            }
+            _ => false,
+        }
+    };
+    let heads: Vec<usize> = (0..objs.len()).filter(|i| is_head(&objs[*i])).collect();
+    if heads.is_empty() {
+        return;
+    }
+    let mut gone: Vec<usize> = Vec::new();
+    for li in 0..objs.len() {
+        let f = objs[li].frame.clone();
+        let Kind::Shape(sp) = &objs[li].kind else { continue };
+        let (Some(path), Some(_)) = (sp.geom.path.clone().filter(|_| sp.geom.prst == "custom"), sp.line.as_ref()) else { continue };
+        if path.trim_end().ends_with(['Z', 'z']) || path.contains(['C', 'Q']) || path.matches('M').count() != 1 {
+            continue;
+        }
+        let v = lore_canvas::geom::path_vertices(&path);
+        if v.len() < 2 {
+            continue;
+        }
+        let at = |(u, w): (f64, f64)| (pt(f.x) + if f.flip_h { 1.0 - u } else { u } * pt(f.w), pt(f.y) + if f.flip_v { 1.0 - w } else { w } * pt(f.h));
+        let ends = [at(v[0]), at(v[v.len() - 1])];
+        for (k, e) in ends.iter().enumerate() {
+            let hit = heads.iter().copied().find(|h| {
+                let hf = objs[*h].frame.clone();
+                !gone.contains(h) && e.0 >= pt(hf.x) - 1.5 && e.0 <= pt(hf.x + hf.w) + 1.5 && e.1 >= pt(hf.y) - 1.5 && e.1 <= pt(hf.y + hf.h) + 1.5
+            });
+            if let Some(h) = hit {
+                gone.push(h);
+                if let Kind::Shape(sp) = &mut objs[li].kind {
+                    let st = sp.line.as_mut().unwrap();
+                    if k == 0 { st.head = "triangle".into() } else { st.tail = "triangle".into() }
+                }
+            }
+        }
+    }
+    let mut i = 0;
+    objs.retain(|_| {
+        i += 1;
+        !gone.contains(&(i - 1))
+    });
+}
+
+/// The largest side (pt) of a triangle that is taken for a line's arrowhead.
+const HEAD_MAX: f64 = 10.0;
 
 /// Room (pt) a saved drawing's box may keep beside what it draws before lines connect at the drawing.
 const ART_SLACK: f64 = 1.0;
@@ -2041,6 +2113,62 @@ pub fn grow_obj_xy(o: &mut Object, gx: f64, gy: f64) {
     }
 }
 
+/// A label of one line that is much wider than its picture, on as few lines as keep it within
+/// the wider of the picture and [`LABEL_WIDE`] text sizes, the lines about equally long. A label
+/// the author broke (`\\\\`) is kept.
+pub fn label_lines(s: &str, size: f64, picture_w: f64) -> String {
+    let room = picture_w.max(LABEL_WIDE * size);
+    let w = text::width(s, size);
+    if text::lines(s).len() != 1 || w <= room + 0.5 {
+        return s.to_string();
+    }
+    let greedy = word_lines(s, size, Some(room));
+    let n = greedy.len();
+    // the narrowest room that still gives that many lines: lines about equally long
+    let mut best = greedy;
+    let mut r = w / n as f64;
+    while r < room {
+        let v = word_lines(s, size, Some(r));
+        if v.len() == n {
+            best = v;
+            break;
+        }
+        r += size * 0.5;
+    }
+    best.join("\\\\")
+}
+
+/// The widest a label under or over a picture is written on one line, in text sizes (a wider
+/// picture allows a wider label).
+pub const LABEL_WIDE: f64 = 10.0;
+
+/// The height of a drawing's middle line: the middle of its large pieces (every piece at least
+/// half as large as the largest), so an attachment (a loop arrow, a badge, a small mark) on one
+/// side does not move the line its neighbours are aligned on. The picture's own middle when the
+/// pieces say nothing.
+fn main_middle(objs: &[Object], art: (f64, f64, f64, f64)) -> f64 {
+    let own = art.1 + art.3 / 2.0;
+    let boxes: Vec<(f64, f64, f64)> = objs
+        .iter()
+        .filter(|o| !matches!(o.kind, Kind::Text(_)))
+        .map(|o| (o.frame.y as f64 / EMU_PT, o.frame.h as f64 / EMU_PT, o.frame.w as f64 / EMU_PT * o.frame.h as f64 / EMU_PT))
+        .collect();
+    let largest = boxes.iter().map(|b| b.2).fold(0.0, f64::max);
+    if largest <= 0.0 {
+        return own;
+    }
+    let big: Vec<&(f64, f64, f64)> = boxes.iter().filter(|b| b.2 >= largest * 0.5).collect();
+    let (lo, hi) = (big.iter().map(|b| b.0).fold(f64::MAX, f64::min), big.iter().map(|b| b.0 + b.1).fold(f64::MIN, f64::max));
+    let mid = (lo + hi) / 2.0;
+    // within the picture, and only an attachment counts: a difference under [`MIDDLE_MOVES`] of
+    // the picture's height (the steps of a stack, a thick outline) leaves the middle where it is
+    if (mid - own).abs() < MIDDLE_MOVES * art.3 || mid < art.1 || mid > art.1 + art.3 { own } else { mid }
+}
+
+/// The share of a picture's height its large pieces' middle must lie off its own middle before
+/// the middle line moves to them.
+const MIDDLE_MOVES: f64 = 0.08;
+
 /// How wide a drawing's own words make it: the width, centred on the drawing, that holds every
 /// text of its parts (words wider than their part spill over both sides of it).
 fn words_width(objs: &[Object], w: f64) -> f64 {
@@ -2164,8 +2292,8 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     let mut above: Vec<(String, &'static str, Type)> = Vec::new();
     let mut below: Vec<(String, &'static str, Type)> = Vec::new();
     match core.label {
-        LabelPos::Above if !n.label.is_empty() => above.push((n.label.clone(), "label", ty.clone())),
-        LabelPos::Below if !n.label.is_empty() => below.push((n.label.clone(), "label", ty.clone())),
+        LabelPos::Above if !n.label.is_empty() => above.push((label_lines(&cx.vars.resolve(&n.label), ty.size, core.w), "label", ty.clone())),
+        LabelPos::Below if !n.label.is_empty() => below.push((label_lines(&cx.vars.resolve(&n.label), ty.size, core.w), "label", ty.clone())),
         _ => {}
     }
     if !n.var.is_empty() {
@@ -2179,16 +2307,20 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     let spill = words_width(&core.objs, core.w);
     if above.is_empty() && below.is_empty() && core.single {
         let (w, h) = (core.w, core.h);
-        return Body { w, h, cy: h / 2.0, reserve_w: w.max(spill), art: (0.0, 0.0, w, h), words: (false, false), objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
+        return Body { w, h, cy: h / 2.0, reserve_w: w.max(spill), art: (0.0, 0.0, w, h), words: (false, false), below: 0.0, axis: h / 2.0, objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
     }
     let legend = core.legend;
     warn.extend(icon_problem(n));
     let pad = cx.s(2.0);
     let measure = |v: &[(String, &str, Type)]| -> f64 { v.iter().map(|(s, _, t)| text::block(&cx.vars.resolve(s), t.size).1 as f64 * t.size * 1.25).sum::<f64>() + if v.is_empty() { 0.0 } else { pad } };
     let (top, bottom) = (measure(&above), measure(&below));
-    let strip = if cx.symmetric { top.max(bottom) } else { top };
+    // the words below start `label_drop` lower, so the labels of a row stand on one line
+    // under its tallest picture (set by `crate::pack`)
+    let drop = if below.is_empty() { 0.0 } else { n.num("label_drop").unwrap_or(0.0).max(0.0) };
+    let strip = if cx.symmetric { top.max(bottom + drop) } else { top };
     let mut objs = Vec::new();
-    let (w, h) = (core.w, core.h + strip + if cx.symmetric { strip } else { bottom });
+    let (w, h) = (core.w, core.h + strip + if cx.symmetric { strip } else { bottom + drop });
+    let mid = main_middle(&core.objs, core.art.unwrap_or((0.0, 0.0, core.w, core.h)));
     // the port: the drawn picture, without the words above and below it, centred on the body's
     // middle line so lines on the left and right meet the picture's middle
     let (ax, ay, aw, ah) = core.art.unwrap_or((0.0, 0.0, core.w, core.h));
@@ -2210,14 +2342,14 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         reserve_w = reserve_w.max(tw);
         objs.push(o);
     }
-    let mut y = strip + core.h + pad;
+    let mut y = strip + core.h + pad + drop;
     for (s, name, t) in &below {
         let (o, tw, th) = cx.text(name, s, t, w / 2.0, y);
         y += th;
         reserve_w = reserve_w.max(tw);
         objs.push(o);
     }
-    Body { w, h, cy: art.1 + art.3 / 2.0, reserve_w, art, words: (!above.is_empty(), !below.is_empty()), objs, single: false, ellipse: false, legend, warn }
+    Body { w, h, cy: art.1 + art.3 / 2.0, reserve_w, art, words: (!above.is_empty(), !below.is_empty()), below: bottom, axis: strip + mid, objs, single: false, ellipse: false, legend, warn }
 }
 
 /// Wrap a body's objects into what goes on the slide: the single shape, or a
@@ -2255,4 +2387,66 @@ pub fn place(body: Body, name: &str, x: f64, y: f64, first_id: u32) -> (Object, 
     let mut group = obj(name, fr, Kind::Group(GroupObj { ch, children, lock_aspect: false, data: None }));
     group.id = gid;
     (group, id)
+}
+
+#[cfg(test)]
+mod align_tests {
+    use super::*;
+
+    #[test]
+    fn a_line_and_its_triangle_become_one_arrow() {
+        // a loop under a body: down, across, up, with a triangle at its last end, a point beside it
+        let mut objs = vec![
+            shape("body", "rect", 0.0, 0.0, 80.0, 60.0, Paint::None, stroke("000000", 1.0)),
+            poly("loop", &[(10.0, 62.0), (10.0, 72.0), (66.0, 72.0), (66.0, 62.0)], false, Paint::None, stroke("000000", 1.0)),
+            poly("head", &[(65.0, 62.0), (68.0, 68.0), (62.0, 68.0)], true, paint("000000", 1.0), None),
+            // a triangle that is a picture of its own (large) stays
+            poly("roof", &[(20.0, 10.0), (60.0, 50.0), (0.0, 50.0)], true, Paint::None, stroke("000000", 1.0)),
+        ];
+        join_arrowheads(&mut objs);
+        let names: Vec<&str> = objs.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(names, ["body", "loop", "roof"], "the head is gone, the rest stays");
+        let Kind::Shape(sp) = &objs[1].kind else { panic!() };
+        let st = sp.line.as_ref().unwrap();
+        assert_eq!((st.head.as_str(), st.tail.as_str()), ("none", "triangle"), "the line ends in its own arrowhead, at the end the triangle was");
+        // a triangle away from every line's end stays
+        let mut far = vec![
+            poly("loop", &[(10.0, 62.0), (10.0, 72.0), (66.0, 72.0)], false, Paint::None, stroke("000000", 1.0)),
+            poly("mark", &[(30.0, 10.0), (33.0, 16.0), (27.0, 16.0)], true, paint("000000", 1.0), None),
+        ];
+        join_arrowheads(&mut far);
+        assert_eq!(far.len(), 2);
+    }
+
+    #[test]
+    fn an_attachment_does_not_move_the_middle_line() {
+        let body = shape("body", "rect", 0.0, 0.0, 80.0, 60.0, Paint::None, stroke("000000", 1.0));
+        let under = poly("loop", &[(10.0, 62.0), (10.0, 84.0), (66.0, 84.0), (66.0, 62.0)], false, Paint::None, stroke("000000", 1.0));
+        let over = poly("loop", &[(10.0, 22.0), (10.0, 0.0), (66.0, 0.0), (66.0, 22.0)], false, Paint::None, stroke("000000", 1.0));
+        let low = shape("body", "rect", 0.0, 24.0, 80.0, 60.0, Paint::None, stroke("000000", 1.0));
+        // the loop under the body: the middle is the body's, not the whole picture's
+        assert!((main_middle(&[body.clone(), under], (0.0, 0.0, 80.0, 84.0)) - 30.0).abs() < 0.01);
+        // the loop over it: again the body's
+        assert!((main_middle(&[low, over], (0.0, 0.0, 80.0, 84.0)) - 54.0).abs() < 0.01);
+        // pieces of about one size (a stack): the picture's own middle
+        let back = shape("back", "rect", 6.0, 0.0, 80.0, 60.0, Paint::None, stroke("000000", 1.0));
+        let front = shape("front", "rect", 0.0, 6.0, 80.0, 60.0, Paint::None, stroke("000000", 1.0));
+        assert!((main_middle(&[back, front], (0.0, 0.0, 86.0, 66.0)) - 33.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_long_label_is_written_on_lines_of_about_one_length() {
+        let size = 10.0;
+        let long = "Corrupted local neighbor representation";
+        let got = label_lines(long, size, 30.0);
+        let lines = text::lines(&got);
+        assert!(lines.len() >= 2, "{got}");
+        assert!(lines.iter().all(|l| text::width(l, size) <= LABEL_WIDE * size + 0.5), "{got}");
+        let (short, wide) = (lines.iter().map(|l| text::width(l, size)).fold(f64::MAX, f64::min), lines.iter().map(|l| text::width(l, size)).fold(0.0, f64::max));
+        assert!(short > wide * 0.5, "no line is a leftover word: {got}");
+        // a short label, a label under a picture as wide as it, and a label the author broke stay
+        assert_eq!(label_lines("Graph", size, 30.0), "Graph");
+        assert_eq!(label_lines(long, size, 400.0), long);
+        assert_eq!(label_lines("Corrupted local\\\\neighbor representation and more words", size, 30.0), "Corrupted local\\\\neighbor representation and more words");
+    }
 }
