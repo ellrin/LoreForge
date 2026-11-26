@@ -934,22 +934,33 @@ fn spread_w(me: &Meas, gr: &mut Grid, nodes: &[usize], cwant: &[u32], ew: u32, h
         }
         used += (gr.lf[c] - l0) + (gr.rt[c] - r0);
     }
-    let rest = level(&mut gr.cgap, ew - used);
+    let rest = level(&mut gr.cgap, ew - used, gap_cap(me, GAP_X_TEXT));
     gr.pad[0] += rest / 2;
     gr.pad[2] += rest - rest / 2;
 }
 
-/// Even out `gaps` with `extra` cells: each cell to the narrowest gap. Returns what is left (all of
-/// it when there is no gap).
-fn level(gaps: &mut [u32], extra: u32) -> u32 {
-    if gaps.is_empty() {
-        return extra;
-    }
-    for _ in 0..extra {
-        let i = (0..gaps.len()).min_by_key(|i| gaps[*i]).unwrap();
+/// Even out `gaps` with `extra` cells: each cell to the narrowest gap still under `cap`. Returns
+/// what is left (all of it when there is no gap).
+fn level(gaps: &mut [u32], extra: u32, cap: u32) -> u32 {
+    let mut left = extra;
+    while left > 0 {
+        let Some(i) = (0..gaps.len()).filter(|i| gaps[*i] < cap).min_by_key(|i| gaps[*i]) else { break };
         gaps[i] += 1;
+        left -= 1;
     }
-    0
+    left
+}
+
+/// How wide the room between neighbouring blocks may be made with spare cells, as multiples of
+/// the text size: the medians measured on the author's fifteen polished figures
+/// (`examples/flow_measure`: 3.3 between the blocks of a row, 5.5 between rows). A gap the lines
+/// need wider stays wider; spare room beyond these goes to the padding inside the frame.
+pub const GAP_X_TEXT: f64 = 3.3;
+pub const GAP_Y_TEXT: f64 = 5.5;
+
+/// A gap of `k` text sizes in cells, less the one-cell margins of the two footprints beside it.
+fn gap_cap(me: &Meas, k: f64) -> u32 {
+    cells(k * me.m.theme.font.size).saturating_sub(2).max(1)
 }
 
 /// As [`spread_w`], down: rows of growable blocks (in the columns as they are), the gaps between
@@ -971,7 +982,7 @@ fn spread_h(me: &Meas, gr: &mut Grid, nodes: &[usize], rwant: &[u32], eh: u32) {
         }
         used += (gr.up[r] - u0) + (gr.dn[r] - d0);
     }
-    let rest = level(&mut gr.rgap, eh - used);
+    let rest = level(&mut gr.rgap, eh - used, gap_cap(me, GAP_Y_TEXT));
     gr.pad[1] += rest / 2;
     gr.pad[3] += rest - rest / 2;
 }
