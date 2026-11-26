@@ -38,6 +38,7 @@ pub mod look;
 pub mod llm;
 pub mod modules;
 pub mod notation;
+pub mod plate;
 pub mod pptx;
 pub mod preview;
 pub mod route;
