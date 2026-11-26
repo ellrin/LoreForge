@@ -2379,3 +2379,27 @@ fn a_chart_grows_to_fill_a_panel_its_neighbour_makes_tall() {
     let xi = g.node_index("x").unwrap();
     assert!((f.layout.nodes[xi].rect.h / f.layout.scale - plain.nodes[xi].rect.h / plain.scale).abs() < 0.5);
 }
+
+#[test]
+fn a_saved_block_takes_the_size_it_is_given() {
+    let lib = tiny_library();
+    let plain = make_body("fig f\nn: tiny \"\" style=x\n", &lib);
+    let wide = make_body("fig f\nn: tiny \"\" style=x w=80\n", &lib);
+    let both = make_body("fig f\nn: tiny \"\" style=x w=80 h=20\n", &lib);
+    assert!((plain.w - 40.0).abs() < 0.5 && (wide.w - 80.0).abs() < 0.5 && (wide.h - 80.0).abs() < 0.5, "{} {} {}", plain.w, wide.w, wide.h);
+    assert!((both.w - 80.0).abs() < 0.5 && (both.h - 20.0).abs() < 0.5);
+    // its line weights stay
+    let lw = |b: &lore_flow::modules::Body| b.objs.iter().find(|o| o.name.ends_with("one")).and_then(|o| o.kind.sp()).and_then(|s| s.line.clone()).unwrap().width_pt;
+    assert_eq!(lw(&plain), lw(&wide));
+}
+
+#[test]
+fn a_blocks_own_wide_words_widen_the_room_it_needs() {
+    // a 40 pt drawing whose part says a long sentence
+    let objs = vec![text_rect("cap", 0, &["A caption much wider than the drawing itself"])];
+    let t = lore_flow::modules::ModuleTemplate { kind: "capped".into(), style: "x".into(), w: 40.0, h: 20.0, objects: serde_json::to_value(&objs).unwrap(), ..Default::default() };
+    let mut lib = Library::default();
+    lib.add(t).unwrap();
+    let b = make_body("fig f\nn: capped \"\" style=x\n", &lib);
+    assert!(b.reserve_w > b.w + 60.0, "reserve {} for w {}", b.reserve_w, b.w);
+}

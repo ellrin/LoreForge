@@ -1591,7 +1591,24 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx, warn: &mut Vec<String>) 
         scale_obj(o, cx.k);
         fill_label(o, &label, cx, &mut drawn);
     }
-    Core { w: cx.s(t.w), h: cx.s(t.h), objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below }, legend, ..Default::default() }
+    // a size given to the block: the drawing stretched to it (its words and line weights stay)
+    let (mut w, mut h) = (cx.s(t.w), cx.s(t.h));
+    let (gx, gy) = match (n.num("w"), n.num("h"), n.num("size")) {
+        (Some(a), Some(b), _) => (a / t.w, b / t.h),
+        (Some(a), None, _) => (a / t.w, a / t.w),
+        (None, Some(b), _) => (b / t.h, b / t.h),
+        (None, None, Some(z)) => (z / t.w.max(t.h), z / t.w.max(t.h)),
+        _ => (1.0, 1.0),
+    };
+    if (gx - 1.0).abs() > 1e-6 || (gy - 1.0).abs() > 1e-6 {
+        let (gx, gy) = (gx.clamp(0.2, 8.0), gy.clamp(0.2, 8.0));
+        for o in objs.iter_mut() {
+            grow_obj_xy(o, gx, gy);
+        }
+        w *= gx;
+        h *= gy;
+    }
+    Core { w, h, objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below }, legend, ..Default::default() }
 }
 
 /// The words a block gives for one fixed text of its drawing: `_` keeps the drawing's word.
@@ -1708,20 +1725,64 @@ pub fn growable(n: &Node) -> bool {
 /// Scale an object's frame (and a group's children) by `g` about the origin, leaving line
 /// weights and text sizes as they are.
 pub fn grow_obj(o: &mut Object, g: f64) {
-    let sc = |v: Emu| (v as f64 * g).round() as Emu;
-    o.frame.x = sc(o.frame.x);
-    o.frame.y = sc(o.frame.y);
-    o.frame.w = sc(o.frame.w);
-    o.frame.h = sc(o.frame.h);
+    grow_obj_xy(o, g, g);
+}
+
+/// As [`grow_obj`], with its own factor across (`gx`) and down (`gy`).
+pub fn grow_obj_xy(o: &mut Object, gx: f64, gy: f64) {
+    let sx = |v: Emu| (v as f64 * gx).round() as Emu;
+    let sy = |v: Emu| (v as f64 * gy).round() as Emu;
+    o.frame.x = sx(o.frame.x);
+    o.frame.y = sy(o.frame.y);
+    o.frame.w = sx(o.frame.w);
+    o.frame.h = sy(o.frame.h);
     if let Kind::Group(gr) = &mut o.kind {
-        gr.ch.x = sc(gr.ch.x);
-        gr.ch.y = sc(gr.ch.y);
-        gr.ch.w = sc(gr.ch.w);
-        gr.ch.h = sc(gr.ch.h);
+        gr.ch.x = sx(gr.ch.x);
+        gr.ch.y = sy(gr.ch.y);
+        gr.ch.w = sx(gr.ch.w);
+        gr.ch.h = sy(gr.ch.h);
         for c in &mut gr.children {
-            grow_obj(c, g);
+            grow_obj_xy(c, gx, gy);
         }
     }
+}
+
+/// How wide a drawing's own words make it: the width, centred on the drawing, that holds every
+/// text of its parts (words wider than their part spill over both sides of it).
+fn words_width(objs: &[Object], w: f64) -> f64 {
+    fn walk(o: &Object, ox: f64, lo: &mut f64, hi: &mut f64) {
+        let x = ox + o.frame.x as f64 / EMU_PT;
+        let fw = o.frame.w as f64 / EMU_PT;
+        match &o.kind {
+            Kind::Text(sp) | Kind::Shape(sp) => {
+                let Some(tb) = &sp.text else { return };
+                if tb.vert.is_some() {
+                    return;
+                }
+                for p in &tb.paras {
+                    let words: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+                    let size = p.runs.iter().map(|r| r.look.size).fold(0.0, f64::max);
+                    if words.trim().is_empty() || size <= 0.0 {
+                        continue;
+                    }
+                    let tw = text::block(&words, size).0;
+                    if tw > fw {
+                        let cx = x + fw / 2.0;
+                        *lo = lo.min(cx - tw / 2.0);
+                        *hi = hi.max(cx + tw / 2.0);
+                    }
+                }
+            }
+            // a group's children are in its own frame here (parts are placed unscaled)
+            Kind::Group(g) => g.children.iter().for_each(|c| walk(c, x - g.ch.x as f64 / EMU_PT, lo, hi)),
+            _ => {}
+        }
+    }
+    let (mut lo, mut hi) = (0.0f64, w);
+    for o in objs {
+        walk(o, 0.0, &mut lo, &mut hi);
+    }
+    2.0 * (w / 2.0 - lo).max(hi - w / 2.0)
 }
 
 pub fn make(node: &Node, cx: &Ctx) -> Body {
@@ -1810,9 +1871,12 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     if !n.caption.is_empty() {
         below.push((n.caption.clone(), "caption", small));
     }
+    // words of the drawing itself that are wider than it: the room it needs is wider too, so a
+    // region's frame and the next column keep clear of them
+    let spill = words_width(&core.objs, core.w);
     if above.is_empty() && below.is_empty() && core.single {
         let (w, h) = (core.w, core.h);
-        return Body { w, h, cy: h / 2.0, reserve_w: w, objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
+        return Body { w, h, cy: h / 2.0, reserve_w: w.max(spill), objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
     }
     let legend = core.legend;
     warn.extend(icon_problem(n));
@@ -1830,7 +1894,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         }
         objs.push(o);
     }
-    let mut reserve_w = w;
+    let mut reserve_w = w.max(spill);
     let mut y = strip - pad;
     for (s, name, t) in above.iter().rev() {
         let lines = text::block(&cx.vars.resolve(s), t.size).1 as f64;
