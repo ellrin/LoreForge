@@ -60,7 +60,7 @@ fn the_request_offers_closed_lists_and_the_notation_table() {
     lib.add_json(r#"{ "kind": "gadget", "description": "a block that narrows", "w": 60, "h": 40, "objects": [] }"#).unwrap();
     let example = (String::from("An image goes through a model."), dsl::parse("fig e\nx: image \"$x$\"\nf: box \"Model\"\nx -> f\n").unwrap());
     let img = Image::from_bytes("image/png", &[1, 2, 3]);
-    let p = FlowPrompt { description: "x goes into a U-Net.", image: Some(img), notation: Some(&reg), library: &lib, examples: std::slice::from_ref(&example) };
+    let p = FlowPrompt { description: "x goes into a U-Net.", image: Some(img), notation: Some(&reg), library: &lib, examples: std::slice::from_ref(&example), page: None };
     let req = llm::request(&p);
     assert!(req.has_images());
     // a registry symbol is the bare symbol: a model registered `y \in \{0,1\}^{14}` as the symbol y
@@ -87,7 +87,7 @@ fn a_reply_becomes_a_checked_graph() {
     let reg = registry();
     let lib = Library::default();
     let mock = MockProvider::new(vec![format!("```json\n{}\n```", good())]);
-    let p = FlowPrompt { description: "…", image: None, notation: Some(&reg), library: &lib, examples: &[] };
+    let p = FlowPrompt { description: "…", image: None, notation: Some(&reg), library: &lib, examples: &[], page: None };
     let prop = rt().block_on(llm::propose(&mock, &p)).unwrap();
     assert_eq!(prop.provider, "mock");
     assert!(prop.retried.is_none());
@@ -110,7 +110,7 @@ fn a_graph_that_does_not_hold_together_is_sent_back_once() {
     let mut bad = good();
     bad["edges"].as_array_mut().unwrap().push(json!({ "from": "pred", "to": "metric", "kind": "data" }));
     let mock = MockProvider::new(vec![bad.to_string(), good().to_string()]);
-    let p = FlowPrompt { description: "…", image: None, notation: None, library: &lib, examples: &[] };
+    let p = FlowPrompt { description: "…", image: None, notation: None, library: &lib, examples: &[], page: None };
     let prop = rt().block_on(llm::propose(&mock, &p)).unwrap();
     assert!(prop.retried.as_deref().unwrap().contains("metric"));
     let seen = mock.seen.lock().unwrap();
@@ -129,7 +129,7 @@ fn a_module_outside_the_list_is_rejected_by_the_schema() {
     let mut odd = good();
     odd["nodes"][1]["module"] = json!("transformer-3000");
     let mock = MockProvider::new(vec![odd.to_string()]);
-    let p = FlowPrompt { description: "…", image: None, notation: None, library: &lib, examples: &[] };
+    let p = FlowPrompt { description: "…", image: None, notation: None, library: &lib, examples: &[], page: None };
     assert!(rt().block_on(llm::propose(&mock, &p)).is_err());
     // (complete_json asked twice)
     assert_eq!(mock.seen.lock().unwrap().len(), 2);
@@ -148,7 +148,7 @@ fn model_ids_are_tidied() {
     v["fig"] = json!("f02 模糊權重分割");
     v["vars_new"][0]["latex"] = json!("\\\\theta_{seg}");
     let mock = MockProvider::new(vec![v.to_string()]);
-    let p = FlowPrompt { description: "…", image: None, notation: None, library: &lib, examples: &[] };
+    let p = FlowPrompt { description: "…", image: None, notation: None, library: &lib, examples: &[], page: None };
     let prop = rt().block_on(llm::propose(&mock, &p)).unwrap();
     assert!(prop.graph.node("L_seg").is_some());
     assert!(prop.graph.arrange.is_empty());

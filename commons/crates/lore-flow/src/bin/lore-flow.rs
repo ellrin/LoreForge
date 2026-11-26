@@ -272,7 +272,7 @@ async fn cmd_graph(a: &Args) -> Result<(), String> {
     let task = llm::task_for(image.is_some());
     let route = router.provider_for_with(task, &opts).await.map_err(|e| format!("no engine for {task}: {e}"))?;
     eprintln!("engine: {}", route.provider.id());
-    let prompt = llm::FlowPrompt { description: &description, image, notation: notation.as_ref(), library: &library, examples: &examples };
+    let prompt = llm::FlowPrompt { description: &description, image, notation: notation.as_ref(), library: &library, examples: &examples, page: None };
     let proposal = match llm::propose(route.provider.as_ref(), &prompt).await {
         Ok(p) => p,
         Err(e) => return Err(e.to_string()),

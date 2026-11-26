@@ -100,6 +100,12 @@ pub async fn seed(app: axum::Router, figures: &[(String, Value)]) -> Vec<(String
 /// `out`. `only` empty = all of them, else just these ids. One at a time, in the list's order;
 /// a failure is recorded and the run goes on. `progress` is called after each one.
 pub async fn run(app: axum::Router, out: &Path, only: &[String], progress: &mut (dyn FnMut(usize, usize, &Made) + Send)) -> std::io::Result<Vec<Made>> {
+    run_on_page(app, out, only, None, progress).await
+}
+
+/// As [`run`], every draft made for one page: `page` = (width in points, ratio width:height),
+/// passed to the draft route, which tells the model the page and measures the draft on it.
+pub async fn run_on_page(app: axum::Router, out: &Path, only: &[String], page: Option<(f64, (u32, u32))>, progress: &mut (dyn FnMut(usize, usize, &Made) + Send)) -> std::io::Result<Vec<Made>> {
     std::fs::create_dir_all(out)?;
     // the list has no format filter: every non-entity row is read and the references kept
     // read page by page: the list answers at most 1000 rows at a time
@@ -126,7 +132,7 @@ pub async fn run(app: axum::Router, out: &Path, only: &[String], progress: &mut 
         while !used.insert(name.clone()) {
             name.push('_');
         }
-        let (m, row) = one(&app, out, &id, &title, &name).await;
+        let (m, row) = one(&app, out, &id, &title, &name, page).await;
         progress(n + 1, total, &m);
         rows.push(row);
         made.push(m);
@@ -142,7 +148,7 @@ struct Row {
     picture: String,
 }
 
-async fn one(app: &axum::Router, out: &Path, id: &str, title: &str, n: &str) -> (Made, Row) {
+async fn one(app: &axum::Router, out: &Path, id: &str, title: &str, n: &str, page: Option<(f64, (u32, u32))>) -> (Made, Row) {
     let mut m = Made { id: id.to_string(), title: title.to_string(), timeline: false, engine: String::new(), error: String::new() };
     let mut picture = String::new();
     match json_call(app, "GET", &format!("/api/hub/make/{}", enc(id)), None).await {
@@ -160,15 +166,16 @@ async fn one(app: &axum::Router, out: &Path, id: &str, title: &str, n: &str) -> 
         Err(e) => m.error = e,
     }
     if m.error.is_empty() {
-        draft_and_draw(app, out, id, n, &mut m).await;
+        draft_and_draw(app, out, id, n, &mut m, page).await;
     }
     let row = Row { made: m.clone(), stem: n.to_string(), picture };
     (m, row)
 }
 
-async fn draft_and_draw(app: &axum::Router, out: &Path, id: &str, n: &str, m: &mut Made) {
-    // the 製作 page sends no body to the draft
-    let d = match json_call(app, "POST", &format!("/api/hub/make/{}/draft", enc(id)), None).await {
+async fn draft_and_draw(app: &axum::Router, out: &Path, id: &str, n: &str, m: &mut Made, page: Option<(f64, (u32, u32))>) {
+    // the 製作 page sends no body to the draft; a page goes in the query
+    let query = page.map(|(w, (a, b))| format!("?width={w}&ratio={a}:{b}")).unwrap_or_default();
+    let d = match json_call(app, "POST", &format!("/api/hub/make/{}/draft{query}", enc(id)), None).await {
         Ok(d) => d,
         Err(e) => {
             m.error = e;
@@ -404,6 +411,22 @@ writable = true
         assert!(std::fs::read_to_string(out.join("t_flowrefs_f02.svg")).unwrap().trim_start().starts_with("<svg"));
         let spec: Value = serde_json::from_str(&std::fs::read_to_string(out.join("t_flowrefs_f02.spec.json")).unwrap()).unwrap();
         assert_eq!(spec["timeline"]["points"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_draft_for_a_page_says_how_it_sits_on_it() {
+        // made for a page 500 pt wide of ratio 3:2: the answer carries the smallest text on that
+        // page; without a page it carries none
+        let e = setup(scripted(vec![kind("flow"), graph_reply(), kind("flow"), graph_reply()]));
+        let out = e.dir.path().join("out");
+        let made = run_on_page(e.app.clone(), &out, &["t.flowrefs:f03".to_string()], Some((500.0, (3, 2))), &mut |_, _, _| {}).await.unwrap();
+        assert_eq!(made[0].error, "");
+        let told: Value = serde_json::from_str(&std::fs::read_to_string(out.join("t_flowrefs_f03.told.json")).unwrap()).unwrap();
+        assert!(told["page"]["text_pt"].as_f64().is_some_and(|t| t > 0.0), "{}", told["page"]);
+        let out2 = e.dir.path().join("out2");
+        go(&e, &out2, &["t.flowrefs:f03".to_string()]).await;
+        let told: Value = serde_json::from_str(&std::fs::read_to_string(out2.join("t_flowrefs_f03.told.json")).unwrap()).unwrap();
+        assert!(told["page"]["text_pt"].is_null(), "{}", told["page"]);
     }
 
     #[tokio::test]

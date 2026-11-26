@@ -151,6 +151,6 @@ pub fn description(source: &str, answers: &Value) -> String {
 /// The last step: the decisions → the L1 graph (and its text form).
 pub async fn graph(llm: &dyn Llm, source: &str, answers: &Value, notation: Option<&Notation>, library: &Library, examples: &[(String, Graph)]) -> Result<Proposal, String> {
     let desc = description(source, answers);
-    let p = FlowPrompt { description: &desc, image: None, notation, library, examples };
+    let p = FlowPrompt { description: &desc, image: None, notation, library, examples, page: None };
     propose_via(llm, &p).await
 }

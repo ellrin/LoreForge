@@ -41,6 +41,10 @@ pub struct FlowPrompt<'a> {
     pub library: &'a Library,
     /// Worked examples: (description, graph). Few-shot for local models.
     pub examples: &'a [(String, Graph)],
+    /// The page the figure is made for (its width and ratio, chosen before anything is drawn).
+    /// With one, the text draft is told the page's shape, is measured on the baseplate and is
+    /// sent back once with the numbers when its own shape leaves the page empty.
+    pub page: Option<crate::plate::Format>,
 }
 
 #[derive(Debug, Clone)]
@@ -509,6 +513,11 @@ pub struct TextProposal {
     /// The first drawable draft had faults in how it looks and was sent back once; the second
     /// was better and is the one kept.
     pub polished: bool,
+    /// With a page: the smallest text of the kept draft on that page, in points.
+    pub page_text_pt: Option<f64>,
+    /// With a page: what still holds the kept draft small there ([`shape_words`]); empty when
+    /// its shape is the page's.
+    pub shape: Vec<String>,
 }
 
 /// JSON schema of the text draft's reply.
@@ -562,7 +571,7 @@ end
 - A panel is a top-level area. Several panels: `arrange a b / c` (rows of panel ids: a and b side by side, c under them).
 - Panel options: none (no frame), bare (nothing drawn), tint=<colour> (only when the description gives the area a colour), title=top-left|top|above|below|left|none. The style draws every panel's frame and corners.
     panel b "Stage 2" tint=blue none title=above     # a pale blue area without a black frame
-- Follow the description's words for the arrangement: 上／下 is rows (`arrange a / b`), 左／右 or 由左到右 is one row (`arrange a b`). Areas listed with no arrangement stated (a, b, c) are stacked as rows: `arrange a / b / c`.
+- Follow the description's words for the arrangement: 上／下 is rows (`arrange a / b`), 左／右 or 由左到右 is one row (`arrange a b`). When the description states no arrangement, write no `arrange` line: the program tries the arrangements on the page and the author picks one.
 - A line between panels: `a -> b : cross`.
 
 ### Blocks
@@ -728,7 +737,8 @@ fn library_section(lib: &Library, description: &str) -> String {
 /// The request of the text draft (a picture attached when there is one).
 pub fn text_request_with(p: &FlowPrompt, k: &Knowledge) -> (LlmRequest, Shown) {
     let shown = shown_for(p.description, k);
-    let user = format!("Description of the figure:\n\n{}\n\nReturn the JSON object with the figure text.", p.description.trim());
+    let page = p.page.as_ref().map(|f| format!("\n\n{}", page_words(f))).unwrap_or_default();
+    let user = format!("Description of the figure:\n\n{}{page}\n\nReturn the JSON object with the figure text.", p.description.trim());
     let msg = match &p.image {
         Some(img) => Message::user_with_images(format!("{user}\n\nThe attached picture shows the figure; use it for what the text leaves open."), vec![img.clone()]),
         None => Message::user(user),
@@ -787,7 +797,7 @@ fn reply_text(v: &Value) -> Result<String, String> {
 
 /// Parse, validate and draw once. The error is what stopped it, in the parser's own words
 /// ("line 7: …"); the warnings are what the draw noticed.
-fn check_text(text: &str, p: &FlowPrompt) -> Result<(Graph, Vec<String>, Vec<String>), String> {
+fn check_text(text: &str, p: &FlowPrompt) -> Result<Checked, String> {
     let kinds = p.library.kinds();
     let g = crate::dsl::parse_with(text, &kinds).map_err(|e| e.to_string())?;
     g.validate(&kinds).map_err(|e| e.to_string())?;
@@ -795,7 +805,76 @@ fn check_text(text: &str, p: &FlowPrompt) -> Result<(Graph, Vec<String>, Vec<Str
     let fig = crate::draw(&g, &d).map_err(|e| e.to_string())?;
     let mut found = looks(&fig);
     found.extend(block_advice(&g, p.library));
-    Ok((g, fig.built.warnings.clone(), found))
+    let on_page = p.page.as_ref().and_then(|f| on_page(&g, f, p.library));
+    Ok(Checked { text: text.to_string(), graph: g, warnings: fig.built.warnings.clone(), looks: found, page_text_pt: on_page.as_ref().map(|b| b.text_pt), shape: on_page.map(|b| p.page.as_ref().map(|f| shape_words(&b, f)).unwrap_or_default()).unwrap_or_default() })
+}
+
+/// One draft, checked: its text and graph, what the draw noticed, what looks wrong, and with a
+/// page how it sits there.
+struct Checked {
+    text: String,
+    graph: Graph,
+    warnings: Vec<String>,
+    looks: Vec<String>,
+    page_text_pt: Option<f64>,
+    shape: Vec<String>,
+}
+
+/// The page in words, for the first request: its shape and what that asks of the areas.
+pub fn page_words(f: &crate::plate::Format) -> String {
+    let (w, h) = f.ratio;
+    let shape = if w * 10 >= h * 13 {
+        "wider than tall: areas run long from left to right, each in as few lanes as its lines allow; areas stacked as rows, or a wide one over two side by side, use it best"
+    } else if h * 10 >= w * 13 {
+        "taller than wide: areas are stacked, and a long path is folded into two lanes rather than run in one long row"
+    } else {
+        "about square: two rows of areas, or areas of two lanes, use it best"
+    };
+    format!("The figure is made for a page area of ratio {w}:{h} (width:height), {:.0} pt wide; it is {shape}. A program measures every block in cells and places the figure on that area: a figure whose own shape is far from {w}:{h} leaves part of the page empty and its text small.", f.width_pt)
+}
+
+/// How a graph sits on a page: what binds the arrangement its text states (the best one when
+/// it states none). `None` for a graph without blocks.
+fn on_page(g: &Graph, f: &crate::plate::Format, lib: &Library) -> Option<crate::plate::Binding> {
+    let theme = crate::Theme::classic_bw();
+    let mut vars = crate::text::Vars::default();
+    vars.add_new(&g.vars_new);
+    let m = crate::plate::Measure { theme: &theme, vars: &vars, library: lib, image_size: &crate::modules::no_images };
+    let options = crate::plate::place(g, f, &m)?;
+    let p = options.iter().find(|p| p.stated).or(options.first())?;
+    Some(crate::plate::binding(g, f, p, &m))
+}
+
+/// The text on the page must gain at least this much from a better shape before a draft is
+/// sent back for its shape alone.
+const SHAPE_GAIN: f64 = 1.15;
+
+/// What holds a figure small on its page, in words the drafting model can act on, with the
+/// numbers: the cells it needs against the page's shape, the areas that set the binding side and
+/// what to do about them. Empty when a better shape would win less than [`SHAPE_GAIN`].
+pub fn shape_words(b: &crate::plate::Binding, f: &crate::plate::Format) -> Vec<String> {
+    if b.text_pt <= 0.0 || b.text_if_shaped_pt < b.text_pt * SHAPE_GAIN {
+        return Vec::new();
+    }
+    let (w, h) = f.ratio;
+    let setters: Vec<String> = b.areas.iter().filter(|a| a.binds).map(|a| format!("{} ({} lane(s) × {} column(s), {} × {} cells)", a.id, a.rows, a.cols, a.w, a.h)).collect();
+    let which = if setters.is_empty() { String::new() } else { format!(" It is set by: {}.", setters.join("; ")) };
+    let mut out = vec![format!(
+        "On the page ({w}:{h}) the figure as pinned needs {} × {} cells, so its {} sets the size: {} cells of the page's {} stay empty and the smallest text is {:.1} pt (it would be {:.1} pt were the figure the page's shape).{which}",
+        b.need.0,
+        b.need.1,
+        if b.tall { "height" } else { "width" },
+        b.spare,
+        if b.tall { "width" } else { "height" },
+        b.text_pt,
+        b.text_if_shaped_pt
+    )];
+    out.push(if b.tall {
+        "Make it less tall and wider: bring the blocks of a second lane into the first where the lines allow (an input may join from the right of its block, a result may sit after it), or put two areas side by side with `arrange`. Do not change what the figure shows.".to_string()
+    } else {
+        "Make it less wide and taller: fold a long row into two lanes (the second half under the first), move an input that joins a block into the lane above or below that block, or stack areas with `arrange`. Do not change what the figure shows.".to_string()
+    });
+    out
 }
 
 /// What a draft gets wrong in its choice of blocks, in words the drafting model can act on: a
@@ -888,10 +967,18 @@ pub fn looks(fig: &crate::Figure) -> Vec<String> {
     out
 }
 
-fn reply_checked(v: &Value, p: &FlowPrompt) -> Result<(String, Graph, Vec<String>, Vec<String>), String> {
-    let t = reply_text(v)?;
-    let (g, w, l) = check_text(&t, p)?;
-    Ok((t, g, w, l))
+fn reply_checked(v: &Value, p: &FlowPrompt) -> Result<Checked, String> {
+    check_text(&reply_text(v)?, p)
+}
+
+/// Is a second draft better than the first? Fewer faults in how it looks without smaller text on
+/// the page, or larger text on the page (by a twentieth at least) without more faults.
+fn better(new: &Checked, old: &Checked) -> bool {
+    let (n, o) = (new.looks.len(), old.looks.len());
+    match (new.page_text_pt, old.page_text_pt) {
+        (Some(a), Some(b)) => (n < o && a >= b * 0.95) || (n <= o && a >= b * 1.05),
+        _ => n < o,
+    }
 }
 
 /// A figure from a description, written by the model as text (tasks [`task_for`], the same engines
@@ -902,36 +989,48 @@ pub async fn propose_text_with(llm: &dyn Llm, p: &FlowPrompt<'_>, k: &Knowledge)
     let (req, shown) = text_request_with(p, k);
     let (v, engine) = llm.complete_json(task, req.clone()).await?;
     let mut req = req;
-    let (mut v, mut dsl, mut graph, mut warnings, mut look, mut retried) = match reply_checked(&v, p) {
-        Ok((t, g, w, l)) => (v, t, g, w, l, false),
+    let (mut v, mut kept, mut retried) = match reply_checked(&v, p) {
+        Ok(c) => (v, c, false),
         Err(why) => {
             req.messages.push(Message::assistant(v.to_string()));
             req.messages.push(Message::user(format!("That figure cannot be drawn: {why}. Return the whole corrected JSON object.")));
             let (v2, _) = llm.complete_json(task, req.clone()).await?;
-            let (t, g, w, l) = reply_checked(&v2, p).map_err(|e| format!("模型寫的圖畫不出來：{e}"))?;
-            (v2, t, g, w, l, true)
+            let c = reply_checked(&v2, p).map_err(|e| format!("模型寫的圖畫不出來：{e}"))?;
+            (v2, c, true)
         }
     };
-    // it draws, but the program sees what the author would not accept: sent back once with the
-    // exact findings; the better of the two drafts is kept
+    // it draws, but the program sees what the author would not accept (faults in how it looks,
+    // or a shape that leaves the page empty): sent back once with the exact findings and the
+    // numbers; the better of the two drafts is kept
     let mut polished = false;
-    if !look.is_empty() {
+    if !kept.looks.is_empty() || !kept.shape.is_empty() {
+        let mut say = String::new();
+        if !kept.looks.is_empty() {
+            say.push_str(&format!(
+                "The figure draws, but the program found these faults in how it looks:\n- {}\nFix them with pins (col=, lane=), a line's side (from=, to=), a line's kind or where a block sits; do not change what the figure shows.",
+                kept.looks.join("\n- ")
+            ));
+        }
+        if !kept.shape.is_empty() {
+            if !say.is_empty() {
+                say.push_str("\n\n");
+            }
+            say.push_str(&kept.shape.join("\n"));
+        }
+        say.push_str("\nReturn the whole corrected JSON object.");
         req.messages.push(Message::assistant(v.to_string()));
-        req.messages.push(Message::user(format!(
-            "The figure draws, but the program found these faults in how it looks:\n- {}\nFix them with pins (col=, lane=), a line's side (from=, to=), a line's kind or where a block sits; do not change what the figure shows. Return the whole corrected JSON object.",
-            look.join("\n- ")
-        )));
+        req.messages.push(Message::user(say));
         if let Ok((v2, _)) = llm.complete_json(task, req).await
-            && let Ok((t, g, w, l)) = reply_checked(&v2, p)
-            && l.len() < look.len()
+            && let Ok(c) = reply_checked(&v2, p)
+            && better(&c, &kept)
         {
-            (v, dsl, graph, warnings, look) = (v2, t, g, w, l);
+            (v, kept) = (v2, c);
             polished = true;
             retried = true;
         }
     }
     let _ = v;
-    Ok((TextProposal { dsl, graph, provider: engine, retried, warnings, looks: look, polished }, shown))
+    Ok((TextProposal { dsl: kept.text, graph: kept.graph, provider: engine, retried, warnings: kept.warnings, looks: kept.looks, polished, page_text_pt: kept.page_text_pt, shape: kept.shape }, shown))
 }
 
 #[cfg(test)]
@@ -966,7 +1065,7 @@ mod tests {
         lib
     }
     fn prompt<'a>(lib: &'a Library, desc: &'a str, ex: &'a [(String, Graph)]) -> FlowPrompt<'a> {
-        FlowPrompt { description: desc, image: None, notation: None, library: lib, examples: ex }
+        FlowPrompt { description: desc, image: None, notation: None, library: lib, examples: ex, page: None }
     }
     fn note(kind: &str, prompt: &str) -> ModuleNote {
         ModuleNote {
@@ -1131,6 +1230,69 @@ mod tests {
     fn text_reply(dsl: &str) -> Value {
         json!({ "dsl": dsl, "vars_new": [] })
     }
+    #[test]
+    fn the_page_is_told_in_the_first_request() {
+        let lib = lib();
+        let mut p = prompt(&lib, DESC, &[]);
+        let (req, _) = text_request_with(&p, &Knowledge::default());
+        assert!(!format!("{:?}", req.messages).contains("page area"), "no page, no page words");
+        p.page = Some(crate::plate::Format::new(500.0, (16, 9)));
+        let (req, _) = text_request_with(&p, &Knowledge::default());
+        let said = format!("{:?}", req.messages);
+        assert!(said.contains("ratio 16:9") && said.contains("500 pt wide") && said.contains("wider than tall"), "{said}");
+        // each shape gets its own advice
+        assert!(page_words(&crate::plate::Format::new(250.0, (5, 6))).contains("about square"));
+        assert!(page_words(&crate::plate::Format::new(250.0, (2, 3))).contains("taller than wide"));
+    }
+
+    fn binding(tall: bool, now: f64, shaped: f64) -> crate::plate::Binding {
+        crate::plate::Binding {
+            tall,
+            need: (167, 170),
+            plate: (255, 170),
+            spare: 88,
+            areas: vec![
+                crate::plate::AreaNeed { id: "a".into(), cols: 6, rows: 1, w: 160, h: 40, binds: false },
+                crate::plate::AreaNeed { id: "b".into(), cols: 8, rows: 2, w: 167, h: 60, binds: true },
+            ],
+            text_pt: now,
+            text_if_shaped_pt: shaped,
+        }
+    }
+
+    #[test]
+    fn shape_words_give_the_numbers_and_the_areas_that_bind() {
+        let f = crate::plate::Format::new(500.0, (3, 2));
+        let w = shape_words(&binding(true, 3.4, 4.3), &f).join(" ");
+        for part in ["3:2", "167 × 170 cells", "height sets the size", "88 cells of the page's width", "3.4 pt", "4.3 pt", "b (2 lane(s) × 8 column(s), 167 × 60 cells)", "less tall and wider"] {
+            assert!(w.contains(part), "missing {part:?} in {w}");
+        }
+        assert!(!w.contains("a (1 lane"), "an area that does not bind is not named: {w}");
+        let w = shape_words(&binding(false, 3.4, 4.3), &f).join(" ");
+        assert!(w.contains("width sets the size") && w.contains("less wide and taller") && w.contains("fold a long row"), "{w}");
+    }
+
+    #[test]
+    fn no_shape_words_when_little_is_to_win() {
+        let f = crate::plate::Format::new(500.0, (3, 2));
+        assert!(shape_words(&binding(true, 4.0, 4.3), &f).is_empty(), "under 15 percent to win: not sent back");
+        assert!(shape_words(&binding(true, 0.0, 4.3), &f).is_empty());
+    }
+
+    #[test]
+    fn a_second_draft_is_kept_for_fewer_faults_or_larger_text_on_the_page() {
+        let c = |looks: usize, text: Option<f64>| Checked { text: String::new(), graph: Graph::default(), warnings: vec![], looks: vec!["x".to_string(); looks], page_text_pt: text, shape: vec![] };
+        // without a page: fewer faults only
+        assert!(better(&c(1, None), &c(2, None)) && !better(&c(2, None), &c(2, None)));
+        // with a page: larger text at the same faults; fewer faults at about the same text
+        assert!(better(&c(2, Some(4.3)), &c(2, Some(3.4))));
+        assert!(better(&c(1, Some(3.3)), &c(2, Some(3.4))));
+        // never: more faults for larger text, or much smaller text for fewer faults
+        assert!(!better(&c(3, Some(5.0)), &c(2, Some(3.4))));
+        assert!(!better(&c(1, Some(2.5)), &c(2, Some(3.4))));
+        assert!(!better(&c(2, Some(3.5)), &c(2, Some(3.4))), "a twentieth at least");
+    }
+
     const PLAIN: &str = "fig f\nx: image \"$x$\"\nm: box \"Model\"\ny: label \"Out\"\nx -> m -> y\n";
     const RICH: &str = "fig f\npanel a \"a. Train\" tint=blue round none title=above\n  x: image \"$x$\" look=photo col=0 lane=0\n  region g \"Group\" dashed tint=orange round title=above\n    f: box \"Model\" fill=blue col=1 lane=0\n    h: gadget \"G\" texts=[A,B] col=2 lane=0\n  end\n  y: label \"Out\" col=3 lane=0\n  x -> f : data color=orange width=2.5\n  f -> h : skip curve color=green\n  h -> y\nend\n";
 

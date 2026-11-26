@@ -191,7 +191,22 @@ async fn save(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<Mak
     ok(json!({ "figure": row(&h, &figure_item), "reference": row(&h, &reference_item) }))
 }
 
-async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
+/// The page a draft is made for, in the draft route's query: `?width=500&ratio=3:2`.
+#[derive(Debug, Default, serde::Deserialize)]
+struct DraftPage {
+    width: Option<f64>,
+    ratio: Option<String>,
+}
+
+impl DraftPage {
+    fn format(&self) -> Option<lore_flow::plate::Format> {
+        let (a, b) = self.ratio.as_deref()?.split_once(':')?;
+        let (a, b): (u32, u32) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+        (a > 0 && b > 0).then(|| lore_flow::plate::Format::new(self.width.filter(|w| *w > 0.0).unwrap_or(500.0), (a, b)))
+    }
+}
+
+async fn draft(State(s): State<Shared>, Path(id): Path<String>, axum::extract::Query(page): axum::extract::Query<DraftPage>) -> R {
     // everything from the hub first: the lock is not held over the model call
     let description = {
         let h = hub(&s)?;
@@ -226,7 +241,7 @@ async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
     let examples = s.flow.examples(&cat.library);
     // the author's own registry (the file `/api/notation` serves); none when there is no file
     let registry = s.home.shared_file("notation.json").and_then(|f| lore_notation::Notation::load(&f).ok()).filter(|n| !n.entries.is_empty());
-    let prompt = lore_flow::llm::FlowPrompt { description: &description, image, notation: registry.as_ref(), library: &cat.library, examples: &examples };
+    let prompt = lore_flow::llm::FlowPrompt { description: &description, image, notation: registry.as_ref(), library: &cat.library, examples: &examples, page: page.format() };
     // the model writes the figure language itself; the program checked and drew it once
     let (p, shown) = lore_flow::llm::propose_text_with(&llm, &prompt, &know).await.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
     let spec = lore_flow::figure::FlowSpec { lore_flow: lore_flow::figure::VERSION, dsl: p.dsl, ..Default::default() };
@@ -235,7 +250,9 @@ async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
         "modules": shown.modules.iter().map(|m| json!({ "kind": m.item.kind, "style": m.item.style, "title": m.item.title, "why": m.why })).collect::<Vec<_>>(),
         "examples": shown.examples.iter().map(|x| json!({ "id": x.item.id, "title": x.item.title, "why": x.why })).collect::<Vec<_>>(),
     });
-    ok(json!({ "spec": spec.to_value(), "engine": p.provider, "told": told, "warnings": p.warnings, "kind": "flow", "why": why }))
+    // how the draft sits on its page, and whether it was sent back once and the second kept
+    let on_page = json!({ "text_pt": p.page_text_pt, "shape": p.shape });
+    ok(json!({ "spec": spec.to_value(), "engine": p.provider, "told": told, "warnings": p.warnings, "looks": p.looks, "polished": p.polished, "page": on_page, "kind": "flow", "why": why }))
 }
 
 // ── the made figure as a slide ───────────────────────────────────────────────

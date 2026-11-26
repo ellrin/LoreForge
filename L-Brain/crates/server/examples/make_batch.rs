@@ -1,6 +1,6 @@
 //! Draft and draw every 待製作 reference of a hub into a folder, to look at. Saves nothing.
 //! `<dir>/private` holds the hub (a copy of `private-example/`, or the real one on your own risk).
-//! `cargo run -p kb-server --example make_batch -- <dir holding private/> <out dir> [--real] [--no-keychain] [id …]`
+//! `cargo run -p kb-server --example make_batch -- <dir holding private/> <out dir> [--real] [--no-keychain] [--page=<width_pt>,<w>:<h>] [id …]`
 //! Without `--real` no model answers (every row says why); `--real` uses the shared model choice
 //! of `<dir>/private/shared` and the model settings in `<dir>/app`.
 
@@ -10,12 +10,23 @@ use std::sync::Arc;
 async fn main() {
     let mut real = false;
     let mut keychain = true;
+    let mut page: Option<(f64, (u32, u32))> = None;
     let mut pos = vec![];
     for a in std::env::args().skip(1) {
         if a == "--real" {
             real = true;
         } else if a == "--no-keychain" {
             keychain = false;
+        } else if let Some(v) = a.strip_prefix("--page=") {
+            // --page=500,3:2 : every draft is made for a page 500 pt wide of ratio 3:2
+            page = v.split_once(',').and_then(|(w, r)| {
+                let (x, y) = r.split_once(':')?;
+                Some((w.trim().parse().ok()?, (x.trim().parse().ok()?, y.trim().parse().ok()?)))
+            });
+            if page.is_none() {
+                eprintln!("--page=<width_pt>,<w>:<h>");
+                std::process::exit(2);
+            }
         } else {
             pos.push(a);
         }
@@ -44,7 +55,7 @@ async fn main() {
     };
     let shared = kb_server::AppState::with_hub(kb, config.web.clone(), rem, llm, kb_server::hub::HubState::from_home(&home));
     let app = kb_server::router_isolated(shared);
-    let made = kb_server::batch::run(app, &out, &only, &mut |n, total, m| {
+    let made = kb_server::batch::run_on_page(app, &out, &only, page, &mut |n, total, m| {
         if m.error.is_empty() {
             println!("{n}/{total} ok {} ({})", m.title, m.engine);
         } else {
