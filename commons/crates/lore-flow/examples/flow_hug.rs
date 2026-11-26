@@ -14,6 +14,24 @@ fn main() {
         let n = lore_flow::route::hugging(&fig.layout, &fig.routes);
         let bends: usize = fig.routes.iter().map(|r| r.bends()).sum();
         total += n;
+        let look = lore_flow::look::check(fig.objects());
+        if std::env::var("LOOK_DEBUG").is_ok() {
+            for o in fig.objects().iter().filter(|o| o.name.ends_with("edge:nd-mold")) {
+                println!("  {} frame {:.1},{:.1} {:.1}x{:.1} flip {} {} {:?}", o.name, o.frame.x as f64 / 12700.0, o.frame.y as f64 / 12700.0, o.frame.w as f64 / 12700.0, o.frame.h as f64 / 12700.0, o.frame.flip_h, o.frame.flip_v, o.kind.sp().map(|s| s.geom.path.clone()));
+            }
+            for o in fig.objects().iter().filter(|o| o.name.ends_with("/title") && o.name.contains("region:")) {
+                let tb = o.kind.sp().and_then(|s| s.text.clone()).unwrap();
+                println!("  {} frame {:.0},{:.0} {:.0}x{:.0} anchor {} align {:?} sizes {:?}", o.name, o.frame.x as f64 / 12700.0, o.frame.y as f64 / 12700.0, o.frame.w as f64 / 12700.0, o.frame.h as f64 / 12700.0, tb.anchor, tb.paras.iter().map(|p| p.align.clone()).collect::<Vec<_>>(), tb.paras.iter().flat_map(|p| p.runs.iter().map(|r| (r.look.size, r.text.chars().count()))).collect::<Vec<_>>());
+            }
+        }
+        let short = |s: &str| s.split('/').skip(1).collect::<Vec<_>>().join("/");
+        println!("  line over words {}, line through an open shape {}", look.over_text.len(), look.through_open.len());
+        for h in look.over_text.iter().take(6) {
+            println!("    words: {}  ×  {}  at {:.0},{:.0}", short(&h.line), short(&h.other), h.at.0, h.at.1);
+        }
+        for h in look.through_open.iter().take(4) {
+            println!("    open:  {}  ×  {}", short(&h.line), short(&h.other));
+        }
         // growable blocks smaller than four lines of text
         let fs = cat.theme(&spec.theme).font.size * fig.layout.scale;
         let g = lore_flow::dsl::parse_with(&spec.dsl, &cat.library.kinds()).ok();

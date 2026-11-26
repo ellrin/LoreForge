@@ -33,6 +33,7 @@ pub mod figure;
 pub mod knowledge;
 pub mod finish;
 pub mod layout;
+pub mod look;
 #[cfg(feature = "llm")]
 pub mod llm;
 pub mod modules;

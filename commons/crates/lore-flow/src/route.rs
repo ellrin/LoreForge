@@ -544,8 +544,9 @@ pub fn curve_clear(c: &[(f64, f64)], rooms: &[Rect], skip: &[usize]) -> Option<u
     if c.len() != 4 {
         return None;
     }
-    for i in 1..24 {
-        let t = i as f64 / 24.0;
+    // fine enough steps that a line of words (about 10 pt high) is not stepped over
+    for i in 1..96 {
+        let t = i as f64 / 96.0;
         let u = 1.0 - t;
         let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
         let p = (b0 * c[0].0 + b1 * c[1].0 + b2 * c[2].0 + b3 * c[3].0, b0 * c[0].1 + b1 * c[1].1 + b2 * c[2].1 + b3 * c[3].1);
@@ -883,6 +884,8 @@ fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra
     let obstacles: Vec<Rect> = lay.nodes.iter().map(|n| n.reserve.inflate(c)).collect();
     let mut walls: Vec<Rect> = obstacles.clone();
     walls.extend(lay.panels.iter().filter_map(|p| p.title_rect));
+    // a region's title is words: no line runs over it
+    walls.extend(lay.regions.iter().filter(|r| !r.title.is_empty()).filter_map(|r| r.title_rect));
     if !lay.legend.is_empty() {
         let top = lay.legend.iter().map(|l| l.text.y).fold(f64::MAX, f64::min);
         walls.push(Rect::new(lay.bounds.x, top, lay.bounds.w, lay.bounds.bottom() - top));

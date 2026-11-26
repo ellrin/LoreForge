@@ -452,9 +452,13 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         // cannot be a connector, so it is not glued to its blocks)
         let mut curve_pts = crate::route::curve_path(r).filter(|c| c.len() == 4);
         if let Some(c) = &curve_pts {
-            let rooms: Vec<Rect> = lay.nodes.iter().map(|n| n.rect.union(&n.reserve)).collect();
+            // blocks, then titles (words a curve may not cross either)
+            let mut rooms: Vec<Rect> = lay.nodes.iter().map(|n| n.rect.union(&n.reserve)).collect();
+            rooms.extend(lay.regions.iter().filter(|g| !g.title.is_empty()).filter_map(|g| g.title_rect));
+            rooms.extend(lay.panels.iter().filter_map(|p| p.title_rect));
             if let Some(hit) = crate::route::curve_clear(c, &rooms, &[a, b]) {
-                warnings.push(format!("{} → {}: 曲線會穿過 {}，改走直角", e.from, e.to, g.nodes[hit].id));
+                let what = g.nodes.get(hit).map(|n| n.id.clone()).unwrap_or_else(|| "標題".into());
+                warnings.push(format!("{} → {}: 曲線會穿過 {what}，改走直角", e.from, e.to));
                 curve_pts = None;
             }
         }
@@ -529,7 +533,15 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
                     }
                 }
             }
-            let clear = |c: &Rect| !lay.nodes.iter().any(|n| n.reserve.overlaps(c)) && !label_rects.iter().any(|l: &Rect| l.overlaps(c)) && !lay.panels.iter().any(|p| p.title_rect.is_some_and(|t| t.overlaps(c)) || (!p.bare && c.overlaps(&p.rect) && !p.rect.contains(c)));
+            // clear of blocks, other labels, titles, frame borders and every other line
+            let on_line = |c: &Rect| routes.iter().any(|q| q.edge != r.edge && q.points.windows(2).any(|w| crate::route::segment_hits(w[0], w[1], c)));
+            let clear = |c: &Rect| {
+                !lay.nodes.iter().any(|n| n.reserve.overlaps(c))
+                    && !label_rects.iter().any(|l: &Rect| l.overlaps(c))
+                    && !lay.panels.iter().any(|p| p.title_rect.is_some_and(|t| t.overlaps(c)) || (!p.bare && c.overlaps(&p.rect) && !p.rect.contains(c)))
+                    && !lay.regions.iter().any(|g| g.title_rect.is_some_and(|t| t.overlaps(c)))
+                    && !on_line(c)
+            };
             let pick = cands.iter().find(|c| clear(c)).or(cands.first()).copied().unwrap_or(Rect::new(0.0, 0.0, w, h));
             label_rects.push(pick);
             o.frame.x = emu(pick.x);
