@@ -38,11 +38,48 @@ fn main() {
         air.text_max_pt = v;
     }
     let p = pack::pack(&g, &f, &m, a.get(5).map(String::as_str).unwrap_or(""), &air).expect("a figure with blocks");
-    // the base draft has no lines
+    // the base draft has no lines; `LINES=1` draws them with the router as it is
     let mut p = p;
-    p.graph.edges.clear();
-    let built = build::build_with(&p.graph, &theme, &vars, &cat.library, &NoMath, &p.layout, &[], 2, &modules::no_images);
-    let fig = Figure { layout: p.layout.clone(), routes: Vec::new(), built };
+    let lines = std::env::var("LINES").is_ok();
+    if !lines {
+        p.graph.edges.clear();
+    }
+    let routes = if lines { lore_flow::route::route(&p.graph, &p.layout) } else { Vec::new() };
+    let built = build::build_with(&p.graph, &theme, &vars, &cat.library, &NoMath, &p.layout, &routes, 2, &modules::no_images);
+    if lines {
+        let bends: usize = routes.iter().map(|r| r.bends()).sum();
+        let forced = routes.iter().filter(|r| r.forced).count();
+        // lines over pictures they do not belong to, and lines that leave the page
+        let (mut over, mut off) = (0, 0);
+        for (e, r) in p.graph.edges.iter().zip(&routes) {
+            let ends = [p.graph.node_index(&e.from), p.graph.node_index(&e.to)];
+            let mut hit = false;
+            for (i, n) in p.layout.nodes.iter().enumerate() {
+                if ends.contains(&Some(i)) {
+                    continue;
+                }
+                hit |= r.points.windows(2).any(|w| lore_flow::route::segment_hits(w[0], w[1], &n.art.inflate(-0.5)));
+            }
+            over += hit as usize;
+            off += r.points.iter().any(|q| !p.layout.bounds.inflate(0.5).contains(&lore_flow::layout::Rect::new(q.0, q.1, 0.0, 0.0))) as usize;
+        }
+        // where placement leaves each flow line: its ends next to each other in a row, in a
+        // column, or neither (which no routing can make straight)
+        let (mut row, mut col, mut neither) = (0, 0, 0);
+        for e in p.graph.edges.iter().filter(|e| e.kind == lore_flow::spec::EdgeKind::Data) {
+            let (Some(a), Some(b)) = (p.graph.node_index(&e.from), p.graph.node_index(&e.to)) else { continue };
+            let (a, b) = (&p.layout.nodes[a], &p.layout.nodes[b]);
+            if (a.port_y - b.port_y).abs() < 1.0 {
+                row += 1
+            } else if (a.art.cx() - b.art.cx()).abs() < 1.0 {
+                col += 1
+            } else {
+                neither += 1
+            }
+        }
+        println!("lines {}; bends {bends}; forced {forced}; hugging {}; over a picture {over}; off the page {off}; flow lines in a row {row}, in a column {col}, neither {neither}", routes.len(), lore_flow::route::hugging(&p.layout, &routes));
+    }
+    let fig = Figure { layout: p.layout.clone(), routes, built };
     std::fs::write(&a[3], lore_flow::figure::svg_mm(&fig, None)).expect("write");
     // checks: nothing over anything, everything inside its area
     let lay = &p.layout;
