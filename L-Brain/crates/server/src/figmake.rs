@@ -252,7 +252,7 @@ async fn draft(State(s): State<Shared>, Path(id): Path<String>, axum::extract::Q
     });
     // how the draft sits on its page, and whether it was sent back once and the second kept
     let on_page = json!({ "text_pt": p.page_text_pt, "shape": p.shape });
-    ok(json!({ "spec": spec.to_value(), "engine": p.provider, "told": told, "warnings": p.warnings, "looks": p.looks, "polished": p.polished, "page": on_page, "kind": "flow", "why": why }))
+    ok(json!({ "spec": spec.to_value(), "engine": p.provider, "told": told, "warnings": p.warnings, "looks": p.looks, "polished": p.polished, "sent_back": p.sent_back, "first_dsl": p.first_dsl, "page": on_page, "kind": "flow", "why": why }))
 }
 
 // ── the made figure as a slide ───────────────────────────────────────────────

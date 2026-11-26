@@ -292,3 +292,19 @@ fn a_block_says_what_it_already_draws() {
     // a block of the same kind that is not joined to the head is another thing
     assert!(!advice.iter().any(|a| a.contains("far")), "{advice:?}");
 }
+
+#[test]
+fn a_dropped_word_of_a_slot_the_description_uses_is_named() {
+    use lore_flow::modules::Library;
+    let mut lib = Library::default();
+    let run = |t: &str| format!(r#"{{ "id": 0, "name": "t", "type": "shape", "frame": {{ "x": 0, "y": 0, "w": 508000, "h": 127000 }}, "geom": {{ "prst": "rect" }}, "fill": {{ "kind": "none" }}, "text": {{ "insets": [0,0,0,0], "anchor": "ctr", "wrap": true, "paras": [ {{ "align": "l", "runs": [ {{ "kind": "text", "text": "{t}", "look": {{ "font": "Arial", "size": 10, "color": "role:text" }} }} ] }} ] }} }}"#);
+    lib.add_json(&format!(r#"{{ "kind": "card", "style": "two", "description": "a rule card", "w": 60, "h": 40, "objects": [ {}, {} ] }}"#, run("Antecedent:"), run("Consequent:"))).unwrap();
+    let g = lore_flow::dsl::parse_with("fig f\nr: card \"\" style=two texts=[\"Product rule\",\"Consequent: Choquet integral\"]\n", &lib.kinds()).unwrap();
+    // the description writes the heading: dropping it is named; the slot written in full is not
+    let advice = lore_flow::llm::block_advice_for(&g, &lib, "A box: Antecedent: Product rule, then Consequent: Choquet integral.");
+    assert_eq!(advice.len(), 1, "{advice:?}");
+    assert!(advice[0].contains("block r") && advice[0].contains("'Antecedent'") && advice[0].contains("'Product rule'"), "{advice:?}");
+    // a description that does not use the block's word: the slot is a placeholder, free to replace
+    assert!(lore_flow::llm::block_advice_for(&g, &lib, "A box with the product rule and the Choquet integral.").iter().all(|a| !a.contains("Antecedent")));
+    assert!(lore_flow::llm::block_advice(&g, &lib).is_empty());
+}

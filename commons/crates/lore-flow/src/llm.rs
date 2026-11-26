@@ -513,6 +513,11 @@ pub struct TextProposal {
     /// The first drawable draft had faults in how it looks and was sent back once; the second
     /// was better and is the one kept.
     pub polished: bool,
+    /// What the first drawable draft was sent back with (faults in how it looks, its shape on
+    /// the page), whether or not the second draft was kept; empty when nothing was sent back.
+    pub sent_back: Vec<String>,
+    /// The first drawable draft's text when it was sent back (the kept one is `dsl`).
+    pub first_dsl: Option<String>,
     /// With a page: the smallest text of the kept draft on that page, in points.
     pub page_text_pt: Option<f64>,
     /// With a page: what still holds the kept draft small there ([`shape_words`]); empty when
@@ -626,7 +631,7 @@ Names: red orange yellow green teal blue purple pink brown grey black, or RRGGBB
 ### Saved blocks of the library, with their own words
 A saved block (listed below) is a kind like any other. It carries fixed words; texts=[...] replaces them in order, `_` keeps one, "" blanks one:
     m: encoder-decoder-ladder "Backbone" style=five texts=[Enc,_,"",Dec] col=1 lane=0
-The program warns when you give more words than the block has. Maths $...$ works inside them. The list below shows each block's own words in [its words: …]: replace every one that is a placeholder (Num, Den, Model, Item …) with the description's words through texts=[…]. The label is the block's NAME as the description writes it; never repeat in the label a word the block already prints (× N, a title).
+The program warns when you give more words than the block has. Maths $...$ works inside them. The list below shows each block's own words in [its words: …]: replace every one that is a placeholder (Num, Den, Model, Item …) with the description's words through texts=[…]. The label is the block's NAME as the description writes it; never repeat in the label a word the block already prints (× N, a title). An entry of texts= replaces the WHOLE of that word slot: when the description writes a heading and its words together ("Antecedent: Product rule"), the entry is all of it, not only the part after the heading. A file name, a size or a count the description shows ON a thing goes into that block's words (texts=) or its caption=, never into its label.
 
 ### Symbols
 `@id` in a label is a symbol of the notation table. A symbol that is not in the table is listed in vars_new as {id, latex, meaning} (or as a line `var id = "latex" "meaning"`) and then used as @id. `latex` is the bare symbol (\\hat{y}): no $, no definition. Never type a reference such as "Table 1" or "Fig. 2".
@@ -807,7 +812,7 @@ fn check_text(text: &str, p: &FlowPrompt) -> Result<Checked, String> {
     let d = crate::Drawing { library: p.library.clone(), notation: p.notation, ..Default::default() };
     let fig = crate::draw(&g, &d).map_err(|e| e.to_string())?;
     let mut found = looks(&fig);
-    found.extend(block_advice(&g, p.library));
+    found.extend(block_advice_for(&g, p.library, p.description));
     let on_page = p.page.as_ref().and_then(|f| on_page(&g, f, p.library));
     Ok(Checked { text: text.to_string(), graph: g, warnings: fig.built.warnings.clone(), looks: found, page_text_pt: on_page.as_ref().map(|b| b.text_pt), shape: on_page.map(|b| p.page.as_ref().map(|f| shape_words(&b, f)).unwrap_or_default()).unwrap_or_default() })
 }
@@ -884,6 +889,13 @@ pub fn shape_words(b: &crate::plate::Binding, f: &crate::plate::Format) -> Vec<S
 /// built-in kind where a saved block of the library is to be used instead, and a label that
 /// repeats words the block already prints.
 pub fn block_advice(g: &Graph, lib: &Library) -> Vec<String> {
+    block_advice_for(g, lib, "")
+}
+
+/// As [`block_advice`], with the description the figure is drawn from: an entry of `texts=`
+/// that drops a word of the block's own slot which the description itself uses is named too.
+pub fn block_advice_for(g: &Graph, lib: &Library, description: &str) -> Vec<String> {
+    let said = description.to_lowercase();
     let mut out = Vec::new();
     for n in &g.nodes {
         let saved = lib.templates.get(&n.module).is_some_and(|_| !MODULES.iter().any(|(m, _)| *m == n.module));
@@ -907,6 +919,14 @@ pub fn block_advice(g: &Graph, lib: &Library) -> Vec<String> {
                     if !out.contains(&s) {
                         out.push(s);
                     }
+                }
+            }
+            // a word of a slot that the description uses, dropped by texts=
+            let given: Vec<String> = n.params.get("texts").and_then(|v| v.as_array()).map(|a| a.iter().map(|x| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())).collect()).unwrap_or_default();
+            for (own, new) in t.fixed_texts().iter().zip(&given) {
+                let word = own.trim().trim_end_matches(':').trim();
+                if new != "_" && word.chars().count() >= 4 && !said.is_empty() && said.contains(&word.to_lowercase()) && !new.to_lowercase().contains(&word.to_lowercase()) {
+                    out.push(format!("block {}: texts= replaced the block's word '{word}' with '{new}', but the description writes '{word}': an entry replaces the whole slot, so write the slot's words in full", n.id));
                 }
             }
             let label = n.label.trim();
@@ -1016,7 +1036,10 @@ pub async fn propose_text_with(llm: &dyn Llm, p: &FlowPrompt<'_>, k: &Knowledge)
     // or a shape that leaves the page empty): sent back once with the exact findings and the
     // numbers; the better of the two drafts is kept
     let mut polished = false;
+    let (mut sent_back, mut first_dsl) = (Vec::new(), None);
     if !kept.looks.is_empty() || !kept.shape.is_empty() {
+        sent_back = kept.looks.iter().chain(&kept.shape).cloned().collect();
+        first_dsl = Some(kept.text.clone());
         let mut say = String::new();
         if !kept.looks.is_empty() {
             say.push_str(&format!(
@@ -1043,7 +1066,7 @@ pub async fn propose_text_with(llm: &dyn Llm, p: &FlowPrompt<'_>, k: &Knowledge)
         }
     }
     let _ = v;
-    Ok((TextProposal { dsl: kept.text, graph: kept.graph, provider: engine, retried, warnings: kept.warnings, looks: kept.looks, polished, page_text_pt: kept.page_text_pt, shape: kept.shape }, shown))
+    Ok((TextProposal { dsl: kept.text, graph: kept.graph, provider: engine, retried, warnings: kept.warnings, looks: kept.looks, polished, sent_back, first_dsl, page_text_pt: kept.page_text_pt, shape: kept.shape }, shown))
 }
 
 #[cfg(test)]
