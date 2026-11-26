@@ -2200,7 +2200,13 @@ fn a_style_is_layers_joined_with_plus() {
     put("base.toml", "id = \"base\"\n[edges.data]\ncolor = \"111111\"\nwidth = 2.2\ntail = \"triangle\"\n[colors]\nink = \"111111\"\n");
     put("pink.toml", "id = \"pink\"\npart = \"palette\"\n[colors]\nink = \"3F3F46\"\n[panel]\nline = \"D9D4E8\"\n");
     put("graded.toml", GRADED);
+    // a palette that only colours a line the structure defines does not stand alone, and still stacks
+    put("ink.toml", "id = \"ink\"\npart = \"palette\"\n[edges.side]\ncolor = \"3F3F46\"\n");
+    put("lined.toml", "id = \"lined\"\n[edges.side]\ncolor = \"000000\"\nwidth = 1.2\ntail = \"triangle\"\n");
+    put("whole.toml", "id = \"whole\"\nstack = [\"lined\", \"ink\"]\n");
     let cat = lore_flow::figure::Catalogue::load(Some(dir.path()));
+    let side = cat.theme("whole").edge(EdgeKind::Side).clone();
+    assert_eq!((side.color.as_str(), side.width), ("3F3F46", 1.2), "a layer that is not a theme alone is still a layer");
     let t = cat.theme("base+pink+graded");
     assert_eq!(t.id, "base+pink+graded");
     assert_eq!((t.colors.ink.as_str(), t.panel.line.as_str()), ("3F3F46", "D9D4E8"), "the palette lies over the structure");

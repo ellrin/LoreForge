@@ -315,9 +315,13 @@ impl Catalogue {
         }
         for f in files(&dir.join("themes"), "toml") {
             let Ok(text) = std::fs::read_to_string(&f) else { continue };
+            // a layer need not be a whole theme by itself (a palette may give a line only its
+            // colour), so its text is kept by its id whether or not it stands alone
+            if let Some(id) = toml::from_str::<toml::Value>(&text).ok().and_then(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_string)) {
+                c.theme_texts.retain(|x| x.0 != id);
+                c.theme_texts.push((id, text.clone()));
+            }
             if let Ok(t) = Theme::from_toml(&text) {
-                c.theme_texts.retain(|x| x.0 != t.id);
-                c.theme_texts.push((t.id.clone(), text.clone()));
                 c.themes.retain(|x| x.0 != t.id);
                 c.themes.push((t.id.clone(), if t.name.is_empty() { t.id.clone() } else { t.name.clone() }, t));
             }
