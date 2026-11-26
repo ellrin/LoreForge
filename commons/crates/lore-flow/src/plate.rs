@@ -1,9 +1,10 @@
 //! The baseplate: a figure is built on a grid of cells whose size is fixed before anything is
 //! drawn (`docs/flow-blocks.md` §10, the author's layered build).
 //!
-//! A [`Format`] is a page format chosen up front (a two-column figure 16:9, a one-column figure
-//! 5:6 …): it fixes how many cells the plate has and how large a cell is on the page, so text
-//! and line weights are the same in every figure of a paper and nothing is shrunk to fit.
+//! A [`Format`] is chosen up front: a width on the page and any ratio. The ratio fixes the
+//! plate's shape; the plate is that ratio times the smallest whole multiplier that holds the
+//! figure, so blocks are as large as the shape allows. How small the text then is on the page
+//! (the width divided by the cells across) is reported, not a reason to fail.
 //! Blocks take whole cells (their picture, their words and a margin); rows and columns of the
 //! plate are sized in whole cells and decide what is aligned with what; the room between them
 //! is sized by the lines that have to pass. Text and lines are not bound to the grid.
@@ -17,40 +18,47 @@ use serde::{Deserialize, Serialize};
 use crate::layout::{Layout, Rect};
 use crate::spec::Graph;
 
-/// A page format: what the finished figure has to fit.
+/// A page format: two independent settings the author gives before anything is drawn. Any width
+/// and any ratio are valid (two columns at 1:1, one column at 16:9 …).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Format {
-    pub id: String,
-    /// Shown to the author.
-    pub name: String,
-    /// Width of the figure on the page, in points (a column or the full text width).
+    /// Width of the figure on the page, in points (one column, two columns, or any width).
     pub width_pt: f64,
-    /// Width : height.
+    /// Width : height. It fixes the plate's SHAPE only, not how much fits: the plate is this
+    /// ratio times the smallest whole multiplier that holds the figure.
     pub ratio: (u32, u32),
-    /// Cells across. The cell is `width_pt / cols` on the page.
-    pub cols: u32,
-    /// The smallest text allowed on the page, in points.
+    /// Text smaller than this on the page is reported (the figure is still drawn).
     pub min_text_pt: f64,
 }
 
 impl Format {
-    /// Size of one cell on the page, in points.
-    pub fn cell_pt(&self) -> f64 {
-        self.width_pt / self.cols.max(1) as f64
+    pub fn new(width_pt: f64, ratio: (u32, u32)) -> Format {
+        Format { width_pt, ratio: reduce(ratio), min_text_pt: 6.0 }
     }
-    /// Cells down (the ratio applied to `cols`, rounded).
-    pub fn rows(&self) -> u32 {
-        ((self.cols as f64) * self.ratio.1 as f64 / self.ratio.0.max(1) as f64).round().max(1.0) as u32
+    /// The plate for a multiplier: cells across and down.
+    pub fn plate(&self, k: u32) -> (u32, u32) {
+        let r = reduce(self.ratio);
+        (r.0 * k.max(1), r.1 * k.max(1))
     }
-    /// The neutral formats every installation has; the author's own list (per journal) lies
-    /// over them by id.
-    pub fn builtin() -> Vec<Format> {
-        vec![
-            Format { id: "two-column-16x9".into(), name: "雙欄 16:9".into(), width_pt: 500.0, ratio: (16, 9), cols: 160, min_text_pt: 6.0 },
-            Format { id: "one-column-5x6".into(), name: "單欄 5:6".into(), width_pt: 250.0, ratio: (5, 6), cols: 80, min_text_pt: 6.0 },
-            Format { id: "slide-16x9".into(), name: "投影片 16:9".into(), width_pt: 960.0, ratio: (16, 9), cols: 160, min_text_pt: 12.0 },
-        ]
+    /// The smallest multiplier whose plate is at least `need` cells across and down.
+    pub fn multiplier(&self, need: (u32, u32)) -> u32 {
+        let r = reduce(self.ratio);
+        need.0.div_ceil(r.0).max(need.1.div_ceil(r.1)).max(1)
     }
+    /// Size of one cell on the page for a plate `cols` cells across, in points.
+    pub fn cell_pt(&self, cols: u32) -> f64 {
+        self.width_pt / cols.max(1) as f64
+    }
+}
+
+/// A ratio in lowest terms (16:9 stays, 32:18 becomes 16:9, 0 counts as 1).
+pub fn reduce(r: (u32, u32)) -> (u32, u32) {
+    let (a, b) = (r.0.max(1), r.1.max(1));
+    let mut g = (a, b);
+    while g.1 != 0 {
+        g = (g.1, g.0 % g.1);
+    }
+    (a / g.0, b / g.0)
 }
 
 /// A rectangle of cells: column and row of its top-left cell, cells across and down.
@@ -104,16 +112,10 @@ pub struct Placement {
     pub budget: Budget,
     /// Cells of the plate left empty, as a share (0..1).
     pub empty: f64,
-}
-
-/// Why a figure does not fit a format, in the author's terms.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Misfit {
-    /// Cells needed across and down by the tightest arrangement.
-    pub need: (u32, u32),
-    /// Cells the format has.
-    pub have: (u32, u32),
-    /// What would make it fit: another format's id, labels to break, a ratio that holds it.
+    /// The smallest text on the page for this plate and the format's width, in points.
+    pub text_pt: f64,
+    /// When `text_pt` is under the format's limit: what would help (a wider width, labels that
+    /// could break, less detail). Empty when the text is large enough.
     pub ways: Vec<String>,
 }
 
@@ -130,13 +132,13 @@ pub fn footprints(_g: &Graph, _f: &Format, _m: &Measure) -> Vec<Footprint> {
     unimplemented!("docs/flow-blocks.md §10: package plate")
 }
 
-/// The arrangements of the graph that fit the format, best first; or why none fits.
-pub fn place(_g: &Graph, _f: &Format, _m: &Measure) -> Result<Vec<Placement>, Misfit> {
+/// The arrangements of the graph, best first, each on the smallest plate of the format's ratio
+/// that holds it. `None` only for a graph without blocks.
+pub fn place(_g: &Graph, _f: &Format, _m: &Measure) -> Option<Vec<Placement>> {
     unimplemented!("docs/flow-blocks.md §10: package plate")
 }
 
-/// A placement as the layout the router and the drawing take: every rectangle on cell borders,
-/// the scale fixed by the format (never fitted afterwards).
+/// A placement as the layout the router and the drawing take: every rectangle on cell borders.
 pub fn to_layout(_g: &Graph, _f: &Format, _p: &Placement, _m: &Measure) -> Layout {
     unimplemented!("docs/flow-blocks.md §10: package plate")
 }
@@ -151,14 +153,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_format_fixes_the_plate() {
-        let f = Format::builtin();
-        let two = f.iter().find(|x| x.id == "two-column-16x9").unwrap();
-        assert_eq!((two.cols, two.rows()), (160, 90));
-        let one = f.iter().find(|x| x.id == "one-column-5x6").unwrap();
-        assert_eq!((one.cols, one.rows()), (80, 96));
-        // one cell is the same size on the page in both, so text and lines match across figures
-        assert!((two.cell_pt() - one.cell_pt()).abs() < 1e-9);
-        assert_eq!(rect_of(Cells { x: 2, y: 3, w: 10, h: 10 }, two.cell_pt()).w, 10.0 * two.cell_pt());
+    fn a_ratio_fixes_the_shape_and_the_need_fixes_the_size() {
+        let f = Format::new(500.0, (16, 9));
+        assert_eq!(f.plate(10), (160, 90));
+        assert_eq!(f.plate(20), (320, 180));
+        // a figure that needs 190 x 100 cells gets the smallest 16:9 plate that holds it
+        let k = f.multiplier((190, 100));
+        assert_eq!((k, f.plate(k)), (12, (192, 108)));
+        // any ratio: two columns at 1:1, one column at 5:6, a ratio not in lowest terms
+        assert_eq!(Format::new(500.0, (1, 1)).plate(Format::new(500.0, (1, 1)).multiplier((190, 100))), (190, 190));
+        assert_eq!(Format::new(250.0, (5, 6)).plate(16), (80, 96));
+        assert_eq!(Format::new(500.0, (32, 18)).ratio, (16, 9));
+        // the cell on the page shrinks as the plate grows: legibility is a separate report
+        assert!(f.cell_pt(320) < f.cell_pt(160));
+        assert_eq!(rect_of(Cells { x: 2, y: 3, w: 10, h: 10 }, 3.0).w, 30.0);
     }
 }
