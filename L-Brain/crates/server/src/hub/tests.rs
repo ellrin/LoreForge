@@ -581,3 +581,17 @@ async fn a_proposals_picture_becomes_the_approved_references_picture() {
     assert_eq!((s, h[header::CONTENT_TYPE].to_str().unwrap()), (StatusCode::OK, "image/png"));
     assert_eq!(b, png);
 }
+
+#[test]
+fn the_drawing_routes_know_the_blocks_of_the_slide_apps_flow_folder() {
+    // a home whose only saved block lies in SlideComposer/flow (where the author's library is)
+    let dir = tempfile::tempdir().unwrap();
+    let private = dir.path().join("private");
+    write(&private.join("shared/flow/README.md"), "shared");
+    write(&private.join("SlideComposer/flow/modules/document/page.json"), DRAWING);
+    std::fs::create_dir_all(private.join("KnowledgeBase")).unwrap();
+    let home = lore_home::Home::at(dir.path());
+    let state = HubState::from_home(&home);
+    // a draft that uses that block is checked against the hub's catalogue, so it must draw too
+    assert!(state.flow.catalogue().library.kinds().iter().any(|k| k == "document"), "{:?}", state.flow.catalogue().library.kinds());
+}

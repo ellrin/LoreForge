@@ -100,7 +100,13 @@ impl HubState {
             },
             None => None,
         };
-        HubState { hub, app_dirs, flow: lore_flow::web::Flow::new(home.clone()) }
+        // the drawing routes read the same folders the hub's catalogue does: a draft is checked
+        // against the blocks of L-Slide's flow folder too, so it must be drawn with them
+        let mut flow = lore_flow::web::Flow::new(home.clone());
+        if let Some(d) = home.app_dir("SlideComposer").map(|d| d.join("flow")).filter(|d| d.is_dir()) {
+            flow = flow.with_app_dir(d);
+        }
+        HubState { hub, app_dirs, flow }
     }
 
     /// Tests and demos: a hub in `dir` (hub records in `dir/hub`, app data in `dir/app`, flow
