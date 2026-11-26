@@ -2474,3 +2474,17 @@ fn blocks_line_up_on_their_pictures_not_their_boxes() {
         assert_eq!(f.routes[0].bends(), 0, "{src}: {:?}", f.routes[0].points);
     }
 }
+
+#[test]
+fn a_tinted_panel_keeps_a_pale_frame_under_soft_frames() {
+    let soft = "[region]\nsoft = true\n[tints.blue]\nfill = \"E6F0FB\"\nmid = \"BFD8F3\"\nline = \"6C8FD6\"\n";
+    let t = Theme::from_toml(soft).unwrap();
+    let (g, lay, routes) = laid("fig f\npanel p \"P\" tint=blue\n  a: box \"A\"\nend\n");
+    let b = built_with(&t, &g, &lay, &routes);
+    let sp = b.objects[index(&b, "flow:f/panel:p")].kind.sp().unwrap();
+    assert_eq!(sp.line.as_ref().unwrap().color, "BFD8F3");
+    // the built-in theme keeps the strong outline
+    let b = built(&g, &lay, &routes);
+    let (_, strong) = lore_flow::theme::named("blue").unwrap();
+    assert!(b.objects[index(&b, "flow:f/panel:p")].kind.sp().unwrap().line.as_ref().unwrap().color.eq_ignore_ascii_case(&strong));
+}

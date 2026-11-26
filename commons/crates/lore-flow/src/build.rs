@@ -239,8 +239,11 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             let fill = named.as_ref().map(|(f, _)| Paint::solid(f)).unwrap_or(Paint::None);
             let round = theme.corners.map(|c| c.panel != 0.0).unwrap_or(q.round);
             let mut o = modules::shape("", if round { "roundRect" } else { "rect" }, r.x, r.y, r.w, r.h, fill, None);
-            let colour = match &named {
-                Some((_, l)) if !is_hex(&q.tint) => l.clone(),
+            // soft frames: a tinted panel is outlined a step deeper than its fill, not in the
+            // tint's strong colour (an outer frame stays pale)
+            let colour = match (&named, theme.tint_mid(&q.tint).filter(|_| theme.region.soft)) {
+                (Some(_), Some(m)) if !is_hex(&q.tint) => m,
+                (Some((_, l)), _) if !is_hex(&q.tint) => l.clone(),
                 _ if line != "none" => line.to_string(),
                 _ => theme.colors.muted.clone(),
             };
