@@ -48,6 +48,20 @@ right angles on a sparse grid: never through a module or a panel title, feedback
 lines between panels in the gaps, unrelated lines never on one track. Up to three corners = a
 straight/bent connector attached to its modules; more = an open polyline.
 
+## Filling a page (the base draft)
+
+`pack::pack(graph, Format, Measure, arrangement, Air)` draws a figure's blocks as large as a page of
+a fixed shape allows, without lines: the areas in the rows the arrangement names (`a / b c`), in
+each area its blocks in the order written, in rows that break wherever that keeps things largest
+(a region is one item with rows of its own). Three searches, each on one number: the largest text
+(the smallest page that holds everything at its natural size), then every area's pictures enlarged
+together, then the areas that still have room. `Air` states the air in text sizes (`gap` between
+blocks, `pad` inside a frame, `between` areas) and `text_max_pt`, a limit on the text that hands the
+rest of the page to the pictures. `Packed` carries the layout, the graph with each block's `grow=`,
+the text size on the page, the page's cover and each area's rows.
+`cargo run -p lore-flow --example flow_pack -- <spec> <width_pt> <w:h> <out.svg> <flow dir> [arrangement] [gap] [pad] [largest text pt]`.
+Lines are not placed yet; tests in `tests/pack.rs`.
+
 ## Modules, styles, the library
 
 A module of one shape is that shape; anything else is a group whose first child `port` is an

@@ -620,7 +620,7 @@ fn grid(me: &Meas, sizes: &[layout::Size], rt: &layout::RTree, pi: usize, fold: 
 
 /// A region's title as `build` draws it (the drawing's font size, bold; `layout` measures it at
 /// the small size, narrower than drawn): its width, its line and the band it takes.
-fn reg_title(r: &crate::spec::Region, theme: &crate::theme::Theme) -> (f64, f64, f64) {
+pub(crate) fn reg_title(r: &crate::spec::Region, theme: &crate::theme::Theme) -> (f64, f64, f64) {
     if r.title.is_empty() {
         return (0.0, 0.0, 0.0);
     }
