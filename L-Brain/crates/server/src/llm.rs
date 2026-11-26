@@ -103,6 +103,13 @@ impl Llm {
     }
 
     /// No engine at all, never the real keychain or `claude` CLI (tests).
+    /// The same engines without the keychain: no API key is looked up, so nothing asks for
+    /// permission (a run nobody is sitting at); the subscription through the CLI still works.
+    pub fn without_keychain(mut self) -> Llm {
+        self.keys.isolate();
+        self
+    }
+
     pub fn none() -> Llm {
         let mut l = Llm::new(None);
         l.external = None;
