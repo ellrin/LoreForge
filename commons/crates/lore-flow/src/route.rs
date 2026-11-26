@@ -1239,15 +1239,20 @@ fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra
             }
         }
     }
-    let regions: Vec<Rect> = lay.regions.iter().map(|r| r.rect).collect();
-    for r in lay.panels.iter().filter(|p| !p.bare).map(|p| &p.rect).chain(regions.iter()) {
+    // a panel is a base area: lines run over it, and crossing its border only costs a little.
+    // A region is a module: a line enters one only to reach an end inside it, so crossing a
+    // region's border costs as much as a long detour (a line that ends inside pays it once on
+    // every possible path; a line passing through would pay it twice and goes round instead)
+    let module = 90.0 * k;
+    let regions: Vec<(Rect, f64)> = lay.regions.iter().map(|r| (r.rect, module)).collect();
+    for (r, cost) in lay.panels.iter().filter(|p| !p.bare).map(|p| (p.rect, border)).chain(regions) {
         for j in 0..ny {
             if grid.ys[j] > r.y && grid.ys[j] < r.bottom() {
                 for i in 0..nx - 1 {
                     for bx in [r.x, r.right()] {
                         if grid.xs[i] < bx && grid.xs[i + 1] >= bx {
                             let idx = grid.hi(i, j);
-                            grid.h_cost[idx] += border;
+                            grid.h_cost[idx] += cost;
                         }
                     }
                 }
@@ -1259,7 +1264,7 @@ fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra
                     for by in [r.y, r.bottom()] {
                         if grid.ys[j] < by && grid.ys[j + 1] >= by {
                             let idx = grid.vi(i, j);
-                            grid.v_cost[idx] += border;
+                            grid.v_cost[idx] += cost;
                         }
                     }
                 }

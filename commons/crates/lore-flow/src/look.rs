@@ -33,6 +33,8 @@ pub struct Report {
     pub on_line: Vec<Hit>,
     /// A figure line that passes behind a block that is not one of its ends.
     pub behind_block: Vec<Hit>,
+    /// A figure line that runs through a module's frame (a region) with neither end inside it.
+    pub through_module: Vec<Hit>,
 }
 
 /// `flow:<fig>/edge:<from>-<to>` → (from, to); `None` for a label, a junction dot or anything else.
@@ -287,13 +289,30 @@ pub fn check(objects: &[Object]) -> Report {
                 }
                 match o {
                     Item::Shape { rect, .. } => !(oname.contains("/panel:") || oname.contains("/region:")) && near(rect, p, 3.0),
-                    Item::Text(t) => block_of(oname).is_some() && near(t, p, 4.5),
+                    // words of a block (a label block is only words): within a little of them,
+                    // the more the larger they are
+                    Item::Text(t) => block_of(oname).is_some() && near(t, p, (0.45 * t.h.min(t.w)).max(4.5)),
                     Item::Line(q) => q.windows(2).any(|s| seg_dist(p, s[0], s[1]) < 2.0),
                     Item::Spill(_) => false,
                 }
             });
             if !touches {
                 rep.loose_ends.push(Hit { line: lname.clone(), other: which.to_string(), at: p });
+            }
+        }
+        // through a module's frame with neither end inside
+        for (oname, o) in &items {
+            let Item::Shape { rect, .. } = o else { continue };
+            if !oname.contains("/region:") || oname.ends_with("/title") {
+                continue;
+            }
+            let inner = rect.inflate(-1.0);
+            let holds = |p: (f64, f64)| p.0 > rect.x - 1.0 && p.0 < rect.right() + 1.0 && p.1 > rect.y - 1.0 && p.1 < rect.bottom() + 1.0;
+            if holds(pts[0]) || holds(pts[pts.len() - 1]) {
+                continue;
+            }
+            if let Some(at) = pts.windows(2).find_map(|sg| crossing(sg[0], sg[1], &inner)) {
+                rep.through_module.push(Hit { line: lname.clone(), other: oname.clone(), at });
             }
         }
         // behind a block that is not one of its ends

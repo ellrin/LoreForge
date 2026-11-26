@@ -769,6 +769,18 @@ pub fn looks(fig: &crate::Figure) -> Vec<String> {
     for h in &rep.through_open {
         push(format!("{} shows through {}", who(&h.line), who(&h.other)));
     }
+    for h in &rep.through_module {
+        push(format!("{} runs through {} without ending in it", who(&h.line), who(&h.other)));
+    }
+    for h in &rep.behind_block {
+        push(format!("{} passes behind {}", who(&h.line), who(&h.other)));
+    }
+    for h in &rep.loose_ends {
+        push(format!("the {} of {} touches nothing", h.other, who(&h.line)));
+    }
+    for h in &rep.on_line {
+        push(format!("{} runs on top of {}", who(&h.line), who(&h.other)));
+    }
     for h in &rep.words_cut {
         if h.line == h.other {
             push(format!("the words of {} run past its own shape", who(&h.line)));

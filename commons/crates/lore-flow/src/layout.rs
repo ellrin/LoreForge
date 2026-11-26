@@ -278,8 +278,9 @@ struct PanelPlan {
 
 /// Padding between a region's members and its frame (pt, natural size).
 const REG_PAD: f64 = 8.0;
-/// Least clear space between a frame and what lies beside it (pt, natural size).
-const REG_GAP: f64 = 6.0;
+/// Room between two neighbouring regions' frames: a channel a line can run in clear of both
+/// frames (the router's lanes lie 7 pt off each frame, so two lines fit).
+const REG_GAP: f64 = 20.0;
 
 /// The graph's regions as a forest.
 struct RTree {
