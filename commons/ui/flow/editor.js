@@ -77,7 +77,7 @@
   }
   const DASHES = [["solid", "實線"], ["dash", "虛線"], ["sysDash", "短虛線"], ["sysDot", "點線"], ["lgDash", "長虛線"], ["dashDot", "虛點線"]];
   const DASH_SVG = { solid: "", dash: "4 3", sysDash: "3 1", sysDot: "1 1", lgDash: "8 3", dashDot: "4 3 1 3", lgDashDot: "8 3 1 3" };
-  const LINE_NAMES = { data: "資料流", supervision: "監督", feedback: "回饋", "loss-out": "損失輸出", compare: "比較", optional: "可選", shared: "共享權重", skip: "跳接", concat: "串接", down: "降採樣", up: "升採樣", cross: "跨 block", stage: "階段", repeat: "重複", zoom: "放大" };
+  const LINE_NAMES = { data: "資料流", side: "支線", supervision: "監督", feedback: "回饋", "loss-out": "損失輸出", compare: "比較", optional: "可選", shared: "共享權重", skip: "跳接", concat: "串接", down: "降採樣", up: "升採樣", cross: "跨 block", stage: "階段", repeat: "重複", zoom: "放大" };
 
   /**
    * The figure for a paper: its print size in mm, every line holding LaTeX set again with TeX glyphs

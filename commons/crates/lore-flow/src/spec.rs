@@ -44,6 +44,8 @@ pub enum EdgeKind {
     Supervision,
     /// Gradient or weight going back to a model; drawn below the row.
     Feedback,
+    /// A data line that is not the main line: a branch, an input joining in (thinner).
+    Side,
     /// A model's output that is a loss.
     LossOut,
     /// Prediction compared with a target (double-headed).
@@ -69,8 +71,9 @@ pub enum EdgeKind {
 }
 
 impl EdgeKind {
-    pub const ALL: [EdgeKind; 15] = [
+    pub const ALL: [EdgeKind; 16] = [
         EdgeKind::Data,
+        EdgeKind::Side,
         EdgeKind::Supervision,
         EdgeKind::Feedback,
         EdgeKind::LossOut,
@@ -89,6 +92,7 @@ impl EdgeKind {
     pub fn as_str(self) -> &'static str {
         match self {
             EdgeKind::Data => "data",
+            EdgeKind::Side => "side",
             EdgeKind::Supervision => "supervision",
             EdgeKind::Feedback => "feedback",
             EdgeKind::LossOut => "loss-out",
@@ -111,11 +115,12 @@ impl EdgeKind {
     /// Edges that order the nodes along the flow. The others are drawn after
     /// the layout is fixed.
     pub fn is_flow(self) -> bool {
-        matches!(self, EdgeKind::Data | EdgeKind::LossOut | EdgeKind::Concat | EdgeKind::Down | EdgeKind::Up | EdgeKind::Stage | EdgeKind::Optional | EdgeKind::Repeat)
+        matches!(self, EdgeKind::Data | EdgeKind::Side | EdgeKind::LossOut | EdgeKind::Concat | EdgeKind::Down | EdgeKind::Up | EdgeKind::Stage | EdgeKind::Optional | EdgeKind::Repeat)
     }
     pub fn label(self) -> &'static str {
         match self {
             EdgeKind::Data => "Data flow",
+            EdgeKind::Side => "Branch",
             EdgeKind::Supervision => "Supervision",
             EdgeKind::Feedback => "Feedback",
             EdgeKind::LossOut => "Loss",

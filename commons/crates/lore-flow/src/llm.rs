@@ -175,7 +175,7 @@ Every thing the description names is one node: {id, module, role?, label, var?, 
     s.push_str(
         "\n## Edges\n\
 {from, to, kind, label?}. kind is one of:\n\
-  data (main flow) | supervision (ground truth into a loss) | feedback (a loss or weight going back to update a model) | \
+  data (main flow) | side (a data line beside the main flow: a branch, an input joining in) | supervision (ground truth into a loss) | feedback (a loss or weight going back to update a model) | \
 loss-out (a model's output that is a loss) | compare (prediction against target, double-headed) | optional (weak or optional path) | \
 shared (shared weights) | skip (skip connection) | concat (an input of a concatenation node) | down | up | \
 cross (from one panel to another) | stage | repeat | zoom (an enlarged detail of a node).\n\
@@ -571,7 +571,7 @@ end
   a -> b -> c                     a chain
   a -> b : kind "label" color=orange width=2.5 curve
   a>b -> c : optional             leaves the MIDDLE of the line a->b (a branch off a line)
-- kind: data (default), supervision, feedback, loss-out, compare, optional, shared, skip, concat, down, up, cross. Dashed by default: supervision, feedback, optional, shared, cross. After the colon the order is: kind, "label", color=, width=, curve.
+- kind: data (default; the one main line from input to output), side (any other data line: a branch, an input joining in), supervision, feedback, loss-out, compare, optional, shared, skip, concat, down, up, cross. Dashed by default: supervision, feedback, optional, shared, cross. After the colon the order is: kind, "label", color=, width=, curve.
 - color= gives a line its own colour: one colour per path. width= is the thickness in pt (1 to 4). curve draws a curved line (for a skip over blocks).
 - Two paths that join meet in an `op` block (label + for add, x for multiply, . element-wise, C concatenation).
 
