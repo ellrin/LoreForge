@@ -625,7 +625,28 @@ fn reg_title(r: &crate::spec::Region, theme: &crate::theme::Theme) -> (f64, f64,
         return (0.0, 0.0, 0.0);
     }
     let size = theme.font.size;
-    (text::width(&r.title, size) * 1.12, size * 1.3, size * 1.3 + 2.0)
+    let t = title_lines(&r.title, size);
+    let lines: Vec<&str> = t.split("\\\\").collect();
+    let w = lines.iter().map(|l| text::width(l.trim(), size)).fold(0.0, f64::max) * 1.12;
+    let h = size * 1.3 * lines.len() as f64;
+    (w, h, h + 2.0)
+}
+
+/// A region title wider than this many font sizes is written on two lines.
+const TITLE_WRAP: f64 = 16.0;
+
+/// A region's title as it is written: a long one on two lines, broken at the space nearest its
+/// middle (as figures in papers write the names of their steps), so a long name does not set the
+/// width of its frame. A title that already has a break, or no space, is kept.
+pub fn title_lines(title: &str, size: f64) -> String {
+    if title.contains("\\\\") || text::width(title, size) <= TITLE_WRAP * size {
+        return title.to_string();
+    }
+    let mid = title.len() / 2;
+    match title.char_indices().filter(|(_, c)| *c == ' ').min_by_key(|(i, _)| i.abs_diff(mid)) {
+        Some((i, _)) => format!("{}\\\\{}", title[..i].trim_end(), title[i + 1..].trim_start()),
+        None => title.to_string(),
+    }
 }
 
 /// Room for the regions of one area, in cells (the frames are worked out from the grid, not
@@ -1528,6 +1549,7 @@ fn layout_of(me: &Meas, p: &Placement) -> Layout {
                     let f = rect_of(c, CELL);
                     let (tw, th, band) = reg_title(r, m.theme);
                     b.rect = f;
+                    b.title = title_lines(&r.title, m.theme.font.size);
                     b.title_rect = (!r.title.is_empty()).then(|| match layout::title_at(r) {
                         "top" => Rect::new(f.cx() - tw / 2.0, f.y + 1.0, tw, th),
                         "above" => Rect::new(f.cx() - tw / 2.0, f.y - band + 1.0, tw, th),

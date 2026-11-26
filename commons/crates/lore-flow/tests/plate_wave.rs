@@ -757,3 +757,13 @@ fn binding_names_the_direction_and_the_areas_that_set_it() {
     let shaped = (b.need.0 as f64 * b.need.1 as f64 * 5.0 / 6.0).sqrt();
     assert!(near(b.text_if_shaped_pt / b.text_pt, p.plate.0 as f64 / shaped));
 }
+
+#[test]
+fn a_long_region_title_is_written_on_two_lines() {
+    use lore_flow::plate::title_lines;
+    assert_eq!(title_lines("Step 1. Data pre-processing and augmentation", 11.0), "Step 1. Data pre-processing\\\\and augmentation");
+    assert_eq!(title_lines("Encoder", 11.0), "Encoder");
+    // a break the author wrote is kept; a long word without a space cannot break
+    assert_eq!(title_lines("A long title the author\\\\already broke in two lines himself", 11.0), "A long title the author\\\\already broke in two lines himself");
+    assert_eq!(title_lines("Supercalifragilisticexpialidocious_and_more", 11.0), "Supercalifragilisticexpialidocious_and_more");
+}
