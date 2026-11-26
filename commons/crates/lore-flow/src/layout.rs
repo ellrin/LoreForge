@@ -252,26 +252,26 @@ pub struct Layout {
     pub scale: f64,
 }
 
-struct Size {
-    w: f64,
-    h: f64,
-    reserve_w: f64,
-    cy: f64,
-    art: (f64, f64, f64, f64),
-    words: (bool, bool),
-    single: bool,
-    ellipse: bool,
-    legend: Vec<crate::art::Swatch>,
+pub(crate) struct Size {
+    pub(crate) w: f64,
+    pub(crate) h: f64,
+    pub(crate) reserve_w: f64,
+    pub(crate) cy: f64,
+    pub(crate) art: (f64, f64, f64, f64),
+    pub(crate) words: (bool, bool),
+    pub(crate) single: bool,
+    pub(crate) ellipse: bool,
+    pub(crate) legend: Vec<crate::art::Swatch>,
 }
 
-struct PanelPlan {
-    nodes: Vec<usize>,
-    layer: BTreeMap<usize, usize>,
-    lane: BTreeMap<usize, usize>,
+pub(crate) struct PanelPlan {
+    pub(crate) nodes: Vec<usize>,
+    pub(crate) layer: BTreeMap<usize, usize>,
+    pub(crate) lane: BTreeMap<usize, usize>,
     /// Positions of the node frames relative to the content origin.
-    pos: BTreeMap<usize, Rect>,
-    content: (f64, f64),
-    down: bool,
+    pub(crate) pos: BTreeMap<usize, Rect>,
+    pub(crate) content: (f64, f64),
+    pub(crate) down: bool,
 }
 
 // ── regions ────────────────────────────────────────────────────────────
@@ -283,7 +283,7 @@ const REG_PAD: f64 = 8.0;
 const REG_GAP: f64 = 20.0;
 
 /// The graph's regions as a forest.
-struct RTree {
+pub(crate) struct RTree {
     kids: Vec<Vec<usize>>,
     roots: Vec<usize>,
     /// Every node of a region, those of its sub-regions included.
@@ -294,7 +294,7 @@ struct RTree {
 }
 
 impl RTree {
-    fn new(g: &Graph) -> RTree {
+    pub(crate) fn new(g: &Graph) -> RTree {
         let n = g.regions.len();
         let find = |id: &str| g.regions.iter().position(|r| r.id == id);
         let mut parent: Vec<Option<usize>> = (0..n).map(|i| find(&g.regions[i].parent).filter(|p| *p != i)).collect();
@@ -531,7 +531,7 @@ fn stack_lanes(rt: &RTree, scope: &BTreeSet<usize>, kids: &[usize], layer: &BTre
 /// The frames of the regions, outer before inner, with the room each frame (title included)
 /// takes: `(index in the graph, box, frame plus the title that lies outside it)`.
 /// `rooms` = the room of every node; `k` scales the padding and the title.
-fn frame_regions(g: &Graph, rt: &RTree, rooms: &[Rect], theme: &Theme, k: f64) -> Vec<(usize, RegionBox, Rect)> {
+pub(crate) fn frame_regions(g: &Graph, rt: &RTree, rooms: &[Rect], theme: &Theme, k: f64) -> Vec<(usize, RegionBox, Rect)> {
     let n = g.regions.len();
     let mut got: Vec<Option<(RegionBox, Rect)>> = vec![None; n];
     for &i in rt.order.iter().rev() {
@@ -775,7 +775,7 @@ fn reaches(succ: &BTreeMap<usize, Vec<usize>>, from: usize, to: usize) -> bool {
     false
 }
 
-fn plan_panel(g: &Graph, nodes: &[usize], sizes: &[Size], down: bool, theme: &Theme, rt: &RTree, avail: f64) -> PanelPlan {
+pub(crate) fn plan_panel(g: &Graph, nodes: &[usize], sizes: &[Size], down: bool, theme: &Theme, rt: &RTree, avail: f64) -> PanelPlan {
     let inside: BTreeSet<usize> = nodes.iter().copied().collect();
     let idx = |id: &str| g.node_index(id).filter(|i| inside.contains(i));
     // flow edges inside the panel, acyclic
