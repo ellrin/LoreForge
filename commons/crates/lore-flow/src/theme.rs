@@ -412,7 +412,8 @@ pub fn shade(hex: &str, t: f64) -> String {
 /// A colour by name for a block, a line or a region's background, from the document's own
 /// palette (never the app's screen theme): `(fill, line)` as `RRGGBB`, the fill pale and the
 /// line strong. Names: red, orange, yellow, green, teal, blue, purple, pink, brown, grey,
-/// black. An `RRGGBB` is given back as both. `None` = not a colour.
+/// black, and white (white as both, for words on a dark block). An `RRGGBB` is given back as
+/// both. `None` = not a colour.
 pub fn named(name: &str) -> Option<(String, String)> {
     let n = name.trim();
     let hex = n.trim_start_matches('#');
@@ -432,6 +433,8 @@ pub fn named(name: &str) -> Option<(String, String)> {
         "brown" => ("EBE0D7", "6D4C41"),
         "grey" | "gray" => ("E6E6E6", "616161"),
         "black" => ("D9D9D9", "000000"),
+        // words on a dark block; as a fill, plain white
+        "white" => ("FFFFFF", "FFFFFF"),
         _ => return None,
     };
     Some((fill.to_string(), line.to_string()))

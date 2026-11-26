@@ -1551,38 +1551,41 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx, warn: &mut Vec<String>) 
     let mut objs: Vec<Object> = serde_json::from_value(v).unwrap_or_default();
     let mut drawn = false;
     let label = cx.vars.resolve(&n.label);
-    fn fill_label(o: &mut Object, label: &str, cx: &Ctx, drawn: &mut bool) {
+    // the label goes in once the drawing has its final size, so it can break to fit its part
+    fn fill_label(o: &mut Object, sx: f64, label: &str, cx: &Ctx, drawn: &mut bool) {
+        let room = part_room(o, sx);
         match &mut o.kind {
             Kind::Text(sp) | Kind::Shape(sp) => {
                 let mut math = false;
                 if let Some(tb) = &mut sp.text {
-                    for p in &mut tb.paras {
-                        if let Some(i) = p.runs.iter().position(|r| r.text.trim() == "{{label}}") {
-                            let l = &p.runs[i].look;
+                    let room = if tb.vert.is_some() { None } else { room };
+                    let mut pi = 0;
+                    while pi < tb.paras.len() {
+                        if let Some(i) = tb.paras[pi].runs.iter().position(|r| r.text.trim() == "{{label}}") {
+                            let l = &tb.paras[pi].runs[i].look;
                             let ty = Type { font: l.font.clone(), ea_font: l.ea_font.clone(), math_font: cx.theme.font.math.clone(), size: l.size, bold: l.bold, italic: l.italic, color: l.color.clone() };
-                            let (rs, m) = text::runs(label, &ty, cx.vars, cx.math);
-                            math |= m;
-                            p.runs.splice(i..=i, rs);
+                            let lines: Vec<Vec<lore_canvas::Run>> = word_lines(label, ty.size, room)
+                                .iter()
+                                .map(|line| {
+                                    let (rs, m) = text::runs(line, &ty, cx.vars, cx.math);
+                                    math |= m;
+                                    rs
+                                })
+                                .collect();
+                            let (np, _) = splice_lines(&mut tb.paras, pi, i, lines);
+                            pi = np;
                             *drawn = true;
                         }
+                        pi += 1;
                     }
                 }
                 sp.equation |= math;
             }
-            Kind::Group(g) => g.children.iter_mut().for_each(|c| fill_label(c, label, cx, drawn)),
+            Kind::Group(g) => {
+                let k = group_scale(o.frame.w, g.ch.w, sx);
+                g.children.iter_mut().for_each(|c| fill_label(c, k, label, cx, drawn))
+            }
             _ => {}
-        }
-    }
-    // the block's own words in place of the drawing's fixed ones
-    let texts: Vec<String> = n.list("texts");
-    let named: Vec<(String, String)> = n.params.iter().filter_map(|(k, v)| k.strip_prefix("text.").map(|name| (name.to_string(), v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())))).collect();
-    if !texts.is_empty() || !named.is_empty() {
-        let mut seen = 0usize;
-        for o in objs.iter_mut() {
-            replace_fixed(o, &texts, &named, &mut seen, &[], cx);
-        }
-        if texts.len() > seen {
-            warn.push(format!("{}: 這個積木只有 {} 處文字", n.id, seen));
         }
     }
     for (i, o) in objs.iter_mut().enumerate() {
@@ -1597,7 +1600,6 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx, warn: &mut Vec<String>) 
         }
         restyle(o, cx.theme);
         scale_obj(o, cx.k);
-        fill_label(o, &label, cx, &mut drawn);
     }
     // a size given to the block: the drawing stretched to it (its words and line weights stay)
     let (mut w, mut h) = (cx.s(t.w), cx.s(t.h));
@@ -1616,7 +1618,184 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx, warn: &mut Vec<String>) 
         w *= gx;
         h *= gy;
     }
-    Core { w, h, objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below }, legend, ..Default::default() }
+    // the block's own words in place of the drawing's fixed ones
+    let texts: Vec<String> = n.list("texts");
+    let named: Vec<(String, String)> = n.params.iter().filter_map(|(k, v)| k.strip_prefix("text.").map(|name| (name.to_string(), v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())))).collect();
+    if !texts.is_empty() || !named.is_empty() {
+        let mut seen = 0usize;
+        for o in objs.iter_mut() {
+            replace_fixed(o, 1.0, &texts, &named, &mut seen, &[], cx);
+        }
+        if texts.len() > seen {
+            warn.push(format!("{}: 這個積木只有 {} 處文字", n.id, seen));
+        }
+    }
+    for o in objs.iter_mut() {
+        fill_label(o, 1.0, &label, cx, &mut drawn);
+    }
+    // where lines connect: what the drawing really draws, when the box keeps room beside it (words
+    // under a picture, empty margin); a drawing with its own port keeps the port the author set
+    let art = if t.port.is_some() {
+        None
+    } else {
+        drawn_bounds(&objs).and_then(|(x0, y0, x1, y1)| {
+            let (x0, y0, x1, y1) = (x0.max(0.0), y0.max(0.0), x1.min(w), y1.min(h));
+            let spare = x0 > ART_SLACK || y0 > ART_SLACK || w - x1 > ART_SLACK || h - y1 > ART_SLACK;
+            (x1 - x0 > 0.0 && y1 - y0 > 0.0 && spare).then_some((x0, y0, x1 - x0, y1 - y0))
+        })
+    };
+    Core { w, h, objs, single: false, ellipse: false, label: if drawn { LabelPos::Drawn } else { LabelPos::Below }, legend, art, ..Default::default() }
+}
+
+/// Room (pt) a saved drawing's box may keep beside what it draws before lines connect at the drawing.
+const ART_SLACK: f64 = 1.0;
+
+/// How many pt one unit of a group's children is: `sx` (the group's own) times its frame over its
+/// child space.
+fn group_scale(frame_w: Emu, ch_w: Emu, sx: f64) -> f64 {
+    if ch_w > 0 && frame_w > 0 { sx * frame_w as f64 / ch_w as f64 } else { sx }
+}
+
+/// The width (pt) words have inside a part: its frame without its side insets.
+fn part_room(o: &Object, sx: f64) -> Option<f64> {
+    let tb = o.kind.sp()?.text.as_ref()?;
+    let w = (o.frame.w - tb.insets[0] - tb.insets[2]) as f64 / EMU_PT * sx;
+    (w > 0.0).then_some(w)
+}
+
+/// The box (x0, y0, x1, y1, pt) of the parts a drawing shows: a fill, an outline, a line, a
+/// picture; not words alone, not hidden parts, not a `port`. `None` = nothing is drawn.
+fn drawn_bounds(objs: &[Object]) -> Option<(f64, f64, f64, f64)> {
+    // child → parent: parent = a * child + b, across and down
+    #[derive(Clone, Copy)]
+    struct Map {
+        ax: f64,
+        bx: f64,
+        ay: f64,
+        by: f64,
+    }
+    fn walk(o: &Object, m: Map, b: &mut Option<(f64, f64, f64, f64)>) {
+        if o.hidden || o.name == "port" || o.name.ends_with("/port") {
+            return;
+        }
+        let f = &o.frame;
+        let (mut x, mut y, mut w, mut h) = (f.x as f64, f.y as f64, f.w as f64, f.h as f64);
+        // a quarter turn swaps the box's sides about its centre
+        let turn = f.rot.rem_euclid(180.0);
+        if (turn - 90.0).abs() < 1.0 {
+            (x, y, w, h) = (x + w / 2.0 - h / 2.0, y + h / 2.0 - w / 2.0, h, w);
+        }
+        let seen = |p: &Paint| match p {
+            Paint::None => false,
+            Paint::Solid { alpha, .. } => *alpha > 0.0,
+            _ => true,
+        };
+        let stroked = |l: &Option<Stroke>| l.as_ref().is_some_and(|l| l.width_pt > 0.0 && l.alpha > 0.0 && !l.color.is_empty() && l.color != "none");
+        let drawn = match &o.kind {
+            Kind::Text(sp) | Kind::Shape(sp) => seen(&sp.fill) || stroked(&sp.line),
+            Kind::Connector(c) => stroked(&c.line),
+            Kind::Picture(_) | Kind::Table(_) | Kind::Locked(_) => true,
+            Kind::Group(g) => {
+                let (sx, sy) = (if g.ch.w > 0 { w / g.ch.w as f64 } else { 1.0 }, if g.ch.h > 0 { h / g.ch.h as f64 } else { 1.0 });
+                let inner = Map { ax: m.ax * sx, bx: m.ax * (x - g.ch.x as f64 * sx) + m.bx, ay: m.ay * sy, by: m.ay * (y - g.ch.y as f64 * sy) + m.by };
+                g.children.iter().for_each(|c| walk(c, inner, b));
+                false
+            }
+        };
+        if drawn {
+            let (x0, y0) = (m.ax * x + m.bx, m.ay * y + m.by);
+            let (x1, y1) = (m.ax * (x + w) + m.bx, m.ay * (y + h) + m.by);
+            *b = Some(match *b {
+                None => (x0, y0, x1, y1),
+                Some((a, c, d, e)) => (a.min(x0), c.min(y0), d.max(x1), e.max(y1)),
+            });
+        }
+    }
+    let mut b = None;
+    let pt = Map { ax: 1.0 / EMU_PT, bx: 0.0, ay: 1.0 / EMU_PT, by: 0.0 };
+    for o in objs {
+        walk(o, pt, &mut b);
+    }
+    b
+}
+
+/// The lines words are written in inside a part: `\\` breaks the line, and a line wider than
+/// `room` (pt) breaks at its spaces (never inside `$…$`) so each line fits; a word wider than the
+/// room alone stays whole and overflows as before.
+fn word_lines(s: &str, size: f64, room: Option<f64>) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text::lines(s) {
+        let room = match room {
+            Some(r) if text::width(&line, size) > r + 0.5 => r,
+            _ => {
+                out.push(line);
+                continue;
+            }
+        };
+        // words: split at spaces outside math
+        let mut words: Vec<String> = Vec::new();
+        let (mut cur, mut math, mut prev) = (String::new(), false, ' ');
+        for c in line.chars() {
+            if c == '$' && prev != '\\' {
+                math = !math;
+            }
+            if c == ' ' && !math {
+                if !cur.is_empty() {
+                    words.push(std::mem::take(&mut cur));
+                }
+            } else {
+                cur.push(c);
+            }
+            prev = c;
+        }
+        if !cur.is_empty() {
+            words.push(cur);
+        }
+        let mut row = String::new();
+        for w in words {
+            if row.is_empty() {
+                row = w;
+                continue;
+            }
+            let wider = format!("{row} {w}");
+            if text::width(&wider, size) <= room + 0.5 {
+                row = wider;
+            } else {
+                out.push(std::mem::replace(&mut row, w));
+            }
+        }
+        out.push(row);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// Put `lines` (runs per line) in place of run `ri` of paragraph `pi`: the first line there, each
+/// further line in a paragraph of its own made like `pi`; runs before the placeholder stay in the
+/// first line, runs after it follow the last. Returns (paragraph, run) just after what was put in.
+fn splice_lines(paras: &mut Vec<lore_canvas::Para>, pi: usize, ri: usize, lines: Vec<Vec<lore_canvas::Run>>) -> (usize, usize) {
+    let after: Vec<lore_canvas::Run> = paras[pi].runs.split_off(ri + 1);
+    paras[pi].runs.pop();
+    let mut like = paras[pi].clone();
+    like.runs.clear();
+    like.src = None;
+    like.k = 0;
+    let mut idx = pi;
+    for (j, l) in lines.into_iter().enumerate() {
+        if j == 0 {
+            paras[pi].runs.extend(l);
+        } else {
+            idx += 1;
+            let mut q = like.clone();
+            q.runs = l;
+            paras.insert(idx, q);
+        }
+    }
+    let end = paras[idx].runs.len();
+    paras[idx].runs.extend(after);
+    (idx, end)
 }
 
 /// The words a block gives for one fixed text of its drawing: `_` keeps the drawing's word.
@@ -1634,18 +1813,22 @@ fn own_words(w: &str) -> Option<&str> {
 /// Walk an object (groups depth-first, paragraphs and runs in order): the `seen`-th fixed text
 /// (a run that is not `{{label}}` and not blank) takes `texts[seen]`, and the first fixed text
 /// of an object (or group) named in `named` takes that name's words.
-fn replace_fixed(o: &mut Object, texts: &[String], named: &[(String, String)], seen: &mut usize, above: &[String], cx: &Ctx) {
+/// Words given with `\\` or wider than their part break into lines as a label does.
+fn replace_fixed(o: &mut Object, sx: f64, texts: &[String], named: &[(String, String)], seen: &mut usize, above: &[String], cx: &Ctx) {
     let mut path: Vec<String> = above.to_vec();
     path.push(o.name.clone());
+    let room = part_room(o, sx);
     match &mut o.kind {
         Kind::Text(sp) | Kind::Shape(sp) => {
             let mut first_here = true;
             let mut math = false;
             if let Some(tb) = &mut sp.text {
-                for p in &mut tb.paras {
+                let room = if tb.vert.is_some() { None } else { room };
+                let mut pi = 0;
+                while pi < tb.paras.len() {
                     let mut i = 0;
-                    while i < p.runs.len() {
-                        let r = &p.runs[i];
+                    while i < tb.paras[pi].runs.len() {
+                        let r = &tb.paras[pi].runs[i];
                         if r.kind != "text" || r.text.trim().is_empty() || r.text.trim() == "{{label}}" {
                             i += 1;
                             continue;
@@ -1660,26 +1843,35 @@ fn replace_fixed(o: &mut Object, texts: &[String], named: &[(String, String)], s
                         match word {
                             None => i += 1,
                             Some(w) if w.is_empty() => {
-                                p.runs[i].text = String::new();
+                                tb.paras[pi].runs[i].text = String::new();
                                 i += 1;
                             }
                             Some(w) => {
                                 let ty = Type { font: l.font.clone(), ea_font: l.ea_font.clone(), math_font: cx.theme.font.math.clone(), size: l.size, bold: l.bold, italic: l.italic, color: l.color.clone() };
-                                let (rs, m) = text::runs(&cx.vars.resolve(&w), &ty, cx.vars, cx.math);
-                                math |= m;
-                                let k = rs.len();
-                                p.runs.splice(i..=i, rs);
-                                i += k.max(1);
+                                let lines: Vec<Vec<lore_canvas::Run>> = word_lines(&cx.vars.resolve(&w), ty.size, room)
+                                    .iter()
+                                    .map(|line| {
+                                        let (rs, m) = text::runs(line, &ty, cx.vars, cx.math);
+                                        math |= m;
+                                        rs
+                                    })
+                                    .collect();
+                                let (np, nr) = splice_lines(&mut tb.paras, pi, i, lines);
+                                // go on after the words put in (the run they replaced is gone)
+                                pi = np;
+                                i = nr;
                             }
                         }
                     }
+                    pi += 1;
                 }
             }
             sp.equation |= math;
         }
         Kind::Group(g) => {
+            let k = group_scale(o.frame.w, g.ch.w, sx);
             for c in &mut g.children {
-                replace_fixed(c, texts, named, seen, &path, cx);
+                replace_fixed(c, k, texts, named, seen, &path, cx);
             }
         }
         _ => {}
@@ -1689,6 +1881,8 @@ fn replace_fixed(o: &mut Object, texts: &[String], named: &[(String, String)], s
 struct Own {
     /// The text colour the block names, as a hex.
     text: Option<String>,
+    /// `fill=` / `line=` / `text=` words that are no colour.
+    warn: Vec<String>,
 }
 
 /// A colour param as written (name or hex) -> (fill, line) of its name, or itself.
@@ -1703,6 +1897,18 @@ fn own_pair(n: &Node, k: &str, theme: &Theme) -> Option<(String, String)> {
 /// drawings (`role:fill` …) then read the block's own colour first. A multi-colour kind
 /// (a layer legend, `classes=`) keeps its own per-class colours.
 fn own_colours(n: &mut Node, theme: &Theme) -> Own {
+    // a word that is no colour (a misspelt name) is said, not silently dropped
+    let mut warn = Vec::new();
+    for k in ["fill", "line", "text"] {
+        if let Some(v) = n.str(k).map(str::trim)
+            && !v.is_empty()
+            && v != "none"
+            && !matches!(v, "true" | "false" | "yes" | "no" | "on" | "off")
+            && theme.tint(v).is_none()
+        {
+            warn.push(format!("{}: 不認得的顏色 {}", n.id, v));
+        }
+    }
     let by_name = |v: Option<&str>| v.is_some_and(|v| {
         let h = v.trim().trim_start_matches('#');
         !(h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit())) && h != "none"
@@ -1719,15 +1925,41 @@ fn own_colours(n: &mut Node, theme: &Theme) -> Own {
         n.params.insert("line".into(), line.into());
     }
     let text = own_pair(n, "text", theme).map(|(_, c)| c).filter(|c| c != "none");
-    Own { text }
+    Own { text, warn }
 }
 
-/// Draw a node at scale `cx.k`.
+/// Every node parameter some kind reads (the generators here and in `art`, `finish`, `chart`,
+/// the layout's `col` / `lane`, a saved drawing's `texts` / `text.<name>`), for
+/// `notation::check_graph`'s `unknown_param`. Names starting with `_` are the crate's own.
+/// A new parameter read anywhere belongs here, else it is reported as unknown.
+pub const PARAMS: &[&str] = &[
+    // size, colour, finish (every kind)
+    "w", "h", "size", "grow", "fill", "line", "text", "line_w", "radius", "finish", "alpha", "bold", "small",
+    // layout
+    "col", "lane",
+    // box, op, loss, image, icon, chart
+    "shape", "vertical", "look", "src", "srcs", "icon", "chart", "axes", "mu", "sigma", "values", "ellipse",
+    // stacks, bars, grids
+    "n", "offset", "cell", "dir", "rows", "cols", "highlight",
+    // networks
+    "layers", "colors", "through", "filled", "bar_w", "bar_h", "gap", "taper", "solid", "dims", "classes", "fills", "labels", "depth", "latent", "names", "sizes", "inputs", "hidden",
+    // brace
+    "thick", "ends", "heads",
+    // saved drawings
+    "texts",
+];
+
+/// Whether some kind reads node parameter `k` ([`PARAMS`], `text.<name>`, the crate's `_…`).
+pub fn known_param(k: &str) -> bool {
+    k.starts_with('_') || k.starts_with("text.") || PARAMS.contains(&k)
+}
+
 /// A block that may be drawn larger than its natural size to fill its panel: pictures, charts,
 /// icons, networks and saved drawings, not the blocks whose size is their words (box, op, loss,
-/// label, brace), and not a block whose size was given.
+/// label, brace), and not a block given an exact `w=` / `h=`. A `size=` is the smallest it is
+/// drawn, so such a block still grows.
 pub fn growable(n: &Node) -> bool {
-    !matches!(n.module.as_str(), "box" | "op" | "loss" | "label" | "brace") && n.num("w").is_none() && n.num("h").is_none() && n.num("size").is_none()
+    !matches!(n.module.as_str(), "box" | "op" | "loss" | "label" | "brace") && n.num("w").is_none() && n.num("h").is_none()
 }
 
 /// Scale an object's frame (and a group's children) by `g` about the origin, leaving line
@@ -1824,7 +2056,13 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         Some(_) if !crate::spec::MODULES.iter().any(|(m, _)| *m == n.module) => cx.lib.get(&n.module, ""),
         _ => None,
     };
-    let mut warn: Vec<String> = Vec::new();
+    let mut warn: Vec<String> = own.warn;
+    // `size` of a picture-like block (a growable kind, a saved drawing) is a length in pt; a small
+    // number was meant as a factor
+    let picture_like = saved.is_some() || !matches!(n.module.as_str(), "box" | "op" | "loss" | "label" | "brace");
+    if picture_like && n.num("size").is_some_and(|s| s < 8.0) {
+        warn.push(format!("{}: size 是點數（pt），不是倍數", n.id));
+    }
     let core = match (saved, n.module.as_str()) {
         (Some(t), _) => gen_template(n, t, cx, &mut warn),
         (None, "box") => gen_box(n, cx),
@@ -1860,6 +2098,9 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         core.h *= gr;
         for o in &mut core.objs {
             grow_obj(o, gr);
+        }
+        if let Some((x, y, w, h)) = core.art {
+            core.art = Some((x * gr, y * gr, w * gr, h * gr));
         }
     }
     // text around the body: the label (above or below) and, below, the variable and caption

@@ -37,7 +37,8 @@ pub struct VarDecision {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Finding {
-    /// unknown_ref | use_registered | loss_style | hardcoded_reference | a lore-notation code
+    /// unknown_ref | use_registered | loss_style | hardcoded_reference | finish_word |
+    /// unknown_param | a lore-notation code
     pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -193,6 +194,10 @@ pub fn check_graph(g: &mut Graph, notation: &Notation) -> NotationReport {
             && let Err(e) = crate::finish::Finish::of(&Node::default(), &crate::theme::Theme::classic_bw()).apply(w)
         {
             add("finish_word", e, Some(&n.id));
+        }
+        // a parameter no kind reads (a misspelling, a word from another tool) changes nothing
+        for k in n.params.keys().filter(|k| !crate::modules::known_param(k)) {
+            add("unknown_param", format!("{}: no kind of block reads the parameter {k:?}", n.id), Some(&n.id));
         }
         if n.module == "loss" {
             let math = text::math_of(&vars.resolve(&n.label));
