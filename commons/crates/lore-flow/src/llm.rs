@@ -528,7 +528,8 @@ pub fn text_schema() -> Value {
 }
 
 const MAX_TEXT_EXAMPLE: usize = 4500;
-const MAX_LIBRARY_LINES: usize = 120;
+/// Room for the list of saved blocks in the drafting prompt (about 400 lines of 110 characters).
+const MAX_LIBRARY_CHARS: usize = 48_000;
 
 /// The language, taught once. Compact and exact: every sentence is one the parser reads.
 const LANGUAGE_GUIDE: &str = r##"You draw a figure by WRITING ITS TEXT in a small figure language. A program checks the text, lays it out and draws it. Reply with one JSON object {"dsl": "<the figure text>", "vars_new": [{"id","latex","meaning"}]}. Inside the JSON string a newline is \n, a quote is \" and every LaTeX backslash is doubled (\\mathcal).
@@ -561,7 +562,7 @@ end
 - A panel is a top-level area. Several panels: `arrange a b / c` (rows of panel ids: a and b side by side, c under them).
 - Panel options: none (no frame), bare (nothing drawn), tint=<colour> (only when the description gives the area a colour), title=top-left|top|above|below|left|none. The style draws every panel's frame and corners.
     panel b "Stage 2" tint=blue none title=above     # a pale blue area without a black frame
-- Follow the description's words for the arrangement: 上／下 is rows (`arrange a / b`), 左／右 or 由左到右 is one row (`arrange a b`).
+- Follow the description's words for the arrangement: 上／下 is rows (`arrange a / b`), 左／右 or 由左到右 is one row (`arrange a b`). Areas listed with no arrangement stated (a, b, c) are stacked as rows: `arrange a / b / c`.
 - A line between panels: `a -> b : cross`.
 
 ### Blocks
@@ -575,7 +576,7 @@ end
     x: image "$x$" look=photo col=0 lane=1
     f: box "Model" col=1 lane=1
     y: label "Output" col=2 lane=1
-- Words: `$...$` is LaTeX; `@id` is a registered symbol. A label may be empty ("").
+- Words: `$...$` is LaTeX; `@id` is a registered symbol. A label may be empty (""). A line break inside a label is two backslashes (written `\\\\` inside the JSON string).
 
 ### Regions (frames round blocks; they nest)
   region g "Group title" tint=orange title=above
@@ -594,7 +595,8 @@ end
 - kind: data (default; the one main line from input to output), side (any other data line: a branch, an input joining in), supervision, feedback, loss-out, compare, optional, shared, skip, concat, down, up, cross. Dashed by default: supervision, feedback, optional, shared, cross. After the colon the order is: kind, "label", color=, curve, from=, to=.
 - color= only when the description says paths have different colours: one colour name per path, the same along the whole path. Never write width=: the line's kind sets its weight. curve only for a line that arcs over other blocks (a skip) or between parallel rows; an ordinary join is never curved.
 - from=top|bottom|left|right and to=… choose the side a line leaves or enters a block; leave them out unless the description says where the line goes in.
-- Two paths that join meet in an `op` block (label + for add, x for multiply, . element-wise, C concatenation).
+- An `op` block (label + for add, x for multiply, . element-wise, C concatenation) only where the description names that operation. Two lines that simply arrive at one block each go to that block; a line that splits off another is the branch form `a>b -> c`.
+- A line the description calls dashed (虛線) is a dashed kind by its meaning: supervision, feedback, optional, shared or cross. Things joined by a brace with no arrow (several outputs gathered into one) are a `brace` block beside them, with no lines.
 
 ### Alignment
   align row x enc bb              same height (centres on one row)
@@ -605,7 +607,7 @@ Use pins inside a panel; use align across panels.
 Names: red orange yellow green teal blue purple pink brown grey black, or RRGGBB (six hex digits; digits only are read as a number, so use a name or a hex with a letter). They go on blocks (fill= line= text=), lines (color=), regions and panels (tint=). A name gives a pale fill and a strong outline. There is no beige: write F5E6C8.
 
 ### Looks and picture blocks
-- Pictures from a paper are never drawn: `image "" look=photo|mask|heatmap|plot`; `image-stack n=3`.
+- A photo, mask or heat map from a paper is never drawn: `image "" look=photo|mask|heatmap|plot`; `image-stack n=3`. Anything else the description names that a saved block draws uses that block.
 - A small chart: `c: chart "Name" chart=bell|bells|membership|bars|scatter|surface n=3 labels=[A,B,C] values=[1,2,3]`.
 - An icon: `d: icon "Doctor" icon=healthicons:doctor-outline` (icon=<set:name>; only ids you are sure of).
 - A network as bars: `lb: layer-bars "" layers=[Conv,MBConv1,FC] colors=[pink,purple] through=orange` (colors= one outline colour per bar, the last repeats; filled=true also fills them pale; through=<colour>|true draws the dashed line "data flows through these layers"). Other forms: `unet depth=3`, `cuboid-seq shape=down n=4`, `vector-bar n=4 dir=v`, `matrix rows=3 cols=3`.
@@ -625,7 +627,7 @@ fn text_system(p: &FlowPrompt, shown: &Shown) -> String {
     for (kind, d) in MODULES.iter() {
         s.push_str(&format!("  - {kind}: {d}\n"));
     }
-    s.push_str(&library_section(p.library));
+    s.push_str(&library_section(p.library, p.description));
     s.push_str(&notes_section(shown));
     match p.notation.filter(|n| !n.entries.is_empty()) {
         Some(n) => {
@@ -653,31 +655,59 @@ fn text_system(p: &FlowPrompt, shown: &Shown) -> String {
     s
 }
 
-/// Every saved block kind and style of the library, one line each, components first.
-fn library_section(lib: &Library) -> String {
-    let mut rows: Vec<(bool, String, String, String)> = Vec::new();
+/// Every saved block of the library, one line each: the modules first (the figures are built
+/// from them), then the components; within a level, the blocks whose name or description shares
+/// words with the description come first. Nothing is cut off by count: a block the model is not
+/// shown is a block it draws as a plain box.
+fn library_section(lib: &Library, description: &str) -> String {
+    let words: Vec<String> = description
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 3)
+        .map(|w| w.to_ascii_lowercase())
+        .collect();
+    let hits = |kind: &str, style: &str, d: &str| -> usize {
+        let hay = format!("{kind} {style} {d}").to_ascii_lowercase();
+        let mut seen: Vec<&str> = Vec::new();
+        for w in &words {
+            if !seen.contains(&w.as_str()) && hay.contains(w.as_str()) {
+                seen.push(w);
+            }
+        }
+        seen.len()
+    };
+    // (is a module, shared words, kind, style, description)
+    let mut rows: Vec<(bool, usize, String, String, String)> = Vec::new();
     for (kind, styles) in &lib.templates {
         if MODULES.iter().any(|(m, _)| m == kind) {
             continue;
         }
         for (style, t) in styles {
-            rows.push((t.level == "component", kind.clone(), style.clone(), t.description.clone()));
+            rows.push((t.level != "component", hits(kind, style, &t.description), kind.clone(), style.clone(), t.description.clone()));
         }
     }
     if rows.is_empty() {
         return String::new();
     }
-    rows.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-    let total = rows.len();
-    let mut s = String::from("\n## Saved blocks of the library (kind, style, level: what it is). Used like any kind, with style= and texts=[...]\n");
-    for (comp, kind, style, d) in rows.into_iter().take(MAX_LIBRARY_LINES) {
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
+    let mut s = String::from(
+        "\n## Saved blocks of the library (kind, style: what it is). Used like any kind, with style= and texts=[...]. When the description names a thing one of these draws (a U-Net, an augmentation, a classifier head, a rule card, a video …) use the block, never a plain box.\n",
+    );
+    let mut budget = MAX_LIBRARY_CHARS;
+    let mut left = 0usize;
+    for (module, _, kind, style, d) in rows {
         let st = if style == crate::modules::DEFAULT_STYLE { String::new() } else { format!(" style={style}") };
-        let level = if comp { " (component)" } else { "" };
-        let d = if d.trim().is_empty() { "a saved drawing".to_string() } else { cut(d.trim(), 160) };
-        s.push_str(&format!("  - {kind}{st}{level}: {d}\n"));
+        let level = if module { "" } else { " (component)" };
+        let d = if d.trim().is_empty() { "a saved drawing".to_string() } else { cut(d.trim(), 110) };
+        let line = format!("  - {kind}{st}{level}: {d}\n");
+        if line.len() > budget {
+            left += 1;
+            continue;
+        }
+        budget -= line.len();
+        s.push_str(&line);
     }
-    if total > MAX_LIBRARY_LINES {
-        s.push_str(&format!("  - … and {} more\n", total - MAX_LIBRARY_LINES));
+    if left > 0 {
+        s.push_str(&format!("  - … and {left} more\n"));
     }
     s
 }
@@ -700,12 +730,27 @@ fn reply_text(v: &Value) -> Result<String, String> {
     let cs: Vec<char> = dsl.chars().collect();
     let mut text = String::new();
     let mut i = 0;
+    // inside `$…$` a doubled backslash before a letter is LaTeX escaped once too often: one.
+    // Outside maths a doubled backslash is a line break and stays; a written-out `\n` there (a
+    // newline the model spelt instead of breaking the line) becomes that line break too.
+    let mut math = false;
     while i < cs.len() {
-        if cs[i] == '\\' && cs.get(i + 1) == Some(&'\\') && cs.get(i + 2).is_some_and(|c| c.is_ascii_alphabetic()) {
+        let c = cs[i];
+        if c == '$' {
+            math = !math;
+        } else if c == '\n' {
+            math = false;
+        }
+        if c == '\\' && cs.get(i + 1) == Some(&'\\') && cs.get(i + 2).is_some_and(|c| c.is_ascii_alphabetic()) && math {
             i += 1;
             continue;
         }
-        text.push(cs[i]);
+        if c == '\\' && !math && cs.get(i + 1) == Some(&'n') && (i == 0 || cs[i - 1] != '\\') {
+            text.push_str("\\\\");
+            i += 2;
+            continue;
+        }
+        text.push(c);
         i += 1;
     }
     let mut text = text.trim_end().to_string();
@@ -1197,15 +1242,23 @@ mod tests {
         let s = &req.system;
         assert!(s.contains("tiny-conv (component): one convolution"), "{s}");
         assert!(s.contains("gadget style=plain: a block") && s.contains("gadget style=fancy: a block"), "{s}");
-        // components come first
-        assert!(s.find("tiny-conv").unwrap() < s.find("gadget style=").unwrap());
-        // the list is capped
+        // modules come first: the figures are built from them
+        assert!(s.find("gadget style=").unwrap() < s.find("tiny-conv").unwrap());
+        // every block is listed: 150 are not cut to the first 120 (a block the model is not shown
+        // is one it draws as a plain box), and a block the description names leads its level
         let mut big = Library::default();
         for i in 0..150 {
             big.add_json(&format!(r#"{{ "kind": "blk{i:03}", "description": "d", "w": 10, "h": 10, "objects": [] }}"#)).unwrap();
         }
-        let (req, _) = text_request_with(&prompt(&big, DESC, &[]), &Knowledge::default());
-        assert!(req.system.contains("blk119") && !req.system.contains("blk120") && req.system.contains("and 30 more"));
+        big.add_json(r#"{ "kind": "zz-ladder", "description": "a U-Net drawn as a ladder", "w": 10, "h": 10, "objects": [] }"#).unwrap();
+        let (req, _) = text_request_with(&prompt(&big, "The model is a U-Net with skip lines.", &[]), &Knowledge::default());
+        let s = &req.system;
+        assert!(s.contains("blk000") && s.contains("blk149") && !s.contains("more\n"), "all listed");
+        assert!(s.find("zz-ladder").unwrap() < s.find("blk000").unwrap(), "the named block first");
+        // a reply's label line break survives, a spelt-out newline becomes one, LaTeX in maths is repaired
+        let v = json!({ "dsl": "fig f\na: box \"One\\\\Two\"\nb: box \"Up\\nDown\"\nc: label \"$\\\\mathcal L$\"\n", "vars_new": [] });
+        let t = reply_text(&v).unwrap();
+        assert!(t.contains("\"One\\\\Two\"") && t.contains("\"Up\\\\Down\"") && t.contains("$\\mathcal L$"), "{t}");
     }
 
     #[test]
