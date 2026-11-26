@@ -2332,7 +2332,10 @@ fn soft_frames_hide_a_line_that_passes_beneath() {
     let lib = Library::default();
     let opt = layout::LayoutOptions { frame: Rect::new(0.0, 0.0, 600.0, 300.0), ..Default::default() };
     let lay = layout::layout(&g, &t, &vars, &lib, &opt);
-    let routes = route::route(&g, &lay);
+    let mut routes = route::route(&g, &lay);
+    // the router goes round the module now; a line that cannot is drawn straight through it
+    let (pa, pb) = (&lay.nodes[0].rect, &lay.nodes[2].rect);
+    routes[0].points = vec![(pa.right(), pa.cy()), (pb.x, pa.cy())];
     let b = built_with(&t, &g, &lay, &routes);
     let pos = |name: &str| b.objects.iter().position(|o| o.name == name).unwrap_or_else(|| panic!("{name}"));
     let region = &b.objects[pos("flow:f/region:grp")];
@@ -2345,4 +2348,14 @@ fn soft_frames_hide_a_line_that_passes_beneath() {
     let pos = |name: &str| b.objects.iter().position(|o| o.name == name).unwrap();
     assert!(pos("flow:f/edge:a-b") < pos("flow:f/region:grp"));
     assert_eq!(b.objects[pos("flow:f/region:grp")].kind.sp().unwrap().fill, lore_canvas::Paint::None);
+}
+
+#[test]
+fn no_line_is_drawn_on_a_frame() {
+    // two tinted rows of blocks; a line from the first block of the top row to the last of the
+    // bottom row has to pass between the two frames
+    let src = "fig f\npanel p \"P\"\n  a: box \"A\" col=0 lane=0\n  b: box \"B\" col=1 lane=0\n  c: box \"C\" col=2 lane=0\n  d: box \"D\" col=0 lane=1\n  e: box \"E\" col=1 lane=1\n  h: box \"H\" col=2 lane=1\n  region top \"\" tint=pink in=p\n    a b c\n  end\n  region bot \"\" tint=blue in=p\n    d e h\n  end\n  a -> b -> c : data\n  d -> e -> h : data\n  a -> h : supervision\n  c -> d : side\n";
+    let (g, lay, routes) = laid(src);
+    assert_eq!(g.nodes.len(), 6);
+    assert_eq!(route::hugging(&lay, &routes), 0, "{:?}", routes.iter().map(|r| r.points.clone()).collect::<Vec<_>>());
 }

@@ -834,6 +834,46 @@ fn turned(lay: &Layout, a: usize, b: usize, r: &Route, turns: &[f64]) -> Option<
     Some(simplify(pts))
 }
 
+/// The frames a line should not run along: panels (not bare) and regions.
+fn frame_rects(lay: &Layout) -> Vec<Rect> {
+    lay.panels.iter().filter(|p| !p.bare).map(|p| p.rect).chain(lay.regions.iter().map(|r| r.rect)).collect()
+}
+
+/// How many stretches of the lines run along a frame's border (within 4.5 pt at natural size,
+/// for more than 6 pt), or turn on it: lines drawn on a frame. 0 is the aim.
+pub fn hugging(lay: &Layout, routes: &[Route]) -> usize {
+    let k = lay.scale;
+    let near = 4.5 * k;
+    let frames = frame_rects(lay);
+    let mut n = 0;
+    for r in routes {
+        for w in r.points.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let len = (a.0 - b.0).abs() + (a.1 - b.1).abs();
+            if len < 6.0 * k {
+                continue;
+            }
+            let horizontal = (a.1 - b.1).abs() < 1e-6;
+            let vertical = (a.0 - b.0).abs() < 1e-6;
+            let along = frames.iter().any(|f| {
+                if horizontal {
+                    let over = a.0.max(b.0).min(f.right()) - a.0.min(b.0).max(f.x);
+                    over > 6.0 * k && ((a.1 - f.y).abs() < near || (a.1 - f.bottom()).abs() < near)
+                } else if vertical {
+                    let over = a.1.max(b.1).min(f.bottom()) - a.1.min(b.1).max(f.y);
+                    over > 6.0 * k && ((a.0 - f.x).abs() < near || (a.0 - f.right()).abs() < near)
+                } else {
+                    false
+                }
+            });
+            if along {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 /// The routing grid of a layout: its tracks, the walls no line may pass through and the cost of
 /// crossing a panel border. `extra_x` / `extra_y` are tracks to add (always kept).
 fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra_y: &[f64]) -> (Grid, Vec<Rect>) {
@@ -877,9 +917,15 @@ fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra
             }
         }
         if !p.bare {
-            lx.extend([(p.rect.x + 5.0 * k, 1.0, false), (p.rect.right() - 5.0 * k, 1.0, false)]);
-            ly.extend([(p.rect.y + 5.0 * k, 1.0, false), (p.rect.bottom() - 5.0 * k, 1.0, false)]);
+            lx.extend([(p.rect.x + m, 1.0, false), (p.rect.right() - m, 1.0, false)]);
+            ly.extend([(p.rect.y + m, 1.0, false), (p.rect.bottom() - m, 1.0, false)]);
         }
+    }
+    // a lane on each side of a region's frame, clear of it
+    for rb in &lay.regions {
+        let r = &rb.rect;
+        lx.extend([(r.x - m, HUG, false), (r.right() + m, HUG, false)]);
+        ly.extend([(r.y - m, HUG, false), (r.bottom() + m, HUG, false)]);
     }
     // room to go around the whole figure
     lx.extend([(lay.bounds.x - 2.0 * m, 1.0, true), (lay.bounds.right() + 2.0 * m, 1.0, true)]);
@@ -955,10 +1001,37 @@ fn make_grid(g: &Graph, lay: &Layout, fixed: &[[End; 2]], extra_x: &[f64], extra
             }
         }
     }
-    // crossing a panel border costs, so long lines keep to the gaps
+    // crossing a frame's border costs (a panel's or a region's), so long lines keep to the gaps
+    // and stay out of modules they do not belong to; running along a border costs too, so a
+    // line is never drawn on a frame
     let border = 14.0 * k;
-    for p in lay.panels.iter().filter(|p| !p.bare) {
-        let r = &p.rect;
+    let near = 4.5 * k;
+    for r in frame_rects(lay) {
+        for (j, &y) in grid.ys.iter().enumerate() {
+            if (y - r.y).abs() < near || (y - r.bottom()).abs() < near {
+                for i in 0..nx - 1 {
+                    let (x0, x1) = (grid.xs[i].max(r.x), grid.xs[i + 1].min(r.right()));
+                    if x1 > x0 {
+                        let idx = grid.hi(i, j);
+                        grid.h_cost[idx] += 2.0 * (x1 - x0);
+                    }
+                }
+            }
+        }
+        for (i, &x) in grid.xs.iter().enumerate() {
+            if (x - r.x).abs() < near || (x - r.right()).abs() < near {
+                for j in 0..ny - 1 {
+                    let (y0, y1) = (grid.ys[j].max(r.y), grid.ys[j + 1].min(r.bottom()));
+                    if y1 > y0 {
+                        let idx = grid.vi(i, j);
+                        grid.v_cost[idx] += 2.0 * (y1 - y0);
+                    }
+                }
+            }
+        }
+    }
+    let regions: Vec<Rect> = lay.regions.iter().map(|r| r.rect).collect();
+    for r in lay.panels.iter().filter(|p| !p.bare).map(|p| &p.rect).chain(regions.iter()) {
         for j in 0..ny {
             if grid.ys[j] > r.y && grid.ys[j] < r.bottom() {
                 for i in 0..nx - 1 {
