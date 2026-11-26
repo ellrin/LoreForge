@@ -2403,3 +2403,33 @@ fn a_blocks_own_wide_words_widen_the_room_it_needs() {
     let b = make_body("fig f\nn: capped \"\" style=x\n", &lib);
     assert!(b.reserve_w > b.w + 60.0, "reserve {} for w {}", b.reserve_w, b.w);
 }
+
+#[test]
+fn a_fork_up_and_down_turns_in_one_column() {
+    // one block feeding a block above-right and a block below-right
+    let src = "fig f\npanel p \"P\"\n  q: box \"QA model\" col=0 lane=1\n  b: box \"B\" col=1 lane=0\n  g: box \"G\" col=1 lane=2\n  q -> b : side\n  q -> g : data\n";
+    let (g, _lay, routes) = laid(src);
+    let turn_x = |id: &str| {
+        let r = routes.iter().find(|r| g.edges[r.edge].to == id).unwrap();
+        let v: Vec<f64> = r.points.windows(2).filter(|w| (w[0].0 - w[1].0).abs() < 1e-6 && (w[0].1 - w[1].1).abs() > 1.0).map(|w| w[0].0).collect();
+        (v, r.points.clone())
+    };
+    let (up, pu) = turn_x("b");
+    let (down, pd) = turn_x("g");
+    assert_eq!(up.len(), 1, "{pu:?}");
+    assert_eq!(down.len(), 1, "{pd:?}");
+    assert!((up[0] - down[0]).abs() < 0.5, "the two vertical runs line up: {pu:?} {pd:?}");
+    // the same with each target in a titled group of two
+    let src = "fig f\npanel p \"P\"\n  region bq \"Bad quality\" none title=above\n    b: box \"B\" col=2 lane=0\n    b2: box \"B2\" col=3 lane=0\n  end\n  f: box \"F\" col=0 lane=1\n  q: box \"QA model\" col=1 lane=1\n  region gq \"Good quality\" none title=above\n    g: box \"G\" col=2 lane=2\n    g2: box \"G2\" col=3 lane=2\n  end\n  f -> q\n  q -> b : side\n  q -> g : data\n";
+    let (g2, _lay, routes) = laid(src);
+    let turn_x = |id: &str| {
+        let r = routes.iter().find(|r| g2.edges[r.edge].to == id).unwrap();
+        let v: Vec<f64> = r.points.windows(2).filter(|w| (w[0].0 - w[1].0).abs() < 1e-6 && (w[0].1 - w[1].1).abs() > 1.0).map(|w| w[0].0).collect();
+        (v, r.points.clone())
+    };
+    let (up, pu) = turn_x("b");
+    let (down, pd) = turn_x("g");
+    assert!(up.len() == 1 && down.len() == 1 && (up[0] - down[0]).abs() < 0.5, "in groups too: {pu:?} {pd:?}");
+    // and they leave the block at one point (a T), not at two points side by side
+    assert!((pu[0].1 - pd[0].1).abs() < 0.5 && (pu[0].0 - pd[0].0).abs() < 0.5, "one point: {pu:?} {pd:?}");
+}

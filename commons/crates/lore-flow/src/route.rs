@@ -448,6 +448,21 @@ pub fn route_with(g: &Graph, lay: &Layout, ends: &BTreeMap<String, EdgeEnds>) ->
                 continue;
             }
         }
+        // a fork: two lines leaving (or entering) one side towards opposite sides of the block's
+        // middle share the middle point and split at one column, like a T, instead of leaving
+        // at two points that make two separate bends
+        if uses.len() == 2 && taken.is_empty() && uses[0].end == uses[1].end {
+            let o = &lay.nodes[node];
+            let mid = if matches!(side, Side::Top | Side::Bottom) { o.rect.cx() } else { o.port_y };
+            let gap = 2.0 * lay.scale;
+            if (uses[0].key < mid - gap && uses[1].key > mid + gap) || (uses[1].key < mid - gap && uses[0].key > mid + gap) {
+                for u in &uses {
+                    fixed2[u.edge][u.end] = End::At(side, 2);
+                }
+                moved = true;
+                continue;
+            }
+        }
         uses.sort_by(|x, y| x.key.partial_cmp(&y.key).unwrap_or(Ordering::Equal).then((x.edge, x.end).cmp(&(y.edge, y.end))));
         for (u, slot) in uses.iter().zip(spread(uses.len(), &taken)) {
             fixed2[u.edge][u.end] = End::At(side, slot);
