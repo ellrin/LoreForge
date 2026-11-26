@@ -35,6 +35,8 @@ pub struct Finish {
     pub typed: bool,
     /// Corner radius of rectangular parts, a fraction of the short side.
     pub radius: f64,
+    /// The theme's corner scheme for this block, in points (negative = pill); `None` = `radius` as it is.
+    pub corner: Option<f64>,
     /// Line weight in pt at natural size.
     pub lw: f64,
     /// The module's own colours (node, then kind, then role).
@@ -85,6 +87,7 @@ impl Finish {
             alpha: 1.0,
             typed: false,
             radius: theme.node.radius,
+            corner: None,
             lw: theme.node.line_w,
             fill: m.and_then(|m| m.fill.clone()).unwrap_or_else(|| r.fill.clone()),
             line: m.and_then(|m| m.line.clone()).unwrap_or_else(|| r.line.clone()),
@@ -124,8 +127,23 @@ impl Finish {
         }
         if let Some(v) = n.num("radius") {
             f.radius = v;
+        } else if let Some(c) = &theme.corners {
+            f.corner = Some(if n.module == "loss" || n.role_or_default() == "loss" {
+                c.loss
+            } else if matches!(n.role_or_default(), "input" | "data" | "output" | "gt") {
+                c.data
+            } else {
+                c.step
+            });
         }
         f
+    }
+
+    /// Sets `radius` from the theme's corner scheme for a rectangle of this drawn size.
+    pub fn fit(&mut self, w: f64, h: f64, k: f64) {
+        if let Some(pt) = self.corner {
+            self.radius = crate::theme::Corners::fraction(pt, k, w, h);
+        }
     }
 
     /// The module's own colour for parts that must show on paper.

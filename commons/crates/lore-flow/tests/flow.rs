@@ -2125,3 +2125,89 @@ fn figures_without_these_cases_route_as_before() {
         vec![vec![(262.0, 203.0), (301.0, 203.0)], vec![(361.0, 203.0), (400.0, 203.0)], vec![(458.0, 203.0), (419.0, 203.0)], vec![(410.0, 216.0), (410.0, 233.0), (331.0, 233.0), (331.0, 222.0)]]
     );
 }
+
+// ── corner schemes and layered themes ──────────────────────────────────
+
+const GRADED: &str = "id = \"graded\"\npart = \"corners\"\n[corners]\npanel = 14\nregion = 9\ninner = 5\ndata = 0\nstep = 7\nloss = -1\n[node]\nloss = \"box\"\n";
+const HARD: &str = "id = \"hard\"\npart = \"corners\"\n[corners]\n[node]\nloss = \"box\"\n";
+
+fn built_with(theme: &Theme, g: &Graph, lay: &layout::Layout, routes: &[route::Route]) -> build::Built {
+    build::build(g, theme, &Vars::default(), &Library::default(), &NoMath, lay, routes, 2)
+}
+
+fn body_with(theme: &Theme, src: &str) -> Object {
+    let g = dsl::parse(&format!("fig f\n{src}\n")).unwrap();
+    let (vars, lib) = (Vars::default(), Library::default());
+    let cx = lore_flow::modules::Ctx { theme, vars: &vars, math: &NoMath, lib: &lib, k: 1.0, symmetric: false, image_size: &lore_flow::modules::no_images };
+    lore_flow::modules::make(&g.nodes[0], &cx).objs.into_iter().find(|o| o.kind.sp().is_some_and(|s| matches!(s.geom.prst.as_str(), "rect" | "roundRect"))).expect("a rectangle")
+}
+
+fn adj(o: &Object) -> f64 {
+    o.kind.sp().unwrap().geom.adj.get("adj").copied().unwrap_or(0.0)
+}
+
+#[test]
+fn the_builtin_theme_has_no_corner_scheme() {
+    // what classic-bw draws stays what it drew: every part keeps its own radius
+    assert!(Theme::classic_bw().corners.is_none());
+    assert!(Theme::from_toml("id = \"x\"\n").unwrap().corners.is_none());
+}
+
+#[test]
+fn a_corner_scheme_decides_region_corners_by_depth() {
+    let (g, mut lay, routes) = laid("fig f\na: box \"A\"\n");
+    let rect = lay.nodes[0].rect.inflate(20.0);
+    lay.regions.push(rbox("outer", rect, 0));
+    lay.regions.push(rbox("inner", rect, 1));
+    let graded = Theme::from_toml(GRADED).unwrap();
+    let b = built_with(&graded, &g, &lay, &routes);
+    let (o, i) = (&b.objects[index(&b, "flow:f/region:outer")], &b.objects[index(&b, "flow:f/region:inner")]);
+    assert_eq!(o.kind.sp().unwrap().geom.prst, "roundRect", "the scheme rounds a region that did not say round");
+    assert!((adj(o) / adj(i) - 9.0 / 5.0).abs() < 0.01, "outer 9 pt, inner 5 pt on the same rectangle: {} {}", adj(o), adj(i));
+    // the hard scheme wins over the region's own `round`
+    lay.regions[0].round = true;
+    let b = built_with(&Theme::from_toml(HARD).unwrap(), &g, &lay, &routes);
+    assert_eq!(b.objects[index(&b, "flow:f/region:outer")].kind.sp().unwrap().geom.prst, "rect");
+    // without a scheme the word still rounds it
+    let b = built(&g, &lay, &routes);
+    assert_eq!(b.objects[index(&b, "flow:f/region:outer")].kind.sp().unwrap().geom.prst, "roundRect");
+}
+
+#[test]
+fn a_corner_scheme_tells_data_step_and_loss_apart() {
+    let t = Theme::from_toml(GRADED).unwrap();
+    let step = body_with(&t, "a: box \"Normalise\"");
+    let s = step.kind.sp().unwrap();
+    assert_eq!(s.geom.prst, "roundRect");
+    // 7 pt whatever the block's size: the fraction follows the short side
+    let short = step.frame.w.min(step.frame.h) as f64;
+    assert!((adj(&step) / 100_000.0 * short - 7.0 * lore_flow::modules::EMU_PT as f64).abs() < short * 0.01, "{} of {short}", adj(&step));
+    assert_eq!(body_with(&t, "a: box \"x\" role=input").kind.sp().unwrap().geom.prst, "rect", "data is square");
+    assert_eq!(adj(&body_with(&t, "a: loss \"L\"")), 50_000.0, "a loss is a pill");
+    // a block's own radius still wins, and shape=round yields to the scheme
+    assert_eq!(adj(&body_with(&t, "a: box \"A\" radius=0.3")), 30_000.0);
+    let hard = Theme::from_toml(HARD).unwrap();
+    assert_eq!(body_with(&hard, "a: box \"A\" shape=round").kind.sp().unwrap().geom.prst, "rect");
+    assert_eq!(body_with(&hard, "a: loss \"L\"").kind.sp().unwrap().geom.prst, "rect");
+    assert_eq!(body_with(&Theme::classic_bw(), "a: box \"A\" shape=round").kind.sp().unwrap().geom.prst, "roundRect");
+}
+
+#[test]
+fn a_style_is_layers_joined_with_plus() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("themes")).unwrap();
+    let put = |name: &str, text: &str| std::fs::write(dir.path().join("themes").join(name), text).unwrap();
+    put("base.toml", "id = \"base\"\n[edges.data]\ncolor = \"111111\"\nwidth = 2.2\ntail = \"triangle\"\n[colors]\nink = \"111111\"\n");
+    put("pink.toml", "id = \"pink\"\npart = \"palette\"\n[colors]\nink = \"3F3F46\"\n[panel]\nline = \"D9D4E8\"\n");
+    put("graded.toml", GRADED);
+    let cat = lore_flow::figure::Catalogue::load(Some(dir.path()));
+    let t = cat.theme("base+pink+graded");
+    assert_eq!(t.id, "base+pink+graded");
+    assert_eq!((t.colors.ink.as_str(), t.panel.line.as_str()), ("3F3F46", "D9D4E8"), "the palette lies over the structure");
+    assert_eq!(t.edge(EdgeKind::Data).width, 2.2, "the structure's weights stay");
+    assert_eq!(t.corners.unwrap().region, 9.0);
+    assert_eq!(cat.theme("base+hard").corners, None, "an unknown layer gives the built-in theme");
+    assert_eq!(cat.theme("base+hard").id, "classic-bw");
+    // order decides
+    assert_eq!(cat.theme("pink+base").colors.ink, "111111");
+}

@@ -15,7 +15,7 @@ use crate::modules::{self, Ctx, EMU_PT, Library, emu};
 use crate::route::{Route, Side};
 use crate::spec::*;
 use crate::text::{MathSource, Vars};
-use crate::theme::Theme;
+use crate::theme::{Corners, Theme};
 
 #[derive(Debug, Clone)]
 pub struct Built {
@@ -233,7 +233,8 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             // the panel's own options: drawn like a region's frame
             let named = crate::theme::named(&q.tint);
             let fill = named.as_ref().map(|(f, _)| Paint::solid(f)).unwrap_or(Paint::None);
-            let mut o = modules::shape("", if q.round { "roundRect" } else { "rect" }, r.x, r.y, r.w, r.h, fill, None);
+            let round = theme.corners.map(|c| c.panel != 0.0).unwrap_or(q.round);
+            let mut o = modules::shape("", if round { "roundRect" } else { "rect" }, r.x, r.y, r.w, r.h, fill, None);
             let colour = match &named {
                 Some((_, l)) if !is_hex(&q.tint) => l.clone(),
                 _ if line != "none" => line.to_string(),
@@ -251,8 +252,22 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
                     s.dash = dash;
                     sp.line = Some(s);
                 }
-                if q.round {
-                    sp.geom.adj.insert("adj".into(), ((8.0 * k / r.w.min(r.h).max(1.0)).min(0.5) * 100_000.0).round());
+                if round {
+                    sp.geom.adj.insert("adj".into(), Corners::adj(theme.corners.map(|c| c.panel).unwrap_or(8.0), k, r.w, r.h));
+                }
+            }
+            o
+        } else if let Some(c) = theme.corners {
+            // a corner scheme: the panel's radius in points, whatever its size
+            let mut o = modules::shape("", if c.panel != 0.0 { "roundRect" } else { "rect" }, r.x, r.y, r.w, r.h, if fill == "none" { Paint::None } else { Paint::solid(fill) }, None);
+            if let Some(sp) = o.kind.sp_mut() {
+                if line != "none" && theme.panel.line_w > 0.0 {
+                    let mut s = Stroke::new(line, (theme.panel.line_w * k).max(0.5));
+                    s.dash = theme.panel.dash.clone();
+                    sp.line = Some(s);
+                }
+                if c.panel != 0.0 {
+                    sp.geom.adj.insert("adj".into(), Corners::adj(c.panel, k, r.w, r.h));
                 }
             }
             o
@@ -309,7 +324,12 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             Some((f, _)) => Paint::solid(f),
             None => Paint::None,
         };
-        let prst = if rb.round { "roundRect" } else { "rect" };
+        // a corner scheme decides over the region's own `round`
+        let radius = match theme.corners {
+            Some(c) => if rb.depth == 0 { c.region } else { c.inner },
+            None => if rb.round { 8.0 } else { 0.0 },
+        };
+        let prst = if radius != 0.0 { "roundRect" } else { "rect" };
         let mut o = modules::shape("", prst, r.x, r.y, r.w, r.h, fill, None);
         let colour = match &own {
             Some((_, l)) if !is_hex(&rb.tint) => l.clone(),
@@ -327,8 +347,8 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
                 st.dash = dash.into();
                 sp.line = Some(st);
             }
-            if rb.round {
-                sp.geom.adj.insert("adj".into(), ((8.0 * k / r.w.min(r.h).max(1.0)).min(0.5) * 100_000.0).round());
+            if radius != 0.0 {
+                sp.geom.adj.insert("adj".into(), Corners::adj(radius, k, r.w, r.h));
             }
         }
         o.id = id;

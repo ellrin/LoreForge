@@ -106,6 +106,18 @@ TOML over the built-in `classic-bw` (`themes/classic-bw.toml`): fonts (`family`,
 shading, spacing. Any 6-digit colour is allowed. `private-example/SlideComposer/flow/themes/`
 also has `soft-colour.toml` (SegNet colours: blue conv, green pooling, red upsampling).
 
+A style can be layers: a structure (weights, dashes), a palette, a corner scheme, each its own
+file (`part = "palette"` / `"corners"` marks a layer). `Catalogue::theme("lore+macaron+graded")`
+lays the named files over one another in that order (`Theme::from_layers`); an unknown layer
+gives the built-in theme.
+
+`[corners]` is a corner scheme: one radius per level in points (`panel`, `region`, `inner` = a
+region in a region, `data` = blocks of role input/data/output/gt, `step` = other rectangles,
+`loss`; `0` = square, negative = pill). With one, the theme decides the corners of panel
+frames, region frames, boxes and losses, over the figure's own `round` words; a block's own
+`radius=` still wins. Without one nothing changes. Saved library blocks keep the corners
+they were drawn with.
+
 ## Variables
 
 Labels refer to the notation registry by id (`@id`, `var=`); registered macros are expanded

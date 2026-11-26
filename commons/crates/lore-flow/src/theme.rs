@@ -29,6 +29,14 @@ pub struct Theme {
     pub layers: BTreeMap<String, LayerStyle>,
     pub shade: Shade,
     pub space: Space,
+    /// Corner radii by level, in points. Absent = every part keeps its own radius
+    /// (`panel.radius`, `node.radius`, a region's `round`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corners: Option<Corners>,
+    /// What a theme file is when it is one layer of a style: `""` (a whole theme),
+    /// `"palette"` or `"corners"`. Layers are joined with `+` ([`crate::figure::Catalogue::theme`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub part: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -97,6 +105,40 @@ pub struct Colors {
     pub image: String,
     pub tensor: String,
     pub cycle: Vec<String>,
+}
+
+/// A corner scheme: one radius per level, in points at natural size. `0` = square,
+/// a negative value = a pill (half the short side). When a theme has one it decides
+/// the corners of panel frames, region frames and rectangular blocks, over the figure's
+/// own `round` words (a block's own `radius=` still wins).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Corners {
+    /// A panel (a, b, c).
+    pub panel: f64,
+    /// A region directly in a panel.
+    pub region: f64,
+    /// A region inside a region.
+    pub inner: f64,
+    /// A block that is data (role input, data, output, gt).
+    pub data: f64,
+    /// A block that is a step (every other rectangle).
+    pub step: f64,
+    /// A loss or metric.
+    pub loss: f64,
+}
+
+impl Corners {
+    /// The `adj` value of a `roundRect` of this size for a radius in points (`k` = scale).
+    pub fn adj(pt: f64, k: f64, w: f64, h: f64) -> f64 {
+        let short = w.min(h).max(1.0);
+        let f = if pt < 0.0 { 0.5 } else { (pt * k / short).min(0.5) };
+        (f * 100_000.0).round()
+    }
+    /// The radius as a fraction of the short side.
+    pub fn fraction(pt: f64, k: f64, w: f64, h: f64) -> f64 {
+        Corners::adj(pt, k, w, h) / 100_000.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -199,6 +241,19 @@ impl Theme {
         let mut base: toml::Value = toml::from_str(CLASSIC_BW).expect("built-in theme parses");
         let over: toml::Value = toml::from_str(text).map_err(|e| format!("theme: {e}"))?;
         merge(&mut base, over);
+        let t: Theme = base.try_into().map_err(|e| format!("theme: {e}"))?;
+        t.check()?;
+        Ok(t)
+    }
+
+    /// Several theme files laid over `classic-bw` in order (a structure, a palette, a corner
+    /// scheme): a later file wins where both say something.
+    pub fn from_layers(texts: &[&str]) -> Result<Theme, String> {
+        let mut base: toml::Value = toml::from_str(CLASSIC_BW).expect("built-in theme parses");
+        for text in texts {
+            let over: toml::Value = toml::from_str(text).map_err(|e| format!("theme: {e}"))?;
+            merge(&mut base, over);
+        }
         let t: Theme = base.try_into().map_err(|e| format!("theme: {e}"))?;
         t.check()?;
         Ok(t)

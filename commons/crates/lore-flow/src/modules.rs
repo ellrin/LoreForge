@@ -581,8 +581,10 @@ fn gen_box(n: &Node, cx: &Ctx) -> Core {
     let named = style_name(n, cx.theme);
     let kind = n.str("shape").unwrap_or(if named.is_empty() { "rect" } else { named.as_str() });
     // round and pill are corner radii (a finish) of the rectangle
+    f.fit(w, h, cx.k);
     match kind {
-        "round" if f.radius <= 0.0 => f.radius = 0.18,
+        // with a corner scheme the scheme decides how round a rectangle is
+        "round" if f.radius <= 0.0 && f.corner.is_none() => f.radius = 0.18,
         "pill" => f.radius = 0.5,
         _ => {}
     }
@@ -651,6 +653,7 @@ fn gen_loss(n: &Node, cx: &Ctx) -> Core {
     }
     let pad = if look == "plain" { cx.s(6.0) } else { cx.s(16.0) };
     let (mut w, mut h) = (tw + pad, lines as f64 * ty.size * 1.25 + if look == "plain" { cx.s(4.0) } else { cx.s(10.0) });
+    f.fit(w, h, cx.k);
     let (fill, line) = f.part(&f.fill, cx.k);
     let mut o = match look.as_str() {
         "box" => {

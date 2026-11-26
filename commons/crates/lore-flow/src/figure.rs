@@ -242,6 +242,8 @@ impl FlowLayout {
 pub struct Catalogue {
     /// (id, name, theme).
     pub themes: Vec<(String, String, Theme)>,
+    /// The text of each theme file read from a folder, by id (the layers of a `a+b+c` theme).
+    pub theme_texts: Vec<(String, String)>,
     pub layouts: Vec<FlowLayout>,
     pub library: Library,
     /// The timeline styles: the neutral ones, then the author's (a private id replaces a neutral one).
@@ -264,7 +266,7 @@ impl Catalogue {
     pub fn builtin() -> Catalogue {
         let t = Theme::classic_bw();
         let layouts: Vec<FlowLayout> = serde_json::from_str(LAYOUTS).expect("bundled layouts.json parses");
-        Catalogue { themes: vec![(t.id.clone(), t.name.clone(), t)], layouts, library: Library::default(), timelines: crate::timeline::style::builtin(), timeline_errors: vec![], timeline_colors: crate::timeline::lore_colors() }
+        Catalogue { themes: vec![(t.id.clone(), t.name.clone(), t)], theme_texts: vec![], layouts, library: Library::default(), timelines: crate::timeline::style::builtin(), timeline_errors: vec![], timeline_colors: crate::timeline::lore_colors() }
     }
 
     /// The public ones plus the author's (`dir` = `private/shared/flow`):
@@ -314,6 +316,8 @@ impl Catalogue {
         for f in files(&dir.join("themes"), "toml") {
             let Ok(text) = std::fs::read_to_string(&f) else { continue };
             if let Ok(t) = Theme::from_toml(&text) {
+                c.theme_texts.retain(|x| x.0 != t.id);
+                c.theme_texts.push((t.id.clone(), text.clone()));
                 c.themes.retain(|x| x.0 != t.id);
                 c.themes.push((t.id.clone(), if t.name.is_empty() { t.id.clone() } else { t.name.clone() }, t));
             }
@@ -328,7 +332,21 @@ impl Catalogue {
     }
 
     pub fn theme(&self, id: &str) -> Theme {
-        self.themes.iter().find(|t| t.0 == id).map(|t| t.2.clone()).unwrap_or_else(Theme::classic_bw)
+        if let Some(t) = self.themes.iter().find(|t| t.0 == id) {
+            return t.2.clone();
+        }
+        // `structure+palette+corners`: the named files laid over one another in that order
+        if id.contains('+') {
+            let texts: Vec<&str> = id.split('+').filter_map(|part| self.theme_texts.iter().find(|t| t.0 == part).map(|t| t.1.as_str())).collect();
+            if texts.len() == id.split('+').count()
+                && let Ok(mut t) = Theme::from_layers(&texts)
+            {
+                t.id = id.to_string();
+                t.part.clear();
+                return t;
+            }
+        }
+        Theme::classic_bw()
     }
 
     pub fn layout(&self, id: &str) -> Option<&FlowLayout> {
