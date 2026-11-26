@@ -8,6 +8,8 @@
 //! | GET | /api/hub/make/{id} | `{id, title, source, image, spec, made}`: what the editor starts from (409: not a reference) |
 //! | POST | /api/hub/make/{id} | `{spec, title?}` → `{figure, reference}`; the spec is drawn once first (422 when it cannot be) |
 //! | POST | /api/hub/make/{id}/draft | `{spec, engine}`: a first draft from the description (and the picture); stored nowhere |
+//! | GET | /api/hub/make/{id}/pptx | the made figure as a one-slide .pptx of native objects (409: none made yet) |
+//! | POST | /api/hub/make/{id}/open | writes that .pptx into the app's cache folder and asks the system to open it with L-Slide → `{path, opened, how}` |
 //!
 //! A reference that describes a time axis is made as a timeline: its draft comes from the
 //! timeline task (`sc-flow-timeline`, with a picture `sc-flow-timeline-vision`) and is a spec with
@@ -51,6 +53,8 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/hub/make/{id}", get(start).post(save).layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)))
         .route("/api/hub/make/{id}/draft", post(draft))
+        .route("/api/hub/make/{id}/pptx", get(pptx))
+        .route("/api/hub/make/{id}/open", post(open_in_slide))
 }
 
 fn err(status: StatusCode, msg: &str) -> HubError {
@@ -231,6 +235,94 @@ async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
     ok(json!({ "spec": spec.to_value(), "engine": p.provider, "told": told, "kind": "flow", "why": why }))
 }
 
+// ── the made figure as a slide ───────────────────────────────────────────────
+
+const SLIDE_MARGIN_PT: f64 = 24.0;
+const EMU_PER_PT: f64 = 12_700.0;
+
+/// The made figure of reference `id` drawn on one slide: its title and the .pptx bytes. The slide
+/// is the spec's `frame` (16:9, 960 × 540 pt when it has none); the figure is laid out inside
+/// the frame less a margin, so it is scaled to fit, and centred.
+fn figure_pptx(s: &Shared, id: &str) -> Result<(String, Vec<u8>), HubError> {
+    let h = hub(s)?;
+    let r = reference(&h, id)?;
+    let cat = spec_category(&h)?;
+    let fig = made_figure(&h, &cat, &r.id)?.ok_or_else(|| err(StatusCode::CONFLICT, "這一條還沒有做好的圖。"))?;
+    let spec = lore_flow::figure::FlowSpec::from_value(spec_value(&fig)).map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("圖的規格讀不了：{e}")))?;
+    let (w, hh) = match spec.frame {
+        Some([w, hh]) if w > 10.0 && hh > 10.0 => (w, hh),
+        _ => (960.0, 540.0),
+    };
+    let inner = lore_flow::Rect::new(0.0, 0.0, w - 2.0 * SLIDE_MARGIN_PT, hh - 2.0 * SLIDE_MARGIN_PT);
+    let (drawn, _) = lore_flow::figure::render(&spec, &h.catalogue(), None, &lore_flow::NoMath, inner, 2).map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("畫不出來：{e}")))?;
+    let b = drawn.layout.bounds;
+    let dx = ((SLIDE_MARGIN_PT + (inner.w - b.w) / 2.0 - b.x) * EMU_PER_PT).round() as i64;
+    let dy = ((SLIDE_MARGIN_PT + (inner.h - b.h) / 2.0 - b.y) * EMU_PER_PT).round() as i64;
+    let mut objects = drawn.built.objects.clone();
+    // top-level objects (connectors too) are in slide coordinates; group children are relative
+    for o in &mut objects {
+        o.frame.x += dx;
+        o.frame.y += dy;
+    }
+    let pictures = drawn.built.pictures.clone();
+    let bytes = lore_flow::pptx::single_slide_with(&objects, w, hh, &|p: &str| if pictures.iter().any(|x| x == p) { std::fs::read(p).ok() } else { None }).map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("做不出 .pptx：{e}")))?;
+    let title = if fig.title.trim().is_empty() { r.title.clone() } else { fig.title.clone() };
+    Ok((title, bytes))
+}
+
+/// A file stem from a title: no path separators or control characters, never empty.
+fn file_stem(title: &str, id: &str) -> String {
+    let clean = |t: &str| t.chars().map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
+    let t = clean(title);
+    let t = t.trim_matches('.').to_string();
+    if t.is_empty() { clean(&id.replace(':', "-")) } else { t.chars().take(80).collect() }
+}
+
+/// `attachment; filename="ascii.pptx"; filename*=UTF-8''percent.pptx`
+fn disposition(stem: &str) -> String {
+    let ascii: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || " -_.()".contains(c) { c } else { '_' }).collect();
+    let ascii = if ascii.trim_matches(|c| c == '_' || c == ' ').is_empty() { "figure".to_string() } else { ascii };
+    let mut enc = String::new();
+    for b in format!("{stem}.pptx").bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { enc.push(b as char) } else { enc.push_str(&format!("%{b:02X}")) }
+    }
+    format!("attachment; filename=\"{ascii}.pptx\"; filename*=UTF-8''{enc}")
+}
+
+async fn pptx(State(s): State<Shared>, Path(id): Path<String>) -> Result<axum::response::Response, HubError> {
+    use axum::http::{HeaderValue, header};
+    let (title, bytes) = figure_pptx(&s, &id)?;
+    let mut res = axum::response::Response::new(axum::body::Body::from(bytes));
+    let h = res.headers_mut();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/vnd.openxmlformats-officedocument.presentationml.presentation"));
+    h.insert(header::CONTENT_DISPOSITION, HeaderValue::from_str(&disposition(&file_stem(&title, &id))).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "檔名不能用。"))?);
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    Ok(res)
+}
+
+/// Writes the figure's .pptx into `<app dir>/figures/` (the app's own cache, never the space or
+/// `private/`; a name from the title, never over a file) and asks the system to open it. L-Slide
+/// registers .pptx as a document type (`apps/desktop/tauri.conf.json`, `RunEvent::Opened` in its
+/// `main.rs`), so `open -a L-Slide <file>` opens it there as a deck bound to that file. When that
+/// fails the file is revealed in Finder instead.
+async fn open_in_slide(State(s): State<Shared>, Path(id): Path<String>) -> R {
+    let (title, bytes) = figure_pptx(&s, &id)?;
+    let dir = s.rem.dir.clone().ok_or_else(|| err(StatusCode::CONFLICT, "找不到這個 App 的資料夾，沒有地方放檔案。"))?.join("figures");
+    std::fs::create_dir_all(&dir).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("資料夾建不起來：{e}")))?;
+    let path = lore_store::free_path(&dir, &file_stem(&title, &id), "pptx");
+    lore_store::write_atomic(&path, &bytes).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("檔案寫不出來：{e}")))?;
+    let p = path.to_string_lossy().to_string();
+    let tried = s.rem.runner.run("open", &["-a", "L-Slide", &p]);
+    let (opened, how) = match tried {
+        Ok(o) if o.status == 0 => (true, "L-Slide".to_string()),
+        _ => match s.rem.runner.run("open", &["-R", &p]) {
+            Ok(o) if o.status == 0 => (false, "Finder".to_string()),
+            _ => (false, "none".to_string()),
+        },
+    };
+    ok(json!({ "path": p, "opened": opened, "how": how }))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -244,6 +336,7 @@ mod tests {
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
+    use super::EMU_PER_PT;
     use crate::hub::HubState;
     use crate::reminders::Reminders;
     use crate::{AppState, Config};
@@ -310,6 +403,10 @@ writable = true
     }
 
     fn setup(replies: Vec<String>) -> Env {
+        setup_with(replies, Arc::new(lore_store::SystemRunner))
+    }
+
+    fn setup_with(replies: Vec<String>, runner: Arc<dyn lore_store::CommandRunner>) -> Env {
         let dir = tempfile::tempdir().unwrap();
         let hubdir = dir.path().join("hubdata");
         let a = hubdir.join("app");
@@ -322,7 +419,7 @@ writable = true
         std::fs::write(p.join("space.toml"), "id = \"me\"\nname = \"我的\"\nkind = \"personal\"\nmembers = [\"ellrin\"]\n").unwrap();
         let config = Config { spaces: vec![p], member: "ellrin".into(), port: 0, web: dir.path().join("web"), intervals: Default::default(), app_dir: None };
         let kb = crate::open(&config, KbOptions { clock: Arc::new(FixedClock::at("2026-11-08T21:10:00+08:00")), ..Default::default() }).unwrap();
-        let rem = Reminders::isolated(&dir.path().join("rem"), Arc::new(lore_store::SystemRunner), "http://127.0.0.1:7700");
+        let rem = Reminders::isolated(&dir.path().join("rem"), runner, "http://127.0.0.1:7700");
         let mock = Arc::new(MockProvider::new(replies));
         let f = MockFactory::default().with("claude:sonnet", mock.clone());
         let state = HubState::isolated(&hubdir, MANIFEST).unwrap();
@@ -735,5 +832,177 @@ writable = true
         let c = v["figure"]["fields"]["commands"].as_str().unwrap();
         assert!(c.contains("Other") && !c.contains("Model"), "{c}");
         assert!(v["figure"]["fields"]["spoken"].as_str().unwrap().contains("Other"));
+    }
+
+    // ── the figure as a slide ──
+
+    struct FakeRunner(std::sync::Mutex<Vec<Vec<String>>>, i32);
+    impl lore_store::CommandRunner for FakeRunner {
+        fn run(&self, program: &str, args: &[&str]) -> std::io::Result<lore_store::CommandOutput> {
+            let mut v = vec![program.to_string()];
+            v.extend(args.iter().map(|a| a.to_string()));
+            self.0.lock().unwrap().push(v);
+            Ok(lore_store::CommandOutput { status: self.1, stdout: String::new(), stderr: String::new() })
+        }
+    }
+
+    async fn get_raw(app: &axum::Router, uri: &str) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+        let res = app.clone().oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap()).await.unwrap();
+        let (s, h) = (res.status(), res.headers().clone());
+        (s, h, res.into_body().collect().await.unwrap().to_bytes().to_vec())
+    }
+
+    async fn made(e: &Env, frame: Option<[f64; 2]>) {
+        let mut sp = spec(SPEC);
+        if let Some(f) = frame {
+            sp["frame"] = json!(f);
+        }
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": sp }))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+    }
+
+    fn read_slide(bytes: &[u8]) -> lore_canvas::Deck {
+        lore_flow::pptx::read(bytes).unwrap()
+    }
+
+    fn conns(sl: &lore_canvas::Slide) -> Vec<&lore_canvas::Object> {
+        sl.objects.iter().filter(|o| matches!(o.kind, lore_canvas::Kind::Connector(_))).collect()
+    }
+
+    #[tokio::test]
+    async fn a_made_figure_downloads_as_a_pptx() {
+        let e = setup(vec![]);
+        made(&e, None).await;
+        let (s, h, b) = get_raw(&e.app, "/api/hub/make/t.flowrefs:f01/pptx").await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(h["content-type"], "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+        assert!(b.starts_with(b"PK"));
+        let d = read_slide(&b);
+        assert_eq!(d.slides.len(), 1);
+        assert!(d.slides[0].objects.len() >= 5, "{}", d.slides[0].objects.len());
+    }
+
+    #[tokio::test]
+    async fn a_reference_without_a_figure_has_no_pptx() {
+        let e = setup(vec![]);
+        let (s, _, b) = get_raw(&e.app, "/api/hub/make/t.flowrefs:f01/pptx").await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        let v: Value = serde_json::from_slice(&b).unwrap();
+        println!("{v}");
+        assert!(!v.to_string().contains('\n'));
+        assert_eq!(get_raw(&e.app, "/api/hub/make/t.flowrefs:nope/pptx").await.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_file_name_follows_the_title() {
+        let e = setup(vec![]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01", Some(json!({ "spec": spec(SPEC), "title": "訓練 loop/一" }))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let (_, h, _) = get_raw(&e.app, "/api/hub/make/t.flowrefs:f01/pptx").await;
+        let d = h["content-disposition"].to_str().unwrap();
+        assert!(d.starts_with("attachment; filename=\"____ loop_.pptx\"") || d.contains("filename=\""), "{d}");
+        assert!(d.contains("filename*=UTF-8''%E8%A8%93%E7%B7%B4%20loop%20%E4%B8%80.pptx"), "{d}");
+        assert!(d.is_ascii());
+        assert_eq!(super::file_stem("", "t.x:f01"), "t.x-f01");
+        assert_eq!(super::file_stem("Plain", "x"), "Plain");
+    }
+
+    #[tokio::test]
+    async fn every_line_is_a_connector_attached_at_both_ends() {
+        let e = setup(vec![]);
+        made(&e, None).await;
+        let (_, _, b) = get_raw(&e.app, "/api/hub/make/t.flowrefs:f01/pptx").await;
+        let d = read_slide(&b);
+        let sl = &d.slides[0];
+        let cs = conns(sl);
+        assert_eq!(cs.len(), 2, "x -> f -> y");
+        fn all(os: &[lore_canvas::Object], out: &mut Vec<u32>) {
+            for o in os {
+                out.push(o.id);
+                if let lore_canvas::Kind::Group(g) = &o.kind {
+                    all(&g.children, out);
+                }
+            }
+        }
+        let mut ids = vec![];
+        all(&sl.objects, &mut ids);
+        for c in cs {
+            let lore_canvas::Kind::Connector(k) = &c.kind else { unreachable!() };
+            for a in [k.start.as_ref(), k.end.as_ref()] {
+                let a = a.expect("attached");
+                assert!(ids.contains(&a.id), "{a:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn moving_a_block_moves_its_lines_end() {
+        let e = setup(vec![]);
+        made(&e, None).await;
+        let (_, _, b) = get_raw(&e.app, "/api/hub/make/t.flowrefs:f01/pptx").await;
+        let mut d = read_slide(&b);
+        let sl = &mut d.slides[0];
+        let c0 = conns(sl)[0].clone();
+        let lore_canvas::Kind::Connector(k) = &c0.kind else { unreachable!() };
+        let target = k.end.clone().unwrap();
+        let before = lore_canvas::geom::connector_points(&c0.frame).1;
+        let dy = (30.0 * EMU_PER_PT) as i64;
+        sl.objects.iter_mut().find(|o| o.id == target.id).unwrap().frame.y += dy;
+        let moved = std::collections::BTreeSet::from([target.id]);
+        let fixed = lore_canvas::geom::reroute(sl, &moved);
+        let nf = fixed.iter().find(|(id, _)| *id == c0.id).expect("the line follows").1.clone();
+        let after = lore_canvas::geom::connector_points(&nf).1;
+        assert!(((after.1 - before.1) - dy as f64).abs() < 2.0, "{before:?} {after:?}");
+    }
+
+    #[tokio::test]
+    async fn the_slide_is_sized_to_the_figure() {
+        let e = setup(vec![]);
+        made(&e, Some([800.0, 300.0])).await;
+        let (_, _, b) = get_raw(&e.app, "/api/hub/make/t.flowrefs:f01/pptx").await;
+        let d = read_slide(&b);
+        assert_eq!((d.size.w, d.size.h), ((800.0 * EMU_PER_PT) as i64, (300.0 * EMU_PER_PT) as i64));
+        for o in &d.slides[0].objects {
+            assert!(o.frame.x >= 0 && o.frame.y >= 0 && o.frame.x + o.frame.w <= d.size.w + 12700 && o.frame.y + o.frame.h <= d.size.h + 12700, "{} {:?}", o.id, o.frame);
+        }
+        let e2 = setup(vec![]);
+        made(&e2, None).await;
+        let (_, _, b2) = get_raw(&e2.app, "/api/hub/make/t.flowrefs:f01/pptx").await;
+        let d2 = read_slide(&b2);
+        assert_eq!((d2.size.w, d2.size.h), ((960.0 * EMU_PER_PT) as i64, (540.0 * EMU_PER_PT) as i64));
+    }
+
+    #[tokio::test]
+    async fn open_writes_the_file_and_asks_the_system() {
+        let fake = Arc::new(FakeRunner(Default::default(), 0));
+        let e = setup_with(vec![], fake.clone());
+        made(&e, None).await;
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/open", None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!((v["opened"].clone(), v["how"].clone()), (json!(true), json!("L-Slide")));
+        let p = std::path::PathBuf::from(v["path"].as_str().unwrap());
+        assert!(p.is_file() && std::fs::read(&p).unwrap().starts_with(b"PK"));
+        assert!(p.starts_with(e._dir.path().join("rem")), "{p:?}");
+        assert!(!p.starts_with(e._dir.path().join("personal")) && !p.starts_with(e._dir.path().join("hubdata")));
+        assert_eq!(fake.0.lock().unwrap().clone(), vec![vec!["open".to_string(), "-a".into(), "L-Slide".into(), p.to_string_lossy().to_string()]]);
+        // a command that fails: the file is shown in Finder instead
+        let bad = Arc::new(FakeRunner(Default::default(), 1));
+        let e2 = setup_with(vec![], bad.clone());
+        made(&e2, None).await;
+        let (_, v2) = call(&e2.app, "POST", "/api/hub/make/t.flowrefs:f01/open", None).await;
+        assert_eq!((v2["opened"].clone(), v2["how"].clone()), (json!(false), json!("none")));
+        assert_eq!(bad.0.lock().unwrap().len(), 2);
+        assert_eq!(bad.0.lock().unwrap()[1][1], "-R");
+    }
+
+    #[tokio::test]
+    async fn open_never_overwrites() {
+        let fake = Arc::new(FakeRunner(Default::default(), 0));
+        let e = setup_with(vec![], fake);
+        made(&e, None).await;
+        let (_, a) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/open", None).await;
+        let (_, b) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/open", None).await;
+        assert_ne!(a["path"], b["path"]);
+        assert!(std::path::Path::new(a["path"].as_str().unwrap()).is_file() && std::path::Path::new(b["path"].as_str().unwrap()).is_file());
     }
 }

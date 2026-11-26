@@ -34,6 +34,7 @@ tower = { version = "0.5", features = ["util"] }
 base64 = "0.22"
 
 [dev-dependencies]
+lore-canvas = { path = "../../../commons/crates/lore-canvas" }
 tempfile.workspace = true
 http-body-util = "0.1"
 base64 = "0.22"

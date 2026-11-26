@@ -454,6 +454,8 @@ const Hub = (() => {
         isNew ? null : ` · ${it.source?.kind === "external" ? it.source.name : it.source?.kind === "author" ? "我加的" : "Lore"}`, it.used ? ` · 用過 ${it.used} 次` : null),
       el("div", { class: "h-acts" },
         !isNew && it.fields?.made_from ? el("button", { type: "button", onclick: () => make({ id: it.fields.made_from }) }, "編輯圖形") : null,
+        !isNew && it.fields?.made_from ? el("button", { type: "button", onclick: async () => { try { const r = await api("POST", `/api/hub/make/${enc(it.fields.made_from)}/open`); S.host.toast?.(r.opened ? "已在 L-Slide 打開" : "已存檔，在 Finder 顯示"); } catch (e) { S.host.fail?.(e); } } }, "在 L-Slide 打開") : null,
+        !isNew && it.fields?.made_from ? el("button", { type: "button", onclick: () => { const a = el("a", { href: `/api/hub/make/${enc(it.fields.made_from)}/pptx`, download: "" }); document.body.append(a); a.click(); a.remove(); } }, "下載 .pptx") : null,
         canMeta ? (saveBtn = el("button", { type: "button", class: "pri", disabled: !isNew, onclick: save }, isNew ? "新增" : "儲存")) : null,
         !isNew && c?.writable && !builtin ? el("button", { type: "button", class: "quiet", onclick: () => remove(it) }, "移除") : null),
       !isNew && canMeta ? el("details", { class: "h-more" }, el("summary", {}, "請 L-Echo 改"), askEcho(it)) : null);

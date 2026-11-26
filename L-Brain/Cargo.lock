@@ -2023,6 +2023,7 @@ dependencies = [
  "http-body-util",
  "kb-core",
  "lettre",
+ "lore-canvas",
  "lore-engines",
  "lore-flow",
  "lore-home",
