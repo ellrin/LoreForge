@@ -1479,6 +1479,43 @@ pub fn scale_obj(o: &mut Object, k: f64) {
     }
 }
 
+/// A saved block in the theme's style: its strokes at the nearest of the theme's line levels,
+/// its rounded rectangles at the corner scheme's step radius (natural size, before scaling).
+fn restyle(o: &mut Object, theme: &Theme) {
+    let levels = &theme.node.levels;
+    let snap = |l: &mut Stroke| {
+        if l.width_pt > 0.0
+            && let Some(best) = levels.iter().copied().min_by(|a, b| (a - l.width_pt).abs().total_cmp(&(b - l.width_pt).abs()))
+        {
+            l.width_pt = best;
+        }
+    };
+    let (w, h) = (o.frame.w as f64 / EMU_PT, o.frame.h as f64 / EMU_PT);
+    match &mut o.kind {
+        Kind::Text(sp) | Kind::Shape(sp) => {
+            if let Some(l) = &mut sp.line {
+                snap(l);
+            }
+            if let Some(c) = theme.corners
+                && sp.geom.prst == "roundRect"
+            {
+                // a pill stays a pill; any other rounding follows the scheme
+                let pill = sp.geom.adj.get("adj").is_some_and(|a| *a >= 45_000.0);
+                if !pill {
+                    sp.geom.adj.insert("adj".into(), crate::theme::Corners::adj(c.step, 1.0, w, h));
+                }
+            }
+        }
+        Kind::Connector(c) => {
+            if let Some(l) = &mut c.line {
+                snap(l);
+            }
+        }
+        Kind::Group(g) => g.children.iter_mut().for_each(|c| restyle(c, theme)),
+        _ => {}
+    }
+}
+
 fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx, warn: &mut Vec<String>) -> Core {
     let st = style(n, cx);
     // the layer types a saved drawing names go into the colour legend, as when it was drawn
@@ -1548,6 +1585,7 @@ fn gen_template(n: &Node, t: &ModuleTemplate, cx: &Ctx, warn: &mut Vec<String>) 
             o.frame.x -= p.x;
             o.frame.y -= p.y;
         }
+        restyle(o, cx.theme);
         scale_obj(o, cx.k);
         fill_label(o, &label, cx, &mut drawn);
     }

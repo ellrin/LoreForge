@@ -166,6 +166,11 @@ pub struct NodeStyle {
     /// `gradient`, `flat`, `translucent`, `typed` / `mono` …
     #[serde(default)]
     pub finish: String,
+    /// The line weights a saved block may use, in points (e.g. detail, block, model). When
+    /// given, every stroke of a library block is drawn at the nearest of them, so blocks
+    /// made at different times share the style's weights. Empty = as saved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

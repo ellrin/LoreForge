@@ -2211,3 +2211,35 @@ fn a_style_is_layers_joined_with_plus() {
     // order decides
     assert_eq!(cat.theme("pink+base").colors.ink, "111111");
 }
+
+#[test]
+fn a_saved_block_takes_the_styles_weights_and_corners() {
+    let mut a = rect_obj("thin", 0, "role:fill", "role:line");
+    let mut b = rect_obj("heavy", 254_000, "role:fill", "role:line");
+    let mut c = rect_obj("pill", 508_000, "role:fill", "role:line");
+    for (o, w, adj) in [(&mut a, 0.75, 20_000.0), (&mut b, 3.0, 20_000.0), (&mut c, 1.0, 50_000.0)] {
+        let sp = o.kind.sp_mut().unwrap();
+        sp.line.as_mut().unwrap().width_pt = w;
+        sp.geom.prst = "roundRect".into();
+        sp.geom.adj.insert("adj".into(), adj);
+    }
+    let t = lore_flow::modules::ModuleTemplate { kind: "tiny".into(), style: "x".into(), w: 40.0, h: 60.0, objects: serde_json::to_value(vec![a, b, c]).unwrap(), ..Default::default() };
+    let mut lib = Library::default();
+    lib.add(t).unwrap();
+    let draw = |theme: &Theme| {
+        let g = dsl::parse_with("fig f\nn: tiny \"A\" style=x\n", &lib.kinds()).unwrap();
+        let vars = Vars::default();
+        let cx = lore_flow::modules::Ctx { theme, vars: &vars, math: &NoMath, lib: &lib, k: 1.0, symmetric: false, image_size: &lore_flow::modules::no_images };
+        lore_flow::modules::make(&g.nodes[0], &cx).objs
+    };
+    let part = |objs: &[Object], name: &str| objs.iter().find(|o| o.name.ends_with(name)).unwrap().clone();
+    let width = |o: &Object| o.kind.sp().unwrap().line.as_ref().unwrap().width_pt;
+    // as saved without a style
+    let plain = draw(&Theme::classic_bw());
+    assert_eq!((width(&part(&plain, "thin")), width(&part(&plain, "heavy")), adj(&part(&plain, "thin"))), (0.75, 3.0, 20_000.0));
+    // with levels and a hard scheme
+    let styled = draw(&Theme::from_layers(&["[node]\nlevels = [0.6, 1.1, 1.6]\n", HARD]).unwrap());
+    assert_eq!((width(&part(&styled, "thin")), width(&part(&styled, "heavy")), width(&part(&styled, "pill"))), (0.6, 1.6, 1.1));
+    assert_eq!(adj(&part(&styled, "thin")), 0.0, "what the block rounded follows the scheme");
+    assert_eq!(adj(&part(&styled, "pill")), 50_000.0, "a pill stays a pill");
+}
