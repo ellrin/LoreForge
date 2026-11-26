@@ -379,3 +379,37 @@ fn a_paper_figure_prints_at_its_frame_width() {
     assert!(attr(&cropped, "width") <= attr(&framed, "width") + 0.01);
     assert!((attr(&cropped, "height") - attr(&framed, "height")).abs() < 0.01, "only the width changes");
 }
+
+#[test]
+fn a_spec_made_for_a_page_is_drawn_on_the_baseplate_in_the_arrangement_picked() {
+    let cat = Catalogue::default();
+    let frame = Rect::new(0.0, 0.0, 900.0, 600.0);
+    let draw = |page: Option<PageSpec>| {
+        let s = FlowSpec { page, ..spec() };
+        // the page survives a save
+        let back = FlowSpec::from_value(s.to_value()).unwrap();
+        assert_eq!(back.page, s.page);
+        render(&s, &cat, None, &NoMath, frame, 2).unwrap().0
+    };
+    let panel = |f: &Figure, id: &str| f.layout.panels.iter().find(|p| p.id == id).unwrap().rect;
+    // side by side on a wide page, stacked on a tall one: the arrangement picked is the one drawn
+    let wide = draw(Some(PageSpec { width_pt: 500.0, ratio: [3, 1], arrangement: "a b".into() }));
+    let (a, b) = (panel(&wide, "a"), panel(&wide, "b"));
+    assert!(b.x >= a.right() - 0.5 && (a.y - b.y).abs() < 0.5, "side by side: {a:?} {b:?}");
+    let tall = draw(Some(PageSpec { width_pt: 250.0, ratio: [1, 1], arrangement: "a / b".into() }));
+    let (a, b) = (panel(&tall, "a"), panel(&tall, "b"));
+    assert!(b.y >= a.bottom() - 0.5 && (a.x - b.x).abs() < 0.5, "stacked: {a:?} {b:?}");
+    // the figure fits its frame and keeps the page's shape (the plate is the page)
+    for (f, r) in [(&wide, 3.0), (&tall, 1.0)] {
+        let bb = f.layout.bounds;
+        assert!(bb.x >= frame.x - 0.5 && bb.y >= frame.y - 0.5 && bb.right() <= frame.right() + 0.5 && bb.bottom() <= frame.bottom() + 0.5, "{bb:?}");
+        assert!((bb.w / bb.h - r).abs() < 0.2 * r, "ratio {} against {r}", bb.w / bb.h);
+        assert_eq!(f.layout.nodes.len(), 8);
+    }
+    // no page: the planner's own layout, as before
+    let plain = draw(None);
+    assert!((plain.layout.bounds.w / plain.layout.bounds.h - 3.0).abs() > 0.2, "the old layout does not know the page");
+    // a name the plate does not have falls back to its first option instead of failing
+    let odd = draw(Some(PageSpec { width_pt: 500.0, ratio: [16, 9], arrangement: "no such arrangement".into() }));
+    assert_eq!(odd.layout.panels.len(), 2);
+}

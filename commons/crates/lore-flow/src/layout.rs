@@ -126,12 +126,18 @@ pub struct LayoutOptions {
     /// The author's choices for single lines, by `figure::edge_key`. The router reads them
     /// from the layout (see [`Placed::ends`]).
     pub ends: BTreeMap<String, crate::figure::EdgeEnds>,
+    /// The page the figure is made for. With one, the figure is measured and placed on the
+    /// baseplate ([`crate::plate`]) instead of by this module's planner, then fitted into `frame`.
+    pub page: Option<crate::plate::Format>,
+    /// With a page: the arrangement picked, as `plate::place` names its options; empty = the
+    /// first option.
+    pub arrangement: String,
 }
 
 impl Default for LayoutOptions {
     fn default() -> Self {
         // a 16:9 slide of 10 in with a margin
-        LayoutOptions { frame: Rect::new(24.0, 24.0, 672.0, 357.0), max_scale: 1.5, template: None, legend: None, place: BTreeMap::new(), ends: BTreeMap::new() }
+        LayoutOptions { frame: Rect::new(24.0, 24.0, 672.0, 357.0), max_scale: 1.5, template: None, legend: None, place: BTreeMap::new(), ends: BTreeMap::new(), page: None, arrangement: String::new() }
     }
 }
 
@@ -250,6 +256,48 @@ pub struct Layout {
     pub bounds: Rect,
     /// Scale applied to the natural size.
     pub scale: f64,
+}
+
+impl Layout {
+    /// This layout scaled and moved to fit `opt.frame` (centred, never beyond `opt.max_scale`
+    /// times its present size), with the author's choices for single lines attached to the
+    /// blocks they leave. For a layout made at natural size elsewhere (the baseplate).
+    pub fn fitted(mut self, g: &Graph, opt: &LayoutOptions) -> Layout {
+        let b = self.bounds;
+        if b.w <= 0.0 || b.h <= 0.0 {
+            return self;
+        }
+        let k = (opt.frame.w / b.w).min(opt.frame.h / b.h).min(opt.max_scale);
+        let ox = opt.frame.x + (opt.frame.w - b.w * k) / 2.0 - b.x * k;
+        let oy = opt.frame.y + (opt.frame.h - b.h * k) / 2.0 - b.y * k;
+        for (n, pl) in g.nodes.iter().zip(&mut self.nodes) {
+            pl.rect = pl.rect.map(ox, oy, k);
+            pl.reserve = pl.reserve.map(ox, oy, k);
+            pl.art = pl.art.map(ox, oy, k);
+            pl.port_y = oy + pl.port_y * k;
+            pl.origin = (ox + pl.origin.0 * k, oy + pl.origin.1 * k);
+            pl.ends = opt.ends.iter().filter(|(key, _)| key.split(['>', '#']).next() == Some(n.id.as_str())).map(|(key, v)| (key.clone(), v.clone())).collect();
+        }
+        for p in &mut self.panels {
+            p.rect = p.rect.map(ox, oy, k);
+            p.title_rect = p.title_rect.map(|t| t.map(ox, oy, k));
+        }
+        for r in &mut self.regions {
+            r.rect = r.rect.map(ox, oy, k);
+            r.title_rect = r.title_rect.map(|t| t.map(ox, oy, k));
+        }
+        for l in &mut self.legend {
+            l.line = ((ox + l.line.0.0 * k, oy + l.line.0.1 * k), (ox + l.line.1.0 * k, oy + l.line.1.1 * k));
+            l.text = l.text.map(ox, oy, k);
+        }
+        for s in &mut self.swatches {
+            s.at = s.at.map(ox, oy, k);
+            s.text = s.text.map(ox, oy, k);
+        }
+        self.bounds = b.map(ox, oy, k);
+        self.scale *= k;
+        self
+    }
 }
 
 pub(crate) struct Size {
@@ -1127,7 +1175,7 @@ pub fn layout_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, opt: &L
 /// Move the blocks the author moved: each named node's rectangle is shifted by its offset
 /// (times the scale), kept inside the figure's frame and clear of the legends; the panel of
 /// a moved node grows to hold it (its title keeps its corner) and the bounds grow with it.
-fn apply_place(lay: &mut Layout, g: &Graph, opt: &LayoutOptions, theme: &Theme) {
+pub(crate) fn apply_place(lay: &mut Layout, g: &Graph, opt: &LayoutOptions, theme: &Theme) {
     if opt.place.is_empty() {
         return;
     }

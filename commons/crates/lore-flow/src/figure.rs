@@ -86,6 +86,10 @@ pub struct FlowSpec {
     /// uses and where the line turns. A key the text no longer has is ignored.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ends: BTreeMap<String, EdgeEnds>,
+    /// The page the figure is made for and the arrangement picked on it: with one, the figure
+    /// is measured and placed on the baseplate ([`crate::plate`]) and `layout` is not read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<PageSpec>,
     /// A timeline instead of a data flow ([`crate::timeline`]): when set, `dsl` and the fields
     /// of the flow layout are not read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,6 +97,16 @@ pub struct FlowSpec {
     /// Keys a newer editor wrote: kept.
     #[serde(flatten)]
     pub other: BTreeMap<String, Value>,
+}
+
+/// A figure's page: the width it prints at (pt), its ratio width : height, and the arrangement
+/// of its areas the author picked (as `plate::place` names its options; empty = the first).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PageSpec {
+    pub width_pt: f64,
+    pub ratio: [u32; 2],
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arrangement: String,
 }
 
 /// A block's connection points: five on each side (corner, quarter, middle, three quarters,
@@ -457,6 +471,10 @@ impl FlowSpec {
         let mut g = self.graph(&cat.library)?;
         let mut theme = cat.theme(&self.theme);
         let mut opt = LayoutOptions { frame, place: self.place.clone(), ends: self.ends.clone(), ..Default::default() };
+        if let Some(p) = self.page.as_ref().filter(|p| p.width_pt > 0.0 && p.ratio[0] > 0 && p.ratio[1] > 0) {
+            opt.page = Some(crate::plate::Format::new(p.width_pt, (p.ratio[0], p.ratio[1])));
+            opt.arrangement = p.arrangement.clone();
+        }
         // layout template, then the per-block directions
         if let Some(l) = cat.layout(&self.layout).filter(|l| l.fits(g.panels.len())) {
             opt.template = l.apply(&mut g);

@@ -169,6 +169,31 @@ pub fn fill_panels(g: &Graph, lay: &layout::Layout, relayout: impl Fn(&Graph) ->
     None
 }
 
+/// A graph placed on the baseplate of a page and fitted into the drawing's frame: the graph as
+/// it is drawn (hand-given sizes dropped, the plate's enlargements set) and its layout. The
+/// arrangement is the one the options name, else the first the plate offers. `None` for a graph
+/// the plate cannot place (no blocks).
+fn on_page(g: &Graph, d: &Drawing, f: &plate::Format, vars: &Vars, size: &dyn Fn(&str) -> Option<(u32, u32)>) -> Option<(Graph, layout::Layout)> {
+    let mut g = g.clone();
+    for n in &mut g.nodes {
+        for k in ["w", "h", "size", "grow"] {
+            n.params.remove(k);
+        }
+    }
+    let m = plate::Measure { theme: &d.theme, vars, library: &d.library, image_size: size };
+    let name = d.options.arrangement.trim();
+    let picked = if name.is_empty() { None } else { plate::arrangement(&g, f, &m, name) };
+    let p = match picked {
+        Some(p) => p,
+        None => plate::place(&g, f, &m)?.into_iter().next()?,
+    };
+    let lay = plate::to_layout(&g, f, &p, &m);
+    let g = plate::grown(&g, f, &p, &m);
+    let mut lay = lay.fitted(&g, &d.options);
+    layout::apply_place(&mut lay, &g, &d.options, &d.theme);
+    Some((g, lay))
+}
+
 /// Graph → layout → routes → objects.
 pub fn draw(g: &Graph, d: &Drawing) -> Result<Figure, SpecError> {
     g.validate(&d.library.kinds())?;
@@ -176,16 +201,24 @@ pub fn draw(g: &Graph, d: &Drawing) -> Result<Figure, SpecError> {
     let mut vars = d.notation.map(Vars::from_notation).unwrap_or_default();
     vars.add_new(&g.vars_new);
     let size = |src: &str| d.pictures.and_then(|f| f(src)).and_then(|b| pptx::image_size(&b));
-    let mut layout = layout::layout_with(g, &d.theme, &vars, &d.library, &d.options, &size);
-    // a panel its blocks leave mostly empty: its pictures, charts and drawings are drawn larger
     let grown;
-    let g = match fill_panels(g, &layout, |gg| layout::layout_with(gg, &d.theme, &vars, &d.library, &d.options, &size)) {
-        Some((gg, lay)) => {
-            grown = gg;
-            layout = lay;
-            &grown
+    let mut layout;
+    let g = if let Some((gg, lay)) = d.options.page.as_ref().and_then(|f| on_page(g, d, f, &vars, &size)) {
+        // made for a page: measured and placed on the baseplate, which also sizes the pictures
+        grown = gg;
+        layout = lay;
+        &grown
+    } else {
+        layout = layout::layout_with(g, &d.theme, &vars, &d.library, &d.options, &size);
+        // a panel its blocks leave mostly empty: its pictures, charts and drawings are drawn larger
+        match fill_panels(g, &layout, |gg| layout::layout_with(gg, &d.theme, &vars, &d.library, &d.options, &size)) {
+            Some((gg, lay)) => {
+                grown = gg;
+                layout = lay;
+                &grown
+            }
+            None => g,
         }
-        None => g,
     };
     let routes = route::route(g, &layout);
     // a line may run outside the blocks' box (round a block that was moved to the edge): the
