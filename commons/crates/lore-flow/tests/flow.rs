@@ -2298,3 +2298,51 @@ fn a_palette_names_the_tints_and_a_style_the_region_frames() {
     assert_eq!(o.fill, lore_canvas::Paint::solid(&pale));
     assert!(o.line.as_ref().unwrap().color.eq_ignore_ascii_case(&strong));
 }
+
+#[test]
+fn a_line_lies_under_a_frame_it_only_passes_through() {
+    use lore_flow::build::{Layer, frame_order};
+    // a panel holding two regions side by side; line 0 runs from region A to a block outside
+    // both, crossing region B; line 1 stays inside A
+    let frames = [Rect::new(0.0, 0.0, 300.0, 100.0), Rect::new(10.0, 10.0, 80.0, 80.0), Rect::new(120.0, 10.0, 80.0, 80.0)];
+    let ends = [[(50.0, 50.0), (250.0, 50.0)], [(30.0, 50.0), (70.0, 50.0)]];
+    let lines = vec![vec![(50.0, 50.0), (250.0, 50.0)], vec![(30.0, 50.0), (70.0, 50.0)]];
+    let (order, forced) = frame_order(&frames, &ends, &lines);
+    let at = |x: Layer| order.iter().position(|o| *o == x).unwrap();
+    assert!(forced.is_empty());
+    assert!(at(Layer::Frame(0)) < at(Layer::Frame(1)) && at(Layer::Frame(0)) < at(Layer::Frame(2)), "outer first");
+    assert!(at(Layer::Frame(1)) < at(Layer::Line(0)), "over the frame that holds its start");
+    assert!(at(Layer::Line(0)) < at(Layer::Frame(2)), "under the frame it only crosses");
+    assert!(at(Layer::Frame(1)) < at(Layer::Line(1)));
+    // two lines that cross each other's frames: one of them is drawn over, and said so
+    let ends = [[(50.0, 50.0), (250.0, 50.0)], [(160.0, 50.0), (5.0, 50.0)]];
+    let lines = vec![vec![(50.0, 50.0), (250.0, 50.0)], vec![(160.0, 50.0), (5.0, 50.0)]];
+    let (order, forced) = frame_order(&frames, &ends, &lines);
+    assert_eq!(order.len(), 5);
+    assert_eq!(forced.len(), 1);
+}
+
+#[test]
+fn soft_frames_hide_a_line_that_passes_beneath() {
+    // a module frame (a region without a tint) between two blocks it does not hold
+    let src = "fig f\npanel p \"P\"\n  a: box \"A\" col=0 lane=0\n  m: box \"M\" col=1 lane=0\n  b: box \"B\" col=2 lane=0\n  region grp \"\" in=p\n    m\n  end\n  a -> b : data\n";
+    let g = dsl::parse(src).unwrap();
+    let t = Theme::from_toml("[region]\nsoft = true\n").unwrap();
+    let vars = Vars::default();
+    let lib = Library::default();
+    let opt = layout::LayoutOptions { frame: Rect::new(0.0, 0.0, 600.0, 300.0), ..Default::default() };
+    let lay = layout::layout(&g, &t, &vars, &lib, &opt);
+    let routes = route::route(&g, &lay);
+    let b = built_with(&t, &g, &lay, &routes);
+    let pos = |name: &str| b.objects.iter().position(|o| o.name == name).unwrap_or_else(|| panic!("{name}"));
+    let region = &b.objects[pos("flow:f/region:grp")];
+    assert!(matches!(region.kind.sp().unwrap().fill, lore_canvas::Paint::Solid { .. }), "opaque");
+    let crosses = routes[0].points.windows(2).any(|s| segment_hits(s[0], s[1], &lay.regions[0].rect));
+    assert!(crosses, "the line passes through the module's frame");
+    assert!(pos("flow:f/edge:a-b") < pos("flow:f/region:grp"), "the line is drawn before the frame it passes through");
+    // the order is the rule in every style; without soft frames the frame is just not opaque
+    let b = built(&g, &lay, &routes);
+    let pos = |name: &str| b.objects.iter().position(|o| o.name == name).unwrap();
+    assert!(pos("flow:f/edge:a-b") < pos("flow:f/region:grp"));
+    assert_eq!(b.objects[pos("flow:f/region:grp")].kind.sp().unwrap().fill, lore_canvas::Paint::None);
+}
