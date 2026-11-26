@@ -268,17 +268,7 @@ writable = true
     const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13, 1, 2, 3];
 
     fn graph_reply() -> String {
-        json!({
-            "fig": "pipe", "panels": [],
-            "nodes": [
-                { "id": "x", "module": "image", "label": "Input" },
-                { "id": "f", "module": "box", "label": "Model" },
-                { "id": "y", "module": "label", "label": "Output" }
-            ],
-            "edges": [ { "from": "x", "to": "f", "kind": "data" }, { "from": "f", "to": "y", "kind": "data" } ],
-            "vars_new": []
-        })
-        .to_string()
+        json!({ "dsl": "fig pipe\nx: image \"Input\"\nf: box \"Model\"\ny: label \"Output\"\nx -> f -> y\n", "vars_new": [] }).to_string()
     }
 
     /// The model's answer to "a timeline or a data flow?", asked before every draft.
@@ -407,7 +397,7 @@ writable = true
     async fn a_failed_draft_is_recorded_and_the_run_goes_on() {
         // the first reference gets an answer that is no figure twice (the draft asks again once),
         // the next a good one
-        let bad = json!({ "nodes": [{ "id": "a", "module": "box", "label": "A" }], "edges": [{ "from": "a", "to": "zz" }] }).to_string();
+        let bad = json!({ "dsl": "fig bad\na: box \"A\"\na -> zz\n", "vars_new": [] }).to_string();
         let e = setup(scripted(vec![kind("flow"), bad.clone(), bad, kind("flow"), graph_reply()]));
         let out = e.dir.path().join("out");
         let mut seen = vec![];

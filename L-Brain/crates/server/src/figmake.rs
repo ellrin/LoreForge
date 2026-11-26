@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | GET | /api/hub/make/{id} | `{id, title, source, image, spec, made}`: what the editor starts from (409: not a reference) |
 //! | POST | /api/hub/make/{id} | `{spec, title?}` → `{figure, reference}`; the spec is drawn once first (422 when it cannot be) |
-//! | POST | /api/hub/make/{id}/draft | `{spec, engine}`: a first draft from the description (and the picture); stored nowhere |
+//! | POST | /api/hub/make/{id}/draft | `{spec, engine, warnings}`: a first draft from the description (and the picture), written by the model as figure text and drawn once; stored nowhere |
 //! | GET | /api/hub/make/{id}/pptx | the made figure as a one-slide .pptx of native objects (409: none made yet) |
 //! | POST | /api/hub/make/{id}/open | writes that .pptx into the app's cache folder and asks the system to open it with L-Slide → `{path, opened, how}` |
 //!
@@ -224,15 +224,18 @@ async fn draft(State(s): State<Shared>, Path(id): Path<String>) -> R {
         return ok(json!({ "spec": spec.to_value(), "engine": engine, "kind": "timeline", "why": why }));
     }
     let examples = s.flow.examples(&cat.library);
-    let prompt = lore_flow::llm::FlowPrompt { description: &description, image, notation: None, library: &cat.library, examples: &examples };
-    let (p, shown) = lore_flow::llm::propose_with(&llm, &prompt, &know).await.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
+    // the author's own registry (the file `/api/notation` serves); none when there is no file
+    let registry = s.home.shared_file("notation.json").and_then(|f| lore_notation::Notation::load(&f).ok()).filter(|n| !n.entries.is_empty());
+    let prompt = lore_flow::llm::FlowPrompt { description: &description, image, notation: registry.as_ref(), library: &cat.library, examples: &examples };
+    // the model writes the figure language itself; the program checked and drew it once
+    let (p, shown) = lore_flow::llm::propose_text_with(&llm, &prompt, &know).await.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
     let spec = lore_flow::figure::FlowSpec { lore_flow: lore_flow::figure::VERSION, dsl: p.dsl, ..Default::default() };
     // what the model was told from his knowledge, each with the one line on why it was picked
     let told = json!({
         "modules": shown.modules.iter().map(|m| json!({ "kind": m.item.kind, "style": m.item.style, "title": m.item.title, "why": m.why })).collect::<Vec<_>>(),
         "examples": shown.examples.iter().map(|x| json!({ "id": x.item.id, "title": x.item.title, "why": x.why })).collect::<Vec<_>>(),
     });
-    ok(json!({ "spec": spec.to_value(), "engine": p.provider, "told": told, "kind": "flow", "why": why }))
+    ok(json!({ "spec": spec.to_value(), "engine": p.provider, "told": told, "warnings": p.warnings, "kind": "flow", "why": why }))
 }
 
 // ── the made figure as a slide ───────────────────────────────────────────────
@@ -378,23 +381,15 @@ writable = true
     const SPEC: &str = "fig demo\nx: image \"Input\"\nf: box \"Model\"\ny: label \"Output\"\nx -> f -> y\n";
 
     fn graph_reply() -> String {
-        json!({
-            "fig": "pipe", "panels": [],
-            "nodes": [
-                { "id": "x", "module": "image", "label": "Input" },
-                { "id": "f", "module": "box", "label": "Model" },
-                { "id": "y", "module": "label", "label": "Output" }
-            ],
-            "edges": [ { "from": "x", "to": "f", "kind": "data" }, { "from": "f", "to": "y", "kind": "data" } ],
-            "vars_new": []
-        })
-        .to_string()
+        json!({ "dsl": "fig pipe\nx: image \"Input\" col=0 lane=0\nf: box \"Model\" col=1 lane=0\ny: label \"Output\" col=2 lane=0\nx -> f : data color=blue\nf -> y : data color=blue\n", "vars_new": [] }).to_string()
     }
 
     struct Env {
         _dir: tempfile::TempDir,
         app: axum::Router,
         mock: Arc<MockProvider>,
+        /// The LoreForge folder of the test (`private/shared/notation.json` goes under it).
+        home: std::path::PathBuf,
     }
 
     fn write(p: &std::path::Path, text: impl AsRef<[u8]>) {
@@ -423,8 +418,11 @@ writable = true
         let mock = Arc::new(MockProvider::new(replies));
         let f = MockFactory::default().with("claude:sonnet", mock.clone());
         let state = HubState::isolated(&hubdir, MANIFEST).unwrap();
-        let app = crate::router_isolated(AppState::with_hub(kb, config.web.clone(), rem, Llm::with_factory(f), state));
-        Env { _dir: dir, app, mock }
+        // the same as AppState::with_hub, but with a home inside the temp dir: no real registry is read
+        let home = lore_home::Home::at(dir.path().join("home"));
+        let shared = Arc::new(AppState { kb: std::sync::Mutex::new(kb), web: config.web.clone(), rem, home, llm: Arc::new(Llm::with_factory(f)), hub: state.hub.map(std::sync::Mutex::new), inbox: None, hub_dirs: state.app_dirs, flow: state.flow });
+        let app = crate::router_isolated(shared);
+        Env { home: dir.path().join("home"), _dir: dir, app, mock }
     }
 
     use crate::llm::Llm;
@@ -786,8 +784,50 @@ writable = true
         assert!(v["spec"].get("timeline").is_none_or(|t| t.is_null()), "{v}");
         let seen = e.mock.seen.lock().unwrap();
         let schema = serde_json::to_string(&seen[1].json_schema).unwrap();
-        assert!(schema.contains("nodes") && !schema.contains("points"), "{schema}");
+        assert!(schema.contains("dsl") && !schema.contains("points"), "{schema}");
     }
+    #[tokio::test]
+    async fn a_flow_draft_is_written_as_text() {
+        let dsl = "fig f\nx: image \"In\" col=0 lane=0\nm: box \"Model\" col=1 lane=0\nx -> m : data color=notacolour\n";
+        let e = setup(vec![kind("flow"), json!({ "dsl": dsl, "vars_new": [] }).to_string()]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/draft", None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["spec"]["dsl"], dsl);
+        assert_eq!(v["kind"], "flow");
+        assert!(v["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("notacolour")), "{v}");
+        let seen = e.mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[1].system.contains("align row") && seen[1].system.contains("texts=["));
+    }
+
+    #[tokio::test]
+    async fn a_flow_draft_gets_the_notation_registry() {
+        let e = setup(vec![kind("flow"), graph_reply()]);
+        let shared = e.home.join("private/shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        let reg = json!({ "version": 1, "entries": [ { "id": "w_daidai", "kind": "symbol", "latex": "\\omega_d", "meaning": "weight of the daidai run" } ] });
+        std::fs::write(shared.join("notation.json"), reg.to_string()).unwrap();
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/draft", None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let seen = e.mock.seen.lock().unwrap();
+        assert!(seen[1].system.contains("- w_daidai — $\\omega_d$ — weight of the daidai run"), "{}", seen[1].system);
+        // with no registry file the table is empty
+        let e = setup(vec![kind("flow"), graph_reply()]);
+        call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/draft", None).await;
+        assert!(e.mock.seen.lock().unwrap()[1].system.contains("(empty: every variable goes into vars_new)"));
+    }
+
+    #[tokio::test]
+    async fn a_timeline_draft_is_unchanged() {
+        let e = setup(vec![kind("timeline"), timeline_reply()]);
+        let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f02/draft", None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["kind"], "timeline");
+        assert!(v["spec"].get("dsl").is_none_or(|d| d.is_null() || d == ""), "{v}");
+        assert!(v.get("warnings").is_none(), "{v}");
+        assert_eq!(e.mock.seen.lock().unwrap().len(), 2);
+    }
+
     /// The regression this guards: seven of the author's twelve timeline references had no
     /// "時間軸" / "timeline" in their words and were drawn as boxes and arrows.
     #[tokio::test]
@@ -816,7 +856,7 @@ writable = true
         let (s, v) = call(&e.app, "POST", "/api/hub/make/t.flowrefs:f01/draft", None).await;
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
         // the question may be asked again once; no draft request (the one whose schema has `nodes`) was sent on a guess
-        assert!(e.mock.seen.lock().unwrap().iter().all(|r| !serde_json::to_string(&r.json_schema).unwrap().contains("nodes")));
+        assert!(e.mock.seen.lock().unwrap().iter().all(|r| !serde_json::to_string(&r.json_schema).unwrap().contains("dsl")));
     }
     /// Found by a review: a second save with a changed figure kept the first figure's commands,
     /// and the next draft was shown them as its example.

@@ -487,6 +487,263 @@ pub async fn propose(provider: &dyn LlmProvider, p: &FlowPrompt<'_>) -> Result<P
     Ok(Proposal { graph, dsl, notation, provider: provider.id(), retried, cleared_styles })
 }
 
+// ── the text draft ───────────────────────────────────────────────────────────
+// The model writes the figure language itself; the program checks it, draws it once and sends a
+// failure back once with the parser's own words.
+
+/// A figure written as text by the model, checked and drawn once.
+#[derive(Debug, Clone)]
+pub struct TextProposal {
+    /// The figure text (what the model wrote, plus `var` lines for the symbols it listed).
+    pub dsl: String,
+    pub graph: Graph,
+    /// The engine that answered.
+    pub provider: String,
+    /// The first reply could not be drawn and was sent back once.
+    pub retried: bool,
+    /// What the successful draw noticed (a line with too many corners, an unknown colour, an
+    /// alignment not met). Told to the author, not sent back to the model.
+    pub warnings: Vec<String>,
+}
+
+/// JSON schema of the text draft's reply.
+pub fn text_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dsl", "vars_new"],
+        "properties": {
+            "dsl": { "type": "string" },
+            "vars_new": { "type": "array", "items": {
+                "type": "object", "additionalProperties": false, "required": ["id", "latex", "meaning"],
+                "properties": { "id": { "type": "string" }, "latex": { "type": "string" }, "meaning": { "type": "string" } }
+            } }
+        }
+    })
+}
+
+const MAX_TEXT_EXAMPLE: usize = 4500;
+const MAX_LIBRARY_LINES: usize = 120;
+
+/// The language, taught once. Compact and exact: every sentence is one the parser reads.
+const LANGUAGE_GUIDE: &str = r##"You draw a figure by WRITING ITS TEXT in a small figure language. A program checks the text, lays it out and draws it. Reply with one JSON object {"dsl": "<the figure text>", "vars_new": [{"id","latex","meaning"}]}. Inside the JSON string a newline is \n, a quote is \" and every LaTeX backslash is doubled (\\mathcal).
+
+## What the author wants of a figure
+- The same areas and blocks the description names, no more, no fewer, named as the description names them.
+- Every block pinned to a cell (col= and lane=) so the picture's proportions are deliberate, not left to chance.
+- A straight main flow, left to right (or top to bottom), with as few corners as possible: give blocks that a line joins the same lane so the line is straight.
+- One colour per path or per kind of thing; regions round blocks of one kind; do not colour everything.
+- Few crossing lines; no line should have to cross a block.
+
+## The language (one statement per line; # starts a comment)
+fig <name>
+panel a "a. Title" [dir=right|down]
+  ...blocks, regions and lines of the panel...
+end
+- A panel is a top-level area. Several panels: `arrange a b / c` (rows of panel ids: a and b side by side, c under them).
+- Panel options are a region's: dashed | dotted | solid | none (the frame's line), tint=<colour>, round, title=top-left|top|above|below|left|none.
+    panel b "Stage 2" tint=blue round none title=above     # a pale rounded area without a black frame
+- A line between panels: `a -> b : cross`.
+
+### Blocks
+  id: kind "label" key=value ...
+- id: lower-case letters, digits, _ (unique among blocks, regions and panels). kind: one of the kinds listed below.
+- role=input|model|op|data|output|gt|loss|merge|note only shades the block. caption="16x16" adds a small line under it. style=<name> picks the kind's art style.
+- A block's own colour: fill=blue (pale fill, blue outline), or fill=F5E6C8; line=<colour>; text=<colour>.
+    enc: encoder "Encoder" style=trapezoid fill=blue
+- Pins: col=<n> (0 = first along the flow) and lane=<n> (0 = top). Columns and lanes are counted PER PANEL; gaps are closed up. Pin EVERY block of a panel and you decide the layout: blocks with no line between them can share a row, one block can sit under another, an input can come from the right. Lines never move a pinned block.
+    x: image "$x$" look=photo col=0 lane=1
+    f: box "Model" col=1 lane=1
+    y: label "Output" col=2 lane=1
+- Words: `$...$` is LaTeX; `@id` is a registered symbol. A label may be empty ("").
+
+### Regions (frames round blocks; they nest)
+  region g "Group title" dashed tint=orange round title=above
+    a1: box "A" col=1 lane=0
+    region inner "Inner" dotted
+      a2: op "+" col=2 lane=0
+    end
+  end
+- Options: dashed | dotted | solid | none, tint=<colour>, round, title=top-left|top|above|below|left. Blocks declared inside are members; a region may also list only ids: `region r "T" dashed` / `  n1 n2` / `end`. A region frames its members' cells: pin the members to adjacent cells.
+
+### Lines
+  a -> b                          a data line
+  a -> b -> c                     a chain
+  a -> b : kind "label" color=orange width=2.5 curve
+  a>b -> c : optional             leaves the MIDDLE of the line a->b (a branch off a line)
+- kind: data (default), supervision, feedback, loss-out, compare, optional, shared, skip, concat, down, up, cross. Dashed by default: supervision, feedback, optional, shared, cross. After the colon the order is: kind, "label", color=, width=, curve.
+- color= gives a line its own colour: one colour per path. width= is the thickness in pt (1 to 4). curve draws a curved line (for a skip over blocks).
+- Two paths that join meet in an `op` block (label + for add, x for multiply, . element-wise, C concatenation).
+
+### Alignment
+  align row x enc bb              same height (centres on one row)
+  align col a1 a3                 one above the other (same centre column)
+Use pins inside a panel; use align across panels.
+
+### Colours
+Names: red orange yellow green teal blue purple pink brown grey black, or RRGGBB (six hex digits; digits only are read as a number, so use a name or a hex with a letter). They go on blocks (fill= line= text=), lines (color=), regions and panels (tint=). A name gives a pale fill and a strong outline. There is no beige: write F5E6C8.
+
+### Looks and picture blocks
+- Pictures from a paper are never drawn: `image "" look=photo|mask|heatmap|plot`; `image-stack n=3`.
+- A small chart: `c: chart "Name" chart=bell|bells|membership|bars|scatter|surface n=3 labels=[A,B,C] values=[1,2,3]`.
+- An icon: `d: icon "Doctor" icon=healthicons:doctor-outline` (icon=<set:name>; only ids you are sure of).
+- A network as bars: `lb: layer-bars "" layers=[Conv,MBConv1,FC] colors=[pink,purple] through=orange` (colors= one outline colour per bar, the last repeats; filled=true also fills them pale; through=<colour>|true draws the dashed line "data flows through these layers"). Other forms: `unet depth=3`, `cuboid-seq shape=down n=4`, `vector-bar n=4 dir=v`, `matrix rows=3 cols=3`.
+
+### Saved blocks of the library, with their own words
+A saved block (listed below) is a kind like any other. It carries fixed words; texts=[...] replaces them in order, `_` keeps one, "" blanks one:
+    m: encoder-decoder-ladder "Backbone" style=five texts=[Enc,_,"",Dec] col=1 lane=0
+The program warns when you give more words than the block has. Maths $...$ works inside them.
+
+### Symbols
+`@id` in a label is a symbol of the notation table. A symbol that is not in the table is listed in vars_new as {id, latex, meaning} (or as a line `var id = "latex" "meaning"`) and then used as @id. `latex` is the bare symbol (\\hat{y}): no $, no definition. Never type a reference such as "Table 1" or "Fig. 2".
+"##;
+
+fn text_system(p: &FlowPrompt, shown: &Shown) -> String {
+    let mut s = String::from(LANGUAGE_GUIDE);
+    s.push_str("\n## Kinds of blocks (kind: what it draws)\n");
+    for (kind, d) in MODULES.iter() {
+        s.push_str(&format!("  - {kind}: {d}\n"));
+    }
+    s.push_str(&library_section(p.library));
+    s.push_str(&notes_section(shown));
+    match p.notation.filter(|n| !n.entries.is_empty()) {
+        Some(n) => {
+            s.push_str("\n## Notation table (id, LaTeX, meaning): write @id in a label\n");
+            for e in n.entries.iter().filter(|e| e.latex.is_some()).take(200) {
+                s.push_str(&format!("- {} — ${}$ — {}\n", e.id, e.latex.as_deref().unwrap_or(""), e.meaning.as_deref().or(e.meaning_en.as_deref()).unwrap_or("")));
+            }
+        }
+        None => s.push_str("\n## Notation table\n(empty: every variable goes into vars_new)\n"),
+    }
+    let mut n = 0;
+    for ex in &shown.examples {
+        n += 1;
+        s.push_str(&format!(
+            "\n## Example {n} (the author's own figure: {})\nDescription:\n{}\n\nFigure text (colours, pins and options are part of what it says):\n```\n{}\n```\n",
+            ex.item.title.trim(),
+            ex.item.description.trim(),
+            cut(&ex.item.dsl, MAX_TEXT_EXAMPLE).trim_end()
+        ));
+    }
+    for (desc, g) in p.examples.iter().take(MAX_EXAMPLES.saturating_sub(shown.examples.len())) {
+        n += 1;
+        s.push_str(&format!("\n## Example {n}\nDescription:\n{}\n\nFigure text:\n```\n{}\n```\n", desc.trim(), cut(&crate::dsl::to_dsl(g), MAX_TEXT_EXAMPLE).trim_end()));
+    }
+    s
+}
+
+/// Every saved block kind and style of the library, one line each, components first.
+fn library_section(lib: &Library) -> String {
+    let mut rows: Vec<(bool, String, String, String)> = Vec::new();
+    for (kind, styles) in &lib.templates {
+        if MODULES.iter().any(|(m, _)| m == kind) {
+            continue;
+        }
+        for (style, t) in styles {
+            rows.push((t.level == "component", kind.clone(), style.clone(), t.description.clone()));
+        }
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let total = rows.len();
+    let mut s = String::from("\n## Saved blocks of the library (kind, style, level: what it is). Used like any kind, with style= and texts=[...]\n");
+    for (comp, kind, style, d) in rows.into_iter().take(MAX_LIBRARY_LINES) {
+        let st = if style == crate::modules::DEFAULT_STYLE { String::new() } else { format!(" style={style}") };
+        let level = if comp { " (component)" } else { "" };
+        let d = if d.trim().is_empty() { "a saved drawing".to_string() } else { cut(d.trim(), 160) };
+        s.push_str(&format!("  - {kind}{st}{level}: {d}\n"));
+    }
+    if total > MAX_LIBRARY_LINES {
+        s.push_str(&format!("  - … and {} more\n", total - MAX_LIBRARY_LINES));
+    }
+    s
+}
+
+/// The request of the text draft (a picture attached when there is one).
+pub fn text_request_with(p: &FlowPrompt, k: &Knowledge) -> (LlmRequest, Shown) {
+    let shown = shown_for(p.description, k);
+    let user = format!("Description of the figure:\n\n{}\n\nReturn the JSON object with the figure text.", p.description.trim());
+    let msg = match &p.image {
+        Some(img) => Message::user_with_images(format!("{user}\n\nThe attached picture shows the figure; use it for what the text leaves open."), vec![img.clone()]),
+        None => Message::user(user),
+    };
+    (LlmRequest::chat(text_system(p, &shown), vec![msg]).json(text_schema()).max_tokens(8000), shown)
+}
+
+/// The text of a reply: its `dsl` with a `var` line for each symbol of `vars_new` the text does not
+/// declare itself. A doubled backslash before a letter (a JSON escaped once too often) is one.
+fn reply_text(v: &Value) -> Result<String, String> {
+    let dsl = v.get("dsl").and_then(Value::as_str).ok_or("the reply has no \"dsl\" text")?;
+    let cs: Vec<char> = dsl.chars().collect();
+    let mut text = String::new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '\\' && cs.get(i + 1) == Some(&'\\') && cs.get(i + 2).is_some_and(|c| c.is_ascii_alphabetic()) {
+            i += 1;
+            continue;
+        }
+        text.push(cs[i]);
+        i += 1;
+    }
+    let mut text = text.trim_end().to_string();
+    text.push('\n');
+    if let Some(list) = v.get("vars_new").and_then(Value::as_array) {
+        for x in list {
+            let id = x.get("id").and_then(Value::as_str).unwrap_or("").trim().trim_start_matches('@').to_string();
+            let latex = crate::spec::bare_latex(x.get("latex").and_then(Value::as_str).unwrap_or(""));
+            if id.is_empty() || latex.is_empty() {
+                continue;
+            }
+            let declared = text.lines().any(|l| l.trim_start().strip_prefix("var ").is_some_and(|r| r.trim_start().split(|c: char| c.is_whitespace() || c == '=').next() == Some(id.as_str())));
+            if !declared {
+                let meaning = x.get("meaning").and_then(Value::as_str).unwrap_or("").replace('"', "'");
+                text.push_str(&format!("var {id} = \"{}\" \"{meaning}\"\n", latex.replace('"', "'")));
+            }
+        }
+    }
+    Ok(text)
+}
+
+/// Parse, validate and draw once. The error is what stopped it, in the parser's own words
+/// ("line 7: …"); the warnings are what the draw noticed.
+fn check_text(text: &str, p: &FlowPrompt) -> Result<(Graph, Vec<String>), String> {
+    let kinds = p.library.kinds();
+    let g = crate::dsl::parse_with(text, &kinds).map_err(|e| e.to_string())?;
+    g.validate(&kinds).map_err(|e| e.to_string())?;
+    let d = crate::Drawing { library: p.library.clone(), notation: p.notation, ..Default::default() };
+    let fig = crate::draw(&g, &d).map_err(|e| e.to_string())?;
+    Ok((g, fig.built.warnings.clone()))
+}
+
+fn reply_checked(v: &Value, p: &FlowPrompt) -> Result<(String, Graph, Vec<String>), String> {
+    let t = reply_text(v)?;
+    let (g, w) = check_text(&t, p)?;
+    Ok((t, g, w))
+}
+
+/// A figure from a description, written by the model as text (tasks [`task_for`], the same engines
+/// as [`propose_with`]); also returns what the model was shown from the author's knowledge. A
+/// text that does not parse, validate or draw is sent back once with the exact message.
+pub async fn propose_text_with(llm: &dyn Llm, p: &FlowPrompt<'_>, k: &Knowledge) -> Result<(TextProposal, Shown), String> {
+    let task = task_for(p.image.is_some());
+    let (req, shown) = text_request_with(p, k);
+    let (v, engine) = llm.complete_json(task, req.clone()).await?;
+    let (dsl, graph, warnings, retried) = match reply_checked(&v, p) {
+        Ok((t, g, w)) => (t, g, w, false),
+        Err(why) => {
+            let mut again = req;
+            again.messages.push(Message::assistant(v.to_string()));
+            again.messages.push(Message::user(format!("That figure cannot be drawn: {why}. Return the whole corrected JSON object.")));
+            let (v2, _) = llm.complete_json(task, again).await?;
+            let (t, g, w) = reply_checked(&v2, p).map_err(|e| format!("模型寫的圖畫不出來：{e}"))?;
+            (t, g, w, true)
+        }
+    };
+    Ok((TextProposal { dsl, graph, provider: engine, retried, warnings }, shown))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,5 +934,169 @@ mod tests {
         let sent = llm.seen.lock().unwrap();
         assert!(sent[0].system.contains("- unet: U."));
         assert!(sent[0].system.contains("the author's own figure: One"));
+    }
+
+    // ── the text draft ──
+
+    fn text_reply(dsl: &str) -> Value {
+        json!({ "dsl": dsl, "vars_new": [] })
+    }
+    const PLAIN: &str = "fig f\nx: image \"$x$\"\nm: box \"Model\"\ny: label \"Out\"\nx -> m -> y\n";
+    const RICH: &str = "fig f\npanel a \"a. Train\" tint=blue round none title=above\n  x: image \"$x$\" look=photo col=0 lane=0\n  region g \"Group\" dashed tint=orange round title=above\n    f: box \"Model\" fill=blue col=1 lane=0\n    h: gadget \"G\" texts=[A,B] col=2 lane=0\n  end\n  y: label \"Out\" col=3 lane=0\n  x -> f : data color=orange width=2.5\n  f -> h : skip curve color=green\n  h -> y\nend\n";
+
+    fn last_user(req: &LlmRequest) -> String {
+        req.messages.last().unwrap().text()
+    }
+
+    #[test]
+    fn a_text_draft_is_parsed_checked_and_drawn() {
+        let lib = lib();
+        let llm = script(vec![json!({ "dsl": PLAIN, "vars_new": [ { "id": "w_b", "latex": "$\\omega_b$", "meaning": "weight" } ] })]);
+        let (t, _) = rt().block_on(propose_text_with(&llm, &prompt(&lib, DESC, &[]), &Knowledge::default())).unwrap();
+        assert_eq!(t.graph.nodes.len(), 3);
+        assert!(!t.retried && t.provider == "script");
+        // a symbol of vars_new becomes a var line of the text, and of the graph
+        assert!(t.dsl.contains("var w_b = \"\\omega_b\" \"weight\""), "{}", t.dsl);
+        assert_eq!(t.graph.vars_new[0].id, "w_b");
+        assert_eq!(llm.seen.lock().unwrap().len(), 1);
+        let sent = &llm.seen.lock().unwrap()[0];
+        assert!(sent.json_schema.is_some() && !serde_json::to_string(&sent.json_schema).unwrap().contains("nodes"));
+    }
+
+    #[test]
+    fn a_draft_with_regions_pins_and_colours_is_accepted() {
+        let lib = lib();
+        let llm = script(vec![text_reply(RICH)]);
+        let (t, _) = rt().block_on(propose_text_with(&llm, &prompt(&lib, DESC, &[]), &Knowledge::default())).unwrap();
+        assert!(!t.retried, "{:?}", t.warnings);
+        assert_eq!(t.graph.regions.len(), 1);
+        assert_eq!(t.graph.regions[0].members.len(), 2);
+        assert_eq!(t.graph.edges.len(), 3);
+        assert!(t.dsl.contains("texts=[A,B]") && t.dsl.contains("width=2.5") && t.dsl.contains("lane=0"));
+    }
+
+    #[test]
+    fn a_draft_that_does_not_parse_is_sent_back_once_with_the_line() {
+        let lib = lib();
+        let bad = "fig f\nx: box \"A\"\ny: box \"B\"\nx -> y -> nowhere\n";
+        let msg = match crate::dsl::parse_with(bad, &lib.kinds()) {
+            Err(e) => e.to_string(),
+            Ok(g) => g.validate(&lib.kinds()).unwrap_err().to_string(),
+        };
+        assert!(!msg.is_empty());
+        let llm = script(vec![text_reply(bad), text_reply(PLAIN)]);
+        let (t, _) = rt().block_on(propose_text_with(&llm, &prompt(&lib, DESC, &[]), &Knowledge::default())).unwrap();
+        assert!(t.retried);
+        let seen = llm.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        let back = last_user(&seen[1]);
+        assert!(back.contains(&msg) && back.contains("whole corrected JSON object"), "{back}");
+        assert_eq!(seen[1].messages.len(), 3);
+    }
+
+    #[test]
+    fn a_syntax_error_names_its_line() {
+        let lib = lib();
+        let bad = "fig f\nx: box \"A\n";
+        let llm = script(vec![text_reply(bad), text_reply(PLAIN)]);
+        rt().block_on(propose_text_with(&llm, &prompt(&lib, DESC, &[]), &Knowledge::default())).unwrap();
+        let back = last_user(&llm.seen.lock().unwrap()[1]);
+        assert!(back.contains("line 2"), "{back}");
+    }
+
+    #[test]
+    fn a_second_failure_is_one_line() {
+        let lib = lib();
+        let bad = "fig f\nx: box \"A\n";
+        let llm = script(vec![text_reply(bad), text_reply(bad)]);
+        let e = rt().block_on(propose_text_with(&llm, &prompt(&lib, DESC, &[]), &Knowledge::default())).unwrap_err();
+        assert!(e.starts_with("模型寫的圖畫不出來：") && !e.contains('\n'), "{e}");
+        assert_eq!(llm.seen.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_reply_without_text_is_sent_back() {
+        let lib = lib();
+        let llm = script(vec![json!({ "vars_new": [] }), text_reply(PLAIN)]);
+        let (t, _) = rt().block_on(propose_text_with(&llm, &prompt(&lib, DESC, &[]), &Knowledge::default())).unwrap();
+        assert!(t.retried);
+    }
+
+    #[test]
+    fn draw_warnings_come_back_and_are_not_sent_back() {
+        let lib = lib();
+        let dsl = "fig f\nx: image \"$x$\"\nm: box \"Model\"\nx -> m : data color=notacolour\n";
+        let llm = script(vec![text_reply(dsl)]);
+        let (t, _) = rt().block_on(propose_text_with(&llm, &prompt(&lib, DESC, &[]), &Knowledge::default())).unwrap();
+        assert!(!t.retried);
+        assert!(t.warnings.iter().any(|w| w.contains("notacolour")), "{:?}", t.warnings);
+        assert_eq!(llm.seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_text_prompt_teaches_every_sentence() {
+        let lib = lib();
+        let (req, _) = text_request_with(&prompt(&lib, DESC, &[]), &Knowledge::default());
+        for kw in ["region", "align row", "col=", "lane=", "tint=", "color=", "width=", "curve", "texts=", "colors=", "through=", "chart=", "icon=", "align col", "dashed", "title=above", "a>b -> c", "fill=", "caption=", "style="] {
+            assert!(req.system.contains(kw), "{kw}");
+        }
+        assert!(req.system.lines().count() < 220, "{}", req.system.lines().count());
+        assert!(req.system.contains("(empty: every variable goes into vars_new)"));
+        assert!(req.messages[0].text().contains(DESC));
+    }
+
+    #[test]
+    fn examples_are_shown_with_their_colours_and_pins() {
+        let lib = lib();
+        let dsl = "fig m\nx: image \"$x$\" fill=ff0000 w=40 col=2 lane=1\nf: unet \"U\" depth=3 color=\"red\"\nx -> f : data color=orange\n";
+        let k = Knowledge { modules: vec![], examples: vec![made("a", "My seg", dsl)] };
+        let folder = vec![("A folder example.".to_string(), crate::dsl::parse("fig e\nx: image \"$x$\"\n").unwrap())];
+        let (req, shown) = text_request_with(&prompt(&lib, DESC, &folder), &k);
+        assert_eq!(shown.examples.len(), 1);
+        let s = &req.system;
+        for kept in ["fill=ff0000", "w=40", "col=2 lane=1", "color=\"red\"", "color=orange"] {
+            assert!(s.contains(kept), "{kept}");
+        }
+        assert!(s.contains("## Example 1 (the author's own figure: My seg)") && s.contains("A folder example."));
+        let long = (0..600).map(|i| format!("n{i}: box \"label number {i}\" col={i}")).collect::<Vec<_>>().join("\n");
+        let k = Knowledge { modules: vec![], examples: vec![made("a", "T", &long)] };
+        let (req, _) = text_request_with(&prompt(&lib, DESC, &[]), &k);
+        assert!(req.system.contains("n0:") && !req.system.contains("n599:"));
+    }
+
+    #[test]
+    fn the_library_blocks_are_listed_with_their_level() {
+        let mut lib = lib();
+        lib.add_json(r#"{ "kind": "tiny-conv", "description": "one convolution", "level": "component", "w": 30, "h": 20, "objects": [] }"#).unwrap();
+        let (req, _) = text_request_with(&prompt(&lib, DESC, &[]), &Knowledge::default());
+        let s = &req.system;
+        assert!(s.contains("tiny-conv (component): one convolution"), "{s}");
+        assert!(s.contains("gadget style=plain: a block") && s.contains("gadget style=fancy: a block"), "{s}");
+        // components come first
+        assert!(s.find("tiny-conv").unwrap() < s.find("gadget style=").unwrap());
+        // the list is capped
+        let mut big = Library::default();
+        for i in 0..150 {
+            big.add_json(&format!(r#"{{ "kind": "blk{i:03}", "description": "d", "w": 10, "h": 10, "objects": [] }}"#)).unwrap();
+        }
+        let (req, _) = text_request_with(&prompt(&big, DESC, &[]), &Knowledge::default());
+        assert!(req.system.contains("blk119") && !req.system.contains("blk120") && req.system.contains("and 30 more"));
+    }
+
+    #[test]
+    fn registered_symbols_are_offered_when_there_is_a_registry() {
+        let lib = lib();
+        let n: Notation = serde_json::from_value(json!({ "version": 1, "entries": [
+            { "id": "w_b", "kind": "symbol", "latex": "\\omega_b", "meaning": "weight of batch b" } ] })).unwrap();
+        let mut p = prompt(&lib, DESC, &[]);
+        p.notation = Some(&n);
+        let (req, _) = text_request_with(&p, &Knowledge::default());
+        assert!(req.system.contains("- w_b — $\\omega_b$ — weight of batch b"), "{}", req.system);
+        assert!(!req.system.contains("(empty: every variable goes into vars_new)"));
+        // a registered symbol is drawn from the registry
+        let dsl = "fig f\nx: box \"@w_b\"\ny: label \"Out\"\nx -> y\n";
+        let llm = script(vec![text_reply(dsl)]);
+        let (t, _) = rt().block_on(propose_text_with(&llm, &p, &Knowledge::default())).unwrap();
+        assert!(!t.retried);
     }
 }
