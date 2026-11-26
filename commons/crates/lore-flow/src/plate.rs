@@ -223,9 +223,9 @@ pub const CELL: f64 = 4.0;
 /// one channel need `7 (n + 1)`.
 const LINE_ROOM: f64 = 7.0;
 /// The most a picture-like block is enlarged to fill spare room (its words keep their size).
-pub const GROW_MAX: f64 = 2.0;
+pub const GROW_MAX: f64 = 3.0;
 /// Enlargements tried: 1.00, 1.05 … GROW_MAX (a coarse ladder, so `to_layout` finds the same).
-const GROW_STEPS: usize = 21;
+const GROW_STEPS: usize = 41;
 /// Margin inside every framed panel, between its blocks' footprints and its frame (cells; each
 /// footprint has its own one-cell margin besides). A title adds its row on top.
 pub const FRAME_PAD: u32 = 1;
