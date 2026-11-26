@@ -504,6 +504,11 @@ pub struct TextProposal {
     /// What the successful draw noticed (a line with too many corners, an unknown colour, an
     /// alignment not met). Told to the author, not sent back to the model.
     pub warnings: Vec<String>,
+    /// What the program still sees wrong in how the kept draft looks ([`looks`]).
+    pub looks: Vec<String>,
+    /// The first drawable draft had faults in how it looks and was sent back once; the second
+    /// was better and is the one kept.
+    pub polished: bool,
 }
 
 /// JSON schema of the text draft's reply.
@@ -535,14 +540,28 @@ const LANGUAGE_GUIDE: &str = r##"You draw a figure by WRITING ITS TEXT in a smal
 - One colour per path or per kind of thing; regions round blocks of one kind; do not colour everything.
 - Few crossing lines; no line should have to cross a block.
 
+## How to place a panel (the author's recipe)
+1. Each path the description draws from an input to an output (one per panel, or one per row when the description draws parallel rows: training over inference, view 1 … view V) is one chain with `: data`, its blocks pinned in one lane, col = 0, 1, 2 … in the order of the chain.
+2. Every other line has the kind of its meaning: `side` (a branch, an input that joins in, a prediction into its own loss), `supervision` (ground truth or a label into a loss), `feedback` (a loss or weights going back), `skip` (over blocks, drawn above the row), `shared` (two blocks that share weights: ONE line, not two), `compare` (two things compared), `cross` (only between two panels). The main path ends at the prediction; losses are never on it. Only paths that must be told apart get `color=`.
+3. A block that joins a path at block X sits in X's column, in the lane directly above or below, so its line is straight; an input that comes earlier sits one column before X in its own lane.
+4. A loss is a `loss` block, never a label or a box. It sits beside the block it is computed from: right of it when that block ends the path, otherwise in the same column directly above (the first loss) or below (the second). Its ground truth sits on the far side of the loss, in the loss's lane.
+5. A line may leave the middle of another line (`a>b -> c`) when the description says a path splits on its way or copies a value along (a branch to a second model, a stop-gradient copy, a second ground truth for another loss). A block that feeds three or more rows keeps one line to each.
+6. Repeated rows (view 1, view 2, … view V; branch 1 … R) share columns: the same col for the same role, one lane per row, and an `ellipsis` in its own lane between the last two rows.
+7. Pin a panel top to bottom (`dir=down`, col = 0, 1, 2 down the panel) only when the description says the panel runs from top to bottom.
+8. A name written over or under several blocks is a region with no frame: `region r "Bad quality" none title=above` around them. Never a `label` block in a lane of its own above them.
+9. Words written inside a box in the description are the box's label, not a caption.
+10. A legend for the whole figure goes in its own frameless panel (`panel leg "" bare`) in its own row of `arrange` where the description puts it, items pinned in lane 0 in the listed order. A key that explains one panel's symbols may stay inside that panel, in its own column.
+11. `align` only between panels, only to make a line between panels straight; inside a panel the pins do it.
+
 ## The language (one statement per line; # starts a comment)
 fig <name>
 panel a "a. Title" [dir=right|down]
   ...blocks, regions and lines of the panel...
 end
 - A panel is a top-level area. Several panels: `arrange a b / c` (rows of panel ids: a and b side by side, c under them).
-- Panel options are a region's: dashed | dotted | solid | none (the frame's line), tint=<colour>, round, title=top-left|top|above|below|left|none.
-    panel b "Stage 2" tint=blue round none title=above     # a pale rounded area without a black frame
+- Panel options: none (no frame), bare (nothing drawn), tint=<colour> (only when the description gives the area a colour), title=top-left|top|above|below|left|none. The style draws every panel's frame and corners.
+    panel b "Stage 2" tint=blue none title=above     # a pale blue area without a black frame
+- Follow the description's words for the arrangement: 上／下 is rows (`arrange a / b`), 左／右 or 由左到右 is one row (`arrange a b`).
 - A line between panels: `a -> b : cross`.
 
 ### Blocks
@@ -551,6 +570,7 @@ end
 - role=input|model|op|data|output|gt|loss|merge|note only shades the block. caption="16x16" adds a small line under it. style=<name> picks the kind's art style.
 - A block's own colour: fill=blue (pale fill, blue outline), or fill=F5E6C8; line=<colour>; text=<colour>.
     enc: encoder "Encoder" style=trapezoid fill=blue
+- Never write round, radius= or shape=round: corners come from the style.
 - Pins: col=<n> (0 = first along the flow) and lane=<n> (0 = top). Columns and lanes are counted PER PANEL; gaps are closed up. Pin EVERY block of a panel and you decide the layout: blocks with no line between them can share a row, one block can sit under another, an input can come from the right. Lines never move a pinned block.
     x: image "$x$" look=photo col=0 lane=1
     f: box "Model" col=1 lane=1
@@ -558,21 +578,22 @@ end
 - Words: `$...$` is LaTeX; `@id` is a registered symbol. A label may be empty ("").
 
 ### Regions (frames round blocks; they nest)
-  region g "Group title" dashed tint=orange round title=above
+  region g "Group title" tint=orange title=above
     a1: box "A" col=1 lane=0
     region inner "Inner" dotted
       a2: op "+" col=2 lane=0
     end
   end
-- Options: dashed | dotted | solid | none, tint=<colour>, round, title=top-left|top|above|below|left. Blocks declared inside are members; a region may also list only ids: `region r "T" dashed` / `  n1 n2` / `end`. A region frames its members' cells: pin the members to adjacent cells.
+- Options: none (no frame), dashed or dotted (only when the description draws that group's frame so), tint=<colour>, title=top-left|top|above|below|left. A region with tint is a group of like things; a region without tint is the frame of one named sub-network. Blocks declared inside are members; a region may also list only ids: `region r "T" dashed` / `  n1 n2` / `end`. A region frames its members' cells: pin the members to adjacent cells.
 
 ### Lines
   a -> b                          a data line
   a -> b -> c                     a chain
-  a -> b : kind "label" color=orange width=2.5 curve
+  a -> b : kind "label" color=orange curve
   a>b -> c : optional             leaves the MIDDLE of the line a->b (a branch off a line)
-- kind: data (default; the one main line from input to output), side (any other data line: a branch, an input joining in), supervision, feedback, loss-out, compare, optional, shared, skip, concat, down, up, cross. Dashed by default: supervision, feedback, optional, shared, cross. After the colon the order is: kind, "label", color=, width=, curve.
-- color= gives a line its own colour: one colour per path. width= is the thickness in pt (1 to 4). curve draws a curved line (for a skip over blocks).
+- kind: data (default; the one main line from input to output), side (any other data line: a branch, an input joining in), supervision, feedback, loss-out, compare, optional, shared, skip, concat, down, up, cross. Dashed by default: supervision, feedback, optional, shared, cross. After the colon the order is: kind, "label", color=, curve, from=, to=.
+- color= only when the description says paths have different colours: one colour name per path, the same along the whole path. Never write width=: the line's kind sets its weight. curve only for a line that arcs over other blocks (a skip) or between parallel rows; an ordinary join is never curved.
+- from=top|bottom|left|right and to=… choose the side a line leaves or enters a block; leave them out unless the description says where the line goes in.
 - Two paths that join meet in an `op` block (label + for add, x for multiply, . element-wise, C concatenation).
 
 ### Alignment
@@ -708,19 +729,64 @@ fn reply_text(v: &Value) -> Result<String, String> {
 
 /// Parse, validate and draw once. The error is what stopped it, in the parser's own words
 /// ("line 7: …"); the warnings are what the draw noticed.
-fn check_text(text: &str, p: &FlowPrompt) -> Result<(Graph, Vec<String>), String> {
+fn check_text(text: &str, p: &FlowPrompt) -> Result<(Graph, Vec<String>, Vec<String>), String> {
     let kinds = p.library.kinds();
     let g = crate::dsl::parse_with(text, &kinds).map_err(|e| e.to_string())?;
     g.validate(&kinds).map_err(|e| e.to_string())?;
     let d = crate::Drawing { library: p.library.clone(), notation: p.notation, ..Default::default() };
     let fig = crate::draw(&g, &d).map_err(|e| e.to_string())?;
-    Ok((g, fig.built.warnings.clone()))
+    Ok((g, fig.built.warnings.clone(), looks(&fig)))
 }
 
-fn reply_checked(v: &Value, p: &FlowPrompt) -> Result<(String, Graph, Vec<String>), String> {
+/// What the program sees wrong in how a drawn figure looks, in words the drafting model can act
+/// on: lines over words, lines showing through a shape, words cut by a shape or frame, lines
+/// drawn on a frame. Empty = clean.
+pub fn looks(fig: &crate::Figure) -> Vec<String> {
+    // `flow:<fig>/edge:a-b/…` → "the line a → b"; `flow:<fig>/<node>/…` → "block <node>"
+    let who = |name: &str| -> String {
+        let rest = name.split_once('/').map(|x| x.1).unwrap_or(name);
+        if let Some(e) = rest.strip_prefix("edge:") {
+            let e = e.split('/').next().unwrap_or(e);
+            return format!("the line {}", e.replacen('-', " → ", 1));
+        }
+        for (key, what) in [("panel:", "panel"), ("region:", "region")] {
+            if let Some(r) = rest.strip_prefix(key) {
+                return format!("{what} {}", r.split('/').next().unwrap_or(r));
+            }
+        }
+        format!("block {}", rest.split('/').next().unwrap_or(rest))
+    };
+    let rep = crate::look::check(fig.objects());
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |s: String| {
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    };
+    for h in &rep.over_text {
+        push(format!("{} runs over the words of {}", who(&h.line), who(&h.other)));
+    }
+    for h in &rep.through_open {
+        push(format!("{} shows through {}", who(&h.line), who(&h.other)));
+    }
+    for h in &rep.words_cut {
+        if h.line == h.other {
+            push(format!("the words of {} run past its own shape", who(&h.line)));
+        } else {
+            push(format!("the border of {} cuts the words of {}", who(&h.line), who(&h.other)));
+        }
+    }
+    let n = crate::route::hugging(&fig.layout, &fig.routes);
+    if n > 0 {
+        push(format!("{n} stretch(es) of line run along a frame's border"));
+    }
+    out
+}
+
+fn reply_checked(v: &Value, p: &FlowPrompt) -> Result<(String, Graph, Vec<String>, Vec<String>), String> {
     let t = reply_text(v)?;
-    let (g, w) = check_text(&t, p)?;
-    Ok((t, g, w))
+    let (g, w, l) = check_text(&t, p)?;
+    Ok((t, g, w, l))
 }
 
 /// A figure from a description, written by the model as text (tasks [`task_for`], the same engines
@@ -730,18 +796,37 @@ pub async fn propose_text_with(llm: &dyn Llm, p: &FlowPrompt<'_>, k: &Knowledge)
     let task = task_for(p.image.is_some());
     let (req, shown) = text_request_with(p, k);
     let (v, engine) = llm.complete_json(task, req.clone()).await?;
-    let (dsl, graph, warnings, retried) = match reply_checked(&v, p) {
-        Ok((t, g, w)) => (t, g, w, false),
+    let mut req = req;
+    let (mut v, mut dsl, mut graph, mut warnings, mut look, mut retried) = match reply_checked(&v, p) {
+        Ok((t, g, w, l)) => (v, t, g, w, l, false),
         Err(why) => {
-            let mut again = req;
-            again.messages.push(Message::assistant(v.to_string()));
-            again.messages.push(Message::user(format!("That figure cannot be drawn: {why}. Return the whole corrected JSON object.")));
-            let (v2, _) = llm.complete_json(task, again).await?;
-            let (t, g, w) = reply_checked(&v2, p).map_err(|e| format!("模型寫的圖畫不出來：{e}"))?;
-            (t, g, w, true)
+            req.messages.push(Message::assistant(v.to_string()));
+            req.messages.push(Message::user(format!("That figure cannot be drawn: {why}. Return the whole corrected JSON object.")));
+            let (v2, _) = llm.complete_json(task, req.clone()).await?;
+            let (t, g, w, l) = reply_checked(&v2, p).map_err(|e| format!("模型寫的圖畫不出來：{e}"))?;
+            (v2, t, g, w, l, true)
         }
     };
-    Ok((TextProposal { dsl, graph, provider: engine, retried, warnings }, shown))
+    // it draws, but the program sees what the author would not accept: sent back once with the
+    // exact findings; the better of the two drafts is kept
+    let mut polished = false;
+    if !look.is_empty() {
+        req.messages.push(Message::assistant(v.to_string()));
+        req.messages.push(Message::user(format!(
+            "The figure draws, but the program found these faults in how it looks:\n- {}\nFix them with pins (col=, lane=), a line's side (from=, to=), a line's kind or where a block sits; do not change what the figure shows. Return the whole corrected JSON object.",
+            look.join("\n- ")
+        )));
+        if let Ok((v2, _)) = llm.complete_json(task, req).await
+            && let Ok((t, g, w, l)) = reply_checked(&v2, p)
+            && l.len() < look.len()
+        {
+            (v, dsl, graph, warnings, look) = (v2, t, g, w, l);
+            polished = true;
+            retried = true;
+        }
+    }
+    let _ = v;
+    Ok((TextProposal { dsl, graph, provider: engine, retried, warnings, looks: look, polished }, shown))
 }
 
 #[cfg(test)]
@@ -961,6 +1046,31 @@ mod tests {
         assert_eq!(llm.seen.lock().unwrap().len(), 1);
         let sent = &llm.seen.lock().unwrap()[0];
         assert!(sent.json_schema.is_some() && !serde_json::to_string(&sent.json_schema).unwrap().contains("nodes"));
+    }
+
+    #[test]
+    fn a_draft_that_looks_wrong_is_sent_back_once_and_the_better_kept() {
+        // a saved block whose one part holds its label: a long word runs past the part
+        let mut lib = Library::default();
+        lib.add_json(r#"{ "kind": "capped", "style": "x", "description": "a block", "w": 40, "h": 20, "objects": [
+            { "id": 0, "name": "cap", "type": "shape", "frame": { "x": 0, "y": 0, "w": 508000, "h": 254000 }, "geom": { "prst": "rect" },
+              "fill": { "kind": "solid", "color": "FFFFFF" }, "line": { "color": "000000", "width_pt": 1.0 },
+              "text": { "insets": [0, 0, 0, 0], "anchor": "ctr", "wrap": true, "paras": [ { "align": "ctr", "runs": [ { "kind": "text", "text": "{{label}}", "look": { "font": "Arial", "size": 10, "color": "role:text" } } ] } ] } } ] }"#)
+            .unwrap();
+        let long = "fig f\nn: capped \"Supercalifragilisticexpialidocious\" style=x\n";
+        let short = "fig f\nn: capped \"Ok\" style=x\n";
+        let llm = script(vec![text_reply(long), text_reply(short)]);
+        let (t, _) = rt().block_on(propose_text_with(&llm, &prompt(&lib, DESC, &[]), &Knowledge::default())).unwrap();
+        assert!(t.polished && t.looks.is_empty(), "{:?}", t.looks);
+        assert!(t.dsl.contains("\"Ok\""));
+        let seen = llm.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(last_user(&seen[1]).contains("run past its own shape"), "{}", last_user(&seen[1]));
+        drop(seen);
+        // a second draft that is no better is not kept
+        let llm = script(vec![text_reply(long), text_reply(long)]);
+        let (t, _) = rt().block_on(propose_text_with(&llm, &prompt(&lib, DESC, &[]), &Knowledge::default())).unwrap();
+        assert!(!t.polished && !t.looks.is_empty());
     }
 
     #[test]
