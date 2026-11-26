@@ -24,7 +24,6 @@ fn main() {
             n.params.remove(k);
         }
     }
-    g.edges.clear();
     let mut vars = Vars::default();
     vars.add_new(&g.vars_new);
     let m = Measure { theme: &theme, vars: &vars, library: &cat.library, image_size: &modules::no_images };
@@ -39,6 +38,9 @@ fn main() {
         air.text_max_pt = v;
     }
     let p = pack::pack(&g, &f, &m, a.get(5).map(String::as_str).unwrap_or(""), &air).expect("a figure with blocks");
+    // the base draft has no lines
+    let mut p = p;
+    p.graph.edges.clear();
     let built = build::build_with(&p.graph, &theme, &vars, &cat.library, &NoMath, &p.layout, &[], 2, &modules::no_images);
     let fig = Figure { layout: p.layout.clone(), routes: Vec::new(), built };
     std::fs::write(&a[3], lore_flow::figure::svg_mm(&fig, None)).expect("write");
@@ -58,6 +60,9 @@ fn main() {
         }
     }
     println!("text {:.1} pt; page cover {:.0}%; slack across {:.0}% down {:.0}%; pictures over pictures {over}; pictures out of their area {out}", p.text_pt, 100.0 * p.cover, 100.0 * p.slack.0, 100.0 * p.slack.1);
+    if !p.notes.is_empty() {
+        println!("  notes (no room taken): {}; without free room: {}", p.notes.join(" "), if p.crowded.is_empty() { "none".to_string() } else { p.crowded.join(" ") });
+    }
     for ar in &p.areas {
         println!("  {}: pictures x{:.2}, cover {:.0}%, rows {}", ar.id, ar.grow, 100.0 * ar.cover, ar.rows.iter().map(|r| r.join(" ")).collect::<Vec<_>>().join(" | "));
     }

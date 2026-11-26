@@ -72,6 +72,31 @@ pub struct Packed {
     /// What is left of the page in the direction that does not bind, as a share of it:
     /// (across, down). Both near 0 = the page is full both ways.
     pub slack: (f64, f64),
+    /// The blocks that are notes, not objects (see [`is_note`]): they took no room in the
+    /// filling and were written in the air beside the block they belong to.
+    pub notes: Vec<String>,
+    /// The notes among them that found no free room and lie over something.
+    pub crowded: Vec<String>,
+}
+
+/// A note, not an object: a block that is words only (`label`) and sits on lines none of which
+/// carries the flow (no `data` line). It says something about a line or a block (a weight fed in
+/// from the side, the name of a comparison), so it takes no room in the filling and does not
+/// move the objects; it is written in the air next to the block it is tied to. Words without any
+/// line (a legend's rows, a heading) stay objects: nothing says where else they belong.
+pub fn is_note(g: &Graph, n: usize) -> bool {
+    let node = &g.nodes[n];
+    if node.module != "label" {
+        return false;
+    }
+    let mut any = false;
+    for e in g.edges.iter().filter(|e| e.from == node.id || e.to == node.id) {
+        any = true;
+        if e.kind == crate::spec::EdgeKind::Data {
+            return false;
+        }
+    }
+    any
 }
 
 #[derive(Debug, Clone)]
@@ -86,16 +111,75 @@ struct Area {
     bare: bool,
     down: bool,
     items: Vec<Item>,
+    notes: Vec<usize>,
 }
 
-/// A block's tight box at one enlargement: width, height, and how far its picture's middle line
-/// lies under its top.
+/// A block's tight box at one enlargement: its width, how far its middle line lies under its
+/// top (`up`), how far its picture reaches under that line (`dn`), and the height of the words
+/// under the picture (`words`). In a row the middle lines coincide and the words start on one
+/// line under the row's tallest picture, so a row is max up + max dn + max words tall.
 #[derive(Debug, Clone, Copy)]
 struct Box3 {
     w: f64,
-    h: f64,
     up: f64,
+    dn: f64,
+    words: f64,
+    /// A frame (a region), not a block: it is as tall as its row and sets no line for words.
+    frame: bool,
 }
+
+/// A row's height above its middle line, its height below it, and how far under the line the
+/// words of its blocks start (under the tallest picture among the blocks; a frame in the row
+/// does not push them down).
+fn row_parts(b: &[Box3]) -> (f64, f64, f64) {
+    let up = b.iter().map(|x| x.up).fold(0.0, f64::max);
+    let leaf_dn = b.iter().filter(|x| !x.frame).map(|x| x.dn).fold(0.0, f64::max);
+    let words = b.iter().filter(|x| !x.frame).map(|x| x.words).fold(0.0, f64::max);
+    let below = b.iter().filter(|x| x.frame).map(|x| x.dn).fold(leaf_dn + words, f64::max);
+    (up, below, leaf_dn)
+}
+
+/// The columns the rows of a frame share, so the items of different rows lie under each other.
+/// The longest rows set them. A shorter row starts as many columns in as centres it when that
+/// lands on columns (the difference is even), else at the first column, and joins only when each
+/// of its items is at most [`JOIN`] times as wide as its column (the column then holds it); a
+/// row with an item too wide for that is laid out on its own, centred (`None`).
+/// Returns each column's width, each row's first column, and the width they all need.
+fn columns(b: &[Box3], ends: &[usize], gap: f64) -> (Vec<f64>, Vec<Option<usize>>, f64) {
+    let mut rows = Vec::new();
+    let mut a = 0;
+    for &e in ends {
+        rows.push((a, e));
+        a = e;
+    }
+    let n = rows.iter().map(|(a, z)| z - a).max().unwrap_or(0);
+    let mut w = vec![0.0f64; n];
+    for (a, z) in rows.iter().filter(|(a, z)| z - a == n) {
+        for i in *a..*z {
+            w[i - a] = w[i - a].max(b[i].w);
+        }
+    }
+    let mut first = Vec::new();
+    let mut need: f64 = 0.0;
+    for (a, z) in &rows {
+        let l = z - a;
+        let f = if (n - l) % 2 == 0 { (n - l) / 2 } else { 0 };
+        if l == n || (*a..*z).all(|i| b[i].w <= w[f + i - a] * JOIN + 0.01) {
+            for i in *a..*z {
+                w[f + i - a] = w[f + i - a].max(b[i].w);
+            }
+            first.push(Some(f));
+        } else {
+            need = need.max(b[*a..*z].iter().map(|x| x.w).sum::<f64>() + gap * (l - 1) as f64);
+            first.push(None);
+        }
+    }
+    let need = need.max(w.iter().sum::<f64>() + gap * n.saturating_sub(1) as f64);
+    (w, first, need)
+}
+
+/// How much wider than a column an item of a shorter row may be and still stand in it.
+const JOIN: f64 = 1.3;
 
 /// One way a frame holds its items: its size, where its rows end, and which shape each item
 /// that is itself a frame takes.
@@ -113,6 +197,10 @@ struct Ctx2<'a> {
     air: &'a Air,
     fs: f64,
     cache: RefCell<BTreeMap<(usize, u32), Box3>>,
+    /// Per area and per region: a band kept free above and below its rows, for notes that found
+    /// no room in the air (the same above and below, so the objects stay centred).
+    band_area: Vec<f64>,
+    band_reg: Vec<f64>,
 }
 
 fn steps(g: f64) -> u32 {
@@ -136,7 +224,7 @@ impl Ctx2<'_> {
         }
         let b = body(&self.g.nodes[n], grow, false, self.m);
         let w = b.w.max(b.reserve_w);
-        let out = Box3 { w, h: b.h, up: b.art.1 + b.art.3 / 2.0 };
+        let out = Box3 { w, up: b.axis, dn: b.h - b.below - b.axis, words: b.below, frame: false };
         self.cache.borrow_mut().insert((n, grow), out);
         out
     }
@@ -160,7 +248,10 @@ impl Ctx2<'_> {
     /// and the widest.
     fn group_shapes(&self, r: usize, kids: &[Item], grow: u32) -> Vec<Shape> {
         let (band, tw) = self.region_title(r);
-        let all = self.shapes(kids, grow, band, tw, true);
+        let mut all = self.shapes(kids, grow, band, tw, true);
+        for s in &mut all {
+            s.h += 2.0 * self.band_reg[r];
+        }
         if all.len() > 3 { vec![all[0].clone(), all[all.len() / 2].clone(), all[all.len() - 1].clone()] } else { all }
     }
 
@@ -186,7 +277,7 @@ impl Ctx2<'_> {
             .iter()
             .map(|it| match it {
                 Item::Leaf(i) => vec![(self.leaf(*i, grow), 0)],
-                Item::Group(r, kids) => self.group_shapes(*r, kids, grow).iter().enumerate().map(|(k, s)| (Box3 { w: s.w, h: s.h, up: s.h / 2.0 }, k)).collect(),
+                Item::Group(r, kids) => self.group_shapes(*r, kids, grow).iter().enumerate().map(|(k, s)| (Box3 { w: s.w, up: s.h / 2.0, dn: s.h / 2.0, words: 0.0, frame: true }, k)).collect(),
             })
             .collect();
         let mut combos: Vec<Vec<usize>> = vec![vec![]];
@@ -214,9 +305,8 @@ impl Ctx2<'_> {
             // best[k][i] = (height, width) of items ..i in k rows
             let row = |a: usize, z: usize| -> (f64, f64) {
                 let w = b[a..z].iter().map(|x| x.w).sum::<f64>() + gap * (z - a - 1) as f64;
-                let up = b[a..z].iter().map(|x| x.up).fold(0.0, f64::max);
-                let dn = b[a..z].iter().map(|x| x.h - x.up).fold(0.0, f64::max);
-                (w, up + dn)
+                let (up, below, _) = row_parts(&b[a..z]);
+                (w, up + below)
             };
             // widths worth trying: every row's width; for each, the fewest-height breaking
             let mut widths: Vec<f64> = Vec::new();
@@ -253,12 +343,8 @@ impl Ctx2<'_> {
                     z = best[z].unwrap().1;
                 }
                 ends.reverse();
-                let mut a = 0;
-                let mut w: f64 = 0.0;
-                for &e in &ends {
-                    w = w.max(row(a, e).0);
-                    a = e;
-                }
+                // the width is that of the columns the rows share
+                let (_, _, w) = columns(&b, &ends, gap);
                 out.push(Shape { w: w.max(min_w) + 2.0 * pad, h: h + top + if top > 0.0 { pad } else { 2.0 * pad }, ends, kids: kids.clone() });
             }
         }
@@ -320,9 +406,15 @@ fn areas(g: &Graph) -> Vec<Area> {
     panels
         .into_iter()
         .map(|(id, title, bare, down)| {
-            let nodes: Vec<usize> = (0..g.nodes.len()).filter(|i| if id == "_" { g.nodes[*i].panel.is_empty() } else { g.nodes[*i].panel == id }).collect();
+            let all: Vec<usize> = (0..g.nodes.len()).filter(|i| if id == "_" { g.nodes[*i].panel.is_empty() } else { g.nodes[*i].panel == id }).collect();
+            // notes take no room; an area of notes only keeps them as its objects
+            let mut notes: Vec<usize> = all.iter().copied().filter(|n| is_note(g, *n)).collect();
+            if notes.len() == all.len() {
+                notes.clear();
+            }
+            let nodes: Vec<usize> = all.iter().copied().filter(|n| !notes.contains(n)).collect();
             let items = build(&nodes, 0, &chain);
-            Area { bare: bare || id == "_", id, title, down, items }
+            Area { bare: bare || id == "_", id, title, down, items, notes }
         })
         .collect()
 }
@@ -396,9 +488,40 @@ pub fn pack(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) ->
     if g.nodes.is_empty() {
         return None;
     }
+    // notes go in the air the objects leave; a frame whose notes found none gets a band for
+    // them above and below its rows, and the page is packed again
+    let (mut ba, mut br) = (vec![0.0; areas(g).len()], vec![0.0; g.regions.len()]);
+    let mut out = None;
+    for _ in 0..3 {
+        let (p, want) = pack_with(g, f, m, arrangement, air, &ba, &br)?;
+        let done = p.crowded.is_empty();
+        out = Some(p);
+        if done {
+            break;
+        }
+        for (frame, h) in want {
+            match frame {
+                Frame2::Area(i) => ba[i] = ba[i].max(h),
+                Frame2::Region(r) => br[r] = br[r].max(h),
+            }
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Frame2 {
+    Area(usize),
+    Region(usize),
+}
+
+/// One packing with the given bands; with it, for every note without free room, its frame and
+/// the band that would hold it.
+fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, band_area: &[f64], band_reg: &[f64]) -> Option<(Packed, Vec<(Frame2, f64)>)> {
     let ar = areas(g);
     let rows = rows_of(g, &ar, arrangement);
-    let cx = Ctx2 { g, m, air, fs: m.theme.font.size, cache: RefCell::new(BTreeMap::new()) };
+    let cx = Ctx2 { g, m, air, fs: m.theme.font.size, cache: RefCell::new(BTreeMap::new()), band_area: band_area.to_vec(), band_reg: band_reg.to_vec() };
+    let mut want: Vec<(Frame2, f64)> = Vec::new();
     let between = air.between * cx.fs;
     let ratio = f.ratio.1.max(1) as f64 / f.ratio.0.max(1) as f64;
     let shapes_at = |grow: &[u32]| -> Vec<Vec<Shape>> {
@@ -406,7 +529,11 @@ pub fn pack(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) ->
             .enumerate()
             .map(|(i, a)| {
                 let (band, tw) = cx.area_title(a);
-                cx.shapes(&a.items, grow[i], band, tw + if a.bare { 0.0 } else { cx.pad() }, !a.bare)
+                let mut v = cx.shapes(&a.items, grow[i], band, tw + if a.bare { 0.0 } else { cx.pad() }, !a.bare);
+                for s in &mut v {
+                    s.h += 2.0 * cx.band_area[i];
+                }
+                v
             })
             .collect()
     };
@@ -486,21 +613,62 @@ pub fn pack(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) ->
     }
     // every block in its place
     let mut tight: Vec<Rect> = vec![Rect::new(0.0, 0.0, 0.0, 0.0); g.nodes.len()];
+    let mut drop: Vec<f64> = vec![0.0; g.nodes.len()];
     let mut reg_rect: Vec<Option<Rect>> = vec![None; g.regions.len()];
     let mut out_areas = Vec::new();
+    let (mut notes, mut crowded) = (Vec::new(), Vec::new());
     for (i, a) in ar.iter().enumerate() {
         let (band, tw) = cx.area_title(a);
         let s = &sh[i][ft.pick[i]];
         let mut rows_txt = Vec::new();
-        place(&cx, &a.items, grow[i], s, rects[i], band, !a.bare, &mut tight, &mut reg_rect, Some(&mut rows_txt));
+        place(&cx, &a.items, grow[i], s, rects[i], band, cx.band_area[i], !a.bare, &mut tight, &mut drop, &mut reg_rect, Some(&mut rows_txt));
         let _ = tw;
+        // the notes, in the air the objects left: each inside the innermost frame it belongs to
+        let pad = if a.bare { 0.0 } else { cx.pad() };
+        let inner = Rect::new(rects[i].x + pad, rects[i].y + band + if band > 0.0 { 0.0 } else { pad }, rects[i].w - 2.0 * pad, rects[i].h - band - if band > 0.0 { pad } else { 2.0 * pad });
+        let objects = leaves(&a.items);
+        let mut taken: Vec<Rect> = objects.iter().map(|n| tight[*n]).collect();
+        let num = |n: usize, k: &str| g.nodes[n].num(k).unwrap_or(0.0);
+        let side = |a: f64, b: f64| if a > b { 1.0 } else if a < b { -1.0 } else { 0.0 };
+        for &n in &a.notes {
+            let b = cx.leaf(n, 100);
+            let id = &g.nodes[n].id;
+            // its frame: the smallest region that names it, else the area
+            let home = (0..g.regions.len()).filter(|r| g.regions[*r].members.iter().any(|x| x == id) && reg_rect[*r].is_some()).min_by(|x, y| (reg_rect[*x].unwrap().w * reg_rect[*x].unwrap().h).partial_cmp(&(reg_rect[*y].unwrap().w * reg_rect[*y].unwrap().h)).unwrap());
+            let room = match home {
+                Some(r) => {
+                    let (rr, t) = (reg_rect[r].unwrap(), cx.region_title(r).0);
+                    Rect::new(rr.x + cx.pad(), rr.y + t, rr.w - 2.0 * cx.pad(), rr.h - t - cx.pad())
+                }
+                None => inner,
+            };
+            // in the area's own room the frames inside it are taken whole
+            let mut shut: Vec<Rect> = taken.clone();
+            if home.is_none() {
+                shut.extend(reg_rect.iter().flatten().filter(|rr| rects[i].contains(rr)).copied());
+            }
+            let partner = g.edges.iter().filter_map(|e| if &e.from == id { g.node_index(&e.to) } else if &e.to == id { g.node_index(&e.from) } else { None }).find(|p| objects.contains(p));
+            let by = partner.map(|p| {
+                let (dc, dl) = (side(num(n, "col"), num(p, "col")), side(num(n, "lane"), num(p, "lane")));
+                (tight[p], if a.down { (dl, dc) } else { (dc, dl) })
+            });
+            let size = (b.w, b.up + b.dn + b.words);
+            let (r, ok) = note_place(size, by, room, &shut, cx.fs * 0.5);
+            tight[n] = r;
+            taken.push(r);
+            notes.push(id.clone());
+            if !ok {
+                crowded.push(id.clone());
+                want.push((home.map(Frame2::Region).unwrap_or(Frame2::Area(i)), size.1 + cx.fs * 0.6));
+            }
+        }
         let covered: f64 = leaves(&a.items).iter().map(|n| tight[*n].w * tight[*n].h).sum();
         out_areas.push(AreaPack { id: a.id.clone(), grow: grow[i] as f64 / 100.0, rows: rows_txt, cover: covered / (rects[i].w * rects[i].h).max(1.0) });
     }
     // the layout: each block drawn as `build` draws it (its frame mirrored about the picture's
     // middle line in a left-to-right area), laid so that its picture lies where the tight box has it
     let mut graph = g.clone();
-    let area_of: BTreeMap<usize, usize> = ar.iter().enumerate().flat_map(|(i, a)| leaves(&a.items).into_iter().map(move |n| (n, i))).collect();
+    let area_of: BTreeMap<usize, usize> = ar.iter().enumerate().flat_map(|(i, a)| leaves(&a.items).into_iter().chain(a.notes.iter().copied()).map(move |n| (n, i))).collect();
     let mut nodes = Vec::new();
     for (n, node) in g.nodes.iter().enumerate() {
         let pi = area_of[&n];
@@ -509,6 +677,11 @@ pub fn pack(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) ->
         if gr > 100 {
             graph.nodes[n].params.insert("grow".into(), serde_json::json!(gr as f64 / 100.0));
         }
+        graph.nodes[n].params.remove("label_drop");
+        if drop[n] > 0.05 {
+            graph.nodes[n].params.insert("label_drop".into(), serde_json::json!((drop[n] * 100.0).round() / 100.0));
+        }
+        let node = &graph.nodes[n];
         let t = body(node, gr, false, m);
         let b = body(node, gr, !ar[pi].down, m);
         let tr = tight[n];
@@ -520,7 +693,7 @@ pub fn pack(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) ->
         nodes.push(Placed { rect, reserve, port_y: rect.y + b.cy, art, words: b.words, panel: pi, layer: 0, lane: 0, single: b.single, ellipse: b.ellipse, ends: BTreeMap::new(), origin: (0.0, 0.0) });
     }
     for a in &ar {
-        let ns = leaves(&a.items);
+        let ns: Vec<usize> = leaves(&a.items).into_iter().chain(a.notes.iter().copied()).collect();
         let key = |v: f64| (v * 10.0).round() as i64;
         let mut xs: Vec<i64> = ns.iter().map(|n| key(nodes[*n].art.cx())).collect();
         let mut ys: Vec<i64> = ns.iter().map(|n| key(nodes[*n].port_y)).collect();
@@ -564,7 +737,7 @@ pub fn pack(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) ->
     };
     let lay = Layout { nodes, panels, regions, legend: Vec::new(), swatches: Vec::new(), bounds: Rect::new(0.0, 0.0, pw, ph), scale: 1.0 };
     let cover = tight.iter().map(|r| r.w * r.h).sum::<f64>() / (pw * ph);
-    Some(Packed { layout: lay, graph, text_pt: cx.fs * f.width_pt / pw, cover, areas: out_areas, slack: (1.0 - ft.used.0 / pw, 1.0 - ft.used.1 / ph) })
+    Some((Packed { layout: lay, graph, text_pt: cx.fs * f.width_pt / pw, cover, areas: out_areas, slack: (1.0 - ft.used.0 / pw, 1.0 - ft.used.1 / ph), notes, crowded }, want))
 }
 
 fn leaves(items: &[Item]) -> Vec<usize> {
@@ -582,11 +755,13 @@ fn has_growable(g: &Graph, items: &[Item]) -> bool {
     leaves(items).iter().any(|n| modules::growable(&g.nodes[*n]))
 }
 
-/// Lay the items of a frame out in `rect` as shape `s` says: rows spread evenly down the frame,
-/// the items of a row evenly across it, each on its row's middle line. A frame among the items
+/// Lay the items of a frame out in `rect` as shape `s` says: rows spread evenly down the frame
+/// (so they are centred in it), the columns the rows share spread evenly across it, each item in
+/// the middle of its column and on its row's middle line, the words under the pictures of a row
+/// on one line (`drop` = how much lower a block's words start for that). A frame among the items
 /// keeps its own size.
 #[allow(clippy::too_many_arguments)]
-fn place(cx: &Ctx2, items: &[Item], grow: u32, s: &Shape, rect: Rect, top: f64, framed: bool, tight: &mut [Rect], reg: &mut [Option<Rect>], mut rows_txt: Option<&mut Vec<Vec<String>>>) {
+fn place(cx: &Ctx2, items: &[Item], grow: u32, s: &Shape, rect: Rect, top: f64, band: f64, framed: bool, tight: &mut [Rect], drop: &mut [f64], reg: &mut [Option<Rect>], mut rows_txt: Option<&mut Vec<Vec<String>>>) {
     if items.is_empty() {
         return;
     }
@@ -601,48 +776,112 @@ fn place(cx: &Ctx2, items: &[Item], grow: u32, s: &Shape, rect: Rect, top: f64, 
             Item::Group(r, kids) => {
                 let all = cx.group_shapes(*r, kids, grow);
                 let sh = all[(*k).min(all.len() - 1)].clone();
-                (Box3 { w: sh.w, h: sh.h, up: sh.h / 2.0 }, Some(sh))
+                (Box3 { w: sh.w, up: sh.h / 2.0, dn: sh.h / 2.0, words: 0.0, frame: true }, Some(sh))
             }
         })
         .collect();
+    let boxes: Vec<Box3> = sub.iter().map(|x| x.0).collect();
     let mut bounds = Vec::new();
     let mut a = 0;
     for &e in &s.ends {
         bounds.push((a, e));
         a = e;
     }
-    let row_h: Vec<(f64, f64)> = bounds.iter().map(|(a, z)| (sub[*a..*z].iter().map(|x| x.0.up).fold(0.0, f64::max), sub[*a..*z].iter().map(|x| x.0.h - x.0.up).fold(0.0, f64::max))).collect();
-    let inner_h = rect.h - top - if top > 0.0 { pad } else { 2.0 * pad };
-    let need_h: f64 = row_h.iter().map(|(u, d)| u + d).sum::<f64>() + gap * (bounds.len() - 1) as f64;
+    let parts: Vec<(f64, f64, f64)> = bounds.iter().map(|(a, z)| row_parts(&boxes[*a..*z])).collect();
+    let inner_h = rect.h - top - 2.0 * band - if top > 0.0 { pad } else { 2.0 * pad };
+    let need_h: f64 = parts.iter().map(|(u, d, _)| u + d).sum::<f64>() + gap * (bounds.len() - 1) as f64;
     let spare_h = (inner_h - need_h).max(0.0) / (bounds.len() + 1) as f64;
-    let mut y = rect.y + top + if top > 0.0 { 0.0 } else { pad } + spare_h;
+    // the columns, spread evenly across the frame
+    let (cols, first, _) = columns(&boxes, &s.ends, gap);
+    let need_w: f64 = cols.iter().sum::<f64>() + gap * (cols.len() - 1) as f64;
+    let spare_w = (rect.w - 2.0 * pad - need_w).max(0.0) / (cols.len() + 1) as f64;
+    let mut col_x = Vec::new();
+    let mut x = rect.x + pad + spare_w;
+    for w in &cols {
+        col_x.push(x);
+        x += w + gap + spare_w;
+    }
+    let mut y = rect.y + top + band + if top > 0.0 { 0.0 } else { pad } + spare_h;
     for (ri, (a, z)) in bounds.iter().enumerate() {
-        let need_w: f64 = sub[*a..*z].iter().map(|x| x.0.w).sum::<f64>() + gap * (z - a - 1) as f64;
-        let spare_w = (rect.w - 2.0 * pad - need_w).max(0.0) / (z - a + 1) as f64;
-        let mut x = rect.x + pad + spare_w;
-        let line = y + row_h[ri].0;
+        let (up, below, dn) = parts[ri];
+        let line = y + up;
         let mut names = Vec::new();
+        // a row on its own: its items spread evenly across the frame
+        let own_w: f64 = boxes[*a..*z].iter().map(|x| x.w).sum::<f64>() + gap * (z - a - 1) as f64;
+        let own_spare = (rect.w - 2.0 * pad - own_w).max(0.0) / (z - a + 1) as f64;
+        let mut own_x = rect.x + pad + own_spare;
         for i in *a..*z {
             let (b, sh) = &sub[i];
-            let r = Rect::new(x, line - b.up, b.w, b.h);
+            let x = match first[ri] {
+                Some(f) => col_x[f + i - a] + (cols[f + i - a] - b.w) / 2.0,
+                None => own_x,
+            };
+            own_x += b.w + gap + own_spare;
             match &items[i] {
                 Item::Leaf(n) => {
-                    tight[*n] = r;
+                    let d = if b.words > 0.0 { dn - b.dn } else { 0.0 };
+                    tight[*n] = Rect::new(x, line - b.up, b.w, b.up + b.dn + d + b.words);
+                    drop[*n] = d;
                     names.push(cx.g.nodes[*n].id.clone());
                 }
                 Item::Group(rg, kids) => {
                     // the frames of one row are equally tall
-                    let r = Rect::new(x, y, b.w, row_h[ri].0 + row_h[ri].1);
+                    let r = Rect::new(x, y, b.w, up + below);
                     reg[*rg] = Some(r);
                     names.push(format!("[{}]", cx.g.regions[*rg].id));
-                    place(cx, kids, grow, sh.as_ref().unwrap(), r, cx.region_title(*rg).0, true, tight, reg, None);
+                    place(cx, kids, grow, sh.as_ref().unwrap(), r, cx.region_title(*rg).0, cx.band_reg[*rg], true, tight, drop, reg, None);
                 }
             }
-            x += b.w + gap + spare_w;
         }
         if let Some(t) = rows_txt.as_deref_mut() {
             t.push(names);
         }
-        y += row_h[ri].0 + row_h[ri].1 + gap + spare_h;
+        y += up + below + gap + spare_h;
+    }
+}
+
+/// Where a note is written: in free room of its area, as near as it gets to the side of the
+/// block it is tied to on which the figure's text has it (its column and row against that
+/// block's; below it when they say nothing). `None` when the area has no free room for it.
+fn note_place(size: (f64, f64), by: Option<(Rect, (f64, f64))>, inner: Rect, taken: &[Rect], step: f64) -> (Rect, bool) {
+    let (w, h) = size;
+    let air = step * 0.6;
+    let want = match by {
+        Some((p, (dx, dy))) => {
+            let (dx, dy) = if dx == 0.0 && dy == 0.0 { (0.0, 1.0) } else { (dx, dy) };
+            (p.cx() + dx * (p.w / 2.0 + w / 2.0 + air), p.cy() + dy * (p.h / 2.0 + h / 2.0 + air))
+        }
+        None => (inner.cx(), inner.cy()),
+    };
+    let clamp = |v: f64, lo: f64, hi: f64| if hi < lo { (lo + hi) / 2.0 } else { v.max(lo).min(hi) };
+    let at = |cx: f64, cy: f64| Rect::new(cx - w / 2.0, cy - h / 2.0, w, h);
+    let free = |r: &Rect| !taken.iter().any(|t| t.inflate(air * 0.5).overlaps(r));
+    let mut best: Option<(f64, Rect)> = None;
+    let (x0, x1, y0, y1) = (inner.x + w / 2.0, inner.right() - w / 2.0, inner.y + h / 2.0, inner.bottom() - h / 2.0);
+    let mut tries: Vec<(f64, f64)> = vec![(clamp(want.0, x0, x1), clamp(want.1, y0, y1))];
+    let mut y = y0;
+    while y <= y1 + 0.01 {
+        let mut x = x0;
+        while x <= x1 + 0.01 {
+            tries.push((x, y));
+            x += step;
+        }
+        y += step;
+    }
+    for (cx, cy) in tries {
+        let r = at(cx, cy);
+        if free(&r) {
+            // beside or under its block before over it: over a block is where its own label
+            // or a line coming down to it would be looked for
+            let over = by.is_some_and(|(p, (_, dy))| dy >= 0.0 && cy < p.y);
+            let d = (cx - want.0).powi(2) + (cy - want.1).powi(2) + if over { (step * 40.0).powi(2) } else { 0.0 };
+            if best.as_ref().is_none_or(|b| d < b.0) {
+                best = Some((d, r));
+            }
+        }
+    }
+    match best {
+        Some((_, r)) => (r, true),
+        None => (at(clamp(want.0, x0, x1), clamp(want.1, y0, y1)), false),
     }
 }

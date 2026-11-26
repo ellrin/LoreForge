@@ -171,3 +171,63 @@ fn no_blocks_no_page() {
     let m = Measure { theme: &theme, vars: &vars, library: &lib, image_size: &modules::no_images };
     assert!(pack::pack(&g, &Format::new(500.0, (2, 1)), &m, "", &Air::default()).is_none());
 }
+
+// ---- alignment ----
+
+/// A wide page with one area: three pictures of different heights and a small operator.
+const ROW: &str = "fig t\npanel a \"Row\"\n  x: image \"Input picture\" look=photo\n  v: vector-bar \"v\" n=4 dir=h\n  m: box \"Model\"\n  o: op \".\"\n  x -> v -> m -> o\nend\n";
+
+#[test]
+fn the_pictures_of_a_row_stand_on_one_line_and_their_words_on_another() {
+    let (g, p) = packed(ROW, (4, 1), "", &Air::default());
+    let l = &p.layout;
+    let at = |id: &str| g.node_index(id).unwrap();
+    // one middle line
+    let line = l.nodes[at("x")].art.cy();
+    for id in ["v", "m", "o"] {
+        assert!((l.nodes[at(id)].art.cy() - line).abs() < 0.6, "{id} is off the row's line");
+    }
+    // the low picture's words start as far under it as the tall picture reaches lower
+    let drop = p.graph.nodes[at("v")].num("label_drop").expect("the low picture's words are lowered");
+    assert!((drop - (l.nodes[at("x")].art.bottom() - l.nodes[at("v")].art.bottom())).abs() < 0.6, "{drop}");
+    assert!(p.graph.nodes[at("x")].num("label_drop").is_none(), "the tallest picture's words stay");
+}
+
+#[test]
+fn the_blocks_of_two_rows_stand_under_each_other() {
+    let src = format!("fig t\npanel a \"Grid\"\n{}end\n", pictures(6, "x"));
+    let (_, p) = packed(&src, (1, 1), "", &Air::default());
+    assert!(p.areas[0].rows.len() >= 2, "{:?}", p.areas[0].rows);
+    let l = &p.layout;
+    let per = p.areas[0].rows[0].len();
+    for (i, n) in l.nodes.iter().enumerate().skip(per) {
+        assert!((n.art.cx() - l.nodes[i % per].art.cx()).abs() < 0.6, "block {i} is not under block {}", i % per);
+    }
+}
+
+#[test]
+fn a_note_takes_no_room_and_does_not_move_the_objects() {
+    let with = format!("{}", ROW.replace("end\n", "  w: label \"weights fed in from the side\" col=3 lane=1\n  w -> o : side\nend\n"));
+    let (g, p) = packed(&with, (4, 1), "", &Air::default());
+    let (g0, p0) = packed(ROW, (4, 1), "", &Air::default());
+    assert_eq!(p.notes, ["w"]);
+    assert!(p.crowded.is_empty(), "the note found room");
+    assert!(p0.notes.is_empty());
+    assert_eq!(p.areas[0].rows, p0.areas[0].rows, "the objects are in the same rows");
+    // the objects are as far down their page with the note as without it: in the middle
+    let mid = |g: &Graph, p: &Packed| {
+        let ys: Vec<f64> = ["x", "v", "m", "o"].iter().map(|id| p.layout.nodes[g.node_index(id).unwrap()].art.cy()).collect();
+        ys.iter().sum::<f64>() / ys.len() as f64 / p.layout.bounds.h
+    };
+    assert!((mid(&g, &p) - mid(&g0, &p0)).abs() < 0.01, "{} vs {}", mid(&g, &p), mid(&g0, &p0));
+    // the note is drawn, inside its area and over nothing
+    let l = &p.layout;
+    let w = g.node_index("w").unwrap();
+    assert!(l.panels[0].rect.contains(&l.nodes[w].art));
+    for (i, n) in l.nodes.iter().enumerate().filter(|(i, _)| *i != w) {
+        assert!(!n.rect.union(&n.reserve).inflate(-0.1).overlaps(&l.nodes[w].art), "the note lies over block {i}");
+    }
+    // words on a line that carries the flow are an object, and so are words on no line
+    let (_, q) = packed("fig t\npanel a \"Row\"\n  x: image \"P\" look=photo\n  r: label \"result\"\n  k: label \"legend row\"\n  x -> r\nend\n", (4, 1), "", &Air::default());
+    assert!(q.notes.is_empty());
+}

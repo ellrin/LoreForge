@@ -60,7 +60,21 @@ blocks, `pad` inside a frame, `between` areas) and `text_max_pt`, a limit on the
 rest of the page to the pictures. `Packed` carries the layout, the graph with each block's `grow=`,
 the text size on the page, the page's cover and each area's rows.
 `cargo run -p lore-flow --example flow_pack -- <spec> <width_pt> <w:h> <out.svg> <flow dir> [arrangement] [gap] [pad] [largest text pt]`.
-Lines are not placed yet; tests in `tests/pack.rs`.
+Alignment, all of it rules: the pictures of a row stand on one middle line (`Body.axis`, the
+middle of a picture's large pieces, so a loop arrow over one block and under the next does not
+shift them); the words under them start on one line under the row's tallest picture (`label_drop=`
+on the lower ones; a frame in the row does not push them down); the rows of a frame share columns
+set by its longest rows, so blocks lie under each other (a shorter row joins when its items are at
+most 1.3 columns wide, centred on columns when that lands on them, else it is centred by itself);
+the rows are centred in their frame. A block that is words only on lines none of which carries the
+flow is a note (`pack::is_note`: a weight fed in from the side, the name of a comparison): it takes
+no room, does not move the objects, and is written in free air inside its own frame, beside or
+under the block it is tied to; when there is none its frame gets a band above and below its rows
+(`Packed.notes`, `Packed.crowded`). A label of one line wider than its picture and ten text sizes
+is written on lines of about one length (`modules::label_lines`); a saved drawing's arrow made of
+a line and a separate small triangle becomes one line with its own arrowhead.
+Lines are not placed yet (they still enter at `Body.cy`); tests in `tests/pack.rs` and
+`modules::align_tests`.
 
 ## Modules, styles, the library
 
