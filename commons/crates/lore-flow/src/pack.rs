@@ -47,11 +47,15 @@ pub struct Air {
     /// seen and its arrowhead. Words on the line widen it further (their width across, their
     /// height down). Only where a line runs; on a stated grid.
     pub line: f64,
+    /// The least size the text should have on the page, in points. Under it the room for
+    /// lines is given back first; a page that still cannot reach it is marked `Packed.small`
+    /// (it holds more blocks or words than its width carries at that size).
+    pub text_min_pt: f64,
 }
 
 impl Default for Air {
     fn default() -> Air {
-        Air { gap: 1.5, pad: 0.8, between: 0.6, grow_max: 4.0, text_max_pt: 0.0, paths: 0.6, line: 2.5 }
+        Air { gap: 1.5, pad: 0.8, between: 0.6, grow_max: 4.0, text_max_pt: 0.0, paths: 0.6, line: 2.5, text_min_pt: 5.0 }
     }
 }
 
@@ -89,6 +93,8 @@ pub struct Packed {
     pub notes: Vec<String>,
     /// The notes among them that found no free room and lie over something.
     pub crowded: Vec<String>,
+    /// The text is under `Air.text_min_pt`.
+    pub small: bool,
 }
 
 /// A note, not an object: a block that is words only (`label`) and sits on lines none of which
@@ -664,6 +670,21 @@ fn fit(sh: &[Vec<Shape>], rows: &[Vec<usize>], w: f64, h: f64, between: f64) -> 
 /// (`a / b c`); empty = the graph's own `arrange`, else one area per row. `None` for a figure
 /// without blocks.
 pub fn pack(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) -> Option<Packed> {
+    let mut p = pack_air(g, f, m, arrangement, air)?;
+    // text under the least size: the room kept for lines goes back to the plain gap, which
+    // gives the text what it can; a page still under it says so (`Packed.small`)
+    if p.text_pt < air.text_min_pt && air.line > air.gap {
+        if let Some(q) = pack_air(g, f, m, arrangement, &Air { line: air.gap, ..air.clone() }) {
+            if q.text_pt > p.text_pt + 1e-6 {
+                p = q;
+            }
+        }
+    }
+    p.small = p.text_pt < air.text_min_pt - 1e-6;
+    Some(p)
+}
+
+fn pack_air(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) -> Option<Packed> {
     if g.nodes.is_empty() {
         return None;
     }
@@ -1004,7 +1025,7 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
     };
     let lay = Layout { nodes, panels, regions, legend: Vec::new(), swatches: Vec::new(), bounds: Rect::new(0.0, 0.0, pw, ph), scale: 1.0 };
     let cover = tight.iter().map(|r| r.w * r.h).sum::<f64>() / (pw * ph);
-    Some((Packed { layout: lay, graph, text_pt: cx.fs * f.width_pt / pw, cover, areas: out_areas, slack: (1.0 - ft.used.0 / pw, 1.0 - ft.used.1 / ph), notes, crowded }, want))
+    Some((Packed { layout: lay, graph, text_pt: cx.fs * f.width_pt / pw, cover, areas: out_areas, slack: (1.0 - ft.used.0 / pw, 1.0 - ft.used.1 / ph), notes, crowded, small: false }, want))
 }
 
 fn leaves(items: &[Item]) -> Vec<usize> {

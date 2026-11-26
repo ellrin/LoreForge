@@ -371,3 +371,23 @@ fn a_block_a_line_passes_beneath_gets_a_ground_and_no_other_block_does() {
     let pos = |name: &str| built.objects.iter().position(|o| o.name.contains(name)).unwrap();
     assert!(pos("edge:x-z") < pos(&build::node_name("t", "y")));
 }
+
+#[test]
+fn two_blocks_that_face_each_other_are_joined_straight_even_when_their_middles_differ() {
+    let (g, mut p) = packed(PATHS, (2, 1), "", &Air::default());
+    // the lower encoder a little to the right of the upper one: their widths still overlap
+    let f = g.node_index("f").unwrap();
+    let n = &mut p.layout.nodes[f];
+    n.rect.x += 6.0;
+    n.art.x += 6.0;
+    n.reserve.x += 6.0;
+    let rs = lines::lines(&p.graph, &p.layout);
+    let shared = rs.iter().find(|r| p.graph.edges[r.edge].from == "e" && p.graph.edges[r.edge].to == "f").unwrap();
+    assert_eq!(shared.bends(), 0, "{:?}", shared.points);
+    assert!((shared.points[0].0 - shared.points[1].0).abs() < 1e-6, "one upright line");
+    let x = shared.points[0].0;
+    for id in ["e", "f"] {
+        let a = p.layout.nodes[g.node_index(id).unwrap()].art;
+        assert!(x > a.x && x < a.right(), "the line meets {id}'s picture");
+    }
+}

@@ -106,6 +106,9 @@ fn main() {
             }
         }
     }
+    if p.small {
+        println!("the text is under the least size");
+    }
     println!("text {:.1} pt; page cover {:.0}%; slack across {:.0}% down {:.0}%; pictures over pictures {over}; pictures out of their area {out}", p.text_pt, 100.0 * p.cover, 100.0 * p.slack.0, 100.0 * p.slack.1);
     if !p.notes.is_empty() {
         println!("  notes (no room taken): {}; without free room: {}", p.notes.join(" "), if p.crowded.is_empty() { "none".to_string() } else { p.crowded.join(" ") });

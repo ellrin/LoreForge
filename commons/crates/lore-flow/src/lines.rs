@@ -33,12 +33,19 @@ fn shapes(a: &Placed, b: &Placed) -> Vec<Cand> {
     // which way b lies from a, when their pictures are apart in that direction
     let across = if rb.x >= ra.right() { Some((Side::Right, Side::Left)) } else if rb.right() <= ra.x { Some((Side::Left, Side::Right)) } else { None };
     let down = if rb.y >= ra.bottom() { Some((Side::Bottom, Side::Top)) } else if rb.bottom() <= ra.y { Some((Side::Top, Side::Bottom)) } else { None };
-    // straight
-    if let Some((s, t)) = across.filter(|_| (a.port_y - b.port_y).abs() < 0.5) {
-        v.push(Cand { pts: vec![mid(a, s), mid(b, t)], from: s, to: t });
+    // straight, whenever one line can join the two: their pictures face each other (they share
+    // a stretch of height, or of width). The line runs through the arriving block's middle when
+    // that lies on the leaving block's side, else through the leaving block's middle, else
+    // through the middle of what they share
+    let level = |lo_a: f64, hi_a: f64, pa: f64, lo_b: f64, hi_b: f64, pb: f64| -> Option<f64> {
+        let (lo, hi) = (lo_a.max(lo_b), hi_a.min(hi_b));
+        (hi - lo > 1.0).then(|| if pb > lo_a + 0.5 && pb < hi_a - 0.5 { pb } else if pa > lo_b + 0.5 && pa < hi_b - 0.5 { pa } else { (lo + hi) / 2.0 })
+    };
+    if let (Some((s, t)), Some(y)) = (across, level(ra.y, ra.bottom(), a.port_y, rb.y, rb.bottom(), b.port_y)) {
+        v.push(Cand { pts: vec![(mid(a, s).0, y), (mid(b, t).0, y)], from: s, to: t });
     }
-    if let Some((s, t)) = down.filter(|_| (ra.cx() - rb.cx()).abs() < 0.5) {
-        v.push(Cand { pts: vec![mid(a, s), mid(b, t)], from: s, to: t });
+    if let (Some((s, t)), Some(x)) = (down, level(ra.x, ra.right(), ra.cx(), rb.x, rb.right(), rb.cx())) {
+        v.push(Cand { pts: vec![(x, mid(a, s).1), (x, mid(b, t).1)], from: s, to: t });
     }
     // one bend: across first, then down into b; or down first, then across into b
     let side_x = if rb.cx() > ra.right() { Some(Side::Right) } else if rb.cx() < ra.x { Some(Side::Left) } else { None };
@@ -52,14 +59,14 @@ fn shapes(a: &Placed, b: &Placed) -> Vec<Cand> {
         v.push(Cand { pts: vec![mid(a, s), (ra.cx(), b.port_y), mid(b, t)], from: s, to: t });
     }
     // two bends: a step whose middle run lies in the gap between the two
-    if let Some((s, t)) = across.filter(|_| (a.port_y - b.port_y).abs() >= 0.5) {
+    if let Some((s, t)) = across.filter(|_| level(ra.y, ra.bottom(), a.port_y, rb.y, rb.bottom(), b.port_y).is_none()) {
         let (p, q) = (mid(a, s), mid(b, t));
         for f in MIDDLES {
             let x = p.0 + (q.0 - p.0) * f;
             v.push(Cand { pts: vec![p, (x, p.1), (x, q.1), q], from: s, to: t });
         }
     }
-    if let Some((s, t)) = down.filter(|_| (ra.cx() - rb.cx()).abs() >= 0.5) {
+    if let Some((s, t)) = down.filter(|_| level(ra.x, ra.right(), ra.cx(), rb.x, rb.right(), rb.cx()).is_none()) {
         let (p, q) = (mid(a, s), mid(b, t));
         for f in MIDDLES {
             let y = p.1 + (q.1 - p.1) * f;

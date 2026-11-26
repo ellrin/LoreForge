@@ -98,8 +98,12 @@ passes beneath gets a `ground` of the paper's colour under its picture (`build`)
 does not show through an open drawing. An area takes its grid when that makes its own lines
 simpler than freely broken rows do (bends, blocks passed beneath, a line through a block of words
 counted heavily), within the text share `Air.paths` (0.6) unless free rows would send a line
-through a block of words. Not yet: the words of a line that passes beneath a block still lie over
-that block; the lines of notes; free areas get no line room.
+through a block of words. Two blocks whose pictures face each other (they share a stretch of
+height, or of width) are joined by one straight line even when their middles differ; a step is
+drawn only when no straight line exists. `Air.text_min_pt` (5) is the least text size: under it
+the room for lines is given back first, and a page still under it is marked `Packed.small`.
+Not yet: the words of a line that passes beneath a block still lie over that block; the lines of
+notes; free areas get no line room; packing a figure of fifty blocks takes over a minute.
 
 ## Modules, styles, the library
 
