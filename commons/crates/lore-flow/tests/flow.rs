@@ -2210,6 +2210,13 @@ fn a_style_is_layers_joined_with_plus() {
     assert_eq!(cat.theme("base+hard").id, "classic-bw");
     // order decides
     assert_eq!(cat.theme("pink+base").colors.ink, "111111");
+    // a style file that names its layers is that stack, and is what a figure picks by one id
+    put("mine.toml", "id = \"mine\"\nname = \"Mine\"\nstack = [\"base\", \"pink\", \"graded\"]\n[corners]\nloss = 3\n");
+    let cat = lore_flow::figure::Catalogue::load(Some(dir.path()));
+    let m = cat.theme("mine");
+    assert_eq!((m.id.as_str(), m.colors.ink.as_str(), m.edge(EdgeKind::Data).width), ("mine", "3F3F46", 2.2));
+    assert_eq!((m.corners.unwrap().region, m.corners.unwrap().loss), (9.0, 3.0), "its own lines come last");
+    assert!(m.part.is_empty());
 }
 
 #[test]

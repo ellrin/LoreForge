@@ -347,7 +347,7 @@ fn catalogue_json(flow: &Flow) -> Value {
     json!({
         "steps": crate::discuss::STEPS.iter().map(|s| json!({ "id": s.0, "title": s.1 })).collect::<Vec<_>>(),
         "layouts": cat.layouts,
-        "themes": cat.themes.iter().map(|t| json!({ "id": t.0, "name": t.1 })).collect::<Vec<_>>(),
+        "themes": cat.themes.iter().filter(|t| t.2.part.is_empty()).map(|t| json!({ "id": t.0, "name": t.1 })).collect::<Vec<_>>(),
         "lines": EdgeKind::ALL.iter().map(|k| { let e = th.edge(*k); json!({ "id": k.as_str(), "label": k.label(), "color": e.color, "dash": e.dash, "width": e.width }) }).collect::<Vec<_>>(),
         "palette": flow.palette(),
         // the timeline styles (the neutral ones, then the author's), with what each cannot draw yet

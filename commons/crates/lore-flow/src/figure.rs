@@ -322,6 +322,21 @@ impl Catalogue {
                 c.themes.push((t.id.clone(), if t.name.is_empty() { t.id.clone() } else { t.name.clone() }, t));
             }
         }
+        // a style that names its layers: those files in order, then its own
+        let composed: Vec<(String, Vec<String>)> = c.themes.iter().filter(|t| !t.2.stack.is_empty()).map(|t| (t.0.clone(), t.2.stack.clone())).collect();
+        for (id, layers) in composed {
+            let text = |want: &str| c.theme_texts.iter().find(|t| t.0 == want).map(|t| t.1.clone());
+            let mut texts: Vec<String> = layers.iter().filter_map(|l| text(l)).collect();
+            if texts.len() != layers.len() {
+                continue;
+            }
+            texts.extend(text(&id));
+            if let Ok(t) = Theme::from_layers(&texts.iter().map(String::as_str).collect::<Vec<_>>())
+                && let Some(slot) = c.themes.iter_mut().find(|x| x.0 == id)
+            {
+                slot.2 = Theme { part: String::new(), ..t };
+            }
+        }
         if dir.join("modules").is_dir()
             && let Ok(lib) = Library::load_dir(&dir.join("modules"))
         {

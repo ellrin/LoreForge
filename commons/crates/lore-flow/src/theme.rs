@@ -44,6 +44,10 @@ pub struct Theme {
     /// `"palette"` or `"corners"`. Layers are joined with `+` ([`crate::figure::Catalogue::theme`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub part: String,
+    /// A style made of other theme files: their ids, laid over one another in order, this
+    /// file last (`stack = ["lore", "macaron", "graded"]`). Read by the catalogue.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stack: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
