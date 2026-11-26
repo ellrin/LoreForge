@@ -273,3 +273,22 @@ fn a_block_says_what_it_replaces_and_what_it_prints() {
     assert!(advice[0].contains("block a uses the built-in unet") && advice[0].contains("u-ladder style=bars"));
     assert!(advice[2].contains("already prints '× N'"));
 }
+
+#[test]
+fn a_block_says_what_it_already_draws() {
+    use lore_flow::modules::Library;
+    let mut lib = Library::default();
+    lib.add_json(r#"{ "kind": "head", "style": "scores", "description": "a backbone, its scores and their brace", "includes": ["layer-bars", "brace"], "w": 60, "h": 40, "objects": [] }"#).unwrap();
+    // layer-bars → head → brace → label: the bars and the brace are drawn twice; the label is not
+    let g = lore_flow::dsl::parse_with(
+        "fig f\nx: image \"$x$\"\nl: layer-bars \"\" layers=[Conv,FC]\nh: head \"Q\" style=scores\nb: brace \"\"\nq: label \"q\"\nfar: layer-bars \"\" layers=[Conv]\nx -> l -> h -> b -> q\nx -> far\n",
+        &lib.kinds(),
+    )
+    .unwrap();
+    let advice = lore_flow::llm::block_advice(&g, &lib);
+    assert_eq!(advice.len(), 2, "{advice:?}");
+    assert!(advice.iter().any(|a| a.contains("block h (head) already draws its layer-bars") && a.contains("remove l")), "{advice:?}");
+    assert!(advice.iter().any(|a| a.contains("already draws its brace") && a.contains("remove b")), "{advice:?}");
+    // a block of the same kind that is not joined to the head is another thing
+    assert!(!advice.iter().any(|a| a.contains("far")), "{advice:?}");
+}

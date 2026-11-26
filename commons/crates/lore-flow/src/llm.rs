@@ -700,6 +700,9 @@ fn library_section(lib: &Library, description: &str) -> String {
             if !t.replaces.is_empty() {
                 d.push_str(&format!(" (use instead of the built-in `{}`)", t.replaces.join("`, `")));
             }
+            if !t.includes.is_empty() {
+                d.push_str(&format!(" (it already draws its `{}`: put no such block beside it)", t.includes.join("`, `")));
+            }
             let fixed = t.fixed_texts();
             if !fixed.is_empty() {
                 let shown: Vec<String> = fixed.iter().take(6).map(|w| cut(w, 18)).collect();
@@ -896,6 +899,16 @@ pub fn block_advice(g: &Graph, lib: &Library) -> Vec<String> {
         // a label that repeats the block's own words
         let style = crate::modules::style_name(n, &crate::Theme::classic_bw());
         if let Some(t) = lib.get(&n.module, &style) {
+            // a neighbour that draws again what the block already draws
+            for e in g.edges.iter().filter(|e| e.from == n.id || e.to == n.id) {
+                let other = if e.from == n.id { &e.to } else { &e.from };
+                if let Some(o) = g.node(other).filter(|o| o.panel == n.panel && t.includes.iter().any(|k| *k == o.module)) {
+                    let s = format!("block {} ({}) already draws its {}: block {} draws it a second time; remove {} and join its other lines to {}", n.id, n.module, o.module, o.id, o.id, n.id);
+                    if !out.contains(&s) {
+                        out.push(s);
+                    }
+                }
+            }
             let label = n.label.trim();
             if !label.is_empty()
                 && let Some(w) = t.fixed_texts().into_iter().find(|w| w.chars().count() >= 2 && label.contains(w.as_str()))

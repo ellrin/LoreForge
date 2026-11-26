@@ -75,6 +75,11 @@ pub struct ModuleTemplate {
     /// `image look=mask`): a draft that uses one of those is told about this block.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replaces: Vec<String>,
+    /// Kinds this block already draws as parts of itself (a classifier head draws its
+    /// `layer-bars`, its `nn` and its `brace`): a neighbouring block of one of those kinds,
+    /// joined to it by a line, draws the same thing a second time, and a draft is told so.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub includes: Vec<String>,
     /// Natural size in pt (of the port rect when there is one).
     pub w: f64,
     pub h: f64,
@@ -405,7 +410,7 @@ pub fn template_from_objects(objects: &[Object], opt: &SaveOptions) -> Result<Mo
         }
         swap(&mut v, None, false, &picks);
     }
-    let t = ModuleTemplate { kind: opt.kind.clone(), style: opt.style.clone(), description: opt.description.clone(), w: b.w as f64 / EMU_PT, h: b.h as f64 / EMU_PT, level: String::new(), made_of: Vec::new(), names: Vec::new(), replaces: Vec::new(), port: None, objects: v };
+    let t = ModuleTemplate { kind: opt.kind.clone(), style: opt.style.clone(), description: opt.description.clone(), w: b.w as f64 / EMU_PT, h: b.h as f64 / EMU_PT, level: String::new(), made_of: Vec::new(), names: Vec::new(), replaces: Vec::new(), includes: Vec::new(), port: None, objects: v };
     // must load back
     Library::default().add(t.clone())?;
     Ok(t)
