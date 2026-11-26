@@ -114,6 +114,59 @@ impl Figure {
     }
 }
 
+/// How much larger a panel's growable blocks could be: the panel's inside against the box of
+/// its blocks (with their words), the smaller of the two directions; 1 = full.
+pub fn panel_room(g: &Graph, lay: &layout::Layout) -> Vec<f64> {
+    lay.panels
+        .iter()
+        .enumerate()
+        .map(|(pi, p)| {
+            let rs: Vec<Rect> = lay.nodes.iter().filter(|n| n.panel == pi).map(|n| n.reserve.union(&n.rect)).collect();
+            if p.bare || rs.is_empty() || !g.nodes.iter().zip(&lay.nodes).any(|(n, b)| b.panel == pi && modules::growable(n)) {
+                return 1.0;
+            }
+            let (x0, y0) = rs.iter().fold((f64::MAX, f64::MAX), |m, r| (m.0.min(r.x), m.1.min(r.y)));
+            let (x1, y1) = rs.iter().fold((f64::MIN, f64::MIN), |m, r| (m.0.max(r.right()), m.1.max(r.bottom())));
+            let pad = 14.0 * lay.scale;
+            let top = p.title_rect.map(|t| (t.bottom() - p.rect.y).max(0.0)).unwrap_or(0.0);
+            let (iw, ih) = (p.rect.w - 2.0 * pad, p.rect.h - 2.0 * pad - top);
+            ((iw / (x1 - x0).max(1.0)).max(ih / (y1 - y0).max(1.0))).max(1.0)
+        })
+        .collect()
+}
+
+/// Grow the pictures, charts and drawings of panels their blocks leave mostly empty (room
+/// over 1.15, at most 1.6 times), as long as the figure as a whole is not drawn smaller for
+/// it; `relayout` lays out a graph again. `None` = nothing to grow.
+pub fn fill_panels(g: &Graph, lay: &layout::Layout, relayout: impl Fn(&Graph) -> layout::Layout) -> Option<(Graph, layout::Layout)> {
+    let room = panel_room(g, lay);
+    if room.iter().all(|r| *r < 1.15) {
+        return None;
+    }
+    let mut share = 1.0;
+    for _ in 0..3 {
+        let mut gg = g.clone();
+        let mut any = false;
+        for (n, b) in gg.nodes.iter_mut().zip(&lay.nodes) {
+            let r = room[b.panel];
+            if r >= 1.15 && modules::growable(n) {
+                let f = 1.0 + (r.min(1.6) - 1.0) * share;
+                n.params.insert("grow".into(), serde_json::json!((f * 100.0).round() / 100.0));
+                any = true;
+            }
+        }
+        if !any {
+            return None;
+        }
+        let l2 = relayout(&gg);
+        if l2.scale >= lay.scale * 0.99 {
+            return Some((gg, l2));
+        }
+        share /= 2.0;
+    }
+    None
+}
+
 /// Graph → layout → routes → objects.
 pub fn draw(g: &Graph, d: &Drawing) -> Result<Figure, SpecError> {
     g.validate(&d.library.kinds())?;
@@ -122,6 +175,16 @@ pub fn draw(g: &Graph, d: &Drawing) -> Result<Figure, SpecError> {
     vars.add_new(&g.vars_new);
     let size = |src: &str| d.pictures.and_then(|f| f(src)).and_then(|b| pptx::image_size(&b));
     let mut layout = layout::layout_with(g, &d.theme, &vars, &d.library, &d.options, &size);
+    // a panel its blocks leave mostly empty: its pictures, charts and drawings are drawn larger
+    let grown;
+    let g = match fill_panels(g, &layout, |gg| layout::layout_with(gg, &d.theme, &vars, &d.library, &d.options, &size)) {
+        Some((gg, lay)) => {
+            grown = gg;
+            layout = lay;
+            &grown
+        }
+        None => g,
+    };
     let routes = route::route(g, &layout);
     // a line may run outside the blocks' box (round a block that was moved to the edge): the
     // figure's bounds hold every line, so no preview or picture cuts one off

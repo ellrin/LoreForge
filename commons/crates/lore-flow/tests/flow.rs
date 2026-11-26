@@ -2361,3 +2361,21 @@ fn no_line_is_drawn_on_a_frame() {
     assert_eq!(g.nodes.len(), 6);
     assert_eq!(route::hugging(&lay, &routes), 0, "{:?}", routes.iter().map(|r| r.points.clone()).collect::<Vec<_>>());
 }
+
+#[test]
+fn a_chart_grows_to_fill_a_panel_its_neighbour_makes_tall() {
+    // panel a is three blocks high; panel b beside it holds one chart and is as high as a
+    let src = "fig f\narrange a b\npanel a \"A\"\n  x: box \"X\" col=0 lane=0\n  y: box \"Y\" col=0 lane=1\n  z: box \"Z\" col=0 lane=2\n  w: box \"W\" col=0 lane=3\n  x -> y -> z -> w : data\npanel b \"B\"\n  c: chart \"C\" chart=bell\n";
+    let g = dsl::parse(src).unwrap();
+    let opt = layout::LayoutOptions { frame: Rect::new(0.0, 0.0, 600.0, 400.0), ..Default::default() };
+    let d = Drawing { options: opt.clone(), ..Default::default() };
+    let f = draw(&g, &d).unwrap();
+    let plain = layout::layout(&g, &Theme::classic_bw(), &Vars::default(), &Library::default(), &opt);
+    let ci = g.node_index("c").unwrap();
+    let (grown, before) = (f.layout.nodes[ci].rect, plain.nodes[ci].rect);
+    assert!(grown.h / f.layout.scale > before.h / plain.scale * 1.15, "{grown:?} {before:?}");
+    assert!(f.layout.scale >= plain.scale * 0.99, "the figure is not drawn smaller for it");
+    // the boxes keep their size: only pictures, charts and drawings grow
+    let xi = g.node_index("x").unwrap();
+    assert!((f.layout.nodes[xi].rect.h / f.layout.scale - plain.nodes[xi].rect.h / plain.scale).abs() < 0.5);
+}

@@ -14,7 +14,29 @@ fn main() {
         let n = lore_flow::route::hugging(&fig.layout, &fig.routes);
         let bends: usize = fig.routes.iter().map(|r| r.bends()).sum();
         total += n;
-        println!("{f}: on a frame {n}, bends {bends}");
+        // growable blocks smaller than four lines of text
+        let fs = cat.theme(&spec.theme).font.size * fig.layout.scale;
+        let g = lore_flow::dsl::parse_with(&spec.dsl, &cat.library.kinds()).ok();
+        if let Some(g) = g {
+            let small: Vec<String> = g.nodes.iter().zip(&fig.layout.nodes).filter(|(nd, b)| lore_flow::modules::growable(nd) && b.rect.h.max(b.rect.w) < 4.0 * fs).map(|(nd, b)| format!("{}({}) {:.1}x{:.1}", nd.id, nd.module, b.rect.w / fs, b.rect.h / fs)).collect();
+            if !small.is_empty() {
+                println!("  small: {}", small.join(", "));
+            }
+        }
+        // how much of each framed panel its blocks fill: the content's box against the panel's inside
+        let mut slack = Vec::new();
+        for (pi, p) in fig.layout.panels.iter().enumerate() {
+            let rs: Vec<_> = fig.layout.nodes.iter().filter(|nd| nd.panel == pi).map(|nd| nd.rect).collect();
+            if rs.is_empty() || p.bare {
+                continue;
+            }
+            let (x0, y0) = rs.iter().fold((f64::MAX, f64::MAX), |m, r| (m.0.min(r.x), m.1.min(r.y)));
+            let (x1, y1) = rs.iter().fold((f64::MIN, f64::MIN), |m, r| (m.0.max(r.right()), m.1.max(r.bottom())));
+            let area: f64 = rs.iter().map(|r| r.w * r.h).sum();
+            slack.push(format!("{}:{:.0}%/{:.0}%", p.id, 100.0 * (x1 - x0) * (y1 - y0) / (p.rect.w * p.rect.h), 100.0 * area / (p.rect.w * p.rect.h)));
+        }
+        let used: f64 = fig.layout.nodes.iter().map(|nd| nd.rect.w * nd.rect.h).sum::<f64>() / (fig.layout.bounds.w * fig.layout.bounds.h);
+        println!("{f}: on a frame {n}, bends {bends}, blocks cover {:.0}% of the figure; panels (content box / blocks) {}", 100.0 * used, slack.join(" "));
     }
     println!("total on a frame {total}");
 }
