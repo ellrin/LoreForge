@@ -480,9 +480,87 @@ impl FrameFaults {
 
 /// The frame faults of a layout (see [`FrameFaults`]). `g` is the graph the layout was made
 /// from (the same nodes in the same order).
+///
+/// Decisions: a frame is a framed panel (`!bare`) or a region, panels first, then regions, each
+/// in the layout's order. "Contains" is meant with 0.5 pt to spare. A title is crossed by
+/// another frame's border when its rectangle shares area with that frame's rectangle but does
+/// not lie wholly inside it (0.5 pt to spare): that covers a border running through the title
+/// and a small frame lying inside the title. A title that merely touches a border from outside
+/// shares no area and is fine. A region drawn with `line none` still counts as a frame.
 pub fn frame_faults(g: &crate::spec::Graph, lay: &crate::layout::Layout) -> FrameFaults {
-    let _ = (g, lay);
-    FrameFaults::default()
+    struct F<'a> {
+        id: &'a str,
+        rect: Rect,
+        title: Option<Rect>,
+    }
+    let mut frames: Vec<F> = lay.panels.iter().filter(|p| !p.bare).map(|p| F { id: &p.id, rect: p.rect, title: p.title_rect }).collect();
+    frames.extend(lay.regions.iter().map(|r| F { id: &r.id, rect: r.rect, title: r.title_rect }));
+    let area = |a: &Rect, b: &Rect, min: f64| a.right().min(b.right()) - a.x.max(b.x) > min && a.bottom().min(b.bottom()) - a.y.max(b.y) > min;
+    let holds = |outer: &Rect, inner: &Rect, tol: f64| outer.inflate(tol).contains(inner);
+    let push = |v: &mut Vec<(String, String)>, a: &str, b: &str| {
+        let p = (a.to_string(), b.to_string());
+        if !v.contains(&p) {
+            v.push(p);
+        }
+    };
+    let mut out = FrameFaults::default();
+    // frames over each other
+    for (i, a) in frames.iter().enumerate() {
+        for b in &frames[i + 1..] {
+            if area(&a.rect, &b.rect, 0.5) && !holds(&a.rect, &b.rect, 0.5) && !holds(&b.rect, &a.rect, 0.5) {
+                push(&mut out.overlaps, a.id, b.id);
+            }
+        }
+    }
+    // titles against titles, and against other frames' borders
+    for (i, a) in frames.iter().enumerate() {
+        let Some(ta) = &a.title else { continue };
+        for b in &frames[i + 1..] {
+            if b.title.is_some_and(|tb| area(ta, &tb, 0.5)) {
+                push(&mut out.titles, a.id, b.id);
+            }
+        }
+        for b in frames.iter().filter(|b| b.id != a.id) {
+            if area(ta, &b.rect, 0.0) && !holds(&b.rect, ta, -0.5) {
+                push(&mut out.titles, a.id, b.id);
+            }
+        }
+    }
+    // blocks outside their frames, strangers inside a frame
+    let region_of = |id: &str| lay.regions.iter().find(|r| r.id == id);
+    // is the region `id` the region `top`, or inside it (by the parent chain)?
+    let within = |id: &str, top: &str| {
+        let mut cur = id;
+        for _ in 0..=g.regions.len() {
+            if cur == top {
+                return true;
+            }
+            match g.regions.iter().find(|r| r.id == cur) {
+                Some(r) if !r.parent.is_empty() => cur = &r.parent,
+                _ => return false,
+            }
+        }
+        false
+    };
+    for (nd, pl) in g.nodes.iter().zip(&lay.nodes) {
+        if let Some(p) = lay.panels.get(pl.panel).filter(|p| !p.bare)
+            && !holds(&p.rect, &pl.rect, 1.0)
+        {
+            push(&mut out.strays, &nd.id, &p.id);
+        }
+        for r in &g.regions {
+            let Some(rb) = region_of(&r.id) else { continue };
+            let member = g.regions.iter().any(|x| within(&x.id, &r.id) && x.members.contains(&nd.id));
+            if member {
+                if !holds(&rb.rect, &pl.rect, 1.0) {
+                    push(&mut out.strays, &nd.id, &r.id);
+                }
+            } else if area(&pl.rect, &rb.rect, 1.0) {
+                push(&mut out.strays, &nd.id, &r.id);
+            }
+        }
+    }
+    out
 }
 
 /// Points on the page per point of the layout when the whole figure is fitted into a page box

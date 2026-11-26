@@ -10,7 +10,7 @@ fn main() {
     let mut total = 0;
     for f in a {
         let spec = FlowSpec::from_value(serde_json::from_str(&std::fs::read_to_string(&f).expect("read")).expect("json")).expect("spec");
-        let (fig, _) = render(&spec, &cat, None, &NoMath, spec.frame_rect(), 2).expect("render");
+        let (fig, graph) = render(&spec, &cat, None, &NoMath, spec.frame_rect(), 2).expect("render");
         let n = lore_flow::route::hugging(&fig.layout, &fig.routes);
         let bends: usize = fig.routes.iter().map(|r| r.bends()).sum();
         total += n;
@@ -29,6 +29,23 @@ fn main() {
         let (uneven, sparse) = lore_flow::look::frames(&fig.layout);
         let small_text = lore_flow::look::smallest_text(fig.objects(), fig.layout.bounds.w, 500.0);
         println!("  loose ends {}, line on line {}, line behind a block {}, line over a module {}, hidden arrowheads {}, uneven frames {}, sparse panels {}, smallest text at page width {:.1} pt", look.loose_ends.len(), look.on_line.len(), look.behind_block.len(), look.over_module.len(), look.hidden_heads.len(), uneven, sparse, small_text);
+        // frame faults, on the graph `render` prepared (its nodes are in the layout's order)
+        let ff = lore_flow::look::frame_faults(&graph, &fig.layout);
+        println!("  frame faults {} (overlaps {}, titles {}, strays {})", ff.count(), ff.overlaps.len(), ff.titles.len(), ff.strays.len());
+        for list in [&ff.overlaps, &ff.titles, &ff.strays] {
+            for (a, b) in list.iter().take(3) {
+                println!("    frame: {a} × {b}");
+            }
+        }
+        // FORMAT="<width_pt> <w>:<h>": how the figure sits on a page of that width and shape
+        if let Ok(fmt) = std::env::var("FORMAT") {
+            let mut it = fmt.split_whitespace();
+            let width: f64 = it.next().and_then(|w| w.parse().ok()).expect("FORMAT: <width_pt> <w>:<h>");
+            let (rw, rh): (u32, u32) = it.next().and_then(|r| r.split_once(':')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))).expect("FORMAT: <width_pt> <w>:<h>");
+            let cover = lore_flow::look::page_cover(&fig.layout, (rw, rh));
+            let text = lore_flow::look::page_text(fig.objects(), &fig.layout, width, (rw, rh));
+            println!("  on the page {width} pt {rw}:{rh}: cover {:.0}%, smallest text {:.1} pt", 100.0 * cover, text);
+        }
         for h in look.loose_ends.iter().take(4) {
             println!("    loose: {} ({})", short(&h.line), h.other);
         }
