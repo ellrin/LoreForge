@@ -1767,7 +1767,9 @@ fn a_line_runs_through_the_bars() {
         }
         _ => panic!("not a line"),
     }
-    assert!(pos("bar2") < pos("through") && pos("through") < pos("bartext0"));
+    // beneath the bars, which are opaque, so it never crosses a bar's name
+    assert!(pos("through") < pos("bar0") && pos("bar2") < pos("bartext0"));
+    assert!((0..3).all(|i| matches!(bar(&b, i).fill, lore_canvas::Paint::Solid { .. })));
     assert!(bar(&b, 0).text.is_none());
     assert!(line.frame.w > 0 && line.frame.h == 0);
     let plain = bar_objs("fig f\nq: layer-bars \"L\" layers=[Conv,Conv,Conv]\n");

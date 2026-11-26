@@ -1144,7 +1144,9 @@ fn gen_layer_bars(n: &Node, cx: &Ctx, warn: &mut Vec<String>) -> Core {
     if let Some(c) = through {
         let mut st = Stroke::new(&c, (cx.theme.node.line_w * cx.k).max(0.5));
         st.dash = "dash".into();
-        objs.push(seg("through", (0.0, full / 2.0), (width, full / 2.0), st));
+        // beneath the bars (they are opaque): it shows in the gaps between them and never runs
+        // over a bar's name
+        objs.insert(0, seg("through", (0.0, full / 2.0), (width, full / 2.0), st));
         objs.extend(texts);
     }
     Core { w: width, h: full, objs, single: false, ellipse: false, label: LabelPos::Above, legend, ..Default::default() }
@@ -1696,6 +1698,32 @@ fn own_colours(n: &mut Node, theme: &Theme) -> Own {
 }
 
 /// Draw a node at scale `cx.k`.
+/// A block that may be drawn larger than its natural size to fill its panel: pictures, charts,
+/// icons, networks and saved drawings, not the blocks whose size is their words (box, op, loss,
+/// label, brace), and not a block whose size was given.
+pub fn growable(n: &Node) -> bool {
+    !matches!(n.module.as_str(), "box" | "op" | "loss" | "label" | "brace") && n.num("w").is_none() && n.num("h").is_none() && n.num("size").is_none()
+}
+
+/// Scale an object's frame (and a group's children) by `g` about the origin, leaving line
+/// weights and text sizes as they are.
+pub fn grow_obj(o: &mut Object, g: f64) {
+    let sc = |v: Emu| (v as f64 * g).round() as Emu;
+    o.frame.x = sc(o.frame.x);
+    o.frame.y = sc(o.frame.y);
+    o.frame.w = sc(o.frame.w);
+    o.frame.h = sc(o.frame.h);
+    if let Kind::Group(gr) = &mut o.kind {
+        gr.ch.x = sc(gr.ch.x);
+        gr.ch.y = sc(gr.ch.y);
+        gr.ch.w = sc(gr.ch.w);
+        gr.ch.h = sc(gr.ch.h);
+        for c in &mut gr.children {
+            grow_obj(c, g);
+        }
+    }
+}
+
 pub fn make(node: &Node, cx: &Ctx) -> Body {
     // a node that only names its variable shows the variable as its label
     let mut n = node.clone();
@@ -1755,6 +1783,16 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
             None => gen_box(n, cx),
         },
     };
+    // a picture-like block grown to fill its panel (`grow=`, set by `crate::draw`): its shapes
+    // are larger, its line weights and its words stay as the style has them
+    let mut core = core;
+    if let Some(gr) = n.num("grow").filter(|g| *g > 1.0 && growable(n)) {
+        core.w *= gr;
+        core.h *= gr;
+        for o in &mut core.objs {
+            grow_obj(o, gr);
+        }
+    }
     // text around the body: the label (above or below) and, below, the variable and caption
     let ink = cx.theme.colors.ink.clone();
     let ty = cx.ty(1.0, false, &ink);
