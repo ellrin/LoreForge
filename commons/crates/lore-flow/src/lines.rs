@@ -382,7 +382,18 @@ pub fn lines(g: &Graph, lay: &Layout) -> Vec<Route> {
             }
             s
         };
-        let (fs, ts) = (stated(&e.from_side, &mut notes), stated(&e.to_side, &mut notes));
+        let (mut fs, mut ts) = (stated(&e.from_side, &mut notes), stated(&e.to_side, &mut notes));
+        // the lines from a heading to what it is about (`gather`) all leave by the side that
+        // faces those things together and arrive by the side facing back: one trunk, a fork
+        if e.kind == EdgeKind::Gather && fs.is_none() && ts.is_none() {
+            let them: Vec<Rect> = g.edges.iter().filter(|x| x.kind == EdgeKind::Gather && x.from == e.from).filter_map(|x| g.node_index(&x.to)).map(|i| lay.nodes[i].art).collect();
+            let all = them.iter().skip(1).fold(them[0], |u, r| u.union(r));
+            let s = if all.y >= a.art.bottom() { Some(Side::Bottom) } else if all.bottom() <= a.art.y { Some(Side::Top) } else if all.x >= a.art.right() { Some(Side::Right) } else if all.right() <= a.art.x { Some(Side::Left) } else { None };
+            if let Some(s) = s {
+                fs = Some(s);
+                ts = Some(s.opposite());
+            }
+        }
         let cands: Vec<Cand> = if fs.is_none() && ts.is_none() {
             let mut v = shapes(a, b);
             v.extend(rounds(a, b, lay));

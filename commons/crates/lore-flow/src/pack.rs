@@ -111,6 +111,10 @@ pub struct Packed {
 /// line (a legend's rows, a heading) stay objects: nothing says where else they belong.
 pub fn is_note(g: &Graph, n: usize) -> bool {
     let node = &g.nodes[n];
+    // a brace that gathers named things is a relation between them: it lies along them
+    if gathers(g, n).is_some() {
+        return true;
+    }
     // stated by the one who draws: `by=<block>` ties any mark to that block
     if node.str("by").is_some_and(|b| b != node.id && g.node_index(b).is_some()) {
         return true;
@@ -126,6 +130,20 @@ pub fn is_note(g: &Graph, n: usize) -> bool {
         }
     }
     any
+}
+
+/// The things a mark gathers (`gathers=[first,last]`, or more names): a brace or a dimension
+/// mark that lies along them, as long as they are, on the side of `toward=<block>` (else its
+/// own `dir`). It takes no cell. `None` when it names nothing of its own area.
+pub fn gathers(g: &Graph, n: usize) -> Option<Vec<usize>> {
+    let node = &g.nodes[n];
+    let names: Vec<String> = match node.params.get("gathers")? {
+        serde_json::Value::Array(a) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        serde_json::Value::String(t) => t.split(',').map(|x| x.trim().to_string()).collect(),
+        _ => return None,
+    };
+    let v: Vec<usize> = names.iter().filter_map(|id| g.node_index(id)).filter(|m| *m != n && g.nodes[*m].panel == node.panel && !g.nodes[*m].params.contains_key("gathers")).collect();
+    (!v.is_empty()).then_some(v)
 }
 
 #[derive(Debug, Clone)]
@@ -994,6 +1012,7 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
     let mut reg_rect: Vec<Option<Rect>> = vec![None; g.regions.len()];
     let mut out_areas = Vec::new();
     let (mut notes, mut crowded) = (Vec::new(), Vec::new());
+    let mut gather_dir: BTreeMap<usize, &'static str> = BTreeMap::new();
     // for an area on a grid: the middle of each column and the line of each row
     let mut axes: Vec<Option<(Vec<f64>, Vec<f64>)>> = vec![None; ar.len()];
     for (i, a) in ar.iter().enumerate() {
@@ -1010,6 +1029,7 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
         let inner = Rect::new(rects[i].x + pad, rects[i].y + band + if band > 0.0 { 0.0 } else { pad }, rects[i].w - 2.0 * pad, rects[i].h - band - if band > 0.0 { pad } else { 2.0 * pad });
         let objects = leaves(&a.items);
         let mut taken: Vec<(usize, Rect)> = objects.iter().map(|n| (*n, tight[*n])).collect();
+        // (marks that gather are written last: what they gather may be marks placed before)
         let num = |n: usize, k: &str| g.nodes[n].num(k).unwrap_or(0.0);
         let side = |a: f64, b: f64| if a > b { 1.0 } else if a < b { -1.0 } else { 0.0 };
         // a mark tied to another mark is written after it, beside where that one was written
@@ -1021,9 +1041,42 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
             left.retain(|n| !ready.contains(n));
             order.extend(ready);
         }
+        order.sort_by_key(|n| gathers(g, *n).is_some());
         for &n in &order {
             let b = cx.leaf(n, 100);
             let id = &g.nodes[n].id;
+            // a mark that gathers: along what it gathers, as long as they are together, on the
+            // side of the block it points at
+            let along: Vec<Rect> = gathers(g, n).unwrap_or_default().iter().filter(|m| taken.iter().any(|t| t.0 == **m)).map(|m| tight[*m]).collect();
+            if !along.is_empty() {
+                let bb = along.iter().skip(1).fold(along[0], |u, r| u.union(r));
+                let to = g.nodes[n].str("toward").and_then(|t| g.node_index(t)).filter(|t| taken.iter().any(|x| x.0 == *t)).map(|t| tight[t]);
+                let dir = match to {
+                    Some(t) if t.x >= bb.right() - 0.5 => "right",
+                    Some(t) if t.right() <= bb.x + 0.5 => "left",
+                    Some(t) if t.y >= bb.bottom() - 0.5 => "down",
+                    Some(t) if t.bottom() <= bb.y + 0.5 => "up",
+                    _ => match g.nodes[n].str("dir") {
+                        Some("left") => "left",
+                        Some("down") => "down",
+                        Some("up") => "up",
+                        _ => "right",
+                    },
+                };
+                let thick = b.w.min(b.over + b.up + b.dn + b.words);
+                let air = cx.fs * 0.5;
+                let r = match dir {
+                    "right" => Rect::new(bb.right() + air, bb.y, thick, bb.h),
+                    "left" => Rect::new(bb.x - air - thick, bb.y, thick, bb.h),
+                    "down" => Rect::new(bb.x, bb.bottom() + air, bb.w, thick),
+                    _ => Rect::new(bb.x, bb.y - air - thick, bb.w, thick),
+                };
+                tight[n] = r;
+                taken.push((n, r));
+                notes.push(id.clone());
+                gather_dir.insert(n, dir);
+                continue;
+            }
             // its frame: the smallest region that names it, else the area
             let home = (0..g.regions.len()).filter(|r| g.regions[*r].members.iter().any(|x| x == id) && reg_rect[*r].is_some()).min_by(|x, y| (reg_rect[*x].unwrap().w * reg_rect[*x].unwrap().h).partial_cmp(&(reg_rect[*y].unwrap().w * reg_rect[*y].unwrap().h)).unwrap());
             let room = match home {
@@ -1079,6 +1132,9 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
     // the layout: each block drawn as `build` draws it (its frame mirrored about the picture's
     // middle line in a left-to-right area), laid so that its picture lies where the tight box has it
     let mut graph = g.clone();
+    for (n, dir) in &gather_dir {
+        graph.nodes[*n].params.insert("dir".into(), serde_json::json!(dir));
+    }
     let area_of: BTreeMap<usize, usize> = ar.iter().enumerate().flat_map(|(i, a)| leaves(&a.items).into_iter().chain(a.notes.iter().copied()).map(move |n| (n, i))).collect();
     let mut nodes = Vec::new();
     for (n, node) in g.nodes.iter().enumerate() {
@@ -1097,9 +1153,14 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
             graph.nodes[n].params.insert("label_rise".into(), serde_json::json!((rise[n] * 100.0).round() / 100.0));
         }
         // a block that takes the width of its columns: its drawing stretched across, its height kept
-        if (wide(node) || high(node)) && axes[pi].is_some() {
+        // (a mark that gathers is as long as what it gathers, on any area)
+        let (is_wide, is_high) = match gather_dir.get(&n) {
+            Some(d) => (matches!(*d, "up" | "down"), matches!(*d, "left" | "right")),
+            None => (wide(node) && axes[pi].is_some(), high(node) && axes[pi].is_some()),
+        };
+        if is_wide || is_high {
             let nat = body(&graph.nodes[n], gr, false, m);
-            let (tw, th) = (if wide(node) { tight[n].w } else { nat.w }, if high(node) { tight[n].h } else { nat.art.3 });
+            let (tw, th) = (if is_wide { tight[n].w } else { nat.w }, if is_high { tight[n].h } else { nat.art.3 });
             if (tw - nat.w).abs() > 0.5 || (th - nat.art.3).abs() > 0.5 {
                 let mut probe = graph.nodes[n].clone();
                 probe.params.insert("w".into(), serde_json::json!(100.0));
@@ -1111,14 +1172,14 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
                 }
                 // a mark whose length is its `size` (a brace) takes that instead
                 let got = body(&graph.nodes[n], gr, false, m);
-                if (high(node) && (got.art.3 - th).abs() > 0.5) || (wide(node) && (got.w - tw).abs() > 0.5) {
+                if (is_high && (got.art.3 - th).abs() > 0.5) || (is_wide && (got.w - tw).abs() > 0.5) {
                     graph.nodes[n].params.remove("w");
                     graph.nodes[n].params.remove("h");
                     probe.params.remove("w");
                     probe.params.remove("h");
                     probe.params.insert("size".into(), serde_json::json!(100.0));
                     let u = body(&probe, gr, false, m);
-                    let (have, want) = if high(node) { (u.art.3, th) } else { (u.w, tw) };
+                    let (have, want) = if is_high { (u.art.3, th) } else { (u.w, tw) };
                     if have > 0.0 {
                         graph.nodes[n].params.insert("size".into(), serde_json::json!(want * 100.0 / have));
                     }

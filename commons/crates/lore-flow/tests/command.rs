@@ -199,3 +199,45 @@ fn a_mark_tied_to_a_mark_is_written_beside_it() {
     assert!(l.y >= y.bottom() - 0.5 && l.cx() > y.x && l.cx() < y.right() + l.w, "L {l:?} under Y {y:?}");
     assert!(r.right() <= l.x + 0.5 && (r.cy() - l.cy()).abs() < l.h, "R {r:?} left of L {l:?}");
 }
+
+/// A brace and a fork are relations, not drawings. The brace lies along what it gathers, as
+/// long as they are together, on the side of the block it points at, and takes no cell; the
+/// fork is plain lines from a heading to each thing it is about, out of one side.
+#[test]
+fn a_brace_lies_along_what_it_gathers_and_a_fork_reaches_each_thing() {
+    use lore_flow::pack::{self, Air};
+    use lore_flow::plate::{Format, Measure};
+    let src = "fig t\npanel a \"\" none title=none\n  p: box \"P\" col=0 lane=0\n  q: box \"Q\" col=0 lane=1\n  r: box \"R\" col=0 lane=2\n  b: brace \"\" col=1 lane=1\n  h: box \"About these\" col=2 lane=1\n  c: box \"Caption\" col=4 lane=0\n  u: box \"U\" col=3 lane=1\n  v: box \"V\" col=4 lane=1\n  w: box \"W\" col=5 lane=1\n  p -> q -> r\n  u -> v -> w\nend\n";
+    let g = graph(src);
+    let (g, said, not) = apply_all(&g, &[
+        Command::Brace { a: "b".into(), from: "p".into(), to: "r".into(), toward: Some("h".into()) },
+        Command::Fork { a: "c".into(), to: vec!["u".into(), "v".into(), "w".into()] },
+    ]);
+    assert!(not.is_empty() && said.len() == 2, "{not:?} {said:?}");
+    assert_eq!(g.edges.iter().filter(|e| e.kind == EdgeKind::Gather).count(), 3);
+    let (theme, vars, lib) = (Theme::classic_bw(), Vars::default(), Library::default());
+    let m = Measure { theme: &theme, vars: &vars, library: &lib, image_size: &modules::no_images };
+    let p = pack::pack(&g, &Format::new(500.0, (2, 1)), &m, "", &Air { stated: true, ..Air::default() }).expect("packed");
+    let at = |id: &str| p.layout.nodes[g.node_index(id).unwrap()].art;
+    // the brace: no cell, from the top of the first to the bottom of the last, between them
+    // and the heading
+    assert!(p.notes.contains(&"b".to_string()));
+    let (b, top, low, h) = (at("b"), at("p"), at("r"), at("h"));
+    assert!((b.y - top.y).abs() < 1.5 && (b.bottom() - low.bottom()).abs() < 1.5, "brace {b:?} along {top:?} … {low:?}");
+    assert!(b.x >= top.right() && b.right() <= h.x + 0.5, "brace {b:?} between {top:?} and {h:?}");
+    // the fork: three lines out of the caption's bottom into the top of each, without heads
+    let rs = lines::lines(&p.graph, &p.layout);
+    let fork: Vec<&route::Route> = rs.iter().filter(|r| g.edges[r.edge].kind == EdgeKind::Gather).collect();
+    assert_eq!(fork.len(), 3);
+    for r in &fork {
+        let to = at(&g.edges[r.edge].to);
+        let end = r.points[r.points.len() - 1];
+        assert_eq!((r.from_side, r.to_side), (route::Side::Bottom, route::Side::Top));
+        assert!((end.0 - to.cx()).abs() < 0.5 && (end.1 - to.y).abs() < 0.5, "ends at {end:?}, the top middle of {to:?}");
+        assert!(lines::keeps_the_rule(r));
+    }
+    assert_eq!(theme.edge(EdgeKind::Gather).tail, "none");
+    // taken back: the brace is an object in its cell again
+    let (freed, _) = apply(&g, &Command::Free { a: "b".into() }).unwrap();
+    assert!(!pack::is_note(&freed, freed.node_index("b").unwrap()));
+}

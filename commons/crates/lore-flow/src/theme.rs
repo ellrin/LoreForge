@@ -281,7 +281,9 @@ fn hex_ok(s: &str) -> bool {
 
 impl Theme {
     pub fn classic_bw() -> Theme {
-        toml::from_str(CLASSIC_BW).expect("built-in theme parses")
+        let mut t: Theme = toml::from_str(CLASSIC_BW).expect("built-in theme parses");
+        t.gather_line();
+        t
     }
 
     /// A theme file laid over `classic-bw`.
@@ -289,8 +291,9 @@ impl Theme {
         let mut base: toml::Value = toml::from_str(CLASSIC_BW).expect("built-in theme parses");
         let over: toml::Value = toml::from_str(text).map_err(|e| format!("theme: {e}"))?;
         merge(&mut base, over);
-        let t: Theme = base.try_into().map_err(|e| format!("theme: {e}"))?;
+        let mut t: Theme = base.try_into().map_err(|e| format!("theme: {e}"))?;
         t.check()?;
+        t.gather_line();
         Ok(t)
     }
 
@@ -302,9 +305,21 @@ impl Theme {
             let over: toml::Value = toml::from_str(text).map_err(|e| format!("theme: {e}"))?;
             merge(&mut base, over);
         }
-        let t: Theme = base.try_into().map_err(|e| format!("theme: {e}"))?;
+        let mut t: Theme = base.try_into().map_err(|e| format!("theme: {e}"))?;
         t.check()?;
+        t.gather_line();
         Ok(t)
+    }
+
+    /// A theme that says nothing of the `gather` line draws it as its main line without heads,
+    /// a little thinner.
+    fn gather_line(&mut self) {
+        if !self.edges.contains_key("gather") {
+            // as thin as the theme's branch line when it has one
+            let d = self.edges["data"].clone();
+            let w = self.edges.get("side").map(|s| s.width).unwrap_or(d.width).min(d.width);
+            self.edges.insert("gather".into(), EdgeStyle { width: w, dash: "solid".into(), head: "none".into(), tail: "none".into(), ..d });
+        }
     }
 
     fn check(&self) -> Result<(), String> {

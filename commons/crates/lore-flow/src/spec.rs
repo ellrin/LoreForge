@@ -68,10 +68,14 @@ pub enum EdgeKind {
     Repeat,
     /// Projection lines of an enlarged detail.
     Zoom,
+    /// A heading (a caption box) to each of the things it is about: plain lines, no head, all
+    /// out of the side that faces them, so they fork from one trunk. A relation, not a
+    /// drawing: the fork follows the things wherever they stand.
+    Gather,
 }
 
 impl EdgeKind {
-    pub const ALL: [EdgeKind; 16] = [
+    pub const ALL: [EdgeKind; 17] = [
         EdgeKind::Data,
         EdgeKind::Side,
         EdgeKind::Supervision,
@@ -88,6 +92,7 @@ impl EdgeKind {
         EdgeKind::Stage,
         EdgeKind::Repeat,
         EdgeKind::Zoom,
+        EdgeKind::Gather,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -107,6 +112,7 @@ impl EdgeKind {
             EdgeKind::Stage => "stage",
             EdgeKind::Repeat => "repeat",
             EdgeKind::Zoom => "zoom",
+            EdgeKind::Gather => "gather",
         }
     }
     pub fn parse(s: &str) -> Option<EdgeKind> {
@@ -135,6 +141,7 @@ impl EdgeKind {
             EdgeKind::Stage => "Stage",
             EdgeKind::Repeat => "Repeat",
             EdgeKind::Zoom => "Detail",
+            EdgeKind::Gather => "Applies to",
         }
     }
 }

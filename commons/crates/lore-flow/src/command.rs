@@ -2,7 +2,8 @@
 //! a relation between named objects (A beside B, A in B's row, A over the columns from B to C,
 //! a mark tied to a block), never a coordinate: [`apply`] works out the cell, the span, the tie,
 //! and writes only what `pack`, `settle` and `lines` already read (`col`, `lane`, `span`,
-//! `tall`, `stretch`, `by`, `side`, a line's sides, a break in a label). An agent or a small
+//! `tall`, `stretch`, `by`, `side`, `gathers`, `toward`, a line's sides, a `gather` line, a
+//! break in a label). An agent or a small
 //! model has one job here: to turn a sentence into one of these with the right names.
 //!
 //! A command answers with the figure and what it changed, in words; or with a [`Clash`] that
@@ -114,6 +115,18 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         arrive: Option<Way>,
     },
+    /// A (a brace, a dimension mark) gathers the things from one object to another: it lies
+    /// along them, as long as they are together, on the side of the block it points at, and
+    /// takes no cell.
+    Brace {
+        a: String,
+        from: String,
+        to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        toward: Option<String>,
+    },
+    /// A (a heading, a caption box) is about these things: plain lines fork from it to each.
+    Fork { a: String, to: Vec<String> },
     /// What was said about A is taken back (its tie, span, height, stretch): the figure's own
     /// structure settles it again.
     Free { a: String },
@@ -434,9 +447,58 @@ pub fn apply(g: &Graph, c: &Command) -> Result<(Graph, Vec<String>), Clash> {
             }
             Ok((g2, said))
         }
+        Command::Brace { a, from, to, toward } => {
+            let (i, j, k) = (find(g, a)?, find(g, from)?, find(g, to)?);
+            same_panel(g, &[i, j, k])?;
+            if i == j || i == k {
+                return Err(clash(format!("{a} 不能括住自己"), vec![a.clone()]));
+            }
+            if g.edges.iter().any(|e| &e.from == a || &e.to == a) {
+                return Err(clash(format!("{a} 有線接著，是物件不是括號"), vec![a.clone()]));
+            }
+            let n = &mut g2.nodes[i];
+            n.params.remove("by");
+            n.params.remove("side");
+            n.params.remove("stretch");
+            put(n, "gathers", json!([from, to]));
+            let mut said = format!("{a}：括住 {from} 到 {to}，跟它們一樣長，不佔格子");
+            match toward {
+                Some(t) => {
+                    let ti = find(g, t)?;
+                    same_panel(g, &[i, ti])?;
+                    put(&mut g2.nodes[i], "toward", json!(t));
+                    said.push_str(&format!("，指向 {t}"));
+                }
+                None => {
+                    g2.nodes[i].params.remove("toward");
+                }
+            }
+            Ok((g2, vec![said]))
+        }
+        Command::Fork { a, to } => {
+            find(g, a)?;
+            if to.is_empty() {
+                return Err(clash(format!("沒有說 {a} 要連到哪些物件"), vec![a.clone()]));
+            }
+            let mut new = Vec::new();
+            for t in to {
+                find(g, t)?;
+                if t == a {
+                    return Err(clash(format!("{a} 不能連到自己"), vec![a.clone()]));
+                }
+                if !g2.edges.iter().any(|e| &e.from == a && &e.to == t && e.kind == crate::spec::EdgeKind::Gather) {
+                    g2.edges.push(crate::spec::Edge { from: a.clone(), to: t.clone(), kind: crate::spec::EdgeKind::Gather, ..Default::default() });
+                    new.push(t.clone());
+                }
+            }
+            if new.is_empty() {
+                return Ok((g2, vec![format!("{a}：已經連到這些物件，不變")]));
+            }
+            Ok((g2, vec![format!("{a}：分叉連到 {}（無箭頭，跟著它們走）", new.join("、"))]))
+        }
         Command::Free { a } => {
             let i = find(g, a)?;
-            let had: Vec<&str> = ["by", "side", "span", "tall", "stretch", "stated"].into_iter().filter(|k| g2.nodes[i].params.remove(*k).is_some()).collect();
+            let had: Vec<&str> = ["by", "side", "span", "tall", "stretch", "gathers", "toward", "stated"].into_iter().filter(|k| g2.nodes[i].params.remove(*k).is_some()).collect();
             if had.is_empty() {
                 return Ok((g2, vec![format!("{a}：沒有說過什麼，不變")]));
             }
