@@ -197,7 +197,10 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
         lanes.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
         for l in lanes {
             let mut row: Vec<usize> = here.iter().copied().filter(|i| (at(&g.nodes[*i]).unwrap().1 - l).abs() < 1e-6 && g.nodes[*i].num("tall").unwrap_or(1.0) <= 1.0).collect();
-            if row.len() < 2 || row.iter().any(|i| touched(&g, &g.nodes[*i].id) || g.nodes[*i].params.contains_key("span")) {
+            // headings are words (a label, a box) or brackets: a row of small pictures no line
+            // touches (the entries of a key) is not over anything
+            let heads = |i: &usize| matches!(g.nodes[*i].module.as_str(), "label" | "box" | "bracket");
+            if row.len() < 2 || !row.iter().all(heads) || row.iter().any(|i| touched(&g, &g.nodes[*i].id) || g.nodes[*i].params.contains_key("span")) {
                 continue;
             }
             // nothing else may reach into this row

@@ -818,3 +818,14 @@ fn a_regions_frame_on_a_grid_lies_round_its_own_blocks() {
     assert!(f.contains(&m.art), "{f:?} holds {:?}", m.art);
     assert!(f.h < t.art.h * 0.8, "frame {} high beside a picture {} high", f.h, t.art.h);
 }
+
+/// A row of small pictures no line touches (the entries of a key) is not a row of headings:
+/// none of them is laid over the columns of the flow.
+#[test]
+fn a_row_of_pictures_no_line_touches_is_not_a_row_of_headings() {
+    use lore_flow::settle::settle;
+    let src = "fig t\npanel a \"\" none title=none\n  k0: image \"Key one\" look=photo col=2 lane=0\n  k1: image \"Key two\" look=photo col=3 lane=0\n  x: box \"X\" col=0 lane=1\n  y: box \"Y\" col=1 lane=1\n  z: box \"Z\" col=2 lane=1\n  x -> y -> z\nend\n";
+    let g = dsl::parse(src).unwrap();
+    let (s, said) = settle(&g);
+    assert!(s.nodes.iter().all(|n| n.num("span").is_none()), "{said:?}");
+}
