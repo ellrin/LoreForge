@@ -55,7 +55,9 @@ a fixed shape allows, without lines: the areas in the rows the arrangement names
 each area its blocks in the order written, in rows that break wherever that keeps things largest
 (a region is one item with rows of its own). Three searches, each on one number: the largest text
 (the smallest page that holds everything at its natural size), then every area's pictures enlarged
-together, then the areas that still have room. `Air` states the air in text sizes (`gap` between
+together, then the areas that still have room (no further than `Air.grow_apart`, 1.5, times what
+all took together: the pictures of one figure are nearly of one scale, and room left over stays
+air). `Air` states the air in text sizes (`gap` between
 blocks, `pad` inside a frame, `between` areas) and `text_max_pt`, a limit on the text that hands the
 rest of the page to the pictures. `Packed` carries the layout, the graph with each block's `grow=`,
 the text size on the page, the page's cover and each area's rows.
@@ -102,6 +104,11 @@ through a block of words. Two blocks whose pictures face each other (they share 
 height, or of width) are joined by one straight line even when their middles differ; a step is
 drawn only when no straight line exists. `Air.text_min_pt` (5) is the least text size: under it
 the room for lines is given back first, and a page still under it is marked `Packed.small`.
+A line of any shape keeps off the words of the blocks it passes and off the titles of panels and
+frames (counted heavily; a line round the outside turns under a frame's title, not in it), and an
+end on the side where its own block's caption is written lies at the far edge of the caption. On
+a grid a region's frame lies round its own blocks, not round their whole cells; regions over the
+same rows keep one top and bottom, regions over the same columns one left and right.
 
 Stated placement (what the one who draws says, over the choices made here): `Air.stated` keeps
 every stated grid whatever it costs the text (`GRID=1` in the example); `span=k` lays a block

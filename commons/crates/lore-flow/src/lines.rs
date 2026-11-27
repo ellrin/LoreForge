@@ -116,7 +116,15 @@ fn rounds(a: &Placed, b: &Placed, lay: &Layout) -> Vec<Cand> {
     // it has the room there (a little inside its edge, still clear of the blocks), and no
     // line of this shape leaves the page
     let holds = |r: &Rect| r.contains(ra) && r.contains(rb);
-    let frame: Option<Rect> = lay.regions.iter().map(|r| r.rect).filter(|r| holds(r)).chain(lay.panels.iter().filter(|p| !p.bare).map(|p| p.rect).filter(|r| holds(r))).min_by(|x, y| (x.w * x.h).partial_cmp(&(y.w * y.h)).unwrap());
+    // (a frame's title is not room: where it is written along an edge, the frame ends at it)
+    let less = |r: Rect, t: Option<Rect>| -> Rect {
+        match t {
+            Some(t) if t.w >= t.h && t.cy() < r.cy() && t.bottom() > r.y => Rect::new(r.x, t.bottom(), r.w, r.bottom() - t.bottom()),
+            Some(t) if t.w >= t.h && t.cy() >= r.cy() && t.y < r.bottom() => Rect::new(r.x, r.y, r.w, t.y - r.y),
+            _ => r,
+        }
+    };
+    let frame: Option<Rect> = lay.regions.iter().map(|r| (r.rect, r.title_rect)).filter(|r| holds(&r.0)).chain(lay.panels.iter().filter(|p| !p.bare).map(|p| (p.rect, p.title_rect)).filter(|r| holds(&r.0))).min_by(|x, y| (x.0.w * x.0.h).partial_cmp(&(y.0.w * y.0.h)).unwrap()).map(|(r, t)| less(r, t));
     let keep = |want: f64, edge: Option<f64>, clear: f64, sign: f64| -> f64 {
         // `sign` -1: a run above or left (smaller is further out); +1: below or right
         match edge {
@@ -350,14 +358,12 @@ pub fn lines(g: &Graph, lay: &Layout) -> Vec<Route> {
                 })
                 .count() as f64;
             let wordy = words(a, c.from) as u8 as f64 + words(b, c.to) as u8 as f64;
-            // round the outside: more than its bends, and never through the words of a block
-            // (the part of a block's frame that is not its picture)
+            // round the outside: more than its bends
             let round = c.pts.len() == 4 && c.from == c.to;
-            let over_words = if round {
-                lay.nodes.iter().enumerate().filter(|(i, n)| *i != ia && *i != ib && c.pts.windows(2).any(|w| word_rects(n).iter().any(|r| segment_hits(w[0], w[1], &r.inflate(-0.5))))).count() as f64
-            } else {
-                0.0
-            };
+            // nor through the words of another block, of any shape, nor through a title
+            let hits = |r: &Rect| c.pts.windows(2).any(|w| segment_hits(w[0], w[1], &r.inflate(-0.5)));
+            let over_words = lay.nodes.iter().enumerate().filter(|(i, n)| *i != ia && *i != ib && word_rects(n).iter().any(|r| hits(r))).count() as f64
+                + lay.panels.iter().filter_map(|p| p.title_rect).chain(lay.regions.iter().filter_map(|r| r.title_rect)).filter(|r| hits(r)).count() as f64;
             let len: f64 = c.pts.windows(2).map(|w| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs()).sum();
             bends * 100.0 + under * 250.0 + shared * 60.0 + wordy * 150.0 + len / 1000.0 + if round { ROUND } else { 0.0 } + over_words * 400.0
         };
@@ -441,6 +447,23 @@ pub fn lines(g: &Graph, lay: &Layout) -> Vec<Route> {
                         c.pts[at] = p;
                         if at == 0 { c.pts[1] = corner } else { c.pts[n - 2] = corner }
                     }
+                }
+            }
+            c
+        });
+        // an end on a side where its own block's words are written lies at the far edge of
+        // those words (the line starts under a caption, not across it), while its run reaches
+        let best = best.map(|mut c| {
+            let n = c.pts.len();
+            for (at, nd, side) in [(0usize, a, c.from), (n - 1, b, c.to)] {
+                if !words(nd, side) {
+                    continue;
+                }
+                let edge = if side == Side::Top { nd.rect.y } else { nd.rect.bottom() };
+                let next = if at == 0 { c.pts[1] } else { c.pts[n - 2] };
+                let here = c.pts[at];
+                if (next.0 - here.0).abs() < 0.05 && (next.1 - edge) * (edge - here.1) > 0.0 {
+                    c.pts[at].1 = edge;
                 }
             }
             c

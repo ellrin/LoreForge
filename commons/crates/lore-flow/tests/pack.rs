@@ -772,3 +772,49 @@ fn a_figures_structure_settles_marks_parallel_rows_headings_and_long_words() {
     let stated = dsl::parse_with(&src.replace("j: box \"Join\" col=3 lane=1", "j: box \"Join\" col=3 lane=1 tall=1"), &["bracket".to_string()]).unwrap();
     assert_eq!(settle(&stated).0.nodes[stated.node_index("j").unwrap()].num("tall"), Some(1.0));
 }
+
+/// A line that leaves a picture on the side its caption is written starts at the far edge of
+/// the caption, not across it; and no line is drawn through the title of its frame.
+#[test]
+fn a_line_starts_beyond_its_blocks_caption_and_keeps_off_titles() {
+    let src = "fig t\npanel a \"A long title of the panel\"\n  x: image \"Picture above\" look=photo col=0 lane=0\n  y: image \"Picture below\" look=photo col=0 lane=1\n  p: box \"P\" col=1 lane=0\n  q: box \"Q\" col=2 lane=0\n  r: box \"R\" col=3 lane=0\n  x -> y\n  p -> q -> r\n  p -> r : skip\nend\n";
+    let (g, p) = packed(src, (2, 1), "", &Air { stated: true, ..Air::default() });
+    let rs = lines::lines(&p.graph, &p.layout);
+    let x = &p.layout.nodes[g.node_index("x").unwrap()];
+    assert!(x.words.1 && x.rect.bottom() > x.art.bottom() + 1.0, "the picture has a caption under it");
+    let down = rs.iter().find(|r| g.edges[r.edge].from == "x").unwrap();
+    assert!((down.points[0].1 - x.rect.bottom()).abs() < 0.01, "starts at {} (caption ends {}, picture {})", down.points[0].1, x.rect.bottom(), x.art.bottom());
+    let title = p.layout.panels[0].title_rect.expect("a title");
+    for r in &rs {
+        assert!(!r.points.windows(2).any(|w| route::segment_hits(w[0], w[1], &title.inflate(-0.5))), "{:?} through the title {title:?}", r.points);
+    }
+}
+
+/// An area with room to spare does not draw its pictures far larger than the other areas do
+/// (`Air.grow_apart`): the room stays air.
+#[test]
+fn no_areas_pictures_are_drawn_far_larger_than_the_others() {
+    let boxes: String = (0..6).map(|i| format!("  x{i}: box \"A wide box {i}\"\n")).collect();
+    let src = format!("fig t\npanel a \"First\"\n  z: image \"Z\" look=photo\n{boxes}end\npanel b \"Second\"\n{}end\n", pictures(2, "y"));
+    let grows = |apart: f64| -> (f64, f64) {
+        let (_, p) = packed(&src, (4, 3), "a / b", &Air { grow_apart: apart, ..Air::default() });
+        (p.areas.iter().map(|a| a.grow).fold(f64::MAX, f64::min), p.areas.iter().map(|a| a.grow).fold(0.0, f64::max))
+    };
+    let (lo, hi) = grows(Air::default().grow_apart);
+    assert!(hi <= lo * 1.5 + 0.011, "{lo} and {hi}");
+    let (_, hi_free) = grows(100.0);
+    assert!(hi_free > hi + 0.2, "without the limit {hi_free}, with it {hi}");
+}
+
+/// On a grid a region's frame lies round its own blocks: a row made tall by a block outside
+/// the region does not make the frame tall.
+#[test]
+fn a_regions_frame_on_a_grid_lies_round_its_own_blocks() {
+    let src = "fig t\npanel a \"\" none title=none\n  t: box \"Tall\" h=120 col=0 lane=0\n  region s \"\" tint=blue\n    m: box \"Model\" col=1 lane=0\n  end\n  t -> m\nend\n";
+    let (g, p) = packed(src, (2, 1), "", &Air { stated: true, ..Air::default() });
+    let (t, m) = (&p.layout.nodes[g.node_index("t").unwrap()], &p.layout.nodes[g.node_index("m").unwrap()]);
+    let f = p.layout.regions[0].rect;
+    assert!(t.art.h > m.art.h * 2.0, "the picture is the tall one: {} vs {}", t.art.h, m.art.h);
+    assert!(f.contains(&m.art), "{f:?} holds {:?}", m.art);
+    assert!(f.h < t.art.h * 0.8, "frame {} high beside a picture {} high", f.h, t.art.h);
+}

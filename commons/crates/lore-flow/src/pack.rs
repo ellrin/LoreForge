@@ -35,6 +35,10 @@ pub struct Air {
     pub between: f64,
     /// The most a picture is enlarged.
     pub grow_max: f64,
+    /// The most the pictures of one area are enlarged over those of the area enlarged least
+    /// (the pictures of one figure are of one scale, nearly): an area with room to spare keeps
+    /// it as air.
+    pub grow_apart: f64,
     /// The largest the text is drawn on the page, in points (0 = as large as it goes). With a
     /// limit the page that is left goes to the pictures.
     pub text_max_pt: f64,
@@ -58,7 +62,7 @@ pub struct Air {
 
 impl Default for Air {
     fn default() -> Air {
-        Air { gap: 1.5, pad: 0.8, between: 0.6, grow_max: 4.0, text_max_pt: 0.0, paths: 0.6, line: 2.5, text_min_pt: 5.0, stated: false }
+        Air { gap: 1.5, pad: 0.8, between: 0.6, grow_max: 4.0, grow_apart: 1.5, text_max_pt: 0.0, paths: 0.6, line: 2.5, text_min_pt: 5.0, stated: false }
     }
 }
 
@@ -167,6 +171,8 @@ struct GReg {
     r1: usize,
     /// The regions of the grid inside this one, itself included (indexes into `Grid.regs`).
     inside: Vec<usize>,
+    /// Its blocks (indexes into `Grid.cell`).
+    cells: Vec<usize>,
 }
 
 /// A grid measured at one enlargement: column widths, each row's parts, the room region frames
@@ -241,7 +247,7 @@ fn grid_of(g: &Graph, rt: &RTree, objects: &[usize], down: bool) -> Option<Grid>
         if mine.is_empty() {
             continue;
         }
-        regs.push(GReg { r, c0: mine.iter().map(|c| c.1).min().unwrap(), c1: cell.iter().zip(&last).filter(|(c, _)| rt.all[r].contains(&c.0)).map(|(_, l)| *l).max().unwrap(), r0: mine.iter().map(|c| c.2).min().unwrap(), r1: cell.iter().zip(&low).filter(|(c, _)| rt.all[r].contains(&c.0)).map(|(_, l)| *l).max().unwrap(), inside: Vec::new() });
+        regs.push(GReg { r, c0: mine.iter().map(|c| c.1).min().unwrap(), c1: cell.iter().zip(&last).filter(|(c, _)| rt.all[r].contains(&c.0)).map(|(_, l)| *l).max().unwrap(), r0: mine.iter().map(|c| c.2).min().unwrap(), r1: cell.iter().zip(&low).filter(|(c, _)| rt.all[r].contains(&c.0)).map(|(_, l)| *l).max().unwrap(), inside: Vec::new(), cells: (0..cell.len()).filter(|k| rt.all[r].contains(&cell[*k].0)).collect() });
     }
     for i in 0..regs.len() {
         regs[i].inside = (0..regs.len()).filter(|j| *j == i || (rt.all[regs[*j].r].is_subset(&rt.all[regs[i].r]) && rt.all[regs[*j].r] != rt.all[regs[i].r])).collect();
@@ -918,14 +924,17 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
     let top = steps(air.grow_max).max(100);
     let fits = |grow: &[u32]| fit(&shapes_at(grow), &rows, pw, ph, between).is_some();
     let mut active: Vec<usize> = (0..ar.len()).filter(|i| has_growable(g, &ar[*i].items)).collect();
+    let growing = active.clone();
+    let mut cap = top;
+    let mut first = true;
     while !active.is_empty() {
         let base = grow.clone();
         // the largest common addition for the active areas
-        let (mut a, mut b) = (0u32, top - active.iter().map(|i| base[*i]).min().unwrap());
+        let (mut a, mut b) = (0u32, cap.saturating_sub(active.iter().map(|i| base[*i]).min().unwrap()));
         let with = |d: u32| -> Vec<u32> {
             let mut v = base.clone();
             for &i in &active {
-                v[i] = (base[i] + d).min(top);
+                v[i] = (base[i] + d).min(cap);
             }
             v
         };
@@ -938,10 +947,16 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
             }
         }
         grow = with(a);
+        if first {
+            // what all took together is the figure's scale: no area goes far over it
+            first = false;
+            let least = growing.iter().map(|i| grow[*i]).min().unwrap_or(100);
+            cap = top.min((least as f64 * air.grow_apart.max(1.0)).floor() as u32).max(least);
+        }
         // who can still take one more step alone?
         let before = active.len();
         active.retain(|&i| {
-            if grow[i] >= top {
+            if grow[i] >= cap {
                 return false;
             }
             let mut v = grow.clone();
@@ -1337,10 +1352,43 @@ fn grid_place(cx: &Ctx2, a: &Area, gr: &Grid, grow: u32, rect: Rect, band: f64, 
         row.sort();
         rows_txt.push(row.into_iter().map(|x| x.1).collect());
     }
-    for (q, i) in gr.regs.iter().zip(&geo.inset) {
-        let (x0, x1) = (xs[q.c0] - i.0, xs[q.c1] + geo.cw[q.c1] + i.1);
-        let (y0, y1) = (ys[q.r0] - i.2, ys[q.r1] + geo.parts[q.r1].0 + geo.parts[q.r1].1 + i.3);
-        reg[q.r] = Some(Rect::new(x0, y0, x1 - x0, y1 - y0));
+    // a region's frame lies round its own blocks (what they take in their cells, not the whole
+    // cells: a row is as tall as its tallest block, which may be none of the region's), never
+    // past its cells; regions over the same rows keep one top and bottom, regions over the same
+    // columns one left and right
+    let mut fr: Vec<(f64, f64, f64, f64)> = gr
+        .regs
+        .iter()
+        .zip(&geo.inset)
+        .map(|(q, i)| {
+            let (cx0, cx1) = (xs[q.c0] - i.0, xs[q.c1] + geo.cw[q.c1] + i.1);
+            let (cy0, cy1) = (ys[q.r0] - i.2, ys[q.r1] + geo.parts[q.r1].0 + geo.parts[q.r1].1 + i.3);
+            let t: Vec<Rect> = q.cells.iter().map(|k| tight[gr.cell[*k].0]).collect();
+            let x0 = t.iter().map(|r| r.x).fold(f64::INFINITY, f64::min) - i.0;
+            let x1 = t.iter().map(|r| r.right()).fold(f64::NEG_INFINITY, f64::max) + i.1;
+            let y0 = t.iter().map(|r| r.y).fold(f64::INFINITY, f64::min) - i.2;
+            let y1 = t.iter().map(|r| r.bottom()).fold(f64::NEG_INFINITY, f64::max) + i.3;
+            // at least as wide as its title asks (the cells were made that wide)
+            let need = cx.region_title(q.r).1 + 2.0 * cx.pad();
+            let (x0, x1) = if x1 - x0 < need { let m = (x0 + x1) / 2.0; (m - need / 2.0, m + need / 2.0) } else { (x0, x1) };
+            (x0.max(cx0), x1.min(cx1), y0.max(cy0), y1.min(cy1))
+        })
+        .collect();
+    let was = fr.clone();
+    for (i, q) in gr.regs.iter().enumerate() {
+        for (j, o) in gr.regs.iter().enumerate() {
+            if (o.r0, o.r1) == (q.r0, q.r1) {
+                fr[i].2 = fr[i].2.min(was[j].2);
+                fr[i].3 = fr[i].3.max(was[j].3);
+            }
+            if (o.c0, o.c1) == (q.c0, q.c1) {
+                fr[i].0 = fr[i].0.min(was[j].0);
+                fr[i].1 = fr[i].1.max(was[j].1);
+            }
+        }
+    }
+    for (q, f) in gr.regs.iter().zip(&fr) {
+        reg[q.r] = Some(Rect::new(f.0, f.2, f.1 - f.0, f.3 - f.2));
     }
     ((0..gr.cols).map(|c| xs[c] + geo.cw[c] / 2.0).collect(), (0..gr.rows).map(|r| ys[r] + geo.parts[r].0).collect())
 }
