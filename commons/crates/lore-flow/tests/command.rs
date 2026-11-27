@@ -181,3 +181,21 @@ fn a_commanded_figure_packs() {
     assert!(p.layout.nodes.iter().enumerate().all(|(i, n)| i == g.node_index("l").unwrap() || !n.art.inflate(-0.5).overlaps(&l)), "the loss {l:?} lies over a block");
     assert!(l.cx() > o.cx() && (l.cy() - o.cy()).abs() < 2.0 * o.h, "the loss {l:?} by the output {o:?}");
 }
+
+/// A mark tied to another mark is written beside where that mark was written, on the side said.
+#[test]
+fn a_mark_tied_to_a_mark_is_written_beside_it() {
+    use lore_flow::pack::{self, Air};
+    use lore_flow::plate::{Format, Measure};
+    let src = "fig t\npanel a \"\" none title=none\n  x: box \"X\" col=0 lane=0\n  y: box \"Y\" col=1 lane=0\n  z: box \"Z\" col=2 lane=0\n  w: box \"W\" col=1 lane=2\n  l: loss \"L\" col=1 lane=1\n  r: loss \"R\" col=2 lane=2\n  x -> y -> z\n  y -> w\nend\n";
+    let g = graph(src);
+    let (g, _, not) = apply_all(&g, &[Command::Tie { mark: "r".into(), to: "l".into(), side: Some(Way::Left) }, Command::Tie { mark: "l".into(), to: "y".into(), side: Some(Way::Below) }]);
+    assert!(not.is_empty(), "{not:?}");
+    let (theme, vars, lib) = (Theme::classic_bw(), Vars::default(), Library::default());
+    let m = Measure { theme: &theme, vars: &vars, library: &lib, image_size: &modules::no_images };
+    let p = pack::pack(&g, &Format::new(500.0, (2, 1)), &m, "", &Air { stated: true, ..Air::default() }).expect("packed");
+    let at = |id: &str| p.layout.nodes[g.node_index(id).unwrap()].art;
+    let (l, r, y) = (at("l"), at("r"), at("y"));
+    assert!(l.y >= y.bottom() - 0.5 && l.cx() > y.x && l.cx() < y.right() + l.w, "L {l:?} under Y {y:?}");
+    assert!(r.right() <= l.x + 0.5 && (r.cy() - l.cy()).abs() < l.h, "R {r:?} left of L {l:?}");
+}

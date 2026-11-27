@@ -1012,7 +1012,16 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
         let mut taken: Vec<(usize, Rect)> = objects.iter().map(|n| (*n, tight[*n])).collect();
         let num = |n: usize, k: &str| g.nodes[n].num(k).unwrap_or(0.0);
         let side = |a: f64, b: f64| if a > b { 1.0 } else if a < b { -1.0 } else { 0.0 };
-        for &n in &a.notes {
+        // a mark tied to another mark is written after it, beside where that one was written
+        let mut order: Vec<usize> = Vec::new();
+        let mut left: Vec<usize> = a.notes.clone();
+        while !left.is_empty() {
+            let ready: Vec<usize> = left.iter().copied().filter(|n| !g.nodes[*n].str("by").and_then(|b| g.node_index(b)).is_some_and(|p| p != *n && left.contains(&p))).collect();
+            let ready = if ready.is_empty() { left.clone() } else { ready };
+            left.retain(|n| !ready.contains(n));
+            order.extend(ready);
+        }
+        for &n in &order {
             let b = cx.leaf(n, 100);
             let id = &g.nodes[n].id;
             // its frame: the smallest region that names it, else the area
@@ -1037,7 +1046,7 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
             if home.is_none() {
                 shut.extend(reg_rect.iter().flatten().filter(|rr| rects[i].contains(rr)).map(|r| (*r, 0.0)));
             }
-            let stated = g.nodes[n].str("by").and_then(|b| g.node_index(b)).filter(|p| objects.contains(p));
+            let stated = g.nodes[n].str("by").and_then(|b| g.node_index(b)).filter(|p| *p != n && taken.iter().any(|t| t.0 == *p));
             let partner = stated.or_else(|| g.edges.iter().filter_map(|e| if &e.from == id { g.node_index(&e.to) } else if &e.to == id { g.node_index(&e.from) } else { None }).find(|p| objects.contains(p)));
             let by = partner.map(|p| {
                 let (dc, dl) = (side(num(n, "col"), num(p, "col")), side(num(n, "lane"), num(p, "lane")));
