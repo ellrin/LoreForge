@@ -1056,6 +1056,20 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
                     graph.nodes[n].params.insert("w".into(), serde_json::json!(tw * 100.0 / u.w));
                     graph.nodes[n].params.insert("h".into(), serde_json::json!(th * 100.0 / u.art.3));
                 }
+                // a mark whose length is its `size` (a brace) takes that instead
+                let got = body(&graph.nodes[n], gr, false, m);
+                if (high(node) && (got.art.3 - th).abs() > 0.5) || (wide(node) && (got.w - tw).abs() > 0.5) {
+                    graph.nodes[n].params.remove("w");
+                    graph.nodes[n].params.remove("h");
+                    probe.params.remove("w");
+                    probe.params.remove("h");
+                    probe.params.insert("size".into(), serde_json::json!(100.0));
+                    let u = body(&probe, gr, false, m);
+                    let (have, want) = if high(node) { (u.art.3, th) } else { (u.w, tw) };
+                    if have > 0.0 {
+                        graph.nodes[n].params.insert("size".into(), serde_json::json!(want * 100.0 / have));
+                    }
+                }
             }
         }
         let node = &graph.nodes[n];
