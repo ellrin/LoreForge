@@ -472,7 +472,9 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             e.from != n.id && e.to != n.id && r.points.windows(2).any(|w| crate::route::segment_hits(w[0], w[1], &pl.art.inflate(-0.5)))
         });
         if passed {
-            let ground = modules::paint(&theme.colors.paper, 1.0);
+            // the colour the block stands on: the fill of the innermost frame around it, else paper
+            let on = region_fills.iter().rev().find(|(o, f)| f.is_some() && o.contains(&pl.art)).and_then(|(_, f)| f.clone());
+            let ground = modules::paint(&on.unwrap_or_else(|| theme.colors.paper.clone()), 1.0);
             if body.single {
                 if let Some(sp) = body.objs.first_mut().and_then(|o| o.kind.sp_mut()) {
                     if matches!(sp.fill, lore_canvas::Paint::None) && sp.text.is_none() {

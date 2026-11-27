@@ -469,3 +469,27 @@ fn of_two_crossing_lines_the_side_line_is_behind() {
     assert!(behind[of("c")], "the side line crosses the flow line and lies behind it");
     assert!(!behind[of("a")] && !behind[of("b")]);
 }
+
+/// The ground under a block passed beneath has the colour the block stands on: inside a tinted
+/// frame the frame's fill, never a white patch.
+#[test]
+fn the_ground_of_a_passed_block_takes_its_frames_colour() {
+    let src = "fig t\npanel a \"Row\"\n  x: image \"A\" look=photo col=0 lane=0\n  region r \"\" tint=grey\n    y: image \"B\" look=photo col=1 lane=0\n  end\n  z: image \"C\" look=photo col=2 lane=0\n  x -> z\nend\n";
+    let (_, p) = packed(src, (4, 1), "", &Air { stated: true, ..Air::default() });
+    let rs = lines::lines(&p.graph, &p.layout);
+    let (theme, vars, lib) = (Theme::classic_bw(), Vars::default(), Library::default());
+    let built = build::build_with(&p.graph, &theme, &vars, &lib, &NoMath, &p.layout, &rs, 2, &modules::no_images);
+    let fill = |o: &lore_canvas::Object| match &o.kind {
+        lore_canvas::Kind::Shape(s) => match &s.fill {
+            lore_canvas::Paint::Solid { color, .. } => Some(color.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let frame = built.objects.iter().find(|o| o.name.contains("region:r")).and_then(fill).expect("the frame is filled");
+    let y = built.objects.iter().find(|o| o.name == build::node_name("t", "y")).unwrap();
+    let lore_canvas::Kind::Group(g) = &y.kind else { panic!("a group") };
+    let ground = g.children.iter().find(|c| c.name.ends_with("ground")).and_then(fill).expect("a ground");
+    assert_eq!(ground, frame);
+    assert_ne!(ground.trim_start_matches('#').to_uppercase(), theme.colors.paper.trim_start_matches('#').to_uppercase());
+}
