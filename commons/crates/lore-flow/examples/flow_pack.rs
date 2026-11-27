@@ -42,6 +42,16 @@ fn main() {
     }
     // `GRID=1`: the pick of the one who draws, every stated grid kept
     air.stated = std::env::var("GRID").is_ok();
+    // `OUTLINE=1`: the opening statement (areas, modules, frames, marks, paths) and what each
+    // shape of the whole figure gives, before anything is placed
+    if std::env::var("OUTLINE").is_ok() {
+        print!("{}", lore_flow::outline::outline(&g).text());
+        println!("整張圖的比例（寬 {} pt）：", f.width_pt);
+        for s in lore_flow::outline::shapes(&g, f.width_pt, &m, a.get(5).map(String::as_str).unwrap_or(""), &air, &lore_flow::outline::SHAPES) {
+            println!("  {}:{}  字 {:.1} pt，圖佔 {:.0}%{}", s.ratio.0, s.ratio.1, s.text_pt, s.cover * 100.0, if s.small { "（字太小）" } else { "" });
+        }
+        return;
+    }
     let p = pack::pack(&g, &f, &m, a.get(5).map(String::as_str).unwrap_or(""), &air).expect("a figure with blocks");
     // the base draft has no lines; `LINES=1` draws them with the router as it is
     let mut p = p;

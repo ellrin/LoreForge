@@ -113,6 +113,13 @@ free room on that side (a dashed return arrow under its loss); `tall=k` stands a
 rows from its own, in their middle (the trunk's big blocks beside four parallel rows), and
 `stretch=tall` makes it as tall as those rows (`both`: and as wide as its columns).
 
+The opening statement (`outline`): before anything is placed, `outline::outline` lists a figure's
+areas, the modules of each, frames, marks with the module they belong to, the flow's own paths
+and the other lines by kind (`Outline::text` for the one who draws), and `outline::shapes` gives
+the text size and cover of each shape the whole figure can take (width : height, eight of them),
+largest text first: the shape is chosen first, and every later step keeps it. `OUTLINE=1` in the
+example prints both.
+
 Crossing lines are told apart (`build::lines_behind`): of two lines that cross, the side line
 lies behind the flow line (of two of one kind, the later one); it is drawn first and half-way
 towards the paper's colour, so the crossing reads as depth.

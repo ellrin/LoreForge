@@ -692,3 +692,28 @@ fn words_written_above_the_picture_leave_its_bottom_free() {
     let (_, b0) = built_lines(&q);
     assert!(part_rect(&b0, "x", "label").y >= part_rect(&b0, "x", "port").bottom() - 0.01);
 }
+
+/// The opening statement: areas, the modules of each, frames, marks with the module they belong
+/// to, the flow's own paths and the other lines by kind; and the shapes the whole figure can
+/// take with the text size each gives, largest text first.
+#[test]
+fn the_opening_statement_names_modules_paths_marks_and_the_figures_shapes() {
+    use lore_flow::outline;
+    let src = "fig t\npanel a \"First\"\n  x: image \"In\" look=photo\n  e: box \"Encoder\"\n  region r \"Heads\"\n    h: box \"Head\"\n    k: box \"Other head\"\n  end\n  w: label \"weights\"\n  x -> e -> h\n  e -> k\n  w -> e : side\nend\npanel b \"Second\"\n  l: loss \"L\"\n  m: box \"m\" by=l side=below\n  h -> l : side\nend\n";
+    let g = graph(src);
+    let o = outline::outline(&g);
+    assert_eq!((o.areas.len(), o.modules, o.marks, o.frames, o.lines), (2, 5, 2, 1, 5));
+    assert_eq!(o.areas[0].modules.iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["x", "e", "h", "k"]);
+    assert_eq!(o.areas[0].marks, [("w".to_string(), "e".to_string())]);
+    assert_eq!(o.areas[1].marks, [("m".to_string(), "l".to_string())]);
+    assert_eq!(o.areas[0].frames, [("Heads".to_string(), vec!["h".to_string(), "k".to_string()])]);
+    assert!(o.paths.contains(&vec!["x".to_string(), "e".to_string(), "h".to_string()]) && o.paths.contains(&vec!["e".to_string(), "k".to_string()]), "{:?}", o.paths);
+    assert_eq!(o.others.len(), 2);
+    assert!(o.text().contains("2 個區塊") && o.text().contains("x → e → h"));
+    let (theme, vars, lib) = (Theme::classic_bw(), Vars::default(), Library::default());
+    let m = Measure { theme: &theme, vars: &vars, library: &lib, image_size: &modules::no_images };
+    let s = outline::shapes(&g, 500.0, &m, "", &Air::default(), &outline::SHAPES);
+    assert_eq!(s.len(), outline::SHAPES.len());
+    assert!(s.windows(2).all(|w| w[0].text_pt >= w[1].text_pt));
+    assert!(s[0].text_pt > s[s.len() - 1].text_pt, "the shape matters: {:?}", s);
+}
