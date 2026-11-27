@@ -440,3 +440,19 @@ fn stated_placement_spans_stretches_and_ties_marks() {
     let (_, free) = packed(src, (2, 1), "", &Air { paths: 0.0, ..Air::default() });
     assert!(!free.areas[0].grid);
 }
+
+/// A block over several rows (`tall=`) stands in their middle and makes none of them taller
+/// alone; with `stretch=tall` it is as tall as those rows together.
+#[test]
+fn a_tall_block_stands_beside_its_rows_and_can_take_their_height() {
+    let src = |extra: &str| format!("fig t\npanel a \"\" none title=none\n  a: box \"A\" col=0 lane=0\n  b: box \"B\" col=0 lane=1\n  c: box \"C\" col=0 lane=2\n  t: box \"Tall\" vertical=true col=1 lane=0 tall=3{extra}\n  a -> t\n  b -> t\n  c -> t\nend\n");
+    let (g, p) = packed(&src(""), (1, 1), "", &Air { stated: true, ..Air::default() });
+    assert!(p.areas[0].grid);
+    let at = |p: &Packed, id: &str| p.layout.nodes[g.node_index(id).unwrap()].art;
+    assert!((at(&p, "t").cy() - at(&p, "b").cy()).abs() < 0.5, "in the middle of its three rows");
+    let (_, q) = packed(&src(" stretch=tall"), (1, 1), "", &Air { stated: true, ..Air::default() });
+    assert!(at(&q, "t").y <= at(&q, "a").y + 0.5 && at(&q, "t").bottom() >= at(&q, "c").bottom() - 0.5, "{:?}", at(&q, "t"));
+    // so every row's line into it is straight
+    let routes = lore_flow::lines::lines(&q.graph, &q.layout);
+    assert!(routes.iter().all(|r| r.bends() == 0));
+}

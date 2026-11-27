@@ -153,6 +153,8 @@ struct Grid {
     cell: Vec<(usize, usize, usize)>,
     /// Per cell of `cell`: the last column the block reaches (`span=` columns from its own).
     last: Vec<usize>,
+    /// Per cell: the last row the block reaches (`tall=` rows from its own).
+    low: Vec<usize>,
     regs: Vec<GReg>,
 }
 
@@ -186,6 +188,16 @@ struct GridGeom {
     h: f64,
 }
 
+/// `stretch=true|wide|both`: the block is as wide as the columns it lies over.
+fn wide(n: &crate::spec::Node) -> bool {
+    n.flag("stretch") || matches!(n.str("stretch"), Some("wide" | "both"))
+}
+
+/// `stretch=tall|both`: the block is as tall as the rows it stands beside.
+fn high(n: &crate::spec::Node) -> bool {
+    matches!(n.str("stretch"), Some("tall" | "both"))
+}
+
 fn grid_of(g: &Graph, rt: &RTree, objects: &[usize], down: bool) -> Option<Grid> {
     if objects.is_empty() {
         return None;
@@ -209,8 +221,12 @@ fn grid_of(g: &Graph, rt: &RTree, objects: &[usize], down: bool) -> Option<Grid>
         let to = *c + g.nodes[*n].num("span").unwrap_or(1.0).max(1.0) - 1.0;
         xs.iter().rposition(|x| *x <= to + 1e-6).unwrap_or(k.1).max(k.1)
     }).collect();
+    let low: Vec<usize> = at.iter().zip(&cell).map(|((n, _, l), k)| {
+        let to = *l + g.nodes[*n].num("tall").unwrap_or(1.0).max(1.0) - 1.0;
+        ys.iter().rposition(|y| *y <= to + 1e-6).unwrap_or(k.2).max(k.2)
+    }).collect();
     for (i, a) in cell.iter().enumerate() {
-        if (0..i).any(|j| cell[j].2 == a.2 && cell[j].1 <= last[i] && a.1 <= last[j]) {
+        if (0..i).any(|j| cell[j].2 <= low[i] && a.2 <= low[j] && cell[j].1 <= last[i] && a.1 <= last[j]) {
             return None;
         }
     }
@@ -220,12 +236,12 @@ fn grid_of(g: &Graph, rt: &RTree, objects: &[usize], down: bool) -> Option<Grid>
         if mine.is_empty() {
             continue;
         }
-        regs.push(GReg { r, c0: mine.iter().map(|c| c.1).min().unwrap(), c1: cell.iter().zip(&last).filter(|(c, _)| rt.all[r].contains(&c.0)).map(|(_, l)| *l).max().unwrap(), r0: mine.iter().map(|c| c.2).min().unwrap(), r1: mine.iter().map(|c| c.2).max().unwrap(), inside: Vec::new() });
+        regs.push(GReg { r, c0: mine.iter().map(|c| c.1).min().unwrap(), c1: cell.iter().zip(&last).filter(|(c, _)| rt.all[r].contains(&c.0)).map(|(_, l)| *l).max().unwrap(), r0: mine.iter().map(|c| c.2).min().unwrap(), r1: cell.iter().zip(&low).filter(|(c, _)| rt.all[r].contains(&c.0)).map(|(_, l)| *l).max().unwrap(), inside: Vec::new() });
     }
     for i in 0..regs.len() {
         regs[i].inside = (0..regs.len()).filter(|j| *j == i || (rt.all[regs[*j].r].is_subset(&rt.all[regs[i].r]) && rt.all[regs[*j].r] != rt.all[regs[i].r])).collect();
     }
-    Some(Grid { cols: xs.len(), rows: ys.len(), cell, last, regs })
+    Some(Grid { cols: xs.len(), rows: ys.len(), cell, last, low, regs })
 }
 
 /// A block's tight box at one enlargement: its width, how far its middle line lies under its
@@ -377,10 +393,12 @@ impl Ctx2<'_> {
         let (pad, gap) = (self.pad(), self.gap());
         let mut cw = vec![0.0f64; gr.cols];
         let mut by_row: Vec<Vec<Box3>> = vec![Vec::new(); gr.rows];
-        for (&(n, c, r), &l) in gr.cell.iter().zip(&gr.last) {
+        for (k, (&(n, c, r), &l)) in gr.cell.iter().zip(&gr.last).enumerate() {
             let b = self.leaf(n, grow);
+            // a block over several rows sets the height of none alone
+            let b = if gr.low[k] > r { Box3 { up: 0.0, dn: 0.0, words: 0.0, ..b } } else { b };
             // a block that takes the width of its columns (`stretch`) asks for none itself
-            if l == c && !self.g.nodes[n].flag("stretch") {
+            if l == c && !wide(&self.g.nodes[n]) {
                 cw[c] = cw[c].max(b.w);
             }
             by_row[r].push(b);
@@ -450,10 +468,25 @@ impl Ctx2<'_> {
         for (&(n, c, _), &l) in gr.cell.iter().zip(&gr.last).filter(|(c, l)| **l > c.1) {
             let have: f64 = (c..=l).map(|k| cw[k]).sum::<f64>() + (c..l).map(|k| gx[k] + right[k] + left[k + 1]).sum::<f64>();
             let need = self.leaf(n, grow).w;
-            if need > have && !self.g.nodes[n].flag("stretch") {
+            if need > have && !wide(&self.g.nodes[n]) {
                 let add = (need - have) / (l - c + 1) as f64;
                 for w in &mut cw[c..=l] {
                     *w += add;
+                }
+            }
+        }
+        // a block over several rows: they are together at least as tall as it
+        let mut parts = parts;
+        for (k, &(n, _, r)) in gr.cell.iter().enumerate().filter(|(k, c)| gr.low[*k] > c.2) {
+            let l = gr.low[k];
+            let have: f64 = (r..=l).map(|i| parts[i].0 + parts[i].1).sum::<f64>() + (r..l).map(|i| gy[i] + bottom[i] + top[i + 1]).sum::<f64>();
+            let b = self.leaf(n, grow);
+            let need = b.up + b.dn + b.words;
+            if need > have && !high(&self.g.nodes[n]) {
+                let add = (need - have) / (l - r + 1) as f64 / 2.0;
+                for p in &mut parts[r..=l] {
+                    p.0 += add;
+                    p.1 += add;
                 }
             }
         }
@@ -1011,16 +1044,17 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
             graph.nodes[n].params.insert("label_drop".into(), serde_json::json!((drop[n] * 100.0).round() / 100.0));
         }
         // a block that takes the width of its columns: its drawing stretched across, its height kept
-        if node.flag("stretch") && axes[pi].is_some() {
+        if (wide(node) || high(node)) && axes[pi].is_some() {
             let nat = body(&graph.nodes[n], gr, false, m);
-            if (tight[n].w - nat.w).abs() > 0.5 {
+            let (tw, th) = (if wide(node) { tight[n].w } else { nat.w }, if high(node) { tight[n].h } else { nat.art.3 });
+            if (tw - nat.w).abs() > 0.5 || (th - nat.art.3).abs() > 0.5 {
                 let mut probe = graph.nodes[n].clone();
                 probe.params.insert("w".into(), serde_json::json!(100.0));
                 probe.params.insert("h".into(), serde_json::json!(100.0));
                 let u = body(&probe, gr, false, m);
                 if u.w > 0.0 && u.art.3 > 0.0 {
-                    graph.nodes[n].params.insert("w".into(), serde_json::json!(tight[n].w * 100.0 / u.w));
-                    graph.nodes[n].params.insert("h".into(), serde_json::json!(nat.art.3 * 100.0 / u.art.3));
+                    graph.nodes[n].params.insert("w".into(), serde_json::json!(tw * 100.0 / u.w));
+                    graph.nodes[n].params.insert("h".into(), serde_json::json!(th * 100.0 / u.art.3));
                 }
             }
         }
@@ -1219,12 +1253,26 @@ fn grid_place(cx: &Ctx2, a: &Area, gr: &Grid, grow: u32, rect: Rect, band: f64, 
         y += geo.parts[r].0 + geo.parts[r].1 + geo.bottom[r] + geo.gy.get(r).copied().unwrap_or(0.0);
     }
     let mut names: Vec<Vec<(usize, String)>> = vec![Vec::new(); gr.rows];
-    for (&(n, c, r), &l) in gr.cell.iter().zip(&gr.last) {
+    for (k, (&(n, c, r), &l)) in gr.cell.iter().zip(&gr.last).enumerate() {
         let b = cx.leaf(n, grow);
         let (up, _, dn) = geo.parts[r];
         let d = if b.words > 0.0 { dn - b.dn } else { 0.0 };
+        // over several rows: the middle of its picture and words in the middle of those rows
+        let lo = gr.low[k];
+        let (up, d) = if lo > r {
+            let mid = (ys[r] + ys[lo] + geo.parts[lo].0 + geo.parts[lo].1) / 2.0;
+            (mid - ys[r] - (b.dn + b.words - b.up) / 2.0, 0.0)
+        } else {
+            (up, d)
+        };
         let over = xs[l] + geo.cw[l] - xs[c];
-        if cx.g.nodes[n].flag("stretch") {
+        if high(&cx.g.nodes[n]) && lo > r {
+            let w = if wide(&cx.g.nodes[n]) { over } else { b.w };
+            tight[n] = Rect::new(xs[c] + (over - w) / 2.0, ys[r], w, ys[lo] + geo.parts[lo].0 + geo.parts[lo].1 - ys[r]);
+            names[r].push((c, cx.g.nodes[n].id.clone()));
+            continue;
+        }
+        if wide(&cx.g.nodes[n]) {
             tight[n] = Rect::new(xs[c], ys[r] + up - b.up, over, b.up + b.dn + d + b.words);
             drop[n] = d;
             names[r].push((c, cx.g.nodes[n].id.clone()));

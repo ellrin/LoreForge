@@ -109,7 +109,9 @@ over k columns from its own (a heading under a group, one net over several paths
 are together as wide as it, none is widened alone); `stretch=true` makes a block as wide as the
 columns it lies over, its height kept (a bracket under what it gathers); `by=<block>` with
 `side=above|below|left|right` ties any mark to a block: it takes no cell and is written in the
-free room on that side (a dashed return arrow under its loss).
+free room on that side (a dashed return arrow under its loss); `tall=k` stands a block beside k
+rows from its own, in their middle (the trunk's big blocks beside four parallel rows), and
+`stretch=tall` makes it as tall as those rows (`both`: and as wide as its columns).
 Not yet: the words of a line that passes beneath a block still lie over that block; the lines of
 notes; free areas get no line room; packing a figure of fifty blocks takes over a minute.
 
