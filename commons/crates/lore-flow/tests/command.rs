@@ -265,3 +265,23 @@ fn the_figures_text_states_a_brace_and_a_fork() {
     assert_eq!(again.nodes[b].str("toward"), Some("h"));
     assert_eq!(again.edges, g.edges);
 }
+
+/// A mark is not written where a line is sure to run: between two objects that face each
+/// other, or on the trunk, bar and legs of a fork.
+#[test]
+fn a_mark_is_not_written_on_a_line_that_is_sure_to_run() {
+    use lore_flow::pack::{self, Air};
+    use lore_flow::plate::{Format, Measure};
+    let src = "fig t\npanel a \"\" none title=none\n  c: box \"Caption of these\" col=1 lane=0\n  u: box \"U\" col=0 lane=1\n  v: box \"V\" col=1 lane=1\n  w: box \"W\" col=2 lane=1\n  l: loss \"L\" by=u side=above col=0 lane=0\n  k: loss \"K\" by=v side=right col=2 lane=2\n  u -> v -> w\n  c -> u : gather\n  c -> v : gather\n  c -> w : gather\nend\n";
+    let g = graph(src);
+    let (theme, vars, lib) = (Theme::classic_bw(), Vars::default(), Library::default());
+    let m = Measure { theme: &theme, vars: &vars, library: &lib, image_size: &modules::no_images };
+    let p = pack::pack(&g, &Format::new(500.0, (2, 1)), &m, "", &Air { stated: true, ..Air::default() }).expect("packed");
+    let rs = lines::lines(&p.graph, &p.layout);
+    for id in ["l", "k"] {
+        let mark = p.layout.nodes[g.node_index(id).unwrap()].art;
+        for r in &rs {
+            assert!(!r.points.windows(2).any(|w| route::segment_hits(w[0], w[1], &mark.inflate(-0.5))), "{id} {mark:?} lies on the line {:?}", r.points);
+        }
+    }
+}

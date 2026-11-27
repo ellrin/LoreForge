@@ -1116,6 +1116,35 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
             if home.is_none() {
                 shut.extend(reg_rect.iter().flatten().filter(|rr| rects[i].contains(rr)).map(|r| (*r, 0.0)));
             }
+            // where a line is sure to run before any line is drawn: straight between two objects
+            // that face each other (one row, one column), and the trunk, bar and legs of a
+            // fork (`gather`). A mark is not written there (lines of its own excepted)
+            let thin = cx.fs * 0.25;
+            for e in g.edges.iter().filter(|e| &e.from != id && &e.to != id) {
+                let (Some(a), Some(b)) = (g.node_index(&e.from).filter(|x| objects.contains(x)), g.node_index(&e.to).filter(|x| objects.contains(x))) else { continue };
+                let (ra, rb) = (tight[a], tight[b]);
+                if e.kind == crate::spec::EdgeKind::Gather {
+                    let down = rb.y >= ra.bottom();
+                    let up = rb.bottom() <= ra.y;
+                    if down || up {
+                        let (y0, y1) = if down { (ra.bottom(), rb.y) } else { (rb.bottom(), ra.y) };
+                        let mid = (y0 + y1) / 2.0;
+                        shut.push((Rect::new(ra.cx() - thin, y0.min(mid), 2.0 * thin, (if down { mid - y0 } else { y1 - mid }).abs()), 0.0));
+                        shut.push((Rect::new(ra.cx().min(rb.cx()), mid - thin, (ra.cx() - rb.cx()).abs(), 2.0 * thin), 0.0));
+                        shut.push((Rect::new(rb.cx() - thin, if down { mid } else { y0 }, 2.0 * thin, (y1 - y0) / 2.0), 0.0));
+                    }
+                    continue;
+                }
+                let (x0, x1) = (ra.x.max(rb.x), ra.right().min(rb.right()));
+                let (y0, y1) = (ra.y.max(rb.y), ra.bottom().min(rb.bottom()));
+                if y1 - y0 > 1.0 && (rb.x >= ra.right() || ra.x >= rb.right()) {
+                    let (l, r) = (ra.right().min(rb.right()), ra.x.max(rb.x));
+                    shut.push((Rect::new(l, (y0 + y1) / 2.0 - thin, r - l, 2.0 * thin), 0.0));
+                } else if x1 - x0 > 1.0 && (rb.y >= ra.bottom() || ra.y >= rb.bottom()) {
+                    let (t, b2) = (ra.bottom().min(rb.bottom()), ra.y.max(rb.y));
+                    shut.push((Rect::new((x0 + x1) / 2.0 - thin, t, 2.0 * thin, b2 - t), 0.0));
+                }
+            }
             let stated = g.nodes[n].str("by").and_then(|b| g.node_index(b)).filter(|p| *p != n && taken.iter().any(|t| t.0 == *p));
             let partner = stated.or_else(|| g.edges.iter().filter_map(|e| if &e.from == id { g.node_index(&e.to) } else if &e.to == id { g.node_index(&e.from) } else { None }).find(|p| objects.contains(p)));
             let by = partner.map(|p| {
