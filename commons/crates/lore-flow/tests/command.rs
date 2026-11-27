@@ -285,3 +285,21 @@ fn a_mark_is_not_written_on_a_line_that_is_sure_to_run() {
         }
     }
 }
+
+/// The lines that leave one block by one side turn at one level, whatever the heights of
+/// what they reach: a question's yes and no share one bar.
+#[test]
+fn lines_that_fan_out_of_one_side_share_one_bar() {
+    use lore_flow::pack::{self, Air};
+    use lore_flow::plate::{Format, Measure};
+    let src = "fig t\npanel a \"\" none title=none\n  q: label \"Is it so?\" col=1 lane=0\n  y: label \"Yes\" col=0 lane=1\n  n: label \"No, and here\\\\are three lines\\\\of words\" col=2 lane=1\n  q -> y : data \"yes\" from=bottom to=top\n  q -> n : data \"no\" from=bottom to=top\nend\n";
+    let g = graph(src);
+    let (theme, vars, lib) = (Theme::classic_bw(), Vars::default(), Library::default());
+    let m = Measure { theme: &theme, vars: &vars, library: &lib, image_size: &modules::no_images };
+    let p = pack::pack(&g, &Format::new(500.0, (2, 1)), &m, "", &Air { stated: true, ..Air::default() }).expect("packed");
+    let rs = lines::lines(&p.graph, &p.layout);
+    assert!(rs.iter().all(|r| r.points.len() == 4), "{:?}", rs.iter().map(|r| r.points.clone()).collect::<Vec<_>>());
+    assert!((rs[0].points[1].1 - rs[1].points[1].1).abs() < 0.01, "bars at {} and {}", rs[0].points[1].1, rs[1].points[1].1);
+    let tops: Vec<f64> = ["y", "n"].iter().map(|id| p.layout.nodes[g.node_index(id).unwrap()].art.y).collect();
+    assert!(rs[0].points[1].1 < tops[0].min(tops[1]), "the bar lies above both");
+}

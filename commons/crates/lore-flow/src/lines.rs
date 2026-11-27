@@ -486,6 +486,45 @@ pub fn lines(g: &Graph, lay: &Layout) -> Vec<Route> {
         };
         done.push((ei, r));
     }
+    level_fans(g, &mut done);
     done.sort_by_key(|d| d.0);
     done.into_iter().map(|d| d.1).collect()
+}
+
+/// The steps that leave one block by one side turn at one level (one bar, not a stair): the
+/// level of the step whose turn is nearest the block, which lies in every one of their gaps.
+/// Likewise the steps that arrive at one block by one side, when they are not levelled as a
+/// fan out already.
+fn level_fans(g: &Graph, done: &mut [(usize, Route)]) {
+    let step = |r: &Route| r.points.len() == 4 && !r.forced && r.from_side.opposite() == r.to_side;
+    let upright = |r: &Route| matches!(r.from_side, Side::Top | Side::Bottom);
+    let level = |r: &Route| if upright(r) { r.points[1].1 } else { r.points[1].0 };
+    let mut fixed = vec![false; done.len()];
+    for out in [true, false] {
+        let key = |d: &(usize, Route)| (if out { g.edges[d.0].from.clone() } else { g.edges[d.0].to.clone() }, if out { d.1.from_side } else { d.1.to_side });
+        for i in 0..done.len() {
+            if fixed[i] || !step(&done[i].1) {
+                continue;
+            }
+            let k = key(&done[i]);
+            let group: Vec<usize> = (i..done.len()).filter(|j| !fixed[*j] && step(&done[*j].1) && key(&done[*j]) == k).collect();
+            if group.len() < 2 {
+                continue;
+            }
+            // nearest the shared block: its end of each line is the same point's side
+            let at = |r: &Route| if upright(r) { if out { r.points[0].1 } else { r.points[3].1 } } else if out { r.points[0].0 } else { r.points[3].0 };
+            let common = group.iter().map(|j| (level(&done[*j].1), (level(&done[*j].1) - at(&done[*j].1)).abs())).min_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap().0;
+            for j in group {
+                let r = &mut done[j].1;
+                if upright(r) {
+                    r.points[1].1 = common;
+                    r.points[2].1 = common;
+                } else {
+                    r.points[1].0 = common;
+                    r.points[2].0 = common;
+                }
+                fixed[j] = true;
+            }
+        }
+    }
 }
