@@ -134,8 +134,22 @@ pub fn figure_words(g: &Graph) -> String {
             if let Some(st) = n.str("stretch") {
                 line += &format!(" 拉伸 {st}");
             }
+            if let Some(f) = n.str("fill") {
+                line += &format!(" 顏色 {f}");
+            }
+            if n.flag("vertical") {
+                line += " 字轉向";
+            }
             s += &line;
             s.push('\n');
+        }
+    }
+    // the frames: a row or a part of the figure is often called by its frame's title
+    if !g.regions.is_empty() {
+        s += "外框（標題：裡面的物件）：\n";
+        for r in &g.regions {
+            let title = if r.title.trim().is_empty() { "（無標題）".to_string() } else { format!("「{}」", r.title.trim()) };
+            s += &format!("  {} {}：{}\n", r.id, title, r.members.join("、"));
         }
     }
     s += "線：\n";
@@ -158,6 +172,8 @@ const SYSTEM: &str = "你把作者的一句話，變成流程圖版面的指令�
 - 只能用使用者給的清單裡的名字，一字不改；不可以自己發明物件。\n\
 - 作者要求幾件事，就給幾個指令，一件事一個指令，不多給。\n\
 - 句子沒有說清楚，或提到的東西不在清單裡，那一部分不要給指令，並把缺什麼寫在 unclear（用句子的語言）；全部都清楚時 unclear 留空字串。\n\
+- 作者說「A 是 B 的」「A 屬於 B」，而 A 是損失（loss）、回傳箭頭（arrow）或註記時，用 tie，不用 beside：這種標記貼著 B，不佔格子。beside 只用在一般物件。\n\
+- 作者用外框的標題稱呼一排或一部分時，取那個外框裡的物件。\n\
 - 只回一個 JSON 物件 {commands, unclear}。\n\n\
 指令（do 的值）：\n\
 - beside {a, of, side}：a 放在 of 的某一邊（left/right/above/below）。\n\
