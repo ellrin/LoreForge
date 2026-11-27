@@ -134,13 +134,22 @@ B's row or column), `over` (A over the columns from B to C), `beside-rows` (A be
 from B to C, `fill` = as tall), `tie` (a mark belongs to a block, on a side, and takes no cell),
 `swap`, `cell` (the column and row as the text counts them), `stretch`, `break` / `one-line` (a
 label's words), `line-side` (the side a line leaves and arrives by), `free` (what was said about
-A is taken back). The answer is the figure and what changed, in words, or a `Clash`: why it
+A is taken back), `brace` (a brace gathers the things from B to C: `gathers=`, `toward=`; `pack`
+lays it along them, as long as they are together, on the side of the block it points at, and it
+takes no cell), `fork` (a heading is about these things: one `gather` line to each, a line kind
+without heads whose lines leave the heading by the side facing the things together, so they fork
+from one trunk and follow the things wherever they stand). A brace and a fork are relations, not
+drawings: neither is saved inside a block. The answer is the figure and what changed, in words, or a `Clash`: why it
 cannot be done and who is in the way (a taken cell names who stands there; an unknown name comes
 back with the nearest names, by name or by the words on the object). What a command places
 carries `stated`, and `settle` leaves it alone. Commands are written as JSON (`{"do":"tie",
 "mark":…,"to":…,"side":"above"}`): what a model returns for a sentence; `apply_all` leaves out
 the ones that cannot be done and keeps their reasons. `COMMANDS=<file>` in the example. Tests in
-`tests/command.rs`. Not yet behind any app or model.
+`tests/command.rs`. A sentence → commands: `say::say(llm, graph, sentence)` (task `flow-command`,
+a small model) shows the model the figure in words (`say::figure_words`: objects by name, kind,
+words, cell, ties; lines) and the commands, reads `{commands, unclear}`, applies them, and sends
+what cannot be done back once with the reasons; tests with a scripted model in `tests/say.rs`.
+Not yet behind any app.
 
 What a figure's structure settles by itself (`settle::settle`, before anyone states anything;
 what is stated stays): a small thing nothing is joined to (a return arrow, a loss no line
