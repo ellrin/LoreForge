@@ -250,3 +250,18 @@ fn a_brace_lies_along_what_it_gathers_and_a_fork_reaches_each_thing() {
     let (freed, _) = apply(&g, &Command::Free { a: "b".into() }).unwrap();
     assert!(!pack::is_note(&freed, freed.node_index("b").unwrap()));
 }
+
+/// The figure's own text states a brace's surroundings (`gathers=[first,last] toward=block`)
+/// and a fork (`: gather` lines), and both come back from the text written out again.
+#[test]
+fn the_figures_text_states_a_brace_and_a_fork() {
+    let src = "fig t\npanel a \"\" none title=none\n  p: box \"P\" col=0 lane=0\n  r: box \"R\" col=0 lane=1\n  b: brace \"\" gathers=[p,r] toward=h col=1 lane=0\n  h: box \"H\" col=2 lane=0\n  p -> r\n  h -> p : gather\n  h -> r : gather\nend\n";
+    let g = graph(src);
+    let b = g.node_index("b").unwrap();
+    assert_eq!(lore_flow::pack::gathers(&g, b), Some(vec![g.node_index("p").unwrap(), g.node_index("r").unwrap()]));
+    assert_eq!(g.edges.iter().filter(|e| e.kind == EdgeKind::Gather).count(), 2);
+    let again = graph(&dsl::to_dsl(&g));
+    assert_eq!(lore_flow::pack::gathers(&again, b), lore_flow::pack::gathers(&g, b));
+    assert_eq!(again.nodes[b].str("toward"), Some("h"));
+    assert_eq!(again.edges, g.edges);
+}

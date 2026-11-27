@@ -182,7 +182,7 @@ Every thing the description names is one node: {id, module, role?, label, var?, 
   data (main flow) | side (a data line beside the main flow: a branch, an input joining in) | supervision (ground truth into a loss) | feedback (a loss or weight going back to update a model) | \
 loss-out (a model's output that is a loss) | compare (prediction against target, double-headed) | optional (weak or optional path) | \
 shared (shared weights) | skip (skip connection) | concat (an input of a concatenation node) | down | up | \
-cross (from one panel to another) | stage | repeat | zoom (an enlarged detail of a node).\n\
+cross (from one panel to another) | stage | repeat | zoom (an enlarged detail of a node) | gather (a caption or heading to EACH thing it is about: plain lines without heads that fork from it).\n\
 - Two paths that join meet in an op node (label + for add, x for multiply, . for element-wise product, C for concatenation).\n\
 - A prediction and its target both go INTO the loss node: prediction by data, target by supervision.\n\n\
 ## Panels\n\
@@ -557,7 +557,7 @@ const LANGUAGE_GUIDE: &str = r##"You draw a figure by WRITING ITS TEXT in a smal
 
 ## How to place a panel (the author's recipe)
 1. Each path the description draws from an input to an output (one per panel, or one per row when the description draws parallel rows: training over inference, view 1 … view V) is one chain with `: data`, its blocks pinned in one lane, col = 0, 1, 2 … in the order of the chain.
-2. Every other line has the kind of its meaning: `side` (a branch, an input that joins in, a prediction into its own loss), `supervision` (ground truth or a label into a loss), `feedback` (a loss or weights going back), `skip` (over blocks, drawn above the row), `shared` (two blocks that share weights: ONE line, not two), `compare` (two things compared), `cross` (only between two panels). The main path ends at the prediction; losses are never on it. Only paths that must be told apart get `color=`.
+2. Every other line has the kind of its meaning: `side` (a branch, an input that joins in, a prediction into its own loss), `supervision` (ground truth or a label into a loss), `feedback` (a loss or weights going back), `skip` (over blocks, drawn above the row), `shared` (two blocks that share weights: ONE line, not two), `compare` (two things compared), `cross` (only between two panels), `gather` (a caption box that applies to several things: one line from it to each of them; the fork is drawn from these lines, never by a block that has prongs of its own). The main path ends at the prediction; losses are never on it. Only paths that must be told apart get `color=`.
 3. A block that joins a path at block X sits in X's column, in the lane directly above or below, so its line is straight; an input that comes earlier sits one column before X in its own lane.
 4. A loss is a `loss` block, never a label or a box. It sits beside the block it is computed from: right of it when that block ends the path, otherwise in the same column directly above (the first loss) or below (the second). Its ground truth sits on the far side of the loss, in the loss's lane.
 5. A line may leave the middle of another line (`a>b -> c`) when the description says a path splits on its way or copies a value along (a branch to a second model, a stop-gradient copy, a second ground truth for another loss). A block that feeds three or more rows keeps one line to each.
@@ -606,10 +606,13 @@ end
   a -> b -> c                     a chain
   a -> b : kind "label" color=orange curve
   a>b -> c : optional             leaves the MIDDLE of the line a->b (a branch off a line)
-- kind: data (default; the one main line from input to output), side (any other data line: a branch, an input joining in), supervision, feedback, loss-out, compare, optional, shared, skip, concat, down, up, cross. Dashed by default: supervision, feedback, optional, shared, cross. After the colon the order is: kind, "label", color=, curve, from=, to=.
+- kind: data (default; the one main line from input to output), side (any other data line: a branch, an input joining in), supervision, feedback, loss-out, compare, optional, shared, skip, concat, down, up, cross, gather (a caption to each thing it is about). Dashed by default: supervision, feedback, optional, shared, cross. After the colon the order is: kind, "label", color=, curve, from=, to=.
 - color= only when the description says paths have different colours: one colour name per path, the same along the whole path. Never write width=: the line's kind sets its weight. curve only for a line that arcs over other blocks (a skip) or between parallel rows; an ordinary join is never curved.
 - from=top|bottom|left|right and to=… choose the side a line leaves or enters a block; leave them out unless the description says where the line goes in.
 - An `op` block (label + for add, x for multiply, . element-wise, C concatenation) only where the description names that operation. Two lines that simply arrive at one block each go to that block; a line that splits off another is the branch form `a>b -> c`.
+- A caption or bracket joined to several things (a box with a fork under it, 「…分別連到 A、B、C」) is a plain `box` and one `: gather` line to each thing; do not pick a block whose drawing already contains the fork.
+- Words are upright: write vertical=true only for words of more than four letters in a bar that must stay narrow (a tall thin layer); a symbol or a short name ($L^2$, FC) is never turned.
+- A brace gathers things: `gathers=[first,last]` names what its open side spans (two objects at least) and `toward=<block>` what its tip points at; without both, use no brace.
 - A line the description calls dashed (虛線) is a dashed kind by its meaning, along its whole length: supervision, feedback, optional, shared or cross.
 - Two lines the description says meet midway and then go on as one (兩條線匯合後進 X) are ONE line leaving the middle of the first: `a>b -> X : <kind> "label"`, where a -> b is a line the first block already has; the second source gets no line of its own.
 - Outputs gathered by a brace with no arrow: prefer a saved block that draws the outputs with their brace; otherwise a `brace` block in the column right after the outputs, the next line starting at the brace, and no line from the outputs to the gathered value.
