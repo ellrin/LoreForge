@@ -151,6 +151,12 @@ words, cell, ties; lines) and the commands, reads `{commands, unclear}`, applies
 what cannot be done back once with the reasons; tests with a scripted model in `tests/say.rs`.
 Not yet behind any app.
 
+What kind of figure a figure is (`traits::Traits`, said at the start with the opening statement
+and the shape): its scale (`whole`, `modules`, `part`), what it stresses (`process`,
+`algorithm`) and the shapes it is laid in (`rows`, `panels`, `strip`, `tree`, `chain`). A worked
+example is picked by these, not by its subject (`traits::pick`; `web::Flow::examples_like` reads
+`examples/*.json` = `{description, dsl, traits}`; the drafting route takes `traits` in its body).
+
 What a figure's structure settles by itself (`settle::settle`, before anyone states anything;
 what is stated stays): a small thing nothing is joined to (a return arrow, a loss no line
 reaches) is tied to the nearest module; a module joined to modules that stand in one column in

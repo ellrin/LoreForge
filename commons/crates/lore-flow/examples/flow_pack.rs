@@ -71,6 +71,10 @@ fn main() {
         }
         Err(_) => g,
     };
+    // `DSL_OUT=<file>`: the figure's text as it now stands (what was settled and said written in)
+    if let Ok(path) = std::env::var("DSL_OUT") {
+        std::fs::write(&path, lore_flow::dsl::to_dsl(&g)).expect("write the figure's text");
+    }
     // `OUTLINE=1`: the opening statement (areas, modules, frames, marks, paths) and what each
     // shape of the whole figure gives, before anything is placed
     if std::env::var("OUTLINE").is_ok() {

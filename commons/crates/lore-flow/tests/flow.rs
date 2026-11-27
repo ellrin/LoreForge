@@ -2511,3 +2511,24 @@ fn uneven_frames_and_small_text_are_measured() {
     // 10 pt words in a figure 1000 pt wide are 5 pt when the figure is printed 500 pt wide
     assert!((lore_flow::look::smallest_text(&objs, 1000.0, 500.0) - 5.0).abs() < 1e-6);
 }
+
+/// The editor's worked examples are picked by what kind of figure is wanted: an example
+/// file's `traits` are read, the most alike comes first, one with nothing in common is left out.
+#[test]
+fn worked_examples_are_picked_by_the_kind_of_figure() {
+    use lore_flow::traits::Traits;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("examples")).unwrap();
+    let write = |name: &str, traits: serde_json::Value| {
+        let j = serde_json::json!({ "description": name, "dsl": "fig t\n  a: box \"A\"\n  b: box \"B\"\n  a -> b\n", "traits": traits });
+        std::fs::write(dir.path().join("examples").join(format!("{name}.json")), j.to_string()).unwrap();
+    };
+    write("a-network", serde_json::json!({ "scale": "whole", "emphasis": "algorithm", "shape": ["rows"] }));
+    write("b-pipeline", serde_json::json!({ "scale": "whole", "emphasis": "process", "shape": ["strip", "tree"] }));
+    let f = lore_flow::web::Flow::bare().with_dir(dir.path().to_path_buf());
+    let lib = Library::default();
+    let names = |t: Traits| f.examples_like(&lib, &t).into_iter().map(|x| x.0).collect::<Vec<_>>();
+    assert_eq!(names(Traits { scale: "whole".into(), emphasis: "process".into(), ..Default::default() }), vec!["b-pipeline", "a-network"]);
+    assert_eq!(names(Traits { scale: "part".into(), emphasis: "process".into(), shape: vec!["tree".into()], parts: vec![] }), vec!["b-pipeline"]);
+    assert_eq!(f.examples(&lib).len(), 2);
+}

@@ -42,6 +42,7 @@ pub mod modules;
 pub mod notation;
 pub mod lines;
 pub mod command;
+pub mod traits;
 pub mod outline;
 pub mod settle;
 pub mod pack;

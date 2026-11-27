@@ -89,6 +89,25 @@ impl Flow {
     pub fn preferences(&self) -> String {
         self.private_dir().and_then(|d| std::fs::read_to_string(d.join("assist.md")).ok()).unwrap_or_default()
     }
+    /// The worked examples for a figure of this kind (`examples/*.json` = `{ "description",
+    /// "dsl", "traits": {scale, emphasis, shape, parts} }`): those most alike in kind first
+    /// ([`crate::traits::pick`]), at most four. An example without traits is alike to nothing.
+    pub fn examples_like(&self, lib: &crate::Library, want: &crate::traits::Traits) -> Vec<(String, Graph)> {
+        let Some(dir) = self.private_dir() else { return vec![] };
+        let mut v: Vec<_> = std::fs::read_dir(dir.join("examples")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
+        v.sort();
+        let all: Vec<(crate::traits::Traits, (String, Graph))> = v
+            .iter()
+            .filter_map(|p| {
+                let j: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
+                let g = crate::dsl::parse_with(j["dsl"].as_str()?, &lib.kinds()).ok()?;
+                let t = serde_json::from_value(j["traits"].clone()).unwrap_or_default();
+                Some((t, (j["description"].as_str()?.to_string(), g)))
+            })
+            .collect();
+        crate::traits::pick(all, want, 4)
+    }
+
     /// Worked examples for the graph task: `examples/*.json` = `{ "description", "dsl" }`.
     pub fn examples(&self, lib: &crate::Library) -> Vec<(String, Graph)> {
         let Some(dir) = self.private_dir() else { return vec![] };
@@ -318,6 +337,10 @@ struct DiscussBody {
     answers: Value,
     #[serde(default)]
     doc: String,
+    /// What kind of figure it is, said at the start (scale, emphasis, shapes): the worked
+    /// examples shown to the model are those most alike in kind.
+    #[serde(default)]
+    traits: crate::traits::Traits,
 }
 
 #[derive(Deserialize)]
@@ -430,7 +453,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(flow: Flow) -> axum::Router<S> {
                     let Some(llm) = f.llm.clone() else { return bad(StatusCode::SERVICE_UNAVAILABLE, "這個 app 沒有接模型") };
                     let n = f.notation_of(&b.doc);
                     let cat = f.catalogue();
-                    let examples = f.examples(&cat.library);
+                    let examples = if b.traits == crate::traits::Traits::default() { f.examples(&cat.library) } else { f.examples_like(&cat.library, &b.traits) };
                     match crate::discuss::graph(llm.as_ref(), &b.source, &b.answers, n.as_ref(), &cat.library, &examples).await {
                         Ok(p) => Json(json!({
                             "dsl": p.dsl,
