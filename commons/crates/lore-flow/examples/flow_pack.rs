@@ -46,6 +46,9 @@ fn main() {
     // shape of the whole figure gives, before anything is placed
     if std::env::var("OUTLINE").is_ok() {
         print!("{}", lore_flow::outline::outline(&g).text());
+        for (role, solid, flat) in lore_flow::outline::mixed_looks(&g, m.library, m.theme) {
+            println!("風格不一致（{role}）：立體 {}；平面 {}", solid.join("、"), flat.join("、"));
+        }
         println!("整張圖的比例（寬 {} pt）：", f.width_pt);
         for s in lore_flow::outline::shapes(&g, f.width_pt, &m, a.get(5).map(String::as_str).unwrap_or(""), &air, &lore_flow::outline::SHAPES) {
             println!("  {}:{}  字 {:.1} pt，圖佔 {:.0}%{}", s.ratio.0, s.ratio.1, s.text_pt, s.cover * 100.0, if s.small { "（字太小）" } else { "" });

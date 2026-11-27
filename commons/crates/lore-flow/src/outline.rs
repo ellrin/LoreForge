@@ -149,3 +149,64 @@ pub fn shapes(g: &Graph, width_pt: f64, m: &Measure, arrangement: &str, air: &Ai
     v.sort_by(|a, b| b.text_pt.partial_cmp(&a.text_pt).unwrap());
     v
 }
+
+/// How a module is drawn: `solid` (with depth) or `flat`; `None` for what has no look of its
+/// own to keep (photos and plain pictures, words, operators, losses, plain boxes, marks).
+pub fn look(n: &crate::spec::Node, lib: &crate::modules::Library, theme: &crate::theme::Theme) -> Option<&'static str> {
+    let style = crate::modules::style_name(n, theme);
+    let saved = if style.is_empty() { None } else { lib.get(&n.module, &style) }.or_else(|| if crate::spec::MODULES.iter().any(|(m, _)| *m == n.module) { None } else { lib.get(&n.module, "") });
+    if let Some(t) = saved {
+        return Some(t.look());
+    }
+    match n.module.as_str() {
+        "cuboid-seq" => Some("solid"),
+        "encoder" | "decoder" | "autoencoder" | "nn" | "unet" | "layer-bars" | "feature-stack" | "vector-bar" | "matrix" => Some("flat"),
+        _ => None,
+    }
+}
+
+/// What a module shows, for the comparison of looks: `network` (a model: its layers or stages),
+/// `feature` (what flows between models: maps, tokens, embeddings), or nothing to compare.
+/// A written `role=` decides (`model`, `data`); else the built-in kind; else what the saved
+/// drawing says about itself (its kind and its description).
+pub fn family(n: &crate::spec::Node, lib: &crate::modules::Library) -> Option<&'static str> {
+    match n.role.as_str() {
+        "model" => return Some("network"),
+        "data" => return Some("feature"),
+        "" => {}
+        _ => return None,
+    }
+    match n.module.as_str() {
+        "encoder" | "decoder" | "autoencoder" | "nn" | "unet" | "layer-bars" | "cuboid-seq" => return Some("network"),
+        "feature-stack" | "vector-bar" | "matrix" => return Some("feature"),
+        _ => {}
+    }
+    if crate::spec::MODULES.iter().any(|(m, _)| *m == n.module) {
+        return None;
+    }
+    let said = format!("{} {}", n.module, lib.description(&n.module)).to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| said.split(|c: char| !c.is_alphanumeric()).any(|x| x == *w || x.strip_suffix('s') == Some(*w)));
+    if has(&["network", "encoder", "decoder", "backbone", "generator", "discriminator", "classifier", "transformer", "model", "layer", "unet", "ladder"]) {
+        Some("network")
+    } else if has(&["feature", "tensor", "token", "embedding", "map", "volume", "cube", "cuboid", "slab", "prism", "voxel"]) {
+        Some("feature")
+    } else {
+        None
+    }
+}
+
+/// A figure keeps one look for the things of one family: its networks are all drawn with depth
+/// or all flat, and so are its features. Returns, per family that mixes the two, (family, the
+/// solid ones, the flat ones); empty when the figure is of one piece.
+pub fn mixed_looks(g: &Graph, lib: &crate::modules::Library, theme: &crate::theme::Theme) -> Vec<(String, Vec<String>, Vec<String>)> {
+    let mut by: std::collections::BTreeMap<String, (Vec<String>, Vec<String>)> = Default::default();
+    for (i, n) in g.nodes.iter().enumerate() {
+        if pack::is_note(g, i) {
+            continue;
+        }
+        let (Some(fam), Some(l)) = (family(n, lib), look(n, lib, theme)) else { continue };
+        let e = by.entry(fam.to_string()).or_default();
+        if l == "solid" { e.0.push(n.id.clone()) } else { e.1.push(n.id.clone()) }
+    }
+    by.into_iter().filter(|(_, (s, f))| !s.is_empty() && !f.is_empty()).map(|(r, (s, f))| (r, s, f)).collect()
+}

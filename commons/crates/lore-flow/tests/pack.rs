@@ -717,3 +717,23 @@ fn the_opening_statement_names_modules_paths_marks_and_the_figures_shapes() {
     assert!(s.windows(2).all(|w| w[0].text_pt >= w[1].text_pt));
     assert!(s[0].text_pt > s[s.len() - 1].text_pt, "the shape matters: {:?}", s);
 }
+
+/// A figure is of one piece: its networks are all drawn with depth or all flat, and so are its
+/// features. A drawing's look is read from what it is made of; photos, words and plain boxes
+/// are not compared.
+#[test]
+fn a_figure_that_mixes_solid_and_flat_networks_says_so() {
+    use lore_flow::modules::ModuleTemplate;
+    use lore_flow::outline;
+    let face = |name: &str| serde_json::json!({"id": 0, "name": name, "type": "shape", "frame": {"x": 0, "y": 0, "w": 127000, "h": 127000}, "geom": {"prst": "rect"}});
+    let mut lib = Library::default();
+    lib.add(ModuleTemplate { kind: "plate-network".into(), style: "x".into(), description: "a network of plates seen from an angle".into(), w: 40.0, h: 40.0, objects: serde_json::json!([face("front"), face("top"), face("side")]), ..Default::default() }).unwrap();
+    lib.add(ModuleTemplate { kind: "bar-network".into(), style: "x".into(), description: "a network as a row of bars".into(), w: 40.0, h: 40.0, objects: serde_json::json!([face("bar")]), ..Default::default() }).unwrap();
+    assert_eq!((lib.get("plate-network", "x").unwrap().look(), lib.get("bar-network", "x").unwrap().look()), ("solid", "flat"));
+    let theme = Theme::classic_bw();
+    let kinds = ["plate-network".to_string(), "bar-network".to_string()];
+    let fig = |second: &str| dsl::parse_with(&format!("fig t\npanel a \"\"\n  x: image \"In\" look=photo\n  m: plate-network \"M\" style=x\n  n: {second} \"N\" style=x\n  b: box \"Head\"\n  x -> m -> n -> b\nend\n"), &kinds).unwrap();
+    let mixed = outline::mixed_looks(&fig("bar-network"), &lib, &theme);
+    assert_eq!(mixed, [("network".to_string(), vec!["m".to_string()], vec!["n".to_string()])]);
+    assert!(outline::mixed_looks(&fig("plate-network"), &lib, &theme).is_empty());
+}

@@ -80,6 +80,10 @@ pub struct ModuleTemplate {
     /// joined to it by a line, draws the same thing a second time, and a draft is told so.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<String>,
+    /// How the drawing looks: `solid` (drawn with depth: top and side faces) or `flat`. Empty
+    /// = read from the drawing itself ([`ModuleTemplate::look`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub look: String,
     /// Natural size in pt (of the port rect when there is one).
     pub w: f64,
     pub h: f64,
@@ -95,6 +99,29 @@ pub struct ModuleTemplate {
 }
 
 impl ModuleTemplate {
+    /// Whether the drawing is drawn with depth (`solid`) or flat: as stated, else from what it
+    /// is made of (a part named `top`, `side` or `top-side`: the faces of a block seen from an
+    /// angle; a `can` or `cube` shape).
+    pub fn look(&self) -> &'static str {
+        match self.look.as_str() {
+            "solid" => return "solid",
+            "flat" => return "flat",
+            _ => {}
+        }
+        fn deep(v: &Value) -> bool {
+            match v {
+                Value::Array(a) => a.iter().any(deep),
+                Value::Object(m) => {
+                    let name = m.get("name").and_then(Value::as_str).unwrap_or("");
+                    let last = name.rsplit('/').next().unwrap_or("");
+                    let prst = m.get("geom").and_then(|g| g.get("prst")).and_then(Value::as_str).unwrap_or("");
+                    matches!(last, "top" | "side" | "top-side") || matches!(prst, "can" | "cube") || m.get("children").is_some_and(deep)
+                }
+                _ => false,
+            }
+        }
+        if deep(&self.objects) { "solid" } else { "flat" }
+    }
     /// The words the drawing prints by itself (not the `{{label}}` slot), in drawing order.
     pub fn fixed_texts(&self) -> Vec<String> {
         fn walk(v: &Value, out: &mut Vec<String>) {
@@ -410,7 +437,7 @@ pub fn template_from_objects(objects: &[Object], opt: &SaveOptions) -> Result<Mo
         }
         swap(&mut v, None, false, &picks);
     }
-    let t = ModuleTemplate { kind: opt.kind.clone(), style: opt.style.clone(), description: opt.description.clone(), w: b.w as f64 / EMU_PT, h: b.h as f64 / EMU_PT, level: String::new(), made_of: Vec::new(), names: Vec::new(), replaces: Vec::new(), includes: Vec::new(), port: None, objects: v };
+    let t = ModuleTemplate { look: String::new(), kind: opt.kind.clone(), style: opt.style.clone(), description: opt.description.clone(), w: b.w as f64 / EMU_PT, h: b.h as f64 / EMU_PT, level: String::new(), made_of: Vec::new(), names: Vec::new(), replaces: Vec::new(), includes: Vec::new(), port: None, objects: v };
     // must load back
     Library::default().add(t.clone())?;
     Ok(t)
