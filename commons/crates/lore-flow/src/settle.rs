@@ -96,6 +96,7 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
         let mut hi = l;
         // parallel rows: modules of ONE column, in several rows, all joined to this one
         let mut own = false;
+        let mut most = 0usize;
         for s in &sides {
             let mut xs: Vec<f64> = s.iter().map(|p| p.0).collect();
             xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -110,6 +111,7 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
                     lo = if own { lo.min(ys[0]) } else { ys[0] };
                     hi = if own { hi.max(ys[ys.len() - 1]) } else { ys[ys.len() - 1] };
                     own = true;
+                    most = most.max(ys.len());
                 }
             }
         }
@@ -119,7 +121,8 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
             || !g.edges.iter().any(|e| e.kind == EdgeKind::Data && (e.from == id || e.to == id) && g.node_index(if e.from == id { &e.to } else { &e.from }).is_some_and(|j| j != i && first[j].is_some_and(|p| (p.1 - l).abs() < 1e-6) && g.nodes[j].panel == g.nodes[i].panel));
         // a plain box can be as tall as the rows: every row's line into it is then straight,
         // wherever its own row lies among them
-        let grows = g.nodes[i].module == "box" && !g.nodes[i].params.contains_key("h") && !g.nodes[i].params.contains_key("stretch");
+        // (three rows or more: a box between two things is not a bar across rows)
+        let grows = most >= 3 && g.nodes[i].module == "box" && !g.nodes[i].params.contains_key("h") && !g.nodes[i].params.contains_key("stretch");
         if !(hi - lo > 1e-6 && (level || grows)) {
             continue;
         }
