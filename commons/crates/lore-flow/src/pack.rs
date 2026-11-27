@@ -51,11 +51,14 @@ pub struct Air {
     /// lines is given back first; a page that still cannot reach it is marked `Packed.small`
     /// (it holds more blocks or words than its width carries at that size).
     pub text_min_pt: f64,
+    /// The user's own pick, over the choice made here: every area whose objects state their
+    /// column and row stands on that grid, whatever it costs the text.
+    pub stated: bool,
 }
 
 impl Default for Air {
     fn default() -> Air {
-        Air { gap: 1.5, pad: 0.8, between: 0.6, grow_max: 4.0, text_max_pt: 0.0, paths: 0.6, line: 2.5, text_min_pt: 5.0 }
+        Air { gap: 1.5, pad: 0.8, between: 0.6, grow_max: 4.0, text_max_pt: 0.0, paths: 0.6, line: 2.5, text_min_pt: 5.0, stated: false }
     }
 }
 
@@ -104,6 +107,10 @@ pub struct Packed {
 /// line (a legend's rows, a heading) stay objects: nothing says where else they belong.
 pub fn is_note(g: &Graph, n: usize) -> bool {
     let node = &g.nodes[n];
+    // stated by the one who draws: `by=<block>` ties any mark to that block
+    if node.str("by").is_some_and(|b| b != node.id && g.node_index(b).is_some()) {
+        return true;
+    }
     if node.module != "label" {
         return false;
     }
@@ -144,6 +151,8 @@ struct Grid {
     rows: usize,
     /// (block, column, row)
     cell: Vec<(usize, usize, usize)>,
+    /// Per cell of `cell`: the last column the block reaches (`span=` columns from its own).
+    last: Vec<usize>,
     regs: Vec<GReg>,
 }
 
@@ -195,8 +204,13 @@ fn grid_of(g: &Graph, rt: &RTree, objects: &[usize], down: bool) -> Option<Grid>
     let (xs, ys) = (index(at.iter().map(|a| a.1).collect()), index(at.iter().map(|a| a.2).collect()));
     let pos = |v: &[f64], x: f64| v.iter().position(|y| (*y - x).abs() < 1e-6).unwrap();
     let cell: Vec<(usize, usize, usize)> = at.iter().map(|(n, c, l)| (*n, pos(&xs, *c), pos(&ys, *l))).collect();
+    // a block with `span=k` reaches over the stated columns up to k - 1 past its own
+    let last: Vec<usize> = at.iter().zip(&cell).map(|((n, c, _), k)| {
+        let to = *c + g.nodes[*n].num("span").unwrap_or(1.0).max(1.0) - 1.0;
+        xs.iter().rposition(|x| *x <= to + 1e-6).unwrap_or(k.1).max(k.1)
+    }).collect();
     for (i, a) in cell.iter().enumerate() {
-        if cell[..i].iter().any(|b| (b.1, b.2) == (a.1, a.2)) {
+        if (0..i).any(|j| cell[j].2 == a.2 && cell[j].1 <= last[i] && a.1 <= last[j]) {
             return None;
         }
     }
@@ -206,12 +220,12 @@ fn grid_of(g: &Graph, rt: &RTree, objects: &[usize], down: bool) -> Option<Grid>
         if mine.is_empty() {
             continue;
         }
-        regs.push(GReg { r, c0: mine.iter().map(|c| c.1).min().unwrap(), c1: mine.iter().map(|c| c.1).max().unwrap(), r0: mine.iter().map(|c| c.2).min().unwrap(), r1: mine.iter().map(|c| c.2).max().unwrap(), inside: Vec::new() });
+        regs.push(GReg { r, c0: mine.iter().map(|c| c.1).min().unwrap(), c1: cell.iter().zip(&last).filter(|(c, _)| rt.all[r].contains(&c.0)).map(|(_, l)| *l).max().unwrap(), r0: mine.iter().map(|c| c.2).min().unwrap(), r1: mine.iter().map(|c| c.2).max().unwrap(), inside: Vec::new() });
     }
     for i in 0..regs.len() {
         regs[i].inside = (0..regs.len()).filter(|j| *j == i || (rt.all[regs[*j].r].is_subset(&rt.all[regs[i].r]) && rt.all[regs[*j].r] != rt.all[regs[i].r])).collect();
     }
-    Some(Grid { cols: xs.len(), rows: ys.len(), cell, regs })
+    Some(Grid { cols: xs.len(), rows: ys.len(), cell, last, regs })
 }
 
 /// A block's tight box at one enlargement: its width, how far its middle line lies under its
@@ -363,9 +377,12 @@ impl Ctx2<'_> {
         let (pad, gap) = (self.pad(), self.gap());
         let mut cw = vec![0.0f64; gr.cols];
         let mut by_row: Vec<Vec<Box3>> = vec![Vec::new(); gr.rows];
-        for &(n, c, r) in &gr.cell {
+        for (&(n, c, r), &l) in gr.cell.iter().zip(&gr.last) {
             let b = self.leaf(n, grow);
-            cw[c] = cw[c].max(b.w);
+            // a block that takes the width of its columns (`stretch`) asks for none itself
+            if l == c && !self.g.nodes[n].flag("stretch") {
+                cw[c] = cw[c].max(b.w);
+            }
             by_row[r].push(b);
         }
         let parts: Vec<(f64, f64, f64)> = by_row.iter().map(|b| row_parts(b)).collect();
@@ -425,6 +442,17 @@ impl Ctx2<'_> {
             if need > span {
                 let add = (need - span) / (a.c1 - a.c0 + 1) as f64;
                 for w in &mut cw[a.c0..=a.c1] {
+                    *w += add;
+                }
+            }
+        }
+        // a block over several columns: they are together at least as wide as it
+        for (&(n, c, _), &l) in gr.cell.iter().zip(&gr.last).filter(|(c, l)| **l > c.1) {
+            let have: f64 = (c..=l).map(|k| cw[k]).sum::<f64>() + (c..l).map(|k| gx[k] + right[k] + left[k + 1]).sum::<f64>();
+            let need = self.leaf(n, grow).w;
+            if need > have && !self.g.nodes[n].flag("stretch") {
+                let add = (need - have) / (l - c + 1) as f64;
+                for w in &mut cw[c..=l] {
                     *w += add;
                 }
             }
@@ -701,13 +729,16 @@ fn pack_air(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air) ->
     let has: Vec<bool> = areas(g).iter().map(|a| a.grid.is_some()).collect();
     // every area in rows broken freely: the largest the text gets
     let free = pack_choice(g, f, m, arrangement, air, &vec![false; n])?;
-    if !has.iter().any(|h| *h) || air.paths <= 0.0 {
+    if !has.iter().any(|h| *h) || (air.paths <= 0.0 && !air.stated) {
         return Some(free);
     }
     // an area stands on the grid its text states when that makes its own lines simpler than
     // rows broken freely do (fewer bends, fewer blocks passed beneath); where it does not, the
     // freely broken rows are larger and no worse
     let all = pack_choice(g, f, m, arrangement, air, &has)?;
+    if air.stated {
+        return Some(all);
+    }
     let trouble = |p: &Packed, area: usize| -> usize {
         crate::lines::lines(&p.graph, &p.layout)
             .iter()
@@ -935,10 +966,20 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
             if home.is_none() {
                 shut.extend(reg_rect.iter().flatten().filter(|rr| rects[i].contains(rr)).copied());
             }
-            let partner = g.edges.iter().filter_map(|e| if &e.from == id { g.node_index(&e.to) } else if &e.to == id { g.node_index(&e.from) } else { None }).find(|p| objects.contains(p));
+            let stated = g.nodes[n].str("by").and_then(|b| g.node_index(b)).filter(|p| objects.contains(p));
+            let partner = stated.or_else(|| g.edges.iter().filter_map(|e| if &e.from == id { g.node_index(&e.to) } else if &e.to == id { g.node_index(&e.from) } else { None }).find(|p| objects.contains(p)));
             let by = partner.map(|p| {
                 let (dc, dl) = (side(num(n, "col"), num(p, "col")), side(num(n, "lane"), num(p, "lane")));
-                (tight[p], if a.down { (dl, dc) } else { (dc, dl) })
+                // `side=` says where about the block; else the mark's own column and row do
+                let d = match g.nodes[n].str("side") {
+                    Some("below") => (0.0, 1.0),
+                    Some("above") => (0.0, -1.0),
+                    Some("left") => (-1.0, 0.0),
+                    Some("right") => (1.0, 0.0),
+                    _ if a.down => (dl, dc),
+                    _ => (dc, dl),
+                };
+                (tight[p], d)
             });
             let size = (b.w, b.up + b.dn + b.words);
             let (r, ok) = note_place(size, by, room, &shut, cx.fs * 0.5);
@@ -968,6 +1009,20 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
         graph.nodes[n].params.remove("label_drop");
         if drop[n] > 0.05 {
             graph.nodes[n].params.insert("label_drop".into(), serde_json::json!((drop[n] * 100.0).round() / 100.0));
+        }
+        // a block that takes the width of its columns: its drawing stretched across, its height kept
+        if node.flag("stretch") && axes[pi].is_some() {
+            let nat = body(&graph.nodes[n], gr, false, m);
+            if (tight[n].w - nat.w).abs() > 0.5 {
+                let mut probe = graph.nodes[n].clone();
+                probe.params.insert("w".into(), serde_json::json!(100.0));
+                probe.params.insert("h".into(), serde_json::json!(100.0));
+                let u = body(&probe, gr, false, m);
+                if u.w > 0.0 && u.art.3 > 0.0 {
+                    graph.nodes[n].params.insert("w".into(), serde_json::json!(tight[n].w * 100.0 / u.w));
+                    graph.nodes[n].params.insert("h".into(), serde_json::json!(nat.art.3 * 100.0 / u.art.3));
+                }
+            }
         }
         let node = &graph.nodes[n];
         let t = body(node, gr, false, m);
@@ -1164,11 +1219,18 @@ fn grid_place(cx: &Ctx2, a: &Area, gr: &Grid, grow: u32, rect: Rect, band: f64, 
         y += geo.parts[r].0 + geo.parts[r].1 + geo.bottom[r] + geo.gy.get(r).copied().unwrap_or(0.0);
     }
     let mut names: Vec<Vec<(usize, String)>> = vec![Vec::new(); gr.rows];
-    for &(n, c, r) in &gr.cell {
+    for (&(n, c, r), &l) in gr.cell.iter().zip(&gr.last) {
         let b = cx.leaf(n, grow);
         let (up, _, dn) = geo.parts[r];
         let d = if b.words > 0.0 { dn - b.dn } else { 0.0 };
-        tight[n] = Rect::new(xs[c] + (geo.cw[c] - b.w) / 2.0, ys[r] + up - b.up, b.w, b.up + b.dn + d + b.words);
+        let over = xs[l] + geo.cw[l] - xs[c];
+        if cx.g.nodes[n].flag("stretch") {
+            tight[n] = Rect::new(xs[c], ys[r] + up - b.up, over, b.up + b.dn + d + b.words);
+            drop[n] = d;
+            names[r].push((c, cx.g.nodes[n].id.clone()));
+            continue;
+        }
+        tight[n] = Rect::new(xs[c] + (over - b.w) / 2.0, ys[r] + up - b.up, b.w, b.up + b.dn + d + b.words);
         drop[n] = d;
         names[r].push((c, cx.g.nodes[n].id.clone()));
     }

@@ -417,3 +417,26 @@ fn quoted_words_in_a_list_keep_their_line_break_and_their_latex() {
     assert_eq!(v, ["One:\\\\Two", "$\\tilde q$"]);
     assert_eq!(text::lines(&v[0]), ["One:", "Two"]);
 }
+
+/// What the one who draws states over the choices made here: the grid kept (`Air.stated`), a
+/// block over several columns (`span=`), a block as wide as its columns (`stretch`), a mark
+/// tied to a block (`by=`, `side=`).
+#[test]
+fn stated_placement_spans_stretches_and_ties_marks() {
+    let src = "fig t\npanel a \"\" none title=none\n  a: box \"A\" col=0 lane=0\n  b: box \"B\" col=1 lane=0\n  c: box \"C\" col=2 lane=0\n  d: box \"D\" col=3 lane=0\n  h: box \"A heading much longer than any one of the blocks\" col=0 span=4 lane=1\n  k: box \"\" col=0 span=4 lane=2 stretch=true\n  m: box \"m\" by=b side=below\n  a -> b -> c -> d\nend\n";
+    let (g, p) = packed(src, (1, 1), "", &Air { stated: true, ..Air::default() });
+    assert!(p.areas[0].grid, "the stated grid is kept");
+    let at = |id: &str| p.layout.nodes[g.node_index(id).unwrap()].art;
+    // the heading lies over the four columns and widens none of them past its own share
+    assert!((at("h").cx() - (at("a").x + at("d").right()) / 2.0).abs() < 0.5);
+    assert!(at("b").cx() - at("a").cx() < at("h").w / 2.0);
+    // the stretched block is as wide as the columns it lies over
+    assert!((at("k").x - at("a").x.min(at("h").x)).abs() < 1.0 && (at("k").right() - at("d").right().max(at("h").right())).abs() < 1.0, "{:?} {:?} {:?}", at("k"), at("a"), at("d"));
+    // the mark takes no cell and is written under its block
+    assert!(p.notes.contains(&"m".to_string()));
+    assert_eq!(p.areas[0].rows[0], ["a", "b", "c", "d"]);
+    assert!(at("m").y >= at("b").bottom() - 0.01 && (at("m").cx() - at("b").cx()).abs() < at("b").w);
+    // without the statement the same text may still be broken freely; with it, never
+    let (_, free) = packed(src, (2, 1), "", &Air { paths: 0.0, ..Air::default() });
+    assert!(!free.areas[0].grid);
+}

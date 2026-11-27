@@ -40,6 +40,8 @@ fn main() {
     if let Some(v) = std::env::var("PATHS").ok().and_then(|v| v.parse().ok()) {
         air.paths = v;
     }
+    // `GRID=1`: the pick of the one who draws, every stated grid kept
+    air.stated = std::env::var("GRID").is_ok();
     let p = pack::pack(&g, &f, &m, a.get(5).map(String::as_str).unwrap_or(""), &air).expect("a figure with blocks");
     // the base draft has no lines; `LINES=1` draws them with the router as it is
     let mut p = p;
