@@ -137,7 +137,8 @@ pub struct Shape {
 pub const SHAPES: [(u32, u32); 8] = [(1, 1), (4, 3), (3, 2), (16, 9), (2, 1), (5, 2), (3, 1), (4, 1)];
 
 /// What each shape in `among` gives for this figure at `width_pt`: packed as the base draft is,
-/// largest text first. The ones a figure cannot be packed in are left out.
+/// largest text first (of those with the largest, the page best filled). The ones a figure
+/// cannot be packed in are left out.
 pub fn shapes(g: &Graph, width_pt: f64, m: &Measure, arrangement: &str, air: &Air, among: &[(u32, u32)]) -> Vec<Shape> {
     let mut v: Vec<Shape> = among
         .iter()
@@ -146,9 +147,21 @@ pub fn shapes(g: &Graph, width_pt: f64, m: &Measure, arrangement: &str, air: &Ai
             Some(Shape { ratio: *r, text_pt: p.text_pt, cover: p.cover, small: p.small })
         })
         .collect();
-    v.sort_by(|a, b| b.text_pt.partial_cmp(&a.text_pt).unwrap());
+    // largest text first; shapes whose text is as large as the largest (within [`SAME`]) are
+    // as good for reading, so of those the page best filled comes first
+    let best = v.iter().map(|s| s.text_pt).fold(0.0, f64::max);
+    let top = |s: &Shape| s.text_pt >= best * (1.0 - SAME);
+    v.sort_by(|a, b| match (top(a), top(b)) {
+        (true, true) => b.cover.partial_cmp(&a.cover).unwrap(),
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => b.text_pt.partial_cmp(&a.text_pt).unwrap(),
+    });
     v
 }
+
+/// Text sizes within this share of each other read the same.
+pub const SAME: f64 = 0.03;
 
 /// How a module is drawn: `solid` (with depth) or `flat`; `None` for what has no look of its
 /// own to keep (photos and plain pictures, words, operators, losses, plain boxes, marks).

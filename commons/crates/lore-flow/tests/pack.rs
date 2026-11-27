@@ -714,7 +714,8 @@ fn the_opening_statement_names_modules_paths_marks_and_the_figures_shapes() {
     let m = Measure { theme: &theme, vars: &vars, library: &lib, image_size: &modules::no_images };
     let s = outline::shapes(&g, 500.0, &m, "", &Air::default(), &outline::SHAPES);
     assert_eq!(s.len(), outline::SHAPES.len());
-    assert!(s.windows(2).all(|w| w[0].text_pt >= w[1].text_pt));
+    let best = s.iter().map(|x| x.text_pt).fold(0.0, f64::max);
+    assert!(s[0].text_pt >= best * (1.0 - outline::SAME) && s.iter().filter(|x| x.text_pt >= best * (1.0 - outline::SAME)).all(|x| x.cover <= s[0].cover + 1e-9), "largest text, then the page best filled: {s:?}");
     assert!(s[0].text_pt > s[s.len() - 1].text_pt, "the shape matters: {:?}", s);
 }
 
