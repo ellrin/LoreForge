@@ -112,6 +112,10 @@ columns it lies over, its height kept (a bracket under what it gathers); `by=<bl
 free room on that side (a dashed return arrow under its loss); `tall=k` stands a block beside k
 rows from its own, in their middle (the trunk's big blocks beside four parallel rows), and
 `stretch=tall` makes it as tall as those rows (`both`: and as wide as its columns).
+
+Crossing lines are told apart (`build::lines_behind`): of two lines that cross, the side line
+lies behind the flow line (of two of one kind, the later one); it is drawn first and half-way
+towards the paper's colour, so the crossing reads as depth.
 Not yet: the words of a line that passes beneath a block still lie over that block; the lines of
 notes; free areas get no line room; packing a figure of fifty blocks takes over a minute.
 

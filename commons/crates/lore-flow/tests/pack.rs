@@ -456,3 +456,16 @@ fn a_tall_block_stands_beside_its_rows_and_can_take_their_height() {
     let routes = lore_flow::lines::lines(&q.graph, &q.layout);
     assert!(routes.iter().all(|r| r.bends() == 0));
 }
+
+/// Two lines that cross are told apart: the side line lies behind the flow line (drawn first
+/// and lighter); lines that do not cross, or that share a block, are left as they are.
+#[test]
+fn of_two_crossing_lines_the_side_line_is_behind() {
+    let src = "fig t\npanel a \"\" none title=none\n  a: box \"A\" col=0 lane=1\n  b: box \"B\" col=2 lane=1\n  c: box \"C\" col=1 lane=0\n  d: box \"D\" col=1 lane=2\n  e: box \"E\" col=3 lane=1\n  c -> d : side\n  a -> b\n  b -> e\nend\n";
+    let (_, p) = packed(src, (1, 1), "", &Air { stated: true, ..Air::default() });
+    let routes = lore_flow::lines::lines(&p.graph, &p.layout);
+    let behind = lore_flow::build::lines_behind(&p.graph, &routes);
+    let of = |from: &str| routes.iter().position(|r| p.graph.edges[r.edge].from == from).unwrap();
+    assert!(behind[of("c")], "the side line crosses the flow line and lies behind it");
+    assert!(!behind[of("a")] && !behind[of("b")]);
+}

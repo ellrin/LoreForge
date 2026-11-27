@@ -197,6 +197,50 @@ fn stroke_coloured(theme: &Theme, kind: EdgeKind, k: f64, own: Option<&str>, wid
     s
 }
 
+/// How far towards the paper's colour a line behind another is drawn.
+const BEHIND: f64 = 0.5;
+
+/// `c` mixed `t` of the way towards `paper` (hex colours, with or without `#`).
+fn lighter(c: &str, paper: &str, t: f64) -> String {
+    let rgb = |s: &str| -> Option<[f64; 3]> {
+        let h = s.trim_start_matches('#');
+        if h.len() != 6 {
+            return None;
+        }
+        Some([0, 2, 4].map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0) as f64))
+    };
+    let (Some(a), Some(b)) = (rgb(c), rgb(paper)) else { return c.to_string() };
+    let m: Vec<String> = (0..3).map(|i| format!("{:02X}", (a[i] + (b[i] - a[i]) * t).round() as u8)).collect();
+    format!("{}{}", if c.starts_with('#') { "#" } else { "" }, m.concat())
+}
+
+/// Per line: whether it lies behind a line it crosses. Two lines cross when a run of one cuts
+/// through a run of the other away from the ends of both (lines that leave or reach one block
+/// meet there and do not cross). Of two crossing lines the flow line is in front of a side
+/// line; of two of one kind, the earlier one.
+pub fn lines_behind(g: &Graph, routes: &[Route]) -> Vec<bool> {
+    fn cuts(a: ((f64, f64), (f64, f64)), b: ((f64, f64), (f64, f64))) -> bool {
+        let d = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0);
+        let (d1, d2, d3, d4) = (d(b.0, b.1, a.0), d(b.0, b.1, a.1), d(a.0, a.1, b.0), d(a.0, a.1, b.1));
+        let e = 0.5;
+        ((d1 > e && d2 < -e) || (d1 < -e && d2 > e)) && ((d3 > e && d4 < -e) || (d3 < -e && d4 > e))
+    }
+    let front = |i: usize| (g.edges[routes[i].edge].kind != EdgeKind::Data, i);
+    let mut out = vec![false; routes.len()];
+    for i in 0..routes.len() {
+        for j in 0..i {
+            let (ei, ej) = (&g.edges[routes[i].edge], &g.edges[routes[j].edge]);
+            if [&ei.from, &ei.to].iter().any(|x| **x == ej.from || **x == ej.to) {
+                continue;
+            }
+            if routes[i].points.windows(2).any(|a| routes[j].points.windows(2).any(|b| cuts((a[0], a[1]), (b[0], b[1])))) {
+                out[if front(i) > front(j) { i } else { j }] = true;
+            }
+        }
+    }
+    out
+}
+
 fn top_level(name: &str, fr: Frame, kind: Kind, id: u32) -> Object {
     Object { id, name: name.into(), frame: fr, hidden: false, ph: None, slot: None, kind, src: None }
 }
@@ -454,7 +498,13 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
     let small = cx.small(&theme.colors.ink);
     let mut labels = Vec::new();
     let mut label_rects: Vec<Rect> = Vec::new();
-    for r in routes {
+    // lines that cross are told apart: the one behind (a side line under a flow line, else the
+    // later of the two) is drawn first and lighter, so the crossing reads as depth
+    let behind = lines_behind(g, routes);
+    let mut order: Vec<usize> = (0..routes.len()).collect();
+    order.sort_by_key(|i| !behind[*i]);
+    for ri in order {
+        let r = &routes[ri];
         let e = &g.edges[r.edge];
         let (a, b) = (g.node_index(&e.from).unwrap(), g.node_index(&e.to).unwrap());
         let name = format!("flow:{fig}/edge:{}-{}", e.from, e.to);
@@ -466,6 +516,9 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
             }
         }
         let mut st = stroke_coloured(theme, e.kind, k, own.as_deref(), e.width);
+        if behind[ri] {
+            st.color = lighter(&st.color, &theme.colors.paper, BEHIND);
+        }
         // a line into a junction (a dot where lines meet) ends on the dot, without a head
         if g.nodes[b].module == "junction" {
             st.tail = "none".into();
