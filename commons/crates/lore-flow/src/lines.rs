@@ -1,13 +1,16 @@
-//! Lines on a packed page, by construction of three shapes only: straight, one bend (an L), or
-//! two bends going on in the same direction (a step). No line has more than two bends and none
-//! goes back the way an earlier run of it came; what may be chosen is the side a line leaves and
+//! Lines on a packed page, by construction of four shapes only: straight, one bend (an L), two
+//! bends going on in the same direction (a step), or two bends round the outside of what lies
+//! between two blocks of one row or column (up, across, down: taken when the straight line would
+//! be hidden beneath blocks or along other lines; its outer run lies clear of the blocks between
+//! and of their words, inside the frame that holds both blocks when there is room, never off the
+//! page). No line has more than two bends; what may be chosen is the side a line leaves and
 //! arrives at and, for a step, where its middle run lies. A line whose blocks stand in one row
 //! or one column is straight even with a block between them: it passes beneath that block (the
 //! blocks are drawn over the lines) and its arrowhead shows. Among the shapes that exist for a
 //! line the cheapest is taken: fewest bends, then fewest blocks passed beneath, then not along
 //! a line already drawn, then not through a block's words, then the shortest.
 
-use crate::layout::{Layout, Placed};
+use crate::layout::{Layout, Placed, Rect};
 use crate::route::{Route, Side, segment_hits, site_of, site_point};
 use crate::spec::{EdgeKind, Graph};
 
@@ -73,6 +76,81 @@ fn shapes(a: &Placed, b: &Placed) -> Vec<Cand> {
             v.push(Cand { pts: vec![p, (p.0, y), (q.0, y), q], from: s, to: t });
         }
     }
+    v
+}
+
+/// Where a block's words are written: the part of its frame above its picture, and the part
+/// under it, each only when words lie there.
+fn word_rects(n: &Placed) -> Vec<Rect> {
+    let (x0, x1) = (n.reserve.x.min(n.rect.x), n.reserve.right().max(n.rect.right()));
+    let mut v = Vec::new();
+    if n.words.0 && n.art.y - n.rect.y > 0.5 {
+        v.push(Rect::new(x0, n.rect.y, x1 - x0, n.art.y - n.rect.y));
+    }
+    if n.words.1 && n.rect.bottom() - n.art.bottom() > 0.5 {
+        v.push(Rect::new(x0, n.art.bottom(), x1 - x0, n.rect.bottom() - n.art.bottom()));
+    }
+    v
+}
+
+/// How much a line round the outside of a row counts over its two bends: it is taken when the
+/// straight line would be hidden (beneath two blocks, or along several lines), not for one block.
+const ROUND: f64 = 130.0;
+
+/// The lines round the outside of what lies between two blocks of one row (out of the top of
+/// both, or the bottom of both) or of one column (the left of both, or the right): up, across,
+/// down. The outer run lies clear of every block between the two and of the words above or
+/// under them (their whole frames), a little further out.
+fn rounds(a: &Placed, b: &Placed, lay: &Layout) -> Vec<Cand> {
+    let all = &lay.nodes;
+    let (ra, rb) = (&a.art, &b.art);
+    let mut v = Vec::new();
+    // a block with its words: the picture, and the frame's part above or under it only where
+    // words are written there (the frame is laid evenly about the picture's middle line)
+    let whole = |n: &Placed| {
+        let w = word_rects(n);
+        (w.iter().map(|r| r.x).fold(n.art.x, f64::min), w.iter().map(|r| r.y).fold(n.art.y, f64::min), w.iter().map(|r| r.right()).fold(n.art.right(), f64::max), w.iter().map(|r| r.bottom()).fold(n.art.bottom(), f64::max))
+    };
+    let out = (ra.h.min(rb.h).min(ra.w.min(rb.w)) * 0.25).clamp(4.0, 10.0);
+    // the frames that hold both blocks: the outer run stays inside the innermost of them when
+    // it has the room there (a little inside its edge, still clear of the blocks), and no
+    // line of this shape leaves the page
+    let holds = |r: &Rect| r.contains(ra) && r.contains(rb);
+    let frame: Option<Rect> = lay.regions.iter().map(|r| r.rect).filter(|r| holds(r)).chain(lay.panels.iter().filter(|p| !p.bare).map(|p| p.rect).filter(|r| holds(r))).min_by(|x, y| (x.w * x.h).partial_cmp(&(y.w * y.h)).unwrap());
+    let keep = |want: f64, edge: Option<f64>, clear: f64, sign: f64| -> f64 {
+        // `sign` -1: a run above or left (smaller is further out); +1: below or right
+        match edge {
+            Some(e) if (want - e) * sign > -2.0 && (clear - (e - sign * 2.0)) * sign < -2.0 => e - sign * 2.0,
+            _ => want,
+        }
+    };
+    let on_page = |c: &Cand| c.pts.iter().all(|p| p.0 >= lay.bounds.x && p.0 <= lay.bounds.right() && p.1 >= lay.bounds.y && p.1 <= lay.bounds.bottom());
+    if ra.bottom().min(rb.bottom()) - ra.y.max(rb.y) > 1.0 && (rb.x >= ra.right() || rb.right() <= ra.x) {
+        // one row: every block whose frame lies between the two middles and in the row's band
+        let (x0, x1) = (ra.cx().min(rb.cx()), ra.cx().max(rb.cx()));
+        let (y0, y1) = (ra.y.min(rb.y), ra.bottom().max(rb.bottom()));
+        let between: Vec<(f64, f64, f64, f64)> = all.iter().map(whole).filter(|w| w.2 > x0 && w.0 < x1 && w.3 > y0 && w.1 < y1).collect();
+        let (ct, cb) = (between.iter().map(|w| w.1).fold(y0, f64::min), between.iter().map(|w| w.3).fold(y1, f64::max));
+        let top = keep(ct - out, frame.map(|f| f.y), ct, -1.0);
+        let bottom = keep(cb + out, frame.map(|f| f.bottom()), cb, 1.0);
+        for (side, y) in [(Side::Top, top), (Side::Bottom, bottom)] {
+            let (p, q) = (mid(a, side), mid(b, side));
+            v.push(Cand { pts: vec![p, (p.0, y), (q.0, y), q], from: side, to: side });
+        }
+    }
+    if ra.right().min(rb.right()) - ra.x.max(rb.x) > 1.0 && (rb.y >= ra.bottom() || rb.bottom() <= ra.y) {
+        let (y0, y1) = (ra.cy().min(rb.cy()), ra.cy().max(rb.cy()));
+        let (x0, x1) = (ra.x.min(rb.x), ra.right().max(rb.right()));
+        let between: Vec<(f64, f64, f64, f64)> = all.iter().map(whole).filter(|w| w.3 > y0 && w.1 < y1 && w.2 > x0 && w.0 < x1).collect();
+        let (cl, cr) = (between.iter().map(|w| w.0).fold(x0, f64::min), between.iter().map(|w| w.2).fold(x1, f64::max));
+        let left = keep(cl - out, frame.map(|f| f.x), cl, -1.0);
+        let right = keep(cr + out, frame.map(|f| f.right()), cr, 1.0);
+        for (side, x) in [(Side::Left, left), (Side::Right, right)] {
+            let (p, q) = (mid(a, side), mid(b, side));
+            v.push(Cand { pts: vec![p, (x, p.1), (x, q.1), q], from: side, to: side });
+        }
+    }
+    v.retain(|c| on_page(c));
     v
 }
 
@@ -229,12 +307,13 @@ pub fn seen(g: &Graph, lay: &Layout, routes: &[Route], i: usize) -> f64 {
     total
 }
 
-/// A line keeps the rule: at most two bends and no run back the way an earlier run came.
+/// A line keeps the rule: at most two bends (straight, an L, a step, or round the outside).
 pub fn keeps_the_rule(r: &Route) -> bool {
     let sign = |d: f64| if d.abs() < 0.05 { 0.0 } else { d.signum() };
     let runs: Vec<(f64, f64)> = r.points.windows(2).map(|w| (sign(w[1].0 - w[0].0), sign(w[1].1 - w[0].1))).filter(|d| *d != (0.0, 0.0)).collect();
-    let back = runs.iter().enumerate().any(|(i, a)| runs[..i].iter().any(|b| (a.0 != 0.0 && a.0 == -b.0) || (a.1 != 0.0 && a.1 == -b.1)));
-    r.bends() <= 2 && !back
+    // with two bends the first and last runs lie along one axis: the same way (a step) or
+    // opposite ways (round the outside of what lies between); a zigzag needs a third bend
+    r.bends() <= 2 && runs.len() <= 3
 }
 
 /// The lines of a packed figure (see the module's words), the flow's own lines first.
@@ -271,8 +350,16 @@ pub fn lines(g: &Graph, lay: &Layout) -> Vec<Route> {
                 })
                 .count() as f64;
             let wordy = words(a, c.from) as u8 as f64 + words(b, c.to) as u8 as f64;
+            // round the outside: more than its bends, and never through the words of a block
+            // (the part of a block's frame that is not its picture)
+            let round = c.pts.len() == 4 && c.from == c.to;
+            let over_words = if round {
+                lay.nodes.iter().enumerate().filter(|(i, n)| *i != ia && *i != ib && c.pts.windows(2).any(|w| word_rects(n).iter().any(|r| segment_hits(w[0], w[1], &r.inflate(-0.5))))).count() as f64
+            } else {
+                0.0
+            };
             let len: f64 = c.pts.windows(2).map(|w| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs()).sum();
-            bends * 100.0 + under * 250.0 + shared * 60.0 + wordy * 150.0 + len / 1000.0
+            bends * 100.0 + under * 250.0 + shared * 60.0 + wordy * 150.0 + len / 1000.0 + if round { ROUND } else { 0.0 } + over_words * 400.0
         };
         // a side the one who draws states (`from=` / `to=`): only lines that leave and arrive
         // through it; when no line of the three shapes does, the stated side is kept, drawn
@@ -291,7 +378,9 @@ pub fn lines(g: &Graph, lay: &Layout) -> Vec<Route> {
         };
         let (fs, ts) = (stated(&e.from_side, &mut notes), stated(&e.to_side, &mut notes));
         let cands: Vec<Cand> = if fs.is_none() && ts.is_none() {
-            shapes(a, b)
+            let mut v = shapes(a, b);
+            v.extend(rounds(a, b, lay));
+            v
         } else {
             let froms: Vec<Side> = fs.map(|s| vec![s]).unwrap_or(Side::ALL.to_vec());
             let tos: Vec<Side> = ts.map(|s| vec![s]).unwrap_or(Side::ALL.to_vec());

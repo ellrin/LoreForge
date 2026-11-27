@@ -304,15 +304,15 @@ fn route(points: &[(f64, f64)]) -> route::Route {
 }
 
 #[test]
-fn the_rule_for_a_line_is_two_bends_at_most_and_never_back() {
+fn the_rule_for_a_line_is_two_bends_at_most() {
     use lore_flow::lines::keeps_the_rule;
     assert!(keeps_the_rule(&route(&[(0.0, 0.0), (50.0, 0.0)])), "straight");
     assert!(keeps_the_rule(&route(&[(0.0, 0.0), (50.0, 0.0), (50.0, 30.0)])), "one bend");
     assert!(keeps_the_rule(&route(&[(0.0, 0.0), (20.0, 0.0), (20.0, 30.0), (50.0, 30.0)])), "a step");
     // right, down, back left, down: the line that is not drawn
     assert!(!keeps_the_rule(&route(&[(0.0, 0.0), (50.0, 0.0), (50.0, 20.0), (10.0, 20.0), (10.0, 40.0)])));
-    // two bends that come back (a U)
-    assert!(!keeps_the_rule(&route(&[(0.0, 0.0), (0.0, 30.0), (50.0, 30.0), (50.0, 0.0)])));
+    // two bends round the outside of what lies between (up, across, down)
+    assert!(keeps_the_rule(&route(&[(0.0, 0.0), (0.0, 30.0), (50.0, 30.0), (50.0, 0.0)])));
     // three bends, even going on
     assert!(!keeps_the_rule(&route(&[(0.0, 0.0), (20.0, 0.0), (20.0, 30.0), (40.0, 30.0), (40.0, 60.0)])));
 }
@@ -519,8 +519,13 @@ fn every_line_is_routed_and_one_that_does_not_show_says_so() {
     edges.sort();
     assert_eq!(edges, (0..p.graph.edges.len()).collect::<Vec<_>>(), "a route for every edge");
     let at = |from: &str, to: &str| rs.iter().position(|r| p.graph.edges[r.edge].from == from && p.graph.edges[r.edge].to == to).unwrap();
-    // the skip lies on the flow line and beneath b and c: nothing of it shows
-    assert!(lines::seen(&p.graph, &p.layout, &rs, at("a", "d")) < 0.5, "{:?} {:?}", rs.iter().map(|r| &r.points).collect::<Vec<_>>(), p.layout.nodes.iter().map(|n| n.art).collect::<Vec<_>>());
+    // the skip would lie on the flow line and beneath b and c: it goes round the outside of
+    // the row instead (out of the top of a, over b and c, into the top of d) and shows whole
+    let skip = &rs[at("a", "d")];
+    assert_eq!((skip.bends(), skip.from_side, skip.to_side), (2, route::Side::Top, route::Side::Top));
+    let top = p.layout.nodes.iter().map(|n| n.rect.y.min(n.art.y)).fold(f64::MAX, f64::min);
+    assert!(skip.points[1].1 < top - 1.0, "clear of every block of the row");
+    assert!(lines::seen(&p.graph, &p.layout, &rs, at("a", "d")) > 50.0, "{:?} {:?}", rs.iter().map(|r| &r.points).collect::<Vec<_>>(), p.layout.nodes.iter().map(|n| n.art).collect::<Vec<_>>());
     // the flow's own lines show whole
     for (f, t) in [("a", "b"), ("b", "c"), ("c", "d")] {
         let r = &rs[at(f, t)];
@@ -528,7 +533,14 @@ fn every_line_is_routed_and_one_that_does_not_show_says_so() {
         assert!((lines::seen(&p.graph, &p.layout, &rs, at(f, t)) - len).abs() < 0.5, "{f} → {t}");
     }
     let says = |name: &str| built.warnings.iter().any(|w| w.starts_with(name));
-    assert!(says("a → d: 這條線看不到"), "{:?}", built.warnings);
+    assert!(!says("a → d"), "{:?}", built.warnings);
+    // held to the straight line by stated sides, it lies on the flow line and beneath b and c:
+    // nothing of it shows, and the figure says so
+    let (_, q) = packed(&src.replace("a -> d : skip", "a -> d : skip from=right to=left"), (4, 1), "", &Air { stated: true, ..Air::default() });
+    let (qs, qb) = built_lines(&q);
+    let hid = qs.iter().position(|r| q.graph.edges[r.edge].from == "a" && q.graph.edges[r.edge].to == "d").unwrap();
+    assert!(lines::seen(&q.graph, &q.layout, &qs, hid) < 0.5);
+    assert!(qb.warnings.iter().any(|w| w.starts_with("a → d: 這條線看不到")), "{:?}", qb.warnings);
     assert!(!says("a → b") && !says("b → c") && !says("c → d"), "{:?}", built.warnings);
     assert!(rs[at("c", "c")].warnings.iter().any(|w| w.contains("同一個方塊")));
     assert!(says("c → c"), "{:?}", built.warnings);
@@ -611,7 +623,7 @@ fn a_stated_side_is_the_side_a_line_leaves_or_arrives_by() {
     let r = &rs[1];
     assert_eq!((r.from_side, r.to_side), (route::Side::Bottom, route::Side::Bottom));
     assert!(r.bends() <= 2 && by_sides(r), "{:?}", r.points);
-    assert!(r.warnings.iter().any(|w| w.starts_with("a → c") && w.contains("from=bottom to=bottom")), "{:?}", r.warnings);
+    assert!(r.warnings.is_empty() && lines::keeps_the_rule(r), "round the outside is a shape of its own: {:?}", r.warnings);
     // sides that need a line back the way it came: kept, and the line still goes out of the
     // stated side, not through its own block
     for (from, to) in [("top", "top"), ("top", ""), ("right", "right")] {

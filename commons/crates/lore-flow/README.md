@@ -87,7 +87,7 @@ the page and where each flow line's ends lie; `PATHS=<share>` sets `Air.paths`. 
 `lines::lines(graph, layout)` draws the lines of a packed page from three shapes only: straight,
 one bend, or two bends going on in the same direction (a step whose middle run may lie at three
 places in the gap). No line has more than two bends or a run back the way an earlier run came
-(`lines::keeps_the_rule`). Blocks in one row or column are joined straight even with a block
+(`lines::keeps_the_rule`). A fourth shape since: two bends round the outside of a row or column (out of the top of both blocks, over what lies between, down into the other), taken when the straight line would be hidden beneath two blocks or along several lines; its outer run is clear of the blocks between and their words, stays inside the frame that holds both blocks when there is room, and never leaves the page; the rule is now two bends at most. Blocks in one row or column are joined straight even with a block
 between: the line passes beneath it (`lines::beneath`). The cheapest shape is taken: fewest bends,
 blocks passed beneath (a block of words only counts eight times), along another line, through a
 block's words, length. A bent line that would end in the middle of a side where a line ends the
