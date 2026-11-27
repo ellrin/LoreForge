@@ -65,7 +65,7 @@ fn schema_commands() -> Vec<Value> {
         entry("break", &[("a", name()), ("before", name())], &["a", "before"]),
         entry("one-line", &[("a", name())], &["a"]),
         entry("line-side", &[("from", name()), ("to", name()), ("leave", way()), ("arrive", way())], &["from", "to"]),
-        entry("brace", &[("a", name()), ("from", name()), ("to", name()), ("toward", name())], &["a", "from", "to"]),
+        entry("brace", &[("a", name()), ("from", name()), ("to", name()), ("toward", name())], &["a", "from", "to", "toward"]),
         entry("fork", &[("a", name()), ("to", json!({ "type": "array", "items": { "type": "string" }, "minItems": 1 }))], &["a", "to"]),
         entry("free", &[("a", name())], &["a"]),
     ]
@@ -187,7 +187,7 @@ const SYSTEM: &str = "你把作者的一句話，變成流程圖版面的指令�
 - break {a, before}：a 的字在 before 這個字前面換行。\n\
 - one-line {a}：a 的字排成一行。\n\
 - line-side {from, to, leave?, arrive?}：from 到 to 的線從哪一邊出、從哪一邊進。\n\
-- brace {a, from, to, toward?}：大括號或尺寸標記 a 括住 from 到 to 這幾個物件，跟它們一樣長，尖端朝向 toward。\n\
+- brace {a, from, to, toward}：大括號 a 括住 from 到 to 這幾個物件（開口端，至少兩個物件），尖端指向 toward（一定要有）；作者沒說指向誰就寫進 unclear。\n\
 - fork {a, to}：標題或說明方框 a 講的是 to 裡的每個物件（to 是名字的清單），畫成從 a 分叉到每一個的線。\n\
 - free {a}：收回之前對 a 說過的（綁定、跨欄、拉伸），讓圖自己決定。";
 

@@ -456,6 +456,15 @@ pub fn apply(g: &Graph, c: &Command) -> Result<(Graph, Vec<String>), Clash> {
             if g.edges.iter().any(|e| &e.from == a || &e.to == a) {
                 return Err(clash(format!("{a} 有線接著，是物件不是括號"), vec![a.clone()]));
             }
+            // a brace is defined with what surrounds it: its open side takes things long enough
+            // to span (two objects, or one that spans rows or columns), its tip an object
+            let long = |n: &Node| n.num("tall").is_some_and(|t| t > 1.0) || n.num("span").is_some_and(|t| t > 1.0);
+            if j == k && !long(&g.nodes[j]) {
+                return Err(clash(format!("括號 {a} 的開口端要有夠長的東西：至少兩個物件，或一個跨幾列的物件；只說了 {from}"), vec![from.clone()]));
+            }
+            if toward.is_none() {
+                return Err(clash(format!("括號 {a} 的尖端要指向一個物件，請說它指向誰"), vec![a.clone()]));
+            }
             let n = &mut g2.nodes[i];
             n.params.remove("by");
             n.params.remove("side");

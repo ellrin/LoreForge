@@ -102,7 +102,13 @@ pub struct Packed {
     pub crowded: Vec<String>,
     /// The text is under `Air.text_min_pt`.
     pub small: bool,
+    /// Objects whose surroundings are not what they need (a brace whose open side has nothing
+    /// long enough, or whose tip points at nothing), in words.
+    pub unmet: Vec<String>,
 }
+
+/// How thin a brace that gathers is drawn, of a free-standing one.
+const THIN: f64 = 0.6;
 
 /// A note, not an object: a block that is words only (`label`) and sits on lines none of which
 /// carries the flow (no `data` line). It says something about a line or a block (a weight fed in
@@ -1013,6 +1019,7 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
     let mut out_areas = Vec::new();
     let (mut notes, mut crowded) = (Vec::new(), Vec::new());
     let mut gather_dir: BTreeMap<usize, &'static str> = BTreeMap::new();
+    let mut unmet: Vec<String> = Vec::new();
     // for an area on a grid: the middle of each column and the line of each row
     let mut axes: Vec<Option<(Vec<f64>, Vec<f64>)>> = vec![None; ar.len()];
     for (i, a) in ar.iter().enumerate() {
@@ -1063,8 +1070,18 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
                         _ => "right",
                     },
                 };
-                let thick = b.w.min(b.over + b.up + b.dn + b.words);
-                let air = cx.fs * 0.5;
+                // thin, and close to what it gathers: a brace reads with its things, not alone
+                let (nat_thick, nat_len) = (b.w.min(b.over + b.up + b.dn + b.words), b.w.max(b.over + b.up + b.dn + b.words));
+                let thick = nat_thick * THIN;
+                let air = cx.fs * 0.3;
+                // what must surround it: its open side as long as a brace is at least, its tip an object
+                let len = if matches!(dir, "left" | "right") { bb.h } else { bb.w };
+                if len < nat_len * 0.5 {
+                    unmet.push(format!("{id}：開口端的東西太短，括號括不出範圍"));
+                }
+                if to.is_none() {
+                    unmet.push(format!("{id}：尖端沒有指向任何物件"));
+                }
                 let r = match dir {
                     "right" => Rect::new(bb.right() + air, bb.y, thick, bb.h),
                     "left" => Rect::new(bb.x - air - thick, bb.y, thick, bb.h),
@@ -1134,6 +1151,9 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
     let mut graph = g.clone();
     for (n, dir) in &gather_dir {
         graph.nodes[*n].params.insert("dir".into(), serde_json::json!(dir));
+        if graph.nodes[*n].num("thick").is_none() {
+            graph.nodes[*n].params.insert("thick".into(), serde_json::json!(10.0 * THIN));
+        }
     }
     let area_of: BTreeMap<usize, usize> = ar.iter().enumerate().flat_map(|(i, a)| leaves(&a.items).into_iter().chain(a.notes.iter().copied()).map(move |n| (n, i))).collect();
     let mut nodes = Vec::new();
@@ -1251,7 +1271,7 @@ fn pack_with(g: &Graph, f: &Format, m: &Measure, arrangement: &str, air: &Air, b
     };
     let lay = Layout { nodes, panels, regions, legend: Vec::new(), swatches: Vec::new(), bounds: Rect::new(0.0, 0.0, pw, ph), scale: 1.0 };
     let cover = tight.iter().map(|r| r.w * r.h).sum::<f64>() / (pw * ph);
-    Some((Packed { layout: lay, graph, text_pt: cx.fs * f.width_pt / pw, cover, areas: out_areas, slack: (1.0 - ft.used.0 / pw, 1.0 - ft.used.1 / ph), notes, crowded, small: false }, want))
+    Some((Packed { layout: lay, graph, text_pt: cx.fs * f.width_pt / pw, cover, areas: out_areas, slack: (1.0 - ft.used.0 / pw, 1.0 - ft.used.1 / ph), notes, crowded, small: false, unmet }, want))
 }
 
 fn leaves(items: &[Item]) -> Vec<usize> {

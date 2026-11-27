@@ -237,6 +237,15 @@ fn a_brace_lies_along_what_it_gathers_and_a_fork_reaches_each_thing() {
         assert!(lines::keeps_the_rule(r));
     }
     assert_eq!(theme.edge(EdgeKind::Gather).tail, "none");
+    // thin, close to what it gathers, and its surroundings are what it needs
+    assert!(b.w < 8.0 * p.layout.scale && b.x - top.right() < 6.0 * p.layout.scale, "brace {b:?} beside {top:?} (scale {})", p.layout.scale);
+    assert!(p.unmet.is_empty(), "{:?}", p.unmet);
+    // a brace is defined with its surroundings: a tip that points at nothing, or an open side
+    // of one plain object, is refused with the reason
+    let no_tip = apply(&g, &Command::Brace { a: "b".into(), from: "p".into(), to: "r".into(), toward: None }).unwrap_err();
+    assert!(no_tip.why.contains("尖端"), "{}", no_tip.why);
+    let short = apply(&g, &Command::Brace { a: "b".into(), from: "q".into(), to: "q".into(), toward: Some("h".into()) }).unwrap_err();
+    assert!(short.why.contains("開口端"), "{}", short.why);
     // taken back: the brace is an object in its cell again
     let (freed, _) = apply(&g, &Command::Free { a: "b".into() }).unwrap();
     assert!(!pack::is_note(&freed, freed.node_index("b").unwrap()));
