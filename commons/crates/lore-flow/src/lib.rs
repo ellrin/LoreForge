@@ -40,6 +40,7 @@ pub mod modules;
 pub mod notation;
 pub mod lines;
 pub mod outline;
+pub mod settle;
 pub mod pack;
 pub mod plate;
 pub mod pptx;

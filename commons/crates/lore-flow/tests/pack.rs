@@ -737,3 +737,37 @@ fn a_figure_that_mixes_solid_and_flat_networks_says_so() {
     assert_eq!(mixed, [("network".to_string(), vec!["m".to_string()], vec!["n".to_string()])]);
     assert!(outline::mixed_looks(&fig("plate-network"), &lib, &theme).is_empty());
 }
+
+/// What a figure's structure settles by itself (`settle`): a small thing nothing is joined to
+/// is tied to the nearest module; a module joined to a column of parallel rows stands beside
+/// them (a plain box as tall as they are, the next step that was written into its column moved
+/// half a column on, the trunk before it standing there with it); a row of headings lies over
+/// the columns nearest each; a bracket takes their width; long words break. What is stated
+/// stays as stated.
+#[test]
+fn a_figures_structure_settles_marks_parallel_rows_headings_and_long_words() {
+    use lore_flow::settle::settle;
+    let src = "fig t\npanel a \"\" none title=none\n  x: image \"In\" look=photo col=0 lane=1\n  s: box \"Split\" col=1 lane=1\n  r0: image \"A\" look=photo col=2 lane=0\n  r1: image \"B\" look=photo col=2 lane=1\n  r2: image \"C\" look=photo col=2 lane=2\n  j: box \"Join\" col=3 lane=1\n  n: box \"Next\" col=3 lane=2\n  o: box \"Out\" col=4 lane=1\n  l: loss \"L\" col=4 lane=0\n  h0: label \"Left\" col=0 lane=3\n  h1: label \"A heading with rather many words in it\" col=2 lane=3\n  k0: bracket \"\" style=under col=0 lane=4\n  k1: bracket \"\" style=under col=2 lane=4\n  x -> s\n  s -> r0 : side\n  s -> r1\n  s -> r2 : side\n  r0 -> j : side\n  r1 -> j\n  r2 -> j : side\n  j -> o\n  j -> n : side\nend\n";
+    let g = dsl::parse_with(src, &["bracket".to_string()]).unwrap();
+    let (s, said) = settle(&g);
+    let of = |id: &str| &s.nodes[s.node_index(id).unwrap()];
+    // the loss no line reaches belongs to the module nearest it
+    assert_eq!(of("l").str("by"), Some("o"));
+    // the joiner stands beside the three rows and is as tall as they; the step written into
+    // its column moved on; the splitter, a picture's worth of box too, likewise
+    assert_eq!((of("j").num("lane"), of("j").num("tall"), of("j").str("stretch")), (Some(0.0), Some(3.0), Some("tall")));
+    assert_eq!(of("n").num("col"), Some(3.5));
+    assert_eq!((of("s").num("lane"), of("s").num("tall")), (Some(0.0), Some(3.0)));
+    // the input before the splitter stands there with it
+    assert_eq!((of("x").num("lane"), of("x").num("tall")), (Some(0.0), Some(3.0)));
+    // headings and brackets lie over the columns nearest each
+    assert_eq!((of("h0").num("col"), of("h0").num("span")), (Some(0.0), Some(2.0)));
+    assert_eq!((of("h1").num("col"), of("h1").num("span")), (Some(2.0), Some(3.0)));
+    assert!(of("k1").flag("stretch") && of("k0").flag("stretch"));
+    assert!(of("h1").label.contains("\\\\") && !of("h0").label.contains("\\\\"));
+    assert!(said.len() >= 9, "{said:?}");
+    // settled twice it says nothing new, and what is stated is kept
+    assert!(settle(&s).1.is_empty(), "{:?}", settle(&s).1);
+    let stated = dsl::parse_with(&src.replace("j: box \"Join\" col=3 lane=1", "j: box \"Join\" col=3 lane=1 tall=1"), &["bracket".to_string()]).unwrap();
+    assert_eq!(settle(&stated).0.nodes[stated.node_index("j").unwrap()].num("tall"), Some(1.0));
+}

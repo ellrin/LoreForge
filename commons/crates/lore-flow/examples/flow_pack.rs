@@ -42,6 +42,17 @@ fn main() {
     }
     // `GRID=1`: the pick of the one who draws, every stated grid kept
     air.stated = std::env::var("GRID").is_ok();
+    // `SETTLE=1`: what the figure's structure settles by itself is written into it first
+    let g = if std::env::var("SETTLE").is_ok() {
+        let (g2, said) = lore_flow::settle::settle(&g);
+        for s in &said {
+            println!("  settled: {s}");
+        }
+        println!("settled {} things", said.len());
+        g2
+    } else {
+        g
+    };
     // `OUTLINE=1`: the opening statement (areas, modules, frames, marks, paths) and what each
     // shape of the whole figure gives, before anything is placed
     if std::env::var("OUTLINE").is_ok() {

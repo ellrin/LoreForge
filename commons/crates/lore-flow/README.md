@@ -120,6 +120,16 @@ the text size and cover of each shape the whole figure can take (width : height,
 largest text first: the shape is chosen first, and every later step keeps it. `OUTLINE=1` in the
 example prints both.
 
+What a figure's structure settles by itself (`settle::settle`, before anyone states anything;
+what is stated stays): a small thing nothing is joined to (a return arrow, a loss no line
+reaches) is tied to the nearest module; a module joined to modules that stand in one column in
+several rows stands beside those rows (a plain box as tall as they are; a next step written into
+its column moves half a column on; the trunk in its row stands there with it; a picture only
+when its data lines stay level); in a row no line touches, each heading or bracket lies over
+the columns nearest it; a bracket is as wide as its columns; words longer than `settle::LONG`
+letters in a box or label break in two. It returns the figure and what it settled. The rules
+read who is joined to whom, kinds and stated cells only. `SETTLE=1` in the example.
+
 Crossing lines are told apart (`build::lines_behind`): of two lines that cross, the side line
 lies behind the flow line (of two of one kind, the later one); it is drawn first and half-way
 towards the paper's colour, so the crossing reads as depth.
