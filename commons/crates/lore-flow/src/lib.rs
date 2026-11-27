@@ -36,6 +36,8 @@ pub mod layout;
 pub mod look;
 #[cfg(feature = "llm")]
 pub mod llm;
+#[cfg(feature = "llm")]
+pub mod say;
 pub mod modules;
 pub mod notation;
 pub mod lines;

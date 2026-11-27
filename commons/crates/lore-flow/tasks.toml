@@ -81,3 +81,15 @@ default = "claude:sonnet"
 fallback = "local:gemma-4-12b-q8"
 offline = true
 max_tokens = 300
+
+# A sentence about a figure's placement → commands of the closed set (lore_flow::command); the
+# program works out every place. Small: the figure in words in, a short list out.
+[task.flow-command]
+purpose = "chat"
+label = "流程圖：一句話調整"
+class = "tidy"
+needs = { json = true, context = 16000 }
+default = "claude:haiku"
+fallback = "local:gemma-4-12b-q8"
+offline = true
+max_tokens = 1500
